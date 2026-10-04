@@ -57,16 +57,21 @@ class Trajectory:
         return np.radians(np.interp(t, self.t, self.lat)), np.interp(t, self.t, self.h)
 
 
+def sys_num(prn: int) -> tuple[str, int]:
+    """gnssrx's satellite number as (RINEX system, PRN): Galileo 101-136, BeiDou 201-263."""
+    return ("C", prn - 200) if prn >= 200 else (("E", prn - 100) if prn >= 100 else ("G", prn))
+
+
 def sat_clock(nav: list[rinex.Eph], prn: int, t_gps) -> np.ndarray:
     """Each satellite's clock offset (s; broadcast polynomial, relativistic term and group delay) at GPS
     times t_gps; prn as gnssrx numbers it. Over a whole flight some drift by metres."""
-    sys_, num = ("E", prn - 100) if prn >= 100 else ("G", prn)
+    sys_, num = sys_num(prn)
     cands = [e for e in nav if e.prn == num and e.sys == sys_]
     t_gps = np.atleast_1d(t_gps)
     out = np.zeros(t_gps.size)
     for i, tg in enumerate(t_gps):
-        e = min(cands, key=lambda c: abs(rinex.tdiff(tg, c.toe)))
-        out[i] = rinex.sat_pos(e, tg - 0.075)[1]
+        e = min(cands, key=lambda c: abs(rinex.tdiff(rinex.sys_time(c, tg), c.toe)))
+        out[i] = rinex.sat_pos(e, rinex.sys_time(e, tg - 0.075))[1]
     return out
 
 
@@ -93,7 +98,7 @@ def _sat_rx_frame(e: rinex.Eph, t_rx_gps: float, rx: np.ndarray):
     """Satellite position (receive-time ECEF frame) for a signal received at t_rx_gps by rx."""
     tau = 0.075
     for _ in range(4):
-        (x, y, z), _clk = rinex.sat_pos(e, t_rx_gps - tau)
+        (x, y, z), _clk = rinex.sat_pos(e, rinex.sys_time(e, t_rx_gps - tau))
         a = rinex.OMEGA_E * tau
         s = np.array([math.cos(a) * x + math.sin(a) * y, -math.sin(a) * x + math.cos(a) * y, z])
         tau = float(np.linalg.norm(s - rx)) / C
@@ -117,17 +122,18 @@ def los(nav: list[rinex.Eph], prn: int, traj: Trajectory, t_file, t0_gps: float,
     """Per sample time t_file: geometric range (m), Doppler (Hz), Doppler rate (Hz/s), elevation (deg),
     and with with_az the azimuth (deg from north, east positive) as a fifth column.
 
-    t0_gps is the GPS time (s of week) of file second 0; prn as gnssrx numbers it (Galileo + 100).
+    t0_gps is the GPS time (s of week) of file second 0; prn as gnssrx numbers it (Galileo + 100,
+    BeiDou + 200).
     """
     t_file = np.atleast_1d(t_file)
-    sys, num = ("E", prn - 100) if prn >= 100 else ("G", prn)  # gnssrx numbers Galileo 101-163
+    sys, num = sys_num(prn)
     cands = [e for e in nav if e.prn == num and e.sys == sys]
     if not cands:
         raise KeyError(f"no ephemeris for PRN {prn}")
     out = np.zeros((t_file.size, 5 if with_az else 4))
     for i, tf in enumerate(t_file):
         tg = t0_gps + tf
-        e = min(cands, key=lambda c: abs(rinex.tdiff(tg, c.toe)))
+        e = min(cands, key=lambda c: abs(rinex.tdiff(rinex.sys_time(c, tg), c.toe)))
         d0, rng, u, p = _doppler(e, traj, tf, tg)
         dm, _, _, _ = _doppler(e, traj, tf - dt, tg - dt)
         dp, _, _, _ = _doppler(e, traj, tf + dt, tg + dt)

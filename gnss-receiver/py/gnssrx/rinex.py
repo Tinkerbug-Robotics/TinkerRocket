@@ -1,9 +1,9 @@
-"""RINEX 3 navigation file reader (GPS records, and Galileo I/NAV on request), and satellite
-positions from it.
+"""RINEX 3 navigation file reader (GPS records, and Galileo I/NAV and BeiDou MEO/IGSO on request),
+and satellite positions from it.
 
 An independent Python implementation of IS-GPS-200's ephemeris model (Galileo's is the same
-with its own GM), to check the C decoder and orbit code against the broadcast files the
-simulators used.
+with its own GM; BeiDou's with CGCS2000's GM and Earth rate, in BDT), to check the C decoder and
+orbit code against the broadcast files the simulators used.
 """
 from __future__ import annotations
 
@@ -13,7 +13,10 @@ from pathlib import Path
 
 GPS_MU = 3.986005e14
 GAL_MU = 3.986004418e14
+BDS_MU = 3.986004418e14
 OMEGA_E = 7.2921151467e-5
+BDS_OMEGA_E = 7.2921150e-5
+BDT_MINUS_GPST = -14.0
 F_REL = -4.442807633e-10
 C = 299792458.0
 
@@ -44,9 +47,10 @@ class Eph:
     idot: float
     week: int
     health: int
-    tgd: float             # GPS TGD; Galileo BGD(E1,E5b), the I/NAV clock's E1 term
+    tgd: float             # GPS TGD; Galileo BGD(E1,E5b), the I/NAV clock's E1 term; BeiDou TGD1 (B1I)
     iodc: int
-    sys: str = "G"         # "G" or "E"; Galileo's week and toe are GST, which runs with GPST
+    sys: str = "G"         # "G", "E" or "C"; Galileo's week and toe are GST, which runs with GPST;
+                           # BeiDou's week, toe and toc are BDT, 14 s behind it (see sys_time)
 
 
 def _num(s: str) -> float:
@@ -64,8 +68,9 @@ def read_gps(path: str | Path) -> list[Eph]:
 
 
 def read_nav(path: str | Path, systems: str = "GE") -> list[Eph]:
-    """The records of the given systems (G, E); Galileo's F/NAV records (an E5a clock) are left out.
-    RINEX 2 files (GPS only) are read too."""
+    """The records of the given systems (G, E, C); Galileo's F/NAV records (an E5a clock) and BeiDou's
+    GEO satellites (C01-C05, C59-C63: their orbits take another rotation) are left out. RINEX 2 files
+    (GPS only) are read too."""
     lines = Path(path).read_text().splitlines()
     if lines and lines[0][:9].strip() and float(lines[0][:9]) < 3.0:
         return _read_nav_v2(lines) if "G" in systems else []
@@ -81,10 +86,13 @@ def read_nav(path: str | Path, systems: str = "GE") -> list[Eph]:
             continue
         sys = ln[0]
         nrec = {"G": 8, "E": 8, "C": 8, "J": 8, "I": 8, "R": 4, "S": 4}.get(sys, 8)
-        if sys not in "GE" or sys not in systems:
+        if sys not in "GEC" or sys not in systems:
             i += nrec
             continue
         prn = int(ln[1:3])
+        if sys == "C" and (prn <= 5 or prn >= 59):
+            i += nrec
+            continue
         y, mo, d, h, mi, s = int(ln[4:8]), int(ln[9:11]), int(ln[12:14]), int(ln[15:17]), int(ln[18:20]), int(ln[21:23])
         vals = [_num(ln[23 + 19 * k: 42 + 19 * k]) for k in range(3)]
         for r in range(1, nrec):
@@ -100,6 +108,8 @@ def read_nav(path: str | Path, systems: str = "GE") -> list[Eph]:
                 i += nrec
                 continue
             tgd, iodc = iodc, 0  # BGD(E1,E5b) sits where GPS keeps IODC
+        elif sys == "C":
+            iodc = 0  # TGD2 (B2I) sits there; TGD1 is in GPS's TGD place
         out.append(Eph(prn, _gps_sow(y, mo, d, h, mi, s), af0, af1, af2, int(iode), crs, dn, m0, cuc, e, cus, sqa, toe,
                        cic, om0, cis, i0, crc, om, omd, idot, int(week), int(health), tgd, int(iodc), sys))
         i += nrec
@@ -146,11 +156,17 @@ def tdiff(t1: float, t0: float) -> float:
     return d
 
 
+def sys_time(e: Eph, t_gps: float) -> float:
+    """GPS time t_gps (s of week) in e's own system time: BDT for BeiDou, else the same."""
+    return t_gps + BDT_MINUS_GPST if e.sys == "C" else t_gps
+
+
 def sat_pos(e: Eph, t: float) -> tuple[tuple[float, float, float], float]:
-    """ECEF position at GPS time t (s of week) and the L1 C/A clock correction (s)."""
+    """ECEF position at time t (s of week, in e's system time: see sys_time) and the clock
+    correction (s) for its signal (L1 C/A, E1, B1I)."""
     a = e.sqrt_a ** 2
     tk = tdiff(t, e.toe)
-    n = math.sqrt((GAL_MU if e.sys == "E" else GPS_MU) / a ** 3) + e.delta_n
+    n = math.sqrt((GPS_MU if e.sys == "G" else GAL_MU) / a ** 3) + e.delta_n
     m = e.m0 + n * tk
     ek = m
     for _ in range(30):
@@ -162,7 +178,8 @@ def sat_pos(e: Eph, t: float) -> tuple[tuple[float, float, float], float]:
     di = e.cis * math.sin(2 * phi) + e.cic * math.cos(2 * phi)
     u, r, i = phi + du, a * (1 - e.e * math.cos(ek)) + dr, e.i0 + di + e.idot * tk
     xp, yp = r * math.cos(u), r * math.sin(u)
-    om = e.omega0 + (e.omega_dot - OMEGA_E) * tk - OMEGA_E * e.toe
+    we = BDS_OMEGA_E if e.sys == "C" else OMEGA_E
+    om = e.omega0 + (e.omega_dot - we) * tk - we * e.toe
     x = xp * math.cos(om) - yp * math.cos(i) * math.sin(om)
     y = xp * math.sin(om) + yp * math.cos(i) * math.cos(om)
     z = yp * math.sin(i)

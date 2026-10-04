@@ -55,6 +55,9 @@ Things about the files that are not obvious, all measured 2026-09-30:
     scenarios shifted 420 s earlier.
   - Their 45, 51 and 57 dB-Hz files measure 41.3, 45.8 and 48.5 dB-Hz.
   - Only the traveler's 45 has the carrier offset in the file: 23.0 Hz at this centre.
+- **The B1C flight files** (`signalsim_*_gpsgalb1c_2026_45_n_p180.C8`, 2026-10-04) are the sweep's
+  hotshot and traveler, narrow, with BeiDou on B1C. They measure 40.8 dB-Hz on GPS and carry no
+  carrier offset.
 - **Sample convention:** I + jQ, with Doppler signs as the generators log them.
 
 ## Front-end emulation
@@ -574,7 +577,8 @@ LAG,SF,BIAS,NOISE[,TILT]` adds the faults:
 - an attitude error, in degrees, that tips the acceleration from up toward east.
 
 The default is 5 ms, 3 %, 0.5 m/s², 0.1 m/s² and 0°. `--imu-at S0,S1` limits the aiding to a
-window. `imu.csv` logs what the loops were given.
+window. `imu.csv` logs what the loops were given. `--imu-ism6` emulates the board's own IMU instead
+([The board's IMU](#the-boards-imu-milestone-7)).
 
 **Why 20 Hz loops and not the quiet 10 Hz ones.** At burnout, an IMU 5 ms late and 3 % off leaves
 the loop 50–100 Hz/s that it was not told about. An acceleration step's phase error is about its
@@ -1067,6 +1071,163 @@ So the gate pays only at the weakest signals, and only with an IMU and an oscill
 good as the defaults; at burnout it gives margin away. It is worth another look once the board's IMU
 and TCXO are measured, or with burnout predicted from the burn's progress so the loops widen sooner.
 
+### Every L1 signal through the boost (milestone 7)
+
+The sweep files carry BeiDou on B1I, outside the receiver's band. Two SignalSim files carry every L1
+signal it tracks: the sweep's hotshot and traveler, narrow, with GPS L1 C/A (13 satellites), Galileo E1
+(8) and BeiDou B1C (8) (`signalsim_{hotshot,traveler}_gpsgalb1c_2026_45_n_p180.C8`, from
+`tools/gnss-cocom/sdr/signalsim/make_b1c_flights.py`). GPS measures 40.8 dB-Hz on them; Galileo's E1-C
+pilot reads 3.5 dB less and BeiDou's B1C pilot 2 dB less.
+
+The runs (`runs/bsat`) start 80 s before ignition and end at T+20 s (hotshot) and T+25 s (traveler).
+Noise brings GPS to 40.5 dB-Hz, and from T−10 s to each row's level (as the receiver measures it on
+the pad). The IMU is the board's ([below](#the-boards-imu-milestone-7)). Galileo
+and BeiDou start aided after the first GPS fix, from the preloaded ephemerides. The counts are at
+burnout + 1 s; errors are judged from ignition to 10 km, where SignalSim's troposphere stops (T+14 s
+on both). The design, with each pilot C/N0 estimate ([A pilot's C/N0](#a-pilots-cn0)), and with GPS
+alone (`--no-nav`: no Galileo or BeiDou ephemerides, so no aided starts). Each cell: satellites
+delivering (GPS + Galileo + BeiDou); satellites over 10 m; vertical velocity rms, m/s; worst height
+error, m.
+
+Hotshot:
+
+| GPS C/N0 (measured) | Pilots by moments | Pilots from consecutive dumps | GPS alone |
+|---|---|---|---|
+| 40.0 | 13+8+8; 0; 0.07; 0.6 | 13+8+7; 0; 0.08; 0.5 | 13+0+0; 0; 0.16; 0.5 |
+| 37.4 | 13+8+8; 0; 0.09; 0.5 | 13+8+8; 0; 0.09; 0.6 | 13+0+0; 0; 0.18; 0.5 |
+| 34.3 | 13+6+8; 1; 0.11; 0.8 | 13+8+8; 0; 0.15; 0.7 | 13+0+0; 0; 0.23; 0.8 |
+| 32.2 | 13+0+5; 3; 0.26; 1.8 | 13+8+8; 2; 0.17; 1.4 | 13+0+0; 2; 0.39; 1.8 |
+| 30.2 | 13+0+0; 3; 0.48; 3.5 | 13+6+6; 4; 0.18; 2.6 | 13+0+0; 3; 0.48; 3.5 |
+| 28.1 | 13+0+0; 12; 1.88; 18.1 | 13+0+6; 14; 0.77; 14.9 | 13+0+0; 13; 3.66; 27.5 |
+
+Traveler:
+
+| GPS C/N0 (measured) | Pilots by moments | Pilots from consecutive dumps | GPS alone |
+|---|---|---|---|
+| 40.0 | 13+8+8; 0; 0.04; 0.4 | 13+8+8; 0; 0.04; 0.4 | 13+0+0; 0; 0.11; 0.4 |
+| 37.4 | 13+8+8; 0; 0.05; 0.5 | 13+8+8; 0; 0.05; 0.4 | 13+0+0; 0; 0.16; 0.3 |
+| 34.3 | 13+6+7; 1; 0.07; 0.4 | 13+8+8; 0; 0.07; 0.3 | 13+0+0; 0; 0.23; 0.3 |
+| 32.2 | 13+0+5; 2; 0.22; 0.5 | 13+8+8; 0; 0.09; 0.3 | 13+0+0; 0; 0.30; 0.4 |
+| 30.2 | 13+0+0; 0; 0.36; 0.4 | 13+7+8; 0; 0.10; 0.4 | 13+0+0; 0; 0.37; 0.4 |
+| 28.1 | 13+0+0; 12; 2.05; 18.3 | 13+0+5; 17; 0.51; 17.0 | 13+0+0; 13; 2.52; 17.6 |
+
+- **With aiding, all 29 satellites ride both burns at 34 dB-Hz and over** (37 with the old pilot
+  estimate): nothing over 10 m, and a fix every epoch.
+- **GPS holds its carrier, Galileo nearly, and BeiDou lets go and comes back.** At 37–40 dB-Hz:
+  - GPS never lets go, and stays within 0.4 m.
+  - E1-C's 4 ms dumps allow 12.5 Hz loops. On the hotshot 2 of 8 let go, for 0.6 satellite-seconds
+    in all, within 3–4 m; on the traveler none.
+  - B1C's 10 ms dumps cap its loops at 5 Hz, which the aiding can't carry through ignition and
+    burnout. All 8 let go, for about a second in all. By moments they kept delivering code and
+    Doppler, within 5.4 m. From consecutive dumps the estimate dips under 25 dB-Hz while the phase
+    spins, so a channel coasts and holds its measurements back for a few tenths of a second (C39 at
+    the hotshot's burnout: the 7 in the first row).
+- **The pilots' C/N0 set the low end.** By moments, every Galileo satellite was gone on the pad at
+  32.2 dB-Hz and every BeiDou at 30.2, so there the design flew on GPS alone. From consecutive dumps,
+  all 8 + 8 ride both burns at 32.2 dB-Hz, and 6–7 Galileo and 6–8 BeiDou at 30.2. The vertical
+  velocity there is 2.7 and 3.6 times better: hotshot 0.48 → 0.18 m/s, traveler 0.36 → 0.10. Below
+  the 25 dB-Hz line the pilots go: at 28.1 dB-Hz (E1-C at 24.6) Galileo is lost on the pad.
+- **Against GPS alone, the extra satellites cut the vertical velocity noise 1.5 to 3.7 times at
+  every level:** 0.16 → 0.08 m/s at 40 dB-Hz on the hotshot, 0.11 → 0.04 on the traveler, and 2.3 to
+  3.7 times at 30–32 dB-Hz. Height errors are the same where both are small, under 1 m to 34 dB-Hz.
+- **Weak pilots carry noisier code.** At 30.2 dB-Hz one Galileo satellite reached 11 m on the
+  hotshot, beside the 3 GPS satellites that go over with or without the pilots. At 28.1 dB-Hz, past
+  what the design holds, BeiDou adds 2 and 4 to GPS's 12–13, and the fix still has a fifth of the
+  vertical velocity error of GPS alone.
+- **Without aiding, the pilots can't follow a burn.** The 50 Hz fallback can't widen their loops past
+  the caps: on the hotshot at 40 dB-Hz half of BeiDou is lost at burnout, and pilots go over 10 m on
+  both flights (3 each).
+- **The gated profile matches the design** to 30 dB-Hz, within the runs' scatter (`runs/bsat/BG_*`).
+
+Figures (`runs/bsat/fig`): `rates_b1c_hotshot.png` and `rates_b1c_traveler.png`, the three columns
+above at every level, on the rig's key.
+
+### The board's IMU (milestone 7)
+
+The aiding was designed against a generic IMU: 5 ms late, 3 % scale error, 0.5 m/s² bias and
+0.1 m/s² noise (`--imu-err`'s default). The board's IMU is an ST ISM6HG256X, as on Mantis, mounted at
+45° in the board plane. `--imu-ism6 GRADE[,ODR,HG_FS,CAL,TILT]` emulates its accelerometer from the
+datasheet (DS15034 Rev 2; `host/imu_ism6.h`, `ImuIsm6.*`):
+- **Two sensor axes share the thrust**, each at 45° to it. Each is sampled at the output data rate
+  through LPF1 (ODR/2, about a sample of delay), reaches the P4 0.2 ms later, and is held to the
+  next sample.
+- **Two channels per axis.** An axis reads the low-g channel (±16 g) until it nears that rail, then
+  the high-g one (±32 to ±256 g). Each channel has its own noise, offset, sensitivity error, LSB and
+  range, and the high-g channel its nonlinearity.
+- **Pad calibration.** At rest the thrust axis reads 1 g, so the P4 takes each channel's offset on
+  each axis there (5 s). What is left in flight is the sensitivity error on the load above 1 g and
+  the nonlinearity's change.
+
+| | Old model | ISM6HG256X, typical part | Worst part |
+|---|---|---|---|
+| Delay: LPF1, half the hold, transport | 5 ms | 1.8 ms at 960 Hz; 3.3 at 480; 1.0 at 1920 | same |
+| Scale error | 3 % | 0.33 % (a third of the ±1 % 3σ tolerance) | 1 % |
+| Offset in flight | 0.5 m/s² | under 1 mg, pad-calibrated | same |
+| Offset uncalibrated, along the thrust | — | 14 mg low-g, 354 mg high-g | 92 mg, 1.4 g |
+| Nonlinearity | none | high-g 2 %FS, taken as quadratic at every range: 0.29 g along the thrust at the hotshot's peak (±64 g) | same |
+| Noise per sample at 960 Hz | 0.1 m/s² a millisecond | 0.014 m/s² low-g, 0.21 high-g | 0.021, 0.24 |
+
+The datasheet gives the nonlinearity at ±256 g only. Taken as the same fraction of any range, it is
+four times larger at ±64 g than at ±256 g, which errs on the safe side.
+
+**Where the flights sit.** The hotshot peaks at 36.4 g along the thrust, 25.7 g on each axis: the
+high-g channel carries it from T+1.7 s to burnout at T+4.0 s, where the force steps to −3.1 g. The
+traveler's 18.9 g (13.4 g a side) stays on the low-g channel.
+
+**What the loops see** (`trksim`, which counts every cycle slip). The aided design through each burn,
+the 13 GPS satellites × 20 seeds, the signal stepped down 10 s before ignition. The ISM6HG256X as
+`--aid`: its delay at each rate, and its scale error plus the hotshot's peak nonlinearity (1.1 %
+typical, 1.8 % worst) applied throughout. Slips / unlocked seconds in the boost:
+
+| IMU, as the loops are given it (delay; scale error) | Hotshot, 36 dB-Hz | 33 | 32 | Traveler, 33 | 32 |
+|---|---|---|---|---|---|
+| exact | 0 | 0 | 0 | 0 | 4 (1.0 s) |
+| ISM6HG256X at 1920 Hz (1.0 ms; 1.1 %) | 0 | 0 | 0 | 0 | 6 (0.6 s) |
+| at 960 Hz (1.8 ms; 1.1 %) | 0 | 0 | 15 (1.4 s) | 0 | 10 (1.5 s) |
+| at 960 Hz, worst part (1.8 ms; 1.8 %) | 0 | 0 | 15 (1.4 s) | 0 | 10 (1.5 s) |
+| at 480 Hz (3.3 ms; 1.1 %) | 0 | 23 (3.1 s) | 118 (13.3 s) | 0 | 8 (1.9 s) |
+| old model (5 ms; 3 %; 0.5 m/s²) | 0 | 109 (13.9 s) | 379 (35.6 s) | 0 | 53 (5.3 s) |
+
+- **The delay is what counts, at the hotshot's burnout.** The force drops 39.5 g in one trajectory
+  step there, and the IMU hands the loop that step late. At 32 dB-Hz with the scale held at 1.1 %:
+  no slips at 1.0 ms, 15 at 1.76, 67 at 2.5, 118 at 3.33 and 303 at 5 ms. At 1.76 ms with no scale
+  error, none; with 3 %, 88.
+- **So 960 Hz or faster.** 480 Hz, the high-g channel's slowest rate, slips at 33 dB-Hz where 960 does
+  not, and 1920 Hz (a rate the flight computer already runs) is clean to 32. A real motor tails off
+  over tens of milliseconds, which softens the step the files have.
+- **The traveler's burnout is gentler** (23 g): every rate is clean to 33 dB-Hz. At 32 the old model
+  slips 53 times, the board's IMU 6 to 10.
+- **The quiet loops still need widening.** With quiet loops and the board's IMU at 960 Hz, the hotshot
+  slips 71 times at 36 dB-Hz, where the design slips none.
+
+**Through the whole receiver** (`gnssrx` on the B1C files, the design, pilots by moments). Each cell:
+GPS satellites whose PLL let go from ignition to 2.5 s past burnout (unlocked satellite-seconds);
+vertical velocity rms, m/s:
+
+| IMU | Hotshot, 32.2 dB-Hz | Hotshot, 30.2 dB-Hz | Traveler, 32.2 dB-Hz | Traveler, 30.2 dB-Hz |
+|---|---|---|---|---|
+| ISM6HG256X typical, 960 Hz, ±64 g, pad-calibrated (the board) | 2 (4.2 s); 0.26 | 6 (11.3 s); 0.48 | 0 (0.0 s); 0.22 | 3 (4.1 s); 0.36 |
+| the same at 480 Hz | 2 (4.1 s); 0.22 | 6 (9.4 s); 0.60 | 0 (0.0 s); 0.35 | 4 (9.5 s); 0.39 |
+| at 1920 Hz | 1 (4.3 s); 0.22 | 6 (14.6 s); 0.47 | 0 (0.0 s); 0.20 | 4 (4.4 s); 0.37 |
+| high-g at ±256 g | 2 (4.2 s); 0.24 | 6 (13.2 s); 0.47 | 0 (0.0 s); 0.22 | 3 (4.1 s); 0.36 |
+| worst part | 2 (4.2 s); 0.17 | 5 (12.7 s); 0.33 | 0 (0.0 s); 0.20 | 4 (5.2 s); 0.39 |
+| typical, uncalibrated | 2 (4.1 s); 0.26 | 7 (14.7 s); 0.62 | 1 (0.3 s); 0.37 | 6 (6.2 s); 0.41 |
+| worst, uncalibrated | 2 (5.5 s); 0.38 | 5 (13.7 s); 0.35 | 1 (0.3 s); 0.23 | 3 (6.0 s); 0.38 |
+| worst, 2° attitude error | 1 (4.2 s); 0.24 | 7 (16.4 s); 0.47 | 1 (0.3 s); 0.26 | 4 (6.2 s); 0.37 |
+| old model (5 ms, 3 %, 0.5 m/s²) | 2 (3.5 s); 0.26 | 6 (11.2 s); 0.43 | 0 (0.0 s); 0.24 | 4 (5.8 s); 0.37 |
+
+- **Through the whole receiver the IMUs look alike.** One run each, and the runs scatter more than
+  the IMUs differ: every IMU lets go of 0–2 GPS satellites at 32.2 dB-Hz and 3–7 at 30.2. Pilots
+  by moments, so these runs fly on GPS and what is left of BeiDou.
+- **Leaving out the pad calibration gives the worst vertical velocity in every column**, though by
+  little: 0.37–0.62 m/s against the board's 0.22–0.48. On the hotshot the typical part's high-g
+  offset, 250 mg a side (the worst part's 1 g), steps in when the axes switch channels at 22 g.
+- **The high-g range doesn't matter here**: ±64 and ±256 g give the same runs. ±256 g has a coarser
+  LSB (10.4 mg) but, by the datasheet's %FS, less nonlinearity at these loads.
+
+For the board: run the accelerometer at 960 Hz or faster (1920 Hz is the margin), read both
+channels, and take their offsets on the pad.
+
 ### Limits
 
 - **Static sensitivity ends near 31 dB-Hz.** Pull-in fails below about 32 dB-Hz, boost or not.
@@ -1081,6 +1242,9 @@ and TCXO are measured, or with burnout predicted from the burn's progress so the
   Both are configurations nothing flies. A lock-quality term in the sigma would cover them.
 - **Real motors add what the files lack.** The oscillator's g-sensitivity, vibration, spin and
   antenna phase are covered above. The plume's attenuation is not.
+- **B1C's carrier lets go at ignition and burnout, even aided.** Its 10 ms dumps and the
+  three-period command delay cap its loops at 5 Hz. Shorter dumps, or a shorter command delay on the
+  pilots, would let them widen.
 
 ## Real flight data: PSAS Launch-12 (milestone 7)
 
@@ -1342,13 +1506,13 @@ build/host/gnssrx signalsim_static_gpsgalb1c_2026_45_n.C8 --dur 90 --out runs/m6
   1 Hz.
 - The transmit time comes from the prediction rounded to the code epoch, and the secondary-code
   phase from it. On the file, Galileo's CS25 alignment agrees on every dump.
-- A start that never locks is dropped after 5 s and held off for 30 s. Until a pilot has locked
-  (lock indicator and 30 dB-Hz), it gives no measurements.
+- A start that never locks is dropped after 5 s and held off for 30 s. A pilot gives no
+  measurements until it has locked (lock indicator and 25 dB-Hz), nor while it reads under 25 dB-Hz.
 
 **Tracking a pilot:**
 - full-range PLL and FLL discriminators;
 - the BOC(1,1) DLL gain;
-- C/N0 by moments over 0.2 s;
+- C/N0 from consecutive dumps over 0.2 s ([below](#a-pilots-cn0));
 - loop bandwidths capped at Bn·T ≤ 0.05 (12.5 Hz for E1, 5 Hz for B1C). With 10 ms dumps and
   the three-period command delay, the 15 Hz pull-in PLL could not lock B1C.
 
@@ -1375,9 +1539,8 @@ Galileo and BeiDou time offsets solve to about +1.5 m against GPS, steady to a f
   with more power than the prompt over 0.2 s moves the code half a chip its way, over one
   commanded period. A channel parked on either side peak finds the main peak; one near the main
   peak never jumps.
-- **A pilot's C/N0** comes from 0.2 s of moments, which read up to 28 dB-Hz on noise. So a pilot
-  measures, and counts as locked, only at 30 dB-Hz or more, and is dropped below it.
-  Narrowband/wideband on the wiped pilot would allow a lower line.
+- **A pilot's C/N0** ([below](#a-pilots-cn0)): from moments at first, which kept pilots to 30 dB-Hz
+  and over.
 
 **Against Pocket SDR on the same stream** (150 s; its E1-B against our E1-C pilot):
 - **Position:** ours sd 0.15 / 0.03 / 0.17 m; Pocket SDR's 0.32 / 0.23 / 0.68 m.
@@ -1391,6 +1554,33 @@ Galileo and BeiDou time offsets solve to about +1.5 m against GPS, steady to a f
   box it isn't examined further.
 
 **Limit:** E1-B I/NAV and B-CNAV1 are not decoded; ephemerides are preloaded.
+
+### A pilot's C/N0
+
+A pilot first took its C/N0 from 0.2 s of moments, as GPS does before bit sync. On 4 or 10 ms dumps
+those read up to 28 dB-Hz on noise alone, so a pilot counted as locked, measured and stayed only at
+30 dB-Hz and over. E1-C sits about 3.5 dB under GPS L1 C/A on the SignalSim files and the B1C pilot
+about 2 dB, so every Galileo satellite went, on the pad, once GPS read 32 dB-Hz.
+
+Since 2026-10-04 (`TrkPilot.HoldsAWeakPilotAndDropsALostOne`, `TrkPilot.AnEmptySkyNeverLocks`) a
+pilot uses what it is: no data once its secondary code is wiped, so consecutive dumps differ only by
+the carrier's turn between them and the noise. Over 0.2 s:
+- the signal power is |Σ d_k d*_(k−1)|, whatever the frequency error;
+- the noise is what the pairs' mean power keeps beyond that, never negative.
+
+Simulated against moments (20,000–40,000 estimates a level; dB-Hz):
+
+| Signal | Moments, E1-C: median, 1st–99th percentile | From consecutive dumps, E1-C | From consecutive dumps, B1C |
+|---|---|---|---|
+| none | 19.8; up to 27.4 | 15.3; up to 20.3 (21.6 at 99.9 %) | 13.7; up to 19.3 (21.0) |
+| 25 | 25.6; to 29.6 | 25.1; 21.7–27.8 | 25.1; 21.4–28.8 |
+| 30 | 30.3; 26.8–33.1 | 30.1; 27.9–32.2 | 30.1; 27.2–33.4 |
+| 40 | 40.2; 38.1–42.4 | 40.0; 38.3–41.9 | 40.1; 37.5–43.2 |
+
+The carrier's turn between dumps leaves it unbiased (simulated to 40 Hz). Narrowband/wideband in
+20 ms blocks reads as low on noise, but loses 6 dB on B1C at 10 Hz off.
+So pilots now share GPS's 25 dB-Hz line: below it a channel coasts, after a second it is dropped,
+and a pilot must read over it to lock and to measure. GPS is unchanged.
 
 ## Pocket SDR as the cross-check
 

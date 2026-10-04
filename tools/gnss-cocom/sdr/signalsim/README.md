@@ -36,7 +36,7 @@ day-230 multi-GNSS broadcast file, from `../results/`) and a `c8` link to `../c8
 
 | Format | Rate, centre | Carries |
 |---|---|---|
-| narrow (`_n`) | 8.184 Msps at 1575.42 MHz | GPS L1 C/A and Galileo E1, cleanly |
+| narrow (`_n`) | 8.184 Msps at 1575.42 MHz | GPS L1 C/A and Galileo E1, cleanly; BeiDou B1C too (the `gpsgalb1c` files) |
 | wide (`_w`) | 18.48 Msps at 1568.286 MHz | adds BeiDou B1I; L1/E1 sit 7.1 MHz off centre near the HackRF's band edge, where Galileo suffers: keep the 20 MHz baseband filter |
 | L5 | 18.48 Msps at 1176.45 MHz | GPS L5, Galileo E5a, BeiDou B2a |
 
@@ -58,6 +58,7 @@ ways to apply it. `carrier_shift.py` bakes it into the file (the `_cofs` files).
 | `make_wide_hotshot.py` | The hotshot in the same wide 180 s-pad format, at the levels given |
 | `make_l5_config.py`, `make_l5w_config.py` | The static L5-band file, and its warm-start twin that starts 160 s after the hotshot L1 file |
 | `make_b1c_config.py` | The static narrow file with BeiDou B1C added, for the stage-0 software receiver |
+| `make_b1c_flights.py` | The hotshot and the traveler of the wide 180 s-pad files, narrow and with BeiDou on B1C: every signal the stage-0 software receiver tracks |
 | `gen.sh` | Runs IFdataGen on configs |
 | `carrier_shift.py` | Carrier-only frequency shift of an IQ8 file, with code timing untouched |
 | `sat_summary.py` | How clean a PX1105R flight of a SignalSim file was, per constellation, from the capture and the generation log |

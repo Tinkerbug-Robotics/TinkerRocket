@@ -106,7 +106,7 @@ def main() -> int:
     trk = read_csv(a.run / "trk.csv")
     obs = read_csv(a.run / "obs.csv")
     pvt = read_csv(a.run / "pvt.csv")
-    nav = rinex.read_nav(a.nav)
+    nav = rinex.read_nav(a.nav, "GEC")
     traj = truth.Trajectory(a.traj)
     lam = truth.LAMBDA_L1
 
@@ -119,7 +119,7 @@ def main() -> int:
     print(f"{a.run}: file {t_from:.1f}-{t_to:.1f} s, GPS TOW at file 0 = {t0:.3f}")
 
     # --- frequency error and lock, at trk.csv's rate ---
-    prns = sorted({int(p) for p in trk["prn"] if int(p) < 200})  # GPS and Galileo (+100); no BeiDou orbits here
+    prns = sorted({int(p) for p in trk["prn"]})  # GPS, Galileo (+100) and BeiDou (+200)
     los = {}
     for p in prns:
         m = trk["prn"] == p

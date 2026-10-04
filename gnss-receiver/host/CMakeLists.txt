@@ -7,6 +7,7 @@ add_library(gnss_host STATIC
     resamp.c
     iir.c
     rng.c
+    imu_ism6.c
     quant.c
     jam.c
     mitig.c

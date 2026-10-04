@@ -697,9 +697,9 @@ int rx_measure(rx_t *rx, uint64_t t, rx_obs_t *obs, int max, pvt_sol_t *sol)
         double chips = ((double)n->last_code_phase + (double)(t - n->last_t) * (double)n->cur_code) / CODE_ONE;
         double tt;
         if (n->sec_len > 0) {
-            if (!c->locked_once || c->cn0_lin < 1000.0f) {
+            if (!c->locked_once || c->cn0_lin < 316.22777f) {
                 /* An aided start counts once its PLL has confirmed the signal, and while the
-                 * signal stays above the moments estimate's noise floor (30 dB-Hz). */
+                 * signal stays above the loss line (25 dB-Hz). */
                 continue;
             }
             /* A pilot started by rx_aid: the period opened by the last dump, c->period + 1,

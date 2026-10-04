@@ -201,6 +201,22 @@
       "sha256": "e30231018ff0ae805c414942bde6970f2ad7e8764087c31107272db6f5f58613",
       "note": "static 300 s, GPS L1CA + Galileo E1 + BeiDou B1C, narrow, 45 dB-Hz, raw; made for the stage-0 software receiver"
     },
+    "signalsim_hotshot_gpsgalb1c_2026_45_n_p180.C8": {
+      "tool": "signalsim",
+      "config": "hotshot_gpsgalb1c_2026_45_n_p180",
+      "rate": 8184000,
+      "bytes": 4910383632,
+      "sha256": "9ba3f66399a29380e42ea07d31e1a7c2bec2215173ecdcc23e4eaefa856ae590",
+      "note": "hotshot, 180 s pad, to T+120, GPS L1CA + Galileo E1 + BeiDou B1C, narrow, 45 dB-Hz, raw; made for the stage-0 software receiver"
+    },
+    "signalsim_traveler_gpsgalb1c_2026_45_n_p180.C8": {
+      "tool": "signalsim",
+      "config": "traveler_gpsgalb1c_2026_45_n_p180",
+      "rate": 8184000,
+      "bytes": 8838703632,
+      "sha256": "c249682b32ade568c872edaddbd752424910c100eb76613fb76ea86fbc732ba5",
+      "note": "traveler, 180 s pad, to T+360, GPS L1CA + Galileo E1 + BeiDou B1C, narrow, 45 dB-Hz, raw; made for the stage-0 software receiver"
+    },
     "signalsim_static_l5_2026_45.C8": {
       "tool": "signalsim",
       "config": "static_l5_2026_45",

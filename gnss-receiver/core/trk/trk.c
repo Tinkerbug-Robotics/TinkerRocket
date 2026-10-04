@@ -200,9 +200,8 @@ static void cn0_estimate(trk_ch_t *c, float snr, float span)
 {
     c->cn0 = snr > 0.0f ? 10.0f * log10f(snr) : 0.0f;
     c->cn0_lin = snr;
-    /* Thresholds compare in the linear domain, so no libm result decides anything. A pilot's
-     * moments estimate reads up to 28 dB-Hz on noise, so its loss line is 30 dB-Hz. */
-    if (snr < (c->pilot ? 1000.0f : 316.22777f)) {  /* 30 or 25 dB-Hz */
+    /* Thresholds compare in the linear domain, so no libm result decides anything. */
+    if (snr < 316.22777f) {  /* 25 dB-Hz */
         c->t_weak += span;
     } else {
         c->t_weak = 0.0f;
@@ -226,7 +225,36 @@ static void lock_and_cn0(trk_ch_t *c, uint32_t p, float ip, float qp, float T)
         c->pll_lock = 0.0f;
     }
 
-    if (c->bit_sync && !c->pilot) {
+    if (c->pilot) {
+        /*
+         * A wiped pilot carries no data, so consecutive dumps differ only by the carrier's turn
+         * between them and the noise. Over 0.2 s, |sum d_k conj(d_k-1)| is the signal power
+         * whatever the frequency error, and what the pairs' mean power keeps beyond it is the
+         * noise (never negative: Cauchy-Schwarz). On noise alone it reads about 15 dB-Hz (21 at
+         * worst in a thousand), where moments of 4 or 10 ms dumps read up to 28, so a pilot keeps
+         * GPS's 25 dB-Hz loss line. It keeps its own last dump: coasting clears have_prev.
+         */
+        if (c->l1_have) {
+            c->l1_i += ip * c->l1_pi + qp * c->l1_pq;
+            c->l1_q += qp * c->l1_pi - ip * c->l1_pq;
+            c->l1_p += 0.5f * (p2 + c->l1_pi * c->l1_pi + c->l1_pq * c->l1_pq);
+            if (++c->nm == c->cn0_n) {
+                const float s1 = sqrtf(c->l1_i * c->l1_i + c->l1_q * c->l1_q);
+                const float pn = c->l1_p - s1;
+                if (pn > 0.0f) {
+                    c->pn = pn / (float)c->nm;
+                }
+                cn0_estimate(c, pn > 0.0f ? s1 / (pn * T) : 0.0f, T * (float)c->nm);
+                c->l1_i = c->l1_q = c->l1_p = 0.0f;
+                c->nm = 0;
+            }
+        }
+        c->l1_pi = ip;
+        c->l1_pq = qp;
+        c->l1_have = 1;
+        return;
+    }
+    if (c->bit_sync) {
         /*
          * Narrowband over wideband power (Van Dierendonck), in blocks of M dumps inside a bit:
          * mean(NP / WP) = mu gives the SNR per dump (mu - 1) / (M - mu). Unlike the moments
@@ -381,9 +409,9 @@ int trk_update(trk_ch_t *c, const trk_profile_t *p, const corr_dump_t *d, float 
     c->t_state += T;
 
     c->t_tracked += T;
-    /* A pilot's 0.2 s moments estimate reads up to 28 dB-Hz on noise alone, so a pilot must also
-     * show 30 dB-Hz (1000 Hz, compared in the linear domain) before it counts as locked. */
-    const int pilot_ok = !c->pilot || (c->cn0_lin >= 1000.0f);
+    /* A pilot must also show 25 dB-Hz (compared in the linear domain) before it counts as locked:
+     * an aided start on an empty sky can read a lock indicator of noise over noise. */
+    const int pilot_ok = !c->pilot || (c->cn0_lin >= 316.22777f);
     if (c->state == TRK_PULLIN && c->t_state > MIN_PULLIN_S && c->pll_lock > LOCK_IN && pilot_ok) {
         enter(c, TRK_LOCKED);
         c->locked_once = 1;

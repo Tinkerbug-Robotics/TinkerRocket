@@ -69,7 +69,7 @@ void trk_profile_step(trk_profile_t *cur, const trk_profile_t *target, float dt)
 /* Loss of lock: C/N0 below this (dB-Hz) for TRK_LOSS_S seconds; the loops coast meanwhile. */
 #define TRK_LOSS_CN0  25.0f
 #define TRK_LOSS_S    1.0f
-/* Before bit sync, C/N0 is estimated over this many dumps (moments); after it, over 10 bits. */
+/* GPS: before bit sync, C/N0 is estimated over this many dumps (moments); after it, over 10 bits. */
 #define TRK_CN0_N     200
 
 typedef struct {
@@ -125,6 +125,9 @@ typedef struct {
     float cn0_lin;              /* the same, linear (Hz), for thresholds */
     float m2, m4;
     int nm;
+    float l1_i, l1_q, l1_p;     /* a pilot's C/N0: sums of d_k conj(d_k-1) and of each pair's mean power */
+    float l1_pi, l1_pq;         /* and the dump before (l1_have: there is one) */
+    uint8_t l1_have;
     float t_weak;
 
     /* Bit sync and bits. */
@@ -151,8 +154,8 @@ int trk_update(trk_ch_t *c, const trk_profile_t *p, const corr_dump_t *d, float 
 
 /*
  * Makes a started channel track a pilot (GNSS_SIG_GAL_E1C, GNSS_SIG_BDS_B1CP; milestone 6):
- * full-range PLL and FLL discriminators on the wiped pilot, the BOC(1,1) DLL gain, C/N0 by
- * moments over 0.2 s, and no bit sync (the data code's symbols are its own prompt's).
+ * full-range PLL and FLL discriminators on the wiped pilot, the BOC(1,1) DLL gain, C/N0 from
+ * consecutive dumps over 0.2 s, and no bit sync (the data code's symbols are its own prompt's).
  */
 void trk_set_signal(trk_ch_t *c, int sig);
 

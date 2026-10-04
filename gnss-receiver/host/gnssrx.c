@@ -17,6 +17,7 @@
 #include "fe_format.h"
 #include "gnss/boost_detect.h"
 #include "gnss/rx.h"
+#include "imu_ism6.h"
 #include "loops_arg.h"
 #include "manifest.h"
 #include "rng.h"
@@ -89,6 +90,11 @@ static void usage(void)
             "                            bias m/s^2 along local up, white noise m/s^2 per axis, and an attitude\n"
             "                            error in degrees that tips the acceleration from up toward east\n"
             "                            (default 5,0.03,0.5,0.1,0)\n"
+            "  --imu-ism6 GRADE[,ODR,HG_FS,CAL,TILT]   the board's IMU (an ISM6HG256X at 45 deg, host/imu_ism6.h)\n"
+            "                            in place of --imu-err: GRADE typ or max (the datasheet's typical part or its\n"
+            "                            worst), ODR Hz (480 to 7680, default 960), the high-g full scale in g (32 to\n"
+            "                            256, default 64), CAL pad (the P4 takes the offsets at rest) or raw, and the\n"
+            "                            attitude error in degrees (0)\n"
             "  --imu-at S0,S1            aid only from file second S0 to S1 (default: all the run)\n"
             "  --imu-no-aid              the IMU only detects launch and burnout (--boost-detect); no feed-forward\n"
             "  --osc-g GAMMA[,COMP]      the reference oscillator's g-sensitivity along the thrust axis, ppb/g:\n"
@@ -240,6 +246,15 @@ static void imu_at(const imu_traj_t *m, double t, double acc[3])
     memcpy(acc, m->acc[lo], sizeof(double[3]));
 }
 
+/* The specific force along local up at t, m/s^2: the trajectory's acceleration plus gravity's reaction. */
+static double imu_force_up(void *ctx, double t)
+{
+    const imu_traj_t *m = (const imu_traj_t *)ctx;
+    double a[3];
+    imu_at(m, t, a);
+    return a[0] * m->up[0] + a[1] * m->up[1] + a[2] * m->up[2] + 9.80665;
+}
+
 /* The reference oscillator under acceleration: its fractional frequency error is gamma (per g) times
  * the specific force along the thrust axis (local up: these flights go straight up), linear between
  * the trajectory's interval midpoints, plus a vibration tone. */
@@ -378,7 +393,9 @@ int main(int argc, char **argv)
     double imu_lag_ms = 5.0, imu_sf = 0.03, imu_bias = 0.5, imu_noise = 0.1, imu_tilt = 0.0, imu0 = -INFINITY,
            imu1 = INFINITY;
     double boost0 = INFINITY, boost1 = -INFINITY;
-    int boost_detect = 0, imu_no_aid = 0;
+    int boost_detect = 0, imu_no_aid = 0, use_ism6 = 0;
+    ism6_cfg_t i6c;
+    char i6_grade[16] = "typ", i6_cal[16] = "pad";
     double gate_ign = -1.0, gate_frac = 0.9, gate_ms = 10.0;
     boost_detect_cfg_t bdc;
     boost_detect_default(&bdc);
@@ -465,6 +482,24 @@ int main(int argc, char **argv)
                 fprintf(stderr, "gnssrx: --imu-err takes LAG_MS,SF,BIAS,NOISE[,TILT_DEG]\n");
                 return 2;
             }
+        } else if (!strcmp(a, "--imu-ism6") && v) {
+            double odr = 960.0, fs = 64.0, tilt = 0.0;
+            int k = sscanf(argv[++i], "%15[^,],%lf,%lf,%15[^,],%lf", i6_grade, &odr, &fs, i6_cal, &tilt);
+            /* The rates both channels run at, and the high-g ranges (DS15034 table 3). */
+            const int odr_ok = odr == 480.0 || odr == 960.0 || odr == 1920.0 || odr == 3840.0 || odr == 7680.0;
+            const int fs_ok = fs == 32.0 || fs == 64.0 || fs == 128.0 || fs == 256.0;
+            if (k < 1 || (strcmp(i6_grade, "typ") && strcmp(i6_grade, "max")) || !odr_ok || !fs_ok ||
+                (k >= 4 && strcmp(i6_cal, "pad") && strcmp(i6_cal, "raw"))) {
+                fprintf(stderr, "gnssrx: --imu-ism6 takes typ|max[,ODR,HG_FS,pad|raw,TILT_DEG]: ODR 480, 960, 1920,"
+                        " 3840 or 7680 Hz; HG_FS 32, 64, 128 or 256 g\n");
+                return 2;
+            }
+            ism6_cfg_default(&i6c, !strcmp(i6_grade, "max"));
+            i6c.odr_hz = odr;
+            i6c.hg_fs_g = fs;
+            i6c.pad_cal = strcmp(i6_cal, "raw") != 0;
+            imu_tilt = tilt;
+            use_ism6 = 1;
         } else if (!strcmp(a, "--imu-at") && v) {
             if (sscanf(argv[++i], "%lf,%lf", &imu0, &imu1) != 2) {
                 fprintf(stderr, "gnssrx: --imu-at takes S0,S1\n");
@@ -756,6 +791,7 @@ int main(int argc, char **argv)
     memset(&imu, 0, sizeof(imu));
     rng_t imu_rng;
     rng_seed(&imu_rng, 77);
+    ism6_t i6;
     boost_detect_t bd;
     boost_detect_init(&bd, &bdc);
     double bd_on[4], bd_burnout[4], bd_off[4];  /* what it detected, file seconds */
@@ -764,6 +800,11 @@ int main(int argc, char **argv)
     if (imu_path && imu_load(imu_path, &imu) != 0) {
         fprintf(stderr, "gnssrx: cannot read the trajectory %s\n", imu_path);
         return 1;
+    }
+    if (imu.n > 0 && use_ism6) {
+        ism6_init(&i6, &i6c, so.start_s, 77);
+        imu_lag_ms = 1e3 * ism6_mean_delay(&i6c);  /* for the oscillator's feed-forward */
+        imu_sf = 0.0;
     }
     if (imu.n > 0) {
         /* What the aiding was given, at 10 Hz: the true and the emulated acceleration along local up. */
@@ -813,7 +854,10 @@ int main(int argc, char **argv)
         if (boost0 < boost1) {
             fprintf(fini, "boost_at = %.3f,%.3f\n", boost0, boost1);
         }
-        if (imu_path) {
+        if (imu_path && use_ism6) {
+            fprintf(fini, "imu = %s\nimu_ism6 = %s,%g,%g,%s,%g\n", imu_path, i6_grade, i6c.odr_hz, i6c.hg_fs_g,
+                    i6c.pad_cal ? "pad" : "raw", imu_tilt);
+        } else if (imu_path) {
             fprintf(fini, "imu = %s\nimu_err = %g,%g,%g,%g,%g\n", imu_path, imu_lag_ms, imu_sf, imu_bias, imu_noise,
                     imu_tilt);
         }
@@ -922,7 +966,15 @@ int main(int argc, char **argv)
             /* The IMU as the P4 would see it: imu_lag_ms late, scaled, biased along local up, noisy. */
             int on = t_file >= imu0 && t_file < imu1;
             double a[3], nz[4];
-            imu_at(&imu, t_file - 1e-3 * imu_lag_ms, a);
+            if (use_ism6) {
+                /* The board's IMU: its axial specific force as the P4 has it, less gravity, along up. */
+                const double a_up = ism6_read(&i6, t_file, imu_force_up, &imu) - G0;
+                for (int j = 0; j < 3; j++) {
+                    a[j] = a_up * imu.up[j];
+                }
+            } else {
+                imu_at(&imu, t_file - 1e-3 * imu_lag_ms, a);
+            }
             rng_gauss2(&imu_rng, &nz[0], &nz[1]);
             rng_gauss2(&imu_rng, &nz[2], &nz[3]);
             if (imu_tilt != 0.0) {
@@ -937,7 +989,7 @@ int main(int argc, char **argv)
                     a[j] += du * imu.up[j] + de * east[j];
                 }
             }
-            for (int j = 0; j < 3; j++) {
+            for (int j = 0; j < 3 && !use_ism6; j++) {
                 a[j] = a[j] * (1.0 + imu_sf) + imu_bias * imu.up[j] + imu_noise * nz[j];
             }
             if (boost_detect) {
@@ -1197,6 +1249,12 @@ int main(int argc, char **argv)
     }
     printf("  integrity gate: %u channels dropped (under the horizon, or out of agreement), %u fixes withheld for "
            "want of redundancy\n", rx->n_gate_drop, rx->n_gate_withheld);
+    if (imu.n > 0 && use_ism6) {
+        printf("  IMU (ISM6HG256X, %s, %g Hz, +-%g g high-g, %s): %llu samples, %.1f %% of axis readings on the high-g "
+               "channel, %llu at its rail\n", i6_grade, i6c.odr_hz, i6c.hg_fs_g, i6c.pad_cal ? "pad-calibrated" : "raw",
+               (unsigned long long)i6.n_samples, i6.n_samples ? 50.0 * (double)i6.n_high / (double)i6.n_samples : 0.0,
+               (unsigned long long)i6.n_rail);
+    }
     if (t_first_fix_set) {
         printf("  first fix at %.3f s", t_first_fix);
         if (seed) {

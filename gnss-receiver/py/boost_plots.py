@@ -89,8 +89,8 @@ class Run:
         self.tf_trk = self.trk["t_s"] + self.start
         self.tf_obs = self.obs["t_s"] + self.start
         self.tf_pvt = self.pvt["t_s"] + self.start
-        # Satellites that delivered something at some point; BeiDou (201-263) has no orbits here yet.
-        self.prns = sorted({int(p) for p in self.obs["prn"] if int(p) < 200})
+        # Satellites that delivered something at some point.
+        self.prns = sorted({int(p) for p in self.obs["prn"]})
         self.t0 = float(np.round(self.obs["rx_tow"][0] - self.obs["t_s"][0] - self.start, 3))
         b = self.ini.get("boost_at")
         d = self.ini.get("boost_detected")  # on, burnout, off: what the emulated IMU detected
@@ -125,7 +125,7 @@ class Truth:
 
     def __init__(self, traj: Path, nav: Path):
         self.traj = truth.Trajectory(traj)
-        self.nav = rinex.read_nav(nav)
+        self.nav = rinex.read_nav(nav, "GEC")
         self.cache: dict[tuple[int, float], dict[int, np.ndarray]] = {}
 
     def los(self, prn: int, keys: np.ndarray, t0: float) -> np.ndarray:
@@ -202,7 +202,7 @@ def judged(run: Run, tr: Truth, liftoff: float, t_end: float) -> dict[int, dict[
     clock). A satellite with no pre-launch level is not judged."""
     tropo = file_tropo(run)
     o, tf = run.obs, run.tf_obs
-    w = (tf >= liftoff - 30.0) & (tf <= t_end + 0.05) & (o["prn"] < 200)
+    w = (tf >= liftoff - 30.0) & (tf <= t_end + 0.05)
     prn, k, x = o["prn"][w].astype(int), key(tf[w]), o["pr_m"][w].astype(float)
     for p in np.unique(prn):
         m = prn == p
@@ -366,8 +366,6 @@ def errors(run: Run, tr: Truth, liftoff: float):
     dop = np.full(tf.size, np.nan)
     tropo = file_tropo(run)
     for p in np.unique(o["prn"]).astype(int):
-        if p >= 200:  # no BeiDou orbits here
-            continue
         m = o["prn"] == p
         rng[m] = pr_truth(run, tr, p, key(tf[m]), tropo)
         dop[m] = tr.los(p, key(tf[m]), run.t0)[:, 1] - tropo_rate(run, tr, p, key(tf[m]), tropo) / LAM
