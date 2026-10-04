@@ -42,7 +42,7 @@ import rtcm3                                                    # noqa: E402
 from gnss_nmea_monitor import _demux                            # noqa: E402
 from lc86_config import (Link, NAV_MODES, find_bridge, frame,   # noqa: E402
                          open_bridge, read_state, show_state)
-from run_radiated import start_tx, stop_tx                      # noqa: E402
+from run_radiated import start_tx, stop_tx, keep_awake          # noqa: E402
 from ensure_hackrf import hackrf_idle                           # noqa: E402
 
 T0_TOW = 203400.0      # 2026/08/18 08:30:00 GPS, the file's t = 0
@@ -65,6 +65,9 @@ def main() -> int:
     a = ap.parse_args()
     if not 0 <= a.gain <= 6:
         return "--gain is capped at 6 dB for radiated runs"
+    awake = keep_awake(a.seconds + 120)   # the capture plus the receiver setup before it and the stop after
+    print(f"# caffeinate pid {awake.pid}: awake and user-active until this run exits"
+          if awake else "# caffeinate not found: running without a keep-awake")
 
     port = find_bridge("auto")
     if not port:

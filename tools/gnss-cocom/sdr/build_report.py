@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Assemble the two reports from the editable text, the receiver data and the figures.
+"""Assemble the three reports from the editable text, the receiver data and the figures.
 
     report.html        GNSS Receiver Limits: where each receiver stops publishing
     boost_report.html  GNSS Under Boost: what the boost itself does to tracking
 
 Three inputs, each owned by whoever should own it:
 
-    report_text.html, boost_report_text.html   the words   -- edit freely
+    report_text.html, boost_report_text.html,
+    cn0_boost_report_text.html                 the words   -- edit freely
     report_head.html   the stylesheet, shared by both     -- edit rarely
     results/receivers.json + results/figures/   the measurements
 
@@ -61,6 +62,7 @@ OUT = HERE / "report.html"
 PAGES = [
     (TEXT, OUT, "GNSS Receiver Limits"),
     (HERE / "boost_report_text.html", HERE / "boost_report.html", "GNSS Under Boost"),
+    (HERE / "cn0_boost_report_text.html", HERE / "cn0_boost_report.html", "Boost Tracking vs Signal"),
 ]
 
 sys.path.insert(0, str(HERE))
@@ -222,6 +224,14 @@ def build(text_path: Path, title: str):
         "{{FIG_LC86_MODE_SURVEY}}": fig("lc86g_mode_survey.svg"),
         "{{FIG_LC86_SKY_COLDSTART}}": fig("lc86g_sky_coldstart.svg"),
         "{{FIG_LC86_LEVELS}}": fig("lc86g_level_sweep.svg"),
+        "{{FIG_CN0_TRAJECTORIES}}": fig("cn0_trajectories.svg"),
+        "{{FIG_CN0_SKY}}": fig("cn0_sky.svg"),
+        "{{FIG_CN0_PX_TRAVELER}}": fig("cn0_px1105r_traveler.svg"),
+        "{{FIG_CN0_PX_CHECKS}}": fig("cn0_px1105r_checks.svg"),
+        "{{FIG_CN0_PX_HOTSHOT}}": fig("cn0_px1105r_hotshot.svg"),
+        "{{FIG_CN0_PX_OWN_LAG}}": fig("cn0_px1105r_own_lag.svg"),
+        "{{FIG_CN0_M8T_TRAVELER}}": fig("cn0_m8t_traveler.svg"),
+        "{{FIG_CN0_M8T_HOTSHOT}}": fig("cn0_m8t_hotshot.svg"),
     }
     used = {k for k in fills if k in text}
     for k, v in fills.items():
