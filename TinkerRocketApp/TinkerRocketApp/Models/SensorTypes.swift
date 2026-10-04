@@ -143,7 +143,8 @@ nonisolated struct FlightSettingsData {
     static let fGuidance: UInt8        = 2
     static let fServoEnabled: UInt8    = 3
     static let fFwDirty: UInt8         = 4
-    static let fSounds: UInt8          = 5
+    // bit 5 was F_SOUNDS (piezo sounds): retired with the buzzer. Never set
+    // by current firmware; old logs may still carry it. Do not reuse.
     static let fImuRateDynamic: UInt8  = 7
 
     let time_us: UInt32
@@ -247,7 +248,6 @@ nonisolated struct FlightSettingsData {
     var guidanceEnabled: Bool { flags & (1 << FlightSettingsData.fGuidance) != 0 }
     var servoEnabled: Bool { flags & (1 << FlightSettingsData.fServoEnabled) != 0 }
     var fwDirty: Bool { flags & (1 << FlightSettingsData.fFwDirty) != 0 }
-    var soundsEnabled: Bool { flags & (1 << FlightSettingsData.fSounds) != 0 }
     /// The flight ran the dynamic logging rate, so `ism6_update_rate_hz` is
     /// the rate at the snapshot (the boost rate) and the log steps down at the
     /// first frame carrying NSF2_DEPLOYED. Flights predating dynamic mode

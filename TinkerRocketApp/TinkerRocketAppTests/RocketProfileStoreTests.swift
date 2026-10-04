@@ -275,7 +275,8 @@ final class RocketProfileStoreTests: XCTestCase {
 
     /// Pre-#156 profile JSON (no recovery fields) must still load — the
     /// store does `try? decode(...)` and silently drops failures, so a
-    /// regression here would erase saved profiles on app upgrade.
+    /// regression here would erase saved profiles on app upgrade.  Also
+    /// carries the retired "soundsEnabled" key, which must be ignored.
     func testLegacyProfileMissingRecoveryFieldsLoads() throws {
         let legacyJSON = """
         {
@@ -313,7 +314,6 @@ final class RocketProfileStoreTests: XCTestCase {
     // MARK: - Migration
 
     private func seedLegacyDefaults() {
-        defaults.set(true, forKey: "rocketSoundsEnabled")
         defaults.set(false, forKey: "servoControlEnabled")
         defaults.set(1, forKey: "cameraType")
         defaults.set(true, forKey: "useAngleControl")
@@ -332,7 +332,6 @@ final class RocketProfileStoreTests: XCTestCase {
         XCTAssertEqual(store.profiles.count, 1)
         let p = try! XCTUnwrap(store.activeProfile)
         XCTAssertEqual(p.name, "Default")
-        XCTAssertTrue(p.soundsEnabled)
         XCTAssertFalse(p.servoControlEnabled)
         XCTAssertEqual(p.cameraType, 1)
         XCTAssertTrue(p.useAngleControl)

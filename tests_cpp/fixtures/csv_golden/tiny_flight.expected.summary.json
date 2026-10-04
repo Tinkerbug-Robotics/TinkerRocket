@@ -92,7 +92,6 @@
       "frequency_hz" : 333,
       "max_pulse_us" : 2000,
       "min_pulse_us" : 1000
-    },
-    "sounds_enabled" : false
+    }
   }
 }

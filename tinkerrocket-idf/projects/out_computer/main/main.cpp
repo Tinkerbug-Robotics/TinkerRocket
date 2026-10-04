@@ -1709,7 +1709,7 @@ static uint8_t       imu_orient_pub_mode = 0xFF;
 // FC's full config report (#915), mirrored from CONFIG_REPORT_MSG.  This is
 // the ONLY source for the settings the app could not otherwise see — servo
 // trim 2-4, fin travel, fin layout, the PN guidance parameters, the roll
-// waypoints, sounds and the orientation SETTING — and, since v2 (#1231), the
+// waypoints and the orientation SETTING — and, since v2 (#1231), the
 // only FC-sourced copy of the deployment configuration.  Held in RAM only, never
 // NVS: a stale report served after an OC reboot would be a confident lie
 // about a vehicle we have not heard from, and the FC re-pushes every few
@@ -4217,8 +4217,6 @@ static bool isKnownMessageType(uint8_t type)
         case OUT_STATUS_RESPONSE:
         case CAMERA_START:
         case CAMERA_STOP:
-        case SOUNDS_ENABLE:
-        case SOUNDS_DISABLE:
         case SERVO_CONFIG_PENDING:
         case SERVO_CONFIG_MSG:
         case PID_CONFIG_PENDING:
@@ -6273,7 +6271,7 @@ static void sendConfigExtras()
     const ConfigReportData r = snapshotConfigReport(&r_valid);
     (void)r_valid;
 
-    // 1) Servo trim 2-4, fin travel, fin layout, sounds.
+    // 1) Servo trim 2-4, fin travel, fin layout.
     String j = "{\"type\":\"config_servo\"";
     j += ",\"sb2\":"; j += itos(r.servo.bias_us[1]);
     j += ",\"sb3\":"; j += itos(r.servo.bias_us[2]);
@@ -6288,8 +6286,10 @@ static void sendConfigExtras()
     j += "]";
     j += ",\"frv\":";  j += itos(r.fin.reverse_mask);
     j += ",\"frrv\":"; j += itos(r.fin.roll_reverse_mask);
-    j += ",\"snd\":";
-    j += (r.flags & (1U << ConfigReportData::F_SOUNDS)) ? "true" : "false";
+    // The piezo is gone, but apps from before its removal reject a
+    // config_servo frame without "snd" and would show the whole group as
+    // unreported.  A constant false keeps them working; current apps ignore it.
+    j += ",\"snd\":false";
     j += "}";
     enqueueConfigReadback(j);
     ESP_LOGI("CFG", "Queued config_servo readback (%u bytes)", (unsigned)j.length());
@@ -12185,16 +12185,10 @@ static void loop_oc()
         }
         else if (ble_cmd == 11)
         {
-            // Rocket computer sound enable/disable: [enabled:1]
-            const uint8_t* payload = ble_app.getCommandPayload();
-            const size_t plen = ble_app.getCommandPayloadLength();
-            if (plen >= 1)
-            {
-                bool enabled = (payload[0] != 0);
-                setPendingCommand(enabled ? SOUNDS_ENABLE : SOUNDS_DISABLE);
-                ESP_LOGI("BLE", "Sounds: %s (pending for RocketComputer)",
-                              enabled ? "ENABLE" : "DISABLE");
-            }
+            // Retired: sounds enable/disable.  The piezo is gone; an older
+            // app may still send this, so swallow it rather than fall through
+            // to the unknown-command path.
+            ESP_LOGI("BLE", "Cmd 11 (sounds) ignored: no piezo on this rocket");
         }
         else if (ble_cmd == 12)
         {
@@ -12244,7 +12238,7 @@ static void loop_oc()
                 // control the operator had deliberately disabled.
                 //
                 // Adoption from the FC is not available: ConfigReportData's
-                // flags are only F_SOUNDS, F_ORIENT_FROM_NVS, (#1231)
+                // flags are only F_ORIENT_FROM_NVS, (#1231)
                 // F_PYRO_FROM_NVS and (#1472) F_CAMERA_FROM_NVS, and the
                 // F_SERVO_ENABLED bit lives in FlightSettingsData, which the
                 // OC classifies log-only.

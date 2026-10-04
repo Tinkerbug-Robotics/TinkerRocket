@@ -34,7 +34,7 @@ F_GAIN_SCHEDULE = 1
 F_GUIDANCE = 2
 F_SERVO_ENABLED = 3
 F_FW_DIRTY = 4
-F_SOUNDS = 5
+# bit 5: retired (was F_SOUNDS, piezo sounds); older logs may carry it.
 F_GUIDANCE_STATION_KEEP = 6
 F_IMU_RATE_DYNAMIC = 7
 
@@ -100,7 +100,6 @@ def decode(payload: bytes) -> dict[str, Any]:
         "guidance_enabled": flag(F_GUIDANCE),
         "servo_enabled": flag(F_SERVO_ENABLED),
         "fw_dirty": flag(F_FW_DIRTY),
-        "sounds_enabled": flag(F_SOUNDS),
         "guidance_station_keep": flag(F_GUIDANCE_STATION_KEEP),
         "imu_rate_dynamic": flag(F_IMU_RATE_DYNAMIC),
         "roll_delay_ms": h[3],

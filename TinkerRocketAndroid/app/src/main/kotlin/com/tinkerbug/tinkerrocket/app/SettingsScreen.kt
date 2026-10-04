@@ -402,14 +402,6 @@ fun SettingsScreen(
             return@Column
         }
 
-        // ── Rocket ───────────────────────────────────────────────────────
-        // Control settings that used to live here (servo enable, gain
-        // schedule, angle control, roll delay) moved down under the servo
-        // control gate, where the switch that makes them do anything is.
-        Section("Rocket") {
-            ToggleRow("Sounds", active.soundsEnabled) { v -> edit(ConfigGroup.SOUNDS) { it.copy(soundsEnabled = v) } }
-        }
-
         // ── Radio (iOS General-tab "Radio" section) ──────────────────────
         // Presented positively — the switch reads "LoRa telemetry", so ON
         // always means the radio is doing something.  The wire byte is the

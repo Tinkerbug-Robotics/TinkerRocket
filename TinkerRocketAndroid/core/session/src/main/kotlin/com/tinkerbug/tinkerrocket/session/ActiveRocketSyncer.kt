@@ -73,7 +73,7 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         // orientation also re-pushed the IMU rate (and vice versa). iOS sends
         // per field. Inert today because the two profile fields are only ever
         // written by their own controls — split before that stops being true.
-        GUIDANCE, FIN_LAYOUT, CAMERA, IMU_ORIENT, IMU_RATE, SOUNDS, PYRO,
+        GUIDANCE, FIN_LAYOUT, CAMERA, IMU_ORIENT, IMU_RATE, PYRO,
     }
 
     /** Cal is board-specific — it can't be blindly pushed. */
@@ -583,7 +583,6 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
             ConfigGroup.CAMERA -> s.sendCommandFrame(Commands.cameraConfig(profile.cameraType))
             ConfigGroup.IMU_ORIENT -> s.sendCommandFrame(Commands.imuOrient(profile.imuOrientSetting))
             ConfigGroup.IMU_RATE -> s.sendCommandFrame(Commands.imuRate(profile.imuRateHz))
-            ConfigGroup.SOUNDS -> s.sendCommandFrame(Commands.soundsEnable(profile.soundsEnabled))
             ConfigGroup.PYRO -> {
                 val channels = listOf(
                     PyroChannelConfig(profile.pyro1Enabled, profile.pyro1TriggerMode, profile.pyro1TriggerValue),
@@ -797,7 +796,6 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         public const val GROUP_SERVO_TRIM_24: String = "Servo trim 2-4"
         public const val GROUP_FIN_TRAVEL: String = "Fin travel"
         public const val GROUP_FIN_LAYOUT: String = "Fin layout"
-        public const val GROUP_SOUNDS: String = "Sounds"
         public const val GROUP_GUIDANCE_PARAMS: String = "Guidance parameters"
         public const val GROUP_ROLL_PROFILE: String = "Roll profile"
 
@@ -996,11 +994,6 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
                         finRollReverse = rollReverse, finRingMode = ringMode,
                     )
                     changed += GROUP_FIN_LAYOUT
-                }
-
-                if (p.soundsEnabled != e.soundsEnabled) {
-                    p = p.copy(soundsEnabled = e.soundsEnabled)
-                    changed += GROUP_SOUNDS
                 }
             }
 

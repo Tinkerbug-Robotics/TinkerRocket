@@ -52,7 +52,6 @@
 #include "fc_ota_session_policy.h" // #1116: the FC's own exit from an OTA image session nobody ends
 #include "roll_control_mode_policy.h" // #1137 item 6: which roll law runs this tick
 #include "test_mode_gate_policy.h"   // #1137 item 5: the #363 failsafe and the test-command gates
-#include "piezo_wave_policy.h"      // #732 item 3b: the square-wave table that cannot latch the coil on
 #include "oc_cmd_dedup.h"        // #1112: dispatch only on the poll pass; bounded config retry
 #include "servo_pin_policy.h"    // servoPinsValid(): an M1 int -1 pin is unmapped, not GPIO 0xFFFFFFFF
 #include <driver/uart.h>
@@ -770,42 +769,7 @@ static bool sim_flight_latched = false;
 // Roll profile: (time, angle) waypoints for cascaded angle controller
 static RollProfileData roll_profile = {};  // zeroed → num_waypoints = 0 (rate-only)
 static Preferences prefs;
-static bool enable_sounds = config::ENABLE_SOUNDS;
-static bool ready_chirp_played = false;
-static uint32_t last_heartbeat_beep_ms = 0;
-static bool piezo_pwm_ready = false;
-// #732 item 3b: the wave state moved into PiezoWavePolicy::State and every
-// transition is serialised on piezo_mux. It used to be three loose statics
-// mutated from both the main task and the esp_timer task (different cores on
-// the P4) with no interlock, which let a stop and a toggle interleave and
-// leave the coil DC-energised. piezo_wave_end_us was also a torn read waiting
-// to happen: a 64-bit write from piezoStart() against a 64-bit read in the
-// callback is two words on a 32-bit core.
-static portMUX_TYPE piezo_mux = portMUX_INITIALIZER_UNLOCKED;
-static PiezoWavePolicy::State piezo_wave;
-static esp_timer_handle_t piezo_toggle_timer = nullptr;
-static uint32_t piezo_half_period_us = 0;
-
-// Apply a PinAction. Never called for PinAction::None, which means "the pin
-// is not ours to write this transition".
-static inline void piezoApply(PiezoWavePolicy::PinAction a)
-{
-    // A negative PIEZO_PIN is a board with no piezo (the mini). Every write
-    // after setup comes through here, so this one guard keeps them all off a
-    // pin the GPIO driver would answer with an error log per call. It keys on
-    // the pin, not on piezo_pwm_ready: where there IS a coil, piezoStop()
-    // must still drive it low when the timer never initialised.
-    if (config::PIEZO_PIN < 0)
-    {
-        return;
-    }
-    if (a == PiezoWavePolicy::PinAction::None)
-    {
-        return;
-    }
-    gpio_set_level((gpio_num_t)config::PIEZO_PIN,
-                   a == PiezoWavePolicy::PinAction::DriveHigh ? 1 : 0);
-}
+static uint32_t last_heartbeat_ms = 0;
 static bool blue_led_flash_active = false;
 static uint32_t blue_led_flash_end_ms = 0;
 
@@ -1036,10 +1000,6 @@ static const char* resetReasonStr(esp_reset_reason_t r)
         default:                return "OTHER";
     }
 }
-
-enum class BootChirpPhase : uint8_t { Idle, GapAfterBeep1, WaitingBeep2End };
-static BootChirpPhase boot_chirp_phase = BootChirpPhase::Idle;
-static uint32_t boot_chirp_next_ms = 0;
 
 // ==========================================================================
 // SECTION: Servo control and config-frame reads
@@ -2580,7 +2540,6 @@ static void buildFlightSettings(FlightSettingsData& s)
     if (guidance_enabled)   flags |= (uint8_t)(1u << FlightSettingsData::F_GUIDANCE);
     if (servo_enabled)      flags |= (uint8_t)(1u << FlightSettingsData::F_SERVO_ENABLED);
     if (FW_GIT_DIRTY)       flags |= (uint8_t)(1u << FlightSettingsData::F_FW_DIRTY);
-    if (enable_sounds)      flags |= (uint8_t)(1u << FlightSettingsData::F_SOUNDS);
     if (pn_guidance_law == GUIDE_LAW_STATION_KEEP)
                             flags |= (uint8_t)(1u << FlightSettingsData::F_GUIDANCE_STATION_KEEP);
     s.flags = flags;
@@ -2714,7 +2673,6 @@ static void buildConfigReport(ConfigReportData &r)
     r.time_us = (uint32_t)esp_timer_get_time();
     r.version = ConfigReportData::VERSION;
     r.imu_orient_setting = b2r_setting;
-    if (enable_sounds) r.flags |= (1U << ConfigReportData::F_SOUNDS);
     if (b2r_setting_from_nvs) r.flags |= (1U << ConfigReportData::F_ORIENT_FROM_NVS);
     if (pyro_config_from_nvs)  r.flags |= (1U << ConfigReportData::F_PYRO_FROM_NVS);   // #1231
     if (camera_type_from_nvs)  r.flags |= (1U << ConfigReportData::F_CAMERA_FROM_NVS); // #1472
@@ -2780,14 +2738,13 @@ static void sendConfigReport()
     if (log_next_report_send)
     {
         log_next_report_send = false;
-        ESP_LOGI(TAG, "[CFG] Config report sent: orient=%s(%s) sounds=%s "
+        ESP_LOGI(TAG, "[CFG] Config report sent: orient=%s(%s) "
                       "bias=[%d,%d,%d,%d] fin=[%.0f,%.0f,%.0f,%.0f] rev=0x%X/0x%X "
                       "guid=%s wp=%u "
                       "pyro(%s)=[%u/%u/%.1f %u/%u/%.1f %u/%u/%.1f %u/%u/%.1f] "
                       "cam(%s)=%s",
                  b2r_setting == IMU_ORIENT_AUTO ? "AUTO" : orientCodeName(b2r_setting),
                  b2r_setting_from_nvs ? "nvs" : "dflt",
-                 enable_sounds ? "on" : "off",
                  (int)r.servo.bias_us[0], (int)r.servo.bias_us[1],
                  (int)r.servo.bias_us[2], (int)r.servo.bias_us[3],
                  (double)r.fin.azimuth_deg[0], (double)r.fin.azimuth_deg[1],
@@ -3032,108 +2989,6 @@ static void publishSensorCalFromNVS()
     uint8_t buf[sizeof(SensorCalStatusData)];
     memcpy(buf, &s, sizeof(buf));
     (void)enqueueI2STx(SENSOR_CAL_STATUS_MSG, buf, sizeof(buf));
-}
-
-// ==========================================================================
-// SECTION: Piezo buzzer
-// ==========================================================================
-static void piezoToggleCb(void *)
-{
-    // Runs on the esp_timer task. Everything that reads or writes the wave
-    // state — including the GPIO write — happens under piezo_mux, so this can
-    // no longer straddle a piezoStop() on the other core. esp_timer_stop()
-    // takes a lock of its own and is therefore deferred outside the section.
-    bool stop_timer = false;
-    portENTER_CRITICAL(&piezo_mux);
-    const PiezoWavePolicy::PinAction act =
-        PiezoWavePolicy::onTick(piezo_wave, esp_timer_get_time(), stop_timer);
-    piezoApply(act);
-    portEXIT_CRITICAL(&piezo_mux);
-
-    if (stop_timer && piezo_toggle_timer != nullptr)
-    {
-        (void)esp_timer_stop(piezo_toggle_timer);
-    }
-}
-
-static bool initPiezoTimer()
-{
-    if (piezo_toggle_timer != nullptr)
-    {
-        return true;
-    }
-    esp_timer_create_args_t args = {};
-    args.callback = &piezoToggleCb;
-    args.arg = nullptr;
-    args.name = "piezo";
-    return esp_timer_create(&args, &piezo_toggle_timer) == ESP_OK;
-}
-
-static inline void piezoStop()
-{
-    // Clear the wave and drive low as ONE atomic step. Previously these were
-    // separated by the esp_timer_stop() call, and the pin was additionally
-    // guarded on piezo_pwm_ready — so on a board where the timer never
-    // initialised, a stop asserted nothing at all. The safe level is now
-    // asserted unconditionally; a pin we never drove is already low.
-    portENTER_CRITICAL(&piezo_mux);
-    piezoApply(PiezoWavePolicy::onStop(piezo_wave));
-    portEXIT_CRITICAL(&piezo_mux);
-
-    // Safe to run after the section: any callback that fires in between sees
-    // active == false and returns PinAction::None without touching the pin.
-    if (piezo_toggle_timer != nullptr)
-    {
-        (void)esp_timer_stop(piezo_toggle_timer);
-    }
-}
-
-// Synchronised read of "is a beep in progress". Reading piezo_wave.active
-// bare would race the esp_timer task's write; the worst case is only a
-// dropped or doubled heartbeat beep, but the state is now owned by the mux
-// and reading it any other way invites someone to do the same with the pin.
-static inline bool piezoWaveActive()
-{
-    portENTER_CRITICAL(&piezo_mux);
-    const bool a = piezo_wave.active;
-    portEXIT_CRITICAL(&piezo_mux);
-    return a;
-}
-
-// #382: no now_us parameter — every caller passed a 32-bit-truncated
-// time_us(), but piezoToggleCb compares against the full 64-bit
-// esp_timer_get_time(). Past ~71.6 min of uptime the truncated "now" wrapped
-// small, the computed end time sat in the 64-bit past, and every beep (and
-// its LED flash) terminated on the first toggle callback. Read the full
-// clock here so the mistake can't be reintroduced at a call site.
-static inline void piezoStart(uint32_t freq_hz, uint32_t duration_ms)
-{
-    if (!piezo_pwm_ready || piezo_toggle_timer == nullptr || freq_hz == 0U || duration_ms == 0U)
-    {
-        return;
-    }
-
-    piezo_half_period_us = 500000UL / freq_hz;
-    if (piezo_half_period_us < 50U)
-    {
-        piezo_half_period_us = 50U;
-    }
-    const int64_t now_us64 = esp_timer_get_time();
-    // Stop the old wave BEFORE publishing the new one, so a stale callback
-    // cannot consume the new end time with the old half-period still armed.
-    (void)esp_timer_stop(piezo_toggle_timer);
-    portENTER_CRITICAL(&piezo_mux);
-    piezoApply(PiezoWavePolicy::onStart(piezo_wave, now_us64, duration_ms));
-    portEXIT_CRITICAL(&piezo_mux);
-    // Same wrapping-ms domain as serviceBlueLedFlash's now_ms (both derive
-    // (uint32_t)(esp_timer_get_time()/1000)), so the wrap-safe signed
-    // comparison there stays correct.
-    triggerBlueLedFlash((uint32_t)(now_us64 / 1000LL));
-
-    if (esp_timer_start_periodic(piezo_toggle_timer, piezo_half_period_us) != ESP_OK)
-    {
-        piezoStop();
-    }
 }
 
 // ==========================================================================
@@ -3871,53 +3726,18 @@ static inline void serviceCameraStart(uint32_t now_ms)
 }
 
 // ==========================================================================
-// SECTION: Boot chirp and heartbeat beep
+// SECTION: Heartbeat LED
 // ==========================================================================
-static inline void startBootReadyChirp(uint32_t now_ms)
+static inline void serviceHeartbeat(uint32_t now_ms)
 {
-    if (!enable_sounds || !piezo_pwm_ready)
+    if ((now_ms - last_heartbeat_ms) < config::HEARTBEAT_INTERVAL_MS)
     {
         return;
     }
-    piezoStart(2600, 90);
-    boot_chirp_phase = BootChirpPhase::GapAfterBeep1;
-    boot_chirp_next_ms = now_ms + 150U; // 90ms beep + 60ms gap
-}
+    last_heartbeat_ms = now_ms;
 
-static inline void serviceBootReadyChirp(uint32_t now_ms)
-{
-    switch (boot_chirp_phase)
-    {
-        case BootChirpPhase::Idle:
-            return;
-        case BootChirpPhase::GapAfterBeep1:
-            if ((int32_t)(now_ms - boot_chirp_next_ms) >= 0)
-            {
-                piezoStart(1900, 130);
-                boot_chirp_phase = BootChirpPhase::WaitingBeep2End;
-                boot_chirp_next_ms = now_ms + 130U;
-            }
-            return;
-        case BootChirpPhase::WaitingBeep2End:
-            if ((int32_t)(now_ms - boot_chirp_next_ms) >= 0)
-            {
-                boot_chirp_phase = BootChirpPhase::Idle;
-            }
-            return;
-    }
-}
-
-static inline void serviceHeartbeatBeep(uint32_t now_ms)
-{
-    if ((now_ms - last_heartbeat_beep_ms) < config::HEARTBEAT_BEEP_INTERVAL_MS)
-    {
-        return;
-    }
-    last_heartbeat_beep_ms = now_ms;
-
-    // Keep heartbeat LED indication independent from sound enable — and, since
-    // #1137 item 1, from the flight state too.  The state gate used to sit
-    // ABOVE this line, so suppressing the in-flight BEEP also suppressed the
+    // Ungated by flight state since #1137 item 1.  A state gate used to sit
+    // ABOVE this line, so suppressing the in-flight beep also suppressed the
     // blue LED, and it did so for LANDED as well as INFLIGHT.  The other two
     // indicators carry nothing: RED_LED_PIN is driven HIGH once at boot and
     // never touched again, and serviceBlueLedFlash only renders what this
@@ -3926,26 +3746,6 @@ static inline void serviceHeartbeatBeep(uint32_t now_ms)
     // stayed dark until a reboot — precisely when someone is out in a field
     // looking for it.
     triggerBlueLedFlash(now_ms);
-
-    // The beep, and only the beep, is what HEARTBEAT_BEEP_IN_FLIGHT gates, and
-    // only INFLIGHT: config.h documents the knob as "Set true if you also want
-    // periodic beeps during INFLIGHT" and says nothing about LANDED.  A landed
-    // rocket is the case the locator beep exists for.
-    if (!config::HEARTBEAT_BEEP_IN_FLIGHT && rocket_state == INFLIGHT)
-    {
-        return;
-    }
-
-    if (!enable_sounds || !piezo_pwm_ready)
-    {
-        return;
-    }
-    if (boot_chirp_phase != BootChirpPhase::Idle || piezoWaveActive())
-    {
-        return;
-    }
-    piezoStart(config::HEARTBEAT_BEEP_FREQ_HZ,
-               config::HEARTBEAT_BEEP_DURATION_MS);
 }
 
 // ── OTA rollback gate (#8 Phase 4 / Layer 4, #13) ─────────────────────────
@@ -4404,7 +4204,6 @@ static void setup_fc()
     fcBootStatus(FCB_NVS);
     ESP_LOGI(TAG, "NVS prefs loading...");
     prefs.begin("rocket", false);  // read-write (creates namespace on first boot)
-    enable_sounds = prefs.getBool("sounds", config::ENABLE_SOUNDS);
     servo_enabled = prefs.getBool("servo_en", config::USE_SERVO_CONTROL);
     // Camera type must survive an FC-only reset.  It used to be RAM-only,
     // seeded from config::CAMERA_TYPE, and the app pushes it exactly once per
@@ -4421,8 +4220,7 @@ static void setup_fc()
         camera_type_from_nvs = false;               // ...and do not call it a record
     }
     prefs.end();
-    ESP_LOGI(TAG, "NVS: enable_sounds=%s servo_enabled=%s camera_type=%u",
-                  enable_sounds ? "true" : "false",
+    ESP_LOGI(TAG, "NVS: servo_enabled=%s camera_type=%u",
                   servo_enabled ? "true" : "false",
                   runtime_camera_type);
 
@@ -4837,21 +4635,6 @@ static void setup_fc()
                  (unsigned)pyro_cfg_sz, (unsigned)sizeof(PyroConfigData));
     }
     prefs.end();
-
-    // Initialise the piezo whatever the sounds setting, so it's ready if they
-    // are enabled at runtime. A negative PIEZO_PIN is a board with no piezo
-    // (the mini): no GPIO and no timer, and piezo_pwm_ready stays false so
-    // every beep returns early in piezoStart().
-    if (config::PIEZO_PIN >= 0)
-    {
-        gpio_set_direction((gpio_num_t)(config::PIEZO_PIN), GPIO_MODE_OUTPUT);
-        gpio_set_level((gpio_num_t)(config::PIEZO_PIN), 0);
-        piezo_pwm_ready = initPiezoTimer();
-        if (!piezo_pwm_ready)
-        {
-            ESP_LOGE(TAG, "Piezo timer init failed; sounds disabled");
-        }
-    }
 
     // Initialize sensor collector (including sensors) and start polling tasks
     ESP_LOGI(TAG, "Sensor collector init...");
@@ -7358,30 +7141,6 @@ static void loop_fc()
             else if (out_pending_command == CAMERA_STOP)
             {
                 cameraStop(now_ms);
-            }
-            else if (out_pending_command == SOUNDS_ENABLE)
-            {
-                enable_sounds = true;
-                prefs.begin("rocket", false);  // read-write
-                prefs.putBool("sounds", true);
-                config_report_dirty = true; log_next_report_send = true;   // #915
-                prefs.end();
-                ESP_LOGI(TAG, "Sounds ENABLED (saved to NVS)");
-                // Confirmation beep so the user knows it worked
-                if (piezo_pwm_ready)
-                {
-                    piezoStart(2600, 100);
-                }
-            }
-            else if (out_pending_command == SOUNDS_DISABLE)
-            {
-                enable_sounds = false;
-                piezoStop();
-                prefs.begin("rocket", false);  // read-write
-                prefs.putBool("sounds", false);
-                config_report_dirty = true; log_next_report_send = true;   // #915
-                prefs.end();
-                ESP_LOGI(TAG, "Sounds DISABLED (saved to NVS)");
             }
             else if (out_pending_command == SERVO_CONFIG_PENDING)
             {
@@ -9995,11 +9754,6 @@ static void loop_fc()
                 if ((now_ms > 1000U) && have_ism6_si && have_bmp_si)
                 {
                     rocket_state = READY;
-                    if (!ready_chirp_played)
-                    {
-                        startBootReadyChirp(now_ms);
-                        ready_chirp_played = true;
-                    }
                     ESP_LOGI(TAG, "[STATE] INITIALIZATION -> READY");
                 }
                 else if (kinematics.launch_flag)
@@ -11242,13 +10996,12 @@ static void loop_fc()
         }
     }
     
-    const uint32_t now_ms_for_sound = time_ms();
-    serviceBootReadyChirp(now_ms_for_sound);
-    serviceBootCue(now_ms_for_sound);        // #1188: before the heartbeat decides
-    serviceHeartbeatBeep(now_ms_for_sound);
-    serviceBlueLedFlash(now_ms_for_sound);
-    serviceCameraStart(now_ms_for_sound);
-    serviceCameraStop(now_ms_for_sound);
+    const uint32_t now_ms_svc = time_ms();
+    serviceBootCue(now_ms_svc);        // #1188: before the heartbeat decides
+    serviceHeartbeat(now_ms_svc);
+    serviceBlueLedFlash(now_ms_svc);
+    serviceCameraStart(now_ms_svc);
+    serviceCameraStop(now_ms_svc);
 
     // ==========================================================================
     // SECTION: Periodic diagnostics
@@ -11256,9 +11009,9 @@ static void loop_fc()
     // --- Periodic poll-task timing diagnostics (once per second) ---
     {
         static uint32_t last_poll_diag_ms = 0;
-        if ((now_ms_for_sound - last_poll_diag_ms) >= 1000U)
+        if ((now_ms_svc - last_poll_diag_ms) >= 1000U)
         {
-            last_poll_diag_ms = now_ms_for_sound;
+            last_poll_diag_ms = now_ms_svc;
             PollTimingSnapshot pt = {};
             sensor_collector.getPollTimingSnapshot(pt);
             ESP_LOGI(TAG, "[GAP DIAG] iter_max=%lu gnss_max=%lu bmp_max=%lu mmc_max=%lu ism6_max=%lu us",
@@ -11420,9 +11173,9 @@ static void loop_fc()
     // --- Periodic EKF diagnostics (once per second) ---
     {
         static uint32_t last_ekf_diag_ms = 0;
-        if (ekf_initialized && (now_ms_for_sound - last_ekf_diag_ms) >= 1000U)
+        if (ekf_initialized && (now_ms_svc - last_ekf_diag_ms) >= 1000U)
         {
-            last_ekf_diag_ms = now_ms_for_sound;
+            last_ekf_diag_ms = now_ms_svc;
 
             // Horizontal azimuth of the rocket's body-Z axis in NED. This is *not*
             // a roll in the Euler sense -- it's only a useful roll proxy when the

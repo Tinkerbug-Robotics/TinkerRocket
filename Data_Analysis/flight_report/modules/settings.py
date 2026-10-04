@@ -220,7 +220,6 @@ def analyze(flight: Flight) -> AnalysisResult:
     result.note = _SETTINGS_NOTE
     g: list[dict[str, Any]] = []
     # General
-    _group(g, "Rocket", [("Enable Sounds", _on(fs["sounds_enabled"]))])
     _group(g, "IMU Mounting", _mounting_rows(fs))
     _group(g, "IMU Logging Rate", [("Rate", _imu_rate(fs))])
     # Control

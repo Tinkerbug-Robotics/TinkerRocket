@@ -40,7 +40,7 @@ public object BleCommandId {
     public const val POWER_TOGGLE: Int = 8         // BLIND toggle — UI gate #377
     public const val TIME_SYNC: Int = 9            // [year u16][mo][d][h][m][s] UTC
     public const val LORA_CONFIG: Int = 10         // [freq f32][bw f32][sf][cr][txpwr i8]
-    public const val SOUNDS_ENABLE: Int = 11       // [bool]
+    // 11 is retired (was piezo sounds on/off) — do not reuse.
     public const val SERVO_CONFIG: Int = 12        // ServoConfigData 22 B (#267)
     public const val PID_CONFIG: Int = 13          // PIDConfigData 20 B
     public const val SERVO_ENABLE: Int = 14        // [bool]
