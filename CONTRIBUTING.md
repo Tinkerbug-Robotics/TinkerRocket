@@ -63,6 +63,7 @@ which runs on everything. (The full set is larger; the README's CI table lists a
 | `ios-tests.yml` | the iOS app |
 | `flight-report-tests.yml` | flight-report tooling |
 | `wire-codes.yml` | duplicate BLE command numbers |
+| `ci-gate.yml` | **every PR** — waits for the checks that ran, fails if any failed; the one check `main` requires |
 | `docs.yml` | **every push and PR** — generated docs and prose consistency |
 
 Run the equivalents locally before pushing:

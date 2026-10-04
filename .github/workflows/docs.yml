@@ -8,7 +8,7 @@ name: Docs
 #      verify -- links resolve, the IDF version matches CI, the workflow list is
 #      complete, quoted struct sizes match the wire.
 #
-# DELIBERATELY NOT PATH-FILTERED. Every other workflow in this repo is, which
+# DELIBERATELY NOT PATH-FILTERED. Every other workflow but ci-gate.yml is, which
 # is correct for them -- there is no point compiling firmware for a README typo.
 # It is wrong here. Documentation drifts *because of* changes elsewhere: the
 # README's ESP-IDF version went stale when the toolchain moved, its struct sizes
