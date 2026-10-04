@@ -89,13 +89,15 @@ THE SAW FILTERS ARE ESD SENSITIVE.
 ASSEMBLY - PLACEMENT
 - FIDUCIALS FID1-FID3, TOP SIDE.
 - U6 MUST BE CHIP REVISION v3.x. CONFIRM IT ON THE PACKAGE MARKING.
-- U6 AND U602 HAVE NO PIN-1 MARK ON THE TOP SILK. CHECK BOTH IN
-  THE PLACEMENT PREVIEW.
+- U6, U602 AND U8 HAVE NO PIN-1 MARK ON THE TOP SILK. CHECK ALL
+  THREE IN THE PLACEMENT PREVIEW. U8 (6-PIN SOT-563) ALSO FITS
+  WHEN ROTATED.
 - U7 (24-BALL WLCSP) IS 180-DEGREE SYMMETRIC: A ROTATED PART STILL
   FITS AND PUTS VCC ON THE GROUND BALL. BALL A1 IS THE CORNER
   NEAREST THE SILK DOT.
 - U10, C70, C71 AND C72 SIT AT 45 DEGREES, R19 AT 135.
-- DO NOT FIT: C103, C527-C535, R502, R511, R512, U502.
+- DO NOT FIT: C103, C527-C535, R502, R511, R512, U301, U502.
+  U301 IS OWNER-SUPPLIED AND FITTED BY HAND LATER.
 
 ASSEMBLY - HAND WORK
 - J501 (1 x 6) AND J502 (2 x 10) ARE 2.54 mm THROUGH-HOLE HEADERS,
@@ -111,7 +113,7 @@ ASSEMBLY - HAND WORK
 ## Why each item is here
 
 Every figure in the block was measured on 2026-10-03 from the board as saved at 05:30 that morning. That is the
-committed board (113169c9) plus three F.Cu pours at the 1.1 V buck (U9 input, switch node, +1V1_FPGA). DRC: 0 errors,
+committed board (113169c9) plus three F.Cu pours: the input (AVIN) and switch node of U9, the buck that makes +3V3_MCU, and a +1V1_FPGA pour. DRC: 0 errors,
 0 unconnected, schematic parity clean, and a kicad-cli refill reproduces the stored fills byte for byte.
 
 **1 — stackup.** It is the Beetle and Mantis stack. The board started on 6 layers and went to 8 on 2026-10-01 so the
@@ -186,7 +188,9 @@ button (SW1) and the TCXO (Y201) ratings were not confirmed either, so check the
 **Placement.**
 - **U6:** the revision cannot be read from the footprint. Every P4 in this project moves to v3.x (owner decision,
   2026-10-01).
-- **U6 and U602:** neither footprint carries a pin-1 mark on the top silk. Reference designators are hidden on this
+- **U6, U602 and U8:** none of the three footprints carries a pin-1 mark on the top silk, and U8's 6-pin SOT-563 also
+  fits when rotated. Reference designators are hidden on this
   board's silkscreen, so placement goes by the position file.
 - **U7:** a rotated WLCSP powers the flash backwards.
-- **Do-not-fit:** the parts the schematic marks DNP. The position file leaves them out.
+- **Do-not-fit:** the parts the schematic marks DNP. The position file leaves them out. U301, the MAX2771, is owner
+  stock: it is fitted by hand once the L1 chain has been brought up.

@@ -7305,7 +7305,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "1 nF"
+		(property "Value" "100 nF"
 			(at 142.24 187.96 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -7338,7 +7338,7 @@
 				)
 			)
 		)
-		(property "Description" "Capacitor 1 nF C0G"
+		(property "Description" "Capacitor 100 nF X7R"
 			(at 139.7 186.69 0)
 			(hide yes)
 			(show_name no)
@@ -7349,7 +7349,7 @@
 				)
 			)
 		)
-		(property "MPN" "GRM1555C1H102JA01D"
+		(property "MPN" "CL05B104KO5NNNC"
 			(at 139.7 186.69 0)
 			(hide yes)
 			(show_name no)
@@ -7360,7 +7360,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Murata"
+		(property "Mfr" "Samsung"
 			(at 139.7 186.69 0)
 			(hide yes)
 			(show_name no)
@@ -8006,7 +8006,7 @@
 				)
 			)
 		)
-		(property "Value" "10"
+		(property "Value" "2.2"
 			(at 107.95 56.515 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8038,7 +8038,7 @@
 				)
 			)
 		)
-		(property "Description" "Resistor 10"
+		(property "Description" "Resistor 2.2"
 			(at 107.95 53.34 0)
 			(hide yes)
 			(show_name no)
@@ -8049,7 +8049,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0710RL"
+		(property "MPN" "RC0402FR-072R2L"
 			(at 107.95 53.34 0)
 			(hide yes)
 			(show_name no)

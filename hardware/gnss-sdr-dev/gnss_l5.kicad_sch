@@ -3563,7 +3563,7 @@
 		(in_bom yes)
 		(on_board yes)
 		(in_pos_files yes)
-		(dnp no)
+		(dnp yes)
 		(fields_autoplaced yes)
 		(uuid "2cae1d10-c476-4a54-ba1f-32351e688bc4")
 		(property "Reference" "U301"

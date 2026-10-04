@@ -1821,6 +1821,325 @@
 			)
 			(embedded_fonts no)
 		)
+		(symbol "Custom:SRF3225TP-501Y"
+			(pin_names
+				(offset 1.016)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "FL"
+				(at -5.08 6.35 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left bottom)
+				)
+			)
+			(property "Value" "SRF3225TP-501Y"
+				(at -5.08 -6.35 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left top)
+				)
+			)
+			(property "Footprint" "Footprints:FIL_SRF3225TP"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "Datasheet" "https://www.bourns.com/docs/Product-Datasheets/SRF3225TP.pdf"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "Shielded common-mode choke for DC power lines: 2 A, 0.1 ohm max, 60 V, 500 ohm at 100 MHz, 3.2 x 2.5 mm"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "MANUFACTURER" "Bourns"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "MAXIMUM_PACKAGE_HEIGHT" "2.4 mm"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "STANDARD" "Manufacturer Recommendations"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(symbol "SRF3225TP-501Y_0_0"
+				(circle
+					(center -5.715 2.54)
+					(radius 0.2032)
+					(stroke
+						(width 0.4064)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(circle
+					(center -5.715 -3.175)
+					(radius 0.2032)
+					(stroke
+						(width 0.4064)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -5.08 -1.27) (xy 5.08 -1.27)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(arc
+					(start -2.54 5.08)
+					(mid -3.81 3.8155)
+					(end -5.08 5.08)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(arc
+					(start -5.08 -5.08)
+					(mid -3.81 -3.8155)
+					(end -2.54 -5.08)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(arc
+					(start 0 5.08)
+					(mid -1.27 3.8155)
+					(end -2.54 5.08)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(arc
+					(start -2.54 -5.08)
+					(mid -1.27 -3.8155)
+					(end 0 -5.08)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(arc
+					(start 2.54 5.08)
+					(mid 1.27 3.8155)
+					(end 0 5.08)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(arc
+					(start 0 -5.08)
+					(mid 1.27 -3.8155)
+					(end 2.54 -5.08)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(arc
+					(start 5.08 5.08)
+					(mid 3.81 3.8155)
+					(end 2.54 5.08)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(arc
+					(start 2.54 -5.08)
+					(mid 3.81 -3.8155)
+					(end 5.08 -5.08)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 5.08 1.27) (xy -5.08 1.27)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(pin passive line
+					(at -10.16 5.08 0)
+					(length 5.08)
+					(name ""
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 10.16 5.08 180)
+					(length 5.08)
+					(name ""
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 10.16 -5.08 180)
+					(length 5.08)
+					(name ""
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "3"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -10.16 -5.08 0)
+					(length 5.08)
+					(name ""
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "4"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
 		(symbol "Device:C"
 			(pin_numbers
 				(hide yes)
@@ -5730,7 +6049,7 @@
 		)
 	)
 	(symbol
-		(lib_id "Custom:DLW21SN670HQ2L")
+		(lib_id "Custom:SRF3225TP-501Y")
 		(at 160.02 60.96 0)
 		(unit 1)
 		(body_style 1)
@@ -5752,7 +6071,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Value" "DLW21SN670HQ2L"
+		(property "Value" "SRF3225TP-501Y"
 			(at 154.94 67.31 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5763,7 +6082,7 @@
 				(justify left top)
 			)
 		)
-		(property "Footprint" "Footprints:FIL_DLW21SN670HQ2L"
+		(property "Footprint" "Footprints:FIL_SRF3225TP"
 			(at 160.02 60.96 0)
 			(hide yes)
 			(show_name no)
@@ -5774,7 +6093,7 @@
 				)
 			)
 		)
-		(property "Datasheet" ""
+		(property "Datasheet" "https://www.bourns.com/docs/Product-Datasheets/SRF3225TP.pdf"
 			(at 160.02 60.96 0)
 			(hide yes)
 			(show_name no)
@@ -5785,7 +6104,7 @@
 				)
 			)
 		)
-		(property "Description" "Common-mode choke on the host supply/return (VSYS/VSS -> VIN/GND)"
+		(property "Description" "Common-mode choke on the host supply/return (VSYS/VSS -> VIN/GND), shielded power-line type, 2 A"
 			(at 160.02 60.96 0)
 			(hide yes)
 			(show_name no)
@@ -5796,7 +6115,7 @@
 				)
 			)
 		)
-		(property "MPN" "DLW21SN670HQ2L"
+		(property "MPN" "SRF3225TP-501Y"
 			(at 160.02 60.96 0)
 			(hide yes)
 			(show_name no)
@@ -5807,7 +6126,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Murata"
+		(property "Mfr" "Bourns"
 			(at 160.02 60.96 0)
 			(hide yes)
 			(show_name no)
@@ -6729,7 +7048,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "2.2 nF"
+		(property "Value" "22 nF"
 			(at 63.5 144.78 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6762,7 +7081,7 @@
 				)
 			)
 		)
-		(property "Description" "Capacitor 2.2 nF X7R"
+		(property "Description" "Capacitor 22 nF X7R"
 			(at 60.96 143.51 0)
 			(hide yes)
 			(show_name no)
@@ -6773,7 +7092,7 @@
 				)
 			)
 		)
-		(property "MPN" "CC0402KRX7R9BB222"
+		(property "MPN" "CL05B223KB5NNNC"
 			(at 60.96 143.51 0)
 			(hide yes)
 			(show_name no)
@@ -6784,7 +7103,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Yageo"
+		(property "Mfr" "Samsung"
 			(at 60.96 143.51 0)
 			(hide yes)
 			(show_name no)
@@ -7868,7 +8187,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "1 uF"
+		(property "Value" "2.2 uF"
 			(at 101.6 180.34 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -7901,7 +8220,7 @@
 				)
 			)
 		)
-		(property "Description" "Capacitor 1 uF X5R"
+		(property "Description" "Capacitor 2.2 uF X5R"
 			(at 99.06 179.07 0)
 			(hide yes)
 			(show_name no)
@@ -7912,7 +8231,7 @@
 				)
 			)
 		)
-		(property "MPN" "GRM155R61A105KE15D"
+		(property "MPN" "CL05A225MQ5NSNC"
 			(at 99.06 179.07 0)
 			(hide yes)
 			(show_name no)
@@ -7923,7 +8242,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Murata"
+		(property "Mfr" "Samsung"
 			(at 99.06 179.07 0)
 			(hide yes)
 			(show_name no)

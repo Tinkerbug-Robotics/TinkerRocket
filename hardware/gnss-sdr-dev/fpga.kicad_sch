@@ -12768,7 +12768,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "1 k"
+		(property "Value" "0"
 			(at 342.9 243.84 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -12801,7 +12801,7 @@
 				)
 			)
 		)
-		(property "Description" "Resistor 1 k"
+		(property "Description" "Resistor 0"
 			(at 340.36 242.57 0)
 			(hide yes)
 			(show_name no)
@@ -12812,7 +12812,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-071KL"
+		(property "MPN" "RC0402JR-070RL"
 			(at 340.36 242.57 0)
 			(hide yes)
 			(show_name no)
@@ -21481,7 +21481,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "1 k"
+		(property "Value" "0"
 			(at 358.14 246.38 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -21514,7 +21514,7 @@
 				)
 			)
 		)
-		(property "Description" "Resistor 1 k"
+		(property "Description" "Resistor 0"
 			(at 355.6 245.11 0)
 			(hide yes)
 			(show_name no)
@@ -21525,7 +21525,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-071KL"
+		(property "MPN" "RC0402JR-070RL"
 			(at 355.6 245.11 0)
 			(hide yes)
 			(show_name no)

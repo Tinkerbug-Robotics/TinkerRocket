@@ -1640,7 +1640,7 @@
 				)
 			)
 		)
-		(property "Datasheet" "MX35UF4G24AD-Z4I8"
+		(property "Datasheet" "https://cdn.sparkfun.com/assets/e/6/6/1/7/GD5F2GQ5UEYIGR_datasheet.pdf"
 			(at 101.6 88.9 0)
 			(hide yes)
 			(show_name no)
