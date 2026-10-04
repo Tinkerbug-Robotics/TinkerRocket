@@ -18,10 +18,12 @@ and the receiver.
   SMA's axis (13.8 mm above the plate bottom), so the stack never hangs off the board connector. The channels start
   14 mm from the board so a wrench fits the first coupling nut, and each attenuator gets its own zip tie. The
   combiner sits in a fitted cradle between the two channels, raised so its three ports are on the same axis: its two
-  inputs face the two arms, and its sum port faces the DC block, with 8 mm of slide to close the gap for a short
-  cable or a straight adapter. A low rim locates it and a zip tie over its body holds it down. The OUT tab at the
-  far left takes an SMA bulkhead feedthrough, with the DC block on a short V-saddle behind it, in line with the
-  combiner's sum port.
+  inputs face the two arms and its sum port faces the plate's left edge. A low rim locates it and a zip tie over its
+  body holds it down.
+- **Output.** One cable, no connector mount. The DC block screws straight onto the combiner's sum port, the output
+  cable's plug goes on the DC block, and the DC block, plug and cable all lie in one V-channel that runs to the
+  plate's left edge. Two zip ties grip the cable itself near the edge (strain relief), so a tug on the cable never
+  reaches the connectors; a third holds the DC block.
 - **Base.** Zip-tie slots with grooves underneath so the tie heads sit flush, four rubber-foot recesses, four
   countersunk screw holes for fixing the plate to the bench, and engraved labels.
 
@@ -55,10 +57,9 @@ layers, three perimeters and 15-20 % infill is plenty.
   its arm, and an 11 dB path about 7 dB.
 - SMA inline attenuators with 9.5 mm bodies, up to three per arm, valued for the level plan, and one SMA inline DC
   block with a 9.5 mm body.
-- One SMA female-to-female bulkhead feedthrough (1/4-36 thread) for a 3 mm panel; the tab's hole is 6.5 mm.
 - Coax: two SMA male-to-male jumpers about 15 cm long for clock and trigger, two short SMA male-to-male cables from
-  the arms to the combiner inputs, and a short SMA male-to-male cable or a straight male-to-male adapter from the
-  combiner's sum port to the DC block.
+  the arms to the combiner inputs, and one output cable, SMA male at the rig end, long enough to reach the receiver.
+  The DC block goes male end onto the combiner, female end toward the output cable.
 - Zip ties up to 4.5 mm wide.
 - Four 12.7 mm adhesive rubber feet, or four countersunk screws with shanks up to 4.5 mm to fix it to the bench.
 
@@ -66,11 +67,11 @@ layers, three perimeters and 15-20 % infill is plenty.
 
 1. Press the inserts into the standoffs.
 2. Drop each board into its pocket and screw it down.
-3. Fit the bulkhead to the OUT tab, put the DC block on its inner port, and tie the DC block onto its saddle.
-4. Thread three attenuators onto each antenna SMA so they rest in the channel, and tie each one down.
-5. Set the combiner in its cradle with the sum port toward the DC block, connect the sum port to the DC block
-   (sliding the combiner to suit the cable or adapter), strap it down with a zip tie, then run each arm's end to a
-   combiner input.
+3. Thread the attenuators onto each antenna SMA so they rest in the channel, and tie each one down.
+4. Set the combiner in its cradle with the sum port toward the left edge, screw the DC block onto the sum port so it
+   rests in the output channel, and strap the combiner down with a zip tie.
+5. Plug the output cable into the DC block, lay it along the output channel and off the left edge, and tie it down
+   at the two ties near the edge and the DC block at the third. Then run each arm's end to a combiner input.
 6. Fit the jumpers: A.P2 to B.P1 (clock) and A.P1 to B.P2 (trigger). On A, set P2 to clock out and P1 to trigger
    out; on B, set P1 to clock in and P2 to trigger in (`hackrf_clock -1 ...` / `hackrf_clock -2 ...`; see
    `hackrf_clock --help`). Keep the trigger jumper connected: an unconnected trigger input fires on its own.

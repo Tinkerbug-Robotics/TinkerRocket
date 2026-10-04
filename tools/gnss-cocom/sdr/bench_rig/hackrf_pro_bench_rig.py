@@ -12,10 +12,11 @@ Layout (rig frame: origin at the plate's lower-left-bottom corner, x right, y up
     lowered along the button/LED edge
   * right: clock A.P2 -> B.P1 and trigger A.P1 -> B.P2 jumpers run between the boards' right-edge SMAs; each USB-C
     cable exits right over a raised bed into two zip-tie points
-  * left: each antenna output runs left along a V-channel that carries three 9.5 mm inline attenuators at the board
-    SMA's axis height (so the stack doesn't hang off the board connector); a coaxial-block 2-way combiner sits in a
-    fitted cradle between the two arms with its ports on the same axis height; an upright tab at the far left takes
-    an SMA bulkhead (OUT), with the DC block on a short V-saddle behind it, coaxial with the combiner's sum port
+  * left: each antenna output runs left along a V-channel that carries up to three 9.5 mm inline attenuators at the
+    board SMA's axis height (so the stack doesn't hang off the board connector); a coaxial-block 2-way combiner sits
+    in a fitted cradle between the two arms with its ports on the same axis height; the DC block screws straight onto
+    its sum port, and one output cable leaves from the DC block along a V-channel to the plate's left edge, where two
+    zip ties on the cable take any pull off the connectors (strain relief)
   * zip-tie slot pairs (with underside grooves so the tie heads don't rock the plate), rubber-foot recesses and
     countersunk screw holes for fixing it to the bench; engraved labels
 Exports: rig STEP + STL, an assembly STEP with simple board stand-ins (for checking fit in Fusion 360), and
@@ -55,14 +56,17 @@ ARM_BLOCK_W = 18.0
 ARM_TIES_X = [34.0, 56.0, 79.0]              # one tie per pad (3rd x 12-39, 2nd 39-66, 1st 66-93)
 # combiner cradle between the arms, for a coaxial-block 2-way combiner: 18.8 mm wide (ports 1 and 2 out of its sides)
 # x 22.86 mm deep (sum port out of the front) on a 1 mm foot, every port axis 7.37 mm above its base. The sum port
-# faces -x, coaxial with the DC block; ports 1 and 2 face the two arms. A low rim (below the connectors) locates it,
-# with COMB_SLIDE of travel toward the DC block to close the gap for a short cable or a straight adapter; a zip tie
-# straps it down COMB_TIE_BACK in front of its back face, clear of ports 1 and 2 at either end of the slide.
+# faces -x along the output line; ports 1 and 2 face the two arms. A low rim (below the connectors) locates it and a
+# zip tie straps it down COMB_TIE_BACK in front of its back face, clear of ports 1 and 2. COMB_SLIDE adds travel
+# toward -x if ever wanted (0: the DC block rides on the sum port, so nothing needs closing).
 COMB_W, COMB_D, COMB_AXIS = 18.8, 22.86, 7.37
-COMB_BACK_X, COMB_SLIDE, COMB_CLEAR, COMB_RIM_H, COMB_RIM_T, COMB_TIE_BACK = 80.0, 8.0, 0.4, 2.5, 2.4, 19.0
-# output bulkhead tab (SMA bulkhead jack, 1/4-36 thread) and the DC block's V-saddle behind it
-TAB_X, TAB_T, TAB_W, TAB_H, TAB_Y, BULKHEAD_D = 6.0, 3.0, 30.0, 26.0, 72.0, 6.5
-DCB_X0, DCB_X1, DCB_TIE_X = 12.0, 37.0, 24.0  # DC block (~25 mm) screwed onto the bulkhead's inner port
+COMB_BACK_X, COMB_SLIDE, COMB_CLEAR, COMB_RIM_H, COMB_RIM_T, COMB_TIE_BACK = 92.0, 0.0, 0.4, 2.5, 2.4, 19.0
+# output: the DC block (male end) screws onto the combiner's sum port; the output cable's plug goes on the DC block's
+# female end; DC block, plug and cable all lie in one V-channel along OUT_Y that runs to the plate's left edge. The
+# ties at x 7 and 13 grip the cable itself (strain relief), the one at 44 holds the DC block.
+OUT_Y = 72.0
+OUT_X0 = 4.0
+OUT_TIES_X = [7.0, 13.0, 44.0]
 # USB cable tie-downs
 USB_TIES_X, USB_BED_X0, USB_BED_H = [258.0, 276.0], 238.0, 1.5
 # zip ties, feet, bench screws
@@ -159,22 +163,13 @@ for by in (BY_B, BY_A):                      # three attenuators per arm, straig
 # ---------------------------------------------------------------- combiner cradle
 zc = Z_AXIS - COMB_AXIS                      # combiner base: its port axes land on the SMA axis
 cx0, cx1 = COMB_BACK_X - COMB_D - COMB_SLIDE - COMB_CLEAR, COMB_BACK_X + COMB_CLEAR
-cy0, cy1 = TAB_Y - COMB_W / 2 - COMB_CLEAR, TAB_Y + COMB_W / 2 + COMB_CLEAR
+cy0, cy1 = OUT_Y - COMB_W / 2 - COMB_CLEAR, OUT_Y + COMB_W / 2 + COMB_CLEAR
 cradle = box(cx0 - COMB_RIM_T, cy0 - COMB_RIM_T, Z0, cx1 + COMB_RIM_T, cy1 + COMB_RIM_T, zc + COMB_RIM_H)
 rig = rig.union(cradle.cut(box(cx0, cy0, zc, cx1, cy1, zc + COMB_RIM_H + 1)))
-tie_point(COMB_BACK_X - COMB_TIE_BACK, TAB_Y, COMB_W / 2 + COMB_CLEAR + COMB_RIM_T + 2.5)   # strap over the body
+tie_point(COMB_BACK_X - COMB_TIE_BACK, OUT_Y, COMB_W / 2 + COMB_CLEAR + COMB_RIM_T + 2.5)   # strap over the body
 
-# ---------------------------------------------------------------- output bulkhead tab
-tab = box(TAB_X, TAB_Y - TAB_W / 2, Z0, TAB_X + TAB_T, TAB_Y + TAB_W / 2, Z0 + TAB_H)
-for s in (-1, 1):                            # gussets on the inner side
-    g_ = (cq.Workplane("XZ").workplane(offset=-(TAB_Y + s * (TAB_W / 2 - 1.5)))
-          .polyline([(TAB_X + TAB_T, Z0), (TAB_X + TAB_T + 12, Z0), (TAB_X + TAB_T, Z0 + TAB_H - 4)]).close()
-          .extrude(-3.0 if s < 0 else 3.0))
-    tab = tab.union(g_)
-tab = tab.cut(cq.Workplane("YZ").workplane(offset=TAB_X - 1).center(TAB_Y, Z_AXIS)
-              .circle(BULKHEAD_D / 2).extrude(TAB_T + 2))
-rig = rig.union(tab)
-v_channel(DCB_X0, DCB_X1, TAB_Y, [DCB_TIE_X])   # DC block on the bulkhead's inner port, same axis height
+# ---------------------------------------------------------------- output: DC block, plug and cable in one channel
+v_channel(OUT_X0, cx0 - COMB_RIM_T - 1.0, OUT_Y, OUT_TIES_X)   # ends just short of the cradle's front rim
 
 # ---------------------------------------------------------------- USB cable beds + tie-downs
 for by in (BY_B, BY_A):
@@ -196,7 +191,7 @@ for sx, sy in SCREWS:
 labels = [("A  L1  clock + trigger master", BX + BOARD_W / 2, BY_A + BOARD_H + 6.5),
           ("B  L5", BX + BOARD_W / 2, BY_B - 6.5),
           ("CLK  A.P2 > B.P1", 258.0, 90.0), ("TRIG  A.P1 > B.P2", 258.0, 82.0),
-          ("OUT", TAB_X + 12.0, TAB_Y + TAB_W / 2 + 6.0), ("COMBINER", 64.0, 52.0)]
+          ("OUT", 14.0, 90.0), ("COMBINER", 80.0, 50.0)]
 for text, x, y in labels:
     try:
         t = (cq.Workplane("XY").workplane(offset=Z0 - LABEL_DEPTH).center(x, y)
@@ -225,16 +220,23 @@ def board_standin(by):
 
 
 def combiner_standin():
-    """The combiner at the back of its slide: block, ports 1/2 (+-y, 4.06 mm in from its back face) and the sum port
-    (-x), each SMA about 7.6 mm long, on the cradle floor."""
-    c = box(COMB_BACK_X - COMB_D, TAB_Y - COMB_W / 2, zc, COMB_BACK_X, TAB_Y + COMB_W / 2, zc + 13.72)
+    """The combiner on the cradle floor: block, ports 1/2 (+-y, 4.06 mm in from its back face) and the sum port (-x),
+    each SMA about 7.6 mm long; then along the output line the DC block (9.5 x ~21 mm past its coupling nut), the
+    output cable's plug (8 x 18 mm) and 20 mm of cable lying in the channel's V."""
+    c = box(COMB_BACK_X - COMB_D, OUT_Y - COMB_W / 2, zc, COMB_BACK_X, OUT_Y + COMB_W / 2, zc + 13.72)
     px = COMB_BACK_X - 4.06
     for s in (-1, 1):
-        y0 = TAB_Y + s * COMB_W / 2
+        y0 = OUT_Y + s * COMB_W / 2
         c = c.union(cq.Workplane("XZ").workplane(offset=-y0).center(px, Z_AXIS).circle(3.175)
                     .extrude(-7.6 * s))
-    return c.union(cq.Workplane("YZ").workplane(offset=COMB_BACK_X - COMB_D - 7.6).center(TAB_Y, Z_AXIS)
-                   .circle(3.175).extrude(7.6))
+    sum_tip = COMB_BACK_X - COMB_D - 7.6
+    c = c.union(cq.Workplane("YZ").workplane(offset=sum_tip).center(OUT_Y, Z_AXIS).circle(3.175).extrude(7.6))
+    dcb0 = sum_tip + 4.0 - 21.0                                  # DC block's coupling nut over the sum port thread
+    c = c.union(cq.Workplane("YZ").workplane(offset=dcb0).center(OUT_Y, Z_AXIS).circle(PAD_D / 2).extrude(21.0))
+    c = c.union(cq.Workplane("YZ").workplane(offset=dcb0 - 18.0).center(OUT_Y, Z_AXIS).circle(4.0).extrude(18.0))
+    z_cable = z_vertex + 1.5 * 2 ** 0.5                          # a 3 mm cable resting in the V
+    return c.union(cq.Workplane("YZ").workplane(offset=dcb0 - 38.0).center(OUT_Y, z_cable).circle(1.5)
+                   .extrude(20.0))
 
 
 boards = board_standin(BY_A).union(board_standin(BY_B)).union(combiner_standin())
