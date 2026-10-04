@@ -690,7 +690,7 @@
 				)
 			)
 		)
-		(property "Value" "+BATT"
+		(property "Value" "+BATT_F"
 			(at 149.86 59.69 0)
 			(show_name no)
 			(do_not_autoplace no)

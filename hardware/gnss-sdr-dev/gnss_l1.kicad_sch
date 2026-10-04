@@ -6695,7 +6695,7 @@
 				)
 			)
 		)
-		(property "MPN" "GRM155R61A105KE15D"
+		(property "MPN" "CL05A105KO5NNNC"
 			(at 101.6 133.35 0)
 			(hide yes)
 			(show_name no)
@@ -6706,7 +6706,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Murata"
+		(property "Mfr" "Samsung"
 			(at 101.6 133.35 0)
 			(hide yes)
 			(show_name no)
@@ -7293,7 +7293,7 @@
 				)
 			)
 		)
-		(property "MPN" "GRM155R61A105KE15D"
+		(property "MPN" "CL05A105KO5NNNC"
 			(at 292.1 67.31 0)
 			(hide yes)
 			(show_name no)
@@ -7304,7 +7304,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Murata"
+		(property "Mfr" "Samsung"
 			(at 292.1 67.31 0)
 			(hide yes)
 			(show_name no)

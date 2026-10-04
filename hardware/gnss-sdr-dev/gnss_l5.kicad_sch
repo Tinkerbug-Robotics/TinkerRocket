@@ -1922,12 +1922,6 @@
 		(color 0 0 0 0)
 		(uuid "e9f8a1d5-f83d-4239-b604-b98460f52b0e")
 	)
-	(junction
-		(at 172.72 142.24)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "eb2608f7-c66a-43b3-bd28-f072a00e6f22")
-	)
 	(no_connect
 		(at 213.36 162.56)
 		(uuid "362bcb70-e502-4f8f-bd5a-52e93dfdc8d9")
@@ -2238,16 +2232,6 @@
 	)
 	(wire
 		(pts
-			(xy 172.72 149.86) (xy 172.72 152.4)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "66e4b2a9-58a8-47bf-b1ae-9d717135e386")
-	)
-	(wire
-		(pts
 			(xy 76.2 73.66) (xy 88.9 73.66)
 		)
 		(stroke
@@ -2325,16 +2309,6 @@
 			(type default)
 		)
 		(uuid "7f35e4a3-df48-4828-84c2-fd8b978220db")
-	)
-	(wire
-		(pts
-			(xy 152.4 142.24) (xy 160.02 142.24)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "84b00d7b-f5fa-4f87-b116-faa00972a32a")
 	)
 	(wire
 		(pts
@@ -3090,7 +3064,7 @@
 	)
 	(global_label "L5_RF"
 		(shape input)
-		(at 152.4 142.24 180)
+		(at 149.86 142.24 180)
 		(fields_autoplaced yes)
 		(effects
 			(font
@@ -3100,7 +3074,7 @@
 		)
 		(uuid "fb877cde-b4b3-4a00-8f5f-40e4cfd68799")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 152.4 142.24 0)
+			(at 149.86 142.24 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6442,7 +6416,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 172.72 152.4 0)
+		(at 152.4 152.4 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -6453,7 +6427,7 @@
 		(fields_autoplaced yes)
 		(uuid "dfa82d6f-858d-487d-9aca-3dafbc245e1e")
 		(property "Reference" "#PWR_L5 receiver_13"
-			(at 172.72 158.75 0)
+			(at 152.4 158.75 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6464,7 +6438,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 172.72 156.21 0)
+			(at 152.4 156.21 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -6474,7 +6448,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 172.72 152.4 0)
+			(at 152.4 152.4 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6485,7 +6459,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 172.72 152.4 0)
+			(at 152.4 152.4 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6496,7 +6470,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 172.72 152.4 0)
+			(at 152.4 152.4 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6908,7 +6882,7 @@
 	)
 	(symbol
 		(lib_id "Device:C")
-		(at 172.72 146.05 0)
+		(at 152.4 146.05 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -6919,29 +6893,29 @@
 		(fields_autoplaced yes)
 		(uuid "ff7dc71c-246a-41aa-a213-12bf90acada2")
 		(property "Reference" "C309"
-			(at 175.26 144.78 0)
+			(at 148.59 144.78 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify left)
+				(justify right)
 			)
 		)
 		(property "Value" "1.1 pF"
-			(at 175.26 147.32 0)
+			(at 148.59 147.32 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify left)
+				(justify right)
 			)
 		)
 		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
-			(at 172.72 146.05 0)
+			(at 152.4 146.05 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6952,7 +6926,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 172.72 146.05 0)
+			(at 152.4 146.05 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6963,7 +6937,7 @@
 			)
 		)
 		(property "Description" "Capacitor 1.1 pF C0G +-0.05 pF"
-			(at 172.72 146.05 0)
+			(at 152.4 146.05 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6974,7 +6948,7 @@
 			)
 		)
 		(property "MPN" "GJM1555C1H1R1WB01D"
-			(at 172.72 146.05 0)
+			(at 152.4 146.05 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6985,7 +6959,7 @@
 			)
 		)
 		(property "Mfr" "Murata"
-			(at 172.72 146.05 0)
+			(at 152.4 146.05 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -7009,5 +6983,41 @@
 				)
 			)
 		)
+	)
+	(wire
+		(pts
+			(xy 149.86 142.24) (xy 152.4 142.24)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "71a02ffe-3f00-43f0-a6e6-6aa478d436b4")
+	)
+	(wire
+		(pts
+			(xy 152.4 142.24) (xy 160.02 142.24)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "7590b110-d65b-4565-a200-7bd254a1fc20")
+	)
+	(junction
+		(at 152.4 142.24)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "44eda251-c3db-4a9b-9cfe-44fa758c3f18")
+	)
+	(wire
+		(pts
+			(xy 152.4 149.86) (xy 152.4 152.4)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "34126857-b67f-498f-9de4-600755b291e3")
 	)
 )

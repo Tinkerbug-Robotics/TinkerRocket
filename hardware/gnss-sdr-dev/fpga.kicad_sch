@@ -9485,7 +9485,7 @@
 		)
 		(uuid "36dfb768-a7a8-43c0-b81e-34131285fc62")
 	)
-	(label "EVENT_IN"
+	(label "EVENT_IN_HDR"
 		(at 231.14 332.74 0)
 		(effects
 			(font
@@ -22890,6 +22890,334 @@
 				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/5f9f73c7-2415-4d85-a269-421976d4637c"
 					(reference "U501")
 					(unit 5)
+				)
+			)
+		)
+	)
+	(label "EVENT_IN_HDR"
+		(at 243.84 370.84 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "32c910f6-1351-41a8-b79b-b116d8110798")
+	)
+	(symbol
+		(lib_id "Device:R_US")
+		(at 247.65 370.84 90)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "17b596ec-240b-415b-a006-f028cf90cd6f")
+		(property "Reference" "R516"
+			(at 247.65 367.03 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "1 k"
+			(at 247.65 374.65 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 247.65 370.84 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 247.65 370.84 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor 1 k"
+			(at 247.65 370.84 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-071KL"
+			(at 247.65 370.84 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 247.65 370.84 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "9ca891af-6c21-47d8-8d37-075f9fc56fcb")
+		)
+		(pin "2"
+			(uuid "97a1cb6b-e436-4869-ac04-9fb0052de23a")
+		)
+		(instances
+			(project "gnss-sdr-dev"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/5f9f73c7-2415-4d85-a269-421976d4637c"
+					(reference "R516")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts
+			(xy 251.46 370.84) (xy 256.54 370.84)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "fcdf6b0c-3764-40cd-b732-9067434eebdc")
+	)
+	(wire
+		(pts
+			(xy 256.54 370.84) (xy 259.08 370.84)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "fea17768-93da-47f6-b3be-e26531dea670")
+	)
+	(junction
+		(at 256.54 370.84)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "c28ecb17-044a-4aa8-8416-67d2ec9fb90e")
+	)
+	(label "EVENT_IN"
+		(at 259.08 370.84 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "d4d2b45d-95c3-4bf6-96ba-6b86a0ed18c4")
+	)
+	(symbol
+		(lib_id "Device:R_US")
+		(at 256.54 374.65 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "1ae98b23-001c-40cb-8dcb-34e5482712f3")
+		(property "Reference" "R517"
+			(at 258.445 373.38 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "100 k"
+			(at 258.445 375.92 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 256.54 374.65 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 256.54 374.65 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor 100 k"
+			(at 256.54 374.65 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-07100KL"
+			(at 256.54 374.65 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 256.54 374.65 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "b01809e9-f054-41c5-93b8-e2a0d3076685")
+		)
+		(pin "2"
+			(uuid "caa301aa-04a6-468c-a9f9-2a5fd8995cde")
+		)
+		(instances
+			(project "gnss-sdr-dev"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/5f9f73c7-2415-4d85-a269-421976d4637c"
+					(reference "R517")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 256.54 378.46 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom no)
+		(on_board no)
+		(in_pos_files no)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "3a120f23-3b0e-4729-96f0-ce46f2886fd3")
+		(property "Reference" "#PWR_FPGA_22"
+			(at 256.54 384.81 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 256.54 382.27 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 256.54 378.46 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 256.54 378.46 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 256.54 378.46 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "135b9bd7-c471-4439-b223-0b611cc1e741")
+		)
+		(instances
+			(project "gnss-sdr-dev"
+				(path "/18c5be81-d8c2-4b08-92bf-000bb4e79507/5f9f73c7-2415-4d85-a269-421976d4637c"
+					(reference "#PWR_FPGA_22")
+					(unit 1)
 				)
 			)
 		)
