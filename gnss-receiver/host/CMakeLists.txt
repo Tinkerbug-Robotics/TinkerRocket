@@ -37,3 +37,8 @@ target_compile_options(vecreplay PRIVATE ${GNSS_C_WARNINGS})
 add_executable(trksim trksim.c)
 target_link_libraries(trksim PRIVATE gnss_host)
 target_compile_options(trksim PRIVATE ${GNSS_C_WARNINGS})
+
+# Monte Carlo of a flight: every tracked signal at once, with the board's IMU and oscillator.
+add_executable(mcsim mcsim.c)
+target_link_libraries(mcsim PRIVATE gnss_host)
+target_compile_options(mcsim PRIVATE ${GNSS_C_WARNINGS})

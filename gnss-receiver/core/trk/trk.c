@@ -74,15 +74,19 @@ void trk_start(trk_ch_t *c, int prn, float dop_hz, float tap_chips, int32_t if_w
     c->code_k = code_k;
     c->dop_hz = dop_hz;
     c->x2 = TWO_PI_F * dop_hz;
+    c->chip_per_hz = CHIP_PER_HZ;
 }
 
 void trk_set_signal(trk_ch_t *c, int sig)
 {
     c->sig = (uint8_t)sig;
-    c->pilot = sig == GNSS_SIG_GAL_E1C || sig == GNSS_SIG_BDS_B1CP;
-    c->boc = c->pilot;
-    /* 0.2 s of dumps: 50 of E1's 4 ms, 20 of B1C's 10 ms. */
+    const int l5 = sig == GNSS_SIG_GPS_L5Q || sig == GNSS_SIG_GAL_E5AQ || sig == GNSS_SIG_BDS_B2AP;
+    c->boc = sig == GNSS_SIG_GAL_E1C || sig == GNSS_SIG_BDS_B1CP;
+    c->pilot = c->boc || l5;
+    /* 0.2 s of dumps: 50 of E1's 4 ms, 20 of B1C's 10 ms, 200 of an L5 pilot's 1 ms. */
     c->cn0_n = sig == GNSS_SIG_GAL_E1C ? 50 : (sig == GNSS_SIG_BDS_B1CP ? 20 : TRK_CN0_N);
+    /* The L5 pilots run 10.23 Mchip/s on 1176.45 MHz: their code moves 13.4 times as far per hertz. */
+    c->chip_per_hz = l5 ? (float)(10.23e6 / GNSS_FREQ_L5_HZ) : CHIP_PER_HZ;
 }
 
 static void enter(trk_ch_t *c, trk_state_t s)
@@ -436,7 +440,7 @@ void trk_words(const trk_ch_t *c, int32_t *carr_word, uint64_t *code_word)
         dop += c->ff_rate * c->ff_lead;  /* aided: where the Doppler will be when the words land */
     }
     *carr_word = c->if_word + (int32_t)lrintf(dop * c->carr_k);
-    float rate = dop * CHIP_PER_HZ + c->dll_rate;  /* chips/s beyond nominal */
+    float rate = dop * c->chip_per_hz + c->dll_rate;  /* chips/s beyond nominal */
     if (c->code_jump != 0.0f) {
         /* A side-peak jump: the half chip over one code period (its length from the code). */
         const float period = (c->sig == GNSS_SIG_GAL_E1C ? 4092.0f : 10230.0f) / 1.023e6f;

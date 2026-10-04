@@ -75,7 +75,7 @@ void trk_profile_step(trk_profile_t *cur, const trk_profile_t *target, float dt)
 typedef struct {
     trk_state_t state;
     uint8_t prn;
-    uint8_t sig;                /* gnss_sig_t tracked: GPS L1 C/A, or a pilot (E1-C, B1C pilot) */
+    uint8_t sig;                /* gnss_sig_t tracked: GPS L1 C/A, or a pilot (E1-C, B1C, L5Q, E5a-Q, B2a) */
     uint8_t pilot;              /* a pilot: no data on the tracked code once rx wipes its secondary code */
     uint8_t boc;                /* BOC(1,1): the correlation peak is three times as steep */
     uint16_t cn0_n;             /* dumps per C/N0 estimate */
@@ -95,6 +95,7 @@ typedef struct {
     uint64_t code_word0;
     float carr_k;               /* carrier words per Hz */
     float code_k;               /* code words per chip/s */
+    float chip_per_hz;          /* code Doppler per carrier Doppler: the chip rate over the carrier frequency */
 
     /* Loops. */
     float dop_hz;               /* carrier frequency relative to the IF */
@@ -156,6 +157,8 @@ int trk_update(trk_ch_t *c, const trk_profile_t *p, const corr_dump_t *d, float 
  * Makes a started channel track a pilot (GNSS_SIG_GAL_E1C, GNSS_SIG_BDS_B1CP; milestone 6):
  * full-range PLL and FLL discriminators on the wiped pilot, the BOC(1,1) DLL gain, C/N0 from
  * consecutive dumps over 0.2 s, and no bit sync (the data code's symbols are its own prompt's).
+ * The L5 pilots (GNSS_SIG_GPS_L5Q, GNSS_SIG_GAL_E5AQ, GNSS_SIG_BDS_B2AP) are BPSK at 10.23 Mchip/s
+ * on 1176.45 MHz with 1 ms dumps: the same, with the BPSK DLL gain and their own code Doppler.
  */
 void trk_set_signal(trk_ch_t *c, int sig);
 

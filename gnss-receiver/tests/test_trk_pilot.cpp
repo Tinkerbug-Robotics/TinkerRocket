@@ -159,3 +159,63 @@ TEST(TrkPilot, AnEmptySkyNeverLocks)
         }
     }
 }
+
+// An L5 pilot (GPS L5Q: BPSK at 10.23 Mchip/s on 1176.45 MHz, 1 ms dumps): its code moves with its
+// carrier at the L5 ratio, so through 1800 Hz of Doppler ramp the narrow DLL never chases the code.
+TEST(TrkPilot, L5PilotCarriesItsCodeWithTheCarrier)
+{
+    const double fs = 20.46e6, T = 1e-3, fc = GNSS_FREQ_L5_HZ, chip = 10.23e6, d_tap = 0.25;
+    const double carr_k = 4294967296.0 / fs, code_k = 1099511627776.0 / fs;
+    const int32_t if_word = int32_t(std::llround(-4.0e6 / fs * 4294967296.0));
+    const uint64_t code_word0 = uint64_t(std::llround(chip / fs * 1099511627776.0));
+    trk_ch_t ch{};
+    rng_t rng{};
+    rng_seed(&rng, 11);
+    double dop = 800.0, tau = 0.05, phase = 0.2, f_q[3], r_q[3];
+    trk_start(&ch, 8, float(dop + 4.0), float(d_tap), if_word, code_word0, float(carr_k), float(code_k));
+    trk_set_signal(&ch, GNSS_SIG_GPS_L5Q);
+    for (int k = 0; k < 3; k++) {
+        f_q[k] = dop + 4.0;
+        r_q[k] = chip * (1.0 + (dop + 4.0) / fc);
+    }
+    auto tri = [](double x) { return std::fabs(x) < 1.0 ? 1.0 - std::fabs(x) : 0.0; };
+    const double sig = std::sqrt(1.0 / (2.0 * std::pow(10.0, 40.0 / 10.0) * T));
+    double tau_max = 0.0;
+    for (uint32_t k = 0; k < 8000; k++) {  // 2 s still, then 300 Hz/s for 6 s
+        const double t = k * T, rate = t < 2.0 ? 0.0 : 300.0, dop_mid = dop + 0.5 * rate * T;
+        phase += 2.0 * M_PI * (dop_mid - f_q[0]) * T;
+        tau += (chip * (1.0 + dop_mid / fc) - r_q[0]) * T;
+        dop += rate * T;
+        const double c = std::cos(phase), s = std::sin(phase);
+        double n[6];
+        for (int j = 0; j < 6; j += 2) {
+            rng_gauss2(&rng, &n[j], &n[j + 1]);
+        }
+        corr_dump_t d{};
+        d.seq = k;
+        d.ip = float(tri(tau) * c + sig * n[0]);
+        d.qp = float(tri(tau) * s + sig * n[1]);
+        d.ie = float(tri(tau - d_tap) * c + sig * n[2]);  // the early replica sees R(tau - d)
+        d.qe = float(tri(tau - d_tap) * s + sig * n[3]);
+        d.il = float(tri(tau + d_tap) * c + sig * n[4]);
+        d.ql = float(tri(tau + d_tap) * s + sig * n[5]);
+        int b;
+        uint32_t bp;
+        trk_update(&ch, &trk_profile_quiet, &d, float(T), &b, &bp);
+        int32_t cw;
+        uint64_t kw;
+        trk_words(&ch, &cw, &kw);
+        f_q[0] = f_q[1];
+        f_q[1] = f_q[2];
+        f_q[2] = double(cw - if_word) / carr_k;
+        r_q[0] = r_q[1];
+        r_q[1] = r_q[2];
+        r_q[2] = chip + double(int64_t(kw - code_word0)) / code_k;
+        if (t > 3.0) {
+            tau_max = std::fmax(tau_max, std::fabs(tau));
+        }
+    }
+    EXPECT_EQ(ch.state, TRK_LOCKED);
+    EXPECT_LT(tau_max, 0.05);  // a twentieth of an L5 chip, 1.5 m
+    EXPECT_NEAR(ch.cn0, 40.0f, 1.5f);
+}
