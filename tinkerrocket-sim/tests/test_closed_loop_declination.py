@@ -10,14 +10,14 @@ import math
 
 import numpy as np
 
-from tinkerrocket_sim.estimation.tc_ekf import quat2dcm
+from tinkerrocket_sim.physics.sixdof import quat_to_dcm
 from tinkerrocket_sim.simulation.closed_loop_sim import SimConfig, run_closed_loop
 from tinkerrocket_sim.simulation.scenarios import build_rollypolly_iii
 
 
 def _error_about_vertical_deg(q_true, q_est):
     """Rotation from the estimate to the truth about NED down, degrees."""
-    E = quat2dcm(q_true).T @ quat2dcm(q_est) - np.eye(3)
+    E = quat_to_dcm(q_true) @ quat_to_dcm(q_est).T - np.eye(3)
     return math.degrees(0.5 * (E[1, 0] - E[0, 1]))
 
 

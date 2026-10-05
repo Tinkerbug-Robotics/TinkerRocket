@@ -48,5 +48,6 @@ actually sent if that board is ever ordered.
   image is published on `fw-legacy-v*` tags (a V1 board is built by hand,
   `-DTR_BS_BOARD=1`), V3 on the product `fw-v*` tags.
 - **gnss-px1105r** (the Space Bug): its processor runs the bridge image in
-  [`tools/gnss-cocom/firmware/px1105r_p4_bridge`](../../tools/gnss-cocom/firmware/px1105r_p4_bridge/).
+  `px1105r_p4_bridge`, which moved with the GNSS test rig to the private `gnss/`
+  submodule (2026-10-05).
 - **servo-adapter** carries no firmware.

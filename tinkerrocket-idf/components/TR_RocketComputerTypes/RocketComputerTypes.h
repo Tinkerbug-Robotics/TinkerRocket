@@ -1052,7 +1052,7 @@ typedef struct
 // the SDR bench diagnostic prints (gnss:sv:cno:used:elev) plus the tracking
 // quality indicator, azimuth and health, so a flight log converts into the
 // rig's UBX capture format and the bench analysis runs on real flights
-// unchanged (tools/gnss-cocom/sdr/cocom_flightlog.py).
+// unchanged (cocom_flightlog.py, in the private gnss/ submodule).
 //
 // Variable length on the wire: GNSS_SAT_HEADER_BYTES + 6 * num_blocks.  The
 // receiver's table can exceed GNSS_SAT_MAX_BLOCKS because it lists satellites

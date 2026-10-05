@@ -1943,8 +1943,8 @@ TEST(EKFBiasInjection, TheGyroBiasClampStillApplies) {
 //
 // The filter used to mechanize a constant 9.807 m/s².  Gravity falls by
 // 3.09e-6 s⁻² per metre, 0.25 m/s² at 80 km, and through a GNSS outage the
-// filter integrated that as a real acceleration.  Mirrors the Python
-// TcEkf tests (tests/test_tc_ekf_raw.py in tinkerrocket-sim).
+// filter integrated that as a real acceleration.  Mirrors the gravity tests
+// of the Python raw-measurement filter (now in the private gnss/ submodule).
 
 namespace gravity1530 {
 

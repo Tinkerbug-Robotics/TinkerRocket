@@ -9,3 +9,14 @@
 	# `submodules:` explicitly per-workflow (gated on TR_GUIDANCEPN_TOKEN).
 	# Firmware devs who need it: `git submodule update --init tinkerrocket-idf/components/TR_GuidancePN`.
 	update = none
+[submodule "gnss"]
+	path = gnss
+	url = https://github.com/Tinkerbug-Robotics/TinkerRocket-GNSS.git
+	# Private GNSS receiver development (our own receiver, its dev board, the
+	# receiver test rig and the raw-measurement filters), kept out of the public
+	# tree as a precaution: detailed receiver design may be export-controlled.
+	# Nothing in the public tree builds or tests against it. `update = none`
+	# makes recursive clones and the public CI skip it, as for TR_GuidancePN.
+	# With access: `git submodule update --init --checkout gnss` (--checkout is
+	# needed; plain --init skips an `update = none` submodule).
+	update = none
