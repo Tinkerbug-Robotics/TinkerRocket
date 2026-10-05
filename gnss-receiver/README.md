@@ -401,6 +401,8 @@ truth is in the rig's `scenarios/`:
 | `py/mc_scenario.py` | Monte Carlo skies for a flight: the launch at random times of day under the broadcast file's satellites, every signal the L1/L5 design tracks, each one's Doppler, elevation and C/N0 (from a link budget) every 0.1 s, and each run's draws; see [A realistic flight](#a-realistic-flight-a-hundred-times-milestone-7) |
 | `mcsim` | Every signal of one such sky at once, dump by dump, through `core/trk`, with one IMU (the ISM6HG256X emulation), one oscillator and `boost_detect` shared, as on the board. `--design B\|BA\|BG\|Q\|QA`, `--cn0-offset` for the margins, `--clk-prior` for a stored oscillator sensitivity |
 | `py/mc_run.py`, `py/mc_summary.py`, `py/mc_plots.py` | `mcsim` over every sky, configuration and margin (`--clk-prior` / `--clk-prior-abs` draw each run's stored sensitivity); the signals and satellites kept, per run; the figures |
+| `py/loop_bn.py` | A receiver's carrier loop noise bandwidth from its phase jitter on the pad: ours from `obs.csv`, the mosaic-G5 from its SBF |
+| `py/mosaic_ignition.py` | The mosaic-G5 against our loops through the hotshot's ignition on one file: lock claimed, carrier unbroken against the truth, Doppler error; see [A commercial receiver's tracking modes](#a-commercial-receivers-tracking-modes-milestone-7) |
 | `gnssrx --boost-at S0,S1` | The boost profile over those file seconds, as the flight computer would call it. With `--loops-quiet` and `--loops-boost` (bandwidths), `--cn0-at S:DBHZ` (a level change mid-file) and `run.ini` (what made the run) |
 | `gnssrx --boost-detect default` | The boost profile from the launch the emulated IMU detects to 2 s past the burnout it detects, as the P4 will switch it (`core/trk/boost_detect.c`; `fc` for the flight computer's slower rules). Needs `--imu SCEN.csv`; `--imu-no-aid` keeps the IMU for detection only. `run.ini` records what it detected (`boost_detected`, a line per span). `--boost-gate IGN_S,TAIL_FRAC,TAIL_MS` gates the profile to the transitions; see [A gated profile](#a-gated-profile-milestone-7) |
 | `py/boost_track.py` | A run against truth, per satellite: frequency error, unlock time, carrier slips, code error, losses as the bench counts them (no pseudorange for 0.5 s), and the fix |
@@ -1063,7 +1065,14 @@ pattern toward each satellite.
 
 `py/los_truth.py` now gives each satellite's azimuth for this. The runs use the hotshot and
 traveler skies, IMU-aided 20 Hz loops, and spin ramping up through the burn. The figure is
-`runs/spin/fig/spin_antenna.png`.
+`runs/spin/fig/spin_antenna.png`. Its top row is one turn of the roll for a satellite at azimuth 30°
+and three elevations: solid, the carrier phase with the steady one cycle per turn taken out (that
+cycle is a frequency offset equal to the spin rate, the same for every satellite on a nose patch);
+dotted, the gain toward the satellite. Off its boresight the patch receives an ellipse that turns
+with the roll, so a low satellite's carrier runs ahead and falls back twice a turn while its gain
+dips twice: up to 30° and 5 dB at 10° elevation on the nose patch. The side patch sweeps past each
+satellite: in view for half a turn, lagging up to 120°, and blocked by the body for the other half
+(shaded).
 
 **On the roll axis, spin costs nothing at good signal.**
 - A perfect patch there sees exactly a cycle a revolution from every satellite at every
@@ -1536,6 +1545,54 @@ python3 py/mc_run.py $O --designs QA,BA,BG --clk-prior-abs 0.015 --tag G  # a gr
 python3 py/mc_summary.py $O
 python3 py/mc_plots.py $O --flight Hotshot -o $O/fig
 ```
+
+### A commercial receiver's tracking modes (milestone 7)
+
+The rig's mosaic-G5 flew the B1C hotshot file through the HackRF on 2026-10-04: six flights, each
+cold-started, its default dynamics (`setReceiverDynamics, Moderate, Automotive`) against the most
+dynamic (`High, Unlimited`), at 0, −3 and −6 dB (GPS 40.0, 37.3 and 34.5 dB-Hz on the pad), at the
+C/N0 sweep's attenuation. A check flight read the L1/E1 front end's AGC at 51 dB against the sweep's
+50, and GPS at 40.0 dB-Hz against 39.9 predicted (both files carry the same total sample power). It
+withholds everything past 600 m/s, T+3.1 s on the hotshot, so the comparison runs from ignition to
+T+3.0 s. It tracked no BeiDou on this file: it seems to need B1I. The captures are the rig's
+`sdr/captures/mosaic_g5_b1chs{M,H}{0,3,6}_*` (not committed), flown with `mosaic_run.py --dynamics`
+(PR #1567, which also brings `tools/gnss-cocom/septentrio_sbf.py`).
+
+**Its loops, from the phase jitter on the pad** (`py/loop_bn.py`: σ² = Bn / (C/N0), each satellite's
+carrier less its trend and what the clocks add to every satellite). On the same file our quiet 10 Hz
+loops read 8.0 Hz, the design's 20 Hz 18.2 and the fallback's 50 Hz 66 (its FLL and the command
+delay add noise). The mosaic's default mode reads 9.0, 9.6 and 8.8 Hz at the three levels: as narrow
+as our quiet loops. High mode reads 44.6, 45.6 and 45.3: five times wider.
+
+**Through the ignition** (`py/mosaic_ignition.py`; figure `runs/mosaic/fig/mosaic_ignition.png`). Per
+GPS satellite tracked a second before ignition: still holding lock at T+3 s by the receiver's own
+word (it reports a carrier phase, with no gap and no lock-time reset; ours: the PLL locked), and
+unbroken judged against the truth (the carrier phase against the integral of the file's Doppler,
+the troposphere's thinning included, less the pad's clock offset and drift and the per-epoch
+median over satellites; a slip is a step over 0.35 cycles that stays). Each cell: holding, of 13
+(unbroken); the fix's vertical velocity error from ignition to T+3 s, rms, m/s (the mosaic fixes
+at 20 Hz, ours at 10):
+
+| GPS C/N0 | mosaic, default | mosaic, High | Ours, quiet 10 Hz | Ours, 50 Hz | Ours, the design |
+|---|---|---|---|---|---|
+| 40.0 | 13 (13); no velocity after T+0.3 s | 13 (9); 1.0 | 3 (1); 1.0 | 13 (13); 0.31 | 13 (13); 0.09 |
+| 37.3 | 11 (9); no velocity after T+0.3 s | 13 (10); 1.1 | 1 (0); 0.9 | 13 (13); 0.38 | 13 (13); 0.14 |
+| 34.5 | 1 (0); 62, stale | 1 (0); 68, stale | 1 (0); 1.3 | 13 (13); 0.52 | 13 (13); 0.14 |
+
+- **The default loop rides the ignition better than ours of the same width.** At 40 dB-Hz it keeps
+  every GPS carrier unbroken, its Doppler 11 Hz off for a moment at T+0.2 s and back within about
+  1 Hz, where our quiet loops, as narrow and third order too, keep 1 of 13.
+- **The default mode's fix gives up.** Its navigation filter rejects the boost's measurements as
+  outliers ("not enough measurements after outlier rejection", "residuals too large"): no velocity
+  from T+0.3 s, no position from T+0.5–1 s. Its high-dynamics flag never set, even at 40 g.
+- **High mode keeps a fix every epoch, and slips without flagging it:** it claims all 13 GPS
+  satellites at 40 and 37.3 dB-Hz while 4 and 3 of their carriers slipped half or whole cycles.
+- **At 34.5 dB-Hz both modes lose all but one GPS carrier within 0.6 s** of the 10 g ignition. Our
+  50 Hz loops and the design keep all 13 unbroken.
+- **Galileo is its strong point:** unaided, it keeps 7 of 8 or 9 through the first three seconds at
+  40 dB-Hz, where our unaided E1-C keeps none (the 12.5 Hz cap).
+- **Not chased:** in High mode its fix on the stationary pad crept 4–13 m high before ignition on
+  this file; the default mode held within 0.3 m, and the C/N0 sweep's High flights didn't do it.
 
 ### Limits
 
