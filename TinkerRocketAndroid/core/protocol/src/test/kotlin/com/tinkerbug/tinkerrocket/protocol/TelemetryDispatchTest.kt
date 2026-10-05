@@ -398,7 +398,7 @@ class TelemetryDispatchTest {
         // configReportGroupsMissing is what the #915 re-adopt waits on.
         val cfg = RocketConfig(
             cameraSource = CameraTypeSource.CONFIG_FRAME,
-            servoExtras = RocketServoExtras(0, 0, 0, -60f, 60f, listOf(0f, 90f, 180f, 270f), 0, 0, true),
+            servoExtras = RocketServoExtras(0, 0, 0, -60f, 60f, listOf(0f, 90f, 180f, 270f), 0, 0),
             guidanceExtras = RocketGuidanceExtras(3f, 30f, 0.5f, 15f, 30f, 0, 0, 0f, 0f, 0f, 0f, 0f, 0),
             rollWaypoints = emptyList(),
         )

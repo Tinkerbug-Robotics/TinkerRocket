@@ -7,7 +7,7 @@
 // as uint8_t GPIO numbers, where 255 is the unmapped sentinel. M1 (the
 // rocket-computer-mini, which has no servos) declares all four as
 // `static constexpr int ... = -1`, the spelling it also uses for its other
-// absent pins (SERVO_ACT_PIN, PIEZO_PIN).
+// absent pins (SERVO_ACT_PIN).
 //
 // main.cpp used to test each pin with `!= 255U`. Under the usual arithmetic
 // conversions an int -1 is converted to unsigned (0xFFFFFFFF), which is not

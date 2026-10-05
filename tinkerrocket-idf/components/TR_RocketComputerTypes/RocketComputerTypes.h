@@ -2384,8 +2384,8 @@ static constexpr uint8_t END_FLIGHT          = 0xA8;
 static constexpr uint8_t OUT_STATUS_RESPONSE = 0xA9;
 static constexpr uint8_t CAMERA_START        = 0xAA;
 static constexpr uint8_t CAMERA_STOP         = 0xAB;
-static constexpr uint8_t SOUNDS_ENABLE       = 0xAC;
-static constexpr uint8_t SOUNDS_DISABLE      = 0xAD;
+// 0xAC / 0xAD: retired (were SOUNDS_ENABLE / SOUNDS_DISABLE; the piezo is
+// gone).  Do not reuse: a down-level OC can still serve them to the FC.
 static constexpr uint8_t SERVO_CONFIG_PENDING = 0xAE;
 static constexpr uint8_t PID_CONFIG_PENDING   = 0xAF;
 static constexpr uint8_t SERVO_CONFIG_MSG     = 0xB0;
@@ -2430,7 +2430,7 @@ static constexpr uint8_t GET_FLIGHT_SNAPSHOT  = 0xD3;  // FC→OC: request the l
 // The OC→FC commands whose DELIVERY moves or energises hardware, or starts an
 // autonomous sequence: a deployment-channel test fire, the momentary ARM of a
 // continuity test, a servo test or replay, the fin ground test, a simulated
-// flight. Every other command sets state — a config, a desired camera or sound
+// flight. Every other command sets state — a config, a desired camera
 // state, a cal step, a stop — and is idempotent to deliver twice.
 //
 // The distinction matters at an FC session boundary. The OC repeats a served
@@ -3192,7 +3192,7 @@ static constexpr size_t ROLL_CTRL_CONFIG_LEN_V1 = 16;
 // defaults (the original confusion in #165 — wrong Kp sent reconstruction off
 // by 5x).  Covers every per-rocket setting editable in the app's settings UI
 // (PID, gain schedule, servo trim/timing, roll control + profile, camera,
-// pyro, sounds) plus the issue's IMU full-scale and outer-loop knobs.  Read at
+// pyro) plus the issue's IMU full-scale and outer-loop knobs.  Read at
 // the snapshot point from the live servo_control values, the runtime override
 // globals, config:: constants, pyro_config, and the active roll_profile.
 // time_us is first so the generic frame parser's "timestamp = first 4 payload
@@ -3260,7 +3260,8 @@ struct __attribute__((packed)) FlightSettingsData
     static constexpr uint8_t F_GUIDANCE          = 2;  // PN guidance enabled
     static constexpr uint8_t F_SERVO_ENABLED     = 3;  // servo/roll control enabled at all
     static constexpr uint8_t F_FW_DIRTY          = 4;  // build had uncommitted changes
-    static constexpr uint8_t F_SOUNDS            = 5;  // piezo sounds enabled
+    // bit 5: retired (was F_SOUNDS, piezo sounds enabled).  Never set by
+    // current firmware; older logs may carry it.  Do not reuse.
     static constexpr uint8_t F_GUIDANCE_STATION_KEEP = 6;  // guidance law: 1 = station-keep, 0 = PN
                                                            // (meaningful only when F_GUIDANCE set)
     static constexpr uint8_t F_IMU_RATE_DYNAMIC      = 7;  // logging rate was DYNAMIC (4k or 8k),
@@ -3389,7 +3390,7 @@ static_assert(sizeof(FlightSettingsData) == 223,
 // otherwise see, so the phone can show and verify the whole editable surface
 // instead of displaying profile values it has no way to check against the
 // vehicle: servo trim 2-4, fin travel, fin layout, the PN guidance
-// parameters, the roll waypoints, sounds, and the orientation SETTING.
+// parameters, the roll waypoints, and the orientation SETTING.
 // Since v2 (#1231) also the live deployment configuration: the app's
 // config_pyro readback used to be the OC echoing its own cache, so a
 // divergence between what the operator configured and what the FC would
@@ -3428,7 +3429,8 @@ struct __attribute__((packed)) ConfigReportData
     static constexpr uint8_t VERSION = 3;
 
     // flags bit positions
-    static constexpr uint8_t F_SOUNDS = 0;   // piezo sounds enabled
+    // bit 0: retired (was F_SOUNDS, piezo sounds enabled).  Never set by
+    // current firmware.  Do not reuse.
     // Set when imu_orient_setting below came from the FC's own NVS record
     // rather than the compile-time board fallback.  This is what lets the OC
     // tell "the FC deliberately holds AUTO" from "the FC has never been told":

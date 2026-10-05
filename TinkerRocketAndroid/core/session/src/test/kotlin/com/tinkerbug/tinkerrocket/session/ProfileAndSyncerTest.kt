@@ -139,6 +139,20 @@ class RocketProfileCodecTest {
     }
 
     @Test
+    fun legacySoundsKey_isIgnored() {
+        // Profiles saved before the piezo was removed carry "soundsEnabled";
+        // they must still load, the key simply dropped.
+        val decoded = RocketProfileCodec.decode(
+            """{"name":"Old","soundsEnabled":true,"pidKp":0.5}""",
+            nowMs = 0,
+        )
+        assertNotNull(decoded)
+        assertEquals("Old", decoded.name)
+        assertEquals(0.5f, decoded.pidKp)
+        assertFalse(RocketProfileCodec.encode(decoded).contains("soundsEnabled"))
+    }
+
+    @Test
     fun wrongLengthFinArrays_fallBackToDefaults() {
         val decoded = RocketProfileCodec.decode(
             """{"name":"X","finServoAtSlot":[1,2],"finReverse":[true]}""",
@@ -421,9 +435,10 @@ class ActiveRocketSyncerTest {
         runCurrent()
 
         val sent = r.sentCommandIds().drop(before).toSet()
-        for (cmd in listOf(12, 13, 14, 22, 31, 26, 65, 66, 33, 64, 67, 11, 34)) {
+        for (cmd in listOf(12, 13, 14, 22, 31, 26, 65, 66, 33, 64, 67, 34)) {
             assertTrue(cmd in sent, "cmd $cmd missing from the explicit push (sent: $sent)")
         }
+        assertFalse(11 in sent, "cmd 11 (piezo sounds) is retired and must not be sent")
         assertIs<ActiveRocketSyncer.SyncState.Syncing>(r.syncer.syncState.value)
         advanceTimeBy(ActiveRocketSyncer.SYNCED_DELAY_MS)
         runCurrent()
@@ -985,14 +1000,13 @@ class ActiveRocketSyncerTest {
     fun unreportedGroups_surviveAdoption() {
         val p = RocketProfile.makeDefault("x", 0).copy(
             servoBias2 = 40, finTravelDeg = 90f, finRingMode = 1,
-            soundsEnabled = true, pnNavGain = 9f,
+            pnNavGain = 9f,
             rollWaypoints = listOf(ProfileRollWaypoint(timeSeconds = 1f, angleDeg = 90f)),
         )
         val r = ActiveRocketSyncer.adopt(p, matchingConfig())
         assertEquals(40, r.profile.servoBias2)
         assertEquals(90f, r.profile.finTravelDeg)
         assertEquals(1, r.profile.finRingMode)
-        assertTrue(r.profile.soundsEnabled)
         assertEquals(9f, r.profile.pnNavGain)
         assertEquals(1, r.profile.rollWaypoints.size)
     }
@@ -1025,7 +1039,7 @@ class ActiveRocketSyncerTest {
         bias2 = 0, bias3 = 0, bias4 = 0,
         finMinDeg = -60f, finMaxDeg = 60f,
         finAzimuths = listOf(0f, 90f, 180f, 270f),
-        finReverseMask = 0, finRollReverseMask = 0, soundsEnabled = false,
+        finReverseMask = 0, finRollReverseMask = 0,
     )
 
     private fun guidanceExtras(): com.tinkerbug.tinkerrocket.protocol.RocketGuidanceExtras {
@@ -1046,6 +1060,23 @@ class ActiveRocketSyncerTest {
         guidanceExtras = guidanceExtras(),
         rollWaypoints = emptyList(),
     )
+
+    /** The retired `snd` key is neither required nor read (piezo removed). */
+    @Test
+    fun configServo_parsesWithOrWithoutLegacySnd() {
+        val base = """{"type":"config_servo","sb2":1,"sb3":2,"sb4":3,"fmn":-60.00,"fmx":60.00,""" +
+            """"faz":[0.0,90.0,180.0,270.0],"frv":0,"frrv":0"""
+        val parse = { j: String ->
+            com.tinkerbug.tinkerrocket.protocol.ConfigServoMessage.parse(
+                kotlinx.serialization.json.Json.parseToJsonElement(j)
+                    as kotlinx.serialization.json.JsonObject,
+            )
+        }
+        val without = parse("$base}")
+        val with = parse("""$base,"snd":false}""")
+        assertNotNull(without)
+        assertEquals(without, with)
+    }
 
     @Test
     fun fullReport_withNoDisagreement_changesNothing() {
@@ -1076,21 +1107,19 @@ class ActiveRocketSyncerTest {
     }
 
     @Test
-    fun servoTrim_finTravel_andSounds_areAdopted() {
+    fun servoTrim_andFinTravel_areAdopted() {
         val p = RocketProfile.makeDefault("x", 0)
-            .copy(servoBias3 = 55, finTravelDeg = 90f, soundsEnabled = true)
+            .copy(servoBias3 = 55, finTravelDeg = 90f)
         val r = ActiveRocketSyncer.adopt(p, fullyReportingConfig())
         assertEquals(
             listOf(
                 ActiveRocketSyncer.GROUP_SERVO_TRIM_24,
                 ActiveRocketSyncer.GROUP_FIN_TRAVEL,
-                ActiveRocketSyncer.GROUP_SOUNDS,
             ),
             r.changed,
         )
         assertEquals(0, r.profile.servoBias3)
         assertEquals(120f, r.profile.finTravelDeg)
-        assertEquals(false, r.profile.soundsEnabled)
     }
 
     @Test
@@ -1139,7 +1168,7 @@ class ActiveRocketSyncerTest {
         assertEquals(9f, r.profile.pnNavGain)
         assertEquals(
             listOf(
-                "Servo trim 2-4", "Fin travel", "Fin layout", "Sounds",
+                "Servo trim 2-4", "Fin travel", "Fin layout",
                 "Guidance parameters", "Roll profile",
             ),
             cfg.unreportedGroups,

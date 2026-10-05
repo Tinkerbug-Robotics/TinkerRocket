@@ -126,7 +126,7 @@ struct DiscoveredDevice: Identifiable {
     }
 }
 
-/// Servo trim 2-4, fin travel, fin layout and sounds, from the rocket's own
+/// Servo trim 2-4, fin travel and fin layout, from the rocket's own
 /// `config_servo` readback (#915).  Grouped so "did this rocket report them?"
 /// is one nil check instead of nine, and so the settings UI can say which
 /// groups it cannot verify rather than implying the whole screen is confirmed.
@@ -141,7 +141,6 @@ nonisolated struct RocketServoExtras: Equatable {
     var finAzimuths: [Float]      // 4, per-servo ring-position azimuth
     var finReverseMask: UInt8     // bit i ⇒ servo i pitch/yaw reversed
     var finRollReverseMask: UInt8 // bit i ⇒ servo i roll reversed (independent)
-    var soundsEnabled: Bool
 }
 
 /// One roll-profile waypoint as the rocket reports it (#915).  A named type,
@@ -330,7 +329,7 @@ struct RocketConfig {
     var unreportedGroups: [String] {
         var out: [String] = []
         if servoExtras == nil {
-            out.append(contentsOf: ["Servo trim 2-4", "Fin travel", "Fin layout", "Sounds"])
+            out.append(contentsOf: ["Servo trim 2-4", "Fin travel", "Fin layout"])
         }
         if guidanceExtras == nil { out.append("Guidance parameters") }
         if rollWaypoints == nil  { out.append("Roll profile") }

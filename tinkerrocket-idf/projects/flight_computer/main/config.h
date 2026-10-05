@@ -817,13 +817,8 @@ struct config : board_pins
     static constexpr float GROUND_TEST_ROLL_RATE_DEADBAND_DPS = 2.0f;
 
     // ### Indicators (pins in board header) ###
-    static constexpr bool ENABLE_SOUNDS = false;
     static constexpr uint16_t BLUE_LED_FLASH_MS = 40;
-    static constexpr uint32_t HEARTBEAT_BEEP_INTERVAL_MS = 1000;
-    static constexpr uint16_t HEARTBEAT_BEEP_FREQ_HZ = 2200;
-    static constexpr uint16_t HEARTBEAT_BEEP_DURATION_MS = 50;
-    // Set true if you also want periodic beeps during INFLIGHT.
-    static constexpr bool HEARTBEAT_BEEP_IN_FLIGHT = false;
+    static constexpr uint32_t HEARTBEAT_INTERVAL_MS = 1000;
     // #1188: blue-LED half period of the "self-powered, nothing restored"
     // boot cue (boot_cue_policy.h). 250 ms is a 2 Hz square wave, which reads
     // as a blink where the heartbeat's 40 ms blip once a second reads as a tick.

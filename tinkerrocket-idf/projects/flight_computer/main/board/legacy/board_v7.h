@@ -88,7 +88,7 @@ struct board_pins
     static constexpr uint8_t SERVO_PIN_4 = 46;
 
     // ### Indicators ###
-    static constexpr int PIEZO_PIN = 53;
+    // GPIO53 (piezo) is left undriven: piezo firmware removed.
     static constexpr uint8_t RED_LED_PIN = 2;
     static constexpr uint8_t BLUE_LED_PIN = 29;
 

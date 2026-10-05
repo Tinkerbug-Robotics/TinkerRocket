@@ -749,7 +749,6 @@ private nonisolated func sigFig(_ v: Float, _ digits: Int = 6) -> Double {
 nonisolated struct FlightSettings: Codable, Sendable {
     let fw_git_sha: String
     let fw_dirty: Bool
-    let sounds_enabled: Bool
     let roll_control: RollControlSettings
     let servo: ServoSettings
     let camera: CameraSettings
@@ -759,7 +758,6 @@ nonisolated struct FlightSettings: Codable, Sendable {
     init(from raw: FlightSettingsData) {
         fw_git_sha = raw.fw_git_sha
         fw_dirty = raw.fwDirty
-        sounds_enabled = raw.soundsEnabled
         roll_control = RollControlSettings(from: raw)
         servo = ServoSettings(from: raw)
         camera = CameraSettings(type: CameraSettings.label(raw.camera_type))

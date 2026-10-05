@@ -187,7 +187,7 @@ final class MessageParserTests: XCTestCase {
         var p: [UInt8] = []
         p += leU32(123456)        // time_us @0
         p.append(1)               // version @4
-        let flags: UInt8 = (1 << 0) | (1 << 1) | (1 << 3) | (1 << 5)  // angle, gainSched, servo, sounds
+        let flags: UInt8 = (1 << 0) | (1 << 1) | (1 << 3) | (1 << 5)  // angle, gainSched, servo, retired bit 5 (old logs still parse)
         p.append(flags)           // flags @5
         p += leU16(500)           // roll_delay_ms @6
         p += leF32(0.02)          // kp @8
@@ -231,7 +231,6 @@ final class MessageParserTests: XCTestCase {
         XCTAssertTrue(raw.gainScheduleEnabled)
         XCTAssertFalse(raw.guidanceEnabled)
         XCTAssertTrue(raw.servoEnabled)
-        XCTAssertTrue(raw.soundsEnabled)
         XCTAssertFalse(raw.fwDirty)
         XCTAssertEqual(raw.roll_delay_ms, 500)
         XCTAssertEqual(raw.kp, 0.02, accuracy: 1e-6)
@@ -271,7 +270,6 @@ final class MessageParserTests: XCTestCase {
         // JSON model mapping
         let s = FlightSettings(from: raw)
         XCTAssertEqual(s.fw_git_sha, "abc1234")
-        XCTAssertTrue(s.sounds_enabled)
         XCTAssertEqual(s.roll_control.mode, "angle_profile")   // num_waypoints > 0
         XCTAssertEqual(s.roll_control.kp, 0.02, accuracy: 1e-9)
         XCTAssertEqual(s.roll_control.cmd_limit_min_deg, -20, accuracy: 1e-9)

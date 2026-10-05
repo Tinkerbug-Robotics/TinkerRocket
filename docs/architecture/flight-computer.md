@@ -35,7 +35,7 @@ interrupt-driven, and why that poll is skipped entirely in flight.
 | **Flight loop** | 1000 Hz |
 | **Estimator** | 15-state error-state EKF at 500 Hz (loop rate ÷ `EKF_DECIMATION`) |
 | **Sensors** | IMU 960/1920/3840/7680 Hz (app-settable; default "4k Dynamic", 3840 Hz to deployment then 960; 7680 only where the board reads the IMU from its FIFO), barometer 500 Hz, magnetometer 100 Hz (V8 IIS2MDC; 200 Hz on older MMC5983MA boards), GNSS 18 Hz |
-| **Outputs** | 1–4 fin servos, 4 pyro channels, camera control, piezo, status LED |
+| **Outputs** | 1–4 fin servos, 4 pyro channels, camera control, status LED |
 | **Talks to the OC** | I2S out (telemetry, master TX) + I2C out (command poll, master) |
 
 ## Two cores, five tasks
@@ -104,7 +104,7 @@ the flight logic inside is gated to `FLIGHT_LOOP_UPDATE_RATE` (1000 Hz).
    feeding an adaptive quorum.
 8. **Run the state machine**, including pyro servicing and the control law.
 9. **Pack and send telemetry** (`NonSensorData` at 500 Hz).
-10. **Service sound, LED, and camera** timers, then periodic diagnostics.
+10. **Service LED and camera** timers, then periodic diagnostics.
 
 ## Flight states
 
