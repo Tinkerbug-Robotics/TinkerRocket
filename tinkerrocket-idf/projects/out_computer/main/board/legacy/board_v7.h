@@ -20,6 +20,7 @@ struct board_pins
     // driven by the FC alone. Only the mini's rework-4 splits the arm across
     // both processors. -1 = not present, same sentinel as GPS_PWR_PIN.
     static constexpr int ARM_CONSENT_PIN = -1;
+    static constexpr int INA_ALERT_PIN = -1;     // #1553: none
 
     // --- Power monitoring (INA230 @ 0x40, always-on I2C bus) ---
     static constexpr int PWR_SDA = 7;

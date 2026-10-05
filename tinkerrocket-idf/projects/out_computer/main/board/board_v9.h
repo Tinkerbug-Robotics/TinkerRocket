@@ -52,6 +52,11 @@ struct board_pins
     // driven by the FC alone. Only the mini's rework-4 splits the arm across
     // both processors. -1 = not present, same sentinel as GPS_PWR_PIN.
     static constexpr int ARM_CONSENT_PIN = -1;
+    // #1553: no INA230 ALERT line on V9. The V10 routes INA_ALERT to S3
+    // GPIO18 (pad 24, R142 100 k to +3V3) and OC_ARM_EN to GPIO14 (pad 19);
+    // both belong in board_v10.h (#1409), which does not exist yet, and this
+    // header must not claim them: the V9 has neither.
+    static constexpr int INA_ALERT_PIN = -1;
 
     // --- Power monitoring (INA230 @ 0x40, always-on I2C bus) ---
     static constexpr int PWR_SDA = 21;       // CONFIRMED (bench-validated)

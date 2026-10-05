@@ -78,6 +78,11 @@
 //     pull-up can close U9 for that stretch, but with no channel switched on,
 //     no squib current flows.
 //
+// Fault current (#1553). While consent is up the OC also watches the pack
+// current, and a shorted e-match mid-pulse drops consent for a hold-off, then
+// gives it back so a later channel can still fire. That veto sits on top of
+// this rule and never raises the pin; pyro_fault_trip_policy.h has it.
+//
 // Pure so the decision table is host-testable (the inflight_refusal_policy.h
 // pattern). main.cpp owns the pin: serviceArmConsent() evaluates this every
 // loop_oc pass, and once more the moment a fire test is staged.

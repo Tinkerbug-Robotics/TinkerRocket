@@ -24,6 +24,14 @@ struct TelemetryData: Codable {
     // link (LoRa does not carry it).  Rendered as one quiet advisory line.
     var scap_voltage: Float?
     var holdup_state: Int?
+    // #1553: the pyro fault-current trip — trips this OC boot ("pft"), the
+    // last trip's peak pack current in amps ("pfa"; 40.9 = INA230 clipped),
+    // and the most channels the live pyro config fires at once ("pfo", only
+    // sent above the 2 the 30 A trip covers).  nil = no trip / no overlap,
+    // a board without the arm-consent stage, or a relay link.
+    var pyro_fault_trips: Int?
+    var pyro_fault_peak_a: Float?
+    var pyro_overlap: Int?
     // #412: the LoRa daughterboard's own firmware version ("mfw") and the out
     // computer's verdict on it ("mst"). Direct link only — a protocol mismatch
     // disables the radio, so the fault cannot announce itself over LoRa.
@@ -316,6 +324,35 @@ struct TelemetryData: Codable {
             return nil
         }
     }
+
+    /// #1553: the out computer dropped arm consent for 250 ms because the
+    /// pack went over 30 A with consent up — a shorted e-match or harness
+    /// mid-pulse.  Not quiet: the channel that tripped it likely did not
+    /// fire, and nothing else on the phone says why.  nil = no trip this
+    /// boot.  Android twin: `pyroFaultAdvisoryText(Int?, Float?)`.
+    var pyroFaultAdvisoryText: String? {
+        guard let n = pyro_fault_trips, n > 0 else { return nil }
+        var head = n == 1 ? "Pyro fault-current trip" : "Pyro fault-current trip ×\(n)"
+        if let a = pyro_fault_peak_a {
+            // 40.9 is the INA230's ceiling, not a measurement.
+            head += a >= 40.9 ? " — pack ≥ 40.9 A (clipped)"
+                              : String(format: " — pack %.1f A", a)
+        }
+        return head + ", arm consent dropped 250 ms. Shorted e-match or harness:"
+            + " that channel likely did not fire. Inspect before flying."
+    }
+
+    /// #1553: the live pyro config can fire more channels at once than the
+    /// 30 A trip covers (2), so a clean multi-channel event could trip and
+    /// lose those pulses.  ~9.6 A per e-match plus ~5 A of board.  Advisory
+    /// only — the fix is to stagger the triggers.  Android twin:
+    /// `pyroOverlapAdvisoryText(Int?)`.
+    var pyroOverlapAdvisoryText: String? {
+        guard let n = pyro_overlap, n > 2 else { return nil }
+        let amps = Int((Double(n) * 9.6 + 5).rounded())
+        return "Pyro config fires \(n) channels at once (~\(amps) A) — over the"
+            + " 30 A fault trip, which would cut them mid-pulse. Stagger the triggers."
+    }
     func pyroHealth(channel: Int) -> SensorHealth {   // channel 1...4; .na = not configured
         guard (1...4).contains(channel) else { return .na }
         return shState(12 + (channel - 1) * 2)
@@ -507,6 +544,9 @@ struct TelemetryData: Codable {
         case servo_current = "scur"    // #850
         case scap_voltage = "scap"     // #1166
         case holdup_state = "hu"       // #1166
+        case pyro_fault_trips = "pft"  // #1553
+        case pyro_fault_peak_a = "pfa" // #1553
+        case pyro_overlap = "pfo"      // #1553
         case modem_fw = "mfw"          // #412
         case modem_state = "mst"       // #412
         case voltage = "vol"
@@ -593,6 +633,10 @@ struct TelemetryData: Codable {
         // #1166: absent stays nil ("no sense line / relay"), never 0.
         scap_voltage = try c.decodeIfPresent(Float.self, forKey: .scap_voltage)
         holdup_state = flexInt(.holdup_state)
+        // #1553: same shape — absent stays nil ("no trip / no consent stage").
+        pyro_fault_trips = flexInt(.pyro_fault_trips)
+        pyro_fault_peak_a = try c.decodeIfPresent(Float.self, forKey: .pyro_fault_peak_a)
+        pyro_overlap = flexInt(.pyro_overlap)
         // #412: absent stays nil ("no daughterboard on this board"), never 0.
         // flexInt for the same reason every integer key uses it (#571): one
         // field emitted as a float would otherwise throw and lose the frame.

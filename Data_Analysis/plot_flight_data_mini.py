@@ -133,6 +133,7 @@ MSG_SNAPSHOT          = 0xD2  # FlightSnapshotData: FC crash-recovery state, 10 
 MSG_LOG_BUFFER_STATS  = 0xE2  # OC self-emitted ring-buffer snapshot (~1 Hz)
 MSG_LORA              = 0xF1
 MSG_LORA_UPLINK       = 0xF9  # OC-self-emitted uplink RSSI/SNR record
+MSG_PYRO_FAULT_TRIP   = 0x94  # OC-self-emitted pyro fault-current trip, two per trip (#1553)
 MSG_GUIDANCE_TELEM    = 0xCA  # GuidanceTelemData, ~10 Hz during guided coast
 MSG_FLIGHT_SETTINGS   = 0xE1  # FlightSettingsData, once at PRELAUNCH->INFLIGHT
 
@@ -171,6 +172,7 @@ MSG_NAMES = {
     MSG_LOG_BUFFER_STATS: "LogBufferStats",
     MSG_LORA:             "LoRa",
     MSG_LORA_UPLINK:      "LoRaUplink",
+    MSG_PYRO_FAULT_TRIP:  "PyroFaultTrip",
     MSG_GUIDANCE_TELEM:   "Guidance",
 }
 
@@ -192,6 +194,7 @@ MSG_EXPECTED_LEN = {
     MSG_END_FLIGHT:        None,
     MSG_LOG_BUFFER_STATS:  28,    # LogBufferStatsData
     MSG_LORA_UPLINK:       13,   # sizeof(LoRaUplinkData)
+    MSG_PYRO_FAULT_TRIP:   13,   # sizeof(PyroFaultTripData)
     MSG_LORA:              (22, 55),  # #850: SLOW / FAST frames; sweep on struct-size changes (#227)
     MSG_GUIDANCE_TELEM:    (15, 19),  # legacy (mislabeled) / current (+fin cmds)
 }
@@ -292,6 +295,49 @@ FMT_STATUS_QUERY = '<B H H hh B hhh'
 FMT_STATUS_QUERY_B2R = '<BB hhhh'  # b2r_code, b2r_mode, quat×10000 (payload[16:26])
 # LogBufferStatsData: 28 bytes (time_us + 6× uint32 ring counters)
 FMT_LOG_BUFFER_STATS = '<I IIIIII'
+
+# PyroFaultTripData (PYRO_FAULT_TRIP_MSG 0x94), 13 bytes packed (#1553): time_us
+# (OC esp_timer, the LORA_UPLINK_MSG clock — NOT the flight clock), peak_counts
+# (INA230 shunt register), trip_index (1-based this boot), held_ms (0 in phase
+# 1), reason, source, phase.  Two records per trip: phase 1 when the OC drops
+# arm consent, phase 2 when it releases, carrying the peak over the whole hold.
+FMT_PYRO_FAULT_TRIP = '<IhHHBBB'
+SIZE_OF_PYRO_FAULT_TRIP = struct.calcsize(FMT_PYRO_FAULT_TRIP)  # 13
+# INA230 shunt LSB 2.5 uV across R72 (2 mOhm) = 1.25 mA/count = 800 counts/A.
+PYRO_FAULT_COUNTS_PER_A = 800.0
+# The shunt register saturates at INT16_MAX: the real current was at least this.
+PYRO_FAULT_CLIPPED_COUNTS = 32767
+PYRO_FAULT_PHASE_TRIP, PYRO_FAULT_PHASE_RELEASE = 1, 2
+PYRO_FAULT_REASONS = {1: "fire test", 2: "flight"}           # ArmConsentPolicy::Reason
+PYRO_FAULT_SOURCES = {1: "shunt poll", 2: "INA_ALERT edge"}
+PYRO_FAULT_PHASES = {PYRO_FAULT_PHASE_TRIP: "trip", PYRO_FAULT_PHASE_RELEASE: "release"}
+
+
+def decode_pyro_fault_trip(payload):
+    """PyroFaultTripData payload -> record dict, or None if the size is wrong.
+
+    Kept out of `records`: it is a handful of discrete events on the OC clock,
+    not a series on the flight clock, so it lands in config["pyro_fault_trips"]
+    and the health section reports it.
+    """
+    if len(payload) != SIZE_OF_PYRO_FAULT_TRIP:
+        return None
+    (time_us, peak_counts, trip_index, held_ms,
+     reason, source, phase) = struct.unpack(FMT_PYRO_FAULT_TRIP, payload)
+    return {
+        "time_us":     time_us,
+        "peak_counts": peak_counts,
+        "peak_a":      peak_counts / PYRO_FAULT_COUNTS_PER_A,
+        "clipped":     peak_counts >= PYRO_FAULT_CLIPPED_COUNTS,
+        "trip_index":  trip_index,
+        "held_ms":     held_ms,
+        "reason":      reason,
+        "reason_name": PYRO_FAULT_REASONS.get(reason, f"?{reason}"),
+        "source":      source,
+        "source_name": PYRO_FAULT_SOURCES.get(source, f"?{source}"),
+        "phase":       phase,
+        "phase_name":  PYRO_FAULT_PHASES.get(phase, f"?{phase}"),
+    }
 
 # FlightSnapshotData (SNAPSHOT_MSG 0xD2), 224 bytes packed — the FC's periodic
 # crash-recovery state, sent to the OC at 10 Hz through INFLIGHT and logged.
@@ -590,6 +636,8 @@ def parse_binary_file(filepath):
         # own record of what the vehicle was told to do, and the sidecar .json
         # is only the app's rendering of this same frame.
         "flight_settings_frames": [],
+        # #1553: decoded PYRO_FAULT_TRIP_MSG records, in log order (OC clock).
+        "pyro_fault_trips": [],
     }
 
     stats = {
@@ -1111,6 +1159,13 @@ def parse_binary_file(filepath):
                     "ring_drop_oldest_bytes": fields[5],
                     "ring_bad_sof_clears":    fields[6],
                 })
+
+            elif msg_type == MSG_PYRO_FAULT_TRIP:
+                # OC self-emitted fault-current trip (#1553). OC clock, so it
+                # goes to config rather than a time-sorted records stream.
+                rec = decode_pyro_fault_trip(payload)
+                if rec is not None:
+                    config["pyro_fault_trips"].append(rec)
 
             elif msg_type == MSG_GUIDANCE_TELEM and msg_len in (15, 19):
                 # PN guidance telemetry, ~10 Hz during guided coast.

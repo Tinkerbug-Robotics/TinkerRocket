@@ -19,7 +19,13 @@ _PARENT = Path(__file__).resolve().parent.parent.parent
 if str(_PARENT) not in sys.path:
     sys.path.insert(0, str(_PARENT))
 
-from plot_flight_data_mini import get_array  # noqa: E402
+from plot_flight_data_mini import (  # noqa: E402
+    PYRO_FAULT_CLIPPED_COUNTS,
+    PYRO_FAULT_COUNTS_PER_A,
+    PYRO_FAULT_PHASE_RELEASE,
+    PYRO_FAULT_PHASE_TRIP,
+    get_array,
+)
 
 from ..flight import Flight
 from ..registry import AnalysisResult
@@ -139,6 +145,75 @@ def _radio(flight) -> Optional[dict[str, Any]]:
                         f"{'s' if len(logs) != 1 else ''}")
 
 
+def _pyro_trips(trip_records) -> list[dict[str, Any]]:
+    """Pair PYRO_FAULT_TRIP_MSG records into one entry per trip, in log order.
+
+    Phase 1 opens a trip and phase 2 with the same trip_index closes it. A
+    phase 1 with no release means the log ended (or the OC lost power) with
+    consent still held low; a lone phase 2 means the opening record was lost.
+    trip_index restarts at 1 every boot, so a repeated index after a release is
+    a new trip, not the same one.
+    """
+    trips: list[dict[str, Any]] = []
+    open_by_index: dict[int, dict[str, Any]] = {}
+    for r in trip_records:
+        idx = r["trip_index"]
+        if r["phase"] == PYRO_FAULT_PHASE_TRIP:
+            t = {"index": idx, "trip": r, "release": None}
+            trips.append(t)
+            open_by_index[idx] = t
+        elif r["phase"] == PYRO_FAULT_PHASE_RELEASE:
+            t = open_by_index.pop(idx, None)
+            if t is None:
+                t = {"index": idx, "trip": None, "release": r}
+                trips.append(t)
+            else:
+                t["release"] = r
+    return trips
+
+
+def _describe_trip(t: dict[str, Any]) -> str:
+    first = t["trip"] or t["release"]
+    # The release carries the peak over the whole hold; the trip record only
+    # the reading that crossed the limit.
+    final = t["release"] or t["trip"]
+    counts = max(r["peak_counts"] for r in (t["trip"], t["release"]) if r)
+    if counts >= PYRO_FAULT_CLIPPED_COUNTS:
+        peak = f"peak >= {PYRO_FAULT_CLIPPED_COUNTS / PYRO_FAULT_COUNTS_PER_A:.2f} A (shunt clipped)"
+    else:
+        peak = f"peak {counts / PYRO_FAULT_COUNTS_PER_A:.2f} A"
+    # time_us is the OC's esp_timer, not the flight clock, so it cannot be
+    # placed on the report's T axis; say which clock it is.
+    text = (f"fault-current trip #{t['index']} at OC uptime "
+            f"{first['time_us'] / 1e6:.3f} s, {peak}, during "
+            f"{first['reason_name']}, detected by {first['source_name']}")
+    if t["release"] is not None:
+        text += f", consent held low {final['held_ms']} ms"
+    else:
+        text += ", no release record (consent still held low when the log ended)"
+    if t["trip"] is None:
+        text += " (trip record missing; release only)"
+    return text
+
+
+def _pyro_fault(config) -> Optional[dict[str, Any]]:
+    """#1553: the OC dropped arm consent on an over-current pack draw.
+
+    A shorted e-match or harness mid-pulse. The channel it cut off may have
+    done nothing in flight, and this record is the only trace of why — so any
+    trip is a PROBLEM. No records means none were logged, which on firmware
+    older than #1553 proves nothing, so the check is then omitted rather than
+    passed.
+    """
+    trips = _pyro_trips((config or {}).get("pyro_fault_trips") or [])
+    if not trips:
+        return None
+    detail = (f"{len(trips)} pyro fault-current trip{'s' if len(trips) != 1 else ''}: "
+              + "; ".join(_describe_trip(t) for t in trips)
+              + " — inspect the e-matches and pyro harness for a short before the next flight")
+    return _verdict(PROBLEM, detail)
+
+
 def analyze(flight: Flight) -> AnalysisResult:
     result = AnalysisResult(name="health", title="Vehicle Health")
     recs = flight.records
@@ -148,6 +223,7 @@ def analyze(flight: Flight) -> AnalysisResult:
         ("GNSS", _gnss(recs)),
         ("Data logging", _logging(recs, flight.stats)),
         ("Radio link", _radio(flight)),
+        ("Pyro fault current", _pyro_fault(flight.config)),
     ]
 
     metrics: dict[str, str] = {}

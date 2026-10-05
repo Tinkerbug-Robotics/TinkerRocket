@@ -121,6 +121,10 @@ struct board_pins
     // boot" for bench convenience; that silently collapses the design back to
     // a single-processor arm.
     static constexpr int ARM_CONSENT_PIN = 11;   // OC_ARM_EN (CONFIRMED)
+    // #1553: U23's ALERT (pin 3) is not connected on this board, so the
+    // fault-current trip (pyro_fault_trip_policy.h) polls the shunt register
+    // instead of taking the edge. The next revision routes it (#1554).
+    static constexpr int INA_ALERT_PIN = -1;     // U23 ALERT open (CONFIRMED)
 
     // --- Hold-up capacitor voltage (net V_SCAP_ADC) ---
     // Divider off the hold-up capacitor bank, read as ADC1_CH7. Tells us how

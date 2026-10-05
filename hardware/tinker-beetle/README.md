@@ -196,6 +196,17 @@ path at about 2 mA, so an LED cannot tell an armed channel from an unarmed one.
 Test with a real load and check that `PYRO_GND` (J2 pin 5) sits near 0 V during
 the pulse.
 
+**Nothing limits the fire current; the out computer trips on it (#1553).** The
+channels fire straight from the pack, so a shorted e-match or harness draws
+roughly 60–115 A through `Q11`, `R72` and the channel FET. While consent is up
+the out computer polls the INA230 shunt every millisecond, and at 30 A it drops
+`OC_ARM_EN` for 250 ms, long enough for the shorted channel's pulse to end. It
+then gives consent back so the main can still fire. This board's INA230 `ALERT`
+pin (U23 pin 3) is not connected, so the poll is the only path; the next
+revision routes it, and adds a fuse per channel (#1554). Three or more channels
+firing at once can reach 30 A legitimately, so stagger triggers that would
+coincide; the app warns when a config can do that.
+
 **2026-09-02: the window watchdog is gone.** The 2026-08-28 rework had a
 supervisor on the flight computer's `CHIP_PU` that reset it whenever GPIO8
 stopped toggling. It was removed from the schematic and the board (`U46`,

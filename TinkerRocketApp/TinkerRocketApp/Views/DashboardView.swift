@@ -803,6 +803,38 @@ struct ConnectedDashboardView: View {
                     .opacity(staleOpacity)
                 }
 
+                // #1553: the pyro fault-current trip fired this boot — the OC
+                // dropped arm consent for 250 ms on > 30 A.  Same line shape as
+                // the hold-up advisory but red, not orange: a channel likely
+                // did not fire, and this is the only place the phone says why.
+                // Still no recolour of the banner and no arm block.  Then the
+                // config overlap advisory, orange — a fix-before-flight hint.
+                // Direct links only — the LoRa relay does not carry the keys.
+                if !device.isBaseStation,
+                   let faultText = device.telemetry.pyroFaultAdvisoryText {
+                    HStack(spacing: 6) {
+                        Image(systemName: "bolt.trianglebadge.exclamationmark")
+                        Text(faultText)
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.red)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .opacity(staleOpacity)
+                }
+                if !device.isBaseStation,
+                   let overlapText = device.telemetry.pyroOverlapAdvisoryText {
+                    HStack(spacing: 6) {
+                        Image(systemName: "bolt.horizontal")
+                        Text(overlapText)
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.orange)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .opacity(staleOpacity)
+                }
+
                 // #412: the LoRa daughterboard is absent or its firmware does
                 // not match.  Same rule again — one quiet line, no recolour,
                 // no arm block.  Direct links only, and necessarily so: both
