@@ -25,6 +25,8 @@
 #include "soc/rtc.h"            // #541: rtc_clk_* for the 32k-crystal second chance
 #include "esp_private/esp_clk.h"  // #541: esp_clk_slowclk_cal_set after a late 32k start
 #include <esp_timer.h>          // #541: boot USB-enumeration light-sleep grace timer
+#include <hal/gpio_ll.h>        // #1553: the INA_ALERT ISR drops OC_ARM_EN from IRAM
+#include <soc/gpio_struct.h>
 #include "freertos/queue.h"
 #include "freertos/semphr.h"    // oc_i2s_mutex for the Phase 4 Layer 3 I2S flip
 #include "host/ble_gap.h"       // ble_gap_update_params
@@ -77,6 +79,7 @@ static inline std::string itos(int v)
 #include "storage_health_policy.h"    // #281/#278, #1235 items 3/4: the storage go/no-go verdict
 #include "landed_lockout_policy.h"    // #317, #1235 item 5: no new log session after LANDED
 #include "arm_consent_policy.h"       // #1168: when the OC gives its half of the Beetle's pyro arm
+#include "pyro_fault_trip_policy.h"   // #1553: drop that consent on a shorted e-match mid-pulse
 
 #include <TR_I2C_Interface.h>
 #include <TR_I2S_Stream.h>
@@ -550,6 +553,11 @@ static i2c_master_bus_handle_t ina230_bus = nullptr;
 static TR_INA230 ina230(0x40);
 static bool ina230_ok = false;
 static bool ina_continuous = false;         // INA230 in the low-power 1024-sample averaging config
+// #1553: consent is up, so the INA230 runs pyro_fault_trip_policy.h's fast
+// config with the shunt over-limit alert armed. loop_oc is the only writer
+// (serviceArmConsent); the config paths below read it so neither can put the
+// slow config back underneath a fire.
+static bool ina_guard = false;
 // Shunt resistor and current LSB
 static constexpr float INA230_R_SHUNT_OHM = 0.002f;     // 2 mOhm
 static constexpr float INA230_CURRENT_LSB_A = 0.001f;    // 1 mA/bit
@@ -2180,12 +2188,14 @@ static bool commitPowerSample(float bus_v, float current_a)
 // 100 Hz read rate on the V9. Power-down saves the part's ~0.3 mA, which only
 // matters with the rail off; low-power mode still switches to its own
 // continuous 1024-sample averaging (ina_continuous).
+//
+// #1553: while consent is up (ina_guard) this writes the guard config
+// instead — 140 us + 140 us — so a CVRF recovery cannot slow the trip down.
 static void ina230ConfigureForRailOn()
 {
-    ina230.setConfiguration(INA230_Avg::AVG_1,
-                            INA230_ConvTime::CT_332us,
-                            INA230_ConvTime::CT_332us,
-                            INA230_Mode::SHUNT_BUS_CONTINUOUS);
+    using namespace PyroFaultTrip;
+    ina230.writeRegister(INA230_Reg::CONFIGURATION,
+                         configWord(ina_guard ? InaConfig::Guard : InaConfig::RailOn));
     ina_continuous = false;
 }
 
@@ -3971,15 +3981,315 @@ static InflightHold inflightHold()
 
 // Arm consent: the OC's half of the Beetle's two-processor pyro arm
 // (OC_ARM_EN -> Q14). The rule, what it covers and what it deliberately does
-// not are in arm_consent_policy.h. After setup_oc's boot-time LOW the pin has
-// ONE writer, loop_oc: every pass calls serviceArmConsent(), and
+// not are in arm_consent_policy.h. After setup_oc's boot-time LOW the pin is
+// RAISED only by loop_oc: every pass calls serviceArmConsent(), and
 // queueOutStatusResponse() — also loop_oc, the serving slot's only writer —
 // calls armConsentFireTestStaged() the moment it stages a PYRO_FIRE_TEST.
+// #1553's fault-current trip (below) can also DROP it, from its task or the
+// INA_ALERT ISR; armConsentApplyPin() is the only way up, and it re-checks the
+// trip under the same lock.
 // Every other board sets ARM_CONSENT_PIN to -1 and compiles this out.
 static ArmConsentPolicy::FireTestWindow arm_consent_fire_test;
 static uint8_t                          arm_consent_fire_test_ch = 0;
 static ArmConsentPolicy::Reason         arm_consent_reason = ArmConsentPolicy::Reason::None;
 static bool                             arm_consent_sim_noted = false;
+
+// ---------------------------------------------------------------------------
+//  #1553: fault-current trip
+// ---------------------------------------------------------------------------
+// pyro_fault_trip_policy.h has the why and the rules. While consent is wanted
+// the INA230 runs the guard config (ina_guard) with SOL armed, and:
+//   - pyroFaultTask polls the shunt register every tick (1 ms) on core 0, off
+//     loop_oc, so a slow loop pass (LoRa, the logger, a flash write) cannot
+//     delay a trip; this is the Beetle's only path, and the V10's backstop;
+//   - on a board with INA_ALERT_PIN, the falling edge drops OC_ARM_EN from
+//     pyroFaultAlertIsr at once and leaves the bookkeeping to the task.
+// pyro_fault_mux makes the three writers of the pin one: both trip paths only
+// ever drive it LOW, and a loop pass that read "no trip" a moment before
+// one cannot raise it back, because armConsentApplyPin() decides under the
+// lock. Nothing that logs or blocks runs inside it.
+static portMUX_TYPE           pyro_fault_mux        = portMUX_INITIALIZER_UNLOCKED;
+static PyroFaultTrip::State   pyro_fault;                     // under pyro_fault_mux
+static PyroFaultTrip::Reading pyro_fault_reading;             // under pyro_fault_mux: the poll's latest
+static bool                   pyro_fault_alert_edge = false;  // under pyro_fault_mux: ISR -> task
+static bool                   arm_consent_pin_level = false;  // under pyro_fault_mux: what the pin is driven to
+static volatile bool          pyro_fault_guard      = false;  // loop_oc writes; the task polls while true
+static volatile bool          pyro_fault_log_trip   = false;  // task -> loop_oc: a trip to report
+static TaskHandle_t           pyro_fault_task       = nullptr;
+// The consent reason a trip is recorded against. serviceArmConsent sets it
+// BEFORE the pin can go up; arm_consent_reason itself only moves after.
+static volatile uint8_t       pyro_fault_reason     = 0;
+// maxConcurrentChannels() of the live pyro config (loop_oc, servicePyroOverlap).
+static uint8_t                pyro_fault_overlap    = 0;
+
+// The ISR's pin. -1 on a board without consent never reaches the ISR (it is
+// not installed), but the shift inside gpio_ll_set_level must still compile.
+static constexpr int kArmConsentGpio = config::ARM_CONSENT_PIN >= 0 ? config::ARM_CONSENT_PIN : 0;
+
+// INA_ALERT is open drain, active low (R142 100 k to +3V3 on the V10). Pin
+// first; everything else can wait for the task. IRAM, and gpio_ll rather than
+// gpio_set_level, so a flash write (NVS, OTA) cannot hold the trip off.
+static void IRAM_ATTR pyroFaultAlertIsr(void*)
+{
+    BaseType_t woken = pdFALSE;
+    portENTER_CRITICAL_ISR(&pyro_fault_mux);
+    if (pyro_fault_guard)
+    {
+        gpio_ll_set_level(&GPIO, (gpio_num_t)kArmConsentGpio, 0);
+        arm_consent_pin_level = false;
+        pyro_fault_alert_edge = true;
+    }
+    portEXIT_CRITICAL_ISR(&pyro_fault_mux);
+    if (pyro_fault_task != nullptr) vTaskNotifyGiveFromISR(pyro_fault_task, &woken);
+    portYIELD_FROM_ISR(woken);
+}
+
+// Caller holds pyro_fault_mux. Pin low first, then the record.
+static void pyroFaultTripLocked(int16_t counts, PyroFaultTrip::Source src, uint32_t now_ms)
+{
+    if (arm_consent_pin_level)
+    {
+        gpio_set_level((gpio_num_t)kArmConsentGpio, 0);
+        arm_consent_pin_level = false;
+    }
+    if (PyroFaultTrip::onOverLimit(pyro_fault, now_ms, counts, pyro_fault_reason, src))
+    {
+        pyro_fault_log_trip = true;
+    }
+}
+
+static void pyroFaultTask(void*)
+{
+    using namespace PyroFaultTrip;
+    for (;;)
+    {
+        if (!pyro_fault_guard)
+        {
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);   // pyroFaultGuard(true) wakes us
+            continue;
+        }
+        // One I2C read (~60 us at 400 kHz). The IDF master driver serialises
+        // it against loop_oc's readINA230Power on the same bus.
+        int16_t raw = 0;
+        const bool     ok     = ina230.readShuntVoltageRaw(&raw) == TR_INA230_OK;
+        const uint32_t now_ms = millis();
+
+        portENTER_CRITICAL(&pyro_fault_mux);
+        pyro_fault_reading.valid  = ok;
+        pyro_fault_reading.counts = ok ? raw : 0;
+        if (pyro_fault_alert_edge)
+        {
+            // The edge says the limit was crossed; the reading may already be
+            // falling with U9 open, so record at least the limit.
+            pyro_fault_alert_edge = false;
+            pyroFaultTripLocked((ok && raw > kTripLimitCounts) ? raw : kTripLimitCounts,
+                                Source::Alert, now_ms);
+        }
+        if (ok && overLimit(raw))
+            pyroFaultTripLocked(raw, Source::Poll, now_ms);
+        else if (ok)
+            notePeak(pyro_fault, raw);
+        portEXIT_CRITICAL(&pyro_fault_mux);
+
+        ulTaskNotifyTake(pdTRUE, 1);   // the next tick, or at once on an alert edge
+    }
+}
+
+// OC_ARM_EN to the consent rule's verdict, unless a trip holds it low.
+static void armConsentApplyPin(bool wanted)
+{
+    portENTER_CRITICAL(&pyro_fault_mux);
+    const bool high = PyroFaultTrip::pinHigh(wanted, pyro_fault.holding || pyro_fault_alert_edge);
+    if (high != arm_consent_pin_level)
+    {
+        gpio_set_level((gpio_num_t)kArmConsentGpio, high ? 1 : 0);
+        arm_consent_pin_level = high;
+    }
+    portEXIT_CRITICAL(&pyro_fault_mux);
+}
+
+// Enter or leave the guard: the INA230's config and alert, the alert ISR, and
+// the poll. Entered BEFORE the pin goes up and left AFTER it comes down, so
+// the pin is never high without it. An INA230 that does not answer leaves the
+// poll running on failed reads, which trip nothing (see the policy header).
+static void pyroFaultGuard(bool on)
+{
+    using namespace PyroFaultTrip;
+    if (on == ina_guard) return;
+    ina_guard = on;
+    constexpr bool kAlertWired = config::INA_ALERT_PIN >= 0;
+
+    if constexpr (kAlertWired)
+    {
+        if (!on) gpio_intr_disable((gpio_num_t)config::INA_ALERT_PIN);
+    }
+    if (ina230_ok)
+    {
+        // SOL while consent is up; #1409's function, when it exists, takes the
+        // pin back only here, on the way down (alertOwner()).
+        bool ok = ina230.writeRegister(INA230_Reg::MASK_ENABLE,
+                                       on ? solMaskEnable(kAlertWired) : kMeCnvr) == TR_INA230_OK;
+        ok = ina230.writeRegister(INA230_Reg::ALERT_LIMIT, on ? kSolAlertLimit : 0) == TR_INA230_OK && ok;
+        // Guard or rail-on; with the rail off the low-power branch puts its
+        // own averaging back on its next pass (ina_continuous is cleared).
+        ina230ConfigureForRailOn();
+        if (!ok)
+            ESP_LOGW("PYRO", "fault-current trip: INA230 alert %s failed — the shunt poll "
+                             "still runs", on ? "setup" : "restore");
+    }
+    if constexpr (kAlertWired)
+    {
+        if (on) gpio_intr_enable((gpio_num_t)config::INA_ALERT_PIN);
+    }
+
+    portENTER_CRITICAL(&pyro_fault_mux);
+    pyro_fault_guard = on;
+    if (!on)
+    {
+        // An edge the task has not reached yet is still a trip. Left as a
+        // bare flag it would veto consent until the next guard came up.
+        if (pyro_fault_alert_edge)
+        {
+            pyro_fault_alert_edge = false;
+            pyroFaultTripLocked(kTripLimitCounts, Source::Alert, millis());
+        }
+        pyro_fault_reading = Reading{};   // a stale reading must not hold a trip
+    }
+    portEXIT_CRITICAL(&pyro_fault_mux);
+    if (on && pyro_fault_task != nullptr) xTaskNotifyGive(pyro_fault_task);
+
+    ESP_LOGI("PYRO", "fault-current trip %s (limit %ld A, %s)",
+             on ? "ARMED: INA230 at 140 us, SOL" : "stood down: INA230 back to its normal config",
+             (long)kTripThresholdA,
+             kAlertWired ? "INA_ALERT edge + 1 ms shunt poll" : "1 ms shunt poll, no alert pin");
+}
+
+static const char* armConsentReasonName(uint8_t r)
+{
+    return r == (uint8_t)ArmConsentPolicy::Reason::Flight   ? "flight"
+         : r == (uint8_t)ArmConsentPolicy::Reason::FireTest ? "fire test"
+         :                                                     "none";
+}
+
+// One PYRO_FAULT_TRIP_MSG record into the flight log; dropped when no
+// session is open, like every OC-self record.
+static void pyroFaultLogRecord(const PyroFaultTrip::Event& ev, uint16_t index,
+                               uint8_t phase, uint32_t held_ms)
+{
+    PyroFaultTripData rec = {};
+    rec.time_us     = (uint32_t)esp_timer_get_time();
+    rec.peak_counts = ev.peak_counts;
+    rec.trip_index  = index;
+    rec.held_ms     = held_ms > 0xFFFFu ? 0xFFFFu : (uint16_t)held_ms;
+    rec.reason      = ev.reason;
+    rec.source      = ev.source;
+    rec.phase       = phase;
+    uint8_t frame[MAX_FRAME];
+    size_t  frame_len = 0;
+    if (TR_I2C_Interface::packMessage(PYRO_FAULT_TRIP_MSG, (const uint8_t*)&rec, sizeof(rec),
+                                      frame, sizeof(frame), frame_len))
+    {
+        (void)logger.enqueueFrame(frame, frame_len);
+    }
+}
+
+// loop_oc: release a trip whose hold-off is over, and report both edges.
+static void servicePyroFaultTrip(uint32_t now_ms)
+{
+    using namespace PyroFaultTrip;
+    bool     report_trip = false, released = false;
+    Event    ev;
+    uint16_t index = 0;
+
+    portENTER_CRITICAL(&pyro_fault_mux);
+    if (pyro_fault_log_trip)
+    {
+        pyro_fault_log_trip = false;
+        report_trip = true;
+    }
+    const bool was_holding = pyro_fault.holding;
+    const Event held       = pyro_fault.current;
+    if (was_holding && !stillHolding(pyro_fault, now_ms, pyro_fault_reading)) released = true;
+    ev    = released ? held : pyro_fault.last;
+    index = pyro_fault.trips;
+    portEXIT_CRITICAL(&pyro_fault_mux);
+
+    if (report_trip)
+    {
+        const int16_t da = countsToDeciAmps(ev.peak_counts);
+        ESP_LOGE("PYRO", "FAULT-CURRENT TRIP #%u: pack at %d.%d A%s (limit %ld A) with "
+                         "consent up for a %s; OC_ARM_EN dropped by the %s. Held low "
+                         "%lu ms so the shorted channel's pulse ends, then re-armed",
+                 (unsigned)index, da / 10, da % 10,
+                 ev.peak_counts >= 32767 ? " (clipped)" : "", (long)kTripThresholdA,
+                 armConsentReasonName(ev.reason),
+                 ev.source == (uint8_t)Source::Alert ? "INA_ALERT edge" : "shunt poll",
+                 (unsigned long)kHoldOffMs);
+        pyroFaultLogRecord(ev, index, PYRO_FAULT_PHASE_TRIP, 0);
+    }
+    if (released)
+    {
+        const uint32_t held_ms = now_ms - ev.at_ms;
+        const int16_t  da      = countsToDeciAmps(ev.peak_counts);
+        ESP_LOGW("PYRO", "fault-current trip #%u released after %lu ms (peak %d.%d A%s): "
+                         "OC_ARM_EN follows the arm rule again",
+                 (unsigned)index, (unsigned long)held_ms, da / 10, da % 10,
+                 ev.peak_counts >= 32767 ? ", clipped" : "");
+        pyroFaultLogRecord(ev, index, PYRO_FAULT_PHASE_RELEASE, held_ms);
+    }
+}
+
+// The concurrency warning (owner decision, 2026-10-04): the live pyro config,
+// as the config readback reports it, against what the 30 A limit covers.
+// Advisory only — it reaches the console and telemetry ("pfo") and refuses
+// nothing.
+static void servicePyroOverlap()
+{
+    bool valid = false, has_pyro = false;
+    const ConfigReportData r = snapshotConfigReport(&valid, &has_pyro);
+    const PyroConfigData   c = (pwr_pin_on && valid && has_pyro) ? r.pyro : pyroCacheAsData();
+    const PyroFaultTrip::ChannelCfg ch[4] = {
+        { c.ch1_enabled != 0, c.ch1_trigger_mode, c.ch1_trigger_value },
+        { c.ch2_enabled != 0, c.ch2_trigger_mode, c.ch2_trigger_value },
+        { c.ch3_enabled != 0, c.ch3_trigger_mode, c.ch3_trigger_value },
+        { c.ch4_enabled != 0, c.ch4_trigger_mode, c.ch4_trigger_value },
+    };
+    const uint8_t n = PyroFaultTrip::maxConcurrentChannels(ch);
+    if (n == pyro_fault_overlap) return;
+    pyro_fault_overlap = n;
+    if (PyroFaultTrip::concurrencyWarning(n))
+    {
+        ESP_LOGW("PYRO", "pyro config can fire %u channels at once: ~%ld A against the "
+                         "%ld A fault-current trip, which would drop consent mid-pulse and "
+                         "lose them. Stagger the triggers (> %.2f s or > %.0f m apart)",
+                 (unsigned)n,
+                 (long)((n * PyroFaultTrip::kChannelDrawMilliA + PyroFaultTrip::kBoardDrawMilliA) / 1000),
+                 (long)PyroFaultTrip::kTripThresholdA,
+                 (double)PyroFaultTrip::kTimeOverlapS, (double)PyroFaultTrip::kAltOverlapM);
+    }
+}
+
+// #1553: the trip and the concurrency warning into the app telemetry. Boards
+// without a consent stage leave every field at its "absent" default.
+static void fillPyroFaultTelem(TR_BLE_To_APP::TelemetryData& t)
+{
+    if constexpr (config::ARM_CONSENT_PIN >= 0)
+    {
+        servicePyroOverlap();
+        portENTER_CRITICAL(&pyro_fault_mux);
+        const uint16_t trips = pyro_fault.trips;
+        const int16_t  peak  = pyro_fault.last.peak_counts;
+        portEXIT_CRITICAL(&pyro_fault_mux);
+        t.pyro_fault_trips  = trips;
+        t.pyro_fault_peak_a = trips != 0 ? (float)peak / (float)PyroFaultTrip::kCountsPerAmp : NAN;
+        t.pyro_overlap      = PyroFaultTrip::concurrencyWarning(pyro_fault_overlap)
+                                  ? pyro_fault_overlap : 0;
+    }
+    else
+    {
+        (void)t;
+    }
+}
 
 static void serviceArmConsent()
 {
@@ -4010,14 +4320,18 @@ static void serviceArmConsent()
             arm_consent_sim_noted = false;
         }
 
+        // #1553: the guard is up before the pin, and down after it; a trip's
+        // release is decided here, every pass, and the pin re-checked.
+        const bool wanted = ArmConsentPolicy::pinHigh(why);
+        if (wanted) pyro_fault_reason = (uint8_t)why;
+        if (wanted) pyroFaultGuard(true);
+        servicePyroFaultTrip(now_ms);
+        armConsentApplyPin(wanted);
+        if (!wanted) pyroFaultGuard(false);
+
         if (why == arm_consent_reason) return;
         const Reason was   = arm_consent_reason;
         arm_consent_reason = why;
-        if (ArmConsentPolicy::pinHigh(why) != ArmConsentPolicy::pinHigh(was))
-        {
-            gpio_set_level((gpio_num_t)config::ARM_CONSENT_PIN,
-                           ArmConsentPolicy::pinHigh(why) ? 1 : 0);
-        }
 
         if (why == Reason::Flight)
         {
@@ -7999,6 +8313,7 @@ static void printStats()
         ble_telem.scap_voltage = holdup_scap_v;
         ble_telem.holdup_state = holdup_tracker.state;
         fillModemTelem(ble_telem);
+        fillPyroFaultTelem(ble_telem);   // #1553
         ble_telem.latitude = NAN;
         ble_telem.longitude = NAN;
         ble_telem.gdop = NAN;
@@ -8500,6 +8815,7 @@ static void printStats()
     ble_telem.scap_voltage = holdup_scap_v;
     ble_telem.holdup_state = holdup_tracker.state;
     fillModemTelem(ble_telem);
+    fillPyroFaultTelem(ble_telem);   // #1553
     if (latest_gnss_valid)
     {
         ble_telem.latitude = gnss.lat;
@@ -10310,6 +10626,46 @@ static void setup_oc()
         ESP_LOGW("PWR", "INA230 not found -- battery monitoring disabled");
     }
 
+    // #1553: the fault-current trip, on every board with a consent stage. Up
+    // whether or not the INA230 answered: with no gauge its poll reads fail
+    // and trip nothing, and consent is exactly what arm_consent_policy.h says.
+    if constexpr (config::ARM_CONSENT_PIN >= 0)
+    {
+        // Core 0, above loop_oc's 5 and the parser's 6 on core 1, and below
+        // NimBLE. It sleeps unless consent is wanted.
+        if (xTaskCreatePinnedToCore(pyroFaultTask, "PyroTrip", 3072, nullptr, 10,
+                                    &pyro_fault_task, 0) != pdPASS)
+        {
+            pyro_fault_task = nullptr;
+            ESP_LOGE("PYRO", "fault-current trip task not created — consent runs unguarded");
+        }
+        if constexpr (config::INA_ALERT_PIN >= 0)
+        {
+            // Open drain, active low, with its own pull-up (R142 on the V10).
+            gpio_config_t al = {};
+            al.pin_bit_mask = 1ULL << config::INA_ALERT_PIN;
+            al.mode         = GPIO_MODE_INPUT;
+            al.pull_up_en   = GPIO_PULLUP_DISABLE;
+            al.pull_down_en = GPIO_PULLDOWN_DISABLE;
+            al.intr_type    = GPIO_INTR_NEGEDGE;
+            gpio_config(&al);
+            // TR_LoRa_Comms installs the service with the same IRAM flag;
+            // whichever comes second gets INVALID_STATE, which is fine.
+            const esp_err_t isr_err = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
+            if ((isr_err == ESP_OK || isr_err == ESP_ERR_INVALID_STATE) &&
+                gpio_isr_handler_add((gpio_num_t)config::INA_ALERT_PIN,
+                                     pyroFaultAlertIsr, nullptr) == ESP_OK)
+            {
+                gpio_intr_disable((gpio_num_t)config::INA_ALERT_PIN);   // pyroFaultGuard enables it
+            }
+            else
+            {
+                ESP_LOGE("PYRO", "INA_ALERT (GPIO%d) ISR not installed — the shunt poll is "
+                                 "the only fault-current trip", (int)config::INA_ALERT_PIN);
+            }
+        }
+    }
+
     // #850: the rail-current ADC is independent of the INA230 — bring it up
     // whether or not the gauge answered, so a dead or absent INA230 does not
     // also cost the camera/servo current readings.
@@ -11038,11 +11394,11 @@ static void loop_oc()
         // and the reading captures the true average including idle periods.
         {
             // ina_continuous is file-scope (reset on power-ON)
-            if (!ina_continuous && ina230_ok) {
-                ina230.setConfiguration(INA230_Avg::AVG_1024,
-                                        INA230_ConvTime::CT_332us,
-                                        INA230_ConvTime::CT_332us,
-                                        INA230_Mode::SHUNT_BUS_CONTINUOUS);
+            // #1553: not while consent is up — the guard config stays, rail
+            // or no rail (pyro_fault_trip_policy.h inaConfig()).
+            if (!ina_continuous && ina230_ok && !ina_guard) {
+                ina230.writeRegister(INA230_Reg::CONFIGURATION,
+                                     PyroFaultTrip::configWord(PyroFaultTrip::InaConfig::LowPower));
                 ina_continuous = true;
                 ESP_LOGI("PWR", "INA230 switched to continuous averaging (1024 samples)");
             }

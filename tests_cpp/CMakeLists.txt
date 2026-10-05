@@ -1151,6 +1151,30 @@ target_include_directories(test_arm_consent_policy PRIVATE
 target_link_libraries(test_arm_consent_policy GTest::gtest_main)
 gtest_discover_tests(test_arm_consent_policy)
 
+# ---------- test_pyro_fault_trip_policy (#1553) ----------
+# The OC drops arm consent on an INA230 shunt over-limit (a shorted e-match or
+# harness mid-pulse), holds it low past the FC's settle + pulse, then re-arms so
+# a later channel still fires. Load-bearing rows: a clipped hard short always
+# trips and two channels firing together never do; the hold-off is pinned to
+# the FC's own PYRO_ARM_SETTLE_MS / PYRO_FIRE_DURATION_MS (pyro_timing_fc.cpp,
+# its own library because both projects have a config.h); a dead INA230 never
+# holds consent low; SOL owns the alert pin while consent is up (#1409).
+add_library(pyro_timing_fc STATIC pyro_timing_fc.cpp)
+target_include_directories(pyro_timing_fc PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+target_compile_definitions(pyro_timing_fc PRIVATE TR_BOARD_M1=1
+    TR_MAG_DRIVER_QMC5883P=1 TR_GNSS_DRIVER_LC86=1)
+add_executable(test_pyro_fault_trip_policy test_pyro_fault_trip_policy.cpp)
+target_include_directories(test_pyro_fault_trip_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_pyro_fault_trip_policy pyro_timing_fc GTest::gtest_main)
+gtest_discover_tests(test_pyro_fault_trip_policy)
+
 # ---------- test_flush_iter_ledger (#510) ----------
 # Host-side test for the flush-task per-iteration accounting: section sums,
 # clamped unaccounted/drain-other arithmetic, and the WARN/INFO classification

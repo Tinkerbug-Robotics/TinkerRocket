@@ -66,6 +66,15 @@ public:
         // one that is, which is why the verdict travels at all.
         float   scap_voltage = NAN;
         uint8_t holdup_state = 0;
+        // #1553: the pyro fault-current trip. Trips this boot ("pft"; 0 = none,
+        // not emitted), the last trip's peak pack current in amps ("pfa"; NaN
+        // = no trip; 40.9 = the INA230 clipped), and the most channels the
+        // live pyro config can fire at once, emitted ("pfo") only when it is
+        // more than the 30 A trip covers. All absent on boards without a
+        // consent stage (V7/V8/V9), which have no trip.
+        uint16_t pyro_fault_trips  = 0;
+        float    pyro_fault_peak_a = NAN;
+        uint8_t  pyro_overlap      = 0;
         // #412: the LoRa daughterboard's own firmware version and the OC's
         // verdict on it. Both were console-only, so from the phone a
         // radio-dead rocket was indistinguishable from a quiet one.

@@ -106,6 +106,10 @@ static_assert(board_pins::SCAP_ADC_PIN >= 0,
 static_assert(board_pins::SCAP_ADC_PIN < 0 ||
               (board_pins::SCAP_ADC_PIN >= 1 && board_pins::SCAP_ADC_PIN <= 10),
               "SCAP_ADC_PIN must be an ADC1 pad (GPIO1-10) or -1 (#1166)");
+// #1553: the INA230 alert edge drops OC_ARM_EN, so it means nothing on a board
+// with no consent pin to drop.
+static_assert(board_pins::INA_ALERT_PIN < 0 || board_pins::ARM_CONSENT_PIN >= 0,
+              "INA_ALERT_PIN is the fault-current trip's input: it needs ARM_CONSENT_PIN (#1553)");
 
 struct config : board_pins
 {

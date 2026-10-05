@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.LocationOff
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material.icons.filled.SignalCellularOff
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -361,6 +362,55 @@ fun DashboardScreen(
                 )
                 Text(
                     "  $holdupText",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = tr.statusWarn,
+                )
+            }
+        }
+
+        // #1553: the pyro fault-current trip fired this boot — the OC dropped
+        // arm consent for 250 ms on > 30 A.  Same line shape as the hold-up
+        // advisory but statusBad, not statusWarn: a channel likely did not
+        // fire, and this is the only place the phone says why.  Still no
+        // recolour of the banner and no arm block.  Then the config overlap
+        // advisory, statusWarn — a fix-before-flight hint.  Direct links only
+        // — the LoRa relay does not carry the keys.  iOS twin:
+        // DashboardView.swift, next to the hold-up line.
+        val faultText = telemetry.pyroFaultAdvisoryText
+        if (!session.isBaseStation && faultText != null) {
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Filled.Warning,
+                    contentDescription = null,
+                    tint = tr.statusBad,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    "  $faultText",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = tr.statusBad,
+                )
+            }
+        }
+        val overlapText = telemetry.pyroOverlapAdvisoryText
+        if (!session.isBaseStation && overlapText != null) {
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Filled.Warning,
+                    contentDescription = null,
+                    tint = tr.statusWarn,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    "  $overlapText",
                     style = MaterialTheme.typography.labelMedium,
                     color = tr.statusWarn,
                 )

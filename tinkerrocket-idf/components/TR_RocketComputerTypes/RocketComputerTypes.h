@@ -2687,6 +2687,35 @@ static_assert(sizeof(LoRaUplinkData) == 13, "LoRaUplinkData must be 13 bytes");
 // publishes this as a link message, which it never is.
 static constexpr uint8_t LORA_UPLINK_MSG     = 0xF9;  // OC→self: 13-byte LoRaUplinkData, one per uplink decode, straight to the log
 
+// --- Pyro fault-current trip log record (PYRO_FAULT_TRIP_MSG payload) -------
+// #1553: OC self-emitted, two per trip, straight into the flight log. The OC
+// drops arm consent when the INA230 reads the pack over the trip limit while
+// consent is up — a shorted e-match or harness mid-pulse — and re-arms once
+// the shorted channel's pulse is over (out_computer pyro_fault_trip_policy.h).
+// A channel that did nothing in flight leaves no other trace of why.
+//
+// One record when the trip starts (phase 1, held_ms 0) and one when it
+// releases (phase 2), whose peak is the highest reading over the hold.
+typedef struct __attribute__((packed))
+{
+    uint32_t time_us;       // OC esp_timer at the record (the LORA_UPLINK_MSG clock)
+    int16_t  peak_counts;   // INA230 shunt register: 2.5 uV/count, 800 counts/A on
+                            // R72 (2 mOhm); 32767 = clipped (>= 40.96 A)
+    uint16_t trip_index;    // 1 for the first trip this boot
+    uint16_t held_ms;       // phase 2: how long consent was held low; 0 in phase 1
+    uint8_t  reason;        // ArmConsentPolicy::Reason up at the trip: 1 fire test, 2 flight
+    uint8_t  source;        // 1 shunt poll, 2 INA_ALERT edge
+    uint8_t  phase;         // PYRO_FAULT_PHASE_* below
+} PyroFaultTripData;
+static_assert(sizeof(PyroFaultTripData) == 13, "PyroFaultTripData must be 13 bytes");
+
+static constexpr uint8_t PYRO_FAULT_PHASE_TRIP    = 1;
+static constexpr uint8_t PYRO_FAULT_PHASE_RELEASE = 2;
+
+// 0xA0-0xFD are full; the third OC→self record opens the 0x90 block after
+// ISM6_BATCH_MSG. Trailing marker: see LORA_UPLINK_MSG.
+static constexpr uint8_t PYRO_FAULT_TRIP_MSG = 0x94;  // OC→self: 13-byte PyroFaultTripData, two per fault-current trip, straight to the log
+
 
 // ===========================================================================
 //  Base-station binary log records

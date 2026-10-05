@@ -159,6 +159,14 @@ public data class TelemetryData(
     // link (LoRa does not carry it).  Rendered as one quiet advisory line.
     val scapVoltage: Float? = null,           // "scap" Hold-up cap voltage V
     val holdupState: Int? = null,             // "hu"   HoldupState code
+    // #1553: the pyro fault-current trip — trips this OC boot, the last trip's
+    // peak pack current (40.9 = INA230 clipped), and the most channels the
+    // live pyro config fires at once (only sent above the 2 the 30 A trip
+    // covers).  null = no trip / no overlap, a board without the arm-consent
+    // stage, or a relay link.
+    val pyroFaultTrips: Int? = null,          // "pft"  trips this boot
+    val pyroFaultPeakA: Float? = null,        // "pfa"  last trip's peak A
+    val pyroOverlap: Int? = null,             // "pfo"  max simultaneous channels
     // #412: the LoRa daughterboard's own firmware version and the OC's verdict
     // on it. Direct link only — a protocol mismatch disables the radio, so the
     // fault cannot announce itself over LoRa.
@@ -506,6 +514,12 @@ public data class TelemetryData(
     /** #1166: the one quiet advisory line for a hold-up cap that never charged, or null. */
     public val holdupAdvisoryText: String? get() = holdupAdvisoryText(holdupState, scapVoltage)
 
+    /** #1553: see [pyroFaultAdvisoryText]. */
+    public val pyroFaultAdvisoryText: String? get() = pyroFaultAdvisoryText(pyroFaultTrips, pyroFaultPeakA)
+
+    /** #1553: see [pyroOverlapAdvisoryText]. */
+    public val pyroOverlapAdvisoryText: String? get() = pyroOverlapAdvisoryText(pyroOverlap)
+
     /** #412: see [modemAdvisoryText]. */
     public val modemAdvisoryText: String? get() = modemAdvisoryText(modemState)
 
@@ -811,6 +825,9 @@ public data class TelemetryData(
             servoCurrent = strictFloat(json, "scur"),    // #850
             scapVoltage = strictFloat(json, "scap"),     // #1166
             holdupState = flexInt(json, "hu"),           // #1166
+            pyroFaultTrips = flexInt(json, "pft"),       // #1553
+            pyroFaultPeakA = strictFloat(json, "pfa"),   // #1553
+            pyroOverlap = flexInt(json, "pfo"),          // #1553
             modemFirmware = strictString(json, "mfw"),   // #412
             modemState = flexInt(json, "mst"),           // #412
             voltage = strictFloat(json, "vol"),
@@ -936,6 +953,41 @@ public fun holdupAdvisoryText(state: Int?, scapVolts: Float?): String? = when (H
     // or an open joint. It used to read "charged".
     HoldupState.NOT_FITTED -> "Hold-up backup capacitor not detected"
     else -> null
+}
+
+/**
+ * #1553: the out computer dropped arm consent for 250 ms because the pack went
+ * over 30 A with consent up — a shorted e-match or harness mid-pulse.  Not
+ * quiet: the channel that tripped it likely did not fire, and nothing else on
+ * the phone says why.  null = no trip this boot.
+ *
+ * iOS twin: `TelemetryData.pyroFaultAdvisoryText`.
+ */
+public fun pyroFaultAdvisoryText(trips: Int?, peakA: Float?): String? {
+    if (trips == null || trips <= 0) return null
+    var head = if (trips == 1) "Pyro fault-current trip" else "Pyro fault-current trip ×$trips"
+    if (peakA != null) {
+        // 40.9 is the INA230's ceiling, not a measurement.
+        head += if (peakA >= 40.9f) " — pack ≥ 40.9 A (clipped)"
+                else String.format(java.util.Locale.US, " — pack %.1f A", peakA)
+    }
+    return head + ", arm consent dropped 250 ms. Shorted e-match or harness:" +
+        " that channel likely did not fire. Inspect before flying."
+}
+
+/**
+ * #1553: the live pyro config can fire more channels at once than the 30 A
+ * trip covers (2), so a clean multi-channel event could trip and lose those
+ * pulses.  ~9.6 A per e-match plus ~5 A of board.  Advisory only — the fix is
+ * to stagger the triggers.
+ *
+ * iOS twin: `TelemetryData.pyroOverlapAdvisoryText`.
+ */
+public fun pyroOverlapAdvisoryText(channels: Int?): String? {
+    if (channels == null || channels <= 2) return null
+    val amps = Math.round(channels * 9.6 + 5)
+    return "Pyro config fires $channels channels at once (~$amps A) — over the" +
+        " 30 A fault trip, which would cut them mid-pulse. Stagger the triggers."
 }
 
 public fun railAmpsDisplay(amps: Float?): String {

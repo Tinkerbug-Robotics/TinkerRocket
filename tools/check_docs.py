@@ -61,6 +61,7 @@ CODE_TO_STRUCT = {
     # size that matches ONE of these", which is what a mixed-frame log holds.
     0xF1: ("LoRaFastData", "LoRaSlowData"),
     0xF9: "LoRaUplinkData",
+    0x94: "PyroFaultTripData",
 }
 
 HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)

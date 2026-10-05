@@ -410,8 +410,16 @@ struct config : board_pins
     // assertion to the pad test, energising the shared squib rail on the pad
     // for no measurement benefit.
     //
-    // E-matches commit in <10 ms; 200 ms is ignition margin while bounding
-    // the I2t a shorted match can dump into the channel FET on 2S.
+    // E-matches commit in <10 ms; 200 ms is ignition margin. It does NOT
+    // bound a shorted match: the fire loop runs straight from the pack with
+    // nothing limiting current, ~60-115 A on 2S, past the channel FET's and
+    // Q11's single-pulse IDM in well under 200 ms (#1553, layout review
+    // 2026-09-29 D1). What bounds it is the OC's fault-current trip, which
+    // drops arm consent on an INA230 over-limit (out_computer
+    // pyro_fault_trip_policy.h, whose hold-off is pinned to this value and
+    // PYRO_ARM_SETTLE_MS by test_pyro_fault_trip_policy), and the per-channel
+    // fuse of #1554. Shortening the pulse toward the all-fire time cuts the
+    // copper's fault energy in proportion but not the first-millisecond peak.
     static constexpr uint32_t PYRO_FIRE_DURATION_MS    = 200;
     // Time between raising ARM and pulsing FIRE, giving the upstream arming
     // FET its turn-on settle margin. Consumed ONLY by the fire paths.

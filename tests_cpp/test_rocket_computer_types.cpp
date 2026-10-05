@@ -50,6 +50,7 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(sizeof(LoRaFastData),   55u);  // #850: 5-of-6 slots
     EXPECT_EQ(sizeof(LoRaSlowData),   22u);  // #850: 1-of-6 slots
     EXPECT_EQ(sizeof(LoRaUplinkData), 13u);  // uplink RSSI/SNR log record (0xF9)
+    EXPECT_EQ(sizeof(PyroFaultTripData), 13u);  // #1553 fault-current trip log record (0x94)
     EXPECT_EQ(sizeof(FcBootStatusData), 4u); // FC->OC boot progress (0xFA)
     EXPECT_EQ(sizeof(i24le_t),         3u);
     EXPECT_EQ(sizeof(Vec3i16),         6u);
@@ -1804,6 +1805,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         // a new FC<->OC code assigned to either value passed every guard.
         MT(BS_LORA_RX_MSG),
         MT(BS_EVENT_MSG),
+        // #1553: OC-self-emitted fault-current trip record, third in the 0x90 block.
+        MT(PYRO_FAULT_TRIP_MSG),
     };
 #undef MT
 
@@ -1839,7 +1842,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     //      log records that had taken "the last two free codes" without being
     //      registered (#1156 item 7). The 0xA0-0xFD space is FULL; new codes
     //      go in the 0x90 block.
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 97u)
+    // 98 = 97 + PYRO_FAULT_TRIP_MSG (0x94, #1553 fault-current trip record).
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 98u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }

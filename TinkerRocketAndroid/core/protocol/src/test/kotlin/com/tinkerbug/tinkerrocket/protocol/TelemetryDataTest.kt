@@ -788,6 +788,66 @@ class TelemetryDataTest {
         assertNull(decodeOk("""{"hu":9}""").holdupAdvisoryText)
     }
 
+    // --- Pyro fault-current trip (#1553) ---
+    // iOS twin: TelemetryDataTests, testPyroFault_*.
+
+    /** No trip, no overlap, or a board without the consent stage. */
+    @Test
+    fun pyroFault_absentKeysStayNull() {
+        val t = decodeOk("""{"soc":85.0}""")
+        assertNull(t.pyroFaultTrips)
+        assertNull(t.pyroFaultPeakA)
+        assertNull(t.pyroOverlap)
+        assertNull(t.pyroFaultAdvisoryText)
+        assertNull(t.pyroOverlapAdvisoryText)
+    }
+
+    @Test
+    fun pyroFault_tripAdvisory() {
+        val one = decodeOk("""{"pft":1,"pfa":34.2}""")
+        assertEquals(1, one.pyroFaultTrips)
+        assertEquals(34.2f, one.pyroFaultPeakA!!, 0.001f)
+        assertEquals(
+            "Pyro fault-current trip — pack 34.2 A, arm consent dropped 250 ms." +
+                " Shorted e-match or harness: that channel likely did not fire. Inspect before flying.",
+            one.pyroFaultAdvisoryText,
+        )
+        // 40.9 is the INA230's ceiling: say clipped, not a measurement.
+        assertEquals(
+            "Pyro fault-current trip ×3 — pack ≥ 40.9 A (clipped), arm consent dropped 250 ms." +
+                " Shorted e-match or harness: that channel likely did not fire. Inspect before flying.",
+            decodeOk("""{"pft":3,"pfa":40.9}""").pyroFaultAdvisoryText,
+        )
+        // "pft" as a float, no "pfa": the flexInt tolerance, and no amps clause.
+        assertEquals(
+            "Pyro fault-current trip ×2, arm consent dropped 250 ms." +
+                " Shorted e-match or harness: that channel likely did not fire. Inspect before flying.",
+            decodeOk("""{"pft":2.0}""").pyroFaultAdvisoryText,
+        )
+        // A zero count is no trip.
+        assertNull(decodeOk("""{"pft":0}""").pyroFaultAdvisoryText)
+    }
+
+    @Test
+    fun pyroFault_overlapAdvisoryOnlyAboveTwo() {
+        assertEquals(
+            "Pyro config fires 3 channels at once (~34 A) — over the 30 A fault trip," +
+                " which would cut them mid-pulse. Stagger the triggers.",
+            decodeOk("""{"pfo":3}""").pyroOverlapAdvisoryText,
+        )
+        assertEquals(
+            "Pyro config fires 4 channels at once (~43 A) — over the 30 A fault trip," +
+                " which would cut them mid-pulse. Stagger the triggers.",
+            decodeOk("""{"pfo":4}""").pyroOverlapAdvisoryText,
+        )
+        // Two is inside the trip's cover: nothing to say even if it arrives.
+        assertNull(decodeOk("""{"pfo":2}""").pyroOverlapAdvisoryText)
+        // The two advisories are independent.
+        val both = decodeOk("""{"pft":1,"pfa":31.0,"pfo":3}""")
+        assertNotNull(both.pyroFaultAdvisoryText)
+        assertNotNull(both.pyroOverlapAdvisoryText)
+    }
+
     // ── #412: the LoRa daughterboard's identity and the OC's verdict ──────
     // Both were console-only, so from the phone a radio-dead rocket looked
     // exactly like a quiet one. iOS twin: TelemetryDataModemTests.

@@ -52,6 +52,11 @@ _DECODED_ELSEWHERE = {
     "FlightSettings":
         "decoded, and it drives the Settings section; one configuration record "
         "rather than a series, so there is no channel to plot",
+    # #1553: two records per fault-current trip, stamped on the OC clock.
+    "PyroFaultTrip":
+        "decoded, and every trip is reported in the Vehicle Health section; "
+        "discrete events on the out computer's clock, so there is no channel "
+        "to plot on the flight's time axis",
 }
 
 

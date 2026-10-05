@@ -38,6 +38,7 @@ MSG_START_LOGGING    = 0xA7
 MSG_END_FLIGHT       = 0xA8
 MSG_LORA             = 0xF1
 MSG_LORA_UPLINK      = 0xF9  # OC-self-emitted uplink RSSI/SNR record
+MSG_PYRO_FAULT_TRIP  = 0x94  # OC-self-emitted pyro fault-current trip (#1553)
 
 MSG_NAMES = {
     MSG_OUT_STATUS_QUERY: "OUT_STATUS_QUERY",
@@ -51,6 +52,7 @@ MSG_NAMES = {
     MSG_END_FLIGHT:       "EndFlight",
     MSG_LORA:             "LoRa",
     MSG_LORA_UPLINK:      "LoRaUplink",
+    MSG_PYRO_FAULT_TRIP:  "PyroFaultTrip",
 }
 
 MSG_EXPECTED_LEN = {
@@ -64,6 +66,7 @@ MSG_EXPECTED_LEN = {
     MSG_START_LOGGING:    None,
     MSG_END_FLIGHT:       None,
     MSG_LORA_UPLINK:      13,   # sizeof(LoRaUplinkData)
+    MSG_PYRO_FAULT_TRIP:  13,   # sizeof(PyroFaultTripData)
     MSG_LORA:             (22, 55),  # #850: SLOW / FAST frames; sweep on struct-size changes (#227)
 }
 

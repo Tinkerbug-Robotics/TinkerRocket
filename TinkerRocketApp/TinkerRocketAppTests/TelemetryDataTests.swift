@@ -609,4 +609,60 @@ final class SizeDropDecodeTests: XCTestCase {
         XCTAssertNil(future.holdupState)
         XCTAssertNil(future.holdupAdvisoryText)
     }
+
+    // MARK: - Pyro fault-current trip (#1553)
+    // Android twin: TelemetryDataTest, pyroFault_*.
+
+    func testPyroFault_AbsentKeysStayNil() throws {
+        // No trip, no overlap, or a board without the consent stage.
+        let t = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"soc": 85.0}"#.utf8))
+        XCTAssertNil(t.pyro_fault_trips)
+        XCTAssertNil(t.pyro_fault_peak_a)
+        XCTAssertNil(t.pyro_overlap)
+        XCTAssertNil(t.pyroFaultAdvisoryText)
+        XCTAssertNil(t.pyroOverlapAdvisoryText)
+    }
+
+    func testPyroFault_TripAdvisory() throws {
+        let one = try JSONDecoder().decode(TelemetryData.self,
+                                           from: Data(#"{"pft": 1, "pfa": 34.2}"#.utf8))
+        XCTAssertEqual(one.pyro_fault_trips, 1)
+        XCTAssertEqual(one.pyro_fault_peak_a ?? 0, 34.2, accuracy: 0.001)
+        XCTAssertEqual(one.pyroFaultAdvisoryText,
+                       "Pyro fault-current trip — pack 34.2 A, arm consent dropped 250 ms."
+                       + " Shorted e-match or harness: that channel likely did not fire. Inspect before flying.")
+        // 40.9 is the INA230's ceiling: say clipped, not a measurement.
+        let clipped = try JSONDecoder().decode(TelemetryData.self,
+                                               from: Data(#"{"pft": 3, "pfa": 40.9}"#.utf8))
+        XCTAssertEqual(clipped.pyroFaultAdvisoryText,
+                       "Pyro fault-current trip ×3 — pack ≥ 40.9 A (clipped), arm consent dropped 250 ms."
+                       + " Shorted e-match or harness: that channel likely did not fire. Inspect before flying.")
+        // "pft" as a float, no "pfa": the #571 tolerance, and no amps clause.
+        let loose = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"pft": 2.0}"#.utf8))
+        XCTAssertEqual(loose.pyroFaultAdvisoryText,
+                       "Pyro fault-current trip ×2, arm consent dropped 250 ms."
+                       + " Shorted e-match or harness: that channel likely did not fire. Inspect before flying.")
+        // A zero count is no trip.
+        let zero = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"pft": 0}"#.utf8))
+        XCTAssertNil(zero.pyroFaultAdvisoryText)
+    }
+
+    func testPyroFault_OverlapAdvisoryOnlyAboveTwo() throws {
+        let three = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"pfo": 3}"#.utf8))
+        XCTAssertEqual(three.pyroOverlapAdvisoryText,
+                       "Pyro config fires 3 channels at once (~34 A) — over the 30 A fault trip,"
+                       + " which would cut them mid-pulse. Stagger the triggers.")
+        let four = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"pfo": 4}"#.utf8))
+        XCTAssertEqual(four.pyroOverlapAdvisoryText,
+                       "Pyro config fires 4 channels at once (~43 A) — over the 30 A fault trip,"
+                       + " which would cut them mid-pulse. Stagger the triggers.")
+        // Two is inside the trip's cover: nothing to say even if it arrives.
+        let two = try JSONDecoder().decode(TelemetryData.self, from: Data(#"{"pfo": 2}"#.utf8))
+        XCTAssertNil(two.pyroOverlapAdvisoryText)
+        // The two advisories are independent.
+        let both = try JSONDecoder().decode(TelemetryData.self,
+                                            from: Data(#"{"pft": 1, "pfa": 31.0, "pfo": 3}"#.utf8))
+        XCTAssertNotNil(both.pyroFaultAdvisoryText)
+        XCTAssertNotNil(both.pyroOverlapAdvisoryText)
+    }
 }

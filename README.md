@@ -511,6 +511,7 @@ The main sensor frames, with the rate each is produced at:
 | 0xF1 | LoRa Telemetry (fast) | 55 B | 1.67 Hz |
 | 0xF1 | LoRa Telemetry (slow) | 22 B | 0.33 Hz |
 | 0xF9 | LoRa Uplink RX | 13 B | per uplink decode |
+| 0x94 | Pyro fault-current trip | 13 B | two per trip (trip + release) |
 
 `0xA4` (MMC5983MA, 16 B) is the magnetometer frame from an earlier sensor, still on the
 wire so older logs decode.

@@ -2220,6 +2220,16 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     addFloat("scap", data.scap_voltage, 2);
     if (data.holdup_state != 0) { addUint("hu", data.holdup_state); }
 
+    // #1553: the pyro fault-current trip, same shape — absent until there is
+    // something to say. A channel that did nothing in a flight has no other
+    // explanation on the phone, so this rides tier 2 with the hold-up.
+    if (data.pyro_fault_trips != 0)
+    {
+        addUint("pft", data.pyro_fault_trips);
+        addFloat("pfa", data.pyro_fault_peak_a, 1);
+    }
+    if (data.pyro_overlap != 0) { addUint("pfo", data.pyro_overlap); }
+
     // #412: the daughterboard modem. Absent on every board that has no
     // daughterboard — state 0 is not emitted and the fw string stays empty —
     // so the direct-radio boards pay nothing, same shape as "hu" above.
