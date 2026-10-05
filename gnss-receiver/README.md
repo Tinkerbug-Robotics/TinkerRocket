@@ -395,12 +395,12 @@ truth is in the rig's `scenarios/`:
 
 | Tool | What it does |
 |---|---|
-| `py/los_truth.py` | Each satellite's line-of-sight truth along a scenario: Doppler, Doppler rate, elevation, azimuth |
+| `py/los_truth.py` | Each satellite's line-of-sight truth along a scenario: Doppler, Doppler rate, elevation, azimuth (`--motion signalsim` for SignalSim's files: [the motion they carry](#signalsims-files-start-the-motion-a-sample-late-milestone-7)) |
 | `trksim` | One channel's real tracking code (`core/trk`) against that truth, at the level of correlator dumps. It includes the contract's command delay, data bits, and correlated early/prompt/late noise at any C/N0, and runs about 1000× real time. On the IQ files it matches `gnssrx` channel for channel: unlock time within 0.1 s, the same slips. With `--spin`, the rolling antenna's phase and gain; see [Spin and the antenna](#spin-and-the-antenna-milestone-7). Aided, it predicts each command's frequency for when it lands, as `rx_tick` does (from 2026-10-04; before, an aided run's feed-forward landed three periods late). `--aid-imu` feeds the IMU as samples, raw, filtered or predicted forward |
 | `py/trk_sweep.py` | Sweeps `trksim` over loop profiles, C/N0, satellites and seeds; tabulates the worst satellite |
 | `py/mc_scenario.py` | Monte Carlo skies for a flight: the launch at random times of day under the broadcast file's satellites, every signal the L1/L5 design tracks, each one's Doppler, elevation and C/N0 (from a link budget) every 0.1 s, and each run's draws; see [A realistic flight](#a-realistic-flight-a-hundred-times-milestone-7) |
-| `mcsim` | Every signal of one such sky at once, dump by dump, through `core/trk`, with one IMU (the ISM6HG256X emulation), one oscillator and `boost_detect` shared, as on the board. `--design B\|BA\|BG\|Q\|QA`, `--cn0-offset` for the margins |
-| `py/mc_run.py`, `py/mc_summary.py`, `py/mc_plots.py` | `mcsim` over every sky, design and margin; the signals and satellites kept, per run; the figures |
+| `mcsim` | Every signal of one such sky at once, dump by dump, through `core/trk`, with one IMU (the ISM6HG256X emulation), one oscillator and `boost_detect` shared, as on the board. `--design B\|BA\|BG\|Q\|QA`, `--cn0-offset` for the margins, `--clk-prior` for a stored oscillator sensitivity |
+| `py/mc_run.py`, `py/mc_summary.py`, `py/mc_plots.py` | `mcsim` over every sky, configuration and margin (`--clk-prior` / `--clk-prior-abs` draw each run's stored sensitivity); the signals and satellites kept, per run; the figures |
 | `gnssrx --boost-at S0,S1` | The boost profile over those file seconds, as the flight computer would call it. With `--loops-quiet` and `--loops-boost` (bandwidths), `--cn0-at S:DBHZ` (a level change mid-file) and `run.ini` (what made the run) |
 | `gnssrx --boost-detect default` | The boost profile from the launch the emulated IMU detects to 2 s past the burnout it detects, as the P4 will switch it (`core/trk/boost_detect.c`; `fc` for the flight computer's slower rules). Needs `--imu SCEN.csv`; `--imu-no-aid` keeps the IMU for detection only. `run.ini` records what it detected (`boost_detected`, a line per span). `--boost-gate IGN_S,TAIL_FRAC,TAIL_MS` gates the profile to the transitions; see [A gated profile](#a-gated-profile-milestone-7) |
 | `py/boost_track.py` | A run against truth, per satellite: frequency error, unlock time, carrier slips, code error, losses as the bench counts them (no pseudorange for 0.5 s), and the fix |
@@ -876,6 +876,44 @@ T+13.8 s, 0.2 s after the crossing, and so did the design's three GPS losses at 
 The slip check below catches the largest steps. Telling the receiver the file's ceiling, for test
 runs only (as `tropo = none` tells it a gps-sdr-sim file has no troposphere), is not done.
 
+### SignalSim's files start the motion a sample late (milestone 7)
+
+The IMU emulation and the truth tools take the velocity at each 0.1 s sample of a trajectory as its
+central difference, as the rig's smoothed gps-sdr-sim carrier has it. SignalSim's files differ at one
+sample: the scripts that turn a trajectory into SignalSim segments
+(`tools/gnss-cocom/sdr/signalsim/make_*.py`) hold the pad through the last sample before the height
+first changes, then ramp through the central-difference velocities. On both flights the height first
+changes at T+0.2 s, so the file's rocket is still at T+0.1 s, where the central difference already
+says 1.62 m/s on the hotshot (0.62 on the traveler). From T+0.2 s they agree.
+
+So for 0.2 s at ignition the emulated IMU told every aided loop the rocket was moving when the file's
+wasn't: 8.5 Hz × sin(elevation) at L1 at T+0.1 s on the hotshot. Seen three ways:
+- **Unaided, the loops follow the file:** their Doppler at T+0.1 s sits 7.9 and 8.8 Hz × sin(el)
+  under the truth (the quiet and the 50 Hz loops, 26 satellite-samples each), against 8.5 expected.
+- **Aided, the high satellites let go,** all at T+0.3–0.4 s: on the B1C hotshot file the design
+  lost GPS 11 (66° up) at 32–35 dB-Hz, Galileo 13 and 26 (55–68°) at every level to 40.5, and 6 of
+  13 GPS at 30.2 dB-Hz.
+- **Fed the file's own motion, the design loses none of them.** A trajectory leapfrogged so that its
+  central differences are SignalSim's velocities removes every one of those losses; BeiDou B1C still
+  lets go, as it does in `mcsim`.
+
+The fix: where the manifest says `generator = signalsim`, `gnssrx` builds its IMU and oscillator
+trajectory with zero velocity at that sample, and at the last moving one if the flight stops before
+the file ends (`traj_motion = signalsim` in `run.ini`). `truth.Trajectory(..., motion="signalsim")`
+does the same for the truth: `boost_track.py` and `boost_plots.py` look it up from the run's source,
+and `los_truth.py` takes `--motion signalsim`. On the original trajectory `gnssrx` now reproduces the
+leapfrogged runs exactly.
+
+- **Rerun:** the B1C-file runs (`runs/bsatfix`), in [Every L1 signal through the
+  boost](#every-l1-signal-through-the-boost-milestone-7) and [The board's IMU](#the-boards-imu-milestone-7).
+- **Not yet rerun:** the aided runs on the rig's wide sweep files ([On the bought receivers'
+  files](#on-the-bought-receivers-files-milestone-7), [Whole flights](#whole-flights-milestone-7))
+  and on the SignalSim traveler with Galileo (`runs/m7g`). Their IQ files were deleted on 2026-10-04
+  and need regenerating (`regen_c8.py`). Losses there at T+0.3–0.4 s on high satellites are the test's,
+  not the design's; the unaided runs are unaffected.
+- **Unaffected:** gps-sdr-sim's files (`runs/aid`, `runs/osc` and the rest on `*_smooth_*`), whose
+  carrier follows the central differences.
+
 ### The smoothing's slip check (milestone 7)
 
 The carrier smoothing restarts when the PLL lets go. A carrier that skips whole cycles and keeps
@@ -964,6 +1002,8 @@ is `runs/osc/fig/osc_hot_33.png`.
 | 2 ppb/g, fed forward at 80 % | 0 | 0 | 12, 2 not back | 4, 1 not back |
 | 2 ppb/g, fed forward at 50 % | 14 | 14 | 14, 2 not back | 14, 1 not back |
 | 2 ppb/g, learnt in flight | 0 | 0 | 11: 10 at ignition | 11, at ignition |
+| 2 ppb/g, the last flight's value 20 % low, then learnt | 0 | — | 0 | — |
+| 2 ppb/g, a ground check 0.015 ppb/g low, then learnt | 0 | — | 0 | — |
 | 0.4 or 1 ppb/g, learnt in flight | — | — | 0 | 0 |
 
 - **The 50 Hz fallback without aiding** loses nothing at 45 dB-Hz, even at 2 ppb/g. At 33 dB-Hz it
@@ -989,6 +1029,14 @@ state takes it.
 - At 33 dB-Hz an ignition at 2 ppb/g still costs carrier before the estimate exists, 0.3–0.5 s
   in: 10 of 14 on the hotshot and 11 on the traveler. On the traveler's softer start the trigger
   fires 0.12 s in, and the loops spend that narrow.
+- `--osc-prior PPB` starts the feed-forward from a stored sensitivity, in ppb per g of the IMU's
+  reading as the P4 stores it (a ground check's, or the last flight's estimate), until the learnt
+  one is trusted. On the hotshot at 33 dB-Hz with 2 ppb/g (true 1.942 per g of the emulated IMU's
+  reading), the last flight's value 20 % low (1.553) and a ground check 0.015 ppb/g low (1.927)
+  both keep all 14 satellites through ignition and burnout: 20 % low still takes four fifths of
+  ignition's −129 Hz/s. Runs in `runs/osc2` (2026-10-04, the receiver as it now is; its reruns of
+  no feed-forward, learnt and exact match `runs/osc`), figure `runs/osc2/fig/osc_loss.png`. The
+  traveler's rows are not flown.
 
 **Findings:**
 - **The TCXO's X axis must stay across the thrust axis** (the board's layout rule). At 33 dB-Hz it
@@ -1089,67 +1137,70 @@ signal it tracks: the sweep's hotshot and traveler, narrow, with GPS L1 C/A (13 
 `tools/gnss-cocom/sdr/signalsim/make_b1c_flights.py`). GPS measures 40.8 dB-Hz on them; Galileo's E1-C
 pilot reads 3.5 dB less and BeiDou's B1C pilot 2 dB less.
 
-The runs (`runs/bsat`) start 80 s before ignition and end at T+20 s (hotshot) and T+25 s (traveler).
+The runs (`runs/bsatfix`) start 80 s before ignition and end at T+20 s (hotshot) and T+25 s (traveler).
 Noise brings GPS to 40.5 dB-Hz, and from T−10 s to each row's level (as the receiver measures it on
-the pad). The IMU is the board's ([below](#the-boards-imu-milestone-7)). Galileo
-and BeiDou start aided after the first GPS fix, from the preloaded ephemerides. The counts are at
-burnout + 1 s; errors are judged from ignition to 10 km, where SignalSim's troposphere stops (T+14 s
-on both). The design, with each pilot C/N0 estimate ([A pilot's C/N0](#a-pilots-cn0)), and with GPS
-alone (`--no-nav`: no Galileo or BeiDou ephemerides, so no aided starts). Each cell: satellites
-delivering (GPS + Galileo + BeiDou); satellites over 10 m; vertical velocity rms, m/s; worst height
-error, m.
+the pad). The IMU is the board's ([below](#the-boards-imu-milestone-7)), fed the motion the file
+carries ([above](#signalsims-files-start-the-motion-a-sample-late-milestone-7); the first runs, in
+`runs/bsat`, had it a sample early at ignition). Galileo and BeiDou start aided after the first GPS
+fix, from the preloaded ephemerides; the pilots' C/N0 comes from consecutive dumps ([A pilot's
+C/N0](#a-pilots-cn0)). The counts are at burnout + 1 s; errors are judged from ignition to 10 km,
+where SignalSim's troposphere stops (T+14 s on both). The design, and with GPS alone (`--no-nav`: no
+Galileo or BeiDou ephemerides, so no aided starts). Each cell: satellites delivering (GPS + Galileo +
+BeiDou); satellites over 10 m; vertical velocity rms, m/s; worst height error, m.
 
 Hotshot:
 
-| GPS C/N0 (measured) | Pilots by moments | Pilots from consecutive dumps | GPS alone |
-|---|---|---|---|
-| 40.0 | 13+8+8; 0; 0.07; 0.6 | 13+8+7; 0; 0.08; 0.5 | 13+0+0; 0; 0.16; 0.5 |
-| 37.4 | 13+8+8; 0; 0.09; 0.5 | 13+8+8; 0; 0.09; 0.6 | 13+0+0; 0; 0.18; 0.5 |
-| 34.3 | 13+6+8; 1; 0.11; 0.8 | 13+8+8; 0; 0.15; 0.7 | 13+0+0; 0; 0.23; 0.8 |
-| 32.2 | 13+0+5; 3; 0.26; 1.8 | 13+8+8; 2; 0.17; 1.4 | 13+0+0; 2; 0.39; 1.8 |
-| 30.2 | 13+0+0; 3; 0.48; 3.5 | 13+6+6; 4; 0.18; 2.6 | 13+0+0; 3; 0.48; 3.5 |
-| 28.1 | 13+0+0; 12; 1.88; 18.1 | 13+0+6; 14; 0.77; 14.9 | 13+0+0; 13; 3.66; 27.5 |
+| GPS C/N0 (measured) | The design | GPS alone |
+|---|---|---|
+| 40.0 | 13+8+8; 0; 0.06; 0.6 | 13; 0; 0.08; 0.5 |
+| 37.4 | 13+8+8; 0; 0.09; 0.6 | 13; 0; 0.11; 0.5 |
+| 34.3 | 13+8+8; 0; 0.09; 0.6 | 13; 0; 0.16; 0.6 |
+| 32.2 | 13+8+8; 0; 0.11; 0.6 | 13; 0; 0.19; 0.7 |
+| 30.2 | 13+6+7; 1; 0.18; 0.9 | 13; 0; 0.26; 0.8 |
+| 28.1 | 13+0+6; 14; 0.84; 17.3 | 13; 13; 2.78; 24.8 |
 
 Traveler:
 
-| GPS C/N0 (measured) | Pilots by moments | Pilots from consecutive dumps | GPS alone |
-|---|---|---|---|
-| 40.0 | 13+8+8; 0; 0.04; 0.4 | 13+8+8; 0; 0.04; 0.4 | 13+0+0; 0; 0.11; 0.4 |
-| 37.4 | 13+8+8; 0; 0.05; 0.5 | 13+8+8; 0; 0.05; 0.4 | 13+0+0; 0; 0.16; 0.3 |
-| 34.3 | 13+6+7; 1; 0.07; 0.4 | 13+8+8; 0; 0.07; 0.3 | 13+0+0; 0; 0.23; 0.3 |
-| 32.2 | 13+0+5; 2; 0.22; 0.5 | 13+8+8; 0; 0.09; 0.3 | 13+0+0; 0; 0.30; 0.4 |
-| 30.2 | 13+0+0; 0; 0.36; 0.4 | 13+7+8; 0; 0.10; 0.4 | 13+0+0; 0; 0.37; 0.4 |
-| 28.1 | 13+0+0; 12; 2.05; 18.3 | 13+0+5; 17; 0.51; 17.0 | 13+0+0; 13; 2.52; 17.6 |
+| GPS C/N0 (measured) | The design | GPS alone |
+|---|---|---|
+| 40.0 | 13+8+8; 0; 0.04; 0.4 | 13; 0; 0.10; 0.4 |
+| 37.4 | 13+8+8; 0; 0.05; 0.4 | 13; 0; 0.15; 0.3 |
+| 34.3 | 13+8+8; 0; 0.08; 0.4 | 13; 0; 0.22; 0.3 |
+| 32.2 | 13+8+8; 0; 0.11; 0.3 | 13; 0; 0.30; 0.4 |
+| 30.2 | 13+7+8; 1; 0.12; 0.4 | 13; 0; 0.36; 0.4 |
+| 28.1 | 12+0+4; 19; 0.63; 13.5 | 13; 13; 2.60; 20.1 |
 
-- **With aiding, all 29 satellites ride both burns at 34 dB-Hz and over** (37 with the old pilot
-  estimate): nothing over 10 m, and a fix every epoch.
-- **GPS holds its carrier, Galileo nearly, and BeiDou lets go and comes back.** At 37–40 dB-Hz:
-  - GPS never lets go, and stays within 0.4 m.
-  - E1-C's 4 ms dumps allow 12.5 Hz loops. On the hotshot 2 of 8 let go, for 0.6 satellite-seconds
-    in all, within 3–4 m; on the traveler none.
-  - B1C's 10 ms dumps cap its loops at 5 Hz, which the aiding can't carry through ignition and
-    burnout. All 8 let go, for about a second in all. By moments they kept delivering code and
-    Doppler, within 5.4 m. From consecutive dumps the estimate dips under 25 dB-Hz while the phase
-    spins, so a channel coasts and holds its measurements back for a few tenths of a second (C39 at
-    the hotshot's burnout: the 7 in the first row).
-- **The pilots' C/N0 set the low end.** By moments, every Galileo satellite was gone on the pad at
-  32.2 dB-Hz and every BeiDou at 30.2, so there the design flew on GPS alone. From consecutive dumps,
-  all 8 + 8 ride both burns at 32.2 dB-Hz, and 6–7 Galileo and 6–8 BeiDou at 30.2. The vertical
-  velocity there is 2.7 and 3.6 times better: hotshot 0.48 → 0.18 m/s, traveler 0.36 → 0.10. Below
-  the 25 dB-Hz line the pilots go: at 28.1 dB-Hz (E1-C at 24.6) Galileo is lost on the pad.
-- **Against GPS alone, the extra satellites cut the vertical velocity noise 1.5 to 3.7 times at
-  every level:** 0.16 → 0.08 m/s at 40 dB-Hz on the hotshot, 0.11 → 0.04 on the traveler, and 2.3 to
-  3.7 times at 30–32 dB-Hz. Height errors are the same where both are small, under 1 m to 34 dB-Hz.
-- **Weak pilots carry noisier code.** At 30.2 dB-Hz one Galileo satellite reached 11 m on the
-  hotshot, beside the 3 GPS satellites that go over with or without the pilots. At 28.1 dB-Hz, past
-  what the design holds, BeiDou adds 2 and 4 to GPS's 12–13, and the fix still has a fifth of the
-  vertical velocity error of GPS alone.
+- **With aiding, all 29 satellites ride both burns at 32 dB-Hz and over:** nothing over 10 m, and a
+  fix every epoch. At 30.2 dB-Hz 26–28 of them, one reaching 10 m.
+- **GPS and Galileo hold their carrier; BeiDou lets go and comes back.** From 32 to 40 dB-Hz no GPS
+  or Galileo satellite lets go. B1C's 10 ms dumps cap its loops at 5 Hz, which the aiding can't
+  carry through ignition and burnout: all 8 let go, and keep delivering code and Doppler. In the
+  first runs E1-C let 2 of 8 go on the hotshot at every level, and GPS 1–2 at 32–34 dB-Hz: the test's
+  ignition error, not the design's.
+- **The pilots' C/N0 set the low end.** In the first runs (`runs/bsat`), by moments, every Galileo
+  satellite was gone on the pad at 32.2 dB-Hz and every BeiDou at 30.2, so there the design flew on
+  GPS alone. From consecutive dumps all 8 + 8 ride both burns at 32.2 dB-Hz, and 6–7 Galileo and 7–8
+  BeiDou at 30.2. Below the 25 dB-Hz line the pilots go: at 28.1 dB-Hz (E1-C at 24.6) Galileo is
+  lost on the pad.
+- **Against GPS alone, the extra satellites cut the vertical velocity noise** 1.2 to 1.8 times on the
+  hotshot and 2.5 to 3 times on the traveler from 30 to 40 dB-Hz (0.08 → 0.06 m/s and 0.10 → 0.04
+  at 40 dB-Hz), and 3 to 4 times at 28.1. Height errors are the same where both are small, under
+  1 m to 30 dB-Hz. (The first version of this table said 1.5 to 3.7 times: its truth had the rocket
+  moving 1.62 m/s at T+0.1 s, where the file's was still, which put that into one epoch's error.)
+- **Weak pilots carry noisier code.** At 30.2 dB-Hz one satellite reaches 10 m on each flight
+  (BeiDou on the hotshot, GPS on the traveler). At 28.1 dB-Hz, past what the design holds, BeiDou
+  adds 1 and 6 to GPS's 13, and the fix still has a third to a quarter of the vertical velocity error
+  of GPS alone.
 - **Without aiding, the pilots can't follow a burn.** The 50 Hz fallback can't widen their loops past
-  the caps: on the hotshot at 40 dB-Hz half of BeiDou is lost at burnout, and pilots go over 10 m on
-  both flights (3 each).
-- **The gated profile matches the design** to 30 dB-Hz, within the runs' scatter (`runs/bsat/BG_*`).
+  the caps: in the first runs, on the hotshot at 40 dB-Hz half of BeiDou is lost at burnout, and
+  pilots go over 10 m on both flights (3 each).
+- **The gated profile matches the design** to 30 dB-Hz, within the runs' scatter
+  (`runs/bsatfix/pilot/BG_*`). **The quiet loops with the IMU** deliver as many satellites, with the
+  lowest vertical velocity at 30 dB-Hz and below (0.10 m/s on the hotshot at 30.2 against the
+  design's 0.18; 0.15 on the traveler at 28.1 against 0.63), though just after the traveler's
+  burnout at 30.2 dB-Hz they hold carrier on 7 GPS satellites against 11.
 
-Figures (`runs/bsat/fig`): `rates_b1c_hotshot.png` and `rates_b1c_traveler.png`, the three columns
+Figures (`runs/bsatfix/fig`): `rates_b1c_hotshot.png` and `rates_b1c_traveler.png`, the two columns
 above at every level, on the rig's key.
 
 ### The board's IMU (milestone 7)
@@ -1235,32 +1286,38 @@ sample). Slips in the hotshot's boost, of 260 satellite-runs:
   of the last two. At 480 Hz that matches 1920 Hz raw down to 33 dB-Hz, quiet loops included.
 - **The quiet loops come back into play** at 1920 Hz or with the prediction: they ride the hotshot's
   burn as cleanly as the design down to 33 dB-Hz. In the full receiver, with the board's IMU at
-  960 Hz, they already gave the lowest vertical velocity on the B1C files: 0.09 m/s at 32.2 dB-Hz on
-  the hotshot, against the design's 0.17. That reopens the gated profile's question, and the design
-  stays until it is decided.
+  960 Hz, they give the lowest vertical velocity on the B1C files: 0.09 m/s at 32.2 dB-Hz on the
+  hotshot against the design's 0.11, and 0.10 against 0.18 at 30.2 (`runs/bsatfix`, the IMU fed the
+  file's own motion). That reopens the gated profile's question, and the design stays until it is
+  decided.
 
-**Through the whole receiver** (`gnssrx` on the B1C files, the design, pilots by moments). Each cell:
-GPS satellites whose PLL let go from ignition to 2.5 s past burnout (unlocked satellite-seconds);
-vertical velocity rms, m/s:
+**Through the whole receiver** (`gnssrx` on the B1C files, the design, `runs/bsatfix`: the IMU fed the
+file's own motion, the pilots' C/N0 from consecutive dumps). Each cell: GPS satellites whose PLL let go
+from ignition to 2.5 s past burnout (unlocked satellite-seconds); vertical velocity rms, m/s:
 
 | IMU | Hotshot, 32.2 dB-Hz | Hotshot, 30.2 dB-Hz | Traveler, 32.2 dB-Hz | Traveler, 30.2 dB-Hz |
 |---|---|---|---|---|
-| ISM6HG256X typical, 960 Hz, ±64 g, pad-calibrated (the board) | 2 (4.2 s); 0.26 | 6 (11.3 s); 0.48 | 0 (0.0 s); 0.22 | 3 (4.1 s); 0.36 |
-| the same at 480 Hz | 2 (4.1 s); 0.22 | 6 (9.4 s); 0.60 | 0 (0.0 s); 0.35 | 4 (9.5 s); 0.39 |
-| at 1920 Hz | 1 (4.3 s); 0.22 | 6 (14.6 s); 0.47 | 0 (0.0 s); 0.20 | 4 (4.4 s); 0.37 |
-| high-g at ±256 g | 2 (4.2 s); 0.24 | 6 (13.2 s); 0.47 | 0 (0.0 s); 0.22 | 3 (4.1 s); 0.36 |
-| worst part | 2 (4.2 s); 0.17 | 5 (12.7 s); 0.33 | 0 (0.0 s); 0.20 | 4 (5.2 s); 0.39 |
-| typical, uncalibrated | 2 (4.1 s); 0.26 | 7 (14.7 s); 0.62 | 1 (0.3 s); 0.37 | 6 (6.2 s); 0.41 |
-| worst, uncalibrated | 2 (5.5 s); 0.38 | 5 (13.7 s); 0.35 | 1 (0.3 s); 0.23 | 3 (6.0 s); 0.38 |
-| worst, 2° attitude error | 1 (4.2 s); 0.24 | 7 (16.4 s); 0.47 | 1 (0.3 s); 0.26 | 4 (6.2 s); 0.37 |
-| old model (5 ms, 3 %, 0.5 m/s²) | 2 (3.5 s); 0.26 | 6 (11.2 s); 0.43 | 0 (0.0 s); 0.24 | 4 (5.8 s); 0.37 |
+| ISM6HG256X typical, 960 Hz, ±64 g, pad-calibrated (the board) | 0 (0.0 s); 0.11 | 0 (0.0 s); 0.18 | 0 (0.0 s); 0.11 | 2 (3.9 s); 0.12 |
+| the same at 480 Hz | 0 (0.0 s); 0.18 | 0 (0.0 s); 0.18 | 0 (0.0 s); 0.10 | 5 (11.4 s); 0.12 |
+| at 1920 Hz | 0 (0.0 s); 0.11 | 0 (0.0 s); 0.18 | 1 (0.3 s); 0.11 | 3 (6.2 s); 0.12 |
+| high-g at ±256 g | 0 (0.0 s); 0.10 | 0 (0.0 s); 0.19 | 0 (0.0 s); 0.11 | 2 (3.9 s); 0.12 |
+| worst part | 0 (0.0 s); 0.10 | 1 (1.8 s); 0.18 | 1 (0.3 s); 0.11 | 3 (3.3 s); 0.12 |
+| typical, uncalibrated | 0 (0.0 s); 0.12 | 0 (0.0 s); 0.19 | 0 (0.0 s); 0.11 | 3 (4.3 s); 0.12 |
+| worst, uncalibrated | 0 (0.0 s); 0.14 | 1 (0.4 s); 0.26 | 0 (0.0 s); 0.11 | 1 (1.6 s); 0.12 |
+| worst, 2° attitude error | 0 (0.0 s); 0.12 | 0 (0.0 s); 0.18 | 1 (0.3 s); 0.10 | 2 (2.8 s); 0.13 |
+| old model (5 ms, 3 %, 0.5 m/s²) | 0 (0.0 s); 0.11 | 0 (0.0 s); 0.21 | 0 (0.0 s); 0.12 | 2 (3.3 s); 0.14 |
 
-- **Through the whole receiver the IMUs look alike.** One run each, and the runs scatter more than
-  the IMUs differ: every IMU lets go of 0–2 GPS satellites at 32.2 dB-Hz and 3–7 at 30.2. Pilots
-  by moments, so these runs fly on GPS and what is left of BeiDou.
-- **Leaving out the pad calibration gives the worst vertical velocity in every column**, though by
-  little: 0.37–0.62 m/s against the board's 0.22–0.48. On the hotshot the typical part's high-g
-  offset, 250 mg a side (the worst part's 1 g), steps in when the axes switch channels at 22 g.
+- **Through the whole receiver the IMUs look alike.** One run each: on the hotshot no IMU lets a GPS
+  satellite go at 32.2 dB-Hz and at most one at 30.2; on the traveler 0–1 at 32.2 and 1–5 at 30.2,
+  at its burnout. The vertical velocity is 0.10–0.14 m/s at 32.2 dB-Hz and 0.12–0.26 at 30.2. The
+  first runs, with the IMU a sample early at ignition and the pilots by moments, let 0–2 go at 32.2
+  and 3–7 at 30.2, at 0.17–0.62 m/s.
+- **480 Hz is the weakest of the set**, by one run each: 0.18 m/s on the hotshot at 32.2 dB-Hz
+  against 0.10–0.14, and the traveler's most losses at 30.2 (5, for 11.4 satellite-seconds).
+- **The pad calibration matters little.** Left out, the worst part gives the hotshot's worst vertical
+  velocity at 30.2 dB-Hz (0.26 m/s against 0.18–0.21); the typical part stays within the scatter.
+  On the hotshot the typical part's high-g offset, 250 mg a side (the worst part's 1 g), steps in
+  when the axes switch channels at 22 g.
 - **The high-g range doesn't matter here**: ±64 and ±256 g give the same runs. ±256 g has a coarser
   LSB (10.4 mg) but, by the datasheet's %FS, less nonlinearity at these loads.
 
@@ -1339,89 +1396,134 @@ ramp (`TrkPilot.L5PilotCarriesItsCodeWithTheCarrier`). No IQ file carries L5, so
 them. The receiver (`rx.c`) aids every channel at L1's wavelength; its L5 channels will need L5's.
 
 **Checked against the full receiver.** The B1C hotshot file's sky (its 13 GPS, 8 Galileo and 8
-BeiDou satellites, and its launch time), each signal at the C/N0 the receiver measured: `mcsim`
-over 5 seeds against `gnssrx`'s one run (`runs/bsat/pilot`). Satellites that let go between ignition
-and burnout + 2.5 s, of those locked at ignition, GPS; Galileo; BeiDou:
+BeiDou satellites, and its launch time), started as `gnssrx`'s runs are: every signal at the C/N0 the
+receiver measured at the 40.5 setting until T−10 s, then at the row's (`mcsim`, 5 seeds). Against
+`gnssrx`'s one run, with the IMU fed the file's own motion (`runs/bsatfix/pilot`). GPS satellites
+that let go between ignition and burnout + 2.5 s, of the 13 locked at ignition, `mcsim` / `gnssrx`:
 
-| GPS L1 C/A | Aided, `mcsim` | Aided, `gnssrx` | Unaided, `mcsim` | Unaided, `gnssrx` |
-|---|---|---|---|---|
-| 34.3 dB-Hz | 0 of 13; 0 of 7.6; 8 of 8 | 1 of 13; 2 of 8; 8 of 8 | 0.8 of 13; all; all | 0 of 13; all; all |
-| 32.2 | 0 of 13; 0 of 7.2; 8 of 8 | 2 of 13; 2 of 8; 8 of 8 | 9.8 of 13; all; all | 1 of 13; all; all |
-| 30.2 | 2.2 of 4.8; 2.8 of 5.2; 8 of 8 | 6 of 13; 2 of 5; 8 of 8 | all | all |
+| Configuration | 34.4 dB-Hz | 32.3 | 30.2 |
+|---|---|---|---|
+| Unaided, 10 Hz quiet loops | 13 / 13 | 13 / 13 | 13 / 13 |
+| Unaided, 50 Hz loops | 0.6 / 0 | 4.2 / 2 | 13 / 13 |
+| IMU + 10 Hz quiet loops | 0 / 0 | 0 / 0 | 0.4 / 0 |
+| IMU + 20 Hz loops (the design) | 0 / 0 | 0 / 0 | 1.4 / 0 |
+| Gated profile | 0 / 0 | 0 / 0 | 1.0 / 0 |
 
-- **The two start differently.** `mcsim`'s channels pull in at the level they fly; `gnssrx` pulls
-  in at 40.5 dB-Hz and steps down 10 s before ignition. At 30.2 dB-Hz, below where pull-in works,
-  most of `mcsim`'s channels never lock. Of those that do, the same share of GPS lets go: 46 % in
-  both.
-- **Unaided, `mcsim` is harsher by about a decibel.** The 50 Hz loops sit at their threshold at
-  32.2 dB-Hz: in `trksim` too they are unlocked 16 % of the boost there and never at 33.2.
-- **Aided, the full receiver lets a few go that `mcsim` keeps,** all at T+0.3–0.4 s and all 55–68°
-  up: GPS 11 at 32–34 dB-Hz, and Galileo 13 and 26 even at 40.5 dB-Hz. Not yet explained: both time
-  the aiding's lead by each channel's own dump period. Until it is, read the aided E1-C and L1 C/A carrier
-  shares below as optimistic by about that much. The satellite counts don't change, since those
-  satellites keep L5.
+- **They agree to a satellite or two, and where they differ `mcsim` is the harsher.** The 50 Hz
+  loops sit at their threshold at 32 dB-Hz (in `trksim` too: unlocked 16 % of the boost at 32.2 and
+  never at 33.2), and the aided loops lose 1–1.4 of 13 at 30.2 against none. Galileo agrees as
+  closely: with the design none let go from 32 to 40 dB-Hz in either, and at 30.2 4 of 7.4 against 2
+  of 5. Every B1C channel lets go in every configuration in both, and at 40 dB-Hz neither loses
+  anything else.
+- **The first check disagreed, and found a fault in the test.** The IQ runs had the IMU a sample early
+  at ignition on SignalSim's files ([above](#signalsims-files-start-the-motion-a-sample-late-milestone-7)),
+  which let one or two high GPS satellites and two Galileo go at T+0.3–0.4 s that `mcsim` kept.
+  `mcsim` also started at the row's level, where at 30.2 dB-Hz most channels never pull in.
 
-**The designs.** Unaided: the 50 Hz loops with no IMU feed-forward and no clock correction (the IMU
-only marks the launch). The design: IMU + 20 Hz loops. And the gated profile. All three fly the same
-hundred skies. A satellite tracked at ignition is *maintained* if it keeps at least one signal:
-*tracked* if its channel is never dropped, so pseudorange and Doppler keep coming; *with carrier
-lock* if its PLL also never lets go or slips. Each is counted through the boost (ignition to
-burnout) and to burnout + 20 s. To find the margins, the same skies flew again with every signal 3,
-6, 9 and 12 dB weaker: a poorer rocket antenna, a radome, a weak satellite.
+**The configurations** are the five of the sections above: the quiet 10 Hz loops unaided (the stage-0
+receiver's settings: the baseline), the 50 Hz fallback (unaided: no IMU feed-forward and no clock
+correction; the IMU only marks the launch), the quiet loops with the IMU, the design (IMU + 20 Hz
+loops), and the gated profile. All five fly the same hundred skies. A satellite tracked at ignition is
+*maintained* if it keeps at least one signal: *tracked* if its channel is never dropped, so
+pseudorange and Doppler keep coming; *with carrier lock* if its PLL also never lets go or slips. Each
+is counted through the boost (ignition to burnout) and to burnout + 20 s. To find the margins, the
+same skies flew again with every signal 3, 6, 9 and 12 dB weaker: a poorer rocket antenna, a radome,
+a weak satellite.
 
-Satellites lost, of those tracked at ignition: the mean over the hundred skies (the worst sky).
+Satellites lost, of those tracked at ignition (30.7 a sky at the budget): the mean over the hundred
+skies (the worst sky). "Aided" is the quiet loops with the IMU, the design and the gated profile,
+within 0.1 of each other everywhere.
 
-| Link | Design | Tracking, boost | Tracking, +20 s | Carrier, boost | Carrier, +20 s |
+| Link | Configuration | Tracking, boost | Tracking, +20 s | Carrier, boost | Carrier, +20 s |
 |---|---|---|---|---|---|
-| The budget, and 3 dB under | all three | 0 | 0 | 0 | 0 |
-| 6 dB under | unaided | 0 | 0 | 0.2 (2) | 0.4 (2) |
-| | the design, and gated | 0 | 0 | 0 | 0.0 (1) |
-| 9 dB under | unaided | 0.0 (1) | 0.2 (2) | 2.0 (6) | 2.8 (7) |
-| | the design, and gated | 0.0 (1) | 0.0 (1) | 0.3 (3) | 0.8 (4) |
-| 12 dB under | unaided | 0.4 (2) | 1.3 (5) | 6.1 (13) | 6.8 (13) |
-| | the design, and gated | 0.1 (1) | 0.1–0.2 (2) | 1.2 (8) | 2.8 (9) |
+| The budget, and 3 dB under | unaided, quiet | 0 | 0.1 (2) | 30.0 (33) | 30.7 (33) |
+| | unaided, 50 Hz | 0 | 0 | 0 | 0 |
+| | aided | 0 | 0 | 0 | 0 |
+| 6 dB under | unaided, quiet | 0 | 0.1 (1) | 30.1 (33) | 30.7 (33) |
+| | unaided, 50 Hz | 0 | 0 | 0.2 (2) | 0.4 (2) |
+| | aided | 0 | 0 | 0 | 0.0 (1) |
+| 9 dB under | unaided, quiet | 0.1 (1) | 0.3 (2) | 30.1 (33) | 30.4 (33) |
+| | unaided, 50 Hz | 0.0 (1) | 0.2 (2) | 2.0 (6) | 2.8 (7) |
+| | aided | 0.0 (1) | 0.0 (1) | 0.3 (3) | 0.8 (4) |
+| 12 dB under | unaided, quiet | 0.7 (3) | 2.0 (7) | 28.0 (32) | 28.0 (32) |
+| | unaided, 50 Hz | 0.4 (2) | 1.3 (5) | 6.1 (13) | 6.8 (13) |
+| | aided | 0.1 (1) | 0.2 (2) | 1.2 (8–9) | 2.8–2.9 (9–10) |
 
-- **At the link budget every design keeps every satellite,** through the boost and the 20 s after,
-  in all hundred skies: on each, at least one signal holds carrier throughout. So does 3 dB under.
-- **The margins differ.** The aided designs keep every satellite's tracking to 9 dB under the budget
-  (one satellite in one sky aside) and nearly all to 12, where they lose carrier on about one
-  satellite in the boost. Unaided starts losing carrier at 6 dB under. At 12 it loses carrier on 6
-  satellites a sky, 13 in the worst, and drops some altogether.
-- **The gated profile matches the design at every level.** Its advantage was below 30 dB-Hz, where
-  few of these signals go.
+- **At the link budget every configuration keeps tracking every satellite,** through the boost and
+  the 20 s after, in all hundred skies (the quiet unaided loops drop one in about one sky in eight). All but
+  the quiet unaided loops also keep carrier on every one: on each satellite at least one signal holds
+  it throughout. So does 3 dB under.
+- **The baseline keeps tracking but not carrier.** The quiet loops unaided let go of the carrier on
+  every satellite in the boost (but for 0.7 a sky, on L5) and pull back in; code and Doppler keep
+  coming. That is what the other four buy back.
+- **The margins differ.** The aided configurations keep every satellite's tracking to 9 dB under the
+  budget (one satellite in one sky aside) and nearly all to 12, where they lose carrier on about one
+  satellite in the boost. The 50 Hz loops start losing carrier at 6 dB under; at 12 they lose
+  carrier on 6 a sky, 13 in the worst, and drop some altogether.
+- **Aided, the quiet loops match the design at every level, and so does the gated profile:** with
+  the IMU, a 10 Hz loop carries this boost as well as a 20 Hz one.
 
 Signal by signal, at the link budget: each signal kept, of those tracked at ignition, all hundred
-skies.
+skies. Each cell: carrier through the boost / carrier to burnout + 20 s / tracked to burnout + 20 s,
+per cent.
 
-| Signal | Unaided: carrier, boost | carrier, +20 s | tracked, +20 s | Aided: carrier, boost | carrier, +20 s | tracked, +20 s |
-|---|---|---|---|---|---|---|
-| GPS L1 C/A, L5; Galileo E5a; BeiDou B2a | 100 % | 100 % | 100 % | 100 % | 100 % | 100 % |
-| Galileo E1-C (4 ms) | 11 % | 0 % | 100 % | 100 % | 100 % | 100 % |
-| BeiDou B1C (10 ms) | 0 % | 0 % | 49 % | 67 % | 5 % | 100 % |
+| Configuration | GPS L1 C/A | Galileo E1-C (4 ms) | BeiDou B1C (10 ms) | GPS L5, Galileo E5a, BeiDou B2a |
+|---|---|---|---|---|
+| Unaided, 10 Hz quiet loops | 0 / 0 / 98 | 0 / 0 / 78 | 0 / 0 / 46 | 2–4 / 0 / 100 |
+| Unaided, 50 Hz loops | 100 / 100 / 100 | 11 / 0 / 100 | 0 / 0 / 49 | 100 / 100 / 100 |
+| IMU + 10 Hz quiet loops | 100 / 100 / 100 | 100 / 98 / 100 | 67 / 5 / 100 | 100 / 100 / 100 |
+| The design, and gated | 100 / 100 / 100 | 100 / 100 / 100 | 67 / 5 / 100 | 100 / 100 / 100 |
 
 - **The long-dump pilots need aiding.** E1-C's 4 ms dumps cap its loops at 12.5 Hz and B1C's 10 ms
-  at 5 Hz. Unaided, E1-C keeps carrier through the boost on 11 % of satellites and B1C on none, and
-  half the B1C channels drop out after burnout. Aided, E1-C keeps carrier everywhere; B1C keeps it
-  through the boost on two thirds, lets go at burnout on nearly all, and is never dropped.
-- **L5 carries the unaided design.** The L5 pilots' 1 ms dumps take the full 50 Hz loops and hold
-  like GPS L1 C/A. Counting L1 alone, unaided keeps carrier through the boost on 12.5 of 30.6
-  satellites a sky, GPS and about one Galileo; with L5, on all 30.7. Aided, L1 alone keeps 27.6: all but about three
-  BeiDou satellites.
-- **The oscillator decides only B1C.** Aided, in the fifth of skies whose oscillator is above
-  0.15 ppb/g, B1C loses carrier through the boost on about 6 satellites a sky at 9 dB under the budget,
-  against 2 in the rest. The correction arrives half a second after ignition, and B1C's 5 Hz loops
-  can't absorb the shift before it. The 50 Hz loops absorb it unaided, and no other signal shows it.
+  at 5 Hz. Unaided, E1-C keeps carrier through the boost on 11 % of satellites at most and B1C on
+  none, and half the B1C channels drop out after burnout (and a fifth of E1-C on the quiet loops).
+  Aided, E1-C keeps
+  carrier everywhere; B1C keeps it through the boost on two thirds, lets go at burnout on nearly all,
+  and is never dropped.
+- **L5 carries the unaided designs.** The L5 pilots' 1 ms dumps take the full 50 Hz loops and hold
+  like GPS L1 C/A. Counting L1 alone, the 50 Hz loops keep carrier through the boost on 12.5 of 30.6
+  satellites a sky, GPS and about one Galileo; with L5, on all 30.7. Aided, L1 alone keeps 27.6: all
+  but about three BeiDou satellites.
+
+**A stored oscillator sensitivity.** The clock feed-forward learnt in flight is trusted only half a
+second after ignition, and B1C's 5 Hz loops can't absorb the shift before it: aided, B1C loses carrier
+through the boost on 2.9 satellites a sky, 6.3 in the fifth of skies whose oscillator is above
+0.15 ppb/g. The firmware can start each flight from a stored sensitivity instead, a ground check's or
+the last flight's (`mcsim --clk-prior`), and refine it in flight as before. Two versions, for the three
+aided configurations at every margin:
+- **The last flight's value, drifted:** off by 20 % (1σ), for temperature and any change in the
+  crystal's mount since. Orientation is not in it: with the sensitivity calibrated as a vector, the
+  IMU's force vector gives its projection on the pad and in the boost.
+- **A ground check:** a flip test on the three axes, off by ±0.015 ppb/g (1σ) whatever the part.
+
+| Clock feed-forward before T+0.5 s | B1C losing carrier in the boost, a sky (oscillator over 0.15 ppb/g; the rest) | Satellites losing carrier in the boost, 9 dB under (worst) | 12 dB under (worst) |
+|---|---|---|---|
+| None: learnt in flight only | 2.9 (6.3; 2.1) | 0.34 (3) | 1.2 (8) |
+| The last flight's, 20 % off | 1.1 (1.0; 1.2) | 0.03 (1) | 0.6 (4) |
+| A ground check, ±0.015 ppb/g | 1.2 (0.95; 1.3) | 0.04 (1) | 0.6 (4) |
+
+- **A stored value takes the oscillator out of B1C's ignition,** for the bad parts and the typical
+  ones alike: what B1C still loses there, about one satellite a sky, is the boost itself. The two come out alike: the ground check does better on the bad parts (0.95 a sky against 1.05) and a touch worse on the typical ones, where ±0.015 ppb/g is a fifth of the sensitivity.
+- **It cuts the margins' losses through the boost,** since the satellites the aided designs lose there are
+  mostly BeiDou ones left on B1C alone: over the hundred skies at 9 dB under, 33 BeiDou and 1 GPS
+  with the learnt value only, 2 and 1 with the last flight's; at 12 dB under, BeiDou 80 against 21,
+  while Galileo (25 and 22) and GPS (17) don't move. To burnout + 20 s it changes little (0.79 to
+  0.74 at 9 dB under), since B1C lets go at burnout either way. GPS, Galileo and the L5 signals never
+  showed the oscillator.
 
 **What it means.** With an up-looking patch and satellites at their usual power, the hotshot's boost
-costs no satellite with any of the three designs, so what the designs buy is margin. The aided
-designs keep carrier lock on every satellite through the boost to 6 dB under the budget, and
-tracking on nearly every one to 12. Unaided, a receiver should plan on L5 to keep Galileo and BeiDou
-at all. B1C is the one signal no design keeps through burnout (see [Limits](#limits)). Not yet
+costs no satellite's tracking with any of the five configurations, and no satellite's carrier with any
+but the quiet unaided baseline, so what the designs buy is carrier and margin. The aided
+configurations keep carrier lock on every satellite through the boost to 6 dB under the budget, and
+tracking on nearly every one to 12; with the IMU the quiet loops do it as well as the design.
+Unaided, a receiver should plan on L5 to keep Galileo and BeiDou at all. A stored oscillator
+sensitivity, from a ground check or the last flight, takes most of what B1C loses at ignition and
+cuts the losses at the margins. B1C is the one signal no design keeps through burnout (see [Limits](#limits)). Not yet
 flown: the traveler, a spinning antenna, the plume, and the patch's real pattern once the flight
 board's antenna is measured.
 
-Figures (`runs/mc/hotshot/fig`): `mc_sats.png`, the satellites maintained in each sky by design and
-margin; `mc_signals.png`, each signal kept; `mc_cn0.png`, the link budget. The whole set, from
+Figures (`runs/mc/hotshot/fig`): `mc_sats.png`, the satellites maintained in each sky by configuration
+and margin; `mc_signals.png`, each signal kept; `mc_cn0.png`, the link budget. The whole set, from
 `gnss-receiver` (`$SC` is the rig's `tools/gnss-cocom/sdr`; a few minutes on 8 cores):
 
 ```bash
@@ -1429,6 +1531,8 @@ O=runs/mc/hotshot
 python3 py/mc_scenario.py --traj $SC/scenarios/hotshot_pad600.csv --ignition 600 \
     --nav $SC/c8/BRDC_2026230_MN.rnx --day-sow 172800 --runs 100 --out $O
 python3 py/mc_run.py $O
+python3 py/mc_run.py $O --designs QA,BA,BG --clk-prior 0.2 --tag L        # the last flight's sensitivity
+python3 py/mc_run.py $O --designs QA,BA,BG --clk-prior-abs 0.015 --tag G  # a ground check
 python3 py/mc_summary.py $O
 python3 py/mc_plots.py $O --flight Hotshot -o $O/fig
 ```

@@ -25,14 +25,28 @@ def geo_to_ecef(lat_deg, lon_deg, h):
 
 
 class Trajectory:
-    """ECEF position, velocity and acceleration along a scenario CSV (time = file seconds)."""
+    """ECEF position, velocity and acceleration along a scenario CSV (time = file seconds).
 
-    def __init__(self, csv_path: str | Path):
+    The velocity at the samples is the central difference, as gps-sdr-sim's smoothed carrier has it. With
+    motion="signalsim" it is the motion SignalSim's files carry (the manifest's generator = signalsim): their
+    segments (tools/gnss-cocom/sdr/signalsim/make_*.py) hold the pad through the last sample before the
+    position first changes, and stop at the last moving sample if the flight ends before the file. There the
+    velocity is zero; on the hotshot that sample is T+0.1 s, where the central difference says 1.62 m/s."""
+
+    def __init__(self, csv_path: str | Path, motion: str = "central"):
         d = np.loadtxt(csv_path, delimiter=",")
         self.t = d[:, 0]
         self.lat, self.lon, self.h = d[:, 1], d[:, 2], d[:, 3]
         self.pos = geo_to_ecef(self.lat, self.lon, self.h)
         self.vel = np.gradient(self.pos, self.t, axis=0)
+        if motion == "signalsim":
+            moved = np.flatnonzero(np.sum(np.diff(self.pos, axis=0) ** 2, axis=1) > 1e-12) + 1
+            if moved.size:
+                self.vel[moved[0] - 1] = 0.0
+                if moved[-1] < len(self.t) - 1:
+                    self.vel[moved[-1]] = 0.0
+        elif motion != "central":
+            raise ValueError(f"motion {motion!r}: central or signalsim")
         self.acc = np.gradient(self.vel, self.t, axis=0)
 
     def state(self, t):

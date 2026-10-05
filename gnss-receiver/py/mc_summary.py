@@ -2,7 +2,7 @@
 """mcsim's Monte Carlo runs, counted: per run, design and link offset, the signals and satellites tracked at
 ignition and those kept through the boost and through the 20 s after it.
 
-    mc_summary.py DIR [--designs B,BA,BG] [--offsets 0,3,6,9,12]   -> DIR/summary.csv
+    mc_summary.py DIR [--designs Q,B,QA,BA,BG] [--offsets 0,3,6,9,12]   -> DIR/summary.csv
 
 Kept, per signal tracked (PLL locked) at ignition:
   tracked    never dropped (the channel never went off): code and Doppler kept coming;
@@ -53,7 +53,7 @@ def summarize(path: Path) -> dict[str, list[int]]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('dir', type=Path)
-    ap.add_argument('--designs', default='B,BA,BG')
+    ap.add_argument('--designs', default='Q,B,QA,BA,BG')
     ap.add_argument('--offsets', default='0,3,6,9,12')
     a = ap.parse_args()
     runs = [int(r['run']) for r in csv.DictReader(open(a.dir / 'runs.csv'))]

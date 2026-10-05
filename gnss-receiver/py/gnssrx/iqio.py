@@ -42,6 +42,7 @@ class Meta:
     start_gpst: str
     tropo: str = "saastamoinen"  # "none" where the generator applied no troposphere (gps-sdr-sim)
     tropo_top_m: float = 4e4  # where the generator's troposphere stops (SignalSim: 10 km, at once)
+    generator: str = ""  # signalsim, gps-sdr-sim, ...: what made the file
 
 
 def manifest(name: str, path: Path | None = None) -> Meta:
@@ -53,7 +54,16 @@ def manifest(name: str, path: Path | None = None) -> Meta:
     return Meta(name, float(s["fs"]), float(s.get("fc", L1_HZ)), dcv, float(s.get("carrier_fix_hz", 0)),
                 float(s.get("sig_power", 0)), float(s.get("noise_density", 0)), s.get("noise", "no") == "yes",
                 s.get("truth", ""), s.get("start_gpst", ""), s.get("tropo", "saastamoinen").lower(),
-                float(s.get("tropo_top_m", 4e4)))
+                float(s.get("tropo_top_m", 4e4)), s.get("generator", "").lower())
+
+
+def traj_motion(source: str) -> str:
+    """The motion a file's trajectory has in its signal (truth.Trajectory's motion): "signalsim" for SignalSim's
+    files, else "central"."""
+    try:
+        return "signalsim" if manifest(Path(source).name).generator == "signalsim" else "central"
+    except KeyError:
+        return "central"
 
 
 def iq_path(name: str) -> Path:

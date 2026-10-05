@@ -32,7 +32,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gnssrx import rinex, truth  # noqa: E402
+from gnssrx import iqio, rinex, truth  # noqa: E402
 
 
 def read_csv(path: Path) -> dict[str, np.ndarray]:
@@ -107,7 +107,12 @@ def main() -> int:
     obs = read_csv(a.run / "obs.csv")
     pvt = read_csv(a.run / "pvt.csv")
     nav = rinex.read_nav(a.nav, "GEC")
-    traj = truth.Trajectory(a.traj)
+    source = ""
+    if (a.run / "run.ini").exists():
+        for line in (a.run / "run.ini").read_text().splitlines():
+            if line.startswith("source"):
+                source = line.split("=", 1)[1].strip()
+    traj = truth.Trajectory(a.traj, iqio.traj_motion(source))
     lam = truth.LAMBDA_L1
 
     t0 = a.t0_gps

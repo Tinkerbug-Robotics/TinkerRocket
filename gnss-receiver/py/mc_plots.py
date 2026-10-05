@@ -22,8 +22,10 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.patches import Patch  # noqa: E402
 
-DESIGNS = (('B', 'Unaided: 50 Hz loops', '#b4442c'), ('BA', 'IMU + 20 Hz loops (the design)', '#1d5fbf'),
+DESIGNS = (('Q', 'Unaided: 10 Hz quiet loops', '#7a828c'), ('B', 'Unaided: 50 Hz boost loops (the fallback)', '#b4442c'),
+           ('QA', 'IMU + 10 Hz quiet loops', '#1a9bb0'), ('BA', 'IMU + 20 Hz loops (the design)', '#1d5fbf'),
            ('BG', 'Gated profile', '#1f7a4d'))
+STEP = 0.17  # between the designs in a group
 SIG_NAMES = {'L1CA': 'GPS L1 C/A', 'E1C': 'Galileo E1-C', 'B1CP': 'BeiDou B1C', 'L5Q': 'GPS L5',
              'E5AQ': 'Galileo E5a', 'B2AP': 'BeiDou B2a'}
 METRICS = (('tb', 'Tracked through the boost'), ('ta', 'Tracked to burnout + 20 s'),
@@ -51,13 +53,13 @@ def fig_sats(d, offsets, flight, out):
                 if not v:
                     continue
                 kept = np.array([x[m] for x in v])
-                x0 = gi + (di - 1) * 0.26
-                ax.scatter(x0 + rng.uniform(-0.09, 0.09, kept.size), kept + rng.uniform(-0.18, 0.18, kept.size), s=7,
+                x0 = gi + (di - (len(DESIGNS) - 1) / 2) * STEP
+                ax.scatter(x0 + rng.uniform(-0.05, 0.05, kept.size), kept + rng.uniform(-0.18, 0.18, kept.size), s=6,
                            color=col, alpha=0.45, linewidths=0)
-                ax.plot([x0 - 0.11, x0 + 0.11], [np.median(kept)] * 2, color=col, lw=2.2)
+                ax.plot([x0 - 0.065, x0 + 0.065], [np.median(kept)] * 2, color=col, lw=2.2)
                 ax.plot([x0, x0], [np.percentile(kept, 5), np.percentile(kept, 95)], color=col, lw=1.0)
             trk = np.array([x['trk'] for x in d[('BA', off, 'SAT')]])
-            ax.plot([gi - 0.42, gi + 0.42], [np.median(trk)] * 2, color=SLATE, lw=0.8, ls=':')
+            ax.plot([gi - 0.46, gi + 0.46], [np.median(trk)] * 2, color=SLATE, lw=0.8, ls=':')
         ax.set_xticks(range(len(offsets)))
         ax.set_xticklabels(['link budget' if o == 0 else f'{o} dB' for o in offsets])
         ax.set_title(title, loc='left')
@@ -65,7 +67,7 @@ def fig_sats(d, offsets, flight, out):
     for _, lab, col in DESIGNS:
         axes[0, 0].plot([], [], color=col, lw=2.2, label=lab)
     axes[0, 0].plot([], [], color=SLATE, lw=0.8, ls=':', label='median tracked at ignition')
-    axes[0, 0].legend(frameon=False, loc='lower left', fontsize=8.5)
+    axes[0, 0].legend(frameon=False, loc='lower left', fontsize=8, ncol=2)
     fig.suptitle(f'{flight}: satellites maintained in each of 100 skies (dots; bar = median, line = 5th-95th '
                  'percentile), by design and link margin', x=0.01, ha='left', fontsize=10.5)
     fig.savefig(out / 'mc_sats.png', dpi=150)
@@ -87,15 +89,15 @@ def fig_signals(d, flight, out, offs=(0, -12)):
                     v = d.get((dk, off, s), [])
                     n = sum(x['trk'] for x in v)
                     fr.append(100.0 * sum(x[m] for x in v) / n if n else np.nan)
-                xs = np.arange(len(sigs)) + (di - 1) * 0.27
-                ax.bar(xs, fr, width=0.25, color=col)
+                xs = np.arange(len(sigs)) + (di - (len(DESIGNS) - 1) / 2) * 0.165
+                ax.bar(xs, fr, width=0.155, color=col)
             ax.set_xticks(range(len(sigs)))
             ax.set_xticklabels([SIG_NAMES[s] for s in sigs], fontsize=8.5)
             ax.set_ylim(0, 105)
             ax.set_ylabel('% of signals tracked at ignition')
-            ax.set_title(f"{'Link budget' if off == 0 else f'{off} dB under it'}: {lab}", loc='left')
-    fig.legend(handles=[Patch(color=col, label=lab) for _, lab, col in DESIGNS], frameon=False, loc='upper right',
-               ncol=3, fontsize=8.5)
+            ax.set_title(f"{'Link budget' if off == 0 else f'{-off} dB under it'}: {lab}", loc='left')
+    fig.legend(handles=[Patch(color=col, label=lab) for _, lab, col in DESIGNS], frameon=False,
+               loc='outside lower center', ncol=len(DESIGNS), fontsize=8.5)
     fig.suptitle(f'{flight}: each signal kept, all 100 skies', x=0.01, ha='left', fontsize=10.5)
     fig.savefig(out / 'mc_signals.png', dpi=150)
     plt.close(fig)

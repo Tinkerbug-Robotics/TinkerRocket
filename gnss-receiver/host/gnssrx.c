@@ -83,7 +83,8 @@ static void usage(void)
             "                            20,20,50,2,5,500; fc: the flight computer's rules, 30,250,50,2, no rest\n"
             "  --boost-gate IGN_S,TAIL_FRAC,TAIL_MS   with --boost-detect, the profile wide only around the\n"
             "                            transitions: IGN_S after launch, and from the tail-off (the axial force\n"
-            "                            under TAIL_FRAC of its peak for TAIL_MS) to the hold past burnout\n"
+            "                            under TAIL_FRAC of its peak for TAIL_MS) to the hold past burnout\n");
+    fprintf(stderr,
             "  --imu SCEN.csv            IMU aiding emulated from a scenario trajectory (10 Hz t,lat,lon,h;\n"
             "                            file seconds): its acceleration, as the generator's carrier sees it\n"
             "  --imu-err LAG,SF,BIAS,NOISE[,TILT]   the IMU's faults: latency ms, scale error (fraction),\n"
@@ -103,6 +104,9 @@ static void usage(void)
             "                            to every channel from the IMU (rx_set_clock_rate), as a calibrated\n"
             "                            sensitivity would be. COMP -1: the P4 learns it in flight, from the\n"
             "                            fixes' clock drift against the IMU's specific force since the pad\n"
+            "  --osc-prior PPB           with COMP -1: a stored sensitivity, ppb per g of the IMU's reading (a\n"
+            "                            ground check's, or the last flight's estimate), fed forward from the\n"
+            "                            start until the learnt one is trusted\n"
             "  --osc-vib F_HZ,A_G[,S0,S1]   a vibration tone along the thrust axis, A_G peak, from file second S0\n"
             "                            to S1 (default the --boost-at window), through the same sensitivity\n"
             "  --osc-traj SCEN.csv       the trajectory for --osc-g\n"
@@ -166,6 +170,11 @@ static int static_truth(const char *truth, double ref[3], double *lat, double *l
  * IMU emulation from a scenario trajectory (10 Hz t,lat,lon,h, file seconds). gps-sdr-sim's
  * smoothed carrier ramps between the central-difference velocities at the samples, so the
  * acceleration the signal shows is constant over each 0.1 s step: that is the "true" IMU.
+ * SignalSim's files (manifest generator = signalsim) ramp between the same velocities, but their
+ * segments (tools/gnss-cocom/sdr/signalsim/make_*.py) hold the pad through the last sample before the
+ * position first changes, and stop at the last moving sample if the flight ends before the file:
+ * there the velocity is zero, not the central difference. On the hotshot that sample is T+0.1 s,
+ * where the central difference says 1.62 m/s.
  */
 typedef struct {
     int n;
@@ -174,7 +183,7 @@ typedef struct {
     double up[3];          /* local up at the first sample, for the bias */
 } imu_traj_t;
 
-static int imu_load(const char *path, imu_traj_t *m)
+static int imu_load(const char *path, imu_traj_t *m, int signalsim)
 {
     FILE *f = fopen(path, "r");
     if (!f) {
@@ -213,6 +222,22 @@ static int imu_load(const char *path, imu_traj_t *m)
         int a = k > 0 ? k - 1 : 0, b = k < n - 1 ? k + 1 : n - 1;
         for (int j = 0; j < 3; j++) {
             v[k][j] = (p[b][j] - p[a][j]) / (t[b] - t[a]);
+        }
+    }
+    if (signalsim) {
+        int lift = -1, last = -1;
+        for (int k = 1; k < n; k++) {
+            const double dx = p[k][0] - p[k - 1][0], dy = p[k][1] - p[k - 1][1], dz = p[k][2] - p[k - 1][2];
+            if (dx * dx + dy * dy + dz * dz > 1e-12) {
+                lift = lift < 0 ? k : lift;
+                last = k;
+            }
+        }
+        if (lift > 0) {
+            memset(v[lift - 1], 0, sizeof(v[0]));
+        }
+        if (last > 0 && last < n - 1) {
+            memset(v[last], 0, sizeof(v[0]));
         }
     }
     m->acc = malloc(sizeof(double[3]) * (size_t)n);
@@ -388,7 +413,8 @@ int main(int argc, char **argv)
     gps_iono_t iono_aid;
     memset(&iono_aid, 0, sizeof(iono_aid));
     const char *loops_quiet = NULL, *loops_boost = NULL, *nav_arg = NULL, *imu_path = NULL, *osc_traj = NULL;
-    double osc_gamma_ppb = 0.0, osc_comp = 0.0, vib_hz = 0.0, vib_g = 0.0, vib0 = -1.0, vib1 = -1.0;
+    double osc_gamma_ppb = 0.0, osc_comp = 0.0, osc_prior_ppb = 0.0, vib_hz = 0.0, vib_g = 0.0, vib0 = -1.0,
+           vib1 = -1.0;
     int no_nav = 0, pilot_dumps = 0;
     double imu_lag_ms = 5.0, imu_sf = 0.03, imu_bias = 0.5, imu_noise = 0.1, imu_tilt = 0.0, imu0 = -INFINITY,
            imu1 = INFINITY;
@@ -477,6 +503,8 @@ int main(int argc, char **argv)
             }
         } else if (!strcmp(a, "--osc-traj") && v) {
             osc_traj = argv[++i];
+        } else if (!strcmp(a, "--osc-prior") && v) {
+            osc_prior_ppb = atof(argv[++i]);
         } else if (!strcmp(a, "--imu-err") && v) {
             if (sscanf(argv[++i], "%lf,%lf,%lf,%lf,%lf", &imu_lag_ms, &imu_sf, &imu_bias, &imu_noise, &imu_tilt) < 4) {
                 fprintf(stderr, "gnssrx: --imu-err takes LAG_MS,SF,BIAS,NOISE[,TILT_DEG]\n");
@@ -562,11 +590,20 @@ int main(int argc, char **argv)
      * force, both less their pad values (averaged until ignition shows as 2 g over them). */
     double est_pad_f = 0.0, est_pad_d = 0.0, est_sff = 0.0, est_sfd = 0.0, est_gamma = 0.0;
     long est_npad = 0, est_n = 0;
+    /* The motion the file's generator gave the trajectory (see imu_load). */
+    int traj_signalsim = 0;
+    {
+        iq_meta_t gm;
+        const char *b = strrchr(so.file, '/');
+        if (manifest_lookup(so.manifest, b ? b + 1 : so.file, &gm) == 0) {
+            traj_signalsim = !strcmp(gm.generator, "signalsim");
+        }
+    }
     if (osc_gamma_ppb != 0.0 || vib_g != 0.0) {
         const char *tp = osc_traj ? osc_traj : imu_path;
         imu_traj_t ot;
         memset(&ot, 0, sizeof(ot));
-        if (!tp || imu_load(tp, &ot) != 0) {
+        if (!tp || imu_load(tp, &ot, traj_signalsim) != 0) {
             fprintf(stderr, "gnssrx: --osc-g and --osc-vib need a trajectory (--osc-traj or --imu)\n");
             return 2;
         }
@@ -797,7 +834,7 @@ int main(int argc, char **argv)
     double bd_on[4], bd_burnout[4], bd_off[4];  /* what it detected, file seconds */
     int bd_n = 0, bd_prev = 0;
     boost_phase_t bd_phase_prev = BOOST_PAD;
-    if (imu_path && imu_load(imu_path, &imu) != 0) {
+    if (imu_path && imu_load(imu_path, &imu, traj_signalsim) != 0) {
         fprintf(stderr, "gnssrx: cannot read the trajectory %s\n", imu_path);
         return 1;
     }
@@ -861,6 +898,9 @@ int main(int argc, char **argv)
             fprintf(fini, "imu = %s\nimu_err = %g,%g,%g,%g,%g\n", imu_path, imu_lag_ms, imu_sf, imu_bias, imu_noise,
                     imu_tilt);
         }
+        if ((imu_path || osc_traj) && traj_signalsim) {
+            fprintf(fini, "traj_motion = signalsim\n");
+        }
         if (imu_no_aid) {
             fprintf(fini, "imu_aid = 0\n");
         }
@@ -872,6 +912,9 @@ int main(int argc, char **argv)
             }
         }
         if (osc.n > 0) {
+            if (osc_prior_ppb != 0.0) {
+                fprintf(fini, "osc_prior = %g\n", osc_prior_ppb);
+            }
             fprintf(fini, "osc_g = %g,%g\nosc_vib = %g,%g,%g,%g\n", osc_gamma_ppb, osc_comp, vib_hz, vib_g, osc.vib0,
                     osc.vib1);
         }
@@ -1024,10 +1067,11 @@ int main(int argc, char **argv)
         if (osc.n > 0 && osc_comp != 0.0) {
             /* The P4 feeds the oscillator forward from the IMU's specific force (as late and as
              * scaled as the IMU) through its sensitivity: osc_comp of the true one, or its own
-             * estimate once it has one (osc_comp -1). */
+             * estimate once it has one (osc_comp -1), and the stored one until then. */
             double rate;
             osc_force(&osc, t_file - 1e-3 * imu_lag_ms, &rate);
-            const double gam = osc_comp > 0.0 ? osc_comp * osc.gamma : est_gamma;
+            const double gam = osc_comp > 0.0 ? osc_comp * osc.gamma
+                                              : (est_gamma != 0.0 ? est_gamma : osc_prior_ppb * 1e-9);
             rx_set_clock_rate(rx, -GNSS_FREQ_L1_HZ * gam * rate * (1.0 + imu_sf) / G0, gam != 0.0);
         }
         int nc = rx_tick(rx, t_now, dumps, nd, cmds, MAX_CMDS);

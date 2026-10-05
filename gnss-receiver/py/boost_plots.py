@@ -123,8 +123,8 @@ class Run:
 class Truth:
     """Line-of-sight truth per satellite on the 0.1 s grid, computed once per flight."""
 
-    def __init__(self, traj: Path, nav: Path):
-        self.traj = truth.Trajectory(traj)
+    def __init__(self, traj: Path, nav: Path, motion: str = "central"):
+        self.traj = truth.Trajectory(traj, motion)
         self.nav = rinex.read_nav(nav, "GEC")
         self.cache: dict[tuple[int, float], dict[int, np.ndarray]] = {}
 
@@ -305,7 +305,7 @@ def panel_rates(ax, run: Run, tr: Truth, liftoff: float, burnout: float, t_end: 
 
 
 def cmd_rates(a) -> int:
-    tr = Truth(a.traj, a.nav)
+    truths: dict[str, Truth] = {}  # one per motion (truth.Trajectory) among the grid's files
     rows, cols = a.rows.split(","), a.cols.split(",")
     rlab = dict(zip(rows, a.row_labels.split("|"))) if a.row_labels else {r: r for r in rows}
     clab = dict(zip(cols, a.col_labels.split("|"))) if a.col_labels else {c: c for c in cols}
@@ -322,6 +322,8 @@ def cmd_rates(a) -> int:
                 ax.set_visible(False)
                 continue
             run = Run(p)
+            motion = iqio.traj_motion(run.ini.get("source", ""))
+            tr = truths.setdefault(motion, Truth(a.traj, a.nav, motion))
             systems |= {sys_of(q) for q in run.prns}
             label = clab[c] if len(rows) == 1 else f"{clab[c]}  ·  {rlab[r]}"
             panel_rates(ax, run, tr, a.liftoff, a.burnout, t_end, textwrap.fill(label, 78), a.count_after)
@@ -382,7 +384,7 @@ def errors(run: Run, tr: Truth, liftoff: float):
 
 def cmd_timeline(a) -> int:
     run = Run(a.run)
-    tr = Truth(a.traj, a.nav)
+    tr = Truth(a.traj, a.nav, iqio.traj_motion(run.ini.get("source", "")))
     L0, B = a.liftoff, a.burnout
     t_all = np.arange(key(run.tf_trk.min()), key(run.tf_trk.max()) + 1) / 10.0
     tp, tv = tr.traj.state(t_all)

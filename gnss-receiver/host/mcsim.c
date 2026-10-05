@@ -333,6 +333,8 @@ static void usage(void)
             "  --clk-trust S --clk-err E  aided: the clock feed-forward from S after the detected launch, its\n"
             "                             learnt gamma first E off (a fraction), the error decaying over 1 s\n"
             "                             (default 0.5, 0)\n"
+            "  --clk-prior E              aided: a stored gamma (a ground check or the last flight's), E off (a\n"
+            "                             fraction), fed forward from the start until the learnt one is trusted\n"
             "  --cn0-offset DB            added to every signal's C/N0: a weaker antenna or installation\n"
             "  --odr HZ                   the IMU's output data rate (default 960)\n"
             "  --imu-seed N               the IMU part's scale error (datasheet spread) and its noise\n"
@@ -344,7 +346,7 @@ int main(int argc, char **argv)
 {
     const char *scen = NULL, *flight_path = NULL, *design = NULL, *out_path = NULL;
     double t_from = -12.0, t_to = 25.0, burnout = 4.0, after = 20.0, gamma_ppb = 0.0, clk_trust = 0.5,
-           clk_err = 0.0, odr = 960.0, cn0_off = 0.0;
+           clk_err = 0.0, odr = 960.0, cn0_off = 0.0, clk_prior = NAN;
     uint64_t seed = 1, imu_seed = 1;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
@@ -377,6 +379,8 @@ int main(int argc, char **argv)
             clk_trust = atof(v);
         } else if (!strcmp(a, "--clk-err")) {
             clk_err = atof(v);
+        } else if (!strcmp(a, "--clk-prior")) {
+            clk_prior = atof(v);
         } else if (!strcmp(a, "--cn0-offset")) {
             cn0_off = atof(v);
         } else if (!strcmp(a, "--odr")) {
@@ -516,13 +520,15 @@ int main(int argc, char **argv)
         }
         trk_profile_step(&cur, on ? prof_boost : &quiet, 1e-3f);
         const double a_up_imu = f_imu - G0;
-        /* The learnt clock feed-forward at L1, Hz/s: the oscillator's rate as late as the IMU, through the
-         * learnt gamma. */
+        /* The clock feed-forward at L1, Hz/s: the oscillator's rate as late as the IMU, through the learnt
+         * gamma once it is trusted, and before that through the stored one, if there is one. */
         double clk_l1 = 0.0;
-        if (aided && gamma != 0.0 && !isnan(t_launch) && t_end >= t_launch + clk_trust) {
+        const int learnt = !isnan(t_launch) && t_end >= t_launch + clk_trust;
+        if (aided && gamma != 0.0 && (learnt || !isnan(clk_prior))) {
             double rate;
             force_osc(&fl, t_end - imu_delay, &rate);
-            const double g_est = gamma * (1.0 + clk_err * exp(-(t_end - t_launch - clk_trust) / 1.0));
+            const double g_est = learnt ? gamma * (1.0 + clk_err * exp(-(t_end - t_launch - clk_trust) / 1.0))
+                                        : gamma * (1.0 + clk_prior);
             clk_l1 = -GNSS_FREQ_L1_HZ * g_est * rate / G0;
         }
         for (int i = 0; i < nch; i++) {

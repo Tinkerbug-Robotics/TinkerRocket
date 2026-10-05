@@ -27,11 +27,13 @@ def main() -> int:
     ap.add_argument("--from", dest="t_from", type=float, required=True)
     ap.add_argument("--to", dest="t_to", type=float, required=True)
     ap.add_argument("--min-el", type=float, default=5.0)
+    ap.add_argument("--motion", choices=("central", "signalsim"), default="central",
+                    help="the motion the IQ file carries: signalsim for SignalSim's files (truth.Trajectory)")
     ap.add_argument("--out", type=Path, required=True)
     a = ap.parse_args()
 
     nav = rinex.read_gps(a.nav)
-    traj = truth.Trajectory(a.traj)
+    traj = truth.Trajectory(a.traj, a.motion)
     t = traj.t[(traj.t >= a.t_from) & (traj.t <= a.t_to)]
     a.out.mkdir(parents=True, exist_ok=True)
     for prn in sorted({e.prn for e in nav}):
