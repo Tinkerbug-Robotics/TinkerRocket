@@ -96,3 +96,10 @@ TinkerRocketApp/DerivedData/
 # Bench run artifacts (tools/bench_session.py --out): timestamped console dumps
 # and timelines. The evidence that matters is quoted into the tracking issue.
 runs/
+
+# The GNSS receiver work moved to the private gnss/ submodule (2026-10-05). Its
+# old paths stay ignored so that leftovers in older checkouts (IQ-file links, run
+# outputs, local results) can never be committed back into this public repo.
+/tools/gnss-cocom/
+/gnss-receiver/
+/hardware/gnss-sdr-dev/

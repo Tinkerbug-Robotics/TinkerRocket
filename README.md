@@ -287,6 +287,8 @@ TinkerRocket/
 │   ├── gnss-sam10m8-18mm-hv/   # Tinker-Mantis GNSS carrier
 │   └── legacy/                 # Boards no longer offered, kept whole
 │
+├── gnss/                       # GNSS receiver development (private git submodule)
+│
 ├── tinkerrocket-idf/           # ESP-IDF firmware
 │   ├── projects/               # Product-to-build map: projects/README.md
 │   │   ├── flight_computer/    # Flight computer (Tinker-Mantis, Tinker-Beetle)
@@ -355,6 +357,15 @@ When the submodule is not initialized:
 Contributors with access can opt in:
 ```bash
 git submodule update --init tinkerrocket-idf/components/TR_GuidancePN
+```
+
+### GNSS receiver development (optional)
+
+Our own GNSS receiver work (the receiver, its development board, the receiver test rig and the filters that run on raw GNSS measurements) lives in a separate private submodule at `gnss/` ([TinkerRocket-GNSS](https://github.com/Tinkerbug-Robotics/TinkerRocket-GNSS)). It is kept private as a precaution, because detailed GNSS receiver design may be export-controlled.
+
+Nothing in the public tree builds or tests against it: the flight computers fly on the bought GNSS modules above, and every build, test and tool here runs without the submodule. Contributors with access can opt in (`--checkout` is needed, because the submodule is marked `update = none`):
+```bash
+git submodule update --init --checkout gnss
 ```
 
 ### Firmware (ESP-IDF)
@@ -663,12 +674,13 @@ sit together here. They are separate licences covering separate files: the softw
 licence does not reach the board files, and the hardware licence does not reach the
 firmware.
 
-Two exceptions to the above:
+Three exceptions to the above:
 
 | | |
 |---|---|
 | **Vendored components** | Third-party code under `tinkerrocket-idf/components/` keeps its own license — RadioLib is MIT, `spi_nand_flash` is Apache-2.0. Both permit inclusion in a GPL-3.0 work; their own terms continue to govern those files. See the `LICENSE` / `license.txt` in each. |
 | **`TR_GuidancePN`** | The proportional-navigation guidance law is a separate private submodule and is **not** covered by this license. Everything else builds and runs without it (see [Guidance](#guidance-optional)), so the public tree is complete and buildable on its own. |
+| **`gnss/`** | The GNSS receiver development work is a separate private submodule and is **not** covered by this license. Nothing in the public tree depends on it (see [GNSS receiver development](#gnss-receiver-development-optional)). |
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for how to get set
 up and what to watch out for. Contributors are asked to agree to the [CLA](CLA.md) once.

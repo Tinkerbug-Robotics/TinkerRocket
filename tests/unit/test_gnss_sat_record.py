@@ -1,11 +1,11 @@
-"""GNSS per-satellite record (GNSS_SAT_MSG, 0x90): decoder + rig converter.
+"""GNSS per-satellite record (GNSS_SAT_MSG, 0x90): the decoder.
 
 No golden flight carries the record yet (it is new), so the .bin under test
 is synthesised here with the same framing the out computer writes:
 [AA 55 AA 55][type][len][payload][CRC16 BE].  The wire layout is pinned on the
 firmware side by static_asserts and the host gtest; this pins the Python
-reading of it, the tracked-first truncation contract, and that the COCOM
-converter produces frames the rig's own UBX parser reads back unchanged.
+reading of it and the tracked-first truncation contract. The test rig's
+flight-log converter, and its tests, moved to the private gnss/ submodule.
 """
 
 from __future__ import annotations
@@ -16,15 +16,10 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-for p in (REPO_ROOT / "Data_Analysis",
-          REPO_ROOT / "tools" / "gnss-cocom",
-          REPO_ROOT / "tools" / "gnss-cocom" / "sdr"):
-    if str(p) not in sys.path:
-        sys.path.insert(0, str(p))
+if str(REPO_ROOT / "Data_Analysis") not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT / "Data_Analysis"))
 
 import plot_flight_data_mini as pfd          # noqa: E402
-import cocom_flightlog as cfl                # noqa: E402
-import ublox_binary as ubx                   # noqa: E402
 
 PREAMBLE = bytes([0xAA, 0x55, 0xAA, 0x55])
 
@@ -103,78 +98,3 @@ def test_decoder_reads_the_record(tmp_path):
     assert (e1["num_svs"], e1["num_blocks"], len(e1["sats"])) == (40, 1, 1)
     assert stats["type_counts"]["GNSS_SAT"] == 3       # counted at the frame level, incl. the bad one
     assert stats["type_counts"]["GNSS"] == 3
-
-
-def test_converter_pairs_by_itow_and_roundtrips_through_the_rig_parser(tmp_path):
-    records, _, _ = pfd.parse_binary_file(str(build_log(tmp_path)))
-    lines, st = cfl.convert(records)
-    assert st == {"pvt": 3, "sat": 2, "fixes": 2, "paired_by_itow": 2,
-                  "paired_by_time": 0, "unpaired_pvt": 1, "orphan_sat": 0}
-
-    # Every line is `t U <hex>`.  Epochs are in time order and each NAV-SAT
-    # sits immediately BEFORE the NAV-PVT that closes its epoch, even though
-    # the receiver emitted it a few ms later (so its own timestamp is later):
-    # correlate.py treats NAV-PVT as the epoch marker, same as cocom_fcdiag.
-    parsed = []
-    for ln in lines:
-        t, u, hexs = ln.split(" ")
-        assert u == "U"
-        raw = bytes.fromhex(hexs)
-        assert raw[0] == ubx.CLS_NAV
-        parsed.append((float(t), raw[1], raw[2:]))
-    kinds = [x[1] for x in parsed]
-    assert kinds == [ubx.MSG_NAV_SAT, ubx.MSG_NAV_PVT, ubx.MSG_NAV_SAT, ubx.MSG_NAV_PVT, ubx.MSG_NAV_PVT]
-    # Stamps are printed to the millisecond, like the console converter's.
-    pvt_times = [x[0] for x in parsed if x[1] == ubx.MSG_NAV_PVT]
-    assert pvt_times == sorted(pvt_times) == [1.0, 1.056, 1.111]
-    assert parsed[0][0] == 1.004 and parsed[2][0] == 1.059   # SAT keeps its own stamp
-
-    sat0 = ubx.parse_nav_sat(parsed[0][2])
-    assert [(s["gnss"], s["svid"], s["cn0"], s["elev"], s["azim"], s["used_in_fix"], s["quality"])
-            for s in sat0] == [(0, 5, 42, 61, 180, True, 7),
-                                (2, 12, 0, 8, 90, False, 1),
-                                (6, 3, 30, -4, 358, True, 4)]
-    # The rig names constellations its own way (GAL, GLO); the id is the contract.
-    assert [s["gnss_name"] for s in sat0] == [ubx.GNSS_ID[0], ubx.GNSS_ID[2], ubx.GNSS_ID[6]]
-    assert sat0[0]["ephemeris"] and not sat0[0]["almanac"] and sat0[0]["health"] == 1
-
-    pvt0 = ubx.parse_nav_pvt(parsed[1][2])
-    assert pvt0["itow_ms"] == ITOW0 == struct.unpack_from("<I", parsed[0][2], 0)[0]
-    assert pvt0["has_fix"] and pvt0["fix_type"] == 3 and pvt0["num_sv"] == 2
-    assert abs(pvt0["lat"] - 45.0) < 1e-6 and abs(pvt0["alt_m"] - 100.0) < 1e-3
-    # ENU (1, 2, 3) m/s in the log -> NED (2, 1, -3) in NAV-PVT.
-    assert pvt0["vel"] == (2.0, 1.0, -3.0)
-
-    # The fix with no time solution converts too (iTOW 0, no fix), so the
-    # rig sees the outage rather than a gap.
-    pvt2 = ubx.parse_nav_pvt(parsed[4][2])
-    assert pvt2["itow_ms"] == 0 and not pvt2["has_fix"]
-
-
-def test_converter_falls_back_to_the_fc_clock_when_utc_is_unresolved(tmp_path):
-    # Same epoch, but the PVT's UTC is pre-2017 (no time solution yet) while
-    # the SAT record still carries a real iTOW: pair by proximity instead.
-    frames = [
-        frame(0xA1, gnss_payload(5_000_000, dt.datetime(2000, 1, 1), 0, 0, 0, 0, 0, 0, 0, 0, 0)),
-        frame(0x90, sat_payload(5_006_000, 123_456, 1, [sat_block(0, 1, 20, 10, 0, False, 2)])),
-    ]
-    p = tmp_path / "unresolved.bin"
-    p.write_bytes(b"".join(frames))
-    records, _, _ = pfd.parse_binary_file(str(p))
-    lines, st = cfl.convert(records)
-    assert st["paired_by_time"] == 1 and st["paired_by_itow"] == 0 and st["orphan_sat"] == 0
-    pvt = ubx.parse_nav_pvt(bytes.fromhex(lines[1].split(" ")[2])[2:])
-    assert pvt["itow_ms"] == 123_456          # borrowed from the paired SAT record
-
-
-def test_itow_from_utc_matches_gps_week_arithmetic():
-    assert cfl.itow_from_utc({"year": 2026, "month": 9, "day": 9, "hour": 12,
-                              "minute": 0, "second": 0, "milli_sec": 250}) == ITOW0 + 250
-    # Sunday 00:00:00 UTC is 18 s into the GPS week.
-    assert cfl.itow_from_utc({"year": 2026, "month": 9, "day": 6, "hour": 0,
-                              "minute": 0, "second": 0, "milli_sec": 0}) == 18_000
-    # Saturday 23:59:50 UTC wraps into the next week's first seconds.
-    assert cfl.itow_from_utc({"year": 2026, "month": 9, "day": 12, "hour": 23,
-                              "minute": 59, "second": 50, "milli_sec": 0}) == 8_000
-    assert cfl.itow_from_utc({"year": 1980, "month": 1, "day": 6, "hour": 0,
-                              "minute": 0, "second": 0}) is None
