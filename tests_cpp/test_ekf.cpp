@@ -2266,3 +2266,132 @@ TEST(EkfCanopy1580, LevellingWaitsForTheCanopyPastApogee) {
     ekf.getQuaternion(q1);
     EXPECT_GT(tqGeodesicDeg(q0, q1), 3.0f);
 }
+
+// ---------- #1579 the barometer's static port, and the GNSS vertical hold ----------
+
+namespace baroport1579 {
+
+// One baro sample 20 m above the estimate, with the filter moving straight up
+// at `speed_up` m/s: returns the altitude correction it made and, through
+// `var`, the altitude variance before it.
+static double baroStep(float speed_up, float& var, double& alt_msl) {
+    GpsInsEKF ekf;
+    uint32_t t = 0;
+    settleNoseUp(ekf, t);
+    ekf.setVelocity(0.0f, 0.0f, -speed_up);
+    double p0[3];
+    ekf.getPosEst(p0);
+    float cov[3];
+    ekf.getCovPos(cov);
+    var = cov[2];
+    alt_msl = p0[2];
+    EkfBaroData b;
+    b.time_us = t + 1;
+    b.altitude_m = p0[2] + 20.0;
+    ekf.baroMeasUpdate(b);
+    double p1[3];
+    ekf.getPosEst(p1);
+    return p1[2] - p0[2];
+}
+
+// The scalar update's own arithmetic, for a variance R.
+static double expectedStep(float var, double R) { return 20.0 * var / (var + R); }
+
+static double portR(float speed, double alt_msl) {
+    const double s = GpsInsEKF::BARO_PORT_K_M_PER_PA * GpsInsEKF::dynamicPressurePa(speed, (float)alt_msl);
+    return 4.0 + s * s;
+}
+
+}  // namespace baroport1579
+
+TEST(EkfBaroPort1579, DynamicPressureFollowsTheStandardAtmosphere) {
+    EXPECT_NEAR(GpsInsEKF::dynamicPressurePa(100.0f, 0.0f), 6125.0f, 1.0f);
+    EXPECT_NEAR(GpsInsEKF::dynamicPressurePa(100.0f, 8500.0f), 6125.0f / (float)M_E, 1.0f);
+    EXPECT_EQ(GpsInsEKF::dynamicPressurePa(0.0f, 0.0f), 0.0f);
+}
+
+TEST(EkfBaroPort1579, AtRestTheBarometerIsFusedAsBefore) {
+    using namespace baroport1579;
+    float var; double alt;
+    const double step = baroStep(0.0f, var, alt);
+    EXPECT_NEAR(step, expectedStep(var, 4.0), 1e-3) << "2 m sigma, unchanged";
+}
+
+TEST(EkfBaroPort1579, AtBurnoutSpeedTheStaticPortIsDeweighted) {
+    // 100 m/s, about where Eagle Claw's barometer read 102 m low: σ ≈ 45 m.
+    using namespace baroport1579;
+    float var0, var; double alt0, alt;
+    const double at_rest = baroStep(0.0f, var0, alt0);
+    const double moving  = baroStep(100.0f, var, alt);
+    EXPECT_NEAR(moving, expectedStep(var, portR(100.0f, alt)), 1e-3);
+    EXPECT_LT(moving, at_rest / 50.0);
+}
+
+TEST(EkfBaroPort1579, UnderAMainTheBarometerIsBarelyChanged) {
+    // 6 m/s: q ≈ 22 Pa, a 0.16 m port allowance against the 2 m floor.
+    using namespace baroport1579;
+    float var0, var; double alt0, alt;
+    const double at_rest = baroStep(0.0f, var0, alt0);
+    const double hanging = baroStep(6.0f, var, alt);
+    EXPECT_NEAR(hanging, at_rest, 0.01 * at_rest);
+}
+
+namespace hold1579 {
+
+static EkfIMUData tilted45(uint32_t t) {
+    EkfIMUData d;
+    d.time_us = t;
+    d.acc_x = 3.0 * G_SITE * std::cos(M_PI / 4);
+    d.acc_z = 3.0 * G_SITE * std::sin(M_PI / 4);
+    return d;
+}
+
+// A converged pad, then two seconds of IMU-led flight with a 3 g force tilted
+// 45° off the nose and the fix frozen: attitude and bias errors now map into
+// the horizontal and the vertical velocity alike, so the covariance couples
+// them.  Returns the frozen fix (a repeated stamp fuses nothing).
+static EkfGNSSDataLLA coupled(GpsInsEKF& ekf, uint32_t& t, bool vertical_held) {
+    settleNoseUp(ekf, t);
+    const EkfGNSSDataLLA frozen = makeStationaryGNSS(t);
+    ekf.setGnssVerticalHeldOut(vertical_held);
+    for (int i = 0; i < 1000; i++) {
+        t += 2000;
+        ekf.update(false, tilted45(t), frozen, makeNoseUpMag(t));
+    }
+    return frozen;
+}
+
+}  // namespace hold1579
+
+TEST(EkfGnssVerticalHold1579, AHorizontalFixNoLongerReachesTheVertical) {
+    // Two identical filters take the same next tick; one of them also gets a
+    // fix that agrees with it everywhere except +5 m/s north.
+    using namespace hold1579;
+    for (bool held : {false, true}) {
+        GpsInsEKF with_fix, without;
+        uint32_t t1 = 0, t2 = 0;
+        coupled(with_fix, t1, held);
+        const EkfGNSSDataLLA frozen = coupled(without, t2, held);
+        double p[3]; float v[3];
+        with_fix.getPosEst(p); with_fix.getVelEst(v);
+        EkfGNSSDataLLA fix;
+        fix.time_us = t1 + 2000;
+        fix.lat_rad = p[0]; fix.lon_rad = p[1]; fix.alt_m = p[2];
+        fix.vel_n_mps = v[0] + 5.0f; fix.vel_e_mps = v[1]; fix.vel_d_mps = v[2];
+        t1 += 2000; t2 += 2000;
+        with_fix.update(false, tilted45(t1), fix, makeNoseUpMag(t1));
+        without.update(false, tilted45(t2), frozen, makeNoseUpMag(t2));
+
+        float v1[3], v2[3];
+        double p1[3], p2[3];
+        with_fix.getVelEst(v1); without.getVelEst(v2);
+        with_fix.getPosEst(p1); without.getPosEst(p2);
+        if (held) {
+            EXPECT_FLOAT_EQ(v1[2], v2[2]) << "held out: vertical velocity untouched";
+            EXPECT_DOUBLE_EQ(p1[2], p2[2]) << "held out: altitude untouched";
+        } else {
+            EXPECT_GT(std::fabs(v1[2] - v2[2]), 0.05f) << "admitted: the coupling the hold cuts is real";
+        }
+        EXPECT_GT(v1[0] - v2[0], 0.5f) << "the horizontal still follows the fix";
+    }
+}

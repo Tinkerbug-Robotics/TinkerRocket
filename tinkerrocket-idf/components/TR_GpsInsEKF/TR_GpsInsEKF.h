@@ -109,8 +109,31 @@ public:
                 EkfGNSSDataLLA gnss_data,
                 EkfMagData mag_data);
 
-    /// Barometer-only measurement update
+    /// Barometer-only measurement update.
+    ///
+    /// #1579: the barometer's noise grows with dynamic pressure.  The airflow
+    /// over the static port biases the pressure in proportion to q = ½ρv², and
+    /// the sign is the installation's: fitted over boost and early coast on
+    /// five airframes, error = c·q with c = −0.015, +0.012, +0.010, +0.0005 and
+    /// +0.0002 m/Pa — 45–100 m at burnout on three of them, smooth enough to
+    /// pass the spike gate, at speeds far below the transonic lockout.  Fused at
+    /// a fixed 2 m σ it dragged the altitude with it: the flown Eagle Claw
+    /// filter put the rocket 20 m below the pad while it climbed at 50 m/s.
+    /// The variance is (2 m)² + (BARO_PORT_K · q)², q from the filter's own
+    /// speed and altitude; the slope is the mean |c| of the five.  At rest and
+    /// under a main (q of a few tens of Pa) the barometer is fused as before.
+    /// No sign correction: the coefficient is the airframe's and unknown here.
+    /// No innovation gate either — once the IMU-carried altitude has drifted,
+    /// a gate rejects the barometer that would bring it back (the Eagle Claw
+    /// replay ended 17 m off at apogee and 19 m RMS under the chute).
     void baroMeasUpdate(EkfBaroData baro_data);
+    static constexpr float BARO_PORT_K_M_PER_PA = 0.0075f;
+    /// Dynamic pressure from speed and altitude (exponential atmosphere,
+    /// 8.5 km scale height — a few % below 2 km, which is all this needs).
+    static float dynamicPressurePa(float speed_mps, float alt_msl_m) {
+        const float rho = 1.225f * std::exp(-alt_msl_m / 8500.0f);
+        return 0.5f * rho * speed_mps * speed_mps;
+    }
 
     /// #1418: zero-velocity update for a landed vehicle.
     ///
@@ -189,6 +212,9 @@ public:
     /// the vertical out from launch until the receiver qualifies after
     /// burnout.  Horizontal GNSS stays in: with the IMU alone the horizontal
     /// velocity drifted a median 14 m/s by then on the historical flights.
+    /// #1579: while held out, the horizontal fix does not reach the vertical
+    /// states through the covariance either — the vertical flies on the IMU
+    /// and the barometer alone, as the hold intends.
     void setGnssVerticalHeldOut(bool held) { gnssVerticalHeldOut_ = held; }
     bool getGnssVerticalHeldOut() const { return gnssVerticalHeldOut_; }
 
@@ -774,7 +800,8 @@ private:
     static constexpr float RAD2DEG = 180.0f / M_PI;
     static constexpr float DEG2RAD = M_PI / 180.0f;
 
-    // Baro measurement noise variance (2m sigma)^2
+    // Baro measurement noise variance (2m sigma)^2 at rest; #1579 adds the
+    // static port's share with dynamic pressure (see baroMeasUpdate()).
     float R_baro_ = 4.0f;
 
     // #1530: WGS84 normal gravity at the current position estimate, refreshed
