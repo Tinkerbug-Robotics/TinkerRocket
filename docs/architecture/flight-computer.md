@@ -195,8 +195,21 @@ Three gates are worth knowing:
   a low-velocity check, since the filter's init assumes a stationary pad.
 - **Accelerometer attitude correction is disabled during powered flight and coast**
   (`use_ahrs_acc`), because specific force is nowhere near 1 g and gravity is not
-  recoverable from it. It comes back on after apogee: blanket-disabling it through
-  descent starves the filter of its gravity reference and freezes the velocity estimate.
+  recoverable from it. It comes back on under the chute: the vehicles spin and swing
+  through thousands of degrees on the way down, and the gyro alone ends a real descent
+  with a median 38° of tilt error against 5° with the correction on.
+- **Under the chute the filter switches to canopy mode** (#1580). Past apogee, once the
+  low-passed specific force says drag holds the vehicle up — no deployment signal
+  needed, which a motor-ejection drogue never gives the computer — velocity and position
+  follow GNSS and the barometer instead of the accelerometer: the velocity is propagated
+  at constant velocity with 2 m/s² of process noise. The specific force there is mostly
+  swing, read through an attitude that is itself degrees off, while the vehicle's real
+  acceleration averages to zero. On the real 2026-08-29 Rolly Polly V flight this took
+  the velocity error under the chute from 4.2 to 1.3 m/s RMS, and across 3 s GNSS gaps on
+  eleven real descents the median drift from 11.6 to 6.5 m. The attitude becomes a
+  separate problem: the accelerometer correction waits for canopy mode (between apogee
+  and the opening the specific force is free fall or the opening shock), and once there
+  it can no longer move position or velocity, nor can GNSS move the attitude.
 
 Once the landing detector has called it, the rocket itself becomes a measurement. The
 filter fuses a **zero-velocity update** at 10 Hz for as long as the landed verdict holds

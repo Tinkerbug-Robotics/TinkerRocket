@@ -133,6 +133,8 @@ PYBIND11_MODULE(_ekf, m) {
         .def("set_nose_first_flight", &GpsInsEKF::setNoseFirstFlight,
              py::arg("nose_first"))
         .def("get_nose_first_flight", &GpsInsEKF::getNoseFirstFlight)
+        // #1580: canopy mode (velocity/position GNSS-led under a parachute).
+        .def("under_canopy", &GpsInsEKF::underCanopy)
         .def("set_gps_noise_scale", &GpsInsEKF::setGpsNoiseScale,
              py::arg("scale"))
         .def("get_gps_noise_scale", &GpsInsEKF::getGpsNoiseScale)
