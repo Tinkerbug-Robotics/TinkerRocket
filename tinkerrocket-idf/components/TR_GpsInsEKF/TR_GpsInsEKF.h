@@ -13,6 +13,8 @@
 //     at any attitude including vertical (no cos²(pitch) blind spot)
 //   - cos⁴(pitch) gating on GNSS velocity-derived attitude correction only
 //   - Specific force magnitude gating (0.5g–1.5g) during thrust/free-fall
+//   - Canopy mode (#1580): under a parachute, velocity and position follow
+//     GNSS and baro, not the accelerometer — see underCanopy()
 //   - Consistent FRD body frame / NED world frame convention
 
 #include <compat.h>
@@ -206,8 +208,58 @@ public:
     /// clears this from its apogee/deployment flag. Defaults to true, so a
     /// caller that never sets it (the sim harness) is unchanged. This is not a
     /// plausibility test on any measurement — it is the aids' own precondition.
-    void setNoseFirstFlight(bool nose_first) { noseFirstFlight_ = nose_first; }
+    /// Setting it true again also ends canopy mode (see underCanopy()).
+    void setNoseFirstFlight(bool nose_first) {
+        noseFirstFlight_ = nose_first;
+        if (nose_first) { canopy_ = false; canopyForceLP_ = 0.0f; }
+    }
     bool getNoseFirstFlight() const { return noseFirstFlight_; }
+
+    // ── #1580: canopy mode ──────────────────────────────────────────────
+    //
+    // Under a parachute the accelerometer is the wrong instrument for velocity.
+    // The vehicle swings and spins — tens to hundreds of °/s across the force
+    // axis on every real 2026 descent — so ∫R·f dt carries the swing through
+    // an attitude that is itself off by degrees to tens of degrees, while the
+    // vehicle's true acceleration averages to zero: it drifts with the wind at
+    // its descent rate.  On the real 2026-08-29 Rolly Polly V flight (PX1105R
+    // fixes, scored against its reconstructed truth) the IMU-led velocity was
+    // 4.2 m/s RMS off under the chute, four times the receiver's own fix; on
+    // eleven real descents with 3 s GNSS gaps cut in, holding the velocity
+    // drifted less than integrating the IMU did (6.5 vs 11.6 m median, better
+    // on 48 of 64 gaps).
+    //
+    // So once the caller has declared the vehicle past apogee
+    // (setNoseFirstFlight(false)) and the low-passed specific force says drag
+    // is holding it up, the filter latches canopy mode:
+    //   * the velocity is propagated at constant velocity — specific force and
+    //     gravity both leave the velocity prediction and its Jacobian — with
+    //     CANOPY_ACCEL_SIGMA_MPS2 of process noise, so GNSS velocity and the
+    //     baro lead, and a GNSS gap is crossed at the last velocity with an
+    //     honestly growing variance;
+    //   * the attitude and the biases become a separate problem: on entry the
+    //     filter forgets their correlation with position and velocity, which no
+    //     longer depend on them, so no attitude update moves position or
+    //     velocity and no GNSS fix or baro sample moves the attitude;
+    //   * accelerometer levelling still runs (use_ahrs_acc): it is what holds
+    //     the attitude through a real descent — 5° median tilt error at
+    //     touchdown on the same flights, against 38° for the gyro alone.
+    //     Between apogee and canopy mode it waits: the specific force there is
+    //     free fall or the opening shock, never gravity, and the filter is
+    //     still IMU-led, so the opening would tilt the attitude and drag
+    //     position and velocity with it (33 m in 0.3 s in the IMU-only replay
+    //     of the simulated 8/29 flight; with a whole-descent GNSS outage the
+    //     eleven real descents ended equal or closer for the wait).
+    // The detector needs no deployment signal, which a motor-ejection drogue
+    // never gives the flight computer.  Free fall between apogee and
+    // deployment reads ~0 g and stays IMU-led, where gravity is the whole
+    // story; a vehicle falling ballistically switches as its drag builds,
+    // which is also when holding the velocity becomes the better model.
+    // Ends when the caller sets nose-first flight again, and on init().
+    bool underCanopy() const { return canopy_; }
+    static constexpr float CANOPY_DETECT_G         = 0.5f;   // low-passed |f|, g
+    static constexpr float CANOPY_DETECT_TAU_S     = 0.2f;   // its time constant
+    static constexpr float CANOPY_ACCEL_SIGMA_MPS2 = 2.0f;   // velocity process noise
 
     // ── #1304: the magnetometer's validity reference ────────────────────
     //
@@ -666,6 +718,9 @@ private:
 
     // #1135: see setNoseFirstFlight(). Gates both GNSS-derived heading aids.
     bool     noseFirstFlight_    = true;
+    // #1580: see underCanopy().  The low-pass runs only past apogee.
+    bool     canopy_             = false;
+    float    canopyForceLP_      = 0.0f;   // |f|, m/s²
 
     // #257/#265 health: counts down (one per timeUpdate) after stabilizeP()
     // repairs a non-finite covariance — a genuine divergence — keeping

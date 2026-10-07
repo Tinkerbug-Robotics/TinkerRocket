@@ -6682,11 +6682,15 @@ static void loop_fc()
             {
                 const uint32_t ekf_t0 = time_us();
 
-                // AHRS accel correction: enabled on pad and after apogee (descent).
-                // Disabled during thrust and coast where accel is far from 1g.
-                // The 0.5g–1.5g magnitude gate inside the EKF provides additional
-                // rejection, but blanket-disabling during descent starves the
-                // filter of its gravity reference and freezes the velocity estimate.
+                // AHRS accel correction (levelling): enabled on pad and after apogee
+                // (descent).  Disabled during thrust and coast where accel is far
+                // from 1g.  #1580: under the chute the specific force is mostly
+                // swing, yet levelling stays on — it is what holds the attitude
+                // through a real descent (5° median tilt error at touchdown on
+                // eight real flights, 38° for the gyro alone, which loses ~0.2–1 %
+                // of the descent's thousands of degrees of rotation).  The filter
+                // holds it off between apogee and its own canopy detection, and in
+                // canopy mode keeps it from moving position or velocity.
                 const bool post_apogee = kinematics.apogee_flag;
                 const bool use_ahrs_acc = (rocket_state != INFLIGHT) || post_apogee;
                 // #1135: the GNSS heading aids assume nose-first flight, which
@@ -6709,6 +6713,22 @@ static void loop_fc()
                 // landing point walked 21 m in the two seconds after the flag.
                 ekf.landedZeroVelocityUpdate(kinematics.alt_landed_flag || rocket_state == LANDED,
                                              ekf_imu.time_us);
+
+                // #1580: say when the filter goes GNSS-led under a canopy (it
+                // detects that itself, past apogee) and when a new nose-first
+                // flight ends it.
+                {
+                    static bool canopy_logged = false;
+                    const bool canopy = ekf.underCanopy();
+                    if (canopy != canopy_logged)
+                    {
+                        canopy_logged = canopy;
+                        ESP_LOGI(TAG, "[EKF] canopy mode %s at T+%.2f s (#1580)",
+                                 canopy ? "on: velocity and position follow GNSS and baro"
+                                        : "off: IMU-led again",
+                                 (double)((float)(now_ms - launch_time_millis) * 1e-3f));
+                    }
+                }
 
                 // #1190: say so when the shock gate trips — at most once a
                 // second.  On the pad that is the rocket being knocked; in

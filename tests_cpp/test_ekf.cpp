@@ -2041,3 +2041,228 @@ TEST(EkfGravity1530, PadLevellingUsesTheMechanizationGravity) {
     float ae[3]; ekf.getAccelEst(ae);
     EXPECT_LT(std::fabs(ae[0]), 0.003f) << "residual acceleration " << ae[0];
 }
+
+// ---------- #1580 canopy mode ----------
+//
+// Past apogee, once drag holds the vehicle up, the velocity follows GNSS and
+// baro instead of the accelerometer, and the attitude becomes a separate
+// problem (see GpsInsEKF::underCanopy()).
+
+namespace canopy1580 {
+
+constexpr uint32_t CANOPY_TICK_US = 2041;   // the FC's EKF cadence
+
+// A specific force of `g_frac` g, tilted `tilt_deg` from the nose toward body
+// +Z.  Under the filter's nose-up attitude that tilt is horizontal in NED:
+// the swing's signature, a force near 1 g that is not vertical.
+static EkfIMUData force(uint32_t t, double g_frac, double tilt_deg) {
+    EkfIMUData d;
+    d.time_us = t;
+    const double r = tilt_deg * M_PI / 180.0;
+    d.acc_x = g_frac * G_SITE * std::cos(r);
+    d.acc_z = g_frac * G_SITE * std::sin(r);
+    return d;
+}
+
+// `seconds` of `d` (re-stamped), levelling on as the FC has it past apogee,
+// the GNSS fix frozen at `fix` (a repeated stamp fuses nothing).
+static void run(GpsInsEKF& ekf, uint32_t& t, const EkfGNSSDataLLA& fix, double seconds, EkfIMUData d) {
+    const int n = (int)(seconds * 1e6 / CANOPY_TICK_US);
+    for (int i = 0; i < n; i++) {
+        t += CANOPY_TICK_US;
+        d.time_us = t;
+        ekf.update(true, d, fix, makeNoseUpMag(t));
+    }
+}
+
+// A converged pad, then past apogee and hanging at 1 g for half a second.
+static EkfGNSSDataLLA underTheChute(GpsInsEKF& ekf, uint32_t& t) {
+    settleNoseUp(ekf, t);
+    const EkfGNSSDataLLA fix = makeStationaryGNSS(t);
+    ekf.setNoseFirstFlight(false);
+    run(ekf, t, fix, 0.5, force(t, 1.0, 0.0));
+    return fix;
+}
+
+static float horizontalSpeed(const GpsInsEKF& ekf) {
+    float v[3];
+    ekf.getVelEst(v);
+    return std::hypot(v[0], v[1]);
+}
+
+}  // namespace canopy1580
+
+TEST(EkfCanopy1580, NeverEngagesWhileFlyingNoseFirst) {
+    using namespace canopy1580;
+    GpsInsEKF ekf;
+    uint32_t t = 0;
+    settleNoseUp(ekf, t);
+    EXPECT_FALSE(ekf.underCanopy()) << "a pad at 1 g";
+    const EkfGNSSDataLLA fix = makeStationaryGNSS(t);
+    run(ekf, t, fix, 1.0, force(t, 6.0, 0.0));     // a 6 g boost
+    EXPECT_FALSE(ekf.underCanopy()) << "the boost";
+}
+
+TEST(EkfCanopy1580, FreeFallPastApogeeStaysImuLedAndDragEngagesIt) {
+    using namespace canopy1580;
+    GpsInsEKF ekf;
+    uint32_t t = 0;
+    settleNoseUp(ekf, t);
+    const EkfGNSSDataLLA fix = makeStationaryGNSS(t);
+    ekf.setNoseFirstFlight(false);
+    // Between apogee and deployment: free fall, a few percent of g of drag.
+    run(ekf, t, fix, 2.0, force(t, 0.05, 0.0));
+    EXPECT_FALSE(ekf.underCanopy()) << "free fall is gravity's, the IMU's job";
+    // The chute opens.  The 0.2 s low-pass crosses 0.5 g ~0.14 s later.
+    int ticks = 0;
+    while (!ekf.underCanopy() && ticks < 1000) {
+        t += CANOPY_TICK_US;
+        ekf.update(true, force(t, 1.0, 0.0), fix, makeNoseUpMag(t));
+        ++ticks;
+    }
+    EXPECT_TRUE(ekf.underCanopy());
+    EXPECT_GT(ticks * CANOPY_TICK_US, 100000u);
+    EXPECT_LT(ticks * CANOPY_TICK_US, 250000u);
+}
+
+TEST(EkfCanopy1580, EndsWhenNoseFirstAgainAndOnInit) {
+    using namespace canopy1580;
+    GpsInsEKF ekf;
+    uint32_t t = 0;
+    const EkfGNSSDataLLA fix = underTheChute(ekf, t);
+    ASSERT_TRUE(ekf.underCanopy());
+    ekf.setNoseFirstFlight(true);                  // the next flight's pad
+    EXPECT_FALSE(ekf.underCanopy());
+    ekf.setNoseFirstFlight(false);
+    run(ekf, t, fix, 0.5, force(t, 1.0, 0.0));
+    ASSERT_TRUE(ekf.underCanopy());
+    ekf.init(makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t));
+    EXPECT_FALSE(ekf.underCanopy());
+}
+
+TEST(EkfCanopy1580, TheSwingNoLongerReachesTheVelocity) {
+    // 1 g tilted 40° off the vertical for a second with no GNSS: the drogue's
+    // swing as the filter sees it.  Before #1580 the descent was IMU-led and
+    // integrated it; under the canopy the velocity is held.
+    using namespace canopy1580;
+    GpsInsEKF imu_led, canopy;
+    uint32_t t1 = 0, t2 = 0;
+    settleNoseUp(imu_led, t1);                     // nose-first stays set: IMU-led
+    const EkfGNSSDataLLA fix1 = makeStationaryGNSS(t1);
+    run(imu_led, t1, fix1, 0.5, force(t1, 1.0, 0.0));
+    const EkfGNSSDataLLA fix2 = underTheChute(canopy, t2);
+    ASSERT_FALSE(imu_led.underCanopy());
+    ASSERT_TRUE(canopy.underCanopy());
+    const float v1 = horizontalSpeed(imu_led), v2 = horizontalSpeed(canopy);
+
+    run(imu_led, t1, fix1, 1.0, force(t1, 1.0, 40.0));
+    run(canopy,  t2, fix2, 1.0, force(t2, 1.0, 40.0));
+
+    EXPECT_GT(horizontalSpeed(imu_led) - v1, 1.0f) << "the IMU-led filter integrates the swing";
+    EXPECT_LT(std::fabs(horizontalSpeed(canopy) - v2), 0.01f) << "under the canopy the velocity is held";
+}
+
+TEST(EkfCanopy1580, GnssLeadsTheVelocity) {
+    // A 3 m/s north drift at a 6 m/s descent, fixes at 10 Hz, while the IMU
+    // shows the swing: the filter should sit on the fixes within a second.
+    using namespace canopy1580;
+    GpsInsEKF ekf;
+    uint32_t t = 0;
+    underTheChute(ekf, t);
+    double north = 0.0, down = 0.0;
+    EkfGNSSDataLLA fix = makeStationaryGNSS(t);
+    uint32_t t_fix = t;
+    for (int i = 0; i < (int)(2.0e6 / CANOPY_TICK_US); i++) {
+        t += CANOPY_TICK_US;
+        north += 3.0 * CANOPY_TICK_US * 1e-6;
+        down  += 6.0 * CANOPY_TICK_US * 1e-6;
+        if (t - t_fix >= 100000u) {
+            t_fix = t;
+            fix = makeStationaryGNSS(t);
+            fix.lat_rad   = LAT_RAD + north / 6371000.0;
+            fix.alt_m     = ALT_M - down;
+            fix.vel_n_mps = 3.0f;
+            fix.vel_d_mps = 6.0f;
+        }
+        const double swing = 40.0 * std::sin(2.0 * M_PI * 0.8 * i * CANOPY_TICK_US * 1e-6);
+        ekf.update(true, force(t, 1.0, swing), fix, makeNoseUpMag(t));
+    }
+    float v[3];
+    ekf.getVelEst(v);
+    EXPECT_NEAR(v[0], 3.0f, 0.3f);
+    EXPECT_NEAR(v[1], 0.0f, 0.3f);
+    EXPECT_NEAR(v[2], 6.0f, 0.3f);
+}
+
+TEST(EkfCanopy1580, VelocityVarianceGrowsAtTheCanopysRateInAGap) {
+    // With no GNSS the held velocity's uncertainty grows as a random walk of
+    // CANOPY_ACCEL_SIGMA_MPS2: σ² per second per axis.
+    using namespace canopy1580;
+    GpsInsEKF ekf;
+    uint32_t t = 0;
+    const EkfGNSSDataLLA fix = underTheChute(ekf, t);
+    float before[3], after[3];
+    ekf.getCovVel(before);
+    run(ekf, t, fix, 2.0, force(t, 1.0, 0.0));
+    ekf.getCovVel(after);
+    const float s2 = GpsInsEKF::CANOPY_ACCEL_SIGMA_MPS2 * GpsInsEKF::CANOPY_ACCEL_SIGMA_MPS2;
+    for (int i = 0; i < 3; i++)
+        EXPECT_NEAR(after[i] - before[i], 2.0f * s2, 0.2f * 2.0f * s2) << "axis " << i;
+}
+
+TEST(EkfCanopy1580, AttitudeAndPositionVelocityAreSeparateUnderTheCanopy) {
+    // The levelling still moves the attitude, but no longer the position or
+    // velocity; a GNSS fix still moves the velocity, but no longer the attitude.
+    using namespace canopy1580;
+    GpsInsEKF ekf;
+    uint32_t t = 0;
+    const EkfGNSSDataLLA fix = underTheChute(ekf, t);
+    float v0[3], q0[4];
+    double p0[3];
+    ekf.getVelEst(v0); ekf.getPosEst(p0); ekf.getQuaternion(q0);
+
+    run(ekf, t, fix, 2.0, force(t, 1.0, 25.0));    // a 25° levelling innovation
+    float v1[3], q1[4];
+    double p1[3];
+    ekf.getVelEst(v1); ekf.getPosEst(p1); ekf.getQuaternion(q1);
+    EXPECT_GT(tqGeodesicDeg(q0, q1), 5.0f) << "levelling still corrects the attitude";
+    for (int i = 0; i < 3; i++) EXPECT_FLOAT_EQ(v1[i], v0[i]) << "velocity axis " << i;
+    EXPECT_NEAR(p1[2], p0[2], 1e-3) << "altitude";
+    EXPECT_NEAR(p1[0], p0[0], 1e-12) << "latitude";
+
+    // A fix 5 m/s east: the velocity moves, the attitude does not.
+    EkfGNSSDataLLA moved = fix;
+    moved.time_us = t + CANOPY_TICK_US;
+    moved.vel_e_mps = 5.0f;
+    t += CANOPY_TICK_US;
+    float q2[4], v2[3];
+    ekf.update(false, force(t, 1.0, 0.0), moved, makeNoseUpMag(t));
+    ekf.getQuaternion(q2); ekf.getVelEst(v2);
+    EXPECT_GT(v2[1] - v1[1], 0.5f) << "the fix moves the velocity";
+    EXPECT_LT(tqGeodesicDeg(q1, q2), 1e-3f) << "but not the attitude";
+}
+
+TEST(EkfCanopy1580, LevellingWaitsForTheCanopyPastApogee) {
+    // Between apogee and canopy mode the specific force is free fall or the
+    // opening shock — never gravity — and the filter is still IMU-led, so the
+    // levelling holds off.  The first 40 ms of a 1 g force tilted 30°, before
+    // the detector's low-pass has crossed 0.5 g, must not move the attitude.
+    using namespace canopy1580;
+    GpsInsEKF ekf;
+    uint32_t t = 0;
+    settleNoseUp(ekf, t);
+    const EkfGNSSDataLLA fix = makeStationaryGNSS(t);
+    ekf.setNoseFirstFlight(false);
+    run(ekf, t, fix, 2.0, force(t, 0.05, 0.0));    // free fall
+    float q0[4], q1[4];
+    ekf.getQuaternion(q0);
+    run(ekf, t, fix, 0.04, force(t, 1.0, 30.0));   // the chute starts to open
+    ASSERT_FALSE(ekf.underCanopy());
+    ekf.getQuaternion(q1);
+    EXPECT_LT(tqGeodesicDeg(q0, q1), 0.01f);
+    // Once under the canopy the same force levels the attitude again.
+    run(ekf, t, fix, 1.0, force(t, 1.0, 30.0));
+    ASSERT_TRUE(ekf.underCanopy());
+    ekf.getQuaternion(q1);
+    EXPECT_GT(tqGeodesicDeg(q0, q1), 3.0f);
+}

@@ -144,6 +144,8 @@ void GpsInsEKF::resetFilterState() {
     gnssAccelLP_NE_[0]  = gnssAccelLP_NE_[1]  = 0.0f;
     frozen_dt_skips_    = 0;
     zupt_armed_         = false;   // #1418
+    canopy_             = false;   // #1580
+    canopyForceLP_      = 0.0f;
     zupt_next_us_       = 0;
     zupt_count_         = 0;
     dt_s_               = 0.0f;
@@ -305,6 +307,34 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
         if (shock_hold_active_) ++shock_hold_ticks_;
         else                    shock_held_s_ = 0.0f;
     }
+
+    // 4c. #1580 canopy detector (see underCanopy()): past apogee, does drag
+    //     hold the vehicle up?  The raw magnitude — no attitude, no bias.
+    if (!noseFirstFlight_) {
+        const float f = std::sqrt(aMeas[0]*aMeas[0] + aMeas[1]*aMeas[1] + aMeas[2]*aMeas[2]);
+        if (std::isfinite(f))
+            canopyForceLP_ += (dt_s_ / (CANOPY_DETECT_TAU_S + dt_s_)) * (f - canopyForceLP_);
+        if (!canopy_ && canopyForceLP_ > CANOPY_DETECT_G * G_NOMINAL) {
+            canopy_ = true;
+            // Position and velocity stop depending on the attitude and the
+            // biases here, so forget the correlation between the two blocks.
+            // Nothing re-creates it under the canopy (the velocity rows of the
+            // Jacobian are zero), so from now on no attitude update — the
+            // levelling is mostly swing, the mag sees the spin — can move
+            // position or velocity, and no GNSS fix or baro sample can move the
+            // attitude.  Dropping an off-diagonal block of a covariance only
+            // forgets information: the result is still positive semi-definite.
+            // Without it — canopy mode on the old correlation — the levelling
+            // moved the position ~75 m in half a second in a GNSS gap across
+            // the simulated drogue swing.
+            for (int i = 0; i < 6; i++)
+                for (int j = 6; j < 15; j++) { P_[i][j] = 0.0f; P_[j][i] = 0.0f; }
+        }
+    }
+    // Past apogee and not yet under a canopy the vehicle is falling free or
+    // the chute is opening: the specific force is not gravity, and the filter
+    // is still IMU-led and correlated, so levelling waits for canopy mode.
+    if (!noseFirstFlight_ && !canopy_) accel_valid = false;
 
     // 5. Bias-corrected gyro rate (needed for quaternion propagation in timeUpdate).
     //    #1190: zero while the shock gate holds — the exponential map then
@@ -503,10 +533,14 @@ void GpsInsEKF::timeUpdate() {
         normalizeQuaternion(quat_BL_, quat_BL_);
     }
 
-    // Velocity update (using pre-propagation DCM)
-    float aEst_NED[3] = {0,0,0};
-    for (int i=0;i<3;i++) for (int j=0;j<3;j++) aEst_NED[i]+=T_B2NED[i][j]*aEst_B_mps2_[j];
-    for (int i=0;i<3;i++) vEst_NED_mps_[i]+=aEst_NED[i]*dt_s_;
+    // Velocity update (using pre-propagation DCM).  #1580: under a canopy the
+    // velocity is held — specific force and gravity are left out together,
+    // since drag carries the vehicle's weight there (see underCanopy()).
+    if (!canopy_) {
+        float aEst_NED[3] = {0,0,0};
+        for (int i=0;i<3;i++) for (int j=0;j<3;j++) aEst_NED[i]+=T_B2NED[i][j]*aEst_B_mps2_[j];
+        for (int i=0;i<3;i++) vEst_NED_mps_[i]+=aEst_NED[i]*dt_s_;
+    }
 
     // Position update
     double pDot_D[3];
@@ -517,8 +551,11 @@ void GpsInsEKF::timeUpdate() {
     float skew_temp[3][3], Fs_sub[3][3];
     Skew(skew_temp, aEst_B_mps2_);
     multiplyMatrix3x3(T_B2NED, skew_temp, Fs_sub);
-    for (int i=0;i<3;i++) for (int j=0;j<3;j++) Fs_[i+3][j+6]=-2.0f*Fs_sub[i][j];
-    for (int i=0;i<3;i++) for (int j=0;j<3;j++) Fs_[i+3][j+9]=-T_B2NED[i][j];
+    // #1580: under a canopy neither the attitude nor the accel bias reaches
+    // the velocity, so neither may borrow from a velocity innovation.
+    const float fv = canopy_ ? 0.0f : 1.0f;
+    for (int i=0;i<3;i++) for (int j=0;j<3;j++) Fs_[i+3][j+6]=-2.0f*fv*Fs_sub[i][j];
+    for (int i=0;i<3;i++) for (int j=0;j<3;j++) Fs_[i+3][j+9]=-fv*T_B2NED[i][j];
     float Fs_w[3][3];
     Skew(Fs_w, wEst_B_rps_);
     for (int i=0;i<3;i++) for (int j=0;j<3;j++) Fs_[i+6][j+6]=-Fs_w[i][j];
@@ -542,9 +579,12 @@ void GpsInsEKF::timeUpdate() {
     float B[15][12];
     std::memset(B, 0, sizeof(B));
 
-    // Rw diagonal values (pre-scaled)
+    // Rw diagonal values (pre-scaled).  #1580: under a canopy the velocity's
+    // process noise is the canopy's unmodelled acceleration, not the
+    // accelerometer's noise (Gs rows 3-5 are a rotation, so it stays isotropic).
+    const float aVar = canopy_ ? CANOPY_ACCEL_SIGMA_MPS2 * CANOPY_ACCEL_SIGMA_MPS2 : Rw_[0][0];
     const float rw[12] = {
-        Rw_[0][0], Rw_[1][1], Rw_[2][2],
+        aVar, aVar, aVar,
         Rw_[3][3], Rw_[4][4], Rw_[5][5],
         Rw_[6][6], Rw_[7][7], Rw_[8][8],
         Rw_[9][9], Rw_[10][10], Rw_[11][11]
