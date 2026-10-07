@@ -1487,6 +1487,16 @@ void GpsInsEKF::measUpdate(double pMeas_D_rrm[3], float vMeas_NED_mps[3]) {
         }
     }
 
+    // #1579: while the GNSS vertical is held out (GnssAscentGate) the vertical
+    // flies on the IMU and the barometer, by design — so the horizontal fix
+    // may not reach it through the covariance either.  It did: once the
+    // barometer stopped masking it (static-port noise, baroMeasUpdate), the
+    // Rolly Polly V replay's ascent altitude ran 12.2 m RMS off on horizontal
+    // fixes alone, 4.7 m with this cut.  Cut before the Joseph form, so the
+    // vertical keeps its variance instead of being reported as corrected.
+    if (gnssVerticalHeldOut_)
+        for (int j = 0; j < 6; j++) { K[2][j] = 0.0f; K[5][j] = 0.0f; }
+
     // Joseph form: P = (I-KH)*P*(I-KH)^T + K*R_scaled*K^T.  With H = [I6|0],
     // K*H = [K | 0] — a rank-6 block — so each product is one 15x15x6 pass
     // against the first six rows/columns instead of a dense 15^3 multiply
@@ -1563,9 +1573,15 @@ void GpsInsEKF::baroMeasUpdate(EkfBaroData baro_data) {
 
     // H_baro is a single -1 at the Down state; the shared helper does the
     // gain, state correction, and rank-1 Joseph covariance update.
+    // #1579: plus the static port's error at this dynamic pressure.
+    const float spd = std::sqrt(vEst_NED_mps_[0]*vEst_NED_mps_[0] +
+                                vEst_NED_mps_[1]*vEst_NED_mps_[1] +
+                                vEst_NED_mps_[2]*vEst_NED_mps_[2]);
+    const float port_m = BARO_PORT_K_M_PER_PA * dynamicPressurePa(spd, (float)pEst_D_rrm_[2]);
+
     const int   hidx[1] = {2};
     const float hval[1] = {-1.0f};
-    applyScalarMeasUpdate(hidx, hval, 1, y, R_baro_, 1e-10f);
+    applyScalarMeasUpdate(hidx, hval, 1, y, R_baro_ + port_m * port_m, 1e-10f);
 }
 
 // ─── Set Quaternion ─────────────────────────────────────────────────
