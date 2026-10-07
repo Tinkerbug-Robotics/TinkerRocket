@@ -652,9 +652,10 @@ def replay(binary_file, plot_dir=None, align_baro=True, imu_feed="mean",
     # followed live, exactly like the firmware reads kinematics.apogee_flag.
     log_apogee_master = False
     log_has_master = False
-    # Fallback for pre-#143 logs (42/43-byte NonSensor): latched OR of the two
-    # voters that byte layout carried.
+    # Fallback for pre-#143 logs (42/43-byte NonSensor): latched once BOTH of
+    # the two voters that byte layout carried have fired (#1583).
     log_apogee_latched = False
+    log_alt_vote = log_vel_vote = False
 
     # Track latest sensor data for EKF
     latest_gnss = None
@@ -740,8 +741,14 @@ def replay(binary_file, plot_dir=None, align_baro=True, imu_feed="mean",
                 # #529: the master voted apogee_flag is in the log — follow it.
                 log_apogee_master = rec["apogee_flag"]
                 log_has_master = True
-            if rec["alt_apogee"] or rec["vel_apogee"]:
-                log_apogee_latched = True
+            # #1583: both, not either.  Today's vote never lets one sensor
+            # decide (a floor of two concurring voters), and the baro vote is
+            # the one a static port fools in the coast: on GTV 05-09 it fired
+            # at T+1.99 s against an apogee at T+9.4, and the OR replayed the
+            # rest of the climb as descent.
+            log_alt_vote = log_alt_vote or bool(rec["alt_apogee"])
+            log_vel_vote = log_vel_vote or bool(rec["vel_apogee"])
+            log_apogee_latched = log_apogee_latched or (log_alt_vote and log_vel_vote)
 
         elif etype == "baro":
             # Collect pad baro samples for reference pressure (first 20 samples)
@@ -952,8 +959,9 @@ def replay(binary_file, plot_dir=None, align_baro=True, imu_feed="mean",
             # quorum (vel / alt / gps / pitch) — has been in the log all along
             # (apogee_flags bit 2, #142/#143), so post_apogee follows the logged
             # master directly. Only pre-#143 logs (42/43-byte NonSensor, no
-            # apogee_flags byte) fall back to the old approximation: a LATCHED OR
-            # of the two voters that layout carried.
+            # apogee_flags byte) fall back to an approximation: the two voters
+            # that layout carried, latched once both agree — the vote's own
+            # floor of two concurring voters (#1583).
             post_apogee = log_apogee_master if log_has_master else log_apogee_latched
             use_ahrs_acc = (log_rocket_state != ROCKET_STATE_INFLIGHT) or post_apogee
 
