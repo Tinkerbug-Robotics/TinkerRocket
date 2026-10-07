@@ -233,7 +233,7 @@ smooth enough to pass the spike gate. So the filter fuses the barometer with a n
 grows with dynamic pressure — σ² = (2 m)² + (0.0075 m/Pa · q)², q from the filter's own
 speed and altitude, the slope being the five airframes' mean coefficient. At burnout speed
 that is ~45 m; on the pad and under a main it is the 2 m it always was. Over the ascent this
-took the replayed altitude error from 34, 22, 19, 4 and 5 m RMS to 3, 17, 5, 1 and 5 m,
+took the replayed altitude error from 34, 25, 19, 4 and 5 m RMS to 3, 6, 5, 1 and 5 m,
 and 38 to 6 m on the simulated flight with a modelled port. While the GNSS vertical is
 held out (above), a horizontal fix no longer reaches the vertical through the covariance
 either — once the barometer stopped masking it, that leak alone ran the Rolly Polly V

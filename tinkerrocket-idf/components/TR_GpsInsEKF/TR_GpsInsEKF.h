@@ -124,8 +124,8 @@ public:
     /// under a main (q of a few tens of Pa) the barometer is fused as before.
     /// No sign correction: the coefficient is the airframe's and unknown here.
     /// No innovation gate either — once the IMU-carried altitude has drifted,
-    /// a gate rejects the barometer that would bring it back (281 m off on the
-    /// GTV replay).
+    /// a gate rejects the barometer that would bring it back (the Eagle Claw
+    /// replay ended 17 m off at apogee and 19 m RMS under the chute).
     void baroMeasUpdate(EkfBaroData baro_data);
     static constexpr float BARO_PORT_K_M_PER_PA = 0.0075f;
     /// Dynamic pressure from speed and altitude (exponential atmosphere,
