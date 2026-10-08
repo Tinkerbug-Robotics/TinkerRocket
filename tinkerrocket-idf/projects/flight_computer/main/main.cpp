@@ -6591,10 +6591,16 @@ static void loop_fc()
 
                     // Pad attitude initialization: quaternion from measured
                     // gravity (any attitude — see quatFromAccelHeading) plus
-                    // the known pad heading, bypassing the noisy magnetometer.
-                    // The IMU data is already in ROCKET frame here (the
-                    // converter applies the board→rocket mounting rotation),
-                    // so this is mounting-agnostic by construction.
+                    // the configured pad heading.  The IMU data is already in
+                    // ROCKET frame here (the converter applies the board→rocket
+                    // mounting rotation), so this is mounting-agnostic by
+                    // construction.  #1578: the heading is a seed, not a
+                    // measurement — nothing on the pad observes the rotation
+                    // about the vertical except a calibrated magnetometer — so
+                    // it is seeded as uncertain and the mag sets it on the pad.
+                    // setQuaternion() alone had declared it known to 0.06°; the
+                    // logged heading was then 149° and 89° off on Eagle Claw
+                    // (2026-05-17) and Rolly Polly V (2026-08-29).
                     {
                         static constexpr double DEG2RAD_d = M_PI / 180.0;
                         const float heading_rad =
@@ -6605,6 +6611,9 @@ static void loop_fc()
                                              (float)ekf_imu.acc_z,
                                              heading_rad, q);
                         ekf.setQuaternion(q[0], q[1], q[2], q[3]);
+                        ekf.setAttitudeCovariance(
+                            (float)(config::PAD_TILT_SIGMA_DEG * DEG2RAD_d),
+                            (float)(config::PAD_HEADING_SIGMA_DEG * DEG2RAD_d));
                         ESP_LOGI(TAG, "[EKF] Init: acc=(%.2f,%.2f,%.2f) heading=%.1f deg",
                                       ekf_imu.acc_x, ekf_imu.acc_y, ekf_imu.acc_z,
                                       (double)config::PAD_HEADING_DEG);

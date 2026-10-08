@@ -374,4 +374,34 @@ void quatFromAccelHeading(float acc_x_frd, float acc_y_frd, float acc_z_frd,
     q[1] = sr * cp * cy - cr * sp * sy;
     q[2] = cr * sp * cy + sr * cp * sy;
     q[3] = cr * cp * sy - sr * sp * cy;
+
+    // #1578: within 10° of vertical roll was left at zero, so the seed's tilt
+    // pointed toward body Z whichever way the rail actually leaned — up to
+    // ~1.4× the rail's tilt in error.  Turn the Euler seed onto the measured
+    // down by the shortest arc (a body-frame rotation about the axis normal to
+    // both down vectors): exact tilt, and no rotation about the vertical, so
+    // the heading stays the Euler seed's.  A no-op wherever roll was solved.
+    const float dm[3] = {-acc_x_frd / g_mag, -acc_y_frd / g_mag, -acc_z_frd / g_mag};
+    const float ds[3] = {2.0f * (q[1] * q[3] - q[0] * q[2]),        // seed's down in body
+                         2.0f * (q[2] * q[3] + q[0] * q[1]),
+                         q[0] * q[0] - q[1] * q[1] - q[2] * q[2] + q[3] * q[3]};
+    float k[3] = {dm[1] * ds[2] - dm[2] * ds[1], dm[2] * ds[0] - dm[0] * ds[2], dm[0] * ds[1] - dm[1] * ds[0]};
+    const float sn = sqrtf(k[0] * k[0] + k[1] * k[1] + k[2] * k[2]);
+    if (sn > 1e-6f)
+    {
+        float cs = dm[0] * ds[0] + dm[1] * ds[1] + dm[2] * ds[2];
+        if (cs > 1.0f) cs = 1.0f;
+        if (cs < -1.0f) cs = -1.0f;
+        const float half = 0.5f * atan2f(sn, cs);
+        const float s_h = sinf(half) / sn;
+        // q_b rotates dm onto ds in the body frame; q' = q ⊗ q_b then maps dm to NED down.
+        const float b[4] = {cosf(half), k[0] * s_h, k[1] * s_h, k[2] * s_h};
+        const float a[4] = {q[0], q[1], q[2], q[3]};
+        q[0] = a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3];
+        q[1] = a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2];
+        q[2] = a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1];
+        q[3] = a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0];
+        const float n = sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+        for (int i = 0; i < 4; i++) q[i] /= n;
+    }
 }

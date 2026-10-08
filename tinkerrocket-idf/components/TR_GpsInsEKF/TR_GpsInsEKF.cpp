@@ -375,24 +375,32 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
     // 8. Accelerometer gravity reference update
     if (accel_valid) accelMeasUpdate(aMeas);
 
-    // 9. Magnetometer heading update — scalar Kalman, yaw-only (needs valid
-    //    accel for the gravity/level reference; accel owns roll/pitch, mag owns
-    //    heading, so the two are complementary, not competing).
+    // 9. Magnetometer heading update — scalar Kalman, heading only (accel owns
+    //    tilt, mag owns heading, so the two are complementary, not competing).
     //    #459: fuse each mag sample exactly once (same time_us dedup as
     //    baroMeasUpdate) — the mag delivers ~98 Hz while this runs every EKF
     //    tick (~480 Hz), and re-fusing one sample N times contracts yaw
     //    covariance N-fold faster than the sensor's real information rate.
-    //    #1304: no longer gated on accel_valid.  The accelerometer is still
-    //    the preferred tilt reference and is used whenever it is a valid
-    //    gravity measurement; when it is not, the filter's own attitude
-    //    supplies the tilt.  The old coupling switched the one absolute-heading
-    //    sensor off for the entire ascent — 2.9 %–43.8 % of ascent samples
-    //    passed the 0.5–1.5 g window on the four 2026-08-29 flights — which is
-    //    exactly where the gyro is integrating hardest.
+    //    #1578: fused before launch, under a canopy and after landing — not in
+    //    the ascent, nor between apogee and canopy mode.  #1304 had opened the
+    //    ascent to the mag, but no flight's magnetometer was ever valid there
+    //    (all were uncalibrated, 57–1630 µT against 50).  The one flight we
+    //    could calibrate offline, Rolly Polly V 2026-08-29: with the mag on
+    //    the pad only, its heading stayed within 6° of truth through the climb
+    //    and its GNSS-out track matched a true-heading seed (25/47 m at
+    //    T+5/9.7 s); fused in flight it was thrown ~150° right after the
+    //    T+0.85 s nose burst (84/133 m), and skipping samples during and after
+    //    the shock did not prevent it.  A heading set right on the pad holds
+    //    through a ~10 s climb on the gyro.  Revisit with more calibrated
+    //    flights (#1586).  Under a canopy the mag reaches the attitude only
+    //    (#1580), and the tilt comes from the state, not the swinging accel.
     if (mag_data.time_us != magTimePrev_) {
         magTimePrev_ = mag_data.time_us;
-        if (mag_valid) { ++magFusedCount_;    magMeasUpdate(aMeas, magMeas, accel_valid); }
-        else           { ++magRejectedCount_; }
+        const bool mag_phase = use_ahrs_acc && (noseFirstFlight_ || canopy_);
+        if (mag_phase) {
+            if (mag_valid) { ++magFusedCount_;    magMeasUpdate(aMeas, magMeas, accel_valid && !canopy_); }
+            else           { ++magRejectedCount_; }
+        }
     }
 
     // 10. GNSS measurement update
@@ -1094,13 +1102,12 @@ void GpsInsEKF::accelMeasUpdate(const float aMeas[3]) {
 
 // ─── Magnetometer Heading Update (heading-only scalar Kalman) ────────
 //
-// Fuses a tilt-compensated magnetic-heading measurement into the 15-state
-// error covariance, correcting ONLY yaw (rotation about NED-down).  Unlike
-// the retired Mahony correction, the measurement — a tilt-compensated atan2
-// heading — stays well-defined at every attitude including nose-vertical, so
-// there is no cos²(pitch) blind spot.  The accelerometer owns roll/pitch and
+// Fuses a magnetic-heading measurement into the 15-state error covariance,
+// correcting ONLY the rotation about NED-down.  The accelerometer owns tilt and
 // the magnetometer owns heading; their measurement Jacobians are orthogonal in
 // the attitude block, so the two updates are complementary, not competing.
+// #1578: the measurement is formed without Euler angles (see magMeasUpdate),
+// so it is defined at every attitude, nose-vertical included.
 
 void GpsInsEKF::setMagReference(const float ned_uT[3]) {
     for (int i = 0; i < 3; ++i) magRef_NED_uT_[i] = ned_uT[i];
@@ -1114,121 +1121,95 @@ void GpsInsEKF::setMagReference(const float ned_uT[3]) {
 
 void GpsInsEKF::magMeasUpdate(const float aMeas[3], const float magMeas[3],
                               bool accel_is_gravity) {
-    // Body-down unit vector from the current attitude (= aGrav_B / g); this is
-    // both the leveling reference and the heading-error axis (H below).
+    // Body-down unit vector from the current attitude; also the heading-error
+    // axis (H below): a heading error is a rotation about NED-down.
     float T_NED2B[3][3];
     Quat2DCM(T_NED2B, quat_BL_);
     const float d[3] = { T_NED2B[0][2], T_NED2B[1][2], T_NED2B[2][2] };
 
-    // ── Measured magnetic heading: tilt-compensate the body mag with a DOWN
-    //    direction.  Preferred source is the accelerometer, which is
-    //    independent of the quaternion's yaw and so carries no circularity.
-    //    #1304: when the accelerometer is not a gravity measurement — under
-    //    thrust, or in coast where specific force is near zero — the tilt
-    //    comes from the filter's own attitude instead. `d` IS that direction:
-    //    it is NED-down expressed in the body frame. The yaw the update
-    //    corrects does not rotate `d`, so using it here still leaves psi_meas
-    //    free of the state's yaw; what it does introduce is a dependence on
-    //    the state's ROLL, and the R term below charges for exactly that.
-    const float aN = std::sqrt(aMeas[0]*aMeas[0] + aMeas[1]*aMeas[1] + aMeas[2]*aMeas[2]);
-    if (accel_is_gravity && aN < 0.01f) return;
-    // Down direction in body = -accel/|accel| (specific force at rest opposes
-    // modeled gravity-in-body; same sign convention as accelMeasUpdate).
-    const float dmx = accel_is_gravity ? -aMeas[0]/aN : d[0];
-    const float dmy = accel_is_gravity ? -aMeas[1]/aN : d[1];
-    const float dmz = accel_is_gravity ? -aMeas[2]/aN : d[2];
-    // Roll/pitch from the measured down vector (FRD): d = (-sθ, sφcθ, cφcθ).
-    const float roll  = std::atan2(dmy, dmz);
-    const float pitch = std::atan2(-dmx, std::sqrt(dmy*dmy + dmz*dmz));
-    const float sr = std::sin(roll),  cr = std::cos(roll);
-    const float sp = std::sin(pitch), cp = std::cos(pitch);
-    // ── #480: within ~2° of exact vertical, heading is unobservable from
-    //    accel+mag — the accel-derived roll above is atan2(noise, noise) and
-    //    psi_pred below degenerates to atan2(~0, ~0), whose float garbage is
-    //    platform-dependent (CI x86 vs bench arm dragged heading ±180° in
-    //    opposite ways). Skip outright, like the |B_h| gate: the filter holds
-    //    heading on the gyro until the rocket tips a couple of degrees. The
-    //    adaptive R below owns the near-vertical band outside this gate.
-    if (cp < 0.03f) return;
-    // Tilt-compensated horizontal field (level frame), standard e-compass.
-    const float mx = magMeas[0], my = magMeas[1], mz = magMeas[2];
-    const float Xh = mx*cp + my*sr*sp + mz*cr*sp;   // north-ish
-    const float Yh = my*cr - mz*sr;                 // east-ish
-    const float Bh2 = Xh*Xh + Yh*Yh;
-    if (Bh2 < 9.0f) return;                         // |B_horiz| < 3 µT: heading
-                                                    // unobservable (polar/vertical field)
-    const float psi_meas = std::atan2(-Yh, Xh) + declination_rad_;   // TRUE heading
-
-    // ── Per-sample measurement noise (#480). The tilt-compensated heading's
-    //    noise is strongly attitude-dependent, and a constant R over-trusts
-    //    the mag exactly where a rocket lives: near vertical the accel-derived
-    //    ROLL is nearly singular (dmy,dmz ~ cos(pitch)·1g + accel noise), and
-    //    a roll error δφ leaks the VERTICAL field into the horizontal
-    //    components, i.e. δψ ≈ δφ·B_v/|B_h| (Bv/Bh ≈ 1.9 at mid-latitudes).
-    //    On the pad at ~85° tilt that is ~6–7° of real per-sample heading
-    //    noise against the 3° constant — the over-weighted samples dragged
-    //    the heading estimate and pumped the gyro-z bias state (SIL pad NEES
-    //    ~390). First-order propagation, all terms already in scope:
-    //      σψ² ≈ 2·σ_m²/|B_h|²                (raw field noise on Xh,Yh)
-    //           + (σ_roll · B_v/|B_h|)²      (accel tilt-comp roll noise)
-    //      σ_roll ≈ (σ_a/|a|)/max(cp, ε)     (roll singular as pitch → ±90°)
-    //    Floored at R_mag_ so level attitude keeps the tuned base (which also
-    //    covers calibration residuals the propagation can't see), and capped
-    //    so S stays finite at exact vertical (the update is then effectively
-    //    a no-op — heading is genuinely unobservable from accel+mag there).
-    //    KNOWN, ACCEPTED LIMIT (#483): the accel MARKOV BIAS also enters the
-    //    tilt-comp roll and hence psi_meas — on the rail that is ~1.3–2° (1σ)
-    //    of heading error CORRELATED over τ≈100 s, which no white-R value can
-    //    represent. The filter tracks that slow component confidently (SIL
-    //    pad heading NEES O(100) vs truth), while its fast-noise honesty is
-    //    correct (0.10° observed vs 0.175° claimed). Accepted because the
-    //    error is bounded (±~2° at ±2σ bias) and inside guidance-init
-    //    tolerance. If sub-degree pad heading is ever needed, model the
-    //    coupling instead: extend this update's H to the accel-bias states
-    //    with the same geometry as the propagation above (δψ ≈
-    //    (Bv/|Bh|)·δb_lat/(g·cosθ)) — design notes in #483.
-    const float Bv   = -mx*sp + my*sr*cp + mz*cr*cp;         // vertical field, level frame
-    // Roll noise of whichever tilt reference was used.  Accelerometer: the
-    // #480 propagation, singular as pitch → ±90°.  Filter attitude: the
-    // state's own roll 1σ, i.e. 2·√P on the half-angle error state at index 6
-    // (xk[6..8] = δθ/2), with no 1/cp amplification — a state is not a
-    // projection, so it does not degenerate the same way.
-    const float sroll = accel_is_gravity
-        ? (sigma_accel_mps2_ / aN) / std::max(cp, 0.02f)
-        : std::min(2.0f * std::sqrt(std::max(P_[6][6], 0.0f)), 1.0f);
-    // #1304: whatever the measured magnitude misses the model's total
-    // intensity by is a LOWER BOUND on the residual hard iron, and a hard iron
-    // of that size lying in the horizontal plane rotates the heading by
-    // asin(Δ/|B_h|).  A sample that only just passed the validity gate is
-    // therefore fused weakly instead of at full weight.
-    float r_cal = 0.0f;
-    if (magRefValid_) {
-        const float Bh   = std::sqrt(Bh2);
-        const float frac = std::min(magMagErr_uT_ / std::max(Bh, 1e-3f), 1.0f);
-        const float dpsi = std::asin(frac);
-        r_cal = dpsi * dpsi;
+    // ── #1578: the measurement, without Euler angles.  The old e-compass took
+    //    roll and pitch from the down vector and then a yaw; at pitch ±90° roll
+    //    and yaw are the same rotation, so within ~2° of vertical it was
+    //    atan2(noise, noise) and #480 skipped the sample — every sample of a
+    //    rocket on a vertical rail.  The rotation about the vertical is not
+    //    unobservable there: it is the horizontal field, lying in the body's
+    //    Y-Z plane.  So: turn the state's attitude onto the tilt reference by
+    //    the shortest arc (about a horizontal axis — it does not rotate about
+    //    the vertical), carry the field into NED with it, and compare its
+    //    azimuth with magnetic north (the declination).  The innovation is the
+    //    rotation about NED-down that would align them, at any attitude.
+    //
+    //    Tilt reference: the accelerometer's down when it measures gravity (the
+    //    pad, after landing), else the state's own (under a canopy, where the
+    //    specific force is swing).  Rolly Polly V 2026-08-29 sat 1.3° off
+    //    vertical; with its magnetometer calibrated (offline, from its own
+    //    descent) this measurement put the heading within 6° of the GNSS-fitted
+    //    truth in under 2 s of pad data, where the e-compass never fused once.
+    float dm[3] = {d[0], d[1], d[2]};
+    float sig_tilt;
+    if (accel_is_gravity) {
+        const float aN = std::sqrt(aMeas[0]*aMeas[0] + aMeas[1]*aMeas[1] + aMeas[2]*aMeas[2]);
+        if (aN < 0.01f) return;
+        dm[0] = -aMeas[0]/aN; dm[1] = -aMeas[1]/aN; dm[2] = -aMeas[2]/aN;
+        sig_tilt = sigma_accel_mps2_ / aN;
+    } else {
+        // The state's tilt 1σ: its attitude covariance about the two horizontal
+        // NED axes (x = δθ/2, hence the 2), in no direction-dependent way.
+        float pn[2] = {0.0f, 0.0f};
+        for (int k = 0; k < 2; k++)
+            for (int a = 0; a < 3; a++)
+                for (int bb = 0; bb < 3; bb++)
+                    pn[k] += T_NED2B[a][k] * P_[6 + a][6 + bb] * T_NED2B[bb][k];
+        sig_tilt = std::min(2.0f * std::sqrt(std::max(std::max(pn[0], pn[1]), 0.0f)), 1.0f);
     }
-    // The floor and the ceiling are the #480 tuning of the GEOMETRY terms —
-    // R_mag_ceiling_ (~14° σ) exists so S stays finite at exact vertical. The
-    // calibration penalty is added AFTER that clamp, deliberately: a sample
-    // that only just cleared the magnitude gate can be worth 20°+ on its own,
-    // and discounting that down to the geometry ceiling would re-admit exactly
-    // the over-trusted bad measurement this change exists to stop.
-    const float r_geom = 2.0f*sigma_mag_uT_*sigma_mag_uT_/Bh2
-                       + sroll*sroll*(Bv*Bv)/Bh2;
-    const float R_eff = std::min(std::max(r_geom, R_mag_), R_mag_ceiling_) + r_cal;
+    //    Body-frame shortest arc taking dm onto d, applied to the field: then the
+    //    state's DCM puts the field in NED as if the state's tilt were dm's.
+    float mb[3] = {magMeas[0], magMeas[1], magMeas[2]};
+    {
+        float k[3] = {dm[1]*d[2] - dm[2]*d[1], dm[2]*d[0] - dm[0]*d[2], dm[0]*d[1] - dm[1]*d[0]};
+        const float sn = std::sqrt(k[0]*k[0] + k[1]*k[1] + k[2]*k[2]);
+        const float cs = dm[0]*d[0] + dm[1]*d[1] + dm[2]*d[2];
+        if (sn > 1e-6f) {
+            for (int a = 0; a < 3; a++) k[a] /= sn;
+            const float kxm[3] = {k[1]*mb[2] - k[2]*mb[1], k[2]*mb[0] - k[0]*mb[2], k[0]*mb[1] - k[1]*mb[0]};
+            const float kdm = k[0]*mb[0] + k[1]*mb[1] + k[2]*mb[2];
+            for (int a = 0; a < 3; a++) mb[a] = mb[a]*cs + kxm[a]*sn + k[a]*kdm*(1.0f - cs);
+        }
+    }
+    float mn[3];                                     // field in NED (B->NED = T_NED2B^T)
+    for (int a = 0; a < 3; a++)
+        mn[a] = T_NED2B[0][a]*mb[0] + T_NED2B[1][a]*mb[1] + T_NED2B[2][a]*mb[2];
+    const float Bh2 = mn[0]*mn[0] + mn[1]*mn[1];
+    if (Bh2 < 9.0f) return;                          // |B_horiz| < 3 µT: heading
+                                                     // unobservable (polar/vertical field)
 
-    // ── Predicted heading (yaw) from the state quaternion (true-NED frame).
-    //    Computed from T_NED2B directly (euler_BL_rad_ is a cycle stale here).
-    const float psi_pred = std::atan2(T_NED2B[0][1], T_NED2B[0][0]);
-
-    // ── Scalar innovation, wrapped to (-π, π] (≤2 iters: inputs are bounded).
-    float y = psi_meas - psi_pred;
+    // ── Scalar innovation, wrapped to (-π, π] (≤2 iters: inputs are bounded):
+    //    true north is the declination east of magnetic north.
+    float y = declination_rad_ - std::atan2(mn[1], mn[0]);
     while (y >  (float)M_PI) y -= 2.0f * (float)M_PI;
     while (y < -(float)M_PI) y += 2.0f * (float)M_PI;
 
-    // ── H (1×15): ∂ψ_pred/∂(δθ/2) in the body-frame error state.  ∂ψ/∂δθ is
-    //    the body-down axis d (yaw is rotation about NED-down); the factor 2
+    // ── Per-sample measurement noise (#480, #1304).  Field noise on the
+    //    horizontal pair, plus the tilt reference's error leaking the vertical
+    //    field into the horizontal (δψ ≈ δtilt · B_v/|B_h|, B_v/|B_h| ≈ 1.9 at
+    //    mid-latitudes) — with no 1/cos(pitch): there is no Euler roll here to
+    //    go singular.  Floored at R_mag_ (calibration residuals, and the #483
+    //    accel Markov bias in the pad tilt reference) and capped at
+    //    R_mag_ceiling_.  #1304: a sample whose magnitude misses the model's by
+    //    Δ can carry a horizontal hard iron of that size, a heading error of
+    //    asin(Δ/|B_h|) — added after the clamp so it is never discounted.
+    float r_cal = 0.0f;
+    if (magRefValid_) {
+        const float frac = std::min(magMagErr_uT_ / std::max(std::sqrt(Bh2), 1e-3f), 1.0f);
+        const float dpsi = std::asin(frac);
+        r_cal = dpsi * dpsi;
+    }
+    const float r_geom = 2.0f*sigma_mag_uT_*sigma_mag_uT_/Bh2
+                       + sig_tilt*sig_tilt*(mn[2]*mn[2])/Bh2;
+    const float R_eff = std::min(std::max(r_geom, R_mag_), R_mag_ceiling_) + r_cal;
+
+    // ── H (1×15): ∂ψ/∂(δθ/2) in the body-frame error state.  ∂ψ/∂δθ is the
+    //    body-down axis d (heading is rotation about NED-down); the factor 2
     //    accounts for the half-angle attitude error xk[6..8] = δθ/2 (matching
     //    accelMeasUpdate's -2·skew).  Nonzero only in cols 6,7,8.
     //    |H|=2 ⇒ S ≥ R_mag_ at any attitude, so the s_min gate is NaN-safety.
@@ -1610,6 +1591,24 @@ void GpsInsEKF::setQuaternion(float q0_in, float q1_in, float q2_in, float q3_in
         }
         P_[i][i] = att_var;
     }
+}
+
+void GpsInsEKF::setAttitudeCovariance(float tilt_sigma_rad, float heading_sigma_rad) {
+    // NED-frame rotation error φ_N with covariance diag(t², t², h²); the error
+    // state is the body-frame half angle x = ½·C_N2B·φ_N, so P = ¼·C·diag·Cᵀ.
+    // Cross-covariances with the attitude are cleared, as setQuaternion() does.
+    float C[3][3];
+    Quat2DCM(C, quat_BL_);   // NED -> body
+    const float dg[3] = {tilt_sigma_rad * tilt_sigma_rad, tilt_sigma_rad * tilt_sigma_rad,
+                         heading_sigma_rad * heading_sigma_rad};
+    for (int i = 6; i <= 8; i++)
+        for (int j = 0; j < 15; j++) { P_[i][j] = 0.0f; P_[j][i] = 0.0f; }
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++) {
+            float sacc = 0.0f;
+            for (int k = 0; k < 3; k++) sacc += C[i][k] * dg[k] * C[j][k];
+            P_[6 + i][6 + j] = 0.25f * sacc;
+        }
 }
 
 // ─── Quaternion to Euler ────────────────────────────────────────────

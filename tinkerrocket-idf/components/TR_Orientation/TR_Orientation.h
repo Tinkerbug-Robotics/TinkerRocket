@@ -77,9 +77,11 @@ const char *orientCodeName(uint8_t code);
 // FRD specific-force measurement plus a known pad heading.  This is the
 // EKF init previously inlined in flight_computer main.cpp — pitch from
 // the X component, roll from Y/Z (skipped within 10° of vertical where it
-// is ill-conditioned), yaw from the supplied heading.  Works for any
-// attitude, which is what makes the EKF init mounting-agnostic once the
-// board→rocket rotation is applied upstream.
+// is ill-conditioned), yaw from the supplied heading — then turned onto the
+// measured down by the shortest arc (#1578), so the tilt is exact at any
+// attitude and the heading is the Euler seed's.  Works for any attitude,
+// which is what makes the EKF init mounting-agnostic once the board→rocket
+// rotation is applied upstream.
 void quatFromAccelHeading(float acc_x_frd, float acc_y_frd, float acc_z_frd,
                           float heading_rad, float q[4]);
 
