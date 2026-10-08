@@ -199,6 +199,16 @@ public:
     /// Also resets attitude covariance to near-zero.
     void setQuaternion(float q0, float q1, float q2, float q3);
 
+    /// #1578: set the attitude covariance from what is actually known about
+    /// the attitude — 1σ of tilt (about the two horizontal NED axes) and of the
+    /// rotation about the vertical — mapped into the body-frame half-angle
+    /// error state, so it is right at any attitude (for a nose-up rocket the
+    /// vertical is the body X axis, not Z).  For the pad seed: gravity fixes
+    /// the tilt, nothing on the pad fixes the heading but a calibrated
+    /// magnetometer, so the heading is seeded as unknown and the mag sets it.
+    /// setQuaternion()'s 1e-6 on every axis had declared it known to 0.06°.
+    void setAttitudeCovariance(float tilt_sigma_rad, float heading_sigma_rad);
+
     /// Set GPS measurement noise scale factor (1.0 = nominal).
     /// Values >1 inflate R_ during measUpdate, useful for de-weighting
     /// GNSS fixes immediately after reacquisition when h_acc is high.
@@ -317,7 +327,9 @@ public:
     bool  getMagCalSuspect() const { return magCalSuspect_; }
 
     /// Magnetometer samples actually FUSED, and samples refused by the
-    /// magnitude gate.  Free-running, reset only by init().  Post-flight the
+    /// magnitude gate — counted only where the mag is used at all (#1578:
+    /// before launch, under a canopy, after landing).  Free-running, reset
+    /// only by init().  Post-flight the
     /// pair answers "was the mag ever used, and if not, why" without having to
     /// re-derive it from the raw samples.
     uint32_t getMagFusedCount()    const { return magFusedCount_; }
@@ -622,10 +634,10 @@ private:
     /// #1530: set g_mps2_ and the gravity gradient Fs_[5][2] from pEst_D_rrm_.
     void refreshGravity();
     /// #1304: `accel_is_gravity` says whether aMeas may be used as the tilt
-    /// reference.  When false the tilt comes from the filter's own attitude
-    /// instead, so the mag no longer needs the accelerometer to be in its
-    /// 0.5–1.5 g window — which it never is under boost and rarely is in
-    /// coast, which is why the mag was switched off for the whole of ascent.
+    /// reference; when false the tilt comes from the filter's own attitude.
+    /// #1578: the measurement has no Euler angles, so it is defined at any
+    /// attitude including nose-vertical; updateCore() calls it only before
+    /// launch, under a canopy and after landing (see step 9 there).
     void magMeasUpdate(const float aMeas[3], const float magMeas[3],
                        bool accel_is_gravity);
 protected:

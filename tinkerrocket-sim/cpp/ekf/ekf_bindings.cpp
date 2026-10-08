@@ -135,6 +135,9 @@ PYBIND11_MODULE(_ekf, m) {
         .def("get_nose_first_flight", &GpsInsEKF::getNoseFirstFlight)
         // #1580: canopy mode (velocity/position GNSS-led under a parachute).
         .def("under_canopy", &GpsInsEKF::underCanopy)
+        // #1578: the attitude covariance from tilt / heading 1σ (NED-frame).
+        .def("set_attitude_covariance", &GpsInsEKF::setAttitudeCovariance,
+             py::arg("tilt_sigma_rad"), py::arg("heading_sigma_rad"))
         .def("set_gps_noise_scale", &GpsInsEKF::setGpsNoiseScale,
              py::arg("scale"))
         .def("get_gps_noise_scale", &GpsInsEKF::getGpsNoiseScale)

@@ -210,6 +210,18 @@ Three gates are worth knowing:
   separate problem: the accelerometer correction waits for canopy mode (between apogee
   and the opening the specific force is free fall or the opening shock), and once there
   it can no longer move position or velocity, nor can GNSS move the attitude.
+- **The heading comes from a calibrated magnetometer on the pad** (#1578). Gravity fixes
+  the pad attitude's tilt, which is seeded exactly; nothing on the pad fixes the rotation
+  about the vertical except the magnetometer. So that rotation is seeded from
+  `PAD_HEADING_DEG` with a 30° uncertainty (it used to be declared known to 0.06°, and
+  the logged heading was then 149° and 89° off on two flights), and the magnetometer
+  sets it. Its heading measurement is formed without Euler angles, so it works on a
+  vertical rail: the old e-compass skipped every sample within 2° of vertical. The
+  magnetometer is fused before launch, under the chute and after landing, but not in the
+  ascent: on the one flight with a usable (offline-calibrated) magnetometer, the
+  heading set on the pad held through the climb on the gyro, while fusing it in flight
+  lost it after the nose burst (#1586 revisits this). All of this needs a calibrated
+  magnetometer — an uncalibrated one fails the magnitude check and is not fused at all.
 
 Once the landing detector has called it, the rocket itself becomes a measurement. The
 filter fuses a **zero-velocity update** at 10 Hz for as long as the landed verdict holds

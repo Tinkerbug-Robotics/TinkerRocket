@@ -504,8 +504,20 @@ struct config : board_pins
     // stops adjusting.  Only spent while actively trimming on the bench.
     static constexpr uint32_t SERVO_PAD_TRIM_WAKE_MS = 6000;
 
-    // EKF pad heading: compass heading of board Z+ (deg, 0=North, 90=East)
+    // EKF pad heading: compass heading of board Z+ (deg, 0=North, 90=East).
+    // #1578: only the seed — a calibrated magnetometer sets the heading on the
+    // pad (see PAD_HEADING_SIGMA_DEG); without one it stays at this value.
     static constexpr float PAD_HEADING_DEG = 0.0f;
+    // #1578: 1σ of the pad attitude seed.  Tilt comes from gravity (a single
+    // accel sample, plus rail wobble).  The heading is a config constant that
+    // nothing on the pad checks, so it is seeded as unknown enough for the
+    // magnetometer to take over: on Rolly Polly V 2026-08-29 (mag calibrated
+    // offline) 30° let the pad mag pull an 89° seed error to within 6° in
+    // under 2 s, the same as 90° or 180°, while on the flights without a
+    // usable magnetometer it moved the climb's horizontal error least of the
+    // values tried (Eagle Claw 05-17: 164 m RMS -> 170, against 234 at 180°).
+    static constexpr float PAD_TILT_SIGMA_DEG    = 1.0f;
+    static constexpr float PAD_HEADING_SIGMA_DEG = 30.0f;
 
     // Magnetic declination fallback (deg, EAST-positive) used until a good GPS
     // fix lets TR_GeoMag (WMM2025) compute the true value from lat/lon/date.

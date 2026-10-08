@@ -311,6 +311,26 @@ TEST(Orientation, PadQuat_GravityMapsToNedUp) {
     }
 }
 
+TEST(Orientation, PadQuat_NearVerticalRailTiltIsExact) {
+    // #1578: within 10° of vertical roll used to be left at zero, so a rail
+    // leaning toward body Y was seeded leaning toward body Z — the measured
+    // specific force then mapped ~7° off NED up for a 5° lean.  The seed must
+    // map it exactly, whichever way the rail leans.
+    for (float az_deg = 0.0f; az_deg < 360.0f; az_deg += 45.0f)
+    {
+        const float lean = 5.0f * (float)M_PI / 180.0f, az = az_deg * (float)M_PI / 180.0f;
+        const float acc[3] = {kG * cosf(lean), kG * sinf(lean) * cosf(az), kG * sinf(lean) * sinf(az)};
+        float q[4], up[3];
+        quatFromAccelHeading(acc[0], acc[1], acc[2], 0.3f, q);
+        quatRotate(q, acc, up);
+        EXPECT_NEAR(up[0], 0.0f, 0.01f) << "lean toward " << az_deg << " deg";
+        EXPECT_NEAR(up[1], 0.0f, 0.01f) << "lean toward " << az_deg << " deg";
+        EXPECT_NEAR(up[2], -kG, 0.01f) << "lean toward " << az_deg << " deg";
+        const float n = sqrtf(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
+        EXPECT_NEAR(n, 1.0f, 1e-5f);
+    }
+}
+
 TEST(Orientation, PadQuat_HeadingOnlyYaw_WhenLevel) {
     // Level body with 90° heading: yaw quaternion about NED Z.
     float q[4];
