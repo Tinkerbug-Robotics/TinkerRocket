@@ -220,11 +220,12 @@ class SensorConverterTest {
     @Test
     fun `IIS2MDC sensitivity is 0_15 uT per LSB`() {
         // Datasheet 9.13: 0.15 µT/LSB.  With zero rotation (default),
-        // raw 100 should map directly to 15 µT on each axis.
+        // raw 100 should map to 15 µT on each axis — chip X reversed, since
+        // the IIS2MDC's axes are left-handed (see the frame tests below).
         val raw = makeIis2mdc(x = 100, y = 200, z = -100)
         val si = converter.convertIIS2MDC(raw)
 
-        assertEquals(15.0, si.magX, 1e-6)
+        assertEquals(-15.0, si.magX, 1e-6)
         assertEquals(30.0, si.magY, 1e-6)
         assertEquals(-15.0, si.magZ, 1e-6)
     }
@@ -236,11 +237,50 @@ class SensorConverterTest {
         // = 100 µT.
         val c = SensorConverter()
         c.configureMagScale(OutStatusQueryData.QMC5883P_UT_PER_LSB)
+        c.configureMagHandedness(leftHanded = false)
         val si = c.convertIIS2MDC(makeIis2mdc(x = 3750, y = -3750, z = 375))
 
         assertEquals(100.0, si.magX, 1e-6)
         assertEquals(-100.0, si.magY, 1e-6)
         assertEquals(10.0, si.magZ, 1e-6)
+    }
+
+    // MARK: - IIS2MDC chip frame (left-handed)
+    // ST's IIS2MDC axes are a left-handed set, so a sensor→board rotation
+    // alone mirrors board y.  Pinned to the #204 bench (config.h): board +X
+    // north reads the field on chip -Y, board +X east reads it on chip -X.
+
+    private fun assertBenchReadings(c: SensorConverter) {
+        // Board +X north: field on chip -Y → board +X.
+        val north = c.convertIIS2MDC(makeIis2mdc(x = 0, y = -150, z = 0))
+        assertEquals(22.5, north.magX, 1e-6)
+        assertEquals(0.0, north.magY, 1e-6)
+        // Board +X east (north is board +Y): field on chip -X → board +Y.
+        val east = c.convertIIS2MDC(makeIis2mdc(x = -150, y = 0, z = 0))
+        assertEquals(0.0, east.magX, 1e-6)
+        assertEquals(22.5, east.magY, 1e-6)
+        // Chip Z is board Z.
+        val up = c.convertIIS2MDC(makeIis2mdc(x = 0, y = 0, z = 300))
+        assertEquals(45.0, up.magZ, 1e-6)
+    }
+
+    @Test
+    fun `IIS2MDC bench readings land on the board axes`() {
+        val c = SensorConverter()
+        c.configureMiniRotation(imuDeg = -45.0, magDeg = 180.0, iisDeg = 90.0)
+        assertBenchReadings(c)
+    }
+
+    @Test
+    fun `QMC5883P is not reflected`() {
+        // The QMC5883P's axes are right-handed: chip X keeps its sign.
+        val c = SensorConverter()
+        c.configureMiniRotation(imuDeg = -45.0, magDeg = 180.0, iisDeg = 90.0)
+        c.configureMagScale(OutStatusQueryData.QMC5883P_UT_PER_LSB)
+        c.configureMagHandedness(leftHanded = false)
+        val si = c.convertIIS2MDC(makeIis2mdc(x = 3750, y = 0, z = 0))
+        assertEquals(0.0, si.magX, 1e-6)
+        assertEquals(100.0, si.magY, 1e-6)
     }
 
     // MARK: - NonSensor flag extraction (#196)
@@ -298,21 +338,20 @@ class SensorConverterTest {
     }
 
     @Test
-    fun `IIS rotation falls back to MMC angle when iisDeg absent`() {
-        // #204: format_version < 4 logs carry no iis2mdc_rot_z_cdeg — the
-        // IIS2MDC path must reuse the MMC angle then.
+    fun `IIS rotation falls back to the 90 degree placement when iisDeg absent`() {
+        // #204: format_version < 4 logs carry no iis2mdc_rot_z_cdeg.  Every
+        // one with an IIS2MDC stream is a V8/V9 at +90 deg, so the IIS2MDC
+        // path takes that — not the MMC angle, which put those logs 90 deg
+        // off — and reads exactly like a v4 log stamped 90.
         val fallback = SensorConverter()
         fallback.configureMiniRotation(imuDeg = 0.0, magDeg = 180.0, iisDeg = null)
-        val si = fallback.convertIIS2MDC(makeIis2mdc(x = 100, y = 200, z = -100))
-        assertEquals(-15.0, si.magX, 1e-6)
-        assertEquals(-30.0, si.magY, 1e-6)
-        assertEquals(-15.0, si.magZ, 1e-6)  // z is never rotated
+        assertBenchReadings(fallback)
 
         // And with an explicit iisDeg the MMC angle must NOT leak in.
         val explicit = SensorConverter()
         explicit.configureMiniRotation(imuDeg = 0.0, magDeg = 180.0, iisDeg = 0.0)
         val si2 = explicit.convertIIS2MDC(makeIis2mdc(x = 100, y = 200, z = -100))
-        assertEquals(15.0, si2.magX, 1e-6)
+        assertEquals(-15.0, si2.magX, 1e-6)   // chip X reversed (left-handed)
         assertEquals(30.0, si2.magY, 1e-6)
     }
 
@@ -371,7 +410,8 @@ class SensorConverterTest {
         val si = converter.convertIIS2MDC(raw)
 
         assertEquals(side["time_us"]!!.jsonPrimitive.long, si.timeUs)
-        assertEquals(side["mag_x"]!!.jsonPrimitive.int * 0.15, si.magX, 1e-9)
+        // Default rotation 0: only the left-handed chip X changes sign.
+        assertEquals(-side["mag_x"]!!.jsonPrimitive.int * 0.15, si.magX, 1e-9)
         assertEquals(side["mag_y"]!!.jsonPrimitive.int * 0.15, si.magY, 1e-9)
         assertEquals(side["mag_z"]!!.jsonPrimitive.int * 0.15, si.magZ, 1e-9)
     }

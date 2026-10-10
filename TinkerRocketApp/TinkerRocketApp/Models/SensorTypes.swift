@@ -103,6 +103,11 @@ nonisolated struct OutStatusQueryData {
     var magUtPerLsb: Double {
         mag_type == Self.magTypeQMC5883P ? Self.qmc5883pUtPerLsb : Self.iis2mdcUtPerLsb
     }
+    /// Whether the chip behind the IIS2MDC-named stream has left-handed axes
+    /// (magTypeLeftHanded in RocketComputerTypes.h).  The IIS2MDC does, so
+    /// the converter negates its chip X before the Z rotation.  Pre-v6 logs
+    /// (nil) and unknown values are the IIS2MDC, as for the scale.
+    var magLeftHanded: Bool { mag_type != Self.magTypeQMC5883P }
 }
 
 // MARK: - Flight Settings Snapshot (176 bytes) — runtime config at launch (#165)

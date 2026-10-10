@@ -883,6 +883,27 @@ static constexpr double magTypeUtPerLsb(uint8_t mag_type)
                                            : MAG_UT_PER_LSB_IIS2MDC;
 }
 
+// Whether the chip's own X/Y/Z axes form a LEFT-handed set.  The IIS2MDC's
+// do: ST draws each axis pointing toward its X/Y/Z marking, and on this
+// family (LIS2MDL / IIS2MDC) that gives X x Y = -Z — ST's own words are
+// "frame is left-handed".  No rotation can turn a left-handed set into the
+// right-handed board frame, so a sensor->board Rz alone mirrors the field:
+// until this was found every IIS2MDC board vector had board y reversed,
+// and the fused heading was the mirror image of the true one.
+//
+// The fix is a reflection in the chip frame: negate chip X, which leaves
+// (-X, Y, Z) right-handed, and the IIS2MDC's +90 deg sensor->board Rz is
+// then the true placement rotation (chip Y along board -X, as the #204
+// bench found).  SensorConverter::convertIIS2MDCData applies it, the
+// SIL's encoder inverts it, and Data_Analysis/plot_flight_data_mini.py and
+// both apps carry the same rule for logs.  Raw counts on every wire and in
+// every log are untouched chip counts, so the rule applies retroactively.
+// Unknown → IIS2MDC, as for the scale.
+static constexpr bool magTypeLeftHanded(uint8_t mag_type)
+{
+    return mag_type != MAG_TYPE_QMC5883P;
+}
+
 // Payload sent with OUT_STATUS_QUERY so the OUT processor can configure
 // its SensorConverter consistently with the FlightComputer.
 typedef struct __attribute__((packed))
