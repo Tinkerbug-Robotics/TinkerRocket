@@ -66,7 +66,8 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
 #
 #   idf.py -B build_v7 -DTR_BOARD_V7=1 build   # legacy V7 board
 #   idf.py -B build_v8 -DTR_BOARD_V8=1 build   # V8 bench boards
-#   idf.py -B build_v9 -DTR_BOARD_V9=1 build   # Tinker-Mantis V9/V10 (hardware/tinker-mantis)
+#   idf.py -B build_v9 -DTR_BOARD_V9=1 build   # Tinker-Mantis V9 (tag rocket-computer-v9.0.0)
+#   idf.py -B build_v10 -DTR_BOARD_V10=1 build # Tinker-Mantis V10 (hardware/tinker-mantis)
 #   idf.py -B build_m1 -DTR_BOARD_M1=1 build   # Tinker-Beetle rev1 (hardware/tinker-beetle, ESP32-S3 FC)
 #
 # Unlike the other projects there is no default here, because the failure is
@@ -74,12 +75,15 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
 # PYRO2/PYRO3 FIRE, while all four continuity pins stay put. A mis-flashed
 # board therefore boots clean, reports the right channel armed and continuous,
 # and then fires the wrong connector (or, with ARM undriven, none at all).
+# V9 and V10 share every FIRE and CONT pin but not the arm (16 vs 33, and V10's
+# needs the out computer's consent too), so between those two it is the
+# "none at all" case (#1593).
 # Better to fail here than to find out on the pad.
 #
 # The build-dir name is cosmetic — the board comes ONLY from the flag. Use a
 # separate -B dir per variant anyway, since CMake caches it.
 set(_tr_board_flags_set "")
-foreach(_tr_flag TR_BOARD_V7 TR_BOARD_V8 TR_BOARD_V9 TR_BOARD_M1)
+foreach(_tr_flag TR_BOARD_V7 TR_BOARD_V8 TR_BOARD_V9 TR_BOARD_V10 TR_BOARD_M1)
     if(${_tr_flag})
         list(APPEND _tr_board_flags_set ${_tr_flag})
     endif()
@@ -88,12 +92,13 @@ list(LENGTH _tr_board_flags_set _tr_board_flag_count)
 if(_tr_board_flag_count EQUAL 0)
     message(FATAL_ERROR
         "flight_computer: no board revision selected. Pass exactly one of "
-        "-DTR_BOARD_V7=1 / -DTR_BOARD_V8=1 / -DTR_BOARD_V9=1 / -DTR_BOARD_M1=1 "
-        "(V9 is the Tinker-Mantis V9/V10 board, hardware/tinker-mantis; M1 is "
-        "the Tinker-Beetle rev1, hardware/tinker-beetle, whose flight computer is an "
-        "ESP32-S3 rather than a P4). There is no default: the pyro maps all "
-        "differ and a wrong map fires the wrong channel with no runtime "
-        "symptom.")
+        "-DTR_BOARD_V7=1 / -DTR_BOARD_V8=1 / -DTR_BOARD_V9=1 / -DTR_BOARD_V10=1 / "
+        "-DTR_BOARD_M1=1 (V9 is the Tinker-Mantis as fabbed at tag "
+        "rocket-computer-v9.0.0, V10 the Tinker-Mantis at HEAD, "
+        "hardware/tinker-mantis; M1 is the Tinker-Beetle rev1, "
+        "hardware/tinker-beetle, whose flight computer is an ESP32-S3 rather "
+        "than a P4). There is no default: the pyro maps all differ and a wrong "
+        "map fires the wrong channel, or none, with no runtime symptom.")
 elseif(NOT _tr_board_flag_count EQUAL 1)
     message(FATAL_ERROR
         "flight_computer: more than one board revision selected "
@@ -116,13 +121,15 @@ if(TR_BOARD_M1 AND NOT "${CONFIG_IDF_TARGET}" STREQUAL "esp32s3")
 endif()
 if(NOT TR_BOARD_M1 AND CONFIG_IDF_TARGET AND NOT "${CONFIG_IDF_TARGET}" STREQUAL "esp32p4")
     message(FATAL_ERROR
-        "flight_computer: V7/V8/V9 boards are ESP32-P4, but this build dir is "
+        "flight_computer: V7/V8/V9/V10 boards are ESP32-P4, but this build dir is "
         "configured for '${CONFIG_IDF_TARGET}'. Use a fresh build dir per board.")
 endif()
 if(TR_BOARD_M1)
     message(STATUS "flight_computer: board pin map M1 (main/board/board_m1.h, Tinker-Beetle rev1, ESP32-S3)")
+elseif(TR_BOARD_V10)
+    message(STATUS "flight_computer: board pin map V10 (main/board/board_v10.h, arm on GPIO33 + OC consent)")
 elseif(TR_BOARD_V9)
-    message(STATUS "flight_computer: board pin map V9/V10 (main/board/board_v9.h)")
+    message(STATUS "flight_computer: board pin map V9 (main/board/board_v9.h)")
 elseif(TR_BOARD_V8)
     message(STATUS "flight_computer: board pin map V8 (main/board/legacy/board_v8.h)")
 else()

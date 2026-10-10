@@ -10,14 +10,18 @@
 // fork per revision. Select the V8 map with: idf.py -DTR_BOARD_V8=1 build
 // (default stays V7 until V8 bring-up completes).
 //
-// TR_BOARD_V9=1 selects board_v9.h (V9/V10). The S3's *pin* map is unchanged
-// from V8 through V10 — unlike the FC, where V9 moved three pyro pins — so
+// TR_BOARD_V9=1 selects board_v9.h (V9). The S3's *pin* map is unchanged
+// from V8 through V9 — unlike the FC, where V9 moved three pyro pins — so
 // this used to be an alias to board_v8.h. #822: it isn't a pin change that
 // forced the split, it's a deleted part. V9 removed the MRAM (U12), and an
 // alias is presence-blind: it can say "same pins" but not "one fewer device",
-// so V9/V10 firmware kept driving an MRAM_CS that goes nowhere and backed the
+// so V9 firmware kept driving an MRAM_CS that goes nowhere and backed the
 // log ring + reboot snapshot with an unfitted chip. The two headers differ in
 // exactly one value, MRAM_CS (34 vs -1); keep every other pin in step by hand.
+//
+// TR_BOARD_V10=1 selects board_v10.h (#1593): every V9 pin plus four new ones,
+// the first of which is the supervised arm's consent output. A V9 image on a
+// V10 never raises it, so that board cannot fire a channel.
 #ifndef TR_BOARD_V7
 #define TR_BOARD_V7 0
 #endif
@@ -26,6 +30,9 @@
 #endif
 #ifndef TR_BOARD_V9
 #define TR_BOARD_V9 0
+#endif
+#ifndef TR_BOARD_V10
+#define TR_BOARD_V10 0
 #endif
 // TR_BOARD_M1=1 selects board_m1.h — rocket-computer-mini rev1, where the far
 // side of the link is a second ESP32-S3 rather than a P4, the radio is an
@@ -38,8 +45,8 @@
 // No default (#834 sweep). main/CMakeLists.txt raises the same error with a
 // friendlier message; this is the backstop for anything that includes config.h
 // without going through it.
-#if (TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9 + TR_BOARD_M1) != 1
-#error "Set exactly one board revision: -DTR_BOARD_V7=1, -DTR_BOARD_V8=1, -DTR_BOARD_V9=1 or -DTR_BOARD_M1=1. There is no default — V7's PWR_PIN (GPIO6) is ESP_SCL on every later board, V9/V10 needs the sdkconfig overlay that enables its PSRAM log ring, and M1 (rocket-computer-mini) drives its radio over SPI where V8/V9 drive a UART daughterboard."
+#if (TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9 + TR_BOARD_V10 + TR_BOARD_M1) != 1
+#error "Set exactly one board revision: -DTR_BOARD_V7=1, -DTR_BOARD_V8=1, -DTR_BOARD_V9=1, -DTR_BOARD_V10=1 or -DTR_BOARD_M1=1. There is no default — V7's PWR_PIN (GPIO6) is ESP_SCL on every later board, V9 and V10 need the sdkconfig overlay that enables the PSRAM log ring, V10's arm needs this processor's consent (GPIO14), and M1 (rocket-computer-mini) drives its radio over SPI where V8/V9/V10 drive a UART daughterboard."
 #endif
 // TR_BOARD_REV_STR names the board in log lines. It sits next to the header it
 // describes, as in the flight computer's config.h, so the two cannot disagree.
@@ -50,7 +57,10 @@
 #define TR_BOARD_REV_STR "V8"
 #elif TR_BOARD_V9
 #include "board/board_v9.h"
-#define TR_BOARD_REV_STR "V9/V10"
+#define TR_BOARD_REV_STR "V9"
+#elif TR_BOARD_V10
+#include "board/board_v10.h"
+#define TR_BOARD_REV_STR "V10"
 #elif TR_BOARD_M1
 #include "board/board_m1.h"
 #define TR_BOARD_REV_STR "M1 (rocket-computer-mini)"
@@ -86,7 +96,20 @@ static_assert(board_pins::LORA_RXEN_PIN >= 0,
 
 #if TR_BOARD_V9
 static_assert(board_pins::MRAM_CS < 0,
-              "V9/V10 deleted the MRAM (U12) — board_v9.h must keep MRAM_CS = -1 (#822)");
+              "V9 deleted the MRAM (U12) — board_v9.h must keep MRAM_CS = -1 (#822)");
+#elif TR_BOARD_V10
+static_assert(board_pins::MRAM_CS < 0,
+              "V10 has no MRAM (U12) — board_v10.h must keep MRAM_CS = -1 (#822)");
+// #1593: the V10's arm is a two-processor vote, and OC_ARM_EN is ours. -1 here
+// compiles consent out, and the board then cannot fire a channel at all (the
+// Beetle's #1168 bug, rebuilt). The INA230 alert edge is the fault trip's
+// interrupt path (#1553).
+static_assert(board_pins::ARM_CONSENT_PIN == 14,
+              "board_v10.h: OC_ARM_EN is S3 GPIO14 — re-derive it from the netlist before changing it (#1593)");
+static_assert(board_pins::INA_ALERT_PIN == 18,
+              "board_v10.h: INA_ALERT is S3 GPIO18 (#1553, #1593)");
+static_assert(board_pins::PG_RAIL_PIN == 17 && board_pins::VBUCK_OK_PIN == 34,
+              "board_v10.h: PG_RAIL is S3 GPIO17 and VBUCK_OK is GPIO34 (#1593)");
 #elif TR_BOARD_V8
 static_assert(board_pins::MRAM_CS == 34,
               "V8 bench boards have the MRAM fitted on GPIO34 — do not change this (#822)");
@@ -110,6 +133,12 @@ static_assert(board_pins::SCAP_ADC_PIN < 0 ||
 // with no consent pin to drop.
 static_assert(board_pins::INA_ALERT_PIN < 0 || board_pins::ARM_CONSENT_PIN >= 0,
               "INA_ALERT_PIN is the fault-current trip's input: it needs ARM_CONSENT_PIN (#1553)");
+// The consent output must not be an ESP32-S3 strapping pad (GPIO0, 3, 45, 46):
+// setup_oc drives it low, and a strap held at a level by the arm chain could
+// change how the board boots.
+static_assert(board_pins::ARM_CONSENT_PIN != 0 && board_pins::ARM_CONSENT_PIN != 3 &&
+              board_pins::ARM_CONSENT_PIN != 45 && board_pins::ARM_CONSENT_PIN != 46,
+              "ARM_CONSENT_PIN landed on an ESP32-S3 strapping pad");
 
 struct config : board_pins
 {

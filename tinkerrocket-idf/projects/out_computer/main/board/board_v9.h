@@ -2,29 +2,30 @@
 
 #include <stdint.h>
 
-// V9/V10 PCB pin map + board topology for the out computer (ESP32-S3).
+// V9 PCB pin map + board topology for the out computer (ESP32-S3).
 // Selected with TR_BOARD_V9=1:  idf.py -B build_v9 -DTR_BOARD_V9=1 build
 //
-// This is the map of the board files in hardware/tinker-mantis/ (Tinker-Mantis;
-// the folder was hardware/rocket-computer/ until 2026-09-24) — the
-// .kicad_pcb title block reads V9 up to 25fb08d and V10 at HEAD.
+// This is the map of the Tinker-Mantis as fabbed, tag rocket-computer-v9.0.0
+// (the folder was hardware/rocket-computer/ until 2026-09-24). The board files
+// at HEAD are V10, which has its own map, board_v10.h: it keeps every pin
+// below and adds four (arm consent, INA_ALERT, PG_RAIL, VBUCK_OK; #1593).
 //
 // ### Every S3 GPIO here is identical to board_v8.h ###
 // Verified 2026-08-17 by walking U15's pad -> pinfunction -> net in
-// hardware/rocket-computer.kicad_pcb at every commit that ever touched it,
-// and against a kicad-cli netlist export of the V10 schematic. That is the
-// opposite of the FC, whose V9 map moved PYRO_ARM and swapped two FIRE pins.
+// hardware/rocket-computer.kicad_pcb at every commit that ever touched it.
+// That is the opposite of the FC, whose V9 map moved PYRO_ARM and swapped two
+// FIRE pins.
 //
 // So why a separate header? Because a board revision is not only its pin map.
 // A part was DELETED:
 //
-//   part            board_v8.h    here (V9/V10)
+//   part            board_v8.h    here (V9)
 //   MRAM (U12)      MRAM_CS = 34  MRAM_CS = -1  (not fitted)
 //
 // An alias to board_v8.h is pin-correct and presence-blind; it cannot express
 // "same pins, one fewer device", and TR_LogToFlash enables the MRAM ring on
 // the CS pin alone with no device probe. Until #822 this file did not exist
-// and TR_BOARD_V9=1 selected board_v8.h, so V9/V10 firmware addressed an MRAM
+// and TR_BOARD_V9=1 selected board_v8.h, so V9 firmware addressed an MRAM
 // that is not on the board. See the MRAM_CS entry below for what that costs.
 //
 // Two things changed around this map without changing it:
@@ -39,7 +40,7 @@
 struct board_pins
 {
     // --- Power rail switch ---
-    // V9/V10 net P4_EN_S3 (V8 called the same net Power_Switch). NOTE: V7's
+    // V9 net P4_EN_S3 (V8 called the same net Power_Switch). NOTE: V7's
     // PWR_PIN (6) is this board's ESP_SCL net — running the V7 map here
     // toggles the FC I2C clock on every power on/off.
     static constexpr int PWR_PIN = 7;        // P4_EN_S3 (CONFIRMED)
@@ -53,10 +54,12 @@ struct board_pins
     // both processors. -1 = not present, same sentinel as GPS_PWR_PIN.
     static constexpr int ARM_CONSENT_PIN = -1;
     // #1553: no INA230 ALERT line on V9. The V10 routes INA_ALERT to S3
-    // GPIO18 (pad 24, R142 100 k to +3V3) and OC_ARM_EN to GPIO14 (pad 19);
-    // both belong in board_v10.h (#1409), which does not exist yet, and this
-    // header must not claim them: the V9 has neither.
+    // GPIO18 and OC_ARM_EN to GPIO14, and adds PG_RAIL (GPIO17) and VBUCK_OK
+    // (GPIO34); all four are in board_v10.h (#1593). This header must not
+    // claim them: on the V9 those pads are bare.
     static constexpr int INA_ALERT_PIN = -1;
+    static constexpr int PG_RAIL_PIN = -1;
+    static constexpr int VBUCK_OK_PIN = -1;
 
     // --- Power monitoring (INA230 @ 0x40, always-on I2C bus) ---
     static constexpr int PWR_SDA = 21;       // CONFIRMED (bench-validated)

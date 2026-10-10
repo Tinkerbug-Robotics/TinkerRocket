@@ -4066,7 +4066,7 @@ static void setup_fc()
     // FIRE 2/3 and move ARM, but keep all four CONT pins), so print the
     // numbers rather than just the revision — they can be checked against the
     // connector with a meter before anything is armed.
-    ESP_LOGW(TAG, "[BOARD] pin map: %s  (select with -DTR_BOARD_V7/V8/V9/M1=1; no default)",
+    ESP_LOGW(TAG, "[BOARD] pin map: %s  (select with -DTR_BOARD_V7/V8/V9/V10/M1=1; no default)",
              TR_BOARD_REV_STR);
     ESP_LOGW(TAG, "[BOARD] pyro: ARM=%d FIRE=%d/%d/%d/%d CONT=%d/%d/%d/%d",
              (int)config::PYRO_ARM_PIN,
@@ -4684,8 +4684,8 @@ static void setup_fc()
     ekf.setShockGateSettle(config::EKF_SHOCK_SETTLE_MS * 1000u);
     sensor_converter.configureMMC5983MARotationZ(config::MMC5983MA_ROT_Z_DEG);
     // #1312: the count scale of the IIS2MDC-named stream is the chip's, and
-    // the chip is the collector's seam — IIS2MDC on V8/V9, QMC5883P on the
-    // mini, and on the V9/V10 image whichever begin() found above (#1590).
+    // the chip is the collector's seam — IIS2MDC on V8, QMC5883P on the mini
+    // and the V10, and on the V9 image whichever begin() found above (#1590).
     // The converter (EKF input, WMM gate) and the calibrator (R band, verify
     // band, status frame) take it from there; so do its board rotation, the
     // SIL's inverse and the status-query stamps below.

@@ -65,6 +65,7 @@ static inline std::string itos(int v)
 #include "blind_window_policy.h"   // #1271: what a phone-IO blind window actually cost  // #825: boot rail re-assert decision
 #include "flight_token_policy.h"  // #1176: tier-2 rail decision from a durable token
 #include "holdup_policy.h"        // #1166: the verdict on the hold-up supercap
+#include "supply_status_policy.h" // #1593: the V10's PG_RAIL / VBUCK_OK edges
 #include <esp_attr.h>             // RTC_NOINIT_ATTR
 #include <esp_system.h>           // esp_reset_reason
 #include <esp_adc/adc_oneshot.h>  // #850: camera/servo IMON reads
@@ -2120,6 +2121,73 @@ static void serviceHoldup(uint32_t now_ms)
     last_state = st;
 }
 
+// ---------------------------------------------------------------------------
+//  #1593: supply status inputs (Tinker-Mantis V10: PG_RAIL, VBUCK_OK)
+//
+//  Plain inputs with their own pull-up / divider (board_v10.h). Reported on
+//  the console only: the level at boot, every change as it is polled, and the
+//  counts in the stats lines. supply_status_policy.h has the rules; #1409 owns
+//  the RTC-latched cause and the flight-log fields. Boards without the lines
+//  (-1) compile all of it out.
+// ---------------------------------------------------------------------------
+static constexpr bool kSupplyStatusWired =
+    config::PG_RAIL_PIN >= 0 || config::VBUCK_OK_PIN >= 0;
+static SupplyStatus::Line supply_pg_rail;
+static SupplyStatus::Line supply_vbuck_ok;
+
+static void configSupplyInput(int pin)
+{
+    gpio_config_t cfg = {};
+    cfg.pin_bit_mask = 1ULL << pin;
+    cfg.mode         = GPIO_MODE_INPUT;
+    cfg.pull_up_en   = GPIO_PULLUP_DISABLE;     // R59 on PG_RAIL
+    cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;   // R137/R138 on VBUCK_OK
+    cfg.intr_type    = GPIO_INTR_DISABLE;
+    gpio_config(&cfg);
+}
+
+// One line's poll: log a change at once, as a warning when the supply went away.
+static void pollSupplyLine(SupplyStatus::Line& line, int pin, const char* name,
+                           const char* high_means, const char* low_means, uint32_t now_ms)
+{
+    if (pin < 0) return;
+    const bool high = gpio_get_level((gpio_num_t)pin) != 0;
+    switch (SupplyStatus::sample(line, high, now_ms))
+    {
+        case SupplyStatus::Change::First:
+            ESP_LOGI("PWR", "[SUPPLY] %s (GPIO%d) %s at boot — %s", name, pin,
+                     high ? "HIGH" : "LOW", high ? high_means : low_means);
+            break;
+        case SupplyStatus::Change::Fell:
+            ESP_LOGW("PWR", "[SUPPLY] +%lu ms %s fell — %s (fall %lu)",
+                     (unsigned long)now_ms, name, low_means, (unsigned long)line.falls);
+            break;
+        case SupplyStatus::Change::Rose:
+            ESP_LOGI("PWR", "[SUPPLY] +%lu ms %s rose — %s",
+                     (unsigned long)now_ms, name, high_means);
+            break;
+        case SupplyStatus::Change::None:
+            break;
+    }
+}
+
+static void serviceSupplyStatus(uint32_t now_ms)
+{
+    if constexpr (!kSupplyStatusWired) return;
+    pollSupplyLine(supply_pg_rail, config::PG_RAIL_PIN, "PG_RAIL",
+                   "VBATT on", "VBATT OFF: the pack eFuse has cut the rail", now_ms);
+    pollSupplyLine(supply_vbuck_ok, config::VBUCK_OK_PIN, "VBUCK_OK",
+                   "buck supplying", "buck gone: running on the hold-up cap", now_ms);
+}
+
+static void initSupplyStatus()
+{
+    if constexpr (!kSupplyStatusWired) return;
+    if constexpr (config::PG_RAIL_PIN >= 0)  configSupplyInput(config::PG_RAIL_PIN);
+    if constexpr (config::VBUCK_OK_PIN >= 0) configSupplyInput(config::VBUCK_OK_PIN);
+    serviceSupplyStatus(millis());   // the boot levels
+}
+
 static bool commitPowerSample(float bus_v, float current_a)
 {
     static uint8_t consec_bad = 0;
@@ -2202,8 +2270,10 @@ static void ina230ConfigureForRailOn()
 static void readINA230Power()
 {
     // #1166: the hold-up cap rides this tick (one read a second of it), on
-    // both power states and whether or not the INA230 is answering.
+    // both power states and whether or not the INA230 is answering. So do
+    // the V10's supply status lines (#1593).
     serviceHoldup(millis());
+    serviceSupplyStatus(millis());
 
     if (!ina230_ok) return;
 
@@ -3988,7 +4058,8 @@ static InflightHold inflightHold()
 // #1553's fault-current trip (below) can also DROP it, from its task or the
 // INA_ALERT ISR; armConsentApplyPin() is the only way up, and it re-checks the
 // trip under the same lock.
-// Every other board sets ARM_CONSENT_PIN to -1 and compiles this out.
+// Every board other than the Beetle and the Mantis V10 sets ARM_CONSENT_PIN to
+// -1 and compiles this out.
 static ArmConsentPolicy::FireTestWindow arm_consent_fire_test;
 static uint8_t                          arm_consent_fire_test_ch = 0;
 static ArmConsentPolicy::Reason         arm_consent_reason = ArmConsentPolicy::Reason::None;
@@ -8574,6 +8645,12 @@ static void printStats()
                   (unsigned long long)parser_resync_drops,
                   (unsigned long long)parser_len_drops,
                   (unsigned long)frames_bad_crc);
+    if constexpr (kSupplyStatusWired)
+    {
+        ESP_LOGI("PWR", "[SUPPLY] PG_RAIL=%d VBUCK_OK=%d falls=%lu/%lu (#1593)",
+                 supply_pg_rail.high ? 1 : 0, supply_vbuck_ok.high ? 1 : 0,
+                 (unsigned long)supply_pg_rail.falls, (unsigned long)supply_vbuck_ok.falls);
+    }
     // #1155 item 15: page/block were never updated after begin() and printed
     // "page=0 block=1" for the whole flight — a wedged-writer look-alike.
     ESP_LOGI("LOG", "logging=%c file=%s prog_fail=%lu erase_fail=%lu",
@@ -10083,7 +10160,9 @@ static void setup_oc()
     //
     // The mini's rework-4 arm requires BOTH processors: FC_ARM (FC GPIO44) and
     // OC_ARM_EN (this pin) each feed a series element, and the arm FET conducts
-    // only when both are high. Two boot defaults worked against that. FC GPIO44
+    // only when both are high. The Tinker-Mantis V10 has the same chain, with
+    // FC_ARM on P4 GPIO33 and this pin on GPIO14 (#1593). Two boot defaults
+    // worked against that on the mini. FC GPIO44
     // is U0RXD, so it carries the ROM console's weak pull-up from power-on
     // until the FC configures the pad — and this pin FLOATED from reset,
     // because nothing ever drove it. A floating gate on a consent transistor is
@@ -10678,6 +10757,7 @@ static void setup_oc()
     // also cost the camera/servo current readings.
     initRailCurrentAdc();
     initHoldupAdc();   // #1166: V_SCAP on the same ADC unit, its own attenuation
+    initSupplyStatus();   // #1593: the V10's PG_RAIL / VBUCK_OK, levels at boot
 
     // #519: the OC owns its connection-parameter policy — slow (200 ms, latency 4)
     // while the rail is off to save idle power, fast (30 ms) once it comes on for

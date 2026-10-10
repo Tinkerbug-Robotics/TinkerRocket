@@ -10,7 +10,10 @@ name: Firmware Release
 # starting fw-v, and fw-legacy-v does not. Keep the two workflows' build,
 # manifest and publish steps in step; only the matrix and the release wording
 # differ. The matrix here must equal the product-line group of
-# firmware-build.yml.
+# firmware-build.yml, less the boards that group builds before any has passed
+# bring-up: the Tinker-Base's V4 (V3 fills its slot) and the Tinker-Mantis V10
+# (#1593; the V9 pair stays the Tinker-Mantis release until a V10 first article
+# is proven, and a V10 is flashed over USB until then).
 #
 # Why this exists: `firmware-build.yml` compiles every configuration and
 # uploads NOTHING — it ends at `idf.py build`.  So there has never been an
@@ -58,7 +61,7 @@ jobs:
       fail-fast: true   # a release must be all-or-nothing
       matrix:
         include:
-          # Tinker-Mantis: both halves of the V9/V10 board.
+          # Tinker-Mantis: both halves of the V9. Not V10 yet — see the header.
           - line: Tinker-Mantis
             asset: tinker-mantis-flight_computer-V9
             project: flight_computer
@@ -210,7 +213,8 @@ jobs:
             --notes "$(printf '%s\n' \
               '| Product | Images |' \
               '|---|---|' \
-              '| Tinker-Mantis | `tinker-mantis-flight_computer-V9.bin`, `tinker-mantis-out_computer-V9.bin` |' \
+              '| Tinker-Mantis V9 | `tinker-mantis-flight_computer-V9.bin`, `tinker-mantis-out_computer-V9.bin` |' \
+              '| Tinker-Mantis V10 | not released yet: build from source with `-DTR_BOARD_V10=1` (a V9 image cannot arm a V10) |' \
               '| Tinker-Beetle | `tinker-beetle-flight_computer-M1.bin`, `tinker-beetle-out_computer-M1.bin` |' \
               '| Tinker-Base | `tinker-base-base_station-V3.bin` |' \
               '| LoRa daughterboard | `lora-daughterboard-radio_board.bin` |' \
