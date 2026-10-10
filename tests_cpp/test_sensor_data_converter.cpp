@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "TR_Sensor_Data_Converter.h"
 #include "SimSensorModel.h"   // the firmware sim's gyro LSB (#369)
+#include "config.h"         // flight_computer/main/config.h: the chip rotations
 #include <cmath>
 #include <limits>   // #850: quiet_NaN in the rail-current tests
 #include <cstring>
@@ -387,10 +388,11 @@ TEST(SensorConverterMagType, TheQmcScaleIsSelectedByMagType) {
     iis.mag_x = 3750;                   // one gauss of QMC5883P counts
     IIS2MDCDataSI si{};
 
-    // Default: the big board's IIS2MDC, 0.15 µT/LSB — unchanged behaviour.
+    // Default: the big board's IIS2MDC, 0.15 µT/LSB.  Its left-handed chip
+    // X comes out reversed (magTypeLeftHanded); the QMC5883P's does not.
     EXPECT_EQ(conv.magType(), MAG_TYPE_IIS2MDC);
     conv.convertIIS2MDCData(iis, si);
-    EXPECT_NEAR(si.mag_x_uT, 562.5, 1e-6);
+    EXPECT_NEAR(si.mag_x_uT, -562.5, 1e-6);
 
     // The mini: 3750 LSB is 1 G is 100 µT.
     conv.configureMagType(MAG_TYPE_QMC5883P);
@@ -403,7 +405,7 @@ TEST(SensorConverterMagType, TheQmcScaleIsSelectedByMagType) {
     conv.configureMagType(0x7F);
     EXPECT_EQ(conv.magType(), MAG_TYPE_IIS2MDC);
     conv.convertIIS2MDCData(iis, si);
-    EXPECT_NEAR(si.mag_x_uT, 562.5, 1e-6);
+    EXPECT_NEAR(si.mag_x_uT, -562.5, 1e-6);
 }
 
 TEST(SensorConverterMagType, TheScaleIsAppliedBeforeRotationAndB2R) {
@@ -419,4 +421,178 @@ TEST(SensorConverterMagType, TheScaleIsAppliedBeforeRotationAndB2R) {
     EXPECT_NEAR(si.mag_x_uT, 0.0, 1e-3);
     EXPECT_NEAR(si.mag_y_uT, 50.0, 1e-3);   // sensor +X → board +Y
     EXPECT_NEAR(si.mag_z_uT, 0.0, 1e-3);
+}
+
+// ---------- IIS2MDC chip frame: left-handed ----------
+// The IIS2MDC's X/Y/Z are a left-handed set (ST: "frame is left-handed"), so
+// no sensor->board rotation can map them.  With the +90 deg Rz alone, every
+// V8/V9 board vector had board y reversed: the field turned the wrong way
+// under roll and the fused heading was the mirror of the true one, which a
+// |B| gate and a pad dip check cannot see.  These tests pin the conversion to
+// physical facts that do not come from the converter:
+//   - the #204 bench (config.h): board +X north reads the field on chip -Y,
+//     board +X east reads it on chip -X;
+//   - the chip is on the top side, its Z out of the top face (board +Z).
+// So chip X lies along board -Y, chip Y along board -X, chip Z along board +Z.
+namespace {
+
+// Physical direction of each IIS2MDC chip axis, in board coordinates.
+constexpr double kIisAxisInBoard[3][3] = {
+    { 0.0, -1.0, 0.0},   // chip X: board -Y (east bench reading)
+    {-1.0,  0.0, 0.0},   // chip Y: board -X (north bench reading)
+    { 0.0,  0.0, 1.0},   // chip Z: board +Z (top side)
+};
+
+// What the chip reports for a board-frame field (µT): each axis reads the
+// field's component along its physical direction, at 0.15 µT/LSB.
+IIS2MDCData iisCountsFor(const double b[3])
+{
+    int16_t counts[3];
+    for (int i = 0; i < 3; i++)
+    {
+        const double along = kIisAxisInBoard[i][0] * b[0] +
+                             kIisAxisInBoard[i][1] * b[1] +
+                             kIisAxisInBoard[i][2] * b[2];
+        counts[i] = (int16_t)lround(along / MAG_UT_PER_LSB_IIS2MDC);
+    }
+    IIS2MDCData raw{};
+    raw.mag_x = counts[0];
+    raw.mag_y = counts[1];
+    raw.mag_z = counts[2];
+    return raw;
+}
+
+double det3(const double m[3][3])
+{
+    return m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+         - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+         + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+}
+
+// The converter's chip->board matrix, column by column from unit counts.
+void chipToBoard(SensorConverter& conv, double m[3][3])
+{
+    for (int c = 0; c < 3; c++)
+    {
+        IIS2MDCData raw{};
+        raw.mag_x = (c == 0) ? 1000 : 0;
+        raw.mag_y = (c == 1) ? 1000 : 0;
+        raw.mag_z = (c == 2) ? 1000 : 0;
+        IIS2MDCDataSI si{};
+        conv.convertIIS2MDCData(raw, si);
+        const double k = 1000.0 * magTypeUtPerLsb(conv.magType());
+        m[0][c] = si.mag_x_uT / k;
+        m[1][c] = si.mag_y_uT / k;
+        m[2][c] = si.mag_z_uT / k;
+    }
+}
+
+}  // namespace
+
+TEST(SensorConverterIIS2MDCFrame, TheBenchReadingsLandOnTheBoardAxes) {
+    SensorConverter conv;
+    conv.configureIIS2MDCRotationZ(config::IIS2MDC_ROT_Z_DEG);
+    IIS2MDCDataSI si{};
+
+    // Board +X north: the horizontal field reads on chip -Y and must come
+    // out along board +X.
+    IIS2MDCData north{};
+    north.mag_y = -150;                 // 22.5 µT
+    conv.convertIIS2MDCData(north, si);
+    EXPECT_NEAR(si.mag_x_uT, 22.5, 1e-3);
+    EXPECT_NEAR(si.mag_y_uT, 0.0, 1e-3);
+
+    // Board +X east, +Z up: north is board +Y (left).  The field reads on
+    // chip -X and must come out along board +Y.  Rz(+90) alone put it on
+    // board -Y — the mirror.
+    IIS2MDCData east{};
+    east.mag_x = -150;
+    conv.convertIIS2MDCData(east, si);
+    EXPECT_NEAR(si.mag_x_uT, 0.0, 1e-3);
+    EXPECT_NEAR(si.mag_y_uT, 22.5, 1e-3);
+
+    // Chip Z is board Z.
+    IIS2MDCData up{};
+    up.mag_z = 300;
+    conv.convertIIS2MDCData(up, si);
+    EXPECT_NEAR(si.mag_z_uT, 45.0, 1e-3);
+}
+
+TEST(SensorConverterIIS2MDCFrame, AnyBoardFieldRoundTripsThroughThePhysicalChip) {
+    SensorConverter conv;
+    conv.configureIIS2MDCRotationZ(config::IIS2MDC_ROT_Z_DEG);
+    const double fields[][3] = {{21.0, 0.0, -45.0}, {-12.0, 33.0, 18.0},
+                                {5.0, -40.0, 27.0}, {0.0, 0.0, 50.0}};
+    for (const auto& b : fields)
+    {
+        IIS2MDCDataSI si{};
+        conv.convertIIS2MDCData(iisCountsFor(b), si);
+        EXPECT_NEAR(si.mag_x_uT, b[0], 0.1);
+        EXPECT_NEAR(si.mag_y_uT, b[1], 0.1);
+        EXPECT_NEAR(si.mag_z_uT, b[2], 0.1);
+    }
+}
+
+TEST(SensorConverterIIS2MDCFrame, TheFieldTurnsWithTheGyroUnderRoll) {
+    // A world-fixed field seen from a body rolling at +w about board X turns
+    // by -w in the body: m(t) = Rx(-w t) m(0).  Measure the roll with the
+    // ISM6 through its own conversion (config.h rotation) and require the
+    // converted field to turn the same way.  The mirror turned it the
+    // opposite way, so here it would miss by ~2 x 29 µT x sin(10 deg).
+    SensorConverter conv;
+    conv.configureISM6HG256RotationZ(config::ISM6HG256_ROT_Z_DEG);
+    conv.configureIIS2MDCRotationZ(config::IIS2MDC_ROT_Z_DEG);
+
+    // Gyro: +200 dps about board X, encoded back into ISM6 chip counts
+    // (board = Rz(rot) * chip, so chip = Rz(-rot) * board).
+    const double rot = config::ISM6HG256_ROT_Z_DEG * M_PI / 180.0;
+    const double w_board_dps = 200.0;
+    const double dps_per_lsb = 4000.0 * 0.035e-3;
+    ISM6HG256Data imu{};
+    imu.gyro_raw.x = (int16_t)lround( w_board_dps * cos(rot) / dps_per_lsb);
+    imu.gyro_raw.y = (int16_t)lround(-w_board_dps * sin(rot) / dps_per_lsb);
+    ISM6HG256DataSI imu_si{};
+    conv.convertISM6HG256Data(imu, imu_si);
+    ASSERT_NEAR(imu_si.gyro_x, w_board_dps, 0.5);
+    ASSERT_NEAR(imu_si.gyro_y, 0.0, 0.5);
+
+    const double dt = 0.05;            // 10 deg of roll
+    const double th = -imu_si.gyro_x * dt * M_PI / 180.0;
+    const double m0[3] = {40.0, 15.0, -25.0};
+    const double m1[3] = {m0[0],
+                          m0[1] * cos(th) - m0[2] * sin(th),
+                          m0[1] * sin(th) + m0[2] * cos(th)};
+
+    IIS2MDCDataSI s0{}, s1{};
+    conv.convertIIS2MDCData(iisCountsFor(m0), s0);
+    conv.convertIIS2MDCData(iisCountsFor(m1), s1);
+    // Predict the second sample from the first, by the gyro.
+    const double py = s0.mag_y_uT * cos(th) - s0.mag_z_uT * sin(th);
+    const double pz = s0.mag_y_uT * sin(th) + s0.mag_z_uT * cos(th);
+    EXPECT_NEAR(s1.mag_x_uT, s0.mag_x_uT, 0.2);
+    EXPECT_NEAR(s1.mag_y_uT, py, 0.2);
+    EXPECT_NEAR(s1.mag_z_uT, pz, 0.2);
+}
+
+TEST(SensorConverterIIS2MDCFrame, TheReflectionIsTheIIS2MDCsAlone) {
+    // The physical chip triad is left-handed, as ST says ...
+    EXPECT_NEAR(det3(kIisAxisInBoard), -1.0, 1e-12);
+
+    // ... so the IIS2MDC's conversion has to be a reflection, det -1: chip X
+    // to board -Y, chip Y to board -X, chip Z to board +Z.
+    SensorConverter conv;
+    conv.configureIIS2MDCRotationZ(config::IIS2MDC_ROT_Z_DEG);
+    double m[3][3];
+    chipToBoard(conv, m);
+    EXPECT_NEAR(det3(m), -1.0, 1e-9);
+    const double want[3][3] = {{0, -1, 0}, {-1, 0, 0}, {0, 0, 1}};
+    for (int r = 0; r < 3; r++)
+        for (int c = 0; c < 3; c++)
+            EXPECT_NEAR(m[r][c], want[r][c], 1e-6) << "row " << r << " col " << c;
+
+    // The QMC5883P's axes are right-handed, so its conversion stays a
+    // rotation, det +1.
+    conv.configureMagType(MAG_TYPE_QMC5883P);
+    chipToBoard(conv, m);
+    EXPECT_NEAR(det3(m), 1.0, 1e-9);
 }

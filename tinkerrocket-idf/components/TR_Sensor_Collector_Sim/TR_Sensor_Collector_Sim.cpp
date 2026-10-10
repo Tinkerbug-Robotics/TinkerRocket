@@ -751,10 +751,12 @@ void SensorCollectorSim::encodeIIS2MDC(uint32_t time_us, IIS2MDCData& out)
     applyPadAlign(body_x, body_y, body_z);
 
     // Rocket frame → board frame (inverse mounting), then board → sensor
-    // frame (inverse of the converter's sensor→board +Z rotation), so the
-    // forward conversion chain reproduces the simulated field exactly.
+    // frame (inverse of the converter's sensor→board +Z rotation, then of
+    // its chip-X reflection for a left-handed chip), so the forward
+    // conversion chain reproduces the simulated field exactly.
     rocketToBoard(body_x, body_y, body_z);
-    const float sensor_x =  body_x * iis_inv_c_ + body_y * iis_inv_s_;
+    const float x_sign = magTypeLeftHanded(SensorCollector::MAG_TYPE) ? -1.0f : 1.0f;
+    const float sensor_x = x_sign * (body_x * iis_inv_c_ + body_y * iis_inv_s_);
     const float sensor_y = -body_x * iis_inv_s_ + body_y * iis_inv_c_;
 
     out.mag_x = (int16_t)lroundf(sensor_x * COUNTS_PER_UT);

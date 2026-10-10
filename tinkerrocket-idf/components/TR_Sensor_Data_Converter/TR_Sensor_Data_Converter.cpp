@@ -315,21 +315,28 @@ void SensorConverter::convertMMC5983MAData(const MMC5983MAData& in, MMC5983MADat
 // already signed int16 centered at 0; if the FC has loaded a hard-iron
 // calibration (issue #96), it has already been subtracted upstream — by the
 // IIS2MDC's OFFSET_X/Y/Z registers, or by the TR_QMC5883P driver in software
-// — so no subtract is needed here on either part.
+// — so no subtract is needed here on either part.  The chip's handedness is
+// the chip's too (magTypeLeftHanded): a reflection, applied in the chip
+// frame so that iis2mdc_rot_z stays the placement rotation.
 void SensorConverter::convertIIS2MDCData(const IIS2MDCData& in, IIS2MDCDataSI& out)
 {
     out.time_us = in.time_us;
 
     const double UT_PER_LSB = iis2mdc_uT_per_lsb_;
 
-    const double mx = (double)in.mag_x * UT_PER_LSB;
+    // The IIS2MDC's axes are left-handed (magTypeLeftHanded): negate chip X
+    // to get the right-handed set (-X, Y, Z) before the rotation, or every
+    // board vector comes out mirrored in board y.
+    const double x_sign = magTypeLeftHanded(mag_type_) ? -1.0 : 1.0;
+
+    const double mx = x_sign * (double)in.mag_x * UT_PER_LSB;
     const double my = (double)in.mag_y * UT_PER_LSB;
     const double mz = (double)in.mag_z * UT_PER_LSB;
 
     const double c = (double)cosf(iis2mdc_rot_z_rad);
     const double s = (double)sinf(iis2mdc_rot_z_rad);
 
-    // Sensor frame -> board frame, rotation about +Z.
+    // Right-handed sensor frame -> board frame, rotation about +Z.
     out.mag_x_uT = (mx * c) - (my * s);
     out.mag_y_uT = (mx * s) + (my * c);
     out.mag_z_uT = mz;

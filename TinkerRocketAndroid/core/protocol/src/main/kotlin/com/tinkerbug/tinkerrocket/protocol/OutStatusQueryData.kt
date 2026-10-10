@@ -44,6 +44,15 @@ public data class OutStatusQueryData(
     public val magUtPerLsb: Double
         get() = if (magType == MAG_TYPE_QMC5883P) QMC5883P_UT_PER_LSB else IIS2MDC_UT_PER_LSB
 
+    /**
+     * Whether the chip behind the IIS2MDC-named stream has left-handed axes
+     * (magTypeLeftHanded in RocketComputerTypes.h).  The IIS2MDC does, so the
+     * converter negates its chip X before the Z rotation.  Pre-v6 logs (null)
+     * and unknown values are the IIS2MDC, as for the scale.
+     */
+    public val magLeftHanded: Boolean
+        get() = magType != MAG_TYPE_QMC5883P
+
     public companion object {
         public const val MIN_SIZE: Int = 10
         /** Fixed offset of the v4 IIS2MDC rotation tail (#204). */

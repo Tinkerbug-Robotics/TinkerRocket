@@ -253,6 +253,15 @@ struct config : board_pins
     // (and on -X when board +X points east) -> chip +Y is parallel to
     // board -X, a +90 deg sensor->board rotation.  Validated against two
     // static logs (board+X -> N and board+X -> E, 2026-06-17).
+    //
+    // A rotation alone does NOT fit both readings: Rz(+90) puts the east
+    // reading on chip +X.  The chip's axes are left-handed, so the
+    // converter first negates chip X (magTypeLeftHanded in
+    // RocketComputerTypes.h) and this +90 deg is applied to (-X, Y, Z).
+    // Together: board x = -chip y, board y = -chip x, board z = chip z,
+    // which fits both bench readings and every IIS2MDC flight log.  Until
+    // that reflection was added, board y was reversed on every V8/V9 board.
+    // QMC5883P boards share this constant (#1312) but not the reflection.
     static constexpr float IIS2MDC_ROT_Z_DEG = 90.0f;
 
     // Board -> rocket mounting orientation.  Either IMU_ORIENT_AUTO (0xFF) or
@@ -512,10 +521,12 @@ struct config : board_pins
     // accel sample, plus rail wobble).  The heading is a config constant that
     // nothing on the pad checks, so it is seeded as unknown enough for the
     // magnetometer to take over: on Rolly Polly V 2026-08-29 (mag calibrated
-    // offline) 30° let the pad mag pull an 89° seed error to within 6° in
-    // under 2 s, the same as 90° or 180°, while on the flights without a
-    // usable magnetometer it moved the climb's horizontal error least of the
-    // values tried (Eagle Claw 05-17: 164 m RMS -> 170, against 234 at 180°).
+    // offline) 30° let the pad mag pull an 89° seed error to within 10° in
+    // under 2 s, the same as 90° or 180° (6° as first measured, with the
+    // IIS2MDC frame still mirrored — magTypeLeftHanded), while on the flights
+    // without a usable magnetometer it moved the climb's horizontal error
+    // least of the values tried (Eagle Claw 05-17: 164 m RMS -> 170, against
+    // 234 at 180°).
     static constexpr float PAD_TILT_SIGMA_DEG    = 1.0f;
     static constexpr float PAD_HEADING_SIGMA_DEG = 30.0f;
 

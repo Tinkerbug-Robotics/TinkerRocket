@@ -30,6 +30,8 @@ nonisolated class SensorConverter {
     // Count→µT scale of the IIS2MDC-named stream; per-board since #797
     // (big board IIS2MDC vs mini QMC5883P), keyed off the 0xA0 v6 mag_type.
     private var mag_ut_per_lsb: Double = OutStatusQueryData.iis2mdcUtPerLsb
+    // Left-handed chip axes (the IIS2MDC's), keyed off the same mag_type.
+    private var mag_left_handed: Bool = true
 
     init() {
         // Calculate sensitivity values. Mirror the firmware converter
@@ -63,16 +65,28 @@ nonisolated class SensorConverter {
         ism6_rot_z_rad = imuDeg * .pi / 180.0
         mmc_rot_z_rad = magDeg * .pi / 180.0
         // IIS2MDC (new PCB) has its own sensor→board rotation (#204).  Older
-        // logs (status query format_version < 4) don't carry it; fall back to
-        // the MMC value to preserve prior behavior on those.
-        iis2mdc_rot_z_rad = (iisDeg ?? magDeg) * .pi / 180.0
+        // logs (status query format_version < 4) don't carry it.  Every one
+        // that has an IIS2MDC stream came from a V8/V9, where the chip sits at
+        // +90 deg, so fall back to that (as plot_flight_data_mini.py does) —
+        // not to the MMC's angle, which put those logs 90 deg off.
+        iis2mdc_rot_z_rad = (iisDeg ?? SensorConverter.iis2mdcRotZDegPreV4) * .pi / 180.0
     }
+
+    /// IIS2MDC sensor→board rotation for logs that predate the v4 field.
+    static let iis2mdcRotZDegPreV4: Double = 90.0
 
     /// Configure the count→µT scale of the IIS2MDC-named mag stream from the
     /// status query's v6 mag_type (`OutStatusQueryData.magUtPerLsb`).  Left
     /// at the IIS2MDC default when the log predates v6.
     func configureMagScale(utPerLsb: Double) {
         mag_ut_per_lsb = utPerLsb
+    }
+
+    /// Configure the chip handedness of the IIS2MDC-named mag stream from the
+    /// status query's v6 mag_type (`OutStatusQueryData.magLeftHanded`).
+    /// Left at the IIS2MDC default (left-handed) when the log predates v6.
+    func configureMagHandedness(leftHanded: Bool) {
+        mag_left_handed = leftHanded
     }
 
     /// Configure Legacy sensor rotation.
@@ -220,18 +234,20 @@ nonisolated class SensorConverter {
     /// 9.13), mini QMC5883P 100/3750 µT/LSB (#797).  Applies the
     /// IIS2MDC-specific sensor→board rotation (iis2mdc_rot_z_rad, from
     /// status query iis2mdc_rot_z_cdeg, format_version >= 4 — #204), NOT
-    /// the MMC's.
+    /// the MMC's.  A left-handed chip (the IIS2MDC) has its X negated first,
+    /// matching SensorConverter::convertIIS2MDCData in the firmware.
     func convertIIS2MDC(_ raw: IIS2MDCData) -> MMC5983MADataSI {
         let UT_PER_LSB = mag_ut_per_lsb
+        let x_sign: Double = mag_left_handed ? -1.0 : 1.0
 
-        let mx = Double(raw.mag_x) * UT_PER_LSB
+        let mx = x_sign * Double(raw.mag_x) * UT_PER_LSB
         let my = Double(raw.mag_y) * UT_PER_LSB
         let mz = Double(raw.mag_z) * UT_PER_LSB
 
         let c = cos(iis2mdc_rot_z_rad)
         let s = sin(iis2mdc_rot_z_rad)
 
-        // Sensor frame -> board frame, rotation about +Z.
+        // Right-handed sensor frame -> board frame, rotation about +Z.
         let mag_x = (mx * c) - (my * s)
         let mag_y = (mx * s) + (my * c)
         let mag_z = mz
