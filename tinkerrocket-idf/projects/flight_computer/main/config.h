@@ -141,7 +141,9 @@ struct config : board_pins
     // The slot keeps its IIS2MDC name on every board; the part behind it is
     // the TR_Sensor_Collector seam's choice (#1312).  Both parts have one
     // fixed 7-bit address: ST IIS2MDC 0x1E (no SAD pin), QST QMC5883P 0x2C
-    // (datasheet 5.4 — other addresses are "contact factory").
+    // (datasheet 5.4 — other addresses are "contact factory").  The V9/V10
+    // image (TR_MAG_DRIVER_AUTO) is handed the IIS2MDC's and asks for the
+    // QMC5883P at its own fixed address if that one does not answer.
     static constexpr uint32_t IIS2MDC_I2C_FREQ_HZ = 400'000;
 #if defined(TR_MAG_DRIVER_QMC5883P) && TR_MAG_DRIVER_QMC5883P
     static constexpr uint8_t IIS2MDC_I2C_ADDR = 0x2C;   // QMC5883P
@@ -247,22 +249,29 @@ struct config : board_pins
     // MMC5983MA -> board frame (deg), CCW positive about +Z.
     // Note: board frame: +X forward, +Y left, +Z up.
     static constexpr float MMC5983MA_ROT_Z_DEG = 180.0f;
-    // IIS2MDC -> board frame (deg), CCW positive about +Z.
-    // +90 deg from bench characterization (#204): with board +X pointed
-    // true north the IIS2MDC reads Earth's horizontal field on its -Y axis
-    // (and on -X when board +X points east) -> chip +Y is parallel to
-    // board -X, a +90 deg sensor->board rotation.  Validated against two
-    // static logs (board+X -> N and board+X -> E, 2026-06-17).
+    // Magnetometer -> board frame (deg), CCW positive about +Z, applied to the
+    // chip's NORMALIZED frame (magTypeChipSign in RocketComputerTypes.h:
+    // right-handed, Z out of the top).  A placement fact of each board and
+    // chip, so it lives in the board header (MAG_ROT_Z_DEG_IIS2MDC /
+    // MAG_ROT_Z_DEG_QMC5883P).  It used to be one IIS2MDC_ROT_Z_DEG = +90 for
+    // every board: right for the V8/V9 IIS2MDC once its left-handed X is
+    // negated (#1589), wrong for the Beetle's QMC5883P (#1590).
     //
-    // A rotation alone does NOT fit both readings: Rz(+90) puts the east
-    // reading on chip +X.  The chip's axes are left-handed, so the
-    // converter first negates chip X (magTypeLeftHanded in
-    // RocketComputerTypes.h) and this +90 deg is applied to (-X, Y, Z).
-    // Together: board x = -chip y, board y = -chip x, board z = chip z,
-    // which fits both bench readings and every IIS2MDC flight log.  Until
-    // that reflection was added, board y was reversed on every V8/V9 board.
-    // QMC5883P boards share this constant (#1312) but not the reflection.
-    static constexpr float IIS2MDC_ROT_Z_DEG = 90.0f;
+    // The V9/V10 image learns the chip only at SensorCollector::begin()
+    // (TR_MAG_DRIVER_AUTO), so this takes what it found:
+    //   config::magRotZDeg(sensor_collector.magType() == MAG_TYPE_QMC5883P)
+    // (a bool, because this header stays free of RocketComputerTypes.h).
+#if defined(TR_MAG_DRIVER_AUTO) && TR_MAG_DRIVER_AUTO
+    static constexpr float magRotZDeg(bool is_qmc5883p)
+    {
+        return is_qmc5883p ? board_pins::MAG_ROT_Z_DEG_QMC5883P
+                           : board_pins::MAG_ROT_Z_DEG_IIS2MDC;
+    }
+#elif defined(TR_MAG_DRIVER_QMC5883P) && TR_MAG_DRIVER_QMC5883P
+    static constexpr float magRotZDeg(bool) { return board_pins::MAG_ROT_Z_DEG_QMC5883P; }
+#else
+    static constexpr float magRotZDeg(bool) { return board_pins::MAG_ROT_Z_DEG_IIS2MDC; }
+#endif
 
     // Board -> rocket mounting orientation.  Either IMU_ORIENT_AUTO (0xFF) or
     // a TR_Orientation code 0-23: nose_sel*4 + clock, nose_sel 0..5 =
@@ -523,7 +532,7 @@ struct config : board_pins
     // magnetometer to take over: on Rolly Polly V 2026-08-29 (mag calibrated
     // offline) 30° let the pad mag pull an 89° seed error to within 10° in
     // under 2 s, the same as 90° or 180° (6° as first measured, with the
-    // IIS2MDC frame still mirrored — magTypeLeftHanded), while on the flights
+    // IIS2MDC frame still mirrored — magTypeChipSign), while on the flights
     // without a usable magnetometer it moved the climb's horizontal error
     // least of the values tried (Eagle Claw 05-17: 164 m RMS -> 170, against
     // 234 at 180°).

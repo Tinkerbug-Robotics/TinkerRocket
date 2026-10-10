@@ -16,12 +16,20 @@
 // the same IIS2MDCData, so the selection is the type alone and the slot keeps
 // its IIS2MDC name everywhere downstream (isIIS2MDCActive, IIS2MDC_MSG, the
 // mag_cal NVS record, ...).  What the counts MEAN differs — 100/3750 µT/LSB
-// against 0.15 — and that is published once, as SensorCollector::MAG_TYPE /
-// MAG_LSB_TO_uT below, for the converter, the calibrator, the sim and the
+// against 0.15 — and that is published once, as SensorCollector::magType() /
+// magLsbToUt() below, for the converter, the calibrator, the sim and the
 // OUT_STATUS_QUERY stamp to read instead of each carrying its own #ifdef.
 // Projects opt in with add_compile_definitions(TR_MAG_DRIVER_QMC5883P=1);
 // default is the IIS2MDC, unchanged.
-#if defined(TR_MAG_DRIVER_QMC5883P) && TR_MAG_DRIVER_QMC5883P
+//
+// #1590: TR_MAG_DRIVER_AUTO=1 puts TR_MagAuto in the slot instead — the
+// V9/V10 image, whose two boards fit different chips on the same pins.  It
+// probes for either at begin(), so which chip it is, and so its count scale,
+// are known only after begin(): read them through magType() / magLsbToUt(),
+// which every build provides, never from a compile-time constant.
+#if defined(TR_MAG_DRIVER_AUTO) && TR_MAG_DRIVER_AUTO
+#include "mag_auto_driver.h"
+#elif defined(TR_MAG_DRIVER_QMC5883P) && TR_MAG_DRIVER_QMC5883P
 #include <TR_QMC5883P.h>
 #else
 #include <TR_IIS2MDC.h>
@@ -115,29 +123,45 @@ class SensorCollector
 {
 public:
     // --- The magnetometer seam (see the include block above) ---
-#if defined(TR_MAG_DRIVER_QMC5883P) && TR_MAG_DRIVER_QMC5883P
+    // magType(): which chip is behind the IIS2MDC-named slot (a MAG_TYPE_*),
+    // for the converter, the calibrator, the SIL and the OUT_STATUS_QUERY
+    // stamp.  magLsbToUt(): its count scale.  Fixed by the build on a
+    // single-chip board; found by begin() on the V9/V10 image, and the
+    // IIS2MDC until then (or if neither chip answered).
+#if defined(TR_MAG_DRIVER_AUTO) && TR_MAG_DRIVER_AUTO
+    typedef TR_MagAuto       MagDriver;
+    typedef MagAuto_RawData  MagRawData;
+    static constexpr int MAG_DRIVER_OK = TR_MAG_AUTO_OK;
+    uint8_t     magType() const       { return iis2mdc.type(); }
+    float       magLsbToUt() const    { return iis2mdc.lsbToUt(); }
+    const char* magName() const       { return iis2mdc.name(); }
+    const char* magConfigNote() const { return iis2mdc.configNote(); }
+#elif defined(TR_MAG_DRIVER_QMC5883P) && TR_MAG_DRIVER_QMC5883P
     typedef TR_QMC5883P      MagDriver;
     typedef QMC5883P_RawData MagRawData;
-    static constexpr int         MAG_DRIVER_OK   = TR_QMC5883P_OK;
-    static constexpr uint8_t     MAG_TYPE        = MAG_TYPE_QMC5883P;
-    static constexpr float       MAG_LSB_TO_uT   = QMC5883P_LSB_TO_uT;
-    static constexpr const char* MAG_NAME        = "QMC5883P";
-    static constexpr const char* MAG_CONFIG_NOTE = "100 Hz normal mode, +/-8 G, set/reset on, no BDU: tear-checked reads";
+    static constexpr int MAG_DRIVER_OK = TR_QMC5883P_OK;
+    uint8_t     magType() const       { return MAG_TYPE_QMC5883P; }
+    float       magLsbToUt() const    { return QMC5883P_LSB_TO_uT; }
+    const char* magName() const       { return "QMC5883P"; }
+    const char* magConfigNote() const { return "100 Hz normal mode, +/-8 G, set/reset on, no BDU: tear-checked reads"; }
+    static_assert(QMC5883P_LSB_TO_uT - magTypeUtPerLsb(MAG_TYPE_QMC5883P) < 1e-6 &&
+                  magTypeUtPerLsb(MAG_TYPE_QMC5883P) - QMC5883P_LSB_TO_uT < 1e-6,
+                  "QMC5883P_LSB_TO_uT disagrees with magTypeUtPerLsb(MAG_TYPE_QMC5883P)");
 #else
     typedef TR_IIS2MDC       MagDriver;
     typedef IIS2MDC_RawData  MagRawData;
-    static constexpr int         MAG_DRIVER_OK   = TR_IIS2MDC_OK;
-    static constexpr uint8_t     MAG_TYPE        = MAG_TYPE_IIS2MDC;
-    static constexpr float       MAG_LSB_TO_uT   = IIS2MDC_LSB_TO_uT;
-    static constexpr const char* MAG_NAME        = "IIS2MDC";
-    static constexpr const char* MAG_CONFIG_NOTE = "100 Hz continuous, BDU on";
+    static constexpr int MAG_DRIVER_OK = TR_IIS2MDC_OK;
+    uint8_t     magType() const       { return MAG_TYPE_IIS2MDC; }
+    float       magLsbToUt() const    { return IIS2MDC_LSB_TO_uT; }
+    const char* magName() const       { return "IIS2MDC"; }
+    const char* magConfigNote() const { return "100 Hz continuous, BDU on"; }
+    // The scale the seam publishes has to be the one the MAG_TYPE promises
+    // log readers; RocketComputerTypes.h carries the wire-side copy (a
+    // double — the driver's is a float, hence the tolerance rather than ==).
+    static_assert(IIS2MDC_LSB_TO_uT - magTypeUtPerLsb(MAG_TYPE_IIS2MDC) < 1e-6 &&
+                  magTypeUtPerLsb(MAG_TYPE_IIS2MDC) - IIS2MDC_LSB_TO_uT < 1e-6,
+                  "IIS2MDC_LSB_TO_uT disagrees with magTypeUtPerLsb(MAG_TYPE_IIS2MDC)");
 #endif
-    // The scale the seam publishes has to be the one MAG_TYPE promises log
-    // readers; RocketComputerTypes.h carries the wire-side copy (a double —
-    // the driver's is a float, hence the tolerance rather than ==).
-    static_assert(MAG_LSB_TO_uT - magTypeUtPerLsb(MAG_TYPE) < 1e-6 &&
-                  magTypeUtPerLsb(MAG_TYPE) - MAG_LSB_TO_uT < 1e-6,
-                  "SensorCollector::MAG_LSB_TO_uT disagrees with magTypeUtPerLsb(MAG_TYPE)");
 
     /** GNSS high-perf-clock OTP state at boot; a gnss_otp::* constant.
      *  Board-agnostic: the LC86 driver reports NOT_M10 (#837 item 6). */

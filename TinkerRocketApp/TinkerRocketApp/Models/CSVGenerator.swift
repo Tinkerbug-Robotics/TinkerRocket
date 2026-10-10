@@ -424,13 +424,13 @@ nonisolated class CSVGenerator {
                 converter.configureMiniRotation(
                     imuDeg: config.imuRotationDeg,
                     magDeg: config.magRotationDeg,
-                    iisDeg: config.iisRotationDeg
+                    iisDeg: config.iisRotationDegApplied
                 )
                 // v6 mag_type keys the mag count scale (pre-v6 logs resolve
                 // to the IIS2MDC default).
                 converter.configureMagScale(utPerLsb: config.magUtPerLsb)
-                converter.configureMagHandedness(leftHanded: config.magLeftHanded)
-                print("[CSV] Mini rotation config: IMU=\(config.imuRotationDeg)° MAG=\(config.magRotationDeg)° IIS=\(config.iisRotationDeg.map { String($0) } ?? "n/a")° magScale=\(config.magUtPerLsb) µT/LSB magLeftHanded=\(config.magLeftHanded)")
+                converter.configureMagChipSigns(config.magChipSigns)
+                print("[CSV] Mini rotation config: IMU=\(config.imuRotationDeg)° MAG=\(config.magRotationDeg)° IIS=\(config.iisRotationDegApplied.map { String($0) } ?? "n/a")° magScale=\(config.magUtPerLsb) µT/LSB magChipSigns=\(config.magChipSigns)")
             } else {
                 print("[CSV] No statusQuery frame found — using default rotation (0°) and IIS2MDC scale")
             }

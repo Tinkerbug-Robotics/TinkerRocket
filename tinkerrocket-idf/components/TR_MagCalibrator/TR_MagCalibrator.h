@@ -59,8 +59,8 @@ public:
     MagCalibrator();
 
     // #1312: count→µT scale of the chip feeding addSample().  Defaults to
-    // the IIS2MDC's 0.15 µT/LSB; the FC passes SensorCollector::MAG_LSB_TO_uT
-    // at boot.  Only the µT-side gates (R band, residual, verify |B|) and the
+    // the IIS2MDC's 0.15 µT/LSB; the FC passes SensorCollector::magLsbToUt()
+    // at boot, after begin() has found the chip.  Only the µT-side gates (R band, residual, verify |B|) and the
     // status frame's µT fields use it — the fit and the offsets stay in
     // counts.  Without it a 50 µT sphere in QMC counts (1875 LSB) reads as
     // 281 µT and every mini calibration is rejected R_TOO_HIGH.

@@ -392,12 +392,12 @@ public class CsvGenerator {
                     converter.configureMiniRotation(
                         imuDeg = config.imuRotationDeg,
                         magDeg = config.magRotationDeg,
-                        iisDeg = config.iisRotationDeg,
+                        iisDeg = config.iisRotationDegApplied,
                     )
                     // v6 mag_type keys the mag count scale (pre-v6 logs
                     // resolve to the IIS2MDC default).
                     converter.configureMagScale(config.magUtPerLsb)
-                    converter.configureMagHandedness(config.magLeftHanded)
+                    converter.configureMagChipSigns(config.magChipSigns)
                 }
                 // else: default rotation (0°) and IIS2MDC scale
             }

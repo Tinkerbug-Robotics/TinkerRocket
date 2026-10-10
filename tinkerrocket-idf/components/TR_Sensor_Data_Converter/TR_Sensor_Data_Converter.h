@@ -48,7 +48,7 @@ public:
     // #1312: which chip is behind the IIS2MDC-named count stream — a
     // MAG_TYPE_* value.  Sets the count→µT scale convertIIS2MDCData() uses:
     // MAG_TYPE_IIS2MDC (the default, 0.15 µT/LSB) or MAG_TYPE_QMC5883P
-    // (100/3750 at ±8 G).  The FC sets it from SensorCollector::MAG_TYPE;
+    // (100/3750 at ±8 G).  The FC sets it from SensorCollector::magType();
     // the OC from the FC's OUT_STATUS_QUERY v6 mag_type, so both ends scale
     // the same counts the same way.  An unknown value falls back to the
     // IIS2MDC, as a pre-v6 log reader would.

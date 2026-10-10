@@ -45,10 +45,16 @@
 //  Axes (datasheet Figure 2, package seen from above, pin-1 dot top-left):
 //  +X points from the GND/C1 edge (pins 9-12) toward the SCK/VDD edge
 //  (pins 1-4); +Y points from the SDA edge (pins 13-16) toward the all-NC
-//  edge (pins 5-8); +Z points up out of the package.  Right-handed, with
-//  the 0x29 = 0x06 sign word configure() writes.  The chip→board rotation
-//  (IIS2MDC_ROT_Z_DEG) is a placement fact of the mini layout and is still
-//  marked VERIFY there; the axis silk on the board waits on the same bench.
+//  edge (pins 5-8); +Z is drawn up out of the package.
+//
+//  That is NOT the frame this driver reads (#1590).  With the 0x29 = 0x06
+//  sign word configure() writes (its meaning is undocumented), a Beetle
+//  bench log measured X as drawn but Y and Z reversed: still right-handed,
+//  with Z pointing INTO the board, so a flat board read the field pointing
+//  up.  The converter turns that back with magTypeChipSign (+1, -1, -1) in
+//  RocketComputerTypes.h, and each board's MAG_ROT_Z_DEG_QMC5883P is then
+//  the placement rotation alone (Beetle -90, V10 180).  Keep 0x06 unless
+//  those signs change with it; the hard-iron offsets are in these counts.
 // ---------------------------------------------------------------------------
 
 typedef enum {

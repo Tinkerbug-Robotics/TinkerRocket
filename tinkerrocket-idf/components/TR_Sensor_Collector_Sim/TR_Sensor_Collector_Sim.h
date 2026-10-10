@@ -68,6 +68,9 @@ public:
     // path still works after reverting from sim to live.
     bool isIIS2MDCActive() const { return real_.isIIS2MDCActive(); }
     bool setIIS2MDCHardIronOffset(int16_t cx, int16_t cy, int16_t cz);
+    // #1590: which chip the real collector found, and its count scale.
+    uint8_t magType() const { return real_.magType(); }
+    float   magLsbToUt() const { return real_.magLsbToUt(); }
 
     // #1111: IIS2MDC poll health passthrough.  Real-chip state regardless of
     // sim mode: a stalled bench mag stops the sim's synthetic mag too, since
