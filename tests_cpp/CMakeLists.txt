@@ -338,7 +338,12 @@ target_include_directories(test_sensor_data_converter PRIVATE
     ${LIB_DIR}/TR_RocketComputerTypes
     ${LIB_DIR}/TR_Orientation
     ${LIB_DIR}/TR_Sensor_Collector_Sim   # SimSensorModel.h: the sim's gyro LSB (#369)
+    # The IIS2MDC frame tests pin config.h's chip rotations, not a copy.
+    ${LIB_DIR}/../projects/flight_computer/main
 )
+# config.h needs a board revision; the chip rotations are shared by all of
+# them, so V9 is picked only because one has to be (as for test_orientation).
+target_compile_definitions(test_sensor_data_converter PRIVATE TR_BOARD_V9=1)
 target_link_libraries(test_sensor_data_converter GTest::gtest_main)
 gtest_discover_tests(test_sensor_data_converter)
 

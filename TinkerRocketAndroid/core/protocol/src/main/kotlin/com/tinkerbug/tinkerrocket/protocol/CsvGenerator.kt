@@ -397,6 +397,7 @@ public class CsvGenerator {
                     // v6 mag_type keys the mag count scale (pre-v6 logs
                     // resolve to the IIS2MDC default).
                     converter.configureMagScale(config.magUtPerLsb)
+                    converter.configureMagHandedness(config.magLeftHanded)
                 }
                 // else: default rotation (0°) and IIS2MDC scale
             }

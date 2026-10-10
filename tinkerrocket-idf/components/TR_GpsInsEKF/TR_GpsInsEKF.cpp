@@ -386,14 +386,19 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
     //    ascent to the mag, but no flight's magnetometer was ever valid there
     //    (all were uncalibrated, 57–1630 µT against 50).  The one flight we
     //    could calibrate offline, Rolly Polly V 2026-08-29: with the mag on
-    //    the pad only, its heading stayed within 6° of truth through the climb
-    //    and its GNSS-out track matched a true-heading seed (25/47 m at
-    //    T+5/9.7 s); fused in flight it was thrown ~150° right after the
-    //    T+0.85 s nose burst (84/133 m), and skipping samples during and after
-    //    the shock did not prevent it.  A heading set right on the pad holds
-    //    through a ~10 s climb on the gyro.  Revisit with more calibrated
-    //    flights (#1586).  Under a canopy the mag reaches the attitude only
-    //    (#1580), and the tilt comes from the state, not the swinging accel.
+    //    the pad only, its heading stayed within 10° of truth through the
+    //    climb and its GNSS-out track matched a true-heading seed (26/48 m
+    //    against 25/52 m at T+5/9.7 s); fused in flight it was thrown ~150°
+    //    right after the T+0.85 s nose burst (84/133 m), and skipping samples
+    //    during and after the shock did not prevent it.  Those numbers were
+    //    first taken with the IIS2MDC frame mirrored (magTypeLeftHanded),
+    //    which turns the field the wrong way under roll; the pad-only ones
+    //    are re-measured in the corrected frame, the in-flight one is not.
+    //    A heading set right on the pad holds through a ~10 s climb on the
+    //    gyro.  Revisit with more calibrated flights, and the in-flight case
+    //    in the corrected frame (#1586).  Under a canopy the mag reaches the
+    //    attitude only (#1580), and the tilt comes from the state, not the
+    //    swinging accel.
     if (mag_data.time_us != magTimePrev_) {
         magTimePrev_ = mag_data.time_us;
         const bool mag_phase = use_ahrs_acc && (noseFirstFlight_ || canopy_);
@@ -1143,8 +1148,9 @@ void GpsInsEKF::magMeasUpdate(const float aMeas[3], const float magMeas[3],
     //    pad, after landing), else the state's own (under a canopy, where the
     //    specific force is swing).  Rolly Polly V 2026-08-29 sat 1.3° off
     //    vertical; with its magnetometer calibrated (offline, from its own
-    //    descent) this measurement put the heading within 6° of the GNSS-fitted
-    //    truth in under 2 s of pad data, where the e-compass never fused once.
+    //    descent) this measurement put the heading within 10° of the
+    //    GNSS-fitted truth in under 2 s of pad data, where the e-compass never
+    //    fused once.
     float dm[3] = {d[0], d[1], d[2]};
     float sig_tilt;
     if (accel_is_gravity) {

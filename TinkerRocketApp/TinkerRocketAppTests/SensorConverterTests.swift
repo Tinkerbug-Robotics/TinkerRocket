@@ -190,13 +190,58 @@ final class SensorConverterTests: XCTestCase {
 
     func testIIS2MDC_SensitivityIs0_15uTPerLSB() throws {
         // Datasheet 9.13: 0.15 µT/LSB.  With zero rotation (default),
-        // raw 100 should map directly to 15 µT on each axis.
+        // raw 100 should map to 15 µT on each axis — chip X reversed, since
+        // the IIS2MDC's axes are left-handed (see the frame tests below).
         let raw = try makeIIS2MDC(x: 100, y: 200, z: -100)
         let si = converter.convertIIS2MDC(raw)
 
-        XCTAssertEqual(si.mag_x,  15.0, accuracy: 1e-6)
+        XCTAssertEqual(si.mag_x, -15.0, accuracy: 1e-6)
         XCTAssertEqual(si.mag_y,  30.0, accuracy: 1e-6)
         XCTAssertEqual(si.mag_z, -15.0, accuracy: 1e-6)
+    }
+
+    // MARK: - IIS2MDC chip frame (left-handed)
+    // ST's IIS2MDC axes are a left-handed set, so a sensor→board rotation
+    // alone mirrors board y.  Pinned to the #204 bench (config.h): board +X
+    // north reads the field on chip -Y, board +X east reads it on chip -X.
+
+    private func assertBenchReadings(_ c: SensorConverter, file: StaticString = #filePath, line: UInt = #line) throws {
+        // Board +X north: field on chip -Y → board +X.
+        let north = c.convertIIS2MDC(try makeIIS2MDC(x: 0, y: -150, z: 0))
+        XCTAssertEqual(north.mag_x, 22.5, accuracy: 1e-6, file: file, line: line)
+        XCTAssertEqual(north.mag_y,  0.0, accuracy: 1e-6, file: file, line: line)
+        // Board +X east (north is board +Y): field on chip -X → board +Y.
+        let east = c.convertIIS2MDC(try makeIIS2MDC(x: -150, y: 0, z: 0))
+        XCTAssertEqual(east.mag_x,  0.0, accuracy: 1e-6, file: file, line: line)
+        XCTAssertEqual(east.mag_y, 22.5, accuracy: 1e-6, file: file, line: line)
+        // Chip Z is board Z.
+        let up = c.convertIIS2MDC(try makeIIS2MDC(x: 0, y: 0, z: 300))
+        XCTAssertEqual(up.mag_z, 45.0, accuracy: 1e-6, file: file, line: line)
+    }
+
+    func testIIS2MDC_BenchReadingsLandOnTheBoardAxes() throws {
+        let c = SensorConverter()
+        c.configureMiniRotation(imuDeg: -45.0, magDeg: 180.0, iisDeg: 90.0)
+        try assertBenchReadings(c)
+    }
+
+    func testIIS2MDC_PreV4LogFallsBackToThe90DegPlacement() throws {
+        // format_version < 4 carries no IIS2MDC rotation; every such log with
+        // an IIS2MDC stream is a V8/V9 at +90 deg — not the MMC's angle.
+        let c = SensorConverter()
+        c.configureMiniRotation(imuDeg: -45.0, magDeg: 180.0, iisDeg: nil)
+        try assertBenchReadings(c)
+    }
+
+    func testQMC5883P_IsNotReflected() throws {
+        // The QMC5883P's axes are right-handed: chip X keeps its sign.
+        let c = SensorConverter()
+        c.configureMiniRotation(imuDeg: -45.0, magDeg: 180.0, iisDeg: 90.0)
+        c.configureMagScale(utPerLsb: OutStatusQueryData.qmc5883pUtPerLsb)
+        c.configureMagHandedness(leftHanded: false)
+        let si = c.convertIIS2MDC(try makeIIS2MDC(x: 3750, y: 0, z: 0))
+        XCTAssertEqual(si.mag_x,   0.0, accuracy: 1e-6)
+        XCTAssertEqual(si.mag_y, 100.0, accuracy: 1e-6)
     }
 
     // MARK: - NonSensor flag extraction (#196)

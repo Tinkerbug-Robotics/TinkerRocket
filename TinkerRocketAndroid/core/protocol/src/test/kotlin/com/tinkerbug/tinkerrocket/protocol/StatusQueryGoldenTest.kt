@@ -4,8 +4,10 @@ import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * OutStatusQueryData version ladder (v3/v4/v5/v6) — golden walk mirroring the
@@ -54,6 +56,7 @@ class StatusQueryGoldenTest {
         assertEquals(6, q.formatVersion)
         assertNull(q.magType)
         assertEquals(OutStatusQueryData.IIS2MDC_UT_PER_LSB, q.magUtPerLsb)
+        assertTrue(q.magLeftHanded)   // the IIS2MDC's axes are left-handed
     }
 
     @Test
@@ -62,10 +65,13 @@ class StatusQueryGoldenTest {
         val q = OutStatusQueryData.decode(WireFixtures.bytes("logframes/statusquery_v6_42.bin"))!!
         assertEquals(OutStatusQueryData.MAG_TYPE_QMC5883P, q.magType)
         assertEquals(OutStatusQueryData.QMC5883P_UT_PER_LSB, q.magUtPerLsb)
-        // An unknown future mag_type must fall back to the IIS2MDC scale,
-        // same as a pre-v6 log.
+        // The same stamp keys the chip handedness: the QMC5883P is right-handed.
+        assertFalse(q.magLeftHanded)
+        // An unknown future mag_type must fall back to the IIS2MDC scale and
+        // handedness, same as a pre-v6 log.
         val unknown = q.copy(magType = 7)
         assertEquals(OutStatusQueryData.IIS2MDC_UT_PER_LSB, unknown.magUtPerLsb)
+        assertTrue(unknown.magLeftHanded)
     }
 
     @Test

@@ -112,6 +112,17 @@ QMC5883P_UT_PER_LSB = 100.0 / 3750.0
 MAG_TYPE_NAMES = {0: "IIS2MDC", 1: "QMC5883P"}
 MAG_UT_PER_LSB_BY_TYPE = {0: IIS2MDC_UT_PER_LSB, 1: QMC5883P_UT_PER_LSB}
 
+
+def mag_type_left_handed(mag_type):
+    """Whether the chip behind the I2C-mag stream has left-handed axes
+    (magTypeLeftHanded in RocketComputerTypes.h).  The IIS2MDC does, so its
+    chip X is negated before the Z rotation; without that every IIS2MDC
+    board vector has board y reversed.  The log holds raw chip counts, so
+    this applies to every IIS2MDC log, whichever firmware wrote it.
+    None (a pre-v6 log) and unknown values are the IIS2MDC, as for the scale.
+    """
+    return mag_type != 1
+
 # BMP585: temp in Q16 (degC * 65536), pressure in Q6 (Pa * 64)
 # ------------------------------------
 
@@ -1290,13 +1301,15 @@ def parse_binary_file(filepath):
         rec["mag_z"] = mag[2]
 
     # --- Post-process I2C-mag raw data: scale (per-board, from the v6
-    #     mag_type stamp), chip-Z rotate, then board→rocket (matches
+    #     mag_type stamp), chip-X sign for a left-handed chip, chip-Z
+    #     rotate, then board→rocket (matches
     #     SensorConverter::convertIIS2MDCData) ---
     iis_rad = math.radians(config["iis2mdc_rot_z_deg"])
     c_iis, s_iis = math.cos(iis_rad), math.sin(iis_rad)
     mag_ut_per_lsb = config["mag_ut_per_lsb"]
+    x_sign = -1.0 if mag_type_left_handed(config["mag_type"]) else 1.0
     for rec in records["IIS2MDC"]:
-        mx = rec.pop("raw_x") * mag_ut_per_lsb
+        mx = x_sign * rec.pop("raw_x") * mag_ut_per_lsb
         my = rec.pop("raw_y") * mag_ut_per_lsb
         mz = rec.pop("raw_z") * mag_ut_per_lsb
         mag = apply_b2r(mx * c_iis - my * s_iis,

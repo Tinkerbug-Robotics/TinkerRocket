@@ -70,7 +70,9 @@ def test_v6_iis2mdc_scale(tmp_path):
     records, _, config = parse(tmp_path, 6, 0)
     assert config["mag_type"] == 0
     assert config["mag_ut_per_lsb"] == pfd.IIS2MDC_UT_PER_LSB == 0.15
-    assert records["IIS2MDC"][0]["mag_x"] == 150.0
+    # The IIS2MDC's left-handed chip X comes out reversed (see
+    # test_iis2mdc_handedness.py); the scale is what this pins.
+    assert records["IIS2MDC"][0]["mag_x"] == -150.0
 
 
 def test_v6_unknown_mag_type_falls_back_to_iis2mdc(tmp_path):
@@ -86,4 +88,4 @@ def test_v5_log_assumes_iis2mdc(tmp_path):
     # The rest of the v5 config must decode exactly as before the v6 field.
     assert config["low_g_fs_g"] == 16
     assert config["ism6_rot_z_deg"] == -45.0
-    assert records["IIS2MDC"][0]["mag_x"] == 150.0
+    assert records["IIS2MDC"][0]["mag_x"] == -150.0
