@@ -237,12 +237,13 @@ class SensorConverterTest {
         // = 100 µT.
         val c = SensorConverter()
         c.configureMagScale(OutStatusQueryData.QMC5883P_UT_PER_LSB)
-        c.configureMagHandedness(leftHanded = false)
+        c.configureMagChipSigns(Triple(1.0, -1.0, -1.0))
         val si = c.convertIIS2MDC(makeIis2mdc(x = 3750, y = -3750, z = 375))
 
+        // Chip Y and Z reversed into the normalized frame (#1590).
         assertEquals(100.0, si.magX, 1e-6)
-        assertEquals(-100.0, si.magY, 1e-6)
-        assertEquals(10.0, si.magZ, 1e-6)
+        assertEquals(100.0, si.magY, 1e-6)
+        assertEquals(-10.0, si.magZ, 1e-6)
     }
 
     // MARK: - IIS2MDC chip frame (left-handed)
@@ -271,16 +272,51 @@ class SensorConverterTest {
         assertBenchReadings(c)
     }
 
-    @Test
-    fun `QMC5883P is not reflected`() {
-        // The QMC5883P's axes are right-handed: chip X keeps its sign.
+    // MARK: - QMC5883P chip frame (#1590)
+    // As TR_QMC5883P configures it the chip's Z points into the board; its
+    // signs (+1, -1, -1) bring Z out of the top, and the board rotation is
+    // then the placement: Beetle -90 (measured on a bench log), V10 180.
+
+    private fun qmcConverter(stampDeg: Double): SensorConverter {
+        val q = OutStatusQueryData(
+            ism6LowGFsG = 16, ism6HighGFsG = 256, ism6GyroFsDps = 4000,
+            ism6RotZCdeg = -4500, mmcRotZCdeg = 18000, formatVersion = 6,
+            iis2mdcRotZCdeg = (stampDeg * 100.0).toInt(),
+            magType = OutStatusQueryData.MAG_TYPE_QMC5883P,
+        )
         val c = SensorConverter()
-        c.configureMiniRotation(imuDeg = -45.0, magDeg = 180.0, iisDeg = 90.0)
-        c.configureMagScale(OutStatusQueryData.QMC5883P_UT_PER_LSB)
-        c.configureMagHandedness(leftHanded = false)
-        val si = c.convertIIS2MDC(makeIis2mdc(x = 3750, y = 0, z = 0))
-        assertEquals(0.0, si.magX, 1e-6)
-        assertEquals(100.0, si.magY, 1e-6)
+        c.configureMiniRotation(q.imuRotationDeg, q.magRotationDeg, q.iisRotationDegApplied)
+        c.configureMagScale(q.magUtPerLsb)
+        c.configureMagChipSigns(q.magChipSigns)
+        return c
+    }
+
+    private fun qmcMatrix(c: SensorConverter): List<List<Double>> {
+        val cols = listOf(Triple(3750, 0, 0), Triple(0, 3750, 0), Triple(0, 0, 3750)).map { (x, y, z) ->
+            val si = c.convertIIS2MDC(makeIis2mdc(x = x, y = y, z = z))
+            listOf(si.magX / 100.0, si.magY / 100.0, si.magZ / 100.0)
+        }
+        return (0 until 3).map { r -> (0 until 3).map { k -> cols[k][r] } }
+    }
+
+    @Test
+    fun `QMC5883P Beetle maps as measured, pre-1590 stamp included`() {
+        val want = listOf(listOf(0.0, -1.0, 0.0), listOf(-1.0, 0.0, 0.0), listOf(0.0, 0.0, -1.0))
+        for (stamp in listOf(-90.0, 90.0)) {
+            val m = qmcMatrix(qmcConverter(stamp))
+            for (r in 0 until 3) for (k in 0 until 3) {
+                assertEquals(want[r][k], m[r][k], 1e-9, "stamp $stamp row $r col $k")
+            }
+        }
+    }
+
+    @Test
+    fun `QMC5883P V10 maps as inferred`() {
+        val want = listOf(listOf(-1.0, 0.0, 0.0), listOf(0.0, 1.0, 0.0), listOf(0.0, 0.0, -1.0))
+        val m = qmcMatrix(qmcConverter(180.0))
+        for (r in 0 until 3) for (k in 0 until 3) {
+            assertEquals(want[r][k], m[r][k], 1e-9, "row $r col $k")
+        }
     }
 
     // MARK: - NonSensor flag extraction (#196)

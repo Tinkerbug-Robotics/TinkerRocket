@@ -33,6 +33,10 @@ struct board_pins
     static constexpr uint8_t ISM6HG256_CS = 7;
     static constexpr uint8_t IIS2MDC_SDA = 13;
     static constexpr uint8_t IIS2MDC_SCL = 20;
+    // IIS2MDC -> board rotation (deg, CCW about +Z) on its normalized frame
+    // (magTypeChipSign).  The V8/V9 value, kept as it always was here; the
+    // placement on a V7 that carries one has never been checked.
+    static constexpr float MAG_ROT_Z_DEG_IIS2MDC = 90.0f;
 
     // ### Part presence ###
     static constexpr bool USE_BMP585 = true;

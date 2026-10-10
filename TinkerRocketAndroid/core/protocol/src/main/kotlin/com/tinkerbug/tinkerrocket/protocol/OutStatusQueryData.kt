@@ -1,5 +1,7 @@
 package com.tinkerbug.tinkerrocket.protocol
 
+import kotlin.math.abs
+
 /**
  * OutStatusQueryData — msg 0xA0, sensor config from the FlightComputer.
  *
@@ -45,13 +47,32 @@ public data class OutStatusQueryData(
         get() = if (magType == MAG_TYPE_QMC5883P) QMC5883P_UT_PER_LSB else IIS2MDC_UT_PER_LSB
 
     /**
-     * Whether the chip behind the IIS2MDC-named stream has left-handed axes
-     * (magTypeLeftHanded in RocketComputerTypes.h).  The IIS2MDC does, so the
-     * converter negates its chip X before the Z rotation.  Pre-v6 logs (null)
-     * and unknown values are the IIS2MDC, as for the scale.
+     * Per-axis signs carrying the chip's own axes into its normalized frame
+     * (right-handed, Z out of the top) before the Z rotation —
+     * magTypeChipSign in RocketComputerTypes.h.  IIS2MDC (-1, +1, +1): its
+     * axes are left-handed (#1589).  QMC5883P (+1, -1, -1): as configured its
+     * Z points into the board (#1590).  Pre-v6 logs (null) and unknown values
+     * are the IIS2MDC, as for the scale.
      */
-    public val magLeftHanded: Boolean
-        get() = magType != MAG_TYPE_QMC5883P
+    public val magChipSigns: Triple<Double, Double, Double>
+        get() = if (magType == MAG_TYPE_QMC5883P) Triple(1.0, -1.0, -1.0) else Triple(-1.0, 1.0, 1.0)
+
+    /**
+     * The I2C-mag rotation to apply to this log's counts: [iisRotationDeg],
+     * except that a QMC5883P log stamped +90 is a pre-#1590 Beetle log (its
+     * firmware applied the IIS2MDC's angle; no QMC5883P board sits at +90 in
+     * the normalized frame) and is read at the Beetle's -90, as
+     * plot_flight_data_mini.py does.
+     */
+    public val iisRotationDegApplied: Double?
+        get() {
+            val deg = iisRotationDeg ?: return null
+            return if (magType == MAG_TYPE_QMC5883P && abs(deg - QMC5883P_PRE_1590_STAMP_DEG) < 1e-6) {
+                QMC5883P_BEETLE_ROT_Z_DEG
+            } else {
+                deg
+            }
+        }
 
     public companion object {
         public const val MIN_SIZE: Int = 10
@@ -68,6 +89,10 @@ public data class OutStatusQueryData(
         public const val IIS2MDC_UT_PER_LSB: Double = 0.15
         /** QMC5883P at ±8 G, 3750 LSB/gauss (QST Table 2) — the mini's #797 mag. */
         public const val QMC5883P_UT_PER_LSB: Double = 100.0 / 3750.0
+
+        /** The QMC5883P rotation the Beetle stamped before #1590, and its true one. */
+        public const val QMC5883P_PRE_1590_STAMP_DEG: Double = 90.0
+        public const val QMC5883P_BEETLE_ROT_Z_DEG: Double = -90.0
 
         /** Returns null on a wrong-size payload (skip, don't throw), mirroring iOS throw-and-caller-skips. */
         public fun decode(payload: ByteArray): OutStatusQueryData? {

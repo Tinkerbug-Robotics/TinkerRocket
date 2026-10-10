@@ -37,8 +37,9 @@ public class SensorConverter {
     // Count→µT scale of the IIS2MDC-named stream; per-board since #797
     // (big board IIS2MDC vs mini QMC5883P), keyed off the 0xA0 v6 mag_type.
     private var magUtPerLsb: Double = OutStatusQueryData.IIS2MDC_UT_PER_LSB
-    // Left-handed chip axes (the IIS2MDC's), keyed off the same mag_type.
-    private var magLeftHanded: Boolean = true
+    // The chip's axis signs into its normalized frame (magTypeChipSign),
+    // keyed off the same mag_type; the IIS2MDC's by default.
+    private var magChipSigns: Triple<Double, Double, Double> = Triple(-1.0, 1.0, 1.0)
 
     init {
         // Calculate sensitivity values. Mirror the firmware converter
@@ -82,12 +83,12 @@ public class SensorConverter {
     }
 
     /**
-     * Configure the chip handedness of the IIS2MDC-named mag stream from the
-     * status query's v6 mag_type ([OutStatusQueryData.magLeftHanded]).  Left
-     * at the IIS2MDC default (left-handed) when the log predates v6.
+     * Configure the chip axis signs of the IIS2MDC-named mag stream from the
+     * status query's v6 mag_type ([OutStatusQueryData.magChipSigns]).  Left
+     * at the IIS2MDC's when the log predates v6.
      */
-    public fun configureMagHandedness(leftHanded: Boolean) {
-        magLeftHanded = leftHanded
+    public fun configureMagChipSigns(signs: Triple<Double, Double, Double>) {
+        magChipSigns = signs
     }
 
     /**
@@ -247,22 +248,21 @@ public class SensorConverter {
      * per-board ([configureMagScale]): IIS2MDC 0.15 µT/LSB (datasheet 9.13),
      * mini QMC5883P 100/3750 µT/LSB (#797).  Applies the IIS2MDC-specific
      * sensor→board rotation (iis2mdcRotZRad, from status query
-     * iis2mdc_rot_z_cdeg, format_version >= 4 — #204), NOT the MMC's.  A
-     * left-handed chip (the IIS2MDC) has its X negated first, matching
-     * SensorConverter::convertIIS2MDCData in the firmware.
+     * iis2mdc_rot_z_cdeg, format_version >= 4 — #204), NOT the MMC's.  The
+     * chip's axis signs come first ([OutStatusQueryData.magChipSigns]),
+     * matching SensorConverter::convertIIS2MDCData in the firmware.
      */
     public fun convertIIS2MDC(raw: Iis2mdcData): Mmc5983MaDataSi {
         val utPerLsb = magUtPerLsb
-        val xSign = if (magLeftHanded) -1.0 else 1.0
 
-        val mx = xSign * raw.magX.toDouble() * utPerLsb
-        val my = raw.magY.toDouble() * utPerLsb
-        val mz = raw.magZ.toDouble() * utPerLsb
+        val mx = magChipSigns.first * raw.magX.toDouble() * utPerLsb
+        val my = magChipSigns.second * raw.magY.toDouble() * utPerLsb
+        val mz = magChipSigns.third * raw.magZ.toDouble() * utPerLsb
 
         val c = cos(iis2mdcRotZRad)
         val s = sin(iis2mdcRotZRad)
 
-        // Right-handed sensor frame -> board frame, rotation about +Z.
+        // Normalized sensor frame -> board frame, rotation about +Z.
         val magX = (mx * c) - (my * s)
         val magY = (mx * s) + (my * c)
         val magZ = mz

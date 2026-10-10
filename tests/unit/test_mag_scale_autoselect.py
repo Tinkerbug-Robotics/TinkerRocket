@@ -63,7 +63,9 @@ def test_v6_qmc5883p_scale(tmp_path):
     assert config["mag_ut_per_lsb"] == pfd.QMC5883P_UT_PER_LSB == QMC_SCALE
     rec = records["IIS2MDC"][0]
     assert rec["mag_x"] == 1000 * QMC_SCALE
-    assert rec["mag_z"] == -3000 * QMC_SCALE
+    # The QMC5883P's chip Z is reversed into the normalized frame (#1590,
+    # test_iis2mdc_handedness.py); the scale is what this pins.
+    assert rec["mag_z"] == 3000 * QMC_SCALE
 
 
 def test_v6_iis2mdc_scale(tmp_path):

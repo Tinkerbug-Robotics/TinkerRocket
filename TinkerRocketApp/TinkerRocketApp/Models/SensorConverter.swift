@@ -30,8 +30,9 @@ nonisolated class SensorConverter {
     // Count→µT scale of the IIS2MDC-named stream; per-board since #797
     // (big board IIS2MDC vs mini QMC5883P), keyed off the 0xA0 v6 mag_type.
     private var mag_ut_per_lsb: Double = OutStatusQueryData.iis2mdcUtPerLsb
-    // Left-handed chip axes (the IIS2MDC's), keyed off the same mag_type.
-    private var mag_left_handed: Bool = true
+    // The chip's axis signs into its normalized frame (magTypeChipSign),
+    // keyed off the same mag_type; the IIS2MDC's by default.
+    private var mag_chip_signs: (x: Double, y: Double, z: Double) = (-1.0, 1.0, 1.0)
 
     init() {
         // Calculate sensitivity values. Mirror the firmware converter
@@ -82,11 +83,11 @@ nonisolated class SensorConverter {
         mag_ut_per_lsb = utPerLsb
     }
 
-    /// Configure the chip handedness of the IIS2MDC-named mag stream from the
-    /// status query's v6 mag_type (`OutStatusQueryData.magLeftHanded`).
-    /// Left at the IIS2MDC default (left-handed) when the log predates v6.
-    func configureMagHandedness(leftHanded: Bool) {
-        mag_left_handed = leftHanded
+    /// Configure the chip axis signs of the IIS2MDC-named mag stream from the
+    /// status query's v6 mag_type (`OutStatusQueryData.magChipSigns`).  Left
+    /// at the IIS2MDC's when the log predates v6.
+    func configureMagChipSigns(_ signs: (x: Double, y: Double, z: Double)) {
+        mag_chip_signs = signs
     }
 
     /// Configure Legacy sensor rotation.
@@ -234,20 +235,19 @@ nonisolated class SensorConverter {
     /// 9.13), mini QMC5883P 100/3750 µT/LSB (#797).  Applies the
     /// IIS2MDC-specific sensor→board rotation (iis2mdc_rot_z_rad, from
     /// status query iis2mdc_rot_z_cdeg, format_version >= 4 — #204), NOT
-    /// the MMC's.  A left-handed chip (the IIS2MDC) has its X negated first,
+    /// the MMC's.  The chip's axis signs come first (`magChipSigns`),
     /// matching SensorConverter::convertIIS2MDCData in the firmware.
     func convertIIS2MDC(_ raw: IIS2MDCData) -> MMC5983MADataSI {
         let UT_PER_LSB = mag_ut_per_lsb
-        let x_sign: Double = mag_left_handed ? -1.0 : 1.0
 
-        let mx = x_sign * Double(raw.mag_x) * UT_PER_LSB
-        let my = Double(raw.mag_y) * UT_PER_LSB
-        let mz = Double(raw.mag_z) * UT_PER_LSB
+        let mx = mag_chip_signs.x * Double(raw.mag_x) * UT_PER_LSB
+        let my = mag_chip_signs.y * Double(raw.mag_y) * UT_PER_LSB
+        let mz = mag_chip_signs.z * Double(raw.mag_z) * UT_PER_LSB
 
         let c = cos(iis2mdc_rot_z_rad)
         let s = sin(iis2mdc_rot_z_rad)
 
-        // Right-handed sensor frame -> board frame, rotation about +Z.
+        // Normalized sensor frame -> board frame, rotation about +Z.
         let mag_x = (mx * c) - (my * s)
         let mag_y = (mx * s) + (my * c)
         let mag_z = mz

@@ -13,6 +13,69 @@
 
 static const char* SC_TAG = "SENSORS";
 
+// Boot diagnostics only one magnetometer can answer, overloaded on the driver
+// behind the seam so begin() needs no #ifdef: the IIS2MDC's hard iron lives
+// in its OFFSET registers, the QMC5883P's in the driver (it has none).
+// Which driver headers exist depends on the seam (see TR_Sensor_Collector.h).
+#if defined(TR_MAG_DRIVER_AUTO) && TR_MAG_DRIVER_AUTO
+#define TR_MAG_HAS_IIS2MDC  1
+#define TR_MAG_HAS_QMC5883P 1
+#elif defined(TR_MAG_DRIVER_QMC5883P) && TR_MAG_DRIVER_QMC5883P
+#define TR_MAG_HAS_IIS2MDC  0
+#define TR_MAG_HAS_QMC5883P 1
+#else
+#define TR_MAG_HAS_IIS2MDC  1
+#define TR_MAG_HAS_QMC5883P 0
+#endif
+
+#if TR_MAG_HAS_IIS2MDC
+static void logMagBootState(TR_IIS2MDC& mag)
+{
+    // Dump OFFSET_X/Y/Z hard-iron correction registers — should be all
+    // zero after softReset(); non-zero values would be subtracted from
+    // every reading and could explain a fixed offset.
+    uint8_t off[6] = {0};
+    for (int i = 0; i < 6; i++)
+    {
+        (void)mag.readRegister(IIS2MDC_Reg::OFFSET_X_REG_L + i, &off[i]);
+    }
+    ESP_LOGI(SC_TAG,
+        "IIS2MDC OFFSET regs: X=%02X%02X Y=%02X%02X Z=%02X%02X",
+        off[1], off[0], off[3], off[2], off[5], off[4]);
+}
+#endif
+
+#if TR_MAG_HAS_QMC5883P
+static void logMagBootState(TR_QMC5883P& mag)
+{
+    // No offset registers on this part: the hard iron lives in the driver,
+    // and softReset() inside begin() just zeroed it — the same contract the
+    // register dump checks on the IIS2MDC.
+    int16_t ox = 0, oy = 0, oz = 0;
+    mag.getHardIronOffset(&ox, &oy, &oz);
+    ESP_LOGI(SC_TAG, "QMC5883P hard-iron offset (driver): (%d,%d,%d)",
+             (int)ox, (int)oy, (int)oz);
+    // #1590: read back what configure() wrote.  A Beetle bench log read
+    // |B| = 13 uT at the +/-8 G scale (3750 LSB/G), close to 52 uT at the
+    // +/-30 G one (1000 LSB/G): CTRL2 RNG (bits 3:2) should read 10.
+    uint8_t ctrl1 = 0, ctrl2 = 0, sign = 0;
+    (void)mag.readRegister(qmc5883p::REG_CTRL1, &ctrl1);
+    (void)mag.readRegister(qmc5883p::REG_CTRL2, &ctrl2);
+    (void)mag.readRegister(qmc5883p::REG_AXIS_SIGN, &sign);
+    ESP_LOGI(SC_TAG, "QMC5883P CTRL1=0x%02X CTRL2=0x%02X (RNG=%u) AXIS_SIGN=0x%02X",
+             (unsigned)ctrl1, (unsigned)ctrl2, (unsigned)((ctrl2 >> 2) & 0x3u),
+             (unsigned)sign);
+}
+#endif
+
+#if defined(TR_MAG_DRIVER_AUTO) && TR_MAG_DRIVER_AUTO
+static void logMagBootState(TR_MagAuto& mag)
+{
+    if (mag.type() == MAG_TYPE_QMC5883P) logMagBootState(mag.qmc5883p());
+    else                                 logMagBootState(mag.iis2mdc());
+}
+#endif
+
 // #1140 item 1: the MMC5983MA's CM_FREQ and filter bandwidth are not
 // independent — the datasheet's register table pairs them, and the two sites
 // that configured this part used two different, both partly wrong, ladders.
@@ -393,8 +456,15 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     // behaves exactly as before.
     if (use_iis2mdc)
     {
+#if defined(TR_MAG_DRIVER_AUTO) && TR_MAG_DRIVER_AUTO
+        ESP_LOGI(SC_TAG, "Probing for an IIS2MDC (0x%02X), then a QMC5883P (0x%02X), "
+                         "on I2C SDA=%d SCL=%d...",
+                 (unsigned)IIS2MDC_I2C_ADDR, (unsigned)QMC5883P_DEFAULT_ADDR,
+                 (int)IIS2MDC_SDA, (int)IIS2MDC_SCL);
+#else
         ESP_LOGI(SC_TAG, "Probing for %s on I2C SDA=%d SCL=%d addr=0x%02X...",
-                 MAG_NAME, (int)IIS2MDC_SDA, (int)IIS2MDC_SCL, (unsigned)IIS2MDC_I2C_ADDR);
+                 magName(), (int)IIS2MDC_SDA, (int)IIS2MDC_SCL, (unsigned)IIS2MDC_I2C_ADDR);
+#endif
 
         // Mini seam: an app-supplied bus (shared with the INA230) arrives via
         // the ctor; only create our own when none was provided.
@@ -425,39 +495,17 @@ void SensorCollector::begin(uint8_t imu_execution_core)
             // QMC5883P (#1312): normal mode, +/-8 G, set/reset on.
             if (iis2mdc.configure() != MAG_DRIVER_OK)
             {
-                ESP_LOGE(SC_TAG, "%s configuration failed, stopping.", MAG_NAME);
+                ESP_LOGE(SC_TAG, "%s configuration failed, stopping.", magName());
                 while (1) { delay_ms(1000); }
             }
 
             iis2mdc_active = true;
-            ESP_LOGI(SC_TAG, "%s found and initialized (%s)", MAG_NAME, MAG_CONFIG_NOTE);
+            ESP_LOGI(SC_TAG, "%s found and initialized (%s)", magName(), magConfigNote());
             ESP_LOGI(SC_TAG, "MMC5983MA path skipped — %s is the magnetometer on this "
                              "board (shared pin %d owned by I2C SDA)",
-                     MAG_NAME, (int)IIS2MDC_SDA);
+                     magName(), (int)IIS2MDC_SDA);
 
-#if defined(TR_MAG_DRIVER_QMC5883P) && TR_MAG_DRIVER_QMC5883P
-            // No offset registers on this part: the hard iron lives in the
-            // driver, and softReset() inside begin() just zeroed it — the
-            // same contract the register dump below checks on the IIS2MDC.
-            {
-                int16_t ox = 0, oy = 0, oz = 0;
-                iis2mdc.getHardIronOffset(&ox, &oy, &oz);
-                ESP_LOGI(SC_TAG, "QMC5883P hard-iron offset (driver): (%d,%d,%d)",
-                         (int)ox, (int)oy, (int)oz);
-            }
-#else
-            // Dump OFFSET_X/Y/Z hard-iron correction registers — should be all
-            // zero after softReset(); non-zero values would be subtracted from
-            // every reading and could explain a fixed offset.
-            uint8_t off[6] = {0};
-            for (int i = 0; i < 6; i++)
-            {
-                (void)iis2mdc.readRegister(IIS2MDC_Reg::OFFSET_X_REG_L + i, &off[i]);
-            }
-            ESP_LOGI(SC_TAG,
-                "IIS2MDC OFFSET regs: X=%02X%02X Y=%02X%02X Z=%02X%02X",
-                off[1], off[0], off[3], off[2], off[5], off[4]);
-#endif
+            logMagBootState(iis2mdc);
 
             // Sanity print — read a few samples to confirm the part is alive.
             // Continuous mode at 100 Hz means a fresh sample is ready every 10 ms.
@@ -469,11 +517,11 @@ void SensorCollector::begin(uint8_t imu_execution_core)
                 {
                     const float mag = sqrtf(x_uT * x_uT + y_uT * y_uT + z_uT * z_uT);
                     ESP_LOGI(SC_TAG, "%s sample %d: x=%.2f y=%.2f z=%.2f uT  |B|=%.2f uT",
-                             MAG_NAME, s, (double)x_uT, (double)y_uT, (double)z_uT, (double)mag);
+                             magName(), s, (double)x_uT, (double)y_uT, (double)z_uT, (double)mag);
                 }
                 else
                 {
-                    ESP_LOGW(SC_TAG, "%s sample %d read failed", MAG_NAME, s);
+                    ESP_LOGW(SC_TAG, "%s sample %d read failed", magName(), s);
                 }
                 delay_ms(15);
             }
@@ -482,12 +530,12 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         {
             if (use_mmc5983ma)
             {
-                ESP_LOGI(SC_TAG, "%s not detected — falling back to MMC5983MA", MAG_NAME);
+                ESP_LOGI(SC_TAG, "%s not detected — falling back to MMC5983MA", magName());
             }
             else
             {
                 ESP_LOGW(SC_TAG, "%s not detected and this board has no "
-                                 "MMC5983MA fallback — NO MAGNETOMETER", MAG_NAME);
+                                 "MMC5983MA fallback — NO MAGNETOMETER", magName());
             }
             // Tear down the bus so the pins are released (on V7 this frees
             // shared pin 13 for SPI CS use). Never tear down a shared,
@@ -1108,7 +1156,7 @@ void SensorCollector::pollMagData(void* parameter)
                         ESP_LOGW(SC_TAG, "%s STALLED: %lu consecutive read failures "
                                          "(last attempt %lu us) — probing at %lu ms, backing "
                                          "off to %lu ms (#1111)",
-                                 MAG_NAME,
+                                 self->magName(),
                                  (unsigned long)self->iis2mdc_gate.consec_fails,
                                  (unsigned long)iis2_elapsed,
                                  (unsigned long)(Iis2mdcPollGate::STALL_RETRY_MIN_US / 1000u),
@@ -1117,10 +1165,10 @@ void SensorCollector::pollMagData(void* parameter)
                     case Iis2mdcPollGate::EV_RECOVERED:
                         ESP_LOGI(SC_TAG, "%s recovered (stall #%lu after %lu failed "
                                          "attempts) — reconfigured %s%s",
-                                 MAG_NAME,
+                                 self->magName(),
                                  (unsigned long)self->iis2mdc_gate.stall_events,
                                  (unsigned long)iis2_fails_before,
-                                 MAG_CONFIG_NOTE,
+                                 self->magConfigNote(),
                                  self->iis2mdc_offset_set ? ", hard-iron offset re-applied" : "");
                         break;
                     default:

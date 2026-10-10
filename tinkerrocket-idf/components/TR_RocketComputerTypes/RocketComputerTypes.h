@@ -883,25 +883,33 @@ static constexpr double magTypeUtPerLsb(uint8_t mag_type)
                                            : MAG_UT_PER_LSB_IIS2MDC;
 }
 
-// Whether the chip's own X/Y/Z axes form a LEFT-handed set.  The IIS2MDC's
-// do: ST draws each axis pointing toward its X/Y/Z marking, and on this
-// family (LIS2MDL / IIS2MDC) that gives X x Y = -Z — ST's own words are
-// "frame is left-handed".  No rotation can turn a left-handed set into the
-// right-handed board frame, so a sensor->board Rz alone mirrors the field:
-// until this was found every IIS2MDC board vector had board y reversed,
-// and the fused heading was the mirror image of the true one.
+// Each magnetometer's own axes, carried into its NORMALIZED frame: a
+// right-handed set with Z out of the top of the package.  The sensor->board
+// rotation about +Z (the board header's MAG_ROT_Z_DEG_*) is then the
+// placement rotation alone, because a rotation about Z cannot fix either of
+// the two things below.
 //
-// The fix is a reflection in the chip frame: negate chip X, which leaves
-// (-X, Y, Z) right-handed, and the IIS2MDC's +90 deg sensor->board Rz is
-// then the true placement rotation (chip Y along board -X, as the #204
-// bench found).  SensorConverter::convertIIS2MDCData applies it, the
-// SIL's encoder inverts it, and Data_Analysis/plot_flight_data_mini.py and
-// both apps carry the same rule for logs.  Raw counts on every wire and in
-// every log are untouched chip counts, so the rule applies retroactively.
-// Unknown → IIS2MDC, as for the scale.
-static constexpr bool magTypeLeftHanded(uint8_t mag_type)
+//   IIS2MDC  (-1, +1, +1)  ST draws each axis pointing toward its X/Y/Z
+//            marking, and on this family (LIS2MDL / IIS2MDC) that gives
+//            X x Y = -Z — ST's own words are "frame is left-handed".  With an
+//            Rz alone every V8/V9 board vector had board y reversed and the
+//            fused heading was the mirror of the true one (#1589).  Negating
+//            X leaves (-X, Y, Z) right-handed with Z still out of the top.
+//   QMC5883P (+1, -1, -1)  As TR_QMC5883P configures it (axis-sign word
+//            0x29 = 0x06) the set is right-handed but Z points INTO the
+//            board: on a Beetle bench log the field read pointing up with
+//            the board flat (#1590).  Negating Y and Z (a half turn about X)
+//            brings Z out of the top.
+//
+// SensorConverter::convertIIS2MDCData applies these, the SIL's encoder
+// inverts them, and Data_Analysis/plot_flight_data_mini.py and both apps
+// carry the same signs for logs.  Raw counts on every wire and in every log
+// are untouched chip counts, so the signs apply retroactively.  Unknown →
+// IIS2MDC, as for the scale.  axis: 0 = X, 1 = Y, 2 = Z.
+static constexpr int8_t magTypeChipSign(uint8_t mag_type, int axis)
 {
-    return mag_type != MAG_TYPE_QMC5883P;
+    return (mag_type == MAG_TYPE_QMC5883P) ? (axis == 0 ? 1 : -1)
+                                           : (axis == 0 ? -1 : 1);
 }
 
 // Payload sent with OUT_STATUS_QUERY so the OUT processor can configure

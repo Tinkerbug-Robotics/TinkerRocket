@@ -144,6 +144,10 @@ if(TR_BOARD_M1)
     message(STATUS "flight_computer: GNSS driver LC86G (TR_GNSS_DRIVER_LC86=1)")
 elseif(TR_BOARD_V9)
     set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.v9")
+    # V9 fits an ST IIS2MDC and V10 a QST QMC5883P, on the same pins and from
+    # the same board header; this image asks for either at boot (#1590).
+    add_compile_definitions(TR_MAG_DRIVER_AUTO=1)
+    message(STATUS "flight_computer: magnetometer driver auto (IIS2MDC or QMC5883P, TR_MAG_DRIVER_AUTO=1)")
     message(STATUS "flight_computer: sdkconfig overlay sdkconfig.defaults.v9 (comments only since #916 — boot NOR keeps the base 8 MB declaration, sized to the partition table)")
 endif()
 set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")

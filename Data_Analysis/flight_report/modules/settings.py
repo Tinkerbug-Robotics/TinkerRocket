@@ -30,7 +30,7 @@ _PARENT = Path(__file__).resolve().parent.parent
 if str(_PARENT) not in sys.path:
     sys.path.insert(0, str(_PARENT))
 
-from plot_flight_data_mini import MAG_TYPE_NAMES  # noqa: E402
+from plot_flight_data_mini import MAG_TYPE_NAMES, mag_rot_z_deg  # noqa: E402
 
 from .. import flight_settings as fsd
 from ..flight import Flight
@@ -255,7 +255,12 @@ def _sensor_mounting_rows(flight: Flight, fs: Optional[dict[str, Any]]) -> Rows:
     if config.get("ism6_rot_z_deg") is not None:
         rows.append(("IMU rotation about Z", f"{config['ism6_rot_z_deg']:g}°"))
     if config.get("iis2mdc_rot_z_deg") is not None:
-        rows.append(("Magnetometer rotation about Z", f"{config['iis2mdc_rot_z_deg']:g}°"))
+        # The rotation the counts were read at, which a pre-#1590 Beetle log
+        # stamped wrongly (+90 for its QMC5883P's -90); the stamp is noted.
+        applied = mag_rot_z_deg(config)
+        stamped = config["iis2mdc_rot_z_deg"]
+        text = f"{applied:g}°" if applied == stamped else f"{applied:g}° (logged {stamped:g}°, #1590)"
+        rows.append(("Magnetometer rotation about Z", text))
     # The MMC5983MA rotation only means something on a board that carried one.
     if config.get("mmc_rot_z_deg") is not None and (flight.records.get("MMC5983MA") or []):
         rows.append(("MMC5983MA rotation about Z", f"{config['mmc_rot_z_deg']:g}°"))
