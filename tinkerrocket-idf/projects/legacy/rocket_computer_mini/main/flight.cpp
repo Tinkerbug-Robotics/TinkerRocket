@@ -1174,7 +1174,7 @@ static void logOutStatusQuery()
     // tgt_* stay zeroed: no guidance stack (GUID_TGT_NONE / GUID_RC_NONE = 0).
     // #1312: stamped from the collector's seam — QMC5883P here (100/3750
     // µT/LSB) — never from a local #ifdef the build might not define.
-    q.mag_type = SensorCollector::MAG_TYPE;
+    q.mag_type = sensor_collector.magType();
     (void)mini_link::logFrame(OUT_STATUS_QUERY,
                               reinterpret_cast<const uint8_t*>(&q),
                               (uint8_t)sizeof(q));
@@ -2568,13 +2568,13 @@ void flight_setup()
     // #1190: the EKF's shock gate settle window.  The saturation verdicts
     // themselves come from the drain window (kGyroRailLsb / kAccelRailLsb).
     ekf.setShockGateSettle(config::EKF_SHOCK_SETTLE_MS * 1000u);
-    sensor_converter.configureIIS2MDCRotationZ(config::IIS2MDC_ROT_Z_DEG);
+    sensor_converter.configureIIS2MDCRotationZ(config::MAG_ROT_Z_DEG_QMC5883P);
     // #1312: count scale of the mag stream from the collector's seam (the
     // QMC5883P here), for the converter and the calibrator alike.
-    sensor_converter.configureMagType(SensorCollector::MAG_TYPE);
-    mag_calibrator.setCountScale(SensorCollector::MAG_LSB_TO_uT);
+    sensor_converter.configureMagType(sensor_collector.magType());
+    mag_calibrator.setCountScale(sensor_collector.magLsbToUt());
     sensor_collector.configureSimRotation(config::ISM6HG256_ROT_Z_DEG);
-    sensor_collector.configureSimIis2mdcRotation(config::IIS2MDC_ROT_Z_DEG);
+    sensor_collector.configureSimIis2mdcRotation(config::MAG_ROT_Z_DEG_QMC5883P);
 
     // Board→rocket mounting orientation (converter + sim).
     //

@@ -4683,16 +4683,19 @@ static void setup_fc()
     // themselves come from the drain window (kGyroRailLsb / kAccelRailLsb).
     ekf.setShockGateSettle(config::EKF_SHOCK_SETTLE_MS * 1000u);
     sensor_converter.configureMMC5983MARotationZ(config::MMC5983MA_ROT_Z_DEG);
-    sensor_converter.configureIIS2MDCRotationZ(config::IIS2MDC_ROT_Z_DEG);
     // #1312: the count scale of the IIS2MDC-named stream is the chip's, and
-    // the chip is the collector's build-time seam — IIS2MDC here, QMC5883P on
-    // the mini.  The converter (EKF input, WMM gate) and the calibrator (R
-    // band, verify band, status frame) both take it from there; so does the
-    // mag_type stamp below.
-    sensor_converter.configureMagType(SensorCollector::MAG_TYPE);
-    mag_calibrator.setCountScale(SensorCollector::MAG_LSB_TO_uT);
+    // the chip is the collector's seam — IIS2MDC on V8/V9, QMC5883P on the
+    // mini, and on the V9/V10 image whichever begin() found above (#1590).
+    // The converter (EKF input, WMM gate) and the calibrator (R band, verify
+    // band, status frame) take it from there; so do its board rotation, the
+    // SIL's inverse and the status-query stamps below.
+    const uint8_t mag_type = sensor_collector.magType();
+    const float mag_rot_z_deg = config::magRotZDeg(mag_type == MAG_TYPE_QMC5883P);
+    sensor_converter.configureIIS2MDCRotationZ(mag_rot_z_deg);
+    sensor_converter.configureMagType(mag_type);
+    mag_calibrator.setCountScale(sensor_collector.magLsbToUt());
     sensor_collector.configureSimRotation(config::ISM6HG256_ROT_Z_DEG);
-    sensor_collector.configureSimIis2mdcRotation(config::IIS2MDC_ROT_Z_DEG);
+    sensor_collector.configureSimIis2mdcRotation(mag_rot_z_deg);
 
     // Board→rocket mounting orientation (converter + sim + OC query payload).
     // #915: driven by the stored SETTING, so a manual clocking survives a
@@ -4739,7 +4742,7 @@ static void setup_fc()
     out_status_query_data.ism6_gyro_fs_dps = config::ISM6_GYRO_FS_DPS;
     out_status_query_data.ism6_rot_z_cdeg = (int16_t)lroundf(config::ISM6HG256_ROT_Z_DEG * 100.0f);
     out_status_query_data.mmc_rot_z_cdeg = (int16_t)lroundf(config::MMC5983MA_ROT_Z_DEG * 100.0f);
-    out_status_query_data.iis2mdc_rot_z_cdeg = (int16_t)lroundf(config::IIS2MDC_ROT_Z_DEG * 100.0f);
+    out_status_query_data.iis2mdc_rot_z_cdeg = (int16_t)lroundf(mag_rot_z_deg * 100.0f);
     // v3: adds board→rocket orientation (b2r_* fields, filled by
     // applyBoardToRocketOrientation above and on any runtime change).
     // v4: adds per-chip iis2mdc_rot_z_cdeg (#204).
@@ -4749,7 +4752,7 @@ static void setup_fc()
     out_status_query_data.format_version = 6;
     // #1312: stamped from the collector's seam, not from a local #ifdef, so
     // the log can never say one chip while the driver talks to another.
-    out_status_query_data.mag_type = SensorCollector::MAG_TYPE;
+    out_status_query_data.mag_type = mag_type;
     // Guidance-target echo boot state (#435): no cmd 28 processed yet; the
     // current target is whatever cmd 65 left in NVS (restored above).
     out_status_query_data.tgt_seq     = 0;

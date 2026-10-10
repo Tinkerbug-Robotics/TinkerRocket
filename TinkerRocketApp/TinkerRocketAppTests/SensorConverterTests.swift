@@ -233,15 +233,55 @@ final class SensorConverterTests: XCTestCase {
         try assertBenchReadings(c)
     }
 
-    func testQMC5883P_IsNotReflected() throws {
-        // The QMC5883P's axes are right-handed: chip X keeps its sign.
+    // MARK: - QMC5883P chip frame (#1590)
+    // As TR_QMC5883P configures it the chip's Z points into the board; its
+    // signs (+1, -1, -1) bring Z out of the top, and the board rotation is
+    // then the placement: Beetle -90 (measured on a bench log), V10 180.
+
+    private func qmcMatrix(_ c: SensorConverter) throws -> [[Double]] {
+        let cols = try [(Int16(3750), Int16(0), Int16(0)), (0, 3750, 0), (0, 0, 3750)].map { v -> [Double] in
+            let si = c.convertIIS2MDC(try makeIIS2MDC(x: v.0, y: v.1, z: v.2))
+            return [si.mag_x / 100.0, si.mag_y / 100.0, si.mag_z / 100.0]
+        }
+        return (0..<3).map { r in (0..<3).map { k in cols[k][r] } }
+    }
+
+    private func qmcConverter(stampDeg: Double) throws -> SensorConverter {
+        var d = Data()
+        d.appendLE(UInt8(16)); d.appendLE(UInt16(256)); d.appendLE(UInt16(4000))
+        d.appendLE(Int16(-4500)); d.appendLE(Int16(18000)); d.appendLE(UInt8(6))
+        d.appendLE(Int16(0)); d.appendLE(Int16(0)); d.appendLE(Int16(0))           // hg bias
+        d.appendLE(UInt8(0)); d.appendLE(UInt8(0))                                 // b2r code/mode
+        d.appendLE(Int16(10000)); d.appendLE(Int16(0)); d.appendLE(Int16(0)); d.appendLE(Int16(0))
+        d.appendLE(Int16(stampDeg * 100.0))                                        // v4 iis rotation
+        d.append(contentsOf: [UInt8](repeating: 0, count: 13))                     // v5 guidance echo
+        d.appendLE(OutStatusQueryData.magTypeQMC5883P)                              // v6 mag_type
+        let q = try OutStatusQueryData(from: d)
         let c = SensorConverter()
-        c.configureMiniRotation(imuDeg: -45.0, magDeg: 180.0, iisDeg: 90.0)
-        c.configureMagScale(utPerLsb: OutStatusQueryData.qmc5883pUtPerLsb)
-        c.configureMagHandedness(leftHanded: false)
-        let si = c.convertIIS2MDC(try makeIIS2MDC(x: 3750, y: 0, z: 0))
-        XCTAssertEqual(si.mag_x,   0.0, accuracy: 1e-6)
-        XCTAssertEqual(si.mag_y, 100.0, accuracy: 1e-6)
+        c.configureMiniRotation(imuDeg: q.imuRotationDeg, magDeg: q.magRotationDeg,
+                                iisDeg: q.iisRotationDegApplied)
+        c.configureMagScale(utPerLsb: q.magUtPerLsb)
+        c.configureMagChipSigns(q.magChipSigns)
+        return c
+    }
+
+    func testQMC5883P_BeetleMapsAsMeasured() throws {
+        let want: [[Double]] = [[0, -1, 0], [-1, 0, 0], [0, 0, -1]]
+        // Stamped -90 (after #1590), or +90 by the firmware before it.
+        for stamp in [-90.0, 90.0] {
+            let m = try qmcMatrix(try qmcConverter(stampDeg: stamp))
+            for r in 0..<3 { for k in 0..<3 {
+                XCTAssertEqual(m[r][k], want[r][k], accuracy: 1e-9, "stamp \(stamp) row \(r) col \(k)")
+            } }
+        }
+    }
+
+    func testQMC5883P_V10MapsAsInferred() throws {
+        let want: [[Double]] = [[-1, 0, 0], [0, 1, 0], [0, 0, -1]]
+        let m = try qmcMatrix(try qmcConverter(stampDeg: 180.0))
+        for r in 0..<3 { for k in 0..<3 {
+            XCTAssertEqual(m[r][k], want[r][k], accuracy: 1e-9, "row \(r) col \(k)")
+        } }
     }
 
     // MARK: - NonSensor flag extraction (#196)

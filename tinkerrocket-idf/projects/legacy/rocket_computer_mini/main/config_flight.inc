@@ -65,9 +65,15 @@
     // the IIS2MDC) before first flight.  Wrong Z rotations silently corrupt
     // heading and roll-rate sign.
     // ISM6 frame -> board frame rotation (deg), CCW positive about +Z.
-    static constexpr float ISM6HG256_ROT_Z_DEG = -45.0f;   // VERIFY on mini layout
-    // IIS2MDC -> board frame (deg), CCW positive about +Z (#204 method).
-    static constexpr float IIS2MDC_ROT_Z_DEG = 90.0f;      // VERIFY on mini layout
+    // Checked for this layout (#1590): the ISM6 footprint, side, rotation
+    // and pad 1 match V8/V9, so -45 holds.
+    static constexpr float ISM6HG256_ROT_Z_DEG = -45.0f;
+    // QMC5883P -> board frame (deg), CCW positive about +Z, on the chip's
+    // normalized frame (magTypeChipSign in RocketComputerTypes.h).  The same
+    // board as the dual-MCU M1 (U3 on F.Cu at rotation 90), so the same -90,
+    // from a 2026-10-05 bench log (#1590; see flight_computer board_m1.h).
+    // It was the V8/V9 IIS2MDC's +90, which put the field upside down.
+    static constexpr float MAG_ROT_Z_DEG_QMC5883P = -90.0f;
 
     // Board -> rocket mounting orientation: IMU_ORIENT_AUTO (0xFF) or a
     // TR_Orientation code 0-23.

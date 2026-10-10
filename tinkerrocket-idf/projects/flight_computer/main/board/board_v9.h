@@ -98,8 +98,21 @@ struct board_pins
     static constexpr int MMC5983MA_CS = -1;    // no MMC5983MA on V9/V10
     static constexpr uint8_t BMP585_CS = 41;   // BMP585_CS
     static constexpr uint8_t ISM6HG256_CS = 49;// ISM6HG256_CS
-    static constexpr uint8_t IIS2MDC_SDA = 47; // IIS2MDCTR_SDA
-    static constexpr uint8_t IIS2MDC_SCL = 48; // IIS2MDCTR_SCL
+    static constexpr uint8_t IIS2MDC_SDA = 47; // IIS2MDCTR_SDA (V10: MAG_SDA)
+    static constexpr uint8_t IIS2MDC_SCL = 48; // IIS2MDCTR_SCL (V10: MAG_SCL)
+
+    // ### Magnetometer -> board rotation (deg, CCW about +Z) ###
+    // Applied to each chip's normalized frame (magTypeChipSign in
+    // RocketComputerTypes.h): right-handed, Z out of the top.  V9 fits an ST
+    // IIS2MDC (U3, F.Cu, rotation 0): +90, from the #204 bench with the
+    // chip's left-handed X negated first (#1589).  V10 fits a QST QMC5883P
+    // instead (U3, F.Cu, rotation 0), on the same two pins at 0x2C, with no
+    // DRDY pin; this image asks for either at boot (TR_MAG_DRIVER_AUTO).
+    // 180 for it is inferred from the Beetle's bench-measured axes and V10's
+    // placement (#1590) — no V10 has been built, so confirm it on the first
+    // article: lying flat at rest, the field must dip ~65 deg DOWN.
+    static constexpr float MAG_ROT_Z_DEG_IIS2MDC  = 90.0f;
+    static constexpr float MAG_ROT_Z_DEG_QMC5883P = 180.0f;
 
     // ### Part presence ###
     static constexpr bool USE_BMP585 = true;
@@ -117,6 +130,8 @@ struct board_pins
     static constexpr uint8_t ISM6HG256_INT = 50;  // ISM6HG256_INT1
     static constexpr uint8_t BMP585_INT = 42;     // BMP585_INT
     static constexpr int MMC5983MA_INT = -1;      // no MMC5983MA on V9/V10
+    // Poll-only: the collector never configures this pin.  On V10 GPIO46 is
+    // EXP_12, and its QMC5883P has no DRDY.
     static constexpr uint8_t IIS2MDC_INT = 46;    // IIS2MDCTR_INT
 
     // ### Camera ###

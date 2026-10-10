@@ -91,6 +91,16 @@ struct board_pins
     static constexpr int IIS2MDC_SDA = 1;     // MAG_SDA (CONFIRMED)
     static constexpr int IIS2MDC_SCL = 2;     // MAG_SCL (CONFIRMED)
 
+    // QMC5883P -> board rotation (deg, CCW about +Z) on its normalized frame
+    // (magTypeChipSign in RocketComputerTypes.h): -90.  U3 sits on F.Cu at
+    // rotation 90; a 2026-10-05 bench log fixed the rest — the gyro-vs-field
+    // kinematics (0.45 uT rms, against 2.3 as converted before) and the dip
+    // at rest (+65 deg down, against -68: upside down) (#1590).  This was
+    // the V8/V9 IIS2MDC's +90, shared through config.h, which with no axis
+    // signs put the field upside down with the board flat and a nose-up
+    // heading 180 deg off.
+    static constexpr float MAG_ROT_Z_DEG_QMC5883P = -90.0f;
+
     // --- Which sensors this board actually has ---
     // The part fitted is a BMP581, not a BMP585; the driver seam is shared
     // and USE_BMP585 selects it, as on the single-MCU mini map.

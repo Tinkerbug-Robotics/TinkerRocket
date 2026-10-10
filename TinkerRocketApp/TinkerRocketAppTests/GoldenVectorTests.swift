@@ -277,15 +277,15 @@ final class GoldenVectorTests: XCTestCase {
         let q = try OutStatusQueryData(from: WireFixtures.data("logframes/statusquery_v6_42.bin"))
         XCTAssertEqual(q.mag_type, OutStatusQueryData.magTypeQMC5883P)
         XCTAssertEqual(q.magUtPerLsb, OutStatusQueryData.qmc5883pUtPerLsb)
-        // The same stamp keys the chip handedness: the QMC5883P is right-handed.
-        XCTAssertFalse(q.magLeftHanded)
+        // The same stamp keys the chip's axis signs (#1590).
+        XCTAssertTrue(q.magChipSigns == (1.0, -1.0, -1.0))
 
         let truncated = try OutStatusQueryData(
             from: WireFixtures.data("logframes/statusquery_v6_42.bin").prefix(41))
         XCTAssertEqual(truncated.format_version, 6)
         XCTAssertNil(truncated.mag_type)
         XCTAssertEqual(truncated.magUtPerLsb, OutStatusQueryData.iis2mdcUtPerLsb)
-        XCTAssertTrue(truncated.magLeftHanded)   // the IIS2MDC's are left-handed
+        XCTAssertTrue(truncated.magChipSigns == (-1.0, 1.0, 1.0))   // the IIS2MDC's (#1589)
     }
 
     // MARK: - FlightSettings version ladder (v1/v2/v3/v5/v6/v7/v8/v9)

@@ -347,6 +347,34 @@ target_compile_definitions(test_sensor_data_converter PRIVATE TR_BOARD_V9=1)
 target_link_libraries(test_sensor_data_converter GTest::gtest_main)
 gtest_discover_tests(test_sensor_data_converter)
 
+# ---------- test_mag_frame_<BOARD> (#1589, #1590) ----------
+# Each board's magnetometer, chip counts to board frame through the real
+# converter at that board's MAG_ROT_Z_DEG_*, against the measured matrix.
+# One build per board because each board's config.h is its own; the driver
+# seam flags are the ones flight_computer/CMakeLists.txt sets for it.
+foreach(BOARD V8 V9 M1)
+    add_executable(test_mag_frame_${BOARD} test_mag_frame_board.cpp
+        ${LIB_DIR}/TR_Sensor_Data_Converter/TR_Sensor_Data_Converter.cpp
+        ${LIB_DIR}/TR_Orientation/TR_Orientation.cpp
+    )
+    target_include_directories(test_mag_frame_${BOARD} PRIVATE
+        ${SHIM_DIR}
+        ${LIB_DIR}/TR_Sensor_Data_Converter
+        ${LIB_DIR}/TR_RocketComputerTypes
+        ${LIB_DIR}/TR_Orientation
+        ${LIB_DIR}/../projects/flight_computer/main
+    )
+    target_compile_definitions(test_mag_frame_${BOARD} PRIVATE TR_BOARD_${BOARD}=1)
+    if(BOARD STREQUAL "V9")
+        target_compile_definitions(test_mag_frame_${BOARD} PRIVATE TR_MAG_DRIVER_AUTO=1)
+    elseif(BOARD STREQUAL "M1")
+        target_compile_definitions(test_mag_frame_${BOARD} PRIVATE
+            TR_MAG_DRIVER_QMC5883P=1 TR_GNSS_DRIVER_LC86=1)
+    endif()
+    target_link_libraries(test_mag_frame_${BOARD} GTest::gtest_main)
+    gtest_discover_tests(test_mag_frame_${BOARD} TEST_PREFIX "${BOARD}.")
+endforeach()
+
 # ---------- test_sensor_cal_math ----------
 # Pad-calibration arithmetic (#1110): window sums -> gyro zero-rate offsets,
 # high-g cross-cal bias, and the gravity plausibility gate.  Header-only and

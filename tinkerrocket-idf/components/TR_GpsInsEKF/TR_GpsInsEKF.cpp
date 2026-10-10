@@ -391,7 +391,7 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
     //    against 25/52 m at T+5/9.7 s); fused in flight it was thrown ~150°
     //    right after the T+0.85 s nose burst (84/133 m), and skipping samples
     //    during and after the shock did not prevent it.  Those numbers were
-    //    first taken with the IIS2MDC frame mirrored (magTypeLeftHanded),
+    //    first taken with the IIS2MDC frame mirrored (magTypeChipSign),
     //    which turns the field the wrong way under roll; the pad-only ones
     //    are re-measured in the corrected frame, the in-flight one is not.
     //    A heading set right on the pad holds through a ~10 s climb on the
