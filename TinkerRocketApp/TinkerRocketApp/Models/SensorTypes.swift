@@ -103,11 +103,30 @@ nonisolated struct OutStatusQueryData {
     var magUtPerLsb: Double {
         mag_type == Self.magTypeQMC5883P ? Self.qmc5883pUtPerLsb : Self.iis2mdcUtPerLsb
     }
-    /// Whether the chip behind the IIS2MDC-named stream has left-handed axes
-    /// (magTypeLeftHanded in RocketComputerTypes.h).  The IIS2MDC does, so
-    /// the converter negates its chip X before the Z rotation.  Pre-v6 logs
-    /// (nil) and unknown values are the IIS2MDC, as for the scale.
-    var magLeftHanded: Bool { mag_type != Self.magTypeQMC5883P }
+    /// Per-axis signs carrying the chip's own axes into its normalized frame
+    /// (right-handed, Z out of the top) before the Z rotation —
+    /// magTypeChipSign in RocketComputerTypes.h.  IIS2MDC (-1, +1, +1): its
+    /// axes are left-handed (#1589).  QMC5883P (+1, -1, -1): as configured
+    /// its Z points into the board (#1590).  Pre-v6 logs (nil) and unknown
+    /// values are the IIS2MDC, as for the scale.
+    var magChipSigns: (x: Double, y: Double, z: Double) {
+        mag_type == Self.magTypeQMC5883P ? (1.0, -1.0, -1.0) : (-1.0, 1.0, 1.0)
+    }
+    /// The QMC5883P rotation the Beetle stamped before #1590 — the IIS2MDC's
+    /// +90, shared through one constant — and its board's true one.
+    static let qmc5883pPre1590StampDeg: Double = 90.0
+    static let qmc5883pBeetleRotationDeg: Double = -90.0
+    /// The I2C-mag rotation to apply to this log's counts: `iisRotationDeg`,
+    /// except that a QMC5883P log stamped +90 is a pre-#1590 Beetle log (no
+    /// QMC5883P board sits at +90 in the normalized frame) and is read at the
+    /// Beetle's -90, as plot_flight_data_mini.py does.
+    var iisRotationDegApplied: Double? {
+        guard let deg = iisRotationDeg else { return nil }
+        if mag_type == Self.magTypeQMC5883P && abs(deg - Self.qmc5883pPre1590StampDeg) < 1e-6 {
+            return Self.qmc5883pBeetleRotationDeg
+        }
+        return deg
+    }
 }
 
 // MARK: - Flight Settings Snapshot (176 bytes) — runtime config at launch (#165)

@@ -113,15 +113,37 @@ MAG_TYPE_NAMES = {0: "IIS2MDC", 1: "QMC5883P"}
 MAG_UT_PER_LSB_BY_TYPE = {0: IIS2MDC_UT_PER_LSB, 1: QMC5883P_UT_PER_LSB}
 
 
-def mag_type_left_handed(mag_type):
-    """Whether the chip behind the I2C-mag stream has left-handed axes
-    (magTypeLeftHanded in RocketComputerTypes.h).  The IIS2MDC does, so its
-    chip X is negated before the Z rotation; without that every IIS2MDC
-    board vector has board y reversed.  The log holds raw chip counts, so
-    this applies to every IIS2MDC log, whichever firmware wrote it.
-    None (a pre-v6 log) and unknown values are the IIS2MDC, as for the scale.
+def mag_type_chip_signs(mag_type):
+    """Per-axis signs that carry the I2C-mag chip's own axes into its
+    normalized frame — right-handed, Z out of the top — before the Z
+    rotation (magTypeChipSign in RocketComputerTypes.h).
+      IIS2MDC  (-1, +1, +1): ST's axes are left-handed; without this every
+               IIS2MDC board vector has board y reversed (#1589).
+      QMC5883P (+1, -1, -1): as TR_QMC5883P configures it, Z points into the
+               board; without this a flat Beetle reads the field pointing
+               up (#1590).
+    Logs hold raw chip counts, so this applies to every log, whichever
+    firmware wrote it.  None (a pre-v6 log) and unknown values are the
+    IIS2MDC, as for the scale.
     """
-    return mag_type != 1
+    return (1.0, -1.0, -1.0) if mag_type == 1 else (-1.0, 1.0, 1.0)
+
+
+# The QMC5883P rotation the Beetle (and the single-MCU mini on the same
+# board) stamped before #1590: the V8/V9 IIS2MDC's +90, shared through one
+# config constant.  No QMC5883P board sits at +90 in the normalized frame
+# (Beetle -90, V10 180), so a QMC log stamped +90 is a pre-fix Beetle log and
+# is read at the Beetle's true -90.
+QMC5883P_PRE_1590_STAMP_DEG = 90.0
+QMC5883P_BEETLE_ROT_Z_DEG = -90.0
+
+
+def mag_rot_z_deg(config):
+    """The I2C-mag sensor→board rotation to apply to this log's counts."""
+    rot = config["iis2mdc_rot_z_deg"]
+    if config.get("mag_type") == 1 and abs(rot - QMC5883P_PRE_1590_STAMP_DEG) < 1e-6:
+        return QMC5883P_BEETLE_ROT_Z_DEG
+    return rot
 
 # BMP585: temp in Q16 (degC * 65536), pressure in Q6 (Pa * 64)
 # ------------------------------------
@@ -1301,17 +1323,16 @@ def parse_binary_file(filepath):
         rec["mag_z"] = mag[2]
 
     # --- Post-process I2C-mag raw data: scale (per-board, from the v6
-    #     mag_type stamp), chip-X sign for a left-handed chip, chip-Z
-    #     rotate, then board→rocket (matches
-    #     SensorConverter::convertIIS2MDCData) ---
-    iis_rad = math.radians(config["iis2mdc_rot_z_deg"])
+    #     mag_type stamp), the chip's axis signs, chip-Z rotate, then
+    #     board→rocket (matches SensorConverter::convertIIS2MDCData) ---
+    iis_rad = math.radians(mag_rot_z_deg(config))
     c_iis, s_iis = math.cos(iis_rad), math.sin(iis_rad)
     mag_ut_per_lsb = config["mag_ut_per_lsb"]
-    x_sign = -1.0 if mag_type_left_handed(config["mag_type"]) else 1.0
+    sx, sy, sz = mag_type_chip_signs(config["mag_type"])
     for rec in records["IIS2MDC"]:
-        mx = x_sign * rec.pop("raw_x") * mag_ut_per_lsb
-        my = rec.pop("raw_y") * mag_ut_per_lsb
-        mz = rec.pop("raw_z") * mag_ut_per_lsb
+        mx = sx * rec.pop("raw_x") * mag_ut_per_lsb
+        my = sy * rec.pop("raw_y") * mag_ut_per_lsb
+        mz = sz * rec.pop("raw_z") * mag_ut_per_lsb
         mag = apply_b2r(mx * c_iis - my * s_iis,
                         mx * s_iis + my * c_iis,
                         mz)

@@ -389,7 +389,7 @@ TEST(SensorConverterMagType, TheQmcScaleIsSelectedByMagType) {
     IIS2MDCDataSI si{};
 
     // Default: the big board's IIS2MDC, 0.15 µT/LSB.  Its left-handed chip
-    // X comes out reversed (magTypeLeftHanded); the QMC5883P's does not.
+    // X comes out reversed (magTypeChipSign); the QMC5883P's does not.
     EXPECT_EQ(conv.magType(), MAG_TYPE_IIS2MDC);
     conv.convertIIS2MDCData(iis, si);
     EXPECT_NEAR(si.mag_x_uT, -562.5, 1e-6);
@@ -491,7 +491,7 @@ void chipToBoard(SensorConverter& conv, double m[3][3])
 
 TEST(SensorConverterIIS2MDCFrame, TheBenchReadingsLandOnTheBoardAxes) {
     SensorConverter conv;
-    conv.configureIIS2MDCRotationZ(config::IIS2MDC_ROT_Z_DEG);
+    conv.configureIIS2MDCRotationZ(config::MAG_ROT_Z_DEG_IIS2MDC);
     IIS2MDCDataSI si{};
 
     // Board +X north: the horizontal field reads on chip -Y and must come
@@ -520,7 +520,7 @@ TEST(SensorConverterIIS2MDCFrame, TheBenchReadingsLandOnTheBoardAxes) {
 
 TEST(SensorConverterIIS2MDCFrame, AnyBoardFieldRoundTripsThroughThePhysicalChip) {
     SensorConverter conv;
-    conv.configureIIS2MDCRotationZ(config::IIS2MDC_ROT_Z_DEG);
+    conv.configureIIS2MDCRotationZ(config::MAG_ROT_Z_DEG_IIS2MDC);
     const double fields[][3] = {{21.0, 0.0, -45.0}, {-12.0, 33.0, 18.0},
                                 {5.0, -40.0, 27.0}, {0.0, 0.0, 50.0}};
     for (const auto& b : fields)
@@ -541,7 +541,7 @@ TEST(SensorConverterIIS2MDCFrame, TheFieldTurnsWithTheGyroUnderRoll) {
     // opposite way, so here it would miss by ~2 x 29 µT x sin(10 deg).
     SensorConverter conv;
     conv.configureISM6HG256RotationZ(config::ISM6HG256_ROT_Z_DEG);
-    conv.configureIIS2MDCRotationZ(config::IIS2MDC_ROT_Z_DEG);
+    conv.configureIIS2MDCRotationZ(config::MAG_ROT_Z_DEG_IIS2MDC);
 
     // Gyro: +200 dps about board X, encoded back into ISM6 chip counts
     // (board = Rz(rot) * chip, so chip = Rz(-rot) * board).
@@ -581,7 +581,7 @@ TEST(SensorConverterIIS2MDCFrame, TheReflectionIsTheIIS2MDCsAlone) {
     // ... so the IIS2MDC's conversion has to be a reflection, det -1: chip X
     // to board -Y, chip Y to board -X, chip Z to board +Z.
     SensorConverter conv;
-    conv.configureIIS2MDCRotationZ(config::IIS2MDC_ROT_Z_DEG);
+    conv.configureIIS2MDCRotationZ(config::MAG_ROT_Z_DEG_IIS2MDC);
     double m[3][3];
     chipToBoard(conv, m);
     EXPECT_NEAR(det3(m), -1.0, 1e-9);

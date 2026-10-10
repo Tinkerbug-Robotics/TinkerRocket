@@ -739,7 +739,7 @@ void SensorCollectorSim::encodeIIS2MDC(uint32_t time_us, IIS2MDCData& out)
     // Counts at the scale of the chip behind the seam (#1312): 0.15 µT/LSB on
     // the IIS2MDC, 100/3750 on the mini's QMC5883P — so the converter, which
     // reads the same seam, reproduces the simulated field on either board.
-    static constexpr float COUNTS_PER_UT = 1.0f / SensorCollector::MAG_LSB_TO_uT;
+    const float COUNTS_PER_UT = 1.0f / real_.magLsbToUt();
 
     float body[3];
     sim_sensor_model::fieldInBody(pitch_rad_, B_NORTH, B_EAST, B_DOWN, body);
@@ -752,16 +752,17 @@ void SensorCollectorSim::encodeIIS2MDC(uint32_t time_us, IIS2MDCData& out)
 
     // Rocket frame → board frame (inverse mounting), then board → sensor
     // frame (inverse of the converter's sensor→board +Z rotation, then of
-    // its chip-X reflection for a left-handed chip), so the forward
-    // conversion chain reproduces the simulated field exactly.
+    // the chip's axis signs, magTypeChipSign), so the forward conversion
+    // chain reproduces the simulated field exactly.
     rocketToBoard(body_x, body_y, body_z);
-    const float x_sign = magTypeLeftHanded(SensorCollector::MAG_TYPE) ? -1.0f : 1.0f;
-    const float sensor_x = x_sign * (body_x * iis_inv_c_ + body_y * iis_inv_s_);
-    const float sensor_y = -body_x * iis_inv_s_ + body_y * iis_inv_c_;
+    const uint8_t mag_type = real_.magType();
+    const float sensor_x = magTypeChipSign(mag_type, 0) * (body_x * iis_inv_c_ + body_y * iis_inv_s_);
+    const float sensor_y = magTypeChipSign(mag_type, 1) * (-body_x * iis_inv_s_ + body_y * iis_inv_c_);
+    const float sensor_z = magTypeChipSign(mag_type, 2) * body_z;
 
     out.mag_x = (int16_t)lroundf(sensor_x * COUNTS_PER_UT);
     out.mag_y = (int16_t)lroundf(sensor_y * COUNTS_PER_UT);
-    out.mag_z = (int16_t)lroundf(body_z   * COUNTS_PER_UT);
+    out.mag_z = (int16_t)lroundf(sensor_z * COUNTS_PER_UT);
 }
 
 void SensorCollectorSim::encodeGNSS(uint32_t time_us, GNSSData& out)
