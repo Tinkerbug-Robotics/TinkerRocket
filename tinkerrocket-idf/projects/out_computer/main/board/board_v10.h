@@ -6,8 +6,9 @@
 // (ESP32-S3RH2, U15). Selected with TR_BOARD_V10=1:
 //   idf.py -B build_v10 -DTR_BOARD_V10=1 build
 //
-// The map of hardware/tinker-mantis/ at HEAD (title block V10). The fabbed
-// V9 is board_v9.h. Derived 2026-10-10 (#1593) from a pad -> pinfunction ->
+// The map of the Tinker-Mantis V10 as ordered: tag tinker-mantis-v10.0.0
+// (86aa08de). The fabbed V9 is board_v9.h; the V11 in work changes no S3 pad
+// as of 2026-10-10, but needs its own fault-trip threshold (#1595). Derived 2026-10-10 (#1593) from a pad -> pinfunction ->
 // net walk of U15 against the V9 tag, and a kicad-cli netlist export of the
 // V10 schematic for the circuits behind each new pin.
 //

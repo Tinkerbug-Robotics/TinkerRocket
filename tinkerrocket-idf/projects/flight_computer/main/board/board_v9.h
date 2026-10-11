@@ -7,9 +7,8 @@
 //   idf.py -B build_v9 -DTR_BOARD_V9=1 build
 //
 // This is the map of the Tinker-Mantis as fabbed, tag rocket-computer-v9.0.0
-// (the folder was hardware/rocket-computer/ until 2026-09-24). The board files
-// at HEAD, hardware/tinker-mantis/, are V10, which has its own map:
-// board_v10.h. It is NOT board_v8.h either: no V8 PCB was ever committed (the
+// (the folder was hardware/rocket-computer/ until 2026-09-24). The V10 (tag
+// tinker-mantis-v10.0.0) has its own map: board_v10.h. It is NOT board_v8.h either: no V8 PCB was ever committed (the
 // physical V8 bench boards predate the import), and three pyro pins moved
 // between them.
 //

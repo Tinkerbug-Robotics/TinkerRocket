@@ -148,8 +148,8 @@ There is no default board revision, and the build fails without one:
 idf.py -B build_v10 -DTR_BOARD_V10=1 build
 ```
 
-`TR_BOARD_V10=1` is the Tinker-Mantis at HEAD, `hardware/tinker-mantis/`, and `TR_BOARD_V9=1`
-is the Tinker-Mantis as fabbed (tag `rocket-computer-v9.0.0`). They are not interchangeable:
+`TR_BOARD_V10=1` is the Tinker-Mantis V10 as ordered (tag `tinker-mantis-v10.0.0`), and
+`TR_BOARD_V9=1` is the V9 as fabbed (tag `rocket-computer-v9.0.0`). They are not interchangeable:
 V10 moved the arm to P4 GPIO33 and made it a two-processor vote with the out computer, so
 a V9 image cannot arm a V10, and a V10 image cannot arm a V9 (#1593). `TR_BOARD_M1=1` is the Tinker-Beetle, `hardware/tinker-beetle/`, whose flight
 computer is an ESP32-S3 rather than a P4 — its overlay changes the chip target, so it needs

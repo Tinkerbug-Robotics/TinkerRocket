@@ -35,8 +35,8 @@ jobs:
           # ---- Product line: what firmware-release.yml publishes -------------
           #
           # Tinker-Mantis (hardware/tinker-mantis). V9 is the board as fabbed (tag
-          # rocket-computer-v9.0.0); V10 is the artwork at HEAD, with its own map
-          # since #1593: its arm moved to P4 GPIO33 and needs the out computer's
+          # rocket-computer-v9.0.0); V10 is the board as ordered (tag
+          # tinker-mantis-v10.0.0), with its own map since #1593: its arm moved to P4 GPIO33 and needs the out computer's
           # consent on S3 GPIO14, so a V9 image cannot arm a V10. Both halves of a
           # pair take the same flag. flight_computer has no default board revision:
           # the flag is mandatory (projects/flight_computer/main/CMakeLists.txt)

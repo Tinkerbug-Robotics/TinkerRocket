@@ -1,6 +1,7 @@
 # Tinker-Mantis V10 — first-article bring-up
 
-The checklist for the first V10 board, written before one exists (#1593). The firmware is
+The checklist for the first V10 board (tag `tinker-mantis-v10.0.0`, ordered), written before
+one arrives (#1593). The firmware is
 `-DTR_BOARD_V10=1` for both processors (`flight_computer/main/board/board_v10.h`,
 `out_computer/main/board/board_v10.h`). Record results in #1593, and correct this file and
 the board headers wherever the board disagrees with them.
@@ -19,13 +20,13 @@ series resistor, or 1–2 Ω power resistors, as dummy loads on J2.
   Check the boot log before anything else.
 - **New out-computer inputs:** `PG_RAIL` (GPIO17), `INA_ALERT` (GPIO18), `VBUCK_OK` (GPIO34).
 - **New parts behind unchanged pins:** BMP581 (not BMP585), QMC5883P magnetometer (not
-  IIS2MDC), and the pyro switches (WSD20L50DN33 P-FETs at HEAD, or TPS1HC08-Q1 if #1554 is
-  built).
+  IIS2MDC), and WSD20L50DN33 P-FETs as the pyro switches. The TPS1HC08-Q1 switches of
+  #1554 are V11's.
 
 ## 1. Before power
 
-- [ ] Note which pyro switch is fitted at U6/U7/U8/U10: WSD20L50DN33 (HEAD) or TPS1HC08-Q1
-      (#1554). #1588's trip threshold depends on it.
+- [ ] U6/U7/U8/U10 are WSD20L50DN33 P-FETs, as ordered. The #1553 trip stays at 30 A for
+      them (#1595).
 - [ ] Ohm out the arm chain against the schematic: R132 100 Ω, R139 1 k, R21 100 Ω, R22
       100 k (U9 gate to GND), R73 2.2 k (`PYRO_GND` to GND), R78–R81 5.11 k (each `PYROn_FIRE`
       to GND).
@@ -107,8 +108,8 @@ scope check: on V9 that pad was EXP_12.
       scope.
 - [ ] Simulated flight: ARM and FIRE stay low throughout (the flight computer dry-fires a
       sim), and `OC_ARM_EN` stays low.
-- [ ] The #1554 short tests (terminal and harness shorts, cold and hot) are their own bench
-      item. Do them before the first live charge.
+- [ ] Before the first live charge, check the #1553 trip with a controlled short on one
+      channel. The #1554/#1588 short tests are for V11's switches.
 
 ## 6. Supply status inputs
 

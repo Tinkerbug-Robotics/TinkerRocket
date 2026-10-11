@@ -6,8 +6,8 @@
 // Selected with TR_BOARD_V9=1:  idf.py -B build_v9 -DTR_BOARD_V9=1 build
 //
 // This is the map of the Tinker-Mantis as fabbed, tag rocket-computer-v9.0.0
-// (the folder was hardware/rocket-computer/ until 2026-09-24). The board files
-// at HEAD are V10, which has its own map, board_v10.h: it keeps every pin
+// (the folder was hardware/rocket-computer/ until 2026-09-24). The V10 (tag
+// tinker-mantis-v10.0.0) has its own map, board_v10.h: it keeps every pin
 // below and adds four (arm consent, INA_ALERT, PG_RAIL, VBUCK_OK; #1593).
 //
 // ### Every S3 GPIO here is identical to board_v8.h ###

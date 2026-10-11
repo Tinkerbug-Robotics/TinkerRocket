@@ -67,7 +67,7 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
 #   idf.py -B build_v7 -DTR_BOARD_V7=1 build   # legacy V7 board
 #   idf.py -B build_v8 -DTR_BOARD_V8=1 build   # V8 bench boards
 #   idf.py -B build_v9 -DTR_BOARD_V9=1 build   # Tinker-Mantis V9 (tag rocket-computer-v9.0.0)
-#   idf.py -B build_v10 -DTR_BOARD_V10=1 build # Tinker-Mantis V10 (hardware/tinker-mantis)
+#   idf.py -B build_v10 -DTR_BOARD_V10=1 build # Tinker-Mantis V10 (tag tinker-mantis-v10.0.0)
 #   idf.py -B build_m1 -DTR_BOARD_M1=1 build   # Tinker-Beetle rev1 (hardware/tinker-beetle, ESP32-S3 FC)
 #
 # Unlike the other projects there is no default here, because the failure is
@@ -94,8 +94,8 @@ if(_tr_board_flag_count EQUAL 0)
         "flight_computer: no board revision selected. Pass exactly one of "
         "-DTR_BOARD_V7=1 / -DTR_BOARD_V8=1 / -DTR_BOARD_V9=1 / -DTR_BOARD_V10=1 / "
         "-DTR_BOARD_M1=1 (V9 is the Tinker-Mantis as fabbed at tag "
-        "rocket-computer-v9.0.0, V10 the Tinker-Mantis at HEAD, "
-        "hardware/tinker-mantis; M1 is the Tinker-Beetle rev1, "
+        "rocket-computer-v9.0.0, V10 the Tinker-Mantis as ordered at tag "
+        "tinker-mantis-v10.0.0; M1 is the Tinker-Beetle rev1, "
         "hardware/tinker-beetle, whose flight computer is an ESP32-S3 rather "
         "than a P4). There is no default: the pyro maps all differ and a wrong "
         "map fires the wrong channel, or none, with no runtime symptom.")

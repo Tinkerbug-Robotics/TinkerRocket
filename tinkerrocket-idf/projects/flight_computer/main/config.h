@@ -15,7 +15,7 @@
 //   V7 legacy board:  idf.py -B build_v7 -DTR_BOARD_V7=1 build
 //   V8 bench boards:  idf.py -B build_v8 -DTR_BOARD_V8=1 build
 //   V9 (Tinker-Mantis as fabbed):  idf.py -B build_v9 -DTR_BOARD_V9=1 build
-//   V10 (Tinker-Mantis, HEAD):     idf.py -B build_v10 -DTR_BOARD_V10=1 build
+//   V10 (Tinker-Mantis, ordered):  idf.py -B build_v10 -DTR_BOARD_V10=1 build
 //   rocket-computer-mini rev1:  idf.py -B build_m1 -DTR_BOARD_M1=1 build
 //
 // M1 is the one that is NOT an ESP32-P4 — the mini's flight computer is a

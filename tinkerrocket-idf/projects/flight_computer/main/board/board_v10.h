@@ -6,16 +6,21 @@
 // (ESP32-P4, U17). Selected with TR_BOARD_V10=1:
 //   idf.py -B build_v10 -DTR_BOARD_V10=1 build
 //
-// The map of hardware/tinker-mantis/ at HEAD, whose title block reads V10.
-// The fabbed V9 is tag rocket-computer-v9.0.0 and has its own map,
-// board_v9.h. Until #1593 that header claimed to cover V10 as well; it does
-// not, and a V9 image cannot arm a V10 (below).
+// The map of the Tinker-Mantis V10 as ordered: tag tinker-mantis-v10.0.0
+// (86aa08de, plotted 2026-09-30). The fabbed V9 is tag rocket-computer-v9.0.0
+// and has its own map, board_v9.h. Until #1593 that header claimed to cover
+// V10 as well; it does not, and a V9 image cannot arm a V10 (below).
 //
 // Derived 2026-10-10 (#1593) two ways: a pad -> pinfunction -> net walk of U17
 // and U15 in tinker-mantis.kicad_pcb against the same walk of the V9 tag, and
 // a `kicad-cli sch export netlist` of tinker-mantis.kicad_sch, which every
-// circuit description below is traced from. The uncommitted #1554 artwork
-// (TPS1HC08-Q1 pyro switches) changes no processor pad.
+// circuit description below is traced from.
+//
+// The board in work after it is V11: the #1554 TPS1HC08-Q1 pyro switches, a
+// stretched outline and the #1568 USB connector. As of 2026-10-10 it changes
+// no processor pad, so this map would fit it, but its out computer's fault-trip
+// threshold should not be V10's (#1595). Decide whether V11 gets its own build
+// before it is ordered.
 //
 //   P4 GPIO   V9 (board_v9.h)    here (V10)
 //     16      PYRO_ARM           unconnected
@@ -58,8 +63,9 @@
 // check it against the board before arming anything.
 //
 // ### SAFETY: first power-up of this revision — NOT YET DONE ###
-// No V10 has been built. With NO squibs connected, scope all four FIRE pads,
-// FC_ARM (P4 GPIO33, either end of R132), OC_ARM_EN (S3 GPIO14, Q14 base) and
+// V10 is ordered but not yet built. With NO squibs connected, scope all four
+// FIRE pads, FC_ARM (P4 GPIO33, either end of R132), OC_ARM_EN (S3 GPIO14, Q14
+// base) and
 // U9's gate across power-on, reset of each processor, and the whole boot
 // sequence, and confirm they stay quiet. FC_ARM was not part of any earlier
 // scope check: on V9 this pad was EXP_12. P4 GPIO33 is input-enabled with no
@@ -147,17 +153,15 @@ struct board_pins
     // ### Pyro channels — same FIRE/CONT pins as V9, ARM moved to GPIO33 ###
     // Each FIRE net carries a pull-down to GND (R78/R79/R80/R81 for channels
     // 1/2/3/4, 5.11 k), which holds the channel off while the pad is high-Z.
-    // The switch behind it depends on the artwork:
-    //   * HEAD: a DTC123J (Q5/Q3/Q4/Q6) pulls the gate of a WSD20L50DN33
-    //     P-FET (U8/U6/U7/U10) whose source is VBAT_CON (not V9's V_CAP,
-    //     which does not exist here), with a 10 k gate pull-up to VBAT_CON
-    //     (R15/R16/R17/R23).
-    //   * #1554, in progress: a TPS1HC08-Q1 current-limited switch under the
-    //     same U references, EN fed from the FIRE net through the same 10 k.
-    // Active-high in both, so firmware does not change. The designators are
-    // NOT in channel order:
+    // Behind it, a DTC123J (Q5/Q3/Q4/Q6) pulls the gate of a WSD20L50DN33
+    // P-FET (U8/U6/U7/U10) whose source is VBAT_CON (not V9's V_CAP, which
+    // does not exist here), with a 10 k gate pull-up to VBAT_CON
+    // (R15/R16/R17/R23). V11 replaces each with a TPS1HC08-Q1 current-limited
+    // switch under the same U references, EN fed from the FIRE net through the
+    // same 10 k (#1554). Active-high on both. The designators are NOT in
+    // channel order:
     //
-    //   ch | FIRE net   | P4 pin | driver (HEAD) | switch | squib out
+    //   ch | FIRE net   | P4 pin | driver        | FET    | squib out
     //   ---+------------+--------+---------------+--------+-----------------
     //    1 | PYRO1_FIRE |      6 | Q5            | U8     | PYRO1_EXT (J2.1)
     //    2 | PYRO2_FIRE |     11 | Q3            | U6     | PYRO2_EXT (J2.2)
