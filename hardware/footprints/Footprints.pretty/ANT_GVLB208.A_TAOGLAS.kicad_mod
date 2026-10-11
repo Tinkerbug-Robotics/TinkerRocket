@@ -1,0 +1,348 @@
+(footprint "ANT_GVLB208.A_TAOGLAS"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(layer "F.Cu")
+	(descr "Taoglas GVLB208.A single-feed stacked L1/L5 ceramic patch, 20x20x8.8 mm, feed pin 0.8 mm on the centre line 1.2 mm off centre. Land and clearances per datasheet SPE-25-8-318-B sec. 4.2-4.3 (the same as GVLB258.A): 1.0 mm plated hole, 1.2 mm top pad, 2.2 mm bottom pad; no copper within 3.0 mm dia on the top and inner layers, 3.5 mm dia on the bottom. Silkscreen is the nominal 20.0 x 20.0 mm body outline; courtyard is the +0.2 mm tolerance limit (20.4 mm). Tuned by Taoglas on a 70x70 mm ground plane (https://www.taoglas.com/datasheets/GVLB208.A.pdf)")
+	(tags "GNSS L1 L5 patch antenna stacked Taoglas")
+	(property "Reference" "REF**"
+		(at 0 -11 0)
+		(layer "F.SilkS")
+		(uuid "7de70873-aff1-4a48-8fe8-ab63d73a81ee")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "ANT_GVLB208.A_TAOGLAS"
+		(at 0 11 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(uuid "bde73b1d-df40-4278-9dfb-3e3ad44e5e2c")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" "https://www.taoglas.com/datasheets/GVLB208.A.pdf"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "bbe2b58d-9766-43f5-8273-0ade2003f9ac")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" "GNSS L1/L5 single-feed stacked ceramic patch antenna"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "9d09065a-e6a5-4b83-ab6c-45c6fff5db05")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr through_hole)
+	(duplicate_pad_numbers_are_jumpers no)
+	(fp_line
+		(start -10 -10)
+		(end 8.3 -10)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "0fba984c-3a25-401c-95be-55158c7a8753")
+	)
+	(fp_line
+		(start 8.3 -10)
+		(end 10 -8.3)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "e713717d-13cf-499b-b0bb-04b345bf1dd8")
+	)
+	(fp_line
+		(start 10 -8.3)
+		(end 10 10)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "e06cd9ab-ea05-46ad-9b15-9c50e4703a9e")
+	)
+	(fp_line
+		(start 10 10)
+		(end -10 10)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "e72022a4-8fd9-42a1-bec0-bda9f208b8fc")
+	)
+	(fp_line
+		(start -10 10)
+		(end -10 -10)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "53467566-2926-461c-83a0-e48930bd19e9")
+	)
+	(fp_line
+		(start 0 10)
+		(end 0 9)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "b48fc996-54ae-42dc-8a17-638b0ed487dc")
+	)
+	(fp_rect
+		(start -10.2 -10.2)
+		(end 10.2 10.2)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(fill no)
+		(layer "F.CrtYd")
+		(uuid "c60e947e-1cb1-4cb7-a1d8-aceda9622739")
+	)
+	(fp_line
+		(start -10 -10)
+		(end 8.3 -10)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "65b2fa82-fd45-4393-b716-9582fb86904b")
+	)
+	(fp_line
+		(start 8.3 -10)
+		(end 10 -8.3)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "a042ce41-86c9-45ef-a550-02b735853c3f")
+	)
+	(fp_line
+		(start 10 -8.3)
+		(end 10 10)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "25601fb7-07bd-42be-b7ef-389d1c21eb11")
+	)
+	(fp_line
+		(start 10 10)
+		(end -10 10)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "d4899061-6185-474f-82c4-be471e78980d")
+	)
+	(fp_line
+		(start -10 10)
+		(end -10 -10)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "88d6c545-e9f7-40b0-b4d4-89e7355cd14b")
+	)
+	(fp_line
+		(start -9 -9)
+		(end 7 -9)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "45f0f7a0-3fdf-49b4-8c24-ceb59161a3e3")
+	)
+	(fp_line
+		(start 7 -9)
+		(end 9 -7)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "b5211ede-cfea-4ceb-9431-5b1feafc7121")
+	)
+	(fp_line
+		(start 9 -7)
+		(end 9 9)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "bb276ab5-d9d5-4aa7-aab8-3b737ce6feb9")
+	)
+	(fp_line
+		(start 9 9)
+		(end -9 9)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "9ad1aeb8-e184-413f-83d1-6783ff1a1473")
+	)
+	(fp_line
+		(start -9 9)
+		(end -9 -9)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "82362ede-d0e8-4153-8748-39104e0208bd")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 0 -6 0)
+		(layer "F.Fab")
+		(uuid "a70a6d87-baca-44d1-8063-d17bf0112080")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(zone
+		(layers "F.Cu" "In1.Cu" "In2.Cu" "In3.Cu" "In4.Cu" "In5.Cu" "In6.Cu" "In7.Cu"
+			"In8.Cu" "In9.Cu" "In10.Cu" "In11.Cu" "In12.Cu" "In13.Cu" "In14.Cu" "In15.Cu"
+			"In16.Cu" "In17.Cu" "In18.Cu" "In19.Cu" "In20.Cu" "In21.Cu" "In22.Cu" "In23.Cu"
+			"In24.Cu" "In25.Cu" "In26.Cu" "In27.Cu" "In28.Cu" "In29.Cu" "In30.Cu")
+		(uuid "3c035df4-a0cc-4cb7-9e9b-65f1c188caa4")
+		(name "GVLB208.A feed clearance, top and inner")
+		(hatch edge 0.5)
+		(connect_pads
+			(clearance 0)
+		)
+		(min_thickness 0.25)
+		(keepout
+			(tracks not_allowed)
+			(vias not_allowed)
+			(pads allowed)
+			(copperpour not_allowed)
+			(footprints allowed)
+		)
+		(placement
+			(enabled no)
+			(sheetname "")
+		)
+		(fill
+			(thermal_gap 0.5)
+			(thermal_bridge_width 0.5)
+			(island_removal_mode 0)
+		)
+		(polygon
+			(pts
+				(xy 1.5 1.3477) (xy 1.4424 1.6375) (xy 1.3293 1.9105) (xy 1.1651 2.1562) (xy 0.9562 2.3651) (xy 0.7105 2.5293) (xy 0.4375 2.6424) (xy 0.1477 2.7) (xy -0.1477 2.7) (xy -0.4375 2.6424) (xy -0.7105 2.5293) (xy -0.9562 2.3651) (xy -1.1651 2.1562) (xy -1.3293 1.9105) (xy -1.4424 1.6375) (xy -1.5 1.3477) (xy -1.5 1.0523) (xy -1.4424 0.7625) (xy -1.3293 0.4895) (xy -1.1651 0.2438) (xy -0.9562 0.0349) (xy -0.7105 -0.1293) (xy -0.4375 -0.2424) (xy -0.1477 -0.3) (xy 0.1477 -0.3) (xy 0.4375 -0.2424) (xy 0.7105 -0.1293) (xy 0.9562 0.0349) (xy 1.1651 0.2438) (xy 1.3293 0.4895) (xy 1.4424 0.7625) (xy 1.5 1.0523)
+			)
+		)
+	)
+	(zone
+		(layers "B.Cu")
+		(uuid "0dcf221f-31b1-47a9-980f-a6087164cd75")
+		(name "GVLB208.A feed clearance, bottom")
+		(hatch edge 0.5)
+		(connect_pads
+			(clearance 0)
+		)
+		(min_thickness 0.25)
+		(keepout
+			(tracks allowed)
+			(vias not_allowed)
+			(pads allowed)
+			(copperpour not_allowed)
+			(footprints allowed)
+		)
+		(placement
+			(enabled no)
+			(sheetname "")
+		)
+		(fill
+			(thermal_gap 0.5)
+			(thermal_bridge_width 0.5)
+			(island_removal_mode 0)
+		)
+		(polygon
+			(pts
+				(xy 1.75 1.3724) (xy 1.6827 1.7105) (xy 1.5508 2.0289) (xy 1.3593 2.3156) (xy 1.1156 2.5593) (xy 0.8289 2.7508) (xy 0.5105 2.8827) (xy 0.1724 2.95) (xy -0.1724 2.95) (xy -0.5105 2.8827) (xy -0.8289 2.7508) (xy -1.1156 2.5593) (xy -1.3593 2.3156) (xy -1.5508 2.0289) (xy -1.6827 1.7105) (xy -1.75 1.3724) (xy -1.75 1.0276) (xy -1.6827 0.6895) (xy -1.5508 0.3711) (xy -1.3593 0.0844) (xy -1.1156 -0.1593) (xy -0.8289 -0.3508) (xy -0.5105 -0.4827) (xy -0.1724 -0.55) (xy 0.1724 -0.55) (xy 0.5105 -0.4827) (xy 0.8289 -0.3508) (xy 1.1156 -0.1593) (xy 1.3593 0.0844) (xy 1.5508 0.3711) (xy 1.6827 0.6895) (xy 1.75 1.0276)
+			)
+		)
+	)
+	(pad "1" thru_hole circle
+		(at 0 1.2)
+		(size 1.2 1.2)
+		(drill 1)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "a46ed8d9-bd95-434b-8146-2370b831973e")
+		(padstack
+			(mode front_inner_back)
+			(layer "Inner"
+				(shape circle)
+				(size 1.2 1.2)
+			)
+			(layer "B.Cu"
+				(shape circle)
+				(size 2.2 2.2)
+			)
+		)
+	)
+	(embedded_fonts no)
+	(model "${KIPRJMOD}/../3dmodels/ANT_GVLB208.A_TAOGLAS.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+	(model "${KIPRJMOD}/../../3dmodels/ANT_GVLB208.A_TAOGLAS.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+)
