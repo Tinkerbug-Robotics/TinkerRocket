@@ -7,7 +7,7 @@
 	(title_block
 		(title "tinker-beetle")
 		(date "2026-09-05")
-		(rev "V1")
+		(rev "V2")
 		(company "TinkerRocket")
 	)
 	(lib_symbols

@@ -27,8 +27,8 @@ worked on; roll major only when a *previously fabricated* revision is superseded
 that cannot include it — the hash changes when you commit. Tags avoid that.
 
 ```
-tinker-mantis-v<semver>                      earlier revisions: rocket-computer-v9.0.0
-tinker-beetle-v<semver>                      earlier revisions: rocket-computer-mini-v1.0.1
+tinker-mantis-v<semver>                      v10.0.0 ordered; V11 in work. Earlier: rocket-computer-v9.0.0
+tinker-beetle-v<semver>                      V2 in work. Earlier: rocket-computer-mini-v1.0.1
 tinker-base-v<semver>                        never fabricated, no tag yet
 lora-daughterboard-v<semver>                 v3.0.0 fabricated; V4 laid out, not yet tagged
 gnss-sam10m8-18mm-hv-v3.0.0
@@ -48,8 +48,8 @@ to `tinker-base`. Tags are never renamed: a revision fabricated before that day
 keeps its tag under the old name, and at that tag the board is in the old
 folder (`git show rocket-computer-v9.0.0:hardware/rocket-computer/bom.csv`).
 The next fabrication of each gets the new prefix, continuing the same version
-numbers — the Tinker-Mantis's next major is `tinker-mantis-v10.0.0`, the V10 its
-title block already reads. `tools/plot_gerbers.sh` searches both prefixes, so
+numbers: the Tinker-Mantis V10 is `tinker-mantis-v10.0.0`, and the Beetle's next
+is `tinker-beetle-v2.0.0`. `tools/plot_gerbers.sh` searches both prefixes, so
 provenance is unbroken across the rename.
 
 **The silkscreen carries the marketing version only** — `V3`, not a git hash.
@@ -118,13 +118,15 @@ every earlier one is 8 MB.**
 | rocket-computer (legacy) | V7 | U13 / U16 `W25Q64` | 8 MB | **measured** 2026-08-24, `esptool flash-id` `ef 7017` on both MCUs (FC `30:ed:a0:e3:64:9c`, OC `e0:72:a1:ca:e1:50`) |
 | rocket-computer (legacy) | V8 | `W25Q64` | 8 MB | predates the swap; confirmed by the board owner 2026-08-24 ("latest version only is 16 MB, others are 8"). No V8 artwork was ever committed, so there is no BOM to check it against |
 | tinker-mantis (was rocket-computer) | V9 (tag `rocket-computer-v9.0.0`) | U13 / U16 `W25Q128JVSIQ` | 16 MB | tag BOM. **Measured** at the first V9's bring-up, 2026-08-22: its out computer (`9c:13:9e:28:ab:5c`) reads `ef:4018` (Winbond, 16 MB), and a V9 FC logged `Detected size(16384k)` against an 8 MB header. (The row used to name `GD25Q128ESIG`, which reached the BOM on 2026-08-15, after this fab.) |
-| tinker-mantis | V10 (current artwork) | U13 / U16 `W25Q128JVYIQ` | 16 MB | BOM; the 24-ball WLCSP since 2026-09-13 (#1452), after `GD25Q128ESIG` from 2026-08-15. No V10 board has been built. **Unmeasured** |
+| tinker-mantis | V10 (tag `tinker-mantis-v10.0.0`, ordered) | U13 / U16 `W25Q128JVYIQ` | 16 MB | tag BOM; the 24-ball WLCSP since 2026-09-13 (#1452), after `GD25Q128ESIG` from 2026-08-15. Ordered, not yet built. **Unmeasured** |
+| tinker-mantis | V11 (in work) | U13 / U16 `W25Q128JVYIQ` | 16 MB | BOM, unchanged from V10. **Unmeasured** |
 | base-station (legacy) | V1, V2 | `W25Q64` | 8 MB | BOM history + confirmed by the board owner 2026-08-24 ("latest version only is 16 MB, others are 8") |
 | base-station (legacy) | V3 (PCB V5/V6) | U1 `GD25Q128ESIG` | 16 MB | BOM |
 | lora-daughterboard | as-built V3 | U22 `W25Q64JVXGIQ` | 8 MB | the board the firmware was written against; **measured** on two articles — `E0:72:A1:CA:F6:7C` and `E0:72:A1:CA:F6:48`, both GigaDevice `c8:6517` |
 | lora-daughterboard | V3 (tag `lora-daughterboard-v3.0.0`) | U22 `W25Q128JVSIQ` | 16 MB | U22 at the tag. **Measured** on `E0:72:A1:CA:F6:40`, a board from this fab: `flash-id` read `ef:4018` (Winbond, 16 MB) on 2026-08-23, and on 2026-08-27 it flashed and booted `radio up, listening at 915.0 MHz SF8`. (The row used to name `GD25Q128ESIG`, a BOM-only change on 2026-08-15, after this fab. It also used to say "first article is unflashable, so untested"; that article is one dead board, not the revision.) |
 | lora-daughterboard | V4 (2026-09-28) | U22 `W25Q128JVYIQ` | 16 MB | BOM and layout; the Beetle/Mantis 24-ball WLCSP part, placed and routed. No V4 board has been built yet. **Unmeasured** |
 | tinker-beetle (was rocket-computer-mini) | V1 (tag `rocket-computer-mini-v1.0.1`) | U13 / U33 `W25Q128JVYIQ` | 16 MB | BOM, the 24-ball WLCSP. **Measured** 2026-09-23 on the second board's out computer (`9C:13:9E:28:9E:88`): `esptool flash-id` reads JEDEC `EF 4018` (Winbond, 16 MB). The flight computer's `U33` has not been read. (The row used to name `GD25Q128ESIG` on `U13` alone and say no hardware existed.) |
+| tinker-beetle | V2 (in work) | U13 / U33 `W25Q128JVYIQ` | 16 MB | BOM, unchanged from V1. **Unmeasured** |
 | tinker-base (was base-station-mini) | V1 (not fabricated) | U1 `W25Q128JVYIQ` | 16 MB | BOM; the Beetle/Mantis WLCSP part since 2026-09-27 (was `GD25Q128ESIG`). **Unmeasured** |
 
 **How firmware handles it — changed 2026-09-09 (#916).** Each project now
@@ -193,6 +195,23 @@ takes effect where someone would look for it. Any root `projects/*/sdkconfig`
 left over from before is now ignored and can be deleted.
 
 ## Current state
+
+**2026-10-10 — Tinker-Mantis V10 tagged as ordered; the in-work Mantis and Beetle
+move to V11 and V2.** The Mantis V10 was plotted on 2026-09-30 from 86aa08de
+(#1559) and ordered from that package. Its README asked for
+`tinker-mantis-v10.0.0` on that commit at order time, and the tag was never made.
+It is made now, on 86aa08de: the board file there is byte-identical to the one
+plotted (md5 f74e6c2c), and no Mantis file changed on main between the order
+and this entry. The Beetle that was ordered is V1.0.1, which already carries its
+tag (`rocket-computer-mini-v1.0.1`, 091601cb).
+
+Both boards have been worked on since, with copper changes: the Mantis pyro
+switches (#1554), the stretched outline and the USB connector (#1568); the Beetle
+since V1.0.1. A fabricated revision is superseded, so each moves to the next
+major. The title blocks now read V11 and V2, and the silkscreens follow through
+`${REVISION}`. Each board's `FABRICATION-NOTES.md` still describes the ordered
+revision; revise it before the next order. The firmware maps follow the ordered
+boards: `TR_BOARD_V10` and `TR_BOARD_M1`.
 
 **2026-10-05 — gnss-sdr-dev moved to the private GNSS submodule.** The GNSS SDR
 development board now lives in `gnss/` (see the README's GNSS section), which

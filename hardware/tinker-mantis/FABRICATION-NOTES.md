@@ -1,5 +1,11 @@
 # Tinker-Mantis (rocket computer) — fabrication and assembly notes
 
+> **These notes are the V10 as ordered: tag `tinker-mantis-v10.0.0` (86aa08de), plotted
+> 2026-09-30.** The board in work is V11, and its title block says so. Its changes (the
+> #1554 pyro switches, the stretched outline, the #1568 USB connector) make blocks A and B
+> wrong in places, including the board size and the `User.Drawings` copy of block A,
+> which still reads V10. Revise both before V11 is ordered.
+
 **Paste block A into the bare-board fab's order notes verbatim. Paste block B into the assembler's instructions.**
 
 This file exists for the same reason the LoRa board's does: **none of it can travel in the design files.** Via protection, the stencil foil and the process limits are absent from the gerbers, the `.gbrjob`, the Excellon drill file, IPC-2581 and ODB++. The P4 silicon revision (B8) is worse than absent: no file can express it at all, and the wrong part cannot be reworked off the board.
