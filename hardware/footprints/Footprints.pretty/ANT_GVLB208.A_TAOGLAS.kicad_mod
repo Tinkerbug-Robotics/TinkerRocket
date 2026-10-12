@@ -3,7 +3,7 @@
 	(generator "pcbnew")
 	(generator_version "10.0")
 	(layer "F.Cu")
-	(descr "Taoglas GVLB208.A single-feed stacked L1/L5 ceramic patch, 20x20x8.8 mm, feed pin 0.8 mm on the centre line 1.2 mm off centre. Land and clearances per datasheet SPE-25-8-318-B sec. 4.2-4.3 (the same as GVLB258.A): 1.0 mm plated hole, 1.2 mm top pad, 2.2 mm bottom pad; no copper within 3.0 mm dia on the top and inner layers, 3.5 mm dia on the bottom. Silkscreen is the nominal 20.0 x 20.0 mm body outline; courtyard is the +0.2 mm tolerance limit (20.4 mm). Tuned by Taoglas on a 70x70 mm ground plane (https://www.taoglas.com/datasheets/GVLB208.A.pdf)")
+	(descr "Taoglas GVLB208.A single-feed stacked L1/L5 ceramic patch, 20x20x8.8 mm, feed pin 0.8 mm on the centre line 1.2 mm off centre. Land and clearances per datasheet SPE-25-8-318-B sec. 4.2-4.3 (the same as GVLB258.A): 1.0 mm plated hole, 2.2 mm bottom (solder-side) pad; the top (antenna-side) and inner pads are 1.4 mm, not the datasheet's 1.2, for a 0.20 mm annular ring (JLC PTH minimum 0.15 mm); no-copper areas unchanged; no copper within 3.0 mm dia on the top and inner layers, 3.5 mm dia on the bottom. Silkscreen is the nominal 20.0 x 20.0 mm body outline; courtyard is the +0.2 mm tolerance limit (20.4 mm). Tuned by Taoglas on a 70x70 mm ground plane (https://www.taoglas.com/datasheets/GVLB208.A.pdf)")
 	(tags "GNSS L1 L5 patch antenna stacked Taoglas")
 	(property "Reference" "REF**"
 		(at 0 -11 0)
@@ -305,7 +305,7 @@
 	)
 	(pad "1" thru_hole circle
 		(at 0 1.2)
-		(size 1.2 1.2)
+		(size 1.4 1.4)
 		(drill 1)
 		(layers "*.Cu" "*.Mask")
 		(remove_unused_layers no)
@@ -314,7 +314,7 @@
 			(mode front_inner_back)
 			(layer "Inner"
 				(shape circle)
-				(size 1.2 1.2)
+				(size 1.4 1.4)
 			)
 			(layer "B.Cu"
 				(shape circle)
