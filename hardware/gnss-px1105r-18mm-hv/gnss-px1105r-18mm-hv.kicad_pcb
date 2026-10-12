@@ -10,7 +10,7 @@
 	(title_block
 		(title "PX1105R GNSS carrier, LDO supply")
 		(date "2026-10-08")
-		(rev "V1")
+		(rev "V2")
 		(company "TinkerRocket")
 	)
 	(layers
