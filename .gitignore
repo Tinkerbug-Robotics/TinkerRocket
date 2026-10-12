@@ -103,3 +103,7 @@ runs/
 /tools/gnss-cocom/
 /gnss-receiver/
 /hardware/gnss-sdr-dev/
+
+# CAD tool logs: KiCad's importer and Fusion each drop a log beside the design.
+KiCad_Import_*.log
+hardware/**/fusion/**/*.log

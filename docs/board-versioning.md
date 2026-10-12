@@ -32,6 +32,7 @@ tinker-beetle-v<semver>                      earlier revisions: rocket-computer-
 tinker-base-v<semver>                        never fabricated, no tag yet
 lora-daughterboard-v<semver>                 v3.0.0 fabricated; V4 laid out, not yet tagged
 gnss-sam10m8-18mm-hv-v3.0.0
+gnss-px1105r-18mm-hv-v<semver>               the PX1105R version of the SAM-M10Q carrier; never fabricated, no tag yet
 base-station-v5.0.0                          hardware/legacy/
 gnss-px1105r-18mm-highpower-ext-ant-v2.0.0   hardware/legacy/; the Space Bug; V3 laid out, not yet tagged
 servo-adapter-v1.0.0                         hardware/legacy/

@@ -4,7 +4,7 @@
 
 This file exists for the same reason the LoRa board's does: **none of it can travel in the design files.** Via protection, the stencil foil and the process limits are absent from the gerbers, the `.gbrjob`, the Excellon drill file, IPC-2581 and ODB++. The P4 silicon revision (B8) is worse than absent: no file can express it at all, and the wrong part cannot be reworked off the board.
 
-Board: **22.35 × 75.00 mm, 8 layer, 1.630 mm stack**, rev V10. F / In1 / In2 / In3 / In4 / In5 / In6 / B, with In1 and In6 solid GND, In3 the +3V3 plane, In4 the switched 3.3 V plane (`V_MCU_SWTCH`), and In2/In5 routing (In5 also carries a VBATT pour). Two internal 8.0 × 3.0 mm slots are routed as part of the outline.
+Board: **22.35 × 77.50 mm, 8 layer, 1.630 mm stack**, rev V10. F / In1 / In2 / In3 / In4 / In5 / In6 / B, with In1 and In6 solid GND, In3 the +3V3 plane, In4 the switched 3.3 V plane (`V_MCU_SWTCH`), and In2/In5 routing (In5 also carries a VBATT pour). Two internal 8.0 × 3.0 mm slots are routed as part of the outline.
 
 > **Mirrored onto `User.Drawings`** (the board's `Dwgs.User` layer, rewritten for V10 on 2026-09-30). The board's saved plot set does not select that layer, so a `kicad-cli pcb export gerbers --board-plot-params` plot does not ship it. The fab package's `tinker-mantis-fabrication-notes.txt` is block A verbatim, and the order notes are the channel. `tools/plot_gerbers.sh` passes no layer list, so it does emit `User_Drawings.gbr`.
 
@@ -14,7 +14,7 @@ Board: **22.35 × 75.00 mm, 8 layer, 1.630 mm stack**, rev V10. F / In1 / In2 / 
 
 ```
 TINKERROCKET TINKER-MANTIS (ROCKET COMPUTER V10) - FABRICATION NOTES
-BOARD 22.35 x 75.00 mm, 8 LAYER, 1.630 mm STACK.
+BOARD 22.35 x 77.50 mm, 8 LAYER, 1.630 mm STACK.
 TWO INTERNAL SLOTS 8.0 x 3.0 mm, ROUTED; THEY ARE PART OF THE OUTLINE.
 
 A1. STACKUP: JLCPCB JLC08161H-2116, EIGHT LAYER, 1.630 mm.
