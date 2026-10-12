@@ -230,6 +230,11 @@ public:
     // epoch from the u-blox, about once a second from the LC86G's GSV.  Same
     // pop-once contract as getGNSSData(): true at most once per epoch.
     bool getGNSSSatData(GNSSSatData &data_out);
+    // Raw RTCM3 frames from the GNSS receiver (GNSS_RTCM_MSG), oldest first:
+    // ~5 a second from the LC86G's MSM7, never from the u-blox.  Drains a
+    // ring the GNSS poll task fills, so call it until it returns false.
+    // `cap` must be GNSS_RTCM_MAX_FRAME.
+    bool getGNSSRtcmFrame(uint8_t* out, size_t cap, size_t& len, uint32_t& time_us);
     void getISM6HG256DebugSnapshot(ISM6HG256DebugSnapshot &snapshot_out) const;
     void getMMC5983MADebugSnapshot(MMC5983MADebugSnapshot &snapshot_out) const;
     void getPollTimingSnapshot(PollTimingSnapshot &snapshot_out) const;

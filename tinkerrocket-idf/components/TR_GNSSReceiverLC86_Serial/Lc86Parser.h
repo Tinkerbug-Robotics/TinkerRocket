@@ -19,6 +19,8 @@
 
 #include <RocketComputerTypes.h>
 
+#include "Rtcm3Msm.h"
+
 namespace lc86
 {
 
@@ -33,10 +35,16 @@ enum class Event : uint8_t
                   // folded into the table; see takeSat()
     PAIR_ACK,     // $PAIR001 — ackCommandId()/ackResult()
     NAV_MODE,     // $PAIR081,<NavMode> — navMode()
+    RTCM_MODE,    // $PAIR433,<Mode> — rtcmMode()
+    RTCM_EPH_MODE, // $PAIR437,<Enable> — rtcmEphMode()
     QTM_OK,       // $PQTMCFGMSGRATE,OK (write accepted)
     QTM_ERROR,    // $PQTMCFGMSGRATE,ERROR,<code> — qtmErrorCode()
+    MSM_EPOCH,    // an RTCM3 MSM7 epoch closed — see takeMsmEpoch()
+    RTCM,         // any other RTCM3 frame whose CRC checks (MSM7 folded in, or
+                  // a message type this parser does not decode)
+                  // After either of these two, rtcmFrame() holds the frame.
     OTHER_VALID,  // any other sentence with a valid checksum (liveness proof)
-    BAD,          // complete line discarded (checksum/format/overflow)
+    BAD,          // complete line or RTCM3 frame discarded (checksum/format/overflow)
 };
 
 // 8-bit XOR over `len` bytes (the span between '$' and '*').
@@ -53,11 +61,18 @@ public:
     // Feed one received byte; returns what (if anything) completed. Line
     // reassembly is internal, so bytes may arrive in arbitrary slices
     // (pollNewPVT drains bounded chunks — sentences routinely straddle calls).
+    //
+    // RTCM3 frames ($PAIR432) share the stream. NMEA is 7-bit ASCII, so a
+    // 0xD3 can only be a frame's preamble: from there the frame's own length
+    // says how many bytes are binary, and only a frame whose CRC-24Q checks
+    // is decoded. A 0xD3 whose next bytes cannot be a header is dropped and
+    // the byte that gave it away is read as NMEA again, so stray noise costs
+    // at most the bytes before the check that caught it.
     Event feed(uint8_t byte);
 
-    // Drop any partially-assembled line. Call after a baud change so
-    // cross-baud garbage can't glue onto the front of the next real sentence.
-    // Cached EPE values and counters survive.
+    // Drop any partially-assembled line or RTCM3 frame. Call after a baud
+    // change so cross-baud garbage can't glue onto the front of the next real
+    // sentence. Cached EPE values, an open MSM7 epoch and counters survive.
     void resetLine();
 
     // Valid after Event::PVT. Every GNSSData field is filled except time_us
@@ -78,6 +93,14 @@ public:
     // Valid after Event::NAV_MODE: 0 Normal, 1 Fitness, 3 Balloon,
     // 4 Stationary, 5 Drone, 7 Swimming (protocol spec §2.4.25).
     uint8_t navMode() const { return nav_mode_; }
+
+    // Valid after Event::RTCM_MODE: -1 off, 0 MSM4, 1 MSM7 ($PAIR433, the
+    // read-back of $PAIR432).
+    int8_t rtcmMode() const { return rtcm_mode_; }
+
+    // Valid after Event::RTCM_EPH_MODE: 0 off, 1 on ($PAIR437, the read-back
+    // of $PAIR436: RTCM3 ephemeris messages 1019/1020/1042/1044/1046).
+    int8_t rtcmEphMode() const { return rtcm_eph_mode_; }
 
     // Per-satellite report (#1032): moves a completed satellites-in-view
     // burst into `out` and clears the ready flag; false when none is waiting.
@@ -107,6 +130,21 @@ public:
     // time_us is left for the owner to stamp, matching pvt().
     bool takeSat(GNSSSatData& out);
 
+    // Raw measurements (RTCM3 MSM7, $PAIR432,1): moves the latest closed
+    // epoch into `out` and clears the ready flag; false when none is waiting.
+    // An epoch closes on the message that clears DF393 (QZSS, on this
+    // module) or, should that one be lost, when the next epoch's first
+    // message arrives (complete = false then). msmEpoch() reads the same
+    // epoch without taking it.
+    bool takeMsmEpoch(rtcm3::MsmEpoch& out);
+    const rtcm3::MsmEpoch& msmEpoch() const { return msm_ready_; }
+
+    // The frame that produced the last Event::RTCM or Event::MSM_EPOCH,
+    // verbatim from the 0xD3 through its CRC-24Q, for logging. Valid only
+    // until the next feed(): the next frame reuses the buffer.
+    const uint8_t* rtcmFrame() const { return rtcm_buf_; }
+    size_t rtcmFrameLen() const { return rtcm_frame_len_; }
+
     // Valid after Event::GGA. Debug/liveness only — GGA is NEVER a fix
     // source here (no vertical velocity; see the PQTMPVT-is-load-bearing
     // rule in TR_GNSSReceiverLC86_Serial.cpp).
@@ -122,6 +160,15 @@ public:
     uint32_t gsvSkipped() const { return gsv_skipped_; }        // BeiDou B1C lines left out
     uint32_t gsvBursts() const { return gsv_bursts_; }          // bursts closed, empty ones too
     uint32_t gsvBurstsWithSats() const { return gsv_bursts_with_sats_; } // ... that made a record
+    uint32_t rtcmPreambles() const { return rtcm_preambles_; }  // 0xD3 bytes that opened a frame
+    uint32_t rtcmFrames() const { return rtcm_frames_; }        // CRC-checked frames, any type
+    uint32_t rtcmEphFrames() const { return rtcm_eph_frames_; } // ... that are ephemeris (1019/1020/1042/1044/1046)
+    uint32_t rtcmCrcFails() const { return rtcm_crc_fails_; }   // full-length frames that failed
+    uint32_t rtcmBadHeaders() const { return rtcm_bad_headers_; } // 0xD3 not followed by a header
+    uint32_t msmMessages() const { return msm_messages_; }      // MSM7 messages decoded
+    uint32_t msmMalformed() const { return msm_malformed_; }    // MSM7 type, length off its masks
+    uint32_t msmEpochs() const { return msm_epochs_; }          // epochs closed
+    uint32_t msmEpochsIncomplete() const { return msm_epochs_incomplete_; } // ... by the next one
 
 private:
     // NMEA 0183 caps sentences at 82 chars but Quectel's $PQTMPVT runs ~137;
@@ -134,6 +181,8 @@ private:
     Event parsePqtmEpe(const char* const* f, size_t n);
     Event parsePairAck(const char* const* f, size_t n);
     Event parseNavMode(const char* const* f, size_t n);
+    Event parseRtcmMode(const char* const* f, size_t n);
+    Event parseRtcmEphMode(const char* const* f, size_t n);
     Event parseQtmCfgMsgRate(const char* const* f, size_t n);
     Event parseGga(const char* const* f, size_t n);
     Event parseGsv(const char* addr, const char* const* f, size_t n);
@@ -146,9 +195,30 @@ private:
     void finalizeGsv();
     void dropTalker(uint16_t talker);
 
+    // RTCM3 framing: feedRtcm() takes every byte from a 0xD3 to the end of
+    // the frame its length gives; parseRtcm() checks and dispatches it.
+    Event feedRtcm(uint8_t byte, bool& reread);
+    Event parseRtcm();
+    Event foldMsm7(const uint8_t* payload, size_t len);
+    void  closeMsmEpoch(bool complete);
+
     char   line_[kMaxLine + 1];
     size_t line_len_ = 0;
     bool   in_line_  = false;
+
+    uint8_t rtcm_buf_[rtcm3::kMaxPayload + rtcm3::kFrameOverhead];
+    size_t  rtcm_len_    = 0;   // bytes held, preamble included
+    size_t  rtcm_want_   = 0;   // whole frame length, once the header is in
+    size_t  rtcm_frame_len_ = 0; // length of the last CRC-checked frame
+    bool    in_rtcm_     = false;
+
+    // The epoch being gathered and the last one closed (what takeMsmEpoch()
+    // hands out). ~1.9 kB each; the parser lives inside the driver, which
+    // the collector holds statically, so neither is ever on a task stack.
+    rtcm3::MsmEpoch msm_build_ = {};
+    rtcm3::MsmEpoch msm_ready_ = {};
+    bool            msm_open_  = false;
+    bool            msm_ready_flag_ = false;
 
     GNSSData pvt_ = {};
     uint8_t epe_h_acc_m_ = 255;  // $PQTMEPE EPE_2D, cached for the next PVT
@@ -158,6 +228,8 @@ private:
     uint8_t  ack_result_ = 0;
     int      qtm_err_    = 0;
     uint8_t  nav_mode_   = 0xFF;  // 0xFF until a $PAIR081 answer arrives
+    int8_t   rtcm_mode_  = -2;    // -2 until a $PAIR433 answer arrives
+    int8_t   rtcm_eph_mode_ = -2; // -2 until a $PAIR437 answer arrives
     uint8_t  gga_quality_  = 0;
     uint8_t  gga_num_sats_ = 0;
 
@@ -183,6 +255,15 @@ private:
     uint32_t gsv_skipped_     = 0;
     uint32_t gsv_bursts_      = 0;
     uint32_t gsv_bursts_with_sats_ = 0;
+    uint32_t rtcm_preambles_   = 0;
+    uint32_t rtcm_frames_      = 0;
+    uint32_t rtcm_eph_frames_  = 0;
+    uint32_t rtcm_crc_fails_   = 0;
+    uint32_t rtcm_bad_headers_ = 0;
+    uint32_t msm_messages_     = 0;
+    uint32_t msm_malformed_    = 0;
+    uint32_t msm_epochs_       = 0;
+    uint32_t msm_epochs_incomplete_ = 0;
 };
 
 }  // namespace lc86

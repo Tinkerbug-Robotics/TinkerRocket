@@ -6039,6 +6039,35 @@ static void loop_fc()
                            gnssSatWireSize(gnss_sat_data.num_blocks));
     }
 
+    // The receiver's raw RTCM3 frames (GNSS_RTCM_MSG), verbatim, so a flight
+    // can be reconstructed later: on the mini the LC86G's MSM7, ~5 frames once
+    // a second, and one ephemeris message a second; ~600 B/s with the
+    // framing.  Log-only.  A frame longer than one
+    // payload goes as consecutive parts (gnssRtcmParts).  Bounded per pass so
+    // a backlog from boot drains over a few passes rather than in one burst
+    // into the I2S queue.  Static buffers: ~1.3 kB off this task's stack.
+    {
+        static uint8_t rtcm_frame[GNSS_RTCM_MAX_FRAME];
+        static uint8_t rtcm_record[MAX_PAYLOAD];
+        size_t   frame_len = 0;
+        uint32_t frame_us  = 0;
+        for (int i = 0; i < 8 && sensor_collector.getGNSSRtcmFrame(rtcm_frame, sizeof(rtcm_frame),
+                                                                   frame_len, frame_us); i++)
+        {
+            const uint8_t parts = gnssRtcmParts(frame_len);
+            for (uint8_t k = 0; k < parts; k++)
+            {
+                const size_t off = (size_t)k * GNSS_RTCM_MAX_CHUNK;
+                const size_t n   = (frame_len - off < GNSS_RTCM_MAX_CHUNK)
+                                       ? frame_len - off : GNSS_RTCM_MAX_CHUNK;
+                const GnssRtcmHeader hdr = {frame_us, (uint8_t)((k << 4) | parts)};
+                memcpy(rtcm_record, &hdr, sizeof(hdr));
+                memcpy(rtcm_record + sizeof(hdr), rtcm_frame + off, n);
+                (void)enqueueI2STx(GNSS_RTCM_MSG, rtcm_record, sizeof(hdr) + n);
+            }
+        }
+    }
+
     // ==========================================================================
     // SECTION: Full config report (#915)
     // ==========================================================================

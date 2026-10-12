@@ -1457,11 +1457,13 @@ gtest_discover_tests(test_sim_sensor_model)
 # is deliberately IDF-free (bytes in, GNSSData out), so the checksum rules
 # (anchored on the protocol doc's published examples), the $PQTMPVT mapping
 # incl. the vel_u = -VelD sign the EKF hard-fuses, the Quality==0 fix-trust
-# gate, the $PQTMEPE accuracy merge, and junk/partial-line resilience are all
-# pinned on the host. The ESP UART glue lives in TR_GNSSReceiverLC86_Serial.cpp
+# gate, the $PQTMEPE accuracy merge, junk/partial-line resilience, and the
+# RTCM3 MSM7 frames interleaved with the NMEA (Rtcm3Msm.cpp) are all pinned
+# on the host. The ESP UART glue lives in TR_GNSSReceiverLC86_Serial.cpp
 # and is not compiled here.
 add_executable(test_lc86_parser test_lc86_parser.cpp
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Lc86Parser.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
 )
 target_include_directories(test_lc86_parser PRIVATE
     ${SHIM_DIR}

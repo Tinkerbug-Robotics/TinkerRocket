@@ -1377,6 +1377,19 @@ bool SensorCollector::getGNSSSatData(GNSSSatData& sat_out)
     return false;
 }
 
+bool SensorCollector::getGNSSRtcmFrame(uint8_t* out, size_t cap, size_t& len,
+                                       uint32_t& time_us)
+{
+#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+    // No semaphore: the driver's ring is safe between the poll task and us.
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.pollRtcmFrame(out, cap, len, time_us);
+#else
+    (void)out; (void)cap; (void)len; (void)time_us;
+    return false;
+#endif
+}
+
 void SensorCollector::getISM6HG256DebugSnapshot(ISM6HG256DebugSnapshot &snapshot_out) const
 {
     uint8_t i = 0;
