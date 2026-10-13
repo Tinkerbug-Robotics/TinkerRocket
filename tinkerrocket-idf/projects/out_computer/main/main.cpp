@@ -4650,6 +4650,7 @@ static bool isKnownMessageType(uint8_t type)
         case GNSS_SAT_MSG:           // FC→OC over I2S — per-satellite C/N0 every GNSS epoch, log-only
         case GNSS_RTCM_MSG:          // FC→OC over I2S — the GNSS receiver's raw RTCM3 frames, log-only
         case RAW_GNSS_EKF_MSG:       // FC→OC over I2S at 10 Hz — the raw-GNSS shadow filter (#1600), log-only
+        case PAD_CAL_STATUS_MSG:     // FC→OC over I2S at 1 Hz on the ground — pad calibration progress (#1600 phase 5)
         case FC_STATUS_MSG:          // FC→OC over I2S at 5 Hz — the FC's own camera truth (#1154 item 4)
             return true;
         default:
@@ -5192,6 +5193,16 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         if (payload_len >= sizeof(SensorCalStatusData))
         {
             ble_app.sendSensorCalStatus(payload, sizeof(SensorCalStatusData));
+        }
+    }
+    else if (type == PAD_CAL_STATUS_MSG)
+    {
+        // #1600 phase 5: the pad calibration's progress, once a second on the
+        // ground.  Logged like every frame, and forwarded to the app on
+        // file-ops behind 0xD0.
+        if (payload_len >= sizeof(PadCalStatusData))
+        {
+            ble_app.sendPadCalStatus(payload, sizeof(PadCalStatusData));
         }
     }
     else if (type == FC_STATUS_MSG)
@@ -12706,8 +12717,28 @@ static void loop_oc()
         }
         else if (ble_cmd == 21)
         {
+            // Gyro & accel calibration alone: the pre-#1600 app's, kept for it.
             setPendingCommand(GYRO_CAL_CMD);
             ESP_LOGI("BLE", "Gyro cal request -> FlightComputer");
+        }
+        else if (ble_cmd == 75)
+        {
+            // Pad calibration (#1600 phase 5): [iono i8 x8][gps_day u16 LE] —
+            // the GPS broadcast ionosphere the app read from the day's
+            // navigation file, and that file's date (0: the app has none).
+            // The FC stores it for the raw-GNSS filter, runs the gyro/accel
+            // window GYRO_CAL_CMD runs, and reports both as PAD_CAL_STATUS_MSG.
+            // A bare 75 is a pad calibration with no ionosphere.
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            PadCalConfigData cfg = {};
+            if (plen >= sizeof(cfg))
+            {
+                memcpy(&cfg, payload, sizeof(cfg));
+            }
+            setPendingCommandWithConfig(PAD_CAL_PENDING, PAD_CAL_CONFIG_MSG, &cfg, sizeof(cfg));
+            ESP_LOGI("BLE", "Pad calibration -> FlightComputer (ionosphere of GPS day %u)",
+                     (unsigned)cfg.iono_gps_day);
         }
         else if (ble_cmd == 22)
         {

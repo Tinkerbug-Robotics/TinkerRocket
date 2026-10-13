@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "RtcmEphemeris.h"
+#include "gnss/atmo.h"
 #include "gnss/types.h"
 
 namespace gnss_raw
@@ -38,7 +39,7 @@ int32_t sat32(double v)
 RawGnssShadow::RawGnssShadow() : RawGnssShadow(Config()) {}
 
 RawGnssShadow::RawGnssShadow(const Config& cfg)
-    : cfg_(cfg), ekf_(cfg.ekf), builder_(cfg.meas)
+    : cfg_(cfg), ekf_(cfg.ekf), builder_(cfg.meas), survey_(cfg.survey)
 {
 }
 
@@ -72,12 +73,91 @@ void RawGnssShadow::onEphemeris(const uint8_t* payload, size_t len)
     }
 }
 
+void RawGnssShadow::setIono(const ShadowIono& io)
+{
+    iono_in_ = io;
+    have_iono_ = true;
+    iono_dirty_ = true;
+    st_.iono_sets++;
+}
+
+bool RawGnssShadow::ionoAgeDays(int& days) const
+{
+    if (!have_iono_ || week_ == 0 || last_tow_s_ < 0.0)
+        return false;
+    const int today = static_cast<int>(week_) * 7 + static_cast<int>(last_tow_s_ / 86400.0);
+    days = today - static_cast<int>(iono_in_.gps_day);
+    return true;
+}
+
+void RawGnssShadow::padStatus(ShadowPadStatus& out) const
+{
+    auto u8 = [](int x) { return static_cast<uint8_t>(x < 0 ? 0 : (x > 255 ? 255 : x)); };
+    const PadSurvey::Summary& sv = survey_.summary();
+    out.running = running_ ? 1 : 0;
+    out.tracked = u8(st_.tracked);
+    out.no_eph = u8(st_.tracked_no_eph);
+    out.settling = sv.settling;
+    out.corrected = sv.corrected;
+    out.iono_source = ionoSource();
+    int age = 0;
+    out.iono_age_known = ionoAgeDays(age) ? 1 : 0;
+    out.iono_age_days = static_cast<int16_t>(age < -32767 ? -32767 : (age > 32767 ? 32767 : age));
+    out.corr_rms_m = sv.rms_m;
+    double v = 0.0;
+    if (running_)
+        for (int i = 0; i < 3; ++i)
+        {
+            const double s = static_cast<double>(ekf_.sigma(RawGnssEKF<float>::kPos + i));
+            v += s * s;
+        }
+    out.pos_sigma_m = static_cast<float>(std::sqrt(v));
+}
+
+uint8_t RawGnssShadow::ionoSource() const
+{
+    if (use_broadcast_)
+        return kIonoBroadcast;
+    return survey_.summary().corrected > 0 ? kIonoPad : kIonoNone;
+}
+
+void RawGnssShadow::chooseIono(bool in_flight)
+{
+    // made on the pad and kept through the flight: a change there would
+    // start the survey over with no pad left to survey
+    if (in_flight)
+        return;
+    int age = 0;
+    const bool use = have_iono_ && (!ionoAgeDays(age) || age <= cfg_.iono_max_age_days);
+    if (!iono_dirty_ && use == use_broadcast_)
+        return;
+    builder_.setIono(use ? RawMeasBuilder::ionoFromBroadcast(iono_in_.raw) : gps_iono_t{});
+    use_broadcast_ = use;
+    iono_dirty_ = false;
+    survey_.reset();                  // its residuals were against the other model
+}
+
 void RawGnssShadow::onEpoch(const TimedRawEpoch& e)
 {
     st_.epochs++;
     if (e.gps_week != 0)
         week_ = e.gps_week;
+    last_tow_s_ = e.epoch.tow_s;
     last_timed_ = e.mcu_us != 0;
+    // which satellites the receiver tracks that it has not sent the ephemeris of
+    int tracked = 0, no_eph = 0;
+    for (int i = 0; i < e.epoch.n; ++i)
+    {
+        const RawObs& o = e.epoch.obs[i];
+        if (!o.has_pr || o.sys > GNSS_SYS_BDS)
+            continue;
+        tracked++;
+        const double to_sys = o.sys == GNSS_SYS_BDS ? BDT_MINUS_GPST : 0.0;   // as the builder picks
+        if (store_.select(o.sys, o.prn, e.epoch.tow_s + to_sys) == nullptr)
+            no_eph++;
+    }
+    st_.tracked = tracked;
+    st_.tracked_no_eph = no_eph;
     // an epoch the filter will not take still tells which satellites are tracked
     if (e.mcu_us == 0)
     {
@@ -191,7 +271,7 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
             resync(t);
     }
 
-    applyDueEpochs(t);
+    applyDueEpochs(t, s.flags);
 
     const double* lla = ekf_.lla();
     const float* v = ekf_.velNed();
@@ -269,7 +349,7 @@ void RawGnssShadow::resync(double t)
     st_.resyncs++;
 }
 
-void RawGnssShadow::applyDueEpochs(double t)
+void RawGnssShadow::applyDueEpochs(double t, uint8_t imu_flags)
 {
     while (npending_ > 0)
     {
@@ -285,19 +365,36 @@ void RawGnssShadow::applyDueEpochs(double t)
             dropFront();
             continue;
         }
-        apply(e, age);
+        apply(e, age, t, imu_flags);
         pending_[0] = pending_[1];
         npending_--;
     }
 }
 
-void RawGnssShadow::apply(const TimedRawEpoch& e, double age)
+void RawGnssShadow::apply(const TimedRawEpoch& e, double age, double t, uint8_t imu_flags)
 {
+    const bool in_flight = (imu_flags & kShadowInFlight) != 0;
+    chooseIono(in_flight);
     double r[3], v[3];
     ekf_.receiverEcef(r, v);
     const int64_t c0 = now();
     const int n = builder_.build(e.epoch, store_, r, static_cast<double>(ekf_.takeGPeak()), meas_,
                                  RawEpoch::kMaxObs);
+    // the pad survey, against the launch site the seed carries (a fresh one)
+    if (!in_flight && have_seed_ && seed_.on_pad && seed_.pad_valid)
+    {
+        const double ts = static_cast<double>(unwrap32(seed_.time_us, static_cast<int64_t>(t * 1.0e6))) * 1.0e-6;
+        if (std::fabs(t - ts) <= cfg_.seed_max_age_s)
+        {
+            double pad[3];
+            geo_to_ecef(seed_.pad_lla[0], seed_.pad_lla[1], seed_.pad_lla[2], pad);
+            for (int i = 0; i < n; ++i)
+                lock_age_[i] = builder_.relockAge(meas_[i].sys, meas_[i].prn, e.epoch.tow_s);
+            survey_.observe(meas_, n, lock_age_, e.epoch.tow_s, pad);
+            st_.survey_epochs++;
+        }
+    }
+    st_.last_pad_corrected = use_broadcast_ ? 0 : survey_.correct(meas_, n, r);
     const int64_t c1 = now();
     const RawGnssStats rs = ekf_.updateGnssRaw(meas_, n, age);
     const int64_t c2 = now();

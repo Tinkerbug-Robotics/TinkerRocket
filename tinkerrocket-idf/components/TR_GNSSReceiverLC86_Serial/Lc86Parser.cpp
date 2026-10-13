@@ -495,6 +495,13 @@ Event Lc86Parser::parsePqtmPvt(const char* const* f, size_t n)
     d.lat_e7 = scaleI32(fieldDouble(f[9]), 1e7);
     d.lon_e7 = scaleI32(fieldDouble(f[10]), 1e7);
     d.alt_mm = scaleI32(fieldDouble(f[11]), 1000.0);  // <Alt> is MSL, m → mm
+    // <Sep>, the geoid above the ellipsoid: only a fix states it (blank, or
+    // 0.0 from a receiver with no position, otherwise)
+    if (fm >= 2 && f[12][0] != '\0')
+    {
+        geoid_sep_m_ = (float)fieldDouble(f[12]);
+        geoid_sep_valid_ = true;
+    }
 
     d.vel_n_mmps = scaleI32(fieldDouble(f[13]), 1000.0);
     d.vel_e_mmps = scaleI32(fieldDouble(f[14]), 1000.0);

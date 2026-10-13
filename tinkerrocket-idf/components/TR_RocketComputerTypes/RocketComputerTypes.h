@@ -1607,6 +1607,65 @@ typedef struct __attribute__((packed))
 static_assert(sizeof(SensorCalStatusData) == 19,
               "SensorCalStatusData must be 19 bytes");
 
+// ── Pad calibration (#1600 phase 5) ──────────────────────────────────────────
+// OC→FC, after PAD_CAL_PENDING: the GPS broadcast (Klobuchar) ionosphere the
+// app read from the day's navigation file.  The LC86G does not pass these on
+// (RTCM has no message for them), and without them the raw-GNSS filter's
+// absolute altitude reads 6-10 m high.  As GPS broadcasts them, so the app
+// sends exact values: alpha0..3 at 2^-30, 2^-27, 2^-24, 2^-24 s/semicircle^n,
+// beta0..3 at 2^11, 2^14, 2^16, 2^16 s/semicircle^n (IS-GPS-200 20.3.3.5.1.7).
+typedef struct __attribute__((packed))
+{
+    int8_t   iono[8];       // alpha0..3, beta0..3, two's complement
+    uint16_t iono_gps_day;  // the navigation file's date: days since 1980-01-06.
+                            // 0: the app has none, and any stored set is kept
+} PadCalConfigData;
+static_assert(sizeof(PadCalConfigData) == 10,
+              "PadCalConfigData must be 10 bytes");
+
+// FC→OC→app: what a pad calibration is doing, once a second on the ground and
+// at each change.  The OC relays it on the file_ops characteristic behind a
+// 0xD0 discriminator.  The gyro/accel result itself still comes as
+// SensorCalStatusData (0xCB) when the window closes.
+typedef struct __attribute__((packed))
+{
+    uint32_t time_us;         // FC micros()
+    uint8_t  cal_state;       // PAD_CAL_* below
+    uint8_t  cal_progress;    // % of the gyro/accel window gone (100 once it closed)
+    uint16_t cal_gravity_mg;  // |gravity| the window measured, milli-g (0: none yet)
+    uint8_t  sats_tracked;    // GPS, Galileo, BeiDou satellites with a pseudorange, last epoch
+    uint8_t  sats_no_eph;     //   of those, no broadcast ephemeris received yet
+    uint8_t  sats_settling;   //   locked under 50 s: not yet surveyed (a relocked pseudorange starts biased)
+    uint8_t  sats_corrected;  //   with a pad correction ready
+    uint16_t corr_rms_cm;     // those corrections' spread about each system's mean, cm
+    uint8_t  iono_source;     // PAD_IONO_*: what the raw-GNSS filter takes the ionosphere out with
+    uint8_t  flags;           // PCS_* below
+    uint16_t iono_gps_day;    // the stored broadcast parameters' file date (0: none stored)
+    int16_t  iono_age_days;   // their age by the receiver's date (PCS_IONO_AGE)
+    uint16_t pad_fixes;       // receiver fixes in the pad average (restarted by each pad calibration)
+    uint16_t pad_secs;        // the span they cover, s
+    uint16_t pad_scatter_cm;  // their 3-D RMS about the average, cm
+    int32_t  pad_lat_e7;      // the pad: degrees x 1e7
+    int32_t  pad_lon_e7;
+    int32_t  pad_alt_mm;      // ellipsoidal height, mm
+    uint16_t pos_sigma_cm;    // the raw-GNSS filter's 3-D position sigma, cm (0: not running)
+} PadCalStatusData;
+static_assert(sizeof(PadCalStatusData) == 40,
+              "PadCalStatusData must be 40 bytes");
+static constexpr uint8_t PAD_CAL_IDLE     = 0;  // no pad calibration since boot
+static constexpr uint8_t PAD_CAL_RUNNING  = 1;  // the gyro/accel window is open
+static constexpr uint8_t PAD_CAL_DONE     = 2;  // it closed and the new offsets are in use
+static constexpr uint8_t PAD_CAL_REJECTED = 3;  // it closed implausible (gravity), the previous offsets kept
+static constexpr uint8_t PAD_CAL_REFUSED  = 4;  // not run: launched, landed, a sim, or no IMU
+static constexpr uint8_t PAD_IONO_NONE      = 0;  // neither: Klobuchar's night-time 5 ns only
+static constexpr uint8_t PAD_IONO_BROADCAST = 1;  // the broadcast parameters the app sent
+static constexpr uint8_t PAD_IONO_PAD       = 2;  // the pad survey's per-satellite corrections (the backup)
+static constexpr uint8_t PCS_RAW_GNSS   = 0x01;  // this board runs the raw-GNSS filter (LC86G)
+static constexpr uint8_t PCS_RUNNING    = 0x02;  //   and it is running
+static constexpr uint8_t PCS_IONO_AGE   = 0x04;  // iono_age_days is known (the receiver has given its date)
+static constexpr uint8_t PCS_PAD        = 0x08;  // the pad average has fixes (pad_* are set)
+static constexpr uint8_t PCS_PAD_FROZEN = 0x10;  // launched: the pad average and corrections are frozen
+
 // OC→app flash-space stats for the rocket NAND flight log.  Rides the file_ops
 // characteristic behind a 0xCC discriminator (sibling of the 0xCB sensor-cal
 // frame).  All counts are 128 KB NAND blocks; the app derives bytes and the
@@ -2470,6 +2529,15 @@ static constexpr uint8_t GNSS_RTCM_MSG       = 0x95;  // FC→OC over I2S: GnssR
 // FC→OC over I2S: the raw-GNSS shadow filter's state (#1600), 10 Hz while it
 // runs (see RawGnssEkfData).  LC86G boards only; no-op elsewhere.
 static constexpr uint8_t RAW_GNSS_EKF_MSG    = 0x96;  // FC→OC over I2S: RawGnssEkfData, the raw-GNSS shadow filter at 10 Hz, straight to the log.
+
+// The pad calibration (#1600 phase 5).  The app's "Pad calibration" (BLE
+// command 75) runs the gyro/accel window GYRO_CAL_CMD runs, and hands the
+// flight computer the GPS broadcast ionosphere for the raw-GNSS filter
+// (PadCalConfigData).  Progress comes back as PadCalStatusData.
+static constexpr uint8_t PAD_CAL_PENDING     = 0x97;  // OC→FC: pad calibration; PadCalConfigData follows as PAD_CAL_CONFIG_MSG
+static constexpr uint8_t PAD_CAL_CONFIG_MSG  = 0x98;  // OC→FC: 10-byte PadCalConfigData
+static constexpr uint8_t PAD_CAL_STATUS_MSG  = 0x99;  // FC→OC over I2S: PadCalStatusData, 1 Hz on the ground; logged, and relayed to the app
+                                                      // behind a 0xD0 file_ops discriminator.
 
 static constexpr uint8_t OUT_STATUS_QUERY    = 0xA0;
 static constexpr uint8_t GNSS_MSG            = 0xA1;
@@ -4015,6 +4083,8 @@ static_assert(sizeof(GNSSSatData) <= MAX_PAYLOAD,
               "GNSSSatData must fit one I2S frame payload");
 static_assert(sizeof(RawGnssEkfData) <= MAX_PAYLOAD,
               "RawGnssEkfData must fit one I2S frame payload");
+static_assert(sizeof(PadCalStatusData) <= MAX_PAYLOAD,
+              "PadCalStatusData must fit one I2S frame payload");
 
 // The flight settings snapshot (#165) rides the same I2S frame path, so it
 // must also fit one payload.  Checked here since MAX_PAYLOAD is defined below

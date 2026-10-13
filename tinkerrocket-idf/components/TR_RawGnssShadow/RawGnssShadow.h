@@ -19,6 +19,15 @@
 // history, is dropped. An epoch with no MCU time yet (the time sync wants
 // 10 s of fixes) only counts for the satellites' relock ages.
 //
+// The ionosphere (phase 5). A pad calibration brings the GPS broadcast
+// (Klobuchar) parameters from the app, with the date of the navigation file
+// they came from (setIono; NVS keeps them across boots). They are used while
+// they are no older than iono_max_age_days by the receiver's date. Otherwise,
+// and without them, the pad survey's per-satellite corrections are: on the
+// pad, against the launch site (PadSurvey.h), and frozen at liftoff. The
+// choice is made on the pad and kept through the flight; the survey runs
+// either way, and starts over when the choice changes.
+//
 // Stopping. A sensor sim, a hole in the IMU longer than max_gap_s, a state
 // that is not finite, or (on the pad) one pad_reset_m from the flight
 // filter's stops it; it starts again from the next pad seed.
@@ -44,6 +53,7 @@
 #include <RocketComputerTypes.h>
 
 #include "EphemerisStore.h"
+#include "PadSurvey.h"
 #include "RawMeas.h"
 #include "RawMeasBuilder.h"
 #include "ShadowLink.h"
@@ -70,6 +80,16 @@ public:
         double   max_gap_s       = 0.5;   // an IMU hole longer than this stops it
         double   pad_reset_m     = 500.0; // on the pad, this far from the flight filter stops it
         uint16_t default_week    = 2440;  // until an epoch names the GPS week (2026-10)
+        int      iono_max_age_days = 30;  // broadcast parameters older than this give way to the pad survey
+        PadSurvey::Config survey;
+    };
+
+    // What takes the ionosphere out (the pad status message reports it).
+    enum IonoSource : uint8_t
+    {
+        kIonoNone = 0,       // neither: Klobuchar's night-time 5 ns only
+        kIonoBroadcast = 1,  // the GPS broadcast parameters a pad calibration brought
+        kIonoPad = 2,        // the pad survey's corrections (some in use)
     };
 
     enum StopReason : uint8_t
@@ -100,6 +120,13 @@ public:
         double   last_age_s = 0.0;
         uint32_t last_tow_ms = 0;
         int      last_meas = 0;
+        int      last_pad_corrected = 0;   // of its pseudoranges, corrected by the pad survey
+        // the last epoch seen: GPS, Galileo and BeiDou satellites with a
+        // pseudorange, and of those, the ones with no ephemeris yet
+        int      tracked = 0;
+        int      tracked_no_eph = 0;
+        uint32_t survey_epochs = 0;        // epochs the pad survey took
+        uint32_t iono_sets = 0;            // setIono calls
     };
 
     using Clock = int64_t (*)();
@@ -114,6 +141,8 @@ public:
 
     void onSeed(const ShadowSeed& s);
     void onEphemeris(const uint8_t* payload, size_t len);
+    // The broadcast ionosphere a pad calibration brought (or NVS kept).
+    void setIono(const ShadowIono& io);
     void onEpoch(const TimedRawEpoch& e);
     // One flight-filter IMU tick; time64_us is its time widened to 64 bits
     // (unwrap32 against the clock it was stamped with).
@@ -126,6 +155,20 @@ public:
     const RawGnssEKF<float>& filter() const { return ekf_; }
     const EphemerisStore& ephemerides() const { return store_; }
     int ephemerisSatellites() const { return eph_sats_; }
+    const PadSurvey& survey() const { return survey_; }
+    const RawMeasBuilder& builder() const { return builder_; }
+    // The last epoch's measurements as the filter took them (pad corrections
+    // applied when they were in use), n of them: the console's per-satellite line.
+    const RawMeas* lastMeasurements(int& n) const { n = st_.last_meas; return meas_; }
+    // What takes the ionosphere out now.
+    uint8_t ionoSource() const;
+    bool haveIono() const { return have_iono_; }
+    const ShadowIono& iono() const { return iono_in_; }
+    // Days from the parameters' file to the receiver's date (negative if the
+    // file is dated later); false until both are known.
+    bool ionoAgeDays(int& days) const;
+    // The pad calibration's view of it (ShadowLink's pad snapshot).
+    void padStatus(ShadowPadStatus& out) const;
 
     // The 64-bit time nearest ref64 whose low 32 bits are t32.
     static int64_t unwrap32(uint32_t t32, int64_t ref64)
@@ -137,8 +180,9 @@ private:
     void start(double t);
     void stop(uint8_t why);
     void resync(double t);
-    void applyDueEpochs(double t);
-    void apply(const TimedRawEpoch& e, double age);
+    void applyDueEpochs(double t, uint8_t imu_flags);
+    void apply(const TimedRawEpoch& e, double age, double t, uint8_t imu_flags);
+    void chooseIono(bool in_flight);
     void dropFront();
     void fillLog(uint32_t time_us, uint8_t imu_flags);
     int64_t now() const { return clock_ ? clock_() : 0; }
@@ -162,7 +206,14 @@ private:
     double        last_resync_t_ = 0.0;
     double        next_log_t_ = 0.0;
     uint16_t      week_ = 0;
+    double        last_tow_s_ = -1.0;  // the last epoch's time of week (any epoch)
     int           eph_sats_ = 0;
+    PadSurvey     survey_;
+    double        lock_age_[RawEpoch::kMaxObs] = {};
+    ShadowIono    iono_in_ = {};
+    bool          have_iono_ = false;
+    bool          iono_dirty_ = true;   // the builder's model is to be chosen again
+    bool          use_broadcast_ = false;
     bool          last_timed_ = false;
     uint8_t       pend_flags_ = 0;      // RGE_STALE / RGE_RESYNC / RGE_CLOCK_STEP since the last record
     RawGnssEkfData log_ = {};

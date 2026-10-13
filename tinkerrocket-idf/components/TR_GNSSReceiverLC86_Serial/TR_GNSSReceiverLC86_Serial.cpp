@@ -721,6 +721,12 @@ void TR_GNSSReceiverLC86Serial::publishFromParser()
     // MCU sample time, not GNSS time — identical semantics to the u-blox
     // driver; downstream freshness gates key off this.
     data_.time_us = (uint32_t)esp_timer_get_time();
+    float sep = 0.0f;
+    if (parser_.geoidSepM(sep))
+    {
+        geoid_sep_m_.store(sep, std::memory_order_relaxed);
+        geoid_sep_valid_.store(true, std::memory_order_relaxed);
+    }
     if (!pvt_stream_ok_)
     {
         // Insurance latch for the vel_d rule: if begin() never got PQTMPVT

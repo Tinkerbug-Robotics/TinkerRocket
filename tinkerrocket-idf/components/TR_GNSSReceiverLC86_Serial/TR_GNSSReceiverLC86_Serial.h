@@ -9,6 +9,7 @@
 #ifndef TRGNSSRECEIVERLC86_H
 #define TRGNSSRECEIVERLC86_H
 
+#include <atomic>
 #include <cstdint>
 #include <driver/uart.h>
 #include <freertos/FreeRTOS.h>
@@ -110,6 +111,14 @@ class TR_GNSSReceiverLC86Serial
         bool takeEphemeris(uint8_t* out, size_t cap, size_t& len);
         uint32_t rawEpochsDropped() const { return raw_dropped_; }
         uint32_t ephemerisDropped() const { return eph_dropped_; }
+        // The geoid's height above the ellipsoid at the last fix
+        // (Lc86Parser::geoidSepM), m: GNSSData's alt is above the geoid.
+        // False before a fix. Safe from any task.
+        bool geoidSeparationM(float& sep_m) const
+        {
+            sep_m = geoid_sep_m_.load(std::memory_order_relaxed);
+            return geoid_sep_valid_.load(std::memory_order_relaxed);
+        }
         static constexpr size_t kEphMaxPayload = 72;   // 1042, the largest, is 64
 
     private:
@@ -227,6 +236,8 @@ class TR_GNSSReceiverLC86Serial
         QueueHandle_t eph_q_ = nullptr;
         gnss_raw::TimedRawEpoch raw_scratch_ = {};
         uint32_t raw_dropped_ = 0;
+        std::atomic<float> geoid_sep_m_{0.0f};
+        std::atomic<bool>  geoid_sep_valid_{false};
         uint32_t eph_dropped_ = 0;
 
         // checkGsvRate(): the PVT epoch and GSV burst counts when begin()

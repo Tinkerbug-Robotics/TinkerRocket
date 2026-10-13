@@ -1598,6 +1598,7 @@ gtest_discover_tests(test_raw_gnss_ekf)
 # parser into a running shadow filter (fixtures/raw_meas_golden.h).
 add_executable(test_raw_gnss_shadow test_raw_gnss_shadow.cpp
     ${LIB_DIR}/TR_RawGnssShadow/RawGnssShadow.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/PadSurvey.cpp
     ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
     ${LIB_DIR}/TR_GNSSRaw/eph.c
     ${LIB_DIR}/TR_GNSSRaw/atmo.c
@@ -1619,6 +1620,25 @@ target_include_directories(test_raw_gnss_shadow PRIVATE
 )
 target_link_libraries(test_raw_gnss_shadow GTest::gtest_main)
 gtest_discover_tests(test_raw_gnss_shadow)
+
+# ---------- test_pad_survey ----------
+# gnss_raw::PadSurvey (#1600 phase 5): each satellite's pseudorange against
+# the pad's known position -- the backup ionosphere -- through a wandering
+# receiver clock, relocks, a late riser, a refused residual and the pad
+# moving, and correct() in flight.
+add_executable(test_pad_survey test_pad_survey.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/PadSurvey.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+)
+target_include_directories(test_pad_survey PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${LIB_DIR}/TR_RawGnssShadow
+    ${LIB_DIR}/TR_RawGnssEKF
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+)
+target_link_libraries(test_pad_survey GTest::gtest_main)
+gtest_discover_tests(test_pad_survey)
 
 # ---------- test_gnss_time_sync ----------
 # lc86::GnssTimeSync, the MCU clock against GPS time from the receiver's

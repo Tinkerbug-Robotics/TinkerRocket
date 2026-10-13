@@ -69,6 +69,7 @@
 #include <esp_heap_caps.h>
 #include <new>                    // placement new: the raw-GNSS shadow filter (#1600)
 #include <RawGnssShadow.h>        // TR_RawGnssShadow (#1600)
+#include <gnss/types.h>           // GNSS_SYS_* (the console's satellite names)
 #include <esp_log.h>
 #include <esp_task_wdt.h>
 #include <esp_system.h>
@@ -2902,6 +2903,10 @@ static void i2sSenderTask(void *)
     }
 }
 
+// The pad average (see "Pad calibration"): the receiver's fixes on the pad, the
+// raw-GNSS filter's pad survey's reference.  Ellipsoidal; false before a fix.
+static bool padAverageLla(double lla[3], float* scatter_m, uint32_t* span_ms);
+
 // ==========================================================================
 // SECTION: Raw-GNSS shadow filter (#1600)
 // ==========================================================================
@@ -2963,7 +2968,7 @@ static inline void rawShadowPublishSeed(uint32_t time_us, bool on_pad)
     const uint32_t now_ms = millis();
     if (raw_shadow_seed_ms != 0 && now_ms - raw_shadow_seed_ms < 1000) return;
     raw_shadow_seed_ms = (now_ms == 0) ? 1 : now_ms;
-    gnss_raw::ShadowSeed s;
+    gnss_raw::ShadowSeed s = {};
     double pos[3];
     float vel[3], q[4], wb[3];
     ekf.getPosEst(pos);
@@ -2979,9 +2984,35 @@ static inline void rawShadowPublishSeed(uint32_t time_us, bool on_pad)
     }
     for (int i = 0; i < 4; i++) s.quat[i] = q[i];
     s.on_pad = on_pad ? 1 : 0;
+    // The flight filter's altitude is the receiver's, above the geoid; this
+    // filter's is above the ellipsoid (#1600 phase 5)
+    float sep = 0.0f;
+    if (sensor_collector.getGNSSGeoidSeparation(sep)) s.lla[2] += sep;
+    // the pad survey's reference, once the pad average has 10 s of fixes
+    uint32_t span_ms = 0;
+    s.pad_valid = (padAverageLla(s.pad_lla, &s.pad_sigma_m, &span_ms) && span_ms >= 10000) ? 1 : 0;
     raw_shadow_link.seed.write(s);
 }
 
+// The broadcast ionosphere a pad calibration brought, or NVS kept (#1600 phase 5).
+static void rawShadowSetIono(const PadCalConfigData& cfg)
+{
+    gnss_raw::ShadowIono io;
+    memcpy(io.raw, cfg.iono, sizeof(io.raw));
+    io.gps_day = cfg.iono_gps_day;
+    raw_shadow_link.iono.write(io);
+}
+
+
+static const char* ionoName(uint8_t src)
+{
+    switch (src)
+    {
+        case PAD_IONO_BROADCAST: return "broadcast";
+        case PAD_IONO_PAD: return "pad survey";
+        default: return "none";
+    }
+}
 
 // Core 0: the shadow filter's task.
 static void rawShadowTask(void*)
@@ -2990,10 +3021,11 @@ static void rawShadowTask(void*)
     sh.setClock(&rawShadowClock);
     static gnss_raw::TimedRawEpoch epoch;     // ~1.6 kB: off the stack
     uint8_t eph[TR_GNSSReceiverLC86Serial::kEphMaxPayload];
-    uint32_t seed_seq = 0;
+    uint32_t seed_seq = 0, iono_seq = 0;
     gnss_raw::ShadowSeed seed = {};
     bool have_seed = false;
     int64_t win_t0 = esp_timer_get_time();
+    int64_t pad_t0 = win_t0;
     int64_t busy_us = 0;
     uint32_t imu0 = 0, steps0 = 0, recs = 0, rec_drops = 0;
     uint64_t step_sum0 = 0;
@@ -3008,6 +3040,12 @@ static void rawShadowTask(void*)
             seed = s;
             have_seed = true;
             sh.onSeed(s);
+        }
+        gnss_raw::ShadowIono io;
+        if (raw_shadow_link.iono.read(io, seq) && seq != iono_seq)
+        {
+            iono_seq = seq;
+            sh.setIono(io);
         }
         size_t len = 0;
         while (sensor_collector.getGNSSEphemeris(eph, sizeof(eph), len)) sh.onEphemeris(eph, len);
@@ -3027,6 +3065,14 @@ static void rawShadowTask(void*)
         }
         const int64_t a1 = esp_timer_get_time();
         busy_us += a1 - a0;
+        if (a1 - pad_t0 >= 1000000)
+        {
+            // the pad calibration's status (core 1 sends it)
+            gnss_raw::ShadowPadStatus ps;
+            sh.padStatus(ps);
+            raw_shadow_link.pad.write(ps);
+            pad_t0 = a1;
+        }
 
         if (a1 - win_t0 >= 5000000)
         {
@@ -3034,6 +3080,8 @@ static void rawShadowTask(void*)
             const double win_s = (double)(a1 - win_t0) * 1e-6;
             const uint32_t steps = st.step_n - steps0;
             const double step_avg = steps ? (double)(st.step_us_sum - step_sum0) / steps : 0.0;
+            int iono_age = -1;
+            (void)sh.ionoAgeDays(iono_age);
             double dn = 0.0, de = 0.0, dd = 0.0;
             if (have_seed && sh.running())
             {
@@ -3045,8 +3093,9 @@ static void rawShadowTask(void*)
             ESP_LOGI(TAG, "[RAWGNSS] %s (starts %lu, stops %lu, last %u) | imu %.0f/s, step %.0f us "
                           "(max %lu) | epochs %lu: applied %lu, no time %lu, idle %lu, stale %lu | last: "
                           "%d meas, pr %d+%d rej, rr %d+%d rej, age %.0f ms, build %lu us, update %lu us "
-                          "(max %lu/%lu) | eph %d sats | from flight filter N %.1f E %.1f D %.1f m | "
-                          "core 0 %.1f%% | log %lu, dropped %lu, ring drops %lu",
+                          "(max %lu/%lu) | eph %d sats, %d tracked without | from flight filter N %.1f E %.1f "
+                          "D %.1f m | iono %s (%d days) | pad survey %u settling, %u corrected (rms %.2f m), "
+                          "%d used | core 0 %.1f%% | log %lu, dropped %lu, ring drops %lu",
                      sh.running() ? "running" : "waiting", (unsigned long)st.starts,
                      (unsigned long)st.stops, (unsigned)st.last_stop,
                      (double)(st.imu - imu0) / win_s, step_avg, (unsigned long)st.step_us_max,
@@ -3056,9 +3105,42 @@ static void rawShadowTask(void*)
                      st.last.rejected_pr, st.last.used_rr, st.last.rejected_rr,
                      st.last_age_s * 1000.0, (unsigned long)st.build_us,
                      (unsigned long)st.update_us, (unsigned long)st.build_us_max,
-                     (unsigned long)st.update_us_max, sh.ephemerisSatellites(), dn, de, dd,
+                     (unsigned long)st.update_us_max, sh.ephemerisSatellites(), st.tracked_no_eph,
+                     dn, de, dd, ionoName(sh.ionoSource()), iono_age,
+                     (unsigned)sh.survey().summary().settling, (unsigned)sh.survey().summary().corrected,
+                     (double)sh.survey().summary().rms_m, st.last_pad_corrected,
                      100.0 * (double)busy_us * 1e-6 / win_s, (unsigned long)recs,
                      (unsigned long)rec_drops, (unsigned long)raw_shadow_link.imu.dropped());
+            // each satellite's pad correction, at its elevation from the pad:
+            // a common pattern in sin(el) is the pad's height, one system's
+            // is that system's measurements
+            if (sh.survey().summary().corrected > 0)
+            {
+                char line[400];
+                int at = 0;
+                int nm = 0;
+                const gnss_raw::RawMeas* m = sh.lastMeasurements(nm);
+                double r[3], v[3];
+                sh.filter().receiverEcef(r, v);
+                const double rn = sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
+                for (int i = 0; i < nm && at < (int)sizeof(line) - 24; i++)
+                {
+                    double corr = 0.0;
+                    if (!sh.survey().correction(m[i].sys, m[i].prn, corr)) continue;
+                    double d[3], dn = 0.0, dot = 0.0;
+                    for (int a = 0; a < 3; a++)
+                    {
+                        d[a] = m[i].sat_pos[a] - r[a];
+                        dn += d[a] * d[a];
+                        dot += d[a] * r[a];
+                    }
+                    const double el = (dn > 0.0 && rn > 0.0) ? asin(dot / (sqrt(dn) * rn)) * 180.0 / M_PI : 0.0;
+                    at += snprintf(line + at, sizeof(line) - at, " %c%02u/%.0f %+.1f",
+                                   m[i].sys == GNSS_SYS_GPS ? 'G' : (m[i].sys == GNSS_SYS_GAL ? 'E' : 'C'),
+                                   (unsigned)m[i].prn, el, corr);
+                }
+                ESP_LOGI(TAG, "[RAWGNSS] pad corrections (sat/elevation m):%s", line);
+            }
             win_t0 = a1;
             busy_us = 0;
             imu0 = st.imu;
@@ -3266,6 +3348,284 @@ static void publishSensorCalFromNVS()
     uint8_t buf[sizeof(SensorCalStatusData)];
     memcpy(buf, &s, sizeof(buf));
     (void)enqueueI2STx(SENSOR_CAL_STATUS_MSG, buf, sizeof(buf));
+}
+
+// ==========================================================================
+// SECTION: Pad calibration (#1600 phase 5)
+// ==========================================================================
+// The app's "Pad calibration" (BLE 75 -> PAD_CAL_PENDING + PadCalConfigData)
+// does three things here:
+//   - runs the gyro/accel window, as GYRO_CAL_CMD (the older app's command 21)
+//     does: startSensorCal() is both;
+//   - stores the GPS broadcast ionosphere the app read from the day's
+//     navigation file (NVS "gnss": "iono", 8 B, and "ionoday"), for the
+//     raw-GNSS filter, which judges its age by the receiver's date;
+//   - restarts the pad average: the receiver's fixes from then until launch,
+//     ellipsoidal, the reference of the raw-GNSS filter's pad survey (the
+//     backup ionosphere, PadSurvey.h).  It is not the flight filter's
+//     launch-site reference (ref_lat_rad...), which freezes two minutes
+//     after the first fix wherever the rocket was then: restarting that
+//     would move the flight filter's datum and the main-deploy backstop's
+//     convergence, so the survey keeps its own.
+// The app hears how it goes once a second on the ground (PAD_CAL_STATUS_MSG,
+// relayed behind 0xD0) and at each change; the gyro/accel result itself
+// still comes as SENSOR_CAL_STATUS_MSG when the window closes.
+static uint8_t  pad_cal_state = PAD_CAL_IDLE;
+static uint32_t pad_cal_start_ms = 0;
+static uint16_t pad_cal_gravity_mg = 0;
+static PadCalConfigData pad_cal_iono = {};   // the stored set (iono_gps_day 0: none)
+static bool     pad_cal_status_due = false;  // send at the next pass, not in a second
+
+// The pad average, in metres from its first fix (north, east, ellipsoidal
+// up) so the sums keep their precision over hours on the pad.
+struct PadAverage
+{
+    bool     frozen = false;   // launched
+    uint32_t n = 0;
+    uint32_t first_ms = 0, last_ms = 0;
+    double   lat0 = 0.0, lon0 = 0.0, h0 = 0.0;   // rad, rad, m
+    double   sum[3] = {}, sq[3] = {};
+};
+static PadAverage pad_avg;
+static constexpr double PAD_AVG_R_M = 6378137.0;   // metres per radian; the same both ways
+
+static void padAverageRestart()
+{
+    pad_avg = PadAverage();
+}
+
+// One fix that passed the launch-site average's own gate (gnss_gate3_init).
+static void padAverageAdd(double lat_rad, double lon_rad, double alt_msl_m, uint32_t now_ms)
+{
+    if (pad_avg.frozen) return;
+    float sep = 0.0f;
+    if (!sensor_collector.getGNSSGeoidSeparation(sep)) return;   // the LC86G's raw-GNSS filter's
+    const double h = alt_msl_m + (double)sep;
+    if (pad_avg.n == 0)
+    {
+        pad_avg.lat0 = lat_rad;
+        pad_avg.lon0 = lon_rad;
+        pad_avg.h0 = h;
+        pad_avg.first_ms = now_ms;
+    }
+    const double d[3] = {(lat_rad - pad_avg.lat0) * PAD_AVG_R_M,
+                         (lon_rad - pad_avg.lon0) * PAD_AVG_R_M * cos(pad_avg.lat0),
+                         h - pad_avg.h0};
+    for (int i = 0; i < 3; i++)
+    {
+        pad_avg.sum[i] += d[i];
+        pad_avg.sq[i] += d[i] * d[i];
+    }
+    pad_avg.n++;
+    pad_avg.last_ms = now_ms;
+}
+
+static bool padAverageLla(double lla[3], float* scatter_m, uint32_t* span_ms)
+{
+    if (pad_avg.n == 0) return false;
+    double mean[3], var = 0.0;
+    for (int i = 0; i < 3; i++)
+    {
+        mean[i] = pad_avg.sum[i] / pad_avg.n;
+        var += pad_avg.sq[i] / pad_avg.n - mean[i] * mean[i];
+    }
+    lla[0] = pad_avg.lat0 + mean[0] / PAD_AVG_R_M;
+    lla[1] = pad_avg.lon0 + mean[1] / (PAD_AVG_R_M * cos(pad_avg.lat0));
+    lla[2] = pad_avg.h0 + mean[2];
+    if (scatter_m) *scatter_m = (float)sqrt(var > 0.0 ? var : 0.0);
+    if (span_ms) *span_ms = pad_avg.last_ms - pad_avg.first_ms;
+    return true;
+}
+
+enum class SensorCalStart : uint8_t { Started, Busy, Refused };
+
+// The gyro/accel window, for GYRO_CAL_CMD and the pad calibration alike.
+static SensorCalStart startSensorCal()
+{
+    ESP_LOGI(TAG, "[CAL] Sensor calibration requested...");
+    // #1110: the collector measures the window inside its IMU poll task.
+    // #1114: the flight loop does not wait the ~10 s for it -- the request
+    // is posted here and the answer is collected by the "Pad calibration
+    // completion" block after the dispatch chain, so launch detection, the
+    // EKF, the state machine and the deployment channels keep running
+    // through the window.  A rocket that is flying, has flown, or has just
+    // left the pad is refused: a tap that lands after ignition must never
+    // open a window.
+    const char* cal_refusal = sensor_cal::refusal(rocket_state, kinematics.launch_flag);
+    if (cal_refusal != nullptr)
+    {
+        ESP_LOGW(TAG, "[CAL] Sensor calibration REFUSED: %s — previous calibration kept",
+                 cal_refusal);
+        publishSensorCalFromNVS();
+        return SensorCalStart::Refused;
+    }
+    if (sensor_collector.calibrationInProgress())
+    {
+        // The open window answers for this tap too: its completion
+        // publishes.  Publishing the stored cal now would resolve the app's
+        // pending snapshot to the OLD values first.
+        ESP_LOGW(TAG, "[CAL] Sensor calibration already running — request ignored");
+        return SensorCalStart::Busy;
+    }
+    if (!sensor_collector.startCalibration(config::ISM6HG256_ROT_Z_DEG))
+    {
+        // Not started: no IMU, poll task down, or a sim running — the
+        // SENSORS/SIM line above says which.  Nothing changed; push the
+        // stored result so the app's pending snapshot resolves to the values
+        // the rocket is actually using.  The status frame carries no failure
+        // field, so it reads as a re-send of the old calibration there.
+        ESP_LOGE(TAG, "[CAL] Sensor calibration NOT STARTED — previous calibration kept "
+                      "(the log line above says why)");
+        publishSensorCalFromNVS();
+        return SensorCalStart::Refused;
+    }
+    return SensorCalStart::Started;
+}
+
+// What the pad calibration's status says about a start.
+static void padCalNoteStart(SensorCalStart r)
+{
+    if (r == SensorCalStart::Started)
+    {
+        pad_cal_state = PAD_CAL_RUNNING;
+        pad_cal_start_ms = millis();
+        pad_cal_gravity_mg = 0;
+    }
+    else if (r == SensorCalStart::Refused)
+    {
+        pad_cal_state = PAD_CAL_REFUSED;
+    }
+    // Busy: the open window's state stands
+    pad_cal_status_due = true;
+}
+
+// And about the window's end (the completion section).
+static void padCalNoteEnd(uint8_t state)
+{
+    if (pad_cal_state != PAD_CAL_RUNNING) return;
+    pad_cal_state = state;
+    const float g = sensor_collector.cal_gravity_mag;
+    pad_cal_gravity_mg = (uint16_t)((g > 0.0f) ? fminf(65535.0f, g / 9.80665f * 1000.0f + 0.5f) : 0.0f);
+    pad_cal_status_due = true;
+}
+
+static void padCalStoreIono(const PadCalConfigData& cfg)
+{
+    pad_cal_iono = cfg;
+    prefs.begin("gnss", false);
+    prefs.putBytes("iono", cfg.iono, sizeof(cfg.iono));
+    prefs.putUShort("ionoday", cfg.iono_gps_day);
+    prefs.end();
+#if TR_RAW_GNSS_SHADOW
+    rawShadowSetIono(cfg);
+#endif
+    ESP_LOGI(TAG, "[PADCAL] ionosphere of GPS day %u stored: alpha %d %d %d %d, beta %d %d %d %d",
+             (unsigned)cfg.iono_gps_day, cfg.iono[0], cfg.iono[1], cfg.iono[2], cfg.iono[3],
+             cfg.iono[4], cfg.iono[5], cfg.iono[6], cfg.iono[7]);
+}
+
+// setup_fc: the set the last pad calibration stored.
+static void padCalLoadIono()
+{
+    Preferences p;
+    p.begin("gnss", true);   // read-only
+    PadCalConfigData cfg = {};
+    const bool have = p.isKey("ionoday")
+        && p.getBytes("iono", cfg.iono, sizeof(cfg.iono)) == sizeof(cfg.iono);
+    cfg.iono_gps_day = have ? p.getUShort("ionoday", 0) : 0;
+    p.end();
+    if (!have || cfg.iono_gps_day == 0)
+    {
+        ESP_LOGI(TAG, "[PADCAL] no broadcast ionosphere stored");
+        return;
+    }
+    pad_cal_iono = cfg;
+#if TR_RAW_GNSS_SHADOW
+    rawShadowSetIono(cfg);
+#endif
+    ESP_LOGI(TAG, "[PADCAL] broadcast ionosphere of GPS day %u from NVS", (unsigned)cfg.iono_gps_day);
+}
+
+// PAD_CAL_PENDING's payload has arrived.
+static void padCalStart(const PadCalConfigData& cfg)
+{
+    ESP_LOGI(TAG, "[PADCAL] pad calibration requested (ionosphere: %s)",
+             cfg.iono_gps_day != 0 ? "sent" : "none sent");
+    if (cfg.iono_gps_day != 0) padCalStoreIono(cfg);
+    const SensorCalStart r = startSensorCal();
+    padCalNoteStart(r);
+    if (r != SensorCalStart::Refused)
+    {
+        // the rocket is on its pad now: average from here
+        padAverageRestart();
+        ESP_LOGI(TAG, "[PADCAL] pad average restarted");
+    }
+}
+
+// Once a second on the ground, and at each change.  Every pass calls it.
+static void publishPadCalStatus(uint32_t now_ms)
+{
+    static uint32_t last_ms = 0;
+    if (rocket_state == INFLIGHT) return;
+    if (!pad_cal_status_due && last_ms != 0 && (now_ms - last_ms) < 1000U) return;
+    pad_cal_status_due = false;
+    last_ms = (now_ms == 0) ? 1 : now_ms;
+
+    auto u16 = [](double v) -> uint16_t {
+        return (uint16_t)((v > 0.0) ? fmin(65535.0, v + 0.5) : 0.0);
+    };
+    PadCalStatusData d = {};
+    d.time_us = (uint32_t)micros();
+    d.cal_state = pad_cal_state;
+    if (pad_cal_state == PAD_CAL_RUNNING)
+    {
+        const uint32_t win = SensorCollector::calibrationWindowMs();
+        const uint32_t el = now_ms - pad_cal_start_ms;
+        d.cal_progress = (uint8_t)((el >= win) ? 99 : (el * 100U) / win);
+    }
+    else if (pad_cal_state == PAD_CAL_DONE || pad_cal_state == PAD_CAL_REJECTED)
+    {
+        d.cal_progress = 100;
+    }
+    d.cal_gravity_mg = pad_cal_gravity_mg;
+    d.iono_gps_day = pad_cal_iono.iono_gps_day;
+#if TR_RAW_GNSS_SHADOW
+    d.flags |= PCS_RAW_GNSS;
+    gnss_raw::ShadowPadStatus ps;
+    uint32_t seq = 0;
+    if (raw_shadow != nullptr && raw_shadow_link.pad.read(ps, seq))
+    {
+        if (ps.running) d.flags |= PCS_RUNNING;
+        d.sats_tracked = ps.tracked;
+        d.sats_no_eph = ps.no_eph;
+        d.sats_settling = ps.settling;
+        d.sats_corrected = ps.corrected;
+        d.corr_rms_cm = u16((double)ps.corr_rms_m * 100.0);
+        d.iono_source = ps.iono_source;
+        if (ps.iono_age_known)
+        {
+            d.flags |= PCS_IONO_AGE;
+            d.iono_age_days = ps.iono_age_days;
+        }
+        if (ps.running) d.pos_sigma_cm = u16((double)ps.pos_sigma_m * 100.0);
+    }
+#endif
+    double lla[3];
+    float scatter = 0.0f;
+    uint32_t span_ms = 0;
+    if (padAverageLla(lla, &scatter, &span_ms))
+    {
+        static constexpr double kRad2Deg = 180.0 / M_PI;
+        d.flags |= PCS_PAD;
+        d.pad_fixes = (uint16_t)(pad_avg.n > 65535U ? 65535U : pad_avg.n);
+        d.pad_secs = u16(span_ms / 1000.0);
+        d.pad_scatter_cm = u16((double)scatter * 100.0);
+        d.pad_lat_e7 = (int32_t)llround(lla[0] * kRad2Deg * 1e7);
+        d.pad_lon_e7 = (int32_t)llround(lla[1] * kRad2Deg * 1e7);
+        d.pad_alt_mm = (int32_t)llround(lla[2] * 1000.0);
+    }
+    if (pad_avg.frozen) d.flags |= PCS_PAD_FROZEN;
+    (void)enqueueI2STx(PAD_CAL_STATUS_MSG, (const uint8_t*)&d, sizeof(d));
 }
 
 // ==========================================================================
@@ -4758,6 +5118,9 @@ static void setup_fc()
     }
     prefs.end();
 
+    // The broadcast ionosphere the last pad calibration stored (#1600 phase 5)
+    padCalLoadIono();
+
     // Restore magnetometer hard-iron offset from NVS (namespace "mag_cal", issue #96).
     // Apply to IIS2MDC OFFSET_X/Y/Z if the chip is active, and to the
     // MMC5983MA software-offset path in the converter regardless (the
@@ -5947,6 +6310,8 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
         ESP_LOGW(TAG, "[GUIDANCE] Auto-disabled — GNSS-absent degraded flight");
         guidance_enabled = false;
     }
+    // The pad average and the raw-GNSS filter's survey against it stop here
+    pad_avg.frozen = true;
     // Freeze the ENU reference position at launch
     if (!ref_pos_frozen && have_ref_pos) {
         ref_pos_frozen = true;
@@ -6838,6 +7203,11 @@ static void loop_fc()
                         ESP_LOGI(TAG, "[EKF] Ref pos frozen (2 min): n=%lu",
                                       (unsigned long)ref_pos_count);
                     }
+                }
+                // #1600 phase 5: the pad average (see "Pad calibration"), the
+                // same fixes until launch, never a sim's.
+                if (gnss_gate3_init && !sensor_collector.isSimActive() && !sim_flight_latched) {
+                    padAverageAdd(ekf_gnss.lat_rad, ekf_gnss.lon_rad, ekf_gnss.alt_m, now_ms);
                 }
             }
 
@@ -7874,43 +8244,28 @@ static void loop_fc()
             }
             else if (out_pending_command == GYRO_CAL_CMD)
             {
-                ESP_LOGI(TAG, "[CAL] Sensor calibration requested...");
-                // #1110: the collector measures the window inside its IMU
-                // poll task.  #1114: this loop no longer waits the ~10 s for
-                // it — the request is posted here and the answer is collected
-                // by the "Pad calibration completion" block after this
-                // dispatch chain, so launch detection, the EKF, the state
-                // machine and the deployment channels keep running through
-                // the window.  A rocket that is flying, has flown, or has
-                // just left the pad is refused: a tap that lands after
-                // ignition must never open a window.
-                const char* cal_refusal =
-                    sensor_cal::refusal(rocket_state, kinematics.launch_flag);
-                if (cal_refusal != nullptr)
+                // The gyro/accel window alone (the older app's command 21);
+                // see "Pad calibration" for startSensorCal and its gates.
+                padCalNoteStart(startSensorCal());
+            }
+            else if (out_pending_command == PAD_CAL_PENDING)
+            {
+                // #1600 phase 5: the pad calibration -- the same window, the
+                // ionosphere the app sent, and a fresh pad average.
+                delay_ms(1);
+                uint8_t cfg_payload[sizeof(PadCalConfigData)];
+                size_t  cfg_len = 0;
+                if (readConfigFrame(PAD_CAL_CONFIG_MSG, sizeof(PadCalConfigData),
+                                    cfg_payload, sizeof(cfg_payload), cfg_len)
+                    && cfg_len >= sizeof(PadCalConfigData))
                 {
-                    ESP_LOGW(TAG, "[CAL] Sensor calibration REFUSED: %s — previous calibration kept",
-                             cal_refusal);
-                    publishSensorCalFromNVS();
+                    PadCalConfigData cfg;
+                    memcpy(&cfg, cfg_payload, sizeof(cfg));
+                    padCalStart(cfg);
                 }
-                else if (sensor_collector.calibrationInProgress())
+                else
                 {
-                    // The open window answers for this tap too: its
-                    // completion publishes.  Publishing the stored cal now
-                    // would resolve the app's pending snapshot to the OLD
-                    // values first.
-                    ESP_LOGW(TAG, "[CAL] Sensor calibration already running — request ignored");
-                }
-                else if (!sensor_collector.startCalibration(config::ISM6HG256_ROT_Z_DEG))
-                {
-                    // Not started: no IMU, poll task down, or a sim running —
-                    // the SENSORS/SIM line above says which.  Nothing
-                    // changed; push the stored result so the app's pending
-                    // snapshot resolves to the values the rocket is actually
-                    // using.  The status frame carries no failure field, so
-                    // it reads as a re-send of the old calibration there.
-                    ESP_LOGE(TAG, "[CAL] Sensor calibration NOT STARTED — previous calibration kept "
-                                  "(the log line above says why)");
-                    publishSensorCalFromNVS();
+                    cfgRetryOnNextPoll("PAD CAL CFG");
                 }
             }
             // Issue #96 — magnetometer hard-iron cal: start / abort / accept / retry.
@@ -9575,6 +9930,7 @@ static void loop_fc()
                 ESP_LOGW(TAG, "[CAL] Sensor calibration CANCELLED: %s — previous calibration kept",
                          cal_cancel);
                 publishSensorCalFromNVS();
+                padCalNoteEnd(PAD_CAL_REFUSED);
             }
             else
             {
@@ -9599,6 +9955,7 @@ static void loop_fc()
                         prefs.end();
                         ESP_LOGI(TAG, "[CAL] Sensor calibration complete (saved to NVS)");
                         publishSensorCalFromNVS();
+                        padCalNoteEnd(PAD_CAL_DONE);
                         break;
                     case SensorCalPoll::Rejected:
                         // The previous offsets are untouched, so the
@@ -9610,12 +9967,16 @@ static void loop_fc()
                         ESP_LOGE(TAG, "[CAL] Sensor calibration FAILED — previous calibration kept "
                                       "(the SENSORS log above says why)");
                         publishSensorCalFromNVS();
+                        padCalNoteEnd(PAD_CAL_REJECTED);
                         break;
                     default:
                         break;   // Running: nothing to do this pass
                 }
             }
         }
+
+        // #1600 phase 5: the pad calibration's progress, to the app
+        publishPadCalStatus(millis());
 
         TR_LP_LAP(PAD_CAL);
 

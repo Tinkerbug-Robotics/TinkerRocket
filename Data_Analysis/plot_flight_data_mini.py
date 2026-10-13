@@ -156,6 +156,7 @@ MSG_GNSS_SAT          = 0x90  # GNSSSatData: per-satellite C/N0 at every GNSS ep
 MSG_GNSS_RTCM         = 0x95  # GnssRtcmHeader + a raw RTCM3 frame (or one part of it),
                               # variable length 5 + up to 219 (LC86G MSM7)
 MSG_RAW_GNSS_EKF      = 0x96  # RawGnssEkfData: the raw-GNSS shadow filter, 10 Hz (#1600)
+MSG_PAD_CAL_STATUS    = 0x99  # PadCalStatusData: the pad calibration's progress, 1 Hz on the ground (#1600 phase 5)
 MSG_ISM6HG256         = 0xA2
 MSG_BMP585            = 0xA3
 MSG_MMC5983MA         = 0xA4
@@ -196,6 +197,7 @@ MSG_NAMES = {
     MSG_GNSS_SAT:         "GNSS_SAT",
     MSG_GNSS_RTCM:        "GNSS_RTCM",
     MSG_RAW_GNSS_EKF:     "RawGnssEkf",
+    MSG_PAD_CAL_STATUS:   "PadCalStatus",
     MSG_ISM6HG256:        "ISM6HG256",
     MSG_BMP585:           "BMP585",
     MSG_MMC5983MA:        "MMC5983MA",
@@ -222,6 +224,7 @@ MSG_EXPECTED_LEN = {
     MSG_GNSS_SAT:          None,  # 10 + 6*n (n <= 32); the shape is checked where it is decoded
     MSG_GNSS_RTCM:         None,  # 5 + 1..219; checked in decode_gnss_rtcm
     MSG_RAW_GNSS_EKF:      90,    # sizeof(RawGnssEkfData)
+    MSG_PAD_CAL_STATUS:    40,    # sizeof(PadCalStatusData)
     MSG_ISM6HG256:         22,
     MSG_BMP585:            12,
     MSG_MMC5983MA:         16,
@@ -438,6 +441,53 @@ def decode_raw_gnss_ekf(payload):
     }
     for name, bit in RAW_GNSS_EKF_FLAGS.items():
         rec[name] = bool(f[28] & bit)
+    return rec
+
+
+# PadCalStatusData (PAD_CAL_STATUS_MSG 0x99), 40 bytes packed (#1600 phase 5):
+# the pad calibration, once a second on the ground -- the gyro/accel window's
+# state, progress and gravity; the raw-GNSS filter's satellites (tracked,
+# without an ephemeris, settling, with a pad correction) and the corrections'
+# spread; what takes the ionosphere out (none / broadcast / pad survey) and the
+# broadcast set's file date (GPS day) and age; the pad average (fixes, span,
+# scatter, position, ellipsoidal) and the filter's position sigma; PCS_* flags.
+FMT_PAD_CAL_STATUS = '<I BBH BBBB H BB H h HHH iii H'
+SIZE_OF_PAD_CAL_STATUS = struct.calcsize(FMT_PAD_CAL_STATUS)  # 40
+PAD_CAL_STATES = {0: "idle", 1: "running", 2: "done", 3: "rejected", 4: "refused"}
+PAD_IONO_SOURCES = {0: "none", 1: "broadcast", 2: "pad survey"}
+PAD_CAL_FLAGS = {"raw_gnss": 0x01, "filter_running": 0x02, "iono_age_known": 0x04,
+                 "pad_valid": 0x08, "pad_frozen": 0x10}
+
+
+def decode_pad_cal_status(payload):
+    """PadCalStatusData payload -> record dict in SI units, or None if the size is wrong."""
+    if len(payload) != SIZE_OF_PAD_CAL_STATUS:
+        return None
+    f = struct.unpack(FMT_PAD_CAL_STATUS, payload)
+    rec = {
+        "time_us":        f[0],
+        "cal_state":      PAD_CAL_STATES.get(f[1], str(f[1])),
+        "cal_progress":   f[2],
+        "cal_gravity_g":  f[3] * 1e-3,
+        "sats_tracked":   f[4],
+        "sats_no_eph":    f[5],
+        "sats_settling":  f[6],
+        "sats_corrected": f[7],
+        "corr_rms_m":     f[8] * 1e-2,
+        "iono_source":    PAD_IONO_SOURCES.get(f[9], str(f[9])),
+        "flags":          f[10],
+        "iono_gps_day":   f[11],
+        "iono_age_days":  f[12] if f[10] & 0x04 else None,
+        "pad_fixes":      f[13],
+        "pad_secs":       f[14],
+        "pad_scatter_m":  f[15] * 1e-2,
+        "pad_lat_deg":    f[16] * 1e-7,
+        "pad_lon_deg":    f[17] * 1e-7,
+        "pad_alt_m":      f[18] * 1e-3,
+        "pos_sigma_m":    f[19] * 1e-2,
+    }
+    for name, bit in PAD_CAL_FLAGS.items():
+        rec[name] = bool(f[10] & bit)
     return rec
 
 
@@ -739,6 +789,7 @@ def parse_binary_file(filepath):
         "GNSS_SAT":       [],
         "GNSS_RTCM":      [],   # 0x95 raw RTCM3 frame parts; join_gnss_rtcm() reassembles
         "RawGnssEkf":     [],   # 0x96 the raw-GNSS shadow filter, 10 Hz (#1600)
+        "PadCalStatus":   [],   # 0x99 the pad calibration's progress, 1 Hz on the ground (#1600 phase 5)
         "FcStatus":       [],   # 0x92 FcStatusData (#1154 item 4) — appended below; was never initialised
         "ISM6HG256":      [],
         "BMP585":         [],
@@ -943,6 +994,11 @@ def parse_binary_file(filepath):
                 rec = decode_raw_gnss_ekf(payload)
                 if rec is not None:
                     records["RawGnssEkf"].append(rec)
+
+            elif msg_type == MSG_PAD_CAL_STATUS:
+                rec = decode_pad_cal_status(payload)
+                if rec is not None:
+                    records["PadCalStatus"].append(rec)
 
             elif msg_type == MSG_ISM6HG256:
                 fields = struct.unpack(FMT_ISM6, payload)
