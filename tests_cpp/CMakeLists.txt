@@ -1662,6 +1662,23 @@ target_include_directories(test_gnss_checks PRIVATE
 target_link_libraries(test_gnss_checks GTest::gtest_main)
 gtest_discover_tests(test_gnss_checks)
 
+# ---------- test_sim_replay ----------
+# The rig replay (#1600): the flight a TR_SIM_REPLAY build carries, as
+# tools/sim_replay_blob.py writes it (fixtures/sim_replay_tiny.bin, kept in
+# step by tests/unit/test_sim_replay_blob.py), and its clock from the
+# receiver's fixes.
+add_executable(test_sim_replay test_sim_replay.cpp
+    ${LIB_DIR}/TR_Sensor_Collector_Sim/SimReplay.cpp
+)
+target_include_directories(test_sim_replay PRIVATE
+    ${LIB_DIR}/TR_Sensor_Collector_Sim
+)
+target_compile_definitions(test_sim_replay PRIVATE
+    TR_SIM_REPLAY_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sim_replay_tiny.bin"
+)
+target_link_libraries(test_sim_replay GTest::gtest_main)
+gtest_discover_tests(test_sim_replay)
+
 # ---------- test_gnss_time_sync ----------
 # lc86::GnssTimeSync, the MCU clock against GPS time from the receiver's
 # sentence stamps alone (no 1PPS on the Beetle M1; #1600): a simulated LC86G

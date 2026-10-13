@@ -7,3 +7,10 @@ idf_component_register(SRCS "TR_GNSSReceiverLC86_Serial.cpp" "Lc86Parser.cpp" "R
                        INCLUDE_DIRS "."
                        REQUIRES esp_driver_uart TR_RocketComputerTypes TR_GNSSRaw driver esp_timer esp_ringbuf
                        PRIV_REQUIRES esp_driver_gpio)
+
+# #1600 the rig replay (TR_Sensor_Collector_Sim/CMakeLists.txt): its receiver
+# cold-starts at begin(), so it meets the rig's sky with no time, position or
+# ephemeris of its own, as a pad power-up does.
+if(TR_SIM_REPLAY_BLOB)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE TR_GNSS_COLD_START=1)
+endif()

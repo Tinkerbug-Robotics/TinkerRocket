@@ -220,6 +220,33 @@ have happened.
 - Being a time difference, the check is blind to an error that stays the same from epoch to epoch (the
   innovation gate's business) and sharp on a jump, however the filter's position has been led.
 
+## The rig replay (hardware in the loop)
+
+The COCOM rig plays a flight's GNSS signals to the receiver in a Faraday cage. On its own that tests
+the receiver: the raw filter, the physics checks and the flight filter need the IMU, the barometer and
+the magnetometer to fly the same flight, or every check fails by design (a sim's IMU against the
+bench's sky is why the shadow stops for a sim). The rig replay supplies them.
+
+- `tools/sim_replay_blob.py` writes a flight's sensors from the sensors CSV a `sim_flight_3d.py` run
+  writes beside its scenario: 500 Hz pairs (the mean over each 2 ms keeps the integral), the rocket
+  frame FLU, the attitude, the barometer with its static-port error, the scenario's GPS time and pad.
+- A `TR_SIM_REPLAY` build (`idf.py -DTR_SIM_REPLAY_BLOB=FILE`, bench-only) carries the file (1.3 MB
+  for the 107 s of rp5_0829 from t = -30 s) and plays it from boot through the sensor sim's path
+  (`SimReplay.h`). It replaces each real IMU, barometer and magnetometer sample's values at that
+  sample's own instant; the magnetometer reads the flight's attitude against the field the flight
+  computer models (TR_GeoMag at the pad and date).
+- The clock: each receiver fix carries its GPS time and that instant on the MCU clock (GnssTimeSync).
+  The replay follows the fixes while on the pad and freezes 5 s before ignition; from there the
+  samples run on the MCU crystal, as a real IMU's do. Before the first fix it loops the pad's first
+  10 s. A first fix after that instant never starts the flight.
+- The receiver's output passes through: its fixes, raw epochs, ephemerides and satellites are the
+  rig's flight. The shadow runs on it, and the pad average takes its fixes. The receiver
+  cold-starts at boot ($PAIR006), as on a pad power-up.
+- It runs as a sim: the dry-fire gate holds and the log says sim. After landing it loops the last 5 s
+  on the ground until a Stop or a reboot (one run per boot).
+- The console prints the replay's time, phase and clock state and the flight filter's ENU state once a
+  second (`[REPLAY]`), to set beside the flight's truth.
+
 ## Phase 3: the port against the prototype
 
 `TR_RawGnssEKF` (the filter; float on the flight computer) and `TR_GNSSRaw`'s `RawMeasBuilder`, fed

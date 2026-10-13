@@ -62,6 +62,7 @@ struct TimedFix
     uint8_t num_sats = 0;
     int64_t mcu_us = 0;           // its GPS instant on the MCU clock (esp_timer, us); 0 = not known yet
     int64_t arrival_us = 0;       // when its sentence's last byte arrived (MCU, us)
+    double  gps_s = 0.0;          // its GPS time, week * 604800 + time of week (s); 0 = not known
 };
 
 // One satellite at one epoch, corrected (see above). sat_pos is the

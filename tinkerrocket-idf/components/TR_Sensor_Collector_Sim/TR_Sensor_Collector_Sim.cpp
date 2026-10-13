@@ -12,7 +12,9 @@
 #include "TR_Sensor_Collector_Sim.h"
 #include "SimPadAlign.h"
 #include "SimSensorModel.h"
+#include <TR_GeoMag.h>
 #include <cmath>
+#include <esp_timer.h>
 // SensorCollector.h no longer transitively pulls in compat.h, but this
 // file still uses the Arduino-shim millis()/micros() heavily.  Pulled
 // in explicitly here until item #5 of issue #21 slims the sim too.
@@ -221,6 +223,13 @@ float SensorCollectorSim::padAlignmentAngleDeg() const
 
 void SensorCollectorSim::startSim(float ground_pressure_pa)
 {
+    if (replay_on_)
+    {
+        // The rig replay owns the sensors until a Stop: a physics flight over
+        // it would pair the rig's sky with a vertical trajectory.
+        Serial.println("[SIM] startSim refused -- the rig replay is running (Stop first)");
+        return;
+    }
     if (!configured_)
     {
         Serial.println("[SIM] ERROR: startSim called but not configured (missing config cmd?)");
@@ -248,6 +257,9 @@ void SensorCollectorSim::startSim(float ground_pressure_pa)
 
 void SensorCollectorSim::stopSim()
 {
+    if (replay_on_)
+        ESP_LOGW("SIM", "RIG REPLAY stopped: the real sensors from here");
+    replay_on_ = false;
     phase_ = SIM_IDLE;
     // Drop the pad alignment: it belongs to the attitude the board was resting
     // at for THAT run, and a stale one would skew the next sim start.
@@ -262,6 +274,131 @@ bool SensorCollectorSim::isSimActive() const
 }
 
 // ============================================================================
+// The rig replay (SimReplay.h, #1600)
+// ============================================================================
+
+#if defined(TR_SIM_REPLAY) && TR_SIM_REPLAY
+// The flight the build carries (CMakeLists: -DTR_SIM_REPLAY_BLOB=FILE)
+extern const uint8_t sim_replay_bin_start[] asm("_binary_sim_replay_bin_start");
+extern const uint8_t sim_replay_bin_end[] asm("_binary_sim_replay_bin_end");
+#endif
+
+namespace
+{
+const char* clockName(uint8_t st)
+{
+    switch (st)
+    {
+    case sim_replay::ReplayClock::kWaiting:   return "waiting for the rig's fixes";
+    case sim_replay::ReplayClock::kFollowing: return "on the receiver's clock";
+    case sim_replay::ReplayClock::kFrozen:    return "frozen for the flight";
+    case sim_replay::ReplayClock::kMissed:    return "MISSED (the first fix came after the pad)";
+    default:                                  return "?";
+    }
+}
+}  // namespace
+
+bool SensorCollectorSim::startReplay()
+{
+#if defined(TR_SIM_REPLAY) && TR_SIM_REPLAY
+    const size_t len = (size_t)(sim_replay_bin_end - sim_replay_bin_start);
+    if (!replay_.load(sim_replay_bin_start, len))
+    {
+        ESP_LOGE("SIM", "RIG REPLAY: the carried flight does not load (%s; %u bytes)",
+                 replay_.why(), (unsigned)len);
+        return false;
+    }
+    const sim_replay::Header& h = replay_.header();
+    // The field the flight computer will model at this pad and date (its
+    // declination and magnitude gate use the same call): the replay's
+    // magnetometer then agrees with the heading the flight's attitude has.
+    static constexpr double kDeg2Rad = M_PI / 180.0;
+    TR_GeoMag::fieldNED_uT(h.lat_deg * kDeg2Rad, h.lon_deg * kDeg2Rad, h.alt_m,
+                           (double)h.decimal_year, replay_b_ned_);
+    portENTER_CRITICAL(&replay_mux_);
+    replay_clock_.reset(h);
+    portEXIT_CRITICAL(&replay_mux_);
+    // From boot: nothing to hand over from, so no pad alignment (#508) -- the
+    // attitude is the flight's own, which the rig's GNSS has to agree with.
+    pad_align_identity_ = true;
+    for (int i = 0; i < 9; ++i) pad_align_[i] = (i % 4 == 0) ? 1.0f : 0.0f;
+    replay_last_have_t_ = false;
+    replay_on_ = true;
+    phase_ = SIM_PRELAUNCH;   // active: what the dry-fire gate and the log key on
+    phase_start_ms_ = millis();
+    const double week = std::floor(h.ignition_gps_s / 604800.0);
+    ESP_LOGW("SIM", "RIG REPLAY: '%s', %u samples at %u Hz, t %+.2f .. %+.2f s; ignition at GPS "
+             "week %.0f TOW %.3f; the rig's file spans t %+.1f .. %+.1f s; pad %.7f, %.7f, %.1f m; "
+             "field N %.1f E %.1f D %.1f uT (%.4f)",
+             h.name, (unsigned)h.samples, (unsigned)h.rate_hz, h.t0_s, replay_.tLast(), week,
+             h.ignition_gps_s - week * 604800.0, h.scen_start_s, h.scen_end_s, h.lat_deg, h.lon_deg,
+             h.alt_m, (double)replay_b_ned_[0], (double)replay_b_ned_[1], (double)replay_b_ned_[2],
+             (double)h.decimal_year);
+    return true;
+#else
+    return false;
+#endif
+}
+
+void SensorCollectorSim::replayStatus(ReplayStatus& out) const
+{
+    portENTER_CRITICAL(&replay_mux_);
+    out.clock_state = replay_clock_.state();
+    out.fixes = replay_clock_.fixes();
+    out.outside = replay_clock_.outside();
+    out.restarts = replay_clock_.restarts();
+    out.last_fix_t_s = (float)replay_clock_.lastFixT();
+    portEXIT_CRITICAL(&replay_mux_);
+    out.t_s = replay_last_t_;
+    out.have_t = replay_last_have_t_;
+    out.phase = replay_last_phase_;
+}
+
+void SensorCollectorSim::replaySampleAt(uint32_t time_us, sim_replay::Sample& s, bool is_imu)
+{
+    // The sample's instant on the 64-bit clock its 32-bit stamp was cut from
+    // (micros()); it is recent, either side of now.
+    const int64_t now = esp_timer_get_time();
+    const int64_t mcu = now - (int64_t)(int32_t)((uint32_t)now - time_us);
+    double t = 0.0;
+    portENTER_CRITICAL(&replay_mux_);
+    const bool have = replay_clock_.tAt(mcu, t);
+    portEXIT_CRITICAL(&replay_mux_);
+    if (have)
+        replay_.at(t, s);
+    else
+        replay_.padAt((double)mcu * 1.0e-6, s);
+    if (is_imu)
+    {
+        replay_last_t_ = (float)t;
+        replay_last_have_t_ = have;
+        replay_last_phase_ = s.phase;
+    }
+}
+
+void SensorCollectorSim::replayField(const sim_replay::Sample& s, float b[3]) const
+{
+    // R(q)^T B: the NED field in the rocket frame (q turns FLU into NED)
+    const float w = s.q[0], x = s.q[1], y = s.q[2], z = s.q[3];
+    const float* n = replay_b_ned_;
+    b[0] = (1.0f - 2.0f * (y * y + z * z)) * n[0] + 2.0f * (x * y + w * z) * n[1] + 2.0f * (x * z - w * y) * n[2];
+    b[1] = 2.0f * (x * y - w * z) * n[0] + (1.0f - 2.0f * (x * x + z * z)) * n[1] + 2.0f * (y * z + w * x) * n[2];
+    b[2] = 2.0f * (x * z + w * y) * n[0] + 2.0f * (y * z - w * x) * n[1] + (1.0f - 2.0f * (x * x + y * y)) * n[2];
+}
+
+void SensorCollectorSim::replayNoteFix(const gnss_raw::TimedFix& f)
+{
+    portENTER_CRITICAL(&replay_mux_);
+    const uint8_t before = replay_clock_.state();
+    replay_clock_.onFix(f.gps_s, f.mcu_us);
+    const uint8_t after = replay_clock_.state();
+    const double t = replay_clock_.lastFixT();
+    portEXIT_CRITICAL(&replay_mux_);
+    if (after != before)
+        ESP_LOGW("SIM", "RIG REPLAY clock: %s (a fix at t %+.2f s)", clockName(after), t);
+}
+
+// ============================================================================
 // Data Getters
 // ============================================================================
 
@@ -272,6 +409,18 @@ bool SensorCollectorSim::getISM6HG256Data(ISM6HG256Data& data_out)
     if (phase_ == SIM_IDLE) return have_data;
 
     if (!have_data) return false;
+
+    if (replay_on_)
+    {
+        // The rig replay: the flight at this sample's own instant, which the
+        // receiver's clock places (#1600).
+        sim_replay::Sample s;
+        replaySampleAt(data_out.time_us, s, true);
+        static constexpr float kRad2Deg = 180.0f / (float)M_PI;
+        packISM6(data_out.time_us, s.f[0], s.f[1], s.f[2],
+                 s.w[0] * kRad2Deg, s.w[1] * kRad2Deg, s.w[2] * kRad2Deg, data_out);
+        return true;
+    }
 
     // Real IMU data arrived at the hardware rate — step physics and replace
     // VALUES.  The sample keeps its own time_us: real_ stamped it in the core-0
@@ -323,6 +472,18 @@ bool SensorCollectorSim::getBMP585Data(BMP585Data& data_out)
 
     if (!have_data) return false;
 
+    if (replay_on_)
+    {
+        sim_replay::Sample s;
+        replaySampleAt(data_out.time_us, s, false);
+        const uint32_t t_us = data_out.time_us;
+        memset(&data_out, 0, sizeof(data_out));
+        data_out.time_us  = t_us;
+        data_out.press_q6 = (uint32_t)lroundf(s.p_pa * 64.0f);
+        data_out.temp_q16 = (int32_t)(20.0f * 65536.0f);
+        return true;
+    }
+
     // Replace with simulated pressure/temperature
     encodeBMP585(data_out.time_us, data_out);   // value swap only; the stamp is the sensor's (#910)
     return true;
@@ -336,6 +497,16 @@ bool SensorCollectorSim::getMMC5983MAData(MMC5983MAData& data_out)
 
     if (!have_data) return false;
 
+    if (replay_on_)
+    {
+        sim_replay::Sample s;
+        replaySampleAt(data_out.time_us, s, false);
+        float b[3];
+        replayField(s, b);
+        packMMC5983MA(data_out.time_us, b[0], b[1], b[2], data_out);
+        return true;
+    }
+
     // Replace with simulated magnetometer
     encodeMMC5983MA(data_out.time_us, data_out);   // value swap only; the stamp is the sensor's (#910)
     return true;
@@ -348,6 +519,16 @@ bool SensorCollectorSim::getIIS2MDCData(IIS2MDCData& data_out)
     if (phase_ == SIM_IDLE) return have_data;
 
     if (!have_data) return false;
+
+    if (replay_on_)
+    {
+        sim_replay::Sample s;
+        replaySampleAt(data_out.time_us, s, false);
+        float b[3];
+        replayField(s, b);
+        packIIS2MDC(data_out.time_us, b[0], b[1], b[2], data_out);
+        return true;
+    }
 
     // Replace with simulated magnetometer (#463). This path used to pass the
     // REAL bench field through during a sim: on IIS2MDC boards (MMC not
@@ -363,7 +544,8 @@ bool SensorCollectorSim::getGNSSData(GNSSData& data_out)
 {
     bool have_data = real_.getGNSSData(data_out);
 
-    if (phase_ == SIM_IDLE) return have_data;
+    // the rig replay: the receiver's own fixes, from the flight's sky
+    if (phase_ == SIM_IDLE || replay_on_) return have_data;
 
     if (have_data)
     {
@@ -392,7 +574,7 @@ bool SensorCollectorSim::getGNSSData(GNSSData& data_out)
 bool SensorCollectorSim::getGNSSSatData(GNSSSatData& data_out)
 {
     const bool have_data = real_.getGNSSSatData(data_out);
-    if (phase_ == SIM_IDLE) return have_data;
+    if (phase_ == SIM_IDLE || replay_on_) return have_data;
     return false;   // consumed, not forwarded — see the header
 }
 
@@ -400,28 +582,29 @@ bool SensorCollectorSim::getGNSSRtcmFrame(uint8_t* out, size_t cap, size_t& len,
                                           uint32_t& time_us)
 {
     const bool have_frame = real_.getGNSSRtcmFrame(out, cap, len, time_us);
-    if (phase_ == SIM_IDLE) return have_frame;
+    if (phase_ == SIM_IDLE || replay_on_) return have_frame;
     return false;   // consumed, not forwarded — see the header
 }
 
 bool SensorCollectorSim::getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out)
 {
     const bool have = real_.getGNSSRawEpoch(out);
-    if (phase_ == SIM_IDLE) return have;
+    if (phase_ == SIM_IDLE || replay_on_) return have;
     return false;   // consumed, not forwarded — see the header
 }
 
 bool SensorCollectorSim::getGNSSFix(gnss_raw::TimedFix& out)
 {
     const bool have = real_.getGNSSFix(out);
-    if (phase_ == SIM_IDLE) return have;
+    if (have && replay_on_) replayNoteFix(out);   // its GPS time sets the replay's clock
+    if (phase_ == SIM_IDLE || replay_on_) return have;
     return false;   // consumed, not forwarded — see the header
 }
 
 bool SensorCollectorSim::getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len)
 {
     const bool have = real_.getGNSSEphemeris(out, cap, len);
-    if (phase_ == SIM_IDLE) return have;
+    if (phase_ == SIM_IDLE || replay_on_) return have;
     return false;   // consumed, not forwarded — see the header
 }
 
@@ -625,9 +808,6 @@ float SensorCollectorSim::dragAccel(float velocity, float alt) const
 
 void SensorCollectorSim::encodeISM6(uint32_t time_us, ISM6HG256Data& out)
 {
-    memset(&out, 0, sizeof(out));
-    out.time_us = time_us;
-
     // Specific force in body frame.
     // Body X = along rocket axis (forward), Z = perpendicular (down in body).
     //
@@ -655,32 +835,6 @@ void SensorCollectorSim::encodeISM6(uint32_t time_us, ISM6HG256Data& out)
     // pad alignment was solved.
     applyPadAlign(body_ax, body_ay, body_az);
 
-    // Rocket frame → board frame (inverse of the mounting orientation;
-    // identity for the standard +X-nose mounting).
-    rocketToBoard(body_ax, body_ay, body_az);
-
-    // Inverse rotation: board-frame → sensor-frame (ISM6 board rotation about Z)
-    // Only rotates X/Y; Z passes through
-    const float sensor_ax =  body_ax * ism6_inv_c_ + body_ay * ism6_inv_s_;
-    const float sensor_ay = -body_ax * ism6_inv_s_ + body_ay * ism6_inv_c_;
-    const float sensor_az =  body_az;
-
-    // Low-G accelerometer (±16g range)
-    out.acc_low_raw.x = (int16_t)constrain(
-        lroundf(sensor_ax / ACC_LOW_MS2_PER_LSB), -32768, 32767);
-    out.acc_low_raw.y = (int16_t)constrain(
-        lroundf(sensor_ay / ACC_LOW_MS2_PER_LSB), -32768, 32767);
-    out.acc_low_raw.z = (int16_t)constrain(
-        lroundf(sensor_az / ACC_LOW_MS2_PER_LSB), -32768, 32767);
-
-    // High-G accelerometer (±256g range)
-    out.acc_high_raw.x = (int16_t)constrain(
-        lroundf(sensor_ax / ACC_HIGH_MS2_PER_LSB), -32768, 32767);
-    out.acc_high_raw.y = (int16_t)constrain(
-        lroundf(sensor_ay / ACC_HIGH_MS2_PER_LSB), -32768, 32767);
-    out.acc_high_raw.z = (int16_t)constrain(
-        lroundf(sensor_az / ACC_HIGH_MS2_PER_LSB), -32768, 32767);
-
     // Gyro: body rate for the current pitch rate, through the same inverse chain
     // as accel (rocket → board → sensor).
     //
@@ -700,11 +854,48 @@ void SensorCollectorSim::encodeISM6(uint32_t time_us, ISM6HG256Data& out)
     // same re-oriented frame or the attitude the EKF integrates won't match the
     // gravity vector it sees (#508).
     applyPadAlign(gyro_body_x_dps, gyro_body_y_dps, gyro_body_z_dps);
-    rocketToBoard(gyro_body_x_dps, gyro_body_y_dps, gyro_body_z_dps);
 
-    const float sensor_gx =  gyro_body_x_dps * ism6_inv_c_ + gyro_body_y_dps * ism6_inv_s_;
-    const float sensor_gy = -gyro_body_x_dps * ism6_inv_s_ + gyro_body_y_dps * ism6_inv_c_;
-    const float sensor_gz =  gyro_body_z_dps;
+    packISM6(time_us, body_ax, body_ay, body_az,
+             gyro_body_x_dps, gyro_body_y_dps, gyro_body_z_dps, out);
+}
+
+void SensorCollectorSim::packISM6(uint32_t time_us, float ax, float ay, float az,
+                                  float gx_dps, float gy_dps, float gz_dps,
+                                  ISM6HG256Data& out) const
+{
+    memset(&out, 0, sizeof(out));
+    out.time_us = time_us;
+
+    // Rocket frame → board frame (inverse of the mounting orientation;
+    // identity for the standard +X-nose mounting).
+    rocketToBoard(ax, ay, az);
+
+    // Inverse rotation: board-frame → sensor-frame (ISM6 board rotation about Z)
+    // Only rotates X/Y; Z passes through
+    const float sensor_ax =  ax * ism6_inv_c_ + ay * ism6_inv_s_;
+    const float sensor_ay = -ax * ism6_inv_s_ + ay * ism6_inv_c_;
+    const float sensor_az =  az;
+
+    // Low-G accelerometer (±16g range)
+    out.acc_low_raw.x = (int16_t)constrain(
+        lroundf(sensor_ax / ACC_LOW_MS2_PER_LSB), -32768, 32767);
+    out.acc_low_raw.y = (int16_t)constrain(
+        lroundf(sensor_ay / ACC_LOW_MS2_PER_LSB), -32768, 32767);
+    out.acc_low_raw.z = (int16_t)constrain(
+        lroundf(sensor_az / ACC_LOW_MS2_PER_LSB), -32768, 32767);
+
+    // High-G accelerometer (±256g range)
+    out.acc_high_raw.x = (int16_t)constrain(
+        lroundf(sensor_ax / ACC_HIGH_MS2_PER_LSB), -32768, 32767);
+    out.acc_high_raw.y = (int16_t)constrain(
+        lroundf(sensor_ay / ACC_HIGH_MS2_PER_LSB), -32768, 32767);
+    out.acc_high_raw.z = (int16_t)constrain(
+        lroundf(sensor_az / ACC_HIGH_MS2_PER_LSB), -32768, 32767);
+
+    rocketToBoard(gx_dps, gy_dps, gz_dps);
+    const float sensor_gx =  gx_dps * ism6_inv_c_ + gy_dps * ism6_inv_s_;
+    const float sensor_gy = -gx_dps * ism6_inv_s_ + gy_dps * ism6_inv_c_;
+    const float sensor_gz =  gz_dps;
     out.gyro_raw.x = (int16_t)constrain(
         lroundf(sensor_gx / GYRO_DPS_PER_LSB), -32768, 32767);
     out.gyro_raw.y = (int16_t)constrain(
@@ -723,9 +914,6 @@ void SensorCollectorSim::encodeBMP585(uint32_t time_us, BMP585Data& out)
 
 void SensorCollectorSim::encodeMMC5983MA(uint32_t time_us, MMC5983MAData& out)
 {
-    memset(&out, 0, sizeof(out));
-    out.time_us = time_us;
-
     // Earth magnetic field at ~38N latitude (NED frame):
     //   North ~ 22 µT, East ~ 5 µT, Down ~ 42 µT
     // Rotate into body frame by pitch angle.
@@ -734,7 +922,6 @@ void SensorCollectorSim::encodeMMC5983MA(uint32_t time_us, MMC5983MAData& out)
     //   body_x =  North * sin(pitch) + Down * cos(pitch)
     //   body_y =  East
     //   body_z = -North * cos(pitch) + Down * sin(pitch)
-    static constexpr float COUNTS_PER_UT = 131072.0f / 800.0f;
 
     // #512: was (N·sp + D·cp, E, -N·cp + D·sp) — a rotation whose implied "up"
     // sat 90°+ away from the accelerometer's. fieldInBody() projects the NED
@@ -750,26 +937,28 @@ void SensorCollectorSim::encodeMMC5983MA(uint32_t time_us, MMC5983MAData& out)
     // real→sim handover, so no heading step winds the gyro bias either.
     applyPadAlign(body_x, body_y, body_z);
 
+    packMMC5983MA(time_us, body_x, body_y, body_z, out);
+}
+
+void SensorCollectorSim::packMMC5983MA(uint32_t time_us, float bx, float by, float bz,
+                                       MMC5983MAData& out) const
+{
+    static constexpr float COUNTS_PER_UT = 131072.0f / 800.0f;
+    memset(&out, 0, sizeof(out));
+    out.time_us = time_us;
+
     // Rocket frame → board frame (inverse mounting orientation), matching
     // the forward board→rocket rotation the converter now applies to mag.
-    rocketToBoard(body_x, body_y, body_z);
+    rocketToBoard(bx, by, bz);
 
-    out.mag_x = (uint32_t)(lroundf(body_x * COUNTS_PER_UT) + 131072);
-    out.mag_y = (uint32_t)(lroundf(body_y * COUNTS_PER_UT) + 131072);
-    out.mag_z = (uint32_t)(lroundf(body_z * COUNTS_PER_UT) + 131072);
+    out.mag_x = (uint32_t)(lroundf(bx * COUNTS_PER_UT) + 131072);
+    out.mag_y = (uint32_t)(lroundf(by * COUNTS_PER_UT) + 131072);
+    out.mag_z = (uint32_t)(lroundf(bz * COUNTS_PER_UT) + 131072);
 }
 
 void SensorCollectorSim::encodeIIS2MDC(uint32_t time_us, IIS2MDCData& out)
 {
-    memset(&out, 0, sizeof(out));
-    out.time_us = time_us;
-
     // Same Earth field + body projection as encodeMMC5983MA (#463, corrected #512).
-    // Counts at the scale of the chip behind the seam (#1312): 0.15 µT/LSB on
-    // the IIS2MDC, 100/3750 on the mini's QMC5883P — so the converter, which
-    // reads the same seam, reproduces the simulated field on either board.
-    const float COUNTS_PER_UT = 1.0f / real_.magLsbToUt();
-
     float body[3];
     sim_sensor_model::fieldInBody(pitch_rad_, B_NORTH, B_EAST, B_DOWN, body);
     float body_x = body[0];
@@ -779,15 +968,28 @@ void SensorCollectorSim::encodeIIS2MDC(uint32_t time_us, IIS2MDCData& out)
     // Pad-frame alignment (#508) — see encodeISM6.
     applyPadAlign(body_x, body_y, body_z);
 
+    packIIS2MDC(time_us, body_x, body_y, body_z, out);
+}
+
+void SensorCollectorSim::packIIS2MDC(uint32_t time_us, float bx, float by, float bz,
+                                     IIS2MDCData& out) const
+{
+    // Counts at the scale of the chip behind the seam (#1312): 0.15 µT/LSB on
+    // the IIS2MDC, 100/3750 on the mini's QMC5883P — so the converter, which
+    // reads the same seam, reproduces the simulated field on either board.
+    const float COUNTS_PER_UT = 1.0f / real_.magLsbToUt();
+    memset(&out, 0, sizeof(out));
+    out.time_us = time_us;
+
     // Rocket frame → board frame (inverse mounting), then board → sensor
     // frame (inverse of the converter's sensor→board +Z rotation, then of
     // the chip's axis signs, magTypeChipSign), so the forward conversion
     // chain reproduces the simulated field exactly.
-    rocketToBoard(body_x, body_y, body_z);
+    rocketToBoard(bx, by, bz);
     const uint8_t mag_type = real_.magType();
-    const float sensor_x = magTypeChipSign(mag_type, 0) * (body_x * iis_inv_c_ + body_y * iis_inv_s_);
-    const float sensor_y = magTypeChipSign(mag_type, 1) * (-body_x * iis_inv_s_ + body_y * iis_inv_c_);
-    const float sensor_z = magTypeChipSign(mag_type, 2) * body_z;
+    const float sensor_x = magTypeChipSign(mag_type, 0) * (bx * iis_inv_c_ + by * iis_inv_s_);
+    const float sensor_y = magTypeChipSign(mag_type, 1) * (-bx * iis_inv_s_ + by * iis_inv_c_);
+    const float sensor_z = magTypeChipSign(mag_type, 2) * bz;
 
     out.mag_x = (int16_t)lroundf(sensor_x * COUNTS_PER_UT);
     out.mag_y = (int16_t)lroundf(sensor_y * COUNTS_PER_UT);
