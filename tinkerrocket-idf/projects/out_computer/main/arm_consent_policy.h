@@ -15,6 +15,16 @@
 // continuity read true and an LED "fired" (design review 2026-09-21, findings
 // 50 and 53).
 //
+// The Tinker-Mantis V10 (TR_BOARD_V10, #1593) carries the same chain with the
+// same designators: FC_ARM is P4 GPIO33 through R132, OC_ARM_EN is S3 GPIO14,
+// and INA_ALERT (S3 GPIO18) gives the #1553 trip its interrupt. The rule below
+// is board-independent. The reboot notes further down name the Beetle's pads;
+// on the V10 the four FIRE nets are P4 GPIO6/11/9/13, each held off through an
+// FC reset by its R78-R81 pull-down, and FC_ARM's GPIO33 has no pull at reset
+// (unlike the Beetle's GPIO44), so U9 stays open through an FC boot even with
+// consent up. Both are datasheet readings until the first article's scope
+// check (hardware/tinker-mantis/v10-bring-up.md).
+//
 // The FC raises FC_ARM only around a pulse, PYRO_ARM_SETTLE_MS (10) plus
 // PYRO_FIRE_DURATION_MS (200), from either the in-flight deployment state
 // machine or the PYRO_FIRE_TEST ground test. Consent must already be up when

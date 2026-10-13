@@ -139,7 +139,7 @@ at runtime can catch it, while under-declaring is harmless and merely leaves the
 top of the part unaddressable.
 
 That removed the per-revision fork entirely for `flight_computer` and
-`out_computer`. Both share ONE `partitions.csv` across V7/V8/V9/M1 — ending at
+`out_computer`. Both share ONE `partitions.csv` across V7/V8/V9/V10/M1 — ending at
 6.06 MB and 6.14 MB — so the 16 MB overlays were buying nothing at all, while
 being exactly the thing that has gone wrong twice: the V7 boot loop below, and
 rocket-computer-mini's two processors declaring different sizes for one board.
@@ -158,8 +158,8 @@ one `out_computer` uses for V9 PSRAM:
 
 | project | base | overlay |
 |---|---|---|
-| `flight_computer` | 8 MB | `sdkconfig.defaults.v9` (`-DTR_BOARD_V9=1`) — comments only since #916; the flash size stays the base 8 MB |
-| `out_computer` | 8 MB | `sdkconfig.defaults.v9` (`-DTR_BOARD_V9=1`, and M1) — PSRAM only since #916; the flash size stays the base 8 MB |
+| `flight_computer` | 8 MB | `sdkconfig.defaults.v9` (`-DTR_BOARD_V9=1`, and V10) — comments only since #916; the flash size stays the base 8 MB |
+| `out_computer` | 8 MB | `sdkconfig.defaults.v9` (`-DTR_BOARD_V9=1`, V10 and M1) — PSRAM only since #916; the flash size stays the base 8 MB |
 | `base_station` | 8 MB + `partitions.csv` | `sdkconfig.defaults.v3` → 16 MB + `partitions_v3.csv` (`-DTR_BS_BOARD=3`, and `=4` for the Tinker-Base) |
 | `radio_board` | 4 MB | none — table ends at 3.13 MB, and 4 MB is safe on both the 8 MB as-built and the 16 MB artwork |
 | `legacy/rocket_computer_mini` | 8 MB | none — table ends at 6.13 MB; the fitted part is 16 MB but nothing addresses the top half |

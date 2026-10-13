@@ -99,6 +99,8 @@ endif()
 
 if(TR_BOARD_M1)
     set(TR_BOARD_SUFFIX "-m1")
+elseif(TR_BOARD_V10)
+    set(TR_BOARD_SUFFIX "-v10")
 elseif(TR_BOARD_V9)
     set(TR_BOARD_SUFFIX "-v9")
 elseif(TR_BOARD_V8)
@@ -121,7 +123,7 @@ add_compile_definitions(TR_BOARD_OTA_SUFFIX="${TR_BOARD_SUFFIX}")
 # its FC is an ESP32-S3RH2 — so the overlay changes CONFIG_IDF_TARGET as well
 # as turning on that part's in-package PSRAM.
 #
-# For V9/V10 the overlay sets nothing any more. Until #916 it raised the boot
+# For V9 and V10 the overlay sets nothing any more. Until #916 it raised the boot
 # NOR declaration to 16 MB for the GD25Q128 those boards carry; since the
 # owner's 2026-09-09 decision every project declares the smallest standard size
 # that fits its OWN partition table, not the part fitted — 8 MB here, from
@@ -168,10 +170,22 @@ if(TR_BOARD_M1)
     # that lacks it.
     add_compile_definitions(TR_GNSS_DRIVER_LC86=1)
     message(STATUS "flight_computer: GNSS driver LC86G (TR_GNSS_DRIVER_LC86=1)")
+elseif(TR_BOARD_V10)
+    # The V9 overlay is the Tinker-Mantis per-board hook, and it sets nothing
+    # since #916; V10 shares it, so a setting both revisions need has one home.
+    set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.v9")
+    message(STATUS "flight_computer: sdkconfig overlay sdkconfig.defaults.v9 (shared with V9, comments only — boot NOR keeps the base 8 MB declaration, #916)")
+    # U3 on the V10 is a QST QMC5883P (0x2C, no DRDY), where the V9 fits an ST
+    # IIS2MDC. The same seam the Beetle uses; config.h refuses a V10 build
+    # without it, and the board rotation is board_v10.h's
+    # MAG_ROT_Z_DEG_QMC5883P (#1590, #1593).
+    add_compile_definitions(TR_MAG_DRIVER_QMC5883P=1)
+    message(STATUS "flight_computer: magnetometer driver QMC5883P (TR_MAG_DRIVER_QMC5883P=1)")
 elseif(TR_BOARD_V9)
     set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.v9")
-    # V9 fits an ST IIS2MDC and V10 a QST QMC5883P, on the same pins and from
-    # the same board header; this image asks for either at boot (#1590).
+    # V9 fits an ST IIS2MDC. This image asks for either chip at boot (#1590),
+    # which it needed while V10's QMC5883P shared the V9 header; V10 has its
+    # own build above since #1593.
     add_compile_definitions(TR_MAG_DRIVER_AUTO=1)
     message(STATUS "flight_computer: magnetometer driver auto (IIS2MDC or QMC5883P, TR_MAG_DRIVER_AUTO=1)")
     message(STATUS "flight_computer: sdkconfig overlay sdkconfig.defaults.v9 (comments only since #916 — boot NOR keeps the base 8 MB declaration, sized to the partition table)")

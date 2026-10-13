@@ -377,7 +377,7 @@ gtest_discover_tests(test_sensor_data_converter)
 # converter at that board's MAG_ROT_Z_DEG_*, against the measured matrix.
 # One build per board because each board's config.h is its own; the driver
 # seam flags are the ones flight_computer/CMakeLists.txt sets for it.
-foreach(BOARD V8 V9 M1)
+foreach(BOARD V8 V9 V10 M1)
     add_executable(test_mag_frame_${BOARD} test_mag_frame_board.cpp
         ${LIB_DIR}/TR_Sensor_Data_Converter/TR_Sensor_Data_Converter.cpp
         ${LIB_DIR}/TR_Orientation/TR_Orientation.cpp
@@ -392,6 +392,8 @@ foreach(BOARD V8 V9 M1)
     target_compile_definitions(test_mag_frame_${BOARD} PRIVATE TR_BOARD_${BOARD}=1)
     if(BOARD STREQUAL "V9")
         target_compile_definitions(test_mag_frame_${BOARD} PRIVATE TR_MAG_DRIVER_AUTO=1)
+    elseif(BOARD STREQUAL "V10")
+        target_compile_definitions(test_mag_frame_${BOARD} PRIVATE TR_MAG_DRIVER_QMC5883P=1)
     elseif(BOARD STREQUAL "M1")
         target_compile_definitions(test_mag_frame_${BOARD} PRIVATE
             TR_MAG_DRIVER_QMC5883P=1 TR_GNSS_DRIVER_LC86=1)
@@ -832,16 +834,20 @@ target_include_directories(test_modem_rail_sequence PRIVATE
 target_link_libraries(test_modem_rail_sequence GTest::gtest_main)
 gtest_discover_tests(test_modem_rail_sequence)
 
-# ---------- test_fc_gnss_reset_map (x3) ----------
+# ---------- test_fc_gnss_reset_map (x4) ----------
 # #837 item 6: the GNSS "reset and re-verify" path called a pulseReset() that
 # opened with a silent `if (reset_n_pin < 0) return;` — and every FC board
 # revision declares GNSS_RESET_N = -1, so the reset never happened and a fresh
 # SAM-M10Q flew at the default nav-rate ceiling. The fix routes that path
 # through UBX-CFG-RST; this pins the premise that there is no line to drive.
 # Built once per revision, exactly as the firmware selects its header.
-foreach(FCREV 7 8 9)
+foreach(FCREV 7 8 9 10)
     add_executable(test_fc_gnss_reset_map_v${FCREV} test_fc_gnss_reset_map.cpp)
     target_compile_definitions(test_fc_gnss_reset_map_v${FCREV} PRIVATE TR_BOARD_V${FCREV}=1)
+    if(FCREV EQUAL 10)
+        # board_v10.h refuses a build without its magnetometer seam (#1593).
+        target_compile_definitions(test_fc_gnss_reset_map_v${FCREV} PRIVATE TR_MAG_DRIVER_QMC5883P=1)
+    endif()
     target_include_directories(test_fc_gnss_reset_map_v${FCREV} PRIVATE
         ${SHIM_DIR}
         ${LIB_DIR}/TR_RocketComputerTypes
@@ -1209,6 +1215,21 @@ target_include_directories(test_arm_consent_policy PRIVATE
 target_link_libraries(test_arm_consent_policy GTest::gtest_main)
 gtest_discover_tests(test_arm_consent_policy)
 
+# ---------- test_supply_status_policy (#1593) ----------
+# The Tinker-Mantis V10's PG_RAIL and VBUCK_OK, as the out computer reports
+# them: the boot level counts nothing, each change is one fall or rise, and a
+# repeated level is not a change. Pure header in the OC project. The suite also
+# builds the OC config.h for V10, so the two pins are the shipped ones.
+add_executable(test_supply_status_policy test_supply_status_policy.cpp)
+target_compile_definitions(test_supply_status_policy PRIVATE TR_BOARD_V10=1)
+target_include_directories(test_supply_status_policy PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_supply_status_policy GTest::gtest_main)
+gtest_discover_tests(test_supply_status_policy)
+
 # ---------- test_pyro_fault_trip_policy (#1553) ----------
 # The OC drops arm consent on an INA230 shunt over-limit (a shorted e-match or
 # harness mid-pulse), holds it low past the FC's settle + pulse, then re-arms so
@@ -1352,7 +1373,7 @@ gtest_discover_tests(test_pwr_hold_release_policy)
 # Built once per board: the wire sizes and the link rate are shared, but the
 # fastest IMU rate is not (#1485: IMU_RATE_MAX_HZ, 7680 only where the FC
 # reads the IMU from its FIFO), and that is the stream that dominates.
-foreach(BOARD V7 V8 V9 M1)
+foreach(BOARD V7 V8 V9 V10 M1)
     add_executable(test_i2s_link_budget_${BOARD} test_i2s_link_budget.cpp)
     target_include_directories(test_i2s_link_budget_${BOARD} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
@@ -1364,6 +1385,8 @@ foreach(BOARD V7 V8 V9 M1)
     if(BOARD STREQUAL "M1")
         target_compile_definitions(test_i2s_link_budget_${BOARD} PRIVATE
             TR_MAG_DRIVER_QMC5883P=1 TR_GNSS_DRIVER_LC86=1)
+    elseif(BOARD STREQUAL "V10")
+        target_compile_definitions(test_i2s_link_budget_${BOARD} PRIVATE TR_MAG_DRIVER_QMC5883P=1)
     endif()
     target_link_libraries(test_i2s_link_budget_${BOARD} GTest::gtest_main)
     gtest_discover_tests(test_i2s_link_budget_${BOARD} TEST_PREFIX "${BOARD}.")
@@ -1377,7 +1400,7 @@ endforeach()
 # app shows 8k while the vehicle flies the old rate. The two config.h files
 # cannot share a translation unit (both declare `struct config`), so each is
 # compiled into its own small library and the test compares the answers.
-foreach(BOARD V7 V8 V9 M1)
+foreach(BOARD V7 V8 V9 V10 M1)
     add_library(imu_cap_fc_${BOARD} STATIC imu_rate_cap_fc.cpp)
     target_include_directories(imu_cap_fc_${BOARD} PRIVATE
         ${SHIM_DIR}
@@ -1390,6 +1413,8 @@ foreach(BOARD V7 V8 V9 M1)
         # need (flight_computer/CMakeLists.txt sets them for the firmware).
         target_compile_definitions(imu_cap_fc_${BOARD} PRIVATE
             TR_MAG_DRIVER_QMC5883P=1 TR_GNSS_DRIVER_LC86=1)
+    elseif(BOARD STREQUAL "V10")
+        target_compile_definitions(imu_cap_fc_${BOARD} PRIVATE TR_MAG_DRIVER_QMC5883P=1)
     endif()
     add_library(imu_cap_oc_${BOARD} STATIC imu_rate_cap_oc.cpp)
     target_include_directories(imu_cap_oc_${BOARD} PRIVATE

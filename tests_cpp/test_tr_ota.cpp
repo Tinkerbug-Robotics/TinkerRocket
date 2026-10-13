@@ -520,6 +520,68 @@ TEST(TrOtaIdentity, BenchSuffixBetweenBoardAndDateStillMatches)
     EXPECT_EQ(E::Ok, rx.finish());
 }
 
+// #1593: the first two-digit board suffix. A V9 image on a V10 board never
+// arms (the arm moved and needs the OC's consent), and "-v1" (a base-station
+// build) is a substring of "-v10", so the match has to end at a boundary.
+TEST(TrOtaIdentity, V10AcceptsItsOwnImageInEveryVersionShape)
+{
+    const char* versions[] = {
+        "abc1234-v10+20260907-1200",        // clean
+        "abc1234-dirty-v10+20260907-1200",  // dirty tree
+        "abc1234-v10-bench+20260907-1200",  // out_computer bench stamp
+        "537dc3ff-dirty-v10+20260909-183",  // 32 chars clipped to 31 by IDF
+    };
+    for (const char* v : versions)
+    {
+        FakeOTABackend be;
+        R rx(be);
+        rx.setExpectedIdentity("flight_computer", "-v10");
+        auto img = make_image_with_desc(1024, "flight_computer", v);
+        auto hash = sha256_of(img);
+        ASSERT_EQ(E::Ok, rx.begin((uint32_t)img.size(), hash.data())) << v;
+        EXPECT_EQ(E::Ok, push_all(rx, img)) << v;
+        EXPECT_EQ(E::Ok, rx.finish()) << v;
+        EXPECT_TRUE(be.boot_set) << v;
+    }
+}
+
+TEST(TrOtaIdentity, V9AndV10RefuseEachOthersImages)
+{
+    struct Case { const char* expect; const char* version; };
+    const Case cases[] = {
+        {"-v10", "abc1234-v9+20260907-1200"},
+        {"-v9",  "abc1234-v10+20260907-1200"},
+        {"-v1",  "abc1234-v10+20260907-1200"},   // the prefix collision
+        {"-v10", "abc1234-v1+20260907-1200"},
+        {"-v10", "abc1234-v100+20260907-1200"},
+    };
+    for (const Case& c : cases)
+    {
+        FakeOTABackend be;
+        R rx(be);
+        rx.setExpectedIdentity("out_computer", c.expect);
+        auto img = make_image_with_desc(1024, "out_computer", c.version);
+        auto hash = sha256_of(img);
+        ASSERT_EQ(E::Ok, rx.begin((uint32_t)img.size(), hash.data())) << c.version;
+        EXPECT_EQ(E::ImageIdentityMismatch, push_all(rx, img))
+            << c.expect << " accepted " << c.version;
+        EXPECT_FALSE(be.boot_set) << c.version;
+        EXPECT_TRUE(be.bytes.empty()) << c.version;
+    }
+}
+
+TEST(TrOtaIdentity, BoardSuffixMustEndAtABoundary)
+{
+    EXPECT_TRUE(R::hasBoardSuffix("abc-v10+d", "-v10"));
+    EXPECT_TRUE(R::hasBoardSuffix("abc-v10-bench+d", "-v10"));
+    EXPECT_TRUE(R::hasBoardSuffix("abc-v10", "-v10"));
+    EXPECT_FALSE(R::hasBoardSuffix("abc-v10+d", "-v1"));
+    EXPECT_FALSE(R::hasBoardSuffix("abc-v9x+d", "-v9"));
+    // A later, bounded occurrence still counts after an unbounded one.
+    EXPECT_TRUE(R::hasBoardSuffix("abc-v10-v1+d", "-v1"));
+    EXPECT_FALSE(R::hasBoardSuffix("abc-v9+d", ""));
+}
+
 TEST(TrOtaIdentity, UnsetIdentityLeavesBehaviourUnchanged)
 {
     // Every existing caller and test predates the check; with no expected

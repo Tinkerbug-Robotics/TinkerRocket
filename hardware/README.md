@@ -27,7 +27,7 @@ listed.
 
 | Folder | Product | Was | What it is | Firmware |
 |---|---|---|---|---|
-| [`tinker-mantis/`](tinker-mantis/) | **Tinker-Mantis** | `rocket-computer` | Full-size flight computer: ESP32-P4 flight computer and ESP32-S3 out computer on one board | `flight_computer` + `out_computer`, `-DTR_BOARD_V9=1` (V9/V10) |
+| [`tinker-mantis/`](tinker-mantis/) | **Tinker-Mantis** | `rocket-computer` | Full-size flight computer: ESP32-P4 flight computer and ESP32-S3 out computer on one board | `flight_computer` + `out_computer`, `-DTR_BOARD_V10=1` (V10, tag `tinker-mantis-v10.0.0`) or `-DTR_BOARD_V9=1` (V9 as fabbed) |
 | [`lora-daughterboard/`](lora-daughterboard/) | LoRa daughterboard for Tinker-Mantis | — | Swappable UART radio module | `radio_board` |
 | [`gnss-sam10m8-18mm-hv/`](gnss-sam10m8-18mm-hv/) | GNSS carrier for Tinker-Mantis | — | SAM-M10Q carrier, pack-voltage input | — (module carrier) |
 | [`tinker-beetle/`](tinker-beetle/) | **Tinker-Beetle** | `rocket-computer-mini` | Reduced-capability flight computer: two ESP32-S3s, on-board LoRa and GNSS. Forked from `rocket-computer`, no ongoing link | `flight_computer` + `out_computer`, `-DTR_BOARD_M1=1` |

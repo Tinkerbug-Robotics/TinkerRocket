@@ -11,7 +11,7 @@ app_main, where no runtime assertion can reach it. Under-declaring is harmless;
 it just leaves the top of the part unaddressable. Sizing to the TABLE rather
 than to the PART means an image is safe on any board carrying at least that
 much flash, which removed the per-revision fork entirely for flight_computer
-and out_computer — they share one partition table across V7/V8/V9/M1, so the
+and out_computer — they share one partition table across V7/V8/V9/V10/M1, so the
 16 MB overlays were buying nothing at all.
 
 That fork is what went wrong twice: the original V7 boot loop (ec2a0728), and
@@ -46,9 +46,11 @@ TABLE_RE = re.compile(r'^CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="([^"]+)"\s*$', 
 BUILDS = [
     ("flight_computer V7/V8", "flight_computer", ["sdkconfig.defaults"]),
     ("flight_computer V9", "flight_computer", ["sdkconfig.defaults", "sdkconfig.defaults.v9"]),
+    ("flight_computer V10", "flight_computer", ["sdkconfig.defaults", "sdkconfig.defaults.v9"]),
     ("flight_computer M1", "flight_computer", ["sdkconfig.defaults", "sdkconfig.defaults.m1"]),
     ("out_computer V8", "out_computer", ["sdkconfig.defaults"]),
     ("out_computer V9", "out_computer", ["sdkconfig.defaults", "sdkconfig.defaults.v9"]),
+    ("out_computer V10", "out_computer", ["sdkconfig.defaults", "sdkconfig.defaults.v9"]),
     ("out_computer M1", "out_computer", ["sdkconfig.defaults", "sdkconfig.defaults.v9"]),
     ("base_station V1/V2", "base_station", ["sdkconfig.defaults"]),
     ("base_station V3", "base_station", ["sdkconfig.defaults", "sdkconfig.defaults.v3"]),
@@ -59,8 +61,14 @@ BUILDS = [
 
 # Physical boards carrying two processors that boot from their own NOR parts.
 # The Tinker-Beetle's BOM line 59 fits TWO W25Q128JVYIQ (U13 and U33), so
-# both are 16 MB and the two declarations must agree.
-BOARD_PAIRS = [("tinker-beetle", "flight_computer M1", "out_computer M1")]
+# both are 16 MB and the two declarations must agree. The Tinker-Mantis fits
+# two as well (U13 for the out computer, U16 for the flight computer; 16 MB on
+# V9 and V10, docs/board-versioning.md).
+BOARD_PAIRS = [
+    ("tinker-beetle", "flight_computer M1", "out_computer M1"),
+    ("tinker-mantis V9", "flight_computer V9", "out_computer V9"),
+    ("tinker-mantis V10", "flight_computer V10", "out_computer V10"),
+]
 
 # The sizes esptool/IDF can declare. The policy picks the smallest that fits.
 STANDARD_MB = (1, 2, 4, 8, 16, 32, 64)
