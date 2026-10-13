@@ -53,6 +53,118 @@ void RawGnssShadow::reset()
     have_seed_ = false;
 }
 
+void RawGnssShadow::onBaro(const ShadowBaro& b)
+{
+    st_.baro++;
+    baro_ = b;
+    have_baro_ = true;
+}
+
+void RawGnssShadow::onMag(const ShadowMag& m)
+{
+    st_.mags++;
+    mag_ = m;
+    have_mag_ = true;
+}
+
+void RawGnssShadow::applyMag(const float acc[3])
+{
+    if (!have_seed_ || !seed_.have_declination)
+        return;                           // no north to set it against
+    const float* m = mag_.mag;
+    const double mm = std::sqrt(static_cast<double>(m[0]) * m[0] + static_cast<double>(m[1]) * m[1]
+                                + static_cast<double>(m[2]) * m[2]);
+    if (!std::isfinite(mm))
+        return;
+    float err = -1.0f;
+    if (seed_.field_ut > 1.0f)
+    {
+        err = static_cast<float>(std::fabs(mm - seed_.field_ut));
+        if (err > cfg_.mag_field_tol * seed_.field_ut)
+        {
+            st_.mag_suspect++;            // a hard iron that size: no heading in it (#1304)
+            return;
+        }
+    }
+    if (ekf_.updateMagHeading(acc, m, true, seed_.declination_rad, err))
+        st_.mag_fused++;
+}
+
+void RawGnssShadow::navState(ShadowNav& out) const
+{
+    out = ShadowNav{};
+    out.running = running_ ? 1 : 0;
+    if (!running_)
+        return;
+    const double t = ekf_.time();
+    out.time_us = static_cast<uint32_t>(static_cast<int64_t>(std::llround(t * 1.0e6)));
+    for (int i = 0; i < 3; ++i)
+    {
+        out.lla[i] = ekf_.lla()[i];
+        out.vel_ned[i] = ekf_.velNed()[i];
+        out.accel_bias[i] = ekf_.accelBias()[i];
+        out.gyro_bias[i] = ekf_.gyroBias()[i];
+    }
+    for (int i = 0; i < 4; ++i)
+        out.quat[i] = ekf_.quat()[i];
+    for (int i = 0; i < 15; ++i)
+        out.var[i] = ekf_.P(i, i);
+    out.gnss_aided = t - last_aided_t_ <= 2.0 ? 1 : 0;
+    out.baro_aided = t - last_baro_fused_t_ <= 1.0 ? 1 : 0;
+    out.epochs = st_.epochs_applied;
+}
+
+void RawGnssShadow::applyBaro(double t, uint8_t imu_flags)
+{
+    const double h_baro = static_cast<double>(baro_.height_m);
+    if (!std::isfinite(h_baro))
+        return;
+    const bool in_flight = (imu_flags & kShadowInFlight) != 0;
+    const double dt = last_baro_t_ >= 0.0 ? std::fmin(t - last_baro_t_, 1.0) : 0.0;
+    last_baro_t_ = t;
+    // On the pad, once the raw measurements lead: the offset from the
+    // barometer's height to the filter's, a running mean for its first
+    // baro_offset_tau_s, then a low-pass that slow. Frozen at launch.
+    if (!baro_frozen_ && !in_flight && have_seed_ && seed_.on_pad && (own_fix_ || cfg_.primary)
+        && dt >= 0.0)
+    {
+        const double d = ekf_.lla()[2] - h_baro;
+        baro_learn_s_ += dt;
+        const double span = std::fmin(baro_learn_s_, cfg_.baro_offset_tau_s);
+        const double w = span > 0.0 ? std::fmin(1.0, dt / span) : 1.0;
+        baro_offset_ += w * (d - baro_offset_);
+        baro_seen_ = true;
+    }
+    // In flight, frozen: what was learned however short the pad was (a
+    // sim's 5 s, a start just before launch), or with nothing learned -- a
+    // restored flight -- this sample at the filter's own height. A flight
+    // without the barometer has an unbounded vertical.
+    if (in_flight && !baro_frozen_)
+    {
+        if (!baro_seen_)
+            baro_offset_ = ekf_.lla()[2] - h_baro;
+        baro_seen_ = true;
+        baro_learn_s_ = std::fmax(baro_learn_s_, cfg_.baro_offset_min_s);
+        baro_frozen_ = true;
+    }
+    if (baro_learn_s_ < cfg_.baro_offset_min_s)
+        return;                           // on the pad: not learned long enough yet
+    st_.baro_offset_m = baro_offset_;
+    st_.baro_offset_frozen = baro_frozen_ ? 1 : 0;
+
+    // Its variance: the barometer's own, and the static port's error at the
+    // dynamic pressure the filter's speed and height give (#1579)
+    const float* v = ekf_.velNed();
+    const double spd2 = static_cast<double>(v[0]) * v[0] + static_cast<double>(v[1]) * v[1]
+                        + static_cast<double>(v[2]) * v[2];
+    const double rho = 1.225 * std::exp(-ekf_.lla()[2] / 8500.0);
+    const double port_m = cfg_.baro_port_k * 0.5 * rho * spd2;
+    const double var = cfg_.baro_sigma_m * cfg_.baro_sigma_m + port_m * port_m;
+    ekf_.updateHeight(h_baro + baro_offset_, static_cast<float>(var));
+    st_.baro_fused++;
+    last_baro_fused_t_ = t;
+}
+
 void RawGnssShadow::onFix(const TimedFix& f)
 {
     st_.fixes++;
@@ -129,6 +241,9 @@ bool RawGnssShadow::takeCheckLog(GnssCheckData& out)
 
 void RawGnssShadow::onSeed(const ShadowSeed& s)
 {
+    // the navigation filter: the flight computer started over on the pad
+    if (cfg_.primary && running_ && s.on_pad && s.start_gen != start_gen_)
+        stop(kStopNone);
     seed_ = s;
     have_seed_ = true;
 }
@@ -272,7 +387,10 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
 {
     st_.imu++;
     const double t = static_cast<double>(time64_us) * 1.0e-6;
-    if (s.flags & kShadowSim)
+    // A sensor sim's IMU is not the sky's: the shadow stops. The navigation
+    // filter flies it -- the sim drops the receiver's raw output, so it has
+    // the sim's IMU and barometer and nothing to disagree with them.
+    if ((s.flags & kShadowSim) && !cfg_.primary)
     {
         if (running_)
             stop(kStopSim);
@@ -293,12 +411,20 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
         }
         else if (t - t_tick_ > cfg_.max_gap_s)
         {
-            stop(kStopGap);
+            // The navigation filter bridges a hole with one long step (on the
+            // next tick's specific force and rate, as GpsInsEKF's clamped
+            // step does): stopped in flight it could not start again. The
+            // shadow stops.
+            if (cfg_.primary && t - t_tick_ <= cfg_.max_bridge_s)
+                st_.gaps_bridged++;
+            else
+                stop(kStopGap);
         }
     }
     if (!running_)
     {
-        if (have_seed_ && seed_.on_pad)
+        // from the pad; the navigation filter also from a restored flight
+        if (have_seed_ && (seed_.on_pad || (cfg_.primary && seed_.restore)))
         {
             const double ts = static_cast<double>(unwrap32(seed_.time_us, time64_us)) * 1.0e-6;
             if (std::fabs(t - ts) <= cfg_.seed_max_age_s)
@@ -331,12 +457,15 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
     const int64_t c0 = now();
     ekf_.propagate(acc, gyro, static_cast<float>(span));
     t_prev_ = t;
-    // Where the flight filter levels: on the ground as it does; in flight
-    // (under a chute) only once steady and at g's size (LevelGate.h)
+    // Where the flight filter levels: on the ground at g's size (not on a
+    // motor burning before the launch detector says so); in flight (under a
+    // chute) only once steady and at g's size (LevelGate.h)
     levelled_ = false;
+    const bool ground = !(s.flags & kShadowInFlight);
+    level_gate_.onStep(t, acc);
     if (s.flags & kShadowLevel)
     {
-        if (!(s.flags & kShadowInFlight) || level_gate_.allow(acc))
+        if (ground ? level_gate_.gSized(acc) : level_gate_.allow(t, acc))
         {
             ekf_.updateAccelLevel(acc);
             levelled_ = true;
@@ -346,6 +475,28 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
         {
             st_.levels_held++;
         }
+    }
+    // The barometer's latest sample, and once landed zero velocity
+    if (have_baro_)
+    {
+        have_baro_ = false;
+        applyBaro(t, s.flags);
+    }
+    // The navigation filter on the ground: the magnetometer as a heading
+    if (have_mag_)
+    {
+        have_mag_ = false;
+        // the accelerometer is its tilt reference: gravity only, g's size
+        if (cfg_.primary && ground && level_gate_.gSized(acc))
+            applyMag(acc);
+    }
+    if ((s.flags & kShadowLanded) && t >= next_zupt_t_)
+    {
+        // on a schedule, so the steps' own spacing averages out
+        ekf_.updateZeroVelocity(static_cast<float>(cfg_.zupt_sigma_mps));
+        next_zupt_t_ = t - next_zupt_t_ > cfg_.zupt_period_s ? t + cfg_.zupt_period_s
+                                                            : next_zupt_t_ + cfg_.zupt_period_s;
+        st_.zupts++;
     }
     const int64_t c1 = now();
     const uint32_t step_us = static_cast<uint32_t>(c1 - c0);
@@ -358,7 +509,7 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
 
     // the pad: the flight filter's attitude (and, before an epoch of our
     // own, its position and velocity), once a resync_period_s
-    if (have_seed_ && seed_.on_pad && !(s.flags & kShadowInFlight)
+    if (!cfg_.primary && have_seed_ && seed_.on_pad && !(s.flags & kShadowInFlight)
         && t - last_resync_t_ >= cfg_.resync_period_s)
     {
         const double ts = static_cast<double>(unwrap32(seed_.time_us, time64_us)) * 1.0e-6;
@@ -403,8 +554,17 @@ void RawGnssShadow::start(double t)
 {
     const float v[3] = {seed_.vel_ned[0], seed_.vel_ned[1], seed_.vel_ned[2]};
     ekf_.init(seed_.lla, v, seed_.quat, t);
-    ekf_.setQuaternion(seed_.quat);
+    // The flight filter's attitude is taken as known. The navigation filter's
+    // seed on the pad is only the accelerometer's tilt and a guess at the
+    // heading: its covariance stays the start's (20 degrees, any heading)
+    // for the levelling and the magnetometer to settle.
+    restored_ = cfg_.primary && !seed_.on_pad && seed_.restore;
+    start_gen_ = seed_.start_gen;
+    if (!cfg_.primary || restored_)
+        ekf_.setQuaternion(seed_.quat);
     ekf_.seedGyroBias(seed_.gyro_bias);
+    if (restored_)
+        st_.restores++;
     running_ = true;
     own_fix_ = false;
     t_prev_ = t;
@@ -419,6 +579,16 @@ void RawGnssShadow::start(double t)
     fixcheck_.reset();
     level_gate_.reset();
     levelled_ = false;
+    have_baro_ = false;
+    baro_offset_ = 0.0;
+    baro_learn_s_ = 0.0;
+    baro_frozen_ = false;
+    baro_seen_ = false;
+    last_baro_t_ = -1.0;
+    next_zupt_t_ = 0.0;
+    have_mag_ = false;
+    last_aided_t_ = -1.0e9;
+    last_baro_fused_t_ = -1.0e9;
     prop_sum_ = 0;
     prop_n_ = 0;
     st_.starts++;
@@ -533,7 +703,10 @@ void RawGnssShadow::apply(const TimedRawEpoch& e, double age, double t, uint8_t 
     st_.epochs_applied++;
     level_gate_.onEpoch(t, ekf_.velNed());
     if (rs.used_pr > 0)
+    {
         own_fix_ = true;
+        last_aided_t_ = t;
+    }
     if (rs.clock_jump_ms != 0 || rs.clock_step_m != 0.0 || rs.drift_step_mps != 0.0)
         pend_flags_ |= RGE_CLOCK_STEP;
 }

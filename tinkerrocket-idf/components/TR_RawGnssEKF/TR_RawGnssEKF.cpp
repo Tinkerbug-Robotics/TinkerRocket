@@ -527,7 +527,7 @@ T RawGnssEKF<T>::hph(const int* hidx, const T* hval, int hn) const
 // applied, 0 refused by the gate, -1 for a non-positive S.
 template <typename T>
 int RawGnssEKF<T>::scalarUpdate(const int* hidx, const T* hval, int hn, T y, T R, T gate, T att,
-                                T dx[N], T* nis)
+                                T dx[N], T* nis, uint32_t kmask)
 {
     T HP[N] = {};
     for (int m = 0; m < hn; ++m)
@@ -554,6 +554,10 @@ int RawGnssEKF<T>::scalarUpdate(const int* hidx, const T* hval, int hn, T y, T R
     if (att != T(1))
         for (int i = kAtt; i < kAtt + 3; ++i)
             K[i] *= att;
+    if (kmask != 0xFFFFFFFFu)
+        for (int i = 0; i < N; ++i)
+            if (!(kmask & (1u << i)))
+                K[i] = T(0);
 
     for (int i = 0; i < N; ++i)
         for (int j = 0; j < N; ++j)
@@ -651,6 +655,144 @@ void RawGnssEKF<T>::updateAccelLevel(const T acc[3])
     }
     inject(dx_sum);
     stabilize();
+}
+
+template <typename T>
+void RawGnssEKF<T>::updateHeight(double h_m, T var)
+{
+    // A height says nothing about the attitude or the body's accelerometer
+    // bias: through the cross-covariance the IMU's propagation builds, a
+    // barometer whose descent the IMU never felt (the firmware sim's step to
+    // 5 m/s at apogee) tilted the attitude 6 degrees, and with the attitude
+    // held but the bias free it pulled the bias off the levelling's tie
+    // between the two (a roll and the body's sideways bias look the same to
+    // gravity under a chute): either way, with no satellites, gravity on a
+    // wrong tilt became kilometres of horizontal drift. So it moves the
+    // vertical position and velocity and the receiver clock (height and clock
+    // correlate in the satellites' geometry), nothing else.
+    const uint32_t kmask = (1u << (kPos + 2)) | (1u << (kVel + 2)) | (0xFu << kClkBias);
+    const int idx[1] = {kPos + 2};
+    const T val[1] = {T(-1)};
+    const T y = static_cast<T>(h_m - lla_[2]);
+    T dx[N];
+    if (scalarUpdate(idx, val, 1, y, var, T(0), T(1), dx, nullptr, kmask) == 1)
+    {
+        inject(dx);
+        stabilize();
+    }
+}
+
+template <typename T>
+void RawGnssEKF<T>::updateZeroVelocity(T sigma)
+{
+    // position and velocity (states 0-5) only
+    const uint32_t kmask = (1u << (kVel + 3)) - 1u;
+    const T R = sigma * sigma;
+    for (int i = 0; i < 3; ++i)
+    {
+        const int idx[1] = {kVel + i};
+        const T val[1] = {T(1)};
+        T dx[N];
+        if (scalarUpdate(idx, val, 1, -v_[i], R, T(0), T(1), dx, nullptr, kmask) == 1)
+            inject(dx);
+    }
+    stabilize();
+}
+
+template <typename T>
+bool RawGnssEKF<T>::updateMagHeading(const T acc[3], const T mag[3], bool accel_is_gravity, T declination_rad,
+                                     T field_err_ut)
+{
+    T M[3][3];
+    quat2dcm(q_, M);                                   // NED -> body
+    const T d[3] = {M[0][2], M[1][2], M[2][2]};        // body down, the heading error's axis
+    T dm[3] = {d[0], d[1], d[2]};
+    T sig_tilt;
+    if (accel_is_gravity)
+    {
+        const T an = std::sqrt(acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2]);
+        if (an < T(0.01))
+            return false;
+        for (int i = 0; i < 3; ++i)
+            dm[i] = -acc[i] / an;
+        sig_tilt = static_cast<T>(p_.mag_tilt_sigma_mps2) / an;
+    }
+    else
+    {
+        // the state's tilt sigma, about the two horizontal NED axes
+        T pn[2] = {T(0), T(0)};
+        for (int k = 0; k < 2; ++k)
+            for (int a = 0; a < 3; ++a)
+                for (int b = 0; b < 3; ++b)
+                    pn[k] += M[a][k] * P_[kAtt + a][kAtt + b] * M[b][k];
+        const T pmx = pn[0] > pn[1] ? pn[0] : pn[1];
+        sig_tilt = T(2) * std::sqrt(pmx > T(0) ? pmx : T(0));
+        if (sig_tilt > T(1))
+            sig_tilt = T(1);
+    }
+    // the shortest arc taking dm onto d, applied to the field
+    T mb[3] = {mag[0], mag[1], mag[2]};
+    {
+        T k[3] = {dm[1] * d[2] - dm[2] * d[1], dm[2] * d[0] - dm[0] * d[2], dm[0] * d[1] - dm[1] * d[0]};
+        const T sn = std::sqrt(k[0] * k[0] + k[1] * k[1] + k[2] * k[2]);
+        const T cs = dm[0] * d[0] + dm[1] * d[1] + dm[2] * d[2];
+        if (sn > T(1e-6))
+        {
+            for (int a = 0; a < 3; ++a)
+                k[a] /= sn;
+            const T kxm[3] = {k[1] * mb[2] - k[2] * mb[1], k[2] * mb[0] - k[0] * mb[2],
+                              k[0] * mb[1] - k[1] * mb[0]};
+            const T kdm = k[0] * mb[0] + k[1] * mb[1] + k[2] * mb[2];
+            for (int a = 0; a < 3; ++a)
+                mb[a] = mb[a] * cs + kxm[a] * sn + k[a] * kdm * (T(1) - cs);
+        }
+    }
+    T mn[3];                                           // the field in NED
+    for (int a = 0; a < 3; ++a)
+        mn[a] = M[0][a] * mb[0] + M[1][a] * mb[1] + M[2][a] * mb[2];
+    const T bh2 = mn[0] * mn[0] + mn[1] * mn[1];
+    if (!(bh2 >= T(9)))                                // under 3 uT across: no heading in it
+        return false;
+    T y = declination_rad - std::atan2(mn[1], mn[0]);
+    const T pi = T(3.14159265358979323846);
+    while (y > pi)
+        y -= T(2) * pi;
+    while (y < -pi)
+        y += T(2) * pi;
+
+    // the field's noise, the tilt reference's leaking the vertical field
+    // across, floored and capped; then a hard iron the magnitude allows
+    T r_cal = T(0);
+    if (field_err_ut >= T(0))
+    {
+        T frac = field_err_ut / std::sqrt(bh2);
+        if (frac > T(1))
+            frac = T(1);
+        const T dpsi = std::asin(frac);
+        r_cal = dpsi * dpsi;
+    }
+    const T sm = static_cast<T>(p_.mag_sigma_ut);
+    T r = T(2) * sm * sm / bh2 + sig_tilt * sig_tilt * (mn[2] * mn[2]) / bh2;
+    if (r < static_cast<T>(p_.mag_r_floor))
+        r = static_cast<T>(p_.mag_r_floor);
+    if (r > static_cast<T>(p_.mag_r_ceiling))
+        r = static_cast<T>(p_.mag_r_ceiling);
+    r += r_cal;
+
+    const int idx[3] = {kAtt, kAtt + 1, kAtt + 2};
+    const T val[3] = {T(2) * d[0], T(2) * d[1], T(2) * d[2]};
+    // a large innovation (a disturbance, a bad sample) does not move the gyro bias
+    T S = r + hph(idx, val, 3);
+    uint32_t kmask = 0xFFFFFFFFu;
+    if (!(S > T(0)) || y * y / S > static_cast<T>(p_.mag_bias_nis))
+        for (int i = kGyroBias; i < kGyroBias + 3; ++i)
+            kmask &= ~(1u << i);
+    T dx[N];
+    if (scalarUpdate(idx, val, 3, y, r, T(0), T(1), dx, nullptr, kmask) != 1)
+        return false;
+    inject(dx);
+    stabilize();
+    return true;
 }
 
 template <typename T>

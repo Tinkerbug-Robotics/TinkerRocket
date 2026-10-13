@@ -37,6 +37,28 @@
 // passed (FixCheck.h) and logged (GNSS_CHECK_MSG). That one only reports: the
 // flight filter takes every fix as before.
 //
+// Barometer and landing. Each barometer sample the flight filter fuses is
+// fused here too, as a height: the barometer's height above the pad plus an
+// offset to the filter's own (ellipsoidal) height, learned on the pad while
+// the raw measurements lead and frozen at launch. Its variance is the flight
+// filter's: (2 m)^2 plus the static port's error at the dynamic pressure
+// (#1579). With no satellites -- the receiver lost the sky under the main on
+// the rig, and with nothing else the shadow drifted 70 m in 20 s -- it holds
+// the vertical. Once the landing detector has called it, zero velocity, 10
+// times a second (#1418).
+//
+// The navigation filter (Config::primary: the Beetle, TR_RAW_GNSS_PRIMARY).
+// There GpsInsEKF does not run, and the seed is no filter's state, only where
+// to start: the receiver's pad position, an attitude from the accelerometer,
+// the still gyro's mean, the declination and the field's size at the pad. So
+// on the ground the filter keeps its own attitude -- it levels, and takes the
+// magnetometer as a heading (#1578's measurement) -- and is never resynced.
+// It learns the barometer's offset with or without a fix of its own (a flight
+// without GNSS has the barometer and the IMU). A seed marked restore -- a
+// flight the flight computer restored after a reboot -- starts it in flight,
+// the barometer's offset taken from its first sample. Its state goes to the
+// flight loop every step (navState, ShadowLink::nav).
+//
 // Levelling. Where the flight filter takes its accelerometer as gravity (the
 // ground, and after apogee) the shadow does too -- in flight only once its
 // own velocity has held steady from epoch to epoch and the specific force is
@@ -103,6 +125,15 @@ public:
         FixCheck::Config fix_check;
         double   acc_window_s = 0.08;     // the IMU's acceleration at a fix: its mean over this long
         LevelGate::Config level;          // when it levels in flight
+        double   baro_sigma_m    = 2.0;       // the barometer's own noise, m (the flight filter's)
+        double   baro_port_k     = 0.0075;    // the static port's error, m per Pa of dynamic pressure (#1579)
+        double   baro_offset_tau_s = 30.0;    // the pad offset follows the filter's height this slowly
+        double   baro_offset_min_s = 10.0;    // and is used once it has had this long
+        double   zupt_sigma_mps  = 0.5;       // landed: zero velocity, 1 sigma (#1418)
+        double   zupt_period_s   = 0.1;       //   this often
+        bool     primary         = false;     // the navigation filter (above)
+        double   mag_field_tol   = 0.15;      // a field this far off the model's size is no heading (#1304)
+        double   max_bridge_s    = 5.0;       // the navigation filter bridges an IMU hole this long
     };
 
     // What takes the ionosphere out (the pad status message reports it).
@@ -157,6 +188,18 @@ public:
         // levelling on the accelerometer, where the flight filter levels
         uint32_t levels = 0;               // steps that levelled
         uint32_t levels_held = 0;          //   in flight, held off: not steady, or not g's size
+        // the barometer and the landing
+        uint32_t baro = 0;                 // samples seen
+        uint32_t baro_fused = 0;           //   fused (an offset learned)
+        double   baro_offset_m = 0.0;      // the filter's height less the barometer's, on the pad
+        uint8_t  baro_offset_frozen = 0;   //   frozen at launch
+        uint32_t zupts = 0;                // landed zero-velocity updates
+        // the magnetometer (the navigation filter, on the ground)
+        uint32_t mags = 0;                 // samples seen
+        uint32_t mag_fused = 0;            //   taken as a heading
+        uint32_t mag_suspect = 0;          //   refused: not the model's size
+        uint32_t restores = 0;             // starts in flight from a restored flight
+        uint32_t gaps_bridged = 0;         // IMU holes the navigation filter stepped over
     };
 
     using Clock = int64_t (*)();
@@ -175,6 +218,12 @@ public:
     void setIono(const ShadowIono& io);
     // One of the receiver's own fixes (FixCheck).
     void onFix(const TimedFix& f);
+    // A barometer sample the flight filter fused; applied at the next step.
+    void onBaro(const ShadowBaro& b);
+    // A magnetometer sample; the navigation filter takes it on the ground.
+    void onMag(const ShadowMag& m);
+    // The navigation state the flight loop flies on (running = 0 before a start).
+    void navState(ShadowNav& out) const;
     void onEpoch(const TimedRawEpoch& e);
     // One flight-filter IMU tick; time64_us is its time widened to 64 bits
     // (unwrap32 against the clock it was stamped with).
@@ -253,6 +302,22 @@ private:
     FixCheck      fixcheck_;
     LevelGate     level_gate_;
     bool          levelled_ = false;    // the last step levelled (RGE_LEVEL)
+    ShadowBaro    baro_ = {};           // the latest barometer sample, not yet applied
+    bool          have_baro_ = false;
+    double        baro_offset_ = 0.0;   // the filter's height less the barometer's
+    double        baro_learn_s_ = 0.0;  //   learned over this long
+    bool          baro_frozen_ = false; //   frozen at launch
+    bool          baro_seen_ = false;   //   a sample has gone into it
+    double        last_baro_t_ = -1.0;  // the filter time the last sample was applied
+    double        next_zupt_t_ = 0.0;   // landed: the next zero-velocity update is due
+    ShadowMag     mag_ = {};            // the latest magnetometer sample, not yet applied
+    bool          have_mag_ = false;
+    bool          restored_ = false;    // started in flight from a restored flight
+    uint8_t       start_gen_ = 0;       // the seed's start_gen it started from
+    double        last_aided_t_ = -1.0e9;   // raw measurements last applied
+    double        last_baro_fused_t_ = -1.0e9;
+    void          applyMag(const float acc[3]);
+    void          applyBaro(double t, uint8_t imu_flags);
     static constexpr int kFixQ = 4;      // fixes waiting for the IMU to pass them (0.4 s at 10 Hz)
     TimedFix      fixq_[kFixQ] = {};
     int           nfix_ = 0;

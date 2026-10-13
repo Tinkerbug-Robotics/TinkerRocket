@@ -15,25 +15,32 @@ namespace
 
 const float kStill[3] = {0.0f, 0.0f, -9.81f};   // a steady descent: the drag is g, straight up
 
+double g_last_t = 0.0;   // the last epoch's time: the tests ask just after it
+
 void epoch(LevelGate& g, double t, float vn, float ve, float vd)
 {
     const float v[3] = {vn, ve, vd};
     g.onEpoch(t, v);
+    g_last_t = t;
 }
+
+double tNow(const LevelGate&) { return g_last_t + 0.01; }
 
 }  // namespace
 
 TEST(LevelGate, NotUntilTheVelocityHasHeldSteadyTwiceInARow)
 {
     LevelGate g;
-    EXPECT_FALSE(g.allow(kStill));               // no epochs
+    g_last_t = 0.0;
+    g.onStep(0.0, kStill);
+    EXPECT_FALSE(g.allow(0.01, kStill));         // no epochs: an outage, g's size only 0.01 s
     epoch(g, 20.0, 2.0, 2.5, 16.3);
-    EXPECT_FALSE(g.allow(kStill));               // one: nothing to compare
+    EXPECT_FALSE(g.allow(tNow(g), kStill));               // one: nothing to compare
     epoch(g, 21.0, 2.1, 2.6, 16.3);              // 0.14 m/s^2 of drift with the wind
-    EXPECT_FALSE(g.allow(kStill));
+    EXPECT_FALSE(g.allow(tNow(g), kStill));
     epoch(g, 22.0, 2.2, 2.7, 16.3);
     EXPECT_TRUE(g.steady());
-    EXPECT_TRUE(g.allow(kStill));
+    EXPECT_TRUE(g.allow(tNow(g), kStill));
 }
 
 TEST(LevelGate, TheDrogueOpeningIsNotSteady)
@@ -48,14 +55,14 @@ TEST(LevelGate, TheDrogueOpeningIsNotSteady)
     EXPECT_FALSE(g.steady());
     // its size is already g's by 15 s, 18 degrees off vertical: the size alone would have let it in
     const float drag[3] = {0.0f, 2.9f, -8.99f};
-    EXPECT_FALSE(g.allow(drag));
+    EXPECT_FALSE(g.allow(tNow(g), drag));
     epoch(g, 16.0, 1.1, 1.1, 15.9);
     epoch(g, 17.0, 1.7, 1.7, 16.2);
     EXPECT_FALSE(g.steady());                    // 0.9 m/s^2: still turning
     epoch(g, 18.0, 2.1, 2.1, 16.3);
     epoch(g, 19.0, 2.3, 2.3, 16.3);
     epoch(g, 20.0, 2.5, 2.5, 16.3);
-    EXPECT_TRUE(g.allow(kStill));                // 3 degrees and settling
+    EXPECT_TRUE(g.allow(tNow(g), kStill));                // 3 degrees and settling
 }
 
 TEST(LevelGate, TheMainOpeningIsTheWrongSizeEvenWhenSteady)
@@ -65,9 +72,9 @@ TEST(LevelGate, TheMainOpeningIsTheWrongSizeEvenWhenSteady)
         epoch(g, 30.0 + k, 3.4f, 0.0f, 16.1f);
     ASSERT_TRUE(g.steady());
     const float opening[3] = {0.0f, 0.0f, -12.0f};   // vertical, but 1.2 g: it would go into the bias
-    EXPECT_FALSE(g.allow(opening));
+    EXPECT_FALSE(g.allow(tNow(g), opening));
     const float near_g[3] = {0.3f, -0.2f, -9.5f};
-    EXPECT_TRUE(g.allow(near_g));
+    EXPECT_TRUE(g.allow(tNow(g), near_g));
 }
 
 TEST(LevelGate, AGapOrAResetStartsOver)
@@ -99,4 +106,33 @@ TEST(LevelGate, OneJoltStartsTheCountAgain)
     EXPECT_FALSE(g.steady());
     epoch(g, 53.0, 2.8f, 0.0f, 4.5f);
     EXPECT_TRUE(g.steady());
+}
+
+TEST(LevelGate, WithNoSatellitesItLevelsOnceTheForceHasBeenGsSizeFiveSeconds)
+{
+    // Under a chute with no satellites: no epochs to call it steady, and a
+    // gyro bias tilts the attitude unchecked unless it levels
+    LevelGate g;
+    const float opening[3] = {0.0f, 3.0f, -6.0f};   // the drag still settling: 6.7 m/s^2
+    double t = 40.0;
+    for (; t < 42.0; t += 0.01)
+    {
+        g.onStep(t, opening);
+        EXPECT_FALSE(g.allow(t, opening));
+    }
+    for (; t < 46.99; t += 0.01)
+    {
+        g.onStep(t, kStill);
+        EXPECT_FALSE(g.allow(t, kStill));   // g's size, but not for 5 s yet
+    }
+    t = 47.01;
+    g.onStep(t, kStill);
+    EXPECT_TRUE(g.allow(t, kStill));
+    // a jolt starts the 5 s again
+    g.onStep(t + 0.01, opening);
+    g.onStep(t + 0.02, kStill);
+    EXPECT_FALSE(g.allow(t + 0.02, kStill));
+    // with epochs coming, their steadiness decides, not the force's hold
+    epoch(g, 50.0, 0.0f, 0.0f, 12.0f);
+    EXPECT_FALSE(g.allow(50.01, kStill));
 }

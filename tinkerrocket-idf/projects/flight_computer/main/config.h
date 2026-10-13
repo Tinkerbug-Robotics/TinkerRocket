@@ -218,6 +218,18 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 #error "TR_RAW_GNSS_SHADOW needs the LC86G driver's raw MSM7 (TR_GNSS_DRIVER_LC86=1)"
 #endif
 
+// #1600: where the raw-GNSS filter runs (the Beetle) it is the navigation
+// filter. GpsInsEKF does not run there; main.cpp's `ekf` is RawNavAdapter
+// (raw_nav_adapter.h), GpsInsEKF's face on the raw filter's state. The V9
+// keeps GpsInsEKF on the SAM-M10Q's fix. -DTR_RAW_GNSS_PRIMARY=0 flies
+// GpsInsEKF with the raw filter as a shadow beside it, as before.
+#ifndef TR_RAW_GNSS_PRIMARY
+#define TR_RAW_GNSS_PRIMARY TR_RAW_GNSS_SHADOW
+#endif
+#if TR_RAW_GNSS_PRIMARY && !TR_RAW_GNSS_SHADOW
+#error "TR_RAW_GNSS_PRIMARY needs the raw-GNSS filter (TR_RAW_GNSS_SHADOW=1)"
+#endif
+
 struct config : board_pins
 {
 

@@ -539,3 +539,136 @@ TEST(RawGnssEKF, PredictsADopplerThatLagsItsTag)
     EXPECT_LT(worst_f, 0.05);                 // the lag modelled
     EXPECT_GT(worst_g, 0.3);                  // ignored: the Doppler drags the velocity back 20 * 0.0555 m/s
 }
+
+// ---- the barometer and zero velocity (#1600: the shadow's aiding without satellites)
+
+TEST(RawGnssEKF, AHeightHoldsTheVerticalAnIMUWouldLose)
+{
+    // An accelerometer 0.3 m/s^2 strong in the vertical for 20 s: alone it
+    // climbs 60 m; a height at the true one every 0.1 s (2 m sigma) holds it
+    // within a couple of metres
+    for (bool with_height : {false, true})
+    {
+        RawGnssEKF<float> f(quietParams());
+        const double v0[3] = {0.0, 0.0, 0.0};
+        initLevel(f, kLla0, v0);
+        const double a_up[3] = {0.0, 0.0, -0.3};   // NED: up
+        for (int s = 0; s < 200; ++s)
+        {
+            imuSecond(f, a_up, 20);                 // 0.1 s
+            if (with_height)
+                f.updateHeight(kLla0[2], 4.0f);
+        }
+        if (with_height)
+        {
+            EXPECT_NEAR(f.lla()[2], kLla0[2], 3.0);
+            EXPECT_NEAR(f.velNed()[2], 0.0f, 0.5f);
+        }
+        else
+        {
+            EXPECT_GT(f.lla()[2] - kLla0[2], 55.0);
+        }
+        expectCovarianceHealthy(f);
+    }
+}
+
+TEST(RawGnssEKF, ZeroVelocityMovesOnlyPositionAndVelocity)
+{
+    RawGnssEKF<float> f(quietParams());
+    const double v0[3] = {3.0, -2.0, 1.0};
+    initLevel(f, kLla0, v0);
+    imuSecond(f);                                    // 1 s at that velocity: the attitude and biases correlate
+    const float q0[4] = {f.quat()[0], f.quat()[1], f.quat()[2], f.quat()[3]};
+    const float ab0[3] = {f.accelBias()[0], f.accelBias()[1], f.accelBias()[2]};
+    const float wb0[3] = {f.gyroBias()[0], f.gyroBias()[1], f.gyroBias()[2]};
+    for (int k = 0; k < 30; ++k)                     // 3 s at 10 Hz, still
+    {
+        imuSecond(f, nullptr, 20);
+        f.updateZeroVelocity(0.5f);
+    }
+    for (int i = 0; i < 3; ++i)
+    {
+        EXPECT_NEAR(f.velNed()[i], 0.0f, 0.1f);
+        EXPECT_FLOAT_EQ(f.accelBias()[i], ab0[i]);
+        EXPECT_FLOAT_EQ(f.gyroBias()[i], wb0[i]);
+    }
+    for (int i = 0; i < 4; ++i)
+        EXPECT_FLOAT_EQ(f.quat()[i], q0[i]);
+    expectCovarianceHealthy(f);
+}
+
+// ---- the magnetometer as a heading (#1578's measurement, for a raw filter that starts itself)
+
+namespace
+{
+
+// yaw then pitch (no roll), body -> NED, scalar first: Quat2DCM of it is NED -> body
+void quatYawPitch(double yaw, double pitch, float q[4])
+{
+    const double cy = std::cos(yaw / 2), sy = std::sin(yaw / 2), cp = std::cos(pitch / 2), sp = std::sin(pitch / 2);
+    q[0] = float(cy * cp);
+    q[1] = float(-sy * sp);
+    q[2] = float(cy * sp);
+    q[3] = float(sy * cp);
+}
+
+void nedToBody(const float q[4], const double v[3], float out[3])
+{
+    const double w = q[0], x = q[1], y = q[2], z = q[3];
+    const double M[3][3] = {{1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y)},
+                            {2 * (x * y - w * z), 1 - 2 * (x * x + z * z), 2 * (y * z + w * x)},
+                            {2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)}};
+    for (int i = 0; i < 3; ++i)
+        out[i] = float(M[i][0] * v[0] + M[i][1] * v[1] + M[i][2] * v[2]);
+}
+
+// the angle between two attitudes, deg
+double attitudeErrorDeg(const float a[4], const float b[4])
+{
+    const double dot = std::fabs(double(a[0]) * b[0] + double(a[1]) * b[1] + double(a[2]) * b[2] + double(a[3]) * b[3]);
+    return 2.0 * std::acos(std::min(1.0, dot)) * 180.0 / kPi;
+}
+
+}  // namespace
+
+TEST(RawGnssEKF, TheMagnetometerSetsTheHeadingLevelOrOnAVerticalRail)
+{
+    // the pad of rp5_0829: its field (TR_GeoMag), magnetic north 11.6 deg west
+    const double b_ned[3] = {21.0, -4.3, 45.5};
+    const float decl = float(std::atan2(b_ned[1], b_ned[0]));
+    for (double pitch_deg : {0.0, 83.6, 90.0})
+    {
+        float q_true[4], q_wrong[4];
+        quatYawPitch(44.7 * kPi / 180.0, pitch_deg * kPi / 180.0, q_true);
+        quatYawPitch((44.7 + 30.0) * kPi / 180.0, pitch_deg * kPi / 180.0, q_wrong);   // 30 deg off
+        RawGnssEKF<float> f(quietParams());
+        const float v0[3] = {0, 0, 0};
+        f.init(kLla0, v0, q_wrong, 0.0);
+        const double g_ned[3] = {0.0, 0.0, -kG};    // the specific force at rest: up
+        float acc[3], mag[3];
+        nedToBody(q_true, g_ned, acc);
+        nedToBody(q_true, b_ned, mag);
+        const float gyro[3] = {0, 0, 0};
+        int fused = 0;
+        for (int k = 0; k < 100; ++k)                // 2 s at 50 Hz
+        {
+            f.propagate(acc, gyro, 0.02f);
+            f.updateAccelLevel(acc);
+            fused += f.updateMagHeading(acc, mag, true, decl, 0.0f) ? 1 : 0;
+        }
+        EXPECT_EQ(fused, 100) << pitch_deg;
+        EXPECT_LT(attitudeErrorDeg(f.quat(), q_true), 1.0) << "pitch " << pitch_deg;
+        expectCovarianceHealthy(f);
+    }
+}
+
+TEST(RawGnssEKF, AFieldWithNoHorizontalPartSaysNothing)
+{
+    RawGnssEKF<float> f(quietParams());
+    const double v0[3] = {0, 0, 0};
+    initLevel(f, kLla0, v0);
+    const float acc[3] = {0, 0, float(-kG)};
+    const float down_only[3] = {0.5f, 0.0f, 48.0f};  // 0.5 uT across: at a magnetic pole
+    EXPECT_FALSE(f.updateMagHeading(acc, down_only, true, 0.0f, -1.0f));
+    EXPECT_FLOAT_EQ(f.quat()[0], 1.0f);
+}

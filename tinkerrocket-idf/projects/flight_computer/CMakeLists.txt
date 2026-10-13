@@ -78,6 +78,12 @@ if(DEFINED TR_RAW_GNSS_SHADOW)
     add_compile_definitions(TR_RAW_GNSS_SHADOW=${TR_RAW_GNSS_SHADOW})
     message(STATUS "TR_RAW_GNSS_SHADOW=${TR_RAW_GNSS_SHADOW} -- raw-GNSS shadow filter set by hand")
 endif()
+# #1600: the raw-GNSS filter is the navigation filter wherever it runs
+# (main/config.h); -DTR_RAW_GNSS_PRIMARY=0 flies GpsInsEKF beside it instead.
+if(DEFINED TR_RAW_GNSS_PRIMARY)
+    add_compile_definitions(TR_RAW_GNSS_PRIMARY=${TR_RAW_GNSS_PRIMARY})
+    message(STATUS "TR_RAW_GNSS_PRIMARY=${TR_RAW_GNSS_PRIMARY} -- raw-GNSS navigation filter set by hand")
+endif()
 # Bench: a per-section cycle and Xtensa performance-counter profile of the
 # flight task, printed every 5 s (main/loop_profile.h). Never set for flight.
 if(TR_LOOP_PROFILE)
