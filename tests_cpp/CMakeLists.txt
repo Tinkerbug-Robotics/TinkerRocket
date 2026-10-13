@@ -269,6 +269,18 @@ target_include_directories(test_imu_sample_clock PRIVATE
 target_link_libraries(test_imu_sample_clock GTest::gtest_main)
 gtest_discover_tests(test_imu_sample_clock)
 
+# ---------- test_i2s_tx_fill_policy ----------
+# The FC's I2S sender keeps the TX DMA ring full, so a frame never lands at the
+# DMA's read point (the Beetle's IMU batch gaps, 2026-10-12). The policy's
+# decisions, and a model of the IDF v6.0 TX driver on a DMA that reads ahead of
+# its EOF. Header-only and IDF-free.
+add_executable(test_i2s_tx_fill_policy test_i2s_tx_fill_policy.cpp)
+target_include_directories(test_i2s_tx_fill_policy PRIVATE
+    ${LIB_DIR}/TR_I2S_Stream
+)
+target_link_libraries(test_i2s_tx_fill_policy GTest::gtest_main)
+gtest_discover_tests(test_i2s_tx_fill_policy)
+
 # ---------- test_qmc5883p_regs ----------
 # The mini's magnetometer (#1312): register packing pinned to the QMC5883P
 # datasheet's worked examples, the ±8 G scale MAG_TYPE_QMC5883P promises, and

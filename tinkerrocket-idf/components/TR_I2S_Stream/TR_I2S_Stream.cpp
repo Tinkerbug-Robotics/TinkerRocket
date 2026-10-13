@@ -68,6 +68,8 @@ void TR_I2S_Stream::end()
     recv_cb_ctx_    = nullptr;
     is_tx_          = false;
     frame_sync_pin_ = -1;
+    tx_ring_bytes_  = 0;
+    sample_rate_    = 0;
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -84,6 +86,8 @@ esp_err_t TR_I2S_Stream::beginMasterTx(int bclk_pin,
 {
     is_tx_ = true;
     frame_sync_pin_ = frame_sync_pin;
+    tx_ring_bytes_ = (size_t)dma_desc_num * (size_t)dma_frame_num * 4u;   // 16-bit stereo: 4 B a frame
+    sample_rate_ = sample_rate;
     // Recorded so end() can hand the pins back — see the contention note there.
     bclk_pin_ = bclk_pin;
     ws_pin_   = ws_pin;
@@ -394,6 +398,22 @@ esp_err_t TR_I2S_Stream::writeIdleFill(size_t num_bytes, uint32_t timeout_ms)
             break;  // timeout
     }
     return ESP_OK;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Ring top-up
+// ────────────────────────────────────────────────────────────────────
+
+esp_err_t TR_I2S_Stream::topUpTxRing()
+{
+    if (!chan_handle_ || !is_tx_)
+        return ESP_ERR_INVALID_STATE;
+
+    // Zero timeout: the driver writes into its current buffer and every free
+    // one, then reports a timeout the moment none is left — the ring is full.
+    // A ring's worth of zeros covers the case where all of it was free.
+    const esp_err_t err = writeIdleFill(tx_ring_bytes_, 0);
+    return (err == ESP_ERR_TIMEOUT) ? ESP_OK : err;
 }
 
 // ────────────────────────────────────────────────────────────────────

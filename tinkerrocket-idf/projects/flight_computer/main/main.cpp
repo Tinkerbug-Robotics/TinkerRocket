@@ -13,6 +13,7 @@
 #include <TR_Sensor_Collector_Sim.h>
 #include <TR_I2C_Interface.h>
 #include <TR_I2S_Stream.h>
+#include <i2s_tx_fill_policy.h>
 #include <TR_Sensor_Data_Converter.h>
 #include <TR_Orientation.h>
 #include <TR_GpsInsEKF.h>
@@ -1665,7 +1666,7 @@ static RollProfileQuery roll_profile_query(float t_flight_s)
 // ==========================================================================
 // SECTION: I2S transmit to the Out Computer
 // ==========================================================================
-static inline void i2sSendWithStats(uint8_t type, const uint8_t *payload, size_t len)
+static inline esp_err_t i2sSendWithStats(uint8_t type, const uint8_t *payload, size_t len)
 {
     const esp_err_t err = i2s_stream.writeFrame(type, payload, len);
     if (err == ESP_OK)
@@ -1699,6 +1700,7 @@ static inline void i2sSendWithStats(uint8_t type, const uint8_t *payload, size_t
             default: break;
         }
     }
+    return err;
 }
 
 static inline bool enqueueI2STx(uint8_t type, const uint8_t *payload, size_t len)
@@ -2027,7 +2029,7 @@ static void fcFlipToRx()
     // Let the queued OTA_RELAY_READY resends fully clock out before flipping.
     for (int i = 0; i < 60 && uxQueueMessagesWaiting(i2s_tx_queue) > 0; i++)
         delay_ms(10);
-    delay_ms(50);                       // settle: last frame leaves the DMA
+    delay_ms(50);                       // settle: last frame leaves the DMA (a full ring, ~23 ms)
     fc_ota_head = 0;                    // clear any stale ring contents
     fc_ota_tail = 0;
     fc_ota_ring_ovf = 0;                // reset RX diagnostics for this session
@@ -2782,17 +2784,23 @@ static SemaphoreHandle_t i2c_bus_mutex = nullptr;
 // SECTION: I2S sender task
 // ==========================================================================
 // I2S sender task — dequeues telemetry and writes to I2S DMA.
-// When no frame is available, writes idle fill (zeros) to prevent the
-// I2S DMA from replaying stale data.  The OC's parser skips zero runs
-// and only processes SOF-framed data.
 //
-// IMPORTANT: The I2S clock runs continuously at config::I2S_SAMPLE_RATE * 4
-// bytes/sec.  Any gap in writes causes the DMA to replay old buffers,
-// which the OC sees as duplicate frames.  Continuous zero fill eliminates
-// this by ensuring stale DMA slots contain only zeros.
+// The I2S clock runs continuously at config::I2S_SAMPLE_RATE * 4 bytes/s and
+// the DMA cycles its ring whether or not anything new was written; the OC's
+// parser skips the zeros between frames. The sender keeps that ring full
+// (i2s_tx_fill_policy.h): zeros whenever no frame is queued, written ahead
+// and blocking while the ring is full, so each frame lands in the buffer the
+// DMA has just released, a whole ring ahead of its read point. Writing only
+// when a frame came, plus 64 B of zeros a tick, let the ring run nearly dry,
+// and a frame copied in at the DMA's read point went out as zeros: the
+// Beetle's ~0.9 lost IMU batches a second at 7680 Hz (2026-10-12).
 static void i2sSenderTask(void *)
 {
     I2STxMessage msg = {};
+    I2sTxFillPolicy fill(i2s_stream.txRingUs());
+    // A blocking write waits for the DMA to release one buffer; waiting out a
+    // whole ring means the DMA has stopped.
+    const uint32_t idle_timeout_ms = fill.ringUs() / 1000u + 2u;
     for (;;)
     {
         // Phase 4 Layer 3: while an OTA image is streaming the link is flipped
@@ -2800,7 +2808,18 @@ static void i2sSenderTask(void *)
         // actual channel access vs the flip/revert (double-checked under lock).
         if (fc_ota_data_mode)
         {
+            fill.reset();   // the revert brings up a new channel and ring
             delay_ms(5);
+            continue;
+        }
+        const I2sTxFillPolicy::Step step =
+            fill.next(uxQueueMessagesWaiting(i2s_tx_queue) > 0, time_us());
+        if (step == I2sTxFillPolicy::Step::Backoff)
+        {
+            // #1122: no channel until fcServiceI2sTxRecovery() restores it.
+            // One attempt a tick, as the old 1 ms queue wait paced it.
+            delay_ms(1);
+            fill.retry();
             continue;
         }
         if (fc_i2s_mutex) xSemaphoreTake(fc_i2s_mutex, portMAX_DELAY);
@@ -2809,19 +2828,24 @@ static void i2sSenderTask(void *)
             if (fc_i2s_mutex) xSemaphoreGive(fc_i2s_mutex);
             continue;
         }
-        // Try to dequeue with a short timeout (1ms).
-        // If a frame is ready, send it immediately.
-        // If not, write idle fill zeros to keep the DMA pipe clean.
-        if (xQueueReceive(i2s_tx_queue, &msg, pdMS_TO_TICKS(1)) == pdTRUE)
+        esp_err_t err = ESP_OK;
+        switch (step)
         {
-            i2sSendWithStats(msg.type, msg.payload, msg.len);
+            case I2sTxFillPolicy::Step::Refill:
+                err = i2s_stream.topUpTxRing();
+                break;
+            case I2sTxFillPolicy::Step::SendFrame:
+                if (xQueueReceive(i2s_tx_queue, &msg, 0) == pdTRUE)
+                {
+                    err = i2sSendWithStats(msg.type, msg.payload, msg.len);
+                }
+                break;
+            case I2sTxFillPolicy::Step::IdleFill:
+            default:
+                err = i2s_stream.writeIdleFill(I2sTxFillPolicy::IDLE_FILL_BYTES, idle_timeout_ms);
+                break;
         }
-        else
-        {
-            // No frame available — write zeros to fill the I2S DMA pipe.
-            // This prevents stale data replay when the slave reads.
-            i2s_stream.writeIdleFill(64, 1);
-        }
+        fill.wrote(err != ESP_ERR_INVALID_STATE, time_us());   // INVALID_STATE: no channel
         if (fc_i2s_mutex) xSemaphoreGive(fc_i2s_mutex);
     }
 }
