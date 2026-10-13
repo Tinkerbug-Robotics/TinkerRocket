@@ -1042,4 +1042,12 @@ RawGnssStats RawGnssEKF<T>::updateGnssRaw(const RawMeas* m, int n, double age_s)
 template class RawGnssEKF<float>;
 template class RawGnssEKF<double>;
 
+double sagnacRange(const RawMeas& m, const double r[3])
+{
+    const double still[3] = {0.0, 0.0, 0.0};
+    Los L;
+    lineOfSight(m, r, still, L);
+    return L.rho;
+}
+
 }  // namespace gnss_raw

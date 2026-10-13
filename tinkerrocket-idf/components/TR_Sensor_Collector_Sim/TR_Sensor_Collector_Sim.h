@@ -55,6 +55,7 @@ public:
     bool enableGNSSRawOutputs() { return real_.enableGNSSRawOutputs(); }
     bool getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out);
     bool getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len);
+    bool getGNSSGeoidSeparation(float& sep_m) const { return real_.getGNSSGeoidSeparation(sep_m); }
 
     // Debug passthrough
     void getISM6HG256DebugSnapshot(ISM6HG256DebugSnapshot& snapshot_out) const;

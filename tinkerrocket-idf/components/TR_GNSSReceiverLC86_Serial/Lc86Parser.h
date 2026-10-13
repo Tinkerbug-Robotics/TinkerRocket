@@ -89,6 +89,12 @@ public:
     uint32_t pvtTowMs() const { return pvt_tow_ms_; }
     uint16_t pvtGpsWeek() const { return pvt_gps_week_; }
 
+    // The last $PQTMPVT's <Sep>: the geoid's height above the WGS84
+    // ellipsoid there, m. <Alt> (GNSSData alt_mm) is above the geoid (MSL);
+    // alt + sep is the ellipsoidal height a raw-GNSS filter works in (#1600).
+    // False until a fix states one.
+    bool geoidSepM(float& sep_m) const { sep_m = geoid_sep_m_; return geoid_sep_valid_; }
+
     // Valid after Event::PAIR_ACK ($PAIR001,<CommandID>,<Result>).
     // Result: 0 ok, 1 being processed, 2 send failed, 3 unsupported,
     // 4 parameter error, 5 service busy (protocol spec §2.4.1).
@@ -255,6 +261,8 @@ private:
     bool        sat_ready_  = false;
     uint32_t    pvt_tow_ms_ = 0;       // $PQTMPVT <TOW>, ms into the GPS week
     uint16_t    pvt_gps_week_ = 0;     // from <Date>/<Time>/<LeapS>; 0 = unknown
+    float       geoid_sep_m_ = 0.0f;   // $PQTMPVT <Sep>, m
+    bool        geoid_sep_valid_ = false;
 
     uint32_t bad_lines_       = 0;
     uint32_t overlong_lines_  = 0;

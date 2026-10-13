@@ -401,3 +401,177 @@ TEST(RawGnssShadow, FlightFromTheBeetlesOwnRtcm)
                              + (r[2] - kGoldenRmRx[2]) * (r[2] - kGoldenRmRx[2]));
     EXPECT_LT(d, 10.0);
 }
+
+// ------------------------------------------------- the ionosphere (phase 5)
+
+namespace
+{
+
+// The fixture's Klobuchar (BRDC_2026241, kGoldenRmIon) in the bytes GPS
+// broadcasts, dated by GPS day (2026-08-29 is 17037: week 2433, Saturday).
+constexpr uint16_t kGoldenDay = 17037;
+constexpr uint16_t kGoldenWeek = 2433;
+
+gnss_raw::ShadowIono goldenIono(uint16_t day)
+{
+    gnss_raw::ShadowIono io{};
+    const int8_t b[8] = {14, 3, -1, -2, 51, 6, -2, -5};
+    for (int k = 0; k < 8; ++k)
+        io.raw[k] = b[k];
+    io.gps_day = day;
+    return io;
+}
+
+// The fixture's two MSM7 epochs through the flight parser, on the MCU clock
+// a second apart from kT0 + 1 s.
+std::vector<TimedRawEpoch> goldenEpochs()
+{
+    lc86::Lc86Parser parser;
+    std::vector<TimedRawEpoch> epochs;
+    for (int i = 0; i < kGoldenRmMsmN; ++i)
+        for (uint8_t b : frame(kGoldenRmMsm[i]))
+            if (parser.feed(b) == lc86::Event::MSM_EPOCH)
+            {
+                TimedRawEpoch e;
+                EXPECT_TRUE(lc86::rawEpochFromMsm(parser.msmEpoch(), e.epoch));
+                e.mcu_us = kT0 + 1000000 + static_cast<int64_t>(epochs.size()) * 1000000;
+                e.gps_week = kGoldenWeek;
+                epochs.push_back(e);
+            }
+    return epochs;
+}
+
+ShadowSeed goldenSeed(int64_t t_us, bool pad_valid)
+{
+    double lat, lon, h;
+    ecef_to_geo(kGoldenRmRx, &lat, &lon, &h);
+    ShadowSeed s = padSeed(t_us, lat, lon, h);
+    s.pad_valid = pad_valid ? 1 : 0;
+    s.pad_sigma_m = 2.5f;
+    for (int a = 0; a < 3; ++a)
+        s.pad_lla[a] = s.lla[a];
+    return s;
+}
+
+// Each golden epoch handed over 0.2 s late, and the IMU carried past it.
+void runGolden(RawGnssShadow& sh, std::vector<TimedRawEpoch>& epochs, size_t k, uint8_t flags = gnss_raw::kShadowLevel)
+{
+    const int64_t te = epochs[k].mcu_us;
+    feedStill(sh, te - 1000000 + 5000, te + 200000, flags);
+    sh.onEpoch(epochs[k]);
+    feedStill(sh, te + 200000, te + 205000, flags);
+}
+
+}  // namespace
+
+TEST(RawGnssShadow, TheBroadcastBytesAreTheDaysKlobuchar)
+{
+    const gps_iono_t io = gnss_raw::RawMeasBuilder::ionoFromBroadcast(goldenIono(kGoldenDay).raw);
+    EXPECT_TRUE(io.valid);
+    for (int k = 0; k < 4; ++k)
+    {
+        // the RINEX header prints five digits
+        EXPECT_NEAR(io.alpha[k], kGoldenRmIon[k], 1e-4 * std::fabs(kGoldenRmIon[k])) << k;
+        EXPECT_NEAR(io.beta[k], kGoldenRmIon[4 + k], 1e-4 * std::fabs(kGoldenRmIon[4 + k])) << k;
+    }
+}
+
+TEST(RawGnssShadow, UsesTheBroadcastIonosphereWhileItIsCurrent)
+{
+    std::vector<TimedRawEpoch> epochs = goldenEpochs();
+    ASSERT_EQ(epochs.size(), 2u);
+    RawGnssShadow sh(everyTick());
+    for (int i = 0; i < kGoldenRmEphN; ++i)
+        sh.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+    sh.onSeed(goldenSeed(kT0, false));
+    feedStill(sh, kT0, kT0 + 5000);
+    ASSERT_TRUE(sh.running());
+    int age = 0;
+    EXPECT_FALSE(sh.haveIono());
+    EXPECT_FALSE(sh.ionoAgeDays(age));
+    EXPECT_EQ(sh.ionoSource(), RawGnssShadow::kIonoNone);
+
+    sh.setIono(goldenIono(kGoldenDay - 3));
+    EXPECT_FALSE(sh.ionoAgeDays(age));        // the receiver's date is not known yet
+    runGolden(sh, epochs, 0);
+    ASSERT_TRUE(sh.ionoAgeDays(age));
+    EXPECT_EQ(age, 3);
+    EXPECT_EQ(sh.ionoSource(), RawGnssShadow::kIonoBroadcast);
+    EXPECT_DOUBLE_EQ(sh.builder().iono().alpha[0], 14 * 9.313225746154785e-10);
+    EXPECT_EQ(sh.stats().last_pad_corrected, 0);
+
+    // a set 31 days old gives way: no pad corrections yet, so nothing
+    sh.setIono(goldenIono(kGoldenDay - 31));
+    runGolden(sh, epochs, 1);
+    ASSERT_TRUE(sh.ionoAgeDays(age));
+    EXPECT_EQ(age, 31);
+    EXPECT_EQ(sh.ionoSource(), RawGnssShadow::kIonoNone);
+    EXPECT_FALSE(sh.builder().iono().valid);
+    EXPECT_EQ(sh.builder().iono().alpha[0], 0.0);
+    EXPECT_EQ(sh.stats().iono_sets, 2u);
+}
+
+TEST(RawGnssShadow, KeepsItsIonosphereThroughTheFlight)
+{
+    std::vector<TimedRawEpoch> epochs = goldenEpochs();
+    RawGnssShadow sh(everyTick());
+    for (int i = 0; i < kGoldenRmEphN; ++i)
+        sh.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+    sh.setIono(goldenIono(kGoldenDay));
+    sh.onSeed(goldenSeed(kT0, false));
+    feedStill(sh, kT0, kT0 + 5000);
+    runGolden(sh, epochs, 0);
+    ASSERT_EQ(sh.ionoSource(), RawGnssShadow::kIonoBroadcast);
+    // in flight, parameters that would not be used on the pad change nothing
+    sh.setIono(goldenIono(kGoldenDay - 90));
+    runGolden(sh, epochs, 1, gnss_raw::kShadowInFlight);
+    EXPECT_EQ(sh.ionoSource(), RawGnssShadow::kIonoBroadcast);
+    EXPECT_TRUE(sh.builder().iono().valid);
+}
+
+TEST(RawGnssShadow, SurveysThePadOnlyOnThePadWithALaunchSite)
+{
+    std::vector<TimedRawEpoch> epochs = goldenEpochs();
+    {
+        RawGnssShadow sh(everyTick());
+        for (int i = 0; i < kGoldenRmEphN; ++i)
+            sh.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+        sh.onSeed(goldenSeed(kT0, false));    // no launch site yet
+        feedStill(sh, kT0, kT0 + 5000);
+        runGolden(sh, epochs, 0);
+        EXPECT_EQ(sh.stats().survey_epochs, 0u);
+        sh.onSeed(goldenSeed(kT0 + 1300000, true));
+        runGolden(sh, epochs, 1);
+        EXPECT_EQ(sh.stats().survey_epochs, 1u);
+        // each satellite's lock is the shadow's own: two epochs is still settling
+        EXPECT_EQ(sh.survey().summary().tracked, sh.stats().last_meas);
+        EXPECT_EQ(sh.survey().summary().settling, sh.stats().last_meas);
+        EXPECT_EQ(sh.survey().summary().corrected, 0);
+    }
+    {
+        RawGnssShadow sh(everyTick());
+        for (int i = 0; i < kGoldenRmEphN; ++i)
+            sh.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+        sh.onSeed(goldenSeed(kT0, true));
+        feedStill(sh, kT0, kT0 + 5000);
+        runGolden(sh, epochs, 0, gnss_raw::kShadowInFlight);
+        EXPECT_EQ(sh.stats().survey_epochs, 0u);   // not in flight
+    }
+}
+
+TEST(RawGnssShadow, CountsTheTrackedSatellitesWithNoEphemeris)
+{
+    std::vector<TimedRawEpoch> epochs = goldenEpochs();
+    RawGnssShadow sh(everyTick());
+    sh.onEpoch(epochs[1]);                    // not running: still counted
+    const int tracked = sh.stats().tracked;
+    EXPECT_GE(tracked, kGoldenRmMeasN);
+    EXPECT_EQ(sh.stats().tracked_no_eph, tracked);
+    for (int i = 0; i < kGoldenRmEphN; ++i)
+        sh.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+    sh.onEpoch(epochs[1]);
+    EXPECT_EQ(sh.stats().tracked, tracked);
+    // the capture carried an ephemeris for every satellite the epoch has but
+    // the ones the builder leaves for want of one
+    EXPECT_EQ(sh.stats().tracked_no_eph, tracked - kGoldenRmUnmaskedN);
+}
