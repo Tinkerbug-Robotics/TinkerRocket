@@ -24,9 +24,10 @@
 // they came from (setIono; NVS keeps them across boots). They are used while
 // they are no older than iono_max_age_days by the receiver's date. Otherwise,
 // and without them, the pad survey's per-satellite corrections are: on the
-// pad, against the launch site (PadSurvey.h), and frozen at liftoff. The
-// choice is made on the pad and kept through the flight; the survey runs
-// either way, and starts over when the choice changes.
+// pad, against the launch site (PadSurvey.h), and frozen at liftoff -- when the
+// raw measurements vouch for the launch site (the receiver's fix can be
+// hundreds of metres out). The choice is made on the pad and kept through the
+// flight; the survey runs either way, and starts over when the choice changes.
 //
 // Stopping. A sensor sim, a hole in the IMU longer than max_gap_s, a state
 // that is not finite, or (on the pad) one pad_reset_m from the flight
@@ -89,7 +90,7 @@ public:
     {
         kIonoNone = 0,       // neither: Klobuchar's night-time 5 ns only
         kIonoBroadcast = 1,  // the GPS broadcast parameters a pad calibration brought
-        kIonoPad = 2,        // the pad survey's corrections (some in use)
+        kIonoPad = 2,        // the pad survey's corrections (some in use, the pad vouched for)
     };
 
     enum StopReason : uint8_t

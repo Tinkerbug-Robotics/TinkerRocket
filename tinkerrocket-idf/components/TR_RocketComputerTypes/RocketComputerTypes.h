@@ -1665,6 +1665,8 @@ static constexpr uint8_t PCS_RUNNING    = 0x02;  //   and it is running
 static constexpr uint8_t PCS_IONO_AGE   = 0x04;  // iono_age_days is known (the receiver has given its date)
 static constexpr uint8_t PCS_PAD        = 0x08;  // the pad average has fixes (pad_* are set)
 static constexpr uint8_t PCS_PAD_FROZEN = 0x10;  // launched: the pad average and corrections are frozen
+static constexpr uint8_t PCS_PAD_MISMATCH = 0x20;  // the raw measurements put the pad more than 30 m from the
+                                                   // receiver's average fix: its corrections are not used
 
 // OC→app flash-space stats for the rocket NAND flight log.  Rides the file_ops
 // characteristic behind a 0xCC discriminator (sibling of the 0xCB sensor-cal
