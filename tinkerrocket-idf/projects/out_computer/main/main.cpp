@@ -2979,6 +2979,15 @@ static inline IRAM_ATTR void rxPush(uint8_t b)
         return;
     }
     rx_ring[rx_head] = b;
+    // The byte must land before the index that covers it. volatile orders
+    // rx_head against the other volatile accesses only, not against this plain
+    // store, and at -O2 GCC sinks the store below the rx_head write (it does in
+    // the M1 image). Harmless while every channel is created from loop_oc: this
+    // ISR then runs on core 1 with i2sParserTask and finishes before the parser
+    // resumes. The fence keeps the ring correct if either ever moves to core 0,
+    // and costs nothing on the S3, where it shares the memw the volatile store
+    // already gets.
+    __sync_synchronize();
     rx_head = next;
     // High-water tracking — non-atomic but only one ISR context produces.
     const size_t   t    = rx_tail;   // one read: the parser advances it under us
