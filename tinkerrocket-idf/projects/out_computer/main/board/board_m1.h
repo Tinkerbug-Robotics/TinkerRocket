@@ -125,6 +125,10 @@ struct board_pins
     // fault-current trip (pyro_fault_trip_policy.h) polls the shunt register
     // instead of taking the edge. The next revision routes it (#1554).
     static constexpr int INA_ALERT_PIN = -1;     // U23 ALERT open (CONFIRMED)
+    // #1593: no eFuse power-good line (U19's PG goes to its pull-up only), and
+    // VBUCK_OK goes to the flight computer, not here (#1409).
+    static constexpr int PG_RAIL_PIN = -1;
+    static constexpr int VBUCK_OK_PIN = -1;
 
     // --- Hold-up capacitor voltage (net V_SCAP_ADC) ---
     // Divider off the hold-up capacitor bank, read as ADC1_CH7. Tells us how

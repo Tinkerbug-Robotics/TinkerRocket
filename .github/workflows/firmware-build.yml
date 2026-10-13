@@ -34,13 +34,17 @@ jobs:
           #
           # ---- Product line: what firmware-release.yml publishes -------------
           #
-          # Tinker-Mantis (hardware/tinker-mantis) is the V9/V10 board. Both halves
-          # take -DTR_BOARD_V9=1. flight_computer has no default board revision:
+          # Tinker-Mantis (hardware/tinker-mantis). V9 is the board as fabbed (tag
+          # rocket-computer-v9.0.0); V10 is the board as ordered (tag
+          # tinker-mantis-v10.0.0), with its own map since #1593: its arm moved to P4 GPIO33 and needs the out computer's
+          # consent on S3 GPIO14, so a V9 image cannot arm a V10. Both halves of a
+          # pair take the same flag. flight_computer has no default board revision:
           # the flag is mandatory (projects/flight_computer/main/CMakeLists.txt)
           # because a wrong pyro pin map is silent at runtime. out_computer's flag
           # is mandatory too (#834) — a flagless build used to compile the V7 map
-          # silently. V9/V10 deleted the MRAM (board_v9.h sets MRAM_CS = -1) and
-          # enables the PSRAM log ring via an sdkconfig overlay.
+          # silently. V9 and V10 have no MRAM (MRAM_CS = -1) and enable the PSRAM
+          # log ring via an sdkconfig overlay. V10 is built here but not yet
+          # released (firmware-release.yml): no V10 has passed bring-up.
           - line: Tinker-Mantis
             project: flight_computer
             board: V9
@@ -49,6 +53,14 @@ jobs:
             project: out_computer
             board: V9
             flags: -B build_v9 -DTR_BOARD_V9=1
+          - line: Tinker-Mantis
+            project: flight_computer
+            board: V10
+            flags: -B build_v10 -DTR_BOARD_V10=1
+          - line: Tinker-Mantis
+            project: out_computer
+            board: V10
+            flags: -B build_v10 -DTR_BOARD_V10=1
           # Tinker-Beetle (hardware/tinker-beetle, fabbed as rocket-computer-mini-
           # v1.0.1) is a two-ESP32-S3 board that runs out_computer and
           # flight_computer with -DTR_BOARD_M1=1 — not the single-MCU
@@ -130,7 +142,8 @@ jobs:
           # pyro_channel_test drives squib FETs by hand and was not built by CI
           # at all. Its flag is mandatory too (#834): V7's PYRO1 FIRE pin is
           # PYRO_ARM on V9, so a flagless build armed the board on the keypress
-          # meant to pulse channel 1. Build every map so none of them rots.
+          # meant to pulse channel 1. Build every map so none of them rots. It
+          # refuses V10 and M1, whose arm needs the out computer's consent.
           - line: bench
             project: pyro_channel_test
             path: bench/pyro_channel_test

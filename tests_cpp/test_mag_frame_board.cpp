@@ -93,9 +93,11 @@ TEST(MagFrameBoard, TheIIS2MDCMapsAsMeasured) {
 }
 #endif
 
-#if TR_BOARD_V9
-// The V9/V10 image finds the chip at boot (TR_MAG_DRIVER_AUTO), so the board
-// header carries both, and magRotZDeg picks by what was found.
+#if TR_BOARD_V9 || TR_BOARD_V10
+// The V9 image finds the chip at boot (TR_MAG_DRIVER_AUTO), so its header
+// carries both and magRotZDeg picks by what was found; a V9 image on a V10
+// still converts the QMC5883P right. The V10 image drives the QMC5883P only
+// (TR_MAG_DRIVER_QMC5883P, #1593), from board_v10.h's own constant.
 TEST(MagFrameBoard, TheV10sQMC5883PMapsAsInferred) {
     const float rot = config::magRotZDeg(true);
     EXPECT_FLOAT_EQ(rot, config::MAG_ROT_Z_DEG_QMC5883P);

@@ -31,11 +31,12 @@ import replay_deployment_detector as rdd  # noqa: E402
 # included, since config.h still builds V7 and V8 from there -- with the defines
 # the FC's CMake passes for it.  M1 needs its two driver seams as well, or
 # config.h refuses the build (flight_computer/CMakeLists.txt sets both under
-# TR_BOARD_M1).
+# TR_BOARD_M1); V10 needs its magnetometer seam the same way (#1593).
 BOARDS = {
     "v7": ("-DTR_BOARD_V7=1",),
     "v8": ("-DTR_BOARD_V8=1",),
     "v9": ("-DTR_BOARD_V9=1",),
+    "v10": ("-DTR_BOARD_V10=1", "-DTR_MAG_DRIVER_QMC5883P=1"),
     "m1": ("-DTR_BOARD_M1=1", "-DTR_MAG_DRIVER_QMC5883P=1", "-DTR_GNSS_DRIVER_LC86=1"),
 }
 

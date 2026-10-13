@@ -12,8 +12,10 @@ find, verify and flash these.
 
 | Product | Project | Build | Chip | Release image |
 |---|---|---|---|---|
-| **Tinker-Mantis** (V9/V10) | [`flight_computer`](flight_computer/) | `idf.py -B build_v9 -DTR_BOARD_V9=1 build` | ESP32-P4 | `tinker-mantis-flight_computer-V9.bin` |
+| **Tinker-Mantis** V9 | [`flight_computer`](flight_computer/) | `idf.py -B build_v9 -DTR_BOARD_V9=1 build` | ESP32-P4 | `tinker-mantis-flight_computer-V9.bin` |
 | | [`out_computer`](out_computer/) | `idf.py -B build_v9 -DTR_BOARD_V9=1 build` | ESP32-S3 | `tinker-mantis-out_computer-V9.bin` |
+| **Tinker-Mantis** V10 | [`flight_computer`](flight_computer/) | `idf.py -B build_v10 -DTR_BOARD_V10=1 build` | ESP32-P4 | not released until a V10 passes bring-up (#1593) |
+| | [`out_computer`](out_computer/) | `idf.py -B build_v10 -DTR_BOARD_V10=1 build` | ESP32-S3 | not released until a V10 passes bring-up |
 | **Tinker-Beetle** | [`flight_computer`](flight_computer/) | `idf.py -B build_m1 -DTR_BOARD_M1=1 build` | ESP32-S3 | `tinker-beetle-flight_computer-M1.bin` |
 | | [`out_computer`](out_computer/) | `idf.py -B build_m1 -DTR_BOARD_M1=1 build` | ESP32-S3 | `tinker-beetle-out_computer-M1.bin` |
 | **Tinker-Base** | [`base_station`](base_station/) | `idf.py -B build_v4 -DTR_BS_BOARD=4 build` | ESP32-S3 | `tinker-base-base_station-V3.bin` — the V3 image, until V4 has run on hardware |

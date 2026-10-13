@@ -31,7 +31,8 @@ target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error -Wno-format -Wno-narr
 #
 #   idf.py -B build_v7 -DTR_BOARD_V7=1 build   # legacy V7 board
 #   idf.py -B build_v8 -DTR_BOARD_V8=1 build   # V8 bench boards (MRAM fitted)
-#   idf.py -B build_v9 -DTR_BOARD_V9=1 build   # V9/V10 (no MRAM, PSRAM ring)
+#   idf.py -B build_v9 -DTR_BOARD_V9=1 build   # V9 (no MRAM, PSRAM ring)
+#   idf.py -B build_v10 -DTR_BOARD_V10=1 build # V10 (V9 + arm consent, INA_ALERT, PG_RAIL, VBUCK_OK)
 #   idf.py -B build_m1 -DTR_BOARD_M1=1 build   # Tinker-Beetle rev1
 #
 # There used to be a V7 default, i.e. `idf.py build` compiled the map of a
@@ -46,7 +47,7 @@ target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error -Wno-format -Wno-narr
 # The build-dir name stays cosmetic — the board comes ONLY from the flag — but
 # use a separate -B dir per variant anyway, since CMake caches it.
 set(_tr_oc_board_flags "")
-foreach(_tr_flag TR_BOARD_V7 TR_BOARD_V8 TR_BOARD_V9 TR_BOARD_M1)
+foreach(_tr_flag TR_BOARD_V7 TR_BOARD_V8 TR_BOARD_V9 TR_BOARD_V10 TR_BOARD_M1)
     if(${_tr_flag})
         list(APPEND _tr_oc_board_flags ${_tr_flag})
     endif()
@@ -55,12 +56,14 @@ list(LENGTH _tr_oc_board_flags _tr_oc_board_flag_count)
 if(_tr_oc_board_flag_count EQUAL 0)
     message(FATAL_ERROR
         "out_computer: no board revision selected. Pass exactly one of "
-        "-DTR_BOARD_V7=1 / -DTR_BOARD_V8=1 / -DTR_BOARD_V9=1 / -DTR_BOARD_M1=1 "
-        "(V9 is the Tinker-Mantis V9/V10 board, hardware/tinker-mantis; M1 is "
-        "the Tinker-Beetle rev1, hardware/tinker-beetle). There is no default: the old "
-        "one was V7, whose PWR_PIN (GPIO6) is ESP_SCL on every later board, and "
-        "V9/V10 additionally needs the sdkconfig overlay that enables its PSRAM "
-        "log ring.")
+        "-DTR_BOARD_V7=1 / -DTR_BOARD_V8=1 / -DTR_BOARD_V9=1 / -DTR_BOARD_V10=1 / "
+        "-DTR_BOARD_M1=1 (V9 is the Tinker-Mantis as fabbed at tag "
+        "rocket-computer-v9.0.0, V10 the Tinker-Mantis as ordered at tag "
+        "tinker-mantis-v10.0.0; M1 is the Tinker-Beetle rev1, "
+        "hardware/tinker-beetle). There is no default: the old one was V7, whose "
+        "PWR_PIN (GPIO6) is ESP_SCL on every later board, V9 and V10 need the "
+        "sdkconfig overlay that enables the PSRAM log ring, and V10's arm needs "
+        "this processor's consent.")
 elseif(NOT _tr_oc_board_flag_count EQUAL 1)
     message(FATAL_ERROR
         "out_computer: more than one board revision selected "
@@ -77,8 +80,10 @@ if(CONFIG_IDF_TARGET AND NOT "${CONFIG_IDF_TARGET}" STREQUAL "esp32s3")
 endif()
 if(TR_BOARD_M1)
     message(STATUS "out_computer: board pin map M1 (main/board/board_m1.h, Tinker-Beetle rev1, on-board SPI radio)")
+elseif(TR_BOARD_V10)
+    message(STATUS "out_computer: board pin map V10 (main/board/board_v10.h, arm consent on GPIO14, PSRAM ring)")
 elseif(TR_BOARD_V9)
-    message(STATUS "out_computer: board pin map V9/V10 (main/board/board_v9.h, no MRAM, PSRAM ring)")
+    message(STATUS "out_computer: board pin map V9 (main/board/board_v9.h, no MRAM, PSRAM ring)")
 elseif(TR_BOARD_V8)
     message(STATUS "out_computer: board pin map V8 (main/board/legacy/board_v8.h, MRAM fitted)")
 else()

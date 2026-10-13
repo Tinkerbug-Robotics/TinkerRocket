@@ -9,14 +9,20 @@
  * Pins are board-revision dependent (#411):
  *   V7 (default):            ARM=14, CONT/FIRE = 15/16 18/19 38/34 51/50
  *   V8 (-DTR_BOARD_V8=1):    ARM=5,  CONT/FIRE = 7/6 10/9 12/11 14/13
- *   V9/V10 (-DTR_BOARD_V9=1):ARM=16, CONT/FIRE = 7/6 10/11 12/9 14/13
+ *   V9 (-DTR_BOARD_V9=1):    ARM=16, CONT/FIRE = 7/6 10/11 12/9 14/13
  * Build the V9 map with:  idf.py -B build_v9 -DTR_BOARD_V9=1 build
+ *
+ * NOT for the V10 (or the Beetle): their arm is a two-processor vote, and
+ * this flight-computer-only tool cannot raise the out computer's half
+ * (OC_ARM_EN), so ARM never closes U9 (#1593). On a V10 use the app's pyro
+ * fire test, which the out computer gives consent for. The CMakeLists refuses
+ * -DTR_BOARD_V10=1.
  *
  * V8 vs V9 is not cosmetic: ARM moves (5 -> 16) and channels 2 and 3 swap
  * their FIRE pins while keeping their CONT pins, so the wrong build fires the
- * wrong connector with continuity still reading correctly. hardware/
- * rocket-computer/ is the V9/V10 board; the V8 boards are the older bench
- * units. The selected map is printed at startup — read it before arming.
+ * wrong connector with continuity still reading correctly. The V9 is tag
+ * rocket-computer-v9.0.0; the V8 boards are the older bench units. The
+ * selected map is printed at startup — read it before arming.
  *
  * V8 NOTE: the CONT sense path is powered through the arming FET (test-board
  * circuit) — use 'C' (momentary arm) or arm first; unarmed 'c'/'r' reads are
@@ -96,7 +102,7 @@ static const char* TAG = "PYRO_DBG";
 #endif
 
 #if TR_BOARD_V9
-#define TR_BOARD_REV_STR "V9/V10"
+#define TR_BOARD_REV_STR "V9"
 #elif TR_BOARD_V8
 #define TR_BOARD_REV_STR "V8"
 #else

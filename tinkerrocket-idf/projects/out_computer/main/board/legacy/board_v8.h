@@ -44,6 +44,8 @@ struct board_pins
     // both processors. -1 = not present, same sentinel as GPS_PWR_PIN.
     static constexpr int ARM_CONSENT_PIN = -1;
     static constexpr int INA_ALERT_PIN = -1;     // #1553: none
+    static constexpr int PG_RAIL_PIN = -1;       // #1593: V10 only
+    static constexpr int VBUCK_OK_PIN = -1;      // #1593: V10 only
 
     // --- Power monitoring (INA230 @ 0x40, always-on I2C bus) ---
     static constexpr int PWR_SDA = 21;       // CONFIRMED (bench-validated)
