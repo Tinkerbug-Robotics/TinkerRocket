@@ -3188,7 +3188,8 @@ static void rawShadowTask(void*)
                 const gnss_raw::FixCheck::Result& fl = sh.fixCheck().last();
                 ESP_LOGI(TAG, "[RAWGNSS] checks: fixes %lu: %lu passed, %lu flagged, %lu unjudged, %lu lapsed "
                               "(no time %lu, dropped %lu) | last %s: %.1f m of %.1f, %.2f m/s of %.2f over %.2f s "
-                              "| satellites jumped %lu (last epoch %d of %d judged, worst %.1f m)",
+                              "| satellites jumped %lu (last epoch %d of %d judged, worst %.1f m) "
+                              "| levelled %lu steps, %lu held off in flight",
                          (unsigned long)fs.fixes, (unsigned long)fs.passed, (unsigned long)fs.flagged,
                          (unsigned long)fs.unjudged, (unsigned long)fs.lapsed,
                          (unsigned long)st.fixes_untimed, (unsigned long)st.fixes_dropped,
@@ -3197,7 +3198,8 @@ static void rawShadowTask(void*)
                          (double)fl.pos_err_m, (double)fl.pos_tol_m, (double)fl.vel_err_mps,
                          (double)fl.vel_tol_mps, (double)fl.span_s, (unsigned long)st.sats_jumped,
                          st.last_sats_jumped, sh.satCheck().summary().judged,
-                         sh.satCheck().summary().worst_m);
+                         sh.satCheck().summary().worst_m, (unsigned long)st.levels,
+                         (unsigned long)st.levels_held);
             }
             win_t0 = a1;
             busy_us = 0;

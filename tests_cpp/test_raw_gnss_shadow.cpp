@@ -689,3 +689,33 @@ TEST(RawGnssShadow, TakesASatelliteWhoseCodeJumpedAsRelocked)
     EXPECT_EQ(sh.builder().relockAge(o.sys, o.prn, kGoldenRmTowB), 0.0);
     EXPECT_EQ(sh.stats().sats_jumped, static_cast<uint32_t>(base + 1));
 }
+
+TEST(RawGnssShadow, LevelsOnTheGroundButInFlightOnlyOnceSteady)
+{
+    // The flight filter levels after apogee, and as a drogue opens that is
+    // wrong (LevelGate.h, the rig replay of 2026-10-13). With no raw epochs
+    // there is nothing to call the descent steady from: in flight the shadow
+    // holds off, and its records say it did not level.
+    RawGnssShadow sh;
+    RawGnssEkfData rec;
+    sh.onSeed(padSeed(kT0));
+    feedStill(sh, kT0, kT0 + 1000000);           // the pad
+    ASSERT_TRUE(sh.running());
+    const uint32_t pad_levels = sh.stats().levels;
+    EXPECT_GT(pad_levels, 20u);                  // 25 steps a second
+    EXPECT_EQ(sh.stats().levels_held, 0u);
+    while (sh.takeLog(rec)) {}
+    EXPECT_TRUE(rec.flags & RGE_LEVEL);
+
+    const uint8_t descent = gnss_raw::kShadowLevel | gnss_raw::kShadowInFlight;   // after apogee
+    feedStill(sh, kT0 + 1000000, kT0 + 2000000, descent);
+    ASSERT_TRUE(sh.running());
+    EXPECT_EQ(sh.stats().levels, pad_levels);
+    EXPECT_GT(sh.stats().levels_held, 20u);
+    while (sh.takeLog(rec)) {}
+    EXPECT_FALSE(rec.flags & RGE_LEVEL);
+    EXPECT_TRUE(rec.flags & RGE_IN_FLIGHT);
+
+    feedStill(sh, kT0 + 2000000, kT0 + 2500000);   // landed: the ground again
+    EXPECT_GT(sh.stats().levels, pad_levels);
+}

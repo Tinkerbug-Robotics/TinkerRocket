@@ -1679,6 +1679,17 @@ target_compile_definitions(test_sim_replay PRIVATE
 target_link_libraries(test_sim_replay GTest::gtest_main)
 gtest_discover_tests(test_sim_replay)
 
+# ---------- test_level_gate ----------
+# When the raw-GNSS shadow may level on its accelerometer in flight (#1600):
+# once its velocity has held steady from epoch to epoch and the specific force
+# is g's size -- the rig replay's drogue opening, descent and main opening.
+add_executable(test_level_gate test_level_gate.cpp)
+target_include_directories(test_level_gate PRIVATE
+    ${LIB_DIR}/TR_RawGnssShadow
+)
+target_link_libraries(test_level_gate GTest::gtest_main)
+gtest_discover_tests(test_level_gate)
+
 # ---------- test_gnss_time_sync ----------
 # lc86::GnssTimeSync, the MCU clock against GPS time from the receiver's
 # sentence stamps alone (no 1PPS on the Beetle M1; #1600): a simulated LC86G

@@ -40,7 +40,7 @@ RawGnssShadow::RawGnssShadow() : RawGnssShadow(Config()) {}
 
 RawGnssShadow::RawGnssShadow(const Config& cfg)
     : cfg_(cfg), ekf_(cfg.ekf), builder_(cfg.meas), survey_(cfg.survey), satcheck_(cfg.sat_check),
-      fixcheck_(cfg.fix_check)
+      fixcheck_(cfg.fix_check), level_gate_(cfg.level)
 {
 }
 
@@ -331,8 +331,22 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
     const int64_t c0 = now();
     ekf_.propagate(acc, gyro, static_cast<float>(span));
     t_prev_ = t;
+    // Where the flight filter levels: on the ground as it does; in flight
+    // (under a chute) only once steady and at g's size (LevelGate.h)
+    levelled_ = false;
     if (s.flags & kShadowLevel)
-        ekf_.updateAccelLevel(acc);
+    {
+        if (!(s.flags & kShadowInFlight) || level_gate_.allow(acc))
+        {
+            ekf_.updateAccelLevel(acc);
+            levelled_ = true;
+            st_.levels++;
+        }
+        else
+        {
+            st_.levels_held++;
+        }
+    }
     const int64_t c1 = now();
     const uint32_t step_us = static_cast<uint32_t>(c1 - c0);
     st_.step_us_sum += step_us;
@@ -403,6 +417,8 @@ void RawGnssShadow::start(double t)
     nfix_ = 0;
     satcheck_.reset();                    // a new filter: nothing to take differences from
     fixcheck_.reset();
+    level_gate_.reset();
+    levelled_ = false;
     prop_sum_ = 0;
     prop_n_ = 0;
     st_.starts++;
@@ -428,6 +444,7 @@ void RawGnssShadow::resync(double t)
         const float v[3] = {seed_.vel_ned[0], seed_.vel_ned[1], seed_.vel_ned[2]};
         ekf_.init(seed_.lla, v, seed_.quat, t);
         satcheck_.reset();
+        level_gate_.reset();
     }
     ekf_.setQuaternion(seed_.quat);
     ekf_.seedGyroBias(seed_.gyro_bias);
@@ -514,6 +531,7 @@ void RawGnssShadow::apply(const TimedRawEpoch& e, double age, double t, uint8_t 
     st_.last_meas = n;
     st_.last_tow_ms = static_cast<uint32_t>(std::llround(std::fmod(e.epoch.tow_s, 604800.0) * 1000.0));
     st_.epochs_applied++;
+    level_gate_.onEpoch(t, ekf_.velNed());
     if (rs.used_pr > 0)
         own_fix_ = true;
     if (rs.clock_jump_ms != 0 || rs.clock_step_m != 0.0 || rs.drift_step_mps != 0.0)
@@ -554,7 +572,7 @@ void RawGnssShadow::fillLog(uint32_t time_us, uint8_t imu_flags)
     d.eph_sats = u8(eph_sats_);
     d.flags = static_cast<uint8_t>(RGE_RUNNING | (ekf_.clockReady() ? RGE_CLOCK : 0)
                                    | (last_timed_ ? RGE_TIMED : 0)
-                                   | ((imu_flags & kShadowLevel) ? RGE_LEVEL : 0)
+                                   | (levelled_ ? RGE_LEVEL : 0)
                                    | ((imu_flags & kShadowInFlight) ? RGE_IN_FLIGHT : 0) | pend_flags_);
     pend_flags_ = 0;
     d.build_us = sat16(st_.build_us);

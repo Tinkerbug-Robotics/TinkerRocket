@@ -1553,7 +1553,7 @@ static constexpr uint8_t RGE_CLOCK      = 0x02;  // its receiver clock is set (a
 static constexpr uint8_t RGE_TIMED      = 0x04;  // raw epochs arrive placed on the MCU clock
 static constexpr uint8_t RGE_CLOCK_STEP = 0x08;  // the last epoch stepped the receiver clock
 static constexpr uint8_t RGE_STALE      = 0x10;  // an epoch was dropped as too late since the last record
-static constexpr uint8_t RGE_LEVEL      = 0x20;  // levelling against gravity (pad, descent)
+static constexpr uint8_t RGE_LEVEL      = 0x20;  // its last step levelled on the accelerometer (the ground; under a chute once steady)
 static constexpr uint8_t RGE_IN_FLIGHT  = 0x40;  // the flight filter's IMU says INFLIGHT
 static constexpr uint8_t RGE_RESYNC     = 0x80;  // the attitude was retaken from the flight filter (pad) since the last record
 

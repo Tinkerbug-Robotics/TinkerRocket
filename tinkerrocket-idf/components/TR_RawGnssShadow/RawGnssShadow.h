@@ -37,6 +37,11 @@
 // passed (FixCheck.h) and logged (GNSS_CHECK_MSG). That one only reports: the
 // flight filter takes every fix as before.
 //
+// Levelling. Where the flight filter takes its accelerometer as gravity (the
+// ground, and after apogee) the shadow does too -- in flight only once its
+// own velocity has held steady from epoch to epoch and the specific force is
+// g's size (LevelGate.h): as a drogue opens, the drag is far off vertical.
+//
 // Stopping. A sensor sim, a hole in the IMU longer than max_gap_s, a state
 // that is not finite, or (on the pad) one pad_reset_m from the flight
 // filter's stops it; it starts again from the next pad seed.
@@ -63,6 +68,7 @@
 
 #include "EphemerisStore.h"
 #include "FixCheck.h"
+#include "LevelGate.h"
 #include "PadSurvey.h"
 #include "RawMeas.h"
 #include "RawMeasBuilder.h"
@@ -96,6 +102,7 @@ public:
         SatJumpCheck::Config sat_check;
         FixCheck::Config fix_check;
         double   acc_window_s = 0.08;     // the IMU's acceleration at a fix: its mean over this long
+        LevelGate::Config level;          // when it levels in flight
     };
 
     // What takes the ionosphere out (the pad status message reports it).
@@ -147,6 +154,9 @@ public:
         uint32_t fixes = 0;                // receiver fixes seen
         uint32_t fixes_untimed = 0;        //   with no GPS instant on the MCU clock yet
         uint32_t fixes_dropped = 0;        //   more waiting than the queue holds
+        // levelling on the accelerometer, where the flight filter levels
+        uint32_t levels = 0;               // steps that levelled
+        uint32_t levels_held = 0;          //   in flight, held off: not steady, or not g's size
     };
 
     using Clock = int64_t (*)();
@@ -241,6 +251,8 @@ private:
     SatJumpCheck  satcheck_;
     bool          jumped_[RawEpoch::kMaxObs] = {};
     FixCheck      fixcheck_;
+    LevelGate     level_gate_;
+    bool          levelled_ = false;    // the last step levelled (RGE_LEVEL)
     static constexpr int kFixQ = 4;      // fixes waiting for the IMU to pass them (0.4 s at 10 Hz)
     TimedFix      fixq_[kFixQ] = {};
     int           nfix_ = 0;
