@@ -210,6 +210,17 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # Serial
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
+# Compiler optimization: -O2 (Performance), not IDF's -Og default.
+# The same line as flight_computer/sdkconfig.defaults, whose note has the FC
+# measurement and what else -O2 changes. On the Beetle's OC (M1, 240 MHz, on
+# the pad, the FC streaming 7,300 IMU samples/s, not logging) core 1 went from
+# 52 % busy to 43 % (oc_loop 27 -> 22.5 %, I2S Parse 24 -> 19 %), 2026-10-12:
+# more of the headroom #1485 raised the clock for. The images change by -0.5
+# to +2.3 % across the four boards; internal RAM use drops 4-8 KB.
+# TRAP: a build dir configured before this line keeps building -Og. Delete
+# build_<rev>/sdkconfig once (the TRAP note at the end of this file says why).
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
 
 # --- Boot NOR size (#851 item 3, corrected 2026-08-24) --------------------
 # The two ways of getting this wrong are not symmetric:

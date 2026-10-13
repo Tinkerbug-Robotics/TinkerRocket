@@ -52,6 +52,42 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # Serial
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
+# Compiler optimization: -O2 (Performance), not IDF's -Og default.
+# No project set a level before this line, so every image (local, CI and the
+# fw-v* releases) was compiled at CONFIG_COMPILER_OPTIMIZATION_DEBUG, -Og: the
+# level IDF defaults to so that a debugger can follow the source. Nobody chose
+# it. Measured on the Beetle's FC (M1, ESP32-S3 at 240 MHz) on the pad with a
+# GNSS fix and the IMU at 7,680 Hz, 2026-10-12, four to five minutes each:
+#
+#                            -Og        -O2
+#   EKF tick, mean           2,358 us   1,760 us    -25 %
+#   EKF tick, worst in 1 s   3,968 us   2,997 us    median over the run
+#   flight loop              293/s      342/s       EKF 147 -> 171 Hz
+#
+# IMU reads, I2S drops and gaps were the same. The loop is still far below the
+# 1,000/s it is written for (BARO_FUSE_MIN_INTERVAL_US's note quotes ~960 on
+# the P4, where -O2 is not measured yet). On the S3 that is a budget -O2 does
+# not close, but no reason to keep paying a quarter of the EKF's time for
+# nothing. The images grow 7-9 KB (1-2 %); internal RAM use drops 3-4 KB.
+#
+# What else changes with it:
+#  - Float a*b+c becomes one fused multiply-add (GCC's GNU-mode default,
+#    -ffp-contract=fast; -Og never formed them), so float results move in the
+#    last bit. Nothing compares firmware output with the host bit for bit, and
+#    the EKF re-symmetrizes P after every update.
+#  - Plain stores move across volatile ones. A ring that publishes its data
+#    through a volatile index needs a fence between the two (fcOtaRingPush,
+#    the OC's rxPush).
+#  - Backtraces and gdb show inlined frames and <optimized out> locals. To
+#    debug, set CONFIG_COMPILER_OPTIMIZATION_DEBUG=y in one build dir's
+#    sdkconfig rather than here. The bootloader keeps its own level (-Os).
+#
+# TRAP: IDF does not re-apply these defaults to a build dir's existing
+# sdkconfig (one per build dir, see the project CMakeLists), so a build dir
+# configured before this line keeps building -Og. Delete build_<rev>/sdkconfig
+# once.
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
 # --- ESP32-P4 / IDF version tuning (#88) ---------------------------------
 # ESP32-P4 silicon: our boards are v1.x. IDF 5.5+ raises the default min chip
 # rev to v3.x, which refuses to boot on v1.x. Accept the legacy series.
