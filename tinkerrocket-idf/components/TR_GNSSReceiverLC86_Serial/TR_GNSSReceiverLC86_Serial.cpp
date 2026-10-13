@@ -643,6 +643,22 @@ bool TR_GNSSReceiverLC86Serial::begin(uint8_t update_rate_hz_in,
     // anyway (V_BCKP rides the same rail). The navigation mode, fix rate and
     // sentence set all survive it (a cold start too, on the bench). One send,
     // no retries: a late ack must not turn into a second restart.
+#if defined(TR_GNSS_COLD_START) && TR_GNSS_COLD_START
+    // The rig replay (#1600, TR_Sensor_Collector_Sim/SimReplay.h): a cold
+    // start whatever is flowing -- time, position, almanac and ephemeris
+    // erased, the configuration kept, $PAIR432 applied -- so the receiver
+    // meets the rig's sky as a pad power-up does. An FC reboot with the rail
+    // held would otherwise leave it today's clock against the rig's date.
+    {
+        sendSentence("PAIR006");
+        uint8_t result = 0xFF;
+        if (awaitEvent(AwaitKind::PAIR_ACK, kAckTimeoutMs, 6, &result) && result == 0)
+            ESP_LOGW(TAG, "Cold start ($PAIR006) for the rig replay");
+        else
+            ESP_LOGW(TAG, "Cold start ($PAIR006) for the rig replay got result %u",
+                     (unsigned)result);
+    }
+#else
     if (msm_stream_ok_)
     {
         if (awaitEvent(AwaitKind::RTCM_FRAME, kMsmListenMs))
@@ -666,6 +682,7 @@ bool TR_GNSSReceiverLC86Serial::begin(uint8_t update_rate_hz_in,
             }
         }
     }
+#endif
 
     // Deliberately NO $PAIR513 / $PQTMSAVEPAR: config is reapplied on every
     // begin() — a rail cycle wipes the RTC-RAM config anyway (V_BCKP rides
@@ -938,8 +955,9 @@ void TR_GNSSReceiverLC86Serial::publishFix(int64_t end_us)
     const uint16_t week = parser_.pvtGpsWeek();
     if (week != 0)
     {
+        f.gps_s = week * 604800.0 + parser_.pvtTowMs() * 1.0e-3;
         int64_t mcu = 0;
-        if (time_sync_.mcuAt(week * 604800.0 + parser_.pvtTowMs() * 1.0e-3, mcu)) f.mcu_us = mcu;
+        if (time_sync_.mcuAt(f.gps_s, mcu)) f.mcu_us = mcu;
     }
     if (xQueueSend(fix_q_, &f, 0) != pdTRUE) fix_dropped_++;
 }

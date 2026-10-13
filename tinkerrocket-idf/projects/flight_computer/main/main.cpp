@@ -6146,6 +6146,16 @@ static void setup_fc()
         }
     }
 
+    // #1600 the rig replay (TR_SIM_REPLAY builds, SimReplay.h): the flight the
+    // build carries is the sensors' from here -- the pad until the receiver's
+    // fixes give the clock, then the flight at the receiver's GPS time while
+    // the COCOM rig plays the same flight's GNSS. It runs as a sim (the
+    // dry-fire gate holds; the log says sim) with the receiver's output passing
+    // through. Never over a restored flight; false in every other build.
+    if (rocket_state != INFLIGHT && sensor_collector.startReplay())
+        ESP_LOGW(TAG, "[SIM] RIG REPLAY build: the sensors are the carried flight's; "
+                      "the GNSS is the rig's");
+
     ESP_LOGI(TAG, "Setup complete");
     ESP_LOGI(TAG, "Setup complete…");
     // #1176: do NOT flash on a recovery boot. The restore block drives both
@@ -7266,8 +7276,11 @@ static void loop_fc()
                     }
                 }
                 // #1600 phase 5: the pad average (see "Pad calibration"), the
-                // same fixes until launch, never a sim's.
-                if (gnss_gate3_init && !sensor_collector.isSimActive() && !sim_flight_latched) {
+                // same fixes until launch, never a sim's -- but the rig
+                // replay's fixes are the receiver's own.
+                if (gnss_gate3_init &&
+                    (sensor_collector.isReplay() ||
+                     (!sensor_collector.isSimActive() && !sim_flight_latched))) {
                     padAverageAdd(ekf_gnss.lat_rad, ekf_gnss.lon_rad, ekf_gnss.alt_m, now_ms);
                 }
             }
@@ -7491,8 +7504,11 @@ static void loop_fc()
                 // #1600: the raw-GNSS shadow filter gets this very input, and
                 // once a second the flight filter's state (see its section).
                 // Not after a GNSS-absent init: there is no position to seed.
+                // A sim's IMU is not the sky's, so the shadow stops -- except
+                // the rig replay's, which flies the rig's flight.
                 rawShadowPushImu(ekf_imu, use_ahrs_acc, rocket_state == INFLIGHT,
-                                 sensor_collector.isSimActive() || sim_flight_latched);
+                                 (sensor_collector.isSimActive() || sim_flight_latched) &&
+                                     !sensor_collector.isReplay());
                 if (!gnss_absent_flight)
                     rawShadowPublishSeed(ekf_imu.time_us,
                                          rocket_state == READY || rocket_state == PRELAUNCH);
@@ -11440,6 +11456,24 @@ static void loop_fc()
                               (double)pressure_alt_rate_mps,
                               kinematics.launch_flag ? 1 : 0,
                               out_ready ? 1 : 0);
+                if (sensor_collector.isReplay())
+                {
+                    // #1600 the rig replay: where the flight is, and the
+                    // flight filter's answer (ENU from its pad), to set
+                    // beside the flight's truth at t
+                    SensorCollectorSim::ReplayStatus rs;
+                    sensor_collector.replayStatus(rs);
+                    ESP_LOGI(TAG, "[REPLAY] t=%+.2f%s phase=%u clock=%u fixes=%lu (last t=%+.2f, "
+                                  "outside=%lu, restarts=%lu) ekf=%d pos=(%.1f,%.1f,%.1f) "
+                                  "vel=(%.2f,%.2f,%.2f)",
+                             (double)rs.t_s, rs.have_t ? "" : "(pad, no clock)",
+                             (unsigned)rs.phase, (unsigned)rs.clock_state,
+                             (unsigned long)rs.fixes, (double)rs.last_fix_t_s,
+                             (unsigned long)rs.outside, (unsigned long)rs.restarts,
+                             ekf_initialized ? 1 : 0,
+                             (double)imu_pos[0], (double)imu_pos[1], (double)imu_pos[2],
+                             (double)imu_vel[0], (double)imu_vel[1], (double)imu_vel[2]);
+                }
             }
         }
 

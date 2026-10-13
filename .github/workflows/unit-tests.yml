@@ -24,6 +24,10 @@ on:
       # still sends enough bytes to force an identity verdict.
       - 'tools/ota_probe.py'
       - 'tinkerrocket-idf/components/TR_OTA/**'
+      # test_sim_replay_blob writes the rig replay's file with this tool and
+      # checks the C++ reader's fixture against it (#1600).
+      - 'tools/sim_replay_blob.py'
+      - 'tests_cpp/fixtures/sim_replay_tiny.bin'
       # test_loop_profile_summary renders a report with the printf formats in
       # loop_profile.h and parses it with tools/loop_profile_summary.py.
       - 'tools/loop_profile_summary.py'
@@ -43,6 +47,10 @@ on:
       - 'tinkerrocket-idf/components/TR_KinematicChecks/**'
       - 'tools/ota_probe.py'
       - 'tinkerrocket-idf/components/TR_OTA/**'
+      # test_sim_replay_blob writes the rig replay's file with this tool and
+      # checks the C++ reader's fixture against it (#1600).
+      - 'tools/sim_replay_blob.py'
+      - 'tests_cpp/fixtures/sim_replay_tiny.bin'
       - 'tools/loop_profile_summary.py'
       - 'tinkerrocket-idf/projects/flight_computer/main/loop_profile.h'
       - 'tinkerrocket-idf/projects/flight_computer/main/config.h'

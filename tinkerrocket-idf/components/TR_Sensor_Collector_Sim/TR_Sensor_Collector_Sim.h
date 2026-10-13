@@ -18,8 +18,10 @@
 
 #include <TR_Sensor_Collector.h>
 #include <RocketComputerTypes.h>
+#include "SimReplay.h"
 #include "SimSensorModel.h"
 #include "sim_landed_hold.h"
+#include <freertos/FreeRTOS.h>
 
 class SensorCollectorSim
 {
@@ -58,6 +60,10 @@ public:
     bool getGNSSGeoidSeparation(float& sep_m) const { return real_.getGNSSGeoidSeparation(sep_m); }
     // The receiver's fixes for the shadow's checks: dropped while a sim runs,
     // as the raw epochs are.
+    //
+    // The rig replay is the exception to all four rules above (startReplay):
+    // its sky is the flight's, so the receiver's output passes through, and
+    // each fix's GPS time sets the replay's clock.
     bool getGNSSFix(gnss_raw::TimedFix& out);
 
     // Debug passthrough
@@ -147,6 +153,31 @@ public:
     // guess was 9000 ms against a real requirement of >9000 ms, so the
     // transition missed by a margin of zero on every sim flight.
     void noteRocketState(uint8_t state) { fc_rocket_state_ = state; }
+
+    // The rig replay (SimReplay.h, #1600). A TR_SIM_REPLAY build carries a
+    // flight's IMU, barometer and attitude (tools/sim_replay_blob.py); this
+    // starts playing them in place of the real sensors' values: the pad until
+    // the receiver's fixes give the clock, then each sample at its own GPS
+    // time while the COCOM rig plays the same flight's GNSS signals. The
+    // receiver's output passes through, so the raw-GNSS shadow, its checks and
+    // the flight filter all see one flight. The sim is active from here (the
+    // dry-fire gate holds, the log says sim) and stays on the ground after
+    // the flight; a Stop ends it, and the physics sim cannot start over it.
+    // False in a build without a flight, or if the carried one does not load.
+    bool startReplay();
+    bool isReplay() const { return replay_on_; }
+
+    // For the console.
+    struct ReplayStatus
+    {
+        uint8_t  clock_state = 0;     // sim_replay::ReplayClock::State
+        float    t_s = 0.0f;          // the latest IMU sample's replay time, s from ignition
+        bool     have_t = false;      // false: before the clock (the pad, looped)
+        uint8_t  phase = 0;           // its phase (0 pad .. 6 landed)
+        uint32_t fixes = 0, outside = 0, restarts = 0;
+        float    last_fix_t_s = 0.0f; // the latest of the rig's fixes, s from ignition
+    };
+    void replayStatus(ReplayStatus& out) const;
 
 private:
     // ========================================================================
@@ -285,6 +316,31 @@ private:
     void encodeMMC5983MA(uint32_t time_us, MMC5983MAData& out);
     void encodeIIS2MDC(uint32_t time_us, IIS2MDCData& out);
     void encodeGNSS(uint32_t time_us, GNSSData& out);
+
+    // Rocket-frame values to each chip's raw counts (rocket -> board ->
+    // sensor): the step the physics sim and the replay share.
+    void packISM6(uint32_t time_us, float ax, float ay, float az,
+                  float gx_dps, float gy_dps, float gz_dps, ISM6HG256Data& out) const;
+    void packMMC5983MA(uint32_t time_us, float bx, float by, float bz, MMC5983MAData& out) const;
+    void packIIS2MDC(uint32_t time_us, float bx, float by, float bz, IIS2MDCData& out) const;
+
+    // ========================================================================
+    // The rig replay
+    // ========================================================================
+    sim_replay::SimReplay   replay_;
+    sim_replay::ReplayClock replay_clock_;   // under replay_mux_: fixes on the shadow's core, samples on the loop's
+    mutable portMUX_TYPE    replay_mux_ = portMUX_INITIALIZER_UNLOCKED;
+    bool  replay_on_ = false;
+    float replay_b_ned_[3] = {};             // the pad's field, uT: TR_GeoMag, as the flight computer models it
+    float replay_last_t_ = 0.0f;             // the latest IMU sample's (replayStatus)
+    bool  replay_last_have_t_ = false;
+    uint8_t replay_last_phase_ = 0;
+
+    // The flight at a sensor sample's instant (its 32-bit stamp, micros()).
+    void replaySampleAt(uint32_t time_us, sim_replay::Sample& s, bool is_imu);
+    // The field the magnetometer reads in that attitude, rocket frame, uT.
+    void replayField(const sim_replay::Sample& s, float b[3]) const;
+    void replayNoteFix(const gnss_raw::TimedFix& f);
 };
 
 #endif // SENSOR_COLLECTOR_SIM_H
