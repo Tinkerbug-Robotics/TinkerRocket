@@ -77,6 +77,24 @@ public:
     void setIono(const gps_iono_t& io) { iono_ = io; }
     const gps_iono_t& iono() const { return iono_; }
 
+    // The parameters from the 8 bytes GPS broadcasts them in (IS-GPS-200
+    // 20.3.3.5.1.7: alpha0..3 then beta0..3, two's complement, at 2^-30,
+    // 2^-27, 2^-24, 2^-24 s/semicircle^n and 2^11, 2^14, 2^16, 2^16 s/semicircle^n).
+    static gps_iono_t ionoFromBroadcast(const int8_t b[8])
+    {
+        static constexpr double kScale[8] = {
+            9.313225746154785e-10, 7.450580596923828e-09, 5.960464477539063e-08, 5.960464477539063e-08,
+            2048.0, 16384.0, 65536.0, 65536.0};
+        gps_iono_t io = {};
+        io.valid = 1;
+        for (int k = 0; k < 4; ++k)
+        {
+            io.alpha[k] = b[k] * kScale[k];
+            io.beta[k] = b[4 + k] * kScale[4 + k];
+        }
+        return io;
+    }
+
     // Forget every satellite's lock history.
     void reset();
 

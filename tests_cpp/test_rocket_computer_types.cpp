@@ -64,6 +64,24 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(offsetof(RawGnssEkfData, epoch_tow_ms), 72u);
     EXPECT_EQ(offsetof(RawGnssEkfData, flags), 83u);
     EXPECT_EQ(offsetof(RawGnssEkfData, prop_us), 88u);
+    // #1600 phase 5: the pad calibration's ionosphere (0x98) and its progress
+    // (0x99, relayed to the app behind 0xD0: both apps decode it by offset)
+    EXPECT_EQ(sizeof(PadCalConfigData), 10u);
+    EXPECT_EQ(offsetof(PadCalConfigData, iono_gps_day), 8u);
+    EXPECT_EQ(sizeof(PadCalStatusData), 40u);
+    EXPECT_EQ(offsetof(PadCalStatusData, cal_state), 4u);
+    EXPECT_EQ(offsetof(PadCalStatusData, cal_gravity_mg), 6u);
+    EXPECT_EQ(offsetof(PadCalStatusData, sats_tracked), 8u);
+    EXPECT_EQ(offsetof(PadCalStatusData, corr_rms_cm), 12u);
+    EXPECT_EQ(offsetof(PadCalStatusData, iono_source), 14u);
+    EXPECT_EQ(offsetof(PadCalStatusData, flags), 15u);
+    EXPECT_EQ(offsetof(PadCalStatusData, iono_gps_day), 16u);
+    EXPECT_EQ(offsetof(PadCalStatusData, iono_age_days), 18u);
+    EXPECT_EQ(offsetof(PadCalStatusData, pad_fixes), 20u);
+    EXPECT_EQ(offsetof(PadCalStatusData, pad_scatter_cm), 24u);
+    EXPECT_EQ(offsetof(PadCalStatusData, pad_lat_e7), 26u);
+    EXPECT_EQ(offsetof(PadCalStatusData, pad_alt_mm), 34u);
+    EXPECT_EQ(offsetof(PadCalStatusData, pos_sigma_cm), 38u);
     EXPECT_EQ(sizeof(FcBootStatusData), 4u); // FC->OC boot progress (0xFA)
     EXPECT_EQ(sizeof(i24le_t),         3u);
     EXPECT_EQ(sizeof(Vec3i16),         6u);
@@ -1824,6 +1842,10 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(GNSS_RTCM_MSG),
         // FC->OC the raw-GNSS shadow filter's state (#1600), log-only.
         MT(RAW_GNSS_EKF_MSG),
+        // #1600 phase 5: the pad calibration (BLE cmd 75) and its progress.
+        MT(PAD_CAL_PENDING),
+        MT(PAD_CAL_CONFIG_MSG),
+        MT(PAD_CAL_STATUS_MSG),
     };
 #undef MT
 
@@ -1862,7 +1884,9 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     // 98 = 97 + PYRO_FAULT_TRIP_MSG (0x94, #1553 fault-current trip record).
     // 99 = 98 + GNSS_RTCM_MSG (0x95, the LC86G's raw RTCM3 frames).
     // 100 = 99 + RAW_GNSS_EKF_MSG (0x96, the raw-GNSS shadow filter, #1600).
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 100u)
+    // 103 = 100 + the pad calibration's PAD_CAL_PENDING / PAD_CAL_CONFIG_MSG /
+    //       PAD_CAL_STATUS_MSG (0x97-0x99, #1600 phase 5).
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 103u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }

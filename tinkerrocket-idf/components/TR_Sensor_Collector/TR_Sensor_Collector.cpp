@@ -1422,6 +1422,17 @@ bool SensorCollector::getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len)
 #endif
 }
 
+bool SensorCollector::getGNSSGeoidSeparation(float& sep_m) const
+{
+#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.geoidSeparationM(sep_m);
+#else
+    (void)sep_m;
+    return false;
+#endif
+}
+
 void SensorCollector::getISM6HG256DebugSnapshot(ISM6HG256DebugSnapshot &snapshot_out) const
 {
     uint8_t i = 0;
@@ -1577,6 +1588,7 @@ SensorCalPoll SensorCollector::pollCalibration()
     // The poll task wrote cal_sums_ before stamping the seq and giving the
     // semaphore, and will not touch it again until the next request.
     SensorCalResult r;
+    cal_gravity_mag = 0.0f;   // this window's, once it has one
     if (!sensor_cal::compute(cal_sums_, cal_rotation_z_deg_,
                              ism6_low_g_fs_g_, ism6_high_g_fs_g_, r))
     {
@@ -1585,6 +1597,7 @@ SensorCalPoll SensorCollector::pollCalibration()
     }
     if (!sensor_cal::gravityPlausible(r.gravity_mag))
     {
+        cal_gravity_mag = r.gravity_mag;   // the pad calibration reports what failed
         ESP_LOGE(SC_TAG, "Calibration REJECTED: low-g gravity %.3f m/s² outside %.2f..%.2f "
                          "(%lu samples) — bus contention, full-scale mismatch, or the rocket "
                          "was moving; previous calibration kept",

@@ -244,6 +244,10 @@ public:
     bool enableGNSSRawOutputs();
     bool getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out);
     bool getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len);
+    // The geoid's height above the WGS84 ellipsoid at the last fix, m
+    // (GNSSData's alt is above the geoid). LC86G only; false elsewhere or
+    // before a fix.
+    bool getGNSSGeoidSeparation(float& sep_m) const;
     void getISM6HG256DebugSnapshot(ISM6HG256DebugSnapshot &snapshot_out) const;
     void getMMC5983MADebugSnapshot(MMC5983MADebugSnapshot &snapshot_out) const;
     void getPollTimingSnapshot(PollTimingSnapshot &snapshot_out) const;
@@ -269,6 +273,8 @@ public:
     SensorCalPoll pollCalibration();
     void          cancelCalibration();
     bool          calibrationInProgress() const { return cal_session_.waiting(); }
+    // The window's length, ms (the pad calibration's progress, #1600 phase 5).
+    static constexpr uint32_t calibrationWindowMs() { return CAL_WINDOW_US / 1000; }
     int16_t gyro_cal_x;
     int16_t gyro_cal_y;
     int16_t gyro_cal_z;
@@ -302,7 +308,8 @@ public:
 
     // Calibration results (populated by pollCalibration() on Committed)
     float hg_bias_x = 0.0f, hg_bias_y = 0.0f, hg_bias_z = 0.0f;  // m/s², body frame
-    float cal_gravity_mag = 0.0f;  // measured gravity magnitude from low-g (m/s²)
+    float cal_gravity_mag = 0.0f;  // the last window's gravity magnitude from low-g (m/s²), committed
+                                   // or rejected as implausible; 0 for a window with no samples
 
 private:
     static SensorCollector *ism6hg256_instance;

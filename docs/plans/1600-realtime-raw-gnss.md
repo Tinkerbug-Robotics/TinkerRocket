@@ -77,9 +77,10 @@ calibration**:
   with its date, so it works offline at the field) and sends them with a new start command: the 8
   bytes GPS broadcasts, and the date. Command 21 stays for older firmware.
 - **The flight computer** stores them in NVS, runs the existing gyro/accel window, and starts the
-  GNSS pad survey: the pad position from the existing launch-site average of the receiver's own fix;
-  per-satellite corrections against it (the backup ionosphere, kept fresh until liftoff); a check
-  that every tracked satellite has its ephemeris.
+  GNSS pad survey: the pad position from an average of the receiver's own fix; per-satellite
+  corrections against it (the backup ionosphere, kept fresh until liftoff); a check that every
+  tracked satellite has its ephemeris. (Phase 5 gave the survey an average of its own rather than
+  the flight filter's launch-site one: see below.)
 - **A new status message with progress** replaces the 12 s spinner: the gyro/accel result,
   satellites with ephemeris and with pad corrections, the ionosphere source and age, and the pad
   position's uncertainty.
@@ -97,6 +98,65 @@ calibration**:
 
 Later: a rig test that replays a flight's IMU while the rig plays its signals (the firmware sim drops
 raw GNSS today), then flight use.
+
+## Phase 5: pad calibration
+
+**Where the ionosphere comes from.** The app reads it from NOAA's CORS archive, which needs no
+login:
+- the file: `https://geodesy.noaa.gov/corsdata/rinex/YYYY/DDD/brdcDDD0.YYn.gz`, GPS RINEX 2;
+- its header carries `ION ALPHA` / `ION BETA`;
+- today's file is there from early in the UTC day and grows through it (33-70 KB).
+
+The merged multi-GNSS files (BKG's `BRDC00WRD`, both its stream and receiver versions) leave the
+ionosphere out of their headers, so they will not do. 2026-10-13's set was alpha 21, 0, -2, 0 and
+beta 60, -1, -4, 3, in broadcast units.
+
+**The command.** BLE 75 carries `[iono i8 x8][gps_day u16]`: the eight bytes as GPS broadcasts
+them, and the file's date as days since 1980-01-06 (0 when the app has none).
+- The out computer relays it as `PAD_CAL_PENDING` + `PadCalConfigData` (0x97 / 0x98).
+- The flight computer stores the set in NVS (`"gnss"`: `iono`, `ionoday`) and reloads it at boot.
+- It runs the gyro/accel window, as command 21 does; 21 stays for older apps.
+- It restarts the pad average.
+
+**Which ionosphere the filter uses.** The broadcast set, while it is no more than 30 days old by the
+receiver's date. Otherwise, or without one, the pad survey's corrections. The choice is made on the
+pad and kept through the flight.
+
+**The pad average.** The receiver's fixes from the pad calibration until launch, ellipsoidal (the
+receiver's altitude plus its geoid separation, `$PQTMPVT`'s `<Sep>`).
+
+It is not the flight filter's launch-site average. That one freezes two minutes after the first fix,
+wherever the rocket was then. Restarting it would move the flight filter's datum, and with it the
+main-deploy backstop's count of converged fixes.
+
+The shadow's seed altitude is ellipsoidal now too. The flight filter's is above the geoid, so in
+phase 4 the shadow's first raw epoch moved its altitude by the geoid separation (-33 m in New
+Jersey).
+
+**The pad survey (`PadSurvey`).** On each raw epoch on the pad:
+- each satellite's residual is its corrected pseudorange less its range from the pad (the filter's
+  own Sagnac model);
+- less each system's clock, a correction is that residual smoothed over 120 s;
+- the clock is the median over the satellites whose corrections are in use, so a satellite coming
+  or going does not move the others' corrections;
+- a satellite counts only once it has been locked 50 s (a relocked pseudorange starts biased), and
+  its correction is used once it has 30 s of residuals behind it;
+- a residual more than 30 m from its correction is refused.
+
+The corrections freeze at liftoff. As the backup ionosphere, each one comes out of its satellite's
+pseudorange. A satellite with none keeps the ionosphere, so its correlated sigma grows by 5 m times
+Klobuchar's obliquity factor; with no correction in use at all, nothing changes (as in phase 4).
+
+**The status (`PAD_CAL_STATUS_MSG`, 0x99, 40 B).** Sent once a second on the ground and at each
+change; the out computer relays it to the app as file_ops 0xD0. It carries:
+- the gyro/accel window's state, progress and measured gravity;
+- the satellites tracked, without an ephemeris, settling, and with a correction, and the
+  corrections' spread;
+- the ionosphere source, the broadcast set's date and age;
+- the pad average (fixes, span, scatter and position);
+- the filter's position sigma.
+
+The gyro/accel result itself still comes as the 0xCB frame when the window closes.
 
 ## Phase 3: the port against the prototype
 
