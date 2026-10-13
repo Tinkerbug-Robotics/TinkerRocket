@@ -3034,6 +3034,7 @@ static void rawShadowTask(void*)
     int64_t pad_t0 = win_t0;
     int64_t busy_us = 0;
     uint32_t imu0 = 0, steps0 = 0, recs = 0, rec_drops = 0;
+    int flag_prints = 0;
     uint64_t step_sum0 = 0;
     for (;;)
     {
@@ -3056,6 +3057,8 @@ static void rawShadowTask(void*)
         size_t len = 0;
         while (sensor_collector.getGNSSEphemeris(eph, sizeof(eph), len)) sh.onEphemeris(eph, len);
         while (sensor_collector.getGNSSRawEpoch(epoch)) sh.onEpoch(epoch);
+        gnss_raw::TimedFix fix;
+        while (sensor_collector.getGNSSFix(fix)) sh.onFix(fix);   // #1508: each fix against the IMU
         // A bounded batch: a filter that falls behind must still read its
         // seeds and epochs and say so, not spin here on a ring that refills.
         gnss_raw::ShadowImu imu;
@@ -3067,6 +3070,21 @@ static void rawShadowTask(void*)
             {
                 if (enqueueI2STx(RAW_GNSS_EKF_MSG, (const uint8_t*)&rec, sizeof(rec))) recs++;
                 else rec_drops++;
+            }
+        }
+        GnssCheckData chk;
+        while (sh.takeCheckLog(chk))
+        {
+            if (enqueueI2STx(GNSS_CHECK_MSG, (const uint8_t*)&chk, sizeof(chk))) recs++;
+            else rec_drops++;
+            // a flagged fix, on the console too (a few per report window)
+            if (chk.verdict == GCK_FLAGGED && flag_prints < 5)
+            {
+                flag_prints++;
+                ESP_LOGW(TAG, "[RAWGNSS] fix FLAGGED: %.1f m off (allowed %.1f), %.2f m/s off (allowed %.2f), "
+                              "%u ms from the last good fix",
+                         (double)chk.pos_err_m, (double)chk.pos_tol_m, (double)chk.vel_err_mps,
+                         (double)chk.vel_tol_mps, (unsigned)chk.span_ms);
             }
         }
         const int64_t a1 = esp_timer_get_time();
@@ -3164,8 +3182,26 @@ static void rawShadowTask(void*)
                 }
                 ESP_LOGI(TAG, "[RAWGNSS] pad corrections (sat, elevation, azimuth, C/N0, m):%s", line);
             }
+            {
+                // #1508: the receiver's fixes and each satellite against the IMU
+                const gnss_raw::FixCheck::Stats& fs = sh.fixCheck().stats();
+                const gnss_raw::FixCheck::Result& fl = sh.fixCheck().last();
+                ESP_LOGI(TAG, "[RAWGNSS] checks: fixes %lu: %lu passed, %lu flagged, %lu unjudged, %lu lapsed "
+                              "(no time %lu, dropped %lu) | last %s: %.1f m of %.1f, %.2f m/s of %.2f over %.2f s "
+                              "| satellites jumped %lu (last epoch %d of %d judged, worst %.1f m)",
+                         (unsigned long)fs.fixes, (unsigned long)fs.passed, (unsigned long)fs.flagged,
+                         (unsigned long)fs.unjudged, (unsigned long)fs.lapsed,
+                         (unsigned long)st.fixes_untimed, (unsigned long)st.fixes_dropped,
+                         fl.verdict == gnss_raw::FixCheck::kPass
+                             ? "passed" : (fl.verdict == gnss_raw::FixCheck::kFlagged ? "FLAGGED" : "unjudged"),
+                         (double)fl.pos_err_m, (double)fl.pos_tol_m, (double)fl.vel_err_mps,
+                         (double)fl.vel_tol_mps, (double)fl.span_s, (unsigned long)st.sats_jumped,
+                         st.last_sats_jumped, sh.satCheck().summary().judged,
+                         sh.satCheck().summary().worst_m);
+            }
             win_t0 = a1;
             busy_us = 0;
+            flag_prints = 0;
             imu0 = st.imu;
             steps0 = st.step_n;
             step_sum0 = st.step_us_sum;
@@ -3632,6 +3668,7 @@ static void publishPadCalStatus(uint32_t now_ms)
         }
         if (ps.running) d.pos_sigma_cm = u16((double)ps.pos_sigma_m * 100.0);
         if (ps.pad_mismatch) d.flags |= PCS_PAD_MISMATCH;
+        if (ps.fix_suspect) d.flags |= PCS_FIX_SUSPECT;
     }
 #endif
     double lla[3];

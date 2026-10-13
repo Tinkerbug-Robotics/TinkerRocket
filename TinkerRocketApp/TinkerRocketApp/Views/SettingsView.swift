@@ -798,10 +798,22 @@ struct SettingsView: View {
             Text("Solves for the rocket's static magnetic offset by tumbling. Saved to the active profile and re-applied on connect.")
                 .font(.caption).foregroundColor(.secondary)
 
-            // Gyro + accel: one-shot stationary cal.  OnPadCalibrationView
-            // renders as a matching list-row button when embedded=true.
-            OnPadCalibrationView(device: device, embedded: true)
-            Text("Solves for gyro bias and accelerometer offsets. Place the rocket on the pad and keep still; takes ~10 seconds.")
+            // Pad calibration (#1600 phase 5): the gyro/accel window plus the
+            // GNSS pad survey and the broadcast ionosphere. A screen of its
+            // own because the rocket reports progress once a second; it opens
+            // without a rocket too, to show the ionosphere the phone holds.
+            NavigationLink {
+                PadCalibrationView(device: device)
+            } label: {
+                HStack {
+                    Label("Pad Calibration", systemImage: "gyroscope")
+                    Spacer()
+                    if let s = device.padCalStatus, s.state == .running {
+                        Text("\(s.calProgress)%").foregroundColor(.secondary)
+                    }
+                }
+            }
+            Text("Place the rocket on its pad and keep it still. The gyro & accel calibration takes about 10 s; the GNSS survey keeps going until launch.")
                 .font(.caption).foregroundColor(.secondary)
 
             if !canCalibrate {

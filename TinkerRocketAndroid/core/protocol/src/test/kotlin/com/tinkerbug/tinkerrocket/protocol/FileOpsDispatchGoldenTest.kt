@@ -72,6 +72,13 @@ class FileOpsDispatchGoldenTest {
                     assertEquals(side["total_bytes"]!!.jsonPrimitive.long, m.stats.totalBytes, rel)
                     assertEquals(side["backend"]!!.jsonPrimitive.int, m.stats.backend, rel)
                 }
+                f.name.startsWith("padcal_") -> {
+                    val m = assertIs<FileOpsMessage.PadCal>(msg, rel)
+                    assertEquals(side["cal_state"]!!.jsonPrimitive.int, m.status.calState.raw, rel)
+                    assertEquals(side["flags"]!!.jsonPrimitive.int, m.status.flags, rel)
+                    assertEquals(side["pad_lat_e7"]!!.jsonPrimitive.int, m.status.padLatE7, rel)
+                    assertEquals(side["pos_sigma_cm"]!!.jsonPrimitive.int, m.status.posSigmaCm, rel)
+                }
                 else -> throw AssertionError("unmapped fixture $rel — extend this walk")
             }
         }
@@ -143,6 +150,18 @@ class FileOpsDispatchGoldenTest {
         assertIs<FileOpsMessage.BsStorage>(
             FileOpsDispatch.parse(ByteArray(27) { if (it == 0) 0xCD.toByte() else 0 }),
         )
+    }
+
+    @Test
+    fun `pad cal status needs the whole 41-byte frame`() {
+        // [0xD0][PadCalStatusData 40 B].  One byte short is dropped like the
+        // other malformed binaries — and never reaches the file-list parser,
+        // where an unknown first byte used to go.
+        assertNull(FileOpsDispatch.parse(ByteArray(40) { if (it == 0) 0xD0.toByte() else 0 }))
+        val m = assertIs<FileOpsMessage.PadCal>(
+            FileOpsDispatch.parse(ByteArray(41) { if (it == 0) 0xD0.toByte() else 0 }),
+        )
+        assertEquals(PadCalState.IDLE, m.status.calState)
     }
 
     @Test

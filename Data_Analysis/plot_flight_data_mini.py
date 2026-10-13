@@ -157,6 +157,7 @@ MSG_GNSS_RTCM         = 0x95  # GnssRtcmHeader + a raw RTCM3 frame (or one part 
                               # variable length 5 + up to 219 (LC86G MSM7)
 MSG_RAW_GNSS_EKF      = 0x96  # RawGnssEkfData: the raw-GNSS shadow filter, 10 Hz (#1600)
 MSG_PAD_CAL_STATUS    = 0x99  # PadCalStatusData: the pad calibration's progress, 1 Hz on the ground (#1600 phase 5)
+MSG_GNSS_CHECK        = 0x9A  # GnssCheckData: each receiver fix against the IMU, 10 Hz (#1508)
 MSG_ISM6HG256         = 0xA2
 MSG_BMP585            = 0xA3
 MSG_MMC5983MA         = 0xA4
@@ -198,6 +199,7 @@ MSG_NAMES = {
     MSG_GNSS_RTCM:        "GNSS_RTCM",
     MSG_RAW_GNSS_EKF:     "RawGnssEkf",
     MSG_PAD_CAL_STATUS:   "PadCalStatus",
+    MSG_GNSS_CHECK:       "GnssCheck",
     MSG_ISM6HG256:        "ISM6HG256",
     MSG_BMP585:           "BMP585",
     MSG_MMC5983MA:        "MMC5983MA",
@@ -225,6 +227,7 @@ MSG_EXPECTED_LEN = {
     MSG_GNSS_RTCM:         None,  # 5 + 1..219; checked in decode_gnss_rtcm
     MSG_RAW_GNSS_EKF:      90,    # sizeof(RawGnssEkfData)
     MSG_PAD_CAL_STATUS:    40,    # sizeof(PadCalStatusData)
+    MSG_GNSS_CHECK:        24,    # sizeof(GnssCheckData)
     MSG_ISM6HG256:         22,
     MSG_BMP585:            12,
     MSG_MMC5983MA:         16,
@@ -456,7 +459,8 @@ SIZE_OF_PAD_CAL_STATUS = struct.calcsize(FMT_PAD_CAL_STATUS)  # 40
 PAD_CAL_STATES = {0: "idle", 1: "running", 2: "done", 3: "rejected", 4: "refused"}
 PAD_IONO_SOURCES = {0: "none", 1: "broadcast", 2: "pad survey"}
 PAD_CAL_FLAGS = {"raw_gnss": 0x01, "filter_running": 0x02, "iono_age_known": 0x04,
-                 "pad_valid": 0x08, "pad_frozen": 0x10, "pad_mismatch": 0x20}
+                 "pad_valid": 0x08, "pad_frozen": 0x10, "pad_mismatch": 0x20,
+                 "fix_suspect": 0x40}
 
 
 def decode_pad_cal_status(payload):
@@ -489,6 +493,34 @@ def decode_pad_cal_status(payload):
     for name, bit in PAD_CAL_FLAGS.items():
         rec[name] = bool(f[10] & bit)
     return rec
+
+
+# GnssCheckData (GNSS_CHECK_MSG 0x9A), 24 bytes packed (#1508): each receiver
+# fix the raw-GNSS shadow judged against the IMU -- from the last fix that
+# passed, the IMU's own motion predicts this one; flagged when it is further
+# off than its tolerance (the fixes' noise and timing, the IMU's error growing
+# with the span). Also: satellites the last raw epoch took as having jumped.
+# time_us is the fix's GPS instant on the MCU clock. Report-only on the FC.
+FMT_GNSS_CHECK = '<I BBH ffff'
+SIZE_OF_GNSS_CHECK = struct.calcsize(FMT_GNSS_CHECK)  # 24
+GNSS_CHECK_VERDICTS = {0: "unjudged", 1: "pass", 2: "flagged"}
+
+
+def decode_gnss_check(payload):
+    """GnssCheckData payload -> record dict, or None if the size is wrong."""
+    if len(payload) != SIZE_OF_GNSS_CHECK:
+        return None
+    f = struct.unpack(FMT_GNSS_CHECK, payload)
+    return {
+        "time_us":     f[0],
+        "verdict":     GNSS_CHECK_VERDICTS.get(f[1], str(f[1])),
+        "sats_jumped": f[2],
+        "span_s":      f[3] * 1e-3,
+        "pos_err_m":   f[4],
+        "pos_tol_m":   f[5],
+        "vel_err_mps": f[6],
+        "vel_tol_mps": f[7],
+    }
 
 
 # PyroFaultTripData (PYRO_FAULT_TRIP_MSG 0x94), 13 bytes packed (#1553): time_us
@@ -790,6 +822,7 @@ def parse_binary_file(filepath):
         "GNSS_RTCM":      [],   # 0x95 raw RTCM3 frame parts; join_gnss_rtcm() reassembles
         "RawGnssEkf":     [],   # 0x96 the raw-GNSS shadow filter, 10 Hz (#1600)
         "PadCalStatus":   [],   # 0x99 the pad calibration's progress, 1 Hz on the ground (#1600 phase 5)
+        "GnssCheck":      [],   # 0x9A each receiver fix against the IMU, 10 Hz (#1508)
         "FcStatus":       [],   # 0x92 FcStatusData (#1154 item 4) — appended below; was never initialised
         "ISM6HG256":      [],
         "BMP585":         [],
@@ -999,6 +1032,11 @@ def parse_binary_file(filepath):
                 rec = decode_pad_cal_status(payload)
                 if rec is not None:
                     records["PadCalStatus"].append(rec)
+
+            elif msg_type == MSG_GNSS_CHECK:
+                rec = decode_gnss_check(payload)
+                if rec is not None:
+                    records["GnssCheck"].append(rec)
 
             elif msg_type == MSG_ISM6HG256:
                 fields = struct.unpack(FMT_ISM6, payload)

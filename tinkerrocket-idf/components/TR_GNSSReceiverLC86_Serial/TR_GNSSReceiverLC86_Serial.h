@@ -109,8 +109,13 @@ class TR_GNSSReceiverLC86Serial
         bool enableRawOutputs();
         bool takeRawEpoch(gnss_raw::TimedRawEpoch& out);
         bool takeEphemeris(uint8_t* out, size_t cap, size_t& len);
+        // takeFix: each $PQTMPVT as a fix with its GPS instant on the MCU
+        // clock and its height above the ellipsoid, for the shadow's check of
+        // the fix against the IMU (#1508). Same queue rules as above.
+        bool takeFix(gnss_raw::TimedFix& out);
         uint32_t rawEpochsDropped() const { return raw_dropped_; }
         uint32_t ephemerisDropped() const { return eph_dropped_; }
+        uint32_t fixesDropped() const { return fix_dropped_; }
         // The geoid's height above the ellipsoid at the last fix
         // (Lc86Parser::geoidSepM), m: GNSSData's alt is above the geoid.
         // False before a fix. Safe from any task.
@@ -184,6 +189,7 @@ class TR_GNSSReceiverLC86Serial
         // last MSM_EPOCH event, the ephemeris behind its last RTCM event.
         void publishRawEpoch(int64_t end_us);
         void publishEphemeris();
+        void publishFix(int64_t end_us);
 
         lc86::Lc86Parser parser_;
 
@@ -234,6 +240,8 @@ class TR_GNSSReceiverLC86Serial
         };
         QueueHandle_t raw_epoch_q_ = nullptr;
         QueueHandle_t eph_q_ = nullptr;
+        QueueHandle_t fix_q_ = nullptr;
+        uint32_t fix_dropped_ = 0;
         gnss_raw::TimedRawEpoch raw_scratch_ = {};
         uint32_t raw_dropped_ = 0;
         std::atomic<float> geoid_sep_m_{0.0f};

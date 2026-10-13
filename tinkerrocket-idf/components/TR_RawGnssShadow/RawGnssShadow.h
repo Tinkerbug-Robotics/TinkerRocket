@@ -29,6 +29,14 @@
 // hundreds of metres out). The choice is made on the pad and kept through the
 // flight; the survey runs either way, and starts over when the choice changes.
 //
+// Physics checks (#1508). Each raw epoch, every satellite's pseudorange is
+// set against the IMU's propagation since the last one (SatJumpCheck.h): one
+// that jumped is taken as relocked, and the filter de-weights it until it
+// settles. Each of the receiver's own fixes, held until the IMU passes its
+// GPS instant, is set against what the IMU predicts from the last fix that
+// passed (FixCheck.h) and logged (GNSS_CHECK_MSG). That one only reports: the
+// flight filter takes every fix as before.
+//
 // Stopping. A sensor sim, a hole in the IMU longer than max_gap_s, a state
 // that is not finite, or (on the pad) one pad_reset_m from the flight
 // filter's stops it; it starts again from the next pad seed.
@@ -54,9 +62,11 @@
 #include <RocketComputerTypes.h>
 
 #include "EphemerisStore.h"
+#include "FixCheck.h"
 #include "PadSurvey.h"
 #include "RawMeas.h"
 #include "RawMeasBuilder.h"
+#include "SatJumpCheck.h"
 #include "ShadowLink.h"
 #include "TR_RawGnssEKF.h"
 
@@ -83,6 +93,9 @@ public:
         uint16_t default_week    = 2440;  // until an epoch names the GPS week (2026-10)
         int      iono_max_age_days = 30;  // broadcast parameters older than this give way to the pad survey
         PadSurvey::Config survey;
+        SatJumpCheck::Config sat_check;
+        FixCheck::Config fix_check;
+        double   acc_window_s = 0.08;     // the IMU's acceleration at a fix: its mean over this long
     };
 
     // What takes the ionosphere out (the pad status message reports it).
@@ -128,6 +141,12 @@ public:
         int      tracked_no_eph = 0;
         uint32_t survey_epochs = 0;        // epochs the pad survey took
         uint32_t iono_sets = 0;            // setIono calls
+        // the physics checks
+        int      last_sats_jumped = 0;     // the last epoch's satellites taken as jumped
+        uint32_t sats_jumped = 0;          //   all of them
+        uint32_t fixes = 0;                // receiver fixes seen
+        uint32_t fixes_untimed = 0;        //   with no GPS instant on the MCU clock yet
+        uint32_t fixes_dropped = 0;        //   more waiting than the queue holds
     };
 
     using Clock = int64_t (*)();
@@ -144,12 +163,16 @@ public:
     void onEphemeris(const uint8_t* payload, size_t len);
     // The broadcast ionosphere a pad calibration brought (or NVS kept).
     void setIono(const ShadowIono& io);
+    // One of the receiver's own fixes (FixCheck).
+    void onFix(const TimedFix& f);
     void onEpoch(const TimedRawEpoch& e);
     // One flight-filter IMU tick; time64_us is its time widened to 64 bits
     // (unwrap32 against the clock it was stamped with).
     void onImu(const ShadowImu& s, int64_t time64_us);
     // A RAW_GNSS_EKF_MSG record, every log_period_s of IMU time while it runs.
     bool takeLog(RawGnssEkfData& out);
+    // A GNSS_CHECK_MSG record, one per receiver fix judged.
+    bool takeCheckLog(GnssCheckData& out);
 
     bool running() const { return running_; }
     const Stats& stats() const { return st_; }
@@ -158,6 +181,8 @@ public:
     int ephemerisSatellites() const { return eph_sats_; }
     const PadSurvey& survey() const { return survey_; }
     const RawMeasBuilder& builder() const { return builder_; }
+    const FixCheck& fixCheck() const { return fixcheck_; }
+    const SatJumpCheck& satCheck() const { return satcheck_; }
     // The last epoch's measurements as the filter took them (pad corrections
     // applied when they were in use), n of them: the console's per-satellite line.
     const RawMeas* lastMeasurements(int& n) const { n = st_.last_meas; return meas_; }
@@ -183,6 +208,8 @@ private:
     void resync(double t);
     void applyDueEpochs(double t, uint8_t imu_flags);
     void apply(const TimedRawEpoch& e, double age, double t, uint8_t imu_flags);
+    void applyDueFixes(double t);
+    void judge(const TimedFix& f, double t_fix);
     void chooseIono(bool in_flight);
     void dropFront();
     void fillLog(uint32_t time_us, uint8_t imu_flags);
@@ -211,6 +238,14 @@ private:
     int           eph_sats_ = 0;
     PadSurvey     survey_;
     double        lock_age_[RawEpoch::kMaxObs] = {};
+    SatJumpCheck  satcheck_;
+    bool          jumped_[RawEpoch::kMaxObs] = {};
+    FixCheck      fixcheck_;
+    static constexpr int kFixQ = 4;      // fixes waiting for the IMU to pass them (0.4 s at 10 Hz)
+    TimedFix      fixq_[kFixQ] = {};
+    int           nfix_ = 0;
+    GnssCheckData chk_[kFixQ] = {};      // check records waiting to be taken
+    int           nchk_ = 0;
     ShadowIono    iono_in_ = {};
     bool          have_iono_ = false;
     bool          iono_dirty_ = true;   // the builder's model is to be chosen again

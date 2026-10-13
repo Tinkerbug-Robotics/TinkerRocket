@@ -112,6 +112,11 @@ public:
     // Seconds since the satellite last (re)appeared, at GPS time of week tow.
     double relockAge(int sys, int prn, double tow) const;
 
+    // Take the satellite as relocked at tow, as if it had just reappeared: its
+    // pseudoranges from then on carry the relock sigma (a jump the shadow's
+    // SatJumpCheck saw, #1508).
+    void markRelock(int sys, int prn, double tow);
+
 private:
     static constexpr int kSys = 3;
     static constexpr int kPrn = 64;

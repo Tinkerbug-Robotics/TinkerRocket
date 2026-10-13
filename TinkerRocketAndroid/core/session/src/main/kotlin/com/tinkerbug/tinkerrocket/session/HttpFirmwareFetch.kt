@@ -2,6 +2,7 @@ package com.tinkerbug.tinkerrocket.session
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URI
 import java.security.MessageDigest
@@ -39,7 +40,9 @@ public object HttpFirmwareFetch {
                 if (conn.responseCode !in 200..299) {
                     null
                 } else {
-                    conn.inputStream.use { it.readNBytes(MAX_BODY_BYTES) }
+                    val out = ByteArrayOutputStream()
+                    conn.inputStream.use { copyCapped(it, out, MAX_BODY_BYTES) }
+                    out.toByteArray()
                 }
             } catch (_: Exception) {
                 // Every transport failure is the same answer to the caller:

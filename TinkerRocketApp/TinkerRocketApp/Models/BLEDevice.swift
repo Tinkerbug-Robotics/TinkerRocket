@@ -103,6 +103,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// the file_ops characteristic behind a 0xCB discriminator (#132).
     @Published var sensorCalStatus: SensorCalStatus?
 
+    /// Latest pad-calibration status from the FC (#1600 phase 5): file_ops
+    /// behind 0xD0, once a second while the rocket is on the ground and at
+    /// each change. nil until the first frame, so non-nil also says this
+    /// rocket's firmware knows command 75. Reset on disconnect.
+    @Published private(set) var padCalStatus: PadCalStatus?
+
     /// Latest flash-space stats: rocketStorage on a direct rocket link (0xCC),
     /// bsStorage on a base-station link (0xCD). Each is shown by its own bar.
     @Published var rocketStorage: RocketStorageStats?
@@ -391,6 +397,11 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         // republishes IDLE on reconnect anyway.
         magCalStatus = nil
         sensorCalStatus = nil
+        // #1600 phase 5: "has this rocket sent 0xD0 since it connected" is
+        // what the command-21 fallback asks, so the answer is per connection;
+        // the generation bump disarms a fallback armed before the drop.
+        padCalStatus = nil
+        padCalGeneration += 1
         pyroTestRefusal = nil
         // #435: the guidance-target echo is per-connection live state; the
         // OC re-pushes it in the connect-time config readback, so a stale
@@ -1431,6 +1442,45 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// `sensorCalStatus` (valid=false when the rocket has none).
     func sendSensorCalRead() { sendCommand(63) }
 
+    // MARK: - Pad calibration (#1600 phase 5)
+
+    /// How long a rocket that has sent no 0xD0 frame since it connected gets
+    /// to send one after command 75 before it is taken for older firmware.
+    /// Current firmware sends one a second on the ground, and one at once for
+    /// a start.
+    static let padCalLegacyFallbackDelay: TimeInterval = 3.0
+
+    /// Which start an armed fallback belongs to; bumped by every start and by
+    /// a disconnect, so a stale timer cannot send command 21.
+    private var padCalGeneration = 0
+
+    /// Start a pad calibration: command 75 with the broadcast ionosphere, or
+    /// with ten zero bytes when the phone has none (the rocket then keeps any
+    /// set it stored before). The FC runs the gyro/accel window command 21
+    /// runs, stores the ionosphere and restarts its GNSS pad survey.
+    ///
+    /// Firmware from before phase 5 drops 75 and never sends 0xD0. So unless
+    /// this rocket has sent a 0xD0 frame since it connected, it gets
+    /// `legacyAfter` seconds to send one; if none comes, command 21 goes out
+    /// in 75's place and `onLegacy` runs the old flow. A slow rocket that
+    /// turns out to be current runs the window once: the FC ignores 21 while
+    /// 75's window is open.
+    func startPadCalibration(_ iono: Klobuchar?,
+                             legacyAfter: TimeInterval = BLEDevice.padCalLegacyFallbackDelay,
+                             onLegacy: @escaping () -> Void = {}) {
+        sendRawCommand(75, payload: iono?.payload() ?? Data(count: Klobuchar.payloadLength))
+        padCalGeneration += 1
+        guard padCalStatus == nil else { return }
+        let gen = padCalGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + legacyAfter) { [weak self] in
+            guard let self, self.padCalGeneration == gen, self.isConnected,
+                  self.padCalStatus == nil else { return }
+            print("[PADCAL] no 0xD0 within \(legacyAfter) s of command 75: older firmware, sending 21")
+            self.sendCommand(21)
+            onLegacy()
+        }
+    }
+
     func sendToggleLogging() {
         sendCommand(23)
     }
@@ -2196,29 +2246,34 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         if characteristic.uuid == telemetryCharUUID {
             parseTelemetryData(characteristic.value)
         } else if characteristic.uuid == fileOpsCharUUID {
-            if let data = characteristic.value {
-                // Multiple binary frame kinds + JSON share this characteristic;
-                // disambiguate by the first byte.  JSON always starts with '{'
-                // or '[' so the binary discriminators (0xAA scan, 0xCA mag-cal)
-                // can never collide with it.
-                switch data.first {
-                case 0xAA: parseScanResult(data)
-                case 0xCA: parseMagCalStatus(data)     // issue #96
-                case 0xCB: parseSensorCalStatus(data)  // issue #132
-                case 0xCC: parseRocketStorageStats(data)
-                case 0xCD: parseBaseStationStorageStats(data)
-                case 0xCE: parsePyroTestRefusal(data)  // rail-off pyro refusal
-                case 0x7B:                              // '{' → JSON object
-                    if let s = OTAStatusUpdate.parse(data) {
-                        otaStatus = s
-                    } else {
-                        parseFileList(data)
-                    }
-                default:   parseFileList(data)         // '[' or anything else (file list arrays)
-                }
-            }
+            if let data = characteristic.value { handleFileOpsFrame(data) }
         } else if characteristic.uuid == fileTransferCharUUID {
             if let data = characteristic.value { handleFileChunk(data) }
+        }
+    }
+
+    /// One file_ops notification. Its own method so tests can feed frames
+    /// without a CBCharacteristic.
+    func handleFileOpsFrame(_ data: Data) {
+        // Multiple binary frame kinds + JSON share this characteristic;
+        // disambiguate by the first byte.  JSON always starts with '{'
+        // or '[' so the binary discriminators (0xAA scan, 0xCA mag-cal)
+        // can never collide with it.
+        switch data.first {
+        case 0xAA: parseScanResult(data)
+        case 0xCA: parseMagCalStatus(data)     // issue #96
+        case 0xCB: parseSensorCalStatus(data)  // issue #132
+        case 0xCC: parseRocketStorageStats(data)
+        case 0xCD: parseBaseStationStorageStats(data)
+        case 0xCE: parsePyroTestRefusal(data)  // rail-off pyro refusal
+        case 0xD0: parsePadCalStatus(data)     // pad calibration, #1600 phase 5
+        case 0x7B:                              // '{' → JSON object
+            if let s = OTAStatusUpdate.parse(data) {
+                otaStatus = s
+            } else {
+                parseFileList(data)
+            }
+        default:   parseFileList(data)         // '[' or anything else (file list arrays)
         }
     }
 
@@ -2684,6 +2739,19 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             return
         }
         sensorCalStatus = status
+    }
+
+    /// 0xD0 — pad calibration status (#1600 phase 5): [0xD0][40-byte
+    /// PadCalStatusData]. A short frame is dropped whole: every field matters
+    /// to someone deciding whether the rocket is ready.
+    private func parsePadCalStatus(_ data: Data) {
+        let bytes = [UInt8](data)
+        guard bytes.count >= 1 + PadCalStatus.payloadLength, bytes[0] == 0xD0,
+              let status = PadCalStatus.decode(Array(bytes[1...])) else {
+            print("[PADCAL] malformed status (\(bytes.count) bytes)")
+            return
+        }
+        padCalStatus = status
     }
 
     /// 0xCE — rail-off pyro-test refusal (OC sendPyroTestRefusal).

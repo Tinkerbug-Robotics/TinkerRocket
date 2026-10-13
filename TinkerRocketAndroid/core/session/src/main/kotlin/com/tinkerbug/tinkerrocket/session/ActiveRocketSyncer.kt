@@ -2,13 +2,17 @@ package com.tinkerbug.tinkerrocket.session
 
 import com.tinkerbug.tinkerrocket.protocol.BleCommandId
 import com.tinkerbug.tinkerrocket.protocol.Commands
+import com.tinkerbug.tinkerrocket.protocol.Klobuchar
 import com.tinkerbug.tinkerrocket.protocol.PyroChannelConfig
 import com.tinkerbug.tinkerrocket.protocol.RollWaypoint
 import com.tinkerbug.tinkerrocket.protocol.MagCalSubType
 import com.tinkerbug.tinkerrocket.protocol.RocketConfig
 import com.tinkerbug.tinkerrocket.protocol.SensorCalStatus
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -741,7 +745,8 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
      * waits for the SENSOR_CAL_STATUS frame that every outcome on the FC ends
      * with (committed, rejected, refused and cancelled all reach
      * publishSensorCalFromNVS), so it finishes when the rocket does and can
-     * tell a refusal from a run.
+     * tell a refusal from a run.  Since #1600 phase 5 it is
+     * [runPadCalibration]'s fallback for firmware that predates command 75.
      *
      * The subscription is open before the command is written: a refusal comes
      * straight back and must not slip past.  Any connect-time READ still
@@ -762,6 +767,63 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         return SensorCalRun.Answered(frame, now - started, saved = snapshotSensorCal(frame, now))
     }
 
+    /** What came of a pad calibration started by [runPadCalibration]. */
+    public data class PadCalRun(
+        /** The gyro/accel half: the 0xCB answer, read as [runOnPadSensorCal] reads it. */
+        val sensorCal: SensorCalRun,
+        /**
+         * The rocket predates pad calibration: no 0xD0 frame came within
+         * [PAD_CAL_PROBE_MS] of command 75, so command 21 ran the gyro/accel
+         * window alone and [sensorCal] is [runOnPadSensorCal]'s own answer.
+         */
+        val legacy: Boolean,
+    )
+
+    /**
+     * #1600 phase 5: the pad calibration.  Command 75 carries the broadcast
+     * ionosphere [iono] (null: none, and the rocket keeps the set it stored);
+     * the flight computer runs command 21's gyro/accel window, which still
+     * ends in the 0xCB frame, snapshotted into the active profile exactly as
+     * [runOnPadSensorCal] does.  Everything else — the window's progress and
+     * verdict, the GNSS survey — comes in the 0xD0 frames, which the screen
+     * reads from [DeviceSession.padCalStatus].
+     *
+     * Firmware that predates it ignores 75.  A rocket that has sent a 0xD0
+     * frame since it connected has the new firmware; one that has not gets
+     * [PAD_CAL_PROBE_MS] after 75 to send one, and without it this sends
+     * command 21 and runs the legacy flow, unchanged.
+     */
+    public suspend fun runPadCalibration(iono: Klobuchar?, clockMs: () -> Long): PadCalRun {
+        val s = session ?: return PadCalRun(SensorCalRun.NotConnected, legacy = false)
+        sensorCalReadPending = false
+        val started = clockMs()
+        return coroutineScope {
+            // Subscribed before 75 goes out, as runOnPadSensorCal's is: a
+            // refusal comes straight back.  UNDISPATCHED so the write has
+            // been queued by the time the probe below starts its clock.
+            val answer = async(start = CoroutineStart.UNDISPATCHED) {
+                withTimeoutOrNull(SENSOR_CAL_RUN_TIMEOUT_MS) {
+                    s.sensorCalFrames
+                        .onSubscription { s.sendCommandFrame(Commands.padCalibration(iono)) }
+                        .first()
+                }
+            }
+            val speaksPadCal = s.padCalStatus.value != null ||
+                withTimeoutOrNull(PAD_CAL_PROBE_MS) { s.padCalStatus.filterNotNull().first() } != null
+            if (!speaksPadCal) {
+                answer.cancel()
+                return@coroutineScope PadCalRun(runOnPadSensorCal(clockMs), legacy = true)
+            }
+            val frame = answer.await()
+                ?: return@coroutineScope PadCalRun(SensorCalRun.NoAnswer, legacy = false)
+            val now = clockMs()
+            PadCalRun(
+                SensorCalRun.Answered(frame, now - started, saved = snapshotSensorCal(frame, now)),
+                legacy = false,
+            )
+        }
+    }
+
     public companion object {
         public const val SYNCED_DELAY_MS: Long = 800
 
@@ -777,6 +839,15 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
          * the stored calibration re-published on a refusal.
          */
         public const val SENSOR_CAL_WINDOW_MIN_MS: Long = 3_000
+
+        /**
+         * #1600 phase 5: how long a rocket that has sent no 0xD0 frame since
+         * it connected gets to send one after command 75, before the app takes
+         * it for older firmware and sends 21.  The flight computer answers 75
+         * with a 0xD0 frame at once (a state change), and sends one a second
+         * on the ground besides.
+         */
+        public const val PAD_CAL_PROBE_MS: Long = 3_000
 
         // Group labels for the "what the rocket disagreed about" line.  Groups,
         // not fields: "PID gains" reads better on a phone than five numbers,

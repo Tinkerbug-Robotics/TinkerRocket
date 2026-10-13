@@ -18,6 +18,7 @@ import com.tinkerbug.tinkerrocket.protocol.IMUOrientationMode
 import com.tinkerbug.tinkerrocket.protocol.ImuOrientMsg
 import com.tinkerbug.tinkerrocket.protocol.MagCalStatus
 import com.tinkerbug.tinkerrocket.protocol.OtaStatusUpdate
+import com.tinkerbug.tinkerrocket.protocol.PadCalStatus
 import com.tinkerbug.tinkerrocket.protocol.PyroChannelConfig
 import com.tinkerbug.tinkerrocket.protocol.RocketConfig
 import com.tinkerbug.tinkerrocket.protocol.RocketStorageStats
@@ -289,6 +290,17 @@ public class DeviceSession(
     private val _sensorCalFrames = MutableSharedFlow<SensorCalStatus>(extraBufferCapacity = 16)
     public val sensorCalFrames: SharedFlow<SensorCalStatus> = _sensorCalFrames.asSharedFlow()
 
+    /**
+     * The latest pad-calibration status (0xD0, #1600 phase 5); null until one
+     * arrives on this connection.  The flight computer sends it every second
+     * on the ground whether or not a calibration runs, so non-null also says
+     * the rocket knows command 75 — [ActiveRocketSyncer.runPadCalibration]
+     * falls back to 21 without it.  Every frame carries a new time_us, so a
+     * StateFlow conflates none of them away.
+     */
+    private val _padCalStatus = MutableStateFlow<PadCalStatus?>(null)
+    public val padCalStatus: StateFlow<PadCalStatus?> = _padCalStatus.asStateFlow()
+
     private val _rocketStorage = MutableStateFlow<RocketStorageStats?>(null)
     public val rocketStorage: StateFlow<RocketStorageStats?> = _rocketStorage.asStateFlow()
 
@@ -555,6 +567,10 @@ public class DeviceSession(
         // republishes IDLE on reconnect anyway.
         _magCalStatus.value = null
         _sensorCalStatus.value = null
+        // #1600: "a 0xD0 frame since it connected" is what picks command 75
+        // over 21, and the rocket on the next connection may have been
+        // reflashed.  iOS gets the same from a BLEDevice per connection.
+        _padCalStatus.value = null
         // #435: per-connection live state — a stale echo could "confirm" a
         // send made over a new connection to a rebooted FC.
         _guidanceEcho.value = null
@@ -836,6 +852,7 @@ public class DeviceSession(
                 _sensorCalStatus.value = msg.status
                 _sensorCalFrames.tryEmit(msg.status)
             }
+            is FileOpsMessage.PadCal -> _padCalStatus.value = msg.status
             is FileOpsMessage.RocketStorage -> _rocketStorage.value = msg.stats
             is FileOpsMessage.BsStorage -> _bsStorage.value = msg.stats
             is FileOpsMessage.PyroRefusal -> {

@@ -780,6 +780,7 @@ bool TR_GNSSReceiverLC86Serial::pollNewPVT(GNSSData &gnss_data)
                 publishFromParser();
                 new_pvt = true;
                 noteTimeSync(arrived_us(i));
+                if (fix_q_ != nullptr) publishFix(arrived_us(i));
             }
             else if (ev == lc86::Event::GGA && pvt_epochs_ == 0)
             {
@@ -891,7 +892,10 @@ bool TR_GNSSReceiverLC86Serial::enableRawOutputs()
         raw_epoch_q_ = xQueueCreate(2, sizeof(gnss_raw::TimedRawEpoch));
     if (eph_q_ == nullptr)
         eph_q_ = xQueueCreate(8, sizeof(EphItem));
-    return raw_epoch_q_ != nullptr && eph_q_ != nullptr;
+    // Fixes at 10 Hz: a second's worth
+    if (fix_q_ == nullptr)
+        fix_q_ = xQueueCreate(10, sizeof(gnss_raw::TimedFix));
+    return raw_epoch_q_ != nullptr && eph_q_ != nullptr && fix_q_ != nullptr;
 }
 
 void TR_GNSSReceiverLC86Serial::publishRawEpoch(int64_t end_us)
@@ -911,6 +915,38 @@ void TR_GNSSReceiverLC86Serial::publishRawEpoch(int64_t end_us)
         if (time_sync_.mcuAt(gps_s, mcu)) raw_scratch_.mcu_us = mcu;
     }
     if (xQueueSend(raw_epoch_q_, &raw_scratch_, 0) != pdTRUE) raw_dropped_++;
+}
+
+void TR_GNSSReceiverLC86Serial::publishFix(int64_t end_us)
+{
+    const GNSSData& d = data_;
+    if (d.fix_mode < 2) return;   // only fixes are checked
+    gnss_raw::TimedFix f;
+    static constexpr double kDeg2Rad = M_PI / 180.0;
+    f.lat_rad = d.lat_e7 * 1.0e-7 * kDeg2Rad;
+    f.lon_rad = d.lon_e7 * 1.0e-7 * kDeg2Rad;
+    float sep = 0.0f;
+    (void)parser_.geoidSepM(sep);
+    f.alt_m = d.alt_mm * 1.0e-3 + sep;
+    f.vel_ned[0] = d.vel_n_mmps * 1.0e-3f;
+    f.vel_ned[1] = d.vel_e_mmps * 1.0e-3f;
+    f.vel_ned[2] = -d.vel_u_mmps * 1.0e-3f;
+    f.fix_mode = d.fix_mode;
+    f.num_sats = d.num_sats;
+    f.arrival_us = end_us;
+    f.mcu_us = 0;
+    const uint16_t week = parser_.pvtGpsWeek();
+    if (week != 0)
+    {
+        int64_t mcu = 0;
+        if (time_sync_.mcuAt(week * 604800.0 + parser_.pvtTowMs() * 1.0e-3, mcu)) f.mcu_us = mcu;
+    }
+    if (xQueueSend(fix_q_, &f, 0) != pdTRUE) fix_dropped_++;
+}
+
+bool TR_GNSSReceiverLC86Serial::takeFix(gnss_raw::TimedFix& out)
+{
+    return fix_q_ != nullptr && xQueueReceive(fix_q_, &out, 0) == pdTRUE;
 }
 
 void TR_GNSSReceiverLC86Serial::publishEphemeris()

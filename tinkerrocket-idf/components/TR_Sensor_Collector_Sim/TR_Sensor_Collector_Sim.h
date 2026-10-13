@@ -56,6 +56,9 @@ public:
     bool getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out);
     bool getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len);
     bool getGNSSGeoidSeparation(float& sep_m) const { return real_.getGNSSGeoidSeparation(sep_m); }
+    // The receiver's fixes for the shadow's checks: dropped while a sim runs,
+    // as the raw epochs are.
+    bool getGNSSFix(gnss_raw::TimedFix& out);
 
     // Debug passthrough
     void getISM6HG256DebugSnapshot(ISM6HG256DebugSnapshot& snapshot_out) const;
