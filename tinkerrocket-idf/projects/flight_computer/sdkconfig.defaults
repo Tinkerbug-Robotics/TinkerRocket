@@ -64,11 +64,13 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 #   EKF tick, worst in 1 s   3,968 us   2,997 us    median over the run
 #   flight loop              293/s      342/s       EKF 147 -> 171 Hz
 #
-# IMU reads, I2S drops and gaps were the same. The loop is still far below the
-# 1,000/s it is written for (BARO_FUSE_MIN_INTERVAL_US's note quotes ~960 on
-# the P4, where -O2 is not measured yet). On the S3 that is a budget -O2 does
-# not close, but no reason to keep paying a quarter of the EKF's time for
-# nothing. The images grow 7-9 KB (1-2 %); internal RAM use drops 3-4 KB.
+# IMU reads, I2S drops and gaps were the same. Those runs fetched code in DIO
+# through a 16 KB instruction cache, where 81 % of core 1's cycles were fetch
+# stalls, which is why -O2 sped the rest of the pass up so little. With the
+# QIO flash and 32 KB cache sdkconfig.defaults.m1 now sets (#1607) and -O2,
+# the loop runs 831/s and the EKF 416 Hz, 785 us a tick. The P4 is quoted at
+# ~960 loops/s (BARO_FUSE_MIN_INTERVAL_US's note) and is not measured at -O2
+# yet. The images grow 7-9 KB (1-2 %); internal RAM use drops 3-4 KB.
 #
 # What else changes with it:
 #  - Float a*b+c becomes one fused multiply-add (GCC's GNU-mode default,
