@@ -1564,6 +1564,37 @@ target_include_directories(test_raw_gnss_ekf PRIVATE
 target_link_libraries(test_raw_gnss_ekf GTest::gtest_main)
 gtest_discover_tests(test_raw_gnss_ekf)
 
+# ---------- test_raw_gnss_shadow ----------
+# The raw-GNSS shadow filter's flight-computer side (#1600 phase 4): the
+# core-1 -> core-0 handoffs (ShadowLink.h: a lock-free ring and a seqlock,
+# stressed across two threads) and RawGnssShadow -- start and stop, raw epochs
+# held to their own time and applied with their age, the pad resync, the
+# 10 Hz RAW_GNSS_EKF_MSG record -- and the Beetle's own RTCM from the flight
+# parser into a running shadow filter (fixtures/raw_meas_golden.h).
+add_executable(test_raw_gnss_shadow test_raw_gnss_shadow.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/RawGnssShadow.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_GNSSRaw/eph.c
+    ${LIB_DIR}/TR_GNSSRaw/atmo.c
+    ${LIB_DIR}/TR_GNSSRaw/RtcmEphemeris.cpp
+    ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Lc86Parser.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
+)
+target_include_directories(test_raw_gnss_shadow PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RawGnssShadow
+    ${LIB_DIR}/TR_RawGnssEKF
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_raw_gnss_shadow GTest::gtest_main)
+gtest_discover_tests(test_raw_gnss_shadow)
+
 # ---------- test_gnss_time_sync ----------
 # lc86::GnssTimeSync, the MCU clock against GPS time from the receiver's
 # sentence stamps alone (no 1PPS on the Beetle M1; #1600): a simulated LC86G

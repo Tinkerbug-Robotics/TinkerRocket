@@ -28,6 +28,7 @@ PREAMBLE = bytes([0xAA, 0x55, 0xAA, 0x55])
 MSG_TYPES = {
     0x90: "GNSS_SAT",     # per-satellite C/N0, variable length (10 + 6*n)
     0x95: "GNSS_RTCM",    # raw RTCM3 frames, variable length (5 + up to 219)
+    0x96: "RAW_GNSS_EKF", # the raw-GNSS shadow filter, 90 bytes at 10 Hz (#1600)
     0xA0: "STATUS_QUERY",
     0xA1: "GNSS",
     0xA2: "ISM6HG256",

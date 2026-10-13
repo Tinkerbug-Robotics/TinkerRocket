@@ -250,3 +250,13 @@ TEST(RawGnssMeas, Lc86EpochKeepsOneL1SignalOfGpsGalileoAndBeiDou)
     EXPECT_FALSE(lc86::rawEpochFromMsm(me, ep));
     EXPECT_EQ(ep.n, 0);
 }
+
+TEST(RawGnssMeas, AnEpochTakesThePvtWeekAcrossTheWeeksEnd)
+{
+    // the same week
+    EXPECT_DOUBLE_EQ(lc86::epochGpsSeconds(345600000u, 2440, 345599000u), 2440 * 604800.0 + 345600.0);
+    // the epoch just after the week ended, the latest $PQTMPVT just before
+    EXPECT_DOUBLE_EQ(lc86::epochGpsSeconds(1000u, 2440, 604799000u), 2441 * 604800.0 + 1.0);
+    // and the other way round
+    EXPECT_DOUBLE_EQ(lc86::epochGpsSeconds(604799000u, 2441, 1000u), 2440 * 604800.0 + 604799.0);
+}

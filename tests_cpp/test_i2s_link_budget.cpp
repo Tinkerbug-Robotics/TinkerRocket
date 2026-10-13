@@ -59,6 +59,17 @@ double gnssRtcmInflow()
 #endif
 }
 
+// RAW_GNSS_EKF_MSG: the raw-GNSS shadow filter's state (#1600), 10 a second
+// where it runs (config.h TR_RAW_GNSS_SHADOW: the LC86G boards).
+double rawGnssShadowInflow()
+{
+#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+    return framed(sizeof(RawGnssEkfData), 10.0);
+#else
+    return 0.0;
+#endif
+}
+
 // The link: I2S_SAMPLE_RATE samples/s x 4 B (16-bit stereo).
 constexpr double kLinkBytesPerSec = (double)config::I2S_SAMPLE_RATE * 4.0;
 
@@ -81,6 +92,7 @@ double guidedCoastInflow()
          // block went stale twice before.
          + framed(sizeof(FcStatusData),    (double)config::FC_STATUS_RATE_HZ)
          + gnssRtcmInflow()
+         + rawGnssShadowInflow()
          + 220.0;   // POWERData, ~15 Hz
 }
 

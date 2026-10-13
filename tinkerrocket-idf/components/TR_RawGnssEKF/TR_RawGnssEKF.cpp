@@ -33,25 +33,6 @@ void earthRad(double lat, double& rew, double& rns)
     rns = kRe * (1.0 - kE2) / (d * std::sqrt(d));
 }
 
-void llaToEcef(const double lla[3], double r[3])
-{
-    double rew, rns;
-    earthRad(lla[0], rew, rns);
-    const double cl = std::cos(lla[0]), sl = std::sin(lla[0]);
-    r[0] = (rew + lla[2]) * cl * std::cos(lla[1]);
-    r[1] = (rew + lla[2]) * cl * std::sin(lla[1]);
-    r[2] = (rew * (1.0 - kE2) + lla[2]) * sl;
-}
-
-// ECEF -> NED
-void eToNed(double lat, double lon, double T[3][3])
-{
-    const double sl = std::sin(lat), cl = std::cos(lat), so = std::sin(lon), co = std::cos(lon);
-    T[0][0] = -sl * co; T[0][1] = -sl * so; T[0][2] = cl;
-    T[1][0] = -so;      T[1][1] = co;       T[1][2] = 0.0;
-    T[2][0] = -cl * co; T[2][1] = -cl * so; T[2][2] = -sl;
-}
-
 // The predicted range (without the receiver clock), range rate (without its
 // drift) and line of sight: the satellite at transmit time, turned by the
 // Earth's rotation over the travel time (tc_ekf.py _los).
@@ -747,8 +728,18 @@ bool RawGnssEKF<T>::historyChange(double tau, T dv[3], T dp[3]) const
 template <typename T>
 void RawGnssEKF<T>::receiverState(double r[3], double v[3], double Tm[3][3]) const
 {
-    llaToEcef(lla_, r);
-    eToNed(lla_[0], lla_[1], Tm);
+    // llaToEcef and eToNed on one set of sines and cosines (software double
+    // trig is most of what an update costs on the flight computer)
+    const double sl = std::sin(lla_[0]), cl = std::cos(lla_[0]);
+    const double so = std::sin(lla_[1]), co = std::cos(lla_[1]);
+    const double d = std::fabs(1.0 - kE2 * sl * sl);
+    const double rew = kRe / std::sqrt(d);
+    r[0] = (rew + lla_[2]) * cl * co;
+    r[1] = (rew + lla_[2]) * cl * so;
+    r[2] = (rew * (1.0 - kE2) + lla_[2]) * sl;
+    Tm[0][0] = -sl * co; Tm[0][1] = -sl * so; Tm[0][2] = cl;
+    Tm[1][0] = -so;      Tm[1][1] = co;       Tm[1][2] = 0.0;
+    Tm[2][0] = -cl * co; Tm[2][1] = -cl * so; Tm[2][2] = -sl;
     for (int i = 0; i < 3; ++i)
         v[i] = Tm[0][i] * static_cast<double>(v_[0]) + Tm[1][i] * static_cast<double>(v_[1])
              + Tm[2][i] * static_cast<double>(v_[2]);
@@ -917,33 +908,45 @@ RawGnssStats RawGnssEKF<T>::updateGnssRaw(const RawMeas* m, int n, double age_s)
         const RawMeas& mi = m[i];
         if (mi.sys > GNSS_SYS_BDS || mi.prn >= 64)
             continue;
+        if (!mi.has_pr && !mi.has_rr)
+            continue;
+        // The geometry once per satellite, at the state every satellite
+        // before it left (the prototype redoes it per measurement too, but
+        // this satellite's own pseudorange update moves the receiver by
+        // metres at most, turning its line of sight by ~1e-7 rad).
+        double r[3], v[3], Tm[3][3], r_e[3], v_e[3];
+        receiverState(r, v, Tm);
+        backDate(r, v, Tm, dp_e, dv_e, r_e, v_e);
+        Los L;
+        lineOfSight(mi, r_e, v_e, L);
+        T u_ned[3];
+        for (int a = 0; a < 3; ++a)
+            u_ned[a] = T(Tm[a][0] * L.u[0] + Tm[a][1] * L.u[1] + Tm[a][2] * L.u[2]);
         for (int kind = 0; kind < 2; ++kind)
         {
             if (kind == 0 ? !mi.has_pr : !mi.has_rr)
                 continue;
-            // relinearized at the state every update before it left
-            double r[3], v[3], Tm[3][3], r_e[3], v_e[3];
-            receiverState(r, v, Tm);
-            backDate(r, v, Tm, dp_e, dv_e, r_e, v_e);
-            Los L;
             double pred_rate = 0.0;
-            if (kind == 1 && tau > 0.0)
+            if (kind == 1)
             {
-                // a late Doppler: the receiver's velocity then, and the
-                // satellite's own range acceleration backed out
-                double r_l[3], v_l[3];
-                backDate(r, v, Tm, dp_e, dv_l, r_l, v_l);
-                lineOfSight(mi, r_l, v_l, L);
-                pred_rate = L.rate - tau * satRangeAccel(mi, L, v_l);
+                // the receiver's velocity as the pseudorange update left it,
+                // taken back to the Doppler's instant (a late Doppler: tau
+                // before the epoch, the satellite's own range acceleration
+                // backed out)
+                double vr[3], v_l[3];
+                for (int a = 0; a < 3; ++a)
+                    vr[a] = Tm[0][a] * static_cast<double>(v_[0]) + Tm[1][a] * static_cast<double>(v_[1])
+                          + Tm[2][a] * static_cast<double>(v_[2]);
+                const T* dv = tau > 0.0 ? dv_l : dv_e;
+                for (int a = 0; a < 3; ++a)
+                    v_l[a] = vr[a] - (Tm[0][a] * static_cast<double>(dv[0]) + Tm[1][a] * static_cast<double>(dv[1])
+                                      + Tm[2][a] * static_cast<double>(dv[2]));
+                Los Lr = L;
+                Lr.rate = 0.0;
+                for (int a = 0; a < 3; ++a)
+                    Lr.rate += L.u[a] * (L.vs[a] - v_l[a]);
+                pred_rate = tau > 0.0 ? Lr.rate - tau * satRangeAccel(mi, Lr, v_l) : Lr.rate;
             }
-            else
-            {
-                lineOfSight(mi, r_e, v_e, L);
-                pred_rate = L.rate;
-            }
-            T u_ned[3];
-            for (int a = 0; a < 3; ++a)
-                u_ned[a] = T(Tm[a][0] * L.u[0] + Tm[a][1] * L.u[1] + Tm[a][2] * L.u[2]);
 
             int hidx[9];
             T hval[9];
