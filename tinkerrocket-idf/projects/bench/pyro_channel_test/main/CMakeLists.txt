@@ -19,6 +19,19 @@ idf_component_register(
 # flight_computer made this mandatory for the same reason; this is its bench
 # sibling and had the opposite behaviour. The map is still printed at startup —
 # keep checking it before arming — but it is no longer the only defence.
+# The Tinker-Mantis V10 is refused by name rather than left to the "no board"
+# error below: its arm is a two-processor vote (FC_ARM on GPIO33 AND the out
+# computer's OC_ARM_EN), and this flight-computer-only tool cannot raise the
+# out computer's half, so U9 never closes and every channel reads as a dead
+# igniter. A V9 build on a V10 is the same thing with the arm on an unconnected
+# pad (#1593).
+if(TR_BOARD_V10 OR TR_BOARD_M1)
+    message(FATAL_ERROR
+        "pyro_channel_test: the V10 and the Beetle are not supported. Their arm "
+        "needs the out computer's consent (OC_ARM_EN), which this flight-computer-"
+        "only tool cannot raise. Use the app's pyro fire test, which the out "
+        "computer gives consent for (out_computer/main/arm_consent_policy.h).")
+endif()
 set(_tr_pyro_board_flags "")
 foreach(_tr_flag TR_BOARD_V7 TR_BOARD_V8 TR_BOARD_V9)
     if(${_tr_flag})
@@ -41,7 +54,7 @@ elseif(NOT _tr_pyro_board_flag_count EQUAL 1)
 endif()
 target_compile_definitions(${COMPONENT_LIB} PRIVATE ${_tr_pyro_board_flags}=1)
 if(TR_BOARD_V9)
-    message(STATUS "pyro_channel_test: board pin map V9/V10")
+    message(STATUS "pyro_channel_test: board pin map V9")
 elseif(TR_BOARD_V8)
     message(STATUS "pyro_channel_test: board pin map V8")
 else()

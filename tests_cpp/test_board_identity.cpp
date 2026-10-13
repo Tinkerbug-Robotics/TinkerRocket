@@ -19,18 +19,30 @@ static std::string norm(const char* in) {
 
 TEST(BoardIdentity, NormalisesTheCompileTimeConstantsThisRepoActuallyUses) {
     // These are the literal TR_BOARD_REV_STR values in flight_computer/config.h.
-    EXPECT_EQ(norm("V9/V10"), "V9");
+    EXPECT_EQ(norm("V10"), "V10");
+    EXPECT_EQ(norm("V9"), "V9");
     EXPECT_EQ(norm("M1 (rocket-computer-mini)"), "M1");
+    // ...and the one every V9 image built before #1593 still reports.
+    EXPECT_EQ(norm("V9/V10"), "V9");
     EXPECT_EQ(norm("V8"), "V8");
     EXPECT_EQ(norm("V7"), "V7");
 }
 
 TEST(BoardIdentity, V9SlashV10ReducingToV9IsDeliberate) {
-    // Those two revisions share one image, so the constant cannot distinguish
-    // them. A board provisioned as V10 therefore DISAGREES with a V9/V10 image
-    // — and that is the honest answer, not a bug to paper over.
+    // Images built before #1593 said "V9/V10" because the two shared one
+    // image. They no longer do: that image drives the V9's arm pin and cannot
+    // arm a V10. A board provisioned as V10 running one therefore DISAGREES,
+    // which is the answer that matters, not a bug to paper over.
     EXPECT_FALSE(revsMatch("V9/V10", "V10"));
     EXPECT_TRUE(revsMatch("V9/V10", "v9"));
+}
+
+TEST(BoardIdentity, V10HasItsOwnImageNow) {
+    // #1593: TR_BOARD_V10 builds name their board "V10".
+    EXPECT_TRUE(revsMatch("V10", "v10"));
+    EXPECT_FALSE(revsMatch("V10", "V9"));
+    EXPECT_FALSE(revsMatch("V10", "V1"));
+    EXPECT_EQ(board_identity::encodeRevCode("V10", true), 0x9A);
 }
 
 TEST(BoardIdentity, CaseAndPunctuationDoNotMatter) {
@@ -151,11 +163,11 @@ TEST(BoardIdentity, TheAssertedBitSurvivesAndIsVisible) {
 }
 
 TEST(BoardIdentity, TheBuildFlagStringsUsedByTheFirmwareEncode) {
-    // The FC passes TR_BOARD_REV_STR straight in, and those are prose:
-    // "V9/V10" and "M1 (rocket-computer-mini)". normalizeRev cuts at the first
-    // non-alphanumeric, so both reduce to a token. "V9/V10" reducing to V9 is
-    // deliberate — the two share an image, so a V10 board provisioned as "V10"
-    // is a real mismatch and must not be hidden here.
+    // The FC passes TR_BOARD_REV_STR straight in, and some are prose:
+    // "M1 (rocket-computer-mini)", and "V9/V10" before #1593. normalizeRev cuts
+    // at the first non-alphanumeric, so both reduce to a token. "V9/V10"
+    // reducing to V9 is deliberate: that image cannot arm a V10, so a V10
+    // board provisioned as "V10" is a real mismatch and must not be hidden.
     char out[24];
     EXPECT_EQ(board_identity::encodeRevCode("V9/V10", true), 0x99);
     board_identity::revCodeToString(

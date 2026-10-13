@@ -14,12 +14,15 @@
 //
 //   V7 legacy board:  idf.py -B build_v7 -DTR_BOARD_V7=1 build
 //   V8 bench boards:  idf.py -B build_v8 -DTR_BOARD_V8=1 build
-//   V9/V10 boards:    idf.py -B build_v9 -DTR_BOARD_V9=1 build
+//   V9 (Tinker-Mantis as fabbed):  idf.py -B build_v9 -DTR_BOARD_V9=1 build
+//   V10 (Tinker-Mantis, ordered):  idf.py -B build_v10 -DTR_BOARD_V10=1 build
 //   rocket-computer-mini rev1:  idf.py -B build_m1 -DTR_BOARD_M1=1 build
 //
 // M1 is the one that is NOT an ESP32-P4 — the mini's flight computer is a
 // second ESP32-S3, and its pyro map shares no useful pin with V9's. Building
-// a V9 image for it fires the wrong channel silently.
+// a V9 image for it fires the wrong channel silently. V10 moved the arm to
+// GPIO33 and made it a two-processor vote, so a V9 image on a V10 (or the
+// reverse) never arms (#1593).
 //
 // main/CMakeLists.txt enforces the same rule at configure time with a clearer
 // message; this check is the backstop for anything that includes config.h
@@ -33,18 +36,24 @@
 #ifndef TR_BOARD_V9
 #define TR_BOARD_V9 0
 #endif
+#ifndef TR_BOARD_V10
+#define TR_BOARD_V10 0
+#endif
 #ifndef TR_BOARD_M1
 #define TR_BOARD_M1 0
 #endif
-#if (TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9 + TR_BOARD_M1) != 1
-#error "Set exactly one board revision: -DTR_BOARD_V7=1, -DTR_BOARD_V8=1, -DTR_BOARD_V9=1 or -DTR_BOARD_M1=1. There is no default — the V8 and V9 pyro maps differ (ARM 5 vs 16, FIRE 2/3 swapped), and M1 (rocket-computer-mini) is an ESP32-S3 whose pyro map shares no pin with any of them. A wrong map fires the wrong channel silently."
+#if (TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9 + TR_BOARD_V10 + TR_BOARD_M1) != 1
+#error "Set exactly one board revision: -DTR_BOARD_V7=1, -DTR_BOARD_V8=1, -DTR_BOARD_V9=1, -DTR_BOARD_V10=1 or -DTR_BOARD_M1=1. There is no default — the V8 and V9 pyro maps differ (ARM 5 vs 16, FIRE 2/3 swapped), V10 moved ARM again (33, and it needs the out computer's consent), and M1 (rocket-computer-mini) is an ESP32-S3 whose pyro map shares no pin with any of them. A wrong map fires the wrong channel, or none, silently."
 #endif
 #if TR_BOARD_M1
 #include "board/board_m1.h"
 #define TR_BOARD_REV_STR "M1 (rocket-computer-mini)"
+#elif TR_BOARD_V10
+#include "board/board_v10.h"
+#define TR_BOARD_REV_STR "V10"
 #elif TR_BOARD_V9
 #include "board/board_v9.h"
-#define TR_BOARD_REV_STR "V9/V10"
+#define TR_BOARD_REV_STR "V9"
 #elif TR_BOARD_V8
 #include "board/legacy/board_v8.h"
 #define TR_BOARD_REV_STR "V8"
@@ -131,6 +140,68 @@ static_assert(board_pins::USE_IIS2MDC &&
 #endif
 #endif
 
+#if TR_BOARD_V10
+// ======================================================================
+// V10 invariants (#1593), asserted rather than trusted
+// ======================================================================
+// The arm moved from V9's GPIO16 to GPIO33 and every FIRE and CONT pin stayed
+// where V9 has it. A V9 value here builds clean and the board never arms;
+// see board_v10.h.
+static_assert(board_pins::PYRO_ARM_PIN   == 33 &&
+              board_pins::PYRO1_FIRE_PIN == 6  && board_pins::PYRO1_CONT_PIN == 7  &&
+              board_pins::PYRO2_FIRE_PIN == 11 && board_pins::PYRO2_CONT_PIN == 10 &&
+              board_pins::PYRO3_FIRE_PIN == 9  && board_pins::PYRO3_CONT_PIN == 12 &&
+              board_pins::PYRO4_FIRE_PIN == 13 && board_pins::PYRO4_CONT_PIN == 14,
+              "board_v10.h pyro map changed — re-derive it from a netlist export of "
+              "hardware/tinker-mantis before editing this assert away");
+namespace board_v10_check {
+// P4 strapping pins are GPIO34-38. A pyro line there would put a boot strap
+// on a level that depends on whether an igniter is connected.
+constexpr bool notStrap(int p) { return p < 34 || p > 38; }
+// GPIO17 is V_SCAP_ADC, the hold-up sense divider (V9's piezo pad, #1409).
+// Nothing this processor drives may land on it.
+constexpr bool notScapSense(int p) { return p != 17; }
+}  // namespace board_v10_check
+static_assert(board_v10_check::notStrap(board_pins::PYRO_ARM_PIN) &&
+              board_v10_check::notStrap(board_pins::PYRO1_FIRE_PIN) &&
+              board_v10_check::notStrap(board_pins::PYRO2_FIRE_PIN) &&
+              board_v10_check::notStrap(board_pins::PYRO3_FIRE_PIN) &&
+              board_v10_check::notStrap(board_pins::PYRO4_FIRE_PIN) &&
+              board_v10_check::notStrap(board_pins::PYRO1_CONT_PIN) &&
+              board_v10_check::notStrap(board_pins::PYRO2_CONT_PIN) &&
+              board_v10_check::notStrap(board_pins::PYRO3_CONT_PIN) &&
+              board_v10_check::notStrap(board_pins::PYRO4_CONT_PIN),
+              "board_v10.h: a pyro line landed on an ESP32-P4 strapping pin (GPIO34-38)");
+static_assert(board_v10_check::notScapSense(board_pins::PYRO_ARM_PIN) &&
+              board_v10_check::notScapSense(board_pins::PYRO1_FIRE_PIN) &&
+              board_v10_check::notScapSense(board_pins::PYRO2_FIRE_PIN) &&
+              board_v10_check::notScapSense(board_pins::PYRO3_FIRE_PIN) &&
+              board_v10_check::notScapSense(board_pins::PYRO4_FIRE_PIN) &&
+              board_v10_check::notScapSense(board_pins::RED_LED_PIN) &&
+              board_v10_check::notScapSense(board_pins::BLUE_LED_PIN) &&
+              board_v10_check::notScapSense(board_pins::GPS_ACT_PIN) &&
+              board_v10_check::notScapSense(board_pins::SERVO_ACT_PIN) &&
+              board_v10_check::notScapSense(board_pins::RUNCAM_PWR_PIN) &&
+              board_v10_check::notScapSense(board_pins::RUNCAM_TX_PIN) &&
+              board_v10_check::notScapSense(board_pins::PWR_HOLD_PIN) &&
+              board_v10_check::notScapSense(board_pins::GNSS_TX) &&
+              board_v10_check::notScapSense(board_pins::I2S_DOUT_PIN),
+              "board_v10.h: GPIO17 is V_SCAP_ADC — nothing the flight computer drives may use it");
+// The in-flight power latch (#848) needs gpio_hold_en to reach the LP IO hold,
+// which on the P4 covers GPIO0-15 (SOC_RTCIO_PIN_COUNT = 16). Above that the
+// hold does not survive a panic reset and #825 comes back silently.
+static_assert(board_pins::PWR_HOLD_PIN >= 0 && board_pins::PWR_HOLD_PIN <= 15,
+              "board_v10.h: PWR_HOLD_PIN must be an LP IO pad (GPIO0-15) or the in-flight "
+              "rail latch does not survive a reset — see #848/#825");
+// U3 is a QST QMC5883P, poll-only. Driving it as an IIS2MDC (the default seam)
+// finds no chip at 0x1E and the board flies with no magnetometer.
+static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
+              "board_v10.h: the QMC5883P is in the mag slot and has no DRDY pin");
+#if !defined(TR_MAG_DRIVER_QMC5883P) || !TR_MAG_DRIVER_QMC5883P
+#error "board_v10.h: U3 is a QMC5883P — a V10 build needs TR_MAG_DRIVER_QMC5883P=1 (flight_computer/CMakeLists.txt sets it under TR_BOARD_V10)"
+#endif
+#endif
+
 // #1600 phase 4: the raw-GNSS shadow filter (TR_RawGnssShadow, main.cpp's
 // "raw-GNSS shadow filter" section).  It needs the LC86G's raw MSM7, so it
 // runs wherever that driver is and nowhere else; -DTR_RAW_GNSS_SHADOW=0 builds
@@ -157,9 +228,11 @@ struct config : board_pins
     // The slot keeps its IIS2MDC name on every board; the part behind it is
     // the TR_Sensor_Collector seam's choice (#1312).  Both parts have one
     // fixed 7-bit address: ST IIS2MDC 0x1E (no SAD pin), QST QMC5883P 0x2C
-    // (datasheet 5.4 — other addresses are "contact factory").  The V9/V10
+    // (datasheet 5.4 — other addresses are "contact factory").  The V9
     // image (TR_MAG_DRIVER_AUTO) is handed the IIS2MDC's and asks for the
-    // QMC5883P at its own fixed address if that one does not answer.
+    // QMC5883P at its own fixed address if that one does not answer, so a V9
+    // image on a V10 still finds its QMC5883P.  The V10 image drives the
+    // QMC5883P only (TR_MAG_DRIVER_QMC5883P, #1593).
     static constexpr uint32_t IIS2MDC_I2C_FREQ_HZ = 400'000;
 #if defined(TR_MAG_DRIVER_QMC5883P) && TR_MAG_DRIVER_QMC5883P
     static constexpr uint8_t IIS2MDC_I2C_ADDR = 0x2C;   // QMC5883P
@@ -273,7 +346,8 @@ struct config : board_pins
     // every board: right for the V8/V9 IIS2MDC once its left-handed X is
     // negated (#1589), wrong for the Beetle's QMC5883P (#1590).
     //
-    // The V9/V10 image learns the chip only at SensorCollector::begin()
+    // The V9 image probes for either chip, so a V9 image on a V10 still finds
+    // its QMC5883P; it learns which only at SensorCollector::begin()
     // (TR_MAG_DRIVER_AUTO), so this takes what it found:
     //   config::magRotZDeg(sensor_collector.magType() == MAG_TYPE_QMC5883P)
     // (a bool, because this header stays free of RocketComputerTypes.h).

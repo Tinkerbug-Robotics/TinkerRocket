@@ -38,10 +38,11 @@ static constexpr size_t kMaxRev = 7;
 ///
 /// This is what lets the compile-time constants be compared against a
 /// provisioned value without either side having to agree on prose.
-/// TR_BOARD_REV_STR is "V9/V10" on one build and "M1 (rocket-computer-mini)"
-/// on another; both reduce to a token. "V9/V10" reduces to "V9", which is
-/// deliberate — those two revisions share an image, so a V10 board provisioned
-/// as "V10" is a genuine mismatch worth showing rather than hiding.
+/// TR_BOARD_REV_STR is "V10" on one build and "M1 (rocket-computer-mini)" on
+/// another; both reduce to a token. Images built before #1593 said "V9/V10",
+/// which reduces to "V9" — deliberately: that image cannot arm a V10, so a V10
+/// board provisioned as "V10" running it is a genuine mismatch worth showing
+/// rather than hiding.
 ///
 /// Returns the number of characters written (0 when there is nothing usable).
 inline size_t normalizeRev(const char* in, char* out, size_t out_len)

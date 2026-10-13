@@ -36,6 +36,8 @@ string(TIMESTAMP TR_BUILD_DATE "%Y%m%d-%H%M" UTC)
 # misconfiguration, not just a mislabel.
 if(TR_BOARD_M1)
     set(TR_BOARD_SUFFIX "-m1")
+elseif(TR_BOARD_V10)
+    set(TR_BOARD_SUFFIX "-v10")
 elseif(TR_BOARD_V9)
     set(TR_BOARD_SUFFIX "-v9")
 elseif(TR_BOARD_V8)
@@ -93,8 +95,9 @@ add_compile_definitions(TR_BOARD_OTA_SUFFIX="${TR_BOARD_SUFFIX}")
 # existing one. Without the second line, a root sdkconfig written by a V9 build
 # would silently carry CONFIG_SPIRAM into the next V8 build — the same
 # stale-cache trap as a wrong -DTR_BOARD_* flag, and just as quiet.
-if(TR_BOARD_V9 OR TR_BOARD_M1)
-    # M1 shares the overlay: rocket-computer-mini's out computer is the same
+if(TR_BOARD_V9 OR TR_BOARD_V10 OR TR_BOARD_M1)
+    # V10 is the same ESP32-S3RH2 as V9 (#1593). M1 shares the overlay:
+    # rocket-computer-mini's out computer is the same
     # ESP32-S3RH2 with the same 2 MB of in-package quad PSRAM, so the log
     # ring belongs in the same place. The file's V9-specific prose about U13's
     # VCC and WORKLIST M-4 is rocket-computer's history, not the mini's; the
@@ -102,6 +105,8 @@ if(TR_BOARD_V9 OR TR_BOARD_M1)
     set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.v9")
     if(TR_BOARD_M1)
         message(STATUS "out_computer: sdkconfig overlay sdkconfig.defaults.v9 (PSRAM on, shared with M1 — boot NOR keeps the base 8 MB declaration, #916)")
+    elseif(TR_BOARD_V10)
+        message(STATUS "out_computer: sdkconfig overlay sdkconfig.defaults.v9 (PSRAM on, shared with V10 — boot NOR keeps the base 8 MB declaration, #916)")
     else()
         message(STATUS "out_computer: sdkconfig overlay sdkconfig.defaults.v9 (PSRAM on — boot NOR keeps the base 8 MB declaration, #916)")
     endif()

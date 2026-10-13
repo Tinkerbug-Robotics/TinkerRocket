@@ -145,11 +145,13 @@ hardware-specific rules in detail.
 There is no default board revision, and the build fails without one:
 
 ```bash
-idf.py -B build_v9 -DTR_BOARD_V9=1 build
+idf.py -B build_v10 -DTR_BOARD_V10=1 build
 ```
 
-`TR_BOARD_V9=1` is the Tinker-Mantis, `hardware/tinker-mantis/` (its title block reads V9,
-V10 at HEAD). `TR_BOARD_M1=1` is the Tinker-Beetle, `hardware/tinker-beetle/`, whose flight
+`TR_BOARD_V10=1` is the Tinker-Mantis V10 as ordered (tag `tinker-mantis-v10.0.0`), and
+`TR_BOARD_V9=1` is the V9 as fabbed (tag `rocket-computer-v9.0.0`). They are not interchangeable:
+V10 moved the arm to P4 GPIO33 and made it a two-processor vote with the out computer, so
+a V9 image cannot arm a V10, and a V10 image cannot arm a V9 (#1593). `TR_BOARD_M1=1` is the Tinker-Beetle, `hardware/tinker-beetle/`, whose flight
 computer is an ESP32-S3 rather than a P4 — its overlay changes the chip target, so it needs
 a build dir of its own (`-B build_m1`) and rewrites `dependencies.lock` to
 `target: esp32s3`; revert that file after a local M1 build. `TR_BOARD_V8=1` and
@@ -164,9 +166,10 @@ channel's connector — or, since ARM is never driven, fires nothing at all thro
 bleed that still lights a test LED. The boot log prints the map it was built with
 (`[BOARD] pin map:` / `[BOARD] pyro:`); check it against the board before arming anything.
 
-The out computer takes `-DTR_BOARD_V9=1` too, though on that MCU it selects the same pins
-as V8 — pass it anyway so both halves of a pair are built with one flag. The same goes for
-`-DTR_BOARD_M1=1`: both halves of the Tinker-Beetle are built with it.
+The out computer takes the same flag as its flight computer. With `-DTR_BOARD_V9=1` it
+selects the same pins as V8; with `-DTR_BOARD_V10=1` it adds the arm consent output (S3
+GPIO14) that the V10's flight computer cannot fire without. `-DTR_BOARD_M1=1` builds both
+halves of the Tinker-Beetle.
 
 ### Building the base station
 

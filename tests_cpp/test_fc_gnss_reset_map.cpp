@@ -2,9 +2,9 @@
 
 #include "config.h"
 
-// Built once per board revision (TR_BOARD_V7/V8/V9), exactly as the
+// Built once per board revision (TR_BOARD_V7/V8/V9/V10), exactly as the
 // firmware selects its header — so the claim has to survive being stated
-// three times.
+// four times.
 //
 // #837 item 6 — the GNSS "reset and re-verify" path claimed a reset it never
 // performed.
