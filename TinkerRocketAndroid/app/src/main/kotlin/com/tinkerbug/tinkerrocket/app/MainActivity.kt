@@ -34,8 +34,9 @@ class MainActivity : ComponentActivity() {
         add(Manifest.permission.BLUETOOTH_SCAN)
         add(Manifest.permission.BLUETOOTH_CONNECT)
         // Location rides the same prompt (direction-to-rocket arrow, map
-        // phone dot) but never GATES the app — BLE does.
-        add(Manifest.permission.ACCESS_FINE_LOCATION)
+        // phone dot) but never GATES the app — BLE does.  #1616: FINE and
+        // COARSE together; FINE alone is ignored on some Android 12 builds.
+        addAll(PhoneLocationManager.PERMISSIONS)
         if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
     }.toTypedArray()
 

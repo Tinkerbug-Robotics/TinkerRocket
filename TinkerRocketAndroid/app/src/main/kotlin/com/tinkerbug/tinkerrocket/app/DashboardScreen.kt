@@ -964,10 +964,14 @@ fun DashboardScreen(
  * arrow).  Arrow angle = bearing(phone→rocket) − phone heading, so the
  * arrow points where the operator should walk.  Waiting states say WHY
  * the arrow is hidden instead of showing nothing; a denied permission is
- * its own state with a Grant button (the plan's denied-state UI).
+ * its own state with a Grant button (the plan's denied-state UI), and so
+ * is an Approximate-only grant, which asks for precise (#1616).
  */
+// `internal`, not `private`, so the module's Compose tests can drive the
+// permission states directly (#624, #1616). Kotlin `internal` is visible to
+// the test source set and to nothing outside the module.
 @Composable
-private fun DirectionToRocketCard(
+internal fun DirectionToRocketCard(
     phoneLocation: PhoneLocationManager,
     fix: com.tinkerbug.tinkerrocket.session.LastValidRocketFix?,
     rocketAltM: Double?,
@@ -978,11 +982,19 @@ private fun DirectionToRocketCard(
     var permission by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableStateOf(phoneLocation.hasPermission())
     }
+    var approximateOnly by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(phoneLocation.hasApproximateOnly())
+    }
+    // #1616: FINE and COARSE go as one request, so this takes the multiple-
+    // permission contract.  Its result is re-read from the manager rather
+    // than from the map: an Approximate answer grants COARSE only, which
+    // still leaves the arrow off but is not "no answer" either.
     val launcher = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        permission = granted
-        if (granted) phoneLocation.restartIfHeld()
+        androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions(),
+    ) {
+        permission = phoneLocation.hasPermission()
+        approximateOnly = phoneLocation.hasApproximateOnly()
+        if (permission) phoneLocation.restartIfHeld()
     }
 
     Card(Modifier.fillMaxWidth()) {
@@ -993,6 +1005,19 @@ private fun DirectionToRocketCard(
         ) {
             Text("Rocket bearing", style = MaterialTheme.typography.titleMedium)
             when {
+                // #1616: Approximate is an answer, so it gets its own words;
+                // the same request then offers the upgrade to precise.
+                !permission && approximateOnly -> {
+                    Text(
+                        "Precise location is off. Approximate location can be " +
+                            "about a kilometer out, too far to walk to the rocket by.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedButton(onClick = {
+                        launcher.launch(PhoneLocationManager.PERMISSIONS)
+                    }) { Text("Use precise location") }
+                }
                 !permission -> {
                     Text(
                         "Location permission is needed to show direction " +
@@ -1001,7 +1026,7 @@ private fun DirectionToRocketCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     OutlinedButton(onClick = {
-                        launcher.launch(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                        launcher.launch(PhoneLocationManager.PERMISSIONS)
                     }) { Text("Grant location") }
                 }
                 phoneFix == null -> Text(

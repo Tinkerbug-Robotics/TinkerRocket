@@ -75,6 +75,18 @@ class PhoneLocationManager(private val app: Application) {
         ContextCompat.checkSelfPermission(app, Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
 
+    /**
+     * #1616: the user answered the prompt with Approximate, which grants
+     * COARSE without FINE.  The providers still wait for FINE: an approximate
+     * fix can be about a kilometer out, too far to walk to the rocket by.
+     * This only tells that answer apart from no answer, so the UI can ask
+     * for precise instead of for permission.
+     */
+    fun hasApproximateOnly(): Boolean =
+        !hasPermission() &&
+            ContextCompat.checkSelfPermission(app, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+
     private val locationCallback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
             val loc = result.lastLocation ?: return
@@ -181,6 +193,18 @@ class PhoneLocationManager(private val app: Application) {
     }
 
     companion object {
+        /**
+         * #1616: what every location prompt asks for, as one request.
+         * Android's docs want COARSE beside FINE from 12 on: some 12 builds
+         * ignore FINE alone, and apps targeting 12+ log an error for it.
+         * With COARSE already granted, the same pair brings up Android's
+         * prompt to change the access from approximate to precise.
+         */
+        val PERMISSIONS = arrayOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+        )
+
         /** iOS `fixMinInterval` — 30 s between pushes when standing still. */
         const val FIX_MIN_INTERVAL_MS: Long = 30_000
 
