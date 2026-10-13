@@ -71,6 +71,25 @@ if(TR_I2S_TX_MONITOR)
     add_compile_definitions(TR_I2S_TX_MONITOR=1)
     message(STATUS "TR_I2S_TX_MONITOR=1 -- I2S TX monitor ENABLED (bench)")
 endif()
+# #1600 phase 4: the raw-GNSS shadow filter runs wherever the LC86G driver does
+# (main/config.h). -DTR_RAW_GNSS_SHADOW=0 builds an LC86G image without it, for
+# a bench A/B of what it costs on core 0.
+if(DEFINED TR_RAW_GNSS_SHADOW)
+    add_compile_definitions(TR_RAW_GNSS_SHADOW=${TR_RAW_GNSS_SHADOW})
+    message(STATUS "TR_RAW_GNSS_SHADOW=${TR_RAW_GNSS_SHADOW} -- raw-GNSS shadow filter set by hand")
+endif()
+# Bench: a per-section cycle and Xtensa performance-counter profile of the
+# flight task, printed every 5 s (main/loop_profile.h). Never set for flight.
+if(TR_LOOP_PROFILE)
+    add_compile_definitions(TR_LOOP_PROFILE=1)
+    message(STATUS "TR_LOOP_PROFILE=1 -- flight-loop section profiler ENABLED (bench)")
+endif()
+# Bench: 1 = the EKF runs from internal RAM (main/bench_iram.lf),
+# 2 = loop_fc() as well. Measures the flash-fetch cost. Never set for flight.
+if(TR_BENCH_IRAM)
+    add_compile_definitions(TR_BENCH_IRAM=${TR_BENCH_IRAM})
+    message(STATUS "TR_BENCH_IRAM=${TR_BENCH_IRAM} -- hot code in internal RAM (bench)")
+endif()
 # #491 bench: cold-start the u-blox at every boot, so repeated runs of one file
 # start from the same state. Never set for flight.
 if(TR_GNSS_BENCH_COLD_START)

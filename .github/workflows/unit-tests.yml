@@ -24,6 +24,10 @@ on:
       # still sends enough bytes to force an identity verdict.
       - 'tools/ota_probe.py'
       - 'tinkerrocket-idf/components/TR_OTA/**'
+      # test_loop_profile_summary renders a report with the printf formats in
+      # loop_profile.h and parses it with tools/loop_profile_summary.py.
+      - 'tools/loop_profile_summary.py'
+      - 'tinkerrocket-idf/projects/flight_computer/main/loop_profile.h'
       # test_deployment_replay_shim compiles the deployment replay against the
       # FC's config.h and board headers; #808 broke that build with a
       # config.h-only change, which would not have triggered this workflow.
@@ -39,6 +43,8 @@ on:
       - 'tinkerrocket-idf/components/TR_KinematicChecks/**'
       - 'tools/ota_probe.py'
       - 'tinkerrocket-idf/components/TR_OTA/**'
+      - 'tools/loop_profile_summary.py'
+      - 'tinkerrocket-idf/projects/flight_computer/main/loop_profile.h'
       - 'tinkerrocket-idf/projects/flight_computer/main/config.h'
       - 'tinkerrocket-idf/projects/flight_computer/main/board/**'
       - '.github/workflows/unit-tests.yml'

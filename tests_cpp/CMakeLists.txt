@@ -1545,6 +1545,95 @@ target_include_directories(test_gnss_raw PRIVATE
 target_link_libraries(test_gnss_raw GTest::gtest_main)
 gtest_discover_tests(test_gnss_raw)
 
+# ---------- test_raw_gnss_meas ----------
+# The raw-GNSS measurement builder (#1600): two MSM7 epochs the Beetle's LC86G
+# sent on the COCOM rig, through the flight code's own parser (Lc86Parser),
+# Lc86RawEpoch.h and TR_GNSSRaw's RawMeasBuilder, against the corrected
+# measurements the bench prototype's filter took (fixtures/raw_meas_golden.h).
+add_executable(test_raw_gnss_meas test_raw_gnss_meas.cpp
+    ${LIB_DIR}/TR_GNSSRaw/eph.c
+    ${LIB_DIR}/TR_GNSSRaw/atmo.c
+    ${LIB_DIR}/TR_GNSSRaw/RtcmEphemeris.cpp
+    ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Lc86Parser.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
+)
+target_include_directories(test_raw_gnss_meas PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_raw_gnss_meas GTest::gtest_main)
+gtest_discover_tests(test_raw_gnss_meas)
+
+# ---------- test_raw_gnss_ekf ----------
+# TR_RawGnssEKF, the tightly coupled GNSS/INS filter (#1600), on a synthetic
+# sky: convergence from a wrong start, the clock and system offsets from the
+# first epoch, clock steps, a bad satellite refused then let back in, an epoch
+# applied late at its own time, a Doppler that lags its tag, float against
+# double. Its parity with the bench prototype is checked through the
+# tinkerrocket_sim bindings (gnss repo sim/tc_ekf_cocom.py, mode ins-cpp).
+add_executable(test_raw_gnss_ekf test_raw_gnss_ekf.cpp
+    ${LIB_DIR}/TR_GNSSRaw/atmo.c
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+)
+target_include_directories(test_raw_gnss_ekf PRIVATE
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+    ${LIB_DIR}/TR_RawGnssEKF
+)
+target_link_libraries(test_raw_gnss_ekf GTest::gtest_main)
+gtest_discover_tests(test_raw_gnss_ekf)
+
+# ---------- test_raw_gnss_shadow ----------
+# The raw-GNSS shadow filter's flight-computer side (#1600 phase 4): the
+# core-1 -> core-0 handoffs (ShadowLink.h: a lock-free ring and a seqlock,
+# stressed across two threads) and RawGnssShadow -- start and stop, raw epochs
+# held to their own time and applied with their age, the pad resync, the
+# 10 Hz RAW_GNSS_EKF_MSG record -- and the Beetle's own RTCM from the flight
+# parser into a running shadow filter (fixtures/raw_meas_golden.h).
+add_executable(test_raw_gnss_shadow test_raw_gnss_shadow.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/RawGnssShadow.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_GNSSRaw/eph.c
+    ${LIB_DIR}/TR_GNSSRaw/atmo.c
+    ${LIB_DIR}/TR_GNSSRaw/RtcmEphemeris.cpp
+    ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Lc86Parser.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
+)
+target_include_directories(test_raw_gnss_shadow PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RawGnssShadow
+    ${LIB_DIR}/TR_RawGnssEKF
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_raw_gnss_shadow GTest::gtest_main)
+gtest_discover_tests(test_raw_gnss_shadow)
+
+# ---------- test_gnss_time_sync ----------
+# lc86::GnssTimeSync, the MCU clock against GPS time from the receiver's
+# sentence stamps alone (no 1PPS on the Beetle M1; #1600): a simulated LC86G
+# and a simulated 27 ms GNSS poll that backdates each sentence by the bytes
+# behind it, as the driver does, against a crystal 30 ppm off.
+add_executable(test_gnss_time_sync test_gnss_time_sync.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/GnssTimeSync.cpp
+)
+target_include_directories(test_gnss_time_sync PRIVATE
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+)
+target_link_libraries(test_gnss_time_sync GTest::gtest_main)
+gtest_discover_tests(test_gnss_time_sync)
+
 # ---------- wire fixture corpus (docs/plans/android-port.md §2.1) ----------
 # Golden-vector generation from the REAL packed structs: wire_fixture_gen
 # writes tests_cpp/fixtures/wire/ (committed), test_wire_fixture_freshness

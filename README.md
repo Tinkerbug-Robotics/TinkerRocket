@@ -299,7 +299,9 @@ TinkerRocket/
 │   │   └── bench/              # Hardware bring-up tools, never released
 │   └── components/             # First-party + vendored ESP-IDF components
 │       ├── TR_GpsInsEKF/       # 15-state GPS/INS Extended Kalman Filter
-│       ├── TR_GNSSRaw/         # Broadcast ephemeris, satellite positions, GNSS atmosphere models
+│       ├── TR_GNSSRaw/         # Broadcast ephemeris, satellite positions, GNSS atmosphere, raw measurements
+│       ├── TR_RawGnssEKF/      # Tightly coupled GNSS/INS filter on each satellite's pseudorange and Doppler
+│       ├── TR_RawGnssShadow/   # Runs that filter beside the flight filter on core 0, logged only
 │       ├── TR_PID/             # PID controller (derivative-on-measurement)
 │       ├── TR_ControlMixer/    # 4-fin cruciform mixing + gain scheduling
 │       ├── TR_GuidancePN/      # Proportional navigation (git submodule)

@@ -8,6 +8,9 @@ on:
       - 'tinkerrocket-idf/components/TR_PID/**'
       - 'tinkerrocket-idf/components/TR_ControlMixer/**'
       - 'tinkerrocket-idf/components/TR_GuidancePN/**'
+      - 'tinkerrocket-idf/components/TR_GNSSRaw/**'          # _rawgnss (#1600)
+      - 'tinkerrocket-idf/components/TR_RawGnssEKF/**'
+      - 'tinkerrocket-idf/components/TR_GNSSReceiverLC86_Serial/**'
       - 'tests_cpp/host_shim/**'       # sim reuses the host_shim compat headers
       - 'tests/integration/**'
       - '.github/workflows/sim-tests.yml'

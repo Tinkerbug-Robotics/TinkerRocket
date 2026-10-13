@@ -49,6 +49,7 @@
 #include <TR_GNSSReceiverUBlox_Serial.h>
 #endif
 #include <RocketComputerTypes.h>
+#include <RawMeas.h>              // gnss_raw::TimedRawEpoch (TR_GNSSRaw, #1600)
 #include "sensor_cal_math.h"
 #include "sensor_cal_session.h"
 
@@ -235,6 +236,14 @@ public:
     // ring the GNSS poll task fills, so call it until it returns false.
     // `cap` must be GNSS_RTCM_MAX_FRAME.
     bool getGNSSRtcmFrame(uint8_t* out, size_t cap, size_t& len, uint32_t& time_us);
+    // Raw GNSS measurements for the raw-GNSS shadow filter (#1600), from the
+    // LC86G's MSM7 and broadcast ephemeris; never from the u-blox. Off until
+    // enableGNSSRawOutputs() (call it before begin()). Safe from any task:
+    // the driver hands them over through queues. See
+    // TR_GNSSReceiverLC86Serial::takeRawEpoch / takeEphemeris.
+    bool enableGNSSRawOutputs();
+    bool getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out);
+    bool getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len);
     void getISM6HG256DebugSnapshot(ISM6HG256DebugSnapshot &snapshot_out) const;
     void getMMC5983MADebugSnapshot(MMC5983MADebugSnapshot &snapshot_out) const;
     void getPollTimingSnapshot(PollTimingSnapshot &snapshot_out) const;

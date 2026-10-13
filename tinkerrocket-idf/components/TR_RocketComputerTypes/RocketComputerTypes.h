@@ -1510,6 +1510,53 @@ static_assert(sizeof(FcStatusData) == 5,
 // two agree by construction.
 static constexpr uint8_t FCS_CAMERA_ENGAGED = (1u << 0);
 
+// ── RawGnssEkfData (RAW_GNSS_EKF_MSG 0x96, 10 Hz) ───────────────────────────
+// #1600 phase 4.  The raw-GNSS shadow filter (TR_RawGnssEKF, run by
+// TR_RawGnssShadow on core 0): a tightly coupled GNSS/INS filter fed the
+// flight filter's own IMU input and the LC86G's raw MSM7 measurements, logged
+// beside the flight filter so flights can compare them.  It is a SHADOW:
+// nothing it computes reaches the flight filter, the state machine or a
+// deployment.  Ten records a second of its state, each also carrying what the
+// last raw epoch did and what it cost, so a log shows both how it tracked and
+// whether core 0 kept up.
+typedef struct __attribute__((packed))
+{
+    uint32_t time_us;          // the filter's time: the flight filter's IMU tick it last
+                               // propagated to (the same micros() as every FC stream)
+    int32_t  lat_e7;           // degrees x 1e7
+    int32_t  lon_e7;
+    int32_t  alt_mm;           // ellipsoidal height, mm
+    float    vel_ned[3];       // m/s
+    float    quat[4];          // body attitude, scalar-first, as the flight filter's
+    float    clk_bias_m;       // receiver clock bias, m
+    float    clk_drift_mps;    // and drift, m/s
+    float    isb_gal_m;        // Galileo - GPS time offset, m
+    float    isb_bds_m;        // BeiDou - GPS
+    uint16_t pos_sigma_cm[3];  // 1-sigma N, E, D, cm (saturates at 65535)
+    uint16_t vel_sigma_mmps[3];// 1-sigma N, E, D, mm/s (saturates)
+    uint32_t epoch_tow_ms;     // the last raw epoch applied: GPS time of week
+    int16_t  epoch_age_ms;     // how long after its own time it was applied
+    uint8_t  used_pr;          // that epoch's updates: pseudoranges used
+    uint8_t  used_rr;          //   range rates used
+    uint8_t  rejected_pr;      //   refused by the gate
+    uint8_t  rejected_rr;
+    uint8_t  eph_sats;         // satellites with a broadcast ephemeris held
+    uint8_t  flags;            // RGE_* bits below
+    uint16_t build_us;         // CPU (core 0) of that epoch: its measurements
+    uint16_t update_us;        //   and its filter update
+    uint16_t prop_us;          // mean IMU step (propagation + levelling) since the last record
+} RawGnssEkfData;
+static_assert(sizeof(RawGnssEkfData) == 90,
+              "RawGnssEkfData must be 90 bytes");
+static constexpr uint8_t RGE_RUNNING    = 0x01;  // the filter is running (seeded from the flight filter)
+static constexpr uint8_t RGE_CLOCK      = 0x02;  // its receiver clock is set (a raw epoch has been applied)
+static constexpr uint8_t RGE_TIMED      = 0x04;  // raw epochs arrive placed on the MCU clock
+static constexpr uint8_t RGE_CLOCK_STEP = 0x08;  // the last epoch stepped the receiver clock
+static constexpr uint8_t RGE_STALE      = 0x10;  // an epoch was dropped as too late since the last record
+static constexpr uint8_t RGE_LEVEL      = 0x20;  // levelling against gravity (pad, descent)
+static constexpr uint8_t RGE_IN_FLIGHT  = 0x40;  // the flight filter's IMU says INFLIGHT
+static constexpr uint8_t RGE_RESYNC     = 0x80;  // the attitude was retaken from the flight filter (pad) since the last record
+
 // Ordered: the app may render a progress bar from step/FCB_STEP_COUNT.  Append
 // only — the apps map unknown values to a generic "starting up".
 enum FcBootStep : uint8_t
@@ -2419,6 +2466,10 @@ static constexpr uint8_t ISM6_BATCH_MAX      = 10;
 // joins them.  No-op on u-blox boards, whose driver emits none.
 static constexpr uint8_t GNSS_RTCM_MSG       = 0x95;  // FC→OC over I2S: GnssRtcmHeader + the GNSS receiver's raw RTCM3 frame
                                                       // (or one part of it), straight to the log.  VARIABLE length.
+
+// FC→OC over I2S: the raw-GNSS shadow filter's state (#1600), 10 Hz while it
+// runs (see RawGnssEkfData).  LC86G boards only; no-op elsewhere.
+static constexpr uint8_t RAW_GNSS_EKF_MSG    = 0x96;  // FC→OC over I2S: RawGnssEkfData, the raw-GNSS shadow filter at 10 Hz, straight to the log.
 
 static constexpr uint8_t OUT_STATUS_QUERY    = 0xA0;
 static constexpr uint8_t GNSS_MSG            = 0xA1;
@@ -3962,6 +4013,8 @@ static_assert(ism6BatchWireSize(ISM6_BATCH_MAX) <= MAX_PAYLOAD,
               "ISM6_BATCH_MSG: ISM6_BATCH_MAX records must fit in MAX_PAYLOAD");
 static_assert(sizeof(GNSSSatData) <= MAX_PAYLOAD,
               "GNSSSatData must fit one I2S frame payload");
+static_assert(sizeof(RawGnssEkfData) <= MAX_PAYLOAD,
+              "RawGnssEkfData must fit one I2S frame payload");
 
 // The flight settings snapshot (#165) rides the same I2S frame path, so it
 // must also fit one payload.  Checked here since MAX_PAYLOAD is defined below

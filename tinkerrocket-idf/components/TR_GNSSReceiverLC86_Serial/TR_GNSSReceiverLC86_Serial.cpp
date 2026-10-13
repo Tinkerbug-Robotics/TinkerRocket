@@ -11,6 +11,7 @@
 // [B5] is Hardware Design V1.5 (hardware/datasheets/), which documents the
 // ALP low-power mode (added in V1.2).
 #include "TR_GNSSReceiverLC86_Serial.h"
+#include "Lc86RawEpoch.h"
 
 #include <driver/gpio.h>
 #include <esp_log.h>
@@ -116,6 +117,7 @@ void TR_GNSSReceiverLC86Serial::uartBegin(uint32_t baud, uint8_t rx_pin, uint8_t
 
     uart_config_t uart_cfg = {};
     uart_cfg.baud_rate  = (int)baud;
+    byte_us_ = 1.0e7 / (double)baud;   // 8N1: ten bits a byte
     uart_cfg.data_bits  = UART_DATA_8_BITS;
     uart_cfg.parity     = UART_PARITY_DISABLE;
     uart_cfg.stop_bits  = UART_STOP_BITS_1;
@@ -184,7 +186,7 @@ bool TR_GNSSReceiverLC86Serial::awaitEvent(AwaitKind kind, uint32_t timeout_ms,
             // cache (a module already configured by a previous begin() in
             // this power cycle streams PVT throughout the config phase).
             if (ev == lc86::Event::PVT) publishFromParser();
-            if (ev == lc86::Event::RTCM || ev == lc86::Event::MSM_EPOCH) stashRtcmFrame();
+            if (ev == lc86::Event::RTCM || ev == lc86::Event::MSM_EPOCH) stashRtcmFrame(nowUs());
 
             switch (kind)
             {
@@ -745,6 +747,21 @@ bool TR_GNSSReceiverLC86Serial::pollNewPVT(GNSSData &gnss_data)
         const int n = uart_read_bytes(_uartPort, buf, want, 0);
         if (n <= 0) break;
         drained += (size_t)n;
+        // When each byte arrived: the read time less the bytes that came
+        // after it -- the rest of this read and what is still buffered --
+        // at one byte time each. Exact while the receiver is still sending;
+        // late by the idle gap when the poll runs after its burst, by bytes
+        // still in the hardware FIFO, or by a gap between its sentences, all
+        // of which the time sync's envelope removes (GnssTimeSync.h). Never
+        // early, which the envelope could not remove: the buffered count is
+        // taken BEFORE the time, so a byte landing in between makes the
+        // stamp late, not early.
+        size_t behind = 0;
+        uart_get_buffered_data_len(_uartPort, &behind);
+        const int64_t read_us = nowUs();
+        auto arrived_us = [&](int i) {
+            return read_us - (int64_t)((double)((size_t)(n - 1 - i) + behind) * byte_us_);
+        };
 
         for (int i = 0; i < n; i++)
         {
@@ -756,6 +773,7 @@ bool TR_GNSSReceiverLC86Serial::pollNewPVT(GNSSData &gnss_data)
                 // epoch, not a replay.
                 publishFromParser();
                 new_pvt = true;
+                noteTimeSync(arrived_us(i));
             }
             else if (ev == lc86::Event::GGA && pvt_epochs_ == 0)
             {
@@ -765,7 +783,17 @@ bool TR_GNSSReceiverLC86Serial::pollNewPVT(GNSSData &gnss_data)
             }
             if (ev == lc86::Event::RTCM || ev == lc86::Event::MSM_EPOCH)
             {
-                stashRtcmFrame();
+                stashRtcmFrame(arrived_us(i));
+            }
+            if (ev == lc86::Event::RTCM && eph_q_ != nullptr)
+            {
+                publishEphemeris();
+            }
+            if (ev == lc86::Event::MSM_EPOCH)
+            {
+                msm_epoch_tow_ms_ = parser_.msmEpoch().gps_tow_ms;
+                msm_epoch_end_us_ = arrived_us(i);
+                if (raw_epoch_q_ != nullptr) publishRawEpoch(arrived_us(i));
             }
             if (ev == lc86::Event::MSM_EPOCH && !msm_first_reported_)
             {
@@ -775,6 +803,7 @@ bool TR_GNSSReceiverLC86Serial::pollNewPVT(GNSSData &gnss_data)
     }
 
     checkMsmRate();
+    logTimeSync();
 
     if (!new_pvt) return false;  // `gnss_data` untouched (u-blox contract)
     getGNSSData(gnss_data);
@@ -797,7 +826,7 @@ bool TR_GNSSReceiverLC86Serial::pollNewSat(GNSSSatData &out)
     return true;
 }
 
-void TR_GNSSReceiverLC86Serial::stashRtcmFrame()
+void TR_GNSSReceiverLC86Serial::stashRtcmFrame(int64_t end_us)
 {
     const size_t n = parser_.rtcmFrameLen();
     if (rtcm_ring_ == nullptr || n == 0 || n > sizeof(rtcm_item_) - 4)
@@ -805,7 +834,7 @@ void TR_GNSSReceiverLC86Serial::stashRtcmFrame()
         rtcm_dropped_++;
         return;
     }
-    const uint32_t t = (uint32_t)esp_timer_get_time();
+    const uint32_t t = (uint32_t)end_us;   // when its last byte arrived
     memcpy(rtcm_item_, &t, 4);
     memcpy(rtcm_item_ + 4, parser_.rtcmFrame(), n);
     // Never blocks: a full ring means nobody is draining it, and the poll
@@ -814,6 +843,106 @@ void TR_GNSSReceiverLC86Serial::stashRtcmFrame()
     {
         rtcm_dropped_++;
     }
+}
+
+void TR_GNSSReceiverLC86Serial::noteTimeSync(int64_t end_us)
+{
+    // Only epochs the receiver has solved carry a GPS time worth syncing to;
+    // before its first fix the TOW free-runs from wherever it started.
+    const GNSSData& pvt = parser_.pvt();
+    if (pvt.fix_mode < 2 || parser_.pvtGpsWeek() == 0) return;
+    const double gps_s = parser_.pvtGpsWeek() * 604800.0 + parser_.pvtTowMs() * 1.0e-3;
+    time_sync_.addSample(gps_s, end_us);
+}
+
+void TR_GNSSReceiverLC86Serial::logTimeSync()
+{
+    // Once every 30 s on the boot console, so a bench run shows the clock
+    // model settling: the crystal against GPS, how late the poll left the
+    // stamps (what the envelope removes), and how tightly it is pinned.
+    const int64_t now = nowUs();
+    if (now - time_log_us_ < 30LL * 1000 * 1000 || time_sync_.samples() == 0) return;
+    time_log_us_ = now;
+    if (!time_sync_.valid())
+    {
+        ESP_LOGI(TAG, "GNSS time: %lu samples, history still under %.0f s",
+                 (unsigned long)time_sync_.samples(), lc86::GnssTimeSync::kMinSpanS);
+        return;
+    }
+    ESP_LOGI(TAG, "GNSS time: MCU crystal %+.2f ppm against GPS; 90 %% of PVT stamps "
+             "within %.1f ms of the envelope, envelope rms %.2f ms; %lu samples, "
+             "%lu restarts", time_sync_.driftPpm(), time_sync_.lateness90Ms(),
+             time_sync_.envelopeRmsMs(), (unsigned long)time_sync_.samples(),
+             (unsigned long)time_sync_.restarts());
+}
+
+bool TR_GNSSReceiverLC86Serial::enableRawOutputs()
+{
+    // Two epochs: the consumer takes one within the second it has, and a
+    // second slot rides out one slow pass. Eight ephemerides: they come one a
+    // second.
+    if (raw_epoch_q_ == nullptr)
+        raw_epoch_q_ = xQueueCreate(2, sizeof(gnss_raw::TimedRawEpoch));
+    if (eph_q_ == nullptr)
+        eph_q_ = xQueueCreate(8, sizeof(EphItem));
+    return raw_epoch_q_ != nullptr && eph_q_ != nullptr;
+}
+
+void TR_GNSSReceiverLC86Serial::publishRawEpoch(int64_t end_us)
+{
+    const rtcm3::MsmEpoch& me = parser_.msmEpoch();
+    if (!lc86::rawEpochFromMsm(me, raw_scratch_.epoch)) return;   // GLONASS alone: no GPS time
+    raw_scratch_.arrival_us = end_us;
+    raw_scratch_.mcu_us = 0;
+    raw_scratch_.gps_week = 0;
+    // MSM7 states the time of week; the week is the latest $PQTMPVT's
+    const uint16_t week = parser_.pvtGpsWeek();
+    if (week != 0)
+    {
+        const double gps_s = lc86::epochGpsSeconds(me.gps_tow_ms, week, parser_.pvtTowMs());
+        raw_scratch_.gps_week = (uint16_t)std::floor(gps_s / 604800.0);
+        int64_t mcu = 0;
+        if (time_sync_.mcuAt(gps_s, mcu)) raw_scratch_.mcu_us = mcu;
+    }
+    if (xQueueSend(raw_epoch_q_, &raw_scratch_, 0) != pdTRUE) raw_dropped_++;
+}
+
+void TR_GNSSReceiverLC86Serial::publishEphemeris()
+{
+    const size_t n = parser_.rtcmFrameLen();
+    if (n <= rtcm3::kFrameOverhead) return;
+    const uint8_t* payload = parser_.rtcmFrame() + 3;
+    const size_t len = n - rtcm3::kFrameOverhead;
+    const uint16_t mt = rtcm3::messageType(payload, len);
+    if ((mt != 1019 && mt != 1046 && mt != 1042) || len > kEphMaxPayload) return;
+    EphItem it;
+    it.len = (uint8_t)len;
+    memcpy(it.bytes, payload, len);
+    if (xQueueSend(eph_q_, &it, 0) != pdTRUE) eph_dropped_++;
+}
+
+bool TR_GNSSReceiverLC86Serial::takeRawEpoch(gnss_raw::TimedRawEpoch& out)
+{
+    return raw_epoch_q_ != nullptr && xQueueReceive(raw_epoch_q_, &out, 0) == pdTRUE;
+}
+
+bool TR_GNSSReceiverLC86Serial::takeEphemeris(uint8_t* out, size_t cap, size_t& len)
+{
+    if (eph_q_ == nullptr) return false;
+    EphItem it;
+    if (xQueueReceive(eph_q_, &it, 0) != pdTRUE) return false;
+    if (it.len > cap) return false;
+    memcpy(out, it.bytes, it.len);
+    len = it.len;
+    return true;
+}
+
+bool TR_GNSSReceiverLC86Serial::lastMsmEpochTime(uint32_t& gps_tow_ms, int64_t& end_us) const
+{
+    if (msm_epoch_end_us_ == 0) return false;
+    gps_tow_ms = msm_epoch_tow_ms_;
+    end_us = msm_epoch_end_us_;
+    return true;
 }
 
 bool TR_GNSSReceiverLC86Serial::pollRtcmFrame(uint8_t* out, size_t cap,

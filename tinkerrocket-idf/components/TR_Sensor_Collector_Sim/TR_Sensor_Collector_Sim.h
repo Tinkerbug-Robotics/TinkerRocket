@@ -49,6 +49,13 @@ public:
     // runs, so a log never pairs a real sky with a synthetic trajectory.
     bool getGNSSRtcmFrame(uint8_t* out, size_t cap, size_t& len, uint32_t& time_us);
 
+    // Raw GNSS for the raw-GNSS shadow filter (#1600).  Same rule again: a
+    // real sky must not meet a simulated IMU, so while a sim runs the real
+    // epochs and ephemerides are consumed and dropped.
+    bool enableGNSSRawOutputs() { return real_.enableGNSSRawOutputs(); }
+    bool getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out);
+    bool getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len);
+
     // Debug passthrough
     void getISM6HG256DebugSnapshot(ISM6HG256DebugSnapshot& snapshot_out) const;
     void getMMC5983MADebugSnapshot(MMC5983MADebugSnapshot& snapshot_out) const;

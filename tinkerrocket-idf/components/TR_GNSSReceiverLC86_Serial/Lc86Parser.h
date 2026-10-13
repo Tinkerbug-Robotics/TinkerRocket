@@ -81,6 +81,14 @@ public:
     // $PQTMEPE values (255 = never seen / unknown).
     const GNSSData& pvt() const { return pvt_; }
 
+    // GPS time of the last $PQTMPVT: its <TOW> (ms into the week), and the
+    // GPS week, which the sentence never states. The week comes from its UTC
+    // <Date>/<Time> plus <LeapS>, then the one whose time of week matches
+    // <TOW> (so a UTC Saturday night that GPS has already turned into the
+    // next week is named right). 0 = no time yet (fixless, no date).
+    uint32_t pvtTowMs() const { return pvt_tow_ms_; }
+    uint16_t pvtGpsWeek() const { return pvt_gps_week_; }
+
     // Valid after Event::PAIR_ACK ($PAIR001,<CommandID>,<Result>).
     // Result: 0 ok, 1 being processed, 2 send failed, 3 unsupported,
     // 4 parameter error, 5 service busy (protocol spec §2.4.1).
@@ -246,6 +254,7 @@ private:
     GNSSSatData sat_        = {};
     bool        sat_ready_  = false;
     uint32_t    pvt_tow_ms_ = 0;       // $PQTMPVT <TOW>, ms into the GPS week
+    uint16_t    pvt_gps_week_ = 0;     // from <Date>/<Time>/<LeapS>; 0 = unknown
 
     uint32_t bad_lines_       = 0;
     uint32_t overlong_lines_  = 0;

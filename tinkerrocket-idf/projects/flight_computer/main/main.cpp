@@ -55,6 +55,7 @@
 #include "test_mode_gate_policy.h"   // #1137 item 5: the #363 failsafe and the test-command gates
 #include "oc_cmd_dedup.h"        // #1112: dispatch only on the poll pass; bounded config retry
 #include "servo_pin_policy.h"    // servoPinsValid(): an M1 int -1 pin is unmapped, not GPIO 0xFFFFFFFF
+#include "loop_profile.h"        // bench only: -DTR_LOOP_PROFILE=1 section profiler (TR_LP_LAP)
 #include <driver/uart.h>
 #include <esp_private/esp_gpio_reserve.h>
 #include <esp_private/gpio.h>      // gpio_func_sel
@@ -65,6 +66,9 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <nvs_flash.h>
+#include <esp_heap_caps.h>
+#include <new>                    // placement new: the raw-GNSS shadow filter (#1600)
+#include <RawGnssShadow.h>        // TR_RawGnssShadow (#1600)
 #include <esp_log.h>
 #include <esp_task_wdt.h>
 #include <esp_system.h>
@@ -2789,6 +2793,45 @@ static void serviceConfigReport()
 
 static SemaphoreHandle_t i2c_bus_mutex = nullptr;
 
+#if defined(CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS) && defined(CONFIG_FREERTOS_USE_TRACE_FACILITY)
+// Bench builds with FreeRTOS run-time stats on (CONFIG_FREERTOS_USE_TRACE_FACILITY,
+// CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS): every task's share of its core
+// since the last report, every 5 s from the periodic diagnostics.  A task's
+// own wall-clock timing cannot say this: it counts the time higher-priority
+// tasks preempted it.
+static void cpuLoadReport()
+{
+    static constexpr int kMax = 32;
+    static TaskStatus_t prev[kMax];
+    static int nprev = 0;
+    static configRUN_TIME_COUNTER_TYPE prev_total = 0;
+    static TaskStatus_t cur[kMax];
+    configRUN_TIME_COUNTER_TYPE total = 0;
+    const int n = (int)uxTaskGetSystemState(cur, kMax, &total);
+    const double span = (double)(total - prev_total);
+    if (nprev > 0 && span > 0.0)
+    {
+        char line[400];
+        int len = 0;
+        for (int i = 0; i < n && len < (int)sizeof(line) - 40; i++)
+        {
+            configRUN_TIME_COUNTER_TYPE before = 0;
+            for (int j = 0; j < nprev; j++)
+                if (prev[j].xHandle == cur[i].xHandle) before = prev[j].ulRunTimeCounter;
+            const double pct = 100.0 * (double)(cur[i].ulRunTimeCounter - before) / span;
+            if (pct < 0.5) continue;
+            const BaseType_t c = xTaskGetCoreID(cur[i].xHandle);
+            const int core = c == tskNO_AFFINITY ? -1 : (int)c;
+            len += snprintf(line + len, sizeof(line) - len, " %s@%d %.1f%%", cur[i].pcTaskName, core, pct);
+        }
+        ESP_LOGI(TAG, "[CPU] %s", line);
+    }
+    for (int i = 0; i < n; i++) prev[i] = cur[i];
+    nprev = n;
+    prev_total = total;
+}
+#endif
+
 // ==========================================================================
 // SECTION: I2S sender task
 // ==========================================================================
@@ -2858,6 +2901,207 @@ static void i2sSenderTask(void *)
         if (fc_i2s_mutex) xSemaphoreGive(fc_i2s_mutex);
     }
 }
+
+// ==========================================================================
+// SECTION: Raw-GNSS shadow filter (#1600)
+// ==========================================================================
+// The tightly coupled GNSS/INS filter (TR_RawGnssEKF), run as a SHADOW beside
+// the flight filter: it gets the flight filter's own IMU input, tick by tick,
+// and the LC86G's raw MSM7 epochs and broadcast ephemerides, and its state
+// goes to the log at 10 Hz (RAW_GNSS_EKF_MSG).  Nothing it computes reaches
+// the flight filter, the state machine or a deployment.
+//
+// It runs on core 0, in a task below the sensors and the I2S sender.  The
+// flight loop on core 1 is the bottleneck already (instruction-fetch bound at
+// ~340 passes a second on the Beetle, against a 1 kHz design), and core 0 is
+// mostly idle.  The flight loop only copies each EKF tick's IMU input into a
+// lock-free ring and, once a second, the flight filter's state into a seqlock
+// (ShadowLink.h); neither can make it wait.  The GNSS poll task hands over the
+// raw epochs, each already placed on the MCU clock by the driver's
+// GnssTimeSync, and the ephemerides, through queues.
+//
+// The filter object (~40 kB: covariance, ephemeris store, satellite cache,
+// measurement buffers) goes in PSRAM where there is some.  The filter steps at
+// 25 Hz on the mean of the flight filter's ticks (RawGnssShadow min_step_s).
+// Every 5 s the task prints what it costs and how far it sits from the
+// flight filter.
+//
+// What it costs (Beetle FC, -O2, QIO flash and a 32 KB instruction cache,
+// IMU at 7,680 Hz, indoors with 9 satellites, 2026-10-13): 7.5 % of core 0,
+// and the flight loop 806 -> 775 passes/s (EKF tick 785 -> 848 us) for the
+// code the two cores now share the cache and flash bus for.  At IDF's DIO and
+// 16 KB defaults the same filter could not keep up on core 0 (19 % idle) and
+// took 12 % off a 313/s loop.
+#if TR_RAW_GNSS_SHADOW
+static gnss_raw::ShadowLink raw_shadow_link;
+static gnss_raw::RawGnssShadow* raw_shadow = nullptr;
+static uint32_t raw_shadow_seed_ms = 0;
+
+static int64_t rawShadowClock() { return esp_timer_get_time(); }
+
+// Core 1, every flight-filter tick: exactly the input GpsInsEKF::update got.
+static inline void rawShadowPushImu(const EkfIMUData& imu, bool level, bool in_flight, bool sim)
+{
+    static constexpr float kDeg2Rad = (float)(M_PI / 180.0);   // the flight filter's gyro input is deg/s
+    gnss_raw::ShadowImu s;
+    s.time_us = imu.time_us;
+    s.acc[0] = (float)imu.acc_x;
+    s.acc[1] = (float)imu.acc_y;
+    s.acc[2] = (float)imu.acc_z;
+    s.gyro[0] = (float)imu.gyro_x * kDeg2Rad;
+    s.gyro[1] = (float)imu.gyro_y * kDeg2Rad;
+    s.gyro[2] = (float)imu.gyro_z * kDeg2Rad;
+    s.flags = (uint8_t)((level ? gnss_raw::kShadowLevel : 0) | (in_flight ? gnss_raw::kShadowInFlight : 0)
+                        | (sim ? gnss_raw::kShadowSim : 0));
+    raw_shadow_link.imu.push(s);   // a full ring drops the tick and counts it
+}
+
+// Core 1, once a second: the flight filter's state, to start from and, on the
+// pad, to take the attitude from.
+static inline void rawShadowPublishSeed(uint32_t time_us, bool on_pad)
+{
+    const uint32_t now_ms = millis();
+    if (raw_shadow_seed_ms != 0 && now_ms - raw_shadow_seed_ms < 1000) return;
+    raw_shadow_seed_ms = (now_ms == 0) ? 1 : now_ms;
+    gnss_raw::ShadowSeed s;
+    double pos[3];
+    float vel[3], q[4], wb[3];
+    ekf.getPosEst(pos);
+    ekf.getVelEst(vel);
+    ekf.getQuaternion(q);
+    ekf.getRotRateBias(wb);
+    s.time_us = time_us;
+    for (int i = 0; i < 3; i++)
+    {
+        s.lla[i] = pos[i];
+        s.vel_ned[i] = vel[i];
+        s.gyro_bias[i] = wb[i];
+    }
+    for (int i = 0; i < 4; i++) s.quat[i] = q[i];
+    s.on_pad = on_pad ? 1 : 0;
+    raw_shadow_link.seed.write(s);
+}
+
+
+// Core 0: the shadow filter's task.
+static void rawShadowTask(void*)
+{
+    gnss_raw::RawGnssShadow& sh = *raw_shadow;
+    sh.setClock(&rawShadowClock);
+    static gnss_raw::TimedRawEpoch epoch;     // ~1.6 kB: off the stack
+    uint8_t eph[TR_GNSSReceiverLC86Serial::kEphMaxPayload];
+    uint32_t seed_seq = 0;
+    gnss_raw::ShadowSeed seed = {};
+    bool have_seed = false;
+    int64_t win_t0 = esp_timer_get_time();
+    int64_t busy_us = 0;
+    uint32_t imu0 = 0, steps0 = 0, recs = 0, rec_drops = 0;
+    uint64_t step_sum0 = 0;
+    for (;;)
+    {
+        const int64_t a0 = esp_timer_get_time();
+        gnss_raw::ShadowSeed s;
+        uint32_t seq = 0;
+        if (raw_shadow_link.seed.read(s, seq) && seq != seed_seq)
+        {
+            seed_seq = seq;
+            seed = s;
+            have_seed = true;
+            sh.onSeed(s);
+        }
+        size_t len = 0;
+        while (sensor_collector.getGNSSEphemeris(eph, sizeof(eph), len)) sh.onEphemeris(eph, len);
+        while (sensor_collector.getGNSSRawEpoch(epoch)) sh.onEpoch(epoch);
+        // A bounded batch: a filter that falls behind must still read its
+        // seeds and epochs and say so, not spin here on a ring that refills.
+        gnss_raw::ShadowImu imu;
+        for (int k = 0; k < 32 && raw_shadow_link.imu.pop(imu); k++)
+        {
+            sh.onImu(imu, gnss_raw::RawGnssShadow::unwrap32(imu.time_us, esp_timer_get_time()));
+            RawGnssEkfData rec;
+            if (sh.takeLog(rec))
+            {
+                if (enqueueI2STx(RAW_GNSS_EKF_MSG, (const uint8_t*)&rec, sizeof(rec))) recs++;
+                else rec_drops++;
+            }
+        }
+        const int64_t a1 = esp_timer_get_time();
+        busy_us += a1 - a0;
+
+        if (a1 - win_t0 >= 5000000)
+        {
+            const gnss_raw::RawGnssShadow::Stats& st = sh.stats();
+            const double win_s = (double)(a1 - win_t0) * 1e-6;
+            const uint32_t steps = st.step_n - steps0;
+            const double step_avg = steps ? (double)(st.step_us_sum - step_sum0) / steps : 0.0;
+            double dn = 0.0, de = 0.0, dd = 0.0;
+            if (have_seed && sh.running())
+            {
+                const double* lla = sh.filter().lla();
+                dn = (lla[0] - seed.lla[0]) * 6.371e6;
+                de = (lla[1] - seed.lla[1]) * 6.371e6 * cos(seed.lla[0]);
+                dd = seed.lla[2] - lla[2];
+            }
+            ESP_LOGI(TAG, "[RAWGNSS] %s (starts %lu, stops %lu, last %u) | imu %.0f/s, step %.0f us "
+                          "(max %lu) | epochs %lu: applied %lu, no time %lu, idle %lu, stale %lu | last: "
+                          "%d meas, pr %d+%d rej, rr %d+%d rej, age %.0f ms, build %lu us, update %lu us "
+                          "(max %lu/%lu) | eph %d sats | from flight filter N %.1f E %.1f D %.1f m | "
+                          "core 0 %.1f%% | log %lu, dropped %lu, ring drops %lu",
+                     sh.running() ? "running" : "waiting", (unsigned long)st.starts,
+                     (unsigned long)st.stops, (unsigned)st.last_stop,
+                     (double)(st.imu - imu0) / win_s, step_avg, (unsigned long)st.step_us_max,
+                     (unsigned long)st.epochs, (unsigned long)st.epochs_applied,
+                     (unsigned long)st.epochs_untimed, (unsigned long)st.epochs_idle,
+                     (unsigned long)st.epochs_stale, st.last_meas, st.last.used_pr,
+                     st.last.rejected_pr, st.last.used_rr, st.last.rejected_rr,
+                     st.last_age_s * 1000.0, (unsigned long)st.build_us,
+                     (unsigned long)st.update_us, (unsigned long)st.build_us_max,
+                     (unsigned long)st.update_us_max, sh.ephemerisSatellites(), dn, de, dd,
+                     100.0 * (double)busy_us * 1e-6 / win_s, (unsigned long)recs,
+                     (unsigned long)rec_drops, (unsigned long)raw_shadow_link.imu.dropped());
+            win_t0 = a1;
+            busy_us = 0;
+            imu0 = st.imu;
+            steps0 = st.step_n;
+            step_sum0 = st.step_us_sum;
+        }
+        vTaskDelay(pdMS_TO_TICKS(4));
+    }
+}
+
+// setup_fc, after the sensors: the filter object and its task.
+static void startRawShadow()
+{
+    // PSRAM first: with QIO and the 32 KB instruction cache (#1607) it cost
+    // the flight loop no more than internal RAM did (775 against 777 passes/s,
+    // 2026-10-13), and internal RAM is the scarcer (94 KB left, not 53).
+    const size_t n = sizeof(gnss_raw::RawGnssShadow);
+    const char* where = "PSRAM";
+    void* mem = heap_caps_aligned_alloc(alignof(gnss_raw::RawGnssShadow), n,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (mem == nullptr)
+    {
+        where = "internal RAM";
+        mem = heap_caps_aligned_alloc(alignof(gnss_raw::RawGnssShadow), n,
+                                      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (mem == nullptr)
+    {
+        ESP_LOGE(TAG, "[RAWGNSS] no memory for the shadow filter (%u B): not started", (unsigned)n);
+        return;
+    }
+    raw_shadow = new (mem) gnss_raw::RawGnssShadow();
+    if (xTaskCreatePinnedToCore(rawShadowTask, "Raw GNSS", 8192, nullptr, 1, nullptr,
+                                config::SENSOR_CORE) != pdPASS)
+    {
+        ESP_LOGE(TAG, "[RAWGNSS] task not created: shadow filter off");
+        return;
+    }
+    ESP_LOGI(TAG, "[RAWGNSS] shadow filter on core %u, priority 1 (%u B in %s; %u B internal left)",
+             (unsigned)config::SENSOR_CORE, (unsigned)n, where,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+}
+#endif  // TR_RAW_GNSS_SHADOW
 
 // ==========================================================================
 // SECTION: Status LED
@@ -4681,7 +4925,15 @@ static void setup_fc()
     // make visible — a boot parked on "Sensors" for 35 s is a dead GNSS, and the
     // FCB_GNSS report immediately after begin() returns confirms it.
     fcBootStatus(FCB_SENSORS);
+#if TR_RAW_GNSS_SHADOW
+    // #1600: the GNSS driver's raw outputs exist before its poll task does
+    if (!sensor_collector.enableGNSSRawOutputs())
+        ESP_LOGE(TAG, "[RAWGNSS] no memory for the raw GNSS queues");
+#endif
     sensor_collector.begin(config::SENSOR_CORE);
+#if TR_RAW_GNSS_SHADOW
+    startRawShadow();
+#endif
     // The barometer bring-up is now bounded (it used to retry forever, which
     // meant a dead part stopped the FC booting at all, on every reset reason).
     // A boot that continued without it must SAY so — a silent baro-absent
@@ -5839,8 +6091,13 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
 // ==========================================================================
 // SECTION: Main loop
 // ==========================================================================
+#if defined(TR_BENCH_IRAM) && TR_BENCH_IRAM >= 2
+static IRAM_ATTR void loop_fc()   // bench: TR_BENCH_IRAM=2 runs the loop from internal RAM
+#else
 static void loop_fc()
+#endif
 {
+    TR_LP_LAP(YIELD);
     // Zero the IMU-queue drop gauge on the first pass: the poll task starts
     // ~4 s before this loop does (servo init holds setup), producing ~8k
     // meaningless pre-consumer drops into an unconsumed queue.  From here on
@@ -5883,6 +6140,7 @@ static void loop_fc()
     // the retry on fc_ota_data_mode would mean the one path that can recover
     // the link is only reachable while we are still in the mode we just left.
     fcServiceI2sTxRecovery();
+    TR_LP_LAP(PRE);
 
     // ==========================================================================
     // SECTION: Sensor drain and conversion
@@ -5936,6 +6194,7 @@ static void loop_fc()
         while (sensor_collector.getISM6HG256Data(ism6hg256_data))
         {
             dbg_ism6_reads++;
+            TR_LP_SAMPLE();
             fc_ism6_win.add(ism6hg256_data);
             ism6_drained_this_pass = true;
 
@@ -5968,6 +6227,7 @@ static void loop_fc()
         }
 
     }
+    TR_LP_LAP(IMU_DRAIN);
 
     if (sensor_collector.getBMP585Data(bmp585_data))
     {
@@ -6104,6 +6364,7 @@ static void loop_fc()
             }
         }
     }
+    TR_LP_LAP(SENSORS);
 
     // ==========================================================================
     // SECTION: Full config report (#915)
@@ -6224,6 +6485,8 @@ static void loop_fc()
         }
     }
 
+    TR_LP_LAP(PAD_MISC);
+
     // ==========================================================================
     // SECTION: Flight logic: pressure altitude and orientation
     // ==========================================================================
@@ -6233,6 +6496,7 @@ static void loop_fc()
     {
         lt_loop_count++;
         last_flight_loop_update_time = logic_now_us;
+        TR_LP_LAP(GATE);
 
         // #1326: close the IMU drain window HERE — this is the consumer's
         // boundary, so the boxcar spans exactly the samples that arrived since
@@ -6261,6 +6525,7 @@ static void loop_fc()
             // averaged into the following one.
             fc_ism6_win.reset();
         }
+        TR_LP_LAP(IMU_MEAN);
 
         // ### Pressure altitude calculation (for kinematic checks) ###
         const uint32_t now_ms = time_ms();
@@ -6326,6 +6591,8 @@ static void loop_fc()
                                       (1.0f - powf(bmp_latest_si.pressure / ground_pressure_pa, 1.0f / 5.255f));
             }
         }
+
+        TR_LP_LAP(BARO_ALT);
 
         // ### State estimation from GPS/INS EKF ###
         float imu_pos[3] = {0.0f, 0.0f, 0.0f};   // local ENU [E,N,U] meters
@@ -6404,6 +6671,8 @@ static void loop_fc()
                     }
                 }
             }
+
+            TR_LP_LAP(ORIENT);
 
             // ==========================================================================
             // SECTION: EKF input, initialization, and update
@@ -6571,6 +6840,8 @@ static void loop_fc()
                     }
                 }
             }
+
+            TR_LP_LAP(EKF_PREP);
 
             // ── Initialize or update the EKF ──
             // Wait for valid GNSS fix before init — avoids initializing
@@ -6755,6 +7026,7 @@ static void loop_fc()
                                       "(roll control unaffected)");
                     }
                 }
+                TR_LP_LAP(EKF_INIT);
             }
             else if (run_ekf_this_tick)
             {
@@ -6784,6 +7056,16 @@ static void loop_fc()
                 ekf.setGnssVerticalHeldOut(
                     !GnssAscentGate::gnssVerticalToEkf(gnss_admit_state));
                 ekf.update(use_ahrs_acc, ekf_imu, ekf_gnss, ekf_mag);
+#if TR_RAW_GNSS_SHADOW
+                // #1600: the raw-GNSS shadow filter gets this very input, and
+                // once a second the flight filter's state (see its section).
+                // Not after a GNSS-absent init: there is no position to seed.
+                rawShadowPushImu(ekf_imu, use_ahrs_acc, rocket_state == INFLIGHT,
+                                 sensor_collector.isSimActive() || sim_flight_latched);
+                if (!gnss_absent_flight)
+                    rawShadowPublishSeed(ekf_imu.time_us,
+                                         rocket_state == READY || rocket_state == PRELAUNCH);
+#endif
                 // #1418: once the landing detector has called it, the rocket
                 // is a measurement of zero velocity.  Soft and rate-limited
                 // inside the filter; on a no-fix landing it is the only
@@ -6831,6 +7113,8 @@ static void loop_fc()
                                  (double)(accel_norm / 9.80665f));
                     }
                 }
+
+                TR_LP_LAP(EKF_ZUPT);
 
                 // Barometer measurement update.  Freshness is tracked by
                 // BaroGatePolicy against the sample's own timestamp, NOT the
@@ -6906,6 +7190,7 @@ static void loop_fc()
                     }
                 }
 
+                TR_LP_LAP(EKF_BARO);
                 const uint32_t ekf_us = time_us() - ekf_t0;
                 lt_ekf_total_us += ekf_us;
                 lt_ekf_count++;
@@ -6946,6 +7231,7 @@ static void loop_fc()
                 imu_pos[1] = (float)(dlat * (R_EARTH + ref_alt_m));            // North
                 imu_pos[2] = (float)dalt;                                       // Up
             }
+            TR_LP_LAP(EKF_EXTRACT);
         }
 
         if (have_gnss_si && (gnss_latest_si.fix_mode >= 3U))
@@ -7193,6 +7479,7 @@ static void loop_fc()
             // readConfigFrame() I2C reads have an idle bus.  Released after
             // the command dispatch block.
         }
+        TR_LP_LAP(I2C_POLL);
 
         // ==========================================================================
         // SECTION: Command dispatch from the Out Computer
@@ -9263,6 +9550,7 @@ static void loop_fc()
         {
             xSemaphoreGive(i2c_bus_mutex);
         }
+        TR_LP_LAP(CMD);
 
         // ==========================================================================
         // SECTION: Pad calibration completion (#1114)
@@ -9328,6 +9616,8 @@ static void loop_fc()
                 }
             }
         }
+
+        TR_LP_LAP(PAD_CAL);
 
         // ==========================================================================
         // SECTION: Kinematic checks and sensor health
@@ -9467,6 +9757,7 @@ static void loop_fc()
                                        ism6_fresh_kc,    // #1108 imu_healthy
                                        // GnssAscentGate: no apogee vote until admitted
                                        GnssAscentGate::gnssVotes(gnss_admit_state));
+            TR_LP_LAP(KINEMATICS);
 
             // #834 item 4: step the main-deploy gate here, where baro_healthy
             // is in scope.  servicePyroChannels() runs LATER in this same pass
@@ -9643,6 +9934,8 @@ static void loop_fc()
             }
         }
 
+        TR_LP_LAP(GATES);
+
         // ==========================================================================
         // SECTION: Test modes (ground, servo, replay)
         // ==========================================================================
@@ -9700,6 +9993,7 @@ static void loop_fc()
             fcRevertToTx();
         }
 
+        TR_LP_LAP(TESTMODE);
         if (ground_test_active)
         {
             // Ground test behavior depends on control mode:
@@ -10649,6 +10943,8 @@ static void loop_fc()
         }
         }
 
+        TR_LP_LAP(STATE);
+
         // ==========================================================================
         // SECTION: Simulator re-arm and diagnostics
         // ==========================================================================
@@ -10724,6 +11020,8 @@ static void loop_fc()
                               out_ready ? 1 : 0);
             }
         }
+
+        TR_LP_LAP(SIM);
 
         // ==========================================================================
         // SECTION: Telemetry packing (NonSensorData)
@@ -11092,6 +11390,7 @@ static void loop_fc()
                 }
             }
         }
+        TR_LP_LAP(TELEM);
     }
     
     const uint32_t now_ms_svc = time_ms();
@@ -11100,10 +11399,21 @@ static void loop_fc()
     serviceBlueLedFlash(now_ms_svc);
     serviceCameraStart(now_ms_svc);
     serviceCameraStop(now_ms_svc);
+    TR_LP_LAP(SERVICES);
 
     // ==========================================================================
     // SECTION: Periodic diagnostics
     // ==========================================================================
+#if defined(CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS) && defined(CONFIG_FREERTOS_USE_TRACE_FACILITY)
+    {
+        static uint32_t last_cpu_report_ms = 0;
+        if ((now_ms_svc - last_cpu_report_ms) >= 5000U)
+        {
+            last_cpu_report_ms = now_ms_svc;
+            cpuLoadReport();
+        }
+    }
+#endif
     // --- Periodic poll-task timing diagnostics (once per second) ---
     {
         static uint32_t last_poll_diag_ms = 0;
@@ -11352,6 +11662,9 @@ static void loop_fc()
         }
     }
 
+    TR_LP_LAP(DIAG);
+    tr_lp_maybe_report();
+
     // Give back remainder of time slice
     taskYIELD();
 }
@@ -11369,6 +11682,7 @@ extern "C" void app_main(void)
         [](void *) {
             // Subscribe this task to WDT so esp_task_wdt_reset() works
             esp_task_wdt_add(xTaskGetCurrentTaskHandle());
+            tr_lp_boot();   // bench profiler (TR_LOOP_PROFILE); empty otherwise
             for (;;) { loop_fc(); esp_task_wdt_reset(); }
         },
         "flight", 16 * 1024, nullptr, configMAX_PRIORITIES - 1, &flight_task, 1);
