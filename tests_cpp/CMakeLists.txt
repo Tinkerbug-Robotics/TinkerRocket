@@ -1498,6 +1498,20 @@ target_include_directories(test_lc86_parser PRIVATE
 target_link_libraries(test_lc86_parser GTest::gtest_main)
 gtest_discover_tests(test_lc86_parser)
 
+# ---------- test_gnss_time_sync ----------
+# lc86::GnssTimeSync, the MCU clock against GPS time from the receiver's
+# sentence stamps alone (no 1PPS on the Beetle M1; #1600): a simulated LC86G
+# and a simulated 27 ms GNSS poll that backdates each sentence by the bytes
+# behind it, as the driver does, against a crystal 30 ppm off.
+add_executable(test_gnss_time_sync test_gnss_time_sync.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/GnssTimeSync.cpp
+)
+target_include_directories(test_gnss_time_sync PRIVATE
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+)
+target_link_libraries(test_gnss_time_sync GTest::gtest_main)
+gtest_discover_tests(test_gnss_time_sync)
+
 # ---------- wire fixture corpus (docs/plans/android-port.md §2.1) ----------
 # Golden-vector generation from the REAL packed structs: wire_fixture_gen
 # writes tests_cpp/fixtures/wire/ (committed), test_wire_fixture_freshness

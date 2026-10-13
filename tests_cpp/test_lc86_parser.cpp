@@ -169,6 +169,43 @@ TEST(Lc86Pvt, VelUSignIsNegatedVelD)
     EXPECT_EQ(d.pdop_x10, 15);
 }
 
+TEST(Lc86Pvt, KeepsGpsTimeOfWeekAndNamesTheWeek)
+{
+    // The doc's own example: 2023-05-05 07:39:38 UTC + 18 leap seconds is
+    // 459596 s into GPS week 2260 (#1600: the time sync needs GPS time).
+    Lc86Parser p;
+    ASSERT_EQ(count(feedAll(p, kDocPvtLine), Event::PVT), 1);
+    EXPECT_EQ(p.pvtTowMs(), 459596000u);
+    EXPECT_EQ(p.pvtGpsWeek(), 2260);
+}
+
+TEST(Lc86Pvt, TheWeekTurnsWithGpsTimeNotUtc)
+{
+    // Saturday 2026-08-22 23:59:50 UTC is already 8 s into GPS week 2433
+    // (18 leap seconds); 20 s earlier it is still the end of week 2432.
+    Lc86Parser p;
+    ASSERT_EQ(count(feedAll(p, frame(
+        "PQTMPVT,1,8000,20260822,235950.000,1,3,12,18,40.0,-105.0,1000.0,0.0,"
+        "0.0,0.0,0.0,0.0,0.0,1.0,1.5")), Event::PVT), 1);
+    EXPECT_EQ(p.pvtTowMs(), 8000u);
+    EXPECT_EQ(p.pvtGpsWeek(), 2433);
+    ASSERT_EQ(count(feedAll(p, frame(
+        "PQTMPVT,1,604788000,20260822,235930.000,1,3,12,18,40.0,-105.0,1000.0,0.0,"
+        "0.0,0.0,0.0,0.0,0.0,1.0,1.5")), Event::PVT), 1);
+    EXPECT_EQ(p.pvtTowMs(), 604788000u);
+    EXPECT_EQ(p.pvtGpsWeek(), 2432);
+}
+
+TEST(Lc86Pvt, NoDateNoWeek)
+{
+    // A fixless module sends empty fields: no week, so nothing is synced to it.
+    Lc86Parser p;
+    feedAll(p, kDocPvtLine);
+    ASSERT_EQ(p.pvtGpsWeek(), 2260);
+    ASSERT_EQ(count(feedAll(p, frame("PQTMPVT,1,,,,0,0,0,,,,,,,,,,,,")), Event::PVT), 1);
+    EXPECT_EQ(p.pvtGpsWeek(), 0);
+}
+
 TEST(Lc86Pvt, QualityZeroForcesNoFix)
 {
     // FixMode=3 but Quality=0: the module's own validity word wins (the #562

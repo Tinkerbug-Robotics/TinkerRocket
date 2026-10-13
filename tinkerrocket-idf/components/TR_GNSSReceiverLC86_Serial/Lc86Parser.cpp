@@ -77,6 +77,17 @@ static void parseHmsMs(const char* s, uint8_t& h, uint8_t& m, uint8_t& sec,
     ms = frac;
 }
 
+// Days from 1970-01-01 to a proleptic Gregorian date (Hinnant's days_from_civil).
+static int64_t daysFromCivil(int64_t y, unsigned m, unsigned d)
+{
+    y -= m <= 2;
+    const int64_t era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = static_cast<unsigned>(y - era * 400);
+    const unsigned doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1;
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + static_cast<int64_t>(doe) - 719468;
+}
+
 static int hexVal(char c)
 {
     if (c >= '0' && c <= '9') return c - '0';
@@ -446,6 +457,27 @@ Event Lc86Parser::parsePqtmPvt(const char* const* f, size_t n)
     d.minute = mm;
     d.second = ss;
     d.milli_second = ms;
+
+    // The GPS week: UTC <Date>/<Time> + <LeapS> names it, and <TOW> (the
+    // receiver's own GPS time) settles which side of a week boundary the
+    // epoch is on. No date (fixless) leaves it 0.
+    pvt_gps_week_ = 0;
+    if (d.year >= 1980 && d.month >= 1 && d.month <= 12 && d.day >= 1 && d.day <= 31)
+    {
+        long leap = fieldLong(f[8]);
+        if (leap < 10 || leap > 40) leap = 18;     // GPS - UTC since 2017; blank before the almanac
+        const int64_t days = daysFromCivil(d.year, d.month, d.day) - daysFromCivil(1980, 1, 6);
+        const int64_t gps_s = days * 86400 + hh * 3600 + mm * 60 + ss + leap;
+        int64_t week = gps_s / 604800;
+        if (pvt_tow_ms_ > 0)
+        {
+            const int64_t tow_date_s = gps_s - week * 604800;
+            const int64_t tow_s = pvt_tow_ms_ / 1000;
+            if (tow_s - tow_date_s > 302400) week -= 1;
+            else if (tow_date_s - tow_s > 302400) week += 1;
+        }
+        if (week > 0 && week < 65535) pvt_gps_week_ = static_cast<uint16_t>(week);
+    }
 
     const long quality  = fieldLong(f[5]);
     const long fix_mode = fieldLong(f[6]);
