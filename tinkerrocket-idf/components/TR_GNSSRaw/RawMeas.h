@@ -39,6 +39,17 @@ struct RawEpoch
     RawObs obs[kMaxObs] = {};
 };
 
+// An epoch as a receiver driver hands it to a raw-GNSS filter: with its GPS
+// instant placed on the MCU clock (the LC86G driver's GnssTimeSync), so the
+// filter can apply it at its own time however late it arrives.
+struct TimedRawEpoch
+{
+    RawEpoch epoch;
+    int64_t  mcu_us = 0;      // the epoch's GPS instant on the MCU clock (esp_timer, us); 0 = not known yet
+    int64_t  arrival_us = 0;  // when its last frame arrived (MCU, us)
+    uint16_t gps_week = 0;    // its full GPS week; 0 = not known yet
+};
+
 // One satellite at one epoch, corrected (see above). sat_pos is the
 // satellite at the transmit time in the ECEF frame of that instant; the
 // filter turns it by the Earth's rotation over the signal's travel (Sagnac).

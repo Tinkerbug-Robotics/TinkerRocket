@@ -52,6 +52,11 @@ public:
         double relock_gap_s    = 2.5;     // 2.5 epochs at the LC86G's 1 Hz
         double rr_dyn_sigma    = 0.5;     // m/s per g above 1 g
         double rr_relock_sigma = 3.0;     // m/s
+        // Each satellite's orbit is solved exactly at most this often and
+        // carried between by its velocity and acceleration (0: exactly at
+        // every epoch). Over 5 s that is 2 mm and 1 mm/s; it cuts what the
+        // satellites cost the flight computer several fold.
+        double sat_refresh_s   = 5.0;
     };
 
     // The error model's fit (sigma^2 = a^2 + b^2 * 10^(-(C/N0 - 35)/10)).
@@ -93,8 +98,26 @@ private:
     static constexpr int kSys = 3;
     static constexpr int kPrn = 64;
 
+    // A satellite's state at one instant, from one ephemeris.
+    struct SatState
+    {
+        uint8_t  sys = 0, prn = 0;
+        bool     valid = false;
+        int      iode = 0;
+        double   toe = 0.0;
+        double   t_ref = 0.0;        // the system time it is at (a transmit time)
+        double   pos[3] = {}, vel[3] = {}, acc[3] = {};
+        double   clk = 0.0;          // s: with relativity, less the group delay
+        double   clk_rate = 0.0;     // s/s
+        uint32_t used = 0;           // for replacement, least recently used first
+    };
+    static constexpr int kSatCache = 40;
+    const SatState& satState(const gps_eph_t& e, int sys, int prn, double t_sv);
+
     Config     cfg_;
     gps_iono_t iono_ = {};
+    SatState   cache_[kSatCache];
+    uint32_t   cache_tick_ = 0;
     double     first_[kSys][kPrn];
     double     last_[kSys][kPrn];
     bool       seen_[kSys][kPrn];

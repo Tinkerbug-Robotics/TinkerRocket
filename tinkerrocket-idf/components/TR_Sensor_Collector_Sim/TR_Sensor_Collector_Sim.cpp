@@ -404,6 +404,20 @@ bool SensorCollectorSim::getGNSSRtcmFrame(uint8_t* out, size_t cap, size_t& len,
     return false;   // consumed, not forwarded — see the header
 }
 
+bool SensorCollectorSim::getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out)
+{
+    const bool have = real_.getGNSSRawEpoch(out);
+    if (phase_ == SIM_IDLE) return have;
+    return false;   // consumed, not forwarded — see the header
+}
+
+bool SensorCollectorSim::getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len)
+{
+    const bool have = real_.getGNSSEphemeris(out, cap, len);
+    if (phase_ == SIM_IDLE) return have;
+    return false;   // consumed, not forwarded — see the header
+}
+
 // ============================================================================
 // Physics
 // ============================================================================

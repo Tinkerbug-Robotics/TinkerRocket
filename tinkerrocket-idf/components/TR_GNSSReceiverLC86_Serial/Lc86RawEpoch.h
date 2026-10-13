@@ -52,6 +52,21 @@ inline bool rawEpochFromMsm(const rtcm3::MsmEpoch& in, gnss_raw::RawEpoch& out)
     return true;
 }
 
+// An MSM7 epoch's continuous GPS time (s: week * 604800 + time of week).
+// MSM7 states only the time of week; the week is the one of the nearest
+// $PQTMPVT (the parser's pvtGpsWeek/pvtTowMs), moved across the week's end
+// when the two times of week straddle it.
+inline double epochGpsSeconds(uint32_t tow_ms, uint16_t pvt_week, uint32_t pvt_tow_ms)
+{
+    double t = pvt_week * 604800.0 + tow_ms * 1.0e-3;
+    const double ref = pvt_week * 604800.0 + pvt_tow_ms * 1.0e-3;
+    if (t - ref > 302400.0)
+        t -= 604800.0;
+    else if (t - ref < -302400.0)
+        t += 604800.0;
+    return t;
+}
+
 }  // namespace lc86
 
 #endif  // LC86_RAW_EPOCH_H

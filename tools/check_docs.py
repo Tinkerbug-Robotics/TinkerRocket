@@ -62,6 +62,7 @@ CODE_TO_STRUCT = {
     0xF1: ("LoRaFastData", "LoRaSlowData"),
     0xF9: "LoRaUplinkData",
     0x94: "PyroFaultTripData",
+    0x96: "RawGnssEkfData",
 }
 
 HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)

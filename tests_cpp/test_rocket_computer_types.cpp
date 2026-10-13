@@ -52,6 +52,18 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(sizeof(LoRaUplinkData), 13u);  // uplink RSSI/SNR log record (0xF9)
     EXPECT_EQ(sizeof(PyroFaultTripData), 13u);  // #1553 fault-current trip log record (0x94)
     EXPECT_EQ(sizeof(GnssRtcmHeader), 5u);      // raw RTCM3 frame record header (0x95)
+    // #1600: the raw-GNSS shadow filter's 10 Hz record (0x96); time_us first,
+    // as every FC stream, and the fields the ground decoder reads by offset
+    EXPECT_EQ(sizeof(RawGnssEkfData), 90u);
+    EXPECT_EQ(offsetof(RawGnssEkfData, time_us), 0u);
+    EXPECT_EQ(offsetof(RawGnssEkfData, lat_e7), 4u);
+    EXPECT_EQ(offsetof(RawGnssEkfData, vel_ned), 16u);
+    EXPECT_EQ(offsetof(RawGnssEkfData, quat), 28u);
+    EXPECT_EQ(offsetof(RawGnssEkfData, clk_bias_m), 44u);
+    EXPECT_EQ(offsetof(RawGnssEkfData, pos_sigma_cm), 60u);
+    EXPECT_EQ(offsetof(RawGnssEkfData, epoch_tow_ms), 72u);
+    EXPECT_EQ(offsetof(RawGnssEkfData, flags), 83u);
+    EXPECT_EQ(offsetof(RawGnssEkfData, prop_us), 88u);
     EXPECT_EQ(sizeof(FcBootStatusData), 4u); // FC->OC boot progress (0xFA)
     EXPECT_EQ(sizeof(i24le_t),         3u);
     EXPECT_EQ(sizeof(Vec3i16),         6u);
@@ -1810,6 +1822,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(PYRO_FAULT_TRIP_MSG),
         // FC->OC raw RTCM3 frames from the GNSS receiver (LC86G MSM7), log-only.
         MT(GNSS_RTCM_MSG),
+        // FC->OC the raw-GNSS shadow filter's state (#1600), log-only.
+        MT(RAW_GNSS_EKF_MSG),
     };
 #undef MT
 
@@ -1847,7 +1861,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     //      go in the 0x90 block.
     // 98 = 97 + PYRO_FAULT_TRIP_MSG (0x94, #1553 fault-current trip record).
     // 99 = 98 + GNSS_RTCM_MSG (0x95, the LC86G's raw RTCM3 frames).
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 99u)
+    // 100 = 99 + RAW_GNSS_EKF_MSG (0x96, the raw-GNSS shadow filter, #1600).
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 100u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }
