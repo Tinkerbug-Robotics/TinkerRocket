@@ -247,6 +247,38 @@ bench's sky is why the shadow stops for a sim). The rig replay supplies them.
 - The console prints the replay's time, phase and clock state and the flight filter's ENU state once a
   second (`[REPLAY]`), to set beside the flight's truth.
 
+### What the first rig replay showed (rp5_0829, 2026-10-13)
+
+The flight computer flew the flight on schedule: launch at +0.36 s, burnout at +2.72 s (truth 2.755 s),
+apogee at about 11.9 s (truth about 11.7 s), LANDED at 68.7 s (touchdown 66.7 s). Against the flight's
+truth, from the OC's log:
+
+| Phase | Shadow (raw GNSS) | Flight filter | Receiver's own fixes |
+|---|---|---|---|
+| Pad | 0.4 m H, 0.8 m V | 0.1 m, 0.1 m | 0.5 m, 0.0 m |
+| Boost | 6.0 m, 2.2 m, 3.2 m/s | 5.1 m, 4.2 m, 2.4 m/s | velocity 41 m/s off |
+| Coast | 8.2 m, 8.2 m, 3.2 m/s | 32.5 m, 21.9 m, 7.5 m/s | velocity 71 m/s off, 23 m V |
+| Drogue | 19.3 m, 14.5 m, 8.8 m/s | 6.4 m, 4.5 m | 1.2 m, 3.9 m |
+| Main | 2.7 m, 3.3 m, 0.5 m/s | 17.0 m, 14.1 m, 7.3 m/s | 13.2 m, 28.5 m, 7.3 m/s |
+
+- **The flight filter** went wherever the receiver's bad fixes took it: lagging through boost, 120-150 m
+  off at reacquisition, and 28 m off vertically under the main. The physics checks flagged those runs
+  (142 of 1,937 fixes; none on the pad).
+- **The shadow** held under the main, where the receiver's own fixes did not.
+- **Both filters' attitude turned at the drogue opening:** 31 degrees for the flight filter, 19 for the
+  shadow.
+  - The cause is the levelling after apogee (`use_ahrs_acc`). For 5 s the drag pulled 10-45 degrees off
+    vertical while the rocket still moved 10-12 m/s sideways.
+  - The flight filter's 10 Hz fixes hid the error in its position. The shadow's raw epochs come once a
+    second, so it turned into 4 m/s of velocity a second.
+  - So the shadow now levels in flight only once its velocity has held steady from epoch to epoch and
+    the specific force is g's size (`LevelGate.h`). The flight filter's own levelling is the owner's
+    call.
+- **Launch latched on the accelerometer-only fallback**, with the #1102 "blocked static port" warning.
+  The modeled port error (-k q) reads the first second of boost below the pad.
+- **Receiver at touchdown:** it lost every satellite (the 3-D antenna pattern, lying on the ground), so
+  the flight filter landed 11 m off.
+
 ## Phase 3: the port against the prototype
 
 `TR_RawGnssEKF` (the filter; float on the flight computer) and `TR_GNSSRaw`'s `RawMeasBuilder`, fed
