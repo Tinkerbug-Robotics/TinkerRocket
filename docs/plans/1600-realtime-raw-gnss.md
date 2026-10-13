@@ -147,6 +147,28 @@ The corrections freeze at liftoff. As the backup ionosphere, each one comes out 
 pseudorange. A satellite with none keeps the ionosphere, so its correlated sigma grows by 5 m times
 Klobuchar's obliquity factor; with no correction in use at all, nothing changes (as in phase 4).
 
+**The pad, checked against the raw measurements.** On the bench (2026-10-13, indoors), the
+LC86G's own fix said:
+- 312 m below sea level, with 29 satellites, a 3-D fix and a claimed 1 m vertical accuracy;
+- the barometer read 1013.6 hPa, so the board was near sea level.
+
+Its raw measurements disagreed with its fix:
+- they put the antenna near sea level, as the barometer did;
+- fitted as a position offset with a clock per constellation, they put the pad 316 m above and 70 m
+  west of the receiver's average;
+- each constellation alone agreed, to 0.2-1.7 m RMS;
+- the shadow filter, on raw measurements alone, went there too.
+
+The survey's corrections against that pad would have dragged the filter onto the receiver's error
+(they did, before this check), and so would the flight filter, which fuses that fix. An hour earlier,
+with 9-10 satellites, fix and raw solution agreed within 15-30 m. This is #1508's failure, caught in
+the act.
+
+So each epoch the survey fits the corrections in use as a position offset plus a clock per system.
+Further than 30 m from the receiver's average (the uncorrected ionosphere is metres of that), the
+corrections are not used. The status says so (`PCS_PAD_MISMATCH`), and they come back when the two
+agree.
+
 **The status (`PAD_CAL_STATUS_MSG`, 0x99, 40 B).** Sent once a second on the ground and at each
 change; the out computer relays it to the app as file_ops 0xD0. It carries:
 - the gyro/accel window's state, progress and measured gravity;

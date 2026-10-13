@@ -67,7 +67,12 @@ def test_decode_synthetic_payload():
     assert abs(rec["pad_alt_m"] - 1.234) < 1e-12
     assert abs(rec["pos_sigma_m"] - 2.15) < 1e-12
     assert rec["raw_gnss"] and rec["filter_running"] and rec["iono_age_known"] and rec["pad_valid"]
-    assert not rec["pad_frozen"]
+    assert not (rec["pad_frozen"] or rec["pad_mismatch"])
+
+
+def test_a_pad_the_raw_measurements_refuse():
+    rec = pfd.decode_pad_cal_status(record(flags=0x01 | 0x08 | 0x20))
+    assert rec["pad_mismatch"] and rec["pad_valid"]
 
 
 def test_an_unknown_age_reads_as_none():
