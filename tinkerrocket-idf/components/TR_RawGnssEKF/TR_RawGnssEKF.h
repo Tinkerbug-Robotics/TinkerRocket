@@ -169,6 +169,16 @@ public:
     T takeGPeak();
     // The receiver in ECEF (m, m/s).
     void receiverEcef(double r[3], double v[3]) const;
+    // The receiver age_s ago (s), ECEF: now taken back by the history, as an
+    // epoch that age is applied (#1508's satellite check: before an update,
+    // the IMU's propagation from the last one).
+    void receiverEcefAt(double age_s, double r[3], double v[3]) const;
+    // What the IMU alone did between filter times t1 <= t2 (s), NED: its
+    // velocity change (specific force and gravity, no filter corrections) and
+    // the displacement that change adds, the integral of v(t) - v(t1). From a
+    // state at t1, the IMU predicts p(t2) = p(t1) + v(t1) (t2 - t1) + dp.
+    // False, with both zero, unless the history covers [t1, t2].
+    bool imuMotion(double t1, double t2, T dv[3], T dp[3]) const;
 
 private:
     struct Hist

@@ -1422,6 +1422,17 @@ bool SensorCollector::getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len)
 #endif
 }
 
+bool SensorCollector::getGNSSFix(gnss_raw::TimedFix& out)
+{
+#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.takeFix(out);
+#else
+    (void)out;
+    return false;
+#endif
+}
+
 bool SensorCollector::getGNSSGeoidSeparation(float& sep_m) const
 {
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86

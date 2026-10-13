@@ -82,6 +82,12 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(offsetof(PadCalStatusData, pad_lat_e7), 26u);
     EXPECT_EQ(offsetof(PadCalStatusData, pad_alt_mm), 34u);
     EXPECT_EQ(offsetof(PadCalStatusData, pos_sigma_cm), 38u);
+    // #1508: the physics checks on the GNSS (0x9A), log-only
+    EXPECT_EQ(sizeof(GnssCheckData), 24u);
+    EXPECT_EQ(offsetof(GnssCheckData, verdict), 4u);
+    EXPECT_EQ(offsetof(GnssCheckData, span_ms), 6u);
+    EXPECT_EQ(offsetof(GnssCheckData, pos_err_m), 8u);
+    EXPECT_EQ(offsetof(GnssCheckData, vel_tol_mps), 20u);
     EXPECT_EQ(sizeof(FcBootStatusData), 4u); // FC->OC boot progress (0xFA)
     EXPECT_EQ(sizeof(i24le_t),         3u);
     EXPECT_EQ(sizeof(Vec3i16),         6u);
@@ -1846,6 +1852,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(PAD_CAL_PENDING),
         MT(PAD_CAL_CONFIG_MSG),
         MT(PAD_CAL_STATUS_MSG),
+        // #1508: the receiver's fix and raw measurements against the IMU, log-only.
+        MT(GNSS_CHECK_MSG),
     };
 #undef MT
 
@@ -1886,7 +1894,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     // 100 = 99 + RAW_GNSS_EKF_MSG (0x96, the raw-GNSS shadow filter, #1600).
     // 103 = 100 + the pad calibration's PAD_CAL_PENDING / PAD_CAL_CONFIG_MSG /
     //       PAD_CAL_STATUS_MSG (0x97-0x99, #1600 phase 5).
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 103u)
+    // 104 = 103 + GNSS_CHECK_MSG (0x9A, the physics checks on the GNSS, #1508).
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 104u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }

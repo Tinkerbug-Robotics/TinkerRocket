@@ -116,6 +116,15 @@ const RawMeasBuilder::SatState& RawMeasBuilder::satState(const gps_eph_t& e, int
     return c;
 }
 
+void RawMeasBuilder::markRelock(int sys, int prn, double tow)
+{
+    if (sys < 0 || sys >= kSys || prn < 0 || prn >= kPrn)
+        return;
+    first_[sys][prn] = tow;
+    last_[sys][prn] = tow;
+    seen_[sys][prn] = true;
+}
+
 double RawMeasBuilder::relockAge(int sys, int prn, double tow) const
 {
     if (sys < 0 || sys >= kSys || prn < 0 || prn >= kPrn || !seen_[sys][prn])
