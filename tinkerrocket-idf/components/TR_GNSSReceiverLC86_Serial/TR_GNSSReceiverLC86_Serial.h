@@ -15,6 +15,7 @@
 #include <freertos/ringbuf.h>
 
 #include <RocketComputerTypes.h>
+#include "GnssTimeSync.h"
 #include "Lc86Parser.h"
 
 class TR_GNSSReceiverLC86Serial
@@ -84,6 +85,15 @@ class TR_GNSSReceiverLC86Serial
         /// `out` was too small. Monotonic.
         uint32_t rtcmFramesDropped() const { return rtcm_dropped_; }
 
+        // The MCU clock against GPS time (GnssTimeSync.h), fed by every
+        // $PQTMPVT with a fix: what a raw-measurement filter places each
+        // epoch by (#1600). Stamps are when the sentence's last byte arrived,
+        // backdated from the read by the bytes that followed it.
+        const lc86::GnssTimeSync& timeSync() const { return time_sync_; }
+        // The last MSM7 epoch: its GPS time of week, and when its final
+        // frame arrived (MCU us, backdated the same way). False before one.
+        bool lastMsmEpochTime(uint32_t& gps_tow_ms, int64_t& end_us) const;
+
     private:
 
         // What awaitEvent() is pumping the RX stream for (begin()-time only;
@@ -130,7 +140,7 @@ class TR_GNSSReceiverLC86Serial
 
         // Put the frame behind the parser's last RTCM / MSM_EPOCH event into
         // the ring (see pollRtcmFrame).
-        void stashRtcmFrame();
+        void stashRtcmFrame(int64_t end_us);
 
         // One boot-log line on how many GSV bursts arrived in the first few
         // seconds of fixes after begin() (see the .cpp).
@@ -140,6 +150,9 @@ class TR_GNSSReceiverLC86Serial
         // first epoch that has satellites measured (see the .cpp).
         void checkMsmRate();
         void reportFirstMsmEpoch();
+        // GnssTimeSync feed and its periodic boot-console line.
+        void noteTimeSync(int64_t end_us);
+        void logTimeSync();
 
         lc86::Lc86Parser parser_;
 
@@ -172,6 +185,14 @@ class TR_GNSSReceiverLC86Serial
         // One item being built: time_us, then the frame.
         uint8_t  rtcm_item_[4 + rtcm3::kMaxPayload + rtcm3::kFrameOverhead] = {};
         uint32_t rtcm_dropped_ = 0;
+
+        // One byte's time on the wire at the configured baud, us (8N1: 10
+        // bits). Set by uartBegin().
+        double   byte_us_ = 1.0e7 / 115200.0;
+        lc86::GnssTimeSync time_sync_;
+        int64_t  time_log_us_ = 0;
+        uint32_t msm_epoch_tow_ms_ = 0;
+        int64_t  msm_epoch_end_us_ = 0;
 
         // checkGsvRate(): the PVT epoch and GSV burst counts when begin()
         // finished, and whether the line is done (true until a begin() that
