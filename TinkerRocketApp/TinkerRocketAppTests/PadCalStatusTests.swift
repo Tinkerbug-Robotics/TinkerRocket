@@ -262,15 +262,15 @@ final class PadCalStatusTests: XCTestCase {
         // PCS_PAD_MISMATCH: the receiver's fix and its raw measurements
         // disagree, so the survey's corrections are off and the source reads
         // none; the warning line above the block says why.
-        let mismatch = patched([14: 0, 15: 0x0F | 0x20])
+        let mismatch = patched([14: 0, 15: UInt8(0x0F | 0x20)])
         XCTAssertTrue(mismatch.padMismatch)
         XCTAssertEqual(mismatch.ionosphereText, "none yet")
         XCTAssertEqual(PadCalStatus.padMismatchText,
                        "Receiver's fix disagrees with its raw measurements — pad corrections off")
         // the age only once the receiver has given its date
-        XCTAssertEqual(patched([15: 0x0F & ~0x04]).ionosphereText,
+        XCTAssertEqual(patched([15: UInt8(0x0F & ~0x04)]).ionosphereText,
                        "broadcast set of \(PadCalStatus.day(17082))")
-        XCTAssertEqual(patched([16: 0, 17: 0, 15: 0x0F & ~0x04]).ionosphereText, "broadcast set")
+        XCTAssertEqual(patched([16: 0, 17: 0, 15: UInt8(0x0F & ~0x04)]).ionosphereText, "broadcast set")
         XCTAssertEqual(PadCalStatus.age(-1), "0 days old")
         XCTAssertEqual(PadCalStatus.age(0), "0 days old")
         XCTAssertEqual(PadCalStatus.age(1), "1 day old")
@@ -284,7 +284,7 @@ final class PadCalStatusTests: XCTestCase {
         XCTAssertEqual(rows["Pad corrections"], "0")
         XCTAssertEqual(rows["Pad position"], "no fixes yet")
         XCTAssertEqual(rows["Raw-GNSS filter"], "not running yet")
-        XCTAssertEqual(patched([15: 0x0F | 0x10]).padPositionText,
+        XCTAssertEqual(patched([15: UInt8(0x0F | 0x10)]).padPositionText,
                        "1500 fixes over 4:00, scatter 1.8 m, frozen at launch")
         XCTAssertEqual(PadCalStatus.minutesSeconds(3725), "62:05")
     }
