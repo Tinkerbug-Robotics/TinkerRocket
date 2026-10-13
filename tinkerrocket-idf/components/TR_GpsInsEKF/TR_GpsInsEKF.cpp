@@ -4,6 +4,13 @@
 // accelerometer gravity reference, and magnetometer heading correction.
 
 #include "TR_GpsInsEKF.h"
+// Bench profiler laps (-DTR_LOOP_PROFILE=1 on the flight computer): the
+// ekf.* sections of its report. Nothing at all otherwise, host builds included.
+#if defined(TR_LOOP_PROFILE) && TR_LOOP_PROFILE
+#include "tr_loop_profile.h"
+#else
+#define TR_LP_LAP(s) ((void)0)
+#endif
 
 GpsInsEKF::GpsInsEKF() {
     // (The GNSS observation matrix H = [I6 | 0] is exploited structurally in
@@ -355,6 +362,8 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
         for (int i=0;i<3;i++) aEst_B_mps2_[i] = aMeas[i] + aGrav_B[i] - aBias_mps2_[i];
     }
 
+    TR_LP_LAP(EKF_IN);
+
     // 7. Time update (quaternion propagation + velocity/position/covariance prediction)
     timeUpdate();
 
@@ -373,7 +382,10 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
     }
 
     // 8. Accelerometer gravity reference update
-    if (accel_valid) accelMeasUpdate(aMeas);
+    if (accel_valid) {
+        accelMeasUpdate(aMeas);
+        TR_LP_LAP(EKF_ACCEL);
+    }
 
     // 9. Magnetometer heading update — scalar Kalman, heading only (accel owns
     //    tilt, mag owns heading, so the two are complementary, not competing).
@@ -403,7 +415,7 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
         magTimePrev_ = mag_data.time_us;
         const bool mag_phase = use_ahrs_acc && (noseFirstFlight_ || canopy_);
         if (mag_phase) {
-            if (mag_valid) { ++magFusedCount_;    magMeasUpdate(aMeas, magMeas, accel_valid && !canopy_); }
+            if (mag_valid) { ++magFusedCount_;    magMeasUpdate(aMeas, magMeas, accel_valid && !canopy_); TR_LP_LAP(EKF_MAG); }
             else           { ++magRejectedCount_; }
         }
     }
@@ -455,6 +467,7 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
         prevGnssVel_NED_[2] = vMeas_NED[2];
         prevGnssSampleUs_   = t_us;
         haveGnssAccel_      = true;
+        TR_LP_LAP(EKF_GNSS);
     }
 
     // 11. Recompute estimates with post-update quaternion and biases
@@ -473,6 +486,7 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
 
     // 12. Update Euler angles
     Quat2Euler(quat_BL_, euler_BL_rad_);
+    TR_LP_LAP(EKF_OUT);
 }
 
 // ─── Update: ECEF path (simulation) ────────────────────────────────
@@ -559,6 +573,7 @@ void GpsInsEKF::timeUpdate() {
     double pDot_D[3];
     NED2D_Rate(pDot_D, vEst_NED_mps_, pEst_D_rrm_);
     for (int i=0;i<3;i++) pEst_D_rrm_[i]+=(double)dt_s_*pDot_D[i];
+    TR_LP_LAP(EKF_NAV);
 
     // ── Assemble Jacobian (dynamic blocks of Fs_) ──
     float skew_temp[3][3], Fs_sub[3][3];
@@ -764,6 +779,7 @@ void GpsInsEKF::timeUpdate() {
         }
 
     stabilizeP();
+    TR_LP_LAP(EKF_COV);
 }
 
 void GpsInsEKF::stabilizeP() {

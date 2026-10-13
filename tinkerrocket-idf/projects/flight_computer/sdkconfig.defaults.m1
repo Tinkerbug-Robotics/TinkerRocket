@@ -49,6 +49,38 @@ CONFIG_ESP_WIFI_ENABLED=n
 # The IMU read ~2,750 of its 3,840 samples/s. 240 MHz is the S3's ceiling.
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
+# === Code fetch: QIO flash and a 32 KB instruction cache ===
+# Nothing set either, so this processor fetched its code at IDF's defaults: the
+# flash in DIO (two data lines) and a 16 KB instruction cache. The flight loop
+# does not fit in that. loop_fc() alone is 52 KB of code and the EKF 25 KB, and
+# one pass runs through about 38 KB of it. Profiled on the Beetle's FC
+# (-DTR_LOOP_PROFILE=1, #1606) on the pad with a GNSS fix and the IMU at
+# 7,680 Hz, at -O2, 2026-10-12: 81 % of core 1's cycles were stalls on
+# instruction fetch, about 1,200 cache misses a pass at 485 CPU cycles each,
+# and the core retired 0.09 instructions per cycle. That is why -O2 sped the
+# rest of the pass up so little.
+#
+#                                 flight loop   EKF      EKF tick, mean
+#   DIO, 16 KB cache (default)      343/s       171 Hz   1,746 us
+#   QIO, 32 KB cache (these two)    831/s       416 Hz     785 us
+#
+# Each alone (profiled builds, 329/s with the profiler on): the 32 KB cache
+# 591/s, QIO 623/s; QIO cuts a miss to 279 cycles. No IMU, I2S or queue drops
+# at any setting. Core 0 runs from the same cache and gains too.
+#
+# QIO: the FC's W25Q128JV (U33) has IO2/IO3 on SPIWP/SPIHD, and the bootloader
+# finds a quad part ("Enabling QIO for flash chip WinBond"). The in-package
+# PSRAM shares those four lines and is unaffected. The read mode belongs to the
+# SECOND-STAGE BOOTLOADER, which an OTA update never replaces: a board updated
+# over the air keeps DIO, with the bigger cache, until its bootloader is
+# written once over USB (`idf.py -B build_m1 -DTR_BOARD_M1=1 flash`, or
+# bootloader/bootloader.bin at 0x0).
+#
+# The 32 KB cache takes its extra 16 KB from internal RAM: 146 -> 130 KB free
+# after setup.
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+
 # === Brownout: the selector is NOT the same voltage on both targets ===
 # sdkconfig.defaults pins CONFIG_ESP_BROWNOUT_DET_LVL_SEL_5 and calls it "the
 # most-lenient level (2.42V)". That is true on the ESP32-P4 and FALSE here,

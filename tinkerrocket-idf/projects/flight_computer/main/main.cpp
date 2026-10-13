@@ -55,6 +55,7 @@
 #include "test_mode_gate_policy.h"   // #1137 item 5: the #363 failsafe and the test-command gates
 #include "oc_cmd_dedup.h"        // #1112: dispatch only on the poll pass; bounded config retry
 #include "servo_pin_policy.h"    // servoPinsValid(): an M1 int -1 pin is unmapped, not GPIO 0xFFFFFFFF
+#include "loop_profile.h"        // bench only: -DTR_LOOP_PROFILE=1 section profiler (TR_LP_LAP)
 #include <driver/uart.h>
 #include <esp_private/esp_gpio_reserve.h>
 #include <esp_private/gpio.h>      // gpio_func_sel
@@ -5845,8 +5846,13 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
 // ==========================================================================
 // SECTION: Main loop
 // ==========================================================================
+#if defined(TR_BENCH_IRAM) && TR_BENCH_IRAM >= 2
+static IRAM_ATTR void loop_fc()   // bench: TR_BENCH_IRAM=2 runs the loop from internal RAM
+#else
 static void loop_fc()
+#endif
 {
+    TR_LP_LAP(YIELD);
     // Zero the IMU-queue drop gauge on the first pass: the poll task starts
     // ~4 s before this loop does (servo init holds setup), producing ~8k
     // meaningless pre-consumer drops into an unconsumed queue.  From here on
@@ -5889,6 +5895,7 @@ static void loop_fc()
     // the retry on fc_ota_data_mode would mean the one path that can recover
     // the link is only reachable while we are still in the mode we just left.
     fcServiceI2sTxRecovery();
+    TR_LP_LAP(PRE);
 
     // ==========================================================================
     // SECTION: Sensor drain and conversion
@@ -5942,6 +5949,7 @@ static void loop_fc()
         while (sensor_collector.getISM6HG256Data(ism6hg256_data))
         {
             dbg_ism6_reads++;
+            TR_LP_SAMPLE();
             fc_ism6_win.add(ism6hg256_data);
             ism6_drained_this_pass = true;
 
@@ -5974,6 +5982,7 @@ static void loop_fc()
         }
 
     }
+    TR_LP_LAP(IMU_DRAIN);
 
     if (sensor_collector.getBMP585Data(bmp585_data))
     {
@@ -6110,6 +6119,7 @@ static void loop_fc()
             }
         }
     }
+    TR_LP_LAP(SENSORS);
 
     // ==========================================================================
     // SECTION: Full config report (#915)
@@ -6230,6 +6240,8 @@ static void loop_fc()
         }
     }
 
+    TR_LP_LAP(PAD_MISC);
+
     // ==========================================================================
     // SECTION: Flight logic: pressure altitude and orientation
     // ==========================================================================
@@ -6239,6 +6251,7 @@ static void loop_fc()
     {
         lt_loop_count++;
         last_flight_loop_update_time = logic_now_us;
+        TR_LP_LAP(GATE);
 
         // #1326: close the IMU drain window HERE — this is the consumer's
         // boundary, so the boxcar spans exactly the samples that arrived since
@@ -6267,6 +6280,7 @@ static void loop_fc()
             // averaged into the following one.
             fc_ism6_win.reset();
         }
+        TR_LP_LAP(IMU_MEAN);
 
         // ### Pressure altitude calculation (for kinematic checks) ###
         const uint32_t now_ms = time_ms();
@@ -6332,6 +6346,8 @@ static void loop_fc()
                                       (1.0f - powf(bmp_latest_si.pressure / ground_pressure_pa, 1.0f / 5.255f));
             }
         }
+
+        TR_LP_LAP(BARO_ALT);
 
         // ### State estimation from GPS/INS EKF ###
         float imu_pos[3] = {0.0f, 0.0f, 0.0f};   // local ENU [E,N,U] meters
@@ -6410,6 +6426,8 @@ static void loop_fc()
                     }
                 }
             }
+
+            TR_LP_LAP(ORIENT);
 
             // ==========================================================================
             // SECTION: EKF input, initialization, and update
@@ -6577,6 +6595,8 @@ static void loop_fc()
                     }
                 }
             }
+
+            TR_LP_LAP(EKF_PREP);
 
             // ── Initialize or update the EKF ──
             // Wait for valid GNSS fix before init — avoids initializing
@@ -6761,6 +6781,7 @@ static void loop_fc()
                                       "(roll control unaffected)");
                     }
                 }
+                TR_LP_LAP(EKF_INIT);
             }
             else if (run_ekf_this_tick)
             {
@@ -6838,6 +6859,8 @@ static void loop_fc()
                     }
                 }
 
+                TR_LP_LAP(EKF_ZUPT);
+
                 // Barometer measurement update.  Freshness is tracked by
                 // BaroGatePolicy against the sample's own timestamp, NOT the
                 // loop-lifetime bmp_new_for_kf flag: that flag is cleared at
@@ -6912,6 +6935,7 @@ static void loop_fc()
                     }
                 }
 
+                TR_LP_LAP(EKF_BARO);
                 const uint32_t ekf_us = time_us() - ekf_t0;
                 lt_ekf_total_us += ekf_us;
                 lt_ekf_count++;
@@ -6952,6 +6976,7 @@ static void loop_fc()
                 imu_pos[1] = (float)(dlat * (R_EARTH + ref_alt_m));            // North
                 imu_pos[2] = (float)dalt;                                       // Up
             }
+            TR_LP_LAP(EKF_EXTRACT);
         }
 
         if (have_gnss_si && (gnss_latest_si.fix_mode >= 3U))
@@ -7199,6 +7224,7 @@ static void loop_fc()
             // readConfigFrame() I2C reads have an idle bus.  Released after
             // the command dispatch block.
         }
+        TR_LP_LAP(I2C_POLL);
 
         // ==========================================================================
         // SECTION: Command dispatch from the Out Computer
@@ -9269,6 +9295,7 @@ static void loop_fc()
         {
             xSemaphoreGive(i2c_bus_mutex);
         }
+        TR_LP_LAP(CMD);
 
         // ==========================================================================
         // SECTION: Pad calibration completion (#1114)
@@ -9334,6 +9361,8 @@ static void loop_fc()
                 }
             }
         }
+
+        TR_LP_LAP(PAD_CAL);
 
         // ==========================================================================
         // SECTION: Kinematic checks and sensor health
@@ -9473,6 +9502,7 @@ static void loop_fc()
                                        ism6_fresh_kc,    // #1108 imu_healthy
                                        // GnssAscentGate: no apogee vote until admitted
                                        GnssAscentGate::gnssVotes(gnss_admit_state));
+            TR_LP_LAP(KINEMATICS);
 
             // #834 item 4: step the main-deploy gate here, where baro_healthy
             // is in scope.  servicePyroChannels() runs LATER in this same pass
@@ -9649,6 +9679,8 @@ static void loop_fc()
             }
         }
 
+        TR_LP_LAP(GATES);
+
         // ==========================================================================
         // SECTION: Test modes (ground, servo, replay)
         // ==========================================================================
@@ -9706,6 +9738,7 @@ static void loop_fc()
             fcRevertToTx();
         }
 
+        TR_LP_LAP(TESTMODE);
         if (ground_test_active)
         {
             // Ground test behavior depends on control mode:
@@ -10655,6 +10688,8 @@ static void loop_fc()
         }
         }
 
+        TR_LP_LAP(STATE);
+
         // ==========================================================================
         // SECTION: Simulator re-arm and diagnostics
         // ==========================================================================
@@ -10730,6 +10765,8 @@ static void loop_fc()
                               out_ready ? 1 : 0);
             }
         }
+
+        TR_LP_LAP(SIM);
 
         // ==========================================================================
         // SECTION: Telemetry packing (NonSensorData)
@@ -11098,6 +11135,7 @@ static void loop_fc()
                 }
             }
         }
+        TR_LP_LAP(TELEM);
     }
     
     const uint32_t now_ms_svc = time_ms();
@@ -11106,6 +11144,7 @@ static void loop_fc()
     serviceBlueLedFlash(now_ms_svc);
     serviceCameraStart(now_ms_svc);
     serviceCameraStop(now_ms_svc);
+    TR_LP_LAP(SERVICES);
 
     // ==========================================================================
     // SECTION: Periodic diagnostics
@@ -11358,6 +11397,9 @@ static void loop_fc()
         }
     }
 
+    TR_LP_LAP(DIAG);
+    tr_lp_maybe_report();
+
     // Give back remainder of time slice
     taskYIELD();
 }
@@ -11375,6 +11417,7 @@ extern "C" void app_main(void)
         [](void *) {
             // Subscribe this task to WDT so esp_task_wdt_reset() works
             esp_task_wdt_add(xTaskGetCurrentTaskHandle());
+            tr_lp_boot();   // bench profiler (TR_LOOP_PROFILE); empty otherwise
             for (;;) { loop_fc(); esp_task_wdt_reset(); }
         },
         "flight", 16 * 1024, nullptr, configMAX_PRIORITIES - 1, &flight_task, 1);

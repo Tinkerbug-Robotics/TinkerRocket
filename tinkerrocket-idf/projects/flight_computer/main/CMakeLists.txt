@@ -8,9 +8,17 @@ else()
     set(_guidance_req "TR_GuidancePN_Stub")
 endif()
 
+# Bench only (-DTR_BENCH_IRAM): the EKF into internal RAM (bench_iram.lf).
+# Never for flight.
+set(_bench_ldfrag "")
+if(TR_BENCH_IRAM)
+    set(_bench_ldfrag "bench_iram.lf")
+endif()
+
 idf_component_register(
     SRCS "main.cpp"
     INCLUDE_DIRS "."
+    LDFRAGMENTS ${_bench_ldfrag}
     REQUIRES
         esp_driver_gpio esp_driver_spi esp_driver_uart TR_NVS
         TR_RocketComputerTypes
@@ -22,6 +30,7 @@ idf_component_register(
         TR_Orientation
         TR_GpsInsEKF
         TR_GNSSRaw              # raw-GNSS filter support (#1600); compiled, not yet called
+        TR_RawGnssEKF           # the raw-GNSS (tightly coupled) filter (#1600); compiled, not yet called
         TR_GeoMag
         TR_KinematicChecks
         TR_MagCalibrator

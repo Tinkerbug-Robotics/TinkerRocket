@@ -1,0 +1,9 @@
+# Bench only (-DTR_BENCH_IRAM=1 or 2, with TR_LOOP_PROFILE): run the EKF from
+# internal RAM instead of through the flash cache, to measure what instruction
+# fetch costs the flight loop (TR_BENCH_IRAM=2 adds loop_fc, in main.cpp).
+# Never set for flight. libm is not mapped: with IDF v6's picolibc, ldgen does
+# not see libm.a, so powf/sinf/cosf stay in flash either way.
+[mapping:bench_iram_ekf]
+archive: libTR_GpsInsEKF.a
+entries:
+    * (noflash)
