@@ -1520,6 +1520,50 @@ target_include_directories(test_gnss_raw PRIVATE
 target_link_libraries(test_gnss_raw GTest::gtest_main)
 gtest_discover_tests(test_gnss_raw)
 
+# ---------- test_raw_gnss_meas ----------
+# The raw-GNSS measurement builder (#1600): two MSM7 epochs the Beetle's LC86G
+# sent on the COCOM rig, through the flight code's own parser (Lc86Parser),
+# Lc86RawEpoch.h and TR_GNSSRaw's RawMeasBuilder, against the corrected
+# measurements the bench prototype's filter took (fixtures/raw_meas_golden.h).
+add_executable(test_raw_gnss_meas test_raw_gnss_meas.cpp
+    ${LIB_DIR}/TR_GNSSRaw/eph.c
+    ${LIB_DIR}/TR_GNSSRaw/atmo.c
+    ${LIB_DIR}/TR_GNSSRaw/RtcmEphemeris.cpp
+    ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Lc86Parser.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
+)
+target_include_directories(test_raw_gnss_meas PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_raw_gnss_meas GTest::gtest_main)
+gtest_discover_tests(test_raw_gnss_meas)
+
+# ---------- test_raw_gnss_ekf ----------
+# TR_RawGnssEKF, the tightly coupled GNSS/INS filter (#1600), on a synthetic
+# sky: convergence from a wrong start, the clock and system offsets from the
+# first epoch, clock steps, a bad satellite refused then let back in, an epoch
+# applied late at its own time, a Doppler that lags its tag, float against
+# double. Its parity with the bench prototype is checked through the
+# tinkerrocket_sim bindings (gnss repo sim/tc_ekf_cocom.py, mode ins-cpp).
+add_executable(test_raw_gnss_ekf test_raw_gnss_ekf.cpp
+    ${LIB_DIR}/TR_GNSSRaw/atmo.c
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+)
+target_include_directories(test_raw_gnss_ekf PRIVATE
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+    ${LIB_DIR}/TR_RawGnssEKF
+)
+target_link_libraries(test_raw_gnss_ekf GTest::gtest_main)
+gtest_discover_tests(test_raw_gnss_ekf)
+
 # ---------- test_gnss_time_sync ----------
 # lc86::GnssTimeSync, the MCU clock against GPS time from the receiver's
 # sentence stamps alone (no 1PPS on the Beetle M1; #1600): a simulated LC86G

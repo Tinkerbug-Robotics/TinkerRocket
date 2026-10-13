@@ -1,0 +1,1042 @@
+// TR_RawGnssEKF.cpp — see TR_RawGnssEKF.h
+#include "TR_RawGnssEKF.h"
+
+#include <cmath>
+#include <cstring>
+
+#include "gnss/types.h"
+
+namespace gnss_raw
+{
+
+namespace
+{
+
+constexpr double kC      = 299792458.0;
+constexpr double kOmegaE = 7.2921151467e-5;     // rad/s, the Sagnac turn
+constexpr double kRe     = 6378137.0;           // m
+constexpr double kE2     = 0.0066943799901;     // as TR_GpsInsEKF and the prototype
+constexpr double kG0     = 9.807;               // the flight filter's G_NOMINAL
+constexpr double kNever  = -1.0e9;              // no update yet
+
+// WGS84 normal gravity (gnss repo tc_ekf.py gravity_wgs84)
+constexpr double kGammaE = 9.7803253359;
+constexpr double kSomK   = 0.00193185265241;
+constexpr double kFlat   = 1.0 / 298.257223563;
+constexpr double kGravM  = 0.00344978650684;
+
+void earthRad(double lat, double& rew, double& rns)
+{
+    const double s = std::sin(lat);
+    const double d = std::fabs(1.0 - kE2 * s * s);
+    rew = kRe / std::sqrt(d);
+    rns = kRe * (1.0 - kE2) / (d * std::sqrt(d));
+}
+
+void llaToEcef(const double lla[3], double r[3])
+{
+    double rew, rns;
+    earthRad(lla[0], rew, rns);
+    const double cl = std::cos(lla[0]), sl = std::sin(lla[0]);
+    r[0] = (rew + lla[2]) * cl * std::cos(lla[1]);
+    r[1] = (rew + lla[2]) * cl * std::sin(lla[1]);
+    r[2] = (rew * (1.0 - kE2) + lla[2]) * sl;
+}
+
+// ECEF -> NED
+void eToNed(double lat, double lon, double T[3][3])
+{
+    const double sl = std::sin(lat), cl = std::cos(lat), so = std::sin(lon), co = std::cos(lon);
+    T[0][0] = -sl * co; T[0][1] = -sl * so; T[0][2] = cl;
+    T[1][0] = -so;      T[1][1] = co;       T[1][2] = 0.0;
+    T[2][0] = -cl * co; T[2][1] = -cl * so; T[2][2] = -sl;
+}
+
+// The predicted range (without the receiver clock), range rate (without its
+// drift) and line of sight: the satellite at transmit time, turned by the
+// Earth's rotation over the travel time (tc_ekf.py _los).
+struct Los
+{
+    double rho, rate, u[3], vs[3];
+};
+
+void lineOfSight(const RawMeas& m, const double r[3], const double v[3], Los& L)
+{
+    const double* rs = m.sat_pos;
+    double d0 = rs[0] - r[0], d1 = rs[1] - r[1], d2 = rs[2] - r[2];
+    double rho = std::sqrt(d0 * d0 + d1 * d1 + d2 * d2);
+    double c = 1.0, s = 0.0, rr[3] = {rs[0], rs[1], rs[2]};
+    for (int it = 0; it < 2; ++it)
+    {
+        const double th = kOmegaE * rho / kC;
+        c = std::cos(th);
+        s = std::sin(th);
+        rr[0] = c * rs[0] + s * rs[1];
+        rr[1] = -s * rs[0] + c * rs[1];
+        rr[2] = rs[2];
+        d0 = rr[0] - r[0]; d1 = rr[1] - r[1]; d2 = rr[2] - r[2];
+        rho = std::sqrt(d0 * d0 + d1 * d1 + d2 * d2);
+    }
+    const double* vs = m.sat_vel;
+    L.vs[0] = c * vs[0] + s * vs[1];
+    L.vs[1] = -s * vs[0] + c * vs[1];
+    L.vs[2] = vs[2];
+    L.rho = rho;
+    L.u[0] = d0 / rho; L.u[1] = d1 / rho; L.u[2] = d2 / rho;
+    L.rate = L.u[0] * (L.vs[0] - v[0]) + L.u[1] * (L.vs[1] - v[1]) + L.u[2] * (L.vs[2] - v[2]);
+}
+
+// The range acceleration a still receiver sees from the satellite's own
+// motion: along the line of sight, plus the line of sight turning.
+double satRangeAccel(const RawMeas& m, const Los& L, const double v[3])
+{
+    double dvv = 0.0, ua = 0.0;
+    for (int k = 0; k < 3; ++k)
+    {
+        const double dv = L.vs[k] - v[k];
+        dvv += dv * dv;
+        ua += L.u[k] * m.sat_acc[k];
+    }
+    return ua + (dvv - L.rate * L.rate) / L.rho;
+}
+
+// Variance factor for a first-order Gauss-Markov error sampled every dt and
+// fused as if white: (1 + rho) / (1 - rho), rho = exp(-dt / tau).
+double corrInflation(double dt, double tau)
+{
+    if (tau <= 0.0 || dt <= 0.0)
+        return 1.0;
+    const double rho = std::exp(-dt / tau);
+    return rho < 1.0 - 1e-12 ? (1.0 + rho) / (1.0 - rho) : 1e12;
+}
+
+// numpy's median: the mean of the two middle values for an even count.
+double median(double* v, int n)
+{
+    for (int i = 1; i < n; ++i)
+    {
+        const double x = v[i];
+        int j = i - 1;
+        while (j >= 0 && v[j] > x)
+        {
+            v[j + 1] = v[j];
+            --j;
+        }
+        v[j + 1] = x;
+    }
+    return (n % 2) ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
+}
+
+template <typename T>
+void quat2dcm(const T q[4], T M[3][3])
+{
+    const T w = q[0], x = q[1], y = q[2], z = q[3];
+    const T one = T(1), two = T(2);
+    M[0][0] = one - two * (y * y + z * z); M[0][1] = two * (x * y + w * z);       M[0][2] = two * (x * z - w * y);
+    M[1][0] = two * (x * y - w * z);       M[1][1] = one - two * (x * x + z * z); M[1][2] = two * (y * z + w * x);
+    M[2][0] = two * (x * z + w * y);       M[2][1] = two * (y * z - w * x);       M[2][2] = one - two * (x * x + y * y);
+}
+
+template <typename T>
+void quatMult(const T a[4], const T b[4], T o[4])
+{
+    o[0] = a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3];
+    o[1] = a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2];
+    o[2] = a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1];
+    o[3] = a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0];
+}
+
+template <typename T>
+void normalize4(T q[4])
+{
+    const T n = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+    for (int i = 0; i < 4; ++i)
+        q[i] /= n;
+}
+
+}  // namespace
+
+template <typename T>
+RawGnssEKF<T>::RawGnssEKF(const RawGnssEKFParams& p)
+{
+    setParams(p);
+    for (int s = 0; s < 3; ++s)
+        for (int k = 0; k < 64; ++k)
+            last_upd_[s][k][0] = last_upd_[s][k][1] = kNever;
+}
+
+template <typename T>
+void RawGnssEKF<T>::setParams(const RawGnssEKFParams& p)
+{
+    p_ = p;
+    q_acc_  = T(p.a_noise * p.a_noise);
+    q_att_  = T(0.25 * p.w_noise * p.w_noise);                // G = -0.5 I on the attitude
+    q_ab_   = T(2.0 * p.a_markov_sigma * p.a_markov_sigma / p.a_markov_tau);
+    q_wb_   = T(2.0 * p.w_markov_sigma * p.w_markov_sigma / p.w_markov_tau);
+    f_ab_   = T(-1.0 / p.a_markov_tau);
+    f_wb_   = T(-1.0 / p.w_markov_tau);
+    q_clkb_ = T(p.clk_bias_psd);
+    q_clkd_ = T(p.clk_drift_psd);
+    q_isb_  = T(p.isb_psd);
+}
+
+template <typename T>
+void RawGnssEKF<T>::init(const double lla[3], const T v_ned[3], const T q[4], double t0)
+{
+    for (int i = 0; i < 3; ++i)
+    {
+        lla_[i] = lla[i];
+        v_[i] = v_ned[i];
+        ab_[i] = wb_[i] = a_ned_[i] = T(0);
+    }
+    for (int i = 0; i < 4; ++i)
+        q_[i] = q[i];
+    normalize4(q_);
+    clk_b_ = 0.0;
+    clk_d_ = T(0);
+    isb_[0] = isb_[1] = T(0);
+    clk_ready_ = false;
+    g_excess_ = g_peak_ = T(0);
+    t_ = t0;
+
+    std::memset(P_, 0, sizeof(P_));
+    const double d[N] = {
+        p_.p0_pos, p_.p0_pos, p_.p0_pos, p_.p0_vel, p_.p0_vel, p_.p0_vel,
+        p_.p0_att, p_.p0_att, p_.p0_hdg, p_.p0_abias, p_.p0_abias, p_.p0_abias,
+        p_.p0_wbias, p_.p0_wbias, p_.p0_wbias, p_.p0_clk_bias, p_.p0_clk_drift,
+        p_.p0_isb, p_.p0_isb};
+    for (int i = 0; i < N; ++i)
+        P_[i][i] = T(d[i] * d[i]);
+
+    hhead_ = hn_ = 0;
+    hopen_ = t0;
+    std::memset(rejects_, 0, sizeof(rejects_));
+    for (int s = 0; s < 3; ++s)
+        for (int k = 0; k < 64; ++k)
+            last_upd_[s][k][0] = last_upd_[s][k][1] = kNever;
+}
+
+template <typename T>
+void RawGnssEKF<T>::setQuaternion(const T q[4])
+{
+    for (int i = 0; i < 4; ++i)
+        q_[i] = q[i];
+    normalize4(q_);
+    for (int i = kAtt; i < kAtt + 3; ++i)
+        for (int j = 0; j < N; ++j)
+            P_[i][j] = P_[j][i] = T(0);
+    for (int i = kAtt; i < kAtt + 3; ++i)
+        P_[i][i] = T(1e-6);
+}
+
+template <typename T>
+void RawGnssEKF<T>::seedGyroBias(const T gyro_mean[3])
+{
+    for (int i = 0; i < 3; ++i)
+        wb_[i] = gyro_mean[i];
+}
+
+template <typename T>
+T RawGnssEKF<T>::isb(int sys) const
+{
+    return sys == GNSS_SYS_GAL ? isb_[0] : (sys == GNSS_SYS_BDS ? isb_[1] : T(0));
+}
+
+template <typename T>
+T RawGnssEKF<T>::sigma(int i) const
+{
+    return P_[i][i] > T(0) ? std::sqrt(P_[i][i]) : T(0);
+}
+
+template <typename T>
+T RawGnssEKF<T>::takeGPeak()
+{
+    const T g = g_peak_;
+    g_peak_ = T(0);
+    return g;
+}
+
+template <typename T>
+void RawGnssEKF<T>::gravityNed(T g[3]) const
+{
+    if (!p_.gravity_wgs84)
+    {
+        g[0] = g[1] = T(0);
+        g[2] = T(kG0);
+        return;
+    }
+    // Somigliana on the ellipsoid, the second-order height term, and the
+    // small north component above it (tc_ekf.py gravity_wgs84)
+    const double lat = lla_[0], h = lla_[2];
+    const double s2 = std::sin(lat) * std::sin(lat);
+    const double g0 = kGammaE * (1.0 + kSomK * s2) / std::sqrt(1.0 - kE2 * s2);
+    const double gd = g0 * (1.0 - 2.0 / kRe * (1.0 + kFlat + kGravM - 2.0 * kFlat * s2) * h
+                            + 3.0 / (kRe * kRe) * h * h);
+    g[0] = T(-8.08e-9 * h * std::sin(2.0 * lat));
+    g[1] = T(0);
+    g[2] = T(gd);
+}
+
+template <typename T>
+void RawGnssEKF<T>::propagate(const T acc[3], const T gyro[3], T dt)
+{
+    // the pre-propagation attitude, as the flight filter
+    T Tn2b[3][3], Tb2n[3][3];
+    quat2dcm(q_, Tn2b);
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+            Tb2n[j][i] = Tn2b[i][j];
+    T g[3];
+    gravityNed(g);
+    T w[3], a_b[3];
+    for (int i = 0; i < 3; ++i)
+        w[i] = gyro[i] - wb_[i];
+    for (int i = 0; i < 3; ++i)
+        a_b[i] = (acc[i] - ab_[i]) + (Tn2b[i][0] * g[0] + Tn2b[i][1] * g[1] + Tn2b[i][2] * g[2]);
+
+    // attitude: rotation vector, exact for a constant rate over the step
+    {
+        const T th[3] = {w[0] * dt, w[1] * dt, w[2] * dt};
+        const T ang = std::sqrt(th[0] * th[0] + th[1] * th[1] + th[2] * th[2]);
+        T dq[4];
+        if (ang > T(1e-8))
+        {
+            const T ha = T(0.5) * ang;
+            const T s = std::sin(ha) / ang;
+            dq[0] = std::cos(ha);
+            dq[1] = s * th[0];
+            dq[2] = s * th[1];
+            dq[3] = s * th[2];
+        }
+        else
+        {
+            dq[0] = T(1);
+            dq[1] = T(0.5) * th[0];
+            dq[2] = T(0.5) * th[1];
+            dq[3] = T(0.5) * th[2];
+        }
+        T qn[4];
+        quatMult(q_, dq, qn);
+        for (int i = 0; i < 4; ++i)
+            q_[i] = qn[i];
+        normalize4(q_);
+    }
+
+    // velocity, then position from it
+    for (int i = 0; i < 3; ++i)
+        a_ned_[i] = Tb2n[i][0] * a_b[0] + Tb2n[i][1] * a_b[1] + Tb2n[i][2] * a_b[2];
+    for (int i = 0; i < 3; ++i)
+        v_[i] += a_ned_[i] * dt;
+    {
+        double rew, rns;
+        earthRad(lla_[0], rew, rns);
+        const double dts = static_cast<double>(dt);
+        const double dlat = dts * static_cast<double>(v_[0]) / (rns + lla_[2]);
+        const double dlon = dts * static_cast<double>(v_[1]) / ((rew + lla_[2]) * std::cos(lla_[0]));
+        const double dh = -dts * static_cast<double>(v_[2]);
+        lla_[0] += dlat;
+        lla_[1] += dlon;
+        lla_[2] += dh;
+    }
+
+    const T fn = std::sqrt(acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2]);
+    g_excess_ = fn / T(kG0) - T(1);
+    if (g_excess_ > g_peak_)
+        g_peak_ = g_excess_;
+
+    propagateCovariance(Tb2n, a_b, w, g[2], dt);
+    clk_b_ += static_cast<double>(clk_d_) * static_cast<double>(dt);
+    t_ += static_cast<double>(dt);
+    pushHistory(dt, a_ned_);
+}
+
+// P <- (I + F dt) P (I + F dt)' + Qd, Qd = Qc dt + (F Qc + Qc F') dt^2 / 2,
+// touching only F's non-zero blocks (the flight filter's sparse form):
+//   F[0:3, 3:6]   = I                    F[5, 2] = 2 g / R
+//   F[3:6, 6:9]   = -2 Tb2n [a_b x]      F[3:6, 9:12] = -Tb2n
+//   F[6:9, 6:9]   = -[w x]               F[6:9, 12:15] = -I / 2
+//   F[9:12]       = -I / tau_a           F[12:15] = -I / tau_w
+//   F[15, 16]     = 1
+// Qc is diagonal: the accelerometer noise is the same on every axis, so
+// Tb2n diag(q) Tb2n' = q I.
+template <typename T>
+void RawGnssEKF<T>::propagateCovariance(const T Tb2n[3][3], const T a_b[3], const T w_b[3],
+                                        T g_d, T dt)
+{
+    T Fva[3][3], Fvb[3][3], Fww[3][3];
+    {
+        const T sa[3][3] = {{T(0), -a_b[2], a_b[1]}, {a_b[2], T(0), -a_b[0]}, {-a_b[1], a_b[0], T(0)}};
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j)
+            {
+                Fva[i][j] = T(-2) * (Tb2n[i][0] * sa[0][j] + Tb2n[i][1] * sa[1][j] + Tb2n[i][2] * sa[2][j]);
+                Fvb[i][j] = -Tb2n[i][j];
+            }
+        const T sw[3][3] = {{T(0), -w_b[2], w_b[1]}, {w_b[2], T(0), -w_b[0]}, {-w_b[1], w_b[0], T(0)}};
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j)
+                Fww[i][j] = -sw[i][j];
+    }
+    const T f52 = T(2) * g_d / T(kRe);
+    const T half = T(0.5);
+
+    // rows: A = (I + F dt) P
+    T A[N][N];
+    std::memcpy(A, P_, sizeof(A));
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < N; ++j)
+            A[i][j] += dt * P_[i + 3][j];
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < N; ++j)
+        {
+            T s = T(0);
+            for (int k = 0; k < 3; ++k)
+                s += Fva[i][k] * P_[6 + k][j] + Fvb[i][k] * P_[9 + k][j];
+            if (i == 2)
+                s += f52 * P_[2][j];
+            A[3 + i][j] += dt * s;
+        }
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < N; ++j)
+        {
+            T s = T(0);
+            for (int k = 0; k < 3; ++k)
+                s += Fww[i][k] * P_[6 + k][j];
+            s -= half * P_[12 + i][j];
+            A[6 + i][j] += dt * s;
+        }
+    const T dab = T(1) + dt * f_ab_, dwb = T(1) + dt * f_wb_;
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < N; ++j)
+        {
+            A[9 + i][j] = dab * P_[9 + i][j];
+            A[12 + i][j] = dwb * P_[12 + i][j];
+        }
+    for (int j = 0; j < N; ++j)
+        A[15][j] += dt * P_[16][j];
+
+    // columns: P = A (I + F dt)'
+    for (int i = 0; i < N; ++i)
+    {
+        T* Pi = P_[i];
+        const T* Ai = A[i];
+        for (int j = 0; j < N; ++j)
+            Pi[j] = Ai[j];
+        for (int j = 0; j < 3; ++j)
+            Pi[j] += dt * Ai[j + 3];
+        for (int j = 0; j < 3; ++j)
+        {
+            T s = T(0);
+            for (int k = 0; k < 3; ++k)
+                s += Ai[6 + k] * Fva[j][k] + Ai[9 + k] * Fvb[j][k];
+            if (j == 2)
+                s += f52 * Ai[2];
+            Pi[3 + j] += dt * s;
+        }
+        for (int j = 0; j < 3; ++j)
+        {
+            T s = T(0);
+            for (int k = 0; k < 3; ++k)
+                s += Ai[6 + k] * Fww[j][k];
+            s -= half * Ai[12 + j];
+            Pi[6 + j] += dt * s;
+        }
+        for (int j = 0; j < 3; ++j)
+        {
+            Pi[9 + j] = dab * Ai[9 + j];
+            Pi[12 + j] = dwb * Ai[12 + j];
+        }
+        Pi[15] += dt * Ai[16];
+    }
+
+    // Qd
+    const T h2 = half * dt * dt;
+    for (int i = 0; i < 3; ++i)
+    {
+        P_[3 + i][3 + i] += dt * q_acc_;
+        P_[6 + i][6 + i] += dt * q_att_;
+        P_[9 + i][9 + i] += dt * q_ab_ + h2 * T(2) * f_ab_ * q_ab_;
+        P_[12 + i][12 + i] += dt * q_wb_ + h2 * T(2) * f_wb_ * q_wb_;
+        const T pv = h2 * q_acc_;                       // position-velocity
+        P_[i][3 + i] += pv;
+        P_[3 + i][i] += pv;
+        const T aw = h2 * (-half) * q_wb_;              // attitude-gyro bias
+        P_[6 + i][12 + i] += aw;
+        P_[12 + i][6 + i] += aw;
+        for (int k = 0; k < 3; ++k)
+        {
+            const T va = h2 * Fva[i][k] * q_att_;       // velocity-attitude
+            P_[3 + i][6 + k] += va;
+            P_[6 + k][3 + i] += va;
+            const T vb = h2 * Fvb[i][k] * q_ab_;        // velocity-accel bias
+            P_[3 + i][9 + k] += vb;
+            P_[9 + k][3 + i] += vb;
+        }
+    }
+    P_[kClkBias][kClkBias] += dt * q_clkb_;
+    P_[kClkDrift][kClkDrift] += dt * q_clkd_;
+    P_[kClkBias][kClkDrift] += h2 * q_clkd_;
+    P_[kClkDrift][kClkBias] += h2 * q_clkd_;
+    P_[kIsbGal][kIsbGal] += dt * q_isb_;
+    P_[kIsbBds][kIsbBds] += dt * q_isb_;
+
+    symmetrize();
+    stabilize();
+}
+
+template <typename T>
+void RawGnssEKF<T>::symmetrize()
+{
+    for (int i = 0; i < N; ++i)
+        for (int j = 0; j < i; ++j)
+        {
+            const T s = T(0.5) * (P_[i][j] + P_[j][i]);
+            P_[i][j] = s;
+            P_[j][i] = s;
+        }
+}
+
+// A floor and a ceiling on each variance, as the flight filter's stabilizeP:
+// a non-finite or vanishing one restarts its row and column at the floor, one
+// past its cap is scaled down with its correlations.
+template <typename T>
+void RawGnssEKF<T>::stabilize()
+{
+    static const T pmax[N] = {
+        T(1e8), T(1e8), T(1e8), T(1e4), T(1e4), T(1e4), T(10), T(10), T(10),
+        T(10), T(10), T(10), T(1), T(1), T(1), T(1e12), T(1e6), T(1e6), T(1e6)};
+    const T floor = T(1e-12);
+    for (int i = 0; i < N; ++i)
+    {
+        if (!std::isfinite(P_[i][i]) || P_[i][i] < floor)
+        {
+            for (int j = 0; j < N; ++j)
+                P_[i][j] = P_[j][i] = T(0);
+            P_[i][i] = floor;
+            continue;
+        }
+        if (P_[i][i] > pmax[i])
+        {
+            const T s = std::sqrt(pmax[i] / P_[i][i]);
+            for (int j = 0; j < N; ++j)
+            {
+                P_[i][j] *= s;
+                P_[j][i] *= s;
+            }
+            P_[i][i] = pmax[i];
+        }
+    }
+}
+
+template <typename T>
+T RawGnssEKF<T>::hph(const int* hidx, const T* hval, int hn) const
+{
+    T s = T(0);
+    for (int a = 0; a < hn; ++a)
+        for (int b = 0; b < hn; ++b)
+            s += hval[a] * P_[hidx[a]][hidx[b]] * hval[b];
+    return s;
+}
+
+// One scalar measurement (H sparse: hval at columns hidx), innovation y,
+// variance R. gate > 0: refused, nothing changed, when y^2 / S exceeds it.
+// att scales the gain's attitude rows. Joseph form exploiting the rank-1 K H
+// (GpsInsEKF::applyScalarMeasUpdate), which stays exact with the gain so
+// altered. Writes the correction to dx for the caller to inject. Returns 1
+// applied, 0 refused by the gate, -1 for a non-positive S.
+template <typename T>
+int RawGnssEKF<T>::scalarUpdate(const int* hidx, const T* hval, int hn, T y, T R, T gate, T att,
+                                T dx[N], T* nis)
+{
+    T HP[N] = {};
+    for (int m = 0; m < hn; ++m)
+    {
+        const T h = hval[m];
+        const T* row = P_[hidx[m]];
+        for (int j = 0; j < N; ++j)
+            HP[j] += h * row[j];
+    }
+    T S = R;
+    for (int m = 0; m < hn; ++m)
+        S += HP[hidx[m]] * hval[m];
+    if (!(S > T(0)))
+        return -1;
+    const T Sinv = T(1) / S;
+    if (nis)
+        *nis = y * y * Sinv;
+    if (gate > T(0) && y * y * Sinv > gate)
+        return 0;
+
+    T K[N];
+    for (int i = 0; i < N; ++i)
+        K[i] = HP[i] * Sinv;
+    if (att != T(1))
+        for (int i = kAtt; i < kAtt + 3; ++i)
+            K[i] *= att;
+
+    for (int i = 0; i < N; ++i)
+        for (int j = 0; j < N; ++j)
+            P_[i][j] -= K[i] * HP[j];
+    T Acol[N];
+    for (int i = 0; i < N; ++i)
+    {
+        T s = T(0);
+        for (int m = 0; m < hn; ++m)
+            s += P_[i][hidx[m]] * hval[m];
+        Acol[i] = s;
+    }
+    for (int i = 0; i < N; ++i)
+    {
+        const T KR = K[i] * R;
+        for (int j = 0; j < N; ++j)
+            P_[i][j] += -Acol[i] * K[j] + KR * K[j];
+    }
+    symmetrize();
+    for (int i = 0; i < N; ++i)
+        dx[i] = K[i] * y;
+    return 1;
+}
+
+template <typename T>
+void RawGnssEKF<T>::inject(const T dx[N])
+{
+    double rew, rns;
+    earthRad(lla_[0], rew, rns);
+    lla_[2] -= static_cast<double>(dx[2]);
+    lla_[0] += static_cast<double>(dx[0]) / (rns + lla_[2]);
+    lla_[1] += static_cast<double>(dx[1]) / ((rew + lla_[2]) * std::cos(lla_[0]));
+    for (int i = 0; i < 3; ++i)
+    {
+        v_[i] += dx[kVel + i];
+        ab_[i] += dx[kAccBias + i];
+        wb_[i] += dx[kGyroBias + i];
+    }
+    clk_b_ += static_cast<double>(dx[kClkBias]);
+    clk_d_ += dx[kClkDrift];
+    isb_[0] += dx[kIsbGal];
+    isb_[1] += dx[kIsbBds];
+    T dq[4] = {T(1), dx[kAtt], dx[kAtt + 1], dx[kAtt + 2]};
+    normalize4(dq);
+    T qn[4];
+    quatMult(q_, dq, qn);
+    for (int i = 0; i < 4; ++i)
+        q_[i] = qn[i];
+    normalize4(q_);
+}
+
+// How much of a GNSS correction reaches the attitude: cos^4 pitch, as the
+// flight filter (GNSS sees a tilt only through the specific force, and
+// nothing of the rotation about a vertical thrust).
+template <typename T>
+T RawGnssEKF<T>::attGate() const
+{
+    if (!p_.att_gate_cos4)
+        return T(1);
+    T M[3][3];
+    quat2dcm(q_, M);
+    const T sp = -M[0][2];
+    const T c2 = T(1) - sp * sp;
+    return c2 * c2;
+}
+
+template <typename T>
+void RawGnssEKF<T>::updateAccelLevel(const T acc[3])
+{
+    T M[3][3], g[3], ag[3], y[3];
+    quat2dcm(q_, M);
+    gravityNed(g);
+    for (int i = 0; i < 3; ++i)
+        ag[i] = M[i][0] * g[0] + M[i][1] * g[1] + M[i][2] * g[2];
+    for (int i = 0; i < 3; ++i)
+        y[i] = (acc[i] - ab_[i]) + ag[i];
+    const int idx[3][3] = {{7, 8, 9}, {6, 8, 10}, {6, 7, 11}};
+    const T val[3][3] = {{T(2) * ag[2], T(-2) * ag[1], T(1)},
+                         {T(-2) * ag[2], T(2) * ag[0], T(1)},
+                         {T(2) * ag[1], T(-2) * ag[0], T(1)}};
+    // One vector update with R = accel_var I, as three scalar ones on the
+    // same linearization: each innovation less what the rows before it
+    // already corrected, the correction injected once at the end.
+    T dx_sum[N] = {};
+    const T R = T(p_.accel_var);
+    for (int r = 0; r < 3; ++r)
+    {
+        T yr = y[r];
+        for (int m = 0; m < 3; ++m)
+            yr -= val[r][m] * dx_sum[idx[r][m]];
+        T dx[N];
+        if (scalarUpdate(idx[r], val[r], 3, yr, R, T(0), T(1), dx, nullptr) == 1)
+            for (int i = 0; i < N; ++i)
+                dx_sum[i] += dx[i];
+    }
+    inject(dx_sum);
+    stabilize();
+}
+
+template <typename T>
+void RawGnssEKF<T>::pushHistory(T dt, const T a_ned[3])
+{
+    if (hn_ > 0 && (t_ - hopen_) < p_.hist_spacing_s)
+    {
+        Hist& e = hist_[(hhead_ + kHist - 1) % kHist];
+        e.t = t_;
+        for (int i = 0; i < 3; ++i)
+        {
+            e.dv[i] += a_ned[i] * dt;
+            e.dp[i] += v_[i] * dt;
+        }
+        return;
+    }
+    hopen_ = hn_ > 0 ? hist_[(hhead_ + kHist - 1) % kHist].t : t_ - static_cast<double>(dt);
+    Hist& e = hist_[hhead_];
+    e.t = t_;
+    for (int i = 0; i < 3; ++i)
+    {
+        e.dv[i] = a_ned[i] * dt;
+        e.dp[i] = v_[i] * dt;
+    }
+    hhead_ = (hhead_ + 1) % kHist;
+    if (hn_ < kHist)
+        hn_++;
+}
+
+// v(now) - v(now - tau) and p(now) - p(now - tau), NED, from the IMU's own
+// increments (no filter corrections in them), interpolated within an entry
+// (tc_ekf.py velocity_change). Where the history does not reach back that
+// far: the last acceleration and the velocity times tau, and false.
+template <typename T>
+bool RawGnssEKF<T>::historyChange(double tau, T dv[3], T dp[3]) const
+{
+    for (int i = 0; i < 3; ++i)
+        dv[i] = dp[i] = T(0);
+    if (tau <= 0.0)
+        return true;
+    const double t0 = t_ - tau;
+    auto at = [&](int k) -> const Hist& { return hist_[(hhead_ + kHist - hn_ + k) % kHist]; };
+    if (hn_ > 1 && at(0).t <= t0 && at(hn_ - 1).t >= t_ - 1e-9)
+    {
+        T sv[3] = {}, sp[3] = {};
+        for (int k = hn_ - 1; k > 0; --k)
+        {
+            const Hist& b = at(k);
+            const Hist& a = at(k - 1);
+            if (a.t <= t0)
+            {
+                const T w = b.t > a.t ? T((t0 - a.t) / (b.t - a.t)) : T(0);
+                for (int i = 0; i < 3; ++i)
+                {
+                    dv[i] = sv[i] + (T(1) - w) * b.dv[i];
+                    dp[i] = sp[i] + (T(1) - w) * b.dp[i];
+                }
+                return true;
+            }
+            for (int i = 0; i < 3; ++i)
+            {
+                sv[i] += b.dv[i];
+                sp[i] += b.dp[i];
+            }
+        }
+    }
+    for (int i = 0; i < 3; ++i)
+    {
+        dv[i] = a_ned_[i] * T(tau);
+        dp[i] = v_[i] * T(tau);
+    }
+    return false;
+}
+
+template <typename T>
+void RawGnssEKF<T>::receiverState(double r[3], double v[3], double Tm[3][3]) const
+{
+    llaToEcef(lla_, r);
+    eToNed(lla_[0], lla_[1], Tm);
+    for (int i = 0; i < 3; ++i)
+        v[i] = Tm[0][i] * static_cast<double>(v_[0]) + Tm[1][i] * static_cast<double>(v_[1])
+             + Tm[2][i] * static_cast<double>(v_[2]);
+}
+
+template <typename T>
+void RawGnssEKF<T>::receiverEcef(double r[3], double v[3]) const
+{
+    double Tm[3][3];
+    receiverState(r, v, Tm);
+}
+
+namespace
+{
+
+// The receiver at the epoch: now less the NED displacement and velocity
+// change since (both NED, turned to ECEF by the present frame).
+template <typename T>
+void backDate(const double r[3], const double v[3], const double Tm[3][3], const T dp[3], const T dv[3],
+              double r_e[3], double v_e[3])
+{
+    for (int i = 0; i < 3; ++i)
+    {
+        double sp = 0.0, sv = 0.0;
+        for (int k = 0; k < 3; ++k)
+        {
+            sp += Tm[k][i] * static_cast<double>(dp[k]);
+            sv += Tm[k][i] * static_cast<double>(dv[k]);
+        }
+        r_e[i] = r[i] - sp;
+        v_e[i] = v[i] - sv;
+    }
+}
+
+}  // namespace
+
+template <typename T>
+bool RawGnssEKF<T>::initClockFrom(const RawMeas* m, int n, double age_s)
+{
+    double r[3], v[3], Tm[3][3], r_e[3], v_e[3];
+    T dp[3], dv[3];
+    receiverState(r, v, Tm);
+    historyChange(age_s, dv, dp);
+    backDate(r, v, Tm, dp, dv, r_e, v_e);
+
+    double by[3][RawEpoch::kMaxObs];
+    int nby[3] = {0, 0, 0};
+    double d[RawEpoch::kMaxObs];
+    int nd = 0;
+    int ref = -1;
+    for (int i = 0; i < n; ++i)
+    {
+        if (m[i].sys > GNSS_SYS_BDS)
+            continue;
+        Los L;
+        lineOfSight(m[i], r_e, v_e, L);
+        if (m[i].has_pr && nby[m[i].sys] < RawEpoch::kMaxObs)
+        {
+            by[m[i].sys][nby[m[i].sys]++] = m[i].pr - L.rho;
+            if (ref < 0)
+                ref = m[i].sys;
+        }
+        if (m[i].has_rr && nd < RawEpoch::kMaxObs)
+            d[nd++] = m[i].rr - L.rate;
+    }
+    if (ref < 0)
+        return false;
+    if (nby[GNSS_SYS_GPS] > 0)
+        ref = GNSS_SYS_GPS;
+    const double b0 = median(by[ref], nby[ref]);
+    const double d0 = nd > 0 ? median(d, nd) : 0.0;
+    clk_d_ = T(d0);
+    clk_b_ = b0 + d0 * age_s;
+    isb_[0] = nby[GNSS_SYS_GAL] > 0 ? T(median(by[GNSS_SYS_GAL], nby[GNSS_SYS_GAL]) - b0) : T(0);
+    isb_[1] = nby[GNSS_SYS_BDS] > 0 ? T(median(by[GNSS_SYS_BDS], nby[GNSS_SYS_BDS]) - b0) : T(0);
+
+    const T pz = P_[2][2];
+    for (int i = kClkBias; i < N; ++i)
+        for (int j = 0; j < N; ++j)
+            P_[i][j] = P_[j][i] = T(0);
+    P_[kClkBias][kClkBias] = T(p_.p0_clk_bias * p_.p0_clk_bias) + pz;
+    P_[kClkDrift][kClkDrift] = T(p_.p0_clk_drift * p_.p0_clk_drift);
+    P_[kIsbGal][kIsbGal] = P_[kIsbBds][kIsbBds] = T(p_.p0_isb * p_.p0_isb);
+    clk_ready_ = true;
+    return true;
+}
+
+template <typename T>
+RawGnssStats RawGnssEKF<T>::updateGnssRaw(const RawMeas* m, int n, double age_s)
+{
+    RawGnssStats st;
+    if (age_s < 0.0)
+        age_s = 0.0;
+    if (!clk_ready_ && !initClockFrom(m, n, age_s))
+        return st;
+
+    // the receiver's history back to the epoch, and to its Doppler's instant
+    const double tau = p_.rr_lag_s > 0.0 ? p_.rr_lag_s : 0.0;
+    T dp_e[3], dv_e[3], dp_l[3], dv_l[3];
+    historyChange(age_s, dv_e, dp_e);
+    historyChange(age_s + tau, dv_l, dp_l);
+
+    // Receiver clock steps: every satellite's innovation agrees on one
+    {
+        double r[3], v[3], Tm[3][3], r_e[3], v_e[3];
+        receiverState(r, v, Tm);
+        backDate(r, v, Tm, dp_e, dv_e, r_e, v_e);
+        double inn[RawEpoch::kMaxObs], inn_rr[RawEpoch::kMaxObs], dev[RawEpoch::kMaxObs];
+        int ni = 0, nr = 0;
+        const double b_e = clk_b_ - static_cast<double>(clk_d_) * age_s;
+        for (int i = 0; i < n; ++i)
+        {
+            if (m[i].sys > GNSS_SYS_BDS)
+                continue;
+            Los L;
+            lineOfSight(m[i], r_e, v_e, L);
+            if (m[i].has_pr && ni < RawEpoch::kMaxObs)
+                inn[ni++] = m[i].pr - (L.rho + b_e + static_cast<double>(isb(m[i].sys)));
+            if (m[i].has_rr && nr < RawEpoch::kMaxObs)
+                inn_rr[nr++] = m[i].rr - (L.rate + static_cast<double>(clk_d_));
+        }
+        if (ni > 0)
+        {
+            for (int i = 0; i < ni; ++i)
+                dev[i] = inn[i];
+            const double med = median(dev, ni);
+            const double ms = kC * 1e-3;
+            const long k = std::lround(med / ms);
+            if (k != 0 && std::fabs(med - static_cast<double>(k) * ms) < 0.1 * ms)
+            {
+                clk_b_ += static_cast<double>(k) * ms;
+                st.clock_jump_ms = static_cast<int>(k);
+            }
+            else if (ni >= 4 && std::fabs(med) > p_.clock_step_m)
+            {
+                for (int i = 0; i < ni; ++i)
+                    dev[i] = std::fabs(inn[i] - med);
+                if (median(dev, ni) < p_.clock_step_spread_m)
+                {
+                    clk_b_ += med;
+                    st.clock_step_m = med;
+                }
+            }
+        }
+        if (nr >= 4)
+        {
+            for (int i = 0; i < nr; ++i)
+                dev[i] = inn_rr[i];
+            const double med = median(dev, nr);
+            if (std::fabs(med) > p_.drift_step_mps)
+            {
+                for (int i = 0; i < nr; ++i)
+                    dev[i] = std::fabs(inn_rr[i] - med);
+                if (median(dev, nr) < p_.drift_step_spread_mps)
+                {
+                    clk_d_ += T(med);
+                    st.drift_step_mps = med;
+                }
+            }
+        }
+    }
+
+    const T att = attGate();
+    for (int i = 0; i < n; ++i)
+    {
+        const RawMeas& mi = m[i];
+        if (mi.sys > GNSS_SYS_BDS || mi.prn >= 64)
+            continue;
+        for (int kind = 0; kind < 2; ++kind)
+        {
+            if (kind == 0 ? !mi.has_pr : !mi.has_rr)
+                continue;
+            // relinearized at the state every update before it left
+            double r[3], v[3], Tm[3][3], r_e[3], v_e[3];
+            receiverState(r, v, Tm);
+            backDate(r, v, Tm, dp_e, dv_e, r_e, v_e);
+            Los L;
+            double pred_rate = 0.0;
+            if (kind == 1 && tau > 0.0)
+            {
+                // a late Doppler: the receiver's velocity then, and the
+                // satellite's own range acceleration backed out
+                double r_l[3], v_l[3];
+                backDate(r, v, Tm, dp_e, dv_l, r_l, v_l);
+                lineOfSight(mi, r_l, v_l, L);
+                pred_rate = L.rate - tau * satRangeAccel(mi, L, v_l);
+            }
+            else
+            {
+                lineOfSight(mi, r_e, v_e, L);
+                pred_rate = L.rate;
+            }
+            T u_ned[3];
+            for (int a = 0; a < 3; ++a)
+                u_ned[a] = T(Tm[a][0] * L.u[0] + Tm[a][1] * L.u[1] + Tm[a][2] * L.u[2]);
+
+            int hidx[9];
+            T hval[9];
+            int hn = 0;
+            T y, R;
+            const double dt_i = t_ - last_upd_[mi.sys][mi.prn][kind];
+            if (kind == 0)
+            {
+                for (int a = 0; a < 3; ++a)
+                {
+                    hidx[hn] = kPos + a;
+                    hval[hn++] = -u_ned[a];
+                }
+                hidx[hn] = kClkBias;
+                hval[hn++] = T(1);
+                if (mi.sys == GNSS_SYS_GAL || mi.sys == GNSS_SYS_BDS)
+                {
+                    hidx[hn] = mi.sys == GNSS_SYS_GAL ? kIsbGal : kIsbBds;
+                    hval[hn++] = T(1);
+                }
+                if (age_s > 0.0)
+                {
+                    // the position and clock bias then: now less velocity and drift times age
+                    for (int a = 0; a < 3; ++a)
+                    {
+                        hidx[hn] = kVel + a;
+                        hval[hn++] = T(age_s) * u_ned[a];
+                    }
+                    hidx[hn] = kClkDrift;
+                    hval[hn++] = T(-age_s);
+                }
+                const double b_e = clk_b_ - static_cast<double>(clk_d_) * age_s;
+                y = T(mi.pr - (L.rho + b_e + static_cast<double>(isb(mi.sys))));
+                const double s_w = static_cast<double>(mi.sigma_pr), s_c = static_cast<double>(mi.sigma_pr_corr);
+                R = T(s_w * s_w + s_c * s_c * corrInflation(dt_i, static_cast<double>(mi.tau_pr)));
+            }
+            else
+            {
+                for (int a = 0; a < 3; ++a)
+                {
+                    hidx[hn] = kVel + a;
+                    hval[hn++] = -u_ned[a];
+                }
+                hidx[hn] = kClkDrift;
+                hval[hn++] = T(1);
+                y = T(mi.rr - (pred_rate + static_cast<double>(clk_d_)));
+                const double s_r = static_cast<double>(mi.sigma_rr);
+                R = T(s_r * s_r * corrInflation(dt_i, static_cast<double>(mi.tau_rr)));
+            }
+
+            uint8_t& rej = rejects_[mi.sys][mi.prn][kind];
+            T gate = T(p_.gate_chi2);
+            if (rej >= p_.reject_persist)
+            {
+                // persistent disagreement: the filter is the suspect, so let
+                // it in, its variance scaled by its NIS over the gate (the
+                // prototype's rule: on R alone, it would just have passed)
+                gate = T(0);
+                const T nis0 = y * y / (hph(hidx, hval, hn) + R);
+                if (nis0 > T(p_.gate_chi2))
+                    R *= nis0 / T(p_.gate_chi2);
+            }
+            T dx[N];
+            T nis = T(0);
+            const bool ok = scalarUpdate(hidx, hval, hn, y, R, gate, att, dx, &nis) == 1;
+            if (ok)
+            {
+                inject(dx);
+                stabilize();
+                last_upd_[mi.sys][mi.prn][kind] = t_;
+                rej = 0;
+                if (static_cast<float>(nis) > st.nis_max)
+                    st.nis_max = static_cast<float>(nis);
+                if (kind == 0)
+                    st.used_pr++;
+                else
+                    st.used_rr++;
+            }
+            else
+            {
+                if (rej < 255)
+                    rej++;
+                if (kind == 0)
+                    st.rejected_pr++;
+                else
+                    st.rejected_rr++;
+            }
+        }
+    }
+    return st;
+}
+
+template class RawGnssEKF<float>;
+template class RawGnssEKF<double>;
+
+}  // namespace gnss_raw

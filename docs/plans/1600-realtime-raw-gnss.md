@@ -91,3 +91,45 @@ calibration**:
 
 Later: a rig test that replays a flight's IMU while the rig plays its signals (the firmware sim drops
 raw GNSS today), then flight use.
+
+## Phase 3: the port against the prototype
+
+`TR_RawGnssEKF` (the filter; float on the flight computer) and `TR_GNSSRaw`'s `RawMeasBuilder`, fed
+by the LC86G driver's own parser through `Lc86RawEpoch.h`, were flown through the bench scorer on
+the four bench flights. The scorer is the gnss repo's `sim/tc_ekf_cocom.py`, in modes `ins-cpp` and
+`ins-cpp64`, via `tinkerrocket_sim._rawgnss`. The prototype ran with the states the port leaves out
+turned off, which changes nothing on these flights:
+
+| Compared | Largest position / velocity difference |
+|---|---|
+| C++ in double, the prototype's measurements | 1.7e-7 m / 7e-8 m/s; the same updates accepted and refused |
+| C++ in float, against C++ in double | 4.5 mm / 4.5 mm/s |
+| The whole C++ chain, ephemeris preloaded as the prototype does | 1.0 mm / 0.1 mm/s |
+| The whole C++ chain, ephemeris in the order it arrived | 0.3-0.8 m |
+
+The last row is the flight computer's view. Each satellite waits 16-35 s after it appears for the
+receiver to send its ephemeris, where the prototype had every ephemeris from the start. Per phase,
+the altitude and velocity RMS still agree with the prototype's to 0.1 m and 0.01 m/s.
+
+**Applied late.** On the flight computer, epochs arrive 0.1-0.25 s after their time. Applied that
+late, from the history of the IMU's velocity increments, they changed the flight's (ignition to
+landing) RMS as follows:
+
+- altitude: by at most 0.3 m;
+- vertical velocity: by at most 0.01 m/s;
+- horizontal position: by up to 0.6 m at 0.25 s.
+
+A first-order model of the attitude and accelerometer-bias errors over the delay helped two flights
+and hurt one, and was left out. Taking each epoch as it arrives, with its covariance restored and the
+IMU replayed, would be exact; whether that fits the CPU budget is phase 4's question.
+
+**Memory on the ESP32-S3:**
+
+- the filter: 9.4 KB;
+- the ephemeris store: 12.8 KB;
+- the builder: 3.4 KB;
+- a 48-satellite measurement package: 5.8 KB;
+- about 18 KB of code.
+
+That's above the 25 KB estimate, with room to trim (e.g. a smaller history ring and float satellite
+velocities). CPU is measured in phase 4.
