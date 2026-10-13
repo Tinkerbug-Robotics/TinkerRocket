@@ -1665,6 +1665,35 @@ static constexpr uint8_t PCS_RUNNING    = 0x02;  //   and it is running
 static constexpr uint8_t PCS_IONO_AGE   = 0x04;  // iono_age_days is known (the receiver has given its date)
 static constexpr uint8_t PCS_PAD        = 0x08;  // the pad average has fixes (pad_* are set)
 static constexpr uint8_t PCS_PAD_FROZEN = 0x10;  // launched: the pad average and corrections are frozen
+static constexpr uint8_t PCS_PAD_MISMATCH = 0x20;  // the raw measurements put the pad more than 30 m from the
+                                                   // receiver's average fix: its corrections are not used
+static constexpr uint8_t PCS_FIX_SUSPECT  = 0x40;  // the receiver's last fix moved in a way the IMU says the
+                                                   // rocket did not (GnssCheckData, #1508)
+
+// ── GnssCheckData (GNSS_CHECK_MSG 0x9A) ─────────────────────────────────────
+// #1508.  Each receiver fix the raw-GNSS shadow judged against the IMU: from the
+// last fix that passed, the IMU's own motion predicts this one's position and
+// velocity (FixCheck.h), and a fix outside the tolerance -- the fixes' noise and
+// timing, the IMU's error growing with the span -- is flagged.  Also carried:
+// how many satellites the last raw epoch took as having jumped (their
+// pseudoranges against the IMU, epoch to epoch: SatJumpCheck.h).
+// Report-only: the flight filter takes every fix as before.
+typedef struct __attribute__((packed))
+{
+    uint32_t time_us;       // the fix's GPS instant on the MCU clock (micros(), truncated)
+    uint8_t  verdict;       // GCK_* below
+    uint8_t  sats_jumped;   // satellites the last raw epoch took as jumped
+    uint16_t span_ms;       // from the fix it was judged from
+    float    pos_err_m;     // the fix's distance from the IMU's prediction
+    float    pos_tol_m;     //   and what was allowed
+    float    vel_err_mps;   // its velocity's
+    float    vel_tol_mps;
+} GnssCheckData;
+static_assert(sizeof(GnssCheckData) == 24,
+              "GnssCheckData must be 24 bytes");
+static constexpr uint8_t GCK_UNJUDGED = 0;  // no passed fix near enough to judge it from (it is the next one's)
+static constexpr uint8_t GCK_PASS     = 1;
+static constexpr uint8_t GCK_FLAGGED  = 2;
 
 // OC→app flash-space stats for the rocket NAND flight log.  Rides the file_ops
 // characteristic behind a 0xCC discriminator (sibling of the 0xCB sensor-cal
@@ -2538,6 +2567,10 @@ static constexpr uint8_t PAD_CAL_PENDING     = 0x97;  // OC→FC: pad calibratio
 static constexpr uint8_t PAD_CAL_CONFIG_MSG  = 0x98;  // OC→FC: 10-byte PadCalConfigData
 static constexpr uint8_t PAD_CAL_STATUS_MSG  = 0x99;  // FC→OC over I2S: PadCalStatusData, 1 Hz on the ground; logged, and relayed to the app
                                                       // behind a 0xD0 file_ops discriminator.
+// FC→OC over I2S: the receiver's fix and its raw measurements checked against
+// the IMU for physically impossible motion (#1508), one GnssCheckData per fix
+// the raw-GNSS shadow judged; straight to the log.  LC86G boards only.
+static constexpr uint8_t GNSS_CHECK_MSG      = 0x9A;
 
 static constexpr uint8_t OUT_STATUS_QUERY    = 0xA0;
 static constexpr uint8_t GNSS_MSG            = 0xA1;
@@ -4085,6 +4118,8 @@ static_assert(sizeof(RawGnssEkfData) <= MAX_PAYLOAD,
               "RawGnssEkfData must fit one I2S frame payload");
 static_assert(sizeof(PadCalStatusData) <= MAX_PAYLOAD,
               "PadCalStatusData must fit one I2S frame payload");
+static_assert(sizeof(GnssCheckData) <= MAX_PAYLOAD,
+              "GnssCheckData must fit one I2S frame payload");
 
 // The flight settings snapshot (#165) rides the same I2S frame path, so it
 // must also fit one payload.  Checked here since MAX_PAYLOAD is defined below

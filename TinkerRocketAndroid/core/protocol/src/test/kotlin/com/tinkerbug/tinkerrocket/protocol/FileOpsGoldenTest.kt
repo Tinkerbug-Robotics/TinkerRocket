@@ -11,9 +11,9 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
 /**
- * file_ops binary frames: 0xAA freq scan, 0xCB sensor cal, 0xCC/0xCD storage
- * stats — golden walks plus the malformed-frame rejections the iOS parse
- * sites bounds-check.
+ * file_ops binary frames: 0xAA freq scan, 0xCB sensor cal, 0xD0 pad cal,
+ * 0xCC/0xCD storage stats — golden walks plus the malformed-frame rejections
+ * the iOS parse sites bounds-check.
  */
 class FileOpsGoldenTest {
 
@@ -77,6 +77,97 @@ class FileOpsGoldenTest {
     fun `sensor cal accepts exactly 19 bytes and rejects 18`() {
         assertNotNull(SensorCalStatus.decode(ByteArray(19)))
         assertNull(SensorCalStatus.decode(ByteArray(18)))
+    }
+
+    // --- 0xD0 pad calibration (#1600 phase 5) ---
+
+    @Test
+    fun `pad cal status decodes field-for-field`() {
+        val rel = "fileops/padcal_0xD0_40.bin"
+        val side = WireFixtures.sidecar(rel)
+        val frame = WireFixtures.bytes(rel)
+        assertEquals(0xD0.toByte(), frame[0])
+        assertEquals(1 + PadCalStatus.SIZE, frame.size)
+        val s = PadCalStatus.decode(frame.copyOfRange(1, frame.size))
+        assertNotNull(s)
+        fun i(key: String) = side[key]!!.jsonPrimitive.int
+        assertEquals(side["time_us"]!!.jsonPrimitive.long, s.timeUs)
+        assertEquals(i("cal_state"), s.calState.raw)
+        assertEquals(i("cal_progress"), s.calProgress)
+        assertEquals(i("cal_gravity_mg"), s.calGravityMg)
+        assertEquals(i("sats_tracked"), s.satsTracked)
+        assertEquals(i("sats_no_eph"), s.satsNoEph)
+        assertEquals(i("sats_settling"), s.satsSettling)
+        assertEquals(i("sats_corrected"), s.satsCorrected)
+        assertEquals(i("corr_rms_cm"), s.corrRmsCm)
+        assertEquals(i("iono_source"), s.ionoSource.raw)
+        assertEquals(i("flags"), s.flags)
+        assertEquals(i("iono_gps_day"), s.ionoGpsDay)
+        assertEquals(i("iono_age_days"), s.ionoAgeDays)   // i16: the fixture's is negative
+        assertEquals(i("pad_fixes"), s.padFixes)
+        assertEquals(i("pad_secs"), s.padSecs)
+        assertEquals(i("pad_scatter_cm"), s.padScatterCm)
+        assertEquals(i("pad_lat_e7"), s.padLatE7)
+        assertEquals(i("pad_lon_e7"), s.padLonE7)          // i32: negative (west)
+        assertEquals(i("pad_alt_mm"), s.padAltMm)          // i32: negative (below the ellipsoid)
+        assertEquals(i("pos_sigma_cm"), s.posSigmaCm)
+        // The fixture's flags (0x0F) through the named bits.
+        val flags = i("flags")
+        assertEquals((flags and 0x01) != 0, s.rawGnss)
+        assertEquals((flags and 0x02) != 0, s.filterRunning)
+        assertEquals((flags and 0x04) != 0, s.ionoAgeKnown)
+        assertEquals((flags and 0x08) != 0, s.padAverage)
+        assertEquals((flags and 0x10) != 0, s.padFrozen)
+        assertEquals((flags and 0x20) != 0, s.padMismatch)
+    }
+
+    @Test
+    fun `pad cal status accepts exactly 40 bytes and rejects 39`() {
+        assertNotNull(PadCalStatus.decode(ByteArray(40)))
+        assertNull(PadCalStatus.decode(ByteArray(39)))
+    }
+
+    @Test
+    fun `pad cal flag bits decode independently`() {
+        fun withFlags(flags: Int): PadCalStatus {
+            val raw = ByteArray(40)
+            raw[15] = flags.toByte()
+            return PadCalStatus.decode(raw)!!
+        }
+        // PCS_PAD_MISMATCH (0x20): the raw measurements and the receiver's
+        // averaged fix disagree by more than 30 m, so the pad corrections are
+        // off. It must not read off any of its neighbours, nor they off it.
+        withFlags(0x20).let {
+            assertEquals(true, it.padMismatch)
+            assertEquals(false, it.rawGnss || it.filterRunning || it.ionoAgeKnown ||
+                it.padAverage || it.padFrozen)
+        }
+        withFlags(0x1F).let {
+            assertEquals(false, it.padMismatch)
+            assertEquals(true, it.rawGnss && it.filterRunning && it.ionoAgeKnown &&
+                it.padAverage && it.padFrozen)
+        }
+        withFlags(0x21).let {
+            assertEquals(true, it.rawGnss)
+            assertEquals(true, it.padMismatch)
+            assertEquals(false, it.filterRunning)
+        }
+    }
+
+    @Test
+    fun `pad cal state and ionosphere source read their raw values`() {
+        fun with(state: Int, source: Int): PadCalStatus {
+            val raw = ByteArray(40)
+            raw[4] = state.toByte()
+            raw[14] = source.toByte()
+            return PadCalStatus.decode(raw)!!
+        }
+        assertEquals(PadCalState.REJECTED, with(3, 0).calState)
+        assertEquals(PadCalState.REFUSED, with(4, 0).calState)
+        assertEquals(PadIonoSource.PAD_SURVEY, with(0, 2).ionoSource)
+        // A state from a newer firmware reads as idle rather than throwing.
+        assertEquals(PadCalState.IDLE, with(9, 0).calState)
+        assertEquals(PadIonoSource.NONE, with(0, 7).ionoSource)
     }
 
     // --- 0xCC rocket storage ---

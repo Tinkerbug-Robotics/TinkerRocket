@@ -60,11 +60,13 @@ double gnssRtcmInflow()
 }
 
 // RAW_GNSS_EKF_MSG: the raw-GNSS shadow filter's state (#1600), 10 a second
-// where it runs (config.h TR_RAW_GNSS_SHADOW: the LC86G boards).
+// where it runs (config.h TR_RAW_GNSS_SHADOW: the LC86G boards), and its
+// check of each receiver fix against the IMU (GNSS_CHECK_MSG, #1508), one per
+// fix at the receiver's 10 Hz.
 double rawGnssShadowInflow()
 {
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
-    return framed(sizeof(RawGnssEkfData), 10.0);
+    return framed(sizeof(RawGnssEkfData), 10.0) + framed(sizeof(GnssCheckData), 10.0);
 #else
     return 0.0;
 #endif

@@ -22,6 +22,16 @@
 // median of the settled satellites' residuals less their corrections, so a
 // satellite coming or going does not move the others'.
 //
+// The pad, checked. The receiver's own fix can be wrong while its raw
+// measurements are not: on 2026-10-13 the Beetle's LC86G put itself 312 m below
+// sea level, 3-D fix, "1 m" vertical accuracy, while its pseudoranges agreed
+// (to 0.2-1.7 m per constellation) on a point near sea level, as the barometer
+// did. Corrections against such a pad would drag the filter onto it. So each
+// epoch the corrections in use are fitted as a position offset and a clock per
+// system: where the raw measurements put the pad. Further than
+// max_pad_offset_m from the receiver's average (the uncorrected ionosphere is
+// some metres of it), the corrections are not used until it agrees again.
+//
 // Relocks. A pseudorange starts biased after a relock (RawMeasBuilder: 40 m of
 // sigma decaying over 10 s), so a satellite's residuals count only once it
 // has been locked settle_s; the caller passes each one's lock age.
@@ -48,6 +58,8 @@ public:
         double gap_s        = 2.5;    // missing longer than this, a satellite starts over (a relock)
         double max_resid_m  = 30.0;   // a settled satellite's residual this far from its correction is refused
         double pad_move_m   = 20.0;   // the pad moving this far between epochs starts the survey over
+        double max_pad_offset_m = 30.0; // the raw measurements putting the pad further than this from
+                                        // the receiver's average: its corrections are not used
         float  iono_zenith_m = 5.0f;  // what a satellite without a correction keeps (zenith, m; times
                                       // Klobuchar's obliquity factor), added to its correlated sigma
     };
@@ -58,6 +70,9 @@ public:
         uint8_t settling = 0;     //   locked less than settle_s
         uint8_t corrected = 0;    //   with a correction in use
         float   rms_m = 0.0f;     // the RMS of those corrections
+        bool    pad_ok = false;   // the raw measurements put the pad within max_pad_offset_m of the
+                                  // receiver's average (false too until enough satellites tell)
+        float   pad_offset_m = 0.0f;  // how far they put it, m
         double  last_tow_s = -1;  // the last epoch observed (time of week); -1: none
     };
 
@@ -74,7 +89,7 @@ public:
     // Take each satellite's correction out of its pseudorange; without one,
     // widen its correlated sigma by the ionosphere it keeps (r: the receiver,
     // ECEF, for the elevation). Returns how many were corrected. With none
-    // in use, nothing is changed.
+    // in use, or the pad not vouched for (summary().pad_ok), nothing is changed.
     int correct(RawMeas* m, int n, const double r[3]) const;
 
     // The satellite's correction (m), if one is in use.

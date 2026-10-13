@@ -223,9 +223,8 @@ fun SettingsScreen(
             fleetScope.launch { syncer.importRocketCalIntoActiveProfile(System.currentTimeMillis()) }
         })
         // #1059: the sensor cal can be imported now, like the mag cal above.
-        // Running one on the pad is still iOS-only — see the caption in
-        // CalBanner, which no longer tells the operator to do something this
-        // app cannot do.
+        // Running one is the dashboard's Pad calibration tool (#1600 phase 5),
+        // which saves its result to the active profile itself.
         CalBanner("Sensor cal", sensorAdvisory, onImport = {
             fleetScope.launch { syncer.importRocketSensorCalIntoActiveProfile(System.currentTimeMillis()) }
         })

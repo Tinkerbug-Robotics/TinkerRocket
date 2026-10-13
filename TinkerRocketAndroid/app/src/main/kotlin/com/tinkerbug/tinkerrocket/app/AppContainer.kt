@@ -12,12 +12,16 @@ import com.tinkerbug.tinkerrocket.session.BleTransport
 import com.tinkerbug.tinkerrocket.session.DeviceSession
 import com.tinkerbug.tinkerrocket.session.FleetManager
 import com.tinkerbug.tinkerrocket.session.FleetSessionFactory
+import com.tinkerbug.tinkerrocket.session.HttpIonosphereFetch
+import com.tinkerbug.tinkerrocket.session.IonosphereCache
+import com.tinkerbug.tinkerrocket.session.IonosphereSource
 import com.tinkerbug.tinkerrocket.session.KnownDeviceStorage
 import com.tinkerbug.tinkerrocket.session.KnownDeviceStore
 import com.tinkerbug.tinkerrocket.session.LastSessionStore
 import com.tinkerbug.tinkerrocket.session.RocketProfileStore
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -90,6 +94,19 @@ class AppContainer(app: Application) {
 
     /** GitHub-releases update check (plan §1); throttled + failure-silent. */
     val updateChecker = UpdateChecker(app)
+
+    /**
+     * #1600 phase 5: the GPS broadcast ionosphere a pad calibration sends,
+     * from NOAA's daily navigation file.  Internal storage, not the cache dir
+     * Android reclaims: the set fetched at home is the one the field needs.
+     * Refreshes run on IO, off the fleet thread, and outlive the screen that
+     * asked; the one at start is in the init block below.
+     */
+    val ionosphere = IonosphereSource(
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + fleetExceptionHandler),
+        cache = IonosphereCache(File(app.filesDir, "ionosphere/klobuchar.json")),
+        fetch = HttpIonosphereFetch.fetch,
+    )
 
     /**
      * App-wide display units (iOS #160 twin — same UserDefaults key name and
@@ -347,6 +364,11 @@ class AppContainer(app: Application) {
             combine(fleet.devices, fleet.activeDeviceId, fleet.foregroundBSID) { _, _, _ -> Unit }
                 .collect { routeDeviceBindings(fleet) }
         }
+
+        // #1600 phase 5: every start with a signal brings the ionosphere up to
+        // date, so a field without one still has a recent set.  A no-op once
+        // the held set is today's; it never blocks.
+        ionosphere.refreshIfStale()
     }
 }
 

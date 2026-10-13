@@ -480,6 +480,18 @@ public object Commands {
         f32(hgX); f32(hgY); f32(hgZ)
     }
 
+    /**
+     * cmd 75 — pad calibration (#1600 phase 5), PadCalConfigData 10 B:
+     * `[iono i8 ×8][gps_day u16]`, as [Klobuchar.payload] lays it out.  Null
+     * sends ten zero bytes, which say "the app has no ionosphere": the rocket
+     * keeps any set it stored and still runs the gyro/accel window and the
+     * pad survey.
+     */
+    public fun padCalibration(iono: Klobuchar?): ByteArray =
+        frame(BleCommandId.PAD_CAL_RUN) {
+            bytes(iono?.payload() ?: ByteArray(Klobuchar.PAYLOAD_LENGTH))
+        }
+
     // ------------------------------------------------------------------ scan
 
     /** cmd 60 (BS only) — frequency scan, 12 B:

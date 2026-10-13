@@ -48,7 +48,7 @@ public object BleCommandId {
     public const val GROUND_TEST_STOP: Int = 16
     public const val HOP_DISABLE_BS: Int = 17      // [bool] — BS only
     public const val REQUEST_CONFIG: Int = 20
-    public const val SENSOR_CAL_RUN: Int = 21      // on-pad gyro+high-g cal, ~12 s
+    public const val SENSOR_CAL_RUN: Int = 21      // on-pad gyro+high-g cal, ~12 s; PAD_CAL_RUN's fallback
     public const val GAIN_SCHED_ENABLE: Int = 22   // [bool]
     public const val TOGGLE_LOGGING: Int = 23      // [desired u8]; bare = legacy toggle
     public const val SERVO_TEST: Int = 24          // ServoTestAnglesData 8 B
@@ -127,4 +127,16 @@ public object BleCommandId {
      * storage frame the operator acted on; the next frame then re-shows it.
      */
     public const val ACK_BLIND_LAUNCH: Int = 73
+
+    /**
+     * #1600 phase 5: pad calibration. `[iono i8 ×8][gps_day u16]` — the GPS
+     * broadcast ionosphere the app read from the day's navigation file, and
+     * that file's date ([Klobuchar]); all zero when the app has none, and the
+     * rocket then keeps any set it stored. The flight computer runs the same
+     * gyro/accel window as [SENSOR_CAL_RUN], stores the ionosphere for the
+     * raw-GNSS filter and restarts its pad survey; progress comes back as
+     * 0xD0 file-ops frames. Firmware that predates it ignores it, which is
+     * why 21 stays.
+     */
+    public const val PAD_CAL_RUN: Int = 75
 }

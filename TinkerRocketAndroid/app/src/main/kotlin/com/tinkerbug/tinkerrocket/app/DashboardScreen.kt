@@ -99,7 +99,10 @@ fun DashboardScreen(
         "sim" -> { SimulationScreen(session, onBack = { onTool(null) }); return }
         "scan" -> { FreqScanScreen(session, onBack = { onTool(null) }); return }
         "magcal" -> { MagCalScreen(session, syncer, onBack = { onTool(null) }); return }
-        "sensorcal" -> { SensorCalScreen(session, syncer, onBack = { onTool(null) }); return }
+        "sensorcal" -> {
+            SensorCalScreen(session, syncer, container?.ionosphere, onBack = { onTool(null) })
+            return
+        }
         "preflight" -> {
             if (container != null && profileStore != null) {
                 PreflightRunScreen(
@@ -915,12 +918,14 @@ fun DashboardScreen(
                         )
                         com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
                             "Mag cal", tr.myDevices, { onTool("magcal") })
-                        // #1059: the on-pad gyro + high-g calibration (cmd 21),
-                        // beside the mag cal it was always missing next to.
-                        // Direct links only like the rest of this block — the
-                        // base station has no dispatch for cmd 21.
+                        // #1059: the on-pad gyro + high-g calibration, beside the
+                        // mag cal it was always missing next to; since #1600
+                        // phase 5 the pad calibration (cmd 75, which adds the
+                        // GNSS pad survey; cmd 21 for older firmware). Direct
+                        // links only like the rest of this block — the base
+                        // station has no dispatch for either.
                         com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
-                            "Sensor cal", tr.myDevices, { onTool("sensorcal") })
+                            "Pad calibration", tr.myDevices, { onTool("sensorcal") })
                     }
                     // #1050: gated like the servo test beside it — a sim drives
                     // the fins and discards the real flight state, so it is the

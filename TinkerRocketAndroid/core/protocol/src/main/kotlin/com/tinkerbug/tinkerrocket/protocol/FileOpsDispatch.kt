@@ -3,7 +3,7 @@ package com.tinkerbug.tinkerrocket.protocol
 /**
  * Demux for the FILE_OPS characteristic — multiple binary frame kinds plus
  * two JSON shapes share it, disambiguated by the FIRST byte.  JSON always
- * starts with '{' or '[', so the binary discriminators (0xAA/0xCA..0xCD)
+ * starts with '{' or '[', so the binary discriminators (0xAA/0xCA..0xD0)
  * can never collide with it.  A port of the switch in iOS
  * `BLEDevice.peripheral(_:didUpdateValueFor:)` plus each branch's parse
  * helper, including the outer length gates those helpers apply BEFORE
@@ -15,6 +15,7 @@ package com.tinkerbug.tinkerrocket.protocol
  *   0xCC → rocket storage stats    (gate: frame >= 15 → [RocketStorageStats.decode])
  *   0xCD → BS storage stats        (gate: frame >= 27 → [BaseStationStorageStats.decode])
  *   0xCE → pyro-test refusal       (gate: frame >= 4, decoded inline)
+ *   0xD0 → pad-cal status          (gate: frame >= 41 → [PadCalStatus.decode])
  *   0x7B '{' → try ota_status JSON, else file-list parse (which fails on '{')
  *   anything else → file-list JSON array
  *
@@ -64,6 +65,13 @@ public object FileOpsDispatch {
                     reason = frame[3].toInt() and 0xFF,
                 )
             }
+            0xD0 -> {
+                // Before #1600 phase 5 this byte fell through to the
+                // file-list parser and was dropped there.
+                if (frame.size < 1 + PadCalStatus.SIZE) return null
+                PadCalStatus.decode(frame.copyOfRange(1, frame.size))
+                    ?.let { FileOpsMessage.PadCal(it) }
+            }
             0x7B -> {   // '{' → JSON object
                 OtaStatusUpdate.parse(frame)?.let { return FileOpsMessage.Ota(it) }
                 fileList(frame)
@@ -112,6 +120,13 @@ public sealed interface FileOpsMessage {
         val channel: Int,
         val reason: Int,
     ) : FileOpsMessage
+
+    /**
+     * 0xD0 — pad calibration progress (#1600 phase 5): once a second on the
+     * ground and at each change, so its arrival alone says the rocket has
+     * the firmware that knows command 75.
+     */
+    public data class PadCal(val status: PadCalStatus) : FileOpsMessage
 
     /** '{' JSON with `"type":"ota_status"` (#8 phase 2). */
     public data class Ota(val status: OtaStatusUpdate) : FileOpsMessage

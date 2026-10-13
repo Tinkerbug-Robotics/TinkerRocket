@@ -366,3 +366,89 @@ TEST(PadSurvey, WithNoCorrectionInUseCorrectLeavesEveryMeasurementAlone)
         EXPECT_EQ(m[i].sigma_pr_corr, before[i].sigma_pr_corr);
     }
 }
+
+namespace
+{
+
+// The pad as the receiver's average gives it: offset from the true one by
+// east, north, up (m).
+std::vector<double> padOff(double e_m, double n_m, double u_m)
+{
+    double e[3], n[3], u[3];
+    basis(kPad, e, n, u);
+    std::vector<double> p(3);
+    for (int a = 0; a < 3; ++a)
+        p[a] = kPad[a] + e_m * e[a] + n_m * n[a] + u_m * u[a];
+    return p;
+}
+
+}  // namespace
+
+TEST(PadSurvey, ARawSolutionNearTheReceiversPadVouchesForIt)
+{
+    // the receiver's average 10 m off the truth: the ionosphere and the
+    // receiver's own error are of that order, and the pad is used
+    const std::vector<Sv> svs = sky();
+    const std::vector<double> pad = padOff(6.0, -3.0, 7.0);
+    PadSurvey ps;
+    std::mt19937 rng(9);
+    for (int k = 0; k < 120; ++k)
+    {
+        auto m = epoch(svs, kPad, 0.0, 0.5, rng);   // satellites seen from the true pad
+        ps.observe(m.data(), static_cast<int>(m.size()), ages(m.size(), 600.0).data(), kTow0 + k, pad.data());
+    }
+    EXPECT_TRUE(ps.summary().pad_ok);
+    EXPECT_LT(ps.summary().pad_offset_m, 20.0f);
+    auto m = epoch(svs, kPad, 0.0, 0.5, rng);
+    EXPECT_EQ(ps.correct(m.data(), static_cast<int>(m.size()), kPad), static_cast<int>(svs.size()));
+}
+
+TEST(PadSurvey, AReceiverFixFarFromTheRawMeasurementsCorrectsNothing)
+{
+    // 2026-10-13 on the bench: the LC86G's fix 316 m below and 70 m east of
+    // where its own pseudoranges put it
+    const std::vector<Sv> svs = sky();
+    const std::vector<double> pad = padOff(67.6, 18.0, -316.4);
+    PadSurvey ps;
+    std::mt19937 rng(10);
+    for (int k = 0; k < 120; ++k)
+    {
+        auto m = epoch(svs, kPad, 0.0, 0.5, rng);
+        ps.observe(m.data(), static_cast<int>(m.size()), ages(m.size(), 600.0).data(), kTow0 + k, pad.data());
+    }
+    EXPECT_EQ(ps.summary().corrected, svs.size());   // surveyed all the same
+    EXPECT_FALSE(ps.summary().pad_ok);
+    // where the raw measurements put the pad: the offset, less the biases' share
+    EXPECT_NEAR(ps.summary().pad_offset_m, std::sqrt(67.6 * 67.6 + 18.0 * 18.0 + 316.4 * 316.4), 15.0);
+    auto m = epoch(svs, kPad, 0.0, 0.5, rng);
+    const std::vector<RawMeas> before = m;
+    EXPECT_EQ(ps.correct(m.data(), static_cast<int>(m.size()), kPad), 0);
+    for (size_t i = 0; i < m.size(); ++i)
+    {
+        EXPECT_EQ(m[i].pr, before[i].pr);
+        EXPECT_EQ(m[i].sigma_pr_corr, before[i].sigma_pr_corr);
+    }
+}
+
+TEST(PadSurvey, TooFewSatellitesToVouchForThePadCorrectNothing)
+{
+    // two systems, five satellites: three position unknowns and two clocks
+    // leave no redundancy to judge the pad by
+    std::vector<Sv> svs;
+    for (const Sv& s : sky())
+        if (s.sys == GNSS_SYS_GPS && svs.size() < 3)
+            svs.push_back(s);
+    svs.push_back({GNSS_SYS_GAL, 4, 80, 60, 4.9});
+    svs.push_back({GNSS_SYS_GAL, 9, 190, 40, 6.0});
+    PadSurvey ps;
+    std::mt19937 rng(11);
+    for (int k = 0; k < 100; ++k)
+    {
+        auto m = epoch(svs, kPad, 0.0, 0.5, rng);
+        ps.observe(m.data(), static_cast<int>(m.size()), ages(m.size(), 600.0).data(), kTow0 + k, kPad);
+    }
+    EXPECT_EQ(ps.summary().corrected, svs.size());
+    EXPECT_FALSE(ps.summary().pad_ok);
+    auto m = epoch(svs, kPad, 0.0, 0.5, rng);
+    EXPECT_EQ(ps.correct(m.data(), static_cast<int>(m.size()), kPad), 0);
+}

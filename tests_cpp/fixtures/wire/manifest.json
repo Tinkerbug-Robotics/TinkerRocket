@@ -151,6 +151,10 @@
  "size": 27,
  "notes": "BaseStationStorageStatsData behind 0xCD; frame = 27 B (1 + 26-B struct)"},
  {
+ "file": "fileops/padcal_0xD0_40.bin",
+ "size": 41,
+ "notes": "PadCalStatusData behind 0xD0 (#1600 phase 5); frame = 41 B"},
+ {
  "file": "commands/cmd05_simconfig_16.bin",
  "size": 17,
  "notes": "sim config; mass is GRAMS on the wire (OC /1000 -> SimConfigData.mass_kg)"},
@@ -246,6 +250,10 @@
  "file": "commands/cmd67_imurate_2.bin",
  "size": 3,
  "notes": "ImuRateConfigData; valid values 960/1920/3840"},
+ {
+ "file": "commands/cmd75_padcal_10.bin",
+ "size": 11,
+ "notes": "PadCalConfigData: [iono i8 x8][gps_day u16]; gps_day 0 = no ionosphere"},
  {
  "file": "commands/cmd70_otabegin_37.bin",
  "size": 38,

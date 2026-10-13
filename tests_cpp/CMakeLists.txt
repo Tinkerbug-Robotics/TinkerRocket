@@ -1599,6 +1599,8 @@ gtest_discover_tests(test_raw_gnss_ekf)
 add_executable(test_raw_gnss_shadow test_raw_gnss_shadow.cpp
     ${LIB_DIR}/TR_RawGnssShadow/RawGnssShadow.cpp
     ${LIB_DIR}/TR_RawGnssShadow/PadSurvey.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/SatJumpCheck.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/FixCheck.cpp
     ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
     ${LIB_DIR}/TR_GNSSRaw/eph.c
     ${LIB_DIR}/TR_GNSSRaw/atmo.c
@@ -1639,6 +1641,26 @@ target_include_directories(test_pad_survey PRIVATE
 )
 target_link_libraries(test_pad_survey GTest::gtest_main)
 gtest_discover_tests(test_pad_survey)
+
+# ---------- test_gnss_checks ----------
+# The physics checks on the GNSS (#1508): the raw filter's IMU-only motion
+# between two times, each satellite's pseudorange against the IMU epoch to
+# epoch (SatJumpCheck), and the receiver's fix against the IMU (FixCheck).
+add_executable(test_gnss_checks test_gnss_checks.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/SatJumpCheck.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/FixCheck.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_GNSSRaw/atmo.c
+)
+target_include_directories(test_gnss_checks PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${LIB_DIR}/TR_RawGnssShadow
+    ${LIB_DIR}/TR_RawGnssEKF
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+)
+target_link_libraries(test_gnss_checks GTest::gtest_main)
+gtest_discover_tests(test_gnss_checks)
 
 # ---------- test_gnss_time_sync ----------
 # lc86::GnssTimeSync, the MCU clock against GPS time from the receiver's

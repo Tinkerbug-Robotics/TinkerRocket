@@ -30,6 +30,9 @@ struct TinkerRocketAppApp: App {
             .environmentObject(profileStore)
             .environmentObject(syncer)
             .environmentObject(preflightStore)
+            // Today's broadcast ionosphere for pad calibrations (#1600 phase
+            // 5), fetched while there is signal; nothing waits for it.
+            .task { IonosphereStore.shared.refreshIfStale() }
         }
     }
 }
