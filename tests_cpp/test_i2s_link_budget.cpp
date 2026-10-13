@@ -39,6 +39,26 @@ double imuBatched(double rate_hz)
          + frames * (double)(1 + kFrameOverhead);          // count byte + framing, per frame
 }
 
+// GNSS_RTCM_MSG: the LC86G's raw MSM7, one epoch a second as five messages
+// (GPS, GLONASS, Galileo, BeiDou, QZSS). An open sky measured 441 B/s of
+// frames (Beetle, 2026-09-25, up to 29 satellites); budgeted at 40 satellites,
+// 15 B each (one L1 signal: 36 bits per satellite and 80 per cell, plus a mask
+// bit of each), 22 B of message header and 6 of RTCM3 framing per message, and
+// the record header and I2S framing per frame. Plus the broadcast ephemeris
+// ($PAIR436,1): measured at exactly one message a second (Beetle,
+// 2026-10-12), budgeted at the largest, BeiDou's 1042 (64 B + 6 of framing).
+// Zero on u-blox boards, which emit none.
+double gnssRtcmInflow()
+{
+#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+    const double msgs_per_sec = 5.0 + 1.0;
+    const double frame_bytes  = 40.0 * 15.0 + 5.0 * (22.0 + 6.0) + 1.0 * (64.0 + 6.0);
+    return frame_bytes + msgs_per_sec * (double)(sizeof(GnssRtcmHeader) + kFrameOverhead);
+#else
+    return 0.0;
+#endif
+}
+
 // The link: I2S_SAMPLE_RATE samples/s x 4 B (16-bit stereo).
 constexpr double kLinkBytesPerSec = (double)config::I2S_SAMPLE_RATE * 4.0;
 
@@ -60,6 +80,7 @@ double guidedCoastInflow()
          // line below. A stream the budget does not know about is how this
          // block went stale twice before.
          + framed(sizeof(FcStatusData),    (double)config::FC_STATUS_RATE_HZ)
+         + gnssRtcmInflow()
          + 220.0;   // POWERData, ~15 Hz
 }
 

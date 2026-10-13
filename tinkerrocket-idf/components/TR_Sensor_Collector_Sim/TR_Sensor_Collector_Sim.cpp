@@ -396,6 +396,14 @@ bool SensorCollectorSim::getGNSSSatData(GNSSSatData& data_out)
     return false;   // consumed, not forwarded — see the header
 }
 
+bool SensorCollectorSim::getGNSSRtcmFrame(uint8_t* out, size_t cap, size_t& len,
+                                          uint32_t& time_us)
+{
+    const bool have_frame = real_.getGNSSRtcmFrame(out, cap, len, time_us);
+    if (phase_ == SIM_IDLE) return have_frame;
+    return false;   // consumed, not forwarded — see the header
+}
+
 // ============================================================================
 // Physics
 // ============================================================================

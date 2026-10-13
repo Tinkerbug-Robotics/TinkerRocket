@@ -17,6 +17,7 @@
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -69,12 +70,20 @@ static constexpr uint32_t kFirstPvtWaitMs = 1500U;
 // and then line reassembly continues across calls.
 static constexpr size_t kMaxBytesPerPoll = 512U;
 
+// How long begin() listens for an MSM7 frame after enabling them, before it
+// restarts the receiver to apply the setting: one 1 Hz MSM7 period plus
+// margin, like kProbeWindowMs.
+static constexpr uint32_t kMsmListenMs = 1200U;
+
 // How long checkGsvRate() counts GSV bursts before its one boot-log line.
 // At the 1 Hz begin() asks for, 5 s is ~5 bursts: enough to tell 1 Hz from
 // none and from the fix rate.
 static constexpr uint32_t kGsvCheckSeconds = 5U;
 
 static inline int64_t nowUs() { return esp_timer_get_time(); }
+
+static_assert(GNSS_RTCM_MAX_FRAME == rtcm3::kMaxPayload + rtcm3::kFrameOverhead,
+              "GNSS_RTCM_MSG and the parser must agree on the largest RTCM3 frame");
 
 // The $PAIR080 navigation mode begin() flies: 3 = Balloon (see begin()).
 static constexpr uint8_t kFlightNavMode = 3U;
@@ -175,6 +184,7 @@ bool TR_GNSSReceiverLC86Serial::awaitEvent(AwaitKind kind, uint32_t timeout_ms,
             // cache (a module already configured by a previous begin() in
             // this power cycle streams PVT throughout the config phase).
             if (ev == lc86::Event::PVT) publishFromParser();
+            if (ev == lc86::Event::RTCM || ev == lc86::Event::MSM_EPOCH) stashRtcmFrame();
 
             switch (kind)
             {
@@ -212,6 +222,18 @@ bool TR_GNSSReceiverLC86Serial::awaitEvent(AwaitKind kind, uint32_t timeout_ms,
 
                 case AwaitKind::NAV_MODE:
                     if (ev == lc86::Event::NAV_MODE) return true;
+                    break;
+
+                case AwaitKind::RTCM_MODE:
+                    if (ev == lc86::Event::RTCM_MODE) return true;
+                    break;
+
+                case AwaitKind::RTCM_FRAME:
+                    if (ev == lc86::Event::RTCM || ev == lc86::Event::MSM_EPOCH) return true;
+                    break;
+
+                case AwaitKind::RTCM_EPH_MODE:
+                    if (ev == lc86::Event::RTCM_EPH_MODE) return true;
                     break;
             }
         }
@@ -299,6 +321,12 @@ bool TR_GNSSReceiverLC86Serial::begin(uint8_t update_rate_hz_in,
     }
 
     pvt_stream_ok_ = false;
+
+    if (rtcm_ring_ == nullptr)
+    {
+        rtcm_ring_ = xRingbufferCreateStatic(kRtcmRingBytes, RINGBUF_TYPE_NOSPLIT,
+                                             rtcm_ring_mem_, &rtcm_ring_struct_);
+    }
 
     ESP_LOGI(TAG, "Starting LC86G configuration...");
 
@@ -538,6 +566,105 @@ bool TR_GNSSReceiverLC86Serial::begin(uint8_t update_rate_hz_in,
                  navModeName(parser_.navMode()));
     }
 
+    // ── Raw measurements: RTCM3 MSM7 ($PAIR432,1) ──────────────────────
+    // Mode -1 off, 0 MSM4, 1 MSM7. MSM7 carries, per satellite, the
+    // pseudorange, carrier phase, phase-range rate (Doppler, m/s), C/N0 to
+    // 1/16 dB-Hz and a lock-time counter (Rtcm3Msm.h). Once a second whatever
+    // the fix rate, ~440 B/s on an open four-constellation sky (Beetle,
+    // 2026-09-25): beside the NMEA it stays well inside the 115200 line and
+    // the 512 B/poll drain. It changes what the module outputs, not how it
+    // navigates, so a refusal WARNs and carries on.
+    msm_stream_ok_ = sendPairCommand("PAIR432,1", 432);
+    if (msm_stream_ok_)
+    {
+        ESP_LOGI(TAG, "RTCM3 MSM7 raw measurements on (1 Hz)");
+    }
+    else
+    {
+        ESP_LOGW(TAG, "MSM7 enable ($PAIR432,1) refused — no raw measurements "
+                      "this session");
+    }
+
+    // Read it back ($PAIR433), as the navigation mode is above. One attempt.
+    sendSentence("PAIR433");
+    if (!awaitEvent(AwaitKind::RTCM_MODE, kAckTimeoutMs))
+    {
+        ESP_LOGW(TAG, "RTCM mode unknown: no $PAIR433 answer in %lu ms",
+                 (unsigned long)kAckTimeoutMs);
+    }
+    else
+    {
+        ESP_LOGI(TAG, "RTCM mode reads back %d (-1 off, 0 MSM4, 1 MSM7)",
+                 (int)parser_.rtcmMode());
+    }
+
+    // ── RTCM3 ephemeris ($PAIR436,1) ───────────────────────────────────
+    // The broadcast ephemeris of every tracked satellite as RTCM3 1019 (GPS),
+    // 1020 (GLONASS), 1042 (BeiDou), 1044 (QZSS) and 1046 (Galileo) [V1.5
+    // §2.4.47, Table 14]: what a filter on the raw measurements needs to place
+    // the satellites, logged beside them (GNSS_RTCM_MSG). Unlike $PAIR432 it
+    // takes effect without a restart (Beetle, 2026-10-12): one message a
+    // second, round-robin over the satellites it has ephemeris for, ~65 B/s.
+    // Sent before the restart check below all the same, so a restart applies
+    // both. Output only; a refusal WARNs and carries on.
+    eph_stream_ok_ = sendPairCommand("PAIR436,1", 436);
+    if (eph_stream_ok_)
+    {
+        ESP_LOGI(TAG, "RTCM3 ephemeris output on");
+    }
+    else
+    {
+        ESP_LOGW(TAG, "Ephemeris enable ($PAIR436,1) refused — no ephemeris "
+                      "this session");
+    }
+    sendSentence("PAIR437");
+    if (!awaitEvent(AwaitKind::RTCM_EPH_MODE, kAckTimeoutMs))
+    {
+        ESP_LOGW(TAG, "RTCM ephemeris mode unknown: no $PAIR437 answer in %lu ms",
+                 (unsigned long)kAckTimeoutMs);
+    }
+    else
+    {
+        ESP_LOGI(TAG, "RTCM ephemeris output reads back %d (0 off, 1 on)",
+                 (int)parser_.rtcmEphMode());
+    }
+
+    // The module takes $PAIR432 and reads it back, but sends nothing until
+    // its receiver restarts. Beetle, 2026-10-12: mode 1 read back, then not
+    // one 0xD3 in 5 s; a $PAIR004 hot start and the epochs came at 1 Hz, with
+    // satellites measured before any fix. Every bench capture had a cold
+    // start after it, which is why that never showed. So listen for one MSM7
+    // period first and restart only a module that is not sending: one that
+    // already is (an FC reboot with the rail held keeps the module's RAM
+    // config) keeps tracking. A hot start keeps time, ephemeris and position,
+    // and on a pad power-up the module has had none of them for a second
+    // anyway (V_BCKP rides the same rail). The navigation mode, fix rate and
+    // sentence set all survive it (a cold start too, on the bench). One send,
+    // no retries: a late ack must not turn into a second restart.
+    if (msm_stream_ok_)
+    {
+        if (awaitEvent(AwaitKind::RTCM_FRAME, kMsmListenMs))
+        {
+            ESP_LOGI(TAG, "MSM7 already flowing — no receiver restart");
+        }
+        else
+        {
+            sendSentence("PAIR004");
+            uint8_t result = 0xFF;
+            if (awaitEvent(AwaitKind::PAIR_ACK, kAckTimeoutMs, 4, &result) && result == 0)
+            {
+                ESP_LOGI(TAG, "No MSM7 in %lu ms: hot start ($PAIR004) to apply it",
+                         (unsigned long)kMsmListenMs);
+            }
+            else
+            {
+                ESP_LOGW(TAG, "No MSM7 in %lu ms, and the hot start ($PAIR004) "
+                              "got result %u — raw measurements may not flow",
+                         (unsigned long)kMsmListenMs, (unsigned)result);
+            }
+        }
+    }
+
     // Deliberately NO $PAIR513 / $PQTMSAVEPAR: config is reapplied on every
     // begin() — a rail cycle wipes the RTC-RAM config anyway (V_BCKP rides
     // the same switched rail), and a flash save at >1 Hz requires the
@@ -567,6 +694,18 @@ bool TR_GNSSReceiverLC86Serial::begin(uint8_t update_rate_hz_in,
     gsv_check_bursts0_     = parser_.gsvBursts();
     gsv_check_sat_bursts0_ = parser_.gsvBurstsWithSats();
     gsv_checked_           = !sat_stream_ok_;   // nothing to report without GSV
+
+    // Same for the MSM7 lines (checkMsmRate, reportFirstMsmEpoch).
+    msm_check_epochs0_  = pvt_epochs_;
+    msm_check_msm0_     = parser_.msmEpochs();
+    msm_check_msgs0_    = parser_.msmMessages();
+    msm_check_crc0_     = parser_.rtcmCrcFails();
+    msm_check_pre0_     = parser_.rtcmPreambles();
+    msm_check_frames0_  = parser_.rtcmFrames();
+    msm_check_hdr0_     = parser_.rtcmBadHeaders();
+    msm_check_eph0_     = parser_.rtcmEphFrames();
+    msm_rate_checked_   = !msm_stream_ok_;
+    msm_first_reported_ = !msm_stream_ok_;
 
     ESP_LOGI(TAG, "Configuration complete.");
     return true;
@@ -624,8 +763,18 @@ bool TR_GNSSReceiverLC86Serial::pollNewPVT(GNSSData &gnss_data)
                 // acquiring. Never a fix source (cache fix_mode stays 0).
                 data_.num_sats = parser_.ggaNumSats();
             }
+            if (ev == lc86::Event::RTCM || ev == lc86::Event::MSM_EPOCH)
+            {
+                stashRtcmFrame();
+            }
+            if (ev == lc86::Event::MSM_EPOCH && !msm_first_reported_)
+            {
+                reportFirstMsmEpoch();
+            }
         }
     }
+
+    checkMsmRate();
 
     if (!new_pvt) return false;  // `gnss_data` untouched (u-blox contract)
     getGNSSData(gnss_data);
@@ -646,6 +795,44 @@ bool TR_GNSSReceiverLC86Serial::pollNewSat(GNSSSatData &out)
     // parser filled itow_ms from the epoch's $PQTMPVT so the two records pair.
     out.time_us = (uint32_t)esp_timer_get_time();
     return true;
+}
+
+void TR_GNSSReceiverLC86Serial::stashRtcmFrame()
+{
+    const size_t n = parser_.rtcmFrameLen();
+    if (rtcm_ring_ == nullptr || n == 0 || n > sizeof(rtcm_item_) - 4)
+    {
+        rtcm_dropped_++;
+        return;
+    }
+    const uint32_t t = (uint32_t)esp_timer_get_time();
+    memcpy(rtcm_item_, &t, 4);
+    memcpy(rtcm_item_ + 4, parser_.rtcmFrame(), n);
+    // Never blocks: a full ring means nobody is draining it, and the poll
+    // task's latency matters more than the frame.
+    if (xRingbufferSend(rtcm_ring_, rtcm_item_, 4 + n, 0) != pdTRUE)
+    {
+        rtcm_dropped_++;
+    }
+}
+
+bool TR_GNSSReceiverLC86Serial::pollRtcmFrame(uint8_t* out, size_t cap,
+                                              size_t& len, uint32_t& time_us)
+{
+    if (rtcm_ring_ == nullptr) return false;
+    size_t item_len = 0;
+    uint8_t* item = (uint8_t*)xRingbufferReceive(rtcm_ring_, &item_len, 0);
+    if (item == nullptr) return false;
+    const bool fits = item_len > 4 && item_len - 4 <= cap;
+    if (fits)
+    {
+        memcpy(&time_us, item, 4);
+        len = item_len - 4;
+        memcpy(out, item + 4, len);
+    }
+    vRingbufferReturnItem(rtcm_ring_, item);
+    if (!fits) rtcm_dropped_++;
+    return fits;
 }
 
 void TR_GNSSReceiverLC86Serial::checkGsvRate()
@@ -690,6 +877,77 @@ void TR_GNSSReceiverLC86Serial::checkGsvRate()
                  (unsigned long)bursts, (unsigned long)fixes,
                  (unsigned long)seconds, (unsigned long)with_sats);
     }
+}
+
+void TR_GNSSReceiverLC86Serial::checkMsmRate()
+{
+    // One line per boot, like checkGsvRate(): how many MSM7 epochs arrived in
+    // the first kGsvCheckSeconds of fixes after begin(). The module sends one
+    // a second even with nothing tracked (each constellation's message is
+    // then empty), so a board indoors shows the rate too. The frame counts
+    // say where a shortfall is: no preambles means the module sent nothing.
+    if (msm_rate_checked_) return;
+    const uint32_t fixes = pvt_epochs_ - msm_check_epochs0_;
+    if (fixes < kGsvCheckSeconds * update_rate_hz) return;
+    msm_rate_checked_ = true;
+
+    const uint32_t epochs  = parser_.msmEpochs() - msm_check_msm0_;
+    const uint32_t msgs    = parser_.msmMessages() - msm_check_msgs0_;
+    const uint32_t crc     = parser_.rtcmCrcFails() - msm_check_crc0_;
+    const uint32_t pre     = parser_.rtcmPreambles() - msm_check_pre0_;
+    const uint32_t frames  = parser_.rtcmFrames() - msm_check_frames0_;
+    const uint32_t hdr     = parser_.rtcmBadHeaders() - msm_check_hdr0_;
+    const uint32_t eph     = parser_.rtcmEphFrames() - msm_check_eph0_;
+    const uint32_t seconds = fixes / update_rate_hz;
+    if (epochs == 0)
+    {
+        ESP_LOGW(TAG, "MSM7: no epochs in %lu fixes (~%lu s): %lu preambles, %lu "
+                      "frames, %lu bad headers, %lu CRC failures",
+                 (unsigned long)fixes, (unsigned long)seconds, (unsigned long)pre,
+                 (unsigned long)frames, (unsigned long)hdr, (unsigned long)crc);
+        return;
+    }
+    ESP_LOGI(TAG, "MSM7: %lu epochs (%lu messages, %lu frames, %lu of them "
+                  "ephemeris) in %lu fixes (~%lu s), %lu bad headers, %lu CRC "
+                  "failures; latest epoch %u satellites",
+             (unsigned long)epochs, (unsigned long)msgs, (unsigned long)frames,
+             (unsigned long)eph, (unsigned long)fixes, (unsigned long)seconds,
+             (unsigned long)hdr, (unsigned long)crc,
+             (unsigned)parser_.msmEpoch().n_cells);
+}
+
+void TR_GNSSReceiverLC86Serial::reportFirstMsmEpoch()
+{
+    // One line per boot, at the first epoch with four satellites measured
+    // (pseudorange AND Doppler valid): what the raw stream carries once the
+    // module tracks, which the rate line above cannot show on a cold start.
+    // An all-in-view count, per constellation, and the strongest satellite's
+    // numbers as a sanity check (a GPS pseudorange reads 20,000-26,000 km).
+    const rtcm3::MsmEpoch& e = parser_.msmEpoch();
+    unsigned n_meas = 0;
+    unsigned per[7] = {};
+    int best = -1;
+    for (unsigned i = 0; i < e.n_cells; i++)
+    {
+        const rtcm3::MsmCell& c = e.cells[i];
+        if (c.gnss_id < 7) per[c.gnss_id]++;
+        if (std::isnan(c.pseudorange_m) || std::isnan(c.rate_mps)) continue;
+        n_meas++;
+        if (best < 0 || c.cn0_dbhz > e.cells[best].cn0_dbhz) best = (int)i;
+    }
+    if (n_meas < 4) return;
+    msm_first_reported_ = true;
+
+    static const char kLetter[7] = {'G', '?', 'E', 'C', '?', 'J', 'R'};
+    const rtcm3::MsmCell& b = e.cells[best];
+    ESP_LOGI(TAG, "MSM7: first epoch with measurements, GPS TOW %.3f s: %u "
+                  "satellites (GPS %u, GLONASS %u, Galileo %u, BeiDou %u, "
+                  "QZSS %u), %u with pseudorange and Doppler; strongest %c%02u "
+                  "%.2f m, %.3f m/s, %.1f dB-Hz",
+             e.gps_tow_ms / 1000.0, (unsigned)e.n_cells, per[0], per[6],
+             per[2], per[3], per[5], n_meas, kLetter[b.gnss_id],
+             (unsigned)b.sv_id, b.pseudorange_m, (double)b.rate_mps,
+             (double)b.cn0_dbhz);
 }
 
 void TR_GNSSReceiverLC86Serial::getGNSSData(GNSSData &gnss_data)

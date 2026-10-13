@@ -11,6 +11,8 @@
 
 #include <cstdint>
 #include <driver/uart.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/ringbuf.h>
 
 #include <RocketComputerTypes.h>
 #include "Lc86Parser.h"
@@ -68,6 +70,20 @@ class TR_GNSSReceiverLC86Serial
         /// GSV bursts arrived (checkGsvRate).
         bool pollNewSat(GNSSSatData &out);
 
+        /// Raw RTCM3 frames (GNSS_RTCM_MSG): the oldest frame not yet taken,
+        /// verbatim from the 0xD3 through its CRC-24Q, and the MCU time its
+        /// last byte was parsed. False when none is waiting. Every frame the
+        /// parser accepts goes into a ring as it arrives — an MSM7 epoch is
+        /// ~5 frames back to back, which a one-slot handoff would lose all but
+        /// one of — and this drains it. Safe from another task than the one
+        /// calling pollNewPVT(). `cap` must be GNSS_RTCM_MAX_FRAME; a frame
+        /// that cannot fit is dropped and counted.
+        bool pollRtcmFrame(uint8_t* out, size_t cap, size_t& len, uint32_t& time_us);
+
+        /// Frames lost because the ring was full (nobody draining it) or
+        /// `out` was too small. Monotonic.
+        uint32_t rtcmFramesDropped() const { return rtcm_dropped_; }
+
     private:
 
         // What awaitEvent() is pumping the RX stream for (begin()-time only;
@@ -79,6 +95,9 @@ class TR_GNSSReceiverLC86Serial
             QTM_RESULT,  // $PQTMCFGMSGRATE,OK / ,ERROR
             PVT,         // a parsed $PQTMPVT epoch
             NAV_MODE,    // a $PAIR081,<NavMode> answer
+            RTCM_MODE,   // a $PAIR433,<Mode> answer
+            RTCM_FRAME,  // any RTCM3 frame whose CRC checks
+            RTCM_EPH_MODE, // a $PAIR437,<Enable> answer
         };
 
         // Helper: install/reconfigure the UART driver at a given baud rate
@@ -109,9 +128,18 @@ class TR_GNSSReceiverLC86Serial
         // no-PVT-stream insurance latch.
         void publishFromParser();
 
+        // Put the frame behind the parser's last RTCM / MSM_EPOCH event into
+        // the ring (see pollRtcmFrame).
+        void stashRtcmFrame();
+
         // One boot-log line on how many GSV bursts arrived in the first few
         // seconds of fixes after begin() (see the .cpp).
         void checkGsvRate();
+
+        // The same for the RTCM3 MSM7 epochs, and one more line at the
+        // first epoch that has satellites measured (see the .cpp).
+        void checkMsmRate();
+        void reportFirstMsmEpoch();
 
         lc86::Lc86Parser parser_;
 
@@ -133,6 +161,18 @@ class TR_GNSSReceiverLC86Serial
 
         uint32_t pvt_epochs_ = 0;
 
+        // Raw-frame ring (pollRtcmFrame). 4 kB holds ~6 s of open-sky MSM7
+        // (~600 B per epoch with item headers): the main loop drains it every
+        // pass, so it only has to ride out the boot, before the loop runs.
+        // Static storage, created in begin() — never on a task stack.
+        static constexpr size_t kRtcmRingBytes = 4096;
+        uint8_t  rtcm_ring_mem_[kRtcmRingBytes] = {};
+        StaticRingbuffer_t rtcm_ring_struct_ = {};
+        RingbufHandle_t rtcm_ring_ = nullptr;
+        // One item being built: time_us, then the frame.
+        uint8_t  rtcm_item_[4 + rtcm3::kMaxPayload + rtcm3::kFrameOverhead] = {};
+        uint32_t rtcm_dropped_ = 0;
+
         // checkGsvRate(): the PVT epoch and GSV burst counts when begin()
         // finished, and whether the line is done (true until a begin() that
         // enabled GSV arms it).
@@ -140,6 +180,26 @@ class TR_GNSSReceiverLC86Serial
         uint32_t gsv_check_bursts0_     = 0;
         uint32_t gsv_check_sat_bursts0_ = 0;
         bool     gsv_checked_           = true;
+
+        // begin() got $PAIR001 Result 0 for $PAIR432,1 (RTCM3 MSM7 on).
+        bool msm_stream_ok_ = false;
+
+        // begin() got $PAIR001 Result 0 for $PAIR436,1 (RTCM3 ephemeris on).
+        bool eph_stream_ok_ = false;
+
+
+        // checkMsmRate() / reportFirstMsmEpoch(): the counts when begin()
+        // finished, and whether each line is done.
+        uint32_t msm_check_epochs0_  = 0;
+        uint32_t msm_check_msm0_     = 0;
+        uint32_t msm_check_msgs0_    = 0;
+        uint32_t msm_check_crc0_     = 0;
+        uint32_t msm_check_pre0_     = 0;
+        uint32_t msm_check_frames0_  = 0;
+        uint32_t msm_check_hdr0_     = 0;
+        uint32_t msm_check_eph0_     = 0;
+        bool     msm_rate_checked_   = true;
+        bool     msm_first_reported_ = true;
 };
 
 #endif
