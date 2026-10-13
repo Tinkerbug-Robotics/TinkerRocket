@@ -777,6 +777,58 @@ void backDate(const double r[3], const double v[3], const double Tm[3][3], const
 }  // namespace
 
 template <typename T>
+void RawGnssEKF<T>::receiverEcefAt(double age_s, double r_e[3], double v_e[3]) const
+{
+    double r[3], v[3], Tm[3][3];
+    T dp[3], dv[3];
+    receiverState(r, v, Tm);
+    historyChange(age_s, dv, dp);
+    backDate(r, v, Tm, dp, dv, r_e, v_e);
+}
+
+template <typename T>
+bool RawGnssEKF<T>::imuMotion(double t1, double t2, T dv[3], T dp[3]) const
+{
+    for (int i = 0; i < 3; ++i)
+        dv[i] = dp[i] = T(0);
+    if (!(t2 >= t1))
+        return false;
+    auto at = [&](int k) -> const Hist& { return hist_[(hhead_ + kHist - hn_ + k) % kHist]; };
+    // The filter's time is a sum of float steps, a fraction of a millisecond
+    // from the IMU's clock that t1 and t2 are on: that much past either end
+    // of the history is its end.
+    constexpr double kSlack = 1.0e-3;
+    if (hn_ < 2 || at(0).t > t1 + kSlack || at(hn_ - 1).t < t2 - kSlack)
+        return false;
+    // Each entry spans (the previous entry's end, its own end] at a constant
+    // acceleration: its share of [t1, t2] adds that much velocity, and the
+    // velocity gathered so far, plus half its own, times its length.
+    double V[3] = {0.0, 0.0, 0.0}, P[3] = {0.0, 0.0, 0.0};
+    for (int k = 1; k < hn_; ++k)
+    {
+        const double s0 = at(k - 1).t, s1 = at(k).t;
+        if (s1 <= t1 || s1 <= s0)
+            continue;
+        if (s0 >= t2)
+            break;
+        const double lo = s0 > t1 ? s0 : t1, hi = s1 < t2 ? s1 : t2;
+        const double len = hi - lo;
+        for (int i = 0; i < 3; ++i)
+        {
+            const double d = static_cast<double>(at(k).dv[i]) * len / (s1 - s0);
+            P[i] += (V[i] + 0.5 * d) * len;
+            V[i] += d;
+        }
+    }
+    for (int i = 0; i < 3; ++i)
+    {
+        dv[i] = T(V[i]);
+        dp[i] = T(P[i]);
+    }
+    return true;
+}
+
+template <typename T>
 bool RawGnssEKF<T>::initClockFrom(const RawMeas* m, int n, double age_s)
 {
     double r[3], v[3], Tm[3][3], r_e[3], v_e[3];

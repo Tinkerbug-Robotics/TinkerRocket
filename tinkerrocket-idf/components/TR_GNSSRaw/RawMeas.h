@@ -50,6 +50,20 @@ struct TimedRawEpoch
     uint16_t gps_week = 0;    // its full GPS week; 0 = not known yet
 };
 
+// The receiver's own fix as a driver hands it to the raw-GNSS shadow, which
+// checks it against the IMU (FixCheck.h, #1508): with its GPS instant on the
+// MCU clock, so it can be set beside the IMU's motion at that instant.
+struct TimedFix
+{
+    double  lat_rad = 0.0, lon_rad = 0.0;
+    double  alt_m = 0.0;          // above the ellipsoid (the receiver's altitude plus its geoid separation)
+    float   vel_ned[3] = {};      // m/s
+    uint8_t fix_mode = 0;         // as GNSSData: 3 = a 3-D fix
+    uint8_t num_sats = 0;
+    int64_t mcu_us = 0;           // its GPS instant on the MCU clock (esp_timer, us); 0 = not known yet
+    int64_t arrival_us = 0;       // when its sentence's last byte arrived (MCU, us)
+};
+
 // One satellite at one epoch, corrected (see above). sat_pos is the
 // satellite at the transmit time in the ECEF frame of that instant; the
 // filter turns it by the Earth's rotation over the signal's travel (Sagnac).

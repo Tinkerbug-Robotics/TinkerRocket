@@ -244,6 +244,9 @@ public:
     bool enableGNSSRawOutputs();
     bool getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out);
     bool getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len);
+    // The receiver's own fixes with their GPS instant on the MCU clock, for
+    // the shadow's check of each fix against the IMU (#1508). LC86G only.
+    bool getGNSSFix(gnss_raw::TimedFix& out);
     // The geoid's height above the WGS84 ellipsoid at the last fix, m
     // (GNSSData's alt is above the geoid). LC86G only; false elsewhere or
     // before a fix.

@@ -180,6 +180,46 @@ change; the out computer relays it to the app as file_ops 0xD0. It carries:
 
 The gyro/accel result itself still comes as the 0xCB frame when the window closes.
 
+## Physics checks on the GNSS (#1508)
+
+The receiver's own fix can be wrong while it claims to be fine. #1508 caught the LC86G at it:
+- frozen near the pad while the vehicle fell from 79 km;
+- climbing 4 m/s through a 3 g boost;
+- 312 m below sea level on the bench (above).
+
+Checking the fix against another position estimate needs that estimate to be right. Checking it
+against the IMU needs only physics. Two checks run in the shadow, both looking for motion that cannot
+have happened.
+
+**Each receiver fix (`FixCheck`, report-only).**
+- The LC86G driver hands each `$PQTMPVT` to the shadow with its GPS instant on the MCU clock.
+- Once the IMU has passed that instant, the IMU's own motion predicts the fix's position and velocity:
+  the velocity change since the last fix that passed, and the displacement it adds, both from the
+  filter's history ring (`RawGnssEKF::imuMotion`).
+- A fix outside the tolerance is flagged, and the next ones are judged from the same good fix until
+  one agrees. The tolerance covers:
+  - the fixes' own noise;
+  - their timing: a lateness common to all fixes cancels, except for the velocity and acceleration
+    that changed in between, plus one fix's jitter against another's;
+  - the IMU's error growing with the span: 0.5 m/s^2 plus 2 degrees' share of the specific force.
+- Once the good fix is older than the history reaches (4 s), a fix cannot be judged and becomes the
+  next one's reference.
+- It sees a jump, a frozen fix on a moving vehicle, and a velocity the specific force does not allow.
+  A fix wrong by a constant moves as the vehicle does, and passes.
+- It is logged as `GNSS_CHECK_MSG` (0x9A, 24 B per fix) and shown on the console and in the pad status
+  (`PCS_FIX_SUSPECT`).
+- The flight filter still takes every fix. Keeping flagged fixes out of it, the GNSS main-deploy
+  backstop and the recovery gate is the owner's call once flights show the check is right.
+
+**Each satellite (`SatJumpCheck`, acting within the shadow).**
+- At each raw epoch, every satellite's pseudorange change since the last epoch is set against its
+  range change from the filter's IMU-propagated prior.
+- The receiver clock's change is their median.
+- More than 20 m off is a jump (a relock, a reflection taking over). The satellite is taken as
+  relocked: the builder's relock sigma, decaying over 10 s.
+- Being a time difference, the check is blind to an error that stays the same from epoch to epoch (the
+  innovation gate's business) and sharp on a jump, however the filter's position has been led.
+
 ## Phase 3: the port against the prototype
 
 `TR_RawGnssEKF` (the filter; float on the flight computer) and `TR_GNSSRaw`'s `RawMeasBuilder`, fed

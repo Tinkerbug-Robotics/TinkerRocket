@@ -151,6 +151,7 @@ struct ShadowPadStatus
     float   pos_sigma_m;      // the filter's 3-D position sigma
     uint8_t pad_mismatch;     // the raw measurements put the pad far from the receiver's average
     float   pad_offset_m;     //   this far
+    uint8_t fix_suspect;      // the receiver's last fix moved as the IMU says the rocket did not
 };
 
 // The handoffs, as one object both sides share.

@@ -575,3 +575,117 @@ TEST(RawGnssShadow, CountsTheTrackedSatellitesWithNoEphemeris)
     // the ones the builder leaves for want of one
     EXPECT_EQ(sh.stats().tracked_no_eph, tracked - kGoldenRmUnmaskedN);
 }
+
+// ------------------------------------------------ the physics checks (#1508)
+
+namespace
+{
+
+// A receiver fix at the golden pad, offset north by n_m, its GPS instant at t_us.
+gnss_raw::TimedFix goldenFix(int64_t t_us, double n_m = 0.0, uint8_t fix_mode = 3)
+{
+    double lat, lon, h;
+    ecef_to_geo(kGoldenRmRx, &lat, &lon, &h);
+    gnss_raw::TimedFix f;
+    f.lat_rad = lat + n_m / 6.37e6;
+    f.lon_rad = lon;
+    f.alt_m = h;
+    f.fix_mode = fix_mode;
+    f.num_sats = 12;
+    f.mcu_us = t_us;
+    f.arrival_us = t_us + 120000;
+    return f;
+}
+
+}  // namespace
+
+TEST(RawGnssShadow, JudgesEachReceiverFixOnceTheImuHasPassedIt)
+{
+    RawGnssShadow sh;                         // 25 Hz steps: the flight computer's history
+    sh.onSeed(goldenSeed(kT0, false));
+    feedStill(sh, kT0, kT0 + 5000);
+    ASSERT_TRUE(sh.running());
+    GnssCheckData rec;
+    int pass = 0, flagged = 0, unjudged = 0;
+    for (int k = 0; k < 20; ++k)
+    {
+        const int64_t tf = kT0 + 100000 + k * 100000;
+        // the fix arrives before the IMU reaches its instant: held
+        sh.onFix(goldenFix(tf, k == 12 ? 300.0 : 0.0));
+        feedStill(sh, tf - 95000, tf - 5000);
+        EXPECT_FALSE(sh.takeCheckLog(rec));
+        feedStill(sh, tf - 5000, tf + 45000);  // a 25 Hz step past it
+        ASSERT_TRUE(sh.takeCheckLog(rec)) << k;
+        EXPECT_EQ(rec.time_us, static_cast<uint32_t>(tf));
+        if (rec.verdict == GCK_PASS) pass++;
+        if (rec.verdict == GCK_FLAGGED) flagged++;
+        if (rec.verdict == GCK_UNJUDGED) unjudged++;
+        if (k == 12)
+        {
+            EXPECT_EQ(rec.verdict, GCK_FLAGGED);
+            EXPECT_NEAR(rec.pos_err_m, 300.0, 3.0);
+        }
+    }
+    // Unjudged: the first, and the one or two after each pad resync. With no
+    // raw epoch of its own yet the shadow retakes its whole state from the
+    // flight filter once a second, which starts the IMU history over.
+    EXPECT_GE(unjudged, 1);
+    EXPECT_LE(unjudged, 5);
+    EXPECT_EQ(flagged, 1);                    // the jump, and the track passes again after it
+    EXPECT_EQ(pass + flagged + unjudged, 20);
+    EXPECT_EQ(sh.fixCheck().stats().flagged, 1u);
+    // a fix with no MCU time, or no 3-D fix, is not judged
+    sh.onFix(goldenFix(0));
+    sh.onFix(goldenFix(kT0 + 2200000, 0.0, 2));
+    feedStill(sh, kT0 + 2100000, kT0 + 2400000);
+    EXPECT_FALSE(sh.takeCheckLog(rec));
+    EXPECT_EQ(sh.stats().fixes_untimed, 1u);
+    gnss_raw::ShadowPadStatus ps;
+    sh.padStatus(ps);
+    EXPECT_EQ(ps.fix_suspect, 0);
+}
+
+TEST(RawGnssShadow, TakesASatelliteWhoseCodeJumpedAsRelocked)
+{
+    // The rig's two epochs were taken under way (the builder's g_peak is 2 g)
+    // and this IMU stands still, so the check already sees a satellite or two
+    // move as the receiver did; a 40 m jump put on one it did not flag is
+    // flagged as well, and taken as relocked.
+    auto run = [](int jump_index, RawGnssShadow& sh) {
+        std::vector<TimedRawEpoch> epochs = goldenEpochs();
+        for (int i = 0; i < kGoldenRmEphN; ++i)
+            sh.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+        sh.onSeed(goldenSeed(kT0, false));
+        feedStill(sh, kT0, kT0 + 5000);
+        runGolden(sh, epochs, 0);
+        EXPECT_EQ(sh.satCheck().summary().judged, 0);
+        if (jump_index >= 0)
+            epochs[1].epoch.obs[jump_index].pr_m += 40.0;
+        runGolden(sh, epochs, 1);
+        return epochs;
+    };
+    RawGnssShadow ref(everyTick());
+    const std::vector<TimedRawEpoch> epochs = run(-1, ref);
+    const int base = ref.stats().last_sats_jumped;
+    EXPECT_GE(ref.satCheck().summary().judged, 5);
+    // a satellite of both epochs the check left alone
+    int target = -1;
+    for (int i = 0; i < epochs[1].epoch.n && target < 0; ++i)
+    {
+        const gnss_raw::RawObs& o = epochs[1].epoch.obs[i];
+        if (!o.has_pr || o.sys > GNSS_SYS_BDS)
+            continue;
+        bool in_first = false;
+        for (int j = 0; j < epochs[0].epoch.n; ++j)
+            in_first |= epochs[0].epoch.obs[j].sys == o.sys && epochs[0].epoch.obs[j].prn == o.prn;
+        if (in_first && ref.builder().relockAge(o.sys, o.prn, kGoldenRmTowB) > 0.5)
+            target = i;
+    }
+    ASSERT_GE(target, 0);
+    RawGnssShadow sh(everyTick());
+    run(target, sh);
+    const gnss_raw::RawObs& o = epochs[1].epoch.obs[target];
+    EXPECT_EQ(sh.stats().last_sats_jumped, base + 1);
+    EXPECT_EQ(sh.builder().relockAge(o.sys, o.prn, kGoldenRmTowB), 0.0);
+    EXPECT_EQ(sh.stats().sats_jumped, static_cast<uint32_t>(base + 1));
+}

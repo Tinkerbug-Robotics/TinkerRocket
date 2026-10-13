@@ -4,6 +4,6 @@
 # phase 5), the backup ionosphere. RawGnssShadow is pure C++;
 # the flight computer's core-0 task (main.cpp) feeds it through ShadowLink.
 # tests_cpp/test_raw_gnss_shadow.cpp compiles it directly.
-idf_component_register(SRCS "RawGnssShadow.cpp" "PadSurvey.cpp"
+idf_component_register(SRCS "RawGnssShadow.cpp" "PadSurvey.cpp" "SatJumpCheck.cpp" "FixCheck.cpp"
                        INCLUDE_DIRS "."
                        REQUIRES TR_RawGnssEKF TR_GNSSRaw TR_RocketComputerTypes)

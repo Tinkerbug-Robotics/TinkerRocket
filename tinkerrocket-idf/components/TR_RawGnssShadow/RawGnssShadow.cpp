@@ -39,7 +39,8 @@ int32_t sat32(double v)
 RawGnssShadow::RawGnssShadow() : RawGnssShadow(Config()) {}
 
 RawGnssShadow::RawGnssShadow(const Config& cfg)
-    : cfg_(cfg), ekf_(cfg.ekf), builder_(cfg.meas), survey_(cfg.survey)
+    : cfg_(cfg), ekf_(cfg.ekf), builder_(cfg.meas), survey_(cfg.survey), satcheck_(cfg.sat_check),
+      fixcheck_(cfg.fix_check)
 {
 }
 
@@ -48,7 +49,82 @@ void RawGnssShadow::reset()
     if (running_)
         stop(kStopNone);
     npending_ = 0;
+    nfix_ = 0;
     have_seed_ = false;
+}
+
+void RawGnssShadow::onFix(const TimedFix& f)
+{
+    st_.fixes++;
+    if (f.fix_mode < 3 || !running_)
+        return;                           // what the flight filter would take, while there is an IMU history
+    if (f.mcu_us == 0)
+    {
+        st_.fixes_untimed++;
+        return;
+    }
+    if (nfix_ == kFixQ)
+    {
+        for (int i = 1; i < kFixQ; ++i)
+            fixq_[i - 1] = fixq_[i];
+        nfix_--;
+        st_.fixes_dropped++;
+    }
+    fixq_[nfix_++] = f;
+}
+
+void RawGnssShadow::applyDueFixes(double t)
+{
+    while (nfix_ > 0)
+    {
+        const double tf = static_cast<double>(fixq_[0].mcu_us) * 1.0e-6;
+        if (tf > t)
+            return;                       // the IMU has not reached it yet
+        judge(fixq_[0], tf);
+        for (int i = 1; i < nfix_; ++i)
+            fixq_[i - 1] = fixq_[i];
+        nfix_--;
+    }
+}
+
+void RawGnssShadow::judge(const TimedFix& f, double t_fix)
+{
+    double ta = 0.0;
+    float dv[3], dp[3], dva[3], dpa[3], acc[3];
+    const bool have = fixcheck_.anchorTime(ta) && ekf_.imuMotion(ta, t_fix, dv, dp);
+    const bool have_acc = ekf_.imuMotion(t_fix - cfg_.acc_window_s, t_fix, dva, dpa);
+    if (have_acc)
+        for (int i = 0; i < 3; ++i)
+            acc[i] = dva[i] / static_cast<float>(cfg_.acc_window_s);
+    const FixCheck::Result r = fixcheck_.onFix(f, t_fix, have ? dv : nullptr, have ? dp : nullptr,
+                                               have_acc ? acc : nullptr);
+    GnssCheckData d = {};
+    d.time_us = static_cast<uint32_t>(f.mcu_us);
+    d.verdict = r.verdict;
+    d.sats_jumped = static_cast<uint8_t>(st_.last_sats_jumped > 255 ? 255 : st_.last_sats_jumped);
+    d.span_ms = sat16(static_cast<double>(r.span_s) * 1000.0);
+    d.pos_err_m = r.pos_err_m;
+    d.pos_tol_m = r.pos_tol_m;
+    d.vel_err_mps = r.vel_err_mps;
+    d.vel_tol_mps = r.vel_tol_mps;
+    if (nchk_ == kFixQ)
+    {
+        for (int i = 1; i < kFixQ; ++i)
+            chk_[i - 1] = chk_[i];
+        nchk_--;
+    }
+    chk_[nchk_++] = d;
+}
+
+bool RawGnssShadow::takeCheckLog(GnssCheckData& out)
+{
+    if (nchk_ == 0)
+        return false;
+    out = chk_[0];
+    for (int i = 1; i < nchk_; ++i)
+        chk_[i - 1] = chk_[i];
+    nchk_--;
+    return true;
 }
 
 void RawGnssShadow::onSeed(const ShadowSeed& s)
@@ -107,6 +183,7 @@ void RawGnssShadow::padStatus(ShadowPadStatus& out) const
     // the raw measurements put the pad far from the receiver's average
     out.pad_mismatch = (sv.corrected > 0 && !sv.pad_ok && sv.pad_offset_m > 0.0f) ? 1 : 0;
     out.pad_offset_m = sv.pad_offset_m;
+    out.fix_suspect = fixcheck_.last().verdict == FixCheck::kFlagged ? 1 : 0;
     double v = 0.0;
     if (running_)
         for (int i = 0; i < 3; ++i)
@@ -276,6 +353,7 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
     }
 
     applyDueEpochs(t, s.flags);
+    applyDueFixes(t);
 
     const double* lla = ekf_.lla();
     const float* v = ekf_.velNed();
@@ -322,6 +400,9 @@ void RawGnssShadow::start(double t)
     last_resync_t_ = t;
     next_log_t_ = t;
     npending_ = 0;
+    nfix_ = 0;
+    satcheck_.reset();                    // a new filter: nothing to take differences from
+    fixcheck_.reset();
     prop_sum_ = 0;
     prop_n_ = 0;
     st_.starts++;
@@ -342,9 +423,11 @@ void RawGnssShadow::resync(double t)
 {
     if (!own_fix_)
     {
-        // nothing of its own yet: the whole state from the flight filter
+        // nothing of its own yet: the whole state from the flight filter, and
+        // nothing for the satellite check to take a difference across
         const float v[3] = {seed_.vel_ned[0], seed_.vel_ned[1], seed_.vel_ned[2]};
         ekf_.init(seed_.lla, v, seed_.quat, t);
+        satcheck_.reset();
     }
     ekf_.setQuaternion(seed_.quat);
     ekf_.seedGyroBias(seed_.gyro_bias);
@@ -384,6 +467,21 @@ void RawGnssShadow::apply(const TimedRawEpoch& e, double age, double t, uint8_t 
     const int64_t c0 = now();
     const int n = builder_.build(e.epoch, store_, r, static_cast<double>(ekf_.takeGPeak()), meas_,
                                  RawEpoch::kMaxObs);
+    // each satellite against the IMU since the last epoch (#1508): one that
+    // jumped is taken as relocked, its sigma the builder's relock sigma
+    double r_prior[3], v_prior[3];
+    ekf_.receiverEcefAt(age, r_prior, v_prior);
+    const int jumped = satcheck_.check(meas_, n, e.epoch.tow_s, r_prior, jumped_);
+    for (int i = 0; i < n && jumped > 0; ++i)
+    {
+        if (!jumped_[i])
+            continue;
+        builder_.markRelock(meas_[i].sys, meas_[i].prn, e.epoch.tow_s);
+        meas_[i].sigma_pr_corr = static_cast<float>(
+            std::hypot(static_cast<double>(meas_[i].sigma_pr_corr), cfg_.meas.relock_sigma_m));
+    }
+    st_.last_sats_jumped = jumped;
+    st_.sats_jumped += static_cast<uint32_t>(jumped);
     // the pad survey, against the launch site the seed carries (a fresh one)
     if (!in_flight && have_seed_ && seed_.on_pad && seed_.pad_valid)
     {
@@ -401,6 +499,9 @@ void RawGnssShadow::apply(const TimedRawEpoch& e, double age, double t, uint8_t 
     st_.last_pad_corrected = use_broadcast_ ? 0 : survey_.correct(meas_, n, r);
     const int64_t c1 = now();
     const RawGnssStats rs = ekf_.updateGnssRaw(meas_, n, age);
+    double r_post[3], v_post[3];
+    ekf_.receiverEcefAt(age, r_post, v_post);
+    satcheck_.commit(meas_, n, e.epoch.tow_s, r_post);
     const int64_t c2 = now();
     st_.build_us = static_cast<uint32_t>(c1 - c0);
     st_.update_us = static_cast<uint32_t>(c2 - c1);
