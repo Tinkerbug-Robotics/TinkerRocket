@@ -1933,6 +1933,12 @@ static inline IRAM_ATTR void fcOtaRingPush(uint8_t b)
         return;                                          // ring full: drop newest
     }
     fc_ota_ring[fc_ota_head] = b;
+    // Byte before index, as in the OC's rxPush: volatile does not order this
+    // plain store against the fc_ota_head write, and at -O2 GCC moves it below.
+    // fcFlipToRx() runs from loop_fc, so this ISR shares core 1 with
+    // fcOtaParserTask and the reorder cannot be seen; the fence keeps the ring
+    // correct if they ever split.
+    __sync_synchronize();
     fc_ota_head = next;
 }
 static inline size_t  fcOtaRingLen()         { return (fc_ota_head + FC_OTA_RING - fc_ota_tail) % FC_OTA_RING; }
