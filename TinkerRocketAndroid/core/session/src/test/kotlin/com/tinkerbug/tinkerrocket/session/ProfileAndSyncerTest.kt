@@ -16,6 +16,8 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import com.tinkerbug.tinkerrocket.protocol.BleCommandId
 import com.tinkerbug.tinkerrocket.protocol.Commands
+import com.tinkerbug.tinkerrocket.protocol.Klobuchar
+import kotlin.test.assertContentEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 
@@ -884,6 +886,167 @@ class ActiveRocketSyncerTest {
         assertTrue(result.ranWindow)
         assertFalse(result.saved)
         assertNull(r.store.activeProfile?.sensorCal)
+    }
+
+    // ── #1600 phase 5: the pad calibration (cmd 75; 21 for older firmware) ──
+
+    private val iono = Klobuchar(listOf(21, 0, -2, 0, 60, -1, -4, 3), 17082)
+
+    /**
+     * A rocket that has sent a 0xD0 frame since it connected has the new
+     * firmware: 75 goes out with the ionosphere and nothing else does, and the
+     * 0xCB that closes the window is snapshotted exactly as for command 21.
+     */
+    @Test
+    fun padCal_aRocketSending0xD0GetsCmd75Only() = runTest {
+        val r = rig(mutate = { it.copy(lastUsedUnitID = "boardA") })
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        r.fw.emitFileOpsFrame(r.fw.padCalStatusFrame())   // the once-a-second frame, idle
+        runCurrent()
+        val before = r.fw.commandFrames.size
+        val run = async { r.syncer.runPadCalibration(iono) { currentTime } }
+        runCurrent()
+        assertEquals(before + 1, r.fw.commandFrames.size, "exactly one frame on the way in")
+        assertContentEquals(Commands.padCalibration(iono), r.fw.commandFrames.last())
+
+        advanceTimeBy(10_000)
+        r.fw.emitFileOpsFrame(
+            r.fw.sensorCalStatusFrame(gyroX = 11, gyroY = -22, gyroZ = 33, hgZ = 9.75f),
+        )
+        runCurrent()
+        val result = run.await()
+        assertFalse(result.legacy)
+        val answered = assertIs<ActiveRocketSyncer.SensorCalRun.Answered>(result.sensorCal)
+        assertEquals(10_000, answered.elapsedMs)
+        assertTrue(answered.ranWindow)
+        assertTrue(answered.saved)
+        val cal = assertNotNull(r.store.activeProfile?.sensorCal)
+        assertEquals(11, cal.gyroX)
+        assertEquals("boardA", cal.calibratedOnUnitID)
+        assertEquals(listOf(75), r.sentCommandIds().drop(before), "no command 21 behind it")
+    }
+
+    /**
+     * The compatibility fallback: a rocket that has sent no 0xD0 since it
+     * connected and sends none within 3 s of 75 predates it, so command 21
+     * goes out and the legacy flow runs unchanged — timed from the 21.
+     */
+    @Test
+    fun padCal_no0xD0Within3sFallsBackToCmd21() = runTest {
+        val r = rig(mutate = { it.copy(lastUsedUnitID = "boardA") })
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        val before = r.fw.commandFrames.size
+        val run = async { r.syncer.runPadCalibration(iono) { currentTime } }
+        runCurrent()
+        assertEquals(listOf(75), r.sentCommandIds().drop(before))
+
+        advanceTimeBy(ActiveRocketSyncer.PAD_CAL_PROBE_MS - 1)
+        runCurrent()
+        assertEquals(listOf(75), r.sentCommandIds().drop(before), "not before the 3 s are up")
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(listOf(75, 21), r.sentCommandIds().drop(before))
+
+        advanceTimeBy(10_000)
+        r.fw.emitFileOpsFrame(r.fw.sensorCalStatusFrame(gyroX = 7))
+        runCurrent()
+        val result = run.await()
+        assertTrue(result.legacy)
+        val answered = assertIs<ActiveRocketSyncer.SensorCalRun.Answered>(result.sensorCal)
+        assertEquals(10_000, answered.elapsedMs, "timed from the 21, as the legacy flow times it")
+        assertTrue(answered.ranWindow)
+        assertTrue(answered.saved)
+        assertEquals(7, r.store.activeProfile?.sensorCal?.gyroX)
+    }
+
+    /** A rocket whose first 0xD0 answers the 75 itself is new firmware too. */
+    @Test
+    fun padCal_a0xD0InsideTheProbeKeepsCmd75() = runTest {
+        val r = rig(mutate = { it.copy(lastUsedUnitID = "boardA") })
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        val before = r.fw.commandFrames.size
+        val run = async { r.syncer.runPadCalibration(null) { currentTime } }
+        runCurrent()
+        assertContentEquals(Commands.padCalibration(null), r.fw.commandFrames.last())
+
+        advanceTimeBy(400)
+        r.fw.emitFileOpsFrame(r.fw.padCalStatusFrame(calState = 1, calProgress = 4))
+        runCurrent()
+        advanceTimeBy(ActiveRocketSyncer.PAD_CAL_PROBE_MS)
+        runCurrent()
+        assertEquals(listOf(75), r.sentCommandIds().drop(before), "the 0xD0 settled it: no 21")
+
+        advanceTimeBy(10_000 - 400 - ActiveRocketSyncer.PAD_CAL_PROBE_MS)
+        r.fw.emitFileOpsFrame(r.fw.sensorCalStatusFrame(gyroX = 3))
+        runCurrent()
+        val result = run.await()
+        assertFalse(result.legacy)
+        assertEquals(10_000, assertIs<ActiveRocketSyncer.SensorCalRun.Answered>(result.sensorCal).elapsedMs)
+    }
+
+    /**
+     * A refusal is answered at once: the stored calibration re-published as
+     * 0xCB, then a 0xD0 saying REFUSED.  Both land inside the probe, before
+     * anything could have opened a window.
+     */
+    @Test
+    fun padCal_aRefusalIsAnsweredAtOnceAndIsNotAWindow() = runTest {
+        val r = rig(mutate = { it.copy(lastUsedUnitID = "boardA") })
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        val before = r.fw.commandFrames.size
+        val run = async { r.syncer.runPadCalibration(iono) { currentTime } }
+        runCurrent()
+        advanceTimeBy(300)
+        r.fw.emitFileOpsFrame(r.fw.sensorCalStatusFrame(gyroX = 5))
+        r.fw.emitFileOpsFrame(r.fw.padCalStatusFrame(calState = 4))
+        runCurrent()
+        val result = run.await()
+        assertFalse(result.legacy)
+        val answered = assertIs<ActiveRocketSyncer.SensorCalRun.Answered>(result.sensorCal)
+        assertEquals(300, answered.elapsedMs)
+        assertFalse(answered.ranWindow)
+        advanceTimeBy(ActiveRocketSyncer.PAD_CAL_PROBE_MS)
+        runCurrent()
+        assertEquals(listOf(75), r.sentCommandIds().drop(before))
+    }
+
+    @Test
+    fun padCal_noAnswerFromNewFirmwareTimesOutWithoutA21() = runTest {
+        val r = rig(mutate = { it.copy(lastUsedUnitID = "boardA") })
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        r.fw.emitFileOpsFrame(r.fw.padCalStatusFrame())
+        runCurrent()
+        val before = r.fw.commandFrames.size
+        val run = async { r.syncer.runPadCalibration(iono) { currentTime } }
+        runCurrent()
+        advanceTimeBy(ActiveRocketSyncer.SENSOR_CAL_RUN_TIMEOUT_MS + 1)
+        runCurrent()
+        val result = run.await()
+        assertFalse(result.legacy)
+        assertIs<ActiveRocketSyncer.SensorCalRun.NoAnswer>(result.sensorCal)
+        assertNull(r.store.activeProfile?.sensorCal)
+        assertEquals(listOf(75), r.sentCommandIds().drop(before))
+    }
+
+    @Test
+    fun padCal_withoutASessionSendsNothing() = runTest {
+        val r = rig()
+        val before = r.fw.commandFrames.size
+        val result = r.syncer.runPadCalibration(iono) { currentTime }
+        assertIs<ActiveRocketSyncer.SensorCalRun.NotConnected>(result.sensorCal)
+        assertFalse(result.legacy)
+        runCurrent()
+        assertEquals(before, r.fw.commandFrames.size)
     }
 
     @Test

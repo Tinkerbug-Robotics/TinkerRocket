@@ -26,7 +26,20 @@ public object SensorCalGravity {
         val x = lowGX ?: 0f
         val y = lowGY ?: 0f
         val z = lowGZ ?: 0f
-        val mag = sqrt(x * x + y * y + z * z)
+        return judge(sqrt(x * x + y * y + z * z))
+    }
+
+    /**
+     * The same check on the gravity the window itself measured, which a pad
+     * calibration reports (#1600 phase 5, PadCalStatusData.cal_gravity_mg):
+     * the average over the whole window, not one telemetry sample taken after
+     * it.  The flight computer only rejects outside ±20 %, so a 5 % reading
+     * still lands as DONE and is worth this warning.  0 is "none measured".
+     */
+    public fun checkWindow(gravityMg: Int): Warning? =
+        if (gravityMg <= 0) null else judge(gravityMg / 1000f * G_MPS2)
+
+    private fun judge(mag: Float): Warning? {
         if (mag <= 0.1f) return null
         val errPct = abs(mag - G_MPS2) / G_MPS2 * 100f
         return if (errPct > WARN_PCT) Warning(mag, errPct) else null
