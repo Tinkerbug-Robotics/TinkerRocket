@@ -456,7 +456,7 @@ SIZE_OF_PAD_CAL_STATUS = struct.calcsize(FMT_PAD_CAL_STATUS)  # 40
 PAD_CAL_STATES = {0: "idle", 1: "running", 2: "done", 3: "rejected", 4: "refused"}
 PAD_IONO_SOURCES = {0: "none", 1: "broadcast", 2: "pad survey"}
 PAD_CAL_FLAGS = {"raw_gnss": 0x01, "filter_running": 0x02, "iono_age_known": 0x04,
-                 "pad_valid": 0x08, "pad_frozen": 0x10}
+                 "pad_valid": 0x08, "pad_frozen": 0x10, "pad_mismatch": 0x20}
 
 
 def decode_pad_cal_status(payload):

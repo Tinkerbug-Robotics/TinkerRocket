@@ -3101,7 +3101,7 @@ static void rawShadowTask(void*)
                           "%d meas, pr %d+%d rej, rr %d+%d rej, age %.0f ms, build %lu us, update %lu us "
                           "(max %lu/%lu) | eph %d sats, %d tracked without | from flight filter N %.1f E %.1f "
                           "D %.1f m | iono %s (%d days) | pad survey %u settling, %u corrected (rms %.2f m), "
-                          "%d used | core 0 %.1f%% | log %lu, dropped %lu, ring drops %lu",
+                          "%d used, raw puts the pad %.1f m off%s | core 0 %.1f%% | log %lu, dropped %lu, ring drops %lu",
                      sh.running() ? "running" : "waiting", (unsigned long)st.starts,
                      (unsigned long)st.stops, (unsigned)st.last_stop,
                      (double)(st.imu - imu0) / win_s, step_avg, (unsigned long)st.step_us_max,
@@ -3115,6 +3115,8 @@ static void rawShadowTask(void*)
                      dn, de, dd, ionoName(sh.ionoSource()), iono_age,
                      (unsigned)sh.survey().summary().settling, (unsigned)sh.survey().summary().corrected,
                      (double)sh.survey().summary().rms_m, st.last_pad_corrected,
+                     (double)sh.survey().summary().pad_offset_m,
+                     sh.survey().summary().pad_ok ? "" : " (not vouched for)",
                      100.0 * (double)busy_us * 1e-6 / win_s, (unsigned long)recs,
                      (unsigned long)rec_drops, (unsigned long)raw_shadow_link.imu.dropped());
             // each satellite's pad correction, at its elevation from the pad:
@@ -3122,30 +3124,45 @@ static void rawShadowTask(void*)
             // is that system's measurements
             if (sh.survey().summary().corrected > 0)
             {
-                char line[400];
+                char line[640];
                 int at = 0;
                 int nm = 0;
                 const gnss_raw::RawMeas* m = sh.lastMeasurements(nm);
                 double r[3], v[3];
                 sh.filter().receiverEcef(r, v);
                 const double rn = sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
-                for (int i = 0; i < nm && at < (int)sizeof(line) - 24; i++)
+                const double rh = sqrt(r[0] * r[0] + r[1] * r[1]);
+                // geocentric up, east, north at the receiver
+                const double up[3] = {r[0] / rn, r[1] / rn, r[2] / rn};
+                const double ea[3] = {-r[1] / rh, r[0] / rh, 0.0};
+                const double no[3] = {up[1] * ea[2] - up[2] * ea[1], up[2] * ea[0] - up[0] * ea[2],
+                                      up[0] * ea[1] - up[1] * ea[0]};
+                for (int i = 0; i < nm && at < (int)sizeof(line) - 32; i++)
                 {
                     double corr = 0.0;
                     if (!sh.survey().correction(m[i].sys, m[i].prn, corr)) continue;
-                    double d[3], dn = 0.0, dot = 0.0;
+                    double d[3], dn = 0.0, de = 0.0, du = 0.0, dd = 0.0;
                     for (int a = 0; a < 3; a++)
                     {
                         d[a] = m[i].sat_pos[a] - r[a];
-                        dn += d[a] * d[a];
-                        dot += d[a] * r[a];
+                        dd += d[a] * d[a];
+                        de += d[a] * ea[a];
+                        dn += d[a] * no[a];
+                        du += d[a] * up[a];
                     }
-                    const double el = (dn > 0.0 && rn > 0.0) ? asin(dot / (sqrt(dn) * rn)) * 180.0 / M_PI : 0.0;
-                    at += snprintf(line + at, sizeof(line) - at, " %c%02u/%.0f %+.1f",
+                    const double el = (dd > 0.0) ? asin(du / sqrt(dd)) * 180.0 / M_PI : 0.0;
+                    double az = atan2(de, dn) * 180.0 / M_PI;
+                    if (az < 0.0) az += 360.0;
+                    // C/N0 back out of the white sigma the builder gave it
+                    // (RawMeasBuilder::kPrWhiteA/B)
+                    const double sw = (double)m[i].sigma_pr;
+                    const double x = (sw * sw - 0.026 * 0.026) / (0.157 * 0.157);
+                    const double cn0 = (x > 0.0) ? 35.0 - 10.0 * log10(x) : 0.0;
+                    at += snprintf(line + at, sizeof(line) - at, " %c%02u e%.0f a%.0f c%.0f %+.1f",
                                    m[i].sys == GNSS_SYS_GPS ? 'G' : (m[i].sys == GNSS_SYS_GAL ? 'E' : 'C'),
-                                   (unsigned)m[i].prn, el, corr);
+                                   (unsigned)m[i].prn, el, az, cn0, corr);
                 }
-                ESP_LOGI(TAG, "[RAWGNSS] pad corrections (sat/elevation m):%s", line);
+                ESP_LOGI(TAG, "[RAWGNSS] pad corrections (sat, elevation, azimuth, C/N0, m):%s", line);
             }
             win_t0 = a1;
             busy_us = 0;
@@ -3614,6 +3631,7 @@ static void publishPadCalStatus(uint32_t now_ms)
             d.iono_age_days = ps.iono_age_days;
         }
         if (ps.running) d.pos_sigma_cm = u16((double)ps.pos_sigma_m * 100.0);
+        if (ps.pad_mismatch) d.flags |= PCS_PAD_MISMATCH;
     }
 #endif
     double lla[3];

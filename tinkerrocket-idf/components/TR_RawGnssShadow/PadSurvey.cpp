@@ -30,6 +30,48 @@ double median(double* v, int n)
     return (n % 2) ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
 }
 
+// Solve the n x n system a x = b in place (Gaussian elimination, partial
+// pivoting); false if it is singular.
+bool solve(double a[6][6], double b[6], int n, double x[6])
+{
+    for (int c = 0; c < n; ++c)
+    {
+        int p = c;
+        for (int r = c + 1; r < n; ++r)
+            if (std::fabs(a[r][c]) > std::fabs(a[p][c]))
+                p = r;
+        if (std::fabs(a[p][c]) < 1.0e-9)
+            return false;
+        if (p != c)
+        {
+            for (int k = 0; k < n; ++k)
+            {
+                const double t = a[c][k];
+                a[c][k] = a[p][k];
+                a[p][k] = t;
+            }
+            const double t = b[c];
+            b[c] = b[p];
+            b[p] = t;
+        }
+        for (int r = c + 1; r < n; ++r)
+        {
+            const double f = a[r][c] / a[c][c];
+            for (int k = c; k < n; ++k)
+                a[r][k] -= f * a[c][k];
+            b[r] -= f * b[c];
+        }
+    }
+    for (int r = n - 1; r >= 0; --r)
+    {
+        double s = b[r];
+        for (int k = r + 1; k < n; ++k)
+            s -= a[r][k] * x[k];
+        x[r] = s / a[r][r];
+    }
+    return true;
+}
+
 }  // namespace
 
 double PadSurvey::towDiff(double a, double b)
@@ -68,6 +110,7 @@ void PadSurvey::observe(const RawMeas* m, int n, const double* lock_age_s, doubl
     {
         uint8_t sys, prn;
         double  res;
+        double  u[3];   // the line of sight from the pad
     };
     Resid res[RawEpoch::kMaxObs];
     int nr = 0;
@@ -90,7 +133,19 @@ void PadSurvey::observe(const RawMeas* m, int n, const double* lock_age_s, doubl
             settling++;
             continue;
         }
-        res[nr++] = {mi.sys, mi.prn, mi.pr - sagnacRange(mi, pad)};
+        Resid& rk = res[nr++];
+        rk.sys = mi.sys;
+        rk.prn = mi.prn;
+        rk.res = mi.pr - sagnacRange(mi, pad);
+        double d = 0.0;
+        for (int a = 0; a < 3; ++a)
+        {
+            rk.u[a] = mi.sat_pos[a] - pad[a];
+            d += rk.u[a] * rk.u[a];
+        }
+        d = std::sqrt(d);
+        for (int a = 0; a < 3; ++a)
+            rk.u[a] /= d;
     }
 
     // per system, the clock and its offset: the median of the residuals less
@@ -159,6 +214,38 @@ void PadSurvey::observe(const RawMeas* m, int n, const double* lock_age_s, doubl
             used += k;
         }
     }
+    // Where the corrections in use put the pad: corr = clock(system) - u . dp,
+    // dp the offset from the receiver's average, by least squares. A clock
+    // per system seen, so it needs two satellites more than unknowns.
+    double nrm[6][6] = {}, rhs[6] = {}, x[6] = {};
+    int col[kSys] = {-1, -1, -1};
+    int nu = 3, nused = 0;
+    for (int k = 0; k < nr; ++k)
+    {
+        const Sat& s = sat_[res[k].sys][res[k].prn];
+        if (!usable(s))
+            continue;
+        if (col[res[k].sys] < 0)
+            col[res[k].sys] = nu++;
+        double row[6] = {-res[k].u[0], -res[k].u[1], -res[k].u[2], 0.0, 0.0, 0.0};
+        row[col[res[k].sys]] = 1.0;
+        for (int i = 0; i < nu; ++i)
+        {
+            rhs[i] += row[i] * s.corr;
+            for (int j = 0; j < nu; ++j)
+                nrm[i][j] += row[i] * row[j];
+        }
+        nused++;
+    }
+    sum_.pad_ok = false;
+    sum_.pad_offset_m = 0.0f;
+    if (nused >= nu + 2 && solve(nrm, rhs, nu, x))
+    {
+        const double off = std::sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2]);
+        sum_.pad_offset_m = static_cast<float>(off);
+        sum_.pad_ok = off <= cfg_.max_pad_offset_m;
+    }
+
     auto u8 = [](int x) { return static_cast<uint8_t>(x > 255 ? 255 : x); };
     sum_.tracked = u8(tracked);
     sum_.settling = u8(settling);
@@ -169,6 +256,9 @@ void PadSurvey::observe(const RawMeas* m, int n, const double* lock_age_s, doubl
 
 int PadSurvey::correct(RawMeas* m, int n, const double r[3]) const
 {
+    // a pad the raw measurements do not vouch for corrects nothing
+    if (!sum_.pad_ok)
+        return 0;
     // with none in use every satellite keeps the same ionosphere, much of it
     // common, which the filter's clock takes up: the measurements are left as
     // they were (phase 4's shadow), not all widened alike

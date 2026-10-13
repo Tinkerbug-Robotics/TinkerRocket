@@ -104,6 +104,9 @@ void RawGnssShadow::padStatus(ShadowPadStatus& out) const
     out.iono_age_known = ionoAgeDays(age) ? 1 : 0;
     out.iono_age_days = static_cast<int16_t>(age < -32767 ? -32767 : (age > 32767 ? 32767 : age));
     out.corr_rms_m = sv.rms_m;
+    // the raw measurements put the pad far from the receiver's average
+    out.pad_mismatch = (sv.corrected > 0 && !sv.pad_ok && sv.pad_offset_m > 0.0f) ? 1 : 0;
+    out.pad_offset_m = sv.pad_offset_m;
     double v = 0.0;
     if (running_)
         for (int i = 0; i < 3; ++i)
@@ -118,7 +121,8 @@ uint8_t RawGnssShadow::ionoSource() const
 {
     if (use_broadcast_)
         return kIonoBroadcast;
-    return survey_.summary().corrected > 0 ? kIonoPad : kIonoNone;
+    const PadSurvey::Summary& sv = survey_.summary();
+    return (sv.corrected > 0 && sv.pad_ok) ? kIonoPad : kIonoNone;
 }
 
 void RawGnssShadow::chooseIono(bool in_flight)
