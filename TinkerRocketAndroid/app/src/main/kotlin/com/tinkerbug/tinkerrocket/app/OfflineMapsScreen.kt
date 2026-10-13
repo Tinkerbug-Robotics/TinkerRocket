@@ -215,10 +215,6 @@ private fun formatMb(bytes: Long): String {
 fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () -> Unit) {
     val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val context = androidx.compose.ui.platform.LocalContext.current
-    remember {
-        org.maplibre.android.MapLibre.getInstance(context)
-        org.maplibre.android.MapLibre.setConnected(true)
-    }
 
     var source by remember { mutableStateOf(TileSource.USGS_IMAGERY_TOPO) }
     var radiusKm by remember { mutableDoubleStateOf(5.0) }
@@ -260,7 +256,10 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
     }
 
     var mapRef by remember { mutableStateOf<MapLibreMap?>(null) }
+    // #1615: MapLibre's setup runs in the view's own remember (see MapScreen).
     val mapView = remember {
+        org.maplibre.android.MapLibre.getInstance(context)
+        org.maplibre.android.MapLibre.setConnected(true)
         MapView(context).apply {
             onCreate(null)
             getMapAsync { map ->
