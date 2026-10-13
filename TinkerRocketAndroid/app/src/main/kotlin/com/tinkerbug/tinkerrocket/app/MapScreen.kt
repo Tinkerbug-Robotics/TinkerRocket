@@ -102,15 +102,6 @@ fun MapScreen(
         }
     }
     val context = LocalContext.current
-    remember {
-        MapLibre.getInstance(context)
-        // MapLibre fails requests FAST when the OS reports offline — it
-        // never dials, so the (always-reachable) localhost proxy would go
-        // blank in airplane mode.  Force "connected": every source URL is
-        // loopback, and the PROXY owns real offline semantics (cache hit →
-        // tile, upstream fail → hatch placeholder).  Found in the S2 spike.
-        MapLibre.setConnected(true)
-    }
 
     val latchedFix by (
         session?.lastValidRocketFix
@@ -146,7 +137,17 @@ fun MapScreen(
     // The map handle once ready; state so recomposition sees it.
     var mapRef by remember { mutableStateOf<MapLibreMap?>(null) }
 
+    // #1615: MapLibre's setup runs in the view's own remember, since the view
+    // is what needs it.  On its own it was a remember returning Unit (lint
+    // RememberReturnType); an effect instead would run after the view exists.
     val mapView = remember {
+        MapLibre.getInstance(context)
+        // MapLibre fails requests FAST when the OS reports offline — it
+        // never dials, so the (always-reachable) localhost proxy would go
+        // blank in airplane mode.  Force "connected": every source URL is
+        // loopback, and the PROXY owns real offline semantics (cache hit →
+        // tile, upstream fail → hatch placeholder).  Found in the S2 spike.
+        MapLibre.setConnected(true)
         MapView(context).apply {
             onCreate(null)
             getMapAsync { map ->

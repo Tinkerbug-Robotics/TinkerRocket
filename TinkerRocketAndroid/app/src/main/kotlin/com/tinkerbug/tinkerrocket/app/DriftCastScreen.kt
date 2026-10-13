@@ -81,10 +81,6 @@ fun DriftCastScreen(container: AppContainer, onBack: () -> Unit) {
     val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("driftcast", Context.MODE_PRIVATE) }
-    remember {
-        org.maplibre.android.MapLibre.getInstance(context)
-        org.maplibre.android.MapLibre.setConnected(true)
-    }
 
     // Phone GPS backs Use GPS + the first-open auto-seed.
     DisposableEffect(Unit) {
@@ -176,7 +172,10 @@ fun DriftCastScreen(container: AppContainer, onBack: () -> Unit) {
 
     // ── Map ──────────────────────────────────────────────────────────────
     var mapRef by remember { mutableStateOf<MapLibreMap?>(null) }
+    // #1615: MapLibre's setup runs in the view's own remember (see MapScreen).
     val mapView = remember {
+        org.maplibre.android.MapLibre.getInstance(context)
+        org.maplibre.android.MapLibre.setConnected(true)
         MapView(context).apply {
             onCreate(null)
             getMapAsync { map ->

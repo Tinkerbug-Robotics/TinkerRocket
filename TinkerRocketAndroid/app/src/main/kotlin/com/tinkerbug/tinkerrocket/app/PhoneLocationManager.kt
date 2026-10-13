@@ -133,6 +133,12 @@ class PhoneLocationManager(private val app: Application) {
             .setMinUpdateDistanceMeters(5f) // iOS distanceFilter = 5 m
             .build()
         runCatching {
+            // #1615: lint's MissingPermission is wrong here.  hasPermission()
+            // above has confirmed FINE (this call needs FINE or COARSE), and
+            // runCatching catches a SecurityException, but lint only accepts
+            // a check…Permission/enforce…Permission call in this function or
+            // a catch of SecurityException itself.
+            @Suppress("MissingPermission")
             fused.requestLocationUpdates(request, locationCallback, Looper.getMainLooper())
         }
         sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)?.let { sensor ->
