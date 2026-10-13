@@ -119,12 +119,36 @@ size_t buildSentence(const char* body, char* out, size_t out_cap)
 
 void Lc86Parser::resetLine()
 {
-    in_line_  = false;
-    line_len_ = 0;
+    in_line_   = false;
+    line_len_  = 0;
+    in_rtcm_   = false;
+    rtcm_len_  = 0;
+    rtcm_want_ = 0;
 }
 
 Event Lc86Parser::feed(uint8_t byte)
 {
+    if (in_rtcm_)
+    {
+        bool reread = false;
+        const Event ev = feedRtcm(byte, reread);
+        if (!reread) return ev;
+        // Not a frame after all: this byte belongs to the text stream.
+    }
+
+    if (byte == rtcm3::kPreamble)
+    {
+        // A frame can only start between sentences; one mid-line means that
+        // line was cut short, as with '$' below.
+        if (in_line_ && line_len_ > 1) truncated_lines_++;
+        resetLine();
+        rtcm_preambles_++;
+        in_rtcm_     = true;
+        rtcm_buf_[0] = byte;
+        rtcm_len_    = 1;
+        return Event::NONE;
+    }
+
     const char c = (char)byte;
 
     if (c == '$')
@@ -163,6 +187,161 @@ Event Lc86Parser::feed(uint8_t byte)
 
     line_[line_len_++] = c;
     return Event::NONE;
+}
+
+// ── RTCM3 frames ($PAIR432) ─────────────────────────────────────────────
+// Frame: 0xD3, 6 reserved zero bits + 10-bit payload length, the payload
+// (12-bit message number first), CRC-24Q over everything before it.
+
+Event Lc86Parser::feedRtcm(uint8_t byte, bool& reread)
+{
+    rtcm_buf_[rtcm_len_++] = byte;
+
+    if (rtcm_len_ == 2 && (byte & 0xFC) != 0)
+    {
+        // The reserved bits are not zero: the 0xD3 was noise, and this byte
+        // may well be a '$'.
+        rtcm_bad_headers_++;
+        resetLine();
+        reread = true;
+        return Event::NONE;
+    }
+    if (rtcm_len_ == 3)
+    {
+        const size_t len = ((size_t)(rtcm_buf_[1] & 0x03) << 8) | byte;
+        rtcm_want_ = len + rtcm3::kFrameOverhead;
+        if (len < 2)
+        {
+            rtcm_bad_headers_++;
+            resetLine();
+            reread = true;
+        }
+        return Event::NONE;
+    }
+    if (rtcm_len_ == 5)
+    {
+        // Standard messages are 1001-1300 and 4001-4095 the proprietary ones;
+        // anything else this early is not a frame worth waiting out.
+        const uint16_t mt = rtcm3::messageType(rtcm_buf_ + 3, 2);
+        if (!((mt >= 1001 && mt <= 1300) || (mt >= 4001 && mt <= 4095)))
+        {
+            rtcm_bad_headers_++;
+            resetLine();
+            reread = true;
+            return Event::NONE;
+        }
+    }
+    if (rtcm_len_ < 3 || rtcm_len_ < rtcm_want_) return Event::NONE;
+
+    const Event ev = parseRtcm();
+    resetLine();
+    return ev;
+}
+
+Event Lc86Parser::parseRtcm()
+{
+    const size_t n = rtcm_want_;
+    const uint32_t want = ((uint32_t)rtcm_buf_[n - 3] << 16)
+                        | ((uint32_t)rtcm_buf_[n - 2] << 8)
+                        |  (uint32_t)rtcm_buf_[n - 1];
+    if (rtcm3::crc24q(rtcm_buf_, n - 3) != want)
+    {
+        rtcm_crc_fails_++;
+        return Event::BAD;
+    }
+    rtcm_frames_++;
+    rtcm_frame_len_ = n;
+
+    const uint8_t* payload = rtcm_buf_ + 3;
+    const size_t   len     = n - rtcm3::kFrameOverhead;
+    const uint16_t mt      = rtcm3::messageType(payload, len);
+    if (rtcm3::msm7GnssId(mt) != 0xFF)
+    {
+        return foldMsm7(payload, len);
+    }
+    if (rtcm3::isEphemeris(mt)) rtcm_eph_frames_++;
+    return Event::RTCM;
+}
+
+Event Lc86Parser::foldMsm7(const uint8_t* payload, size_t len)
+{
+    // A frame whose CRC checks is reported as RTCM even when it will not
+    // decode: it is still exactly what the module sent, and the log wants it.
+    rtcm3::MsmHeader hdr;
+    if (!rtcm3::peekMsm7(payload, len, hdr))
+    {
+        msm_malformed_++;
+        return Event::RTCM;
+    }
+
+    // A message from the next epoch closes the open one: its constellation
+    // is already in, or its time differs. That only happens when the message
+    // that should have closed it (DF393 = 0) was lost.
+    Event ev = Event::RTCM;
+    if (msm_open_)
+    {
+        const bool repeat = (msm_build_.gnss_mask >> hdr.gnss_id) & 1u;
+        const bool moved  = hdr.gps_tow_ms != rtcm3::kInvalidTow
+                         && msm_build_.gps_tow_ms != rtcm3::kInvalidTow
+                         && hdr.gps_tow_ms != msm_build_.gps_tow_ms;
+        if (repeat || moved)
+        {
+            closeMsmEpoch(false);
+            ev = Event::MSM_EPOCH;
+        }
+    }
+    if (!msm_open_)
+    {
+        // Header only: cells past n_cells are never read.
+        msm_build_.gps_tow_ms = rtcm3::kInvalidTow;
+        msm_build_.n_cells    = 0;
+        msm_build_.n_msgs     = 0;
+        msm_build_.gnss_mask  = 0;
+        msm_build_.dropped    = 0;
+        msm_build_.complete   = false;
+        msm_open_ = true;
+    }
+
+    size_t dropped = 0;
+    if (!rtcm3::decodeMsm7(payload, len, hdr,
+                           msm_build_.cells + msm_build_.n_cells,
+                           rtcm3::kMaxEpochCells - msm_build_.n_cells, &dropped))
+    {
+        msm_malformed_++;
+        return ev;
+    }
+    msm_messages_++;
+    msm_build_.n_cells   = (uint8_t)(msm_build_.n_cells + hdr.n_cells - dropped);
+    msm_build_.dropped   = (uint8_t)((msm_build_.dropped + dropped > 255)
+                                     ? 255 : msm_build_.dropped + dropped);
+    msm_build_.n_msgs++;
+    msm_build_.gnss_mask = (uint8_t)(msm_build_.gnss_mask | (1u << hdr.gnss_id));
+    if (msm_build_.gps_tow_ms == rtcm3::kInvalidTow) msm_build_.gps_tow_ms = hdr.gps_tow_ms;
+
+    if (!hdr.multiple)
+    {
+        closeMsmEpoch(true);
+        return Event::MSM_EPOCH;
+    }
+    return ev;
+}
+
+void Lc86Parser::closeMsmEpoch(bool complete)
+{
+    msm_build_.complete = complete;
+    msm_ready_      = msm_build_;
+    msm_ready_flag_ = true;
+    msm_open_       = false;
+    msm_epochs_++;
+    if (!complete) msm_epochs_incomplete_++;
+}
+
+bool Lc86Parser::takeMsmEpoch(rtcm3::MsmEpoch& out)
+{
+    if (!msm_ready_flag_) return false;
+    out = msm_ready_;
+    msm_ready_flag_ = false;
+    return true;
 }
 
 Event Lc86Parser::parseLine()
@@ -217,6 +396,8 @@ Event Lc86Parser::parseLine()
     if (strcmp(addr, "PQTMEPE") == 0)        return parsePqtmEpe(fields, nfields);
     if (strcmp(addr, "PAIR001") == 0)        return parsePairAck(fields, nfields);
     if (strcmp(addr, "PAIR081") == 0)        return parseNavMode(fields, nfields);
+    if (strcmp(addr, "PAIR433") == 0)        return parseRtcmMode(fields, nfields);
+    if (strcmp(addr, "PAIR437") == 0)        return parseRtcmEphMode(fields, nfields);
     if (strcmp(addr, "PQTMCFGMSGRATE") == 0) return parseQtmCfgMsgRate(fields, nfields);
     if (strlen(addr) == 5 && strcmp(addr + 2, "GGA") == 0)
     {
@@ -367,6 +548,43 @@ Event Lc86Parser::parseNavMode(const char* const* f, size_t n)
     }
     nav_mode_ = (uint8_t)mode;
     return Event::NAV_MODE;
+}
+
+Event Lc86Parser::parseRtcmMode(const char* const* f, size_t n)
+{
+    // $PAIR433,<Mode> — the answer to a $PAIR433 query: -1 off, 0 MSM4,
+    // 1 MSM7 (the values $PAIR432 takes).
+    if (n < 2 || f[1][0] == '\0')
+    {
+        bad_lines_++;
+        return Event::BAD;
+    }
+    const long mode = fieldLong(f[1]);
+    if (mode < -1 || mode > 1)
+    {
+        bad_lines_++;
+        return Event::BAD;
+    }
+    rtcm_mode_ = (int8_t)mode;
+    return Event::RTCM_MODE;
+}
+
+Event Lc86Parser::parseRtcmEphMode(const char* const* f, size_t n)
+{
+    // $PAIR437,<Enable> — the answer to a $PAIR437 query: 0 off, 1 on.
+    if (n < 2 || f[1][0] == '\0')
+    {
+        bad_lines_++;
+        return Event::BAD;
+    }
+    const long on = fieldLong(f[1]);
+    if (on < 0 || on > 1)
+    {
+        bad_lines_++;
+        return Event::BAD;
+    }
+    rtcm_eph_mode_ = (int8_t)on;
+    return Event::RTCM_EPH_MODE;
 }
 
 Event Lc86Parser::parseQtmCfgMsgRate(const char* const* f, size_t n)

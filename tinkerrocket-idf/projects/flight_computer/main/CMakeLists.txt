@@ -21,6 +21,7 @@ idf_component_register(
         TR_Sensor_Data_Converter
         TR_Orientation
         TR_GpsInsEKF
+        TR_GNSSRaw              # raw-GNSS filter support (#1600); compiled, not yet called
         TR_GeoMag
         TR_KinematicChecks
         TR_MagCalibrator

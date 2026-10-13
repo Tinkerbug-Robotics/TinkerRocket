@@ -44,6 +44,11 @@ public:
     // happened.  Nothing synthetic replaces it: the sim has no satellites.
     bool getGNSSSatData(GNSSSatData& data_out);
 
+    // Raw RTCM3 frames (GNSS_RTCM_MSG).  Same rule as getGNSSSatData: real
+    // frames pass through while idle and are consumed and dropped while a sim
+    // runs, so a log never pairs a real sky with a synthetic trajectory.
+    bool getGNSSRtcmFrame(uint8_t* out, size_t cap, size_t& len, uint32_t& time_us);
+
     // Debug passthrough
     void getISM6HG256DebugSnapshot(ISM6HG256DebugSnapshot& snapshot_out) const;
     void getMMC5983MADebugSnapshot(MMC5983MADebugSnapshot& snapshot_out) const;

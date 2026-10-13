@@ -42,6 +42,7 @@ the product-to-build map and why the project names did not change.
 | Folder | Board | What it is | State |
 |---|---|---|---|
 | [`space-bug-m8t/`](space-bug-m8t/) | **Space Bug M8T** | The Space Bug ([`legacy/gnss-px1105r-18mm-highpower-ext-ant/`](legacy/gnss-px1105r-18mm-highpower-ext-ant/)) redrawn around the u-blox NEO-M8T timing receiver, with a one-stage L1 front end and an L1 patch antenna, on the same 35 × 35 mm, 8-layer outline | Schematic done 2026-09-29; the layout is being re-placed around the larger module |
+| [`gnss-px1105r-18mm-hv/`](gnss-px1105r-18mm-hv/) | PX1105R GNSS carrier | The SAM-M10Q carrier ([`gnss-sam10m8-18mm-hv/`](gnss-sam10m8-18mm-hv/)) with the SkyTraq PX1105R L1/L5 receiver and the Space Bug's SAW–LNA–SAW–LNA front end in place of the module, on its outline stretched 2.5 mm to 22 × 30 mm for the antenna, as a 4-layer, 1.2 mm board. J3 matches the SAM carrier except pin 5, which is the receiver's RXD2 input (as on the legacy PX1105R carrier); 1PPS is not on the connector | V1 released 2026-10-12 (tag `gnss-px1105r-18mm-hv-v1.0.0`) with a Taoglas GVLB208.A (20 × 20 mm single-feed L1/L5 stacked patch) on the back; not yet fabricated. Order notes: [`FABRICATION-NOTES.md`](gnss-px1105r-18mm-hv/FABRICATION-NOTES.md) |
 
 ## Legacy boards
 

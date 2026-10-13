@@ -51,6 +51,7 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(sizeof(LoRaSlowData),   22u);  // #850: 1-of-6 slots
     EXPECT_EQ(sizeof(LoRaUplinkData), 13u);  // uplink RSSI/SNR log record (0xF9)
     EXPECT_EQ(sizeof(PyroFaultTripData), 13u);  // #1553 fault-current trip log record (0x94)
+    EXPECT_EQ(sizeof(GnssRtcmHeader), 5u);      // raw RTCM3 frame record header (0x95)
     EXPECT_EQ(sizeof(FcBootStatusData), 4u); // FC->OC boot progress (0xFA)
     EXPECT_EQ(sizeof(i24le_t),         3u);
     EXPECT_EQ(sizeof(Vec3i16),         6u);
@@ -1807,6 +1808,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(BS_EVENT_MSG),
         // #1553: OC-self-emitted fault-current trip record, third in the 0x90 block.
         MT(PYRO_FAULT_TRIP_MSG),
+        // FC->OC raw RTCM3 frames from the GNSS receiver (LC86G MSM7), log-only.
+        MT(GNSS_RTCM_MSG),
     };
 #undef MT
 
@@ -1843,7 +1846,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     //      registered (#1156 item 7). The 0xA0-0xFD space is FULL; new codes
     //      go in the 0x90 block.
     // 98 = 97 + PYRO_FAULT_TRIP_MSG (0x94, #1553 fault-current trip record).
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 98u)
+    // 99 = 98 + GNSS_RTCM_MSG (0x95, the LC86G's raw RTCM3 frames).
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 99u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }
@@ -2580,4 +2584,26 @@ TEST(LoraBeaconPadBytes, TheBaseStationStillReadsTheSameName) {
     received[name_len] = '\0';
 
     EXPECT_STREQ(received, nineteen);
+}
+
+// ============================================================================
+// GNSS_RTCM_MSG (0x95): raw RTCM3 frames split into I2S-sized parts
+// ============================================================================
+// The FC sends a frame longer than one payload as consecutive parts and every
+// reader joins them, so the chunk size and the part count are wire format.
+
+TEST(GnssRtcmRecord, ChunkIsWhatAPayloadHoldsAfterTheHeader)
+{
+    EXPECT_EQ(GNSS_RTCM_MAX_CHUNK, MAX_PAYLOAD - 5u);
+    EXPECT_EQ(GNSS_RTCM_MAX_CHUNK, 219u);
+    EXPECT_EQ(GNSS_RTCM_MAX_FRAME, 1029u);
+}
+
+TEST(GnssRtcmRecord, PartsCoverTheFrame)
+{
+    EXPECT_EQ(gnssRtcmParts(0), 0u);
+    EXPECT_EQ(gnssRtcmParts(22 + 6), 1u);       // an empty MSM7 (QZSS, nothing tracked)
+    EXPECT_EQ(gnssRtcmParts(219), 1u);
+    EXPECT_EQ(gnssRtcmParts(220), 2u);          // 14 satellites of one constellation
+    EXPECT_EQ(gnssRtcmParts(GNSS_RTCM_MAX_FRAME), 5u);
 }

@@ -64,6 +64,13 @@ if(TR_GNSS_RATE_HZ)
     add_compile_definitions(TR_GNSS_RATE_HZ=${TR_GNSS_RATE_HZ})
     message(STATUS "TR_GNSS_RATE_HZ=${TR_GNSS_RATE_HZ} -- bench GNSS rate override")
 endif()
+# Bench diagnostic: watch what the I2S TX DMA really sends, frame by frame,
+# with a loopback receiver on I2S1 (main/i2s_tx_monitor.h). ~80 KB of internal
+# RAM and two ISR copies per DMA buffer; never set for flight.
+if(TR_I2S_TX_MONITOR)
+    add_compile_definitions(TR_I2S_TX_MONITOR=1)
+    message(STATUS "TR_I2S_TX_MONITOR=1 -- I2S TX monitor ENABLED (bench)")
+endif()
 # #491 bench: cold-start the u-blox at every boot, so repeated runs of one file
 # start from the same state. Never set for flight.
 if(TR_GNSS_BENCH_COLD_START)

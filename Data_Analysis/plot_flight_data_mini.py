@@ -153,6 +153,8 @@ MSG_OUT_STATUS_QUERY  = 0xA0
 MSG_GNSS              = 0xA1
 MSG_GNSS_SAT          = 0x90  # GNSSSatData: per-satellite C/N0 at every GNSS epoch,
                               # variable length 10 + 6*n (first code of the 0x90 block)
+MSG_GNSS_RTCM         = 0x95  # GnssRtcmHeader + a raw RTCM3 frame (or one part of it),
+                              # variable length 5 + up to 219 (LC86G MSM7)
 MSG_ISM6HG256         = 0xA2
 MSG_BMP585            = 0xA3
 MSG_MMC5983MA         = 0xA4
@@ -191,6 +193,7 @@ MSG_NAMES = {
     MSG_OUT_STATUS_QUERY: "OUT_STATUS_QUERY",
     MSG_GNSS:             "GNSS",
     MSG_GNSS_SAT:         "GNSS_SAT",
+    MSG_GNSS_RTCM:        "GNSS_RTCM",
     MSG_ISM6HG256:        "ISM6HG256",
     MSG_BMP585:           "BMP585",
     MSG_MMC5983MA:        "MMC5983MA",
@@ -215,6 +218,7 @@ MSG_EXPECTED_LEN = {
     MSG_OUT_STATUS_QUERY:  (16, 26, 28, 41, 42),  # OutStatusQueryData v2 / v3 (+b2r) / v4 (+iis2mdc rot) / v5 (+guid target echo, #435) / v6 (+mag_type)
     MSG_GNSS:              42,
     MSG_GNSS_SAT:          None,  # 10 + 6*n (n <= 32); the shape is checked where it is decoded
+    MSG_GNSS_RTCM:         None,  # 5 + 1..219; checked in decode_gnss_rtcm
     MSG_ISM6HG256:         22,
     MSG_BMP585:            12,
     MSG_MMC5983MA:         16,
@@ -299,6 +303,56 @@ def decode_gnss_sat(payload):
         "cno_mean_used": (sum(s["cno_dbhz"] for s in used) / len(used)) if used else 0.0,
         "sats":          sats,
     }
+# GNSS_RTCM_MSG: GnssRtcmHeader (time_us u32, part u8: index << 4 | count),
+# then the frame bytes. A frame longer than one record goes as consecutive
+# parts with the same time_us (RocketComputerTypes.h, gnssRtcmParts).
+FMT_GNSS_RTCM_HDR = '<I B'
+GNSS_RTCM_HDR_LEN = struct.calcsize(FMT_GNSS_RTCM_HDR)
+
+
+def decode_gnss_rtcm(payload):
+    """GNSS_RTCM_MSG payload -> {time_us, part, parts, data}, or None if malformed."""
+    if len(payload) <= GNSS_RTCM_HDR_LEN:
+        return None
+    time_us, part = struct.unpack_from(FMT_GNSS_RTCM_HDR, payload, 0)
+    index, count = part >> 4, part & 0x0F
+    if count == 0 or index >= count:
+        return None
+    return {"time_us": time_us, "part": index, "parts": count,
+            "data": bytes(payload[GNSS_RTCM_HDR_LEN:])}
+
+
+def join_gnss_rtcm(recs):
+    """GNSS_RTCM records in log order -> ([(time_us, frame bytes)], dropped).
+
+    Parts of one frame are consecutive and share time_us; a frame missing any
+    part (a record lost on the link) is dropped whole and counted, so every
+    frame returned is exactly one the receiver sent.
+    """
+    frames, dropped = [], 0
+    pending = None                     # (time_us, parts, [chunks])
+    for r in recs:
+        if r["part"] == 0:
+            if pending is not None:
+                dropped += 1           # the previous frame never finished
+            pending = (r["time_us"], r["parts"], [r["data"]])
+        elif (pending is not None and r["time_us"] == pending[0]
+              and r["parts"] == pending[1] and r["part"] == len(pending[2])):
+            pending[2].append(r["data"])
+        else:
+            if pending is not None:
+                dropped += 1
+            pending = None
+            dropped += 1               # a part with no frame to belong to
+            continue
+        if pending is not None and len(pending[2]) == pending[1]:
+            frames.append((pending[0], b"".join(pending[2])))
+            pending = None
+    if pending is not None:
+        dropped += 1
+    return frames, dropped
+
+
 # ISM6HG256Data: 22 bytes (time_us + 3×Vec3i16)
 FMT_ISM6 = '<I hhh hhh hhh'
 # BMP585Data: 12 bytes (time_us, temp_q16:i32, press_q6:u32)
@@ -625,6 +679,7 @@ def parse_binary_file(filepath):
     records = {
         "GNSS":           [],
         "GNSS_SAT":       [],
+        "GNSS_RTCM":      [],   # 0x95 raw RTCM3 frame parts; join_gnss_rtcm() reassembles
         "FcStatus":       [],   # 0x92 FcStatusData (#1154 item 4) — appended below; was never initialised
         "ISM6HG256":      [],
         "BMP585":         [],
@@ -819,6 +874,11 @@ def parse_binary_file(filepath):
                 rec = decode_gnss_sat(payload)
                 if rec is not None:
                     records["GNSS_SAT"].append(rec)
+
+            elif msg_type == MSG_GNSS_RTCM:
+                rec = decode_gnss_rtcm(payload)
+                if rec is not None:
+                    records["GNSS_RTCM"].append(rec)
 
             elif msg_type == MSG_ISM6HG256:
                 fields = struct.unpack(FMT_ISM6, payload)

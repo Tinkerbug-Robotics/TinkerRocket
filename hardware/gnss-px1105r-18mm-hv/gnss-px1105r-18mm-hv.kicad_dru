@@ -1,0 +1,12 @@
+(version 1)
+
+# Carried over from the Space Bug (legacy/gnss-px1105r-18mm-highpower-ext-ant), whose front end this board reuses.
+# The RF class stays at 0.2 mm: that gap to the ground pour sets the 50 ohm coplanar line, so it is load-bearing.
+#
+# BGA855N6 LNAs (U3, U4) are TSNP-6-10: 0.4 mm pitch with 0.25 mm pads leaves 0.15 mm between pads, so the RF pins
+# and their fan-out sit 0.15-0.2 mm apart inside the part. Both footprints carry a 0.15 mm local clearance for
+# pad-to-pad; this rule gives the tracks and vias inside each courtyard the same allowance against the RF class's
+# 0.2 mm. Zone fills keep their own clearance. Values need their unit: a bare number here silently disables the rule.
+(rule "TSNP-6-10 LNA pin fan-out"
+	(constraint clearance (min 0.15mm))
+	(condition "A.Type != 'Zone' && B.Type != 'Zone' && ((A.intersectsCourtyard('U3') && B.intersectsCourtyard('U3')) || (A.intersectsCourtyard('U4') && B.intersectsCourtyard('U4')))"))

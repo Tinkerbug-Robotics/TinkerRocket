@@ -269,6 +269,31 @@ target_include_directories(test_imu_sample_clock PRIVATE
 target_link_libraries(test_imu_sample_clock GTest::gtest_main)
 gtest_discover_tests(test_imu_sample_clock)
 
+# ---------- test_i2s_tx_fill_policy ----------
+# The FC's I2S sender keeps the TX DMA ring full, so a frame never lands at the
+# DMA's read point (the Beetle's IMU batch gaps, 2026-10-12). The policy's
+# decisions, and a model of the IDF v6.0 TX driver on a DMA that reads ahead of
+# its EOF. Header-only and IDF-free.
+add_executable(test_i2s_tx_fill_policy test_i2s_tx_fill_policy.cpp)
+target_include_directories(test_i2s_tx_fill_policy PRIVATE
+    ${LIB_DIR}/TR_I2S_Stream
+)
+target_link_libraries(test_i2s_tx_fill_policy GTest::gtest_main)
+gtest_discover_tests(test_i2s_tx_fill_policy)
+
+# ---------- test_i2s_link_check ----------
+# The bench I2S monitor's view of the link (TR_I2S_TX_MONITOR,
+# flight_computer/main/i2s_link_check.h): frames reassembled across DMA buffers
+# as the OC parses them, matched in write order against the sender's log, and
+# ISM6 batch gaps. Header-only and IDF-free.
+add_executable(test_i2s_link_check test_i2s_link_check.cpp)
+target_include_directories(test_i2s_link_check PRIVATE
+    ${LIB_DIR}/../projects/flight_computer/main
+    ${LIB_DIR}/TR_I2C_Interface
+)
+target_link_libraries(test_i2s_link_check GTest::gtest_main)
+gtest_discover_tests(test_i2s_link_check)
+
 # ---------- test_qmc5883p_regs ----------
 # The mini's magnetometer (#1312): register packing pinned to the QMC5883P
 # datasheet's worked examples, the ±8 G scale MAG_TYPE_QMC5883P promises, and
@@ -1482,11 +1507,13 @@ gtest_discover_tests(test_sim_sensor_model)
 # is deliberately IDF-free (bytes in, GNSSData out), so the checksum rules
 # (anchored on the protocol doc's published examples), the $PQTMPVT mapping
 # incl. the vel_u = -VelD sign the EKF hard-fuses, the Quality==0 fix-trust
-# gate, the $PQTMEPE accuracy merge, and junk/partial-line resilience are all
-# pinned on the host. The ESP UART glue lives in TR_GNSSReceiverLC86_Serial.cpp
+# gate, the $PQTMEPE accuracy merge, junk/partial-line resilience, and the
+# RTCM3 MSM7 frames interleaved with the NMEA (Rtcm3Msm.cpp) are all pinned
+# on the host. The ESP UART glue lives in TR_GNSSReceiverLC86_Serial.cpp
 # and is not compiled here.
 add_executable(test_lc86_parser test_lc86_parser.cpp
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Lc86Parser.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
 )
 target_include_directories(test_lc86_parser PRIVATE
     ${SHIM_DIR}
@@ -1495,6 +1522,28 @@ target_include_directories(test_lc86_parser PRIVATE
 )
 target_link_libraries(test_lc86_parser GTest::gtest_main)
 gtest_discover_tests(test_lc86_parser)
+
+# ---------- test_gnss_raw ----------
+# Host test for TR_GNSSRaw, what a raw-measurement (tightly coupled) GNSS/INS
+# filter needs beside the receiver's measurements: the LC86G's RTCM broadcast
+# ephemeris (1019 GPS, 1046 Galileo, 1042 BeiDou) decoded, satellites placed and
+# clocked by the GNSS receiver's own eph.c, and its Klobuchar and Saastamoinen
+# corrections. Reference values come from the bench prototype that scored the
+# filter (fixtures/gnss_raw_golden.h, generated from frames the Beetle's LC86G
+# sent on the COCOM rig).
+add_executable(test_gnss_raw test_gnss_raw.cpp
+    ${LIB_DIR}/TR_GNSSRaw/eph.c
+    ${LIB_DIR}/TR_GNSSRaw/atmo.c
+    ${LIB_DIR}/TR_GNSSRaw/RtcmEphemeris.cpp
+    ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
+)
+target_include_directories(test_gnss_raw PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+)
+target_link_libraries(test_gnss_raw GTest::gtest_main)
+gtest_discover_tests(test_gnss_raw)
 
 # ---------- wire fixture corpus (docs/plans/android-port.md §2.1) ----------
 # Golden-vector generation from the REAL packed structs: wire_fixture_gen

@@ -136,6 +136,24 @@ public:
                             uint32_t timeout_ms = 100);
 
     /**
+     * Fill every free TX DMA buffer with zeros without blocking, so the ring
+     * is full when this returns (i2s_tx_fill_policy.h). ESP_OK once the
+     * driver has no free buffer left; an error only when there is no channel.
+     */
+    esp_err_t topUpTxRing();
+
+    /** Bytes the TX DMA ring holds (descriptors x frames x 4 B); 0 without a TX channel. */
+    size_t txRingBytes() const { return is_tx_ ? tx_ring_bytes_ : 0; }
+
+    /** How long the DMA takes to send the whole TX ring, in microseconds; 0 without a TX channel. */
+    uint32_t txRingUs() const
+    {
+        return (is_tx_ && sample_rate_ > 0)
+                   ? (uint32_t)(((uint64_t)tx_ring_bytes_ * 1000000u) / ((uint64_t)sample_rate_ * 4u))
+                   : 0;
+    }
+
+    /**
      * Write raw bytes to the I2S DMA TX buffer.
      */
     esp_err_t writeRaw(const uint8_t* data,
@@ -187,6 +205,9 @@ private:
     int ws_pin_   = -1;
     int data_pin_ = -1;
     bool is_tx_ = false;
+    // TX ring geometry, for txRingBytes()/txRingUs().
+    size_t   tx_ring_bytes_ = 0;
+    uint32_t sample_rate_ = 0;
 
     // Callback state
     i2s_recv_cb_t recv_cb_ = nullptr;

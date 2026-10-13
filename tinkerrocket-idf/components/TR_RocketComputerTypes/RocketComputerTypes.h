@@ -2401,6 +2401,25 @@ static constexpr uint8_t ISM6_BATCH_MSG      = 0x93;  // FC→OC over I2S: a cou
                                                       // VARIABLE length: 1 + 22*count bytes (ism6BatchWireSize), count 1..ISM6_BATCH_MAX.
 static constexpr uint8_t ISM6_BATCH_MAX      = 10;
 
+// FC→OC over I2S: the GNSS receiver's raw RTCM3 frames, verbatim, straight to
+// the log.  On the mini that is the LC86G's MSM7 ($PAIR432,1): per satellite
+// the pseudorange, carrier phase, Doppler, C/N0 and lock time, one epoch a
+// second as ~5 frames; and its broadcast ephemeris ($PAIR436,1: 1019, 1020,
+// 1042, 1044, 1046), one message a second round-robin over the satellites it
+// has.  Together, everything needed to recompute the receiver's solution.
+// Logged raw, not decoded, so a flight can be
+// reconstructed later with any RTCM3 tool: the frames of a log joined in order
+// ARE a standard .rtcm3 stream (Data_Analysis/extract_gnss_rtcm.py), and
+// nothing the module said is lost to a struct layout.  Every frame whose CRC-24Q
+// checks is sent, MSM7 or not.
+//
+// VARIABLE length: GnssRtcmHeader (5 B) + up to GNSS_RTCM_MAX_CHUNK frame
+// bytes.  A frame longer than one chunk (an MSM7 with 14+ satellites of one
+// constellation) goes as consecutive parts with the same time_us; the reader
+// joins them.  No-op on u-blox boards, whose driver emits none.
+static constexpr uint8_t GNSS_RTCM_MSG       = 0x95;  // FC→OC over I2S: GnssRtcmHeader + the GNSS receiver's raw RTCM3 frame
+                                                      // (or one part of it), straight to the log.  VARIABLE length.
+
 static constexpr uint8_t OUT_STATUS_QUERY    = 0xA0;
 static constexpr uint8_t GNSS_MSG            = 0xA1;
 static constexpr uint8_t ISM6HG256_MSG       = 0xA2;
@@ -3955,6 +3974,30 @@ static_assert(sizeof(FlightSettingsData) <= MAX_PAYLOAD,
 // otherwise verify belongs in it).
 static_assert(sizeof(ConfigReportData) <= MAX_PAYLOAD,
               "ConfigReportData must fit one I2S frame");
+
+// GNSS_RTCM_MSG (0x95) payload header.  `part` packs this part's index (high
+// nibble, from 0) and the frame's part count (low nibble): 0x01 is a whole
+// frame in one record, 0x02 then 0x12 a frame in two.
+typedef struct __attribute__((packed))
+{
+    uint32_t time_us;   // FC micros when the frame's last byte was parsed
+    uint8_t  part;
+} GnssRtcmHeader;
+static_assert(sizeof(GnssRtcmHeader) == 5, "GnssRtcmHeader is 5 bytes on the wire");
+
+// An RTCM3 frame: 0xD3, 6 reserved bits + 10-bit length, up to 1023 payload
+// bytes, CRC-24Q.
+static constexpr size_t GNSS_RTCM_MAX_FRAME = 3 + 1023 + 3;
+static constexpr size_t GNSS_RTCM_MAX_CHUNK = MAX_PAYLOAD - sizeof(GnssRtcmHeader);
+
+// Parts a frame of `frame_len` bytes is sent as (1 for every frame up to a
+// chunk, 0 for an empty one).
+static constexpr uint8_t gnssRtcmParts(size_t frame_len)
+{
+    return (uint8_t)((frame_len + GNSS_RTCM_MAX_CHUNK - 1) / GNSS_RTCM_MAX_CHUNK);
+}
+static_assert(gnssRtcmParts(GNSS_RTCM_MAX_FRAME) <= 15,
+              "GNSS_RTCM_MSG: the part count must fit its nibble");
 
 // Frame: [0xAA][0x55][0xAA][0x55] + type + length + payload + CRC16
 static constexpr size_t MAX_FRAME = 4 + 1 + 1 + MAX_PAYLOAD + 2;
