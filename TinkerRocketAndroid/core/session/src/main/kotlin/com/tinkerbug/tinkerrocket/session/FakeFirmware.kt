@@ -7,6 +7,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
+import com.tinkerbug.tinkerrocket.protocol.PadCalStatus
 import com.tinkerbug.tinkerrocket.protocol.SensorCalStatus
 
 /**
@@ -324,6 +325,39 @@ public class FakeFirmware(
         f32(8, hgX); f32(12, hgY); f32(16, hgZ)
         return p
     }
+
+    /**
+     * `[0xD0][PadCalStatusData 40 B]` pad-calibration status frame (#1600
+     * phase 5).  [timeUs] defaults to a fresh value per frame, as the flight
+     * computer's micros() would be; the fields left out stay 0.
+     */
+    public fun padCalStatusFrame(
+        calState: Int = 0,
+        calProgress: Int = 0,
+        calGravityMg: Int = 0,
+        flags: Int = 0,
+        satsTracked: Int = 0,
+        satsNoEph: Int = 0,
+        ionoSource: Int = 0,
+        ionoGpsDay: Int = 0,
+        timeUs: Long = ++padCalTimeUs * 1_000_000L,
+    ): ByteArray {
+        val p = ByteArray(1 + PadCalStatus.SIZE)
+        p[0] = 0xD0.toByte()
+        fun u16(at: Int, v: Int) { p[at] = v.toByte(); p[at + 1] = (v ushr 8).toByte() }
+        for (i in 0 until 4) p[1 + i] = (timeUs ushr (8 * i)).toByte()
+        p[1 + 4] = calState.toByte()
+        p[1 + 5] = calProgress.toByte()
+        u16(1 + 6, calGravityMg)
+        p[1 + 8] = satsTracked.toByte()
+        p[1 + 9] = satsNoEph.toByte()
+        p[1 + 14] = ionoSource.toByte()
+        p[1 + 15] = flags.toByte()
+        u16(1 + 16, ionoGpsDay)
+        return p
+    }
+
+    private var padCalTimeUs = 0L
 
     /** `[0xAA][start f32][step f32][n u8][rssi i8 × n]` scan-result frame. */
     public fun scanFrame(startMhz: Float, stepKhz: Float, rssiDbm: List<Int>): ByteArray {

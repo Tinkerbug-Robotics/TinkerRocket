@@ -715,6 +715,46 @@ void buildFileops(Builder& b) {
               .u("free_bytes", bs.free_bytes).u("backend", bs.backend).u("flags", bs.flags)
               .done(),
           "BaseStationStorageStatsData behind 0xCD; frame = 27 B (1 + 26-B struct)");
+
+    // 0xD0 pad calibration progress (#1600 phase 5).  Every field distinct and
+    // non-zero, signed ones negative where they can be, so a field swap or a
+    // sign slip in a decoder shows.
+    PadCalStatusData pc{};
+    pc.time_us = 61234567u;
+    pc.cal_state = PAD_CAL_RUNNING;
+    pc.cal_progress = 42;
+    pc.cal_gravity_mg = 1003;
+    pc.sats_tracked = 14;
+    pc.sats_no_eph = 2;
+    pc.sats_settling = 3;
+    pc.sats_corrected = 9;
+    pc.corr_rms_cm = 87;
+    pc.iono_source = PAD_IONO_BROADCAST;
+    pc.flags = PCS_RAW_GNSS | PCS_RUNNING | PCS_IONO_AGE | PCS_PAD;
+    pc.iono_gps_day = 17082;
+    pc.iono_age_days = -1;
+    pc.pad_fixes = 1500;
+    pc.pad_secs = 240;
+    pc.pad_scatter_cm = 180;
+    pc.pad_lat_e7 = 399716265;
+    pc.pad_lon_e7 = -749363464;
+    pc.pad_alt_mm = -31234;
+    pc.pos_sigma_cm = 215;
+    std::vector<uint8_t> pcF{0xD0};
+    append(pcF, bytesOf(pc));
+    b.add("fileops", "padcal_0xD0_40.bin", pcF,
+          Json().u("time_us", pc.time_us).u("cal_state", pc.cal_state)
+              .u("cal_progress", pc.cal_progress).u("cal_gravity_mg", pc.cal_gravity_mg)
+              .u("sats_tracked", pc.sats_tracked).u("sats_no_eph", pc.sats_no_eph)
+              .u("sats_settling", pc.sats_settling).u("sats_corrected", pc.sats_corrected)
+              .u("corr_rms_cm", pc.corr_rms_cm).u("iono_source", pc.iono_source)
+              .u("flags", pc.flags).u("iono_gps_day", pc.iono_gps_day)
+              .i("iono_age_days", pc.iono_age_days).u("pad_fixes", pc.pad_fixes)
+              .u("pad_secs", pc.pad_secs).u("pad_scatter_cm", pc.pad_scatter_cm)
+              .i("pad_lat_e7", pc.pad_lat_e7).i("pad_lon_e7", pc.pad_lon_e7)
+              .i("pad_alt_mm", pc.pad_alt_mm).u("pos_sigma_cm", pc.pos_sigma_cm)
+              .done(),
+          "PadCalStatusData behind 0xD0 (#1600 phase 5); frame = 41 B");
 }
 
 // App→device command payloads: [cmd u8][payload], byte-exact.  Struct-backed
@@ -945,6 +985,16 @@ void buildCommands(Builder& b) {
     b.add("commands", "cmd67_imurate_2.bin", cmd(67, bytesOf(ImuRateConfigData{1920})),
           Json().u("cmd", 67).u("rate_hz", 1920).done(),
           "ImuRateConfigData; valid values 960/1920/3840");
+
+    {
+        // Pad calibration (#1600 phase 5): 2026-10-13's GPS broadcast
+        // ionosphere (NOAA brdc2860.26n) and its file's GPS day.
+        PadCalConfigData pc{{21, 0, -2, 0, 60, -1, -4, 3}, 17082};
+        b.add("commands", "cmd75_padcal_10.bin", cmd(75, bytesOf(pc)),
+              Json().u("cmd", 75).raw("iono", intArray({21, 0, -2, 0, 60, -1, -4, 3}))
+                  .u("iono_gps_day", 17082).done(),
+              "PadCalConfigData: [iono i8 x8][gps_day u16]; gps_day 0 = no ionosphere");
+    }
 
     {
         // OTA_BEGIN: [target u8][size u32 LE][sha256 32 B]; not a header struct

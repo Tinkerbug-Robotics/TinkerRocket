@@ -78,6 +78,7 @@ class CommandsGoldenTest {
         "cmd66_fin_18.bin",
         "cmd67_imurate_2.bin",
         "cmd70_otabegin_37.bin",
+        "cmd75_padcal_10.bin",
     )
 
     @Test
@@ -399,7 +400,26 @@ class CommandsGoldenTest {
         )
     }
 
+    @Test
+    fun `cmd75 pad calibration`() {
+        val s = side("cmd75_padcal_10.bin")
+        val iono = Klobuchar(
+            raw = s["iono"]!!.jsonArray.map { it.jsonPrimitive.int },
+            gpsDay = s.i("iono_gps_day"),
+        )
+        val built = Commands.padCalibration(iono)
+        assertEquals(1 + Klobuchar.PAYLOAD_LENGTH, built.size, "PadCalConfigData frame must be 1+10 bytes")
+        assertMatchesFixture("cmd75_padcal_10.bin", built)
+    }
+
     // ----------------------------------- hand pins (no fixture / iOS XCTest)
+
+    @Test
+    fun `cmd75 without an ionosphere is ten zero bytes`() {
+        // gps_day 0 is the firmware's "the app has none": it keeps any set it
+        // stored, and still runs the window and restarts the pad survey.
+        assertEquals(listOf(75) + List(10) { 0 }, Commands.padCalibration(null).map { it.toInt() })
+    }
 
     @Test
     fun `name clamps to 20 utf8 bytes not characters`() {

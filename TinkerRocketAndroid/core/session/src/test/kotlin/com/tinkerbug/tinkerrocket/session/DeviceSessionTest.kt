@@ -6,6 +6,7 @@ import com.tinkerbug.tinkerrocket.protocol.GuidanceSendFlow
 import com.tinkerbug.tinkerrocket.protocol.IMUOrientationMode
 import com.tinkerbug.tinkerrocket.protocol.MagCalStatus
 import com.tinkerbug.tinkerrocket.protocol.MagCalSubType
+import com.tinkerbug.tinkerrocket.protocol.PadCalState
 import com.tinkerbug.tinkerrocket.protocol.PyroChannelConfig
 import com.tinkerbug.tinkerrocket.protocol.TelemetryData
 import kotlinx.coroutines.async
@@ -1089,6 +1090,40 @@ class DeviceSessionTest {
         advanceTimeBy(10_000)
         runCurrent()
         assertEquals(rssiOps, h.fw.ops.count { it == "rssi" })
+    }
+
+    /**
+     * #1600 phase 5: the 0xD0 status lands in padCalStatus frame by frame and
+     * goes on disconnect — "a 0xD0 frame since it connected" is what picks
+     * command 75 over 21, and the next connection may be a reflashed rocket.
+     */
+    @Test
+    fun padCalStatus_tracksTheLatestFrame_andIsWipedOnDisconnect() = runTest {
+        val h = startedSession()
+        advanceTimeBy(1000)
+        runCurrent()
+        assertNull(h.session.padCalStatus.value)
+
+        h.fw.emitFileOpsFrame(h.fw.padCalStatusFrame(calState = 1, calProgress = 40))
+        runCurrent()
+        assertEquals(PadCalState.RUNNING, h.session.padCalStatus.value?.calState)
+        assertEquals(40, h.session.padCalStatus.value?.calProgress)
+        h.fw.emitFileOpsFrame(
+            h.fw.padCalStatusFrame(calState = 2, calProgress = 100, calGravityMg = 1003),
+        )
+        runCurrent()
+        assertEquals(PadCalState.DONE, h.session.padCalStatus.value?.calState)
+        assertEquals(1003, h.session.padCalStatus.value?.calGravityMg)
+
+        // One byte short: dropped, and not read as a file list either.
+        h.fw.emitFileOpsFrame(h.fw.padCalStatusFrame(calState = 3).copyOf(40))
+        runCurrent()
+        assertEquals(PadCalState.DONE, h.session.padCalStatus.value?.calState)
+        assertTrue(h.session.files.value.isEmpty())
+
+        h.fw.fireDisconnect()
+        runCurrent()
+        assertNull(h.session.padCalStatus.value)
     }
 
     // ── #634 bulk delete ─────────────────────────────────────────────────
