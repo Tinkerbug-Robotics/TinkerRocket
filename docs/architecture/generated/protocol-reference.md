@@ -22,7 +22,7 @@ Start-of-frame bytes from [`TR_I2C_Interface.h`](https://github.com/Tinkerbug-Ro
 
 ## FC ↔ OC message types
 
-98 codes. The dispatch on both ends is a flat first-match chain, so
+101 codes. The dispatch on both ends is a flat first-match chain, so
 two handlers sharing a value means the second is silently dead — which is why
 this list is CI-enforced for uniqueness.
 
@@ -126,8 +126,11 @@ this list is CI-enforced for uniqueness.
 | `0x94` | `PYRO_FAULT_TRIP_MSG` | OC → log | OC→self: 13-byte PyroFaultTripData, two per fault-current trip, straight to the log |
 | `0x95` | `GNSS_RTCM_MSG` | FC → OC | FC→OC over I2S: GnssRtcmHeader + the GNSS receiver's raw RTCM3 frame |
 | `0x96` | `RAW_GNSS_EKF_MSG` | FC → OC | FC→OC over I2S: RawGnssEkfData, the raw-GNSS shadow filter at 10 Hz, straight to the log |
+| `0x97` | `PAD_CAL_PENDING` | OC → FC | OC→FC: pad calibration; PadCalConfigData follows as PAD_CAL_CONFIG_MSG |
+| `0x98` | `PAD_CAL_CONFIG_MSG` | OC → FC | OC→FC: 10-byte PadCalConfigData |
+| `0x99` | `PAD_CAL_STATUS_MSG` | FC → OC | FC→OC over I2S: PadCalStatusData, 1 Hz on the ground; logged, and relayed to the app |
 
-> 52 of these 98 codes carry no comment in the header,
+> 52 of these 101 codes carry no comment in the header,
 > so the Notes column is blank for them. Direction is inferred from the
 > `_PENDING` / `_CMD` / `_MSG` suffix in that case, which is a convention,
 > not a guarantee. A trailing `// OC→FC: what it does` on the constant
@@ -156,6 +159,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `GNSSData` | 42 |
 | `OutStatusQueryData` | 42 |
 | `OutStatusQueryData` | 42 |
+| `PadCalStatusData` | 40 |
 | `MagCalStatusData` | 36 |
 | `LogBufferStatsData` | 28 |
 | `BaseStationStorageStatsData` | 26 |
@@ -183,6 +187,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `BsLoRaRxHeader` | 12 |
 | `MagCalMMCOffset` | 12 |
 | `IIS2MDCData` | 10 |
+| `PadCalConfigData` | 10 |
 | `BsEventHeader` | 9 |
 | `RollWaypoint` | 9 |
 | `ServoTestAnglesData` | 8 |
@@ -210,7 +215,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 
 ### app to Out Computer
 
-56 commands.
+57 commands.
 
 | Cmd | Constant | Description |
 |-----|----------|-------------|
@@ -230,7 +235,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 15 |  |  |
 | 16 |  |  |
 | 20 |  | Config readback request |
-| 21 |  |  |
+| 21 |  | Gyro & accel calibration alone: the pre-#1600 app's, kept for it |
 | 22 |  | Gain schedule enable/disable: [enabled:1] |
 | 23 |  | Logging: payload[0] = desired state (1 = start, 0 = stop), matching the LoRa uplink and BS relay. Same desync… |
 | 24 |  | Servo test: set angles |
@@ -269,10 +274,11 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 69 |  | #1176 step 6 — the operator's manual end of a restored flight. BLE ONLY, by decision: this number is… |
 | 73 |  | #1271 — the operator acknowledges the blind-window loss(es). BLE ONLY, and deliberately absent from… |
 | 74 |  | #773 step 2 — provision this OUT COMPUTER's board revision. BLE ONLY, like cmd 73 above and for the same… |
+| 75 |  | Pad calibration (#1600 phase 5): [iono i8 x8][gps_day u16 LE] — the GPS broadcast ionosphere the app read… |
 | 200 |  | Bench-only: arm config-frame drops, see test_cfg_drop_count |
 
-> 9 of these have no comment in the dispatch and so no
-> description here: 7, 15, 16, 21, 51, 52, 53, 54, 57. Adding a comment to the branch
+> 8 of these have no comment in the dispatch and so no
+> description here: 7, 15, 16, 51, 52, 53, 54, 57. Adding a comment to the branch
 > fills this table in.
 
 ### app to Base Station

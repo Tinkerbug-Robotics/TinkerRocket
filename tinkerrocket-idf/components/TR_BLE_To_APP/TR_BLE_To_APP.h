@@ -344,6 +344,12 @@ public:
     // Sibling discriminator to mag cal's 0xCA.
     void sendSensorCalStatus(const uint8_t* status_bytes, size_t len);
 
+    // Send the pad calibration's progress (#1600 phase 5) on the file-ops
+    // characteristic.  Format:
+    //   [0][0xD0 marker] [1..40][PadCalStatusData LE bytes]
+    // The next discriminator after 0xCF; an app that does not know it drops it.
+    void sendPadCalStatus(const uint8_t* status_bytes, size_t len);
+
     // Send a flash-space stats frame for the storage bar on the file-ops
     // characteristic.  Format: [0]=marker (0xCC rocket / 0xCD base station)
     // [1..]=packed struct LE bytes (RocketStorageStatsData / BaseStationStorageStatsData).

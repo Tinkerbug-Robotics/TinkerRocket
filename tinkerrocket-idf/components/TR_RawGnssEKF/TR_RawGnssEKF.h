@@ -223,6 +223,11 @@ private:
 extern template class RawGnssEKF<float>;
 extern template class RawGnssEKF<double>;
 
+// The range from r (ECEF, m) to m's satellite, turned by the Earth's rotation
+// over the signal's travel: what the pseudorange update predicts, less the
+// receiver's clock (the pad survey's residuals, PadSurvey.h).
+double sagnacRange(const RawMeas& m, const double r[3]);
+
 }  // namespace gnss_raw
 
 #endif  // TR_RAW_GNSS_EKF_H

@@ -1,6 +1,7 @@
 // ShadowLink.h — what the flight loop (core 1) hands the raw-GNSS shadow
-// filter (core 0) (#1600): every flight-filter IMU tick, and now and then the
-// flight filter's own state to start from and to take its pad attitude from.
+// filter (core 0) (#1600): every flight-filter IMU tick, now and then the
+// flight filter's own state to start from and to take its pad attitude from,
+// and the ionosphere a pad calibration brought.
 //
 // The flight loop must not wait on core 0, so neither handoff can block it:
 //   - IMU ticks go through a single-producer single-consumer ring, a store
@@ -39,6 +40,18 @@ struct ShadowSeed
     float    quat[4];       // scalar-first, as both filters keep it
     float    gyro_bias[3];  // rad/s
     uint8_t  on_pad;        // READY or PRELAUNCH: still, and its heading is the magnetometer's
+    uint8_t  pad_valid;     // the launch site below is set (the pad survey's reference, #1600 phase 5)
+    float    pad_sigma_m;   // its uncertainty, m
+    double   pad_lla[3];    // the launch site: the flight computer's average of the receiver's fix
+                            // (rad, rad, m ellipsoidal)
+};
+
+// The GPS broadcast ionosphere the app uploaded with a pad calibration
+// (#1600 phase 5), as the flight computer keeps it in NVS.
+struct ShadowIono
+{
+    int8_t   raw[8];        // alpha0..3, beta0..3 as GPS broadcasts them (RawMeasBuilder::ionoFromBroadcast)
+    uint16_t gps_day;       // the day of the navigation file they came from: days since 1980-01-06
 };
 
 // Lock-free ring, one producer and one consumer on any cores.
@@ -122,11 +135,29 @@ private:
     alignas(8) unsigned char raw_[sizeof(T)] = {};
 };
 
-// The two handoffs, as one object both sides share.
+// What the shadow tells the pad calibration's status message (#1600 phase 5),
+// once a second from its task (RawGnssShadow::padStatus).
+struct ShadowPadStatus
+{
+    uint8_t running;          // the filter is running
+    uint8_t tracked;          // GPS, Galileo, BeiDou satellites with a pseudorange, last epoch
+    uint8_t no_eph;           //   of those, no ephemeris yet
+    uint8_t settling;         //   pad survey: locked too briefly to survey
+    uint8_t corrected;        //   pad survey: a correction ready
+    uint8_t iono_source;      // RawGnssShadow::IonoSource (= PAD_IONO_*)
+    uint8_t iono_age_known;
+    int16_t iono_age_days;    // the broadcast parameters' age by the receiver's date
+    float   corr_rms_m;       // the corrections' spread
+    float   pos_sigma_m;      // the filter's 3-D position sigma
+};
+
+// The handoffs, as one object both sides share.
 struct ShadowLink
 {
     SpscRing<ShadowImu, 64> imu;   // 0.37 s at the Beetle's 171 Hz flight filter
     SeqLock<ShadowSeed> seed;
+    SeqLock<ShadowIono> iono;      // written at boot (from NVS) and by each pad calibration
+    SeqLock<ShadowPadStatus> pad;  // core 0 -> core 1, once a second
 };
 
 }  // namespace gnss_raw

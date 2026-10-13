@@ -206,6 +206,24 @@ TEST(Lc86Pvt, NoDateNoWeek)
     EXPECT_EQ(p.pvtGpsWeek(), 0);
 }
 
+TEST(Lc86Pvt, KeepsTheGeoidSeparationOfAFix)
+{
+    // <Alt> is above the geoid; <Sep> puts it on the ellipsoid the raw-GNSS
+    // filter works in (#1600 phase 5). Only a fix states one.
+    Lc86Parser p;
+    float sep = 1.0f;
+    EXPECT_FALSE(p.geoidSepM(sep));
+    ASSERT_EQ(count(feedAll(p, frame(
+        "PQTMPVT,1,1000,20260816,120000.000,1,3,12,18,40.0,-74.9,10.5,-33.3,"
+        "0.0,0.0,0.0,0.0,0.0,1.0,1.5")), Event::PVT), 1);
+    ASSERT_TRUE(p.geoidSepM(sep));
+    EXPECT_FLOAT_EQ(sep, -33.3f);
+    // a fixless epoch keeps the last one
+    ASSERT_EQ(count(feedAll(p, frame("PQTMPVT,1,,,,0,0,0,,,,,,,,,,,,")), Event::PVT), 1);
+    ASSERT_TRUE(p.geoidSepM(sep));
+    EXPECT_FLOAT_EQ(sep, -33.3f);
+}
+
 TEST(Lc86Pvt, QualityZeroForcesNoFix)
 {
     // FixMode=3 but Quality=0: the module's own validity word wins (the #562
