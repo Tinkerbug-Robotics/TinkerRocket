@@ -59,12 +59,20 @@ def build_payload(args) -> tuple[int, bytes]:
     raise SystemExit("nothing to send: use --hop/--lora/--cmd (or --scan)")
 
 
+def adv_name(d, ad) -> str:
+    # The advertised name first, as the app's scanner reads it (BLEFleet.swift),
+    # then macOS's cached GAP name: that one is None until this Mac has
+    # connected to the unit and can be stale after a rename, so matching it
+    # alone missed the Beetle advertising "Mini V1" at -82 dBm.
+    return ad.local_name or d.name or ""
+
+
 async def scan(name_filter: str | None):
     print(f"Scanning {SCAN_TIMEOUT_S:.0f}s ...")
     found = await BleakScanner.discover(timeout=SCAN_TIMEOUT_S, return_adv=True)
     hits = 0
     for d, ad in found.values():
-        name = d.name or ""
+        name = adv_name(d, ad)
         # Renamed devices advertise the raw user-set unit name (no TR-
         # prefix), so a name gate hides them — the service UUID is the
         # real membership test (same bug/fix as the app's scanner).
@@ -83,7 +91,7 @@ async def scan(name_filter: str | None):
 
 async def find_device(name_substr: str):
     dev = await BleakScanner.find_device_by_filter(
-        lambda d, ad: name_substr.lower() in (d.name or "").lower(),
+        lambda d, ad: name_substr.lower() in adv_name(d, ad).lower(),
         timeout=SCAN_TIMEOUT_S,
     )
     if dev is None:
