@@ -155,6 +155,7 @@ MSG_GNSS_SAT          = 0x90  # GNSSSatData: per-satellite C/N0 at every GNSS ep
                               # variable length 10 + 6*n (first code of the 0x90 block)
 MSG_GNSS_RTCM         = 0x95  # GnssRtcmHeader + a raw RTCM3 frame (or one part of it),
                               # variable length 5 + up to 219 (LC86G MSM7)
+MSG_RAW_GNSS_EKF      = 0x96  # RawGnssEkfData: the raw-GNSS shadow filter, 10 Hz (#1600)
 MSG_ISM6HG256         = 0xA2
 MSG_BMP585            = 0xA3
 MSG_MMC5983MA         = 0xA4
@@ -194,6 +195,7 @@ MSG_NAMES = {
     MSG_GNSS:             "GNSS",
     MSG_GNSS_SAT:         "GNSS_SAT",
     MSG_GNSS_RTCM:        "GNSS_RTCM",
+    MSG_RAW_GNSS_EKF:     "RawGnssEkf",
     MSG_ISM6HG256:        "ISM6HG256",
     MSG_BMP585:           "BMP585",
     MSG_MMC5983MA:        "MMC5983MA",
@@ -219,6 +221,7 @@ MSG_EXPECTED_LEN = {
     MSG_GNSS:              42,
     MSG_GNSS_SAT:          None,  # 10 + 6*n (n <= 32); the shape is checked where it is decoded
     MSG_GNSS_RTCM:         None,  # 5 + 1..219; checked in decode_gnss_rtcm
+    MSG_RAW_GNSS_EKF:      90,    # sizeof(RawGnssEkfData)
     MSG_ISM6HG256:         22,
     MSG_BMP585:            12,
     MSG_MMC5983MA:         16,
@@ -382,6 +385,61 @@ FMT_STATUS_QUERY = '<B H H hh B hhh'
 FMT_STATUS_QUERY_B2R = '<BB hhhh'  # b2r_code, b2r_mode, quat×10000 (payload[16:26])
 # LogBufferStatsData: 28 bytes (time_us + 6× uint32 ring counters)
 FMT_LOG_BUFFER_STATS = '<I IIIIII'
+
+# RawGnssEkfData (RAW_GNSS_EKF_MSG 0x96), 90 bytes packed (#1600 phase 4): the
+# raw-GNSS shadow filter -- a tightly coupled GNSS/INS filter run beside the
+# flight filter on its own IMU input and the LC86G's raw MSM7, never acted on --
+# at 10 Hz: its position (deg x 1e7, mm), NED velocity, attitude, receiver
+# clock and Galileo/BeiDou offsets, 1-sigma position (cm) and velocity (mm/s),
+# what its last raw epoch did (GPS time of week, how late it was applied, the
+# pseudoranges and range rates used and refused), the satellites with an
+# ephemeris, RGE_* flags, and what that epoch and the IMU steps cost core 0.
+FMT_RAW_GNSS_EKF = '<I iii 3f 4f 4f 3H 3H I h BBBB B B HHH'
+SIZE_OF_RAW_GNSS_EKF = struct.calcsize(FMT_RAW_GNSS_EKF)  # 90
+RAW_GNSS_EKF_FLAGS = {"running": 0x01, "clock_set": 0x02, "timed": 0x04, "clock_step": 0x08,
+                      "stale_epoch": 0x10, "levelling": 0x20, "in_flight": 0x40, "pad_resync": 0x80}
+
+
+def decode_raw_gnss_ekf(payload):
+    """RawGnssEkfData payload -> record dict in SI units, or None if the size is wrong."""
+    if len(payload) != SIZE_OF_RAW_GNSS_EKF:
+        return None
+    f = struct.unpack(FMT_RAW_GNSS_EKF, payload)
+    rec = {
+        "time_us":       f[0],
+        "lat_deg":       f[1] * 1e-7,
+        "lon_deg":       f[2] * 1e-7,
+        "alt_m":         f[3] * 1e-3,
+        "vel_n":         f[4],
+        "vel_e":         f[5],
+        "vel_d":         f[6],
+        "q0": f[7], "q1": f[8], "q2": f[9], "q3": f[10],
+        "clk_bias_m":    f[11],
+        "clk_drift_mps": f[12],
+        "isb_gal_m":     f[13],
+        "isb_bds_m":     f[14],
+        "pos_sigma_n":   f[15] * 1e-2,
+        "pos_sigma_e":   f[16] * 1e-2,
+        "pos_sigma_d":   f[17] * 1e-2,
+        "vel_sigma_n":   f[18] * 1e-3,
+        "vel_sigma_e":   f[19] * 1e-3,
+        "vel_sigma_d":   f[20] * 1e-3,
+        "epoch_tow_s":   f[21] * 1e-3,
+        "epoch_age_s":   f[22] * 1e-3,
+        "used_pr":       f[23],
+        "used_rr":       f[24],
+        "rejected_pr":   f[25],
+        "rejected_rr":   f[26],
+        "eph_sats":      f[27],
+        "flags":         f[28],
+        "build_us":      f[29],
+        "update_us":     f[30],
+        "prop_us":       f[31],
+    }
+    for name, bit in RAW_GNSS_EKF_FLAGS.items():
+        rec[name] = bool(f[28] & bit)
+    return rec
+
 
 # PyroFaultTripData (PYRO_FAULT_TRIP_MSG 0x94), 13 bytes packed (#1553): time_us
 # (OC esp_timer, the LORA_UPLINK_MSG clock — NOT the flight clock), peak_counts
@@ -680,6 +738,7 @@ def parse_binary_file(filepath):
         "GNSS":           [],
         "GNSS_SAT":       [],
         "GNSS_RTCM":      [],   # 0x95 raw RTCM3 frame parts; join_gnss_rtcm() reassembles
+        "RawGnssEkf":     [],   # 0x96 the raw-GNSS shadow filter, 10 Hz (#1600)
         "FcStatus":       [],   # 0x92 FcStatusData (#1154 item 4) — appended below; was never initialised
         "ISM6HG256":      [],
         "BMP585":         [],
@@ -879,6 +938,11 @@ def parse_binary_file(filepath):
                 rec = decode_gnss_rtcm(payload)
                 if rec is not None:
                     records["GNSS_RTCM"].append(rec)
+
+            elif msg_type == MSG_RAW_GNSS_EKF:
+                rec = decode_raw_gnss_ekf(payload)
+                if rec is not None:
+                    records["RawGnssEkf"].append(rec)
 
             elif msg_type == MSG_ISM6HG256:
                 fields = struct.unpack(FMT_ISM6, payload)

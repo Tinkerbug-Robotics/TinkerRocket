@@ -131,6 +131,22 @@ static_assert(board_pins::USE_IIS2MDC &&
 #endif
 #endif
 
+// #1600 phase 4: the raw-GNSS shadow filter (TR_RawGnssShadow, main.cpp's
+// "raw-GNSS shadow filter" section).  It needs the LC86G's raw MSM7, so it
+// runs wherever that driver is and nowhere else; -DTR_RAW_GNSS_SHADOW=0 builds
+// an LC86G image without it (flight_computer/CMakeLists.txt passes it on), for
+// a bench A/B of what it costs.
+#ifndef TR_RAW_GNSS_SHADOW
+#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+#define TR_RAW_GNSS_SHADOW 1
+#else
+#define TR_RAW_GNSS_SHADOW 0
+#endif
+#endif
+#if TR_RAW_GNSS_SHADOW && !(defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86)
+#error "TR_RAW_GNSS_SHADOW needs the LC86G driver's raw MSM7 (TR_GNSS_DRIVER_LC86=1)"
+#endif
+
 struct config : board_pins
 {
 

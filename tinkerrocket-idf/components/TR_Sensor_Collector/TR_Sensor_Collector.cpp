@@ -1390,6 +1390,38 @@ bool SensorCollector::getGNSSRtcmFrame(uint8_t* out, size_t cap, size_t& len,
 #endif
 }
 
+bool SensorCollector::enableGNSSRawOutputs()
+{
+#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+    return gnss_receiver.enableRawOutputs();
+#else
+    return false;
+#endif
+}
+
+bool SensorCollector::getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out)
+{
+#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+    // No semaphore: the driver's queue is safe between the poll task and us.
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.takeRawEpoch(out);
+#else
+    (void)out;
+    return false;
+#endif
+}
+
+bool SensorCollector::getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len)
+{
+#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.takeEphemeris(out, cap, len);
+#else
+    (void)out; (void)cap; (void)len;
+    return false;
+#endif
+}
+
 void SensorCollector::getISM6HG256DebugSnapshot(ISM6HG256DebugSnapshot &snapshot_out) const
 {
     uint8_t i = 0;

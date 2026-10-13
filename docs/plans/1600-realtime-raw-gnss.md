@@ -48,19 +48,25 @@ The prototype and the bench data are in the gnss submodule (`sim/tc_ekf_cocom.py
 epochs (unused today), and is logged; nothing it computes reaches `GpsInsEKF`, the state machine or
 deployment until flights have validated it.
 
-- **Core 0, a low-priority GNSS task, once per MSM7 epoch.** Ephemeris decode into a store,
-  satellite positions and clocks (double precision), troposphere and ionosphere, per-satellite noise,
-  then one measurement package to core 1.
-- **Core 1, inside the flight loop.** The 19-state filter in float (the flight filter's error-state
-  form), propagated by the same IMU input, its covariance every few ticks. Each epoch is applied at
-  its own time from a ~0.5 s history of the filter's state, and its updates are spread over a few
-  ticks so no tick grows.
+- **All of it on core 0, in a task of its own** (phase 4 changed this; core 1 was the first plan).
+  The task runs at priority 1, below the sensors and the I2S sender. It does the ephemeris decode into
+  a store; the satellite positions and clocks, troposphere and ionosphere (double precision); the
+  per-satellite noise; and the 19-state filter in float, in the flight filter's error-state form.
+  The flight loop on core 1 only copies each EKF tick's IMU input into a lock-free ring and, once a
+  second, the flight filter's state into a seqlock; neither can make it wait. Each epoch is applied
+  at its own time, from the IMU's velocity history.
+
+  Why it moved: profiling (2026-10-12) found the Beetle's flight loop instruction-fetch bound. It
+  runs ~340 passes a second against a 1 kHz design, and the flight task spins at top priority, so
+  anything added to core 1 comes straight out of the loop rate. Core 0 is ~70 % idle.
 - **Time without PPS.** The M1 wires the LC86G's 1PPS only to an LED: keep the receiver's GPS time,
   backdate each UART read by the bytes still buffered, track the GPS-to-`esp_timer` offset with a
   minimum-latency filter over the 10 Hz PVT and 1 Hz MSM7, and calibrate the receiver's fixed latency
   once on the rig. Beetle V2 routes 1PPS to a GPIO.
-- **Budget (estimates, to be measured on the M1):** about 1-2 % of core 1 and 2-5 % of core 0;
-  ~25 KB of RAM. Separately, every firmware build is at ESP-IDF's default `-Og`.
+- **Budget (to be measured on the M1):** core 1 should see only the handoff, about a microsecond a
+  tick. Core 0 takes the filter: the shadow task times itself and says what it costs. RAM: ~40 KB
+  for the filter object (PSRAM where there is some), the 2 KB IMU ring, and 3.8 KB of GNSS driver
+  queues.
 
 ## Pad calibration
 
@@ -133,3 +139,65 @@ IMU replayed, would be exact; whether that fits the CPU budget is phase 4's ques
 
 That's above the 25 KB estimate, with room to trim (e.g. a smaller history ring and float satellite
 velocities). CPU is measured in phase 4.
+
+## Phase 4: shadow integration
+
+**On the flight computer:**
+- **`TR_RawGnssShadow`** runs `TR_RawGnssEKF`. `RawGnssShadow` is pure and host-tested; `ShadowLink`
+  is the core-1-to-core-0 handoff.
+- **The task:** `main.cpp`, section "Raw-GNSS shadow filter", core 0, priority 1. It is on wherever
+  the LC86G driver is; `-DTR_RAW_GNSS_SHADOW=0` builds without it.
+- **The LC86G driver** hands over each MSM7 epoch with its GPS instant on the MCU clock (its
+  `GnssTimeSync`), and each GPS, Galileo and BeiDou ephemeris, through queues. While a sensor sim
+  runs they are consumed and dropped, as the raw RTCM log is.
+
+**Behaviour:**
+- **Start and pad:** it starts on the pad from the flight filter's state. On the pad it keeps
+  taking the flight filter's attitude and gyro bias once a second, because the heading there is the
+  magnetometer's and this filter has none. It takes the position and velocity too, until its first
+  raw epoch.
+- **Raw epochs:** each is held until the IMU passes its time, then applied with its age; one later
+  than 0.6 s is dropped.
+- **Stops:** a sim, an IMU gap over 0.5 s, a non-finite state, or (on the pad) 500 m from the flight
+  filter stops it. It restarts from the next pad seed.
+- **Log:** `RAW_GNSS_EKF_MSG` (0x96), 90 B at 10 Hz. It carries:
+  - position, velocity, attitude, clock and system offsets, and their sigmas;
+  - what the last epoch did, and how late;
+  - the ephemerides held;
+  - the CPU each epoch and IMU step took.
+- **Console:** a line every 5 s with the same, plus the task's share of core 0 and its distance
+  from the flight filter.
+
+**Measured on the Beetle's FC** (2026-10-13; IMU at 7,680 Hz; indoors, 9-15 satellites; FreeRTOS
+run-time stats for each task's share of its core):
+
+| Build | Flight loop | EKF tick | Core 0 idle | The shadow |
+|---|---|---|---|---|
+| IDF's DIO flash, 16 KB cache, shadow off | 313/s | 1,854 us | 19 % | -- |
+| the same, shadow on (50 Hz steps) | 273/s | 2,216 us | 0 % | 18 %, fell behind |
+| QIO, 32 KB cache (#1607), -O2, shadow off | 806/s | 785 us | 55 % | -- |
+| the same, shadow on (25 Hz steps) | 775/s | 848 us | 47 % | 7.5 % |
+
+**What the first two rows showed.** At IDF's defaults the shadow could not keep up, and it took 12 % off
+the flight loop through the cache and flash bus the two cores share. With #1607's QIO flash and
+32 KB cache, the shadow costs core 0 7.5 % and the flight loop 4 %, with no IMU or I2S drops.
+
+**Cost per epoch** (QIO build, 9 satellites):
+- build: ~20 ms of wall time;
+- update: ~16 ms;
+- a 25 Hz step: ~1.2 ms.
+
+**What brought it there:**
+- each satellite's orbit solved exactly every 5 s and carried between by its velocity and
+  acceleration;
+- the update's geometry computed once per satellite;
+- steps at 25 Hz on the mean of the flight filter's ticks;
+- the 40 KB object in PSRAM, which cost the same as internal RAM (775 vs 777 passes/s) and leaves
+  94 KB of internal RAM rather than 53.
+
+**Still open:** two things are not calibrated:
+- the ionosphere (phase 5);
+- the receiver's latency, which places every epoch late by the same amount until Beetle V2's 1PPS
+  or a scope measures it.
+
+Both are left in the raw log, so a flight can be replayed with them later.

@@ -11,6 +11,7 @@
 // [B5] is Hardware Design V1.5 (hardware/datasheets/), which documents the
 // ALP low-power mode (added in V1.2).
 #include "TR_GNSSReceiverLC86_Serial.h"
+#include "Lc86RawEpoch.h"
 
 #include <driver/gpio.h>
 #include <esp_log.h>
@@ -784,10 +785,15 @@ bool TR_GNSSReceiverLC86Serial::pollNewPVT(GNSSData &gnss_data)
             {
                 stashRtcmFrame(arrived_us(i));
             }
+            if (ev == lc86::Event::RTCM && eph_q_ != nullptr)
+            {
+                publishEphemeris();
+            }
             if (ev == lc86::Event::MSM_EPOCH)
             {
                 msm_epoch_tow_ms_ = parser_.msmEpoch().gps_tow_ms;
                 msm_epoch_end_us_ = arrived_us(i);
+                if (raw_epoch_q_ != nullptr) publishRawEpoch(arrived_us(i));
             }
             if (ev == lc86::Event::MSM_EPOCH && !msm_first_reported_)
             {
@@ -868,6 +874,67 @@ void TR_GNSSReceiverLC86Serial::logTimeSync()
              "%lu restarts", time_sync_.driftPpm(), time_sync_.lateness90Ms(),
              time_sync_.envelopeRmsMs(), (unsigned long)time_sync_.samples(),
              (unsigned long)time_sync_.restarts());
+}
+
+bool TR_GNSSReceiverLC86Serial::enableRawOutputs()
+{
+    // Two epochs: the consumer takes one within the second it has, and a
+    // second slot rides out one slow pass. Eight ephemerides: they come one a
+    // second.
+    if (raw_epoch_q_ == nullptr)
+        raw_epoch_q_ = xQueueCreate(2, sizeof(gnss_raw::TimedRawEpoch));
+    if (eph_q_ == nullptr)
+        eph_q_ = xQueueCreate(8, sizeof(EphItem));
+    return raw_epoch_q_ != nullptr && eph_q_ != nullptr;
+}
+
+void TR_GNSSReceiverLC86Serial::publishRawEpoch(int64_t end_us)
+{
+    const rtcm3::MsmEpoch& me = parser_.msmEpoch();
+    if (!lc86::rawEpochFromMsm(me, raw_scratch_.epoch)) return;   // GLONASS alone: no GPS time
+    raw_scratch_.arrival_us = end_us;
+    raw_scratch_.mcu_us = 0;
+    raw_scratch_.gps_week = 0;
+    // MSM7 states the time of week; the week is the latest $PQTMPVT's
+    const uint16_t week = parser_.pvtGpsWeek();
+    if (week != 0)
+    {
+        const double gps_s = lc86::epochGpsSeconds(me.gps_tow_ms, week, parser_.pvtTowMs());
+        raw_scratch_.gps_week = (uint16_t)std::floor(gps_s / 604800.0);
+        int64_t mcu = 0;
+        if (time_sync_.mcuAt(gps_s, mcu)) raw_scratch_.mcu_us = mcu;
+    }
+    if (xQueueSend(raw_epoch_q_, &raw_scratch_, 0) != pdTRUE) raw_dropped_++;
+}
+
+void TR_GNSSReceiverLC86Serial::publishEphemeris()
+{
+    const size_t n = parser_.rtcmFrameLen();
+    if (n <= rtcm3::kFrameOverhead) return;
+    const uint8_t* payload = parser_.rtcmFrame() + 3;
+    const size_t len = n - rtcm3::kFrameOverhead;
+    const uint16_t mt = rtcm3::messageType(payload, len);
+    if ((mt != 1019 && mt != 1046 && mt != 1042) || len > kEphMaxPayload) return;
+    EphItem it;
+    it.len = (uint8_t)len;
+    memcpy(it.bytes, payload, len);
+    if (xQueueSend(eph_q_, &it, 0) != pdTRUE) eph_dropped_++;
+}
+
+bool TR_GNSSReceiverLC86Serial::takeRawEpoch(gnss_raw::TimedRawEpoch& out)
+{
+    return raw_epoch_q_ != nullptr && xQueueReceive(raw_epoch_q_, &out, 0) == pdTRUE;
+}
+
+bool TR_GNSSReceiverLC86Serial::takeEphemeris(uint8_t* out, size_t cap, size_t& len)
+{
+    if (eph_q_ == nullptr) return false;
+    EphItem it;
+    if (xQueueReceive(eph_q_, &it, 0) != pdTRUE) return false;
+    if (it.len > cap) return false;
+    memcpy(out, it.bytes, it.len);
+    len = it.len;
+    return true;
 }
 
 bool TR_GNSSReceiverLC86Serial::lastMsmEpochTime(uint32_t& gps_tow_ms, int64_t& end_us) const
