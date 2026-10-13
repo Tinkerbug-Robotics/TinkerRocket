@@ -281,6 +281,19 @@ target_include_directories(test_i2s_tx_fill_policy PRIVATE
 target_link_libraries(test_i2s_tx_fill_policy GTest::gtest_main)
 gtest_discover_tests(test_i2s_tx_fill_policy)
 
+# ---------- test_i2s_link_check ----------
+# The bench I2S monitor's view of the link (TR_I2S_TX_MONITOR,
+# flight_computer/main/i2s_link_check.h): frames reassembled across DMA buffers
+# as the OC parses them, matched in write order against the sender's log, and
+# ISM6 batch gaps. Header-only and IDF-free.
+add_executable(test_i2s_link_check test_i2s_link_check.cpp)
+target_include_directories(test_i2s_link_check PRIVATE
+    ${LIB_DIR}/../projects/flight_computer/main
+    ${LIB_DIR}/TR_I2C_Interface
+)
+target_link_libraries(test_i2s_link_check GTest::gtest_main)
+gtest_discover_tests(test_i2s_link_check)
+
 # ---------- test_qmc5883p_regs ----------
 # The mini's magnetometer (#1312): register packing pinned to the QMC5883P
 # datasheet's worked examples, the ±8 G scale MAG_TYPE_QMC5883P promises, and

@@ -1666,8 +1666,14 @@ static RollProfileQuery roll_profile_query(float t_flight_s)
 // ==========================================================================
 // SECTION: I2S transmit to the Out Computer
 // ==========================================================================
+#if TR_I2S_TX_MONITOR
+#include "i2s_tx_monitor.h"   // bench: what the TX DMA really sends
+#endif
 static inline esp_err_t i2sSendWithStats(uint8_t type, const uint8_t *payload, size_t len)
 {
+#if TR_I2S_TX_MONITOR
+    i2smon::noteWrite(type, payload, len);
+#endif
     const esp_err_t err = i2s_stream.writeFrame(type, payload, len);
     if (err == ESP_OK)
     {
@@ -2116,6 +2122,9 @@ static esp_err_t fcBeginMasterTxLocked(const char* why)
         if (fc_i2s_tx_broken)
             ESP_LOGW(TAG, "[OTA] I2S master TX restored (%s)", why);
         fc_i2s_tx_broken = false;
+#if TR_I2S_TX_MONITOR
+        i2smon::onTxChannel(i2s_stream.getHandle());
+#endif
     }
     else
     {
@@ -4176,6 +4185,10 @@ static void setup_fc()
         ESP_LOGE(TAG, "Failed to create I2S TX queue");
         while (1) { delay_ms(1000); }
     }
+#if TR_I2S_TX_MONITOR
+    i2smon::begin(i2s_stream.getHandle(), config::I2S_BCLK_PIN, config::I2S_WS_PIN,
+                  config::I2S_DOUT_PIN, config::I2S_SAMPLE_RATE, config::SENSOR_CORE);
+#endif
     i2c_bus_mutex = xSemaphoreCreateMutex();
     if (i2c_bus_mutex == nullptr)
     {

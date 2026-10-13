@@ -1,5 +1,9 @@
 # Tinker-Beetle (rocket computer mini) — fabrication and assembly notes
 
+> **These notes are the V1.0.1 as ordered: tag `rocket-computer-mini-v1.0.1` (091601cb).**
+> The board in work is V2, and its title block says so (2026-10-10). Revise these notes
+> for V2 before it is ordered.
+
 > ## Board state — routed, placed, fills current, ready to plot (V1.0.1)
 >
 > **22.55 × 69.62 mm, 8 layers, 1.630 mm. Fully routed: 0 unconnected items, 2,296 track
