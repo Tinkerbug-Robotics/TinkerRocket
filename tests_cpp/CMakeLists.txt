@@ -1496,6 +1496,28 @@ target_include_directories(test_lc86_parser PRIVATE
 target_link_libraries(test_lc86_parser GTest::gtest_main)
 gtest_discover_tests(test_lc86_parser)
 
+# ---------- test_gnss_raw ----------
+# Host test for TR_GNSSRaw, what a raw-measurement (tightly coupled) GNSS/INS
+# filter needs beside the receiver's measurements: the LC86G's RTCM broadcast
+# ephemeris (1019 GPS, 1046 Galileo, 1042 BeiDou) decoded, satellites placed and
+# clocked by the GNSS receiver's own eph.c, and its Klobuchar and Saastamoinen
+# corrections. Reference values come from the bench prototype that scored the
+# filter (fixtures/gnss_raw_golden.h, generated from frames the Beetle's LC86G
+# sent on the COCOM rig).
+add_executable(test_gnss_raw test_gnss_raw.cpp
+    ${LIB_DIR}/TR_GNSSRaw/eph.c
+    ${LIB_DIR}/TR_GNSSRaw/atmo.c
+    ${LIB_DIR}/TR_GNSSRaw/RtcmEphemeris.cpp
+    ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
+)
+target_include_directories(test_gnss_raw PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+)
+target_link_libraries(test_gnss_raw GTest::gtest_main)
+gtest_discover_tests(test_gnss_raw)
+
 # ---------- wire fixture corpus (docs/plans/android-port.md §2.1) ----------
 # Golden-vector generation from the REAL packed structs: wire_fixture_gen
 # writes tests_cpp/fixtures/wire/ (committed), test_wire_fixture_freshness

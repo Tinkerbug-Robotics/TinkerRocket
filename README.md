@@ -299,6 +299,7 @@ TinkerRocket/
 │   │   └── bench/              # Hardware bring-up tools, never released
 │   └── components/             # First-party + vendored ESP-IDF components
 │       ├── TR_GpsInsEKF/       # 15-state GPS/INS Extended Kalman Filter
+│       ├── TR_GNSSRaw/         # Broadcast ephemeris, satellite positions, GNSS atmosphere models
 │       ├── TR_PID/             # PID controller (derivative-on-measurement)
 │       ├── TR_ControlMixer/    # 4-fin cruciform mixing + gain scheduling
 │       ├── TR_GuidancePN/      # Proportional navigation (git submodule)
