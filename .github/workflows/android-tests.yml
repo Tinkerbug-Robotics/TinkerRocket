@@ -13,12 +13,14 @@ on:
       - 'TinkerRocketAndroid/**'
       - 'tests_cpp/fixtures/wire/**'
       - 'tools/check_android_tests_ran.py'
+      - 'tools/check_android_api_level.py'
       - '.github/workflows/android-tests.yml'
   pull_request:
     paths:
       - 'TinkerRocketAndroid/**'
       - 'tests_cpp/fixtures/wire/**'
       - 'tools/check_android_tests_ran.py'
+      - 'tools/check_android_api_level.py'
       - '.github/workflows/android-tests.yml'
 
 jobs:
@@ -50,3 +52,14 @@ jobs:
       # in the JUnit XML the step above just wrote.
       - name: Every declared @Test ran
         run: python3 tools/check_android_tests_ran.py
+
+      # :core:protocol, :core:session and :core:maps compile against JDK 21,
+      # where every Java 9+ API exists, and lint's NewApi check skips
+      # kotlin("jvm") modules. That is how InputStream.readNBytes (API 33)
+      # reached a minSdk-31 app and crashed the firmware download on Android
+      # 12 (#1612). So no module's main classes may call a Java or Android API
+      # above minSdk. Reads the classes the test step compiled, and the runner
+      # image's SDK: api-versions.xml for platform android-36, and D8's
+      # backport list from build-tools 36.1.0.
+      - name: No API above minSdk
+        run: python3 tools/check_android_api_level.py
