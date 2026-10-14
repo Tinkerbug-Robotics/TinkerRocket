@@ -23,9 +23,25 @@
 // (ellipsoidal) height: it only ever comes back to the raw filter, and a
 // receiver cold-started by the reboot has no separation to give for a while.
 //
-// Healthy (isHealthy) while the raw filter runs, its state is finite and it
-// has published within max_stale_us: the voters and the gate stop trusting a
-// filter whose core has stalled.
+// Brought forward to now (#1626 K2). The raw filter publishes the state at
+// the IMU tick of its last step, and the flight loop read it 22-48 ms behind
+// the IMU on the rig (the task's period, the 100 Hz steps, the IMU's bursts,
+// the epochs' slices). GpsInsEKF, in the loop, was current every tick. So each
+// IMU tick main.cpp hands the raw filter comes here too (noteImu), and the
+// state the loop reads is the published one carried forward through the ticks
+// since: each tick a strapdown step as the raw filter takes its own
+// (TR_RawGnssEKF::propagate) -- the attitude turned by the body rate less the
+// gyro bias, the specific force less the accelerometer bias turned to NED with
+// gravity added, the velocity, then the position from it. Its biases and
+// covariance are the filter's, as published. A new state from the filter
+// starts it over (refresh); a tick on its own carries it one more. A state
+// older than the ticks kept here is read as published (forwardShort).
+//
+// Healthy (isHealthy) while the raw filter runs, its state is finite, it has
+// published within kMaxStaleUs, and the state it published is no older than
+// that either (#1626 N4): a filter that has stopped stepping -- republishing
+// the same state -- is not healthy, however often it says so, and the
+// forward never carries more than that on the IMU alone.
 //
 // Header-only, host-tested (tests_cpp/test_raw_nav_adapter.cpp).
 #pragma once
@@ -41,8 +57,9 @@
 class RawNavAdapter
 {
 public:
-    static constexpr uint32_t kMaxStaleUs = 200000;   // no new state for this long: not healthy
+    static constexpr uint32_t kMaxStaleUs = 200000;   // no new state, or none this young: not healthy
     static constexpr float kRad2Deg = 57.29577951f;
+    static constexpr int kTicks = 128;                // ticks kept: 0.29 s at the ~440 a second the filter is fed
 
     void attach(gnss_raw::ShadowLink* link) { link_ = link; }
 
@@ -62,28 +79,70 @@ public:
             nav_rx_us_ = now_us;
             if (n.running)
                 restore_pending_ = false;   // it runs: from the pad or the restore
+            forwardFromPublished();
         }
-        // how old the state the loop now reads is (#1600: an epoch fused in
-        // one pass held it 40 ms on the rig; a slice a step should not)
+        // how old the state the loop now reads is, and how far it was brought
+        // forward from the filter's (#1600: an epoch fused in one pass held
+        // the filter's 40 ms on the rig)
         if (nav_.running)
         {
-            const uint32_t age = now_us - nav_.time_us;
+            const uint32_t behind = now_us - nav_.time_us;
+            if (behind < 0x80000000u && behind > max_fwd_us_)
+                max_fwd_us_ = behind;
+            const uint32_t age = now_us - (fwd_ok_ ? fwd_t_us_ : nav_.time_us);
             if (age < 0x80000000u && age > max_age_us_)
                 max_age_us_ = age;
         }
     }
-    // The oldest state the loop was handed since the last call (diagnostic;
-    // read and cleared from the raw filter's task, a benign race).
+    // The oldest state the loop was handed since the last call, and the
+    // furthest behind the filter's own state was (diagnostics; read and
+    // cleared from the raw filter's task, a benign race).
     uint32_t takeMaxAgeUs()
     {
         const uint32_t a = max_age_us_;
         max_age_us_ = 0;
         return a;
     }
+    uint32_t takeMaxForwardUs()
+    {
+        const uint32_t a = max_fwd_us_;
+        max_fwd_us_ = 0;
+        return a;
+    }
+    // States read as published: older than the ticks kept.
+    uint32_t forwardShort() const { return fwd_short_; }
     void setGeoidSeparation(float sep_m) { sep_m_ = sep_m; }
 
-    // The raw filter runs and has said so lately.
-    bool running() const { return nav_.running != 0 && (uint32_t)(now_us_ - nav_rx_us_) <= kMaxStaleUs; }
+    // One IMU tick main.cpp hands the raw filter (rawShadowPushImu): kept,
+    // and the state carried forward through it. A tick no later than the
+    // last kept is a repeat (the raw filter skips those too) or time run back:
+    // not kept, not stepped.
+    void noteImu(const gnss_raw::ShadowImu& s)
+    {
+        if (imu_n_ > 0 && (int32_t)(s.time_us - imu_[(imu_head_ + kTicks - 1) % kTicks].t_us) <= 0)
+            return;
+        Tick& k = imu_[imu_head_];
+        k.t_us = s.time_us;
+        for (int i = 0; i < 3; ++i)
+        {
+            k.acc[i] = s.acc[i];
+            k.gyro[i] = s.gyro[i];
+        }
+        imu_head_ = (imu_head_ + 1) % kTicks;
+        if (imu_n_ < kTicks)
+            imu_n_++;
+        if (fwd_ok_ && (int32_t)(k.t_us - fwd_t_us_) > 0)
+            forwardTick(k);
+    }
+
+    // The raw filter runs, has said so lately, and what it said is recent.
+    bool running() const
+    {
+        if (nav_.running == 0 || (uint32_t)(now_us_ - nav_rx_us_) > kMaxStaleUs)
+            return false;
+        const int32_t age = (int32_t)(now_us_ - nav_.time_us);   // a state stamped after the loop's clock: fresh
+        return age <= (int32_t)kMaxStaleUs;
+    }
 
     // ---------------------------------------------------- configuration
 
@@ -205,23 +264,27 @@ public:
     {
         if (!running())
             return false;
+        const double* lla = fwd_ok_ ? fwd_lla_ : nav_.lla;
+        const float* v = fwd_ok_ ? fwd_v_ : nav_.vel_ned;
+        const float* q = fwd_ok_ ? fwd_q_ : nav_.quat;
         for (int i = 0; i < 3; ++i)
-            if (!std::isfinite(nav_.lla[i]) || !std::isfinite(nav_.vel_ned[i]))
+            if (!std::isfinite(lla[i]) || !std::isfinite(v[i]))
                 return false;
         for (int i = 0; i < 4; ++i)
-            if (!std::isfinite(nav_.quat[i]))
+            if (!std::isfinite(q[i]))
                 return false;
         return true;
     }
-    // lat, lon (rad) and height above the geoid (m), as GpsInsEKF's; before
-    // it runs, where it will start
+    // lat, lon (rad) and height above the geoid (m), as GpsInsEKF's, brought
+    // forward to the latest tick; before it runs, where it will start
     void getPosEst(double (&r)[3]) const
     {
         if (nav_.running)
         {
-            r[0] = nav_.lla[0];
-            r[1] = nav_.lla[1];
-            r[2] = nav_.lla[2] - sep_m_;
+            const double* lla = fwd_ok_ ? fwd_lla_ : nav_.lla;
+            r[0] = lla[0];
+            r[1] = lla[1];
+            r[2] = lla[2] - sep_m_;
         }
         else
         {
@@ -233,12 +296,12 @@ public:
     void getVelEst(float (&r)[3]) const
     {
         for (int i = 0; i < 3; ++i)
-            r[i] = nav_.running ? nav_.vel_ned[i] : start_vel_[i];
+            r[i] = nav_.running ? (fwd_ok_ ? fwd_v_[i] : nav_.vel_ned[i]) : start_vel_[i];
     }
     void getQuaternion(float (&r)[4]) const
     {
         for (int i = 0; i < 4; ++i)
-            r[i] = nav_.running ? nav_.quat[i] : start_q_[i];
+            r[i] = nav_.running ? (fwd_ok_ ? fwd_q_[i] : nav_.quat[i]) : start_q_[i];
     }
     // roll, pitch, yaw (rad): GpsInsEKF::Quat2Euler
     void getOrientEst(float (&r)[3]) const
@@ -290,7 +353,7 @@ public:
             s.quat[i] = q[i];
         for (int i = 0; i < 15; ++i)
             s.P[i][i] = nav_.var[i];
-        s.t_prev_us = nav_.time_us;
+        s.t_prev_us = fwd_ok_ ? fwd_t_us_ : nav_.time_us;
     }
 
     // The raw filter has no shock gate, canopy mode or gyro-bias gate: none trips.
@@ -326,17 +389,126 @@ public:
     uint32_t ticks() const { return ticks_; }
 
 private:
+    struct Tick
+    {
+        uint32_t t_us;
+        float    acc[3];    // specific force, body FRD, m/s^2
+        float    gyro[3];   // body FRD, rad/s
+    };
+
     void block(int i0, float (&r)[3]) const
     {
         for (int i = 0; i < 3; ++i)
             r[i] = nav_.var[i0 + i];
     }
 
+    // The filter's new state, carried through the ticks kept since its time.
+    void forwardFromPublished()
+    {
+        fwd_ok_ = false;
+        if (!nav_.running)
+            return;
+        for (int i = 0; i < 3; ++i)
+        {
+            fwd_lla_[i] = nav_.lla[i];
+            fwd_v_[i] = nav_.vel_ned[i];
+        }
+        for (int i = 0; i < 4; ++i)
+            fwd_q_[i] = nav_.quat[i];
+        fwd_t_us_ = nav_.time_us;
+        // the Earth's radii at the state (TR_RawGnssEKF's earthRad, WGS84):
+        // over the forward's fraction of a second they do not change
+        const double s = std::sin(nav_.lla[0]);
+        const double d = std::fabs(1.0 - 0.0066943799901 * s * s);
+        const double rew = 6378137.0 / std::sqrt(d);
+        const double rns = 6378137.0 * (1.0 - 0.0066943799901) / (d * std::sqrt(d));
+        inv_rn_ = 1.0 / (rns + nav_.lla[2]);
+        inv_re_cos_ = 1.0 / ((rew + nav_.lla[2]) * std::cos(nav_.lla[0]));
+        // the ticks after its time, oldest first: none kept that far back
+        // means a gap the forward would skip over -- read it as published
+        int k = 0;
+        while (k < imu_n_ && (int32_t)(imu_[(imu_head_ + kTicks - 1 - k) % kTicks].t_us - nav_.time_us) > 0)
+            k++;
+        if (k == kTicks)
+        {
+            fwd_short_++;
+            return;
+        }
+        fwd_ok_ = true;
+        for (int j = k - 1; j >= 0; --j)
+            forwardTick(imu_[(imu_head_ + kTicks - 1 - j) % kTicks]);
+    }
+
+    // One tick, as the raw filter steps (TR_RawGnssEKF::propagate): the
+    // attitude at its start turns the specific force; the attitude is then
+    // turned by the rate over the tick (a rotation vector, exact for a constant
+    // rate); the velocity, then the position from it.
+    void forwardTick(const Tick& k)
+    {
+        const float dt = (float)(int32_t)(k.t_us - fwd_t_us_) * 1.0e-6f;
+        const float* q = fwd_q_;
+        const float w = q[0], x = q[1], y = q[2], z = q[3];
+        // NED -> body (TR_RawGnssEKF's quat2dcm); its transpose turns body to NED
+        const float M[3][3] = {{1.0f - 2.0f * (y * y + z * z), 2.0f * (x * y + w * z), 2.0f * (x * z - w * y)},
+                               {2.0f * (x * y - w * z), 1.0f - 2.0f * (x * x + z * z), 2.0f * (y * z + w * x)},
+                               {2.0f * (x * z + w * y), 2.0f * (y * z - w * x), 1.0f - 2.0f * (x * x + y * y)}};
+        float f[3], a[3];
+        for (int i = 0; i < 3; ++i)
+            f[i] = k.acc[i] - nav_.accel_bias[i];
+        for (int i = 0; i < 3; ++i)
+            a[i] = M[0][i] * f[0] + M[1][i] * f[1] + M[2][i] * f[2];
+        a[2] += kGravity;
+        const float th[3] = {(k.gyro[0] - nav_.gyro_bias[0]) * dt, (k.gyro[1] - nav_.gyro_bias[1]) * dt,
+                             (k.gyro[2] - nav_.gyro_bias[2]) * dt};
+        const float ang = std::sqrt(th[0] * th[0] + th[1] * th[1] + th[2] * th[2]);
+        float dq[4];
+        if (ang > 1e-8f)
+        {
+            const float sh = std::sin(0.5f * ang) / ang;
+            dq[0] = std::cos(0.5f * ang);
+            dq[1] = sh * th[0];
+            dq[2] = sh * th[1];
+            dq[3] = sh * th[2];
+        }
+        else
+        {
+            dq[0] = 1.0f;
+            dq[1] = 0.5f * th[0];
+            dq[2] = 0.5f * th[1];
+            dq[3] = 0.5f * th[2];
+        }
+        float qn[4] = {w * dq[0] - x * dq[1] - y * dq[2] - z * dq[3], w * dq[1] + x * dq[0] + y * dq[3] - z * dq[2],
+                       w * dq[2] - x * dq[3] + y * dq[0] + z * dq[1], w * dq[3] + x * dq[2] - y * dq[1] + z * dq[0]};
+        const float n = std::sqrt(qn[0] * qn[0] + qn[1] * qn[1] + qn[2] * qn[2] + qn[3] * qn[3]);
+        for (int i = 0; i < 4; ++i)
+            fwd_q_[i] = qn[i] / n;
+        for (int i = 0; i < 3; ++i)
+            fwd_v_[i] += a[i] * dt;
+        const double dts = (double)dt;
+        fwd_lla_[0] += dts * (double)fwd_v_[0] * inv_rn_;
+        fwd_lla_[1] += dts * (double)fwd_v_[1] * inv_re_cos_;
+        fwd_lla_[2] -= dts * (double)fwd_v_[2];
+        fwd_t_us_ = k.t_us;
+    }
+
+    static constexpr float kGravity = 9.807f;   // the raw filter's (gravity_wgs84 off: the flight filter's G_NOMINAL)
+
     gnss_raw::ShadowLink* link_ = nullptr;
     gnss_raw::ShadowNav nav_ = {};
     uint32_t nav_seq_ = 0;
     uint32_t nav_rx_us_ = 0;
     volatile uint32_t max_age_us_ = 0;
+    volatile uint32_t max_fwd_us_ = 0;
+    // the ticks since, and the state carried forward through them
+    Tick     imu_[kTicks] = {};
+    int      imu_head_ = 0, imu_n_ = 0;
+    bool     fwd_ok_ = false;
+    uint32_t fwd_t_us_ = 0;          // the last tick in it
+    double   fwd_lla_[3] = {};
+    float    fwd_v_[3] = {};
+    float    fwd_q_[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+    double   inv_rn_ = 0.0, inv_re_cos_ = 0.0;
+    uint32_t fwd_short_ = 0;
     uint32_t now_us_ = 0;
     float    sep_m_ = 0.0f;
     // the start

@@ -328,8 +328,15 @@ V9 keeps GpsInsEKF on the SAM-M10Q's fix.
 
 **Rates**
 - The raw filter steps at 100 Hz on core 0 (it was 25 as a shadow). Its raw epochs come once a second.
-- The flight loop on core 1 no longer runs a filter (GpsInsEKF cost about 1 ms a tick at 290 ticks a second). It reads
-  the state, at most a step and a task period old (about 15 ms).
+- The flight loop on core 1 no longer runs a filter (GpsInsEKF cost about 1 ms a tick at 290 ticks a second).
+  - **The state the filter publishes lags the IMU.** The oldest the loop read in a 5 s window on the rig was 22-25 ms
+    with no epoch, from the task's period, the 100 Hz steps, the IMU's bursts and preemption. It was 32-48 ms with an
+    epoch, worked a slice a step (r10, r11, r13).
+  - **So the loop reads that state brought forward** to its latest IMU tick (#1626 K2): `RawNavAdapter` steps it
+    through the ticks since, as the filter steps its own.
+  - **On the rig (r15)** the oldest state the loop read was 12-15 ms old in every phase. That remainder is the IMU's own
+    delivery, which GpsInsEKF in the loop had too. The logged navigation state matched the filter's own accuracy.
+  - **A state 0.2 s old is not healthy**, even if the filter's task republishes it every pass (#1626 N4).
 
 **Logging:** the receiver's 10 Hz fix is still logged (GNSS_MSG), as are the raw filter's 10 Hz record (0x96) and the
 checks (0x9A).
