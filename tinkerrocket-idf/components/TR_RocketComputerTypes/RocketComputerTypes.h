@@ -1289,6 +1289,19 @@ typedef struct
     double gyro_z;
 } ISM6HG256DataSI;
 
+// --- ISM6HG256 die temperature (IMU_TEMP_MSG 0x9C, 1 Hz) ---
+// The gyro's bias and scale both move with the die's temperature, so a
+// calibration against it, or a flight replayed against one, needs it beside
+// the IMU's counts.  Raw, as the chip gives it (OUT_TEMP): 256 LSB per degC,
+// 0 at 25 degC, so degC = 25 + temp_raw / 256.
+typedef struct __attribute__((packed))
+{
+    uint32_t time_us;    // micros() just before the read: the IMU stream's clock
+    int16_t  temp_raw;   // OUT_TEMP, 256 LSB/degC, 0 = 25 degC
+} Ism6TempData;
+static_assert(sizeof(Ism6TempData) == 6,
+              "Ism6TempData must be 6 bytes");
+
 // --- Magnetometer Data ---
 typedef struct __attribute__((packed))
 {
@@ -2595,6 +2608,8 @@ static constexpr uint8_t GNSS_CHECK_MSG      = 0x9A;
 // estimates (RawGnssAttData), beside each RAW_GNSS_EKF_MSG record, 10 Hz while
 // it runs; straight to the log.  LC86G boards only.
 static constexpr uint8_t RAW_GNSS_ATT_MSG    = 0x9B;
+static constexpr uint8_t IMU_TEMP_MSG        = 0x9C;  // FC→OC over I2S: Ism6TempData, the IMU's die temperature once a
+                                                      // second; straight to the log.
 
 static constexpr uint8_t OUT_STATUS_QUERY    = 0xA0;
 static constexpr uint8_t GNSS_MSG            = 0xA1;
@@ -4142,6 +4157,8 @@ static_assert(sizeof(RawGnssEkfData) <= MAX_PAYLOAD,
               "RawGnssEkfData must fit one I2S frame payload");
 static_assert(sizeof(RawGnssAttData) <= MAX_PAYLOAD,
               "RawGnssAttData must fit one I2S frame payload");
+static_assert(sizeof(Ism6TempData) <= MAX_PAYLOAD,
+              "Ism6TempData must fit one I2S frame payload");
 static_assert(sizeof(PadCalStatusData) <= MAX_PAYLOAD,
               "PadCalStatusData must fit one I2S frame payload");
 static_assert(sizeof(GnssCheckData) <= MAX_PAYLOAD,

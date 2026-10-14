@@ -3,7 +3,7 @@
 
 # Out Computer -- `main.cpp` navigation map
 
-`tinkerrocket-idf/projects/out_computer/main/main.cpp` is 13,510 lines in one translation unit. These are the
+`tinkerrocket-idf/projects/out_computer/main/main.cpp` is 13,512 lines in one translation unit. These are the
 `// SECTION:` banners in it, in file order. Indented rows (↳) are regions
 inside a single large function. Line counts include each section's banner
 and leading comments.
@@ -28,18 +28,18 @@ and leading comments.
 | [**pre-restart storage quiesce (#834 item 2)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L3310-L3446) | 137 | 3310-3446 |
 | [**I2C status-query response to the FC**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L3447-L3686) | 240 | 3447-3686 |
 | [**FC OTA relay: I2S direction flip and image feeder**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L3687-L4577) | 891 | 3687-4577 |
-| [**Frame processing: FC -> OC telemetry ingest**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L4578-L5877) | 1,300 | 4578-5877 |
-| [**I2S DMA callback and parser task**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L5878-L6017) | 140 | 5878-6017 |
-| [**I2C ingress from the FC**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L6018-L6054) | 37 | 6018-6054 |
-| [**LoRa downlink: telemetry payload and beacon**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L6055-L6517) | 463 | 6055-6517 |
-| [**Config readback to the app**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L6518-L7102) | 585 | 6518-7102 |
-| [**LoRa uplink command handling**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L7103-L7855) | 753 | 7103-7855 |
-| [**LoRa rendezvous and hop fallback**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L7856-L8204) | 349 | 7856-8204 |
-| [**Diagnostics and periodic statistics**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L8205-L9103) | 899 | 8205-9103 |
-| [**Peripheral initialization (runs on power-on)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L9104-L10183) | 1,080 | 9104-10183 |
-| [**Boot setup (rail off, BLE only)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L10184-L10862) | 679 | 10184-10862 |
-| [**Main loop**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L10863-L13501) | 2,639 | 10863-13501 |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ [BLE command dispatch](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L11853-L13501) | 1,649 | 11853-13501 |
-| [**FreeRTOS entry point**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L13502-L13510) | 9 | 13502-13510 |
+| [**Frame processing: FC -> OC telemetry ingest**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L4578-L5879) | 1,302 | 4578-5879 |
+| [**I2S DMA callback and parser task**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L5880-L6019) | 140 | 5880-6019 |
+| [**I2C ingress from the FC**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L6020-L6056) | 37 | 6020-6056 |
+| [**LoRa downlink: telemetry payload and beacon**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L6057-L6519) | 463 | 6057-6519 |
+| [**Config readback to the app**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L6520-L7104) | 585 | 6520-7104 |
+| [**LoRa uplink command handling**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L7105-L7857) | 753 | 7105-7857 |
+| [**LoRa rendezvous and hop fallback**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L7858-L8206) | 349 | 7858-8206 |
+| [**Diagnostics and periodic statistics**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L8207-L9105) | 899 | 8207-9105 |
+| [**Peripheral initialization (runs on power-on)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L9106-L10185) | 1,080 | 9106-10185 |
+| [**Boot setup (rail off, BLE only)**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L10186-L10864) | 679 | 10186-10864 |
+| [**Main loop**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L10865-L13503) | 2,639 | 10865-13503 |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ [BLE command dispatch](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L11855-L13503) | 1,649 | 11855-13503 |
+| [**FreeRTOS entry point**](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/tinkerrocket-idf/projects/out_computer/main/main.cpp#L13504-L13512) | 9 | 13504-13512 |
 
-Total: 30 sections (1 nested) across 13,510 lines.
+Total: 30 sections (1 nested) across 13,512 lines.

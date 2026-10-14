@@ -95,6 +95,7 @@ double guidedCoastInflow()
          // line below. A stream the budget does not know about is how this
          // block went stale twice before.
          + framed(sizeof(FcStatusData),    (double)config::FC_STATUS_RATE_HZ)
+         + framed(sizeof(Ism6TempData),    1.0)   // the IMU's die temperature
          + gnssRtcmInflow()
          + rawGnssShadowInflow()
          + 220.0;   // POWERData, ~15 Hz

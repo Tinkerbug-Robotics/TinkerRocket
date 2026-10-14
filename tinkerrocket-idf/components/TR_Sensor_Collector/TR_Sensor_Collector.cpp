@@ -292,6 +292,18 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     }
     ism6_queue_drops = 0;
 
+    // The IMU's die temperature handoff (non-fatal: without it, no
+    // IMU_TEMP_MSG records)
+    ism6TempSemaphore = xSemaphoreCreateBinary();
+    if (ism6TempSemaphore != NULL)
+    {
+        xSemaphoreGive(ism6TempSemaphore);
+    }
+    else
+    {
+        ESP_LOGW(SC_TAG, "No IMU temperature handoff: IMU_TEMP_MSG off");
+    }
+
     bmp585DataSemaphore = xSemaphoreCreateBinary();
     if (bmp585DataSemaphore == NULL)
     {
@@ -906,6 +918,27 @@ void SensorCollector::pollIMUdata(void* parameter)
             }
         }
 
+        // === ISM6HG256 die temperature, once a second (IMU_TEMP_MSG) ===
+        // One 2-byte read of OUT_TEMP between drains, on this task: the only
+        // one that touches SPI2 once it runs (#475). An output register, so
+        // the FIFO, its decoder and the sample clock are not disturbed; about
+        // 20 us a second. A failed read is skipped until the next second.
+        if (self->use_ism6hg256 && (int32_t)(time_us() - self->ism6_temp_next_us) >= 0)
+        {
+            const uint32_t t_temp = time_us();
+            self->ism6_temp_next_us = t_temp + 1000000U;
+            int16_t raw = 0;
+            if (self->ism6hg256.ReadTemperatureRaw(&raw) == TR_ISM6HG256_OK &&
+                self->ism6TempSemaphore != nullptr &&
+                xSemaphoreTake(self->ism6TempSemaphore, 0) == pdTRUE)
+            {
+                self->ism6_temp_data.time_us = t_temp;
+                self->ism6_temp_data.temp_raw = raw;
+                self->ism6_temp_ready = true;
+                xSemaphoreGive(self->ism6TempSemaphore);
+            }
+        }
+
         // === BMP585 — only process when interrupt pending ===
         if (self->use_bmp585)
         {
@@ -1272,6 +1305,19 @@ bool SensorCollector::getISM6HG256Data(ISM6HG256Data& ism6hg256_out)
     // sample (up to ISM6_QUEUE_DEPTH of backlog) rather than only the latest.
     return ism6Queue != nullptr &&
            xQueueReceive(ism6Queue, &ism6hg256_out, 0) == pdTRUE;
+}
+
+bool SensorCollector::getIsm6Temperature(Ism6TempData& out)
+{
+    if (ism6_temp_ready && ism6TempSemaphore != nullptr &&
+        xSemaphoreTake(ism6TempSemaphore, 0) == pdTRUE)
+    {
+        out = ism6_temp_data;
+        ism6_temp_ready = false;
+        xSemaphoreGive(ism6TempSemaphore);
+        return true;
+    }
+    return false;
 }
 
 bool SensorCollector::getBMP585Data(BMP585Data& bmp585_out)
