@@ -1018,6 +1018,125 @@ TEST(RawGnssShadow, AShortPadStillGivesTheFlightItsBarometer)
     EXPECT_LT(std::fabs(sh.filter().lla()[2] - h_pad), 3.0);
 }
 
+TEST(RawGnssShadow, InFlightTheBarometerIsHeldOutAtSpeed)
+{
+    // #1579's static-port error is a bias, low at speed: on the rig replay
+    // (r3) the barometer read 1.4 times the modelled term low through boost
+    // and coast, and fused fifty times a second it took the raw filter 21 m
+    // low at the top of the coast. Here that barometer, no satellites, and
+    // 1 s at 60 m/s^2 then 3 s at 60 m/s (210 m): held out from 21 m/s up,
+    // the climb the IMU feels stands.
+    double err[2] = {};
+    for (int hold = 0; hold < 2; ++hold)
+    {
+        RawGnssShadow::Config cfg = primaryCfg();
+        if (!hold)
+            cfg.baro_hold_port_m = 1e9;           // at any speed, as before
+        RawGnssShadow sh(cfg);
+        sh.onSeed(padSeed(kT0));
+        int64_t t = feedFlight(sh, kT0, 12.0, 0.0f, gnss_raw::kShadowLevel, true);
+        const double h_pad = sh.filter().lla()[2];
+        double h = 0.0, v = 0.0;                  // the truth, up
+        for (int64_t k = t; k < t + 4000000; k += 5000)
+        {
+            const float a_up = k - t < 1000000 ? 60.0f : 0.0f;
+            ShadowImu s = still(k, gnss_raw::kShadowInFlight);
+            s.acc[2] -= a_up;
+            if ((k - t) % 100000 == 0)
+            {
+                const double q = 0.5 * 1.225 * v * v;
+                sh.onBaro(gnss_raw::ShadowBaro{static_cast<uint32_t>(k),
+                                               static_cast<float>(h - 1.4 * cfg.baro_port_k * q)});
+            }
+            sh.onImu(s, k);
+            h += v * 0.005 + 0.5 * a_up * 0.005 * 0.005;
+            v += a_up * 0.005;
+        }
+        t += 4000000;
+        err[hold] = sh.filter().lla()[2] - h_pad - h;
+        if (!hold)
+        {
+            EXPECT_EQ(sh.stats().baro_held, 0u);
+            continue;
+        }
+        EXPECT_GE(sh.stats().baro_held, 35u);
+        // and for no longer than 30 s after launch: a wrong speed cannot
+        // keep it out for good
+        const uint32_t fused = sh.stats().baro_fused;
+        t = feedFlight(sh, t, 27.0, 0.0f, gnss_raw::kShadowInFlight, true);
+        EXPECT_GE(sh.stats().baro_fused - fused, 5u);
+    }
+    std::printf("height at 210 m up, 60 m/s: %+.1f m with the barometer held out, %+.1f m without\n",
+                err[1], err[0]);
+    EXPECT_LT(std::fabs(err[1]), 2.0);
+    // pulled toward the port's reading: modestly here, the IMU perfect and the
+    // filter's vertical tight off the pad (with the rig's IMU, 21 m in r3)
+    EXPECT_LT(err[0], -3.0);
+}
+
+TEST(RawGnssShadow, DriftingWithTheWindKeepsTheBarometer)
+{
+    // Under a chute the rocket drifts with the wind, which moves no air past
+    // the port: the vertical speed decides, not the ground speed
+    RawGnssShadow sh(primaryCfg());
+    sh.onSeed(padSeed(kT0));
+    int64_t t = feedFlight(sh, kT0, 12.0, 0.0f, gnss_raw::kShadowLevel, true);
+    const uint32_t fused = sh.stats().baro_fused;
+    // 3 s at 10 m/s^2 sideways: 30 m/s over the ground, level
+    for (int64_t k = t; k < t + 3000000; k += 5000)
+    {
+        ShadowImu s = still(k, gnss_raw::kShadowInFlight);
+        s.acc[0] += 10.0f;
+        if ((k - t) % 100000 == 0)
+            sh.onBaro(gnss_raw::ShadowBaro{static_cast<uint32_t>(k), 0.0f});
+        sh.onImu(s, k);
+    }
+    const float* v = sh.filter().velNed();
+    EXPECT_GT(std::hypot(v[0], v[1]), 25.0f);
+    EXPECT_EQ(sh.stats().baro_held, 0u);
+    EXPECT_GE(sh.stats().baro_fused - fused, 25u);
+}
+
+TEST(RawGnssShadow, OnThePadWithNoSatellitesZeroVelocityHoldsItStill)
+{
+    // On the rig (r4) the receiver lost the sky 87 s before launch and the
+    // navigation filter, with nothing to hold it, drifted 150 m on the pad.
+    // Here a filter that has come to think it moves 1 m/s sideways, then 60 s
+    // still on the pad with no satellites.
+    double drift[2] = {}, speed[2] = {};
+    for (int zupt = 0; zupt < 2; ++zupt)
+    {
+        RawGnssShadow::Config cfg = primaryCfg();
+        cfg.pad_zupt = zupt != 0;
+        RawGnssShadow sh(cfg);
+        sh.onSeed(padSeed(kT0));
+        int64_t t = feedFlight(sh, kT0, 5.0, 0.0f, gnss_raw::kShadowLevel, false);
+        // 0.5 s at 2 m/s^2 sideways (no levelling on it): 1 m/s
+        for (int64_t k = t; k < t + 500000; k += 5000)
+        {
+            ShadowImu s = still(k, 0);
+            s.acc[0] += 2.0f;
+            sh.onImu(s, k);
+        }
+        t += 500000;
+        const double lat0 = sh.filter().lla()[0], lon0 = sh.filter().lla()[1];
+        t = feedFlight(sh, t, 60.0, 0.0f, gnss_raw::kShadowLevel, false);
+        const double dn = (sh.filter().lla()[0] - lat0) * 6.371e6;
+        const double de = (sh.filter().lla()[1] - lon0) * 6.371e6 * std::cos(lat0);
+        drift[zupt] = std::hypot(dn, de);
+        speed[zupt] = std::hypot(sh.filter().velNed()[0], sh.filter().velNed()[1]);
+        if (zupt)
+            EXPECT_GE(sh.stats().pad_zupts, 600u);
+        else
+            EXPECT_EQ(sh.stats().pad_zupts, 0u);
+        EXPECT_EQ(sh.stats().zupts, 0u);          // the landed count is the landing's
+    }
+    EXPECT_GT(drift[0], 40.0);
+    EXPECT_GT(speed[0], 0.5);
+    EXPECT_LT(drift[1], 2.0);
+    EXPECT_LT(speed[1], 0.05);
+}
+
 TEST(RawGnssShadow, ThrustBeforeTheLaunchVerdictIsNotLevelledOn)
 {
     // Between ignition and the launch detector's verdict the vehicle is "on
@@ -1229,9 +1348,9 @@ SimScore flyFirmwareSim(double gyro_bias_dps)
     for (int i = 0; i < 3; ++i)
         sc.v_end[i] = sh.filter().velNed()[i];
     std::printf("sim flight (gyro bias %.2f dps): landed %.1f s; max height error %.1f m, max horizontal %.1f m; "
-                "baro fused %u, levelled %u (held %u), mag %u\n",
-                gyro_bias_dps, t_land, max_h_err, max_horiz, sh.stats().baro_fused, sh.stats().levels,
-                sh.stats().levels_held, sh.stats().mag_fused);
+                "baro fused %u (held at speed %u), levelled %u (held %u), mag %u\n",
+                gyro_bias_dps, t_land, max_h_err, max_horiz, sh.stats().baro_fused, sh.stats().baro_held,
+                sh.stats().levels, sh.stats().levels_held, sh.stats().mag_fused);
     return sc;
 }
 

@@ -129,8 +129,12 @@ public:
         double   baro_port_k     = 0.0075;    // the static port's error, m per Pa of dynamic pressure (#1579)
         double   baro_offset_tau_s = 30.0;    // the pad offset follows the filter's height this slowly
         double   baro_offset_min_s = 10.0;    // and is used once it has had this long
+        double   baro_hold_port_m = 2.0;      // in flight: held out while that error at the vertical speed is above this
+        double   baro_hold_max_s  = 30.0;     //   but no longer than this after launch
         double   zupt_sigma_mps  = 0.5;       // landed: zero velocity, 1 sigma (#1418)
         double   zupt_period_s   = 0.1;       //   this often
+        bool     pad_zupt        = true;      // the navigation filter, on the pad while still: zero velocity too
+        double   still_rate_rps  = 0.05;      //   still: rotating slower than this, the force g's size
         bool     primary         = false;     // the navigation filter (above)
         double   mag_field_tol   = 0.15;      // a field this far off the model's size is no heading (#1304)
         double   max_bridge_s    = 5.0;       // the navigation filter bridges an IMU hole this long
@@ -191,9 +195,11 @@ public:
         // the barometer and the landing
         uint32_t baro = 0;                 // samples seen
         uint32_t baro_fused = 0;           //   fused (an offset learned)
+        uint32_t baro_held = 0;            //   held out in flight at speed (the port's error)
         double   baro_offset_m = 0.0;      // the filter's height less the barometer's, on the pad
         uint8_t  baro_offset_frozen = 0;   //   frozen at launch
         uint32_t zupts = 0;                // landed zero-velocity updates
+        uint32_t pad_zupts = 0;            //   and on the pad, still
         // the magnetometer (the navigation filter, on the ground)
         uint32_t mags = 0;                 // samples seen
         uint32_t mag_fused = 0;            //   taken as a heading
@@ -307,6 +313,7 @@ private:
     double        baro_offset_ = 0.0;   // the filter's height less the barometer's
     double        baro_learn_s_ = 0.0;  //   learned over this long
     bool          baro_frozen_ = false; //   frozen at launch
+    double        baro_launch_t_ = 0.0; //   then, the filter time
     bool          baro_seen_ = false;   //   a sample has gone into it
     double        last_baro_t_ = -1.0;  // the filter time the last sample was applied
     double        next_zupt_t_ = 0.0;   // landed: the next zero-velocity update is due

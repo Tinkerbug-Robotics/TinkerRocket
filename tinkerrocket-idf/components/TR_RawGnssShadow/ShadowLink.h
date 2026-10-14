@@ -201,9 +201,13 @@ struct ShadowPadStatus
 // The handoffs, as one object both sides share.
 struct ShadowLink
 {
-    SpscRing<ShadowImu, 64> imu;   // 0.37 s at the Beetle's 171 Hz flight filter
-    SpscRing<ShadowBaro, 16> baro;
-    SpscRing<ShadowMag, 16> mag;   // where it is the navigation filter
+    // Room for the raw filter's longest pause: an epoch is built and fused in
+    // one pass, about 5 ms a satellite on the Beetle (r3: 14 satellites,
+    // 67 ms; up to 97 ms), and a sky of 30 would be 150 ms. The navigation
+    // filter is fed about 450 samples a second (the shadow 171): 0.57 s here.
+    SpscRing<ShadowImu, 256> imu;
+    SpscRing<ShadowBaro, 64> baro;
+    SpscRing<ShadowMag, 64> mag;   // where it is the navigation filter
     SeqLock<ShadowNav> nav;        // core 0 -> core 1, every step
     SeqLock<ShadowSeed> seed;
     SeqLock<ShadowIono> iono;      // written at boot (from NVS) and by each pad calibration

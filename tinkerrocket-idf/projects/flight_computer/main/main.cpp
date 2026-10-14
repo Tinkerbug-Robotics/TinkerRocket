@@ -541,6 +541,9 @@ static uint32_t ref_pos_count = 0;
 static bool ref_pos_frozen = false;
 static constexpr uint32_t REF_POS_MAX_AGE_MS = 120000; // 2 minutes
 static uint32_t ref_pos_first_time_ms = 0;
+// #1600: where the raw-GNSS filter navigates, the average is of its own
+// position once its raw epochs lead (started over then), not the receiver's
+static bool ref_from_nav = false;
 // The GNSS input the EKF is handed on every tick: the last accepted fix, held
 // unchanged until a newer one arrives.  The loop keeps no "consumed" markers of
 // its own — the filter fuses each fix time_us once — see EkfGnssFeed.h (#1107).
@@ -3217,8 +3220,9 @@ static void rawShadowTask(void*)
                 ESP_LOGI(TAG, "[RAWGNSS] checks: fixes %lu: %lu passed, %lu flagged, %lu unjudged, %lu lapsed "
                               "(no time %lu, dropped %lu) | last %s: %.1f m of %.1f, %.2f m/s of %.2f over %.2f s "
                               "| satellites jumped %lu (last epoch %d of %d judged, worst %.1f m) "
-                              "| levelled %lu steps, %lu held off in flight | baro fused %lu of %lu "
-                              "(offset %+.1f m%s) | zero-velocity %lu | mag fused %lu of %lu (%lu refused) "
+                              "| levelled %lu steps, %lu held off in flight | baro fused %lu of %lu, "
+                              "%lu held at speed (offset %+.1f m%s) | zero-velocity %lu landed, %lu on the pad "
+                              "| mag fused %lu of %lu (%lu refused) "
                               "| restores %lu",
                          (unsigned long)fs.fixes, (unsigned long)fs.passed, (unsigned long)fs.flagged,
                          (unsigned long)fs.unjudged, (unsigned long)fs.lapsed,
@@ -3230,8 +3234,9 @@ static void rawShadowTask(void*)
                          st.last_sats_jumped, sh.satCheck().summary().judged,
                          sh.satCheck().summary().worst_m, (unsigned long)st.levels,
                          (unsigned long)st.levels_held, (unsigned long)st.baro_fused,
-                         (unsigned long)st.baro, st.baro_offset_m,
+                         (unsigned long)st.baro, (unsigned long)st.baro_held, st.baro_offset_m,
                          st.baro_offset_frozen ? ", frozen" : "", (unsigned long)st.zupts,
+                         (unsigned long)st.pad_zupts,
                          (unsigned long)st.mag_fused, (unsigned long)st.mags,
                          (unsigned long)st.mag_suspect, (unsigned long)st.restores);
             }
@@ -6283,6 +6288,7 @@ static void resetFlightStateForSim(const char* edge)
     ref_lat_sum = ref_lon_sum = ref_alt_sum = 0.0;
     ref_pos_count = 0;
     ref_pos_first_time_ms = 0;
+    ref_from_nav = false;
     ekf_gnss_feed.reset();
     GnssAscentGate::reset(gnss_admit_state);   // back on the pad: GNSS flows, pad offset relearned
     gnss_started = false;
@@ -7303,13 +7309,37 @@ static void loop_fc()
 
                 // Running average of GNSS fixes for launch-site reference.
                 // Only accumulate fixes that pass the stricter init gate (Gate 3).
-                if (!ref_pos_frozen && gnss_gate3_init) {
+#if TR_RAW_GNSS_PRIMARY
+                // #1600: the navigation filter's own pad, once its raw epochs
+                // lead (the average started over then), and only its own from
+                // there. Every height it gives is taken from this reference
+                // (the ENU up, the AGL), and on the rig the receiver's average
+                // sat 3.4 m from the raw solution, all of it in those heights
+                // (r3). Until then the receiver's, so the reference (and the
+                // start that waits on it) is not held up.
+                const bool ref_nav_now = ekf.gnssAided();
+                if (ref_nav_now && !ref_from_nav && !ref_pos_frozen && gnss_gate3_init) {
+                    ref_from_nav = true;
+                    ref_lat_sum = ref_lon_sum = ref_alt_sum = 0.0;
+                    ref_pos_count = 0;
+                }
+                const bool ref_take = !ref_from_nav || ref_nav_now;
+#else
+                const bool ref_take = true;
+#endif
+                if (!ref_pos_frozen && gnss_gate3_init && ref_take) {
+                    double ref_add[3] = {ekf_gnss.lat_rad, ekf_gnss.lon_rad, ekf_gnss.alt_m};
+#if TR_RAW_GNSS_PRIMARY
+                    if (ref_from_nav) {
+                        ekf.getPosEst(ref_add);
+                    }
+#endif
                     if (ref_pos_count == 0) {
                         ref_pos_first_time_ms = now_ms;
                     }
-                    ref_lat_sum += ekf_gnss.lat_rad;
-                    ref_lon_sum += ekf_gnss.lon_rad;
-                    ref_alt_sum += ekf_gnss.alt_m;
+                    ref_lat_sum += ref_add[0];
+                    ref_lon_sum += ref_add[1];
+                    ref_alt_sum += ref_add[2];
                     ref_pos_count++;
                     ref_lat_rad = ref_lat_sum / ref_pos_count;
                     ref_lon_rad = ref_lon_sum / ref_pos_count;

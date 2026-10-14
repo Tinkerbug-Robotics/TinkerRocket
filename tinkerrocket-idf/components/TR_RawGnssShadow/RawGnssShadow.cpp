@@ -146,6 +146,7 @@ void RawGnssShadow::applyBaro(double t, uint8_t imu_flags)
         baro_seen_ = true;
         baro_learn_s_ = std::fmax(baro_learn_s_, cfg_.baro_offset_min_s);
         baro_frozen_ = true;
+        baro_launch_t_ = t;
     }
     if (baro_learn_s_ < cfg_.baro_offset_min_s)
         return;                           // on the pad: not learned long enough yet
@@ -159,6 +160,22 @@ void RawGnssShadow::applyBaro(double t, uint8_t imu_flags)
                         + static_cast<double>(v[2]) * v[2];
     const double rho = 1.225 * std::exp(-ekf_.lla()[2] / 8500.0);
     const double port_m = cfg_.baro_port_k * 0.5 * rho * spd2;
+    // In flight, while that error is large, not at all: it is a bias, not
+    // noise. On the rig replay (r3) the barometer read 1.4 times the term low
+    // through boost and coast, 67 m at burnout, and fifty samples a second at
+    // that sigma weigh as one a second at a seventh of it: the raw epochs'
+    // vertical lost to it, the filter 21 m low at the top of the coast (6-8 m
+    // without the barometer, r1). Judged on the vertical speed -- drifting
+    // with the wind under a chute moves no air past the port -- and for no
+    // longer than baro_hold_max_s after launch, so a wrong speed cannot keep
+    // the barometer out for good.
+    const double vd = static_cast<double>(v[2]);
+    if (in_flight && cfg_.baro_port_k * 0.5 * rho * vd * vd > cfg_.baro_hold_port_m
+        && t - baro_launch_t_ < cfg_.baro_hold_max_s)
+    {
+        st_.baro_held++;
+        return;
+    }
     const double var = cfg_.baro_sigma_m * cfg_.baro_sigma_m + port_m * port_m;
     ekf_.updateHeight(h_baro + baro_offset_, static_cast<float>(var));
     st_.baro_fused++;
@@ -476,7 +493,7 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
             st_.levels_held++;
         }
     }
-    // The barometer's latest sample, and once landed zero velocity
+    // The barometer's latest sample
     if (have_baro_)
     {
         have_baro_ = false;
@@ -490,13 +507,26 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
         if (cfg_.primary && ground && level_gate_.gSized(acc))
             applyMag(acc);
     }
-    if ((s.flags & kShadowLanded) && t >= next_zupt_t_)
+    // Zero velocity once landed, and the navigation filter's on the pad while
+    // still: on the rig (r4) the receiver lost the sky 87 s before launch and,
+    // with nothing to hold it, the filter's horizontal velocity drifted to
+    // 1.5 m/s on the pad, 150 m before it left. Still is the levelling's g's
+    // size (not a motor burning before the launch verdict) and little rotation
+    // (not the rocket being carried to the rail).
+    const bool landed = (s.flags & kShadowLanded) != 0;
+    const bool still_on_pad = cfg_.primary && cfg_.pad_zupt && ground && !landed && level_gate_.gSized(acc)
+                              && gyro[0] * gyro[0] + gyro[1] * gyro[1] + gyro[2] * gyro[2]
+                                     < static_cast<float>(cfg_.still_rate_rps * cfg_.still_rate_rps);
+    if ((landed || still_on_pad) && t >= next_zupt_t_)
     {
         // on a schedule, so the steps' own spacing averages out
         ekf_.updateZeroVelocity(static_cast<float>(cfg_.zupt_sigma_mps));
         next_zupt_t_ = t - next_zupt_t_ > cfg_.zupt_period_s ? t + cfg_.zupt_period_s
                                                             : next_zupt_t_ + cfg_.zupt_period_s;
-        st_.zupts++;
+        if (landed)
+            st_.zupts++;
+        else
+            st_.pad_zupts++;
     }
     const int64_t c1 = now();
     const uint32_t step_us = static_cast<uint32_t>(c1 - c0);
@@ -583,6 +613,7 @@ void RawGnssShadow::start(double t)
     baro_offset_ = 0.0;
     baro_learn_s_ = 0.0;
     baro_frozen_ = false;
+    baro_launch_t_ = 0.0;
     baro_seen_ = false;
     last_baro_t_ = -1.0;
     next_zupt_t_ = 0.0;
