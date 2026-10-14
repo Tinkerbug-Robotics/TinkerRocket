@@ -230,6 +230,24 @@ T RawGnssEKF<T>::sigma(int i) const
 }
 
 template <typename T>
+void RawGnssEKF<T>::attSigmaNed(T out[3]) const
+{
+    T M[3][3];
+    quat2dcm(q_, M);                                   // NED -> body
+    // the full angle is twice the state's half-angle (4 P), and body -> NED is
+    // M^T: the NED variance about axis i is sum_ab M[a][i] (4 P)_ab M[b][i]
+    for (int i = 0; i < 3; ++i)
+    {
+        T s = T(0);
+        for (int a = 0; a < 3; ++a)
+            for (int b = 0; b < 3; ++b)
+                s += M[a][i] * P_[kAtt + a][kAtt + b] * M[b][i];
+        s *= T(4);
+        out[i] = s > T(0) ? std::sqrt(s) : T(0);
+    }
+}
+
+template <typename T>
 T RawGnssEKF<T>::takeGPeak()
 {
     const T g = g_peak_;

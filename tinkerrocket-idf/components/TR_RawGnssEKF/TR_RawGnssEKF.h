@@ -191,6 +191,10 @@ public:
     bool clockReady() const { return clk_ready_; }
     T P(int i, int j) const { return P_[i][j]; }
     T sigma(int i) const;
+    // The attitude's 1-sigma (rad) as rotations about north, east and down
+    // (down: the heading): the attitude block, a body-frame half-angle,
+    // doubled and carried into NED.
+    void attSigmaNed(T out[3]) const;
     // |specific force| / g - 1 at the last IMU step, and its largest since
     // the last take (floored at 0): what RawMeasBuilder::build takes.
     T gExcess() const { return g_excess_; }

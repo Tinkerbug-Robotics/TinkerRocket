@@ -3094,6 +3094,12 @@ static void rawShadowTask(void*)
                 if (enqueueI2STx(RAW_GNSS_EKF_MSG, (const uint8_t*)&rec, sizeof(rec))) recs++;
                 else rec_drops++;
             }
+            RawGnssAttData att;   // its attitude 1-sigma and IMU biases, same tick
+            if (sh.takeAttLog(att))
+            {
+                if (enqueueI2STx(RAW_GNSS_ATT_MSG, (const uint8_t*)&att, sizeof(att))) recs++;
+                else rec_drops++;
+            }
         }
 #if TR_RAW_GNSS_PRIMARY
         {

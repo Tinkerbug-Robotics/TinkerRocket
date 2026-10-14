@@ -158,6 +158,7 @@ MSG_GNSS_RTCM         = 0x95  # GnssRtcmHeader + a raw RTCM3 frame (or one part 
 MSG_RAW_GNSS_EKF      = 0x96  # RawGnssEkfData: the raw-GNSS shadow filter, 10 Hz (#1600)
 MSG_PAD_CAL_STATUS    = 0x99  # PadCalStatusData: the pad calibration's progress, 1 Hz on the ground (#1600 phase 5)
 MSG_GNSS_CHECK        = 0x9A  # GnssCheckData: each receiver fix against the IMU, 10 Hz (#1508)
+MSG_RAW_GNSS_ATT      = 0x9B  # RawGnssAttData: the raw-GNSS filter's attitude 1-sigma and IMU biases, 10 Hz
 MSG_ISM6HG256         = 0xA2
 MSG_BMP585            = 0xA3
 MSG_MMC5983MA         = 0xA4
@@ -200,6 +201,7 @@ MSG_NAMES = {
     MSG_RAW_GNSS_EKF:     "RawGnssEkf",
     MSG_PAD_CAL_STATUS:   "PadCalStatus",
     MSG_GNSS_CHECK:       "GnssCheck",
+    MSG_RAW_GNSS_ATT:     "RawGnssAtt",
     MSG_ISM6HG256:        "ISM6HG256",
     MSG_BMP585:           "BMP585",
     MSG_MMC5983MA:        "MMC5983MA",
@@ -228,6 +230,7 @@ MSG_EXPECTED_LEN = {
     MSG_RAW_GNSS_EKF:      90,    # sizeof(RawGnssEkfData)
     MSG_PAD_CAL_STATUS:    40,    # sizeof(PadCalStatusData)
     MSG_GNSS_CHECK:        24,    # sizeof(GnssCheckData)
+    MSG_RAW_GNSS_ATT:      46,    # sizeof(RawGnssAttData)
     MSG_ISM6HG256:         22,
     MSG_BMP585:            12,
     MSG_MMC5983MA:         16,
@@ -493,6 +496,41 @@ def decode_pad_cal_status(payload):
     for name, bit in PAD_CAL_FLAGS.items():
         rec[name] = bool(f[10] & bit)
     return rec
+
+
+# RawGnssAttData (RAW_GNSS_ATT_MSG 0x9B), 46 bytes packed: beside each
+# RawGnssEkfData record, with its time_us, what that record leaves out of the
+# raw-GNSS filter -- its attitude 1-sigma about north, east and down (down is
+# the heading, and on a rocket near vertical the roll; centi-deg on the wire),
+# and its accelerometer (m/s^2) and gyro (deg/s) bias estimates, body FRD, with
+# their 1-sigma (mm/s^2, milli-deg/s on the wire).
+FMT_RAW_GNSS_ATT = '<I 3H 3f 3f 3H 3H'
+SIZE_OF_RAW_GNSS_ATT = struct.calcsize(FMT_RAW_GNSS_ATT)  # 46
+
+
+def decode_raw_gnss_att(payload):
+    """RawGnssAttData payload -> record dict in SI units (angles in deg), or None if the size is wrong."""
+    if len(payload) != SIZE_OF_RAW_GNSS_ATT:
+        return None
+    f = struct.unpack(FMT_RAW_GNSS_ATT, payload)
+    return {
+        "time_us":            f[0],
+        "att_sigma_n_deg":    f[1] * 1e-2,
+        "att_sigma_e_deg":    f[2] * 1e-2,
+        "heading_sigma_deg":  f[3] * 1e-2,
+        "acc_bias_x":         f[4],
+        "acc_bias_y":         f[5],
+        "acc_bias_z":         f[6],
+        "gyro_bias_x_dps":    f[7],
+        "gyro_bias_y_dps":    f[8],
+        "gyro_bias_z_dps":    f[9],
+        "acc_bias_sigma_x":   f[10] * 1e-3,
+        "acc_bias_sigma_y":   f[11] * 1e-3,
+        "acc_bias_sigma_z":   f[12] * 1e-3,
+        "gyro_bias_sigma_x_dps": f[13] * 1e-3,
+        "gyro_bias_sigma_y_dps": f[14] * 1e-3,
+        "gyro_bias_sigma_z_dps": f[15] * 1e-3,
+    }
 
 
 # GnssCheckData (GNSS_CHECK_MSG 0x9A), 24 bytes packed (#1508): each receiver
@@ -823,6 +861,7 @@ def parse_binary_file(filepath):
         "RawGnssEkf":     [],   # 0x96 the raw-GNSS shadow filter, 10 Hz (#1600)
         "PadCalStatus":   [],   # 0x99 the pad calibration's progress, 1 Hz on the ground (#1600 phase 5)
         "GnssCheck":      [],   # 0x9A each receiver fix against the IMU, 10 Hz (#1508)
+        "RawGnssAtt":     [],   # 0x9B the raw-GNSS filter's attitude 1-sigma and IMU biases, 10 Hz
         "FcStatus":       [],   # 0x92 FcStatusData (#1154 item 4) — appended below; was never initialised
         "ISM6HG256":      [],
         "BMP585":         [],
@@ -1037,6 +1076,11 @@ def parse_binary_file(filepath):
                 rec = decode_gnss_check(payload)
                 if rec is not None:
                     records["GnssCheck"].append(rec)
+
+            elif msg_type == MSG_RAW_GNSS_ATT:
+                rec = decode_raw_gnss_att(payload)
+                if rec is not None:
+                    records["RawGnssAtt"].append(rec)
 
             elif msg_type == MSG_ISM6HG256:
                 fields = struct.unpack(FMT_ISM6, payload)

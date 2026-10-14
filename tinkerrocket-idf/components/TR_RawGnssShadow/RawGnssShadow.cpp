@@ -632,6 +632,7 @@ void RawGnssShadow::stop(uint8_t why)
         builder_.noteEpoch(pending_[i].epoch);
     npending_ = 0;
     log_ready_ = false;
+    att_log_ready_ = false;
     st_.stops++;
     st_.last_stop = why;
 }
@@ -785,6 +786,26 @@ void RawGnssShadow::fillLog(uint32_t time_us, uint8_t imu_flags)
     prop_sum_ = 0;
     prop_n_ = 0;
     log_ready_ = true;
+
+    // its companion: the attitude's 1-sigma in NED and the IMU's biases
+    RawGnssAttData& a = att_log_;
+    std::memset(&a, 0, sizeof(a));
+    a.time_us = time_us;
+    float att_sig[3];
+    ekf_.attSigmaNed(att_sig);
+    const float* ab = ekf_.accelBias();
+    const float* wb = ekf_.gyroBias();
+    for (int i = 0; i < 3; ++i)
+    {
+        a.att_sigma_cdeg[i] = sat16(static_cast<double>(att_sig[i]) * kRad2Deg * 100.0);
+        a.acc_bias_mps2[i] = ab[i];
+        a.gyro_bias_dps[i] = static_cast<float>(static_cast<double>(wb[i]) * kRad2Deg);
+        a.acc_bias_sigma_mmps2[i] =
+            sat16(static_cast<double>(ekf_.sigma(RawGnssEKF<float>::kAccBias + i)) * 1000.0);
+        a.gyro_bias_sigma_mdps[i] =
+            sat16(static_cast<double>(ekf_.sigma(RawGnssEKF<float>::kGyroBias + i)) * kRad2Deg * 1000.0);
+    }
+    att_log_ready_ = true;
 }
 
 bool RawGnssShadow::takeLog(RawGnssEkfData& out)
@@ -793,6 +814,15 @@ bool RawGnssShadow::takeLog(RawGnssEkfData& out)
         return false;
     out = log_;
     log_ready_ = false;
+    return true;
+}
+
+bool RawGnssShadow::takeAttLog(RawGnssAttData& out)
+{
+    if (!att_log_ready_)
+        return false;
+    out = att_log_;
+    att_log_ready_ = false;
     return true;
 }
 
