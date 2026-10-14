@@ -96,6 +96,13 @@ if(TR_HEADING_FIT_BENCH)
     add_compile_definitions(TR_HEADING_FIT_BENCH=1)
     message(STATUS "TR_HEADING_FIT_BENCH=1 -- the heading fit's bench ENABLED (bench)")
 endif()
+# Bench: the pad's heading turned this many degrees (added to the magnetic
+# declination), so the heading fit has a known error to find -- a rig replay
+# with and without it should differ by it in the fit's turn. Never set for flight.
+if(DEFINED TR_BENCH_HEADING_ERROR_DEG)
+    add_compile_definitions(TR_BENCH_HEADING_ERROR_DEG=${TR_BENCH_HEADING_ERROR_DEG})
+    message(STATUS "TR_BENCH_HEADING_ERROR_DEG=${TR_BENCH_HEADING_ERROR_DEG} -- the pad heading turned on purpose (bench)")
+endif()
 # Bench: a per-section cycle and Xtensa performance-counter profile of the
 # flight task, printed every 5 s (main/loop_profile.h). Never set for flight.
 if(TR_LOOP_PROFILE)

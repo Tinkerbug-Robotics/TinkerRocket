@@ -3148,9 +3148,16 @@ static void rawShadowTask(void*)
 #if TR_HEADING_FIT_BENCH
     // Bench (-DTR_HEADING_FIT_BENCH=1): what the heading fit costs this core,
     // timed once before the filter runs -- the fit's step, an epoch's Doppler
-    // velocity by satellites, the fit by epochs (HeadingFitBench.h).
+    // velocity by satellites, the fit by epochs (HeadingFitBench.h). A few
+    // seconds of it; it yields after each line (the full-grid reference holds
+    // the core up to a second a line) so this core's idle task keeps its
+    // watchdog fed.
     gnss_raw::bench::run([]() -> int64_t { return esp_timer_get_time(); },
-                         [](const char* line) { ESP_LOGI(TAG, "[RAWGNSS] %s", line); }, 20, 1.0);
+                         [](const char* line) {
+                             ESP_LOGI(TAG, "[RAWGNSS] %s", line);
+                             vTaskDelay(1);
+                         },
+                         20, 1.0);
 #endif
     gnss_raw::RawGnssShadow& sh = *raw_shadow;
     sh.setClock(&rawShadowClock);
@@ -7778,6 +7785,14 @@ static void loop_fc()
                                 ref_lat_rad, ref_lon_rad, ref_alt_m, decimal_year);
                             decl_deg = decl_rad * (180.0f / (float)M_PI);
                         }
+#ifdef TR_BENCH_HEADING_ERROR_DEG
+                        // Bench (-DTR_BENCH_HEADING_ERROR_DEG=N): north turned N deg,
+                        // so the pad's heading is N deg off for the heading fit to
+                        // find (TR_RawGnssShadow/HeadingFit.h). Never in flight.
+                        decl_deg += (float)(TR_BENCH_HEADING_ERROR_DEG);
+                        ESP_LOGW(TAG, "[EKF] BENCH: the declination turned %+.1f deg -- the pad heading is wrong on purpose",
+                                 (double)(TR_BENCH_HEADING_ERROR_DEG));
+#endif
                         ekf.setDeclination(decl_deg * ((float)M_PI / 180.0f));
                         ESP_LOGI(TAG, "[EKF] Declination %.2f deg (WMM2025, %u-%02u-%02u)",
                                       (double)decl_deg, gnss_latest_si.year,

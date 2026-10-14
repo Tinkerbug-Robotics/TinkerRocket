@@ -57,6 +57,28 @@ def blob_edge_t(blob, level=EDGE_MPS2):
     return t0 + (k + (level - amag[k]) / (amag[first] - amag[k])) / rate
 
 
+def unwrap_us(arr):
+    """A log's u32 microsecond stamps, unwrapped (int64)."""
+    a = np.asarray(arr, dtype=np.int64)
+    wraps = np.cumsum(np.diff(a, prepend=a[0]) < -2 ** 31)
+    return a + wraps * 2 ** 32
+
+
+def log_time_base(recs, edge, level=EDGE_MPS2):
+    """What to add to a log's MCU seconds to put them on the flight's time: where its logged accelerometer
+    (ISM6HG256, the high-g one near the rail) first crosses level, linearly, is the replay's edge (edge_t)."""
+    imu = recs["ISM6HG256"]
+    it = unwrap_us([r["time_us"] for r in imu]) * 1e-6
+    lo = np.array([[r["low_acc_x"], r["low_acc_y"], r["low_acc_z"]] for r in imu])
+    hi = np.array([[r["high_acc_x"], r["high_acc_y"], r["high_acc_z"]] for r in imu])
+    near_rail = np.array([r["low_g_near_rail"] for r in imu])
+    amag = np.where(near_rail, np.linalg.norm(hi, axis=1), np.linalg.norm(lo, axis=1))
+    first = int(np.argmax(amag > level))
+    k = first - 1
+    t_cross = it[k] + (level - amag[k]) / (amag[first] - amag[k]) * (it[first] - it[k])
+    return edge - t_cross
+
+
 def edge_t(csv_path, scenario_path, blob_path=None, **build_kw):
     """The flight's ignition edge as its replay file plays it: that file's, or the one sim_replay_blob.py writes
     from the CSV (by default with its default --from: where the pairs start moves the edge by up to a
