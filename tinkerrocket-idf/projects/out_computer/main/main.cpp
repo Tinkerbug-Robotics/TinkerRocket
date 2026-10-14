@@ -2929,7 +2929,8 @@ static uint32_t msg_count_end_flight = 0;
 static uint32_t msg_count_unknown = 0;
 // #569: types accepted by isKnownMessageType and written to the flight log by
 // the enqueue path, but with no live handler branch (GUIDANCE_TELEM_MSG,
-// FLIGHT_SETTINGS_MSG, LORA_MSG, GNSS_SAT_MSG, GNSS_RTCM_MSG, RAW_GNSS_EKF_MSG, GNSS_CHECK_MSG). They used to
+// FLIGHT_SETTINGS_MSG, LORA_MSG, GNSS_SAT_MSG, GNSS_RTCM_MSG, RAW_GNSS_EKF_MSG, GNSS_CHECK_MSG,
+// RAW_GNSS_ATT_MSG, IMU_TEMP_MSG, GNSS_CLOCK_MSG, PAD_CONTEXT_MSG). They used to
 // fall through to msg_count_unknown++, so a guided flight showed a climbing
 // "unknown" rate that read as I2S corruption and masked genuinely unknown
 // frames.
@@ -4661,6 +4662,10 @@ static bool isKnownMessageType(uint8_t type)
         case RAW_GNSS_EKF_MSG:       // FC→OC over I2S at 10 Hz — the raw-GNSS shadow filter (#1600), log-only
         case PAD_CAL_STATUS_MSG:     // FC→OC over I2S at 1 Hz on the ground — pad calibration progress (#1600 phase 5)
         case GNSS_CHECK_MSG:         // FC→OC over I2S at 10 Hz — the receiver's fixes against the IMU (#1508), log-only
+        case RAW_GNSS_ATT_MSG:       // FC→OC over I2S at 10 Hz — the raw-GNSS filter's attitude 1-sigma and IMU biases, log-only
+        case IMU_TEMP_MSG:           // FC→OC over I2S at 1 Hz — the IMU's die temperature, log-only
+        case GNSS_CLOCK_MSG:         // FC→OC over I2S at ~1 Hz — the GPS-to-MCU clock line, log-only
+        case PAD_CONTEXT_MSG:        // FC→OC over I2S once after launch — what a replay needs from the pad, log-only
         case FC_STATUS_MSG:          // FC→OC over I2S at 5 Hz — the FC's own camera truth (#1154 item 4)
             return true;
         default:
@@ -5749,6 +5754,10 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
              type == GNSS_SAT_MSG ||
              type == GNSS_RTCM_MSG ||
              type == RAW_GNSS_EKF_MSG ||
+             type == RAW_GNSS_ATT_MSG ||
+             type == IMU_TEMP_MSG ||
+             type == GNSS_CLOCK_MSG ||
+             type == PAD_CONTEXT_MSG ||
              type == GNSS_CHECK_MSG)
     {
         // #569: log-only types — no live handler by design (they exist for

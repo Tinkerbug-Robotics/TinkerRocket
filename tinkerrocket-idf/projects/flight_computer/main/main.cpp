@@ -17,6 +17,9 @@
 #include <TR_Sensor_Data_Converter.h>
 #include <TR_Orientation.h>
 #include <TR_GpsInsEKF.h>
+#if TR_RAW_GNSS_PRIMARY
+#include "raw_nav_adapter.h"
+#endif
 #include <EkfGnssFeed.h>      // #1107: the GNSS input the EKF is handed each tick
 #include <TR_GeoMag.h>
 #include <TR_KinematicChecks.h>
@@ -520,7 +523,13 @@ static MainDeployGate::Source main_deploy_last_src = MainDeployGate::Source::Non
 static GnssAscentGate::State gnss_admit_state;
 static float max_alt_m = 0.0f;
 static float max_speed_mps = 0.0f;
+#if TR_RAW_GNSS_PRIMARY
+// #1600: the Beetle's navigation filter is the raw-GNSS filter (core 0);
+// `ekf` is GpsInsEKF's face on its state (raw_nav_adapter.h)
+static RawNavAdapter ekf;
+#else
 static GpsInsEKF ekf;
+#endif
 static TR_KinematicChecks kinematics;
 static bool ekf_initialized = false;
 // Launch-site reference position for converting EKF LLA to local ENU.
@@ -532,6 +541,9 @@ static uint32_t ref_pos_count = 0;
 static bool ref_pos_frozen = false;
 static constexpr uint32_t REF_POS_MAX_AGE_MS = 120000; // 2 minutes
 static uint32_t ref_pos_first_time_ms = 0;
+// #1600: where the raw-GNSS filter navigates, the average is of its own
+// position once its raw epochs lead (started over then), not the receiver's
+static bool ref_from_nav = false;
 // The GNSS input the EKF is handed on every tick: the last accepted fix, held
 // unchanged until a newer one arrives.  The loop keeps no "consumed" markers of
 // its own — the filter fuses each fix time_us once — see EkfGnssFeed.h (#1107).
@@ -2671,6 +2683,41 @@ static void sendFlightSettings()
                        sizeof(s));
 }
 
+// The pad context's calibrations (PAD_CONTEXT_MSG, PCX_CAL): what this flight
+// flew with that the logged counts do not carry, for a replay.  Once, beside
+// the launch+5 s settings copy; the raw-GNSS task writes the rest from +6 s.
+static void sendPadContextCal()
+{
+    struct __attribute__((packed))
+    {
+        PadContextHeader h;
+        PadContextCal    c;
+    } r = {};
+    r.h.time_us = (uint32_t)esp_timer_get_time();
+    r.h.kind    = PCX_CAL;
+    r.h.part    = 0;
+    r.h.parts   = 1;
+    r.c.gyro_offset_lsb[0] = sensor_collector_hw.gyro_cal_x;
+    r.c.gyro_offset_lsb[1] = sensor_collector_hw.gyro_cal_y;
+    r.c.gyro_offset_lsb[2] = sensor_collector_hw.gyro_cal_z;
+    r.c.hg_bias_mps2[0] = sensor_converter.highGBiasX();
+    r.c.hg_bias_mps2[1] = sensor_converter.highGBiasY();
+    r.c.hg_bias_mps2[2] = sensor_converter.highGBiasZ();
+    int16_t mx = 0, my = 0, mz = 0;
+    r.c.mag_offset_set = sensor_collector_hw.iis2mdcHardIronOffset(mx, my, mz) ? 1U : 0U;
+    r.c.mag_offset_lsb[0] = mx;
+    r.c.mag_offset_lsb[1] = my;
+    r.c.mag_offset_lsb[2] = mz;
+    r.c.cal_gravity_mps2 = sensor_collector_hw.cal_gravity_mag;
+    int32_t ox = 0, oy = 0, oz = 0;
+    sensor_converter.mmcOffset(ox, oy, oz);
+    r.c.mmc_offset_counts[0] = ox;
+    r.c.mmc_offset_counts[1] = oy;
+    r.c.mmc_offset_counts[2] = oz;
+    static_assert(sizeof(r) == sizeof(PadContextHeader) + sizeof(PadContextCal), "PCX_CAL record is packed");
+    (void)enqueueI2STx(PAD_CONTEXT_MSG, reinterpret_cast<const uint8_t*>(&r), sizeof(r));
+}
+
 // ==========================================================================
 // SECTION: Full config report (#915)
 // ==========================================================================
@@ -2951,7 +2998,8 @@ static uint32_t raw_shadow_seed_ms = 0;
 static int64_t rawShadowClock() { return esp_timer_get_time(); }
 
 // Core 1, every flight-filter tick: exactly the input GpsInsEKF::update got.
-static inline void rawShadowPushImu(const EkfIMUData& imu, bool level, bool in_flight, bool sim)
+static inline void rawShadowPushImu(const EkfIMUData& imu, bool level, bool in_flight, bool sim,
+                                    bool landed)
 {
     static constexpr float kDeg2Rad = (float)(M_PI / 180.0);   // the flight filter's gyro input is deg/s
     gnss_raw::ShadowImu s;
@@ -2963,7 +3011,7 @@ static inline void rawShadowPushImu(const EkfIMUData& imu, bool level, bool in_f
     s.gyro[1] = (float)imu.gyro_y * kDeg2Rad;
     s.gyro[2] = (float)imu.gyro_z * kDeg2Rad;
     s.flags = (uint8_t)((level ? gnss_raw::kShadowLevel : 0) | (in_flight ? gnss_raw::kShadowInFlight : 0)
-                        | (sim ? gnss_raw::kShadowSim : 0));
+                        | (sim ? gnss_raw::kShadowSim : 0) | (landed ? gnss_raw::kShadowLanded : 0));
     raw_shadow_link.imu.push(s);   // a full ring drops the tick and counts it
 }
 
@@ -2975,13 +3023,17 @@ static inline void rawShadowPublishSeed(uint32_t time_us, bool on_pad)
     if (raw_shadow_seed_ms != 0 && now_ms - raw_shadow_seed_ms < 1000) return;
     raw_shadow_seed_ms = (now_ms == 0) ? 1 : now_ms;
     gnss_raw::ShadowSeed s = {};
+#if TR_RAW_GNSS_PRIMARY
+    // The navigation filter: where and how it starts (or the flight it
+    // restores), its north and the field's size (raw_nav_adapter.h)
+    ekf.startSeed(s);
+#else
     double pos[3];
     float vel[3], q[4], wb[3];
     ekf.getPosEst(pos);
     ekf.getVelEst(vel);
     ekf.getQuaternion(q);
     ekf.getRotRateBias(wb);
-    s.time_us = time_us;
     for (int i = 0; i < 3; i++)
     {
         s.lla[i] = pos[i];
@@ -2989,11 +3041,13 @@ static inline void rawShadowPublishSeed(uint32_t time_us, bool on_pad)
         s.gyro_bias[i] = wb[i];
     }
     for (int i = 0; i < 4; i++) s.quat[i] = q[i];
-    s.on_pad = on_pad ? 1 : 0;
     // The flight filter's altitude is the receiver's, above the geoid; this
     // filter's is above the ellipsoid (#1600 phase 5)
     float sep = 0.0f;
     if (sensor_collector.getGNSSGeoidSeparation(sep)) s.lla[2] += sep;
+#endif
+    s.time_us = time_us;
+    s.on_pad = on_pad ? 1 : 0;
     // the pad survey's reference, once the pad average has 10 s of fixes
     uint32_t span_ms = 0;
     s.pad_valid = (padAverageLla(s.pad_lla, &s.pad_sigma_m, &span_ms) && span_ms >= 10000) ? 1 : 0;
@@ -3032,10 +3086,12 @@ static void rawShadowTask(void*)
     bool have_seed = false;
     int64_t win_t0 = esp_timer_get_time();
     int64_t pad_t0 = win_t0;
+    int64_t pcx_t0 = win_t0;   // the last pad-context record written
     int64_t busy_us = 0;
     uint32_t imu0 = 0, steps0 = 0, recs = 0, rec_drops = 0;
     int flag_prints = 0;
     uint64_t step_sum0 = 0;
+    uint32_t nav_step_n = 0;
     for (;;)
     {
         const int64_t a0 = esp_timer_get_time();
@@ -3059,16 +3115,59 @@ static void rawShadowTask(void*)
         while (sensor_collector.getGNSSRawEpoch(epoch)) sh.onEpoch(epoch);
         gnss_raw::TimedFix fix;
         while (sensor_collector.getGNSSFix(fix)) sh.onFix(fix);   // #1508: each fix against the IMU
+        gnss_raw::ShadowBaro baro;
+        while (raw_shadow_link.baro.pop(baro)) sh.onBaro(baro);   // applied at its next step
+        gnss_raw::ShadowMag mag;
+        while (raw_shadow_link.mag.pop(mag)) sh.onMag(mag);       // the navigation filter's, on the ground
         // A bounded batch: a filter that falls behind must still read its
         // seeds and epochs and say so, not spin here on a ring that refills.
         gnss_raw::ShadowImu imu;
         for (int k = 0; k < 32 && raw_shadow_link.imu.pop(imu); k++)
         {
             sh.onImu(imu, gnss_raw::RawGnssShadow::unwrap32(imu.time_us, esp_timer_get_time()));
+#if TR_RAW_GNSS_PRIMARY
+            // the navigation state for the flight loop (RawNavAdapter::refresh)
+            // after every step, not once a batch: a batch can hold several
+            // steps and the slices of an epoch between them
+            if (sh.stats().step_n != nav_step_n)
+            {
+                nav_step_n = sh.stats().step_n;
+                gnss_raw::ShadowNav nav;
+                sh.navState(nav);
+                raw_shadow_link.nav.write(nav);
+            }
+#endif
             RawGnssEkfData rec;
             if (sh.takeLog(rec))
             {
                 if (enqueueI2STx(RAW_GNSS_EKF_MSG, (const uint8_t*)&rec, sizeof(rec))) recs++;
+                else rec_drops++;
+            }
+            RawGnssAttData att;   // its attitude 1-sigma and IMU biases, same tick
+            if (sh.takeAttLog(att))
+            {
+                if (enqueueI2STx(RAW_GNSS_ATT_MSG, (const uint8_t*)&att, sizeof(att))) recs++;
+                else rec_drops++;
+            }
+        }
+#if TR_RAW_GNSS_PRIMARY
+        {
+            // and once a pass, so the loop hears that it is waiting, or stopped
+            gnss_raw::ShadowNav nav;
+            sh.navState(nav);
+            raw_shadow_link.nav.write(nav);
+        }
+#endif
+        // The pad context (PAD_CONTEXT_MSG), once a flight from 6 s after
+        // launch: one record each PAD_CONTEXT_PERIOD_MS (~1.5 s in all).
+        if (a0 - pcx_t0 >= (int64_t)config::PAD_CONTEXT_PERIOD_MS * 1000)
+        {
+            static uint8_t pcx[MAX_PAYLOAD];
+            size_t pcx_len = 0;
+            if (sh.takePadContext(pcx, sizeof(pcx), pcx_len, (uint32_t)a0))
+            {
+                pcx_t0 = a0;
+                if (enqueueI2STx(PAD_CONTEXT_MSG, pcx, pcx_len)) recs++;
                 else rec_drops++;
             }
         }
@@ -3119,7 +3218,8 @@ static void rawShadowTask(void*)
                           "%d meas, pr %d+%d rej, rr %d+%d rej, age %.0f ms, build %lu us, update %lu us "
                           "(max %lu/%lu) | eph %d sats, %d tracked without | from flight filter N %.1f E %.1f "
                           "D %.1f m | iono %s (%d days) | pad survey %u settling, %u corrected (rms %.2f m), "
-                          "%d used, raw puts the pad %.1f m off%s | core 0 %.1f%% | log %lu, dropped %lu, ring drops %lu",
+                          "%d used, raw puts the pad %.1f m off%s | busy %.1f%% of core 0 (wall: with preemption) "
+                          "| log %lu, dropped %lu, ring drops %lu | internal heap %u B free, min %u B",
                      sh.running() ? "running" : "waiting", (unsigned long)st.starts,
                      (unsigned long)st.stops, (unsigned)st.last_stop,
                      (double)(st.imu - imu0) / win_s, step_avg, (unsigned long)st.step_us_max,
@@ -3136,7 +3236,17 @@ static void rawShadowTask(void*)
                      (double)sh.survey().summary().pad_offset_m,
                      sh.survey().summary().pad_ok ? "" : " (not vouched for)",
                      100.0 * (double)busy_us * 1e-6 / win_s, (unsigned long)recs,
-                     (unsigned long)rec_drops, (unsigned long)raw_shadow_link.imu.dropped());
+                     (unsigned long)rec_drops, (unsigned long)raw_shadow_link.imu.dropped(),
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                     (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+#if TR_RAW_GNSS_PRIMARY
+            // what the flight loop got (RawNavAdapter): the oldest state it
+            // read in the window, and how the last epoch was spread
+            ESP_LOGI(TAG, "[RAWGNSS] nav: the loop read a state at most %.1f ms old | last epoch in %lu slices "
+                          "over %.0f ms (longest slice %.1f ms)",
+                     (double)ekf.takeMaxAgeUs() * 1e-3, (unsigned long)st.epoch_slices,
+                     (double)st.epoch_wall_us * 1e-3, (double)st.slice_us_max * 1e-3);
+#endif
             // each satellite's pad correction, at its elevation from the pad:
             // a common pattern in sin(el) is the pad's height, one system's
             // is that system's measurements
@@ -3189,7 +3299,10 @@ static void rawShadowTask(void*)
                 ESP_LOGI(TAG, "[RAWGNSS] checks: fixes %lu: %lu passed, %lu flagged, %lu unjudged, %lu lapsed "
                               "(no time %lu, dropped %lu) | last %s: %.1f m of %.1f, %.2f m/s of %.2f over %.2f s "
                               "| satellites jumped %lu (last epoch %d of %d judged, worst %.1f m) "
-                              "| levelled %lu steps, %lu held off in flight",
+                              "| levelled %lu steps, %lu held off in flight | baro fused %lu of %lu, "
+                              "%lu held at speed (offset %+.1f m%s) | zero-velocity %lu landed, %lu on the pad "
+                              "| mag fused %lu of %lu (%lu refused) "
+                              "| restores %lu",
                          (unsigned long)fs.fixes, (unsigned long)fs.passed, (unsigned long)fs.flagged,
                          (unsigned long)fs.unjudged, (unsigned long)fs.lapsed,
                          (unsigned long)st.fixes_untimed, (unsigned long)st.fixes_dropped,
@@ -3199,7 +3312,12 @@ static void rawShadowTask(void*)
                          (double)fl.vel_tol_mps, (double)fl.span_s, (unsigned long)st.sats_jumped,
                          st.last_sats_jumped, sh.satCheck().summary().judged,
                          sh.satCheck().summary().worst_m, (unsigned long)st.levels,
-                         (unsigned long)st.levels_held);
+                         (unsigned long)st.levels_held, (unsigned long)st.baro_fused,
+                         (unsigned long)st.baro, (unsigned long)st.baro_held, st.baro_offset_m,
+                         st.baro_offset_frozen ? ", frozen" : "", (unsigned long)st.zupts,
+                         (unsigned long)st.pad_zupts,
+                         (unsigned long)st.mag_fused, (unsigned long)st.mags,
+                         (unsigned long)st.mag_suspect, (unsigned long)st.restores);
             }
             win_t0 = a1;
             busy_us = 0;
@@ -3233,16 +3351,31 @@ static void startRawShadow()
         ESP_LOGE(TAG, "[RAWGNSS] no memory for the shadow filter (%u B): not started", (unsigned)n);
         return;
     }
-    raw_shadow = new (mem) gnss_raw::RawGnssShadow();
+    gnss_raw::RawGnssShadow::Config cfg;
+#if TR_RAW_GNSS_PRIMARY
+    // The navigation filter: its own attitude on the pad, and 100 steps a
+    // second for the flight loop (#1600; the step's cost in the [RAWGNSS] line)
+    cfg.primary = true;
+    cfg.min_step_s = 0.01;
+    // and an epoch worked a slice a step, so the state the flight loop reads
+    // keeps up while a sky is built and fused (RawGnssShadow::workJob): in one
+    // pass 14 satellites held it 40 ms on the rig (r9), a sky of 30 ~90 ms
+    cfg.epoch_slice_us = 2500.0;
+#endif
+    raw_shadow = new (mem) gnss_raw::RawGnssShadow(cfg);
     if (xTaskCreatePinnedToCore(rawShadowTask, "Raw GNSS", 8192, nullptr, 1, nullptr,
                                 config::SENSOR_CORE) != pdPASS)
     {
         ESP_LOGE(TAG, "[RAWGNSS] task not created: shadow filter off");
         return;
     }
-    ESP_LOGI(TAG, "[RAWGNSS] shadow filter on core %u, priority 1 (%u B in %s; %u B internal left)",
-             (unsigned)config::SENSOR_CORE, (unsigned)n, where,
+    ESP_LOGI(TAG, "[RAWGNSS] %s on core %u, priority 1, %.0f steps/s (%u B in %s; %u B internal left)",
+             cfg.primary ? "NAVIGATION filter" : "shadow filter", (unsigned)config::SENSOR_CORE,
+             1.0 / cfg.min_step_s, (unsigned)n, where,
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+#if TR_RAW_GNSS_PRIMARY
+    ekf.attach(&raw_shadow_link);
+#endif
 }
 #endif  // TR_RAW_GNSS_SHADOW
 
@@ -6238,6 +6371,7 @@ static void resetFlightStateForSim(const char* edge)
     ref_lat_sum = ref_lon_sum = ref_alt_sum = 0.0;
     ref_pos_count = 0;
     ref_pos_first_time_ms = 0;
+    ref_from_nav = false;
     ekf_gnss_feed.reset();
     GnssAscentGate::reset(gnss_admit_state);   // back on the pad: GNSS flows, pad offset relearned
     gnss_started = false;
@@ -6701,6 +6835,18 @@ static void loop_fc()
                            SIZE_OF_BMP585_DATA);
     }
 
+    // The IMU's die temperature, once a second (IMU_TEMP_MSG): from the
+    // hardware collector, as the chip is real whatever a sensor sim feeds the
+    // filter. Log-only.
+    {
+        Ism6TempData imu_temp;
+        if (sensor_collector_hw.getIsm6Temperature(imu_temp))
+        {
+            (void)enqueueI2STx(IMU_TEMP_MSG, reinterpret_cast<const uint8_t*>(&imu_temp),
+                               sizeof(imu_temp));
+        }
+    }
+
     if (sensor_collector.getMMC5983MAData(mmc5983ma_data))
     {
         dbg_mmc_reads++;
@@ -6800,6 +6946,19 @@ static void loop_fc()
                 memcpy(rtcm_record + sizeof(hdr), rtcm_frame + off, n);
                 (void)enqueueI2STx(GNSS_RTCM_MSG, rtcm_record, sizeof(hdr) + n);
             }
+        }
+    }
+
+    // The GPS-to-MCU clock line (GNSS_CLOCK_MSG), each time it moves: about
+    // once a second with a fix, so a replay places every raw epoch and fix on
+    // the IMU's clock as this flight did. From the hardware collector: it is
+    // the real receiver's clock whatever a sensor sim feeds the filter.
+    // Log-only; no-op on u-blox boards.
+    {
+        GnssClockData clk;
+        while (sensor_collector_hw.getGNSSClockLine(clk))
+        {
+            (void)enqueueI2STx(GNSS_CLOCK_MSG, reinterpret_cast<const uint8_t*>(&clk), sizeof(clk));
         }
     }
     TR_LP_LAP(SENSORS);
@@ -7258,13 +7417,37 @@ static void loop_fc()
 
                 // Running average of GNSS fixes for launch-site reference.
                 // Only accumulate fixes that pass the stricter init gate (Gate 3).
-                if (!ref_pos_frozen && gnss_gate3_init) {
+#if TR_RAW_GNSS_PRIMARY
+                // #1600: the navigation filter's own pad, once its raw epochs
+                // lead (the average started over then), and only its own from
+                // there. Every height it gives is taken from this reference
+                // (the ENU up, the AGL), and on the rig the receiver's average
+                // sat 3.4 m from the raw solution, all of it in those heights
+                // (r3). Until then the receiver's, so the reference (and the
+                // start that waits on it) is not held up.
+                const bool ref_nav_now = ekf.gnssAided();
+                if (ref_nav_now && !ref_from_nav && !ref_pos_frozen && gnss_gate3_init) {
+                    ref_from_nav = true;
+                    ref_lat_sum = ref_lon_sum = ref_alt_sum = 0.0;
+                    ref_pos_count = 0;
+                }
+                const bool ref_take = !ref_from_nav || ref_nav_now;
+#else
+                const bool ref_take = true;
+#endif
+                if (!ref_pos_frozen && gnss_gate3_init && ref_take) {
+                    double ref_add[3] = {ekf_gnss.lat_rad, ekf_gnss.lon_rad, ekf_gnss.alt_m};
+#if TR_RAW_GNSS_PRIMARY
+                    if (ref_from_nav) {
+                        ekf.getPosEst(ref_add);
+                    }
+#endif
                     if (ref_pos_count == 0) {
                         ref_pos_first_time_ms = now_ms;
                     }
-                    ref_lat_sum += ekf_gnss.lat_rad;
-                    ref_lon_sum += ekf_gnss.lon_rad;
-                    ref_alt_sum += ekf_gnss.alt_m;
+                    ref_lat_sum += ref_add[0];
+                    ref_lon_sum += ref_add[1];
+                    ref_alt_sum += ref_add[2];
                     ref_pos_count++;
                     ref_lat_rad = ref_lat_sum / ref_pos_count;
                     ref_lon_rad = ref_lon_sum / ref_pos_count;
@@ -7288,6 +7471,16 @@ static void loop_fc()
             }
 
             TR_LP_LAP(EKF_PREP);
+
+#if TR_RAW_GNSS_PRIMARY
+            // #1600: the raw-GNSS filter's latest state, and the receiver's
+            // geoid separation its heights are turned by (raw_nav_adapter.h)
+            {
+                float sep = 0.0f;
+                if (sensor_collector.getGNSSGeoidSeparation(sep)) ekf.setGeoidSeparation(sep);
+                ekf.refresh(time_us());
+            }
+#endif
 
             // ── Initialize or update the EKF ──
             // Wait for valid GNSS fix before init — avoids initializing
@@ -7510,8 +7703,11 @@ static void loop_fc()
                 // the rig replay's, which flies the rig's flight.
                 rawShadowPushImu(ekf_imu, use_ahrs_acc, rocket_state == INFLIGHT,
                                  (sensor_collector.isSimActive() || sim_flight_latched) &&
-                                     !sensor_collector.isReplay());
-                if (!gnss_absent_flight)
+                                     !sensor_collector.isReplay(),
+                                 kinematics.alt_landed_flag || rocket_state == LANDED);
+                // The navigation filter flies a GNSS-absent flight too, on
+                // the IMU and the barometer
+                if (!gnss_absent_flight || TR_RAW_GNSS_PRIMARY)
                     rawShadowPublishSeed(ekf_imu.time_us,
                                          rocket_state == READY || rocket_state == PRELAUNCH);
 #endif
@@ -7628,6 +7824,12 @@ static void loop_fc()
                         // baro updates.)
                         ekf_baro.altitude_m = (double)pressure_altitude_m + ref_alt_m;
                         ekf.baroMeasUpdate(ekf_baro);
+#if TR_RAW_GNSS_SHADOW
+                        // #1600: the raw-GNSS shadow fuses the same sample
+                        // (its own pad offset: RawGnssShadow.h)
+                        raw_shadow_link.baro.push(
+                            gnss_raw::ShadowBaro{bmp_latest_si.time_us, (float)pressure_altitude_m});
+#endif
                     }
                     else if (gate.spike)
                     {
@@ -10802,6 +11004,7 @@ static void loop_fc()
                     else if (settings_emit_count == 3 &&
                              now_ms - launch_time_millis >= 5000U) {
                         sendFlightSettings();
+                        sendPadContextCal();   // the calibrations a replay needs, once
                         settings_emit_count++;
                     }
                 }

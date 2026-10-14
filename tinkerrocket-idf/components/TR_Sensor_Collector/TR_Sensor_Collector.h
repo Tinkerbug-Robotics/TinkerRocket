@@ -247,6 +247,9 @@ public:
     // The receiver's own fixes with their GPS instant on the MCU clock, for
     // the shadow's check of each fix against the IMU (#1508). LC86G only.
     bool getGNSSFix(gnss_raw::TimedFix& out);
+    // The LC86G's GPS-to-MCU clock line each time it moves (GNSS_CLOCK_MSG);
+    // false on other receivers.
+    bool getGNSSClockLine(GnssClockData& out);
     // The geoid's height above the WGS84 ellipsoid at the last fix, m
     // (GNSSData's alt is above the geoid). LC86G only; false elsewhere or
     // before a fix.
@@ -303,6 +306,15 @@ public:
     // effect on the count stream (#1312).  Returns false if the mag isn't
     // active or the I2C write failed.  Issue #96.
     bool setIIS2MDCHardIronOffset(int16_t cx, int16_t cy, int16_t cz);
+    // The offset last asked of setIIS2MDCHardIronOffset() (the count stream
+    // is after it): false, and zeros, if none was this boot.
+    bool iis2mdcHardIronOffset(int16_t &cx, int16_t &cy, int16_t &cz) const
+    {
+        cx = iis2mdc_offset_cx;
+        cy = iis2mdc_offset_cy;
+        cz = iis2mdc_offset_cz;
+        return iis2mdc_offset_set;
+    }
 
     // #1111: IIS2MDC poll health.  Stalled = the chip failed STALL_FAILS
     // consecutive reads and the poll is down to the backed-off probe.
@@ -497,12 +509,23 @@ public:
     };
     void getIsm6FifoStats(Ism6FifoStats &out) const;
 
+    // The IMU's die temperature (IMU_TEMP_MSG), read by the poll task once a
+    // second between drains: the latest reading not yet taken.
+    bool getIsm6Temperature(Ism6TempData &data_out);
+
 private:
 
     SemaphoreHandle_t bmp585DataSemaphore;
     SemaphoreHandle_t mmc5983maDataSemaphore;
     SemaphoreHandle_t iis2mdcDataSemaphore;
     SemaphoreHandle_t gnssDataSemaphore;
+
+    // The IMU's die temperature: the poll task reads it once a second (the
+    // only task on SPI2, #475) and leaves it here; getIsm6Temperature takes it.
+    SemaphoreHandle_t ism6TempSemaphore = nullptr;
+    Ism6TempData  ism6_temp_data = {};
+    volatile bool ism6_temp_ready = false;
+    uint32_t      ism6_temp_next_us = 0;     // the next read, poll task only (wrap-safe compare)
 
     // Time-gated polling state for IIS2MDC (no DRDY pin in the poll path).
     // #1111: attempt gate + stall back-off; see iis2mdc_poll_gate.h.

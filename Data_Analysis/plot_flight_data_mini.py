@@ -158,6 +158,11 @@ MSG_GNSS_RTCM         = 0x95  # GnssRtcmHeader + a raw RTCM3 frame (or one part 
 MSG_RAW_GNSS_EKF      = 0x96  # RawGnssEkfData: the raw-GNSS shadow filter, 10 Hz (#1600)
 MSG_PAD_CAL_STATUS    = 0x99  # PadCalStatusData: the pad calibration's progress, 1 Hz on the ground (#1600 phase 5)
 MSG_GNSS_CHECK        = 0x9A  # GnssCheckData: each receiver fix against the IMU, 10 Hz (#1508)
+MSG_RAW_GNSS_ATT      = 0x9B  # RawGnssAttData: the raw-GNSS filter's attitude 1-sigma and IMU biases, 10 Hz
+MSG_IMU_TEMP          = 0x9C  # Ism6TempData: the IMU's die temperature, 1 Hz
+MSG_GNSS_CLOCK        = 0x9D  # GnssClockData: the GPS-to-MCU clock line each time it moves, ~1 Hz
+MSG_PAD_CONTEXT       = 0x9E  # PadContextHeader + its kind's body: what a replay needs from the pad,
+                              # once after launch; variable length 7 + up to 196
 MSG_ISM6HG256         = 0xA2
 MSG_BMP585            = 0xA3
 MSG_MMC5983MA         = 0xA4
@@ -200,6 +205,10 @@ MSG_NAMES = {
     MSG_RAW_GNSS_EKF:     "RawGnssEkf",
     MSG_PAD_CAL_STATUS:   "PadCalStatus",
     MSG_GNSS_CHECK:       "GnssCheck",
+    MSG_RAW_GNSS_ATT:     "RawGnssAtt",
+    MSG_IMU_TEMP:         "ImuTemp",
+    MSG_GNSS_CLOCK:       "GnssClock",
+    MSG_PAD_CONTEXT:      "PadContext",
     MSG_ISM6HG256:        "ISM6HG256",
     MSG_BMP585:           "BMP585",
     MSG_MMC5983MA:        "MMC5983MA",
@@ -228,6 +237,10 @@ MSG_EXPECTED_LEN = {
     MSG_RAW_GNSS_EKF:      90,    # sizeof(RawGnssEkfData)
     MSG_PAD_CAL_STATUS:    40,    # sizeof(PadCalStatusData)
     MSG_GNSS_CHECK:        24,    # sizeof(GnssCheckData)
+    MSG_RAW_GNSS_ATT:      46,    # sizeof(RawGnssAttData)
+    MSG_IMU_TEMP:           6,    # sizeof(Ism6TempData)
+    MSG_GNSS_CLOCK:        68,    # sizeof(GnssClockData)
+    MSG_PAD_CONTEXT:       None,  # 7 + its kind's body; checked in decode_pad_context
     MSG_ISM6HG256:         22,
     MSG_BMP585:            12,
     MSG_MMC5983MA:         16,
@@ -493,6 +506,267 @@ def decode_pad_cal_status(payload):
     for name, bit in PAD_CAL_FLAGS.items():
         rec[name] = bool(f[10] & bit)
     return rec
+
+
+# RawGnssAttData (RAW_GNSS_ATT_MSG 0x9B), 46 bytes packed: beside each
+# RawGnssEkfData record, with its time_us, what that record leaves out of the
+# raw-GNSS filter -- its attitude 1-sigma about north, east and down (down is
+# the heading, and on a rocket near vertical the roll; centi-deg on the wire),
+# and its accelerometer (m/s^2) and gyro (deg/s) bias estimates, body FRD, with
+# their 1-sigma (mm/s^2, milli-deg/s on the wire).
+FMT_RAW_GNSS_ATT = '<I 3H 3f 3f 3H 3H'
+SIZE_OF_RAW_GNSS_ATT = struct.calcsize(FMT_RAW_GNSS_ATT)  # 46
+
+
+def decode_raw_gnss_att(payload):
+    """RawGnssAttData payload -> record dict in SI units (angles in deg), or None if the size is wrong."""
+    if len(payload) != SIZE_OF_RAW_GNSS_ATT:
+        return None
+    f = struct.unpack(FMT_RAW_GNSS_ATT, payload)
+    return {
+        "time_us":            f[0],
+        "att_sigma_n_deg":    f[1] * 1e-2,
+        "att_sigma_e_deg":    f[2] * 1e-2,
+        "heading_sigma_deg":  f[3] * 1e-2,
+        "acc_bias_x":         f[4],
+        "acc_bias_y":         f[5],
+        "acc_bias_z":         f[6],
+        "gyro_bias_x_dps":    f[7],
+        "gyro_bias_y_dps":    f[8],
+        "gyro_bias_z_dps":    f[9],
+        "acc_bias_sigma_x":   f[10] * 1e-3,
+        "acc_bias_sigma_y":   f[11] * 1e-3,
+        "acc_bias_sigma_z":   f[12] * 1e-3,
+        "gyro_bias_sigma_x_dps": f[13] * 1e-3,
+        "gyro_bias_sigma_y_dps": f[14] * 1e-3,
+        "gyro_bias_sigma_z_dps": f[15] * 1e-3,
+    }
+
+
+# Ism6TempData (IMU_TEMP_MSG 0x9C), 6 bytes packed: the ISM6HG256X's die
+# temperature once a second, as the chip gives it -- 256 LSB per degC, 0 at
+# 25 degC -- for the gyro's bias and scale against temperature.
+FMT_IMU_TEMP = '<I h'
+SIZE_OF_IMU_TEMP = struct.calcsize(FMT_IMU_TEMP)  # 6
+
+
+def decode_imu_temp(payload):
+    """Ism6TempData payload -> record dict (temp_c in degC), or None if the size is wrong."""
+    if len(payload) != SIZE_OF_IMU_TEMP:
+        return None
+    t, raw = struct.unpack(FMT_IMU_TEMP, payload)
+    return {"time_us": t, "temp_raw": raw, "temp_c": 25.0 + raw / 256.0}
+
+
+# GnssClockData (GNSS_CLOCK_MSG 0x9D), 68 bytes packed: the MCU clock against
+# GPS time as the LC86G driver's GnssTimeSync holds it (no 1PPS on the Beetle:
+# a line fitted to when each $PQTMPVT arrived), each time the line moves -- a
+# new GPS second filed, or a restart. Every raw epoch and fix the flight placed
+# on the IMU's clock went through it, so gnss_clock_mcu_us() on the latest
+# record logged before an epoch's last frame places it exactly as the flight did.
+FMT_GNSS_CLOCK = '<I I I q d d d d f f I H B B'
+SIZE_OF_GNSS_CLOCK = struct.calcsize(FMT_GNSS_CLOCK)  # 68
+GNSS_CLOCK_FLAGS = {"valid": 0x01, "started": 0x02}
+
+
+def decode_gnss_clock(payload):
+    """GnssClockData payload -> record dict, or None if the size is wrong."""
+    if len(payload) != SIZE_OF_GNSS_CLOCK:
+        return None
+    f = struct.unpack(FMT_GNSS_CLOCK, payload)
+    rec = {
+        "time_us":    f[0],
+        "seq":        f[1],
+        "gps0_s":     f[2],
+        "mcu0_us":    f[3],
+        "a_s":        f[4],
+        "t_ref_s":    f[5],
+        "drift":      f[6],
+        "drift_ppm":  f[6] * 1e6,
+        "latency_s":  f[7],
+        "env_rms_ms": f[8],
+        "late90_ms":  f[9],
+        "samples":    f[10],
+        "restarts":   f[11],
+        "bins":       f[12],
+        "flags":      f[13],
+    }
+    for name, bit in GNSS_CLOCK_FLAGS.items():
+        rec[name] = bool(f[13] & bit)
+    return rec
+
+
+def gnss_clock_mcu_us(rec, gps_s):
+    """The MCU micros of a GPS instant (week * 604800 + time of week, s) on a
+    decoded GnssClockData line, as GnssTimeSync::mcuAt computes it (C's llround:
+    half away from zero). None if the line was not valid yet."""
+    if not rec["valid"]:
+        return None
+    t = gps_s - float(rec["gps0_s"])
+    rel = t + (rec["a_s"] + rec["drift"] * (t - rec["t_ref_s"])) - rec["latency_s"]
+    x = rel * 1.0e6
+    return rec["mcu0_us"] + int(math.copysign(math.floor(abs(x) + 0.5), x))
+
+
+# PAD_CONTEXT_MSG (0x9E): the pad, written once after launch -- the log's
+# pre-launch ring keeps only about a second before ignition, and none of this
+# changes in flight. A 7-byte header (time_us when written, kind, part, parts)
+# then one kind's body: "cal", the calibrations the flight flew with that the
+# logged counts do not carry (the flight loop, launch + 5 s); from + 6 s the
+# raw-GNSS filter at the launch tick -- "nav" its state and what it took from
+# the pad, "cov" its covariance (the upper triangle of its 19 error states, in
+# four parts), "survey" the pad survey's corrections (in parts) -- and "eph",
+# each broadcast ephemeris it held as a whole RTCM3 frame, one a record.
+# join_pad_context() puts a launch's records back together.
+FMT_PAD_CONTEXT_HDR = '<I B B B'
+PAD_CONTEXT_HDR_LEN = struct.calcsize(FMT_PAD_CONTEXT_HDR)   # 7
+PAD_CONTEXT_KINDS = {1: "cal", 2: "nav", 3: "cov", 4: "survey", 5: "eph"}
+FMT_PCX_CAL = '<3h 3f 3h B f 3i'
+SIZE_OF_PCX_CAL = struct.calcsize(FMT_PCX_CAL)               # 41
+FMT_PCX_NAV = '<I 3d 3f 4f 3f 3f d 6f 8b H B B'
+SIZE_OF_PCX_NAV = struct.calcsize(FMT_PCX_NAV)               # 124
+PCX_NAV_FLAGS = {"running": 0x01, "clock_set": 0x02, "has_baro": 0x04, "has_iono": 0x08,
+                 "has_declination": 0x10, "primary": 0x20}
+PCX_IONO_SOURCES = {0: "none", 1: "broadcast", 2: "pad survey"}
+PCX_COV_N = 19                                               # position, velocity, attitude
+PCX_COV_VALUES = PCX_COV_N * (PCX_COV_N + 1) // 2            # half-angle, biases, clock, ISBs: 190
+FMT_PCX_COV_HDR = '<H B B'                                   # first, n, reserved; then n float32
+FMT_PCX_SURVEY_HDR = '<4B 2f B'                              # 13; then n of the entry below
+FMT_PCX_SURVEY_ENTRY = '<B B f'                              # sys (0 GPS, 1 Galileo, 2 BeiDou), prn, corr_m
+
+
+def decode_pad_context(payload):
+    """PAD_CONTEXT_MSG payload -> {time_us, kind, part, parts} and its kind's
+    fields, or None if malformed."""
+    if len(payload) < PAD_CONTEXT_HDR_LEN:
+        return None
+    time_us, kind, part, parts = struct.unpack_from(FMT_PAD_CONTEXT_HDR, payload, 0)
+    name = PAD_CONTEXT_KINDS.get(kind)
+    if name is None or parts == 0 or part >= parts:
+        return None
+    body = bytes(payload[PAD_CONTEXT_HDR_LEN:])
+    rec = {"time_us": time_us, "kind": name, "part": part, "parts": parts}
+    if name == "cal":
+        if len(body) != SIZE_OF_PCX_CAL:
+            return None
+        f = struct.unpack(FMT_PCX_CAL, body)
+        rec.update({
+            "gyro_offset_lsb":  f[0:3],      # subtracted before the log: ISM6HG256's gyro counts are after it
+            "hg_bias_mps2":     f[3:6],      # high-g less low-g, body frame: applied after the log
+            "mag_offset_lsb":   f[6:9],      # in the magnetometer's OFFSET registers: IIS2MDC's counts are after it
+            "mag_offset_set":   bool(f[9]),
+            "cal_gravity_mps2": f[10],
+            "mmc_offset_counts": f[11:14],   # the MMC5983MA's: subtracted after the log, before scaling
+        })
+    elif name == "nav":
+        if len(body) != SIZE_OF_PCX_NAV:
+            return None
+        f = struct.unpack(FMT_PCX_NAV, body)
+        rec.update({
+            "filter_time_us":  f[0],          # the launch tick (RawGnssEkf's clock)
+            "lat_rad":         f[1],
+            "lon_rad":         f[2],
+            "height_m":        f[3],          # above the ellipsoid
+            "vel_ned":         f[4:7],
+            "quat":            f[7:11],       # body -> NED, scalar first
+            "acc_bias_mps2":   f[11:14],
+            "gyro_bias_rps":   f[14:17],
+            "clk_bias_m":      f[17],
+            "clk_drift_mps":   f[18],
+            "isb_gal_m":       f[19],
+            "isb_bds_m":       f[20],
+            "baro_offset_m":   f[21],
+            "declination_rad": f[22],
+            "field_ut":        f[23],
+            "iono":            f[24:32],      # GPS broadcast Klobuchar bytes: alpha0..3, beta0..3
+            "iono_gps_day":    f[32],
+            "iono_source":     PCX_IONO_SOURCES.get(f[33], str(f[33])),
+            "flags":           f[34],
+        })
+        for flag, bit in PCX_NAV_FLAGS.items():
+            rec[flag] = bool(f[34] & bit)
+    elif name == "cov":
+        hdr = struct.calcsize(FMT_PCX_COV_HDR)
+        if len(body) < hdr:
+            return None
+        first, n, _ = struct.unpack_from(FMT_PCX_COV_HDR, body, 0)
+        if len(body) != hdr + 4 * n or first + n > PCX_COV_VALUES:
+            return None
+        rec.update({"first": first, "values": struct.unpack_from(f"<{n}f", body, hdr)})
+    elif name == "survey":
+        hdr = struct.calcsize(FMT_PCX_SURVEY_HDR)
+        esz = struct.calcsize(FMT_PCX_SURVEY_ENTRY)
+        if len(body) < hdr:
+            return None
+        tracked, settling, corrected, pad_ok, rms_m, pad_offset_m, n = \
+            struct.unpack_from(FMT_PCX_SURVEY_HDR, body, 0)
+        if len(body) != hdr + esz * n:
+            return None
+        rec.update({
+            "tracked": tracked, "settling": settling, "corrected": corrected,
+            "pad_ok": bool(pad_ok), "rms_m": rms_m, "pad_offset_m": pad_offset_m,
+            "corrections": [struct.unpack_from(FMT_PCX_SURVEY_ENTRY, body, hdr + esz * i)
+                            for i in range(n)],
+        })
+    else:                                     # eph: 0xD3, 6 bits zero, 10 of length, payload, CRC-24Q
+        if len(body) < 6 or body[0] != 0xD3 or (((body[1] & 0x03) << 8) | body[2]) + 6 != len(body):
+            return None
+        rec["frame"] = body
+    return rec
+
+
+def join_pad_context(recs, launch=0):
+    """The decoded PadContext records of a log -> its launch-th launch's pad
+    context (from 0), or None if there is no such launch.
+
+    {"cal", "nav", "cov", "survey", "eph_frames", "missing"}: "cov" the 19x19
+    covariance (symmetric, nested lists) and "survey" the summary with every
+    correction, each None unless all its parts arrived (a part of one is not
+    it); "eph_frames" each ephemeris that arrived, a whole RTCM3 frame, for a
+    replay's RTCM3 parser before the flight's own GNSS_RTCM frames; "missing"
+    the kinds not (all) there. A launch's "cal" comes a second before its "nav"
+    and the rest after it, so a "cal", or a "nav" where there is one already,
+    starts the next launch's.
+    """
+    launches = []
+    for r in recs:
+        k = r["kind"]
+        if not launches or k == "cal" or (k == "nav" and launches[-1]["nav"] is not None):
+            launches.append({"cal": None, "nav": None, "cov": {}, "survey": {}, "eph": [], "parts": {}})
+        cur = launches[-1]
+        if k in ("cal", "nav"):
+            cur[k] = r
+        elif k == "eph":
+            cur["eph"].append(r)
+        else:
+            cur[k][r["part"]] = r
+            cur["parts"][k] = r["parts"]
+    if not 0 <= launch < len(launches):
+        return None
+    cur = launches[launch]
+    cov = None
+    if cur["cov"] and len(cur["cov"]) == cur["parts"]["cov"]:
+        tri = [None] * PCX_COV_VALUES
+        for r in cur["cov"].values():
+            tri[r["first"]:r["first"] + len(r["values"])] = r["values"]
+        if None not in tri and len(tri) == PCX_COV_VALUES:
+            cov = [[0.0] * PCX_COV_N for _ in range(PCX_COV_N)]
+            k = 0
+            for i in range(PCX_COV_N):
+                for j in range(i, PCX_COV_N):
+                    cov[i][j] = cov[j][i] = tri[k]
+                    k += 1
+    survey = None
+    if cur["survey"] and len(cur["survey"]) == cur["parts"]["survey"]:
+        s0 = cur["survey"][0]
+        survey = {k: s0[k] for k in ("tracked", "settling", "corrected", "pad_ok", "rms_m", "pad_offset_m")}
+        survey["corrections"] = [c for p in sorted(cur["survey"]) for c in cur["survey"][p]["corrections"]]
+    out = {"cal": cur["cal"], "nav": cur["nav"], "cov": cov, "survey": survey,
+           "eph_frames": [r["frame"] for r in cur["eph"]]}
+    out["missing"] = [k for k in ("cal", "nav", "cov", "survey") if out[k] is None]
+    if cur["eph"] and len(cur["eph"]) < cur["eph"][0]["parts"]:
+        out["missing"].append("eph")
+    return out
 
 
 # GnssCheckData (GNSS_CHECK_MSG 0x9A), 24 bytes packed (#1508): each receiver
@@ -823,6 +1097,10 @@ def parse_binary_file(filepath):
         "RawGnssEkf":     [],   # 0x96 the raw-GNSS shadow filter, 10 Hz (#1600)
         "PadCalStatus":   [],   # 0x99 the pad calibration's progress, 1 Hz on the ground (#1600 phase 5)
         "GnssCheck":      [],   # 0x9A each receiver fix against the IMU, 10 Hz (#1508)
+        "RawGnssAtt":     [],   # 0x9B the raw-GNSS filter's attitude 1-sigma and IMU biases, 10 Hz
+        "ImuTemp":        [],   # 0x9C the IMU's die temperature, 1 Hz
+        "GnssClock":      [],   # 0x9D the GPS-to-MCU clock line each time it moves, ~1 Hz
+        "PadContext":     [],   # 0x9E the pad, once after launch; join_pad_context() puts a launch's together
         "FcStatus":       [],   # 0x92 FcStatusData (#1154 item 4) — appended below; was never initialised
         "ISM6HG256":      [],
         "BMP585":         [],
@@ -1037,6 +1315,26 @@ def parse_binary_file(filepath):
                 rec = decode_gnss_check(payload)
                 if rec is not None:
                     records["GnssCheck"].append(rec)
+
+            elif msg_type == MSG_RAW_GNSS_ATT:
+                rec = decode_raw_gnss_att(payload)
+                if rec is not None:
+                    records["RawGnssAtt"].append(rec)
+
+            elif msg_type == MSG_IMU_TEMP:
+                rec = decode_imu_temp(payload)
+                if rec is not None:
+                    records["ImuTemp"].append(rec)
+
+            elif msg_type == MSG_GNSS_CLOCK:
+                rec = decode_gnss_clock(payload)
+                if rec is not None:
+                    records["GnssClock"].append(rec)
+
+            elif msg_type == MSG_PAD_CONTEXT:
+                rec = decode_pad_context(payload)
+                if rec is not None:
+                    records["PadContext"].append(rec)
 
             elif msg_type == MSG_ISM6HG256:
                 fields = struct.unpack(FMT_ISM6, payload)

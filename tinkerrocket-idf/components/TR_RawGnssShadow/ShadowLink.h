@@ -1,7 +1,8 @@
 // ShadowLink.h — what the flight loop (core 1) hands the raw-GNSS shadow
-// filter (core 0) (#1600): every flight-filter IMU tick, now and then the
-// flight filter's own state to start from and to take its pad attitude from,
-// and the ionosphere a pad calibration brought.
+// filter (core 0) (#1600): every flight-filter IMU tick, each barometer
+// sample the flight filter fuses, now and then the flight filter's own state
+// to start from and to take its pad attitude from, and the ionosphere a pad
+// calibration brought.
 //
 // The flight loop must not wait on core 0, so neither handoff can block it:
 //   - IMU ticks go through a single-producer single-consumer ring, a store
@@ -30,6 +31,25 @@ struct ShadowImu
 static constexpr uint8_t kShadowLevel    = 0x01;  // the flight filter levels against gravity on this tick
 static constexpr uint8_t kShadowInFlight = 0x02;  // rocket_state is INFLIGHT
 static constexpr uint8_t kShadowSim      = 0x04;  // a sensor sim runs: the IMU is not real
+static constexpr uint8_t kShadowLanded   = 0x08;  // the landing detector has called it: zero velocity
+
+// A magnetometer sample (body FRD, uT): the flight filter's input. The raw
+// filter takes it as a heading on the ground where it is the navigation
+// filter (RawGnssShadow::Config::primary).
+struct ShadowMag
+{
+    uint32_t time_us;
+    float    mag[3];
+};
+
+// A barometer sample the flight filter fused (the same gate: in range, not a
+// spike, not a sealed port): its height above the pad from the ground
+// pressure, m.
+struct ShadowBaro
+{
+    uint32_t time_us;   // its time (esp_timer us, truncated to 32 bits)
+    float    height_m;  // above the pad (pressure altitude from the ground pressure)
+};
 
 // The flight filter's state.
 struct ShadowSeed
@@ -44,6 +64,30 @@ struct ShadowSeed
     float    pad_sigma_m;   // its uncertainty, m
     double   pad_lla[3];    // the launch site: the flight computer's average of the receiver's fix
                             // (rad, rad, m ellipsoidal)
+    // where the raw filter is the navigation filter (Config::primary)
+    float    declination_rad;  // true north east of magnetic, at the pad (TR_GeoMag)
+    float    field_ut;         // the field's size the model gives there; 0 = no model
+    uint8_t  have_declination;
+    uint8_t  restore;          // a flight restored after a reboot: start in flight from this state
+    uint8_t  start_gen;        // a new one on the pad (the flight computer started over): start again
+};
+
+// The raw filter's navigation state, every step (core 0 -> core 1): what the
+// flight loop flies on where it is the navigation filter.
+struct ShadowNav
+{
+    uint32_t time_us;          // the IMU tick it is at
+    double   lla[3];           // rad, rad, m (ellipsoidal)
+    float    vel_ned[3];       // m/s
+    float    quat[4];          // body FRD -> NED, scalar first (as GpsInsEKF)
+    float    accel_bias[3];    // m/s^2
+    float    gyro_bias[3];     // rad/s
+    float    var[15];          // its covariance's diagonal: position (m^2), velocity, attitude
+                               // (half-angle, as GpsInsEKF's), accelerometer and gyro bias
+    uint8_t  running;
+    uint8_t  gnss_aided;       // raw measurements applied within the last 2 s
+    uint8_t  baro_aided;       // a barometer sample fused within the last 1 s
+    uint32_t epochs;           // raw epochs applied since it started
 };
 
 // The GPS broadcast ionosphere the app uploaded with a pad calibration
@@ -157,7 +201,14 @@ struct ShadowPadStatus
 // The handoffs, as one object both sides share.
 struct ShadowLink
 {
-    SpscRing<ShadowImu, 64> imu;   // 0.37 s at the Beetle's 171 Hz flight filter
+    // Room for the raw filter's longest pause: an epoch is built and fused in
+    // one pass, about 5 ms a satellite on the Beetle (r3: 14 satellites,
+    // 67 ms; up to 97 ms), and a sky of 30 would be 150 ms. The navigation
+    // filter is fed about 450 samples a second (the shadow 171): 0.57 s here.
+    SpscRing<ShadowImu, 256> imu;
+    SpscRing<ShadowBaro, 64> baro;
+    SpscRing<ShadowMag, 64> mag;   // where it is the navigation filter
+    SeqLock<ShadowNav> nav;        // core 0 -> core 1, every step
     SeqLock<ShadowSeed> seed;
     SeqLock<ShadowIono> iono;      // written at boot (from NVS) and by each pad calibration
     SeqLock<ShadowPadStatus> pad;  // core 0 -> core 1, once a second

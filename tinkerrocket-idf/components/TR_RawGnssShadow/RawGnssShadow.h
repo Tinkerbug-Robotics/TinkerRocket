@@ -37,6 +37,28 @@
 // passed (FixCheck.h) and logged (GNSS_CHECK_MSG). That one only reports: the
 // flight filter takes every fix as before.
 //
+// Barometer and landing. Each barometer sample the flight filter fuses is
+// fused here too, as a height: the barometer's height above the pad plus an
+// offset to the filter's own (ellipsoidal) height, learned on the pad while
+// the raw measurements lead and frozen at launch. Its variance is the flight
+// filter's: (2 m)^2 plus the static port's error at the dynamic pressure
+// (#1579). With no satellites -- the receiver lost the sky under the main on
+// the rig, and with nothing else the shadow drifted 70 m in 20 s -- it holds
+// the vertical. Once the landing detector has called it, zero velocity, 10
+// times a second (#1418).
+//
+// The navigation filter (Config::primary: the Beetle, TR_RAW_GNSS_PRIMARY).
+// There GpsInsEKF does not run, and the seed is no filter's state, only where
+// to start: the receiver's pad position, an attitude from the accelerometer,
+// the still gyro's mean, the declination and the field's size at the pad. So
+// on the ground the filter keeps its own attitude -- it levels, and takes the
+// magnetometer as a heading (#1578's measurement) -- and is never resynced.
+// It learns the barometer's offset with or without a fix of its own (a flight
+// without GNSS has the barometer and the IMU). A seed marked restore -- a
+// flight the flight computer restored after a reboot -- starts it in flight,
+// the barometer's offset taken from its first sample. Its state goes to the
+// flight loop every step (navState, ShadowLink::nav).
+//
 // Levelling. Where the flight filter takes its accelerometer as gravity (the
 // ground, and after apogee) the shadow does too -- in flight only once its
 // own velocity has held steady from epoch to epoch and the specific force is
@@ -66,6 +88,7 @@
 
 #include <RocketComputerTypes.h>
 
+#include "EphemerisFrames.h"
 #include "EphemerisStore.h"
 #include "FixCheck.h"
 #include "LevelGate.h"
@@ -89,6 +112,8 @@ public:
         double   epoch_latency_s = 0.0;   // the receiver's delay the time sync leaves in (its
                                           // latency_s, uncalibrated: 0)
         double   max_epoch_age_s = 0.6;   // later than this an epoch is dropped
+        double   epoch_slice_us  = 0.0;   // the navigation filter: an epoch's work at most this long a step (0: at once)
+        double   epoch_job_max_s = 0.3;   //   but all of it once the epoch is this old (the IMU history is 0.5 s)
         double   log_period_s    = 0.1;   // RAW_GNSS_EKF_MSG at 10 Hz
         double   min_step_s      = 0.04;  // the filter steps at most this often (25 Hz), on
                                           // the mean of the ticks since; 0 = every tick
@@ -103,6 +128,20 @@ public:
         FixCheck::Config fix_check;
         double   acc_window_s = 0.08;     // the IMU's acceleration at a fix: its mean over this long
         LevelGate::Config level;          // when it levels in flight
+        double   baro_sigma_m    = 2.0;       // the barometer's own noise, m (the flight filter's)
+        double   baro_port_k     = 0.0075;    // the static port's error, m per Pa of dynamic pressure (#1579)
+        double   baro_offset_tau_s = 30.0;    // the pad offset follows the filter's height this slowly
+        double   baro_offset_min_s = 10.0;    // and is used once it has had this long
+        double   baro_hold_port_m = 2.0;      // in flight: held out while that error at the vertical speed is above this
+        double   baro_hold_max_s  = 30.0;     //   but no longer than this after launch
+        double   zupt_sigma_mps  = 0.5;       // landed: zero velocity, 1 sigma (#1418)
+        double   zupt_period_s   = 0.1;       //   this often
+        bool     pad_zupt        = true;      // the navigation filter, on the pad while still: zero velocity too
+        double   still_rate_rps  = 0.05;      //   still: rotating slower than this, the force g's size
+        bool     primary         = false;     // the navigation filter (above)
+        double   mag_field_tol   = 0.15;      // a field this far off the model's size is no heading (#1304)
+        double   max_bridge_s    = 5.0;       // the navigation filter bridges an IMU hole this long
+        double   pad_context_delay_s = 6.0;   // the pad context is written from this long after launch
     };
 
     // What takes the ionosphere out (the pad status message reports it).
@@ -136,6 +175,9 @@ public:
         uint32_t step_n = 0, step_us_max = 0;
         uint32_t build_us = 0, update_us = 0;            // the last epoch
         uint32_t build_us_max = 0, update_us_max = 0;
+        uint32_t epoch_slices = 0;         // the last epoch's work, in this many slices
+        uint32_t epoch_wall_us = 0;        //   from its first to its last (the filter stepping in between)
+        uint32_t slice_us_max = 0;         // the longest slice
         // the last epoch applied
         RawGnssStats last;
         double   last_age_s = 0.0;
@@ -157,6 +199,21 @@ public:
         // levelling on the accelerometer, where the flight filter levels
         uint32_t levels = 0;               // steps that levelled
         uint32_t levels_held = 0;          //   in flight, held off: not steady, or not g's size
+        // the barometer and the landing
+        uint32_t baro = 0;                 // samples seen
+        uint32_t baro_fused = 0;           //   fused (an offset learned)
+        uint32_t baro_held = 0;            //   held out in flight at speed (the port's error)
+        double   baro_offset_m = 0.0;      // the filter's height less the barometer's, on the pad
+        uint8_t  baro_offset_frozen = 0;   //   frozen at launch
+        uint32_t zupts = 0;                // landed zero-velocity updates
+        uint32_t pad_zupts = 0;            //   and on the pad, still
+        // the magnetometer (the navigation filter, on the ground)
+        uint32_t mags = 0;                 // samples seen
+        uint32_t mag_fused = 0;            //   taken as a heading
+        uint32_t mag_suspect = 0;          //   refused: not the model's size
+        uint32_t restores = 0;             // starts in flight from a restored flight
+        uint32_t gaps_bridged = 0;         // IMU holes the navigation filter stepped over
+        uint32_t pad_contexts = 0;         // launches the pad context was taken at
     };
 
     using Clock = int64_t (*)();
@@ -175,12 +232,31 @@ public:
     void setIono(const ShadowIono& io);
     // One of the receiver's own fixes (FixCheck).
     void onFix(const TimedFix& f);
+    // A barometer sample the flight filter fused; applied at the next step.
+    void onBaro(const ShadowBaro& b);
+    // A magnetometer sample; the navigation filter takes it on the ground.
+    void onMag(const ShadowMag& m);
+    // The navigation state the flight loop flies on (running = 0 before a start).
+    void navState(ShadowNav& out) const;
     void onEpoch(const TimedRawEpoch& e);
     // One flight-filter IMU tick; time64_us is its time widened to 64 bits
     // (unwrap32 against the clock it was stamped with).
     void onImu(const ShadowImu& s, int64_t time64_us);
     // A RAW_GNSS_EKF_MSG record, every log_period_s of IMU time while it runs.
     bool takeLog(RawGnssEkfData& out);
+    // Its RAW_GNSS_ATT_MSG companion (attitude 1-sigma, IMU biases), filled at
+    // the same tick: take it after takeLog.
+    bool takeAttLog(RawGnssAttData& out);
+    // The pad context (PAD_CONTEXT_MSG), for a replay of the flight: taken at
+    // the IMU tick the flight computer first calls INFLIGHT (once a flight: a
+    // restored flight, already in the air, takes none) -- the filter's state
+    // and covariance, the ionosphere, the pad survey -- and written from
+    // pad_context_delay_s later, one record a call (PCX_NAV, PCX_COV's parts,
+    // PCX_SURVEY's, then a PCX_EPH for every ephemeris held): the payload in
+    // out, len bytes, stamped now_us (FC micros). False when there is nothing
+    // (yet) to write.
+    bool takePadContext(uint8_t* out, size_t cap, size_t& len, uint32_t now_us);
+    const EphemerisFrames& ephemerisFrames() const { return eph_frames_; }
     // A GNSS_CHECK_MSG record, one per receiver fix judged.
     bool takeCheckLog(GnssCheckData& out);
 
@@ -195,7 +271,9 @@ public:
     const SatJumpCheck& satCheck() const { return satcheck_; }
     // The last epoch's measurements as the filter took them (pad corrections
     // applied when they were in use), n of them: the console's per-satellite line.
-    const RawMeas* lastMeasurements(int& n) const { n = st_.last_meas; return meas_; }
+    // The last epoch's measurements (none while the next one is being built
+    // over them).
+    const RawMeas* lastMeasurements(int& n) const { n = job_.active ? 0 : st_.last_meas; return meas_; }
     // What takes the ionosphere out now.
     uint8_t ionoSource() const;
     bool haveIono() const { return have_iono_; }
@@ -217,12 +295,17 @@ private:
     void stop(uint8_t why);
     void resync(double t);
     void applyDueEpochs(double t, uint8_t imu_flags);
-    void apply(const TimedRawEpoch& e, double age, double t, uint8_t imu_flags);
+    void startJob(const TimedRawEpoch& e, double te, uint8_t imu_flags);
+    void workJob(double t);
+    void jobUnit(double t);
+    void jobChecks(double age, double t);
+    void closeJob(double age, double t);
     void applyDueFixes(double t);
     void judge(const TimedFix& f, double t_fix);
     void chooseIono(bool in_flight);
     void dropFront();
     void fillLog(uint32_t time_us, uint8_t imu_flags);
+    void capturePadContext(uint32_t tick_us);
     int64_t now() const { return clock_ ? clock_() : 0; }
 
     Config        cfg_;
@@ -232,6 +315,23 @@ private:
     RawMeasBuilder builder_;
     RawMeas       meas_[RawEpoch::kMaxObs];
     TimedRawEpoch pending_[2];
+    // the epoch being worked (startJob .. closeJob), a slice a step
+    enum : int { kJobBuild, kJobChecks, kJobClock, kJobFuse, kJobClose };
+    struct Job
+    {
+        bool          active = false;
+        int           phase = kJobBuild;
+        TimedRawEpoch e;
+        double        te = 0.0;           // its instant on the filter's clock
+        bool          in_flight = false;
+        double        r_prior[3] = {};    // the receiver when it started: the builder's, the survey's
+        int           n = 0;              // measurements built
+        int           fused = 0;          //   and fused
+        RawGnssStats  rs;
+        int64_t       t0_us = 0;
+        uint32_t      build_us = 0, update_us = 0, slices = 0;
+    };
+    Job           job_;
     int           npending_ = 0;
     ShadowSeed    seed_ = {};
     bool          have_seed_ = false;
@@ -253,6 +353,23 @@ private:
     FixCheck      fixcheck_;
     LevelGate     level_gate_;
     bool          levelled_ = false;    // the last step levelled (RGE_LEVEL)
+    ShadowBaro    baro_ = {};           // the latest barometer sample, not yet applied
+    bool          have_baro_ = false;
+    double        baro_offset_ = 0.0;   // the filter's height less the barometer's
+    double        baro_learn_s_ = 0.0;  //   learned over this long
+    bool          baro_frozen_ = false; //   frozen at launch
+    double        baro_launch_t_ = 0.0; //   then, the filter time
+    bool          baro_seen_ = false;   //   a sample has gone into it
+    double        last_baro_t_ = -1.0;  // the filter time the last sample was applied
+    double        next_zupt_t_ = 0.0;   // landed: the next zero-velocity update is due
+    ShadowMag     mag_ = {};            // the latest magnetometer sample, not yet applied
+    bool          have_mag_ = false;
+    bool          restored_ = false;    // started in flight from a restored flight
+    uint8_t       start_gen_ = 0;       // the seed's start_gen it started from
+    double        last_aided_t_ = -1.0e9;   // raw measurements last applied
+    double        last_baro_fused_t_ = -1.0e9;
+    void          applyMag(const float acc[3]);
+    void          applyBaro(double t, uint8_t imu_flags);
     static constexpr int kFixQ = 4;      // fixes waiting for the IMU to pass them (0.4 s at 10 Hz)
     TimedFix      fixq_[kFixQ] = {};
     int           nfix_ = 0;
@@ -266,6 +383,22 @@ private:
     uint8_t       pend_flags_ = 0;      // RGE_STALE / RGE_RESYNC / RGE_CLOCK_STEP since the last record
     RawGnssEkfData log_ = {};
     bool          log_ready_ = false;
+    RawGnssAttData att_log_ = {};
+    bool          att_log_ready_ = false;
+    // the pad context (takePadContext)
+    EphemerisFrames eph_frames_;
+    bool          pcx_armed_ = false;    // a ground tick since the last launch edge
+    bool          pcx_pending_ = false;  // taken, not all written
+    uint32_t      pcx_due_us_ = 0;       // written from then (FC micros)
+    int           pcx_stage_ = 0;        // the next record
+    int           pcx_eph_next_ = 0;
+    int           pcx_neph_ = 0;         // the ephemerides held at the launch tick: the later are in the flight's log
+    PadContextNav pcx_nav_ = {};
+    float         pcx_cov_[PCX_COV_VALUES] = {};
+    static constexpr int kPcxSurveyMax = 96;
+    PadSurveyEntry pcx_survey_[kPcxSurveyMax] = {};
+    int           pcx_nsurvey_ = 0;
+    PadSurvey::Summary pcx_sum_ = {};
     uint64_t      prop_sum_ = 0;        // IMU steps since the last record
     uint32_t      prop_n_ = 0;
     Stats         st_;

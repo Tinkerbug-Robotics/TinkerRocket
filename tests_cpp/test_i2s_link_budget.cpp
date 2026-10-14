@@ -15,6 +15,8 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include "RocketComputerTypes.h"
 #include "config.h"          // flight_computer/main/config.h
 
@@ -62,11 +64,30 @@ double gnssRtcmInflow()
 // RAW_GNSS_EKF_MSG: the raw-GNSS shadow filter's state (#1600), 10 a second
 // where it runs (config.h TR_RAW_GNSS_SHADOW: the LC86G boards), and its
 // check of each receiver fix against the IMU (GNSS_CHECK_MSG, #1508), one per
-// fix at the receiver's 10 Hz.
+// fix at the receiver's 10 Hz, and the attitude 1-sigma and IMU biases beside
+// each state record (RAW_GNSS_ATT_MSG).
 double rawGnssShadowInflow()
 {
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
-    return framed(sizeof(RawGnssEkfData), 10.0) + framed(sizeof(GnssCheckData), 10.0);
+    return framed(sizeof(RawGnssEkfData), 10.0) + framed(sizeof(RawGnssAttData), 10.0)
+         + framed(sizeof(GnssCheckData), 10.0)
+         + framed(sizeof(GnssClockData), 1.0);   // the clock line, once a second with a fix
+#else
+    return 0.0;
+#endif
+}
+
+// PAD_CONTEXT_MSG: written once, from 6 s after launch -- inside a guided
+// coast -- one record each config::PAD_CONTEXT_PERIOD_MS, at worst all the
+// largest kind's. Not steady: about 1.5 s of it. Zero on u-blox boards, which
+// have no raw-GNSS filter (the flight loop's one PCX_CAL record is noise).
+double padContextBurst()
+{
+#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+    const size_t largest = sizeof(PadContextHeader)
+                         + std::max({sizeof(PadContextNav), padContextCovWireSize(PCX_COV_PER_PART),
+                                     padContextSurveyWireSize(PCX_SURVEY_PER_PART), PCX_EPH_MAX_FRAME});
+    return framed(largest, 1000.0 / (double)config::PAD_CONTEXT_PERIOD_MS);
 #else
     return 0.0;
 #endif
@@ -93,6 +114,7 @@ double guidedCoastInflow()
          // line below. A stream the budget does not know about is how this
          // block went stale twice before.
          + framed(sizeof(FcStatusData),    (double)config::FC_STATUS_RATE_HZ)
+         + framed(sizeof(Ism6TempData),    1.0)   // the IMU's die temperature
          + gnssRtcmInflow()
          + rawGnssShadowInflow()
          + 220.0;   // POWERData, ~15 Hz
@@ -113,6 +135,16 @@ TEST(I2SLinkBudget, GuidedCoastLeavesRealHeadroom) {
         << "% of the " << kLinkBytesPerSec << " B/s link. A struct on the link "
         << "grew, or a rate went up — re-derive the budget block in config.h "
         << "and bring this back under the line.";
+}
+
+TEST(I2SLinkBudget, ThePadContextFitsInAGuidedCoast) {
+    // Its burst on top of the steady state: it must not push the coast it
+    // lands in over the line either.
+    const double inflow = guidedCoastInflow() + padContextBurst();
+    const double used   = inflow / kLinkBytesPerSec;
+    EXPECT_LT(used, 0.95)
+        << "a guided coast with the pad context's burst is " << (used * 100.0)
+        << "% of the link: lengthen config::PAD_CONTEXT_PERIOD_MS.";
 }
 
 TEST(I2SLinkBudget, TheDominantStreamIsTheIMU) {

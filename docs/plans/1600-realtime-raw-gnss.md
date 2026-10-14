@@ -279,6 +279,61 @@ truth, from the OC's log:
 - **Receiver at touchdown:** it lost every satellite (the 3-D antenna pattern, lying on the ground), so
   the flight filter landed 11 m off.
 
+## The Beetle's navigation filter
+
+The rig showed the receiver's own fix 300-400 m off where the raw filter held 10 m. So on the Beetle the raw filter is
+now the navigation filter, and GpsInsEKF does not run (`TR_RAW_GNSS_PRIMARY`, on wherever the raw filter runs). The
+V9 keeps GpsInsEKF on the SAM-M10Q's fix.
+
+**What the raw filter gained to stand alone**
+- **The barometer:** the samples the flight filter's gate passes, as a height.
+  - The offset to the filter's own (ellipsoidal) height is learned on the pad and frozen at launch, however short
+    the pad (a sim's is 5 s).
+  - The variance is #1579's q-scaled one.
+  - It moves only the vertical position and velocity and the receiver clock. Through the propagation's
+    cross-covariance it otherwise tilted the attitude, or pulled the body's accelerometer bias off the levelling's
+    tie, and with no satellites gravity on a wrong tilt is kilometres of drift.
+  - In r2's outage under the main, the shadow without a barometer drifted 70 m in 20 s.
+- **Zero velocity once landed** (#1418).
+- **The magnetometer as a heading on the ground** (#1578's measurement).
+- **Levelling:**
+  - On the ground only at g's size. Between ignition and the launch verdict the vehicle is still "on the pad" with
+    its motor burning.
+  - In flight once the raw epochs say steady (#1621), or with no epoch for 2 s once the force has been g's size for
+    5 s. Under a chute without satellites a gyro bias would otherwise tilt it unchecked.
+- **Its own start:** it keeps its own attitude on the pad and is never resynced; a new start generation starts it over.
+  It can start in flight from a restored snapshot.
+- **Holes and sims:** it steps over an IMU hole up to 5 s, and it flies a sensor sim (the sim drops the receiver's raw
+  output).
+
+**The firmware sim on the Beetle, four times** (no satellites in a sim, so no horizontal aiding):
+- Launch, burnout, apogee (the velocity and GNSS votes, within 0.25 s of the sim's) and landing ran on the raw filter.
+- The vertical held through the flight once the barometer was fused in flight.
+- The horizontal drift went 430 m, 1.4 km, 1.6 km, then 495 m, as levelling on the motor, the barometer's coupling and
+  the unlevelled descent were fixed in turn.
+- The last left a constant 13 m/s east from a gyro bias the sim carries: its synthetic counts less the board's stored
+  gyro calibration. The same flight on the host (`TheNavigationFilterFliesTheFirmwaresSim`) is 0.6 m horizontal, and
+  39 m with a 0.4 dps gyro bias.
+
+**How main.cpp reads it**
+- `ekf` on the Beetle is `RawNavAdapter` (`raw_nav_adapter.h`), GpsInsEKF's methods answered from the raw filter's
+  state.
+- The raw filter publishes that state every step (`ShadowLink::nav`).
+- The apogee and landing voters, the ascent gate, the transonic lockout, NonSensorData, the sensor health and the
+  snapshot all read it unchanged.
+- The calls that configured GpsInsEKF now carry the raw filter's start in the seed: position, the accelerometer's
+  tilt, the gyro's mean, the declination and the field's size.
+- Heights turn from the ellipsoid to the receiver's geoid with its separation. The snapshot keeps the raw filter's
+  own (ellipsoidal) height, since a receiver cold-started by a reboot has no separation to give for a while.
+
+**Rates**
+- The raw filter steps at 100 Hz on core 0 (it was 25 as a shadow). Its raw epochs come once a second.
+- The flight loop on core 1 no longer runs a filter (GpsInsEKF cost about 1 ms a tick at 290 ticks a second). It reads
+  the state, at most a step and a task period old (about 15 ms).
+
+**Logging:** the receiver's 10 Hz fix is still logged (GNSS_MSG), as are the raw filter's 10 Hz record (0x96) and the
+checks (0x9A).
+
 ## Phase 3: the port against the prototype
 
 `TR_RawGnssEKF` (the filter; float on the flight computer) and `TR_GNSSRaw`'s `RawMeasBuilder`, fed

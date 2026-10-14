@@ -88,6 +88,20 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(offsetof(GnssCheckData, span_ms), 6u);
     EXPECT_EQ(offsetof(GnssCheckData, pos_err_m), 8u);
     EXPECT_EQ(offsetof(GnssCheckData, vel_tol_mps), 20u);
+    // the raw-GNSS filter's attitude 1-sigma and IMU biases (0x9B), beside 0x96
+    EXPECT_EQ(sizeof(RawGnssAttData), 46u);
+    EXPECT_EQ(offsetof(RawGnssAttData, time_us), 0u);
+    EXPECT_EQ(offsetof(RawGnssAttData, acc_bias_mps2), 10u);
+    EXPECT_EQ(offsetof(RawGnssAttData, acc_bias_sigma_mmps2), 34u);
+    // the IMU's die temperature (0x9C), 1 Hz
+    EXPECT_EQ(sizeof(Ism6TempData), 6u);
+    EXPECT_EQ(offsetof(Ism6TempData, temp_raw), 4u);
+    // the GPS-to-MCU clock line (0x9D), ~1 Hz on LC86G boards
+    EXPECT_EQ(sizeof(GnssClockData), 68u);
+    EXPECT_EQ(offsetof(GnssClockData, gps0_s), 8u);
+    EXPECT_EQ(offsetof(GnssClockData, mcu0_us), 12u);
+    EXPECT_EQ(offsetof(GnssClockData, latency_s), 44u);
+    EXPECT_EQ(offsetof(GnssClockData, flags), 67u);
     EXPECT_EQ(sizeof(FcBootStatusData), 4u); // FC->OC boot progress (0xFA)
     EXPECT_EQ(sizeof(i24le_t),         3u);
     EXPECT_EQ(sizeof(Vec3i16),         6u);
@@ -1854,6 +1868,14 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(PAD_CAL_STATUS_MSG),
         // #1508: the receiver's fix and raw measurements against the IMU, log-only.
         MT(GNSS_CHECK_MSG),
+        // the raw-GNSS filter's attitude 1-sigma and IMU biases, log-only.
+        MT(RAW_GNSS_ATT_MSG),
+        // the IMU's die temperature, log-only.
+        MT(IMU_TEMP_MSG),
+        // the GPS-to-MCU clock line, log-only.
+        MT(GNSS_CLOCK_MSG),
+        // what a replay needs from the pad, once after launch, log-only.
+        MT(PAD_CONTEXT_MSG),
     };
 #undef MT
 
@@ -1895,7 +1917,11 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     // 103 = 100 + the pad calibration's PAD_CAL_PENDING / PAD_CAL_CONFIG_MSG /
     //       PAD_CAL_STATUS_MSG (0x97-0x99, #1600 phase 5).
     // 104 = 103 + GNSS_CHECK_MSG (0x9A, the physics checks on the GNSS, #1508).
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 104u)
+    // 105 = 104 + RAW_GNSS_ATT_MSG (0x9B, the raw-GNSS filter's attitude 1-sigma).
+    // 106 = 105 + IMU_TEMP_MSG (0x9C, the IMU's die temperature).
+    // 107 = 106 + GNSS_CLOCK_MSG (0x9D, the GPS-to-MCU clock line).
+    // 108 = 107 + PAD_CONTEXT_MSG (0x9E, the pad, written once after launch).
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 108u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }
@@ -2654,4 +2680,48 @@ TEST(GnssRtcmRecord, PartsCoverTheFrame)
     EXPECT_EQ(gnssRtcmParts(219), 1u);
     EXPECT_EQ(gnssRtcmParts(220), 2u);          // 14 satellites of one constellation
     EXPECT_EQ(gnssRtcmParts(GNSS_RTCM_MAX_FRAME), 5u);
+}
+
+// ============================================================================
+// PAD_CONTEXT_MSG (0x9E): the pad, written once after launch
+// ============================================================================
+// A header, then one kind's body; the covariance and the pad survey in parts.
+// The decoders read these offsets and sizes.
+
+TEST(PadContextRecord, TheKindsAreTheSizesTheDecodersRead)
+{
+    EXPECT_EQ(sizeof(PadContextHeader), 7u);
+    EXPECT_EQ(offsetof(PadContextHeader, kind), 4u);
+    EXPECT_EQ(offsetof(PadContextHeader, parts), 6u);
+    EXPECT_EQ(sizeof(PadContextCal), 41u);
+    EXPECT_EQ(offsetof(PadContextCal, hg_bias_mps2), 6u);
+    EXPECT_EQ(offsetof(PadContextCal, mag_offset_lsb), 18u);
+    EXPECT_EQ(offsetof(PadContextCal, mag_offset_set), 24u);
+    EXPECT_EQ(offsetof(PadContextCal, cal_gravity_mps2), 25u);
+    EXPECT_EQ(offsetof(PadContextCal, mmc_offset_counts), 29u);
+    EXPECT_EQ(sizeof(PadContextNav), 124u);
+    EXPECT_EQ(offsetof(PadContextNav, lla), 4u);
+    EXPECT_EQ(offsetof(PadContextNav, quat), 40u);
+    EXPECT_EQ(offsetof(PadContextNav, clk_bias_m), 80u);
+    EXPECT_EQ(offsetof(PadContextNav, field_ut), 108u);
+    EXPECT_EQ(offsetof(PadContextNav, iono), 112u);
+    EXPECT_EQ(offsetof(PadContextNav, iono_gps_day), 120u);
+    EXPECT_EQ(offsetof(PadContextNav, flags), 123u);
+    EXPECT_EQ(sizeof(PadSurveyEntry), 6u);
+    EXPECT_EQ(offsetof(PadContextSurvey, rms_m), 4u);
+    EXPECT_EQ(offsetof(PadContextSurvey, n), 12u);
+    EXPECT_EQ(offsetof(PadContextSurvey, e), 13u);
+}
+
+TEST(PadContextRecord, ThePartsCoverTheCovarianceAndFitAFrame)
+{
+    EXPECT_EQ(PCX_COV_VALUES, 190);            // 19 error states' upper triangle
+    EXPECT_EQ(padContextCovWireSize(PCX_COV_PER_PART), sizeof(PadContextCov));
+    EXPECT_EQ(padContextCovWireSize(190 - 3 * 48), 188u);   // the last of four parts: 46 values
+    EXPECT_EQ(padContextSurveyWireSize(PCX_SURVEY_PER_PART), sizeof(PadContextSurvey));
+    EXPECT_EQ(padContextSurveyWireSize(0), 13u);            // the summary alone
+    EXPECT_LE(sizeof(PadContextHeader) + sizeof(PadContextNav), MAX_PAYLOAD);
+    EXPECT_LE(sizeof(PadContextHeader) + sizeof(PadContextCov), MAX_PAYLOAD);
+    EXPECT_LE(sizeof(PadContextHeader) + sizeof(PadContextSurvey), MAX_PAYLOAD);
+    EXPECT_LE(sizeof(PadContextHeader) + PCX_EPH_MAX_FRAME, MAX_PAYLOAD);
 }

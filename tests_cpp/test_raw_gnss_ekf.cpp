@@ -500,6 +500,108 @@ TEST(RawGnssEKF, AppliesALateEpochAtItsOwnTime)
         EXPECT_NEAR(late.velNed()[i], truth.velNed()[i], 0.05);
 }
 
+TEST(RawGnssEKF, AnEpochInPartsAtOneAgeIsTheEpochAtOnce)
+{
+    // beginGnssRaw, then updateGnssRawPart over the satellites in two parts,
+    // all at one age: updateGnssRaw, to rounding (each part takes the epoch
+    // back with the velocity the parts before it left)
+    const double vel[3] = {30.0, -20.0, -50.0};
+    RawGnssEKFParams p = quietParams();
+    RawGnssEKF<double> truth(p), whole(p), parts(p);
+    initLevel(truth, kLla0, vel);
+    const double v_err[3] = {vel[0] + 0.5, vel[1] - 0.5, vel[2] + 0.5};
+    double lla_err[3] = {kLla0[0] + 8.0 / 6.37e6, kLla0[1], kLla0[2] + 5.0};
+    initLevel(whole, lla_err, v_err);
+    initLevel(parts, lla_err, v_err);
+    const auto sky = makeSky(kLla0);
+    Clock clk;
+    imuSecond(truth);
+    imuSecond(whole);
+    imuSecond(parts);
+    clk.tick(1.0);
+    for (int e = 0; e < 4; ++e)
+    {
+        double r[3], v[3];
+        truth.receiverEcef(r, v);
+        const auto m = measure(sky, r, v, clk);
+        const int n = static_cast<int>(m.size());
+        const RawGnssStats sw = whole.updateGnssRaw(m.data(), n, 0.1);
+        RawGnssStats sp;
+        ASSERT_TRUE(parts.beginGnssRaw(m.data(), n, 0.1, sp));
+        parts.updateGnssRawPart(m.data(), 0, n / 2, 0.1, sp);
+        parts.updateGnssRawPart(m.data(), n / 2, n, 0.1, sp);
+        EXPECT_EQ(sp.used_pr, sw.used_pr);
+        EXPECT_EQ(sp.used_rr, sw.used_rr);
+        double rp[3], rw[3];
+        ecefOf(parts, rp);
+        ecefOf(whole, rw);
+        EXPECT_LT(dist(rp, rw), 1e-6);
+        for (int i = 0; i < 3; ++i)
+            EXPECT_NEAR(parts.velNed()[i], whole.velNed()[i], 1e-9);
+        imuSecond(truth);
+        imuSecond(whole);
+        imuSecond(parts);
+        clk.tick(1.0);
+    }
+}
+
+TEST(RawGnssEKF, AnEpochFusedInPartsBetweenStepsLandsAtItsOwnTime)
+{
+    // The navigation filter fuses a sky a few satellites at a time between its
+    // steps (RawGnssShadow's epoch job), each part at the age the epoch has by
+    // then. On the climbing receiver above it lands at the truth, and where
+    // the epoch fused at once lands.
+    const double vel[3] = {30.0, -20.0, -50.0};
+    RawGnssEKFParams p = quietParams();
+    RawGnssEKF<double> truth(p), whole(p), parts(p);
+    initLevel(truth, kLla0, vel);
+    const double v_err[3] = {vel[0] + 0.5, vel[1] - 0.5, vel[2] + 0.5};
+    double lla_err[3] = {kLla0[0] + 8.0 / 6.37e6, kLla0[1], kLla0[2] + 5.0};
+    initLevel(whole, lla_err, v_err);
+    initLevel(parts, lla_err, v_err);
+    const auto sky = makeSky(kLla0);
+    Clock clk;
+    imuSecond(truth);
+    imuSecond(whole);
+    imuSecond(parts);
+    clk.tick(1.0);
+    for (int e = 0; e < 12; ++e)
+    {
+        double r[3], v[3];
+        truth.receiverEcef(r, v);
+        const auto m = measure(sky, r, v, clk);
+        const int n = static_cast<int>(m.size());
+        imuSecond(whole, nullptr, 4);         // 20 ms on
+        whole.updateGnssRaw(m.data(), n, 0.02);
+        imuSecond(parts, nullptr, 4);
+        double age = 0.02;
+        RawGnssStats st;
+        ASSERT_TRUE(parts.beginGnssRaw(m.data(), n, age, st));
+        int samples = 4;
+        for (int i = 0; i < n; i += 2)
+        {
+            imuSecond(parts, nullptr, 2);     // a step (10 ms) between parts
+            samples += 2;
+            age += 0.01;
+            parts.updateGnssRawPart(m.data(), i, std::min(i + 2, n), age, st);
+        }
+        EXPECT_GE(st.used_pr, n - 1);
+        imuSecond(truth, nullptr, 200);       // to the next whole second
+        imuSecond(whole, nullptr, 196);
+        imuSecond(parts, nullptr, 200 - samples);
+        clk.tick(1.0);
+    }
+    double rt[3], rw[3], rp[3];
+    ecefOf(truth, rt);
+    ecefOf(whole, rw);
+    ecefOf(parts, rp);
+    EXPECT_LT(dist(rw, rt), 0.5);
+    EXPECT_LT(dist(rp, rt), 0.5);
+    EXPECT_LT(dist(rp, rw), 0.3);
+    for (int i = 0; i < 3; ++i)
+        EXPECT_NEAR(parts.velNed()[i], truth.velNed()[i], 0.05);
+}
+
 TEST(RawGnssEKF, PredictsADopplerThatLagsItsTag)
 {
     // 2 g of upward acceleration; the receiver reports the range rate 55.5 ms
@@ -538,4 +640,187 @@ TEST(RawGnssEKF, PredictsADopplerThatLagsItsTag)
     }
     EXPECT_LT(worst_f, 0.05);                 // the lag modelled
     EXPECT_GT(worst_g, 0.3);                  // ignored: the Doppler drags the velocity back 20 * 0.0555 m/s
+}
+
+// ---- the barometer and zero velocity (#1600: the shadow's aiding without satellites)
+
+TEST(RawGnssEKF, AHeightHoldsTheVerticalAnIMUWouldLose)
+{
+    // An accelerometer 0.3 m/s^2 strong in the vertical for 20 s: alone it
+    // climbs 60 m; a height at the true one every 0.1 s (2 m sigma) holds it
+    // within a couple of metres
+    for (bool with_height : {false, true})
+    {
+        RawGnssEKF<float> f(quietParams());
+        const double v0[3] = {0.0, 0.0, 0.0};
+        initLevel(f, kLla0, v0);
+        const double a_up[3] = {0.0, 0.0, -0.3};   // NED: up
+        for (int s = 0; s < 200; ++s)
+        {
+            imuSecond(f, a_up, 20);                 // 0.1 s
+            if (with_height)
+                f.updateHeight(kLla0[2], 4.0f);
+        }
+        if (with_height)
+        {
+            EXPECT_NEAR(f.lla()[2], kLla0[2], 3.0);
+            EXPECT_NEAR(f.velNed()[2], 0.0f, 0.5f);
+        }
+        else
+        {
+            EXPECT_GT(f.lla()[2] - kLla0[2], 55.0);
+        }
+        expectCovarianceHealthy(f);
+    }
+}
+
+TEST(RawGnssEKF, ZeroVelocityMovesOnlyPositionAndVelocity)
+{
+    RawGnssEKF<float> f(quietParams());
+    const double v0[3] = {3.0, -2.0, 1.0};
+    initLevel(f, kLla0, v0);
+    imuSecond(f);                                    // 1 s at that velocity: the attitude and biases correlate
+    const float q0[4] = {f.quat()[0], f.quat()[1], f.quat()[2], f.quat()[3]};
+    const float ab0[3] = {f.accelBias()[0], f.accelBias()[1], f.accelBias()[2]};
+    const float wb0[3] = {f.gyroBias()[0], f.gyroBias()[1], f.gyroBias()[2]};
+    for (int k = 0; k < 30; ++k)                     // 3 s at 10 Hz, still
+    {
+        imuSecond(f, nullptr, 20);
+        f.updateZeroVelocity(0.5f);
+    }
+    for (int i = 0; i < 3; ++i)
+    {
+        EXPECT_NEAR(f.velNed()[i], 0.0f, 0.1f);
+        EXPECT_FLOAT_EQ(f.accelBias()[i], ab0[i]);
+        EXPECT_FLOAT_EQ(f.gyroBias()[i], wb0[i]);
+    }
+    for (int i = 0; i < 4; ++i)
+        EXPECT_FLOAT_EQ(f.quat()[i], q0[i]);
+    expectCovarianceHealthy(f);
+}
+
+// ---- the magnetometer as a heading (#1578's measurement, for a raw filter that starts itself)
+
+namespace
+{
+
+// yaw then pitch (no roll), body -> NED, scalar first: Quat2DCM of it is NED -> body
+void quatYawPitch(double yaw, double pitch, float q[4])
+{
+    const double cy = std::cos(yaw / 2), sy = std::sin(yaw / 2), cp = std::cos(pitch / 2), sp = std::sin(pitch / 2);
+    q[0] = float(cy * cp);
+    q[1] = float(-sy * sp);
+    q[2] = float(cy * sp);
+    q[3] = float(sy * cp);
+}
+
+void nedToBody(const float q[4], const double v[3], float out[3])
+{
+    const double w = q[0], x = q[1], y = q[2], z = q[3];
+    const double M[3][3] = {{1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y)},
+                            {2 * (x * y - w * z), 1 - 2 * (x * x + z * z), 2 * (y * z + w * x)},
+                            {2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)}};
+    for (int i = 0; i < 3; ++i)
+        out[i] = float(M[i][0] * v[0] + M[i][1] * v[1] + M[i][2] * v[2]);
+}
+
+// the angle between two attitudes, deg
+double attitudeErrorDeg(const float a[4], const float b[4])
+{
+    const double dot = std::fabs(double(a[0]) * b[0] + double(a[1]) * b[1] + double(a[2]) * b[2] + double(a[3]) * b[3]);
+    return 2.0 * std::acos(std::min(1.0, dot)) * 180.0 / kPi;
+}
+
+}  // namespace
+
+TEST(RawGnssEKF, TheMagnetometerSetsTheHeadingLevelOrOnAVerticalRail)
+{
+    // the pad of rp5_0829: its field (TR_GeoMag), magnetic north 11.6 deg west
+    const double b_ned[3] = {21.0, -4.3, 45.5};
+    const float decl = float(std::atan2(b_ned[1], b_ned[0]));
+    for (double pitch_deg : {0.0, 83.6, 90.0})
+    {
+        float q_true[4], q_wrong[4];
+        quatYawPitch(44.7 * kPi / 180.0, pitch_deg * kPi / 180.0, q_true);
+        quatYawPitch((44.7 + 30.0) * kPi / 180.0, pitch_deg * kPi / 180.0, q_wrong);   // 30 deg off
+        RawGnssEKF<float> f(quietParams());
+        const float v0[3] = {0, 0, 0};
+        f.init(kLla0, v0, q_wrong, 0.0);
+        const double g_ned[3] = {0.0, 0.0, -kG};    // the specific force at rest: up
+        float acc[3], mag[3];
+        nedToBody(q_true, g_ned, acc);
+        nedToBody(q_true, b_ned, mag);
+        const float gyro[3] = {0, 0, 0};
+        int fused = 0;
+        for (int k = 0; k < 100; ++k)                // 2 s at 50 Hz
+        {
+            f.propagate(acc, gyro, 0.02f);
+            f.updateAccelLevel(acc);
+            fused += f.updateMagHeading(acc, mag, true, decl, 0.0f) ? 1 : 0;
+        }
+        EXPECT_EQ(fused, 100) << pitch_deg;
+        EXPECT_LT(attitudeErrorDeg(f.quat(), q_true), 1.0) << "pitch " << pitch_deg;
+        expectCovarianceHealthy(f);
+    }
+}
+
+TEST(RawGnssEKF, AFieldWithNoHorizontalPartSaysNothing)
+{
+    RawGnssEKF<float> f(quietParams());
+    const double v0[3] = {0, 0, 0};
+    initLevel(f, kLla0, v0);
+    const float acc[3] = {0, 0, float(-kG)};
+    const float down_only[3] = {0.5f, 0.0f, 48.0f};  // 0.5 uT across: at a magnetic pole
+    EXPECT_FALSE(f.updateMagHeading(acc, down_only, true, 0.0f, -1.0f));
+    EXPECT_FLOAT_EQ(f.quat()[0], 1.0f);
+}
+
+// ---- the attitude's 1-sigma about north, east and down (RAW_GNSS_ATT_MSG)
+
+TEST(RawGnssEKF, TheAttitudeSigmaIsAboutNorthEastAndDown)
+{
+    // A known attitude (setQuaternion: 1e-6 on each half-angle) is 2 mrad of
+    // angle about every axis, at any attitude.
+    {
+        float q[4];
+        quatYawPitch(30.0 * kPi / 180.0, 90.0 * kPi / 180.0, q);
+        RawGnssEKF<float> f(quietParams());
+        const float v0[3] = {0, 0, 0};
+        f.init(kLla0, v0, q, 0.0);
+        f.setQuaternion(q);
+        float s[3];
+        f.attSigmaNed(s);
+        for (int i = 0; i < 3; ++i)
+            EXPECT_NEAR(s[i], 2.0e-3f, 1.0e-5f) << i;
+    }
+    // Levelling on gravity learns the tilt and never the heading: at any pitch,
+    // up the rail included, north and east lose their sigma and down keeps it.
+    // From an isotropic start: the default one is a level body's (the heading's
+    // sigma about body z), which tipped over correlates down with the tilt.
+    RawGnssEKFParams iso = quietParams();
+    iso.p0_att = iso.p0_hdg = 0.5;
+    for (double pitch_deg : {0.0, 45.0, 90.0})
+    {
+        float q[4];
+        quatYawPitch(30.0 * kPi / 180.0, pitch_deg * kPi / 180.0, q);
+        RawGnssEKF<float> f(iso);
+        const float v0[3] = {0, 0, 0};
+        f.init(kLla0, v0, q, 0.0);
+        float s0[3];
+        f.attSigmaNed(s0);
+        const double g_ned[3] = {0.0, 0.0, -kG};    // the specific force at rest: up
+        float acc[3];
+        nedToBody(q, g_ned, acc);
+        const float gyro[3] = {0, 0, 0};
+        for (int k = 0; k < 100; ++k)                // 2 s at 50 Hz
+        {
+            f.propagate(acc, gyro, 0.02f);
+            f.updateAccelLevel(acc);
+        }
+        float s[3];
+        f.attSigmaNed(s);
+        EXPECT_LT(s[0], 0.2f * s0[0]) << "north, pitch " << pitch_deg;
+        EXPECT_LT(s[1], 0.2f * s0[1]) << "east, pitch " << pitch_deg;
+        EXPECT_GT(s[2], 0.8f * s0[2]) << "down (the heading), pitch " << pitch_deg;
+    }
 }

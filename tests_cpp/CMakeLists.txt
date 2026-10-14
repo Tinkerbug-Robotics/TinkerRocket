@@ -1601,6 +1601,7 @@ add_executable(test_raw_gnss_shadow test_raw_gnss_shadow.cpp
     ${LIB_DIR}/TR_RawGnssShadow/PadSurvey.cpp
     ${LIB_DIR}/TR_RawGnssShadow/SatJumpCheck.cpp
     ${LIB_DIR}/TR_RawGnssShadow/FixCheck.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/EphemerisFrames.cpp
     ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
     ${LIB_DIR}/TR_GNSSRaw/eph.c
     ${LIB_DIR}/TR_GNSSRaw/atmo.c
@@ -1622,6 +1623,24 @@ target_include_directories(test_raw_gnss_shadow PRIVATE
 )
 target_link_libraries(test_raw_gnss_shadow GTest::gtest_main)
 gtest_discover_tests(test_raw_gnss_shadow)
+
+# ---------- test_raw_nav_adapter ----------
+# GpsInsEKF's face on the raw-GNSS filter's state (#1600): the Beetle's
+# navigation filter as main.cpp reads it -- the start before it runs, heights
+# turned from the ellipsoid to the geoid, staleness, the snapshot a reboot
+# restores, and the magnetometer it hands the raw filter.
+add_executable(test_raw_nav_adapter test_raw_nav_adapter.cpp)
+target_include_directories(test_raw_nav_adapter PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_GpsInsEKF
+    ${LIB_DIR}/TR_RawGnssShadow
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/flight_computer/main
+)
+target_link_libraries(test_raw_nav_adapter GTest::gtest_main)
+gtest_discover_tests(test_raw_nav_adapter)
 
 # ---------- test_pad_survey ----------
 # gnss_raw::PadSurvey (#1600 phase 5): each satellite's pseudorange against
@@ -1699,7 +1718,9 @@ add_executable(test_gnss_time_sync test_gnss_time_sync.cpp
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/GnssTimeSync.cpp
 )
 target_include_directories(test_gnss_time_sync PRIVATE
+    ${SHIM_DIR}
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+    ${LIB_DIR}/TR_RocketComputerTypes
 )
 target_link_libraries(test_gnss_time_sync GTest::gtest_main)
 gtest_discover_tests(test_gnss_time_sync)

@@ -72,6 +72,12 @@ struct RawGnssEKFParams
     double w_markov_sigma = 0.00025;
     double w_markov_tau   = 50.0;
     double accel_var      = 0.25;      // pad levelling, (m/s^2)^2
+    // The magnetometer as a heading (TR_GpsInsEKF's, #1578/#1304)
+    double mag_sigma_ut   = 0.5;       // the field's noise per axis, uT
+    double mag_tilt_sigma_mps2 = 0.05; // the accelerometer's, as a tilt reference
+    double mag_r_floor    = 0.0027;    // the heading variance at least (calibration residuals), rad^2
+    double mag_r_ceiling  = 0.06;      // and at most, before the magnitude penalty
+    double mag_bias_nis   = 9.0;       // an innovation past this does not move the gyro bias
     // Receiver clock: white frequency (bias) and random-walk frequency
     // (drift) noise. The LC86G steers its clock with its own solution, and
     // its measurements carry drift steps of tens of m/s when that solution
@@ -143,6 +149,28 @@ public:
     void propagate(const T acc[3], const T gyro[3], T dt);
     // Gravity-reference update on the pad (GpsInsEKF::accelMeasUpdate).
     void updateAccelLevel(const T acc[3]);
+    // A height above the ellipsoid (m) measured with variance var (m^2): the
+    // barometer, referred to the filter's own pad. No innovation gate: a
+    // gate refuses the very barometer that would bring a drifted altitude
+    // back (GpsInsEKF::baroMeasUpdate, #1579). It moves the vertical position
+    // and velocity and the receiver clock only: a height says nothing about
+    // the attitude, the body's biases or the horizontal.
+    void updateHeight(double h_m, T var);
+    // Zero velocity, sigma (m/s) per axis, into position and velocity only:
+    // a velocity measurement cannot tell an attitude error from an
+    // accelerometer bias (GpsInsEKF::zeroVelocityUpdate, #1418).
+    void updateZeroVelocity(T sigma);
+    // The magnetometer (body FRD, uT) as a heading, at any attitude: its
+    // field carried into NED on the state's attitude turned onto the tilt
+    // reference by the shortest arc -- the accelerometer's down when it
+    // measures gravity (accel_is_gravity: the pad, the ground), else the
+    // state's own -- and that azimuth set against magnetic north
+    // (declination_rad, true north east of magnetic). field_err_ut: |B| less
+    // the model's, a hard iron that size can turn the heading (#1304); < 0
+    // unknown. False if the field's horizontal part is too weak to say
+    // (TR_GpsInsEKF::magMeasUpdate, #1578: on a vertical rail too).
+    bool updateMagHeading(const T acc[3], const T mag[3], bool accel_is_gravity, T declination_rad,
+                          T field_err_ut);
 
     // Clock bias and drift from an epoch's medians at the current position;
     // false with no pseudorange. updateGnssRaw calls it until it succeeds.
@@ -150,6 +178,13 @@ public:
     // Every satellite's pseudorange and range rate of one epoch, which was
     // age_s ago.
     RawGnssStats updateGnssRaw(const RawMeas* m, int n, double age_s = 0.0);
+    // The same in parts, for a filter that must keep stepping while it fuses
+    // a sky: beginGnssRaw takes the epoch's receiver clock (its first value, a
+    // step every satellite agrees on; false with no clock yet), then
+    // updateGnssRawPart the satellites [i0, i1), each part at the age the
+    // epoch has when it is fused. updateGnssRaw is the two at one age.
+    bool beginGnssRaw(const RawMeas* m, int n, double age_s, RawGnssStats& st);
+    void updateGnssRawPart(const RawMeas* m, int i0, int i1, double age_s, RawGnssStats& st);
 
     double time() const { return t_; }
     const double* lla() const { return lla_; }
@@ -163,6 +198,10 @@ public:
     bool clockReady() const { return clk_ready_; }
     T P(int i, int j) const { return P_[i][j]; }
     T sigma(int i) const;
+    // The attitude's 1-sigma (rad) as rotations about north, east and down
+    // (down: the heading): the attitude block, a body-frame half-angle,
+    // doubled and carried into NED.
+    void attSigmaNed(T out[3]) const;
     // |specific force| / g - 1 at the last IMU step, and its largest since
     // the last take (floored at 0): what RawMeasBuilder::build takes.
     T gExcess() const { return g_excess_; }
@@ -193,8 +232,10 @@ private:
     void   stabilize();
     void   symmetrize();
     T      hph(const int* hidx, const T* hval, int hn) const;
+    // kmask: the states the gain may move (bit i, state i); the rest keep
+    // their estimate and, Joseph form, a consistent covariance.
     int    scalarUpdate(const int* hidx, const T* hval, int hn, T y, T R, T gate, T att,
-                        T dx[N], T* nis);
+                        T dx[N], T* nis, uint32_t kmask = 0xFFFFFFFFu);
     void   inject(const T dx[N]);
     T      attGate() const;
     void   pushHistory(T dt, const T a_ned[3]);

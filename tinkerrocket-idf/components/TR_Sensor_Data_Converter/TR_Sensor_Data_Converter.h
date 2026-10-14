@@ -81,6 +81,12 @@ public:
     // scaling to µT.  IIS2MDC has its own OFFSET_X/Y/Z registers so this
     // setter is irrelevant on the new PCB rev's mag path.
     void setMMCOffset(int32_t cx_counts, int32_t cy_counts, int32_t cz_counts);
+    void mmcOffset(int32_t &cx_counts, int32_t &cy_counts, int32_t &cz_counts) const
+    {
+        cx_counts = mmc_offset_cx_;
+        cy_counts = mmc_offset_cy_;
+        cz_counts = mmc_offset_cz_;
+    }
 
     // --- Data Conversion Functions ---
     // Convert from packed to human readable SI

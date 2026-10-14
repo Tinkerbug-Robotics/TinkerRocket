@@ -218,6 +218,18 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 #error "TR_RAW_GNSS_SHADOW needs the LC86G driver's raw MSM7 (TR_GNSS_DRIVER_LC86=1)"
 #endif
 
+// #1600: where the raw-GNSS filter runs (the Beetle) it is the navigation
+// filter. GpsInsEKF does not run there; main.cpp's `ekf` is RawNavAdapter
+// (raw_nav_adapter.h), GpsInsEKF's face on the raw filter's state. The V9
+// keeps GpsInsEKF on the SAM-M10Q's fix. -DTR_RAW_GNSS_PRIMARY=0 flies
+// GpsInsEKF with the raw filter as a shadow beside it, as before.
+#ifndef TR_RAW_GNSS_PRIMARY
+#define TR_RAW_GNSS_PRIMARY TR_RAW_GNSS_SHADOW
+#endif
+#if TR_RAW_GNSS_PRIMARY && !TR_RAW_GNSS_SHADOW
+#error "TR_RAW_GNSS_PRIMARY needs the raw-GNSS filter (TR_RAW_GNSS_SHADOW=1)"
+#endif
+
 struct config : board_pins
 {
 
@@ -326,6 +338,12 @@ struct config : board_pins
     static_assert(GUIDANCE_TELEM_RATE_HZ >= 1 &&
                   GUIDANCE_TELEM_RATE_HZ <= NON_SENSOR_UPDATE_RATE,
                   "GUIDANCE_TELEM_RATE_HZ must be in [1, NON_SENSOR_UPDATE_RATE]");
+    // The pad context (PAD_CONTEXT_MSG), written once from 6 s after launch:
+    // one record each this often. At most about 70 (the raw-GNSS filter's
+    // state, its covariance and pad survey in parts, then each ephemeris it
+    // held), so about 1.5 s of under 12 KB/s -- inside a guided coast, which
+    // has the room (test_i2s_link_budget: ThePadContextFitsInAGuidedCoast).
+    static constexpr uint32_t PAD_CONTEXT_PERIOD_MS = 20;
     // ISM6 full-scale configuration used by SensorConverter (and shared to OUT).
     static constexpr uint8_t ISM6_LOW_G_FS_G = 16;
     static constexpr uint16_t ISM6_HIGH_G_FS_G = 256;
