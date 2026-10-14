@@ -2994,6 +2994,12 @@ static bool padAverageLla(double lla[3], float* scatter_m, uint32_t* span_ms);
 static gnss_raw::ShadowLink raw_shadow_link;
 static gnss_raw::RawGnssShadow* raw_shadow = nullptr;
 static uint32_t raw_shadow_seed_ms = 0;
+// #1626: its epochs are built in a GNSS task of their own, below the filter's
+// (rawGnssMeasTask). Its stage and the built epochs (~6 kB each) are in PSRAM
+// beside the filter; the handoff's indices here, in internal RAM.
+static gnss_raw::RawGnssMeasStage* raw_meas = nullptr;
+static gnss_raw::SpscSlots<gnss_raw::BuiltEpoch, 2> raw_built;
+static TaskHandle_t raw_meas_task = nullptr;
 
 static int64_t rawShadowClock() { return esp_timer_get_time(); }
 
@@ -3079,14 +3085,66 @@ static const char* ionoName(uint8_t src)
     }
 }
 
+// Core 0, priority 0 -- below the filter's task, so it runs only while that
+// one sleeps (#1626): each raw epoch the receiver sends, built into the
+// measurements the filter fuses (RawGnssMeasStage) at the filter's published
+// position. The build is two-thirds of an epoch's cost (~2 ms a satellite on
+// the Beetle); here it never holds up a filter step, and the filter fuses the
+// built epoch a slice a step. The ephemerides it decodes go on to the
+// filter's task for the pad context; the satellites that task finds jumped
+// come back here, for the epochs after.
+static void rawGnssMeasTask(void*)
+{
+    gnss_raw::RawGnssMeasStage& st = *raw_meas;
+    st.setClock(&rawShadowClock);
+    static gnss_raw::TimedRawEpoch epoch;     // ~1.6 kB: off the stack
+    uint32_t iono_seq = 0;
+    for (;;)
+    {
+        gnss_raw::ShadowIono io;
+        uint32_t seq = 0;
+        if (raw_shadow_link.iono.read(io, seq) && seq != iono_seq)
+        {
+            iono_seq = seq;
+            st.setIono(io);
+        }
+        gnss_raw::ShadowRelock rl;
+        while (raw_shadow_link.relock.pop(rl)) st.markRelock(rl.sys, rl.prn, rl.tow_s);
+        bool seen = false;
+        gnss_raw::ShadowEphFrame ef;
+        size_t len = 0;
+        while (sensor_collector.getGNSSEphemeris(ef.data, sizeof(ef.data), len))
+        {
+            ef.len = (uint16_t)len;
+            st.onEphemeris(ef.data, len);
+            raw_shadow_link.eph.push(ef);     // a full ring drops it (and counts it): the pad context misses one
+            seen = true;
+        }
+        while (sensor_collector.getGNSSRawEpoch(epoch))
+        {
+            seen = true;
+            gnss_raw::BuiltEpoch* slot = raw_built.claim();
+            if (slot == nullptr)
+            {
+                st.skip(epoch);               // the filter's task has not taken the two before
+                continue;
+            }
+            gnss_raw::ShadowNav nav = {};
+            uint32_t nseq = 0;
+            if (!raw_shadow_link.nav.read(nav, nseq)) nav.running = 0;
+            if (st.offer(epoch, nav, *slot)) raw_built.publish();
+        }
+        if (seen) raw_shadow_link.meas.write(st.stats());
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+}
+
 // Core 0: the shadow filter's task.
 static void rawShadowTask(void*)
 {
     gnss_raw::RawGnssShadow& sh = *raw_shadow;
     sh.setClock(&rawShadowClock);
-    static gnss_raw::TimedRawEpoch epoch;     // ~1.6 kB: off the stack
-    uint8_t eph[TR_GNSSReceiverLC86Serial::kEphMaxPayload];
-    uint32_t seed_seq = 0, iono_seq = 0;
+    uint32_t seed_seq = 0, iono_seq = 0, meas_seq = 0;
     gnss_raw::ShadowSeed seed = {};
     bool have_seed = false;
     int64_t win_t0 = esp_timer_get_time();
@@ -3115,9 +3173,21 @@ static void rawShadowTask(void*)
             iono_seq = seq;
             sh.setIono(io);
         }
-        size_t len = 0;
-        while (sensor_collector.getGNSSEphemeris(eph, sizeof(eph), len)) sh.onEphemeris(eph, len);
-        while (sensor_collector.getGNSSRawEpoch(epoch)) sh.onEpoch(epoch);
+        // the GNSS task's side (#1626): each ephemeris it decoded, for the pad
+        // context; its counts; and the epochs it built, held for their time
+        gnss_raw::ShadowEphFrame ef;
+        while (raw_shadow_link.eph.pop(ef)) sh.onEphemeris(ef.data, ef.len);
+        gnss_raw::ShadowMeasStats ms;
+        if (raw_shadow_link.meas.read(ms, seq) && seq != meas_seq)
+        {
+            meas_seq = seq;
+            sh.onMeasStats(ms);
+        }
+        while (const gnss_raw::BuiltEpoch* b = raw_built.peek())
+        {
+            sh.onBuilt(*b);
+            raw_built.release();
+        }
         gnss_raw::TimedFix fix;
         while (sensor_collector.getGNSSFix(fix)) sh.onFix(fix);   // #1508: each fix against the IMU
         gnss_raw::ShadowBaro baro;
@@ -3155,14 +3225,16 @@ static void rawShadowTask(void*)
                 else rec_drops++;
             }
         }
-#if TR_RAW_GNSS_PRIMARY
         {
             // and once a pass, so the loop hears that it is waiting, or stopped
+            // (and the GNSS task, building at the filter's position, either way)
             gnss_raw::ShadowNav nav;
             sh.navState(nav);
             raw_shadow_link.nav.write(nav);
         }
-#endif
+        // back to the GNSS task: the satellites its checks found jumped
+        gnss_raw::ShadowRelock rl;
+        while (sh.takeRelock(rl)) raw_shadow_link.relock.push(rl);
         // The pad context (PAD_CONTEXT_MSG), once a flight from 6 s after
         // launch: one record each PAD_CONTEXT_PERIOD_MS (~1.5 s in all).
         if (a0 - pcx_t0 >= (int64_t)config::PAD_CONTEXT_PERIOD_MS * 1000)
@@ -3256,6 +3328,17 @@ static void rawShadowTask(void*)
                      (unsigned long)ekf.forwardShort(), (unsigned long)st.epoch_slices,
                      (double)st.epoch_wall_us * 1e-3, (double)st.slice_us_max * 1e-3);
 #endif
+            {
+                // the GNSS task (#1626): its build, wall time with everything
+                // above it preempting; and both tasks' stack headroom
+                const gnss_raw::ShadowMeasStats& mst = sh.measStats();
+                ESP_LOGI(TAG, "[RAWGNSS] gnss task: built %lu, not taken %lu | last build %.1f ms (max %.1f, "
+                              "wall) | stack free: filter %u B, gnss %u B | eph dropped %lu",
+                         (unsigned long)mst.built, (unsigned long)mst.dropped, (double)mst.build_us * 1e-3,
+                         (double)mst.build_us_max * 1e-3, (unsigned)uxTaskGetStackHighWaterMark(nullptr),
+                         (unsigned)(raw_meas_task ? uxTaskGetStackHighWaterMark(raw_meas_task) : 0),
+                         (unsigned long)raw_shadow_link.eph.dropped());
+            }
             // each satellite's pad correction, at its elevation from the pad:
             // a common pattern in sin(el) is the pad's height, one system's
             // is that system's measurements
@@ -3371,17 +3454,45 @@ static void startRawShadow()
     // pass 14 satellites held it 40 ms on the rig (r9), a sky of 30 ~90 ms
     cfg.epoch_slice_us = 2500.0;
 #endif
+    // #1626: the epochs are built in the GNSS task (rawGnssMeasTask), with a
+    // stage of its own and two built epochs waiting at most, in PSRAM too
+    cfg.external_build = true;
+    auto alloc = [](size_t align, size_t bytes) {
+        void* m = heap_caps_aligned_alloc(align, bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        return m != nullptr ? m : heap_caps_aligned_alloc(align, bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    };
+    void* stage_mem = alloc(alignof(gnss_raw::RawGnssMeasStage), sizeof(gnss_raw::RawGnssMeasStage));
+    void* built_mem = alloc(alignof(gnss_raw::BuiltEpoch), 2 * sizeof(gnss_raw::BuiltEpoch));
+    if (stage_mem == nullptr || built_mem == nullptr)
+    {
+        ESP_LOGE(TAG, "[RAWGNSS] no memory for the GNSS task's stage (%u B) and epochs (%u B): not started",
+                 (unsigned)sizeof(gnss_raw::RawGnssMeasStage), (unsigned)(2 * sizeof(gnss_raw::BuiltEpoch)));
+        return;
+    }
     raw_shadow = new (mem) gnss_raw::RawGnssShadow(cfg);
+    raw_meas = new (stage_mem) gnss_raw::RawGnssMeasStage(gnss_raw::RawGnssShadow::stageConfig(cfg));
+    gnss_raw::BuiltEpoch* built = static_cast<gnss_raw::BuiltEpoch*>(built_mem);
+    new (&built[0]) gnss_raw::BuiltEpoch();
+    new (&built[1]) gnss_raw::BuiltEpoch();
+    raw_built.attach(built);
     if (xTaskCreatePinnedToCore(rawShadowTask, "Raw GNSS", 8192, nullptr, 1, nullptr,
                                 config::SENSOR_CORE) != pdPASS)
     {
         ESP_LOGE(TAG, "[RAWGNSS] task not created: shadow filter off");
         return;
     }
-    ESP_LOGI(TAG, "[RAWGNSS] %s on core %u, priority 1, %.0f steps/s (%u B in %s; %u B internal left)",
+    // 4 KB: it peaked under 2 KB of 6 on the rig (r14)
+    if (xTaskCreatePinnedToCore(rawGnssMeasTask, "GNSS meas", 4096, nullptr, 0, &raw_meas_task,
+                                config::SENSOR_CORE) != pdPASS)
+    {
+        ESP_LOGE(TAG, "[RAWGNSS] GNSS task not created: no raw epochs");
+    }
+    ESP_LOGI(TAG, "[RAWGNSS] %s on core %u, priority 1, %.0f steps/s (%u B in %s; %u B internal left); "
+                  "its epochs built in the GNSS task, priority 0 (%u B stage, %u B epochs)",
              cfg.primary ? "NAVIGATION filter" : "shadow filter", (unsigned)config::SENSOR_CORE,
              1.0 / cfg.min_step_s, (unsigned)n, where,
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)sizeof(gnss_raw::RawGnssMeasStage), (unsigned)(2 * sizeof(gnss_raw::BuiltEpoch)));
 #if TR_RAW_GNSS_PRIMARY
     ekf.attach(&raw_shadow_link);
 #endif

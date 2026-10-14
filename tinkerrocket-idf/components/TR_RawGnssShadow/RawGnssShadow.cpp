@@ -36,10 +36,19 @@ int32_t sat32(double v)
 
 }  // namespace
 
+RawGnssMeasStage::Config RawGnssShadow::stageConfig(const Config& c)
+{
+    RawGnssMeasStage::Config s;
+    s.meas = c.meas;
+    s.default_week = c.default_week;
+    s.iono_max_age_days = c.iono_max_age_days;
+    return s;
+}
+
 RawGnssShadow::RawGnssShadow() : RawGnssShadow(Config()) {}
 
 RawGnssShadow::RawGnssShadow(const Config& cfg)
-    : cfg_(cfg), ekf_(cfg.ekf), builder_(cfg.meas), survey_(cfg.survey), satcheck_(cfg.sat_check),
+    : cfg_(cfg), ekf_(cfg.ekf), stage_(stageConfig(cfg)), survey_(cfg.survey), satcheck_(cfg.sat_check),
       fixcheck_(cfg.fix_check), level_gate_(cfg.level)
 {
 }
@@ -50,6 +59,7 @@ void RawGnssShadow::reset()
         stop(kStopNone);
     job_.active = false;
     npending_ = 0;
+    npend_built_ = 0;
     nfix_ = 0;
     have_seed_ = false;
 }
@@ -112,6 +122,7 @@ void RawGnssShadow::navState(ShadowNav& out) const
         out.var[i] = ekf_.P(i, i);
     out.gnss_aided = t - last_aided_t_ <= 2.0 ? 1 : 0;
     out.baro_aided = t - last_baro_fused_t_ <= 1.0 ? 1 : 0;
+    out.in_flight = (imu_flags_ & kShadowInFlight) ? 1 : 0;
     out.epochs = st_.epochs_applied;
 }
 
@@ -269,35 +280,28 @@ void RawGnssShadow::onSeed(const ShadowSeed& s)
 void RawGnssShadow::onEphemeris(const uint8_t* payload, size_t len)
 {
     eph_frames_.add(payload, len);           // as sent, for the pad context
-    gps_eph_t e;
-    if (!decodeEphemeris(payload, len, week_ != 0 ? week_ : cfg_.default_week, e))
-    {
-        st_.eph_bad++;
-        return;
-    }
-    if (store_.add(e))
-    {
-        st_.eph_added++;
-        eph_sats_ = store_.satellites(GNSS_SYS_GPS) + store_.satellites(GNSS_SYS_GAL)
-                  + store_.satellites(GNSS_SYS_BDS);
-    }
+    if (cfg_.external_build)
+        return;                              // the GNSS task's stage decodes it
+    (void)stage_.onEphemeris(payload, len);
+    st_.eph_added = stage_.stats().eph_added;
+    st_.eph_bad = stage_.stats().eph_bad;
 }
 
 void RawGnssShadow::setIono(const ShadowIono& io)
 {
     iono_in_ = io;
     have_iono_ = true;
-    iono_dirty_ = true;
     st_.iono_sets++;
+    if (!cfg_.external_build)
+        stage_.setIono(io);
 }
 
 bool RawGnssShadow::ionoAgeDays(int& days) const
 {
-    if (!have_iono_ || week_ == 0 || last_tow_s_ < 0.0)
-        return false;
-    const int today = static_cast<int>(week_) * 7 + static_cast<int>(last_tow_s_ / 86400.0);
-    days = today - static_cast<int>(iono_in_.gps_day);
-    return true;
+    if (!cfg_.external_build)
+        return stage_.ionoAgeDays(days);
+    days = meas_st_.iono_age_days;
+    return meas_st_.iono_age_known != 0;
 }
 
 void RawGnssShadow::padStatus(ShadowPadStatus& out) const
@@ -336,54 +340,26 @@ uint8_t RawGnssShadow::ionoSource() const
     return (sv.corrected > 0 && sv.pad_ok) ? kIonoPad : kIonoNone;
 }
 
-void RawGnssShadow::chooseIono(bool in_flight)
-{
-    // made on the pad and kept through the flight: a change there would
-    // start the survey over with no pad left to survey
-    if (in_flight)
-        return;
-    int age = 0;
-    const bool use = have_iono_ && (!ionoAgeDays(age) || age <= cfg_.iono_max_age_days);
-    if (!iono_dirty_ && use == use_broadcast_)
-        return;
-    builder_.setIono(use ? RawMeasBuilder::ionoFromBroadcast(iono_in_.raw) : gps_iono_t{});
-    use_broadcast_ = use;
-    iono_dirty_ = false;
-    survey_.reset();                  // its residuals were against the other model
-}
-
 void RawGnssShadow::onEpoch(const TimedRawEpoch& e)
 {
+    if (cfg_.external_build)
+        return;                           // the GNSS task's stage sees it (onBuilt)
     st_.epochs++;
-    if (e.gps_week != 0)
-        week_ = e.gps_week;
-    last_tow_s_ = e.epoch.tow_s;
+    stage_.see(e);
+    st_.tracked = stage_.stats().tracked;
+    st_.tracked_no_eph = stage_.stats().tracked_no_eph;
     last_timed_ = e.mcu_us != 0;
-    // which satellites the receiver tracks that it has not sent the ephemeris of
-    int tracked = 0, no_eph = 0;
-    for (int i = 0; i < e.epoch.n; ++i)
-    {
-        const RawObs& o = e.epoch.obs[i];
-        if (!o.has_pr || o.sys > GNSS_SYS_BDS)
-            continue;
-        tracked++;
-        const double to_sys = o.sys == GNSS_SYS_BDS ? BDT_MINUS_GPST : 0.0;   // as the builder picks
-        if (store_.select(o.sys, o.prn, e.epoch.tow_s + to_sys) == nullptr)
-            no_eph++;
-    }
-    st_.tracked = tracked;
-    st_.tracked_no_eph = no_eph;
     // an epoch the filter will not take still tells which satellites are tracked
     if (e.mcu_us == 0)
     {
         st_.epochs_untimed++;
-        builder_.noteEpoch(e.epoch);
+        stage_.noteEpoch(e.epoch);
         return;
     }
     if (!running_)
     {
         st_.epochs_idle++;
-        builder_.noteEpoch(e.epoch);
+        stage_.noteEpoch(e.epoch);
         return;
     }
     if (npending_ == 2)
@@ -395,9 +371,77 @@ void RawGnssShadow::onEpoch(const TimedRawEpoch& e)
     pending_[npending_++] = e;
 }
 
+void RawGnssShadow::onBuilt(const BuiltEpoch& b)
+{
+    if (!cfg_.external_build)
+        return;
+    if (!running_)
+    {
+        st_.epochs_stale++;               // built for a filter that has since stopped
+        return;
+    }
+    if (npend_built_ == 2)
+    {
+        dropFront();
+        st_.epochs_stale++;
+        pend_flags_ |= RGE_STALE;
+    }
+    pend_built_[(pb_head_ + npend_built_) & 1] = b;
+    npend_built_++;
+}
+
+void RawGnssShadow::onMeasStats(const ShadowMeasStats& m)
+{
+    meas_st_ = m;
+    st_.epochs = m.epochs;
+    st_.epochs_untimed = m.untimed;
+    st_.epochs_idle = m.idle;
+    st_.tracked = m.tracked;
+    st_.tracked_no_eph = m.tracked_no_eph;
+    st_.eph_added = m.eph_added;
+    st_.eph_bad = m.eph_bad;
+    last_timed_ = m.last_timed != 0;
+}
+
+bool RawGnssShadow::takeRelock(ShadowRelock& out)
+{
+    if (nrelock_ == 0)
+        return false;
+    out = relock_[0];
+    for (int i = 1; i < nrelock_; ++i)
+        relock_[i - 1] = relock_[i];
+    nrelock_--;
+    return true;
+}
+
+void RawGnssShadow::relock(int sys, int prn, double tow)
+{
+    if (!cfg_.external_build)
+    {
+        stage_.markRelock(sys, prn, tow);
+        return;
+    }
+    if (nrelock_ == kRelockQ)
+    {
+        for (int i = 1; i < kRelockQ; ++i)
+            relock_[i - 1] = relock_[i];
+        nrelock_--;
+    }
+    ShadowRelock& r = relock_[nrelock_++];
+    r.sys = static_cast<uint8_t>(sys);
+    r.prn = static_cast<uint8_t>(prn);
+    r.tow_s = tow;
+}
+
 void RawGnssShadow::dropFront()
 {
-    builder_.noteEpoch(pending_[0].epoch);
+    if (cfg_.external_build)
+    {
+        pb_head_ ^= 1;                    // its satellites' lock ages were taken when it was built
+        npend_built_--;
+        return;
+    }
+    stage_.noteEpoch(pending_[0].epoch);
     pending_[0] = pending_[1];
     npending_--;
 }
@@ -405,6 +449,7 @@ void RawGnssShadow::dropFront()
 void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
 {
     st_.imu++;
+    imu_flags_ = s.flags;
     // The launch edge: the pad context, once a flight (PAD_CONTEXT_MSG). Only
     // after a ground tick, so a flight restored in the air takes none.
     if (s.flags & kShadowInFlight)
@@ -621,6 +666,7 @@ void RawGnssShadow::start(double t)
     next_log_t_ = t;
     job_.active = false;
     npending_ = 0;
+    npend_built_ = 0;
     nfix_ = 0;
     satcheck_.reset();                    // a new filter: nothing to take differences from
     fixcheck_.reset();
@@ -647,8 +693,9 @@ void RawGnssShadow::stop(uint8_t why)
     running_ = false;
     job_.active = false;
     for (int i = 0; i < npending_; ++i)
-        builder_.noteEpoch(pending_[i].epoch);
+        stage_.noteEpoch(pending_[i].epoch);
     npending_ = 0;
+    npend_built_ = 0;
     log_ready_ = false;
     att_log_ready_ = false;
     st_.stops++;
@@ -683,10 +730,20 @@ void RawGnssShadow::applyDueEpochs(double t, uint8_t imu_flags)
             if (job_.active)
                 return;                   // the rest of it at the next step
         }
-        if (npending_ == 0)
-            return;
-        const TimedRawEpoch& e = pending_[0];
-        const double te = static_cast<double>(e.mcu_us) * 1.0e-6 - cfg_.epoch_latency_s;
+        int64_t mcu_us = 0;
+        if (cfg_.external_build)
+        {
+            if (npend_built_ == 0)
+                return;
+            mcu_us = pend_built_[pb_head_].mcu_us;
+        }
+        else
+        {
+            if (npending_ == 0)
+                return;
+            mcu_us = pending_[0].mcu_us;
+        }
+        const double te = static_cast<double>(mcu_us) * 1.0e-6 - cfg_.epoch_latency_s;
         if (te > t)
             return;                       // the IMU has not reached it yet
         if (t - te > cfg_.max_epoch_age_s)
@@ -696,34 +753,46 @@ void RawGnssShadow::applyDueEpochs(double t, uint8_t imu_flags)
             dropFront();
             continue;
         }
-        startJob(e, te, imu_flags);
-        pending_[0] = pending_[1];
-        npending_--;
+        startJob(te, imu_flags);
     }
 }
 
-// An epoch's work is a job of units: each observation built, the checks on
-// the built sky (each satellite against the IMU, the pad survey), the
-// receiver clock, each satellite fused, and the close. The navigation filter
-// does it a slice a step (epoch_slice_us), so the state it publishes keeps up
-// with the IMU however many satellites there are: on the rig (r7-r9) one pass
-// over 14 satellites held the state 40 ms, a sky of 30 would be 90 ms. Every
-// unit takes the epoch back by the age it has when it runs, which the IMU
-// history covers (0.5 s); a job epoch_job_max_s old is finished at once.
-void RawGnssShadow::startJob(const TimedRawEpoch& e, double te, uint8_t imu_flags)
+// An epoch's work is a job of units: each observation built (here, unless a
+// GNSS task built it: external_build), the checks on the built sky (each
+// satellite against the IMU, the pad survey), the receiver clock, each
+// satellite fused, and the close. The navigation filter does it a slice a
+// step (epoch_slice_us), so the state it publishes keeps up with the IMU
+// however many satellites there are: on the rig (r7-r9) one pass over 14
+// satellites held the state 40 ms, a sky of 30 would be 90 ms. Every unit
+// takes the epoch back by the age it has when it runs, which the IMU history
+// covers (1.28 s at 100 steps a second); a job epoch_job_max_s old is
+// finished at once.
+void RawGnssShadow::startJob(double te, uint8_t imu_flags)
 {
-    job_.e = e;
     job_.te = te;
     job_.in_flight = (imu_flags & kShadowInFlight) != 0;
-    chooseIono(job_.in_flight);
-    double v[3];
-    ekf_.receiverEcef(job_.r_prior, v);
-    builder_.begin(job_.e.epoch, job_.r_prior, static_cast<double>(ekf_.takeGPeak()));
-    job_.phase = kJobBuild;
-    job_.n = 0;
+    job_.g_peak = static_cast<double>(ekf_.takeGPeak());
+    if (cfg_.external_build)
+    {
+        built_ = pend_built_[pb_head_];
+        pb_head_ ^= 1;
+        npend_built_--;
+        job_.phase = kJobChecks;
+        job_.build_us = built_.build_us;  // the GNSS task's (wall), then the checks here
+    }
+    else
+    {
+        job_.e = pending_[0];
+        pending_[0] = pending_[1];
+        npending_--;
+        double r[3], v[3];
+        ekf_.receiverEcef(r, v);
+        stage_.begin(job_.e, r, job_.in_flight, built_);
+        job_.phase = kJobBuild;
+        job_.build_us = 0;
+    }
     job_.fused = 0;
     job_.rs = RawGnssStats();
-    job_.build_us = 0;
     job_.update_us = 0;
     job_.slices = 0;
     job_.t0_us = now();
@@ -771,8 +840,7 @@ void RawGnssShadow::jobUnit(double t)
     switch (job_.phase)
     {
     case kJobBuild:
-        job_.n = builder_.next(job_.e.epoch, store_, meas_, job_.n, RawEpoch::kMaxObs, 1);
-        if (builder_.done(job_.e.epoch))
+        if (stage_.next(built_, 1))
             job_.phase = kJobChecks;
         break;
     case kJobChecks:
@@ -780,15 +848,15 @@ void RawGnssShadow::jobUnit(double t)
         job_.phase = kJobClock;
         break;
     case kJobClock:
-        job_.phase = ekf_.beginGnssRaw(meas_, job_.n, age, job_.rs) ? kJobFuse : kJobClose;
+        job_.phase = ekf_.beginGnssRaw(built_.meas, built_.n, age, job_.rs) ? kJobFuse : kJobClose;
         break;
     case kJobFuse:
-        if (job_.fused < job_.n)
+        if (job_.fused < built_.n)
         {
-            ekf_.updateGnssRawPart(meas_, job_.fused, job_.fused + 1, age, job_.rs);
+            ekf_.updateGnssRawPart(built_.meas, job_.fused, job_.fused + 1, age, job_.rs);
             job_.fused++;
         }
-        if (job_.fused >= job_.n)
+        if (job_.fused >= built_.n)
             job_.phase = kJobClose;
         break;
     default:
@@ -799,20 +867,37 @@ void RawGnssShadow::jobUnit(double t)
 
 void RawGnssShadow::jobChecks(double age, double t)
 {
-    const int n = job_.n;
-    const double tow = job_.e.epoch.tow_s;
+    const int n = built_.n;
+    RawMeas* m = built_.meas;
+    const double tow = built_.tow_s;
+    // The Doppler of a loop under stress: the IMU's largest specific force
+    // since the last epoch (RawMeasBuilder's rr_dyn_sigma), added here, where
+    // the IMU is, whoever built the epoch
+    const double s_dyn = cfg_.meas.rr_dyn_sigma * (job_.g_peak > 0.0 ? job_.g_peak : 0.0);
+    if (s_dyn > 0.0)
+        for (int i = 0; i < n; ++i)
+        {
+            const double s = static_cast<double>(m[i].sigma_rr);
+            m[i].sigma_rr = static_cast<float>(std::sqrt(s * s + s_dyn * s_dyn));
+        }
+    // the ionosphere chosen anew on the pad: the survey's residuals were
+    // against the other model
+    if (built_.iono_changed)
+        survey_.reset();
+    use_broadcast_ = built_.use_broadcast != 0;
     // each satellite against the IMU since the last epoch (#1508): one that
     // jumped is taken as relocked, its sigma the builder's relock sigma
     double r_prior[3], v_prior[3];
     ekf_.receiverEcefAt(age, r_prior, v_prior);
-    const int jumped = satcheck_.check(meas_, n, tow, r_prior, jumped_);
+    const int jumped = satcheck_.check(m, n, tow, r_prior, jumped_);
     for (int i = 0; i < n && jumped > 0; ++i)
     {
         if (!jumped_[i])
             continue;
-        builder_.markRelock(meas_[i].sys, meas_[i].prn, tow);
-        meas_[i].sigma_pr_corr = static_cast<float>(
-            std::hypot(static_cast<double>(meas_[i].sigma_pr_corr), cfg_.meas.relock_sigma_m));
+        relock(m[i].sys, m[i].prn, tow);
+        built_.lock_age_s[i] = 0.0;
+        m[i].sigma_pr_corr = static_cast<float>(
+            std::hypot(static_cast<double>(m[i].sigma_pr_corr), cfg_.meas.relock_sigma_m));
     }
     st_.last_sats_jumped = jumped;
     st_.sats_jumped += static_cast<uint32_t>(jumped);
@@ -824,26 +909,24 @@ void RawGnssShadow::jobChecks(double age, double t)
         {
             double pad[3];
             geo_to_ecef(seed_.pad_lla[0], seed_.pad_lla[1], seed_.pad_lla[2], pad);
-            for (int i = 0; i < n; ++i)
-                lock_age_[i] = builder_.relockAge(meas_[i].sys, meas_[i].prn, tow);
-            survey_.observe(meas_, n, lock_age_, tow, pad);
+            survey_.observe(m, n, built_.lock_age_s, tow, pad);
             st_.survey_epochs++;
         }
     }
-    st_.last_pad_corrected = use_broadcast_ ? 0 : survey_.correct(meas_, n, job_.r_prior);
+    st_.last_pad_corrected = use_broadcast_ ? 0 : survey_.correct(m, n, built_.r_approx);
 }
 
 void RawGnssShadow::closeJob(double age, double t)
 {
-    const int n = job_.n;
+    const int n = built_.n;
     const RawGnssStats& rs = job_.rs;
     double r_post[3], v_post[3];
     ekf_.receiverEcefAt(age, r_post, v_post);
-    satcheck_.commit(meas_, n, job_.e.epoch.tow_s, r_post);
+    satcheck_.commit(built_.meas, n, built_.tow_s, r_post);
     st_.last = rs;
     st_.last_age_s = age;
     st_.last_meas = n;
-    st_.last_tow_ms = static_cast<uint32_t>(std::llround(std::fmod(job_.e.epoch.tow_s, 604800.0) * 1000.0));
+    st_.last_tow_ms = static_cast<uint32_t>(std::llround(std::fmod(built_.tow_s, 604800.0) * 1000.0));
     st_.epochs_applied++;
     level_gate_.onEpoch(t, ekf_.velNed());
     if (rs.used_pr > 0)
@@ -887,7 +970,7 @@ void RawGnssShadow::fillLog(uint32_t time_us, uint8_t imu_flags)
     d.used_rr = u8(st_.last.used_rr);
     d.rejected_pr = u8(st_.last.rejected_pr);
     d.rejected_rr = u8(st_.last.rejected_rr);
-    d.eph_sats = u8(eph_sats_);
+    d.eph_sats = u8(ephemerisSatellites());
     d.flags = static_cast<uint8_t>(RGE_RUNNING | (ekf_.clockReady() ? RGE_CLOCK : 0)
                                    | (last_timed_ ? RGE_TIMED : 0)
                                    | (levelled_ ? RGE_LEVEL : 0)

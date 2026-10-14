@@ -12,12 +12,21 @@
 //
 // Raw epochs. Each comes with its GPS instant on the MCU clock
 // (TimedRawEpoch, from the driver's GnssTimeSync). It is held until the IMU
-// has passed that instant, then built into measurements (RawMeasBuilder,
-// with the ephemerides the receiver has sent so far) and applied with its age:
-// the receiver is taken back to the epoch by the IMU's own velocity history,
-// however late the epoch arrived. One later than max_epoch_age_s, past that
-// history, is dropped. An epoch with no MCU time yet (the time sync wants
-// 10 s of fixes) only counts for the satellites' relock ages.
+// has passed that instant, then built into measurements (RawGnssMeasStage:
+// RawMeasBuilder, with the ephemerides the receiver has sent so far) and
+// applied with its age: the receiver is taken back to the epoch by the IMU's
+// own velocity history, however late the epoch arrived. One later than
+// max_epoch_age_s, past that history, is dropped. An epoch with no MCU time
+// yet (the time sync wants 10 s of fixes) only counts for the satellites'
+// relock ages.
+//
+// Built elsewhere (Config::external_build, #1626). On the flight computer the
+// build -- two-thirds of an epoch's cost -- runs in a GNSS task of its own,
+// below this one's priority, with a stage of its own (RawGnssMeasStage.h):
+// the epochs come here built (onBuilt), the satellites the checks find jumped
+// go back to it (takeRelock), and its counts come with them (onMeasStats).
+// The ephemerides still come here, for the pad context only. Without it, as a
+// host test drives it, the shadow builds in its own job.
 //
 // The ionosphere (phase 5). A pad calibration brings the GPS broadcast
 // (Klobuchar) parameters from the app, with the date of the navigation file
@@ -93,6 +102,7 @@
 #include "FixCheck.h"
 #include "LevelGate.h"
 #include "PadSurvey.h"
+#include "RawGnssMeasStage.h"
 #include "RawMeas.h"
 #include "RawMeasBuilder.h"
 #include "SatJumpCheck.h"
@@ -142,6 +152,7 @@ public:
         double   mag_field_tol   = 0.15;      // a field this far off the model's size is no heading (#1304)
         double   max_bridge_s    = 5.0;       // the navigation filter bridges an IMU hole this long
         double   pad_context_delay_s = 6.0;   // the pad context is written from this long after launch
+        bool     external_build = false;      // the epochs come built (onBuilt): a GNSS task builds them
     };
 
     // What takes the ionosphere out (the pad status message reports it).
@@ -220,6 +231,8 @@ public:
 
     RawGnssShadow();
     explicit RawGnssShadow(const Config& cfg);
+    // What a GNSS task's stage builds with, for a shadow with this config.
+    static RawGnssMeasStage::Config stageConfig(const Config& c);
     void setClock(Clock c) { clock_ = c; }
     const Config& config() const { return cfg_; }
 
@@ -227,6 +240,8 @@ public:
     void reset();
 
     void onSeed(const ShadowSeed& s);
+    // A broadcast ephemeris (RTCM3 payload): kept for the pad context, and
+    // decoded for the build unless a GNSS task builds (external_build).
     void onEphemeris(const uint8_t* payload, size_t len);
     // The broadcast ionosphere a pad calibration brought (or NVS kept).
     void setIono(const ShadowIono& io);
@@ -238,7 +253,16 @@ public:
     void onMag(const ShadowMag& m);
     // The navigation state the flight loop flies on (running = 0 before a start).
     void navState(ShadowNav& out) const;
+    // A raw epoch, built here (not with external_build).
     void onEpoch(const TimedRawEpoch& e);
+    // external_build: an epoch the GNSS task built, held as an epoch is.
+    void onBuilt(const BuiltEpoch& b);
+    // external_build: a satellite the checks found jumped, for the GNSS
+    // task's stage (RawGnssMeasStage::markRelock). False when none.
+    bool takeRelock(ShadowRelock& out);
+    // external_build: the GNSS task's counts (the console, the pad status).
+    void onMeasStats(const ShadowMeasStats& m);
+    const ShadowMeasStats& measStats() const { return meas_st_; }
     // One flight-filter IMU tick; time64_us is its time widened to 64 bits
     // (unwrap32 against the clock it was stamped with).
     void onImu(const ShadowImu& s, int64_t time64_us);
@@ -263,17 +287,21 @@ public:
     bool running() const { return running_; }
     const Stats& stats() const { return st_; }
     const RawGnssEKF<float>& filter() const { return ekf_; }
-    const EphemerisStore& ephemerides() const { return store_; }
-    int ephemerisSatellites() const { return eph_sats_; }
+    // The shadow's own stage (not with external_build).
+    const EphemerisStore& ephemerides() const { return stage_.ephemerides(); }
+    const RawMeasBuilder& builder() const { return stage_.builder(); }
+    int ephemerisSatellites() const
+    {
+        return cfg_.external_build ? meas_st_.eph_sats : stage_.ephemerisSatellites();
+    }
     const PadSurvey& survey() const { return survey_; }
-    const RawMeasBuilder& builder() const { return builder_; }
     const FixCheck& fixCheck() const { return fixcheck_; }
     const SatJumpCheck& satCheck() const { return satcheck_; }
     // The last epoch's measurements as the filter took them (pad corrections
     // applied when they were in use), n of them: the console's per-satellite line.
     // The last epoch's measurements (none while the next one is being built
     // over them).
-    const RawMeas* lastMeasurements(int& n) const { n = job_.active ? 0 : st_.last_meas; return meas_; }
+    const RawMeas* lastMeasurements(int& n) const { n = job_.active ? 0 : st_.last_meas; return built_.meas; }
     // What takes the ionosphere out now.
     uint8_t ionoSource() const;
     bool haveIono() const { return have_iono_; }
@@ -295,14 +323,14 @@ private:
     void stop(uint8_t why);
     void resync(double t);
     void applyDueEpochs(double t, uint8_t imu_flags);
-    void startJob(const TimedRawEpoch& e, double te, uint8_t imu_flags);
+    void startJob(double te, uint8_t imu_flags);
     void workJob(double t);
     void jobUnit(double t);
     void jobChecks(double age, double t);
     void closeJob(double age, double t);
+    void relock(int sys, int prn, double tow);
     void applyDueFixes(double t);
     void judge(const TimedFix& f, double t_fix);
-    void chooseIono(bool in_flight);
     void dropFront();
     void fillLog(uint32_t time_us, uint8_t imu_flags);
     void capturePadContext(uint32_t tick_us);
@@ -311,28 +339,33 @@ private:
     Config        cfg_;
     Clock         clock_ = nullptr;
     RawGnssEKF<float> ekf_;
-    EphemerisStore store_;
-    RawMeasBuilder builder_;
-    RawMeas       meas_[RawEpoch::kMaxObs];
-    TimedRawEpoch pending_[2];
+    RawGnssMeasStage stage_;            // its own build (not with external_build)
+    TimedRawEpoch pending_[2];          // raw epochs waiting for the IMU (built here)
+    int           npending_ = 0;
+    BuiltEpoch    pend_built_[2];       // built epochs waiting for it (external_build)
+    int           pb_head_ = 0, npend_built_ = 0;
     // the epoch being worked (startJob .. closeJob), a slice a step
     enum : int { kJobBuild, kJobChecks, kJobClock, kJobFuse, kJobClose };
     struct Job
     {
         bool          active = false;
         int           phase = kJobBuild;
-        TimedRawEpoch e;
+        TimedRawEpoch e;                  // built here: the epoch
         double        te = 0.0;           // its instant on the filter's clock
         bool          in_flight = false;
-        double        r_prior[3] = {};    // the receiver when it started: the builder's, the survey's
-        int           n = 0;              // measurements built
-        int           fused = 0;          //   and fused
+        double        g_peak = 0.0;       // the largest |specific force| / g - 1 since the last epoch
+        int           fused = 0;          // measurements fused
         RawGnssStats  rs;
         int64_t       t0_us = 0;
         uint32_t      build_us = 0, update_us = 0, slices = 0;
     };
     Job           job_;
-    int           npending_ = 0;
+    BuiltEpoch    built_;               // its measurements: built in the job, or handed over
+    static constexpr int kRelockQ = 16;  // jumped satellites waiting for the GNSS task (external_build)
+    ShadowRelock  relock_[kRelockQ] = {};
+    int           nrelock_ = 0;
+    ShadowMeasStats meas_st_ = {};      // the GNSS task's counts (external_build)
+    uint8_t       imu_flags_ = 0;       // the last IMU tick's
     ShadowSeed    seed_ = {};
     bool          have_seed_ = false;
     bool          running_ = false;
@@ -343,11 +376,7 @@ private:
     double        gyro_sum_[3] = {};
     double        last_resync_t_ = 0.0;
     double        next_log_t_ = 0.0;
-    uint16_t      week_ = 0;
-    double        last_tow_s_ = -1.0;  // the last epoch's time of week (any epoch)
-    int           eph_sats_ = 0;
     PadSurvey     survey_;
-    double        lock_age_[RawEpoch::kMaxObs] = {};
     SatJumpCheck  satcheck_;
     bool          jumped_[RawEpoch::kMaxObs] = {};
     FixCheck      fixcheck_;
@@ -375,10 +404,9 @@ private:
     int           nfix_ = 0;
     GnssCheckData chk_[kFixQ] = {};      // check records waiting to be taken
     int           nchk_ = 0;
-    ShadowIono    iono_in_ = {};
+    ShadowIono    iono_in_ = {};        // the pad context's (the stage chooses with its own)
     bool          have_iono_ = false;
-    bool          iono_dirty_ = true;   // the builder's model is to be chosen again
-    bool          use_broadcast_ = false;
+    bool          use_broadcast_ = false;   // the last epoch's ionosphere: the broadcast parameters
     bool          last_timed_ = false;
     uint8_t       pend_flags_ = 0;      // RGE_STALE / RGE_RESYNC / RGE_CLOCK_STEP since the last record
     RawGnssEkfData log_ = {};

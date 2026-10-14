@@ -1598,6 +1598,7 @@ gtest_discover_tests(test_raw_gnss_ekf)
 # parser into a running shadow filter (fixtures/raw_meas_golden.h).
 add_executable(test_raw_gnss_shadow test_raw_gnss_shadow.cpp
     ${LIB_DIR}/TR_RawGnssShadow/RawGnssShadow.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/RawGnssMeasStage.cpp
     ${LIB_DIR}/TR_RawGnssShadow/PadSurvey.cpp
     ${LIB_DIR}/TR_RawGnssShadow/SatJumpCheck.cpp
     ${LIB_DIR}/TR_RawGnssShadow/FixCheck.cpp
