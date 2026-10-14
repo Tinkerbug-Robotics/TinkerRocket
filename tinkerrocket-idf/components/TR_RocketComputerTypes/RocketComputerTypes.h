@@ -1623,6 +1623,125 @@ static_assert(sizeof(GnssClockData) == 68,
 static constexpr uint8_t GCL_VALID   = 0x01;  // the line answers (mcuAt): 10 s of history
 static constexpr uint8_t GCL_STARTED = 0x02;  // a sample has started the history
 
+// ── PAD_CONTEXT_MSG (0x9E): the pad, written once after launch ──────────────
+// The log's pre-launch ring keeps about 0.5-1 s before ignition, so what was
+// set on the pad never reached a flight log: the calibrations in use, the
+// raw-GNSS filter's state and covariance as it left, the broadcast ionosphere
+// a pad calibration brought, the pad survey's corrections -- and most of the
+// broadcast ephemerides, which the receiver sends one a second. A replay had
+// to guess them. None of it changes in flight, so it is written once after
+// launch, when the out computer's ring has drained: the flight loop's
+// calibrations beside its settings copy at +5 s, the raw-GNSS task's records
+// from +6 s, paced (config::PAD_CONTEXT_PERIOD_MS), the last of them every
+// ephemeris the filter holds.
+// VARIABLE length: PadContextHeader + its kind's body (sizeof, or the
+// *WireSize helpers for the parts).
+typedef struct __attribute__((packed))
+{
+    uint32_t time_us;   // FC micros when written, so the type's records stay in time order
+    uint8_t  kind;      // PCX_* below
+    uint8_t  part;      // this record's index among its kind's, from 0
+    uint8_t  parts;     // the records its kind takes
+} PadContextHeader;
+static_assert(sizeof(PadContextHeader) == 7, "PadContextHeader is 7 bytes on the wire");
+static constexpr uint8_t PCX_CAL    = 1;  // PadContextCal, from the flight loop
+static constexpr uint8_t PCX_NAV    = 2;  // PadContextNav, from the raw-GNSS task
+static constexpr uint8_t PCX_COV    = 3;  // PadContextCov, in parts
+static constexpr uint8_t PCX_SURVEY = 4;  // PadContextSurvey, in parts
+static constexpr uint8_t PCX_EPH    = 5;  // a broadcast ephemeris: a whole RTCM3 frame, one per record
+
+// PCX_CAL: what the flight flew with that the logged counts do not carry.
+typedef struct __attribute__((packed))
+{
+    int16_t gyro_offset_lsb[3];  // the gyro's zero-rate offset, raw LSB; the poll task subtracts it, so
+                                 // ISM6HG256_MSG's gyro counts are after it
+    float   hg_bias_mps2[3];     // high-g less low-g accelerometer, body frame, m/s^2; applied after the log
+    int16_t mag_offset_lsb[3];   // the IIS2MDC hard-iron offset in its OFFSET registers, raw LSB; IIS2MDC_MSG's
+                                 // counts are after it
+    uint8_t mag_offset_set;      // 1 if one was programmed this boot
+    float   cal_gravity_mps2;    // |g| the last gyro/accel window measured (0: none this boot)
+    int32_t mmc_offset_counts[3];  // the MMC5983MA's hard-iron offset, centered counts: the converter
+                                   // subtracts it after the log (MMC5983MA_MSG's counts are before it)
+} PadContextCal;
+static_assert(sizeof(PadContextCal) == 41, "PadContextCal must be 41 bytes");
+
+// PCX_NAV: the raw-GNSS filter at the IMU tick the flight computer called
+// INFLIGHT, and what it had taken from the pad.
+typedef struct __attribute__((packed))
+{
+    uint32_t filter_time_us;     // that tick (RawGnssEkfData's clock)
+    double   lla[3];             // lat, lon (rad), height above the ellipsoid (m)
+    float    vel_ned[3];         // m/s
+    float    quat[4];            // body -> NED, scalar first
+    float    acc_bias_mps2[3];   // body FRD
+    float    gyro_bias_rps[3];   // body FRD, rad/s
+    double   clk_bias_m;
+    float    clk_drift_mps;
+    float    isb_gal_m;          // Galileo - GPS time offset, m
+    float    isb_bds_m;          // BeiDou - GPS
+    float    baro_offset_m;      // the filter's height less the barometer's, learned on the pad
+    float    declination_rad;    // the seed's: true north east of magnetic, at the pad
+    float    field_ut;           // the field model's size there (0: none)
+    int8_t   iono[8];            // the broadcast Klobuchar a pad calibration brought (PadCalConfigData's)
+    uint16_t iono_gps_day;       // its navigation file's date, days since 1980-01-06 (0: none)
+    uint8_t  iono_source;        // what took the ionosphere out: 0 neither, 1 the broadcast, 2 the pad survey
+    uint8_t  flags;              // PCN_* below
+} PadContextNav;
+static_assert(sizeof(PadContextNav) == 124, "PadContextNav must be 124 bytes");
+static constexpr uint8_t PCN_RUNNING     = 0x01;  // the filter was running
+static constexpr uint8_t PCN_CLOCK       = 0x02;  // its receiver clock was set
+static constexpr uint8_t PCN_BARO        = 0x04;  // it had a barometer offset (baro_offset_m)
+static constexpr uint8_t PCN_IONO        = 0x08;  // it held a broadcast ionosphere (iono)
+static constexpr uint8_t PCN_DECLINATION = 0x10;  // its seed carried a declination and field size
+static constexpr uint8_t PCN_PRIMARY     = 0x20;  // it was the navigation filter (TR_RAW_GNSS_PRIMARY)
+
+// PCX_COV: that filter's covariance at the same tick, the upper triangle of
+// its 19 error states (TR_RawGnssEKF.h: position, velocity, attitude
+// half-angle, accelerometer and gyro biases, clock bias and drift, Galileo and
+// BeiDou offsets) row by row, i <= j: 190 values in parts of 48.
+static constexpr int PCX_COV_N        = 19;
+static constexpr int PCX_COV_VALUES   = PCX_COV_N * (PCX_COV_N + 1) / 2;
+static constexpr int PCX_COV_PER_PART = 48;
+typedef struct __attribute__((packed))
+{
+    uint16_t first;                  // the first value's index in the triangle
+    uint8_t  n;                      // values in this part
+    uint8_t  reserved;
+    float    p[PCX_COV_PER_PART];
+} PadContextCov;
+static constexpr size_t padContextCovWireSize(uint8_t n) { return 4u + 4u * (size_t)n; }
+
+// PCX_SURVEY: the pad survey's per-satellite pseudorange corrections at the
+// same tick (PadSurvey.h; the filter used them only when they took the
+// ionosphere out), with its summary, in parts of 30.
+typedef struct __attribute__((packed))
+{
+    uint8_t sys;      // gnss_sys_t: 0 GPS, 1 Galileo, 2 BeiDou
+    uint8_t prn;
+    float   corr_m;
+} PadSurveyEntry;
+static constexpr int PCX_SURVEY_PER_PART = 30;
+typedef struct __attribute__((packed))
+{
+    uint8_t  tracked;        // satellites with a pseudorange in the last epoch
+    uint8_t  settling;       //   locked less than the survey's settle time
+    uint8_t  corrected;      //   with a correction in use
+    uint8_t  pad_ok;         // the raw measurements vouched for the launch site
+    float    rms_m;          // the corrections' RMS
+    float    pad_offset_m;   // how far the raw measurements put the launch site
+    uint8_t  n;              // entries in this part
+    PadSurveyEntry e[PCX_SURVEY_PER_PART];
+} PadContextSurvey;
+static constexpr size_t padContextSurveyWireSize(uint8_t n) { return 13u + 6u * (size_t)n; }
+
+// PCX_EPH: each broadcast ephemeris the filter held (RTCM 1019 GPS, 1042
+// BeiDou, 1046 Galileo; the latest of each message and satellite) as a whole
+// RTCM3 frame, 0xD3 to its CRC-24Q: the bytes the receiver framed. part counts
+// them, parts is how many. Not in GNSS_RTCM_MSG, which keeps the receiver's
+// frames as and when they came: a replay feeds these to its RTCM3 parser
+// before the flight's own.
+static constexpr size_t PCX_EPH_MAX_FRAME = 78;   // a 72-byte payload (the LC86G driver's kEphMaxPayload), framed
+
 // Ordered: the app may render a progress bar from step/FCB_STEP_COUNT.  Append
 // only — the apps map unknown values to a generic "starting up".
 enum FcBootStep : uint8_t
@@ -2646,6 +2765,9 @@ static constexpr uint8_t IMU_TEMP_MSG        = 0x9C;  // FC→OC over I2S: Ism6T
 static constexpr uint8_t GNSS_CLOCK_MSG      = 0x9D;  // FC→OC over I2S: GnssClockData, the MCU clock against GPS time
                                                       // each time its line moves (~1 Hz); straight to the log.  LC86G
                                                       // boards only.
+static constexpr uint8_t PAD_CONTEXT_MSG     = 0x9E;  // FC→OC over I2S: PadContextHeader + its kind's body, what a
+                                                      // replay needs from the pad, once after launch; straight to the
+                                                      // log.  VARIABLE length.
 
 static constexpr uint8_t OUT_STATUS_QUERY    = 0xA0;
 static constexpr uint8_t GNSS_MSG            = 0xA1;
@@ -4197,6 +4319,12 @@ static_assert(sizeof(Ism6TempData) <= MAX_PAYLOAD,
               "Ism6TempData must fit one I2S frame payload");
 static_assert(sizeof(GnssClockData) <= MAX_PAYLOAD,
               "GnssClockData must fit one I2S frame payload");
+static_assert(sizeof(PadContextHeader) + sizeof(PadContextNav) <= MAX_PAYLOAD &&
+              sizeof(PadContextHeader) + sizeof(PadContextCal) <= MAX_PAYLOAD &&
+              sizeof(PadContextHeader) + padContextCovWireSize(PCX_COV_PER_PART) <= MAX_PAYLOAD &&
+              sizeof(PadContextHeader) + padContextSurveyWireSize(PCX_SURVEY_PER_PART) <= MAX_PAYLOAD &&
+              sizeof(PadContextHeader) + PCX_EPH_MAX_FRAME <= MAX_PAYLOAD,
+              "every PAD_CONTEXT_MSG record must fit one I2S frame payload");
 static_assert(sizeof(PadCalStatusData) <= MAX_PAYLOAD,
               "PadCalStatusData must fit one I2S frame payload");
 static_assert(sizeof(GnssCheckData) <= MAX_PAYLOAD,

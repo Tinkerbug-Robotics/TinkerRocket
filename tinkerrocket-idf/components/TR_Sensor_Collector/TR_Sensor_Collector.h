@@ -306,6 +306,15 @@ public:
     // effect on the count stream (#1312).  Returns false if the mag isn't
     // active or the I2C write failed.  Issue #96.
     bool setIIS2MDCHardIronOffset(int16_t cx, int16_t cy, int16_t cz);
+    // The offset last asked of setIIS2MDCHardIronOffset() (the count stream
+    // is after it): false, and zeros, if none was this boot.
+    bool iis2mdcHardIronOffset(int16_t &cx, int16_t &cy, int16_t &cz) const
+    {
+        cx = iis2mdc_offset_cx;
+        cy = iis2mdc_offset_cy;
+        cz = iis2mdc_offset_cz;
+        return iis2mdc_offset_set;
+    }
 
     // #1111: IIS2MDC poll health.  Stalled = the chip failed STALL_FAILS
     // consecutive reads and the poll is down to the backed-off probe.

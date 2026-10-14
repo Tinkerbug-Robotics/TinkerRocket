@@ -22,7 +22,7 @@ Start-of-frame bytes from [`TR_I2C_Interface.h`](https://github.com/Tinkerbug-Ro
 
 ## FC ↔ OC message types
 
-105 codes. The dispatch on both ends is a flat first-match chain, so
+106 codes. The dispatch on both ends is a flat first-match chain, so
 two handlers sharing a value means the second is silently dead — which is why
 this list is CI-enforced for uniqueness.
 
@@ -133,8 +133,9 @@ this list is CI-enforced for uniqueness.
 | `0x9B` | `RAW_GNSS_ATT_MSG` | FC → OC |  |
 | `0x9C` | `IMU_TEMP_MSG` | FC → OC | FC→OC over I2S: Ism6TempData, the IMU's die temperature once a |
 | `0x9D` | `GNSS_CLOCK_MSG` | FC → OC | FC→OC over I2S: GnssClockData, the MCU clock against GPS time |
+| `0x9E` | `PAD_CONTEXT_MSG` | FC → OC | FC→OC over I2S: PadContextHeader + its kind's body, what a |
 
-> 54 of these 105 codes carry no comment in the header,
+> 54 of these 106 codes carry no comment in the header,
 > so the Notes column is blank for them. Direction is inferred from the
 > `_PENDING` / `_CMD` / `_MSG` suffix in that case, which is a convention,
 > not a guarantee. A trailing `// OC→FC: what it does` on the constant
@@ -151,6 +152,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `FlightSettingsData` | 223 |
 | `GNSSSatData` | 202 |
 | `ConfigReportData` | 194 |
+| `PadContextNav` | 124 |
 | `RawGnssEkfData` | 90 |
 | `RollProfileData` | 76 |
 | `RollProfileData` | 76 |
@@ -165,6 +167,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `GNSSData` | 42 |
 | `OutStatusQueryData` | 42 |
 | `OutStatusQueryData` | 42 |
+| `PadContextCal` | 41 |
 | `PadCalStatusData` | 40 |
 | `MagCalStatusData` | 36 |
 | `LogBufferStatsData` | 28 |
@@ -199,6 +202,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `RollWaypoint` | 9 |
 | `ServoTestAnglesData` | 8 |
 | `LoRaFrameHeader` | 7 |
+| `PadContextHeader` | 7 |
 | `GNSSSatBlock` | 6 |
 | `Ism6TempData` | 6 |
 | `Vec3i16` | 6 |

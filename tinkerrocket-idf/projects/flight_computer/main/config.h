@@ -338,6 +338,12 @@ struct config : board_pins
     static_assert(GUIDANCE_TELEM_RATE_HZ >= 1 &&
                   GUIDANCE_TELEM_RATE_HZ <= NON_SENSOR_UPDATE_RATE,
                   "GUIDANCE_TELEM_RATE_HZ must be in [1, NON_SENSOR_UPDATE_RATE]");
+    // The pad context (PAD_CONTEXT_MSG), written once from 6 s after launch:
+    // one record each this often. At most about 70 (the raw-GNSS filter's
+    // state, its covariance and pad survey in parts, then each ephemeris it
+    // held), so about 1.5 s of under 12 KB/s -- inside a guided coast, which
+    // has the room (test_i2s_link_budget: ThePadContextFitsInAGuidedCoast).
+    static constexpr uint32_t PAD_CONTEXT_PERIOD_MS = 20;
     // ISM6 full-scale configuration used by SensorConverter (and shared to OUT).
     static constexpr uint8_t ISM6_LOW_G_FS_G = 16;
     static constexpr uint16_t ISM6_HIGH_G_FS_G = 256;
