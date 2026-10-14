@@ -23,6 +23,13 @@ uint16_t sat16(double v)
     return v >= 65535.0 ? 65535 : static_cast<uint16_t>(std::lround(v));
 }
 
+int16_t sats16(double v)
+{
+    if (!std::isfinite(v))
+        return 0;
+    return v >= 32767.0 ? 32767 : (v <= -32767.0 ? -32767 : static_cast<int16_t>(std::lround(v)));
+}
+
 int32_t sat32(double v)
 {
     if (!std::isfinite(v))
@@ -49,7 +56,7 @@ RawGnssShadow::RawGnssShadow() : RawGnssShadow(Config()) {}
 
 RawGnssShadow::RawGnssShadow(const Config& cfg)
     : cfg_(cfg), ekf_(cfg.ekf), stage_(stageConfig(cfg)), survey_(cfg.survey), satcheck_(cfg.sat_check),
-      fixcheck_(cfg.fix_check), level_gate_(cfg.level)
+      fixcheck_(cfg.fix_check), level_gate_(cfg.level), fit_(cfg.heading_fit)
 {
 }
 
@@ -255,6 +262,17 @@ void RawGnssShadow::judge(const TimedFix& f, double t_fix)
         nchk_--;
     }
     chk_[nchk_++] = d;
+}
+
+bool RawGnssShadow::takeHeadingLog(HeadingFitData& out)
+{
+    if (nhdg_ == 0)
+        return false;
+    out = hdg_[0];
+    for (int i = 1; i < nhdg_; ++i)
+        hdg_[i - 1] = hdg_[i];
+    nhdg_--;
+    return true;
 }
 
 bool RawGnssShadow::takeCheckLog(GnssCheckData& out)
@@ -598,6 +616,8 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
     prop_sum_ += step_us;
     prop_n_++;
 
+    stepHeading(t, acc, gyro, static_cast<float>(span), s.flags);
+
     // the pad: the flight filter's attitude (and, before an epoch of our
     // own, its position and velocity), once a resync_period_s
     if (!cfg_.primary && have_seed_ && seed_.on_pad && !(s.flags & kShadowInFlight)
@@ -651,6 +671,10 @@ void RawGnssShadow::start(double t)
     // for the levelling and the magnetometer to settle.
     restored_ = cfg_.primary && !seed_.on_pad && seed_.restore;
     start_gen_ = seed_.start_gen;
+    fit_.reset();
+    fit_ground_ = !restored_;
+    fit_flight_ = false;
+    handed_ = false;
     if (!cfg_.primary || restored_)
         ekf_.setQuaternion(seed_.quat);
     ekf_.seedGyroBias(seed_.gyro_bias);
@@ -812,7 +836,7 @@ void RawGnssShadow::workJob(double t)
         const int64_t u1 = now();
         if (phase <= kJobChecks)
             job_.build_us += static_cast<uint32_t>(u1 - u0);
-        else
+        else if (phase != kJobHeading && phase != kJobHeadingFit)   // the fit times itself
             job_.update_us += static_cast<uint32_t>(u1 - u0);
         u0 = u1;
         if (sliced && static_cast<double>(u1 - s0) >= cfg_.epoch_slice_us)
@@ -845,6 +869,13 @@ void RawGnssShadow::jobUnit(double t)
         break;
     case kJobChecks:
         jobChecks(age, t);
+        job_.phase = kJobHeading;
+        break;
+    case kJobHeading:
+        job_.phase = jobHeading(age) ? kJobHeadingFit : kJobClock;
+        break;
+    case kJobHeadingFit:
+        jobHeadingFit();
         job_.phase = kJobClock;
         break;
     case kJobClock:
@@ -937,6 +968,170 @@ void RawGnssShadow::closeJob(double age, double t)
     if (rs.clock_jump_ms != 0 || rs.clock_step_m != 0.0 || rs.drift_step_mps != 0.0)
         pend_flags_ |= RGE_CLOCK_STEP;
     job_.active = false;
+}
+
+// The heading from thrust, each step: seeded again at every still step on the
+// pad (the filter's attitude and gyro bias, and the IMU biases the hand-off
+// puts back), on the gyro alone from the last one; at launch it takes epochs
+// if that seed is fresh, and in act mode the filter's heading is let go.
+void RawGnssShadow::stepHeading(double t, const float acc[3], const float gyro[3], float span, uint8_t imu_flags)
+{
+    if (cfg_.heading_mode == kHeadingOff)
+        return;
+    const int64_t c0 = now();
+    const bool ground = !(imu_flags & kShadowInFlight);
+    const bool landed = (imu_flags & kShadowLanded) != 0;
+    const bool still = ground && !landed && level_gate_.gSized(acc)
+                       && gyro[0] * gyro[0] + gyro[1] * gyro[1] + gyro[2] * gyro[2]
+                              < static_cast<float>(cfg_.still_rate_rps * cfg_.still_rate_rps);
+    if (still)
+    {
+        fit_.start(ekf_.quat(), ekf_.gyroBias(), t);
+        for (int i = 0; i < 3; ++i)
+        {
+            pad_ab_[i] = ekf_.accelBias()[i];
+            pad_wb_[i] = ekf_.gyroBias()[i];
+        }
+        pad_ll_[0] = ekf_.lla()[0];
+        pad_ll_[1] = ekf_.lla()[1];
+        ekf_.biasCovariance(pad_Pb_);
+        st_.heading_seeds++;
+    }
+    else if (fit_.started())
+    {
+        fit_.imu(acc, gyro, span);
+    }
+    if (!ground && fit_ground_)
+    {
+        // the launch edge
+        fit_launch_t_ = t;
+        fit_flight_ = fit_.started() && t - fit_.t0() <= cfg_.heading_seed_max_s;
+        handed_ = false;
+        if (fit_flight_)
+            st_.heading_flights++;
+        if (cfg_.heading_mode == kHeadingAct)
+        {
+            // from here GNSS turns the heading, and only the heading
+            ekf_.setAttGateVertical(true);
+            ekf_.setHeadingSigma(static_cast<float>(cfg_.heading_pad_sigma_deg / kRad2Deg));
+        }
+    }
+    else if (ground && !fit_ground_)
+    {
+        fit_flight_ = false;              // back on the ground
+        if (cfg_.heading_mode == kHeadingAct)
+            ekf_.setAttGateVertical(cfg_.ekf.att_gate_vertical);
+    }
+    fit_ground_ = ground;
+    const uint32_t us = static_cast<uint32_t>(now() - c0);
+    if (us > st_.heading_step_us_max)
+        st_.heading_step_us_max = us;
+}
+
+// An epoch's part in the fit, in two units: its Doppler velocity, at the
+// instant the Doppler describes, into the fit (true when it was taken); then
+// the fit again, and in act mode the hand-off once it is sure -- before this
+// epoch is fused.
+bool RawGnssShadow::jobHeading(double age)
+{
+    if (cfg_.heading_mode == kHeadingOff || !fit_flight_ || !job_.in_flight)
+        return false;
+    if (job_.te - fit_launch_t_ > cfg_.heading_fit_max_s)
+        return false;
+    const int64_t c0 = now();
+    double r[3], v[3];
+    ekf_.receiverEcefAt(age, r, v);
+    double v_ned[3] = {}, var_h = 0.0;
+    int used = 0;
+    // in the pad's NED, where the fit integrates the IMU (the receiver's own
+    // is turned from it by the Earth's curve, 1.6e-4 rad a kilometre)
+    const bool vel = dopplerVelocityNed(built_.meas, built_.n, r, pad_ll_[0], pad_ll_[1], v_ned, var_h, used);
+    const int64_t c1 = now();
+    st_.heading_vel_us = static_cast<uint32_t>(c1 - c0);
+    if (st_.heading_vel_us > st_.heading_vel_us_max)
+        st_.heading_vel_us_max = st_.heading_vel_us;
+    if (!vel)
+    {
+        st_.heading_vel_fails++;
+        return false;
+    }
+    const double td = job_.te - cfg_.ekf.rr_lag_s;
+    if (!fit_.gnss(td, v_ned, var_h))
+        return false;                     // too slow sideways yet, or past the fit's history
+    st_.heading_epochs++;
+    for (int i = 0; i < 3; ++i)
+        job_.hdg_v[i] = v_ned[i];
+    job_.hdg_var = var_h;
+    job_.hdg_t = td;
+    job_.hdg_sats = used;
+    return true;
+}
+
+void RawGnssShadow::jobHeadingFit()
+{
+    const int64_t c1 = now();
+    const HeadingFit::Result res = fit_.solve();
+    const int64_t c2 = now();
+    const double* v_ned = job_.hdg_v;
+    const double var_h = job_.hdg_var, td = job_.hdg_t;
+    const int used = job_.hdg_sats;
+    st_.heading_solve_us = static_cast<uint32_t>(c2 - c1);
+    if (st_.heading_solve_us > st_.heading_solve_us_max)
+        st_.heading_solve_us_max = st_.heading_solve_us;
+    st_.heading_last = res;
+
+    double filt = 0.0;                    // the filter's heading less the fit's
+    if (res.ok)
+    {
+        float qf[4];
+        fit_.attitude(res.psi, qf);
+        filt = headingBetween(ekf_.quat(), qf);
+    }
+    const bool act = cfg_.heading_mode == kHeadingAct;
+    HeadingFitData d = {};
+    d.time_us = static_cast<uint32_t>(static_cast<int64_t>(std::llround(td * 1.0e6)));
+    d.psi_cdeg = sats16(res.psi * kRad2Deg * 100.0);
+    d.sigma_cdeg = res.ok && res.sigma > 0.0 ? sat16(res.sigma * kRad2Deg * 100.0) : HFT_NO_SIGMA;
+    d.filt_cdeg = sats16(filt * kRad2Deg * 100.0);
+    d.bias_mmps2[0] = sats16(res.bias[0] * 1000.0);
+    d.bias_mmps2[1] = sats16(res.bias[1] * 1000.0);
+    d.speed_cmps = sat16(std::hypot(v_ned[0], v_ned[1]) * 100.0);
+    d.vel_sigma_mmps = sat16(std::sqrt(var_h > 0.0 ? var_h : 0.0) * 1000.0);
+    d.rms_c = sat16(res.rms * 100.0);
+    d.n = static_cast<uint8_t>(res.n > 255 ? 255 : res.n);
+    d.n_cut = static_cast<uint8_t>(res.n_cut > 255 ? 255 : res.n_cut);
+    d.sats = static_cast<uint8_t>(used > 255 ? 255 : used);
+    const bool rival = res.ok && res.rival >= 0.0 && res.rival < cfg_.heading_handoff_rival;
+    d.flags = static_cast<uint8_t>((act ? HFT_ACT : 0) | (res.ok ? HFT_SOLVED : 0) | (handed_ ? HFT_HANDED : 0) |
+                                   (rival ? HFT_RIVAL : 0));
+    d.vel_us = sat16(static_cast<double>(st_.heading_vel_us));
+    d.solve_us = sat16(static_cast<double>(st_.heading_solve_us));
+    d.seed_ms = sat16((fit_launch_t_ - fit_.t0()) * 1000.0);
+    if (act && !handed_ && res.ok && res.sigma > 0.0 && res.sigma * kRad2Deg <= cfg_.heading_handoff_deg && !rival)
+    {
+        handOverHeading(res, filt);
+        d.flags |= HFT_HANDED_NOW;
+        d.turn_cdeg = sats16(-filt * kRad2Deg * 100.0);
+    }
+    if (nhdg_ < kHdgQ)
+        hdg_[nhdg_++] = d;
+}
+
+// The fit's heading to the filter: its attitude turned about the vertical
+// onto the fit's, its heading's sigma the fit's, and what the old heading
+// left behind undone -- the IMU biases as the pad left them, the velocity
+// let go (its value kept), the satellites refused under it forgotten.
+void RawGnssShadow::handOverHeading(const HeadingFit::Result& r, double filt_minus_fit)
+{
+    ekf_.turnHeading(static_cast<float>(-filt_minus_fit));
+    ekf_.setHeadingSigma(static_cast<float>(r.sigma));
+    ekf_.setBiases(pad_ab_, pad_wb_, pad_Pb_);
+    ekf_.releaseVelocity(static_cast<float>(cfg_.heading_handoff_vel_mps));
+    ekf_.clearRejects();
+    handed_ = true;
+    st_.heading_handoffs++;
+    st_.heading_turn_deg = static_cast<float>(-filt_minus_fit * kRad2Deg);
+    st_.heading_handoff_s = static_cast<float>(t_prev_ - fit_launch_t_);
 }
 
 void RawGnssShadow::fillLog(uint32_t time_us, uint8_t imu_flags)

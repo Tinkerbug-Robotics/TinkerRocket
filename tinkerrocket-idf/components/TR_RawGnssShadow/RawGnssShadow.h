@@ -73,6 +73,24 @@
 // own velocity has held steady from epoch to epoch and the specific force is
 // g's size (LevelGate.h): as a drogue opens, the drag is far off vertical.
 //
+// The heading from thrust (HeadingFit.h, heading_mode). Near vertical
+// nothing the filter fuses sees its heading. The fit is seeded at the last
+// still step on the pad (the filter's attitude and gyro bias, and the IMU
+// biases as the pad left them), runs on the gyro alone from there, and after
+// launch takes each raw epoch's Doppler velocity -- an epoch's work gains a
+// step for it, between the checks and the receiver clock -- logging each fit
+// (HEADING_FIT_MSG). Observe: that is all. Act: from launch the filter's
+// heading has heading_pad_sigma_deg (the magnetometer's, not the pad's
+// near-certainty) and GNSS reaches its attitude only about the vertical
+// (att_gate_vertical); once the fit's 1-sigma is heading_handoff_deg or less,
+// and no other heading far off fits within heading_handoff_rival of it (the
+// profile's second valley, HeadingFit::Result::rival -- for thrust along the
+// nose there is none), its heading is handed over, once a flight -- turned onto the fit's, the IMU
+// biases put back as the pad left them, the velocity let go to
+// heading_handoff_vel_mps and the satellites refused under the old heading
+// forgotten -- before that epoch is fused. The epoch's two units (its Doppler
+// velocity, then the fit) are each one slice at most.
+//
 // Stopping. A sensor sim, a hole in the IMU longer than max_gap_s, a state
 // that is not finite, or (on the pad) one pad_reset_m from the flight
 // filter's stops it; it starts again from the next pad seed.
@@ -100,6 +118,7 @@
 #include "EphemerisFrames.h"
 #include "EphemerisStore.h"
 #include "FixCheck.h"
+#include "HeadingFit.h"
 #include "LevelGate.h"
 #include "PadSurvey.h"
 #include "RawGnssMeasStage.h"
@@ -153,6 +172,23 @@ public:
         double   max_bridge_s    = 5.0;       // the navigation filter bridges an IMU hole this long
         double   pad_context_delay_s = 6.0;   // the pad context is written from this long after launch
         bool     external_build = false;      // the epochs come built (onBuilt): a GNSS task builds them
+        // the heading from thrust (above)
+        uint8_t  heading_mode = 0;            // HeadingMode
+        HeadingFit::Config heading_fit;
+        double   heading_seed_max_s = 3.0;    // a seed this long before launch is too old (not still at ignition)
+        double   heading_fit_max_s  = 60.0;   // epochs taken this long after launch
+        double   heading_handoff_deg = 10.0;  // act: the fit's 1-sigma at or under this hands its heading over
+        double   heading_handoff_rival = 25.0;   // act: ... unless another heading's valley rises less than this
+                                                 //   above the fit's (as its sigma's: 25 is five sigmas')
+        double   heading_pad_sigma_deg = 30.0;   // act: the heading's 1-sigma from launch on
+        double   heading_handoff_vel_mps = 3.0;  // act: the velocity let go to this at the hand-off
+    };
+
+    enum HeadingMode : uint8_t
+    {
+        kHeadingOff = 0,
+        kHeadingObserve = 1,   // fit and log
+        kHeadingAct = 2,       // and hand the heading over (the filter gated about the vertical)
     };
 
     // What takes the ionosphere out (the pad status message reports it).
@@ -225,6 +261,18 @@ public:
         uint32_t restores = 0;             // starts in flight from a restored flight
         uint32_t gaps_bridged = 0;         // IMU holes the navigation filter stepped over
         uint32_t pad_contexts = 0;         // launches the pad context was taken at
+        // the heading from thrust
+        uint32_t heading_seeds = 0;        // still pad steps it was seeded at
+        uint32_t heading_flights = 0;      // launches it ran from (its seed fresh enough)
+        uint32_t heading_epochs = 0;       // epochs it took
+        uint32_t heading_vel_fails = 0;    //   with no Doppler velocity (too few satellites agreeing)
+        uint32_t heading_handoffs = 0;     // headings handed over
+        float    heading_turn_deg = 0.0f;  //   the last one's turn
+        float    heading_handoff_s = 0.0f; //   and when, after launch
+        HeadingFit::Result heading_last;   // the last fit
+        uint32_t heading_vel_us = 0, heading_vel_us_max = 0;      // an epoch's Doppler velocity
+        uint32_t heading_solve_us = 0, heading_solve_us_max = 0;  //   and its fit
+        uint32_t heading_step_us_max = 0;  // the fit's share of a step
     };
 
     using Clock = int64_t (*)();
@@ -283,6 +331,9 @@ public:
     const EphemerisFrames& ephemerisFrames() const { return eph_frames_; }
     // A GNSS_CHECK_MSG record, one per receiver fix judged.
     bool takeCheckLog(GnssCheckData& out);
+    // A HEADING_FIT_MSG record, one per epoch the heading fit took.
+    bool takeHeadingLog(HeadingFitData& out);
+    const HeadingFit& headingFit() const { return fit_; }
 
     bool running() const { return running_; }
     const Stats& stats() const { return st_; }
@@ -333,6 +384,10 @@ private:
     void judge(const TimedFix& f, double t_fix);
     void dropFront();
     void fillLog(uint32_t time_us, uint8_t imu_flags);
+    void stepHeading(double t, const float acc[3], const float gyro[3], float span, uint8_t imu_flags);
+    bool jobHeading(double age);
+    void jobHeadingFit();
+    void handOverHeading(const HeadingFit::Result& r, double filt_minus_fit);
     void capturePadContext(uint32_t tick_us);
     int64_t now() const { return clock_ ? clock_() : 0; }
 
@@ -345,7 +400,7 @@ private:
     BuiltEpoch    pend_built_[2];       // built epochs waiting for it (external_build)
     int           pb_head_ = 0, npend_built_ = 0;
     // the epoch being worked (startJob .. closeJob), a slice a step
-    enum : int { kJobBuild, kJobChecks, kJobClock, kJobFuse, kJobClose };
+    enum : int { kJobBuild, kJobChecks, kJobHeading, kJobHeadingFit, kJobClock, kJobFuse, kJobClose };
     struct Job
     {
         bool          active = false;
@@ -358,6 +413,11 @@ private:
         RawGnssStats  rs;
         int64_t       t0_us = 0;
         uint32_t      build_us = 0, update_us = 0, slices = 0;
+        // the heading fit's epoch, between its two units
+        double        hdg_v[3] = {};
+        double        hdg_var = 0.0;
+        double        hdg_t = 0.0;
+        int           hdg_sats = 0;
     };
     Job           job_;
     BuiltEpoch    built_;               // its measurements: built in the job, or handed over
@@ -399,6 +459,18 @@ private:
     double        last_baro_fused_t_ = -1.0e9;
     void          applyMag(const float acc[3]);
     void          applyBaro(double t, uint8_t imu_flags);
+    // the heading from thrust
+    HeadingFit    fit_;
+    bool          fit_ground_ = true;   // the last step was on the ground
+    bool          fit_flight_ = false;  // launched with a fresh seed: epochs are taken
+    double        fit_launch_t_ = 0.0;
+    bool          handed_ = false;      // the heading handed over this flight
+    float         pad_ab_[3] = {}, pad_wb_[3] = {};   // the IMU biases at the seed
+    double        pad_ll_[2] = {};      // its latitude and longitude: the fit's NED is the pad's
+    float         pad_Pb_[6][6] = {};
+    static constexpr int kHdgQ = 4;     // fit records waiting to be taken
+    HeadingFitData hdg_[kHdgQ] = {};
+    int           nhdg_ = 0;
     static constexpr int kFixQ = 4;      // fixes waiting for the IMU to pass them (0.4 s at 10 Hz)
     TimedFix      fixq_[kFixQ] = {};
     int           nfix_ = 0;

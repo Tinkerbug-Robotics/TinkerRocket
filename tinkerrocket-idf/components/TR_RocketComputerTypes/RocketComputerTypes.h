@@ -1742,6 +1742,42 @@ static constexpr size_t padContextSurveyWireSize(uint8_t n) { return 13u + 6u * 
 // before the flight's own.
 static constexpr size_t PCX_EPH_MAX_FRAME = 78;   // a 72-byte payload (the LC86G driver's kEphMaxPayload), framed
 
+// ── HEADING_FIT_MSG (0x9F): the heading from thrust, each fit ───────────────
+// The raw-GNSS filter's batch fit of the pad's heading against the GNSS
+// velocity (RawGnssShadow, HeadingFit.h), once for each raw epoch it takes in
+// flight -- about once a second on the LC86G, from the first epoch fast enough
+// sideways until heading_fit_max_s after launch: the turn it finds for the
+// pad's heading, how sure it is, where the filter's own heading stood against
+// it, and in act mode the hand-off to the navigation filter. With its CPU
+// time. LC86G boards with the fit on (config.h TR_HEADING_FIT).
+typedef struct __attribute__((packed))
+{
+    uint32_t time_us;         // the epoch's Doppler instant, FC micros (RawGnssEkfData's clock)
+    int16_t  psi_cdeg;        // the turn about vertical that rights the pad's heading, centidegrees
+    uint16_t sigma_cdeg;      // its 1-sigma, centidegrees; 0xFFFF: not within 90 deg yet
+    int16_t  filt_cdeg;       // the filter's heading less the fit's, centidegrees, before any turn
+    int16_t  turn_cdeg;       // the turn handed to the filter at this epoch (HFT_HANDED_NOW), else 0
+    int16_t  bias_mmps2[2];   // the lateral accelerometer biases it fits, body y and z, mm/s^2
+    uint16_t speed_cmps;      // the epoch's horizontal GNSS speed, cm/s
+    uint16_t vel_sigma_mmps;  // its per-axis 1-sigma, mm/s
+    uint16_t rms_c;           // the fit's weighted residual RMS per axis, hundredths
+    uint8_t  n;               // epochs in the fit
+    uint8_t  n_cut;           //   cut from it
+    uint8_t  sats;            // satellites in the epoch's Doppler velocity
+    uint8_t  flags;           // HFT_* below
+    uint16_t vel_us;          // the epoch's Doppler velocity, CPU us
+    uint16_t solve_us;        // the fit, CPU us
+    uint16_t seed_ms;         // the seed's age at launch, ms (the last still step before it)
+} HeadingFitData;
+static_assert(sizeof(HeadingFitData) == 32, "HeadingFitData must be 32 bytes");
+static constexpr uint8_t  HFT_ACT        = 0x01;    // act mode: the fit hands its heading over
+static constexpr uint8_t  HFT_SOLVED     = 0x02;    // two epochs or more: psi and the rest are a fit
+static constexpr uint8_t  HFT_HANDED_NOW = 0x04;    // handed over at this epoch (turn_cdeg)
+static constexpr uint8_t  HFT_HANDED     = 0x08;    // handed over before this epoch
+static constexpr uint8_t  HFT_RIVAL      = 0x10;    // another heading far off fits nearly as well (a second
+                                                    //   valley within heading_handoff_rival): not handed over
+static constexpr uint16_t HFT_NO_SIGMA   = 0xFFFF;
+
 // Ordered: the app may render a progress bar from step/FCB_STEP_COUNT.  Append
 // only — the apps map unknown values to a generic "starting up".
 enum FcBootStep : uint8_t
@@ -2768,6 +2804,9 @@ static constexpr uint8_t GNSS_CLOCK_MSG      = 0x9D;  // FC→OC over I2S: GnssC
 static constexpr uint8_t PAD_CONTEXT_MSG     = 0x9E;  // FC→OC over I2S: PadContextHeader + its kind's body, what a
                                                       // replay needs from the pad, once after launch; straight to the
                                                       // log.  VARIABLE length.
+static constexpr uint8_t HEADING_FIT_MSG     = 0x9F;  // FC→OC over I2S: HeadingFitData, the heading from thrust, each
+                                                      // fit (~1 Hz in flight); straight to the log.  LC86G boards
+                                                      // with the fit on.  The 0x90 block's last code.
 
 static constexpr uint8_t OUT_STATUS_QUERY    = 0xA0;
 static constexpr uint8_t GNSS_MSG            = 0xA1;
@@ -4325,6 +4364,8 @@ static_assert(sizeof(PadContextHeader) + sizeof(PadContextNav) <= MAX_PAYLOAD &&
               sizeof(PadContextHeader) + padContextSurveyWireSize(PCX_SURVEY_PER_PART) <= MAX_PAYLOAD &&
               sizeof(PadContextHeader) + PCX_EPH_MAX_FRAME <= MAX_PAYLOAD,
               "every PAD_CONTEXT_MSG record must fit one I2S frame payload");
+static_assert(sizeof(HeadingFitData) <= MAX_PAYLOAD,
+              "HeadingFitData must fit one I2S frame payload");
 static_assert(sizeof(PadCalStatusData) <= MAX_PAYLOAD,
               "PadCalStatusData must fit one I2S frame payload");
 static_assert(sizeof(GnssCheckData) <= MAX_PAYLOAD,

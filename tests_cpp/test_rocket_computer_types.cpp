@@ -102,6 +102,13 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(offsetof(GnssClockData, mcu0_us), 12u);
     EXPECT_EQ(offsetof(GnssClockData, latency_s), 44u);
     EXPECT_EQ(offsetof(GnssClockData, flags), 67u);
+    // the heading from thrust (0x9F), each fit (~1 Hz in flight)
+    EXPECT_EQ(sizeof(HeadingFitData), 32u);
+    EXPECT_EQ(offsetof(HeadingFitData, psi_cdeg), 4u);
+    EXPECT_EQ(offsetof(HeadingFitData, bias_mmps2), 12u);
+    EXPECT_EQ(offsetof(HeadingFitData, n), 22u);
+    EXPECT_EQ(offsetof(HeadingFitData, flags), 25u);
+    EXPECT_EQ(offsetof(HeadingFitData, seed_ms), 30u);
     EXPECT_EQ(sizeof(FcBootStatusData), 4u); // FC->OC boot progress (0xFA)
     EXPECT_EQ(sizeof(i24le_t),         3u);
     EXPECT_EQ(sizeof(Vec3i16),         6u);
@@ -1876,6 +1883,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(GNSS_CLOCK_MSG),
         // what a replay needs from the pad, once after launch, log-only.
         MT(PAD_CONTEXT_MSG),
+        // the heading from thrust, each fit, log-only.
+        MT(HEADING_FIT_MSG),
     };
 #undef MT
 
@@ -1921,7 +1930,9 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     // 106 = 105 + IMU_TEMP_MSG (0x9C, the IMU's die temperature).
     // 107 = 106 + GNSS_CLOCK_MSG (0x9D, the GPS-to-MCU clock line).
     // 108 = 107 + PAD_CONTEXT_MSG (0x9E, the pad, written once after launch).
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 108u)
+    // 109 = 108 + HEADING_FIT_MSG (0x9F, the heading from thrust): the 0x90
+    //       block is full; new codes go in 0x09-0x8F.
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 109u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }

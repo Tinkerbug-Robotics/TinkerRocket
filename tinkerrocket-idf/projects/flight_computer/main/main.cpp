@@ -72,6 +72,9 @@
 #include <esp_heap_caps.h>
 #include <new>                    // placement new: the raw-GNSS shadow filter (#1600)
 #include <RawGnssShadow.h>        // TR_RawGnssShadow (#1600)
+#if TR_HEADING_FIT_BENCH
+#include <HeadingFitBench.h>      // the heading fit's bench (TR_HEADING_FIT_BENCH)
+#endif
 #include <gnss/types.h>           // GNSS_SYS_* (the console's satellite names)
 #include <esp_log.h>
 #include <esp_task_wdt.h>
@@ -3142,6 +3145,13 @@ static void rawGnssMeasTask(void*)
 // Core 0: the shadow filter's task.
 static void rawShadowTask(void*)
 {
+#if TR_HEADING_FIT_BENCH
+    // Bench (-DTR_HEADING_FIT_BENCH=1): what the heading fit costs this core,
+    // timed once before the filter runs -- the fit's step, an epoch's Doppler
+    // velocity by satellites, the fit by epochs (HeadingFitBench.h).
+    gnss_raw::bench::run([]() -> int64_t { return esp_timer_get_time(); },
+                         [](const char* line) { ESP_LOGI(TAG, "[RAWGNSS] %s", line); }, 20, 1.0);
+#endif
     gnss_raw::RawGnssShadow& sh = *raw_shadow;
     sh.setClock(&rawShadowClock);
     uint32_t seed_seq = 0, iono_seq = 0, meas_seq = 0;
@@ -3248,6 +3258,15 @@ static void rawShadowTask(void*)
                 else rec_drops++;
             }
         }
+        HeadingFitData hfit;   // the heading from thrust, each fit (~1 Hz in flight)
+        while (sh.takeHeadingLog(hfit))
+        {
+            if (enqueueI2STx(HEADING_FIT_MSG, (const uint8_t*)&hfit, sizeof(hfit))) recs++;
+            else rec_drops++;
+            if (hfit.flags & HFT_HANDED_NOW)
+                ESP_LOGW(TAG, "[RAWGNSS] heading handed over: turned %+.1f deg (fit 1-sigma %.1f deg, %u epochs)",
+                         hfit.turn_cdeg * 0.01, hfit.sigma_cdeg * 0.01, (unsigned)hfit.n);
+        }
         GnssCheckData chk;
         while (sh.takeCheckLog(chk))
         {
@@ -3316,6 +3335,23 @@ static void rawShadowTask(void*)
                      (unsigned long)rec_drops, (unsigned long)raw_shadow_link.imu.dropped(),
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                      (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+#if TR_HEADING_FIT
+            {
+                const gnss_raw::HeadingFit::Result& hr = st.heading_last;
+                ESP_LOGI(TAG, "[RAWGNSS] heading fit (%s): seeds %lu, flights %lu, epochs %lu (no velocity %lu) | "
+                              "last: turn %+.1f deg, 1-sigma %.1f deg, %d epochs (%d cut) | handed %lu (%+.1f deg at "
+                              "T+%.1f s) | cost: velocity %lu us (max %lu), fit %lu us (max %lu), step max %lu us | "
+                              "task stack %u B unused",
+                         TR_HEADING_FIT == 2 ? "act" : "observe", (unsigned long)st.heading_seeds,
+                         (unsigned long)st.heading_flights, (unsigned long)st.heading_epochs,
+                         (unsigned long)st.heading_vel_fails, hr.psi * 57.29578, hr.sigma > 0.0 ? hr.sigma * 57.29578 : -1.0,
+                         hr.n, hr.n_cut, (unsigned long)st.heading_handoffs, (double)st.heading_turn_deg,
+                         (double)st.heading_handoff_s, (unsigned long)st.heading_vel_us,
+                         (unsigned long)st.heading_vel_us_max, (unsigned long)st.heading_solve_us,
+                         (unsigned long)st.heading_solve_us_max, (unsigned long)st.heading_step_us_max,
+                         (unsigned)uxTaskGetStackHighWaterMark(nullptr));
+            }
+#endif
 #if TR_RAW_GNSS_PRIMARY
             // what the flight loop got (RawNavAdapter): the oldest state it
             // read in the window -- brought forward to its latest IMU tick
@@ -3469,6 +3505,7 @@ static void startRawShadow()
                  (unsigned)sizeof(gnss_raw::RawGnssMeasStage), (unsigned)(2 * sizeof(gnss_raw::BuiltEpoch)));
         return;
     }
+    cfg.heading_mode = TR_HEADING_FIT;   // the heading from thrust (config.h)
     raw_shadow = new (mem) gnss_raw::RawGnssShadow(cfg);
     raw_meas = new (stage_mem) gnss_raw::RawGnssMeasStage(gnss_raw::RawGnssShadow::stageConfig(cfg));
     gnss_raw::BuiltEpoch* built = static_cast<gnss_raw::BuiltEpoch*>(built_mem);

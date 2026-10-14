@@ -163,6 +163,7 @@ MSG_IMU_TEMP          = 0x9C  # Ism6TempData: the IMU's die temperature, 1 Hz
 MSG_GNSS_CLOCK        = 0x9D  # GnssClockData: the GPS-to-MCU clock line each time it moves, ~1 Hz
 MSG_PAD_CONTEXT       = 0x9E  # PadContextHeader + its kind's body: what a replay needs from the pad,
                               # once after launch; variable length 7 + up to 196
+MSG_HEADING_FIT       = 0x9F  # HeadingFitData: the heading from thrust, each fit, ~1 Hz in flight
 MSG_ISM6HG256         = 0xA2
 MSG_BMP585            = 0xA3
 MSG_MMC5983MA         = 0xA4
@@ -209,6 +210,7 @@ MSG_NAMES = {
     MSG_IMU_TEMP:         "ImuTemp",
     MSG_GNSS_CLOCK:       "GnssClock",
     MSG_PAD_CONTEXT:      "PadContext",
+    MSG_HEADING_FIT:      "HeadingFit",
     MSG_ISM6HG256:        "ISM6HG256",
     MSG_BMP585:           "BMP585",
     MSG_MMC5983MA:        "MMC5983MA",
@@ -241,6 +243,7 @@ MSG_EXPECTED_LEN = {
     MSG_IMU_TEMP:           6,    # sizeof(Ism6TempData)
     MSG_GNSS_CLOCK:        68,    # sizeof(GnssClockData)
     MSG_PAD_CONTEXT:       None,  # 7 + its kind's body; checked in decode_pad_context
+    MSG_HEADING_FIT:       32,    # sizeof(HeadingFitData)
     MSG_ISM6HG256:         22,
     MSG_BMP585:            12,
     MSG_MMC5983MA:         16,
@@ -769,6 +772,48 @@ def join_pad_context(recs, launch=0):
     return out
 
 
+# HeadingFitData (HEADING_FIT_MSG 0x9F), 32 bytes packed: the raw-GNSS filter's
+# batch fit of the pad's heading against the GNSS velocity, once for each raw
+# epoch it takes in flight (RawGnssShadow, HeadingFit.h). psi_deg is the turn
+# about vertical that rights the pad's heading (the pad's heading error is
+# -psi_deg); filt_deg the filter's heading less the fit's before any turn; in
+# act mode (the "act" flag) the epoch that handed the heading over carries the
+# turn it applied (turn_deg, "handed_now"); "rival": another heading far off
+# fitted nearly as well, so none was handed over.
+FMT_HEADING_FIT = '<I h H h h 2h H H H B B B B H H H'
+SIZE_OF_HEADING_FIT = struct.calcsize(FMT_HEADING_FIT)  # 32
+HEADING_FIT_FLAGS = {"act": 0x01, "solved": 0x02, "handed_now": 0x04, "handed": 0x08, "rival": 0x10}
+HEADING_FIT_NO_SIGMA = 0xFFFF
+
+
+def decode_heading_fit(payload):
+    """HeadingFitData payload -> record dict (degrees, m/s^2, m/s), or None if the size is wrong."""
+    if len(payload) != SIZE_OF_HEADING_FIT:
+        return None
+    f = struct.unpack(FMT_HEADING_FIT, payload)
+    rec = {
+        "time_us":       f[0],
+        "psi_deg":       f[1] / 100.0,
+        "sigma_deg":     None if f[2] == HEADING_FIT_NO_SIGMA else f[2] / 100.0,
+        "filt_deg":      f[3] / 100.0,
+        "turn_deg":      f[4] / 100.0,
+        "bias_mps2":     (f[5] / 1000.0, f[6] / 1000.0),
+        "speed_mps":     f[7] / 100.0,
+        "vel_sigma_mps": f[8] / 1000.0,
+        "rms":           f[9] / 100.0,
+        "n":             f[10],
+        "n_cut":         f[11],
+        "sats":          f[12],
+        "flags":         f[13],
+        "vel_us":        f[14],
+        "solve_us":      f[15],
+        "seed_ms":       f[16],
+    }
+    for name, bit in HEADING_FIT_FLAGS.items():
+        rec[name] = bool(f[13] & bit)
+    return rec
+
+
 # GnssCheckData (GNSS_CHECK_MSG 0x9A), 24 bytes packed (#1508): each receiver
 # fix the raw-GNSS shadow judged against the IMU -- from the last fix that
 # passed, the IMU's own motion predicts this one; flagged when it is further
@@ -1101,6 +1146,7 @@ def parse_binary_file(filepath):
         "ImuTemp":        [],   # 0x9C the IMU's die temperature, 1 Hz
         "GnssClock":      [],   # 0x9D the GPS-to-MCU clock line each time it moves, ~1 Hz
         "PadContext":     [],   # 0x9E the pad, once after launch; join_pad_context() puts a launch's together
+        "HeadingFit":     [],   # 0x9F the heading from thrust, each fit, ~1 Hz in flight
         "FcStatus":       [],   # 0x92 FcStatusData (#1154 item 4) — appended below; was never initialised
         "ISM6HG256":      [],
         "BMP585":         [],
@@ -1335,6 +1381,11 @@ def parse_binary_file(filepath):
                 rec = decode_pad_context(payload)
                 if rec is not None:
                     records["PadContext"].append(rec)
+
+            elif msg_type == MSG_HEADING_FIT:
+                rec = decode_heading_fit(payload)
+                if rec is not None:
+                    records["HeadingFit"].append(rec)
 
             elif msg_type == MSG_ISM6HG256:
                 fields = struct.unpack(FMT_ISM6, payload)

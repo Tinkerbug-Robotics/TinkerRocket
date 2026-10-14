@@ -10,8 +10,10 @@
 #include <cstdlib>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
+#include <random>
 #include <thread>
 #include <vector>
 
@@ -19,6 +21,7 @@
 #include "Lc86RawEpoch.h"
 #include "RawGnssShadow.h"
 #include "Rtcm3Msm.h"
+#include "RtcmEphemeris.h"
 #include "ShadowLink.h"
 #include "fixtures/raw_meas_golden.h"
 #include "gnss/atmo.h"
@@ -2184,4 +2187,410 @@ TEST(RawGnssShadow, ItsNavStateSaysWhetherItIsInFlight)
     feedStill(sh, kT0 + 20000, kT0 + 40000, gnss_raw::kShadowLevel | gnss_raw::kShadowInFlight);
     sh.navState(nav);
     EXPECT_EQ(nav.in_flight, 1);
+}
+
+// ------------------------------------------- the heading from thrust (HeadingFit)
+
+namespace
+{
+
+struct Mat3
+{
+    double m[3][3];
+};
+
+Mat3 mat3Mul(const Mat3& a, const Mat3& b)
+{
+    Mat3 r{};
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+            for (int k = 0; k < 3; ++k)
+                r.m[i][j] += a.m[i][k] * b.m[k][j];
+    return r;
+}
+
+void mat3Vec(const Mat3& a, const double v[3], double o[3])
+{
+    for (int i = 0; i < 3; ++i)
+        o[i] = a.m[i][0] * v[0] + a.m[i][1] * v[1] + a.m[i][2] * v[2];
+}
+
+Mat3 rotAbout(const double axis[3], double a)
+{
+    const double n = std::sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]);
+    const double k[3] = {axis[0] / n, axis[1] / n, axis[2] / n};
+    const double K[3][3] = {{0, -k[2], k[1]}, {k[2], 0, -k[0]}, {-k[1], k[0], 0}};
+    Mat3 r{};
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+        {
+            double kk = 0.0;
+            for (int l = 0; l < 3; ++l)
+                kk += K[i][l] * K[l][j];
+            r.m[i][j] = (i == j ? 1.0 : 0.0) + std::sin(a) * K[i][j] + (1.0 - std::cos(a)) * kk;
+        }
+    return r;
+}
+
+// A nose-up body leaning lean_deg toward azimuth toward_deg, rolled about
+// its nose: body -> NED
+Mat3 leaningBody(double lean_deg, double toward_deg, double roll_deg)
+{
+    const double z[3] = {0, 0, 1}, y[3] = {0, 1, 0}, up[3] = {0, 0, -1.0};
+    double nose[3];
+    mat3Vec(mat3Mul(rotAbout(z, toward_deg * kPi / 180.0), rotAbout(y, lean_deg * kPi / 180.0)), up, nose);
+    Mat3 C{};                                    // body x up
+    C.m[0][2] = 1;
+    C.m[1][1] = 1;
+    C.m[2][0] = -1;
+    const double cx[3] = {C.m[0][0], C.m[1][0], C.m[2][0]};
+    const double ax[3] = {cx[1] * nose[2] - cx[2] * nose[1], cx[2] * nose[0] - cx[0] * nose[2],
+                          cx[0] * nose[1] - cx[1] * nose[0]};
+    const double an = std::sqrt(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]);
+    if (an > 1e-12)
+        C = mat3Mul(rotAbout(ax, std::asin(an)), C);
+    return mat3Mul(rotAbout(nose, roll_deg * kPi / 180.0), C);
+}
+
+// body -> NED as a scalar-first quaternion (Quat2DCM of it is NED -> body)
+void quatOf(const Mat3& Cm, float q[4])
+{
+    const double (&R)[3][3] = Cm.m;
+    const double t = R[0][0] + R[1][1] + R[2][2];
+    double w, x, y, z;
+    if (t > 0.0)
+    {
+        w = 0.5 * std::sqrt(1.0 + t);
+        x = (R[2][1] - R[1][2]) / (4 * w);
+        y = (R[0][2] - R[2][0]) / (4 * w);
+        z = (R[1][0] - R[0][1]) / (4 * w);
+    }
+    else if (R[0][0] >= R[1][1] && R[0][0] >= R[2][2])
+    {
+        x = 0.5 * std::sqrt(1.0 + 2 * R[0][0] - t);
+        w = (R[2][1] - R[1][2]) / (4 * x);
+        y = (R[0][1] + R[1][0]) / (4 * x);
+        z = (R[0][2] + R[2][0]) / (4 * x);
+    }
+    else if (R[1][1] >= R[2][2])
+    {
+        y = 0.5 * std::sqrt(1.0 + 2 * R[1][1] - t);
+        w = (R[0][2] - R[2][0]) / (4 * y);
+        x = (R[0][1] + R[1][0]) / (4 * y);
+        z = (R[1][2] + R[2][1]) / (4 * y);
+    }
+    else
+    {
+        z = 0.5 * std::sqrt(1.0 + 2 * R[2][2] - t);
+        w = (R[1][0] - R[0][1]) / (4 * z);
+        x = (R[0][2] + R[2][0]) / (4 * z);
+        y = (R[1][2] + R[2][1]) / (4 * z);
+    }
+    const double sgn = w < 0 ? -1.0 : 1.0;
+    q[0] = float(sgn * w);
+    q[1] = float(sgn * x);
+    q[2] = float(sgn * y);
+    q[3] = float(sgn * z);
+}
+
+// The sky the Beetle's own ephemerides give at the pad of its rig: each
+// satellite's pseudorange and range rate as the LC86G reports them, for a
+// receiver whose truth the test sets. A twin of the flight's builder finds
+// each satellite's transmit state, so the shadow's builder takes them back to
+// that truth (its troposphere off; the night-time ionosphere it removes, a
+// few metres, the clock and position absorb). The range rate is the receiver's
+// rr_lag before the tag, as the LC86G's.
+struct SynthSky
+{
+    gnss_raw::EphemerisStore store;
+    gnss_raw::RawMeasBuilder builder;
+    std::mt19937 rng{11};
+    double clk_m = 3000.0;        // the receiver's clock, m
+    double drift_mps = 0.0;
+    double sigma_pr = 1.0, sigma_rr = 0.05;
+
+    explicit SynthSky(const gnss_raw::RawMeasBuilder::Config& c) : builder(c)
+    {
+        for (int i = 0; i < kGoldenRmEphN; ++i)
+        {
+            gps_eph_t e;
+            if (gnss_raw::decodeEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len),
+                                          kGoldenWeek, e))
+                store.add(e);
+        }
+    }
+
+    // r: the receiver at the tag (ECEF), v_lag: its velocity rr_lag before (ECEF)
+    gnss_raw::RawEpoch epoch(double tow, const double r[3], const double v_lag[3])
+    {
+        gnss_raw::RawEpoch ep;
+        ep.tow_s = tow;
+        for (int i = 0; i < kGoldenRmEphN; ++i)
+        {
+            gps_eph_t e;
+            if (!gnss_raw::decodeEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len),
+                                           kGoldenWeek, e))
+                continue;
+            gnss_raw::RawObs& o = ep.obs[ep.n++];
+            o.sys = static_cast<uint8_t>(e.sys);
+            o.prn = static_cast<uint8_t>(e.prn);
+            o.has_pr = o.has_rate = true;
+            o.cn0_dbhz = 42.0f;
+            o.pr_m = 2.2e7;
+            o.rate_mps = 0.0;
+            o.lock_ms = 600000;
+        }
+        // twice: the transmit time follows the pseudorange
+        gnss_raw::RawMeas m[gnss_raw::RawEpoch::kMaxObs];
+        for (int it = 0; it < 3; ++it)
+        {
+            gnss_raw::RawEpoch probe = ep;
+            const int n = builder.build(probe, store, r, 0.0, m, gnss_raw::RawEpoch::kMaxObs);
+            for (int k = 0; k < n; ++k)
+                for (int j = 0; j < ep.n; ++j)
+                {
+                    gnss_raw::RawObs& o = ep.obs[j];
+                    if (o.sys != m[k].sys || o.prn != m[k].prn)
+                        continue;
+                    const double corr = m[k].pr - o.pr_m;            // the builder's clock, less the ionosphere
+                    o.pr_m = gnss_raw::sagnacRange(m[k], r) + clk_m - corr;
+                    double u[3];
+                    const double still = gnss_raw::stillRangeRate(m[k], r, u);
+                    const double clk_rate = m[k].rr - o.rate_mps;     // the satellite clock's rate, m/s
+                    o.rate_mps = still - (u[0] * v_lag[0] + u[1] * v_lag[1] + u[2] * v_lag[2]) + drift_mps
+                               - clk_rate;
+                }
+        }
+        // the builder drops what it cannot place (below its mask): keep what it takes
+        gnss_raw::RawEpoch out;
+        out.tow_s = tow;
+        const int n = builder.build(ep, store, r, 0.0, m, gnss_raw::RawEpoch::kMaxObs);
+        std::normal_distribution<double> npr(0.0, sigma_pr), nrr(0.0, sigma_rr);
+        for (int k = 0; k < n; ++k)
+            for (int j = 0; j < ep.n; ++j)
+                if (ep.obs[j].sys == m[k].sys && ep.obs[j].prn == m[k].prn)
+                {
+                    gnss_raw::RawObs o = ep.obs[j];
+                    o.pr_m += npr(rng);
+                    o.rate_mps += nrr(rng);
+                    out.obs[out.n++] = o;
+                }
+        return out;
+    }
+};
+
+struct BoostRun
+{
+    std::vector<HeadingFitData> recs;
+    float q_true[4] = {};
+    float q_end[4] = {};       // the filter's attitude at the end
+    RawGnssShadow::Stats st;
+    int handed_at = -1;        // the record that handed over
+};
+
+// The Beetle's pad: still for 6 s, then a boost (10 g for 1.5 s) and drag to
+// T+10 s on a body leaning 5 deg toward azimuth 70, rolled 25 deg; raw epochs
+// once a GPS second, each delivered 0.2 s late. The navigation filter starts
+// from a seed whose heading is seed_err_deg off (no magnetometer: it keeps
+// it); the launch detector calls it at T+0.1 s. external: each epoch built by
+// the GNSS task's stage and handed over built, as on the Beetle (#1626).
+BoostRun flyBoost(uint8_t mode, double seed_err_deg, double bias_y = 0.0, double bias_z = 0.0, bool external = false)
+{
+    double lat, lon, h;
+    ecef_to_geo(kGoldenRmRx, &lat, &lon, &h);
+    double r0[3];
+    geo_to_ecef(lat, lon, h, r0);
+    const double sl = std::sin(lat), cl = std::cos(lat), so = std::sin(lon), co = std::cos(lon);
+    auto nedToEcefVec = [&](const double n[3], double o[3]) {
+        const double e[3] = {n[1], n[0], -n[2]};
+        o[0] = -so * e[0] - sl * co * e[1] + cl * co * e[2];
+        o[1] = co * e[0] - sl * so * e[1] + cl * so * e[2];
+        o[2] = cl * e[1] + sl * e[2];
+    };
+
+    RawGnssShadow::Config cfg = primaryCfg();
+    cfg.heading_mode = mode;
+    cfg.meas.troposphere = false;
+    cfg.external_build = external;
+    RawGnssShadow sh(cfg);
+    gnss_raw::RawGnssMeasStage stage(RawGnssShadow::stageConfig(cfg));
+    gnss_raw::BuiltEpoch built;
+    for (int i = 0; i < kGoldenRmEphN; ++i)
+    {
+        sh.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+        stage.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+    }
+    SynthSky sky(cfg.meas);
+    sky.drift_mps = 0.0;
+
+    const Mat3 Ct = leaningBody(5.0, 70.0, 25.0);
+    const double zax[3] = {0, 0, 1};
+    BoostRun run;
+    quatOf(Ct, run.q_true);
+    float q_seed[4];
+    quatOf(mat3Mul(rotAbout(zax, seed_err_deg * kPi / 180.0), Ct), q_seed);
+    ShadowSeed seed = padSeed(kT0, lat, lon, h);
+    for (int i = 0; i < 4; ++i)
+        seed.quat[i] = q_seed[i];
+    sh.onSeed(seed);
+
+    const double tow0 = goldenEpochs()[0].epoch.tow_s;    // the ephemerides' day
+    const double t_ign = 6.0, t_det = 6.1, t_end = 16.0, dt = 0.005, rr_lag = cfg.ekf.rr_lag_s;
+    double p_ned[3] = {}, v_ned[3] = {};
+    std::vector<std::pair<double, double>> hist_v;            // (t, a step's start) for the lagged velocity
+    std::vector<std::array<double, 3>> vel_hist;
+    int next_epoch = 1;
+    std::vector<TimedRawEpoch> due;                           // built at their tag, handed over 0.2 s later
+    for (double t = dt; t <= t_end + 1e-9; t += dt)
+    {
+        // the truth: piecewise-constant specific force, the body's attitude fixed
+        double f_b[3] = {0.0, 0.0, 0.0};
+        if (t > t_ign)
+            f_b[0] = t <= t_ign + 1.5 ? 100.0 : -3.0;
+        double f_n[3], a_n[3];
+        if (t > t_ign)
+        {
+            mat3Vec(Ct, f_b, f_n);
+            for (int i = 0; i < 3; ++i)
+                a_n[i] = f_n[i] + (i == 2 ? kG : 0.0);
+        }
+        else
+        {
+            a_n[0] = a_n[1] = a_n[2] = 0.0;
+            const double up[3] = {0, 0, -kG};             // on the pad: gravity's reaction, in the body
+            Mat3 CtT{};
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    CtT.m[i][j] = Ct.m[j][i];
+            mat3Vec(CtT, up, f_b);
+        }
+        for (int i = 0; i < 3; ++i)
+        {
+            p_ned[i] += v_ned[i] * dt + 0.5 * a_n[i] * dt * dt;
+            v_ned[i] += a_n[i] * dt;
+        }
+        vel_hist.push_back({v_ned[0], v_ned[1], v_ned[2]});
+        ShadowImu s{};
+        s.time_us = static_cast<uint32_t>(kT0 + static_cast<int64_t>(std::llround(t * 1e6)));
+        s.acc[0] = float(f_b[0]);
+        s.acc[1] = float(f_b[1] + bias_y);
+        s.acc[2] = float(f_b[2] + bias_z);
+        s.flags = t < t_ign ? gnss_raw::kShadowLevel : (t >= t_det ? gnss_raw::kShadowInFlight : 0);
+        const int64_t t64 = kT0 + static_cast<int64_t>(std::llround(t * 1e6));
+        sh.onImu(s, t64);
+        // an epoch at each whole GPS second, built where the receiver truly is
+        if (t + 1e-9 >= next_epoch)
+        {
+            const int lag_steps = static_cast<int>(std::lround(rr_lag / dt));
+            const auto& vl = vel_hist[vel_hist.size() > static_cast<size_t>(lag_steps)
+                                          ? vel_hist.size() - 1 - lag_steps : 0];
+            double dr[3], r[3], vlag_e[3];
+            nedToEcefVec(p_ned, dr);
+            nedToEcefVec(vl.data(), vlag_e);
+            for (int i = 0; i < 3; ++i)
+                r[i] = r0[i] + dr[i];
+            TimedRawEpoch e;
+            e.epoch = sky.epoch(tow0 + next_epoch, r, vlag_e);
+            e.mcu_us = t64;
+            e.gps_week = kGoldenWeek;
+            due.push_back(e);
+            next_epoch++;
+        }
+        // handed over 0.2 s after its tag
+        while (!due.empty() && t64 - due.front().mcu_us >= 200000)
+        {
+            if (external)
+                offerBuilt(sh, stage, due.front(), built);
+            else
+                sh.onEpoch(due.front());
+            due.erase(due.begin());
+        }
+        HeadingFitData d;
+        while (sh.takeHeadingLog(d))
+        {
+            if (d.flags & HFT_HANDED_NOW)
+                run.handed_at = static_cast<int>(run.recs.size());
+            run.recs.push_back(d);
+        }
+    }
+    for (int i = 0; i < 4; ++i)
+        run.q_end[i] = sh.filter().quat()[i];
+    run.st = sh.stats();
+    return run;
+}
+
+}  // namespace
+
+TEST(RawGnssShadow, TheHeadingFitObservesWithoutActing)
+{
+    // Observe: the fit finds the pad's 40 deg error in the boost's first
+    // epochs and logs it, the filter flies on as before (cos4 keeps a
+    // vertical heading where it was)
+    const BoostRun run = flyBoost(RawGnssShadow::kHeadingObserve, 40.0);
+    EXPECT_EQ(run.st.heading_flights, 1u);
+    EXPECT_GT(run.st.heading_seeds, 100u);
+    ASSERT_GE(run.recs.size(), 5u);
+    EXPECT_EQ(run.st.heading_handoffs, 0u);
+    EXPECT_EQ(run.handed_at, -1);
+    const HeadingFitData& last = run.recs.back();
+    EXPECT_TRUE(last.flags & HFT_SOLVED);
+    EXPECT_FALSE(last.flags & (HFT_ACT | HFT_HANDED | HFT_HANDED_NOW));
+    EXPECT_NEAR(last.psi_cdeg / 100.0, -40.0, 1.0);          // the turn back
+    ASSERT_NE(last.sigma_cdeg, HFT_NO_SIGMA);
+    EXPECT_LT(last.sigma_cdeg / 100.0, 3.0);
+    EXPECT_NEAR(last.filt_cdeg / 100.0, 40.0, 3.0);          // the filter still 40 off
+    EXPECT_LT(last.seed_ms, 120);                            // seeded at the last still step
+    EXPECT_GE(last.sats, 5);
+    EXPECT_NEAR(gnss_raw::headingBetween(run.q_end, run.q_true) * 180.0 / kPi, 40.0, 5.0);
+}
+
+TEST(RawGnssShadow, TheHeadingFitHandsItsHeadingOverOnce)
+{
+    // Act: the same flight, the fit's heading handed to the navigation filter
+    // once it is sure -- once; the filter flies the truth's heading to the end
+    // with its tilt untouched. With the accelerometer biased sideways, and
+    // with the epochs built in the GNSS task, as the Beetle builds them.
+    for (int external = 0; external < 2; ++external)
+    for (double by : {0.0, 0.08})
+    {
+        const BoostRun run = flyBoost(RawGnssShadow::kHeadingAct, 40.0, by, -0.05, external != 0);
+        SCOPED_TRACE(external ? "built in the GNSS task" : "built here");
+        ASSERT_GE(run.recs.size(), 5u) << by;
+        EXPECT_EQ(run.st.heading_handoffs, 1u) << by;
+        ASSERT_GE(run.handed_at, 0) << by;
+        const HeadingFitData& h = run.recs[run.handed_at];
+        EXPECT_TRUE(h.flags & HFT_ACT);
+        ASSERT_NE(h.sigma_cdeg, HFT_NO_SIGMA);
+        EXPECT_LE(h.sigma_cdeg, 1000);
+        EXPECT_NEAR(h.turn_cdeg, -h.filt_cdeg, 1);
+        for (size_t i = run.handed_at + 1; i < run.recs.size(); ++i)
+        {
+            EXPECT_TRUE(run.recs[i].flags & HFT_HANDED);
+            EXPECT_FALSE(run.recs[i].flags & HFT_HANDED_NOW);
+        }
+        for (const HeadingFitData& d : run.recs)             // thrust along the nose: one valley
+            EXPECT_FALSE(d.flags & HFT_RIVAL);
+        // the whole attitude: the hand-off's heading is as good as the fit's
+        // 1-sigma then (6 deg), and the coast's gentle push teaches the
+        // filter little after it
+        EXPECT_LT(attErrDeg(run.q_end, run.q_true), 3.0) << by;
+        // turned about the vertical only: the filter's tilt is the truth's
+        float q_lev[4];
+        const float* qe = run.q_end;
+        const double hd = gnss_raw::headingBetween(qe, run.q_true);
+        const float qz[4] = {float(std::cos(-0.5 * hd)), 0.0f, 0.0f, float(std::sin(-0.5 * hd))};
+        q_lev[0] = qz[0] * qe[0] - qz[3] * qe[3];
+        q_lev[1] = qz[0] * qe[1] - qz[3] * qe[2];
+        q_lev[2] = qz[0] * qe[2] + qz[3] * qe[1];
+        q_lev[3] = qz[0] * qe[3] + qz[3] * qe[0];
+        EXPECT_LT(attErrDeg(q_lev, run.q_true), 2.0) << by;
+    }
+}
+
+TEST(RawGnssShadow, TheHeadingFitIsOffByDefault)
+{
+    const BoostRun run = flyBoost(RawGnssShadow::kHeadingOff, 40.0);
+    EXPECT_TRUE(run.recs.empty());
+    EXPECT_EQ(run.st.heading_seeds, 0u);
+    EXPECT_EQ(run.st.heading_epochs, 0u);
 }

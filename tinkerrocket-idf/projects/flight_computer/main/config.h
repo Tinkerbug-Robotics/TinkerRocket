@@ -230,6 +230,23 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 #error "TR_RAW_GNSS_PRIMARY needs the raw-GNSS filter (TR_RAW_GNSS_SHADOW=1)"
 #endif
 
+// The heading from thrust (TR_RawGnssShadow/HeadingFit.h): in flight the raw
+// filter fits the pad's heading against the GNSS velocity, each raw epoch,
+// and logs it (HEADING_FIT_MSG). 0 off; 1 observe (the filter flies as it
+// would without it); 2 act (the fit's heading handed to the navigation
+// filter once its 1-sigma is 10 deg, GNSS turning only the heading from
+// launch). Observe by default where the raw filter navigates, until flights
+// say what acting is worth; -DTR_HEADING_FIT=2 for the bench.
+#ifndef TR_HEADING_FIT
+#define TR_HEADING_FIT (TR_RAW_GNSS_PRIMARY ? 1 : 0)
+#endif
+#if TR_HEADING_FIT && !TR_RAW_GNSS_SHADOW
+#error "TR_HEADING_FIT needs the raw-GNSS filter (TR_RAW_GNSS_SHADOW=1)"
+#endif
+#if TR_HEADING_FIT < 0 || TR_HEADING_FIT > 2
+#error "TR_HEADING_FIT is 0 (off), 1 (observe) or 2 (act)"
+#endif
+
 struct config : board_pins
 {
 
