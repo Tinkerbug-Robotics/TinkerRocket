@@ -146,9 +146,17 @@ class Probe:
         return None
 
 
+def adv_name(d, ad) -> str:
+    # The advertised name first, as the app's scanner reads it (BLEFleet.swift),
+    # then macOS's cached GAP name (d.name) — that one is None until this Mac
+    # has connected to the unit (or since a re-flash wiped the bond), so
+    # matching it alone called an advertising board "not found" (#1623).
+    return ad.local_name or d.name or ""
+
+
 async def find_device(name_substr: str):
     dev = await BleakScanner.find_device_by_filter(
-        lambda d, ad: name_substr.lower() in (d.name or "").lower(),
+        lambda d, ad: name_substr.lower() in adv_name(d, ad).lower(),
         timeout=SCAN_TIMEOUT_S,
     )
     if dev is None:
