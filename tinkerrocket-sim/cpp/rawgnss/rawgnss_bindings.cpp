@@ -3,7 +3,9 @@
 // store and measurement builder (TR_GNSSRaw), and the filter (TR_RawGnssEKF)
 // in its float (flight) and double instantiations. The gnss repo's bench
 // scorer (sim/tc_ekf_cocom.py, mode ins-cpp) runs it beside the prototype it
-// was ported from.
+// was ported from. And the heading from thrust (TR_RawGnssShadow's
+// HeadingFit, with the filter's heading gate and hand-off), for the gnss
+// repo's heading runs (sim/heading_seed_sim.py) to fly the port.
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -15,6 +17,7 @@
 #include <vector>
 
 #include "EphemerisStore.h"
+#include "HeadingFit.h"
 #include "Lc86Parser.h"
 #include "Lc86RawEpoch.h"
 #include "RawMeas.h"
@@ -200,7 +203,52 @@ void bindEkf(py::module_& m, const char* name)
             double r[3], v[3];
             e.receiverEcef(r, v);
             return py::make_tuple(vec3(r), vec3(v));
+        })
+        // the heading fit's hand-off (RawGnssShadow::handOverHeading)
+        .def("set_heading_sigma", [](E& e, double s) { e.setHeadingSigma(T(s)); }, py::arg("sigma_rad"))
+        .def("turn_heading", [](E& e, double d) { e.turnHeading(T(d)); }, py::arg("dpsi_rad"))
+        .def("set_att_gate_vertical", &E::setAttGateVertical)
+        .def("set_biases", [](E& e, const A3& ab, const A3& wb, py::array_t<double> Pb) {
+            auto r = Pb.template unchecked<2>();
+            T P[6][6];
+            for (int i = 0; i < 6; ++i)
+                for (int j = 0; j < 6; ++j)
+                    P[i][j] = T(r(i, j));
+            const T a[3] = {T(ab[0]), T(ab[1]), T(ab[2])}, w[3] = {T(wb[0]), T(wb[1]), T(wb[2])};
+            e.setBiases(a, w, P);
+        })
+        .def("bias_covariance", [](const E& e) {
+            T P[6][6];
+            e.biasCovariance(P);
+            py::array_t<double> a({6, 6});
+            auto r = a.template mutable_unchecked<2>();
+            for (int i = 0; i < 6; ++i)
+                for (int j = 0; j < 6; ++j)
+                    r(i, j) = double(P[i][j]);
+            return a;
+        })
+        .def("release_velocity", [](E& e, double s) { e.releaseVelocity(T(s)); }, py::arg("sigma_mps"))
+        .def("clear_rejects", &E::clearRejects)
+        .def("att_sigma_ned", [](const E& e) {
+            T s[3];
+            e.attSigmaNed(s);
+            return A3{double(s[0]), double(s[1]), double(s[2])};
         });
+}
+
+py::dict fitDict(const HeadingFit::Result& r)
+{
+    py::dict d;
+    d["ok"] = r.ok;
+    d["psi"] = r.psi;
+    d["sigma"] = r.sigma > 0.0 ? py::object(py::float_(r.sigma)) : py::object(py::none());
+    d["rival"] = r.rival >= 0.0 ? py::object(py::float_(r.rival)) : py::object(py::none());
+    d["bias"] = py::make_tuple(r.bias[0], r.bias[1]);
+    d["n"] = r.n;
+    d["n_cut"] = r.n_cut;
+    d["rms"] = r.rms;
+    d["evals"] = r.evals;
+    return d;
 }
 
 }  // namespace
@@ -369,6 +417,7 @@ PYBIND11_MODULE(_rawgnss, m)
         .def_readwrite("drift_step_spread_mps", &RawGnssEKFParams::drift_step_spread_mps)
         .def_readwrite("rr_lag_s", &RawGnssEKFParams::rr_lag_s)
         .def_readwrite("att_gate_cos4", &RawGnssEKFParams::att_gate_cos4)
+        .def_readwrite("att_gate_vertical", &RawGnssEKFParams::att_gate_vertical)
         .def_readwrite("p0_pos", &RawGnssEKFParams::p0_pos)
         .def_readwrite("p0_vel", &RawGnssEKFParams::p0_vel)
         .def_readwrite("p0_att", &RawGnssEKFParams::p0_att)
@@ -383,6 +432,58 @@ PYBIND11_MODULE(_rawgnss, m)
 
     bindEkf<float>(m, "RawGnssEKF32");
     bindEkf<double>(m, "RawGnssEKF64");
+
+    // the heading from thrust (TR_RawGnssShadow/HeadingFit.h)
+    py::class_<HeadingFit::Config>(m, "HeadingFitConfig")
+        .def(py::init<>())
+        .def_readwrite("bias_sigma_mps2", &HeadingFit::Config::bias_sigma_mps2)
+        .def_readwrite("drift_mps2", &HeadingFit::Config::drift_mps2)
+        .def_readwrite("cut_chi2", &HeadingFit::Config::cut_chi2)
+        .def_readwrite("min_speed_mps", &HeadingFit::Config::min_speed_mps)
+        .def_readwrite("tau_s", &HeadingFit::Config::tau_s);
+    py::class_<HeadingFit>(m, "HeadingFit")
+        .def(py::init<const HeadingFit::Config&>(), py::arg("config") = HeadingFit::Config())
+        .def("start", [](HeadingFit& f, const std::array<double, 4>& q, const Vec3& wb, double t0) {
+            const float qq[4] = {float(q[0]), float(q[1]), float(q[2]), float(q[3])};
+            const float w[3] = {float(wb[0]), float(wb[1]), float(wb[2])};
+            f.start(qq, w, t0);
+        }, py::arg("q_seed"), py::arg("gyro_bias"), py::arg("t0"))
+        .def("imu", [](HeadingFit& f, const Vec3& acc, const Vec3& gyro, double dt) {
+            const float a[3] = {float(acc[0]), float(acc[1]), float(acc[2])};
+            const float w[3] = {float(gyro[0]), float(gyro[1]), float(gyro[2])};
+            f.imu(a, w, float(dt));
+        })
+        .def("gnss", [](HeadingFit& f, double t, const std::array<double, 2>& v_ne, double var_h) {
+            return f.gnss(t, v_ne.data(), var_h);
+        })
+        .def("solve", [](const HeadingFit& f) { return fitDict(f.solve()); })
+        .def("solve_grid", [](const HeadingFit& f) { return fitDict(f.solveGrid()); })
+        .def("attitude", [](const HeadingFit& f, double psi) {
+            float q[4];
+            f.attitude(psi, q);
+            return std::array<double, 4>{q[0], q[1], q[2], q[3]};
+        })
+        .def_property_readonly("q", [](const HeadingFit& f) {
+            const float* q = f.gyroOnlyQuat();
+            return std::array<double, 4>{q[0], q[1], q[2], q[3]};
+        })
+        .def_property_readonly("started", &HeadingFit::started)
+        .def_property_readonly("t0", &HeadingFit::t0)
+        .def_property_readonly("t", &HeadingFit::time)
+        .def_property_readonly("epochs", &HeadingFit::epochs);
+    m.def("doppler_velocity_ned", [](const py::list& meas, const Vec3& r, double lat, double lon) -> py::object {
+        auto v = toVector(meas);
+        double vn[3], var_h = 0.0;
+        int used = 0;
+        if (!dopplerVelocityNed(v.data(), static_cast<int>(v.size()), r.data(), lat, lon, vn, var_h, used))
+            return py::none();
+        return py::make_tuple(vec3(vn), var_h, used);
+    }, py::arg("meas"), py::arg("r_ecef"), py::arg("lat"), py::arg("lon"));
+    m.def("heading_between", [](const std::array<double, 4>& a, const std::array<double, 4>& b) {
+        const float fa[4] = {float(a[0]), float(a[1]), float(a[2]), float(a[3])};
+        const float fb[4] = {float(b[0]), float(b[1]), float(b[2]), float(b[3])};
+        return headingBetween(fa, fb);
+    });
 
     m.attr("SYS_GPS") = static_cast<int>(GNSS_SYS_GPS);
     m.attr("SYS_GAL") = static_cast<int>(GNSS_SYS_GAL);

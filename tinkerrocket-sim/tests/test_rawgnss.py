@@ -4,7 +4,9 @@ The gnss repo's bench scorer (sim/tc_ekf_cocom.py, modes ins-cpp and ins-cpp64) 
 computer's TR_RawGnssEKF and RawMeasBuilder through these bindings to show they reproduce the prototype
 they were ported from. This pins the bindings themselves: the parameters the LC86G flies with, a filter
 that starts its clock from the first epoch and converges on a synthetic sky, and the parser and builder
-objects the scorer feeds. The filter's behaviour is tested in C++ (tests_cpp/test_raw_gnss_ekf.cpp).
+objects the scorer feeds; and the heading from thrust (HeadingFit, its Doppler velocity, the filter's
+hand-off calls), which the gnss repo's heading runs (sim/heading_seed_sim.py --fit-cpp) fly beside the
+prototype. The behaviour is tested in C++ (tests_cpp/test_raw_gnss_ekf.cpp, test_heading_fit.cpp).
 """
 import math
 
@@ -112,3 +114,65 @@ def test_parser_and_builder_objects():
     b = rg.RawMeasBuilder()
     assert b.build(ep, fe.store, None) == []                # no ephemeris yet: nothing to place
     assert b.relock_age(rg.SYS_GPS, 5, 345601.0) == pytest.approx(1.0)
+
+
+def test_the_heading_fit_finds_a_turned_seed():
+    # a level body pushed north at 8 m/s^2, its seed turned 40 deg about the vertical: the fit turns it back
+    err = math.radians(40.0)
+    f = rg.HeadingFit()
+    f.start([math.cos(err / 2), 0.0, 0.0, math.sin(err / 2)], [0.0, 0.0, 0.0], 0.0)
+    assert f.started and f.epochs == 0
+    for k in range(1, 501):
+        f.imu([8.0, 0.0, -9.807], [0.0, 0.0, 0.0], 0.01)
+        if k % 100 == 0:
+            assert f.gnss(f.t, [8.0 * f.t, 0.0], 0.01)
+    r = f.solve()
+    assert r["ok"] and r["n"] == 5 and r["n_cut"] == 0
+    assert r["psi"] == pytest.approx(-err, abs=math.radians(0.3))
+    assert r["sigma"] is not None and r["sigma"] < math.radians(1.0)
+    assert r["rival"] is None
+    g = f.solve_grid()
+    assert g["psi"] == pytest.approx(r["psi"], abs=1e-9) and g["sigma"] == r["sigma"]
+    q = f.attitude(r["psi"])                           # turned back: the truth's (level, nose north)
+    assert abs(q[0]) == pytest.approx(1.0, abs=1e-4)
+    assert rg.heading_between(q, [1.0, 0.0, 0.0, 0.0]) == pytest.approx(0.0, abs=math.radians(0.3))
+
+
+def test_the_doppler_velocity_of_a_moving_receiver():
+    truth = ecef(LAT, LON, H)
+    sl, cl, so, co = math.sin(LAT), math.cos(LAT), math.sin(LON), math.cos(LON)
+    ned2ecef = np.array([[-sl * co, -so, -cl * co], [-sl * so, co, -cl * so], [cl, 0.0, -sl]])
+    v_ned = np.array([12.0, -30.0, -150.0])
+    v = ned2ecef @ v_ned
+    meas = []
+    for m in measure(sky(truth), truth, 0.0, {}):
+        u = np.array(m.sat_pos) - truth
+        u /= np.linalg.norm(u)
+        meas.append(rg.RawMeas(m.sys, m.prn, list(m.sat_pos), list(m.sat_vel), [0.0, 0.0, 0.0], m.pr,
+                               m.rr - float(u @ v) + 40.0, 1.0, 0.0, 15.0, 0.05, 0.1))     # and a clock drift
+    out = rg.doppler_velocity_ned(meas, list(truth), LAT, LON)
+    assert out is not None
+    vn, var_h, used = out
+    assert used == 8
+    assert np.allclose(vn, v_ned, atol=0.02)
+    assert 0.0 < var_h < 0.01
+    assert rg.doppler_velocity_ned(meas[:4], list(truth), LAT, LON) is None     # under five: none
+
+
+def test_the_hand_off_calls():
+    f = rg.RawGnssEKF32(rg.RawGnssEKFParams())
+    f.init([LAT, LON, H], [0.0, 0.0, 0.0], [0.7071068, 0.0, 0.7071068, 0.0], 0.0)    # nose up
+    q0 = f.q
+    f.turn_heading(0.5)
+    assert rg.heading_between(f.q, q0) == pytest.approx(0.5, abs=1e-5)
+    f.set_heading_sigma(0.3)
+    assert f.att_sigma_ned()[2] == pytest.approx(0.3, rel=1e-4)
+    f.set_att_gate_vertical(True)
+    assert f.params.att_gate_vertical
+    Pb = np.diag([1e-4] * 3 + [1e-6] * 3)
+    f.set_biases([0.01, -0.02, 0.03], [1e-3, 0.0, -1e-3], Pb)
+    assert np.allclose(f.ab, [0.01, -0.02, 0.03], atol=1e-7)
+    assert np.allclose(f.bias_covariance(), Pb, atol=1e-10)
+    f.release_velocity(3.0)
+    assert np.all(np.diag(f.P)[3:6] >= 9.0 - 1e-5)
+    f.clear_rejects()

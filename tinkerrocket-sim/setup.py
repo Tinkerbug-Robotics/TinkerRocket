@@ -138,6 +138,7 @@ if (os.path.exists("cpp/servo/servo_bindings.cpp") and
 gnss_raw_dir = os.path.join(SHARED_LIB_DIR, "TR_GNSSRaw")
 raw_ekf_dir = os.path.join(SHARED_LIB_DIR, "TR_RawGnssEKF")
 lc86_dir = os.path.join(SHARED_LIB_DIR, "TR_GNSSReceiverLC86_Serial")
+shadow_dir = os.path.join(SHARED_LIB_DIR, "TR_RawGnssShadow")
 if (os.path.exists("cpp/rawgnss/rawgnss_bindings.cpp") and
         os.path.exists(gnss_raw_dir) and os.path.exists(raw_ekf_dir)):
     ext_modules.append(
@@ -149,12 +150,13 @@ if (os.path.exists("cpp/rawgnss/rawgnss_bindings.cpp") and
                 os.path.join(gnss_raw_dir, "EphemerisStore.cpp"),
                 os.path.join(gnss_raw_dir, "RawMeasBuilder.cpp"),
                 os.path.join(raw_ekf_dir, "TR_RawGnssEKF.cpp"),
+                os.path.join(shadow_dir, "HeadingFit.cpp"),
                 os.path.join(lc86_dir, "Lc86Parser.cpp"),
                 os.path.join(lc86_dir, "Rtcm3Msm.cpp"),
                 "cpp/rawgnss/rawgnss_bindings.cpp",
             ],
             include_dirs=[SHIM_DIR, gnss_raw_dir, os.path.join(gnss_raw_dir, "include"),
-                          raw_ekf_dir, lc86_dir, types_lib_dir],
+                          raw_ekf_dir, lc86_dir, types_lib_dir, shadow_dir],
             cxx_std=17,
         ),
     )
