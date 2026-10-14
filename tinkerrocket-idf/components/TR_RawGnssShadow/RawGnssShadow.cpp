@@ -1109,7 +1109,9 @@ void RawGnssShadow::jobHeadingFit()
     d.vel_us = sat16(static_cast<double>(st_.heading_vel_us));
     d.solve_us = sat16(static_cast<double>(st_.heading_solve_us));
     d.seed_ms = sat16((fit_launch_t_ - fit_.t0()) * 1000.0);
-    if (act && !handed_ && res.ok && res.sigma > 0.0 && res.sigma * kRad2Deg <= cfg_.heading_handoff_deg && !rival)
+    if (act && !handed_ && res.ok && res.sigma > 0.0 && res.sigma * kRad2Deg <= cfg_.heading_handoff_deg && !rival &&
+        res.n >= cfg_.heading_handoff_min_epochs &&
+        (res.sigma * kRad2Deg <= cfg_.heading_handoff_sure_deg || headingsApart(res, filt)))
     {
         handOverHeading(res, filt);
         d.flags |= HFT_HANDED_NOW;
@@ -1117,6 +1119,19 @@ void RawGnssShadow::jobHeadingFit()
     }
     if (nhdg_ < kHdgQ)
         hdg_[nhdg_++] = d;
+}
+
+// Whether the filter's heading is further from the fit's than
+// heading_handoff_apart of their combined 1-sigmas: lost, not just unsure.
+// Always, with it 0.
+bool RawGnssShadow::headingsApart(const HeadingFit::Result& r, double filt_minus_fit) const
+{
+    if (cfg_.heading_handoff_apart <= 0.0)
+        return true;
+    float s[3];
+    ekf_.attSigmaNed(s);
+    const double sd = static_cast<double>(s[2]);
+    return std::fabs(filt_minus_fit) > cfg_.heading_handoff_apart * std::sqrt(r.sigma * r.sigma + sd * sd);
 }
 
 // The fit's heading to the filter: its attitude turned about the vertical

@@ -2394,7 +2394,10 @@ struct BoostRun
 // from a seed whose heading is seed_err_deg off (no magnetometer: it keeps
 // it); the launch detector calls it at T+0.1 s. external: each epoch built by
 // the GNSS task's stage and handed over built, as on the Beetle (#1626).
-BoostRun flyBoost(uint8_t mode, double seed_err_deg, double bias_y = 0.0, double bias_z = 0.0, bool external = false)
+// apart, min_epochs, sure_deg: heading_handoff_apart, _min_epochs and
+// _sure_deg.
+BoostRun flyBoost(uint8_t mode, double seed_err_deg, double bias_y = 0.0, double bias_z = 0.0, bool external = false,
+                  double apart = 0.0, int min_epochs = 0, double sure_deg = 0.0)
 {
     double lat, lon, h;
     ecef_to_geo(kGoldenRmRx, &lat, &lon, &h);
@@ -2410,6 +2413,9 @@ BoostRun flyBoost(uint8_t mode, double seed_err_deg, double bias_y = 0.0, double
 
     RawGnssShadow::Config cfg = primaryCfg();
     cfg.heading_mode = mode;
+    cfg.heading_handoff_apart = apart;
+    cfg.heading_handoff_min_epochs = min_epochs;
+    cfg.heading_handoff_sure_deg = sure_deg;
     cfg.meas.troposphere = false;
     cfg.external_build = external;
     RawGnssShadow sh(cfg);
@@ -2585,6 +2591,48 @@ TEST(RawGnssShadow, TheHeadingFitHandsItsHeadingOverOnce)
         q_lev[3] = qz[0] * qe[3] + qz[3] * qe[0];
         EXPECT_LT(attErrDeg(q_lev, run.q_true), 2.0) << by;
     }
+}
+
+TEST(RawGnssShadow, TheHeadingFitLeavesAFilterThatIsNotLost)
+{
+    // heading_handoff_apart: the hand-off waits until the filter's heading is
+    // further from the fit's than that many of their combined 1-sigmas (the
+    // rig's r18 handed a two-epoch fit 9.8 deg off to a filter 2.5 deg off) --
+    // or, with heading_handoff_sure_deg, until the fit is that sure.
+    // Seeded right, the filter agrees with the fit and keeps its own heading.
+    const BoostRun right = flyBoost(RawGnssShadow::kHeadingAct, 0.0, 0.0, 0.0, false, 2.0);
+    ASSERT_GE(right.recs.size(), 5u);
+    EXPECT_TRUE(right.recs.back().flags & HFT_SOLVED);
+    EXPECT_EQ(right.st.heading_handoffs, 0u);
+    EXPECT_EQ(right.handed_at, -1);
+    EXPECT_LT(std::fabs(gnss_raw::headingBetween(right.q_end, right.q_true)) * 180.0 / kPi, 2.0);
+
+    // Seeded 40 deg off, its GNSS turns it most of the way, its own 1-sigma
+    // still wide (30 deg at launch): never twice their 1-sigmas apart, it
+    // stalls 13 deg off. Sure to 3 deg, the fit hands over, late but whole.
+    const BoostRun stalled = flyBoost(RawGnssShadow::kHeadingAct, 40.0, 0.0, 0.0, false, 2.0);
+    EXPECT_EQ(stalled.st.heading_handoffs, 0u);
+    EXPECT_GT(std::fabs(gnss_raw::headingBetween(stalled.q_end, stalled.q_true)) * 180.0 / kPi, 8.0);
+    const BoostRun sure = flyBoost(RawGnssShadow::kHeadingAct, 40.0, 0.0, 0.0, false, 2.0, 0, 3.0);
+    EXPECT_EQ(sure.st.heading_handoffs, 1u);
+    ASSERT_GE(sure.handed_at, 0);
+    EXPECT_LE(sure.recs[sure.handed_at].sigma_cdeg, 300);
+    EXPECT_GT(std::fabs(sure.recs[sure.handed_at].filt_cdeg / 100.0), 8.0);
+    EXPECT_LT(attErrDeg(sure.q_end, sure.q_true), 3.0);
+    // and a looser apart takes the lost filter early
+    const BoostRun lost = flyBoost(RawGnssShadow::kHeadingAct, 40.0, 0.0, 0.0, false, 1.0);
+    EXPECT_EQ(lost.st.heading_handoffs, 1u);
+    ASSERT_GE(lost.handed_at, 0);
+    EXPECT_LE(lost.recs[lost.handed_at].n, 4);
+    EXPECT_LT(attErrDeg(lost.q_end, lost.q_true), 3.0);
+
+    // heading_handoff_min_epochs: held to that many epochs (unasked, the
+    // third's 6 deg 1-sigma hands over)
+    const BoostRun later = flyBoost(RawGnssShadow::kHeadingAct, 40.0, 0.0, 0.0, false, 0.0, 5);
+    EXPECT_EQ(later.st.heading_handoffs, 1u);
+    ASSERT_GE(later.handed_at, 0);
+    EXPECT_EQ(later.recs[later.handed_at].n, 5);
+    EXPECT_LT(attErrDeg(later.q_end, later.q_true), 3.0);
 }
 
 TEST(RawGnssShadow, TheHeadingFitIsOffByDefault)

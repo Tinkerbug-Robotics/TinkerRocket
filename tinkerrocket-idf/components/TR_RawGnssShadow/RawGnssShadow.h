@@ -85,11 +85,17 @@
 // (att_gate_vertical); once the fit's 1-sigma is heading_handoff_deg or less,
 // and no other heading far off fits within heading_handoff_rival of it (the
 // profile's second valley, HeadingFit::Result::rival -- for thrust along the
-// nose there is none), its heading is handed over, once a flight -- turned onto the fit's, the IMU
-// biases put back as the pad left them, the velocity let go to
-// heading_handoff_vel_mps and the satellites refused under the old heading
-// forgotten -- before that epoch is fused. The epoch's two units (its Doppler
-// velocity, then the fit) are each one slice at most.
+// nose there is none), its heading is handed over, once a flight -- turned
+// onto the fit's, the IMU biases put back as the pad left them, the velocity
+// let go to heading_handoff_vel_mps and the satellites refused under the old
+// heading forgotten -- before that epoch is fused. If asked, the hand-off
+// also waits for heading_handoff_min_epochs, and for the filter's heading to
+// be further from the fit's than heading_handoff_apart of their combined
+// 1-sigmas -- the filter lost, not just unsure -- until the fit is sure to
+// heading_handoff_sure_deg. (On the rig's r18 the filter's GNSS had already
+// righted a 40 deg error to 2.5 when a two-epoch fit, 9.8 deg off, was handed
+// over.) The epoch's two units (its Doppler velocity, then the fit) are each
+// one slice at most.
 //
 // Stopping. A sensor sim, a hole in the IMU longer than max_gap_s, a state
 // that is not finite, or (on the pad) one pad_reset_m from the flight
@@ -180,6 +186,11 @@ public:
         double   heading_handoff_deg = 10.0;  // act: the fit's 1-sigma at or under this hands its heading over
         double   heading_handoff_rival = 25.0;   // act: ... unless another heading's valley rises less than this
                                                  //   above the fit's (as its sigma's: 25 is five sigmas')
+        int      heading_handoff_min_epochs = 0; // act: ... once the fit holds this many epochs
+        double   heading_handoff_apart = 0.0;    // act: ... and only while its heading and the filter's are more
+                                                 //   than this many of their combined 1-sigmas apart: the filter
+                                                 //   lost, not just unsure (0: whatever the filter's) --
+        double   heading_handoff_sure_deg = 0.0; //   unless the fit's 1-sigma is at or under this
         double   heading_pad_sigma_deg = 30.0;   // act: the heading's 1-sigma from launch on
         double   heading_handoff_vel_mps = 3.0;  // act: the velocity let go to this at the hand-off
     };
@@ -389,6 +400,7 @@ private:
     bool jobHeading(double age);
     void jobHeadingFit();
     void handOverHeading(const HeadingFit::Result& r, double filt_minus_fit);
+    bool headingsApart(const HeadingFit::Result& r, double filt_minus_fit) const;
     void capturePadContext(uint32_t tick_us);
     int64_t now() const { return clock_ ? clock_() : 0; }
 
