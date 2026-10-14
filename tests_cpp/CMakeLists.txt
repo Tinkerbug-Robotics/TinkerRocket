@@ -1603,6 +1603,7 @@ add_executable(test_raw_gnss_shadow test_raw_gnss_shadow.cpp
     ${LIB_DIR}/TR_RawGnssShadow/SatJumpCheck.cpp
     ${LIB_DIR}/TR_RawGnssShadow/FixCheck.cpp
     ${LIB_DIR}/TR_RawGnssShadow/EphemerisFrames.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/HeadingFit.cpp
     ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
     ${LIB_DIR}/TR_GNSSRaw/eph.c
     ${LIB_DIR}/TR_GNSSRaw/atmo.c
@@ -1666,6 +1667,41 @@ target_include_directories(test_pad_survey PRIVATE
 )
 target_link_libraries(test_pad_survey GTest::gtest_main)
 gtest_discover_tests(test_pad_survey)
+
+# ---------- test_heading_fit ----------
+# gnss_raw::HeadingFit: the heading from thrust against GNSS velocity, as a
+# batch fit on the raw Doppler -- any seed heading and the lateral biases from
+# a boosted, leaning body, silence on a vertical flight, the robust cut, close
+# epochs' shared weight, the fast profile against the prototype's full grid
+# and its second valley -- and the Doppler velocity that feeds it.
+add_executable(test_heading_fit test_heading_fit.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/HeadingFit.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_GNSSRaw/atmo.c
+)
+target_include_directories(test_heading_fit PRIVATE
+    ${LIB_DIR}/TR_RawGnssShadow
+    ${LIB_DIR}/TR_RawGnssEKF
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+)
+target_link_libraries(test_heading_fit GTest::gtest_main)
+gtest_discover_tests(test_heading_fit)
+
+# ---------- bench_heading_fit (not a test) ----------
+# The heading fit's bench (HeadingFitBench.h) on the host: what the flight
+# computer prints at boot with -DTR_HEADING_FIT_BENCH=1. Built, never run by ctest.
+add_executable(bench_heading_fit bench_heading_fit.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/HeadingFit.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_GNSSRaw/atmo.c
+)
+target_include_directories(bench_heading_fit PRIVATE
+    ${LIB_DIR}/TR_RawGnssShadow
+    ${LIB_DIR}/TR_RawGnssEKF
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+)
 
 # ---------- test_gnss_checks ----------
 # The physics checks on the GNSS (#1508): the raw filter's IMU-only motion
