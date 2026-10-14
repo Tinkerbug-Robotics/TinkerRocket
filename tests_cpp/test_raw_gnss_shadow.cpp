@@ -184,6 +184,41 @@ TEST(ShadowLink, SeqLockReadsWholeWritesOnly)
     EXPECT_EQ(r.time_us, 50000u);
 }
 
+TEST(ShadowLink, SlotsAreFilledAndReadInPlaceInOrder)
+{
+    // The GNSS task's built epochs (~6 kB) are not copied through the ring:
+    // the task fills a slot where it lies (PSRAM on the flight computer), the
+    // filter's task reads it there; two wait at most.
+    gnss_raw::SpscSlots<int, 2> slots;
+    EXPECT_EQ(slots.claim(), nullptr);        // nothing attached
+    int items[2] = {};
+    slots.attach(items);
+    EXPECT_EQ(slots.peek(), nullptr);
+    for (int v = 1; v <= 2; ++v)
+    {
+        int* s = slots.claim();
+        ASSERT_NE(s, nullptr);
+        *s = v;
+        EXPECT_EQ(slots.peek() == nullptr, v == 1);   // not the consumer's until published
+        slots.publish();
+    }
+    EXPECT_EQ(slots.claim(), nullptr);        // both waiting: full
+    ASSERT_NE(slots.peek(), nullptr);
+    EXPECT_EQ(*slots.peek(), 1);
+    slots.release();
+    int* s = slots.claim();                   // the freed one, filled again
+    ASSERT_NE(s, nullptr);
+    *s = 3;
+    slots.publish();
+    for (int want : {2, 3})
+    {
+        ASSERT_NE(slots.peek(), nullptr);
+        EXPECT_EQ(*slots.peek(), want);
+        slots.release();
+    }
+    EXPECT_EQ(slots.peek(), nullptr);
+}
+
 TEST(ShadowLink, UnwrapsThe32BitClock)
 {
     const int64_t ref = (1LL << 32) + 1000;   // just past a wrap
@@ -1793,4 +1828,360 @@ TEST(RawGnssShadow, ARestoredFlightWritesNoPadContext)
     ASSERT_TRUE(sh.running());
     EXPECT_EQ(sh.stats().pad_contexts, 0u);
     EXPECT_TRUE(drainPadContext(sh, static_cast<uint32_t>(t)).empty());
+}
+
+// ------------------------------------------- the GNSS task's stage (#1626)
+
+namespace
+{
+
+// The GNSS task, as main.cpp plays it beside the filter's: each epoch seen by
+// the stage and built from the filter's published state, then handed to the
+// filter built; the satellites the filter found jumped go back to the stage
+// first, and its counts come with each epoch.
+void offerBuilt(RawGnssShadow& sh, gnss_raw::RawGnssMeasStage& stage, const TimedRawEpoch& e,
+                gnss_raw::BuiltEpoch& built)
+{
+    gnss_raw::ShadowRelock r;
+    while (sh.takeRelock(r))
+        stage.markRelock(r.sys, r.prn, r.tow_s);
+    gnss_raw::ShadowNav nav;
+    sh.navState(nav);
+    if (stage.offer(e, nav, built))
+        sh.onBuilt(built);
+    sh.onMeasStats(stage.stats());
+}
+
+// runGolden, the epoch built in the GNSS task.
+void runGoldenBuilt(RawGnssShadow& sh, gnss_raw::RawGnssMeasStage& stage, std::vector<TimedRawEpoch>& epochs,
+                    size_t k, gnss_raw::BuiltEpoch& built)
+{
+    const int64_t te = epochs[k].mcu_us;
+    feedStill(sh, te - 1000000 + 5000, te + 200000);
+    offerBuilt(sh, stage, epochs[k], built);
+    feedStill(sh, te + 200000, te + 205000);
+}
+
+gnss_raw::ShadowNav goldenNav(bool running)
+{
+    gnss_raw::ShadowNav nav{};
+    ecef_to_geo(kGoldenRmRx, &nav.lla[0], &nav.lla[1], &nav.lla[2]);
+    nav.running = running ? 1 : 0;
+    return nav;
+}
+
+}  // namespace
+
+TEST(RawGnssMeasStage, BuildsATimedEpochForARunningFilterAsTheBuilderDoes)
+{
+    // The GNSS task's turn for each epoch: an epoch with no MCU time yet, or
+    // for a filter not running, keeps its satellites' lock ages and is not
+    // built; one for a running filter is built at the filter's position --
+    // what RawMeasBuilder makes of it there, with no stress on the Doppler
+    // (the filter adds that), each measurement with its satellite's lock age.
+    gnss_raw::RawGnssMeasStage stage;
+    for (int i = 0; i < kGoldenRmEphN; ++i)
+        ASSERT_TRUE(stage.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len)));
+    EXPECT_GT(stage.ephemerisSatellites(), 0);
+    std::vector<TimedRawEpoch> epochs = goldenEpochs();
+    gnss_raw::BuiltEpoch b;
+    TimedRawEpoch untimed = epochs[0];
+    untimed.mcu_us = 0;
+    EXPECT_FALSE(stage.offer(untimed, goldenNav(true), b));
+    EXPECT_EQ(stage.stats().untimed, 1u);
+    EXPECT_EQ(stage.stats().last_timed, 0);
+    EXPECT_FALSE(stage.offer(epochs[0], goldenNav(false), b));
+    EXPECT_EQ(stage.stats().idle, 1u);
+    stage.skip(epochs[0]);                    // the handoff full: seen, not built
+    EXPECT_EQ(stage.stats().dropped, 1u);
+    ASSERT_TRUE(stage.offer(epochs[0], goldenNav(true), b));
+    EXPECT_EQ(stage.stats().epochs, 4u);
+    EXPECT_EQ(stage.stats().built, 1u);
+    EXPECT_EQ(stage.stats().last_timed, 1);
+    EXPECT_GT(stage.stats().tracked, 0);
+    EXPECT_EQ(b.mcu_us, epochs[0].mcu_us);
+    EXPECT_EQ(b.tow_s, epochs[0].epoch.tow_s);
+    EXPECT_EQ(b.gps_week, kGoldenWeek);
+    EXPECT_EQ(b.iono_changed, 1);             // the first epoch on the pad chooses the ionosphere
+    EXPECT_EQ(b.use_broadcast, 0);            //   none brought: the pad survey's
+    ASSERT_GE(b.n, 7);
+
+    gnss_raw::RawMeasBuilder ref{gnss_raw::RawMeasBuilder::Config{}};
+    ref.setIono(gps_iono_t{});
+    gnss_raw::RawMeas want[gnss_raw::RawEpoch::kMaxObs];
+    double r[3];
+    geo_to_ecef(goldenNav(true).lla[0], goldenNav(true).lla[1], goldenNav(true).lla[2], r);
+    const int n = ref.build(epochs[0].epoch, stage.ephemerides(), r, 0.0, want, gnss_raw::RawEpoch::kMaxObs);
+    ASSERT_EQ(b.n, n);
+    for (int i = 0; i < n; ++i)
+    {
+        EXPECT_EQ(b.meas[i].sys, want[i].sys);
+        EXPECT_EQ(b.meas[i].prn, want[i].prn);
+        EXPECT_EQ(b.meas[i].pr, want[i].pr);
+        EXPECT_EQ(b.meas[i].rr, want[i].rr);
+        EXPECT_EQ(b.meas[i].sat_pos[0], want[i].sat_pos[0]);
+        EXPECT_EQ(b.meas[i].sigma_rr, want[i].sigma_rr);
+        EXPECT_EQ(b.meas[i].sigma_pr_corr, want[i].sigma_pr_corr);
+        EXPECT_EQ(b.lock_age_s[i], stage.builder().relockAge(b.meas[i].sys, b.meas[i].prn, b.tow_s));
+    }
+}
+
+namespace
+{
+
+struct GoldenRun
+{
+    double   r_end[3] = {};
+    uint32_t slices = 0;           // over both epochs
+    uint32_t used_pr = 0;
+    uint32_t min_steps_during = 0; // the fewest steps the filter took while an epoch was worked
+};
+
+// The golden epochs through the navigation filter, each handed over 20 ms
+// late: built here or in the GNSS task, at once or a 2.5 ms slice a step.
+GoldenRun runGoldenNav(bool split, bool sliced)
+{
+    std::vector<TimedRawEpoch> epochs = goldenEpochs();
+    GoldenRun out;
+    out.min_steps_during = 1000000;
+    RawGnssShadow::Config cfg;
+    cfg.primary = true;
+    cfg.min_step_s = 0.01;
+    cfg.epoch_slice_us = sliced ? 2500.0 : 0.0;
+    cfg.external_build = split;
+    RawGnssShadow sh(cfg);
+    gnss_raw::RawGnssMeasStage stage(RawGnssShadow::stageConfig(cfg));
+    gnss_raw::BuiltEpoch built;
+    g_fake_us = 0;
+    sh.setClock(fakeClock);
+    for (int i = 0; i < kGoldenRmEphN; ++i)
+    {
+        sh.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+        stage.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+    }
+    sh.onSeed(goldenSeed(kT0, false));
+    int64_t t = kT0;
+    feedStill(sh, t, kT0 + 1000000);
+    t = kT0 + 1000000;
+    EXPECT_TRUE(sh.running());
+    for (size_t k = 0; k < epochs.size(); ++k)
+    {
+        const int64_t te = epochs[k].mcu_us;
+        feedStill(sh, t, te + 20000);
+        t = te + 20000;
+        if (split)
+            offerBuilt(sh, stage, epochs[k], built);
+        else
+            sh.onEpoch(epochs[k]);
+        const uint32_t applied = sh.stats().epochs_applied;
+        const uint32_t steps0 = sh.stats().step_n;
+        while (sh.stats().epochs_applied == applied && t < te + 400000)
+        {
+            feedStill(sh, t, t + 5000);
+            t += 5000;
+        }
+        EXPECT_EQ(sh.stats().epochs_applied, applied + 1) << "split " << split << ", epoch " << k;
+        out.min_steps_during = std::min(out.min_steps_during, sh.stats().step_n - steps0);
+        out.slices += sh.stats().epoch_slices;
+        out.used_pr += static_cast<uint32_t>(sh.stats().last.used_pr);
+    }
+    if (split)
+    {
+        EXPECT_EQ(sh.stats().epochs, 2u);           // the GNSS task's counts
+        EXPECT_EQ(sh.stats().epochs_stale, 0u);
+        EXPECT_EQ(sh.ephemerisSatellites(), stage.ephemerisSatellites());
+    }
+    double v[3];
+    sh.filter().receiverEcef(out.r_end, v);
+    return out;
+}
+
+double dist3(const double a[3], const double b[3])
+{
+    return std::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]));
+}
+
+}  // namespace
+
+TEST(RawGnssShadow, BuiltInAGnssTaskTheGoldenEpochsLandWhereTheyDoBuiltHere)
+{
+    // The navigation filter with its epochs built in the GNSS task
+    // (external_build, main.cpp) fuses what the one that builds its own does.
+    // At once, the same epochs fused at the same steps: the same place, the
+    // build's position (the filter's published state, a tick earlier) all
+    // that differs. A 2.5 ms slice a step: the split one works each epoch in
+    // fewer slices -- the build is no longer among them -- stepping all the
+    // while, and ends near the other (it fuses earlier, between other steps'
+    // updates, as the sliced and the at-once runs differ).
+    const GoldenRun here = runGoldenNav(false, false);
+    const GoldenRun task = runGoldenNav(true, false);
+    EXPECT_EQ(task.used_pr, here.used_pr);
+    EXPECT_GE(here.used_pr, 7u + kGoldenRmMeasN - 1);
+    EXPECT_LT(dist3(here.r_end, task.r_end), 1e-3);
+    EXPECT_EQ(here.slices, 2u);
+    EXPECT_EQ(task.slices, 2u);
+
+    const GoldenRun here_sliced = runGoldenNav(false, true);
+    const GoldenRun task_sliced = runGoldenNav(true, true);
+    EXPECT_EQ(task_sliced.used_pr, here.used_pr);
+    EXPECT_LT(task_sliced.slices, here_sliced.slices);
+    EXPECT_GE(task_sliced.min_steps_during, 2u);   // it stepped while it fused
+    EXPECT_LT(dist3(task_sliced.r_end, here.r_end), 1.0);
+    EXPECT_LT(dist3(task_sliced.r_end, here_sliced.r_end), 0.2);
+}
+
+TEST(RawGnssShadow, BuiltInAGnssTaskAJumpedSatelliteGoesBackToItsStage)
+{
+    // TakesASatelliteWhoseCodeJumpedAsRelocked, with the epochs built in the
+    // GNSS task: the satellite the filter's check finds jumped comes back to
+    // that task's stage (takeRelock), which takes it as relocked for the
+    // epochs after; the filter widens it at once as before.
+    std::vector<TimedRawEpoch> epochs = goldenEpochs();
+    RawGnssShadow::Config cfg = everyTick();
+    cfg.external_build = true;
+    auto run = [&](int jump_index, RawGnssShadow& sh, gnss_raw::RawGnssMeasStage& stage) {
+        std::vector<TimedRawEpoch> es = goldenEpochs();
+        gnss_raw::BuiltEpoch built;
+        for (int i = 0; i < kGoldenRmEphN; ++i)
+        {
+            sh.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+            stage.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+        }
+        sh.onSeed(goldenSeed(kT0, false));
+        feedStill(sh, kT0, kT0 + 5000);
+        runGoldenBuilt(sh, stage, es, 0, built);
+        if (jump_index >= 0)
+            es[1].epoch.obs[jump_index].pr_m += 40.0;
+        runGoldenBuilt(sh, stage, es, 1, built);
+    };
+    RawGnssShadow ref(cfg);
+    gnss_raw::RawGnssMeasStage ref_stage(RawGnssShadow::stageConfig(cfg));
+    run(-1, ref, ref_stage);
+    const int base = ref.stats().last_sats_jumped;
+    gnss_raw::ShadowRelock r;
+    int base_marks = 0;
+    while (ref.takeRelock(r))
+        base_marks++;
+    EXPECT_EQ(base_marks, base);
+    int target = -1;
+    for (int i = 0; i < epochs[1].epoch.n && target < 0; ++i)
+    {
+        const gnss_raw::RawObs& o = epochs[1].epoch.obs[i];
+        if (!o.has_pr || o.sys > GNSS_SYS_BDS)
+            continue;
+        bool in_first = false;
+        for (int j = 0; j < epochs[0].epoch.n; ++j)
+            in_first |= epochs[0].epoch.obs[j].sys == o.sys && epochs[0].epoch.obs[j].prn == o.prn;
+        if (in_first && ref_stage.builder().relockAge(o.sys, o.prn, kGoldenRmTowB) > 0.5)
+            target = i;
+    }
+    ASSERT_GE(target, 0);
+    RawGnssShadow sh(cfg);
+    gnss_raw::RawGnssMeasStage stage(RawGnssShadow::stageConfig(cfg));
+    run(target, sh, stage);
+    const gnss_raw::RawObs& o = epochs[1].epoch.obs[target];
+    EXPECT_EQ(sh.stats().last_sats_jumped, base + 1);
+    EXPECT_GT(stage.builder().relockAge(o.sys, o.prn, kGoldenRmTowB), 0.5);   // not yet told
+    bool marked = false;
+    while (sh.takeRelock(r))
+    {
+        marked |= r.sys == o.sys && r.prn == o.prn && r.tow_s == kGoldenRmTowB;
+        stage.markRelock(r.sys, r.prn, r.tow_s);
+    }
+    EXPECT_TRUE(marked);
+    EXPECT_EQ(stage.builder().relockAge(o.sys, o.prn, kGoldenRmTowB), 0.0);
+    EXPECT_EQ(sh.builder().relockAge(o.sys, o.prn, kGoldenRmTowB), 0.0)
+        << "the shadow's own stage builds nothing here";
+}
+
+TEST(RawGnssShadow, ABuiltEpochIsHeldAndDroppedAsARawEpochIs)
+{
+    // Built in the GNSS task, an epoch waits for the IMU to pass its instant
+    // as a raw one does: one for a filter not running, one the IMU passed
+    // more than max_epoch_age_s ago, and the oldest of three waiting are
+    // dropped as stale. And each path takes only its own kind of epoch.
+    RawGnssShadow::Config cfg = everyTick();
+    cfg.external_build = true;
+    RawGnssShadow sh(cfg);
+    gnss_raw::BuiltEpoch b;                   // no satellites: a job of a check, the clock and the close
+    b.mcu_us = kT0 + 100000;
+    sh.onBuilt(b);
+    EXPECT_EQ(sh.stats().epochs_stale, 1u);   // not running
+    sh.onSeed(padSeed(kT0));
+    feedStill(sh, kT0, kT0 + 50000);
+    ASSERT_TRUE(sh.running());
+    TimedRawEpoch raw;
+    raw.mcu_us = kT0 + 60000;
+    sh.onEpoch(raw);                          // a raw epoch: not this path's
+    EXPECT_EQ(sh.stats().epochs, 0u);
+    // the IMU is at kT0 + 45 ms: an epoch a second old is stale when taken
+    b.mcu_us = kT0 + 45000 - 1000000;
+    sh.onBuilt(b);
+    feedStill(sh, kT0 + 50000, kT0 + 55000);
+    EXPECT_EQ(sh.stats().epochs_stale, 2u);
+    EXPECT_EQ(sh.stats().epochs_applied, 0u);
+    // three ahead of the IMU: the oldest goes, the two after are applied
+    for (int k = 0; k < 3; ++k)
+    {
+        b.mcu_us = kT0 + 100000 + k * 10000;
+        sh.onBuilt(b);
+    }
+    EXPECT_EQ(sh.stats().epochs_stale, 3u);
+    feedStill(sh, kT0 + 55000, kT0 + 200000);
+    EXPECT_EQ(sh.stats().epochs_applied, 2u);
+    EXPECT_EQ(sh.stats().last_tow_ms, 0u);
+
+    RawGnssShadow inline_sh(everyTick());     // builds its own: takes no built epoch
+    inline_sh.onSeed(padSeed(kT0));
+    feedStill(inline_sh, kT0, kT0 + 50000);
+    b.mcu_us = kT0 + 60000;
+    inline_sh.onBuilt(b);
+    feedStill(inline_sh, kT0 + 50000, kT0 + 100000);
+    EXPECT_EQ(inline_sh.stats().epochs_applied, 0u);
+    EXPECT_EQ(inline_sh.stats().epochs_stale, 0u);
+}
+
+TEST(RawGnssShadow, BuiltInAGnssTaskItKeepsTheEphemeridesForThePadContextOnly)
+{
+    // The GNSS task's stage decodes the ephemerides; the filter still takes
+    // each as the receiver sent it, for the pad context, and decodes none.
+    RawGnssShadow::Config cfg;
+    cfg.external_build = true;
+    RawGnssShadow sh(cfg);
+    for (int i = 0; i < kGoldenRmEphN; ++i)
+        sh.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+    EXPECT_EQ(sh.ephemerisFrames().count(), kGoldenRmEphN);
+    EXPECT_EQ(sh.ephemerides().satellites(GNSS_SYS_GPS), 0);
+    EXPECT_EQ(sh.ephemerisSatellites(), 0);
+    gnss_raw::ShadowMeasStats ms{};
+    ms.eph_sats = 9;
+    ms.tracked = 12;
+    ms.tracked_no_eph = 3;
+    ms.iono_age_known = 1;
+    ms.iono_age_days = -45;
+    sh.onMeasStats(ms);
+    EXPECT_EQ(sh.ephemerisSatellites(), 9);
+    EXPECT_EQ(sh.stats().tracked_no_eph, 3);
+    int age = 0;
+    EXPECT_TRUE(sh.ionoAgeDays(age));
+    EXPECT_EQ(age, -45);
+    gnss_raw::ShadowPadStatus ps;
+    sh.padStatus(ps);
+    EXPECT_EQ(ps.tracked, 12);
+    EXPECT_EQ(ps.no_eph, 3);
+}
+
+TEST(RawGnssShadow, ItsNavStateSaysWhetherItIsInFlight)
+{
+    // The GNSS task keeps its ionosphere through the flight on this flag.
+    RawGnssShadow sh(everyTick());
+    sh.onSeed(padSeed(kT0));
+    feedStill(sh, kT0, kT0 + 20000);
+    gnss_raw::ShadowNav nav;
+    sh.navState(nav);
+    EXPECT_EQ(nav.running, 1);
+    EXPECT_EQ(nav.in_flight, 0);
+    feedStill(sh, kT0 + 20000, kT0 + 40000, gnss_raw::kShadowLevel | gnss_raw::kShadowInFlight);
+    sh.navState(nav);
+    EXPECT_EQ(nav.in_flight, 1);
 }

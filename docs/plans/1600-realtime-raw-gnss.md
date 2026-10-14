@@ -337,6 +337,19 @@ V9 keeps GpsInsEKF on the SAM-M10Q's fix.
   - **On the rig (r15)** the oldest state the loop read was 12-15 ms old in every phase. That remainder is the IMU's own
     delivery, which GpsInsEKF in the loop had too. The logged navigation state matched the filter's own accuracy.
   - **A state 0.2 s old is not healthy**, even if the filter's task republishes it every pass (#1626 N4).
+- **Each epoch is built in a GNSS task of its own** (#1626): `RawGnssMeasStage`, on core 0 at priority 0, so it runs
+  only while the filter's task sleeps.
+  - The build is about two-thirds of an epoch's cost (~2 ms a satellite). It needs only a rough receiver position,
+    which the task takes from the filter's published state.
+  - The filter takes each epoch built (two can wait, in PSRAM) and fuses it a slice a step: the satellite checks, the
+    pad survey, the clock, each satellite, the close.
+  - The satellites the checks find jumped go back to the task's builder. The ephemerides it decodes come on to the
+    filter's task for the pad context.
+  - On the golden epochs the split fuses what the filter did alone, bit for bit at once. Sliced, it needs 9 slices
+    for two epochs against 16.
+  - On the rig (r14) it changed neither the state's age nor how soon an epoch is fused, at the LC86G's 1 Hz: the build
+    had been sliced already, and at priority 0 it takes 65-190 ms of wall time. It is the pipeline a 10-20 Hz
+    receiver needs, with the filter's per-epoch work a third of what it was.
 
 **Logging:** the receiver's 10 Hz fix is still logged (GNSS_MSG), as are the raw filter's 10 Hz record (0x96) and the
 checks (0x9A).
