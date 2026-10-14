@@ -95,7 +95,7 @@ public:
     static constexpr double kG         = 9.807;   // the flight filter's G_NOMINAL
 
     HeadingFit() : HeadingFit(Config()) {}
-    explicit HeadingFit(const Config& c);
+    explicit HeadingFit(const Config& c) : cfg_(c) {}
     void setConfig(const Config& c) { cfg_ = c; }
     const Config& config() const { return cfg_; }
 

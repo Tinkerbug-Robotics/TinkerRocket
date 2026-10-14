@@ -1102,6 +1102,8 @@ void RawGnssShadow::jobHeadingFit()
     d.n_cut = static_cast<uint8_t>(res.n_cut > 255 ? 255 : res.n_cut);
     d.sats = static_cast<uint8_t>(used > 255 ? 255 : used);
     const bool rival = res.ok && res.rival >= 0.0 && res.rival < cfg_.heading_handoff_rival;
+    if (rival)
+        st_.heading_rivals++;
     d.flags = static_cast<uint8_t>((act ? HFT_ACT : 0) | (res.ok ? HFT_SOLVED : 0) | (handed_ ? HFT_HANDED : 0) |
                                    (rival ? HFT_RIVAL : 0));
     d.vel_us = sat16(static_cast<double>(st_.heading_vel_us));

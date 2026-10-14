@@ -3151,13 +3151,32 @@ static void rawShadowTask(void*)
     // velocity by satellites, the fit by epochs (HeadingFitBench.h). A few
     // seconds of it; it yields after each line (the full-grid reference holds
     // the core up to a second a line) so this core's idle task keeps its
-    // watchdog fed.
-    gnss_raw::bench::run([]() -> int64_t { return esp_timer_get_time(); },
-                         [](const char* line) {
-                             ESP_LOGI(TAG, "[RAWGNSS] %s", line);
-                             vTaskDelay(1);
-                         },
-                         20, 1.0);
+    // watchdog fed. Its 19 kB of working storage is lent from PSRAM, where
+    // the shadow's own fit lives, and given back: kept in internal RAM it
+    // left the flight task no room to start (rig r17).
+    {
+        void* fit_mem = heap_caps_malloc(sizeof(gnss_raw::HeadingFit), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        void* meas_mem = heap_caps_malloc(sizeof(gnss_raw::RawMeas) * gnss_raw::RawEpoch::kMaxObs,
+                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (fit_mem != nullptr && meas_mem != nullptr)
+        {
+            gnss_raw::HeadingFit* fit = new (fit_mem) gnss_raw::HeadingFit();
+            gnss_raw::bench::run(*fit, static_cast<gnss_raw::RawMeas*>(meas_mem),
+                                 []() -> int64_t { return esp_timer_get_time(); },
+                                 [](const char* line) {
+                                     ESP_LOGI(TAG, "[RAWGNSS] %s", line);
+                                     vTaskDelay(1);
+                                 },
+                                 20, 1.0);
+            fit->~HeadingFit();
+        }
+        else
+        {
+            ESP_LOGE(TAG, "[RAWGNSS] heading fit bench: no PSRAM for its storage -- not run");
+        }
+        heap_caps_free(fit_mem);
+        heap_caps_free(meas_mem);
+    }
 #endif
     gnss_raw::RawGnssShadow& sh = *raw_shadow;
     sh.setClock(&rawShadowClock);
@@ -3346,13 +3365,14 @@ static void rawShadowTask(void*)
             {
                 const gnss_raw::HeadingFit::Result& hr = st.heading_last;
                 ESP_LOGI(TAG, "[RAWGNSS] heading fit (%s): seeds %lu, flights %lu, epochs %lu (no velocity %lu) | "
-                              "last: turn %+.1f deg, 1-sigma %.1f deg, %d epochs (%d cut) | handed %lu (%+.1f deg at "
-                              "T+%.1f s) | cost: velocity %lu us (max %lu), fit %lu us (max %lu), step max %lu us | "
-                              "task stack %u B unused",
+                              "last: turn %+.1f deg, 1-sigma %.1f deg, %d epochs (%d cut), rivals %lu | handed %lu "
+                              "(%+.1f deg at T+%.1f s) | cost: velocity %lu us (max %lu), fit %lu us (max %lu), step "
+                              "max %lu us | task stack %u B unused",
                          TR_HEADING_FIT == 2 ? "act" : "observe", (unsigned long)st.heading_seeds,
                          (unsigned long)st.heading_flights, (unsigned long)st.heading_epochs,
                          (unsigned long)st.heading_vel_fails, hr.psi * 57.29578, hr.sigma > 0.0 ? hr.sigma * 57.29578 : -1.0,
-                         hr.n, hr.n_cut, (unsigned long)st.heading_handoffs, (double)st.heading_turn_deg,
+                         hr.n, hr.n_cut, (unsigned long)st.heading_rivals, (unsigned long)st.heading_handoffs,
+                         (double)st.heading_turn_deg,
                          (double)st.heading_handoff_s, (unsigned long)st.heading_vel_us,
                          (unsigned long)st.heading_vel_us_max, (unsigned long)st.heading_solve_us,
                          (unsigned long)st.heading_solve_us_max, (unsigned long)st.heading_step_us_max,

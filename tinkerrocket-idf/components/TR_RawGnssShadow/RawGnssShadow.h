@@ -267,6 +267,7 @@ public:
         uint32_t heading_epochs = 0;       // epochs it took
         uint32_t heading_vel_fails = 0;    //   with no Doppler velocity (too few satellites agreeing)
         uint32_t heading_handoffs = 0;     // headings handed over
+        uint32_t heading_rivals = 0;       // fits another heading's valley came within heading_handoff_rival of
         float    heading_turn_deg = 0.0f;  //   the last one's turn
         float    heading_handoff_s = 0.0f; //   and when, after launch
         HeadingFit::Result heading_last;   // the last fit

@@ -125,14 +125,13 @@ inline double fly(HeadingFit& fit, int epochs, Clock clock)
 
 // The bench: one line a measurement through print, in microseconds (the
 // clock's ticks over ticks_per_us). reps: how often each is timed (the mean
-// is printed, and the worst).
-inline void run(Clock clock, Print print, int reps = 20, double ticks_per_us = 1.0)
+// is printed, and the worst). fit and m (RawEpoch::kMaxObs of them) are its
+// working storage, 19 kB, more than a task's stack: the flight computer
+// lends it PSRAM, where the shadow's own fit lives, and takes it back after.
+inline void run(HeadingFit& fit, RawMeas* m, Clock clock, Print print, int reps = 20, double ticks_per_us = 1.0)
 {
     char line[200];
     const double k_us = 1.0 / ticks_per_us;
-    // its objects are static: a fit is 12 kB, more than a task's stack
-    static HeadingFit fit;
-    static RawMeas m[RawEpoch::kMaxObs];
     // the fit's step
     {
         fit.reset();

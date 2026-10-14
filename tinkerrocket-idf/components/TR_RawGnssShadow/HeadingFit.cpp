@@ -19,27 +19,73 @@ inline double gridAngle(int k)
     return -kPi + static_cast<double>(k) * kStep;
 }
 
-// The grid's turns, once (HeadingFit's constructor: libm's doubles are
-// software on the ESP32-S3, a few thousand instructions a call): cos and sin
-// of one step and of a coarse stride, and of each coarse point.
+// cos and sin by their series, at compile time: |x| <= pi/4, to double's
+// rounding (the next term is under 1e-26)
+struct CS
+{
+    double c, s;
+};
+constexpr CS seriesCS(double x)
+{
+    const double x2 = x * x;
+    double c = 1.0, s = x, tc = 1.0, ts = x;
+    for (int k = 1; k <= 12; ++k)
+    {
+        tc *= -x2 / static_cast<double>((2 * k - 1) * (2 * k));
+        ts *= -x2 / static_cast<double>((2 * k) * (2 * k + 1));
+        c += tc;
+        s += ts;
+    }
+    return {c, s};
+}
+
+// cos and sin of h half-degrees: reduced exactly to the nearest quarter turn
+constexpr CS halfDegreesCS(int h)
+{
+    const int q = (h >= 0 ? h + 90 : h - 90) / 180;
+    const CS v = seriesCS(static_cast<double>(h - 180 * q) * (kPi / 360.0));
+    switch (((q % 4) + 4) % 4)
+    {
+    case 0: return {v.c, v.s};
+    case 1: return {-v.s, v.c};
+    case 2: return {-v.c, -v.s};
+    default: return {v.s, -v.c};
+    }
+}
+
+// The grid's turns: cos and sin of one step and of a coarse stride, and of
+// each coarse point. Built by the compiler, so it sits in flash: no libm
+// doubles (software on the ESP32-S3) and no internal RAM.
 struct Turns
 {
     double c1, s1, cK, sK;
     double cc[HeadingFit::kGrid / kCoarse], sc[HeadingFit::kGrid / kCoarse];
-    Turns() : c1(std::cos(kStep)), s1(std::sin(kStep)), cK(std::cos(kCoarse * kStep)), sK(std::sin(kCoarse * kStep))
-    {
-        for (int j = 0; j < HeadingFit::kGrid / kCoarse; ++j)
-        {
-            cc[j] = std::cos(gridAngle(j * kCoarse));
-            sc[j] = std::sin(gridAngle(j * kCoarse));
-        }
-    }
 };
-const Turns& turns()
+constexpr Turns makeTurns()
 {
-    static const Turns t;
+    Turns t{};
+    const CS one = seriesCS(kStep), stride = seriesCS(kCoarse * kStep);
+    t.c1 = one.c;
+    t.s1 = one.s;
+    t.cK = stride.c;
+    t.sK = stride.s;
+    for (int j = 0; j < HeadingFit::kGrid / kCoarse; ++j)
+    {
+        const CS v = halfDegreesCS(-360 + 5 * j);     // -180 deg + 2.5 j
+        t.cc[j] = v.c;
+        t.sc[j] = v.s;
+    }
     return t;
 }
+constexpr Turns kTurns = makeTurns();
+// the quarter turns exactly, and one between them to rounding
+static_assert(kTurns.cc[0] == -1.0 && kTurns.sc[0] == 0.0, "-180 deg");
+static_assert(kTurns.cc[36] == 0.0 && kTurns.sc[36] == -1.0, "-90 deg");
+static_assert(kTurns.cc[72] == 1.0 && kTurns.sc[72] == 0.0, "0 deg");
+static_assert(kTurns.cc[108] == 0.0 && kTurns.sc[108] == 1.0, "90 deg");
+static_assert(kTurns.cc[18] + 0.70710678118654752 < 1e-15 && kTurns.cc[18] + 0.70710678118654752 > -1e-15 &&
+                  kTurns.sc[18] + 0.70710678118654752 < 1e-15 && kTurns.sc[18] + 0.70710678118654752 > -1e-15,
+              "-135 deg");
 
 // (c, s) of an angle turned by (cd, sd)
 inline void turn(double& c, double& s, double cd, double sd)
@@ -191,11 +237,6 @@ bool invert4(const T A[4][4], T Ai[4][4])
 }
 
 }  // namespace
-
-HeadingFit::HeadingFit(const Config& c) : cfg_(c)
-{
-    turns();
-}
 
 void HeadingFit::reset()
 {
@@ -421,7 +462,7 @@ bool HeadingFit::fit(const Sums& sums, bool full_grid, Result& r, double cs[2]) 
         return false;
     Profile p;
     profile(sums, p);
-    const Turns& tr = turns();
+    const Turns& tr = kTurns;
     int evals = 0;
 
     // the grid's minimum (i; ci, si its cos and sin), and the profile's other

@@ -26,6 +26,8 @@ void out(const char* line)
 
 int main()
 {
-    gnss_raw::bench::run(nowNs, out, 200, 1000.0);
+    static gnss_raw::HeadingFit fit;
+    static gnss_raw::RawMeas m[gnss_raw::RawEpoch::kMaxObs];
+    gnss_raw::bench::run(fit, m, nowNs, out, 200, 1000.0);
     return 0;
 }
