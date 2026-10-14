@@ -53,8 +53,10 @@ For how it works, see "The rig replay" in [docs/plans/1600-realtime-raw-gnss.md]
 6. **Score it:**
    ```
    python3 tools/rig_replay/score_console.py rig_runs/run_r1/fc_console.log
-   python3 tools/rig_replay/score_log.py OUTDIR/flight_YYYYMMDD_HHMMSS.bin
+   python3 tools/rig_replay/score_log.py OUTDIR/flight_YYYYMMDD_HHMMSS.bin --blob /abs/path/sim_replay.bin
    ```
+   - `--blob` is the replay file the image was built with: the log's clock is put on the flight's time by where its accelerometer crosses 20 m/s² at ignition. Without it, that edge is worked out from the flight's CSV as `sim_replay_blob.py` writes it with its default `--from`.
+   - Another flight: `--flight sim_<id>`, or `--csv` and `--scenario`.
 7. **Put a flight image back on the FC.** The replay image is for the bench only.
 
 ## Reading the results

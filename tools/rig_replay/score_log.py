@@ -4,11 +4,13 @@ the raw-GNSS filter's records (0x96), the navigation state the flight computer
 logs (NonSensor), the receiver's own fixes (GNSS) and the physics checks (0x9A)
 -- is each flagged fix really off, and does any badly-off fix pass?
 
-    score_log.py OC_LOG [--flight sim_rp5_0829 | --csv SENSORS_CSV --scenario JSON] [--npz OUT]
+    score_log.py OC_LOG [--flight sim_rp5_0829 | --csv SENSORS_CSV --scenario JSON] [--blob REPLAY.bin] [--npz OUT]
 
 The log's MCU clock is put on the flight's time by the ignition edge in the
-replayed accelerometer: the replay blob's 500 Hz pairs cross 20 m/s^2 at
-t = +3.56 ms. Heights: the raw filter's are ellipsoidal, scored as they are;
+replayed accelerometer: where the replay file's 500 Hz pairs cross 20 m/s^2
+(rp5_0829's at t = +3.56 ms). Give --blob the file the replay image was built
+with; without it the edge is worked out from the flight's CSV as
+sim_replay_blob.py writes it with its default --from. Heights: the raw filter's are ellipsoidal, scored as they are;
 the receiver's are above the geoid, so its median offset on the pad is
 removed (and printed); NonSensor's ENU is from the flight computer's own pad
 reference.
@@ -24,9 +26,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "..", "Data_Analysis"))
 import plot_flight_data_mini as P  # noqa: E402
-from truth import Truth, flight_files  # noqa: E402
-
-EDGE_T = 0.003555          # s: the blob's ignition edge crossing 20 m/s^2
+from truth import EDGE_MPS2, Truth, edge_t, flight_files  # noqa: E402
 
 
 def unwrap_us(arr):
@@ -58,10 +58,13 @@ def main():
     ap.add_argument("--flight", default="sim_rp5_0829", help="its files under $COCOM_SDR/scenarios")
     ap.add_argument("--csv", help="the sensors CSV, if not the flight's")
     ap.add_argument("--scenario", help="the scenario JSON, if not the flight's")
+    ap.add_argument("--blob", help="the replay file the image carried (its ignition edge)")
     ap.add_argument("--npz", help="write the error series here")
     args = ap.parse_args()
     csv, scen = flight_files(args.flight)
-    tr = Truth(args.csv or csv, args.scenario or scen)
+    csv, scen = args.csv or csv, args.scenario or scen
+    tr = Truth(csv, scen)
+    edge = edge_t(csv, scen, args.blob)
 
     recs, _stats, _cfg = P.parse_binary_file(args.log)
     print({k: len(v) for k, v in recs.items() if v})
@@ -73,11 +76,11 @@ def main():
     hi = np.array([[r["high_acc_x"], r["high_acc_y"], r["high_acc_z"]] for r in imu])
     near_rail = np.array([r["low_g_near_rail"] for r in imu])
     amag = np.where(near_rail, np.linalg.norm(hi, axis=1), np.linalg.norm(lo, axis=1))
-    first = int(np.argmax(amag > 20.0))
+    first = int(np.argmax(amag > EDGE_MPS2))
     k = first - 1
-    t_cross = it[k] + (20.0 - amag[k]) / (amag[first] - amag[k]) * (it[first] - it[k])
-    base = EDGE_T - t_cross
-    print(f"time map: t = MCU s {base:+.4f}, from the ignition edge")
+    t_cross = it[k] + (EDGE_MPS2 - amag[k]) / (amag[first] - amag[k]) * (it[first] - it[k])
+    base = edge - t_cross
+    print(f"time map: t = MCU s {base:+.4f}, from the ignition edge (the replay's at t = {edge * 1e3:+.3f} ms)")
 
     # ---- the raw-GNSS filter's records
     sh = recs["RawGnssEkf"]

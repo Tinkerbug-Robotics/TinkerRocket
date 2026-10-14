@@ -12,12 +12,18 @@ import gzip
 import json
 import math
 import os
+import struct
 import subprocess
+import sys
 
 import numpy as np
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import sim_replay_blob as srb  # noqa: E402
+
 A, E2 = 6378137.0, 0.0066943799901          # WGS84
 PHASES = ("pad", "rail", "boost", "coast", "drogue", "main", "landed")
+EDGE_MPS2 = 20.0                            # the ignition edge: specific force crossing this
 
 
 def cocom_sdr():
@@ -34,6 +40,34 @@ def flight_files(flight):
     scen = os.path.join(cocom_sdr(), "scenarios")
     return (os.path.join(scen, f"{flight}_sensors.csv.gz"),
             os.path.join(scen, f"real_{flight}_sky3d_pad180.json"))
+
+
+def blob_edge_t(blob, level=EDGE_MPS2):
+    """When (s from ignition) a replay file's specific force first crosses level, linearly between its 500 Hz
+    pairs: the ignition edge the flight computer plays, which the scorers put the log's MCU clock on."""
+    hdr = struct.unpack_from(srb.HEADER_FMT, blob, 0)
+    rate, n, t0, acc_lsb = hdr[4], hdr[5], hdr[6], hdr[13]
+    f = np.frombuffer(blob, dtype="<i2", count=n * srb.SAMPLE_BYTES // 2,
+                      offset=srb.HEADER_BYTES).reshape(n, -1)[:, 0:3]
+    amag = np.linalg.norm(f * float(acc_lsb), axis=1)
+    first = int(np.argmax(amag > level))
+    if first == 0:
+        raise ValueError(f"the replay's specific force never crosses {level} m/s^2 from below")
+    k = first - 1
+    return t0 + (k + (level - amag[k]) / (amag[first] - amag[k])) / rate
+
+
+def edge_t(csv_path, scenario_path, blob_path=None, **build_kw):
+    """The flight's ignition edge as its replay file plays it: that file's, or the one sim_replay_blob.py writes
+    from the CSV (by default with its default --from: where the pairs start moves the edge by up to a
+    millisecond)."""
+    if blob_path:
+        with open(blob_path, "rb") as f:
+            return blob_edge_t(f.read())
+    with open(scenario_path) as f:
+        scen = json.load(f)
+    blob, _ = srb.build(srb.read_csv(csv_path), scen, **build_kw)
+    return blob_edge_t(blob)
 
 
 class Truth:

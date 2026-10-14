@@ -4,7 +4,7 @@
 static-port sigma (baro_port_k * q, from the truth's speed and the vertical
 speed alone), to see when the filter should hold it out (#1600; #1579's term).
 
-    baro_port_check.py OC_LOG [--flight sim_rp5_0829 | --csv SENSORS_CSV]
+    baro_port_check.py OC_LOG [--flight sim_rp5_0829 | --csv SENSORS_CSV --scenario JSON] [--blob REPLAY.bin]
 """
 import argparse
 import os
@@ -16,8 +16,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "..", "Data_Analysis"))
 import plot_flight_data_mini as P  # noqa: E402
-from score_log import EDGE_T, unwrap_us  # noqa: E402
-from truth import Truth, flight_files  # noqa: E402
+from score_log import unwrap_us  # noqa: E402
+from truth import EDGE_MPS2, Truth, edge_t, flight_files  # noqa: E402
 
 PORT_K = 0.0075            # m per Pa: RawGnssShadow::Config::baro_port_k
 HOLD_M = 2.0               #   baro_hold_port_m
@@ -28,17 +28,22 @@ def main():
     ap.add_argument("log")
     ap.add_argument("--flight", default="sim_rp5_0829")
     ap.add_argument("--csv")
+    ap.add_argument("--scenario")
+    ap.add_argument("--blob", help="the replay file the image carried (its ignition edge)")
     args = ap.parse_args()
-    tr = Truth(args.csv or flight_files(args.flight)[0])
+    csv, scen = flight_files(args.flight)
+    csv, scen = args.csv or csv, args.scenario or scen
+    tr = Truth(csv)
+    edge = edge_t(csv, scen, args.blob)
     recs, _s, _c = P.parse_binary_file(args.log)
 
     imu = recs["ISM6HG256"]
     it = unwrap_us([r["time_us"] for r in imu]) * 1e-6
     lo = np.array([[r["low_acc_x"], r["low_acc_y"], r["low_acc_z"]] for r in imu])
     amag = np.linalg.norm(lo, axis=1)
-    first = int(np.argmax(amag > 20.0))
+    first = int(np.argmax(amag > EDGE_MPS2))
     k = first - 1
-    base = EDGE_T - (it[k] + (20.0 - amag[k]) / (amag[first] - amag[k]) * (it[first] - it[k]))
+    base = edge - (it[k] + (EDGE_MPS2 - amag[k]) / (amag[first] - amag[k]) * (it[first] - it[k]))
 
     b = recs["BMP585"]
     bt = unwrap_us([r["time_us"] for r in b]) * 1e-6 + base
