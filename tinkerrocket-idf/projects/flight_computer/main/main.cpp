@@ -6761,6 +6761,18 @@ static void loop_fc()
                            SIZE_OF_BMP585_DATA);
     }
 
+    // The IMU's die temperature, once a second (IMU_TEMP_MSG): from the
+    // hardware collector, as the chip is real whatever a sensor sim feeds the
+    // filter. Log-only.
+    {
+        Ism6TempData imu_temp;
+        if (sensor_collector_hw.getIsm6Temperature(imu_temp))
+        {
+            (void)enqueueI2STx(IMU_TEMP_MSG, reinterpret_cast<const uint8_t*>(&imu_temp),
+                               sizeof(imu_temp));
+        }
+    }
+
     if (sensor_collector.getMMC5983MAData(mmc5983ma_data))
     {
         dbg_mmc_reads++;

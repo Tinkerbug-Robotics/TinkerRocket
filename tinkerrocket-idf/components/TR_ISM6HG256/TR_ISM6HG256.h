@@ -50,6 +50,9 @@ public:
     // The chip's own oscillator error: the effective ODR is the typical one
     // times (1 + 0.0013 * freq_fine). ST trims each part and records it here.
     TR_ISM6HG256Status ReadOdrTrim(int8_t *freq_fine);
+    // The die temperature: OUT_TEMP_L/H in one burst (BDU), 256 LSB per degC,
+    // 0 at 25 degC. An output register: reading it leaves the FIFO alone.
+    TR_ISM6HG256Status ReadTemperatureRaw(int16_t *raw);
 
     TR_ISM6HG256Status Set_X_OutputDataRate(float Odr);
     TR_ISM6HG256Status Set_HG_X_OutputDataRate(float Odr);

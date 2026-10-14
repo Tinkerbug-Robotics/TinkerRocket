@@ -159,6 +159,7 @@ MSG_RAW_GNSS_EKF      = 0x96  # RawGnssEkfData: the raw-GNSS shadow filter, 10 H
 MSG_PAD_CAL_STATUS    = 0x99  # PadCalStatusData: the pad calibration's progress, 1 Hz on the ground (#1600 phase 5)
 MSG_GNSS_CHECK        = 0x9A  # GnssCheckData: each receiver fix against the IMU, 10 Hz (#1508)
 MSG_RAW_GNSS_ATT      = 0x9B  # RawGnssAttData: the raw-GNSS filter's attitude 1-sigma and IMU biases, 10 Hz
+MSG_IMU_TEMP          = 0x9C  # Ism6TempData: the IMU's die temperature, 1 Hz
 MSG_ISM6HG256         = 0xA2
 MSG_BMP585            = 0xA3
 MSG_MMC5983MA         = 0xA4
@@ -202,6 +203,7 @@ MSG_NAMES = {
     MSG_PAD_CAL_STATUS:   "PadCalStatus",
     MSG_GNSS_CHECK:       "GnssCheck",
     MSG_RAW_GNSS_ATT:     "RawGnssAtt",
+    MSG_IMU_TEMP:         "ImuTemp",
     MSG_ISM6HG256:        "ISM6HG256",
     MSG_BMP585:           "BMP585",
     MSG_MMC5983MA:        "MMC5983MA",
@@ -231,6 +233,7 @@ MSG_EXPECTED_LEN = {
     MSG_PAD_CAL_STATUS:    40,    # sizeof(PadCalStatusData)
     MSG_GNSS_CHECK:        24,    # sizeof(GnssCheckData)
     MSG_RAW_GNSS_ATT:      46,    # sizeof(RawGnssAttData)
+    MSG_IMU_TEMP:           6,    # sizeof(Ism6TempData)
     MSG_ISM6HG256:         22,
     MSG_BMP585:            12,
     MSG_MMC5983MA:         16,
@@ -531,6 +534,21 @@ def decode_raw_gnss_att(payload):
         "gyro_bias_sigma_y_dps": f[14] * 1e-3,
         "gyro_bias_sigma_z_dps": f[15] * 1e-3,
     }
+
+
+# Ism6TempData (IMU_TEMP_MSG 0x9C), 6 bytes packed: the ISM6HG256X's die
+# temperature once a second, as the chip gives it -- 256 LSB per degC, 0 at
+# 25 degC -- for the gyro's bias and scale against temperature.
+FMT_IMU_TEMP = '<I h'
+SIZE_OF_IMU_TEMP = struct.calcsize(FMT_IMU_TEMP)  # 6
+
+
+def decode_imu_temp(payload):
+    """Ism6TempData payload -> record dict (temp_c in degC), or None if the size is wrong."""
+    if len(payload) != SIZE_OF_IMU_TEMP:
+        return None
+    t, raw = struct.unpack(FMT_IMU_TEMP, payload)
+    return {"time_us": t, "temp_raw": raw, "temp_c": 25.0 + raw / 256.0}
 
 
 # GnssCheckData (GNSS_CHECK_MSG 0x9A), 24 bytes packed (#1508): each receiver
@@ -862,6 +880,7 @@ def parse_binary_file(filepath):
         "PadCalStatus":   [],   # 0x99 the pad calibration's progress, 1 Hz on the ground (#1600 phase 5)
         "GnssCheck":      [],   # 0x9A each receiver fix against the IMU, 10 Hz (#1508)
         "RawGnssAtt":     [],   # 0x9B the raw-GNSS filter's attitude 1-sigma and IMU biases, 10 Hz
+        "ImuTemp":        [],   # 0x9C the IMU's die temperature, 1 Hz
         "FcStatus":       [],   # 0x92 FcStatusData (#1154 item 4) — appended below; was never initialised
         "ISM6HG256":      [],
         "BMP585":         [],
@@ -1081,6 +1100,11 @@ def parse_binary_file(filepath):
                 rec = decode_raw_gnss_att(payload)
                 if rec is not None:
                     records["RawGnssAtt"].append(rec)
+
+            elif msg_type == MSG_IMU_TEMP:
+                rec = decode_imu_temp(payload)
+                if rec is not None:
+                    records["ImuTemp"].append(rec)
 
             elif msg_type == MSG_ISM6HG256:
                 fields = struct.unpack(FMT_ISM6, payload)

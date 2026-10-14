@@ -497,12 +497,23 @@ public:
     };
     void getIsm6FifoStats(Ism6FifoStats &out) const;
 
+    // The IMU's die temperature (IMU_TEMP_MSG), read by the poll task once a
+    // second between drains: the latest reading not yet taken.
+    bool getIsm6Temperature(Ism6TempData &data_out);
+
 private:
 
     SemaphoreHandle_t bmp585DataSemaphore;
     SemaphoreHandle_t mmc5983maDataSemaphore;
     SemaphoreHandle_t iis2mdcDataSemaphore;
     SemaphoreHandle_t gnssDataSemaphore;
+
+    // The IMU's die temperature: the poll task reads it once a second (the
+    // only task on SPI2, #475) and leaves it here; getIsm6Temperature takes it.
+    SemaphoreHandle_t ism6TempSemaphore = nullptr;
+    Ism6TempData  ism6_temp_data = {};
+    volatile bool ism6_temp_ready = false;
+    uint32_t      ism6_temp_next_us = 0;     // the next read, poll task only (wrap-safe compare)
 
     // Time-gated polling state for IIS2MDC (no DRDY pin in the poll path).
     // #1111: attempt gate + stall back-off; see iis2mdc_poll_gate.h.
