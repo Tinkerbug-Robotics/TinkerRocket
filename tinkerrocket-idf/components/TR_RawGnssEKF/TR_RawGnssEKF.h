@@ -98,6 +98,12 @@ struct RawGnssEKFParams
     // MSM7, fitted against the rig's truth in boost and coast, 2026-10-12)
     double rr_lag_s       = 0.0555;
     bool   att_gate_cos4  = true;      // false: GNSS corrections reach the attitude in full
+    // GNSS corrections to the attitude about the vertical only (wins over
+    // att_gate_cos4): the heading, and the gyro biases only along the
+    // vertical -- across it they would tilt the attitude later. The tilt
+    // stays the gyro's and the levelling's. For a filter that learns its
+    // heading in flight (the heading fit's hand-off, RawGnssShadow).
+    bool   att_gate_vertical = false;
     // Initial sigmas
     double p0_pos = 10.0, p0_vel = 1.0, p0_att = 0.34906, p0_hdg = 3.14159;
     double p0_abias = 0.981, p0_wbias = 0.01745;
@@ -134,6 +140,9 @@ public:
     explicit RawGnssEKF(const RawGnssEKFParams& p = RawGnssEKFParams());
     void setParams(const RawGnssEKFParams& p);
     const RawGnssEKFParams& params() const { return p_; }
+    // att_gate_vertical, switched in flight (the heading fit's act mode: from
+    // launch -- on the pad nothing sees the heading for GNSS to turn)
+    void setAttGateVertical(bool on) { p_.att_gate_vertical = on; }
 
     // Start at a position (lat, lon rad; ellipsoidal height m), NED velocity
     // and attitude, at filter time t0 (s; any clock the IMU steps share).
@@ -144,6 +153,27 @@ public:
     void setQuaternion(const T q[4]);
     // The gyro bias from a still gyro's mean (the pad seed).
     void seedGyroBias(const T gyro_mean[3]);
+    // The heading's own 1-sigma (rad, a rotation about the vertical), as a
+    // magnetometer or the heading fit hands it over: the attitude's variance
+    // about the vertical set to it, its cross-covariances dropped, the tilt's
+    // kept. (setQuaternion takes the whole attitude as known: right for the
+    // tilt the pad levels, not for a heading a filter must learn in flight.)
+    void setHeadingSigma(T sigma_rad);
+    // Turn the attitude about the vertical (NED down) by dpsi (rad): the
+    // heading grows by dpsi, the tilt is kept.
+    void turnHeading(T dpsi);
+    // The IMU biases and their 6x6 covariance (accelerometer then gyro), in
+    // place of the filter's own, their cross-covariances dropped: a heading
+    // hand-off puts back what the pad left, before a wrong heading leaned on
+    // them in flight.
+    void setBiases(const T ab[3], const T wb[3], const T Pb[6][6]);
+    void biasCovariance(T Pb[6][6]) const;
+    // Let the velocity go: each axis's variance at least sigma^2 (m/s), its
+    // cross-covariances dropped, its value kept.
+    void releaseVelocity(T sigma);
+    // Forget which satellites were refused (reject_persist's count): ones
+    // refused under a wrong heading come back on their own merits.
+    void clearRejects();
 
     // IMU time update: specific force (m/s^2) and rate (rad/s), body FRD.
     void propagate(const T acc[3], const T gyro[3], T dt);
@@ -233,9 +263,11 @@ private:
     void   symmetrize();
     T      hph(const int* hidx, const T* hval, int hn) const;
     // kmask: the states the gain may move (bit i, state i); the rest keep
-    // their estimate and, Joseph form, a consistent covariance.
+    // their estimate and, Joseph form, a consistent covariance. att_axis: the
+    // gain's attitude and gyro-bias rows projected onto this body-frame unit
+    // vector (att_gate_vertical: the vertical).
     int    scalarUpdate(const int* hidx, const T* hval, int hn, T y, T R, T gate, T att,
-                        T dx[N], T* nis, uint32_t kmask = 0xFFFFFFFFu);
+                        T dx[N], T* nis, uint32_t kmask = 0xFFFFFFFFu, const T* att_axis = nullptr);
     void   inject(const T dx[N]);
     T      attGate() const;
     void   pushHistory(T dt, const T a_ned[3]);
@@ -278,6 +310,12 @@ extern template class RawGnssEKF<double>;
 // over the signal's travel: what the pseudorange update predicts, less the
 // receiver's clock (the pad survey's residuals, PadSurvey.h).
 double sagnacRange(const RawMeas& m, const double r[3]);
+// The range rate a receiver still at r (ECEF, m) would see from m's satellite
+// -- its Sagnac-turned velocity along the line of sight, m/s -- and that line
+// of sight (unit, ECEF, receiver to satellite), in double: what a Doppler
+// velocity solve predicts (HeadingFit.h's own, in float, is held to it), and
+// the synthetic skies' Doppler in its tests and bench.
+double stillRangeRate(const RawMeas& m, const double r[3], double u[3]);
 
 }  // namespace gnss_raw
 

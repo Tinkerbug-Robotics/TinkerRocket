@@ -7,6 +7,8 @@
 // gnss repo's tc_ekf_cocom.py, mode ins-cpp, through tinkerrocket_sim._rawgnss.)
 #include <gtest/gtest.h>
 
+#include <array>
+
 #include <cmath>
 #include <vector>
 
@@ -822,5 +824,246 @@ TEST(RawGnssEKF, TheAttitudeSigmaIsAboutNorthEastAndDown)
         EXPECT_LT(s[0], 0.2f * s0[0]) << "north, pitch " << pitch_deg;
         EXPECT_LT(s[1], 0.2f * s0[1]) << "east, pitch " << pitch_deg;
         EXPECT_GT(s[2], 0.8f * s0[2]) << "down (the heading), pitch " << pitch_deg;
+    }
+}
+
+// ---- learning the heading in flight (the heading fit's hand-off, RawGnssShadow)
+
+namespace
+{
+
+// The rotation about NED down that takes attitude b to attitude a (a = Rz b
+// when they differ only in heading), deg, and the tilt left over, deg.
+void headingTilt(const float a[4], const float b[4], double& hdg_deg, double& tilt_deg)
+{
+    const double a0 = a[0], a1 = a[1], a2 = a[2], a3 = a[3];
+    const double b0 = b[0], b1 = -b[1], b2 = -b[2], b3 = -b[3];   // conj(b)
+    const double r0 = a0 * b0 - a1 * b1 - a2 * b2 - a3 * b3;
+    const double r3 = a0 * b3 + a1 * b2 - a2 * b1 + a3 * b0;
+    const double n = std::sqrt(r0 * r0 + r3 * r3);
+    hdg_deg = 2.0 * std::atan2(r3, r0) * 180.0 / kPi;
+    hdg_deg = std::fmod(hdg_deg + 540.0, 360.0) - 180.0;
+    tilt_deg = 2.0 * std::acos(std::min(1.0, n)) * 180.0 / kPi;    // the swing's angle
+}
+
+// A level body from rest, accelerating each second at a[s] (NED, m/s^2):
+// the filter on its IMU and, each second, the sky measured where the body
+// truly is. A heading error is told from an accelerometer bias only once the
+// push turns.
+template <typename T>
+void flyLevel(RawGnssEKF<T>& f, const std::vector<std::array<double, 3>>& a, Clock& clk)
+{
+    const auto sky = makeSky(kLla0);
+    double r0[3];
+    geo_to_ecef(kLla0[0], kLla0[1], kLla0[2], r0);
+    double p_ned[3] = {}, v_ned[3] = {};
+    for (const auto& as : a)
+    {
+        imuSecond(f, as.data());
+        clk.tick(1.0);
+        double dp[3], dv[3], r[3], v[3];
+        for (int k = 0; k < 3; ++k)
+        {
+            p_ned[k] += v_ned[k] + 0.5 * as[k];
+            v_ned[k] += as[k];
+        }
+        nedToEcef(kLla0[0], kLla0[1], p_ned, dp);
+        nedToEcef(kLla0[0], kLla0[1], v_ned, dv);
+        for (int k = 0; k < 3; ++k)
+        {
+            r[k] = r0[k] + dp[k];
+            v[k] = dv[k];
+        }
+        const auto m = measure(sky, r, v, clk);
+        f.updateGnssRaw(m.data(), static_cast<int>(m.size()));
+    }
+}
+
+}  // namespace
+
+TEST(RawGnssEKF, TheVerticalGateLearnsTheHeadingAndLeavesTheTilt)
+{
+    // A level body pushed north-east, its filter 20 deg off in heading and
+    // handed that heading with a 30 deg sigma: GNSS turns the heading in and,
+    // through the vertical gate, nothing else of the attitude -- the tilt the
+    // pad levelled stays exactly, and the gyro bias moves only along the vertical.
+    for (bool gate : {true, false})
+    {
+        RawGnssEKFParams p = quietParams();
+        p.att_gate_vertical = gate;
+        RawGnssEKF<double> f(p);
+        float qf[4];
+        quatYawPitch(20.0 * kPi / 180.0, 0.0, qf);
+        const double q[4] = {qf[0], qf[1], qf[2], qf[3]};
+        const double v0[3] = {0.0, 0.0, 0.0};
+        f.init(kLla0, v0, q, 0.0);
+        f.setQuaternion(q);
+        f.setHeadingSigma(30.0 * kPi / 180.0);
+        Clock clk;
+        std::vector<std::array<double, 3>> a(12, std::array<double, 3>{2.0, 0.0, 0.0});
+        for (int s = 4; s < 8; ++s)
+            a[s] = {0.0, 2.0, 0.0};
+        for (int s = 8; s < 12; ++s)
+            a[s] = {-2.0, 1.0, 0.0};
+        flyLevel(f, a, clk);
+        const float qn[4] = {float(f.quat()[0]), float(f.quat()[1]), float(f.quat()[2]), float(f.quat()[3])};
+        const float level[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+        double hdg, tilt;
+        headingTilt(qn, level, hdg, tilt);
+        EXPECT_LT(std::fabs(hdg), 1.0) << "gate " << gate;
+        if (gate)
+        {
+            EXPECT_LT(tilt, 1.0e-4);
+            // a level body's vertical is its z: the gyro bias moved along it alone
+            EXPECT_LT(std::fabs(f.gyroBias()[0]), 1.0e-9);
+            EXPECT_LT(std::fabs(f.gyroBias()[1]), 1.0e-9);
+        }
+        expectCovarianceHealthy(f);
+    }
+}
+
+TEST(RawGnssEKF, AHeadingSigmaFreesTheHeadingAndKeepsTheTilt)
+{
+    // Up a rail or level: after setQuaternion (the pad: a degree's tenth on
+    // every axis) a heading sigma frees the rotation about the vertical alone,
+    // and drops what it shared with every other state.
+    for (double pitch_deg : {0.0, 60.0, 85.0, 90.0})
+    {
+        Clock clk;
+        RawGnssEKF<double> f = converged<double>(5, clk);   // correlated states
+        float qf[4];
+        quatYawPitch(30.0 * kPi / 180.0, pitch_deg * kPi / 180.0, qf);
+        const double q[4] = {qf[0], qf[1], qf[2], qf[3]};
+        f.setQuaternion(q);
+        imuSecond(f);                                       // the attitude correlates again
+        double s0[3];
+        f.attSigmaNed(s0);
+        f.setHeadingSigma(30.0 * kPi / 180.0);
+        double s[3];
+        f.attSigmaNed(s);
+        EXPECT_NEAR(s[0], s0[0], 1.0e-9 * s0[0]) << pitch_deg;   // the tilt as it was
+        EXPECT_NEAR(s[1], s0[1], 1.0e-9 * s0[1]) << pitch_deg;
+        EXPECT_NEAR(s[2], 30.0 * kPi / 180.0, 1.0e-6) << pitch_deg;
+        // the vertical's part of the attitude shares nothing with the rest
+        double M[3][3];
+        const double* qn = f.quat();
+        const double w = qn[0], x = qn[1], y = qn[2], z = qn[3];
+        M[0][2] = 2 * (x * z - w * y);
+        M[1][2] = 2 * (y * z + w * x);
+        M[2][2] = 1 - 2 * (x * x + y * y);
+        for (int j = 0; j < RawGnssEKF<double>::N; ++j)
+        {
+            if (j >= RawGnssEKF<double>::kAtt && j < RawGnssEKF<double>::kAtt + 3)
+                continue;
+            double c = 0.0;
+            for (int a = 0; a < 3; ++a)
+                c += M[a][2] * f.P(RawGnssEKF<double>::kAtt + a, j);
+            EXPECT_NEAR(c, 0.0, 1.0e-12 * (1.0 + std::sqrt(f.P(j, j)))) << "state " << j << ", pitch " << pitch_deg;
+        }
+        expectCovarianceHealthy(f);
+    }
+}
+
+TEST(RawGnssEKF, TurningTheHeadingKeepsTheTilt)
+{
+    // yaw then pitch, body -> NED (quatYawPitch, in double)
+    auto yawPitch = [](double yaw, double pitch, double q[4]) {
+        const double cy = std::cos(yaw / 2), sy = std::sin(yaw / 2), cp = std::cos(pitch / 2), sp = std::sin(pitch / 2);
+        q[0] = cy * cp;
+        q[1] = -sy * sp;
+        q[2] = cy * sp;
+        q[3] = sy * cp;
+    };
+    double q0[4], want[4];
+    yawPitch(10.0 * kPi / 180.0, 80.0 * kPi / 180.0, q0);
+    yawPitch(35.0 * kPi / 180.0, 80.0 * kPi / 180.0, want);
+    RawGnssEKF<double> f(quietParams());
+    const double v0[3] = {0, 0, 0};
+    f.init(kLla0, v0, q0, 0.0);
+    f.turnHeading(25.0 * kPi / 180.0);
+    const double sgn = f.quat()[0] * want[0] >= 0.0 ? 1.0 : -1.0;
+    for (int i = 0; i < 4; ++i)
+        EXPECT_NEAR(sgn * f.quat()[i], want[i], 1.0e-12) << i;
+}
+
+TEST(RawGnssEKF, AHandOffPutsTheBiasesBackAndLetsTheVelocityGo)
+{
+    Clock clk;
+    RawGnssEKF<double> f = converged<double>(8, clk);
+    const double ab[3] = {0.02, -0.03, 0.05}, wb[3] = {1e-4, -2e-4, 3e-4};
+    double Pb[6][6] = {};
+    for (int i = 0; i < 6; ++i)
+        Pb[i][i] = (i < 3 ? 0.01 : 1e-6) * (1 + i);
+    Pb[0][1] = Pb[1][0] = 1e-3;
+    const double v_before[3] = {f.velNed()[0], f.velNed()[1], f.velNed()[2]};
+    f.setBiases(ab, wb, Pb);
+    f.releaseVelocity(3.0);
+    double got[6][6];
+    f.biasCovariance(got);
+    for (int i = 0; i < 3; ++i)
+    {
+        EXPECT_EQ(f.accelBias()[i], ab[i]);
+        EXPECT_EQ(f.gyroBias()[i], wb[i]);
+        EXPECT_EQ(f.velNed()[i], v_before[i]);
+        EXPECT_GE(f.P(RawGnssEKF<double>::kVel + i, RawGnssEKF<double>::kVel + i), 9.0);
+    }
+    for (int i = 0; i < 6; ++i)
+        for (int j = 0; j < 6; ++j)
+            EXPECT_EQ(got[i][j], Pb[i][j]);
+    for (int j = 0; j < RawGnssEKF<double>::N; ++j)
+    {
+        const bool bias = j >= RawGnssEKF<double>::kAccBias && j < RawGnssEKF<double>::kAccBias + 6;
+        const bool vel = j >= RawGnssEKF<double>::kVel && j < RawGnssEKF<double>::kVel + 3;
+        for (int i = 0; i < 3; ++i)
+        {
+            if (!bias)
+                EXPECT_EQ(f.P(RawGnssEKF<double>::kAccBias + i, j), 0.0) << j;
+            if (!vel)
+                EXPECT_EQ(f.P(RawGnssEKF<double>::kVel + i, j), 0.0) << j;
+        }
+    }
+    expectCovarianceHealthy(f);
+}
+
+TEST(RawGnssEKF, ClearingTheRefusalsForgetsThem)
+{
+    // Refused twice, forgotten, then refused anew: the third refusal in a row
+    // since the clear lets it in, not the third overall.
+    Clock clk;
+    RawGnssEKF<double> f = converged<double>(10, clk);
+    const auto sky = makeSky(kLla0);
+    double r[3];
+    geo_to_ecef(kLla0[0], kLla0[1], kLla0[2], r);
+    const double v[3] = {0.0, 0.0, 0.0};
+    for (int e = 0; e < 6; ++e)
+    {
+        if (e == 2)
+            f.clearRejects();
+        imuSecond(f);
+        clk.tick(1.0);
+        auto m = measure(sky, r, v, clk);
+        m[3].pr += 200.0;
+        const RawGnssStats st = f.updateGnssRaw(m.data(), static_cast<int>(m.size()));
+        EXPECT_EQ(st.rejected_pr, e < 5 ? 1 : 0) << "epoch " << e;
+    }
+}
+
+TEST(RawGnssEKF, AStillReceiversRangeRateIsTheSkysDoppler)
+{
+    const auto sky = makeSky(kLla0);
+    double r[3];
+    geo_to_ecef(kLla0[0], kLla0[1], kLla0[2], r);
+    const double v[3] = {0.0, 0.0, 0.0};
+    Clock clk;
+    clk.drift = 0.0;
+    const auto m = measure(sky, r, v, clk);
+    for (const RawMeas& mi : m)
+    {
+        double u[3];
+        const double rate = stillRangeRate(mi, r, u);
+        EXPECT_NEAR(rate, mi.rr, 1.0e-9);
+        EXPECT_NEAR(u[0] * u[0] + u[1] * u[1] + u[2] * u[2], 1.0, 1.0e-12);
+        // toward the satellite
+        EXPECT_GT(u[0] * (mi.sat_pos[0] - r[0]) + u[1] * (mi.sat_pos[1] - r[1]) + u[2] * (mi.sat_pos[2] - r[2]), 0.0);
     }
 }
