@@ -8,17 +8,23 @@ else()
     set(_guidance_req "TR_GuidancePN_Stub")
 endif()
 
+set(_ldfrags "")
+# #1600: on the LC86G board (the Beetle) the raw-GNSS filter is the navigation
+# filter (main/config.h): its EKF and measurement builder run from internal RAM
+# (raw_gnss_iram.lf). Where the filter is built out, nothing references them.
+if(TR_BOARD_M1)
+    list(APPEND _ldfrags "raw_gnss_iram.lf")
+endif()
 # Bench only (-DTR_BENCH_IRAM): the EKF into internal RAM (bench_iram.lf).
 # Never for flight.
-set(_bench_ldfrag "")
 if(TR_BENCH_IRAM)
-    set(_bench_ldfrag "bench_iram.lf")
+    list(APPEND _ldfrags "bench_iram.lf")
 endif()
 
 idf_component_register(
     SRCS "main.cpp"
     INCLUDE_DIRS "."
-    LDFRAGMENTS ${_bench_ldfrag}
+    LDFRAGMENTS ${_ldfrags}
     REQUIRES
         esp_driver_gpio esp_driver_spi esp_driver_uart TR_NVS
         TR_RocketComputerTypes

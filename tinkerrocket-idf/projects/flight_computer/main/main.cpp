@@ -3150,7 +3150,8 @@ static void rawShadowTask(void*)
                           "%d meas, pr %d+%d rej, rr %d+%d rej, age %.0f ms, build %lu us, update %lu us "
                           "(max %lu/%lu) | eph %d sats, %d tracked without | from flight filter N %.1f E %.1f "
                           "D %.1f m | iono %s (%d days) | pad survey %u settling, %u corrected (rms %.2f m), "
-                          "%d used, raw puts the pad %.1f m off%s | core 0 %.1f%% | log %lu, dropped %lu, ring drops %lu",
+                          "%d used, raw puts the pad %.1f m off%s | busy %.1f%% of core 0 (wall: with preemption) "
+                          "| log %lu, dropped %lu, ring drops %lu | internal heap %u B free, min %u B",
                      sh.running() ? "running" : "waiting", (unsigned long)st.starts,
                      (unsigned long)st.stops, (unsigned)st.last_stop,
                      (double)(st.imu - imu0) / win_s, step_avg, (unsigned long)st.step_us_max,
@@ -3167,7 +3168,9 @@ static void rawShadowTask(void*)
                      (double)sh.survey().summary().pad_offset_m,
                      sh.survey().summary().pad_ok ? "" : " (not vouched for)",
                      100.0 * (double)busy_us * 1e-6 / win_s, (unsigned long)recs,
-                     (unsigned long)rec_drops, (unsigned long)raw_shadow_link.imu.dropped());
+                     (unsigned long)rec_drops, (unsigned long)raw_shadow_link.imu.dropped(),
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                     (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
             // each satellite's pad correction, at its elevation from the pad:
             // a common pattern in sin(el) is the pad's height, one system's
             // is that system's measurements

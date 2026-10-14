@@ -1,0 +1,17 @@
+# #1600: the raw-GNSS filter's EKF (TR_RawGnssEKF) and measurement builder
+# (TR_GNSSRaw) run from internal RAM on the Beetle, where the filter is the
+# navigation filter (main/CMakeLists.txt). Through the flash cache, which core
+# 1's flight loop keeps full, a step took 2.4 ms and an epoch 4.4 ms a
+# satellite; from internal RAM 1.4 ms and 3.0 ms, the filter's share of core 0
+# 22 -> 17 % on the pad (rig replay r7/r8, 2026-10-13). 33 KB of internal RAM.
+# libm is not mapped (with IDF v6's picolibc, ldgen does not see libm.a): the
+# builder's double-precision functions stay in flash.
+[mapping:raw_gnss_iram_ekf]
+archive: libTR_RawGnssEKF.a
+entries:
+    * (noflash)
+
+[mapping:raw_gnss_iram_meas]
+archive: libTR_GNSSRaw.a
+entries:
+    * (noflash)
