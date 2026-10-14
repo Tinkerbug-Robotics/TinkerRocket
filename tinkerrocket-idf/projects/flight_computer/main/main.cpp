@@ -2683,6 +2683,41 @@ static void sendFlightSettings()
                        sizeof(s));
 }
 
+// The pad context's calibrations (PAD_CONTEXT_MSG, PCX_CAL): what this flight
+// flew with that the logged counts do not carry, for a replay.  Once, beside
+// the launch+5 s settings copy; the raw-GNSS task writes the rest from +6 s.
+static void sendPadContextCal()
+{
+    struct __attribute__((packed))
+    {
+        PadContextHeader h;
+        PadContextCal    c;
+    } r = {};
+    r.h.time_us = (uint32_t)esp_timer_get_time();
+    r.h.kind    = PCX_CAL;
+    r.h.part    = 0;
+    r.h.parts   = 1;
+    r.c.gyro_offset_lsb[0] = sensor_collector_hw.gyro_cal_x;
+    r.c.gyro_offset_lsb[1] = sensor_collector_hw.gyro_cal_y;
+    r.c.gyro_offset_lsb[2] = sensor_collector_hw.gyro_cal_z;
+    r.c.hg_bias_mps2[0] = sensor_converter.highGBiasX();
+    r.c.hg_bias_mps2[1] = sensor_converter.highGBiasY();
+    r.c.hg_bias_mps2[2] = sensor_converter.highGBiasZ();
+    int16_t mx = 0, my = 0, mz = 0;
+    r.c.mag_offset_set = sensor_collector_hw.iis2mdcHardIronOffset(mx, my, mz) ? 1U : 0U;
+    r.c.mag_offset_lsb[0] = mx;
+    r.c.mag_offset_lsb[1] = my;
+    r.c.mag_offset_lsb[2] = mz;
+    r.c.cal_gravity_mps2 = sensor_collector_hw.cal_gravity_mag;
+    int32_t ox = 0, oy = 0, oz = 0;
+    sensor_converter.mmcOffset(ox, oy, oz);
+    r.c.mmc_offset_counts[0] = ox;
+    r.c.mmc_offset_counts[1] = oy;
+    r.c.mmc_offset_counts[2] = oz;
+    static_assert(sizeof(r) == sizeof(PadContextHeader) + sizeof(PadContextCal), "PCX_CAL record is packed");
+    (void)enqueueI2STx(PAD_CONTEXT_MSG, reinterpret_cast<const uint8_t*>(&r), sizeof(r));
+}
+
 // ==========================================================================
 // SECTION: Full config report (#915)
 // ==========================================================================
@@ -3051,6 +3086,7 @@ static void rawShadowTask(void*)
     bool have_seed = false;
     int64_t win_t0 = esp_timer_get_time();
     int64_t pad_t0 = win_t0;
+    int64_t pcx_t0 = win_t0;   // the last pad-context record written
     int64_t busy_us = 0;
     uint32_t imu0 = 0, steps0 = 0, recs = 0, rec_drops = 0;
     int flag_prints = 0;
@@ -3109,6 +3145,19 @@ static void rawShadowTask(void*)
             raw_shadow_link.nav.write(nav);
         }
 #endif
+        // The pad context (PAD_CONTEXT_MSG), once a flight from 6 s after
+        // launch: one record each PAD_CONTEXT_PERIOD_MS (~1.5 s in all).
+        if (a0 - pcx_t0 >= (int64_t)config::PAD_CONTEXT_PERIOD_MS * 1000)
+        {
+            static uint8_t pcx[MAX_PAYLOAD];
+            size_t pcx_len = 0;
+            if (sh.takePadContext(pcx, sizeof(pcx), pcx_len, (uint32_t)a0))
+            {
+                pcx_t0 = a0;
+                if (enqueueI2STx(PAD_CONTEXT_MSG, pcx, pcx_len)) recs++;
+                else rec_drops++;
+            }
+        }
         GnssCheckData chk;
         while (sh.takeCheckLog(chk))
         {
@@ -10930,6 +10979,7 @@ static void loop_fc()
                     else if (settings_emit_count == 3 &&
                              now_ms - launch_time_millis >= 5000U) {
                         sendFlightSettings();
+                        sendPadContextCal();   // the calibrations a replay needs, once
                         settings_emit_count++;
                     }
                 }

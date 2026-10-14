@@ -267,6 +267,7 @@ void RawGnssShadow::onSeed(const ShadowSeed& s)
 
 void RawGnssShadow::onEphemeris(const uint8_t* payload, size_t len)
 {
+    eph_frames_.add(payload, len);           // as sent, for the pad context
     gps_eph_t e;
     if (!decodeEphemeris(payload, len, week_ != 0 ? week_ : cfg_.default_week, e))
     {
@@ -403,6 +404,20 @@ void RawGnssShadow::dropFront()
 void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
 {
     st_.imu++;
+    // The launch edge: the pad context, once a flight (PAD_CONTEXT_MSG). Only
+    // after a ground tick, so a flight restored in the air takes none.
+    if (s.flags & kShadowInFlight)
+    {
+        if (pcx_armed_)
+        {
+            pcx_armed_ = false;
+            capturePadContext(s.time_us);
+        }
+    }
+    else
+    {
+        pcx_armed_ = true;
+    }
     const double t = static_cast<double>(time64_us) * 1.0e-6;
     // A sensor sim's IMU is not the sky's: the shadow stops. The navigation
     // filter flies it -- the sim drops the receiver's raw output, so it has
@@ -823,6 +838,158 @@ bool RawGnssShadow::takeAttLog(RawGnssAttData& out)
         return false;
     out = att_log_;
     att_log_ready_ = false;
+    return true;
+}
+
+static_assert(RawGnssEKF<float>::N == PCX_COV_N, "PCX_COV carries the filter's whole covariance");
+static_assert(EphemerisFrames::kMaxPayload + EphemerisFrames::kFrameOverhead <= PCX_EPH_MAX_FRAME,
+              "a held ephemeris, framed, must fit one PCX_EPH record");
+
+void RawGnssShadow::capturePadContext(uint32_t tick_us)
+{
+    PadContextNav& n = pcx_nav_;
+    std::memset(&n, 0, sizeof(n));
+    n.filter_time_us = tick_us;
+    const double* lla = ekf_.lla();
+    const float* v = ekf_.velNed();
+    const float* q = ekf_.quat();
+    const float* ab = ekf_.accelBias();
+    const float* wb = ekf_.gyroBias();
+    for (int i = 0; i < 3; ++i)
+    {
+        n.lla[i] = lla[i];
+        n.vel_ned[i] = v[i];
+        n.acc_bias_mps2[i] = ab[i];
+        n.gyro_bias_rps[i] = wb[i];
+    }
+    for (int i = 0; i < 4; ++i)
+        n.quat[i] = q[i];
+    n.clk_bias_m = ekf_.clockBias();
+    n.clk_drift_mps = ekf_.clockDrift();
+    n.isb_gal_m = ekf_.isb(GNSS_SYS_GAL);
+    n.isb_bds_m = ekf_.isb(GNSS_SYS_BDS);
+    n.baro_offset_m = static_cast<float>(baro_offset_);
+    const bool decl = have_seed_ && seed_.have_declination;
+    if (decl)
+    {
+        n.declination_rad = seed_.declination_rad;
+        n.field_ut = seed_.field_ut;
+    }
+    if (have_iono_)
+    {
+        std::memcpy(n.iono, iono_in_.raw, sizeof(n.iono));
+        n.iono_gps_day = iono_in_.gps_day;
+    }
+    n.iono_source = ionoSource();
+    n.flags = static_cast<uint8_t>((running_ ? PCN_RUNNING : 0) | (ekf_.clockReady() ? PCN_CLOCK : 0)
+                                   | (baro_seen_ ? PCN_BARO : 0) | (have_iono_ ? PCN_IONO : 0)
+                                   | (decl ? PCN_DECLINATION : 0) | (cfg_.primary ? PCN_PRIMARY : 0));
+    // the covariance's upper triangle, row by row
+    int k = 0;
+    for (int i = 0; i < PCX_COV_N; ++i)
+        for (int j = i; j < PCX_COV_N; ++j)
+            pcx_cov_[k++] = ekf_.P(i, j);
+    // the pad survey's corrections, GPS, Galileo, BeiDou
+    pcx_nsurvey_ = 0;
+    for (int sys = GNSS_SYS_GPS; sys <= GNSS_SYS_BDS; ++sys)
+    {
+        for (int prn = 1; prn < 64 && pcx_nsurvey_ < kPcxSurveyMax; ++prn)
+        {
+            double corr = 0.0;
+            if (survey_.correction(sys, prn, corr))
+                pcx_survey_[pcx_nsurvey_++] = PadSurveyEntry{static_cast<uint8_t>(sys), static_cast<uint8_t>(prn),
+                                                             static_cast<float>(corr)};
+        }
+    }
+    pcx_sum_ = survey_.summary();
+    pcx_due_us_ = tick_us + static_cast<uint32_t>(cfg_.pad_context_delay_s * 1.0e6);
+    pcx_stage_ = 0;
+    pcx_eph_next_ = 0;
+    pcx_neph_ = eph_frames_.count();
+    pcx_pending_ = true;
+    st_.pad_contexts++;
+}
+
+bool RawGnssShadow::takePadContext(uint8_t* out, size_t cap, size_t& len, uint32_t now_us)
+{
+    if (!pcx_pending_ || static_cast<int32_t>(now_us - pcx_due_us_) < 0 || out == nullptr)
+        return false;
+    constexpr int kCovParts = (PCX_COV_VALUES + PCX_COV_PER_PART - 1) / PCX_COV_PER_PART;
+    const int survey_parts = pcx_nsurvey_ == 0 ? 1 : (pcx_nsurvey_ + PCX_SURVEY_PER_PART - 1) / PCX_SURVEY_PER_PART;
+    PadContextHeader h = {now_us, 0, 0, 1};
+    uint8_t* body = out + sizeof(h);
+    size_t body_len = 0;
+    if (pcx_stage_ == 0)
+    {
+        h.kind = PCX_NAV;
+        body_len = sizeof(PadContextNav);
+        if (sizeof(h) + body_len > cap)
+            return false;
+        std::memcpy(body, &pcx_nav_, body_len);
+    }
+    else if (pcx_stage_ <= kCovParts)
+    {
+        const int part = pcx_stage_ - 1;
+        PadContextCov c = {};
+        c.first = static_cast<uint16_t>(part * PCX_COV_PER_PART);
+        const int left = PCX_COV_VALUES - c.first;
+        c.n = static_cast<uint8_t>(left < PCX_COV_PER_PART ? left : PCX_COV_PER_PART);
+        for (int i = 0; i < c.n; ++i)
+            c.p[i] = pcx_cov_[c.first + i];
+        h.kind = PCX_COV;
+        h.part = static_cast<uint8_t>(part);
+        h.parts = static_cast<uint8_t>(kCovParts);
+        body_len = padContextCovWireSize(c.n);
+        if (sizeof(h) + body_len > cap)
+            return false;
+        std::memcpy(body, &c, body_len);
+    }
+    else if (pcx_stage_ <= kCovParts + survey_parts)
+    {
+        const int part = pcx_stage_ - 1 - kCovParts;
+        PadContextSurvey sv = {};
+        sv.tracked = pcx_sum_.tracked;
+        sv.settling = pcx_sum_.settling;
+        sv.corrected = pcx_sum_.corrected;
+        sv.pad_ok = pcx_sum_.pad_ok ? 1 : 0;
+        sv.rms_m = pcx_sum_.rms_m;
+        sv.pad_offset_m = pcx_sum_.pad_offset_m;
+        const int first = part * PCX_SURVEY_PER_PART;
+        const int left = pcx_nsurvey_ - first;
+        sv.n = static_cast<uint8_t>(left < 0 ? 0 : (left < PCX_SURVEY_PER_PART ? left : PCX_SURVEY_PER_PART));
+        for (int i = 0; i < sv.n; ++i)
+            sv.e[i] = pcx_survey_[first + i];
+        h.kind = PCX_SURVEY;
+        h.part = static_cast<uint8_t>(part);
+        h.parts = static_cast<uint8_t>(survey_parts);
+        body_len = padContextSurveyWireSize(sv.n);
+        if (sizeof(h) + body_len > cap)
+            return false;
+        std::memcpy(body, &sv, body_len);
+    }
+    else
+    {
+        // then each ephemeris held at the launch tick, framed as the receiver
+        // framed it (a satellite's newer one, since, in its place)
+        if (pcx_eph_next_ >= pcx_neph_ || cap < sizeof(h))
+        {
+            pcx_pending_ = false;
+            return false;
+        }
+        h.kind = PCX_EPH;
+        h.part = static_cast<uint8_t>(pcx_eph_next_);
+        h.parts = static_cast<uint8_t>(pcx_neph_);
+        body_len = eph_frames_.frame(pcx_eph_next_, body, cap - sizeof(h));
+        if (body_len == 0)
+            return false;
+        pcx_eph_next_++;
+        std::memcpy(out, &h, sizeof(h));
+        len = sizeof(h) + body_len;
+        return true;
+    }
+    pcx_stage_++;
+    std::memcpy(out, &h, sizeof(h));
+    len = sizeof(h) + body_len;
     return true;
 }
 

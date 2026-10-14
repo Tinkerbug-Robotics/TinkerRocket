@@ -15,6 +15,8 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include "RocketComputerTypes.h"
 #include "config.h"          // flight_computer/main/config.h
 
@@ -75,6 +77,22 @@ double rawGnssShadowInflow()
 #endif
 }
 
+// PAD_CONTEXT_MSG: written once, from 6 s after launch -- inside a guided
+// coast -- one record each config::PAD_CONTEXT_PERIOD_MS, at worst all the
+// largest kind's. Not steady: about 1.5 s of it. Zero on u-blox boards, which
+// have no raw-GNSS filter (the flight loop's one PCX_CAL record is noise).
+double padContextBurst()
+{
+#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+    const size_t largest = sizeof(PadContextHeader)
+                         + std::max({sizeof(PadContextNav), padContextCovWireSize(PCX_COV_PER_PART),
+                                     padContextSurveyWireSize(PCX_SURVEY_PER_PART), PCX_EPH_MAX_FRAME});
+    return framed(largest, 1000.0 / (double)config::PAD_CONTEXT_PERIOD_MS);
+#else
+    return 0.0;
+#endif
+}
+
 // The link: I2S_SAMPLE_RATE samples/s x 4 B (16-bit stereo).
 constexpr double kLinkBytesPerSec = (double)config::I2S_SAMPLE_RATE * 4.0;
 
@@ -117,6 +135,16 @@ TEST(I2SLinkBudget, GuidedCoastLeavesRealHeadroom) {
         << "% of the " << kLinkBytesPerSec << " B/s link. A struct on the link "
         << "grew, or a rate went up — re-derive the budget block in config.h "
         << "and bring this back under the line.";
+}
+
+TEST(I2SLinkBudget, ThePadContextFitsInAGuidedCoast) {
+    // Its burst on top of the steady state: it must not push the coast it
+    // lands in over the line either.
+    const double inflow = guidedCoastInflow() + padContextBurst();
+    const double used   = inflow / kLinkBytesPerSec;
+    EXPECT_LT(used, 0.95)
+        << "a guided coast with the pad context's burst is " << (used * 100.0)
+        << "% of the link: lengthen config::PAD_CONTEXT_PERIOD_MS.";
 }
 
 TEST(I2SLinkBudget, TheDominantStreamIsTheIMU) {

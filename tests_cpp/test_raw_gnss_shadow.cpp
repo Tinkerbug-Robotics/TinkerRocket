@@ -9,6 +9,7 @@
 
 #include <cstdlib>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <thread>
@@ -1446,4 +1447,283 @@ TEST(RawGnssShadow, UnderAChuteWithNoSatellitesLevellingHoldsAGyroBias)
     EXPECT_LT(sc.max_horiz, 150.0);
     for (int i = 0; i < 3; ++i)
         EXPECT_NEAR(sc.v_end[i], 0.0f, 0.5f);
+}
+
+// ------------------------------------------- the pad context (PAD_CONTEXT_MSG)
+
+namespace
+{
+
+// A broadcast ephemeris payload for msg and sat, len bytes, filled with fill.
+std::vector<uint8_t> ephPayload(uint16_t msg, uint8_t sat, size_t len = 61, uint8_t fill = 0x5A)
+{
+    std::vector<uint8_t> p(len, fill);
+    p[0] = static_cast<uint8_t>(msg >> 4);
+    p[1] = static_cast<uint8_t>(((msg & 0x0F) << 4) | (sat >> 2));
+    p[2] = static_cast<uint8_t>(((sat & 0x03) << 6) | (fill & 0x3F));
+    return p;
+}
+
+// The message and satellite of a framed ephemeris (6-bit satellite IDs).
+std::pair<uint16_t, uint8_t> ephKey(const uint8_t* frame)
+{
+    const uint16_t msg = static_cast<uint16_t>((frame[3] << 4) | (frame[4] >> 4));
+    return {msg, static_cast<uint8_t>(((frame[4] & 0x0F) << 2) | (frame[5] >> 6))};
+}
+
+struct PadContextRec
+{
+    PadContextHeader h;
+    std::vector<uint8_t> body;
+};
+
+// Every record the shadow writes at now_us, until it has none.
+std::vector<PadContextRec> drainPadContext(RawGnssShadow& sh, uint32_t now_us)
+{
+    std::vector<PadContextRec> out;
+    uint8_t buf[MAX_PAYLOAD];
+    size_t len = 0;
+    while (sh.takePadContext(buf, sizeof(buf), len, now_us))
+    {
+        PadContextRec r;
+        EXPECT_GE(len, sizeof(PadContextHeader));
+        EXPECT_LE(len, sizeof(buf));
+        std::memcpy(&r.h, buf, sizeof(r.h));
+        r.body.assign(buf + sizeof(r.h), buf + len);
+        out.push_back(r);
+        if (out.size() > 200)
+            break;
+    }
+    return out;
+}
+
+}  // namespace
+
+TEST(EphemerisFrames, EachComesBackAsTheFrameTheReceiverSent)
+{
+    // The Beetle's own ephemerides (GPS, Galileo, BeiDou): framed again they
+    // are the receiver's bytes, and the flight parser takes every one.
+    gnss_raw::EphemerisFrames ef;
+    for (int i = 0; i < kGoldenRmEphN; ++i)
+        ASSERT_TRUE(ef.add(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len)));
+    ASSERT_EQ(ef.count(), kGoldenRmEphN);
+    lc86::Lc86Parser parser;
+    int rtcm = 0, bad = 0;
+    for (int i = 0; i < kGoldenRmEphN; ++i)
+    {
+        uint8_t out[PCX_EPH_MAX_FRAME];
+        const size_t n = ef.frame(i, out, sizeof(out));
+        const std::vector<uint8_t> want = frame(kGoldenRmEph[i]);
+        ASSERT_EQ(n, want.size());
+        EXPECT_TRUE(std::equal(want.begin(), want.end(), out)) << "ephemeris " << i;
+        EXPECT_EQ(gnss_raw::EphemerisFrames::crc24q(out, n - 3), rtcm3::crc24q(out, n - 3));
+        for (size_t k = 0; k < n; ++k)
+        {
+            const lc86::Event e = parser.feed(out[k]);
+            rtcm += e == lc86::Event::RTCM;
+            bad += e == lc86::Event::BAD;
+        }
+        EXPECT_EQ(ef.frame(i, out, n - 1), 0u);     // one byte short: nothing
+    }
+    EXPECT_EQ(rtcm, kGoldenRmEphN);
+    EXPECT_EQ(bad, 0);
+    EXPECT_EQ(parser.rtcmEphFrames(), static_cast<uint32_t>(kGoldenRmEphN));
+}
+
+TEST(EphemerisFrames, KeepsEachSatellitesLatestAndDropsTheOldestWhenFull)
+{
+    gnss_raw::EphemerisFrames ef;
+    uint8_t out[PCX_EPH_MAX_FRAME];
+    // a new one for a satellite replaces its last
+    auto a = ephPayload(1019, 5, 61, 0x11), b = ephPayload(1019, 5, 61, 0x22);
+    ASSERT_TRUE(ef.add(a.data(), a.size()));
+    ASSERT_TRUE(ef.add(b.data(), b.size()));
+    ASSERT_EQ(ef.count(), 1);
+    ASSERT_EQ(ef.frame(0, out, sizeof(out)), 67u);
+    EXPECT_EQ(out[3 + 10], 0x22);
+    // the same satellite in another message is another
+    auto c = ephPayload(1046, 5, 63);
+    ASSERT_TRUE(ef.add(c.data(), c.size()));
+    EXPECT_EQ(ef.count(), 2);
+    // full: the one added longest ago goes, not the one refreshed
+    for (uint8_t sat = 6; ef.count() < gnss_raw::EphemerisFrames::kMax; ++sat)
+    {
+        auto p = ephPayload(1019, sat);
+        ASSERT_TRUE(ef.add(p.data(), p.size()));
+    }
+    ASSERT_TRUE(ef.add(b.data(), b.size()));           // 1019 sat 5 again: now the newest
+    auto d = ephPayload(1042, 1, 64);
+    ASSERT_TRUE(ef.add(d.data(), d.size()));
+    EXPECT_EQ(ef.count(), gnss_raw::EphemerisFrames::kMax);
+    bool has_1019_5 = false, has_1046_5 = false, has_1042_1 = false;
+    for (int i = 0; i < ef.count(); ++i)
+    {
+        ASSERT_GT(ef.frame(i, out, sizeof(out)), 0u);
+        const auto k = ephKey(out);
+        has_1019_5 |= k == std::make_pair<uint16_t, uint8_t>(1019, 5);
+        has_1046_5 |= k == std::make_pair<uint16_t, uint8_t>(1046, 5);
+        has_1042_1 |= k == std::make_pair<uint16_t, uint8_t>(1042, 1);
+    }
+    EXPECT_TRUE(has_1019_5);
+    EXPECT_FALSE(has_1046_5);                          // the oldest
+    EXPECT_TRUE(has_1042_1);
+    // too short or too long to be one: refused
+    EXPECT_FALSE(ef.add(a.data(), 2));
+    auto big = ephPayload(1042, 2, gnss_raw::EphemerisFrames::kMaxPayload + 1);
+    EXPECT_FALSE(ef.add(big.data(), big.size()));
+    EXPECT_FALSE(ef.add(nullptr, 61));
+}
+
+TEST(RawGnssShadow, WritesThePadContextOnceFromSixSecondsAfterLaunch)
+{
+    // The Beetle's ephemerides and two epochs on a surveyed pad with a
+    // broadcast ionosphere; then the launch. Everything the filter had at the
+    // launch tick comes back, as it was, from 6 s later: its state, its
+    // covariance in four parts, the pad survey, then each ephemeris framed.
+    // (The survey takes each satellite at once here: two epochs are all the
+    // fixture has.)
+    RawGnssShadow::Config cfg = primaryCfg();
+    cfg.survey.settle_s = 0.0;
+    cfg.survey.min_span_s = 0.0;
+    RawGnssShadow sh(cfg);
+    for (int i = 0; i < kGoldenRmEphN; ++i)
+        sh.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+    sh.setIono(goldenIono(kGoldenDay));
+    auto epochs = goldenEpochs();
+    ShadowSeed seed = goldenSeed(kT0, true);
+    seed.declination_rad = 0.15f;
+    seed.field_ut = 48.0f;
+    seed.have_declination = 1;
+    sh.onSeed(seed);
+    for (size_t k = 0; k < epochs.size(); ++k)
+        runGolden(sh, epochs, k);
+    ASSERT_TRUE(sh.running());
+    const int64_t t_edge = epochs.back().mcu_us + 205000;
+    feedStill(sh, epochs.back().mcu_us + 205000, t_edge);
+    uint8_t buf[MAX_PAYLOAD];
+    size_t len = 0;
+    EXPECT_FALSE(sh.takePadContext(buf, sizeof(buf), len, static_cast<uint32_t>(t_edge + 10000000)));
+    EXPECT_EQ(sh.stats().pad_contexts, 0u);
+
+    // the filter as it is at the launch tick, before the tick steps it
+    const auto& f = sh.filter();
+    const double lla[3] = {f.lla()[0], f.lla()[1], f.lla()[2]};
+    float q[4];
+    for (int i = 0; i < 4; ++i)
+        q[i] = f.quat()[i];
+    std::vector<float> tri;
+    for (int i = 0; i < PCX_COV_N; ++i)
+        for (int j = i; j < PCX_COV_N; ++j)
+            tri.push_back(f.P(i, j));
+    std::vector<PadSurveyEntry> corrections;
+    for (int sys = 0; sys <= 2; ++sys)
+        for (int prn = 1; prn < 64; ++prn)
+        {
+            double c = 0.0;
+            if (sh.survey().correction(sys, prn, c))
+                corrections.push_back({static_cast<uint8_t>(sys), static_cast<uint8_t>(prn), static_cast<float>(c)});
+        }
+    ASSERT_GE(corrections.size(), 8u);
+    const uint8_t tracked = sh.survey().summary().tracked;
+
+    int64_t t = feedFlight(sh, t_edge, 2.0, 20.0f, gnss_raw::kShadowInFlight, false);
+    EXPECT_EQ(sh.stats().pad_contexts, 1u);
+    // an ephemeris for a new satellite in flight is in the flight's own log:
+    // not one of these
+    const auto late = ephPayload(1019, 31);
+    sh.onEphemeris(late.data(), late.size());
+    // nothing until 6 s after the launch tick
+    EXPECT_FALSE(sh.takePadContext(buf, sizeof(buf), len, static_cast<uint32_t>(t_edge + 5999000)));
+    t = feedFlight(sh, t, 4.5, 0.0f, gnss_raw::kShadowInFlight, false);
+    const uint32_t now = static_cast<uint32_t>(t);
+    // a buffer too small for the next record takes nothing from it
+    EXPECT_FALSE(sh.takePadContext(buf, sizeof(PadContextHeader) + 10, len, now));
+
+    const std::vector<PadContextRec> recs = drainPadContext(sh, now);
+    ASSERT_EQ(recs.size(), 1u + 4u + 1u + static_cast<size_t>(kGoldenRmEphN));
+    for (const auto& r : recs)
+        EXPECT_EQ(r.h.time_us, now);
+    // the state
+    ASSERT_EQ(recs[0].h.kind, PCX_NAV);
+    EXPECT_EQ(recs[0].h.parts, 1);
+    ASSERT_EQ(recs[0].body.size(), sizeof(PadContextNav));
+    PadContextNav nav;
+    std::memcpy(&nav, recs[0].body.data(), sizeof(nav));
+    EXPECT_EQ(nav.filter_time_us, static_cast<uint32_t>(t_edge));
+    for (int i = 0; i < 3; ++i)
+        EXPECT_EQ(nav.lla[i], lla[i]);
+    for (int i = 0; i < 4; ++i)
+        EXPECT_EQ(nav.quat[i], q[i]);
+    EXPECT_EQ(nav.flags, PCN_RUNNING | PCN_CLOCK | PCN_IONO | PCN_DECLINATION | PCN_PRIMARY);
+    EXPECT_EQ(nav.iono_gps_day, kGoldenDay);
+    EXPECT_EQ(nav.iono[0], 14);
+    EXPECT_EQ(nav.iono[7], -5);
+    EXPECT_EQ(nav.iono_source, sh.ionoSource());
+    EXPECT_FLOAT_EQ(nav.declination_rad, 0.15f);
+    EXPECT_FLOAT_EQ(nav.field_ut, 48.0f);
+    // the covariance's triangle, in four parts
+    std::vector<float> got;
+    for (int p = 0; p < 4; ++p)
+    {
+        const PadContextRec& r = recs[1 + p];
+        ASSERT_EQ(r.h.kind, PCX_COV);
+        EXPECT_EQ(r.h.part, p);
+        EXPECT_EQ(r.h.parts, 4);
+        PadContextCov c{};
+        ASSERT_LE(r.body.size(), sizeof(c));
+        std::memcpy(&c, r.body.data(), r.body.size());
+        EXPECT_EQ(c.first, p * PCX_COV_PER_PART);
+        EXPECT_EQ(c.n, p < 3 ? 48 : 46);
+        EXPECT_EQ(r.body.size(), padContextCovWireSize(c.n));
+        for (int k = 0; k < c.n; ++k)
+            got.push_back(c.p[k]);
+    }
+    EXPECT_EQ(got, tri);
+    // the pad survey
+    ASSERT_EQ(recs[5].h.kind, PCX_SURVEY);
+    EXPECT_EQ(recs[5].h.parts, 1);
+    PadContextSurvey sv{};
+    ASSERT_LE(recs[5].body.size(), sizeof(sv));
+    std::memcpy(&sv, recs[5].body.data(), recs[5].body.size());
+    EXPECT_EQ(sv.tracked, tracked);
+    EXPECT_EQ(recs[5].body.size(), padContextSurveyWireSize(sv.n));
+    ASSERT_EQ(sv.n, corrections.size());
+    for (size_t i = 0; i < corrections.size(); ++i)
+    {
+        EXPECT_EQ(sv.e[i].sys, corrections[i].sys);
+        EXPECT_EQ(sv.e[i].prn, corrections[i].prn);
+        EXPECT_EQ(sv.e[i].corr_m, corrections[i].corr_m);
+    }
+    // each ephemeris, as the receiver framed it
+    for (int i = 0; i < kGoldenRmEphN; ++i)
+    {
+        const PadContextRec& r = recs[6 + i];
+        ASSERT_EQ(r.h.kind, PCX_EPH);
+        EXPECT_EQ(r.h.part, i);
+        EXPECT_EQ(r.h.parts, kGoldenRmEphN);
+        EXPECT_EQ(r.body, frame(kGoldenRmEph[i]));
+    }
+    // and once: nothing more this flight
+    t = feedFlight(sh, t, 1.0, 0.0f, gnss_raw::kShadowInFlight, false);
+    EXPECT_FALSE(sh.takePadContext(buf, sizeof(buf), len, static_cast<uint32_t>(t)));
+    EXPECT_EQ(sh.stats().pad_contexts, 1u);
+    // a flight after this one, back on the ground, is another
+    t = feedFlight(sh, t, 1.0, 0.0f, gnss_raw::kShadowLevel, false);
+    t = feedFlight(sh, t, 1.0, 20.0f, gnss_raw::kShadowInFlight, false);
+    EXPECT_EQ(sh.stats().pad_contexts, 2u);
+    EXPECT_FALSE(drainPadContext(sh, static_cast<uint32_t>(t + 6000000)).empty());
+}
+
+TEST(RawGnssShadow, ARestoredFlightWritesNoPadContext)
+{
+    // Rebooted in the air: it never saw the pad, so it has none to write.
+    RawGnssShadow sh(primaryCfg());
+    ShadowSeed seed = padSeed(kT0);
+    seed.on_pad = 0;
+    seed.restore = 1;
+    sh.onSeed(seed);
+    const int64_t t = feedFlight(sh, kT0, 8.0, 0.0f, gnss_raw::kShadowInFlight, false);
+    ASSERT_TRUE(sh.running());
+    EXPECT_EQ(sh.stats().pad_contexts, 0u);
+    EXPECT_TRUE(drainPadContext(sh, static_cast<uint32_t>(t)).empty());
 }

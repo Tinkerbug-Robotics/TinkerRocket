@@ -88,6 +88,7 @@
 
 #include <RocketComputerTypes.h>
 
+#include "EphemerisFrames.h"
 #include "EphemerisStore.h"
 #include "FixCheck.h"
 #include "LevelGate.h"
@@ -138,6 +139,7 @@ public:
         bool     primary         = false;     // the navigation filter (above)
         double   mag_field_tol   = 0.15;      // a field this far off the model's size is no heading (#1304)
         double   max_bridge_s    = 5.0;       // the navigation filter bridges an IMU hole this long
+        double   pad_context_delay_s = 6.0;   // the pad context is written from this long after launch
     };
 
     // What takes the ionosphere out (the pad status message reports it).
@@ -206,6 +208,7 @@ public:
         uint32_t mag_suspect = 0;          //   refused: not the model's size
         uint32_t restores = 0;             // starts in flight from a restored flight
         uint32_t gaps_bridged = 0;         // IMU holes the navigation filter stepped over
+        uint32_t pad_contexts = 0;         // launches the pad context was taken at
     };
 
     using Clock = int64_t (*)();
@@ -239,6 +242,16 @@ public:
     // Its RAW_GNSS_ATT_MSG companion (attitude 1-sigma, IMU biases), filled at
     // the same tick: take it after takeLog.
     bool takeAttLog(RawGnssAttData& out);
+    // The pad context (PAD_CONTEXT_MSG), for a replay of the flight: taken at
+    // the IMU tick the flight computer first calls INFLIGHT (once a flight: a
+    // restored flight, already in the air, takes none) -- the filter's state
+    // and covariance, the ionosphere, the pad survey -- and written from
+    // pad_context_delay_s later, one record a call (PCX_NAV, PCX_COV's parts,
+    // PCX_SURVEY's, then a PCX_EPH for every ephemeris held): the payload in
+    // out, len bytes, stamped now_us (FC micros). False when there is nothing
+    // (yet) to write.
+    bool takePadContext(uint8_t* out, size_t cap, size_t& len, uint32_t now_us);
+    const EphemerisFrames& ephemerisFrames() const { return eph_frames_; }
     // A GNSS_CHECK_MSG record, one per receiver fix judged.
     bool takeCheckLog(GnssCheckData& out);
 
@@ -281,6 +294,7 @@ private:
     void chooseIono(bool in_flight);
     void dropFront();
     void fillLog(uint32_t time_us, uint8_t imu_flags);
+    void capturePadContext(uint32_t tick_us);
     int64_t now() const { return clock_ ? clock_() : 0; }
 
     Config        cfg_;
@@ -343,6 +357,20 @@ private:
     bool          log_ready_ = false;
     RawGnssAttData att_log_ = {};
     bool          att_log_ready_ = false;
+    // the pad context (takePadContext)
+    EphemerisFrames eph_frames_;
+    bool          pcx_armed_ = false;    // a ground tick since the last launch edge
+    bool          pcx_pending_ = false;  // taken, not all written
+    uint32_t      pcx_due_us_ = 0;       // written from then (FC micros)
+    int           pcx_stage_ = 0;        // the next record
+    int           pcx_eph_next_ = 0;
+    int           pcx_neph_ = 0;         // the ephemerides held at the launch tick: the later are in the flight's log
+    PadContextNav pcx_nav_ = {};
+    float         pcx_cov_[PCX_COV_VALUES] = {};
+    static constexpr int kPcxSurveyMax = 96;
+    PadSurveyEntry pcx_survey_[kPcxSurveyMax] = {};
+    int           pcx_nsurvey_ = 0;
+    PadSurvey::Summary pcx_sum_ = {};
     uint64_t      prop_sum_ = 0;        // IMU steps since the last record
     uint32_t      prop_n_ = 0;
     Stats         st_;
