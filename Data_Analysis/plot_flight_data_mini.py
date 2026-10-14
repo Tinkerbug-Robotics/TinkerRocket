@@ -160,6 +160,7 @@ MSG_PAD_CAL_STATUS    = 0x99  # PadCalStatusData: the pad calibration's progress
 MSG_GNSS_CHECK        = 0x9A  # GnssCheckData: each receiver fix against the IMU, 10 Hz (#1508)
 MSG_RAW_GNSS_ATT      = 0x9B  # RawGnssAttData: the raw-GNSS filter's attitude 1-sigma and IMU biases, 10 Hz
 MSG_IMU_TEMP          = 0x9C  # Ism6TempData: the IMU's die temperature, 1 Hz
+MSG_GNSS_CLOCK        = 0x9D  # GnssClockData: the GPS-to-MCU clock line each time it moves, ~1 Hz
 MSG_ISM6HG256         = 0xA2
 MSG_BMP585            = 0xA3
 MSG_MMC5983MA         = 0xA4
@@ -204,6 +205,7 @@ MSG_NAMES = {
     MSG_GNSS_CHECK:       "GnssCheck",
     MSG_RAW_GNSS_ATT:     "RawGnssAtt",
     MSG_IMU_TEMP:         "ImuTemp",
+    MSG_GNSS_CLOCK:       "GnssClock",
     MSG_ISM6HG256:        "ISM6HG256",
     MSG_BMP585:           "BMP585",
     MSG_MMC5983MA:        "MMC5983MA",
@@ -234,6 +236,7 @@ MSG_EXPECTED_LEN = {
     MSG_GNSS_CHECK:        24,    # sizeof(GnssCheckData)
     MSG_RAW_GNSS_ATT:      46,    # sizeof(RawGnssAttData)
     MSG_IMU_TEMP:           6,    # sizeof(Ism6TempData)
+    MSG_GNSS_CLOCK:        68,    # sizeof(GnssClockData)
     MSG_ISM6HG256:         22,
     MSG_BMP585:            12,
     MSG_MMC5983MA:         16,
@@ -549,6 +552,56 @@ def decode_imu_temp(payload):
         return None
     t, raw = struct.unpack(FMT_IMU_TEMP, payload)
     return {"time_us": t, "temp_raw": raw, "temp_c": 25.0 + raw / 256.0}
+
+
+# GnssClockData (GNSS_CLOCK_MSG 0x9D), 68 bytes packed: the MCU clock against
+# GPS time as the LC86G driver's GnssTimeSync holds it (no 1PPS on the Beetle:
+# a line fitted to when each $PQTMPVT arrived), each time the line moves -- a
+# new GPS second filed, or a restart. Every raw epoch and fix the flight placed
+# on the IMU's clock went through it, so gnss_clock_mcu_us() on the latest
+# record logged before an epoch's last frame places it exactly as the flight did.
+FMT_GNSS_CLOCK = '<I I I q d d d d f f I H B B'
+SIZE_OF_GNSS_CLOCK = struct.calcsize(FMT_GNSS_CLOCK)  # 68
+GNSS_CLOCK_FLAGS = {"valid": 0x01, "started": 0x02}
+
+
+def decode_gnss_clock(payload):
+    """GnssClockData payload -> record dict, or None if the size is wrong."""
+    if len(payload) != SIZE_OF_GNSS_CLOCK:
+        return None
+    f = struct.unpack(FMT_GNSS_CLOCK, payload)
+    rec = {
+        "time_us":    f[0],
+        "seq":        f[1],
+        "gps0_s":     f[2],
+        "mcu0_us":    f[3],
+        "a_s":        f[4],
+        "t_ref_s":    f[5],
+        "drift":      f[6],
+        "drift_ppm":  f[6] * 1e6,
+        "latency_s":  f[7],
+        "env_rms_ms": f[8],
+        "late90_ms":  f[9],
+        "samples":    f[10],
+        "restarts":   f[11],
+        "bins":       f[12],
+        "flags":      f[13],
+    }
+    for name, bit in GNSS_CLOCK_FLAGS.items():
+        rec[name] = bool(f[13] & bit)
+    return rec
+
+
+def gnss_clock_mcu_us(rec, gps_s):
+    """The MCU micros of a GPS instant (week * 604800 + time of week, s) on a
+    decoded GnssClockData line, as GnssTimeSync::mcuAt computes it (C's llround:
+    half away from zero). None if the line was not valid yet."""
+    if not rec["valid"]:
+        return None
+    t = gps_s - float(rec["gps0_s"])
+    rel = t + (rec["a_s"] + rec["drift"] * (t - rec["t_ref_s"])) - rec["latency_s"]
+    x = rel * 1.0e6
+    return rec["mcu0_us"] + int(math.copysign(math.floor(abs(x) + 0.5), x))
 
 
 # GnssCheckData (GNSS_CHECK_MSG 0x9A), 24 bytes packed (#1508): each receiver
@@ -881,6 +934,7 @@ def parse_binary_file(filepath):
         "GnssCheck":      [],   # 0x9A each receiver fix against the IMU, 10 Hz (#1508)
         "RawGnssAtt":     [],   # 0x9B the raw-GNSS filter's attitude 1-sigma and IMU biases, 10 Hz
         "ImuTemp":        [],   # 0x9C the IMU's die temperature, 1 Hz
+        "GnssClock":      [],   # 0x9D the GPS-to-MCU clock line each time it moves, ~1 Hz
         "FcStatus":       [],   # 0x92 FcStatusData (#1154 item 4) — appended below; was never initialised
         "ISM6HG256":      [],
         "BMP585":         [],
@@ -1105,6 +1159,11 @@ def parse_binary_file(filepath):
                 rec = decode_imu_temp(payload)
                 if rec is not None:
                     records["ImuTemp"].append(rec)
+
+            elif msg_type == MSG_GNSS_CLOCK:
+                rec = decode_gnss_clock(payload)
+                if rec is not None:
+                    records["GnssClock"].append(rec)
 
             elif msg_type == MSG_ISM6HG256:
                 fields = struct.unpack(FMT_ISM6, payload)

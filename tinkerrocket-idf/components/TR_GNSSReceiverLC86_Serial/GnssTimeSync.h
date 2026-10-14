@@ -94,6 +94,32 @@ public:
     uint32_t samples() const { return samples_; }
     uint32_t restarts() const { return restarts_; }
 
+    // The line as mcuAt applies it, for a log a replay can place epochs by
+    // exactly as the flight did: with t = gps_s - gps0_s,
+    //   mcu_us = mcu0_us + llround((t + a_s + drift * (t - t_ref_s) - latency_s) * 1e6)
+    // (valid only: before that mcuAt answers nothing).
+    struct Snapshot
+    {
+        double   gps0_s = 0.0;      // whole GPS seconds (week * 604800 + time of week)
+        int64_t  mcu0_us = 0;       // esp_timer, us
+        double   a_s = 0.0;         // the envelope's MCU - GPS at t_ref_s, s from the references
+        double   t_ref_s = 0.0;     // s after gps0_s
+        double   drift = 0.0;       // d(MCU - GPS) / d(GPS)
+        double   latency_s = 0.0;   // Config::latency_s
+        double   env_rms_ms = 0.0;  // envelopeRmsMs()
+        double   late90_ms = 0.0;   // lateness90Ms()
+        uint32_t samples = 0;
+        uint32_t restarts = 0;
+        uint32_t seq = 0;           // lineSeq()
+        int      bins = 0;          // GPS seconds held (0..kBins)
+        bool     started = false;   // a sample has started the history
+        bool     valid = false;     // valid()
+    };
+    void snapshot(Snapshot& out) const;
+    // Counts every change of the line: each GPS second filed (the refit), the
+    // first one, a restart. Never reset, so a log's gaps show lost records.
+    uint32_t lineSeq() const { return seq_; }
+
 private:
     struct Bin
     {
@@ -131,6 +157,7 @@ private:
     int      off_run_ = 0;
     uint32_t samples_ = 0;
     uint32_t restarts_ = 0;
+    uint32_t seq_ = 0;          // lineSeq(): not reset
     float    late_ms_[32] = {};
     int      late_n_ = 0;
     int      late_head_ = 0;

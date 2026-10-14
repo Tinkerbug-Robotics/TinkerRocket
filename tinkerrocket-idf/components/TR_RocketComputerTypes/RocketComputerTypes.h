@@ -1590,6 +1590,39 @@ typedef struct __attribute__((packed))
 static_assert(sizeof(RawGnssAttData) == 46,
               "RawGnssAttData must be 46 bytes");
 
+// ── GnssClockData (GNSS_CLOCK_MSG 0x9D, ~1 Hz) ─────────────────────────────
+// The MCU clock against GPS time as the LC86G driver's GnssTimeSync holds it
+// (no 1PPS on the Beetle M1: it fits a line to when each $PQTMPVT arrived),
+// each time that line moves -- a new GPS second filed, or a restart: about
+// once a second while the receiver has a fix.  Everything that places a raw
+// epoch or a fix on the IMU's clock goes through it, so a replay that places
+// them by the latest line logged before each epoch's last frame arrived
+// places them exactly as the flight did:
+//   t = gps_s - gps0_s
+//   mcu_us = mcu0_us + llround((t + a_s + drift * (t - t_ref_s) - latency_s) * 1e6)
+// Valid (GCL_VALID) once it holds 10 s of history; mcuAt answers nothing before.
+typedef struct __attribute__((packed))
+{
+    uint32_t time_us;      // FC micros the line took effect: the backdated end of the $PQTMPVT that moved it
+    uint32_t seq;          // line changes since boot (GnssTimeSync::lineSeq): a gap is a record lost
+    uint32_t gps0_s;       // the line's GPS reference: whole seconds, week * 604800 + time of week
+    int64_t  mcu0_us;      // its MCU reference: esp_timer, us
+    double   a_s;          // the envelope's MCU - GPS at t_ref_s, s from the references
+    double   t_ref_s;      // that anchor, s after gps0_s
+    double   drift;        // d(MCU - GPS) / d(GPS): the MCU crystal (x 1e6: ppm)
+    double   latency_s;    // the receiver's own delay taken out (Config::latency_s; uncalibrated: 0)
+    float    env_rms_ms;   // the near-envelope seconds' RMS about the line, ms
+    float    late90_ms;    // 90 % of the recent stamps sit this far above it, ms
+    uint32_t samples;      // $PQTMPVT stamps taken since boot
+    uint16_t restarts;     // history restarts since boot (saturates)
+    uint8_t  bins;         // GPS seconds the envelope holds (0-64)
+    uint8_t  flags;        // GCL_* below
+} GnssClockData;
+static_assert(sizeof(GnssClockData) == 68,
+              "GnssClockData must be 68 bytes");
+static constexpr uint8_t GCL_VALID   = 0x01;  // the line answers (mcuAt): 10 s of history
+static constexpr uint8_t GCL_STARTED = 0x02;  // a sample has started the history
+
 // Ordered: the app may render a progress bar from step/FCB_STEP_COUNT.  Append
 // only — the apps map unknown values to a generic "starting up".
 enum FcBootStep : uint8_t
@@ -2610,6 +2643,9 @@ static constexpr uint8_t GNSS_CHECK_MSG      = 0x9A;
 static constexpr uint8_t RAW_GNSS_ATT_MSG    = 0x9B;
 static constexpr uint8_t IMU_TEMP_MSG        = 0x9C;  // FC→OC over I2S: Ism6TempData, the IMU's die temperature once a
                                                       // second; straight to the log.
+static constexpr uint8_t GNSS_CLOCK_MSG      = 0x9D;  // FC→OC over I2S: GnssClockData, the MCU clock against GPS time
+                                                      // each time its line moves (~1 Hz); straight to the log.  LC86G
+                                                      // boards only.
 
 static constexpr uint8_t OUT_STATUS_QUERY    = 0xA0;
 static constexpr uint8_t GNSS_MSG            = 0xA1;
@@ -4159,6 +4195,8 @@ static_assert(sizeof(RawGnssAttData) <= MAX_PAYLOAD,
               "RawGnssAttData must fit one I2S frame payload");
 static_assert(sizeof(Ism6TempData) <= MAX_PAYLOAD,
               "Ism6TempData must fit one I2S frame payload");
+static_assert(sizeof(GnssClockData) <= MAX_PAYLOAD,
+              "GnssClockData must fit one I2S frame payload");
 static_assert(sizeof(PadCalStatusData) <= MAX_PAYLOAD,
               "PadCalStatusData must fit one I2S frame payload");
 static_assert(sizeof(GnssCheckData) <= MAX_PAYLOAD,

@@ -1479,6 +1479,17 @@ bool SensorCollector::getGNSSFix(gnss_raw::TimedFix& out)
 #endif
 }
 
+bool SensorCollector::getGNSSClockLine(GnssClockData& out)
+{
+#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.takeClockLine(out);   // the driver's queue: no semaphore
+#else
+    (void)out;
+    return false;
+#endif
+}
+
 bool SensorCollector::getGNSSGeoidSeparation(float& sep_m) const
 {
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86

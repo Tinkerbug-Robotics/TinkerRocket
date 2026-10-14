@@ -33,6 +33,7 @@ MSG_TYPES = {
     0x9A: "GNSS_CHECK",   # each receiver fix against the IMU, 24 bytes at 10 Hz (#1508)
     0x9B: "RAW_GNSS_ATT", # the raw-GNSS filter's attitude 1-sigma and IMU biases, 46 bytes at 10 Hz
     0x9C: "IMU_TEMP",     # the IMU's die temperature, 6 bytes at 1 Hz
+    0x9D: "GNSS_CLOCK",   # the GPS-to-MCU clock line, 68 bytes at ~1 Hz
     0xA0: "STATUS_QUERY",
     0xA1: "GNSS",
     0xA2: "ISM6HG256",
