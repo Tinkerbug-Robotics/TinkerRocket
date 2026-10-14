@@ -116,6 +116,12 @@ class TR_GNSSReceiverLC86Serial
         uint32_t rawEpochsDropped() const { return raw_dropped_; }
         uint32_t ephemerisDropped() const { return eph_dropped_; }
         uint32_t fixesDropped() const { return fix_dropped_; }
+        // takeClockLine: the time sync's line each time it moves -- a new GPS
+        // second filed, or a restart: about once a second with a fix -- for
+        // GNSS_CLOCK_MSG (GnssClockRecord.h). Its queue is made in begin(),
+        // raw outputs or not. Same queue rules as above.
+        bool takeClockLine(GnssClockData& out);
+        uint32_t clockLinesDropped() const { return clock_dropped_; }
         // The geoid's height above the ellipsoid at the last fix
         // (Lc86Parser::geoidSepM), m: GNSSData's alt is above the geoid.
         // False before a fix. Safe from any task.
@@ -242,6 +248,13 @@ class TR_GNSSReceiverLC86Serial
         QueueHandle_t eph_q_ = nullptr;
         QueueHandle_t fix_q_ = nullptr;
         uint32_t fix_dropped_ = 0;
+        // GNSS_CLOCK_MSG: the time sync's line, pushed by noteTimeSync when it moves
+        static constexpr int kClockQDepth = 4;
+        StaticQueue_t clock_q_struct_ = {};
+        uint8_t clock_q_mem_[kClockQDepth * sizeof(GnssClockData)] = {};
+        QueueHandle_t clock_q_ = nullptr;
+        uint32_t clock_seq_seen_ = 0;
+        uint32_t clock_dropped_ = 0;
         gnss_raw::TimedRawEpoch raw_scratch_ = {};
         uint32_t raw_dropped_ = 0;
         std::atomic<float> geoid_sep_m_{0.0f};

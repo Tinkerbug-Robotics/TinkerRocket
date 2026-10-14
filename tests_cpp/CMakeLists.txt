@@ -1717,7 +1717,9 @@ add_executable(test_gnss_time_sync test_gnss_time_sync.cpp
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/GnssTimeSync.cpp
 )
 target_include_directories(test_gnss_time_sync PRIVATE
+    ${SHIM_DIR}
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+    ${LIB_DIR}/TR_RocketComputerTypes
 )
 target_link_libraries(test_gnss_time_sync GTest::gtest_main)
 gtest_discover_tests(test_gnss_time_sync)

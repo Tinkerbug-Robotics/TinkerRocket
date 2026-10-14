@@ -96,6 +96,12 @@ TEST(RocketComputerTypes, KnownSizes) {
     // the IMU's die temperature (0x9C), 1 Hz
     EXPECT_EQ(sizeof(Ism6TempData), 6u);
     EXPECT_EQ(offsetof(Ism6TempData, temp_raw), 4u);
+    // the GPS-to-MCU clock line (0x9D), ~1 Hz on LC86G boards
+    EXPECT_EQ(sizeof(GnssClockData), 68u);
+    EXPECT_EQ(offsetof(GnssClockData, gps0_s), 8u);
+    EXPECT_EQ(offsetof(GnssClockData, mcu0_us), 12u);
+    EXPECT_EQ(offsetof(GnssClockData, latency_s), 44u);
+    EXPECT_EQ(offsetof(GnssClockData, flags), 67u);
     EXPECT_EQ(sizeof(FcBootStatusData), 4u); // FC->OC boot progress (0xFA)
     EXPECT_EQ(sizeof(i24le_t),         3u);
     EXPECT_EQ(sizeof(Vec3i16),         6u);
@@ -1866,6 +1872,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(RAW_GNSS_ATT_MSG),
         // the IMU's die temperature, log-only.
         MT(IMU_TEMP_MSG),
+        // the GPS-to-MCU clock line, log-only.
+        MT(GNSS_CLOCK_MSG),
     };
 #undef MT
 
@@ -1909,7 +1917,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     // 104 = 103 + GNSS_CHECK_MSG (0x9A, the physics checks on the GNSS, #1508).
     // 105 = 104 + RAW_GNSS_ATT_MSG (0x9B, the raw-GNSS filter's attitude 1-sigma).
     // 106 = 105 + IMU_TEMP_MSG (0x9C, the IMU's die temperature).
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 106u)
+    // 107 = 106 + GNSS_CLOCK_MSG (0x9D, the GPS-to-MCU clock line).
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 107u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }

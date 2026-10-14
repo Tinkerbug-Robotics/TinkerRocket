@@ -108,7 +108,26 @@ bool GnssTimeSync::addSample(double gps_s, int64_t mcu_us)
         a_ = d;
         t_ref_ = t;
     }
+    seq_++;                      // the line moved (refit, the first second, or a restart)
     return kept;
+}
+
+void GnssTimeSync::snapshot(Snapshot& s) const
+{
+    s.gps0_s = gps0_;
+    s.mcu0_us = mcu0_;
+    s.a_s = a_;
+    s.t_ref_s = t_ref_;
+    s.drift = drift_;
+    s.latency_s = cfg_.latency_s;
+    s.env_rms_ms = env_rms_ms_;
+    s.late90_ms = lateness90Ms();
+    s.samples = samples_;
+    s.restarts = restarts_;
+    s.seq = seq_;
+    s.bins = n_;
+    s.started = have_;
+    s.valid = valid();
 }
 
 void GnssTimeSync::refitDrift()

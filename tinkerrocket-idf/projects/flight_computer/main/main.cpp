@@ -6899,6 +6899,19 @@ static void loop_fc()
             }
         }
     }
+
+    // The GPS-to-MCU clock line (GNSS_CLOCK_MSG), each time it moves: about
+    // once a second with a fix, so a replay places every raw epoch and fix on
+    // the IMU's clock as this flight did. From the hardware collector: it is
+    // the real receiver's clock whatever a sensor sim feeds the filter.
+    // Log-only; no-op on u-blox boards.
+    {
+        GnssClockData clk;
+        while (sensor_collector_hw.getGNSSClockLine(clk))
+        {
+            (void)enqueueI2STx(GNSS_CLOCK_MSG, reinterpret_cast<const uint8_t*>(&clk), sizeof(clk));
+        }
+    }
     TR_LP_LAP(SENSORS);
 
     // ==========================================================================

@@ -11,6 +11,7 @@
 // [B5] is Hardware Design V1.5 (hardware/datasheets/), which documents the
 // ALP low-power mode (added in V1.2).
 #include "TR_GNSSReceiverLC86_Serial.h"
+#include "GnssClockRecord.h"
 #include "Lc86RawEpoch.h"
 
 #include <driver/gpio.h>
@@ -328,6 +329,11 @@ bool TR_GNSSReceiverLC86Serial::begin(uint8_t update_rate_hz_in,
     {
         rtcm_ring_ = xRingbufferCreateStatic(kRtcmRingBytes, RINGBUF_TYPE_NOSPLIT,
                                              rtcm_ring_mem_, &rtcm_ring_struct_);
+    }
+    if (clock_q_ == nullptr)
+    {
+        clock_q_ = xQueueCreateStatic(kClockQDepth, sizeof(GnssClockData), clock_q_mem_,
+                                      &clock_q_struct_);
     }
 
     ESP_LOGI(TAG, "Starting LC86G configuration...");
@@ -877,6 +883,17 @@ void TR_GNSSReceiverLC86Serial::noteTimeSync(int64_t end_us)
     if (pvt.fix_mode < 2 || parser_.pvtGpsWeek() == 0) return;
     const double gps_s = parser_.pvtGpsWeek() * 604800.0 + parser_.pvtTowMs() * 1.0e-3;
     time_sync_.addSample(gps_s, end_us);
+    // GNSS_CLOCK_MSG: the line each time it moves, from this task (the only
+    // one that touches time_sync_), to the flight loop through a queue
+    if (clock_q_ != nullptr && time_sync_.lineSeq() != clock_seq_seen_)
+    {
+        clock_seq_seen_ = time_sync_.lineSeq();
+        lc86::GnssTimeSync::Snapshot snap;
+        time_sync_.snapshot(snap);
+        GnssClockData rec;
+        lc86::gnssClockRecord(snap, static_cast<uint32_t>(end_us), rec);
+        if (xQueueSend(clock_q_, &rec, 0) != pdTRUE) clock_dropped_++;
+    }
 }
 
 void TR_GNSSReceiverLC86Serial::logTimeSync()
@@ -965,6 +982,11 @@ void TR_GNSSReceiverLC86Serial::publishFix(int64_t end_us)
 bool TR_GNSSReceiverLC86Serial::takeFix(gnss_raw::TimedFix& out)
 {
     return fix_q_ != nullptr && xQueueReceive(fix_q_, &out, 0) == pdTRUE;
+}
+
+bool TR_GNSSReceiverLC86Serial::takeClockLine(GnssClockData& out)
+{
+    return clock_q_ != nullptr && xQueueReceive(clock_q_, &out, 0) == pdTRUE;
 }
 
 void TR_GNSSReceiverLC86Serial::publishEphemeris()

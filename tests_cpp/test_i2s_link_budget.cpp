@@ -68,7 +68,8 @@ double rawGnssShadowInflow()
 {
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
     return framed(sizeof(RawGnssEkfData), 10.0) + framed(sizeof(RawGnssAttData), 10.0)
-         + framed(sizeof(GnssCheckData), 10.0);
+         + framed(sizeof(GnssCheckData), 10.0)
+         + framed(sizeof(GnssClockData), 1.0);   // the clock line, once a second with a fix
 #else
     return 0.0;
 #endif

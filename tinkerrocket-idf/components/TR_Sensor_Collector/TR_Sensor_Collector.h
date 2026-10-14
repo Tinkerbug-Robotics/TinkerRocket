@@ -247,6 +247,9 @@ public:
     // The receiver's own fixes with their GPS instant on the MCU clock, for
     // the shadow's check of each fix against the IMU (#1508). LC86G only.
     bool getGNSSFix(gnss_raw::TimedFix& out);
+    // The LC86G's GPS-to-MCU clock line each time it moves (GNSS_CLOCK_MSG);
+    // false on other receivers.
+    bool getGNSSClockLine(GnssClockData& out);
     // The geoid's height above the WGS84 ellipsoid at the last fix, m
     // (GNSSData's alt is above the geoid). LC86G only; false elsewhere or
     // before a fix.

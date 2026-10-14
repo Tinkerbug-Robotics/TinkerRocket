@@ -22,7 +22,7 @@ Start-of-frame bytes from [`TR_I2C_Interface.h`](https://github.com/Tinkerbug-Ro
 
 ## FC ↔ OC message types
 
-104 codes. The dispatch on both ends is a flat first-match chain, so
+105 codes. The dispatch on both ends is a flat first-match chain, so
 two handlers sharing a value means the second is silently dead — which is why
 this list is CI-enforced for uniqueness.
 
@@ -132,8 +132,9 @@ this list is CI-enforced for uniqueness.
 | `0x9A` | `GNSS_CHECK_MSG` | FC → OC |  |
 | `0x9B` | `RAW_GNSS_ATT_MSG` | FC → OC |  |
 | `0x9C` | `IMU_TEMP_MSG` | FC → OC | FC→OC over I2S: Ism6TempData, the IMU's die temperature once a |
+| `0x9D` | `GNSS_CLOCK_MSG` | FC → OC | FC→OC over I2S: GnssClockData, the MCU clock against GPS time |
 
-> 54 of these 104 codes carry no comment in the header,
+> 54 of these 105 codes carry no comment in the header,
 > so the Notes column is blank for them. Direction is inferred from the
 > `_PENDING` / `_CMD` / `_MSG` suffix in that case, which is a convention,
 > not a guarantee. A trailing `// OC→FC: what it does` on the constant
@@ -153,6 +154,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `RawGnssEkfData` | 90 |
 | `RollProfileData` | 76 |
 | `RollProfileData` | 76 |
+| `GnssClockData` | 68 |
 | `LoRaFastData` | 55 |
 | `LoRaFastData` | 55 |
 | `NonSensorData` | 52 |
