@@ -1025,16 +1025,22 @@ template <typename T>
 RawGnssStats RawGnssEKF<T>::updateGnssRaw(const RawMeas* m, int n, double age_s)
 {
     RawGnssStats st;
+    if (beginGnssRaw(m, n, age_s, st))
+        updateGnssRawPart(m, 0, n, age_s, st);
+    return st;
+}
+
+template <typename T>
+bool RawGnssEKF<T>::beginGnssRaw(const RawMeas* m, int n, double age_s, RawGnssStats& st)
+{
     if (age_s < 0.0)
         age_s = 0.0;
     if (!clk_ready_ && !initClockFrom(m, n, age_s))
-        return st;
+        return false;
 
-    // the receiver's history back to the epoch, and to its Doppler's instant
-    const double tau = p_.rr_lag_s > 0.0 ? p_.rr_lag_s : 0.0;
-    T dp_e[3], dv_e[3], dp_l[3], dv_l[3];
+    // the receiver's history back to the epoch
+    T dp_e[3], dv_e[3];
     historyChange(age_s, dv_e, dp_e);
-    historyChange(age_s + tau, dv_l, dp_l);
 
     // Receiver clock steps: every satellite's innovation agrees on one
     {
@@ -1095,9 +1101,23 @@ RawGnssStats RawGnssEKF<T>::updateGnssRaw(const RawMeas* m, int n, double age_s)
             }
         }
     }
+    return true;
+}
+
+template <typename T>
+void RawGnssEKF<T>::updateGnssRawPart(const RawMeas* m, int i0, int i1, double age_s, RawGnssStats& st)
+{
+    if (age_s < 0.0)
+        age_s = 0.0;
+    // the receiver's history back to the epoch, and to its Doppler's instant,
+    // as it stands now: a part fused later takes the epoch back further
+    const double tau = p_.rr_lag_s > 0.0 ? p_.rr_lag_s : 0.0;
+    T dp_e[3], dv_e[3], dp_l[3], dv_l[3];
+    historyChange(age_s, dv_e, dp_e);
+    historyChange(age_s + tau, dv_l, dp_l);
 
     const T att = attGate();
-    for (int i = 0; i < n; ++i)
+    for (int i = i0; i < i1; ++i)
     {
         const RawMeas& mi = m[i];
         if (mi.sys > GNSS_SYS_BDS || mi.prn >= 64)
@@ -1230,7 +1250,6 @@ RawGnssStats RawGnssEKF<T>::updateGnssRaw(const RawMeas* m, int n, double age_s)
             }
         }
     }
-    return st;
 }
 
 template class RawGnssEKF<float>;

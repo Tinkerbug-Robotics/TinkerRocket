@@ -135,19 +135,33 @@ double RawMeasBuilder::relockAge(int sys, int prn, double tow) const
 int RawMeasBuilder::build(const RawEpoch& ep, const EphemerisStore& eph, const double* r_approx,
                           double g_peak, RawMeas* out, int cap)
 {
+    begin(ep, r_approx, g_peak);
+    return next(ep, eph, out, 0, cap, ep.n);
+}
+
+void RawMeasBuilder::begin(const RawEpoch& ep, const double* r_approx, double g_peak)
+{
     noteEpoch(ep);
 
-    const bool have_pos = r_approx != nullptr
+    have_pos_ = r_approx != nullptr
         && std::sqrt(r_approx[0] * r_approx[0] + r_approx[1] * r_approx[1] + r_approx[2] * r_approx[2]) > 6.0e6;
-    double lat = 0.0, lon = 0.0, hgt = 0.0;
-    if (have_pos)
-        ecef_to_geo(r_approx, &lat, &lon, &hgt);
-    const double el_mask = cfg_.el_mask_deg * kPi / 180.0;
-    const double g_over = g_peak > 0.0 ? g_peak : 0.0;
-
-    int n = 0;
-    for (int i = 0; i < ep.n && n < cap; ++i)
+    lat_ = lon_ = hgt_ = 0.0;
+    if (have_pos_)
     {
+        for (int k = 0; k < 3; ++k)
+            r_approx_[k] = r_approx[k];
+        ecef_to_geo(r_approx_, &lat_, &lon_, &hgt_);
+    }
+    el_mask_ = cfg_.el_mask_deg * kPi / 180.0;
+    g_over_ = g_peak > 0.0 ? g_peak : 0.0;
+    next_obs_ = 0;
+}
+
+int RawMeasBuilder::next(const RawEpoch& ep, const EphemerisStore& eph, RawMeas* out, int n, int cap, int max_obs)
+{
+    for (int looked = 0; looked < max_obs && next_obs_ < ep.n && n < cap; ++looked)
+    {
+        const int i = next_obs_++;
         const RawObs& o = ep.obs[i];
         if (!o.has_pr || o.sys >= kSys || o.prn >= kPrn)
             continue;
@@ -168,16 +182,16 @@ int RawMeasBuilder::build(const RawEpoch& ep, const EphemerisStore& eph, const d
         const double dts = c.clk + c.clk_rate * dt;
 
         double corr = GNSS_C * dts;   // the clock with relativity, less the group delay
-        if (have_pos)
+        if (have_pos_)
         {
-            const double d[3] = {rs[0] - r_approx[0], rs[1] - r_approx[1], rs[2] - r_approx[2]};
+            const double d[3] = {rs[0] - r_approx_[0], rs[1] - r_approx_[1], rs[2] - r_approx_[2]};
             double az, el;
-            gnss_az_el(lat, lon, d, &az, &el);
-            if (el < el_mask)
+            gnss_az_el(lat_, lon_, d, &az, &el);
+            if (el < el_mask_)
                 continue;
             const double fr = GNSS_FREQ_L1_HZ / carrierHz(o.sys);
-            const double iono = iono_klobuchar(&iono_, lat, lon, az, el, ep.tow_s) * fr * fr;
-            const double trop = cfg_.troposphere ? tropo_saastamoinen(lat, hgt, el) : 0.0;
+            const double iono = iono_klobuchar(&iono_, lat_, lon_, az, el, ep.tow_s) * fr * fr;
+            const double trop = cfg_.troposphere ? tropo_saastamoinen(lat_, hgt_, el) : 0.0;
             corr -= iono + trop;
         }
 
@@ -204,7 +218,7 @@ int RawMeasBuilder::build(const RawEpoch& ep, const EphemerisStore& eph, const d
         const double fresh = std::exp(-age / cfg_.relock_tau_s);
         if (cfg_.relock_sigma_m > 0.0)
             s_corr = std::hypot(s_corr, cfg_.relock_sigma_m * fresh);
-        const double s_dyn = cfg_.rr_dyn_sigma * g_over;
+        const double s_dyn = cfg_.rr_dyn_sigma * g_over_;
         const double s_rel = cfg_.rr_relock_sigma * fresh;
         const double s_rr2 = s_rr * cfg_.rr_scale;
         m.sigma_pr = static_cast<float>(cn0Sigma(kPrWhiteA, kPrWhiteB, cn0));

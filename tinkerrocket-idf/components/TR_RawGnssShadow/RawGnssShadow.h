@@ -111,6 +111,8 @@ public:
         double   epoch_latency_s = 0.0;   // the receiver's delay the time sync leaves in (its
                                           // latency_s, uncalibrated: 0)
         double   max_epoch_age_s = 0.6;   // later than this an epoch is dropped
+        double   epoch_slice_us  = 0.0;   // the navigation filter: an epoch's work at most this long a step (0: at once)
+        double   epoch_job_max_s = 0.3;   //   but all of it once the epoch is this old (the IMU history is 0.5 s)
         double   log_period_s    = 0.1;   // RAW_GNSS_EKF_MSG at 10 Hz
         double   min_step_s      = 0.04;  // the filter steps at most this often (25 Hz), on
                                           // the mean of the ticks since; 0 = every tick
@@ -171,6 +173,9 @@ public:
         uint32_t step_n = 0, step_us_max = 0;
         uint32_t build_us = 0, update_us = 0;            // the last epoch
         uint32_t build_us_max = 0, update_us_max = 0;
+        uint32_t epoch_slices = 0;         // the last epoch's work, in this many slices
+        uint32_t epoch_wall_us = 0;        //   from its first to its last (the filter stepping in between)
+        uint32_t slice_us_max = 0;         // the longest slice
         // the last epoch applied
         RawGnssStats last;
         double   last_age_s = 0.0;
@@ -250,7 +255,9 @@ public:
     const SatJumpCheck& satCheck() const { return satcheck_; }
     // The last epoch's measurements as the filter took them (pad corrections
     // applied when they were in use), n of them: the console's per-satellite line.
-    const RawMeas* lastMeasurements(int& n) const { n = st_.last_meas; return meas_; }
+    // The last epoch's measurements (none while the next one is being built
+    // over them).
+    const RawMeas* lastMeasurements(int& n) const { n = job_.active ? 0 : st_.last_meas; return meas_; }
     // What takes the ionosphere out now.
     uint8_t ionoSource() const;
     bool haveIono() const { return have_iono_; }
@@ -272,7 +279,11 @@ private:
     void stop(uint8_t why);
     void resync(double t);
     void applyDueEpochs(double t, uint8_t imu_flags);
-    void apply(const TimedRawEpoch& e, double age, double t, uint8_t imu_flags);
+    void startJob(const TimedRawEpoch& e, double te, uint8_t imu_flags);
+    void workJob(double t);
+    void jobUnit(double t);
+    void jobChecks(double age, double t);
+    void closeJob(double age, double t);
     void applyDueFixes(double t);
     void judge(const TimedFix& f, double t_fix);
     void chooseIono(bool in_flight);
@@ -287,6 +298,23 @@ private:
     RawMeasBuilder builder_;
     RawMeas       meas_[RawEpoch::kMaxObs];
     TimedRawEpoch pending_[2];
+    // the epoch being worked (startJob .. closeJob), a slice a step
+    enum : int { kJobBuild, kJobChecks, kJobClock, kJobFuse, kJobClose };
+    struct Job
+    {
+        bool          active = false;
+        int           phase = kJobBuild;
+        TimedRawEpoch e;
+        double        te = 0.0;           // its instant on the filter's clock
+        bool          in_flight = false;
+        double        r_prior[3] = {};    // the receiver when it started: the builder's, the survey's
+        int           n = 0;              // measurements built
+        int           fused = 0;          //   and fused
+        RawGnssStats  rs;
+        int64_t       t0_us = 0;
+        uint32_t      build_us = 0, update_us = 0, slices = 0;
+    };
+    Job           job_;
     int           npending_ = 0;
     ShadowSeed    seed_ = {};
     bool          have_seed_ = false;

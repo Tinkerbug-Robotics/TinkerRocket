@@ -464,7 +464,74 @@ void runGolden(RawGnssShadow& sh, std::vector<TimedRawEpoch>& epochs, size_t k, 
     feedStill(sh, te + 200000, te + 205000, flags);
 }
 
+// Each look at the clock a millisecond on: every unit of an epoch's work
+// costs 1 ms, so the slicing does not hang on the host's speed.
+int64_t g_fake_us = 0;
+int64_t fakeClock() { return g_fake_us += 1000; }
+
 }  // namespace
+
+TEST(RawGnssShadow, TheNavigationFilterFusesAnEpochInSlicesAndKeepsStepping)
+{
+    // As the navigation filter it works an epoch a slice a step
+    // (epoch_slice_us), so the state it publishes keeps up with the IMU while
+    // it builds and fuses a sky: on the rig (r7-r9) one pass over 14
+    // satellites held it 40 ms. The golden epochs, each handed over 20 ms
+    // late, at once and in 2.5 ms slices: the sliced run steps through its
+    // epochs, fuses every one, and ends where the other does.
+    std::vector<TimedRawEpoch> epochs = goldenEpochs();
+    ASSERT_EQ(epochs.size(), 2u);
+    double r_end[2][3];
+    uint32_t slices[2] = {};
+    uint32_t steps_during[2] = {};
+    for (int sliced = 0; sliced < 2; ++sliced)
+    {
+        RawGnssShadow::Config cfg;            // the navigation filter's (primaryCfg, below)
+        cfg.primary = true;
+        cfg.min_step_s = 0.01;
+        if (sliced)
+            cfg.epoch_slice_us = 2500.0;
+        RawGnssShadow sh(cfg);
+        g_fake_us = 0;
+        sh.setClock(fakeClock);               // both runs on it: only the slicing differs
+        for (int i = 0; i < kGoldenRmEphN; ++i)
+            sh.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+        sh.onSeed(goldenSeed(kT0, false));
+        int64_t t = kT0;
+        feedStill(sh, t, kT0 + 1000000);
+        t = kT0 + 1000000;
+        ASSERT_TRUE(sh.running());
+        for (size_t k = 0; k < epochs.size(); ++k)
+        {
+            const int64_t te = epochs[k].mcu_us;
+            feedStill(sh, t, te + 20000);
+            t = te + 20000;
+            sh.onEpoch(epochs[k]);
+            const uint32_t applied = sh.stats().epochs_applied;
+            const uint32_t steps0 = sh.stats().step_n;
+            while (sh.stats().epochs_applied == applied && t < te + 400000)
+            {
+                feedStill(sh, t, t + 5000);
+                t += 5000;
+            }
+            ASSERT_EQ(sh.stats().epochs_applied, applied + 1) << "epoch " << k;
+            steps_during[sliced] = std::max(steps_during[sliced], sh.stats().step_n - steps0);
+            EXPECT_GE(sh.stats().last.used_pr, k == 0 ? 7 : kGoldenRmMeasN - 1);
+            EXPECT_LT(sh.stats().last_age_s, 0.3);
+            slices[sliced] = std::max(slices[sliced], sh.stats().epoch_slices);
+        }
+        double v[3];
+        sh.filter().receiverEcef(r_end[sliced], v);
+    }
+    EXPECT_EQ(slices[0], 1u);
+    EXPECT_GE(slices[1], 5u);
+    EXPECT_LE(steps_during[0], 1u);
+    EXPECT_GE(steps_during[1], 5u);           // it stepped while it fused
+    const double d = std::sqrt((r_end[0][0] - r_end[1][0]) * (r_end[0][0] - r_end[1][0])
+                             + (r_end[0][1] - r_end[1][1]) * (r_end[0][1] - r_end[1][1])
+                             + (r_end[0][2] - r_end[1][2]) * (r_end[0][2] - r_end[1][2]));
+    EXPECT_LT(d, 1.0);
+}
 
 TEST(RawGnssShadow, TheBroadcastBytesAreTheDaysKlobuchar)
 {

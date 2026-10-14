@@ -3055,6 +3055,7 @@ static void rawShadowTask(void*)
     uint32_t imu0 = 0, steps0 = 0, recs = 0, rec_drops = 0;
     int flag_prints = 0;
     uint64_t step_sum0 = 0;
+    uint32_t nav_step_n = 0;
     for (;;)
     {
         const int64_t a0 = esp_timer_get_time();
@@ -3088,6 +3089,18 @@ static void rawShadowTask(void*)
         for (int k = 0; k < 32 && raw_shadow_link.imu.pop(imu); k++)
         {
             sh.onImu(imu, gnss_raw::RawGnssShadow::unwrap32(imu.time_us, esp_timer_get_time()));
+#if TR_RAW_GNSS_PRIMARY
+            // the navigation state for the flight loop (RawNavAdapter::refresh)
+            // after every step, not once a batch: a batch can hold several
+            // steps and the slices of an epoch between them
+            if (sh.stats().step_n != nav_step_n)
+            {
+                nav_step_n = sh.stats().step_n;
+                gnss_raw::ShadowNav nav;
+                sh.navState(nav);
+                raw_shadow_link.nav.write(nav);
+            }
+#endif
             RawGnssEkfData rec;
             if (sh.takeLog(rec))
             {
@@ -3097,7 +3110,7 @@ static void rawShadowTask(void*)
         }
 #if TR_RAW_GNSS_PRIMARY
         {
-            // the navigation state for the flight loop (RawNavAdapter::refresh)
+            // and once a pass, so the loop hears that it is waiting, or stopped
             gnss_raw::ShadowNav nav;
             sh.navState(nav);
             raw_shadow_link.nav.write(nav);
@@ -3171,6 +3184,14 @@ static void rawShadowTask(void*)
                      (unsigned long)rec_drops, (unsigned long)raw_shadow_link.imu.dropped(),
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                      (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+#if TR_RAW_GNSS_PRIMARY
+            // what the flight loop got (RawNavAdapter): the oldest state it
+            // read in the window, and how the last epoch was spread
+            ESP_LOGI(TAG, "[RAWGNSS] nav: the loop read a state at most %.1f ms old | last epoch in %lu slices "
+                          "over %.0f ms (longest slice %.1f ms)",
+                     (double)ekf.takeMaxAgeUs() * 1e-3, (unsigned long)st.epoch_slices,
+                     (double)st.epoch_wall_us * 1e-3, (double)st.slice_us_max * 1e-3);
+#endif
             // each satellite's pad correction, at its elevation from the pad:
             // a common pattern in sin(el) is the pad's height, one system's
             // is that system's measurements
@@ -3281,6 +3302,10 @@ static void startRawShadow()
     // second for the flight loop (#1600; the step's cost in the [RAWGNSS] line)
     cfg.primary = true;
     cfg.min_step_s = 0.01;
+    // and an epoch worked a slice a step, so the state the flight loop reads
+    // keeps up while a sky is built and fused (RawGnssShadow::workJob): in one
+    // pass 14 satellites held it 40 ms on the rig (r9), a sky of 30 ~90 ms
+    cfg.epoch_slice_us = 2500.0;
 #endif
     raw_shadow = new (mem) gnss_raw::RawGnssShadow(cfg);
     if (xTaskCreatePinnedToCore(rawShadowTask, "Raw GNSS", 8192, nullptr, 1, nullptr,

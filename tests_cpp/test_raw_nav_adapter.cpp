@@ -150,6 +150,30 @@ TEST(RawNavAdapter, ACoreThatStopsPublishingIsNotHealthy)
     EXPECT_FALSE(ekf.isHealthy());
 }
 
+TEST(RawNavAdapter, ItSaysHowOldAStateTheLoopRead)
+{
+    // the raw filter publishes after every step; the loop reads the latest:
+    // the oldest it was handed in a window is the diagnostic (#1600)
+    ShadowLink link;
+    RawNavAdapter ekf;
+    ekf.attach(&link);
+    ShadowNav n = navAt(100.0, 85.0f);
+    n.time_us = 5000000;
+    link.nav.write(n);
+    ekf.refresh(5004000);                        // 4 ms old
+    ekf.refresh(5012000);                        // still that state: 12 ms
+    EXPECT_EQ(ekf.takeMaxAgeUs(), 12000u);
+    EXPECT_EQ(ekf.takeMaxAgeUs(), 0u);           // taken: a new window
+    n.time_us = 5010000;
+    link.nav.write(n);
+    ekf.refresh(5013000);
+    EXPECT_EQ(ekf.takeMaxAgeUs(), 3000u);
+    n.time_us = 5020000;                         // a state stamped after the loop's clock
+    link.nav.write(n);
+    ekf.refresh(5015000);
+    EXPECT_EQ(ekf.takeMaxAgeUs(), 0u);           // is not a 4294-second-old one
+}
+
 TEST(RawNavAdapter, TheSnapshotRestoresTheRawFiltersOwnHeight)
 {
     // The receiver a reboot cold-starts has no geoid separation for a while:

@@ -48,6 +48,7 @@ void RawGnssShadow::reset()
 {
     if (running_)
         stop(kStopNone);
+    job_.active = false;
     npending_ = 0;
     nfix_ = 0;
     have_seed_ = false;
@@ -603,6 +604,7 @@ void RawGnssShadow::start(double t)
         acc_sum_[i] = gyro_sum_[i] = 0.0;
     last_resync_t_ = t;
     next_log_t_ = t;
+    job_.active = false;
     npending_ = 0;
     nfix_ = 0;
     satcheck_.reset();                    // a new filter: nothing to take differences from
@@ -628,6 +630,7 @@ void RawGnssShadow::start(double t)
 void RawGnssShadow::stop(uint8_t why)
 {
     running_ = false;
+    job_.active = false;
     for (int i = 0; i < npending_; ++i)
         builder_.noteEpoch(pending_[i].epoch);
     npending_ = 0;
@@ -656,52 +659,149 @@ void RawGnssShadow::resync(double t)
 
 void RawGnssShadow::applyDueEpochs(double t, uint8_t imu_flags)
 {
-    while (npending_ > 0)
+    for (;;)
     {
+        if (job_.active)
+        {
+            workJob(t);
+            if (job_.active)
+                return;                   // the rest of it at the next step
+        }
+        if (npending_ == 0)
+            return;
         const TimedRawEpoch& e = pending_[0];
         const double te = static_cast<double>(e.mcu_us) * 1.0e-6 - cfg_.epoch_latency_s;
         if (te > t)
             return;                       // the IMU has not reached it yet
-        const double age = t - te;
-        if (age > cfg_.max_epoch_age_s)
+        if (t - te > cfg_.max_epoch_age_s)
         {
             st_.epochs_stale++;
             pend_flags_ |= RGE_STALE;
             dropFront();
             continue;
         }
-        apply(e, age, t, imu_flags);
+        startJob(e, te, imu_flags);
         pending_[0] = pending_[1];
         npending_--;
     }
 }
 
-void RawGnssShadow::apply(const TimedRawEpoch& e, double age, double t, uint8_t imu_flags)
+// An epoch's work is a job of units: each observation built, the checks on
+// the built sky (each satellite against the IMU, the pad survey), the
+// receiver clock, each satellite fused, and the close. The navigation filter
+// does it a slice a step (epoch_slice_us), so the state it publishes keeps up
+// with the IMU however many satellites there are: on the rig (r7-r9) one pass
+// over 14 satellites held the state 40 ms, a sky of 30 would be 90 ms. Every
+// unit takes the epoch back by the age it has when it runs, which the IMU
+// history covers (0.5 s); a job epoch_job_max_s old is finished at once.
+void RawGnssShadow::startJob(const TimedRawEpoch& e, double te, uint8_t imu_flags)
 {
-    const bool in_flight = (imu_flags & kShadowInFlight) != 0;
-    chooseIono(in_flight);
-    double r[3], v[3];
-    ekf_.receiverEcef(r, v);
-    const int64_t c0 = now();
-    const int n = builder_.build(e.epoch, store_, r, static_cast<double>(ekf_.takeGPeak()), meas_,
-                                 RawEpoch::kMaxObs);
+    job_.e = e;
+    job_.te = te;
+    job_.in_flight = (imu_flags & kShadowInFlight) != 0;
+    chooseIono(job_.in_flight);
+    double v[3];
+    ekf_.receiverEcef(job_.r_prior, v);
+    builder_.begin(job_.e.epoch, job_.r_prior, static_cast<double>(ekf_.takeGPeak()));
+    job_.phase = kJobBuild;
+    job_.n = 0;
+    job_.fused = 0;
+    job_.rs = RawGnssStats();
+    job_.build_us = 0;
+    job_.update_us = 0;
+    job_.slices = 0;
+    job_.t0_us = now();
+    job_.active = true;
+}
+
+void RawGnssShadow::workJob(double t)
+{
+    const bool sliced = cfg_.epoch_slice_us > 0.0 && clock_ != nullptr && t - job_.te <= cfg_.epoch_job_max_s;
+    const int64_t s0 = now();
+    int64_t u0 = s0;
+    job_.slices++;
+    while (job_.active)
+    {
+        const int phase = job_.phase;
+        jobUnit(t);
+        const int64_t u1 = now();
+        if (phase <= kJobChecks)
+            job_.build_us += static_cast<uint32_t>(u1 - u0);
+        else
+            job_.update_us += static_cast<uint32_t>(u1 - u0);
+        u0 = u1;
+        if (sliced && static_cast<double>(u1 - s0) >= cfg_.epoch_slice_us)
+            break;
+    }
+    const uint32_t slice = static_cast<uint32_t>(u0 - s0);
+    if (slice > st_.slice_us_max)
+        st_.slice_us_max = slice;
+    if (!job_.active)
+    {
+        st_.build_us = job_.build_us;
+        st_.update_us = job_.update_us;
+        if (st_.build_us > st_.build_us_max)
+            st_.build_us_max = st_.build_us;
+        if (st_.update_us > st_.update_us_max)
+            st_.update_us_max = st_.update_us;
+        st_.epoch_slices = job_.slices;
+        st_.epoch_wall_us = static_cast<uint32_t>(u0 - job_.t0_us);
+    }
+}
+
+void RawGnssShadow::jobUnit(double t)
+{
+    const double age = t - job_.te;
+    switch (job_.phase)
+    {
+    case kJobBuild:
+        job_.n = builder_.next(job_.e.epoch, store_, meas_, job_.n, RawEpoch::kMaxObs, 1);
+        if (builder_.done(job_.e.epoch))
+            job_.phase = kJobChecks;
+        break;
+    case kJobChecks:
+        jobChecks(age, t);
+        job_.phase = kJobClock;
+        break;
+    case kJobClock:
+        job_.phase = ekf_.beginGnssRaw(meas_, job_.n, age, job_.rs) ? kJobFuse : kJobClose;
+        break;
+    case kJobFuse:
+        if (job_.fused < job_.n)
+        {
+            ekf_.updateGnssRawPart(meas_, job_.fused, job_.fused + 1, age, job_.rs);
+            job_.fused++;
+        }
+        if (job_.fused >= job_.n)
+            job_.phase = kJobClose;
+        break;
+    default:
+        closeJob(age, t);
+        break;
+    }
+}
+
+void RawGnssShadow::jobChecks(double age, double t)
+{
+    const int n = job_.n;
+    const double tow = job_.e.epoch.tow_s;
     // each satellite against the IMU since the last epoch (#1508): one that
     // jumped is taken as relocked, its sigma the builder's relock sigma
     double r_prior[3], v_prior[3];
     ekf_.receiverEcefAt(age, r_prior, v_prior);
-    const int jumped = satcheck_.check(meas_, n, e.epoch.tow_s, r_prior, jumped_);
+    const int jumped = satcheck_.check(meas_, n, tow, r_prior, jumped_);
     for (int i = 0; i < n && jumped > 0; ++i)
     {
         if (!jumped_[i])
             continue;
-        builder_.markRelock(meas_[i].sys, meas_[i].prn, e.epoch.tow_s);
+        builder_.markRelock(meas_[i].sys, meas_[i].prn, tow);
         meas_[i].sigma_pr_corr = static_cast<float>(
             std::hypot(static_cast<double>(meas_[i].sigma_pr_corr), cfg_.meas.relock_sigma_m));
     }
     st_.last_sats_jumped = jumped;
     st_.sats_jumped += static_cast<uint32_t>(jumped);
     // the pad survey, against the launch site the seed carries (a fresh one)
-    if (!in_flight && have_seed_ && seed_.on_pad && seed_.pad_valid)
+    if (!job_.in_flight && have_seed_ && seed_.on_pad && seed_.pad_valid)
     {
         const double ts = static_cast<double>(unwrap32(seed_.time_us, static_cast<int64_t>(t * 1.0e6))) * 1.0e-6;
         if (std::fabs(t - ts) <= cfg_.seed_max_age_s)
@@ -709,28 +809,25 @@ void RawGnssShadow::apply(const TimedRawEpoch& e, double age, double t, uint8_t 
             double pad[3];
             geo_to_ecef(seed_.pad_lla[0], seed_.pad_lla[1], seed_.pad_lla[2], pad);
             for (int i = 0; i < n; ++i)
-                lock_age_[i] = builder_.relockAge(meas_[i].sys, meas_[i].prn, e.epoch.tow_s);
-            survey_.observe(meas_, n, lock_age_, e.epoch.tow_s, pad);
+                lock_age_[i] = builder_.relockAge(meas_[i].sys, meas_[i].prn, tow);
+            survey_.observe(meas_, n, lock_age_, tow, pad);
             st_.survey_epochs++;
         }
     }
-    st_.last_pad_corrected = use_broadcast_ ? 0 : survey_.correct(meas_, n, r);
-    const int64_t c1 = now();
-    const RawGnssStats rs = ekf_.updateGnssRaw(meas_, n, age);
+    st_.last_pad_corrected = use_broadcast_ ? 0 : survey_.correct(meas_, n, job_.r_prior);
+}
+
+void RawGnssShadow::closeJob(double age, double t)
+{
+    const int n = job_.n;
+    const RawGnssStats& rs = job_.rs;
     double r_post[3], v_post[3];
     ekf_.receiverEcefAt(age, r_post, v_post);
-    satcheck_.commit(meas_, n, e.epoch.tow_s, r_post);
-    const int64_t c2 = now();
-    st_.build_us = static_cast<uint32_t>(c1 - c0);
-    st_.update_us = static_cast<uint32_t>(c2 - c1);
-    if (st_.build_us > st_.build_us_max)
-        st_.build_us_max = st_.build_us;
-    if (st_.update_us > st_.update_us_max)
-        st_.update_us_max = st_.update_us;
+    satcheck_.commit(meas_, n, job_.e.epoch.tow_s, r_post);
     st_.last = rs;
     st_.last_age_s = age;
     st_.last_meas = n;
-    st_.last_tow_ms = static_cast<uint32_t>(std::llround(std::fmod(e.epoch.tow_s, 604800.0) * 1000.0));
+    st_.last_tow_ms = static_cast<uint32_t>(std::llround(std::fmod(job_.e.epoch.tow_s, 604800.0) * 1000.0));
     st_.epochs_applied++;
     level_gate_.onEpoch(t, ekf_.velNed());
     if (rs.used_pr > 0)
@@ -740,6 +837,7 @@ void RawGnssShadow::apply(const TimedRawEpoch& e, double age, double t, uint8_t 
     }
     if (rs.clock_jump_ms != 0 || rs.clock_step_m != 0.0 || rs.drift_step_mps != 0.0)
         pend_flags_ |= RGE_CLOCK_STEP;
+    job_.active = false;
 }
 
 void RawGnssShadow::fillLog(uint32_t time_us, uint8_t imu_flags)

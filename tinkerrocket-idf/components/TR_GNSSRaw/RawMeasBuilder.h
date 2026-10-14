@@ -108,6 +108,15 @@ public:
     // g_peak: the largest |specific force| / g - 1 since the last epoch.
     int build(const RawEpoch& ep, const EphemerisStore& eph, const double* r_approx,
               double g_peak, RawMeas* out, int cap);
+    // The same in parts, for a filter that builds a sky between its steps:
+    // begin() takes the epoch (its satellites' relock ages, the receiver, the
+    // g peak), then next() goes on from where it stopped through at most
+    // max_obs of its observations, building into out[n..cap); it returns the
+    // new n. done() once it has been through every observation. next() is
+    // given the same epoch each time; r_approx is copied at begin.
+    void begin(const RawEpoch& ep, const double* r_approx, double g_peak);
+    int  next(const RawEpoch& ep, const EphemerisStore& eph, RawMeas* out, int n, int cap, int max_obs);
+    bool done(const RawEpoch& ep) const { return next_obs_ >= ep.n; }
 
     // Seconds since the satellite last (re)appeared, at GPS time of week tow.
     double relockAge(int sys, int prn, double tow) const;
@@ -141,6 +150,12 @@ private:
     gps_iono_t iono_ = {};
     SatState   cache_[kSatCache];
     uint32_t   cache_tick_ = 0;
+    // the epoch being built (begin, next)
+    int        next_obs_ = 0;
+    bool       have_pos_ = false;
+    double     r_approx_[3] = {};
+    double     lat_ = 0.0, lon_ = 0.0, hgt_ = 0.0;
+    double     el_mask_ = 0.0, g_over_ = 0.0;
     double     first_[kSys][kPrn];
     double     last_[kSys][kPrn];
     bool       seen_[kSys][kPrn];

@@ -178,6 +178,13 @@ public:
     // Every satellite's pseudorange and range rate of one epoch, which was
     // age_s ago.
     RawGnssStats updateGnssRaw(const RawMeas* m, int n, double age_s = 0.0);
+    // The same in parts, for a filter that must keep stepping while it fuses
+    // a sky: beginGnssRaw takes the epoch's receiver clock (its first value, a
+    // step every satellite agrees on; false with no clock yet), then
+    // updateGnssRawPart the satellites [i0, i1), each part at the age the
+    // epoch has when it is fused. updateGnssRaw is the two at one age.
+    bool beginGnssRaw(const RawMeas* m, int n, double age_s, RawGnssStats& st);
+    void updateGnssRawPart(const RawMeas* m, int i0, int i1, double age_s, RawGnssStats& st);
 
     double time() const { return t_; }
     const double* lla() const { return lla_; }

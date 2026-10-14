@@ -500,6 +500,108 @@ TEST(RawGnssEKF, AppliesALateEpochAtItsOwnTime)
         EXPECT_NEAR(late.velNed()[i], truth.velNed()[i], 0.05);
 }
 
+TEST(RawGnssEKF, AnEpochInPartsAtOneAgeIsTheEpochAtOnce)
+{
+    // beginGnssRaw, then updateGnssRawPart over the satellites in two parts,
+    // all at one age: updateGnssRaw, to rounding (each part takes the epoch
+    // back with the velocity the parts before it left)
+    const double vel[3] = {30.0, -20.0, -50.0};
+    RawGnssEKFParams p = quietParams();
+    RawGnssEKF<double> truth(p), whole(p), parts(p);
+    initLevel(truth, kLla0, vel);
+    const double v_err[3] = {vel[0] + 0.5, vel[1] - 0.5, vel[2] + 0.5};
+    double lla_err[3] = {kLla0[0] + 8.0 / 6.37e6, kLla0[1], kLla0[2] + 5.0};
+    initLevel(whole, lla_err, v_err);
+    initLevel(parts, lla_err, v_err);
+    const auto sky = makeSky(kLla0);
+    Clock clk;
+    imuSecond(truth);
+    imuSecond(whole);
+    imuSecond(parts);
+    clk.tick(1.0);
+    for (int e = 0; e < 4; ++e)
+    {
+        double r[3], v[3];
+        truth.receiverEcef(r, v);
+        const auto m = measure(sky, r, v, clk);
+        const int n = static_cast<int>(m.size());
+        const RawGnssStats sw = whole.updateGnssRaw(m.data(), n, 0.1);
+        RawGnssStats sp;
+        ASSERT_TRUE(parts.beginGnssRaw(m.data(), n, 0.1, sp));
+        parts.updateGnssRawPart(m.data(), 0, n / 2, 0.1, sp);
+        parts.updateGnssRawPart(m.data(), n / 2, n, 0.1, sp);
+        EXPECT_EQ(sp.used_pr, sw.used_pr);
+        EXPECT_EQ(sp.used_rr, sw.used_rr);
+        double rp[3], rw[3];
+        ecefOf(parts, rp);
+        ecefOf(whole, rw);
+        EXPECT_LT(dist(rp, rw), 1e-6);
+        for (int i = 0; i < 3; ++i)
+            EXPECT_NEAR(parts.velNed()[i], whole.velNed()[i], 1e-9);
+        imuSecond(truth);
+        imuSecond(whole);
+        imuSecond(parts);
+        clk.tick(1.0);
+    }
+}
+
+TEST(RawGnssEKF, AnEpochFusedInPartsBetweenStepsLandsAtItsOwnTime)
+{
+    // The navigation filter fuses a sky a few satellites at a time between its
+    // steps (RawGnssShadow's epoch job), each part at the age the epoch has by
+    // then. On the climbing receiver above it lands at the truth, and where
+    // the epoch fused at once lands.
+    const double vel[3] = {30.0, -20.0, -50.0};
+    RawGnssEKFParams p = quietParams();
+    RawGnssEKF<double> truth(p), whole(p), parts(p);
+    initLevel(truth, kLla0, vel);
+    const double v_err[3] = {vel[0] + 0.5, vel[1] - 0.5, vel[2] + 0.5};
+    double lla_err[3] = {kLla0[0] + 8.0 / 6.37e6, kLla0[1], kLla0[2] + 5.0};
+    initLevel(whole, lla_err, v_err);
+    initLevel(parts, lla_err, v_err);
+    const auto sky = makeSky(kLla0);
+    Clock clk;
+    imuSecond(truth);
+    imuSecond(whole);
+    imuSecond(parts);
+    clk.tick(1.0);
+    for (int e = 0; e < 12; ++e)
+    {
+        double r[3], v[3];
+        truth.receiverEcef(r, v);
+        const auto m = measure(sky, r, v, clk);
+        const int n = static_cast<int>(m.size());
+        imuSecond(whole, nullptr, 4);         // 20 ms on
+        whole.updateGnssRaw(m.data(), n, 0.02);
+        imuSecond(parts, nullptr, 4);
+        double age = 0.02;
+        RawGnssStats st;
+        ASSERT_TRUE(parts.beginGnssRaw(m.data(), n, age, st));
+        int samples = 4;
+        for (int i = 0; i < n; i += 2)
+        {
+            imuSecond(parts, nullptr, 2);     // a step (10 ms) between parts
+            samples += 2;
+            age += 0.01;
+            parts.updateGnssRawPart(m.data(), i, std::min(i + 2, n), age, st);
+        }
+        EXPECT_GE(st.used_pr, n - 1);
+        imuSecond(truth, nullptr, 200);       // to the next whole second
+        imuSecond(whole, nullptr, 196);
+        imuSecond(parts, nullptr, 200 - samples);
+        clk.tick(1.0);
+    }
+    double rt[3], rw[3], rp[3];
+    ecefOf(truth, rt);
+    ecefOf(whole, rw);
+    ecefOf(parts, rp);
+    EXPECT_LT(dist(rw, rt), 0.5);
+    EXPECT_LT(dist(rp, rt), 0.5);
+    EXPECT_LT(dist(rp, rw), 0.3);
+    for (int i = 0; i < 3; ++i)
+        EXPECT_NEAR(parts.velNed()[i], truth.velNed()[i], 0.05);
+}
+
 TEST(RawGnssEKF, PredictsADopplerThatLagsItsTag)
 {
     // 2 g of upward acceleration; the receiver reports the range rate 55.5 ms

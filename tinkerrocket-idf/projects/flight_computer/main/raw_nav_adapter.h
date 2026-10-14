@@ -63,6 +63,22 @@ public:
             if (n.running)
                 restore_pending_ = false;   // it runs: from the pad or the restore
         }
+        // how old the state the loop now reads is (#1600: an epoch fused in
+        // one pass held it 40 ms on the rig; a slice a step should not)
+        if (nav_.running)
+        {
+            const uint32_t age = now_us - nav_.time_us;
+            if (age < 0x80000000u && age > max_age_us_)
+                max_age_us_ = age;
+        }
+    }
+    // The oldest state the loop was handed since the last call (diagnostic;
+    // read and cleared from the raw filter's task, a benign race).
+    uint32_t takeMaxAgeUs()
+    {
+        const uint32_t a = max_age_us_;
+        max_age_us_ = 0;
+        return a;
     }
     void setGeoidSeparation(float sep_m) { sep_m_ = sep_m; }
 
@@ -320,6 +336,7 @@ private:
     gnss_raw::ShadowNav nav_ = {};
     uint32_t nav_seq_ = 0;
     uint32_t nav_rx_us_ = 0;
+    volatile uint32_t max_age_us_ = 0;
     uint32_t now_us_ = 0;
     float    sep_m_ = 0.0f;
     // the start
