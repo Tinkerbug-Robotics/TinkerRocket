@@ -241,6 +241,9 @@ public:
     void onImu(const ShadowImu& s, int64_t time64_us);
     // A RAW_GNSS_EKF_MSG record, every log_period_s of IMU time while it runs.
     bool takeLog(RawGnssEkfData& out);
+    // Its RAW_GNSS_ATT_MSG companion (attitude 1-sigma, IMU biases), filled at
+    // the same tick: take it after takeLog.
+    bool takeAttLog(RawGnssAttData& out);
     // A GNSS_CHECK_MSG record, one per receiver fix judged.
     bool takeCheckLog(GnssCheckData& out);
 
@@ -366,6 +369,8 @@ private:
     uint8_t       pend_flags_ = 0;      // RGE_STALE / RGE_RESYNC / RGE_CLOCK_STEP since the last record
     RawGnssEkfData log_ = {};
     bool          log_ready_ = false;
+    RawGnssAttData att_log_ = {};
+    bool          att_log_ready_ = false;
     uint64_t      prop_sum_ = 0;        // IMU steps since the last record
     uint32_t      prop_n_ = 0;
     Stats         st_;

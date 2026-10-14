@@ -22,7 +22,7 @@ Start-of-frame bytes from [`TR_I2C_Interface.h`](https://github.com/Tinkerbug-Ro
 
 ## FC ↔ OC message types
 
-102 codes. The dispatch on both ends is a flat first-match chain, so
+103 codes. The dispatch on both ends is a flat first-match chain, so
 two handlers sharing a value means the second is silently dead — which is why
 this list is CI-enforced for uniqueness.
 
@@ -130,8 +130,9 @@ this list is CI-enforced for uniqueness.
 | `0x98` | `PAD_CAL_CONFIG_MSG` | OC → FC | OC→FC: 10-byte PadCalConfigData |
 | `0x99` | `PAD_CAL_STATUS_MSG` | FC → OC | FC→OC over I2S: PadCalStatusData, 1 Hz on the ground; logged, and relayed to the app |
 | `0x9A` | `GNSS_CHECK_MSG` | FC → OC |  |
+| `0x9B` | `RAW_GNSS_ATT_MSG` | FC → OC |  |
 
-> 53 of these 102 codes carry no comment in the header,
+> 54 of these 103 codes carry no comment in the header,
 > so the Notes column is blank for them. Direction is inferred from the
 > `_PENDING` / `_CMD` / `_MSG` suffix in that case, which is a convention,
 > not a guarantee. A trailing `// OC→FC: what it does` on the constant
@@ -155,6 +156,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `LoRaFastData` | 55 |
 | `NonSensorData` | 52 |
 | `NonSensorData` | 52 |
+| `RawGnssAttData` | 46 |
 | `GuidanceConfigData` | 45 |
 | `GNSSData` | 42 |
 | `GNSSData` | 42 |

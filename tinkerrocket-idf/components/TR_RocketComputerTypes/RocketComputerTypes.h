@@ -1557,6 +1557,26 @@ static constexpr uint8_t RGE_LEVEL      = 0x20;  // its last step levelled on th
 static constexpr uint8_t RGE_IN_FLIGHT  = 0x40;  // the flight filter's IMU says INFLIGHT
 static constexpr uint8_t RGE_RESYNC     = 0x80;  // the attitude was retaken from the flight filter (pad) since the last record
 
+// ── RawGnssAttData (RAW_GNSS_ATT_MSG 0x9B, 10 Hz) ───────────────────────────
+// What RawGnssEkfData leaves out of the raw-GNSS filter: how well it knows its
+// attitude, and what it has made of the IMU.  The attitude's 1-sigma as
+// rotations about north, east and down -- down is the heading, and on a rocket
+// near vertical the roll -- and the accelerometer and gyro bias estimates with
+// their 1-sigma.  Written beside each RawGnssEkfData record, with its time_us,
+// so a log shows when the heading converged and what moved it, which the
+// quaternion alone cannot.
+typedef struct __attribute__((packed))
+{
+    uint32_t time_us;                 // the RawGnssEkfData record's
+    uint16_t att_sigma_cdeg[3];       // attitude 1-sigma about N, E and D (the heading), centi-deg (saturates)
+    float    acc_bias_mps2[3];        // accelerometer bias estimate, body FRD, m/s^2
+    float    gyro_bias_dps[3];        // gyro bias estimate, body FRD, deg/s
+    uint16_t acc_bias_sigma_mmps2[3]; // their 1-sigma: mm/s^2 (saturates)
+    uint16_t gyro_bias_sigma_mdps[3]; //   and milli-deg/s (saturates)
+} RawGnssAttData;
+static_assert(sizeof(RawGnssAttData) == 46,
+              "RawGnssAttData must be 46 bytes");
+
 // Ordered: the app may render a progress bar from step/FCB_STEP_COUNT.  Append
 // only — the apps map unknown values to a generic "starting up".
 enum FcBootStep : uint8_t
@@ -2571,6 +2591,10 @@ static constexpr uint8_t PAD_CAL_STATUS_MSG  = 0x99;  // FC→OC over I2S: PadCa
 // the IMU for physically impossible motion (#1508), one GnssCheckData per fix
 // the raw-GNSS shadow judged; straight to the log.  LC86G boards only.
 static constexpr uint8_t GNSS_CHECK_MSG      = 0x9A;
+// FC→OC over I2S: the raw-GNSS filter's attitude 1-sigma and IMU bias
+// estimates (RawGnssAttData), beside each RAW_GNSS_EKF_MSG record, 10 Hz while
+// it runs; straight to the log.  LC86G boards only.
+static constexpr uint8_t RAW_GNSS_ATT_MSG    = 0x9B;
 
 static constexpr uint8_t OUT_STATUS_QUERY    = 0xA0;
 static constexpr uint8_t GNSS_MSG            = 0xA1;
@@ -4116,6 +4140,8 @@ static_assert(sizeof(GNSSSatData) <= MAX_PAYLOAD,
               "GNSSSatData must fit one I2S frame payload");
 static_assert(sizeof(RawGnssEkfData) <= MAX_PAYLOAD,
               "RawGnssEkfData must fit one I2S frame payload");
+static_assert(sizeof(RawGnssAttData) <= MAX_PAYLOAD,
+              "RawGnssAttData must fit one I2S frame payload");
 static_assert(sizeof(PadCalStatusData) <= MAX_PAYLOAD,
               "PadCalStatusData must fit one I2S frame payload");
 static_assert(sizeof(GnssCheckData) <= MAX_PAYLOAD,

@@ -774,3 +774,53 @@ TEST(RawGnssEKF, AFieldWithNoHorizontalPartSaysNothing)
     EXPECT_FALSE(f.updateMagHeading(acc, down_only, true, 0.0f, -1.0f));
     EXPECT_FLOAT_EQ(f.quat()[0], 1.0f);
 }
+
+// ---- the attitude's 1-sigma about north, east and down (RAW_GNSS_ATT_MSG)
+
+TEST(RawGnssEKF, TheAttitudeSigmaIsAboutNorthEastAndDown)
+{
+    // A known attitude (setQuaternion: 1e-6 on each half-angle) is 2 mrad of
+    // angle about every axis, at any attitude.
+    {
+        float q[4];
+        quatYawPitch(30.0 * kPi / 180.0, 90.0 * kPi / 180.0, q);
+        RawGnssEKF<float> f(quietParams());
+        const float v0[3] = {0, 0, 0};
+        f.init(kLla0, v0, q, 0.0);
+        f.setQuaternion(q);
+        float s[3];
+        f.attSigmaNed(s);
+        for (int i = 0; i < 3; ++i)
+            EXPECT_NEAR(s[i], 2.0e-3f, 1.0e-5f) << i;
+    }
+    // Levelling on gravity learns the tilt and never the heading: at any pitch,
+    // up the rail included, north and east lose their sigma and down keeps it.
+    // From an isotropic start: the default one is a level body's (the heading's
+    // sigma about body z), which tipped over correlates down with the tilt.
+    RawGnssEKFParams iso = quietParams();
+    iso.p0_att = iso.p0_hdg = 0.5;
+    for (double pitch_deg : {0.0, 45.0, 90.0})
+    {
+        float q[4];
+        quatYawPitch(30.0 * kPi / 180.0, pitch_deg * kPi / 180.0, q);
+        RawGnssEKF<float> f(iso);
+        const float v0[3] = {0, 0, 0};
+        f.init(kLla0, v0, q, 0.0);
+        float s0[3];
+        f.attSigmaNed(s0);
+        const double g_ned[3] = {0.0, 0.0, -kG};    // the specific force at rest: up
+        float acc[3];
+        nedToBody(q, g_ned, acc);
+        const float gyro[3] = {0, 0, 0};
+        for (int k = 0; k < 100; ++k)                // 2 s at 50 Hz
+        {
+            f.propagate(acc, gyro, 0.02f);
+            f.updateAccelLevel(acc);
+        }
+        float s[3];
+        f.attSigmaNed(s);
+        EXPECT_LT(s[0], 0.2f * s0[0]) << "north, pitch " << pitch_deg;
+        EXPECT_LT(s[1], 0.2f * s0[1]) << "east, pitch " << pitch_deg;
+        EXPECT_GT(s[2], 0.8f * s0[2]) << "down (the heading), pitch " << pitch_deg;
+    }
+}

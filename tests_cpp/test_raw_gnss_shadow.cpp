@@ -1004,6 +1004,74 @@ TEST(RawGnssShadow, TheNavigationFilterSetsItsOwnAttitudeOnThePad)
     EXPECT_GT(nav.var[8], 0.0f);
 }
 
+TEST(RawGnssShadow, EachRecordCarriesTheAttitudeSigmaAndTheBiasesBesideIt)
+{
+    // RAW_GNSS_ATT_MSG, beside every RAW_GNSS_EKF_MSG record at the same tick.
+    // The navigation filter up rp5_0829's rail: levelling learns the tilt, so
+    // north and east are known long before down -- the heading -- is; the
+    // magnetometer, from 3 s, brings the heading in, and the records show when.
+    float q[4];
+    quatYawPitch(44.7 * kPi / 180.0, 83.6 * kPi / 180.0, q);
+    const double b_ned[3] = {21.0, -4.3, 45.5};
+    const double up[3] = {0.0, 0.0, -kG};
+    float acc[3], mag[3];
+    nedToBody(q, up, acc);
+    nedToBody(q, b_ned, mag);
+
+    RawGnssShadow sh(primaryCfg());
+    ShadowSeed seed = padSeed(kT0);
+    for (int i = 0; i < 4; ++i)
+        seed.quat[i] = q[i];
+    seed.declination_rad = float(std::atan2(b_ned[1], b_ned[0]));
+    seed.field_ut = 50.3f;
+    seed.have_declination = 1;
+    sh.onSeed(seed);
+    RawGnssEkfData rec;
+    RawGnssAttData att, before_mag{}, after_mag{};
+    int n = 0;
+    for (int64_t t = kT0; t < kT0 + 6000000; t += 5000)
+    {
+        ShadowImu s{};
+        s.time_us = static_cast<uint32_t>(t);
+        for (int i = 0; i < 3; ++i)
+            s.acc[i] = acc[i];
+        s.flags = gnss_raw::kShadowLevel;
+        if (t >= kT0 + 3000000 && (t - kT0) % 20000 == 0)   // a 50 Hz magnetometer, from 3 s
+        {
+            gnss_raw::ShadowMag m{};
+            m.time_us = static_cast<uint32_t>(t);
+            for (int i = 0; i < 3; ++i)
+                m.mag[i] = mag[i];
+            sh.onMag(m);
+        }
+        if ((t - kT0) % 1000000 == 0)              // the seed, once a second as main.cpp sends it
+        {
+            seed.time_us = static_cast<uint32_t>(t);
+            sh.onSeed(seed);
+        }
+        sh.onImu(s, t);
+        while (sh.takeLog(rec))
+        {
+            ASSERT_TRUE(sh.takeAttLog(att));
+            EXPECT_EQ(att.time_us, rec.time_us);
+            n++;
+            (t < kT0 + 3000000 ? before_mag : after_mag) = att;
+        }
+        EXPECT_FALSE(sh.takeAttLog(att));          // never one without its record
+    }
+    EXPECT_GT(n, 50);
+    EXPECT_LT(before_mag.att_sigma_cdeg[0], before_mag.att_sigma_cdeg[2] / 4);
+    EXPECT_LT(before_mag.att_sigma_cdeg[1], before_mag.att_sigma_cdeg[2] / 4);
+    EXPECT_LT(after_mag.att_sigma_cdeg[2], before_mag.att_sigma_cdeg[2] / 4);
+    for (int i = 0; i < 3; ++i)
+    {
+        EXPECT_TRUE(std::isfinite(after_mag.acc_bias_mps2[i]));
+        EXPECT_TRUE(std::isfinite(after_mag.gyro_bias_dps[i]));
+        EXPECT_GT(after_mag.acc_bias_sigma_mmps2[i], 0);
+        EXPECT_GT(after_mag.gyro_bias_sigma_mdps[i], 0);
+    }
+}
+
 TEST(RawGnssShadow, TheNavigationFilterStartsInFlightFromARestoredFlight)
 {
     RawGnssShadow sh(primaryCfg());
