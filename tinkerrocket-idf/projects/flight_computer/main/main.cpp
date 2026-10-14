@@ -3013,6 +3013,11 @@ static inline void rawShadowPushImu(const EkfIMUData& imu, bool level, bool in_f
     s.flags = (uint8_t)((level ? gnss_raw::kShadowLevel : 0) | (in_flight ? gnss_raw::kShadowInFlight : 0)
                         | (sim ? gnss_raw::kShadowSim : 0) | (landed ? gnss_raw::kShadowLanded : 0));
     raw_shadow_link.imu.push(s);   // a full ring drops the tick and counts it
+#if TR_RAW_GNSS_PRIMARY
+    // and the navigation state the loop reads, brought forward through it
+    // from the raw filter's last (#1626 K2, raw_nav_adapter.h)
+    ekf.noteImu(s);
+#endif
 }
 
 // Core 1, once a second: the flight filter's state, to start from and, on the
@@ -3241,10 +3246,14 @@ static void rawShadowTask(void*)
                      (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
 #if TR_RAW_GNSS_PRIMARY
             // what the flight loop got (RawNavAdapter): the oldest state it
-            // read in the window, and how the last epoch was spread
-            ESP_LOGI(TAG, "[RAWGNSS] nav: the loop read a state at most %.1f ms old | last epoch in %lu slices "
+            // read in the window -- brought forward to its latest IMU tick
+            // (#1626 K2) from the raw filter's, which was at most so far
+            // behind -- and how the last epoch was spread
+            ESP_LOGI(TAG, "[RAWGNSS] nav: the loop read a state at most %.1f ms old, brought forward up to "
+                          "%.1f ms from the filter's (%lu read as published) | last epoch in %lu slices "
                           "over %.0f ms (longest slice %.1f ms)",
-                     (double)ekf.takeMaxAgeUs() * 1e-3, (unsigned long)st.epoch_slices,
+                     (double)ekf.takeMaxAgeUs() * 1e-3, (double)ekf.takeMaxForwardUs() * 1e-3,
+                     (unsigned long)ekf.forwardShort(), (unsigned long)st.epoch_slices,
                      (double)st.epoch_wall_us * 1e-3, (double)st.slice_us_max * 1e-3);
 #endif
             // each satellite's pad correction, at its elevation from the pad:

@@ -1627,12 +1627,17 @@ gtest_discover_tests(test_raw_gnss_shadow)
 # ---------- test_raw_nav_adapter ----------
 # GpsInsEKF's face on the raw-GNSS filter's state (#1600): the Beetle's
 # navigation filter as main.cpp reads it -- the start before it runs, heights
-# turned from the ellipsoid to the geoid, staleness, the snapshot a reboot
-# restores, and the magnetometer it hands the raw filter.
-add_executable(test_raw_nav_adapter test_raw_nav_adapter.cpp)
+# turned from the ellipsoid to the geoid, the state brought forward to the
+# latest IMU tick (against TR_RawGnssEKF's own propagation, #1626 K2),
+# staleness, the snapshot a reboot restores, and the magnetometer it hands the
+# raw filter.
+add_executable(test_raw_nav_adapter test_raw_nav_adapter.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+)
 target_include_directories(test_raw_nav_adapter PRIVATE
     ${SHIM_DIR}
     ${LIB_DIR}/TR_GpsInsEKF
+    ${LIB_DIR}/TR_RawGnssEKF
     ${LIB_DIR}/TR_RawGnssShadow
     ${LIB_DIR}/TR_GNSSRaw
     ${LIB_DIR}/TR_GNSSRaw/include
