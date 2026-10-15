@@ -1012,8 +1012,17 @@ void RawGnssShadow::stepHeading(double t, const float acc[3], const float gyro[3
             st_.heading_flights++;
         if (cfg_.heading_mode == kHeadingAct)
         {
-            // from here GNSS turns the heading, and only the heading
-            ekf_.setAttGateVertical(true);
+            // from here GNSS turns the heading, and only the heading -- or,
+            // with the full gate, the whole attitude
+            if (cfg_.heading_gate_full)
+            {
+                ekf_.setAttGateVertical(false);
+                ekf_.setAttGateCos4(false);
+            }
+            else
+            {
+                ekf_.setAttGateVertical(true);
+            }
             ekf_.setHeadingSigma(static_cast<float>(cfg_.heading_pad_sigma_deg / kRad2Deg));
             // and, if asked, the tilt let go to at least its floor
             if (cfg_.heading_launch_tilt_sigma_deg > 0.0)
@@ -1024,7 +1033,10 @@ void RawGnssShadow::stepHeading(double t, const float acc[3], const float gyro[3
     {
         fit_flight_ = false;              // back on the ground
         if (cfg_.heading_mode == kHeadingAct)
+        {
             ekf_.setAttGateVertical(cfg_.ekf.att_gate_vertical);
+            ekf_.setAttGateCos4(cfg_.ekf.att_gate_cos4);
+        }
     }
     fit_ground_ = ground;
     const uint32_t us = static_cast<uint32_t>(now() - c0);

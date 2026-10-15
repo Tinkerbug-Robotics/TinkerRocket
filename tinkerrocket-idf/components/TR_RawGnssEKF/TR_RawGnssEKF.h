@@ -155,6 +155,9 @@ public:
     // att_gate_vertical, switched in flight (the heading fit's act mode: from
     // launch -- on the pad nothing sees the heading for GNSS to turn)
     void setAttGateVertical(bool on) { p_.att_gate_vertical = on; }
+    // att_gate_cos4, switched in flight (act's full gate: GNSS corrections
+    // reach the whole attitude, att_gate_vertical off as well)
+    void setAttGateCos4(bool on) { p_.att_gate_cos4 = on; }
 
     // Start at a position (lat, lon rad; ellipsoidal height m), NED velocity
     // and attitude, at filter time t0 (s; any clock the IMU steps share).

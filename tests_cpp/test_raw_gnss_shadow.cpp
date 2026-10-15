@@ -2388,7 +2388,20 @@ struct BoostRun
     int handed_at = -1;        // the record that handed over
     float att_sigma_pad[3] = {};      // attSigmaNed (rad) at the last step before the launch edge,
     float att_sigma_launch[3] = {};   //   and just after it
+    float q_launch[4] = {};    // the filter's attitude just after the launch edge,
+    float q_burnout[4] = {};   //   at burnout (T+1.5 s: one epoch, T+1, fused in the boost)
 };
+
+// The tilt between two attitudes, deg: a's turned about the vertical onto
+// b's heading, then the angle between them.
+double tiltErrDeg(const float a[4], const float b[4])
+{
+    const double hd = gnss_raw::headingBetween(a, b);
+    const float qz[4] = {float(std::cos(-0.5 * hd)), 0.0f, 0.0f, float(std::sin(-0.5 * hd))};
+    const float q[4] = {qz[0] * a[0] - qz[3] * a[3], qz[0] * a[1] - qz[3] * a[2], qz[0] * a[2] + qz[3] * a[1],
+                        qz[0] * a[3] + qz[3] * a[0]};
+    return attErrDeg(q, b);
+}
 
 // The Beetle's pad: still for 6 s, then a boost (10 g for 1.5 s) and drag to
 // T+10 s on a body leaning 5 deg toward azimuth 70, rolled 25 deg; raw epochs
@@ -2398,9 +2411,10 @@ struct BoostRun
 // the GNSS task's stage and handed over built, as on the Beetle (#1626).
 // apart, min_epochs, sure_deg: heading_handoff_apart, _min_epochs and
 // _sure_deg, when not negative (else the defaults). tilt_floor_deg:
-// heading_launch_tilt_sigma_deg.
+// heading_launch_tilt_sigma_deg; gate_full: heading_gate_full.
 BoostRun flyBoost(uint8_t mode, double seed_err_deg, double bias_y = 0.0, double bias_z = 0.0, bool external = false,
-                  double apart = -1.0, int min_epochs = -1, double sure_deg = -1.0, double tilt_floor_deg = 0.0)
+                  double apart = -1.0, int min_epochs = -1, double sure_deg = -1.0, double tilt_floor_deg = 0.0,
+                  bool gate_full = false)
 {
     double lat, lon, h;
     ecef_to_geo(kGoldenRmRx, &lat, &lon, &h);
@@ -2423,6 +2437,7 @@ BoostRun flyBoost(uint8_t mode, double seed_err_deg, double bias_y = 0.0, double
     if (sure_deg >= 0.0)
         cfg.heading_handoff_sure_deg = sure_deg;
     cfg.heading_launch_tilt_sigma_deg = tilt_floor_deg;
+    cfg.heading_gate_full = gate_full;
     cfg.meas.troposphere = false;
     cfg.external_build = external;
     RawGnssShadow sh(cfg);
@@ -2493,9 +2508,18 @@ BoostRun flyBoost(uint8_t mode, double seed_err_deg, double bias_y = 0.0, double
         const int64_t t64 = kT0 + static_cast<int64_t>(std::llround(t * 1e6));
         sh.onImu(s, t64);
         if (!(s.flags & gnss_raw::kShadowInFlight))
+        {
             sh.filter().attSigmaNed(run.att_sigma_pad);
+        }
         else if (++flight_ticks == 3)                         // a step (10 ms) into the flight
+        {
             sh.filter().attSigmaNed(run.att_sigma_launch);
+            for (int i = 0; i < 4; ++i)
+                run.q_launch[i] = sh.filter().quat()[i];
+        }
+        if (std::fabs(t - (t_ign + 1.5)) < 0.5 * dt)
+            for (int i = 0; i < 4; ++i)
+                run.q_burnout[i] = sh.filter().quat()[i];
         // an epoch at each whole GPS second, built where the receiver truly is
         if (t + 1e-9 >= next_epoch)
         {
@@ -2657,6 +2681,62 @@ TEST(RawGnssShadow, TheHeadingFitIsOffByDefault)
     EXPECT_TRUE(run.recs.empty());
     EXPECT_EQ(run.st.heading_seeds, 0u);
     EXPECT_EQ(run.st.heading_epochs, 0u);
+}
+
+TEST(RawGnssShadow, TheFullGateOpensAtLaunchAndClosesOnTheGround)
+{
+    // heading_gate_full: in act, from the launch edge, neither the vertical
+    // gate nor cos^4; back on the ground both are the EKF config's again.
+    // Without it act gates to the vertical; off by default.
+    EXPECT_FALSE(RawGnssShadow::Config().heading_gate_full);
+    for (bool full : {false, true})
+    {
+        RawGnssShadow::Config cfg = primaryCfg();
+        cfg.heading_mode = RawGnssShadow::kHeadingAct;
+        cfg.heading_gate_full = full;
+        RawGnssShadow sh(cfg);
+        sh.onSeed(padSeed(kT0));
+        int64_t t = feedFlight(sh, kT0, 1.0, 0.0f, gnss_raw::kShadowLevel, false);
+        ASSERT_TRUE(sh.running());
+        EXPECT_TRUE(sh.filter().params().att_gate_cos4);
+        EXPECT_FALSE(sh.filter().params().att_gate_vertical);
+        t = feedFlight(sh, t, 0.5, 20.0f, gnss_raw::kShadowInFlight, false);
+        ASSERT_TRUE(sh.running());
+        EXPECT_EQ(sh.filter().params().att_gate_cos4, !full) << full;
+        EXPECT_EQ(sh.filter().params().att_gate_vertical, !full) << full;
+        feedFlight(sh, t, 0.5, 0.0f, gnss_raw::kShadowLanded, false);
+        ASSERT_TRUE(sh.running());
+        EXPECT_TRUE(sh.filter().params().att_gate_cos4) << full;
+        EXPECT_FALSE(sh.filter().params().att_gate_vertical) << full;
+    }
+}
+
+TEST(RawGnssShadow, TheFullGateTakesThePadsTiltOutInTheBoost)
+{
+    // The pad's tilt 1 deg off: the accelerometer reads g tan(1 deg) (0.17
+    // m/s^2) sideways, which the 6 s pad's levelling takes as tilt (#1626
+    // K1); the heading is right. In the boost the 10 g of thrust turns that
+    // tilt into 1.7 m/s^2 the bias cannot make. With heading_gate_full GNSS
+    // takes it out: the boost's one epoch to 0.29 deg, the coast's epochs to
+    // 0.07. Through act's default gate, the heading's, it stays 0.97.
+    const double by = kG * std::tan(1.0 * kPi / 180.0);
+    const BoostRun hdg = flyBoost(RawGnssShadow::kHeadingAct, 0.0, by, 0.0, false, -1.0, -1, -1.0, 0.0, false);
+    const BoostRun full = flyBoost(RawGnssShadow::kHeadingAct, 0.0, by, 0.0, false, -1.0, -1, -1.0, 0.0, true);
+    for (const BoostRun* r : {&hdg, &full})
+        EXPECT_NEAR(tiltErrDeg(r->q_launch, r->q_true), 1.0, 0.1);
+    const double h0 = tiltErrDeg(hdg.q_launch, hdg.q_true);
+    EXPECT_NEAR(tiltErrDeg(hdg.q_burnout, hdg.q_true), h0, 0.02);
+    EXPECT_NEAR(tiltErrDeg(hdg.q_end, hdg.q_true), h0, 0.02);
+    const double f0 = tiltErrDeg(full.q_launch, full.q_true);
+    EXPECT_LT(tiltErrDeg(full.q_burnout, full.q_true), 0.5 * f0);
+    EXPECT_LT(tiltErrDeg(full.q_end, full.q_true), 0.15 * f0);
+    EXPECT_LT(attErrDeg(full.q_end, full.q_true), 0.5);
+    // Why the default is the heading's gate: with the heading 40 deg off (its
+    // own velocity error in the boost), the full gate puts some of it into
+    // the tilt -- 2 deg at burnout, 1.2 at the end -- where the heading's
+    // gate leaves the pad's 1.
+    const BoostRun lost = flyBoost(RawGnssShadow::kHeadingAct, 40.0, by, 0.0, false, -1.0, -1, -1.0, 0.0, true);
+    EXPECT_GT(tiltErrDeg(lost.q_burnout, lost.q_true), 1.5);
 }
 
 TEST(RawGnssShadow, ActLetsTheTiltGoToItsLaunchFloor)

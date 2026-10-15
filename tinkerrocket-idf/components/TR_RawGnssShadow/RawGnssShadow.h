@@ -84,7 +84,9 @@
 // near-certainty), its tilt at least heading_launch_tilt_sigma_deg if that
 // is set (the pad cannot tell its tilt from an accelerometer bias, #1626
 // K1), and GNSS reaches its attitude only about the vertical
-// (att_gate_vertical); once the fit's 1-sigma is heading_handoff_deg or less,
+// (att_gate_vertical) -- or, with heading_gate_full, all of it, neither that
+// gate nor cos^4 pitch (back on the ground both are the EKF config's
+// again); once the fit's 1-sigma is heading_handoff_deg or less,
 // and no other heading far off fits within heading_handoff_rival of it (the
 // profile's second valley, HeadingFit::Result::rival -- for thrust along the
 // nose there is none), its heading is handed over, once a flight -- turned
@@ -197,6 +199,8 @@ public:
         double   heading_launch_tilt_sigma_deg = 0.0;   // act: and the tilt's at least this from launch
                                                         //   (the pad's is the accelerometer bias's too,
                                                         //   #1626 K1; 0: off)
+        bool     heading_gate_full = false;      // act: from launch GNSS reaches the whole attitude (neither
+                                                 //   the vertical gate nor cos^4), not the heading only
         double   heading_handoff_vel_mps = 3.0;  // act: the velocity let go to this at the hand-off
     };
 
