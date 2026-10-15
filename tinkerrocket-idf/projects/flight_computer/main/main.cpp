@@ -12553,12 +12553,20 @@ extern "C" void app_main(void)
 {
     setup_fc();
     TaskHandle_t flight_task = nullptr;
-    xTaskCreatePinnedToCore(
+    if (xTaskCreatePinnedToCore(
         [](void *) {
             // Subscribe this task to WDT so esp_task_wdt_reset() works
             esp_task_wdt_add(xTaskGetCurrentTaskHandle());
             tr_lp_boot();   // bench profiler (TR_LOOP_PROFILE); empty otherwise
             for (;;) { loop_fc(); esp_task_wdt_reset(); }
         },
-        "flight", 16 * 1024, nullptr, configMAX_PRIORITIES - 1, &flight_task, 1);
+        "flight", 16 * 1024, nullptr, configMAX_PRIORITIES - 1, &flight_task, 1) != pdPASS)
+    {
+        // Its stack is 16 KB of internal RAM in one block: a rig image once
+        // had too little left, and never flew, without a word.
+        ESP_LOGE(TAG, "[BOOT] *** THE FLIGHT TASK (\"flight\", 16 KB stack) WAS NOT CREATED: NO FLIGHT LOOP RUNS *** "
+                      "internal RAM %u B free, largest block %u B",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    }
 }
