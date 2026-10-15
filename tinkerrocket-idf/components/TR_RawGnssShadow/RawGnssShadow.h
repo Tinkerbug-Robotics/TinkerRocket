@@ -81,7 +81,9 @@
 // step for it, between the checks and the receiver clock -- logging each fit
 // (HEADING_FIT_MSG). Observe: that is all. Act: from launch the filter's
 // heading has heading_pad_sigma_deg (the magnetometer's, not the pad's
-// near-certainty) and GNSS reaches its attitude only about the vertical
+// near-certainty), its tilt at least heading_launch_tilt_sigma_deg if that
+// is set (the pad cannot tell its tilt from an accelerometer bias, #1626
+// K1), and GNSS reaches its attitude only about the vertical
 // (att_gate_vertical); once the fit's 1-sigma is heading_handoff_deg or less,
 // and no other heading far off fits within heading_handoff_rival of it (the
 // profile's second valley, HeadingFit::Result::rival -- for thrust along the
@@ -192,6 +194,9 @@ public:
                                                  //   lost, not just unsure (0: whatever the filter's) --
         double   heading_handoff_sure_deg = 3.0; //   unless the fit's 1-sigma is at or under this
         double   heading_pad_sigma_deg = 30.0;   // act: the heading's 1-sigma from launch on
+        double   heading_launch_tilt_sigma_deg = 0.0;   // act: and the tilt's at least this from launch
+                                                        //   (the pad's is the accelerometer bias's too,
+                                                        //   #1626 K1; 0: off)
         double   heading_handoff_vel_mps = 3.0;  // act: the velocity let go to this at the hand-off
     };
 

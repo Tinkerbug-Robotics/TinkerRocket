@@ -2386,6 +2386,8 @@ struct BoostRun
     float q_end[4] = {};       // the filter's attitude at the end
     RawGnssShadow::Stats st;
     int handed_at = -1;        // the record that handed over
+    float att_sigma_pad[3] = {};      // attSigmaNed (rad) at the last step before the launch edge,
+    float att_sigma_launch[3] = {};   //   and just after it
 };
 
 // The Beetle's pad: still for 6 s, then a boost (10 g for 1.5 s) and drag to
@@ -2395,9 +2397,10 @@ struct BoostRun
 // it); the launch detector calls it at T+0.1 s. external: each epoch built by
 // the GNSS task's stage and handed over built, as on the Beetle (#1626).
 // apart, min_epochs, sure_deg: heading_handoff_apart, _min_epochs and
-// _sure_deg, when not negative (else the defaults).
+// _sure_deg, when not negative (else the defaults). tilt_floor_deg:
+// heading_launch_tilt_sigma_deg.
 BoostRun flyBoost(uint8_t mode, double seed_err_deg, double bias_y = 0.0, double bias_z = 0.0, bool external = false,
-                  double apart = -1.0, int min_epochs = -1, double sure_deg = -1.0)
+                  double apart = -1.0, int min_epochs = -1, double sure_deg = -1.0, double tilt_floor_deg = 0.0)
 {
     double lat, lon, h;
     ecef_to_geo(kGoldenRmRx, &lat, &lon, &h);
@@ -2419,6 +2422,7 @@ BoostRun flyBoost(uint8_t mode, double seed_err_deg, double bias_y = 0.0, double
         cfg.heading_handoff_min_epochs = min_epochs;
     if (sure_deg >= 0.0)
         cfg.heading_handoff_sure_deg = sure_deg;
+    cfg.heading_launch_tilt_sigma_deg = tilt_floor_deg;
     cfg.meas.troposphere = false;
     cfg.external_build = external;
     RawGnssShadow sh(cfg);
@@ -2450,6 +2454,7 @@ BoostRun flyBoost(uint8_t mode, double seed_err_deg, double bias_y = 0.0, double
     std::vector<std::array<double, 3>> vel_hist;
     int next_epoch = 1;
     std::vector<TimedRawEpoch> due;                           // built at their tag, handed over 0.2 s later
+    int flight_ticks = 0;
     for (double t = dt; t <= t_end + 1e-9; t += dt)
     {
         // the truth: piecewise-constant specific force, the body's attitude fixed
@@ -2487,6 +2492,10 @@ BoostRun flyBoost(uint8_t mode, double seed_err_deg, double bias_y = 0.0, double
         s.flags = t < t_ign ? gnss_raw::kShadowLevel : (t >= t_det ? gnss_raw::kShadowInFlight : 0);
         const int64_t t64 = kT0 + static_cast<int64_t>(std::llround(t * 1e6));
         sh.onImu(s, t64);
+        if (!(s.flags & gnss_raw::kShadowInFlight))
+            sh.filter().attSigmaNed(run.att_sigma_pad);
+        else if (++flight_ticks == 3)                         // a step (10 ms) into the flight
+            sh.filter().attSigmaNed(run.att_sigma_launch);
         // an epoch at each whole GPS second, built where the receiver truly is
         if (t + 1e-9 >= next_epoch)
         {
@@ -2648,4 +2657,28 @@ TEST(RawGnssShadow, TheHeadingFitIsOffByDefault)
     EXPECT_TRUE(run.recs.empty());
     EXPECT_EQ(run.st.heading_seeds, 0u);
     EXPECT_EQ(run.st.heading_epochs, 0u);
+}
+
+TEST(RawGnssShadow, ActLetsTheTiltGoToItsLaunchFloor)
+{
+    // heading_launch_tilt_sigma_deg: at the launch edge act raises the tilt's
+    // 1-sigma about north and east to at least it, beside the heading's own
+    // (a pad cannot tell its tilt from an accelerometer bias, #1626 K1). The
+    // 6 s pad here levels the tilt to ~5 deg, so the floor is 8. Off (0) by
+    // default, and never in observe.
+    const double floor_deg = 8.0;
+    const BoostRun act = flyBoost(RawGnssShadow::kHeadingAct, 0.0, 0.0, 0.0, false, -1.0, -1, -1.0, floor_deg);
+    const BoostRun plain = flyBoost(RawGnssShadow::kHeadingAct, 0.0);
+    const BoostRun observe = flyBoost(RawGnssShadow::kHeadingObserve, 0.0, 0.0, 0.0, false, -1.0, -1, -1.0, floor_deg);
+    EXPECT_EQ(RawGnssShadow::Config().heading_launch_tilt_sigma_deg, 0.0);
+    for (int i = 0; i < 2; ++i)
+    {
+        EXPECT_LT(act.att_sigma_pad[i] * 180.0 / kPi, floor_deg - 1.0) << i;
+        EXPECT_GE(act.att_sigma_launch[i] * 180.0 / kPi, floor_deg * (1.0 - 1.0e-4)) << i;
+        EXPECT_NEAR(plain.att_sigma_launch[i], plain.att_sigma_pad[i], 1.0e-3f * plain.att_sigma_pad[i]) << i;
+        EXPECT_NEAR(observe.att_sigma_launch[i], observe.att_sigma_pad[i], 1.0e-3f * observe.att_sigma_pad[i]) << i;
+    }
+    // the heading's is act's own either way
+    EXPECT_NEAR(act.att_sigma_launch[2] * 180.0 / kPi, RawGnssShadow::Config().heading_pad_sigma_deg, 0.1);
+    EXPECT_NEAR(plain.att_sigma_launch[2] * 180.0 / kPi, RawGnssShadow::Config().heading_pad_sigma_deg, 0.1);
 }

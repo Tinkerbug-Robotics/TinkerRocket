@@ -1227,6 +1227,123 @@ TEST(RawGnssEKF, AHeadingSigmaFreesTheHeadingAndKeepsTheTilt)
     }
 }
 
+TEST(RawGnssEKF, ATiltFloorRaisesTheTiltAndKeepsTheVertical)
+{
+    // setTiltSigmaFloor: the tilt's 1-sigma about north and about east at
+    // least the floor -- each one's deficit added along it -- the attitude's
+    // part about the vertical, the north-east covariance and every other
+    // state's covariance as they were; a tilt already past the floor is left
+    // as it is. After GNSS and a second's drift the tilt is under a degree,
+    // and tipped over its north and east differ (0.74 and 0.56 deg at 60 deg
+    // of pitch), so a floor between them raises the one and leaves the other.
+    using F = RawGnssEKF<double>;
+    constexpr int N = F::N;
+    // the variances about north and east (half-angle^2), their covariance, and the vertical's row
+    auto block = [](const F& f, double& nn, double& ee, double& ne, double vrow[N]) {
+        const double* qn = f.quat();
+        const double w = qn[0], x = qn[1], y = qn[2], z = qn[3];
+        const double u[3][3] = {{1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)},   // north,
+                                {2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)},   // east,
+                                {2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)}};  // down, in the body
+        double B[2][2];
+        for (int i = 0; i < 2; ++i)
+            for (int j = 0; j < 2; ++j)
+            {
+                B[i][j] = 0.0;
+                for (int a = 0; a < 3; ++a)
+                    for (int b = 0; b < 3; ++b)
+                        B[i][j] += u[i][a] * f.P(F::kAtt + a, F::kAtt + b) * u[j][b];
+            }
+        nn = B[0][0];
+        ee = B[1][1];
+        ne = B[0][1];
+        for (int j = 0; j < N; ++j)
+        {
+            vrow[j] = 0.0;
+            for (int a = 0; a < 3; ++a)
+                vrow[j] += u[2][a] * f.P(F::kAtt + a, j);
+        }
+    };
+    auto outsideKept = [](const F& f, const F& f0) {
+        for (int i = 0; i < N; ++i)
+            for (int j = 0; j < N; ++j)
+                if (!(i >= F::kAtt && i < F::kAtt + 3 && j >= F::kAtt && j < F::kAtt + 3))
+                    EXPECT_EQ(f.P(i, j), f0.P(i, j)) << i << ", " << j;
+    };
+    for (double pitch_deg : {0.0, 60.0, 83.6, 90.0})
+    {
+        SCOPED_TRACE(pitch_deg);
+        Clock clk;
+        F f0 = converged<double>(5, clk);
+        float qf[4];
+        quatYawPitch(30.0 * kPi / 180.0, pitch_deg * kPi / 180.0, qf);
+        const double q[4] = {qf[0], qf[1], qf[2], qf[3]};
+        f0.setQuaternion(q);
+        imuSecond(f0);
+        f0.setHeadingSigma(30.0 * kPi / 180.0);
+        double nn0, ee0, ne0, v0[N], s0[3];
+        block(f0, nn0, ee0, ne0, v0);
+        f0.attSigmaNed(s0);
+        ASSERT_LT(std::max(s0[0], s0[1]), 1.0 * kPi / 180.0);
+        // under the tilt: nothing moves
+        {
+            F f = f0;
+            f.setTiltSigmaFloor(0.01 * kPi / 180.0);
+            for (int i = 0; i < N; ++i)
+                for (int j = 0; j < N; ++j)
+                    EXPECT_EQ(f.P(i, j), f0.P(i, j)) << i << ", " << j;
+        }
+        // between north's and east's (tipped over): the smaller raised, the larger kept
+        if (std::max(nn0, ee0) > 1.5 * std::min(nn0, ee0))
+        {
+            F f = f0;
+            const double fl2 = std::sqrt(nn0 * ee0);                      // a variance between them
+            f.setTiltSigmaFloor(2.0 * std::sqrt(fl2));                    // as a rotation's 1-sigma
+            double nn, ee, ne, v[N];
+            block(f, nn, ee, ne, v);
+            EXPECT_NEAR(nn, std::max(nn0, fl2), 1.0e-15);
+            EXPECT_NEAR(ee, std::max(ee0, fl2), 1.0e-15);
+            EXPECT_NEAR(ne, ne0, 1.0e-15);
+            for (int j = 0; j < N; ++j)
+                EXPECT_NEAR(v[j], v0[j], 1.0e-15) << "the vertical's row, state " << j;
+            outsideKept(f, f0);
+            expectCovarianceHealthy(f);
+        }
+        // past both: north and east at the floor, their covariance kept
+        {
+            F f = f0;
+            const double floor_rad = 3.0 * kPi / 180.0;
+            f.setTiltSigmaFloor(floor_rad);
+            double nn, ee, ne, v[N], s[3];
+            block(f, nn, ee, ne, v);
+            EXPECT_NEAR(nn, 0.25 * floor_rad * floor_rad, 1.0e-15);
+            EXPECT_NEAR(ee, 0.25 * floor_rad * floor_rad, 1.0e-15);
+            EXPECT_NEAR(ne, ne0, 1.0e-15);
+            f.attSigmaNed(s);
+            EXPECT_NEAR(s[0], floor_rad, 1.0e-9);
+            EXPECT_NEAR(s[1], floor_rad, 1.0e-9);
+            EXPECT_NEAR(s[2], s0[2], 1.0e-12);
+            for (int j = 0; j < N; ++j)
+                EXPECT_NEAR(v[j], v0[j], 1.0e-15) << "the vertical's row, state " << j;
+            outsideKept(f, f0);
+            expectCovarianceHealthy(f);
+        }
+    }
+    // not a floor: nothing
+    {
+        Clock clk;
+        F f0 = converged<double>(5, clk);
+        for (double bad : {0.0, -3.0 * kPi / 180.0})
+        {
+            F f = f0;
+            f.setTiltSigmaFloor(bad);
+            for (int i = 0; i < N; ++i)
+                for (int j = 0; j < N; ++j)
+                    EXPECT_EQ(f.P(i, j), f0.P(i, j)) << bad << ": " << i << ", " << j;
+        }
+    }
+}
+
 TEST(RawGnssEKF, TurningTheHeadingKeepsTheTilt)
 {
     // yaw then pitch, body -> NED (quatYawPitch, in double)

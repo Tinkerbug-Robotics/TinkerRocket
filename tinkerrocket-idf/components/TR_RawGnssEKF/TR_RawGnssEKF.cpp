@@ -272,6 +272,30 @@ void RawGnssEKF<T>::setHeadingSigma(T sigma_rad)
 }
 
 template <typename T>
+void RawGnssEKF<T>::setTiltSigmaFloor(T sigma_rad)
+{
+    if (!(sigma_rad > T(0)))
+        return;
+    T M[3][3];
+    quat2dcm(q_, M);                                   // NED -> body: columns 0 and 1 are north and east in it
+    // the state is the half-angle's vector part: a rotation sigma is sigma/2 there
+    const T floor2 = T(0.25) * sigma_rad * sigma_rad;
+    // north, then east (the one's deficit leaves the other's variance as it was)
+    for (int k = 0; k < 2; ++k)
+    {
+        T v = T(0);
+        for (int a = 0; a < 3; ++a)
+            for (int b = 0; b < 3; ++b)
+                v += M[a][k] * P_[kAtt + a][kAtt + b] * M[b][k];
+        const T d = floor2 - v;
+        if (d > T(0))
+            for (int a = 0; a < 3; ++a)
+                for (int b = 0; b < 3; ++b)
+                    P_[kAtt + a][kAtt + b] += d * (M[a][k] * M[b][k]);   // (a, b) and (b, a) alike: P stays symmetric
+    }
+}
+
+template <typename T>
 void RawGnssEKF<T>::turnHeading(T dpsi)
 {
     // body -> NED, then about NED down: q' = qz(dpsi) q

@@ -174,6 +174,15 @@ public:
     // kept. (setQuaternion takes the whole attitude as known: right for the
     // tilt the pad levels, not for a heading a filter must learn in flight.)
     void setHeadingSigma(T sigma_rad);
+    // The tilt's 1-sigma about north and about east (rad, a rotation) at
+    // least sigma_rad: each one's deficit added along it, so the part about
+    // the vertical, the north-east covariance and every cross-covariance are
+    // kept, P symmetric and positive definite. (An axis between north and
+    // east can stay under the floor by that covariance: little, once the
+    // floor is past the tilt the pad left.) For a tilt the pad could not tell
+    // from an accelerometer bias (#1626 K1), let go at launch (RawGnssShadow's
+    // heading_launch_tilt_sigma_deg).
+    void setTiltSigmaFloor(T sigma_rad);
     // Turn the attitude about the vertical (NED down) by dpsi (rad): the
     // heading grows by dpsi, the tilt is kept.
     void turnHeading(T dpsi);

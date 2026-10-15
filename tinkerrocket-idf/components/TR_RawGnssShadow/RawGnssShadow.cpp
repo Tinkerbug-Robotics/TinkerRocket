@@ -1015,6 +1015,9 @@ void RawGnssShadow::stepHeading(double t, const float acc[3], const float gyro[3
             // from here GNSS turns the heading, and only the heading
             ekf_.setAttGateVertical(true);
             ekf_.setHeadingSigma(static_cast<float>(cfg_.heading_pad_sigma_deg / kRad2Deg));
+            // and, if asked, the tilt let go to at least its floor
+            if (cfg_.heading_launch_tilt_sigma_deg > 0.0)
+                ekf_.setTiltSigmaFloor(static_cast<float>(cfg_.heading_launch_tilt_sigma_deg / kRad2Deg));
         }
     }
     else if (ground && !fit_ground_)
