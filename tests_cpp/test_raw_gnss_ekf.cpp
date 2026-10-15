@@ -506,7 +506,10 @@ TEST(RawGnssEKF, AnEpochInPartsAtOneAgeIsTheEpochAtOnce)
 {
     // beginGnssRaw, then updateGnssRawPart over the satellites in two parts,
     // all at one age: updateGnssRaw, to rounding (each part takes the epoch
-    // back with the velocity the parts before it left)
+    // back with the velocity the parts before it left, and gates the attitude
+    // with cos^4 pitch at the attitude they left: a velocity error now tilts
+    // the attitude, 0.6 deg here, and the gate moves at its square, so the
+    // velocity differs by ~1e-8 m/s)
     const double vel[3] = {30.0, -20.0, -50.0};
     RawGnssEKFParams p = quietParams();
     RawGnssEKF<double> truth(p), whole(p), parts(p);
@@ -539,7 +542,7 @@ TEST(RawGnssEKF, AnEpochInPartsAtOneAgeIsTheEpochAtOnce)
         ecefOf(whole, rw);
         EXPECT_LT(dist(rp, rw), 1e-6);
         for (int i = 0; i < 3; ++i)
-            EXPECT_NEAR(parts.velNed()[i], whole.velNed()[i], 1e-9);
+            EXPECT_NEAR(parts.velNed()[i], whole.velNed()[i], 1e-7);
         imuSecond(truth);
         imuSecond(whole);
         imuSecond(parts);
@@ -701,6 +704,134 @@ TEST(RawGnssEKF, ZeroVelocityMovesOnlyPositionAndVelocity)
     expectCovarianceHealthy(f);
 }
 
+// ---- a tilt's velocity: the specific force's Jacobian (#1626 E1)
+
+namespace
+{
+
+// A level filter at rest whose tilt has the 1-sigma s (the half-angle state:
+// a rotation of 2 s) about north and east, nothing shared with the rest.
+RawGnssEKF<double> tiltSigma(double s)
+{
+    RawGnssEKFParams p = quietParams();
+    p.p0_att = s;
+    RawGnssEKF<double> f(p);
+    const double v0[3] = {0.0, 0.0, 0.0}, q[4] = {1.0, 0.0, 0.0, 0.0};
+    f.init(kLla0, v0, q, 0.0);
+    return f;
+}
+
+void stepBoth(RawGnssEKF<double>& a, RawGnssEKF<double>& b, const double acc[3], int steps)
+{
+    const double gyro[3] = {0.0, 0.0, 0.0};
+    for (int i = 0; i < steps; ++i)
+    {
+        a.propagate(acc, gyro, kDt);
+        b.propagate(acc, gyro, kDt);
+    }
+}
+
+}  // namespace
+
+TEST(RawGnssEKF, OnThePadATiltDrivesTheHorizontalVelocity)
+{
+    // Still and level, the accelerometer reads g up: a tilt theta turns g theta
+    // of it into a horizontal acceleration, v' = Tb2n f + g. So against a filter
+    // whose tilt is known, a tilt sigma s gives the velocity a cross-covariance
+    // F_va s^2 t with it and F_va s^2 F_va' t^2 more variance, F_va = -2 Tb2n
+    // [f x]: -2 g between the turn about y and north, 2 g between the turn
+    // about x and east, nothing to the vertical. (Built from the kinematic
+    // acceleration, 0 here, the filter saw none of it.)
+    using F = RawGnssEKF<double>;
+    const double s = 0.02;                               // 2.3 deg of tilt
+    F known = tiltSigma(1.0e-3), tilted = tiltSigma(s);
+    const double acc[3] = {0.0, 0.0, -kG};
+    stepBoth(known, tilted, acc, 200);                   // 1 s
+    const double t = 1.0, ds2 = s * s - 1.0e-6, g2 = 2.0 * kG;
+    auto d = [&](int i, int j) { return tilted.P(i, j) - known.P(i, j); };
+    EXPECT_NEAR(d(F::kVel, F::kAtt + 1), -g2 * ds2 * t, 1.0e-9);
+    EXPECT_NEAR(d(F::kVel + 1, F::kAtt), g2 * ds2 * t, 1.0e-9);
+    EXPECT_NEAR(d(F::kVel, F::kAtt), 0.0, 1.0e-12);
+    EXPECT_NEAR(d(F::kVel + 1, F::kAtt + 1), 0.0, 1.0e-12);
+    for (int k = 0; k < 3; ++k)
+        EXPECT_NEAR(d(F::kVel + 2, F::kAtt + k), 0.0, 1.0e-12) << k;
+    EXPECT_NEAR(d(F::kVel, F::kVel), g2 * g2 * ds2 * t * t, 1.0e-9);     // 0.15 (m/s)^2
+    EXPECT_NEAR(d(F::kVel + 1, F::kVel + 1), g2 * g2 * ds2 * t * t, 1.0e-9);
+    EXPECT_NEAR(d(F::kVel + 2, F::kVel + 2), 0.0, 1.0e-12);
+    EXPECT_GT(d(F::kVel, F::kVel), 0.1);
+    expectCovarianceHealthy(tilted);
+}
+
+TEST(RawGnssEKF, InFreeFallATiltDrivesNoVelocity)
+{
+    // Falling with nothing pushing (a drag-free coast), the accelerometer reads
+    // 0: whatever the tilt, the velocity is gravity's alone. A tilt sigma builds
+    // no velocity-attitude cross-covariance, and the velocity's variance grows
+    // as a known tilt's does. (The kinematic acceleration's block, -2 Tb2n
+    // [(f + Tn2b g) x], built 2 g of it here.)
+    using F = RawGnssEKF<double>;
+    F known = tiltSigma(1.0e-3), tilted = tiltSigma(0.02);
+    const double acc[3] = {0.0, 0.0, 0.0};
+    stepBoth(known, tilted, acc, 200);
+    for (int i = 0; i < 3; ++i)
+    {
+        for (int k = 0; k < 3; ++k)
+            EXPECT_NEAR(tilted.P(F::kVel + i, F::kAtt + k), 0.0, 1.0e-15) << i << k;
+        EXPECT_NEAR(tilted.P(F::kVel + i, F::kVel + i), known.P(F::kVel + i, F::kVel + i), 1.0e-12) << i;
+    }
+    EXPECT_NEAR(tilted.velNed()[2], kG, 1.0e-9);         // and the state falls as before
+    expectCovarianceHealthy(tilted);
+}
+
+TEST(RawGnssEKF, TheTiltToVelocityIsWhatATiltDoesToTheState)
+{
+    // At any attitude and specific force, the covariance's tilt-to-velocity
+    // block is what a tilt does to the state's own velocity over a step: the
+    // propagation from q (x) [1, +-eps e_k] (the error state's own injection),
+    // differenced. That pins F_va's frame and sign, -2 Tb2n [f x].
+    using F = RawGnssEKF<double>;
+    const double yaw = 30.0 * kPi / 180.0, pitch = 60.0 * kPi / 180.0, roll = 20.0 * kPi / 180.0;
+    const double cy = std::cos(yaw / 2), sy = std::sin(yaw / 2), cp = std::cos(pitch / 2), sp = std::sin(pitch / 2);
+    const double qyp[4] = {cy * cp, -sy * sp, cy * sp, sy * cp};
+    const double qr[4] = {std::cos(roll / 2), std::sin(roll / 2), 0.0, 0.0};
+    auto mul = [](const double a[4], const double b[4], double o[4]) {
+        o[0] = a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3];
+        o[1] = a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2];
+        o[2] = a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1];
+        o[3] = a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0];
+    };
+    double q[4];
+    mul(qyp, qr, q);
+    const double acc[3] = {4.0, -1.5, -11.0}, gyro[3] = {0.0, 0.0, 0.0}, v0[3] = {0.0, 0.0, 0.0};
+    const double dt = 1.0e-3, s = 0.01, eps = 1.0e-6;
+    RawGnssEKFParams p = quietParams();
+    p.p0_att = p.p0_hdg = s;                             // the attitude's variance s^2 on every axis
+    F f(p);
+    f.init(kLla0, v0, q, 0.0);
+    f.propagate(acc, gyro, dt);
+    for (int k = 0; k < 3; ++k)
+    {
+        double vk[2][3];
+        for (int sgn = 0; sgn < 2; ++sgn)
+        {
+            double d[4] = {1.0, 0.0, 0.0, 0.0}, qp[4];
+            d[1 + k] = sgn == 0 ? eps : -eps;
+            mul(q, d, qp);
+            F g(p);
+            g.init(kLla0, v0, qp, 0.0);
+            g.propagate(acc, gyro, dt);
+            for (int i = 0; i < 3; ++i)
+                vk[sgn][i] = g.velNed()[i];
+        }
+        for (int i = 0; i < 3; ++i)
+        {
+            const double fd = (vk[0][i] - vk[1][i]) / (2.0 * eps * dt);      // F_va[i][k], from the state
+            const double cov = f.P(F::kVel + i, F::kAtt + k) / (s * s * dt);  // and from the covariance
+            EXPECT_NEAR(cov, fd, 1.0e-3) << "velocity " << i << ", attitude " << k;   // of up to 2 |f|, 24
+        }
+    }
+}
+
 // ---- the magnetometer as a heading (#1578's measurement, for a raw filter that starts itself)
 
 namespace
@@ -834,7 +965,8 @@ namespace
 
 // The rotation about NED down that takes attitude b to attitude a (a = Rz b
 // when they differ only in heading), deg, and the tilt left over, deg.
-void headingTilt(const float a[4], const float b[4], double& hdg_deg, double& tilt_deg)
+template <typename T>
+void headingTilt(const T a[4], const T b[4], double& hdg_deg, double& tilt_deg)
 {
     const double a0 = a[0], a1 = a[1], a2 = a[2], a3 = a[3];
     const double b0 = b[0], b1 = -b[1], b2 = -b[2], b3 = -b[3];   // conj(b)
@@ -887,6 +1019,12 @@ TEST(RawGnssEKF, TheVerticalGateLearnsTheHeadingAndLeavesTheTilt)
     // handed that heading with a 30 deg sigma: GNSS turns the heading in and,
     // through the vertical gate, nothing else of the attitude -- the tilt the
     // pad levelled stays exactly, and the gyro bias moves only along the vertical.
+    // The pad levels for 6 s first, as flyBoost's (test_raw_gnss_shadow.cpp):
+    // that learns the gyro bias across the vertical (1.7e-3 rad/s left of the
+    // start's 1.7e-2), which GNSS through the gate cannot. Without it the
+    // tilt's sigma grows to 11 deg in the 12 s, and with a tilt's velocity
+    // modelled (#1626 E1) the heading is learned only to 2.3 deg (its own
+    // sigma 12).
     for (bool gate : {true, false})
     {
         RawGnssEKFParams p = quietParams();
@@ -898,6 +1036,12 @@ TEST(RawGnssEKF, TheVerticalGateLearnsTheHeadingAndLeavesTheTilt)
         const double v0[3] = {0.0, 0.0, 0.0};
         f.init(kLla0, v0, q, 0.0);
         f.setQuaternion(q);
+        const double still[3] = {0.0, 0.0, -kG}, no_rate[3] = {0.0, 0.0, 0.0};
+        for (int k = 0; k < 300; ++k)                       // 6 s at 50 Hz
+        {
+            f.propagate(still, no_rate, 0.02);
+            f.updateAccelLevel(still);
+        }
         f.setHeadingSigma(30.0 * kPi / 180.0);
         Clock clk;
         std::vector<std::array<double, 3>> a(12, std::array<double, 3>{2.0, 0.0, 0.0});
@@ -906,10 +1050,11 @@ TEST(RawGnssEKF, TheVerticalGateLearnsTheHeadingAndLeavesTheTilt)
         for (int s = 8; s < 12; ++s)
             a[s] = {-2.0, 1.0, 0.0};
         flyLevel(f, a, clk);
-        const float qn[4] = {float(f.quat()[0]), float(f.quat()[1]), float(f.quat()[2]), float(f.quat()[3])};
-        const float level[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+        // in double: a float copy is a unit quaternion to 6e-8 only, which
+        // reads as up to 0.03 deg of tilt
+        const double level[4] = {1.0, 0.0, 0.0, 0.0};
         double hdg, tilt;
-        headingTilt(qn, level, hdg, tilt);
+        headingTilt(f.quat(), level, hdg, tilt);
         EXPECT_LT(std::fabs(hdg), 1.0) << "gate " << gate;
         if (gate)
         {

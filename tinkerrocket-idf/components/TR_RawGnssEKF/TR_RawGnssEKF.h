@@ -258,7 +258,9 @@ private:
     };
 
     void   gravityNed(T g[3]) const;
-    void   propagateCovariance(const T Tb2n[3][3], const T a_b[3], const T w_b[3], T g_d, T dt);
+    // f_b: the specific force less the accelerometer bias, body (the tilt's
+    // Jacobian is its, not the kinematic acceleration's: #1626 E1)
+    void   propagateCovariance(const T Tb2n[3][3], const T f_b[3], const T w_b[3], T g_d, T dt);
     void   stabilize();
     void   symmetrize();
     T      hph(const int* hidx, const T* hval, int hn) const;

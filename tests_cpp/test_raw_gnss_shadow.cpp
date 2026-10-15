@@ -2559,9 +2559,9 @@ TEST(RawGnssShadow, TheHeadingFitHandsItsHeadingOverOnce)
     // once it is sure -- once; the filter flies the truth's heading to the end
     // with its tilt untouched. With the accelerometer biased sideways, and
     // with the epochs built in the GNSS task, as the Beetle builds them. The
-    // filter's GNSS turns most of the 40 deg out but its own 1-sigma stays
+    // filter's GNSS turns 16 of the 40 deg out but its own 1-sigma stays
     // wide, so by the default rule the fit waits until it is sure to 3 deg
-    // (the 9th epoch) and turns the last 13 deg.
+    // (the 9th epoch) and turns the last 24 deg.
     for (int external = 0; external < 2; ++external)
     for (double by : {0.0, 0.08})
     {
@@ -2614,9 +2614,9 @@ TEST(RawGnssShadow, TheHeadingFitLeavesAFilterThatIsNotLost)
     EXPECT_EQ(right.handed_at, -1);
     EXPECT_LT(std::fabs(gnss_raw::headingBetween(right.q_end, right.q_true)) * 180.0 / kPi, 2.0);
 
-    // Seeded 40 deg off, its GNSS turns it most of the way, its own 1-sigma
+    // Seeded 40 deg off, its GNSS turns it part of the way, its own 1-sigma
     // still wide (30 deg at launch): never twice their 1-sigmas apart, it
-    // stalls 13 deg off. Sure to 3 deg, the fit hands over, late but whole.
+    // stalls 22 deg off. Sure to 3 deg, the fit hands over, late but whole.
     const BoostRun stalled = flyBoost(RawGnssShadow::kHeadingAct, 40.0, 0.0, 0.0, false, 2.0, 0, 0.0);
     EXPECT_EQ(stalled.st.heading_handoffs, 0u);
     EXPECT_GT(std::fabs(gnss_raw::headingBetween(stalled.q_end, stalled.q_true)) * 180.0 / kPi, 8.0);

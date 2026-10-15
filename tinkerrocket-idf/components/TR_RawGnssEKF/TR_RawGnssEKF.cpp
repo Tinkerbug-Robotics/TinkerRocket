@@ -383,11 +383,17 @@ void RawGnssEKF<T>::propagate(const T acc[3], const T gyro[3], T dt)
             Tb2n[j][i] = Tn2b[i][j];
     T g[3];
     gravityNed(g);
-    T w[3], a_b[3];
+    // f_b: the specific force (what the accelerometer measures, less its
+    // bias); a_b: the body's kinematic acceleration, with gravity, which the
+    // state integrates. The covariance takes f_b (#1626 E1).
+    T w[3], f_b[3], a_b[3];
     for (int i = 0; i < 3; ++i)
         w[i] = gyro[i] - wb_[i];
     for (int i = 0; i < 3; ++i)
-        a_b[i] = (acc[i] - ab_[i]) + (Tn2b[i][0] * g[0] + Tn2b[i][1] * g[1] + Tn2b[i][2] * g[2]);
+    {
+        f_b[i] = acc[i] - ab_[i];
+        a_b[i] = f_b[i] + (Tn2b[i][0] * g[0] + Tn2b[i][1] * g[1] + Tn2b[i][2] * g[2]);
+    }
 
     // attitude: rotation vector, exact for a constant rate over the step
     {
@@ -439,7 +445,7 @@ void RawGnssEKF<T>::propagate(const T acc[3], const T gyro[3], T dt)
     if (g_excess_ > g_peak_)
         g_peak_ = g_excess_;
 
-    propagateCovariance(Tb2n, a_b, w, g[2], dt);
+    propagateCovariance(Tb2n, f_b, w, g[2], dt);
     clk_b_ += static_cast<double>(clk_d_) * static_cast<double>(dt);
     t_ += static_cast<double>(dt);
     pushHistory(dt, a_ned_);
@@ -448,19 +454,25 @@ void RawGnssEKF<T>::propagate(const T acc[3], const T gyro[3], T dt)
 // P <- (I + F dt) P (I + F dt)' + Qd, Qd = Qc dt + (F Qc + Qc F') dt^2 / 2,
 // touching only F's non-zero blocks (the flight filter's sparse form):
 //   F[0:3, 3:6]   = I                    F[5, 2] = 2 g / R
-//   F[3:6, 6:9]   = -2 Tb2n [a_b x]      F[3:6, 9:12] = -Tb2n
+//   F[3:6, 6:9]   = -2 Tb2n [f_b x]      F[3:6, 9:12] = -Tb2n
 //   F[6:9, 6:9]   = -[w x]               F[6:9, 12:15] = -I / 2
 //   F[9:12]       = -I / tau_a           F[12:15] = -I / tau_w
 //   F[15, 16]     = 1
+// The tilt to velocity is the specific force's (#1626 E1): v' = Tb2n f + g,
+// and gravity, in NED, does not turn with the attitude, so q = q^ (x) [1, a]
+// gives dv' = -2 Tb2n [f x] a. Built from the kinematic acceleration, as
+// GpsInsEKF's still is, it said a tilt theta drives no velocity on the pad or
+// under a chute, where it drives g theta, and g theta in a coast, where it
+// drives none.
 // Qc is diagonal: the accelerometer noise is the same on every axis, so
 // Tb2n diag(q) Tb2n' = q I.
 template <typename T>
-void RawGnssEKF<T>::propagateCovariance(const T Tb2n[3][3], const T a_b[3], const T w_b[3],
+void RawGnssEKF<T>::propagateCovariance(const T Tb2n[3][3], const T f_b[3], const T w_b[3],
                                         T g_d, T dt)
 {
     T Fva[3][3], Fvb[3][3], Fww[3][3];
     {
-        const T sa[3][3] = {{T(0), -a_b[2], a_b[1]}, {a_b[2], T(0), -a_b[0]}, {-a_b[1], a_b[0], T(0)}};
+        const T sa[3][3] = {{T(0), -f_b[2], f_b[1]}, {f_b[2], T(0), -f_b[0]}, {-f_b[1], f_b[0], T(0)}};
         for (int i = 0; i < 3; ++i)
             for (int j = 0; j < 3; ++j)
             {
