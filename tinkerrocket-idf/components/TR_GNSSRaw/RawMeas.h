@@ -2,7 +2,9 @@
 // per-satellite measurements a tightly coupled GNSS/INS filter takes (#1600)
 //
 // RawEpoch is what any receiver reports, in its own words but SI units: per
-// satellite, the pseudorange, the range rate and C/N0. (The LC86G's come from
+// satellite, the pseudorange, the range rate, the carrier phase and C/N0, and
+// the lock time and half-cycle flag that say whether the phase is continuous
+// from the epoch before. (The LC86G's come from
 // RTCM MSM7: Lc86RawEpoch.h in its driver fills one.) RawMeasBuilder turns
 // an epoch into RawMeas, corrected so the filter only adds its own receiver
 // state: the satellite placed at the transmit time, its clock, relativity
@@ -28,6 +30,11 @@ struct RawObs
     double   pr_m;        // pseudorange, m
     double   rate_mps;    // range rate, m/s (the MSM7 phase-range rate; = -lambda * Doppler)
     uint32_t lock_ms;     // the receiver's minimum lock time, ms (0 if it gives none)
+    bool     has_phase;   // a carrier phase (phase_m)
+    bool     halfcyc;     // its half-cycle ambiguity unresolved (MSM7 DF420): it can step by half a cycle
+    double   phase_m;     // the carrier phase as a range, m (MSM7: the rough range DF397 + DF398 plus the
+                          // fine phase range DF406). It carries the receiver's own integer per lock: its
+                          // changes are the measurement (RawMeasBuilder's carrier range rate)
 };
 
 // One receiver epoch: every satellite measured at one GPS instant.

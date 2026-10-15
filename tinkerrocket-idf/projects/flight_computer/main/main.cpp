@@ -3002,6 +3002,7 @@ static uint32_t raw_shadow_seed_ms = 0;
 // (rawGnssMeasTask). Its stage and the built epochs (~6 kB each) are in PSRAM
 // beside the filter; the handoff's indices here, in internal RAM.
 static gnss_raw::RawGnssMeasStage* raw_meas = nullptr;
+static gnss_raw::TimedRawEpoch* raw_meas_epoch = nullptr;   // the GNSS task's copy of each epoch (~2 kB), PSRAM
 static gnss_raw::SpscSlots<gnss_raw::BuiltEpoch, 2> raw_built;
 static TaskHandle_t raw_meas_task = nullptr;
 
@@ -3101,7 +3102,9 @@ static void rawGnssMeasTask(void*)
 {
     gnss_raw::RawGnssMeasStage& st = *raw_meas;
     st.setClock(&rawShadowClock);
-    static gnss_raw::TimedRawEpoch epoch;     // ~1.6 kB: off the stack
+    // ~2 kB (48 satellites' code, Doppler and carrier phase): off the stack,
+    // and in PSRAM beside the stage (startRawShadow), not internal RAM
+    gnss_raw::TimedRawEpoch& epoch = *raw_meas_epoch;
     uint32_t iono_seq = 0;
     for (;;)
     {
@@ -3556,10 +3559,12 @@ static void startRawShadow()
     };
     void* stage_mem = alloc(alignof(gnss_raw::RawGnssMeasStage), sizeof(gnss_raw::RawGnssMeasStage));
     void* built_mem = alloc(alignof(gnss_raw::BuiltEpoch), 2 * sizeof(gnss_raw::BuiltEpoch));
-    if (stage_mem == nullptr || built_mem == nullptr)
+    void* epoch_mem = alloc(alignof(gnss_raw::TimedRawEpoch), sizeof(gnss_raw::TimedRawEpoch));
+    if (stage_mem == nullptr || built_mem == nullptr || epoch_mem == nullptr)
     {
-        ESP_LOGE(TAG, "[RAWGNSS] no memory for the GNSS task's stage (%u B) and epochs (%u B): not started",
-                 (unsigned)sizeof(gnss_raw::RawGnssMeasStage), (unsigned)(2 * sizeof(gnss_raw::BuiltEpoch)));
+        ESP_LOGE(TAG, "[RAWGNSS] no memory for the GNSS task's stage (%u B) and epochs (%u B + %u B): not started",
+                 (unsigned)sizeof(gnss_raw::RawGnssMeasStage), (unsigned)(2 * sizeof(gnss_raw::BuiltEpoch)),
+                 (unsigned)sizeof(gnss_raw::TimedRawEpoch));
         return;
     }
     cfg.heading_mode = TR_HEADING_FIT;   // the heading from thrust (config.h)
@@ -3587,6 +3592,7 @@ static void startRawShadow()
 #endif
     raw_shadow = new (mem) gnss_raw::RawGnssShadow(cfg);
     raw_meas = new (stage_mem) gnss_raw::RawGnssMeasStage(gnss_raw::RawGnssShadow::stageConfig(cfg));
+    raw_meas_epoch = new (epoch_mem) gnss_raw::TimedRawEpoch();
     gnss_raw::BuiltEpoch* built = static_cast<gnss_raw::BuiltEpoch*>(built_mem);
     new (&built[0]) gnss_raw::BuiltEpoch();
     new (&built[1]) gnss_raw::BuiltEpoch();

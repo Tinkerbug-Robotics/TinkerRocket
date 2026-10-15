@@ -260,3 +260,77 @@ TEST(RawGnssMeas, AnEpochTakesThePvtWeekAcrossTheWeeksEnd)
     // and the other way round
     EXPECT_DOUBLE_EQ(lc86::epochGpsSeconds(604799000u, 2441, 1000u), 2440 * 604800.0 + 604799.0);
 }
+
+TEST(RawGnssMeas, Lc86EpochCarriesThePhaseItsHalfCycleFlagAndLockTime)
+{
+    // The MSM7 phase range (DF397 + DF398 + DF406) as the observation's
+    // carrier phase, its half-cycle flag (DF420) beside it; a phase the module
+    // marked invalid is none
+    rtcm3::MsmEpoch me{};
+    me.gps_tow_ms = 123456789;
+    auto cell = [](uint8_t gnss, uint8_t sv, double pr, double phase, bool half, uint32_t lock) {
+        rtcm3::MsmCell c{};
+        c.pseudorange_m = pr;
+        c.phase_range_m = phase;
+        c.rate_mps = -300.0f;
+        c.cn0_dbhz = 42.0f;
+        c.lock_ms = lock;
+        c.gnss_id = gnss;
+        c.sv_id = sv;
+        c.sig_id = 2;
+        c.half_cycle = half;
+        return c;
+    };
+    me.cells[me.n_cells++] = cell(0, 5, 2.1e7, 2.1e7 + 3.25, false, 557056);           // GPS, locked
+    me.cells[me.n_cells++] = cell(2, 11, 2.4e7, std::nan(""), false, 0);               // Galileo, no phase
+    me.cells[me.n_cells++] = cell(3, 25, 2.3e7, 2.3e7 - 1.5, true, 64);                // BeiDou, half-cycle unresolved
+    RawEpoch ep;
+    ASSERT_TRUE(lc86::rawEpochFromMsm(me, ep));
+    ASSERT_EQ(ep.n, 3);
+    EXPECT_TRUE(ep.obs[0].has_phase);
+    EXPECT_DOUBLE_EQ(ep.obs[0].phase_m, 2.1e7 + 3.25);
+    EXPECT_FALSE(ep.obs[0].halfcyc);
+    EXPECT_EQ(ep.obs[0].lock_ms, 557056u);
+    EXPECT_FALSE(ep.obs[1].has_phase);
+    EXPECT_EQ(ep.obs[1].phase_m, 0.0);
+    EXPECT_TRUE(ep.obs[2].has_phase);
+    EXPECT_DOUBLE_EQ(ep.obs[2].phase_m, 2.3e7 - 1.5);
+    EXPECT_TRUE(ep.obs[2].halfcyc);
+    EXPECT_EQ(ep.obs[2].lock_ms, 64u);
+}
+
+TEST(RawGnssMeas, TheBeetlesCarrierPhaseMovesWithItsDoppler)
+{
+    // The fixture's two epochs, a second apart: where a satellite's phase is
+    // continuous across them (a phase at both, the lock time grown by the
+    // second, no half cycle pending), its change over the second is its range
+    // rate over the second -- the two Dopplers' mean, to their noise -- less a
+    // rate common to every satellite (the receiver clock's, which the MSM7
+    // Doppler has taken out and the phase has not). Two do here, G10 and G29:
+    // the rest have no phase at one end or the other.
+    const std::vector<RawEpoch> eps = parseEpochs();
+    ASSERT_EQ(eps.size(), 2u);
+    std::vector<double> excess;
+    int continuous = 0;
+    for (int j = 0; j < eps[1].n; ++j)
+    {
+        const gnss_raw::RawObs& b = eps[1].obs[j];
+        for (int i = 0; i < eps[0].n; ++i)
+        {
+            const gnss_raw::RawObs& a = eps[0].obs[i];
+            if (a.sys != b.sys || a.prn != b.prn || !a.has_phase || !b.has_phase || a.halfcyc || b.halfcyc
+                || b.lock_ms < a.lock_ms + 900)
+                continue;
+            continuous++;
+            SCOPED_TRACE(testing::Message() << "sys " << int(b.sys) << " prn " << int(b.prn));
+            // within a code-minus-carrier's metres of the pseudorange
+            EXPECT_NEAR(b.phase_m, b.pr_m, 30.0);
+            excess.push_back((b.phase_m - a.phase_m) - 0.5 * (a.rate_mps + b.rate_mps));
+        }
+    }
+    ASSERT_EQ(continuous, 2);
+    // the common rate: the receiver's clock, a few m/s here
+    EXPECT_LT(std::fabs(excess[0]), 5.0);
+    // and each satellite's to the Dopplers' noise: a decimetre a second
+    EXPECT_NEAR(excess[0], excess[1], 0.25);
+}
