@@ -26,6 +26,8 @@ void RawMeasBuilder::reset()
 {
     for (int i = 0; i < kSatCache; ++i)
         cache_[i].valid = false;
+    cr_n_[0] = cr_n_[1] = 0;
+    cr_done_ = true;
     for (int s = 0; s < kSys; ++s)
         for (int p = 0; p < kPrn; ++p)
         {
@@ -150,6 +152,66 @@ void RawMeasBuilder::begin(const RawEpoch& ep, const double* r_approx, double g_
     el_mask_ = cfg_.el_mask_deg * kPi / 180.0;
     g_over_ = g_peak > 0.0 ? g_peak : 0.0;
     next_obs_ = 0;
+    // this epoch's carrier ends, from none: the last epoch's are kept until
+    // it is done (an epoch begun and not finished leaves them as they were)
+    cr_n_[cr_side_ ^ 1] = 0;
+    cr_done_ = false;
+    cr_model_ = have_pos_ ? static_cast<uint8_t>(1u | (static_cast<unsigned>(iono_gen_) << 1)) : 0;
+}
+
+// The satellite's end of this epoch kept, and its carrier range rate since
+// the last epoch's end into m when the gates pass at both (RawMeasBuilder.h).
+void RawMeasBuilder::carrierRate(const RawObs& o, const GnssSignalProfile& sig, double tow, double phase,
+                                 const double rs[3], RawMeas& m)
+{
+    const float sigma = phaseSigmaM(sig, o.cn0_dbhz);
+    int& ncur = cr_n_[cr_side_ ^ 1];
+    if (ncur < RawEpoch::kMaxObs)
+    {
+        CarrierEnd& e = cr_end_[cr_side_ ^ 1][ncur++];
+        e.sys = o.sys;
+        e.prn = o.prn;
+        e.halfcyc = o.halfcyc;
+        e.model = cr_model_;
+        e.cn0 = o.cn0_dbhz;
+        e.sigma_m = sigma;
+        e.lock_ms = o.lock_ms;
+        e.tow = tow;
+        e.phase = phase;
+        for (int k = 0; k < 3; ++k)
+            e.sat_pos[k] = rs[k];
+    }
+    const CarrierEnd* p = nullptr;
+    for (int i = 0; i < cr_n_[cr_side_]; ++i)
+    {
+        const CarrierEnd& e = cr_end_[cr_side_][i];
+        if (e.sys == o.sys && e.prn == o.prn)
+        {
+            p = &e;
+            break;
+        }
+    }
+    if (p == nullptr)
+        return;                           // not in the last epoch: it starts over
+    const double dt = gps_time_diff(tow, p->tow);
+    if (!(dt > 0.5 * cfg_.epoch_period_s && dt < cfg_.cr_max_interval_s))
+        return;                           // not the epoch before
+    if (o.halfcyc || p->halfcyc || p->model != cr_model_)
+        return;
+    if (o.cn0_dbhz < sig.cn0_min_cr || p->cn0 < sig.cn0_min_cr)
+        return;
+    // the lock: not gone back, held long enough at the earlier end, and the
+    // later end's older than the interval (no relock between)
+    if (o.lock_ms < p->lock_ms || p->lock_ms < cfg_.cr_min_lock_ms || static_cast<double>(o.lock_ms) < dt * 1000.0)
+        return;
+    m.has_cr = true;
+    m.cr_dt = static_cast<float>(dt);
+    m.cr_dphi_m = phase - p->phase;
+    for (int k = 0; k < 3; ++k)
+        m.sat_pos_prev[k] = p->sat_pos[k];
+    const double sa = static_cast<double>(sigma), sb = static_cast<double>(p->sigma_m);
+    const double s = std::sqrt(sa * sa + sb * sb) / dt;
+    m.sigma_cr = static_cast<float>(s > cfg_.cr_sigma_floor_mps ? s : cfg_.cr_sigma_floor_mps);
 }
 
 int RawMeasBuilder::next(const RawEpoch& ep, const EphemerisStore& eph, RawMeas* out, int n, int cap, int max_obs)
@@ -180,6 +242,7 @@ int RawMeasBuilder::next(const RawEpoch& ep, const EphemerisStore& eph, RawMeas*
         const double dts = c.clk + c.clk_rate * dt;
 
         double corr = GNSS_C * dts;   // the clock with relativity, less the group delay
+        double iono = 0.0, trop = 0.0;
         if (have_pos_)
         {
             const double d[3] = {rs[0] - r_approx_[0], rs[1] - r_approx_[1], rs[2] - r_approx_[2]};
@@ -188,8 +251,8 @@ int RawMeasBuilder::next(const RawEpoch& ep, const EphemerisStore& eph, RawMeas*
             if (el < el_mask_)
                 continue;
             const double fr = GNSS_FREQ_L1_HZ / sig.carrier_hz;
-            const double iono = iono_klobuchar(&iono_, lat_, lon_, az, el, ep.tow_s) * fr * fr;
-            const double trop = cfg_.troposphere ? tropo_saastamoinen(lat_, hgt_, el) : 0.0;
+            iono = iono_klobuchar(&iono_, lat_, lon_, az, el, ep.tow_s) * fr * fr;
+            trop = cfg_.troposphere ? tropo_saastamoinen(lat_, hgt_, el) : 0.0;
             corr -= iono + trop;
         }
 
@@ -224,6 +287,22 @@ int RawMeasBuilder::next(const RawEpoch& ep, const EphemerisStore& eph, RawMeas*
         m.tau_pr = static_cast<float>(cfg_.pr_tau_s);
         m.sigma_rr = static_cast<float>(std::sqrt(s_rr2 * s_rr2 + s_dyn * s_dyn + s_rel * s_rel));
         m.tau_rr = static_cast<float>(cfg_.rr_tau_s);
+
+        // the carrier range rate: the phase range corrected as the code is,
+        // but for the ionosphere's sign (it advances the phase)
+        m.has_cr = false;
+        m.sigma_cr = 0.0f;
+        m.cr_dt = 0.0f;
+        m.cr_dphi_m = 0.0;
+        for (int k = 0; k < 3; ++k)
+            m.sat_pos_prev[k] = 0.0;
+        if (cfg_.carrier && o.has_phase)
+            carrierRate(o, sig, ep.tow_s, o.phase_m + (GNSS_C * dts + iono - trop), rs, m);
+    }
+    if (!cr_done_ && next_obs_ >= ep.n)
+    {
+        cr_side_ ^= 1;                    // the epoch is done: its ends are the last epoch's now
+        cr_done_ = true;
     }
     return n;
 }
