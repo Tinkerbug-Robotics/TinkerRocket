@@ -187,11 +187,25 @@ void RawGnssEKF<T>::init(const double lla[3], const T v_ned[3], const T q[4], do
     std::memset(P_, 0, sizeof(P_));
     const double d[N] = {
         p_.p0_pos, p_.p0_pos, p_.p0_pos, p_.p0_vel, p_.p0_vel, p_.p0_vel,
-        p_.p0_att, p_.p0_att, p_.p0_hdg, p_.p0_abias, p_.p0_abias, p_.p0_abias,
+        p_.p0_att, p_.p0_att, p_.p0_att, p_.p0_abias, p_.p0_abias, p_.p0_abias,
         p_.p0_wbias, p_.p0_wbias, p_.p0_wbias, p_.p0_clk_bias, p_.p0_clk_drift,
         p_.p0_isb, p_.p0_isb};
     for (int i = 0; i < N; ++i)
         P_[i][i] = T(d[i] * d[i]);
+    // The attitude: p0_att about the two horizontal axes, p0_hdg about the
+    // vertical -- NED down in the body frame, at the attitude it starts from
+    // (#1626 N10): setHeadingSigma on p0_att's sphere (a rotation's sigma,
+    // twice the half-angle's). On body z, as it was, a nose-up rocket's "any
+    // heading" lay across it, a tilt the levelling then took, and its real
+    // heading had the tilt's p0_att. A level start (q = 1) is what it was. So
+    // q must be the best attitude there is, not a placeholder: the navigation
+    // filter's pad seed is the accelerometer's tilt (main.cpp's
+    // quatFromAccelHeading), and the levelling moves it a fraction of a
+    // degree. A start degrees off gives some of the heading's variance to the
+    // levelling as the linearization moves (3 deg: 57 deg of heading is 41
+    // after 10 s); a body far off its start, an identity start on a nose-up
+    // rocket, would leave the heading p0_att's, as before.
+    setHeadingSigma(T(2.0 * p_.p0_hdg));
 
     hhead_ = hn_ = 0;
     hopen_ = t0;

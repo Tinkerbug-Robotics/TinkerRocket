@@ -928,15 +928,14 @@ TEST(RawGnssEKF, TheAttitudeSigmaIsAboutNorthEastAndDown)
     }
     // Levelling on gravity learns the tilt and never the heading: at any pitch,
     // up the rail included, north and east lose their sigma and down keeps it.
-    // From an isotropic start: the default one is a level body's (the heading's
-    // sigma about body z), which tipped over correlates down with the tilt.
-    RawGnssEKFParams iso = quietParams();
-    iso.p0_att = iso.p0_hdg = 0.5;
+    // From the default start: its heading sigma is about the vertical at any
+    // attitude (#1626 N10). (It was body z's, which tipped over shared down
+    // with the tilt, and this took an isotropic start, p0_att = p0_hdg = 0.5.)
     for (double pitch_deg : {0.0, 45.0, 90.0})
     {
         float q[4];
         quatYawPitch(30.0 * kPi / 180.0, pitch_deg * kPi / 180.0, q);
-        RawGnssEKF<float> f(iso);
+        RawGnssEKF<float> f(quietParams());
         const float v0[3] = {0, 0, 0};
         f.init(kLla0, v0, q, 0.0);
         float s0[3];
@@ -956,6 +955,125 @@ TEST(RawGnssEKF, TheAttitudeSigmaIsAboutNorthEastAndDown)
         EXPECT_LT(s[1], 0.2f * s0[1]) << "east, pitch " << pitch_deg;
         EXPECT_GT(s[2], 0.8f * s0[2]) << "down (the heading), pitch " << pitch_deg;
     }
+}
+
+// ---- the start's heading sigma about the vertical (#1626 N10)
+
+TEST(RawGnssEKF, TheStartLeavesTheHeadingFreeAboutTheVertical)
+{
+    // init's attitude covariance: p0_hdg about NED down in the body frame and
+    // p0_att about north and east, at any attitude -- up a nose-up rocket's
+    // rail the heading's is about the nose, not across it -- and nothing shared
+    // between the vertical and the tilt. (The state is the half-angle: a
+    // rotation's 1-sigma is twice it, as attSigmaNed reports.)
+    const RawGnssEKFParams p = quietParams();
+    const double a2 = p.p0_att * p.p0_att, h2 = p.p0_hdg * p.p0_hdg;
+    ASSERT_GT(p.p0_hdg, 1.4 * p.p0_att);
+    using F = RawGnssEKF<double>;
+    for (double pitch_deg : {0.0, 45.0, 83.6, 90.0})
+    {
+        float qf[4];
+        quatYawPitch(30.0 * kPi / 180.0, pitch_deg * kPi / 180.0, qf);
+        const double q[4] = {qf[0], qf[1], qf[2], qf[3]};
+        F f(p);
+        const double v0[3] = {0.0, 0.0, 0.0};
+        f.init(kLla0, v0, q, 0.0);
+        double s[3];
+        f.attSigmaNed(s);
+        EXPECT_NEAR(s[0], 2.0 * p.p0_att, 1.0e-9) << pitch_deg;
+        EXPECT_NEAR(s[1], 2.0 * p.p0_att, 1.0e-9) << pitch_deg;
+        EXPECT_NEAR(s[2], 2.0 * p.p0_hdg, 1.0e-9) << pitch_deg;
+        // NED down in the body: an eigenvector of the block, with p0_hdg^2
+        const double* qn = f.quat();
+        const double w = qn[0], x = qn[1], y = qn[2], z = qn[3];
+        const double e[3] = {2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)};
+        for (int a = 0; a < 3; ++a)
+        {
+            double pe = 0.0;
+            for (int b = 0; b < 3; ++b)
+                pe += f.P(F::kAtt + a, F::kAtt + b) * e[b];
+            EXPECT_NEAR(pe, h2 * e[a], 1.0e-9) << "pitch " << pitch_deg << ", axis " << a;
+        }
+    }
+    // nose up, heading north: the vertical is body -x, so the heading's
+    // variance is on x, and z (east, a tilt) has the tilt's
+    {
+        float qf[4];
+        quatYawPitch(0.0, 90.0 * kPi / 180.0, qf);
+        const double q[4] = {qf[0], qf[1], qf[2], qf[3]};
+        F f(p);
+        const double v0[3] = {0.0, 0.0, 0.0};
+        f.init(kLla0, v0, q, 0.0);
+        EXPECT_NEAR(f.P(F::kAtt, F::kAtt), h2, 1.0e-6);
+        EXPECT_NEAR(f.P(F::kAtt + 1, F::kAtt + 1), a2, 1.0e-12);
+        EXPECT_NEAR(f.P(F::kAtt + 2, F::kAtt + 2), a2, 1.0e-6);
+    }
+    // level (q = 1): the diagonal it always was
+    {
+        F f(p);
+        const double v0[3] = {0.0, 0.0, 0.0}, q[4] = {1.0, 0.0, 0.0, 0.0};
+        f.init(kLla0, v0, q, 0.0);
+        for (int a = 0; a < 3; ++a)
+            for (int b = 0; b < 3; ++b)
+                EXPECT_EQ(f.P(F::kAtt + a, F::kAtt + b), a == b ? (a == 2 ? h2 : a2) : 0.0) << a << b;
+    }
+}
+
+TEST(RawGnssEKF, UpTheRailTheLevelledStartKeepsItsHeadingFreeInFloat)
+{
+    // The navigation filter's pad (RawGnssShadow::start): started from the
+    // accelerometer's tilt on rp5_0829's rail, and levelled 3 minutes at
+    // 100 Hz with no magnetometer. North and east are learned; the heading is
+    // not, and keeps p0_hdg's 57 deg (more, as the vertical gyro bias walks)
+    // -- in float, as the flight computer runs it, within 1% of double. With
+    // p0_hdg at pi, float lost it after 60 s here: the attitude block holding
+    // pi^2 about a tilted axis beside what the levelling pins (the tilt with
+    // the accelerometer bias, to 4e-6) is past float's precision; it went
+    // indefinite, and its rows restarted, the heading at 0.2 deg. A seed
+    // degrees off the tilt gives some of the heading's variance to the
+    // levelling, as the linearization moves (3 deg off: 41 deg after 10 s).
+    float q[4];
+    quatYawPitch(44.7 * kPi / 180.0, 83.6 * kPi / 180.0, q);
+    const double qd[4] = {q[0], q[1], q[2], q[3]};
+    RawGnssEKF<float> f(quietParams());
+    RawGnssEKF<double> d(quietParams());
+    const float v0[3] = {0, 0, 0};
+    const double v0d[3] = {0, 0, 0};
+    f.init(kLla0, v0, q, 0.0);
+    d.init(kLla0, v0d, qd, 0.0);
+    float s0[3];
+    f.attSigmaNed(s0);
+    const double g_ned[3] = {0.0, 0.0, -kG};
+    float acc[3];
+    nedToBody(q, g_ned, acc);
+    const double accd[3] = {acc[0], acc[1], acc[2]};
+    const float gyro[3] = {0, 0, 0};
+    const double gyrod[3] = {0, 0, 0};
+    double worst = 0.0;
+    for (int k = 1; k <= 18000; ++k)
+    {
+        f.propagate(acc, gyro, 0.01f);
+        f.updateAccelLevel(acc);
+        d.propagate(accd, gyrod, 0.01);
+        d.updateAccelLevel(accd);
+        if (k % 100 == 0)
+        {
+            float s[3];
+            double sd[3];
+            f.attSigmaNed(s);
+            d.attSigmaNed(sd);
+            for (int i = 0; i < 3; ++i)
+                worst = std::max(worst, std::fabs(double(s[i]) / sd[i] - 1.0));
+            ASSERT_GT(s[2], 0.95f * s0[2]) << "t " << k * 0.01 << " s";
+        }
+    }
+    float s[3];
+    f.attSigmaNed(s);
+    EXPECT_NEAR(s0[2], 2.0f * float(quietParams().p0_hdg), 1.0e-5f);
+    EXPECT_LT(s[0], 0.05f * s0[0]);
+    EXPECT_LT(s[1], 0.05f * s0[1]);
+    EXPECT_LT(worst, 0.01);
+    expectCovarianceHealthy(f);
 }
 
 // ---- learning the heading in flight (the heading fit's hand-off, RawGnssShadow)

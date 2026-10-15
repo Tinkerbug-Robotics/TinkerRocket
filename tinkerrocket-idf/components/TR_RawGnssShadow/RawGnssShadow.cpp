@@ -667,8 +667,9 @@ void RawGnssShadow::start(double t)
     ekf_.init(seed_.lla, v, seed_.quat, t);
     // The flight filter's attitude is taken as known. The navigation filter's
     // seed on the pad is only the accelerometer's tilt and a guess at the
-    // heading: its covariance stays the start's (20 degrees, any heading)
-    // for the levelling and the magnetometer to settle.
+    // heading: its covariance stays the start's (p0_att about north and east,
+    // p0_hdg about the seed's vertical, #1626 N10) for the levelling and the
+    // magnetometer to settle.
     restored_ = cfg_.primary && !seed_.on_pad && seed_.restore;
     start_gen_ = seed_.start_gen;
     fit_.reset();

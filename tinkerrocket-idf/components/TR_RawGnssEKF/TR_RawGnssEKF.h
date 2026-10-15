@@ -104,8 +104,20 @@ struct RawGnssEKFParams
     // stays the gyro's and the levelling's. For a filter that learns its
     // heading in flight (the heading fit's hand-off, RawGnssShadow).
     bool   att_gate_vertical = false;
-    // Initial sigmas
-    double p0_pos = 10.0, p0_vel = 1.0, p0_att = 0.34906, p0_hdg = 3.14159;
+    // Initial sigmas, in the state's units (the attitude's: a half-angle).
+    // p0_att: the tilt's, about north and east; p0_hdg: the heading's, about
+    // the vertical of init's attitude (#1626 N10). p0_hdg was pi ("any
+    // heading", uNavINS's), on body z. About a tilted vertical, pi^2 beside
+    // what the levelling pins (the tilt with the accelerometer bias, to 4e-6)
+    // is past float's precision: on a still pad with no magnetometer the
+    // attitude block went indefinite within two minutes up the rail and the
+    // heading's sigma restarted at 0.2 deg. 0.5 (a heading 1-sigma of
+    // 57 deg) held 30 minutes at every rail attitude tried, 75-90 deg
+    // (UpTheRailTheLevelledStartKeepsItsHeadingFreeInFloat). At 10-60 deg a
+    // still pad gives float out after 4-7 minutes with either start: there the
+    // levelled tilt itself nears float's floor. The flight filter takes 30 deg
+    // about the vertical on the pad (PAD_HEADING_SIGMA_DEG).
+    double p0_pos = 10.0, p0_vel = 1.0, p0_att = 0.34906, p0_hdg = 0.5;
     double p0_abias = 0.981, p0_wbias = 0.01745;
     double p0_clk_bias = 30.0, p0_clk_drift = 5.0, p0_isb = 30.0;
     // Gravity: the flight filter's constant 9.807, or WGS84 normal gravity
@@ -146,7 +158,10 @@ public:
 
     // Start at a position (lat, lon rad; ellipsoidal height m), NED velocity
     // and attitude, at filter time t0 (s; any clock the IMU steps share).
-    // The clock is set by the first raw epoch (initClockFrom).
+    // The clock is set by the first raw epoch (initClockFrom). The attitude's
+    // covariance: p0_att about the two horizontal axes, p0_hdg about the
+    // vertical of q (#1626 N10) -- so q is the best attitude there is (on the
+    // pad, the accelerometer's tilt), not a placeholder.
     void init(const double lla[3], const T v_ned[3], const T q[4], double t0);
     // Take the attitude as known (the pad seed): its variance to 1e-6 and its
     // cross-covariances to zero, as GpsInsEKF::setQuaternion.
