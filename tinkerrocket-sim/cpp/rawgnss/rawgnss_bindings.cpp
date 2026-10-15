@@ -6,6 +6,13 @@
 // was ported from. And the heading from thrust (TR_RawGnssShadow's
 // HeadingFit, with the filter's heading gate and hand-off), for the gnss
 // repo's heading runs (sim/heading_seed_sim.py) to fly the port.
+//
+// The receivers' profiles (ReceiverProfile.h) and their application to a
+// builder or a filter; the carrier phase in an observation (phase_m,
+// halfcyc), the carrier range rate in a measurement (cr_dphi_m, cr_dt,
+// sat_pos_prev, sigma_cr), the filter's carrier update in its parts and its
+// stats -- so a log replays offline through the flight code with the carrier
+// off, observed or fused.
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -22,6 +29,8 @@
 #include "Lc86RawEpoch.h"
 #include "RawMeas.h"
 #include "RawMeasBuilder.h"
+#include "ReceiverProfile.h"
+#include "ReceiverProfileApply.h"
 #include "Rtcm3Msm.h"
 #include "RtcmEphemeris.h"
 #include "TR_RawGnssEKF.h"
@@ -95,6 +104,19 @@ struct Lc86FrontEnd
     }
 };
 
+// Each observation's carrier phase: (phase_m | None, halfcyc).
+py::list obsCarrierList(const RawEpoch& ep)
+{
+    py::list l;
+    for (int i = 0; i < ep.n; ++i)
+    {
+        const RawObs& o = ep.obs[i];
+        l.append(py::make_tuple(o.has_phase ? py::object(py::float_(o.phase_m)) : py::object(py::none()),
+                                o.halfcyc));
+    }
+    return l;
+}
+
 py::list obsList(const RawEpoch& ep)
 {
     py::list l;
@@ -127,7 +149,54 @@ py::dict statsDict(const RawGnssStats& s)
     d["clock_step_m"] = s.clock_step_m;
     d["drift_step_mps"] = s.drift_step_mps;
     d["nis_max"] = s.nis_max;
+    d["used_cr"] = s.used_cr;
+    d["cr_built"] = s.cr_built;
+    d["cr_unmatched"] = s.cr_unmatched;
+    d["cr_in"] = s.cr_in;
+    d["cr_half"] = s.cr_half;
+    d["cr_repaired"] = s.cr_repaired;
+    d["cr_other"] = s.cr_other;
+    d["cr_too_few"] = s.cr_too_few;
+    d["cr_rms_mps"] = s.cr_rms_mps;
+    d["cr_fit_rms_mps"] = s.cr_fit_rms_mps;
+    d["cr_dv_mps"] = s.cr_dv_mps;
+    d["cr_roll_rev_s"] = s.cr_roll_rev_s;
+    d["cr_common_mps"] = s.cr_common_mps;
     return d;
+}
+
+py::list carrierInfoList(const CarrierInfo* ci, int n)
+{
+    static const char* kVerdict[] = {"in", "repaired", "half_cycle", "other", "unmatched", "too_few"};
+    py::list l;
+    for (int i = 0; i < n; ++i)
+    {
+        py::dict d;
+        d["idx"] = ci[i].idx;
+        d["sys"] = ci[i].sys;
+        d["prn"] = ci[i].prn;
+        d["verdict"] = (ci[i].verdict >= 0 && ci[i].verdict <= 5) ? kVerdict[ci[i].verdict] : "?";
+        d["half"] = static_cast<int>(ci[i].half);
+        d["sigma"] = ci[i].sigma;
+        d["y"] = ci[i].y;
+        l.append(d);
+    }
+    return l;
+}
+
+template <typename T, size_t K>
+std::vector<T> arrayList(const T (&a)[K])
+{
+    return std::vector<T>(a, a + K);
+}
+
+template <typename T, size_t K>
+void arraySet(T (&a)[K], const std::vector<T>& v)
+{
+    if (v.size() != K)
+        throw py::value_error("expected " + std::to_string(K) + " values (one per gnss_sys_t)");
+    for (size_t k = 0; k < K; ++k)
+        a[k] = v[k];
 }
 
 template <typename T>
@@ -168,7 +237,36 @@ void bindEkf(py::module_& m, const char* name)
         .def("update_gnss_raw", [](E& e, const py::list& meas, double age) {
             auto v = toVector(meas);
             return statsDict(e.updateGnssRaw(v.data(), static_cast<int>(v.size()), age));
-        }, py::arg("meas"), py::arg("age_s") = 0.0)
+        }, py::arg("meas"), py::arg("age_s") = 0.0,
+           "The whole epoch: its clock, every pseudorange and range rate, and its carrier range rates in the "
+           "params' cr_mode (off, observe, fuse); the epoch's stats")
+        // an epoch in parts, as the flight computer works it (the stats carried between)
+        .def("begin_gnss_raw", [](E& e, const py::list& meas, double age, RawGnssStats& st) {
+            auto v = toVector(meas);
+            return e.beginGnssRaw(v.data(), static_cast<int>(v.size()), age, st);
+        }, py::arg("meas"), py::arg("age_s"), py::arg("stats"))
+        .def("update_gnss_raw_part", [](E& e, const py::list& meas, int i0, int i1, double age, RawGnssStats& st) {
+            auto v = toVector(meas);
+            e.updateGnssRawPart(v.data(), i0, i1, age, st);
+        }, py::arg("meas"), py::arg("i0"), py::arg("i1"), py::arg("age_s"), py::arg("stats"))
+        .def("begin_carrier", [](E& e, const py::list& meas, double age, RawGnssStats& st) {
+            auto v = toVector(meas);
+            return e.beginCarrier(v.data(), static_cast<int>(v.size()), age, st);
+        }, py::arg("meas"), py::arg("age_s"), py::arg("stats"),
+           "The carrier rates screened at the prior (observe: all there is); how many fuse_carrier will fuse")
+        .def("fuse_carrier", [](E& e, const py::list& meas, RawGnssStats& st) {
+            auto v = toVector(meas);
+            e.fuseCarrier(v.data(), st);
+        }, py::arg("meas"), py::arg("stats"), "The same measurements begin_carrier screened")
+        .def("end_carrier", &E::endCarrier, py::arg("stats"), "Once an epoch: the common rate dropped")
+        .def("carrier_info", [](const E& e) {
+            int n = 0;
+            const CarrierInfo* ci = e.carrierInfo(n);
+            return carrierInfoList(ci, n);
+        }, "The last screen's rates: idx, sys, prn, verdict, half, sigma, y (m/s, before the common rate)")
+        .def("update_height", [](E& e, double h, double var) { e.updateHeight(h, T(var)); }, py::arg("h_m"),
+             py::arg("var_m2"))
+        .def("update_zero_velocity", [](E& e, double s) { e.updateZeroVelocity(T(s)); }, py::arg("sigma_mps"))
         .def_property_readonly("t", &E::time)
         .def_property_readonly("lla", [](const E& e) { return vec3(e.lla()); })
         .def_property_readonly("v", [](const E& e) {
@@ -208,6 +306,8 @@ void bindEkf(py::module_& m, const char* name)
         .def("set_heading_sigma", [](E& e, double s) { e.setHeadingSigma(T(s)); }, py::arg("sigma_rad"))
         .def("turn_heading", [](E& e, double d) { e.turnHeading(T(d)); }, py::arg("dpsi_rad"))
         .def("set_att_gate_vertical", &E::setAttGateVertical)
+        .def("set_att_gate_cos4", &E::setAttGateCos4)
+        .def("set_tilt_sigma_floor", [](E& e, double s) { e.setTiltSigmaFloor(T(s)); }, py::arg("sigma_rad"))
         .def("set_biases", [](E& e, const A3& ab, const A3& wb, py::array_t<double> Pb) {
             auto r = Pb.template unchecked<2>();
             T P[6][6];
@@ -260,8 +360,21 @@ PYBIND11_MODULE(_rawgnss, m)
     py::class_<RawMeas>(m, "RawMeas")
         .def(py::init([](int sys, int prn, const Vec3& sat_pos, const Vec3& sat_vel, const Vec3& sat_acc,
                          py::object pr, py::object rr, float sigma_pr, float sigma_pr_corr, float tau_pr,
-                         float sigma_rr, float tau_rr) {
+                         float sigma_rr, float tau_rr, py::object cr_dphi_m, float cr_dt, py::object sat_pos_prev,
+                         float sigma_cr) {
                  RawMeas x{};
+                 x.has_cr = !cr_dphi_m.is_none();
+                 if (x.has_cr)
+                 {
+                     if (sat_pos_prev.is_none())
+                         throw py::value_error("a carrier range rate needs sat_pos_prev");
+                     x.cr_dphi_m = cr_dphi_m.cast<double>();
+                     x.cr_dt = cr_dt;
+                     x.sigma_cr = sigma_cr;
+                     const Vec3 sp = sat_pos_prev.cast<Vec3>();
+                     for (int k = 0; k < 3; ++k)
+                         x.sat_pos_prev[k] = sp[k];
+                 }
                  x.sys = static_cast<uint8_t>(sys);
                  x.prn = static_cast<uint8_t>(prn);
                  for (int k = 0; k < 3; ++k)
@@ -283,7 +396,9 @@ PYBIND11_MODULE(_rawgnss, m)
              }),
              py::arg("sys"), py::arg("prn"), py::arg("sat_pos"), py::arg("sat_vel"), py::arg("sat_acc"),
              py::arg("pr"), py::arg("rr"), py::arg("sigma_pr"), py::arg("sigma_pr_corr"), py::arg("tau_pr"),
-             py::arg("sigma_rr"), py::arg("tau_rr"))
+             py::arg("sigma_rr"), py::arg("tau_rr"), py::arg("cr_dphi_m") = py::none(), py::arg("cr_dt") = 1.0f,
+             py::arg("sat_pos_prev") = py::none(), py::arg("sigma_cr") = 0.008f,
+             "cr_dphi_m (with sat_pos_prev, the satellite at the earlier epoch): a carrier range rate over cr_dt")
         .def_readonly("sys", &RawMeas::sys)
         .def_readonly("prn", &RawMeas::prn)
         .def_property_readonly("sat_pos", [](const RawMeas& x) { return vec3(x.sat_pos); })
@@ -295,7 +410,14 @@ PYBIND11_MODULE(_rawgnss, m)
         .def_readonly("sigma_pr_corr", &RawMeas::sigma_pr_corr)
         .def_readonly("tau_pr", &RawMeas::tau_pr)
         .def_readonly("sigma_rr", &RawMeas::sigma_rr)
-        .def_readonly("tau_rr", &RawMeas::tau_rr);
+        .def_readonly("tau_rr", &RawMeas::tau_rr)
+        .def_readonly("has_cr", &RawMeas::has_cr)
+        .def_property_readonly("cr_dphi_m", [](const RawMeas& x) {
+            return x.has_cr ? py::object(py::float_(x.cr_dphi_m)) : py::object(py::none());
+        })
+        .def_readonly("cr_dt", &RawMeas::cr_dt)
+        .def_property_readonly("sat_pos_prev", [](const RawMeas& x) { return vec3(x.sat_pos_prev); })
+        .def_readonly("sigma_cr", &RawMeas::sigma_cr);
 
     py::class_<RawEpoch>(m, "RawEpoch")
         .def(py::init([](double tow, const py::list& obs) {
@@ -315,13 +437,18 @@ PYBIND11_MODULE(_rawgnss, m)
                      o.rate_mps = o.has_rate ? t[3].cast<double>() : 0.0;
                      o.cn0_dbhz = t[4].cast<float>();
                      o.lock_ms = t.size() > 5 ? t[5].cast<uint32_t>() : 0u;
+                     o.has_phase = t.size() > 6 && !t[6].is_none();
+                     o.phase_m = o.has_phase ? t[6].cast<double>() : 0.0;
+                     o.halfcyc = t.size() > 7 ? t[7].cast<bool>() : false;
                  }
                  return ep;
              }),
              py::arg("tow_s"), py::arg("obs"),
-             "obs: [(sys, prn, pr_m | None, rate_mps | None, cn0[, lock_ms])], sys as gnss_sys_t")
+             "obs: [(sys, prn, pr_m | None, rate_mps | None, cn0[, lock_ms[, phase_m | None[, halfcyc]]])], "
+             "sys as gnss_sys_t")
         .def_readonly("tow_s", &RawEpoch::tow_s)
-        .def_property_readonly("obs", &obsList);
+        .def_property_readonly("obs", &obsList)
+        .def_property_readonly("obs_carrier", &obsCarrierList, "each observation's (phase_m | None, halfcyc)");
 
     py::class_<EphemerisStore>(m, "EphemerisStore")
         .def(py::init<>())
@@ -361,7 +488,24 @@ PYBIND11_MODULE(_rawgnss, m)
         .def_readwrite("relock_tau_s", &RawMeasBuilder::Config::relock_tau_s)
         .def_readwrite("relock_gap_s", &RawMeasBuilder::Config::relock_gap_s)
         .def_readwrite("rr_dyn_sigma", &RawMeasBuilder::Config::rr_dyn_sigma)
-        .def_readwrite("rr_relock_sigma", &RawMeasBuilder::Config::rr_relock_sigma);
+        .def_readwrite("rr_relock_sigma", &RawMeasBuilder::Config::rr_relock_sigma)
+        .def_readwrite("sat_refresh_s", &RawMeasBuilder::Config::sat_refresh_s)
+        .def_readwrite("pr_white_a", &RawMeasBuilder::Config::pr_white_a)
+        .def_readwrite("pr_white_b", &RawMeasBuilder::Config::pr_white_b)
+        .def_readwrite("pr_corr_a", &RawMeasBuilder::Config::pr_corr_a)
+        .def_readwrite("pr_corr_b", &RawMeasBuilder::Config::pr_corr_b)
+        .def_readwrite("pr_tau_s", &RawMeasBuilder::Config::pr_tau_s)
+        .def_readwrite("rr_white_a", &RawMeasBuilder::Config::rr_white_a)
+        .def_readwrite("rr_white_b", &RawMeasBuilder::Config::rr_white_b)
+        .def_readwrite("rr_tau_s", &RawMeasBuilder::Config::rr_tau_s)
+        .def_readwrite("carrier", &RawMeasBuilder::Config::carrier)
+        .def_readwrite("cr_min_lock_ms", &RawMeasBuilder::Config::cr_min_lock_ms)
+        .def_readwrite("epoch_period_s", &RawMeasBuilder::Config::epoch_period_s)
+        .def_readwrite("cr_max_interval_s", &RawMeasBuilder::Config::cr_max_interval_s)
+        .def_readwrite("cr_sigma_floor_mps", &RawMeasBuilder::Config::cr_sigma_floor_mps)
+        .def_property("sig", [](const RawMeasBuilder::Config& c) { return arrayList(c.sig); },
+                      [](RawMeasBuilder::Config& c, const std::vector<GnssSignalProfile>& v) { arraySet(c.sig, v); },
+                      "each system's signal (gnss_sys_t: GPS, Galileo, BeiDou, QZSS), copies");
 
     py::class_<RawMeasBuilder>(m, "RawMeasBuilder")
         .def(py::init<>())
@@ -428,7 +572,115 @@ PYBIND11_MODULE(_rawgnss, m)
         .def_readwrite("p0_clk_drift", &RawGnssEKFParams::p0_clk_drift)
         .def_readwrite("p0_isb", &RawGnssEKFParams::p0_isb)
         .def_readwrite("gravity_wgs84", &RawGnssEKFParams::gravity_wgs84)
-        .def_readwrite("hist_spacing_s", &RawGnssEKFParams::hist_spacing_s);
+        .def_readwrite("hist_spacing_s", &RawGnssEKFParams::hist_spacing_s)
+        .def_readwrite("cr_mode", &RawGnssEKFParams::cr_mode)
+        .def_readwrite("cr_sigma_per_rev_s", &RawGnssEKFParams::cr_sigma_per_rev_s)
+        .def_readwrite("cr_common_sigma_mps", &RawGnssEKFParams::cr_common_sigma_mps)
+        .def_readwrite("cr_screen_k", &RawGnssEKFParams::cr_screen_k)
+        .def_readwrite("cr_screen_floor_mps", &RawGnssEKFParams::cr_screen_floor_mps)
+        .def_readwrite("cr_half_cycle", &RawGnssEKFParams::cr_half_cycle)
+        .def_property("cr_carrier_hz", [](const RawGnssEKFParams& p) { return arrayList(p.cr_carrier_hz); },
+                      [](RawGnssEKFParams& p, const std::vector<double>& v) { arraySet(p.cr_carrier_hz, v); })
+        .def_property("cr_half_cycle_unflagged",
+                      [](const RawGnssEKFParams& p) { return arrayList(p.cr_half_cycle_unflagged); },
+                      [](RawGnssEKFParams& p, const std::vector<bool>& v) {
+                          if (v.size() != static_cast<size_t>(kProfileSys))
+                              throw py::value_error("expected one per gnss_sys_t");
+                          for (int k = 0; k < kProfileSys; ++k)
+                              p.cr_half_cycle_unflagged[k] = v[k];
+                      });
+
+    // the per-epoch stats, carried between an epoch's parts (begin_gnss_raw ...)
+    py::class_<RawGnssStats>(m, "RawGnssStats")
+        .def(py::init<>())
+        .def_readonly("used_pr", &RawGnssStats::used_pr)
+        .def_readonly("used_rr", &RawGnssStats::used_rr)
+        .def_readonly("rejected_pr", &RawGnssStats::rejected_pr)
+        .def_readonly("rejected_rr", &RawGnssStats::rejected_rr)
+        .def_readonly("used_cr", &RawGnssStats::used_cr)
+        .def_readonly("cr_built", &RawGnssStats::cr_built)
+        .def_readonly("cr_in", &RawGnssStats::cr_in)
+        .def_readonly("cr_common_mps", &RawGnssStats::cr_common_mps)
+        .def("as_dict", &statsDict);
+
+    // the receivers' profiles (ReceiverProfile.h)
+    py::class_<GnssSignalProfile>(m, "GnssSignalProfile")
+        .def(py::init<>())
+        .def_readwrite("carrier_hz", &GnssSignalProfile::carrier_hz)
+        .def_readwrite("cn0_min_pr", &GnssSignalProfile::cn0_min_pr)
+        .def_readwrite("cn0_min_rr", &GnssSignalProfile::cn0_min_rr)
+        .def_readwrite("cn0_min_cr", &GnssSignalProfile::cn0_min_cr)
+        .def_readwrite("phase_sigma35_m", &GnssSignalProfile::phase_sigma35_m)
+        .def_readwrite("phase_sigma45_m", &GnssSignalProfile::phase_sigma45_m)
+        .def_readwrite("half_cycle_unflagged", &GnssSignalProfile::half_cycle_unflagged)
+        .def("phase_sigma", [](const GnssSignalProfile& g, float cn0) { return phaseSigmaM(g, cn0); },
+             py::arg("cn0_dbhz"), "the carrier phase's 1-sigma (m) at that C/N0");
+    py::class_<GnssReceiverProfile>(m, "GnssReceiverProfile")
+        .def(py::init<>())
+        .def_property_readonly("type", [](const GnssReceiverProfile& p) { return static_cast<int>(p.type); })
+        .def_property_readonly("name", [](const GnssReceiverProfile& p) { return std::string(p.name); })
+        .def_readwrite("measured", &GnssReceiverProfile::measured)
+        .def_property("sig", [](const GnssReceiverProfile& p) { return arrayList(p.sig); },
+                      [](GnssReceiverProfile& p, const std::vector<GnssSignalProfile>& v) { arraySet(p.sig, v); },
+                      "each system's signal (gnss_sys_t), copies")
+        .def_readwrite("rr_lag_s", &GnssReceiverProfile::rr_lag_s)
+        .def_readwrite("epoch_latency_s", &GnssReceiverProfile::epoch_latency_s)
+        .def_readwrite("raw_epoch_period_s", &GnssReceiverProfile::raw_epoch_period_s)
+        .def_readwrite("pr_white_a", &GnssReceiverProfile::pr_white_a)
+        .def_readwrite("pr_white_b", &GnssReceiverProfile::pr_white_b)
+        .def_readwrite("pr_corr_a", &GnssReceiverProfile::pr_corr_a)
+        .def_readwrite("pr_corr_b", &GnssReceiverProfile::pr_corr_b)
+        .def_readwrite("pr_corr_scale", &GnssReceiverProfile::pr_corr_scale)
+        .def_readwrite("pr_tau_s", &GnssReceiverProfile::pr_tau_s)
+        .def_readwrite("rr_white_a", &GnssReceiverProfile::rr_white_a)
+        .def_readwrite("rr_white_b", &GnssReceiverProfile::rr_white_b)
+        .def_readwrite("rr_scale", &GnssReceiverProfile::rr_scale)
+        .def_readwrite("rr_tau_s", &GnssReceiverProfile::rr_tau_s)
+        .def_readwrite("doppler_step_hz", &GnssReceiverProfile::doppler_step_hz)
+        .def_readwrite("relock_sigma_m", &GnssReceiverProfile::relock_sigma_m)
+        .def_readwrite("relock_tau_s", &GnssReceiverProfile::relock_tau_s)
+        .def_readwrite("relock_gap_s", &GnssReceiverProfile::relock_gap_s)
+        .def_readwrite("rr_dyn_sigma", &GnssReceiverProfile::rr_dyn_sigma)
+        .def_readwrite("rr_relock_sigma", &GnssReceiverProfile::rr_relock_sigma)
+        .def_readwrite("clk_bias_psd", &GnssReceiverProfile::clk_bias_psd)
+        .def_readwrite("clk_drift_psd", &GnssReceiverProfile::clk_drift_psd)
+        .def_readwrite("isb_psd", &GnssReceiverProfile::isb_psd)
+        .def_readwrite("clock_step_m", &GnssReceiverProfile::clock_step_m)
+        .def_readwrite("clock_step_spread_m", &GnssReceiverProfile::clock_step_spread_m)
+        .def_readwrite("drift_step_mps", &GnssReceiverProfile::drift_step_mps)
+        .def_readwrite("drift_step_spread_mps", &GnssReceiverProfile::drift_step_spread_mps)
+        .def_readwrite("p0_clk_bias", &GnssReceiverProfile::p0_clk_bias)
+        .def_readwrite("p0_clk_drift", &GnssReceiverProfile::p0_clk_drift)
+        .def_readwrite("p0_isb", &GnssReceiverProfile::p0_isb)
+        .def_readwrite("cr_mode", &GnssReceiverProfile::cr_mode)
+        .def_readwrite("cr_min_lock_ms", &GnssReceiverProfile::cr_min_lock_ms)
+        .def_readwrite("cr_max_interval_s", &GnssReceiverProfile::cr_max_interval_s)
+        .def_readwrite("cr_sigma_floor_mps", &GnssReceiverProfile::cr_sigma_floor_mps)
+        .def_readwrite("cr_sigma_per_rev_s", &GnssReceiverProfile::cr_sigma_per_rev_s)
+        .def_readwrite("cr_common_sigma_mps", &GnssReceiverProfile::cr_common_sigma_mps)
+        .def_readwrite("cr_screen_k", &GnssReceiverProfile::cr_screen_k)
+        .def_readwrite("cr_screen_floor_mps", &GnssReceiverProfile::cr_screen_floor_mps)
+        .def_readwrite("cr_half_cycle", &GnssReceiverProfile::cr_half_cycle);
+    m.def("lc86g_profile", &lc86gProfile, "the Quectel LC86G's (the Beetle's), measured");
+    m.def("neo_m8t_profile", &neoM8tProfile, "u-blox NEO-M8T: UNMEASURED placeholders");
+    m.def("px1105r_profile", &px1105rProfile, "SkyTraq PX1105R: UNMEASURED placeholders");
+    m.def("mosaic_g5_profile", &mosaicG5Profile, "Septentrio mosaic-G5: UNMEASURED placeholders");
+    m.def("generic_profile", &genericProfile, "a receiver with none: UNMEASURED placeholders");
+    m.def("profile_for", [](int type) { return profileFor(static_cast<GnssReceiverType>(type)); }, py::arg("type"));
+    m.def("apply_profile", [](const GnssReceiverProfile& p, RawMeasBuilder::Config& c) { applyReceiverProfile(p, c); },
+          py::arg("profile"), py::arg("config"), "the profile into a builder's config, in place");
+    m.def("apply_profile", [](const GnssReceiverProfile& p, RawGnssEKFParams& e) { applyReceiverProfile(p, e); },
+          py::arg("profile"), py::arg("params"), "the profile into a filter's params, in place");
+    m.attr("CARRIER_OFF") = static_cast<int>(kCarrierOff);
+    m.attr("CARRIER_OBSERVE") = static_cast<int>(kCarrierObserve);
+    m.attr("CARRIER_FUSE") = static_cast<int>(kCarrierFuse);
+    m.attr("HALF_CYCLE_REJECT") = static_cast<int>(kHalfCycleReject);
+    m.attr("HALF_CYCLE_REPAIR") = static_cast<int>(kHalfCycleRepair);
+    m.attr("RX_GENERIC") = static_cast<int>(kRxGeneric);
+    m.attr("RX_LC86G") = static_cast<int>(kRxLc86g);
+    m.attr("RX_NEO_M8T") = static_cast<int>(kRxNeoM8t);
+    m.attr("RX_PX1105R") = static_cast<int>(kRxPx1105r);
+    m.attr("RX_MOSAIC_G5") = static_cast<int>(kRxMosaicG5);
 
     bindEkf<float>(m, "RawGnssEKF32");
     bindEkf<double>(m, "RawGnssEKF64");
@@ -488,4 +740,5 @@ PYBIND11_MODULE(_rawgnss, m)
     m.attr("SYS_GPS") = static_cast<int>(GNSS_SYS_GPS);
     m.attr("SYS_GAL") = static_cast<int>(GNSS_SYS_GAL);
     m.attr("SYS_BDS") = static_cast<int>(GNSS_SYS_BDS);
+    m.attr("SYS_QZS") = static_cast<int>(GNSS_SYS_QZS);
 }

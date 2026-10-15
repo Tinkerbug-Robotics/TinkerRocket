@@ -132,8 +132,10 @@ if (os.path.exists("cpp/servo/servo_bindings.cpp") and
 
 # Raw-GNSS tightly coupled filter (#1600): the LC86G's RTCM through the flight
 # code's own parser (TR_GNSSReceiverLC86_Serial), ephemeris store and
-# measurement builder (TR_GNSSRaw), and the filter (TR_RawGnssEKF), for the
-# gnss repo's bench scorer to run beside the prototype it was ported from.
+# measurement builder (TR_GNSSRaw), and the filter (TR_RawGnssEKF, its carrier
+# range rate too), with the receivers' profiles, for the gnss repo's bench
+# scorer to run beside the prototype it was ported from and for a log replayed
+# through the flight code with the carrier observed or fused.
 # The receiver's C core (eph.c, atmo.c) comes in through a C++ wrapper.
 gnss_raw_dir = os.path.join(SHARED_LIB_DIR, "TR_GNSSRaw")
 raw_ekf_dir = os.path.join(SHARED_LIB_DIR, "TR_RawGnssEKF")
@@ -149,7 +151,9 @@ if (os.path.exists("cpp/rawgnss/rawgnss_bindings.cpp") and
                 os.path.join(gnss_raw_dir, "RtcmEphemeris.cpp"),
                 os.path.join(gnss_raw_dir, "EphemerisStore.cpp"),
                 os.path.join(gnss_raw_dir, "RawMeasBuilder.cpp"),
+                os.path.join(gnss_raw_dir, "RawMeasCarrier.cpp"),
                 os.path.join(raw_ekf_dir, "TR_RawGnssEKF.cpp"),
+                os.path.join(raw_ekf_dir, "TR_RawGnssCarrier.cpp"),
                 os.path.join(shadow_dir, "HeadingFit.cpp"),
                 os.path.join(lc86_dir, "Lc86Parser.cpp"),
                 os.path.join(lc86_dir, "Rtcm3Msm.cpp"),
