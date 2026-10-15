@@ -103,6 +103,22 @@ if(DEFINED TR_BENCH_HEADING_ERROR_DEG)
     add_compile_definitions(TR_BENCH_HEADING_ERROR_DEG=${TR_BENCH_HEADING_ERROR_DEG})
     message(STATUS "TR_BENCH_HEADING_ERROR_DEG=${TR_BENCH_HEADING_ERROR_DEG} -- the pad heading turned on purpose (bench)")
 endif()
+# Bench (local, rig comparison): act's heading prior and hand-off threshold.
+foreach(_v TR_BENCH_HEADING_PAD_SIGMA_DEG TR_BENCH_HEADING_HANDOFF_DEG)
+    if(DEFINED ${_v})
+        add_compile_definitions(${_v}=${${_v}})
+        message(STATUS "${_v}=${${_v}} (bench)")
+    endif()
+endforeach()
+# Bench (rig comparison): act's attitude gate from launch -- 1 opens it whole
+# (RawGnssShadow heading_gate_full), 0 leaves the heading's -- and the tilt's
+# floor at launch, deg (heading_launch_tilt_sigma_deg). Never set for flight.
+foreach(_v TR_BENCH_HEADING_GATE_FULL TR_BENCH_LAUNCH_TILT_SIGMA_DEG)
+    if(DEFINED ${_v})
+        add_compile_definitions(${_v}=${${_v}})
+        message(STATUS "${_v}=${${_v}} (bench)")
+    endif()
+endforeach()
 # Bench: a per-section cycle and Xtensa performance-counter profile of the
 # flight task, printed every 5 s (main/loop_profile.h). Never set for flight.
 if(TR_LOOP_PROFILE)

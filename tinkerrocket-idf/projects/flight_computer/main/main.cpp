@@ -3533,6 +3533,28 @@ static void startRawShadow()
         return;
     }
     cfg.heading_mode = TR_HEADING_FIT;   // the heading from thrust (config.h)
+#ifdef TR_BENCH_HEADING_PAD_SIGMA_DEG
+    cfg.heading_pad_sigma_deg = TR_BENCH_HEADING_PAD_SIGMA_DEG;   // bench: act's heading 1-sigma from launch
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: act's heading 1-sigma from launch %.1f deg (TR_BENCH_HEADING_PAD_SIGMA_DEG)",
+             cfg.heading_pad_sigma_deg);
+#endif
+#ifdef TR_BENCH_HEADING_HANDOFF_DEG
+    cfg.heading_handoff_deg = TR_BENCH_HEADING_HANDOFF_DEG;       // bench: below 0, never handed over
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: act hands the fit's heading over at a 1-sigma of %.1f deg%s "
+                  "(TR_BENCH_HEADING_HANDOFF_DEG)",
+             cfg.heading_handoff_deg, cfg.heading_handoff_deg < 0.0 ? " -- never" : "");
+#endif
+#ifdef TR_BENCH_HEADING_GATE_FULL
+    cfg.heading_gate_full = (TR_BENCH_HEADING_GATE_FULL) != 0;   // bench: act's GNSS on the whole attitude
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: act's attitude gate from launch: %s (TR_BENCH_HEADING_GATE_FULL)",
+             cfg.heading_gate_full ? "FULL -- GNSS turns the tilt too" : "the heading's");
+#endif
+#ifdef TR_BENCH_LAUNCH_TILT_SIGMA_DEG
+    cfg.heading_launch_tilt_sigma_deg = TR_BENCH_LAUNCH_TILT_SIGMA_DEG;   // bench: act's tilt floor at launch
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: act lets the tilt's 1-sigma go to at least %.2f deg at launch "
+                  "(TR_BENCH_LAUNCH_TILT_SIGMA_DEG)",
+             cfg.heading_launch_tilt_sigma_deg);
+#endif
     raw_shadow = new (mem) gnss_raw::RawGnssShadow(cfg);
     raw_meas = new (stage_mem) gnss_raw::RawGnssMeasStage(gnss_raw::RawGnssShadow::stageConfig(cfg));
     gnss_raw::BuiltEpoch* built = static_cast<gnss_raw::BuiltEpoch*>(built_mem);
