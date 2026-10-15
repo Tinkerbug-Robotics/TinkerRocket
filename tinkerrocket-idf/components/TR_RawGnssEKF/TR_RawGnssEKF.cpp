@@ -41,9 +41,8 @@ struct Los
     double rho, rate, u[3], vs[3];
 };
 
-void lineOfSight(const RawMeas& m, const double r[3], const double v[3], Los& L)
+void lineOfSight(const double rs[3], const double vs[3], const double r[3], const double v[3], Los& L)
 {
-    const double* rs = m.sat_pos;
     double d0 = rs[0] - r[0], d1 = rs[1] - r[1], d2 = rs[2] - r[2];
     double rho = std::sqrt(d0 * d0 + d1 * d1 + d2 * d2);
     double c = 1.0, s = 0.0, rr[3] = {rs[0], rs[1], rs[2]};
@@ -62,13 +61,17 @@ void lineOfSight(const RawMeas& m, const double r[3], const double v[3], Los& L)
         d0 = rr[0] - r[0]; d1 = rr[1] - r[1]; d2 = rr[2] - r[2];
         rho = std::sqrt(d0 * d0 + d1 * d1 + d2 * d2);
     }
-    const double* vs = m.sat_vel;
     L.vs[0] = c * vs[0] + s * vs[1];
     L.vs[1] = -s * vs[0] + c * vs[1];
     L.vs[2] = vs[2];
     L.rho = rho;
     L.u[0] = d0 / rho; L.u[1] = d1 / rho; L.u[2] = d2 / rho;
     L.rate = L.u[0] * (L.vs[0] - v[0]) + L.u[1] * (L.vs[1] - v[1]) + L.u[2] * (L.vs[2] - v[2]);
+}
+
+void lineOfSight(const RawMeas& m, const double r[3], const double v[3], Los& L)
+{
+    lineOfSight(m.sat_pos, m.sat_vel, r, v, L);
 }
 
 // The range acceleration a still receiver sees from the satellite's own
@@ -213,6 +216,12 @@ void RawGnssEKF<T>::init(const double lla[3], const T v_ned[3], const T q[4], do
     for (int s = 0; s < 3; ++s)
         for (int k = 0; k < 64; ++k)
             last_upd_[s][k][0] = last_upd_[s][k][1] = kNever;
+    // the carrier: no receiver kept, nothing screened
+    cr_cur_.valid = cr_prev_.valid = false;
+    cr_ninfo_ = cr_nfuse_ = 0;
+    cr_roll_sum_ = cr_roll_t_ = 0.0;
+    for (int i = 0; i < 3; ++i)
+        cr_ex_[i] = 0.0;
 }
 
 template <typename T>
@@ -487,6 +496,13 @@ void RawGnssEKF<T>::propagate(const T acc[3], const T gyro[3], T dt)
     clk_b_ += static_cast<double>(clk_d_) * static_cast<double>(dt);
     t_ += static_cast<double>(dt);
     pushHistory(dt, a_ned_);
+    // the carrier's noise grows with the roll rate (body x, the nose): its
+    // mean size until the next screen
+    if (p_.cr_mode != kCarrierOff)
+    {
+        cr_roll_sum_ += std::fabs(static_cast<double>(w[0])) * static_cast<double>(dt);
+        cr_roll_t_ += static_cast<double>(dt);
+    }
 }
 
 // P <- (I + F dt) P (I + F dt)' + Qd, Qd = Qc dt + (F Qc + Qc F') dt^2 / 2,
@@ -715,21 +731,7 @@ int RawGnssEKF<T>::scalarUpdate(const int* hidx, const T* hval, int hn, T y, T R
     T K[N];
     for (int i = 0; i < N; ++i)
         K[i] = HP[i] * Sinv;
-    if (att != T(1))
-        for (int i = kAtt; i < kAtt + 3; ++i)
-            K[i] *= att;
-    if (att_axis != nullptr)
-    {
-        // only along the axis: the attitude's correction, and the gyro bias's
-        // (across the vertical a gyro bias integrates into a tilt)
-        const int bases[2] = {kAtt, kGyroBias};
-        for (int base : bases)
-        {
-            const T d = att_axis[0] * K[base] + att_axis[1] * K[base + 1] + att_axis[2] * K[base + 2];
-            for (int a = 0; a < 3; ++a)
-                K[base + a] = att_axis[a] * d;
-        }
-    }
+    gateGain(K, att, att_axis);
     if (kmask != 0xFFFFFFFFu)
         for (int i = 0; i < N; ++i)
             if (!(kmask & (1u << i)))
@@ -759,6 +761,26 @@ int RawGnssEKF<T>::scalarUpdate(const int* hidx, const T* hval, int hn, T y, T R
 }
 
 template <typename T>
+void RawGnssEKF<T>::gateGain(T K[N], T att, const T* att_axis)
+{
+    if (att != T(1))
+        for (int i = kAtt; i < kAtt + 3; ++i)
+            K[i] *= att;
+    if (att_axis != nullptr)
+    {
+        // only along the axis: the attitude's correction, and the gyro bias's
+        // (across the vertical a gyro bias integrates into a tilt)
+        const int bases[2] = {kAtt, kGyroBias};
+        for (int base : bases)
+        {
+            const T d = att_axis[0] * K[base] + att_axis[1] * K[base + 1] + att_axis[2] * K[base + 2];
+            for (int a = 0; a < 3; ++a)
+                K[base + a] = att_axis[a] * d;
+        }
+    }
+}
+
+template <typename T>
 void RawGnssEKF<T>::inject(const T dx[N])
 {
     double rew, rns;
@@ -783,6 +805,21 @@ void RawGnssEKF<T>::inject(const T dx[N])
     for (int i = 0; i < 4; ++i)
         q_[i] = qn[i];
     normalize4(q_);
+    // The carrier's receiver snapshots (an epoch's, the one before's): a
+    // correction now moves the trajectory at an earlier time t by dp - dv
+    // (now - t), to first order -- whatever made it
+    if (p_.cr_mode != kCarrierOff)
+    {
+        CrSnap* snaps[2] = {&cr_cur_, &cr_prev_};
+        for (CrSnap* sn : snaps)
+        {
+            if (!sn->valid)
+                continue;
+            const double age = t_ - sn->t;
+            for (int i = 0; i < 3; ++i)
+                sn->d_ned[i] += static_cast<double>(dx[kPos + i]) - static_cast<double>(dx[kVel + i]) * age;
+        }
+    }
 }
 
 // How much of a GNSS correction reaches the attitude: cos^4 pitch, as the
@@ -798,6 +835,20 @@ T RawGnssEKF<T>::attGate() const
     const T sp = -M[0][2];
     const T c2 = T(1) - sp * sp;
     return c2 * c2;
+}
+
+// The axis a GNSS correction's attitude part is held to: the vertical in the
+// body frame (vert) with att_gate_vertical, else none. With attGate and
+// gateGain, the attitude gate every GNSS update -- range, range rate,
+// carrier -- goes through.
+template <typename T>
+const T* RawGnssEKF<T>::gnssAttAxis(T vert[3]) const
+{
+    T M[3][3];
+    quat2dcm(q_, M);
+    for (int a = 0; a < 3; ++a)
+        vert[a] = M[a][2];
+    return p_.att_gate_vertical ? vert : nullptr;
 }
 
 template <typename T>
@@ -974,6 +1025,15 @@ bool RawGnssEKF<T>::updateMagHeading(const T acc[3], const T mag[3], bool accel_
 template <typename T>
 void RawGnssEKF<T>::pushHistory(T dt, const T a_ned[3])
 {
+    // the carrier's integration excess, this step's: a dt^2 / 2
+    const bool cr = p_.cr_mode != kCarrierOff;
+    T ex[3] = {};
+    if (cr)
+        for (int i = 0; i < 3; ++i)
+        {
+            ex[i] = T(0.5) * a_ned[i] * dt * dt;
+            cr_ex_[i] += static_cast<double>(ex[i]);
+        }
     if (hn_ > 0 && (t_ - hopen_) < p_.hist_spacing_s)
     {
         Hist& e = hist_[(hhead_ + kHist - 1) % kHist];
@@ -983,6 +1043,9 @@ void RawGnssEKF<T>::pushHistory(T dt, const T a_ned[3])
             e.dv[i] += a_ned[i] * dt;
             e.dp[i] += v_[i] * dt;
         }
+        if (cr)
+            for (int i = 0; i < 3; ++i)
+                e.ex[i] += ex[i];
         return;
     }
     hopen_ = hn_ > 0 ? hist_[(hhead_ + kHist - 1) % kHist].t : t_ - static_cast<double>(dt);
@@ -992,6 +1055,7 @@ void RawGnssEKF<T>::pushHistory(T dt, const T a_ned[3])
     {
         e.dv[i] = a_ned[i] * dt;
         e.dp[i] = v_[i] * dt;
+        e.ex[i] = ex[i];
     }
     hhead_ = (hhead_ + 1) % kHist;
     if (hn_ < kHist)
@@ -1203,6 +1267,9 @@ RawGnssStats RawGnssEKF<T>::updateGnssRaw(const RawMeas* m, int n, double age_s)
     RawGnssStats st;
     if (beginGnssRaw(m, n, age_s, st))
         updateGnssRawPart(m, 0, n, age_s, st);
+    if (beginCarrier(m, n, age_s, st) > 0)
+        fuseCarrier(m, st);
+    endCarrier(st);
     return st;
 }
 
@@ -1277,6 +1344,10 @@ bool RawGnssEKF<T>::beginGnssRaw(const RawMeas* m, int n, double age_s, RawGnssS
             }
         }
     }
+    // The carrier's receiver at this epoch: back-dated as the pseudoranges
+    // take it, before they correct it (each correction from here moves it)
+    if (p_.cr_mode != kCarrierOff)
+        crSnapshot(age_s, dp_e);
     return true;
 }
 
@@ -1294,13 +1365,7 @@ void RawGnssEKF<T>::updateGnssRawPart(const RawMeas* m, int i0, int i1, double a
 
     const T att = attGate();
     T vert[3];                            // the vertical in the body frame (att_gate_vertical)
-    {
-        T M[3][3];
-        quat2dcm(q_, M);
-        for (int a = 0; a < 3; ++a)
-            vert[a] = M[a][2];
-    }
-    const T* axis = p_.att_gate_vertical ? vert : nullptr;
+    const T* axis = gnssAttAxis(vert);
     for (int i = i0; i < i1; ++i)
     {
         const RawMeas& mi = m[i];
@@ -1446,6 +1511,26 @@ double sagnacRange(const RawMeas& m, const double r[3])
     lineOfSight(m, r, still, L);
     return L.rho;
 }
+
+namespace ekf_detail
+{
+
+double sagnacLos(const double rs[3], const double r[3], double u[3])
+{
+    const double still[3] = {0.0, 0.0, 0.0};
+    Los L;
+    lineOfSight(rs, still, r, still, L);
+    for (int a = 0; a < 3; ++a)
+        u[a] = L.u[a];
+    return L.rho;
+}
+
+double medianOf(double* v, int n)
+{
+    return median(v, n);
+}
+
+}  // namespace ekf_detail
 
 double stillRangeRate(const RawMeas& m, const double r[3], double u[3])
 {

@@ -817,6 +817,7 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
         job_.build_us = 0;
     }
     job_.fused = 0;
+    job_.cr_screened = false;
     job_.rs = RawGnssStats();
     job_.update_us = 0;
     job_.slices = 0;
@@ -889,7 +890,16 @@ void RawGnssShadow::jobUnit(double t)
             job_.fused++;
         }
         if (job_.fused >= built_.n)
-            job_.phase = kJobClose;
+            job_.phase = ekf_.params().cr_mode == kCarrierFuse ? kJobCarrier : kJobClose;
+        break;
+    case kJobCarrier:
+        // fuse mode: the screen, then every screened rate at once in the next unit
+        job_.cr_screened = true;
+        job_.phase = ekf_.beginCarrier(built_.meas, built_.n, age, job_.rs) > 0 ? kJobCarrierFuse : kJobClose;
+        break;
+    case kJobCarrierFuse:
+        ekf_.fuseCarrier(built_.meas, job_.rs);
+        job_.phase = kJobClose;
         break;
     default:
         closeJob(age, t);
@@ -951,7 +961,36 @@ void RawGnssShadow::jobChecks(double age, double t)
 void RawGnssShadow::closeJob(double age, double t)
 {
     const int n = built_.n;
-    const RawGnssStats& rs = job_.rs;
+    RawGnssStats& rs = job_.rs;
+    // the carrier: observe screens here, in the unit that closes the epoch
+    // (the state untouched, no step falls differently); the epoch closed
+    if (ekf_.params().cr_mode != kCarrierOff)
+    {
+        if (!job_.cr_screened)
+            (void)ekf_.beginCarrier(built_.meas, n, age, rs);
+        ekf_.endCarrier(rs);
+        if (rs.cr_built > 0)
+        {
+            st_.cr_epochs++;
+            if (rs.cr_too_few)
+                st_.cr_too_few++;
+        }
+        st_.cr_built += static_cast<uint32_t>(rs.cr_built);
+        st_.cr_unmatched += static_cast<uint32_t>(rs.cr_unmatched);
+        st_.cr_in += static_cast<uint32_t>(rs.cr_in);
+        st_.cr_half += static_cast<uint32_t>(rs.cr_half);
+        st_.cr_repaired += static_cast<uint32_t>(rs.cr_repaired);
+        st_.cr_other += static_cast<uint32_t>(rs.cr_other);
+        st_.cr_used += static_cast<uint32_t>(rs.used_cr);
+        if (rs.cr_in > 0)
+        {
+            st_.cr_last_rms_mps = rs.cr_rms_mps;
+            st_.cr_last_fit_rms_mps = rs.cr_fit_rms_mps;
+            st_.cr_last_dv_mps = rs.cr_dv_mps;
+            st_.cr_last_common_mps = rs.cr_common_mps;
+            st_.cr_last_roll_rev_s = rs.cr_roll_rev_s;
+        }
+    }
     double r_post[3], v_post[3];
     ekf_.receiverEcefAt(age, r_post, v_post);
     satcheck_.commit(built_.meas, n, built_.tow_s, r_post);

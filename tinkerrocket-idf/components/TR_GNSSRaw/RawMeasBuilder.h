@@ -211,8 +211,10 @@ private:
         double   phase = 0.0;        // the phase range, corrected, m
         double   sat_pos[3] = {};    // the satellite at its transmit time
     };
-    void carrierRate(const RawObs& o, const GnssSignalProfile& sig, double tow, double phase,
-                     const double rs[3], RawMeas& m);
+    // dts, iono, trop: the satellite clock (s) and the atmosphere (m) the
+    // pseudorange was corrected by
+    void carrierRate(const RawObs& o, const GnssSignalProfile& sig, double tow, double dts, double iono,
+                     double trop, const double rs[3], RawMeas& m);
 
     Config     cfg_;
     gps_iono_t iono_ = {};

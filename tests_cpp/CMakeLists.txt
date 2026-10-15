@@ -1556,6 +1556,7 @@ add_executable(test_raw_gnss_meas test_raw_gnss_meas.cpp
     ${LIB_DIR}/TR_GNSSRaw/RtcmEphemeris.cpp
     ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
     ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasCarrier.cpp
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Lc86Parser.cpp
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
 )
@@ -1580,6 +1581,7 @@ gtest_discover_tests(test_raw_gnss_meas)
 add_executable(test_raw_gnss_ekf test_raw_gnss_ekf.cpp
     ${LIB_DIR}/TR_GNSSRaw/atmo.c
     ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssCarrier.cpp
 )
 target_include_directories(test_raw_gnss_ekf PRIVATE
     ${LIB_DIR}/TR_GNSSRaw
@@ -1588,6 +1590,26 @@ target_include_directories(test_raw_gnss_ekf PRIVATE
 )
 target_link_libraries(test_raw_gnss_ekf GTest::gtest_main)
 gtest_discover_tests(test_raw_gnss_ekf)
+
+# ---------- test_raw_gnss_carrier ----------
+# TR_RawGnssEKF's carrier range rate (#1600): a synthetic sky with exact
+# carrier phases beside its pseudoranges and Dopplers, a receiver clock with
+# white FM and a common wind-up. Observe never moves the state; fusing beats
+# the Doppler alone; the screen's half-cycle steps; under four rates; a
+# missed epoch; a correction between epochs; float against double; the
+# attitude gate.
+add_executable(test_raw_gnss_carrier test_raw_gnss_carrier.cpp
+    ${LIB_DIR}/TR_GNSSRaw/atmo.c
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssCarrier.cpp
+)
+target_include_directories(test_raw_gnss_carrier PRIVATE
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+    ${LIB_DIR}/TR_RawGnssEKF
+)
+target_link_libraries(test_raw_gnss_carrier GTest::gtest_main)
+gtest_discover_tests(test_raw_gnss_carrier)
 
 # ---------- test_raw_gnss_shadow ----------
 # The raw-GNSS shadow filter's flight-computer side (#1600 phase 4): the
@@ -1605,11 +1627,13 @@ add_executable(test_raw_gnss_shadow test_raw_gnss_shadow.cpp
     ${LIB_DIR}/TR_RawGnssShadow/EphemerisFrames.cpp
     ${LIB_DIR}/TR_RawGnssShadow/HeadingFit.cpp
     ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssCarrier.cpp
     ${LIB_DIR}/TR_GNSSRaw/eph.c
     ${LIB_DIR}/TR_GNSSRaw/atmo.c
     ${LIB_DIR}/TR_GNSSRaw/RtcmEphemeris.cpp
     ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
     ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasCarrier.cpp
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Lc86Parser.cpp
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
 )
@@ -1641,11 +1665,13 @@ add_executable(test_receiver_profile test_receiver_profile.cpp
     ${LIB_DIR}/TR_RawGnssShadow/EphemerisFrames.cpp
     ${LIB_DIR}/TR_RawGnssShadow/HeadingFit.cpp
     ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssCarrier.cpp
     ${LIB_DIR}/TR_GNSSRaw/eph.c
     ${LIB_DIR}/TR_GNSSRaw/atmo.c
     ${LIB_DIR}/TR_GNSSRaw/RtcmEphemeris.cpp
     ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
     ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasCarrier.cpp
 )
 target_include_directories(test_receiver_profile PRIVATE
     ${SHIM_DIR}
@@ -1667,6 +1693,7 @@ gtest_discover_tests(test_receiver_profile)
 # raw filter.
 add_executable(test_raw_nav_adapter test_raw_nav_adapter.cpp
     ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssCarrier.cpp
 )
 target_include_directories(test_raw_nav_adapter PRIVATE
     ${SHIM_DIR}
@@ -1689,6 +1716,7 @@ gtest_discover_tests(test_raw_nav_adapter)
 add_executable(test_pad_survey test_pad_survey.cpp
     ${LIB_DIR}/TR_RawGnssShadow/PadSurvey.cpp
     ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssCarrier.cpp
 )
 target_include_directories(test_pad_survey PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -1709,6 +1737,7 @@ gtest_discover_tests(test_pad_survey)
 add_executable(test_heading_fit test_heading_fit.cpp
     ${LIB_DIR}/TR_RawGnssShadow/HeadingFit.cpp
     ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssCarrier.cpp
     ${LIB_DIR}/TR_GNSSRaw/atmo.c
 )
 target_include_directories(test_heading_fit PRIVATE
@@ -1726,6 +1755,7 @@ gtest_discover_tests(test_heading_fit)
 add_executable(bench_heading_fit bench_heading_fit.cpp
     ${LIB_DIR}/TR_RawGnssShadow/HeadingFit.cpp
     ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssCarrier.cpp
     ${LIB_DIR}/TR_GNSSRaw/atmo.c
 )
 target_include_directories(bench_heading_fit PRIVATE
@@ -1743,6 +1773,7 @@ add_executable(test_gnss_checks test_gnss_checks.cpp
     ${LIB_DIR}/TR_RawGnssShadow/SatJumpCheck.cpp
     ${LIB_DIR}/TR_RawGnssShadow/FixCheck.cpp
     ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssCarrier.cpp
     ${LIB_DIR}/TR_GNSSRaw/atmo.c
 )
 target_include_directories(test_gnss_checks PRIVATE

@@ -3365,6 +3365,26 @@ static void rawShadowTask(void*)
                      (unsigned long)rec_drops, (unsigned long)raw_shadow_link.imu.dropped(),
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                      (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+            if (sh.config().ekf.cr_mode != gnss_raw::kCarrierOff)
+            {
+                // the carrier range rates (the receiver profile's mode): what
+                // the screen took, and the last screened epoch's innovations,
+                // the velocity they point to and the common rate -- in m/s and
+                // in cycles a second, the carrier wind-up beside the roll rate
+                const double lam = 299792458.0 / sh.config().ekf.cr_carrier_hz[GNSS_SYS_GPS];
+                ESP_LOGI(TAG, "[RAWGNSS] carrier (%s, a half cycle %s): epochs %lu (%lu under 4) | rates %lu: in %lu "
+                              "(%lu repaired), half-cycle %lu, other %lu, unmatched %lu, fused %lu | last: innovations "
+                              "%.1f mm/s rms, %.1f about the fit, velocity %.3f m/s off, common %+.3f m/s (%+.2f cyc/s) "
+                              "at roll %.2f rev/s",
+                         gnss_raw::carrierModeName(sh.config().ekf.cr_mode),
+                         sh.config().ekf.cr_half_cycle == gnss_raw::kHalfCycleRepair ? "repaired" : "rejected",
+                         (unsigned long)st.cr_epochs, (unsigned long)st.cr_too_few, (unsigned long)st.cr_built,
+                         (unsigned long)st.cr_in, (unsigned long)st.cr_repaired, (unsigned long)st.cr_half,
+                         (unsigned long)st.cr_other, (unsigned long)st.cr_unmatched, (unsigned long)st.cr_used,
+                         (double)st.cr_last_rms_mps * 1000.0, (double)st.cr_last_fit_rms_mps * 1000.0,
+                         (double)st.cr_last_dv_mps, st.cr_last_common_mps, st.cr_last_common_mps / lam,
+                         (double)st.cr_last_roll_rev_s);
+            }
 #if TR_HEADING_FIT
             {
                 const gnss_raw::HeadingFit::Result& hr = st.heading_last;

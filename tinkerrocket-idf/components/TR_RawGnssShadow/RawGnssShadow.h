@@ -101,6 +101,19 @@
 // a 1-sigma of 5 deg, 9.8 deg off, was handed over.) The epoch's two units
 // (its Doppler velocity, then the fit) are each one slice at most.
 //
+// The carrier range rate (the receiver profile's cr_mode, ekf.cr_mode). Each
+// epoch's builder gives the satellites whose carrier phase was continuous
+// since the epoch before a carrier range rate (RawMeasBuilder), and the
+// filter screens them after the epoch's pseudoranges and Dopplers
+// (TR_RawGnssEKF.h). Observe (the LC86G's): the screen, the innovations and
+// the epoch's common rate are computed and counted at the epoch's close --
+// in the unit that closes it, so no step or slice falls differently -- and
+// the state is never touched. Fuse: a unit screens, the next fuses every
+// screened rate at once (the common rate is the state's at that instant).
+// The counts, the innovations' RMS, the common rate (m/s, and in cycles a
+// second: with the roll rate beside it, the carrier wind-up) are in the
+// stats and on the console.
+//
 // Stopping. A sensor sim, a hole in the IMU longer than max_gap_s, a state
 // that is not finite, or (on the pad) one pad_reset_m from the flight
 // filter's stops it; it starts again from the next pad seed.
@@ -294,6 +307,21 @@ public:
         uint32_t heading_vel_us = 0, heading_vel_us_max = 0;      // an epoch's Doppler velocity
         uint32_t heading_solve_us = 0, heading_solve_us_max = 0;  //   and its fit
         uint32_t heading_step_us_max = 0;  // the fit's share of a step
+        // the carrier range rates (above): totals, each epoch's in last
+        uint32_t cr_epochs = 0;            // epochs with any
+        uint32_t cr_too_few = 0;           //   with under 4 to screen: none taken
+        uint32_t cr_built = 0;             // rates offered
+        uint32_t cr_unmatched = 0;         //   whose earlier epoch the filter did not keep
+        uint32_t cr_in = 0;                //   screened in (repaired ones too)
+        uint32_t cr_half = 0;              //   rejected as half-cycle steps
+        uint32_t cr_repaired = 0;          //   repaired
+        uint32_t cr_other = 0;             //   rejected otherwise
+        uint32_t cr_used = 0;              //   fused (fuse mode)
+        float    cr_last_rms_mps = 0.0f;   // the last epoch screened: its innovations' RMS about the common rate,
+        float    cr_last_fit_rms_mps = 0.0f;   //   and about the screen's fit,
+        float    cr_last_dv_mps = 0.0f;    //   the velocity correction the rates point to,
+        double   cr_last_common_mps = 0.0; //   the common rate,
+        float    cr_last_roll_rev_s = 0.0f;//   the mean |roll rate|
     };
 
     using Clock = int64_t (*)();
@@ -422,7 +450,8 @@ private:
     BuiltEpoch    pend_built_[2];       // built epochs waiting for it (external_build)
     int           pb_head_ = 0, npend_built_ = 0;
     // the epoch being worked (startJob .. closeJob), a slice a step
-    enum : int { kJobBuild, kJobChecks, kJobHeading, kJobHeadingFit, kJobClock, kJobFuse, kJobClose };
+    enum : int { kJobBuild, kJobChecks, kJobHeading, kJobHeadingFit, kJobClock, kJobFuse, kJobCarrier,
+                 kJobCarrierFuse, kJobClose };
     struct Job
     {
         bool          active = false;
@@ -432,6 +461,7 @@ private:
         bool          in_flight = false;
         double        g_peak = 0.0;       // the largest |specific force| / g - 1 since the last epoch
         int           fused = 0;          // measurements fused
+        bool          cr_screened = false;  // its carrier rates screened (fuse mode's own unit)
         RawGnssStats  rs;
         int64_t       t0_us = 0;
         uint32_t      build_us = 0, update_us = 0, slices = 0;

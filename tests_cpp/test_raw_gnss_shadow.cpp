@@ -2762,3 +2762,309 @@ TEST(RawGnssShadow, ActLetsTheTiltGoToItsLaunchFloor)
     EXPECT_NEAR(act.att_sigma_launch[2] * 180.0 / kPi, RawGnssShadow::Config().heading_pad_sigma_deg, 0.1);
     EXPECT_NEAR(plain.att_sigma_launch[2] * 180.0 / kPi, RawGnssShadow::Config().heading_pad_sigma_deg, 0.1);
 }
+
+// ------------------------------------------- the carrier range rate (#1600)
+
+namespace
+{
+
+// Normal draws the same on every platform (test_heading_fit.cpp's): Box-Muller
+// on mt19937's own words.
+double portableNormal(std::mt19937& rng)
+{
+    const double u1 = (static_cast<double>(rng()) + 0.5) / 4294967296.0;
+    const double u2 = (static_cast<double>(rng()) + 0.5) / 4294967296.0;
+    return std::sqrt(-2.0 * std::log(u1)) * std::cos(2.0 * kPi * u2);
+}
+
+// SynthSky's twin with carrier phases: each satellite's phase range the
+// pseudorange's truth plus an integer of its own, the receiver clock with a
+// drift, a common wind-up; the code and the Doppler noisy as the LC86G's.
+struct CarrierSky
+{
+    gnss_raw::EphemerisStore store;
+    gnss_raw::RawMeasBuilder::Config cfg;
+    std::mt19937 rng{1015};
+    double clk_m = 3000.0, drift_mps = -1.5;
+    double wind_cyc_s = 0.5;          // the wind-up, cycles a second
+    double sigma_pr = 1.0, sigma_rr = 0.1, sigma_phase = 0.003;
+    double tow0 = 0.0;
+
+    explicit CarrierSky(const gnss_raw::RawMeasBuilder::Config& c) : cfg(c)
+    {
+        for (int i = 0; i < kGoldenRmEphN; ++i)
+        {
+            gps_eph_t e;
+            if (gnss_raw::decodeEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len),
+                                          kGoldenWeek, e))
+                store.add(e);
+        }
+    }
+
+    // r: the receiver at the tag (ECEF), v_lag: its velocity rr_lag before (ECEF)
+    gnss_raw::RawEpoch epoch(double tow, const double r[3], const double v_lag[3])
+    {
+        const double t = tow - tow0;
+        const double clk = clk_m + drift_mps * t;
+        gnss_raw::RawEpoch ep;
+        ep.tow_s = tow;
+        for (int i = 0; i < kGoldenRmEphN; ++i)
+        {
+            gps_eph_t e;
+            if (!gnss_raw::decodeEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len),
+                                           kGoldenWeek, e))
+                continue;
+            gnss_raw::RawObs& o = ep.obs[ep.n++];
+            o.sys = static_cast<uint8_t>(e.sys);
+            o.prn = static_cast<uint8_t>(e.prn);
+            o.has_pr = o.has_rate = true;
+            o.cn0_dbhz = 42.0f;
+            o.pr_m = 2.2e7;
+            o.rate_mps = 0.0;
+            o.lock_ms = 600000 + static_cast<uint32_t>(std::lround(t * 1000.0));
+        }
+        gnss_raw::RawMeas m[gnss_raw::RawEpoch::kMaxObs];
+        for (int it = 0; it < 3; ++it)
+        {
+            gnss_raw::RawEpoch probe = ep;
+            gnss_raw::RawMeasBuilder b(cfg);
+            const int n = b.build(probe, store, r, 0.0, m, gnss_raw::RawEpoch::kMaxObs);
+            for (int k = 0; k < n; ++k)
+                for (int j = 0; j < ep.n; ++j)
+                {
+                    gnss_raw::RawObs& o = ep.obs[j];
+                    if (o.sys != m[k].sys || o.prn != m[k].prn)
+                        continue;
+                    const double corr = m[k].pr - o.pr_m;
+                    o.pr_m = gnss_raw::sagnacRange(m[k], r) + clk - corr;
+                    double u[3];
+                    const double still = gnss_raw::stillRangeRate(m[k], r, u);
+                    const double clk_rate = m[k].rr - o.rate_mps;
+                    o.rate_mps = still - (u[0] * v_lag[0] + u[1] * v_lag[1] + u[2] * v_lag[2]) + drift_mps - clk_rate;
+                }
+        }
+        gnss_raw::RawEpoch out;
+        out.tow_s = tow;
+        gnss_raw::RawMeasBuilder b(cfg);
+        const int n = b.build(ep, store, r, 0.0, m, gnss_raw::RawEpoch::kMaxObs);
+        for (int k = 0; k < n; ++k)
+            for (int j = 0; j < ep.n; ++j)
+                if (ep.obs[j].sys == m[k].sys && ep.obs[j].prn == m[k].prn)
+                {
+                    gnss_raw::RawObs o = ep.obs[j];
+                    const double lam = 299792458.0 / cfg.sig[o.sys].carrier_hz;
+                    o.has_phase = true;
+                    o.halfcyc = false;
+                    o.phase_m = o.pr_m + lam * (100.0 + o.prn + wind_cyc_s * t) + sigma_phase * portableNormal(rng);
+                    o.pr_m += sigma_pr * portableNormal(rng);
+                    o.rate_mps += sigma_rr * portableNormal(rng);
+                    out.obs[out.n++] = o;
+                }
+        return out;
+    }
+};
+
+struct CarrierRun
+{
+    RawGnssShadow::Stats st;
+    std::vector<double> verr;          // the velocity's error against the truth at the filter's time, each 0.5 s in flight
+    std::vector<uint64_t> state;       // a hash of the filter's whole state, each 0.25 s
+};
+
+uint64_t stateHash(const gnss_raw::RawGnssEKF<float>& f)
+{
+    uint64_t h = 1469598103934665603ULL;
+    auto add = [&](const void* p, size_t n) {
+        const uint8_t* b = static_cast<const uint8_t*>(p);
+        for (size_t i = 0; i < n; ++i)
+        {
+            h ^= b[i];
+            h *= 1099511628211ULL;
+        }
+    };
+    add(f.lla(), 3 * sizeof(double));
+    add(f.velNed(), 3 * sizeof(float));
+    add(f.quat(), 4 * sizeof(float));
+    add(f.accelBias(), 3 * sizeof(float));
+    add(f.gyroBias(), 3 * sizeof(float));
+    const double cb = f.clockBias();
+    const float cd = f.clockDrift();
+    add(&cb, sizeof(cb));
+    add(&cd, sizeof(cd));
+    for (int i = 0; i < gnss_raw::RawGnssEKF<float>::N; ++i)
+        for (int j = 0; j < gnss_raw::RawGnssEKF<float>::N; ++j)
+        {
+            const float p = f.P(i, j);
+            add(&p, sizeof(p));
+        }
+    return h;
+}
+
+// The navigation filter on a pad (4 s) and a boost (3 g up the nose for 2 s)
+// and coast, turning half a revolution a second about its nose from launch;
+// an epoch each GPS second, built in the GNSS task's stage and handed over
+// 0.2 s late; a barometer at 50 Hz; the epochs worked a slice a step on a
+// clock of 1 ms a look. mode: the carrier's.
+CarrierRun flyCarrier(uint8_t mode, double t_end = 14.0)
+{
+    double lat, lon, h;
+    ecef_to_geo(kGoldenRmRx, &lat, &lon, &h);
+    double r0[3];
+    geo_to_ecef(lat, lon, h, r0);
+    const double sl = std::sin(lat), cl = std::cos(lat), so = std::sin(lon), co = std::cos(lon);
+    auto nedToEcefVec = [&](const double n[3], double o[3]) {
+        const double e[3] = {n[1], n[0], -n[2]};
+        o[0] = -so * e[0] - sl * co * e[1] + cl * co * e[2];
+        o[1] = co * e[0] - sl * so * e[1] + cl * so * e[2];
+        o[2] = cl * e[1] + sl * e[2];
+    };
+    RawGnssShadow::Config cfg = primaryCfg();
+    cfg.external_build = true;
+    cfg.epoch_slice_us = 2500.0;
+    cfg.meas.troposphere = false;
+    cfg.ekf.cr_mode = mode;
+    cfg.meas.carrier = mode != gnss_raw::kCarrierOff;
+    RawGnssShadow sh(cfg);
+    g_fake_us = 0;
+    sh.setClock(fakeClock);
+    gnss_raw::RawGnssMeasStage stage(RawGnssShadow::stageConfig(cfg));
+    gnss_raw::BuiltEpoch built;
+    for (int i = 0; i < kGoldenRmEphN; ++i)
+    {
+        sh.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+        stage.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+    }
+    CarrierSky sky(cfg.meas);
+    sky.tow0 = goldenEpochs()[0].epoch.tow_s;
+    ShadowSeed seed = padSeed(kT0, lat, lon, h);
+    const float q_up[4] = {float(std::cos(kPi / 4)), 0.0f, float(std::sin(kPi / 4)), 0.0f};   // body x up
+    for (int i = 0; i < 4; ++i)
+        seed.quat[i] = q_up[i];
+    sh.onSeed(seed);
+    const double t_ign = 4.0, t_det = 4.1, dt = 0.005, rr_lag = cfg.ekf.rr_lag_s;
+    double p_ned[3] = {}, v_ned[3] = {};
+    std::vector<std::array<double, 3>> vel_hist;
+    int next_epoch = 1;
+    std::vector<TimedRawEpoch> due;
+    CarrierRun run;
+    for (double t = dt; t <= t_end + 1e-9; t += dt)
+    {
+        double a_n[3] = {0.0, 0.0, 0.0};
+        double fx = kG;                                // on the pad: up the body's x
+        if (t > t_ign)
+        {
+            fx = t <= t_ign + 2.0 ? 3.0 * kG : 0.0;    // then coasting, weightless
+            a_n[2] = -fx + kG;
+        }
+        for (int i = 0; i < 3; ++i)
+        {
+            p_ned[i] += v_ned[i] * dt + 0.5 * a_n[i] * dt * dt;
+            v_ned[i] += a_n[i] * dt;
+        }
+        vel_hist.push_back({v_ned[0], v_ned[1], v_ned[2]});
+        ShadowImu s{};
+        const int64_t t64 = kT0 + static_cast<int64_t>(std::llround(t * 1e6));
+        s.time_us = static_cast<uint32_t>(t64);
+        s.acc[0] = float(fx);
+        s.gyro[0] = t > t_ign ? float(kPi) : 0.0f;    // half a turn a second about the nose
+        s.flags = t < t_ign ? gnss_raw::kShadowLevel : (t >= t_det ? gnss_raw::kShadowInFlight : 0);
+        const int step = static_cast<int>(std::llround(t / dt));
+        if (step % 4 == 0)
+        {
+            gnss_raw::ShadowBaro b{};
+            b.time_us = s.time_us;
+            b.height_m = float(-p_ned[2]);
+            sh.onBaro(b);
+        }
+        sh.onImu(s, t64);
+        if (t + 1e-9 >= next_epoch)
+        {
+            const int lag_steps = static_cast<int>(std::lround(rr_lag / dt));
+            const auto& vl = vel_hist[vel_hist.size() > static_cast<size_t>(lag_steps)
+                                          ? vel_hist.size() - 1 - lag_steps : 0];
+            double dr[3], r[3], vlag_e[3];
+            nedToEcefVec(p_ned, dr);
+            nedToEcefVec(vl.data(), vlag_e);
+            for (int i = 0; i < 3; ++i)
+                r[i] = r0[i] + dr[i];
+            TimedRawEpoch e;
+            e.epoch = sky.epoch(sky.tow0 + next_epoch, r, vlag_e);
+            e.mcu_us = t64;
+            e.gps_week = kGoldenWeek;
+            due.push_back(e);
+            next_epoch++;
+        }
+        while (!due.empty() && t64 - due.front().mcu_us >= 200000)
+        {
+            offerBuilt(sh, stage, due.front(), built);
+            due.erase(due.begin());
+        }
+        if (step % 50 == 0)
+            run.state.push_back(stateHash(sh.filter()));
+        if (step % 100 == 50 && t > t_ign + 3.0)
+        {
+            // against the truth at the filter's own time (it steps at 100 Hz on 200 Hz ticks)
+            const double tf = sh.filter().time() - static_cast<double>(kT0) * 1e-6;
+            double e2 = 0.0;
+            for (int i = 0; i < 3; ++i)
+            {
+                const double vt = v_ned[i] - a_n[i] * (t - tf);
+                e2 += (sh.filter().velNed()[i] - vt) * (sh.filter().velNed()[i] - vt);
+            }
+            run.verr.push_back(std::sqrt(e2));
+        }
+    }
+    run.st = sh.stats();
+    return run;
+}
+
+double rmsOf(const std::vector<double>& v)
+{
+    double s = 0.0;
+    for (double x : v)
+        s += x * x;
+    return v.empty() ? 0.0 : std::sqrt(s / static_cast<double>(v.size()));
+}
+
+}  // namespace
+
+TEST(RawGnssShadow, ObservingTheCarrierChangesNothingTheFilterDoes)
+{
+    // The LC86G's default. The navigation filter's flight with the epochs
+    // built in the GNSS task and worked a slice a step: off and observed,
+    // every bit of the state alike every 0.25 s -- the screen runs in the
+    // unit that closes an epoch, so no slice falls differently -- and observe
+    // has screened every rate the builder gave
+    const CarrierRun off = flyCarrier(gnss_raw::kCarrierOff);
+    const CarrierRun obs = flyCarrier(gnss_raw::kCarrierObserve);
+    ASSERT_EQ(off.state.size(), obs.state.size());
+    for (size_t i = 0; i < off.state.size(); ++i)
+        ASSERT_EQ(off.state[i], obs.state[i]) << "at " << 0.25 * static_cast<double>(i) << " s";
+    EXPECT_EQ(off.st.cr_epochs, 0u);
+    EXPECT_EQ(off.st.cr_built, 0u);
+    EXPECT_GE(obs.st.cr_epochs, 12u);
+    EXPECT_GT(obs.st.cr_built, 100u);
+    EXPECT_EQ(obs.st.cr_in, obs.st.cr_built);         // no good rate refused
+    EXPECT_EQ(obs.st.cr_used, 0u);                    // and none fused
+    EXPECT_EQ(obs.st.cr_too_few + obs.st.cr_unmatched + obs.st.cr_half + obs.st.cr_other, 0u);
+    // the common rate: the clock's drift and the wind-up (half a cycle a second)
+    EXPECT_NEAR(obs.st.cr_last_common_mps, -1.5 + 0.5 * 299792458.0 / GNSS_FREQ_L1_HZ, 0.05);
+    EXPECT_NEAR(obs.st.cr_last_roll_rev_s, 0.5f, 0.01f);
+    EXPECT_GT(obs.st.cr_last_rms_mps, 0.0f);
+}
+
+TEST(RawGnssShadow, FusingTheCarrierHoldsTheVelocityTheDopplerCannot)
+{
+    // The same flight with the carrier fused (a bench mode on the LC86G):
+    // the screen a unit, every screened rate fused at once the next, through
+    // the epochs' slices
+    const CarrierRun obs = flyCarrier(gnss_raw::kCarrierObserve);
+    const CarrierRun fuse = flyCarrier(gnss_raw::kCarrierFuse);
+    EXPECT_GT(fuse.st.cr_used, 100u);
+    EXPECT_EQ(fuse.st.cr_used, fuse.st.cr_in);
+    EXPECT_EQ(fuse.st.cr_other + fuse.st.cr_half, 0u);
+    const double e_obs = rmsOf(obs.verr), e_fuse = rmsOf(fuse.verr);
+    EXPECT_LT(e_fuse, 0.5 * e_obs) << "observe " << e_obs << ", fuse " << e_fuse;
+    EXPECT_LT(e_fuse, 0.02);
+    EXPECT_NEAR(fuse.st.cr_last_common_mps, -1.5 + 0.5 * 299792458.0 / GNSS_FREQ_L1_HZ, 0.05);
+}

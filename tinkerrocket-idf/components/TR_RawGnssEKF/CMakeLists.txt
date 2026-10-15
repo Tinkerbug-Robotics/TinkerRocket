@@ -3,6 +3,6 @@
 # pseudorange and range rate (TR_GNSSRaw's RawMeasBuilder makes them). Pure
 # C++, IDF-free: tests_cpp/test_raw_gnss_ekf.cpp and the tinkerrocket-sim
 # bindings compile it directly.
-idf_component_register(SRCS "TR_RawGnssEKF.cpp"
+idf_component_register(SRCS "TR_RawGnssEKF.cpp" "TR_RawGnssCarrier.cpp"
                        INCLUDE_DIRS "."
                        REQUIRES TR_GNSSRaw)
