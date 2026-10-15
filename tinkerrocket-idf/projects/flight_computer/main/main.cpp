@@ -72,6 +72,7 @@
 #include <esp_heap_caps.h>
 #include <new>                    // placement new: the raw-GNSS shadow filter (#1600)
 #include <RawGnssShadow.h>        // TR_RawGnssShadow (#1600)
+#include <ReceiverProfileApply.h> // the receiver's profile into its configs (TR_GNSSRaw/ReceiverProfile.h)
 #if TR_HEADING_FIT_BENCH
 #include <HeadingFitBench.h>      // the heading fit's bench (TR_HEADING_FIT_BENCH)
 #endif
@@ -3437,9 +3438,10 @@ static void rawShadowTask(void*)
                     double az = atan2(de, dn) * 180.0 / M_PI;
                     if (az < 0.0) az += 360.0;
                     // C/N0 back out of the white sigma the builder gave it
-                    // (RawMeasBuilder::kPrWhiteA/B)
+                    // (the receiver profile's pr_white_a/b)
                     const double sw = (double)m[i].sigma_pr;
-                    const double x = (sw * sw - 0.026 * 0.026) / (0.157 * 0.157);
+                    const double wa = sh.config().meas.pr_white_a, wb = sh.config().meas.pr_white_b;
+                    const double x = (sw * sw - wa * wa) / (wb * wb);
                     const double cn0 = (x > 0.0) ? 35.0 - 10.0 * log10(x) : 0.0;
                     at += snprintf(line + at, sizeof(line) - at, " %c%02u e%.0f a%.0f c%.0f %+.1f",
                                    m[i].sys == GNSS_SYS_GPS ? 'G' : (m[i].sys == GNSS_SYS_GAL ? 'E' : 'C'),
@@ -3507,6 +3509,34 @@ static void startRawShadow()
         return;
     }
     gnss_raw::RawGnssShadow::Config cfg;
+    // The receiver's profile (TR_GNSSRaw/ReceiverProfile.h): every gate,
+    // noise model and feature mode the filter takes from the receiver the
+    // board carries, before any bench override below
+#if TR_BOARD_M1
+    gnss_raw::GnssReceiverProfile rx = gnss_raw::lc86gProfile();     // U5: a Quectel LC86G
+#else
+    gnss_raw::GnssReceiverProfile rx = gnss_raw::genericProfile();   // UNMEASURED placeholders
+#endif
+#ifdef TR_BENCH_CARRIER_MODE
+    // bench: the carrier range rates off (0), observed (1) or fused (2)
+    static_assert(TR_BENCH_CARRIER_MODE >= 0 && TR_BENCH_CARRIER_MODE <= 2,
+                  "TR_BENCH_CARRIER_MODE is 0 (off), 1 (observe) or 2 (fuse)");
+    rx.cr_mode = (uint8_t)(TR_BENCH_CARRIER_MODE);
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: carrier range rates %s (TR_BENCH_CARRIER_MODE)",
+             rx.cr_mode == gnss_raw::kCarrierFuse ? "FUSED" : gnss_raw::carrierModeName(rx.cr_mode));
+#endif
+#ifdef TR_BENCH_HALF_CYCLE_REPAIR
+    // bench: a carrier rate a half-cycle step explains repaired (1), not dropped (0)
+    static_assert(TR_BENCH_HALF_CYCLE_REPAIR == 0 || TR_BENCH_HALF_CYCLE_REPAIR == 1,
+                  "TR_BENCH_HALF_CYCLE_REPAIR is 0 (reject) or 1 (repair)");
+    rx.cr_half_cycle = (TR_BENCH_HALF_CYCLE_REPAIR) ? gnss_raw::kHalfCycleRepair : gnss_raw::kHalfCycleReject;
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: a carrier rate's half-cycle step %s (TR_BENCH_HALF_CYCLE_REPAIR)",
+             rx.cr_half_cycle == gnss_raw::kHalfCycleRepair ? "REPAIRED" : "rejected");
+#endif
+    gnss_raw::applyReceiverProfile(rx, cfg);
+    ESP_LOGI(TAG, "[RAWGNSS] receiver profile %s%s: carrier range rates %s, a half-cycle step %s",
+             rx.name, rx.measured ? "" : " (UNMEASURED: placeholders)", gnss_raw::carrierModeName(rx.cr_mode),
+             rx.cr_half_cycle == gnss_raw::kHalfCycleRepair ? "repaired" : "rejected");
 #if TR_RAW_GNSS_PRIMARY
     // The navigation filter: its own attitude on the pad, and 100 steps a
     // second for the flight loop (#1600; the step's cost in the [RAWGNSS] line)

@@ -58,10 +58,14 @@
 #include <cstdint>
 
 #include "RawMeas.h"
+#include "ReceiverProfile.h"
 
 namespace gnss_raw
 {
 
+// The receiver's settings -- its clock model, its Doppler's lag, its carrier
+// range rate's -- are its profile's (ReceiverProfile.h, applyReceiverProfile);
+// these defaults are the LC86G's.
 struct RawGnssEKFParams
 {
     // IMU noise model: the flight filter's defaults (TR_GpsInsEKF.h)
@@ -125,6 +129,17 @@ struct RawGnssEKFParams
     // The velocity-increment history keeps an entry per this much time, s
     // (128 entries: 0.5 s at 4 ms; at a 200 Hz IMU, every sample)
     double hist_spacing_s = 0.004;
+    // The carrier range rate (ReceiverProfile.h's cr_*)
+    uint8_t cr_mode             = kCarrierObserve;   // CarrierMode
+    double  cr_sigma_per_rev_s  = 0.023;             // m/s more (in quadrature) per rev/s of roll
+    double  cr_common_sigma_mps = 5.0;               // the epoch's common rate: its prior 1-sigma
+    double  cr_screen_k         = 4.0;               // the screen: suspect past this many sigmas
+    double  cr_screen_floor_mps = 0.03;              //   and this much
+    uint8_t cr_half_cycle       = kHalfCycleReject;  // HalfCycleAction
+    // each system's carrier (its wavelength), and whether its half-cycle
+    // steps can come unflagged (gnss_sys_t: GPS, Galileo, BeiDou, QZSS)
+    double  cr_carrier_hz[kProfileSys] = {GNSS_FREQ_L1_HZ, GNSS_FREQ_L1_HZ, 1561.098e6, GNSS_FREQ_L1_HZ};
+    bool    cr_half_cycle_unflagged[kProfileSys] = {true, false, true, true};
 };
 
 struct RawGnssStats

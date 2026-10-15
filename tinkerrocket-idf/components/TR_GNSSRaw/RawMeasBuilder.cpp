@@ -20,11 +20,6 @@ double cn0Sigma(double a, double b, double cn0)
     return std::sqrt(a * a + b * b * std::pow(10.0, -(cn0 - 35.0) / 10.0));
 }
 
-double carrierHz(int sys)
-{
-    return sys == GNSS_SYS_BDS ? 1561.098e6 : GNSS_FREQ_L1_HZ;   // B1I; L1 C/A and E1
-}
-
 }  // namespace
 
 void RawMeasBuilder::reset()
@@ -165,6 +160,9 @@ int RawMeasBuilder::next(const RawEpoch& ep, const EphemerisStore& eph, RawMeas*
         const RawObs& o = ep.obs[i];
         if (!o.has_pr || o.sys >= kSys || o.prn >= kPrn)
             continue;
+        const GnssSignalProfile& sig = cfg_.sig[o.sys];   // the receiver's signal of that system
+        if (o.cn0_dbhz < sig.cn0_min_pr)
+            continue;
         // each ephemeris keeps its own system's time: BeiDou runs 14 s behind GPS
         const double to_sys = o.sys == GNSS_SYS_BDS ? kBdtMinusGpst : 0.0;
         const gps_eph_t* e = eph.select(o.sys, o.prn, ep.tow_s + to_sys);
@@ -189,7 +187,7 @@ int RawMeasBuilder::next(const RawEpoch& ep, const EphemerisStore& eph, RawMeas*
             gnss_az_el(lat_, lon_, d, &az, &el);
             if (el < el_mask_)
                 continue;
-            const double fr = GNSS_FREQ_L1_HZ / carrierHz(o.sys);
+            const double fr = GNSS_FREQ_L1_HZ / sig.carrier_hz;
             const double iono = iono_klobuchar(&iono_, lat_, lon_, az, el, ep.tow_s) * fr * fr;
             const double trop = cfg_.troposphere ? tropo_saastamoinen(lat_, hgt_, el) : 0.0;
             corr -= iono + trop;
@@ -206,14 +204,14 @@ int RawMeasBuilder::next(const RawEpoch& ep, const EphemerisStore& eph, RawMeas*
         }
         m.has_pr = true;
         m.pr = o.pr_m + corr;
-        m.has_rr = o.has_rate;
-        m.rr = o.has_rate ? o.rate_mps + GNSS_C * c.clk_rate : 0.0;
+        m.has_rr = o.has_rate && !(o.cn0_dbhz < sig.cn0_min_rr);
+        m.rr = m.has_rr ? o.rate_mps + GNSS_C * c.clk_rate : 0.0;
 
         const double cn0 = static_cast<double>(o.cn0_dbhz);
-        const double lam = GNSS_C / carrierHz(o.sys);
-        const double s_rr = std::hypot(cn0Sigma(kRrWhiteA, kRrWhiteB, cn0),
+        const double lam = GNSS_C / sig.carrier_hz;
+        const double s_rr = std::hypot(cn0Sigma(cfg_.rr_white_a, cfg_.rr_white_b, cn0),
                                        lam * cfg_.doppler_step_hz / std::sqrt(12.0));
-        double s_corr = cn0Sigma(kPrCorrA, kPrCorrB, cn0) * cfg_.pr_corr_scale;
+        double s_corr = cn0Sigma(cfg_.pr_corr_a, cfg_.pr_corr_b, cn0) * cfg_.pr_corr_scale;
         const double age = relockAge(o.sys, o.prn, ep.tow_s);
         const double fresh = std::exp(-age / cfg_.relock_tau_s);
         if (cfg_.relock_sigma_m > 0.0)
@@ -221,11 +219,11 @@ int RawMeasBuilder::next(const RawEpoch& ep, const EphemerisStore& eph, RawMeas*
         const double s_dyn = cfg_.rr_dyn_sigma * g_over_;
         const double s_rel = cfg_.rr_relock_sigma * fresh;
         const double s_rr2 = s_rr * cfg_.rr_scale;
-        m.sigma_pr = static_cast<float>(cn0Sigma(kPrWhiteA, kPrWhiteB, cn0));
+        m.sigma_pr = static_cast<float>(cn0Sigma(cfg_.pr_white_a, cfg_.pr_white_b, cn0));
         m.sigma_pr_corr = static_cast<float>(s_corr);
-        m.tau_pr = static_cast<float>(kPrTauS);
+        m.tau_pr = static_cast<float>(cfg_.pr_tau_s);
         m.sigma_rr = static_cast<float>(std::sqrt(s_rr2 * s_rr2 + s_dyn * s_dyn + s_rel * s_rel));
-        m.tau_rr = static_cast<float>(kRrTauS);
+        m.tau_rr = static_cast<float>(cfg_.rr_tau_s);
     }
     return n;
 }

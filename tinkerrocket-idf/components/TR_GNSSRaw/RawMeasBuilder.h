@@ -13,7 +13,9 @@
 // Noise per measurement, from C/N0 (a PX1105R, 20 min static, 2026-09-26):
 // a white and a time-correlated pseudorange part and a white range-rate part,
 // sigma^2 = a^2 + b^2 * 10^(-(C/N0 - 35)/10). Then the LC86G's own, measured
-// on the COCOM rig (2026-10-12):
+// on the COCOM rig (2026-10-12) -- each of them, and the noise model itself,
+// the receiver's profile's (ReceiverProfile.h; the config's defaults are the
+// LC86G's):
 //   - its correlated pseudorange error is half the PX1105R's (pr_corr_scale);
 //   - a satellite missing for more than relock_gap_s has relocked, and its
 //     pseudorange starts biased: relock_sigma_m more, decaying over
@@ -32,6 +34,7 @@
 
 #include "EphemerisStore.h"
 #include "RawMeas.h"
+#include "ReceiverProfile.h"
 #include "gnss/eph.h"
 
 namespace gnss_raw
@@ -40,10 +43,32 @@ namespace gnss_raw
 class RawMeasBuilder
 {
 public:
+    // The error model's fit (sigma^2 = a^2 + b^2 * 10^(-(C/N0 - 35)/10)): the
+    // config's defaults, the LC86G profile's.
+    static constexpr double kPrWhiteA = 0.026, kPrWhiteB = 0.157;   // m
+    static constexpr double kPrCorrA  = 1.94,  kPrCorrB  = 3.5;     // m
+    static constexpr double kPrTauS   = 15.0;
+    static constexpr double kRrWhiteA = 0.0,   kRrWhiteB = 0.2;     // m/s
+    static constexpr double kRrTauS   = 0.1;
+
+    // The receiver's settings are its profile's (ReceiverProfile.h,
+    // applyReceiverProfile); these defaults are the LC86G's.
     struct Config
     {
         double el_mask_deg     = 3.0;
         bool   troposphere     = true;    // Saastamoinen
+        // each system's signal (gnss_sys_t): its carrier and C/N0 floors, its
+        // carrier phase's noise
+        GnssSignalProfile sig[kProfileSys] = {
+            {GNSS_FREQ_L1_HZ, 0.0f, 0.0f, 32.5f, 0.0045f, 0.0014f, true},    // GPS L1 C/A
+            {GNSS_FREQ_L1_HZ, 0.0f, 0.0f, 35.0f, 0.0024f, 0.0011f, false},   // Galileo E1
+            {1561.098e6, 0.0f, 0.0f, 32.5f, 0.0045f, 0.0014f, true},         // BeiDou B1I
+            {GNSS_FREQ_L1_HZ, 0.0f, 0.0f, 32.5f, 0.0045f, 0.0014f, true}};   // QZSS L1 C/A
+        double pr_white_a      = kPrWhiteA, pr_white_b = kPrWhiteB;   // the noise model's fit
+        double pr_corr_a       = kPrCorrA, pr_corr_b = kPrCorrB;
+        double pr_tau_s        = kPrTauS;
+        double rr_white_a      = kRrWhiteA, rr_white_b = kRrWhiteB;
+        double rr_tau_s        = kRrTauS;
         double doppler_step_hz = 0.0;     // a receiver's Doppler resolution (SkyTraq 1 Hz), whose rounding joins sigma_rr
         double pr_corr_scale   = 0.5;     // LC86G
         double rr_scale        = 1.0;
@@ -57,14 +82,15 @@ public:
         // every epoch). Over 5 s that is 2 mm and 1 mm/s; it cuts what the
         // satellites cost the flight computer several fold.
         double sat_refresh_s   = 5.0;
+        // The carrier range rate (below): built unless the profile's mode is
+        // off, between epochs epoch_period_s apart (more than half that, at
+        // most cr_max_interval_s), each end locked cr_min_lock_ms or more
+        bool     carrier            = true;
+        uint32_t cr_min_lock_ms     = 1000;
+        double   epoch_period_s     = 1.0;
+        double   cr_max_interval_s  = 1.5;
+        double   cr_sigma_floor_mps = 0.008;
     };
-
-    // The error model's fit (sigma^2 = a^2 + b^2 * 10^(-(C/N0 - 35)/10)).
-    static constexpr double kPrWhiteA = 0.026, kPrWhiteB = 0.157;   // m
-    static constexpr double kPrCorrA  = 1.94,  kPrCorrB  = 3.5;     // m
-    static constexpr double kPrTauS   = 15.0;
-    static constexpr double kRrWhiteA = 0.0,   kRrWhiteB = 0.2;     // m/s
-    static constexpr double kRrTauS   = 0.1;
 
     RawMeasBuilder() { reset(); }
     explicit RawMeasBuilder(const Config& cfg) : cfg_(cfg) { reset(); }

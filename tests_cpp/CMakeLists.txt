@@ -1626,6 +1626,38 @@ target_include_directories(test_raw_gnss_shadow PRIVATE
 target_link_libraries(test_raw_gnss_shadow GTest::gtest_main)
 gtest_discover_tests(test_raw_gnss_shadow)
 
+# ---------- test_receiver_profile ----------
+# The receiver profiles (#1600): TR_GNSSRaw/ReceiverProfile.h, and
+# TR_RawGnssShadow/ReceiverProfileApply.h putting one into the builder's, the
+# EKF's and the shadow's configs. The LC86G's is exactly what the filter flew
+# with before profiles, and the configs' own defaults; the other receivers'
+# are its numbers marked UNMEASURED; the carrier phase's sigma by C/N0.
+add_executable(test_receiver_profile test_receiver_profile.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/RawGnssShadow.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/RawGnssMeasStage.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/PadSurvey.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/SatJumpCheck.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/FixCheck.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/EphemerisFrames.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/HeadingFit.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_GNSSRaw/eph.c
+    ${LIB_DIR}/TR_GNSSRaw/atmo.c
+    ${LIB_DIR}/TR_GNSSRaw/RtcmEphemeris.cpp
+    ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
+)
+target_include_directories(test_receiver_profile PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RawGnssShadow
+    ${LIB_DIR}/TR_RawGnssEKF
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_receiver_profile GTest::gtest_main)
+gtest_discover_tests(test_receiver_profile)
+
 # ---------- test_raw_nav_adapter ----------
 # GpsInsEKF's face on the raw-GNSS filter's state (#1600): the Beetle's
 # navigation filter as main.cpp reads it -- the start before it runs, heights

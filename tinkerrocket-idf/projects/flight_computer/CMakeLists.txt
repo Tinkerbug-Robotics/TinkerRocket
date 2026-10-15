@@ -119,6 +119,17 @@ foreach(_v TR_BENCH_HEADING_GATE_FULL TR_BENCH_LAUNCH_TILT_SIGMA_DEG)
         message(STATUS "${_v}=${${_v}} (bench)")
     endif()
 endforeach()
+# Bench (rig comparison): the carrier range rates -- 0 off, 1 observed (the
+# LC86G profile's), 2 fused (RawGnssEKFParams cr_mode) -- and a rate a
+# half-cycle step explains repaired (1) rather than dropped (0). Each sets the
+# receiver's profile before it is applied (main.cpp startRawShadow). Never set
+# for flight.
+foreach(_v TR_BENCH_CARRIER_MODE TR_BENCH_HALF_CYCLE_REPAIR)
+    if(DEFINED ${_v})
+        add_compile_definitions(${_v}=${${_v}})
+        message(STATUS "${_v}=${${_v}} (bench)")
+    endif()
+endforeach()
 # Bench: a per-section cycle and Xtensa performance-counter profile of the
 # flight task, printed every 5 s (main/loop_profile.h). Never set for flight.
 if(TR_LOOP_PROFILE)
