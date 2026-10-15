@@ -27,6 +27,38 @@ constexpr double kPi = 3.14159265358979323846;
 constexpr double kG = 9.807;
 constexpr double kDeg = kPi / 180.0;
 
+// A normal draw that is the same on every platform. std::normal_distribution's
+// algorithm is the library's own: libc++ and libstdc++ draw different numbers
+// from one seed, and FindsAnySeedHeadingAndTheLateralBiases passed on Linux CI
+// and failed on macOS (bias[1] -0.080 against -0.09 +- 0.01).
+// std::uniform_real_distribution is not fixed either. mt19937's raw 32-bit
+// words are: each is taken to (0, 1) as (x + 0.5) / 2^32, and a pair to two
+// normals by Box-Muller (the second kept for the next call).
+class PortableNormal
+{
+public:
+    PortableNormal(double mean, double sigma) : mean_(mean), sigma_(sigma) {}
+    double operator()(std::mt19937& rng)
+    {
+        if (have_next_)
+        {
+            have_next_ = false;
+            return mean_ + sigma_ * next_;
+        }
+        const double u1 = (static_cast<double>(rng()) + 0.5) / 4294967296.0;
+        const double u2 = (static_cast<double>(rng()) + 0.5) / 4294967296.0;
+        const double r = std::sqrt(-2.0 * std::log(u1));
+        next_ = r * std::sin(2.0 * kPi * u2);
+        have_next_ = true;
+        return mean_ + sigma_ * r * std::cos(2.0 * kPi * u2);
+    }
+
+private:
+    double mean_, sigma_;
+    double next_ = 0.0;
+    bool   have_next_ = false;
+};
+
 struct M3
 {
     double m[3][3];
@@ -175,7 +207,7 @@ void boost(Boost& out, double seed_err_deg, double by = 0.06, double bz = -0.09,
            unsigned seed = 1, int gnss_every = 1000, int bad_epoch = -1, double bad_mps = 0.0)
 {
     std::mt19937 rng(seed);
-    std::normal_distribution<double> nd(0.0, noise);
+    PortableNormal nd(0.0, noise);
     const M3 Ct = leaningBody();
     const double b[3] = {0.0, by, bz};
     const double g_up[3] = {0, 0, -kG};
@@ -292,7 +324,7 @@ TEST(HeadingFit, BiasesThatCanTakeUpAHalfTurnLeaveARival)
         const float wb[3] = {0, 0, 0};
         fit.start(q, wb, 0.0);
         std::mt19937 rng(7);
-        std::normal_distribution<double> nd(0.0, 0.1);
+        PortableNormal nd(0.0, 0.1);
         const float acc[3] = {0.0f, 100.0f, float(-2.0 * kG)}, gyro[3] = {0, 0, 0};
         for (int k = 1; k <= 3000; ++k)
         {
@@ -323,7 +355,7 @@ TEST(HeadingFit, SaysNothingOnAVerticalFlight)
     const float wb[3] = {0, 0, 0};
     fit.start(q, wb, 0.0);
     std::mt19937 rng(3);
-    std::normal_distribution<double> n05(0.0, 0.05), n1(0.0, 0.1);
+    PortableNormal n05(0.0, 0.05), n1(0.0, 0.1);
     double t = 0.0, vt = 0.0;
     for (int k = 1; k <= 8000; ++k)
     {
@@ -413,7 +445,7 @@ std::vector<RawMeas> skyMeasured(const double lla[3], const double v_ned[3], dou
     double v[3];
     enu2ecef(v_enu, v);
     std::mt19937 rng(seed);
-    std::normal_distribution<double> nd(0.0, sigma_rr);
+    PortableNormal nd(0.0, sigma_rr);
     std::vector<RawMeas> out;
     for (const AzEl& d : dirs)
     {
