@@ -152,10 +152,10 @@
 // out. Act's opened heading and the boost's heading-velocity correlation
 // (+-0.83) widened the innovation gate: it refused 4 of the 7, let 3 through,
 // and those turned the heading +22.8 deg for the rest of the flight (GNSS was
-// gone after it). So, before the apogee call, each epoch -- or, with
-// boost_screen_g above 0, only one whose IMU peak since the last epoch is
-// above that many g -- is judged at the start of its fusion, after the
-// receiver clock's step and before any update, none of it fused:
+// gone after it). So, before the apogee call, an epoch whose IMU peak since
+// the last epoch is above boost_screen_g (2; 0 judges every epoch) is a boost
+// epoch, and at the start of its fusion -- after the receiver clock's step,
+// before any update -- it is judged, none of it fused:
 //   - its Dopplers gated against the state as it stands, each with the test
 //     the update would give it as the epoch's first (TR_RawGnssEKF::
 //     screenRangeRates);
@@ -176,13 +176,27 @@
 // Only the Dopplers count, never the carrier's rates (none in a boost anyway).
 // After the apogee call it never runs: a drogue's snatch can pass 2 g, and the
 // epoch after it can be the carrier's first. By default it runs in act
-// (kScreenAct), where GNSS turns the attitude from launch, on every epoch
-// (boost_screen_g 0) since 2026-10-16: a check of the epoch's own data, not
-// of the phase. It was the boost's alone (2 g) until then; on the RF rig's
-// four GNSS logs it never fired on the real data, armed either way, and with
-// a c30-like corrupted T+1 epoch and no GNSS after it to T+8 it dropped that
-// epoch 7 times in 8 (the worst above unaided 0.7 deg, without it too). Its
-// names keep "boost" (the stats, the console, the log).
+// (kScreenAct), where GNSS turns the attitude from launch. Not on every
+// epoch: it judges the data by the filter, so a filter itself wrong -- a
+// magnetometer 40 deg off out of the boost, sure of its heading -- sees
+// good Dopplers refused and the epochs that would right it dropped (the
+// cloud session's 16-flight grid, 2026-10-16: one run in 32 at +-40 still 25
+// deg off at T+14 against 7; 11 in 32 dropped epochs on r18's boost).
+//
+// The vertical check (vert_check_mps; off at 0). What the rig's receiver
+// hands over after losing its loops is coherent, not scattered: c30's T+1
+// Dopplers are those of a receiver still on the pad, within 0.8 m/s of one
+// velocity that is 82 m/s down of the filter's; GTV's T+1 is 67 m/s off
+// and recovers over six epochs (27, 17, 11, 9, 6, 3); a re-flown Eagle
+// Claw's T+2 is 54. So each epoch with four Dopplers or more has one
+// velocity and clock rate fitted to its Dopplers (TR_RawGnssEKF::
+// screenRangeRates), and is dropped whole -- as the boost screen drops one
+// -- if the fit's vertical is more than vert_check_mps off the filter's.
+// The vertical is the IMU's and the barometer's whatever the heading, so a
+// filter wrong about its heading is never locked out, and it runs on every
+// epoch, in every phase, the boost's length whatever it is. Good epochs on
+// the rig came within 1.3 m/s. With it on, the boost screen is only the
+// thin epochs' backstop: a boost epoch with under four Dopplers.
 //
 // The carrier range rate (the receiver profile's cr_mode, ekf.cr_mode). Each
 // epoch's builder gives the satellites whose carrier phase was continuous
@@ -326,9 +340,11 @@ public:
         double   heading_handoff_vel_mps = 3.0;  // act: the velocity let go to this at the hand-off
         // the boost screen (above)
         uint8_t  boost_screen = 1;               // BoostScreen: off, in act only (the default), always
-        double   boost_screen_g = 0.0;           // the epochs it judges, before the apogee call: every one (0,
-                                                 //   the default), or one whose IMU peak since the last epoch is
-                                                 //   above this many g
+        double   boost_screen_g = 2.0;           // a boost epoch: the IMU's specific force since the last epoch
+                                                 //   above this many g, before the apogee call (0: every epoch)
+        // the vertical check (above)
+        double   vert_check_mps = 0.0;           // an epoch whose Dopplers' fitted vertical is more than this off
+                                                 //   the filter's is dropped (0: off; 20 m/s on the rig's logs)
     };
 
     // When the boost screen runs (Config::boost_screen).
@@ -487,6 +503,11 @@ public:
         int      boost_last_dry_used = 0;  //   fused on the scratch copy (-1: not worked through)
         int      boost_last_dry_refused = 0;   //   and refused there
         float    boost_last_g = 0.0f;      //   its IMU peak since the epoch before, g
+        // the vertical check
+        uint32_t vert_checked = 0;         // epochs with a velocity fitted to their Dopplers
+        uint32_t vert_dropped = 0;         //   dropped: the fit's vertical more than vert_check_mps off
+        float    vert_last_dv_down = 0.0f; //   the last one's: its vertical against the filter's, m/s
+        float    vert_worst_dv_down = 0.0f;//   and the largest kept (|.|), m/s
     };
 
     using Clock = int64_t (*)();
@@ -629,6 +650,7 @@ private:
         bool          in_flight = false;
         double        g_peak = 0.0;       // the largest |specific force| / g - 1 since the last epoch
         bool          screen = false;     // a boost epoch the boost screen judges (kJobScreen)
+        bool          vcheck = false;     // the vertical check judges it if it can fit it (kJobScreen)
         int           dry_k = 0;          //   the scratch copy's next measurement (kJobScreenDry)
         double        dry_age = 0.0;      //   the epoch's age when it was copied
         RawGnssStats  dry_rs;             //   its counts

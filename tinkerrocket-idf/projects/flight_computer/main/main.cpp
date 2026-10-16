@@ -3220,6 +3220,7 @@ static void rawShadowTask(void*)
     uint32_t unset_launches = 0;   // #1590: launches with no magnetometer heading, said so
     uint32_t gate_apogee = 0;      // act's full gates opened at the apogee call, said so
     uint32_t boost_dropped = 0;    // boost epochs the boost screen dropped, said so
+    uint32_t vert_dropped = 0;     // epochs the vertical check dropped, said so
     uint32_t act_launches = 0;     // act's launch priors, said so
     for (;;)
     {
@@ -3356,6 +3357,15 @@ static void rawShadowTask(void*)
                               "gate refused %d of its Dopplers and passed %d (%d of %d at the prior; IMU peak %.1f g)",
                          bs.boost_last_dry_refused, bs.boost_last_dry_used, bs.boost_last_refused, bs.boost_last_rr,
                          (double)bs.boost_last_g);
+        }
+        // the vertical check: an epoch dropped whole, said at once (a receiver
+        // that lost its loops hands over the Dopplers of one standing still)
+        if (sh.stats().vert_dropped != vert_dropped)
+        {
+            vert_dropped = sh.stats().vert_dropped;
+            ESP_LOGW(TAG, "[RAWGNSS] vertical check: epoch dropped, none of it fused -- its Dopplers put the vertical "
+                          "velocity %+.1f m/s off the filter's (more than %.0f)",
+                     (double)sh.stats().vert_last_dv_down, sh.config().vert_check_mps);
         }
         // back to the GNSS task: the satellites its checks found jumped
         gnss_raw::ShadowRelock rl;
@@ -3578,6 +3588,7 @@ static void rawShadowTask(void*)
                               "%lu off its dip; the last dip %+.1f deg off) "
                               "| boost screen %s: %lu epochs, %lu dropped (%lu worked through) (last: %d of %d Dopplers "
                               "refused at the prior, %d refused and %d fused worked through, %.1f g) "
+                              "| vertical check %s: %lu epochs, %lu dropped (last %+.1f m/s, largest kept %+.1f) "
                               "| restores %lu",
                          (unsigned long)fs.fixes, (unsigned long)fs.passed, (unsigned long)fs.flagged,
                          (unsigned long)fs.unjudged, (unsigned long)fs.lapsed,
@@ -3602,6 +3613,9 @@ static void rawShadowTask(void*)
                          (unsigned long)st.boost_screened, (unsigned long)st.boost_dropped,
                          (unsigned long)st.boost_dropped_dry, st.boost_last_refused, st.boost_last_rr,
                          st.boost_last_dry_refused, st.boost_last_dry_used, (double)st.boost_last_g,
+                         sh.config().vert_check_mps > 0.0 ? "on" : "off", (unsigned long)st.vert_checked,
+                         (unsigned long)st.vert_dropped, (double)st.vert_last_dv_down,
+                         (double)st.vert_worst_dv_down,
                          (unsigned long)st.restores);
             }
             win_t0 = a1;
@@ -3733,14 +3747,17 @@ static void startRawShadow()
 #endif
     // what the filter flies, bench or not: a flight's console says it
     ESP_LOGI(TAG, "[RAWGNSS] heading %s: %s; launch prior %.0f deg with the magnetometer's heading, %.0f without; "
-                  "tilt floor %.2f deg; the fit's hand-off %s; the screen %s",
+                  "tilt floor %.2f deg; the fit's hand-off %s; the vertical check %s; the boost screen %s",
              cfg.heading_mode == gnss_raw::RawGnssShadow::kHeadingAct       ? "ACT"
              : cfg.heading_mode == gnss_raw::RawGnssShadow::kHeadingObserve ? "observe"
                                                                             : "off",
              gnss_raw::RawGnssShadow::headingGateName(cfg.heading_gate), cfg.heading_pad_sigma_deg,
              cfg.heading_pad_sigma_fallback_deg, cfg.heading_launch_tilt_sigma_deg,
              cfg.heading_handoff_deg < 0.0 ? "never" : "at the fit's 1-sigma",
-             cfg.boost_screen_g <= 0.0 ? "on every epoch before the apogee call" : "on boost epochs before the call");
+             cfg.vert_check_mps > 0.0 ? "on every epoch it can fit" : "off",
+             cfg.boost_screen_g <= 0.0 ? "on every epoch before the apogee call"
+             : cfg.vert_check_mps > 0.0 ? "on boost epochs too thin for the vertical check"
+                                        : "on boost epochs before the call");
     raw_shadow = new (mem) gnss_raw::RawGnssShadow(cfg);
     raw_meas = new (stage_mem) gnss_raw::RawGnssMeasStage(gnss_raw::RawGnssShadow::stageConfig(cfg));
     raw_meas_epoch = new (epoch_mem) gnss_raw::TimedRawEpoch();

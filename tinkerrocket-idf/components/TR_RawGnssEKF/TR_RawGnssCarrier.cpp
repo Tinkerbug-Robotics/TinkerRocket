@@ -11,6 +11,7 @@
 #include "TR_RawGnssEKF.h"
 
 #include <cmath>
+#include <utility>
 #include <cstring>
 
 #include "RawGnssEKFGeometry.h"
@@ -629,10 +630,20 @@ void RawGnssEKF<T>::endCarrier(RawGnssStats& st)
 // satellite refused reject_persist epochs running. Nothing is fused, and the
 // state, its covariance and the satellites' counts stay as they are. The
 // geometry once: no update moves the receiver between satellites here.
+// And, for the shadow's vertical check, one velocity (NED) and clock rate
+// fitted to all the Dopplers' innovations by least squares, unweighted: its
+// down part is the epoch's vertical velocity against the filter's, which the
+// IMU and barometer hold whatever the heading (a receiver that has lost its
+// loops in a boost hands over the Dopplers of one still on the pad: 82 m/s
+// down at T+1 on the rig's c30, its Dopplers within 0.8 m/s of each other).
 template <typename T>
 void RawGnssEKF<T>::screenRangeRates(const RawMeas* m, int n, double age_s, RawGnssStats& st) const
 {
     st.screen_rr = st.screen_refused = 0;
+    st.screen_fit_n = 0;
+    st.screen_dv_down_mps = 0.0f;
+    double HtH[4][4] = {}, Hty[4] = {};
+    int nfit = 0;
     if (age_s < 0.0)
         age_s = 0.0;
     const double tau = p_.rr_lag_s > 0.0 ? p_.rr_lag_s : 0.0;
@@ -676,6 +687,18 @@ void RawGnssEKF<T>::screenRangeRates(const RawMeas* m, int n, double age_s, RawG
         hidx[hn] = kClkDrift;
         hval[hn++] = T(1);
         const T y = T(mi.rr - (pred_rate + static_cast<double>(clk_d_)));
+        {
+            const double h[4] = {-static_cast<double>(u_ned[0]), -static_cast<double>(u_ned[1]),
+                                 -static_cast<double>(u_ned[2]), 1.0};
+            const double yd = mi.rr - (pred_rate + static_cast<double>(clk_d_));
+            for (int j = 0; j < 4; ++j)
+            {
+                Hty[j] += h[j] * yd;
+                for (int k = 0; k < 4; ++k)
+                    HtH[j][k] += h[j] * h[k];
+            }
+            nfit++;
+        }
         const double s_r = static_cast<double>(mi.sigma_rr);
         const double dt_i = t_ - last_upd_[mi.sys][mi.prn][1];
         const T R = T(s_r * s_r * corrInflation(dt_i, static_cast<double>(mi.tau_rr)));
@@ -698,6 +721,37 @@ void RawGnssEKF<T>::screenRangeRates(const RawMeas* m, int n, double age_s, RawG
         if (!(S > T(0)) || (gate > T(0) && y * y * (T(1) / S) > gate))
             st.screen_refused++;
     }
+    // the fit: four unknowns, so four Dopplers at least (Gauss-Jordan, partial pivoting)
+    if (nfit < 4)
+        return;
+    double M[4][5];
+    for (int j = 0; j < 4; ++j)
+    {
+        for (int k = 0; k < 4; ++k)
+            M[j][k] = HtH[j][k];
+        M[j][4] = Hty[j];
+    }
+    for (int c = 0; c < 4; ++c)
+    {
+        int piv = c;
+        for (int r2 = c + 1; r2 < 4; ++r2)
+            if (std::fabs(M[r2][c]) > std::fabs(M[piv][c]))
+                piv = r2;
+        if (std::fabs(M[piv][c]) < 1e-9)
+            return;                       // the geometry gives no velocity: unjudged
+        for (int k = 0; k < 5; ++k)
+            std::swap(M[c][k], M[piv][k]);
+        for (int r2 = 0; r2 < 4; ++r2)
+        {
+            if (r2 == c)
+                continue;
+            const double f = M[r2][c] / M[c][c];
+            for (int k = 0; k < 5; ++k)
+                M[r2][k] -= f * M[c][k];
+        }
+    }
+    st.screen_fit_n = nfit;
+    st.screen_dv_down_mps = static_cast<float>(M[2][4] / M[2][2]);
 }
 
 // Each member here, for both scalars (TR_RawGnssEKF.cpp instantiates the rest).

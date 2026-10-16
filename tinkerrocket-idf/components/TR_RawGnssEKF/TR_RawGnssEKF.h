@@ -242,6 +242,11 @@ struct RawGnssStats
     int    screen_seq_used = 0;        // the scratch copy's: the Dopplers fused
     int    screen_seq_refused = 0;     //   and refused
     bool   screen_dropped = false;     // the epoch dropped, none of it fused (the shadow's call)
+    // and the vertical check's fit (screenRangeRates): one velocity and clock
+    // rate fitted to the epoch's Dopplers at the same prediction
+    int    screen_fit_n = 0;           // the Dopplers fitted (0: under 4, or no fit)
+    float  screen_dv_down_mps = 0.0f;  //   the fit's velocity correction, down: the epoch's vertical
+                                       //   velocity against the filter's
 };
 
 // One carrier range rate as the screen took it (RawGnssEKF::carrierInfo).

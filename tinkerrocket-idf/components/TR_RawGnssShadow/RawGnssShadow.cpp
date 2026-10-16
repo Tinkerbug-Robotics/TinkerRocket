@@ -855,12 +855,13 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
     job_.in_flight = (imu_flags & kShadowInFlight) != 0;
     job_.g_peak = static_cast<double>(ekf_.takeGPeak());
     // the boost screen judges this epoch: no apogee call yet (a drogue's
-    // snatch is no boost), and every epoch -- or, with boost_screen_g above 0,
-    // only one with the IMU past that many g since the last
+    // snatch is no boost), and the IMU past boost_screen_g since the last
+    // epoch (0: every epoch)
     const bool screening = cfg_.boost_screen == kScreenOn
                            || (cfg_.boost_screen == kScreenAct && cfg_.heading_mode == kHeadingAct);
     job_.screen = screening && !(imu_flags & kShadowApogee)
                   && (cfg_.boost_screen_g <= 0.0 || job_.g_peak + 1.0 > cfg_.boost_screen_g);
+    job_.vcheck = cfg_.vert_check_mps > 0.0;   // every epoch, every phase
     if (cfg_.external_build)
     {
         built_ = pend_built_[pb_head_];
@@ -946,7 +947,7 @@ void RawGnssShadow::jobUnit(double t)
         break;
     case kJobClock:
         job_.phase = !ekf_.beginGnssRaw(built_.meas, built_.n, age, job_.rs) ? kJobClose
-                     : (job_.screen ? kJobScreen : kJobFuse);
+                     : (job_.screen || job_.vcheck ? kJobScreen : kJobFuse);
         break;
     case kJobScreen:
         jobScreen(age);
@@ -1029,14 +1030,36 @@ void RawGnssShadow::jobChecks(double age, double t)
     st_.last_pad_corrected = use_broadcast_ ? 0 : survey_.correct(m, n, built_.r_approx);
 }
 
-// The boost screen (RawGnssShadow.h), its first unit: the boost epoch's
-// Dopplers gated at the state as the clock's step left it. Half or more
-// refused, the epoch is dropped (closeJob); else the filter is copied, and the
-// epoch worked through on the copy a satellite a unit (jobScreenDry).
+// The vertical check and the boost screen (RawGnssShadow.h), their first
+// unit. The Dopplers at the state as the clock's step left it: with the
+// vertical check on, an epoch it can fit (four Dopplers or more) is judged by
+// its fitted vertical alone, dropped (closeJob) or fused. Else a boost epoch:
+// half or more of its Dopplers refused, it is dropped; else the filter is
+// copied, and the epoch worked through on the copy a satellite a unit
+// (jobScreenDry).
 void RawGnssShadow::jobScreen(double age)
 {
     RawGnssStats& rs = job_.rs;
     ekf_.screenRangeRates(built_.meas, built_.n, age, rs);
+    if (job_.vcheck && rs.screen_fit_n >= 4)
+    {
+        const float dv = rs.screen_dv_down_mps;
+        const bool drop = std::fabs(static_cast<double>(dv)) > cfg_.vert_check_mps;
+        st_.vert_checked++;
+        st_.vert_last_dv_down = dv;
+        if (drop)
+            st_.vert_dropped++;
+        else if (std::fabs(dv) > std::fabs(st_.vert_worst_dv_down))
+            st_.vert_worst_dv_down = dv;
+        rs.screen_dropped = drop;
+        job_.phase = drop ? kJobClose : kJobFuse;
+        return;
+    }
+    if (!job_.screen)
+    {
+        job_.phase = kJobFuse;            // under four Dopplers, and no boost epoch: unjudged
+        return;
+    }
     st_.boost_screened++;
     st_.boost_last_rr = rs.screen_rr;
     st_.boost_last_refused = rs.screen_refused;
@@ -1093,7 +1116,7 @@ void RawGnssShadow::closeJob(double age, double t)
     RawGnssStats& rs = job_.rs;
     if (rs.screen_dropped)
     {
-        // Dropped by the boost screen: none of it fused, and nothing of it
+        // Dropped by the vertical check or the boost screen: none of it fused, and nothing of it
         // kept -- its receiver is no carrier rate's earlier end (the next
         // epoch's rates across it go unmatched), its pseudoranges no satellite
         // check's reference, its velocity no levelling epoch. The clock's step
