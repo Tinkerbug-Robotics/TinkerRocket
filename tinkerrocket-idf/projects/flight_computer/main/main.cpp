@@ -3215,6 +3215,7 @@ static void rawShadowTask(void*)
     int flag_prints = 0;
     uint64_t step_sum0 = 0;
     uint32_t nav_step_n = 0;
+    uint32_t unset_launches = 0;   // #1590: launches with no magnetometer heading, said so
     for (;;)
     {
         const int64_t a0 = esp_timer_get_time();
@@ -3291,6 +3292,20 @@ static void rawShadowTask(void*)
             gnss_raw::ShadowNav nav;
             sh.navState(nav);
             raw_shadow_link.nav.write(nav);
+        }
+        // #1590: a launch whose pad fused no magnetometer heading -- none
+        // calibrated, or none at all -- said at once. The heading is the
+        // start's guess; act claims its launch prior about it.
+        if (sh.stats().heading_unset_launches != unset_launches)
+        {
+            unset_launches = sh.stats().heading_unset_launches;
+            if (sh.config().heading_mode == gnss_raw::RawGnssShadow::kHeadingAct)
+                ESP_LOGE(TAG, "[RAWGNSS] *** LAUNCH WITH NO MAGNETOMETER HEADING: act claims a %.0f deg heading "
+                              "1-sigma about the start's guess (its own was %.0f deg) -- OVERCONFIDENT ***",
+                         sh.config().heading_pad_sigma_deg, (double)sh.stats().heading_launch_sigma_deg);
+            else
+                ESP_LOGW(TAG, "[RAWGNSS] launch with no magnetometer heading: the heading is the start's guess, "
+                              "1-sigma %.0f deg", (double)sh.stats().heading_launch_sigma_deg);
         }
         // back to the GNSS task: the satellites its checks found jumped
         gnss_raw::ShadowRelock rl;
@@ -3409,12 +3424,14 @@ static void rawShadowTask(void*)
             {
                 const gnss_raw::HeadingFit::Result& hr = st.heading_last;
                 ESP_LOGI(TAG, "[RAWGNSS] heading fit (%s): seeds %lu, flights %lu, epochs %lu (no velocity %lu) | "
+                              "launches with no magnetometer heading %lu (the last launch's own 1-sigma %.1f deg) | "
                               "last: turn %+.1f deg, 1-sigma %.1f deg, %d epochs (%d cut), rivals %lu | handed %lu "
                               "(%+.1f deg at T+%.1f s) | cost: velocity %lu us (max %lu), fit %lu us (max %lu), step "
                               "max %lu us | task stack %u B unused",
                          TR_HEADING_FIT == 2 ? "act" : "observe", (unsigned long)st.heading_seeds,
                          (unsigned long)st.heading_flights, (unsigned long)st.heading_epochs,
-                         (unsigned long)st.heading_vel_fails, hr.psi * 57.29578, hr.sigma > 0.0 ? hr.sigma * 57.29578 : -1.0,
+                         (unsigned long)st.heading_vel_fails, (unsigned long)st.heading_unset_launches,
+                         (double)st.heading_launch_sigma_deg, hr.psi * 57.29578, hr.sigma > 0.0 ? hr.sigma * 57.29578 : -1.0,
                          hr.n, hr.n_cut, (unsigned long)st.heading_rivals, (unsigned long)st.heading_handoffs,
                          (double)st.heading_turn_deg,
                          (double)st.heading_handoff_s, (unsigned long)st.heading_vel_us,

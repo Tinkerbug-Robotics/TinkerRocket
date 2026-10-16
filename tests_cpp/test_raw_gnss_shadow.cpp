@@ -1412,6 +1412,52 @@ TEST(RawGnssShadow, TheMagnetometerIsTakenOnlyOnTheGroundAtGsSize)
     EXPECT_EQ(sh.stats().mag_uncal, before.mag_uncal);
 }
 
+TEST(RawGnssShadow, ALaunchWithNoMagnetometerHeadingIsCountedWithItsOwnSigma)
+{
+    // The no-magnetometer start: a pad that fused no heading (here its
+    // magnetometer uncalibrated, so refused) launches on the start's guess,
+    // 44.7 deg off on this rail, at p0_hdg's 57 deg 1-sigma and growing. Each
+    // launch keeps its own 1-sigma, and one with no magnetometer heading is
+    // counted. Act still claims heading_pad_sigma_deg (30) about the guess --
+    // tighter than the filter's own, which is what the flight computer says
+    // loudly; observe keeps the filter's own. A calibrated pad's launch is
+    // not counted, and act loosens its sub-degree heading to 30.
+    for (uint8_t mode : {uint8_t(RawGnssShadow::kHeadingObserve), uint8_t(RawGnssShadow::kHeadingAct)})
+        for (bool cal : {false, true})
+        {
+            RawGnssShadow::Config c = primaryCfg();
+            c.heading_mode = mode;
+            RawGnssShadow sh(c);
+            RailPad pad;
+            const float none[3] = {};
+            const uint8_t flags = cal ? gnss_raw::kShadowMagCalibrated : uint8_t(0);
+            const int64_t t = pad.run(sh, kT0, 10.0, none, [flags](double) { return flags; });
+            const double own = headingSigmaDeg(sh);
+            const double err = headingErrDeg(sh, pad.q_true);
+            EXPECT_EQ(sh.stats().heading_unset_launches, 0u);
+            // launch: a tenth of a second at 4 g along the nose
+            pad.run(sh, t, 0.1, none, [flags](double) { return flags; }, gnss_raw::kShadowInFlight, 4.0f);
+            ASSERT_TRUE(sh.running());
+            const char* what = cal ? "calibrated" : "no heading";
+            EXPECT_EQ(sh.stats().heading_unset_launches, cal ? 0u : 1u) << int(mode) << what;
+            EXPECT_NEAR(sh.stats().heading_launch_sigma_deg, own, 0.5) << int(mode) << what;
+            if (cal)
+            {
+                EXPECT_LT(own, 1.0) << int(mode);
+                EXPECT_NEAR(err, 0.0, 0.5) << int(mode);
+            }
+            else
+            {
+                EXPECT_GT(own, 55.0) << int(mode);
+                EXPECT_NEAR(err, -44.7, 1.0) << int(mode);   // north, the guess
+            }
+            if (mode == RawGnssShadow::kHeadingAct)
+                EXPECT_NEAR(headingSigmaDeg(sh), 30.0, 0.5) << what;   // act's prior, whatever the pad left
+            else
+                EXPECT_NEAR(headingSigmaDeg(sh), own, 1.0) << what;
+        }
+}
+
 TEST(RawGnssShadow, TheNavigationFilterStartsInFlightFromARestoredFlight)
 {
     RawGnssShadow sh(primaryCfg());

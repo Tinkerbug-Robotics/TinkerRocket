@@ -106,6 +106,15 @@
 // a 1-sigma of 5 deg, 9.8 deg off, was handed over.) The epoch's two units
 // (its Doppler velocity, then the fit) are each one slice at most.
 //
+// A launch with no magnetometer heading (#1590). Where the pad fused none --
+// no magnetometer, or none calibrated -- the heading at launch is the start's
+// guess (main.cpp's PAD_HEADING_DEG about the vertical), its 1-sigma p0_hdg's
+// 57 deg grown to ~76 over a long pad by the vertical gyro bias's. Act's
+// heading_pad_sigma_deg is then claimed about a heading nothing measured.
+// Each launch's own heading 1-sigma (before act's) is kept in the stats, and
+// a launch with no magnetometer heading counted (heading_unset_launches), for
+// the flight computer to say loudly; the priors are as they were.
+//
 // The carrier range rate (the receiver profile's cr_mode, ekf.cr_mode). Each
 // epoch's builder gives the satellites whose carrier phase was continuous
 // since the epoch before a carrier range rate (RawMeasBuilder), and the
@@ -329,6 +338,8 @@ public:
         uint32_t heading_flights = 0;      // launches it ran from (its seed fresh enough)
         uint32_t heading_epochs = 0;       // epochs it took
         uint32_t heading_vel_fails = 0;    //   with no Doppler velocity (too few satellites agreeing)
+        uint32_t heading_unset_launches = 0;  // launches whose pad fused no magnetometer heading (#1590)
+        float    heading_launch_sigma_deg = 0.0f;   // the last launch's own heading 1-sigma, before act's prior
         uint32_t heading_handoffs = 0;     // headings handed over
         uint32_t heading_rivals = 0;       // fits another heading's valley came within heading_handoff_rival of
         float    heading_turn_deg = 0.0f;  //   the last one's turn
@@ -535,6 +546,7 @@ private:
     double        next_zupt_t_ = 0.0;   // landed: the next zero-velocity update is due
     ShadowMag     mag_ = {};            // the latest magnetometer sample, not yet applied
     bool          have_mag_ = false;
+    uint32_t      mag_fused_run_ = 0;   // magnetometer headings fused since the start (on the ground)
     bool          restored_ = false;    // started in flight from a restored flight
     uint8_t       start_gen_ = 0;       // the seed's start_gen it started from
     double        last_aided_t_ = -1.0e9;   // raw measurements last applied

@@ -142,7 +142,10 @@ void RawGnssShadow::applyMag(const float acc[3])
         }
     }
     if (ekf_.updateMagHeading(acc, m, true, seed_.declination_rad, err))
+    {
         st_.mag_fused++;
+        mag_fused_run_++;
+    }
 }
 
 void RawGnssShadow::navState(ShadowNav& out) const
@@ -743,6 +746,7 @@ void RawGnssShadow::start(double t)
     last_baro_t_ = -1.0;
     next_zupt_t_ = 0.0;
     have_mag_ = false;
+    mag_fused_run_ = 0;
     last_aided_t_ = -1.0e9;
     last_baro_fused_t_ = -1.0e9;
     prop_sum_ = 0;
@@ -1086,6 +1090,15 @@ void RawGnssShadow::stepHeading(double t, const float acc[3], const float gyro[3
         handed_ = false;
         if (fit_flight_)
             st_.heading_flights++;
+        // the heading the pad leaves (#1590): its own 1-sigma, and whether a
+        // magnetometer heading was ever fused -- if not, the heading is the
+        // start's guess, and act's prior below is claimed about it. (A
+        // shadow's pad heading is the flight filter's, magnetometer and all.)
+        float sig[3];
+        ekf_.attSigmaNed(sig);
+        st_.heading_launch_sigma_deg = static_cast<float>(static_cast<double>(sig[2]) * kRad2Deg);
+        if (cfg_.primary && mag_fused_run_ == 0)
+            st_.heading_unset_launches++;
         if (cfg_.heading_mode == kHeadingAct)
         {
             // from here GNSS turns the heading, and only the heading -- or,
