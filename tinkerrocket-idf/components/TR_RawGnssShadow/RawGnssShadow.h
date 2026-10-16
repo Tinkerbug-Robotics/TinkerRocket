@@ -120,6 +120,38 @@
 // a launch with no magnetometer heading counted (heading_unset_launches), for
 // the flight computer to say loudly; the priors are as they were.
 //
+// The boost screen (boost_screen, boost_screen_g). A receiver losing lock in
+// the boost can hand over an epoch whose Dopplers are tens of m/s off: on the
+// rig (c30) the LC86G, at 3.8 g at T+1 s, gave one with Dopplers 36-70 m/s
+// out. Act's opened heading and the boost's heading-velocity correlation
+// (+-0.83) widened the innovation gate: it refused 4 of the 7, let 3 through,
+// and those turned the heading +22.8 deg for the rest of the flight (GNSS was
+// gone after it). So, before the apogee call, an epoch whose IMU peak since
+// the last epoch is above boost_screen_g is a boost epoch, and at the start of
+// its fusion -- after the receiver clock's step, before any update -- it is
+// judged, none of it fused:
+//   - its Dopplers gated against the state as it stands, each with the test
+//     the update would give it as the epoch's first (TR_RawGnssEKF::
+//     screenRangeRates);
+//   - and, unless that already drops it, the epoch worked through on a
+//     scratch copy of the filter (dry_), a satellite a slice, with the
+//     update's own code -- its pseudoranges and Dopplers in the update's
+//     order -- and its Dopplers' refusals counted. A bad Doppler the gate
+//     passes at the prior pulls the state and the good ones after it are
+//     refused (a cascade), and every update shrinks the gate for the rest:
+//     the prior's gate alone kept c30-like epochs in the offline replay
+//     (3 of 7 refused there, 4-5 of 7 worked through) that turned the heading
+//     9 deg past unaided's. The two together drop what the replay's majority
+//     check dropped, epoch for epoch.
+// If either refuses half or more of the Dopplers the whole epoch is dropped:
+// no pseudorange, Doppler or carrier update, and it is no satellite check's
+// reference, no levelling epoch and no carrier rate's earlier end. Half or
+// more, not most: in the offline replay a strict majority let ties through.
+// Only the Dopplers count, never the carrier's rates (none in a boost anyway).
+// After the apogee call it never runs: a drogue's snatch can pass 2 g, and the
+// epoch after it can be the carrier's first. By default it runs in act
+// (kScreenAct), where GNSS turns the heading from launch.
+//
 // The carrier range rate (the receiver profile's cr_mode, ekf.cr_mode). Each
 // epoch's builder gives the satellites whose carrier phase was continuous
 // since the epoch before a carrier range rate (RawMeasBuilder), and the
@@ -256,6 +288,18 @@ public:
         uint8_t  heading_gate = 0;               // act: what of the attitude GNSS reaches in flight, and
                                                  //   when each opens (HeadingGate)
         double   heading_handoff_vel_mps = 3.0;  // act: the velocity let go to this at the hand-off
+        // the boost screen (above)
+        uint8_t  boost_screen = 1;               // BoostScreen: off, in act only (the default), always
+        double   boost_screen_g = 2.0;           // a boost epoch: the IMU's specific force since the last epoch
+                                                 //   above this many g, before the apogee call
+    };
+
+    // When the boost screen runs (Config::boost_screen).
+    enum BoostScreen : uint8_t
+    {
+        kScreenOff = 0,
+        kScreenAct = 1,        // in act only: GNSS turns the heading from launch (the default)
+        kScreenOn = 2,         // whatever the heading mode
     };
 
     enum HeadingMode : uint8_t
@@ -392,6 +436,15 @@ public:
         float    cr_last_dv_mps = 0.0f;    //   the velocity correction the rates point to,
         double   cr_last_common_mps = 0.0; //   the common rate,
         float    cr_last_roll_rev_s = 0.0f;//   the mean |roll rate|
+        // the boost screen
+        uint32_t boost_screened = 0;       // boost epochs screened
+        uint32_t boost_dropped = 0;        //   dropped: half or more of their Dopplers refused
+        uint32_t boost_dropped_dry = 0;    //     of them, by the scratch copy's updates (the prior's gate kept them)
+        int      boost_last_rr = 0;        // the last one screened: its Dopplers
+        int      boost_last_refused = 0;   //   refused at the prior,
+        int      boost_last_dry_used = 0;  //   fused on the scratch copy (-1: not worked through)
+        int      boost_last_dry_refused = 0;   //   and refused there
+        float    boost_last_g = 0.0f;      //   its IMU peak since the epoch before, g
     };
 
     using Clock = int64_t (*)();
@@ -497,6 +550,9 @@ private:
     void workJob(double t);
     void jobUnit(double t);
     void jobChecks(double age, double t);
+    void jobScreen(double age);
+    void jobScreenDry();
+    void screenVerdict(bool drop, bool dry);
     void closeJob(double age, double t);
     void relock(int sys, int prn, double tow);
     void applyDueFixes(double t);
@@ -520,8 +576,8 @@ private:
     BuiltEpoch    pend_built_[2];       // built epochs waiting for it (external_build)
     int           pb_head_ = 0, npend_built_ = 0;
     // the epoch being worked (startJob .. closeJob), a slice a step
-    enum : int { kJobBuild, kJobChecks, kJobHeading, kJobHeadingFit, kJobClock, kJobFuse, kJobCarrier,
-                 kJobCarrierFuse, kJobClose };
+    enum : int { kJobBuild, kJobChecks, kJobHeading, kJobHeadingFit, kJobClock, kJobScreen, kJobScreenDry, kJobFuse,
+                 kJobCarrier, kJobCarrierFuse, kJobClose };
     struct Job
     {
         bool          active = false;
@@ -530,6 +586,10 @@ private:
         double        te = 0.0;           // its instant on the filter's clock
         bool          in_flight = false;
         double        g_peak = 0.0;       // the largest |specific force| / g - 1 since the last epoch
+        bool          screen = false;     // a boost epoch the boost screen judges (kJobScreen)
+        int           dry_k = 0;          //   the scratch copy's next measurement (kJobScreenDry)
+        double        dry_age = 0.0;      //   the epoch's age when it was copied
+        RawGnssStats  dry_rs;             //   its counts
         int           fused = 0;          // measurements fused
         bool          cr_screened = false;  // its carrier rates screened (fuse mode's own unit)
         RawGnssStats  rs;
@@ -543,6 +603,7 @@ private:
     };
     Job           job_;
     BuiltEpoch    built_;               // its measurements: built in the job, or handed over
+    RawGnssEKF<float> dry_;             // the boost screen's scratch copy of the filter (kJobScreenDry)
     static constexpr int kRelockQ = 16;  // jumped satellites waiting for the GNSS task (external_build)
     ShadowRelock  relock_[kRelockQ] = {};
     int           nrelock_ = 0;

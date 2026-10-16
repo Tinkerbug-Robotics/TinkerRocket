@@ -1712,3 +1712,76 @@ TEST(RawGnssEKF, LevellingLeavesTheHeadingAloneInFloat)
     EXPECT_NEAR(s[2], st[2], 1.0e-3f * st[2]);
     expectCovarianceHealthy(f);
 }
+
+// ---- the boost screen's gate (screenRangeRates)
+
+TEST(RawGnssEKF, TheScreenGatesEachDopplerAsItsUpdateWouldFirstAndChangesNothing)
+{
+    // A converged filter and an epoch of Dopplers alone, eight of them off by
+    // amounts around the gate (and the rest true): each one screened on its
+    // own is refused exactly when updateGnssRawPart, given it as the epoch's
+    // first update, refuses it -- the same innovation, variance and
+    // chi-square; and the whole epoch screened counts them so, leaving the
+    // state and P as they were. A satellite refused reject_persist epochs
+    // running passes, as the update lets it in.
+    Clock clk;
+    RawGnssEKF<double> f = converged<double>(10, clk);
+    const auto sky = makeSky(kLla0);
+    double r[3];
+    geo_to_ecef(kLla0[0], kLla0[1], kLla0[2], r);
+    const double v[3] = {0.0, 0.0, 0.0};
+    imuSecond(f);
+    clk.tick(1.0);
+    auto m = measure(sky, r, v, clk);
+    // m/s: the gate (chi-square 10.83) is about 1.02 m/s here -- the clock
+    // drift's second of walk (0.036 m^2/s^3) beside the Doppler's 0.05 --
+    // so a few fall within a few percent of it either side
+    const double offs[10] = {0.0, 0.5, 0.95, 1.0, 1.05, 1.1, 1.5, -1.05, -3.0, 0.0};
+    for (size_t i = 0; i < m.size(); ++i)
+    {
+        m[i].has_pr = false;
+        m[i].rr += offs[i];
+    }
+    const int n = static_cast<int>(m.size());
+    RawGnssStats st0;
+    ASSERT_TRUE(f.beginGnssRaw(m.data(), n, 0.0, st0));
+    int refused_one_by_one = 0;
+    for (int i = 0; i < n; ++i)
+    {
+        RawGnssEKF<double> a = f;
+        RawGnssStats sc, su;
+        a.screenRangeRates(&m[i], 1, 0.0, sc);
+        a.updateGnssRawPart(m.data(), i, i + 1, 0.0, su);
+        EXPECT_EQ(sc.screen_rr, 1) << i;
+        EXPECT_EQ(sc.screen_refused, su.rejected_rr) << "satellite " << i << ", off " << offs[i];
+        EXPECT_EQ(su.used_rr + su.rejected_rr, 1) << i;
+        refused_one_by_one += sc.screen_refused;
+    }
+    EXPECT_GE(refused_one_by_one, 3);                    // the gate falls between the offsets (6 here)
+    EXPECT_LE(refused_one_by_one, 7);
+    const RawGnssEKF<double> before = f;
+    RawGnssStats all;
+    f.screenRangeRates(m.data(), n, 0.0, all);
+    EXPECT_EQ(all.screen_rr, n);
+    EXPECT_EQ(all.screen_refused, refused_one_by_one);
+    for (int i = 0; i < RawGnssEKF<double>::N; ++i)
+        for (int j = 0; j < RawGnssEKF<double>::N; ++j)
+            ASSERT_EQ(f.P(i, j), before.P(i, j)) << i << ", " << j;
+    for (int i = 0; i < 4; ++i)
+        EXPECT_EQ(f.quat()[i], before.quat()[i]);
+    for (int i = 0; i < 3; ++i)
+        EXPECT_EQ(f.velNed()[i], before.velNed()[i]);
+    EXPECT_EQ(f.clockDrift(), before.clockDrift());
+    // refused reject_persist epochs running, the update lets satellite 8 in:
+    // so does the screen
+    for (int e = 0; e < f.params().reject_persist; ++e)
+    {
+        RawGnssStats s;
+        f.updateGnssRawPart(m.data(), 8, 9, 0.0, s);
+        ASSERT_EQ(s.rejected_rr, 1) << e;
+    }
+    RawGnssStats sp;
+    f.screenRangeRates(&m[8], 1, 0.0, sp);
+    EXPECT_EQ(sp.screen_rr, 1);
+    EXPECT_EQ(sp.screen_refused, 0);
+}

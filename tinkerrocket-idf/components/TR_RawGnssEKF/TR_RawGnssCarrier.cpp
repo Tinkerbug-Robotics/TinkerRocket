@@ -1,16 +1,19 @@
 // TR_RawGnssCarrier.cpp — TR_RawGnssEKF's carrier range rate (see
 // TR_RawGnssEKF.h): the screen, the fusion with the epoch's common rate, the
-// epoch's close, and the integration's excess back-dated. Once an epoch, so
-// apart from the filter's per-step code: on the Beetle this file stays in
-// flash where the rest of the filter runs from internal RAM
-// (raw_gnss_iram.lf), 9 kB less of it. Its per-step part -- the receiver
-// snapshots that every correction moves (inject), the roll rate and the
-// integration's excess (propagate, pushHistory) -- is TR_RawGnssEKF.cpp's.
+// epoch's close, and the integration's excess back-dated; and the boost
+// screen's gate (screenRangeRates). Once an epoch, so apart from the filter's
+// per-step code: on the Beetle this file stays in flash where the rest of the
+// filter runs from internal RAM (raw_gnss_iram.lf), 11 kB less of it. Its
+// per-step part -- the receiver snapshots that every correction moves
+// (inject), the roll rate and the integration's excess (propagate,
+// pushHistory) -- is TR_RawGnssEKF.cpp's, and the geometry both predict with
+// RawGnssEKFGeometry.h's.
 #include "TR_RawGnssEKF.h"
 
 #include <cmath>
 #include <cstring>
 
+#include "RawGnssEKFGeometry.h"
 #include "gnss/types.h"
 
 namespace gnss_raw
@@ -27,6 +30,14 @@ constexpr double kTwoPi  = 6.283185307179586;
 // is a whole epoch)
 constexpr double kCrSameEpochS = 0.01;
 constexpr double kCrIntervalTolS = 0.1;
+
+// the geometry every update predicts with (RawGnssEKFGeometry.h): the boost
+// screen's Dopplers predicted as updateGnssRawPart predicts them
+using ekf_geom::Los;
+using ekf_geom::lineOfSight;
+using ekf_geom::satRangeAccel;
+using ekf_geom::corrInflation;
+using ekf_geom::backDate;
 
 }  // namespace
 
@@ -610,6 +621,85 @@ void RawGnssEKF<T>::endCarrier(RawGnssStats& st)
 }
 
 
+// The boost screen (screenRangeRates, RawGnssShadow's): the epoch's Dopplers
+// at the state as it stands, each as updateGnssRawPart would predict and gate
+// it were it the epoch's first update: the same
+// prediction (the receiver back to the Doppler's instant, the satellite's
+// range acceleration out), H, R and chi-square, the same let-in for a
+// satellite refused reject_persist epochs running. Nothing is fused, and the
+// state, its covariance and the satellites' counts stay as they are. The
+// geometry once: no update moves the receiver between satellites here.
+template <typename T>
+void RawGnssEKF<T>::screenRangeRates(const RawMeas* m, int n, double age_s, RawGnssStats& st) const
+{
+    st.screen_rr = st.screen_refused = 0;
+    if (age_s < 0.0)
+        age_s = 0.0;
+    const double tau = p_.rr_lag_s > 0.0 ? p_.rr_lag_s : 0.0;
+    T dp_e[3], dv_e[3], dp_l[3], dv_l[3];
+    historyChange(age_s, dv_e, dp_e);
+    historyChange(age_s + tau, dv_l, dp_l);
+    double r[3], v[3], Tm[3][3], r_e[3], v_e[3];
+    receiverState(r, v, Tm);
+    backDate(r, v, Tm, dp_e, dv_e, r_e, v_e);
+    double vr[3], v_l[3];
+    for (int a = 0; a < 3; ++a)
+        vr[a] = Tm[0][a] * static_cast<double>(v_[0]) + Tm[1][a] * static_cast<double>(v_[1])
+              + Tm[2][a] * static_cast<double>(v_[2]);
+    const T* dv = tau > 0.0 ? dv_l : dv_e;
+    for (int a = 0; a < 3; ++a)
+        v_l[a] = vr[a] - (Tm[0][a] * static_cast<double>(dv[0]) + Tm[1][a] * static_cast<double>(dv[1])
+                          + Tm[2][a] * static_cast<double>(dv[2]));
+    for (int i = 0; i < n; ++i)
+    {
+        const RawMeas& mi = m[i];
+        if (mi.sys > GNSS_SYS_BDS || mi.prn >= 64 || !mi.has_rr)
+            continue;
+        Los L;
+        lineOfSight(mi, r_e, v_e, L);
+        T u_ned[3];
+        for (int a = 0; a < 3; ++a)
+            u_ned[a] = T(Tm[a][0] * L.u[0] + Tm[a][1] * L.u[1] + Tm[a][2] * L.u[2]);
+        Los Lr = L;
+        Lr.rate = 0.0;
+        for (int a = 0; a < 3; ++a)
+            Lr.rate += L.u[a] * (L.vs[a] - v_l[a]);
+        const double pred_rate = tau > 0.0 ? Lr.rate - tau * satRangeAccel(mi, Lr, v_l) : Lr.rate;
+        int hidx[4];
+        T hval[4];
+        int hn = 0;
+        for (int a = 0; a < 3; ++a)
+        {
+            hidx[hn] = kVel + a;
+            hval[hn++] = -u_ned[a];
+        }
+        hidx[hn] = kClkDrift;
+        hval[hn++] = T(1);
+        const T y = T(mi.rr - (pred_rate + static_cast<double>(clk_d_)));
+        const double s_r = static_cast<double>(mi.sigma_rr);
+        const double dt_i = t_ - last_upd_[mi.sys][mi.prn][1];
+        const T R = T(s_r * s_r * corrInflation(dt_i, static_cast<double>(mi.tau_rr)));
+        st.screen_rr++;
+        if (rejects_[mi.sys][mi.prn][1] >= p_.reject_persist)
+            continue;                     // the update lets it in, whatever its innovation
+        // S and the test as scalarUpdate forms them
+        T HP[N] = {};
+        for (int k = 0; k < hn; ++k)
+        {
+            const T h = hval[k];
+            const T* row = P_[hidx[k]];
+            for (int j = 0; j < N; ++j)
+                HP[j] += h * row[j];
+        }
+        T S = R;
+        for (int k = 0; k < hn; ++k)
+            S += HP[hidx[k]] * hval[k];
+        const T gate = T(p_.gate_chi2);
+        if (!(S > T(0)) || (gate > T(0) && y * y * (T(1) / S) > gate))
+            st.screen_refused++;
+    }
+}
+
 // Each member here, for both scalars (TR_RawGnssEKF.cpp instantiates the rest).
 #define TR_RAW_GNSS_CARRIER_INSTANTIATE(T)                                                                        \
     template void RawGnssEKF<T>::crSnapshot(double, const T[3]);                                                 \
@@ -621,7 +711,8 @@ void RawGnssEKF<T>::endCarrier(RawGnssStats& st)
     template int RawGnssEKF<T>::beginCarrier(const RawMeas*, int, double, RawGnssStats&);                        \
     template bool RawGnssEKF<T>::crFitSolve(double[4]);                                                          \
     template void RawGnssEKF<T>::fuseCarrier(const RawMeas*, RawGnssStats&);                                     \
-    template void RawGnssEKF<T>::endCarrier(RawGnssStats&);
+    template void RawGnssEKF<T>::endCarrier(RawGnssStats&);                                                      \
+    template void RawGnssEKF<T>::screenRangeRates(const RawMeas*, int, double, RawGnssStats&) const;
 TR_RAW_GNSS_CARRIER_INSTANTIATE(float)
 TR_RAW_GNSS_CARRIER_INSTANTIATE(double)
 #undef TR_RAW_GNSS_CARRIER_INSTANTIATE

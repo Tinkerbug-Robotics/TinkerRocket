@@ -3647,3 +3647,333 @@ TEST(RawGnssShadow, FusingTheCarrierHoldsTheVelocityTheDopplerCannot)
     EXPECT_LT(e_fuse, 0.02);
     EXPECT_NEAR(fuse.st.cr_last_common_mps, -1.5 + 0.5 * 299792458.0 / GNSS_FREQ_L1_HZ, 0.05);
 }
+
+// ------------------------------------------------ the boost screen (a6h)
+
+namespace
+{
+
+// One flight for the boost screen: the Beetle's pad 6 s, a boost of
+// boost_mps2 along the nose for 1.5 s from T+0 (6 s), then drag, on a body
+// leaning lean_deg toward azimuth 70; act with the heading's gate, its 30
+// deg launch prior and no hand-off (design H's ascent). Raw epochs once a
+// GPS second from the synthetic sky, each delivered 0.2 s late. The epoch at
+// T+bad_s is, if asked, cut to its first keep satellites with offs[k] (m/s)
+// on the k-th Doppler, or left out (drop_bad); with lost_after, no epoch
+// comes after it (the receiver has lost the sky). kShadowApogee from
+// apogee_s (flight time; never if negative). screen: Config::boost_screen.
+struct ScreenFlight
+{
+    uint8_t mode = RawGnssShadow::kHeadingAct;
+    uint8_t screen = RawGnssShadow::kScreenAct;
+    double boost_mps2 = 100.0;
+    double lean_deg = 5.0;
+    double bad_s = 1.0;
+    int keep = 0;                   // 0: every satellite the sky gives
+    std::vector<double> offs;
+    bool offs_at_end = false;       // offs on the last Dopplers (fused last), not the first
+    bool drop_bad = false;
+    bool lost_after = false;
+    double apogee_s = -1.0;
+};
+
+struct ScreenRun
+{
+    RawGnssShadow::Stats st;
+    gnss_raw::RawGnssStats bad;     // the bad epoch's own, at its close
+    bool bad_closed = false;
+    float q_end[4] = {};
+    float q_true[4] = {};
+};
+
+ScreenRun flyScreen(const ScreenFlight& o)
+{
+    double lat, lon, h;
+    ecef_to_geo(kGoldenRmRx, &lat, &lon, &h);
+    double r0[3];
+    geo_to_ecef(lat, lon, h, r0);
+    const double sl = std::sin(lat), cl = std::cos(lat), so = std::sin(lon), co = std::cos(lon);
+    auto nedToEcefVec = [&](const double n[3], double out[3]) {
+        const double e[3] = {n[1], n[0], -n[2]};
+        out[0] = -so * e[0] - sl * co * e[1] + cl * co * e[2];
+        out[1] = co * e[0] - sl * so * e[1] + cl * so * e[2];
+        out[2] = cl * e[1] + sl * e[2];
+    };
+    RawGnssShadow::Config cfg = primaryCfg();
+    cfg.heading_mode = o.mode;
+    cfg.heading_gate = RawGnssShadow::kGateHeading;
+    cfg.heading_handoff_deg = -1.0;
+    cfg.boost_screen = o.screen;
+    cfg.meas.troposphere = false;
+    // the accelerometer bias a long pad leaves (the bias's Gauss-Markov
+    // prior, 0.01 m/s^2, after minutes): 6 s from p0_abias's 0.1 g would
+    // leave the tilt 5.7 deg unsure, the boost's velocity 10 m/s, and the
+    // gate four times what it is on a real pad
+    cfg.ekf.p0_abias = 0.02;
+    RawGnssShadow sh(cfg);
+    for (int i = 0; i < kGoldenRmEphN; ++i)
+        sh.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+    SynthSky sky(cfg.meas);
+    const Mat3 Ct = leaningBody(o.lean_deg, 70.0, 25.0);
+    ScreenRun run;
+    quatOf(Ct, run.q_true);
+    ShadowSeed seed = padSeed(kT0, lat, lon, h);
+    quatOf(Ct, seed.quat);                                    // the pad's attitude, its heading the truth's
+    sh.onSeed(seed);
+    const double tow0 = goldenEpochs()[0].epoch.tow_s;
+    const double t_ign = 6.0, t_det = 6.1, t_end = 12.0, dt = 0.005, rr_lag = cfg.ekf.rr_lag_s;
+    double p_ned[3] = {}, v_ned[3] = {};
+    std::vector<std::array<double, 3>> vel_hist;
+    std::vector<TimedRawEpoch> due;
+    int next_epoch = 1;
+    const uint32_t bad_tow_ms = static_cast<uint32_t>(std::llround((tow0 + t_ign + o.bad_s) * 1000.0));
+    for (double t = dt; t <= t_end + 1e-9; t += dt)
+    {
+        double f_b[3] = {0.0, 0.0, 0.0}, a_n[3];
+        if (t > t_ign)
+        {
+            f_b[0] = t <= t_ign + 1.5 ? o.boost_mps2 : -3.0;
+            double f_n[3];
+            mat3Vec(Ct, f_b, f_n);
+            for (int i = 0; i < 3; ++i)
+                a_n[i] = f_n[i] + (i == 2 ? kG : 0.0);
+        }
+        else
+        {
+            a_n[0] = a_n[1] = a_n[2] = 0.0;
+            const double up[3] = {0, 0, -kG};
+            Mat3 CtT{};
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    CtT.m[i][j] = Ct.m[j][i];
+            mat3Vec(CtT, up, f_b);
+        }
+        for (int i = 0; i < 3; ++i)
+        {
+            p_ned[i] += v_ned[i] * dt + 0.5 * a_n[i] * dt * dt;
+            v_ned[i] += a_n[i] * dt;
+        }
+        vel_hist.push_back({v_ned[0], v_ned[1], v_ned[2]});
+        const int64_t t64 = kT0 + static_cast<int64_t>(std::llround(t * 1e6));
+        ShadowImu s{};
+        s.time_us = static_cast<uint32_t>(t64);
+        for (int i = 0; i < 3; ++i)
+            s.acc[i] = float(f_b[i]);
+        s.flags = t < t_ign ? gnss_raw::kShadowLevel : (t >= t_det ? gnss_raw::kShadowInFlight : 0);
+        if (o.apogee_s >= 0.0 && t >= t_ign + o.apogee_s)
+            s.flags |= gnss_raw::kShadowApogee;
+        sh.onImu(s, t64);
+        if (!run.bad_closed && sh.stats().last_tow_ms == bad_tow_ms)
+        {
+            run.bad = sh.stats().last;
+            run.bad_closed = true;
+        }
+        if (t + 1e-9 >= next_epoch)
+        {
+            const int lag_steps = static_cast<int>(std::lround(rr_lag / dt));
+            const auto& vl = vel_hist[vel_hist.size() > static_cast<size_t>(lag_steps)
+                                          ? vel_hist.size() - 1 - lag_steps : 0];
+            double dr[3], r[3], vlag_e[3];
+            nedToEcefVec(p_ned, dr);
+            nedToEcefVec(vl.data(), vlag_e);
+            for (int i = 0; i < 3; ++i)
+                r[i] = r0[i] + dr[i];
+            TimedRawEpoch e;
+            e.epoch = sky.epoch(tow0 + next_epoch, r, vlag_e);
+            e.mcu_us = t64;
+            e.gps_week = kGoldenWeek;
+            const bool bad = std::fabs(next_epoch - (t_ign + o.bad_s)) < 1e-6;
+            const bool after = next_epoch > t_ign + o.bad_s + 1e-6;
+            next_epoch++;
+            if ((bad && o.drop_bad) || (after && o.lost_after))
+                continue;
+            if (bad && (o.keep > 0 || !o.offs.empty()))
+            {
+                if (o.keep > 0 && e.epoch.n > o.keep)
+                    e.epoch.n = o.keep;
+                for (size_t k = 0; k < o.offs.size() && static_cast<int>(k) < e.epoch.n; ++k)
+                    e.epoch.obs[o.offs_at_end ? e.epoch.n - 1 - static_cast<int>(k) : static_cast<int>(k)].rate_mps +=
+                        o.offs[k];
+            }
+            due.push_back(e);
+        }
+        while (!due.empty() && t64 - due.front().mcu_us >= 200000)
+        {
+            sh.onEpoch(due.front());
+            due.erase(due.begin());
+        }
+    }
+    for (int i = 0; i < 4; ++i)
+        run.q_end[i] = sh.filter().quat()[i];
+    run.st = sh.stats();
+    return run;
+}
+
+// c30's T+1, as the rig's LC86G gave it losing lock in the boost: eight
+// satellites, four Dopplers 40-62 m/s off (the gate refuses them at the
+// epoch's prior), one 12 m/s off (it passes, and it is wrong), three good;
+// and nothing after it.
+ScreenFlight c30Like()
+{
+    ScreenFlight o;
+    o.keep = 8;
+    o.offs = {48.0, -55.0, 62.0, 40.0, 12.0};
+    o.lost_after = true;
+    return o;
+}
+
+}  // namespace
+
+TEST(RawGnssShadow, TheBoostScreenDropsAnEpochWhoseDopplersTheGateMostlyRefuses)
+{
+    // A c30-like epoch at T+1 (10 g), the sky lost after it: the screen
+    // gates its 8 Dopplers at the prior, refuses 4, and drops it whole -- no
+    // pseudorange or Doppler fused, not counted applied, the flight then
+    // what it is with that epoch never sent. Unscreened, the update's own
+    // gate refuses the same four and lets the fifth, 12 m/s off, turn the
+    // heading for the rest of the flight. The epoch at T+0 is a boost epoch
+    // too (the IMU's peak since the epoch before it is the boost's), and
+    // passes.
+    const ScreenRun screened = flyScreen(c30Like());
+    ScreenFlight none = c30Like();
+    none.drop_bad = true;
+    const ScreenRun without = flyScreen(none);
+    ScreenFlight off = c30Like();
+    off.screen = RawGnssShadow::kScreenOff;
+    const ScreenRun unscreened = flyScreen(off);
+
+    ASSERT_TRUE(screened.bad_closed);
+    EXPECT_TRUE(screened.bad.screen_dropped);
+    EXPECT_EQ(screened.bad.screen_rr, 8);
+    EXPECT_EQ(screened.bad.screen_refused, 4);
+    EXPECT_EQ(screened.bad.used_pr, 0);
+    EXPECT_EQ(screened.bad.used_rr, 0);
+    EXPECT_EQ(screened.st.boost_screened, 2u);
+    EXPECT_EQ(screened.st.boost_dropped, 1u);
+    EXPECT_EQ(screened.st.boost_dropped_dry, 0u);       // the prior's gate dropped it: not worked through
+    EXPECT_EQ(screened.st.boost_last_dry_used, -1);
+    EXPECT_EQ(screened.st.epochs_applied + 1, unscreened.st.epochs_applied);
+    // as if it never came
+    EXPECT_LT(attErrDeg(screened.q_end, without.q_end), 0.01);
+    // unscreened: the gate takes the fifth
+    ASSERT_TRUE(unscreened.bad_closed);
+    EXPECT_FALSE(unscreened.bad.screen_dropped);
+    EXPECT_EQ(unscreened.st.boost_screened, 0u);
+    EXPECT_GE(unscreened.bad.rejected_rr, 4);
+    EXPECT_GT(unscreened.bad.used_rr, 0);
+    EXPECT_LT(attErrDeg(screened.q_end, screened.q_true), 0.5);
+    EXPECT_GT(attErrDeg(unscreened.q_end, unscreened.q_true), 5.0);   // 10.1 deg, all of it heading
+}
+
+TEST(RawGnssShadow, TheBoostScreenKeepsAnEpochWithUnderHalfRefused)
+{
+    // Three of eight far off: under half at the prior and worked through,
+    // the epoch is fused, and the update's own gate refuses the three.
+    ScreenFlight o = c30Like();
+    o.offs = {48.0, -55.0, 62.0};
+    const ScreenRun run = flyScreen(o);
+    ASSERT_TRUE(run.bad_closed);
+    EXPECT_EQ(run.bad.screen_rr, 8);
+    EXPECT_EQ(run.bad.screen_refused, 3);
+    EXPECT_EQ(run.bad.screen_seq_refused, 3);           // worked through: the same three
+    EXPECT_EQ(run.bad.screen_seq_used, 5);
+    EXPECT_FALSE(run.bad.screen_dropped);
+    EXPECT_EQ(run.st.boost_dropped, 0u);
+    EXPECT_EQ(run.st.boost_screened, 2u);
+    EXPECT_EQ(run.bad.used_pr, 8);
+    EXPECT_EQ(run.bad.rejected_rr, 3);
+    EXPECT_EQ(run.bad.used_rr, 5);
+    EXPECT_LT(attErrDeg(run.q_end, run.q_true), 1.0);
+}
+
+TEST(RawGnssShadow, TheBoostScreenNeverActsBelowItsThreshold)
+{
+    // The same epoch in a 1.2 g climb (the IMU's peak never past 2 g): not
+    // screened, fused, the update's gate alone refusing what it refuses.
+    ScreenFlight o = c30Like();
+    o.boost_mps2 = 12.0;
+    const ScreenRun run = flyScreen(o);
+    ASSERT_TRUE(run.bad_closed);
+    EXPECT_EQ(run.st.boost_screened, 0u);
+    EXPECT_EQ(run.st.boost_dropped, 0u);
+    EXPECT_EQ(run.bad.screen_rr, 0);
+    EXPECT_FALSE(run.bad.screen_dropped);
+    EXPECT_GT(run.bad.used_pr, 0);
+    EXPECT_GE(run.bad.rejected_rr, 4);
+}
+
+TEST(RawGnssShadow, TheBoostScreenNeverActsAfterTheApogeeCall)
+{
+    // Past 2 g after the apogee call -- a drogue's snatch, the epoch after it
+    // the carrier's first -- the screen never runs: here the call comes in
+    // the boost (T+0.5), and the c30-like epoch at T+1 is fused as the
+    // update's gate takes it. The epoch at T+0, before the call, is screened.
+    ScreenFlight o = c30Like();
+    o.apogee_s = 0.5;
+    const ScreenRun run = flyScreen(o);
+    ASSERT_TRUE(run.bad_closed);
+    EXPECT_EQ(run.st.boost_screened, 1u);
+    EXPECT_EQ(run.st.boost_dropped, 0u);
+    EXPECT_EQ(run.bad.screen_rr, 0);
+    EXPECT_FALSE(run.bad.screen_dropped);
+    EXPECT_GT(run.bad.used_pr, 0);
+}
+
+TEST(RawGnssShadow, TheBoostScreenRunsInActByDefault)
+{
+    // kScreenAct, the default: in act only. Observe flies the epoch as the
+    // update's gate takes it (GNSS barely reaches its attitude in a boost);
+    // kScreenOn screens there too.
+    EXPECT_EQ(RawGnssShadow::Config().boost_screen, RawGnssShadow::kScreenAct);
+    EXPECT_DOUBLE_EQ(RawGnssShadow::Config().boost_screen_g, 2.0);
+    ScreenFlight o = c30Like();
+    o.mode = RawGnssShadow::kHeadingObserve;
+    const ScreenRun obs = flyScreen(o);
+    EXPECT_EQ(obs.st.boost_screened, 0u);
+    EXPECT_EQ(obs.st.boost_dropped, 0u);
+    o.screen = RawGnssShadow::kScreenOn;
+    const ScreenRun on = flyScreen(o);
+    EXPECT_EQ(on.st.boost_screened, 2u);
+    EXPECT_EQ(on.st.boost_dropped, 1u);
+}
+
+TEST(RawGnssShadow, TheBoostScreenWorksTheEpochThroughForWhatThePriorsGatePasses)
+{
+    // Four good Dopplers, then four 20 m/s off: at the epoch's prior the gate
+    // is wide -- the boost's velocity and act's opened heading -- and passes
+    // all eight; worked through on the scratch copy, each update shrinks it
+    // and the last four are refused: half, and the epoch is dropped whole --
+    // the flight what it is with the epoch never sent, the filter untouched by
+    // the copy's work. As the offline replay's majority check, which worked
+    // the epoch and counted (c30-like draws: 3 of 7 refused at the prior, 4-5
+    // worked through).
+    ScreenFlight o;
+    o.keep = 8;
+    o.offs = {20.0, -20.0, 20.0, -20.0};
+    o.offs_at_end = true;
+    o.lost_after = true;
+    const ScreenRun run = flyScreen(o);
+    ScreenFlight none = o;
+    none.drop_bad = true;
+    const ScreenRun without = flyScreen(none);
+    ASSERT_TRUE(run.bad_closed);
+    EXPECT_EQ(run.bad.screen_rr, 8);
+    EXPECT_EQ(run.bad.screen_refused, 0);
+    EXPECT_EQ(run.bad.screen_seq_refused, 4);
+    EXPECT_EQ(run.bad.screen_seq_used, 4);
+    EXPECT_TRUE(run.bad.screen_dropped);
+    EXPECT_EQ(run.bad.used_pr, 0);
+    EXPECT_EQ(run.bad.used_rr, 0);
+    EXPECT_EQ(run.st.boost_dropped, 1u);
+    EXPECT_EQ(run.st.boost_dropped_dry, 1u);
+    EXPECT_LT(attErrDeg(run.q_end, without.q_end), 0.01);
+    // 18 m/s off: two refused worked through, under half: kept and fused
+    o.offs = {18.0, -18.0, 18.0, -18.0};
+    const ScreenRun kept = flyScreen(o);
+    EXPECT_EQ(kept.bad.screen_refused, 0);
+    EXPECT_EQ(kept.bad.screen_seq_refused, 2);
+    EXPECT_FALSE(kept.bad.screen_dropped);
+    EXPECT_EQ(kept.bad.used_pr, 8);
+    EXPECT_EQ(kept.bad.used_rr, 6);
+    EXPECT_EQ(kept.st.boost_dropped, 0u);
+}

@@ -852,6 +852,11 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
     job_.te = te;
     job_.in_flight = (imu_flags & kShadowInFlight) != 0;
     job_.g_peak = static_cast<double>(ekf_.takeGPeak());
+    // a boost epoch, for the boost screen: the IMU past boost_screen_g since
+    // the last epoch, and no apogee call yet (a drogue's snatch is no boost)
+    const bool screening = cfg_.boost_screen == kScreenOn
+                           || (cfg_.boost_screen == kScreenAct && cfg_.heading_mode == kHeadingAct);
+    job_.screen = screening && !(imu_flags & kShadowApogee) && job_.g_peak + 1.0 > cfg_.boost_screen_g;
     if (cfg_.external_build)
     {
         built_ = pend_built_[pb_head_];
@@ -936,7 +941,14 @@ void RawGnssShadow::jobUnit(double t)
         job_.phase = kJobClock;
         break;
     case kJobClock:
-        job_.phase = ekf_.beginGnssRaw(built_.meas, built_.n, age, job_.rs) ? kJobFuse : kJobClose;
+        job_.phase = !ekf_.beginGnssRaw(built_.meas, built_.n, age, job_.rs) ? kJobClose
+                     : (job_.screen ? kJobScreen : kJobFuse);
+        break;
+    case kJobScreen:
+        jobScreen(age);
+        break;
+    case kJobScreenDry:
+        jobScreenDry();
         break;
     case kJobFuse:
         if (job_.fused < built_.n)
@@ -1013,10 +1025,87 @@ void RawGnssShadow::jobChecks(double age, double t)
     st_.last_pad_corrected = use_broadcast_ ? 0 : survey_.correct(m, n, built_.r_approx);
 }
 
+// The boost screen (RawGnssShadow.h), its first unit: the boost epoch's
+// Dopplers gated at the state as the clock's step left it. Half or more
+// refused, the epoch is dropped (closeJob); else the filter is copied, and the
+// epoch worked through on the copy a satellite a unit (jobScreenDry).
+void RawGnssShadow::jobScreen(double age)
+{
+    RawGnssStats& rs = job_.rs;
+    ekf_.screenRangeRates(built_.meas, built_.n, age, rs);
+    st_.boost_screened++;
+    st_.boost_last_rr = rs.screen_rr;
+    st_.boost_last_refused = rs.screen_refused;
+    st_.boost_last_dry_used = -1;
+    st_.boost_last_dry_refused = 0;
+    st_.boost_last_g = static_cast<float>(job_.g_peak + 1.0);
+    if (rs.screen_refused > 0 && 2 * rs.screen_refused >= rs.screen_rr)
+    {
+        screenVerdict(true, false);
+        return;
+    }
+    dry_ = ekf_;
+    job_.dry_k = 0;
+    job_.dry_age = age;
+    job_.dry_rs = RawGnssStats();
+    job_.phase = kJobScreenDry;
+}
+
+// The epoch's next measurement on the scratch copy, as the update fuses it --
+// at the age the epoch had when copied: the copy does not step -- and, the
+// last done, the verdict on its Dopplers' refusals.
+void RawGnssShadow::jobScreenDry()
+{
+    if (job_.dry_k < built_.n)
+    {
+        dry_.updateGnssRawPart(built_.meas, job_.dry_k, job_.dry_k + 1, job_.dry_age, job_.dry_rs);
+        job_.dry_k++;
+    }
+    if (job_.dry_k < built_.n)
+        return;
+    const RawGnssStats& d = job_.dry_rs;
+    job_.rs.screen_seq_used = d.used_rr;
+    job_.rs.screen_seq_refused = d.rejected_rr;
+    st_.boost_last_dry_used = d.used_rr;
+    st_.boost_last_dry_refused = d.rejected_rr;
+    screenVerdict(d.rejected_rr > 0 && d.rejected_rr >= d.used_rr, true);
+}
+
+void RawGnssShadow::screenVerdict(bool drop, bool dry)
+{
+    job_.rs.screen_dropped = drop;
+    if (drop)
+    {
+        st_.boost_dropped++;
+        if (dry)
+            st_.boost_dropped_dry++;
+    }
+    job_.phase = drop ? kJobClose : kJobFuse;
+}
+
 void RawGnssShadow::closeJob(double age, double t)
 {
     const int n = built_.n;
     RawGnssStats& rs = job_.rs;
+    if (rs.screen_dropped)
+    {
+        // Dropped by the boost screen: none of it fused, and nothing of it
+        // kept -- its receiver is no carrier rate's earlier end (the next
+        // epoch's rates across it go unmatched), its pseudoranges no satellite
+        // check's reference, its velocity no levelling epoch. The clock's step
+        // (beginGnssRaw) stands: every satellite agreed on it.
+        ekf_.dropEpoch();
+        if (ekf_.params().cr_mode != kCarrierOff)
+            ekf_.endCarrier(rs);
+        st_.last = rs;
+        st_.last_age_s = age;
+        st_.last_meas = n;
+        st_.last_tow_ms = static_cast<uint32_t>(std::llround(std::fmod(built_.tow_s, 604800.0) * 1000.0));
+        if (rs.clock_jump_ms != 0 || rs.clock_step_m != 0.0 || rs.drift_step_mps != 0.0)
+            pend_flags_ |= RGE_CLOCK_STEP;
+        job_.active = false;
+        return;
+    }
     // the carrier: observe screens here, in the unit that closes the epoch
     // (the state untouched, no step falls differently); the epoch closed
     if (ekf_.params().cr_mode != kCarrierOff)

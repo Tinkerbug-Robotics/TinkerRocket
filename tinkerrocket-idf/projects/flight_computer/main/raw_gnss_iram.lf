@@ -10,8 +10,9 @@
 archive: libTR_RawGnssEKF.a
 entries:
     * (noflash)
-    # but the carrier range rate's screen and fusion, once an epoch: in flash,
-    # 9 KB of internal RAM spared (its per-step part is TR_RawGnssEKF's)
+    # but the carrier range rate's screen and fusion and the boost screen's
+    # gate, once an epoch: in flash, 11 KB of internal RAM spared (the
+    # carrier's per-step part is TR_RawGnssEKF's)
     TR_RawGnssCarrier (default)
 
 [mapping:raw_gnss_iram_meas]

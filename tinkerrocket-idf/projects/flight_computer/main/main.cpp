@@ -3219,6 +3219,7 @@ static void rawShadowTask(void*)
     uint32_t nav_step_n = 0;
     uint32_t unset_launches = 0;   // #1590: launches with no magnetometer heading, said so
     uint32_t gate_apogee = 0;      // act's full gates opened at the apogee call, said so
+    uint32_t boost_dropped = 0;    // boost epochs the boost screen dropped, said so
     for (;;)
     {
         const int64_t a0 = esp_timer_get_time();
@@ -3320,6 +3321,22 @@ static void rawShadowTask(void*)
             else
                 ESP_LOGI(TAG, "[RAWGNSS] act: the attitude gate opens in full at the apogee call (a restored "
                               "flight's): GNSS corrects the tilt too");
+        }
+        // the boost screen: an epoch dropped whole, said at once (a receiver
+        // losing lock in the boost hands over Dopplers tens of m/s off)
+        if (sh.stats().boost_dropped != boost_dropped)
+        {
+            boost_dropped = sh.stats().boost_dropped;
+            const gnss_raw::RawGnssShadow::Stats& bs = sh.stats();
+            if (bs.boost_last_dry_used < 0)
+                ESP_LOGW(TAG, "[RAWGNSS] boost screen: epoch dropped, none of it fused -- the gate refused %d of its %d "
+                              "Dopplers at the prior (IMU peak %.1f g since the epoch before)",
+                         bs.boost_last_refused, bs.boost_last_rr, (double)bs.boost_last_g);
+            else
+                ESP_LOGW(TAG, "[RAWGNSS] boost screen: epoch dropped, none of it fused -- worked through on a copy, the "
+                              "gate refused %d of its Dopplers and passed %d (%d of %d at the prior; IMU peak %.1f g)",
+                         bs.boost_last_dry_refused, bs.boost_last_dry_used, bs.boost_last_refused, bs.boost_last_rr,
+                         (double)bs.boost_last_g);
         }
         // back to the GNSS task: the satellites its checks found jumped
         gnss_raw::ShadowRelock rl;
@@ -3537,6 +3554,8 @@ static void rawShadowTask(void*)
                               "%lu held at speed (offset %+.1f m%s) | zero-velocity %lu landed, %lu on the pad "
                               "| mag fused %lu of %lu (refused: %lu uncalibrated, %lu off the model's size, "
                               "%lu off its dip; the last dip %+.1f deg off) "
+                              "| boost screen %s: %lu epochs, %lu dropped (%lu worked through) (last: %d of %d Dopplers "
+                              "refused at the prior, %d refused and %d fused worked through, %.1f g) "
                               "| restores %lu",
                          (unsigned long)fs.fixes, (unsigned long)fs.passed, (unsigned long)fs.flagged,
                          (unsigned long)fs.unjudged, (unsigned long)fs.lapsed,
@@ -3554,6 +3573,13 @@ static void rawShadowTask(void*)
                          (unsigned long)st.mag_fused, (unsigned long)st.mags,
                          (unsigned long)st.mag_uncal, (unsigned long)st.mag_suspect,
                          (unsigned long)st.mag_dip, (double)st.mag_dip_err_deg,
+                         sh.config().boost_screen == gnss_raw::RawGnssShadow::kScreenOff ? "off"
+                             : (sh.config().boost_screen == gnss_raw::RawGnssShadow::kScreenOn ? "on"
+                                : (sh.config().heading_mode == gnss_raw::RawGnssShadow::kHeadingAct ? "on (act)"
+                                                                                                   : "off (not act)")),
+                         (unsigned long)st.boost_screened, (unsigned long)st.boost_dropped,
+                         (unsigned long)st.boost_dropped_dry, st.boost_last_refused, st.boost_last_rr,
+                         st.boost_last_dry_refused, st.boost_last_dry_used, (double)st.boost_last_g,
                          (unsigned long)st.restores);
             }
             win_t0 = a1;

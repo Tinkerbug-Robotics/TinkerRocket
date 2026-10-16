@@ -97,9 +97,11 @@
 // computer (single-precision FPU), double for checking the port against the
 // prototype. Position (lat/lon/height) and the clock bias stay double.
 // Measurement prediction runs in double once per satellite per epoch.
-// Pure and host-compilable (tests_cpp/test_raw_gnss_ekf.cpp). The carrier's
-// once-an-epoch code is TR_RawGnssCarrier.cpp's, which the Beetle keeps in
-// flash where the rest runs from internal RAM (raw_gnss_iram.lf).
+// Pure and host-compilable (tests_cpp/test_raw_gnss_ekf.cpp). The once-an-
+// epoch code -- the carrier's, and the boost screen's gate -- is
+// TR_RawGnssCarrier.cpp's, which the Beetle keeps in flash where the rest
+// runs from internal RAM (raw_gnss_iram.lf); the geometry both predict with
+// is RawGnssEKFGeometry.h's.
 #ifndef TR_RAW_GNSS_EKF_H
 #define TR_RAW_GNSS_EKF_H
 
@@ -232,6 +234,14 @@ struct RawGnssStats
     double cr_common_mps = 0.0;        // the epoch's common rate: observe, the screen's fit to the screened
                                        //   rates (a weighted mean, the velocity's part taken out); fuse,
                                        //   the estimate
+    // RawGnssShadow's boost screen: the Dopplers gated at the epoch's prior
+    // before any update (screenRangeRates), and the epoch worked on a scratch
+    // copy of the filter (its updates' own counts, the Dopplers')
+    int    screen_rr = 0;              // gated at the prior
+    int    screen_refused = 0;         //   of them, refused
+    int    screen_seq_used = 0;        // the scratch copy's: the Dopplers fused
+    int    screen_seq_refused = 0;     //   and refused
+    bool   screen_dropped = false;     // the epoch dropped, none of it fused (the shadow's call)
 };
 
 // One carrier range rate as the screen took it (RawGnssEKF::carrierInfo).
@@ -353,6 +363,17 @@ public:
     // epoch has when it is fused. updateGnssRaw is the two at one age.
     bool beginGnssRaw(const RawMeas* m, int n, double age_s, RawGnssStats& st);
     void updateGnssRawPart(const RawMeas* m, int i0, int i1, double age_s, RawGnssStats& st);
+    // The epoch's Doppler range rates (has_rr) gated at the state as it
+    // stands, after beginGnssRaw and before any update: each with the
+    // innovation, variance and chi-square updateGnssRawPart would give it as
+    // the epoch's first update (a satellite refused reject_persist epochs
+    // running passes: the update lets it in). How many were gated and
+    // refused, in st.screen_rr and st.screen_refused; nothing else changes.
+    void screenRangeRates(const RawMeas* m, int n, double age_s, RawGnssStats& st) const;
+    // The epoch begun is dropped, none of it fused: its receiver is no
+    // carrier rate's earlier end, so the next epoch's rates across it go
+    // unmatched. endCarrier still closes it.
+    void dropEpoch() { cr_cur_.valid = false; }
     // The epoch's carrier range rates (above), after its pseudoranges and
     // Dopplers, the epoch age_s ago: beginCarrier screens them at the prior
     // and counts (observe mode: all there is; it returns 0), and returns how
