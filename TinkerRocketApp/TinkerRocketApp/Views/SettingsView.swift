@@ -17,8 +17,29 @@ import SwiftUI
 import Combine
 
 struct SettingsView: View {
+    /// The device Settings was opened on. Only its peripheral is used; the
+    /// screen itself runs on the fleet's live instance (see body).
+    let device: BLEDevice
+    @EnvironmentObject var fleet: BLEFleet   // injected by DashboardView
+
+    /// BLEFleet replaces the BLEDevice on every disconnect/reconnect, and an
+    /// out-computer flash ends in the OC's reboot. Held directly, the opened
+    /// instance went dead: the Version row kept the old firmware, "Update
+    /// firmware…" stayed disabled, and every config push (all guarded on
+    /// `isConnected`) went nowhere until Settings was reopened (2026-10-16).
+    /// Resolved here, like FirmwareUpdateView does, rather than left to the
+    /// presenter: the dashboard resolves its sheets (DashboardSheet.live(in:)),
+    /// but RocketProfileView presents Settings too.
+    var body: some View {
+        SettingsContent(device: fleet.liveDevice(for: device))
+    }
+}
+
+private struct SettingsContent: View {
+    /// The fleet's live instance, swapped in by SettingsView after a
+    /// reconnect. The @State below (tab, edits in progress, the LoRa
+    /// switches) survives the swap; only what is read off the device changes.
     @ObservedObject var device: BLEDevice
-    @EnvironmentObject var fleet: BLEFleet   // injected by DashboardView for FirmwareUpdateView → OTASession lookup
     @EnvironmentObject var store: RocketProfileStore
     @Environment(\.dismiss) var dismiss
 
@@ -74,7 +95,24 @@ struct SettingsView: View {
 
     // Drives the full-screen pyro test-fire cover.  (The per-channel continuity
     // readout state lives in the PyroChannelTestControls child view.)
-    @State private var pyroTestChannel: Int?
+    @State private var pyroTest: PyroTestRun?
+
+    /// A test fire, held on the link it was started on. The screen follows
+    /// the fleet's live instance, but a test must not: if its link drops
+    /// before T-0, PyroTestView aborts ("Link lost before fire", #292), and
+    /// following would send the fire over the rebuilt link instead — after a
+    /// continuity check and a focus latch made on the old one. Closing the
+    /// test and opening it again starts one on the live link.
+    private struct PyroTestRun: Identifiable {
+        let channel: Int
+        let device: BLEDevice
+        var id: Int { channel }
+    }
+
+    /// Screens pushed by value rather than by destination (see body).
+    private enum Screen: Hashable {
+        case firmwareUpdate
+    }
 
     // "Sent" feedback in section headers.
     @State private var servoApplied = false
@@ -246,7 +284,17 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        NavigationView {
+        // A NavigationStack, with the firmware screen pushed by value. The
+        // Form below picks its layout from the device, and that changes while
+        // the firmware screen is up: a reconnect hands Settings a rebuilt
+        // BLEDevice, which may read `.unknown` until its identity readback or
+        // report the rail off in its first frame, and a flight computer flash
+        // reboots the FC, whose settings are swapped out until it runs again.
+        // A destination link is popped when its row moves to another branch of
+        // the Form (seen in the simulator, 2026-10-16); a value on the stack
+        // is not. The firmware flow always meets one of these: every flash
+        // ends in a reboot.
+        NavigationStack {
             Form {
                 // Firmware update is device-level (not profile-level). BS and
                 // no-profile devices have no tab bar, so they each carry a
@@ -283,6 +331,11 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle(navTitle)
+            .navigationDestination(for: Screen.self) { screen in
+                switch screen {
+                case .firmwareUpdate: FirmwareUpdateView(device: device)
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }
@@ -299,11 +352,8 @@ struct SettingsView: View {
             .onAppear { loadFromProfile() }
             // Test Pyro Channel (from the Pyro tab) presents the same full-screen
             // test-fire flow the dashboard uses.
-            .fullScreenCover(item: Binding<IdentifiableInt?>(
-                get: { pyroTestChannel.map { IdentifiableInt(value: $0) } },
-                set: { pyroTestChannel = $0?.value }
-            )) { item in
-                PyroTestView(device: device, channel: item.value)
+            .fullScreenCover(item: $pyroTest) { run in
+                PyroTestView(device: run.device, channel: run.channel)
             }
             .onChange(of: store.activeId) { _ in loadFromProfile() }
             // Leaving a tab commits its pending text edit; reloading then snaps
@@ -437,9 +487,9 @@ struct SettingsView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
-            NavigationLink {
-                FirmwareUpdateView(device: device)
-            } label: {
+            // By value, so a reconnect that changes the Form's layout can't
+            // pop the screen mid-update (see body).
+            NavigationLink(value: Screen.firmwareUpdate) {
                 Label("Update firmware…", systemImage: "arrow.up.circle")
             }
             .disabled(!device.isConnected)
@@ -707,7 +757,9 @@ struct SettingsView: View {
             // continuity dot and buttons appeared/disappeared as siblings of the
             // focused Delay TextField on every live frame — which disrupted
             // keyboard layout on first focus (negative TUIKeyplane width → hang).
-            PyroChannelTestControls(device: device, channel: ch) { pyroTestChannel = $0 }
+            PyroChannelTestControls(device: device, channel: ch) {
+                pyroTest = PyroTestRun(channel: $0, device: device)
+            }
         }
     }
 
