@@ -378,7 +378,10 @@ public:
     void screenRangeRates(const RawMeas* m, int n, double age_s, RawGnssStats& st) const;
     // the vertical check's fit leaves out a Doppler this many of its own 1-sigmas off the rest's fit
     static constexpr double kVertOutlier = 4.0;
-    static bool fitVelocityClock(const double H[][4], const double* y, const bool* in, int n, double x[4]);
+    static bool fitVelocityClock(const double H[][4], const double* y, const double* s, const bool* in, int n,
+                                 double x[4]);
+    static bool verticalFit(const double H[][4], const double* y, const double* s, bool* in, int n, double x[4],
+                            int& nin, int& nout);
     // The epoch begun is dropped, none of it fused: its receiver is no
     // carrier rate's earlier end, so the next epoch's rates across it go
     // unmatched. endCarrier still closes it.

@@ -780,3 +780,78 @@ TEST(RawGnssCarrier, TheCarrierGoesThroughTheGnssUpdatesAttitudeGate)
     EXPECT_NEAR(tilt[1] / tilt[0], std::pow(std::cos(pitch), 4.0), 0.1);   // cos^4 pitch of that
     EXPECT_LT(tilt[2], 1e-3 * tilt[0]);                           // the vertical gate: none
 }
+
+// The vertical check's fit (RawGnssEKF::verticalFit), on rows built from a
+// sky of directions: each Doppler's innovation is what a receiver velocity
+// error dv (NED, m/s) and clock rate c make of it, plus err. Row i points to
+// (az, el); u (receiver to satellite, NED) = (cos el cos az, cos el sin az,
+// -sin el), H = (-u, 1).
+namespace
+{
+struct FitRows
+{
+    double H[16][4] = {}, y[16] = {}, s[16] = {};
+    bool in[16] = {};
+    int n = 0;
+    void add(double az_deg, double el_deg, const double dv[3], double c, double err, double sigma)
+    {
+        const double az = az_deg * M_PI / 180.0, el = el_deg * M_PI / 180.0;
+        const double u[3] = {std::cos(el) * std::cos(az), std::cos(el) * std::sin(az), -std::sin(el)};
+        for (int a = 0; a < 3; ++a)
+            H[n][a] = -u[a];
+        H[n][3] = 1.0;
+        y[n] = -(u[0] * dv[0] + u[1] * dv[1] + u[2] * dv[2]) + c + err;
+        s[n] = sigma;
+        n++;
+    }
+};
+}  // namespace
+
+TEST(RawGnssEKF, TheVerticalFitWeighsEachDopplerByItsOwnSigma)
+{
+    // The cloud session's GTV-type epoch: six tracking Dopplers at 0.07-0.11
+    // m/s, right; four relocking at 3 m/s, off by 15, 22, 115 and 118 (the
+    // stale one). Unweighted, the relocking rows pulled the fit, the precise
+    // rows looked the outliers, and the loop left five of them out: 28.9 m/s
+    // down, the epoch dropped. Weighted by their own sigmas the precise rows
+    // hold the fit, the noisy ones are left out, and it reads the truth.
+    const double zero[3] = {0.0, 0.0, 0.0};
+    FitRows r;
+    const double az[6] = {10, 80, 150, 220, 290, 340}, el[6] = {15, 35, 60, 25, 75, 45};
+    const double tiny[6] = {0.05, -0.08, 0.03, 0.1, -0.04, 0.06};
+    for (int i = 0; i < 6; ++i)
+        r.add(az[i], el[i], zero, 12.0, tiny[i], 0.07 + 0.008 * i);
+    r.add(120, 20, zero, 12.0, 15.0, 3.0);
+    r.add(200, 50, zero, 12.0, 22.0, 3.0);
+    r.add(30, 65, zero, 12.0, 115.0, 3.0);
+    r.add(260, 55, zero, 12.0, 118.0, 3.0);
+    double x[4];
+    int nin = 0, nout = 0;
+    ASSERT_TRUE(gnss_raw::RawGnssEKF<float>::verticalFit(r.H, r.y, r.s, r.in, r.n, x, nin, nout));
+    EXPECT_EQ(nout, 4);
+    EXPECT_EQ(nin, 6);
+    for (int i = 0; i < 6; ++i)
+        EXPECT_TRUE(r.in[i]) << i;
+    EXPECT_LT(std::fabs(x[2]), 0.5);
+    EXPECT_NEAR(x[3], 12.0, 0.5);
+}
+
+TEST(RawGnssEKF, TheVerticalFitSeesAWholeReceiverGoneStale)
+{
+    // c30's T+1: every Doppler that of a receiver still on the pad, 82 m/s
+    // down of the filter's climb, all at the boost's sigma and within a metre
+    // a second of one another -- nothing to leave out, and the fit reads it.
+    const double stale[3] = {0.0, 0.0, 82.0};
+    FitRows r;
+    const double az[7] = {-64, 45, -155, -43, 127, -163, 142}, el[7] = {25, 55, 73, 54, 54, 5, 13};
+    const double err[7] = {0.6, -0.9, 0.4, -0.3, 0.8, -0.5, 0.2};
+    for (int i = 0; i < 7; ++i)
+        r.add(az[i], el[i], stale, 20.0, err[i], 7.7);
+    double x[4];
+    int nin = 0, nout = 0;
+    ASSERT_TRUE(gnss_raw::RawGnssEKF<float>::verticalFit(r.H, r.y, r.s, r.in, r.n, x, nin, nout));
+    EXPECT_EQ(nout, 0);
+    EXPECT_NEAR(x[2], 82.0, 2.0);
+    // under four rows there is no velocity to fit
+    EXPECT_FALSE(gnss_raw::RawGnssEKF<float>::verticalFit(r.H, r.y, r.s, r.in, 3, x, nin, nout));
+}

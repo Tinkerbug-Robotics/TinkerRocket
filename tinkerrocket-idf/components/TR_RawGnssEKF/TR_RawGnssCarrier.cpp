@@ -10,6 +10,7 @@
 // RawGnssEKFGeometry.h's.
 #include "TR_RawGnssEKF.h"
 
+#include <algorithm>
 #include <cmath>
 #include <utility>
 #include <cstring>
@@ -631,17 +632,21 @@ void RawGnssEKF<T>::endCarrier(RawGnssStats& st)
 // state, its covariance and the satellites' counts stay as they are. The
 // geometry once: no update moves the receiver between satellites here.
 // And, for the shadow's vertical check, one velocity (NED) and clock rate
-// fitted to the Dopplers' innovations by least squares, unweighted: its down
-// part is the epoch's vertical velocity against the filter's, which the IMU
-// and barometer hold whatever the heading (a receiver that has lost its loops
-// in a boost hands over the Dopplers of one still on the pad: 82 m/s down at
-// T+1 on the rig's c30, its Dopplers within 0.8 m/s of each other). A
-// satellite on its own far off the fit -- more than kVertOutlier of its own
-// 1-sigmas -- is left out and the rest fitted again, while five stay: one bad
-// satellite among good ones (GTV's E13, 50-63 m/s off for four epochs) is the
-// per-row gate's to refuse, not the epoch's to lose, and one that stays bad
-// would otherwise drop every epoch. A whole receiver gone stale has no such
-// satellite: its Dopplers agree with one another.
+// fitted to the Dopplers' innovations by least squares, each weighted by its
+// own 1-sigma as the update weights it (a relocking satellite's 3 m/s counts
+// for little beside a tracking one's 0.1: unweighted, the noisy rows pulled
+// the fit and the loop below left out the precise ones -- the cloud session's
+// sim, 2026-10-16): its down part is the epoch's vertical velocity against the
+// filter's, which the IMU and barometer hold whatever the heading (a receiver
+// that has lost its loops in a boost hands over the Dopplers of one still on
+// the pad: 82 m/s down at T+1 on the rig's c30, its Dopplers within 0.8 m/s of
+// each other). A satellite on its own far off the fit -- more than
+// kVertOutlier of its own 1-sigmas -- is left out and the rest fitted again,
+// while five stay (verticalFit): one bad satellite among good ones (GTV's
+// E13, 50-63 m/s off for four epochs) is the per-row gate's to refuse, not the
+// epoch's to lose, and one that stays bad would otherwise drop every epoch. A
+// whole receiver gone stale has no such satellite: its Dopplers agree with
+// one another.
 template <typename T>
 void RawGnssEKF<T>::screenRangeRates(const RawMeas* m, int n, double age_s, RawGnssStats& st) const
 {
@@ -729,29 +734,47 @@ void RawGnssEKF<T>::screenRangeRates(const RawMeas* m, int n, double age_s, RawG
             st.screen_refused++;
     }
     // the fit: four unknowns, so four Dopplers at least
-    if (nfit < 4)
-        return;
-    bool* in = vfit_in_;
-    for (int i = 0; i < nfit; ++i)
-        in[i] = true;
-    int nin = nfit;
+    int nin = 0, nout = 0;
     double x[4];
+    if (!verticalFit(Hf, yf, sf, vfit_in_, nfit, x, nin, nout))
+        return;                           // under four, or the geometry gives no velocity: unjudged
+    st.screen_fit_n = nin;
+    st.screen_fit_out = nout;
+    st.screen_dv_down_mps = static_cast<float>(x[2]);
+}
+
+// The vertical check's fit (screenRangeRates): rows H (velocity NED, clock
+// rate), innovations y, their 1-sigmas s. Fitted weighted by 1/s^2; while
+// more than five stay in, the one most of its own 1-sigmas off the fit, past
+// kVertOutlier, is left out and the rest fitted again. x the last fit; in
+// marks the rows kept (nin) and left out (nout). False under four rows or if
+// the geometry gives no velocity.
+template <typename T>
+bool RawGnssEKF<T>::verticalFit(const double H[][4], const double* y, const double* s, bool* in, int n, double x[4],
+                                int& nin, int& nout)
+{
+    nin = n;
+    nout = 0;
+    if (n < 4)
+        return false;
+    for (int i = 0; i < n; ++i)
+        in[i] = true;
     for (;;)
     {
-        if (!fitVelocityClock(Hf, yf, in, nfit, x))
-            return;                       // the geometry gives no velocity: unjudged
+        if (!fitVelocityClock(H, y, s, in, n, x))
+            return false;
         if (nin <= 5)
-            break;
+            return true;
         int worst = -1;
         double worst_z = kVertOutlier;
-        for (int i = 0; i < nfit; ++i)
+        for (int i = 0; i < n; ++i)
         {
             if (!in[i])
                 continue;
-            double r = yf[i];
+            double r = y[i];
             for (int j = 0; j < 4; ++j)
-                r -= Hf[i][j] * x[j];
-            const double z = std::fabs(r) / sf[i];
+                r -= H[i][j] * x[j];
+            const double z = std::fabs(r) / s[i];
             if (z > worst_z)
             {
                 worst_z = z;
@@ -759,39 +782,43 @@ void RawGnssEKF<T>::screenRangeRates(const RawMeas* m, int n, double age_s, RawG
             }
         }
         if (worst < 0)
-            break;
+            return true;
         in[worst] = false;
         nin--;
-        st.screen_fit_out++;
+        nout++;
     }
-    st.screen_fit_n = nin;
-    st.screen_dv_down_mps = static_cast<float>(x[2]);
 }
 
-// One velocity and clock rate by least squares, unweighted, on the rows in
-// (Gauss-Jordan, partial pivoting); false if the geometry gives no velocity.
+// One velocity and clock rate by least squares, each row weighted by 1/s^2, on
+// the rows in (Gauss-Jordan, partial pivoting); false if the geometry gives no
+// velocity.
 template <typename T>
-bool RawGnssEKF<T>::fitVelocityClock(const double H[][4], const double* y, const bool* in, int n, double x[4])
+bool RawGnssEKF<T>::fitVelocityClock(const double H[][4], const double* y, const double* s, const bool* in, int n,
+                                     double x[4])
 {
     double M[4][5] = {};
     for (int i = 0; i < n; ++i)
     {
         if (!in[i])
             continue;
+        const double w = 1.0 / (s[i] * s[i]);
         for (int j = 0; j < 4; ++j)
         {
-            M[j][4] += H[i][j] * y[i];
+            M[j][4] += w * H[i][j] * y[i];
             for (int k = 0; k < 4; ++k)
-                M[j][k] += H[i][j] * H[i][k];
+                M[j][k] += w * H[i][j] * H[i][k];
         }
     }
+    double scale = 0.0;                   // the normal matrix's size, for a pivot test that ignores the weights' units
+    for (int j = 0; j < 4; ++j)
+        scale = std::max(scale, std::fabs(M[j][j]));
     for (int c = 0; c < 4; ++c)
     {
         int piv = c;
         for (int r2 = c + 1; r2 < 4; ++r2)
             if (std::fabs(M[r2][c]) > std::fabs(M[piv][c]))
                 piv = r2;
-        if (std::fabs(M[piv][c]) < 1e-9)
+        if (!(std::fabs(M[piv][c]) > 1e-12 * scale))
             return false;
         for (int k = 0; k < 5; ++k)
             std::swap(M[c][k], M[piv][k]);
@@ -822,7 +849,10 @@ bool RawGnssEKF<T>::fitVelocityClock(const double H[][4], const double* y, const
     template void RawGnssEKF<T>::fuseCarrier(const RawMeas*, RawGnssStats&);                                     \
     template void RawGnssEKF<T>::endCarrier(RawGnssStats&);                                                      \
     template void RawGnssEKF<T>::screenRangeRates(const RawMeas*, int, double, RawGnssStats&) const;           \
-    template bool RawGnssEKF<T>::fitVelocityClock(const double[][4], const double*, const bool*, int, double[4]);
+    template bool RawGnssEKF<T>::fitVelocityClock(const double[][4], const double*, const double*, const bool*, int, \
+                                                  double[4]);                                                   \
+    template bool RawGnssEKF<T>::verticalFit(const double[][4], const double*, const double*, bool*, int, double[4],  \
+                                             int&, int&);
 TR_RAW_GNSS_CARRIER_INSTANTIATE(float)
 TR_RAW_GNSS_CARRIER_INSTANTIATE(double)
 #undef TR_RAW_GNSS_CARRIER_INSTANTIATE
