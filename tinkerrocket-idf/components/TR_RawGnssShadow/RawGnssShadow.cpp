@@ -88,7 +88,7 @@ void RawGnssShadow::onMag(const ShadowMag& m)
 // Each refused sample is counted once, by the first gate it fails: the
 // calibration, the size, then the dip. onImu calls this only on the ground at
 // g's size, where the specific force is gravity: the dip takes it as down.
-void RawGnssShadow::applyMag(const float acc[3])
+void RawGnssShadow::applyMag(double t, const float acc[3])
 {
     if (!have_seed_ || !seed_.have_declination)
         return;                           // no north to set it against
@@ -145,6 +145,7 @@ void RawGnssShadow::applyMag(const float acc[3])
     {
         st_.mag_fused++;
         mag_fused_run_++;
+        last_mag_fused_t_ = t;
     }
 }
 
@@ -624,7 +625,7 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
         have_mag_ = false;
         // the accelerometer is its tilt reference: gravity only, g's size
         if (cfg_.primary && ground && level_gate_.gSized(acc))
-            applyMag(acc);
+            applyMag(t, acc);
     }
     // Zero velocity once landed, and the navigation filter's on the pad while
     // still: on the rig (r4) the receiver lost the sky 87 s before launch and,
@@ -761,6 +762,7 @@ void RawGnssShadow::start(double t)
     next_zupt_t_ = 0.0;
     have_mag_ = false;
     mag_fused_run_ = 0;
+    last_mag_fused_t_ = -1.0e9;
     last_aided_t_ = -1.0e9;
     last_baro_fused_t_ = -1.0e9;
     prop_sum_ = 0;
@@ -1203,13 +1205,24 @@ void RawGnssShadow::stepHeading(double t, const float acc[3], const float gyro[3
         st_.heading_launch_sigma_deg = static_cast<float>(static_cast<double>(sig[2]) * kRad2Deg);
         if (cfg_.primary && mag_fused_run_ == 0)
             st_.heading_unset_launches++;
+        // the pad's heading is the magnetometer's: a sample through its gates
+        // fused within heading_mag_recent_s of this edge (RawGnssShadow.h)
+        const bool primary_mag = cfg_.primary && mag_fused_run_ > 0;
+        st_.heading_launch_mag_age_s = primary_mag ? static_cast<float>(t - last_mag_fused_t_) : -1.0f;
+        const bool mag_heading = primary_mag && t - last_mag_fused_t_ <= cfg_.heading_mag_recent_s;
         if (cfg_.heading_mode == kHeadingAct)
         {
             // from here GNSS turns the heading, and only the heading -- or,
             // with the full gate from launch, the whole attitude (from the
-            // apogee call: below)
+            // apogee call: below) -- from the launch prior
             setFlightGate(cfg_.heading_gate == kGateFullLaunch);
-            ekf_.setHeadingSigma(static_cast<float>(cfg_.heading_pad_sigma_deg / kRad2Deg));
+            const double prior = mag_heading ? cfg_.heading_pad_sigma_deg : cfg_.heading_pad_sigma_fallback_deg;
+            ekf_.setHeadingSigma(static_cast<float>(prior / kRad2Deg));
+            st_.heading_act_launches++;
+            if (mag_heading)
+                st_.heading_mag_launches++;
+            st_.heading_launch_prior_deg = static_cast<float>(prior);
+            st_.heading_launch_mag = mag_heading ? 1 : 0;
             // and, if asked, the tilt let go to at least its floor
             if (cfg_.heading_launch_tilt_sigma_deg > 0.0)
                 ekf_.setTiltSigmaFloor(static_cast<float>(cfg_.heading_launch_tilt_sigma_deg / kRad2Deg));

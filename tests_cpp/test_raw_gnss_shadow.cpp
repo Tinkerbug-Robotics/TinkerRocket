@@ -1479,10 +1479,11 @@ TEST(RawGnssShadow, ALaunchWithNoMagnetometerHeadingIsCountedWithItsOwnSigma)
     // magnetometer uncalibrated, so refused) launches on the start's guess,
     // 44.7 deg off on this rail, at p0_hdg's 57 deg 1-sigma and growing. Each
     // launch keeps its own 1-sigma, and one with no magnetometer heading is
-    // counted. Act still claims heading_pad_sigma_deg (30) about the guess --
+    // counted. Act still claims its fallback prior (30) about the guess --
     // tighter than the filter's own, which is what the flight computer says
     // loudly; observe keeps the filter's own. A calibrated pad's launch is
-    // not counted, and act loosens its sub-degree heading to 30.
+    // not counted, and act loosens its sub-degree heading to the
+    // magnetometer's prior (10).
     for (uint8_t mode : {uint8_t(RawGnssShadow::kHeadingObserve), uint8_t(RawGnssShadow::kHeadingAct)})
         for (bool cal : {false, true})
         {
@@ -1513,10 +1514,131 @@ TEST(RawGnssShadow, ALaunchWithNoMagnetometerHeadingIsCountedWithItsOwnSigma)
                 EXPECT_NEAR(err, -44.7, 1.0) << int(mode);   // north, the guess
             }
             if (mode == RawGnssShadow::kHeadingAct)
-                EXPECT_NEAR(headingSigmaDeg(sh), 30.0, 0.5) << what;   // act's prior, whatever the pad left
+                EXPECT_NEAR(headingSigmaDeg(sh), cal ? 10.0 : 30.0, 0.5) << what;   // act's prior
             else
                 EXPECT_NEAR(headingSigmaDeg(sh), own, 1.0) << what;
         }
+}
+
+namespace
+{
+
+// A pad on rp5_0829's rail in act: the magnetometer read as seg_flags says
+// through each segment (secs, flags, the field tipped by dip_deg toward the
+// vertical), then the launch edge (a tenth of a second at 4 g along the
+// nose). The heading's 1-sigma just after the edge, deg.
+struct PadSeg
+{
+    double secs;
+    uint8_t flags;
+    double dip_deg;
+};
+
+double launchPrior(RawGnssShadow& sh, const std::vector<PadSeg>& segs)
+{
+    RailPad pad;
+    int64_t t = kT0;
+    for (const PadSeg& g : segs)
+    {
+        float h[3] = {};
+        if (g.dip_deg != 0.0)
+            turnedField(pad, g.dip_deg, 0.0, h);
+        const uint8_t f = g.flags;
+        t = pad.run(sh, t, g.secs, h, [f](double) { return f; });
+    }
+    const float none[3] = {};
+    pad.run(sh, t, 0.1, none, [](double) { return gnss_raw::kShadowMagCalibrated; }, gnss_raw::kShadowInFlight, 4.0f);
+    EXPECT_TRUE(sh.running());
+    return headingSigmaDeg(sh);
+}
+
+RawGnssShadow::Config actCfg()
+{
+    RawGnssShadow::Config c = primaryCfg();
+    c.heading_mode = RawGnssShadow::kHeadingAct;
+    return c;
+}
+
+}  // namespace
+
+TEST(RawGnssShadow, ActsLaunchPriorIsTheMagnetometersOnlyWhenItsHeadingIsRecent)
+{
+    // heading_pad_sigma_deg (10) where the pad's heading is the
+    // magnetometer's -- a sample through the calibration, size and dip gates
+    // fused within heading_mag_recent_s (5 s) of the launch edge -- else
+    // heading_pad_sigma_fallback_deg (30).
+    constexpr uint8_t kCal = gnss_raw::kShadowMagCalibrated;
+    const RawGnssShadow::Config d;
+    EXPECT_DOUBLE_EQ(d.heading_pad_sigma_deg, 10.0);
+    EXPECT_DOUBLE_EQ(d.heading_pad_sigma_fallback_deg, 30.0);
+    EXPECT_DOUBLE_EQ(d.heading_mag_recent_s, 5.0);
+    {
+        SCOPED_TRACE("calibrated to the launch");
+        RawGnssShadow sh(actCfg());
+        EXPECT_NEAR(launchPrior(sh, {{10.0, kCal, 0.0}}), 10.0, 0.5);
+        EXPECT_EQ(sh.stats().heading_act_launches, 1u);
+        EXPECT_EQ(sh.stats().heading_mag_launches, 1u);
+        EXPECT_EQ(sh.stats().heading_launch_mag, 1);
+        EXPECT_FLOAT_EQ(sh.stats().heading_launch_prior_deg, 10.0f);
+        EXPECT_LT(sh.stats().heading_launch_mag_age_s, 0.1f);
+        EXPECT_EQ(sh.stats().heading_unset_launches, 0u);
+    }
+    {
+        SCOPED_TRACE("uncalibrated: none fused");
+        RawGnssShadow sh(actCfg());
+        EXPECT_NEAR(launchPrior(sh, {{10.0, 0, 0.0}}), 30.0, 0.5);
+        EXPECT_EQ(sh.stats().heading_mag_launches, 0u);
+        EXPECT_EQ(sh.stats().heading_launch_mag, 0);
+        EXPECT_LT(sh.stats().heading_launch_mag_age_s, 0.0f);
+        EXPECT_EQ(sh.stats().heading_unset_launches, 1u);
+    }
+    {
+        SCOPED_TRACE("stale: calibrated, then refused for the last 6 s (the calibration gone)");
+        RawGnssShadow sh(actCfg());
+        EXPECT_NEAR(launchPrior(sh, {{10.0, kCal, 0.0}, {6.0, 0, 0.0}}), 30.0, 0.5);
+        EXPECT_EQ(sh.stats().heading_launch_mag, 0);
+        EXPECT_NEAR(sh.stats().heading_launch_mag_age_s, 6.0f, 0.1f);
+        EXPECT_EQ(sh.stats().heading_unset_launches, 0u);   // it had one: not an unset launch
+    }
+    {
+        SCOPED_TRACE("recent: refused for the last 4 s only");
+        RawGnssShadow sh(actCfg());
+        EXPECT_NEAR(launchPrior(sh, {{10.0, kCal, 0.0}, {4.0, 0, 0.0}}), 10.0, 0.5);
+        EXPECT_EQ(sh.stats().heading_launch_mag, 1);
+        EXPECT_NEAR(sh.stats().heading_launch_mag_age_s, 4.0f, 0.1f);
+    }
+    {
+        SCOPED_TRACE("the dip gate refusing every sample");
+        RawGnssShadow sh(actCfg());
+        EXPECT_NEAR(launchPrior(sh, {{10.0, kCal, 10.0}}), 30.0, 0.5);
+        EXPECT_EQ(sh.stats().mag_fused, 0u);
+        EXPECT_GE(sh.stats().mag_dip, 495u);
+        EXPECT_EQ(sh.stats().heading_launch_mag, 0);
+    }
+    {
+        SCOPED_TRACE("the dip gate refusing for the last 6 s");
+        RawGnssShadow sh(actCfg());
+        EXPECT_NEAR(launchPrior(sh, {{10.0, kCal, 0.0}, {6.0, kCal, 10.0}}), 30.0, 0.5);
+        EXPECT_GE(sh.stats().mag_dip, 295u);
+        EXPECT_EQ(sh.stats().heading_launch_mag, 0);
+    }
+    {
+        SCOPED_TRACE("observe: no prior set");
+        RawGnssShadow::Config c = primaryCfg();
+        c.heading_mode = RawGnssShadow::kHeadingObserve;
+        RawGnssShadow sh(c);
+        EXPECT_LT(launchPrior(sh, {{10.0, kCal, 0.0}}), 1.0);
+        EXPECT_EQ(sh.stats().heading_act_launches, 0u);
+    }
+    {
+        SCOPED_TRACE("the priors as configured");
+        RawGnssShadow::Config c = actCfg();
+        c.heading_pad_sigma_deg = 7.0;
+        c.heading_pad_sigma_fallback_deg = 45.0;
+        RawGnssShadow a(c), b(c);
+        EXPECT_NEAR(launchPrior(a, {{10.0, kCal, 0.0}}), 7.0, 0.5);
+        EXPECT_NEAR(launchPrior(b, {{10.0, 0, 0.0}}), 45.0, 0.5);
+    }
 }
 
 TEST(RawGnssShadow, TheNavigationFilterStartsInFlightFromARestoredFlight)
@@ -3337,9 +3459,10 @@ TEST(RawGnssShadow, ActLetsTheTiltGoToItsLaunchFloor)
         EXPECT_NEAR(plain.att_sigma_launch[i], plain.att_sigma_pad[i], 1.0e-3f * plain.att_sigma_pad[i]) << i;
         EXPECT_NEAR(observe.att_sigma_launch[i], observe.att_sigma_pad[i], 1.0e-3f * observe.att_sigma_pad[i]) << i;
     }
-    // the heading's is act's own either way
-    EXPECT_NEAR(act.att_sigma_launch[2] * 180.0 / kPi, RawGnssShadow::Config().heading_pad_sigma_deg, 0.1);
-    EXPECT_NEAR(plain.att_sigma_launch[2] * 180.0 / kPi, RawGnssShadow::Config().heading_pad_sigma_deg, 0.1);
+    // the heading's is act's own either way (no magnetometer here: the fallback)
+    EXPECT_NEAR(act.att_sigma_launch[2] * 180.0 / kPi, RawGnssShadow::Config().heading_pad_sigma_fallback_deg, 0.1);
+    EXPECT_NEAR(plain.att_sigma_launch[2] * 180.0 / kPi, RawGnssShadow::Config().heading_pad_sigma_fallback_deg,
+                0.1);
 }
 
 // ------------------------------------------- the carrier range rate (#1600)

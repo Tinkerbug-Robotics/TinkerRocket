@@ -3220,6 +3220,7 @@ static void rawShadowTask(void*)
     uint32_t unset_launches = 0;   // #1590: launches with no magnetometer heading, said so
     uint32_t gate_apogee = 0;      // act's full gates opened at the apogee call, said so
     uint32_t boost_dropped = 0;    // boost epochs the boost screen dropped, said so
+    uint32_t act_launches = 0;     // act's launch priors, said so
     for (;;)
     {
         const int64_t a0 = esp_timer_get_time();
@@ -3306,10 +3307,28 @@ static void rawShadowTask(void*)
             if (sh.config().heading_mode == gnss_raw::RawGnssShadow::kHeadingAct)
                 ESP_LOGE(TAG, "[RAWGNSS] *** LAUNCH WITH NO MAGNETOMETER HEADING: act claims a %.0f deg heading "
                               "1-sigma about the start's guess (its own was %.0f deg) -- OVERCONFIDENT ***",
-                         sh.config().heading_pad_sigma_deg, (double)sh.stats().heading_launch_sigma_deg);
+                         sh.config().heading_pad_sigma_fallback_deg, (double)sh.stats().heading_launch_sigma_deg);
             else
                 ESP_LOGW(TAG, "[RAWGNSS] launch with no magnetometer heading: the heading is the start's guess, "
                               "1-sigma %.0f deg", (double)sh.stats().heading_launch_sigma_deg);
+        }
+        // act's launch prior: the magnetometer's heading's, or the fallback, once a flight
+        if (sh.stats().heading_act_launches != act_launches)
+        {
+            act_launches = sh.stats().heading_act_launches;
+            const gnss_raw::RawGnssShadow::Stats& hs = sh.stats();
+            if (hs.heading_launch_mag)
+                ESP_LOGI(TAG, "[RAWGNSS] act: launch heading 1-sigma %.0f deg, the magnetometer's (its last heading "
+                              "%.2f s before the launch edge)",
+                         (double)hs.heading_launch_prior_deg, (double)hs.heading_launch_mag_age_s);
+            else if (hs.heading_launch_mag_age_s >= 0.0f)
+                ESP_LOGW(TAG, "[RAWGNSS] act: launch heading 1-sigma %.0f deg, the fallback: the magnetometer's last "
+                              "heading was %.1f s before the launch edge (more than %.0f s)",
+                         (double)hs.heading_launch_prior_deg, (double)hs.heading_launch_mag_age_s,
+                         sh.config().heading_mag_recent_s);
+            else
+                ESP_LOGW(TAG, "[RAWGNSS] act: launch heading 1-sigma %.0f deg, the fallback: no magnetometer heading",
+                         (double)hs.heading_launch_prior_deg);
         }
         // act, the full gate from the apogee call (kGateFullApogee): once a flight
         if (sh.stats().heading_gate_apogee != gate_apogee)
@@ -3456,6 +3475,7 @@ static void rawShadowTask(void*)
                 const gnss_raw::HeadingFit::Result& hr = st.heading_last;
                 ESP_LOGI(TAG, "[RAWGNSS] heading fit (%s): seeds %lu, flights %lu, epochs %lu (no velocity %lu) | "
                               "launches with no magnetometer heading %lu (the last launch's own 1-sigma %.1f deg) | "
+                              "act's launch prior: the magnetometer's at %lu of %lu launches (last %.0f deg) | "
                               "last: turn %+.1f deg, 1-sigma %.1f deg, %d epochs (%d cut), rivals %lu | handed %lu "
                               "(%+.1f deg at T+%.1f s) | act's gate %s, opened in full at the apogee call %lu | "
                               "cost: velocity %lu us (max %lu), fit %lu us (max %lu), step max %lu us | task stack "
@@ -3463,7 +3483,9 @@ static void rawShadowTask(void*)
                          TR_HEADING_FIT == 2 ? "act" : "observe", (unsigned long)st.heading_seeds,
                          (unsigned long)st.heading_flights, (unsigned long)st.heading_epochs,
                          (unsigned long)st.heading_vel_fails, (unsigned long)st.heading_unset_launches,
-                         (double)st.heading_launch_sigma_deg, hr.psi * 57.29578, hr.sigma > 0.0 ? hr.sigma * 57.29578 : -1.0,
+                         (double)st.heading_launch_sigma_deg, (unsigned long)st.heading_mag_launches,
+                         (unsigned long)st.heading_act_launches, (double)st.heading_launch_prior_deg,
+                         hr.psi * 57.29578, hr.sigma > 0.0 ? hr.sigma * 57.29578 : -1.0,
                          hr.n, hr.n_cut, (unsigned long)st.heading_rivals, (unsigned long)st.heading_handoffs,
                          (double)st.heading_turn_deg,
                          (double)st.heading_handoff_s,
@@ -3672,9 +3694,19 @@ static void startRawShadow()
     }
     cfg.heading_mode = TR_HEADING_FIT;   // the heading from thrust (config.h)
 #ifdef TR_BENCH_HEADING_PAD_SIGMA_DEG
-    cfg.heading_pad_sigma_deg = TR_BENCH_HEADING_PAD_SIGMA_DEG;   // bench: act's heading 1-sigma from launch
-    ESP_LOGW(TAG, "[RAWGNSS] BENCH: act's heading 1-sigma from launch %.1f deg (TR_BENCH_HEADING_PAD_SIGMA_DEG)",
+    // bench: act's heading 1-sigma from launch where the pad's heading is the
+    // magnetometer's (fused through its gates just before launch)
+    cfg.heading_pad_sigma_deg = TR_BENCH_HEADING_PAD_SIGMA_DEG;
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: act's heading 1-sigma from launch %.1f deg with the magnetometer's heading "
+                  "(TR_BENCH_HEADING_PAD_SIGMA_DEG)",
              cfg.heading_pad_sigma_deg);
+#endif
+#ifdef TR_BENCH_HEADING_PAD_SIGMA_FALLBACK_DEG
+    // bench: and without it (none, none calibrated, or none lately)
+    cfg.heading_pad_sigma_fallback_deg = TR_BENCH_HEADING_PAD_SIGMA_FALLBACK_DEG;
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: act's heading 1-sigma from launch %.1f deg without the magnetometer's heading "
+                  "(TR_BENCH_HEADING_PAD_SIGMA_FALLBACK_DEG)",
+             cfg.heading_pad_sigma_fallback_deg);
 #endif
 #ifdef TR_BENCH_HEADING_HANDOFF_DEG
     cfg.heading_handoff_deg = TR_BENCH_HEADING_HANDOFF_DEG;       // bench: below 0, never handed over

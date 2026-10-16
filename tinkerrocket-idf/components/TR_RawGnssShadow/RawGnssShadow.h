@@ -88,7 +88,7 @@
 // launch takes each raw epoch's Doppler velocity -- an epoch's work gains a
 // step for it, between the checks and the receiver clock -- logging each fit
 // (HEADING_FIT_MSG). Observe: that is all. Act: from launch the filter's
-// heading has heading_pad_sigma_deg (the magnetometer's, not the pad's
+// heading has the launch prior (below: the magnetometer's, not the pad's
 // near-certainty), its tilt at least heading_launch_tilt_sigma_deg if that
 // is set (the pad cannot tell its tilt from an accelerometer bias, #1626
 // K1), and GNSS reaches its attitude only about the vertical
@@ -111,14 +111,33 @@
 // a 1-sigma of 5 deg, 9.8 deg off, was handed over.) The epoch's two units
 // (its Doppler velocity, then the fit) are each one slice at most.
 //
+// Act's launch prior: the heading's 1-sigma from the launch edge on. The
+// magnetometer's heading, calibrated, is good to about 4-5 deg on the Beetle
+// in its flight configuration (10 until that is measured again); a wider
+// prior only lets a thin boost epoch throw a right heading about -- in the
+// offline replay a 3-satellite epoch moved one 10-15 deg at a 30 deg prior
+// and a magnetometer error of 0, at 10 deg 2.6 at most. So where the pad's
+// heading is the magnetometer's -- a sample through the calibration, size
+// and dip gates (applyMag) fused within heading_mag_recent_s of the launch
+// edge -- the prior is heading_pad_sigma_deg (10); otherwise
+// heading_pad_sigma_fallback_deg (30). The window: the magnetometer is
+// taken only on the ground at g's size, so the last sample before the edge
+// is at least the ignition-to-verdict delay old (0.1-0.4 s on the rig), and a
+// start that keeps the force off g's size or an igniter's current that the
+// gates refuse can add a second or two; a magnetometer silent or refused for
+// longer than 5 s before launch is no longer the heading's source (the
+// gyro's drift over that time is a few tenths of a degree at most, but
+// whatever stopped the gates passing it is unexplained). The shadow (not
+// the navigation filter) takes no magnetometer of its own: the fallback.
+//
 // A launch with no magnetometer heading (#1590). Where the pad fused none --
 // no magnetometer, or none calibrated -- the heading at launch is the start's
 // guess (main.cpp's PAD_HEADING_DEG about the vertical), its 1-sigma p0_hdg's
 // 57 deg grown to ~76 over a long pad by the vertical gyro bias's. Act's
-// heading_pad_sigma_deg is then claimed about a heading nothing measured.
-// Each launch's own heading 1-sigma (before act's) is kept in the stats, and
-// a launch with no magnetometer heading counted (heading_unset_launches), for
-// the flight computer to say loudly; the priors are as they were.
+// fallback prior is then claimed about a heading nothing measured. Each
+// launch's own heading 1-sigma (before act's) is kept in the stats, and a
+// launch with no magnetometer heading counted (heading_unset_launches), for
+// the flight computer to say loudly.
 //
 // The boost screen (boost_screen, boost_screen_g). A receiver losing lock in
 // the boost can hand over an epoch whose Dopplers are tens of m/s off: on the
@@ -281,7 +300,10 @@ public:
                                                  //   than this many of their combined 1-sigmas apart: the filter
                                                  //   lost, not just unsure (0: whatever the filter's) --
         double   heading_handoff_sure_deg = 3.0; //   unless the fit's 1-sigma is at or under this
-        double   heading_pad_sigma_deg = 30.0;   // act: the heading's 1-sigma from launch on
+        double   heading_pad_sigma_deg = 10.0;   // act: the heading's 1-sigma from launch on, where the pad's is
+                                                 //   the magnetometer's (above)
+        double   heading_pad_sigma_fallback_deg = 30.0;   // act: and where it is not
+        double   heading_mag_recent_s = 5.0;     // act: the magnetometer's when it fused within this of the launch edge
         double   heading_launch_tilt_sigma_deg = 0.0;   // act: and the tilt's at least this from launch
                                                         //   (the pad's is the accelerometer bias's too,
                                                         //   #1626 K1; 0: off)
@@ -411,6 +433,11 @@ public:
         uint32_t heading_vel_fails = 0;    //   with no Doppler velocity (too few satellites agreeing)
         uint32_t heading_unset_launches = 0;  // launches whose pad fused no magnetometer heading (#1590)
         float    heading_launch_sigma_deg = 0.0f;   // the last launch's own heading 1-sigma, before act's prior
+        float    heading_launch_mag_age_s = -1.0f;  //   its last magnetometer heading, this long before (-1: none)
+        uint32_t heading_act_launches = 0; // act: launch edges that set the prior
+        uint32_t heading_mag_launches = 0; //   of them, with the magnetometer's heading (heading_pad_sigma_deg)
+        float    heading_launch_prior_deg = 0.0f;   //   the last one's prior,
+        uint8_t  heading_launch_mag = 0;   //   1: the magnetometer's (heading_pad_sigma_deg), 0: the fallback
         uint32_t heading_gate_apogee = 0;  // act: full gates opened at the apogee call (kGateFullApogee)
         float    heading_gate_apogee_s = 0.0f;   //   the last, after the launch edge (-1: a restored flight's)
         uint32_t heading_handoffs = 0;     // headings handed over
@@ -637,11 +664,12 @@ private:
     ShadowMag     mag_ = {};            // the latest magnetometer sample, not yet applied
     bool          have_mag_ = false;
     uint32_t      mag_fused_run_ = 0;   // magnetometer headings fused since the start (on the ground)
+    double        last_mag_fused_t_ = -1.0e9;   //   the last, filter time
     bool          restored_ = false;    // started in flight from a restored flight
     uint8_t       start_gen_ = 0;       // the seed's start_gen it started from
     double        last_aided_t_ = -1.0e9;   // raw measurements last applied
     double        last_baro_fused_t_ = -1.0e9;
-    void          applyMag(const float acc[3]);
+    void          applyMag(double t, const float acc[3]);
     void          applyBaro(double t, uint8_t imu_flags);
     // the heading from thrust
     HeadingFit    fit_;
