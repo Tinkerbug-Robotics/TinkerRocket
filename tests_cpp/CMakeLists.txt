@@ -1407,6 +1407,17 @@ foreach(BOARD V7 V8 V9 V10 M1)
     target_link_libraries(test_i2s_link_budget_${BOARD} GTest::gtest_main)
     gtest_discover_tests(test_i2s_link_budget_${BOARD} TEST_PREFIX "${BOARD}.")
 endforeach()
+# The V9 flying a mosaic-G5 (-DTR_GNSS_MOSAIC=1): its SBF stream on the same link.
+add_executable(test_i2s_link_budget_V9_MOSAIC test_i2s_link_budget.cpp)
+target_include_directories(test_i2s_link_budget_V9_MOSAIC PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+target_compile_definitions(test_i2s_link_budget_V9_MOSAIC PRIVATE TR_BOARD_V9=1 TR_GNSS_DRIVER_MOSAIC=1)
+target_link_libraries(test_i2s_link_budget_V9_MOSAIC GTest::gtest_main)
+gtest_discover_tests(test_i2s_link_budget_V9_MOSAIC TEST_PREFIX "V9_MOSAIC.")
 
 # ---------- test_imu_rate_board_parity (#1485) ----------
 # The FC and the OC each state the fastest IMU rate their board flies: the FC
@@ -1538,6 +1549,35 @@ target_include_directories(test_lc86_parser PRIVATE
 )
 target_link_libraries(test_lc86_parser GTest::gtest_main)
 gtest_discover_tests(test_lc86_parser)
+
+# ---------- test_sbf_parser / test_mosaic_link ----------
+# The protocol half of the V9's Septentrio mosaic-G5 driver
+# (TR_GNSSReceiverMosaic_Serial): SbfParser.cpp splits the receiver's stream
+# into CRC-checked SBF blocks, command-reply lines and prompts and decodes the
+# blocks the driver reads (PVTGeodetic -> GNSSData on the u-blox driver's
+# scale); MosaicLink.cpp finds and sets up the receiver whatever state it is
+# in (booting, factory baud, already saved, reset in flight) against a
+# scripted receiver; PpsPairer.h pairs 1PPS edges with GPS seconds. All three
+# are IDF-free; the UART and interrupt glue is not compiled here.
+add_executable(test_sbf_parser test_sbf_parser.cpp
+    ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial/SbfParser.cpp
+)
+target_include_directories(test_sbf_parser PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_sbf_parser GTest::gtest_main)
+gtest_discover_tests(test_sbf_parser)
+
+add_executable(test_mosaic_link test_mosaic_link.cpp
+    ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial/MosaicLink.cpp
+)
+target_include_directories(test_mosaic_link PRIVATE
+    ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial
+)
+target_link_libraries(test_mosaic_link GTest::gtest_main)
+gtest_discover_tests(test_mosaic_link)
 
 # ---------- test_gnss_raw ----------
 # Host test for TR_GNSSRaw, what a raw-measurement (tightly coupled) GNSS/INS

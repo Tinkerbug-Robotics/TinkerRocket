@@ -79,6 +79,11 @@ struct board_pins
     //                          i.e. a module OUTPUT; an INPUT to the FC.
     //   gnss-px1105r-...-ext-ant  J4.5 -> net RXD2 -> U1.15 RXD2
     //                          i.e. a module INPUT; an OUTPUT from the FC.
+    //   mosaic-go G5 harness   J1.5 <- 1k <- the receiver's PPS (10-pin
+    //                          socket pin 8); J1.1/J1.2 to its COM1 through
+    //                          1k each; J1.3 not used. A module OUTPUT, so an
+    //                          FC input, read only by the mosaic build
+    //                          (-DTR_GNSS_MOSAIC=1) as the 1PPS.
     //
     // This used to read "GNSS_RXD2 on GPIO2 (the receiver's second UART) is
     // unused by firmware", which is only true of the px1105r.  Implementing
@@ -89,13 +94,15 @@ struct board_pins
     // 1 PPS the SAM-M10Q carrier already routes to a P4 GPIO is being thrown
     // away because the header called it a UART line.
     //
-    // Nothing in firmware distinguishes the carriers at runtime — the board
-    // header hard-selects the UBlox driver and TR_GNSSReceiverUBlox_Serial has
+    // Nothing in firmware distinguishes the carriers at runtime — the default
+    // build hard-selects the UBlox driver and TR_GNSSReceiverUBlox_Serial has
     // no carrier identification.  So GPIO2 stays unused: do not use it without
     // first establishing which carrier is fitted (NVS, or the UBX MON-VER that
-    // begin() already reads).
+    // begin() already reads).  The mosaic build establishes it by being built
+    // (config.h GNSS_PPS_PIN), and still never drives the pin.
     static constexpr uint8_t GNSS_RX = 3;   // FC receives; module TXD drives this
     static constexpr uint8_t GNSS_TX = 4;   // FC drives;   module RXD listens here
+    static constexpr int8_t  GNSS_J1_PIN5 = 2;   // net GNSS_RXD2: carrier-dependent, see above
     static constexpr int8_t GNSS_RESET_N = -1;
     static constexpr int8_t GNSS_SAFEBOOT_N = -1;
 

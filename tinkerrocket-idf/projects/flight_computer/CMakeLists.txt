@@ -196,6 +196,20 @@ elseif(TR_BOARD_V9)
     message(STATUS "flight_computer: magnetometer driver auto (IIS2MDC or QMC5883P, TR_MAG_DRIVER_AUTO=1)")
     message(STATUS "flight_computer: sdkconfig overlay sdkconfig.defaults.v9 (comments only since #916 — boot NOR keeps the base 8 MB declaration, sized to the partition table)")
 endif()
+# A V9 flying a Septentrio mosaic-G5 on J1 instead of its u-blox carrier
+# (`idf.py -B build_v9_mosaic -DTR_BOARD_V9=1 -DTR_GNSS_MOSAIC=1 build`). The
+# same seam as TR_GNSS_DRIVER_LC86 on the M1: the driver is the build's
+# choice, and config.h refuses it on any other board. Its own overlay puts the
+# UART interrupt in IRAM: at 2 Mbaud the RX FIFO lasts 0.64 ms, shorter than a
+# flash write keeps a cache-dependent interrupt waiting.
+if(TR_GNSS_MOSAIC)
+    if(NOT TR_BOARD_V9)
+        message(FATAL_ERROR "TR_GNSS_MOSAIC is for the V9 (-DTR_BOARD_V9=1): its J1 is where the harness lands")
+    endif()
+    add_compile_definitions(TR_GNSS_DRIVER_MOSAIC=1)
+    list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.mosaic")
+    message(STATUS "flight_computer: GNSS driver Septentrio mosaic-G5 (TR_GNSS_DRIVER_MOSAIC=1), overlay sdkconfig.defaults.mosaic")
+endif()
 set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)

@@ -202,6 +202,20 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 #endif
 #endif
 
+// The V9 flying a Septentrio mosaic-G5 on J1 (-DTR_GNSS_MOSAIC=1,
+// CMakeLists.txt). The driver is the build's choice, like the M1's LC86G; the
+// harness puts the receiver's 1PPS on J1 pin 5, which only this build reads,
+// and only as an input (board_v9.h). Refused anywhere else: the M1's receiver
+// is soldered on, and no other board's J1 has been checked for this harness.
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if !TR_BOARD_V9
+#error "TR_GNSS_DRIVER_MOSAIC is a V9 build (-DTR_BOARD_V9=1 -DTR_GNSS_MOSAIC=1)"
+#endif
+#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+#error "One GNSS driver per build: TR_GNSS_DRIVER_MOSAIC and TR_GNSS_DRIVER_LC86 are both set"
+#endif
+#endif
+
 // #1600 phase 4: the raw-GNSS shadow filter (TR_RawGnssShadow, main.cpp's
 // "raw-GNSS shadow filter" section).  It needs the LC86G's raw MSM7, so it
 // runs wherever that driver is and nowhere else; -DTR_RAW_GNSS_SHADOW=0 builds
@@ -271,8 +285,19 @@ struct config : board_pins
     static constexpr uint16_t GNSS_UPDATE_RATE = TR_GNSS_RATE_HZ;
     static_assert(TR_GNSS_RATE_HZ >= 1 && TR_GNSS_RATE_HZ <= 25,
                   "TR_GNSS_RATE_HZ must be 1-25 Hz");
+#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // Not an over-request: the mosaic-G5 makes what its streams ask for, and
+    // its permission file allows 20 Hz, position and measurements alike. The
+    // poll task runs at twice this (every 25 ms).
+    static constexpr uint16_t GNSS_UPDATE_RATE = 20;
 #else
     static constexpr uint16_t GNSS_UPDATE_RATE = 18;
+#endif
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // Where the receiver's 1PPS lands: J1 pin 5 through the harness's 1 kOhm.
+    static constexpr int8_t GNSS_PPS_PIN = GNSS_J1_PIN5;
+#else
+    static constexpr int8_t GNSS_PPS_PIN = -1;
 #endif
     static constexpr uint16_t BMP585_UPDATE_RATE = 500;
     // MMC5983MA hardware supports 1/10/20/50/100/200/1000 Hz only.

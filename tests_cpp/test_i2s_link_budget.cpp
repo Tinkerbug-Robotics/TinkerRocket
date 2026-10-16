@@ -16,6 +16,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 
 #include "RocketComputerTypes.h"
 #include "config.h"          // flight_computer/main/config.h
@@ -50,12 +51,33 @@ double imuBatched(double rate_hz)
 // ($PAIR436,1): measured at exactly one message a second (Beetle,
 // 2026-10-12), budgeted at the largest, BeiDou's 1042 (64 B + 6 of framing).
 // Zero on u-blox boards, which emit none.
+// The same record on the V9 with a mosaic-G5 carries its SBF blocks (TR_GNSS_DRIVER_MOSAIC):
+// MeasEpoch, MeasExtra and PVTGeodetic at 20 Hz, status at 1 Hz. The
+// 2026-10-15 spin-rig capture (33 satellites, ~99 signals) measured MeasEpoch
+// 1,495 B, MeasExtra 1,631 B and PVTGeodetic 96 B; budgeted here at 45
+// satellites and 130 signals: MeasEpoch 20 B + 20 a satellite + 12 a further
+// signal, MeasExtra 20 B + 16 a signal, each block split into 219-byte parts
+// with the record header and I2S framing on each. The status blocks measured
+// 1.4 kB/s; budgeted at 2.2. The navigation data is a few blocks a minute
+// (and one ~7 kB burst after launch, under a second of the headroom).
+double gnssSbfBlock(double bytes)
+{
+    const double parts = std::ceil(bytes / (double)GNSS_RTCM_MAX_CHUNK);
+    return bytes + parts * (double)(sizeof(GnssRtcmHeader) + kFrameOverhead);
+}
+
 double gnssRtcmInflow()
 {
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
     const double msgs_per_sec = 5.0 + 1.0;
     const double frame_bytes  = 40.0 * 15.0 + 5.0 * (22.0 + 6.0) + 1.0 * (64.0 + 6.0);
     return frame_bytes + msgs_per_sec * (double)(sizeof(GnssRtcmHeader) + kFrameOverhead);
+#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    const double sats = 45.0, signals = 130.0;
+    const double meas_epoch = 20.0 + 20.0 * sats + 12.0 * (signals - sats);
+    const double meas_extra = 20.0 + 16.0 * signals;
+    const double per_epoch = gnssSbfBlock(meas_epoch) + gnssSbfBlock(meas_extra) + gnssSbfBlock(96.0);
+    return (double)config::GNSS_UPDATE_RATE * per_epoch + 2200.0;
 #else
     return 0.0;
 #endif

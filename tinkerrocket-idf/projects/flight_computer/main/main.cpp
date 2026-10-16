@@ -5609,6 +5609,8 @@ static void setup_fc()
     if (!sensor_collector.enableGNSSRawOutputs())
         ESP_LOGE(TAG, "[RAWGNSS] no memory for the raw GNSS queues");
 #endif
+    // The mosaic-G5's 1PPS (J1 pin 5); -1 and a no-op on every other build.
+    sensor_collector_hw.setGNSSPpsPin(config::GNSS_PPS_PIN);
     sensor_collector.begin(config::SENSOR_CORE);
 #if TR_RAW_GNSS_SHADOW
     startRawShadow();
@@ -6612,6 +6614,11 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     // qualifies after burnout.  The GNSS-minus-baro pad offset it will be
     // judged against is frozen now.
     GnssAscentGate::onLaunch(gnss_admit_state, now_ms);
+    // The mosaic-G5 sent every ephemeris when it first decoded it, long before
+    // this flight's log began: ask for them all again so the log holds what a
+    // replay of its raw measurements needs. A flag for the GNSS poll task;
+    // no-op on other receivers.
+    sensor_collector_hw.requestGNSSNavResend();
     ESP_LOGI(TAG, "[GNSS] Vertical held out of the EKF and the apogee vote until it "
                   "agrees with the barometer after burnout (pad offset %+.1f m%s)",
              (double)gnss_admit_state.pad_offset_m,
@@ -7043,12 +7050,18 @@ static void loop_fc()
     // The receiver's raw RTCM3 frames (GNSS_RTCM_MSG), verbatim, so a flight
     // can be reconstructed later: on the mini the LC86G's MSM7, ~5 frames once
     // a second, and one ephemeris message a second; ~600 B/s with the
-    // framing.  Log-only.  A frame longer than one
-    // payload goes as consecutive parts (gnssRtcmParts).  Bounded per pass so
-    // a backlog from boot drains over a few passes rather than in one burst
-    // into the I2S queue.  Static buffers: ~1.3 kB off this task's stack.
+    // framing.  On a V9 with a mosaic-G5 the same record carries its SBF
+    // blocks: ~60 a second, ~70 kB/s with the framing.  Log-only.  A frame
+    // longer than one payload goes as consecutive parts (gnssRtcmParts).
+    // Bounded per pass so a backlog from boot drains over a few passes rather
+    // than in one burst into the I2S queue.  Static buffers: ~1.3 kB (~3.5 kB
+    // on the mosaic build) off this task's stack.
     {
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+        static uint8_t rtcm_frame[GNSS_SBF_MAX_FRAME];   // an SBF block, up to 15 parts
+#else
         static uint8_t rtcm_frame[GNSS_RTCM_MAX_FRAME];
+#endif
         static uint8_t rtcm_record[MAX_PAYLOAD];
         size_t   frame_len = 0;
         uint32_t frame_us  = 0;

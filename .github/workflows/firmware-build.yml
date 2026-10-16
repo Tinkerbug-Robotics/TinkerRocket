@@ -49,6 +49,12 @@ jobs:
             project: flight_computer
             board: V9
             flags: -B build_v9 -DTR_BOARD_V9=1
+          # The V9 flying a Septentrio mosaic-G5 on J1 (TR_GNSS_DRIVER_MOSAIC):
+          # the same board, another GNSS driver. It pairs with the V9 out_computer.
+          - line: Tinker-Mantis
+            project: flight_computer
+            board: V9-mosaic
+            flags: -B build_v9_mosaic -DTR_BOARD_V9=1 -DTR_GNSS_MOSAIC=1
           - line: Tinker-Mantis
             project: out_computer
             board: V9

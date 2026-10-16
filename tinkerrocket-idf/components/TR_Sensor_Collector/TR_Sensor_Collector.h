@@ -38,13 +38,17 @@
 #include "ism6_fifo_decoder.h"
 #include "imu_sample_clock.h"
 // GNSS driver is a compile-time seam: the rocket-computer boards carry a
-// u-blox receiver, the mini carries a Quectel LC86G. Both drivers expose the
-// identical begin/pollNewPVT/getGNSSData surface and produce the same
-// GNSSData, so the selection is the type alone. Projects opt in with
-// add_compile_definitions(TR_GNSS_DRIVER_LC86=1) at project level (same
-// pattern as TR_GUIDANCE_AVAILABLE); default is u-blox, unchanged.
+// u-blox receiver, the mini carries a Quectel LC86G, and a V9 can fly a
+// Septentrio mosaic-G5 on J1 instead of its u-blox carrier. All three drivers
+// expose the identical begin/pollNewPVT/getGNSSData surface and produce the
+// same GNSSData, so the selection is the type alone. Projects opt in with
+// add_compile_definitions(TR_GNSS_DRIVER_LC86=1) or TR_GNSS_DRIVER_MOSAIC=1
+// at project level (same pattern as TR_GUIDANCE_AVAILABLE); default is
+// u-blox, unchanged.
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
 #include <TR_GNSSReceiverLC86_Serial.h>
+#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#include <TR_GNSSReceiverMosaic_Serial.h>
 #else
 #include <TR_GNSSReceiverUBlox_Serial.h>
 #endif
@@ -231,11 +235,18 @@ public:
     // epoch from the u-blox, about once a second from the LC86G's GSV.  Same
     // pop-once contract as getGNSSData(): true at most once per epoch.
     bool getGNSSSatData(GNSSSatData &data_out);
-    // Raw RTCM3 frames from the GNSS receiver (GNSS_RTCM_MSG), oldest first:
-    // ~5 a second from the LC86G's MSM7, never from the u-blox.  Drains a
-    // ring the GNSS poll task fills, so call it until it returns false.
-    // `cap` must be GNSS_RTCM_MAX_FRAME.
+    // Raw frames from the GNSS receiver (GNSS_RTCM_MSG), oldest first: ~5 a
+    // second of RTCM3 from the LC86G's MSM7, ~60 SBF blocks a second from the
+    // mosaic-G5, never anything from the u-blox.  Drains a ring the GNSS poll
+    // task fills, so call it until it returns false.  `cap` must be
+    // GNSS_RTCM_MAX_FRAME (LC86G) or GNSS_SBF_MAX_FRAME (mosaic-G5).
     bool getGNSSRtcmFrame(uint8_t* out, size_t cap, size_t& len, uint32_t& time_us);
+    // mosaic-G5 only (no-ops elsewhere): the pin its 1PPS reaches, set before
+    // begin(); and a request to send every navigation block it holds once
+    // more, from any task (the flight log starts at launch, long after the
+    // receiver first sent them).
+    void setGNSSPpsPin(int8_t pin);
+    void requestGNSSNavResend();
     // Raw GNSS measurements for the raw-GNSS shadow filter (#1600), from the
     // LC86G's MSM7 and broadcast ephemeris; never from the u-blox. Off until
     // enableGNSSRawOutputs() (call it before begin()). Safe from any task:
@@ -247,12 +258,13 @@ public:
     // The receiver's own fixes with their GPS instant on the MCU clock, for
     // the shadow's check of each fix against the IMU (#1508). LC86G only.
     bool getGNSSFix(gnss_raw::TimedFix& out);
-    // The LC86G's GPS-to-MCU clock line each time it moves (GNSS_CLOCK_MSG);
-    // false on other receivers.
+    // The GPS-to-MCU clock line each time it moves (GNSS_CLOCK_MSG): the
+    // LC86G's from its sentences' arrival, the mosaic-G5's from its 1PPS;
+    // false on the u-blox.
     bool getGNSSClockLine(GnssClockData& out);
     // The geoid's height above the WGS84 ellipsoid at the last fix, m
-    // (GNSSData's alt is above the geoid). LC86G only; false elsewhere or
-    // before a fix.
+    // (GNSSData's alt is above the geoid). LC86G and mosaic-G5; false
+    // elsewhere or before a fix.
     bool getGNSSGeoidSeparation(float& sep_m) const;
     void getISM6HG256DebugSnapshot(ISM6HG256DebugSnapshot &snapshot_out) const;
     void getMMC5983MADebugSnapshot(MMC5983MADebugSnapshot &snapshot_out) const;
@@ -411,6 +423,8 @@ private:
     MagDriver iis2mdc;   // the IIS2MDC-named slot; the type is the seam's choice
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
     TR_GNSSReceiverLC86Serial gnss_receiver;
+#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    TR_GNSSReceiverMosaicSerial gnss_receiver;
 #else
     TR_GNSSReceiverUBloxSerial gnss_receiver;
 #endif

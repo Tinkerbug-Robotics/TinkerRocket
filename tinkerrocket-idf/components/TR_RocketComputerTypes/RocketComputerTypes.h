@@ -1630,6 +1630,11 @@ static_assert(sizeof(GnssClockData) == 68,
               "GnssClockData must be 68 bytes");
 static constexpr uint8_t GCL_VALID   = 0x01;  // the line answers (mcuAt): 10 s of history
 static constexpr uint8_t GCL_STARTED = 0x02;  // a sample has started the history
+// The line's samples are 1PPS edges on an MCU pin, each paired with its GPS
+// second, not sentence arrivals (the mosaic-G5 on the V9: J1 pin 5). An edge
+// IS its GPS second, so latency_s is 0 and needs no calibration; time_us is
+// the edge that moved the line.
+static constexpr uint8_t GCL_PPS     = 0x04;
 
 // ── PAD_CONTEXT_MSG (0x9E): the pad, written once after launch ──────────────
 // The log's pre-launch ring keeps about 0.5-1 s before ignition, so what was
@@ -2745,7 +2750,18 @@ static constexpr uint8_t ISM6_BATCH_MAX      = 10;
 // bytes.  A frame longer than one chunk (an MSM7 with 14+ satellites of one
 // constellation) goes as consecutive parts with the same time_us; the reader
 // joins them.  No-op on u-blox boards, whose driver emits none.
-static constexpr uint8_t GNSS_RTCM_MSG       = 0x95;  // FC→OC over I2S: GnssRtcmHeader + the GNSS receiver's raw RTCM3 frame
+//
+// On the V9 with a Septentrio mosaic-G5 (TR_GNSS_DRIVER_MOSAIC) the same
+// record carries that receiver's own output instead: every SBF block whose
+// CRC checks, verbatim from "$@" ("$@" vs 0xD3 tells a reader which).  The
+// G5 has no RTCM3 output, and SBF carries more: per signal the pseudorange,
+// carrier phase, Doppler, C/N0 and lock time (MeasEpoch, 20 Hz), the
+// receiver's own noise estimates and multipath corrections (MeasExtra,
+// 20 Hz), its fix (PVTGeodetic, 20 Hz), status at 1 Hz and the navigation
+// data.  The blocks joined in order ARE a standard .sbf file
+// (Data_Analysis/extract_gnss_sbf.py).  A block takes up to 15 parts
+// (GNSS_SBF_MAX_FRAME); MeasEpoch and MeasExtra take 7-9.
+static constexpr uint8_t GNSS_RTCM_MSG       = 0x95;  // FC→OC over I2S: GnssRtcmHeader + the GNSS receiver's own frame (RTCM3 or SBF)
                                                       // (or one part of it), straight to the log.  VARIABLE length.
 
 // FC→OC over I2S: the raw-GNSS shadow filter's state (#1600), 10 Hz while it
@@ -2772,7 +2788,7 @@ static constexpr uint8_t IMU_TEMP_MSG        = 0x9C;  // FC→OC over I2S: Ism6T
                                                       // second; straight to the log.
 static constexpr uint8_t GNSS_CLOCK_MSG      = 0x9D;  // FC→OC over I2S: GnssClockData, the MCU clock against GPS time
                                                       // each time its line moves (~1 Hz); straight to the log.  LC86G
-                                                      // boards only.
+                                                      // boards, and the V9 with a mosaic-G5 (from its 1PPS: GCL_PPS).
 static constexpr uint8_t PAD_CONTEXT_MSG     = 0x9E;  // FC→OC over I2S: PadContextHeader + its kind's body, what a
                                                       // replay needs from the pad, once after launch; straight to the
                                                       // log.  VARIABLE length.
@@ -4373,6 +4389,13 @@ static constexpr uint8_t gnssRtcmParts(size_t frame_len)
 }
 static_assert(gnssRtcmParts(GNSS_RTCM_MAX_FRAME) <= 15,
               "GNSS_RTCM_MSG: the part count must fit its nibble");
+
+// The longest SBF block GNSS_RTCM_MSG carries: fifteen full parts (3,285 B).
+// The mosaic-G5's longest block, MeasExtra, is 16 B a signal: 1,812 B at the
+// ~100 signals of an open sky (2026-10-15 spin-rig capture), so ~200 fit.
+static constexpr size_t GNSS_SBF_MAX_FRAME = 15 * GNSS_RTCM_MAX_CHUNK;
+static_assert(gnssRtcmParts(GNSS_SBF_MAX_FRAME) == 15,
+              "GNSS_SBF_MAX_FRAME: fifteen parts, no more");
 
 // Frame: [0xAA][0x55][0xAA][0x55] + type + length + payload + CRC16
 static constexpr size_t MAX_FRAME = 4 + 1 + 1 + MAX_PAYLOAD + 2;

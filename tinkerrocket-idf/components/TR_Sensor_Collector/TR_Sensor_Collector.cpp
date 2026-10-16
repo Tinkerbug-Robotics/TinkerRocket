@@ -1274,7 +1274,8 @@ void SensorCollector::pollGNSSdata(void* parameter)
         const uint32_t gnss_elapsed = time_us() - gnss_t0;
         self->pt_gnss_calls++;
 
-#if defined(TR_GNSS_COCOM_DIAG) && TR_GNSS_COCOM_DIAG && !(defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86)
+#if defined(TR_GNSS_COCOM_DIAG) && TR_GNSS_COCOM_DIAG && !(defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86) \
+    && !(defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC)
         // ~1 Hz, and after the poll so the NAV-PVT cache is fresh. Deliberately
         // outside the timing accounting above: this is diagnostic load and
         // should not be charged to the GNSS parse budget it would distort.
@@ -1453,9 +1454,30 @@ bool SensorCollector::getGNSSRtcmFrame(uint8_t* out, size_t cap, size_t& len,
     // No semaphore: the driver's ring is safe between the poll task and us.
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.pollRtcmFrame(out, cap, len, time_us);
+#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // SBF blocks, through the driver's ring like the LC86G's frames.
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.pollRawFrame(out, cap, len, time_us);
 #else
     (void)out; (void)cap; (void)len; (void)time_us;
     return false;
+#endif
+}
+
+void SensorCollector::setGNSSPpsPin(int8_t pin)
+{
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    gnss_receiver.setPpsPin(pin);
+#else
+    (void)pin;
+#endif
+}
+
+void SensorCollector::requestGNSSNavResend()
+{
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // An atomic flag: the GNSS poll task sends the command.
+    if (use_gnss && gnss_online_) gnss_receiver.requestNavResend();
 #endif
 }
 
@@ -1507,6 +1529,9 @@ bool SensorCollector::getGNSSClockLine(GnssClockData& out)
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.takeClockLine(out);   // the driver's queue: no semaphore
+#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.takeClockLine(out);   // its PPS line (GCL_PPS)
 #else
     (void)out;
     return false;
@@ -1516,6 +1541,9 @@ bool SensorCollector::getGNSSClockLine(GnssClockData& out)
 bool SensorCollector::getGNSSGeoidSeparation(float& sep_m) const
 {
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.geoidSeparationM(sep_m);
+#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.geoidSeparationM(sep_m);
 #else

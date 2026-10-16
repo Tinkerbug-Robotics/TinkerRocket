@@ -124,7 +124,7 @@ this list is CI-enforced for uniqueness.
 | `0xFC` | `BS_LORA_RX_MSG` | FC → OC | BS→self: BsLoRaRxHeader + the raw LoRa frame, one per received packet |
 | `0xFD` | `BS_EVENT_MSG` | FC → OC | BS→self: BsEventHeader + UTF-8 text, one per hop/session event |
 | `0x94` | `PYRO_FAULT_TRIP_MSG` | OC → log | OC→self: 13-byte PyroFaultTripData, two per fault-current trip, straight to the log |
-| `0x95` | `GNSS_RTCM_MSG` | FC → OC | FC→OC over I2S: GnssRtcmHeader + the GNSS receiver's raw RTCM3 frame |
+| `0x95` | `GNSS_RTCM_MSG` | FC → OC | FC→OC over I2S: GnssRtcmHeader + the GNSS receiver's own frame (RTCM3 or SBF) |
 | `0x96` | `RAW_GNSS_EKF_MSG` | FC → OC | FC→OC over I2S: RawGnssEkfData, the raw-GNSS shadow filter at 10 Hz, straight to the log |
 | `0x97` | `PAD_CAL_PENDING` | OC → FC | OC→FC: pad calibration; PadCalConfigData follows as PAD_CAL_CONFIG_MSG |
 | `0x98` | `PAD_CAL_CONFIG_MSG` | OC → FC | OC→FC: 10-byte PadCalConfigData |
