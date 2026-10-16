@@ -727,6 +727,7 @@ void RawGnssShadow::start(double t)
     // step after.
     gate_full_ = false;
     boost_seen_t_ = -1.0e9;
+    vert_latch_ = false;
     if (cfg_.heading_mode == kHeadingAct)
     {
         if (restored_)
@@ -1044,6 +1045,21 @@ void RawGnssShadow::jobScreen(double age)
 {
     RawGnssStats& rs = job_.rs;
     ekf_.screenRangeRates(built_.meas, built_.n, age, rs);
+    // after a vertical drop, an epoch is dropped too unless its fit is back
+    // within vert_release_mps: too thin to fit, it is not
+    if (vert_latch_)
+    {
+        const bool back = rs.screen_fit_n >= 4
+                          && std::fabs(static_cast<double>(rs.screen_dv_down_mps)) <= cfg_.vert_release_mps;
+        if (!back)
+        {
+            st_.vert_latched++;
+            rs.screen_dropped = true;
+            job_.phase = kJobClose;
+            return;
+        }
+        vert_latch_ = false;
+    }
     if (job_.vcheck && rs.screen_fit_n >= 4)
     {
         const float dv = rs.screen_dv_down_mps;
@@ -1051,7 +1067,10 @@ void RawGnssShadow::jobScreen(double age)
         st_.vert_checked++;
         st_.vert_last_dv_down = dv;
         if (drop)
+        {
             st_.vert_dropped++;
+            vert_latch_ = cfg_.vert_release_mps > 0.0;
+        }
         else if (std::fabs(dv) > std::fabs(st_.vert_worst_dv_down))
             st_.vert_worst_dv_down = dv;
         if (drop || !job_.screen)

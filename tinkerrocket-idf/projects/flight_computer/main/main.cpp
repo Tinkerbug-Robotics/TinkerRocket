@@ -3221,6 +3221,7 @@ static void rawShadowTask(void*)
     uint32_t gate_apogee = 0;      // act's full gates opened at the apogee call, said so
     uint32_t boost_dropped = 0;    // boost epochs the boost screen dropped, said so
     uint32_t vert_dropped = 0;     // epochs the vertical check dropped, said so
+    uint32_t vert_latched = 0;     //   and after a drop, not yet back within vert_release_mps, said so
     uint32_t act_launches = 0;     // act's launch priors, said so
     for (;;)
     {
@@ -3366,6 +3367,17 @@ static void rawShadowTask(void*)
             ESP_LOGW(TAG, "[RAWGNSS] vertical check: epoch dropped, none of it fused -- its Dopplers put the vertical "
                           "velocity %+.1f m/s off the filter's (more than %.0f)",
                      (double)sh.stats().vert_last_dv_down, sh.config().vert_check_mps);
+        }
+        if (sh.stats().vert_latched != vert_latched)
+        {
+            vert_latched = sh.stats().vert_latched;
+            const gnss_raw::RawGnssStats& ls = sh.stats().last;
+            if (ls.screen_fit_n >= 4)
+                ESP_LOGW(TAG, "[RAWGNSS] vertical check: epoch held out after a drop -- its Dopplers put the vertical "
+                              "velocity %+.1f m/s off (back within %.0f lets the next in)",
+                         (double)ls.screen_dv_down_mps, sh.config().vert_release_mps);
+            else
+                ESP_LOGW(TAG, "[RAWGNSS] vertical check: epoch held out after a drop -- too few Dopplers to fit");
         }
         // back to the GNSS task: the satellites its checks found jumped
         gnss_raw::ShadowRelock rl;
@@ -3588,7 +3600,8 @@ static void rawShadowTask(void*)
                               "%lu off its dip; the last dip %+.1f deg off) "
                               "| boost screen %s: %lu epochs, %lu dropped (%lu worked through) (last: %d of %d Dopplers "
                               "refused at the prior, %d refused and %d fused worked through, %.1f g) "
-                              "| vertical check %s: %lu epochs, %lu dropped (last %+.1f m/s, largest kept %+.1f) "
+                              "| vertical check %s: %lu epochs, %lu dropped (last %+.1f m/s, largest kept %+.1f), "
+                              "%lu held after a drop "
                               "| restores %lu",
                          (unsigned long)fs.fixes, (unsigned long)fs.passed, (unsigned long)fs.flagged,
                          (unsigned long)fs.unjudged, (unsigned long)fs.lapsed,
@@ -3615,7 +3628,7 @@ static void rawShadowTask(void*)
                          st.boost_last_dry_refused, st.boost_last_dry_used, (double)st.boost_last_g,
                          sh.config().vert_check_mps > 0.0 ? "on" : "off", (unsigned long)st.vert_checked,
                          (unsigned long)st.vert_dropped, (double)st.vert_last_dv_down,
-                         (double)st.vert_worst_dv_down,
+                         (double)st.vert_worst_dv_down, (unsigned long)st.vert_latched,
                          (unsigned long)st.restores);
             }
             win_t0 = a1;
@@ -3746,8 +3759,12 @@ static void startRawShadow()
              cfg.heading_launch_tilt_sigma_deg);
 #endif
     // what the filter flies, bench or not: a flight's console says it
-    char vcheck_txt[48], screen_txt[80];
-    if (cfg.vert_check_mps > 0.0)
+    char vcheck_txt[112], screen_txt[80];
+    if (cfg.vert_check_mps > 0.0 && cfg.vert_release_mps > 0.0)
+        snprintf(vcheck_txt, sizeof(vcheck_txt),
+                 "%.0f m/s on every epoch it can fit, and after a drop every epoch until one fits within %.0f",
+                 cfg.vert_check_mps, cfg.vert_release_mps);
+    else if (cfg.vert_check_mps > 0.0)
         snprintf(vcheck_txt, sizeof(vcheck_txt), "%.0f m/s on every epoch it can fit", cfg.vert_check_mps);
     else
         snprintf(vcheck_txt, sizeof(vcheck_txt), "off");

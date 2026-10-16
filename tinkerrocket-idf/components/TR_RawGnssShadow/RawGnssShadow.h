@@ -209,6 +209,22 @@
 // row to show its vertical (7 m/s down where the boost screen refused 3 of
 // 4).
 //
+// The vertical check's latch (vert_release_mps; 5 m/s, none at 0). A
+// receiver that lost its loops can come back over seconds, not at once, and
+// the epochs on its way back fit under vert_check_mps: in the cloud
+// session's grid (2026-10-16, the firmware's clock; a whole receiver stale,
+// closing with tau = 2 s from burnout) one fitting +19.8 m/s down was fused
+// and turned the heading 18 deg, for the rest of the flight where GNSS was
+// lost after it. So after a vertical drop every epoch is dropped too until
+// one's fit is back within vert_release_mps, and one too thin to fit (under
+// four Dopplers) is dropped while it holds. On that grid, with GNSS after
+// the tail, it cut the runs over 3 deg worse than unaided from 43 to 31 of
+// 112 and the worst from 29.7 to 14.0 deg; with no fault it changed
+// nothing. The rig's receivers came back within 1 m/s at the next epoch or
+// with a 3-5 m/s tail (eca10, f4b), released at once; of 24 rig logs it
+// changed only v10, whose 2-3 Doppler epochs after its T+1 drop had turned
+// a right heading 9 deg.
+//
 // The carrier range rate (the receiver profile's cr_mode, ekf.cr_mode). Each
 // epoch's builder gives the satellites whose carrier phase was continuous
 // since the epoch before a carrier range rate (RawMeasBuilder), and the
@@ -357,6 +373,8 @@ public:
         // the vertical check (above)
         double   vert_check_mps = 20.0;          // an epoch whose Dopplers' fitted vertical is more than this off
                                                  //   the filter's is dropped (0: off)
+        double   vert_release_mps = 5.0;         //   and, after one, every epoch after it until one's fitted
+                                                 //   vertical is back within this (0: no latch)
     };
 
     // When the boost screen runs (Config::boost_screen).
@@ -520,6 +538,7 @@ public:
         uint32_t vert_dropped = 0;         //   dropped: the fit's vertical more than vert_check_mps off
         float    vert_last_dv_down = 0.0f; //   the last one's: its vertical against the filter's, m/s
         float    vert_worst_dv_down = 0.0f;//   and the largest kept (|.|), m/s
+        uint32_t vert_latched = 0;         // epochs dropped after a vertical drop, not yet back (vert_release_mps)
     };
 
     using Clock = int64_t (*)();
@@ -728,6 +747,7 @@ private:
     bool          handed_ = false;      // the heading handed over this flight
     bool          gate_full_ = false;   // act: the whole attitude's gate is open this flight
     double        boost_seen_t_ = -1.0e9;   // the filter's time the IMU last read past boost_screen_g
+    bool          vert_latch_ = false;  // a vertical drop, and no epoch back within vert_release_mps since
     bool          launch_seen_ = false; // a launch edge since the start (a restored flight has none)
     void          setFlightGate(bool full);
     void          setGroundGate();

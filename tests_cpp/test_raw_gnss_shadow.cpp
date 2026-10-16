@@ -3802,7 +3802,11 @@ namespace
 // screen_g: Config::boost_screen_g (0 judges every epoch). vcheck:
 // Config::vert_check_mps (0: off). bad_dv_ned: the bad epoch's Dopplers as a
 // receiver this much faster (NED, m/s) would have them -- a stale epoch, a
-// receiver still on the pad, has the climb's down.
+// receiver still on the pad, has the climb's down. vrelease:
+// Config::vert_release_mps (negative: the config's own). tail_down: the
+// epochs after the bad one, as a receiver this much faster down would have
+// them (a receiver closing on the truth), each cut to its tail_keep entry's
+// first satellites if that is above 0.
 struct ScreenFlight
 {
     uint8_t mode = RawGnssShadow::kHeadingAct;
@@ -3820,6 +3824,9 @@ struct ScreenFlight
     bool drop_bad = false;
     bool lost_after = false;
     double apogee_s = -1.0;
+    double vrelease = -1.0;
+    std::vector<double> tail_down;
+    std::vector<int> tail_keep;
 };
 
 struct ScreenRun
@@ -3852,6 +3859,8 @@ ScreenRun flyScreen(const ScreenFlight& o)
     cfg.boost_screen = o.screen;
     cfg.boost_screen_g = o.screen_g;
     cfg.vert_check_mps = o.vcheck;
+    if (o.vrelease >= 0.0)
+        cfg.vert_release_mps = o.vrelease;
     cfg.meas.troposphere = false;
     // the accelerometer bias a long pad leaves (the bias's Gauss-Markov
     // prior, 0.01 m/s^2, after minutes): 6 s from p0_abias's 0.1 g would
@@ -3935,6 +3944,17 @@ ScreenRun flyScreen(const ScreenFlight& o)
                 for (int i = 0; i < 3; ++i)
                     vlag_e[i] += dv_e[i];
             }
+            // the tail: the k-th epoch after the bad one
+            const long k_tail = std::lround(next_epoch - (t_ign + o.bad_s));
+            const bool tail = k_tail >= 1 && static_cast<size_t>(k_tail) <= o.tail_down.size();
+            if (tail)
+            {
+                const double dn[3] = {0.0, 0.0, o.tail_down[static_cast<size_t>(k_tail - 1)]};
+                double dv_e[3];
+                nedToEcefVec(dn, dv_e);
+                for (int i = 0; i < 3; ++i)
+                    vlag_e[i] += dv_e[i];
+            }
             e.epoch = sky.epoch(tow0 + next_epoch, r, vlag_e);
             e.mcu_us = t64;
             e.gps_week = kGoldenWeek;
@@ -3943,6 +3963,10 @@ ScreenRun flyScreen(const ScreenFlight& o)
             next_epoch++;
             if ((bad && o.drop_bad) || (after && o.lost_after) || (rel > o.cut_from_s && rel < o.cut_to_s))
                 continue;
+            if (tail && static_cast<size_t>(k_tail) <= o.tail_keep.size() &&
+                o.tail_keep[static_cast<size_t>(k_tail - 1)] > 0 &&
+                e.epoch.n > o.tail_keep[static_cast<size_t>(k_tail - 1)])
+                e.epoch.n = o.tail_keep[static_cast<size_t>(k_tail - 1)];
             if (bad && (o.keep > 0 || !o.offs.empty()))
             {
                 if (o.keep > 0 && e.epoch.n > o.keep)
@@ -4237,6 +4261,64 @@ TEST(RawGnssShadow, TheVerticalCheckLeavesOutOneBadSatelliteAndKeepsTheEpoch)
     EXPECT_GT(run.bad.used_pr, 0);
 }
 
+TEST(RawGnssShadow, TheLatchHoldsOutAReceiverClosingAfterAVerticalDrop)
+{
+    // A receiver that lost its loops comes back over seconds: T+1 ~80 m/s
+    // down of the filter's (dropped by the vertical check), then 12 and 8 m/s
+    // (under vert_check_mps, so fused without the latch), then within 1. The
+    // latch holds T+2 and T+3 out and T+4, back within vert_release_mps, is
+    // fused: the attitude ends 0.17 deg off the truth's, against 1.1 with
+    // the tail fused. (Not to the hundredth what never sending them gives:
+    // the receiver's side still saw them, so T+4's relock ages differ.)
+    ScreenFlight o;
+    o.screen = RawGnssShadow::kScreenOff;     // the vertical check alone
+    o.vcheck = 20.0;
+    o.vrelease = 5.0;
+    o.bad_dv_ned[2] = 80.0;
+    o.tail_down = {12.0, 8.0, 1.0};
+    const ScreenRun run = flyScreen(o);
+    ASSERT_TRUE(run.bad_closed);
+    EXPECT_TRUE(run.bad.screen_dropped);
+    EXPECT_EQ(run.st.vert_dropped, 1u);
+    EXPECT_EQ(run.st.vert_latched, 2u);
+    EXPECT_LT(attErrDeg(run.q_end, run.q_true), 0.3);
+    // with no latch the tail is fused: under 20 m/s, the vertical check passes it
+    o.vrelease = 0.0;
+    const ScreenRun off = flyScreen(o);
+    EXPECT_EQ(off.st.vert_dropped, 1u);
+    EXPECT_EQ(off.st.vert_latched, 0u);
+    EXPECT_GT(off.st.epochs_applied, run.st.epochs_applied);
+    EXPECT_GT(attErrDeg(off.q_end, off.q_true), 0.8);
+}
+
+TEST(RawGnssShadow, TheLatchHoldsOutThinEpochsUntilOneFitsBack)
+{
+    // After a vertical drop an epoch too thin to fit (under four Dopplers)
+    // cannot show it is back: held out while the latch holds. The first epoch
+    // that fits within vert_release_mps (T+4, every satellite) releases it.
+    // These thin epochs were good, and holding them out costs next to nothing.
+    ScreenFlight o;
+    o.screen = RawGnssShadow::kScreenOff;
+    o.vcheck = 20.0;
+    o.vrelease = 5.0;
+    o.bad_dv_ned[2] = 80.0;
+    o.tail_down = {0.0, 0.0, 0.0};
+    o.tail_keep = {3, 3, 0};
+    const ScreenRun run = flyScreen(o);
+    EXPECT_EQ(run.st.vert_dropped, 1u);
+    EXPECT_EQ(run.st.vert_latched, 2u);
+    o.vrelease = 0.0;
+    const ScreenRun off = flyScreen(o);
+    EXPECT_EQ(off.st.vert_latched, 0u);
+    EXPECT_LT(std::fabs(attErrDeg(run.q_end, run.q_true) - attErrDeg(off.q_end, off.q_true)), 0.05);
+    // a flight with no vertical drop never latches: its thin epochs are fused
+    ScreenFlight clean = o;
+    clean.bad_dv_ned[2] = 0.0;
+    const ScreenRun c = flyScreen(clean);
+    EXPECT_EQ(c.st.vert_dropped, 0u);
+    EXPECT_EQ(c.st.vert_latched, 0u);
+}
+
 TEST(RawGnssShadow, TheBoostScreenRunsInActByDefault)
 {
     // kScreenAct, the default: in act only. Observe flies the epoch as the
@@ -4247,6 +4329,7 @@ TEST(RawGnssShadow, TheBoostScreenRunsInActByDefault)
     EXPECT_DOUBLE_EQ(RawGnssShadow::Config().boost_screen_g, 2.0);
     EXPECT_DOUBLE_EQ(RawGnssShadow::Config().boost_screen_window_s, 1.5);
     EXPECT_DOUBLE_EQ(RawGnssShadow::Config().vert_check_mps, 20.0);
+    EXPECT_DOUBLE_EQ(RawGnssShadow::Config().vert_release_mps, 5.0);
     ScreenFlight o = c30Like();
     o.mode = RawGnssShadow::kHeadingObserve;
     const ScreenRun obs = flyScreen(o);
@@ -4298,3 +4381,4 @@ TEST(RawGnssShadow, TheBoostScreenWorksTheEpochThroughForWhatThePriorsGatePasses
     EXPECT_EQ(kept.bad.used_rr, 6);
     EXPECT_EQ(kept.st.boost_dropped, 0u);
 }
+
