@@ -161,6 +161,28 @@ final class SettingsNavigationTests: XCTestCase {
         XCTAssertEqual(pushedTitle(root), "Firmware update")
     }
 
+    /// Back out of the firmware screen. That releases its FirmwareCatalogSession,
+    /// whose isolated deinit aborted the app on iOS 26.2 (swiftlang/swift#87316):
+    /// every time the operator left the screen. The pop is dispatched, so the
+    /// release happens in SwiftUI's own update outside any task, as after a
+    /// Back tap.
+    func testBackingOutOfTheFirmwareScreen() async throws {
+        let fleet = BLEFleet()
+        let store = RocketProfileStore(directory: tempDir, defaults: defaults)
+        let bs = LinkedDevice(UUID(), name: "TR-B-Test")
+        connect(bs, to: fleet)
+
+        let root = await host(SettingsView(device: bs)
+            .environmentObject(fleet)
+            .environmentObject(store))
+        try await open(row: IndexPath(item: 1, section: 5), expecting: "Firmware update", in: root)
+
+        let nav = try XCTUnwrap(navigation(root))
+        DispatchQueue.main.async { _ = nav.popViewController(animated: true) }
+        await settle()
+        XCTAssertNil(pushedTitle(root), "Back must land on Settings, with the app still running")
+    }
+
     /// Settings' other pushes are still destination links, now inside a
     /// NavigationStack. They must still open.
     func testTheDestinationLinksStillOpen() async throws {
