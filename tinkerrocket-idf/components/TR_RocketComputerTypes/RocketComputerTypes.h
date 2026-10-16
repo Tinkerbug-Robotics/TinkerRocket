@@ -873,6 +873,12 @@ static constexpr uint8_t MAG_TYPE_QMC5883P = 1;
 // same two values for the log reader.  Double, because the converter has
 // always multiplied by a double 0.15 and the IIS2MDC path must stay
 // bit-identical; float consumers (the calibrator, the collector) narrow it.
+//
+// QMC5883P logs written before TR_QMC5883P released its soft reset (#1590
+// scale) are not at this scale.  The ±8 G range never took, so the part
+// counted at ±30 G (1000 LSB/G): read at 100/3750, their |B| is 3.75x small
+// (the Beetle's 13 µT on the bench).  Directions are right.  Nothing in such
+// a log marks it, and none of them is a flight.
 static constexpr double MAG_UT_PER_LSB_IIS2MDC  = 0.15;              // 1.5 mgauss/LSB
 static constexpr double MAG_UT_PER_LSB_QMC5883P = 100.0 / 3750.0;   // 3750 LSB/G at ±8 G
 static constexpr double magTypeUtPerLsb(uint8_t mag_type)
@@ -895,11 +901,13 @@ static constexpr double magTypeUtPerLsb(uint8_t mag_type)
 //            Rz alone every V8/V9 board vector had board y reversed and the
 //            fused heading was the mirror of the true one (#1589).  Negating
 //            X leaves (-X, Y, Z) right-handed with Z still out of the top.
-//   QMC5883P (+1, -1, -1)  As TR_QMC5883P configures it (axis-sign word
-//            0x29 = 0x06) the set is right-handed but Z points INTO the
-//            board: on a Beetle bench log the field read pointing up with
-//            the board flat (#1590).  Negating Y and Z (a half turn about X)
-//            brings Z out of the top.
+//   QMC5883P (+1, -1, -1)  At axis-sign word 0x29 = 0x00, its value after
+//            a reset and the one TR_QMC5883P writes, the set is right-handed
+//            but Z points INTO the board: on a Beetle bench log the field
+//            read pointing up with the board flat (#1590).  Negating Y and Z
+//            (a half turn about X) brings Z out of the top.  (The driver used
+//            to write the datasheet's 0x06, but that write never took, so
+//            every QMC5883P log is at 0x00; see qmc5883p_regs.h.)
 //
 // SensorConverter::convertIIS2MDCData applies these, the SIL's encoder
 // inverts them, and Data_Analysis/plot_flight_data_mini.py and both apps

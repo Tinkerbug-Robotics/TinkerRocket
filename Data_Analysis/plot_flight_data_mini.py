@@ -104,6 +104,9 @@ MMC_UT_PER_COUNT = (8.0 * 100.0) / 131072.0  # ≈ 0.006104
 # than v6 carry no field and are assumed to be the big board's IIS2MDC.
 #   Big board V8 (IIS2MDC):                0.15 µT/LSB (ST datasheet 9.13)
 #   rocket-computer-mini (QMC5883P, #797): 100/3750 µT/LSB (±8 G, QST Table 2)
+# QMC5883P logs from before the driver released its soft reset (#1590 scale)
+# were counted at ±30 G, 1000 LSB/G: read here, their |B| is 3.75x small and
+# their directions are right.  Nothing in the log marks them; none is a flight.
 IIS2MDC_UT_PER_LSB  = 0.15
 QMC5883P_UT_PER_LSB = 100.0 / 3750.0
 
