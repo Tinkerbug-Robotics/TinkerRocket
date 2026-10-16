@@ -98,7 +98,7 @@ fun DashboardScreen(
         "servo" -> { ServoTestScreen(session, profileStore, onBack = { onTool(null) }); return }
         "sim" -> { SimulationScreen(session, onBack = { onTool(null) }); return }
         "scan" -> { FreqScanScreen(session, onBack = { onTool(null) }); return }
-        "magcal" -> { MagCalScreen(session, syncer, onBack = { onTool(null) }); return }
+        "magcal" -> { MagCalScreen(session, device.deviceId, syncer, onBack = { onTool(null) }); return }
         "sensorcal" -> {
             SensorCalScreen(session, syncer, container?.ionosphere, onBack = { onTool(null) })
             return
