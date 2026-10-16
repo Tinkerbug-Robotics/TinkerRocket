@@ -311,6 +311,12 @@ class MainActivity : ComponentActivity() {
                                         // disconnecting to reach My Devices.
                                         network = container.networkStore,
                                         knownDevices = container.knownDevices,
+                                        // While the flight computer is off or not
+                                        // running, Settings points at the
+                                        // dashboard's Firmware tool: an update may
+                                        // be the only way forward for an FC that
+                                        // cannot finish booting.
+                                        onOpenFirmware = { tab = 0; tool = "ota" },
                                     )
                                 }
                             }

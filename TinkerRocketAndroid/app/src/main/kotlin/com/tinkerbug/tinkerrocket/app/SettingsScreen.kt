@@ -63,6 +63,9 @@ import com.tinkerbug.tinkerrocket.session.DeviceSession
 import com.tinkerbug.tinkerrocket.session.ProfileRollWaypoint
 import com.tinkerbug.tinkerrocket.session.RocketProfile
 import com.tinkerbug.tinkerrocket.session.RocketProfileStore
+import com.tinkerbug.tinkerrocket.session.FlightComputerNotice
+import com.tinkerbug.tinkerrocket.session.SettingsAccess
+import com.tinkerbug.tinkerrocket.session.settingsAccess
 import com.tinkerbug.tinkerrocket.session.UnitFormatter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -95,6 +98,10 @@ fun SettingsScreen(
     // tests compile unchanged; the section simply does not render without them.
     network: AppNetworkStore? = null,
     knownDevices: com.tinkerbug.tinkerrocket.session.KnownDeviceStore? = null,
+    // Opens the dashboard's Firmware tool. Offered while the flight computer is
+    // off or not running, when an update may be the only way forward; null (the
+    // default) leaves the button out, so existing call sites are unchanged.
+    onOpenFirmware: (() -> Unit)? = null,
 ) {
     val profiles by store.profiles.collectAsState()
     val activeId by store.activeId.collectAsState()
@@ -127,10 +134,21 @@ fun SettingsScreen(
     val hasTelemetry by (
         session?.hasReceivedTelemetry ?: kotlinx.coroutines.flow.MutableStateFlow(false)
         ).collectAsState()
-    val initializing by remember(session) {
-        session?.telemetry?.map { it.state == "INITIALIZATION" }?.distinctUntilChanged()
-            ?: kotlinx.coroutines.flow.flowOf(false)
-    }.collectAsState(initial = false)
+    // The state string, not a per-frame flag: it changes only on a state
+    // transition, so this still never recomposes at telemetry rate.
+    val rocketState by remember(session) {
+        session?.telemetry?.map { it.state }?.distinctUntilChanged()
+            ?: kotlinx.coroutines.flow.flowOf("UNKNOWN")
+    }.collectAsState(initial = "UNKNOWN")
+    // The FC's boot step, for the notice that stands in for its settings while
+    // it is not running.  "bt" is fixed per step, so this changes only when the
+    // step (or a degraded bit) does.
+    val bootNotice by remember(session) {
+        session?.telemetry
+            ?.map { FcBootNotice(it.fcBootStepRaw, it.fcRescue, it.fcBootStatusLine()) }
+            ?.distinctUntilChanged()
+            ?: kotlinx.coroutines.flow.flowOf(FcBootNotice(null, false, null))
+    }.collectAsState(initial = FcBootNotice(null, false, null))
 
     // "LoRa off" is DEVICE state (rocket NVS), not a profile field, so it is
     // read from the config readback and written straight to the session.
@@ -300,26 +318,16 @@ fun SettingsScreen(
         }
 
         // ── Device-state gate ────────────────────────────────────────────
-        // Everything below is FC configuration, and the FC answers none of it
-        // until it is running. This fails silently rather than loudly: the OC's
-        // #366 queue HOLDS commands while the rail is down and drains the batch
-        // at power-on, so edits made now land much later, out of order, or not
-        // at all. iOS SettingsView gates the same two states; Android had
-        // neither.
-        //
-        // Both scopes are load-bearing:
-        //  - !isBaseStation: the BS relay's TelemetryData never carries
-        //    pwrPinOn (the LoRa packet has no room for it), so over a
-        //    base-station link it reads false forever — an unscoped gate would
-        //    lock Settings on every BS connection.
-        //  - hasReceivedTelemetry (#377): before the first frame TelemetryData
-        //    is all-defaults, and a defaulted pwrPinOn is indistinguishable
-        //    from a genuinely-off rocket, so the notice would flash on every
-        //    connect — including for a rocket that is already powered on.
-        //
-        // Unlike iOS, firmware update is its own screen here rather than a row
-        // inside Settings, so nothing that still works with the rail off is
-        // lost behind this gate.
+        // Most of what follows is FC configuration, and the FC answers none of
+        // it until it is running. This fails silently rather than loudly: the
+        // OC's #366 queue HOLDS commands while the rail is down and drains the
+        // batch at power-on, so edits made now land much later, out of order,
+        // or not at all. The radio and network ID are the out computer's own
+        // and stay available, as does the firmware update (a dashboard tool
+        // here, linked from the gate). The rule, with the #377 and base-station
+        // scopes that keep it from locking a healthy rocket, is settingsAccess()
+        // in core/session SettingsAccess.kt, shared with iOS through
+        // tests_cpp/fixtures/app_behavior/settings_access.json.
         // #1038: over a BASE-STATION link this screen used to render the full
         // editor. Every edit persisted to the profile and called
         // syncer.pushGroup, which returns early on a base-station session
@@ -384,53 +392,55 @@ fun SettingsScreen(
             return@Column
         }
 
-        val directLink = session != null && connected && !session.isBaseStation
-        if (directLink && hasTelemetry && !powerOn) {
-            GateNotice(
-                "Rocket is off",
-                "The flight computer answers every setting on this screen, and it " +
-                    "isn't running yet. Power on the rocket to configure it.",
-            )
-            return@Column
-        }
-        if (directLink && initializing) {
-            GateNotice(
-                "Initializing…",
-                "Waiting for sensors to start up. Settings can be applied once ready.",
-            )
+        // Which of the sections below the rocket can honour right now
+        // (core/session SettingsAccess.kt has the rule and why).  The flight
+        // computer's settings need it running; the out computer's own radio and
+        // network settings and the firmware update do not.  This used to be two
+        // early returns that hid everything, the out computer's settings with
+        // it, so an FC stuck in its boot locked out the screen around its fix.
+        val access = settingsAccess(
+            isConnected = session != null && connected,
+            isBaseStation = session?.isBaseStation == true,
+            hasReceivedTelemetry = hasTelemetry,
+            pwrPinOn = powerOn,
+            state = rocketState,
+            bootStepReported = bootNotice.stepRaw != null,
+        )
+        if (!access.allowsFlightComputerSettings) {
+            if (access == SettingsAccess.ROCKET_OFF) {
+                GateNotice(
+                    "Rocket is off",
+                    "Most settings live on the flight computer, which isn't powered. " +
+                        "Power on the rocket to change them. The radio, network ID and " +
+                        "firmware below are on the out computer and work now.",
+                )
+            } else {
+                GateNotice(
+                    FlightComputerNotice.title(bootNotice.stepRaw != null, bootNotice.rescue),
+                    FlightComputerNotice.explanation(bootNotice.stepRaw != null, bootNotice.rescue),
+                    // The step it is on; the rescue title already says it all.
+                    detail = bootNotice.line.takeIf { bootNotice.stepRaw != null && !bootNotice.rescue },
+                    warn = bootNotice.rescue,
+                )
+            }
+            RadioSection(session, connected, haveConfig, loraTxDisabled, inflight)
+            if (session != null && network != null && knownDevices != null) {
+                NetworkSection(session, network, knownDevices)
+            }
+            if (onOpenFirmware != null) {
+                Section("Firmware") {
+                    OutlinedButton(onClick = onOpenFirmware) { Text("Update firmware…") }
+                    Caption(
+                        "The out computer or the flight computer. A flight computer " +
+                            "update tells you whether the flight computer answered.",
+                    )
+                }
+            }
+            AppOnlySections(active, ::edit)
             return@Column
         }
 
-        // ── Radio (iOS General-tab "Radio" section) ──────────────────────
-        // Presented positively — the switch reads "LoRa telemetry", so ON
-        // always means the radio is doing something.  The wire byte is the
-        // inverse ("disabled"), inverted once, here.
-        Section("Radio") {
-            ToggleRow(
-                "LoRa telemetry",
-                loraTxDisabled != true,
-                enabled = session != null && connected &&
-                    loraTxDisabled != null && !inflight,
-            ) { on -> session?.sendLoraTxDisabled(!on) }
-            Caption(
-                when {
-                    inflight ->
-                        "Locked while the rocket is flying — muting it now would drop " +
-                            "the only link telling you where it is."
-                    connected && haveConfig && loraTxDisabled == null ->
-                        "This rocket's firmware doesn't support turning the radio off. " +
-                            "Update it to use this."
-                    loraTxDisabled == true ->
-                        "OFF — the rocket transmits nothing: no telemetry, no beacon. It " +
-                            "still listens, so the base station can turn it back on. You " +
-                            "will have no tracking during flight."
-                    else ->
-                        "ON — the rocket downlinks telemetry to the base station at 2 Hz. " +
-                            "Turn it off to fly silent (bench work, a busy band, or a site " +
-                            "where you would rather not transmit)."
-                },
-            )
-        }
+        RadioSection(session, connected, haveConfig, loraTxDisabled, inflight)
 
         // #624: iOS carries the Network section on the rocket General tab as
         // well as in the base-station branch, and for the same reason on both:
@@ -940,51 +950,7 @@ fun SettingsScreen(
                 "before flight; test-fire (Ground Test) is iOS-only for now.",
         )
 
-        // ── Recovery — app-side landing prediction, nothing on the wire ──
-        Section("Recovery") {
-            // iOS applyRecoveryConfig validation: rates and the deploy
-            // altitude must be > 0 (a rate ≤ 0.1 fps degrades simulateDescent
-            // to "lands where it is"); drag k accepts 0 (gravity-only) but
-            // never a negative, which would turn the drag term into thrust
-            // and blow the ballistic prediction up.
-            FieldRow {
-                NumField("Drogue ft/s", fmtD(active.drogueRateFps), Modifier.weight(1f)) { s ->
-                    s.toDoubleOrNull()?.takeIf { it > 0 }
-                        ?.let { v -> edit(null) { it.copy(drogueRateFps = v) } }
-                }
-                NumField("Main ft/s", fmtD(active.mainRateFps), Modifier.weight(1f)) { s ->
-                    s.toDoubleOrNull()?.takeIf { it > 0 }
-                        ?.let { v -> edit(null) { it.copy(mainRateFps = v) } }
-                }
-                NumField("Main alt ft", fmtD(active.mainDeployAltAglFt), Modifier.weight(1f)) { s ->
-                    s.toDoubleOrNull()?.takeIf { it > 0 }
-                        ?.let { v -> edit(null) { it.copy(mainDeployAltAglFt = v) } }
-                }
-            }
-            Caption(
-                "Descent profile for the live landing prediction and Drift Cast: drogue " +
-                    "rate above the main-deploy altitude (AGL), main rate below it. Stored " +
-                    "per rocket in the app — not sent to the flight computer.",
-            )
-            // iOS Drag k row — was missing on Android (accidental omission,
-            // the other three recovery fields were ported together).
-            FieldRow {
-                NumField("Drag k 1/m", fmtD(active.ballisticDragK), Modifier.weight(1f)) { s ->
-                    s.toDoubleOrNull()?.takeIf { it >= 0 }
-                        ?.let { v -> edit(null) { it.copy(ballisticDragK = v) } }
-                }
-            }
-            Caption(
-                "Quadratic drag coefficient for the coast-to-apogee ballistic prediction " +
-                    "(a = −k·|v|·v). ≈0.0005 for typical 54–65 mm airframes; 0 = gravity-only.",
-            )
-        }
-
-        Section("Notes") {
-            NumField("Notes", active.notes, Modifier.fillMaxWidth(), keyboard = KeyboardType.Text) { s ->
-                edit(null) { it.copy(notes = s) }
-            }
-        }
+        AppOnlySections(active, ::edit)
     }
 
     if (adding) {
@@ -1110,17 +1076,134 @@ private fun CalBanner(label: String, advisory: CalAdvisory, onImport: (() -> Uni
     }
 }
 
-/** Full-width notice shown in place of the config sections when the rocket
- *  can't accept settings yet (rail off / initializing). */
+/**
+ * The profile's app-only fields: the descent profile behind the landing
+ * prediction and Drift Cast, and the notes. Nothing here is sent to the rocket,
+ * so they stay editable whatever the flight computer is doing.
+ */
 @Composable
-private fun GateNotice(title: String, body: String) {
+private fun AppOnlySections(
+    active: RocketProfile,
+    edit: (ConfigGroup?, (RocketProfile) -> RocketProfile) -> Unit,
+) {
+    // ── Recovery — app-side landing prediction, nothing on the wire ──
+    Section("Recovery") {
+        // iOS applyRecoveryConfig validation: rates and the deploy
+        // altitude must be > 0 (a rate ≤ 0.1 fps degrades simulateDescent
+        // to "lands where it is"); drag k accepts 0 (gravity-only) but
+        // never a negative, which would turn the drag term into thrust
+        // and blow the ballistic prediction up.
+        FieldRow {
+            NumField("Drogue ft/s", fmtD(active.drogueRateFps), Modifier.weight(1f)) { s ->
+                s.toDoubleOrNull()?.takeIf { it > 0 }
+                    ?.let { v -> edit(null) { it.copy(drogueRateFps = v) } }
+            }
+            NumField("Main ft/s", fmtD(active.mainRateFps), Modifier.weight(1f)) { s ->
+                s.toDoubleOrNull()?.takeIf { it > 0 }
+                    ?.let { v -> edit(null) { it.copy(mainRateFps = v) } }
+            }
+            NumField("Main alt ft", fmtD(active.mainDeployAltAglFt), Modifier.weight(1f)) { s ->
+                s.toDoubleOrNull()?.takeIf { it > 0 }
+                    ?.let { v -> edit(null) { it.copy(mainDeployAltAglFt = v) } }
+            }
+        }
+        Caption(
+            "Descent profile for the live landing prediction and Drift Cast: drogue " +
+                "rate above the main-deploy altitude (AGL), main rate below it. Stored " +
+                "per rocket in the app — not sent to the flight computer.",
+        )
+        // iOS Drag k row — was missing on Android (accidental omission,
+        // the other three recovery fields were ported together).
+        FieldRow {
+            NumField("Drag k 1/m", fmtD(active.ballisticDragK), Modifier.weight(1f)) { s ->
+                s.toDoubleOrNull()?.takeIf { it >= 0 }
+                    ?.let { v -> edit(null) { it.copy(ballisticDragK = v) } }
+            }
+        }
+        Caption(
+            "Quadratic drag coefficient for the coast-to-apogee ballistic prediction " +
+                "(a = −k·|v|·v). ≈0.0005 for typical 54–65 mm airframes; 0 = gravity-only.",
+        )
+    }
+
+    Section("Notes") {
+        NumField("Notes", active.notes, Modifier.fillMaxWidth(), keyboard = KeyboardType.Text) { s ->
+            edit(null) { it.copy(notes = s) }
+        }
+    }
+}
+
+/**
+ * "LoRa off": the out computer's transmitter, so it works whatever the flight
+ * computer is doing (iOS General-tab "Radio" section).  Presented positively:
+ * the switch reads "LoRa telemetry", so ON always means the radio is doing
+ * something.  The wire byte is the inverse ("disabled"), inverted once, here.
+ */
+@Composable
+private fun RadioSection(
+    session: DeviceSession?,
+    connected: Boolean,
+    haveConfig: Boolean,
+    loraTxDisabled: Boolean?,
+    inflight: Boolean,
+) {
+    Section("Radio") {
+        ToggleRow(
+            "LoRa telemetry",
+            loraTxDisabled != true,
+            enabled = session != null && connected &&
+                loraTxDisabled != null && !inflight,
+        ) { on -> session?.sendLoraTxDisabled(!on) }
+        Caption(
+            when {
+                inflight ->
+                    "Locked while the rocket is flying — muting it now would drop " +
+                        "the only link telling you where it is."
+                connected && haveConfig && loraTxDisabled == null ->
+                    "This rocket's firmware doesn't support turning the radio off. " +
+                        "Update it to use this."
+                loraTxDisabled == true ->
+                    "OFF — the rocket transmits nothing: no telemetry, no beacon. It " +
+                        "still listens, so the base station can turn it back on. You " +
+                        "will have no tracking during flight."
+                else ->
+                    "ON — the rocket downlinks telemetry to the base station at 2 Hz. " +
+                        "Turn it off to fly silent (bench work, a busy band, or a site " +
+                        "where you would rather not transmit)."
+            },
+        )
+    }
+}
+
+/** What the not-running notice shows; distinct-until-changed in SettingsScreen. */
+private data class FcBootNotice(val stepRaw: Int?, val rescue: Boolean, val line: String?)
+
+/** Full-width notice shown in place of the flight computer's sections when it
+ *  can't accept settings (rail off, still starting, stuck, rescue mode).
+ *  [detail] is the boot step it is on, amber when [warn]. */
+@Composable
+private fun GateNotice(title: String, body: String, detail: String? = null, warn: Boolean = false) {
     Card(Modifier.fillMaxWidth()) {
         Column(
             Modifier.fillMaxWidth().padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(
+                title,
+                style = MaterialTheme.typography.titleMedium,
+                color = if (warn) com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors.statusWarn
+                        else androidx.compose.ui.graphics.Color.Unspecified,
+                textAlign = TextAlign.Center,
+            )
+            if (detail != null) {
+                Text(
+                    detail,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+            }
             Text(
                 body,
                 style = MaterialTheme.typography.bodyMedium,

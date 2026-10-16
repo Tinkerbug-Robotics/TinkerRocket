@@ -66,7 +66,13 @@ public enum class FcBootStep(public val raw: Int) {
                    // on this step IS the dead-GNSS stall
     GNSS(3),       // GNSS receiver bring-up
     SERVOS(4),     // servo init + neutral settle
-    COMPLETE(5);   // setup_fc done; the state machine takes over
+    COMPLETE(5),   // setup_fc done; the state machine takes over
+    // FCB_RESCUE: not a step but where a boot that cannot finish ends up. The
+    // FC's last boots stalled in setup or kept resetting, so it brought up only
+    // the out-computer link and serves firmware updates and nothing else, until
+    // an update lands or the rocket is power-cycled (flight_computer
+    // fc_rescue_policy.h). Outside the progress range on the wire.
+    RESCUE(64);
 
     public val label: String
         get() = when (this) {
@@ -76,10 +82,14 @@ public enum class FcBootStep(public val raw: Int) {
             GNSS -> "Starting GNSS"
             SERVOS -> "Starting servos"
             COMPLETE -> "Flight computer ready"
+            RESCUE -> "Rescue mode \u2014 ready for a firmware update"
         }
 
     public companion object {
-        /** FCB_STEP_COUNT — the count, not a step (progress denominator). */
+        /**
+         * FCB_STEP_COUNT — the count of PROGRESS steps (LINKS..COMPLETE), the
+         * progress denominator.  RESCUE is not one of them.
+         */
         public const val STEP_COUNT: Int = 6
 
         public fun fromRaw(raw: Int): FcBootStep? = entries.firstOrNull { it.raw == raw }
@@ -678,10 +688,18 @@ public data class TelemetryData(
      * frame, so a wedged boot and a just-started one carry the same "bt" — only
      * the dwell separates them.  FcBootStep.COMPLETE is exempt: setup_fc() has
      * finished and the app is merely waiting for the first real NonSensorData.
+     * So is RESCUE, which stays put by design: "no progress" would only tell
+     * the operator to keep waiting.
      */
     public fun fcBootStalled(dwellS: Int): Boolean =
-        fcBooting && fcBootStep != FcBootStep.COMPLETE &&
+        fcBooting && fcBootStep != FcBootStep.COMPLETE && !fcRescue &&
             dwellS >= fcBootStallAfterS(fcBootStep)
+
+    /**
+     * The FC is in rescue mode: it will not finish booting on its own, and a
+     * flight computer firmware update is what it is waiting for.
+     */
+    public val fcRescue: Boolean get() = fcBootStep == FcBootStep.RESCUE
 
     /**
      * The one secondary line under the state label (iOS twin: RocketStateView
