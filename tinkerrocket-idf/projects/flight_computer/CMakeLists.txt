@@ -85,7 +85,8 @@ if(DEFINED TR_RAW_GNSS_PRIMARY)
     message(STATUS "TR_RAW_GNSS_PRIMARY=${TR_RAW_GNSS_PRIMARY} -- raw-GNSS navigation filter set by hand")
 endif()
 # The heading from thrust (main/config.h): -DTR_HEADING_FIT=0 off, 1 observe
-# (fit and log), 2 act (hand the fit's heading to the navigation filter).
+# (fit and log), 2 act (GNSS turns the attitude from launch; the default where
+# the raw filter navigates).
 if(DEFINED TR_HEADING_FIT)
     add_compile_definitions(TR_HEADING_FIT=${TR_HEADING_FIT})
     message(STATUS "TR_HEADING_FIT=${TR_HEADING_FIT} -- the heading from thrust set by hand")

@@ -3731,6 +3731,16 @@ static void startRawShadow()
                   "(TR_BENCH_LAUNCH_TILT_SIGMA_DEG)",
              cfg.heading_launch_tilt_sigma_deg);
 #endif
+    // what the filter flies, bench or not: a flight's console says it
+    ESP_LOGI(TAG, "[RAWGNSS] heading %s: %s; launch prior %.0f deg with the magnetometer's heading, %.0f without; "
+                  "tilt floor %.2f deg; the fit's hand-off %s; the screen %s",
+             cfg.heading_mode == gnss_raw::RawGnssShadow::kHeadingAct       ? "ACT"
+             : cfg.heading_mode == gnss_raw::RawGnssShadow::kHeadingObserve ? "observe"
+                                                                            : "off",
+             gnss_raw::RawGnssShadow::headingGateName(cfg.heading_gate), cfg.heading_pad_sigma_deg,
+             cfg.heading_pad_sigma_fallback_deg, cfg.heading_launch_tilt_sigma_deg,
+             cfg.heading_handoff_deg < 0.0 ? "never" : "at the fit's 1-sigma",
+             cfg.boost_screen_g <= 0.0 ? "on every epoch before the apogee call" : "on boost epochs before the call");
     raw_shadow = new (mem) gnss_raw::RawGnssShadow(cfg);
     raw_meas = new (stage_mem) gnss_raw::RawGnssMeasStage(gnss_raw::RawGnssShadow::stageConfig(cfg));
     raw_meas_epoch = new (epoch_mem) gnss_raw::TimedRawEpoch();

@@ -854,11 +854,13 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
     job_.te = te;
     job_.in_flight = (imu_flags & kShadowInFlight) != 0;
     job_.g_peak = static_cast<double>(ekf_.takeGPeak());
-    // a boost epoch, for the boost screen: the IMU past boost_screen_g since
-    // the last epoch, and no apogee call yet (a drogue's snatch is no boost)
+    // the boost screen judges this epoch: no apogee call yet (a drogue's
+    // snatch is no boost), and every epoch -- or, with boost_screen_g above 0,
+    // only one with the IMU past that many g since the last
     const bool screening = cfg_.boost_screen == kScreenOn
                            || (cfg_.boost_screen == kScreenAct && cfg_.heading_mode == kHeadingAct);
-    job_.screen = screening && !(imu_flags & kShadowApogee) && job_.g_peak + 1.0 > cfg_.boost_screen_g;
+    job_.screen = screening && !(imu_flags & kShadowApogee)
+                  && (cfg_.boost_screen_g <= 0.0 || job_.g_peak + 1.0 > cfg_.boost_screen_g);
     if (cfg_.external_build)
     {
         built_ = pend_built_[pb_head_];

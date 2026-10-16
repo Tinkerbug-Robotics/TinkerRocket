@@ -2951,9 +2951,11 @@ double tiltErrDeg(const float a[4], const float b[4])
 // apart, min_epochs, sure_deg: heading_handoff_apart, _min_epochs and
 // _sure_deg, when not negative (else the defaults). tilt_floor_deg:
 // heading_launch_tilt_sigma_deg; gate: heading_gate (no apogee call here).
+// handoff_deg: heading_handoff_deg -- 10 deg, the hand-off these flights test
+// (the config's default is never).
 BoostRun flyBoost(uint8_t mode, double seed_err_deg, double bias_y = 0.0, double bias_z = 0.0, bool external = false,
                   double apart = -1.0, int min_epochs = -1, double sure_deg = -1.0, double tilt_floor_deg = 0.0,
-                  uint8_t gate = RawGnssShadow::kGateHeading)
+                  uint8_t gate = RawGnssShadow::kGateHeading, double handoff_deg = 10.0)
 {
     double lat, lon, h;
     ecef_to_geo(kGoldenRmRx, &lat, &lon, &h);
@@ -2977,6 +2979,7 @@ BoostRun flyBoost(uint8_t mode, double seed_err_deg, double bias_y = 0.0, double
         cfg.heading_handoff_sure_deg = sure_deg;
     cfg.heading_launch_tilt_sigma_deg = tilt_floor_deg;
     cfg.heading_gate = gate;
+    cfg.heading_handoff_deg = handoff_deg;
     cfg.meas.troposphere = false;
     cfg.external_build = external;
     RawGnssShadow sh(cfg);
@@ -3224,10 +3227,10 @@ TEST(RawGnssShadow, TheHeadingFitIsOffByDefault)
 
 TEST(RawGnssShadow, TheFullGateOpensAtLaunchAndClosesOnTheGround)
 {
-    // heading_gate kGateFullLaunch (A): in act, from the launch edge, neither
-    // the vertical gate nor cos^4; back on the ground both are the EKF
-    // config's again. kGateHeading (C), the default, gates to the vertical.
-    EXPECT_EQ(RawGnssShadow::Config().heading_gate, RawGnssShadow::kGateHeading);
+    // heading_gate kGateFullLaunch (A), the default: in act, from the launch
+    // edge, neither the vertical gate nor cos^4; back on the ground both are
+    // the EKF config's again. kGateHeading (C) gates to the vertical.
+    EXPECT_EQ(RawGnssShadow::Config().heading_gate, RawGnssShadow::kGateFullLaunch);
     for (bool full : {false, true})
     {
         RawGnssShadow::Config cfg = primaryCfg();
@@ -3451,7 +3454,7 @@ TEST(RawGnssShadow, ActLetsTheTiltGoToItsLaunchFloor)
     const BoostRun act = flyBoost(RawGnssShadow::kHeadingAct, 0.0, 0.0, 0.0, false, -1.0, -1, -1.0, floor_deg);
     const BoostRun plain = flyBoost(RawGnssShadow::kHeadingAct, 0.0);
     const BoostRun observe = flyBoost(RawGnssShadow::kHeadingObserve, 0.0, 0.0, 0.0, false, -1.0, -1, -1.0, floor_deg);
-    EXPECT_EQ(RawGnssShadow::Config().heading_launch_tilt_sigma_deg, 0.0);
+    EXPECT_EQ(RawGnssShadow::Config().heading_launch_tilt_sigma_deg, 0.6);
     for (int i = 0; i < 2; ++i)
     {
         EXPECT_LT(act.att_sigma_pad[i] * 180.0 / kPi, floor_deg - 1.0) << i;
@@ -3784,11 +3787,14 @@ namespace
 // T+bad_s is, if asked, cut to its first keep satellites with offs[k] (m/s)
 // on the k-th Doppler, or left out (drop_bad); with lost_after, no epoch
 // comes after it (the receiver has lost the sky). kShadowApogee from
-// apogee_s (flight time; never if negative). screen: Config::boost_screen.
+// apogee_s (flight time; never if negative). screen: Config::boost_screen;
+// screen_g: Config::boost_screen_g -- 2 g, the boost's, as these flights test
+// it (the config's default, 0, judges every epoch).
 struct ScreenFlight
 {
     uint8_t mode = RawGnssShadow::kHeadingAct;
     uint8_t screen = RawGnssShadow::kScreenAct;
+    double screen_g = 2.0;
     double boost_mps2 = 100.0;
     double lean_deg = 5.0;
     double bad_s = 1.0;
@@ -3826,7 +3832,9 @@ ScreenRun flyScreen(const ScreenFlight& o)
     cfg.heading_mode = o.mode;
     cfg.heading_gate = RawGnssShadow::kGateHeading;
     cfg.heading_handoff_deg = -1.0;
+    cfg.heading_launch_tilt_sigma_deg = 0.0;   // no tilt floor, as these flights were written
     cfg.boost_screen = o.screen;
+    cfg.boost_screen_g = o.screen_g;
     cfg.meas.troposphere = false;
     // the accelerometer bias a long pad leaves (the bias's Gauss-Markov
     // prior, 0.01 m/s^2, after minutes): 6 s from p0_abias's 0.1 g would
@@ -4042,13 +4050,36 @@ TEST(RawGnssShadow, TheBoostScreenNeverActsAfterTheApogeeCall)
     EXPECT_GT(run.bad.used_pr, 0);
 }
 
+TEST(RawGnssShadow, TheScreenJudgesEveryEpochBeforeTheApogeeCallByDefault)
+{
+    // boost_screen_g 0, the default since 2026-10-16: every epoch before the
+    // apogee call is judged, whatever the IMU read. The c30-like epoch in a
+    // 1.2 g climb, which a 2 g screen never sees, is dropped whole; with the
+    // call before it (T+0.5) it is fused as the update's gate takes it.
+    ScreenFlight o = c30Like();
+    o.boost_mps2 = 12.0;
+    o.screen_g = RawGnssShadow::Config().boost_screen_g;
+    const ScreenRun run = flyScreen(o);
+    ASSERT_TRUE(run.bad_closed);
+    EXPECT_GE(run.st.boost_screened, 2u);
+    EXPECT_EQ(run.st.boost_dropped, 1u);
+    EXPECT_TRUE(run.bad.screen_dropped);
+    EXPECT_EQ(run.bad.used_pr, 0);
+    o.apogee_s = 0.5;
+    const ScreenRun late = flyScreen(o);
+    ASSERT_TRUE(late.bad_closed);
+    EXPECT_EQ(late.st.boost_dropped, 0u);
+    EXPECT_FALSE(late.bad.screen_dropped);
+    EXPECT_GT(late.bad.used_pr, 0);
+}
+
 TEST(RawGnssShadow, TheBoostScreenRunsInActByDefault)
 {
     // kScreenAct, the default: in act only. Observe flies the epoch as the
     // update's gate takes it (GNSS barely reaches its attitude in a boost);
-    // kScreenOn screens there too.
+    // kScreenOn screens there too. The default judges every epoch (0 g).
     EXPECT_EQ(RawGnssShadow::Config().boost_screen, RawGnssShadow::kScreenAct);
-    EXPECT_DOUBLE_EQ(RawGnssShadow::Config().boost_screen_g, 2.0);
+    EXPECT_DOUBLE_EQ(RawGnssShadow::Config().boost_screen_g, 0.0);
     ScreenFlight o = c30Like();
     o.mode = RawGnssShadow::kHeadingObserve;
     const ScreenRun obs = flyScreen(o);

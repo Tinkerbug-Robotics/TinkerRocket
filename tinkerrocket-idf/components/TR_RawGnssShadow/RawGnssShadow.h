@@ -89,14 +89,18 @@
 // step for it, between the checks and the receiver clock -- logging each fit
 // (HEADING_FIT_MSG). Observe: that is all. Act: from launch the filter's
 // heading has the launch prior (below: the magnetometer's, not the pad's
-// near-certainty), its tilt at least heading_launch_tilt_sigma_deg if that
-// is set (the pad cannot tell its tilt from an accelerometer bias, #1626
-// K1), and GNSS reaches its attitude only about the vertical
-// (att_gate_vertical) -- or all of it, neither that gate nor cos^4 pitch,
-// from launch or from the flight computer's apogee call (heading_gate,
-// HeadingGate; the call rides each IMU tick, kShadowApogee, and a restored
-// flight comes back in the gate its phase has); back on the ground both are
-// the EKF config's again. Once the fit's 1-sigma is heading_handoff_deg or less,
+// near-certainty), its tilt at least heading_launch_tilt_sigma_deg (0.6
+// deg; the pad cannot tell its tilt from an accelerometer bias, #1626 K1),
+// and GNSS reaches all of its attitude, neither att_gate_vertical nor cos^4
+// pitch, from launch -- or only about the vertical, from launch or until the
+// flight computer's apogee call (heading_gate, HeadingGate; the call rides
+// each IMU tick, kShadowApogee, and a restored flight comes back in the gate
+// its phase has); back on the ground both are the EKF config's again. All of
+// it from launch is the default since 2026-10-16: on the RF rig's three skies
+// (rp5, Eagle Claw, GTV; magnetometer 0, +10, +40) it matched the heading
+// alone until the apogee call before apogee, ended a 40 deg error at 0.4-2.1
+// deg against 3.3-6.0, and moved neither apogee vote. Once the fit's 1-sigma
+// is heading_handoff_deg or less (never by default: below),
 // and no other heading far off fits within heading_handoff_rival of it (the
 // profile's second valley, HeadingFit::Result::rival -- for thrust along the
 // nose there is none), its heading is handed over, once a flight -- turned
@@ -109,7 +113,10 @@
 // deg); and, if asked, for heading_handoff_min_epochs. (On the rig's r18 act's
 // own GNSS had already righted a 40 deg error to 2.5 when a two-epoch fit at
 // a 1-sigma of 5 deg, 9.8 deg off, was handed over.) The epoch's two units
-// (its Doppler velocity, then the fit) are each one slice at most.
+// (its Doppler velocity, then the fit) are each one slice at most. The
+// hand-off is off by default (heading_handoff_deg below 0): it overwrites
+// the filter's heading rather than fusing a measurement (r18 above), and the
+// filter's own GNSS updates turn the heading anyway.
 //
 // Act's launch prior: the heading's 1-sigma from the launch edge on. The
 // magnetometer's heading, calibrated, is good to about 4-5 deg on the Beetle
@@ -145,10 +152,10 @@
 // out. Act's opened heading and the boost's heading-velocity correlation
 // (+-0.83) widened the innovation gate: it refused 4 of the 7, let 3 through,
 // and those turned the heading +22.8 deg for the rest of the flight (GNSS was
-// gone after it). So, before the apogee call, an epoch whose IMU peak since
-// the last epoch is above boost_screen_g is a boost epoch, and at the start of
-// its fusion -- after the receiver clock's step, before any update -- it is
-// judged, none of it fused:
+// gone after it). So, before the apogee call, each epoch -- or, with
+// boost_screen_g above 0, only one whose IMU peak since the last epoch is
+// above that many g -- is judged at the start of its fusion, after the
+// receiver clock's step and before any update, none of it fused:
 //   - its Dopplers gated against the state as it stands, each with the test
 //     the update would give it as the epoch's first (TR_RawGnssEKF::
 //     screenRangeRates);
@@ -169,7 +176,13 @@
 // Only the Dopplers count, never the carrier's rates (none in a boost anyway).
 // After the apogee call it never runs: a drogue's snatch can pass 2 g, and the
 // epoch after it can be the carrier's first. By default it runs in act
-// (kScreenAct), where GNSS turns the heading from launch.
+// (kScreenAct), where GNSS turns the attitude from launch, on every epoch
+// (boost_screen_g 0) since 2026-10-16: a check of the epoch's own data, not
+// of the phase. It was the boost's alone (2 g) until then; on the RF rig's
+// four GNSS logs it never fired on the real data, armed either way, and with
+// a c30-like corrupted T+1 epoch and no GNSS after it to T+8 it dropped that
+// epoch 7 times in 8 (the worst above unaided 0.7 deg, without it too). Its
+// names keep "boost" (the stats, the console, the log).
 //
 // The carrier range rate (the receiver profile's cr_mode, ekf.cr_mode). Each
 // epoch's builder gives the satellites whose carrier phase was continuous
@@ -292,7 +305,8 @@ public:
         HeadingFit::Config heading_fit;
         double   heading_seed_max_s = 3.0;    // a seed this long before launch is too old (not still at ignition)
         double   heading_fit_max_s  = 60.0;   // epochs taken this long after launch
-        double   heading_handoff_deg = 10.0;  // act: the fit's 1-sigma at or under this hands its heading over
+        double   heading_handoff_deg = -1.0;  // act: the fit's 1-sigma at or under this hands its heading over
+                                              //   (below 0, the default: never)
         double   heading_handoff_rival = 25.0;   // act: ... unless another heading's valley rises less than this
                                                  //   above the fit's (as its sigma's: 25 is five sigmas')
         int      heading_handoff_min_epochs = 0; // act: ... once the fit holds this many epochs
@@ -304,16 +318,17 @@ public:
                                                  //   the magnetometer's (above)
         double   heading_pad_sigma_fallback_deg = 30.0;   // act: and where it is not
         double   heading_mag_recent_s = 5.0;     // act: the magnetometer's when it fused within this of the launch edge
-        double   heading_launch_tilt_sigma_deg = 0.0;   // act: and the tilt's at least this from launch
+        double   heading_launch_tilt_sigma_deg = 0.6;   // act: and the tilt's at least this from launch
                                                         //   (the pad's is the accelerometer bias's too,
                                                         //   #1626 K1; 0: off)
-        uint8_t  heading_gate = 0;               // act: what of the attitude GNSS reaches in flight, and
-                                                 //   when each opens (HeadingGate)
+        uint8_t  heading_gate = 1;               // act: what of the attitude GNSS reaches in flight, and
+                                                 //   when each opens (HeadingGate: all of it from launch)
         double   heading_handoff_vel_mps = 3.0;  // act: the velocity let go to this at the hand-off
         // the boost screen (above)
         uint8_t  boost_screen = 1;               // BoostScreen: off, in act only (the default), always
-        double   boost_screen_g = 2.0;           // a boost epoch: the IMU's specific force since the last epoch
-                                                 //   above this many g, before the apogee call
+        double   boost_screen_g = 0.0;           // the epochs it judges, before the apogee call: every one (0,
+                                                 //   the default), or one whose IMU peak since the last epoch is
+                                                 //   above this many g
     };
 
     // When the boost screen runs (Config::boost_screen).
@@ -338,7 +353,7 @@ public:
     enum HeadingGate : uint8_t
     {
         kGateHeading = 0,      // the heading only (att_gate_vertical), from launch (C)
-        kGateFullLaunch = 1,   // the whole attitude -- neither that gate nor cos^4 -- from launch (A)
+        kGateFullLaunch = 1,   // the whole attitude -- neither that gate nor cos^4 -- from launch (A, the default)
         kGateFullApogee = 2,   // the heading only from launch, the whole attitude from the flight
                                //   computer's apogee call (kShadowApogee) to the ground (H)
     };
