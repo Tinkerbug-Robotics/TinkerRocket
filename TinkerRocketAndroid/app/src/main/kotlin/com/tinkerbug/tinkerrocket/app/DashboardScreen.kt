@@ -1796,9 +1796,11 @@ private fun RocketStateBanner(telemetry: TelemetryData) {
         val dwellS = rememberBootDwellSeconds(telemetry)
         telemetry.fcBootStatusLine(dwellS)?.let { line ->
             // A degraded step FINISHED and boot carried on, so nothing else
-            // will ever mention it; amber is the caution rung.  Everything
-            // else is secondary text — the state label owns the color.
-            val warn = telemetry.fcBootStalled(dwellS) ||
+            // will ever mention it; amber is the caution rung.  Rescue mode
+            // never "stalls" (it stays put by design) but is no healthier than
+            // a stalled boot.  Everything else is secondary text — the state
+            // label owns the color.
+            val warn = telemetry.fcRescue || telemetry.fcBootStalled(dwellS) ||
                 telemetry.fcBootDegradedSubsystems.isNotEmpty()
             Text(
                 line,

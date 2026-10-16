@@ -1320,7 +1320,10 @@ struct RocketStateView: View {
 
     var bootLineColor: Color {
         guard let boot else { return .secondary }   // waiting on a silent FC
-        return (boot.isStalled(dwell: bootDwell) || !boot.degradedSubsystems.isEmpty)
+        // Rescue mode never "stalls" (it stays put by design), but it is no
+        // more a healthy boot than a stalled one is.
+        return (boot.isRescue || boot.isStalled(dwell: bootDwell) ||
+                !boot.degradedSubsystems.isEmpty)
             ? .orange : .secondary
     }
 
