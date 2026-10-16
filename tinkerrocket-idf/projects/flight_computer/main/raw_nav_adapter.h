@@ -188,10 +188,13 @@ public:
         have_decl_ = true;
     }
     float getDeclination() const { return decl_rad_; }
+    // The model's field at the pad (NED, uT): its size, and its dip below the
+    // horizontal (#1590), for the raw filter's magnetometer gates.
     void setMagReference(const float ned_uT[3])
     {
         mag_ref_ut_ = std::sqrt(ned_uT[0] * ned_uT[0] + ned_uT[1] * ned_uT[1] + ned_uT[2] * ned_uT[2]);
         mag_ref_valid_ = std::isfinite(mag_ref_ut_) && mag_ref_ut_ > 20.0f && mag_ref_ut_ < 70.0f;
+        mag_dip_rad_ = std::atan2(ned_uT[2], std::sqrt(ned_uT[0] * ned_uT[0] + ned_uT[1] * ned_uT[1]));
     }
     bool  getMagReferenceValid() const { return mag_ref_valid_; }
     float getMagReferenceTotal_uT() const { return mag_ref_ut_; }
@@ -267,6 +270,8 @@ public:
         s.declination_rad = decl_rad_;
         s.have_declination = have_decl_ ? 1 : 0;
         s.field_ut = mag_ref_valid_ ? mag_ref_ut_ : 0.0f;
+        s.dip_rad = mag_ref_valid_ ? mag_dip_rad_ : 0.0f;
+        s.have_dip = mag_ref_valid_ ? 1 : 0;
         s.restore = restore_pending_ ? 1 : 0;
         s.start_gen = start_gen_;
     }
@@ -536,6 +541,7 @@ private:
     float    decl_rad_ = 0.0f;
     bool     have_decl_ = false;
     float    mag_ref_ut_ = 0.0f;
+    float    mag_dip_rad_ = 0.0f;
     bool     mag_ref_valid_ = false;
     bool     mag_suspect_ = false;
     uint8_t  mag_flags_ = 0;         // gnss_raw::kShadowMag*: none until main.cpp says

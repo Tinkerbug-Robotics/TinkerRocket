@@ -65,7 +65,8 @@
 // The magnetometer only with its hard iron out (#1590): each sample says
 // whether a stored calibration is applied, or the field is a sim's
 // (ShadowMag::flags); any other is refused and counted (mag_uncal), as is one
-// off the model's size (mag_suspect, #1304).
+// off the model's size (mag_suspect, #1304) or, against the accelerometer's
+// down, off the model's dip (mag_dip, mag_dip_tol_deg).
 // It learns the barometer's offset with or without a fix of its own (a flight
 // without GNSS has the barometer and the IMU). A seed marked restore -- a
 // flight the flight computer restored after a reboot -- starts it in flight,
@@ -196,6 +197,28 @@ public:
         double   still_rate_rps  = 0.05;      //   still: rotating slower than this, the force g's size
         bool     primary         = false;     // the navigation filter (above)
         double   mag_field_tol   = 0.15;      // a field this far off the model's size is no heading (#1304)
+        // A field whose dip -- its angle below the horizontal, the
+        // accelerometer's down the vertical -- is further than this from the
+        // model's is no heading either (#1590; 0: not checked). What a
+        // calibrated QMC5883P's direction can be off by, worst case: 1 uT of
+        // hard iron the calibration left, at the ~45 uT the Beetle flies in,
+        // 1.3 deg; about 1 deg of axis non-orthogonality; the soft iron a
+        // hard-iron calibration leaves, a few % between axes (3 %: 0.9 deg);
+        // the accelerometer as the vertical (mag_tilt_sigma_mps2's 0.05 m/s^2:
+        // 0.3 deg); the model's dip and a local anomaly, 0.5 deg. Summed 4.0
+        // deg (2.0 root-sum-square), and the sample's own noise (0.5 uT an
+        // axis) 0.4 deg rms, 1.2 at three sigma: 5.2. 6 passes all of it.
+        // Simulated at random attitudes in the fields of New Jersey and New
+        // Mexico (1 uT, 2 % gains, 1 deg, 0.3 deg, 0.5 uT), no sample was
+        // past 5.5 deg; with the gains the Beetle's bench fit found left
+        // uncorrected (1.07/0.99/0.94), up to 0.03 % were past 6. The hard
+        // iron the size test lets through mostly tips the dip far more: of
+        // the attitudes where an uncalibrated Beetle's 40 uT passes it and
+        // reads a heading over 10 deg off (16-18 %), this leaves a sixth to
+        // a quarter (3-4 %). It cannot see a hard iron that only turns the
+        // field about the vertical -- size and dip both kept -- so it does
+        // not stand in for the calibration.
+        double   mag_dip_tol_deg = 6.0;
         double   max_bridge_s    = 5.0;       // the navigation filter bridges an IMU hole this long
         double   pad_context_delay_s = 6.0;   // the pad context is written from this long after launch
         bool     external_build = false;      // the epochs come built (onBuilt): a GNSS task builds them
@@ -296,6 +319,8 @@ public:
         uint32_t mag_fused = 0;            //   taken as a heading
         uint32_t mag_uncal = 0;            //   refused: no stored hard-iron calibration applied (#1590)
         uint32_t mag_suspect = 0;          //   refused: not the model's size
+        uint32_t mag_dip = 0;              //   refused: not the model's dip (mag_dip_tol_deg)
+        float    mag_dip_err_deg = 0.0f;   // the last sample the dip was taken of: its dip less the model's
         uint32_t restores = 0;             // starts in flight from a restored flight
         uint32_t gaps_bridged = 0;         // IMU holes the navigation filter stepped over
         uint32_t pad_contexts = 0;         // launches the pad context was taken at

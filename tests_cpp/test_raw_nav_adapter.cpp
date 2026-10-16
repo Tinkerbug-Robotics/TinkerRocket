@@ -76,6 +76,8 @@ TEST(RawNavAdapter, BeforeTheRawFilterRunsItAnswersWhereItWillStart)
     EXPECT_EQ(s.have_declination, 1);
     EXPECT_NEAR(s.declination_rad, -11.6f * float(kDeg), 1e-6f);
     EXPECT_NEAR(s.field_ut, 50.3f, 0.1f);
+    EXPECT_EQ(s.have_dip, 1);                    // #1590: the field's dip below the horizontal
+    EXPECT_NEAR(s.dip_rad, std::atan2(45.5, std::hypot(21.0, 4.3)), 1e-6);   // 64.8 deg
     EXPECT_EQ(s.restore, 0);
     EXPECT_EQ(s.start_gen, 1);
 
@@ -92,6 +94,13 @@ TEST(RawNavAdapter, BeforeTheRawFilterRunsItAnswersWhereItWillStart)
     ekf.init(imu, gnss, EkfMagData());
     ekf.startSeed(s);
     EXPECT_EQ(s.start_gen, 2);
+
+    // a model the adapter will not take (#1304's 20-70 uT): no size, no dip
+    const float weak[3] = {5.0f, 0.0f, 10.0f};
+    ekf.setMagReference(weak);
+    ekf.startSeed(s);
+    EXPECT_EQ(s.field_ut, 0.0f);
+    EXPECT_EQ(s.have_dip, 0);
 }
 
 TEST(RawNavAdapter, RunningItAnswersFromTheRawFilter)

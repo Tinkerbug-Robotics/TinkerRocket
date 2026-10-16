@@ -3501,7 +3501,8 @@ static void rawShadowTask(void*)
                               "| satellites jumped %lu (last epoch %d of %d judged, worst %.1f m) "
                               "| levelled %lu steps, %lu held off in flight | baro fused %lu of %lu, "
                               "%lu held at speed (offset %+.1f m%s) | zero-velocity %lu landed, %lu on the pad "
-                              "| mag fused %lu of %lu (refused: %lu uncalibrated, %lu off the model's size) "
+                              "| mag fused %lu of %lu (refused: %lu uncalibrated, %lu off the model's size, "
+                              "%lu off its dip; the last dip %+.1f deg off) "
                               "| restores %lu",
                          (unsigned long)fs.fixes, (unsigned long)fs.passed, (unsigned long)fs.flagged,
                          (unsigned long)fs.unjudged, (unsigned long)fs.lapsed,
@@ -3518,6 +3519,7 @@ static void rawShadowTask(void*)
                          (unsigned long)st.pad_zupts,
                          (unsigned long)st.mag_fused, (unsigned long)st.mags,
                          (unsigned long)st.mag_uncal, (unsigned long)st.mag_suspect,
+                         (unsigned long)st.mag_dip, (double)st.mag_dip_err_deg,
                          (unsigned long)st.restores);
             }
             win_t0 = a1;

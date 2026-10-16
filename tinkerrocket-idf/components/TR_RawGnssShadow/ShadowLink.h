@@ -78,7 +78,9 @@ struct ShadowSeed
     // where the raw filter is the navigation filter (Config::primary)
     float    declination_rad;  // true north east of magnetic, at the pad (TR_GeoMag)
     float    field_ut;         // the field's size the model gives there; 0 = no model
+    float    dip_rad;          // and its dip, below the horizontal (#1590)
     uint8_t  have_declination;
+    uint8_t  have_dip;         // dip_rad is the model's
     uint8_t  restore;          // a flight restored after a reboot: start in flight from this state
     uint8_t  start_gen;        // a new one on the pad (the flight computer started over): start again
 };

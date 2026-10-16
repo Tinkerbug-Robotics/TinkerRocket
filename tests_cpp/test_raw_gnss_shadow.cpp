@@ -1142,18 +1142,24 @@ struct RailPad
         seed.declination_rad = float(std::atan2(b_ned[1], b_ned[0]));
         seed.field_ut = 50.3f;
         seed.have_declination = 1;
+        seed.dip_rad = float(dipRad());
+        seed.have_dip = 1;
     }
+
+    double dipRad() const { return std::atan2(b_ned[2], std::hypot(b_ned[0], b_ned[1])); }
 
     // A hard iron on the board, given in NED (on the still pad it is fixed
     // there too): the body's part of it.
     void hardIron(const double h_ned[3], float h_body[3]) const { nedToBody(q_true, h_ned, h_body); }
 
-    // From t0 for secs, still on the rail: the IMU at 200 Hz, the seed once a
+    // From t0 for secs, still on the rail: the IMU at 200 Hz (its specific
+    // force acc_scale times gravity's, flagged imu_flags), the seed once a
     // second as main.cpp sends it, and a 50 Hz magnetometer reading the field
     // plus h_body (uT), each sample's flags flags_at(seconds since kT0).
     // Returns where it stopped.
     template <typename F>
-    int64_t run(RawGnssShadow& sh, int64_t t0, double secs, const float h_body[3], F flags_at)
+    int64_t run(RawGnssShadow& sh, int64_t t0, double secs, const float h_body[3], F flags_at,
+                uint8_t imu_flags = gnss_raw::kShadowLevel, float acc_scale = 1.0f)
     {
         int64_t t = t0;
         for (; t < t0 + static_cast<int64_t>(secs * 1e6); t += 5000)
@@ -1161,8 +1167,8 @@ struct RailPad
             ShadowImu s{};
             s.time_us = static_cast<uint32_t>(t);
             for (int i = 0; i < 3; ++i)
-                s.acc[i] = acc[i];
-            s.flags = gnss_raw::kShadowLevel;
+                s.acc[i] = acc[i] * acc_scale;
+            s.flags = imu_flags;
             if ((t - kT0) % 20000 == 0)
             {
                 gnss_raw::ShadowMag m{};
@@ -1231,6 +1237,7 @@ TEST(RawGnssShadow, AnUncalibratedMagnetometerIsNoHeading)
     EXPECT_EQ(sh.stats().mag_fused, 0u);
     EXPECT_GE(sh.stats().mag_uncal, 245u);        // 50 a second, from the start's first step
     EXPECT_EQ(sh.stats().mag_suspect, 0u);        // counted once, by the gate it failed first
+    EXPECT_EQ(sh.stats().mag_dip, 0u);
     EXPECT_NEAR(headingErrDeg(sh, pad.q_true), -44.7, 1.0);   // north: the seed's guess
     EXPECT_GT(headingSigmaDeg(sh), 50.0);
 }
@@ -1246,6 +1253,8 @@ TEST(RawGnssShadow, ACalibratedMagnetometerIsAHeading)
     EXPECT_GE(sh.stats().mag_fused, 245u);
     EXPECT_EQ(sh.stats().mag_uncal, 0u);
     EXPECT_EQ(sh.stats().mag_suspect, 0u);
+    EXPECT_EQ(sh.stats().mag_dip, 0u);
+    EXPECT_NEAR(sh.stats().mag_dip_err_deg, 0.0f, 0.01f);   // the truth's dip, the model's
     EXPECT_NEAR(headingErrDeg(sh, pad.q_true), 0.0, 1.0);
     EXPECT_LT(headingSigmaDeg(sh), 5.0);
 }
@@ -1276,6 +1285,131 @@ TEST(RawGnssShadow, ASimsFieldNeedsNoCalibration)
     EXPECT_GE(sh.stats().mag_fused, 245u);
     EXPECT_EQ(sh.stats().mag_uncal, 0u);
     EXPECT_NEAR(headingErrDeg(sh, pad.q_true), 0.0, 1.0);
+}
+
+namespace
+{
+
+// The field the magnetometer reads turned off the truth's, as a hard iron
+// (body, uT) that does it: tipped by d_dip_deg toward the vertical (its size
+// and heading kept), and turned about the vertical by turn_deg (its size and
+// dip kept).
+void turnedField(const RailPad& pad, double d_dip_deg, double turn_deg, float h_body[3])
+{
+    const double bn = std::sqrt(pad.b_ned[0] * pad.b_ned[0] + pad.b_ned[1] * pad.b_ned[1] +
+                                pad.b_ned[2] * pad.b_ned[2]);
+    const double dip = pad.dipRad() + d_dip_deg * kPi / 180.0;
+    const double az = std::atan2(pad.b_ned[1], pad.b_ned[0]) + turn_deg * kPi / 180.0;
+    const double m_ned[3] = {bn * std::cos(dip) * std::cos(az), bn * std::cos(dip) * std::sin(az), bn * std::sin(dip)};
+    const double h_ned[3] = {m_ned[0] - pad.b_ned[0], m_ned[1] - pad.b_ned[1], m_ned[2] - pad.b_ned[2]};
+    pad.hardIron(h_ned, h_body);
+}
+
+}  // namespace
+
+TEST(RawGnssShadow, AFieldOffTheModelsDipIsNoHeading)
+{
+    // The 40 uT the size test passes, on a magnetometer flagged calibrated (a
+    // calibration gone stale: a battery moved, a screw changed): it lifts the
+    // field 31 deg toward the horizontal, and the dip test refuses every
+    // sample. The heading stays the start's guess.
+    RailPad pad;
+    float h[3];
+    sizePassingHardIron(pad, h);
+    RawGnssShadow sh(primaryCfg());
+    pad.run(sh, kT0, 5.0, h, [](double) { return gnss_raw::kShadowMagCalibrated; });
+    EXPECT_EQ(sh.stats().mag_fused, 0u);
+    EXPECT_GE(sh.stats().mag_dip, 245u);
+    EXPECT_EQ(sh.stats().mag_uncal, 0u);
+    EXPECT_EQ(sh.stats().mag_suspect, 0u);         // its size is the model's
+    EXPECT_NEAR(sh.stats().mag_dip_err_deg, 33.7f - 64.8f, 0.2f);
+    EXPECT_NEAR(headingErrDeg(sh, pad.q_true), -44.7, 1.0);
+
+    // What it keeps out: with no dip to hold it to, the size test alone takes
+    // it, and the heading goes 59 deg the wrong way of the truth.
+    RailPad nodip;
+    nodip.seed.have_dip = 0;
+    RawGnssShadow open(primaryCfg());
+    nodip.run(open, kT0, 5.0, h, [](double) { return gnss_raw::kShadowMagCalibrated; });
+    EXPECT_GE(open.stats().mag_fused, 245u);
+    EXPECT_EQ(open.stats().mag_dip, 0u);
+    const double bh = std::hypot(pad.b_ned[0], pad.b_ned[1]);
+    const double wrong_deg = std::atan2(std::sqrt(40.0 * 40.0 - 17.58 * 17.58), bh) * 180.0 / kPi;   // 59.2
+    EXPECT_NEAR(headingErrDeg(open, nodip.q_true), -wrong_deg, 2.0);
+}
+
+TEST(RawGnssShadow, TheDipTestTakesWhatACalibratedMagnetometerIsOffBy)
+{
+    // mag_dip_tol_deg (6): a field tipped 5 deg -- a calibrated QMC5883P's
+    // worst case (RawGnssShadow.h) -- is fused either way; 7 deg is refused.
+    ASSERT_DOUBLE_EQ(RawGnssShadow::Config().mag_dip_tol_deg, 6.0);
+    for (double d : {-5.0, 5.0, -7.0, 7.0})
+    {
+        RailPad pad;
+        float h[3];
+        turnedField(pad, d, 0.0, h);
+        RawGnssShadow sh(primaryCfg());
+        pad.run(sh, kT0, 2.0, h, [](double) { return gnss_raw::kShadowMagCalibrated; });
+        EXPECT_NEAR(sh.stats().mag_dip_err_deg, d, 0.01) << d;
+        if (std::fabs(d) < 6.0)
+        {
+            EXPECT_GE(sh.stats().mag_fused, 95u) << d;
+            EXPECT_EQ(sh.stats().mag_dip, 0u) << d;
+            EXPECT_NEAR(headingErrDeg(sh, pad.q_true), 0.0, 1.0) << d;   // tipped, not turned
+        }
+        else
+        {
+            EXPECT_EQ(sh.stats().mag_fused, 0u) << d;
+            EXPECT_GE(sh.stats().mag_dip, 95u) << d;
+        }
+    }
+}
+
+TEST(RawGnssShadow, OnlyTheCalibrationGuardsAHardIronThatTurnsTheFieldAboutTheVertical)
+{
+    // 21 uT laid so the field only turns 60 deg about the vertical: its size
+    // and its dip are the model's, and neither test can see it. Flagged
+    // calibrated it is fused, the heading 60 deg off -- what the size and dip
+    // tests cannot do; uncalibrated it is refused.
+    RailPad pad;
+    float h[3];
+    turnedField(pad, 0.0, 60.0, h);
+    RawGnssShadow stale(primaryCfg());
+    pad.run(stale, kT0, 5.0, h, [](double) { return gnss_raw::kShadowMagCalibrated; });
+    EXPECT_GE(stale.stats().mag_fused, 245u);
+    EXPECT_EQ(stale.stats().mag_suspect + stale.stats().mag_dip, 0u);
+    EXPECT_NEAR(headingErrDeg(stale, pad.q_true), -60.0, 2.0);
+
+    RailPad pad2;
+    RawGnssShadow uncal(primaryCfg());
+    pad2.run(uncal, kT0, 5.0, h, [](double) { return uint8_t(0); });
+    EXPECT_EQ(uncal.stats().mag_fused, 0u);
+    EXPECT_GE(uncal.stats().mag_uncal, 245u);
+}
+
+TEST(RawGnssShadow, TheMagnetometerIsTakenOnlyOnTheGroundAtGsSize)
+{
+    // The dip test takes the specific force as down: so the magnetometer is
+    // applied only on the ground, the force g's size. In flight, and on the
+    // pad with a motor burning before the launch detector's verdict, every
+    // sample is seen and none is applied -- fused, or refused by any gate.
+    RailPad pad;
+    float h[3];
+    sizePassingHardIron(pad, h);                   // what the dip test would refuse
+    RawGnssShadow sh(primaryCfg());
+    int64_t t = pad.run(sh, kT0, 1.0, h, [](double) { return gnss_raw::kShadowMagCalibrated; });
+    const RawGnssShadow::Stats before = sh.stats();
+    ASSERT_GT(before.mag_dip, 40u);
+    t = pad.run(sh, t, 1.0, h, [](double) { return gnss_raw::kShadowMagCalibrated; },
+                gnss_raw::kShadowInFlight);         // in flight
+    t = pad.run(sh, t, 1.0, h, [](double) { return gnss_raw::kShadowMagCalibrated; },
+                gnss_raw::kShadowLevel, 4.0f);      // 4 g on the pad
+    ASSERT_TRUE(sh.running());
+    EXPECT_GE(sh.stats().mags, before.mags + 100u);
+    EXPECT_EQ(sh.stats().mag_fused, before.mag_fused);
+    EXPECT_EQ(sh.stats().mag_dip, before.mag_dip);
+    EXPECT_EQ(sh.stats().mag_suspect, before.mag_suspect);
+    EXPECT_EQ(sh.stats().mag_uncal, before.mag_uncal);
 }
 
 TEST(RawGnssShadow, TheNavigationFilterStartsInFlightFromARestoredFlight)
@@ -1590,6 +1724,7 @@ struct SimScore
     double max_h_err = 0, max_horiz = 0, t_land = -1;
     float  v_end[3] = {};
     bool   running = false;
+    uint32_t mag_fused = 0, mag_refused = 0;
 };
 
 // A sim on the Beetle drops the receiver's raw output: the navigation filter
@@ -1613,6 +1748,8 @@ SimScore flyFirmwareSim(double gyro_bias_dps)
     seed.declination_rad = float(std::atan2(5.0, 22.0));
     seed.field_ut = 47.7f;
     seed.have_declination = 1;
+    seed.dip_rad = float(std::atan2(42.0, std::hypot(22.0, 5.0)));   // the sim's field's (WMM's there: 0.4 deg less)
+    seed.have_dip = 1;
     const double h0 = 0.0;
     double max_h_err = 0, max_horiz = 0, t_land = -1;
     bool launched = false, apogee = false;
@@ -1685,6 +1822,8 @@ SimScore flyFirmwareSim(double gyro_bias_dps)
     }
     sc.running = sh.running();
     sc.t_land = t_land;
+    sc.mag_fused = sh.stats().mag_fused;
+    sc.mag_refused = sh.stats().mag_uncal + sh.stats().mag_suspect + sh.stats().mag_dip;
     sc.max_h_err = max_h_err;
     sc.max_horiz = max_horiz;
     for (int i = 0; i < 3; ++i)
@@ -1707,6 +1846,9 @@ TEST(RawGnssShadow, TheNavigationFilterFliesTheFirmwaresSim)
     EXPECT_LT(sc.max_horiz, 5.0);
     for (int i = 0; i < 3; ++i)
         EXPECT_NEAR(sc.v_end[i], 0.0f, 0.3f);
+    // the sim's field passes every magnetometer gate, on the pad and landed (#1590)
+    EXPECT_GT(sc.mag_fused, 100u);
+    EXPECT_EQ(sc.mag_refused, 0u);
 }
 
 TEST(RawGnssShadow, UnderAChuteWithNoSatellitesLevellingHoldsAGyroBias)

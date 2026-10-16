@@ -86,7 +86,8 @@ void RawGnssShadow::onMag(const ShadowMag& m)
 }
 
 // Each refused sample is counted once, by the first gate it fails: the
-// calibration, then the size.
+// calibration, the size, then the dip. onImu calls this only on the ground at
+// g's size, where the specific force is gravity: the dip takes it as down.
 void RawGnssShadow::applyMag(const float acc[3])
 {
     if (!have_seed_ || !seed_.have_declination)
@@ -115,6 +116,29 @@ void RawGnssShadow::applyMag(const float acc[3])
         {
             st_.mag_suspect++;            // a hard iron that size: no heading in it (#1304)
             return;
+        }
+    }
+    // The dip: the field's part along the accelerometer's down, as an angle
+    // below the horizontal, against the model's (#1590). A hard iron the size
+    // test passes has to lie across the field, and that tips the field's
+    // direction as well as its heading (mag_dip_tol_deg).
+    if (seed_.have_dip && cfg_.mag_dip_tol_deg > 0.0)
+    {
+        const double an = std::sqrt(static_cast<double>(acc[0]) * acc[0] + static_cast<double>(acc[1]) * acc[1]
+                                    + static_cast<double>(acc[2]) * acc[2]);
+        if (an > 0.1 && mm > 0.1)
+        {
+            // down is -acc: the specific force of a body at rest points up
+            double s = -(static_cast<double>(m[0]) * acc[0] + static_cast<double>(m[1]) * acc[1]
+                         + static_cast<double>(m[2]) * acc[2]) / (an * mm);
+            s = s > 1.0 ? 1.0 : (s < -1.0 ? -1.0 : s);
+            const double d_err = std::asin(s) - static_cast<double>(seed_.dip_rad);
+            st_.mag_dip_err_deg = static_cast<float>(d_err * kRad2Deg);
+            if (std::fabs(d_err) * kRad2Deg > cfg_.mag_dip_tol_deg)
+            {
+                st_.mag_dip++;
+                return;
+            }
         }
     }
     if (ekf_.updateMagHeading(acc, m, true, seed_.declination_rad, err))
