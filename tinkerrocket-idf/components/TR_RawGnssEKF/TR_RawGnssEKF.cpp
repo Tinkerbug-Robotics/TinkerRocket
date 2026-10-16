@@ -204,10 +204,11 @@ void RawGnssEKF<T>::init(const double lla[3], const T v_ned[3], const T q[4], do
     // q must be the best attitude there is, not a placeholder: the navigation
     // filter's pad seed is the accelerometer's tilt (main.cpp's
     // quatFromAccelHeading), and the levelling moves it a fraction of a
-    // degree. A start degrees off gives some of the heading's variance to the
-    // levelling as the linearization moves (3 deg: 57 deg of heading is 41
-    // after 10 s); a body far off its start, an identity start on a nose-up
-    // rocket, would leave the heading p0_att's, as before.
+    // degree. (A start degrees off gave some of the heading's variance to the
+    // levelling as the linearization moved -- 3 deg: 57 deg of heading was 41
+    // after 10 s -- until the levelling was made heading-free,
+    // level_heading_free.) A body far off its start, an identity start on a
+    // nose-up rocket, would leave the heading p0_att's, as before.
     setHeadingSigma(T(2.0 * p_.p0_hdg));
 
     hhead_ = hn_ = 0;
@@ -707,7 +708,7 @@ T RawGnssEKF<T>::hph(const int* hidx, const T* hval, int hn) const
 // applied, 0 refused by the gate, -1 for a non-positive S.
 template <typename T>
 int RawGnssEKF<T>::scalarUpdate(const int* hidx, const T* hval, int hn, T y, T R, T gate, T att,
-                                T dx[N], T* nis, uint32_t kmask, const T* att_axis)
+                                T dx[N], T* nis, uint32_t kmask, const T* att_axis, const T* att_off_axis)
 {
     T HP[N] = {};
     for (int m = 0; m < hn; ++m)
@@ -736,6 +737,20 @@ int RawGnssEKF<T>::scalarUpdate(const int* hidx, const T* hval, int hn, T y, T R
         for (int i = 0; i < N; ++i)
             if (!(kmask & (1u << i)))
                 K[i] = T(0);
+    if (att_off_axis != nullptr)
+    {
+        // nothing about the axis: the attitude's and the gyro bias's
+        // corrections across it only (the Joseph form below keeps P exact for
+        // the gain so altered: the attitude about the axis, the gyro bias
+        // along it and their covariance come through as they were)
+        const int bases[2] = {kAtt, kGyroBias};
+        for (int base : bases)
+        {
+            const T d = att_off_axis[0] * K[base] + att_off_axis[1] * K[base + 1] + att_off_axis[2] * K[base + 2];
+            for (int a = 0; a < 3; ++a)
+                K[base + a] -= att_off_axis[a] * d;
+        }
+    }
 
     for (int i = 0; i < N; ++i)
         for (int j = 0; j < N; ++j)
@@ -865,6 +880,15 @@ void RawGnssEKF<T>::updateAccelLevel(const T acc[3])
     const T val[3][3] = {{T(2) * ag[2], T(-2) * ag[1], T(1)},
                          {T(-2) * ag[2], T(2) * ag[0], T(1)},
                          {T(2) * ag[1], T(-2) * ag[0], T(1)}};
+    // Gravity says nothing of a turn about the vertical (its H has no part
+    // along it), but through the attitude's correlations with the tilt and
+    // the accelerometer bias the gain would turn the heading, and move the
+    // gyro bias along the vertical that turns it later: those rows, along the
+    // vertical in the body frame -- NED down, M's third column -- are zeroed
+    // (level_heading_free, TR_RawGnssEKF.h). The dual of the GNSS heading
+    // gate (att_gate_vertical), which keeps only them.
+    const T vert[3] = {M[0][2], M[1][2], M[2][2]};
+    const T* off = p_.level_heading_free ? vert : nullptr;
     // One vector update with R = accel_var I, as three scalar ones on the
     // same linearization: each innovation less what the rows before it
     // already corrected, the correction injected once at the end.
@@ -876,7 +900,7 @@ void RawGnssEKF<T>::updateAccelLevel(const T acc[3])
         for (int m = 0; m < 3; ++m)
             yr -= val[r][m] * dx_sum[idx[r][m]];
         T dx[N];
-        if (scalarUpdate(idx[r], val[r], 3, yr, R, T(0), T(1), dx, nullptr) == 1)
+        if (scalarUpdate(idx[r], val[r], 3, yr, R, T(0), T(1), dx, nullptr, 0xFFFFFFFFu, nullptr, off) == 1)
             for (int i = 0; i < N; ++i)
                 dx_sum[i] += dx[i];
     }

@@ -77,6 +77,9 @@
 // ground, and after apogee) the shadow does too -- in flight only once its
 // own velocity has held steady from epoch to epoch and the specific force is
 // g's size (LevelGate.h): as a drogue opens, the drag is far off vertical.
+// Gravity carries no heading, and a levelling never turns it (the EKF's
+// level_heading_free): act's wide launch heading, correlated with the tilt
+// by the boost, is otherwise turned by the first levelling under the chute.
 //
 // The heading from thrust (HeadingFit.h, heading_mode). Near vertical
 // nothing the filter fuses sees its heading. The fit is seeded at the last

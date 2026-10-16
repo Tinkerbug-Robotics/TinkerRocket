@@ -124,6 +124,24 @@ struct RawGnssEKFParams
     double w_markov_sigma = 0.00025;
     double w_markov_tau   = 50.0;
     double accel_var      = 0.25;      // pad levelling, (m/s^2)^2
+    // Gravity carries no heading: a levelling update (updateAccelLevel), on
+    // the ground or in flight, corrects the tilt and the biases and never the
+    // rotation about the vertical -- the gain's rows along the vertical, the
+    // attitude's and the gyro bias's, are zeroed, Joseph form, so the
+    // heading, the gyro bias that turns it, their variances and covariance
+    // come through it unchanged and the cross-covariances stay consistent
+    // (the dual of att_gate_vertical, which keeps only those rows). Without
+    // it, a heading left correlated with the tilt or the accelerometer bias
+    // is turned through those correlations, at once or later through that
+    // gyro bias. Replayed from the rig's f3c with every epoch from T+0.5 s
+    // cut, the first levelling under the chute turned act's 30 deg launch
+    // heading -8.8 deg and took its 1-sigma from 31.4 to 13.5 deg, as if
+    // gravity had measured it. On a pad with no magnetometer a start a few
+    // degrees off its tilt gave the levelling some of the heading's variance
+    // as the linearization moved (3 deg off: 57 deg was 41 after 10 s); the
+    // heading keeps its own now. With a magnetometer the pad's heading is the
+    // magnetometer's either way.
+    bool   level_heading_free = true;
     // The magnetometer as a heading (TR_GpsInsEKF's, #1578/#1304)
     double mag_sigma_ut   = 0.5;       // the field's noise per axis, uT
     double mag_tilt_sigma_mps2 = 0.05; // the accelerometer's, as a tilt reference
@@ -295,7 +313,9 @@ public:
 
     // IMU time update: specific force (m/s^2) and rate (rad/s), body FRD.
     void propagate(const T acc[3], const T gyro[3], T dt);
-    // Gravity-reference update on the pad (GpsInsEKF::accelMeasUpdate).
+    // Gravity-reference update on the pad (GpsInsEKF::accelMeasUpdate), and
+    // in flight where the shadow levels. With level_heading_free (the
+    // default) it never turns the heading or shrinks its variance.
     void updateAccelLevel(const T acc[3]);
     // A height above the ellipsoid (m) measured with variance var (m^2): the
     // barometer, referred to the filter's own pad. No innovation gate: a
@@ -401,9 +421,13 @@ private:
     // kmask: the states the gain may move (bit i, state i); the rest keep
     // their estimate and, Joseph form, a consistent covariance. att_axis: the
     // gain's attitude and gyro-bias rows projected onto this body-frame unit
-    // vector (att_gate_vertical: the vertical).
+    // vector (att_gate_vertical: the vertical). att_off_axis: the gain's
+    // attitude and gyro-bias rows along this body-frame unit vector zeroed
+    // (the levelling, the vertical: the attitude about it and the gyro bias
+    // along it keep their estimates and covariance).
     int    scalarUpdate(const int* hidx, const T* hval, int hn, T y, T R, T gate, T att,
-                        T dx[N], T* nis, uint32_t kmask = 0xFFFFFFFFu, const T* att_axis = nullptr);
+                        T dx[N], T* nis, uint32_t kmask = 0xFFFFFFFFu, const T* att_axis = nullptr,
+                        const T* att_off_axis = nullptr);
     // The gain's attitude rows as the GNSS updates have them: scaled by att,
     // and (att_axis) the attitude's and gyro bias's projected onto that axis
     // (gnssAttAxis: the vertical in the body frame with att_gate_vertical,

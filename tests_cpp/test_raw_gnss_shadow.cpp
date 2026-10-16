@@ -1412,6 +1412,67 @@ TEST(RawGnssShadow, TheMagnetometerIsTakenOnlyOnTheGroundAtGsSize)
     EXPECT_EQ(sh.stats().mag_uncal, before.mag_uncal);
 }
 
+TEST(RawGnssShadow, HeadingFreeLevellingLeavesTheMagnetometersPadHeading)
+{
+    // Gravity carries no heading on the ground either (the EKF's
+    // level_heading_free, on by default): with a calibrated magnetometer the
+    // pad's heading and its 1-sigma are what they were with the levelling's
+    // heading row left in -- the magnetometer sets them.
+    double err[2], sig[2];
+    for (int free = 0; free < 2; ++free)
+    {
+        RawGnssShadow::Config c = primaryCfg();
+        c.ekf.level_heading_free = free != 0;
+        RawGnssShadow sh(c);
+        RailPad pad;
+        const float none[3] = {};
+        pad.run(sh, kT0, 10.0, none, [](double) { return gnss_raw::kShadowMagCalibrated; });
+        ASSERT_TRUE(sh.running());
+        EXPECT_GE(sh.stats().mag_fused, 495u);
+        err[free] = headingErrDeg(sh, pad.q_true);
+        sig[free] = headingSigmaDeg(sh);
+    }
+    EXPECT_TRUE(RawGnssShadow::Config().ekf.level_heading_free);
+    EXPECT_NEAR(err[1], 0.0, 0.5);
+    EXPECT_NEAR(err[1], err[0], 0.001);                        // 0.0096 deg both
+    EXPECT_LT(sig[1], 1.0);
+    EXPECT_NEAR(sig[1], sig[0], 0.001 * sig[0]);               // 0.283 deg both
+}
+
+TEST(RawGnssShadow, WithNoMagnetometerThePadLevellingKeepsTheHeadingUnknown)
+{
+    // No heading on the pad (the magnetometer uncalibrated, refused), and a
+    // seed 3 deg off the rail's tilt: the levelling learns the tilt and,
+    // heading-free, leaves the heading as unknown as the start said (p0_hdg's
+    // 57 deg, growing). With the heading row left in, the linearization's
+    // move gave the levelling part of the heading's variance (#1626 N10):
+    // a 1-sigma degrees smaller that nothing measured.
+    double sig[2], err[2];
+    for (int free = 0; free < 2; ++free)
+    {
+        RawGnssShadow::Config c = primaryCfg();
+        c.ekf.level_heading_free = free != 0;
+        RawGnssShadow sh(c);
+        RailPad pad;
+        quatYawPitch(0.0, 80.6 * kPi / 180.0, pad.seed.quat);   // the tilt 3 deg off
+        const float none[3] = {};
+        pad.run(sh, kT0, 10.0, none, [](double) { return uint8_t(0); });
+        ASSERT_TRUE(sh.running());
+        EXPECT_EQ(sh.stats().mag_fused, 0u);
+        sig[free] = headingSigmaDeg(sh);
+        err[free] = headingErrDeg(sh, pad.q_true);
+        // the tilt learned either way: from p0_att's 40 deg to what a still
+        // pad can tell from an accelerometer bias of p0_abias's 0.1 g (#1626 K1)
+        float s[3];
+        sh.filter().attSigmaNed(s);
+        EXPECT_LT(s[0] * 180.0 / kPi, 6.0) << free;
+        EXPECT_LT(s[1] * 180.0 / kPi, 6.0) << free;
+    }
+    EXPECT_GT(sig[1], 57.0);                                   // 57.9 deg
+    EXPECT_LT(sig[0], sig[1] - 10.0);                          // 41.5 with the heading rows left in
+    EXPECT_NEAR(err[1], -44.7, 1.0);                           // north, the seed's guess
+}
+
 TEST(RawGnssShadow, ALaunchWithNoMagnetometerHeadingIsCountedWithItsOwnSigma)
 {
     // The no-magnetometer start: a pad that fused no heading (here its

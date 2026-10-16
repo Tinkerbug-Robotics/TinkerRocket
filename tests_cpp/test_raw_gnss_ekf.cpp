@@ -1029,9 +1029,11 @@ TEST(RawGnssEKF, UpTheRailTheLevelledStartKeepsItsHeadingFreeInFloat)
     // p0_hdg at pi, float lost it after 60 s here: the attitude block holding
     // pi^2 about a tilted axis beside what the levelling pins (the tilt with
     // the accelerometer bias, to 4e-6) is past float's precision; it went
-    // indefinite, and its rows restarted, the heading at 0.2 deg. A seed
-    // degrees off the tilt gives some of the heading's variance to the
-    // levelling, as the linearization moves (3 deg off: 41 deg after 10 s).
+    // indefinite, and its rows restarted, the heading at 0.2 deg. (With the
+    // levelling's heading row left in, a seed degrees off the tilt gave some
+    // of the heading's variance to the levelling as the linearization moved,
+    // 3 deg off: 41 deg after 10 s. Heading-free, the default, it keeps it:
+    // test_raw_gnss_shadow.cpp, WithNoMagnetometerThePadLevellingKeepsTheHeadingUnknown.)
     float q[4];
     quatYawPitch(44.7 * kPi / 180.0, 83.6 * kPi / 180.0, q);
     const double qd[4] = {q[0], q[1], q[2], q[3]};
@@ -1446,4 +1448,267 @@ TEST(RawGnssEKF, AStillReceiversRangeRateIsTheSkysDoppler)
         // toward the satellite
         EXPECT_GT(u[0] * (mi.sat_pos[0] - r[0]) + u[1] * (mi.sat_pos[1] - r[1]) + u[2] * (mi.sat_pos[2] - r[2]), 0.0);
     }
+}
+
+// ---- gravity carries no heading (level_heading_free)
+
+namespace
+{
+
+// P's Cholesky factor exists: positive definite.
+template <typename T>
+bool positiveDefinite(const RawGnssEKF<T>& f)
+{
+    constexpr int N = RawGnssEKF<T>::N;
+    double L[N][N] = {};
+    for (int i = 0; i < N; ++i)
+        for (int j = 0; j <= i; ++j)
+        {
+            double s = static_cast<double>(f.P(i, j));
+            for (int k = 0; k < j; ++k)
+                s -= L[i][k] * L[j][k];
+            if (i == j)
+            {
+                if (!(s > 0.0))
+                    return false;
+                L[i][i] = std::sqrt(s);
+            }
+            else
+            {
+                L[i][j] = s / L[j][j];
+            }
+        }
+    return true;
+}
+
+// The heading's correlation (the attitude error about NED down) with the tilt
+// about north and with the accelerometer bias (its largest), from P: the
+// attitude rows taken into NED by the attitude.
+template <typename T>
+void headingCorrelations(const RawGnssEKF<T>& f, double& c_tilt_n, double& c_bias)
+{
+    using F = RawGnssEKF<T>;
+    const T* q = f.quat();
+    const double w = q[0], x = q[1], y = q[2], z = q[3];
+    // NED -> body: its columns are north, east and down in the body
+    const double M[3][3] = {{1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y)},
+                            {2 * (x * y - w * z), 1 - 2 * (x * x + z * z), 2 * (y * z + w * x)},
+                            {2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)}};
+    auto cov = [&](int i, int j) {
+        double s = 0.0;
+        for (int a = 0; a < 3; ++a)
+            for (int b = 0; b < 3; ++b)
+                s += M[a][i] * static_cast<double>(f.P(F::kAtt + a, F::kAtt + b)) * M[b][j];
+        return s;
+    };
+    const double hh = cov(2, 2);
+    c_tilt_n = cov(2, 0) / std::sqrt(hh * cov(0, 0));
+    c_bias = 0.0;
+    for (int k = 0; k < 3; ++k)
+    {
+        double s = 0.0;
+        for (int a = 0; a < 3; ++a)
+            s += M[a][2] * static_cast<double>(f.P(F::kAtt + a, F::kAccBias + k));
+        const double c = s / std::sqrt(hh * static_cast<double>(f.P(F::kAccBias + k, F::kAccBias + k)));
+        if (std::fabs(c) > std::fabs(c_bias))
+            c_bias = c;
+    }
+}
+
+// The angle between the filter's down in the body and the one a still
+// accelerometer reading acc gives, deg.
+template <typename T>
+double tiltOffDeg(const RawGnssEKF<T>& f, const T acc[3])
+{
+    const T* q = f.quat();
+    const double w = q[0], x = q[1], y = q[2], z = q[3];
+    const double d[3] = {2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)};
+    const double an = std::sqrt(double(acc[0]) * acc[0] + double(acc[1]) * acc[1] + double(acc[2]) * acc[2]);
+    const double c = -(d[0] * acc[0] + d[1] * acc[1] + d[2] * acc[2]) / an;
+    return std::acos(std::min(1.0, std::max(-1.0, c))) * 180.0 / kPi;
+}
+
+// Act's launch, then GNSS while the body is pushed north (RawGnssShadow
+// opens the heading at the launch edge): a heading error and a tilt about
+// north both put the east velocity off, and the accelerometer bias with
+// them, so the Dopplers tie the heading to the tilt and the bias.
+template <typename T>
+RawGnssEKF<T> actPushed(bool heading_free)
+{
+    RawGnssEKFParams p = quietParams();
+    p.level_heading_free = heading_free;
+    RawGnssEKF<T> f(p);
+    float qf[4];
+    quatYawPitch(20.0 * kPi / 180.0, 0.0, qf);           // 20 deg off a level truth (body = NED)
+    const T q0[4] = {T(qf[0]), T(qf[1]), T(qf[2]), T(qf[3])};
+    const T v0[3] = {T(0), T(0), T(0)};
+    f.init(kLla0, v0, q0, 0.0);
+    f.setQuaternion(q0);
+    const T still[3] = {T(0), T(0), T(-kG)}, no_rate[3] = {T(0), T(0), T(0)};
+    for (int k = 0; k < 300; ++k)                        // the pad: 6 s at 50 Hz
+    {
+        f.propagate(still, no_rate, T(0.02));
+        f.updateAccelLevel(still);
+    }
+    f.setHeadingSigma(T(30.0 * kPi / 180.0));            // the launch edge: act's prior
+    f.setTiltSigmaFloor(T(1.0 * kPi / 180.0));           //   and a tilt floor
+    Clock clk;
+    const std::vector<std::array<double, 3>> push(4, std::array<double, 3>{3.0, 0.0, 0.0});
+    flyLevel(f, push, clk);
+    return f;
+}
+
+// The heading's part of the state about the body-frame vertical e (unit):
+// the attitude's variance about it, the gyro bias's along it and their
+// covariance (state units), and the gyro bias along it.
+template <typename T>
+void verticalBlock(const RawGnssEKF<T>& f, const double e[3], double out[4])
+{
+    using F = RawGnssEKF<T>;
+    out[0] = out[1] = out[2] = out[3] = 0.0;
+    for (int a = 0; a < 3; ++a)
+    {
+        out[3] += e[a] * static_cast<double>(f.gyroBias()[a]);
+        for (int b = 0; b < 3; ++b)
+        {
+            out[0] += e[a] * static_cast<double>(f.P(F::kAtt + a, F::kAtt + b)) * e[b];
+            out[1] += e[a] * static_cast<double>(f.P(F::kGyroBias + a, F::kGyroBias + b)) * e[b];
+            out[2] += e[a] * static_cast<double>(f.P(F::kAtt + a, F::kGyroBias + b)) * e[b];
+        }
+    }
+}
+
+// NED down in the body frame at attitude q
+template <typename T>
+void downInBody(const T q[4], double e[3])
+{
+    const double w = q[0], x = q[1], y = q[2], z = q[3];
+    e[0] = 2 * (x * z - w * y);
+    e[1] = 2 * (y * z + w * x);
+    e[2] = 1 - 2 * (x * x + y * y);
+}
+
+}  // namespace
+
+TEST(RawGnssEKF, LevellingLeavesACorrelatedHeadingAloneAndStillLevels)
+{
+    // After act's launch and 4 s of GNSS in a push (actPushed) the body hangs
+    // still, rolled 2 deg off the filter's tilt, and is levelled 50 times.
+    // Each update leaves the heading where it was, and the heading's part of
+    // the state -- its variance about the update's vertical, the gyro bias
+    // along it, their variance and covariance -- to double's last bits; the
+    // tilt comes back to the accelerometer's, and P stays symmetric and
+    // positive definite. (Measured about the vertical after the update, the
+    // heading's 1-sigma moves at the second order only: the tilt corrected
+    // turns the body-frame vertical it is taken about.) The same levelling
+    // with its heading rows left in turns the heading through those ties, as
+    // under the rig's chute (f3c with every epoch from T+0.5 s cut: -8.8 deg,
+    // its 1-sigma 31.4 -> 13.5).
+    double turned[2] = {}, sig_drop[2] = {};
+    for (bool free : {true, false})
+    {
+        SCOPED_TRACE(free ? "heading-free" : "the heading rows left in");
+        RawGnssEKF<double> f = actPushed<double>(free);
+        double c_tilt, c_bias;
+        headingCorrelations(f, c_tilt, c_bias);
+        EXPECT_GT(std::max(std::fabs(c_tilt), std::fabs(c_bias)), 0.3) << c_tilt << " " << c_bias;
+        double s0[3];
+        f.attSigmaNed(s0);
+        EXPECT_GT(s0[2], 2.0 * kPi / 180.0);              // GNSS has not pinned it in 4 s
+        // the body rolled 2 deg about its nose from where the filter has it
+        const double* q = f.quat();
+        const float qf[4] = {float(q[0]), float(q[1]), float(q[2]), float(q[3])};
+        float down_b[3];
+        const double down_ned[3] = {0.0, 0.0, 1.0};
+        nedToBody(qf, down_ned, down_b);
+        const double r = 2.0 * kPi / 180.0;
+        const double acc[3] = {-kG * down_b[0], -kG * (std::cos(r) * down_b[1] - std::sin(r) * down_b[2]),
+                               -kG * (std::sin(r) * down_b[1] + std::cos(r) * down_b[2])};
+        EXPECT_NEAR(tiltOffDeg(f, acc), 2.0, 0.01);
+        const double q_start[4] = {q[0], q[1], q[2], q[3]};
+        for (int k = 0; k < 50; ++k)
+        {
+            const double qb[4] = {f.quat()[0], f.quat()[1], f.quat()[2], f.quat()[3]};
+            double e[3], vb[4], sb[3];
+            downInBody(qb, e);
+            verticalBlock(f, e, vb);
+            f.attSigmaNed(sb);
+            f.updateAccelLevel(acc);
+            double hdg, tilt, va[4], sa[3];
+            headingTilt(f.quat(), qb, hdg, tilt);
+            verticalBlock(f, e, va);
+            f.attSigmaNed(sa);
+            if (free)
+            {
+                ASSERT_LT(std::fabs(hdg), 1.0e-9) << "update " << k;
+                ASSERT_NEAR(va[0], vb[0], 1.0e-12 * vb[0]) << "update " << k;
+                ASSERT_NEAR(va[1], vb[1], 1.0e-12 * vb[1]) << "update " << k;
+                ASSERT_NEAR(va[2], vb[2], 1.0e-12 * std::sqrt(vb[0] * vb[1])) << "update " << k;
+                ASSERT_NEAR(va[3], vb[3], 1.0e-15) << "update " << k;
+                ASSERT_NEAR(sa[2], sb[2], 1.0e-4 * sb[2]) << "update " << k;
+            }
+        }
+        double hdg, tilt, s[3];
+        headingTilt(f.quat(), q_start, hdg, tilt);
+        f.attSigmaNed(s);
+        turned[free ? 0 : 1] = hdg;
+        sig_drop[free ? 0 : 1] = (s0[2] - s[2]) * 180.0 / kPi;
+        EXPECT_LT(tiltOffDeg(f, acc), 0.2);              // levelled either way
+        expectCovarianceHealthy(f);
+        EXPECT_TRUE(positiveDefinite(f));
+    }
+    // (each update about a horizontal axis; their composition, the axes a hair
+    // apart, twists by their product: the second order's thousandth of a degree)
+    EXPECT_LT(std::fabs(turned[0]), 1.0e-3);
+    EXPECT_LT(std::fabs(sig_drop[0]), 0.01);
+    EXPECT_GT(std::fabs(turned[1]), 3.0);                // the ties turned it (5.2 deg)
+    EXPECT_GT(sig_drop[1], 1.0);                         //   and shrank its sigma (1.3 deg)
+}
+
+TEST(RawGnssEKF, LevellingLeavesTheHeadingAloneInFloat)
+{
+    // The flight computer's float: each update's turn a float's rounding at
+    // most and P positive definite throughout; then 5 s at 100 Hz, stepping
+    // between updates, against a twin that only steps: the levelled filter's
+    // heading has turned as the twin's and its 1-sigma grown as the twin's --
+    // the levelling took nothing from the gyro bias along the vertical.
+    RawGnssEKF<float> f = actPushed<float>(true);
+    const float* q = f.quat();
+    float down_b[3];
+    const double down_ned[3] = {0.0, 0.0, 1.0};
+    nedToBody(q, down_ned, down_b);
+    const double r = 2.0 * kPi / 180.0;
+    const float acc[3] = {float(-kG * down_b[0]), float(-kG * (std::cos(r) * down_b[1] - std::sin(r) * down_b[2])),
+                          float(-kG * (std::sin(r) * down_b[1] + std::cos(r) * down_b[2]))};
+    for (int k = 0; k < 50; ++k)
+    {
+        const float qb[4] = {f.quat()[0], f.quat()[1], f.quat()[2], f.quat()[3]};
+        float sb[3], s[3];
+        f.attSigmaNed(sb);
+        f.updateAccelLevel(acc);
+        f.attSigmaNed(s);
+        double hdg, tilt;
+        headingTilt(f.quat(), qb, hdg, tilt);
+        ASSERT_LT(std::fabs(hdg), 1.0e-3) << "update " << k;
+        ASSERT_NEAR(s[2], sb[2], 1.0e-4f * sb[2]) << "update " << k;
+        ASSERT_TRUE(positiveDefinite(f)) << "update " << k;
+    }
+    EXPECT_LT(tiltOffDeg(f, acc), 0.2);
+    RawGnssEKF<float> twin = f;
+    const float gyro[3] = {0, 0, 0};
+    for (int k = 0; k < 500; ++k)
+    {
+        f.propagate(acc, gyro, 0.01f);
+        f.updateAccelLevel(acc);
+        twin.propagate(acc, gyro, 0.01f);
+        ASSERT_TRUE(positiveDefinite(f)) << "step " << k;
+    }
+    double hdg, tilt;
+    headingTilt(f.quat(), twin.quat(), hdg, tilt);
+    EXPECT_LT(std::fabs(hdg), 0.01) << "levelling's turn over 5 s, beside the stepping's own";
+    float s[3], st[3];
+    f.attSigmaNed(s);
+    twin.attSigmaNed(st);
+    EXPECT_NEAR(s[2], st[2], 1.0e-3f * st[2]);
+    expectCovarianceHealthy(f);
 }
