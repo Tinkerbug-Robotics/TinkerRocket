@@ -332,6 +332,11 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     // CoreBluetooth objects (peripheral is set by BLEFleet on connect)
     var peripheral: CBPeripheral?
+    /// Which link this instance is for. Unlike the instance, it survives
+    /// BLEFleet replacing the BLEDevice on every disconnect/reconnect. nil for
+    /// the peripheral-less virtual rocket. Declared here rather than in an
+    /// extension so tests can override it: a CBPeripheral can't be built in one.
+    var peripheralID: UUID? { peripheral?.identifier }
     private var telemetryCharacteristic: CBCharacteristic?
     private var commandCharacteristic: CBCharacteristic?
     private var fileOpsCharacteristic: CBCharacteristic?
