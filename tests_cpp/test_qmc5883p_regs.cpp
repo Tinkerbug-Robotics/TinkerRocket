@@ -73,9 +73,71 @@ TEST(Qmc5883pRegs, FixedAddressChipIdAndMap) {
     EXPECT_EQ(REG_CTRL1, 0x0A);
     EXPECT_EQ(REG_CTRL2, 0x0B);
     EXPECT_EQ(REG_AXIS_SIGN, 0x29);     // section 7, every example
-    EXPECT_EQ(AXIS_SIGN_VALUE, 0x06);
     EXPECT_EQ(STATUS_DRDY, 0x01);
     EXPECT_EQ(STATUS_OVFL, 0x02);
+}
+
+TEST(Qmc5883pRegs, TheSignWordIsTheResetValueNotTheDatasheetExample) {
+    // Section 7 writes 0x06.  The driver writes 0x00: every QMC5883P log so
+    // far, and the chip signs #1590 measured from one, were taken at 0x00,
+    // because the 0x06 write never took (#1590 scale).  0x06 would most
+    // likely turn Y and Z, and with them the Beetle's pad heading.
+    EXPECT_EQ(AXIS_SIGN_VALUE, 0x00);
+    EXPECT_EQ(AXIS_SIGN_DATASHEET_EXAMPLE, 0x06);
+}
+
+TEST(Qmc5883pRegs, ReadbackComparesCtrl1WholeAndCtrl2UnderItsMask) {
+    const uint8_t c1 = ctrl1(Mode::NORMAL, Odr::HZ_100, Osr1::X8, Osr2::X8);   // 0xC9
+    const uint8_t c2 = ctrl2(Range::G8, SetReset::SET_AND_RESET_ON);          // 0x08
+    EXPECT_TRUE(configTook({0xC9, 0x08, 0x00}, c1, c2, AXIS_SIGN_VALUE));
+    // The Beetle before the fix: CTRL1 took, CTRL2 and the sign word did not.
+    EXPECT_FALSE(configTook({0xC9, 0x00, 0x00}, c1, c2, AXIS_SIGN_VALUE));
+    EXPECT_FALSE(configTook({0xC9, 0x08, 0x06}, c1, c2, AXIS_SIGN_VALUE));
+    EXPECT_FALSE(configTook({0xC8, 0x08, 0x00}, c1, c2, AXIS_SIGN_VALUE));   // still suspended
+    // SOFT_RST or SELF_TEST still set is a miss; the RFU bits 5:4 are not.
+    EXPECT_FALSE(configTook({0xC9, 0x88, 0x00}, c1, c2, AXIS_SIGN_VALUE));
+    EXPECT_FALSE(configTook({0xC9, 0x48, 0x00}, c1, c2, AXIS_SIGN_VALUE));
+    EXPECT_TRUE(configTook({0xC9, 0x38, 0x00}, c1, c2, AXIS_SIGN_VALUE));
+    EXPECT_EQ(CTRL2_READBACK_MASK, 0xCF);
+}
+
+TEST(Qmc5883pRegs, RangeOfCtrl2) {
+    EXPECT_EQ(rangeOfCtrl2(0x00), Range::G30);   // the Beetle's readback before the fix
+    EXPECT_EQ(rangeOfCtrl2(0x04), Range::G12);
+    EXPECT_EQ(rangeOfCtrl2(0x08), Range::G8);
+    EXPECT_EQ(rangeOfCtrl2(0x0C), Range::G2);
+    EXPECT_EQ(rangeOfCtrl2(0xB7), Range::G12);   // only bits 3:2 count
+    EXPECT_EQ(rangeOfCtrl2(0xF3), Range::G30);
+    EXPECT_EQ(fullScaleGauss(Range::G30), 30);
+    EXPECT_EQ(fullScaleGauss(Range::G12), 12);
+    EXPECT_EQ(fullScaleGauss(Range::G8), 8);
+    EXPECT_EQ(fullScaleGauss(Range::G2), 2);
+}
+
+TEST(Qmc5883pRegs, CountsConvertToTheEightGaussScale) {
+    EXPECT_EQ(CONTRACT_RANGE, Range::G8);
+    // ±8 G is the identity, end to end.
+    EXPECT_EQ(toContractCounts(0, Range::G8), 0);
+    EXPECT_EQ(toContractCounts(1875, Range::G8), 1875);
+    EXPECT_EQ(toContractCounts(-32768, Range::G8), -32768);
+    EXPECT_EQ(toContractCounts(32767, Range::G8), 32767);
+    // ±30 G: x3.75.  The Beetle's 13.27 uT at rest (498 counts at the logged
+    // scale, which were 498 counts at 1000 LSB/G) is 49.8 uT.
+    EXPECT_EQ(toContractCounts(498, Range::G30), 1868);
+    EXPECT_NEAR(toContractCounts(498, Range::G30) * uTPerLsb(Range::G8), 49.8f, 0.05f);
+    EXPECT_EQ(toContractCounts(1, Range::G30), 4);      // 3.75, rounded
+    EXPECT_EQ(toContractCounts(-1, Range::G30), -4);
+    EXPECT_EQ(toContractCounts(2, Range::G30), 8);      // 7.5, half away from zero
+    EXPECT_EQ(toContractCounts(-2, Range::G30), -8);
+    EXPECT_EQ(toContractCounts(8737, Range::G30), 32764);
+    EXPECT_EQ(toContractCounts(8738, Range::G30), 32767);    // 32767.5 saturates
+    EXPECT_EQ(toContractCounts(30000, Range::G30), 32767);   // the OVFL threshold
+    EXPECT_EQ(toContractCounts(-8739, Range::G30), -32768);
+    // ±12 G is x1.5, ±2 G x0.25.
+    EXPECT_EQ(toContractCounts(1000, Range::G12), 1500);
+    EXPECT_EQ(toContractCounts(15000, Range::G2), 3750);
+    EXPECT_EQ(toContractCounts(1, Range::G2), 0);
+    EXPECT_EQ(toContractCounts(2, Range::G2), 1);
 }
 
 TEST(Qmc5883pRegs, DecodeIsLittleEndianTwosComplement) {
