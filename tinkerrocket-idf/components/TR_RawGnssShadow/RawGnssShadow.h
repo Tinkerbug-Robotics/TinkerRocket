@@ -152,10 +152,14 @@
 // out. Act's opened heading and the boost's heading-velocity correlation
 // (+-0.83) widened the innovation gate: it refused 4 of the 7, let 3 through,
 // and those turned the heading +22.8 deg for the rest of the flight (GNSS was
-// gone after it). So, before the apogee call, an epoch whose IMU peak since
-// the last epoch is above boost_screen_g (2; 0 judges every epoch) is a boost
-// epoch, and at the start of its fusion -- after the receiver clock's step,
-// before any update -- it is judged, none of it fused:
+// gone after it). So, before the apogee call, an epoch whose start finds the
+// IMU past boost_screen_g (2; 0 judges every epoch) within the last
+// boost_screen_window_s (1.5 s) is a boost epoch -- the window, not the peak
+// since the last epoch, so the first epoch back after a dropout is no boost
+// epoch: a filter 6 s without GNSS refuses its rows, and the screen would drop
+// the epoch that rights it -- and at the start of its fusion, after the
+// receiver clock's step and before any update, it is judged, none of it
+// fused:
 //   - its Dopplers gated against the state as it stands, each with the test
 //     the update would give it as the epoch's first (TR_RawGnssEKF::
 //     screenRangeRates);
@@ -195,8 +199,15 @@
 // The vertical is the IMU's and the barometer's whatever the heading, so a
 // filter wrong about its heading is never locked out, and it runs on every
 // epoch, in every phase, the boost's length whatever it is. Good epochs on
-// the rig came within 1.3 m/s. With it on, the boost screen is only the
-// thin epochs' backstop: a boost epoch with under four Dopplers.
+// the rig came within 1.3 m/s. On by default (20 m/s) since 2026-10-16,
+// beside the boost screen, which still judges every boost epoch: an epoch is
+// dropped if either fails. Each sees what the other misses -- a stale boost
+// epoch whose Dopplers agree with one another passes the boost screen's gate
+// (in the cloud session's grid, a c30-type epoch then no GNSS to T+8: 3 runs
+// in 112 over 3 deg worse than unaided with the boost screen alone, none
+// with the vertical check), and one with exactly four Dopplers has no spare
+// row to show its vertical (7 m/s down where the boost screen refused 3 of
+// 4).
 //
 // The carrier range rate (the receiver profile's cr_mode, ekf.cr_mode). Each
 // epoch's builder gives the satellites whose carrier phase was continuous
@@ -340,11 +351,12 @@ public:
         double   heading_handoff_vel_mps = 3.0;  // act: the velocity let go to this at the hand-off
         // the boost screen (above)
         uint8_t  boost_screen = 1;               // BoostScreen: off, in act only (the default), always
-        double   boost_screen_g = 2.0;           // a boost epoch: the IMU's specific force since the last epoch
-                                                 //   above this many g, before the apogee call (0: every epoch)
+        double   boost_screen_g = 2.0;           // a boost epoch: the IMU's specific force above this many g,
+                                                 //   before the apogee call (0: every epoch) ...
+        double   boost_screen_window_s = 1.5;    //   ... within this long before the epoch's start
         // the vertical check (above)
-        double   vert_check_mps = 0.0;           // an epoch whose Dopplers' fitted vertical is more than this off
-                                                 //   the filter's is dropped (0: off; 20 m/s on the rig's logs)
+        double   vert_check_mps = 20.0;          // an epoch whose Dopplers' fitted vertical is more than this off
+                                                 //   the filter's is dropped (0: off)
     };
 
     // When the boost screen runs (Config::boost_screen).
@@ -715,6 +727,7 @@ private:
     double        fit_launch_t_ = 0.0;
     bool          handed_ = false;      // the heading handed over this flight
     bool          gate_full_ = false;   // act: the whole attitude's gate is open this flight
+    double        boost_seen_t_ = -1.0e9;   // the filter's time the IMU last read past boost_screen_g
     bool          launch_seen_ = false; // a launch edge since the start (a restored flight has none)
     void          setFlightGate(bool full);
     void          setGroundGate();

@@ -3746,6 +3746,16 @@ static void startRawShadow()
              cfg.heading_launch_tilt_sigma_deg);
 #endif
     // what the filter flies, bench or not: a flight's console says it
+    char vcheck_txt[48], screen_txt[80];
+    if (cfg.vert_check_mps > 0.0)
+        snprintf(vcheck_txt, sizeof(vcheck_txt), "%.0f m/s on every epoch it can fit", cfg.vert_check_mps);
+    else
+        snprintf(vcheck_txt, sizeof(vcheck_txt), "off");
+    if (cfg.boost_screen_g <= 0.0)
+        snprintf(screen_txt, sizeof(screen_txt), "on every epoch before the apogee call");
+    else
+        snprintf(screen_txt, sizeof(screen_txt), "on boost epochs (past %.1f g within %.1f s) before the call",
+                 cfg.boost_screen_g, cfg.boost_screen_window_s);
     ESP_LOGI(TAG, "[RAWGNSS] heading %s: %s; launch prior %.0f deg with the magnetometer's heading, %.0f without; "
                   "tilt floor %.2f deg; the fit's hand-off %s; the vertical check %s; the boost screen %s",
              cfg.heading_mode == gnss_raw::RawGnssShadow::kHeadingAct       ? "ACT"
@@ -3753,11 +3763,7 @@ static void startRawShadow()
                                                                             : "off",
              gnss_raw::RawGnssShadow::headingGateName(cfg.heading_gate), cfg.heading_pad_sigma_deg,
              cfg.heading_pad_sigma_fallback_deg, cfg.heading_launch_tilt_sigma_deg,
-             cfg.heading_handoff_deg < 0.0 ? "never" : "at the fit's 1-sigma",
-             cfg.vert_check_mps > 0.0 ? "on every epoch it can fit" : "off",
-             cfg.boost_screen_g <= 0.0 ? "on every epoch before the apogee call"
-             : cfg.vert_check_mps > 0.0 ? "on boost epochs too thin for the vertical check"
-                                        : "on boost epochs before the call");
+             cfg.heading_handoff_deg < 0.0 ? "never" : "at the fit's 1-sigma", vcheck_txt, screen_txt);
     raw_shadow = new (mem) gnss_raw::RawGnssShadow(cfg);
     raw_meas = new (stage_mem) gnss_raw::RawGnssMeasStage(gnss_raw::RawGnssShadow::stageConfig(cfg));
     raw_meas_epoch = new (epoch_mem) gnss_raw::TimedRawEpoch();

@@ -245,6 +245,7 @@ struct RawGnssStats
     // and the vertical check's fit (screenRangeRates): one velocity and clock
     // rate fitted to the epoch's Dopplers at the same prediction
     int    screen_fit_n = 0;           // the Dopplers fitted (0: under 4, or no fit)
+    int    screen_fit_out = 0;         //   left out of it, each far off on its own
     float  screen_dv_down_mps = 0.0f;  //   the fit's velocity correction, down: the epoch's vertical
                                        //   velocity against the filter's
 };
@@ -375,6 +376,9 @@ public:
     // running passes: the update lets it in). How many were gated and
     // refused, in st.screen_rr and st.screen_refused; nothing else changes.
     void screenRangeRates(const RawMeas* m, int n, double age_s, RawGnssStats& st) const;
+    // the vertical check's fit leaves out a Doppler this many of its own 1-sigmas off the rest's fit
+    static constexpr double kVertOutlier = 4.0;
+    static bool fitVelocityClock(const double H[][4], const double* y, const bool* in, int n, double x[4]);
     // The epoch begun is dropped, none of it fused: its receiver is no
     // carrier rate's earlier end, so the next epoch's rates across it go
     // unmatched. endCarrier still closes it.
@@ -515,6 +519,11 @@ private:
     T      a_ned_[3] = {};
     T      g_excess_ = 0;
     T      g_peak_ = 0;
+    // screenRangeRates' vertical-check fit: its rows, scratch (kept off the task's stack)
+    mutable double vfit_h_[RawEpoch::kMaxObs][4] = {};
+    mutable double vfit_y_[RawEpoch::kMaxObs] = {};
+    mutable double vfit_s_[RawEpoch::kMaxObs] = {};
+    mutable bool   vfit_in_[RawEpoch::kMaxObs] = {};
 
     Hist   hist_[kHist] = {};
     int    hhead_ = 0;        // next slot

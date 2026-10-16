@@ -593,6 +593,8 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
 
     const int64_t c0 = now();
     ekf_.propagate(acc, gyro, static_cast<float>(span));
+    if (static_cast<double>(ekf_.gExcess()) + 1.0 > cfg_.boost_screen_g)
+        boost_seen_t_ = ekf_.time();      // the boost screen's window (startJob)
     t_prev_ = t;
     // Where the flight filter levels: on the ground at g's size (not on a
     // motor burning before the launch detector says so); in flight (under a
@@ -724,6 +726,7 @@ void RawGnssShadow::start(double t)
     // apogee call (which the snapshot restores) opens it whole at the first
     // step after.
     gate_full_ = false;
+    boost_seen_t_ = -1.0e9;
     if (cfg_.heading_mode == kHeadingAct)
     {
         if (restored_)
@@ -855,12 +858,12 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
     job_.in_flight = (imu_flags & kShadowInFlight) != 0;
     job_.g_peak = static_cast<double>(ekf_.takeGPeak());
     // the boost screen judges this epoch: no apogee call yet (a drogue's
-    // snatch is no boost), and the IMU past boost_screen_g since the last
-    // epoch (0: every epoch)
+    // snatch is no boost), and the IMU past boost_screen_g within the last
+    // boost_screen_window_s (0 g: every epoch)
     const bool screening = cfg_.boost_screen == kScreenOn
                            || (cfg_.boost_screen == kScreenAct && cfg_.heading_mode == kHeadingAct);
     job_.screen = screening && !(imu_flags & kShadowApogee)
-                  && (cfg_.boost_screen_g <= 0.0 || job_.g_peak + 1.0 > cfg_.boost_screen_g);
+                  && (cfg_.boost_screen_g <= 0.0 || ekf_.time() - boost_seen_t_ <= cfg_.boost_screen_window_s);
     job_.vcheck = cfg_.vert_check_mps > 0.0;   // every epoch, every phase
     if (cfg_.external_build)
     {
@@ -1032,9 +1035,9 @@ void RawGnssShadow::jobChecks(double age, double t)
 
 // The vertical check and the boost screen (RawGnssShadow.h), their first
 // unit. The Dopplers at the state as the clock's step left it: with the
-// vertical check on, an epoch it can fit (four Dopplers or more) is judged by
-// its fitted vertical alone, dropped (closeJob) or fused. Else a boost epoch:
-// half or more of its Dopplers refused, it is dropped; else the filter is
+// vertical check on, an epoch it can fit (four Dopplers or more) whose fitted
+// vertical is too far off is dropped (closeJob). Then a boost epoch, fitted or
+// not: half or more of its Dopplers refused, it is dropped; else the filter is
 // copied, and the epoch worked through on the copy a satellite a unit
 // (jobScreenDry).
 void RawGnssShadow::jobScreen(double age)
@@ -1051,13 +1054,16 @@ void RawGnssShadow::jobScreen(double age)
             st_.vert_dropped++;
         else if (std::fabs(dv) > std::fabs(st_.vert_worst_dv_down))
             st_.vert_worst_dv_down = dv;
-        rs.screen_dropped = drop;
-        job_.phase = drop ? kJobClose : kJobFuse;
-        return;
+        if (drop || !job_.screen)
+        {
+            rs.screen_dropped = drop;
+            job_.phase = drop ? kJobClose : kJobFuse;
+            return;
+        }
     }
     if (!job_.screen)
     {
-        job_.phase = kJobFuse;            // under four Dopplers, and no boost epoch: unjudged
+        job_.phase = kJobFuse;            // no boost epoch, and the vertical check passed it or could not fit it
         return;
     }
     st_.boost_screened++;
