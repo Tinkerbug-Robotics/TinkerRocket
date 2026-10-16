@@ -20,7 +20,10 @@ The summary also names each broadcast-ephemeris message ($PAIR436,1: 1019 GPS,
 and reference time, with sqrt(A) as a sanity check on the decode.
 
 Every frame written passes its own CRC-24Q; a frame missing a part, or failing
-its CRC, is left out and counted. Field references are RTCM 10403.3 (DFnnn).
+its CRC, is left out and counted. On the V9 the same record carries the
+mosaic-G5's SBF blocks instead: those are not RTCM3, so they are left out and
+counted on a line of their own, not as bad CRCs (extract_gnss_sbf.py writes
+them). Field references are RTCM 10403.3 (DFnnn).
 """
 
 from __future__ import annotations
@@ -188,8 +191,10 @@ def extract(bin_path: Path):
     records, _stats, _config = pfd.parse_binary_file(str(bin_path))
     joined, dropped = pfd.join_gnss_rtcm(records["GNSS_RTCM"])
     good = [(t, f) for t, f in joined if frame_ok(f)]
+    sbf = sum(1 for _, f in joined if f[:2] == pfd.SBF_SYNC)   # a mosaic-G5's, not bad RTCM3
     return good, {"records": len(records["GNSS_RTCM"]), "frames": len(joined),
-                  "dropped_parts": dropped, "bad_crc": len(joined) - len(good)}
+                  "dropped_parts": dropped, "bad_crc": len(joined) - len(good) - sbf,
+                  "sbf_blocks": sbf}
 
 
 def main(argv=None) -> int:
@@ -207,6 +212,8 @@ def main(argv=None) -> int:
     types = Counter(message_type(f) for _, f in frames)
     print(f"{args.log.name}: {st['records']} records -> {st['frames']} frames "
           f"({st['dropped_parts']} incomplete, {st['bad_crc']} bad CRC)")
+    if st["sbf_blocks"]:
+        print(f"  {st['sbf_blocks']} SBF blocks (mosaic-G5), not RTCM3: see extract_gnss_sbf.py")
     print(f"  wrote {out} ({out.stat().st_size} bytes)")
     print("  message types: " + (", ".join(f"{t} x{n}" for t, n in sorted(types.items())) or "none"))
     if frames:
