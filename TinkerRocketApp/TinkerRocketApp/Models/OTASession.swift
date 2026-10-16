@@ -65,7 +65,7 @@ final class OTASession: ObservableObject {
     init(fleet: BLEFleet, peripheralID: UUID) {
         self.peripheralID = peripheralID
         self.linkLookup = { [weak fleet] in
-            fleet?.devices.first { $0.peripheral?.identifier == peripheralID }
+            fleet?.devices.first { $0.peripheralID == peripheralID }
         }
     }
 

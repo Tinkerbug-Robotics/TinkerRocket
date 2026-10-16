@@ -163,6 +163,55 @@ final class OTASessionFlowTests: XCTestCase {
         try await waitUntil("verified") { session.state == .verified(newVersion: "v2-new") }
     }
 
+    // MARK: - The next flash after a reconnect
+
+    /// 2026-10-16, a V9 updated over BLE: the out computer first, then the
+    /// flight computer from the same screen. The OC's flash ends in its reboot,
+    /// so the FC flash is the first run on the link the fleet rebuilt. Picking
+    /// the FC image re-arms the finished session (`reset()`, which is what the
+    /// screen's file pick does), and the run must then go out over the NEW
+    /// link and land. The screen-side half of that day's bug is pinned in
+    /// FirmwareUpdateLiveDeviceTests.
+    func testAfterAReconnect_aNewlyPickedImageCanBeFlashed() async throws {
+        let oldLink = ScriptedLink(firmwareVersion: "oc-v1", fcFirmwareVersion: "fc-v1")
+        let box = LinkBox(oldLink)
+        let session = makeSession(box)
+
+        // The OC flash, through the reboot it causes.
+        session.start(data: espImage("oc-v2"))
+        try await waitUntil("OC begin") { oldLink.beginCalls.count == 1 }
+        oldLink.otaStatus = OTAStatusUpdate(state: .ready, bytes: 0, err: nil, fw: nil)
+        try await waitUntil("OC finish") { oldLink.finishCount == 1 }
+        oldLink.otaStatus = OTAStatusUpdate(state: .readyToBoot, bytes: 0, err: nil, fw: nil)
+        try await waitUntil("OC rebooting") { session.state == .rebooting }
+        box.link = nil
+        try await Task.sleep(nanoseconds: 40_000_000)
+        let newLink = ScriptedLink(firmwareVersion: "oc-v2", fcFirmwareVersion: "fc-v1")
+        box.link = newLink
+        try await waitUntil("OC verified") { session.state == .verified(newVersion: "oc-v2") }
+
+        // Picking the FC image.
+        session.reset()
+        XCTAssertEqual(session.state, .idle)
+
+        session.start(data: espImage("fc-v2"), targetIsFC: true)
+        try await waitUntil("FC begin on the new link") { newLink.beginCalls.count == 1 }
+        XCTAssertEqual(newLink.beginCalls[0].targetIsFC, true)
+        XCTAssertEqual(session.preFlashFirmwareVersion, "fc-v1")
+        newLink.otaStatus = OTAStatusUpdate(state: .ready, bytes: 0, err: nil, fw: nil)
+        try await waitUntil("FC finish") { newLink.finishCount == 1 }
+        newLink.otaStatus = OTAStatusUpdate(state: .readyToBoot, bytes: 0, err: nil, fw: nil)
+        try await waitUntil("FC rebooting") { session.state == .rebooting }
+        // The OC stays up while the FC reboots behind it, and relays its new version.
+        newLink.fcFirmwareVersion = "fc-v2"
+        try await waitUntil("FC verified") { session.state == .verified(newVersion: "fc-v2") }
+
+        XCTAssertEqual(newLink.chunks.reduce(Data()) { $0 + $1.data }, espImage("fc-v2"))
+        XCTAssertEqual(oldLink.beginCalls.count, 1, "The dead link saw nothing of the FC run")
+        XCTAssertEqual(oldLink.finishCount, 1)
+        XCTAssertEqual(oldLink.abortCount, 0)
+    }
+
     // MARK: - Failure branches
 
     func testRollback_sameVersionBack_reportsRollbackNotSuccess() async throws {
