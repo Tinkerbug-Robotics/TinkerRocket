@@ -54,6 +54,7 @@
 #include "sim_flight_policy.h"   // #1104: sim edge rule + latched dry-fire predicate (TR_Sensor_Collector_Sim)
 #include "oc_cmd_session_gate.h" // #1105: no replay of one-shot commands across an FC boot
 #include "fc_ota_session_policy.h" // #1116: the FC's own exit from an OTA image session nobody ends
+#include "fc_rescue_policy.h"     // rescue mode: an FC that cannot finish booting still takes an update
 #include "roll_control_mode_policy.h" // #1137 item 6: which roll law runs this tick
 #include "test_mode_gate_policy.h"   // #1137 item 5: the #363 failsafe and the test-command gates
 #include "oc_cmd_dedup.h"        // #1112: dispatch only on the poll pass; bounded config retry
@@ -4882,6 +4883,10 @@ static volatile bool     fc_boot_reporting = false;
 
 static void fcBootEmitOnce()
 {
+    // Rescue mode keeps reporting while it takes an update. The link is
+    // reversed for the image then and the sender idles, so a report queued now
+    // would only sit in front of the update's terminal status when it reverts.
+    if (fc_ota_data_mode) return;
     FcBootStatusData s{};
     s.step       = fc_boot_step_now;
     s.degraded   = fc_boot_degraded;
@@ -4912,6 +4917,505 @@ static void fcBootReporterTask(void*)
     // One last COMPLETE so a listener that missed the transition still sees it.
     fcBootEmitOnce();
     vTaskDelete(nullptr);
+}
+
+// The OC's answer to GET_FLIGHT_SNAPSHOT: the one way a booting FC learns that
+// it is in the middle of a flight (#104, #846, #1176). Asked by the normal
+// boot after the servos, and by a rescue-mode candidate right after the links
+// come up, which must not enter rescue mode while the OC could hand back a
+// flight to resume (fc_rescue_policy.h).
+struct OcSnapshotAnswer
+{
+    FlightSnapshotData snap;
+    bool valid;                // a live, non-sim, in-flight snapshot to restore
+    bool answered_no_flight;   // a definitive "no flight": a sim frame or a LANDED clear
+};
+
+static OcSnapshotAnswer fcAskOcForFlightSnapshot()
+{
+    OcSnapshotAnswer answer = {};
+    FlightSnapshotData& snap = answer.snap;
+    bool& valid = answer.valid;
+    bool& answered_no_flight = answer.answered_no_flight;
+    {
+        // #364/#846: bounded retries instead of the old single-shot. The
+        // both-reset case (pack brownout) is exactly when the one boot
+        // probe misses — the OC is still bringing its I2C slave up — and
+        // a silently-skipped recovery mid-descent is a ballistic. Five
+        // attempts ~350 ms apart bound the extra boot time at ~1.75 s,
+        // spent ONLY on unexpected-reset boots. Between attempts the OC
+        // gets a fresh OUT_STATUS_QUERY (full-length read — an aborted
+        // short read would desync its V2 slave TX ring, #399), and a
+        // failed snapshot read gets an I2C_TX_RESYNC first (#402; the
+        // bus is idle here by construction — nothing else polls during
+        // setup). A definitive answer (valid restore, sim refusal, or a
+        // LANDED/garbage frame that parsed) stops the retries; only
+        // transport failures continue.
+        constexpr int kRecoveryAttempts = 5;
+        (void)out_ready;   // no longer a precondition — see below
+        bool definitive = false;
+        for (int attempt = 0; attempt < kRecoveryAttempts && !definitive;
+             ++attempt) {
+            if (attempt > 0) delay_ms(350);
+
+            // Deliberately NOT gated on out_ready. That gate IS #364: a
+            // single unretried boot probe, taken seconds earlier (the
+            // servo wiggle alone can be 4.2 s), decided recovery was
+            // impossible and the FC cold-started mid-descent. The ask
+            // below is its own liveness test — if the OC is not up, the
+            // read fails and we retry; if it is, we get the answer. No
+            // second status query: re-probing would also pop the OC's
+            // queued-command slot (CMD_REPEAT_LIMIT) for a reply this
+            // path discards.
+
+            // Send GET_FLIGHT_SNAPSHOT, then read the SNAPSHOT_MSG
+            // response. The OC serves its RAM cache (#846) — seeded live
+            // over I2S, or at boot from the NAND log stream — with the
+            // V7/V8 MRAM slot as fallback.
+            if (i2c_interface.sendMessage(GET_FLIGHT_SNAPSHOT, nullptr, 0) != ESP_OK) {
+                ESP_LOGW(TAG, "[RECOVERY] Failed to send GET_FLIGHT_SNAPSHOT (attempt %d/%d)",
+                         attempt + 1, kRecoveryAttempts);
+                continue;
+            }
+            delay_ms(20);  // let OC service the request and queue the response
+
+            constexpr size_t kRespFrameLen = 4 + 1 + 1 + sizeof(FlightSnapshotData) + 2;
+            // Read EXACTLY the staged frame size. The OC stages
+            // kRespFrameLen bytes; under the V2 slave driver, clocking out
+            // more than was staged underflows the TX path (the +16 "SOF
+            // byte loss" slack was a V1-only defense and V2 keeps the SOF
+            // at offset 0). Over-reading here is the inverse of the #88
+            // status-path residue bug. Buffer keeps slack for the scan.
+            uint8_t buf[kRespFrameLen + 16] = {};
+            esp_err_t rerr = i2c_interface.masterRead(buf, kRespFrameLen, 100);
+            if (rerr != ESP_OK) {
+                ESP_LOGW(TAG, "[RECOVERY] I2C read for snapshot failed: %s (attempt %d/%d)",
+                         esp_err_to_name(rerr), attempt + 1, kRecoveryAttempts);
+                // The aborted read may have desynced the OC's slave TX
+                // ring — ask it to reset before the next attempt (#402).
+                (void)i2c_interface.sendMessage(I2C_TX_RESYNC, nullptr, 0);
+                continue;
+            }
+            // #1139 item 1: this was a "defensive SOF scan" that could
+            // never scan anything.  masterRead() fetches exactly
+            // kRespFrameLen bytes into a buffer with 16 bytes of slack,
+            // and the loop was bounded by sizeof(buf) — so off ran 1..16,
+            // every one of them straddling the untouched zero tail where
+            // the CRC cannot validate.  It was dead code for all off > 0,
+            // i.e. for exactly the misalignment it was written to recover
+            // from, while reading as though misalignment were handled.
+            //
+            // Since the read length equals the frame length, offset 0 is
+            // the only offset that can hold a frame, so the scan is now
+            // stated as the single check it always was.  (The [CFG READ]
+            // path at the top of this file bounds by actual_read and the
+            // mini bounds by `avail`; both read MORE than one frame, which
+            // is what makes a scan meaningful there.  Reading extra bytes
+            // here would change what the OC's slave TX ring is asked to
+            // clock out mid-recovery, which is not a change to make on
+            // this path.)
+            bool frame_seen = false;
+            {
+                constexpr size_t off = 0;
+                if (buf[off] == 0xAA && buf[off+1] == 0x55 &&
+                    buf[off+2] == 0xAA && buf[off+3] == 0x55 &&
+                    buf[off+4] == SNAPSHOT_MSG) {
+                    uint8_t type = 0;
+                    uint8_t payload[sizeof(FlightSnapshotData)] = {};
+                    size_t  payload_len = 0;
+                    if (TR_I2C_Interface::unpackMessage(
+                            buf + off, kRespFrameLen,
+                            type, payload, sizeof(payload),
+                            payload_len, true) &&
+                        type == SNAPSHOT_MSG &&
+                        payload_len == sizeof(FlightSnapshotData)) {
+                        memcpy(&snap, payload, sizeof(FlightSnapshotData));
+                        if (snap.magic   == FlightSnapshotData::MAGIC &&
+                            snap.version == FlightSnapshotData::VERSION &&
+                            snap.rocket_state == (uint8_t)INFLIGHT &&
+                            snap.crc32 == computeSnapshotCRC(snap)) {
+                            if (snap.sim_flight) {
+                                // The dry-fire gate lives in isSimActive(),
+                                // which a reboot resets — restoring here
+                                // would fire real pyro outputs on bench
+                                // igniters mid-sim.
+                                ESP_LOGW(TAG, "[RECOVERY] Snapshot is from a SIMULATED flight — refusing restore");
+                            } else {
+                                valid = true;
+                            }
+                            if (!valid) answered_no_flight = true;
+                            definitive = true;   // a real answer, either way
+                            // The OC demonstrably answered — latch it for
+                            // the #848/#859 hold reconciliation just below,
+                            // which would otherwise inherit a stale false.
+                            out_ready = true;
+                            out_ready_last_ms = millis();   // #1137 item 9
+                        } else {
+                            ESP_LOGW(TAG, "[RECOVERY] Snapshot invalid (magic=0x%08lX state=%u crc=%s)",
+                                     (unsigned long)snap.magic, snap.rocket_state,
+                                     (snap.crc32 == computeSnapshotCRC(snap)) ? "OK" : "FAIL");
+                            // A frame that PARSED but fails validation is
+                            // also definitive when it is a LANDED clear —
+                            // the flight genuinely ended. Garbage keeps
+                            // retrying (could be a torn TX ring).
+                            if (snap.magic == FlightSnapshotData::MAGIC &&
+                                snap.crc32 == computeSnapshotCRC(snap)) {
+                                definitive = true;
+                                answered_no_flight = true;
+                            }
+                            out_ready = true;   // the OC answered
+                            out_ready_last_ms = millis();   // #1137 item 9
+                        }
+                        frame_seen = true;
+                    }
+                }
+            }
+            if (!frame_seen) {
+                // #1139 item 1: a read that COMPLETED but carried no
+                // frame used to fall through in total silence — no log,
+                // no RESYNC — so a desynced OC slave TX ring produced
+                // kRecoveryAttempts identical quiet failures and the
+                // flight was abandoned with nothing said. The failed-read
+                // branch above already treats this as a desync signature;
+                // a dry read is the same evidence.
+                ESP_LOGW(TAG, "[RECOVERY] read OK but no SNAPSHOT frame "
+                              "(first bytes %02X %02X %02X %02X %02X) — "
+                              "asking the OC to reset its slave TX ring",
+                         buf[0], buf[1], buf[2], buf[3], buf[4]);
+                (void)i2c_interface.sendMessage(I2C_TX_RESYNC, nullptr, 0);
+            }
+        }
+    }
+    return answer;
+}
+
+// #773 step 2: what this BOARD says it is, as opposed to what this IMAGE
+// was built for. Written once when the board is provisioned (BLE cmd 74)
+// and untouched by an OTA, so it stays true across a reflash — which the
+// version string and TR_BOARD_REV_STR cannot, both being properties of the
+// image. Absent means unprovisioned, and that is reported as its own state
+// rather than guessed at.
+static void fcLoadProvisionedBoardRev()
+{
+    prefs.begin("board", true);   // read-only
+    char raw[32] = {0};
+    // getBytes, not a string API: TR_NVS has no getString, and the value
+    // is stored as raw bytes by the provisioning command below. Bounded to
+    // sizeof(raw) - 1 so the result is always NUL-terminated even if a
+    // corrupt entry has no terminator of its own.
+    if (prefs.isKey("rev"))
+    {
+        const size_t n = prefs.getBytes("rev", raw, sizeof(raw) - 1);
+        raw[(n < sizeof(raw) - 1) ? n : sizeof(raw) - 1] = '\0';
+    }
+    prefs.end();
+    board_identity::normalizeRev(raw, provisioned_board_rev,
+                                 sizeof(provisioned_board_rev));
+    if (provisioned_board_rev[0] != '\0')
+    {
+        const bool agrees = board_identity::revsMatch(provisioned_board_rev,
+                                                      TR_BOARD_REV_STR);
+        ESP_LOGI(TAG, "#773: board provisioned as %s; this image is built "
+                      "for %s — %s",
+                 provisioned_board_rev, TR_BOARD_REV_STR,
+                 agrees ? "agree" : "*** MISMATCH ***");
+        if (!agrees)
+        {
+            ESP_LOGE(TAG, "#773: this image was built for a different board "
+                          "than the one it is running on. The board is the "
+                          "authority here — the image's own version string "
+                          "cannot tell you this, which is why the board is "
+                          "provisioned separately.");
+        }
+    }
+    else
+    {
+        ESP_LOGW(TAG, "#773: board not provisioned — no stored revision. "
+                      "The app can only fall back to what this image "
+                      "asserts (%s), which a wrong flash gets wrong.",
+                 TR_BOARD_REV_STR);
+    }
+}
+
+// #848: reconcile an inherited power hold once the flight state is known
+// (pwr_hold_policy.h carries the decision table + rationale). Called at the
+// end of setup_fc(), and by rescue mode, which knows the OC is alive and has
+// no flight to hand back.
+static void fcReconcilePowerHoldAtBoot()
+{
+    if (config::PWR_HOLD_PIN >= 0)
+    {
+        switch (PwrHoldPolicy::bootAction(pwr_hold_latched_at_boot,
+                                          rocket_state == INFLIGHT,
+                                          out_ready))
+        {
+            case PwrHoldPolicy::BootAction::Assert:
+                pwrHoldAssert("reboot recovery");
+                break;
+            case PwrHoldPolicy::BootAction::Release:
+                pwrHoldRelease("boot: flight over, OC alive");
+                break;
+            case PwrHoldPolicy::BootAction::KeepHold:
+                // A latched hold with no recovered flight and no OC: this is a
+                // downed rocket and we are its GNSS tracker. Deliberately NOT
+                // released — battery pull is the power-off. If the OC answers
+                // later (the boot probe is a single unretried query and the OC
+                // may simply still be booting), the out_ready latch in the
+                // status-poll path releases this.
+                pwr_hold_orphan_keep = true;
+                ESP_LOGE(TAG, "[PWR] Power hold KEPT: previous flight did not "
+                              "resolve and the OC is not answering. Holding our "
+                              "own rail for recovery tracking; disconnect the "
+                              "battery to power off (auto-releases if the OC "
+                              "comes back).");
+                break;
+            case PwrHoldPolicy::BootAction::None:
+                // Defensive: the RTC flag and the LP-pad hold register are
+                // separate LP-domain state — a brownout can scramble the flag
+                // while the hold register keeps the pad latched. Releasing
+                // costs nothing here (LOW == high-Z through D9) and self-heals
+                // a phantom latch; pwrHoldRelease only logs when the flag was
+                // actually set, so cold boots stay quiet.
+                pwrHoldRelease("boot: no hold expected");
+                break;
+        }
+    }
+}
+
+// ==========================================================================
+// SECTION: Rescue mode (fc_rescue_policy.h)
+// ==========================================================================
+// An FC whose setup_fc() stalls or crash-loops cannot take an update, because
+// the OTA relay is served only from loop_fc(). The policy header has the
+// reasoning; this is the driver: the record, the setup watchdog, the OC check,
+// and (with the OTA handlers, further down) the loop that serves the relay.
+//
+// The record lives in RTC memory like the #848 hold flag: it survives the
+// panic, watchdog and software resets a crash loop or the setup watchdog
+// produces. A power-on leaves it random, which atBoot() never trusts.
+RTC_NOINIT_ATTR static FcRescuePolicy::Record fc_rescue_rtc;
+static FcRescuePolicy::BootDecision fc_rescue_boot = {};  // this boot's decision
+static bool fc_rescue_mode = false;     // setup_fc() stopped after the links; app_main runs fcRescueTask
+static esp_timer_handle_t fc_setup_watchdog = nullptr;
+
+static FcRescuePolicy::ResetClass fcRescueResetClass(esp_reset_reason_t r)
+{
+    switch (r)
+    {
+        // A person or the supply restarted the board. A power cycle is how an
+        // operator leaves rescue mode, so these always start the counts over.
+        case ESP_RST_POWERON:
+        case ESP_RST_BROWNOUT:
+        case ESP_RST_EXT:
+        case ESP_RST_USB:
+        case ESP_RST_JTAG:
+        case ESP_RST_PWR_GLITCH:
+        case ESP_RST_DEEPSLEEP:
+        case ESP_RST_SDIO:
+            return FcRescuePolicy::ResetClass::FreshStart;
+        // The previous boot ended itself: a panic, a watchdog, or esp_restart().
+        // The FC calls esp_restart() in two places only, the setup watchdog and
+        // an installed update, and the update clears the counts first.
+        default:
+            return FcRescuePolicy::ResetClass::Abnormal;
+    }
+}
+
+// The counts belong to one image. Its partition names it: an update always
+// lands in the other slot, and a rollback runs from the other slot too.
+static uint32_t fcRescueImageId()
+{
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    return running ? (uint32_t)running->address : 0u;
+}
+
+// setup_fc() has run FcRescuePolicy::kSetupStallMs without finishing. Runs in
+// the esp_timer task, so it fires however the main task is stuck (a driver
+// spinning, a blocked semaphore) for as long as the scheduler runs; a hang with
+// interrupts off is the interrupt watchdog's. Never fires in a working boot:
+// the longest legitimate setup is under half the window, and it is disarmed
+// the moment setup finishes or rescue mode takes over.
+static void fcSetupWatchdogFired(void*)
+{
+    ESP_LOGE(TAG, "[RESCUE] setup still running after %u s, on boot step %u "
+                  "(started %u ms after reset): stalled, not slow. Restarting; "
+                  "the next boot comes up in rescue mode so the out computer "
+                  "can deliver a firmware update.",
+             (unsigned)(FcRescuePolicy::kSetupStallMs / 1000U),
+             (unsigned)fc_boot_step_now, (unsigned)fc_boot_step_started_ms);
+    fc_rescue_rtc = FcRescuePolicy::onSetupStall(fc_rescue_rtc);
+    esp_restart();
+}
+
+static void fcSetupWatchdogStop()
+{
+    if (fc_setup_watchdog == nullptr) return;
+    (void)esp_timer_stop(fc_setup_watchdog);
+    (void)esp_timer_delete(fc_setup_watchdog);
+    fc_setup_watchdog = nullptr;
+}
+
+// First thing in setup_fc(), after the pyro pins are safe: decide, count this
+// boot before it has the chance to fail, and arm the setup watchdog.
+static void fcRescueAtBoot()
+{
+    using namespace FcRescuePolicy;
+    const esp_reset_reason_t rst = esp_reset_reason();
+    fc_rescue_boot = atBoot(fc_rescue_rtc, fcRescueResetClass(rst), fcRescueImageId());
+    fc_rescue_rtc = fc_rescue_boot.record;
+    if (fc_rescue_boot.mode == BootMode::RescueCandidate)
+    {
+        ESP_LOGW(TAG, "[RESCUE] rescue-mode candidate: %s",
+                 fc_rescue_boot.reason == Reason::SetupStalled
+                     ? "the previous boot stalled in setup"
+                     : "the last boots never ran the flight loop for a minute");
+    }
+    else if (fc_rescue_rtc.unproven_boots > 1)
+    {
+        ESP_LOGW(TAG, "[RESCUE] boot %u in a row that has not yet run the flight "
+                      "loop for %u s (rescue mode after %u)",
+                 (unsigned)fc_rescue_rtc.unproven_boots,
+                 (unsigned)(kProvenRunMs / 1000U), (unsigned)kMaxUnprovenBoots);
+    }
+
+    esp_timer_create_args_t args = {};
+    args.callback = fcSetupWatchdogFired;
+    args.name = "setup_wd";
+    if (esp_timer_create(&args, &fc_setup_watchdog) != ESP_OK ||
+        esp_timer_start_once(fc_setup_watchdog, (uint64_t)kSetupStallMs * 1000ULL) != ESP_OK)
+    {
+        ESP_LOGE(TAG, "[RESCUE] setup watchdog not armed: a stalled setup will "
+                      "not restart into rescue mode on its own this boot");
+        fcSetupWatchdogStop();
+    }
+}
+
+// loop_fc() has run FcRescuePolicy::kProvenRunMs: this image boots. Clears the
+// counts, so a crash later in the field starts again from one.
+static inline void fcMaybeMarkBootProven()
+{
+    static bool done = false;
+    if (done) return;
+    static int64_t first_us = 0;
+    const int64_t now = esp_timer_get_time();
+    if (first_us == 0) { first_us = now; return; }
+    if (!FcRescuePolicy::provenAfter((uint32_t)((now - first_us) / 1000LL))) return;
+    done = true;
+    fc_rescue_rtc = FcRescuePolicy::onProven(fc_rescue_rtc);
+    ESP_LOGI(TAG, "[RESCUE] flight loop ran %u s: boot proven, rescue counts cleared",
+             (unsigned)(FcRescuePolicy::kProvenRunMs / 1000U));
+}
+
+// The OUT_STATUS_QUERY payload while the sensors are not running: only the
+// compile-time half (full scales and chip rotations), at format 1, so the OC
+// applies none of the fields this boot has no values for. A normal boot sends
+// the full payload on its first query and overwrites all of it.
+static OutStatusQueryData fcRescueStatusQuery()
+{
+    OutStatusQueryData q = {};
+    q.ism6_low_g_fs_g  = config::ISM6_LOW_G_FS_G;
+    q.ism6_high_g_fs_g = config::ISM6_HIGH_G_FS_G;
+    q.ism6_gyro_fs_dps = config::ISM6_GYRO_FS_DPS;
+    q.ism6_rot_z_cdeg  = (int16_t)lroundf(config::ISM6HG256_ROT_Z_DEG * 100.0f);
+    q.mmc_rot_z_cdeg   = (int16_t)lroundf(config::MMC5983MA_ROT_Z_DEG * 100.0f);
+    q.format_version   = 1;
+    return q;
+}
+
+// Is the OC there? One self-contained status exchange, as setup_fc()'s boot
+// probe does it (query, then the read of its own answer), retried with the
+// #402 slave resync in between because an FC reset mid-read can leave the OC's
+// slave TX ring out of step. The OC answers every query it receives. Nothing is
+// dispatched from here: a command the OC happens to be serving only reaches the
+// #1105 session gate, exactly as at the normal boot probe.
+static bool fcRescueOcAnswers()
+{
+    constexpr int kAttempts = 10;   // ~3.5 s: the OC is normally long up (only the FC reset)
+    const OutStatusQueryData q = fcRescueStatusQuery();
+    for (int attempt = 0; attempt < kAttempts; ++attempt)
+    {
+        if (attempt > 0) delay_ms(350);
+        if (i2c_interface.sendMessage(OUT_STATUS_QUERY,
+                                      reinterpret_cast<const uint8_t*>(&q),
+                                      sizeof(q)) != ESP_OK)
+            continue;
+        delay_ms(10);   // let the OC stage its 96-byte response
+        uint8_t buf[COMBINED_READ_SIZE] = {};
+        if (i2c_interface.masterRead(buf, COMBINED_READ_SIZE, 50) == ESP_OK)
+        {
+            uint8_t type = 0;
+            uint8_t payload[OUT_STATUS_PAYLOAD_BYTES] = {};
+            size_t  len = 0;
+            if (TR_I2C_Interface::unpackMessage(buf, OUT_STATUS_FRAME_BYTES, type,
+                                                payload, sizeof(payload), len, true) &&
+                type == OUT_STATUS_RESPONSE && len >= 1)
+            {
+                if (payload[0] != 0) { out_ready = true; out_ready_last_ms = millis(); }
+                if (len >= 2) oc_cmd_gate.observe(payload[1]);   // #1105
+                i2c_query_ok++;
+                return true;
+            }
+        }
+        i2c_query_fail++;
+        (void)i2c_interface.sendMessage(I2C_TX_RESYNC, nullptr, 0);   // #402
+    }
+    return false;
+}
+
+// Right after the links and the OTA receiver are up, which is all rescue mode
+// needs. Returns true when this boot is rescue mode, and setup_fc() then
+// returns at once.
+static bool fcRescueTryEnter()
+{
+    using namespace FcRescuePolicy;
+    if (fc_rescue_boot.mode != BootMode::RescueCandidate) return false;
+
+    // Never at the cost of a flight: the OC must be alive and have no flight to
+    // hand back. That is the same ask the normal boot makes before it resumes
+    // a flight, and a refusal here falls through to that normal boot.
+    OcCheck oc = {};
+    oc.answered = fcRescueOcAnswers();
+    if (oc.answered)
+    {
+        ESP_LOGI(TAG, "[RESCUE] asking the out computer for a flight in progress "
+                      "(the [RECOVERY] lines that follow are that ask)");
+        oc.flight_to_resume = fcAskOcForFlightSnapshot().valid;
+    }
+    if (!mayEnterRescue(fc_rescue_boot, oc))
+    {
+        fc_rescue_rtc = onRescueRefused(fc_rescue_rtc);
+        ESP_LOGW(TAG, "[RESCUE] rescue mode refused: %s. Booting normally.",
+                 !oc.answered ? "the out computer is not answering, so it could not "
+                                "relay an update and may be holding a flight"
+                              : "the out computer holds a flight in progress, which "
+                                "the normal boot resumes");
+        return false;
+    }
+
+    fcSetupWatchdogStop();
+    fc_rescue_mode = true;
+    fcBootStatus(FCB_RESCUE);   // repeated every 500 ms by fcBootReporterTask from here on
+    ESP_LOGW(TAG, "========================================");
+    ESP_LOGW(TAG, "[RESCUE] RESCUE MODE: %s. The flight software is not started:",
+             fc_rescue_boot.reason == Reason::SetupStalled
+                 ? "the previous boot stalled in setup"
+                 : "the last boots never ran the flight loop for a minute");
+    ESP_LOGW(TAG, "[RESCUE] no sensors, GNSS, servos, camera, state machine or pyro.");
+    ESP_LOGW(TAG, "[RESCUE] Serving firmware updates through the out computer only.");
+    ESP_LOGW(TAG, "[RESCUE] An update or a power cycle ends it.");
+    ESP_LOGW(TAG, "========================================");
+
+    // The camera's safe state, as a normal boot leaves it: gate off, shutter
+    // high-Z. Nothing else is configured.
+    cameraGateInit();
+    goproShutterPark();
+    // FC_IDENTITY carries the provisioned revision; the app checks a picked
+    // image against it before a byte is sent.
+    fcLoadProvisionedBoardRev();
+    // The OC answered and holds no flight, so a hold latched by a previous
+    // flight is handed back to it (pwr_hold_policy.h: OC alive -> Release).
+    fcReconcilePowerHoldAtBoot();
+    return true;
 }
 
 static void setup_fc()
@@ -4962,6 +5466,11 @@ static void setup_fc()
 
     // Pyro channels: safe pins FIRST, before any other peripheral init
     initPyroPins();
+
+    // Rescue mode (fc_rescue_policy.h): count this boot before it can fail and
+    // arm the watchdog that turns a stalled setup into a counted restart. Here,
+    // right after the pins are safe, so the watchdog covers everything after.
+    fcRescueAtBoot();
 
     // Power gates (#411): on V8 the FC switches the GNSS + servo rails.
     // Raised before any dependent init (the GNSS boot probe and the servo
@@ -5156,6 +5665,12 @@ static void setup_fc()
     // during an OTA, when flight is not in progress.
     xTaskCreatePinnedToCore(fcOtaParserTask, "FC OTA RX", 4096, nullptr, 3,
                             &fc_ota_parser_task, 1);
+
+    // Rescue mode stops here: the OC links and the OTA receiver are all it
+    // needs, and nothing below them runs (no NVS settings, sensors, GNSS,
+    // servos, camera or flight recovery). app_main starts fcRescueTask instead
+    // of the flight task.
+    if (fcRescueTryEnter()) return;
 
     // Load persistent rocket settings from NVS (factory default from config.h)
     fcBootStatus(FCB_NVS);
@@ -5437,6 +5952,8 @@ static void setup_fc()
     // The broadcast ionosphere the last pad calibration stored (#1600 phase 5)
     padCalLoadIono();
 
+    fcLoadProvisionedBoardRev();   // #773 step 2
+
     // Restore magnetometer hard-iron offset from NVS (namespace "mag_cal", issue #96).
     // Apply to IIS2MDC OFFSET_X/Y/Z if the chip is active, and to the
     // MMC5983MA software-offset path in the converter regardless (the
@@ -5446,53 +5963,6 @@ static void setup_fc()
     // below.  The converter offset is set here too even though the IIS2MDC
     // chip handles its own subtraction; this lets a single NVS schema cover
     // both mag chips without divergence.
-    // #773 step 2: what this BOARD says it is, as opposed to what this IMAGE
-    // was built for. Written once when the board is provisioned (BLE cmd 74)
-    // and untouched by an OTA, so it stays true across a reflash — which the
-    // version string and TR_BOARD_REV_STR cannot, both being properties of the
-    // image. Absent means unprovisioned, and that is reported as its own state
-    // rather than guessed at.
-    {
-        prefs.begin("board", true);   // read-only
-        char raw[32] = {0};
-        // getBytes, not a string API: TR_NVS has no getString, and the value
-        // is stored as raw bytes by the provisioning command below. Bounded to
-        // sizeof(raw) - 1 so the result is always NUL-terminated even if a
-        // corrupt entry has no terminator of its own.
-        if (prefs.isKey("rev"))
-        {
-            const size_t n = prefs.getBytes("rev", raw, sizeof(raw) - 1);
-            raw[(n < sizeof(raw) - 1) ? n : sizeof(raw) - 1] = '\0';
-        }
-        prefs.end();
-        board_identity::normalizeRev(raw, provisioned_board_rev,
-                                     sizeof(provisioned_board_rev));
-        if (provisioned_board_rev[0] != '\0')
-        {
-            const bool agrees = board_identity::revsMatch(provisioned_board_rev,
-                                                          TR_BOARD_REV_STR);
-            ESP_LOGI(TAG, "#773: board provisioned as %s; this image is built "
-                          "for %s — %s",
-                     provisioned_board_rev, TR_BOARD_REV_STR,
-                     agrees ? "agree" : "*** MISMATCH ***");
-            if (!agrees)
-            {
-                ESP_LOGE(TAG, "#773: this image was built for a different board "
-                              "than the one it is running on. The board is the "
-                              "authority here — the image's own version string "
-                              "cannot tell you this, which is why the board is "
-                              "provisioned separately.");
-            }
-        }
-        else
-        {
-            ESP_LOGW(TAG, "#773: board not provisioned — no stored revision. "
-                          "The app can only fall back to what this image "
-                          "asserts (%s), which a wrong flash gets wrong.",
-                     TR_BOARD_REV_STR);
-        }
-    }
-
     prefs.begin("mag_cal", false);
     if (prefs.isKey("ver"))
     {
@@ -5604,6 +6074,15 @@ static void setup_fc()
     // make visible — a boot parked on "Sensors" for 35 s is a dead GNSS, and the
     // FCB_GNSS report immediately after begin() returns confirms it.
     fcBootStatus(FCB_SENSORS);
+#if defined(TR_TEST_SETUP_FAIL) && TR_TEST_SETUP_FAIL
+    // Bench only (CMakeLists.txt): stand in for a sensor driver that never
+    // returns (1) or panics (2), so the setup watchdog and rescue mode can be
+    // exercised on a board. Never set in a flight image.
+    ESP_LOGE(TAG, "[RESCUE] TR_TEST_SETUP_FAIL=%d build: setup fails here ON PURPOSE",
+             (int)TR_TEST_SETUP_FAIL);
+    if (TR_TEST_SETUP_FAIL == 2) abort();
+    for (;;) delay_ms(1000);
+#endif
 #if TR_RAW_GNSS_SHADOW
     // #1600: the GNSS driver's raw outputs exist before its poll task does
     if (!sensor_collector.enableGNSSRawOutputs())
@@ -5957,153 +6436,10 @@ static void setup_fc()
         bool answered_no_flight = false;
 
         {
-            // #364/#846: bounded retries instead of the old single-shot. The
-            // both-reset case (pack brownout) is exactly when the one boot
-            // probe misses — the OC is still bringing its I2C slave up — and
-            // a silently-skipped recovery mid-descent is a ballistic. Five
-            // attempts ~350 ms apart bound the extra boot time at ~1.75 s,
-            // spent ONLY on unexpected-reset boots. Between attempts the OC
-            // gets a fresh OUT_STATUS_QUERY (full-length read — an aborted
-            // short read would desync its V2 slave TX ring, #399), and a
-            // failed snapshot read gets an I2C_TX_RESYNC first (#402; the
-            // bus is idle here by construction — nothing else polls during
-            // setup). A definitive answer (valid restore, sim refusal, or a
-            // LANDED/garbage frame that parsed) stops the retries; only
-            // transport failures continue.
-            constexpr int kRecoveryAttempts = 5;
-            (void)out_ready;   // no longer a precondition — see below
-            bool definitive = false;
-            for (int attempt = 0; attempt < kRecoveryAttempts && !definitive;
-                 ++attempt) {
-                if (attempt > 0) delay_ms(350);
-
-                // Deliberately NOT gated on out_ready. That gate IS #364: a
-                // single unretried boot probe, taken seconds earlier (the
-                // servo wiggle alone can be 4.2 s), decided recovery was
-                // impossible and the FC cold-started mid-descent. The ask
-                // below is its own liveness test — if the OC is not up, the
-                // read fails and we retry; if it is, we get the answer. No
-                // second status query: re-probing would also pop the OC's
-                // queued-command slot (CMD_REPEAT_LIMIT) for a reply this
-                // path discards.
-
-                // Send GET_FLIGHT_SNAPSHOT, then read the SNAPSHOT_MSG
-                // response. The OC serves its RAM cache (#846) — seeded live
-                // over I2S, or at boot from the NAND log stream — with the
-                // V7/V8 MRAM slot as fallback.
-                if (i2c_interface.sendMessage(GET_FLIGHT_SNAPSHOT, nullptr, 0) != ESP_OK) {
-                    ESP_LOGW(TAG, "[RECOVERY] Failed to send GET_FLIGHT_SNAPSHOT (attempt %d/%d)",
-                             attempt + 1, kRecoveryAttempts);
-                    continue;
-                }
-                delay_ms(20);  // let OC service the request and queue the response
-
-                constexpr size_t kRespFrameLen = 4 + 1 + 1 + sizeof(FlightSnapshotData) + 2;
-                // Read EXACTLY the staged frame size. The OC stages
-                // kRespFrameLen bytes; under the V2 slave driver, clocking out
-                // more than was staged underflows the TX path (the +16 "SOF
-                // byte loss" slack was a V1-only defense and V2 keeps the SOF
-                // at offset 0). Over-reading here is the inverse of the #88
-                // status-path residue bug. Buffer keeps slack for the scan.
-                uint8_t buf[kRespFrameLen + 16] = {};
-                esp_err_t rerr = i2c_interface.masterRead(buf, kRespFrameLen, 100);
-                if (rerr != ESP_OK) {
-                    ESP_LOGW(TAG, "[RECOVERY] I2C read for snapshot failed: %s (attempt %d/%d)",
-                             esp_err_to_name(rerr), attempt + 1, kRecoveryAttempts);
-                    // The aborted read may have desynced the OC's slave TX
-                    // ring — ask it to reset before the next attempt (#402).
-                    (void)i2c_interface.sendMessage(I2C_TX_RESYNC, nullptr, 0);
-                    continue;
-                }
-                // #1139 item 1: this was a "defensive SOF scan" that could
-                // never scan anything.  masterRead() fetches exactly
-                // kRespFrameLen bytes into a buffer with 16 bytes of slack,
-                // and the loop was bounded by sizeof(buf) — so off ran 1..16,
-                // every one of them straddling the untouched zero tail where
-                // the CRC cannot validate.  It was dead code for all off > 0,
-                // i.e. for exactly the misalignment it was written to recover
-                // from, while reading as though misalignment were handled.
-                //
-                // Since the read length equals the frame length, offset 0 is
-                // the only offset that can hold a frame, so the scan is now
-                // stated as the single check it always was.  (The [CFG READ]
-                // path at the top of this file bounds by actual_read and the
-                // mini bounds by `avail`; both read MORE than one frame, which
-                // is what makes a scan meaningful there.  Reading extra bytes
-                // here would change what the OC's slave TX ring is asked to
-                // clock out mid-recovery, which is not a change to make on
-                // this path.)
-                bool frame_seen = false;
-                {
-                    constexpr size_t off = 0;
-                    if (buf[off] == 0xAA && buf[off+1] == 0x55 &&
-                        buf[off+2] == 0xAA && buf[off+3] == 0x55 &&
-                        buf[off+4] == SNAPSHOT_MSG) {
-                        uint8_t type = 0;
-                        uint8_t payload[sizeof(FlightSnapshotData)] = {};
-                        size_t  payload_len = 0;
-                        if (TR_I2C_Interface::unpackMessage(
-                                buf + off, kRespFrameLen,
-                                type, payload, sizeof(payload),
-                                payload_len, true) &&
-                            type == SNAPSHOT_MSG &&
-                            payload_len == sizeof(FlightSnapshotData)) {
-                            memcpy(&snap, payload, sizeof(FlightSnapshotData));
-                            if (snap.magic   == FlightSnapshotData::MAGIC &&
-                                snap.version == FlightSnapshotData::VERSION &&
-                                snap.rocket_state == (uint8_t)INFLIGHT &&
-                                snap.crc32 == computeSnapshotCRC(snap)) {
-                                if (snap.sim_flight) {
-                                    // The dry-fire gate lives in isSimActive(),
-                                    // which a reboot resets — restoring here
-                                    // would fire real pyro outputs on bench
-                                    // igniters mid-sim.
-                                    ESP_LOGW(TAG, "[RECOVERY] Snapshot is from a SIMULATED flight — refusing restore");
-                                } else {
-                                    valid = true;
-                                }
-                                if (!valid) answered_no_flight = true;
-                                definitive = true;   // a real answer, either way
-                                // The OC demonstrably answered — latch it for
-                                // the #848/#859 hold reconciliation just below,
-                                // which would otherwise inherit a stale false.
-                                out_ready = true;
-                                out_ready_last_ms = millis();   // #1137 item 9
-                            } else {
-                                ESP_LOGW(TAG, "[RECOVERY] Snapshot invalid (magic=0x%08lX state=%u crc=%s)",
-                                         (unsigned long)snap.magic, snap.rocket_state,
-                                         (snap.crc32 == computeSnapshotCRC(snap)) ? "OK" : "FAIL");
-                                // A frame that PARSED but fails validation is
-                                // also definitive when it is a LANDED clear —
-                                // the flight genuinely ended. Garbage keeps
-                                // retrying (could be a torn TX ring).
-                                if (snap.magic == FlightSnapshotData::MAGIC &&
-                                    snap.crc32 == computeSnapshotCRC(snap)) {
-                                    definitive = true;
-                                    answered_no_flight = true;
-                                }
-                                out_ready = true;   // the OC answered
-                                out_ready_last_ms = millis();   // #1137 item 9
-                            }
-                            frame_seen = true;
-                        }
-                    }
-                }
-                if (!frame_seen) {
-                    // #1139 item 1: a read that COMPLETED but carried no
-                    // frame used to fall through in total silence — no log,
-                    // no RESYNC — so a desynced OC slave TX ring produced
-                    // kRecoveryAttempts identical quiet failures and the
-                    // flight was abandoned with nothing said. The failed-read
-                    // branch above already treats this as a desync signature;
-                    // a dry read is the same evidence.
-                    ESP_LOGW(TAG, "[RECOVERY] read OK but no SNAPSHOT frame "
-                                  "(first bytes %02X %02X %02X %02X %02X) — "
-                                  "asking the OC to reset its slave TX ring",
-                             buf[0], buf[1], buf[2], buf[3], buf[4]);
-                    (void)i2c_interface.sendMessage(I2C_TX_RESYNC, nullptr, 0);
-                }
-            }
+            const OcSnapshotAnswer ask = fcAskOcForFlightSnapshot();
+            snap = ask.snap;
+            valid = ask.valid;
+            answered_no_flight = ask.answered_no_flight;
         }
 
         if (valid) {
@@ -6363,43 +6699,7 @@ static void setup_fc()
 
     // #848: reconcile an inherited power hold now that the flight state is
     // known (pwr_hold_policy.h carries the decision table + rationale).
-    if (config::PWR_HOLD_PIN >= 0)
-    {
-        switch (PwrHoldPolicy::bootAction(pwr_hold_latched_at_boot,
-                                          rocket_state == INFLIGHT,
-                                          out_ready))
-        {
-            case PwrHoldPolicy::BootAction::Assert:
-                pwrHoldAssert("reboot recovery");
-                break;
-            case PwrHoldPolicy::BootAction::Release:
-                pwrHoldRelease("boot: flight over, OC alive");
-                break;
-            case PwrHoldPolicy::BootAction::KeepHold:
-                // A latched hold with no recovered flight and no OC: this is a
-                // downed rocket and we are its GNSS tracker. Deliberately NOT
-                // released — battery pull is the power-off. If the OC answers
-                // later (the boot probe is a single unretried query and the OC
-                // may simply still be booting), the out_ready latch in the
-                // status-poll path releases this.
-                pwr_hold_orphan_keep = true;
-                ESP_LOGE(TAG, "[PWR] Power hold KEPT: previous flight did not "
-                              "resolve and the OC is not answering. Holding our "
-                              "own rail for recovery tracking; disconnect the "
-                              "battery to power off (auto-releases if the OC "
-                              "comes back).");
-                break;
-            case PwrHoldPolicy::BootAction::None:
-                // Defensive: the RTC flag and the LP-pad hold register are
-                // separate LP-domain state — a brownout can scramble the flag
-                // while the hold register keeps the pad latched. Releasing
-                // costs nothing here (LOW == high-Z through D9) and self-heals
-                // a phantom latch; pwrHoldRelease only logs when the flag was
-                // actually set, so cold boots stay quiet.
-                pwrHoldRelease("boot: no hold expected");
-                break;
-        }
-    }
+    fcReconcilePowerHoldAtBoot();
 
     // #1600 the rig replay (TR_SIM_REPLAY builds, SimReplay.h): the flight the
     // build carries is the sensors' from here -- the pad until the receiver's
@@ -6424,6 +6724,7 @@ static void setup_fc()
     // carries rocket_state, so the app switches to showing real states.  Any
     // degraded bits accumulated above ride this final frame so a boot that
     // finished imperfectly still says so.
+    fcSetupWatchdogStop();   // setup finished: not a stall
     fcBootStatus(FCB_COMPLETE);
 }
 
@@ -6781,6 +7082,232 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
 }
 
 // ==========================================================================
+// SECTION: OTA relay command handlers
+// ==========================================================================
+// The three OC commands of an FC-relay update session, served from the OC
+// command dispatch in loop_fc() and, in rescue mode, from fcRescueTask(). One
+// body for both, so a board in rescue mode takes an update exactly the way a
+// running one does.
+static void fcOtaHandleBegin()
+{
+    FcOtaWdtWindow _ota_wdt;   // #1142 item 3
+    // #8 Phase 4: OTA relay from the OC. Refuse unless READY so an
+    // OTA can't start mid-flight (mirrors the cal handlers). Read
+    // the image header (size + sha256) and begin the session
+    // (erases ota_1). Image bytes arrive over I2S in Layer 3;
+    // Layer 2 exercises just this control handshake.
+    if (isCommandLockoutState(rocket_state))
+    {
+        // Block OTA only in the genuinely-unsafe states (INFLIGHT,
+        // MAG_CALIBRATION) — same lockout as the test commands (#218).
+        // READY/PRELAUNCH/LANDED are all fine: a GPS lock on the
+        // bench puts us in PRELAUNCH, and the OTA reboot lands in a
+        // safe state anyway.
+        ESP_LOGW(TAG, "[OTA] BEGIN refused: state=%u (no OTA while INFLIGHT or in MAG_CALIBRATION)",
+                 (unsigned)rocket_state);
+        sendOtaRelayStatus(OTA_RELAY_VERIFY_FAILED, 0, 0);
+    }
+    else
+    {
+        if (fc_ota_data_mode)
+        {
+            // #1116: a BEGIN while an image session is still open is
+            // the operator's retry after a session nobody ended (the
+            // OC's FINISH/ABORT was dropped, or the OC rebooted mid-
+            // transfer). begin() used to refuse it with AlreadyActive,
+            // and that refusal rode the idle I2S sender — so the retry
+            // could never work either. Supersede the old session
+            // instead, silently: no ABORTED status, because a terminal
+            // status would end the relay session the OC has just
+            // opened for THIS begin.
+            ESP_LOGW(TAG, "[OTA] BEGIN while a session is still open "
+                          "(bytes_written=%u/%u) — superseding it (#1116)",
+                     (unsigned)fc_ota_receiver.bytesWritten(),
+                     (unsigned)fc_ota_total_size);
+            fcOtaLogRxDiag();
+            fcOtaTearDownSession();
+        }
+        delay_ms(1);
+        uint8_t hdr[36];
+        size_t  hlen = 0;
+        if (readConfigFrame(OTA_BEGIN_MSG, 36, hdr, sizeof(hdr), hlen)
+            && hlen >= 36)
+        {
+            uint32_t total_size = 0;
+            memcpy(&total_size, hdr, 4);
+            ESP_LOGW(TAG, "[OTA] BEGIN size=%u — erasing ota_1", (unsigned)total_size);
+            // The OTA ends in esp_restart(), which drops the
+            // camera gate.  Start the stop now so the file is
+            // closed long before the image has finished arriving;
+            // the restart below waits out any remainder.
+            cameraWindDown(time_ms(), "FC OTA");
+            // #1125: refuse an image built for another project or
+            // another board before a byte reaches ota_1. This
+            // matters most here: PYRO_ARM is GPIO5 on V8 and GPIO16
+            // on V9, and on V9 GPIO5 is the rail latch — so a -v8
+            // image on a V9 board arms the power-hold pin, never
+            // asserts the real ARM line, still shows normal
+            // continuity on the pad, and cannot fire a channel at
+            // apogee. The board suffix comes from
+            // TR_BOARD_OTA_SUFFIX (CMake, same source as
+            // PROJECT_VER) rather than from the running image's own
+            // version string, which is configure-time and goes
+            // stale on an incremental build.
+#ifdef TR_BOARD_OTA_SUFFIX
+            {
+                const esp_app_desc_t* self = esp_app_get_description();
+                fc_ota_receiver.setExpectedIdentity(
+                    self ? self->project_name : nullptr,
+                    TR_BOARD_OTA_SUFFIX);
+            }
+#endif
+            const TR_OTA_Receiver::Error e = fc_ota_receiver.begin(total_size, hdr + 4);
+            if (e == TR_OTA_Receiver::Error::Ok)
+            {
+                ESP_LOGI(TAG, "[OTA] ready for image");
+                fc_ota_total_size = total_size;
+                sendOtaRelayStatusRobust(OTA_RELAY_READY, 0, 0);
+                // Layer 3: flip to slave RX and receive the image
+                // over the (now reversed) I2S link. Blocks until the
+                // READY resends have drained off the still-TX link.
+                fcFlipToRx();
+            }
+            else
+            {
+                ESP_LOGE(TAG, "[OTA] begin failed: %d", (int)e);
+                sendOtaRelayStatusRobust(OTA_RELAY_VERIFY_FAILED, (uint8_t)e, 0);
+            }
+        }
+        else
+        {
+            ESP_LOGE(TAG, "[OTA] BEGIN header read failed");
+            sendOtaRelayStatus(OTA_RELAY_VERIFY_FAILED, 0, 0);
+        }
+    }
+}
+
+static void fcOtaHandleFinish()
+{
+    FcOtaWdtWindow _ota_wdt;   // #1142 item 3
+    // Layer 3: the OC pumped the tail of the image just before sending
+    // FINISH; give the parser a moment to drain the last in-flight frames,
+    // then revert the I2S link to master-TX so the terminal status rides
+    // the normal-direction path back. Only finalize when an OTA session is
+    // actually active (fc_ota_data_mode); a FINISH with no session is a
+    // stale/duplicate (handled in the else). On success the FC reboots.
+    if (fc_ota_data_mode)
+    {
+        // Wait for the image tail to land. The OC drains its TX queue and
+        // keeps the link clocked briefly after FINISH, so bytesWritten
+        // should reach the total (it stalled 1 frame short before this).
+        for (int i = 0; i < 200 &&
+                (uint32_t)fc_ota_receiver.bytesWritten() < fc_ota_total_size; i++)
+        {
+            delay_ms(5);            // up to ~1 s for the tail to land
+            esp_task_wdt_reset();   // #1142 item 3
+        }
+        // Do NOT seize the bus as master TX until the OC has stopped
+        // driving BCLK (reverted to slave RX). Otherwise both ends drive
+        // BCLK = contention and the terminal status is garbled — and the
+        // final frame is lost. Silence == the I2S RX callback stops firing.
+        fcOtaWaitForOcQuiet(400);   // ~100 ms quiet, <=2 s cap
+        fcRevertToTx();
+
+        ESP_LOGW(TAG, "[OTA] FINISH (bytes_written=%u/%u)",
+                 (unsigned)fc_ota_receiver.bytesWritten(),
+                 (unsigned)fc_ota_total_size);
+        fcOtaLogRxDiag();   // which failure mode stalled it, if any
+        // finish() blocks in esp_ota_end() re-reading the staged
+        // image, and this MCU has no status callback wired (every
+        // relay status here is sent explicitly), so say it before
+        // going quiet. The relay adds its own latency on top of
+        // the verify, which makes the silent gap longer on this
+        // path than on the OC's — the app must not read it as a
+        // dead FC. Plain send, not the robust resend: a dropped
+        // heartbeat costs the app nothing but a longer wait, and
+        // the ~1.4 s resend would be spent before the verify even
+        // starts.
+        sendOtaRelayStatus(OTA_RELAY_VERIFYING, 0,
+                           (uint32_t)fc_ota_receiver.bytesWritten());
+        TR_OTA_Receiver::Error e = fc_ota_receiver.finish();
+        // #1154 item 13: a ring overflow is the CAUSE, and it would
+        // otherwise surface as SizeMismatch — the symptom, which
+        // sends whoever is debugging a stalled relay looking for a
+        // dropped BLE chunk on the phone side instead of an ingest
+        // stall on this side. Name it.
+        if (e != TR_OTA_Receiver::Error::Ok && fc_ota_ring_ovf > 0)
+        {
+            ESP_LOGE(TAG, "[OTA] finish failed with %u byte(s) dropped by "
+                          "the I2S ingest ring — the relay stalled here, "
+                          "not on the phone; reporting RelayRingOverflow "
+                          "instead of %d",
+                     (unsigned)fc_ota_ring_ovf, (int)e);
+            e = TR_OTA_Receiver::Error::RelayRingOverflow;
+        }
+        if (e == TR_OTA_Receiver::Error::Ok)
+        {
+            // Robust resend spans ~1.4 s, which also gives the app
+            // time to catch ready_to_boot before the I2S link drops at
+            // reboot (replaces the old fixed 500 ms pre-restart delay).
+            sendOtaRelayStatusRobust(OTA_RELAY_READY_TO_BOOT, 0,
+                                     (uint32_t)fc_ota_receiver.bytesWritten());
+            // Normally long finished — the stop started at BEGIN.
+            // Bounded: finalize plus the start-press hold-back and
+            // a margin, never forever.
+            const uint32_t cam_wait_start = time_ms();
+            while (cameraStopInProgress() &&
+                   time_ms() - cam_wait_start <
+                       config::GOPRO_FINALIZE_MS + config::GOPRO_MIN_RECORD_MS + 2000U)
+            {
+                serviceCameraStop(time_ms());
+                esp_task_wdt_reset();
+                delay_ms(20);
+            }
+            // The new image starts fresh (fc_rescue_policy.h): the rescue
+            // counts this image built up, rescue mode included, must not
+            // follow it, nor greet this image if a rollback brings it back.
+            fc_rescue_rtc = FcRescuePolicy::onUpdateInstalled(fc_rescue_rtc);
+            esp_restart();
+        }
+        else
+        {
+            ESP_LOGE(TAG, "[OTA] finish failed: %d", (int)e);
+            sendOtaRelayStatusRobust(OTA_RELAY_VERIFY_FAILED, (uint8_t)e,
+                                     (uint32_t)fc_ota_receiver.bytesWritten());
+        }
+    }
+    else
+    {
+        // Stale/duplicate FINISH with no active OTA session — e.g. the OC's
+        // pre-loaded I2C status response, read by the freshly-rebooted FC
+        // right after a *successful* OTA (bench: "finish failed: 2" at boot).
+        // finish() here only returns SessionNotActive and logs a scary error,
+        // so a completed OTA appears to end in failure. Ignore it instead —
+        // the FC is idempotent to a duplicate FINISH regardless of why the
+        // OC re-sent it.
+        ESP_LOGI(TAG, "[OTA] FINISH ignored — no active OTA session (stale/duplicate)");
+    }
+}
+
+static void fcOtaHandleAbort()
+{
+    FcOtaWdtWindow _ota_wdt;   // #1142 item 3
+    // #834 items 6/7 (review): wait for the OC to stop driving BCLK
+    // before seizing it, exactly as the FINISH path above does and
+    // for the same reason — otherwise both ends drive BCLK/WS. This
+    // used to be unreachable in practice because nothing staged
+    // OTA_ABORT_CMD while the OC was (or was about to be) master;
+    // the OC's disconnect/stall/flip-fail recovery now does, so the
+    // abort path needs the same handshake. Shorter cap than FINISH:
+    // an abort is already the unhappy path and must not stall the
+    // flight loop. (#1116: the wait, the revert and the discard live
+    // in fcOtaTearDownSession, shared with the session watchdog.)
+    ESP_LOGW(TAG, "[OTA] ABORT");
+    fcOtaTearDownSession();
+    sendOtaRelayStatusRobust(OTA_RELAY_ABORTED, 0, 0);
+}
+
+// ==========================================================================
 // SECTION: Main loop
 // ==========================================================================
 #if defined(TR_BENCH_IRAM) && TR_BENCH_IRAM >= 2
@@ -6804,6 +7331,7 @@ static void loop_fc()
     }
 
     fcMaybeMarkOtaValid();   // Layer 4: confirm a freshly OTA'd image after a stable run
+    fcMaybeMarkBootProven(); // rescue mode: a minute of this loop clears the boot counts
 
     // ── OTA image pump: yield the core to the OTA RX parser ──
     // During an FC OTA the board is grounded and its I2S is flipped to slave RX.
@@ -9149,215 +9677,15 @@ static void loop_fc()
             }
             else if (out_pending_command == OTA_BEGIN_PENDING)
             {
-                FcOtaWdtWindow _ota_wdt;   // #1142 item 3
-                // #8 Phase 4: OTA relay from the OC. Refuse unless READY so an
-                // OTA can't start mid-flight (mirrors the cal handlers). Read
-                // the image header (size + sha256) and begin the session
-                // (erases ota_1). Image bytes arrive over I2S in Layer 3;
-                // Layer 2 exercises just this control handshake.
-                if (isCommandLockoutState(rocket_state))
-                {
-                    // Block OTA only in the genuinely-unsafe states (INFLIGHT,
-                    // MAG_CALIBRATION) — same lockout as the test commands (#218).
-                    // READY/PRELAUNCH/LANDED are all fine: a GPS lock on the
-                    // bench puts us in PRELAUNCH, and the OTA reboot lands in a
-                    // safe state anyway.
-                    ESP_LOGW(TAG, "[OTA] BEGIN refused: state=%u (no OTA while INFLIGHT or in MAG_CALIBRATION)",
-                             (unsigned)rocket_state);
-                    sendOtaRelayStatus(OTA_RELAY_VERIFY_FAILED, 0, 0);
-                }
-                else
-                {
-                    if (fc_ota_data_mode)
-                    {
-                        // #1116: a BEGIN while an image session is still open is
-                        // the operator's retry after a session nobody ended (the
-                        // OC's FINISH/ABORT was dropped, or the OC rebooted mid-
-                        // transfer). begin() used to refuse it with AlreadyActive,
-                        // and that refusal rode the idle I2S sender — so the retry
-                        // could never work either. Supersede the old session
-                        // instead, silently: no ABORTED status, because a terminal
-                        // status would end the relay session the OC has just
-                        // opened for THIS begin.
-                        ESP_LOGW(TAG, "[OTA] BEGIN while a session is still open "
-                                      "(bytes_written=%u/%u) — superseding it (#1116)",
-                                 (unsigned)fc_ota_receiver.bytesWritten(),
-                                 (unsigned)fc_ota_total_size);
-                        fcOtaLogRxDiag();
-                        fcOtaTearDownSession();
-                    }
-                    delay_ms(1);
-                    uint8_t hdr[36];
-                    size_t  hlen = 0;
-                    if (readConfigFrame(OTA_BEGIN_MSG, 36, hdr, sizeof(hdr), hlen)
-                        && hlen >= 36)
-                    {
-                        uint32_t total_size = 0;
-                        memcpy(&total_size, hdr, 4);
-                        ESP_LOGW(TAG, "[OTA] BEGIN size=%u — erasing ota_1", (unsigned)total_size);
-                        // The OTA ends in esp_restart(), which drops the
-                        // camera gate.  Start the stop now so the file is
-                        // closed long before the image has finished arriving;
-                        // the restart below waits out any remainder.
-                        cameraWindDown(time_ms(), "FC OTA");
-                        // #1125: refuse an image built for another project or
-                        // another board before a byte reaches ota_1. This
-                        // matters most here: PYRO_ARM is GPIO5 on V8 and GPIO16
-                        // on V9, and on V9 GPIO5 is the rail latch — so a -v8
-                        // image on a V9 board arms the power-hold pin, never
-                        // asserts the real ARM line, still shows normal
-                        // continuity on the pad, and cannot fire a channel at
-                        // apogee. The board suffix comes from
-                        // TR_BOARD_OTA_SUFFIX (CMake, same source as
-                        // PROJECT_VER) rather than from the running image's own
-                        // version string, which is configure-time and goes
-                        // stale on an incremental build.
-#ifdef TR_BOARD_OTA_SUFFIX
-                        {
-                            const esp_app_desc_t* self = esp_app_get_description();
-                            fc_ota_receiver.setExpectedIdentity(
-                                self ? self->project_name : nullptr,
-                                TR_BOARD_OTA_SUFFIX);
-                        }
-#endif
-                        const TR_OTA_Receiver::Error e = fc_ota_receiver.begin(total_size, hdr + 4);
-                        if (e == TR_OTA_Receiver::Error::Ok)
-                        {
-                            ESP_LOGI(TAG, "[OTA] ready for image");
-                            fc_ota_total_size = total_size;
-                            sendOtaRelayStatusRobust(OTA_RELAY_READY, 0, 0);
-                            // Layer 3: flip to slave RX and receive the image
-                            // over the (now reversed) I2S link. Blocks until the
-                            // READY resends have drained off the still-TX link.
-                            fcFlipToRx();
-                        }
-                        else
-                        {
-                            ESP_LOGE(TAG, "[OTA] begin failed: %d", (int)e);
-                            sendOtaRelayStatusRobust(OTA_RELAY_VERIFY_FAILED, (uint8_t)e, 0);
-                        }
-                    }
-                    else
-                    {
-                        ESP_LOGE(TAG, "[OTA] BEGIN header read failed");
-                        sendOtaRelayStatus(OTA_RELAY_VERIFY_FAILED, 0, 0);
-                    }
-                }
+                fcOtaHandleBegin();
             }
             else if (out_pending_command == OTA_FINISH_CMD)
             {
-                FcOtaWdtWindow _ota_wdt;   // #1142 item 3
-                // Layer 3: the OC pumped the tail of the image just before sending
-                // FINISH; give the parser a moment to drain the last in-flight frames,
-                // then revert the I2S link to master-TX so the terminal status rides
-                // the normal-direction path back. Only finalize when an OTA session is
-                // actually active (fc_ota_data_mode); a FINISH with no session is a
-                // stale/duplicate (handled in the else). On success the FC reboots.
-                if (fc_ota_data_mode)
-                {
-                    // Wait for the image tail to land. The OC drains its TX queue and
-                    // keeps the link clocked briefly after FINISH, so bytesWritten
-                    // should reach the total (it stalled 1 frame short before this).
-                    for (int i = 0; i < 200 &&
-                            (uint32_t)fc_ota_receiver.bytesWritten() < fc_ota_total_size; i++)
-                    {
-                        delay_ms(5);            // up to ~1 s for the tail to land
-                        esp_task_wdt_reset();   // #1142 item 3
-                    }
-                    // Do NOT seize the bus as master TX until the OC has stopped
-                    // driving BCLK (reverted to slave RX). Otherwise both ends drive
-                    // BCLK = contention and the terminal status is garbled — and the
-                    // final frame is lost. Silence == the I2S RX callback stops firing.
-                    fcOtaWaitForOcQuiet(400);   // ~100 ms quiet, <=2 s cap
-                    fcRevertToTx();
-
-                    ESP_LOGW(TAG, "[OTA] FINISH (bytes_written=%u/%u)",
-                             (unsigned)fc_ota_receiver.bytesWritten(),
-                             (unsigned)fc_ota_total_size);
-                    fcOtaLogRxDiag();   // which failure mode stalled it, if any
-                    // finish() blocks in esp_ota_end() re-reading the staged
-                    // image, and this MCU has no status callback wired (every
-                    // relay status here is sent explicitly), so say it before
-                    // going quiet. The relay adds its own latency on top of
-                    // the verify, which makes the silent gap longer on this
-                    // path than on the OC's — the app must not read it as a
-                    // dead FC. Plain send, not the robust resend: a dropped
-                    // heartbeat costs the app nothing but a longer wait, and
-                    // the ~1.4 s resend would be spent before the verify even
-                    // starts.
-                    sendOtaRelayStatus(OTA_RELAY_VERIFYING, 0,
-                                       (uint32_t)fc_ota_receiver.bytesWritten());
-                    TR_OTA_Receiver::Error e = fc_ota_receiver.finish();
-                    // #1154 item 13: a ring overflow is the CAUSE, and it would
-                    // otherwise surface as SizeMismatch — the symptom, which
-                    // sends whoever is debugging a stalled relay looking for a
-                    // dropped BLE chunk on the phone side instead of an ingest
-                    // stall on this side. Name it.
-                    if (e != TR_OTA_Receiver::Error::Ok && fc_ota_ring_ovf > 0)
-                    {
-                        ESP_LOGE(TAG, "[OTA] finish failed with %u byte(s) dropped by "
-                                      "the I2S ingest ring — the relay stalled here, "
-                                      "not on the phone; reporting RelayRingOverflow "
-                                      "instead of %d",
-                                 (unsigned)fc_ota_ring_ovf, (int)e);
-                        e = TR_OTA_Receiver::Error::RelayRingOverflow;
-                    }
-                    if (e == TR_OTA_Receiver::Error::Ok)
-                    {
-                        // Robust resend spans ~1.4 s, which also gives the app
-                        // time to catch ready_to_boot before the I2S link drops at
-                        // reboot (replaces the old fixed 500 ms pre-restart delay).
-                        sendOtaRelayStatusRobust(OTA_RELAY_READY_TO_BOOT, 0,
-                                                 (uint32_t)fc_ota_receiver.bytesWritten());
-                        // Normally long finished — the stop started at BEGIN.
-                        // Bounded: finalize plus the start-press hold-back and
-                        // a margin, never forever.
-                        const uint32_t cam_wait_start = time_ms();
-                        while (cameraStopInProgress() &&
-                               time_ms() - cam_wait_start <
-                                   config::GOPRO_FINALIZE_MS + config::GOPRO_MIN_RECORD_MS + 2000U)
-                        {
-                            serviceCameraStop(time_ms());
-                            esp_task_wdt_reset();
-                            delay_ms(20);
-                        }
-                        esp_restart();
-                    }
-                    else
-                    {
-                        ESP_LOGE(TAG, "[OTA] finish failed: %d", (int)e);
-                        sendOtaRelayStatusRobust(OTA_RELAY_VERIFY_FAILED, (uint8_t)e,
-                                                 (uint32_t)fc_ota_receiver.bytesWritten());
-                    }
-                }
-                else
-                {
-                    // Stale/duplicate FINISH with no active OTA session — e.g. the OC's
-                    // pre-loaded I2C status response, read by the freshly-rebooted FC
-                    // right after a *successful* OTA (bench: "finish failed: 2" at boot).
-                    // finish() here only returns SessionNotActive and logs a scary error,
-                    // so a completed OTA appears to end in failure. Ignore it instead —
-                    // the FC is idempotent to a duplicate FINISH regardless of why the
-                    // OC re-sent it.
-                    ESP_LOGI(TAG, "[OTA] FINISH ignored — no active OTA session (stale/duplicate)");
-                }
+                fcOtaHandleFinish();
             }
             else if (out_pending_command == OTA_ABORT_CMD)
             {
-                FcOtaWdtWindow _ota_wdt;   // #1142 item 3
-                // #834 items 6/7 (review): wait for the OC to stop driving BCLK
-                // before seizing it, exactly as the FINISH path above does and
-                // for the same reason — otherwise both ends drive BCLK/WS. This
-                // used to be unreachable in practice because nothing staged
-                // OTA_ABORT_CMD while the OC was (or was about to be) master;
-                // the OC's disconnect/stall/flip-fail recovery now does, so the
-                // abort path needs the same handshake. Shorter cap than FINISH:
-                // an abort is already the unhappy path and must not stall the
-                // flight loop. (#1116: the wait, the revert and the discard live
-                // in fcOtaTearDownSession, shared with the session watchdog.)
-                ESP_LOGW(TAG, "[OTA] ABORT");
-                fcOtaTearDownSession();
-                sendOtaRelayStatusRobust(OTA_RELAY_ABORTED, 0, 0);
+                fcOtaHandleAbort();
             }
             else if (out_pending_command == GAIN_SCHED_ENABLE)
             {
@@ -12450,6 +12778,152 @@ static void loop_fc()
     taskYIELD();
 }
 
+// ==========================================================================
+// SECTION: Rescue mode loop
+// ==========================================================================
+// What a board in rescue mode runs instead of the flight task: the OC poll,
+// pipelined exactly as loop_fc() does it (read the answer the last query
+// staged, then send the next), and the three OTA commands through the same
+// handlers. Every other command is dropped and logged. No sensor, servo,
+// camera, state-machine or pyro code runs, so nothing here can arm or fire.
+//
+// Core 1 like the flight task, but at a modest priority and asleep most of
+// each pass, so fcOtaParserTask (prio 3, same core) drains the image ring
+// whenever a transfer is running.
+static void fcRescueTask(void*)
+{
+    esp_task_wdt_add(nullptr);   // a wedge panics and comes back to rescue mode
+    const OutStatusQueryData query = fcRescueStatusQuery();
+    bool     query_pending   = false;
+    uint32_t last_poll_ms    = 0;
+    // #402: no polls while the OC resets its slave. Starts closed: the snapshot
+    // ask that admitted this mode sends a RESYNC after every dry read, and the
+    // first poll must not land on the reset it asked for.
+    uint32_t quiet_until_ms  = time_ms() + config::I2C_RESYNC_GRACE_MS;
+    uint32_t consec_fails    = 0;
+    uint32_t id_throttle     = 1000;   // identity on the first poll, then every ~2 s
+    uint32_t last_status_ms  = time_ms();
+    uint32_t dropped         = 0;
+
+    for (;;)
+    {
+        const uint32_t now_ms = time_ms();
+
+        // #1116 / #1122: the session's own way out, and the master-TX retry,
+        // exactly as loop_fc() runs them.
+        if (fc_ota_data_mode) fcOtaServiceSessionWatchdog(now_ms);
+        fcServiceI2sTxRecovery();
+
+        if ((uint32_t)(now_ms - last_poll_ms) >= 250U &&
+            (int32_t)(now_ms - quiet_until_ms) >= 0)
+        {
+            last_poll_ms = now_ms;
+            xSemaphoreTake(i2c_bus_mutex, portMAX_DELAY);
+            bool read_ok = false;
+            bool resync_sent = false;
+            cfg_read_cache_len = 0;
+
+            if (query_pending)
+            {
+                uint8_t buf[COMBINED_READ_SIZE] = {};
+                if (i2c_interface.masterRead(buf, COMBINED_READ_SIZE, 50) == ESP_OK)
+                {
+                    uint8_t type = 0;
+                    uint8_t payload[OUT_STATUS_PAYLOAD_BYTES] = {};
+                    size_t  len = 0;
+                    if (TR_I2C_Interface::unpackMessage(buf, OUT_STATUS_FRAME_BYTES, type,
+                                                        payload, sizeof(payload), len, true) &&
+                        type == OUT_STATUS_RESPONSE && len >= 1)
+                    {
+                        read_ok = true;
+                        if (payload[0] != 0) { out_ready = true; out_ready_last_ms = now_ms; }
+                        if (len >= 2)
+                        {
+                            out_pending_command = payload[1];
+                            out_pending_epoch   = (len >= 3) ? payload[2] : 0U;
+                            oc_cmd_gate.observe(payload[1]);
+                        }
+                        memcpy(cfg_read_cache, buf + OUT_STATUS_FRAME_BYTES,
+                               COMBINED_READ_SIZE - OUT_STATUS_FRAME_BYTES);
+                        cfg_read_cache_len = COMBINED_READ_SIZE - OUT_STATUS_FRAME_BYTES;
+                    }
+                }
+                if (read_ok) { i2c_query_ok++; consec_fails = 0; }
+                else
+                {
+                    i2c_query_fail++;
+                    // #402: a run of failed reads is the OC's slave TX ring out
+                    // of step. Ask it to reset and keep the bus quiet meanwhile.
+                    if (++consec_fails % 8 == 0)
+                    {
+                        (void)i2c_interface.sendMessage(I2C_TX_RESYNC, nullptr, 0, 10);
+                        quiet_until_ms = now_ms + config::I2C_RESYNC_GRACE_MS;
+                        query_pending = false;
+                        resync_sent = true;
+                        ESP_LOGW(TAG, "[RESCUE] %u failed OC reads: RESYNC sent, bus "
+                                      "quiet for %u ms", (unsigned)consec_fails,
+                                 (unsigned)config::I2C_RESYNC_GRACE_MS);
+                    }
+                }
+            }
+
+            if (!resync_sent)
+            {
+                query_pending = i2c_interface.sendMessage(
+                    OUT_STATUS_QUERY, reinterpret_cast<const uint8_t*>(&query),
+                    sizeof(query), 10) == ESP_OK;
+                // The version (and the board the FC was provisioned as) for the
+                // app, which checks a picked image against it and reads it back
+                // to tell an update from a rollback. Not mid-transfer, as in
+                // loop_fc().
+                if (!fc_ota_data_mode && ++id_throttle >= 8)
+                {
+                    id_throttle = 0;
+                    const esp_app_desc_t* d = esp_app_get_description();
+                    const char* v = (d && d->version[0]) ? d->version : "unknown";
+                    char id_payload[64];
+                    const size_t id_len = board_identity::encodePayload(
+                        v, provisioned_board_rev, id_payload, sizeof(id_payload));
+                    (void)i2c_interface.sendMessage(
+                        FC_IDENTITY, reinterpret_cast<const uint8_t*>(id_payload),
+                        id_len, 10);
+                }
+            }
+
+            // Dispatch only what this poll just read: an OTA handler has no
+            // retry for a stale mirror to feed.
+            const uint8_t cmd = read_ok
+                ? oc_cmd_dedup.take(true, out_pending_command, out_pending_epoch) : 0U;
+            if (cmd != 0U)
+            {
+                if (!FcRescuePolicy::servesInRescue(cmd))
+                {
+                    ++dropped;
+                    ESP_LOGW(TAG, "[RESCUE] cmd 0x%02X dropped: rescue mode serves "
+                                  "firmware updates only", (unsigned)cmd);
+                }
+                else if (cmd == OTA_BEGIN_PENDING) fcOtaHandleBegin();
+                else if (cmd == OTA_FINISH_CMD)    fcOtaHandleFinish();
+                else                               fcOtaHandleAbort();
+            }
+            xSemaphoreGive(i2c_bus_mutex);
+        }
+
+        if ((uint32_t)(now_ms - last_status_ms) >= 30000U)
+        {
+            last_status_ms = now_ms;
+            ESP_LOGW(TAG, "[RESCUE] waiting for a firmware update through the out "
+                          "computer (OC reads ok=%lu fail=%lu, commands dropped=%lu). "
+                          "Power-cycle to try a normal boot.",
+                     (unsigned long)i2c_query_ok, (unsigned long)i2c_query_fail,
+                     (unsigned long)dropped);
+        }
+
+        esp_task_wdt_reset();
+        vTaskDelay(pdMS_TO_TICKS(fc_ota_data_mode ? 5 : 10));
+    }
+}
+
 /* ── ESP-IDF entry point ─────────────────────────────────── */
 
 // ==========================================================================
@@ -12458,6 +12932,15 @@ static void loop_fc()
 extern "C" void app_main(void)
 {
     setup_fc();
+    if (fc_rescue_mode)
+    {
+        // setup_fc() stopped after the links (fc_rescue_policy.h): no flight
+        // task, no sensors behind it. 16 KB like the flight task, which ran
+        // these same OTA handlers.
+        xTaskCreatePinnedToCore(fcRescueTask, "rescue", 16 * 1024, nullptr, 5,
+                                nullptr, 1);
+        return;
+    }
     TaskHandle_t flight_task = nullptr;
     xTaskCreatePinnedToCore(
         [](void *) {
