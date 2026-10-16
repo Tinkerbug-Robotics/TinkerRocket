@@ -42,19 +42,29 @@
 //  µT/LSB, the value MAG_TYPE_QMC5883P promises every log reader.  Keep
 //  configure()'s range at G8 unless that contract changes with it.
 //
+//  Until this driver released the soft reset, that range never took: CTRL2
+//  read back 0x00 (±30 G, 1000 LSB/G), so every QMC5883P count from #1312
+//  up to this fix is 3.75x small at the contract's scale (the Beetle's |B|
+//  of 13 µT on the bench, its "strength too low" calibrations).  Directions
+//  were right.  configure() now reads its writes back.  readRawXYZ() hands
+//  out counts at the contract's scale whatever the readback says: if ±8 G
+//  will not take, it converts the counts of the range the part reports.
+//
 //  Axes (datasheet Figure 2, package seen from above, pin-1 dot top-left):
 //  +X points from the GND/C1 edge (pins 9-12) toward the SCK/VDD edge
 //  (pins 1-4); +Y points from the SDA edge (pins 13-16) toward the all-NC
 //  edge (pins 5-8); +Z is drawn up out of the package.
 //
-//  That is NOT the frame this driver reads (#1590).  With the 0x29 = 0x06
-//  sign word configure() writes (its meaning is undocumented), a Beetle
-//  bench log measured X as drawn but Y and Z reversed: still right-handed,
-//  with Z pointing INTO the board, so a flat board read the field pointing
-//  up.  The converter turns that back with magTypeChipSign (+1, -1, -1) in
+//  That is NOT the frame this driver reads (#1590).  At sign word 0x29 =
+//  0x00, the value after a reset, a Beetle bench log measured X as drawn but
+//  Y and Z reversed: still right-handed, with Z pointing INTO the board, so
+//  a flat board read the field pointing up.  (The driver meant to write the
+//  datasheet's 0x06, but that write never took; see qmc5883p_regs.h.)  The
+//  converter turns the frame back with magTypeChipSign (+1, -1, -1) in
 //  RocketComputerTypes.h, and each board's MAG_ROT_Z_DEG_QMC5883P is then
-//  the placement rotation alone (Beetle -90, V10 180).  Keep 0x06 unless
-//  those signs change with it; the hard-iron offsets are in these counts.
+//  the placement rotation alone (Beetle -90, V10 180).  Keep 0x29 at 0x00
+//  unless those signs change with it; the hard-iron offsets are in these
+//  counts.
 // ---------------------------------------------------------------------------
 
 typedef enum {
@@ -92,20 +102,34 @@ public:
     bool isConnected();
 
     /// CTRL2.SOFT_RST: every register back to default (suspend mode), and the
-    /// driver's hard-iron offset back to zero.  POR completes inside 250 µs
-    /// (datasheet Table 7); the driver waits 5 ms.
+    /// driver's hard-iron offset back to zero.  The bit does not clear
+    /// itself, and the part keeps no write while it is set
+    /// (qmc5883p_regs.h), so this writes it back to 0 before returning.
+    /// POR completes inside 250 µs (datasheet Table 7); the driver waits
+    /// 5 ms on each side of the release.
     TR_QMC5883PStatus softReset();
 
     /// One-shot configuration, in the datasheet's order (section 7): the
-    /// axis sign word (0x29 = 0x06), then suspend — the mode a mode change
-    /// has to pass through (9.2.3), which also makes this a safe
-    /// re-configure of a part that is already running (the stall-revive
-    /// path) — then CTRL2 (range, set/reset), then CTRL1 (OSR, ODR, mode).
+    /// axis sign word (0x29 = 0x00, see qmc5883p_regs.h), then suspend — the
+    /// mode a mode change has to pass through (9.2.3), which also makes this
+    /// a safe re-configure of a part that is already running (the
+    /// stall-revive path) — then CTRL2 (range, set/reset), then CTRL1 (OSR,
+    /// ODR, mode).  Then it reads the three back.  If the part does not hold
+    /// what was written, it writes all four again, CONFIGURE_ATTEMPTS times
+    /// in all.
+    ///
+    /// ERROR means a transfer failed.  A part that answers every transfer
+    /// but never holds the configuration still returns OK.  configVerified()
+    /// is false then, and configReadback() holds what the part reported.  The
+    /// collector would halt the boot on an ERROR; a magnetometer that reads
+    /// at the wrong range is no reason to keep a rocket on the ground, and
+    /// readRawXYZ() converts its counts anyway.
     ///
     /// Defaults: normal mode at 100 Hz (the IIS2MDC's cadence, and what the
     /// collector's poll gate assumes), ±8 G, OSR1 = 8 / OSR2 = 8 (the most
     /// filtering the part offers; ~600 µA), set/reset on (periodic degauss,
     /// the counterpart of the IIS2MDC's OFF_CANC with periodic Set pulses).
+    static constexpr uint8_t CONFIGURE_ATTEMPTS = 3;
     TR_QMC5883PStatus configure(qmc5883p::Odr      odr       = qmc5883p::Odr::HZ_100,
                                 qmc5883p::Mode     mode      = qmc5883p::Mode::NORMAL,
                                 qmc5883p::Range    range     = qmc5883p::Range::G8,
@@ -121,6 +145,9 @@ public:
     /// One sample: hard iron subtracted, tear-checked (see the header note).
     /// Two transfers (three when a refresh lands mid-read), bailing at the
     /// first failure, so a wedged bus costs one I2C timeout, not three.
+    /// Counts are at the ±8 G scale (100/3750 µT/LSB) even if the part
+    /// reported another range at configure(): they are converted first, then
+    /// the hard iron is subtracted.
     TR_QMC5883PStatus readRawXYZ(QMC5883P_RawData *out);
 
     /// Set the hard-iron offset the driver subtracts from every sample, in
@@ -133,7 +160,7 @@ public:
     TR_QMC5883PStatus setHardIronOffset(int16_t cx, int16_t cy, int16_t cz);
     void getHardIronOffset(int16_t *cx, int16_t *cy, int16_t *cz) const;
 
-    /// One sample in µT at the configured range.
+    /// One sample in µT.
     TR_QMC5883PStatus readFieldsXYZ_uT(float *x_uT, float *y_uT, float *z_uT);
 
     /// Register 0x00 (expected 0x80).
@@ -150,8 +177,20 @@ public:
     /// the ODR configure() asked for.
     uint32_t tearRereads() const { return _rereads; }
 
-    /// µT per LSB at the configured range.
-    float lsbToUt() const { return qmc5883p::uTPerLsb(_range); }
+    /// µT per LSB of the counts readRawXYZ() hands out: always the ±8 G
+    /// scale, whatever range the part is in.
+    float lsbToUt() const { return qmc5883p::uTPerLsb(qmc5883p::CONTRACT_RANGE); }
+
+    /// The last configure(): did the part hold all three registers, what did
+    /// it report, and how many write passes did that take (0 before any
+    /// configure(), or when a transfer failed before the first readback).
+    bool configVerified() const { return _config_verified; }
+    const qmc5883p::ConfigReadback& configReadback() const { return _readback; }
+    uint8_t configAttempts() const { return _config_attempts; }
+
+    /// The range the part reported at the last configure() (CTRL2 RNG).  The
+    /// counts are converted from this range to the ±8 G scale.
+    qmc5883p::Range range() const { return _range; }
 
     /// Low-level register access.
     TR_QMC5883PStatus readRegister(uint8_t reg, uint8_t *value);
@@ -164,6 +203,9 @@ private:
     int16_t         _off_x, _off_y, _off_z;
     bool            _overflow;
     uint32_t        _rereads;
+    bool            _config_verified;
+    uint8_t         _config_attempts;
+    qmc5883p::ConfigReadback _readback;
 
     TR_QMC5883PStatus readRegisters(uint8_t reg, uint8_t *buf, size_t len);
     TR_QMC5883PStatus readBurst(int16_t *x, int16_t *y, int16_t *z);

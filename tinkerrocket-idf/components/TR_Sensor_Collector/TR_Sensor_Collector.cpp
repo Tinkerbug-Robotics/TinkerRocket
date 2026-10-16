@@ -55,16 +55,39 @@ static void logMagBootState(TR_QMC5883P& mag)
     mag.getHardIronOffset(&ox, &oy, &oz);
     ESP_LOGI(SC_TAG, "QMC5883P hard-iron offset (driver): (%d,%d,%d)",
              (int)ox, (int)oy, (int)oz);
-    // #1590: read back what configure() wrote.  A Beetle bench log read
-    // |B| = 13 uT at the +/-8 G scale (3750 LSB/G), close to 52 uT at the
-    // +/-30 G one (1000 LSB/G): CTRL2 RNG (bits 3:2) should read 10.
+    // #1590: read back what configure() wrote, again, after it checked.
+    // Before softReset() released SOFT_RST this read CTRL1=0xC9 CTRL2=0x00
+    // (RNG=0, +/-30 G) AXIS_SIGN=0x00 on the Beetle: the range never took,
+    // and |B| read 3.75x low.  Now CTRL2 should read 0x08 (RNG=2, +/-8 G).
     uint8_t ctrl1 = 0, ctrl2 = 0, sign = 0;
     (void)mag.readRegister(qmc5883p::REG_CTRL1, &ctrl1);
     (void)mag.readRegister(qmc5883p::REG_CTRL2, &ctrl2);
     (void)mag.readRegister(qmc5883p::REG_AXIS_SIGN, &sign);
-    ESP_LOGI(SC_TAG, "QMC5883P CTRL1=0x%02X CTRL2=0x%02X (RNG=%u) AXIS_SIGN=0x%02X",
-             (unsigned)ctrl1, (unsigned)ctrl2, (unsigned)((ctrl2 >> 2) & 0x3u),
-             (unsigned)sign);
+    const qmc5883p::Range rng = qmc5883p::rangeOfCtrl2(ctrl2);
+    if (mag.configVerified())
+    {
+        ESP_LOGI(SC_TAG, "QMC5883P CTRL1=0x%02X CTRL2=0x%02X (RNG=%u, +/-%u G) "
+                         "AXIS_SIGN=0x%02X: as written (pass %u)",
+                 (unsigned)ctrl1, (unsigned)ctrl2, (unsigned)rng,
+                 (unsigned)qmc5883p::fullScaleGauss(rng), (unsigned)sign,
+                 (unsigned)mag.configAttempts());
+    }
+    else
+    {
+        // Still flies: readRawXYZ() converts the counts from the range the
+        // part reports, so |B| keeps its scale.  The sign word is what
+        // cannot be fixed up afterwards -- a wrong one turns the pad heading.
+        ESP_LOGE(SC_TAG, "QMC5883P configuration did NOT take in %u passes: "
+                         "CTRL1=0x%02X CTRL2=0x%02X (RNG=%u, +/-%u G) AXIS_SIGN=0x%02X "
+                         "(wanted CTRL2 RNG=2 and AXIS_SIGN=0x%02X). Counts are converted "
+                         "from +/-%u G to the 3750 LSB/G log scale; do not trust a "
+                         "heading until the sign word reads 0x%02X",
+                 (unsigned)mag.configAttempts(), (unsigned)ctrl1, (unsigned)ctrl2,
+                 (unsigned)rng, (unsigned)qmc5883p::fullScaleGauss(rng), (unsigned)sign,
+                 (unsigned)qmc5883p::AXIS_SIGN_VALUE,
+                 (unsigned)qmc5883p::fullScaleGauss(mag.range()),
+                 (unsigned)qmc5883p::AXIS_SIGN_VALUE);
+    }
 }
 #endif
 

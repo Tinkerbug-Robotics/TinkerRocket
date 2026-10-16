@@ -305,6 +305,22 @@ target_include_directories(test_qmc5883p_regs PRIVATE
 target_link_libraries(test_qmc5883p_regs GTest::gtest_main)
 gtest_discover_tests(test_qmc5883p_regs)
 
+# ---------- test_qmc5883p_driver ----------
+# The QMC5883P driver itself (#1590 scale) against a fake of the part's
+# register file: SOFT_RST held until written back to 0, as the Beetle's boot
+# readback shows.  begin() + configure() must leave ±8 G and sign word 0x00
+# in the part, and the counts must keep the ±8 G scale even if they do not.
+# The I2C calls resolve to the fake through host_shim/driver/i2c_master.h.
+add_executable(test_qmc5883p_driver test_qmc5883p_driver.cpp
+    ${LIB_DIR}/TR_QMC5883P/TR_QMC5883P.cpp
+)
+target_include_directories(test_qmc5883p_driver PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_QMC5883P
+)
+target_link_libraries(test_qmc5883p_driver GTest::gtest_main)
+gtest_discover_tests(test_qmc5883p_driver)
+
 # ---------- test_control_mixer ----------
 add_executable(test_control_mixer test_control_mixer.cpp
     ${LIB_DIR}/TR_ControlMixer/TR_ControlMixer.cpp
