@@ -2767,10 +2767,10 @@ double tiltErrDeg(const float a[4], const float b[4])
 // the GNSS task's stage and handed over built, as on the Beetle (#1626).
 // apart, min_epochs, sure_deg: heading_handoff_apart, _min_epochs and
 // _sure_deg, when not negative (else the defaults). tilt_floor_deg:
-// heading_launch_tilt_sigma_deg; gate_full: heading_gate_full.
+// heading_launch_tilt_sigma_deg; gate: heading_gate (no apogee call here).
 BoostRun flyBoost(uint8_t mode, double seed_err_deg, double bias_y = 0.0, double bias_z = 0.0, bool external = false,
                   double apart = -1.0, int min_epochs = -1, double sure_deg = -1.0, double tilt_floor_deg = 0.0,
-                  bool gate_full = false)
+                  uint8_t gate = RawGnssShadow::kGateHeading)
 {
     double lat, lon, h;
     ecef_to_geo(kGoldenRmRx, &lat, &lon, &h);
@@ -2793,7 +2793,7 @@ BoostRun flyBoost(uint8_t mode, double seed_err_deg, double bias_y = 0.0, double
     if (sure_deg >= 0.0)
         cfg.heading_handoff_sure_deg = sure_deg;
     cfg.heading_launch_tilt_sigma_deg = tilt_floor_deg;
-    cfg.heading_gate_full = gate_full;
+    cfg.heading_gate = gate;
     cfg.meas.troposphere = false;
     cfg.external_build = external;
     RawGnssShadow sh(cfg);
@@ -3041,15 +3041,15 @@ TEST(RawGnssShadow, TheHeadingFitIsOffByDefault)
 
 TEST(RawGnssShadow, TheFullGateOpensAtLaunchAndClosesOnTheGround)
 {
-    // heading_gate_full: in act, from the launch edge, neither the vertical
-    // gate nor cos^4; back on the ground both are the EKF config's again.
-    // Without it act gates to the vertical; off by default.
-    EXPECT_FALSE(RawGnssShadow::Config().heading_gate_full);
+    // heading_gate kGateFullLaunch (A): in act, from the launch edge, neither
+    // the vertical gate nor cos^4; back on the ground both are the EKF
+    // config's again. kGateHeading (C), the default, gates to the vertical.
+    EXPECT_EQ(RawGnssShadow::Config().heading_gate, RawGnssShadow::kGateHeading);
     for (bool full : {false, true})
     {
         RawGnssShadow::Config cfg = primaryCfg();
         cfg.heading_mode = RawGnssShadow::kHeadingAct;
-        cfg.heading_gate_full = full;
+        cfg.heading_gate = full ? RawGnssShadow::kGateFullLaunch : RawGnssShadow::kGateHeading;
         RawGnssShadow sh(cfg);
         sh.onSeed(padSeed(kT0));
         int64_t t = feedFlight(sh, kT0, 1.0, 0.0f, gnss_raw::kShadowLevel, false);
@@ -3067,17 +3067,178 @@ TEST(RawGnssShadow, TheFullGateOpensAtLaunchAndClosesOnTheGround)
     }
 }
 
+namespace
+{
+
+// The attitude gate the filter has: 'h' the heading's (att_gate_vertical),
+// 'f' the whole attitude's (neither that nor cos^4), 'g' the EKF config's
+// (the ground's: cos^4 pitch).
+char gateOf(const RawGnssShadow& sh)
+{
+    const gnss_raw::RawGnssEKFParams& p = sh.filter().params();
+    if (p.att_gate_vertical)
+        return 'h';
+    return p.att_gate_cos4 ? 'g' : 'f';
+}
+
+RawGnssShadow::Config gateCfg(uint8_t mode, uint8_t gate)
+{
+    RawGnssShadow::Config c = primaryCfg();
+    c.heading_mode = mode;
+    c.heading_gate = gate;
+    return c;
+}
+
+constexpr uint8_t kFlight = gnss_raw::kShadowInFlight;
+constexpr uint8_t kApogee = gnss_raw::kShadowInFlight | gnss_raw::kShadowApogee;
+
+}  // namespace
+
+TEST(RawGnssShadow, FromTheApogeeCallTheGateOpensInFullAndStaysOpen)
+{
+    // kGateFullApogee (H): the launch edge gates GNSS to the heading, as C;
+    // the flight computer's apogee call (kShadowApogee on the IMU tick) opens
+    // the whole attitude, once a flight and counted. It stays open whatever
+    // the flag does, to the ground. Only the gate changes there: the
+    // heading's 1-sigma is the launch edge's, carried on.
+    RawGnssShadow sh(gateCfg(RawGnssShadow::kHeadingAct, RawGnssShadow::kGateFullApogee));
+    sh.onSeed(padSeed(kT0));
+    int64_t t = feedFlight(sh, kT0, 1.0, 0.0f, gnss_raw::kShadowLevel, false);
+    ASSERT_TRUE(sh.running());
+    EXPECT_EQ(gateOf(sh), 'g');
+    t = feedFlight(sh, t, 0.5, 20.0f, kFlight, false);           // the boost
+    EXPECT_EQ(gateOf(sh), 'h');
+    EXPECT_NEAR(headingSigmaDeg(sh), 30.0, 0.5);                  // act's prior, at launch
+    t = feedFlight(sh, t, 2.0, 0.0f, kFlight, false);             // the coast
+    EXPECT_EQ(gateOf(sh), 'h');
+    EXPECT_EQ(sh.stats().heading_gate_apogee, 0u);
+    const double sig = headingSigmaDeg(sh);
+    float tilt[3];
+    sh.filter().attSigmaNed(tilt);
+    t = feedFlight(sh, t, 0.02, 0.0f, kApogee, false);            // the apogee call
+    EXPECT_EQ(gateOf(sh), 'f');
+    EXPECT_EQ(sh.stats().heading_gate_apogee, 1u);
+    EXPECT_NEAR(sh.stats().heading_gate_apogee_s, 2.5, 0.02);     // after the launch edge
+    float tilt2[3];
+    sh.filter().attSigmaNed(tilt2);
+    EXPECT_NEAR(headingSigmaDeg(sh), sig, 0.1);                   // no new prior
+    EXPECT_NEAR(tilt2[0], tilt[0], 1.0e-3f);                      // no tilt floor
+    EXPECT_NEAR(tilt2[1], tilt[1], 1.0e-3f);
+    // under the drogue, with the call held as main.cpp latches it -- and
+    // without it: latched here too
+    t = feedFlight(sh, t, 1.0, 0.0f, kApogee | gnss_raw::kShadowLevel, false);
+    t = feedFlight(sh, t, 1.0, 0.0f, kFlight | gnss_raw::kShadowLevel, false);
+    EXPECT_EQ(gateOf(sh), 'f');
+    EXPECT_EQ(sh.stats().heading_gate_apogee, 1u);
+    // landed (the call still set): the ground's
+    feedFlight(sh, t, 0.5, 0.0f, gnss_raw::kShadowLanded | gnss_raw::kShadowLevel | gnss_raw::kShadowApogee,
+               false);
+    ASSERT_TRUE(sh.running());
+    EXPECT_EQ(gateOf(sh), 'g');
+    EXPECT_EQ(sh.stats().heading_gate_apogee, 1u);
+}
+
+TEST(RawGnssShadow, FromLaunchTheGateIsFullAndTheHeadingsNeverOpens)
+{
+    // A (kGateFullLaunch) opens at the launch edge as before; C
+    // (kGateHeading) keeps the heading's through the apogee call. Neither
+    // counts an opening at the call.
+    for (uint8_t gate : {uint8_t(RawGnssShadow::kGateFullLaunch), uint8_t(RawGnssShadow::kGateHeading)})
+    {
+        RawGnssShadow sh(gateCfg(RawGnssShadow::kHeadingAct, gate));
+        sh.onSeed(padSeed(kT0));
+        int64_t t = feedFlight(sh, kT0, 1.0, 0.0f, gnss_raw::kShadowLevel, false);
+        t = feedFlight(sh, t, 0.5, 20.0f, kFlight, false);
+        const char at_launch = gateOf(sh);
+        EXPECT_EQ(at_launch, gate == RawGnssShadow::kGateFullLaunch ? 'f' : 'h') << int(gate);
+        feedFlight(sh, t, 1.0, 0.0f, kApogee | gnss_raw::kShadowLevel, false);
+        EXPECT_EQ(gateOf(sh), at_launch) << int(gate);
+        EXPECT_EQ(sh.stats().heading_gate_apogee, 0u) << int(gate);
+    }
+}
+
+TEST(RawGnssShadow, ARestoredFlightComesBackInItsPhasesGate)
+{
+    // A reboot in flight: the navigation filter starts in the air from the
+    // snapshot, with no launch edge to set act's gate, so the start sets the
+    // flight's. Past the apogee call -- the snapshot restores it, so it rides
+    // the first tick -- H's is whole at the first step (counted, untimed);
+    // before it, the heading's until the call. A's is whole from the start.
+    for (bool past_apogee : {true, false})
+    {
+        RawGnssShadow sh(gateCfg(RawGnssShadow::kHeadingAct, RawGnssShadow::kGateFullApogee));
+        ShadowSeed seed = padSeed(kT0);
+        seed.on_pad = 0;
+        seed.restore = 1;
+        sh.onSeed(seed);
+        int64_t t = feedFlight(sh, kT0, 0.5, 0.0f, past_apogee ? kApogee : kFlight, false);
+        ASSERT_TRUE(sh.running());
+        ASSERT_EQ(sh.stats().restores, 1u);
+        EXPECT_EQ(gateOf(sh), past_apogee ? 'f' : 'h') << past_apogee;
+        EXPECT_EQ(sh.stats().heading_gate_apogee, past_apogee ? 1u : 0u);
+        if (past_apogee)
+            EXPECT_LT(sh.stats().heading_gate_apogee_s, 0.0f);     // no launch edge to time it from
+        t = feedFlight(sh, t, 0.1, 0.0f, kApogee, false);
+        EXPECT_EQ(gateOf(sh), 'f') << past_apogee;
+        EXPECT_EQ(sh.stats().heading_gate_apogee, 1u) << past_apogee;
+    }
+    RawGnssShadow a(gateCfg(RawGnssShadow::kHeadingAct, RawGnssShadow::kGateFullLaunch));
+    ShadowSeed seed = padSeed(kT0);
+    seed.on_pad = 0;
+    seed.restore = 1;
+    a.onSeed(seed);
+    feedFlight(a, kT0, 0.5, 0.0f, kFlight, false);
+    ASSERT_TRUE(a.running());
+    EXPECT_EQ(gateOf(a), 'f');
+    EXPECT_EQ(a.stats().heading_gate_apogee, 0u);
+}
+
+TEST(RawGnssShadow, ObserveNeverTouchesTheGate)
+{
+    // Observe (and off) fit and log only: whatever heading_gate says, the
+    // gate stays the EKF config's through launch, the apogee call, the
+    // ground, and a restored flight.
+    for (uint8_t mode : {uint8_t(RawGnssShadow::kHeadingObserve), uint8_t(RawGnssShadow::kHeadingOff)})
+        for (uint8_t gate : {uint8_t(RawGnssShadow::kGateHeading), uint8_t(RawGnssShadow::kGateFullLaunch),
+                             uint8_t(RawGnssShadow::kGateFullApogee)})
+        {
+            RawGnssShadow sh(gateCfg(mode, gate));
+            sh.onSeed(padSeed(kT0));
+            int64_t t = feedFlight(sh, kT0, 1.0, 0.0f, gnss_raw::kShadowLevel, false);
+            EXPECT_EQ(gateOf(sh), 'g');
+            t = feedFlight(sh, t, 0.5, 20.0f, kFlight, false);
+            EXPECT_EQ(gateOf(sh), 'g') << int(mode) << int(gate);
+            t = feedFlight(sh, t, 1.0, 0.0f, kApogee | gnss_raw::kShadowLevel, false);
+            EXPECT_EQ(gateOf(sh), 'g') << int(mode) << int(gate);
+            feedFlight(sh, t, 0.5, 0.0f, gnss_raw::kShadowLanded | gnss_raw::kShadowLevel, false);
+            EXPECT_EQ(gateOf(sh), 'g') << int(mode) << int(gate);
+            EXPECT_EQ(sh.stats().heading_gate_apogee, 0u);
+
+            RawGnssShadow r(gateCfg(mode, gate));
+            ShadowSeed seed = padSeed(kT0);
+            seed.on_pad = 0;
+            seed.restore = 1;
+            r.onSeed(seed);
+            feedFlight(r, kT0, 0.5, 0.0f, kApogee, false);
+            ASSERT_TRUE(r.running());
+            EXPECT_EQ(gateOf(r), 'g') << int(mode) << int(gate);
+        }
+}
+
 TEST(RawGnssShadow, TheFullGateTakesThePadsTiltOutInTheBoost)
 {
     // The pad's tilt 1 deg off: the accelerometer reads g tan(1 deg) (0.17
     // m/s^2) sideways, which the 6 s pad's levelling takes as tilt (#1626
     // K1); the heading is right. In the boost the 10 g of thrust turns that
-    // tilt into 1.7 m/s^2 the bias cannot make. With heading_gate_full GNSS
-    // takes it out: the boost's one epoch to 0.29 deg, the coast's epochs to
-    // 0.07. Through act's default gate, the heading's, it stays 0.97.
+    // tilt into 1.7 m/s^2 the bias cannot make. With the full gate from
+    // launch (kGateFullLaunch) GNSS takes it out: the boost's one epoch to
+    // 0.29 deg, the coast's epochs to 0.07. Through act's default gate, the
+    // heading's, it stays 0.97.
     const double by = kG * std::tan(1.0 * kPi / 180.0);
-    const BoostRun hdg = flyBoost(RawGnssShadow::kHeadingAct, 0.0, by, 0.0, false, -1.0, -1, -1.0, 0.0, false);
-    const BoostRun full = flyBoost(RawGnssShadow::kHeadingAct, 0.0, by, 0.0, false, -1.0, -1, -1.0, 0.0, true);
+    const BoostRun hdg = flyBoost(RawGnssShadow::kHeadingAct, 0.0, by, 0.0, false, -1.0, -1, -1.0, 0.0,
+                                  RawGnssShadow::kGateHeading);
+    const BoostRun full = flyBoost(RawGnssShadow::kHeadingAct, 0.0, by, 0.0, false, -1.0, -1, -1.0, 0.0,
+                                   RawGnssShadow::kGateFullLaunch);
     for (const BoostRun* r : {&hdg, &full})
         EXPECT_NEAR(tiltErrDeg(r->q_launch, r->q_true), 1.0, 0.1);
     const double h0 = tiltErrDeg(hdg.q_launch, hdg.q_true);
@@ -3091,7 +3252,8 @@ TEST(RawGnssShadow, TheFullGateTakesThePadsTiltOutInTheBoost)
     // own velocity error in the boost), the full gate puts some of it into
     // the tilt -- 2 deg at burnout, 1.2 at the end -- where the heading's
     // gate leaves the pad's 1.
-    const BoostRun lost = flyBoost(RawGnssShadow::kHeadingAct, 40.0, by, 0.0, false, -1.0, -1, -1.0, 0.0, true);
+    const BoostRun lost = flyBoost(RawGnssShadow::kHeadingAct, 40.0, by, 0.0, false, -1.0, -1, -1.0, 0.0,
+                                   RawGnssShadow::kGateFullLaunch);
     EXPECT_GT(tiltErrDeg(lost.q_burnout, lost.q_true), 1.5);
 }
 

@@ -36,6 +36,8 @@ static constexpr uint8_t kShadowLevel    = 0x01;  // the flight filter levels ag
 static constexpr uint8_t kShadowInFlight = 0x02;  // rocket_state is INFLIGHT
 static constexpr uint8_t kShadowSim      = 0x04;  // a sensor sim runs: the IMU is not real
 static constexpr uint8_t kShadowLanded   = 0x08;  // the landing detector has called it: zero velocity
+static constexpr uint8_t kShadowApogee   = 0x10;  // the flight computer has called apogee (pyro_apogee_detected:
+                                                  //   latched for the flight, restored after a reboot)
 
 // A magnetometer sample (body FRD, uT): the flight filter's input. The raw
 // filter takes it as a heading on the ground where it is the navigation

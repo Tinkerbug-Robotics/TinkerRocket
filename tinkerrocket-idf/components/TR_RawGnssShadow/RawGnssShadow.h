@@ -89,9 +89,11 @@
 // near-certainty), its tilt at least heading_launch_tilt_sigma_deg if that
 // is set (the pad cannot tell its tilt from an accelerometer bias, #1626
 // K1), and GNSS reaches its attitude only about the vertical
-// (att_gate_vertical) -- or, with heading_gate_full, all of it, neither that
-// gate nor cos^4 pitch (back on the ground both are the EKF config's
-// again); once the fit's 1-sigma is heading_handoff_deg or less,
+// (att_gate_vertical) -- or all of it, neither that gate nor cos^4 pitch,
+// from launch or from the flight computer's apogee call (heading_gate,
+// HeadingGate; the call rides each IMU tick, kShadowApogee, and a restored
+// flight comes back in the gate its phase has); back on the ground both are
+// the EKF config's again. Once the fit's 1-sigma is heading_handoff_deg or less,
 // and no other heading far off fits within heading_handoff_rival of it (the
 // profile's second valley, HeadingFit::Result::rival -- for thrust along the
 // nose there is none), its heading is handed over, once a flight -- turned
@@ -248,8 +250,8 @@ public:
         double   heading_launch_tilt_sigma_deg = 0.0;   // act: and the tilt's at least this from launch
                                                         //   (the pad's is the accelerometer bias's too,
                                                         //   #1626 K1; 0: off)
-        bool     heading_gate_full = false;      // act: from launch GNSS reaches the whole attitude (neither
-                                                 //   the vertical gate nor cos^4), not the heading only
+        uint8_t  heading_gate = 0;               // act: what of the attitude GNSS reaches in flight, and
+                                                 //   when each opens (HeadingGate)
         double   heading_handoff_vel_mps = 3.0;  // act: the velocity let go to this at the hand-off
     };
 
@@ -259,6 +261,28 @@ public:
         kHeadingObserve = 1,   // fit and log
         kHeadingAct = 2,       // and hand the heading over (the filter gated about the vertical)
     };
+
+    // Act's attitude gate in flight (Config::heading_gate): what of the
+    // attitude a GNSS correction reaches, and when each opens. Back on the
+    // ground, the EKF config's (cos^4 pitch) again; observe and off never
+    // touch it.
+    enum HeadingGate : uint8_t
+    {
+        kGateHeading = 0,      // the heading only (att_gate_vertical), from launch (C)
+        kGateFullLaunch = 1,   // the whole attitude -- neither that gate nor cos^4 -- from launch (A)
+        kGateFullApogee = 2,   // the heading only from launch, the whole attitude from the flight
+                               //   computer's apogee call (kShadowApogee) to the ground (H)
+    };
+    static const char* headingGateName(uint8_t gate)
+    {
+        switch (gate)
+        {
+        case kGateHeading:    return "the heading's from launch";
+        case kGateFullLaunch: return "FULL from launch -- GNSS turns the tilt too";
+        case kGateFullApogee: return "the heading's from launch, FULL from the apogee call";
+        default:              return "?";
+        }
+    }
 
     // What takes the ionosphere out (the pad status message reports it).
     enum IonoSource : uint8_t
@@ -340,6 +364,8 @@ public:
         uint32_t heading_vel_fails = 0;    //   with no Doppler velocity (too few satellites agreeing)
         uint32_t heading_unset_launches = 0;  // launches whose pad fused no magnetometer heading (#1590)
         float    heading_launch_sigma_deg = 0.0f;   // the last launch's own heading 1-sigma, before act's prior
+        uint32_t heading_gate_apogee = 0;  // act: full gates opened at the apogee call (kGateFullApogee)
+        float    heading_gate_apogee_s = 0.0f;   //   the last, after the launch edge (-1: a restored flight's)
         uint32_t heading_handoffs = 0;     // headings handed over
         uint32_t heading_rivals = 0;       // fits another heading's valley came within heading_handoff_rival of
         float    heading_turn_deg = 0.0f;  //   the last one's turn
@@ -559,6 +585,10 @@ private:
     bool          fit_flight_ = false;  // launched with a fresh seed: epochs are taken
     double        fit_launch_t_ = 0.0;
     bool          handed_ = false;      // the heading handed over this flight
+    bool          gate_full_ = false;   // act: the whole attitude's gate is open this flight
+    bool          launch_seen_ = false; // a launch edge since the start (a restored flight has none)
+    void          setFlightGate(bool full);
+    void          setGroundGate();
     float         pad_ab_[3] = {}, pad_wb_[3] = {};   // the IMU biases at the seed
     double        pad_ll_[2] = {};      // its latitude and longitude: the fit's NED is the pad's
     float         pad_Pb_[6][6] = {};

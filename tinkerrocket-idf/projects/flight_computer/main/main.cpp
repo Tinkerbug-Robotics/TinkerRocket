@@ -3028,9 +3028,10 @@ static TaskHandle_t raw_meas_task = nullptr;
 
 static int64_t rawShadowClock() { return esp_timer_get_time(); }
 
-// Core 1, every flight-filter tick: exactly the input GpsInsEKF::update got.
+// Core 1, every flight-filter tick: exactly the input GpsInsEKF::update got,
+// and the flight's phase (in flight, landed, the apogee call).
 static inline void rawShadowPushImu(const EkfIMUData& imu, bool level, bool in_flight, bool sim,
-                                    bool landed)
+                                    bool landed, bool apogee)
 {
     static constexpr float kDeg2Rad = (float)(M_PI / 180.0);   // the flight filter's gyro input is deg/s
     gnss_raw::ShadowImu s;
@@ -3042,7 +3043,8 @@ static inline void rawShadowPushImu(const EkfIMUData& imu, bool level, bool in_f
     s.gyro[1] = (float)imu.gyro_y * kDeg2Rad;
     s.gyro[2] = (float)imu.gyro_z * kDeg2Rad;
     s.flags = (uint8_t)((level ? gnss_raw::kShadowLevel : 0) | (in_flight ? gnss_raw::kShadowInFlight : 0)
-                        | (sim ? gnss_raw::kShadowSim : 0) | (landed ? gnss_raw::kShadowLanded : 0));
+                        | (sim ? gnss_raw::kShadowSim : 0) | (landed ? gnss_raw::kShadowLanded : 0)
+                        | (apogee ? gnss_raw::kShadowApogee : 0));
     raw_shadow_link.imu.push(s);   // a full ring drops the tick and counts it
 #if TR_RAW_GNSS_PRIMARY
     // and the navigation state the loop reads, brought forward through it
@@ -3216,6 +3218,7 @@ static void rawShadowTask(void*)
     uint64_t step_sum0 = 0;
     uint32_t nav_step_n = 0;
     uint32_t unset_launches = 0;   // #1590: launches with no magnetometer heading, said so
+    uint32_t gate_apogee = 0;      // act's full gates opened at the apogee call, said so
     for (;;)
     {
         const int64_t a0 = esp_timer_get_time();
@@ -3306,6 +3309,17 @@ static void rawShadowTask(void*)
             else
                 ESP_LOGW(TAG, "[RAWGNSS] launch with no magnetometer heading: the heading is the start's guess, "
                               "1-sigma %.0f deg", (double)sh.stats().heading_launch_sigma_deg);
+        }
+        // act, the full gate from the apogee call (kGateFullApogee): once a flight
+        if (sh.stats().heading_gate_apogee != gate_apogee)
+        {
+            gate_apogee = sh.stats().heading_gate_apogee;
+            if (sh.stats().heading_gate_apogee_s >= 0.0f)
+                ESP_LOGI(TAG, "[RAWGNSS] act: the attitude gate opens in full at the apogee call, T+%.2f s: GNSS "
+                              "corrects the tilt too", (double)sh.stats().heading_gate_apogee_s);
+            else
+                ESP_LOGI(TAG, "[RAWGNSS] act: the attitude gate opens in full at the apogee call (a restored "
+                              "flight's): GNSS corrects the tilt too");
         }
         // back to the GNSS task: the satellites its checks found jumped
         gnss_raw::ShadowRelock rl;
@@ -3426,15 +3440,18 @@ static void rawShadowTask(void*)
                 ESP_LOGI(TAG, "[RAWGNSS] heading fit (%s): seeds %lu, flights %lu, epochs %lu (no velocity %lu) | "
                               "launches with no magnetometer heading %lu (the last launch's own 1-sigma %.1f deg) | "
                               "last: turn %+.1f deg, 1-sigma %.1f deg, %d epochs (%d cut), rivals %lu | handed %lu "
-                              "(%+.1f deg at T+%.1f s) | cost: velocity %lu us (max %lu), fit %lu us (max %lu), step "
-                              "max %lu us | task stack %u B unused",
+                              "(%+.1f deg at T+%.1f s) | act's gate %s, opened in full at the apogee call %lu | "
+                              "cost: velocity %lu us (max %lu), fit %lu us (max %lu), step max %lu us | task stack "
+                              "%u B unused",
                          TR_HEADING_FIT == 2 ? "act" : "observe", (unsigned long)st.heading_seeds,
                          (unsigned long)st.heading_flights, (unsigned long)st.heading_epochs,
                          (unsigned long)st.heading_vel_fails, (unsigned long)st.heading_unset_launches,
                          (double)st.heading_launch_sigma_deg, hr.psi * 57.29578, hr.sigma > 0.0 ? hr.sigma * 57.29578 : -1.0,
                          hr.n, hr.n_cut, (unsigned long)st.heading_rivals, (unsigned long)st.heading_handoffs,
                          (double)st.heading_turn_deg,
-                         (double)st.heading_handoff_s, (unsigned long)st.heading_vel_us,
+                         (double)st.heading_handoff_s,
+                         gnss_raw::RawGnssShadow::headingGateName(sh.config().heading_gate),
+                         (unsigned long)st.heading_gate_apogee, (unsigned long)st.heading_vel_us,
                          (unsigned long)st.heading_vel_us_max, (unsigned long)st.heading_solve_us,
                          (unsigned long)st.heading_solve_us_max, (unsigned long)st.heading_step_us_max,
                          (unsigned)uxTaskGetStackHighWaterMark(nullptr));
@@ -3640,9 +3657,15 @@ static void startRawShadow()
              cfg.heading_handoff_deg, cfg.heading_handoff_deg < 0.0 ? " -- never" : "");
 #endif
 #ifdef TR_BENCH_HEADING_GATE_FULL
-    cfg.heading_gate_full = (TR_BENCH_HEADING_GATE_FULL) != 0;   // bench: act's GNSS on the whole attitude
-    ESP_LOGW(TAG, "[RAWGNSS] BENCH: act's attitude gate from launch: %s (TR_BENCH_HEADING_GATE_FULL)",
-             cfg.heading_gate_full ? "FULL -- GNSS turns the tilt too" : "the heading's");
+    // bench: act's attitude gate in flight -- 0 the heading's (C), 1 the whole
+    // attitude from launch (A), 2 the heading's until the apogee call and the
+    // whole attitude from it (H)
+    static_assert(TR_BENCH_HEADING_GATE_FULL >= 0 && TR_BENCH_HEADING_GATE_FULL <= 2,
+                  "TR_BENCH_HEADING_GATE_FULL is 0 (the heading's), 1 (full from launch) or 2 (full from the "
+                  "apogee call)");
+    cfg.heading_gate = (uint8_t)(TR_BENCH_HEADING_GATE_FULL);
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: act's attitude gate: %s (TR_BENCH_HEADING_GATE_FULL=%d)",
+             gnss_raw::RawGnssShadow::headingGateName(cfg.heading_gate), (int)(TR_BENCH_HEADING_GATE_FULL));
 #endif
 #ifdef TR_BENCH_LAUNCH_TILT_SIGMA_DEG
     cfg.heading_launch_tilt_sigma_deg = TR_BENCH_LAUNCH_TILT_SIGMA_DEG;   // bench: act's tilt floor at launch
@@ -8020,10 +8043,21 @@ static void loop_fc()
                 // Not after a GNSS-absent init: there is no position to seed.
                 // A sim's IMU is not the sky's, so the shadow stops -- except
                 // the rig replay's, which flies the rig's flight.
+                //
+                // The apogee call is pyro_apogee_detected: the flight
+                // computer's one latched decision -- the time the drogue's
+                // delay counts from, logged once ("[PYRO] Apogee detected"),
+                // the main-deploy gate's and guidance's apogee, and what the
+                // snapshot carries through a reboot (both it and the
+                // kinematics vote are restored from it). It latches from
+                // kinematics.apogee_flag in the same pass, after this, so
+                // either reaches the raw filter on the same tick; only read
+                // here, the pyro logic unchanged.
                 rawShadowPushImu(ekf_imu, use_ahrs_acc, rocket_state == INFLIGHT,
                                  (sensor_collector.isSimActive() || sim_flight_latched) &&
                                      !sensor_collector.isReplay(),
-                                 kinematics.alt_landed_flag || rocket_state == LANDED);
+                                 kinematics.alt_landed_flag || rocket_state == LANDED,
+                                 pyro_apogee_detected);
                 // The navigation filter flies a GNSS-absent flight too, on
                 // the IMU and the barometer
                 if (!gnss_absent_flight || TR_RAW_GNSS_PRIMARY)

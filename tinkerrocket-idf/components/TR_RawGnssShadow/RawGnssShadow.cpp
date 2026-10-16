@@ -716,6 +716,20 @@ void RawGnssShadow::start(double t)
     fit_ground_ = !restored_;
     fit_flight_ = false;
     handed_ = false;
+    launch_seen_ = false;
+    // Act's attitude gate: on the pad the ground's (whatever a run that
+    // stopped in flight left); a restored flight, with no launch edge to set
+    // it, the flight's -- whole from launch, else the heading's, and the
+    // apogee call (which the snapshot restores) opens it whole at the first
+    // step after.
+    gate_full_ = false;
+    if (cfg_.heading_mode == kHeadingAct)
+    {
+        if (restored_)
+            setFlightGate(cfg_.heading_gate == kGateFullLaunch);
+        else
+            setGroundGate();
+    }
     if (!cfg_.primary || restored_)
         ekf_.setQuaternion(seed_.quat);
     ekf_.seedGyroBias(seed_.gyro_bias);
@@ -1086,6 +1100,7 @@ void RawGnssShadow::stepHeading(double t, const float acc[3], const float gyro[3
     {
         // the launch edge
         fit_launch_t_ = t;
+        launch_seen_ = true;
         fit_flight_ = fit_.started() && t - fit_.t0() <= cfg_.heading_seed_max_s;
         handed_ = false;
         if (fit_flight_)
@@ -1102,16 +1117,9 @@ void RawGnssShadow::stepHeading(double t, const float acc[3], const float gyro[3
         if (cfg_.heading_mode == kHeadingAct)
         {
             // from here GNSS turns the heading, and only the heading -- or,
-            // with the full gate, the whole attitude
-            if (cfg_.heading_gate_full)
-            {
-                ekf_.setAttGateVertical(false);
-                ekf_.setAttGateCos4(false);
-            }
-            else
-            {
-                ekf_.setAttGateVertical(true);
-            }
+            // with the full gate from launch, the whole attitude (from the
+            // apogee call: below)
+            setFlightGate(cfg_.heading_gate == kGateFullLaunch);
             ekf_.setHeadingSigma(static_cast<float>(cfg_.heading_pad_sigma_deg / kRad2Deg));
             // and, if asked, the tilt let go to at least its floor
             if (cfg_.heading_launch_tilt_sigma_deg > 0.0)
@@ -1122,15 +1130,43 @@ void RawGnssShadow::stepHeading(double t, const float acc[3], const float gyro[3
     {
         fit_flight_ = false;              // back on the ground
         if (cfg_.heading_mode == kHeadingAct)
-        {
-            ekf_.setAttGateVertical(cfg_.ekf.att_gate_vertical);
-            ekf_.setAttGateCos4(cfg_.ekf.att_gate_cos4);
-        }
+            setGroundGate();
+    }
+    // Act, kGateFullApogee: the flight computer's apogee call opens the whole
+    // attitude to GNSS, latched to the ground. Through the ascent the gate is
+    // the heading's, so a wrong heading cannot reach the tilt (on the rig the
+    // full gate there pulled gross magnetometer errors into 1-2 deg of pitch);
+    // under the drogue GNSS corrects the tilt as well. Only the gate changes:
+    // the prior, the tilt floor and the hand-off are the launch edge's.
+    if (cfg_.heading_mode == kHeadingAct && cfg_.heading_gate == kGateFullApogee && !ground && !gate_full_
+        && (imu_flags & kShadowApogee))
+    {
+        setFlightGate(true);
+        st_.heading_gate_apogee++;
+        st_.heading_gate_apogee_s = launch_seen_ ? static_cast<float>(t - fit_launch_t_) : -1.0f;
     }
     fit_ground_ = ground;
     const uint32_t us = static_cast<uint32_t>(now() - c0);
     if (us > st_.heading_step_us_max)
         st_.heading_step_us_max = us;
+}
+
+// Act's gate in flight: the whole attitude (neither the vertical gate nor
+// cos^4), or the heading only (the vertical gate wins over cos^4, which is
+// left the config's).
+void RawGnssShadow::setFlightGate(bool full)
+{
+    ekf_.setAttGateVertical(!full);
+    ekf_.setAttGateCos4(full ? false : cfg_.ekf.att_gate_cos4);
+    gate_full_ = full;
+}
+
+// The ground's: the EKF config's.
+void RawGnssShadow::setGroundGate()
+{
+    ekf_.setAttGateVertical(cfg_.ekf.att_gate_vertical);
+    ekf_.setAttGateCos4(cfg_.ekf.att_gate_cos4);
+    gate_full_ = false;
 }
 
 // An epoch's part in the fit, in two units: its Doppler velocity, at the

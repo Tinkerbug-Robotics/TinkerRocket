@@ -110,9 +110,10 @@ foreach(_v TR_BENCH_HEADING_PAD_SIGMA_DEG TR_BENCH_HEADING_HANDOFF_DEG)
         message(STATUS "${_v}=${${_v}} (bench)")
     endif()
 endforeach()
-# Bench (rig comparison): act's attitude gate from launch -- 1 opens it whole
-# (RawGnssShadow heading_gate_full), 0 leaves the heading's -- and the tilt's
-# floor at launch, deg (heading_launch_tilt_sigma_deg). Never set for flight.
+# Bench (rig comparison): act's attitude gate in flight (RawGnssShadow
+# heading_gate) -- 0 the heading's, 1 whole from launch, 2 the heading's until
+# the flight computer's apogee call and whole from it -- and the tilt's floor
+# at launch, deg (heading_launch_tilt_sigma_deg). Never set for flight.
 foreach(_v TR_BENCH_HEADING_GATE_FULL TR_BENCH_LAUNCH_TILT_SIGMA_DEG)
     if(DEFINED ${_v})
         add_compile_definitions(${_v}=${${_v}})
