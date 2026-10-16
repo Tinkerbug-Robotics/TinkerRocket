@@ -1013,12 +1013,13 @@ TEST(RawGnssShadow, TheNavigationFilterSetsItsOwnAttitudeOnThePad)
         for (int i = 0; i < 3; ++i)
             s.acc[i] = acc[i];
         s.flags = gnss_raw::kShadowLevel;
-        if ((t - kT0) % 20000 == 0)                // a 50 Hz magnetometer
+        if ((t - kT0) % 20000 == 0)                // a 50 Hz magnetometer, calibrated
         {
             gnss_raw::ShadowMag m{};
             m.time_us = static_cast<uint32_t>(t);
             for (int i = 0; i < 3; ++i)
                 m.mag[i] = mag[i];
+            m.flags = gnss_raw::kShadowMagCalibrated;
             sh.onMag(m);
         }
         if ((t - kT0) % 1000000 == 0)              // and the seed, once a second as main.cpp sends it
@@ -1081,6 +1082,7 @@ TEST(RawGnssShadow, EachRecordCarriesTheAttitudeSigmaAndTheBiasesBesideIt)
             m.time_us = static_cast<uint32_t>(t);
             for (int i = 0; i < 3; ++i)
                 m.mag[i] = mag[i];
+            m.flags = gnss_raw::kShadowMagCalibrated;
             sh.onMag(m);
         }
         if ((t - kT0) % 1000000 == 0)              // the seed, once a second as main.cpp sends it
@@ -1109,6 +1111,171 @@ TEST(RawGnssShadow, EachRecordCarriesTheAttitudeSigmaAndTheBiasesBesideIt)
         EXPECT_GT(after_mag.acc_bias_sigma_mmps2[i], 0);
         EXPECT_GT(after_mag.gyro_bias_sigma_mdps[i], 0);
     }
+}
+
+// ------------------------------- the magnetometer's hard iron (#1590)
+
+namespace
+{
+
+// rp5_0829 on its rail, as above: the truth's attitude and its field (WMM's at
+// the pad: 50.3 uT, 64.8 deg below the horizontal, heading 44.7 deg), and the
+// seed main.cpp starts from -- the accelerometer's tilt and a guess at the
+// heading, north.
+struct RailPad
+{
+    float q_true[4] = {}, acc[3] = {}, mag[3] = {};
+    double b_ned[3] = {21.0, -4.3, 45.5};
+    ShadowSeed seed{};
+
+    RailPad()
+    {
+        float q_seed[4];
+        quatYawPitch(44.7 * kPi / 180.0, 83.6 * kPi / 180.0, q_true);
+        quatYawPitch(0.0, 83.6 * kPi / 180.0, q_seed);
+        const double up[3] = {0.0, 0.0, -kG};
+        nedToBody(q_true, up, acc);
+        nedToBody(q_true, b_ned, mag);
+        seed = padSeed(kT0);
+        for (int i = 0; i < 4; ++i)
+            seed.quat[i] = q_seed[i];
+        seed.declination_rad = float(std::atan2(b_ned[1], b_ned[0]));
+        seed.field_ut = 50.3f;
+        seed.have_declination = 1;
+    }
+
+    // A hard iron on the board, given in NED (on the still pad it is fixed
+    // there too): the body's part of it.
+    void hardIron(const double h_ned[3], float h_body[3]) const { nedToBody(q_true, h_ned, h_body); }
+
+    // From t0 for secs, still on the rail: the IMU at 200 Hz, the seed once a
+    // second as main.cpp sends it, and a 50 Hz magnetometer reading the field
+    // plus h_body (uT), each sample's flags flags_at(seconds since kT0).
+    // Returns where it stopped.
+    template <typename F>
+    int64_t run(RawGnssShadow& sh, int64_t t0, double secs, const float h_body[3], F flags_at)
+    {
+        int64_t t = t0;
+        for (; t < t0 + static_cast<int64_t>(secs * 1e6); t += 5000)
+        {
+            ShadowImu s{};
+            s.time_us = static_cast<uint32_t>(t);
+            for (int i = 0; i < 3; ++i)
+                s.acc[i] = acc[i];
+            s.flags = gnss_raw::kShadowLevel;
+            if ((t - kT0) % 20000 == 0)
+            {
+                gnss_raw::ShadowMag m{};
+                m.time_us = static_cast<uint32_t>(t);
+                for (int i = 0; i < 3; ++i)
+                    m.mag[i] = mag[i] + h_body[i];
+                m.flags = flags_at((t - kT0) * 1e-6);
+                sh.onMag(m);
+            }
+            if ((t - kT0) % 1000000 == 0)
+            {
+                seed.time_us = static_cast<uint32_t>(t);
+                sh.onSeed(seed);
+            }
+            sh.onImu(s, t);
+        }
+        return t;
+    }
+};
+
+// The filter's heading less the truth's about the vertical, deg.
+double headingErrDeg(const RawGnssShadow& sh, const float q_true[4])
+{
+    return gnss_raw::headingBetween(sh.filter().quat(), q_true) * 180.0 / kPi;
+}
+
+double headingSigmaDeg(const RawGnssShadow& sh)
+{
+    float s[3];
+    sh.filter().attSigmaNed(s);
+    return s[2] * 180.0 / kPi;
+}
+
+// 40 uT of hard iron, as an uncalibrated Beetle carries, laid where it keeps
+// |B| at the model's 50.3 uT exactly: across the field's horizontal part and
+// 17.6 uT up, 114 deg from B. The size test passes it, and it reads a heading
+// 59 deg east of the truth (at 64.8 deg of dip it also lifts the field to
+// 33.7 deg).
+void sizePassingHardIron(const RailPad& pad, float h_body[3])
+{
+    const double bh = std::hypot(pad.b_ned[0], pad.b_ned[1]);
+    const double across[2] = {-pad.b_ned[1] / bh, pad.b_ned[0] / bh};   // the horizontal, 90 deg east of B's
+    const double h_d = -17.58, h_a = std::sqrt(40.0 * 40.0 - h_d * h_d);
+    const double h_ned[3] = {h_a * across[0], h_a * across[1], h_d};
+    pad.hardIron(h_ned, h_body);
+}
+
+}  // namespace
+
+TEST(RawGnssShadow, AnUncalibratedMagnetometerIsNoHeading)
+{
+    // An uncalibrated Beetle on the rail, its 40 uT of hard iron at an
+    // attitude where the field's size is the model's: refused, every sample
+    // counted, though the size test alone would pass it. The heading stays
+    // the start's guess and as unsure as the start left it.
+    RailPad pad;
+    float h[3];
+    sizePassingHardIron(pad, h);
+    const double mm = std::sqrt(double(pad.mag[0] + h[0]) * (pad.mag[0] + h[0]) +
+                                double(pad.mag[1] + h[1]) * (pad.mag[1] + h[1]) +
+                                double(pad.mag[2] + h[2]) * (pad.mag[2] + h[2]));
+    ASSERT_NEAR(mm, 50.3, 0.5);                   // the size test's 15 % is no help
+    RawGnssShadow sh(primaryCfg());
+    pad.run(sh, kT0, 5.0, h, [](double) { return uint8_t(0); });
+    ASSERT_TRUE(sh.running());
+    EXPECT_EQ(sh.stats().mag_fused, 0u);
+    EXPECT_GE(sh.stats().mag_uncal, 245u);        // 50 a second, from the start's first step
+    EXPECT_EQ(sh.stats().mag_suspect, 0u);        // counted once, by the gate it failed first
+    EXPECT_NEAR(headingErrDeg(sh, pad.q_true), -44.7, 1.0);   // north: the seed's guess
+    EXPECT_GT(headingSigmaDeg(sh), 50.0);
+}
+
+TEST(RawGnssShadow, ACalibratedMagnetometerIsAHeading)
+{
+    // The true field, its hard iron out by a stored calibration: fused, and
+    // the heading turned from the guess onto the truth.
+    RailPad pad;
+    const float none[3] = {};
+    RawGnssShadow sh(primaryCfg());
+    pad.run(sh, kT0, 5.0, none, [](double) { return gnss_raw::kShadowMagCalibrated; });
+    EXPECT_GE(sh.stats().mag_fused, 245u);
+    EXPECT_EQ(sh.stats().mag_uncal, 0u);
+    EXPECT_EQ(sh.stats().mag_suspect, 0u);
+    EXPECT_NEAR(headingErrDeg(sh, pad.q_true), 0.0, 1.0);
+    EXPECT_LT(headingSigmaDeg(sh), 5.0);
+}
+
+TEST(RawGnssShadow, ACalibrationAppliedWhileItRunsCountsFromItsFirstSample)
+{
+    // Each sample carries whether its hard iron is out, so a calibration the
+    // app pushes on the pad counts from the next sample, with no restart.
+    RailPad pad;
+    const float none[3] = {};
+    RawGnssShadow sh(primaryCfg());
+    pad.run(sh, kT0, 6.0, none,
+            [](double t) { return t < 3.0 ? uint8_t(0) : gnss_raw::kShadowMagCalibrated; });
+    EXPECT_EQ(sh.stats().starts, 1u);
+    EXPECT_NEAR(double(sh.stats().mag_uncal), 149.0, 2.0);
+    EXPECT_NEAR(double(sh.stats().mag_fused), 150.0, 2.0);
+    EXPECT_NEAR(headingErrDeg(sh, pad.q_true), 0.0, 1.0);
+}
+
+TEST(RawGnssShadow, ASimsFieldNeedsNoCalibration)
+{
+    // A sensor sim's field, and the rig replay's, is the truth's
+    // (kShadowMagSim): taken with no stored calibration.
+    RailPad pad;
+    const float none[3] = {};
+    RawGnssShadow sh(primaryCfg());
+    pad.run(sh, kT0, 5.0, none, [](double) { return gnss_raw::kShadowMagSim; });
+    EXPECT_GE(sh.stats().mag_fused, 245u);
+    EXPECT_EQ(sh.stats().mag_uncal, 0u);
+    EXPECT_NEAR(headingErrDeg(sh, pad.q_true), 0.0, 1.0);
 }
 
 TEST(RawGnssShadow, TheNavigationFilterStartsInFlightFromARestoredFlight)
@@ -1482,6 +1649,7 @@ SimScore flyFirmwareSim(double gyro_bias_dps)
                 gnss_raw::ShadowMag m{};
                 m.time_us = static_cast<uint32_t>(t);
                 sim.mag(m.mag);
+                m.flags = gnss_raw::kShadowMagSim;   // the sim's field: the truth's
                 sh.onMag(m);
             }
             if (!in_flight && (t - kT0) % 1000000 == 0)

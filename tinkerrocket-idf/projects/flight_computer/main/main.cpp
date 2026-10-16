@@ -244,6 +244,26 @@ static bool    mag_cal_verify_active  = false;
 // offsets indefinitely.
 static constexpr int64_t MAG_CAL_VERIFY_DURATION_US = 60'000'000;
 
+#if TR_RAW_GNSS_PRIMARY
+// #1590: a stored hard-iron calibration is what takes the magnetometer's hard
+// iron out now -- the one NVS kept, applied at boot (applyPendingMagOffset),
+// or one a calibration saved or the app pushed since.  The navigation filter
+// takes no heading from the magnetometer without one.  The collector's flag
+// alone says only that an offset was asked of it this boot: MAG_CAL_START, a
+// failed verify and a retry write zeros, and ending the first calibration a
+// board ever had "restores" zeros.  So zeros, a session still open (sampling
+// at zero, or verifying a candidate not yet stored), and a stored offset not
+// yet applied (a magnetometer that came up late) are none.  No real board's
+// hard iron is under one count on every axis.
+static bool magHardIronApplied()
+{
+    int16_t cx = 0, cy = 0, cz = 0;
+    if (!sensor_collector_hw.iis2mdcHardIronOffset(cx, cy, cz)) return false;
+    if (mag_cal_session_active || pending_mag_apply) return false;
+    return cx != 0 || cy != 0 || cz != 0;
+}
+#endif
+
 // Gyro zero-rate bias restored from NVS (#132).  Applied to sensor_collector
 // after begin(), alongside the mag offsets, so a stored sensor cal survives
 // reboots without the app connected.
@@ -3481,7 +3501,7 @@ static void rawShadowTask(void*)
                               "| satellites jumped %lu (last epoch %d of %d judged, worst %.1f m) "
                               "| levelled %lu steps, %lu held off in flight | baro fused %lu of %lu, "
                               "%lu held at speed (offset %+.1f m%s) | zero-velocity %lu landed, %lu on the pad "
-                              "| mag fused %lu of %lu (%lu refused) "
+                              "| mag fused %lu of %lu (refused: %lu uncalibrated, %lu off the model's size) "
                               "| restores %lu",
                          (unsigned long)fs.fixes, (unsigned long)fs.passed, (unsigned long)fs.flagged,
                          (unsigned long)fs.unjudged, (unsigned long)fs.lapsed,
@@ -3497,7 +3517,8 @@ static void rawShadowTask(void*)
                          st.baro_offset_frozen ? ", frozen" : "", (unsigned long)st.zupts,
                          (unsigned long)st.pad_zupts,
                          (unsigned long)st.mag_fused, (unsigned long)st.mags,
-                         (unsigned long)st.mag_suspect, (unsigned long)st.restores);
+                         (unsigned long)st.mag_uncal, (unsigned long)st.mag_suspect,
+                         (unsigned long)st.restores);
             }
             win_t0 = a1;
             busy_us = 0;
@@ -7964,6 +7985,15 @@ static void loop_fc()
                 // with the IMU alone that drifted a median 14 m/s by admission.
                 ekf.setGnssVerticalHeldOut(
                     !GnssAscentGate::gnssVerticalToEkf(gnss_admit_state));
+#if TR_RAW_GNSS_PRIMARY
+                // #1590: whether the magnetometer's hard iron is out rides
+                // each sample to the raw filter, which takes no heading from
+                // one without: a stored calibration applied, or a sensor
+                // sim's field -- the truth's.  The rig replay (TR_SIM_REPLAY
+                // builds) is a sim from boot (startReplay), its field the
+                // flight's attitude in the field the pad's model gives.
+                ekf.setMagCalibration(magHardIronApplied(), sensor_collector.isSimActive());
+#endif
                 ekf.update(use_ahrs_acc, ekf_imu, ekf_gnss, ekf_mag);
 #if TR_RAW_GNSS_SHADOW
                 // #1600: the raw-GNSS shadow filter gets this very input, and

@@ -39,12 +39,19 @@ static constexpr uint8_t kShadowLanded   = 0x08;  // the landing detector has ca
 
 // A magnetometer sample (body FRD, uT): the flight filter's input. The raw
 // filter takes it as a heading on the ground where it is the navigation
-// filter (RawGnssShadow::Config::primary).
+// filter (RawGnssShadow::Config::primary) -- and only if its hard iron is out
+// (flags): an uncalibrated Beetle carries ~40 uT of it, and at the attitudes
+// where that leaves |B| near the model's size it turns the heading by tens
+// of degrees (#1590). Each sample says so itself, because a calibration can
+// be applied while the filter runs.
 struct ShadowMag
 {
     uint32_t time_us;
     float    mag[3];
+    uint8_t  flags;     // kShadowMag* below; 0: its hard iron is not known to be out
 };
+static constexpr uint8_t kShadowMagCalibrated = 0x01;  // a stored hard-iron calibration is applied
+static constexpr uint8_t kShadowMagSim        = 0x02;  // a sensor sim's or the rig replay's field: the truth's
 
 // A barometer sample the flight filter fused (the same gate: in range, not a
 // spike, not a sealed port): its height above the pad from the ground

@@ -62,6 +62,10 @@
 // the still gyro's mean, the declination and the field's size at the pad. So
 // on the ground the filter keeps its own attitude -- it levels, and takes the
 // magnetometer as a heading (#1578's measurement) -- and is never resynced.
+// The magnetometer only with its hard iron out (#1590): each sample says
+// whether a stored calibration is applied, or the field is a sim's
+// (ShadowMag::flags); any other is refused and counted (mag_uncal), as is one
+// off the model's size (mag_suspect, #1304).
 // It learns the barometer's offset with or without a fix of its own (a flight
 // without GNSS has the barometer and the IMU). A seed marked restore -- a
 // flight the flight computer restored after a reboot -- starts it in flight,
@@ -290,6 +294,7 @@ public:
         // the magnetometer (the navigation filter, on the ground)
         uint32_t mags = 0;                 // samples seen
         uint32_t mag_fused = 0;            //   taken as a heading
+        uint32_t mag_uncal = 0;            //   refused: no stored hard-iron calibration applied (#1590)
         uint32_t mag_suspect = 0;          //   refused: not the model's size
         uint32_t restores = 0;             // starts in flight from a restored flight
         uint32_t gaps_bridged = 0;         // IMU holes the navigation filter stepped over

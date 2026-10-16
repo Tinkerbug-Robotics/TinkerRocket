@@ -85,10 +85,23 @@ void RawGnssShadow::onMag(const ShadowMag& m)
     have_mag_ = true;
 }
 
+// Each refused sample is counted once, by the first gate it fails: the
+// calibration, then the size.
 void RawGnssShadow::applyMag(const float acc[3])
 {
     if (!have_seed_ || !seed_.have_declination)
         return;                           // no north to set it against
+    // A hard iron the calibration has not taken out is no heading, whatever
+    // the field's size says (#1590). An uncalibrated Beetle carries ~40 uT
+    // of it and reads 10-90 uT by attitude: at about a fifth of attitudes |B|
+    // lands within mag_field_tol of the model's, and there it turns the
+    // heading by tens of degrees, past 90 at some. A sim's or the rig
+    // replay's field is the truth's: nothing to take out.
+    if ((mag_.flags & (kShadowMagCalibrated | kShadowMagSim)) == 0)
+    {
+        st_.mag_uncal++;
+        return;
+    }
     const float* m = mag_.mag;
     const double mm = std::sqrt(static_cast<double>(m[0]) * m[0] + static_cast<double>(m[1]) * m[1]
                                 + static_cast<double>(m[2]) * m[2]);
