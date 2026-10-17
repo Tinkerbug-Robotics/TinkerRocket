@@ -756,31 +756,10 @@ void buildFileops(Builder& b) {
               .done(),
           "PadCalStatusData behind 0xD0 (#1600 phase 5); frame = 41 B");
 
-    // 0xD1 the low-g accelerometer hand calibration's status (#1629): a stored
-    // offset and a finished face window, every field distinct, signs mixed.
-    AccelCalStatusData ac{};
-    ac.flags = ACCF_STORED | ACCF_APPLIED;
-    ac.face_state = ACC_FACE_DONE;
-    ac.offset_mps2[0] = 0.0412f;
-    ac.offset_mps2[1] = -0.0273f;
-    ac.offset_mps2[2] = 0.0156f;
-    ac.face_mean_mps2[0] = -0.0831f;
-    ac.face_mean_mps2[1] = 0.1149f;
-    ac.face_mean_mps2[2] = 9.8213f;
-    ac.face_sd_mps2[0] = 0.0123f;
-    ac.face_sd_mps2[1] = 0.0134f;
-    ac.face_sd_mps2[2] = 0.0145f;
-    ac.face_n = 2880;
-    std::vector<uint8_t> acF{0xD1};
-    append(acF, bytesOf(ac));
-    b.add("fileops", "accelcal_0xD1_40.bin", acF,
-          Json().u("flags", ac.flags).u("face_state", ac.face_state)
-              .f("offset_x", ac.offset_mps2[0]).f("offset_y", ac.offset_mps2[1]).f("offset_z", ac.offset_mps2[2])
-              .f("face_mean_x", ac.face_mean_mps2[0]).f("face_mean_y", ac.face_mean_mps2[1])
-              .f("face_mean_z", ac.face_mean_mps2[2]).f("face_sd_x", ac.face_sd_mps2[0])
-              .f("face_sd_y", ac.face_sd_mps2[1]).f("face_sd_z", ac.face_sd_mps2[2]).u("face_n", ac.face_n)
-              .done(),
-          "AccelCalStatusData behind 0xD1 (#1629); frame = 41 B");
+    // (0xD1, the low-g accelerometer hand calibration's status (#1629), has no
+    // fixture yet: only tools/accel_cal_six_face.py speaks it, and every app
+    // golden walk needs a decoder for each frame here.  Its layout is pinned by
+    // test_rocket_computer_types.cpp; the apps' guided flow adds the fixture.)
 }
 
 // App→device command payloads: [cmd u8][payload], byte-exact.  Struct-backed
@@ -969,16 +948,8 @@ void buildCommands(Builder& b) {
               "SensorCalApplyData");
     }
 
-    {
-        // #1629: the low-g hand calibration's offset (tools/accel_cal_six_face.py)
-        AccelCalApplyData a{};
-        a.offset_mps2[0] = 0.0412f;
-        a.offset_mps2[1] = -0.0273f;
-        a.offset_mps2[2] = 0.0156f;
-        b.add("commands", "cmd76_accelcal_12.bin", cmd(76, bytesOf(a)),
-              Json().u("cmd", 76).f("offset_x", 0.0412f).f("offset_y", -0.0273f).f("offset_z", 0.0156f).done(),
-              "AccelCalApplyData");
-    }
+    // (cmd 76-78, the low-g hand calibration (#1629): no fixture until an app
+    // sends them -- see the 0xD1 note.)
 
     b.add("commands", "cmd64_imuorient_auto.bin", cmd(64, bytesOf(ImuOrientConfigData{IMU_ORIENT_AUTO})),
           Json().u("cmd", 64).u("setting", 255).done(),
