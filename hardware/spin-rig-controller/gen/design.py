@@ -125,7 +125,7 @@ P(s, 'D101', 'Device:D_Zener', 'BZT52C12', 'Diode_SMD:D_SOD-123', {1: 'VMAIN', 2
 P(s, 'D102', 'Device:D_Zener', 'SMCJ30A', 'Diode_SMD:D_SMC', {1: 'VMAIN', 2: GND}, 'SMCJ30A', 'Littelfuse',
   desc='TVS, 30 V standoff', block=b)
 P(s, 'C101', 'Device:C_Polarized', '100 uF 50 V', 'Capacitor_SMD:CP_Elec_8x10.5', {1: 'VMAIN', 2: GND},
-  'RVT1H101M0810', 'Lelon', desc='Bulk: damps the pack lead on plug-in', block=b)
+  'RVT1H101M0810', 'Honor Elec', desc='Bulk: damps the pack lead on plug-in', block=b)
 C(s, 'C102', '4.7uF/50V', 'VMAIN', GND, b)
 C(s, 'C103', '4.7uF/50V', 'VMAIN', GND, b)
 P(s, 'R102', 'Device:R_Shunt', '2 mΩ', 'Footprints:R_0805_Kelvin',

@@ -5547,7 +5547,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Lelon"
+		(property "Mfr" "Honor Elec"
 			(at 194.31 50.8 0)
 			(hide yes)
 			(show_name no)
@@ -5558,7 +5558,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C72480"
+		(property "LCSC" "C3352"
 			(at 194.31 50.8 0)
 			(hide yes)
 			(show_name no)

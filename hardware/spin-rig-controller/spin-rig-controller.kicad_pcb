@@ -34002,7 +34002,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Lelon"
+		(property "Mfr" "Honor Elec"
 			(at 0 0 0)
 			(layer "F.Fab")
 			(hide yes)
@@ -34014,7 +34014,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C72480"
+		(property "LCSC" "C3352"
 			(at 0 0 0)
 			(layer "F.Fab")
 			(hide yes)
