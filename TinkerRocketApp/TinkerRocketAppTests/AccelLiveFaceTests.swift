@@ -235,18 +235,29 @@ final class AccelLiveFaceTests: XCTestCase {
         u[face.axis] = face.up ? 1 : -1
         p1[(face.axis + 1) % 3] = 1
         p2[(face.axis + 2) % 3] = 1
-        let l = leanDeg * .pi / 180, a = azDeg * .pi / 180
-        return (0..<3).map { cos(l) * u[$0] + sin(l) * (cos(a) * p1[$0] + sin(a) * p2[$0]) }
+        let l: Double = leanDeg * .pi / 180
+        let a: Double = azDeg * .pi / 180
+        return (0..<3).map { (i: Int) -> Double in
+            let along: Double = cos(l) * u[i]
+            let around: Double = cos(a) * p1[i] + sin(a) * p2[i]
+            return along + sin(l) * around
+        }
     }
 
     /// orientMatrixFromNoseVector: the shortest arc taking unit `a` to rocket +X, row-major.
     private func exactRotation(_ a: [Double]) -> [Double] {
         let c = a[0]
         if c < -1 + 1e-6 { return [-1, 0, 0, 0, -1, 0, 0, 0, 1] }
-        let ky = a[2], kz = -a[1], f = 1 / (1 + c)
-        return [1 - f * (ky * ky + kz * kz), -kz, ky,
-                kz, 1 - f * kz * kz, f * ky * kz,
-                -ky, f * ky * kz, 1 - f * ky * ky]
+        let ky: Double = a[2]
+        let kz: Double = -a[1]
+        let f: Double = 1 / (1 + c)
+        let r00: Double = 1 - f * (ky * ky + kz * kz)
+        let r11: Double = 1 - f * kz * kz
+        let r12: Double = f * ky * kz
+        let r22: Double = 1 - f * ky * ky
+        return [r00, -kz, ky,
+                kz, r11, r12,
+                -ky, r12, r22]
     }
 
     /// orientNearestNoseCode: the clock-0 code of the board axis nearest `v`.
@@ -258,7 +269,12 @@ final class AccelLiveFaceTests: XCTestCase {
 
     /// One g along unit `v` (board frame), turned by `r` into the rocket frame.
     private func rotate(_ r: [Double], _ v: [Double]) -> [Double] {
-        (0..<3).map { i in AccelSixFace.g0 * (r[3 * i] * v[0] + r[3 * i + 1] * v[1] + r[3 * i + 2] * v[2]) }
+        (0..<3).map { (i: Int) -> Double in
+            let fromX: Double = r[3 * i] * v[0]
+            let fromY: Double = r[3 * i + 1] * v[1]
+            let fromZ: Double = r[3 * i + 2] * v[2]
+            return AccelSixFace.g0 * (fromX + fromY + fromZ)
+        }
     }
 
     // MARK: - What the screen shows

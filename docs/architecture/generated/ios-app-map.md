@@ -3,7 +3,7 @@
 
 # iOS App -- module map
 
-`TinkerRocketApp/TinkerRocketApp` is 37,435 lines across 98 Swift files, grouped by directory.
+`TinkerRocketApp/TinkerRocketApp` is 37,436 lines across 98 Swift files, grouped by directory.
 "Declares" lists the top-level types in each file. Files of 400+ lines also
 list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 
@@ -31,7 +31,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [NetworkMonitor.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Maps/Offline/NetworkMonitor.swift) | 52 | `NetworkMonitor`, `OfflinePill` |
 
 
-## `Models/` — 55 files, 19,800 lines
+## `Models/` — 55 files, 19,801 lines
 
 | File | Lines | Declares |
 |------|-------|----------|
@@ -44,7 +44,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [TelemetryData.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/TelemetryData.swift) | 995 | `TelemetryData` |
 | [ActiveRocketSyncer.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/ActiveRocketSyncer.swift) | 957 | `ActiveRocketSyncer` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Lifecycle · Triggers · Binding · Adoption (rocket wins) · Explicit push (user-initiated only) · The precedence rule · Mag cal · Sensor cal (gyro + high-g) — mirrors mag cal · Suggestion |
-| [AccelSixFace.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/AccelSixFace.swift) | 829 | — |
+| [AccelSixFace.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/AccelSixFace.swift) | 830 | — |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Faces · Which face it is on now (a hint; a measurement names its own) · One face window · The six faces · The solve: one sphere fit over all six faces · The screen's flow · What the screen says · The live face on a device |
 | [BLEFleet.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/BLEFleet.swift) | 789 | `BLEFleet` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Published state · Rocket roster (#390) · Private state · Voice routing (#829's iOS twin) · Init · Scanning · Connection · Virtual Rocket (iOS twin of Android demo mode, 2026-07-30) · Device lookup · Last-valid rocket fix cache (#140) · CBCentralManagerDelegate |
@@ -157,4 +157,4 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [ColumnPickerView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/ColumnPickerView.swift) | 72 | `ColumnPickerView` |
 
 
-Total: 98 files, 37,435 lines.
+Total: 98 files, 37,436 lines.

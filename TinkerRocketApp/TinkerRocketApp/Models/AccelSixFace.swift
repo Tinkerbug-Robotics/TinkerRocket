@@ -200,7 +200,8 @@ nonisolated enum AccelSixFace {
         if abs(norm - g0) > liveMovingTolerance { return .moving }
         let (face, tilt) = identify(v)
         guard mounting.tiltKnown else {
-            let offNoseDeg = acos(max(-1, min(1, rocket[0] / norm))) * 180 / .pi
+            let cosOffNose: Double = max(-1, min(1, rocket[0] / norm))
+            let offNoseDeg: Double = acos(cosOffNose) * 180 / .pi
             return offNoseDeg > exactSettledDeg ? .moving : .on(face, tiltDeg: nil)
         }
         return tilt > tiltMaxDeg ? .askew(face, tiltDeg: tilt) : .on(face, tiltDeg: tilt)
