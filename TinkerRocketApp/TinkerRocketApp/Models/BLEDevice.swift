@@ -168,6 +168,11 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// gets wrong forever.
     @Published var fcBoardRev: String?
     @Published var ocBoardRev: String?
+    /// The GNSS receiver the flight computer found ("fc_identity" / "fc_gnss"):
+    /// "u-blox", "mosaic-G5" or "LC86G". The V9 finds its receiver at boot,
+    /// so the pad shows which one it took. nil when the FC found none (it
+    /// flies GNSS-absent) or its firmware does not say.
+    @Published var fcGnss: String?
 
     /// Latest OTA status frame from the device (#8 phase 2). Driven by
     /// ota_status JSON notifications on the file-ops characteristic.
@@ -2515,9 +2520,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             // "unprovisioned" and must stay nil rather than becoming "".
             fcBoardRev = (dict["fc_board"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             ocBoardRev = (dict["oc_board"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            // The receiver the FC found: "" is none (GNSS-absent), so it
+            // clears; an OC that predates the key leaves the value alone.
+            if let gnss = dict["fc_gnss"] as? String { fcGnss = gnss.isEmpty ? nil : gnss }
             print("[CFG] FC identity: fc_fw=\(fcFirmwareVersion) "
                   + "fc_board=\(fcBoardRev ?? "unprovisioned") "
-                  + "oc_board=\(ocBoardRev ?? "unprovisioned")")
+                  + "oc_board=\(ocBoardRev ?? "unprovisioned") "
+                  + "fc_gnss=\(fcGnss ?? "none")")
             return
         }
 

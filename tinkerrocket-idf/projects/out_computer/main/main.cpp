@@ -1707,6 +1707,23 @@ static char          fc_fw_version[40]  = {0};
 static char          fc_board_rev[board_identity::kMaxRev + 1] = {0};
 static char          oc_board_rev[board_identity::kMaxRev + 1] = {0};
 static volatile bool fc_identity_dirty  = false;
+// The GNSS receiver the FC found (GNSS_TYPE_*), the third field of its
+// FC_IDENTITY push: GNSS_TYPE_NONE until an FC that sends it has, and while
+// the FC flies GNSS-absent. Relayed to the app as fc_identity's "fc_gnss",
+// and it sets the IMU limit below.
+static volatile uint8_t fc_gnss_type = GNSS_TYPE_NONE;
+// The "config" frame carries "irmax" and "irate", and the receiver moves both
+// (a mosaic-G5 caps the IMU at 3840 Hz): send the readback again when it does.
+static volatile bool config_readback_dirty = false;
+
+// The fastest IMU rate the FC flies now: this board's, lowered by the
+// receiver the FC found (imuRateMaxForGnss, the rule the FC applies itself).
+// What the apps filter their menus on ("irmax"), and what the readback's
+// "irate" is brought within, so it says what the FC flies.
+static uint16_t imuRateMaxNow()
+{
+    return imuRateMaxForGnss(config::IMU_RATE_MAX_HZ, fc_gnss_type);
+}
 
 // FC's active board→rocket mounting orientation, mirrored from the v3
 // status query.  Re-published to the app when it changes mid-connection
@@ -4765,12 +4782,27 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         board_identity::decodePayload(
             reinterpret_cast<const char*>(payload), payload_len,
             incoming, sizeof(incoming), incoming_rev, sizeof(incoming_rev));
+        // Then the receiver it found, where the FC sends one (an older FC
+        // sends none, which reads as none).
+        char incoming_gnss[16] = {0};
+        board_identity::decodeGnss(reinterpret_cast<const char*>(payload), payload_len,
+                                   incoming_gnss, sizeof(incoming_gnss));
+        const uint8_t gnss = gnssTypeFromName(incoming_gnss);
         if (strncmp(incoming, fc_fw_version, sizeof(fc_fw_version)) != 0 ||
-            strncmp(incoming_rev, fc_board_rev, sizeof(fc_board_rev)) != 0)
+            strncmp(incoming_rev, fc_board_rev, sizeof(fc_board_rev)) != 0 ||
+            gnss != fc_gnss_type)
         {
+            const uint16_t imu_max_was = imuRateMaxNow();
             memcpy(fc_fw_version, incoming, sizeof(fc_fw_version));
             memcpy(fc_board_rev, incoming_rev, sizeof(fc_board_rev));
+            fc_gnss_type = gnss;
             fc_identity_dirty = true;
+            if (imuRateMaxNow() != imu_max_was)
+            {
+                ESP_LOGI("CFG", "FC GNSS receiver %s: IMU rates up to %u Hz",
+                         gnss != GNSS_TYPE_NONE ? gnssTypeName(gnss) : "none", (unsigned)imuRateMaxNow());
+                config_readback_dirty = true;
+            }
         }
         return;
     }
@@ -6591,16 +6623,19 @@ static void sendFcIdentity()
     // empty rather than becoming "unknown" — the app must be able to tell "this
     // board says it is a V9" from "this board has never been asked", and a
     // placeholder string would erase that difference.
-    char buf[160];
+    // The GNSS receiver the FC found rides along the same way: "" when none
+    // (GNSS-absent, rescue mode, or an FC that does not say), never a guess.
+    char buf[192];
     snprintf(buf, sizeof(buf),
              "{\"type\":\"fc_identity\",\"fc_fw\":\"%s\","
-             "\"fc_board\":\"%s\",\"oc_board\":\"%s\"}",
-             fc_fw, fc_board_rev, oc_board_rev);
+             "\"fc_board\":\"%s\",\"oc_board\":\"%s\",\"fc_gnss\":\"%s\"}",
+             fc_fw, fc_board_rev, oc_board_rev, gnssTypeName(fc_gnss_type));
     enqueueConfigReadback(String(buf));   // #398 item 3
-    ESP_LOGI("CFG", "Queued fc_identity (fc_fw=%s fc_board=%s oc_board=%s)",
+    ESP_LOGI("CFG", "Queued fc_identity (fc_fw=%s fc_board=%s oc_board=%s fc_gnss=%s)",
              fc_fw,
              fc_board_rev[0] ? fc_board_rev : "unprovisioned",
-             oc_board_rev[0] ? oc_board_rev : "unprovisioned");
+             oc_board_rev[0] ? oc_board_rev : "unprovisioned",
+             fc_gnss_type != GNSS_TYPE_NONE ? gnssTypeName(fc_gnss_type) : "none");
 }
 
 // Publish the FC's active board→rocket mounting orientation as its own
@@ -6859,6 +6894,8 @@ static void sendCurrentConfig()
     // pass would enqueue 9 + 4 frames against the 12-deep readback ring and
     // evict the main "config" frame (see CFG_RB_CAP).
     fc_config_report_dirty = false;
+    // Likewise a re-publish for a new IMU limit: this burst states it.
+    config_readback_dirty = false;
 
     // Split config into two smaller JSON messages to stay within MTU limits.
     // Message 1: servo/PID/LoRa config ("config" type)
@@ -6889,10 +6926,14 @@ static void sendCurrentConfig()
     // Current apps take the camera from config_pyro (which says where it came
     // from) and treat this key as unverified.
     j += ",\"camt\":"; j += itos(cameraReadback().type);
-    j += ",\"irate\":"; j += itos(cfg_imu_rate);
-    // #1485: the fastest IMU rate this board flies. Absent from older
-    // firmware, which the apps read as 3840 (nothing older could do more).
-    j += ",\"irmax\":"; j += itos(config::IMU_RATE_MAX_HZ);
+    // The setting as the FC flies it: brought within the limit its receiver
+    // sets (8k Dynamic flies as 4k Dynamic with a mosaic-G5). The stored
+    // setting is kept, for when the receiver no longer lowers the limit.
+    j += ",\"irate\":"; j += itos(imuRateSettingClamp(cfg_imu_rate, imuRateMaxNow()));
+    // #1485: the fastest IMU rate this board flies, with the receiver its FC
+    // found. Absent from older firmware, which the apps read as 3840 (nothing
+    // older could do more).
+    j += ",\"irmax\":"; j += itos(imuRateMaxNow());
     // LoRa settings
     j += ",\"lf\":";  j += fmtf(lora_freq_mhz, 3);   // #1155 item 9: 0.1 MHz hid a 902.25 -> "902.20" (channel centres end in .125/.25)
     j += ",\"lsf\":"; j += itos(lora_sf);
@@ -11737,6 +11778,18 @@ static void loop_oc()
         ble_was_connected = ble_now;
     }
 
+    // The FC's receiver moved the IMU limit the "config" frame states: the
+    // whole readback again, as cmd 20 sends it (fc_identity included), once
+    // the ring has drained. Two bursts in it at once would evict the first
+    // one's frames (CFG_RB_CAP); a connect burst still going out is what
+    // usually precedes this, and it already carries the new limit.
+    if (config_readback_dirty && cfg_rb_count == 0 &&
+        ble_app.isConnected() && ble_app.isReadyForNotify())
+    {
+        fc_identity_dirty = false;
+        sendCurrentConfig();   // clears config_readback_dirty
+    }
+
     // Re-publish the FC version to the app when it changes mid-connection: an FC
     // OTA reboots the FC (new version) but never drops the OC<->app BLE link, so
     // the connect-time fc_identity won't refresh on its own. This is what lets
@@ -12988,7 +13041,12 @@ static void loop_oc()
             // Dynamic"), IMU_RATE_DYNAMIC_8K (1) or a whitelisted ISM6HG256
             // ODR, up to this board's IMU_RATE_MAX_HZ.  Relayed to the FC,
             // which applies the ODR live (except INFLIGHT) and persists it in
-            // FC NVS.  The FC checks the same limit for the same board.
+            // FC NVS.  The FC checks the same limit for the same board.  Where
+            // its receiver lowers the limit (imuRateMaxNow: the mosaic-G5) both
+            // keep the setting as sent and the FC flies the fastest that fits,
+            // which the readback's "irate" reports: checking the lower limit
+            // here would refuse what the FC keeps, or keep what it refuses
+            // before its identity push has named the receiver.
             const uint8_t* payload = ble_app.getCommandPayload();
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= 2)

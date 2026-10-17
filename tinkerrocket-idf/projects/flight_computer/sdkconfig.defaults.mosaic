@@ -1,5 +1,6 @@
 # The V9 flying a Septentrio mosaic-G5 (-DTR_GNSS_MOSAIC=1, CMakeLists.txt),
-# applied on top of sdkconfig.defaults and sdkconfig.defaults.v9.
+# and the V9 image that finds either receiver at boot (TR_GNSS_AUTO, on by
+# default), applied on top of sdkconfig.defaults and sdkconfig.defaults.v9.
 #
 # The receiver streams ~66 kB/s at 2 Mbaud. At that rate the UART's 128-byte
 # RX FIFO fills in 0.64 ms, and an interrupt that needs the flash cache waits

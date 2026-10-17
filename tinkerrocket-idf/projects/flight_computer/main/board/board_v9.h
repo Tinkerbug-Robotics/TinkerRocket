@@ -94,12 +94,13 @@ struct board_pins
     // 1 PPS the SAM-M10Q carrier already routes to a P4 GPIO is being thrown
     // away because the header called it a UART line.
     //
-    // Nothing in firmware distinguishes the carriers at runtime — the default
-    // build hard-selects the UBlox driver and TR_GNSSReceiverUBlox_Serial has
-    // no carrier identification.  So GPIO2 stays unused: do not use it without
-    // first establishing which carrier is fitted (NVS, or the UBX MON-VER that
-    // begin() already reads).  The mosaic build establishes it by being built
-    // (config.h GNSS_PPS_PIN), and still never drives the pin.
+    // Do not use GPIO2 without first establishing which carrier is fitted.
+    // The V9 image does at boot (TR_Sensor_Collector's gnss_detect.h, which
+    // tells the u-blox from the mosaic by what each answers on pins 1-2) and
+    // the mosaic's driver reads the pin only once the mosaic is found; the
+    // u-blox path never touches it, which leaves the PX1105R's RXD2 alone.
+    // The mosaic-only build establishes it by being built (config.h
+    // GNSS_PPS_PIN). Neither ever drives the pin.
     static constexpr uint8_t GNSS_RX = 3;   // FC receives; module TXD drives this
     static constexpr uint8_t GNSS_TX = 4;   // FC drives;   module RXD listens here
     static constexpr int8_t  GNSS_J1_PIN5 = 2;   // net GNSS_RXD2: carrier-dependent, see above

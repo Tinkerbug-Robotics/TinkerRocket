@@ -45,10 +45,18 @@
 // add_compile_definitions(TR_GNSS_DRIVER_LC86=1) or TR_GNSS_DRIVER_MOSAIC=1
 // at project level (same pattern as TR_GUIDANCE_AVAILABLE); default is
 // u-blox, unchanged.
+//
+// TR_GNSS_DRIVER_AUTO=1 puts TR_GNSSAuto in the slot instead: the V9 image,
+// whose J1 takes either the u-blox carrier or the mosaic-G5 harness. It finds
+// the receiver at begin() (gnss_auto_driver.h), so which one it is, and what
+// follows from it, are known only after begin(): read them through
+// gnssType(), never from a compile-time constant.
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
 #include <TR_GNSSReceiverLC86_Serial.h>
 #elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
 #include <TR_GNSSReceiverMosaic_Serial.h>
+#elif defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+#include "gnss_auto_driver.h"
 #else
 #include <TR_GNSSReceiverUBlox_Serial.h>
 #endif
@@ -241,18 +249,30 @@ public:
     // task fills, so call it until it returns false.  `cap` must be
     // GNSS_RTCM_MAX_FRAME (LC86G) or GNSS_SBF_MAX_FRAME (mosaic-G5).
     bool getGNSSRtcmFrame(uint8_t* out, size_t cap, size_t& len, uint32_t& time_us);
-    // mosaic-G5 only (no-ops elsewhere): the pin its 1PPS reaches, set before
-    // begin(); and a request to send every navigation block it holds once
-    // more, from any task (the flight log starts at launch, long after the
-    // receiver first sent them).
+    // mosaic-G5 only (no-ops elsewhere): the pin its 1PPS reaches and its
+    // navigation rate, set before begin() (on the V9 image the pin is touched
+    // only once the mosaic is found); and a request to send every navigation
+    // block it holds once more, from any task (the flight log starts at
+    // launch, long after the receiver first sent them).
     void setGNSSPpsPin(int8_t pin);
+    void setGNSSMosaicRate(uint8_t rate_hz);
     void requestGNSSNavResend();
     // Leave the GNSS receiver out of this boot: begin() does not look for it,
     // and isGnssOnline() is false, so the FC flies GNSS-absent (#557). Call
     // before begin(). The mosaic-G5 build calls it on a boot that follows a
     // crash restart, so a receiver-triggered fault cannot keep the FC from
-    // finishing its boot and taking an update over the air.
+    // finishing its boot and taking an update over the air; the V9 image
+    // does the same when its last boot found the mosaic (gnssLastBootType()).
     void skipGNSSThisBoot() { use_gnss = false; }
+    // Which receiver the FC talks to (GNSS_TYPE_*): the build's own, or on the
+    // V9 image the one begin() found; GNSS_TYPE_NONE when none came up, so
+    // the FC is GNSS-absent. What the FC names in its identity push and what
+    // sets its IMU limit (imuRateMaxForGnss).
+    uint8_t gnssType() const;
+    // The receiver this board had last boot, readable before begin(): the
+    // build's own, or the V9 image's NVS record (GNSS_TYPE_NONE when it has
+    // none yet).
+    uint8_t gnssLastBootType();
     // Raw GNSS measurements for the raw-GNSS shadow filter (#1600), from the
     // LC86G's MSM7 and broadcast ephemeris; never from the u-blox. Off until
     // enableGNSSRawOutputs() (call it before begin()). Safe from any task:
@@ -412,6 +432,9 @@ private:
     // module fails bring-up (dead/deaf UART).  Gates the GNSS poll task and is
     // exposed via isGnssOnline() so the FC can enter GNSS-absent mode.
     bool gnss_online_ = true;
+    // begin() has run the GNSS bring-up: until then (and in rescue mode,
+    // which never starts the sensors) gnssType() names no receiver.
+    bool gnss_begun_ = false;
     // Set by begin() once the barometer has both answered and been configured.
     bool bmp585_online_ = false;
 
@@ -431,6 +454,8 @@ private:
     TR_GNSSReceiverLC86Serial gnss_receiver;
 #elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
     TR_GNSSReceiverMosaicSerial gnss_receiver;
+#elif defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+    TR_GNSSAuto gnss_receiver;
 #else
     TR_GNSSReceiverUBloxSerial gnss_receiver;
 #endif

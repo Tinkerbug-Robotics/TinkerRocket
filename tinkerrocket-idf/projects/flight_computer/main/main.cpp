@@ -716,6 +716,13 @@ static uint16_t burnout_neg_count = 0;
 // on purpose: in dynamic mode the live rate changes mid-flight, and the
 // setting must not.
 static uint16_t imu_rate_setting = IMU_RATE_DYNAMIC;
+// The fastest IMU rate this boot flies: the board's, lowered to 3840 Hz once
+// the GNSS bring-up has found a mosaic-G5, whose SBF shares the link and the
+// OC's flash (RocketComputerTypes.h imuRateMaxForGnss). A setting above it is
+// kept (NVS, and the OC's copy) and flown as the fastest that fits; the OC
+// reports what flies, and limits the app's menu, once the FC's identity push
+// names the receiver. Until the receiver is known it is the board's.
+static uint16_t imu_rate_max_hz = config::IMU_RATE_MAX_HZ;
 
 // #1485: the board's limit must be a rate the chip can be set to, and the
 // default setting must fit under it, or a fresh board would refuse its own
@@ -6088,17 +6095,20 @@ static void setup_fc()
     if (!sensor_collector.enableGNSSRawOutputs())
         ESP_LOGE(TAG, "[RAWGNSS] no memory for the raw GNSS queues");
 #endif
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO)
     // The mosaic-G5 driver is new, and on a mounted rocket the only way to
     // replace firmware is over the air, which needs a finished boot. So a boot
     // that follows a crash restart (a panic or a watchdog) leaves the receiver
     // out: whatever crashed, this boot gets the FC to its loop, GNSS-absent,
     // where it can take an update. A power-on or a software restart (an OTA)
     // brings the receiver back. In flight that means a crash costs GNSS for
-    // the rest of the flight, never the flight computer.
+    // the rest of the flight, never the flight computer. The V9 image does it
+    // where its last boot found the mosaic, and only there: a u-blox board
+    // keeps its receiver through a crash, as it always has.
     {
         const esp_reset_reason_t rr = esp_reset_reason();
-        if (rr == ESP_RST_PANIC || rr == ESP_RST_INT_WDT || rr == ESP_RST_TASK_WDT || rr == ESP_RST_WDT)
+        if ((rr == ESP_RST_PANIC || rr == ESP_RST_INT_WDT || rr == ESP_RST_TASK_WDT || rr == ESP_RST_WDT) &&
+            sensor_collector_hw.gnssLastBootType() == GNSS_TYPE_MOSAIC)
         {
             ESP_LOGE(TAG, "[GNSS] the last reset was a crash (%s): the mosaic-G5 stays out of this boot",
                      resetReasonStr(rr));
@@ -6107,7 +6117,9 @@ static void setup_fc()
     }
 #endif
     // The mosaic-G5's 1PPS (J1 pin 5); -1 and a no-op on every other build.
+    // The V9 image's mosaic rate as well; its GNSS_UPDATE_RATE is the u-blox's.
     sensor_collector_hw.setGNSSPpsPin(config::GNSS_PPS_PIN);
+    sensor_collector_hw.setGNSSMosaicRate(config::GNSS_MOSAIC_UPDATE_RATE);
     sensor_collector.begin(config::SENSOR_CORE);
 #if TR_RAW_GNSS_SHADOW
     startRawShadow();
@@ -6141,6 +6153,27 @@ static void setup_fc()
     // the receiver never came up, rather than only finding out from a missing
     // fix later.
     fcBootStatus(FCB_GNSS, gnss_absent_mode ? FCB_DEG_GNSS : 0);
+    // The receiver now known, the IMU limit that goes with it: a mosaic-G5's
+    // SBF leaves the IMU at most 3840 Hz. A setting above it flies as the
+    // fastest that fits (8k Dynamic as 4k Dynamic, 7680 Hz as 3840 Hz) without
+    // touching NVS, so the board gets the user's setting back with a u-blox.
+    {
+        const uint8_t gnss_type = sensor_collector_hw.gnssType();
+        imu_rate_max_hz = imuRateMaxForGnss(config::IMU_RATE_MAX_HZ, gnss_type);
+        ESP_LOGI(TAG, "[GNSS] Receiver: %s; IMU rates up to %u Hz",
+                 gnss_type != GNSS_TYPE_NONE ? gnssTypeName(gnss_type) : "none",
+                 (unsigned)imu_rate_max_hz);
+        const uint16_t flown = imuRateSettingClamp(imu_rate_setting, imu_rate_max_hz);
+        if (flown != imu_rate_setting)
+        {
+            ESP_LOGW(TAG, "[GNSS] the %s caps the IMU at %u Hz: the logging rate setting %u flies as %u "
+                          "(the setting is kept)",
+                     gnssTypeName(gnss_type), (unsigned)imu_rate_max_hz, (unsigned)imu_rate_setting,
+                     (unsigned)flown);
+            imu_rate_setting = flown;
+            applyImuRateForFlightPhase();
+        }
+    }
     sensor_converter.configureISM6HG256FullScale(
         static_cast<ISM6LowGFullScale>(config::ISM6_LOW_G_FS_G),
         static_cast<ISM6HighGFullScale>(config::ISM6_HIGH_G_FS_G),
@@ -7601,9 +7634,9 @@ static void loop_fc()
     // longer than one payload goes as consecutive parts (gnssRtcmParts).
     // Bounded per pass so a backlog from boot drains over a few passes rather
     // than in one burst into the I2S queue.  Static buffers: ~1.3 kB (~3.5 kB
-    // on the mosaic build) off this task's stack.
+    // on the mosaic build and the V9 image) off this task's stack.
     {
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO)
         static uint8_t rtcm_frame[GNSS_SBF_MAX_FRAME];   // an SBF block, up to 15 parts
 #else
         static uint8_t rtcm_frame[GNSS_RTCM_MAX_FRAME];
@@ -8796,9 +8829,13 @@ static void loop_fc()
                     // BOARD itself was provisioned with, so the two can be
                     // compared. Rides this same variable-length message: an OC
                     // that predates it reads up to the NUL and never notices.
+                    // Then the GNSS receiver the FC found, for the pad, and for
+                    // the OC's IMU limit (imuRateMaxForGnss); an OC that
+                    // predates that field reads up to the revision's NUL.
                     char id_payload[64];
                     const size_t id_len = board_identity::encodePayload(
-                        v, provisioned_board_rev, id_payload, sizeof(id_payload));
+                        v, provisioned_board_rev, id_payload, sizeof(id_payload),
+                        gnssTypeName(sensor_collector_hw.gnssType()));
                     (void)i2c_interface.sendMessage(
                         FC_IDENTITY, reinterpret_cast<const uint8_t*>(id_payload),
                         id_len, 10);
@@ -9887,11 +9924,24 @@ static void loop_fc()
                     }
                     else if (imuRateSettingValid(rate_hz, config::IMU_RATE_MAX_HZ))
                     {
-                        imu_rate_setting = rate_hz;
+                        // Any setting the board flies is kept as sent, here
+                        // and in the OC's copy, and flown as the fastest that
+                        // fits the receiver's limit, as at boot: an 8k setting
+                        // sent before the OC knew of a mosaic-G5 flies as 4k
+                        // and comes back with a u-blox, and the two copies
+                        // never disagree.
+                        imu_rate_setting = imuRateSettingClamp(rate_hz, imu_rate_max_hz);
                         applyImuRateForFlightPhase();
                         prefs.begin("imu", false);
                         prefs.putUShort("rate", rate_hz);
                         prefs.end();
+                        if (imu_rate_setting != rate_hz)
+                        {
+                            ESP_LOGW(TAG, "[CFG] IMU logging rate setting %u flies as %u: the %s caps the IMU "
+                                          "at %u Hz",
+                                     (unsigned)rate_hz, (unsigned)imu_rate_setting,
+                                     gnssTypeName(sensor_collector_hw.gnssType()), (unsigned)imu_rate_max_hz);
+                        }
                         if (imuRateIsDynamic(rate_hz))
                         {
                             ESP_LOGI(TAG, "[CFG] IMU logging rate: DYNAMIC "
@@ -12914,7 +12964,8 @@ static void fcRescueTask(void*)
                     const char* v = (d && d->version[0]) ? d->version : "unknown";
                     char id_payload[64];
                     const size_t id_len = board_identity::encodePayload(
-                        v, provisioned_board_rev, id_payload, sizeof(id_payload));
+                        v, provisioned_board_rev, id_payload, sizeof(id_payload),
+                        gnssTypeName(sensor_collector_hw.gnssType()));   // none in rescue mode
                     (void)i2c_interface.sendMessage(
                         FC_IDENTITY, reinterpret_cast<const uint8_t*>(id_payload),
                         id_len, 10);

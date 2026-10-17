@@ -647,10 +647,14 @@ public class DeviceSession(
                 // is folded in only when present, so an OC that predates them
                 // leaves the previous value alone rather than clearing it.
                 val cur = _identity.value
+                // The receiver: "" (none came up) clears it, which the board
+                // revisions never do; an OC without the key leaves it alone.
+                val gnss = msg.msg.fcGnss
                 _identity.value = cur.copy(
                     fcFirmwareVersion = msg.msg.fcFirmwareVersion ?: cur.fcFirmwareVersion,
                     fcBoardRev = msg.msg.fcBoardRev ?: cur.fcBoardRev,
                     ocBoardRev = msg.msg.ocBoardRev ?: cur.ocBoardRev,
+                    fcGnss = if (gnss != null) gnss.ifEmpty { null } else cur.fcGnss,
                 )
             }
             is TelemetryCharMessage.ImuOrient -> onImuOrient(msg.msg)
@@ -1756,6 +1760,8 @@ public data class DeviceIdentity(
      */
     val fcBoardRev: String? = null,
     val ocBoardRev: String? = null,
+    /** The GNSS receiver the FC found ("u-blox", "mosaic-G5"); null for none, or not said. */
+    val fcGnss: String? = null,
 )
 
 /** One rocket seen via this base-station link's LoRa relay (iOS RemoteRocket). */

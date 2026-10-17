@@ -291,6 +291,25 @@ class DeviceSessionTest {
         assertEquals("abc1234+20260722-0900", h.session.identity.value.firmwareVersion)
     }
 
+    @Test
+    fun fcIdentity_gnssReceiverIsSetClearedAndKept() = runTest {
+        // The V9 names the receiver it found; "" (GNSS-absent) clears it; an
+        // OC that predates the key leaves it as it was.
+        val h = startedSession {
+            fcIdentityJson = """{"type":"fc_identity","fc_fw":"fc99","fc_board":"V9","oc_board":"V9","fc_gnss":"mosaic-G5"}"""
+        }
+        advanceTimeBy(1000)
+        runCurrent()
+        assertEquals("mosaic-G5", h.session.identity.value.fcGnss)
+        h.fw.emitTelemetryJson("""{"type":"fc_identity","fc_fw":"fc99","fc_board":"V9","oc_board":"V9"}""")
+        runCurrent()
+        assertEquals("mosaic-G5", h.session.identity.value.fcGnss)
+        h.fw.emitTelemetryJson("""{"type":"fc_identity","fc_fw":"fc99","fc_board":"V9","oc_board":"V9","fc_gnss":""}""")
+        runCurrent()
+        assertNull(h.session.identity.value.fcGnss)
+        assertEquals("V9", h.session.identity.value.fcBoardRev)
+    }
+
     // ── imu_orient caching gate ──────────────────────────────────────────
 
     @Test

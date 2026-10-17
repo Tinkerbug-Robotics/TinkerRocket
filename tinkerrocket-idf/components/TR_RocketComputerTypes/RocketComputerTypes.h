@@ -920,6 +920,44 @@ static constexpr int8_t magTypeChipSign(uint8_t mag_type, int axis)
                                            : (axis == 0 ? -1 : 1);
 }
 
+// Which GNSS receiver the flight computer talks to.  The build chooses it on
+// most boards (the u-blox on V7-V10, the LC86G on the Beetle); the V9 image
+// finds it at boot, because its J1 takes either the stock u-blox SAM-M10Q
+// carrier or a Septentrio mosaic-G5 harness (TR_Sensor_Collector's
+// TR_GNSS_DRIVER_AUTO, gnss_detect.h).  The FC names it in its FC_IDENTITY
+// push (BoardIdentity.h encodePayload) and the OC relays the name to the apps
+// as fc_identity's "fc_gnss", so the pad shows which receiver the FC found.
+// NONE: no receiver came up (the FC flies GNSS-absent, #557), the FC is in
+// rescue mode, or the FC predates this.
+static constexpr uint8_t GNSS_TYPE_NONE   = 0;
+static constexpr uint8_t GNSS_TYPE_UBLOX  = 1;   // u-blox SAM-M10Q: UBX
+static constexpr uint8_t GNSS_TYPE_MOSAIC = 2;   // Septentrio mosaic-G5: SBF
+static constexpr uint8_t GNSS_TYPE_LC86G  = 3;   // Quectel LC86G (the Beetle): NMEA and RTCM3
+
+// The name each type goes by on the wire and on screen ("" for NONE).
+constexpr const char* gnssTypeName(uint8_t type)
+{
+    return type == GNSS_TYPE_UBLOX  ? "u-blox"
+         : type == GNSS_TYPE_MOSAIC ? "mosaic-G5"
+         : type == GNSS_TYPE_LC86G  ? "LC86G"
+         : "";
+}
+
+// gnssTypeName() read back: NONE for an empty name or one this firmware does
+// not know (a newer FC's receiver), never a guess.
+constexpr uint8_t gnssTypeFromName(const char* name)
+{
+    if (name == nullptr || name[0] == '\0') return GNSS_TYPE_NONE;
+    for (uint8_t t = GNSS_TYPE_UBLOX; t <= GNSS_TYPE_LC86G; t++)
+    {
+        const char* a = gnssTypeName(t);
+        size_t i = 0;
+        while (a[i] != '\0' && a[i] == name[i]) i++;
+        if (a[i] == '\0' && name[i] == '\0') return t;
+    }
+    return GNSS_TYPE_NONE;
+}
+
 // Payload sent with OUT_STATUS_QUERY so the OUT processor can configure
 // its SensorConverter consistently with the FlightComputer.
 typedef struct __attribute__((packed))
@@ -3342,6 +3380,45 @@ constexpr uint16_t imuRateResolve(uint16_t setting_hz, bool deployed)
 {
     if (!imuRateIsDynamic(setting_hz)) return setting_hz;
     return deployed ? IMU_RATE_DYNAMIC_POST_HZ : imuRatePeakHz(setting_hz);
+}
+
+// The fastest IMU rate a board flies with this GNSS receiver. The mosaic-G5's
+// SBF blocks (MeasEpoch, MeasExtra and PVTGeodetic at 20 Hz: ~66 kB/s on a
+// 33-satellite sky) share the FC->OC link and the OC's flash with the IMU.
+// At 7680 Hz the link would run at ~92 % (test_i2s_link_budget, budgeted at
+// 130 signals) and the log would outrun the OC's ~310 kB/s flash drain
+// (measured 221 kB/s at 3840 Hz with the SBF on the Goblin's V9, 2026-10-16,
+// and 7680 Hz adds another ~115 kB/s). So with it the IMU stops at 3840 Hz;
+// every other receiver flies the board's own IMU_RATE_MAX_HZ. The FC applies
+// this once its receiver is known and the OC once the FC has named it
+// (FC_IDENTITY). Both still take any setting the board flies, and keep it, and
+// the FC flies imuRateSettingClamp() of it; the OC reports that ("irate") and
+// this limit ("irmax"), so the apps' menus offer only what flies.
+static constexpr uint16_t IMU_RATE_MAX_HZ_MOSAIC = 3840;
+constexpr uint16_t imuRateMaxForGnss(uint16_t board_max_hz, uint8_t gnss_type)
+{
+    return (gnss_type == GNSS_TYPE_MOSAIC && board_max_hz > IMU_RATE_MAX_HZ_MOSAIC)
+               ? IMU_RATE_MAX_HZ_MOSAIC
+               : board_max_hz;
+}
+
+// A setting brought within max_hz: a dynamic mode that does not fit becomes
+// "4k Dynamic", a fixed rate the fastest step at or below max_hz. What the
+// FC flies and the OC reports when the receiver lowers the limit; both keep
+// the setting the user chose in NVS, so a board whose receiver no longer
+// lowers it gets it back. A value that is no setting at all comes back as
+// it went in, for the caller's own validation to refuse.
+constexpr uint16_t imuRateSettingClamp(uint16_t setting_hz, uint16_t max_hz)
+{
+    if (imuRatePeakHz(setting_hz) == 0) return setting_hz;
+    if (imuRateSettingValid(setting_hz, max_hz)) return setting_hz;
+    if (imuRateIsDynamic(setting_hz)) return IMU_RATE_DYNAMIC;
+    uint16_t best = 0;
+    for (uint16_t opt : IMU_RATE_OPTIONS_HZ)
+    {
+        if (opt <= max_hz && opt > best) best = opt;
+    }
+    return best != 0 ? best : setting_hz;
 }
 
 // Pyro trigger modes

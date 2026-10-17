@@ -30,7 +30,7 @@ static constexpr uint32_t kFactoryBaud = 115200U;   // [RG scs]: every COM port'
 // often still booting when begin() runs. Same order of budget as the u-blox
 // driver's bring-up deadline; a healthy, already-set-up receiver answers in
 // well under a second.
-static constexpr uint32_t kBeginTimeoutMs = 30000U;
+static constexpr uint32_t kBeginTimeoutMs = 30000U;   // the default; setBeginTimeoutMs() changes it
 
 // 16 kB holds ~5 epochs of the full set; the poll task runs every 25 ms.
 static constexpr size_t kUartRxBuf = 16384;
@@ -81,7 +81,7 @@ static const char* intervalFor(uint8_t hz)
 }
 
 TR_GNSSReceiverMosaicSerial::TR_GNSSReceiverMosaicSerial(uart_port_t uart_port)
-    : _uartPort(uart_port) {}
+    : _uartPort(uart_port), begin_timeout_ms_(kBeginTimeoutMs) {}
 
 // ── UART ────────────────────────────────────────────────────────────────
 
@@ -285,8 +285,8 @@ bool TR_GNSSReceiverMosaicSerial::begin(uint8_t update_rate_hz,
     setups_logged_ = 0;
 
     ESP_LOGI(TAG, "Looking for the mosaic-G5 (RX=%u TX=%u PPS=%d), up to %lu s...",
-             rx_pin_, tx_pin_, pps_pin_, static_cast<unsigned long>(kBeginTimeoutMs / 1000));
-    const int64_t deadline_us = nowUs() + static_cast<int64_t>(kBeginTimeoutMs) * 1000;
+             rx_pin_, tx_pin_, pps_pin_, static_cast<unsigned long>(begin_timeout_ms_ / 1000));
+    const int64_t deadline_us = nowUs() + static_cast<int64_t>(begin_timeout_ms_) * 1000;
     while (nowUs() < deadline_us && !link_.running())
     {
         runLink();
@@ -299,7 +299,7 @@ bool TR_GNSSReceiverMosaicSerial::begin(uint8_t update_rate_hz,
     {
         ESP_LOGE(TAG, "GNSS bring-up: no mosaic-G5 answered in %lu s (last state %u); "
                       "continuing without GNSS",
-                 static_cast<unsigned long>(kBeginTimeoutMs / 1000), static_cast<unsigned>(link_.state()));
+                 static_cast<unsigned long>(begin_timeout_ms_ / 1000), static_cast<unsigned>(link_.state()));
         return false;
     }
     return true;

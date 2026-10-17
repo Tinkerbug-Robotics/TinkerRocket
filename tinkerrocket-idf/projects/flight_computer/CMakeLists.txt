@@ -216,9 +216,41 @@ if(TR_GNSS_MOSAIC)
     if(NOT TR_BOARD_V9)
         message(FATAL_ERROR "TR_GNSS_MOSAIC is for the V9 (-DTR_BOARD_V9=1): its J1 is where the harness lands")
     endif()
+    if(TR_GNSS_AUTO)
+        message(FATAL_ERROR "TR_GNSS_MOSAIC and TR_GNSS_AUTO are both on: the mosaic-only image or the image that finds either receiver, not both")
+    endif()
     add_compile_definitions(TR_GNSS_DRIVER_MOSAIC=1)
     list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.mosaic")
     message(STATUS "flight_computer: GNSS driver Septentrio mosaic-G5 (TR_GNSS_DRIVER_MOSAIC=1), overlay sdkconfig.defaults.mosaic")
+endif()
+# The V9 image finds its GNSS receiver at boot: the stock u-blox SAM-M10Q
+# carrier or the mosaic-G5 harness, both on J1 (TR_Sensor_Collector's
+# TR_GNSS_DRIVER_AUTO, gnss_auto_driver.h). On for the V9 unless
+# -DTR_GNSS_AUTO=0, which builds the u-blox-only image every V9 flew before;
+# -DTR_GNSS_MOSAIC=1 builds the mosaic-only one. It takes the mosaic's overlay
+# too, because it may find the mosaic: at 2 Mbaud the UART interrupt has to
+# run through flash writes (gnss_auto_driver.cpp refuses a build dir whose
+# sdkconfig predates it). -DTR_BOARD_V8=1 -DTR_GNSS_AUTO=1 builds it for a V8
+# as well, on request only, for the bench: the V8 carries the same SAM-M10Q
+# carrier on the same GPIO3/GPIO4, so its u-blox path is the V9's.
+if(NOT DEFINED TR_GNSS_AUTO AND TR_BOARD_V9 AND NOT TR_GNSS_MOSAIC)
+    set(TR_GNSS_AUTO ON)
+endif()
+if(TR_GNSS_AUTO)
+    if(NOT TR_BOARD_V9 AND NOT TR_BOARD_V8)
+        message(FATAL_ERROR "TR_GNSS_AUTO is for the V9 (-DTR_BOARD_V9=1): its J1 takes either receiver (or a V8, for the bench)")
+    endif()
+    add_compile_definitions(TR_GNSS_DRIVER_AUTO=1)
+    # The V8 (legacy) sets no defaults list of its own: start it from the base
+    # file, or the overlay alone would replace it and the build lose its P4
+    # target.
+    if(NOT SDKCONFIG_DEFAULTS)
+        set(SDKCONFIG_DEFAULTS "sdkconfig.defaults")
+    endif()
+    list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.mosaic")
+    message(STATUS "flight_computer: GNSS driver auto (u-blox or mosaic-G5, found at boot: TR_GNSS_DRIVER_AUTO=1), overlay sdkconfig.defaults.mosaic")
+elseif(TR_BOARD_V9 AND NOT TR_GNSS_MOSAIC)
+    message(STATUS "flight_computer: GNSS driver u-blox only (-DTR_GNSS_AUTO=0)")
 endif()
 set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")
 

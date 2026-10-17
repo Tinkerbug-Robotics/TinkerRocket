@@ -52,8 +52,13 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         // Call before begin(). The pin is only ever read.
         void setPpsPin(int8_t pin) { pps_pin_ = pin; }
 
+        // How long begin() looks for the receiver: 30 s unless set. The V9's
+        // auto image (TR_GNSSAuto) shortens it when the u-blox driver's own
+        // 60 s search ran first, to keep the boot inside its setup watchdog.
+        void setBeginTimeoutMs(uint32_t ms) { begin_timeout_ms_ = ms; }
+
         // Find the receiver and set it up (MosaicLink.h). Waits up to
-        // kBeginTimeoutMs for it, so a receiver that powers up with the FC
+        // the begin timeout for it, so a receiver that powers up with the FC
         // is found; false on a dead or deaf receiver (#557 GNSS-absent mode).
         // reset_n_pin / safeboot_n_pin: signature compatibility only.
         bool begin(uint8_t update_rate_hz,
@@ -124,6 +129,7 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         uint8_t     tx_pin_ = 0;
         int8_t      pps_pin_ = -1;
         uint8_t     update_rate_hz_ = 20;
+        uint32_t    begin_timeout_ms_;
 
         mosaic::SbfParser parser_;
         mosaic::MosaicLink link_;

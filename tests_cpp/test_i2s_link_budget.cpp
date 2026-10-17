@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 #include "RocketComputerTypes.h"
 #include "config.h"          // flight_computer/main/config.h
@@ -66,21 +67,54 @@ double gnssSbfBlock(double bytes)
     return bytes + parts * (double)(sizeof(GnssRtcmHeader) + kFrameOverhead);
 }
 
-double gnssRtcmInflow()
+// What one flight of this image streams, by the receiver that flies it: most
+// images have one; the V9 image (TR_GNSS_DRIVER_AUTO) flies whichever is on
+// J1, the u-blox at the board's IMU limit or the mosaic-G5 at the limit it
+// sets (imuRateMaxForGnss), so the budget has to hold for both.
+struct Flight
 {
+    const char* receiver;
+    uint8_t     gnss;        // GNSS_TYPE_*
+    double      imu_hz;      // the fastest IMU rate it flies
+    double      gnss_hz;     // GNSSData's rate
+};
+
+std::vector<Flight> flights()
+{
+    const double board = (double)config::IMU_RATE_MAX_HZ;
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
-    const double msgs_per_sec = 5.0 + 1.0;
-    const double frame_bytes  = 40.0 * 15.0 + 5.0 * (22.0 + 6.0) + 1.0 * (64.0 + 6.0);
-    return frame_bytes + msgs_per_sec * (double)(sizeof(GnssRtcmHeader) + kFrameOverhead);
+    return {{"LC86G", GNSS_TYPE_LC86G, board, (double)config::GNSS_UPDATE_RATE}};
 #elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
-    const double sats = 45.0, signals = 130.0;
-    const double meas_epoch = 20.0 + 20.0 * sats + 12.0 * (signals - sats);
-    const double meas_extra = 20.0 + 16.0 * signals;
-    const double per_epoch = gnssSbfBlock(meas_epoch) + gnssSbfBlock(meas_extra) + gnssSbfBlock(96.0);
-    return (double)config::GNSS_UPDATE_RATE * per_epoch + 2200.0;
+    return {{"mosaic-G5", GNSS_TYPE_MOSAIC,
+             (double)imuRateMaxForGnss(config::IMU_RATE_MAX_HZ, GNSS_TYPE_MOSAIC),
+             (double)config::GNSS_UPDATE_RATE}};
+#elif defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+    return {{"u-blox", GNSS_TYPE_UBLOX, board, (double)config::GNSS_UPDATE_RATE},
+            {"mosaic-G5", GNSS_TYPE_MOSAIC,
+             (double)imuRateMaxForGnss(config::IMU_RATE_MAX_HZ, GNSS_TYPE_MOSAIC),
+             (double)config::GNSS_MOSAIC_UPDATE_RATE}};
 #else
-    return 0.0;
+    return {{"u-blox", GNSS_TYPE_UBLOX, board, (double)config::GNSS_UPDATE_RATE}};
 #endif
+}
+
+double gnssRtcmInflow(const Flight& f)
+{
+    if (f.gnss == GNSS_TYPE_LC86G)
+    {
+        const double msgs_per_sec = 5.0 + 1.0;
+        const double frame_bytes  = 40.0 * 15.0 + 5.0 * (22.0 + 6.0) + 1.0 * (64.0 + 6.0);
+        return frame_bytes + msgs_per_sec * (double)(sizeof(GnssRtcmHeader) + kFrameOverhead);
+    }
+    if (f.gnss == GNSS_TYPE_MOSAIC)
+    {
+        const double sats = 45.0, signals = 130.0;
+        const double meas_epoch = 20.0 + 20.0 * sats + 12.0 * (signals - sats);
+        const double meas_extra = 20.0 + 16.0 * signals;
+        const double per_epoch = gnssSbfBlock(meas_epoch) + gnssSbfBlock(meas_extra) + gnssSbfBlock(96.0);
+        return f.gnss_hz * per_epoch + 2200.0;
+    }
+    return 0.0;
 }
 
 // RAW_GNSS_EKF_MSG: the raw-GNSS shadow filter's state (#1600), 10 a second
@@ -118,18 +152,19 @@ double padContextBurst()
 // The link: I2S_SAMPLE_RATE samples/s x 4 B (16-bit stereo).
 constexpr double kLinkBytesPerSec = (double)config::I2S_SAMPLE_RATE * 4.0;
 
-// Steady-state inflow during a GUIDED coast at the fastest IMU rate this board
-// flies (IMU_RATE_MAX_HZ: a fixed rate or a dynamic mode's boost) — the worst
-// case, and the phase guidance telemetry exists for. Built once per board.
-double guidedCoastInflow()
+// Steady-state inflow during a GUIDED coast at the fastest IMU rate the flight
+// flies (IMU_RATE_MAX_HZ, or the receiver's lower limit: a fixed rate or a
+// dynamic mode's boost) — the worst case, and the phase guidance telemetry
+// exists for. Built once per board, for each receiver its image flies.
+double guidedCoastInflow(const Flight& f)
 {
-    return imuBatched((double)config::IMU_RATE_MAX_HZ)
+    return imuBatched(f.imu_hz)
          + framed(sizeof(NonSensorData),   (double)config::NON_SENSOR_UPDATE_RATE)
          + framed(sizeof(BMP585Data),      (double)config::BMP585_UPDATE_RATE)
          + framed(sizeof(GuidanceTelemData), (double)config::GUIDANCE_TELEM_RATE_HZ)
          + framed(sizeof(FlightSnapshotData), 10.0)
          + framed(sizeof(IIS2MDCData),     100.0)
-         + framed(sizeof(GNSSData),        (double)config::GNSS_UPDATE_RATE)
+         + framed(sizeof(GNSSData),        f.gnss_hz)
          // #1154 item 4: the FC's camera truth. Counted here because that is
          // the whole reason it is a 5 Hz message and not a byte in the 500 Hz
          // NonSensorData — the byte version measured 95.06% and tripped the
@@ -137,7 +172,7 @@ double guidedCoastInflow()
          // block went stale twice before.
          + framed(sizeof(FcStatusData),    (double)config::FC_STATUS_RATE_HZ)
          + framed(sizeof(Ism6TempData),    1.0)   // the IMU's die temperature
-         + gnssRtcmInflow()
+         + gnssRtcmInflow(f)
          + rawGnssShadowInflow()
          + 220.0;   // POWERData, ~15 Hz
 }
@@ -145,47 +180,75 @@ double guidedCoastInflow()
 }  // namespace
 
 TEST(I2SLinkBudget, GuidedCoastLeavesRealHeadroom) {
-    const double inflow = guidedCoastInflow();
-    const double used   = inflow / kLinkBytesPerSec;
+    for (const Flight& f : flights())
+    {
+        const double inflow = guidedCoastInflow(f);
+        const double used   = inflow / kLinkBytesPerSec;
 
-    // 95% is the line. Below it there is room for jitter and for the burst
-    // traffic this steady-state sum ignores (config readback, OTA chunks, the
-    // snapshot cadence changing); above it, enqueueI2STx starts dropping and
-    // says nothing.  At GUIDANCE_TELEM_RATE_HZ 500 this was 0.986.
-    EXPECT_LT(used, 0.95)
-        << "guided-coast inflow " << inflow << " B/s is " << (used * 100.0)
-        << "% of the " << kLinkBytesPerSec << " B/s link. A struct on the link "
-        << "grew, or a rate went up — re-derive the budget block in config.h "
-        << "and bring this back under the line.";
+        // 95% is the line. Below it there is room for jitter and for the burst
+        // traffic this steady-state sum ignores (config readback, OTA chunks, the
+        // snapshot cadence changing); above it, enqueueI2STx starts dropping and
+        // says nothing.  At GUIDANCE_TELEM_RATE_HZ 500 this was 0.986.
+        EXPECT_LT(used, 0.95)
+            << "with the " << f.receiver << " at " << f.imu_hz << " Hz IMU, "
+            << "guided-coast inflow " << inflow << " B/s is " << (used * 100.0)
+            << "% of the " << kLinkBytesPerSec << " B/s link. A struct on the link "
+            << "grew, or a rate went up — re-derive the budget block in config.h "
+            << "and bring this back under the line.";
+    }
 }
 
 TEST(I2SLinkBudget, ThePadContextFitsInAGuidedCoast) {
     // Its burst on top of the steady state: it must not push the coast it
     // lands in over the line either.
-    const double inflow = guidedCoastInflow() + padContextBurst();
-    const double used   = inflow / kLinkBytesPerSec;
-    EXPECT_LT(used, 0.95)
-        << "a guided coast with the pad context's burst is " << (used * 100.0)
-        << "% of the link: lengthen config::PAD_CONTEXT_PERIOD_MS.";
+    for (const Flight& f : flights())
+    {
+        const double inflow = guidedCoastInflow(f) + padContextBurst();
+        const double used   = inflow / kLinkBytesPerSec;
+        EXPECT_LT(used, 0.95)
+            << "with the " << f.receiver << ", a guided coast with the pad context's burst is "
+            << (used * 100.0) << "% of the link: lengthen config::PAD_CONTEXT_PERIOD_MS.";
+    }
 }
 
 TEST(I2SLinkBudget, TheDominantStreamIsTheIMU) {
     // Sanity on the shape of the budget: if anything ever outgrows the IMU
     // stream, the tuning advice in config.h (and the bench gauges it names)
-    // is pointing at the wrong thing.
-    const double imu = imuBatched((double)config::IMU_RATE_MAX_HZ);
-    EXPECT_GT(imu, guidedCoastInflow() * 0.5);
+    // is pointing at the wrong thing. With the mosaic-G5 its SBF is the other
+    // big stream, about the IMU's size at 3840 Hz, and config.h names both.
+    for (const Flight& f : flights())
+    {
+        const double imu = imuBatched(f.imu_hz);
+        const double big = imu + (f.gnss == GNSS_TYPE_MOSAIC ? gnssRtcmInflow(f) : 0.0);
+        EXPECT_GT(big, guidedCoastInflow(f) * 0.5) << f.receiver;
+    }
 }
 
 TEST(I2SLinkBudget, NonGuidedFlightHasMoreRoomStill) {
     // GuidanceTelem is only emitted while guidance is active, so an unguided
     // flight is strictly cheaper.  Stated so the guided case is understood as
     // the binding one rather than the only one.
-    const double guided   = guidedCoastInflow();
-    const double unguided = guided - framed(sizeof(GuidanceTelemData),
-                                            (double)config::GUIDANCE_TELEM_RATE_HZ);
-    EXPECT_LT(unguided, guided);
-    EXPECT_LT(unguided / kLinkBytesPerSec, 0.95);
+    for (const Flight& f : flights())
+    {
+        const double guided   = guidedCoastInflow(f);
+        const double unguided = guided - framed(sizeof(GuidanceTelemData),
+                                                (double)config::GUIDANCE_TELEM_RATE_HZ);
+        EXPECT_LT(unguided, guided);
+        EXPECT_LT(unguided / kLinkBytesPerSec, 0.95) << f.receiver;
+    }
+}
+
+TEST(I2SLinkBudget, TheMosaicFliesUnderItsOwnImuLimit) {
+    // Where an image can fly the mosaic-G5, the IMU limit it sets is what
+    // keeps its SBF from crowding the link; at the board's own limit the same
+    // coast would run close to the line.
+    for (const Flight& f : flights())
+    {
+        if (f.gnss != GNSS_TYPE_MOSAIC) continue;
+        EXPECT_LE(f.imu_hz, (double)IMU_RATE_MAX_HZ_MOSAIC);
+        const double used = guidedCoastInflow(f) / kLinkBytesPerSec;
+        EXPECT_LT(used, 0.75) << "the mosaic-G5 at " << f.imu_hz << " Hz IMU: " << (used * 100.0) << "%";
+    }
 }
 
 TEST(I2SLinkBudget, GuidanceRateDividesTheNonSensorRate) {

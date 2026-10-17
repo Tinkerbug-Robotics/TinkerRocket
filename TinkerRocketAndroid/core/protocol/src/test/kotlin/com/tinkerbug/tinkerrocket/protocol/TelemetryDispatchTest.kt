@@ -463,6 +463,28 @@ class TelemetryDispatchTest {
     }
 
     @Test
+    fun `fc_identity names the GNSS receiver the FC found`() {
+        val msg = assertIs<TelemetryCharMessage.FcIdentity>(
+            TelemetryDispatch.parse(
+                """{"type":"fc_identity","fc_fw":"abc","fc_board":"V9","oc_board":"V9","fc_gnss":"mosaic-G5"}""",
+            ),
+        )
+        assertEquals("mosaic-G5", msg.msg.fcGnss)
+        // "" is a real answer (none came up); absent is an OC that predates it.
+        assertEquals(
+            "",
+            assertIs<TelemetryCharMessage.FcIdentity>(
+                TelemetryDispatch.parse("""{"type":"fc_identity","fc_gnss":""}"""),
+            ).msg.fcGnss,
+        )
+        assertNull(
+            assertIs<TelemetryCharMessage.FcIdentity>(
+                TelemetryDispatch.parse("""{"type":"fc_identity","fc_fw":"abc"}"""),
+            ).msg.fcGnss,
+        )
+    }
+
+    @Test
     fun `imu_orient decodes name mode and setting`() {
         val msg = assertIs<TelemetryCharMessage.ImuOrient>(
             TelemetryDispatch.parse("""{"type":"imu_orient","name":"-Z r90","mode":3,"set":255}"""),
