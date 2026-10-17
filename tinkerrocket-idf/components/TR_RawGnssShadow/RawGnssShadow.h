@@ -265,6 +265,26 @@
 //     epoch: under a chute with the sky gone the mosaic still sends its empty
 //     epochs, and the outage's levelling would never start.
 //
+// The turning body. The filter takes the antenna at the IMU (r = 0), and the
+// offset between them is not measured before a flight. While the body turns
+// at omega, an antenna r away moves omega x r against the IMU: 1.5 m/s at the
+// drogue's snatch (5 rad/s) with 0.3 m on the nose, a velocity every Doppler
+// sees and the IMU's does not, which the update reads as an attitude error
+// (Grid B, 2026-10-17: up to 42 deg in the snatch's first 3 s, no fault). Two
+// allowances, each off at 0, need only a bound on r and the gyro:
+//   - each Doppler's sigma takes, in quadrature, the most omega x r can be
+//     (rotLeverSigma): rot_lever_axial_m (along the nose) times the rate
+//     across the nose, plus rot_lever_radial_m (across it) times the whole
+//     rate -- an antenna on the axis does not move as the body rolls, one off
+//     it does. The rate is the gyro less its bias at its largest since the
+//     epoch before, so the epoch's own instant is in it. The boost screen,
+//     the vertical check and the update all judge the Dopplers with it;
+//   - an epoch whose rate across the nose reached att_hold_rate_rps, and each
+//     within att_hold_s after one, keeps GNSS off the attitude and the gyro
+//     bias (the unaided twin's mask, for those epochs): the snatch and a
+//     tumble. Roll alone never holds it: a spinning rocket keeps its GNSS
+//     attitude.
+//
 // Stopping. A sensor sim, a hole in the IMU longer than max_gap_s, a state
 // that is not finite, or (on the pad) one pad_reset_m from the flight
 // filter's stops it; it starts again from the next pad seed.
@@ -420,6 +440,13 @@ public:
         double   restore_vel_sigma_mps = 0.0;
         double   restore_att_sigma_deg = 0.0;
         bool     restore_seed_bias = false;
+        // An antenna away from the IMU by an offset nobody measured (above:
+        // the turning body). 0: off, the Beetle's filter exactly.
+        double   rot_lever_axial_m = 0.0;     // its offset along the nose at most, m
+        double   rot_lever_radial_m = 0.0;    //   and across it, m: each Doppler's sigma takes rotLeverSigma
+        double   att_hold_rate_rps = 0.0;     // an epoch whose rate across the nose reached this, rad/s, and
+        double   att_hold_s = 0.0;            //   every epoch within this long after one: GNSS held off the
+                                              //   attitude and the gyro bias (RawGnssEKF::setAttHold)
     };
 
     // When the boost screen runs (Config::boost_screen).
@@ -584,6 +611,12 @@ public:
         float    vert_last_dv_down = 0.0f; //   the last one's: its vertical against the filter's, m/s
         float    vert_worst_dv_down = 0.0f;//   and the largest kept (|.|), m/s
         uint32_t vert_latched = 0;         // epochs dropped after a vertical drop, not yet back (vert_release_mps)
+        // the turning body (rot_lever_*, att_hold_*)
+        float    rot_last_sigma_mps = 0.0f;   // the last epoch's rotation allowance on its Dopplers
+        float    rot_max_sigma_mps = 0.0f;    //   the largest any epoch took
+        float    rot_last_across_rps = 0.0f;  // the last epoch's largest rate across the nose
+        uint32_t att_held = 0;             // epochs whose GNSS was held off the attitude (att_hold_rate_rps)
+        bool     att_last_held = false;    //   the last one's
     };
 
     using Clock = int64_t (*)();
@@ -592,6 +625,12 @@ public:
     explicit RawGnssShadow(const Config& cfg);
     // What a GNSS task's stage builds with, for a shadow with this config.
     static RawGnssMeasStage::Config stageConfig(const Config& c);
+    // The most an antenna up to axial_m along the nose and radial_m across it
+    // can move against the IMU while the body turns at rate_rps, of which
+    // across_rps across the nose (m/s): |omega x r| <= axial |omega across|
+    // + radial |omega| (along the nose only the cross rate moves it; across,
+    // any rate does, up to its whole size). Below 0 counts as 0.
+    static double rotLeverSigma(double axial_m, double radial_m, double rate_rps, double across_rps);
     void setClock(Clock c) { clock_ = c; }
     const Config& config() const { return cfg_; }
 
@@ -725,6 +764,7 @@ private:
         double        te = 0.0;           // its instant on the filter's clock
         bool          in_flight = false;
         double        g_peak = 0.0;       // the largest |specific force| / g - 1 since the last epoch
+        double        rot_sigma = 0.0;    // the turning body's allowance on its Dopplers (rot_lever_*), m/s
         int64_t       pr_k = 0;           // pr_period_s: the period of GPS time it falls in
         bool          screen = false;     // a boost epoch the boost screen judges (kJobScreen)
         bool          vcheck = false;     // the vertical check judges it if it can fit it (kJobScreen)
@@ -808,6 +848,11 @@ private:
     int64_t       pr_period_k_ = -1;    // pr_period_s: the period the code was last fused in (< 0: none since the start)
     double        fit_last_te_ = -1.0;  // heading_fit_period_s: the last epoch the fit took (< 0: none this flight)
     bool          vert_latch_ = false;  // a vertical drop, and no epoch back within vert_release_mps since
+    double        att_hold_until_ = -1.0e9;   // att_hold_s: epochs up to this instant are held (filter's clock)
+    bool          rotOn() const
+    {
+        return cfg_.rot_lever_axial_m > 0.0 || cfg_.rot_lever_radial_m > 0.0 || cfg_.att_hold_rate_rps > 0.0;
+    }
     bool          launch_seen_ = false; // a launch edge since the start (a restored flight has none)
     void          setFlightGate(bool full);
     void          setGroundGate();

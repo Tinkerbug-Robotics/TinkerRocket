@@ -258,6 +258,11 @@ struct Args
     int gnss_only_gate = 1;          //   and act's launch edge on the attitude (1, launch: gnss_only_arm.h), or the
                                      //   ground's gate kept (0, ground)
     std::string pvt_out;             // each receiver fix's height above the ellipsoid, for the pad height's score
+    // the turning body (RawGnssShadow::Config, a RAW_REPLAY_ROT build; -1: the firmware's, off): the antenna's
+    // offset from the IMU bounded along the nose and across it (each Doppler's sigma takes rotLeverSigma), and
+    // GNSS held off the attitude from a rate across the nose and for a while after
+    double rot_lever_axial_m = -1.0, rot_lever_radial_m = -1.0;
+    double att_hold_rate_rps = -1.0, att_hold_s = -1.0;
     std::set<std::string> given;     // the options on the command line
 };
 
@@ -289,7 +294,9 @@ void usage()
                  "  [--seed-gyro-dps x,y,z]\n"
                  "  [--sat-cap N] [--fuse-ms X] [--flight-state log|quorum] [--time-tag-from-boot]\n"
                  "  [--assume-finetime] [--pad-zupt 0|1] [--gnss-only-from-s X] [--gnss-only-gate launch|ground]\n"
-                 "  [--pvt-out FILE]\n");
+                 "  [--pvt-out FILE]\n"
+                 "  the turning body (a RAW_REPLAY_ROT build): [--rot-lever-axial-m X] [--rot-lever-radial-m X]\n"
+                 "  [--att-hold-rate X] [--att-hold-s X]\n");
 }
 
 bool parseArgs(int argc, char** argv, Args& a)
@@ -416,6 +423,10 @@ bool parseArgs(int argc, char** argv, Args& a)
                 return false;
         }
         else if (k == "--pvt-out") a.pvt_out = val();
+        else if (k == "--rot-lever-axial-m") a.rot_lever_axial_m = std::atof(val());
+        else if (k == "--rot-lever-radial-m") a.rot_lever_radial_m = std::atof(val());
+        else if (k == "--att-hold-rate") a.att_hold_rate_rps = std::atof(val());
+        else if (k == "--att-hold-s") a.att_hold_s = std::atof(val());
         else if (k == "--acc-sub")
         {
             if (std::sscanf(val(), "%lf,%lf,%lf", &a.acc_sub[0], &a.acc_sub[1], &a.acc_sub[2]) != 3)
@@ -1618,6 +1629,23 @@ int main(int argc, char** argv)
         }
         cfg.ekf.att_gnss_off = true;
     }
+#endif
+    // the turning body's allowances (RawGnssShadow.h): off unless given
+#if RAW_REPLAY_ROT
+    if (a.rot_lever_axial_m >= 0.0)
+        cfg.rot_lever_axial_m = a.rot_lever_axial_m;
+    if (a.rot_lever_radial_m >= 0.0)
+        cfg.rot_lever_radial_m = a.rot_lever_radial_m;
+    if (a.att_hold_rate_rps >= 0.0)
+        cfg.att_hold_rate_rps = a.att_hold_rate_rps;
+    if (a.att_hold_s >= 0.0)
+        cfg.att_hold_s = a.att_hold_s;
+#else
+    if (a.rot_lever_axial_m >= 0.0 || a.rot_lever_radial_m >= 0.0 || a.att_hold_rate_rps >= 0.0 || a.att_hold_s >= 0.0)
+        std::fprintf(stderr, "WARNING: this build has no turning-body allowances (RAW_REPLAY_ROT=OFF): "
+                             "--rot-lever-axial-m, --rot-lever-radial-m, --att-hold-rate and --att-hold-s are ignored\n");
+#endif
+#if RAW_REPLAY_MOSAIC
     const bool mosaic_eph_cap = gnss_raw::EphemerisStore::kCapacity == 128;
     if (mosaic != mosaic_eph_cap)
         std::fprintf(stderr, "WARNING: this binary's ephemeris store holds %u (the %s build's); the %s build's holds "
@@ -3308,6 +3336,12 @@ int main(int argc, char** argv)
 #endif
 #if RAW_REPLAY_LATCH
                 std::fprintf(ej, "\"vert_latched\": %u, ", fs.vert_latched);
+#endif
+#if RAW_REPLAY_ROT
+                std::fprintf(ej, "\"rot\": {\"axial_m\": %.3f, \"radial_m\": %.3f, \"hold_rps\": %.3f, \"hold_s\": %.3f, "
+                                 "\"max_sigma_mps\": %.3f, \"held\": %u}, ",
+                             sh.cfg_.rot_lever_axial_m, sh.cfg_.rot_lever_radial_m, sh.cfg_.att_hold_rate_rps,
+                             sh.cfg_.att_hold_s, static_cast<double>(fs.rot_max_sigma_mps), fs.att_held);
 #endif
                 std::fprintf(ej, "\"screen_compare\": [");
                 for (size_t i = 0; i < cmps.size(); ++i)

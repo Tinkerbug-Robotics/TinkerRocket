@@ -285,6 +285,7 @@ struct ClosedEpoch
     double t = 0.0;
     gnss_raw::RawGnssStats st;
     float sigma_rr_max = 0.0f, sigma_rr_min = 0.0f;
+    bool held = false;                    // GNSS held off the attitude for it (att_hold_rate_rps)
 };
 
 struct TenRun
@@ -313,6 +314,15 @@ struct TenFlight
     int    epoch_ms = 100;               // an epoch this often (a multiple of 5 ms)
     bool   lose_whole_seconds = false;   // the epochs on whole GPS seconds never come
     double bad_vertical_t = -1.0;        // the epoch at this time: its Dopplers 40 m/s off vertically
+    // a turn in flight: from turn_t (after ignition) the body turns about
+    // its turn_axis (0 the nose, 1 body y) at turn_rps for turn_s, then back
+    // as fast for as long, the thrust turning with it; the antenna is lever_m
+    // up the nose from the IMU (the filter takes it at the IMU)
+    double turn_t = -1.0;
+    double turn_s = 0.5;
+    double turn_rps = 0.0;
+    int    turn_axis = 1;
+    double lever_m = 0.0;
 };
 
 TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
@@ -347,13 +357,23 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
     for (int step = 1; step * dt <= t_end + 1e-9; ++step)
     {
         const double t = step * dt;
+        // the turn (in flight only: the pad stands still): its rate over the step ending at t, and the angle at t
+        double w_turn = 0.0, ang = 0.0;
+        if (fl.turn_t >= 0.0 && t > fl.turn_t + 1e-9 && t <= fl.turn_t + 2.0 * fl.turn_s + 1e-9)
+        {
+            const bool out = t <= fl.turn_t + fl.turn_s + 1e-9;
+            w_turn = out ? fl.turn_rps : -fl.turn_rps;
+            ang = fl.turn_rps * (out ? t - fl.turn_t : fl.turn_t + 2.0 * fl.turn_s - t);
+        }
+        const double ax[3] = {fl.turn_axis == 0 ? 1.0 : 0.0, fl.turn_axis == 1 ? 1.0 : 0.0, 0.0};
+        const Mat3 Cn = mat3Mul(Ct, rotAbout(ax, ang));      // body -> NED, turned
         double f_b[3] = {0.0, 0.0, 0.0}, a_n[3] = {0.0, 0.0, 0.0};
         if (t > kIgn)
         {
             const double thrust = fl.thrust_g + (fl.burnout_thrust_g - fl.thrust_g) * (t - kIgn) / (kBurnout - kIgn);
             f_b[0] = t <= kBurnout ? thrust * kG : 0.0;       // then coasting, weightless
             double f_n[3];
-            mat3Vec(Ct, f_b, f_n);
+            mat3Vec(Cn, f_b, f_n);
             for (int i = 0; i < 3; ++i)
                 a_n[i] = f_n[i] + (i == 2 ? kG : 0.0);
         }
@@ -376,6 +396,7 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
         s.time_us = static_cast<uint32_t>(t64);
         for (int i = 0; i < 3; ++i)
             s.acc[i] = float(f_b[i]);
+        s.gyro[fl.turn_axis] = float(w_turn);
         s.flags = t < kIgn ? gnss_raw::kShadowLevel : (t >= kIgn + 0.1 ? gnss_raw::kShadowInFlight : 0);
         sh.onImu(s, t64);
         // each epoch as it closes
@@ -392,6 +413,7 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
                 c.sigma_rr_max = std::max(c.sigma_rr_max, m[i].sigma_rr);
                 c.sigma_rr_min = i == 0 ? m[i].sigma_rr : std::min(c.sigma_rr_min, m[i].sigma_rr);
             }
+            c.held = sh.stats().att_last_held;
             run.eps.push_back(c);
         }
         gnss_raw::ShadowNav nav;
@@ -409,9 +431,19 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
             const int ms = next_epoch * fl.epoch_ms;
             if (!fl.lose_whole_seconds || ms % 1000 != 0)
             {
+                // the antenna: lever_m up the nose, moving omega x r with the turn
+                const double r_b[3] = {fl.lever_m, 0.0, 0.0};
+                const double w_b[3] = {ax[0] * w_turn, ax[1] * w_turn, 0.0};
+                const double wxr[3] = {w_b[1] * r_b[2] - w_b[2] * r_b[1], w_b[2] * r_b[0] - w_b[0] * r_b[2],
+                                       w_b[0] * r_b[1] - w_b[1] * r_b[0]};
+                double r_n[3], wxr_n[3], p_ant[3];
+                mat3Vec(Cn, r_b, r_n);
+                mat3Vec(Cn, wxr, wxr_n);
+                for (int i = 0; i < 3; ++i)
+                    p_ant[i] = p_ned[i] + r_n[i];
                 double dr[3], r[3], ve[3];
-                nedToEcefVec(p_ned, dr);
-                double v_rx[3] = {v_ned[0], v_ned[1], v_ned[2]};
+                nedToEcefVec(p_ant, dr);
+                double v_rx[3] = {v_ned[0] + wxr_n[0], v_ned[1] + wxr_n[1], v_ned[2] + wxr_n[2]};
                 if (std::fabs(ms / 1000.0 - fl.bad_vertical_t) < 1e-6)
                     v_rx[2] += 40.0;
                 nedToEcefVec(v_rx, ve);
@@ -1046,4 +1078,127 @@ TEST(LevelGateV9, AtZeroEveryEpochIsTaken)
     }
     s.onEpoch(22.0, v);
     EXPECT_TRUE(s.steady());
+}
+
+// ---- the turning body: rot_lever_axial_m and rot_lever_radial_m, att_hold_rate_rps and att_hold_s
+
+namespace
+{
+
+const ClosedEpoch* epochAt(const TenRun& r, double t)
+{
+    for (const ClosedEpoch& c : r.eps)
+        if (std::fabs(c.t - t) < 0.01)
+            return &c;
+    return nullptr;
+}
+
+// out and back over 1 s from 7 s, in the coast
+TenFlight turningCoast(double rps, int axis, double lever_m)
+{
+    TenFlight fl;
+    fl.turn_t = 7.0;
+    fl.turn_s = 0.5;
+    fl.turn_rps = rps;
+    fl.turn_axis = axis;
+    fl.lever_m = lever_m;
+    return fl;
+}
+
+}  // namespace
+
+TEST(RawGnssShadowV9, TheTurningBodysAllowanceIsOnTheDopplersOfTheEpochsItTurnedIn)
+{
+    // 2 rad/s about body y: with 0.3 m along the nose and 0.05 m across it
+    // allowed, every Doppler of an epoch whose interval (since the epoch
+    // before) saw the turn takes 0.3 x 2 + 0.05 x 2 = 0.7 m/s in quadrature
+    // -- the epochs tagged 7.0 to 8.0 s, each handed over 50 ms after its tag.
+    // Every other epoch is as without the allowance, and so is the filter
+    // until the turn.
+    const TenFlight fl = turningCoast(2.0, 1, 0.0);
+    RawGnssShadow::Config c = mosaicCfg();
+    c.rot_lever_axial_m = 0.3;
+    c.rot_lever_radial_m = 0.05;
+    const TenRun on = flyTen(c, fl), bare = flyTen(mosaicCfg(), fl);
+    int turned = 0;
+    for (int k = 30; k <= 95; ++k)
+    {
+        const double t = k / 10.0;
+        const ClosedEpoch* a = epochAt(on, t);
+        const ClosedEpoch* b = epochAt(bare, t);
+        ASSERT_NE(a, nullptr) << t;
+        ASSERT_NE(b, nullptr) << t;
+        const double a2 = double(a->sigma_rr_min) * a->sigma_rr_min, b2 = double(b->sigma_rr_min) * b->sigma_rr_min;
+        if (t > 7.0 - 1e-6 && t < 8.0 + 1e-6)
+        {
+            EXPECT_NEAR(a2 - b2, 0.49, 0.02) << t;
+            turned++;
+        }
+        else
+        {
+            EXPECT_NEAR(a2, b2, 1e-4 * b2) << t;
+        }
+        EXPECT_FALSE(a->held) << t;
+    }
+    EXPECT_EQ(turned, 11);
+    EXPECT_NEAR(on.st.rot_max_sigma_mps, 0.7f, 0.02f);
+    EXPECT_EQ(on.st.att_held, 0u);
+    // the filter itself: the same as without it until the turn
+    ASSERT_EQ(on.state.size(), bare.state.size());
+    int same = 0;
+    for (size_t i = 0; i < on.state.size() && 0.25 * double(i + 1) < 7.0; ++i)
+    {
+        EXPECT_EQ(on.state[i], bare.state[i]) << i;
+        same++;
+    }
+    EXPECT_EQ(same, 27);
+    // a roll -- the nose's own axis -- moves an antenna on it not at all: only
+    // the radial 0.05 m takes it, 0.05 x 5
+    const TenRun roll = flyTen(c, turningCoast(5.0, 0, 0.0));
+    EXPECT_NEAR(roll.st.rot_max_sigma_mps, 0.25f, 0.01f);
+}
+
+TEST(RawGnssShadowV9, TheHoldTakesTheEpochsThatTurnedAcrossTheNoseAndTheTailAfter)
+{
+    // Held from 1.5 rad/s across the nose and for 0.25 s after: a 2 rad/s
+    // pitch holds the 11 epochs that saw it and the 2 within 0.25 s after the
+    // last; a 5 rad/s roll holds none. No allowance on the Dopplers was asked
+    // for: their sigmas are the bare flight's.
+    RawGnssShadow::Config c = mosaicCfg();
+    c.att_hold_rate_rps = 1.5;
+    c.att_hold_s = 0.25;
+    const TenRun pitch = flyTen(c, turningCoast(2.0, 1, 0.0)), bare = flyTen(mosaicCfg(), turningCoast(2.0, 1, 0.0));
+    int held = 0;
+    for (const ClosedEpoch& e : pitch.eps)
+    {
+        const bool want = e.t > 7.0 - 1e-6 && e.t < 8.2 + 1e-6;
+        EXPECT_EQ(e.held, want) << e.t;
+        held += e.held ? 1 : 0;
+        const ClosedEpoch* b = epochAt(bare, e.t);
+        ASSERT_NE(b, nullptr) << e.t;
+        EXPECT_EQ(e.sigma_rr_min, b->sigma_rr_min) << e.t;
+    }
+    EXPECT_EQ(held, 13);
+    EXPECT_EQ(pitch.st.att_held, 13u);
+    EXPECT_EQ(pitch.st.rot_max_sigma_mps, 0.0f);
+    const TenRun roll = flyTen(c, turningCoast(5.0, 0, 0.0));
+    EXPECT_EQ(roll.st.att_held, 0u);
+    // under the threshold, nothing is held: 1.4 rad/s
+    const TenRun slow = flyTen(c, turningCoast(1.4, 1, 0.0));
+    EXPECT_EQ(slow.st.att_held, 0u);
+}
+
+TEST(RawGnssShadowV9, KeepingTheRateForTheAllowancesChangesNothingUntilOneActs)
+{
+    // A hold that never triggers (100 rad/s) keeps the filter's rate, and
+    // nothing else: through the turn, every 0.25 s, the filter is the
+    // default's bit for bit
+    RawGnssShadow::Config c = mosaicCfg();
+    c.att_hold_rate_rps = 100.0;
+    const TenFlight fl = turningCoast(3.0, 1, 0.3);
+    const TenRun kept = flyTen(c, fl), bare = flyTen(mosaicCfg(), fl);
+    ASSERT_EQ(kept.state.size(), bare.state.size());
+    for (size_t i = 0; i < kept.state.size(); ++i)
+        EXPECT_EQ(kept.state[i], bare.state[i]) << i;
+    EXPECT_EQ(kept.st.att_held, 0u);
 }

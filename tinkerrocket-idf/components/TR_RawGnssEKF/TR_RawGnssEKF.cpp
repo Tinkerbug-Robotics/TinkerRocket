@@ -129,6 +129,8 @@ void RawGnssEKF<T>::init(const double lla[3], const T v_ned[3], const T q[4], do
     isb_[0] = isb_[1] = T(0);
     clk_ready_ = false;
     g_excess_ = g_peak_ = T(0);
+    rate_peak_ = rate_across_peak_ = T(0);
+    att_hold_ = false;
     t_ = t0;
 
     std::memset(P_, 0, sizeof(P_));
@@ -371,6 +373,14 @@ T RawGnssEKF<T>::takeGPeak()
 }
 
 template <typename T>
+void RawGnssEKF<T>::takeRatePeak(T& all, T& across)
+{
+    all = rate_peak_;
+    across = rate_across_peak_;
+    rate_peak_ = rate_across_peak_ = T(0);
+}
+
+template <typename T>
 void RawGnssEKF<T>::gravityNed(T g[3]) const
 {
     if (!p_.gravity_wgs84)
@@ -463,6 +473,15 @@ void RawGnssEKF<T>::propagate(const T acc[3], const T gyro[3], T dt)
     g_excess_ = fn / T(kG0) - T(1);
     if (g_excess_ > g_peak_)
         g_peak_ = g_excess_;
+    if (track_rate_)
+    {
+        const T across = std::sqrt(w[1] * w[1] + w[2] * w[2]);
+        const T all = std::sqrt(w[0] * w[0] + across * across);
+        if (all > rate_peak_)
+            rate_peak_ = all;
+        if (across > rate_across_peak_)
+            rate_across_peak_ = across;
+    }
 
     propagateCovariance(Tb2n, f_b, w, g[2], dt);
     clk_b_ += static_cast<double>(clk_d_) * static_cast<double>(dt);
@@ -1342,8 +1361,9 @@ void RawGnssEKF<T>::updateGnssRawPart(const RawMeas* m, int i0, int i1, double a
     // here, and only here (scalarUpdate's other callers -- the levelling, the
     // height, zero velocity, the magnetometer -- keep theirs). The
     // accelerometer bias keeps its gain (RawGnssEKFParams::att_gnss_off says
-    // what that leaves).
-    const uint32_t kmask = p_.att_gnss_off ? ~((0x7u << kAtt) | (0x7u << kGyroBias)) : 0xFFFFFFFFu;
+    // what that leaves). The hold (setAttHold) is the same mask for a while.
+    const uint32_t kmask =
+        p_.att_gnss_off || att_hold_ ? ~((0x7u << kAtt) | (0x7u << kGyroBias)) : 0xFFFFFFFFu;
     for (int i = i0; i < i1; ++i)
     {
         const RawMeas& mi = m[i];

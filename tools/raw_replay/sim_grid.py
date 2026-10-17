@@ -21,8 +21,12 @@ are made against, and truth/<flight>.nav, which the truth's quorum reads) are in
     PYTHONPATH=<simbuild>/tinkerrocket-sim/src:<gnss-hf-sim>/sim \\
         python3 tools/raw_replay/sim_grid.py OUT --flights <grid>/flights [--patterns none,cut05,...] \\
         [--mags 0,+10,...] [--arms design,unaided,noguard] [--jobs 8] \\
-        [--binary tools/raw_replay/build/raw_replay_mosaic] [--lever-arm 0.3] [--harness-args "..."]
+        [--binary tools/raw_replay/build/raw_replay_mosaic] [--lever-arm 0.3] [--harness-args "..."] \\
+        [--pause-file FILE]
     python3 tools/raw_replay/sim_tables.py OUT
+
+--pause-file names a file another job writes "active" into while it needs the machine quiet (a bench rig's timing
+run, say): before each events file and each run the workers read it and wait, checking every 30 s, while it says so.
 """
 from __future__ import annotations
 
@@ -40,15 +44,32 @@ sys.path.insert(0, HERE)
 
 MAGS = ["0", "+10", "-10", "+40", "-40", "none30"]
 ARMS = ["design", "unaided", "noguard"]
+PAUSE_POLL_S = 30.0
+
+
+def wait_quiet(pause_file):
+    """Wait while pause_file says "active" (--pause-file): another job needs the machine quiet."""
+    if not pause_file:
+        return
+    while True:
+        try:
+            with open(pause_file) as fh:
+                busy = "active" in fh.read()
+        except OSError:
+            busy = False
+        if not busy:
+            return
+        time.sleep(PAUSE_POLL_S)
 
 
 def make_events(job):
-    flight, pattern, out_dir, phases_path, lever_arm, force = job
+    flight, pattern, out_dir, phases_path, lever_arm, force, pause_file = job
     import sim_events
     name = os.path.splitext(os.path.basename(flight))[0]
     path = os.path.join(out_dir, f"{name}__{pattern}.events")
     if os.path.exists(path) and not force:
         return path, None, 0.0
+    wait_quiet(pause_file)
     t0 = time.time()
     phases = json.load(open(phases_path))["flights"]
     path, counts = sim_events.build(flight, pattern, out_dir, phases, lever_arm=lever_arm)
@@ -68,7 +89,7 @@ def read_meta(events):
 
 
 def run_one(job):
-    events, mag, arm, binary, runs_dir, scores_dir, keep, extra = job
+    events, mag, arm, binary, runs_dir, scores_dir, keep, extra, pause_file = job
     import sim_tables
     base = os.path.basename(events)[:-len(".events")]
     flight, pattern = base.split("__")
@@ -93,6 +114,7 @@ def run_one(job):
     if os.path.exists(nav):
         args += ["--truth-nav", nav]
     args += extra
+    wait_quiet(pause_file)
     t0 = time.time()
     p = subprocess.run(args, capture_output=True, text=True)
     dt = time.time() - t0
@@ -133,6 +155,8 @@ def main():
                                          "in minutes: a scratch directory will do)")
     ap.add_argument("--events-only", action="store_true")
     ap.add_argument("--force-events", action="store_true")
+    ap.add_argument("--pause-file", default="", help="wait before each events file and run while this file says "
+                                                     "'active' (checked every 30 s)")
     a = ap.parse_args()
     import sim_events
     pats = list(sim_events.PATTERNS) if a.patterns == "all" else a.patterns.split(",")
@@ -146,7 +170,7 @@ def main():
     for d in (ev_dir, runs_dir, scores_dir):
         os.makedirs(d, exist_ok=True)
     t0 = time.time()
-    jobs = [(f, p, ev_dir, phases, a.lever_arm, a.force_events) for f in flights for p in pats]
+    jobs = [(f, p, ev_dir, phases, a.lever_arm, a.force_events, a.pause_file) for f in flights for p in pats]
     events = []
     with cf.ProcessPoolExecutor(a.jobs) as ex:
         for path, counts, dt in ex.map(make_events, jobs):
@@ -160,8 +184,8 @@ def main():
         raise SystemExit(f"no harness at {a.binary}: build tools/raw_replay first")
     keep = set(a.keep_csv.split(",")) if a.keep_csv else set()
     extra = a.harness_args.split()
-    rjobs = [(e, m, arm, a.binary, runs_dir, scores_dir, keep, extra) for e in events for m in a.mags.split(",")
-             for arm in a.arms.split(",")]
+    rjobs = [(e, m, arm, a.binary, runs_dir, scores_dir, keep, extra, a.pause_file) for e in events
+             for m in a.mags.split(",") for arm in a.arms.split(",")]
     t1 = time.time()
     n = 0
     rcs = {}

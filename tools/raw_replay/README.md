@@ -462,6 +462,23 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   (the antenna on the IMU against 0.3 m up the nose).
 - **`--reject-persist-rr N`** (an experiment on the filter's own parameter, after the profile): the Doppler's refusal
   count before a satellite is let back in (the mosaic profile's 30 epochs, 3 s at 10 Hz).
+- **The turning body** (`RawGnssShadow::Config`, off by default; a `RAW_REPLAY_ROT` build, on unless the tree is
+  older than exp/v9-robust): the antenna's offset from the IMU is never measured before a flight, and the sim puts
+  it 0.3 m up the nose, which at the drogue's snatch (5 rad/s) moves 1.5 m/s against the IMU. `--rot-lever-axial-m A
+  --rot-lever-radial-m R` give every Doppler, in quadrature, the most such an antenna can move:
+  A x the rate across the nose + R x the whole rate, both the gyro less its bias at its largest since the epoch
+  before (`RawGnssShadow::rotLeverSigma`; `R` alone is the isotropic bound |omega| r). `--att-hold-rate W
+  --att-hold-s S` hold GNSS off the attitude and the gyro bias (the unaided twin's mask) for every epoch whose rate
+  across the nose reached W rad/s and for S s after one; a roll alone never holds it. The events JSON's `rot` gives
+  the settings, the largest allowance taken and the epochs held. The firmware's switches are config.h's
+  `RAW_ROT_LEVER_*` and `RAW_ATT_HOLD_*` (mosaic only, 0: off).
+- **`sim_compare.py BASE NAME=EXP ...`** sets experiment grids (each a `sim_grid.py --arms design --harness-args
+  "..."` run into its own OUT) beside the base grid's design and unaided twin, flight by flight: the phase bars per
+  pattern (pooled over the informative magnetometer arms and over all of them), the worst excess, the deployment's
+  first 3 s, the pitch near apogee and the quorum (early calls and raw votes, latency, vz at apogee, guard latches).
+  Every arm is judged against today's twin.
+- **`sim_grid.py --pause-file FILE`**: before each events file and each run the workers wait, checking every 30 s,
+  while FILE says "active" (a bench rig's timing run needs the machine quiet).
 
 A run takes 0.2-0.6 s (about 70 s of flight, 16 satellites fused an epoch at 10 Hz, ~9 capped out, and the truth's
 quorum beside it); an events file 7-10 s; the whole grid (384 events files, 6912 runs in three arms) about 20

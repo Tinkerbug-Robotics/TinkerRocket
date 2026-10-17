@@ -22,7 +22,8 @@ endif()
 # has; the defaults are this tree's (the design flown since #1637). For an older tree: RAW_REPLAY_OLD=ON before the
 # receiver profiles and the carrier (the rig's r20-r26 code, aef947c5), RAW_REPLAY_VCHECK=OFF before the vertical
 # check (fc/gnss-heading-fuse 7966f2cb), RAW_REPLAY_LATCH=OFF before its latch (4755f128), RAW_REPLAY_MOSAIC=OFF
-# before the mosaic-G5's decoders, the stage's addEphemeris and the unaided switch (fc/v9-raw-primary). DYNMEM and
+# before the mosaic-G5's decoders, the stage's addEphemeris and the unaided switch (fc/v9-raw-primary), RAW_REPLAY_ROT=OFF
+# before the turning body's allowances (exp/v9-robust). DYNMEM and
 # FITGATE are experiments the firmware does not carry: build them against a copy with experiments/*.patch applied
 # (README.md).
 set(SRC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." CACHE PATH "the tree whose firmware sources are compiled")
@@ -32,9 +33,14 @@ option(RAW_REPLAY_DYNMEM "the firmware tree has the Doppler's settling (rr_dyn_t
 option(RAW_REPLAY_LATCH "the firmware tree has the vertical check's latch (vert_release_mps)" ON)
 option(RAW_REPLAY_FITGATE "the firmware tree has the Dopplers' fit gate (rr_fit_gate: experiments/doppler_fit_gate.patch)" OFF)
 option(RAW_REPLAY_MOSAIC "the firmware tree has the mosaic-G5 path (SBF decoders, addEphemeris, att_gnss_off, the raw vote guard)" ON)
+option(RAW_REPLAY_ROT "the firmware tree has the turning body's allowances (rot_lever_*, att_hold_*: exp/v9-robust)" ON)
 if(RAW_REPLAY_OLD AND RAW_REPLAY_MOSAIC)
     message(STATUS "raw_replay: RAW_REPLAY_OLD turns RAW_REPLAY_MOSAIC off")
     set(RAW_REPLAY_MOSAIC OFF)
+endif()
+if(RAW_REPLAY_OLD AND RAW_REPLAY_ROT)
+    message(STATUS "raw_replay: RAW_REPLAY_OLD turns RAW_REPLAY_ROT off")
+    set(RAW_REPLAY_ROT OFF)
 endif()
 set(LIB_DIR "${SRC_ROOT}/tinkerrocket-idf/components")
 set(FC_MAIN "${SRC_ROOT}/tinkerrocket-idf/projects/flight_computer/main")
@@ -108,7 +114,8 @@ function(raw_replay_target name)
         RAW_REPLAY_DYNMEM=$<BOOL:${RAW_REPLAY_DYNMEM}>
         RAW_REPLAY_LATCH=$<BOOL:${RAW_REPLAY_LATCH}>
         RAW_REPLAY_FITGATE=$<BOOL:${RAW_REPLAY_FITGATE}>
-        RAW_REPLAY_MOSAIC=$<BOOL:${RAW_REPLAY_MOSAIC}>)
+        RAW_REPLAY_MOSAIC=$<BOOL:${RAW_REPLAY_MOSAIC}>
+        RAW_REPLAY_ROT=$<BOOL:${RAW_REPLAY_ROT}>)
 endfunction()
 
 raw_replay_target(raw_replay)

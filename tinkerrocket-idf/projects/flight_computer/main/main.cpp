@@ -4046,6 +4046,16 @@ static void startRawShadow()
     cfg.restore_seed_bias = true;
     cfg.level_on_fused_epochs = true;
     cfg.heading_gate = config::RAW_HEADING_GATE;
+    // the turning body: an antenna off the IMU by an offset nobody measured
+    // (config.h; 0 is off)
+    cfg.rot_lever_axial_m = config::RAW_ROT_LEVER_AXIAL_M;
+    cfg.rot_lever_radial_m = config::RAW_ROT_LEVER_RADIAL_M;
+    cfg.att_hold_rate_rps = config::RAW_ATT_HOLD_RATE_RPS;
+    cfg.att_hold_s = config::RAW_ATT_HOLD_S;
+    if (cfg.rot_lever_axial_m > 0.0 || cfg.rot_lever_radial_m > 0.0 || cfg.att_hold_rate_rps > 0.0)
+        ESP_LOGI(TAG, "[RAWGNSS] turning body: Dopplers allow %.2f m along the nose, %.2f m across; attitude held "
+                      "from %.1f rad/s across the nose and %.2f s after (0: off)",
+                 cfg.rot_lever_axial_m, cfg.rot_lever_radial_m, cfg.att_hold_rate_rps, cfg.att_hold_s);
 #ifdef TR_BENCH_BOOST_SCREEN_G
     // bench (the CPU ladder, P1): the boost screen's threshold, g -- 0 screens
     // every epoch before the apogee call, its worst cost

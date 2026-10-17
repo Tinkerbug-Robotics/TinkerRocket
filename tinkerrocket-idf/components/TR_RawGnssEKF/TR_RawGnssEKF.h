@@ -356,6 +356,15 @@ public:
     // and last update stand as they were. A copy of the filter takes it along.
     void setFusePr(bool on) { fuse_pr_ = on; }
     bool fusePr() const { return fuse_pr_; }
+    // GNSS held off the attitude and the gyro bias, for the updates until it
+    // is let go: what att_gnss_off does always, here for a while (the
+    // pseudorange and Doppler rows' gain on them masked, Joseph form; the
+    // carrier's update is not held). RawGnssShadow's hold while the body
+    // turns fast (Config::att_hold_rate_rps): an antenna off the IMU swings
+    // then, and its Dopplers would turn the attitude. A copy of the filter
+    // takes it along; init lets it go.
+    void setAttHold(bool on) { att_hold_ = on; }
+    bool attHold() const { return att_hold_; }
     // A flight restored after a reboot: the position's, velocity's and
     // attitude's 1-sigmas set to these on every axis (the attitude's a
     // rotation, rad), their cross-covariances dropped. A block whose sigma is
@@ -460,6 +469,14 @@ public:
     // the last take (floored at 0): what RawMeasBuilder::build takes.
     T gExcess() const { return g_excess_; }
     T takeGPeak();
+    // The body's rate (the gyro less its bias, rad/s) at its largest since
+    // the last take: its whole size, and its size across the nose (body y
+    // and z: the rate that swings an antenna on the nose's axis), each
+    // largest on its own; both zeroed by the take. Kept only while
+    // setTrackRate is on (RawGnssShadow's rotation allowance and hold), so a
+    // filter without them steps as it always has; off, both read 0.
+    void setTrackRate(bool on) { track_rate_ = on; }
+    void takeRatePeak(T& all, T& across);
     // The receiver in ECEF (m, m/s).
     void receiverEcef(double r[3], double v[3]) const;
     // The receiver age_s ago (s), ECEF: now taken back by the history, as an
@@ -565,9 +582,13 @@ private:
     double t_ = 0.0;
     bool   clk_ready_ = false;
     bool   fuse_pr_ = true;      // setFusePr
+    bool   att_hold_ = false;    // setAttHold
+    bool   track_rate_ = false;  // setTrackRate
     T      a_ned_[3] = {};
     T      g_excess_ = 0;
     T      g_peak_ = 0;
+    T      rate_peak_ = 0;       // takeRatePeak: the whole rate's largest,
+    T      rate_across_peak_ = 0;   //   and across the nose
     // screenRangeRates' vertical-check fit: its rows, scratch (kept off the task's stack)
     mutable double vfit_h_[RawEpoch::kMaxObs][4] = {};
     mutable double vfit_y_[RawEpoch::kMaxObs] = {};
