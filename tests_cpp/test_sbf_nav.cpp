@@ -35,6 +35,7 @@ namespace {
 
 constexpr int kNearWeek = 2440;
 constexpr double kDnu = -2e10;
+constexpr double kGalPairMaxS = 1800.0;   // Galileo issues at most this far apart get the tight bound
 
 // A block body written at the guide's absolute offsets (the body starts at 14).
 struct Body
@@ -525,9 +526,14 @@ TEST(SbfNavPrivateCapture, EveryNavBlockDecodes)
         ASSERT_TRUE(read) << path;
 
         // consecutive issues of one satellite agree at the middle of their toes
-        // (a swapped or mis-scaled field shows as kilometres)
-        double worst_m = 0.0;
-        int pairs = 0;
+        // (a swapped or mis-scaled field shows as kilometres). Galileo's I/NAV
+        // issues, 10 min apart, agree much closer, and that bound is what
+        // tells its C_ic from its C_is: the guide's text swaps the two words,
+        // the builder above writes them where the decoder reads them, and on
+        // the 10/16 captures the swapped reading leaves 0.58 and 0.98 m where
+        // the right one leaves 0.19 and 0.16 m
+        double worst_m = 0.0, worst_gal_m = 0.0;
+        int pairs = 0, gal_pairs = 0;
         for (const auto& kv : by_sat)
             for (size_t i = 1; i < kv.second.size(); i++)
             {
@@ -539,8 +545,14 @@ TEST(SbfNavPrivateCapture, EveryNavBlockDecodes)
                 double a[3], va[3], ca, c[3], vc[3], cc;
                 gps_sat_pos(&p, t, a, va, &ca);
                 gps_sat_pos(&q, t, c, vc, &cc);
-                worst_m = std::max(worst_m, std::hypot(std::hypot(a[0] - c[0], a[1] - c[1]), a[2] - c[2]));
+                const double d = std::hypot(std::hypot(a[0] - c[0], a[1] - c[1]), a[2] - c[2]);
+                worst_m = std::max(worst_m, d);
                 pairs++;
+                if (p.sys == GNSS_SYS_GAL && dt <= kGalPairMaxS)
+                {
+                    worst_gal_m = std::max(worst_gal_m, d);
+                    gal_pairs++;
+                }
             }
 
         const char* names[] = {"OK", "NOT_EPHEMERIS", "SHORT", "NO_WEEK", "BAD_SVID", "FNAV_SKIPPED", "GEO",
@@ -553,7 +565,8 @@ TEST(SbfNavPrivateCapture, EveryNavBlockDecodes)
             std::printf(";");
         }
         std::printf(" GPSIon %u ok %u bad; sats with an ephemeris %zu; consecutive issues %d, worst mid-toe "
-                    "difference %.2f m\n", ion_ok, ion_bad, by_sat.size(), pairs, worst_m);
+                    "difference %.2f m (Galileo within %.0f min: %d, %.2f m)\n", ion_ok, ion_bad, by_sat.size(),
+                    pairs, worst_m, kGalPairMaxS / 60.0, gal_pairs, worst_gal_m);
 
         EXPECT_EQ(scan.crc_fails, 0u);
         for (const auto& kv : st)
@@ -571,5 +584,6 @@ TEST(SbfNavPrivateCapture, EveryNavBlockDecodes)
         EXPECT_GT(ion_ok, 0u);
         EXPECT_EQ(ion_bad, 0u);
         if (pairs > 0) EXPECT_LT(worst_m, 5.0);
+        if (gal_pairs > 0) EXPECT_LT(worst_gal_m, 0.4);
     }
 }
