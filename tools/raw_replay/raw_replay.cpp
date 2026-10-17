@@ -100,6 +100,7 @@
 #include "TR_GeoMag.h"
 #include "TR_Orientation.h"
 #include "flight_votes.h"
+#include "gnss_only_arm.h"
 #include "mosaic_feed.h"
 #include "rinex_nav.h"
 #include "sim_epoch.h"
@@ -183,6 +184,13 @@ struct Args
     double relock_min_lock_ms = 0.0;
     double corrupt_at_s = -1.0e9;
     int corrupt_seed = 1;
+    // the corruption's size, drawn uniform in [lo, hi] with a random sign: the range rate (m/s) and the
+    // pseudorange (m); the defaults are c30's gross errors, which the gate refuses
+    double corrupt_rr_mps[2] = {30.0, 70.0};
+    double corrupt_pr_m[2] = {20.0, 40.0};
+    // the corrupted epoch is the first at or after corrupt_at_s on a whole GPS second (its pseudoranges fused there,
+    // pr_period_s 1 s), not the nearest
+    bool corrupt_pr_epoch = false;
     double fc_unit_us = 0.0;     // >0: an emulated FC clock -- each job unit costs this, so epochs slice as on the FC
     bool reanchor = false;       // at the launch tick, take the pad context's state and covariance as they were
     double no_line_ms = 25.0;    // a log with no clock line at all (no fix in it): an epoch's MCU time is its last
@@ -235,6 +243,8 @@ struct Args
     int reject_persist_rr = -1;      // RawGnssEKFParams::reject_persist_rr after the profile (-1: the profile's; the
                                      //   mosaic's 30 epochs, 3 s at 10 Hz): a Doppler refused this many epochs running
                                      //   is let back in
+    bool have_seed_gyro = false;     // --seed-gyro-dps: the cold start's gyro bias given, not the ring's mean
+    double seed_gyro_dps[3] = {};    //   (body FRD, deg/s): a log that begins while the payload turns
     int sat_cap = -1;                // TR_BENCH_RAW_SAT_CAP: the stage's satellites an epoch (-1: the profile's)
     double fuse_ms = -1.0;           // TR_BENCH_RAW_FUSE_MS: the fused epochs' period (-1: the profile's)
     std::string flight_state;        // the launch and landing: "log" (the ticks' flags), "quorum" (the quorum's own
@@ -245,6 +255,9 @@ struct Args
     int pad_zupt = -1;               // RawGnssShadow::Config::pad_zupt (-1: the firmware's, on)
     double gnss_only_from_s = 1.0e9; // a static log scored on GNSS: from this flight time on the ground, no pad ZUPT
                                      //   and no levelling (the IMU, GNSS and the barometer alone, as in flight)
+    int gnss_only_gate = 1;          //   and act's launch edge on the attitude (1, launch: gnss_only_arm.h), or the
+                                     //   ground's gate kept (0, ground)
+    std::string pvt_out;             // each receiver fix's height above the ellipsoid, for the pad height's score
     std::set<std::string> given;     // the options on the command line
 };
 
@@ -264,6 +277,7 @@ void usage()
                  "  [--guard-step-sigma X] [--relock-min-lock-ms X] [--guard-dop-thin-pass] [--guard-dv-vert-max X]\n"
                  "  [--guard-dv-vert-hold X]\n"
                  "  [--guard-tight-g X --guard-gate-chi2 X] [--cut-from-s X --cut-to-s Y] [--corrupt-at-s X --corrupt-seed N]\n"
+                 "  [--corrupt-rr-mps lo,hi] [--corrupt-pr-m lo,hi] [--corrupt-pr-epoch]\n"
                  "  [--boost-screen 0|1|2] [--boost-screen-g X] [--pad-sigma-fallback-deg X] [--mag-recent-s X]\n"
                  "  [--level-heading-free 0|1] [--mag-flags N] [--compare-sequential] [--no-apogee-flag]\n"
                  "  [--max-epoch-age-s X] [--vert-check-mps X] [--boost-screen-window-s X] [--rr-dyn-tau-s X]\n"
@@ -272,8 +286,10 @@ void usage()
                  "  the mosaic-G5 (a RAW_REPLAY_MOSAIC build): [--receiver lc86g|mosaic] [--cold-start] [--unaided]\n"
                  "  [--rinex FILE]... [--quorum] [--vote-guard 0|1] [--loop-hz X] [--seed-heading-deg X]\n"
                  "  [--seed-heading-error-deg X] [--reject-persist-rr N] [--truth-nav FILE]\n"
+                 "  [--seed-gyro-dps x,y,z]\n"
                  "  [--sat-cap N] [--fuse-ms X] [--flight-state log|quorum] [--time-tag-from-boot]\n"
-                 "  [--assume-finetime] [--pad-zupt 0|1] [--gnss-only-from-s X]\n");
+                 "  [--assume-finetime] [--pad-zupt 0|1] [--gnss-only-from-s X] [--gnss-only-gate launch|ground]\n"
+                 "  [--pvt-out FILE]\n");
 }
 
 bool parseArgs(int argc, char** argv, Args& a)
@@ -323,6 +339,17 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--cut-to-s") a.cut_to_s = std::atof(val());
         else if (k == "--corrupt-at-s") a.corrupt_at_s = std::atof(val());
         else if (k == "--corrupt-seed") a.corrupt_seed = std::atoi(val());
+        else if (k == "--corrupt-rr-mps")
+        {
+            if (std::sscanf(val(), "%lf,%lf", &a.corrupt_rr_mps[0], &a.corrupt_rr_mps[1]) != 2)
+                return false;
+        }
+        else if (k == "--corrupt-pr-m")
+        {
+            if (std::sscanf(val(), "%lf,%lf", &a.corrupt_pr_m[0], &a.corrupt_pr_m[1]) != 2)
+                return false;
+        }
+        else if (k == "--corrupt-pr-epoch") a.corrupt_pr_epoch = true;
         else if (k == "--guard-step-deg") a.step_deg = std::atof(val());
         else if (k == "--guard-step-sigma") a.step_sigma = std::atof(val());
         else if (k == "--guard-tight-g") a.tight_g = std::atof(val());
@@ -366,6 +393,11 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--seed-heading-error-deg") a.seed_heading_error_deg = std::atof(val());
         else if (k == "--reject-persist-rr") a.reject_persist_rr = std::atoi(val());
         else if (k == "--truth-nav") a.truth_nav = val();
+        else if (k == "--seed-gyro-dps")
+        {
+            a.have_seed_gyro = std::sscanf(val(), "%lf,%lf,%lf", &a.seed_gyro_dps[0], &a.seed_gyro_dps[1],
+                                           &a.seed_gyro_dps[2]) == 3;
+        }
         else if (k == "--sat-cap") a.sat_cap = std::atoi(val());
         else if (k == "--fuse-ms") a.fuse_ms = std::atof(val());
         else if (k == "--flight-state") a.flight_state = val();
@@ -373,6 +405,17 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--assume-finetime") a.assume_finetime = true;
         else if (k == "--pad-zupt") a.pad_zupt = std::atoi(val());
         else if (k == "--gnss-only-from-s") a.gnss_only_from_s = std::atof(val());
+        else if (k == "--gnss-only-gate")
+        {
+            const std::string g = val();
+            if (g == "launch")
+                a.gnss_only_gate = 1;
+            else if (g == "ground")
+                a.gnss_only_gate = 0;
+            else
+                return false;
+        }
+        else if (k == "--pvt-out") a.pvt_out = val();
         else if (k == "--acc-sub")
         {
             if (std::sscanf(val(), "%lf,%lf,%lf", &a.acc_sub[0], &a.acc_sub[1], &a.acc_sub[2]) != 3)
@@ -1907,6 +1950,28 @@ int main(int argc, char** argv)
                  "epochs,used_pr,used_rr,rej_pr,rej_rr,last_meas,age_ms,eph_sats,tracked,cr_built,cr_in,cr_used,"
                  "cr_half,cr_other,levelled,zupts,baro_fused,baro_held,mag_fused,hdg_fit_psi_deg,hdg_fit_sig_deg,"
                  "hdg_handoffs,stale\n");
+#if RAW_REPLAY_MOSAIC
+    // the epochs file (RUN.csv.epochs.csv, a mosaic or cold-start replay): one row per epoch the filter closed,
+    // whatever --every -- its measurements fused and refused, the longest any one satellite has been refused running
+    // (each kind's: the EKF's count times that kind's period), and the corrupted satellites built into it. The CSV's
+    // own epoch fields are the last epoch at each row it writes, and a row written --every N can miss one
+    FILE* epf = nullptr;
+    if (mosaic || cold)
+    {
+        epf = std::fopen((a.out + ".epochs.csv").c_str(), "w");
+        if (epf)
+            std::fprintf(epf, "t_s,t_close_s,tow_ms,used_pr,rej_pr,used_rr,rej_rr,nis_max,rej_run_pr_s,rej_run_rr_s,"
+                              "corrupt_rr,corrupt_pr\n");
+    }
+    // --pvt-out: each receiver fix with a solution, its height above the ellipsoid (the pad height's score)
+    FILE* pvtf = nullptr;
+    if (!a.pvt_out.empty())
+    {
+        pvtf = std::fopen(a.pvt_out.c_str(), "w");
+        if (pvtf)
+            std::fprintf(pvtf, "t_mcu_s,t_s,h_ell_m,undulation_m,mode,v_acc_m\n");
+    }
+#endif
 #if RAW_REPLAY_DIGEST
     FILE* dg = nullptr;
     uint32_t dg_step = 0;
@@ -2021,6 +2086,17 @@ int main(int argc, char** argv)
     double first_tow = -1.0;
     int epochs_decoded = 0, epochs_untimed = 0, eph_flight = 0, ages_matched = 0, epochs_line_fallback = 0;
     int epochs_cut = 0, epochs_corrupted_sats = 0;
+    // the corrupted epoch: its time of week (ms), flight time, and each satellite's errors (before the stage's
+    // cap: how many of them it built, and what the filter did with them, are the epochs file's)
+    struct CorruptSat
+    {
+        uint8_t sys, prn;
+        double d_rr, d_pr;
+    };
+    std::vector<CorruptSat> corrupt_sats;
+    int64_t corrupt_tow_ms = -1;
+    double corrupt_t_s = 0.0;
+    int corrupt_built_rr = -1, corrupt_built_pr = -1;   // of them, built into the epoch with a range rate, a code
     int rates_seen = 0, rates_relock_dropped = 0;
     bool corrupted = false;
     bool have_line_ever = false;
@@ -2054,17 +2130,30 @@ int main(int argc, char** argv)
     uint8_t last_flags = 0;
     int nonfinite_rows = 0, unhealthy_rows = 0;
 #if RAW_REPLAY_MOSAIC
+    rr::GnssOnlyArm gnss_only(a.gnss_only_from_s, a.gnss_only_gate == 1 ? rr::GnssOnlyArm::kGateLaunch
+                                                                        : rr::GnssOnlyArm::kGateGround);
     int mag_handed = 0;                    // magnetometer samples handed to the filter, and their sizes (uT)
     std::vector<double> mag_norms;
     uint32_t dop_applied = 0;              // the epochs the filter closed: Dopplers fused, refused, largest NIS
     std::vector<int> dop_used;
     std::vector<float> dop_nis;
     int dop_rejected = 0, dop_rejected_epochs = 0;
+    // the filter's stops (RawGnssShadow::stop: kStopGap, kStopNotFinite, kStopFar ...) as the rows saw them: a stop
+    // on the pad restarts from the seed within the step, so the running column never shows it
+    uint32_t stops_seen = 0;
+    std::vector<std::pair<double, int>> stop_at;
 #endif
 
     auto writeRow = [&](int64_t t_us) {
         const RawGnssEKF<float>& e = sh.filter();
         const RawGnssShadow::Stats& st = sh.stats();
+#if RAW_REPLAY_MOSAIC
+        if (st.stops != stops_seen)
+        {
+            stops_seen = st.stops;
+            stop_at.emplace_back(t_us * 1e-6 + a.t_base_s, static_cast<int>(st.last_stop));
+        }
+#endif
         const double* lla = e.lla();
         const float* v = e.velNed();
         const float* q = e.quat();
@@ -2148,6 +2237,12 @@ int main(int argc, char** argv)
         imu.gyro_x = n > 0 ? gm[0] / n * kR2D : 0.0;
         imu.gyro_y = n > 0 ? gm[1] / n * kR2D : 0.0;
         imu.gyro_z = n > 0 ? gm[2] / n * kR2D : 0.0;
+        if (a.have_seed_gyro)
+        {
+            imu.gyro_x = a.seed_gyro_dps[0];
+            imu.gyro_y = a.seed_gyro_dps[1];
+            imu.gyro_z = a.seed_gyro_dps[2];
+        }
         EkfGNSSDataLLA g;
         g.time_us = s.time_us;
         g.lat_rad = cold_lla[0];
@@ -2241,10 +2336,11 @@ int main(int argc, char** argv)
             setPad(cold_lla[0] * kR2D, cold_lla[1] * kR2D, cold_lla[2] + cold_sep);
         const double sinp = 2.0 * (static_cast<double>(q[0]) * q[2] - static_cast<double>(q[3]) * q[1]);
         std::fprintf(stderr, "cold start at T%+.3f s: pitch %.2f deg, heading guess %.1f deg, declination %s, "
-                             "field %.1f uT\n",
+                             "field %.1f uT, gyro bias %.3f/%.3f/%.3f deg/s (%s)\n",
                      ev_t_now * 1e-6 + a.t_base_s, std::asin(std::max(-1.0, std::min(1.0, sinp))) * kR2D,
                      a.seed_heading_deg, in.meta.count("declination_rad") ? "META's" : "WMM2025's",
-                     std::sqrt(ned[0] * ned[0] + ned[1] * ned[1] + ned[2] * ned[2]));
+                     std::sqrt(ned[0] * ned[0] + ned[1] * ned[1] + ned[2] * ned[2]), imu.gyro_x, imu.gyro_y,
+                     imu.gyro_z, a.have_seed_gyro ? "--seed-gyro-dps" : "the last 16 ticks' mean");
     };
 #endif
 
@@ -2277,9 +2373,17 @@ int main(int argc, char** argv)
                 epochs_cut++;
                 return;   // the receiver gave nothing
             }
-            if (!corrupted && std::fabs(t_gps - a.corrupt_at_s) < corrupt_tol_s)
+            // the corrupted epoch: the nearest to --corrupt-at-s, or with --corrupt-pr-epoch the first at or after
+            // it on a whole GPS second (the pseudoranges are fused on that epoch, pr_period_s 1 s)
+            const bool whole_s =
+                std::fabs(te.epoch.tow_s - std::floor(te.epoch.tow_s + 0.5)) < 1.0e-3;
+            const bool hit = a.corrupt_pr_epoch ? (t_gps >= a.corrupt_at_s - corrupt_tol_s && whole_s)
+                                                : std::fabs(t_gps - a.corrupt_at_s) < corrupt_tol_s;
+            if (!corrupted && hit)
             {
                 corrupted = true;
+                corrupt_tow_ms = static_cast<int64_t>(std::llround(std::fmod(te.epoch.tow_s, 604800.0) * 1000.0));
+                corrupt_t_s = t_gps;
                 uint32_t st = 2463534242u + static_cast<uint32_t>(a.corrupt_seed) * 7919u;
                 auto rnd = [&st]() {   // xorshift32: uniform in [0, 1)
                     st ^= st << 13;
@@ -2295,8 +2399,13 @@ int main(int argc, char** argv)
                 {
                     const int j = static_cast<int>(rnd() * nidx) % nidx;
                     RawObs& o = te.epoch.obs[idx[j]];
-                    o.rate_mps += (rnd() < 0.5 ? -1.0 : 1.0) * (30.0 + 40.0 * rnd());
-                    o.pr_m += (rnd() < 0.5 ? -1.0 : 1.0) * (20.0 + 20.0 * rnd());
+                    const double d_rr = (rnd() < 0.5 ? -1.0 : 1.0) *
+                                        (a.corrupt_rr_mps[0] + (a.corrupt_rr_mps[1] - a.corrupt_rr_mps[0]) * rnd());
+                    const double d_pr = (rnd() < 0.5 ? -1.0 : 1.0) *
+                                        (a.corrupt_pr_m[0] + (a.corrupt_pr_m[1] - a.corrupt_pr_m[0]) * rnd());
+                    o.rate_mps += d_rr;
+                    o.pr_m += d_pr;
+                    corrupt_sats.push_back({o.sys, o.prn, d_rr, d_pr});
                     idx[j] = idx[--nidx];
                     epochs_corrupted_sats++;
                 }
@@ -2387,7 +2496,25 @@ int main(int argc, char** argv)
                 ShadowNav nav;
                 sh.navState(nav);
                 if (stage.offer(gnss_task[k].e, nav, *slot))
+                {
+#if RAW_REPLAY_MOSAIC
+                    // the corrupted epoch as built: which of its corrupted satellites the stage's cap kept, with a
+                    // range rate and with a code
+                    if (corrupt_tow_ms >= 0 &&
+                        std::llround(std::fmod(slot->tow_s, 604800.0) * 1000.0) == corrupt_tow_ms)
+                    {
+                        corrupt_built_rr = corrupt_built_pr = 0;
+                        for (int i = 0; i < slot->n; ++i)
+                            for (const CorruptSat& c : corrupt_sats)
+                                if (slot->meas[i].sys == c.sys && slot->meas[i].prn == c.prn)
+                                {
+                                    corrupt_built_rr += slot->meas[i].has_rr ? 1 : 0;
+                                    corrupt_built_pr += slot->meas[i].has_pr ? 1 : 0;
+                                }
+                    }
+#endif
                     sh.onBuilt(*slot);
+                }
                 sh.onMeasStats(stage.stats());
             }
             gnss_task.erase(gnss_task.begin(), gnss_task.begin() + static_cast<long>(k));
@@ -2553,6 +2680,11 @@ int main(int argc, char** argv)
                             votes.onFix(f);
                         if (tvotesp)
                             tvotesp->onFix(f);
+                        if (pvtf && p.has_solution)
+                            std::fprintf(pvtf, "%.6f,%.6f,%.4f,%.4f,%u,%.2f\n", ev.t_us * 1e-6,
+                                         ev.t_us * 1e-6 + a.t_base_s, p.height_m,
+                                         static_cast<double>(p.undulation_m), static_cast<unsigned>(p.mode),
+                                         p.v_acc_cm == 65535 ? -1.0 : p.v_acc_cm * 0.01);
                         if (cold && !cold_pos_known && p.has_solution)
                         {
                             // the cold start's position: the receiver's first fix (above the geoid, and its
@@ -2653,17 +2785,45 @@ int main(int argc, char** argv)
                     s.flags = static_cast<uint8_t>(s.flags & ~kShadowApogee);
             }
 #endif
-#if !RAW_REPLAY_OLD
-            // --gnss-only-from-s: from then on the ground the filter holds its velocity and tilt by GNSS, the IMU and
-            // the barometer alone -- the pad's zero-velocity updates and its levelling hold a static log's velocity
-            // to millimetres a second whatever the receiver gives, so they would score the pad, not GNSS
+#if RAW_REPLAY_MOSAIC
+            // --gnss-only-from-s: from then on the ground the filter has the IMU, GNSS and the barometer, as in
+            // flight. The pad's zero-velocity updates and its levelling hold a static log's velocity to millimetres a
+            // second and its tilt to the accelerometer whatever the receiver gives (they would score the pad, not
+            // GNSS), so both are off; and act's launch edge opens the attitude's gate, which the ground's cos^4
+            // holds near shut on a payload standing nose up (gnss_only_arm.h; --gnss-only-gate ground keeps it)
+            if (gnss_only.asked())
+            {
+                const bool was_on = gnss_only.on();
+                const int launches0 = gnss_only.launches();
+                s.flags = gnss_only.tick(sh, ev.t_us * 1e-6 + a.t_base_s, ev.t_us * 1e-6, s.flags);
+                if (!was_on && gnss_only.on())
+                    std::fprintf(stderr, "GNSS only from T%+.3f s: no pad ZUPT, no levelling, %s\n",
+                                 ev.t_us * 1e-6 + a.t_base_s,
+                                 gnss_only.gate() == rr::GnssOnlyArm::kGateLaunch
+                                     ? "act's launch edge on the attitude"
+                                     : "the ground's attitude gate kept (--gnss-only-gate ground)");
+                if (gnss_only.launches() != launches0)
+                    std::fprintf(stderr, "GNSS only: the launch edge at T%+.3f s (start %u): %s, heading 1-sigma "
+                                         "%.0f deg, tilt floor %.1f deg\n",
+                                 ev.t_us * 1e-6 + a.t_base_s, sh.stats().starts,
+                                 gnss_only.priorDeg() < 0.0 ? "not act: the gate left the config's"
+                                 : sh.gate_full_                ? "the whole attitude's gate"
+                                                                : "the heading's gate",
+                                 gnss_only.priorDeg(), sh.cfg_.heading_launch_tilt_sigma_deg);
+            }
+#elif !RAW_REPLAY_OLD
+            // --gnss-only-from-s: from then on the ground no pad ZUPT and no levelling (the pad's zero-velocity
+            // updates and its levelling hold a static log's velocity to millimetres a second whatever the receiver
+            // gives). This build keeps the ground's attitude gate: cos^4 pitch, near shut on a payload standing
+            // nose up, so GNSS reaches the gyro bias but hardly the tilt (a RAW_REPLAY_MOSAIC build opens it)
             if (a.gnss_only_from_s < 1.0e8 && ev.t_us * 1e-6 + a.t_base_s >= a.gnss_only_from_s &&
                 !(s.flags & kShadowInFlight))
             {
                 if (sh.cfg_.pad_zupt)
                 {
                     sh.cfg_.pad_zupt = false;
-                    std::fprintf(stderr, "GNSS only from T%+.3f s: no pad ZUPT, no levelling\n",
+                    std::fprintf(stderr, "GNSS only from T%+.3f s: no pad ZUPT, no levelling (the ground's attitude "
+                                         "gate kept)\n",
                                  ev.t_us * 1e-6 + a.t_base_s);
                 }
                 s.flags = static_cast<uint8_t>(s.flags & ~kShadowLevel);
@@ -2677,7 +2837,11 @@ int main(int argc, char** argv)
             for (int i = 0; i < 3; ++i)
                 gyro_ring[gyro_n % 16][i] = s.gyro[i];
             gyro_n++;
-            if (cold && !seed_ready && cold_pos_known && (!cold_pos_meta || gyro_n >= 16))
+            // main.cpp seeds the gyro bias from its 16-tick ring, which a boot has filled long before the
+            // receiver's first fix; a log that begins after that fix (the 10/16-17 V9 logs, a few ms in) would
+            // otherwise seed from one or two ticks, 0.1 deg/s off on the ISM6's quantized means, and no static
+            // pad observes the bias about the vertical
+            if (cold && !seed_ready && cold_pos_known && (gyro_n >= 16 || a.have_seed_gyro))
             {
                 coldSeed(s, ev.t_us);
                 seed_ready = true;
@@ -2821,6 +2985,29 @@ int main(int argc, char** argv)
                     if (l.rejected_rr > 0)
                         dop_rejected_epochs++;
                     dop_nis.push_back(l.nis_max);
+                    if (epf)
+                    {
+                        // the longest any one satellite has been refused running, each kind's: the EKF's own count
+                        // (rejects_, which reject_persist lets back in at) times that kind's period -- an epoch the
+                        // stage left the satellite out of neither counts nor ends the run
+                        const double te = sh.built_.mcu_us * 1e-6 + a.t_base_s;
+                        const double period[2] = {sh.cfg_.pr_period_s > 0.0 ? sh.cfg_.pr_period_s
+                                                                            : fusedEpochPeriod(rx),
+                                                  fusedEpochPeriod(rx)};
+                        int run_n[2] = {0, 0};
+                        for (int sy = 0; sy < 3; ++sy)
+                            for (int pn = 0; pn < 64; ++pn)
+                                for (int kd = 0; kd < 2; ++kd)
+                                    run_n[kd] = std::max(run_n[kd], static_cast<int>(sh.ekf_.rejects_[sy][pn][kd]));
+                        const double run_s[2] = {run_n[0] * period[0], run_n[1] * period[1]};
+                        const int64_t tow_ms = static_cast<int64_t>(sh.stats().last_tow_ms);
+                        const bool is_corrupt = corrupt_tow_ms >= 0 && tow_ms == corrupt_tow_ms;
+                        std::fprintf(epf, "%.6f,%.6f,%lld,%d,%d,%d,%d,%.3f,%.3f,%.3f,%d,%d\n", te,
+                                     ev.t_us * 1e-6 + a.t_base_s, static_cast<long long>(tow_ms), l.used_pr,
+                                     l.rejected_pr, l.used_rr, l.rejected_rr, static_cast<double>(l.nis_max), run_s[0],
+                                     run_s[1], is_corrupt ? std::max(corrupt_built_rr, 0) : 0,
+                                     is_corrupt ? std::max(corrupt_built_pr, 0) : 0);
+                    }
                 }
             }
 #endif
@@ -3065,6 +3252,12 @@ int main(int argc, char** argv)
         }
     }
     std::fclose(out);
+#if RAW_REPLAY_MOSAIC
+    if (epf)
+        std::fclose(epf);
+    if (pvtf)
+        std::fclose(pvtf);
+#endif
 #if RAW_REPLAY_DIGEST
     if (dg)
     {
@@ -3159,6 +3352,38 @@ int main(int argc, char** argv)
                                      "\"below_cn0\": %u, \"below_mask\": %u, \"meas_built\": %u}, ",
                                  sim_counts.epochs, sim_counts.built, sim_counts.eph_standins, sim_counts.below_cn0,
                                  sim_counts.below_mask, sim_counts.meas_built);
+                {
+                    // each stop at the first row after it (flight time) with RawGnssShadow's reason: 1 sim,
+                    // 2 gap, 3 not finite, 4 far from the seed on the pad
+                    std::string so;
+                    for (size_t i = 0; i < stop_at.size(); ++i)
+                        so += (i ? ", " : "") + std::string("[") + std::to_string(stop_at[i].first) + ", " +
+                              std::to_string(stop_at[i].second) + "]";
+                    std::fprintf(ej, "\"filter\": {\"starts\": %u, \"stops\": %u, \"last_stop\": %u, \"stop_at\": [%s]}, ",
+                                 sh.stats().starts, sh.stats().stops, static_cast<unsigned>(sh.stats().last_stop),
+                                 so.c_str());
+                }
+                if (gnss_only.asked())
+                    std::fprintf(ej, "\"gnss_only\": {\"from_s\": %.3f, \"gate\": \"%s\", \"launches\": %d, "
+                                     "\"prior_deg\": %.1f, \"tilt_floor_deg\": %.2f}, ",
+                                 a.gnss_only_from_s,
+                                 gnss_only.gate() == rr::GnssOnlyArm::kGateLaunch ? "launch" : "ground",
+                                 gnss_only.launches(), gnss_only.priorDeg(), sh.cfg_.heading_launch_tilt_sigma_deg);
+                if (a.given.count("--corrupt-at-s"))
+                {
+                    // the corrupted epoch: its satellites' errors as injected, and how many of them the stage built
+                    // (the cap keeps 16 of the sky); what the filter did with them is the epochs file's
+                    std::string cs;
+                    for (size_t i = 0; i < corrupt_sats.size(); ++i)
+                        cs += (i ? ", " : "") + std::string("[") + std::to_string(corrupt_sats[i].sys) + ", " +
+                              std::to_string(corrupt_sats[i].prn) + ", " + std::to_string(corrupt_sats[i].d_rr) +
+                              ", " + std::to_string(corrupt_sats[i].d_pr) + "]";
+                    std::fprintf(ej, "\"corrupt\": {\"t_s\": %s, \"tow_ms\": %lld, \"pr_epoch_asked\": %d, "
+                                     "\"sats\": [%s], \"built_rr\": %d, \"built_pr\": %d}, ",
+                                 corrupt_tow_ms >= 0 ? std::to_string(corrupt_t_s).c_str() : "null",
+                                 static_cast<long long>(corrupt_tow_ms), a.corrupt_pr_epoch ? 1 : 0, cs.c_str(),
+                                 corrupt_built_rr, corrupt_built_pr);
+                }
                 std::fprintf(ej, "\"stage\": {\"epochs\": %u, \"untimed\": %u, \"idle\": %u, \"built\": %u, "
                                  "\"eph_added\": %u, \"eph_bad\": %u, \"eph_sats\": %d, \"tracked\": %d, "
                                  "\"tracked_no_eph\": %d, \"capped_out\": %u}, ",

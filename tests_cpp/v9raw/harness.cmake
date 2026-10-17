@@ -88,3 +88,41 @@ target_include_directories(test_raw_replay_votes PRIVATE
 )
 target_link_libraries(test_raw_replay_votes GTest::gtest_main)
 gtest_discover_tests(test_raw_replay_votes)
+
+# ---------- test_raw_replay_gnss_only ----------
+# The harness's GNSS-only arm (gnss_only_arm.h): no pad ZUPT and no levelling
+# from its time on the ground, and act's launch edge on the attitude -- the
+# flight gate, the heading prior, the tilt floor -- at the switch and after
+# each restart, as in flight; the ground's cos^4 gate only when asked.
+add_executable(test_raw_replay_gnss_only test_raw_replay_gnss_only.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/RawGnssShadow.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/RawGnssMeasStage.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/PadSurvey.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/SatJumpCheck.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/FixCheck.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/EphemerisFrames.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/HeadingFit.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssCarrier.cpp
+    ${LIB_DIR}/TR_GNSSRaw/eph.c
+    ${LIB_DIR}/TR_GNSSRaw/atmo.c
+    ${LIB_DIR}/TR_GNSSRaw/RtcmEphemeris.cpp
+    ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasCarrier.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Lc86Parser.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
+)
+target_include_directories(test_raw_replay_gnss_only PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${RAW_REPLAY_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RawGnssShadow
+    ${LIB_DIR}/TR_RawGnssEKF
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_raw_replay_gnss_only GTest::gtest_main)
+gtest_discover_tests(test_raw_replay_gnss_only)

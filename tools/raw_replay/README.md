@@ -74,9 +74,16 @@ Experiments that change no firmware (each one a switch the harness throws on the
 | `--guard-gate-chi2 X --guard-tight-g G` | (c) the innovation gate set to chi2 X while the IMU peak is above 1 + G g |
 | `--cut-from-s X --cut-to-s Y` | a synthesized dropout: every epoch whose GPS time is in [X, Y) of flight time is dropped |
 | `--corrupt-at-s X --corrupt-seed N` | the epoch nearest X corrupted like c30's T+1: on 3 satellites the range rate off by 30-70 m/s and the pseudorange by 20-40 m |
+| `--corrupt-rr-mps lo,hi`, `--corrupt-pr-m lo,hi` | the corruption's sizes instead (each drawn uniform in [lo, hi] with a random sign): under the gate, say, `0.05,0.12` and `5,10` on the mosaic |
+| `--corrupt-pr-epoch` | the first epoch at or after X on a whole GPS second instead (on a 10 Hz receiver its pseudoranges are fused there, `pr_period_s` 1 s) |
 
 A sidecar `<csv>.events.json` records the guards' counts, the apogee votes the run's own estimate gives, and when the
-gate switched.
+gate switched. A mosaic or cold-start replay also writes `<csv>.epochs.csv`: one row per epoch the filter closed,
+whatever `--every` (its time, the codes and Dopplers used and refused, the largest NIS, the longest any one satellite
+has been refused running for each kind -- the EKF's own count, `rejects_`, which `reject_persist` lets back in at,
+times that kind's period: 1 s for a code, 0.1 s for a Doppler on the mosaic -- and the corrupted satellites built
+into it). `--pvt-out FILE` writes each
+receiver fix's height above the ellipsoid, for `score_static.py --pvt`; it and the CSV stay out of the repo.
 
 `extract.py --borrow OTHER.events` takes the pad context (covariance, ephemerides, ionosphere, IMU biases) from
 another run of the same replay for a log whose OC image dropped records 0x9B-0x9F (r16, r18, r19).
@@ -171,7 +178,10 @@ The SBF blocks go through `mosaic_feed.h`, which does what the driver (`rawMeasE
 The cut, corrupt and relock faults (`--cut-from-s`, `--corrupt-at-s`, `--relock-min-lock-ms`) apply to the decoded
 epochs as for the LC86G. On a mosaic or cold-start replay they are keyed on flight time (the epoch's MCU time, its
 arrival where untimed, plus `t_base_s`: the CSV's `t_s` and the quorum's frame), and the corrupted epoch is the one
-within half a fused period of `--corrupt-at-s`. `--truth-t0-tow` keys them on the GPS time of week less T+0's
+within half a fused period of `--corrupt-at-s` (with `--corrupt-pr-epoch`, the first on a whole second at or after
+it). The corruption lands before the stage's satellite cap, so some of its satellites may never be built: the events
+JSON's `corrupt` gives each one's errors and how many the stage built, and the epochs file says what the filter did
+with that epoch. `--truth-t0-tow` keys them on the GPS time of week less T+0's
 instead, as the Beetle's rig runs are (the rig scenario's by default). A cut that cuts no epoch or a corruption that
 hits no satellite is a warning on every run and fails a mosaic or cold-start run with exit status 3 (the events
 JSON's `cut` and `corrupted_sats`, and `faults_clock`, say what happened). The LC86G's 1 Hz lock-history seeding and
@@ -181,7 +191,12 @@ the A-line age matching apply only to a restored LC86G start.
 
 The filter starts on the pad as the mosaic-only image starts it, through `RawNavAdapter` as main.cpp does: at the
 first IMU tick once the receiver's position is known (META `seed_lla` "lat_deg lon_deg h", the height above the
-geoid, else the first PVTGeodetic with a solution), `init()` with that position and the last 16 ticks' mean gyro,
+geoid, else the first PVTGeodetic with a solution) and 16 ticks are in the gyro ring, `init()` with that position and
+the last 16 ticks' mean gyro (main.cpp's `initGyroRing`, which a boot fills long before the receiver's first fix: a
+log that begins after that fix, as the 10/16-17 V9 logs do a few ms in, would otherwise seed the gyro bias from one
+or two of the ISM6's quantized tick means, 0.13 deg/s off about the rocket's axis on the cone-on log, and nothing on a
+still pad observes that bias without the magnetometer; `--seed-gyro-dps x,y,z`, body FRD, gives the seed instead,
+for a log that begins while the payload turns: the cone-off spin-rig log),
 `setQuaternion()` from the tick's accelerometer and the pad heading guess (`quatFromAccelHeading`,
 `--seed-heading-deg`, `config::PAD_HEADING_DEG` 0; META `seed_quat` "w x y z" instead), `setDeclination()` and
 `setMagReference()` from WMM2025 at the pad (`TR_GeoMag`, on META `decimal_year` or the first fix's date; META
@@ -281,11 +296,14 @@ receiver velocity, so their quorum has three voters unless re-extracted with `V`
   against gravity, and between them they hold a static log's velocity to millimetres a second whatever the receiver
   gives: on the 10/16 outdoor log, the log's own nav (one satellite with an ephemeris) scores 0.006/0.002/0.006 m/s
   rms, better than RINEX's nineteen (0.018/0.015/0.020). `--gnss-only-from-s T` stops both from flight time T on the
-  ground (the IMU, GNSS and the barometer alone, as in flight), and then the two separate: 0.89/0.24/0.025 m/s with
-  the one satellite, 0.021/0.016/0.021 with RINEX (from 20 s into the log, scored from 2 s later). Score G3's static
-  velocity from such a run, with the `doppler` counts beside it. (`--pad-zupt 0` turns the ZUPT off from the start
-  but keeps the levelling, which on a static pad still holds the horizontal velocity: 0.001/0.005/0.025 with the one
-  satellite.)
+  ground and takes act's launch edge on the attitude there (`gnss_only_arm.h`: the flight gate, the heading prior,
+  the tilt floor, again after any restart): the IMU, GNSS and the barometer alone, as in flight. The ground's own
+  gate is cos^4 pitch, about 1e-7 on a payload standing nose up, and it scales only the attitude's gain, not the
+  gyro bias's: an arm that kept it (`--gnss-only-gate ground`, E4's first run) left the tilt to the gyro alone while
+  GNSS still moved the bias. Then the two separate: 0.91/0.21/0.025 m/s with the one satellite, 0.018/0.015/0.021
+  with RINEX (from 20 s into the log, scored from 2 s later). Score G3's static velocity from such a run, with the
+  `doppler` counts beside it. (`--pad-zupt 0` turns the ZUPT off from the start but keeps the levelling, which on a
+  static pad still holds the horizontal velocity: 0.001/0.005/0.025 with the one satellite.)
 - **Heading.** With the antenna on the IMU (r = 0) a still receiver says nothing about heading, so on a static pad
   only the magnetometer can, and on the 10/16 logs it never does: they read |B| 70-73 uT against the model's 50.5
   (uncalibrated), so every sample fails the field's size gate and none is fused. The heading there is the seed's and
@@ -294,6 +312,49 @@ receiver velocity, so their quorum has three voters unless re-extracted with `V`
   logs as recorded, and seeding from the log's quaternion (`--seed-quat-from-log`) would pass the heading check by
   construction. They become testable on a log whose magnetometer passes the filter's gates (after the stored
   calibration, G10), or on the spin rig's turns scored against the rig's own angle, not the log's GpsInsEKF.
+
+### Scoring a static or spin-rig log (`score_static.py`)
+
+```
+tools/raw_replay/score_static.py RUN.csv --from-s T0 [--to-s T1] [--log OC_LOG] [--rig RIG.npz] [--events EVENTS] \
+    [--pvt PVT.csv] [--ref NOFAULT.csv (--cut-from-s A --cut-to-s B | --corrupt-at-s T)] [--json OUT.json]
+```
+
+Gate G3's numbers from one run, distances and statistics only (no position or height is printed or written): the
+filter's stops in [T0, T1] (the whole run's beside them: a stop after the window is not G3's), non-finite and
+unhealthy rows; the velocity's mean and rms per axis in [T0, T1]; per closed epoch (from the epochs file where there
+is one) the satellites tracked and with an ephemeris, the Dopplers and pseudoranges used and refused, the
+measurement rows the update worked (the CPU counts) and the longest any one satellite was refused; with `--log`,
+tilt (the angle between the two filters' gravity directions) and heading (the twist about NED down, as is and from
+T0) against the log's own flight filter (NonSensor q, the auto image's GpsInsEKF; its NonSensor is cached beside the
+run); with `--events`, tilt against the accelerometer's own 1 s means (its bias in them), for the run and the log's
+filter -- on a still pad GpsInsEKF is no tilt truth either, its split of tilt and accelerometer bias being its own;
+with `--rig`, board +Z's bearing against the spin rig's own (an npz of t_mcu_s and bearing_deg, deg true); with
+`--pvt`, the raw filter's height against the receiver's mean; each whole-millisecond step of the receiver clock with
+the velocity across it (the epoch before and after, and the 1 s means, beside the same at every other epoch) and
+each satellite's refusals within 5 s; and with `--ref`, the velocity, position and tilt against the no-fault run 2 s
+after GNSS returns (one sample, and the mean over the next second), paired step for step so a fault run written
+`--every 10` pairs exactly, with the pad ZUPTs around the fault and, for a corrupted epoch, how many of its
+satellites the stage built and the filter refused.
+
+What the 10/16-17 V9 logs showed (E4, revised after the 10/17 review; the report and its runner are in
+`gnss-attitude-study/v9-mosaic-filter-plan/evidence/real-logs/`, outside the repo):
+
+- No stop and no non-finite state in any scored window of an as-flown or RINEX run, faults included. Static velocity
+  holds 0.014-0.025 m/s rms per axis as flown, and 0.018-0.025 GNSS-only with the flight's gate (aided).
+- Tilt against the log's GpsInsEKF: 0.36-0.40 deg p95 as flown on the two spin-rig logs. Outdoors the raw filter
+  made a 0.7 deg excursion 30-40 s after its start (tilt and body-z accelerometer bias together, with or without
+  GNSS), not slow convergence. On 10/17 GpsInsEKF itself sits 0.56 deg off the accelerometer's gravity direction
+  from the first sample: on a still pad it is no tilt truth, so `--events` scores against the accelerometer too.
+- On the turning spin rig GNSS moves the gyro's bias about the rocket's axis within two minutes and the heading
+  integrates it: with the rig's true heading at the start, 137-143 deg p95 off over 25 min GNSS-only (15-80 as
+  flown on the pad, where the ground's gate does not scale the bias's gain), while its heading sigma says 6-23 deg;
+  the unaided twin stays within 4-8.
+- The -1 ms clock jump steps the velocity 0.072 m/s epoch to epoch (the bar is 0.05; the spread at every other epoch
+  is 0.103 p95) and 0.006 as 1 s means (0.011 p95 elsewhere); no satellite is refused.
+- 3 s cuts: as flown on the rig, 1 of 21 over 0.1 m/s 2 s after GNSS returns; GNSS-only, cone on 0 of 10, cone off 6
+  of 11 (at most 0.42). Gross corrupted Dopplers are refused at the gate (or the vertical check drops the epoch);
+  gross codes are fused on pseudorange epochs (0.3 m of position); errors under the gate leave nothing measurable.
 
 ### What it does not reproduce
 
@@ -314,7 +375,7 @@ receiver velocity, so their quorum has three voters unless re-extracted with `V`
 - The 10/16 outdoor log (60 s, 3788 Hz IMU): 599 epochs at 10 Hz, all timed (598 with a PVT's bias; ReceiverTime
   FINETIME, a K line a second), no non-finite row, no stop; the log's own nav gives one satellite an ephemeris
   (Galileo), RINEX all 19 tracked. With RINEX the static velocity is 0.015-0.020 m/s rms per axis after 20 s with
-  the pad's ZUPT and levelling on, and 0.021/0.016/0.021 on GNSS alone (`--gnss-only-from-s`, above); 16 satellites
+  the pad's ZUPT and levelling on, and 0.018/0.015/0.021 on GNSS alone (`--gnss-only-from-s`, above); 16 satellites
   fused an epoch (the cap). Its magnetometer is never fused (above).
 - The 10/16 cone-off spin-rig log (26 min): Galileo-only from its own nav (no download), but with each preloaded
   issue filed when a receiver could have it, only 2 satellites have an ephemeris at the start and the filter is
