@@ -1,6 +1,7 @@
 # Spin rig controller, V1
 
-A 4-layer, 110 x 80 mm board that runs the StepperOnline closed-loop NEMA 23 kit on the rig's 6S pack.
+A 4-layer, 67 x 90 mm board that runs the StepperOnline closed-loop NEMA 23 kit on the rig's 6S pack. It stacks on
+the rig's Raspberry Pi 4B like a HAT (see "Stacking on the Pi").
 
 - **Kit:** 1-CL57T-S20-V41, a 23HS30-5004D-E1000 motor (2 N·m) with a CL57T-V41 driver.
 - **What it does:**
@@ -9,7 +10,7 @@ A 4-layer, 110 x 80 mm board that runs the StepperOnline closed-loop NEMA 23 kit
   - a regen clamp;
   - driver current and voltage monitoring;
   - the CL57T step/direction/enable interface;
-  - an encoder tap;
+  - an encoder pass-through, read on the way;
   - the index sensor;
   - the mosaic-go's PPS and EventA.
 - **What it replaces in the V2 design (section 9):**
@@ -20,17 +21,18 @@ A 4-layer, 110 x 80 mm board that runs the StepperOnline closed-loop NEMA 23 kit
   - the proto board.
 
 **Status (2026-10-16):** the schematic and board are generated and checked.
+- **This revision** (after the first review): the pack comes in on an XT60, and every lead to the driver plugs into one of the CL57T's own 3.5 mm pluggable headers, in the driver's pin order. The encoder lead passes through the board, and the small signal connectors are through-hole JST PH (see "Leads to the driver"). The board stacks on the Pi 4B (see "Stacking on the Pi").
 - **ERC:** 0 errors. Four warnings remain, all from the shared library's SP0503BAHTG symbol (its pins are typed "unspecified"; the Beetle uses the same symbol).
-- **The repo's parity gate** (`tools/check_board_parity.py`): 170 board symbols, all in the layout and linked by path.
-- **DRC:** 0 errors, 0 unconnected items, schematic parity clean. Two warnings remain: the USB-C connector's own silkscreen runs past the board edge, as the connector does.
-- **Routing:** an autorouter (Freerouting 2.4.1) did most of it. I pre-routed the parts that matter (Kelvin sense, USB-C pairing, 5 V feeders, driver feed), closed the router's leftovers with a small router of my own, and checked everything against KiCad's DRC. It is not hand-tuned (see "Before ordering").
+- **The repo's parity gate** (`tools/check_board_parity.py`): 167 board symbols, all in the layout and linked by path.
+- **DRC:** 0 errors, 0 warnings, 0 unconnected items, schematic parity clean.
+- **Routing:** an autorouter (Freerouting 2.4.1) did most of it. I pre-routed the parts that matter (Kelvin sense, USB-C pairing, the crystal, the buck's small-signal runs, the ESP32's bottom fan-out, the driver feed and the Pi's 5 V feed), closed the router's leftovers with a small router of my own and a few planned fixes (`gen/hand_fixes.py`), and checked everything against KiCad's DRC. It is not hand-tuned (see "Before ordering").
 - **Nothing has been ordered.**
 
 Files:
 - `spin-rig-controller.kicad_pro`: the KiCad 10 project.
 - `.kicad_sch` files: a root sheet plus `power`, `mcu` and `io` sheets.
 - `.kicad_pcb`: the board.
-- `FABRICATION-NOTES.md`: the order notes.
+- `FABRICATION-NOTES.md`: the order notes, and a step-by-step guide to ordering assembled boards from JLC.
 - **Libraries:** the repo's shared ones (`../symbols/Custom.kicad_sym`, `../footprints/Footprints.pretty`, `../3dmodels`). This board added three symbols (TLV3011, UCC27517, AO4264E) and one footprint (R_0805_Kelvin) to them.
 - `gerbers/` (ignored by git), written by `gen/make_fab.py`:
   - a review copy of the gerbers;
@@ -48,20 +50,34 @@ Files:
 - **USB-C:** the Beetle's J6 circuit: GCT USB4110GFA, SP0503BAHTG ESD array, 5.1 kΩ CC pull-downs, 22 Ω in D+/D-. The S3's own USB serves both flashing and the data link to the Pi.
 - **The 2 mΩ PA0805 shunt** (the Beetle's R72), here Kelvin-sensed.
 - **Connector families:**
-  - JST VH for power, as the Mantis battery connector;
-  - JST PH SM4 for signals and SH for I2C, as the Beetle and Mantis use them;
-  - the rocket boards' 2-pin power convention: pin 1 GND, pin 2 positive.
-- **The Pi header** is the SKR Pico's P5, pin for pin (5 V, 5 V, GND, RX, TX to Pi pins 2, 4, 6, 8, 10), so the V1 harness plugs straight on.
+  - JST PH (here the through-hole B?B-PH-K) for signals and SH for I2C, as the Beetle and Mantis use them;
+  - JST VH for the brake resistor, as the Mantis battery connector;
+  - the rocket boards' 2-pin power convention, pin 1 GND and pin 2 positive, on the XT60 and 5 V AUX.
+- **New here:** an XT60 for the pack, as the rig's pack and anti-spark switch use, and Phoenix MC 1,5 3.5 mm pluggable headers for the driver. Those follow the driver's pin order, not the convention.
+- **The Pi link** uses the same Pi pins as the SKR Pico's P5 (5 V on 2 and 4, ground, the UART on 8 and 10), now through a socket that stacks on the Pi (below).
 
 The power stage is new: the rocket boards run from 1S/2S and none of their regulators take 25 V.
+
+## Stacking on the Pi
+
+The board sits on the Pi 4B like a HAT, on the standard 11 mm spacing.
+- **The socket:** J202 is a 2x20, 8.5 mm female socket on the underside, on the Pi's header. It carries 5 V in on pins 2 and 4, the Pi's UART0 on pins 8 (TXD) and 10 (RXD) through R211/R212, and all eight ground pins. The Pi's 3.3 V pins and its other GPIOs are left unconnected.
+- **Mounting:** M2.5 x 11 mm standoffs at H3, H5, H6 and H7, the Pi's 58 x 49 mm pattern.
+- **Orientation:** the Pi is turned so its USB and Ethernet end sticks out past the board's bottom edge, which sits on the HAT's 65 mm line. Its GPIO edge runs down x = 56 and its SD-card end is at y = 25.
+- **The overhang:** the board is 67 x 90 mm over the Pi's 56 x 65 mm (its port end excluded). A 25 mm strip at the top (the XT60, the input stage, encoder-out) and an 11 mm strip down the right (the driver's control and encoder-in headers, index and GNSS) overhang it. Support the top strip when plugging in the pack.
+- **USB:** J201 is on the left edge beside the ESP32. A short USB-C to USB-A lead runs down to the Pi's ports. Its plug sits over the Pi's second micro-HDMI port, which the rig (a headless Pi) doesn't use.
+- **No side-entry connector faces the bottom edge,** where the Pi's USB and Ethernet stand.
+- **Clearances over the Pi:** only this board's through-hole pins reach down toward the Pi, and they stick out less than 2.5 mm into the 11 mm gap. J103's land near the Pi's USB-C, J102's over a micro-HDMI port and J104's near the back of its USB block. Those are all under 6 mm tall, so the pins clear them by about 3 mm. The XT60 and the driver headers sit on the overhang, past the Pi. None of the Pi's tall parts is under the board: its USB and Ethernet are past the edge, and the PoE header has nothing above it. Trim the pins flush if a Pi case or heatsink is taller.
+- **Power:** the Pi runs from this board's 5.13 V through F103 (4 A) and a 2 mm track to its header, which bypasses the Pi's own USB-C input. **Don't plug a supply into the Pi's USB-C while it's stacked:** there is no ideal diode, so the two 5 V sources would fight.
+- **Rotor balance:** the V2 layout put the Pi and the controller opposite each other on the rotor. Stacked, they are one mass, so the rotor layout and its counterweights change.
 
 ## Power
 
 **Input and the driver feed (sheet `power`):**
-- J101 takes the pack, after the anti-spark switch and the inline 10 A fuse.
+- J101 (Amass XT60PW-M, right angle, on the top edge) takes the pack, after the anti-spark switch and the inline 10 A fuse.
 - Q101 (NCE60P50K, 60 V P-FET, gate held at -12 V by D101) blocks a reversed plug. Once on, it conducts both ways, so regen still flows back into the pack.
 - D102 (SMCJ30A) and C101 (100 µF, 50 V) take the plug-in spike.
-- The driver's current goes through R102 (2 mΩ) to J103.
+- The driver's current goes through R102 (2 mΩ) to J103, the driver's P4 (+VDC, GND).
 - U101 (INA238, 85 V, I2C 0x40) reads the driver's current (both directions, so regen shows) and the bus voltage at the shunt.
 
 **Regen clamp:**
@@ -91,9 +107,9 @@ The power stage is new: the rocket boards run from 1S/2S and none of their regul
   - The catch diode's anode lands against their ground pad.
   - Its cathode and the inductor share a short 1.5 mm switch node off pin 8, poured wider.
   - The thermal pad has no vias in it (the 4-layer rule). It connects through the top ground pour at its open end, so expect the IC to run warm at the full 5 V load.
-- **The 5 V output** reaches the In2 plane through five 0.6/0.3 mm vias between the inductor and the output caps. The Pi and AUX fuses draw from it through three and two vias. The Pi feed itself is a 1.5 mm track.
+- **The 5 V output** reaches the In2 plane through five 0.6/0.3 mm vias between the inductor and the output caps. The Pi and AUX fuses draw from it through three and two vias. The Pi feed itself is a 2 mm track up to the socket.
 - **Outputs:**
-  - the Pi header (J202, moved down into the 5 V band), through F103 (4 A);
+  - the Pi, through F103 (4 A) and its socket (J202, pins 2 and 4);
   - J104 AUX (PH 2-pin, 1.5 A resettable fuse), for the V0 SDR board or the Beetle;
   - the driver interface, the clamp and the index sensor.
 
@@ -104,8 +120,8 @@ The power stage is new: the rocket boards run from 1S/2S and none of their regul
 
 ## The CL57T interface (sheet `io`)
 
-- **J301** (PH 10-pin): PUL+ PUL- DIR+ DIR- ENA+ ENA- ALM+ ALM- PEND+ PEND-, wired to the driver's control terminal in that order.
-- **Drive:** a 74ACT244 at 5 V drives PUL+, DIR+ and ENA+ (±24 mA, through 33 Ω). The minus terminals are ground.
+- **J301** (3.5 mm, 9-pin) is the driver's P1 in its order: PUL+ PUL- DIR+ DIR- ENA+ ENA- ALM BRK COM-.
+- **Drive:** a 74ACT244 at 5 V drives PUL+, DIR+ and ENA+ (±24 mA, through 33 Ω). The minus terminals and COM- are ground.
 - **Set the driver's S3 switch to 5 V** (it ships at 24 V).
 - **STEP and DIR** stay off through reset: R301 holds the buffer's output enable high until the firmware enables it.
   - DRV_OE_N is on GPIO21, which doesn't glitch at power-up (GPIO1-14 can pulse low for 60 µs).
@@ -114,17 +130,21 @@ The power stage is new: the rocket boards run from 1S/2S and none of their regul
   - ENA has its own always-on buffer. Its level through reset is set by R304 (pull-up, fitted) or R305 (pull-down, not fitted).
   - The CL57T manual says an unconnected ENA means enabled. So a driven ENA (opto current) should mean disabled, and R304 then holds the driver off through reset.
   - **Check this on the bench** before trusting it. If it is the other way round, move the resistor to R305.
-- **ALM and PEND** are the driver's optocoupler outputs, pulled up to 3.3 V here.
+- **ALM and BRK** are the driver's open-collector optocoupler outputs. They share its COM-, which is this board's ground, and are pulled up to 3.3 V here.
+  - The CL57T V4.x has no in-position (PEND) output: the earlier ALM± / PEND± wiring was a guess from another driver. BRK, its brake-release output, reads whether the driver is holding the motor.
 - **Firmware:** STEP must be at least 2.5 µs high and low, with DIR set 5 µs before the edge (the V2 doc's numbers).
 
-## Encoder tap, index, GNSS timing (sheet `io`)
+## Encoder pass-through, index, GNSS timing (sheet `io`)
 
-- **J302** (PH 8-pin: EA+ EA- EB+ EB- EZ+ EZ- EGND):
-  - wired in parallel with the driver's encoder input, label to label;
-  - read by an AM26LV32E (3.3 V RS-422 receiver, fail-safe on open inputs);
-  - the Z channel is there in case this encoder has one;
-  - the 120 Ω terminations (R313-R315) are not fitted: measure whether the driver terminates the pairs first;
-  - R316 (0 Ω) ties the encoder ground to the board ground. Remove it if the driver's encoder ground turns out not to be its supply ground.
+- **The encoder lead passes through the board:**
+  - the kit's encoder extension lead lands on J302 (right edge);
+  - J305 (top edge) carries the same six wires on to the driver's P2;
+  - both read EB+ EB- EA+ EA- VCC EGND, as P2 does. J302 is numbered from the bottom so that its six traces to J305 nest around the corner without crossing.
+- **VCC** is the driver's 5 V for the encoder. It only passes through.
+- **The receiver:** an AM26LV32E (3.3 V RS-422 receiver, fail-safe on open inputs) reads A and B on the way.
+  - The motor's encoder has no index, so the receiver's other two channels are unused.
+  - The 120 Ω terminations (R313, R314) are not fitted: measure whether the driver terminates the pairs first.
+- R316 (0 Ω) ties the encoder ground to the board ground. Remove it if the driver's encoder ground turns out not to be its supply ground.
 - **J303 index** (PH 4-pin: GND, signal, LED anode, 5 V):
   - takes a slotted optical switch (its LED fed through the 330 Ω on the pin) or a Hall switch (5 V supply, open-drain out);
   - the signal goes through a 74LVC1G17 Schmitt buffer, which tolerates 5 V.
@@ -134,6 +154,33 @@ The power stage is new: the rocket boards run from 1S/2S and none of their regul
   - an MCU pin (the commanded turn).
   - Both buffers are off through reset, and R326 (100 k) holds EventA low then. The firmware should enable one buffer, and only while PPS is alive, as V1 does.
 
+## Leads to the driver
+
+The CL57T V4.x has pluggable screw blocks:
+- P1, control (9 positions);
+- P2, encoder (6);
+- P3, motor (4);
+- P4, power (2);
+- P5, a 4-pin RS232 port for its tuning software.
+
+I took them from the CL57T V4.0 manual and the CL42T and CL86T V4.1 manuals; StepperOnline's own CL57T V4.1 PDF sits behind a bot check.
+
+The board's driver headers are 3.5 mm Phoenix MC 1,5, the CL42T V4.1's pitch, in the driver's order. Each lead is wired position for position, and the silkscreen names every pin.
+
+| Board | Goes to | Order | Lead |
+|---|---|---|---|
+| J103 (2) | the driver's P4 | +VDC, GND | an 18 AWG pair |
+| J301 (9) | the driver's P1 | PUL+ PUL- DIR+ DIR- ENA+ ENA- ALM BRK COM- | shielded, as the manual suggests |
+| J305 (6) | the driver's P2 | EB+ EB- EA+ EA- VCC EGND | shielded, A and B pairs twisted |
+| J302 (6) | the motor | EB+ EB- EA+ EA- VCC EGND (top to bottom) | the kit's encoder extension lead, cut to length |
+
+The motor's own lead (the GX16 plug and its extension) goes straight to P3 and never touches the board.
+
+**Plugs:**
+- The driver end of each lead uses the driver's own plug.
+- The board end needs four 3.5 mm plugs: one 2-position, one 9-position and two 6-position. Phoenix's are the MC 1,5/x-ST-3,5; the generic 15EDGK-3.5 parts are LCSC C42701, C5188256 and C5188253.
+- The headers are Phoenix 1844210, 1844281 and 1844252. LCSC had no 9-pin in stock on 2026-10-16. The generic 15EDGRC-3.5 headers are sold as equivalents; check one's drawing against the footprint before buying.
+
 ## ESP32-S3 pins
 
 The S3's GPIO matrix lets any of these signals sit on any pin. I chose pins on the side of the chip that faces the
@@ -142,7 +189,7 @@ connector each signal goes to; that cut the routing problems the first pin map h
 | Side (faces) | Pin / GPIO | Signal |
 |---|---|---|
 | Left (power column) | 6 / 1 | ALM |
-| | 7 / 2 | PEND |
+| | 7 / 2 | DRV_BRK (the driver's BRK output) |
 | | 8 / 3 | INA_ALERT |
 | | 9 / 4, 10 / 5 | I2C SDA, SCL (INA238 and Qwiic J203) |
 | | 11 / 6 | BRAKE_SENSE |
@@ -157,7 +204,7 @@ connector each signal goes to; that cut the routing problems the first pin map h
 | | 37 / 47 | EVT_MCU (EventA from the MCU) |
 | | 38 / 33 | PPS |
 | | 39 / 34 | INDEX |
-| | 40 / 35, 41 / 36, 42 / 37 | ENC_Z, ENC_B, ENC_A |
+| | 41 / 36, 42 / 37 | ENC_B, ENC_A |
 | Top (driver and EventA buffers) | 43 / 38 | EVT_MCU_OE_N |
 | | 44 / 39 | STEP |
 | | 48 / 42 | ENA |
@@ -166,7 +213,7 @@ connector each signal goes to; that cut the routing problems the first pin map h
 | | 4 | CHIP_PU (RC, RESET button) |
 | | 52 / 46 | 10 k pull-down (strap) |
 
-Free: GPIO 8, 14, 15, 17, 18, 40 and 41. GPIO 14 (pin 19), 40 (pin 45) and 41 (pin 47) sit next to 3.3 V
+Free: GPIO 8, 14, 15, 17, 18, 35, 40 and 41. GPIO 14 (pin 19), 40 (pin 45) and 41 (pin 47) sit next to 3.3 V
 pins and are left unconnected on purpose, so those pins have room for their vias.
 - GPIO 33-37 and 47-48 are used. That rules out an octal-PSRAM S3 (R8), which needs them; the FN8 (quad flash in the package) leaves them free.
 - GPIO 3 is a strapping pin only when the JTAG eFuse is burned. Here it carries INA_ALERT, which idles high.
@@ -175,7 +222,7 @@ pins and are left unconnected on purpose, so those pins have room for their vias
 
 The V1 firmware's PIO programs don't port: the S3 has no PIO. The S3 does have the peripherals for the same job:
 
-- **MCPWM capture:** two units, three channels each, with a 12.5 ns timer. Both capture timers can be synced to PPS through the MCPWM sync input. The six channels cover PPS, STEP (read back on its own pin), ENC_A, ENC_B, ENC_Z and INDEX. Every edge is timed on the same clock as PPS.
+- **MCPWM capture:** two units, three channels each, with a 12.5 ns timer. Both capture timers can be synced to PPS through the MCPWM sync input. Five of the six channels cover PPS, STEP (read back on its own pin), ENC_A, ENC_B and INDEX. Every edge is timed on the same clock as PPS.
 - **STEP generation:** RMT with DMA, or an MCPWM generator synced to PPS. With every STEP edge measured, the truth no longer depends on the step train starting a fixed delay after PPS.
 - **PCNT:** counts A/B quadrature as a cross-check.
 - **Load:** about 80,000 captures a second at 10 rev/s (encoder plus STEP), roughly a tenth of one core in an IRAM interrupt. Core 1 can carry it.
@@ -187,30 +234,32 @@ All of these take any GPIO through the GPIO matrix, so the pin map above doesn't
 - **Stackup:** JLC 4-layer, 1.6 mm (JLC04161H-7628), 1 oz outer copper.
   - F.Cu: parts and signals; motor-current and ground pours.
   - In1: solid ground, no tracks.
-  - In2: a 5 V plane along the bottom (no tracks there), stepping up to 50 mm under the buck. Three 0.5 mm feeders run up from it to the clamp, the 74ACT244 and the index connector. The rest of In2 carries signals.
+  - In2: a 5 V plane under the buck along the bottom 22 mm (no tracks there). The router fed the 5 V loads above it, the 74ACT244 among them, with tracks. The rest of In2 carries signals.
   - 3.3 V is routed as tracks. A pour on In2 broke into 32 one-via fragments around the signals there, so I took it out.
   - B.Cu: signals and a ground pour.
-- **Ground stitching:** about 450 vias tie the outer ground pours to In1, on a 3 mm grid wherever one fits, and on a 1.5 mm grid around the ESP32.
-- **Parts:** all on the top side.
-  - The three VH connectors and the 1x5 header are through-hole: hand-solder them, or pay for JLC's through-hole assembly.
+- **Ground stitching:** most of the board's 540 vias tie the outer ground pours to In1, on a 3 mm grid wherever one fits, and on a 1.5 mm grid around the ESP32.
+- **Parts:** every surface-mount part is on the top side.
+  - Every connector but USB-C and Qwiic is through-hole and soldered by hand: J101-J104, J202 (on the underside) and J301-J305. `make_fab.py` leaves them out of the JLC BOM and CPL and lists them in `-hand.csv`.
 - **Vias:** tented, none in pads (the rule for the 4-layer rocket boards).
   - The ESP32's center pad (its only ground) has four ground vias in the corners of the ring between it and the pins, the closest a via can sit without going in the pad.
   - The decoupling caps around it are stitched on a 1.5 mm grid.
 - **Crystal:** short F.Cu runs to the 40 MHz crystal and its 24 nH inductor, with no vias.
 - **Net classes:** Default 0.2 / 0.15 mm, Power 0.5 / 0.15 mm, Motor 1.5 / 0.3 mm. The motor nets (pack, bus, driver feed, brake) are also poured 1.2 mm around their tracks on both outer layers.
 - **Kelvin sensing:** R102's sense lines are pre-routed (locked) from its inner sense pads straight to U101, so the router can't tap the current path.
-- **Mechanical:** four M3 holes (not plated, so the board ground doesn't touch the frame).
+- **Mechanical:** the Pi's four M2.5 holes (H3, H5-H7), not plated, so the board ground doesn't touch the frame. The board mounts on the Pi; it has no holes of its own.
+- **No fiducials:** JLC's Economic assembly doesn't use them.
   - The board spins with the rotor. At 10 rev/s and 50 mm out it sees about 20 g.
-  - The heavy parts (C101, L101, the VH connectors) are surface-mount or held by their pins. A dab of adhesive on C101 and L101 costs nothing.
+  - The heavy parts (C101, L101, the XT60) are surface-mount or held by their pins. A dab of adhesive on C101 and L101 costs nothing.
 
 ## Cost
 
 | Item | Estimate |
 |---|---|
-| Parts, per board, JLC prices for 5 boards | about $25 (the INA238 is $8 of it) |
-| JLC extended-part fees | about $108 per order (36 part types at $3). Every passive and LED is a basic part |
+| Parts JLC fits, per board, JLC prices for 5 boards | about $23 (the INA238 is $8 of it) |
+| JLC extended-part fees | about $87 per order (29 part types at $3). Every passive and LED is a basic part |
 | PCB, 4-layer, 5 pieces, plus assembly setup | about $40-60 |
-| **5 assembled boards, before shipping** | **about $280** |
+| **5 assembled boards, before shipping** | **about $250** |
+| Hand-soldered connectors and their plugs, per board | about $9 with Phoenix headers and generic plugs (the JST PH parts are on hand) |
 | The motor kit (1-CL57T-S20-V41) | $58.66 (it replaces the NEMA 24 kit's $93.99) |
 
 The board saves these V2 BOM lines: the Pico ($4), the Pololu buck ($39.95), the shunt regulator ($23.33), the 74ACT244 and RS-422 parts, adapters and proto board (about $21). That is about $88 of the V2 BOM, roughly what one assembled board costs. The external brake resistor (about $5-10) is new.
@@ -220,15 +269,15 @@ The board saves these V2 BOM lines: the Pico ($4), the Pololu buck ($39.95), the
 1. **Look over the routing in KiCad.** It is mostly autorouted. I'd look at:
    - the USB pair (short, but not length-matched);
    - the crystal;
-   - the buck. I placed it and pre-routed its switch node; the rest of its copper is the router's.
-     - The bootstrap cap (C112) sits about 7 mm from the switch node, joined by a B.Cu trace. There's no room for it at the package's top end without moving the catch diode off the input caps. Its loop carries only gate-charge pulses.
+   - the buck. I placed it and pre-routed its switch node and its bootstrap, RT and EN runs; the rest of its copper is the router's.
+     - The bootstrap cap (C112) sits below the IC's left end, about 9 mm from the switch node, joined by a 0.5 mm run partly on B.Cu. There's no room for it at the package's top end without moving the catch diode off the input caps. Its loop carries only gate-charge pulses.
+   - the USB ESD array (CR201). It sits about 10 mm below J201, the closest free spot, so D+ and D- run down to it and back. That is harmless at full speed (12 Mbit/s).
      - The thermal pad has no vias (the 4-layer rule), so the IC will run warm at full load.
 2. **The ENA default (R304/R305) and the CL57T's S3 switch:** the bench checks above.
-3. **The three power connectors are the same JST VH part**, side by side: PACK IN, DRIVER PWR and BRAKE R.
-   - A pack plugged into DRIVER bypasses the reverse-polarity switch; reversed, it shorts through D102.
-   - Crimp the three harnesses so they can't swap (different lengths, colored sleeves), and check the silkscreen before plugging in.
-4. **The 23HS30's shaft is 8 mm** (the NEMA 24 was 10 mm), so the V2 coupling becomes an SCPW28-8-x.
-5. **In JLC's CPL preview**, check the rotation of every IC and connector. KiCad's and JLC's zero orientations differ for some packages.
+3. **Measure the pitch of the CL57T's terminal blocks.** The headers here are 3.5 mm, the CL42T V4.1's. If the CL57T's are 3.81 mm, swap the three footprints and their plugs.
+4. **The XT60's polarity:** pin 1 is the footprint's "-", next to its "-" mark. Check it against your pack lead with a meter. A reversed pack only leaves the board dark, because Q101 blocks it.
+5. **The 23HS30's shaft is 8 mm** (the NEMA 24 was 10 mm), so the V2 coupling becomes an SCPW28-8-x.
+6. **In JLC's CPL preview**, check the rotation of every IC and connector. KiCad's and JLC's zero orientations differ for some packages.
 
 ## Independent review
 
@@ -246,7 +295,7 @@ On 2026-10-16 a second reviewer checked every pinout against its datasheet and t
 - an EventA pull-down (R326);
 - the crystal routing.
 
-**Left for the bench:** the CL57T manual wasn't reachable, so its terminal order, input current and ENA polarity are still to check.
+**Left for the bench:** the CL57T V4.1 manual wasn't reachable. The terminal order now comes from the V4.0 manual and the V4.1 siblings (see "Leads to the driver"), but the input current and ENA polarity are still to check.
 
 ## Bring-up
 
@@ -258,7 +307,7 @@ On 2026-10-16 a second reviewer checked every pinout against its datasheet and t
 3. **Read the INA238:** bus voltage, and about zero current.
 4. **The clamp:** a 28-30 V bench supply with the brake resistor fitted. BRAKE lights at about 28.8 V and goes out at about 27.7 V.
 5. **The driver:** S3 at 5 V, motor unloaded. Check the ENA polarity (driver off with the S3 in reset), then STEP/DIR at a slow rate.
-6. **The encoder:** spin the motor shaft by hand and watch the counts.
+6. **The encoder:** the extension lead into J302, and J305 on to the driver's P2. Spin the motor shaft by hand and watch the counts.
 7. **Then the pack**, through the anti-spark switch and the 10 A fuse.
 
 ## Regenerating
@@ -274,18 +323,21 @@ From `gen/`:
     - It needs Java 25 or newer: set `JAVA`, or let it default to Homebrew's `openjdk`.
   - It finishes each result (`make_pcb.py finish`: the pours) and fixes it (`fixup.py`: plane fan-out and stitching), then keeps the best.
 - `./finalize.sh`: field and keep-out fixes (`post_fix.py`), the leftovers routed (`patch_route.py`), re-stitching, and DRC.
+- `hand_fixes.py` (KiCad's Python): whatever `finalize.sh` couldn't close, planned by hand for this routing result (below).
 - With KiCad's Python (`/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3`):
-  - `silk.py`: references to the fab layer, function labels on the silkscreen;
+  - `silk.py`: references to the fab layer, function labels on the silkscreen, and a name at every pin of the driver's headers;
   - `cleanup.py`: dangling vias and stubs out.
 - `python3 check.py`: DRC with schematic parity.
-- `python3 make_fab.py`: the review package and the JLC BOM/CPL, into `gerbers/`. At order time, plot the gerbers with `tools/plot_gerbers.sh spin-rig-controller` and tag the commit; see `FABRICATION-NOTES.md`.
+- `python3 make_fab.py`: the review package and the JLC BOM/CPL, into `gerbers/`. At order time, plot the gerbers with `tools/plot_gerbers.sh spin-rig-controller --aux-origin` (the CPL's frame) and tag the commit; see `FABRICATION-NOTES.md`.
 
 Freerouting's results vary from run to run. If a rerun leaves more than a few unconnected items, run `route_best.sh` again.
 
-This version took two hand-directed fixes after `finalize.sh`, both done with `patch_route.py`'s functions:
-- The input cap's VMAIN_F pad was joined to C111.
-- Two BUCK_EN segments that came within 0.14 mm of VMAIN_F were ripped up and rerouted.
+After `finalize.sh`, this revision took the planned fixes in `gen/hand_fixes.py` (KiCad's Python). They fit this routing result only:
+- the pre-routed escape from the ESP32's 3.3 V pin 20 taken out, because the router fed the pin its own way;
+- the ESP32's 3.3 V pins 2 and 3 joined to the 3.3 V copper west of them, with CHIP_PU's escape moved under that run to a 0.45 mm via.
 
-`extra_pours.py`, `silk.py` and `cleanup.py` ran after that.
+The fixes earlier revisions needed for the buck (BOOT, RT and EN) and the ESP32's bottom fan-out are now locked pre-routes in `make_pcb.py`, laid out relative to U104 and U201.
+
+`extra_pours.py`, `silk.py` and `cleanup.py` ran after that. `gen/region.py` lists a window's copper, which is how I planned each fix.
 
 Rerunning `make_pcb.py place` or `route_best.sh` discards hand edits to the board. Once the layout is being edited in KiCad, change the schematic in KiCad too, and use Update PCB from Schematic.
