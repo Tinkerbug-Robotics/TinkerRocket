@@ -81,6 +81,7 @@ static inline std::string itos(int v)
 #include "landed_lockout_policy.h"    // #317, #1235 item 5: no new log session after LANDED
 #include "arm_consent_policy.h"       // #1168: when the OC gives its half of the Beetle's pyro arm
 #include "pyro_fault_trip_policy.h"   // #1553: drop that consent on a shorted e-match mid-pulse
+#include "snapshot_answer_policy.h"   // when the OC may answer the FC's snapshot ask with "no flight"
 
 #include <TR_I2C_Interface.h>
 #include <TR_I2S_Stream.h>
@@ -102,6 +103,7 @@ static inline std::string itos(int v)
 #include <TR_FlightLog.h>
 #include <SnapshotTailScan.h>   // #846: boot re-seed of the snapshot cache
 #include <ground_baseline_policy.h>   // #1150: the pad reference after an in-flight OC reset
+#include <flight_snapshot_answer.h>   // the snapshot answer as the FC reads it, and "no flight"
 #include <TR_NandBackend_esp.h>
 #include <NvsBitmapStore.h>
 #include <NandBitmapStore.h>   // #398: bitmap on NAND (not NVS) — no cache-disable stall
@@ -958,8 +960,23 @@ static bool pwr_pin_on = false;
 // inherited, and the FC re-validates magic/version/state/CRC32/sim on its
 // side — a stale or garbage cache can never restore a flight.
 static constexpr size_t kSnapFrameLen = 4 + 1 + 1 + sizeof(FlightSnapshotData) + 2;
+static_assert(kSnapFrameLen == flight_snapshot_answer::kFrameLen,
+              "the FC reads exactly the frame the OC stages (#399)");
 static uint8_t  snapshot_cache[kSnapFrameLen];
 static bool     snapshot_cache_valid = false;
+// True once this boot's NAND re-seed has run, or the V7/V8 MRAM slot is
+// readable: from then on, "nothing servable" means no flight even on a
+// recovery boot (snapshot_answer_policy.h). Set in initLoggingSubsystem().
+static bool     snapshot_stores_settled = false;
+
+// The FC's snapshot CRC32 (flight_computer computeSnapshotCRC), for the
+// explicit "no flight" answer, which is the only snapshot the OC writes itself.
+static uint32_t snapshotCrc(const FlightSnapshotData& s)
+{
+    CRC32 crc;
+    crc.add(reinterpret_cast<const uint8_t*>(&s), flight_snapshot_answer::kCrcBytes);
+    return crc.calc();
+}
 
 // ==========================================================================
 // SECTION: #1176 flight token — durable evidence that a flight was in progress
@@ -1157,6 +1174,59 @@ static bool snapshotServable(const uint8_t* frame, uint32_t age_ms)
     if (snap.magic != FlightSnapshotData::MAGIC) return false;
     if (snap.rocket_state != (uint8_t)INFLIGHT) return false;   // a clear
     return snap.flight_elapsed_ms < kSnapshotServeTtlMs;
+}
+
+// The rocket state a snapshot wire frame carries.
+static uint8_t snapshotFrameState(const uint8_t* frame)
+{
+    FlightSnapshotData snap = {};
+    memcpy(&snap, frame + 6, sizeof(snap));   // past SOF(4)+type+len
+    return snap.rocket_state;
+}
+
+// The V7/V8 MRAM slot read back as neither empty (the zeros a #1176
+// retirement writes) nor a snapshot (its magic): bytes that may be a torn
+// flight frame, which the OC never answers "no flight" over
+// (snapshot_answer_policy.h).
+static bool snapshotSlotGarbled(const uint8_t* frame)
+{
+    FlightSnapshotData snap = {};
+    memcpy(&snap, frame + 6, sizeof(snap));   // past SOF(4)+type+len
+    if (snap.magic == FlightSnapshotData::MAGIC) return false;
+    for (size_t i = 0; i < kSnapFrameLen; ++i)
+    {
+        if (frame[i] != 0) return true;
+    }
+    return false;
+}
+
+// Stage the explicit "no flight in progress" answer to GET_FLIGHT_SNAPSHOT
+// (snapshot_answer_policy.h). Kept out of processFrame() so its ~460 B of
+// locals never sit on the I2S parser task's stack, which holds processFrame()'s
+// frame twice over during a batch unpack (#1485); the ask only ever arrives
+// over the I2C ingress.
+static __attribute__((noinline)) void stageNoFlightAnswer()
+{
+    FlightSnapshotData none = flight_snapshot_answer::noFlightPayload();
+    none.crc32 = snapshotCrc(none);
+    uint8_t frame[kSnapFrameLen];
+    size_t frame_len = 0;
+    if (TR_I2C_Interface::packMessage(SNAPSHOT_MSG,
+                                      reinterpret_cast<const uint8_t*>(&none),
+                                      sizeof(none), frame, sizeof(frame),
+                                      frame_len) &&
+        frame_len == kSnapFrameLen)
+    {
+        i2c_interface.writeToSlave(frame, frame_len, 0);
+        ESP_LOGI("OC", "[RECOVERY] FC asked for a flight snapshot: no flight "
+                       "in progress, answered so");
+    }
+    else
+    {
+        ESP_LOGE("OC", "[RECOVERY] could not pack the no-flight answer (%u B) — "
+                       "sending no reply",
+                 (unsigned)frame_len);
+    }
 }
 // #825: false after a boot rail restore — our reset wiped the commanded
 // camera state while the FC (kept alive by the restored rail) may still be
@@ -5715,23 +5785,26 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         }
         portEXIT_CRITICAL(&snapshot_cache_mux);
 
+        // The MRAM slot read back as neither the zeros of a retired slot nor a
+        // snapshot: possibly a torn flight frame, so never "no flight".
+        bool mram_garbled = false;
         if (had_cache && snapshotServable(snap_frame, cache_age))
         {
             have = true;
             snapshot_served = true;   // #846: consumed — see the boot re-seed
         }
-        else if (!had_cache &&
-                 logger.mramRawRead(config::SNAPSHOT_REGION_BASE,
-                                    snap_frame, sizeof(snap_frame)) &&
-                 snapshotServable(snap_frame, 0))
+        if (!have && !had_cache &&
+            logger.mramRawRead(config::SNAPSHOT_REGION_BASE,
+                               snap_frame, sizeof(snap_frame)))
         {
             // V7/V8 fallback. Age is unknown (the slot has no clock), so only
             // the frame's own flight_elapsed_ms bounds it — enough to refuse
             // a slot left INFLIGHT by a flight that has since timed out.
-            have = true;
+            if (snapshotServable(snap_frame, 0)) have = true;
+            else mram_garbled = snapshotSlotGarbled(snap_frame);
         }
-        else if (boot_token_restore && boot_token.have_frame &&
-                 snapshotServable(boot_token.snap, 0))
+        if (!have && boot_token_restore && boot_token.have_frame &&
+            snapshotServable(boot_token.snap, 0))
         {
             // #1176 third source, and on V9/V10 it is the ONLY one for a reboot
             // in the first half second of a flight: the log session is still
@@ -5764,28 +5837,40 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             ESP_LOGW("OC", "[RECOVERY] serving the snapshot carried in the "
                            "flight token");
         }
-        else if (had_cache)
+        // A cached in-flight frame that is too old to serve is worth a line;
+        // the FC's own LANDED clear, which every boot now leaves here, is not.
+        if (!have && had_cache && snapshotFrameState(snap_frame) == (uint8_t)INFLIGHT)
         {
-            ESP_LOGW("OC", "[RECOVERY] cached snapshot not servable (age %lu ms, "
-                           "or not an in-flight frame) — not serving it",
+            ESP_LOGW("OC", "[RECOVERY] cached in-flight snapshot not servable "
+                           "(age %lu ms, or past the flight time) — not serving it",
                      (unsigned long)cache_age);
         }
-        if (have)
+
+        const bool recovery_context = boot_rail_restored || boot_token_powered;
+        switch (SnapshotAnswerPolicy::decide(have, mram_garbled, recovery_context,
+                                             snapshot_stores_settled))
         {
+        case SnapshotAnswerPolicy::Reply::Serve:
             // Non-blocking write — if the TX ringbuffer is full, drop;
             // FC's masterRead retry path will handle it.
             i2c_interface.writeToSlave(snap_frame, sizeof(snap_frame), 0);
-        }
-        else
-        {
-            // No cache (nothing received this session, no boot re-seed) and
-            // no MRAM. The FC handles the missing reply safely — masterRead
-            // fails or the SOF scan finds nothing, it retries (#364), then
-            // cold-starts — but from the OC side the request would otherwise
-            // vanish without trace. Fires at most once per FC reset per retry.
-            ESP_LOGW("OC", "[RECOVERY] FC asked for a flight snapshot and "
-                           "none is available (no cached frame, no MRAM) — "
-                           "sending no reply");
+            break;
+        case SnapshotAnswerPolicy::Reply::NoFlight:
+            // Say so, so the FC stops asking at the first exchange. This used
+            // to stage nothing: the FC's read then returned the last staged
+            // status reply, which is not an answer, so every boot spent all
+            // five tries.
+            stageNoFlightAnswer();
+            break;
+        case SnapshotAnswerPolicy::Reply::Silent:
+            // Not certain there is no flight, so say nothing, as before: the
+            // FC retries (#364) and a logger retry or a clean second read can
+            // still serve it. Fires at most once per FC ask.
+            ESP_LOGW("OC", "[RECOVERY] FC asked for a flight snapshot and none "
+                           "is servable yet (%s) — sending no reply",
+                     mram_garbled ? "the MRAM slot read back garbled"
+                                  : "a recovery boot whose logger has not come up");
+            break;
         }
     }
     else if (type == I2C_TX_RESYNC)
@@ -9846,6 +9931,12 @@ static bool initLoggingSubsystem()
                 }
             }
         }
+
+        // The stores this boot serves from have had their chance: the MRAM
+        // slot is readable from here on, or the re-seed above has run, whatever
+        // it found. From now on the OC may answer "no flight" even on a
+        // recovery boot (snapshot_answer_policy.h).
+        snapshot_stores_settled = logger.isMramEnabled() || flightlog.isInitialized();
 
         // -------------------------------------------------------------------
         // DIAGNOSTIC ONE-SHOT — wipes the entire filesystem at boot.

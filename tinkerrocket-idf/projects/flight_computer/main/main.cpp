@@ -47,6 +47,7 @@
 #include <esp_ota_ops.h>          // Layer 4: esp_ota_mark_app_valid_cancel_rollback (#8/#13)
 #include <esp_app_desc.h>         // esp_app_get_description() for FC_IDENTITY version push (#8)
 #include <BoardIdentity.h>       // #773 step 2: provisioned board revision
+#include <flight_snapshot_answer.h>   // how the OC's answer to GET_FLIGHT_SNAPSHOT reads (host-tested)
 #include <driver/gpio.h>
 #include <esp_attr.h>            // RTC_NOINIT_ATTR for the #848 power-hold latch flag
 #include "pwr_hold_policy.h"     // #848: boot reconciliation decision table
@@ -5384,7 +5385,11 @@ struct OcSnapshotAnswer
 {
     FlightSnapshotData snap;
     bool valid;                // a live, non-sim, in-flight snapshot to restore
-    bool answered_no_flight;   // a definitive "no flight": a sim frame or a LANDED clear
+    bool answered_no_flight;   // a definitive "no flight": a sim frame, a LANDED clear,
+                               // or the OC saying it holds none
+    bool refused_inflight;     // of those, an in-flight frame this FC won't restore
+                               // (a sim flight, another snapshot VERSION): the OC's
+                               // store still holds it, so the boot clears it
 };
 
 static OcSnapshotAnswer fcAskOcForFlightSnapshot()
@@ -5399,14 +5404,15 @@ static OcSnapshotAnswer fcAskOcForFlightSnapshot()
         // probe misses — the OC is still bringing its I2C slave up — and
         // a silently-skipped recovery mid-descent is a ballistic. Five
         // attempts ~350 ms apart bound the extra boot time at ~1.75 s,
-        // spent ONLY on unexpected-reset boots. Between attempts the OC
-        // gets a fresh OUT_STATUS_QUERY (full-length read — an aborted
-        // short read would desync its V2 slave TX ring, #399), and a
-        // failed snapshot read gets an I2C_TX_RESYNC first (#402; the
-        // bus is idle here by construction — nothing else polls during
-        // setup). A definitive answer (valid restore, sim refusal, or a
-        // LANDED/garbage frame that parsed) stops the retries; only
-        // transport failures continue.
+        // spent only while the OC is not answering. A failed or frameless
+        // read gets an I2C_TX_RESYNC first (#402; the bus is idle here by
+        // construction — nothing else polls during setup). A definitive
+        // answer (flight_snapshot_answer.h: a restore, a sim refusal, the
+        // OC's "no flight in progress", or a snapshot that is no flight to
+        // restore) stops the retries; only transport failures and garbage
+        // continue. An OC from before that answer stays silent when it
+        // holds no flight, so on one every boot still spends the five
+        // tries.
         constexpr int kRecoveryAttempts = 5;
         (void)out_ready;   // no longer a precondition — see below
         bool definitive = false;
@@ -5436,6 +5442,8 @@ static OcSnapshotAnswer fcAskOcForFlightSnapshot()
             delay_ms(20);  // let OC service the request and queue the response
 
             constexpr size_t kRespFrameLen = 4 + 1 + 1 + sizeof(FlightSnapshotData) + 2;
+            static_assert(kRespFrameLen == flight_snapshot_answer::kFrameLen,
+                          "the FC reads exactly the frame the OC stages (#399)");
             // Read EXACTLY the staged frame size. The OC stages
             // kRespFrameLen bytes; under the V2 slave driver, clocking out
             // more than was staged underflows the TX path (the +16 "SOF
@@ -5486,42 +5494,56 @@ static OcSnapshotAnswer fcAskOcForFlightSnapshot()
                         type == SNAPSHOT_MSG &&
                         payload_len == sizeof(FlightSnapshotData)) {
                         memcpy(&snap, payload, sizeof(FlightSnapshotData));
-                        if (snap.magic   == FlightSnapshotData::MAGIC &&
-                            snap.version == FlightSnapshotData::VERSION &&
-                            snap.rocket_state == (uint8_t)INFLIGHT &&
-                            snap.crc32 == computeSnapshotCRC(snap)) {
-                            if (snap.sim_flight) {
-                                // The dry-fire gate lives in isSimActive(),
-                                // which a reboot resets — restoring here
-                                // would fire real pyro outputs on bench
-                                // igniters mid-sim.
-                                ESP_LOGW(TAG, "[RECOVERY] Snapshot is from a SIMULATED flight — refusing restore");
+                        const bool crc_ok = (snap.crc32 == computeSnapshotCRC(snap));
+                        const flight_snapshot_answer::Verdict verdict =
+                            flight_snapshot_answer::classify(snap, crc_ok);
+                        answer.refused_inflight =
+                            flight_snapshot_answer::refusedInflight(verdict, snap);
+                        switch (verdict) {
+                        case flight_snapshot_answer::Verdict::Restore:
+                            valid = true;
+                            definitive = true;
+                            break;
+                        case flight_snapshot_answer::Verdict::SimFlight:
+                            // The dry-fire gate lives in isSimActive(),
+                            // which a reboot resets — restoring here
+                            // would fire real pyro outputs on bench
+                            // igniters mid-sim.
+                            ESP_LOGW(TAG, "[RECOVERY] Snapshot is from a SIMULATED flight — refusing restore");
+                            answered_no_flight = true;
+                            definitive = true;
+                            break;
+                        case flight_snapshot_answer::Verdict::NoFlight:
+                            // The OC saying it holds no flight, or a
+                            // snapshot that is no flight to restore: the
+                            // FC's LANDED clear, or another VERSION's frame.
+                            // The VERSION mismatch is the one worth a
+                            // warning.
+                            if (flight_snapshot_answer::isNoFlightAnswer(snap, crc_ok)) {
+                                ESP_LOGI(TAG, "[RECOVERY] The out computer holds no flight in progress");
+                            } else if (snap.version != FlightSnapshotData::VERSION &&
+                                       snap.rocket_state == (uint8_t)INFLIGHT) {
+                                ESP_LOGW(TAG, "[RECOVERY] Snapshot is version %u, this image reads %u — not restoring",
+                                         snap.version, FlightSnapshotData::VERSION);
                             } else {
-                                valid = true;
+                                ESP_LOGI(TAG, "[RECOVERY] Snapshot is a cleared flight (state %u) — nothing to restore",
+                                         snap.rocket_state);
                             }
-                            if (!valid) answered_no_flight = true;
-                            definitive = true;   // a real answer, either way
-                            // The OC demonstrably answered — latch it for
-                            // the #848/#859 hold reconciliation just below,
-                            // which would otherwise inherit a stale false.
-                            out_ready = true;
-                            out_ready_last_ms = millis();   // #1137 item 9
-                        } else {
+                            answered_no_flight = true;
+                            definitive = true;
+                            break;
+                        case flight_snapshot_answer::Verdict::Garbage:
+                            // Keeps retrying: could be a torn TX ring.
                             ESP_LOGW(TAG, "[RECOVERY] Snapshot invalid (magic=0x%08lX state=%u crc=%s)",
                                      (unsigned long)snap.magic, snap.rocket_state,
-                                     (snap.crc32 == computeSnapshotCRC(snap)) ? "OK" : "FAIL");
-                            // A frame that PARSED but fails validation is
-                            // also definitive when it is a LANDED clear —
-                            // the flight genuinely ended. Garbage keeps
-                            // retrying (could be a torn TX ring).
-                            if (snap.magic == FlightSnapshotData::MAGIC &&
-                                snap.crc32 == computeSnapshotCRC(snap)) {
-                                definitive = true;
-                                answered_no_flight = true;
-                            }
-                            out_ready = true;   // the OC answered
-                            out_ready_last_ms = millis();   // #1137 item 9
+                                     crc_ok ? "OK" : "FAIL");
+                            break;
                         }
+                        // The OC demonstrably answered — latch it for the
+                        // #848/#859 hold reconciliation just below, which
+                        // would otherwise inherit a stale false.
+                        out_ready = true;
+                        out_ready_last_ms = millis();   // #1137 item 9
                         frame_seen = true;
                     }
                 }
@@ -6965,9 +6987,13 @@ static void setup_fc()
     // servable INFLIGHT frame" now means "a flight really is in progress".
     //
     // The cost on a normal boot is one I2C exchange, because the retry loop
-    // stops the moment the OC answers ANYTHING. The retries only accumulate
-    // when the OC does not answer at all, which is the one case where cold
-    // starting mid-descent would be unrecoverable.
+    // stops at the first definitive answer and the OC says "no flight" when it
+    // holds none (snapshot_answer_policy.h). The retries only accumulate when
+    // the OC does not answer at all, which is the one case where cold
+    // starting mid-descent would be unrecoverable. An OC from before that
+    // answer stays silent when it holds no flight, so on one a normal boot
+    // spends all five tries (~1.5 s, five "[RECOVERY] read OK but no SNAPSHOT
+    // frame" lines with the OC's last status reply, AA 55 AA 55 A9).
     {
         esp_reset_reason_t rst = esp_reset_reason();
         ESP_LOGI(TAG, "Reset reason: %s (%d)", resetReasonStr(rst), (int)rst);
@@ -6979,12 +7005,14 @@ static void setup_fc()
         // difference between safely clearing the record and destroying the one
         // the next brownout would have needed (#834 item 3).
         bool answered_no_flight = false;
+        bool refused_inflight = false;
 
         {
             const OcSnapshotAnswer ask = fcAskOcForFlightSnapshot();
             snap = ask.snap;
             valid = ask.valid;
             answered_no_flight = ask.answered_no_flight;
+            refused_inflight = ask.refused_inflight;
         }
 
         if (valid) {
@@ -7235,9 +7263,19 @@ static void setup_fc()
         //
         // Expressed on the answer instead, it is strictly tighter: no answer
         // means no clear, on every reset reason. A genuinely ended flight is
-        // still cleared here (the OC serves the LANDED frame), by the LANDED
-        // one-shot, and by the OC's own retirement of its stores.
-        if (!reboot_recovery && answered_no_flight) {
+        // cleared by the LANDED one-shot and by the OC's own retirement of its
+        // stores.
+        //
+        // What this clear retires is an in-flight frame the OC handed back
+        // and this FC refused (a sim flight, another snapshot VERSION), which
+        // would otherwise be offered again on every boot until it ages out.
+        // The OC's own "no flight in progress" needs none: its stores hold
+        // nothing to retire. And a clear sent then would do harm: it carries
+        // the FC's uptime as its flight_elapsed_ms, and the OC's #846 replay
+        // filter would drop the next flight's INFLIGHT frames as replays until
+        // their elapsed time passed it, leaving the first seconds of that
+        // flight unrecoverable.
+        if (!reboot_recovery && answered_no_flight && refused_inflight) {
             clearFlightSnapshot();
         }
     }
