@@ -103,6 +103,8 @@ fun DashboardScreen(
             SensorCalScreen(session, syncer, container?.ionosphere, onBack = { onTool(null) })
             return
         }
+        // #1629: no syncer — the offset is the board's, never the profile's.
+        "accelcal" -> { AccelCalScreen(session, device.deviceId, onBack = { onTool(null) }); return }
         "preflight" -> {
             if (container != null && profileStore != null) {
                 PreflightRunScreen(
@@ -926,6 +928,16 @@ fun DashboardScreen(
                         // station has no dispatch for either.
                         com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
                             "Pad calibration", tr.myDevices, { onTool("sensorcal") })
+                        // #1629: the six-face accelerometer calibration, beside
+                        // the other two. Gated like its iOS Settings entry
+                        // (AccelSixFace.canCalibrate): connected and powered.
+                        // The screen says why it cannot run beyond that.
+                        com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
+                            "Accel cal", tr.myDevices, { onTool("accelcal") },
+                            enabled = com.tinkerbug.tinkerrocket.session.AccelSixFace.canCalibrate(
+                                connected, session.isBaseStation, telemetry.pwrPinOn,
+                            ),
+                        )
                     }
                     // #1050: gated like the servo test beside it — a sim drives
                     // the fins and discards the real flight state, so it is the

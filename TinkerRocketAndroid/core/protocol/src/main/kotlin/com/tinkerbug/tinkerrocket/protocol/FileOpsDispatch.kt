@@ -3,7 +3,7 @@ package com.tinkerbug.tinkerrocket.protocol
 /**
  * Demux for the FILE_OPS characteristic — multiple binary frame kinds plus
  * two JSON shapes share it, disambiguated by the FIRST byte.  JSON always
- * starts with '{' or '[', so the binary discriminators (0xAA/0xCA..0xD0)
+ * starts with '{' or '[', so the binary discriminators (0xAA/0xCA..0xD1)
  * can never collide with it.  A port of the switch in iOS
  * `BLEDevice.peripheral(_:didUpdateValueFor:)` plus each branch's parse
  * helper, including the outer length gates those helpers apply BEFORE
@@ -16,6 +16,7 @@ package com.tinkerbug.tinkerrocket.protocol
  *   0xCD → BS storage stats        (gate: frame >= 27 → [BaseStationStorageStats.decode])
  *   0xCE → pyro-test refusal       (gate: frame >= 4, decoded inline)
  *   0xD0 → pad-cal status          (gate: frame >= 41 → [PadCalStatus.decode])
+ *   0xD1 → accel-cal status        (gate: frame >= 41 → [AccelCalStatus.decode])
  *   0x7B '{' → try ota_status JSON, else file-list parse (which fails on '{')
  *   anything else → file-list JSON array
  *
@@ -72,6 +73,13 @@ public object FileOpsDispatch {
                 PadCalStatus.decode(frame.copyOfRange(1, frame.size))
                     ?.let { FileOpsMessage.PadCal(it) }
             }
+            0xD1 -> {
+                // #1629.  Like 0xD0 before it, this byte used to fall
+                // through to the file-list parser and be dropped there.
+                if (frame.size < 1 + AccelCalStatus.SIZE) return null
+                AccelCalStatus.decode(frame.copyOfRange(1, frame.size))
+                    ?.let { FileOpsMessage.AccelCal(it) }
+            }
             0x7B -> {   // '{' → JSON object
                 OtaStatusUpdate.parse(frame)?.let { return FileOpsMessage.Ota(it) }
                 fileList(frame)
@@ -127,6 +135,13 @@ public sealed interface FileOpsMessage {
      * the firmware that knows command 75.
      */
     public data class PadCal(val status: PadCalStatus) : FileOpsMessage
+
+    /**
+     * 0xD1 — the six-face accelerometer calibration (#1629): the stored
+     * offset and the last face window.  Only ever an answer to commands
+     * 76/77/78 or the close of a face window the app asked for.
+     */
+    public data class AccelCal(val status: AccelCalStatus) : FileOpsMessage
 
     /** '{' JSON with `"type":"ota_status"` (#8 phase 2). */
     public data class Ota(val status: OtaStatusUpdate) : FileOpsMessage

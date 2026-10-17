@@ -1,11 +1,13 @@
 package com.tinkerbug.tinkerrocket.protocol
 
+import kotlinx.serialization.json.float
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -78,6 +80,24 @@ class FileOpsDispatchGoldenTest {
                     assertEquals(side["flags"]!!.jsonPrimitive.int, m.status.flags, rel)
                     assertEquals(side["pad_lat_e7"]!!.jsonPrimitive.int, m.status.padLatE7, rel)
                     assertEquals(side["pos_sigma_cm"]!!.jsonPrimitive.int, m.status.posSigmaCm, rel)
+                }
+                f.name.startsWith("accelcal_") -> {
+                    // Every field: the six-face solve reads the means and the
+                    // save's read-back compares the offsets to 1e-5 m/s², so a
+                    // byte out of place anywhere in the 40 matters.
+                    val s = assertIs<FileOpsMessage.AccelCal>(msg, rel).status
+                    fun f(key: String): Float = side[key]!!.jsonPrimitive.float
+                    val flags = side["flags"]!!.jsonPrimitive.int
+                    assertEquals(flags, s.flags, rel)
+                    assertEquals(flags and 0x01 != 0, s.stored, rel)
+                    assertEquals(flags and 0x02 != 0, s.applied, rel)
+                    assertEquals(side["face_state"]!!.jsonPrimitive.int, s.faceState.raw, rel)
+                    assertEquals(listOf(f("offset_x"), f("offset_y"), f("offset_z")), s.offset, rel)
+                    assertEquals(
+                        listOf(f("face_mean_x"), f("face_mean_y"), f("face_mean_z")), s.faceMean, rel,
+                    )
+                    assertEquals(listOf(f("face_sd_x"), f("face_sd_y"), f("face_sd_z")), s.faceSd, rel)
+                    assertEquals(side["face_n"]!!.jsonPrimitive.int, s.faceN, rel)
                 }
                 else -> throw AssertionError("unmapped fixture $rel — extend this walk")
             }
@@ -162,6 +182,23 @@ class FileOpsDispatchGoldenTest {
             FileOpsDispatch.parse(ByteArray(41) { if (it == 0) 0xD0.toByte() else 0 }),
         )
         assertEquals(PadCalState.IDLE, m.status.calState)
+    }
+
+    @Test
+    fun `accel cal status needs the whole 41-byte frame`() {
+        // [0xD1][AccelCalStatusData 40 B] (#1629).  One byte short is dropped,
+        // and never reaches the file-list parser.
+        assertNull(FileOpsDispatch.parse(ByteArray(40) { if (it == 0) 0xD1.toByte() else 0 }))
+        val m = assertIs<FileOpsMessage.AccelCal>(
+            FileOpsDispatch.parse(ByteArray(41) { if (it == 0) 0xD1.toByte() else 0 }),
+        )
+        assertEquals(AccelFaceState.IDLE, m.status.faceState)
+        assertFalse(m.status.stored)
+        assertFalse(m.status.applied)
+        // A face_state this app does not know reads as IDLE, which the face
+        // sequencing ignores, rather than as a result.
+        val odd = ByteArray(41).also { it[0] = 0xD1.toByte(); it[2] = 9 }
+        assertEquals(AccelFaceState.IDLE, assertIs<FileOpsMessage.AccelCal>(FileOpsDispatch.parse(odd)).status.faceState)
     }
 
     @Test
