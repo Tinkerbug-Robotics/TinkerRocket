@@ -201,6 +201,24 @@ final class SettingsNavigationTests: XCTestCase {
         try await open(row: IndexPath(item: 2, section: 2), expecting: "Pad Calibration", in: root)
     }
 
+    /// The six-face accelerometer calibration (#1629) sits under the pad
+    /// calibration, and opens for a rocket that is connected and powered.
+    func testTheAccelerometerCalibrationOpens() async throws {
+        let fleet = BLEFleet()
+        let store = RocketProfileStore(directory: tempDir, defaults: defaults)
+        store.setActive(store.add(name: "Atlas").id)
+        let rocket = LinkedDevice(UUID())
+        connect(rocket, to: fleet)
+        feed(rocket, railOn: true)
+
+        let root = await host(SettingsView(device: rocket)
+            .environmentObject(fleet)
+            .environmentObject(store))
+        // Calibration: Magnetometer Calibration, its note, Pad Calibration,
+        // its note, then Accelerometer Calibration (Six Faces).
+        try await open(row: IndexPath(item: 4, section: 2), expecting: "Accelerometer Calibration", in: root)
+    }
+
     // MARK: - Hosting
 
     private func host<V: View>(_ view: V) async -> UIViewController {

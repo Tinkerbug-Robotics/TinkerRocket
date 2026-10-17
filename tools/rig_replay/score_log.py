@@ -26,13 +26,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "..", "Data_Analysis"))
 import plot_flight_data_mini as P  # noqa: E402
-from truth import EDGE_MPS2, Truth, edge_t, flight_files  # noqa: E402
-
-
-def unwrap_us(arr):
-    a = np.asarray(arr, dtype=np.int64)
-    wraps = np.cumsum(np.diff(a, prepend=a[0]) < -2 ** 31)
-    return a + wraps * 2 ** 32
+from truth import Truth, edge_t, flight_files, log_time_base, unwrap_us  # noqa: E402
 
 
 def phase_stats(tr, name, t, ep, ev, sel=None):
@@ -70,16 +64,7 @@ def main():
     print({k: len(v) for k, v in recs.items() if v})
 
     # ---- the MCU clock on the flight's time: the ignition edge
-    imu = recs["ISM6HG256"]
-    it = unwrap_us([r["time_us"] for r in imu]) * 1e-6
-    lo = np.array([[r["low_acc_x"], r["low_acc_y"], r["low_acc_z"]] for r in imu])
-    hi = np.array([[r["high_acc_x"], r["high_acc_y"], r["high_acc_z"]] for r in imu])
-    near_rail = np.array([r["low_g_near_rail"] for r in imu])
-    amag = np.where(near_rail, np.linalg.norm(hi, axis=1), np.linalg.norm(lo, axis=1))
-    first = int(np.argmax(amag > EDGE_MPS2))
-    k = first - 1
-    t_cross = it[k] + (EDGE_MPS2 - amag[k]) / (amag[first] - amag[k]) * (it[first] - it[k])
-    base = edge - t_cross
+    base = log_time_base(recs, edge)
     print(f"time map: t = MCU s {base:+.4f}, from the ignition edge (the replay's at t = {edge * 1e3:+.3f} ms)")
 
     # ---- the raw-GNSS filter's records

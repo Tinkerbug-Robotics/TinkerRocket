@@ -109,6 +109,19 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// rocket's firmware knows command 75. Reset on disconnect.
     @Published private(set) var padCalStatus: PadCalStatus?
 
+    /// Latest accelerometer-calibration status from the FC (#1629): file_ops
+    /// behind 0xD1, in answer to commands 76/77/78 and when a face window
+    /// closes. nil until the first frame. Reset on disconnect. The offset is a
+    /// board property that only the six-face screen writes: it is in no rocket
+    /// profile and no connect-time sync.
+    @Published private(set) var accelCalStatus: AccelCalStatus?
+
+    /// Every 0xD1 frame, in order. The six-face screen sequences them (a
+    /// MEASURING frame, then the window's result), which `accelCalStatus`
+    /// cannot carry: two equal frames publish no change, and SwiftUI may
+    /// coalesce changes that come close together.
+    let accelCalFrames = PassthroughSubject<AccelCalStatus, Never>()
+
     /// Latest flash-space stats: rocketStorage on a direct rocket link (0xCC),
     /// bsStorage on a base-station link (0xCD). Each is shown by its own bar.
     @Published var rocketStorage: RocketStorageStats?
@@ -186,6 +199,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// mounting before arming. Empty until a v3-orientation FC reports it.
     @Published var imuOrientationName: String = ""
     @Published var imuOrientationMode: IMUOrientationMode = .unknown
+    /// The mounting code in that "imu_orient" message (0...23; in auto-exact
+    /// the nearest code, not the rotation in use). The rocket's own link
+    /// leaves "imo" out of telemetry, so the six-face screen's live hint
+    /// turns lx/ly/lz back with this. nil until a message carries one; reset
+    /// on disconnect, so a hint never runs on an earlier link's mounting.
+    @Published var imuOrientationCode: Int?
 
     /// Live guidance-target echo (#435): FC-authoritative state of the
     /// station-keep aim point ("guid_target" frames relayed by the OC).
@@ -412,6 +431,8 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         // the generation bump disarms a fallback armed before the drop.
         padCalStatus = nil
         padCalGeneration += 1
+        accelCalStatus = nil
+        imuOrientationCode = nil
         pyroTestRefusal = nil
         // #435: the guidance-target echo is per-connection live state; the
         // OC re-pushes it in the connect-time config readback, so a stale
@@ -1505,6 +1526,30 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
     }
 
+    // MARK: - Accelerometer six-face calibration (#1629)
+    //
+    // tools/accel_cal_six_face.py is the reference; AccelCalFlow runs the
+    // same steps. Each command is answered with a 0xD1 frame on file_ops
+    // (`accelCalStatus` / `accelCalFrames`).
+
+    /// Store and apply the low-g accelerometer's offset: command 76 with
+    /// AccelCalApplyData, three little-endian Float32 (x, y, z), board frame,
+    /// m/s². All zero clears it. The FC refuses any |component| > 1.0 m/s²
+    /// (and answers with its unchanged status), and refuses in flight, after
+    /// a flight and during a magnetometer calibration (without an answer).
+    func sendAccelCalApply(x: Float, y: Float, z: Float) {
+        sendRawCommand(76, payload: AccelCalApply.payload(x: x, y: y, z: z))
+    }
+
+    /// Ask the FC for its stored offset and last face window: one 0xD1 frame.
+    func sendAccelCalRead() { sendRawCommand(77) }
+
+    /// Average the low-g accelerometer over one 3 s face window: a 0xD1
+    /// MEASURING frame at once, then DONE or FAILED. A refusal (in flight,
+    /// after a flight, in a sim, during a magnetometer calibration) is a
+    /// FAILED frame with no samples and no MEASURING before it.
+    func sendAccelFaceMeasure() { sendRawCommand(78) }
+
     func sendToggleLogging() {
         sendCommand(23)
     }
@@ -2291,6 +2336,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         case 0xCD: parseBaseStationStorageStats(data)
         case 0xCE: parsePyroTestRefusal(data)  // rail-off pyro refusal
         case 0xD0: parsePadCalStatus(data)     // pad calibration, #1600 phase 5
+        case 0xD1: parseAccelCalStatus(data)   // accelerometer six-face calibration, #1629
         case 0x7B:                              // '{' → JSON object
             if let s = OTAStatusUpdate.parse(data) {
                 otaStatus = s
@@ -2560,6 +2606,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             if let mode = dict["mode"] as? Int {
                 imuOrientationMode = IMUOrientationMode(rawValue: mode) ?? .unknown
             }
+            if let code = dict["code"] as? Int { imuOrientationCode = code }
             if let set = dict["set"] as? Int, var cfg = rocketConfig {
                 cfg.imuOrientSetting = UInt8(clamping: set)
                 rocketConfig = cfg
@@ -2784,6 +2831,19 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             return
         }
         padCalStatus = status
+    }
+
+    /// 0xD1 — accelerometer calibration status (#1629): [0xD1][40-byte
+    /// AccelCalStatusData]. A short frame is dropped whole.
+    private func parseAccelCalStatus(_ data: Data) {
+        let bytes = [UInt8](data)
+        guard bytes.count >= 1 + AccelCalStatus.payloadLength, bytes[0] == 0xD1,
+              let status = AccelCalStatus.decode(Array(bytes[1...])) else {
+            print("[ACCCAL] malformed status (\(bytes.count) bytes)")
+            return
+        }
+        accelCalStatus = status
+        accelCalFrames.send(status)
     }
 
     /// 0xCE — rail-off pyro-test refusal (OC sendPyroTestRefusal).

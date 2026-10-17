@@ -10,8 +10,10 @@
 #include <cstdlib>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
+#include <random>
 #include <thread>
 #include <vector>
 
@@ -19,6 +21,7 @@
 #include "Lc86RawEpoch.h"
 #include "RawGnssShadow.h"
 #include "Rtcm3Msm.h"
+#include "RtcmEphemeris.h"
 #include "ShadowLink.h"
 #include "fixtures/raw_meas_golden.h"
 #include "gnss/atmo.h"
@@ -57,10 +60,21 @@ ShadowImu still(int64_t t_us, uint8_t flags = gnss_raw::kShadowLevel)
     return s;
 }
 
+// The golden epochs are the LC86G's on the rig in a coasting flight (all
+// their Dopplers agree on a climb of 29-39 m/s), fed here to a filter held
+// still: the vertical check would drop them, rightly. The tests that take them
+// for their pseudoranges and plumbing run without it.
+RawGnssShadow::Config goldenStill()
+{
+    RawGnssShadow::Config c;
+    c.vert_check_mps = 0.0;
+    return c;
+}
+
 // A filter that steps on every tick, for the tests that time things to one.
 RawGnssShadow::Config everyTick()
 {
-    RawGnssShadow::Config c;
+    RawGnssShadow::Config c = goldenStill();
     c.min_step_s = 0.0;
     return c;
 }
@@ -522,7 +536,7 @@ TEST(RawGnssShadow, TheNavigationFilterFusesAnEpochInSlicesAndKeepsStepping)
     uint32_t steps_during[2] = {};
     for (int sliced = 0; sliced < 2; ++sliced)
     {
-        RawGnssShadow::Config cfg;            // the navigation filter's (primaryCfg, below)
+        RawGnssShadow::Config cfg = goldenStill();   // the navigation filter's (primaryCfg, below)
         cfg.primary = true;
         cfg.min_step_s = 0.01;
         if (sliced)
@@ -890,7 +904,7 @@ TEST(RawGnssShadow, TheBarometerHoldsTheHeightWithNoSatellites)
     double drift[2] = {};
     for (int with_baro = 0; with_baro < 2; ++with_baro)
     {
-        RawGnssShadow sh;
+        RawGnssShadow sh(goldenStill());
         double h0 = 0.0;
         int64_t t = ownFixShadow(sh, h0);
         ASSERT_TRUE(sh.running());
@@ -1010,12 +1024,13 @@ TEST(RawGnssShadow, TheNavigationFilterSetsItsOwnAttitudeOnThePad)
         for (int i = 0; i < 3; ++i)
             s.acc[i] = acc[i];
         s.flags = gnss_raw::kShadowLevel;
-        if ((t - kT0) % 20000 == 0)                // a 50 Hz magnetometer
+        if ((t - kT0) % 20000 == 0)                // a 50 Hz magnetometer, calibrated
         {
             gnss_raw::ShadowMag m{};
             m.time_us = static_cast<uint32_t>(t);
             for (int i = 0; i < 3; ++i)
                 m.mag[i] = mag[i];
+            m.flags = gnss_raw::kShadowMagCalibrated;
             sh.onMag(m);
         }
         if ((t - kT0) % 1000000 == 0)              // and the seed, once a second as main.cpp sends it
@@ -1078,6 +1093,7 @@ TEST(RawGnssShadow, EachRecordCarriesTheAttitudeSigmaAndTheBiasesBesideIt)
             m.time_us = static_cast<uint32_t>(t);
             for (int i = 0; i < 3; ++i)
                 m.mag[i] = mag[i];
+            m.flags = gnss_raw::kShadowMagCalibrated;
             sh.onMag(m);
         }
         if ((t - kT0) % 1000000 == 0)              // the seed, once a second as main.cpp sends it
@@ -1105,6 +1121,534 @@ TEST(RawGnssShadow, EachRecordCarriesTheAttitudeSigmaAndTheBiasesBesideIt)
         EXPECT_TRUE(std::isfinite(after_mag.gyro_bias_dps[i]));
         EXPECT_GT(after_mag.acc_bias_sigma_mmps2[i], 0);
         EXPECT_GT(after_mag.gyro_bias_sigma_mdps[i], 0);
+    }
+}
+
+// ------------------------------- the magnetometer's hard iron (#1590)
+
+namespace
+{
+
+// rp5_0829 on its rail, as above: the truth's attitude and its field (WMM's at
+// the pad: 50.3 uT, 64.8 deg below the horizontal, heading 44.7 deg), and the
+// seed main.cpp starts from -- the accelerometer's tilt and a guess at the
+// heading, north.
+struct RailPad
+{
+    float q_true[4] = {}, acc[3] = {}, mag[3] = {};
+    double b_ned[3] = {21.0, -4.3, 45.5};
+    ShadowSeed seed{};
+
+    RailPad()
+    {
+        float q_seed[4];
+        quatYawPitch(44.7 * kPi / 180.0, 83.6 * kPi / 180.0, q_true);
+        quatYawPitch(0.0, 83.6 * kPi / 180.0, q_seed);
+        const double up[3] = {0.0, 0.0, -kG};
+        nedToBody(q_true, up, acc);
+        nedToBody(q_true, b_ned, mag);
+        seed = padSeed(kT0);
+        for (int i = 0; i < 4; ++i)
+            seed.quat[i] = q_seed[i];
+        seed.declination_rad = float(std::atan2(b_ned[1], b_ned[0]));
+        seed.field_ut = 50.3f;
+        seed.have_declination = 1;
+        seed.dip_rad = float(dipRad());
+        seed.have_dip = 1;
+    }
+
+    double dipRad() const { return std::atan2(b_ned[2], std::hypot(b_ned[0], b_ned[1])); }
+
+    // A hard iron on the board, given in NED (on the still pad it is fixed
+    // there too): the body's part of it.
+    void hardIron(const double h_ned[3], float h_body[3]) const { nedToBody(q_true, h_ned, h_body); }
+
+    // From t0 for secs, still on the rail: the IMU at 200 Hz (its specific
+    // force acc_scale times gravity's, flagged imu_flags), the seed once a
+    // second as main.cpp sends it, and a 50 Hz magnetometer reading the field
+    // plus h_body (uT), each sample's flags flags_at(seconds since kT0).
+    // Returns where it stopped.
+    template <typename F>
+    int64_t run(RawGnssShadow& sh, int64_t t0, double secs, const float h_body[3], F flags_at,
+                uint8_t imu_flags = gnss_raw::kShadowLevel, float acc_scale = 1.0f)
+    {
+        int64_t t = t0;
+        for (; t < t0 + static_cast<int64_t>(secs * 1e6); t += 5000)
+        {
+            ShadowImu s{};
+            s.time_us = static_cast<uint32_t>(t);
+            for (int i = 0; i < 3; ++i)
+                s.acc[i] = acc[i] * acc_scale;
+            s.flags = imu_flags;
+            if ((t - kT0) % 20000 == 0)
+            {
+                gnss_raw::ShadowMag m{};
+                m.time_us = static_cast<uint32_t>(t);
+                for (int i = 0; i < 3; ++i)
+                    m.mag[i] = mag[i] + h_body[i];
+                m.flags = flags_at((t - kT0) * 1e-6);
+                sh.onMag(m);
+            }
+            if ((t - kT0) % 1000000 == 0)
+            {
+                seed.time_us = static_cast<uint32_t>(t);
+                sh.onSeed(seed);
+            }
+            sh.onImu(s, t);
+        }
+        return t;
+    }
+};
+
+// The filter's heading less the truth's about the vertical, deg.
+double headingErrDeg(const RawGnssShadow& sh, const float q_true[4])
+{
+    return gnss_raw::headingBetween(sh.filter().quat(), q_true) * 180.0 / kPi;
+}
+
+double headingSigmaDeg(const RawGnssShadow& sh)
+{
+    float s[3];
+    sh.filter().attSigmaNed(s);
+    return s[2] * 180.0 / kPi;
+}
+
+// 40 uT of hard iron, as an uncalibrated Beetle carries, laid where it keeps
+// |B| at the model's 50.3 uT exactly: across the field's horizontal part and
+// 17.6 uT up, 114 deg from B. The size test passes it, and it reads a heading
+// 59 deg east of the truth (at 64.8 deg of dip it also lifts the field to
+// 33.7 deg).
+void sizePassingHardIron(const RailPad& pad, float h_body[3])
+{
+    const double bh = std::hypot(pad.b_ned[0], pad.b_ned[1]);
+    const double across[2] = {-pad.b_ned[1] / bh, pad.b_ned[0] / bh};   // the horizontal, 90 deg east of B's
+    const double h_d = -17.58, h_a = std::sqrt(40.0 * 40.0 - h_d * h_d);
+    const double h_ned[3] = {h_a * across[0], h_a * across[1], h_d};
+    pad.hardIron(h_ned, h_body);
+}
+
+}  // namespace
+
+TEST(RawGnssShadow, AnUncalibratedMagnetometerIsNoHeading)
+{
+    // An uncalibrated Beetle on the rail, its 40 uT of hard iron at an
+    // attitude where the field's size is the model's: refused, every sample
+    // counted, though the size test alone would pass it. The heading stays
+    // the start's guess and as unsure as the start left it.
+    RailPad pad;
+    float h[3];
+    sizePassingHardIron(pad, h);
+    const double mm = std::sqrt(double(pad.mag[0] + h[0]) * (pad.mag[0] + h[0]) +
+                                double(pad.mag[1] + h[1]) * (pad.mag[1] + h[1]) +
+                                double(pad.mag[2] + h[2]) * (pad.mag[2] + h[2]));
+    ASSERT_NEAR(mm, 50.3, 0.5);                   // the size test's 15 % is no help
+    RawGnssShadow sh(primaryCfg());
+    pad.run(sh, kT0, 5.0, h, [](double) { return uint8_t(0); });
+    ASSERT_TRUE(sh.running());
+    EXPECT_EQ(sh.stats().mag_fused, 0u);
+    EXPECT_GE(sh.stats().mag_uncal, 245u);        // 50 a second, from the start's first step
+    EXPECT_EQ(sh.stats().mag_suspect, 0u);        // counted once, by the gate it failed first
+    EXPECT_EQ(sh.stats().mag_dip, 0u);
+    EXPECT_NEAR(headingErrDeg(sh, pad.q_true), -44.7, 1.0);   // north: the seed's guess
+    EXPECT_GT(headingSigmaDeg(sh), 50.0);
+}
+
+TEST(RawGnssShadow, ACalibratedMagnetometerIsAHeading)
+{
+    // The true field, its hard iron out by a stored calibration: fused, and
+    // the heading turned from the guess onto the truth.
+    RailPad pad;
+    const float none[3] = {};
+    RawGnssShadow sh(primaryCfg());
+    pad.run(sh, kT0, 5.0, none, [](double) { return gnss_raw::kShadowMagCalibrated; });
+    EXPECT_GE(sh.stats().mag_fused, 245u);
+    EXPECT_EQ(sh.stats().mag_uncal, 0u);
+    EXPECT_EQ(sh.stats().mag_suspect, 0u);
+    EXPECT_EQ(sh.stats().mag_dip, 0u);
+    EXPECT_NEAR(sh.stats().mag_dip_err_deg, 0.0f, 0.01f);   // the truth's dip, the model's
+    EXPECT_NEAR(headingErrDeg(sh, pad.q_true), 0.0, 1.0);
+    EXPECT_LT(headingSigmaDeg(sh), 5.0);
+}
+
+TEST(RawGnssShadow, ACalibrationAppliedWhileItRunsCountsFromItsFirstSample)
+{
+    // Each sample carries whether its hard iron is out, so a calibration the
+    // app pushes on the pad counts from the next sample, with no restart.
+    RailPad pad;
+    const float none[3] = {};
+    RawGnssShadow sh(primaryCfg());
+    pad.run(sh, kT0, 6.0, none,
+            [](double t) { return t < 3.0 ? uint8_t(0) : gnss_raw::kShadowMagCalibrated; });
+    EXPECT_EQ(sh.stats().starts, 1u);
+    EXPECT_NEAR(double(sh.stats().mag_uncal), 149.0, 2.0);
+    EXPECT_NEAR(double(sh.stats().mag_fused), 150.0, 2.0);
+    EXPECT_NEAR(headingErrDeg(sh, pad.q_true), 0.0, 1.0);
+}
+
+TEST(RawGnssShadow, ASimsFieldNeedsNoCalibration)
+{
+    // A sensor sim's field, and the rig replay's, is the truth's
+    // (kShadowMagSim): taken with no stored calibration.
+    RailPad pad;
+    const float none[3] = {};
+    RawGnssShadow sh(primaryCfg());
+    pad.run(sh, kT0, 5.0, none, [](double) { return gnss_raw::kShadowMagSim; });
+    EXPECT_GE(sh.stats().mag_fused, 245u);
+    EXPECT_EQ(sh.stats().mag_uncal, 0u);
+    EXPECT_NEAR(headingErrDeg(sh, pad.q_true), 0.0, 1.0);
+}
+
+namespace
+{
+
+// The field the magnetometer reads turned off the truth's, as a hard iron
+// (body, uT) that does it: tipped by d_dip_deg toward the vertical (its size
+// and heading kept), and turned about the vertical by turn_deg (its size and
+// dip kept).
+void turnedField(const RailPad& pad, double d_dip_deg, double turn_deg, float h_body[3])
+{
+    const double bn = std::sqrt(pad.b_ned[0] * pad.b_ned[0] + pad.b_ned[1] * pad.b_ned[1] +
+                                pad.b_ned[2] * pad.b_ned[2]);
+    const double dip = pad.dipRad() + d_dip_deg * kPi / 180.0;
+    const double az = std::atan2(pad.b_ned[1], pad.b_ned[0]) + turn_deg * kPi / 180.0;
+    const double m_ned[3] = {bn * std::cos(dip) * std::cos(az), bn * std::cos(dip) * std::sin(az), bn * std::sin(dip)};
+    const double h_ned[3] = {m_ned[0] - pad.b_ned[0], m_ned[1] - pad.b_ned[1], m_ned[2] - pad.b_ned[2]};
+    pad.hardIron(h_ned, h_body);
+}
+
+}  // namespace
+
+TEST(RawGnssShadow, AFieldOffTheModelsDipIsNoHeading)
+{
+    // The 40 uT the size test passes, on a magnetometer flagged calibrated (a
+    // calibration gone stale: a battery moved, a screw changed): it lifts the
+    // field 31 deg toward the horizontal, and the dip test refuses every
+    // sample. The heading stays the start's guess.
+    RailPad pad;
+    float h[3];
+    sizePassingHardIron(pad, h);
+    RawGnssShadow sh(primaryCfg());
+    pad.run(sh, kT0, 5.0, h, [](double) { return gnss_raw::kShadowMagCalibrated; });
+    EXPECT_EQ(sh.stats().mag_fused, 0u);
+    EXPECT_GE(sh.stats().mag_dip, 245u);
+    EXPECT_EQ(sh.stats().mag_uncal, 0u);
+    EXPECT_EQ(sh.stats().mag_suspect, 0u);         // its size is the model's
+    EXPECT_NEAR(sh.stats().mag_dip_err_deg, 33.7f - 64.8f, 0.2f);
+    EXPECT_NEAR(headingErrDeg(sh, pad.q_true), -44.7, 1.0);
+
+    // What it keeps out: with no dip to hold it to, the size test alone takes
+    // it, and the heading goes 59 deg the wrong way of the truth.
+    RailPad nodip;
+    nodip.seed.have_dip = 0;
+    RawGnssShadow open(primaryCfg());
+    nodip.run(open, kT0, 5.0, h, [](double) { return gnss_raw::kShadowMagCalibrated; });
+    EXPECT_GE(open.stats().mag_fused, 245u);
+    EXPECT_EQ(open.stats().mag_dip, 0u);
+    const double bh = std::hypot(pad.b_ned[0], pad.b_ned[1]);
+    const double wrong_deg = std::atan2(std::sqrt(40.0 * 40.0 - 17.58 * 17.58), bh) * 180.0 / kPi;   // 59.2
+    EXPECT_NEAR(headingErrDeg(open, nodip.q_true), -wrong_deg, 2.0);
+}
+
+TEST(RawGnssShadow, TheDipTestTakesWhatACalibratedMagnetometerIsOffBy)
+{
+    // mag_dip_tol_deg (6): a field tipped 5 deg -- a calibrated QMC5883P's
+    // worst case (RawGnssShadow.h) -- is fused either way; 7 deg is refused.
+    ASSERT_DOUBLE_EQ(RawGnssShadow::Config().mag_dip_tol_deg, 6.0);
+    for (double d : {-5.0, 5.0, -7.0, 7.0})
+    {
+        RailPad pad;
+        float h[3];
+        turnedField(pad, d, 0.0, h);
+        RawGnssShadow sh(primaryCfg());
+        pad.run(sh, kT0, 2.0, h, [](double) { return gnss_raw::kShadowMagCalibrated; });
+        EXPECT_NEAR(sh.stats().mag_dip_err_deg, d, 0.01) << d;
+        if (std::fabs(d) < 6.0)
+        {
+            EXPECT_GE(sh.stats().mag_fused, 95u) << d;
+            EXPECT_EQ(sh.stats().mag_dip, 0u) << d;
+            EXPECT_NEAR(headingErrDeg(sh, pad.q_true), 0.0, 1.0) << d;   // tipped, not turned
+        }
+        else
+        {
+            EXPECT_EQ(sh.stats().mag_fused, 0u) << d;
+            EXPECT_GE(sh.stats().mag_dip, 95u) << d;
+        }
+    }
+}
+
+TEST(RawGnssShadow, OnlyTheCalibrationGuardsAHardIronThatTurnsTheFieldAboutTheVertical)
+{
+    // 21 uT laid so the field only turns 60 deg about the vertical: its size
+    // and its dip are the model's, and neither test can see it. Flagged
+    // calibrated it is fused, the heading 60 deg off -- what the size and dip
+    // tests cannot do; uncalibrated it is refused.
+    RailPad pad;
+    float h[3];
+    turnedField(pad, 0.0, 60.0, h);
+    RawGnssShadow stale(primaryCfg());
+    pad.run(stale, kT0, 5.0, h, [](double) { return gnss_raw::kShadowMagCalibrated; });
+    EXPECT_GE(stale.stats().mag_fused, 245u);
+    EXPECT_EQ(stale.stats().mag_suspect + stale.stats().mag_dip, 0u);
+    EXPECT_NEAR(headingErrDeg(stale, pad.q_true), -60.0, 2.0);
+
+    RailPad pad2;
+    RawGnssShadow uncal(primaryCfg());
+    pad2.run(uncal, kT0, 5.0, h, [](double) { return uint8_t(0); });
+    EXPECT_EQ(uncal.stats().mag_fused, 0u);
+    EXPECT_GE(uncal.stats().mag_uncal, 245u);
+}
+
+TEST(RawGnssShadow, TheMagnetometerIsTakenOnlyOnTheGroundAtGsSize)
+{
+    // The dip test takes the specific force as down: so the magnetometer is
+    // applied only on the ground, the force g's size. In flight, and on the
+    // pad with a motor burning before the launch detector's verdict, every
+    // sample is seen and none is applied -- fused, or refused by any gate.
+    RailPad pad;
+    float h[3];
+    sizePassingHardIron(pad, h);                   // what the dip test would refuse
+    RawGnssShadow sh(primaryCfg());
+    int64_t t = pad.run(sh, kT0, 1.0, h, [](double) { return gnss_raw::kShadowMagCalibrated; });
+    const RawGnssShadow::Stats before = sh.stats();
+    ASSERT_GT(before.mag_dip, 40u);
+    t = pad.run(sh, t, 1.0, h, [](double) { return gnss_raw::kShadowMagCalibrated; },
+                gnss_raw::kShadowInFlight);         // in flight
+    t = pad.run(sh, t, 1.0, h, [](double) { return gnss_raw::kShadowMagCalibrated; },
+                gnss_raw::kShadowLevel, 4.0f);      // 4 g on the pad
+    ASSERT_TRUE(sh.running());
+    EXPECT_GE(sh.stats().mags, before.mags + 100u);
+    EXPECT_EQ(sh.stats().mag_fused, before.mag_fused);
+    EXPECT_EQ(sh.stats().mag_dip, before.mag_dip);
+    EXPECT_EQ(sh.stats().mag_suspect, before.mag_suspect);
+    EXPECT_EQ(sh.stats().mag_uncal, before.mag_uncal);
+}
+
+TEST(RawGnssShadow, HeadingFreeLevellingLeavesTheMagnetometersPadHeading)
+{
+    // Gravity carries no heading on the ground either (the EKF's
+    // level_heading_free, on by default): with a calibrated magnetometer the
+    // pad's heading and its 1-sigma are what they were with the levelling's
+    // heading row left in -- the magnetometer sets them.
+    double err[2], sig[2];
+    for (int free = 0; free < 2; ++free)
+    {
+        RawGnssShadow::Config c = primaryCfg();
+        c.ekf.level_heading_free = free != 0;
+        RawGnssShadow sh(c);
+        RailPad pad;
+        const float none[3] = {};
+        pad.run(sh, kT0, 10.0, none, [](double) { return gnss_raw::kShadowMagCalibrated; });
+        ASSERT_TRUE(sh.running());
+        EXPECT_GE(sh.stats().mag_fused, 495u);
+        err[free] = headingErrDeg(sh, pad.q_true);
+        sig[free] = headingSigmaDeg(sh);
+    }
+    EXPECT_TRUE(RawGnssShadow::Config().ekf.level_heading_free);
+    EXPECT_NEAR(err[1], 0.0, 0.5);
+    EXPECT_NEAR(err[1], err[0], 0.001);                        // 0.0096 deg both
+    EXPECT_LT(sig[1], 1.0);
+    EXPECT_NEAR(sig[1], sig[0], 0.001 * sig[0]);               // 0.283 deg both
+}
+
+TEST(RawGnssShadow, WithNoMagnetometerThePadLevellingKeepsTheHeadingUnknown)
+{
+    // No heading on the pad (the magnetometer uncalibrated, refused), and a
+    // seed 3 deg off the rail's tilt: the levelling learns the tilt and,
+    // heading-free, leaves the heading as unknown as the start said (p0_hdg's
+    // 57 deg, growing). With the heading row left in, the linearization's
+    // move gave the levelling part of the heading's variance (#1626 N10):
+    // a 1-sigma degrees smaller that nothing measured.
+    double sig[2], err[2];
+    for (int free = 0; free < 2; ++free)
+    {
+        RawGnssShadow::Config c = primaryCfg();
+        c.ekf.level_heading_free = free != 0;
+        RawGnssShadow sh(c);
+        RailPad pad;
+        quatYawPitch(0.0, 80.6 * kPi / 180.0, pad.seed.quat);   // the tilt 3 deg off
+        const float none[3] = {};
+        pad.run(sh, kT0, 10.0, none, [](double) { return uint8_t(0); });
+        ASSERT_TRUE(sh.running());
+        EXPECT_EQ(sh.stats().mag_fused, 0u);
+        sig[free] = headingSigmaDeg(sh);
+        err[free] = headingErrDeg(sh, pad.q_true);
+        // the tilt learned either way: from p0_att's 40 deg to what a still
+        // pad can tell from an accelerometer bias of p0_abias's 0.1 g (#1626 K1)
+        float s[3];
+        sh.filter().attSigmaNed(s);
+        EXPECT_LT(s[0] * 180.0 / kPi, 6.0) << free;
+        EXPECT_LT(s[1] * 180.0 / kPi, 6.0) << free;
+    }
+    EXPECT_GT(sig[1], 57.0);                                   // 57.9 deg
+    EXPECT_LT(sig[0], sig[1] - 10.0);                          // 41.5 with the heading rows left in
+    EXPECT_NEAR(err[1], -44.7, 1.0);                           // north, the seed's guess
+}
+
+TEST(RawGnssShadow, ALaunchWithNoMagnetometerHeadingIsCountedWithItsOwnSigma)
+{
+    // The no-magnetometer start: a pad that fused no heading (here its
+    // magnetometer uncalibrated, so refused) launches on the start's guess,
+    // 44.7 deg off on this rail, at p0_hdg's 57 deg 1-sigma and growing. Each
+    // launch keeps its own 1-sigma, and one with no magnetometer heading is
+    // counted. Act still claims its fallback prior (30) about the guess --
+    // tighter than the filter's own, which is what the flight computer says
+    // loudly; observe keeps the filter's own. A calibrated pad's launch is
+    // not counted, and act loosens its sub-degree heading to the
+    // magnetometer's prior (10).
+    for (uint8_t mode : {uint8_t(RawGnssShadow::kHeadingObserve), uint8_t(RawGnssShadow::kHeadingAct)})
+        for (bool cal : {false, true})
+        {
+            RawGnssShadow::Config c = primaryCfg();
+            c.heading_mode = mode;
+            RawGnssShadow sh(c);
+            RailPad pad;
+            const float none[3] = {};
+            const uint8_t flags = cal ? gnss_raw::kShadowMagCalibrated : uint8_t(0);
+            const int64_t t = pad.run(sh, kT0, 10.0, none, [flags](double) { return flags; });
+            const double own = headingSigmaDeg(sh);
+            const double err = headingErrDeg(sh, pad.q_true);
+            EXPECT_EQ(sh.stats().heading_unset_launches, 0u);
+            // launch: a tenth of a second at 4 g along the nose
+            pad.run(sh, t, 0.1, none, [flags](double) { return flags; }, gnss_raw::kShadowInFlight, 4.0f);
+            ASSERT_TRUE(sh.running());
+            const char* what = cal ? "calibrated" : "no heading";
+            EXPECT_EQ(sh.stats().heading_unset_launches, cal ? 0u : 1u) << int(mode) << what;
+            EXPECT_NEAR(sh.stats().heading_launch_sigma_deg, own, 0.5) << int(mode) << what;
+            if (cal)
+            {
+                EXPECT_LT(own, 1.0) << int(mode);
+                EXPECT_NEAR(err, 0.0, 0.5) << int(mode);
+            }
+            else
+            {
+                EXPECT_GT(own, 55.0) << int(mode);
+                EXPECT_NEAR(err, -44.7, 1.0) << int(mode);   // north, the guess
+            }
+            if (mode == RawGnssShadow::kHeadingAct)
+                EXPECT_NEAR(headingSigmaDeg(sh), cal ? 10.0 : 30.0, 0.5) << what;   // act's prior
+            else
+                EXPECT_NEAR(headingSigmaDeg(sh), own, 1.0) << what;
+        }
+}
+
+namespace
+{
+
+// A pad on rp5_0829's rail in act: the magnetometer read as seg_flags says
+// through each segment (secs, flags, the field tipped by dip_deg toward the
+// vertical), then the launch edge (a tenth of a second at 4 g along the
+// nose). The heading's 1-sigma just after the edge, deg.
+struct PadSeg
+{
+    double secs;
+    uint8_t flags;
+    double dip_deg;
+};
+
+double launchPrior(RawGnssShadow& sh, const std::vector<PadSeg>& segs)
+{
+    RailPad pad;
+    int64_t t = kT0;
+    for (const PadSeg& g : segs)
+    {
+        float h[3] = {};
+        if (g.dip_deg != 0.0)
+            turnedField(pad, g.dip_deg, 0.0, h);
+        const uint8_t f = g.flags;
+        t = pad.run(sh, t, g.secs, h, [f](double) { return f; });
+    }
+    const float none[3] = {};
+    pad.run(sh, t, 0.1, none, [](double) { return gnss_raw::kShadowMagCalibrated; }, gnss_raw::kShadowInFlight, 4.0f);
+    EXPECT_TRUE(sh.running());
+    return headingSigmaDeg(sh);
+}
+
+RawGnssShadow::Config actCfg()
+{
+    RawGnssShadow::Config c = primaryCfg();
+    c.heading_mode = RawGnssShadow::kHeadingAct;
+    return c;
+}
+
+}  // namespace
+
+TEST(RawGnssShadow, ActsLaunchPriorIsTheMagnetometersOnlyWhenItsHeadingIsRecent)
+{
+    // heading_pad_sigma_deg (10) where the pad's heading is the
+    // magnetometer's -- a sample through the calibration, size and dip gates
+    // fused within heading_mag_recent_s (5 s) of the launch edge -- else
+    // heading_pad_sigma_fallback_deg (30).
+    constexpr uint8_t kCal = gnss_raw::kShadowMagCalibrated;
+    const RawGnssShadow::Config d;
+    EXPECT_DOUBLE_EQ(d.heading_pad_sigma_deg, 10.0);
+    EXPECT_DOUBLE_EQ(d.heading_pad_sigma_fallback_deg, 30.0);
+    EXPECT_DOUBLE_EQ(d.heading_mag_recent_s, 5.0);
+    {
+        SCOPED_TRACE("calibrated to the launch");
+        RawGnssShadow sh(actCfg());
+        EXPECT_NEAR(launchPrior(sh, {{10.0, kCal, 0.0}}), 10.0, 0.5);
+        EXPECT_EQ(sh.stats().heading_act_launches, 1u);
+        EXPECT_EQ(sh.stats().heading_mag_launches, 1u);
+        EXPECT_EQ(sh.stats().heading_launch_mag, 1);
+        EXPECT_FLOAT_EQ(sh.stats().heading_launch_prior_deg, 10.0f);
+        EXPECT_LT(sh.stats().heading_launch_mag_age_s, 0.1f);
+        EXPECT_EQ(sh.stats().heading_unset_launches, 0u);
+    }
+    {
+        SCOPED_TRACE("uncalibrated: none fused");
+        RawGnssShadow sh(actCfg());
+        EXPECT_NEAR(launchPrior(sh, {{10.0, 0, 0.0}}), 30.0, 0.5);
+        EXPECT_EQ(sh.stats().heading_mag_launches, 0u);
+        EXPECT_EQ(sh.stats().heading_launch_mag, 0);
+        EXPECT_LT(sh.stats().heading_launch_mag_age_s, 0.0f);
+        EXPECT_EQ(sh.stats().heading_unset_launches, 1u);
+    }
+    {
+        SCOPED_TRACE("stale: calibrated, then refused for the last 6 s (the calibration gone)");
+        RawGnssShadow sh(actCfg());
+        EXPECT_NEAR(launchPrior(sh, {{10.0, kCal, 0.0}, {6.0, 0, 0.0}}), 30.0, 0.5);
+        EXPECT_EQ(sh.stats().heading_launch_mag, 0);
+        EXPECT_NEAR(sh.stats().heading_launch_mag_age_s, 6.0f, 0.1f);
+        EXPECT_EQ(sh.stats().heading_unset_launches, 0u);   // it had one: not an unset launch
+    }
+    {
+        SCOPED_TRACE("recent: refused for the last 4 s only");
+        RawGnssShadow sh(actCfg());
+        EXPECT_NEAR(launchPrior(sh, {{10.0, kCal, 0.0}, {4.0, 0, 0.0}}), 10.0, 0.5);
+        EXPECT_EQ(sh.stats().heading_launch_mag, 1);
+        EXPECT_NEAR(sh.stats().heading_launch_mag_age_s, 4.0f, 0.1f);
+    }
+    {
+        SCOPED_TRACE("the dip gate refusing every sample");
+        RawGnssShadow sh(actCfg());
+        EXPECT_NEAR(launchPrior(sh, {{10.0, kCal, 10.0}}), 30.0, 0.5);
+        EXPECT_EQ(sh.stats().mag_fused, 0u);
+        EXPECT_GE(sh.stats().mag_dip, 495u);
+        EXPECT_EQ(sh.stats().heading_launch_mag, 0);
+    }
+    {
+        SCOPED_TRACE("the dip gate refusing for the last 6 s");
+        RawGnssShadow sh(actCfg());
+        EXPECT_NEAR(launchPrior(sh, {{10.0, kCal, 0.0}, {6.0, kCal, 10.0}}), 30.0, 0.5);
+        EXPECT_GE(sh.stats().mag_dip, 295u);
+        EXPECT_EQ(sh.stats().heading_launch_mag, 0);
+    }
+    {
+        SCOPED_TRACE("observe: no prior set");
+        RawGnssShadow::Config c = primaryCfg();
+        c.heading_mode = RawGnssShadow::kHeadingObserve;
+        RawGnssShadow sh(c);
+        EXPECT_LT(launchPrior(sh, {{10.0, kCal, 0.0}}), 1.0);
+        EXPECT_EQ(sh.stats().heading_act_launches, 0u);
+    }
+    {
+        SCOPED_TRACE("the priors as configured");
+        RawGnssShadow::Config c = actCfg();
+        c.heading_pad_sigma_deg = 7.0;
+        c.heading_pad_sigma_fallback_deg = 45.0;
+        RawGnssShadow a(c), b(c);
+        EXPECT_NEAR(launchPrior(a, {{10.0, kCal, 0.0}}), 7.0, 0.5);
+        EXPECT_NEAR(launchPrior(b, {{10.0, 0, 0.0}}), 45.0, 0.5);
     }
 }
 
@@ -1420,6 +1964,7 @@ struct SimScore
     double max_h_err = 0, max_horiz = 0, t_land = -1;
     float  v_end[3] = {};
     bool   running = false;
+    uint32_t mag_fused = 0, mag_refused = 0;
 };
 
 // A sim on the Beetle drops the receiver's raw output: the navigation filter
@@ -1443,6 +1988,8 @@ SimScore flyFirmwareSim(double gyro_bias_dps)
     seed.declination_rad = float(std::atan2(5.0, 22.0));
     seed.field_ut = 47.7f;
     seed.have_declination = 1;
+    seed.dip_rad = float(std::atan2(42.0, std::hypot(22.0, 5.0)));   // the sim's field's (WMM's there: 0.4 deg less)
+    seed.have_dip = 1;
     const double h0 = 0.0;
     double max_h_err = 0, max_horiz = 0, t_land = -1;
     bool launched = false, apogee = false;
@@ -1479,6 +2026,7 @@ SimScore flyFirmwareSim(double gyro_bias_dps)
                 gnss_raw::ShadowMag m{};
                 m.time_us = static_cast<uint32_t>(t);
                 sim.mag(m.mag);
+                m.flags = gnss_raw::kShadowMagSim;   // the sim's field: the truth's
                 sh.onMag(m);
             }
             if (!in_flight && (t - kT0) % 1000000 == 0)
@@ -1514,6 +2062,8 @@ SimScore flyFirmwareSim(double gyro_bias_dps)
     }
     sc.running = sh.running();
     sc.t_land = t_land;
+    sc.mag_fused = sh.stats().mag_fused;
+    sc.mag_refused = sh.stats().mag_uncal + sh.stats().mag_suspect + sh.stats().mag_dip;
     sc.max_h_err = max_h_err;
     sc.max_horiz = max_horiz;
     for (int i = 0; i < 3; ++i)
@@ -1536,6 +2086,9 @@ TEST(RawGnssShadow, TheNavigationFilterFliesTheFirmwaresSim)
     EXPECT_LT(sc.max_horiz, 5.0);
     for (int i = 0; i < 3; ++i)
         EXPECT_NEAR(sc.v_end[i], 0.0f, 0.3f);
+    // the sim's field passes every magnetometer gate, on the pad and landed (#1590)
+    EXPECT_GT(sc.mag_fused, 100u);
+    EXPECT_EQ(sc.mag_refused, 0u);
 }
 
 TEST(RawGnssShadow, UnderAChuteWithNoSatellitesLevellingHoldsAGyroBias)
@@ -1944,7 +2497,7 @@ GoldenRun runGoldenNav(bool split, bool sliced)
     std::vector<TimedRawEpoch> epochs = goldenEpochs();
     GoldenRun out;
     out.min_steps_during = 1000000;
-    RawGnssShadow::Config cfg;
+    RawGnssShadow::Config cfg = goldenStill();
     cfg.primary = true;
     cfg.min_step_s = 0.01;
     cfg.epoch_slice_us = sliced ? 2500.0 : 0.0;
@@ -2185,3 +2738,1647 @@ TEST(RawGnssShadow, ItsNavStateSaysWhetherItIsInFlight)
     sh.navState(nav);
     EXPECT_EQ(nav.in_flight, 1);
 }
+
+// ------------------------------------------- the heading from thrust (HeadingFit)
+
+namespace
+{
+
+struct Mat3
+{
+    double m[3][3];
+};
+
+Mat3 mat3Mul(const Mat3& a, const Mat3& b)
+{
+    Mat3 r{};
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+            for (int k = 0; k < 3; ++k)
+                r.m[i][j] += a.m[i][k] * b.m[k][j];
+    return r;
+}
+
+void mat3Vec(const Mat3& a, const double v[3], double o[3])
+{
+    for (int i = 0; i < 3; ++i)
+        o[i] = a.m[i][0] * v[0] + a.m[i][1] * v[1] + a.m[i][2] * v[2];
+}
+
+Mat3 rotAbout(const double axis[3], double a)
+{
+    const double n = std::sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]);
+    const double k[3] = {axis[0] / n, axis[1] / n, axis[2] / n};
+    const double K[3][3] = {{0, -k[2], k[1]}, {k[2], 0, -k[0]}, {-k[1], k[0], 0}};
+    Mat3 r{};
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+        {
+            double kk = 0.0;
+            for (int l = 0; l < 3; ++l)
+                kk += K[i][l] * K[l][j];
+            r.m[i][j] = (i == j ? 1.0 : 0.0) + std::sin(a) * K[i][j] + (1.0 - std::cos(a)) * kk;
+        }
+    return r;
+}
+
+// A nose-up body leaning lean_deg toward azimuth toward_deg, rolled about
+// its nose: body -> NED
+Mat3 leaningBody(double lean_deg, double toward_deg, double roll_deg)
+{
+    const double z[3] = {0, 0, 1}, y[3] = {0, 1, 0}, up[3] = {0, 0, -1.0};
+    double nose[3];
+    mat3Vec(mat3Mul(rotAbout(z, toward_deg * kPi / 180.0), rotAbout(y, lean_deg * kPi / 180.0)), up, nose);
+    Mat3 C{};                                    // body x up
+    C.m[0][2] = 1;
+    C.m[1][1] = 1;
+    C.m[2][0] = -1;
+    const double cx[3] = {C.m[0][0], C.m[1][0], C.m[2][0]};
+    const double ax[3] = {cx[1] * nose[2] - cx[2] * nose[1], cx[2] * nose[0] - cx[0] * nose[2],
+                          cx[0] * nose[1] - cx[1] * nose[0]};
+    const double an = std::sqrt(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]);
+    if (an > 1e-12)
+        C = mat3Mul(rotAbout(ax, std::asin(an)), C);
+    return mat3Mul(rotAbout(nose, roll_deg * kPi / 180.0), C);
+}
+
+// body -> NED as a scalar-first quaternion (Quat2DCM of it is NED -> body)
+void quatOf(const Mat3& Cm, float q[4])
+{
+    const double (&R)[3][3] = Cm.m;
+    const double t = R[0][0] + R[1][1] + R[2][2];
+    double w, x, y, z;
+    if (t > 0.0)
+    {
+        w = 0.5 * std::sqrt(1.0 + t);
+        x = (R[2][1] - R[1][2]) / (4 * w);
+        y = (R[0][2] - R[2][0]) / (4 * w);
+        z = (R[1][0] - R[0][1]) / (4 * w);
+    }
+    else if (R[0][0] >= R[1][1] && R[0][0] >= R[2][2])
+    {
+        x = 0.5 * std::sqrt(1.0 + 2 * R[0][0] - t);
+        w = (R[2][1] - R[1][2]) / (4 * x);
+        y = (R[0][1] + R[1][0]) / (4 * x);
+        z = (R[0][2] + R[2][0]) / (4 * x);
+    }
+    else if (R[1][1] >= R[2][2])
+    {
+        y = 0.5 * std::sqrt(1.0 + 2 * R[1][1] - t);
+        w = (R[0][2] - R[2][0]) / (4 * y);
+        x = (R[0][1] + R[1][0]) / (4 * y);
+        z = (R[1][2] + R[2][1]) / (4 * y);
+    }
+    else
+    {
+        z = 0.5 * std::sqrt(1.0 + 2 * R[2][2] - t);
+        w = (R[1][0] - R[0][1]) / (4 * z);
+        x = (R[0][2] + R[2][0]) / (4 * z);
+        y = (R[1][2] + R[2][1]) / (4 * z);
+    }
+    const double sgn = w < 0 ? -1.0 : 1.0;
+    q[0] = float(sgn * w);
+    q[1] = float(sgn * x);
+    q[2] = float(sgn * y);
+    q[3] = float(sgn * z);
+}
+
+// The sky the Beetle's own ephemerides give at the pad of its rig: each
+// satellite's pseudorange and range rate as the LC86G reports them, for a
+// receiver whose truth the test sets. A twin of the flight's builder finds
+// each satellite's transmit state, so the shadow's builder takes them back to
+// that truth (its troposphere off; the night-time ionosphere it removes, a
+// few metres, the clock and position absorb). The range rate is the receiver's
+// rr_lag before the tag, as the LC86G's.
+struct SynthSky
+{
+    gnss_raw::EphemerisStore store;
+    gnss_raw::RawMeasBuilder builder;
+    std::mt19937 rng{11};
+    double clk_m = 3000.0;        // the receiver's clock, m
+    double drift_mps = 0.0;
+    double sigma_pr = 1.0, sigma_rr = 0.05;
+
+    explicit SynthSky(const gnss_raw::RawMeasBuilder::Config& c) : builder(c)
+    {
+        for (int i = 0; i < kGoldenRmEphN; ++i)
+        {
+            gps_eph_t e;
+            if (gnss_raw::decodeEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len),
+                                          kGoldenWeek, e))
+                store.add(e);
+        }
+    }
+
+    // r: the receiver at the tag (ECEF), v_lag: its velocity rr_lag before (ECEF)
+    gnss_raw::RawEpoch epoch(double tow, const double r[3], const double v_lag[3])
+    {
+        gnss_raw::RawEpoch ep;
+        ep.tow_s = tow;
+        for (int i = 0; i < kGoldenRmEphN; ++i)
+        {
+            gps_eph_t e;
+            if (!gnss_raw::decodeEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len),
+                                           kGoldenWeek, e))
+                continue;
+            gnss_raw::RawObs& o = ep.obs[ep.n++];
+            o.sys = static_cast<uint8_t>(e.sys);
+            o.prn = static_cast<uint8_t>(e.prn);
+            o.has_pr = o.has_rate = true;
+            o.cn0_dbhz = 42.0f;
+            o.pr_m = 2.2e7;
+            o.rate_mps = 0.0;
+            o.lock_ms = 600000;
+        }
+        // twice: the transmit time follows the pseudorange
+        gnss_raw::RawMeas m[gnss_raw::RawEpoch::kMaxObs];
+        for (int it = 0; it < 3; ++it)
+        {
+            gnss_raw::RawEpoch probe = ep;
+            const int n = builder.build(probe, store, r, 0.0, m, gnss_raw::RawEpoch::kMaxObs);
+            for (int k = 0; k < n; ++k)
+                for (int j = 0; j < ep.n; ++j)
+                {
+                    gnss_raw::RawObs& o = ep.obs[j];
+                    if (o.sys != m[k].sys || o.prn != m[k].prn)
+                        continue;
+                    const double corr = m[k].pr - o.pr_m;            // the builder's clock, less the ionosphere
+                    o.pr_m = gnss_raw::sagnacRange(m[k], r) + clk_m - corr;
+                    double u[3];
+                    const double still = gnss_raw::stillRangeRate(m[k], r, u);
+                    const double clk_rate = m[k].rr - o.rate_mps;     // the satellite clock's rate, m/s
+                    o.rate_mps = still - (u[0] * v_lag[0] + u[1] * v_lag[1] + u[2] * v_lag[2]) + drift_mps
+                               - clk_rate;
+                }
+        }
+        // the builder drops what it cannot place (below its mask): keep what it takes
+        gnss_raw::RawEpoch out;
+        out.tow_s = tow;
+        const int n = builder.build(ep, store, r, 0.0, m, gnss_raw::RawEpoch::kMaxObs);
+        std::normal_distribution<double> npr(0.0, sigma_pr), nrr(0.0, sigma_rr);
+        for (int k = 0; k < n; ++k)
+            for (int j = 0; j < ep.n; ++j)
+                if (ep.obs[j].sys == m[k].sys && ep.obs[j].prn == m[k].prn)
+                {
+                    gnss_raw::RawObs o = ep.obs[j];
+                    o.pr_m += npr(rng);
+                    o.rate_mps += nrr(rng);
+                    out.obs[out.n++] = o;
+                }
+        return out;
+    }
+};
+
+struct BoostRun
+{
+    std::vector<HeadingFitData> recs;
+    float q_true[4] = {};
+    float q_end[4] = {};       // the filter's attitude at the end
+    RawGnssShadow::Stats st;
+    int handed_at = -1;        // the record that handed over
+    float att_sigma_pad[3] = {};      // attSigmaNed (rad) at the last step before the launch edge,
+    float att_sigma_launch[3] = {};   //   and just after it
+    float q_launch[4] = {};    // the filter's attitude just after the launch edge,
+    float q_burnout[4] = {};   //   at burnout (T+1.5 s: one epoch, T+1, fused in the boost)
+};
+
+// The tilt between two attitudes, deg: a's turned about the vertical onto
+// b's heading, then the angle between them.
+double tiltErrDeg(const float a[4], const float b[4])
+{
+    const double hd = gnss_raw::headingBetween(a, b);
+    const float qz[4] = {float(std::cos(-0.5 * hd)), 0.0f, 0.0f, float(std::sin(-0.5 * hd))};
+    const float q[4] = {qz[0] * a[0] - qz[3] * a[3], qz[0] * a[1] - qz[3] * a[2], qz[0] * a[2] + qz[3] * a[1],
+                        qz[0] * a[3] + qz[3] * a[0]};
+    return attErrDeg(q, b);
+}
+
+// The Beetle's pad: still for 6 s, then a boost (10 g for 1.5 s) and drag to
+// T+10 s on a body leaning 5 deg toward azimuth 70, rolled 25 deg; raw epochs
+// once a GPS second, each delivered 0.2 s late. The navigation filter starts
+// from a seed whose heading is seed_err_deg off (no magnetometer: it keeps
+// it); the launch detector calls it at T+0.1 s. external: each epoch built by
+// the GNSS task's stage and handed over built, as on the Beetle (#1626).
+// apart, min_epochs, sure_deg: heading_handoff_apart, _min_epochs and
+// _sure_deg, when not negative (else the defaults). tilt_floor_deg:
+// heading_launch_tilt_sigma_deg; gate: heading_gate (no apogee call here).
+// handoff_deg: heading_handoff_deg -- 10 deg, the hand-off these flights test
+// (the config's default is never).
+BoostRun flyBoost(uint8_t mode, double seed_err_deg, double bias_y = 0.0, double bias_z = 0.0, bool external = false,
+                  double apart = -1.0, int min_epochs = -1, double sure_deg = -1.0, double tilt_floor_deg = 0.0,
+                  uint8_t gate = RawGnssShadow::kGateHeading, double handoff_deg = 10.0)
+{
+    double lat, lon, h;
+    ecef_to_geo(kGoldenRmRx, &lat, &lon, &h);
+    double r0[3];
+    geo_to_ecef(lat, lon, h, r0);
+    const double sl = std::sin(lat), cl = std::cos(lat), so = std::sin(lon), co = std::cos(lon);
+    auto nedToEcefVec = [&](const double n[3], double o[3]) {
+        const double e[3] = {n[1], n[0], -n[2]};
+        o[0] = -so * e[0] - sl * co * e[1] + cl * co * e[2];
+        o[1] = co * e[0] - sl * so * e[1] + cl * so * e[2];
+        o[2] = cl * e[1] + sl * e[2];
+    };
+
+    RawGnssShadow::Config cfg = primaryCfg();
+    cfg.heading_mode = mode;
+    if (apart >= 0.0)
+        cfg.heading_handoff_apart = apart;
+    if (min_epochs >= 0)
+        cfg.heading_handoff_min_epochs = min_epochs;
+    if (sure_deg >= 0.0)
+        cfg.heading_handoff_sure_deg = sure_deg;
+    cfg.heading_launch_tilt_sigma_deg = tilt_floor_deg;
+    cfg.heading_gate = gate;
+    cfg.heading_handoff_deg = handoff_deg;
+    cfg.meas.troposphere = false;
+    cfg.external_build = external;
+    RawGnssShadow sh(cfg);
+    gnss_raw::RawGnssMeasStage stage(RawGnssShadow::stageConfig(cfg));
+    gnss_raw::BuiltEpoch built;
+    for (int i = 0; i < kGoldenRmEphN; ++i)
+    {
+        sh.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+        stage.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+    }
+    SynthSky sky(cfg.meas);
+    sky.drift_mps = 0.0;
+
+    const Mat3 Ct = leaningBody(5.0, 70.0, 25.0);
+    const double zax[3] = {0, 0, 1};
+    BoostRun run;
+    quatOf(Ct, run.q_true);
+    float q_seed[4];
+    quatOf(mat3Mul(rotAbout(zax, seed_err_deg * kPi / 180.0), Ct), q_seed);
+    ShadowSeed seed = padSeed(kT0, lat, lon, h);
+    for (int i = 0; i < 4; ++i)
+        seed.quat[i] = q_seed[i];
+    sh.onSeed(seed);
+
+    const double tow0 = goldenEpochs()[0].epoch.tow_s;    // the ephemerides' day
+    const double t_ign = 6.0, t_det = 6.1, t_end = 16.0, dt = 0.005, rr_lag = cfg.ekf.rr_lag_s;
+    double p_ned[3] = {}, v_ned[3] = {};
+    std::vector<std::pair<double, double>> hist_v;            // (t, a step's start) for the lagged velocity
+    std::vector<std::array<double, 3>> vel_hist;
+    int next_epoch = 1;
+    std::vector<TimedRawEpoch> due;                           // built at their tag, handed over 0.2 s later
+    int flight_ticks = 0;
+    for (double t = dt; t <= t_end + 1e-9; t += dt)
+    {
+        // the truth: piecewise-constant specific force, the body's attitude fixed
+        double f_b[3] = {0.0, 0.0, 0.0};
+        if (t > t_ign)
+            f_b[0] = t <= t_ign + 1.5 ? 100.0 : -3.0;
+        double f_n[3], a_n[3];
+        if (t > t_ign)
+        {
+            mat3Vec(Ct, f_b, f_n);
+            for (int i = 0; i < 3; ++i)
+                a_n[i] = f_n[i] + (i == 2 ? kG : 0.0);
+        }
+        else
+        {
+            a_n[0] = a_n[1] = a_n[2] = 0.0;
+            const double up[3] = {0, 0, -kG};             // on the pad: gravity's reaction, in the body
+            Mat3 CtT{};
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    CtT.m[i][j] = Ct.m[j][i];
+            mat3Vec(CtT, up, f_b);
+        }
+        for (int i = 0; i < 3; ++i)
+        {
+            p_ned[i] += v_ned[i] * dt + 0.5 * a_n[i] * dt * dt;
+            v_ned[i] += a_n[i] * dt;
+        }
+        vel_hist.push_back({v_ned[0], v_ned[1], v_ned[2]});
+        ShadowImu s{};
+        s.time_us = static_cast<uint32_t>(kT0 + static_cast<int64_t>(std::llround(t * 1e6)));
+        s.acc[0] = float(f_b[0]);
+        s.acc[1] = float(f_b[1] + bias_y);
+        s.acc[2] = float(f_b[2] + bias_z);
+        s.flags = t < t_ign ? gnss_raw::kShadowLevel : (t >= t_det ? gnss_raw::kShadowInFlight : 0);
+        const int64_t t64 = kT0 + static_cast<int64_t>(std::llround(t * 1e6));
+        sh.onImu(s, t64);
+        if (!(s.flags & gnss_raw::kShadowInFlight))
+        {
+            sh.filter().attSigmaNed(run.att_sigma_pad);
+        }
+        else if (++flight_ticks == 3)                         // a step (10 ms) into the flight
+        {
+            sh.filter().attSigmaNed(run.att_sigma_launch);
+            for (int i = 0; i < 4; ++i)
+                run.q_launch[i] = sh.filter().quat()[i];
+        }
+        if (std::fabs(t - (t_ign + 1.5)) < 0.5 * dt)
+            for (int i = 0; i < 4; ++i)
+                run.q_burnout[i] = sh.filter().quat()[i];
+        // an epoch at each whole GPS second, built where the receiver truly is
+        if (t + 1e-9 >= next_epoch)
+        {
+            const int lag_steps = static_cast<int>(std::lround(rr_lag / dt));
+            const auto& vl = vel_hist[vel_hist.size() > static_cast<size_t>(lag_steps)
+                                          ? vel_hist.size() - 1 - lag_steps : 0];
+            double dr[3], r[3], vlag_e[3];
+            nedToEcefVec(p_ned, dr);
+            nedToEcefVec(vl.data(), vlag_e);
+            for (int i = 0; i < 3; ++i)
+                r[i] = r0[i] + dr[i];
+            TimedRawEpoch e;
+            e.epoch = sky.epoch(tow0 + next_epoch, r, vlag_e);
+            e.mcu_us = t64;
+            e.gps_week = kGoldenWeek;
+            due.push_back(e);
+            next_epoch++;
+        }
+        // handed over 0.2 s after its tag
+        while (!due.empty() && t64 - due.front().mcu_us >= 200000)
+        {
+            if (external)
+                offerBuilt(sh, stage, due.front(), built);
+            else
+                sh.onEpoch(due.front());
+            due.erase(due.begin());
+        }
+        HeadingFitData d;
+        while (sh.takeHeadingLog(d))
+        {
+            if (d.flags & HFT_HANDED_NOW)
+                run.handed_at = static_cast<int>(run.recs.size());
+            run.recs.push_back(d);
+        }
+    }
+    for (int i = 0; i < 4; ++i)
+        run.q_end[i] = sh.filter().quat()[i];
+    run.st = sh.stats();
+    return run;
+}
+
+}  // namespace
+
+TEST(RawGnssShadow, TheHeadingFitObservesWithoutActing)
+{
+    // Observe: the fit finds the pad's 40 deg error in the boost's first
+    // epochs and logs it, the filter flies on as before (cos4 keeps a
+    // vertical heading where it was)
+    const BoostRun run = flyBoost(RawGnssShadow::kHeadingObserve, 40.0);
+    EXPECT_EQ(run.st.heading_flights, 1u);
+    EXPECT_GT(run.st.heading_seeds, 100u);
+    ASSERT_GE(run.recs.size(), 5u);
+    EXPECT_EQ(run.st.heading_handoffs, 0u);
+    EXPECT_EQ(run.handed_at, -1);
+    const HeadingFitData& last = run.recs.back();
+    EXPECT_TRUE(last.flags & HFT_SOLVED);
+    EXPECT_FALSE(last.flags & (HFT_ACT | HFT_HANDED | HFT_HANDED_NOW));
+    EXPECT_NEAR(last.psi_cdeg / 100.0, -40.0, 1.0);          // the turn back
+    ASSERT_NE(last.sigma_cdeg, HFT_NO_SIGMA);
+    EXPECT_LT(last.sigma_cdeg / 100.0, 3.0);
+    EXPECT_NEAR(last.filt_cdeg / 100.0, 40.0, 3.0);          // the filter still 40 off
+    EXPECT_LT(last.seed_ms, 120);                            // seeded at the last still step
+    EXPECT_GE(last.sats, 5);
+    EXPECT_NEAR(gnss_raw::headingBetween(run.q_end, run.q_true) * 180.0 / kPi, 40.0, 5.0);
+}
+
+TEST(RawGnssShadow, TheHeadingFitHandsItsHeadingOverOnce)
+{
+    // Act: the same flight, the fit's heading handed to the navigation filter
+    // once it is sure -- once; the filter flies the truth's heading to the end
+    // with its tilt untouched. With the accelerometer biased sideways, and
+    // with the epochs built in the GNSS task, as the Beetle builds them. The
+    // filter's GNSS turns 16 of the 40 deg out but its own 1-sigma stays
+    // wide, so by the default rule the fit waits until it is sure to 3 deg
+    // (the 9th epoch) and turns the last 24 deg.
+    for (int external = 0; external < 2; ++external)
+    for (double by : {0.0, 0.08})
+    {
+        const BoostRun run = flyBoost(RawGnssShadow::kHeadingAct, 40.0, by, -0.05, external != 0);
+        SCOPED_TRACE(external ? "built in the GNSS task" : "built here");
+        ASSERT_GE(run.recs.size(), 5u) << by;
+        EXPECT_EQ(run.st.heading_handoffs, 1u) << by;
+        ASSERT_GE(run.handed_at, 0) << by;
+        const HeadingFitData& h = run.recs[run.handed_at];
+        EXPECT_TRUE(h.flags & HFT_ACT);
+        ASSERT_NE(h.sigma_cdeg, HFT_NO_SIGMA);
+        EXPECT_LE(h.sigma_cdeg, 1000);
+        EXPECT_NEAR(h.turn_cdeg, -h.filt_cdeg, 1);
+        for (size_t i = run.handed_at + 1; i < run.recs.size(); ++i)
+        {
+            EXPECT_TRUE(run.recs[i].flags & HFT_HANDED);
+            EXPECT_FALSE(run.recs[i].flags & HFT_HANDED_NOW);
+        }
+        for (const HeadingFitData& d : run.recs)             // thrust along the nose: one valley
+            EXPECT_FALSE(d.flags & HFT_RIVAL);
+        EXPECT_LE(h.sigma_cdeg, 300);
+        // the whole attitude: the hand-off's heading is as good as the fit's
+        // 1-sigma then, and the coast's gentle push teaches the filter little
+        // after it
+        EXPECT_LT(attErrDeg(run.q_end, run.q_true), 3.0) << by;
+        // turned about the vertical only: the filter's tilt is the truth's
+        float q_lev[4];
+        const float* qe = run.q_end;
+        const double hd = gnss_raw::headingBetween(qe, run.q_true);
+        const float qz[4] = {float(std::cos(-0.5 * hd)), 0.0f, 0.0f, float(std::sin(-0.5 * hd))};
+        q_lev[0] = qz[0] * qe[0] - qz[3] * qe[3];
+        q_lev[1] = qz[0] * qe[1] - qz[3] * qe[2];
+        q_lev[2] = qz[0] * qe[2] + qz[3] * qe[1];
+        q_lev[3] = qz[0] * qe[3] + qz[3] * qe[0];
+        EXPECT_LT(attErrDeg(q_lev, run.q_true), 2.0) << by;
+    }
+}
+
+TEST(RawGnssShadow, TheHeadingFitLeavesAFilterThatIsNotLost)
+{
+    // heading_handoff_apart: the hand-off waits until the filter's heading is
+    // further from the fit's than that many of their combined 1-sigmas (the
+    // rig's r18 handed a two-epoch fit 9.8 deg off to a filter 2.5 deg off) --
+    // or, with heading_handoff_sure_deg, until the fit is that sure.
+    // Seeded right, the filter agrees with the fit and keeps its own heading.
+    const BoostRun right = flyBoost(RawGnssShadow::kHeadingAct, 0.0, 0.0, 0.0, false, 2.0, 0, 0.0);
+    ASSERT_GE(right.recs.size(), 5u);
+    EXPECT_TRUE(right.recs.back().flags & HFT_SOLVED);
+    EXPECT_EQ(right.st.heading_handoffs, 0u);
+    EXPECT_EQ(right.handed_at, -1);
+    EXPECT_LT(std::fabs(gnss_raw::headingBetween(right.q_end, right.q_true)) * 180.0 / kPi, 2.0);
+
+    // Seeded 40 deg off, its GNSS turns it part of the way, its own 1-sigma
+    // still wide (30 deg at launch): never twice their 1-sigmas apart, it
+    // stalls 22 deg off. Sure to 3 deg, the fit hands over, late but whole.
+    const BoostRun stalled = flyBoost(RawGnssShadow::kHeadingAct, 40.0, 0.0, 0.0, false, 2.0, 0, 0.0);
+    EXPECT_EQ(stalled.st.heading_handoffs, 0u);
+    EXPECT_GT(std::fabs(gnss_raw::headingBetween(stalled.q_end, stalled.q_true)) * 180.0 / kPi, 8.0);
+    const BoostRun sure = flyBoost(RawGnssShadow::kHeadingAct, 40.0, 0.0, 0.0, false, 2.0, 0, 3.0);
+    EXPECT_EQ(sure.st.heading_handoffs, 1u);
+    ASSERT_GE(sure.handed_at, 0);
+    EXPECT_LE(sure.recs[sure.handed_at].sigma_cdeg, 300);
+    EXPECT_GT(std::fabs(sure.recs[sure.handed_at].filt_cdeg / 100.0), 8.0);
+    EXPECT_LT(attErrDeg(sure.q_end, sure.q_true), 3.0);
+    // and a looser apart takes the lost filter early
+    const BoostRun lost = flyBoost(RawGnssShadow::kHeadingAct, 40.0, 0.0, 0.0, false, 1.0, 0, 0.0);
+    EXPECT_EQ(lost.st.heading_handoffs, 1u);
+    ASSERT_GE(lost.handed_at, 0);
+    EXPECT_LE(lost.recs[lost.handed_at].n, 4);
+    EXPECT_LT(attErrDeg(lost.q_end, lost.q_true), 3.0);
+
+    // heading_handoff_min_epochs: held to that many epochs (unasked, the
+    // third's 6 deg 1-sigma hands over)
+    const BoostRun later = flyBoost(RawGnssShadow::kHeadingAct, 40.0, 0.0, 0.0, false, 0.0, 5, 0.0);
+    EXPECT_EQ(later.st.heading_handoffs, 1u);
+    ASSERT_GE(later.handed_at, 0);
+    EXPECT_EQ(later.recs[later.handed_at].n, 5);
+    EXPECT_LT(attErrDeg(later.q_end, later.q_true), 3.0);
+}
+
+TEST(RawGnssShadow, TheHeadingFitIsOffByDefault)
+{
+    const BoostRun run = flyBoost(RawGnssShadow::kHeadingOff, 40.0);
+    EXPECT_TRUE(run.recs.empty());
+    EXPECT_EQ(run.st.heading_seeds, 0u);
+    EXPECT_EQ(run.st.heading_epochs, 0u);
+}
+
+TEST(RawGnssShadow, TheFullGateOpensAtLaunchAndClosesOnTheGround)
+{
+    // heading_gate kGateFullLaunch (A), the default: in act, from the launch
+    // edge, neither the vertical gate nor cos^4; back on the ground both are
+    // the EKF config's again. kGateHeading (C) gates to the vertical.
+    EXPECT_EQ(RawGnssShadow::Config().heading_gate, RawGnssShadow::kGateFullLaunch);
+    for (bool full : {false, true})
+    {
+        RawGnssShadow::Config cfg = primaryCfg();
+        cfg.heading_mode = RawGnssShadow::kHeadingAct;
+        cfg.heading_gate = full ? RawGnssShadow::kGateFullLaunch : RawGnssShadow::kGateHeading;
+        RawGnssShadow sh(cfg);
+        sh.onSeed(padSeed(kT0));
+        int64_t t = feedFlight(sh, kT0, 1.0, 0.0f, gnss_raw::kShadowLevel, false);
+        ASSERT_TRUE(sh.running());
+        EXPECT_TRUE(sh.filter().params().att_gate_cos4);
+        EXPECT_FALSE(sh.filter().params().att_gate_vertical);
+        t = feedFlight(sh, t, 0.5, 20.0f, gnss_raw::kShadowInFlight, false);
+        ASSERT_TRUE(sh.running());
+        EXPECT_EQ(sh.filter().params().att_gate_cos4, !full) << full;
+        EXPECT_EQ(sh.filter().params().att_gate_vertical, !full) << full;
+        feedFlight(sh, t, 0.5, 0.0f, gnss_raw::kShadowLanded, false);
+        ASSERT_TRUE(sh.running());
+        EXPECT_TRUE(sh.filter().params().att_gate_cos4) << full;
+        EXPECT_FALSE(sh.filter().params().att_gate_vertical) << full;
+    }
+}
+
+namespace
+{
+
+// The attitude gate the filter has: 'h' the heading's (att_gate_vertical),
+// 'f' the whole attitude's (neither that nor cos^4), 'g' the EKF config's
+// (the ground's: cos^4 pitch).
+char gateOf(const RawGnssShadow& sh)
+{
+    const gnss_raw::RawGnssEKFParams& p = sh.filter().params();
+    if (p.att_gate_vertical)
+        return 'h';
+    return p.att_gate_cos4 ? 'g' : 'f';
+}
+
+RawGnssShadow::Config gateCfg(uint8_t mode, uint8_t gate)
+{
+    RawGnssShadow::Config c = primaryCfg();
+    c.heading_mode = mode;
+    c.heading_gate = gate;
+    return c;
+}
+
+constexpr uint8_t kFlight = gnss_raw::kShadowInFlight;
+constexpr uint8_t kApogee = gnss_raw::kShadowInFlight | gnss_raw::kShadowApogee;
+
+}  // namespace
+
+TEST(RawGnssShadow, FromTheApogeeCallTheGateOpensInFullAndStaysOpen)
+{
+    // kGateFullApogee (H): the launch edge gates GNSS to the heading, as C;
+    // the flight computer's apogee call (kShadowApogee on the IMU tick) opens
+    // the whole attitude, once a flight and counted. It stays open whatever
+    // the flag does, to the ground. Only the gate changes there: the
+    // heading's 1-sigma is the launch edge's, carried on.
+    RawGnssShadow sh(gateCfg(RawGnssShadow::kHeadingAct, RawGnssShadow::kGateFullApogee));
+    sh.onSeed(padSeed(kT0));
+    int64_t t = feedFlight(sh, kT0, 1.0, 0.0f, gnss_raw::kShadowLevel, false);
+    ASSERT_TRUE(sh.running());
+    EXPECT_EQ(gateOf(sh), 'g');
+    t = feedFlight(sh, t, 0.5, 20.0f, kFlight, false);           // the boost
+    EXPECT_EQ(gateOf(sh), 'h');
+    EXPECT_NEAR(headingSigmaDeg(sh), 30.0, 0.5);                  // act's prior, at launch
+    t = feedFlight(sh, t, 2.0, 0.0f, kFlight, false);             // the coast
+    EXPECT_EQ(gateOf(sh), 'h');
+    EXPECT_EQ(sh.stats().heading_gate_apogee, 0u);
+    const double sig = headingSigmaDeg(sh);
+    float tilt[3];
+    sh.filter().attSigmaNed(tilt);
+    t = feedFlight(sh, t, 0.02, 0.0f, kApogee, false);            // the apogee call
+    EXPECT_EQ(gateOf(sh), 'f');
+    EXPECT_EQ(sh.stats().heading_gate_apogee, 1u);
+    EXPECT_NEAR(sh.stats().heading_gate_apogee_s, 2.5, 0.02);     // after the launch edge
+    float tilt2[3];
+    sh.filter().attSigmaNed(tilt2);
+    EXPECT_NEAR(headingSigmaDeg(sh), sig, 0.1);                   // no new prior
+    EXPECT_NEAR(tilt2[0], tilt[0], 1.0e-3f);                      // no tilt floor
+    EXPECT_NEAR(tilt2[1], tilt[1], 1.0e-3f);
+    // under the drogue, with the call held as main.cpp latches it -- and
+    // without it: latched here too
+    t = feedFlight(sh, t, 1.0, 0.0f, kApogee | gnss_raw::kShadowLevel, false);
+    t = feedFlight(sh, t, 1.0, 0.0f, kFlight | gnss_raw::kShadowLevel, false);
+    EXPECT_EQ(gateOf(sh), 'f');
+    EXPECT_EQ(sh.stats().heading_gate_apogee, 1u);
+    // landed (the call still set): the ground's
+    feedFlight(sh, t, 0.5, 0.0f, gnss_raw::kShadowLanded | gnss_raw::kShadowLevel | gnss_raw::kShadowApogee,
+               false);
+    ASSERT_TRUE(sh.running());
+    EXPECT_EQ(gateOf(sh), 'g');
+    EXPECT_EQ(sh.stats().heading_gate_apogee, 1u);
+}
+
+TEST(RawGnssShadow, FromLaunchTheGateIsFullAndTheHeadingsNeverOpens)
+{
+    // A (kGateFullLaunch) opens at the launch edge as before; C
+    // (kGateHeading) keeps the heading's through the apogee call. Neither
+    // counts an opening at the call.
+    for (uint8_t gate : {uint8_t(RawGnssShadow::kGateFullLaunch), uint8_t(RawGnssShadow::kGateHeading)})
+    {
+        RawGnssShadow sh(gateCfg(RawGnssShadow::kHeadingAct, gate));
+        sh.onSeed(padSeed(kT0));
+        int64_t t = feedFlight(sh, kT0, 1.0, 0.0f, gnss_raw::kShadowLevel, false);
+        t = feedFlight(sh, t, 0.5, 20.0f, kFlight, false);
+        const char at_launch = gateOf(sh);
+        EXPECT_EQ(at_launch, gate == RawGnssShadow::kGateFullLaunch ? 'f' : 'h') << int(gate);
+        feedFlight(sh, t, 1.0, 0.0f, kApogee | gnss_raw::kShadowLevel, false);
+        EXPECT_EQ(gateOf(sh), at_launch) << int(gate);
+        EXPECT_EQ(sh.stats().heading_gate_apogee, 0u) << int(gate);
+    }
+}
+
+TEST(RawGnssShadow, ARestoredFlightComesBackInItsPhasesGate)
+{
+    // A reboot in flight: the navigation filter starts in the air from the
+    // snapshot, with no launch edge to set act's gate, so the start sets the
+    // flight's. Past the apogee call -- the snapshot restores it, so it rides
+    // the first tick -- H's is whole at the first step (counted, untimed);
+    // before it, the heading's until the call. A's is whole from the start.
+    for (bool past_apogee : {true, false})
+    {
+        RawGnssShadow sh(gateCfg(RawGnssShadow::kHeadingAct, RawGnssShadow::kGateFullApogee));
+        ShadowSeed seed = padSeed(kT0);
+        seed.on_pad = 0;
+        seed.restore = 1;
+        sh.onSeed(seed);
+        int64_t t = feedFlight(sh, kT0, 0.5, 0.0f, past_apogee ? kApogee : kFlight, false);
+        ASSERT_TRUE(sh.running());
+        ASSERT_EQ(sh.stats().restores, 1u);
+        EXPECT_EQ(gateOf(sh), past_apogee ? 'f' : 'h') << past_apogee;
+        EXPECT_EQ(sh.stats().heading_gate_apogee, past_apogee ? 1u : 0u);
+        if (past_apogee)
+            EXPECT_LT(sh.stats().heading_gate_apogee_s, 0.0f);     // no launch edge to time it from
+        t = feedFlight(sh, t, 0.1, 0.0f, kApogee, false);
+        EXPECT_EQ(gateOf(sh), 'f') << past_apogee;
+        EXPECT_EQ(sh.stats().heading_gate_apogee, 1u) << past_apogee;
+    }
+    RawGnssShadow a(gateCfg(RawGnssShadow::kHeadingAct, RawGnssShadow::kGateFullLaunch));
+    ShadowSeed seed = padSeed(kT0);
+    seed.on_pad = 0;
+    seed.restore = 1;
+    a.onSeed(seed);
+    feedFlight(a, kT0, 0.5, 0.0f, kFlight, false);
+    ASSERT_TRUE(a.running());
+    EXPECT_EQ(gateOf(a), 'f');
+    EXPECT_EQ(a.stats().heading_gate_apogee, 0u);
+}
+
+TEST(RawGnssShadow, ObserveNeverTouchesTheGate)
+{
+    // Observe (and off) fit and log only: whatever heading_gate says, the
+    // gate stays the EKF config's through launch, the apogee call, the
+    // ground, and a restored flight.
+    for (uint8_t mode : {uint8_t(RawGnssShadow::kHeadingObserve), uint8_t(RawGnssShadow::kHeadingOff)})
+        for (uint8_t gate : {uint8_t(RawGnssShadow::kGateHeading), uint8_t(RawGnssShadow::kGateFullLaunch),
+                             uint8_t(RawGnssShadow::kGateFullApogee)})
+        {
+            RawGnssShadow sh(gateCfg(mode, gate));
+            sh.onSeed(padSeed(kT0));
+            int64_t t = feedFlight(sh, kT0, 1.0, 0.0f, gnss_raw::kShadowLevel, false);
+            EXPECT_EQ(gateOf(sh), 'g');
+            t = feedFlight(sh, t, 0.5, 20.0f, kFlight, false);
+            EXPECT_EQ(gateOf(sh), 'g') << int(mode) << int(gate);
+            t = feedFlight(sh, t, 1.0, 0.0f, kApogee | gnss_raw::kShadowLevel, false);
+            EXPECT_EQ(gateOf(sh), 'g') << int(mode) << int(gate);
+            feedFlight(sh, t, 0.5, 0.0f, gnss_raw::kShadowLanded | gnss_raw::kShadowLevel, false);
+            EXPECT_EQ(gateOf(sh), 'g') << int(mode) << int(gate);
+            EXPECT_EQ(sh.stats().heading_gate_apogee, 0u);
+
+            RawGnssShadow r(gateCfg(mode, gate));
+            ShadowSeed seed = padSeed(kT0);
+            seed.on_pad = 0;
+            seed.restore = 1;
+            r.onSeed(seed);
+            feedFlight(r, kT0, 0.5, 0.0f, kApogee, false);
+            ASSERT_TRUE(r.running());
+            EXPECT_EQ(gateOf(r), 'g') << int(mode) << int(gate);
+        }
+}
+
+TEST(RawGnssShadow, TheFullGateTakesThePadsTiltOutInTheBoost)
+{
+    // The pad's tilt 1 deg off: the accelerometer reads g tan(1 deg) (0.17
+    // m/s^2) sideways, which the 6 s pad's levelling takes as tilt (#1626
+    // K1); the heading is right. In the boost the 10 g of thrust turns that
+    // tilt into 1.7 m/s^2 the bias cannot make. With the full gate from
+    // launch (kGateFullLaunch) GNSS takes it out: the boost's one epoch to
+    // 0.29 deg, the coast's epochs to 0.07. Through act's default gate, the
+    // heading's, it stays 0.97.
+    const double by = kG * std::tan(1.0 * kPi / 180.0);
+    const BoostRun hdg = flyBoost(RawGnssShadow::kHeadingAct, 0.0, by, 0.0, false, -1.0, -1, -1.0, 0.0,
+                                  RawGnssShadow::kGateHeading);
+    const BoostRun full = flyBoost(RawGnssShadow::kHeadingAct, 0.0, by, 0.0, false, -1.0, -1, -1.0, 0.0,
+                                   RawGnssShadow::kGateFullLaunch);
+    for (const BoostRun* r : {&hdg, &full})
+        EXPECT_NEAR(tiltErrDeg(r->q_launch, r->q_true), 1.0, 0.1);
+    const double h0 = tiltErrDeg(hdg.q_launch, hdg.q_true);
+    EXPECT_NEAR(tiltErrDeg(hdg.q_burnout, hdg.q_true), h0, 0.02);
+    EXPECT_NEAR(tiltErrDeg(hdg.q_end, hdg.q_true), h0, 0.02);
+    const double f0 = tiltErrDeg(full.q_launch, full.q_true);
+    EXPECT_LT(tiltErrDeg(full.q_burnout, full.q_true), 0.5 * f0);
+    EXPECT_LT(tiltErrDeg(full.q_end, full.q_true), 0.15 * f0);
+    EXPECT_LT(attErrDeg(full.q_end, full.q_true), 0.5);
+    // Why the default is the heading's gate: with the heading 40 deg off (its
+    // own velocity error in the boost), the full gate puts some of it into
+    // the tilt -- 2 deg at burnout, 1.2 at the end -- where the heading's
+    // gate leaves the pad's 1.
+    const BoostRun lost = flyBoost(RawGnssShadow::kHeadingAct, 40.0, by, 0.0, false, -1.0, -1, -1.0, 0.0,
+                                   RawGnssShadow::kGateFullLaunch);
+    EXPECT_GT(tiltErrDeg(lost.q_burnout, lost.q_true), 1.5);
+}
+
+TEST(RawGnssShadow, ActLetsTheTiltGoToItsLaunchFloor)
+{
+    // heading_launch_tilt_sigma_deg: at the launch edge act raises the tilt's
+    // 1-sigma about north and east to at least it, beside the heading's own
+    // (a pad cannot tell its tilt from an accelerometer bias, #1626 K1). The
+    // 6 s pad here levels the tilt to ~5 deg, so the floor is 8. Off (0) by
+    // default, and never in observe.
+    const double floor_deg = 8.0;
+    const BoostRun act = flyBoost(RawGnssShadow::kHeadingAct, 0.0, 0.0, 0.0, false, -1.0, -1, -1.0, floor_deg);
+    const BoostRun plain = flyBoost(RawGnssShadow::kHeadingAct, 0.0);
+    const BoostRun observe = flyBoost(RawGnssShadow::kHeadingObserve, 0.0, 0.0, 0.0, false, -1.0, -1, -1.0, floor_deg);
+    EXPECT_EQ(RawGnssShadow::Config().heading_launch_tilt_sigma_deg, 0.6);
+    for (int i = 0; i < 2; ++i)
+    {
+        EXPECT_LT(act.att_sigma_pad[i] * 180.0 / kPi, floor_deg - 1.0) << i;
+        EXPECT_GE(act.att_sigma_launch[i] * 180.0 / kPi, floor_deg * (1.0 - 1.0e-4)) << i;
+        EXPECT_NEAR(plain.att_sigma_launch[i], plain.att_sigma_pad[i], 1.0e-3f * plain.att_sigma_pad[i]) << i;
+        EXPECT_NEAR(observe.att_sigma_launch[i], observe.att_sigma_pad[i], 1.0e-3f * observe.att_sigma_pad[i]) << i;
+    }
+    // the heading's is act's own either way (no magnetometer here: the fallback)
+    EXPECT_NEAR(act.att_sigma_launch[2] * 180.0 / kPi, RawGnssShadow::Config().heading_pad_sigma_fallback_deg, 0.1);
+    EXPECT_NEAR(plain.att_sigma_launch[2] * 180.0 / kPi, RawGnssShadow::Config().heading_pad_sigma_fallback_deg,
+                0.1);
+}
+
+// ------------------------------------------- the carrier range rate (#1600)
+
+namespace
+{
+
+// Normal draws the same on every platform (test_heading_fit.cpp's): Box-Muller
+// on mt19937's own words.
+double portableNormal(std::mt19937& rng)
+{
+    const double u1 = (static_cast<double>(rng()) + 0.5) / 4294967296.0;
+    const double u2 = (static_cast<double>(rng()) + 0.5) / 4294967296.0;
+    return std::sqrt(-2.0 * std::log(u1)) * std::cos(2.0 * kPi * u2);
+}
+
+// SynthSky's twin with carrier phases: each satellite's phase range the
+// pseudorange's truth plus an integer of its own, the receiver clock with a
+// drift, a common wind-up; the code and the Doppler noisy as the LC86G's.
+struct CarrierSky
+{
+    gnss_raw::EphemerisStore store;
+    gnss_raw::RawMeasBuilder::Config cfg;
+    std::mt19937 rng{1015};
+    double clk_m = 3000.0, drift_mps = -1.5;
+    double wind_cyc_s = 0.5;          // the wind-up, cycles a second
+    double sigma_pr = 1.0, sigma_rr = 0.1, sigma_phase = 0.003;
+    double tow0 = 0.0;
+
+    explicit CarrierSky(const gnss_raw::RawMeasBuilder::Config& c) : cfg(c)
+    {
+        for (int i = 0; i < kGoldenRmEphN; ++i)
+        {
+            gps_eph_t e;
+            if (gnss_raw::decodeEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len),
+                                          kGoldenWeek, e))
+                store.add(e);
+        }
+    }
+
+    // r: the receiver at the tag (ECEF), v_lag: its velocity rr_lag before (ECEF)
+    gnss_raw::RawEpoch epoch(double tow, const double r[3], const double v_lag[3])
+    {
+        const double t = tow - tow0;
+        const double clk = clk_m + drift_mps * t;
+        gnss_raw::RawEpoch ep;
+        ep.tow_s = tow;
+        for (int i = 0; i < kGoldenRmEphN; ++i)
+        {
+            gps_eph_t e;
+            if (!gnss_raw::decodeEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len),
+                                           kGoldenWeek, e))
+                continue;
+            gnss_raw::RawObs& o = ep.obs[ep.n++];
+            o.sys = static_cast<uint8_t>(e.sys);
+            o.prn = static_cast<uint8_t>(e.prn);
+            o.has_pr = o.has_rate = true;
+            o.cn0_dbhz = 42.0f;
+            o.pr_m = 2.2e7;
+            o.rate_mps = 0.0;
+            o.lock_ms = 600000 + static_cast<uint32_t>(std::lround(t * 1000.0));
+        }
+        gnss_raw::RawMeas m[gnss_raw::RawEpoch::kMaxObs];
+        for (int it = 0; it < 3; ++it)
+        {
+            gnss_raw::RawEpoch probe = ep;
+            gnss_raw::RawMeasBuilder b(cfg);
+            const int n = b.build(probe, store, r, 0.0, m, gnss_raw::RawEpoch::kMaxObs);
+            for (int k = 0; k < n; ++k)
+                for (int j = 0; j < ep.n; ++j)
+                {
+                    gnss_raw::RawObs& o = ep.obs[j];
+                    if (o.sys != m[k].sys || o.prn != m[k].prn)
+                        continue;
+                    const double corr = m[k].pr - o.pr_m;
+                    o.pr_m = gnss_raw::sagnacRange(m[k], r) + clk - corr;
+                    double u[3];
+                    const double still = gnss_raw::stillRangeRate(m[k], r, u);
+                    const double clk_rate = m[k].rr - o.rate_mps;
+                    o.rate_mps = still - (u[0] * v_lag[0] + u[1] * v_lag[1] + u[2] * v_lag[2]) + drift_mps - clk_rate;
+                }
+        }
+        gnss_raw::RawEpoch out;
+        out.tow_s = tow;
+        gnss_raw::RawMeasBuilder b(cfg);
+        const int n = b.build(ep, store, r, 0.0, m, gnss_raw::RawEpoch::kMaxObs);
+        for (int k = 0; k < n; ++k)
+            for (int j = 0; j < ep.n; ++j)
+                if (ep.obs[j].sys == m[k].sys && ep.obs[j].prn == m[k].prn)
+                {
+                    gnss_raw::RawObs o = ep.obs[j];
+                    const double lam = 299792458.0 / cfg.sig[o.sys].carrier_hz;
+                    o.has_phase = true;
+                    o.halfcyc = false;
+                    o.phase_m = o.pr_m + lam * (100.0 + o.prn + wind_cyc_s * t) + sigma_phase * portableNormal(rng);
+                    o.pr_m += sigma_pr * portableNormal(rng);
+                    o.rate_mps += sigma_rr * portableNormal(rng);
+                    out.obs[out.n++] = o;
+                }
+        return out;
+    }
+};
+
+struct CarrierRun
+{
+    RawGnssShadow::Stats st;
+    std::vector<double> verr;          // the velocity's error against the truth at the filter's time, each 0.5 s in flight
+    std::vector<uint64_t> state;       // a hash of the filter's whole state, each 0.25 s
+};
+
+uint64_t stateHash(const gnss_raw::RawGnssEKF<float>& f)
+{
+    uint64_t h = 1469598103934665603ULL;
+    auto add = [&](const void* p, size_t n) {
+        const uint8_t* b = static_cast<const uint8_t*>(p);
+        for (size_t i = 0; i < n; ++i)
+        {
+            h ^= b[i];
+            h *= 1099511628211ULL;
+        }
+    };
+    add(f.lla(), 3 * sizeof(double));
+    add(f.velNed(), 3 * sizeof(float));
+    add(f.quat(), 4 * sizeof(float));
+    add(f.accelBias(), 3 * sizeof(float));
+    add(f.gyroBias(), 3 * sizeof(float));
+    const double cb = f.clockBias();
+    const float cd = f.clockDrift();
+    add(&cb, sizeof(cb));
+    add(&cd, sizeof(cd));
+    for (int i = 0; i < gnss_raw::RawGnssEKF<float>::N; ++i)
+        for (int j = 0; j < gnss_raw::RawGnssEKF<float>::N; ++j)
+        {
+            const float p = f.P(i, j);
+            add(&p, sizeof(p));
+        }
+    return h;
+}
+
+// The navigation filter on a pad (4 s) and a boost (3 g up the nose for 2 s)
+// and coast, turning half a revolution a second about its nose from launch;
+// an epoch each GPS second, built in the GNSS task's stage and handed over
+// 0.2 s late; a barometer at 50 Hz; the epochs worked a slice a step on a
+// clock of 1 ms a look. mode: the carrier's.
+CarrierRun flyCarrier(uint8_t mode, double t_end = 14.0)
+{
+    double lat, lon, h;
+    ecef_to_geo(kGoldenRmRx, &lat, &lon, &h);
+    double r0[3];
+    geo_to_ecef(lat, lon, h, r0);
+    const double sl = std::sin(lat), cl = std::cos(lat), so = std::sin(lon), co = std::cos(lon);
+    auto nedToEcefVec = [&](const double n[3], double o[3]) {
+        const double e[3] = {n[1], n[0], -n[2]};
+        o[0] = -so * e[0] - sl * co * e[1] + cl * co * e[2];
+        o[1] = co * e[0] - sl * so * e[1] + cl * so * e[2];
+        o[2] = cl * e[1] + sl * e[2];
+    };
+    RawGnssShadow::Config cfg = primaryCfg();
+    cfg.external_build = true;
+    cfg.epoch_slice_us = 2500.0;
+    cfg.meas.troposphere = false;
+    cfg.ekf.cr_mode = mode;
+    cfg.meas.carrier = mode != gnss_raw::kCarrierOff;
+    RawGnssShadow sh(cfg);
+    g_fake_us = 0;
+    sh.setClock(fakeClock);
+    gnss_raw::RawGnssMeasStage stage(RawGnssShadow::stageConfig(cfg));
+    gnss_raw::BuiltEpoch built;
+    for (int i = 0; i < kGoldenRmEphN; ++i)
+    {
+        sh.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+        stage.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+    }
+    CarrierSky sky(cfg.meas);
+    sky.tow0 = goldenEpochs()[0].epoch.tow_s;
+    ShadowSeed seed = padSeed(kT0, lat, lon, h);
+    const float q_up[4] = {float(std::cos(kPi / 4)), 0.0f, float(std::sin(kPi / 4)), 0.0f};   // body x up
+    for (int i = 0; i < 4; ++i)
+        seed.quat[i] = q_up[i];
+    sh.onSeed(seed);
+    const double t_ign = 4.0, t_det = 4.1, dt = 0.005, rr_lag = cfg.ekf.rr_lag_s;
+    double p_ned[3] = {}, v_ned[3] = {};
+    std::vector<std::array<double, 3>> vel_hist;
+    int next_epoch = 1;
+    std::vector<TimedRawEpoch> due;
+    CarrierRun run;
+    for (double t = dt; t <= t_end + 1e-9; t += dt)
+    {
+        double a_n[3] = {0.0, 0.0, 0.0};
+        double fx = kG;                                // on the pad: up the body's x
+        if (t > t_ign)
+        {
+            fx = t <= t_ign + 2.0 ? 3.0 * kG : 0.0;    // then coasting, weightless
+            a_n[2] = -fx + kG;
+        }
+        for (int i = 0; i < 3; ++i)
+        {
+            p_ned[i] += v_ned[i] * dt + 0.5 * a_n[i] * dt * dt;
+            v_ned[i] += a_n[i] * dt;
+        }
+        vel_hist.push_back({v_ned[0], v_ned[1], v_ned[2]});
+        ShadowImu s{};
+        const int64_t t64 = kT0 + static_cast<int64_t>(std::llround(t * 1e6));
+        s.time_us = static_cast<uint32_t>(t64);
+        s.acc[0] = float(fx);
+        s.gyro[0] = t > t_ign ? float(kPi) : 0.0f;    // half a turn a second about the nose
+        s.flags = t < t_ign ? gnss_raw::kShadowLevel : (t >= t_det ? gnss_raw::kShadowInFlight : 0);
+        const int step = static_cast<int>(std::llround(t / dt));
+        if (step % 4 == 0)
+        {
+            gnss_raw::ShadowBaro b{};
+            b.time_us = s.time_us;
+            b.height_m = float(-p_ned[2]);
+            sh.onBaro(b);
+        }
+        sh.onImu(s, t64);
+        if (t + 1e-9 >= next_epoch)
+        {
+            const int lag_steps = static_cast<int>(std::lround(rr_lag / dt));
+            const auto& vl = vel_hist[vel_hist.size() > static_cast<size_t>(lag_steps)
+                                          ? vel_hist.size() - 1 - lag_steps : 0];
+            double dr[3], r[3], vlag_e[3];
+            nedToEcefVec(p_ned, dr);
+            nedToEcefVec(vl.data(), vlag_e);
+            for (int i = 0; i < 3; ++i)
+                r[i] = r0[i] + dr[i];
+            TimedRawEpoch e;
+            e.epoch = sky.epoch(sky.tow0 + next_epoch, r, vlag_e);
+            e.mcu_us = t64;
+            e.gps_week = kGoldenWeek;
+            due.push_back(e);
+            next_epoch++;
+        }
+        while (!due.empty() && t64 - due.front().mcu_us >= 200000)
+        {
+            offerBuilt(sh, stage, due.front(), built);
+            due.erase(due.begin());
+        }
+        if (step % 50 == 0)
+            run.state.push_back(stateHash(sh.filter()));
+        if (step % 100 == 50 && t > t_ign + 3.0)
+        {
+            // against the truth at the filter's own time (it steps at 100 Hz on 200 Hz ticks)
+            const double tf = sh.filter().time() - static_cast<double>(kT0) * 1e-6;
+            double e2 = 0.0;
+            for (int i = 0; i < 3; ++i)
+            {
+                const double vt = v_ned[i] - a_n[i] * (t - tf);
+                e2 += (sh.filter().velNed()[i] - vt) * (sh.filter().velNed()[i] - vt);
+            }
+            run.verr.push_back(std::sqrt(e2));
+        }
+    }
+    run.st = sh.stats();
+    return run;
+}
+
+double rmsOf(const std::vector<double>& v)
+{
+    double s = 0.0;
+    for (double x : v)
+        s += x * x;
+    return v.empty() ? 0.0 : std::sqrt(s / static_cast<double>(v.size()));
+}
+
+}  // namespace
+
+TEST(RawGnssShadow, ObservingTheCarrierChangesNothingTheFilterDoes)
+{
+    // The LC86G's default. The navigation filter's flight with the epochs
+    // built in the GNSS task and worked a slice a step: off and observed,
+    // every bit of the state alike every 0.25 s -- the screen runs in the
+    // unit that closes an epoch, so no slice falls differently -- and observe
+    // has screened every rate the builder gave
+    const CarrierRun off = flyCarrier(gnss_raw::kCarrierOff);
+    const CarrierRun obs = flyCarrier(gnss_raw::kCarrierObserve);
+    ASSERT_EQ(off.state.size(), obs.state.size());
+    for (size_t i = 0; i < off.state.size(); ++i)
+        ASSERT_EQ(off.state[i], obs.state[i]) << "at " << 0.25 * static_cast<double>(i) << " s";
+    EXPECT_EQ(off.st.cr_epochs, 0u);
+    EXPECT_EQ(off.st.cr_built, 0u);
+    EXPECT_GE(obs.st.cr_epochs, 12u);
+    EXPECT_GT(obs.st.cr_built, 100u);
+    EXPECT_EQ(obs.st.cr_in, obs.st.cr_built);         // no good rate refused
+    EXPECT_EQ(obs.st.cr_used, 0u);                    // and none fused
+    EXPECT_EQ(obs.st.cr_too_few + obs.st.cr_unmatched + obs.st.cr_half + obs.st.cr_other, 0u);
+    // the common rate: the clock's drift and the wind-up (half a cycle a second)
+    EXPECT_NEAR(obs.st.cr_last_common_mps, -1.5 + 0.5 * 299792458.0 / GNSS_FREQ_L1_HZ, 0.05);
+    EXPECT_NEAR(obs.st.cr_last_roll_rev_s, 0.5f, 0.01f);
+    EXPECT_GT(obs.st.cr_last_rms_mps, 0.0f);
+}
+
+TEST(RawGnssShadow, FusingTheCarrierHoldsTheVelocityTheDopplerCannot)
+{
+    // The same flight with the carrier fused (a bench mode on the LC86G):
+    // the screen a unit, every screened rate fused at once the next, through
+    // the epochs' slices
+    const CarrierRun obs = flyCarrier(gnss_raw::kCarrierObserve);
+    const CarrierRun fuse = flyCarrier(gnss_raw::kCarrierFuse);
+    EXPECT_GT(fuse.st.cr_used, 100u);
+    EXPECT_EQ(fuse.st.cr_used, fuse.st.cr_in);
+    EXPECT_EQ(fuse.st.cr_other + fuse.st.cr_half, 0u);
+    const double e_obs = rmsOf(obs.verr), e_fuse = rmsOf(fuse.verr);
+    EXPECT_LT(e_fuse, 0.5 * e_obs) << "observe " << e_obs << ", fuse " << e_fuse;
+    EXPECT_LT(e_fuse, 0.02);
+    EXPECT_NEAR(fuse.st.cr_last_common_mps, -1.5 + 0.5 * 299792458.0 / GNSS_FREQ_L1_HZ, 0.05);
+}
+
+// ------------------------------------------------ the boost screen (a6h)
+
+namespace
+{
+
+// One flight for the boost screen: the Beetle's pad 6 s, a boost of
+// boost_mps2 along the nose for 1.5 s from T+0 (6 s), then drag, on a body
+// leaning lean_deg toward azimuth 70; act with the heading's gate, its 30
+// deg launch prior and no hand-off (design H's ascent). Raw epochs once a
+// GPS second from the synthetic sky, each delivered 0.2 s late. The epoch at
+// T+bad_s is, if asked, cut to its first keep satellites with offs[k] (m/s)
+// on the k-th Doppler, or left out (drop_bad); with lost_after, no epoch
+// comes after it (the receiver has lost the sky). kShadowApogee from
+// apogee_s (flight time; never if negative). screen: Config::boost_screen;
+// screen_g: Config::boost_screen_g (0 judges every epoch). vcheck:
+// Config::vert_check_mps (0: off). bad_dv_ned: the bad epoch's Dopplers as a
+// receiver this much faster (NED, m/s) would have them -- a stale epoch, a
+// receiver still on the pad, has the climb's down. vrelease:
+// Config::vert_release_mps (negative: the config's own). tail_down: the
+// epochs after the bad one, as a receiver this much faster down would have
+// them (a receiver closing on the truth), each cut to its tail_keep entry's
+// first satellites if that is above 0.
+struct ScreenFlight
+{
+    uint8_t mode = RawGnssShadow::kHeadingAct;
+    uint8_t screen = RawGnssShadow::kScreenAct;
+    double screen_g = 2.0;
+    double vcheck = 0.0;
+    double bad_dv_ned[3] = {0.0, 0.0, 0.0};
+    double cut_from_s = 1.0e9, cut_to_s = 1.0e9;   // epochs strictly between (flight time) never come
+    double boost_mps2 = 100.0;
+    double lean_deg = 5.0;
+    double bad_s = 1.0;
+    int keep = 0;                   // 0: every satellite the sky gives
+    std::vector<double> offs;
+    bool offs_at_end = false;       // offs on the last Dopplers (fused last), not the first
+    bool drop_bad = false;
+    bool lost_after = false;
+    double apogee_s = -1.0;
+    double vrelease = -1.0;
+    std::vector<double> tail_down;
+    std::vector<int> tail_keep;
+};
+
+struct ScreenRun
+{
+    RawGnssShadow::Stats st;
+    gnss_raw::RawGnssStats bad;     // the bad epoch's own, at its close
+    bool bad_closed = false;
+    float q_end[4] = {};
+    float q_true[4] = {};
+};
+
+ScreenRun flyScreen(const ScreenFlight& o)
+{
+    double lat, lon, h;
+    ecef_to_geo(kGoldenRmRx, &lat, &lon, &h);
+    double r0[3];
+    geo_to_ecef(lat, lon, h, r0);
+    const double sl = std::sin(lat), cl = std::cos(lat), so = std::sin(lon), co = std::cos(lon);
+    auto nedToEcefVec = [&](const double n[3], double out[3]) {
+        const double e[3] = {n[1], n[0], -n[2]};
+        out[0] = -so * e[0] - sl * co * e[1] + cl * co * e[2];
+        out[1] = co * e[0] - sl * so * e[1] + cl * so * e[2];
+        out[2] = cl * e[1] + sl * e[2];
+    };
+    RawGnssShadow::Config cfg = primaryCfg();
+    cfg.heading_mode = o.mode;
+    cfg.heading_gate = RawGnssShadow::kGateHeading;
+    cfg.heading_handoff_deg = -1.0;
+    cfg.heading_launch_tilt_sigma_deg = 0.0;   // no tilt floor, as these flights were written
+    cfg.boost_screen = o.screen;
+    cfg.boost_screen_g = o.screen_g;
+    cfg.vert_check_mps = o.vcheck;
+    if (o.vrelease >= 0.0)
+        cfg.vert_release_mps = o.vrelease;
+    cfg.meas.troposphere = false;
+    // the accelerometer bias a long pad leaves (the bias's Gauss-Markov
+    // prior, 0.01 m/s^2, after minutes): 6 s from p0_abias's 0.1 g would
+    // leave the tilt 5.7 deg unsure, the boost's velocity 10 m/s, and the
+    // gate four times what it is on a real pad
+    cfg.ekf.p0_abias = 0.02;
+    RawGnssShadow sh(cfg);
+    for (int i = 0; i < kGoldenRmEphN; ++i)
+        sh.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+    SynthSky sky(cfg.meas);
+    const Mat3 Ct = leaningBody(o.lean_deg, 70.0, 25.0);
+    ScreenRun run;
+    quatOf(Ct, run.q_true);
+    ShadowSeed seed = padSeed(kT0, lat, lon, h);
+    quatOf(Ct, seed.quat);                                    // the pad's attitude, its heading the truth's
+    sh.onSeed(seed);
+    const double tow0 = goldenEpochs()[0].epoch.tow_s;
+    const double t_ign = 6.0, t_det = 6.1, t_end = 12.0, dt = 0.005, rr_lag = cfg.ekf.rr_lag_s;
+    double p_ned[3] = {}, v_ned[3] = {};
+    std::vector<std::array<double, 3>> vel_hist;
+    std::vector<TimedRawEpoch> due;
+    int next_epoch = 1;
+    const uint32_t bad_tow_ms = static_cast<uint32_t>(std::llround((tow0 + t_ign + o.bad_s) * 1000.0));
+    for (double t = dt; t <= t_end + 1e-9; t += dt)
+    {
+        double f_b[3] = {0.0, 0.0, 0.0}, a_n[3];
+        if (t > t_ign)
+        {
+            f_b[0] = t <= t_ign + 1.5 ? o.boost_mps2 : -3.0;
+            double f_n[3];
+            mat3Vec(Ct, f_b, f_n);
+            for (int i = 0; i < 3; ++i)
+                a_n[i] = f_n[i] + (i == 2 ? kG : 0.0);
+        }
+        else
+        {
+            a_n[0] = a_n[1] = a_n[2] = 0.0;
+            const double up[3] = {0, 0, -kG};
+            Mat3 CtT{};
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    CtT.m[i][j] = Ct.m[j][i];
+            mat3Vec(CtT, up, f_b);
+        }
+        for (int i = 0; i < 3; ++i)
+        {
+            p_ned[i] += v_ned[i] * dt + 0.5 * a_n[i] * dt * dt;
+            v_ned[i] += a_n[i] * dt;
+        }
+        vel_hist.push_back({v_ned[0], v_ned[1], v_ned[2]});
+        const int64_t t64 = kT0 + static_cast<int64_t>(std::llround(t * 1e6));
+        ShadowImu s{};
+        s.time_us = static_cast<uint32_t>(t64);
+        for (int i = 0; i < 3; ++i)
+            s.acc[i] = float(f_b[i]);
+        s.flags = t < t_ign ? gnss_raw::kShadowLevel : (t >= t_det ? gnss_raw::kShadowInFlight : 0);
+        if (o.apogee_s >= 0.0 && t >= t_ign + o.apogee_s)
+            s.flags |= gnss_raw::kShadowApogee;
+        sh.onImu(s, t64);
+        if (!run.bad_closed && sh.stats().last_tow_ms == bad_tow_ms)
+        {
+            run.bad = sh.stats().last;
+            run.bad_closed = true;
+        }
+        if (t + 1e-9 >= next_epoch)
+        {
+            const int lag_steps = static_cast<int>(std::lround(rr_lag / dt));
+            const auto& vl = vel_hist[vel_hist.size() > static_cast<size_t>(lag_steps)
+                                          ? vel_hist.size() - 1 - lag_steps : 0];
+            double dr[3], r[3], vlag_e[3];
+            nedToEcefVec(p_ned, dr);
+            nedToEcefVec(vl.data(), vlag_e);
+            for (int i = 0; i < 3; ++i)
+                r[i] = r0[i] + dr[i];
+            TimedRawEpoch e;
+            const bool bad = std::fabs(next_epoch - (t_ign + o.bad_s)) < 1e-6;
+            if (bad)
+            {
+                double dv_e[3];
+                nedToEcefVec(o.bad_dv_ned, dv_e);
+                for (int i = 0; i < 3; ++i)
+                    vlag_e[i] += dv_e[i];
+            }
+            // the tail: the k-th epoch after the bad one
+            const long k_tail = std::lround(next_epoch - (t_ign + o.bad_s));
+            const bool tail = k_tail >= 1 && static_cast<size_t>(k_tail) <= o.tail_down.size();
+            if (tail)
+            {
+                const double dn[3] = {0.0, 0.0, o.tail_down[static_cast<size_t>(k_tail - 1)]};
+                double dv_e[3];
+                nedToEcefVec(dn, dv_e);
+                for (int i = 0; i < 3; ++i)
+                    vlag_e[i] += dv_e[i];
+            }
+            e.epoch = sky.epoch(tow0 + next_epoch, r, vlag_e);
+            e.mcu_us = t64;
+            e.gps_week = kGoldenWeek;
+            const bool after = next_epoch > t_ign + o.bad_s + 1e-6;
+            const double rel = next_epoch - t_ign;
+            next_epoch++;
+            if ((bad && o.drop_bad) || (after && o.lost_after) || (rel > o.cut_from_s && rel < o.cut_to_s))
+                continue;
+            if (tail && static_cast<size_t>(k_tail) <= o.tail_keep.size() &&
+                o.tail_keep[static_cast<size_t>(k_tail - 1)] > 0 &&
+                e.epoch.n > o.tail_keep[static_cast<size_t>(k_tail - 1)])
+                e.epoch.n = o.tail_keep[static_cast<size_t>(k_tail - 1)];
+            if (bad && (o.keep > 0 || !o.offs.empty()))
+            {
+                if (o.keep > 0 && e.epoch.n > o.keep)
+                    e.epoch.n = o.keep;
+                for (size_t k = 0; k < o.offs.size() && static_cast<int>(k) < e.epoch.n; ++k)
+                    e.epoch.obs[o.offs_at_end ? e.epoch.n - 1 - static_cast<int>(k) : static_cast<int>(k)].rate_mps +=
+                        o.offs[k];
+            }
+            due.push_back(e);
+        }
+        while (!due.empty() && t64 - due.front().mcu_us >= 200000)
+        {
+            sh.onEpoch(due.front());
+            due.erase(due.begin());
+        }
+    }
+    for (int i = 0; i < 4; ++i)
+        run.q_end[i] = sh.filter().quat()[i];
+    run.st = sh.stats();
+    return run;
+}
+
+// c30's T+1, as the rig's LC86G gave it losing lock in the boost: eight
+// satellites, four Dopplers 40-62 m/s off (the gate refuses them at the
+// epoch's prior), one 12 m/s off (it passes, and it is wrong), three good;
+// and nothing after it.
+ScreenFlight c30Like()
+{
+    ScreenFlight o;
+    o.keep = 8;
+    o.offs = {48.0, -55.0, 62.0, 40.0, 12.0};
+    o.lost_after = true;
+    return o;
+}
+
+}  // namespace
+
+TEST(RawGnssShadow, TheBoostScreenDropsAnEpochWhoseDopplersTheGateMostlyRefuses)
+{
+    // A c30-like epoch at T+1 (10 g), the sky lost after it: the screen
+    // gates its 8 Dopplers at the prior, refuses 4, and drops it whole -- no
+    // pseudorange or Doppler fused, not counted applied, the flight then
+    // what it is with that epoch never sent. Unscreened, the update's own
+    // gate refuses the same four and lets the fifth, 12 m/s off, turn the
+    // heading for the rest of the flight. The epoch at T+0 is a boost epoch
+    // too (the IMU's peak since the epoch before it is the boost's), and
+    // passes.
+    const ScreenRun screened = flyScreen(c30Like());
+    ScreenFlight none = c30Like();
+    none.drop_bad = true;
+    const ScreenRun without = flyScreen(none);
+    ScreenFlight off = c30Like();
+    off.screen = RawGnssShadow::kScreenOff;
+    const ScreenRun unscreened = flyScreen(off);
+
+    ASSERT_TRUE(screened.bad_closed);
+    EXPECT_TRUE(screened.bad.screen_dropped);
+    EXPECT_EQ(screened.bad.screen_rr, 8);
+    EXPECT_EQ(screened.bad.screen_refused, 4);
+    EXPECT_EQ(screened.bad.used_pr, 0);
+    EXPECT_EQ(screened.bad.used_rr, 0);
+    EXPECT_EQ(screened.st.boost_screened, 2u);
+    EXPECT_EQ(screened.st.boost_dropped, 1u);
+    EXPECT_EQ(screened.st.boost_dropped_dry, 0u);       // the prior's gate dropped it: not worked through
+    EXPECT_EQ(screened.st.boost_last_dry_used, -1);
+    EXPECT_EQ(screened.st.epochs_applied + 1, unscreened.st.epochs_applied);
+    // as if it never came
+    EXPECT_LT(attErrDeg(screened.q_end, without.q_end), 0.01);
+    // unscreened: the gate takes the fifth
+    ASSERT_TRUE(unscreened.bad_closed);
+    EXPECT_FALSE(unscreened.bad.screen_dropped);
+    EXPECT_EQ(unscreened.st.boost_screened, 0u);
+    EXPECT_GE(unscreened.bad.rejected_rr, 4);
+    EXPECT_GT(unscreened.bad.used_rr, 0);
+    EXPECT_LT(attErrDeg(screened.q_end, screened.q_true), 0.5);
+    EXPECT_GT(attErrDeg(unscreened.q_end, unscreened.q_true), 5.0);   // 10.1 deg, all of it heading
+}
+
+TEST(RawGnssShadow, TheBoostScreenKeepsAnEpochWithUnderHalfRefused)
+{
+    // Three of eight far off: under half at the prior and worked through,
+    // the epoch is fused, and the update's own gate refuses the three.
+    ScreenFlight o = c30Like();
+    o.offs = {48.0, -55.0, 62.0};
+    const ScreenRun run = flyScreen(o);
+    ASSERT_TRUE(run.bad_closed);
+    EXPECT_EQ(run.bad.screen_rr, 8);
+    EXPECT_EQ(run.bad.screen_refused, 3);
+    EXPECT_EQ(run.bad.screen_seq_refused, 3);           // worked through: the same three
+    EXPECT_EQ(run.bad.screen_seq_used, 5);
+    EXPECT_FALSE(run.bad.screen_dropped);
+    EXPECT_EQ(run.st.boost_dropped, 0u);
+    EXPECT_EQ(run.st.boost_screened, 2u);
+    EXPECT_EQ(run.bad.used_pr, 8);
+    EXPECT_EQ(run.bad.rejected_rr, 3);
+    EXPECT_EQ(run.bad.used_rr, 5);
+    EXPECT_LT(attErrDeg(run.q_end, run.q_true), 1.0);
+}
+
+TEST(RawGnssShadow, TheBoostScreenNeverActsBelowItsThreshold)
+{
+    // The same epoch in a 1.2 g climb (the IMU's peak never past 2 g): not
+    // screened, fused, the update's gate alone refusing what it refuses.
+    ScreenFlight o = c30Like();
+    o.boost_mps2 = 12.0;
+    const ScreenRun run = flyScreen(o);
+    ASSERT_TRUE(run.bad_closed);
+    EXPECT_EQ(run.st.boost_screened, 0u);
+    EXPECT_EQ(run.st.boost_dropped, 0u);
+    EXPECT_EQ(run.bad.screen_rr, 0);
+    EXPECT_FALSE(run.bad.screen_dropped);
+    EXPECT_GT(run.bad.used_pr, 0);
+    EXPECT_GE(run.bad.rejected_rr, 4);
+}
+
+TEST(RawGnssShadow, TheBoostScreenNeverActsAfterTheApogeeCall)
+{
+    // Past 2 g after the apogee call -- a drogue's snatch, the epoch after it
+    // the carrier's first -- the screen never runs: here the call comes in
+    // the boost (T+0.5), and the c30-like epoch at T+1 is fused as the
+    // update's gate takes it. The epoch at T+0, before the call, is screened.
+    ScreenFlight o = c30Like();
+    o.apogee_s = 0.5;
+    const ScreenRun run = flyScreen(o);
+    ASSERT_TRUE(run.bad_closed);
+    EXPECT_EQ(run.st.boost_screened, 1u);
+    EXPECT_EQ(run.st.boost_dropped, 0u);
+    EXPECT_EQ(run.bad.screen_rr, 0);
+    EXPECT_FALSE(run.bad.screen_dropped);
+    EXPECT_GT(run.bad.used_pr, 0);
+}
+
+TEST(RawGnssShadow, TheScreenAtZeroGJudgesEveryEpochBeforeTheApogeeCall)
+{
+    // boost_screen_g 0: every epoch before the apogee call is judged, whatever
+    // the IMU read. The c30-like epoch in a 1.2 g climb, which a 2 g screen
+    // never sees, is dropped whole; with the call before it (T+0.5) it is
+    // fused as the update's gate takes it.
+    ScreenFlight o = c30Like();
+    o.boost_mps2 = 12.0;
+    o.screen_g = 0.0;
+    const ScreenRun run = flyScreen(o);
+    ASSERT_TRUE(run.bad_closed);
+    EXPECT_GE(run.st.boost_screened, 2u);
+    EXPECT_EQ(run.st.boost_dropped, 1u);
+    EXPECT_TRUE(run.bad.screen_dropped);
+    EXPECT_EQ(run.bad.used_pr, 0);
+    o.apogee_s = 0.5;
+    const ScreenRun late = flyScreen(o);
+    ASSERT_TRUE(late.bad_closed);
+    EXPECT_EQ(late.st.boost_dropped, 0u);
+    EXPECT_FALSE(late.bad.screen_dropped);
+    EXPECT_GT(late.bad.used_pr, 0);
+}
+
+TEST(RawGnssShadow, TheVerticalCheckDropsAStaleEpoch)
+{
+    // A receiver that lost its loops in the boost hands over the Dopplers of
+    // one still on the pad: at T+1 the climb is ~90 m/s, and the epoch's
+    // Dopplers agree on a velocity ~90 m/s down of the filter's. The vertical
+    // check drops it whole -- the flight what it is with the epoch never sent.
+    ScreenFlight o;
+    o.screen = RawGnssShadow::kScreenOff;     // the vertical check alone
+    o.vcheck = 20.0;
+    o.bad_dv_ned[2] = 90.0;
+    o.lost_after = true;
+    const ScreenRun run = flyScreen(o);
+    ScreenFlight none = o;
+    none.drop_bad = true;
+    const ScreenRun without = flyScreen(none);
+    ASSERT_TRUE(run.bad_closed);
+    EXPECT_GE(run.bad.screen_fit_n, 4);
+    EXPECT_GT(run.bad.screen_dv_down_mps, 60.0f);
+    EXPECT_TRUE(run.bad.screen_dropped);
+    EXPECT_EQ(run.bad.used_pr, 0);
+    EXPECT_EQ(run.bad.used_rr, 0);
+    EXPECT_EQ(run.st.vert_dropped, 1u);
+    EXPECT_EQ(run.st.boost_screened, 0u);
+    EXPECT_LT(attErrDeg(run.q_end, without.q_end), 0.01);
+    // off, the same epoch is fused as the update's gate takes it
+    o.vcheck = 0.0;
+    const ScreenRun off = flyScreen(o);
+    ASSERT_TRUE(off.bad_closed);
+    EXPECT_FALSE(off.bad.screen_dropped);
+    EXPECT_EQ(off.st.vert_checked, 0u);
+}
+
+TEST(RawGnssShadow, TheVerticalCheckKeepsGoodEpochsAndAHorizontalDisagreement)
+{
+    // Every epoch with four Dopplers or more is judged, in every phase, and a
+    // good one kept. A disagreement across the ground -- what a filter wrong
+    // about its heading sees, the data right -- leaves the vertical alone:
+    // kept, so such a filter is never locked out.
+    ScreenFlight o;
+    o.screen = RawGnssShadow::kScreenOff;
+    o.vcheck = 20.0;
+    const ScreenRun good = flyScreen(o);
+    EXPECT_GE(good.st.vert_checked, 6u);
+    EXPECT_EQ(good.st.vert_dropped, 0u);
+    EXPECT_LT(std::fabs(good.st.vert_worst_dv_down), 2.0f);
+    o.bad_dv_ned[0] = 15.0;
+    const ScreenRun across = flyScreen(o);
+    ASSERT_TRUE(across.bad_closed);
+    EXPECT_GE(across.bad.screen_fit_n, 4);
+    EXPECT_LT(std::fabs(across.bad.screen_dv_down_mps), 2.0f);
+    EXPECT_FALSE(across.bad.screen_dropped);
+    EXPECT_EQ(across.st.vert_dropped, 0u);
+}
+
+TEST(RawGnssShadow, TheVerticalCheckLeavesThinEpochsToTheBoostScreen)
+{
+    // Under four Dopplers there is no velocity to fit: the boost screen is
+    // that epoch's only judge. The c30-like epoch cut to three satellites, two
+    // of them 48 and 55 m/s off: unjudged by the vertical check, screened by
+    // the boost screen and dropped.
+    ScreenFlight o = c30Like();
+    o.keep = 3;
+    o.offs = {48.0, -55.0};
+    o.vcheck = 20.0;
+    const ScreenRun run = flyScreen(o);
+    ASSERT_TRUE(run.bad_closed);
+    EXPECT_EQ(run.bad.screen_fit_n, 0);
+    EXPECT_EQ(run.st.boost_screened, 2u);         // T+0's too: every boost epoch is
+    EXPECT_TRUE(run.bad.screen_dropped);
+    EXPECT_EQ(run.st.boost_dropped, 1u);
+    EXPECT_EQ(run.st.vert_dropped, 0u);
+}
+
+TEST(RawGnssShadow, TheBoostScreenStillJudgesABoostEpochTheVerticalCheckPasses)
+{
+    // An epoch that disagrees across the ground, 60 m/s sideways, passes the
+    // vertical check (its fitted vertical is the filter's); in the boost the
+    // boost screen still judges it, refuses half or more of its Dopplers and
+    // drops it. Each check sees what the other misses. (30 m/s sideways, all
+    // satellites agreeing, the boost's wide gate passes: a coherent error is
+    // the boost screen's blind spot, as a stale receiver is.)
+    ScreenFlight o;
+    o.vcheck = 20.0;
+    o.bad_dv_ned[1] = 60.0;
+    o.lost_after = true;
+    const ScreenRun run = flyScreen(o);
+    ASSERT_TRUE(run.bad_closed);
+    EXPECT_GE(run.bad.screen_fit_n, 4);
+    EXPECT_LT(std::fabs(run.bad.screen_dv_down_mps), 2.0f);
+    EXPECT_EQ(run.st.vert_dropped, 0u);
+    EXPECT_GT(run.bad.screen_rr, 0);
+    EXPECT_TRUE(run.bad.screen_dropped);
+    EXPECT_EQ(run.st.boost_dropped, 1u);
+}
+
+TEST(RawGnssShadow, TheBoostScreenIsNotArmedByABoostLongPast)
+{
+    // A boost epoch is one whose start finds the IMU past 2 g within the last
+    // 1.5 s, not since the epoch before: after a dropout from T+1.5 to T+4.5
+    // the first epoch back (T+5, the boost 3.5 s gone) is not screened --
+    // a filter that long without GNSS refuses its rows, and the screen would
+    // drop the epoch that rights it. The boost's own epochs still are.
+    ScreenFlight o = c30Like();
+    o.keep = 8;
+    o.offs = {12.0};
+    o.lost_after = false;
+    o.bad_s = 5.0;
+    o.cut_from_s = 1.5;
+    o.cut_to_s = 4.5;
+    const ScreenRun run = flyScreen(o);
+    ASSERT_TRUE(run.bad_closed);
+    EXPECT_EQ(run.bad.screen_rr, 0);              // not screened
+    EXPECT_FALSE(run.bad.screen_dropped);
+    EXPECT_GT(run.bad.used_pr, 0);
+    EXPECT_GE(run.st.boost_screened, 1u);         // the boost's epochs were
+}
+
+TEST(RawGnssShadow, TheVerticalCheckLeavesOutOneBadSatelliteAndKeepsTheEpoch)
+{
+    // One satellite gone stale among good ones (GTV's E13, 50-63 m/s off for
+    // four epochs) would pull the epoch's fit: it is left out -- more than
+    // four of its own 1-sigmas off the rest's fit -- the rest fitted again,
+    // and the epoch kept for the per-row gate to refuse that satellite alone.
+    ScreenFlight o;
+    o.screen = RawGnssShadow::kScreenOff;     // the vertical check alone
+    o.vcheck = 20.0;
+    o.keep = 8;
+    o.offs = {60.0};
+    o.lost_after = true;
+    const ScreenRun run = flyScreen(o);
+    ASSERT_TRUE(run.bad_closed);
+    EXPECT_EQ(run.bad.screen_fit_out, 1);
+    EXPECT_EQ(run.bad.screen_fit_n, 7);
+    EXPECT_LT(std::fabs(run.bad.screen_dv_down_mps), 2.0f);
+    EXPECT_FALSE(run.bad.screen_dropped);
+    EXPECT_EQ(run.st.vert_dropped, 0u);
+    EXPECT_GT(run.bad.used_pr, 0);
+}
+
+TEST(RawGnssShadow, TheLatchHoldsOutAReceiverClosingAfterAVerticalDrop)
+{
+    // A receiver that lost its loops comes back over seconds: T+1 ~80 m/s
+    // down of the filter's (dropped by the vertical check), then 12 and 8 m/s
+    // (under vert_check_mps, so fused without the latch), then within 1. The
+    // latch holds T+2 and T+3 out and T+4, back within vert_release_mps, is
+    // fused: the attitude ends 0.17 deg off the truth's, against 1.1 with
+    // the tail fused. (Not to the hundredth what never sending them gives:
+    // the receiver's side still saw them, so T+4's relock ages differ.)
+    ScreenFlight o;
+    o.screen = RawGnssShadow::kScreenOff;     // the vertical check alone
+    o.vcheck = 20.0;
+    o.vrelease = 5.0;
+    o.bad_dv_ned[2] = 80.0;
+    o.tail_down = {12.0, 8.0, 1.0};
+    const ScreenRun run = flyScreen(o);
+    ASSERT_TRUE(run.bad_closed);
+    EXPECT_TRUE(run.bad.screen_dropped);
+    EXPECT_EQ(run.st.vert_dropped, 1u);
+    EXPECT_EQ(run.st.vert_latched, 2u);
+    EXPECT_LT(attErrDeg(run.q_end, run.q_true), 0.3);
+    // with no latch the tail is fused: under 20 m/s, the vertical check passes it
+    o.vrelease = 0.0;
+    const ScreenRun off = flyScreen(o);
+    EXPECT_EQ(off.st.vert_dropped, 1u);
+    EXPECT_EQ(off.st.vert_latched, 0u);
+    EXPECT_GT(off.st.epochs_applied, run.st.epochs_applied);
+    EXPECT_GT(attErrDeg(off.q_end, off.q_true), 0.8);
+}
+
+TEST(RawGnssShadow, TheLatchHoldsOutThinEpochsUntilOneFitsBack)
+{
+    // After a vertical drop an epoch too thin to fit (under four Dopplers)
+    // cannot show it is back: held out while the latch holds. The first epoch
+    // that fits within vert_release_mps (T+4, every satellite) releases it.
+    // These thin epochs were good, and holding them out costs next to nothing.
+    ScreenFlight o;
+    o.screen = RawGnssShadow::kScreenOff;
+    o.vcheck = 20.0;
+    o.vrelease = 5.0;
+    o.bad_dv_ned[2] = 80.0;
+    o.tail_down = {0.0, 0.0, 0.0};
+    o.tail_keep = {3, 3, 0};
+    const ScreenRun run = flyScreen(o);
+    EXPECT_EQ(run.st.vert_dropped, 1u);
+    EXPECT_EQ(run.st.vert_latched, 2u);
+    o.vrelease = 0.0;
+    const ScreenRun off = flyScreen(o);
+    EXPECT_EQ(off.st.vert_latched, 0u);
+    EXPECT_LT(std::fabs(attErrDeg(run.q_end, run.q_true) - attErrDeg(off.q_end, off.q_true)), 0.05);
+    // a flight with no vertical drop never latches: its thin epochs are fused
+    ScreenFlight clean = o;
+    clean.bad_dv_ned[2] = 0.0;
+    const ScreenRun c = flyScreen(clean);
+    EXPECT_EQ(c.st.vert_dropped, 0u);
+    EXPECT_EQ(c.st.vert_latched, 0u);
+}
+
+TEST(RawGnssShadow, TheBoostScreenRunsInActByDefault)
+{
+    // kScreenAct, the default: in act only. Observe flies the epoch as the
+    // update's gate takes it (GNSS barely reaches its attitude in a boost);
+    // kScreenOn screens there too. The default judges boost epochs (2 g), and
+    // the vertical check runs beside it at 20 m/s.
+    EXPECT_EQ(RawGnssShadow::Config().boost_screen, RawGnssShadow::kScreenAct);
+    EXPECT_DOUBLE_EQ(RawGnssShadow::Config().boost_screen_g, 2.0);
+    EXPECT_DOUBLE_EQ(RawGnssShadow::Config().boost_screen_window_s, 1.5);
+    EXPECT_DOUBLE_EQ(RawGnssShadow::Config().vert_check_mps, 20.0);
+    EXPECT_DOUBLE_EQ(RawGnssShadow::Config().vert_release_mps, 5.0);
+    ScreenFlight o = c30Like();
+    o.mode = RawGnssShadow::kHeadingObserve;
+    const ScreenRun obs = flyScreen(o);
+    EXPECT_EQ(obs.st.boost_screened, 0u);
+    EXPECT_EQ(obs.st.boost_dropped, 0u);
+    o.screen = RawGnssShadow::kScreenOn;
+    const ScreenRun on = flyScreen(o);
+    EXPECT_EQ(on.st.boost_screened, 2u);
+    EXPECT_EQ(on.st.boost_dropped, 1u);
+}
+
+TEST(RawGnssShadow, TheBoostScreenWorksTheEpochThroughForWhatThePriorsGatePasses)
+{
+    // Four good Dopplers, then four 20 m/s off: at the epoch's prior the gate
+    // is wide -- the boost's velocity and act's opened heading -- and passes
+    // all eight; worked through on the scratch copy, each update shrinks it
+    // and the last four are refused: half, and the epoch is dropped whole --
+    // the flight what it is with the epoch never sent, the filter untouched by
+    // the copy's work. As the offline replay's majority check, which worked
+    // the epoch and counted (c30-like draws: 3 of 7 refused at the prior, 4-5
+    // worked through).
+    ScreenFlight o;
+    o.keep = 8;
+    o.offs = {20.0, -20.0, 20.0, -20.0};
+    o.offs_at_end = true;
+    o.lost_after = true;
+    const ScreenRun run = flyScreen(o);
+    ScreenFlight none = o;
+    none.drop_bad = true;
+    const ScreenRun without = flyScreen(none);
+    ASSERT_TRUE(run.bad_closed);
+    EXPECT_EQ(run.bad.screen_rr, 8);
+    EXPECT_EQ(run.bad.screen_refused, 0);
+    EXPECT_EQ(run.bad.screen_seq_refused, 4);
+    EXPECT_EQ(run.bad.screen_seq_used, 4);
+    EXPECT_TRUE(run.bad.screen_dropped);
+    EXPECT_EQ(run.bad.used_pr, 0);
+    EXPECT_EQ(run.bad.used_rr, 0);
+    EXPECT_EQ(run.st.boost_dropped, 1u);
+    EXPECT_EQ(run.st.boost_dropped_dry, 1u);
+    EXPECT_LT(attErrDeg(run.q_end, without.q_end), 0.01);
+    // 18 m/s off: two refused worked through, under half: kept and fused
+    o.offs = {18.0, -18.0, 18.0, -18.0};
+    const ScreenRun kept = flyScreen(o);
+    EXPECT_EQ(kept.bad.screen_refused, 0);
+    EXPECT_EQ(kept.bad.screen_seq_refused, 2);
+    EXPECT_FALSE(kept.bad.screen_dropped);
+    EXPECT_EQ(kept.bad.used_pr, 8);
+    EXPECT_EQ(kept.bad.used_rr, 6);
+    EXPECT_EQ(kept.st.boost_dropped, 0u);
+}
+

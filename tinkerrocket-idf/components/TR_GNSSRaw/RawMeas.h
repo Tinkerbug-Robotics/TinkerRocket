@@ -2,7 +2,9 @@
 // per-satellite measurements a tightly coupled GNSS/INS filter takes (#1600)
 //
 // RawEpoch is what any receiver reports, in its own words but SI units: per
-// satellite, the pseudorange, the range rate and C/N0. (The LC86G's come from
+// satellite, the pseudorange, the range rate, the carrier phase and C/N0, and
+// the lock time and half-cycle flag that say whether the phase is continuous
+// from the epoch before. (The LC86G's come from
 // RTCM MSM7: Lc86RawEpoch.h in its driver fills one.) RawMeasBuilder turns
 // an epoch into RawMeas, corrected so the filter only adds its own receiver
 // state: the satellite placed at the transmit time, its clock, relativity
@@ -28,6 +30,11 @@ struct RawObs
     double   pr_m;        // pseudorange, m
     double   rate_mps;    // range rate, m/s (the MSM7 phase-range rate; = -lambda * Doppler)
     uint32_t lock_ms;     // the receiver's minimum lock time, ms (0 if it gives none)
+    bool     has_phase;   // a carrier phase (phase_m)
+    bool     halfcyc;     // its half-cycle ambiguity unresolved (MSM7 DF420): it can step by half a cycle
+    double   phase_m;     // the carrier phase as a range, m (MSM7: the rough range DF397 + DF398 plus the
+                          // fine phase range DF406). It carries the receiver's own integer per lock: its
+                          // changes are the measurement (RawMeasBuilder's carrier range rate)
 };
 
 // One receiver epoch: every satellite measured at one GPS instant.
@@ -68,6 +75,15 @@ struct TimedFix
 // One satellite at one epoch, corrected (see above). sat_pos is the
 // satellite at the transmit time in the ECEF frame of that instant; the
 // filter turns it by the Earth's rotation over the signal's travel (Sagnac).
+//
+// The carrier range rate (has_cr): the satellite's carrier phase range since
+// the epoch before, cr_dphi_m over cr_dt, both ends corrected as its
+// pseudorange is (the satellite clock, and with a receiver position the
+// ionosphere -- the phase's advance -- and the troposphere). sat_pos_prev is
+// the satellite at the earlier epoch's transmit time, so the filter predicts
+// the interval's range change from the two geometries (TR_RawGnssEKF's
+// carrier update). It carries the receiver's clock change over the interval:
+// the filter takes that as a common rate of the epoch.
 struct RawMeas
 {
     uint8_t sys;          // gnss_sys_t
@@ -84,6 +100,11 @@ struct RawMeas
     float   tau_pr;       // its correlation time, s
     float   sigma_rr;     // m/s
     float   tau_rr;       // s
+    bool    has_cr;       // a carrier range rate (RawMeasBuilder's gates passed at both ends)
+    float   sigma_cr;     // its 1-sigma, m/s: both ends' phase noise over the interval, floored
+    float   cr_dt;        // the interval, s
+    double  cr_dphi_m;    // the corrected phase range's change over it, m
+    double  sat_pos_prev[3];   // the satellite at the earlier epoch's transmit time, m (ECEF of that instant)
 };
 
 }  // namespace gnss_raw

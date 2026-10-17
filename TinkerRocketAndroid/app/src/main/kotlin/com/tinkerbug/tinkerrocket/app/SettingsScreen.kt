@@ -102,6 +102,9 @@ fun SettingsScreen(
     // off or not running, when an update may be the only way forward; null (the
     // default) leaves the button out, so existing call sites are unchanged.
     onOpenFirmware: (() -> Unit)? = null,
+    // #1629: opens the dashboard's six-face accelerometer calibration, the
+    // way onOpenFirmware opens its Firmware tool; null leaves the entry out.
+    onOpenAccelCal: (() -> Unit)? = null,
 ) {
     val profiles by store.profiles.collectAsState()
     val activeId by store.activeId.collectAsState()
@@ -472,6 +475,32 @@ fun SettingsScreen(
         // sits where the General tab's content ends.
         if (session != null && network != null && knownDevices != null) {
             NetworkSection(session, network, knownDevices)
+        }
+
+        // ── Calibration (#1629) ──────────────────────────────────────────
+        // The six-face accelerometer calibration, worded and gated as in iOS
+        // SettingsView's Calibration section (the rocket itself, connected
+        // and powered). The screen itself is a dashboard tool beside the mag
+        // and pad calibrations; this opens it. The offset is the board's own
+        // (stored on the flight computer), so it is no profile field and
+        // nothing pushes it on connect.
+        if (onOpenAccelCal != null && session != null && !session.isBaseStation) {
+            val canCalibrate = com.tinkerbug.tinkerrocket.session.AccelSixFace.canCalibrate(
+                connected, session.isBaseStation, powerOn,
+            )
+            Section("Calibration") {
+                OutlinedButton(onClick = onOpenAccelCal, enabled = canCalibrate) {
+                    Text(com.tinkerbug.tinkerrocket.session.AccelCalReadout.ENTRY)
+                }
+                Caption(com.tinkerbug.tinkerrocket.session.AccelCalReadout.ENTRY_CAPTION)
+                if (!canCalibrate) {
+                    Text(
+                        com.tinkerbug.tinkerrocket.session.AccelCalReadout.ENTRY_POWER,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors.statusWarn,
+                    )
+                }
+            }
         }
 
         // ── IMU Mounting (iOS General-tab section; raw-int field replaced

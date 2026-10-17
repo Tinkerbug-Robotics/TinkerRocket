@@ -76,6 +76,8 @@ TEST(RawNavAdapter, BeforeTheRawFilterRunsItAnswersWhereItWillStart)
     EXPECT_EQ(s.have_declination, 1);
     EXPECT_NEAR(s.declination_rad, -11.6f * float(kDeg), 1e-6f);
     EXPECT_NEAR(s.field_ut, 50.3f, 0.1f);
+    EXPECT_EQ(s.have_dip, 1);                    // #1590: the field's dip below the horizontal
+    EXPECT_NEAR(s.dip_rad, std::atan2(45.5, std::hypot(21.0, 4.3)), 1e-6);   // 64.8 deg
     EXPECT_EQ(s.restore, 0);
     EXPECT_EQ(s.start_gen, 1);
 
@@ -92,6 +94,13 @@ TEST(RawNavAdapter, BeforeTheRawFilterRunsItAnswersWhereItWillStart)
     ekf.init(imu, gnss, EkfMagData());
     ekf.startSeed(s);
     EXPECT_EQ(s.start_gen, 2);
+
+    // a model the adapter will not take (#1304's 20-70 uT): no size, no dip
+    const float weak[3] = {5.0f, 0.0f, 10.0f};
+    ekf.setMagReference(weak);
+    ekf.startSeed(s);
+    EXPECT_EQ(s.field_ut, 0.0f);
+    EXPECT_EQ(s.have_dip, 0);
 }
 
 TEST(RawNavAdapter, RunningItAnswersFromTheRawFilter)
@@ -235,6 +244,43 @@ TEST(RawNavAdapter, TheMagnetometerGoesToTheRawFilterOnce)
     m.mag_z = 60.0;                               // 68 uT: a hard iron
     ekf.update(true, EkfIMUData(), EkfGNSSDataLLA(), m);
     EXPECT_TRUE(ekf.getMagCalSuspect());
+}
+
+TEST(RawNavAdapter, EachMagnetometerSampleSaysWhetherItsHardIronIsOut)
+{
+    // #1590: main.cpp says each pass whether a stored hard-iron calibration
+    // is applied and whether the field is a sim's (the rig replay's too);
+    // every sample handed on from then carries it. Until it says, none.
+    ShadowLink link;
+    RawNavAdapter ekf;
+    ekf.attach(&link);
+    EkfMagData m;
+    m.mag_x = 30.0;
+    m.mag_y = 10.0;
+    m.mag_z = 38.0;
+    ShadowMag got{};
+    const struct
+    {
+        bool    set, cal, sim;
+        uint8_t flags;
+    } cases[] = {
+        {false, false, false, 0},                                                  // never said: not out
+        {true, true, false, gnss_raw::kShadowMagCalibrated},                       // calibrated
+        {true, false, true, gnss_raw::kShadowMagSim},                              // a sim, or the replay
+        {true, true, true, gnss_raw::kShadowMagCalibrated | gnss_raw::kShadowMagSim},
+        {true, false, false, 0},                                                   // calibration gone again
+    };
+    uint32_t t = 1000;
+    for (const auto& c : cases)
+    {
+        if (c.set)
+            ekf.setMagCalibration(c.cal, c.sim);
+        m.time_us = t += 20000;
+        ekf.update(true, EkfIMUData(), EkfGNSSDataLLA(), m);
+        ASSERT_TRUE(link.mag.pop(got));
+        EXPECT_EQ(got.flags, c.flags) << c.cal << c.sim;
+        EXPECT_FLOAT_EQ(got.mag[0], 30.0f);
+    }
 }
 
 // ------------------------------------------- brought forward to now (#1626 K2)

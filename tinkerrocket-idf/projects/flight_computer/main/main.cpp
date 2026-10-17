@@ -74,6 +74,10 @@
 #include <esp_heap_caps.h>
 #include <new>                    // placement new: the raw-GNSS shadow filter (#1600)
 #include <RawGnssShadow.h>        // TR_RawGnssShadow (#1600)
+#include <ReceiverProfileApply.h> // the receiver's profile into its configs (TR_GNSSRaw/ReceiverProfile.h)
+#if TR_HEADING_FIT_BENCH
+#include <HeadingFitBench.h>      // the heading fit's bench (TR_HEADING_FIT_BENCH)
+#endif
 #include <gnss/types.h>           // GNSS_SYS_* (the console's satellite names)
 #include <esp_log.h>
 #include <esp_task_wdt.h>
@@ -241,6 +245,26 @@ static bool    mag_cal_verify_active  = false;
 // FC eventually evaluates so the chip isn't left with unverified
 // offsets indefinitely.
 static constexpr int64_t MAG_CAL_VERIFY_DURATION_US = 60'000'000;
+
+#if TR_RAW_GNSS_PRIMARY
+// #1590: a stored hard-iron calibration is what takes the magnetometer's hard
+// iron out now -- the one NVS kept, applied at boot (applyPendingMagOffset),
+// or one a calibration saved or the app pushed since.  The navigation filter
+// takes no heading from the magnetometer without one.  The collector's flag
+// alone says only that an offset was asked of it this boot: MAG_CAL_START, a
+// failed verify and a retry write zeros, and ending the first calibration a
+// board ever had "restores" zeros.  So zeros, a session still open (sampling
+// at zero, or verifying a candidate not yet stored), and a stored offset not
+// yet applied (a magnetometer that came up late) are none.  No real board's
+// hard iron is under one count on every axis.
+static bool magHardIronApplied()
+{
+    int16_t cx = 0, cy = 0, cz = 0;
+    if (!sensor_collector_hw.iis2mdcHardIronOffset(cx, cy, cz)) return false;
+    if (mag_cal_session_active || pending_mag_apply) return false;
+    return cx != 0 || cy != 0 || cz != 0;
+}
+#endif
 
 // Gyro zero-rate bias restored from NVS (#132).  Applied to sensor_collector
 // after begin(), alongside the mag offsets, so a stored sensor cal survives
@@ -2753,6 +2777,23 @@ static void sendPadContextCal()
     r.c.mmc_offset_counts[2] = oz;
     static_assert(sizeof(r) == sizeof(PadContextHeader) + sizeof(PadContextCal), "PCX_CAL record is packed");
     (void)enqueueI2STx(PAD_CONTEXT_MSG, reinterpret_cast<const uint8_t*>(&r), sizeof(r));
+    // PCX_ACC: the low-g accelerometer's hand-calibrated offset (#1629), which
+    // the converter takes off after the log
+    struct __attribute__((packed))
+    {
+        PadContextHeader h;
+        PadContextAcc    a;
+    } ra = {};
+    ra.h.time_us = r.h.time_us;
+    ra.h.kind    = PCX_ACC;
+    ra.h.part    = 0;
+    ra.h.parts   = 1;
+    ra.a.applied = sensor_converter.lowGOffsetApplied() ? 1U : 0U;
+    ra.a.offset_mps2[0] = sensor_converter.lowGOffsetX();
+    ra.a.offset_mps2[1] = sensor_converter.lowGOffsetY();
+    ra.a.offset_mps2[2] = sensor_converter.lowGOffsetZ();
+    static_assert(sizeof(ra) == sizeof(PadContextHeader) + sizeof(PadContextAcc), "PCX_ACC record is packed");
+    (void)enqueueI2STx(PAD_CONTEXT_MSG, reinterpret_cast<const uint8_t*>(&ra), sizeof(ra));
 }
 
 // ==========================================================================
@@ -3035,14 +3076,16 @@ static uint32_t raw_shadow_seed_ms = 0;
 // (rawGnssMeasTask). Its stage and the built epochs (~6 kB each) are in PSRAM
 // beside the filter; the handoff's indices here, in internal RAM.
 static gnss_raw::RawGnssMeasStage* raw_meas = nullptr;
+static gnss_raw::TimedRawEpoch* raw_meas_epoch = nullptr;   // the GNSS task's copy of each epoch (~2 kB), PSRAM
 static gnss_raw::SpscSlots<gnss_raw::BuiltEpoch, 2> raw_built;
 static TaskHandle_t raw_meas_task = nullptr;
 
 static int64_t rawShadowClock() { return esp_timer_get_time(); }
 
-// Core 1, every flight-filter tick: exactly the input GpsInsEKF::update got.
+// Core 1, every flight-filter tick: exactly the input GpsInsEKF::update got,
+// and the flight's phase (in flight, landed, the apogee call).
 static inline void rawShadowPushImu(const EkfIMUData& imu, bool level, bool in_flight, bool sim,
-                                    bool landed)
+                                    bool landed, bool apogee)
 {
     static constexpr float kDeg2Rad = (float)(M_PI / 180.0);   // the flight filter's gyro input is deg/s
     gnss_raw::ShadowImu s;
@@ -3054,7 +3097,8 @@ static inline void rawShadowPushImu(const EkfIMUData& imu, bool level, bool in_f
     s.gyro[1] = (float)imu.gyro_y * kDeg2Rad;
     s.gyro[2] = (float)imu.gyro_z * kDeg2Rad;
     s.flags = (uint8_t)((level ? gnss_raw::kShadowLevel : 0) | (in_flight ? gnss_raw::kShadowInFlight : 0)
-                        | (sim ? gnss_raw::kShadowSim : 0) | (landed ? gnss_raw::kShadowLanded : 0));
+                        | (sim ? gnss_raw::kShadowSim : 0) | (landed ? gnss_raw::kShadowLanded : 0)
+                        | (apogee ? gnss_raw::kShadowApogee : 0));
     raw_shadow_link.imu.push(s);   // a full ring drops the tick and counts it
 #if TR_RAW_GNSS_PRIMARY
     // and the navigation state the loop reads, brought forward through it
@@ -3134,7 +3178,9 @@ static void rawGnssMeasTask(void*)
 {
     gnss_raw::RawGnssMeasStage& st = *raw_meas;
     st.setClock(&rawShadowClock);
-    static gnss_raw::TimedRawEpoch epoch;     // ~1.6 kB: off the stack
+    // ~2 kB (48 satellites' code, Doppler and carrier phase): off the stack,
+    // and in PSRAM beside the stage (startRawShadow), not internal RAM
+    gnss_raw::TimedRawEpoch& epoch = *raw_meas_epoch;
     uint32_t iono_seq = 0;
     for (;;)
     {
@@ -3179,6 +3225,39 @@ static void rawGnssMeasTask(void*)
 // Core 0: the shadow filter's task.
 static void rawShadowTask(void*)
 {
+#if TR_HEADING_FIT_BENCH
+    // Bench (-DTR_HEADING_FIT_BENCH=1): what the heading fit costs this core,
+    // timed once before the filter runs -- the fit's step, an epoch's Doppler
+    // velocity by satellites, the fit by epochs (HeadingFitBench.h). A few
+    // seconds of it; it yields after each line (the full-grid reference holds
+    // the core up to a second a line) so this core's idle task keeps its
+    // watchdog fed. Its 19 kB of working storage is lent from PSRAM, where
+    // the shadow's own fit lives, and given back: kept in internal RAM it
+    // left the flight task no room to start (rig r17).
+    {
+        void* fit_mem = heap_caps_malloc(sizeof(gnss_raw::HeadingFit), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        void* meas_mem = heap_caps_malloc(sizeof(gnss_raw::RawMeas) * gnss_raw::RawEpoch::kMaxObs,
+                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (fit_mem != nullptr && meas_mem != nullptr)
+        {
+            gnss_raw::HeadingFit* fit = new (fit_mem) gnss_raw::HeadingFit();
+            gnss_raw::bench::run(*fit, static_cast<gnss_raw::RawMeas*>(meas_mem),
+                                 []() -> int64_t { return esp_timer_get_time(); },
+                                 [](const char* line) {
+                                     ESP_LOGI(TAG, "[RAWGNSS] %s", line);
+                                     vTaskDelay(1);
+                                 },
+                                 20, 1.0);
+            fit->~HeadingFit();
+        }
+        else
+        {
+            ESP_LOGE(TAG, "[RAWGNSS] heading fit bench: no PSRAM for its storage -- not run");
+        }
+        heap_caps_free(fit_mem);
+        heap_caps_free(meas_mem);
+    }
+#endif
     gnss_raw::RawGnssShadow& sh = *raw_shadow;
     sh.setClock(&rawShadowClock);
     uint32_t seed_seq = 0, iono_seq = 0, meas_seq = 0;
@@ -3192,6 +3271,12 @@ static void rawShadowTask(void*)
     int flag_prints = 0;
     uint64_t step_sum0 = 0;
     uint32_t nav_step_n = 0;
+    uint32_t unset_launches = 0;   // #1590: launches with no magnetometer heading, said so
+    uint32_t gate_apogee = 0;      // act's full gates opened at the apogee call, said so
+    uint32_t boost_dropped = 0;    // boost epochs the boost screen dropped, said so
+    uint32_t vert_dropped = 0;     // epochs the vertical check dropped, said so
+    uint32_t vert_latched = 0;     //   and after a drop, not yet back within vert_release_mps, said so
+    uint32_t act_launches = 0;     // act's launch priors, said so
     for (;;)
     {
         const int64_t a0 = esp_timer_get_time();
@@ -3269,6 +3354,85 @@ static void rawShadowTask(void*)
             sh.navState(nav);
             raw_shadow_link.nav.write(nav);
         }
+        // #1590: a launch whose pad fused no magnetometer heading -- none
+        // calibrated, or none at all -- said at once. The heading is the
+        // start's guess; act claims its launch prior about it.
+        if (sh.stats().heading_unset_launches != unset_launches)
+        {
+            unset_launches = sh.stats().heading_unset_launches;
+            if (sh.config().heading_mode == gnss_raw::RawGnssShadow::kHeadingAct)
+                ESP_LOGE(TAG, "[RAWGNSS] *** LAUNCH WITH NO MAGNETOMETER HEADING: act claims a %.0f deg heading "
+                              "1-sigma about the start's guess (its own was %.0f deg) -- OVERCONFIDENT ***",
+                         sh.config().heading_pad_sigma_fallback_deg, (double)sh.stats().heading_launch_sigma_deg);
+            else
+                ESP_LOGW(TAG, "[RAWGNSS] launch with no magnetometer heading: the heading is the start's guess, "
+                              "1-sigma %.0f deg", (double)sh.stats().heading_launch_sigma_deg);
+        }
+        // act's launch prior: the magnetometer's heading's, or the fallback, once a flight
+        if (sh.stats().heading_act_launches != act_launches)
+        {
+            act_launches = sh.stats().heading_act_launches;
+            const gnss_raw::RawGnssShadow::Stats& hs = sh.stats();
+            if (hs.heading_launch_mag)
+                ESP_LOGI(TAG, "[RAWGNSS] act: launch heading 1-sigma %.0f deg, the magnetometer's (its last heading "
+                              "%.2f s before the launch edge)",
+                         (double)hs.heading_launch_prior_deg, (double)hs.heading_launch_mag_age_s);
+            else if (hs.heading_launch_mag_age_s >= 0.0f)
+                ESP_LOGW(TAG, "[RAWGNSS] act: launch heading 1-sigma %.0f deg, the fallback: the magnetometer's last "
+                              "heading was %.1f s before the launch edge (more than %.0f s)",
+                         (double)hs.heading_launch_prior_deg, (double)hs.heading_launch_mag_age_s,
+                         sh.config().heading_mag_recent_s);
+            else
+                ESP_LOGW(TAG, "[RAWGNSS] act: launch heading 1-sigma %.0f deg, the fallback: no magnetometer heading",
+                         (double)hs.heading_launch_prior_deg);
+        }
+        // act, the full gate from the apogee call (kGateFullApogee): once a flight
+        if (sh.stats().heading_gate_apogee != gate_apogee)
+        {
+            gate_apogee = sh.stats().heading_gate_apogee;
+            if (sh.stats().heading_gate_apogee_s >= 0.0f)
+                ESP_LOGI(TAG, "[RAWGNSS] act: the attitude gate opens in full at the apogee call, T+%.2f s: GNSS "
+                              "corrects the tilt too", (double)sh.stats().heading_gate_apogee_s);
+            else
+                ESP_LOGI(TAG, "[RAWGNSS] act: the attitude gate opens in full at the apogee call (a restored "
+                              "flight's): GNSS corrects the tilt too");
+        }
+        // the boost screen: an epoch dropped whole, said at once (a receiver
+        // losing lock in the boost hands over Dopplers tens of m/s off)
+        if (sh.stats().boost_dropped != boost_dropped)
+        {
+            boost_dropped = sh.stats().boost_dropped;
+            const gnss_raw::RawGnssShadow::Stats& bs = sh.stats();
+            if (bs.boost_last_dry_used < 0)
+                ESP_LOGW(TAG, "[RAWGNSS] boost screen: epoch dropped, none of it fused -- the gate refused %d of its %d "
+                              "Dopplers at the prior (IMU peak %.1f g since the epoch before)",
+                         bs.boost_last_refused, bs.boost_last_rr, (double)bs.boost_last_g);
+            else
+                ESP_LOGW(TAG, "[RAWGNSS] boost screen: epoch dropped, none of it fused -- worked through on a copy, the "
+                              "gate refused %d of its Dopplers and passed %d (%d of %d at the prior; IMU peak %.1f g)",
+                         bs.boost_last_dry_refused, bs.boost_last_dry_used, bs.boost_last_refused, bs.boost_last_rr,
+                         (double)bs.boost_last_g);
+        }
+        // the vertical check: an epoch dropped whole, said at once (a receiver
+        // that lost its loops hands over the Dopplers of one standing still)
+        if (sh.stats().vert_dropped != vert_dropped)
+        {
+            vert_dropped = sh.stats().vert_dropped;
+            ESP_LOGW(TAG, "[RAWGNSS] vertical check: epoch dropped, none of it fused -- its Dopplers put the vertical "
+                          "velocity %+.1f m/s off the filter's (more than %.0f)",
+                     (double)sh.stats().vert_last_dv_down, sh.config().vert_check_mps);
+        }
+        if (sh.stats().vert_latched != vert_latched)
+        {
+            vert_latched = sh.stats().vert_latched;
+            const gnss_raw::RawGnssStats& ls = sh.stats().last;
+            if (ls.screen_fit_n >= 4)
+                ESP_LOGW(TAG, "[RAWGNSS] vertical check: epoch held out after a drop -- its Dopplers put the vertical "
+                              "velocity %+.1f m/s off (back within %.0f lets the next in)",
+                         (double)ls.screen_dv_down_mps, sh.config().vert_release_mps);
+            else
+                ESP_LOGW(TAG, "[RAWGNSS] vertical check: epoch held out after a drop -- too few Dopplers to fit");
+        }
         // back to the GNSS task: the satellites its checks found jumped
         gnss_raw::ShadowRelock rl;
         while (sh.takeRelock(rl)) raw_shadow_link.relock.push(rl);
@@ -3284,6 +3448,15 @@ static void rawShadowTask(void*)
                 if (enqueueI2STx(PAD_CONTEXT_MSG, pcx, pcx_len)) recs++;
                 else rec_drops++;
             }
+        }
+        HeadingFitData hfit;   // the heading from thrust, each fit (~1 Hz in flight)
+        while (sh.takeHeadingLog(hfit))
+        {
+            if (enqueueI2STx(HEADING_FIT_MSG, (const uint8_t*)&hfit, sizeof(hfit))) recs++;
+            else rec_drops++;
+            if (hfit.flags & HFT_HANDED_NOW)
+                ESP_LOGW(TAG, "[RAWGNSS] heading handed over: turned %+.1f deg (fit 1-sigma %.1f deg, %u epochs)",
+                         hfit.turn_cdeg * 0.01, hfit.sigma_cdeg * 0.01, (unsigned)hfit.n);
         }
         GnssCheckData chk;
         while (sh.takeCheckLog(chk))
@@ -3353,6 +3526,52 @@ static void rawShadowTask(void*)
                      (unsigned long)rec_drops, (unsigned long)raw_shadow_link.imu.dropped(),
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                      (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+            if (sh.config().ekf.cr_mode != gnss_raw::kCarrierOff)
+            {
+                // the carrier range rates (the receiver profile's mode): what
+                // the screen took, and the last screened epoch's innovations,
+                // the velocity they point to and the common rate -- in m/s and
+                // in cycles a second, the carrier wind-up beside the roll rate
+                const double lam = 299792458.0 / sh.config().ekf.cr_carrier_hz[GNSS_SYS_GPS];
+                ESP_LOGI(TAG, "[RAWGNSS] carrier (%s, a half cycle %s): epochs %lu (%lu under 4) | rates %lu: in %lu "
+                              "(%lu repaired), half-cycle %lu, other %lu, unmatched %lu, fused %lu | last: innovations "
+                              "%.1f mm/s rms, %.1f about the fit, velocity %.3f m/s off, common %+.3f m/s (%+.2f cyc/s) "
+                              "at roll %.2f rev/s",
+                         gnss_raw::carrierModeName(sh.config().ekf.cr_mode),
+                         sh.config().ekf.cr_half_cycle == gnss_raw::kHalfCycleRepair ? "repaired" : "rejected",
+                         (unsigned long)st.cr_epochs, (unsigned long)st.cr_too_few, (unsigned long)st.cr_built,
+                         (unsigned long)st.cr_in, (unsigned long)st.cr_repaired, (unsigned long)st.cr_half,
+                         (unsigned long)st.cr_other, (unsigned long)st.cr_unmatched, (unsigned long)st.cr_used,
+                         (double)st.cr_last_rms_mps * 1000.0, (double)st.cr_last_fit_rms_mps * 1000.0,
+                         (double)st.cr_last_dv_mps, st.cr_last_common_mps, st.cr_last_common_mps / lam,
+                         (double)st.cr_last_roll_rev_s);
+            }
+#if TR_HEADING_FIT
+            {
+                const gnss_raw::HeadingFit::Result& hr = st.heading_last;
+                ESP_LOGI(TAG, "[RAWGNSS] heading fit (%s): seeds %lu, flights %lu, epochs %lu (no velocity %lu) | "
+                              "launches with no magnetometer heading %lu (the last launch's own 1-sigma %.1f deg) | "
+                              "act's launch prior: the magnetometer's at %lu of %lu launches (last %.0f deg) | "
+                              "last: turn %+.1f deg, 1-sigma %.1f deg, %d epochs (%d cut), rivals %lu | handed %lu "
+                              "(%+.1f deg at T+%.1f s) | act's gate %s, opened in full at the apogee call %lu | "
+                              "cost: velocity %lu us (max %lu), fit %lu us (max %lu), step max %lu us | task stack "
+                              "%u B unused",
+                         TR_HEADING_FIT == 2 ? "act" : "observe", (unsigned long)st.heading_seeds,
+                         (unsigned long)st.heading_flights, (unsigned long)st.heading_epochs,
+                         (unsigned long)st.heading_vel_fails, (unsigned long)st.heading_unset_launches,
+                         (double)st.heading_launch_sigma_deg, (unsigned long)st.heading_mag_launches,
+                         (unsigned long)st.heading_act_launches, (double)st.heading_launch_prior_deg,
+                         hr.psi * 57.29578, hr.sigma > 0.0 ? hr.sigma * 57.29578 : -1.0,
+                         hr.n, hr.n_cut, (unsigned long)st.heading_rivals, (unsigned long)st.heading_handoffs,
+                         (double)st.heading_turn_deg,
+                         (double)st.heading_handoff_s,
+                         gnss_raw::RawGnssShadow::headingGateName(sh.config().heading_gate),
+                         (unsigned long)st.heading_gate_apogee, (unsigned long)st.heading_vel_us,
+                         (unsigned long)st.heading_vel_us_max, (unsigned long)st.heading_solve_us,
+                         (unsigned long)st.heading_solve_us_max, (unsigned long)st.heading_step_us_max,
+                         (unsigned)uxTaskGetStackHighWaterMark(nullptr));
+            }
+#endif
 #if TR_RAW_GNSS_PRIMARY
             // what the flight loop got (RawNavAdapter): the oldest state it
             // read in the window -- brought forward to its latest IMU tick
@@ -3411,9 +3630,10 @@ static void rawShadowTask(void*)
                     double az = atan2(de, dn) * 180.0 / M_PI;
                     if (az < 0.0) az += 360.0;
                     // C/N0 back out of the white sigma the builder gave it
-                    // (RawMeasBuilder::kPrWhiteA/B)
+                    // (the receiver profile's pr_white_a/b)
                     const double sw = (double)m[i].sigma_pr;
-                    const double x = (sw * sw - 0.026 * 0.026) / (0.157 * 0.157);
+                    const double wa = sh.config().meas.pr_white_a, wb = sh.config().meas.pr_white_b;
+                    const double x = (sw * sw - wa * wa) / (wb * wb);
                     const double cn0 = (x > 0.0) ? 35.0 - 10.0 * log10(x) : 0.0;
                     at += snprintf(line + at, sizeof(line) - at, " %c%02u e%.0f a%.0f c%.0f %+.1f",
                                    m[i].sys == GNSS_SYS_GPS ? 'G' : (m[i].sys == GNSS_SYS_GAL ? 'E' : 'C'),
@@ -3430,7 +3650,12 @@ static void rawShadowTask(void*)
                               "| satellites jumped %lu (last epoch %d of %d judged, worst %.1f m) "
                               "| levelled %lu steps, %lu held off in flight | baro fused %lu of %lu, "
                               "%lu held at speed (offset %+.1f m%s) | zero-velocity %lu landed, %lu on the pad "
-                              "| mag fused %lu of %lu (%lu refused) "
+                              "| mag fused %lu of %lu (refused: %lu uncalibrated, %lu off the model's size, "
+                              "%lu off its dip; the last dip %+.1f deg off) "
+                              "| boost screen %s: %lu epochs, %lu dropped (%lu worked through) (last: %d of %d Dopplers "
+                              "refused at the prior, %d refused and %d fused worked through, %.1f g) "
+                              "| vertical check %s: %lu epochs, %lu dropped (last %+.1f m/s, largest kept %+.1f), "
+                              "%lu held after a drop "
                               "| restores %lu",
                          (unsigned long)fs.fixes, (unsigned long)fs.passed, (unsigned long)fs.flagged,
                          (unsigned long)fs.unjudged, (unsigned long)fs.lapsed,
@@ -3446,7 +3671,19 @@ static void rawShadowTask(void*)
                          st.baro_offset_frozen ? ", frozen" : "", (unsigned long)st.zupts,
                          (unsigned long)st.pad_zupts,
                          (unsigned long)st.mag_fused, (unsigned long)st.mags,
-                         (unsigned long)st.mag_suspect, (unsigned long)st.restores);
+                         (unsigned long)st.mag_uncal, (unsigned long)st.mag_suspect,
+                         (unsigned long)st.mag_dip, (double)st.mag_dip_err_deg,
+                         sh.config().boost_screen == gnss_raw::RawGnssShadow::kScreenOff ? "off"
+                             : (sh.config().boost_screen == gnss_raw::RawGnssShadow::kScreenOn ? "on"
+                                : (sh.config().heading_mode == gnss_raw::RawGnssShadow::kHeadingAct ? "on (act)"
+                                                                                                   : "off (not act)")),
+                         (unsigned long)st.boost_screened, (unsigned long)st.boost_dropped,
+                         (unsigned long)st.boost_dropped_dry, st.boost_last_refused, st.boost_last_rr,
+                         st.boost_last_dry_refused, st.boost_last_dry_used, (double)st.boost_last_g,
+                         sh.config().vert_check_mps > 0.0 ? "on" : "off", (unsigned long)st.vert_checked,
+                         (unsigned long)st.vert_dropped, (double)st.vert_last_dv_down,
+                         (double)st.vert_worst_dv_down, (unsigned long)st.vert_latched,
+                         (unsigned long)st.restores);
             }
             win_t0 = a1;
             busy_us = 0;
@@ -3481,6 +3718,34 @@ static void startRawShadow()
         return;
     }
     gnss_raw::RawGnssShadow::Config cfg;
+    // The receiver's profile (TR_GNSSRaw/ReceiverProfile.h): every gate,
+    // noise model and feature mode the filter takes from the receiver the
+    // board carries, before any bench override below
+#if TR_BOARD_M1
+    gnss_raw::GnssReceiverProfile rx = gnss_raw::lc86gProfile();     // U5: a Quectel LC86G
+#else
+    gnss_raw::GnssReceiverProfile rx = gnss_raw::genericProfile();   // UNMEASURED placeholders
+#endif
+#ifdef TR_BENCH_CARRIER_MODE
+    // bench: the carrier range rates off (0), observed (1) or fused (2)
+    static_assert(TR_BENCH_CARRIER_MODE >= 0 && TR_BENCH_CARRIER_MODE <= 2,
+                  "TR_BENCH_CARRIER_MODE is 0 (off), 1 (observe) or 2 (fuse)");
+    rx.cr_mode = (uint8_t)(TR_BENCH_CARRIER_MODE);
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: carrier range rates %s (TR_BENCH_CARRIER_MODE)",
+             rx.cr_mode == gnss_raw::kCarrierFuse ? "FUSED" : gnss_raw::carrierModeName(rx.cr_mode));
+#endif
+#ifdef TR_BENCH_HALF_CYCLE_REPAIR
+    // bench: a carrier rate a half-cycle step explains repaired (1), not dropped (0)
+    static_assert(TR_BENCH_HALF_CYCLE_REPAIR == 0 || TR_BENCH_HALF_CYCLE_REPAIR == 1,
+                  "TR_BENCH_HALF_CYCLE_REPAIR is 0 (reject) or 1 (repair)");
+    rx.cr_half_cycle = (TR_BENCH_HALF_CYCLE_REPAIR) ? gnss_raw::kHalfCycleRepair : gnss_raw::kHalfCycleReject;
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: a carrier rate's half-cycle step %s (TR_BENCH_HALF_CYCLE_REPAIR)",
+             rx.cr_half_cycle == gnss_raw::kHalfCycleRepair ? "REPAIRED" : "rejected");
+#endif
+    gnss_raw::applyReceiverProfile(rx, cfg);
+    ESP_LOGI(TAG, "[RAWGNSS] receiver profile %s%s: carrier range rates %s, a half-cycle step %s",
+             rx.name, rx.measured ? "" : " (UNMEASURED: placeholders)", gnss_raw::carrierModeName(rx.cr_mode),
+             rx.cr_half_cycle == gnss_raw::kHalfCycleRepair ? "repaired" : "rejected");
 #if TR_RAW_GNSS_PRIMARY
     // The navigation filter: its own attitude on the pad, and 100 steps a
     // second for the flight loop (#1600; the step's cost in the [RAWGNSS] line)
@@ -3500,14 +3765,79 @@ static void startRawShadow()
     };
     void* stage_mem = alloc(alignof(gnss_raw::RawGnssMeasStage), sizeof(gnss_raw::RawGnssMeasStage));
     void* built_mem = alloc(alignof(gnss_raw::BuiltEpoch), 2 * sizeof(gnss_raw::BuiltEpoch));
-    if (stage_mem == nullptr || built_mem == nullptr)
+    void* epoch_mem = alloc(alignof(gnss_raw::TimedRawEpoch), sizeof(gnss_raw::TimedRawEpoch));
+    if (stage_mem == nullptr || built_mem == nullptr || epoch_mem == nullptr)
     {
-        ESP_LOGE(TAG, "[RAWGNSS] no memory for the GNSS task's stage (%u B) and epochs (%u B): not started",
-                 (unsigned)sizeof(gnss_raw::RawGnssMeasStage), (unsigned)(2 * sizeof(gnss_raw::BuiltEpoch)));
+        ESP_LOGE(TAG, "[RAWGNSS] no memory for the GNSS task's stage (%u B) and epochs (%u B + %u B): not started",
+                 (unsigned)sizeof(gnss_raw::RawGnssMeasStage), (unsigned)(2 * sizeof(gnss_raw::BuiltEpoch)),
+                 (unsigned)sizeof(gnss_raw::TimedRawEpoch));
         return;
     }
+    cfg.heading_mode = TR_HEADING_FIT;   // the heading from thrust (config.h)
+#ifdef TR_BENCH_HEADING_PAD_SIGMA_DEG
+    // bench: act's heading 1-sigma from launch where the pad's heading is the
+    // magnetometer's (fused through its gates just before launch)
+    cfg.heading_pad_sigma_deg = TR_BENCH_HEADING_PAD_SIGMA_DEG;
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: act's heading 1-sigma from launch %.1f deg with the magnetometer's heading "
+                  "(TR_BENCH_HEADING_PAD_SIGMA_DEG)",
+             cfg.heading_pad_sigma_deg);
+#endif
+#ifdef TR_BENCH_HEADING_PAD_SIGMA_FALLBACK_DEG
+    // bench: and without it (none, none calibrated, or none lately)
+    cfg.heading_pad_sigma_fallback_deg = TR_BENCH_HEADING_PAD_SIGMA_FALLBACK_DEG;
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: act's heading 1-sigma from launch %.1f deg without the magnetometer's heading "
+                  "(TR_BENCH_HEADING_PAD_SIGMA_FALLBACK_DEG)",
+             cfg.heading_pad_sigma_fallback_deg);
+#endif
+#ifdef TR_BENCH_HEADING_HANDOFF_DEG
+    cfg.heading_handoff_deg = TR_BENCH_HEADING_HANDOFF_DEG;       // bench: below 0, never handed over
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: act hands the fit's heading over at a 1-sigma of %.1f deg%s "
+                  "(TR_BENCH_HEADING_HANDOFF_DEG)",
+             cfg.heading_handoff_deg, cfg.heading_handoff_deg < 0.0 ? " -- never" : "");
+#endif
+#ifdef TR_BENCH_HEADING_GATE_FULL
+    // bench: act's attitude gate in flight -- 0 the heading's (C), 1 the whole
+    // attitude from launch (A), 2 the heading's until the apogee call and the
+    // whole attitude from it (H)
+    static_assert(TR_BENCH_HEADING_GATE_FULL >= 0 && TR_BENCH_HEADING_GATE_FULL <= 2,
+                  "TR_BENCH_HEADING_GATE_FULL is 0 (the heading's), 1 (full from launch) or 2 (full from the "
+                  "apogee call)");
+    cfg.heading_gate = (uint8_t)(TR_BENCH_HEADING_GATE_FULL);
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: act's attitude gate: %s (TR_BENCH_HEADING_GATE_FULL=%d)",
+             gnss_raw::RawGnssShadow::headingGateName(cfg.heading_gate), (int)(TR_BENCH_HEADING_GATE_FULL));
+#endif
+#ifdef TR_BENCH_LAUNCH_TILT_SIGMA_DEG
+    cfg.heading_launch_tilt_sigma_deg = TR_BENCH_LAUNCH_TILT_SIGMA_DEG;   // bench: act's tilt floor at launch
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: act lets the tilt's 1-sigma go to at least %.2f deg at launch "
+                  "(TR_BENCH_LAUNCH_TILT_SIGMA_DEG)",
+             cfg.heading_launch_tilt_sigma_deg);
+#endif
+    // what the filter flies, bench or not: a flight's console says it
+    char vcheck_txt[112], screen_txt[80];
+    if (cfg.vert_check_mps > 0.0 && cfg.vert_release_mps > 0.0)
+        snprintf(vcheck_txt, sizeof(vcheck_txt),
+                 "%.0f m/s on every epoch it can fit, and after a drop every epoch until one fits within %.0f",
+                 cfg.vert_check_mps, cfg.vert_release_mps);
+    else if (cfg.vert_check_mps > 0.0)
+        snprintf(vcheck_txt, sizeof(vcheck_txt), "%.0f m/s on every epoch it can fit", cfg.vert_check_mps);
+    else
+        snprintf(vcheck_txt, sizeof(vcheck_txt), "off");
+    if (cfg.boost_screen_g <= 0.0)
+        snprintf(screen_txt, sizeof(screen_txt), "on every epoch before the apogee call");
+    else
+        snprintf(screen_txt, sizeof(screen_txt), "on boost epochs (past %.1f g within %.1f s) before the call",
+                 cfg.boost_screen_g, cfg.boost_screen_window_s);
+    ESP_LOGI(TAG, "[RAWGNSS] heading %s: %s; launch prior %.0f deg with the magnetometer's heading, %.0f without; "
+                  "tilt floor %.2f deg; the fit's hand-off %s; the vertical check %s; the boost screen %s",
+             cfg.heading_mode == gnss_raw::RawGnssShadow::kHeadingAct       ? "ACT"
+             : cfg.heading_mode == gnss_raw::RawGnssShadow::kHeadingObserve ? "observe"
+                                                                            : "off",
+             gnss_raw::RawGnssShadow::headingGateName(cfg.heading_gate), cfg.heading_pad_sigma_deg,
+             cfg.heading_pad_sigma_fallback_deg, cfg.heading_launch_tilt_sigma_deg,
+             cfg.heading_handoff_deg < 0.0 ? "never" : "at the fit's 1-sigma", vcheck_txt, screen_txt);
     raw_shadow = new (mem) gnss_raw::RawGnssShadow(cfg);
     raw_meas = new (stage_mem) gnss_raw::RawGnssMeasStage(gnss_raw::RawGnssShadow::stageConfig(cfg));
+    raw_meas_epoch = new (epoch_mem) gnss_raw::TimedRawEpoch();
     gnss_raw::BuiltEpoch* built = static_cast<gnss_raw::BuiltEpoch*>(built_mem);
     new (&built[0]) gnss_raw::BuiltEpoch();
     new (&built[1]) gnss_raw::BuiltEpoch();
@@ -3699,6 +4029,96 @@ static void publishSensorCalFromNVS()
     uint8_t buf[sizeof(SensorCalStatusData)];
     memcpy(buf, &s, sizeof(buf));
     (void)enqueueI2STx(SENSOR_CAL_STATUS_MSG, buf, sizeof(buf));
+}
+
+// #1629 — the low-g accelerometer's hand calibration (RocketComputerTypes.h,
+// ACC_CAL_*).  tools/accel_cal_six_face.py turns the board through six faces,
+// asks for a face window on each (BLE 78), solves the offset from them and
+// writes it (BLE 76); BLE 77 reads it back.  A face window averages every
+// low-g sample the drain hands over for ACC_FACE_WINDOW_US, in the board frame
+// with no offset (SensorConverter::lowGBoardRaw).
+struct AccFaceWindow
+{
+    bool     active = false;
+    int64_t  t0_us = 0;
+    double   sum[3] = {};
+    double   sumsq[3] = {};
+    uint32_t n = 0;
+    uint8_t  state = ACC_FACE_IDLE;
+    float    mean[3] = {};
+    float    sd[3] = {};
+};
+static AccFaceWindow acc_face;
+
+static bool accCalStored(Preferences& p)
+{
+    return p.isKey("ver") && p.getUChar("ver", 0) == ACC_CAL_NVS_SCHEMA_VERSION && p.getBool("done", false);
+}
+
+static void publishAccelCalStatus()
+{
+    AccelCalStatusData s{};
+    Preferences p;
+    p.begin("acc_cal", true);  // read-only (boot creates the namespace)
+    const bool stored = accCalStored(p);
+    if (stored)
+    {
+        s.offset_mps2[0] = p.getFloat("ox", 0.0f);
+        s.offset_mps2[1] = p.getFloat("oy", 0.0f);
+        s.offset_mps2[2] = p.getFloat("oz", 0.0f);
+    }
+    p.end();
+    s.flags = (uint8_t)((stored ? ACCF_STORED : 0u) | (sensor_converter.lowGOffsetApplied() ? ACCF_APPLIED : 0u));
+    s.face_state = acc_face.state;
+    for (int i = 0; i < 3; ++i)
+    {
+        s.face_mean_mps2[i] = acc_face.mean[i];
+        s.face_sd_mps2[i] = acc_face.sd[i];
+    }
+    s.face_n = (uint16_t)(acc_face.n > 0xFFFFu ? 0xFFFFu : acc_face.n);
+    uint8_t buf[sizeof(AccelCalStatusData)];
+    memcpy(buf, &s, sizeof(buf));
+    (void)enqueueI2STx(ACC_CAL_STATUS_MSG, buf, sizeof(buf));
+}
+
+static void accFaceAdd(const ISM6HG256Data& d)
+{
+    double v[3];
+    sensor_converter.lowGBoardRaw(d, v);
+    for (int i = 0; i < 3; ++i)
+    {
+        acc_face.sum[i] += v[i];
+        acc_face.sumsq[i] += v[i] * v[i];
+    }
+    acc_face.n++;
+}
+
+// The window's verdict: still (every axis's SD at most ACC_FACE_STILL_SD) and
+// one g (|mean| within ACC_FACE_G_TOL of 9.80665), else failed -- its numbers
+// are sent either way.
+static void accFaceFinish()
+{
+    acc_face.active = false;
+    double m2 = 0.0, sd_max = 0.0;
+    for (int i = 0; i < 3; ++i)
+    {
+        const double n = acc_face.n > 0 ? (double)acc_face.n : 1.0;
+        const double mean = acc_face.sum[i] / n;
+        const double var = acc_face.sumsq[i] / n - mean * mean;
+        const double sd = var > 0.0 ? sqrt(var) : 0.0;
+        acc_face.mean[i] = (float)mean;
+        acc_face.sd[i] = (float)sd;
+        m2 += mean * mean;
+        if (sd > sd_max) sd_max = sd;
+    }
+    const double g = sqrt(m2);
+    const bool ok = acc_face.n >= 100 && sd_max <= (double)ACC_FACE_STILL_SD &&
+                    fabs(g - 9.80665) <= (double)ACC_FACE_G_TOL;
+    acc_face.state = ok ? ACC_FACE_DONE : ACC_FACE_FAILED;
+    ESP_LOGI(TAG, "[ACCCAL] face %s: mean (%.4f, %.4f, %.4f) m/s² |g| %.4f, SD max %.4f, %lu samples",
+             ok ? "done" : "FAILED (moving, or not one g)", (double)acc_face.mean[0], (double)acc_face.mean[1],
+             (double)acc_face.mean[2], g, sd_max, (unsigned long)acc_face.n);
+    publishAccelCalStatus();
 }
 
 // ==========================================================================
@@ -6008,6 +6428,28 @@ static void setup_fc()
     }
     prefs.end();
 
+    // The low-g accelerometer's hand-calibrated offset (#1629), board frame
+    prefs.begin("acc_cal", false);  // read-write (creates the namespace on first boot)
+    if (accCalStored(prefs))
+    {
+        const float ox = prefs.getFloat("ox", 0.0f);
+        const float oy = prefs.getFloat("oy", 0.0f);
+        const float oz = prefs.getFloat("oz", 0.0f);
+        sensor_converter.setLowGOffset(ox, oy, oz);
+        ESP_LOGI(TAG, "NVS low-g offset: %.4f, %.4f, %.4f m/s² (%.1f, %.1f, %.1f mg)", (double)ox, (double)oy,
+                 (double)oz, (double)ox / 9.80665e-3, (double)oy / 9.80665e-3, (double)oz / 9.80665e-3);
+    }
+    else if (prefs.isKey("ver") && prefs.getUChar("ver", 0) != ACC_CAL_NVS_SCHEMA_VERSION)
+    {
+        ESP_LOGW(TAG, "NVS low-g offset: schema %u, not %u -- ignored (calibrate again)",
+                 (unsigned)prefs.getUChar("ver", 0), (unsigned)ACC_CAL_NVS_SCHEMA_VERSION);
+    }
+    else
+    {
+        ESP_LOGW(TAG, "NVS low-g offset: none -- the accelerometer is not hand-calibrated (#1629)");
+    }
+    prefs.end();
+
     // The broadcast ionosphere the last pad calibration stored (#1600 phase 5)
     padCalLoadIono();
 
@@ -7525,6 +7967,8 @@ static void loop_fc()
             TR_LP_SAMPLE();
             fc_ism6_win.add(ism6hg256_data);
             ism6_drained_this_pass = true;
+            if (acc_face.active)
+                accFaceAdd(ism6hg256_data);   // #1629: a six-face calibration's window
 
             memcpy(&ism6_batch[ism6BatchWireSize(ism6_batch_n)],
                    &ism6hg256_data,
@@ -7541,6 +7985,8 @@ static void loop_fc()
             ism6_batch[0] = ism6_batch_n;
             (void)enqueueI2STx(ISM6_BATCH_MSG, ism6_batch, ism6BatchWireSize(ism6_batch_n));
         }
+        if (acc_face.active && esp_timer_get_time() - acc_face.t0_us >= (int64_t)ACC_FACE_WINDOW_US)
+            accFaceFinish();
 
         if (ism6_drained_this_pass)
         {
@@ -7874,6 +8320,8 @@ static void loop_fc()
                 dbg_ism6_passes++;
                 if (fc_ism6_win.n > dbg_ism6_win_max) dbg_ism6_win_max = fc_ism6_win.n;
 
+                // #1629: the hand-calibrated offset is the real IMU's -- not the sim's truth counts
+                sensor_converter.setLowGOffsetEnabled(!sensor_collector.isSimActive());
                 sensor_converter.convertISM6HG256Data(ism6_mean_raw, ism6_latest_si);
                 have_ism6_si = true;
                 // The low-g near-rail verdict comes from the window's WORST raw
@@ -8389,6 +8837,14 @@ static void loop_fc()
                                 ref_lat_rad, ref_lon_rad, ref_alt_m, decimal_year);
                             decl_deg = decl_rad * (180.0f / (float)M_PI);
                         }
+#ifdef TR_BENCH_HEADING_ERROR_DEG
+                        // Bench (-DTR_BENCH_HEADING_ERROR_DEG=N): north turned N deg,
+                        // so the pad's heading is N deg off for the heading fit to
+                        // find (TR_RawGnssShadow/HeadingFit.h). Never in flight.
+                        decl_deg += (float)(TR_BENCH_HEADING_ERROR_DEG);
+                        ESP_LOGW(TAG, "[EKF] BENCH: the declination turned %+.1f deg -- the pad heading is wrong on purpose",
+                                 (double)(TR_BENCH_HEADING_ERROR_DEG));
+#endif
                         ekf.setDeclination(decl_deg * ((float)M_PI / 180.0f));
                         ESP_LOGI(TAG, "[EKF] Declination %.2f deg (WMM2025, %u-%02u-%02u)",
                                       (double)decl_deg, gnss_latest_si.year,
@@ -8462,6 +8918,15 @@ static void loop_fc()
                 // with the IMU alone that drifted a median 14 m/s by admission.
                 ekf.setGnssVerticalHeldOut(
                     !GnssAscentGate::gnssVerticalToEkf(gnss_admit_state));
+#if TR_RAW_GNSS_PRIMARY
+                // #1590: whether the magnetometer's hard iron is out rides
+                // each sample to the raw filter, which takes no heading from
+                // one without: a stored calibration applied, or a sensor
+                // sim's field -- the truth's.  The rig replay (TR_SIM_REPLAY
+                // builds) is a sim from boot (startReplay), its field the
+                // flight's attitude in the field the pad's model gives.
+                ekf.setMagCalibration(magHardIronApplied(), sensor_collector.isSimActive());
+#endif
                 ekf.update(use_ahrs_acc, ekf_imu, ekf_gnss, ekf_mag);
 #if TR_RAW_GNSS_SHADOW
                 // #1600: the raw-GNSS shadow filter gets this very input, and
@@ -8469,10 +8934,21 @@ static void loop_fc()
                 // Not after a GNSS-absent init: there is no position to seed.
                 // A sim's IMU is not the sky's, so the shadow stops -- except
                 // the rig replay's, which flies the rig's flight.
+                //
+                // The apogee call is pyro_apogee_detected: the flight
+                // computer's one latched decision -- the time the drogue's
+                // delay counts from, logged once ("[PYRO] Apogee detected"),
+                // the main-deploy gate's and guidance's apogee, and what the
+                // snapshot carries through a reboot (both it and the
+                // kinematics vote are restored from it). It latches from
+                // kinematics.apogee_flag in the same pass, after this, so
+                // either reaches the raw filter on the same tick; only read
+                // here, the pyro logic unchanged.
                 rawShadowPushImu(ekf_imu, use_ahrs_acc, rocket_state == INFLIGHT,
                                  (sensor_collector.isSimActive() || sim_flight_latched) &&
                                      !sensor_collector.isReplay(),
-                                 kinematics.alt_landed_flag || rocket_state == LANDED);
+                                 kinematics.alt_landed_flag || rocket_state == LANDED,
+                                 pyro_apogee_detected);
                 // The navigation filter flies a GNSS-absent flight too, on
                 // the IMU and the barometer
                 if (!gnss_absent_flight || TR_RAW_GNSS_PRIMARY)
@@ -9798,6 +10274,89 @@ static void loop_fc()
             {
                 ESP_LOGI(TAG, "[SENSORCAL] READ -> publish status from NVS");
                 publishSensorCalFromNVS();
+            }
+            // #1629 — the low-g accelerometer's hand calibration: store and apply
+            // the offset the six faces solved (BLE 76; all zero clears it), read
+            // it back (BLE 77), average one face (BLE 78).  Locked out like the
+            // other cal pushes.
+            else if (out_pending_command == ACC_CAL_APPLY_PENDING)
+            {
+                if (isCommandLockoutState(rocket_state) || post_flight_lockout)
+                {
+                    ESP_LOGW(TAG, "[ACCCAL] apply refused: state=%u (INFLIGHT/MAG_CALIBRATION, or post-flight)",
+                             (unsigned)rocket_state);
+                }
+                else
+                {
+                    delay_ms(1);
+                    uint8_t cfg_payload[sizeof(AccelCalApplyData)];
+                    size_t  cfg_len = 0;
+                    if (readConfigFrame(ACC_CAL_APPLY_MSG, sizeof(AccelCalApplyData),
+                                        cfg_payload, sizeof(cfg_payload), cfg_len)
+                        && cfg_len >= sizeof(AccelCalApplyData))
+                    {
+                        AccelCalApplyData ap;
+                        memcpy(&ap, cfg_payload, sizeof(ap));
+                        bool sane = true, zero = true;
+                        for (int i = 0; i < 3; ++i)
+                        {
+                            const float o = ap.offset_mps2[i];
+                            if (!(o == o) || fabsf(o) > ACC_CAL_OFFSET_MAX_MPS2)
+                                sane = false;
+                            if (o != 0.0f)
+                                zero = false;
+                        }
+                        if (!sane)
+                        {
+                            ESP_LOGW(TAG, "[ACCCAL] apply refused: offset (%.4f, %.4f, %.4f) m/s² past %.1f -- "
+                                          "a bad solve?", (double)ap.offset_mps2[0], (double)ap.offset_mps2[1],
+                                     (double)ap.offset_mps2[2], (double)ACC_CAL_OFFSET_MAX_MPS2);
+                        }
+                        else
+                        {
+                            prefs.begin("acc_cal", false);
+                            prefs.putUChar("ver",  ACC_CAL_NVS_SCHEMA_VERSION);
+                            prefs.putBool ("done", !zero);
+                            prefs.putFloat("ox",   ap.offset_mps2[0]);
+                            prefs.putFloat("oy",   ap.offset_mps2[1]);
+                            prefs.putFloat("oz",   ap.offset_mps2[2]);
+                            prefs.end();
+                            sensor_converter.setLowGOffset(ap.offset_mps2[0], ap.offset_mps2[1], ap.offset_mps2[2]);
+                            ESP_LOGI(TAG, "[ACCCAL] APPLY+saved: (%.4f, %.4f, %.4f) m/s²%s",
+                                     (double)ap.offset_mps2[0], (double)ap.offset_mps2[1],
+                                     (double)ap.offset_mps2[2], zero ? " -- cleared" : "");
+                        }
+                        publishAccelCalStatus();
+                    }
+                    else
+                    {
+                        cfgRetryOnNextPoll("ACCCAL APPLY");   // #1112
+                    }
+                }
+            }
+            else if (out_pending_command == ACC_CAL_READ)
+            {
+                ESP_LOGI(TAG, "[ACCCAL] READ -> publish status");
+                publishAccelCalStatus();
+            }
+            else if (out_pending_command == ACC_FACE_PENDING)
+            {
+                if (isCommandLockoutState(rocket_state) || post_flight_lockout || sensor_collector.isSimActive())
+                {
+                    ESP_LOGW(TAG, "[ACCCAL] face refused: state=%u%s", (unsigned)rocket_state,
+                             sensor_collector.isSimActive() ? " (sim)" : "");
+                    acc_face = AccFaceWindow{};
+                    acc_face.state = ACC_FACE_FAILED;
+                }
+                else if (!acc_face.active)
+                {
+                    acc_face = AccFaceWindow{};
+                    acc_face.active = true;
+                    acc_face.t0_us = esp_timer_get_time();
+                    acc_face.state = ACC_FACE_MEASURING;
+                    ESP_LOGI(TAG, "[ACCCAL] face window open (%.1f s)", (double)ACC_FACE_WINDOW_US * 1e-6);
+                }
+                publishAccelCalStatus();
             }
             else if (out_pending_command == OTA_BEGIN_PENDING)
             {
@@ -13125,12 +13684,20 @@ extern "C" void app_main(void)
         return;
     }
     TaskHandle_t flight_task = nullptr;
-    xTaskCreatePinnedToCore(
+    if (xTaskCreatePinnedToCore(
         [](void *) {
             // Subscribe this task to WDT so esp_task_wdt_reset() works
             esp_task_wdt_add(xTaskGetCurrentTaskHandle());
             tr_lp_boot();   // bench profiler (TR_LOOP_PROFILE); empty otherwise
             for (;;) { loop_fc(); esp_task_wdt_reset(); }
         },
-        "flight", 16 * 1024, nullptr, configMAX_PRIORITIES - 1, &flight_task, 1);
+        "flight", 16 * 1024, nullptr, configMAX_PRIORITIES - 1, &flight_task, 1) != pdPASS)
+    {
+        // Its stack is 16 KB of internal RAM in one block: a rig image once
+        // had too little left, and never flew, without a word.
+        ESP_LOGE(TAG, "[BOOT] *** THE FLIGHT TASK (\"flight\", 16 KB stack) WAS NOT CREATED: NO FLIGHT LOOP RUNS *** "
+                      "internal RAM %u B free, largest block %u B",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    }
 }

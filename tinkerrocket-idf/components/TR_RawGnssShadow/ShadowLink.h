@@ -36,15 +36,24 @@ static constexpr uint8_t kShadowLevel    = 0x01;  // the flight filter levels ag
 static constexpr uint8_t kShadowInFlight = 0x02;  // rocket_state is INFLIGHT
 static constexpr uint8_t kShadowSim      = 0x04;  // a sensor sim runs: the IMU is not real
 static constexpr uint8_t kShadowLanded   = 0x08;  // the landing detector has called it: zero velocity
+static constexpr uint8_t kShadowApogee   = 0x10;  // the flight computer has called apogee (pyro_apogee_detected:
+                                                  //   latched for the flight, restored after a reboot)
 
 // A magnetometer sample (body FRD, uT): the flight filter's input. The raw
 // filter takes it as a heading on the ground where it is the navigation
-// filter (RawGnssShadow::Config::primary).
+// filter (RawGnssShadow::Config::primary) -- and only if its hard iron is out
+// (flags): an uncalibrated Beetle carries ~40 uT of it, and at the attitudes
+// where that leaves |B| near the model's size it turns the heading by tens
+// of degrees (#1590). Each sample says so itself, because a calibration can
+// be applied while the filter runs.
 struct ShadowMag
 {
     uint32_t time_us;
     float    mag[3];
+    uint8_t  flags;     // kShadowMag* below; 0: its hard iron is not known to be out
 };
+static constexpr uint8_t kShadowMagCalibrated = 0x01;  // a stored hard-iron calibration is applied
+static constexpr uint8_t kShadowMagSim        = 0x02;  // a sensor sim's or the rig replay's field: the truth's
 
 // A barometer sample the flight filter fused (the same gate: in range, not a
 // spike, not a sealed port): its height above the pad from the ground
@@ -71,7 +80,9 @@ struct ShadowSeed
     // where the raw filter is the navigation filter (Config::primary)
     float    declination_rad;  // true north east of magnetic, at the pad (TR_GeoMag)
     float    field_ut;         // the field's size the model gives there; 0 = no model
+    float    dip_rad;          // and its dip, below the horizontal (#1590)
     uint8_t  have_declination;
+    uint8_t  have_dip;         // dip_rad is the model's
     uint8_t  restore;          // a flight restored after a reboot: start in flight from this state
     uint8_t  start_gen;        // a new one on the pad (the flight computer started over): start again
 };

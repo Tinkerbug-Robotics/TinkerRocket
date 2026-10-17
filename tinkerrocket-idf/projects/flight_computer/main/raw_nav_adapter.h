@@ -12,9 +12,11 @@
 // the raw filter needs to start: init() and setQuaternion() are where and how
 // it starts on the pad, with the still gyro's mean; setDeclination() and
 // setMagReference() its north and the field's size; update() hands it the
-// magnetometer (ShadowLink::mag); setState() a restored flight it starts from
-// in flight. main.cpp's seed publisher carries them (startSeed). The IMU, the
-// barometer and the landing flag reach the raw filter from main.cpp as before.
+// magnetometer (ShadowLink::mag), each sample marked with whether its hard
+// iron is out (setMagCalibration, #1590); setState() a restored flight it
+// starts from in flight. main.cpp's seed publisher carries them (startSeed).
+// The IMU, the barometer and the landing flag reach the raw filter from
+// main.cpp as before.
 //
 // Heights: GpsInsEKF's, and so what main.cpp reads (ref_alt_m, imu_pos), are
 // the receiver's -- above the geoid. The raw filter's are above the
@@ -186,15 +188,29 @@ public:
         have_decl_ = true;
     }
     float getDeclination() const { return decl_rad_; }
+    // The model's field at the pad (NED, uT): its size, and its dip below the
+    // horizontal (#1590), for the raw filter's magnetometer gates.
     void setMagReference(const float ned_uT[3])
     {
         mag_ref_ut_ = std::sqrt(ned_uT[0] * ned_uT[0] + ned_uT[1] * ned_uT[1] + ned_uT[2] * ned_uT[2]);
         mag_ref_valid_ = std::isfinite(mag_ref_ut_) && mag_ref_ut_ > 20.0f && mag_ref_ut_ < 70.0f;
+        mag_dip_rad_ = std::atan2(ned_uT[2], std::sqrt(ned_uT[0] * ned_uT[0] + ned_uT[1] * ned_uT[1]));
     }
     bool  getMagReferenceValid() const { return mag_ref_valid_; }
     float getMagReferenceTotal_uT() const { return mag_ref_ut_; }
     // the last magnetometer sample's size against the model's (#1304)
     bool  getMagCalSuspect() const { return mag_suspect_; }
+
+    // Whether the magnetometer's hard iron is out, for the samples update()
+    // hands on from here (#1590): a stored calibration is applied, or the
+    // field is a sensor sim's or the rig replay's -- the truth's. main.cpp
+    // says so each pass; the raw filter takes no heading from a sample with
+    // neither.
+    void setMagCalibration(bool hard_iron_applied, bool sim_field)
+    {
+        mag_flags_ = (uint8_t)((hard_iron_applied ? gnss_raw::kShadowMagCalibrated : 0)
+                               | (sim_field ? gnss_raw::kShadowMagSim : 0));
+    }
 
     // The magnetometer, each new sample, to the raw filter.
     void update(bool, EkfIMUData, EkfGNSSDataLLA, EkfMagData mag)
@@ -215,6 +231,7 @@ public:
             s.time_us = mag.time_us;
             for (int i = 0; i < 3; ++i)
                 s.mag[i] = m[i];
+            s.flags = mag_flags_;
             link_->mag.push(s);
         }
     }
@@ -253,6 +270,8 @@ public:
         s.declination_rad = decl_rad_;
         s.have_declination = have_decl_ ? 1 : 0;
         s.field_ut = mag_ref_valid_ ? mag_ref_ut_ : 0.0f;
+        s.dip_rad = mag_ref_valid_ ? mag_dip_rad_ : 0.0f;
+        s.have_dip = mag_ref_valid_ ? 1 : 0;
         s.restore = restore_pending_ ? 1 : 0;
         s.start_gen = start_gen_;
     }
@@ -522,8 +541,10 @@ private:
     float    decl_rad_ = 0.0f;
     bool     have_decl_ = false;
     float    mag_ref_ut_ = 0.0f;
+    float    mag_dip_rad_ = 0.0f;
     bool     mag_ref_valid_ = false;
     bool     mag_suspect_ = false;
+    uint8_t  mag_flags_ = 0;         // gnss_raw::kShadowMag*: none until main.cpp says
     uint32_t mag_time_us_ = 0;
     uint32_t ticks_ = 0;
 };

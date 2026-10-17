@@ -6,6 +6,6 @@
 # the flight computer's core-0 task (main.cpp) feeds it through ShadowLink.
 # tests_cpp/test_raw_gnss_shadow.cpp compiles it directly.
 idf_component_register(SRCS "RawGnssShadow.cpp" "RawGnssMeasStage.cpp" "PadSurvey.cpp" "SatJumpCheck.cpp"
-                            "FixCheck.cpp" "EphemerisFrames.cpp"
+                            "FixCheck.cpp" "EphemerisFrames.cpp" "HeadingFit.cpp"
                        INCLUDE_DIRS "."
                        REQUIRES TR_RawGnssEKF TR_GNSSRaw TR_RocketComputerTypes)

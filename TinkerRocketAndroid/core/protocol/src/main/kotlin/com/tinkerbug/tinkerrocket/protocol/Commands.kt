@@ -498,6 +498,16 @@ public object Commands {
             bytes(iono?.payload() ?: ByteArray(Klobuchar.PAYLOAD_LENGTH))
         }
 
+    /**
+     * cmd 76 — AccelCalApplyData, 12 B (#1629):
+     * `[offset_x f32][offset_y f32][offset_z f32]`, the low-g accelerometer's
+     * offset in the BOARD frame (+X forward, +Y left, +Z up), m/s².  All zero
+     * clears the stored offset.  The flight computer refuses any component
+     * past 1.0 m/s² (a bad solve) and refuses in flight.
+     */
+    public fun accelCalApply(offsetX: Float, offsetY: Float, offsetZ: Float): ByteArray =
+        frame(BleCommandId.ACC_CAL_APPLY) { f32(offsetX); f32(offsetY); f32(offsetZ) }
+
     // ------------------------------------------------------------------ scan
 
     /** cmd 60 (BS only) — frequency scan, 12 B:

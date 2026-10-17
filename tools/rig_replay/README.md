@@ -15,6 +15,7 @@ For how it works, see "The rig replay" in [docs/plans/1600-realtime-raw-gnss.md]
 | `score_console.py` | Scores the console's `[REPLAY]` lines (the navigation filter's ENU, once a second) against the truth, by phase |
 | `score_log.py` | Scores the OC's flight log against the truth: the raw-GNSS filter's records (0x96), the logged navigation state, the receiver's own fixes, and the physics checks (0x9A) |
 | `baro_port_check.py` | The barometer's error through the flight beside the filter's static-port model |
+| `score_heading.py` | The heading from thrust (0x9F): each fit on the flight's time, its 1-sigma, the hand-off and its cost; with `--ref`, two runs' turns side by side |
 | `truth.py` | Loads a flight's truth and scenario for the scorers |
 
 ## What you need
@@ -58,6 +59,23 @@ For how it works, see "The rig replay" in [docs/plans/1600-realtime-raw-gnss.md]
    - `--blob` is the replay file the image was built with: the log's clock is put on the flight's time by where its accelerometer crosses 20 m/s² at ignition. Without it, that edge is worked out from the flight's CSV as `sim_replay_blob.py` writes it with its default `--from`.
    - Another flight: `--flight sim_<id>`, or `--csv` and `--scenario`.
 7. **Put a flight image back on the FC.** The replay image is for the bench only.
+
+## The heading from thrust
+
+The fit (TR_RawGnssShadow/HeadingFit.h) runs in observe mode in every LC86G image; its records (0x9F) are in the
+OC's log. Two bench flags go with the replay image (step 2):
+
+- `-DTR_HEADING_FIT_BENCH=1` times the fit at the raw-GNSS task's start: the console's `[RAWGNSS] heading fit
+  bench:` lines, a few seconds before the filter starts.
+- `-DTR_BENCH_HEADING_ERROR_DEG=N` turns the pad's heading N deg (the declination's), for the fit to find. With
+  `-DTR_HEADING_FIT=2` (act) the filter is handed the fit's heading too, once its 1-sigma is 10 deg.
+
+The same replay flown with and without the error: the fits' turns should differ by -N, whatever the
+magnetometer's own error:
+```
+python3 tools/rig_replay/score_heading.py OUTDIR_B/flight_....bin --ref OUTDIR_A/flight_....bin --error 40 \
+    --blob /abs/path/sim_replay.bin
+```
 
 ## Reading the results
 

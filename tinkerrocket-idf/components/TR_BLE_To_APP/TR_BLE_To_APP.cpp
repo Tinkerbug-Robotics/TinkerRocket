@@ -1746,6 +1746,29 @@ void TR_BLE_To_APP::sendPadCalStatus(const uint8_t* status_bytes, size_t len)
     }
 }
 
+void TR_BLE_To_APP::sendAccelCalStatus(const uint8_t* status_bytes, size_t len)
+{
+    if (!device_connected_ || status_bytes == nullptr || len == 0) return;
+    // 0xD1 marker + payload (sizeof(AccelCalStatusData)); cap defensively.
+    constexpr size_t MAX_PAYLOAD = 64;
+    if (len > MAX_PAYLOAD) len = MAX_PAYLOAD;
+
+    uint8_t buf[1 + MAX_PAYLOAD];
+    buf[0] = 0xD1;
+    memcpy(&buf[1], status_bytes, len);
+
+    int rc = notify_data(conn_handle_, file_ops_val_handle_, buf, 1 + len);
+    if (rc != 0)
+    {
+        static uint32_t fail_count = 0;
+        if ((fail_count++ % 32) == 0)
+        {
+            ESP_LOGW(BLE_TAG, "Accel-cal status notify failed, rc=%d (count=%lu)",
+                     rc, (unsigned long)fail_count);
+        }
+    }
+}
+
 void TR_BLE_To_APP::sendStorageStats(uint8_t marker, const uint8_t* bytes, size_t len)
 {
     if (!device_connected_ || bytes == nullptr || len == 0) return;

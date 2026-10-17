@@ -317,6 +317,9 @@ class MainActivity : ComponentActivity() {
                                         // be the only way forward for an FC that
                                         // cannot finish booting.
                                         onOpenFirmware = { tab = 0; tool = "ota" },
+                                        // #1629: and at the dashboard's six-face
+                                        // accelerometer calibration, the same way.
+                                        onOpenAccelCal = { tab = 0; tool = "accelcal" },
                                     )
                                 }
                             }

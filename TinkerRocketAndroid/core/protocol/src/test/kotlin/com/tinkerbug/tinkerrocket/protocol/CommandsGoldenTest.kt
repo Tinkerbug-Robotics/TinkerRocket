@@ -79,6 +79,7 @@ class CommandsGoldenTest {
         "cmd67_imurate_2.bin",
         "cmd70_otabegin_37.bin",
         "cmd75_padcal_10.bin",
+        "cmd76_accelcal_12.bin",
         "cmd79_gnsslog_1.bin",
     )
 
@@ -419,7 +420,35 @@ class CommandsGoldenTest {
         assertMatchesFixture("cmd75_padcal_10.bin", built)
     }
 
+    @Test
+    fun `cmd76 accel cal apply`() {
+        val s = side("cmd76_accelcal_12.bin")
+        val built = Commands.accelCalApply(
+            offsetX = s.f("offset_x"), offsetY = s.f("offset_y"), offsetZ = s.f("offset_z"),
+        )
+        assertEquals(1 + 12, built.size, "AccelCalApplyData frame must be 1+12 bytes")
+        assertMatchesFixture("cmd76_accelcal_12.bin", built)
+    }
+
     // ----------------------------------- hand pins (no fixture / iOS XCTest)
+
+    @Test
+    fun `cmd76 from the solved offset as the screen sends it`() {
+        // The six-face solve works in doubles; the wire is f32.  The emitter
+        // packed (0.0412, -0.0273, 0.0156) m/s², so the same three numbers,
+        // narrowed the way the screen narrows them, must be the same bytes.
+        val solved = listOf(0.0412, -0.0273, 0.0156)
+        assertMatchesFixture(
+            "cmd76_accelcal_12.bin",
+            Commands.accelCalApply(solved[0].toFloat(), solved[1].toFloat(), solved[2].toFloat()),
+        )
+    }
+
+    @Test
+    fun `cmd76 all zero is the clear`() {
+        // The flight computer reads an all-zero offset as "remove the stored one".
+        assertEquals(listOf(76) + List(12) { 0 }, Commands.accelCalApply(0f, 0f, 0f).map { it.toInt() })
+    }
 
     @Test
     fun `cmd75 without an ionosphere is ten zero bytes`() {

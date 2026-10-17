@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <initializer_list>
 #include <limits>
@@ -102,6 +103,13 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(offsetof(GnssClockData, mcu0_us), 12u);
     EXPECT_EQ(offsetof(GnssClockData, latency_s), 44u);
     EXPECT_EQ(offsetof(GnssClockData, flags), 67u);
+    // the heading from thrust (0x9F), each fit (~1 Hz in flight)
+    EXPECT_EQ(sizeof(HeadingFitData), 32u);
+    EXPECT_EQ(offsetof(HeadingFitData, psi_cdeg), 4u);
+    EXPECT_EQ(offsetof(HeadingFitData, bias_mmps2), 12u);
+    EXPECT_EQ(offsetof(HeadingFitData, n), 22u);
+    EXPECT_EQ(offsetof(HeadingFitData, flags), 25u);
+    EXPECT_EQ(offsetof(HeadingFitData, seed_ms), 30u);
     EXPECT_EQ(sizeof(FcBootStatusData), 4u); // FC->OC boot progress (0xFA)
     EXPECT_EQ(sizeof(i24le_t),         3u);
     EXPECT_EQ(sizeof(Vec3i16),         6u);
@@ -1880,6 +1888,14 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(GNSS_CLOCK_MSG),
         // what a replay needs from the pad, once after launch, log-only.
         MT(PAD_CONTEXT_MSG),
+        // the heading from thrust, each fit, log-only.
+        MT(HEADING_FIT_MSG),
+        // the low-g accelerometer's six-face hand calibration (#1629): the
+        // apply pair, the read, the face window and the FC's status reply --
+        // the 0x80 block's first codes.
+        MT(ACC_CAL_APPLY_PENDING),    MT(ACC_CAL_APPLY_MSG),
+        MT(ACC_CAL_READ),             MT(ACC_CAL_STATUS_MSG),
+        MT(ACC_FACE_PENDING),
         // GNSS log setting (BLE cmd 79): two codes from the top of the 0x80
         // block.
         MT(GNSS_LOG_CONFIG_PENDING),  MT(GNSS_LOG_CONFIG_MSG),
@@ -1928,10 +1944,15 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     // 106 = 105 + IMU_TEMP_MSG (0x9C, the IMU's die temperature).
     // 107 = 106 + GNSS_CLOCK_MSG (0x9D, the GPS-to-MCU clock line).
     // 108 = 107 + PAD_CONTEXT_MSG (0x9E, the pad, written once after launch).
-    // 110 = 108 + the GNSS log setting pair GNSS_LOG_CONFIG_PENDING /
-    //       GNSS_LOG_CONFIG_MSG (0x8E/0x8F, BLE cmd 79). The 0x90 block being
-    //       full too, they open the 0x80 block, from its top.
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 110u)
+    // 109 = 108 + HEADING_FIT_MSG (0x9F, the heading from thrust): the 0x90
+    //       block is full; new codes go in 0x09-0x8F.
+    // 114 = 109 + the low-g hand calibration's ACC_CAL_APPLY_PENDING /
+    //       ACC_CAL_APPLY_MSG / ACC_CAL_READ / ACC_CAL_STATUS_MSG /
+    //       ACC_FACE_PENDING (0x80-0x84, #1629).
+    // 116 = 114 + the GNSS log setting pair GNSS_LOG_CONFIG_PENDING /
+    //       GNSS_LOG_CONFIG_MSG (0x8E/0x8F, BLE cmd 79), from the top of
+    //       the 0x80 block.
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 116u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }
@@ -2734,4 +2755,18 @@ TEST(PadContextRecord, ThePartsCoverTheCovarianceAndFitAFrame)
     EXPECT_LE(sizeof(PadContextHeader) + sizeof(PadContextCov), MAX_PAYLOAD);
     EXPECT_LE(sizeof(PadContextHeader) + sizeof(PadContextSurvey), MAX_PAYLOAD);
     EXPECT_LE(sizeof(PadContextHeader) + PCX_EPH_MAX_FRAME, MAX_PAYLOAD);
+}
+
+// #1629: the low-g accelerometer's hand calibration rides the OC<->FC link and
+// BLE byte for byte -- tools/accel_cal_six_face.py packs and unpacks these.
+TEST(RocketComputerTypes, AccelCalStructsKeepTheirWireSizes) {
+    EXPECT_EQ(sizeof(AccelCalApplyData), 12u);
+    EXPECT_EQ(sizeof(AccelCalStatusData), 40u);
+    EXPECT_EQ(sizeof(PadContextAcc), 13u);
+    EXPECT_EQ(offsetof(AccelCalStatusData, offset_mps2), 2u);
+    EXPECT_EQ(offsetof(AccelCalStatusData, face_mean_mps2), 14u);
+    EXPECT_EQ(offsetof(AccelCalStatusData, face_sd_mps2), 26u);
+    EXPECT_EQ(offsetof(AccelCalStatusData, face_n), 38u);
+    EXPECT_NE(PCX_ACC, PCX_CAL);
+    EXPECT_NE(PCX_ACC, PCX_EPH);
 }

@@ -47,21 +47,75 @@
 // ~0.5 s). The Doppler is the range rate rr_lag_s before the epoch's tag
 // (55.5 ms on the LC86G), predicted the same way.
 //
+// The carrier range rate (RawMeas has_cr: a satellite's carrier phase range
+// over the interval since its epoch before, RawMeasBuilder), after the
+// epoch's pseudoranges and Dopplers, in the receiver profile's mode (off,
+// observe, fuse: cr_mode):
+//   - the measurement is the interval's MEAN range rate: y = (cr_dphi_m -
+//     [rho(s_k, r_k) - rho(s_prev, r_prev)]) / dt - c, both ranges with the
+//     Sagnac turn the pseudorange's has. A mid-interval time tag gave 183 mm/s
+//     innovations through manoeuvres in the carrier simulation, the mean from
+//     the filter's own motion 55 mm/s;
+//   - r_k is the receiver at the epoch, back-dated as the pseudoranges take
+//     it (beginGnssRaw), and r_prev the one the epoch before left: each a
+//     snapshot that every later correction, whatever its source, moves to
+//     first order as it moves the trajectory -- dp - dv (t_correction -
+//     t_snapshot) -- so r_k - r_prev is the corrected filter's own
+//     displacement over the interval, however late the epochs came. Less
+//     the integration's excess: the position steps on each step's end
+//     velocity, a dt / 2 per second past the velocity's own path (6 cm/s at
+//     13 m/s^2 and 10 ms steps, 50 in a 10 g boost) -- invisible to the code,
+//     but the carrier would pull the velocity off by it;
+//   - c is the epoch's common rate (the receiver clock's white FM, ~0.1 m/s
+//     over a second, and the common carrier wind-up), not the clock drift
+//     state: a nuisance with the profile's prior about the epoch's median,
+//     estimated with the state over the epoch's carrier updates (its
+//     cross-covariance P_xc and variance P_cc beside P, Joseph form) and
+//     dropped after. H: the Doppler's on the velocity (-u_k: the interval's
+//     displacement error is the velocity error times dt), 1 on c. R: the
+//     rate's sigma and cr_sigma_per_rev_s per rev/s of roll (the gyro's mean
+//     |roll rate| over the interval), in quadrature;
+//   - the screen, at the prior: each rate against the others. The epoch's
+//     median takes the common rate out, but a Doppler-quality velocity
+//     (0.05-0.2 m/s off) puts good rates many sigmas apart along their
+//     different lines of sight, so the common rate and a velocity correction
+//     are fitted to the rates (the velocity weighted by the filter's own
+//     covariance). The worst rate past max(cr_screen_k sigma,
+//     cr_screen_floor_mps) on its residual left out of the fit is set aside
+//     and the rest refitted, until none is; then each set aside is judged
+//     against that clean fit on its own: within it after all, back in; where
+//     the system's half cycles can come unflagged, within 3 sigma of
+//     lambda/(2 dt) either way, a half-cycle step -- repaired (cr_dphi_m less
+//     or plus lambda/2) or dropped, as the profile says; else dropped. Under
+//     4 rates there is nothing to screen against: none taken;
+//   - observe: the screen, the innovations, the common rate and the velocity
+//     correction the rates point to (the fit's), counted, and the state
+//     untouched. Fuse: the screened rates fused, through the attitude gate
+//     the GNSS updates have.
+//
 // T is the covariance and attitude/velocity scalar: float on the flight
 // computer (single-precision FPU), double for checking the port against the
 // prototype. Position (lat/lon/height) and the clock bias stay double.
 // Measurement prediction runs in double once per satellite per epoch.
-// Pure and host-compilable (tests_cpp/test_raw_gnss_ekf.cpp).
+// Pure and host-compilable (tests_cpp/test_raw_gnss_ekf.cpp). The once-an-
+// epoch code -- the carrier's, and the boost screen's gate -- is
+// TR_RawGnssCarrier.cpp's, which the Beetle keeps in flash where the rest
+// runs from internal RAM (raw_gnss_iram.lf); the geometry both predict with
+// is RawGnssEKFGeometry.h's.
 #ifndef TR_RAW_GNSS_EKF_H
 #define TR_RAW_GNSS_EKF_H
 
 #include <cstdint>
 
 #include "RawMeas.h"
+#include "ReceiverProfile.h"
 
 namespace gnss_raw
 {
 
+// The receiver's settings -- its clock model, its Doppler's lag, its carrier
+// range rate's -- are its profile's (ReceiverProfile.h, applyReceiverProfile);
+// these defaults are the LC86G's.
 struct RawGnssEKFParams
 {
     // IMU noise model: the flight filter's defaults (TR_GpsInsEKF.h)
@@ -72,6 +126,24 @@ struct RawGnssEKFParams
     double w_markov_sigma = 0.00025;
     double w_markov_tau   = 50.0;
     double accel_var      = 0.25;      // pad levelling, (m/s^2)^2
+    // Gravity carries no heading: a levelling update (updateAccelLevel), on
+    // the ground or in flight, corrects the tilt and the biases and never the
+    // rotation about the vertical -- the gain's rows along the vertical, the
+    // attitude's and the gyro bias's, are zeroed, Joseph form, so the
+    // heading, the gyro bias that turns it, their variances and covariance
+    // come through it unchanged and the cross-covariances stay consistent
+    // (the dual of att_gate_vertical, which keeps only those rows). Without
+    // it, a heading left correlated with the tilt or the accelerometer bias
+    // is turned through those correlations, at once or later through that
+    // gyro bias. Replayed from the rig's f3c with every epoch from T+0.5 s
+    // cut, the first levelling under the chute turned act's 30 deg launch
+    // heading -8.8 deg and took its 1-sigma from 31.4 to 13.5 deg, as if
+    // gravity had measured it. On a pad with no magnetometer a start a few
+    // degrees off its tilt gave the levelling some of the heading's variance
+    // as the linearization moved (3 deg off: 57 deg was 41 after 10 s); the
+    // heading keeps its own now. With a magnetometer the pad's heading is the
+    // magnetometer's either way.
+    bool   level_heading_free = true;
     // The magnetometer as a heading (TR_GpsInsEKF's, #1578/#1304)
     double mag_sigma_ut   = 0.5;       // the field's noise per axis, uT
     double mag_tilt_sigma_mps2 = 0.05; // the accelerometer's, as a tilt reference
@@ -98,8 +170,26 @@ struct RawGnssEKFParams
     // MSM7, fitted against the rig's truth in boost and coast, 2026-10-12)
     double rr_lag_s       = 0.0555;
     bool   att_gate_cos4  = true;      // false: GNSS corrections reach the attitude in full
-    // Initial sigmas
-    double p0_pos = 10.0, p0_vel = 1.0, p0_att = 0.34906, p0_hdg = 3.14159;
+    // GNSS corrections to the attitude about the vertical only (wins over
+    // att_gate_cos4): the heading, and the gyro biases only along the
+    // vertical -- across it they would tilt the attitude later. The tilt
+    // stays the gyro's and the levelling's. For a filter that learns its
+    // heading in flight (the heading fit's hand-off, RawGnssShadow).
+    bool   att_gate_vertical = false;
+    // Initial sigmas, in the state's units (the attitude's: a half-angle).
+    // p0_att: the tilt's, about north and east; p0_hdg: the heading's, about
+    // the vertical of init's attitude (#1626 N10). p0_hdg was pi ("any
+    // heading", uNavINS's), on body z. About a tilted vertical, pi^2 beside
+    // what the levelling pins (the tilt with the accelerometer bias, to 4e-6)
+    // is past float's precision: on a still pad with no magnetometer the
+    // attitude block went indefinite within two minutes up the rail and the
+    // heading's sigma restarted at 0.2 deg. 0.5 (a heading 1-sigma of
+    // 57 deg) held 30 minutes at every rail attitude tried, 75-90 deg
+    // (UpTheRailTheLevelledStartKeepsItsHeadingFreeInFloat). At 10-60 deg a
+    // still pad gives float out after 4-7 minutes with either start: there the
+    // levelled tilt itself nears float's floor. The flight filter takes 30 deg
+    // about the vertical on the pad (PAD_HEADING_SIGMA_DEG).
+    double p0_pos = 10.0, p0_vel = 1.0, p0_att = 0.34906, p0_hdg = 0.5;
     double p0_abias = 0.981, p0_wbias = 0.01745;
     double p0_clk_bias = 30.0, p0_clk_drift = 5.0, p0_isb = 30.0;
     // Gravity: the flight filter's constant 9.807, or WGS84 normal gravity
@@ -107,6 +197,17 @@ struct RawGnssEKFParams
     // The velocity-increment history keeps an entry per this much time, s
     // (128 entries: 0.5 s at 4 ms; at a 200 Hz IMU, every sample)
     double hist_spacing_s = 0.004;
+    // The carrier range rate (ReceiverProfile.h's cr_*)
+    uint8_t cr_mode             = kCarrierObserve;   // CarrierMode
+    double  cr_sigma_per_rev_s  = 0.023;             // m/s more (in quadrature) per rev/s of roll
+    double  cr_common_sigma_mps = 5.0;               // the epoch's common rate: its prior 1-sigma
+    double  cr_screen_k         = 4.0;               // the screen: suspect past this many sigmas
+    double  cr_screen_floor_mps = 0.03;              //   and this much
+    uint8_t cr_half_cycle       = kHalfCycleReject;  // HalfCycleAction
+    // each system's carrier (its wavelength), and whether its half-cycle
+    // steps can come unflagged (gnss_sys_t: GPS, Galileo, BeiDou, QZSS)
+    double  cr_carrier_hz[kProfileSys] = {GNSS_FREQ_L1_HZ, GNSS_FREQ_L1_HZ, 1561.098e6, GNSS_FREQ_L1_HZ};
+    bool    cr_half_cycle_unflagged[kProfileSys] = {true, false, true, true};
 };
 
 struct RawGnssStats
@@ -117,6 +218,48 @@ struct RawGnssStats
     double clock_step_m = 0.0;         // a common pseudorange step that was not
     double drift_step_mps = 0.0;       // a common range-rate step
     float  nis_max = 0.0f;             // largest NIS among the updates applied
+    // the carrier range rates (beginCarrier, fuseCarrier)
+    int    used_cr = 0;                // fused
+    int    cr_built = 0;               // offered (has_cr)
+    int    cr_unmatched = 0;           //   whose earlier epoch the filter did not keep (or no clock yet)
+    int    cr_in = 0;                  //   screened in (and repaired): fused in fuse mode
+    int    cr_half = 0;                //   rejected as half-cycle steps
+    int    cr_repaired = 0;            //   repaired, half-cycle steps
+    int    cr_other = 0;               //   rejected otherwise
+    bool   cr_too_few = false;         // under 4 to screen: none taken
+    float  cr_rms_mps = 0.0f;          // the screened rates' innovations about the common rate, RMS
+    float  cr_fit_rms_mps = 0.0f;      //   and about the screen's fit (the common rate and a velocity)
+    float  cr_dv_mps = 0.0f;           // that fit's velocity correction: the prior's error, as the rates see it
+    float  cr_roll_rev_s = 0.0f;       // the mean |roll rate| over the interval, rev/s
+    double cr_common_mps = 0.0;        // the epoch's common rate: observe, the screen's fit to the screened
+                                       //   rates (a weighted mean, the velocity's part taken out); fuse,
+                                       //   the estimate
+    // RawGnssShadow's boost screen: the Dopplers gated at the epoch's prior
+    // before any update (screenRangeRates), and the epoch worked on a scratch
+    // copy of the filter (its updates' own counts, the Dopplers')
+    int    screen_rr = 0;              // gated at the prior
+    int    screen_refused = 0;         //   of them, refused
+    int    screen_seq_used = 0;        // the scratch copy's: the Dopplers fused
+    int    screen_seq_refused = 0;     //   and refused
+    bool   screen_dropped = false;     // the epoch dropped, none of it fused (the shadow's call)
+    // and the vertical check's fit (screenRangeRates): one velocity and clock
+    // rate fitted to the epoch's Dopplers at the same prediction
+    int    screen_fit_n = 0;           // the Dopplers fitted (0: under 4, or no fit)
+    int    screen_fit_out = 0;         //   left out of it, each far off on its own
+    float  screen_dv_down_mps = 0.0f;  //   the fit's velocity correction, down: the epoch's vertical
+                                       //   velocity against the filter's
+};
+
+// One carrier range rate as the screen took it (RawGnssEKF::carrierInfo).
+struct CarrierInfo
+{
+    enum : int8_t { kIn = 0, kRepaired = 1, kHalfCycle = 2, kOther = 3, kUnmatched = 4, kTooFew = 5 };
+    uint8_t idx;        // its index in the epoch's measurements
+    uint8_t sys, prn;
+    int8_t  verdict;    // above
+    int8_t  half;       // a half-cycle step found: +1 (lambda/2 too much), -1, 0 none
+    float   sigma;      // its 1-sigma, m/s (with the roll rate's term)
+    double  y;          // its innovation at the prior before the common rate, m/s (a repair taken out)
 };
 
 template <typename T>
@@ -134,20 +277,61 @@ public:
     explicit RawGnssEKF(const RawGnssEKFParams& p = RawGnssEKFParams());
     void setParams(const RawGnssEKFParams& p);
     const RawGnssEKFParams& params() const { return p_; }
+    // att_gate_vertical, switched in flight (the heading fit's act mode: from
+    // launch -- on the pad nothing sees the heading for GNSS to turn)
+    void setAttGateVertical(bool on) { p_.att_gate_vertical = on; }
+    // att_gate_cos4, switched in flight (act's full gate: GNSS corrections
+    // reach the whole attitude, att_gate_vertical off as well)
+    void setAttGateCos4(bool on) { p_.att_gate_cos4 = on; }
 
     // Start at a position (lat, lon rad; ellipsoidal height m), NED velocity
     // and attitude, at filter time t0 (s; any clock the IMU steps share).
-    // The clock is set by the first raw epoch (initClockFrom).
+    // The clock is set by the first raw epoch (initClockFrom). The attitude's
+    // covariance: p0_att about the two horizontal axes, p0_hdg about the
+    // vertical of q (#1626 N10) -- so q is the best attitude there is (on the
+    // pad, the accelerometer's tilt), not a placeholder.
     void init(const double lla[3], const T v_ned[3], const T q[4], double t0);
     // Take the attitude as known (the pad seed): its variance to 1e-6 and its
     // cross-covariances to zero, as GpsInsEKF::setQuaternion.
     void setQuaternion(const T q[4]);
     // The gyro bias from a still gyro's mean (the pad seed).
     void seedGyroBias(const T gyro_mean[3]);
+    // The heading's own 1-sigma (rad, a rotation about the vertical), as a
+    // magnetometer or the heading fit hands it over: the attitude's variance
+    // about the vertical set to it, its cross-covariances dropped, the tilt's
+    // kept. (setQuaternion takes the whole attitude as known: right for the
+    // tilt the pad levels, not for a heading a filter must learn in flight.)
+    void setHeadingSigma(T sigma_rad);
+    // The tilt's 1-sigma about north and about east (rad, a rotation) at
+    // least sigma_rad: each one's deficit added along it, so the part about
+    // the vertical, the north-east covariance and every cross-covariance are
+    // kept, P symmetric and positive definite. (An axis between north and
+    // east can stay under the floor by that covariance: little, once the
+    // floor is past the tilt the pad left.) For a tilt the pad could not tell
+    // from an accelerometer bias (#1626 K1), let go at launch (RawGnssShadow's
+    // heading_launch_tilt_sigma_deg).
+    void setTiltSigmaFloor(T sigma_rad);
+    // Turn the attitude about the vertical (NED down) by dpsi (rad): the
+    // heading grows by dpsi, the tilt is kept.
+    void turnHeading(T dpsi);
+    // The IMU biases and their 6x6 covariance (accelerometer then gyro), in
+    // place of the filter's own, their cross-covariances dropped: a heading
+    // hand-off puts back what the pad left, before a wrong heading leaned on
+    // them in flight.
+    void setBiases(const T ab[3], const T wb[3], const T Pb[6][6]);
+    void biasCovariance(T Pb[6][6]) const;
+    // Let the velocity go: each axis's variance at least sigma^2 (m/s), its
+    // cross-covariances dropped, its value kept.
+    void releaseVelocity(T sigma);
+    // Forget which satellites were refused (reject_persist's count): ones
+    // refused under a wrong heading come back on their own merits.
+    void clearRejects();
 
     // IMU time update: specific force (m/s^2) and rate (rad/s), body FRD.
     void propagate(const T acc[3], const T gyro[3], T dt);
-    // Gravity-reference update on the pad (GpsInsEKF::accelMeasUpdate).
+    // Gravity-reference update on the pad (GpsInsEKF::accelMeasUpdate), and
+    // in flight where the shadow levels. With level_heading_free (the
+    // default) it never turns the heading or shrinks its variance.
     void updateAccelLevel(const T acc[3]);
     // A height above the ellipsoid (m) measured with variance var (m^2): the
     // barometer, referred to the filter's own pad. No innovation gate: a
@@ -185,6 +369,37 @@ public:
     // epoch has when it is fused. updateGnssRaw is the two at one age.
     bool beginGnssRaw(const RawMeas* m, int n, double age_s, RawGnssStats& st);
     void updateGnssRawPart(const RawMeas* m, int i0, int i1, double age_s, RawGnssStats& st);
+    // The epoch's Doppler range rates (has_rr) gated at the state as it
+    // stands, after beginGnssRaw and before any update: each with the
+    // innovation, variance and chi-square updateGnssRawPart would give it as
+    // the epoch's first update (a satellite refused reject_persist epochs
+    // running passes: the update lets it in). How many were gated and
+    // refused, in st.screen_rr and st.screen_refused; nothing else changes.
+    void screenRangeRates(const RawMeas* m, int n, double age_s, RawGnssStats& st) const;
+    // the vertical check's fit leaves out a Doppler this many of its own 1-sigmas off the rest's fit
+    static constexpr double kVertOutlier = 4.0;
+    static bool fitVelocityClock(const double H[][4], const double* y, const double* s, const bool* in, int n,
+                                 double x[4]);
+    static bool verticalFit(const double H[][4], const double* y, const double* s, bool* in, int n, double x[4],
+                            int& nin, int& nout);
+    // The epoch begun is dropped, none of it fused: its receiver is no
+    // carrier rate's earlier end, so the next epoch's rates across it go
+    // unmatched. endCarrier still closes it.
+    void dropEpoch() { cr_cur_.valid = false; }
+    // The epoch's carrier range rates (above), after its pseudoranges and
+    // Dopplers, the epoch age_s ago: beginCarrier screens them at the prior
+    // and counts (observe mode: all there is; it returns 0), and returns how
+    // many fuseCarrier will fuse (fuse mode). fuseCarrier fuses every one
+    // with the epoch's common rate, at once: nothing may step or update the
+    // filter between its rates (the common rate's cross-covariance is the
+    // state's at that instant). endCarrier closes the epoch -- the common
+    // rate dropped, this epoch's receiver kept for the next -- whether or not
+    // the others ran: call it once an epoch. updateGnssRaw does all three.
+    int  beginCarrier(const RawMeas* m, int n, double age_s, RawGnssStats& st);
+    void fuseCarrier(const RawMeas* m, RawGnssStats& st);
+    void endCarrier(RawGnssStats& st);
+    // The last screen's rates, n of them.
+    const CarrierInfo* carrierInfo(int& n) const { n = cr_ninfo_; return cr_info_; }
 
     double time() const { return t_; }
     const double* lla() const { return lla_; }
@@ -225,21 +440,68 @@ private:
         double t;      // end of the entry's span, filter time
         T      dv[3];  // NED velocity increment over the span
         T      dp[3];  // NED displacement over it
+        T      ex[3];  // the carrier's: how far that displacement (each step's end velocity times
+                       // its length) runs past the velocity's own path, sum of a dt^2 / 2
     };
 
     void   gravityNed(T g[3]) const;
-    void   propagateCovariance(const T Tb2n[3][3], const T a_b[3], const T w_b[3], T g_d, T dt);
+    // f_b: the specific force less the accelerometer bias, body (the tilt's
+    // Jacobian is its, not the kinematic acceleration's: #1626 E1)
+    void   propagateCovariance(const T Tb2n[3][3], const T f_b[3], const T w_b[3], T g_d, T dt);
     void   stabilize();
     void   symmetrize();
     T      hph(const int* hidx, const T* hval, int hn) const;
     // kmask: the states the gain may move (bit i, state i); the rest keep
-    // their estimate and, Joseph form, a consistent covariance.
+    // their estimate and, Joseph form, a consistent covariance. att_axis: the
+    // gain's attitude and gyro-bias rows projected onto this body-frame unit
+    // vector (att_gate_vertical: the vertical). att_off_axis: the gain's
+    // attitude and gyro-bias rows along this body-frame unit vector zeroed
+    // (the levelling, the vertical: the attitude about it and the gyro bias
+    // along it keep their estimates and covariance).
     int    scalarUpdate(const int* hidx, const T* hval, int hn, T y, T R, T gate, T att,
-                        T dx[N], T* nis, uint32_t kmask = 0xFFFFFFFFu);
+                        T dx[N], T* nis, uint32_t kmask = 0xFFFFFFFFu, const T* att_axis = nullptr,
+                        const T* att_off_axis = nullptr);
+    // The gain's attitude rows as the GNSS updates have them: scaled by att,
+    // and (att_axis) the attitude's and gyro bias's projected onto that axis
+    // (gnssAttAxis: the vertical in the body frame with att_gate_vertical,
+    // else none).
+    static void gateGain(T K[N], T att, const T* att_axis);
+    const T* gnssAttAxis(T vert[3]) const;
+    // One carrier rate with the epoch's common rate c: x and c jointly (its
+    // H 1; P_xc, P_cc beside P), Joseph form, the gain gated as above. dc:
+    // c's correction.
+    int    carrierUpdate(const int* hidx, const T* hval, int hn, T y, T R, T att, const T* att_axis, T dx[N],
+                         T& dc, T* nis);
+    // The carrier's rate at the state as it stands, before the common rate
+    // (m/s), and its line of sight at the epoch (NED, the present frame Tm).
+    double carrierRate(const RawMeas& m, const double Tm[3][3], T u_ned[3]) const;
+    void   crEnds(const double Tm[3][3], double rk[3], double rp[3]) const;
+    // this epoch's receiver snapshot, age_s back (dp_e: the history's displacement since)
+    void   crSnapshot(double age_s, const T dp_e[3]);
+    // The screen's fit (beginCarrier): the epoch's rates, their lines of
+    // sight, the prior's; per rate, in the fit, its residual left out of the
+    // fit and that residual's sigma. A member, not the stack's:
+    // 2.6 kB, in the filter's own storage (PSRAM on the flight computer).
+    // (Scratch, each epoch's: written before it is read, so not zeroed.)
+    struct CrFit
+    {
+        int    n = 0;
+        int    info[RawEpoch::kMaxObs];     // its cr_info_ entry
+        double y[RawEpoch::kMaxObs];        // its innovation before the common rate (a repair taken out)
+        double u[RawEpoch::kMaxObs][3];     // its line of sight, NED
+        bool   in[RawEpoch::kMaxObs];
+        double d[RawEpoch::kMaxObs];
+        double sd[RawEpoch::kMaxObs];
+        double pvv[3][3];                   // the filter's velocity covariance
+        double c0 = 0.0, sc2 = 0.0;         // the common rate's prior: its mean and variance
+    };
+    bool   crFitSolve(double z[4]);
     void   inject(const T dx[N]);
     T      attGate() const;
     void   pushHistory(T dt, const T a_ned[3]);
     bool   historyChange(double tau, T dv[3], T dp[3]) const;
+    // The carrier's: the history's excess (ex) over the last tau.
+    void   historyExcess(double tau, double ex[3]) const;
     void   receiverState(double r[3], double v[3], double Tm[3][3]) const;
 
     RawGnssEKFParams p_;
@@ -260,6 +522,11 @@ private:
     T      a_ned_[3] = {};
     T      g_excess_ = 0;
     T      g_peak_ = 0;
+    // screenRangeRates' vertical-check fit: its rows, scratch (kept off the task's stack)
+    mutable double vfit_h_[RawEpoch::kMaxObs][4] = {};
+    mutable double vfit_y_[RawEpoch::kMaxObs] = {};
+    mutable double vfit_s_[RawEpoch::kMaxObs] = {};
+    mutable bool   vfit_in_[RawEpoch::kMaxObs] = {};
 
     Hist   hist_[kHist] = {};
     int    hhead_ = 0;        // next slot
@@ -269,6 +536,34 @@ private:
     // per satellite (gnss_sys_t x PRN) and kind (0 pseudorange, 1 range rate)
     uint8_t rejects_[3][64][2] = {};
     double  last_upd_[3][64][2] = {};
+
+    // The carrier range rate (above). A receiver snapshot: where the filter
+    // put the receiver at an epoch (ECEF), and the corrections since, NED, as
+    // they move the trajectory there (inject).
+    struct CrSnap
+    {
+        bool   valid = false;
+        double t = 0.0;            // the epoch's filter time; the rest written when it is taken
+        double r[3];
+        double d_ned[3];
+        double ex[3];              // the integration's excess to then (cr_ex_ back-dated), NED
+    };
+    CrSnap      cr_cur_;           // this epoch's (beginGnssRaw)
+    CrSnap      cr_prev_;          // the epoch before's (endCarrier)
+    CarrierInfo cr_info_[RawEpoch::kMaxObs];   // the last screen's, cr_ninfo_ of them (not zeroed)
+    int         cr_ninfo_ = 0;
+    int         cr_nfuse_ = 0;     // of them, to fuse (fuse mode)
+    double      cr_c_ = 0.0;       // the epoch's common rate (m/s), its variance, its
+    T           cr_pcc_ = 0;       //   cross-covariance with the state (set when fused)
+    T           cr_pxc_[N];
+    double      cr_roll_sum_ = 0.0, cr_roll_t_ = 0.0;   // |roll rate| dt, and dt, since the last screen
+    // The position is integrated on each step's end velocity: over a second
+    // it runs a dt / 2 per second past the path the velocity itself traces
+    // (6 cm at 13 m/s^2 and 10 ms steps), which the carrier would read as a
+    // velocity error. Its running sum, NED (sum of a dt^2 / 2): the carrier's
+    // displacement is the position's less this one's change.
+    double      cr_ex_[3] = {};
+    CrFit       cr_fit_;
 };
 
 extern template class RawGnssEKF<float>;
@@ -278,6 +573,22 @@ extern template class RawGnssEKF<double>;
 // over the signal's travel: what the pseudorange update predicts, less the
 // receiver's clock (the pad survey's residuals, PadSurvey.h).
 double sagnacRange(const RawMeas& m, const double r[3]);
+// The range rate a receiver still at r (ECEF, m) would see from m's satellite
+// -- its Sagnac-turned velocity along the line of sight, m/s -- and that line
+// of sight (unit, ECEF, receiver to satellite), in double: what a Doppler
+// velocity solve predicts (HeadingFit.h's own, in float, is held to it), and
+// the synthetic skies' Doppler in its tests and bench.
+double stillRangeRate(const RawMeas& m, const double r[3], double u[3]);
+
+// TR_RawGnssEKF.cpp's own, for the carrier's source (TR_RawGnssCarrier.cpp):
+// the Sagnac-turned range from r to a satellite at rs (transmit time, ECEF
+// then) and its line of sight, as every range the filter predicts; numpy's
+// median, in place.
+namespace ekf_detail
+{
+double sagnacLos(const double rs[3], const double r[3], double u[3]);
+double medianOf(double* v, int n);
+}  // namespace ekf_detail
 
 }  // namespace gnss_raw
 
