@@ -1,0 +1,87 @@
+diff --git a/tinkerrocket-idf/components/TR_RawGnssEKF/TR_RawGnssCarrier.cpp b/tinkerrocket-idf/components/TR_RawGnssEKF/TR_RawGnssCarrier.cpp
+index 7b04ee1b..0c3d081d 100644
+--- a/tinkerrocket-idf/components/TR_RawGnssEKF/TR_RawGnssCarrier.cpp
++++ b/tinkerrocket-idf/components/TR_RawGnssEKF/TR_RawGnssCarrier.cpp
+@@ -709,6 +709,7 @@ void RawGnssEKF<T>::screenRangeRates(const RawMeas* m, int n, double age_s, RawG
+             Hf[nfit][3] = 1.0;
+             yf[nfit] = mi.rr - (pred_rate + static_cast<double>(clk_d_));
+             sf[nfit] = mi.sigma_rr > 0.0f ? static_cast<double>(mi.sigma_rr) : 1.0;
++            vfit_idx_[nfit] = i;
+             nfit++;
+         }
+         const double s_r = static_cast<double>(mi.sigma_rr);
+@@ -741,6 +742,18 @@ void RawGnssEKF<T>::screenRangeRates(const RawMeas* m, int n, double age_s, RawG
+     st.screen_fit_n = nin;
+     st.screen_fit_out = nout;
+     st.screen_dv_down_mps = static_cast<float>(x[2]);
++    // rr_fit_gate: each Doppler against the final fit (five rows or more: four fit exactly)
++    if (p_.rr_fit_gate > 0.0 && nfit >= 5)
++    {
++        for (int k = 0; k < nfit; ++k)
++        {
++            double r = yf[k];
++            for (int j = 0; j < 4; ++j)
++                r -= Hf[k][j] * x[j];
++            fit_verdict_[vfit_idx_[k]] = std::fabs(r) / sf[k] > p_.rr_fit_gate ? 2 : 1;
++        }
++        fit_valid_ = true;
++    }
+ }
+ 
+ // The vertical check's fit (screenRangeRates): rows H (velocity NED, clock
+diff --git a/tinkerrocket-idf/components/TR_RawGnssEKF/TR_RawGnssEKF.cpp b/tinkerrocket-idf/components/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+index cdd0723a..2469c186 100644
+--- a/tinkerrocket-idf/components/TR_RawGnssEKF/TR_RawGnssEKF.cpp
++++ b/tinkerrocket-idf/components/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+@@ -1221,6 +1221,7 @@ RawGnssStats RawGnssEKF<T>::updateGnssRaw(const RawMeas* m, int n, double age_s)
+ template <typename T>
+ bool RawGnssEKF<T>::beginGnssRaw(const RawMeas* m, int n, double age_s, RawGnssStats& st)
+ {
++    fit_valid_ = false;                   // rr_fit_gate: screenRangeRates judges this epoch afresh
+     if (age_s < 0.0)
+         age_s = 0.0;
+     if (!clk_ready_ && !initClockFrom(m, n, age_s))
+@@ -1417,6 +1418,17 @@ void RawGnssEKF<T>::updateGnssRawPart(const RawMeas* m, int i0, int i1, double a
+                 if (nis0 > T(p_.gate_chi2))
+                     R *= nis0 / T(p_.gate_chi2);
+             }
++            if (kind == 1 && p_.rr_fit_gate > 0.0 && fit_valid_ && i < RawEpoch::kMaxObs)
++            {
++                if (fit_verdict_[i] == 2)
++                {
++                    if (rej < 255)
++                        rej++;
++                    st.rejected_rr++;
++                    continue;                     // refused by the epoch's own fit
++                }
++                gate = T(0);                      // the fit kept it: no gate of its own
++            }
+             T dx[N];
+             T nis = T(0);
+             const bool ok = scalarUpdate(hidx, hval, hn, y, R, gate, att, dx, &nis, 0xFFFFFFFFu, axis) == 1;
+diff --git a/tinkerrocket-idf/components/TR_RawGnssEKF/TR_RawGnssEKF.h b/tinkerrocket-idf/components/TR_RawGnssEKF/TR_RawGnssEKF.h
+index d43b33fc..fd53b835 100644
+--- a/tinkerrocket-idf/components/TR_RawGnssEKF/TR_RawGnssEKF.h
++++ b/tinkerrocket-idf/components/TR_RawGnssEKF/TR_RawGnssEKF.h
+@@ -161,6 +161,11 @@ struct RawGnssEKFParams
+     // Raw measurement gating
+     double gate_chi2      = 10.83;     // p = 0.001, 1 dof
+     int    reject_persist = 3;         // refused this many epochs running: let back in
++    // An epoch's Dopplers judged together (screenRangeRates' velocity-and-
++    // clock fit, five rows or more): one more than this many of its own
++    // sigmas off the fit is refused, the rest fused with no gate of their
++    // own; fewer rows, the per-row gate (0: always the per-row gate)
++    double rr_fit_gate    = 0.0;
+     // A step in every pseudorange (or range rate) at once is the receiver's clock
+     double clock_step_m          = 1000.0;
+     double clock_step_spread_m   = 200.0;
+@@ -527,6 +532,9 @@ private:
+     mutable double vfit_y_[RawEpoch::kMaxObs] = {};
+     mutable double vfit_s_[RawEpoch::kMaxObs] = {};
+     mutable bool   vfit_in_[RawEpoch::kMaxObs] = {};
++    mutable int    vfit_idx_[RawEpoch::kMaxObs] = {};     // each row's measurement
++    mutable uint8_t fit_verdict_[RawEpoch::kMaxObs] = {}; // by measurement: 1 kept, 2 refused (rr_fit_gate)
++    mutable bool   fit_valid_ = false;                    //   for this epoch (beginGnssRaw clears it)
+ 
+     Hist   hist_[kHist] = {};
+     int    hhead_ = 0;        // next slot

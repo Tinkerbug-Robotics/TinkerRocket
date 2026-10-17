@@ -1,0 +1,142 @@
+diff --git a/tinkerrocket-idf/components/TR_GNSSRaw/RawMeasBuilder.h b/tinkerrocket-idf/components/TR_GNSSRaw/RawMeasBuilder.h
+index 908d14ac..d0fb316d 100644
+--- a/tinkerrocket-idf/components/TR_GNSSRaw/RawMeasBuilder.h
++++ b/tinkerrocket-idf/components/TR_GNSSRaw/RawMeasBuilder.h
+@@ -96,6 +96,7 @@ public:
+         double relock_tau_s    = 10.0;
+         double relock_gap_s    = 2.5;     // 2.5 epochs at the LC86G's 1 Hz
+         double rr_dyn_sigma    = 0.5;     // m/s per g above 1 g
++        double rr_dyn_tau_s    = 0.0;     // its settling after the stress, s (RawGnssShadow; 0: none)
+         double rr_relock_sigma = 3.0;     // m/s
+         // Each satellite's orbit is solved exactly at most this often and
+         // carried between by its velocity and acceleration (0: exactly at
+diff --git a/tinkerrocket-idf/components/TR_GNSSRaw/ReceiverProfile.h b/tinkerrocket-idf/components/TR_GNSSRaw/ReceiverProfile.h
+index 344d4db6..e178ca26 100644
+--- a/tinkerrocket-idf/components/TR_GNSSRaw/ReceiverProfile.h
++++ b/tinkerrocket-idf/components/TR_GNSSRaw/ReceiverProfile.h
+@@ -101,9 +101,12 @@ struct GnssReceiverProfile
+     double doppler_step_hz = 0.0;                // the Doppler's resolution, whose rounding joins its sigma
+     // a relock (a satellite missing longer than relock_gap_s): the pseudorange
+     // relock_sigma_m more, decaying over relock_tau_s, the Doppler rr_relock_sigma;
+-    // a tracking loop under stress: the Doppler rr_dyn_sigma per g above 1 g
++    // a tracking loop under stress: the Doppler rr_dyn_sigma per g above 1 g,
++    // and settling for rr_dyn_tau_s after the stress ends (RawGnssShadow; 0:
++    // the largest since the epoch before only)
+     double relock_sigma_m = 0.0, relock_tau_s = 0.0, relock_gap_s = 0.0;
+     double rr_dyn_sigma = 0.0, rr_relock_sigma = 0.0;
++    double rr_dyn_tau_s = 0.0;
+ 
+     // its clock (RawGnssEKFParams): white frequency (bias) and random-walk
+     // frequency (drift) noise, the system offsets' walk; a step every satellite
+@@ -187,6 +190,7 @@ inline GnssReceiverProfile lc86gProfile()
+     p.relock_tau_s = 10.0;          // existing default
+     p.relock_gap_s = 2.5;           // existing default: 2.5 epochs
+     p.rr_dyn_sigma = 0.5;           // existing default: m/s per g above 1 g
++    p.rr_dyn_tau_s = 0.0;           // existing default: no settling (RawGnssShadow.h)
+     p.rr_relock_sigma = 3.0;        // existing default
+ 
+     // the clock: it steers to its own solution, in steps (+124 m/s of drift
+diff --git a/tinkerrocket-idf/components/TR_RawGnssShadow/RawGnssShadow.cpp b/tinkerrocket-idf/components/TR_RawGnssShadow/RawGnssShadow.cpp
+index c0822f9b..4fc7cc16 100644
+--- a/tinkerrocket-idf/components/TR_RawGnssShadow/RawGnssShadow.cpp
++++ b/tinkerrocket-idf/components/TR_RawGnssShadow/RawGnssShadow.cpp
+@@ -1,6 +1,7 @@
+ // RawGnssShadow.cpp — see RawGnssShadow.h
+ #include "RawGnssShadow.h"
+ 
++#include <algorithm>
+ #include <cmath>
+ #include <cstring>
+ 
+@@ -595,6 +596,8 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
+     ekf_.propagate(acc, gyro, static_cast<float>(span));
+     if (static_cast<double>(ekf_.gExcess()) + 1.0 > cfg_.boost_screen_g)
+         boost_seen_t_ = ekf_.time();      // the boost screen's window (startJob)
++    if (cfg_.meas.rr_dyn_tau_s > 0.0)     // the Doppler's settling (jobChecks)
++        g_mem_ = std::max(ekf_.gExcess(), g_mem_ * std::exp(-static_cast<float>(span / cfg_.meas.rr_dyn_tau_s)));
+     t_prev_ = t;
+     // Where the flight filter levels: on the ground at g's size (not on a
+     // motor burning before the launch detector says so); in flight (under a
+@@ -728,6 +731,7 @@ void RawGnssShadow::start(double t)
+     gate_full_ = false;
+     boost_seen_t_ = -1.0e9;
+     vert_latch_ = false;
++    g_mem_ = 0.0f;
+     if (cfg_.heading_mode == kHeadingAct)
+     {
+         if (restored_)
+@@ -858,6 +862,7 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
+     job_.te = te;
+     job_.in_flight = (imu_flags & kShadowInFlight) != 0;
+     job_.g_peak = static_cast<double>(ekf_.takeGPeak());
++    job_.g_mem = static_cast<double>(g_mem_);
+     // the boost screen judges this epoch: no apogee call yet (a drogue's
+     // snatch is no boost), and the IMU past boost_screen_g within the last
+     // boost_screen_window_s (0 g: every epoch)
+@@ -990,8 +995,10 @@ void RawGnssShadow::jobChecks(double age, double t)
+     const double tow = built_.tow_s;
+     // The Doppler of a loop under stress: the IMU's largest specific force
+     // since the last epoch (RawMeasBuilder's rr_dyn_sigma), added here, where
+-    // the IMU is, whoever built the epoch
+-    const double s_dyn = cfg_.meas.rr_dyn_sigma * (job_.g_peak > 0.0 ? job_.g_peak : 0.0);
++    // the IMU is, whoever built the epoch -- or, settling (rr_dyn_tau_s), the
++    // boost's as it fades, if that is larger (RawGnssShadow.h)
++    const double g_dyn = std::max(job_.g_peak, job_.g_mem);
++    const double s_dyn = cfg_.meas.rr_dyn_sigma * (g_dyn > 0.0 ? g_dyn : 0.0);
+     if (s_dyn > 0.0)
+         for (int i = 0; i < n; ++i)
+         {
+diff --git a/tinkerrocket-idf/components/TR_RawGnssShadow/RawGnssShadow.h b/tinkerrocket-idf/components/TR_RawGnssShadow/RawGnssShadow.h
+index cb0a8ae7..954f2ed6 100644
+--- a/tinkerrocket-idf/components/TR_RawGnssShadow/RawGnssShadow.h
++++ b/tinkerrocket-idf/components/TR_RawGnssShadow/RawGnssShadow.h
+@@ -225,6 +225,21 @@
+ // changed only v10, whose 2-3 Doppler epochs after its T+1 drop had turned
+ // a right heading 9 deg.
+ //
++// The Doppler's settling (the receiver profile's rr_dyn_tau_s; none at 0).
++// Each epoch's Dopplers carry rr_dyn_sigma (0.5 m/s) per g of the IMU's
++// largest specific force past 1 g since the epoch before (jobChecks), which
++// ends with the thrust -- but the receiver's loops do not settle with it. On
++// the rig's rp5 runs the satellites whose loops held through the boost were
++// the low ones (5-13 deg up; the high ones relock, at rr_relock_sigma), and
++// their Dopplers in the first coast epochs were 1.9, 1.1 and 0.7 m/s rms off
++// at 1, 2 and 3 s after the thrust tailed off, each at a tracking sigma of
++// 0.1-0.35 m/s. A near-horizon Doppler is nearly all horizontal velocity,
++// which act's 10 deg launch prior lets the heading explain: two of them 1 m/s
++// off turned a right heading 5.4 deg (zt), three 9 deg (v10), for the rest of
++// the coast. With rr_dyn_tau_s the allowance is the larger of that peak and
++// the IMU's g past 1 faded with rr_dyn_tau_s since (g_mem_), so the first
++// coast epochs carry the boost's allowance as it decays.
++//
+ // The carrier range rate (the receiver profile's cr_mode, ekf.cr_mode). Each
+ // epoch's builder gives the satellites whose carrier phase was continuous
+ // since the epoch before a carrier range rate (RawMeasBuilder), and the
+@@ -680,6 +695,7 @@ private:
+         double        te = 0.0;           // its instant on the filter's clock
+         bool          in_flight = false;
+         double        g_peak = 0.0;       // the largest |specific force| / g - 1 since the last epoch
++        double        g_mem = 0.0;        // g_mem_ at its start (the Doppler's settling)
+         bool          screen = false;     // a boost epoch the boost screen judges (kJobScreen)
+         bool          vcheck = false;     // the vertical check judges it if it can fit it (kJobScreen)
+         int           dry_k = 0;          //   the scratch copy's next measurement (kJobScreenDry)
+@@ -748,6 +764,7 @@ private:
+     bool          gate_full_ = false;   // act: the whole attitude's gate is open this flight
+     double        boost_seen_t_ = -1.0e9;   // the filter's time the IMU last read past boost_screen_g
+     bool          vert_latch_ = false;  // a vertical drop, and no epoch back within vert_release_mps since
++    float         g_mem_ = 0.0f;        // |specific force| / g - 1, faded with meas.rr_dyn_tau_s (0: unused)
+     bool          launch_seen_ = false; // a launch edge since the start (a restored flight has none)
+     void          setFlightGate(bool full);
+     void          setGroundGate();
+diff --git a/tinkerrocket-idf/components/TR_RawGnssShadow/ReceiverProfileApply.h b/tinkerrocket-idf/components/TR_RawGnssShadow/ReceiverProfileApply.h
+index ffc71e1e..ed4c4a43 100644
+--- a/tinkerrocket-idf/components/TR_RawGnssShadow/ReceiverProfileApply.h
++++ b/tinkerrocket-idf/components/TR_RawGnssShadow/ReceiverProfileApply.h
+@@ -38,6 +38,7 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawMeasBuilder::C
+     c.relock_tau_s = p.relock_tau_s;
+     c.relock_gap_s = p.relock_gap_s;
+     c.rr_dyn_sigma = p.rr_dyn_sigma;
++    c.rr_dyn_tau_s = p.rr_dyn_tau_s;
+     c.rr_relock_sigma = p.rr_relock_sigma;
+     c.carrier = p.cr_mode != kCarrierOff;
+     c.cr_min_lock_ms = p.cr_min_lock_ms;

@@ -1,0 +1,1898 @@
+// raw_replay.cpp -- the Beetle's raw-GNSS navigation filter, replayed offline
+// from one OC flight log (#1600 attitude work).
+//
+// The flight computer's raw task (flight_computer/main/main.cpp, the raw-GNSS
+// section) feeds RawGnssShadow: every EKF tick's IMU input with its flags,
+// each barometer sample BaroGatePolicy accepts, each new magnetometer sample,
+// once a second the seed, and the epochs its GNSS task builds
+// (RawGnssMeasStage) from the LC86G's MSM7, placed on the MCU clock by the
+// driver's time sync. This program does the same from extract.py's event
+// stream, with the firmware's own sources compiled unmodified, and every bench
+// flag of the image set at run time:
+//
+//   --heading-mode N      TR_HEADING_FIT: 0 off, 1 observe, 2 act
+//   --pad-sigma-deg X     TR_BENCH_HEADING_PAD_SIGMA_DEG (act's heading 1-sigma from launch)
+//   --handoff-deg X       TR_BENCH_HEADING_HANDOFF_DEG (-1: never handed over)
+//   --gate-full 0|1       TR_BENCH_HEADING_GATE_FULL
+//   --tilt-sigma-deg X    TR_BENCH_LAUNCH_TILT_SIGMA_DEG (0: off)
+//   --carrier N           TR_BENCH_CARRIER_MODE: 0 off, 1 observe, 2 fuse
+//   --half-cycle-repair N TR_BENCH_HALF_CYCLE_REPAIR
+//   --mag-error-deg X     TR_BENCH_HEADING_ERROR_DEG: added to the declination
+//   --recorded-mag-error-deg X   what the log's own image was built with
+//
+// The log keeps about a second of the pad before ignition, so the replay
+// starts from the raw filter's own state at the log's first record (0x96 and
+// 0x9B) with the covariance its pad context (0x9E) carried at the launch tick
+// (its velocity block scaled to the first record's sigmas). A magnetometer
+// heading error other than the recorded one turns that pad state about the
+// vertical by the difference, as the magnetometer would have on the pad, and
+// north (the declination the filter takes the magnetometer with) with it.
+// See README.md for what is and is not reproduced.
+#include <algorithm>
+#include <atomic>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
+#include <map>
+#include <memory>
+#include <new>
+#include <sstream>
+#include <string>
+#include <vector>
+
+#include <RocketComputerTypes.h>
+
+#include "Lc86Parser.h"
+#include "Lc86RawEpoch.h"
+#include "Rtcm3Msm.h"
+#include "baro_gate_policy.h"
+
+// The replay restores the filter's internal state (its pad state and
+// covariance, the builder's lock history) that no public call sets: the
+// firmware's headers, read with their private members open. The .cpp files
+// are compiled as they are; access does not change a class's layout.
+#define private public
+#define protected public
+#include "RawGnssMeasStage.h"
+#include "RawGnssShadow.h"
+#if !RAW_REPLAY_OLD
+#include "ReceiverProfileApply.h"
+#endif
+#undef private
+#undef protected
+
+using namespace gnss_raw;
+
+// the carrier's counts, where the code has them (not the old rig code's)
+#if RAW_REPLAY_OLD
+#define CR(x) 0u
+#else
+#define CR(x) (x)
+#endif
+
+namespace
+{
+
+constexpr double kD2R = M_PI / 180.0;
+constexpr double kR2D = 180.0 / M_PI;
+
+struct Args
+{
+    std::string in, out;
+    int heading_mode = 1;
+    double pad_sigma_deg = 30.0;
+    double handoff_deg = 10.0;
+    int gate_full = 0;
+    double tilt_sigma_deg = 0.0;
+    int carrier = -1;            // -1: the profile's (the LC86G's: observe)
+    int half_cycle_repair = -1;  // -1: the profile's
+    double mag_error_deg = 0.0;
+    double recorded_mag_error_deg = 0.0;
+    double epoch_delay_ms = 100.0;  // an epoch the log has no on-board age for: handed over this long after it arrived
+    bool match_ages = true;         // hand each epoch over when the on-board filter closed it (its logged age)
+    double age_lead_ms = 20.0;      //   less this: the FC fused it a slice a step before that close
+    // a gate switched in flight (a harness-only experiment, no firmware change): act's full gate from this flight
+    // time on (the heading-only gate before it); "apogee" = the log's own apogee call
+    bool gate_full_from_apogee = false;
+    double gate_full_at_s = -1.0e9;
+    double burnout_s = 2.755;       // the apogee votes are looked for from here (flight time, the truth's burnout)
+    // act opened later than launch (a harness-only experiment): run in observe (--heading-mode 1) and at the log's
+    // apogee call (or this flight time) do what act's launch edge does -- the heading's prior, the tilt floor and
+    // the gate (--gate-full) -- with the gates back to the config's on the ground
+    bool act_from_apogee = false;
+    double act_at_s = -1.0e9;
+    double epoch_shift_ms = 0.0;    // every epoch's MCU time moved by this (a receiver output delay, T1, tried)
+    double diag_from_s = 1.0e9, diag_to_s = -1.0e9;   // epochs in this flight-time window: each unit printed
+    double truth_t0_tow = 573786.0; // the GPS time of week of the flight's T+0 (the scenario's), for the diagnosis
+    // boost safeguards (harness-only experiments), for an epoch whose IMU peak since the last one is above
+    // guard_g (|f| > (1 + guard_g) g): the attitude held out of it with fewer than min_pr pseudoranges (a1) or when
+    // its Dopplers do not agree about one velocity to dop_rms_mps (a2); a satellite refused that would turn the
+    // heading past step_deg in the epoch (b2) or past step_sigma of its 1-sigma (b1); the innovation gate tightened
+    // to gate_chi2 above tight_g (c)
+    double guard_g = 1.0;
+    int min_pr = 0;
+    double dop_rms_mps = 0.0;
+    double dv_max_mps = 0.0;        // (a3) or the velocity correction the epoch's Dopplers point to is above this
+    double dv_sigma = 0.0;          // ... or above this many of the filter's own velocity 1-sigma, if that is larger
+    bool reject_epoch = false;      // (a4) such an epoch dropped whole, not only held from the attitude
+    bool majority = false;          // (a6) a boost epoch most of whose range rates the gate refuses: dropped whole
+    bool majority_half = false;     // (a6h) ... half or more of them (a tie drops it too)
+    bool dop_thin_pass = false;     // (a2/a3) an epoch with too few Dopplers to judge passes (default: held out)
+    double dv_vert_max = 0.0;       // (a3v) ... or whose fitted velocity is off the filter's VERTICAL by more than this
+                                    //   (m/s): the vertical is the IMU's and barometer's, whatever the heading
+    double dv_vert_hold = 0.0;      // (a3vh) ... above this (and not past dv_vert_max): the attitude held out of the
+                                    //   epoch, its velocity and position fused (never dropped, whatever --guard-reject-epoch)
+    double step_deg = 0.0, step_sigma = 0.0;
+    double tight_g = 2.0, gate_chi2 = 0.0;
+    // a boost dropout, synthesized: every epoch whose GPS time falls in [cut_from_s, cut_to_s) of flight time is
+    // dropped; and one epoch (the one nearest corrupt_at_s) corrupted like c30's T+1: on 3 of its satellites the
+    // range rate off by 30..70 m/s and the pseudorange by 20..40 m, signs and satellites drawn from corrupt_seed
+    double cut_from_s = 1.0e9, cut_to_s = 1.0e9;
+    // the relock rule: before the flight computer's apogee call, a satellite whose lock time (MSM7's) is under
+    // this many ms gives no range rate -- a relocked loop's Doppler settles over a second or two
+    double relock_min_lock_ms = 0.0;
+    double corrupt_at_s = -1.0e9;
+    int corrupt_seed = 1;
+    double fc_unit_us = 0.0;     // >0: an emulated FC clock -- each job unit costs this, so epochs slice as on the FC
+    bool reanchor = false;       // at the launch tick, take the pad context's state and covariance as they were
+    double no_line_ms = 25.0;    // a log with no clock line at all (no fix in it): an epoch's MCU time is its last
+                                 // frame's arrival plus this (the line sat 10-47 ms, median 25, after it on r20-r25);
+                                 // negative: leave such epochs untimed
+    double pad_lat = 39.4683565, pad_lon = -75.29286495, pad_h = -0.712;   // the truth's pad (NED origin)
+    double t_base_s = 0.0;       // flight time = MCU s + this (the ignition edge)
+    // a calibrated IMU (the pad's hand calibration): these subtracted from every tick, and the pad state the
+    // filter would have had with it (its attitude, accelerometer bias, the gyro bias it had less what came off)
+    double acc_sub[3] = {}, gyro_sub[3] = {};
+    bool have_pad_quat = false, have_pad_ab = false;
+    double pad_quat[4] = {1, 0, 0, 0}, pad_ab[3] = {}, pad_wb_sub[3] = {};
+    int every = 1;               // a CSV row every this many steps
+    // the firmware's own switches since fc/gnss-heading-fuse 0729114f (-1: the firmware's default)
+    int boost_screen = -1;           // RawGnssShadow::Config::boost_screen: 0 off, 1 in act (default), 2 always
+    double boost_screen_g = -1.0;    //   boost_screen_g (2 g)
+    double pad_sigma_fallback_deg = -1.0;   // heading_pad_sigma_fallback_deg (30): act's prior without the
+                                            //   magnetometer's heading (--pad-sigma-deg: with it)
+    double mag_recent_s = -1.0;      // heading_mag_recent_s (5 s)
+    int level_heading_free = -1;     // RawGnssEKFParams::level_heading_free (1)
+    int mag_flags = 2;               // each magnetometer sample's ShadowMag flags: 2 the rig's field (a sim's, the
+                                     //   truth's: kShadowMagSim), 1 calibrated, 0 neither (refused)
+    // compare the firmware's boost screen (a pre-pass at the epoch's prior) with the harness's sequential majority
+    // check (the epoch worked, then its refusals counted) on every boost epoch, each from the same state
+    bool compare_sequential = false;
+    bool apogee_flag = true;         // kShadowApogee on every tick from the log's apogee flag (--no-apogee-flag: never)
+    double vert_check_mps = -1.0;    // RawGnssShadow::Config::vert_check_mps (20 m/s; 0 off) -- a RAW_REPLAY_VCHECK build
+    double boost_screen_window_s = -1.0;   // boost_screen_window_s (1.5 s) -- a RAW_REPLAY_VCHECK build
+    double rr_dyn_sigma = -1.0;      // the receiver profile's rr_dyn_sigma (the Doppler's allowance per g)
+    double rr_fit_gate = -1.0;       // RawGnssEKFParams::rr_fit_gate (the Dopplers judged by their epoch's fit) -- a
+                                     //   RAW_REPLAY_FITGATE build
+    double vert_release_mps = -1.0;  // RawGnssShadow::Config::vert_release_mps (the vertical check's latch) -- a
+                                     //   RAW_REPLAY_LATCH build
+    double rr_dyn_tau_s = -1.0;      // the receiver profile's rr_dyn_tau_s (the Doppler's settling) -- a
+                                     //   RAW_REPLAY_DYNMEM build
+    double max_epoch_age_s = -1.0;   // RawGnssShadow::Config::max_epoch_age_s (0.6 s): later, an epoch is dropped
+};
+
+void usage()
+{
+    std::fprintf(stderr,
+                 "raw_replay --in EVENTS.txt --out RUN.csv [--heading-mode 0|1|2] [--pad-sigma-deg X]\n"
+                 "  [--handoff-deg X] [--gate-full 0|1] [--tilt-sigma-deg X] [--carrier 0|1|2]\n"
+                 "  [--half-cycle-repair 0|1] [--mag-error-deg X] [--recorded-mag-error-deg X]\n"
+                 "  [--epoch-delay-ms X] [--no-match-ages] [--age-lead-ms X] [--fc-unit-us X] [--reanchor]\n"
+                 "  [--t-base-s X] [--pad lat,lon,h] [--every N]\n"
+                 "  [--acc-sub x,y,z] [--gyro-sub x,y,z] [--pad-quat w,x,y,z] [--pad-ab x,y,z] [--pad-wb-sub x,y,z]\n"
+                 "  [--gate-full-from-apogee] [--gate-full-at-s X] [--burnout-s X] [--act-from-apogee] [--act-at-s X]\n"
+                 "  [--epoch-shift-ms X] [--diag-from-s X --diag-to-s Y]\n"
+                 "  [--guard-g X] [--guard-min-pr N] [--guard-doppler-rms X] [--guard-dv-max X] [--guard-dv-sigma K]\n"
+                 "  [--guard-reject-epoch] [--guard-majority] [--guard-majority-half] [--guard-step-deg X]\n"
+                 "  [--guard-step-sigma X] [--relock-min-lock-ms X] [--guard-dop-thin-pass] [--guard-dv-vert-max X]\n"
+                 "  [--guard-dv-vert-hold X]\n"
+                 "  [--guard-tight-g X --guard-gate-chi2 X] [--cut-from-s X --cut-to-s Y] [--corrupt-at-s X --corrupt-seed N]\n"
+                 "  [--boost-screen 0|1|2] [--boost-screen-g X] [--pad-sigma-fallback-deg X] [--mag-recent-s X]\n"
+                 "  [--level-heading-free 0|1] [--mag-flags N] [--compare-sequential] [--no-apogee-flag]\n"
+                 "  [--max-epoch-age-s X] [--vert-check-mps X] [--boost-screen-window-s X] [--rr-dyn-tau-s X]\n"
+                 "  [--rr-dyn-sigma X] [--vert-release-mps X] [--rr-fit-gate X]\n");
+}
+
+bool parseArgs(int argc, char** argv, Args& a)
+{
+    for (int i = 1; i < argc; ++i)
+    {
+        std::string k = argv[i];
+        auto val = [&](void) -> const char* {
+            if (i + 1 >= argc)
+            {
+                std::fprintf(stderr, "%s needs a value\n", k.c_str());
+                std::exit(2);
+            }
+            return argv[++i];
+        };
+        if (k == "--in") a.in = val();
+        else if (k == "--out") a.out = val();
+        else if (k == "--heading-mode") a.heading_mode = std::atoi(val());
+        else if (k == "--pad-sigma-deg") a.pad_sigma_deg = std::atof(val());
+        else if (k == "--handoff-deg") a.handoff_deg = std::atof(val());
+        else if (k == "--gate-full") a.gate_full = std::atoi(val());
+        else if (k == "--tilt-sigma-deg") a.tilt_sigma_deg = std::atof(val());
+        else if (k == "--carrier") a.carrier = std::atoi(val());
+        else if (k == "--half-cycle-repair") a.half_cycle_repair = std::atoi(val());
+        else if (k == "--mag-error-deg") a.mag_error_deg = std::atof(val());
+        else if (k == "--recorded-mag-error-deg") a.recorded_mag_error_deg = std::atof(val());
+        else if (k == "--epoch-delay-ms") a.epoch_delay_ms = std::atof(val());
+        else if (k == "--no-match-ages") a.match_ages = false;
+        else if (k == "--gate-full-from-apogee") a.gate_full_from_apogee = true;
+        else if (k == "--act-from-apogee") a.act_from_apogee = true;
+        else if (k == "--epoch-shift-ms") a.epoch_shift_ms = std::atof(val());
+        else if (k == "--diag-from-s") a.diag_from_s = std::atof(val());
+        else if (k == "--guard-g") a.guard_g = std::atof(val());
+        else if (k == "--guard-min-pr") a.min_pr = std::atoi(val());
+        else if (k == "--guard-doppler-rms") a.dop_rms_mps = std::atof(val());
+        else if (k == "--guard-dv-max") a.dv_max_mps = std::atof(val());
+        else if (k == "--guard-dv-sigma") a.dv_sigma = std::atof(val());
+        else if (k == "--guard-reject-epoch") a.reject_epoch = true;
+        else if (k == "--guard-dop-thin-pass") a.dop_thin_pass = true;
+        else if (k == "--guard-dv-vert-max") a.dv_vert_max = std::atof(val());
+        else if (k == "--guard-dv-vert-hold") a.dv_vert_hold = std::atof(val());
+        else if (k == "--guard-majority") a.majority = true;
+        else if (k == "--guard-majority-half") a.majority = a.majority_half = true;
+        else if (k == "--cut-from-s") a.cut_from_s = std::atof(val());
+        else if (k == "--relock-min-lock-ms") a.relock_min_lock_ms = std::atof(val());
+        else if (k == "--cut-to-s") a.cut_to_s = std::atof(val());
+        else if (k == "--corrupt-at-s") a.corrupt_at_s = std::atof(val());
+        else if (k == "--corrupt-seed") a.corrupt_seed = std::atoi(val());
+        else if (k == "--guard-step-deg") a.step_deg = std::atof(val());
+        else if (k == "--guard-step-sigma") a.step_sigma = std::atof(val());
+        else if (k == "--guard-tight-g") a.tight_g = std::atof(val());
+        else if (k == "--guard-gate-chi2") a.gate_chi2 = std::atof(val());
+        else if (k == "--diag-to-s") a.diag_to_s = std::atof(val());
+        else if (k == "--act-at-s") a.act_at_s = std::atof(val());
+        else if (k == "--gate-full-at-s") a.gate_full_at_s = std::atof(val());
+        else if (k == "--burnout-s") a.burnout_s = std::atof(val());
+        else if (k == "--age-lead-ms") a.age_lead_ms = std::atof(val());
+        else if (k == "--fc-unit-us") a.fc_unit_us = std::atof(val());
+        else if (k == "--reanchor") a.reanchor = true;
+        else if (k == "--no-line-ms") a.no_line_ms = std::atof(val());
+        else if (k == "--t-base-s") a.t_base_s = std::atof(val());
+        else if (k == "--every") a.every = std::max(1, std::atoi(val()));
+        else if (k == "--boost-screen") a.boost_screen = std::atoi(val());
+        else if (k == "--boost-screen-g") a.boost_screen_g = std::atof(val());
+        else if (k == "--pad-sigma-fallback-deg") a.pad_sigma_fallback_deg = std::atof(val());
+        else if (k == "--mag-recent-s") a.mag_recent_s = std::atof(val());
+        else if (k == "--level-heading-free") a.level_heading_free = std::atoi(val());
+        else if (k == "--mag-flags") a.mag_flags = std::atoi(val());
+        else if (k == "--compare-sequential") a.compare_sequential = true;
+        else if (k == "--no-apogee-flag") a.apogee_flag = false;
+        else if (k == "--max-epoch-age-s") a.max_epoch_age_s = std::atof(val());
+        else if (k == "--vert-check-mps") a.vert_check_mps = std::atof(val());
+        else if (k == "--boost-screen-window-s") a.boost_screen_window_s = std::atof(val());
+        else if (k == "--rr-dyn-tau-s") a.rr_dyn_tau_s = std::atof(val());
+        else if (k == "--rr-dyn-sigma") a.rr_dyn_sigma = std::atof(val());
+        else if (k == "--vert-release-mps") a.vert_release_mps = std::atof(val());
+        else if (k == "--rr-fit-gate") a.rr_fit_gate = std::atof(val());
+        else if (k == "--acc-sub")
+        {
+            if (std::sscanf(val(), "%lf,%lf,%lf", &a.acc_sub[0], &a.acc_sub[1], &a.acc_sub[2]) != 3)
+                return false;
+        }
+        else if (k == "--gyro-sub")
+        {
+            if (std::sscanf(val(), "%lf,%lf,%lf", &a.gyro_sub[0], &a.gyro_sub[1], &a.gyro_sub[2]) != 3)
+                return false;
+        }
+        else if (k == "--pad-quat")
+        {
+            if (std::sscanf(val(), "%lf,%lf,%lf,%lf", &a.pad_quat[0], &a.pad_quat[1], &a.pad_quat[2],
+                            &a.pad_quat[3]) != 4)
+                return false;
+            a.have_pad_quat = true;
+        }
+        else if (k == "--pad-ab")
+        {
+            if (std::sscanf(val(), "%lf,%lf,%lf", &a.pad_ab[0], &a.pad_ab[1], &a.pad_ab[2]) != 3)
+                return false;
+            a.have_pad_ab = true;
+        }
+        else if (k == "--pad-wb-sub")
+        {
+            if (std::sscanf(val(), "%lf,%lf,%lf", &a.pad_wb_sub[0], &a.pad_wb_sub[1], &a.pad_wb_sub[2]) != 3)
+                return false;
+        }
+        else if (k == "--pad")
+        {
+            if (std::sscanf(val(), "%lf,%lf,%lf", &a.pad_lat, &a.pad_lon, &a.pad_h) != 3)
+                return false;
+        }
+        else
+        {
+            std::fprintf(stderr, "unknown argument %s\n", k.c_str());
+            return false;
+        }
+    }
+    return !a.in.empty() && !a.out.empty();
+}
+
+std::vector<uint8_t> unhex(const std::string& s)
+{
+    std::vector<uint8_t> out(s.size() / 2);
+    for (size_t i = 0; i < out.size(); ++i)
+        out[i] = static_cast<uint8_t>(std::stoi(s.substr(2 * i, 2), nullptr, 16));
+    return out;
+}
+
+// One event from extract.py, in time order.
+struct Event
+{
+    char kind;
+    int64_t t_us;
+    double v[8];
+    int flags;
+    std::vector<uint8_t> bytes;
+};
+
+struct Input
+{
+    std::map<std::string, std::string> meta;
+    std::vector<double> s;          // S: the first record's state
+    std::vector<double> pnav;       // PNAV: the pad context's nav
+    std::vector<double> pcov;       // PCOV: 190 values, upper triangle
+    std::vector<std::vector<uint8_t>> peph;
+    std::map<uint32_t, double> age_ms;   // A: each epoch's age when the on-board filter closed it
+    std::vector<Event> ev;
+};
+
+bool readInput(const std::string& path, Input& in)
+{
+    std::ifstream f(path);
+    if (!f)
+        return false;
+    std::string line;
+    while (std::getline(f, line))
+    {
+        if (line.empty() || line[0] == '#')
+            continue;
+        std::istringstream ss(line);
+        std::string tag;
+        ss >> tag;
+        if (tag == "META")
+        {
+            std::string k, v;
+            ss >> k;
+            std::getline(ss, v);
+            in.meta[k] = v.size() && v[0] == ' ' ? v.substr(1) : v;
+        }
+        else if (tag == "S" || tag == "PNAV" || tag == "PCOV")
+        {
+            std::vector<double>& dst = tag == "S" ? in.s : (tag == "PNAV" ? in.pnav : in.pcov);
+            double x;
+            while (ss >> x)
+                dst.push_back(x);
+        }
+        else if (tag == "PEPH")
+        {
+            std::string h;
+            ss >> h;
+            in.peph.push_back(unhex(h));
+        }
+        else if (tag == "A")
+        {
+            long long tow = 0;
+            double age = 0.0;
+            ss >> tow >> age;
+            in.age_ms[static_cast<uint32_t>(tow)] = age;
+        }
+        else if (tag == "PSUR")
+        {
+            // the pad survey: used only where it took the ionosphere out (checked below)
+            in.meta["psur"] = line;
+        }
+        else if (tag.size() == 1)
+        {
+            Event e{};
+            e.kind = tag[0];
+            long long t = 0;
+            ss >> t;
+            e.t_us = t;
+            if (e.kind == 'I')
+            {
+                for (int i = 0; i < 6; ++i)
+                    ss >> e.v[i];
+                ss >> e.flags;
+            }
+            else if (e.kind == 'B')
+                ss >> e.v[0];
+            else if (e.kind == 'M')
+                ss >> e.v[0] >> e.v[1] >> e.v[2];
+            else if (e.kind == 'F')
+                ss >> e.v[0] >> e.v[1] >> e.v[2] >> e.v[3];   // week, tow_ms, fix mode, sats
+            else if (e.kind == 'K')
+            {
+                long long mcu0 = 0;
+                ss >> e.v[0] >> mcu0 >> e.v[2] >> e.v[3] >> e.v[4] >> e.v[5] >> e.flags;
+                e.v[1] = static_cast<double>(mcu0);
+            }
+            else if (e.kind == 'R')
+            {
+                std::string h;
+                ss >> h;
+                e.bytes = unhex(h);
+            }
+            in.ev.push_back(std::move(e));
+        }
+    }
+    return true;
+}
+
+// q (scalar first) = a * b
+void quatMul(const double a[4], const double b[4], double o[4])
+{
+    o[0] = a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3];
+    o[1] = a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2];
+    o[2] = a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1];
+    o[3] = a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0];
+}
+
+// The GPS -> MCU line the driver's time sync held (GnssTimeSync::mcuAt).
+struct ClockLine
+{
+    bool valid = false;
+    double gps0_s = 0, a_s = 0, t_ref_s = 0, drift = 0, latency_s = 0;
+    int64_t mcu0_us = 0;
+    bool mcuAt(double gps_s, int64_t& out) const
+    {
+        if (!valid)
+            return false;
+        const double t = gps_s - gps0_s;
+        const double rel = t + (a_s + drift * (t - t_ref_s)) - latency_s;
+        out = mcu0_us + static_cast<int64_t>(std::llround(rel * 1.0e6));
+        return true;
+    }
+};
+
+// An emulated FC clock: each call costs fc_unit_us, so the shadow's job
+// slices (epoch_slice_us) fall about as they did on the Beetle.
+int64_t g_fake_clock_us = 0;
+double g_fake_unit_us = 0.0;
+int64_t fakeClock()
+{
+    g_fake_clock_us += static_cast<int64_t>(g_fake_unit_us);
+    return g_fake_clock_us;
+}
+
+// ---- the diagnosis of one epoch (--diag-from-s/--diag-to-s): the TR_RawGnssEKF.cpp geometry, copied
+struct DLos
+{
+    double rho, rate, u[3], vs[3];
+};
+
+void dLineOfSight(const double rs[3], const double vs[3], const double r[3], const double v[3], DLos& L)
+{
+    const double kC = 299792458.0, kOmegaE = 7.2921151467e-5;
+    double d0 = rs[0] - r[0], d1 = rs[1] - r[1], d2 = rs[2] - r[2];
+    double rho = std::sqrt(d0 * d0 + d1 * d1 + d2 * d2);
+    double c = 1.0, s = 0.0, rr[3] = {rs[0], rs[1], rs[2]};
+    for (int it = 0; it < 2; ++it)
+    {
+        const double th = kOmegaE * rho / kC;
+        const double th2 = th * th;
+        c = 1.0 - 0.5 * th2;
+        s = th * (1.0 - th2 / 6.0);
+        rr[0] = c * rs[0] + s * rs[1];
+        rr[1] = -s * rs[0] + c * rs[1];
+        rr[2] = rs[2];
+        d0 = rr[0] - r[0]; d1 = rr[1] - r[1]; d2 = rr[2] - r[2];
+        rho = std::sqrt(d0 * d0 + d1 * d1 + d2 * d2);
+    }
+    L.vs[0] = c * vs[0] + s * vs[1];
+    L.vs[1] = -s * vs[0] + c * vs[1];
+    L.vs[2] = vs[2];
+    L.rho = rho;
+    L.u[0] = d0 / rho; L.u[1] = d1 / rho; L.u[2] = d2 / rho;
+    L.rate = L.u[0] * (L.vs[0] - v[0]) + L.u[1] * (L.vs[1] - v[1]) + L.u[2] * (L.vs[2] - v[2]);
+}
+
+double dSatRangeAccel(const RawMeas& m, const DLos& L, const double v[3])
+{
+    double dvv = 0.0, ua = 0.0;
+    for (int k = 0; k < 3; ++k)
+    {
+        const double dv = L.vs[k] - v[k];
+        dvv += dv * dv;
+        ua += L.u[k] * m.sat_acc[k];
+    }
+    return ua + (dvv - L.rate * L.rate) / L.rho;
+}
+
+// body -> NED of q (scalar first), and the heading (rotation about down) and tilt (north, east) of b relative to a
+void dDcm(const float q[4], double R[3][3])
+{
+    const double w = q[0], x = q[1], y = q[2], z = q[3];
+    R[0][0] = 1 - 2 * (y * y + z * z); R[0][1] = 2 * (x * y - w * z);     R[0][2] = 2 * (x * z + w * y);
+    R[1][0] = 2 * (x * y + w * z);     R[1][1] = 1 - 2 * (x * x + z * z); R[1][2] = 2 * (y * z - w * x);
+    R[2][0] = 2 * (x * z - w * y);     R[2][1] = 2 * (y * z + w * x);     R[2][2] = 1 - 2 * (x * x + y * y);
+}
+
+void dTurn(const float qa[4], const float qb[4], double out[3])
+{
+    // e = qb * qa^-1 (NED): small rotation vector, deg (north, east, down)
+    const double a0 = qa[0], a1 = -qa[1], a2 = -qa[2], a3 = -qa[3];
+    const double b0 = qb[0], b1 = qb[1], b2 = qb[2], b3 = qb[3];
+    double e0 = b0 * a0 - b1 * a1 - b2 * a2 - b3 * a3;
+    double e1 = b0 * a1 + b1 * a0 + b2 * a3 - b3 * a2;
+    double e2 = b0 * a2 - b1 * a3 + b2 * a0 + b3 * a1;
+    double e3 = b0 * a3 + b1 * a2 - b2 * a1 + b3 * a0;
+    if (e0 < 0) { e0 = -e0; e1 = -e1; e2 = -e2; e3 = -e3; }
+    out[0] = 2.0 * e1 * kR2D;
+    out[1] = 2.0 * e2 * kR2D;
+    out[2] = 2.0 * e3 * kR2D;
+}
+
+void diagEpoch(RawGnssShadow& sh, const BuiltEpoch& b, int64_t t_us, uint8_t flags, const Args& a, const float acc[3])
+{
+    RawGnssEKF<float>& f = sh.ekf_;
+    const double t = t_us * 1e-6;
+    const double te = b.mcu_us * 1e-6;
+    const double age = t - te;
+    const double tf = t + a.t_base_s, tef = te + a.t_base_s;
+    // the attitude block in NED: heading variance and its covariance with the velocity
+    double R[3][3];
+    dDcm(f.quat(), R);
+    double Pa[3][3], Pav[3][3];
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+        {
+            Pa[i][j] = 0.0;
+            Pav[i][j] = 0.0;
+        }
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+            for (int k = 0; k < 3; ++k)
+            {
+                for (int l = 0; l < 3; ++l)
+                    Pa[i][j] += 4.0 * R[i][k] * f.P(6 + k, 6 + l) * R[j][l];
+                Pav[i][j] += 2.0 * R[i][k] * f.P(6 + k, 3 + j);
+            }
+    const double sh_ = std::sqrt(std::max(0.0, Pa[2][2]));
+    std::printf("DIAG epoch tow %.3f: tag T%+.3f (GPS time T%+.3f), step T%+.3f, age %.1f ms, %d measurements, "
+                "|f| %.1f g, vD %.2f m/s\n",
+                b.tow_s, tef, b.tow_s - a.truth_t0_tow, tf, age * 1e3, b.n,
+                std::sqrt(acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2]) / 9.80665, f.velNed()[2]);
+    std::printf("DIAG   before: heading sigma %.2f deg, tilt sigma N %.2f E %.2f deg; heading-velocity correlation "
+                "N %+.2f E %+.2f D %+.2f\n",
+                sh_ * kR2D, std::sqrt(std::max(0.0, Pa[0][0])) * kR2D, std::sqrt(std::max(0.0, Pa[1][1])) * kR2D,
+                Pav[2][0] / (sh_ * std::sqrt(f.P(3, 3)) + 1e-30), Pav[2][1] / (sh_ * std::sqrt(f.P(4, 4)) + 1e-30),
+                Pav[2][2] / (sh_ * std::sqrt(f.P(5, 5)) + 1e-30));
+    // the job, a unit at a time, as onImu would have worked it
+    sh.pend_built_[sh.pb_head_] = b;
+    sh.npend_built_ = 1;
+    sh.startJob(te, flags);
+    float q0[4];
+    for (int i = 0; i < 4; ++i)
+        q0[i] = f.quat()[i];
+    for (int guard = 0; sh.job_.active && guard < 400; ++guard)
+    {
+        const int phase = sh.job_.phase;
+        const int k = sh.job_.fused;
+        double y_pr = std::nan(""), y_rr = std::nan(""), el = std::nan("");
+        if (phase == RawGnssShadow::kJobFuse && k < sh.built_.n)
+        {
+            const RawMeas& mi = sh.built_.meas[k];
+            const double tau = f.p_.rr_lag_s > 0.0 ? f.p_.rr_lag_s : 0.0;
+            const double ag = t - te;
+            float dp_e[3], dv_e[3], dp_l[3], dv_l[3];
+            f.historyChange(ag, dv_e, dp_e);
+            f.historyChange(ag + tau, dv_l, dp_l);
+            double r[3], v[3], Tm[3][3], r_e[3], v_e[3];
+            f.receiverState(r, v, Tm);
+            for (int i = 0; i < 3; ++i)
+            {
+                double sp = 0.0, sv = 0.0;
+                for (int j = 0; j < 3; ++j)
+                {
+                    sp += Tm[j][i] * dp_e[j];
+                    sv += Tm[j][i] * dv_e[j];
+                }
+                r_e[i] = r[i] - sp;
+                v_e[i] = v[i] - sv;
+            }
+            DLos L;
+            dLineOfSight(mi.sat_pos, mi.sat_vel, r_e, v_e, L);
+            const double b_e = f.clk_b_ - static_cast<double>(f.clk_d_) * ag;
+            y_pr = mi.pr - (L.rho + b_e + static_cast<double>(f.isb(mi.sys)));
+            double vr[3], v_l[3];
+            for (int i = 0; i < 3; ++i)
+                vr[i] = Tm[0][i] * f.v_[0] + Tm[1][i] * f.v_[1] + Tm[2][i] * f.v_[2];
+            for (int i = 0; i < 3; ++i)
+                v_l[i] = vr[i] - (Tm[0][i] * dv_l[0] + Tm[1][i] * dv_l[1] + Tm[2][i] * dv_l[2]);
+            DLos Lr = L;
+            Lr.rate = 0.0;
+            for (int i = 0; i < 3; ++i)
+                Lr.rate += L.u[i] * (L.vs[i] - v_l[i]);
+            const double pred = tau > 0.0 ? Lr.rate - tau * dSatRangeAccel(mi, Lr, v_l) : Lr.rate;
+            y_rr = mi.rr - (pred + static_cast<double>(f.clk_d_));
+            // elevation, from the NED line of sight
+            const double ud = Tm[2][0] * L.u[0] + Tm[2][1] * L.u[1] + Tm[2][2] * L.u[2];
+            el = std::asin(std::max(-1.0, std::min(1.0, -ud))) * kR2D;
+            // the line of sight in NED, for the record
+            const double un = Tm[0][0] * L.u[0] + Tm[0][1] * L.u[1] + Tm[0][2] * L.u[2];
+            const double ue = Tm[1][0] * L.u[0] + Tm[1][1] * L.u[1] + Tm[1][2] * L.u[2];
+            std::printf("DIAG   sat %c%02d el %4.1f az %5.1f: pr innovation %+9.2f m (sigma %.1f+%.1f), Doppler "
+                        "innovation %+7.2f m/s (sigma %.2f)",
+                        mi.sys == 0 ? 'G' : (mi.sys == 1 ? 'E' : 'C'), mi.prn, el, std::atan2(ue, un) * kR2D, y_pr,
+                        mi.sigma_pr, mi.sigma_pr_corr, y_rr, mi.sigma_rr);
+            // and, for a check against the truth, the measurement and the geometry (ECEF)
+            std::fprintf(stderr, "DIAGDATA %.3f %d %d %.4f %.5f %.4f %.4f %.4f %.6f %.6f %.6f %.4f %.4f %.4f %.5f %.5f %.5f "
+                                 "%.3f %.3f %.3f %.3f\n",
+                         b.tow_s, mi.sys, mi.prn, mi.pr, mi.rr, mi.sat_pos[0], mi.sat_pos[1], mi.sat_pos[2],
+                         mi.sat_vel[0], mi.sat_vel[1], mi.sat_vel[2], r_e[0], r_e[1], r_e[2], v_l[0], v_l[1], v_l[2],
+                         y_pr, y_rr, static_cast<double>(mi.sigma_rr), static_cast<double>(mi.sigma_pr));
+        }
+        const int used_pr0 = sh.job_.rs.used_pr, used_rr0 = sh.job_.rs.used_rr;
+        float qb[4], vb[3];
+        for (int i = 0; i < 4; ++i)
+            qb[i] = f.quat()[i];
+        for (int i = 0; i < 3; ++i)
+            vb[i] = f.velNed()[i];
+        sh.jobUnit(t);
+        double turn[3];
+        dTurn(qb, f.quat(), turn);
+        if (phase == RawGnssShadow::kJobFuse && k < sh.built_.n)
+            std::printf(" -> used pr %d rr %d; heading %+.3f deg, tilt N %+.3f E %+.3f deg, velocity N %+.3f E %+.3f D "
+                        "%+.3f m/s\n",
+                        sh.job_.rs.used_pr - used_pr0, sh.job_.rs.used_rr - used_rr0, turn[2], turn[0], turn[1],
+                        f.velNed()[0] - vb[0], f.velNed()[1] - vb[1], f.velNed()[2] - vb[2]);
+        else if (std::fabs(turn[0]) + std::fabs(turn[1]) + std::fabs(turn[2]) > 1e-4)
+            std::printf("DIAG   unit %d: heading %+.3f deg, tilt N %+.3f E %+.3f deg\n", phase, turn[2], turn[0],
+                        turn[1]);
+    }
+    double tot[3];
+    dTurn(q0, f.quat(), tot);
+    std::printf("DIAG   epoch total: used pr %d rr %d, rejected pr %d rr %d; heading %+.3f deg, tilt N %+.3f E "
+                "%+.3f deg\n",
+                sh.job_.rs.used_pr, sh.job_.rs.used_rr, sh.job_.rs.rejected_pr, sh.job_.rs.rejected_rr, tot[2],
+                tot[0], tot[1]);
+}
+
+struct GuardStats
+{
+    int epochs = 0, blocked_pr = 0, blocked_dop = 0, refused = 0, tightened = 0, rejected = 0, majority = 0;
+    std::vector<double> majority_tow;   // the epochs the majority check dropped (time of week, s)
+};
+
+// --compare-sequential: one boost epoch's two verdicts, from the same state
+struct ScreenCmp
+{
+    double tow = 0.0, t_flight = 0.0, g = 0.0;
+    bool apogee = false;          // the apogee call already made (the firmware never screens then)
+    bool fw_screened = false, fw_drop = false;
+    int fw_rr = 0, fw_refused = 0;
+    int seq_used = 0, seq_rej = 0;
+    bool seq_drop = false;
+    int meas = 0, seq_used_pr = 0, seq_rej_pr = 0;
+    int fw_dry_used = -1, fw_dry_rej = 0;   // the firmware's own scratch-copy counts (-1: not worked through)
+};
+
+// An epoch worked unit by unit with the boost safeguards (the epoch held out of the step that would have applied it)
+void guardedEpoch(RawGnssShadow& sh, const BuiltEpoch& b, int64_t t_us, uint8_t flags, const Args& a, GuardStats& gs)
+{
+    RawGnssEKF<float>& f = sh.ekf_;
+    const double t = t_us * 1e-6;
+    const double te = b.mcu_us * 1e-6;
+    const double gpk = static_cast<double>(f.g_peak_);
+    const bool boost = gpk > a.guard_g;
+    const RawGnssEKFParams saved = f.p_;
+    bool block = false;
+    bool hold_only = false;   // (a3vh): held from the attitude, never dropped
+    if (boost)
+    {
+        gs.epochs++;
+        int npr = 0;
+        for (int i = 0; i < b.n; ++i)
+            npr += b.meas[i].has_pr ? 1 : 0;
+        if (a.min_pr > 0 && npr < a.min_pr)
+        {
+            block = true;
+            gs.blocked_pr++;
+        }
+        if ((a.dop_rms_mps > 0.0 || a.dv_max_mps > 0.0 || a.dv_sigma > 0.0 || a.dv_vert_max > 0.0 ||
+             a.dv_vert_hold > 0.0) && !block)
+        {
+            // the epoch's Dopplers against the filter, a common velocity and clock rate fitted to them: their
+            // spread about the fit
+            const double tau = f.p_.rr_lag_s > 0.0 ? f.p_.rr_lag_s : 0.0;
+            const double ag = t - te;
+            float dp_e[3], dv_e[3], dp_l[3], dv_l[3];
+            f.historyChange(ag, dv_e, dp_e);
+            f.historyChange(ag + tau, dv_l, dp_l);
+            double r[3], v[3], Tm[3][3], r_e[3], v_e[3];
+            f.receiverState(r, v, Tm);
+            for (int i = 0; i < 3; ++i)
+            {
+                double sp = 0.0, sv = 0.0;
+                for (int j = 0; j < 3; ++j)
+                {
+                    sp += Tm[j][i] * dp_e[j];
+                    sv += Tm[j][i] * dv_e[j];
+                }
+                r_e[i] = r[i] - sp;
+                v_e[i] = v[i] - sv;
+            }
+            double vr[3], v_l[3];
+            for (int i = 0; i < 3; ++i)
+                vr[i] = Tm[0][i] * f.v_[0] + Tm[1][i] * f.v_[1] + Tm[2][i] * f.v_[2];
+            for (int i = 0; i < 3; ++i)
+                v_l[i] = vr[i] - (Tm[0][i] * dv_l[0] + Tm[1][i] * dv_l[1] + Tm[2][i] * dv_l[2]);
+            double HtH[4][4] = {}, Hty[4] = {}, ys[RawEpoch::kMaxObs], H[RawEpoch::kMaxObs][4];
+            int n = 0;
+            for (int i = 0; i < b.n && n < RawEpoch::kMaxObs; ++i)
+            {
+                const RawMeas& mi = b.meas[i];
+                if (!mi.has_rr)
+                    continue;
+                DLos L;
+                dLineOfSight(mi.sat_pos, mi.sat_vel, r_e, v_e, L);
+                DLos Lr = L;
+                Lr.rate = 0.0;
+                for (int k = 0; k < 3; ++k)
+                    Lr.rate += L.u[k] * (L.vs[k] - v_l[k]);
+                const double pred = tau > 0.0 ? Lr.rate - tau * dSatRangeAccel(mi, Lr, v_l) : Lr.rate;
+                ys[n] = mi.rr - (pred + static_cast<double>(f.clk_d_));
+                H[n][0] = -L.u[0];
+                H[n][1] = -L.u[1];
+                H[n][2] = -L.u[2];
+                H[n][3] = 1.0;
+                for (int j = 0; j < 4; ++j)
+                {
+                    Hty[j] += H[n][j] * ys[n];
+                    for (int k = 0; k < 4; ++k)
+                        HtH[j][k] += H[n][j] * H[n][k];
+                }
+                n++;
+            }
+            if (n >= (a.dop_rms_mps > 0.0 ? 5 : 4))
+            {
+                // solve the 4x4 normal equations (Gauss-Jordan)
+                double M[4][5];
+                for (int j = 0; j < 4; ++j)
+                {
+                    for (int k = 0; k < 4; ++k)
+                        M[j][k] = HtH[j][k];
+                    M[j][4] = Hty[j];
+                }
+                bool ok = true;
+                for (int c = 0; c < 4 && ok; ++c)
+                {
+                    int piv = c;
+                    for (int r2 = c + 1; r2 < 4; ++r2)
+                        if (std::fabs(M[r2][c]) > std::fabs(M[piv][c]))
+                            piv = r2;
+                    if (std::fabs(M[piv][c]) < 1e-9)
+                    {
+                        ok = false;
+                        break;
+                    }
+                    for (int k = 0; k < 5; ++k)
+                        std::swap(M[c][k], M[piv][k]);
+                    for (int r2 = 0; r2 < 4; ++r2)
+                    {
+                        if (r2 == c)
+                            continue;
+                        const double fct = M[r2][c] / M[c][c];
+                        for (int k = 0; k < 5; ++k)
+                            M[r2][k] -= fct * M[c][k];
+                    }
+                }
+                if (ok)
+                {
+                    double x[4];
+                    for (int j = 0; j < 4; ++j)
+                        x[j] = M[j][4] / M[j][j];
+                    double ss = 0.0;
+                    for (int i = 0; i < n; ++i)
+                    {
+                        double e = ys[i];
+                        for (int j = 0; j < 4; ++j)
+                            e -= H[i][j] * x[j];
+                        ss += e * e;
+                    }
+                    const double rms = std::sqrt(ss / std::max(1, n - 4));
+                    const double dv = std::sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2]);
+                    // the threshold: dv_max, or dv_sigma of the filter's own velocity 1-sigma when that is larger
+                    // (a filter that has drifted in boost, e.g. on a magnetometer 40 deg off, is not a bad epoch)
+                    double dv_thr = a.dv_max_mps;
+                    if (a.dv_sigma > 0.0)
+                    {
+                        const double sv = std::sqrt(std::max(0.0, static_cast<double>(f.P(3, 3) + f.P(4, 4) +
+                                                                                       f.P(5, 5))));
+                        dv_thr = std::max(dv_thr, a.dv_sigma * sv);
+                    }
+                    // the fitted correction's down component (Tm's rows: N, E, D in ECEF)
+                    const double dv_down = Tm[2][0] * x[0] + Tm[2][1] * x[1] + Tm[2][2] * x[2];
+                    if (std::getenv("RAW_REPLAY_DVLOG"))
+                        std::fprintf(stderr, "DV tow %.1f n %d rms %.2f dv %.2f down %+.2f\n", b.tow_s, n, rms, dv, dv_down);
+                    if ((a.dop_rms_mps > 0.0 && rms > a.dop_rms_mps) || (dv_thr > 0.0 && dv > dv_thr) ||
+                        (a.dv_vert_max > 0.0 && std::fabs(dv_down) > a.dv_vert_max))
+                    {
+                        block = true;
+                        gs.blocked_dop++;
+                    }
+                    else if (a.dv_vert_hold > 0.0 && std::fabs(dv_down) > a.dv_vert_hold)
+                    {
+                        hold_only = true;     // the attitude held out, the rest fused
+                        gs.blocked_dop++;
+                    }
+                }
+            }
+            else if (n > 0 && !a.dop_thin_pass)
+            {
+                // too few to judge their agreement: held out as well (--guard-dop-thin-pass: passed)
+                block = true;
+                gs.blocked_dop++;
+            }
+        }
+        if (hold_only)
+            block = true;
+        else if (block && a.reject_epoch)
+        {
+            // (a4) the whole epoch dropped: nothing of it reaches the filter. The IMU peak restarts as it does when
+            // an epoch is used (startJob takes it): "boost" is the peak since the last epoch, used or not
+            f.takeGPeak();
+            gs.rejected++;
+            return;
+        }
+        if (block)
+        {
+            // GNSS keeps the velocity, position and clock; the attitude gets cos^4(pitch) of it: nothing near vertical
+            f.p_.att_gate_cos4 = true;
+            f.p_.att_gate_vertical = false;
+        }
+        if (a.gate_chi2 > 0.0 && gpk > a.tight_g)
+        {
+            f.p_.gate_chi2 = a.gate_chi2;
+            gs.tightened++;
+        }
+    }
+    // (a6) the epoch judged by its own measurements after the gate has seen them: the filter as it was before it,
+    // kept in case most of its range rates are refused
+    std::unique_ptr<RawGnssEKF<float>> keep_epoch;
+    if (boost && a.majority)
+        keep_epoch.reset(new RawGnssEKF<float>(f));
+    sh.pend_built_[sh.pb_head_] = b;
+    sh.npend_built_ = 1;
+    sh.startJob(te, flags);
+    // the heading budget for this epoch (b)
+    double budget = 1e9;
+    if (boost && a.step_deg > 0.0)
+        budget = a.step_deg;
+    if (boost && a.step_sigma > 0.0)
+    {
+        float att[3];
+        f.attSigmaNed(att);
+        budget = std::min(budget, a.step_sigma * att[2] * kR2D);
+    }
+    float q0[4];
+    for (int i = 0; i < 4; ++i)
+        q0[i] = f.quat()[i];
+    for (int guard = 0; sh.job_.active && guard < 400; ++guard)
+    {
+        const int phase = sh.job_.phase;
+        if (phase == RawGnssShadow::kJobFuse && budget < 1e8)
+        {
+            std::unique_ptr<RawGnssEKF<float>> keep(new RawGnssEKF<float>(f));
+            const RawGnssStats rs_keep = sh.job_.rs;
+            sh.jobUnit(t);
+            double tot[3];
+            dTurn(q0, f.quat(), tot);
+            if (std::fabs(tot[2]) > budget)
+            {
+                // this satellite would turn the heading past the epoch's budget: refused, as if never fused
+                const int fused = sh.job_.fused;
+                const int ph = sh.job_.phase;
+                f = *keep;
+                sh.job_.rs = rs_keep;
+                sh.job_.fused = fused;
+                sh.job_.phase = ph;
+                gs.refused++;
+            }
+        }
+        else
+        {
+            sh.jobUnit(t);
+        }
+    }
+    if (keep_epoch && (sh.job_.rs.rejected_rr > sh.job_.rs.used_rr ||
+                       (a.majority_half && sh.job_.rs.rejected_rr > 0 && sh.job_.rs.rejected_rr >= sh.job_.rs.used_rr)))
+    {
+        // (a6) more of its range rates refused than used: a receiver that lost track (c30's T+1 had 4 of 7 refused
+        // and the 3 it let through turned the heading 23 deg); the epoch is dropped whole, the IMU peak restarted
+        f = *keep_epoch;
+        f.takeGPeak();
+        gs.majority++;
+        gs.majority_tow.push_back(b.tow_s);
+    }
+    // the gates and the innovation gate back as the configuration (and act's launch edge) left them
+    f.p_.att_gate_cos4 = saved.att_gate_cos4;
+    f.p_.att_gate_vertical = saved.att_gate_vertical;
+    f.p_.gate_chi2 = saved.gate_chi2;
+}
+
+}  // namespace
+
+int main(int argc, char** argv)
+{
+    Args a;
+    if (!parseArgs(argc, argv, a))
+    {
+        usage();
+        return 2;
+    }
+    Input in;
+    if (!readInput(a.in, in) || in.s.size() < 20)
+    {
+        std::fprintf(stderr, "cannot read %s (or no start state)\n", a.in.c_str());
+        return 1;
+    }
+    const bool have_pnav = in.pnav.size() >= 35;   // PNAV: extract.py's 35 values (below)
+    const bool have_pcov = in.pcov.size() == 190;
+
+    // ---- the configuration, as startRawShadow() builds it, with the bench flags
+    RawGnssShadow::Config cfg;
+#if !RAW_REPLAY_OLD
+    GnssReceiverProfile rx = lc86gProfile();
+    if (a.carrier >= 0)
+        rx.cr_mode = static_cast<uint8_t>(a.carrier);
+    if (a.half_cycle_repair >= 0)
+        rx.cr_half_cycle = a.half_cycle_repair ? kHalfCycleRepair : kHalfCycleReject;
+    if (a.rr_dyn_sigma >= 0.0)
+        rx.rr_dyn_sigma = a.rr_dyn_sigma;
+#if RAW_REPLAY_DYNMEM
+    if (a.rr_dyn_tau_s >= 0.0)
+        rx.rr_dyn_tau_s = a.rr_dyn_tau_s;
+#else
+    if (a.rr_dyn_tau_s >= 0.0)
+        std::fprintf(stderr, "WARNING: this build has no Doppler settling (RAW_REPLAY_DYNMEM=OFF): --rr-dyn-tau-s is "
+                             "ignored\n");
+#endif
+    applyReceiverProfile(rx, cfg);
+#else
+    // the rig's r20-r26 code (aef947c5): no receiver profile, no carrier, no full gate or tilt floor
+    if (a.carrier > 0 || a.gate_full || a.tilt_sigma_deg > 0.0)
+        std::fprintf(stderr, "WARNING: this build is the old code: --carrier, --gate-full and --tilt-sigma-deg do "
+                             "not exist in it and are ignored\n");
+#endif
+    cfg.primary = true;
+    cfg.min_step_s = 0.01;
+    cfg.epoch_slice_us = 2500.0;
+    cfg.external_build = true;
+    cfg.heading_mode = static_cast<uint8_t>(a.heading_mode);
+    cfg.heading_pad_sigma_deg = a.pad_sigma_deg;
+    cfg.heading_handoff_deg = a.handoff_deg;
+#if !RAW_REPLAY_OLD
+    // act's gate in flight: 0 the heading's, 1 whole from launch (A), 2 the heading's until the apogee call and
+    // whole from it (H) -- TR_BENCH_HEADING_GATE_FULL
+    cfg.heading_gate = static_cast<uint8_t>(a.gate_full);
+    cfg.heading_launch_tilt_sigma_deg = a.tilt_sigma_deg;
+    if (a.boost_screen >= 0)
+        cfg.boost_screen = static_cast<uint8_t>(a.boost_screen);
+    if (a.boost_screen_g >= 0.0)
+        cfg.boost_screen_g = a.boost_screen_g;   // 0: every epoch before the call
+    if (a.pad_sigma_fallback_deg > 0.0)
+        cfg.heading_pad_sigma_fallback_deg = a.pad_sigma_fallback_deg;
+    if (a.mag_recent_s >= 0.0)
+        cfg.heading_mag_recent_s = a.mag_recent_s;
+    if (a.level_heading_free >= 0)
+        cfg.ekf.level_heading_free = a.level_heading_free != 0;
+#endif
+    if (a.max_epoch_age_s > 0.0)
+        cfg.max_epoch_age_s = a.max_epoch_age_s;
+#if RAW_REPLAY_FITGATE
+    if (a.rr_fit_gate >= 0.0)
+        cfg.ekf.rr_fit_gate = a.rr_fit_gate;
+#else
+    if (a.rr_fit_gate >= 0.0)
+        std::fprintf(stderr, "WARNING: this build has no fit gate (RAW_REPLAY_FITGATE=OFF): --rr-fit-gate is ignored\n");
+#endif
+#if RAW_REPLAY_LATCH
+    if (a.vert_release_mps >= 0.0)
+        cfg.vert_release_mps = a.vert_release_mps;
+#else
+    if (a.vert_release_mps >= 0.0)
+        std::fprintf(stderr, "WARNING: this build has no latch (RAW_REPLAY_LATCH=OFF): --vert-release-mps is ignored\n");
+#endif
+#if RAW_REPLAY_VCHECK
+    if (a.vert_check_mps >= 0.0)
+        cfg.vert_check_mps = a.vert_check_mps;
+    if (a.boost_screen_window_s >= 0.0)
+        cfg.boost_screen_window_s = a.boost_screen_window_s;
+#else
+    if (a.vert_check_mps >= 0.0 || a.boost_screen_window_s >= 0.0)
+        std::fprintf(stderr, "WARNING: this build has no vertical check or boost window (RAW_REPLAY_VCHECK=OFF): "
+                             "--vert-check-mps and --boost-screen-window-s are ignored\n");
+#endif
+
+    std::unique_ptr<RawGnssShadow> shp(new RawGnssShadow(cfg));
+    std::unique_ptr<RawGnssMeasStage> stp(new RawGnssMeasStage(RawGnssShadow::stageConfig(cfg)));
+    RawGnssShadow& sh = *shp;
+    RawGnssMeasStage& stage = *stp;
+    if (a.fc_unit_us > 0.0)
+    {
+        g_fake_unit_us = a.fc_unit_us;
+        sh.setClock(&fakeClock);
+    }
+    lc86::Lc86Parser parser;
+
+    // ---- the pad's ephemerides and ionosphere (the pad context)
+    int eph_pad = 0;
+    for (const auto& fr : in.peph)
+    {
+        if (fr.size() <= rtcm3::kFrameOverhead)
+            continue;
+        const uint8_t* payload = fr.data() + 3;
+        const size_t len = fr.size() - rtcm3::kFrameOverhead;
+        if (stage.onEphemeris(payload, len))
+            eph_pad++;
+        sh.onEphemeris(payload, len);
+    }
+    // PNAV: 0 the launch tick, 1-3 lla, 4-6 velocity, 7-10 quaternion, 11-13 accelerometer bias, 14-16 gyro
+    // bias, 17 clock bias, 18 drift, 19-20 Galileo and BeiDou offsets, 21 the barometer's offset, 22
+    // declination, 23 field, 24-31 the broadcast ionosphere, 32 its day, 33 the ionosphere's source, 34 flags
+    if (have_pnav && (static_cast<int>(in.pnav[34]) & 0x08))
+    {
+        ShadowIono io{};
+        for (int i = 0; i < 8; ++i)
+            io.raw[i] = static_cast<int8_t>(in.pnav[24 + i]);
+        io.gps_day = static_cast<uint16_t>(in.pnav[32]);
+        stage.setIono(io);
+        sh.setIono(io);
+    }
+    const int iono_source = have_pnav ? static_cast<int>(in.pnav[33]) : -1;
+    std::fprintf(stderr, "pad context: %s; ionosphere %s; declination %s\n", have_pnav ? "yes" : "NO",
+                 (have_pnav && (static_cast<int>(in.pnav[34]) & 0x08)) ? "broadcast restored" : "none",
+                 (have_pnav && (static_cast<int>(in.pnav[34]) & 0x10)) ? "restored" : "none");
+    if (iono_source == 2)
+        std::fprintf(stderr, "WARNING: this flight's ionosphere was the pad survey's: not restored, the replay "
+                             "flies without it\n");
+
+    // ---- the start: the first pad record, turned by the magnetometer's error difference
+    const double* S = in.s.data();
+    const int64_t t0_us = static_cast<int64_t>(S[0]);
+    const double dpsi = (a.mag_error_deg - a.recorded_mag_error_deg) * kD2R;
+    const double qz[4] = {std::cos(0.5 * dpsi), 0.0, 0.0, std::sin(0.5 * dpsi)};   // about NED down
+    double q0[4] = {S[7], S[8], S[9], S[10]}, qs[4];
+    quatMul(qz, q0, qs);
+    if (a.have_pad_quat)   // the caller's pad attitude, final (its magnetometer error included)
+        for (int i = 0; i < 4; ++i)
+            qs[i] = a.pad_quat[i];
+    const double cz = std::cos(dpsi), sz = std::sin(dpsi);
+    double v0[3] = {cz * S[4] - sz * S[5], sz * S[4] + cz * S[5], S[6]};
+
+    ShadowSeed seed{};
+    seed.time_us = static_cast<uint32_t>(t0_us);
+    for (int i = 0; i < 3; ++i)
+    {
+        seed.lla[i] = S[1 + i];
+        seed.vel_ned[i] = static_cast<float>(v0[i]);
+        seed.gyro_bias[i] = static_cast<float>(S[14 + i] - a.pad_wb_sub[i]);
+    }
+    for (int i = 0; i < 4; ++i)
+        seed.quat[i] = static_cast<float>(qs[i]);
+    seed.on_pad = 1;
+    seed.pad_valid = 0;   // the survey's reference: not used with the broadcast ionosphere
+    if (have_pnav && (static_cast<int>(in.pnav[34]) & 0x10))
+    {
+        seed.declination_rad = static_cast<float>(in.pnav[22] + dpsi);
+        seed.field_ut = static_cast<float>(in.pnav[23]);
+        seed.have_declination = 1;
+    }
+    seed.start_gen = 1;
+
+    // the covariance: the pad context's (the launch tick), its velocity block
+    // scaled to the first record's sigmas, the NED blocks turned with the state
+    float P0[19][19] = {};
+    bool have_p0 = false;
+    if (have_pcov)
+    {
+        int k = 0;
+        for (int i = 0; i < 19; ++i)
+            for (int j = i; j < 19; ++j)
+            {
+                P0[i][j] = P0[j][i] = static_cast<float>(in.pcov[k]);
+                k++;
+            }
+        const double* sig = &S[23];   // pos n e d, vel n e d (the first record's)
+        double d[19];
+        for (int i = 0; i < 19; ++i)
+            d[i] = 1.0;
+        for (int i = 3; i < 6; ++i)
+            if (sig[i] > 0.0 && P0[i][i] > 0.0f)
+                d[i] = sig[i] / std::sqrt(static_cast<double>(P0[i][i]));
+        for (int i = 0; i < 19; ++i)
+            for (int j = 0; j < 19; ++j)
+                P0[i][j] = static_cast<float>(P0[i][j] * d[i] * d[j]);
+        have_p0 = true;
+    }
+    if (have_p0 && dpsi != 0.0)
+    {
+        // T = blockdiag(Rz, Rz, I...): position and velocity are NED, the attitude error is the body's
+        double T[19][19] = {};
+        for (int i = 0; i < 19; ++i)
+            T[i][i] = 1.0;
+        for (int b = 0; b < 2; ++b)
+        {
+            const int o = 3 * b;
+            T[o][o] = cz;
+            T[o][o + 1] = -sz;
+            T[o + 1][o] = sz;
+            T[o + 1][o + 1] = cz;
+        }
+        double TP[19][19] = {};
+        for (int i = 0; i < 19; ++i)
+            for (int j = 0; j < 19; ++j)
+                for (int k = 0; k < 19; ++k)
+                    TP[i][j] += T[i][k] * P0[k][j];
+        for (int i = 0; i < 19; ++i)
+            for (int j = 0; j < 19; ++j)
+            {
+                double s = 0.0;
+                for (int k = 0; k < 19; ++k)
+                    s += TP[i][k] * T[j][k];
+                P0[i][j] = static_cast<float>(s);
+            }
+    }
+
+    if (a.reanchor && dpsi != 0.0)
+        std::fprintf(stderr, "WARNING: --reanchor takes the recorded launch state, which carries the recorded "
+                             "magnetometer error: not done with a different one\n");
+
+    // ---- the CSV
+    FILE* out = std::fopen(a.out.c_str(), "w");
+    if (!out)
+    {
+        std::fprintf(stderr, "cannot write %s\n", a.out.c_str());
+        return 1;
+    }
+    std::fprintf(out,
+                 "t_mcu_s,t_s,running,in_flight,qw,qx,qy,qz,lat_deg,lon_deg,h_m,n_m,e_m,d_m,vn,ve,vd,"
+                 "sig_tilt_n_deg,sig_tilt_e_deg,sig_hdg_deg,sig_pn,sig_pe,sig_pd,sig_vn,sig_ve,sig_vd,"
+                 "ab_x,ab_y,ab_z,wb_x_dps,wb_y_dps,wb_z_dps,clk_b_m,clk_d_mps,healthy,finite,gnss_aided,baro_aided,"
+                 "epochs,used_pr,used_rr,rej_pr,rej_rr,last_meas,age_ms,eph_sats,tracked,cr_built,cr_in,cr_used,"
+                 "cr_half,cr_other,levelled,zupts,baro_fused,baro_held,mag_fused,hdg_fit_psi_deg,hdg_fit_sig_deg,"
+                 "hdg_handoffs,stale\n");
+
+    // the pad's NED (the truth's origin)
+    const double A = 6378137.0, E2 = 0.0066943799901;
+    const double s0 = std::sin(a.pad_lat * kD2R);
+    const double w0 = std::sqrt(1.0 - E2 * s0 * s0);
+    const double RN = A * (1.0 - E2) / (w0 * w0 * w0) + a.pad_h;
+    const double RE = A / w0 + a.pad_h;
+
+    // the clock line: each K event from its time on; before the log's first one, that first one (the lines move
+    // by a millisecond or so a minute) -- the driver's earlier lines never reached the log
+    ClockLine line;
+    for (const Event& e : in.ev)
+        if (e.kind == 'K')
+        {
+            line.valid = e.flags != 0;
+            line.gps0_s = e.v[0];
+            line.mcu0_us = static_cast<int64_t>(e.v[1]);
+            line.a_s = e.v[2];
+            line.t_ref_s = e.v[3];
+            line.drift = e.v[4];
+            line.latency_s = e.v[5];
+            break;
+        }
+    const bool log_has_line = line.valid;
+    int fix_week = 0;
+    uint32_t fix_tow_ms = 0;
+    bool have_fix = false;
+    struct PendingEpoch
+    {
+        int64_t release_us;
+        TimedRawEpoch e;
+    };
+    std::vector<PendingEpoch> gnss_task;   // epochs the GNSS task has not built yet
+    std::unique_ptr<BuiltEpoch> slot(new BuiltEpoch());
+    std::unique_ptr<TimedRawEpoch> scratch(new TimedRawEpoch());
+    BaroGatePolicy baro_gate;
+    const double p_ground = in.meta.count("ground_pressure_pa") ? std::atof(in.meta["ground_pressure_pa"].c_str())
+                                                                : -1.0;
+    double bmp_p = 0.0;
+    int64_t bmp_t = 0;
+    bool bmp_new = false;
+    double mag_v[3] = {};
+    int64_t mag_t = 0;
+    bool mag_new = false;
+    bool started = false, restored = false;
+    int64_t last_seed_us = 0;
+    uint32_t last_step = 0;
+    int rows = 0;
+    int first_epochs_seeded = 0;
+    double first_tow = -1.0;
+    int epochs_decoded = 0, epochs_untimed = 0, eph_flight = 0, ages_matched = 0, epochs_line_fallback = 0;
+    int epochs_cut = 0, epochs_corrupted_sats = 0;
+    int rates_seen = 0, rates_relock_dropped = 0;
+    bool corrupted = false;
+    bool have_line_ever = false;
+    const int64_t t_inflight = in.meta.count("t_inflight_us") ? std::atoll(in.meta["t_inflight_us"].c_str()) : -1;
+    bool reanchored = false;
+    bool gate_switched = false;
+    const int64_t t_apogee_flag = in.meta.count("t_apogee_flag_us") ? std::atoll(in.meta["t_apogee_flag_us"].c_str()) : -1;
+    int64_t gate_switch_us = -1;
+    if (a.gate_full_from_apogee)
+        gate_switch_us = t_apogee_flag;
+    else if (a.gate_full_at_s > -1.0e8)
+        gate_switch_us = static_cast<int64_t>((a.gate_full_at_s - a.t_base_s) * 1.0e6);
+    if ((a.gate_full_from_apogee || a.gate_full_at_s > -1.0e8) && (a.heading_mode != 2 || a.gate_full))
+        std::fprintf(stderr, "WARNING: a gate switched in flight only means something in act with the heading-only "
+                             "gate (--heading-mode 2 --gate-full 0)\n");
+    double pitch_vote_t = -1e9, vel_vote_t = -1e9;
+    int64_t act_at_us = -1;
+    if (a.act_from_apogee)
+        act_at_us = t_apogee_flag;
+    else if (a.act_at_s > -1.0e8)
+        act_at_us = static_cast<int64_t>((a.act_at_s - a.t_base_s) * 1.0e6);
+    if (act_at_us > 0 && a.heading_mode != 1)
+        std::fprintf(stderr, "WARNING: act opened late is meant to run in observe (--heading-mode 1)\n");
+    bool act_opened = false, act_closed = false;
+    float last_acc[3] = {};
+    GuardStats gstats;
+    std::vector<double> fw_dropped_tow;    // the epochs the firmware's boost screen dropped (time of week, s)
+    std::vector<double> fw_dropped_t;      //   and their flight times (s)
+    std::vector<double> vert_dropped_t;    // the epochs its vertical check dropped (flight time, s)
+    std::vector<ScreenCmp> cmps;           // --compare-sequential
+    uint8_t last_flags = 0;
+    int nonfinite_rows = 0, unhealthy_rows = 0;
+
+    auto writeRow = [&](int64_t t_us) {
+        const RawGnssEKF<float>& e = sh.filter();
+        const RawGnssShadow::Stats& st = sh.stats();
+        const double* lla = e.lla();
+        const float* v = e.velNed();
+        const float* q = e.quat();
+        float att[3];
+        e.attSigmaNed(att);
+        bool finite = true;
+        for (int i = 0; i < 3; ++i)
+            finite = finite && std::isfinite(lla[i]) && std::isfinite(v[i]);
+        for (int i = 0; i < 4; ++i)
+            finite = finite && std::isfinite(q[i]);
+        ShadowNav nav;
+        sh.navState(nav);
+        const bool healthy = nav.running && finite;
+        if (!finite)
+            nonfinite_rows++;
+        if (!healthy)
+            unhealthy_rows++;
+        const double n_m = (lla[0] * kR2D - a.pad_lat) * kD2R * RN;
+        const double e_m = (lla[1] * kR2D - a.pad_lon) * kD2R * RE * std::cos(a.pad_lat * kD2R);
+        const double d_m = -(lla[2] - a.pad_h);
+        const float* ab = e.accelBias();
+        const float* wb = e.gyroBias();
+        std::fprintf(out,
+                     "%.6f,%.6f,%d,%d,%.7f,%.7f,%.7f,%.7f,%.9f,%.9f,%.4f,%.4f,%.4f,%.4f,%.5f,%.5f,%.5f,"
+                     "%.5f,%.5f,%.5f,%.4f,%.4f,%.4f,%.5f,%.5f,%.5f,"
+                     "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.3f,%.5f,%d,%d,%d,%d,"
+                     "%u,%d,%d,%d,%d,%d,%.1f,%d,%d,%u,%u,%u,%u,%u,%d,%u,%u,%u,%u,%.3f,%.3f,%u,%u\n",
+                     t_us * 1e-6, t_us * 1e-6 + a.t_base_s, sh.running() ? 1 : 0,
+                     (last_flags & kShadowInFlight) ? 1 : 0, q[0], q[1], q[2], q[3], lla[0] * kR2D, lla[1] * kR2D,
+                     lla[2], n_m, e_m, d_m, v[0], v[1], v[2], att[0] * kR2D, att[1] * kR2D, att[2] * kR2D,
+                     e.sigma(0), e.sigma(1), e.sigma(2), e.sigma(3), e.sigma(4), e.sigma(5), ab[0], ab[1], ab[2],
+                     wb[0] * kR2D, wb[1] * kR2D, wb[2] * kR2D, e.clockBias(), e.clockDrift(), healthy ? 1 : 0,
+                     finite ? 1 : 0, nav.gnss_aided, nav.baro_aided, st.epochs_applied, st.last.used_pr,
+                     st.last.used_rr, st.last.rejected_pr, st.last.rejected_rr, st.last_meas, st.last_age_s * 1000.0,
+                     sh.ephemerisSatellites(), st.tracked, CR(st.cr_built), CR(st.cr_in), CR(st.cr_used),
+                     CR(st.cr_half), CR(st.cr_other), sh.levelled_ ? 1 : 0, st.zupts + st.pad_zupts, st.baro_fused, st.baro_held,
+                     st.mag_fused, st.heading_last.psi * kR2D, st.heading_last.sigma * kR2D, st.heading_handoffs,
+                     st.epochs_stale);
+        rows++;
+    };
+
+    for (const Event& ev : in.ev)
+    {
+        // the GNSS task: each epoch built once its build is done (the filter's
+        // position at that time), handed to the filter's task
+        if (!gnss_task.empty())
+        {
+            size_t k = 0;
+            for (; k < gnss_task.size() && gnss_task[k].release_us <= ev.t_us; ++k)
+            {
+                ShadowNav nav;
+                sh.navState(nav);
+                if (stage.offer(gnss_task[k].e, nav, *slot))
+                    sh.onBuilt(*slot);
+                sh.onMeasStats(stage.stats());
+            }
+            gnss_task.erase(gnss_task.begin(), gnss_task.begin() + static_cast<long>(k));
+        }
+
+        switch (ev.kind)
+        {
+        case 'B':
+            bmp_t = ev.t_us;
+            bmp_p = ev.v[0];
+            bmp_new = true;
+            break;
+        case 'M':
+            mag_t = ev.t_us;
+            for (int i = 0; i < 3; ++i)
+                mag_v[i] = ev.v[i];
+            mag_new = true;
+            break;
+        case 'F':
+            fix_week = static_cast<int>(ev.v[0]);
+            fix_tow_ms = static_cast<uint32_t>(ev.v[1]);
+            have_fix = true;
+            break;
+        case 'K':
+            have_line_ever = true;
+            line.valid = ev.flags != 0;
+            line.gps0_s = ev.v[0];
+            line.mcu0_us = static_cast<int64_t>(ev.v[1]);
+            line.a_s = ev.v[2];
+            line.t_ref_s = ev.v[3];
+            line.drift = ev.v[4];
+            line.latency_s = ev.v[5];
+            break;
+        case 'R':
+        {
+            for (size_t i = 0; i < ev.bytes.size(); ++i)
+            {
+                const lc86::Event pe = parser.feed(ev.bytes[i]);
+                if (pe == lc86::Event::RTCM)
+                {
+                    const size_t n = parser.rtcmFrameLen();
+                    if (n > rtcm3::kFrameOverhead)
+                    {
+                        const uint8_t* payload = parser.rtcmFrame() + 3;
+                        const size_t len = n - rtcm3::kFrameOverhead;
+                        const uint16_t mt = rtcm3::messageType(payload, len);
+                        if ((mt == 1019 || mt == 1046 || mt == 1042) && len <= 72)
+                        {
+                            stage.onEphemeris(payload, len);
+                            sh.onEphemeris(payload, len);
+                            eph_flight++;
+                        }
+                    }
+                }
+                else if (pe == lc86::Event::MSM_EPOCH)
+                {
+                    const rtcm3::MsmEpoch& me = parser.msmEpoch();
+                    TimedRawEpoch& te = *scratch;
+                    te = TimedRawEpoch();
+                    if (!lc86::rawEpochFromMsm(me, te.epoch))
+                        continue;
+                    te.arrival_us = ev.t_us;
+                    if (have_fix && fix_week != 0)
+                    {
+                        const double gps_s =
+                            lc86::epochGpsSeconds(me.gps_tow_ms, static_cast<uint16_t>(fix_week), fix_tow_ms);
+                        te.gps_week = static_cast<uint16_t>(std::floor(gps_s / 604800.0));
+                        int64_t mcu = 0;
+                        if (line.mcuAt(gps_s, mcu))
+                            te.mcu_us = mcu;
+                    }
+                    if (te.mcu_us != 0)
+                        te.mcu_us += static_cast<int64_t>(a.epoch_shift_ms * 1000.0);
+                    if (te.mcu_us == 0 && !have_line_ever && !log_has_line && a.no_line_ms >= 0.0)
+                    {
+                        te.mcu_us = ev.t_us + static_cast<int64_t>(a.no_line_ms * 1000.0);
+                        epochs_line_fallback++;
+                    }
+                    epochs_decoded++;
+                    if (te.mcu_us == 0)
+                        epochs_untimed++;
+                    {
+                        const double t_gps = te.epoch.tow_s - a.truth_t0_tow;   // its GPS time, flight time
+                        if (t_gps >= a.cut_from_s && t_gps < a.cut_to_s)
+                        {
+                            epochs_cut++;
+                            continue;   // the receiver gave nothing
+                        }
+                        if (!corrupted && std::fabs(t_gps - a.corrupt_at_s) < 0.5)
+                        {
+                            corrupted = true;
+                            uint32_t st = 2463534242u + static_cast<uint32_t>(a.corrupt_seed) * 7919u;
+                            auto rnd = [&st]() {   // xorshift32: uniform in [0, 1)
+                                st ^= st << 13;
+                                st ^= st >> 17;
+                                st ^= st << 5;
+                                return (st & 0xFFFFFF) / 16777216.0;
+                            };
+                            int idx[RawEpoch::kMaxObs], nidx = 0;
+                            for (int i = 0; i < te.epoch.n; ++i)
+                                if (te.epoch.obs[i].has_pr && te.epoch.obs[i].has_rate)
+                                    idx[nidx++] = i;
+                            for (int c = 0; c < 3 && nidx > 0; ++c)
+                            {
+                                const int j = static_cast<int>(rnd() * nidx) % nidx;
+                                RawObs& o = te.epoch.obs[idx[j]];
+                                o.rate_mps += (rnd() < 0.5 ? -1.0 : 1.0) * (30.0 + 40.0 * rnd());
+                                o.pr_m += (rnd() < 0.5 ? -1.0 : 1.0) * (20.0 + 20.0 * rnd());
+                                idx[j] = idx[--nidx];
+                                epochs_corrupted_sats++;
+                            }
+                        }
+                    }
+                    // the relock rule (--relock-min-lock-ms): until the apogee call, a young lock's range rate is
+                    // left out; its pseudorange and phase are kept
+                    for (int i = 0; i < te.epoch.n; ++i)
+                    {
+                        RawObs& o = te.epoch.obs[i];
+                        if (!o.has_rate)
+                            continue;
+                        rates_seen++;
+                        const bool after_call = t_apogee_flag > 0 && te.mcu_us != 0 && te.mcu_us >= t_apogee_flag;
+                        if (a.relock_min_lock_ms > 0.0 && !after_call &&
+                            static_cast<double>(o.lock_ms) < a.relock_min_lock_ms)
+                        {
+                            o.has_rate = false;
+                            rates_relock_dropped++;
+                        }
+                    }
+                    // the satellites the pad had: long locked, last updated an epoch ago
+                    if (first_tow < 0.0)
+                        first_tow = te.epoch.tow_s;
+                    if (started && te.epoch.tow_s - first_tow < 2.5 && first_epochs_seeded < 3)
+                    {
+                        first_epochs_seeded++;
+                        RawMeasBuilder& b = stage.builder_;
+                        RawGnssEKF<float>& f = sh.ekf_;
+                        for (int i = 0; i < te.epoch.n; ++i)
+                        {
+                            const RawObs& o = te.epoch.obs[i];
+                            if (o.sys >= 3 || o.prn >= 64 || b.seen_[o.sys][o.prn])
+                                continue;
+                            b.seen_[o.sys][o.prn] = true;
+                            b.first_[o.sys][o.prn] = te.epoch.tow_s - 600.0;
+                            b.last_[o.sys][o.prn] = te.epoch.tow_s - 1.0;
+                            const double t_prev = te.mcu_us * 1e-6 - 0.85;
+                            f.last_upd_[o.sys][o.prn][0] = t_prev;
+                            f.last_upd_[o.sys][o.prn][1] = t_prev;
+                        }
+                    }
+                    // handed over as the flight computer did: when its filter closed this epoch (the logged
+                    // age) less the slices before the close, never before the frame plus a build
+                    int64_t release = ev.t_us + static_cast<int64_t>(a.epoch_delay_ms * 1000.0);
+                    const uint32_t tow_ms = static_cast<uint32_t>(std::llround(te.epoch.tow_s * 1000.0));
+                    auto it = in.age_ms.find(tow_ms);
+                    if (a.match_ages && te.mcu_us != 0 && it != in.age_ms.end())
+                    {
+                        release = te.mcu_us + static_cast<int64_t>((it->second - a.age_lead_ms) * 1000.0);
+                        release = std::max(release, ev.t_us + 5000);
+                        ages_matched++;
+                    }
+                    gnss_task.push_back({release, te});
+                }
+            }
+            break;
+        }
+        case 'I':
+        {
+            if (ev.t_us < t0_us)
+                break;   // before the first record: nothing to start from
+            ShadowImu s{};
+            s.time_us = static_cast<uint32_t>(ev.t_us);
+            for (int i = 0; i < 3; ++i)
+            {
+                s.acc[i] = static_cast<float>(ev.v[i] - a.acc_sub[i]);
+                s.gyro[i] = static_cast<float>(ev.v[3 + i] - a.gyro_sub[i]);
+            }
+            s.flags = static_cast<uint8_t>(ev.flags);
+#if !RAW_REPLAY_OLD
+            // the flight computer's apogee call (pyro_apogee_detected: kShadowApogee), latched from the log's apogee
+            // flag on -- it latches from kinematics.apogee_flag in the same pass. The log's ticks carry no such
+            // bit; the firmware's H gate and boost screen read it
+            if (a.apogee_flag && t_apogee_flag > 0 && ev.t_us >= t_apogee_flag)
+                s.flags |= kShadowApogee;
+#endif
+            last_flags = s.flags;
+            // the magnetometer the loop handed the adapter this tick
+            if (mag_new)
+            {
+                mag_new = false;
+                ShadowMag m{};
+                m.time_us = static_cast<uint32_t>(mag_t);
+                m.flags = static_cast<uint8_t>(a.mag_flags);
+                for (int i = 0; i < 3; ++i)
+                    m.mag[i] = static_cast<float>(mag_v[i]);
+                sh.onMag(m);
+            }
+            // the seed, once a second (on the pad while not in flight)
+            if (!started || ev.t_us - last_seed_us >= 1000000)
+            {
+                last_seed_us = ev.t_us;
+                seed.time_us = static_cast<uint32_t>(ev.t_us);
+                seed.on_pad = (s.flags & (kShadowInFlight | kShadowLanded)) ? 0 : 1;
+                sh.onSeed(seed);
+            }
+            // the launch tick: the pad context's own state, if asked -- the state that tick found, so set
+            // before it steps (and before act opens the attitude at the launch edge)
+            if (a.reanchor && dpsi == 0.0 && !reanchored && have_pnav && have_pcov && t_inflight > 0 &&
+                ev.t_us >= t_inflight && sh.running())
+            {
+                reanchored = true;
+                RawGnssEKF<float>& f = sh.ekf_;
+                const double* N = in.pnav.data();
+                for (int i = 0; i < 3; ++i)
+                {
+                    f.lla_[i] = N[1 + i];
+                    f.v_[i] = static_cast<float>(N[4 + i]);
+                    f.ab_[i] = static_cast<float>(N[11 + i]);
+                    f.wb_[i] = static_cast<float>(N[14 + i]);
+                }
+                for (int i = 0; i < 4; ++i)
+                    f.q_[i] = static_cast<float>(N[7 + i]);
+                f.clk_b_ = N[17];
+                f.clk_d_ = static_cast<float>(N[18]);
+                f.isb_[0] = static_cast<float>(N[19]);
+                f.isb_[1] = static_cast<float>(N[20]);
+                int k = 0;
+                for (int i = 0; i < 19; ++i)
+                    for (int j = i; j < 19; ++j)
+                    {
+                        f.P_[i][j] = f.P_[j][i] = static_cast<float>(in.pcov[k]);
+                        k++;
+                    }
+            }
+            // the diagnosis: an epoch in the window, due at this step, is held out of it and worked unit by unit after
+            bool diag = false, guarded = false;
+            BuiltEpoch held;
+            const bool guards_on = a.min_pr > 0 || a.dop_rms_mps > 0.0 || a.dv_max_mps > 0.0 || a.dv_sigma > 0.0 ||
+                                   a.dv_vert_max > 0.0 || a.dv_vert_hold > 0.0 ||
+                                   a.step_deg > 0.0 || a.step_sigma > 0.0 || a.gate_chi2 > 0.0 || a.majority;
+            if (sh.running() && sh.npend_built_ > 0 && !sh.job_.active)
+            {
+                const BuiltEpoch& b = sh.pend_built_[sh.pb_head_];
+                const double te_f = b.mcu_us * 1e-6 + a.t_base_s;
+                const bool steps = ev.t_us * 1e-6 - sh.t_prev_ >= sh.cfg_.min_step_s - 1.0e-6;   // as onImu decides
+                if (steps && te_f >= a.diag_from_s && te_f <= a.diag_to_s && b.mcu_us * 1e-6 <= ev.t_us * 1e-6)
+                {
+                    diag = true;
+                    held = b;
+                    sh.npend_built_ = 0;
+                }
+                else if (guards_on && steps && b.mcu_us * 1e-6 <= ev.t_us * 1e-6)
+                {
+                    guarded = true;
+                    held = b;
+                    sh.npend_built_ = 0;
+                }
+            }
+            // --compare-sequential: an epoch due at this step worked first on a copy of the filter with the boost
+            // screen off -- the harness's sequential majority check, its verdict from the same state the firmware's
+            // pre-pass (on the filter itself, below) judges from
+            std::unique_ptr<RawGnssShadow> seq;
+            uint32_t cmp_tow_ms = 0;
+            double cmp_tow = 0.0, cmp_te = 0.0;
+#if !RAW_REPLAY_OLD
+            if (a.compare_sequential && !diag && !guarded && sh.running() && sh.npend_built_ > 0 && !sh.job_.active)
+            {
+                const BuiltEpoch& b = sh.pend_built_[sh.pb_head_];
+                const bool steps = ev.t_us * 1e-6 - sh.t_prev_ >= sh.cfg_.min_step_s - 1.0e-6;
+                if (steps && b.mcu_us * 1e-6 - sh.cfg_.epoch_latency_s <= ev.t_us * 1e-6)
+                {
+                    cmp_tow = b.tow_s;
+                    cmp_te = b.mcu_us * 1e-6 + a.t_base_s;
+                    cmp_tow_ms = static_cast<uint32_t>(std::llround(std::fmod(b.tow_s, 604800.0) * 1000.0));
+                    seq.reset(new RawGnssShadow(sh));
+                    seq->cfg_.boost_screen = RawGnssShadow::kScreenOff;
+                    const uint32_t applied0 = seq->stats().epochs_applied;
+                    seq->onImu(s, ev.t_us);
+                    if (seq->stats().epochs_applied != applied0 + 1)
+                        seq.reset();   // no job closed here (an epoch dropped as stale, say): nothing to compare
+                }
+            }
+            const uint32_t fw_dropped0 = sh.stats().boost_dropped;
+            const uint32_t fw_closed0 = sh.stats().epochs_applied + sh.stats().boost_dropped;
+#endif
+#if RAW_REPLAY_VCHECK
+            const uint32_t vert_dropped0 = sh.stats().vert_dropped;
+            const uint32_t vert_checked0 = sh.stats().vert_checked;
+            const uint32_t screened0 = sh.stats().boost_screened;
+            uint32_t closed0 = sh.stats().epochs_applied + sh.stats().boost_dropped + sh.stats().vert_dropped;
+#if RAW_REPLAY_LATCH
+            closed0 += sh.stats().vert_latched;
+#endif
+#endif
+            sh.onImu(s, ev.t_us);
+#if RAW_REPLAY_VCHECK
+            if (sh.stats().vert_dropped != vert_dropped0)
+                vert_dropped_t.push_back(sh.built_.mcu_us * 1e-6 + a.t_base_s);
+            uint32_t closed1 = sh.stats().epochs_applied + sh.stats().boost_dropped + sh.stats().vert_dropped;
+#if RAW_REPLAY_LATCH
+            closed1 += sh.stats().vert_latched;
+#endif
+            if (std::getenv("RAW_REPLAY_VLOG") && std::atoi(std::getenv("RAW_REPLAY_VLOG")) >= 3 && closed1 != closed0)
+            {
+                const RawGnssStats& l = sh.stats().last;
+                double g_mem = 0.0;
+#if RAW_REPLAY_DYNMEM
+                g_mem = sh.job_.g_mem;
+#endif
+                std::fprintf(stderr, "VEPOCH t %+.3f n %d %s | pr %d+%d rej | rr %d+%d rej | nis_max %.1f | g_peak %.1f "
+                                     "g_mem %.1f\n",
+                             sh.built_.mcu_us * 1e-6 + a.t_base_s, sh.built_.n,
+                             l.screen_dropped ? "DROPPED" : "fused", l.used_pr, l.rejected_pr, l.used_rr,
+                             l.rejected_rr, static_cast<double>(l.nis_max), sh.job_.g_peak, g_mem);
+                int k = 0;
+                for (int i = 0; i < sh.built_.n && k < RawEpoch::kMaxObs; ++i)
+                {
+                    const RawMeas& mi = sh.built_.meas[i];
+                    if (mi.sys > GNSS_SYS_BDS || mi.prn >= 64 || !mi.has_rr)
+                        continue;
+                    // the row's geometry: H = (-u_ned, 1), u from the receiver to the satellite; p = the
+                    // filter's velocity direction along u (a step in thrust along the velocity shows as p)
+                    const double* hr = sh.ekf_.vfit_h_[k];
+                    const double el = std::asin(std::max(-1.0, std::min(1.0, hr[2]))) * 57.29577951308232;
+                    const double az = std::atan2(-hr[1], -hr[0]) * 57.29577951308232;
+                    const double vn = static_cast<double>(sh.ekf_.v_[0]), ve = static_cast<double>(sh.ekf_.v_[1]),
+                                 vd = static_cast<double>(sh.ekf_.v_[2]);
+                    const double vm = std::sqrt(vn * vn + ve * ve + vd * vd);
+                    const double pv = vm > 1e-3 ? -(vn * hr[0] + ve * hr[1] + vd * hr[2]) / vm : 0.0;
+                    std::fprintf(stderr, "VEROW  sys %d prn %3d  y %+9.2f  s %6.2f  el %5.1f az %6.1f  p %+5.2f\n",
+                                 mi.sys, mi.prn, sh.ekf_.vfit_y_[k], sh.ekf_.vfit_s_[k], el, az < 0 ? az + 360.0 : az,
+                                 pv);
+                    k++;
+                }
+            }
+            // RAW_REPLAY_VLOG: each epoch the vertical check fitted, and each the boost screen judged
+            if (std::getenv("RAW_REPLAY_VLOG") &&
+                (sh.stats().vert_checked != vert_checked0 || sh.stats().boost_screened != screened0))
+            {
+                const RawGnssStats& r = sh.job_.rs;
+                std::fprintf(stderr, "VLOG t %+.3f tow %.1f n %d | vert %s fit %d out %d dv_down %+.2f | screen %s rr %d "
+                                     "refused %d | g_peak %.1f\n",
+                             sh.built_.mcu_us * 1e-6 + a.t_base_s, sh.built_.tow_s, sh.built_.n,
+                             sh.stats().vert_checked != vert_checked0 ? "yes" : "no", r.screen_fit_n, r.screen_fit_out,
+                             static_cast<double>(r.screen_dv_down_mps),
+                             sh.stats().boost_screened != screened0 ? "yes" : "no", r.screen_rr, r.screen_refused,
+                             sh.job_.g_peak + 1.0);
+                // RAW_REPLAY_VLOG=3: below, every closed epoch with its rows
+                // RAW_REPLAY_VLOG=2: the fit's rows (the measurements with a rate, in order), each with its
+                // innovation, its 1-sigma and whether the fit kept it
+                if (std::atoi(std::getenv("RAW_REPLAY_VLOG")) >= 2 && sh.stats().vert_checked != vert_checked0)
+                {
+                    int k = 0;
+                    for (int i = 0; i < sh.built_.n && k < RawEpoch::kMaxObs; ++i)
+                    {
+                        const RawMeas& mi = sh.built_.meas[i];
+                        if (mi.sys > GNSS_SYS_BDS || mi.prn >= 64 || !mi.has_rr)
+                            continue;
+                        std::fprintf(stderr, "VROW   sys %d prn %3d  y %+9.2f  s %6.2f  %s\n", mi.sys, mi.prn,
+                                     sh.ekf_.vfit_y_[k], sh.ekf_.vfit_s_[k], sh.ekf_.vfit_in_[k] ? "in" : "OUT");
+                        k++;
+                    }
+                }
+            }
+#endif
+#if !RAW_REPLAY_OLD
+            if (sh.stats().boost_dropped != fw_dropped0)
+            {
+                fw_dropped_tow.push_back(sh.stats().last_tow_ms * 1e-3);
+                fw_dropped_t.push_back(sh.built_.mcu_us * 1e-6 + a.t_base_s);
+            }
+            // both closed this epoch at this step (the filter applied or dropped it, the copy applied it)
+            if (seq && sh.stats().epochs_applied + sh.stats().boost_dropped == fw_closed0 + 1 &&
+                seq->stats().last_tow_ms == cmp_tow_ms && sh.stats().last_tow_ms == cmp_tow_ms &&
+                seq->job_.g_peak + 1.0 > sh.cfg_.boost_screen_g)
+            {
+                ScreenCmp c;
+                c.tow = cmp_tow;
+                c.t_flight = cmp_te;
+                c.g = seq->job_.g_peak + 1.0;
+                c.apogee = (s.flags & kShadowApogee) != 0;
+                c.fw_screened = sh.job_.screen;
+                c.fw_rr = sh.stats().last.screen_rr;
+                c.fw_refused = sh.stats().last.screen_refused;
+                c.fw_drop = sh.stats().last.screen_dropped;
+                c.seq_used = seq->stats().last.used_rr;
+                c.seq_rej = seq->stats().last.rejected_rr;
+                c.seq_drop = c.seq_rej > 0 && c.seq_rej >= c.seq_used;
+                c.meas = seq->stats().last_meas;
+                if (sh.stats().boost_last_dry_used >= 0 || sh.stats().last.screen_seq_used > 0 ||
+                    sh.stats().last.screen_seq_refused > 0)
+                {
+                    c.fw_dry_used = sh.stats().last.screen_seq_used;
+                    c.fw_dry_rej = sh.stats().last.screen_seq_refused;
+                }
+                c.seq_used_pr = seq->stats().last.used_pr;
+                c.seq_rej_pr = seq->stats().last.rejected_pr;
+                cmps.push_back(c);
+            }
+#endif
+            if (diag)
+                diagEpoch(sh, held, ev.t_us, s.flags, a, last_acc);
+            if (guarded && sh.running())
+                guardedEpoch(sh, held, ev.t_us, s.flags, a, gstats);
+            for (int i = 0; i < 3; ++i)
+                last_acc[i] = s.acc[i];
+            if (!started && sh.running())
+            {
+                started = true;
+                // the pad state the log's first record carried
+                RawGnssEKF<float>& f = sh.ekf_;
+                for (int i = 0; i < 3; ++i)
+                {
+                    f.lla_[i] = S[1 + i];
+                    f.v_[i] = static_cast<float>(v0[i]);
+                    f.ab_[i] = static_cast<float>(a.have_pad_ab ? a.pad_ab[i] : S[11 + i]);
+                    f.wb_[i] = static_cast<float>(S[14 + i] - a.pad_wb_sub[i]);
+                }
+                for (int i = 0; i < 4; ++i)
+                    f.q_[i] = static_cast<float>(qs[i]);
+                f.clk_b_ = S[17];
+                f.clk_d_ = static_cast<float>(S[18]);
+                f.isb_[0] = static_cast<float>(S[19]);
+                f.isb_[1] = static_cast<float>(S[20]);
+                f.clk_ready_ = S[21] != 0.0;
+                if (have_p0)
+                    for (int i = 0; i < 19; ++i)
+                        for (int j = 0; j < 19; ++j)
+                            f.P_[i][j] = P0[i][j];
+                sh.own_fix_ = true;
+                if (have_pnav)
+                {
+                    sh.baro_offset_ = in.pnav[21];
+                    sh.baro_learn_s_ = 60.0;
+                    sh.baro_seen_ = (static_cast<int>(in.pnav[34]) & 0x04) != 0;
+                }
+                sh.last_aided_t_ = ev.t_us * 1e-6;
+                restored = true;
+            }
+            // the gate switched in flight (harness only): act's full gate from then on, as the launch edge
+            // sets it (RawGnssShadow::stepHeading), while the rocket is in flight
+            if (!gate_switched && gate_switch_us > 0 && ev.t_us >= gate_switch_us && sh.running() &&
+                (s.flags & kShadowInFlight))
+            {
+                gate_switched = true;
+#if !RAW_REPLAY_OLD
+                sh.ekf_.setAttGateVertical(false);
+                sh.ekf_.setAttGateCos4(false);
+#endif
+            }
+#if !RAW_REPLAY_OLD
+            // act opened late (harness only): act's launch edge at that time, the gates back on the ground
+            if (!act_opened && act_at_us > 0 && ev.t_us >= act_at_us && sh.running() && (s.flags & kShadowInFlight))
+            {
+                act_opened = true;
+                if (a.gate_full == 1)
+                {
+                    sh.ekf_.setAttGateVertical(false);
+                    sh.ekf_.setAttGateCos4(false);
+                }
+                else
+                {
+                    sh.ekf_.setAttGateVertical(true);
+                }
+                sh.ekf_.setHeadingSigma(static_cast<float>(a.pad_sigma_deg * kD2R));
+                if (a.tilt_sigma_deg > 0.0)
+                    sh.ekf_.setTiltSigmaFloor(static_cast<float>(a.tilt_sigma_deg * kD2R));
+            }
+            if (act_opened && !act_closed && !(s.flags & kShadowInFlight))
+            {
+                act_closed = true;
+                sh.ekf_.setAttGateVertical(cfg.ekf.att_gate_vertical);
+                sh.ekf_.setAttGateCos4(cfg.ekf.att_gate_cos4);
+            }
+#endif
+            // the apogee votes the filter's state would cast (TR_KinematicChecks tests 1 and 4), at every step
+            if (sh.running() && ev.t_us * 1e-6 + a.t_base_s > a.burnout_s)
+            {
+                const RawGnssEKF<float>& f = sh.filter();
+                const float* q = f.quat();
+                const double sinp = 2.0 * (static_cast<double>(q[0]) * q[2] - static_cast<double>(q[3]) * q[1]);
+                const double pitch = std::asin(std::max(-1.0, std::min(1.0, sinp)));
+                const double tf = ev.t_us * 1e-6 + a.t_base_s;
+                if (pitch_vote_t < -1e8 && pitch < -0.087)
+                    pitch_vote_t = tf;
+                const double up = f.lla()[2] - a.pad_h;
+                if (vel_vote_t < -1e8 && up > 15.0 && f.velNed()[2] > 0.0f)
+                    vel_vote_t = tf;
+            }
+            // back to the GNSS task: the satellites the checks found jumped
+            ShadowRelock rl;
+            while (sh.takeRelock(rl))
+                stage.markRelock(rl.sys, rl.prn, rl.tow_s);
+            // the barometer sample the loop fused this tick (BaroGatePolicy)
+            if (bmp_new && p_ground > 0.0)
+            {
+                bmp_new = false;
+                const float alt = 44330.0f * (1.0f - std::pow(static_cast<float>(bmp_p) /
+                                                               static_cast<float>(p_ground), 1.0f / 5.255f));
+                const BaroGatePolicy::Decision d =
+                    baro_gate.evaluate(static_cast<uint32_t>(bmp_t), alt, false, 5.0f, 500.0f, 20000u);
+                if (d.accept)
+                    sh.onBaro(ShadowBaro{static_cast<uint32_t>(bmp_t), alt});
+            }
+            // a row each step
+            if (sh.running() && sh.stats().step_n != last_step)
+            {
+                if ((sh.stats().step_n % static_cast<uint32_t>(a.every)) == 0)
+                    writeRow(ev.t_us);
+                last_step = sh.stats().step_n;
+            }
+            break;
+        }
+        default:
+            break;
+        }
+    }
+    std::fclose(out);
+    {
+        FILE* ej = std::fopen((a.out + ".events.json").c_str(), "w");
+        if (ej)
+        {
+            std::fprintf(ej, "{\"guard\": {\"boost_epochs\": %d, \"blocked_pr\": %d, \"blocked_doppler\": %d, "
+                             "\"refused\": %d, \"tightened\": %d, \"rejected\": %d, \"majority\": %d}, "
+                             "\"cut\": %d, \"corrupted_sats\": %d, \"rates_seen\": %d, \"rates_relock_dropped\": %d, ",
+                         gstats.epochs, gstats.blocked_pr, gstats.blocked_dop, gstats.refused, gstats.tightened,
+                         gstats.rejected, gstats.majority, epochs_cut, epochs_corrupted_sats, rates_seen,
+                         rates_relock_dropped);
+            auto list = [&](const std::vector<double>& v) {
+                std::string o = "[";
+                for (size_t i = 0; i < v.size(); ++i)
+                    o += (i ? ", " : "") + std::to_string(v[i]);
+                return o + "]";
+            };
+            std::fprintf(ej, "\"majority_tow\": %s, ", list(gstats.majority_tow).c_str());
+#if !RAW_REPLAY_OLD
+            {
+                const RawGnssShadow::Stats& fs = sh.stats();
+                std::fprintf(ej, "\"fw\": {\"screened\": %u, \"dropped\": %u, \"dropped_tow\": %s, \"prior_deg\": %.3f, "
+                                 "\"prior_mag\": %d, \"mag_age_s\": %.3f, \"act_launches\": %u, \"levels\": %u, "
+                                 "\"levels_held\": %u, \"mag_fused\": %u, \"mag_uncal\": %u, \"gate_apogee\": %u, "
+                                 "\"gate_apogee_s\": %.3f, \"dropped_dry\": %u}, ",
+                             fs.boost_screened, fs.boost_dropped, list(fw_dropped_tow).c_str(),
+                             static_cast<double>(fs.heading_launch_prior_deg), fs.heading_launch_mag,
+                             static_cast<double>(fs.heading_launch_mag_age_s), fs.heading_act_launches, fs.levels,
+                             fs.levels_held, fs.mag_fused, fs.mag_uncal, fs.heading_gate_apogee,
+                             static_cast<double>(fs.heading_gate_apogee_s), fs.boost_dropped_dry);
+#if RAW_REPLAY_VCHECK
+                std::fprintf(ej, "\"vert\": {\"checked\": %u, \"dropped\": %u, \"dropped_t\": %s, "
+                                 "\"last_dv_down\": %.2f, \"worst_kept_dv_down\": %.2f, \"threshold\": %.1f, "
+                                 "\"window_s\": %.2f}, \"fw_dropped_t\": %s, ",
+                             fs.vert_checked, fs.vert_dropped, list(vert_dropped_t).c_str(),
+                             static_cast<double>(fs.vert_last_dv_down), static_cast<double>(fs.vert_worst_dv_down),
+                             sh.cfg_.vert_check_mps, sh.cfg_.boost_screen_window_s, list(fw_dropped_t).c_str());
+#endif
+#if RAW_REPLAY_LATCH
+                std::fprintf(ej, "\"vert_latched\": %u, ", fs.vert_latched);
+#endif
+                std::fprintf(ej, "\"screen_compare\": [");
+                for (size_t i = 0; i < cmps.size(); ++i)
+                {
+                    const ScreenCmp& c = cmps[i];
+                    std::fprintf(ej, "%s{\"tow\": %.3f, \"t\": %.3f, \"g\": %.2f, \"apogee\": %d, \"fw_screened\": %d, "
+                                     "\"fw_rr\": %d, \"fw_refused\": %d, \"fw_drop\": %d, \"seq_used\": %d, \"seq_rej\": %d, "
+                                     "\"seq_drop\": %d, \"meas\": %d, \"seq_used_pr\": %d, \"seq_rej_pr\": %d, "
+                                     "\"fw_dry_used\": %d, \"fw_dry_rej\": %d}",
+                                 i ? ", " : "", c.tow, c.t_flight, c.g, c.apogee ? 1 : 0, c.fw_screened ? 1 : 0, c.fw_rr,
+                                 c.fw_refused, c.fw_drop ? 1 : 0, c.seq_used, c.seq_rej, c.seq_drop ? 1 : 0, c.meas,
+                                 c.seq_used_pr, c.seq_rej_pr, c.fw_dry_used, c.fw_dry_rej);
+                }
+                std::fprintf(ej, "], ");
+            }
+#endif
+            std::fprintf(ej, "\"pitch_vote_t\": %s, \"vel_vote_t\": %s, \"gate_switch_t\": %s}\n",
+                         pitch_vote_t > -1e8 ? std::to_string(pitch_vote_t).c_str() : "null",
+                         vel_vote_t > -1e8 ? std::to_string(vel_vote_t).c_str() : "null",
+                         gate_switched ? std::to_string(gate_switch_us * 1e-6 + a.t_base_s).c_str() : "null");
+            std::fclose(ej);
+        }
+    }
+    const RawGnssShadow::Stats& st = sh.stats();
+    (void)st;
+    std::fprintf(stderr,
+                 "%s: %d rows; started %d (restored %d, re-anchored %d); epochs decoded %d (untimed %d, timed "
+                 "without a clock line %d, on-board age matched %d), applied %u, stale %u; ephemerides %d pad + %d "
+                 "in flight; stops %u (last %u); heading handoffs %u; carrier built %u in %u used %u; non-finite rows "
+                 "%d, unhealthy rows %d\n",
+                 a.out.c_str(), rows, started ? 1 : 0, restored ? 1 : 0, reanchored ? 1 : 0, epochs_decoded,
+                 epochs_untimed, epochs_line_fallback, ages_matched, st.epochs_applied, st.epochs_stale, eph_pad, eph_flight, st.stops,
+                 st.last_stop,
+                 st.heading_handoffs, CR(st.cr_built), CR(st.cr_in), CR(st.cr_used), nonfinite_rows,
+                 unhealthy_rows);
+    return 0;
+}

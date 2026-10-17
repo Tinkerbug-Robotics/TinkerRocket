@@ -1,0 +1,13 @@
+# what building and running the studies here leaves behind (README: "Layout they expect")
+build*/
+in/
+study_*/
+diag*/
+matrix*/
+calib*/
+val/
+*.csv
+*.events.json
+*.out
+*.err
+__pycache__/
