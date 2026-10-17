@@ -209,6 +209,18 @@ class TelemetryDispatchTest {
     }
 
     @Test
+    fun `config glog lands only for the two settings`() {
+        // The GNSS log setting (cmd 79): 0 detailed, 1 reduced. Absent on
+        // firmware that has no such setting, which the settings screen reads
+        // as "this rocket can't change it".
+        assertEquals(0, config("""{"type":"config","glog":0}""").gnssLogSetting)
+        assertEquals(1, config("""{"type":"config","glog":1}""").gnssLogSetting)
+        assertNull(config("""{"type":"config","glog":2}""").gnssLogSetting)
+        assertNull(config("""{"type":"config","glog":-1}""").gnssLogSetting)
+        assertNull(config("""{"type":"config"}""").gnssLogSetting)
+    }
+
+    @Test
     fun `config absent lora keys read as null`() {
         val cfg = config("""{"type":"config","sb1":1}""")
         assertNull(cfg.loraFreqMHz)

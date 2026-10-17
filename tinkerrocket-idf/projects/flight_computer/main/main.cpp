@@ -38,6 +38,7 @@
 #include <RocketComputerTypes.h>
 #include <GuidancePointGate.h>    // #435: pure cmd-28 acceptance gate (host-tested)
 #include <RollProfileGate.h>      // #1115: total wrap180f + roll-profile acceptance gate (host-tested)
+#include <gnss_log_policy.h>      // the REDUCED GNSS log's SBF cut (host-tested)
 #include <TR_OTA_Receiver.h>      // FC-side OTA relay receiver (#8 Phase 4)
 #include <TR_OTA_Backend_esp.h>
 #include <esp_system.h>           // esp_restart after a verified relayed OTA
@@ -716,13 +717,26 @@ static uint16_t burnout_neg_count = 0;
 // on purpose: in dynamic mode the live rate changes mid-flight, and the
 // setting must not.
 static uint16_t imu_rate_setting = IMU_RATE_DYNAMIC;
+// The setting as the user chose it (NVS "imu"/"rate"). imu_rate_setting is
+// this brought within imu_rate_max_hz, and the two differ only while the
+// limit is lower than the setting: kept so the setting comes back when the
+// limit rises again (a u-blox next boot, or the REDUCED GNSS log now).
+static uint16_t imu_rate_user_setting = IMU_RATE_DYNAMIC;
 // The fastest IMU rate this boot flies: the board's, lowered to 3840 Hz once
-// the GNSS bring-up has found a mosaic-G5, whose SBF shares the link and the
-// OC's flash (RocketComputerTypes.h imuRateMaxForGnss). A setting above it is
-// kept (NVS, and the OC's copy) and flown as the fastest that fits; the OC
-// reports what flies, and limits the app's menu, once the FC's identity push
-// names the receiver. Until the receiver is known it is the board's.
+// the GNSS bring-up has found a mosaic-G5 and the GNSS log setting below is
+// DETAILED, since all of its SBF then shares the link and the OC's flash
+// (RocketComputerTypes.h imuRateMaxForGnss). A setting above it is kept (NVS,
+// and the OC's copy) and flown as the fastest that fits; the OC reports what
+// flies, and limits the app's menu, once the FC's identity push names the
+// receiver. Until the receiver is known it is the board's.
 static uint16_t imu_rate_max_hz = config::IMU_RATE_MAX_HZ;
+// The GNSS log setting (BLE cmd 79, NVS "gnsslog"/"set"): every SBF block a
+// mosaic-G5 sends into the log (DETAILED, the default), or PVTGeodetic at
+// 20 Hz with the raw measurements once a second (REDUCED), which leaves the
+// IMU the board's own limit. Nothing else logs SBF, so with any other
+// receiver it changes nothing.
+static uint8_t gnss_log_setting = GNSS_LOG_DETAILED;
+static gnss_log::SbfCut sbf_log_cut;   // the REDUCED log's place in the SBF stream
 
 // #1485: the board's limit must be a rate the chip can be set to, and the
 // default setting must fit under it, or a fresh board would refuse its own
@@ -755,6 +769,21 @@ static void applyImuRateForFlightPhase()
 {
     const uint16_t hz = imuRateResolve(imu_rate_setting, deployment_detected);
     if (hz != sensor_collector_hw.ism6Rate()) sensor_collector_hw.setIsm6Rate(hz);
+}
+
+// The IMU limit from the receiver found and the GNSS log setting, and the
+// user's setting flown within it (NVS untouched). Once the GNSS bring-up has
+// found the receiver, and whenever the GNSS log setting changes.
+static void refreshImuRateLimit()
+{
+    imu_rate_max_hz = imuRateMaxForGnss(config::IMU_RATE_MAX_HZ, sensor_collector_hw.gnssType(),
+                                        gnss_log_setting);
+    const uint16_t flown = imuRateSettingClamp(imu_rate_user_setting, imu_rate_max_hz);
+    if (flown != imu_rate_setting)
+    {
+        imu_rate_setting = flown;
+        applyImuRateForFlightPhase();
+    }
 }
 
 static bool mach_locked_out = false;    // promoted from baro block for apogee voting
@@ -5912,6 +5941,7 @@ static void setup_fc()
                      (unsigned)nvs_rate, (unsigned)config::IMU_RATE_MAX_HZ);
         }
     }
+    imu_rate_user_setting = imu_rate_setting;
     {
         const uint16_t boot_hz = imuRateResolve(imu_rate_setting, /*deployed=*/false);
         sensor_collector_hw.setIsm6Rate(boot_hz);
@@ -5929,6 +5959,28 @@ static void setup_fc()
         }
     }
     prefs.end();
+
+    // The GNSS log setting (BLE cmd 79): what the log keeps of a mosaic-G5's
+    // SBF, and with it the IMU limit, which follows once the receiver is
+    // known (refreshImuRateLimit, after the GNSS bring-up). Whitelisted on
+    // read like the rate: an unknown value logs every block, as before.
+    prefs.begin("gnsslog", false);
+    if (prefs.isKey("set"))
+    {
+        const uint8_t nvs_log = prefs.getUChar("set", GNSS_LOG_DETAILED);
+        if (gnssLogSettingValid(nvs_log))
+        {
+            gnss_log_setting = nvs_log;
+        }
+        else
+        {
+            ESP_LOGW(TAG, "NVS GNSS log setting %u invalid — using detailed", (unsigned)nvs_log);
+        }
+    }
+    prefs.end();
+    ESP_LOGI(TAG, "GNSS log: %s", gnss_log_setting == GNSS_LOG_REDUCED
+                                      ? "reduced (a mosaic-G5's raw measurements once a second)"
+                                      : "detailed (every SBF block)");
 
     // Restore high-g accelerometer bias from NVS (namespace "cal")
     prefs.begin("cal", false);  // read-write (creates namespace on first boot)
@@ -6153,25 +6205,23 @@ static void setup_fc()
     // the receiver never came up, rather than only finding out from a missing
     // fix later.
     fcBootStatus(FCB_GNSS, gnss_absent_mode ? FCB_DEG_GNSS : 0);
-    // The receiver now known, the IMU limit that goes with it: a mosaic-G5's
-    // SBF leaves the IMU at most 3840 Hz. A setting above it flies as the
-    // fastest that fits (8k Dynamic as 4k Dynamic, 7680 Hz as 3840 Hz) without
-    // touching NVS, so the board gets the user's setting back with a u-blox.
+    // The receiver now known, the IMU limit that goes with it: a mosaic-G5
+    // with the DETAILED GNSS log leaves the IMU at most 3840 Hz. A setting
+    // above it flies as the fastest that fits (8k Dynamic as 4k Dynamic,
+    // 7680 Hz as 3840 Hz) without touching NVS, so the board gets the user's
+    // setting back with a u-blox, or with the REDUCED GNSS log.
     {
         const uint8_t gnss_type = sensor_collector_hw.gnssType();
-        imu_rate_max_hz = imuRateMaxForGnss(config::IMU_RATE_MAX_HZ, gnss_type);
+        refreshImuRateLimit();
         ESP_LOGI(TAG, "[GNSS] Receiver: %s; IMU rates up to %u Hz",
                  gnss_type != GNSS_TYPE_NONE ? gnssTypeName(gnss_type) : "none",
                  (unsigned)imu_rate_max_hz);
-        const uint16_t flown = imuRateSettingClamp(imu_rate_setting, imu_rate_max_hz);
-        if (flown != imu_rate_setting)
+        if (imu_rate_setting != imu_rate_user_setting)
         {
             ESP_LOGW(TAG, "[GNSS] the %s caps the IMU at %u Hz: the logging rate setting %u flies as %u "
                           "(the setting is kept)",
-                     gnssTypeName(gnss_type), (unsigned)imu_rate_max_hz, (unsigned)imu_rate_setting,
-                     (unsigned)flown);
-            imu_rate_setting = flown;
-            applyImuRateForFlightPhase();
+                     gnssTypeName(gnss_type), (unsigned)imu_rate_max_hz, (unsigned)imu_rate_user_setting,
+                     (unsigned)imu_rate_setting);
         }
     }
     sensor_converter.configureISM6HG256FullScale(
@@ -7630,8 +7680,10 @@ static void loop_fc()
     // can be reconstructed later: on the mini the LC86G's MSM7, ~5 frames once
     // a second, and one ephemeris message a second; ~600 B/s with the
     // framing.  On a V9 with a mosaic-G5 the same record carries its SBF
-    // blocks: ~60 a second, ~70 kB/s with the framing.  Log-only.  A frame
-    // longer than one payload goes as consecutive parts (gnssRtcmParts).
+    // blocks: ~60 a second, ~70 kB/s with the framing, or ~9 kB/s with the
+    // REDUCED GNSS log, which keeps the raw measurements once a second
+    // (gnss_log_policy.h).  Log-only.  A frame longer than one payload goes
+    // as consecutive parts (gnssRtcmParts).
     // Bounded per pass so a backlog from boot drains over a few passes rather
     // than in one burst into the I2S queue.  Static buffers: ~1.3 kB (~3.5 kB
     // on the mosaic build and the V9 image) off this task's stack.
@@ -7647,6 +7699,10 @@ static void loop_fc()
         for (int i = 0; i < 8 && sensor_collector.getGNSSRtcmFrame(rtcm_frame, sizeof(rtcm_frame),
                                                                    frame_len, frame_us); i++)
         {
+            if (!gnss_log::keep(sbf_log_cut, rtcm_frame, frame_len, gnss_log_setting == GNSS_LOG_REDUCED))
+            {
+                continue;
+            }
             const uint8_t parts = gnssRtcmParts(frame_len);
             for (uint8_t k = 0; k < parts; k++)
             {
@@ -9928,8 +9984,9 @@ static void loop_fc()
                         // and in the OC's copy, and flown as the fastest that
                         // fits the receiver's limit, as at boot: an 8k setting
                         // sent before the OC knew of a mosaic-G5 flies as 4k
-                        // and comes back with a u-blox, and the two copies
-                        // never disagree.
+                        // and comes back with a u-blox or the REDUCED GNSS
+                        // log, and the two copies never disagree.
+                        imu_rate_user_setting = rate_hz;
                         imu_rate_setting = imuRateSettingClamp(rate_hz, imu_rate_max_hz);
                         applyImuRateForFlightPhase();
                         prefs.begin("imu", false);
@@ -9967,6 +10024,50 @@ static void loop_fc()
                 else
                 {
                     cfgRetryOnNextPoll("IMU RATE CFG");   // #1112
+                }
+            }
+            else if (out_pending_command == GNSS_LOG_CONFIG_PENDING)
+            {
+                delay_ms(1);
+                uint8_t cfg_payload[sizeof(GnssLogConfigData)];
+                size_t  cfg_len = 0;
+                if (readConfigFrame(GNSS_LOG_CONFIG_MSG, sizeof(GnssLogConfigData),
+                                    cfg_payload, sizeof(cfg_payload), cfg_len)
+                    && cfg_len >= sizeof(GnssLogConfigData))
+                {
+                    const uint8_t setting = cfg_payload[0];
+                    if (rocket_state == INFLIGHT)
+                    {
+                        // It moves the IMU limit, and the IMU rate never
+                        // changes mid-flight (IMU_RATE_CONFIG above).
+                        ESP_LOGW(TAG, "[CFG] GNSS log change ignored INFLIGHT");
+                    }
+                    else if (gnssLogSettingValid(setting))
+                    {
+                        gnss_log_setting = setting;
+                        prefs.begin("gnsslog", false);
+                        prefs.putUChar("set", setting);
+                        prefs.end();
+                        const uint16_t max_was = imu_rate_max_hz;
+                        refreshImuRateLimit();
+                        ESP_LOGI(TAG, "[CFG] GNSS log: %s (persisted)", gnssLogName(setting));
+                        if (imu_rate_max_hz != max_was)
+                        {
+                            ESP_LOGI(TAG, "[CFG] with the %s, IMU rates up to %u Hz now: the logging rate "
+                                          "setting %u flies as %u",
+                                     gnssTypeName(sensor_collector_hw.gnssType()), (unsigned)imu_rate_max_hz,
+                                     (unsigned)imu_rate_user_setting, (unsigned)imu_rate_setting);
+                        }
+                    }
+                    else
+                    {
+                        ESP_LOGW(TAG, "[CFG] GNSS log setting %u rejected (not detailed or reduced)",
+                                 (unsigned)setting);
+                    }
+                }
+                else
+                {
+                    cfgRetryOnNextPoll("GNSS LOG CFG");   // #1112
                 }
             }
             else if (out_pending_command == PYRO_CONFIG_PENDING)

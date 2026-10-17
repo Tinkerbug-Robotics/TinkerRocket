@@ -22,7 +22,7 @@ Start-of-frame bytes from [`TR_I2C_Interface.h`](https://github.com/Tinkerbug-Ro
 
 ## FC ↔ OC message types
 
-106 codes. The dispatch on both ends is a flat first-match chain, so
+108 codes. The dispatch on both ends is a flat first-match chain, so
 two handlers sharing a value means the second is silently dead — which is why
 this list is CI-enforced for uniqueness.
 
@@ -134,8 +134,10 @@ this list is CI-enforced for uniqueness.
 | `0x9C` | `IMU_TEMP_MSG` | FC → OC | FC→OC over I2S: Ism6TempData, the IMU's die temperature once a |
 | `0x9D` | `GNSS_CLOCK_MSG` | FC → OC | FC→OC over I2S: GnssClockData, the MCU clock against GPS time |
 | `0x9E` | `PAD_CONTEXT_MSG` | FC → OC | FC→OC over I2S: PadContextHeader + its kind's body, what a |
+| `0x8E` | `GNSS_LOG_CONFIG_PENDING` | OC → FC | OC→FC: payload follows as GNSS_LOG_CONFIG_MSG |
+| `0x8F` | `GNSS_LOG_CONFIG_MSG` | OC → FC | OC→FC: 1-byte GnssLogConfigData |
 
-> 54 of these 106 codes carry no comment in the header,
+> 54 of these 108 codes carry no comment in the header,
 > so the Notes column is blank for them. Direction is inferred from the
 > `_PENDING` / `_CMD` / `_MSG` suffix in that case, which is a convention,
 > not a guarantee. A trailing `// OC→FC: what it does` on the constant
@@ -214,6 +216,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `ImuRateConfigData` | 2 |
 | `CameraConfigData` | 1 |
 | `DataReadyFlags` | 1 |
+| `GnssLogConfigData` | 1 |
 | `ImuOrientConfigData` | 1 |
 | `LoRaChannelSetSelection` | 1 |
 | `LogStateFlags` | 1 |
@@ -227,7 +230,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 
 ### app to Out Computer
 
-57 commands.
+58 commands.
 
 | Cmd | Constant | Description |
 |-----|----------|-------------|
@@ -287,6 +290,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 73 |  | #1271 — the operator acknowledges the blind-window loss(es). BLE ONLY, and deliberately absent from… |
 | 74 |  | #773 step 2 — provision this OUT COMPUTER's board revision. BLE ONLY, like cmd 73 above and for the same… |
 | 75 |  | Pad calibration (#1600 phase 5): [iono i8 x8][gps_day u16 LE] — the GPS broadcast ionosphere the app read… |
+| 79 |  | GNSS log setting: [setting:1] — GNSS_LOG_DETAILED (0, every SBF block of a mosaic-G5) or GNSS_LOG_REDUCED (1,… |
 | 200 |  | Bench-only: arm config-frame drops, see test_cfg_drop_count |
 
 > 8 of these have no comment in the dispatch and so no

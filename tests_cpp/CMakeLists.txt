@@ -1607,6 +1607,20 @@ target_include_directories(test_gnss_detect PRIVATE
 target_link_libraries(test_gnss_detect GTest::gtest_main)
 gtest_discover_tests(test_gnss_detect)
 
+# ---------- test_gnss_log_policy ----------
+# The GNSS log setting (BLE cmd 79): the IMU limit each value gives
+# (RocketComputerTypes.h imuRateMaxForGnss) and the REDUCED log's SBF cut
+# (TR_RocketComputerTypes/gnss_log_policy.h), on made-up streams and on a
+# recorded mosaic-G5 epoch (fixtures/gnss_detect_sbf.h).
+add_executable(test_gnss_log_policy test_gnss_log_policy.cpp)
+target_include_directories(test_gnss_log_policy PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_gnss_log_policy GTest::gtest_main)
+gtest_discover_tests(test_gnss_log_policy)
+
 # ---------- test_gnss_raw ----------
 # Host test for TR_GNSSRaw, what a raw-measurement (tightly coupled) GNSS/INS
 # filter needs beside the receiver's measurements: the LC86G's RTCM broadcast

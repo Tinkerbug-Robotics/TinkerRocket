@@ -25,6 +25,7 @@
 #include <cstdint>
 
 #include <RocketComputerTypes.h>
+#include <gnss_log_policy.h>
 
 namespace mosaic
 {
@@ -41,6 +42,9 @@ enum SbfBlock : uint16_t
     SBF_XPPS_OFFSET     = 5911,
     SBF_DISK_STATUS     = 4059,
 };
+// The reduced GNSS log thins exactly these two (gnss_log_policy.h).
+static_assert(SBF_MEAS_EPOCH == gnss_log::kSbfMeasEpoch && SBF_MEAS_EXTRA == gnss_log::kSbfMeasExtra,
+              "the reduced GNSS log must name the raw measurement blocks this driver streams");
 
 static constexpr uint32_t kTowDnu = 4294967295U;   // TOW do-not-use
 static constexpr uint16_t kWncDnu = 65535U;        // WNc do-not-use

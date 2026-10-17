@@ -187,6 +187,18 @@ struct RocketProfile: Codable, Equatable, Identifiable {
         ImuRateChoice(label: "8k", setting: 7680, peakHz: 7680),
     ]
 
+    /// GNSS log (BLE cmd 79): what the rocket logs of a Septentrio
+    /// mosaic-G5's data. `gnssLogDetailed` (0, the default) logs all of it,
+    /// raw measurements included, and holds the IMU at 4k; `gnssLogReduced`
+    /// (1) logs the position at 20 Hz and the raw measurements once a second,
+    /// which leaves room for the 8k rates. The receiver's own microSD card
+    /// keeps everything either way. No other receiver has data this changes.
+    var gnssLogSetting: UInt8 = RocketProfile.gnssLogDetailed
+
+    /// `GNSS_LOG_DETAILED` / `GNSS_LOG_REDUCED` in RocketComputerTypes.h.
+    static let gnssLogDetailed: UInt8 = 0
+    static let gnssLogReduced: UInt8 = 1
+
     // MARK: Servo
     // #561: default 0 (neutral) to match config.h SERVO_BIAS_N and biases 2-4.
     // The old 85 (~10° on the ±60° / 1000-2000µs fin cal) baked a servo-1 trim
@@ -381,6 +393,10 @@ extension RocketProfile {
         cameraType = try c.decodeIfPresent(UInt8.self, forKey: .cameraType) ?? defaults.cameraType
         imuOrientSetting = try c.decodeIfPresent(UInt8.self, forKey: .imuOrientSetting) ?? defaults.imuOrientSetting
         imuRateHz = try c.decodeIfPresent(UInt16.self, forKey: .imuRateHz) ?? defaults.imuRateHz
+        // A value that is neither setting reads as the default, as the
+        // firmware reads its NVS.
+        let gnssLog = try c.decodeIfPresent(UInt8.self, forKey: .gnssLogSetting) ?? defaults.gnssLogSetting
+        gnssLogSetting = gnssLog <= RocketProfile.gnssLogReduced ? gnssLog : defaults.gnssLogSetting
 
         servoBias1 = try c.decodeIfPresent(Int16.self, forKey: .servoBias1) ?? defaults.servoBias1
         servoBias2 = try c.decodeIfPresent(Int16.self, forKey: .servoBias2) ?? defaults.servoBias2

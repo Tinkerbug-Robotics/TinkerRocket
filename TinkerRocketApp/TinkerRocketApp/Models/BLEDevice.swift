@@ -1137,6 +1137,20 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
     }
 
+    /// GNSS log — `RocketProfile.gnssLogDetailed` (0) or `.gnssLogReduced`
+    /// (1): all of a mosaic-G5's data in the log with the IMU at most 4k, or
+    /// its position and once-a-second raw measurements with the 8k rates
+    /// open. The FC applies it on the pad and persists it in FC NVS; the out
+    /// computer then re-sends the readback, whose `irmax` the rate menu
+    /// follows.
+    func sendGnssLogConfig(_ setting: UInt8) {
+        sendRawCommand(79, payload: Data([setting]))
+        if var cfg = rocketConfig {
+            cfg.gnssLogSetting = setting
+            rocketConfig = cfg
+        }
+    }
+
     /// 4-channel pyro config. Each tuple is (enabled, trigger_mode, trigger_value).
     /// Wire layout (24 bytes): 4 × {u8 enabled, u8 mode, f32 value}.
     func sendPyroConfig(channels: [(enabled: Bool, mode: UInt8, value: Float)]) {
@@ -2333,6 +2347,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             }
             if let irmax = dict["irmax"] as? Int, let hz = UInt16(exactly: irmax) {
                 cfg.imuRateMaxHz = hz
+            }
+            // Only the two settings land: anything else reads as "not reported".
+            if let glog = dict["glog"] as? Int, let s = UInt8(exactly: glog), s <= RocketProfile.gnssLogReduced {
+                cfg.gnssLogSetting = s
             }
             cfg.loraFreqMHz = parseFloat(dict["lf"])
             cfg.loraSF = (dict["lsf"] as? Int).map { UInt8($0) }

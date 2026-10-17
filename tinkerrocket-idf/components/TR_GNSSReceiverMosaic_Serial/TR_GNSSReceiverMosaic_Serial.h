@@ -15,7 +15,9 @@
 //     configuration, so a receiver that resets comes back streaming;
 //   - GNSSData from PVTGeodetic (SbfParser.h: gnssDataFromPvt);
 //   - every CRC-valid block, verbatim, into a ring the flight loop logs as
-//     GNSS_RTCM_MSG (0x95), the record that carries the LC86G's RTCM3;
+//     GNSS_RTCM_MSG (0x95), the record that carries the LC86G's RTCM3 (all
+//     of them, or with the REDUCED GNSS log the raw measurements once a
+//     second: gnss_log_policy.h);
 //   - the MCU clock against GPS time from the 1PPS on J1 pin 5 (GPIO2 on the
 //     V9), logged as GNSS_CLOCK_MSG (0x9D) with GCL_PPS;
 //   - the navigation data again on request (requestNavResend(), at launch),

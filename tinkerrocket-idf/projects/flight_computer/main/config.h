@@ -351,7 +351,10 @@ struct config : board_pins
     //
     // With a mosaic-G5 on the V9 its SBF blocks (GNSS_RTCM_MSG) are the other
     // big stream, about the IMU's size at 3840 Hz, and the IMU stops there
-    // (imuRateMaxForGnss): the test budgets the V9 image for both receivers.
+    // (imuRateMaxForGnss) unless the GNSS log setting (cmd 79) is REDUCED,
+    // which keeps ~9 kB/s of it and lets the IMU fly 7680 Hz: the test
+    // budgets the V9 image for both receivers and both settings, on the link
+    // and on the OC's flash.
     static constexpr uint16_t ISM6HG256_UPDATE_RATE = 1920;
 
     // #1485: the highest IMU logging rate this board can fly, fixed or as a

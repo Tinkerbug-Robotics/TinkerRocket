@@ -95,6 +95,12 @@ public data class RocketProfile(
     // the six-way lockstep would have chosen, and the decode fallback below
     // turned a missing/off-whitelist stored value into 1920 as well.
     val imuRateHz: Int = 0,
+    // GNSS log, cmd 79: GNSS_LOG_DETAILED (all of a mosaic-G5's data in the
+    // log, the IMU at most 4k, the default) or GNSS_LOG_REDUCED (its position
+    // at 20 Hz and raw measurements once a second, the 8k rates open). The
+    // receiver's own microSD card keeps everything either way; no other
+    // receiver has data this changes.
+    val gnssLogSetting: Int = GNSS_LOG_DETAILED,
 
     // Servo (#561: bias defaults 0 — a generic default must not carry trim)
     val servoBias1: Int = 0,
@@ -177,6 +183,10 @@ public data class RocketProfile(
         /** What a rocket flies when it doesn't say (no `irmax`): every board
          *  before the 8k rates topped out here. */
         public const val IMU_RATE_BASELINE_MAX_HZ: Int = 3840
+
+        /** `GNSS_LOG_DETAILED` / `GNSS_LOG_REDUCED` in RocketComputerTypes.h. */
+        public const val GNSS_LOG_DETAILED: Int = 0
+        public const val GNSS_LOG_REDUCED: Int = 1
 
         /** Every logging-rate setting: the two dynamic modes, then the
          *  whitelisted ISM6HG256 ODR steps. */
@@ -280,6 +290,7 @@ public object RocketProfileCodec {
         put("cameraType", JsonPrimitive(p.cameraType))
         put("imuOrientSetting", JsonPrimitive(p.imuOrientSetting))
         put("imuRateHz", JsonPrimitive(p.imuRateHz))
+        put("gnssLogSetting", JsonPrimitive(p.gnssLogSetting))
         put("servoBias1", JsonPrimitive(p.servoBias1))
         put("servoBias2", JsonPrimitive(p.servoBias2))
         put("servoBias3", JsonPrimitive(p.servoBias3))
@@ -429,6 +440,9 @@ public object RocketProfileCodec {
                 },
             imuRateHz = (o.int("imuRateHz") ?: d.imuRateHz)
                 .let { if (it in RocketProfile.IMU_RATES_HZ) it else d.imuRateHz },
+            // Neither setting reads as the default, as the firmware reads its NVS.
+            gnssLogSetting = (o.int("gnssLogSetting") ?: d.gnssLogSetting)
+                .let { if (it == RocketProfile.GNSS_LOG_DETAILED || it == RocketProfile.GNSS_LOG_REDUCED) it else d.gnssLogSetting },
             servoBias1 = o.int("servoBias1") ?: d.servoBias1,
             servoBias2 = o.int("servoBias2") ?: d.servoBias2,
             servoBias3 = o.int("servoBias3") ?: d.servoBias3,

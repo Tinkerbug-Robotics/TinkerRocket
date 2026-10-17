@@ -3,8 +3,11 @@
 
 The flight computer logs every SBF block the mosaic-G5 sends whose CRC checks,
 byte for byte (MeasEpoch, MeasExtra and PVTGeodetic at 20 Hz, the receiver's
-status once a second, the navigation messages as they come). Joined in log
-order they are a standard SBF file, so this writes exactly that:
+status once a second, the navigation messages as they come). With the GNSS log
+setting at reduced (BLE cmd 79, which lets the IMU log at 8k) it keeps
+MeasEpoch and MeasExtra once a second, so the summary's MeasEpoch rate reads
+1 Hz; the receiver's own microSD card has all of them. Joined in log order
+the blocks are a standard SBF file, so this writes exactly that:
 
     ./extract_gnss_sbf.py flight_20261020_143000.bin
         -> flight_20261020_143000.sbf   (Septentrio's RxTools read it; sbf2rin

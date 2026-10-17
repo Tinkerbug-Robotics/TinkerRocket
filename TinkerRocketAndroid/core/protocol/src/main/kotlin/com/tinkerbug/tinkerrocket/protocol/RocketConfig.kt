@@ -111,6 +111,9 @@ public data class RocketConfig(
     /** #1485: the fastest IMU rate this rocket flies (null = firmware from
      *  before the 8k rates, which tops out at 3840 Hz). */
     val imuRateMaxHz: Int? = null,              // u16?, "irmax"
+    /** The GNSS log setting, cmd 79: 0 detailed, 1 reduced (null = firmware
+     *  that has no such setting). */
+    val gnssLogSetting: Int? = null,            // u8?, "glog"
     val loraFreqMHz: Float? = null,             // "lf"
     val loraSF: Int? = null,                    // u8?, "lsf"
     val loraBwKHz: Float? = null,               // "lbw"
@@ -289,6 +292,7 @@ public data class ConfigMessage(
     val camt: Long? = null,
     val irate: Long? = null,
     val irmax: Long? = null,
+    val glog: Long? = null,
     val lf: Float? = null,
     val lsf: Long? = null,
     val lbw: Float? = null,
@@ -351,6 +355,8 @@ public data class ConfigMessage(
             imuOrientSetting = d.imuOrientSetting,   // config never carries it (iOS: fresh nil)
             imuRateHz = irate?.takeIf { it in 0..0xFFFF }?.toInt(),
             imuRateMaxHz = irmax?.takeIf { it in 0..0xFFFF }?.toInt(),
+            // Only the two settings land: anything else reads as not reported (iOS).
+            gnssLogSetting = glog?.takeIf { it in 0..1 }?.toInt(),
             loraFreqMHz = lf,
             loraSF = lsf?.coerceIn(0, 0xFF)?.toInt(),
             loraBwKHz = lbw,
@@ -411,6 +417,7 @@ public data class ConfigMessage(
             camt = JsonBridging.nsInt(json, "camt"),
             irate = JsonBridging.nsInt(json, "irate"),
             irmax = JsonBridging.nsInt(json, "irmax"),
+            glog = JsonBridging.nsInt(json, "glog"),
             lf = JsonBridging.parseFloatIos(json, "lf"),
             lsf = JsonBridging.nsInt(json, "lsf"),
             lbw = JsonBridging.parseFloatIos(json, "lbw"),

@@ -77,7 +77,10 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         // orientation also re-pushed the IMU rate (and vice versa). iOS sends
         // per field. Inert today because the two profile fields are only ever
         // written by their own controls — split before that stops being true.
-        GUIDANCE, FIN_LAYOUT, CAMERA, IMU_ORIENT, IMU_RATE, PYRO,
+        GUIDANCE, FIN_LAYOUT, CAMERA, IMU_ORIENT, IMU_RATE,
+        // cmd 79, after the rate as on iOS: it moves the rate's limit.
+        GNSS_LOG,
+        PYRO,
     }
 
     /** Cal is board-specific — it can't be blindly pushed. */
@@ -587,6 +590,8 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
             ConfigGroup.CAMERA -> s.sendCommandFrame(Commands.cameraConfig(profile.cameraType))
             ConfigGroup.IMU_ORIENT -> s.sendCommandFrame(Commands.imuOrient(profile.imuOrientSetting))
             ConfigGroup.IMU_RATE -> s.sendCommandFrame(Commands.imuRate(profile.imuRateHz))
+            // An out computer without cmd 79 ignores it.
+            ConfigGroup.GNSS_LOG -> s.sendCommandFrame(Commands.gnssLog(profile.gnssLogSetting))
             ConfigGroup.PYRO -> {
                 val channels = listOf(
                     PyroChannelConfig(profile.pyro1Enabled, profile.pyro1TriggerMode, profile.pyro1TriggerValue),
@@ -862,6 +867,7 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         public const val GROUP_CAMERA: String = "Camera"
         public const val GROUP_IMU_ORIENTATION: String = "IMU orientation"
         public const val GROUP_IMU_RATE: String = "IMU rate"
+        public const val GROUP_GNSS_LOG: String = "GNSS log"
 
         // #915 firmware follow-up: reachable only once the rocket reports them.
         public const val GROUP_SERVO_TRIM_24: String = "Servo trim 2-4"
@@ -988,6 +994,12 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
                 if (p.imuRateHz != it) {
                     p = p.copy(imuRateHz = it)
                     changed += GROUP_IMU_RATE
+                }
+            }
+            cfg.gnssLogSetting?.let {
+                if (p.gnssLogSetting != it) {
+                    p = p.copy(gnssLogSetting = it)
+                    changed += GROUP_GNSS_LOG
                 }
             }
 

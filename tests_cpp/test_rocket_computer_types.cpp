@@ -1880,6 +1880,9 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(GNSS_CLOCK_MSG),
         // what a replay needs from the pad, once after launch, log-only.
         MT(PAD_CONTEXT_MSG),
+        // GNSS log setting (BLE cmd 79): two codes from the top of the 0x80
+        // block.
+        MT(GNSS_LOG_CONFIG_PENDING),  MT(GNSS_LOG_CONFIG_MSG),
     };
 #undef MT
 
@@ -1925,7 +1928,10 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     // 106 = 105 + IMU_TEMP_MSG (0x9C, the IMU's die temperature).
     // 107 = 106 + GNSS_CLOCK_MSG (0x9D, the GPS-to-MCU clock line).
     // 108 = 107 + PAD_CONTEXT_MSG (0x9E, the pad, written once after launch).
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 108u)
+    // 110 = 108 + the GNSS log setting pair GNSS_LOG_CONFIG_PENDING /
+    //       GNSS_LOG_CONFIG_MSG (0x8E/0x8F, BLE cmd 79). The 0x90 block being
+    //       full too, they open the 0x80 block, from its top.
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 110u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }

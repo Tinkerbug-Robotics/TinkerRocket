@@ -1497,6 +1497,20 @@ static void stageImuRateConfig()
     cfg.rate_hz = cfg_imu_rate;
         setPendingCommandWithConfig(IMU_RATE_CONFIG_PENDING, IMU_RATE_CONFIG_MSG, &cfg, sizeof(cfg));
 }
+
+// GNSS log setting (BLE cmd 79): every SBF block of a mosaic-G5 in the log
+// (DETAILED, the default) or the REDUCED set, which lets the IMU fly 8k.
+// Kept like the IMU rate: cached here for the readback ("glog") and for the
+// IMU limit the apps' menus follow (imuRateMaxNow), relayed to the FC, which
+// keeps its own copy in NVS and applies it at boot.
+static uint8_t cfg_gnss_log = GNSS_LOG_DETAILED;
+
+static void stageGnssLogConfig()
+{
+    GnssLogConfigData cfg;
+    cfg.setting = cfg_gnss_log;
+    setPendingCommandWithConfig(GNSS_LOG_CONFIG_PENDING, GNSS_LOG_CONFIG_MSG, &cfg, sizeof(cfg));
+}
 // Pyro config cache (4 channels on new PCB)
 static bool    cfg_pyro_enabled[4]      = { false, false, false, false };
 static uint8_t cfg_pyro_trigger_mode[4] = { 0, 0, 0, 0 };
@@ -1712,17 +1726,19 @@ static volatile bool fc_identity_dirty  = false;
 // the FC flies GNSS-absent. Relayed to the app as fc_identity's "fc_gnss",
 // and it sets the IMU limit below.
 static volatile uint8_t fc_gnss_type = GNSS_TYPE_NONE;
-// The "config" frame carries "irmax" and "irate", and the receiver moves both
-// (a mosaic-G5 caps the IMU at 3840 Hz): send the readback again when it does.
+// The "config" frame carries "irmax" and "irate", and the receiver and the
+// GNSS log setting move both (a mosaic-G5 with the detailed log caps the IMU
+// at 3840 Hz): send the readback again when they do.
 static volatile bool config_readback_dirty = false;
 
 // The fastest IMU rate the FC flies now: this board's, lowered by the
-// receiver the FC found (imuRateMaxForGnss, the rule the FC applies itself).
-// What the apps filter their menus on ("irmax"), and what the readback's
-// "irate" is brought within, so it says what the FC flies.
+// receiver the FC found with the GNSS log setting (imuRateMaxForGnss, the
+// rule the FC applies itself). What the apps filter their menus on
+// ("irmax"), and what the readback's "irate" is brought within, so it says
+// what the FC flies.
 static uint16_t imuRateMaxNow()
 {
-    return imuRateMaxForGnss(config::IMU_RATE_MAX_HZ, fc_gnss_type);
+    return imuRateMaxForGnss(config::IMU_RATE_MAX_HZ, fc_gnss_type, cfg_gnss_log);
 }
 
 // FC's active board→rocket mounting orientation, mirrored from the v3
@@ -4663,6 +4679,8 @@ static bool isKnownMessageType(uint8_t type)
         case ORIENT_CONFIG_MSG:
         case IMU_RATE_CONFIG_PENDING:
         case IMU_RATE_CONFIG_MSG:
+        case GNSS_LOG_CONFIG_PENDING:
+        case GNSS_LOG_CONFIG_MSG:
         case LORA_MSG:
         case SNAPSHOT_MSG:           // FC→OC over I2S during INFLIGHT
         case GET_FLIGHT_SNAPSHOT:    // FC→OC over I2C at boot recovery
@@ -6931,9 +6949,13 @@ static void sendCurrentConfig()
     // setting is kept, for when the receiver no longer lowers the limit.
     j += ",\"irate\":"; j += itos(imuRateSettingClamp(cfg_imu_rate, imuRateMaxNow()));
     // #1485: the fastest IMU rate this board flies, with the receiver its FC
-    // found. Absent from older firmware, which the apps read as 3840 (nothing
-    // older could do more).
+    // found and the GNSS log setting. Absent from older firmware, which the
+    // apps read as 3840 (nothing older could do more).
     j += ",\"irmax\":"; j += itos(imuRateMaxNow());
+    // The GNSS log setting (cmd 79): 0 detailed, 1 reduced. Absent from
+    // firmware that has no such setting, which the apps read as "this rocket
+    // cannot change it".
+    j += ",\"glog\":"; j += itos(cfg_gnss_log);
     // LoRa settings
     j += ",\"lf\":";  j += fmtf(lora_freq_mhz, 3);   // #1155 item 9: 0.1 MHz hid a 902.25 -> "902.20" (channel centres end in .125/.25)
     j += ",\"lsf\":"; j += itos(lora_sf);
@@ -9209,6 +9231,17 @@ static void loadCachedPeripheralConfigFromNvs()
                  (unsigned)imuRatePeakHz(cfg_imu_rate));
     else
         ESP_LOGI("CFG", "NVS IMU logging rate: %u Hz", (unsigned)cfg_imu_rate);
+
+    // Load cached GNSS log setting. Readback/cache and the IMU limit only:
+    // the FC owns applying it (its own NVS), as with the rate above.
+    prefs.begin("gnsslog", false);
+    {
+        const uint8_t nvs_log = prefs.getUChar("set", cfg_gnss_log);
+        if (gnssLogSettingValid(nvs_log)) cfg_gnss_log = nvs_log;
+        else ESP_LOGW("CFG", "NVS GNSS log setting %u invalid — keeping detailed", (unsigned)nvs_log);
+    }
+    prefs.end();
+    ESP_LOGI("CFG", "NVS GNSS log: %s", gnssLogName(cfg_gnss_log));
 
     // #1271: outstanding blind-window losses, carried across the power cycle
     // between the lost flight and the operator connecting to download. This
@@ -11778,11 +11811,12 @@ static void loop_oc()
         ble_was_connected = ble_now;
     }
 
-    // The FC's receiver moved the IMU limit the "config" frame states: the
-    // whole readback again, as cmd 20 sends it (fc_identity included), once
-    // the ring has drained. Two bursts in it at once would evict the first
-    // one's frames (CFG_RB_CAP); a connect burst still going out is what
-    // usually precedes this, and it already carries the new limit.
+    // The FC's receiver or the GNSS log setting (cmd 79) moved the IMU limit
+    // the "config" frame states: the whole readback again, as cmd 20 sends
+    // it (fc_identity included), once the ring has drained. Two bursts in it
+    // at once would evict the first one's frames (CFG_RB_CAP); a connect
+    // burst still going out is what usually precedes this, and it already
+    // carries the new limit.
     if (config_readback_dirty && cfg_rb_count == 0 &&
         ble_app.isConnected() && ble_app.isReadyForNotify())
     {
@@ -13077,6 +13111,43 @@ static void loop_oc()
                     ESP_LOGW("BLE", "IMU logging rate setting %u rejected "
                                     "(not dynamic or an ODR step up to %u Hz)",
                              (unsigned)rate_hz, (unsigned)config::IMU_RATE_MAX_HZ);
+                }
+            }
+        }
+        else if (ble_cmd == 79)
+        {
+            // GNSS log setting: [setting:1] — GNSS_LOG_DETAILED (0, every SBF
+            // block of a mosaic-G5) or GNSS_LOG_REDUCED (1, its raw
+            // measurements once a second, which lets the IMU fly 8k).
+            // Relayed to the FC, which applies it (except INFLIGHT) and keeps
+            // it in FC NVS. With a mosaic-G5 it moves the IMU limit, so the
+            // readback goes out again and the apps' rate menus follow.
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= 1)
+            {
+                const uint8_t setting = payload[0];
+                if (gnssLogSettingValid(setting))
+                {
+                    const uint16_t imu_max_was = imuRateMaxNow();
+                    cfg_gnss_log = setting;
+                    stageGnssLogConfig();
+                    Preferences p2;
+                    p2.begin("gnsslog", false);
+                    p2.putUChar("set", cfg_gnss_log);
+                    p2.end();
+                    ESP_LOGI("BLE", "GNSS log: %s -> FlightComputer", gnssLogName(setting));
+                    if (imuRateMaxNow() != imu_max_was)
+                    {
+                        ESP_LOGI("CFG", "GNSS log %s with the %s: IMU rates up to %u Hz",
+                                 gnssLogName(setting), gnssTypeName(fc_gnss_type), (unsigned)imuRateMaxNow());
+                        config_readback_dirty = true;
+                    }
+                }
+                else
+                {
+                    ESP_LOGW("BLE", "GNSS log setting %u rejected (not detailed or reduced)",
+                             (unsigned)setting);
                 }
             }
         }

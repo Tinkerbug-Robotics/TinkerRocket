@@ -3053,6 +3053,13 @@ static constexpr uint8_t FIN_CONFIG_MSG          = 0xF3;  // 18-byte FinConfigDa
 // the 44100 Hz I2S link can carry (3840 ≈ 156 of 176 KB/s framed).
 static constexpr uint8_t IMU_RATE_CONFIG_PENDING = 0xF5;  // OC→FC: payload follows as IMU_RATE_CONFIG_MSG
 static constexpr uint8_t IMU_RATE_CONFIG_MSG     = 0xF6;  // 2-byte ImuRateConfigData
+// GNSS log detail (user setting, BLE cmd 79): how much of the mosaic-G5's SBF
+// the FC logs, and so how fast the IMU may run beside it (GnssLogConfigData).
+// 0xA0-0xFD and the 0x90 block are full, 0x80-0x84 are the accelerometer
+// calibration's (#1637, on main after this branch was cut) and 0x9F is held
+// by branches not merged yet, so this pair takes the top of the 0x80 block.
+static constexpr uint8_t GNSS_LOG_CONFIG_PENDING = 0x8E;  // OC→FC: payload follows as GNSS_LOG_CONFIG_MSG
+static constexpr uint8_t GNSS_LOG_CONFIG_MSG     = 0x8F;  // OC→FC: 1-byte GnssLogConfigData
 // Drift-Cast guidance aim point (#435, BLE cmd 28): OC→FC two-phase like the
 // other config pairs.  Payload is byte-for-byte the app's 20-byte
 // {lat f64, lon f64, alt f32} LE frame (GuidancePointData).  0xF7-0xFD were
@@ -3382,22 +3389,65 @@ constexpr uint16_t imuRateResolve(uint16_t setting_hz, bool deployed)
     return deployed ? IMU_RATE_DYNAMIC_POST_HZ : imuRatePeakHz(setting_hz);
 }
 
-// The fastest IMU rate a board flies with this GNSS receiver. The mosaic-G5's
-// SBF blocks (MeasEpoch, MeasExtra and PVTGeodetic at 20 Hz: ~66 kB/s on a
-// 33-satellite sky) share the FC->OC link and the OC's flash with the IMU.
-// At 7680 Hz the link would run at ~92 % (test_i2s_link_budget, budgeted at
-// 130 signals) and the log would outrun the OC's ~310 kB/s flash drain
-// (measured 221 kB/s at 3840 Hz with the SBF on the Goblin's V9, 2026-10-16,
-// and 7680 Hz adds another ~115 kB/s). So with it the IMU stops at 3840 Hz;
-// every other receiver flies the board's own IMU_RATE_MAX_HZ. The FC applies
-// this once its receiver is known and the OC once the FC has named it
-// (FC_IDENTITY). Both still take any setting the board flies, and keep it, and
-// the FC flies imuRateSettingClamp() of it; the OC reports that ("irate") and
-// this limit ("irmax"), so the apps' menus offer only what flies.
-static constexpr uint16_t IMU_RATE_MAX_HZ_MOSAIC = 3840;
-constexpr uint16_t imuRateMaxForGnss(uint16_t board_max_hz, uint8_t gnss_type)
+// GNSS log detail (GNSS_LOG_CONFIG_MSG payload, BLE cmd 79): what the FC
+// logs of a mosaic-G5's SBF.
+//   DETAILED (the default): every block the receiver sends, as before this
+//     setting. Its raw measurements are about the IMU's size at 3840 Hz, so
+//     the IMU stops there (imuRateMaxForGnss).
+//   REDUCED: PVTGeodetic at 20 Hz, the status and navigation blocks, and the
+//     raw measurements (MeasEpoch, MeasExtra) once a second
+//     (gnss_log_policy.h). The IMU flies the board's own limit, 8k included.
+// The receiver streams the full set either way, to the FC, which parses all
+// of it, and to its own microSD card; only the FC's log is cut. No other
+// receiver has a stream this touches (the u-blox sends no raw data, and the
+// LC86G's RTCM3 is ~0.6 kB/s), so for them the setting changes nothing.
+// Kept like the IMU rate: the OC stores it and relays it, the FC stores it
+// and applies it (never INFLIGHT), and both start a fresh board on DETAILED.
+static constexpr uint8_t GNSS_LOG_DETAILED = 0;
+static constexpr uint8_t GNSS_LOG_REDUCED  = 1;
+
+typedef struct __attribute__((packed))
 {
-    return (gnss_type == GNSS_TYPE_MOSAIC && board_max_hz > IMU_RATE_MAX_HZ_MOSAIC)
+    uint8_t setting;  // GNSS_LOG_DETAILED or GNSS_LOG_REDUCED
+} GnssLogConfigData;
+static_assert(sizeof(GnssLogConfigData) == 1, "GnssLogConfigData must be 1 byte");
+
+constexpr bool gnssLogSettingValid(uint8_t setting)
+{
+    return setting == GNSS_LOG_DETAILED || setting == GNSS_LOG_REDUCED;
+}
+
+// For log lines.
+constexpr const char* gnssLogName(uint8_t setting)
+{
+    return setting == GNSS_LOG_DETAILED ? "detailed"
+         : setting == GNSS_LOG_REDUCED  ? "reduced"
+         : "?";
+}
+
+// The fastest IMU rate a board flies with this GNSS receiver and GNSS log
+// setting. The mosaic-G5's SBF blocks (MeasEpoch, MeasExtra and PVTGeodetic
+// at 20 Hz: ~66 kB/s on a 33-satellite sky) share the FC->OC link and the
+// OC's flash with the IMU. At 7680 Hz the link would run at ~92 %
+// (test_i2s_link_budget, budgeted at 130 signals) and the log would outrun
+// the OC's ~310 kB/s flash drain (measured 221 kB/s at 3840 Hz with the SBF
+// on the Goblin's V9, 2026-10-16, and 7680 Hz adds another ~115 kB/s). So
+// with it and the DETAILED log the IMU stops at 3840 Hz. The REDUCED log
+// keeps ~9 kB/s of the SBF, which 7680 Hz has room for (the log at ~94 % of
+// the drain in a guided coast, a u-blox flight's ~91 %), and every other
+// receiver flies the board's own IMU_RATE_MAX_HZ whatever the setting. The FC
+// applies this once its receiver is known and the OC once the FC has named
+// it (FC_IDENTITY). Both still take any IMU setting the board flies, and keep
+// it, and the FC flies imuRateSettingClamp() of it; the OC reports that
+// ("irate") and this limit ("irmax"), so the apps' menus offer only what
+// flies. A gnss_log that is no setting reads as DETAILED: the limit that is
+// safe for every log.
+static constexpr uint16_t IMU_RATE_MAX_HZ_MOSAIC = 3840;
+constexpr uint16_t imuRateMaxForGnss(uint16_t board_max_hz, uint8_t gnss_type,
+                                     uint8_t gnss_log = GNSS_LOG_DETAILED)
+{
+    return (gnss_type == GNSS_TYPE_MOSAIC && gnss_log != GNSS_LOG_REDUCED &&
+            board_max_hz > IMU_RATE_MAX_HZ_MOSAIC)
                ? IMU_RATE_MAX_HZ_MOSAIC
                : board_max_hz;
 }
