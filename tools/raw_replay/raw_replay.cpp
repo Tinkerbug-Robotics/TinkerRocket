@@ -936,7 +936,7 @@ void guardedEpoch(RawGnssShadow& sh, const BuiltEpoch& b, int64_t t_us, uint8_t 
 
 #if RAW_REPLAY_DIGEST
 // ---- --digest: what a step left, hashed field by field. The lists below are
-// fixed (bitident.sh builds this file frozen at the commit that added it):
+// fixed (bitident.sh builds this file frozen at the commit it names):
 // every field is named, so a tree that only adds fields hashes the same, and
 // any change to what the Beetle's filter does with today's fields does not.
 struct Fnv
@@ -1151,16 +1151,22 @@ std::string hex64(uint64_t v)
     return b;
 }
 
+// main.cpp's raw task takes a PAD_CONTEXT_MSG record at most this often
+// (config::PAD_CONTEXT_PERIOD_MS), stamped with its FC micros
+constexpr int64_t kPadContextPeriodUs = 20000;
+
 // One step's line: its count and IMU time, then the hashes of the navigation
-// state, the RAW_GNSS_EKF_MSG (0x96) and RAW_GNSS_ATT_MSG (0x9B) records and
-// the HEADING_FIT_MSG records it filled ("-": none this step, as main.cpp's
-// raw task would have found), the counters, and the filter's whole state.
-// Taking the records changes nothing the filter does: they are its log's.
-void writeDigest(FILE* out, RawGnssShadow& sh, uint32_t time_us)
+// state, the RAW_GNSS_EKF_MSG (0x96) and RAW_GNSS_ATT_MSG (0x9B) records, the
+// HEADING_FIT_MSG records and the PAD_CONTEXT_MSG record it filled ("-": none
+// this step, as main.cpp's raw task would have found), the counters, and the
+// filter's whole state. Taking the records changes nothing the filter does:
+// they are its log's. The pad context is taken as the raw task takes it, at
+// the step's IMU time (t_us; pcx_t0_us: when the last one was taken).
+void writeDigest(FILE* out, RawGnssShadow& sh, uint32_t time_us, int64_t t_us, int64_t& pcx_t0_us)
 {
     ShadowNav nav;
     sh.navState(nav);
-    std::string rec = "-", att = "-", hdg = "-";
+    std::string rec = "-", att = "-", hdg = "-", pcx = "-";
     RawGnssEkfData r;
     if (sh.takeLog(r))
     {
@@ -1185,8 +1191,21 @@ void writeDigest(FILE* out, RawGnssShadow& sh, uint32_t time_us)
     }
     if (nh > 0)
         hdg = hex64(hh.h);
-    std::fprintf(out, "%u %u %s %s %s %s %s %s\n", sh.stats().step_n, time_us, hex64(navHash(nav)).c_str(),
-                 rec.c_str(), att.c_str(), hdg.c_str(), hex64(statsHash(sh.stats())).c_str(),
+    if (t_us - pcx_t0_us >= kPadContextPeriodUs)
+    {
+        uint8_t buf[MAX_PAYLOAD];
+        size_t len = 0;
+        if (sh.takePadContext(buf, sizeof(buf), len, static_cast<uint32_t>(t_us)))
+        {
+            pcx_t0_us = t_us;
+            Fnv h;
+            h.put(static_cast<uint32_t>(len));
+            h.add(buf, len);
+            pcx = hex64(h.h);
+        }
+    }
+    std::fprintf(out, "%u %u %s %s %s %s %s %s %s\n", sh.stats().step_n, time_us, hex64(navHash(nav)).c_str(),
+                 rec.c_str(), att.c_str(), hdg.c_str(), pcx.c_str(), hex64(statsHash(sh.stats())).c_str(),
                  hex64(stateHash(sh.filter())).c_str());
 }
 #endif
@@ -1443,6 +1462,7 @@ int main(int argc, char** argv)
 #if RAW_REPLAY_DIGEST
     FILE* dg = nullptr;
     uint32_t dg_step = 0;
+    int64_t dg_pcx_t0 = INT64_MIN / 2;   // none taken yet: the first goes when it is due
     if (!a.digest.empty())
     {
         dg = std::fopen(a.digest.c_str(), "w");
@@ -2118,7 +2138,7 @@ int main(int argc, char** argv)
             if (dg && sh.stats().step_n != dg_step)
             {
                 dg_step = sh.stats().step_n;
-                writeDigest(dg, sh, s.time_us);
+                writeDigest(dg, sh, s.time_us, ev.t_us, dg_pcx_t0);
             }
 #endif
             break;
