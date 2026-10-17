@@ -1,6 +1,8 @@
 // RawGnssMeasStage.cpp — see RawGnssMeasStage.h
 #include "RawGnssMeasStage.h"
 
+#include <cmath>
+
 #include "RtcmEphemeris.h"
 #include "gnss/atmo.h"
 #include "gnss/types.h"
@@ -39,6 +41,45 @@ bool RawGnssMeasStage::onEphemeris(const uint8_t* payload, size_t len)
     return true;
 }
 
+bool RawGnssMeasStage::addEphemeris(const gps_eph_t& e)
+{
+    // The RTCM decode gives only what the builder can place, and a driver's
+    // is held to the same: a GPS, Galileo or BeiDou MEO/IGSO satellite
+    // (gnss/eph.h has no GEO orbit), PRN 1-63.
+    bool ok = e.valid != 0 && e.sys >= GNSS_SYS_GPS && e.sys <= GNSS_SYS_BDS && e.prn >= 1 && e.prn < kPrns
+              && !(e.sys == GNSS_SYS_BDS && (e.prn <= 5 || e.prn >= 59));
+    // And, where the last epoch named its week, its toe within
+    // kEphMaxOffsetS of the receiver's time: the store goes by second of week
+    // alone, so one a whole number of weeks old (a receiver's stored copy)
+    // would be taken as today's. (That epoch's own week, not the last one
+    // named: past the week's turn the two differ.) BeiDou's toe is in BeiDou
+    // time, 14 s behind GPS.
+    if (ok && last_week_ != 0 && e.week > 0)
+    {
+        const double toe_gps = e.toe - (e.sys == GNSS_SYS_BDS ? BDT_MINUS_GPST : 0.0);
+        const double d = (e.week - static_cast<int>(last_week_)) * 604800.0 + (toe_gps - last_tow_s_);
+        ok = std::fabs(d) <= kEphMaxOffsetS;
+    }
+    if (!ok)
+    {
+        st_.eph_bad++;
+        return false;
+    }
+    if (store_.add(e))
+    {
+        st_.eph_added++;
+        st_.eph_sats = sat16s(store_.satellites(GNSS_SYS_GPS) + store_.satellites(GNSS_SYS_GAL)
+                              + store_.satellites(GNSS_SYS_BDS));
+    }
+    return true;
+}
+
+bool RawGnssMeasStage::hasEphemeris(int sys, int prn, double tow_gps) const
+{
+    const double to_sys = sys == GNSS_SYS_BDS ? BDT_MINUS_GPST : 0.0;   // as the builder picks
+    return store_.select(sys, prn, tow_gps + to_sys) != nullptr;
+}
+
 void RawGnssMeasStage::setIono(const ShadowIono& io)
 {
     iono_in_ = io;
@@ -60,6 +101,7 @@ void RawGnssMeasStage::see(const TimedRawEpoch& e)
     st_.epochs++;
     if (e.gps_week != 0)
         week_ = e.gps_week;
+    last_week_ = e.gps_week;
     last_tow_s_ = e.epoch.tow_s;
     st_.last_timed = e.mcu_us != 0 ? 1 : 0;
     // which satellites the receiver tracks that it has not sent the ephemeris of
@@ -162,10 +204,131 @@ bool RawGnssMeasStage::offer(const TimedRawEpoch& e, const ShadowNav& nav, Built
     }
     double r[3];
     geo_to_ecef(nav.lla[0], nav.lla[1], nav.lla[2], r);
-    build(e, r, nav.in_flight != 0, out);
+    if (cfg_.sat_cap > 0)
+    {
+        // every satellite's lock age from the whole sky, then the build from
+        // the cap's picks (begin() notes them again at the same time: no gap)
+        builder_.noteEpoch(e.epoch);
+        capEpoch(e);
+        build(sel_, r, nav.in_flight != 0, out);
+        capBuilt(out);
+    }
+    else
+    {
+        build(e, r, nav.in_flight != 0, out);
+    }
     st_.built++;
     return true;
 }
+
+// The cap's picks from e into sel_: of the satellites the builder would build
+// (a pseudorange at or above its system's C/N0 floor, an ephemeris), up to
+// kCapGps GPS ones first, then any, to sat_cap. Each by its C/N0, kCapHoldDb
+// more if it was built the last epoch; a tie goes to the lower system, then
+// the lower PRN, so the same sky always gives the same picks. The cap knows
+// no elevations: a satellite its build dropped under the mask (capBuilt) is
+// picked only after every other, and not among the GPS ones, until it is
+// tried again. sel_ keeps e's order.
+void RawGnssMeasStage::capEpoch(const TimedRawEpoch& e)
+{
+    static constexpr int8_t kNot = -1, kCand = 0, kPicked = 1, kMasked = 2;
+    const RawEpoch& in = e.epoch;
+    const int n = in.n < RawEpoch::kMaxObs ? in.n : RawEpoch::kMaxObs;
+    // a satellite rises through the mask in minutes: those under it are
+    // tried again, as any other, kCapMaskRetryS after the first of them
+    if ((masked_[0] | masked_[1] | masked_[2]) != 0 && std::fabs(gps_time_diff(in.tow_s, masked_tow_)) >= kCapMaskRetryS)
+        masked_[0] = masked_[1] = masked_[2] = 0;
+    float score[RawEpoch::kMaxObs];
+    int8_t state[RawEpoch::kMaxObs];
+    int cand_sats = 0;                    // the candidates not under the mask
+    for (int i = 0; i < n; ++i)
+    {
+        const RawObs& o = in.obs[i];
+        state[i] = kNot;
+        score[i] = 0.0f;
+        if (!o.has_pr || o.sys > GNSS_SYS_BDS || o.prn >= kPrns || o.cn0_dbhz < cfg_.meas.sig[o.sys].cn0_min_pr
+            || !hasEphemeris(o.sys, o.prn, in.tow_s))
+            continue;
+        bool first = true;                // a satellite's first observation counts it
+        for (int j = 0; j < i; ++j)
+            if (state[j] != kNot && in.obs[j].sys == o.sys && in.obs[j].prn == o.prn)
+                first = false;
+        const bool masked = ((masked_[o.sys] >> o.prn) & 1u) != 0;
+        cand_sats += first && !masked ? 1 : 0;
+        state[i] = masked ? kMasked : kCand;
+        score[i] = o.cn0_dbhz + (((picked_[o.sys] >> o.prn) & 1u) != 0 ? kCapHoldDb : 0.0f);
+    }
+    auto better = [&](int a, int b) {
+        if (score[a] != score[b])
+            return score[a] > score[b];
+        if (in.obs[a].sys != in.obs[b].sys)
+            return in.obs[a].sys < in.obs[b].sys;
+        return in.obs[a].prn < in.obs[b].prn;
+    };
+    uint64_t picked[3] = {};
+    int sats = 0, kept = 0;               // picked; of them, not under the mask
+    for (int pass = 0; pass < 3; ++pass)
+    {
+        // GPS first, then any, then those under the mask
+        const int want = pass == 0 ? (cfg_.sat_cap < kCapGps ? cfg_.sat_cap : kCapGps) : cfg_.sat_cap;
+        const int8_t from = pass < 2 ? kCand : kMasked;
+        while (sats < want)
+        {
+            int best = -1;
+            for (int i = 0; i < n; ++i)
+                if (state[i] == from && (pass != 0 || in.obs[i].sys == GNSS_SYS_GPS) && (best < 0 || better(i, best)))
+                    best = i;
+            if (best < 0)
+                break;
+            const uint8_t sys = in.obs[best].sys, prn = in.obs[best].prn;
+            for (int i = 0; i < n; ++i)   // the satellite, every observation of it
+                if (state[i] == from && in.obs[i].sys == sys && in.obs[i].prn == prn)
+                    state[i] = kPicked;
+            picked[sys] |= uint64_t{1} << prn;
+            sats++;
+            kept += from == kCand ? 1 : 0;
+        }
+    }
+    sel_.epoch.tow_s = in.tow_s;
+    int k = 0;
+    for (int i = 0; i < n; ++i)
+        if (state[i] == kPicked)
+            sel_.epoch.obs[k++] = in.obs[i];
+    sel_.epoch.n = k;
+    sel_.mcu_us = e.mcu_us;
+    sel_.arrival_us = e.arrival_us;
+    sel_.gps_week = e.gps_week;
+    for (int s = 0; s < 3; ++s)
+        picked_[s] = picked[s];
+    st_.capped_out += static_cast<uint32_t>(cand_sats - kept);
+}
+
+// After the build of the cap's picks: the hold is for the satellites built,
+// and a pick the build dropped -- under the elevation mask, the one test the
+// cap cannot make -- is picked last from now on (capEpoch), so it does not
+// keep a place a satellite that can be built is waiting for.
+void RawGnssMeasStage::capBuilt(const BuiltEpoch& out)
+{
+    uint64_t built[3] = {};
+    for (int i = 0; i < out.n; ++i)
+        if (out.meas[i].sys <= GNSS_SYS_BDS && out.meas[i].prn < kPrns)
+            built[out.meas[i].sys] |= uint64_t{1} << out.meas[i].prn;
+    const bool none = (masked_[0] | masked_[1] | masked_[2]) == 0;
+    for (int s = 0; s < 3; ++s)
+    {
+        masked_[s] = (masked_[s] | picked_[s]) & ~built[s];
+        picked_[s] = built[s];
+    }
+    if (none && (masked_[0] | masked_[1] | masked_[2]) != 0)
+        masked_tow_ = out.tow_s;
+}
+
+#ifdef TR_EPH_CAPACITY
+bool RawGnssMeasStage::ephCapacityAgrees(size_t caller_capacity)
+{
+    return caller_capacity == EphemerisStore::kCapacity && EphemerisStore::builtCapacity() == EphemerisStore::kCapacity;
+}
+#endif
 
 void RawGnssMeasStage::skip(const TimedRawEpoch& e)
 {
