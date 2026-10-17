@@ -16,6 +16,7 @@ void GnssTimeSync::reset()
     bn_ = 0;
     a_ = 0.0;
     drift_ = 0.0;
+    drift_fitted_ = false;
     t_ref_ = 0.0;
     env_rms_ms_ = 0.0;
     off_run_ = 0;
@@ -194,6 +195,7 @@ void GnssTimeSync::refitDrift()
     const double sigma_b = sigma * std::sqrt(12.0 / q) / span;
     const double w = kDriftPrior * kDriftPrior / (kDriftPrior * kDriftPrior + sigma_b * sigma_b);
     drift_ = std::max(-kMaxDrift, std::min(kMaxDrift, w * b));
+    drift_fitted_ = true;
 }
 
 void GnssTimeSync::refit()

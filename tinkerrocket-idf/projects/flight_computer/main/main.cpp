@@ -3692,7 +3692,8 @@ static void rawShadowTask(void*)
                               "capped out | tracked %d, "
                               "%d without an ephemeris | eph %d sats, %u of %u store entries, %lu blocks refused, "
                               "%lu nav queue drops | imu ring drops %lu, gaps bridged %lu | PPS tag max %ld us, "
-                              "%lu over %ld of %lu | iono %s (%u sets) | pad datum %s, %lu fixes | GNSS log %s",
+                              "%lu over %ld of %lu judged (%lu settling, %lu edges late) | iono %s (%u sets) | pad datum %s, %lu fixes | "
+                              "GNSS log %s",
                          (unsigned)(sh.running() ? nv.gnss_aided : 0), (unsigned)(sh.running() ? nv.baro_aided : 0),
                          rs.period_ms ? 1000.0 / (double)rs.period_ms : 0.0, (unsigned long)rs.period_ms,
                          sh.config().sat_cap, (unsigned long)mst.epochs, (unsigned long)mst.untimed,
@@ -3701,8 +3702,9 @@ static void rawShadowTask(void*)
                          (unsigned)(raw_meas ? raw_meas->ephemerides().size() : 0),
                          (unsigned)gnss_raw::EphemerisStore::kCapacity, (unsigned long)raw_nav_drain.refused,
                          (unsigned long)nav_dropped, (unsigned long)raw_shadow_link.imu.dropped(),
-                         (unsigned long)st.gaps_bridged, (long)rs.pps_max_us, (unsigned long)rs.pps_over,
-                         (long)TR_GNSSReceiverMosaicSerial::kPpsTagBarUs, (unsigned long)rs.pps_checks,
+                         (unsigned long)st.gaps_bridged, (long)rs.pps.max_us, (unsigned long)rs.pps.over,
+                         (long)TR_GNSSReceiverMosaicSerial::kPpsTagBarUs, (unsigned long)rs.pps.checks,
+                         (unsigned long)rs.pps.settling, (unsigned long)rs.pps.late,
                          !raw_iono.have ? "none" : (raw_iono.from_rx ? "the receiver's GPSIon" : "the app's"),
                          (unsigned)raw_iono.sets, ref_from_nav ? "the raw filter's" : "the receiver's",
                          (unsigned long)ref_pos_count,

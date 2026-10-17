@@ -42,7 +42,8 @@
 // with the bias of the last PVTGeodetic whose own MeasEpoch was noted
 // (pvtAnchorsJumps) carried forward by its drift and by the clock jumps since
 // it (a -1 ms jump takes 1 ms off the bias). ppsResidualUs checks a
-// whole-second epoch's tag against its 1PPS edge.
+// whole-second epoch's tag against its 1PPS edge, and notePpsTag keeps that
+// check over a run.
 //
 // Header-only and pure (tests_cpp/test_mosaic_raw_epoch.cpp).
 #ifndef MOSAIC_RAW_EPOCH_H
@@ -338,6 +339,80 @@ inline int32_t ppsResidualUs(int64_t mcu_us, int64_t pps_edge_us, double rx_clk_
     if (!(r < 2147483647.0)) return 2147483647;
     if (!(r > -2147483648.0)) return -2147483647 - 1;
     return static_cast<int32_t>(std::lround(r));
+}
+
+// The PPS tag check kept over a run, one whole second at a time (the
+// driver's RawStats).
+struct PpsTagStats
+{
+    uint32_t checks = 0;            // whole seconds judged (the line had the crystal's drift)
+    uint32_t over = 0;              //   with |residual| over the bar
+    int32_t  max_us = 0;            //   the largest |residual|
+    int32_t  last_us = 0;           // the last residual, signed, judged or not
+    uint32_t settling = 0;          // seconds checked before the line had the drift: not judged
+    int32_t  settling_max_us = 0;   //   their largest |residual|
+    uint32_t late = 0;              // edges the interrupt stamped late: judged where they were due
+    int32_t  late_max_us = 0;       //   the latest, us past due
+    // the last second checked and its edge, if that was on time: where the
+    // next second's edge is due
+    int64_t  prev_s = 0;
+    int64_t  prev_edge_us = 0;
+    bool     prev_on_time = false;
+};
+
+// One whole second's check: its GPS second, its epoch's tag, the 1PPS edge
+// paired with that second as the interrupt stamped it, the clock line's MCU
+// length of the second that ended there (mcuAt(gps_s) - mcuAt(gps_s - 1)),
+// whether the line has fitted the MCU crystal's drift yet
+// (GnssTimeSync::driftFitted), and the epoch's own RxClkBias. Two things
+// other than a bad tag move the residual, and each is kept apart:
+//   - An edge can be stamped late, never early: a flash write holds off the
+//     GPIO interrupt (its service is not IRAM-safe), for milliseconds at an
+//     erase. Such an edge comes more than the bar after where the second
+//     before's edge puts it (one line second on; a crystal moves that by
+//     100 us at most), and the tag is judged against where it was due, so a
+//     late edge neither reads as a bad tag nor hides one. A line that drifts
+//     off the edges moves them a few tens of us a second, never the bar, and
+//     stays in the check.
+//   - Until the line has fitted the drift (20 s of its 10 s blocks, ~30 s
+//     after the first edge) it runs flat, and its tags part from the edges
+//     by the crystal's ppm each second: ~0.4 ms by then at the V9's +16 ppm.
+//     A known, passing error of the line, not a slip in the tag's arithmetic:
+//     those seconds are counted and not judged.
+inline void notePpsTag(PpsTagStats& s, int64_t gps_s, int64_t tag_mcu_us, int64_t edge_us, int64_t second_us,
+                       bool line_settled, double rx_clk_bias_ms, int32_t bar_us)
+{
+    int64_t ref = edge_us;
+    bool late = false;
+    if (s.prev_on_time && s.prev_s == gps_s - 1)
+    {
+        const int64_t due = s.prev_edge_us + second_us;
+        if (edge_us - due > bar_us)
+        {
+            late = true;
+            ref = due;
+            const int64_t l = edge_us - due;
+            const int32_t l32 = l > 2147483647 ? 2147483647 : static_cast<int32_t>(l);
+            s.late++;
+            if (l32 > s.late_max_us) s.late_max_us = l32;
+        }
+    }
+    s.prev_s = gps_s;
+    s.prev_on_time = !late;
+    if (!late) s.prev_edge_us = edge_us;
+
+    const int32_t res = ppsResidualUs(tag_mcu_us, ref, rx_clk_bias_ms);
+    const int32_t mag = (res == -2147483647 - 1) ? 2147483647 : (res < 0 ? -res : res);
+    s.last_us = res;
+    if (!line_settled)
+    {
+        s.settling++;
+        if (mag > s.settling_max_us) s.settling_max_us = mag;
+        return;
+    }
+    s.checks++;
+    if (mag > s.max_us) s.max_us = mag;
+    if (mag > bar_us) s.over++;
 }
 
 }  // namespace mosaic

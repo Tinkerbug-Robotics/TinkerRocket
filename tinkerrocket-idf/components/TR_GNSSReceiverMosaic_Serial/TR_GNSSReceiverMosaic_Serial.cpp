@@ -923,18 +923,23 @@ void TR_GNSSReceiverMosaicSerial::rawPvt(const mosaic::PvtGeodetic& p)
     // The PPS tag check: the whole-second epoch's tag against the edge of
     // that very GPS second, with this, its own epoch's, RxClkBias
     // (ppsResidualUs). A slip of a second, a week, a millisecond of jumps or
-    // the bias's sign in the tag shows here as hundreds of microseconds or more.
+    // the bias's sign in the tag shows here as hundreds of microseconds or
+    // more. An edge the interrupt stamped late (a flash write held it off),
+    // and the seconds before the line has the crystal's drift, are kept
+    // apart (notePpsTag).
     if (r.tag_have && r.tag_rx_ms == rx_ms)
     {
         r.tag_have = false;
         if (r.pair_have && r.pair_gps_s * 1000LL == rx_ms)
         {
-            const int32_t res = mosaic::ppsResidualUs(r.tag_mcu_us, r.pair_edge_us, p.rx_clk_bias_ms);
-            const int32_t mag = (res == INT32_MIN) ? INT32_MAX : std::abs(res);
-            r.st.pps_checks++;
-            r.st.pps_last_us = res;
-            if (mag > r.st.pps_max_us) r.st.pps_max_us = mag;
-            if (mag > kPpsTagBarUs) r.st.pps_over++;
+            int64_t at_s = 0, at_before = 0;
+            const int64_t second_us =
+                time_sync_.mcuAt(static_cast<double>(r.pair_gps_s), at_s) &&
+                        time_sync_.mcuAt(static_cast<double>(r.pair_gps_s - 1), at_before)
+                    ? at_s - at_before
+                    : 1000000;
+            mosaic::notePpsTag(r.st.pps, r.pair_gps_s, r.tag_mcu_us, r.pair_edge_us, second_us,
+                               time_sync_.driftFitted(), p.rx_clk_bias_ms, kPpsTagBarUs);
         }
     }
 }
@@ -1006,10 +1011,13 @@ void TR_GNSSReceiverMosaicSerial::logRawStatus()
              s.nav_in_psram ? "PSRAM" : "internal RAM", static_cast<unsigned long>(s.ions),
              static_cast<unsigned long>(s.ions_bad), static_cast<unsigned long>(s.clock_jumps),
              static_cast<unsigned long>(s.clock_restarts), static_cast<unsigned long>(s.pvt_passed));
-    ESP_LOGI(TAG, "mosaic PPS tag check: %lu whole seconds checked, |residual| max %ld us, %lu over %ld us, "
-                  "last %+ld us",
-             static_cast<unsigned long>(s.pps_checks), static_cast<long>(s.pps_max_us),
-             static_cast<unsigned long>(s.pps_over), static_cast<long>(kPpsTagBarUs),
-             static_cast<long>(s.pps_last_us));
+    ESP_LOGI(TAG, "mosaic PPS tag check: %lu whole seconds judged, |residual| max %ld us, %lu over %ld us, "
+                  "last %+ld us | %lu before the line had the crystal's drift (max %ld us, not judged) | %lu edges "
+                  "stamped late (the interrupt held off), up to %ld us past due: judged where due",
+             static_cast<unsigned long>(s.pps.checks), static_cast<long>(s.pps.max_us),
+             static_cast<unsigned long>(s.pps.over), static_cast<long>(kPpsTagBarUs),
+             static_cast<long>(s.pps.last_us), static_cast<unsigned long>(s.pps.settling),
+             static_cast<long>(s.pps.settling_max_us), static_cast<unsigned long>(s.pps.late),
+             static_cast<long>(s.pps.late_max_us));
 }
 #endif  // TR_GNSS_DRIVER_MOSAIC

@@ -182,11 +182,11 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
             uint32_t ions = 0;               // GPSIon blocks decoded
             uint32_t ions_bad = 0;           //   and refused
             // the PPS tag check: each whole-second epoch's tag against its
-            // 1PPS edge (ppsResidualUs, with that second's own RxClkBias)
-            uint32_t pps_checks = 0;
-            uint32_t pps_over = 0;           // |residual| over kPpsTagBarUs
-            int32_t  pps_max_us = 0;         // the largest |residual|
-            int32_t  pps_last_us = 0;        // the last residual, signed
+            // 1PPS edge (ppsResidualUs, with that second's own RxClkBias), or
+            // where the edge was due when the interrupt stamped it late, and
+            // judged once the line has the crystal's drift (notePpsTag); the
+            // bar is kPpsTagBarUs
+            mosaic::PpsTagStats pps;
         };
         void rawStats(RawStats& out) const;
         static constexpr int32_t kPpsTagBarUs = 200;   // a right tag leaves ~0.03 ms rms

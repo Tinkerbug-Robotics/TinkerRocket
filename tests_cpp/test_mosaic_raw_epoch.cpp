@@ -580,6 +580,123 @@ TEST(MosaicRawEpoch, PpsResidualSaturates)
     EXPECT_EQ(ppsResidualUs(0, int64_t(604800) * 1000000, 0.0), -2147483647 - 1);
 }
 
+// The check kept over a run (notePpsTag): an edge the interrupt stamped late
+// -- a flash write held it off -- is judged where the second before puts it,
+// so it neither reads as a bad tag nor hides one; an early edge, or one late
+// with the second before it late too, stays the check; and the seconds
+// before the line has the crystal's drift are counted, not judged.
+TEST(MosaicRawEpoch, PpsTagCheckSetsALateEdgeAside)
+{
+    const int32_t bar = 200;
+    const double bias = 0.4;                                    // ms: a right tag sits 400 us before its edge
+    auto edgeOf = [](int64_t k) { return 5000000 + k * 1000020; };   // a crystal 20 ppm fast
+    auto right = [&](int64_t k) { return edgeOf(k) - 400; };
+    const int64_t sec = 1000020;                                // the line's second
+    PpsTagStats s;
+    notePpsTag(s, 100, right(100), edgeOf(100) + 5, sec, true, bias, bar);   // the interrupt's own jitter
+    EXPECT_EQ(s.checks, 1u);
+    EXPECT_EQ(s.max_us, 5);
+    EXPECT_EQ(s.last_us, -5);
+    EXPECT_EQ(s.late, 0u);
+    notePpsTag(s, 101, right(101), edgeOf(101), sec, true, bias, bar);
+
+    // 3 ms late (an erase): the edge alone reads -3000 us, a "time-tag slip"
+    EXPECT_EQ(ppsResidualUs(right(102), edgeOf(102) + 3000, bias), -3000);
+    notePpsTag(s, 102, right(102), edgeOf(102) + 3000, sec, true, bias, bar);
+    EXPECT_EQ(s.late, 1u);
+    EXPECT_EQ(s.late_max_us, 3000);
+    EXPECT_EQ(s.last_us, 0);
+    EXPECT_EQ(s.max_us, 5);
+    EXPECT_EQ(s.over, 0u);
+
+    // the second after a late edge has none on time before it: the edge is
+    // the check, and on time it passes
+    notePpsTag(s, 103, right(103), edgeOf(103), sec, true, bias, bar);
+    EXPECT_EQ(s.last_us, 0);
+    EXPECT_EQ(s.over, 0u);
+
+    // a millisecond slip in the tag on a late edge's second still fails
+    notePpsTag(s, 104, right(104) + 1000, edgeOf(104) + 3000, sec, true, bias, bar);
+    EXPECT_EQ(s.late, 2u);
+    EXPECT_EQ(s.last_us, 1000);
+    EXPECT_EQ(s.over, 1u);
+
+    // two late in a row: the second has no on-time edge before it, and fails
+    notePpsTag(s, 105, right(105), edgeOf(105) + 3000, sec, true, bias, bar);
+    EXPECT_EQ(s.late, 2u);
+    EXPECT_EQ(s.last_us, -3000);
+    EXPECT_EQ(s.over, 2u);
+
+    // an edge 3 ms early is no interrupt's doing: it stays the check
+    notePpsTag(s, 106, right(106), edgeOf(106), sec, true, bias, bar);
+    notePpsTag(s, 107, right(107), edgeOf(107) - 3000, sec, true, bias, bar);
+    EXPECT_EQ(s.last_us, 3000);
+    EXPECT_EQ(s.over, 3u);
+
+    // after a gap there is no second before to say where it was due
+    notePpsTag(s, 120, right(120), edgeOf(120) + 3000, sec, true, bias, bar);
+    EXPECT_EQ(s.late, 2u);
+    EXPECT_EQ(s.over, 4u);
+    EXPECT_EQ(s.max_us, 3000);
+    EXPECT_EQ(s.checks, 9u);
+
+    // a line still flat: its seconds are counted apart, whatever they read
+    PpsTagStats f;
+    notePpsTag(f, 10, right(10) - 450, edgeOf(10), sec, false, bias, bar);
+    EXPECT_EQ(f.settling, 1u);
+    EXPECT_EQ(f.settling_max_us, 450);
+    EXPECT_EQ(f.checks, 0u);
+    EXPECT_EQ(f.over, 0u);
+    EXPECT_EQ(f.last_us, -450);
+}
+
+// The same on the PPS line itself (GnssTimeSync, the driver's), as the
+// driver runs it: 90 s of edges on an MCU clock 16 ppm fast (the V9's), one
+// stamped 5 ms late at 60 s, each whole second's epoch tagged on the line
+// as it stood. Until the line has fitted the drift its tags part from the
+// edges by the crystal (hundreds of us, counted apart); from then every
+// second passes, and the late edge is set aside -- where the edge alone
+// would have read a 5 ms slip.
+TEST(MosaicRawEpoch, ALateEdgeOnThePpsLine)
+{
+    const double t0 = 2440 * 604800.0 + 302400.0;   // GPS s
+    auto mcuTrue = [&](double gps) { return 4.0e9 + (gps - t0) * 1.0e6 * (1.0 + 16e-6); };
+    lc86::GnssTimeSync sync;
+    const int64_t late_k = 60, late_us = 5000;
+    const double bias = 0.31;   // ms
+    PpsTagStats s;
+    int32_t edge_alone_worst = 0;
+    for (int64_t k = 0; k < 90; ++k)
+    {
+        const double gps = t0 + k;
+        const int64_t edge = std::llround(mcuTrue(gps)) + (k == late_k ? late_us : 0);
+        sync.addSample(gps, edge);
+        int64_t tag = 0, at_s = 0, at_before = 0;
+        if (!sync.mcuAt(gps - bias * 1e-3, tag)) continue;   // the whole second's epoch, tagged on the line
+        ASSERT_TRUE(sync.mcuAt(gps, at_s));
+        ASSERT_TRUE(sync.mcuAt(gps - 1.0, at_before));
+        notePpsTag(s, static_cast<int64_t>(gps), tag, edge, at_s - at_before, sync.driftFitted(), bias, 200);
+        if (sync.driftFitted())
+        {
+            const int32_t alone = ppsResidualUs(tag, edge, bias);
+            if (std::abs(alone) > std::abs(edge_alone_worst)) edge_alone_worst = alone;
+        }
+    }
+    std::printf("[pps] %u seconds judged, max %d us; %u before the drift (max %d us); %u late (up to %d us); "
+                "the edge alone: %d us\n",
+                (unsigned)s.checks, (int)s.max_us, (unsigned)s.settling, (int)s.settling_max_us, (unsigned)s.late,
+                (int)s.late_max_us, (int)edge_alone_worst);
+    EXPECT_TRUE(sync.driftFitted());
+    EXPECT_GE(s.settling, 15u);
+    EXPECT_GT(s.settling_max_us, 200);   // the flat line's ramp: why those seconds are not judged
+    EXPECT_GE(s.checks, 55u);
+    EXPECT_EQ(s.over, 0u);
+    EXPECT_LT(s.max_us, 60);   // the line still settling its drift: well inside the bar
+    EXPECT_EQ(s.late, 1u);
+    EXPECT_NEAR(s.late_max_us, late_us, 30);
+    EXPECT_LT(edge_alone_worst, -4900);   // what the check read before
+}
+
 // The whole tag on a simulated bench: a mosaic whose clock runs 0.27 ppm
 // fast from +0.4996 ms and steps -1 ms at a whole second, its MeasEpoch at
 // 20 Hz from 10 s before the end of GPS week 2440 to 10 s into 2441, a PVT
