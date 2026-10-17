@@ -244,16 +244,20 @@
 // A receiver fused faster than 1 Hz (the mosaic-G5's 10 Hz). The safeguards
 // above were set on the LC86G's epoch a second, and some count epochs, so a
 // faster profile keeps their time instead:
-//   - the pseudoranges are fused only on epochs on a pr_period_s GPS-time grid
-//     (1 s): each code update's correlated part is inflated by the time since
-//     that satellite's last, so fused every 0.1 s the gate would open sqrt(10)
-//     wider for no more information. gnss_aided still means a pseudorange
-//     fused within 2 s;
+//   - the pseudoranges are fused once in each pr_period_s of GPS time (1 s),
+//     on the first epoch of it that is fused: each code update's correlated
+//     part is inflated by the time since that satellite's last, so fused
+//     every 0.1 s the gate would open sqrt(10) wider for no more information.
+//     An epoch lost, stale or dropped on the whole second moves the code to
+//     the next one rather than skipping the second. gnss_aided still means a
+//     pseudorange fused within 2 s;
 //   - a Doppler refused the EKF's reject_persist_rr epochs running is let in
 //     (30 at 10 Hz: the Beetle's 3 s);
 //   - the Doppler's stress takes the IMU's peak over rr_dyn_window_s (1 s,
-//     the LC86G's epoch), not the 0.1 s since the epoch before: a loop still
-//     settling after burnout is weighted as the Beetle weighs it;
+//     the LC86G's epoch), not the 0.1 s since the epoch before: the largest
+//     any epoch within the window carried, so a loop still settling after
+//     burnout is weighted as the Beetle weighs it for the whole second,
+//     however the thrust fell before it;
 //   - the levelling's steady test takes epochs LevelGate's min_dt_s apart, and
 //     the heading fit one epoch a heading_fit_period_s (its 64 would fill in
 //     6.4 s);
@@ -401,7 +405,7 @@ public:
         // A receiver fused faster than 1 Hz (below; the mosaic-G5's profile
         // sets them, ReceiverProfileApply.h). 0 or false: an epoch at a time,
         // as the Beetle's LC86G flies.
-        double   pr_period_s = 0.0;              // the pseudoranges fused only on epochs on this GPS-time grid
+        double   pr_period_s = 0.0;              // the pseudoranges fused once in each this long of GPS time
         double   rr_dyn_window_s = 0.0;          // the Doppler's stress (meas.rr_dyn_sigma) on the IMU's peak over
                                                  //   this long, not only since the epoch before
         double   heading_fit_period_s = 0.0;     // the heading fit takes an epoch at most this often
@@ -721,6 +725,7 @@ private:
         double        te = 0.0;           // its instant on the filter's clock
         bool          in_flight = false;
         double        g_peak = 0.0;       // the largest |specific force| / g - 1 since the last epoch
+        int64_t       pr_k = 0;           // pr_period_s: the period of GPS time it falls in
         bool          screen = false;     // a boost epoch the boost screen judges (kJobScreen)
         bool          vcheck = false;     // the vertical check judges it if it can fit it (kJobScreen)
         int           dry_k = 0;          //   the scratch copy's next measurement (kJobScreenDry)
@@ -788,8 +793,19 @@ private:
     bool          handed_ = false;      // the heading handed over this flight
     bool          gate_full_ = false;   // act: the whole attitude's gate is open this flight
     double        boost_seen_t_ = -1.0e9;   // the filter's time the IMU last read past boost_screen_g
-    double        g_hold_ = 0.0;        // rr_dyn_window_s: the largest g excess an epoch has carried lately,
-    double        g_hold_te_ = -1.0e9;  //   and that epoch's time
+    // rr_dyn_window_s: the epochs within the window whose g excess could
+    // still be its largest -- each larger than every one after it, so the
+    // oldest is the window's peak (holdGExcess)
+    struct GHeld
+    {
+        double        te;                 // the epoch's instant on the filter's clock
+        double        g;                  // its g excess
+    };
+    static constexpr int kGHeld = 16;   // 1 s at 10 Hz is 11
+    GHeld         g_held_[kGHeld] = {};
+    int           n_g_held_ = 0;
+    double        holdGExcess(double te, double g);
+    int64_t       pr_period_k_ = -1;    // pr_period_s: the period the code was last fused in (< 0: none since the start)
     double        fit_last_te_ = -1.0;  // heading_fit_period_s: the last epoch the fit took (< 0: none this flight)
     bool          vert_latch_ = false;  // a vertical drop, and no epoch back within vert_release_mps since
     bool          launch_seen_ = false; // a launch edge since the start (a restored flight has none)

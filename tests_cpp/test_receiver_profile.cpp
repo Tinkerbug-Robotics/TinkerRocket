@@ -439,6 +439,8 @@ TEST(ReceiverProfile, TheMosaicG5V0Profile)
     EXPECT_EQ(p.pr_corr_scale, 0.5);
     EXPECT_EQ(p.pr_tau_s, 15.0);
     EXPECT_EQ(p.pr_period_s, 1.0);
+    // a whole number of fused epochs: the code on the same epoch of each second
+    EXPECT_EQ(std::llround(p.pr_period_s * 1000.0) % std::llround(p.fuse_epoch_period_s * 1000.0), 0);
     // the Doppler
     EXPECT_EQ(p.rr_white_a, 0.01);
     EXPECT_EQ(p.rr_white_b, 0.075);

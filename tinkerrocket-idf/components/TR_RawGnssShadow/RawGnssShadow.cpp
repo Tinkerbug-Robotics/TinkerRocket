@@ -41,12 +41,16 @@ int32_t sat32(double v)
     return static_cast<int32_t>(std::llround(v));
 }
 
-// A GPS time of week on a grid of period_s, to the millisecond the receivers
-// tag their epochs on (pr_period_s: whole seconds of a 10 Hz stream)
-bool onGrid(double tow_s, double period_s)
+// The period of GPS time of week a time falls in (pr_period_s: each whole
+// second of a 10 Hz stream), on the millisecond the receivers tag their
+// epochs on
+int64_t periodIndex(double tow_s, double period_s)
 {
     const long long p = std::llround(period_s * 1000.0);
-    return p <= 0 || std::llround(tow_s * 1000.0) % p == 0;
+    const long long ms = std::llround(tow_s * 1000.0);
+    if (p <= 0)
+        return ms;
+    return ms >= 0 ? ms / p : -((p - 1 - ms) / p);
 }
 
 // heading_fit_period_s: an epoch this much early still counts as the period's
@@ -740,8 +744,8 @@ void RawGnssShadow::start(double t)
     gate_full_ = false;
     boost_seen_t_ = -1.0e9;
     vert_latch_ = false;
-    g_hold_ = 0.0;
-    g_hold_te_ = -1.0e9;
+    n_g_held_ = 0;
+    pr_period_k_ = -1;
     fit_last_te_ = -1.0;
     if (cfg_.heading_mode == kHeadingAct)
     {
@@ -913,10 +917,14 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
         job_.phase = kJobBuild;
         job_.build_us = 0;
     }
-    // the pseudoranges only on pr_period_s's grid (RawGnssShadow.h); the
-    // boost screen's scratch copy takes the switch along
+    // the pseudoranges once in each pr_period_s (RawGnssShadow.h): on this
+    // epoch if none in its period was fused yet (closeJob); the boost
+    // screen's scratch copy takes the switch along
     if (cfg_.pr_period_s > 0.0)
-        ekf_.setFusePr(onGrid(built_.tow_s, cfg_.pr_period_s));
+    {
+        job_.pr_k = periodIndex(built_.tow_s, cfg_.pr_period_s);
+        ekf_.setFusePr(job_.pr_k != pr_period_k_);
+    }
     job_.fused = 0;
     job_.cr_screened = false;
     job_.rs = RawGnssStats();
@@ -1015,6 +1023,28 @@ void RawGnssShadow::jobUnit(double t)
     }
 }
 
+// rr_dyn_window_s: the largest g excess an epoch carried within the window,
+// this one's included -- the window's peak, however the thrust fell inside it.
+// Kept are the epochs that could still be it: those the window has not left,
+// each larger than every one after it. With more of them in the window than
+// there is room for (kGHeld), the newest takes the last one's larger excess:
+// held a little longer, never let go early.
+double RawGnssShadow::holdGExcess(double te, double g)
+{
+    int n = 0;
+    for (int i = 0; i < n_g_held_; ++i)
+        if (te - g_held_[i].te <= cfg_.rr_dyn_window_s)
+            g_held_[n++] = g_held_[i];
+    while (n > 0 && g_held_[n - 1].g <= g)
+        n--;
+    if (n < kGHeld)
+        g_held_[n++] = {te, g};
+    else
+        g_held_[n - 1].te = te;
+    n_g_held_ = n;
+    return g_held_[0].g;
+}
+
 void RawGnssShadow::jobChecks(double age, double t)
 {
     const int n = built_.n;
@@ -1023,19 +1053,12 @@ void RawGnssShadow::jobChecks(double age, double t)
     // The Doppler of a loop under stress: the IMU's largest specific force
     // since the last epoch (RawMeasBuilder's rr_dyn_sigma), added here, where
     // the IMU is, whoever built the epoch. With rr_dyn_window_s, the largest
-    // an epoch carried within that long: held until a larger one comes or it
-    // is that old, so at 10 Hz the epochs after burnout keep the boost's
-    // weighting for the second the LC86G's one epoch kept it.
+    // any epoch carried within that long (holdGExcess), so at 10 Hz the
+    // epochs after burnout keep the boost's weighting for the second the
+    // LC86G's one epoch kept it.
     double g_ex = job_.g_peak > 0.0 ? job_.g_peak : 0.0;
     if (cfg_.rr_dyn_window_s > 0.0)
-    {
-        if (g_ex >= g_hold_ || job_.te - g_hold_te_ > cfg_.rr_dyn_window_s)
-        {
-            g_hold_ = g_ex;
-            g_hold_te_ = job_.te;
-        }
-        g_ex = g_hold_;
-    }
+        g_ex = holdGExcess(job_.te, g_ex);
     const double s_dyn = cfg_.meas.rr_dyn_sigma * g_ex;
     if (s_dyn > 0.0)
         for (int i = 0; i < n; ++i)
@@ -1249,6 +1272,11 @@ void RawGnssShadow::closeJob(double age, double t)
         own_fix_ = true;
         last_aided_t_ = t;
     }
+    // pr_period_s: its pseudoranges went through the update (fused or
+    // refused), the period's code -- an epoch whose clock could not be taken
+    // fused none, and one dropped never comes here
+    if (cfg_.pr_period_s > 0.0 && job_.fused > 0)
+        pr_period_k_ = job_.pr_k;
     if (rs.clock_jump_ms != 0 || rs.clock_step_m != 0.0 || rs.drift_step_mps != 0.0)
         pend_flags_ |= RGE_CLOCK_STEP;
     job_.active = false;

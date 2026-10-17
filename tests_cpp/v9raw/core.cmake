@@ -24,10 +24,13 @@ gtest_discover_tests(test_raw_gnss_ekf_v9)
 # ---------- test_raw_gnss_shadow_v9 ----------
 # RawGnssShadow and LevelGate at 10 Hz, through the mosaic-G5's profile on the
 # synthetic sky (fixtures/raw_meas_golden.h): the pseudorange once a second
-# with gnss_aided held, the Doppler's stress held a second after burnout, the
-# heading fit an epoch a second, a restored flight's sigmas and accelerometer
-# bias, levelling on fused epochs only (empty epochs under a chute), and the
-# steady test on epochs a second apart.
+# with gnss_aided held (on the first epoch of each second fused, a whole
+# second's epoch lost or dropped or not), the Doppler's stress the window's
+# peak a second after burnout (a falling thrust too), the heading fit an epoch
+# a second, a restored flight's sigmas and accelerometer bias, levelling on
+# fused epochs only (empty epochs under a chute), the steady test on epochs a
+# second apart, and the profile's satellite cap reaching the GNSS task's stage
+# (skipped until the stage has one).
 add_executable(test_raw_gnss_shadow_v9 test_raw_gnss_shadow_v9.cpp
     ${LIB_DIR}/TR_RawGnssShadow/RawGnssShadow.cpp
     ${LIB_DIR}/TR_RawGnssShadow/RawGnssMeasStage.cpp

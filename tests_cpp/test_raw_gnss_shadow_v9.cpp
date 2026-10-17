@@ -3,8 +3,9 @@
 // once a second (pr_period_s), the Doppler's stress held for a window
 // (rr_dyn_window_s), the heading fit an epoch a second
 // (heading_fit_period_s), a restored flight's sigmas and accelerometer bias,
-// levelling only on epochs that fused something (level_on_fused_epochs), and
-// LevelGate's steady test on epochs a second apart (min_dt_s). Each at its
+// levelling only on epochs that fused something (level_on_fused_epochs),
+// LevelGate's steady test on epochs a second apart (min_dt_s), and the
+// profile's satellite cap on its way to the GNSS task's stage. Each at its
 // default is the Beetle's filter exactly (the existing tests, unchanged).
 //
 // The flights are test_raw_gnss_shadow.cpp's synthetic sky: the Beetle's own
@@ -303,8 +304,21 @@ struct TenRun
 // the launch detector calls it at 4.1 s.
 constexpr double kIgn = 4.0, kBurnout = 6.0;
 
-TenRun flyTen(const RawGnssShadow::Config& cfg, double lean_deg = 0.0, double t_end = 10.0)
+struct TenFlight
 {
+    double lean_deg = 0.0;
+    double t_end = 10.0;
+    double thrust_g = 3.0;               // along the nose at ignition,
+    double burnout_thrust_g = 3.0;       //   at burnout, and straight between
+    int    epoch_ms = 100;               // an epoch this often (a multiple of 5 ms)
+    bool   lose_whole_seconds = false;   // the epochs on whole GPS seconds never come
+    double bad_vertical_t = -1.0;        // the epoch at this time: its Dopplers 40 m/s off vertically
+};
+
+TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
+{
+    const double lean_deg = fl.lean_deg, t_end = fl.t_end;
+    const int epoch_steps = fl.epoch_ms / 5;
     double lat, lon, h;
     ecef_to_geo(kGoldenRmRx, &lat, &lon, &h);
     double r0[3];
@@ -336,7 +350,8 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, double lean_deg = 0.0, double t_
         double f_b[3] = {0.0, 0.0, 0.0}, a_n[3] = {0.0, 0.0, 0.0};
         if (t > kIgn)
         {
-            f_b[0] = t <= kBurnout ? 3.0 * kG : 0.0;          // then coasting, weightless
+            const double thrust = fl.thrust_g + (fl.burnout_thrust_g - fl.thrust_g) * (t - kIgn) / (kBurnout - kIgn);
+            f_b[0] = t <= kBurnout ? thrust * kG : 0.0;       // then coasting, weightless
             double f_n[3];
             mat3Vec(Ct, f_b, f_n);
             for (int i = 0; i < 3; ++i)
@@ -387,19 +402,27 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, double lean_deg = 0.0, double t_
             run.unaided_ticks_after++;
         if (step % 50 == 0)
             run.state.push_back(stateHash(sh.filter()));
-        // an epoch at each tenth of a GPS second, built where the receiver truly is
-        if (step % 20 == 0)
+        // an epoch every epoch_ms of GPS time (a tenth of a second), built
+        // where the receiver truly is
+        if (step % epoch_steps == 0)
         {
-            double dr[3], r[3], ve[3];
-            nedToEcefVec(p_ned, dr);
-            nedToEcefVec(v_ned, ve);
-            for (int i = 0; i < 3; ++i)
-                r[i] = r0[i] + dr[i];
-            TimedRawEpoch e;
-            e.epoch = sky.epoch(tow0 + next_epoch / 10.0, r, ve);
-            e.mcu_us = t64;
-            e.gps_week = kGoldenWeek;
-            due.push_back(e);
+            const int ms = next_epoch * fl.epoch_ms;
+            if (!fl.lose_whole_seconds || ms % 1000 != 0)
+            {
+                double dr[3], r[3], ve[3];
+                nedToEcefVec(p_ned, dr);
+                double v_rx[3] = {v_ned[0], v_ned[1], v_ned[2]};
+                if (std::fabs(ms / 1000.0 - fl.bad_vertical_t) < 1e-6)
+                    v_rx[2] += 40.0;
+                nedToEcefVec(v_rx, ve);
+                for (int i = 0; i < 3; ++i)
+                    r[i] = r0[i] + dr[i];
+                TimedRawEpoch e;
+                e.epoch = sky.epoch(tow0 + ms / 1000.0, r, ve);
+                e.mcu_us = t64;
+                e.gps_week = kGoldenWeek;
+                due.push_back(e);
+            }
             next_epoch++;
         }
         while (!due.empty() && t64 - due.front().mcu_us >= 50000)
@@ -415,32 +438,56 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, double lean_deg = 0.0, double t_
     return run;
 }
 
+TenRun flyTen(const RawGnssShadow::Config& cfg, double lean_deg = 0.0, double t_end = 10.0)
+{
+    TenFlight fl;
+    fl.lean_deg = lean_deg;
+    fl.t_end = t_end;
+    return flyTen(cfg, fl);
+}
+
+// The epochs that fused the code are the first of each GPS second that was
+// fused (not dropped): one a second, whichever epochs came
+void expectCodeOnceASecond(const TenRun& run)
+{
+    long last_s = -1;
+    for (const ClosedEpoch& c : run.eps)
+    {
+        if (c.st.screen_dropped)
+            continue;
+        const long s = std::lround(c.t * 1000.0) / 1000;
+        const bool first = s != last_s;
+        EXPECT_EQ(c.st.used_pr > 0, first) << "t " << c.t;
+        EXPECT_GT(c.st.used_rr, 4) << "t " << c.t;
+        if (first)
+            last_s = s;
+    }
+}
+
 }  // namespace
 
 // ---- pr_period_s: the code once a second
 
 TEST(RawGnssShadowV9, AtTenHertzThePseudorangeIsFusedOnceASecond)
 {
-    // The mosaic's profile: the Dopplers every epoch, the pseudoranges only
-    // on the whole GPS seconds -- and gnss_aided (a pseudorange within 2 s)
-    // holds from the first one to the end, through the boost and the coast
+    // The mosaic's profile: the Dopplers every epoch, the pseudoranges on the
+    // first epoch of each GPS second -- the start's first, then the whole
+    // seconds -- and gnss_aided (a pseudorange within 2 s) holds from the
+    // first one to the end, through the boost and the coast
     const TenRun run = flyTen(mosaicCfg());
     ASSERT_GT(run.eps.size(), 80u);
+    expectCodeOnceASecond(run);
     int with_pr = 0, whole = 0;
     for (const ClosedEpoch& c : run.eps)
-    {
-        const long ms = std::lround(c.t * 1000.0);
-        const bool on_second = ms % 1000 == 0;
-        whole += on_second ? 1 : 0;
-        if (c.st.screen_dropped)
-            continue;
-        EXPECT_EQ(c.st.used_pr > 0, on_second) << "t " << c.t;
-        EXPECT_GT(c.st.used_rr, 4) << "t " << c.t;
-        with_pr += c.st.used_pr > 0 ? 1 : 0;
-    }
-    EXPECT_GE(with_pr, whole - 1);
+        if (c.st.used_pr > 0)
+        {
+            with_pr++;
+            whole += std::lround(c.t * 1000.0) % 1000 == 0 ? 1 : 0;
+        }
+    EXPECT_GE(whole, 9);                          // 1 s to 9 s
+    EXPECT_EQ(with_pr, whole + 1);                // and the start's first, at 0.1 s
     EXPECT_GE(run.first_aided_t, 0.0);
-    EXPECT_LT(run.first_aided_t, 1.5);
+    EXPECT_LT(run.first_aided_t, 0.5);
     EXPECT_EQ(run.unaided_ticks_after, 0);
     EXPECT_EQ(run.st.stops, 0u);
 
@@ -451,6 +498,84 @@ TEST(RawGnssShadowV9, AtTenHertzThePseudorangeIsFusedOnceASecond)
     for (const ClosedEpoch& c : all.eps)
         if (!c.st.screen_dropped)
             EXPECT_GT(c.st.used_pr, 0) << "t " << c.t;
+}
+
+TEST(RawGnssShadowV9, AWholeSecondsEpochLostMovesTheCodeToTheNext)
+{
+    // Every whole second's epoch lost (stale, or never built): the code goes
+    // on the next epoch, 0.1 s late, not a second late -- and gnss_aided
+    // never lapses. (On the whole seconds only, the code came every 2 s.)
+    TenFlight fl;
+    fl.lose_whole_seconds = true;
+    const TenRun run = flyTen(mosaicCfg(), fl);
+    ASSERT_GT(run.eps.size(), 70u);
+    expectCodeOnceASecond(run);
+    int with_pr = 0;
+    double last = -1.0;
+    for (const ClosedEpoch& c : run.eps)
+        if (c.st.used_pr > 0)
+        {
+            with_pr++;
+            if (last >= 0.0)
+                EXPECT_NEAR(c.t - last, 1.0, 0.15) << "t " << c.t;
+            last = c.t;
+        }
+    EXPECT_GE(with_pr, 9);
+    EXPECT_GE(run.first_aided_t, 0.0);
+    EXPECT_EQ(run.unaided_ticks_after, 0);
+    EXPECT_EQ(run.st.stops, 0u);
+}
+
+TEST(RawGnssShadowV9, AWholeSecondsEpochDroppedMovesTheCodeToTheNext)
+{
+    // The vertical check drops the epoch at 3 s (its Dopplers 40 m/s off
+    // vertically): none of it fused, so the second's code goes on the next
+    // epoch fused, at 3.1 s
+    TenFlight fl;
+    fl.bad_vertical_t = 3.0;
+    const TenRun run = flyTen(mosaicCfg(), fl);
+    const ClosedEpoch* dropped = nullptr;
+    const ClosedEpoch* next = nullptr;
+    for (const ClosedEpoch& c : run.eps)
+    {
+        if (std::fabs(c.t - 3.0) < 0.01)
+            dropped = &c;
+        if (std::fabs(c.t - 3.1) < 0.01)
+            next = &c;
+    }
+    ASSERT_NE(dropped, nullptr);
+    ASSERT_NE(next, nullptr);
+    EXPECT_TRUE(dropped->st.screen_dropped);
+    EXPECT_FALSE(next->st.screen_dropped);
+    EXPECT_GT(next->st.used_pr, 0);
+    expectCodeOnceASecond(run);
+    EXPECT_EQ(run.unaided_ticks_after, 0);
+}
+
+TEST(RawGnssShadowV9, EpochsOffTheWholeSecondStillFuseTheCodeEachSecond)
+{
+    // A bench's 150 ms epochs: one falls on a whole second only every 3 s.
+    // The code still goes on the first epoch of each second, 0.9-1.05 s apart
+    TenFlight fl;
+    fl.epoch_ms = 150;
+    const TenRun run = flyTen(mosaicCfg(), fl);
+    ASSERT_GT(run.eps.size(), 50u);
+    expectCodeOnceASecond(run);
+    int with_pr = 0;
+    double last = -1.0;
+    for (const ClosedEpoch& c : run.eps)
+        if (c.st.used_pr > 0)
+        {
+            with_pr++;
+            if (last >= 0.0)
+            {
+                EXPECT_GE(c.t - last, 0.85) << "t " << c.t;
+                EXPECT_LE(c.t - last, 1.1) << "t " << c.t;
+            }
+            last = c.t;
+        }
+    EXPECT_GE(with_pr, 9);
+    EXPECT_EQ(run.unaided_ticks_after, 0);
 }
 
 // ---- rr_dyn_window_s: the Doppler's stress held after burnout
@@ -503,6 +628,75 @@ TEST(RawGnssShadowV9, TheDopplersStressIsHeldForItsWindowAfterBurnout)
     ASSERT_NE(pad, nullptr);
     ASSERT_NE(boost, nullptr);
     EXPECT_GT(double(boost->sigma_rr_min) * boost->sigma_rr_min - double(pad->sigma_rr_min) * pad->sigma_rr_min, 0.5);
+}
+
+TEST(RawGnssShadowV9, TheStressHeldIsTheWindowsPeakUnderAFallingThrust)
+{
+    // A boost falling from 5 g to 2 g at burnout: each epoch's own peak is
+    // smaller than the one before it. Held, an epoch's stress is the largest
+    // any epoch within the second before it carried: the second after
+    // burnout keeps at least the last boost epoch's, and none is left once
+    // the window has passed it. (A hold of one peak, replaced by the epoch
+    // of the moment when it aged out, let the boost's go 0.1 s after
+    // burnout.) Each epoch's stress^2 is its Doppler sigma's square less a
+    // flight's with none.
+    TenFlight fl;
+    fl.thrust_g = 5.0;
+    fl.burnout_thrust_g = 2.0;
+    RawGnssShadow::Config c_none = mosaicCfg();
+    c_none.meas.rr_dyn_sigma = 0.0;
+    RawGnssShadow::Config c_bare = mosaicCfg();
+    c_bare.rr_dyn_window_s = 0.0;
+    const TenRun none = flyTen(c_none, fl), bare = flyTen(c_bare, fl), held = flyTen(mosaicCfg(), fl);
+    auto stress2 = [&](const TenRun& r, double t) -> double {
+        const ClosedEpoch* a = nullptr;
+        const ClosedEpoch* z = nullptr;
+        for (const ClosedEpoch& c : r.eps)
+            if (std::fabs(c.t - t) < 0.01)
+                a = &c;
+        for (const ClosedEpoch& c : none.eps)
+            if (std::fabs(c.t - t) < 0.01)
+                z = &c;
+        EXPECT_NE(a, nullptr) << t;
+        EXPECT_NE(z, nullptr) << t;
+        if (a == nullptr || z == nullptr)
+            return 0.0;
+        return double(a->sigma_rr_min) * a->sigma_rr_min - double(z->sigma_rr_min) * z->sigma_rr_min;
+    };
+    // the epochs' own stress (window 0): the last boost epoch's
+    double last_boost_t = -1.0, last_boost = 0.0;
+    for (int k = 30; k <= 90; ++k)
+    {
+        const double b = stress2(bare, k / 10.0);
+        if (b > 0.01)
+        {
+            last_boost_t = k / 10.0;
+            last_boost = b;
+        }
+    }
+    ASSERT_NEAR(last_boost_t, kBurnout, 0.15);
+    EXPECT_GT(last_boost, 0.2);                   // 2 g at burnout: 1 g over, 0.5 m/s
+    for (int k = 30; k <= 90; ++k)
+    {
+        const double t = k / 10.0;
+        // the window's peak: of the epochs well inside it at least, of those
+        // on its edge too at most
+        double lo = 0.0, hi = 0.0;
+        for (int j = k - 10; j <= k; ++j)
+        {
+            const double b = stress2(bare, j / 10.0);
+            hi = std::max(hi, b);
+            if (j > k - 10)
+                lo = std::max(lo, b);
+        }
+        const double h = stress2(held, t);
+        EXPECT_GE(h, lo - 0.01) << t;
+        EXPECT_LE(h, hi + 0.01) << t;
+        if (t > last_boost_t + 0.01 && t < last_boost_t + 0.95)
+            EXPECT_GE(h, last_boost - 0.01) << t;
+        if (t > last_boost_t + 1.05)
+            EXPECT_LT(h, 0.01) << t;
+    }
 }
 
 // ---- heading_fit_period_s: the fit an epoch a second
@@ -606,6 +800,45 @@ TEST(RawGnssShadowV9, ARestoredStartDeclaresItsSigmasAndTakesTheSnapshotsBias)
         EXPECT_FLOAT_EQ(pad.filter().P(F::kPos + a, F::kPos + a), 100.0f);
         EXPECT_EQ(pad.filter().accelBias()[a], 0.0f);
     }
+}
+
+// ---- sat_cap: the profile's cap reaches the GNSS task's stage
+
+namespace
+{
+
+// RawGnssMeasStage::Config::sat_cap, where the stage has it (its own change,
+// the mosaic's cap); -1 where it has none yet
+template <class S>
+auto stageSatCap(const S& s, int) -> decltype(static_cast<int>(s.sat_cap))
+{
+    return static_cast<int>(s.sat_cap);
+}
+
+template <class S>
+int stageSatCap(const S&, long)
+{
+    return -1;
+}
+
+}  // namespace
+
+TEST(RawGnssShadowV9, TheProfilesSatelliteCapReachesTheGnssTasksStage)
+{
+    // The GNSS task builds with RawGnssShadow::stageConfig(cfg): the mosaic's
+    // 16 must arrive there, or the V8 builds every satellite of a 28-strong
+    // sky ten times a second; the LC86G's none
+    RawGnssShadow::Config m = primaryCfg();
+    gnss_raw::applyReceiverProfile(gnss_raw::mosaicG5Profile(), m);
+    ASSERT_EQ(m.sat_cap, 16);
+    RawGnssShadow::Config b = primaryCfg();
+    gnss_raw::applyReceiverProfile(gnss_raw::lc86gProfile(), b);
+    ASSERT_EQ(b.sat_cap, 0);
+    const int got = stageSatCap(RawGnssShadow::stageConfig(m), 0);
+    if (got < 0)
+        GTEST_SKIP() << "RawGnssMeasStage::Config has no sat_cap yet (the stage's change)";
+    EXPECT_EQ(got, 16);
+    EXPECT_EQ(stageSatCap(RawGnssShadow::stageConfig(b), 0), 0);
 }
 
 // ---- level_on_fused_epochs

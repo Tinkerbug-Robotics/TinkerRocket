@@ -97,7 +97,8 @@ struct GnssReceiverProfile
     // epochs keep the time they had at 1 Hz (RawGnssShadow.h, "A receiver
     // fused faster than 1 Hz"). 0: every epoch, as the LC86G's.
     double fuse_epoch_period_s = 0.0;     // the GNSS task builds only the epochs on this GPS-time grid
-    double pr_period_s = 0.0;             // the pseudoranges fused only on this grid (the Dopplers every epoch)
+    double pr_period_s = 0.0;             // the pseudoranges fused once in each this long of GPS time (the
+                                          //   Dopplers every epoch)
     int    sat_cap = 0;                   // at most this many satellites built an epoch (0: all)
     double reject_persist_s = 0.0;        // a satellite refused this long running is let back in: the EKF's
                                           //   reject_persist and reject_persist_rr in fused epochs (0: theirs)
