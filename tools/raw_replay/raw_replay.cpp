@@ -1335,6 +1335,9 @@ int main(int argc, char** argv)
             a.epoch_delay_ms = 30.0;
         a.match_ages = false;
     }
+    // the flight's time from the events file where it says (extract.py --sbf, a sim's), unless given
+    if ((mosaic || cold) && !a.given.count("--t-base-s") && in.meta.count("t_base_s"))
+        a.t_base_s = std::atof(in.meta["t_base_s"].c_str());
     if (a.fw_defaults && !a.given.count("--heading-mode"))
         a.heading_mode = 2;   // act: TR_HEADING_FIT = 2 where the raw filter is primary
 
@@ -2856,6 +2859,9 @@ int main(int argc, char** argv)
                  st.heading_handoffs, CR(st.cr_built), CR(st.cr_in), CR(st.cr_used), nonfinite_rows,
                  unhealthy_rows);
 #if RAW_REPLAY_MOSAIC
+    if (cold && !seed_ready)
+        std::fprintf(stderr, "WARNING: the cold start never had a position (no PVTGeodetic with a solution, no META "
+                             "seed_lla): the filter never started\n");
     if (mosaic)
     {
         const rr::MosaicFeed::Counts& fc = feed.counts();

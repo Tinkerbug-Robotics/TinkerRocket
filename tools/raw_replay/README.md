@@ -114,7 +114,9 @@ tools/raw_replay/build/raw_replay_mosaic --in run.events --out run.csv --receive
 block of 0x95 in R lines as it arrived (PVTGeodetic among them), and every navigation block (GPSNav, GALNav,
 BDSNav, GPSIon) once more just before the first event, unless `--nav-as-logged`: the receiver sends a satellite's
 ephemeris only when it changes, and the logs begin long after it started. T+0 is the log's in-flight edge, or the
-log's own clock where it has none. I, B, M, F and K lines are as for the Beetle.
+log's own clock where it has none (META `t_base_s`, which a mosaic or cold-start run takes unless `--t-base-s` is
+given). I, B, M, F and K lines are as for the Beetle. `--seed-quat-from-log` writes META `seed_quat` from the log's
+own flight filter (NonSensor, the auto image's GpsInsEKF) for a cold start that should begin from its attitude.
 
 ### What `--receiver mosaic` sets
 
