@@ -2930,7 +2930,7 @@ static uint32_t msg_count_unknown = 0;
 // #569: types accepted by isKnownMessageType and written to the flight log by
 // the enqueue path, but with no live handler branch (GUIDANCE_TELEM_MSG,
 // FLIGHT_SETTINGS_MSG, LORA_MSG, GNSS_SAT_MSG, GNSS_RTCM_MSG, RAW_GNSS_EKF_MSG, GNSS_CHECK_MSG,
-// RAW_GNSS_ATT_MSG, IMU_TEMP_MSG, GNSS_CLOCK_MSG, PAD_CONTEXT_MSG). They used to
+// RAW_GNSS_ATT_MSG, IMU_TEMP_MSG, GNSS_CLOCK_MSG, PAD_CONTEXT_MSG, HEADING_FIT_MSG). They used to
 // fall through to msg_count_unknown++, so a guided flight showed a climbing
 // "unknown" rate that read as I2S corruption and masked genuinely unknown
 // frames.
@@ -4651,6 +4651,11 @@ static bool isKnownMessageType(uint8_t type)
         case GET_FLIGHT_SNAPSHOT:    // FC→OC over I2C at boot recovery
         case MAG_CAL_STATUS_MSG:     // FC→OC over I2S — issue #96
         case SENSOR_CAL_STATUS_MSG:  // FC→OC over I2S — sensor-cal readback (#132)
+        case ACC_CAL_APPLY_PENDING:  // #1629: the low-g hand calibration — OC→FC only,
+        case ACC_CAL_APPLY_MSG:      // listed like the other cal pairs
+        case ACC_CAL_READ:
+        case ACC_FACE_PENDING:
+        case ACC_CAL_STATUS_MSG:     // FC→OC over I2S — its readback and face windows
         case OTA_STATUS_MSG:         // FC→OC over I2S — OTA relay status (#8 Phase 4)
         case FLIGHT_SETTINGS_MSG:    // FC→OC over I2S at flight-start — issue #165
         case FC_IDENTITY:            // FC→OC over I2C — FC firmware version (#8 Phase 4)
@@ -4666,6 +4671,7 @@ static bool isKnownMessageType(uint8_t type)
         case IMU_TEMP_MSG:           // FC→OC over I2S at 1 Hz — the IMU's die temperature, log-only
         case GNSS_CLOCK_MSG:         // FC→OC over I2S at ~1 Hz — the GPS-to-MCU clock line, log-only
         case PAD_CONTEXT_MSG:        // FC→OC over I2S once after launch — what a replay needs from the pad, log-only
+        case HEADING_FIT_MSG:        // FC→OC over I2S at ~1 Hz in flight — the heading from thrust, each fit, log-only
         case FC_STATUS_MSG:          // FC→OC over I2S at 5 Hz — the FC's own camera truth (#1154 item 4)
             return true;
         default:
@@ -5208,6 +5214,15 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         if (payload_len >= sizeof(SensorCalStatusData))
         {
             ble_app.sendSensorCalStatus(payload, sizeof(SensorCalStatusData));
+        }
+    }
+    else if (type == ACC_CAL_STATUS_MSG)
+    {
+        // #1629: the low-g hand calibration's readback and face windows,
+        // forwarded to BLE on file-ops behind 0xD1.
+        if (payload_len >= sizeof(AccelCalStatusData))
+        {
+            ble_app.sendAccelCalStatus(payload, sizeof(AccelCalStatusData));
         }
     }
     else if (type == PAD_CAL_STATUS_MSG)
@@ -5758,6 +5773,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
              type == IMU_TEMP_MSG ||
              type == GNSS_CLOCK_MSG ||
              type == PAD_CONTEXT_MSG ||
+             type == HEADING_FIT_MSG ||
              type == GNSS_CHECK_MSG)
     {
         // #569: log-only types — no live handler by design (they exist for
@@ -13318,6 +13334,36 @@ static void loop_oc()
         {
             setPendingCommand(SENSOR_CAL_READ);
             ESP_LOGI("BLE", "Sensor cal READ -> FlightComputer");
+        }
+        // #1629 — the low-g accelerometer's six-face hand calibration
+        // (tools/accel_cal_six_face.py): store and apply the solved offset
+        // (12-byte AccelCalApplyData, board frame m/s^2; all zero clears it).
+        else if (ble_cmd == 76)
+        {
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= sizeof(AccelCalApplyData))
+            {
+                setPendingCommandWithConfig(ACC_CAL_APPLY_PENDING, ACC_CAL_APPLY_MSG, payload, sizeof(AccelCalApplyData));
+                ESP_LOGI("BLE", "Accel cal APPLY queued for FlightComputer");
+            }
+            else
+            {
+                ESP_LOGW("BLE", "Accel cal APPLY: payload too short (%u < %u)",
+                              (unsigned)plen, (unsigned)sizeof(AccelCalApplyData));
+            }
+        }
+        // #1629 — read the stored low-g offset and the last face window back.
+        else if (ble_cmd == 77)
+        {
+            setPendingCommand(ACC_CAL_READ);
+            ESP_LOGI("BLE", "Accel cal READ -> FlightComputer");
+        }
+        // #1629 — average the low-g accelerometer over one face, the board still.
+        else if (ble_cmd == 78)
+        {
+            setPendingCommand(ACC_FACE_PENDING);
+            ESP_LOGI("BLE", "Accel cal FACE -> FlightComputer");
         }
         else if (ble_cmd == 69)
         {

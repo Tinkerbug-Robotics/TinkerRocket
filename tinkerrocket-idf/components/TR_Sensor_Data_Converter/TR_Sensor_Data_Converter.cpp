@@ -73,6 +73,27 @@ void SensorConverter::configureBoardToRocket(const float R[9])
     b2r_identity_ = identity;
 }
 
+void SensorConverter::setLowGOffset(float ox, float oy, float oz)
+{
+    lg_off_x_ = ox;
+    lg_off_y_ = oy;
+    lg_off_z_ = oz;
+#ifdef ESP_PLATFORM
+    ESP_LOGI("Converter", "Low-g offset set: %.4f, %.4f, %.4f m/s²", (double)ox, (double)oy, (double)oz);
+#endif
+}
+
+void SensorConverter::lowGBoardRaw(const ISM6HG256Data& in, double out[3]) const
+{
+    const double c = (double)cosf(ism6_rot_z_rad);
+    const double s = (double)sinf(ism6_rot_z_rad);
+    const double lg_x = (double)in.acc_low_raw.x * (double)acc_low_ms2_per_lsb;
+    const double lg_y = (double)in.acc_low_raw.y * (double)acc_low_ms2_per_lsb;
+    out[0] = (lg_x * c) - (lg_y * s);
+    out[1] = (lg_x * s) + (lg_y * c);
+    out[2] = (double)in.acc_low_raw.z * (double)acc_low_ms2_per_lsb;
+}
+
 void SensorConverter::setHighGBias(float bx, float by, float bz)
 {
     if (bx == hg_bias_x_ && by == hg_bias_y_ && bz == hg_bias_z_)
@@ -247,15 +268,22 @@ void SensorConverter::convertISM6HG256Data(const ISM6HG256Data& in, ISM6HG256Dat
     out.low_g_acc_x = (lg_x * c) - (lg_y * s);
     out.low_g_acc_y = (lg_x * s) + (lg_y * c);
     out.low_g_acc_z = (double)in.acc_low_raw.z * (double)acc_low_ms2_per_lsb;
+    // the hand-calibrated offset (board frame), off both accelerometers below
+    const double ox = lg_off_on_ ? (double)lg_off_x_ : 0.0;
+    const double oy = lg_off_on_ ? (double)lg_off_y_ : 0.0;
+    const double oz = lg_off_on_ ? (double)lg_off_z_ : 0.0;
+    out.low_g_acc_x -= ox;
+    out.low_g_acc_y -= oy;
+    out.low_g_acc_z -= oz;
 
     // High-g accel (m/s^2), rotate about +Z to board frame, subtract bias.
     // Bias is calibrated in board frame, so it must come off BEFORE the
     // board→rocket rotation below.
     const double hg_x = (double)in.acc_high_raw.x * (double)acc_high_ms2_per_lsb;
     const double hg_y = (double)in.acc_high_raw.y * (double)acc_high_ms2_per_lsb;
-    out.high_g_acc_x = (hg_x * c) - (hg_y * s) - (double)hg_bias_x_;
-    out.high_g_acc_y = (hg_x * s) + (hg_y * c) - (double)hg_bias_y_;
-    out.high_g_acc_z = (double)in.acc_high_raw.z * (double)acc_high_ms2_per_lsb - (double)hg_bias_z_;
+    out.high_g_acc_x = (hg_x * c) - (hg_y * s) - (double)hg_bias_x_ - ox;
+    out.high_g_acc_y = (hg_x * s) + (hg_y * c) - (double)hg_bias_y_ - oy;
+    out.high_g_acc_z = (double)in.acc_high_raw.z * (double)acc_high_ms2_per_lsb - (double)hg_bias_z_ - oz;
 
     // Gyro (deg/s), then rotate about +Z to board frame.
     const double g_x = (double)in.gyro_raw.x * (double)gyro_dps_per_lsb;

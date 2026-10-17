@@ -755,6 +755,11 @@ void buildFileops(Builder& b) {
               .i("pad_alt_mm", pc.pad_alt_mm).u("pos_sigma_cm", pc.pos_sigma_cm)
               .done(),
           "PadCalStatusData behind 0xD0 (#1600 phase 5); frame = 41 B");
+
+    // (0xD1, the low-g accelerometer hand calibration's status (#1629), has no
+    // fixture yet: only tools/accel_cal_six_face.py speaks it, and every app
+    // golden walk needs a decoder for each frame here.  Its layout is pinned by
+    // test_rocket_computer_types.cpp; the apps' guided flow adds the fixture.)
 }
 
 // App→device command payloads: [cmd u8][payload], byte-exact.  Struct-backed
@@ -942,6 +947,9 @@ void buildCommands(Builder& b) {
                   .f("hg_x", 0.25f).f("hg_y", -0.5f).f("hg_z", 9.81f).done(),
               "SensorCalApplyData");
     }
+
+    // (cmd 76-78, the low-g hand calibration (#1629): no fixture until an app
+    // sends them -- see the 0xD1 note.)
 
     b.add("commands", "cmd64_imuorient_auto.bin", cmd(64, bytesOf(ImuOrientConfigData{IMU_ORIENT_AUTO})),
           Json().u("cmd", 64).u("setting", 255).done(),

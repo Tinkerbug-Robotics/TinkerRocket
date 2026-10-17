@@ -6,7 +6,9 @@
 // bench prototype leaves them (gnss/eph.h has no GLONASS orbit integration
 // and no QZSS constants). The phase-range rate is the receiver's range rate
 // with its own clock drift already taken out (Rtcm3Msm.h); the filter's
-// clock-drift state then sits near zero. Header-only, pure.
+// clock-drift state then sits near zero. The carrier phase is the MSM7
+// phase range (DF397 + DF398 + DF406), with its half-cycle flag (DF420) and
+// the cell's lock time. Header-only, pure.
 #ifndef LC86_RAW_EPOCH_H
 #define LC86_RAW_EPOCH_H
 
@@ -48,6 +50,9 @@ inline bool rawEpochFromMsm(const rtcm3::MsmEpoch& in, gnss_raw::RawEpoch& out)
         o.rate_mps = o.has_rate ? static_cast<double>(c.rate_mps) : 0.0;
         o.cn0_dbhz = c.cn0_dbhz;
         o.lock_ms = c.lock_ms;
+        o.has_phase = std::isfinite(c.phase_range_m);
+        o.halfcyc = c.half_cycle;
+        o.phase_m = o.has_phase ? c.phase_range_m : 0.0;
     }
     return true;
 }

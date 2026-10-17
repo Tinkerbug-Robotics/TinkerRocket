@@ -350,6 +350,12 @@ public:
     // The next discriminator after 0xCF; an app that does not know it drops it.
     void sendPadCalStatus(const uint8_t* status_bytes, size_t len);
 
+    // Send the low-g accelerometer hand calibration's status (#1629) on the
+    // file-ops characteristic.  Format:
+    //   [0][0xD1 marker] [1..40][AccelCalStatusData LE bytes]
+    // The next discriminator after 0xD0.
+    void sendAccelCalStatus(const uint8_t* status_bytes, size_t len);
+
     // Send a flash-space stats frame for the storage bar on the file-ops
     // characteristic.  Format: [0]=marker (0xCC rocket / 0xCD base station)
     // [1..]=packed struct LE bytes (RocketStorageStatsData / BaseStationStorageStatsData).

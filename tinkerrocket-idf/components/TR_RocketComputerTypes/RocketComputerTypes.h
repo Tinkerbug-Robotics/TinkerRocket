@@ -1657,6 +1657,7 @@ static constexpr uint8_t PCX_NAV    = 2;  // PadContextNav, from the raw-GNSS ta
 static constexpr uint8_t PCX_COV    = 3;  // PadContextCov, in parts
 static constexpr uint8_t PCX_SURVEY = 4;  // PadContextSurvey, in parts
 static constexpr uint8_t PCX_EPH    = 5;  // a broadcast ephemeris: a whole RTCM3 frame, one per record
+static constexpr uint8_t PCX_ACC    = 6;  // PadContextAcc, from the flight loop beside PCX_CAL
 
 // PCX_CAL: what the flight flew with that the logged counts do not carry.
 typedef struct __attribute__((packed))
@@ -1672,6 +1673,16 @@ typedef struct __attribute__((packed))
                                    // subtracts it after the log (MMC5983MA_MSG's counts are before it)
 } PadContextCal;
 static_assert(sizeof(PadContextCal) == 41, "PadContextCal must be 41 bytes");
+
+// PCX_ACC: the low-g accelerometer's hand-calibrated offset (AccelCalApplyData),
+// which the converter takes off after the log: ISM6HG256_MSG's counts are
+// before it, so a replay takes it off the low-g and the high-g alike.
+typedef struct __attribute__((packed))
+{
+    uint8_t applied;             // 1 if the converter took it off this flight (stored, and not in sim)
+    float   offset_mps2[3];      // board frame, m/s^2
+} PadContextAcc;
+static_assert(sizeof(PadContextAcc) == 13, "PadContextAcc must be 13 bytes");
 
 // PCX_NAV: the raw-GNSS filter at the IMU tick the flight computer called
 // INFLIGHT, and what it had taken from the pad.
@@ -1750,6 +1761,42 @@ static constexpr size_t padContextSurveyWireSize(uint8_t n) { return 13u + 6u * 
 // before the flight's own.
 static constexpr size_t PCX_EPH_MAX_FRAME = 78;   // a 72-byte payload (the LC86G driver's kEphMaxPayload), framed
 
+// ── HEADING_FIT_MSG (0x9F): the heading from thrust, each fit ───────────────
+// The raw-GNSS filter's batch fit of the pad's heading against the GNSS
+// velocity (RawGnssShadow, HeadingFit.h), once for each raw epoch it takes in
+// flight -- about once a second on the LC86G, from the first epoch fast enough
+// sideways until heading_fit_max_s after launch: the turn it finds for the
+// pad's heading, how sure it is, where the filter's own heading stood against
+// it, and in act mode the hand-off to the navigation filter. With its CPU
+// time. LC86G boards with the fit on (config.h TR_HEADING_FIT).
+typedef struct __attribute__((packed))
+{
+    uint32_t time_us;         // the epoch's Doppler instant, FC micros (RawGnssEkfData's clock)
+    int16_t  psi_cdeg;        // the turn about vertical that rights the pad's heading, centidegrees
+    uint16_t sigma_cdeg;      // its 1-sigma, centidegrees; 0xFFFF: not within 90 deg yet
+    int16_t  filt_cdeg;       // the filter's heading less the fit's, centidegrees, before any turn
+    int16_t  turn_cdeg;       // the turn handed to the filter at this epoch (HFT_HANDED_NOW), else 0
+    int16_t  bias_mmps2[2];   // the lateral accelerometer biases it fits, body y and z, mm/s^2
+    uint16_t speed_cmps;      // the epoch's horizontal GNSS speed, cm/s
+    uint16_t vel_sigma_mmps;  // its per-axis 1-sigma, mm/s
+    uint16_t rms_c;           // the fit's weighted residual RMS per axis, hundredths
+    uint8_t  n;               // epochs in the fit
+    uint8_t  n_cut;           //   cut from it
+    uint8_t  sats;            // satellites in the epoch's Doppler velocity
+    uint8_t  flags;           // HFT_* below
+    uint16_t vel_us;          // the epoch's Doppler velocity, CPU us
+    uint16_t solve_us;        // the fit, CPU us
+    uint16_t seed_ms;         // the seed's age at launch, ms (the last still step before it)
+} HeadingFitData;
+static_assert(sizeof(HeadingFitData) == 32, "HeadingFitData must be 32 bytes");
+static constexpr uint8_t  HFT_ACT        = 0x01;    // act mode: the fit hands its heading over
+static constexpr uint8_t  HFT_SOLVED     = 0x02;    // two epochs or more: psi and the rest are a fit
+static constexpr uint8_t  HFT_HANDED_NOW = 0x04;    // handed over at this epoch (turn_cdeg)
+static constexpr uint8_t  HFT_HANDED     = 0x08;    // handed over before this epoch
+static constexpr uint8_t  HFT_RIVAL      = 0x10;    // another heading far off fits nearly as well (a second
+                                                    //   valley within heading_handoff_rival): not handed over
+static constexpr uint16_t HFT_NO_SIGMA   = 0xFFFF;
+
 // Ordered: the app may render a progress bar from step/FCB_STEP_COUNT.  Append
 // only — the apps map unknown values to a generic "starting up".
 enum FcBootStep : uint8_t
@@ -1806,6 +1853,53 @@ typedef struct __attribute__((packed))
 } SensorCalStatusData;
 static_assert(sizeof(SensorCalStatusData) == 19,
               "SensorCalStatusData must be 19 bytes");
+
+// ── The low-g accelerometer's hand calibration (#1629, for the 2026-10-24 flights) ──
+// On a still pad the filter levels on gravity, and an accelerometer offset is
+// indistinguishable from tilt there: the pad calibration's one still window
+// cannot separate them.  With each body axis turned straight up and then
+// straight down, gravity flips sign on that axis and the offset does not, so
+// the six faces give the offset (tools/accel_cal_six_face.py solves it).  The
+// offset is in the BOARD frame (after the ISM6's Z rotation, before the
+// board->rocket mounting: +X forward, +Y left, +Z up), and the converter takes
+// it off the low-g AND the high-g reading -- the high-g's bias is calibrated
+// against the raw low-g (sensor_cal_math), so it keeps its meaning.  Not taken
+// off in sim, whose counts are the truth's.  NVS namespace "acc_cal", keys ver
+// (ACC_CAL_NVS_SCHEMA_VERSION), done, ox/oy/oz (float, m/s^2).
+static constexpr uint8_t ACC_CAL_NVS_SCHEMA_VERSION = 1;
+static constexpr float   ACC_CAL_OFFSET_MAX_MPS2    = 1.0f;   // ~100 mg: a larger offset is refused as a bad solve
+
+// ACC_CAL_APPLY_MSG payload: the offset to store and apply.  All zero clears it.
+typedef struct __attribute__((packed))
+{
+    float offset_mps2[3];   // board frame, m/s^2
+} AccelCalApplyData;
+static_assert(sizeof(AccelCalApplyData) == 12, "AccelCalApplyData must be 12 bytes");
+
+// A face window (ACC_FACE_PENDING): the low-g reading averaged over
+// ACC_FACE_WINDOW_US, the board still on one face.
+static constexpr uint32_t ACC_FACE_WINDOW_US   = 3000000;
+static constexpr float    ACC_FACE_STILL_SD    = 0.05f;   // m/s^2: any axis's sample SD above this, it moved
+static constexpr float    ACC_FACE_G_TOL       = 0.5f;    // m/s^2: |mean| this far from 9.80665, not one g
+static constexpr uint8_t  ACC_FACE_IDLE        = 0;
+static constexpr uint8_t  ACC_FACE_MEASURING   = 1;
+static constexpr uint8_t  ACC_FACE_DONE        = 2;
+static constexpr uint8_t  ACC_FACE_FAILED      = 3;       // moving, or not one g (the numbers still sent)
+static constexpr uint8_t  ACCF_STORED          = 1u << 0; // an offset is in NVS
+static constexpr uint8_t  ACCF_APPLIED         = 1u << 1; //   and the converter takes it off (not in sim)
+
+// ACC_CAL_STATUS_MSG (FC->OC over I2S), forwarded to the app on file-ops
+// behind 0xD1: the stored offset and the last face window.
+typedef struct __attribute__((packed))
+{
+    uint8_t  flags;              // ACCF_*
+    uint8_t  face_state;         // ACC_FACE_*
+    float    offset_mps2[3];     // the stored offset, board frame, m/s^2 (0 when none)
+    float    face_mean_mps2[3];  // the last face window's mean low-g reading, board frame, before any offset
+    float    face_sd_mps2[3];    // each axis's sample SD over it
+    uint16_t face_n;             // its samples
+} AccelCalStatusData;
+static_assert(sizeof(AccelCalStatusData) == 40, "AccelCalStatusData must be 40 bytes");
 
 // ── Pad calibration (#1600 phase 5) ──────────────────────────────────────────
 // OC→FC, after PAD_CAL_PENDING: the GPS broadcast (Klobuchar) ionosphere the
@@ -2783,6 +2877,9 @@ static constexpr uint8_t GNSS_CLOCK_MSG      = 0x9D;  // FC→OC over I2S: GnssC
 static constexpr uint8_t PAD_CONTEXT_MSG     = 0x9E;  // FC→OC over I2S: PadContextHeader + its kind's body, what a
                                                       // replay needs from the pad, once after launch; straight to the
                                                       // log.  VARIABLE length.
+static constexpr uint8_t HEADING_FIT_MSG     = 0x9F;  // FC→OC over I2S: HeadingFitData, the heading from thrust, each
+                                                      // fit (~1 Hz in flight); straight to the log.  LC86G boards
+                                                      // with the fit on.  The 0x90 block's last code.
 
 static constexpr uint8_t OUT_STATUS_QUERY    = 0xA0;
 static constexpr uint8_t GNSS_MSG            = 0xA1;
@@ -2911,8 +3008,8 @@ static constexpr uint8_t MAG_CAL_READ          = 0xDC;  // OC→FC: publish curr
 // The on-pad "Calibrate Sensors" routine produces a gyro zero-rate bias and
 // a high-g accel bias.  Mirroring mag cal, the app stores both per-rocket and
 // pushes them back on connect (APPLY) or reads what's stored (READ).  The
-// low-g accelerometer is the cal reference, not itself corrected, so there is
-// nothing to store for it.
+// low-g accelerometer is this cal's reference, not corrected by it; its own
+// offset is the six-face hand calibration's (ACC_CAL_*, below).
 //
 // These three OC→FC codes originally sat at 0xDD/0xDE/0xDF, which ALIAS the
 // mag-cal MAG_CAL_VERIFY_DONE/RESET/FORCE_APPLY codes above.  The FC's
@@ -2931,6 +3028,15 @@ static constexpr uint8_t SENSOR_CAL_APPLY_PENDING = 0xE8;  // OC→FC: payload f
 static constexpr uint8_t SENSOR_CAL_APPLY_MSG     = 0xE9;  // 18-byte SensorCalApplyData payload
 static constexpr uint8_t SENSOR_CAL_READ          = 0xEA;  // OC→FC: publish current NVS sensor cal
 static constexpr uint8_t SENSOR_CAL_STATUS_MSG    = 0xE0;  // FC→OC: SensorCalStatusData
+
+// --- The low-g accelerometer's hand calibration (#1629; AccelCalApplyData) ---
+// 0x90-0x9F and 0xA0-0xFD are full: these open the 0x80 block (nothing on any
+// link gates on a type byte's range -- see GNSS_SAT_MSG).  BLE 76/77/78.
+static constexpr uint8_t ACC_CAL_APPLY_PENDING = 0x80;  // OC→FC: payload follows as ACC_CAL_APPLY_MSG
+static constexpr uint8_t ACC_CAL_APPLY_MSG     = 0x81;  // 12-byte AccelCalApplyData payload
+static constexpr uint8_t ACC_CAL_READ          = 0x82;  // OC→FC: publish the stored offset as a status frame
+static constexpr uint8_t ACC_CAL_STATUS_MSG    = 0x83;  // FC→OC over I2S: AccelCalStatusData
+static constexpr uint8_t ACC_FACE_PENDING      = 0x84;  // OC→FC: average the low-g over one face window
 
 // FC→OC over I2S, emitted once at the PRELAUNCH→INFLIGHT transition. A
 // snapshot of the active roll-control / IMU settings so the per-flight .bin
@@ -4340,6 +4446,8 @@ static_assert(sizeof(PadContextHeader) + sizeof(PadContextNav) <= MAX_PAYLOAD &&
               sizeof(PadContextHeader) + padContextSurveyWireSize(PCX_SURVEY_PER_PART) <= MAX_PAYLOAD &&
               sizeof(PadContextHeader) + PCX_EPH_MAX_FRAME <= MAX_PAYLOAD,
               "every PAD_CONTEXT_MSG record must fit one I2S frame payload");
+static_assert(sizeof(HeadingFitData) <= MAX_PAYLOAD,
+              "HeadingFitData must fit one I2S frame payload");
 static_assert(sizeof(PadCalStatusData) <= MAX_PAYLOAD,
               "PadCalStatusData must fit one I2S frame payload");
 static_assert(sizeof(GnssCheckData) <= MAX_PAYLOAD,

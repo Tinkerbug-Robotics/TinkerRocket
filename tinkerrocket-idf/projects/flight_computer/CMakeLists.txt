@@ -94,6 +94,56 @@ if(DEFINED TR_RAW_GNSS_PRIMARY)
     add_compile_definitions(TR_RAW_GNSS_PRIMARY=${TR_RAW_GNSS_PRIMARY})
     message(STATUS "TR_RAW_GNSS_PRIMARY=${TR_RAW_GNSS_PRIMARY} -- raw-GNSS navigation filter set by hand")
 endif()
+# The heading from thrust (main/config.h): -DTR_HEADING_FIT=0 off, 1 observe
+# (fit and log), 2 act (GNSS turns the attitude from launch; the default where
+# the raw filter navigates).
+if(DEFINED TR_HEADING_FIT)
+    add_compile_definitions(TR_HEADING_FIT=${TR_HEADING_FIT})
+    message(STATUS "TR_HEADING_FIT=${TR_HEADING_FIT} -- the heading from thrust set by hand")
+endif()
+# Bench: what the heading fit costs core 0, timed once when the raw-GNSS task
+# starts (TR_RawGnssShadow/HeadingFitBench.h). Never set for flight.
+if(TR_HEADING_FIT_BENCH)
+    add_compile_definitions(TR_HEADING_FIT_BENCH=1)
+    message(STATUS "TR_HEADING_FIT_BENCH=1 -- the heading fit's bench ENABLED (bench)")
+endif()
+# Bench: the pad's heading turned this many degrees (added to the magnetic
+# declination), so the heading fit has a known error to find -- a rig replay
+# with and without it should differ by it in the fit's turn. Never set for flight.
+if(DEFINED TR_BENCH_HEADING_ERROR_DEG)
+    add_compile_definitions(TR_BENCH_HEADING_ERROR_DEG=${TR_BENCH_HEADING_ERROR_DEG})
+    message(STATUS "TR_BENCH_HEADING_ERROR_DEG=${TR_BENCH_HEADING_ERROR_DEG} -- the pad heading turned on purpose (bench)")
+endif()
+# Bench (local, rig comparison): act's heading prior -- with the
+# magnetometer's heading (TR_BENCH_HEADING_PAD_SIGMA_DEG) and without it
+# (TR_BENCH_HEADING_PAD_SIGMA_FALLBACK_DEG) -- and hand-off threshold.
+foreach(_v TR_BENCH_HEADING_PAD_SIGMA_DEG TR_BENCH_HEADING_PAD_SIGMA_FALLBACK_DEG TR_BENCH_HEADING_HANDOFF_DEG)
+    if(DEFINED ${_v})
+        add_compile_definitions(${_v}=${${_v}})
+        message(STATUS "${_v}=${${_v}} (bench)")
+    endif()
+endforeach()
+# Bench (rig comparison): act's attitude gate in flight (RawGnssShadow
+# heading_gate) -- 0 the heading's, 1 whole from launch, 2 the heading's until
+# the flight computer's apogee call and whole from it -- and the tilt's floor
+# at launch, deg (heading_launch_tilt_sigma_deg). Never set for flight.
+foreach(_v TR_BENCH_HEADING_GATE_FULL TR_BENCH_LAUNCH_TILT_SIGMA_DEG)
+    if(DEFINED ${_v})
+        add_compile_definitions(${_v}=${${_v}})
+        message(STATUS "${_v}=${${_v}} (bench)")
+    endif()
+endforeach()
+# Bench (rig comparison): the carrier range rates -- 0 off, 1 observed (the
+# LC86G profile's), 2 fused (RawGnssEKFParams cr_mode) -- and a rate a
+# half-cycle step explains repaired (1) rather than dropped (0). Each sets the
+# receiver's profile before it is applied (main.cpp startRawShadow). Never set
+# for flight.
+foreach(_v TR_BENCH_CARRIER_MODE TR_BENCH_HALF_CYCLE_REPAIR)
+    if(DEFINED ${_v})
+        add_compile_definitions(${_v}=${${_v}})
+        message(STATUS "${_v}=${${_v}} (bench)")
+    endif()
+endforeach()
 # Bench: a per-section cycle and Xtensa performance-counter profile of the
 # flight task, printed every 5 s (main/loop_profile.h). Never set for flight.
 if(TR_LOOP_PROFILE)
