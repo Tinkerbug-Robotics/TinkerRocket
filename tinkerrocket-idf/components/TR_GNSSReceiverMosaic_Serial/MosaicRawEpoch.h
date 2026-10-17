@@ -20,7 +20,9 @@
 //     from the first epoch's Doppler;
 //   - phase_m = pr + carrier offset * lambda: the carrier as a range, with
 //     has_phase only when the code, the carrier and the lock time are all
-//     valid; lock_ms the lock time (1 s resolution); halfcyc ObsInfo bit 2;
+//     valid; halfcyc ObsInfo bit 2;
+//   - lock_ms: the lock time (1 s resolution), held to 254 s and to the time
+//     since the last clock jump (lockCapMs);
 //   - cn0_dbhz = CN0 * 0.25 + 10; a do-not-use C/N0 leaves the cell with no
 //     measurement at all.
 //
@@ -31,15 +33,16 @@
 // phase_m stay as the receiver gave them, so tow_s - pr_m / c is still each
 // satellite's transmit time and the builder places it right; the filter's
 // whole-millisecond clock backstop takes the code step; and every cell's
-// lock_ms is 0 on the first epoch with cells after the jump, so no carrier
-// interval spans the step.
+// lock_ms counts from the jump (lockCapMs), so no carrier interval spans the
+// step, whichever epochs between never reach the builder.
 //
 // The time tag (plan section 2). TOW is receiver time: the GPS instant of an
 // epoch is TOW - RxClkBias (t_sys = t_rx - RxClkBias, Reference Guide), so
 //   mcu_us = mcuAt(epochGpsS(WNc, TOW, dtrMs(bias, drift, dt, jumps)))
-// with the bias of the last PVTGeodetic carried forward by its drift and by
-// the clock jumps since it (a -1 ms jump takes 1 ms off the bias).
-// ppsResidualUs checks a whole-second epoch's tag against its 1PPS edge.
+// with the bias of the last PVTGeodetic whose own MeasEpoch was noted
+// (pvtAnchorsJumps) carried forward by its drift and by the clock jumps since
+// it (a -1 ms jump takes 1 ms off the bias). ppsResidualUs checks a
+// whole-second epoch's tag against its 1PPS edge.
 //
 // Header-only and pure (tests_cpp/test_mosaic_raw_epoch.cpp).
 #ifndef MOSAIC_RAW_EPOCH_H
@@ -57,6 +60,7 @@ namespace mosaic
 {
 
 static constexpr double kMosaicC = 299792458.0;   // m/s, as gnss/atmo.h's GNSS_C
+static constexpr uint32_t kMosaicLockMaxMs = 254000;   // a Type2's LockTime clips at 254 s
 
 // The receiver's clock jumps, followed from one MeasEpoch to the next.
 // CumClkJumps is the jumps since the receiver started, in ms mod 256; a step
@@ -64,7 +68,9 @@ static constexpr double kMosaicC = 299792458.0;   // m/s, as gnss/atmo.h's GNSS_
 // different log), and the count starts over there. A driver that adapts only
 // the epochs on its fuse grid shows the others to noteMeasEpochClock, so the
 // count (and the PVT bias it carries forward with dtrMs) misses no jump; a
-// header seen twice (noted, then adapted) counts once.
+// header seen twice (noted, then adapted) counts once. Where the last jump or
+// start-over was seen (cut_ms) holds every later cell's lock time
+// (lockCapMs).
 struct MosaicJumpState
 {
     bool     have = false;        // an epoch with CumClkJumps seen since the last start-over
@@ -73,7 +79,8 @@ struct MosaicJumpState
     int32_t  j_ms = 0;            // the clock jumps since the start-over, ms
     uint32_t jumps = 0;           // epochs that jumped
     uint32_t rebases = 0;         // start-overs after the first epoch
-    uint32_t jumps_at_cells = 0;  // `jumps` when rawEpochFromMeasEpoch last gave cells
+    bool     cut = false;         // a jump or a start-over seen: the carrier is continuous only since cut_ms
+    int64_t  cut_ms = 0;          // the receiver time of the epoch that showed it, ms
 };
 
 // What one MeasEpoch gave, beside the cells.
@@ -86,7 +93,7 @@ struct MosaicEpochInfo
     bool      jumped = false;    // the clock jumped jump_ms at this epoch
     bool      rebased = false;   // the jump count started over at this epoch (j_ms from 0)
     int8_t    jump_ms = 0;
-    bool      lock_reset = false;   // a jump at this epoch or since the last one with cells: every lock_ms is 0
+    uint32_t  lock_cap_ms = kMosaicLockMaxMs;   // every cell's lock_ms at most this (lockCapMs)
     int32_t   j_ms = 0;          // MosaicJumpState::j_ms after this epoch
     uint8_t   n_gps = 0, n_gal = 0, n_bds = 0;
     uint8_t   geo = 0;           // BeiDou GEO B1I cells left out
@@ -122,12 +129,42 @@ inline void noteClockJumps(const SbfMeasHeader& h, MosaicJumpState& js, MosaicEp
                 js.j_ms += d;
             }
             if (info.jumped) js.jumps++;
+            if (info.jumped || info.rebased)
+            {
+                js.cut = true;
+                js.cut_ms = t;
+            }
         }
         js.have = true;
         js.last_cum = h.cum_clk_jumps;
         js.last_ms = t;
     }
     info.j_ms = js.j_ms;
+}
+
+// The most lock time a cell of this epoch may claim, ms. 254 s: a Type1's
+// LockTime runs to 65534 s but a Type2's clips at 254, and a satellite's L1
+// signal moves between the two levels from epoch to epoch (hundreds of times
+// on each 10/16 capture), so past 254 s its lock would go back at a switch,
+// which RawMeasCarrier takes for a slip; a relock still shows, as a drop to
+// 0-1 s. And no more than the time since the last clock jump or start-over:
+// the uncorrected carrier steps c * 1 ms there, so its continuous span starts
+// over, and an interval from an epoch before it fails the builder's rule that
+// the later end's lock covers the interval. That holds whichever epochs
+// between were lost on the way (a full queue, one not published, one the
+// stage dropped as stale or left unbuilt), which a lock zeroed at one epoch
+// alone would not; it costs the carrier the first cr_min_lock_ms after each
+// jump (about one an hour).
+inline uint32_t lockCapMs(const SbfMeasHeader& h, const MosaicJumpState& js)
+{
+    uint32_t cap = kMosaicLockMaxMs;
+    if (js.cut)
+    {
+        const int64_t since = static_cast<int64_t>(h.wnc) * 604800000LL + h.tow_ms - js.cut_ms;
+        if (since < static_cast<int64_t>(cap))
+            cap = since > 0 ? static_cast<uint32_t>(since) : 0U;   // time back (revision 0, untracked): none
+    }
+    return cap;
 }
 
 // The clock-jump count of a MeasEpoch that is not adapted (off the fuse
@@ -165,9 +202,7 @@ inline bool rawEpochFromMeasEpoch(const uint8_t* b, size_t len, gnss_raw::RawEpo
     if (info.status != SbfStatus::OK)
         return false;
     noteClockJumps(h, js, info);
-    // no carrier interval may span a jump: not at this epoch, nor at one
-    // between it and the last epoch the builder had (decimated, or empty)
-    info.lock_reset = js.jumps != js.jumps_at_cells;
+    info.lock_cap_ms = lockCapMs(h, js);
     out.tow_s = h.tow_ms * 1.0e-3;
 
     SbfMeasSignal s;
@@ -233,13 +268,12 @@ inline bool rawEpochFromMeasEpoch(const uint8_t* b, size_t len, gnss_raw::RawEpo
         o.pr_m = has_pr ? s.prM() : 0.0;
         o.has_rate = cn0_ok && s.dop_valid;
         o.rate_mps = o.has_rate ? -lambda * s.doppler_hz : 0.0;
-        o.lock_ms = (s.lockValid() && !info.lock_reset) ? static_cast<uint32_t>(s.lock_s) * 1000U : 0U;
+        const uint32_t lock_ms = static_cast<uint32_t>(s.lock_s) * 1000U;
+        o.lock_ms = s.lockValid() ? (lock_ms < info.lock_cap_ms ? lock_ms : info.lock_cap_ms) : 0U;
         o.has_phase = has_pr && s.carrier_valid && s.lockValid();
         o.halfcyc = s.half_cycle;
         o.phase_m = o.has_phase ? s.phaseRangeM(lambda) : 0.0;
     }
-    if (out.n > 0)
-        js.jumps_at_cells = js.jumps;
     return out.n > 0;
 }
 
@@ -266,9 +300,24 @@ inline double epochGpsS(uint16_t wnc, uint32_t tow_ms, double dtr_ms)
 // (RxClkDrift, positive with the receiver's clock fast), across
 // jumps_since_pvt ms of clock jumps since it (MosaicJumpState::j_ms now less
 // at that PVT, while rebases has not changed): a -1 ms jump takes 1 ms off.
+// Only a PVT that pvtAnchorsJumps accepted may be carried.
 inline double dtrMs(double pvt_bias_ms, double drift_ppm, double dt_s, int32_t jumps_since_pvt)
 {
     return pvt_bias_ms + drift_ppm * 1.0e-3 * dt_s + jumps_since_pvt;
+}
+
+// Whether a PVTGeodetic (its WNc and TOW) may anchor dtrMs, with
+// MosaicJumpState::j_ms taken as it arrives: only when the MeasEpoch of its
+// own epoch was the last one noted (Stream7 sends the PVT just after it: 65,865
+// of 65,866 on the 10/16 captures, the other with no MeasEpoch at all). Its
+// RxClkBias already holds any jump at its epoch; if that MeasEpoch was lost (a
+// CRC failure, an overrun) at a jump, the count would take the jump only at
+// the next MeasEpoch, after the PVT, and every tag carried from that PVT would
+// hold it twice -- 1 ms off until the next PVT. Passed over, the PVT before
+// it (if young enough) or dtr 0 stands in.
+inline bool pvtAnchorsJumps(const MosaicJumpState& js, uint16_t wnc, uint32_t tow_ms)
+{
+    return js.have && js.last_ms == static_cast<int64_t>(wnc) * 604800000LL + tow_ms;
 }
 
 // The PPS tag check for a whole-second epoch (TOW % 1000 == 0): its tag
