@@ -24,8 +24,11 @@
 // and the Doppler, the correlated code's relock term decaying with the
 // satellite's lock age, the Doppler's relock term, rr_scale -- with no
 // stress term (the stage builds with g_peak 0; the filter adds it from the
-// IMU). A sim's own extra Doppler sigma (rr_sig_add: a stale satellite at
-// the relock class, as the rig's receiver gave it) is added in quadrature.
+// IMU). A sim's own extra Doppler sigma (rr_sig_add) is added in
+// quadrature -- for experiments only: the firmware has no path that tells
+// the filter one satellite's Doppler is worse (the builder's relock term
+// comes from a gap it sees, and the mosaic's own Doppler variance is decoded
+// but not used), so sim_events.py's patterns leave it 0.
 // The carrier is off on the mosaic, so has_cr is never set.
 //
 // The stage's private members are the caller's to open: include this after

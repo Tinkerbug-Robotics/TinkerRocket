@@ -9,12 +9,14 @@ its four-voter quorum:
   B  the barometer at 500 Hz, as pressure on META ground_pressure_pa (optionally behind a pneumatic lag);
   M  the magnetometer at 100 Hz: the truth's field in the body, 0.3 uT of noise (the no-magnetometer arm runs the
      same file with --mag-flags 0);
-  X  each receiver epoch at 10 Hz on the GPS-time grid, released 30 ms after it (the GNSS task's build, until the
-     bench measures it): every satellite placed (position, velocity and acceleration, ECEF of the transmit time),
-     its corrected pseudorange, range rate and C/N0, PRNs mapped to GPS, Galileo and BeiDou by shell -- the stage's
-     cap, floors, mask and noise model then act on it in the harness (sim_epoch.h);
-  V  the receiver's own fix 25 ms after each epoch: a least-squares solution from the same (faulted) measurements,
-     its velocity 4-6 ms late (High dynamics), so a receiver fault reaches the GPS voter as it reaches the filter;
+  X  each receiver epoch on the fused 10 Hz grid of GPS time, released 30 ms after it (the GNSS task's build,
+     until the bench measures it): every satellite placed (position, velocity and acceleration, ECEF of the
+     transmit time), its corrected pseudorange, range rate and C/N0, PRNs mapped to GPS, Galileo and BeiDou by
+     shell -- the stage's cap, floors, mask and noise model then act on it in the harness (sim_epoch.h);
+  V  the receiver's own fix 25 ms after each of its epochs, at its own 20 Hz (the mosaic streams PVTGeodetic at
+     msec50, config::GNSS_UPDATE_RATE; only the raw epochs are cut to the fused grid): a least-squares solution from
+     the same (faulted) measurements, its velocity the truth's of 4-6 ms before the epoch (High dynamics) plus the
+     solution's error, so a receiver fault reaches the GPS voter as it reaches the filter;
   META the cold start's (seed_lla, seed_quat -- the truth at the seed, the harness turns it by the magnetometer's
      error -- pad_lla, declination_rad, field_ned_ut, decimal_year, ground_pressure_pa), state_machine none (the
      quorum's own launch and landing), t_base_s, the truth's phase times, and what the pattern did (sim_*).
@@ -23,26 +25,45 @@ The receiver (MosaicRx, from the gnss repo's RawGNSSModel): 3 Walker shells (GPS
 clock), a 3 deg mask, lock kept to 200 m/s^2 along the line of sight, a dipole-like C/N0 along the nose (46 dB-Hz
 broadside, 6 dB on the axis), and noise at the mosaic profile's v0 fits for that C/N0 -- the code's white
 (0.10/0.30) and correlated (1.94/3.5 x 0.5, 15 s) parts, the Doppler's white (0.01/0.075, without the profile's 1.5
-margin), 0.05 m/s per g of stress (the profile allows 0.5), a TCXO with 1 ppb/g, no Doppler lag. The antenna is
---lever-arm m along the nose from the IMU (0.3 by default; the filter keeps r = 0).
+margin), 0.05 m/s per g of stress (the profile allows 0.5), a TCXO with 1 ppb/g, no Doppler lag. It measures at
+its own 20 Hz (--pvt-rate), as the mosaic does; every second epoch is on the fused 10 Hz grid (--rate) and goes to
+the filter. The antenna is --lever-arm m along the nose from the IMU (0.3 by default; the filter keeps r = 0).
 
-Patterns (G4/G5): none; cutA (A = 0.5, 1.5, 3: every epoch from T+A to T+8 cut, 43 % of the Dopplers of the epoch
-before it off by 36-70 m/s, as c30's); stale_rx (every Doppler follows a receiver held at the pad's velocity
-through the boost, closing on the truth with tau 2 s from burnout, 3 m/s of scatter: the closing tail with GNSS
-after); stale_sats (two Galileo satellites so, tau 4 s, their sigma 8 x the lag from burnout); settle15, settle40
-(from burnout each Doppler off by a fresh draw of A exp(-dt/1.5 s) m/s, A 1.5 and 4); lolN (N = 0..3: every
-satellite loses lock N s before the true apogee and re-acquires as the model does; no fix while under 4);
-coherent (the receiver's velocity biased down by a ramp 0 -> 5 m/s over the 3 s before the true apogee, then held:
-every Doppler and the fix's vU); coherent15 (the guard's own case: 0 -> 15 m/s down over 1 s from 3 s before the
-true apogee, then held); baro_lagT (T = 0.5, 0.7, 1.0 s: the static port's first-order lag, GNSS clean).
+Patterns (G4/G5):
+  none;
+  cutA (A = 0.5, 1.5, 3: every epoch from T+A to T+8 cut, 43 % of the Dopplers of the fused epoch before it off by
+     36-70 m/s, as c30's and the Beetle report's -- GNSS comes back at T+8, at or after the true apogee, so the
+     coast flies unaided);
+  gapD (D = 0.5, 1.5, 3: the same cut D s long from burnout, the epoch before it corrupted -- GNSS comes back in
+     coast, where a velocity error turns the heading);
+  stale_rx (every Doppler follows a receiver held at the pad's velocity through the boost, closing on the truth
+     with tau 2 s from burnout, 3 m/s of scatter: the closing tail with GNSS after);
+  stale_sats (two Galileo satellites so, tau 4 s -- the filter is not told: no firmware path widens one
+     satellite's Doppler sigma, so rr_sig_add stays 0);
+  settle15, settle40 (from burnout each Doppler off by a fresh draw of A exp(-dt/1.5 s) m/s, A 1.5 and 4; settle40
+     also 2 m/s rms common to every Doppler over the first 5 s of coast: tc_ekf_eval --post-thrust 1.5,1.5 and
+     4,1.5,2, the rig's rp5);
+  lolN (N = 0..3: every satellite loses lock N s before the true apogee and re-acquires as the model does; no fix
+     while under 4);
+  coherent (the receiver's velocity biased down by a ramp 0 -> 5 m/s over the 3 s before the true apogee, then
+     held: every Doppler and the fix's vU);
+  coherent15 (a fast coherent step: 0 -> 15 m/s down over 1 s from 3 s before the true apogee, then held -- the
+     filter's Doppler gate refuses it, so it is not the raw vote guard's case);
+  slow12, slow15 (a slow coherent ramp, 2 or 2.5 m/s a second, ending at 12 or 15 m/s at the true apogee: it
+     starts 6 s before it, never before burnout, then held), slow15b (0 -> 15 m/s over 6 s from burnout, then held):
+     the filter accepts these and reads more than 10 m/s low before apogee -- the raw vote guard's own case;
+  baro_lagT (T = 0.5, 0.7, 1.0 s: the static port's first-order lag, GNSS clean -- a sensitivity sweep; nothing
+     on the Goblin's port is measured).
 The faults are tc_ekf_eval.run's (Grid A's) where it has them, applied before the PRN mapping as it applies them.
 
     PYTHONPATH=<simbuild>/tinkerrocket-sim/src:<gnss-hf-sim>/sim \\
         python3 tools/raw_replay/sim_events.py FLIGHT.pkl OUT_DIR --pattern none [--truth-phases J]
 
 writes OUT_DIR/<flight>__<pattern>.events and, once a flight, OUT_DIR/truth/<flight>.npz (the truth sim_tables.py
-scores against: flight time, attitude, NED velocity and position, the phase times). Nothing is printed of
-the pad's position; it goes only into the events file.
+scores against: flight time, attitude, NED velocity and position, the phase times) and OUT_DIR/truth/<flight>.nav
+(the same truth at the IMU as raw_replay --truth-nav reads it: the quorum on a perfect filter, the run's own
+barometer and fixes, for the truth's own call). Nothing is printed of the pad's position; it goes only into the
+events file.
 """
 from __future__ import annotations
 
@@ -66,10 +87,12 @@ TOW0 = 573786.0              # T+0's time of week (15:23 UTC), as the rig scenar
 DECIMAL_YEAR = 2026.81
 RELEASE_S = 0.030            # the GNSS task hands a built epoch over this long after its GPS instant
 FIX_ARRIVAL_S = 0.025        # the receiver's PVT reaches the flight loop this long after its epoch
+CORRUPT = (0.43, 36.0, 70.0)  # the epoch before a cut: this share of its Dopplers off by 36-70 m/s (c30's)
 W_EARTH = np.array([0.0, 0.0, OMGE])
 
-PATTERNS = ("none", "cut05", "cut15", "cut30", "stale_rx", "stale_sats", "settle15", "settle40",
-            "lol0", "lol1", "lol2", "lol3", "coherent", "coherent15", "baro_lag05", "baro_lag07", "baro_lag10")
+PATTERNS = ("none", "cut05", "cut15", "cut30", "gap05", "gap15", "gap30", "stale_rx", "stale_sats", "settle15",
+            "settle40", "lol0", "lol1", "lol2", "lol3", "coherent", "coherent15", "slow12", "slow15", "slow15b",
+            "baro_lag05", "baro_lag07", "baro_lag10")
 
 
 def cn0_sigma(a, b, cn0):
@@ -261,9 +284,12 @@ def body_rates(q, t):
 
 # ------------------------------------------------------------------ the fix (V)
 
-def solve_fix(meas, info, r_true, v_true_lag, T_e2n):
-    """The receiver's least-squares fix from this epoch's measurements (all it tracks): the position and velocity
-    errors against the truth (NED, m and m/s), solved linearly at the true antenna state."""
+def solve_fix(meas, info, v_true, T_e2n):
+    """The receiver's least-squares fix from this epoch's measurements (all it tracks): its position and velocity
+    errors (NED, m and m/s), solved linearly at the true antenna state of the epoch (v_true: ECEF m/s, the velocity
+    each range rate was formed at). The caller adds the velocity error to the velocity the fix reports, which is
+    the truth's of a few ms before (the PVT filter's lag): linearizing at that lagged velocity instead would give
+    back the epoch's own velocity, since the range rates carry it."""
     n = len(meas)
     if n < 4:
         return None
@@ -274,7 +300,7 @@ def solve_fix(meas, info, r_true, v_true_lag, T_e2n):
         H[i, :3] = -u
         H[i, 3] = 1.0
         yp[i] = m["pr"] - info["rho"][m["k"]]
-        yv[i] = m["rr"] - float(u @ (info["vs_r"][m["k"]] - v_true_lag))
+        yv[i] = m["rr"] - float(u @ (info["vs_r"][m["k"]] - v_true))
         wp[i] = 1.0 / (m["s_pr"] ** 2 + m["s_corr"] ** 2)
         wv[i] = 1.0 / (m["s_rr"] ** 2 + m["rr_sig_add"] ** 2)
     try:
@@ -285,9 +311,60 @@ def solve_fix(meas, info, r_true, v_true_lag, T_e2n):
     return T_e2n @ dx[:3], T_e2n @ dv[:3]
 
 
+def coherent_bias(te, coh):
+    """The coherent fault's downward bias at te (m/s): amp * clip((te - t_start) / ramp_s, 0, 1)."""
+    amp, ramp_s, t_start = coh
+    return amp * min(1.0, max(0.0, (te - t_start) / ramp_s))
+
+
+def settle_offsets(rng, n, dt_b, post):
+    """The tracking loops settling after the thrust (tc_ekf_eval --post-thrust A,TAU[,COMMON[,WINDOW]]), dt_b s
+    after burnout: n Doppler offsets (m/s), each a fresh draw of A exp(-dt_b/TAU) rms, plus one draw of COMMON rms
+    shared by all of them over the first WINDOW s of coast (None: nothing left to add)."""
+    a, tau, common, window = post
+    s_sat = a * math.exp(-dt_b / tau)
+    c = float(rng.normal(0.0, common)) if common > 0.0 and dt_b <= window else 0.0
+    if s_sat <= 1e-3 and c == 0.0:
+        return None
+    return [float(rng.normal(0.0, s_sat)) + c for _ in range(n)]
+
+
+def pattern_params(pattern, t_burn, t_apo):
+    """A pattern's parameters: dict(cut=(from, to) flight s, corrupt=CORRUPT, stale=(tau, scatter),
+    stale_sats=(n, tau), post=(A, tau, common, window), lol_s, coh=(amp, ramp_s, t_start), baro_tau)."""
+    p = dict(cut=None, corrupt=None, stale=None, stale_sats=None, post=None, lol_s=None, coh=None, baro_tau=None)
+    if pattern.startswith("cut"):
+        p.update(cut=(float(pattern[3:]) / 10.0, 8.0), corrupt=CORRUPT)
+    elif pattern.startswith("gap"):
+        p.update(cut=(t_burn, t_burn + float(pattern[3:]) / 10.0), corrupt=CORRUPT)
+    elif pattern == "stale_rx":
+        p["stale"] = (2.0, 3.0)
+    elif pattern == "stale_sats":
+        p["stale_sats"] = (2, 4.0)
+    elif pattern == "settle15":
+        p["post"] = (1.5, 1.5, 0.0, 5.0)
+    elif pattern == "settle40":
+        p["post"] = (4.0, 1.5, 2.0, 5.0)
+    elif pattern.startswith("lol"):
+        p["lol_s"] = float(pattern[3:])
+    elif pattern == "coherent":
+        p["coh"] = (5.0, 3.0, t_apo - 3.0)
+    elif pattern == "coherent15":
+        p["coh"] = (15.0, 1.0, t_apo - 3.0)
+    elif pattern in ("slow12", "slow15"):
+        p["coh"] = (float(pattern[4:]), 6.0, max(t_apo - 6.0, t_burn))
+    elif pattern == "slow15b":
+        p["coh"] = (15.0, 6.0, t_burn)
+    elif pattern.startswith("baro_lag"):
+        p["baro_tau"] = float(pattern[8:]) / 10.0
+    elif pattern != "none":
+        raise SystemExit(f"unknown pattern {pattern}")
+    return p
+
+
 # ------------------------------------------------------------------ the events file
 
-def build(flight_path, pattern, out_dir, phases_all, lever_arm=0.3, shells=3, rate_hz=10.0):
+def build(flight_path, pattern, out_dir, phases_all, lever_arm=0.3, shells=3, rate_hz=10.0, pvt_hz=20.0):
     name = os.path.splitext(os.path.basename(flight_path))[0]
     ph = phases_all[name]
     rng_land = np.random.default_rng(stable_seed(name, "landing"))
@@ -310,37 +387,19 @@ def build(flight_path, pattern, out_dir, phases_all, lever_arm=0.3, shells=3, ra
     a_ant = np.gradient(v_ant, t, axis=0)
     nose = C_n2b[:, 0, :]                              # body x in NED
 
-    rx = MosaicRx(ref, seed=stable_seed(name, "receiver"), n_shells=shells, rate_hz=rate_hz)
+    rx = MosaicRx(ref, seed=stable_seed(name, "receiver"), n_shells=shells, rate_hz=pvt_hz)
     rng_f = np.random.default_rng(stable_seed(name, pattern, "fault"))
     T_e2n = rx.T_ecef2ned
     Tn2e = T_e2n.T
     lag_v = 0.004 + 0.002 * np.random.default_rng(stable_seed(name, "pvt-lag")).random()   # the fix's 4-6 ms
 
-    # pattern parameters
-    cut = corrupt = stale = stale_sats = post = None
-    lol_s = coh = baro_tau = None
-    if pattern.startswith("cut"):
-        cut = (float(pattern[3:]) / 10.0, 8.0)
-        corrupt = (0.43, 36.0, 70.0)
-    elif pattern == "stale_rx":
-        stale = (2.0, 3.0)
-    elif pattern == "stale_sats":
-        stale_sats = (2, 4.0, 8.0)
-    elif pattern.startswith("settle"):
-        post = (float(pattern[6:]) / 10.0, 1.5)
-    elif pattern.startswith("lol"):
-        lol_s = float(pattern[3:])
-    elif pattern == "coherent":
-        coh = (5.0, 3.0, 3.0)          # m/s, ramp s, from s before the true apogee
-    elif pattern == "coherent15":
-        coh = (15.0, 1.0, 3.0)
-    elif pattern.startswith("baro_lag"):
-        baro_tau = float(pattern[8:]) / 10.0
-    elif pattern != "none":
-        raise SystemExit(f"unknown pattern {pattern}")
+    pp = pattern_params(pattern, t_burn, t_apo)
+    cut, corrupt, stale, stale_sats, post = pp["cut"], pp["corrupt"], pp["stale"], pp["stale_sats"], pp["post"]
+    lol_s, coh, baro_tau = pp["lol_s"], pp["coh"], pp["baro_tau"]
 
+    # sim_*_epochs count the fused epochs (the filter's); sim_rx_epochs every receiver epoch, sim_fixes its fixes
     counts = dict(sim_epochs_cut=0, sim_sats_corrupted=0, sim_stale_epochs=0, sim_post_epochs=0,
-                  sim_lol_epochs=0, sim_coherent_epochs=0, sim_epochs=0, sim_fixes=0)
+                  sim_lol_epochs=0, sim_coherent_epochs=0, sim_epochs=0, sim_rx_epochs=0, sim_fixes=0)
     stale_prns = None
     lol_done = False
     lol_t = None
@@ -350,16 +409,20 @@ def build(flight_path, pattern, out_dir, phases_all, lever_arm=0.3, shells=3, ra
     def us(x):
         return int(round((x + T_OFS) * 1e6))
 
-    # ---- the receiver: an epoch at every 100 ms of GPS time
+    # ---- the receiver: an epoch every 50 ms of GPS time (its PVT rate), every second one on the fused grid
     t_ms = np.round(t * 1000.0).astype(np.int64)
-    period_ms = int(round(1000.0 / rate_hz))
+    x_ms = int(round(1000.0 / rate_hz))
+    rx_ms = int(round(1000.0 / pvt_hz))
+    if x_ms % rx_ms != 0:
+        raise SystemExit(f"the fused grid ({x_ms} ms) must fall on the receiver's epochs ({rx_ms} ms)")
     g_pk = 0.0
     first_fix = None
     for i in range(len(t)):
         g_pk = max(g_pk, sf_g[i])
-        if t_ms[i] % period_ms != 0:
+        if t_ms[i] % rx_ms != 0:
             continue
         te = t_ms[i] / 1000.0
+        on_grid = int(t_ms[i] % x_ms == 0)             # this epoch goes to the filter as well as to the fix
         t_rel = te                                     # flight time (T+0 = the launch edge)
         if lol_s is not None and not lol_done and te >= t_apo - lol_s - 1e-9:
             # every channel lost at once; each re-acquires as the model re-acquires (its delay, its relock noise)
@@ -368,10 +431,10 @@ def build(flight_path, pattern, out_dir, phases_all, lever_arm=0.3, shells=3, ra
             lol_done, lol_t = True, te
         meas, info = rx.measure_full(te, p_ant[i], v_ant[i], a_ant[i], sf_g[i], g_pk, nose[i])
         g_pk = sf_g[i]
-        counts["sim_epochs"] += 1
+        counts["sim_rx_epochs"] += 1
+        counts["sim_epochs"] += on_grid
         if lol_done and len(meas) < info["visible"]:
-            counts["sim_lol_epochs"] += 1
-        r_rx = rx.ref_ecef + Tn2e @ p_ant[i]
+            counts["sim_lol_epochs"] += on_grid
         # the stale receiver (tc_ekf_eval --stale-doppler): from launch every Doppler follows a receiver at
         # v_true - lag v_true, lag 1 through the boost then exp(-(t - burnout)/tau), with scatter
         if stale is not None and i >= i_launch:
@@ -381,8 +444,10 @@ def build(flight_path, pattern, out_dir, phases_all, lever_arm=0.3, shells=3, ra
                 scat = stale[1] * lag
                 for m in meas:
                     m["rr"] += float(info["u"][m["k"]] @ dv_e) + float(rng_f.normal(0.0, scat))
-                counts["sim_stale_epochs"] += 1
-        # two stale satellites of the second shell (tc_ekf_eval --stale-sats N,TAU,SCALE)
+                counts["sim_stale_epochs"] += on_grid
+        # two stale satellites of the second shell (tc_ekf_eval --stale-sats N,TAU): their Dopplers lag so, and
+        # nothing tells the filter -- the firmware has no path that widens one satellite's Doppler sigma (the
+        # builder's relock term is from a gap it sees; the mosaic's own Doppler variance is decoded, not used)
         if stale_sats is not None and i >= i_launch and meas:
             if stale_prns is None:
                 pool = [m["prn"] for m in meas if 100 <= m["prn"] < 200] or [m["prn"] for m in meas]
@@ -391,29 +456,27 @@ def build(flight_path, pattern, out_dir, phases_all, lever_arm=0.3, shells=3, ra
             lag = 1.0 if te < t_burn else math.exp(-(te - t_burn) / stale_sats[1])
             if lag > 1e-3 and stale_prns:
                 dv_e = Tn2e @ (lag * v_ant[i])
-                s_st = stale_sats[2] * lag if te >= t_burn else 0.0
                 for m in meas:
                     if m["prn"] in stale_prns:
                         m["rr"] += float(info["u"][m["k"]] @ dv_e)
-                        m["rr_sig_add"] = s_st
-                counts["sim_stale_epochs"] += 1
-        # the tracking loops settling after the thrust (tc_ekf_eval --post-thrust A,TAU)
+                counts["sim_stale_epochs"] += on_grid
+        # the tracking loops settling after the thrust (tc_ekf_eval --post-thrust A,TAU[,COMMON])
         if post is not None and te >= t_burn and meas:
-            s_sat = post[0] * math.exp(-(te - t_burn) / post[1])
-            if s_sat > 1e-3:
-                for m in meas:
-                    m["rr"] += float(rng_f.normal(0.0, s_sat))
-                counts["sim_post_epochs"] += 1
-        # the coherent coast fault: the receiver's velocity biased down by a ramp, every Doppler and its fix
+            offs = settle_offsets(rng_f, len(meas), te - t_burn, post)
+            if offs is not None:
+                for m, o in zip(meas, offs):
+                    m["rr"] += o
+                counts["sim_post_epochs"] += on_grid
+        # the coherent fault: the receiver's velocity biased down by a ramp, every Doppler and its fix
         if coh is not None:
-            b = coh[0] * min(1.0, max(0.0, (te - (t_apo - coh[2])) / coh[1]))
+            b = coherent_bias(te, coh)
             if b > 0.0:
                 db_e = Tn2e @ np.array([0.0, 0.0, b])
                 for m in meas:
                     m["rr"] -= float(info["u"][m["k"]] @ db_e)
-                counts["sim_coherent_epochs"] += 1
-        # a cut, and the epoch before it corrupted (tc_ekf_eval --gnss-cut A,B --corrupt-before-cut F,LO,HI)
-        if cut is not None and corrupt is not None and t_rel < cut[0] <= t_rel + 1.0 / rate_hz + 1e-6:
+                counts["sim_coherent_epochs"] += on_grid
+        # a cut, and the fused epoch before it corrupted (tc_ekf_eval --gnss-cut A,B --corrupt-before-cut F,LO,HI)
+        if cut is not None and corrupt is not None and on_grid and t_rel < cut[0] <= t_rel + x_ms / 1000.0 + 1e-6:
             ks = list(range(len(meas)))
             nb = max(1, int(round(corrupt[0] * len(ks)))) if ks else 0
             bad = set(rng_f.choice(ks, size=min(nb, len(ks)), replace=False).tolist()) if nb else set()
@@ -422,12 +485,12 @@ def build(flight_path, pattern, out_dir, phases_all, lever_arm=0.3, shells=3, ra
             counts["sim_sats_corrupted"] += len(bad)
         if cut is not None and cut[0] <= t_rel < cut[1]:
             meas = []
-            counts["sim_epochs_cut"] += 1
+            counts["sim_epochs_cut"] += on_grid
         if not meas:
             continue                                   # an empty epoch is not handed over (nor a fix made)
-        # the receiver's fix from the same measurements
+        # the receiver's fix from the same measurements: their errors, on the truth of lag_v before the epoch
         v_lag = np.array([np.interp(te - lag_v, t, v_ant[:, k]) for k in range(3)])
-        fx = solve_fix(meas, info, r_rx, Tn2e @ v_lag, T_e2n)
+        fx = solve_fix(meas, info, Tn2e @ v_ant[i], T_e2n)
         if fx is not None:
             dpos, dvel = fx
             pa = p_ant[i] + dpos
@@ -438,6 +501,8 @@ def build(flight_path, pattern, out_dir, phases_all, lever_arm=0.3, shells=3, ra
             counts["sim_fixes"] += 1
             if first_fix is None:
                 first_fix = ecef2lla(rx.ref_ecef + Tn2e @ pa)
+        if not on_grid:
+            continue
         # the epoch, its satellites mapped to systems
         parts = []
         for m in meas:
@@ -503,8 +568,8 @@ def build(flight_path, pattern, out_dir, phases_all, lever_arm=0.3, shells=3, ra
         f"META flight {name}",
         f"META pattern {pattern}",
         f"META lever_arm_m {lever_arm}",
-        f"META receiver_model mosaic-like shells {shells} rate_hz {rate_hz} lock_los_accel 200 rr_dyn_true 0.05 "
-        f"cn0_broadside 46 cn0_axis_loss 6 el_mask 3",
+        f"META receiver_model mosaic-like shells {shells} rate_hz {rate_hz} pvt_hz {pvt_hz} lock_los_accel 200 "
+        f"rr_dyn_true 0.05 cn0_broadside 46 cn0_axis_loss 6 el_mask 3",
         f"META fix_vel_lag_s {lag_v:.4f}",
         f"META t_inflight_us {us(thrust_start)}",
         f"META t_landed_flag_us {us(touch + 1.0)}",
@@ -518,7 +583,7 @@ def build(flight_path, pattern, out_dir, phases_all, lever_arm=0.3, shells=3, ra
     if baro_tau is not None:
         lines.append(f"META sim_baro_lag_tau_s {baro_tau}")
     if coh is not None:
-        lines.append(f"META sim_coherent_mps {coh[0]} over_s {coh[1]} from_s_before_apogee {coh[2]}")
+        lines.append(f"META sim_coherent_mps {coh[0]} over_s {coh[1]} from_t_s {coh[2]!r}")
     if stale_prns:
         lines.append("META sim_stale_prns " + " ".join("%d:%d" % map_prn(x) for x in sorted(stale_prns)))
     for k, val in counts.items():
@@ -537,7 +602,22 @@ def build(flight_path, pattern, out_dir, phases_all, lever_arm=0.3, shells=3, ra
         tmp = f"{tpath}.{os.getpid()}.{pattern}.npz"   # several patterns of a flight may be written at once
         np.savez_compressed(tmp, t=t, q=q, v=v, pd=p[:, 2], phases=json.dumps(dict(ph, touchdown_s=touch)))
         os.replace(tmp, tpath)
+    npath = os.path.join(tdir, f"{name}.nav")
+    if not os.path.exists(npath):
+        write_truth_nav(npath, [us(x) for x in t], v, q, ref[2] - p[:, 2], tag=pattern)
     return out, counts
+
+
+def write_truth_nav(path, t_us, v, q, h, tag=""):
+    """The truth at the IMU as raw_replay --truth-nav reads it (truth_nav.h): a line a row, the MCU time (us), the
+    NED velocity (m/s), the attitude (body FRD -> NED, scalar first) and the height on the receiver's fix's datum
+    (m). Written to a temporary name first: several patterns of a flight may write it at once."""
+    tmp = f"{path}.{os.getpid()}.{tag}.tmp"
+    with open(tmp, "w") as fh:
+        fh.write("# sim_events.py truth: t_us vn ve vd qw qx qy qz h\n")
+        fh.write("".join(f"{tu} {vv[0]:.4f} {vv[1]:.4f} {vv[2]:.4f} {qq[0]:.7f} {qq[1]:.7f} {qq[2]:.7f} {qq[3]:.7f} "
+                         f"{hh:.3f}\n" for tu, vv, qq, hh in zip(t_us, v, q, h)))
+    os.replace(tmp, path)
 
 
 def main():
@@ -548,11 +628,12 @@ def main():
     ap.add_argument("--truth-phases", help="truth_phases.json (default: beside the flight)")
     ap.add_argument("--lever-arm", type=float, default=0.3, help="the antenna along the nose from the IMU, m")
     ap.add_argument("--shells", type=int, default=3)
-    ap.add_argument("--rate", type=float, default=10.0)
+    ap.add_argument("--rate", type=float, default=10.0, help="the fused epochs a second (the filter's)")
+    ap.add_argument("--pvt-rate", type=float, default=20.0, help="the receiver's epochs and fixes a second")
     a = ap.parse_args()
     tp = a.truth_phases or os.path.join(os.path.dirname(os.path.abspath(a.flight)), "truth_phases.json")
     phases = json.load(open(tp))["flights"]
-    out, counts = build(a.flight, a.pattern, a.out_dir, phases, a.lever_arm, a.shells, a.rate)
+    out, counts = build(a.flight, a.pattern, a.out_dir, phases, a.lever_arm, a.shells, a.rate, a.pvt_rate)
     print(out, json.dumps(counts))
 
 
