@@ -317,6 +317,16 @@ bool TR_GNSSReceiverMosaicSerial::begin(uint8_t update_rate_hz,
     link_.start(cfg, cmds_, n_cmds_, nowMs());
     setups_logged_ = 0;
 
+    if (!begin_wait_)
+    {
+        // setBeginWait(false): the link's first step here (its UART at the
+        // first baud it listens on), every step after it in the poll task
+        runLink();
+        ESP_LOGI(TAG, "Looking for the mosaic-G5 (RX=%u TX=%u PPS=%d) from the poll task, without waiting",
+                 rx_pin_, tx_pin_, pps_pin_);
+        return true;
+    }
+
     ESP_LOGI(TAG, "Looking for the mosaic-G5 (RX=%u TX=%u PPS=%d), up to %lu s...",
              rx_pin_, tx_pin_, pps_pin_, static_cast<unsigned long>(begin_timeout_ms_ / 1000));
     const int64_t deadline_us = nowUs() + static_cast<int64_t>(begin_timeout_ms_) * 1000;

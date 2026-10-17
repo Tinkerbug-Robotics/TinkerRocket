@@ -72,6 +72,13 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         // 60 s search ran first, to keep the boot inside its setup watchdog.
         void setBeginTimeoutMs(uint32_t ms) { begin_timeout_ms_ = ms; }
 
+        // Whether begin() waits for the receiver (the default) or only starts
+        // looking and returns true: the poll task (pollNewPVT) then finds and
+        // sets it up whenever it answers, as it does after a receiver reset in
+        // flight. The mosaic-only image's reboot in flight, so the flight
+        // resumes without waiting on the receiver's boot.
+        void setBeginWait(bool wait) { begin_wait_ = wait; }
+
         // Find the receiver and set it up (MosaicLink.h). Waits up to
         // the begin timeout for it, so a receiver that powers up with the FC
         // is found; false on a dead or deaf receiver (#557 GNSS-absent mode).
@@ -228,6 +235,7 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         int8_t      pps_pin_ = -1;
         uint8_t     update_rate_hz_ = 20;
         uint32_t    begin_timeout_ms_;
+        bool        begin_wait_ = true;
 
         mosaic::SbfParser parser_;
         mosaic::MosaicLink link_;

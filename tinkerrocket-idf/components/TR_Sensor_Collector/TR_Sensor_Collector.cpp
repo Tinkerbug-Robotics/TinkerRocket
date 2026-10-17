@@ -747,6 +747,10 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     ESP_LOGI(SC_TAG, "Initializing GNSS (RX=%d TX=%d)...", GNSS_RX, GNSS_TX);
     if (use_gnss)
     {
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+        // a reboot in flight: look for it, but leave the rest to the poll task
+        gnss_receiver.setBeginWait(!gnss_defer_);
+#endif
         if (!gnss_receiver.begin((uint8_t)GNSS_UPDATE_RATE,
                                  GNSS_RX,
                                  GNSS_TX,
@@ -770,6 +774,11 @@ void SensorCollector::begin(uint8_t imu_execution_core)
             // The poll task runs at twice the navigation rate of the receiver
             // found: 18 Hz for the u-blox, 20 for the mosaic-G5.
             GNSS_UPDATE_RATE = gnss_receiver.updateRateHz();
+#endif
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+            if (gnss_defer_)
+                ESP_LOGW(SC_TAG, "GNSS bring-up left to the poll task: the receiver comes up when it answers");
+            else
 #endif
             ESP_LOGI(SC_TAG, "GNSS found and initialized");
             // Per-satellite reports (UBX-NAV-SAT) are enabled inside the

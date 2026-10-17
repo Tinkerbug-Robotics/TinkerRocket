@@ -267,6 +267,16 @@ public:
     // Whether begin() looks for the receiver this boot: built in, and not
     // left out by skipGNSSThisBoot().
     bool gnssWantedThisBoot() const { return use_gnss; }
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // The mosaic-only image, on a reboot in flight: begin() starts looking for
+    // the receiver but does not wait for it (up to 30 s with no flight logic);
+    // the GNSS poll task finds and sets it up whenever it answers, as it does
+    // after a receiver reset in flight (TR_GNSSReceiverMosaicSerial::
+    // setBeginWait). isGnssOnline() is true from begin(), with no fix until
+    // the receiver sends one. Call before begin(); skipGNSSThisBoot() still
+    // leaves the receiver out.
+    void deferGNSSBringUpThisBoot() { gnss_defer_ = true; }
+#endif
     // Which receiver the FC talks to (GNSS_TYPE_*): the build's own, or on the
     // V9 image the one begin() found; GNSS_TYPE_NONE when none came up, so
     // the FC is GNSS-absent. What the FC names in its identity push and what
@@ -452,6 +462,10 @@ private:
     // begin() has run the GNSS bring-up: until then (and in rescue mode,
     // which never starts the sensors) gnssType() names no receiver.
     bool gnss_begun_ = false;
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // deferGNSSBringUpThisBoot(): the poll task brings the receiver up
+    bool gnss_defer_ = false;
+#endif
     // Set by begin() once the barometer has both answered and been configured.
     bool bmp585_online_ = false;
 
