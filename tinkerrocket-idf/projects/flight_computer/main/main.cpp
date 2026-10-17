@@ -6864,13 +6864,22 @@ static void setup_fc()
     // #1600: the GNSS driver's raw outputs exist before its poll task does
 #if TR_RAW_NAV_MOSAIC
     // -- for a receiver this boot looks for: a crash boot left the mosaic out
-    // above, and its navigation filter flies GNSS-absent
+    // above, and its navigation filter flies GNSS-absent. Outputs that could
+    // not be made leave it GNSS-absent as surely, which the boot says below.
+    bool raw_outputs_failed = false;
     if (!sensor_collector_hw.gnssWantedThisBoot())
+    {
         ESP_LOGW(TAG, "[RAWGNSS] no raw GNSS outputs this boot: the receiver is left out");
-    else
-#endif
+    }
+    else if (!sensor_collector.enableGNSSRawOutputs())
+    {
+        ESP_LOGE(TAG, "[RAWGNSS] no memory for the raw GNSS queues");
+        raw_outputs_failed = true;
+    }
+#else
     if (!sensor_collector.enableGNSSRawOutputs())
         ESP_LOGE(TAG, "[RAWGNSS] no memory for the raw GNSS queues");
+#endif
 #endif
     // The mosaic-G5's 1PPS (J1 pin 5); -1 and a no-op on every other build.
     // The V9 image's mosaic rate as well; its GNSS_UPDATE_RATE is the u-blox's.
@@ -6893,6 +6902,13 @@ static void setup_fc()
     else if (raw_meas_task == nullptr)
     {
         ESP_LOGE(TAG, "[RAWGNSS] *** NAVIGATION FILTER WITHOUT GNSS *** (its GNSS task was not created)");
+        fcBootStatus(FCB_SENSORS, FCB_DEG_SENSORS);
+    }
+    else if (raw_outputs_failed)
+    {
+        // the driver has no queues to hand its epochs over: the GNSS task
+        // never gets one, and the filter flies IMU and barometer alone
+        ESP_LOGE(TAG, "[RAWGNSS] *** NAVIGATION FILTER WITHOUT GNSS *** (no raw GNSS queues)");
         fcBootStatus(FCB_SENSORS, FCB_DEG_SENSORS);
     }
 #endif
