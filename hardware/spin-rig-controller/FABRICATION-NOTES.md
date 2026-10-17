@@ -15,7 +15,7 @@ floor and the paste-coverage convention are repo-wide; they live in
 
 ```
 TINKERROCKET SPIN RIG CONTROLLER V1 - FABRICATION AND ASSEMBLY NOTES
-BOARD 110.0 x 80.0 mm, 4 LAYER, 1.6 mm. GERBERS, DRILL AND CPL ALL
+BOARD 67.0 x 90.0 mm, 4 LAYER, 1.6 mm. GERBERS, DRILL AND CPL ALL
 USE THE BOARD'S BOTTOM-LEFT CORNER AS 0,0.
 
 1. STACKUP: JLCPCB JLC04161H-7628, 1.6 mm, 1 oz OUTER / 0.5 oz INNER.
@@ -25,27 +25,27 @@ USE THE BOARD'S BOTTOM-LEFT CORNER AS 0,0.
 2. SURFACE FINISH: ENIG. FOR THE 0.4 mm PITCH QFN-56 (U201) AND ITS
    4.1 mm EXPOSED PAD.
 
-3. VIAS: 667 THROUGH VIAS, TENTED BOTH SIDES. STANDARD PROCESS: NO
+3. VIAS: 540 THROUGH VIAS, TENTED BOTH SIDES. STANDARD PROCESS: NO
    FILLING, NO CAPPING.
-   655 x 0.60 mm PAD / 0.30 mm DRILL, 9 x 0.80 / 0.40, 3 x 0.45 / 0.30.
+   507 x 0.60 mm PAD / 0.30 mm DRILL, 29 x 0.80 / 0.40, 4 x 0.45 / 0.30.
    NO VIA-IN-PAD: NO VIA SITS IN OR CUTS INTO AN SMD LAND, INCLUDING
    THE EXPOSED PADS OF U201 AND U104.
 
 4. MINIMUM TRACK 0.15 mm, MINIMUM SPACING 0.15 mm (0.30 mm ON THE
-   MOTOR-CURRENT NETS). MINIMUM ANNULAR RING 0.075 mm (THE THREE
+   MOTOR-CURRENT NETS). MINIMUM ANNULAR RING 0.075 mm (THE FOUR
    0.45 / 0.30 VIAS), 0.15 mm ELSEWHERE. COPPER TO BOARD EDGE 0.30 mm.
 
-5. HOLES: 3 x 3.20 mm NON-PLATED (H1, H2, H4, M3), 4 x 2.70 mm
-   NON-PLATED (H3, H5-H7, M2.5), 2 x 0.65 mm NON-PLATED (J201 PEGS).
+5. HOLES: 4 x 2.70 mm NON-PLATED (H3, H5-H7, M2.5), 2 x 0.65 mm
+   NON-PLATED (J201 PEGS).
    PLATED: 2 x 2.70 mm (J101 XT60), 2 x 0.60 x 1.70 mm OVAL PLATED
    SLOTS (J101 XT60 PEGS), 2 x 1.70 mm (J102 JST VH), 23 x 1.20 mm
    (J103, J301, J302, J305: 3.5 mm TERMINAL HEADERS), 40 x 1.00 mm
    (J202, 2x20 SOCKET), 9 x 0.75 mm (J104, J303, J304: JST PH).
 
-6. USB-C RECEPTACLE J201 SITS FLUSH WITH THE BOTTOM EDGE.
+6. USB-C RECEPTACLE J201 SITS FLUSH WITH THE LEFT EDGE.
 
-7. ORDER NUMBER: AT THE "JLCJLCJLCJLC" MARK ABOVE THE TITLE, BOTTOM
-   LEFT.
+7. ORDER NUMBER: AT THE "JLCJLCJLCJLC" MARK UNDER THE TITLE, UPPER
+   MIDDLE OF THE BOARD.
 
 ASSEMBLY
 ECONOMIC PCBA, SINGLE SIDED: ALL SMD PARTS ON THE TOP. BOM AND CPL
@@ -55,7 +55,7 @@ THROUGH-HOLE CONNECTORS J101-J104, J202, J301-J305 ARE NOT IN THE BOM
 OR CPL: THEY ARE HAND-SOLDERED AFTER ASSEMBLY. DO NOT FIT THEM.
 TOOLING HOLES (1.152 mm NPTH), IF NEEDED: PLEASE USE THESE SPOTS,
 CLEAR OF TRACKS ON EVERY LAYER (mm FROM THE BOTTOM-LEFT CORNER):
-X 107.50 Y 71.00, X 3.00 Y 8.25, X 105.00 Y 8.25.
+X 18.25 Y 84.50, X 51.00 Y 78.25, X 57.25 Y 2.50.
 CHECK EVERY IC AND CONNECTOR ROTATION IN THE CPL PREVIEW.
 ```
 
@@ -78,7 +78,7 @@ CHECK EVERY IC AND CONNECTOR ROTATION IN THE CPL PREVIEW.
 The order is one PCB order with assembly switched on. JLC fits the 138 SMD parts on the top side. The ten
 through-hole connectors come separately and are soldered by hand.
 
-**1. The bare boards.** Upload the gerber zip at jlcpcb.com ("Order now"). JLC should read 110 x 80 mm and 4
+**1. The bare boards.** Upload the gerber zip at jlcpcb.com ("Order now"). JLC should read 67 x 90 mm and 4
 layers. Then set:
 
 | Option | Setting |
@@ -114,35 +114,35 @@ their LCSC codes. All 60 lines should match, with nothing short: on 2026-10-16 t
 **4. The placement preview.** This is the step that catches mistakes. Check every polarized part against the
 table below: its pin-1 dot or cathode band must sit where the table says. Rotate any that don't (90° steps), and
 check that every part sits centered on its pads. Positions are millimetres from the board's bottom-left corner,
-with the connector edge at the top.
+with the XT60's edge at the top.
 
 | Part | Package | Position (x, y) | Pin 1 or polarity mark |
 |---|---|---|---|
-| U201 (ESP32-S3) | QFN-56 | 72.0, 36.0 | pin 1 top-left |
-| U101 (INA238) | MSOP-10 | 14.0, 58.0 | pin 1 top-left |
-| U102 (TLV3011) | SOT-23-6 | 33.0, 44.0 | pin 1 top-left |
-| U103 (UCC27517) | SOT-23-5 | 33.0, 37.0 | pin 1 top-left |
-| U104 (TPS54560B) | SO-8 PowerPAD | 20.0, 18.0 | pin 1 top-left |
-| U105 (AP2112K) | SOT-23-5 | 68.0, 27.8 | pin 1 top-left |
-| U301 (74ACT244) | TSSOP-20 | 60.0, 62.0 | pin 1 top-left |
-| U302 (AM26LV32E) | SOIC-16 | 85.0, 62.0 | pin 1 bottom-left (turned 90°) |
-| U303 (74LVC1G17) | SOT-23-5 | 94.5, 49.0 | pin 1 bottom-left (turned 90°) |
-| U304 (74LVC2G125) | SSOP-8 | 93.5, 59.5 | pin 1 bottom-left (turned 90°) |
-| Q101 (P-FET) | TO-252 | 29.5, 66.0 | tab faces left, toward the XT60; the gate lead is bottom-right |
-| Q102 (AO4264E) | SOIC-8 | 22.5, 34.0 | pin 1 bottom-right (turned 180°) |
-| CR201 (USB ESD) | SOT-143 | 68.5, 13.0 | pin 1 top-left |
-| Y201 (40 MHz) | 4-pad crystal | 68.2, 44.2 | pin 1 bottom-right |
-| D101 (12 V zener) | SOD-123 | 37.8, 60.5 | cathode left |
-| D102 (TVS) | SMC | 29.0, 58.0 | cathode left |
-| D103 (brake diode) | SMC | 14.8, 35.4 | cathode top |
-| D105 (catch diode) | SMC | 17.0, 24.4 | cathode right |
-| D107, D108 (Schottky) | SOD-323 | 67.8, 24.2 and 63.2, 11.0 | cathode left |
-| D104 (LED) | 0603 | 36.5, 37.5 | cathode bottom |
-| D106, D201, D202, D203 (LEDs) | 0603 | 40.8, 16.5; 79.8, 8.5; 76.2, 10.8; 80.0, 10.8 | cathode left |
-| C101 (100 µF) | 8 x 10.5 electrolytic | 38.5, 74.4 | + left |
+| U201 (ESP32-S3) | QFN-56 | 35.0, 31.0 | pin 1 top-left |
+| U101 (INA238) | MSOP-10 | 15.0, 65.5 | pin 1 top-left |
+| U102 (TLV3011) | SOT-23-6 | 31.5, 54.0 | pin 1 top-left |
+| U103 (UCC27517) | SOT-23-5 | 31.5, 48.0 | pin 1 top-left |
+| U104 (TPS54560B) | SO-8 PowerPAD | 20.0, 11.0 | pin 1 top-left |
+| U105 (AP2112K) | SOT-23-5 | 32.0, 9.25 | pin 1 top-left |
+| U301 (74ACT244) | TSSOP-20 | 44.5, 44.0 | pin 1 bottom-left (turned 90°) |
+| U302 (AM26LV32E) | SOIC-16 | 48.0, 73.0 | pin 1 bottom-left (turned 90°) |
+| U303 (74LVC1G17) | SOT-23-5 | 45.0, 30.0 | pin 1 bottom-left (turned 90°) |
+| U304 (74LVC2G125) | SSOP-8 | 45.0, 35.0 | pin 1 bottom-left (turned 90°) |
+| Q101 (P-FET) | TO-252 | 24.0, 75.5 | tab faces left, toward the XT60; the gate lead is bottom-right |
+| Q102 (AO4264E) | SOIC-8 | 21.05, 39.54 | pin 1 bottom-right (turned 180°) |
+| CR201 (USB ESD) | SOT-143 | 7.0, 17.25 | pin 1 top-left |
+| Y201 (40 MHz) | 4-pad crystal | 31.2, 39.2 | pin 1 bottom-right |
+| D101 (12 V zener) | SOD-123 | 28.0, 70.0 | cathode left |
+| D102 (TVS) | SMC | 36.0, 68.2 | cathode left |
+| D103 (brake diode) | SMC | 13.35, 40.94 | cathode top |
+| D105 (catch diode) | SMC | 17.0, 17.4 | cathode right |
+| D107, D108 (Schottky) | SOD-323 | 26.0, 3.25 and 12.0, 30.5 | cathode left |
+| D104, D202 (LEDs) | 0603 | 35.0, 48.0 and 22.25, 30.75 | cathode bottom |
+| D106, D201, D203 (LEDs) | 0603 | 43.0, 9.5; 19.25, 29.75; 18.25, 32.0 | cathode left |
+| C101 (100 µF) | 8 x 10.5 electrolytic | 35.8, 84.4 | + left |
 
-J201 (USB-C) has no pin 1 to check, but its opening must face the bottom edge, flush with it. Its footprint origin
-sits 1.4 mm off its pads, so check that it lands on them. Q101's origin is off its pads too (it's KiCad's TO-252).
+J201 (USB-C) has no pin 1 to check, but its opening must face the left edge, flush with it. Its footprint origin
+sits about 1 mm off its pad row, so check that it lands on its pads. Q101's origin is off its pads too (it's KiCad's TO-252).
 
 **5. Order notes.** Paste the block at the top of this file into the order's remark box. If the box is too
 short, keep items 2, 3 and 7 and the ASSEMBLY lines.

@@ -14,14 +14,16 @@ import pcbnew
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import kilib  # noqa: E402
+import make_pcb  # noqa: E402
 
 PCB = os.path.join(kilib.PROJ, 'spin-rig-controller.kicad_pcb')
 DRC = os.path.join(HERE, 'out', 'drc.json')
-OX, OY, W, H = 100.0, 100.0, 110.0, 80.0
+OX, OY, W, H = make_pcb.OX, make_pcb.OY, make_pcb.W, make_pcb.H
 CLR = pcbnew.FromMM(0.2)
 CU = [pcbnew.F_Cu, pcbnew.In1_Cu, pcbnew.In2_Cu, pcbnew.B_Cu]
+_p5 = make_pcb.IN2_5V
 PLANE = {'GND': [(0, 0, W, H)],                    # In1, everywhere
-         '+5V': [(0.3, 50.0, 47.0, H - 0.3), (0.3, 56.0, W - 0.3, H - 0.3)]}   # In2 band (steps up at the buck)
+         '+5V': [(min(x for x, _ in _p5), min(y for _, y in _p5), max(x for x, _ in _p5), max(y for _, y in _p5))]}  # In2
 # 3.3 V is routed as tracks: a pour on In2 only fragmented around the signals there
 
 b = pcbnew.LoadBoard(PCB)
@@ -185,10 +187,11 @@ def main():
             x += 3.0
         y += 3.0
     # denser around the ESP32, where the decoupling caps' ground pads sit
-    y = 31.0
-    while y < 57.0:
-        x = 59.0
-        while x < 86.0:
+    ux, uy = make_pcb.U201_XY
+    y = uy - 13.0
+    while y < uy + 13.0:
+        x = ux - 13.0
+        while x < ux + 14.0:
             c = pcbnew.VECTOR2I(mm(OX + x), mm(OY + y))
             if fill.Contains(c) and via_ok(c, 0.6, 0.3, gnd):
                 add_via(c, gnd)

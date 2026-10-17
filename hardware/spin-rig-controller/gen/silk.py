@@ -14,11 +14,12 @@ sys.path.insert(0, HERE)
 import kilib  # noqa: E402
 
 PCB = os.path.join(kilib.PROJ, 'spin-rig-controller.kicad_pcb')
-OX, OY, W, H = 100.0, 100.0, 110.0, 80.0
+import make_pcb  # noqa: E402
+OX, OY, W, H = make_pcb.OX, make_pcb.OY, make_pcb.W, make_pcb.H
 mm = pcbnew.FromMM
 
 LABELS = {
-    'J101': 'PACK', 'J103': 'DRIVER P4', 'J102': 'BRAKE R', 'J301': 'DRIVER P1', 'J305': 'DRIVER P2',
+    'J101': 'PACK', 'J103': 'DRIVER P4', 'J102': 'BRAKE R', 'J305': 'DRIVER P2',
     'J302': 'ENCODER IN', 'J303': 'INDEX', 'J304': 'GNSS', 'J201': 'USB', 'J202': 'PI 4B BELOW',
     'J203': 'QWIIC', 'J104': '5V AUX', 'SW201': 'BOOT', 'SW202': 'RESET', 'D104': 'BRAKE', 'D106': '5V',
     'D201': '3V3', 'D202': 'STAT', 'D203': 'FAULT', 'TP201': 'TX', 'TP202': 'RX', 'TP203': '3V3', 'TP204': '5V',
@@ -196,21 +197,35 @@ for ref, text in LABELS.items():
     else:
         missed.append(ref)
 
-# the title, where it fits
+# the title, where it fits: full size first, then smaller and turned on its side
+title = None
 for d in b.GetDrawings():
     if isinstance(d, pcbnew.PCB_TEXT) and 'SPIN RIG CONTROLLER' in d.GetText():
-        blocks_wo = [o for o in blocks if o != d.GetBoundingBox()]
-        for x in range(30, 100, 2):
-            for y in range(4, 78, 2):
-                d.SetPosition(pcbnew.VECTOR2I(mm(OX + x), mm(OY + y)))
-                bb = d.GetBoundingBox()
-                if edge.Contains(bb) and not any(bb.Intersects(o) for o in blocks_wo):
-                    break
-            else:
-                continue
-            break
-        blocks.append(d.GetBoundingBox())
         title = d
+if title is not None:
+    blocks_wo = [o for o in blocks if o != title.GetBoundingBox()]
+    done_t = False
+    for size, thick in ((1.5, 0.25), (1.2, 0.2), (1.0, 0.16)):
+        title.SetTextSize(pcbnew.VECTOR2I(mm(size), mm(size)))
+        title.SetTextThickness(mm(thick))
+        for ang in (0, 90):
+            title.SetTextAngleDegrees(ang)
+            for x in range(4, int(W) - 3):
+                for y in range(4, int(H) - 2):
+                    title.SetPosition(pcbnew.VECTOR2I(mm(OX + x), mm(OY + y)))
+                    bb = title.GetBoundingBox()
+                    if edge.Contains(bb) and not any(bb.Intersects(o) for o in blocks_wo):
+                        done_t = True
+                        break
+                if done_t:
+                    break
+            if done_t:
+                break
+        if done_t:
+            break
+    if not done_t:
+        missed.append('title')
+    blocks.append(title.GetBoundingBox())
 
 # JLC's order-number marker: JLC prints the order number in place of this text when the order picks
 # "Specify a location", instead of somewhere of its own choosing. Beside the title, where it fits.
@@ -227,7 +242,7 @@ cands = []
 for dy in (1.4, 1.9, 2.4):
     for dx in (0, -2, 2, -4, 4, -6, 6, -8, 8):
         cands += [(tb.GetCenter().x + mm(dx), tb.GetTop() - mm(dy)), (tb.GetCenter().x + mm(dx), tb.GetBottom() + mm(dy))]
-cands += [(mm(OX + x), mm(OY + y)) for x in range(10, 100, 2) for y in range(4, 78, 2)]
+cands += [(mm(OX + x), mm(OY + y)) for x in range(4, int(W) - 4, 2) for y in range(4, int(H) - 2, 2)]
 for x, y in cands:
     t.SetPosition(pcbnew.VECTOR2I(int(x), int(y)))
     if fits(t):

@@ -4682,102 +4682,6 @@
 			)
 			(embedded_fonts no)
 		)
-		(symbol "Mechanical:Fiducial"
-			(exclude_from_sim no)
-			(in_bom no)
-			(on_board yes)
-			(in_pos_files yes)
-			(duplicate_pin_numbers_are_jumpers no)
-			(property "Reference" "FID"
-				(at 0 5.08 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Value" "Fiducial"
-				(at 0 3.175 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Footprint" ""
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Datasheet" ""
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Description" "Fiducial Marker"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "ki_keywords" "fiducial marker"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "ki_fp_filters" "Fiducial*"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(symbol "Fiducial_0_1"
-				(circle
-					(center 0 0)
-					(radius 1.27)
-					(stroke
-						(width 0.508)
-						(type default)
-					)
-					(fill
-						(type background)
-					)
-				)
-			)
-			(embedded_fonts no)
-		)
 		(symbol "Mechanical:MountingHole"
 			(pin_names
 				(offset 1.016)
@@ -17112,7 +17016,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "TestPoint:TestPoint_Pad_D1.5mm"
+		(property "Footprint" "TestPoint:TestPoint_Pad_D1.0mm"
 			(at 273.05 214.63 0)
 			(hide yes)
 			(show_name no)
@@ -17244,7 +17148,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "TestPoint:TestPoint_Pad_D1.5mm"
+		(property "Footprint" "TestPoint:TestPoint_Pad_D1.0mm"
 			(at 289.56 214.63 0)
 			(hide yes)
 			(show_name no)
@@ -17376,7 +17280,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "TestPoint:TestPoint_Pad_D1.5mm"
+		(property "Footprint" "TestPoint:TestPoint_Pad_D1.0mm"
 			(at 306.07 214.63 0)
 			(hide yes)
 			(show_name no)
@@ -17575,7 +17479,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "TestPoint:TestPoint_Pad_D1.5mm"
+		(property "Footprint" "TestPoint:TestPoint_Pad_D1.0mm"
 			(at 321.31 214.63 0)
 			(hide yes)
 			(show_name no)
@@ -17774,7 +17678,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "TestPoint:TestPoint_Pad_D1.5mm"
+		(property "Footprint" "TestPoint:TestPoint_Pad_D1.0mm"
 			(at 337.82 214.63 0)
 			(hide yes)
 			(show_name no)
@@ -17973,7 +17877,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "TestPoint:TestPoint_Pad_D1.5mm"
+		(property "Footprint" "TestPoint:TestPoint_Pad_D1.0mm"
 			(at 353.06 214.63 0)
 			(hide yes)
 			(show_name no)
@@ -18161,8 +18065,8 @@
 		(on_board yes)
 		(in_pos_files no)
 		(dnp no)
-		(uuid "8a8821d3-ee30-5ad3-89dc-f9ac7e58de30")
-		(property "Reference" "H1"
+		(uuid "9bcbe6bb-58b2-59ac-8a62-52ebdc5f6c97")
+		(property "Reference" "H3"
 			(at 15.24 288.06 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -18173,7 +18077,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "M3"
+		(property "Value" "M2.5"
 			(at 15.24 292.06 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -18184,7 +18088,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "MountingHole:MountingHole_3.2mm_M3"
+		(property "Footprint" "MountingHole:MountingHole_2.7mm_M2.5"
 			(at 15.24 289.56 0)
 			(hide yes)
 			(show_name no)
@@ -18253,7 +18157,7 @@
 		(instances
 			(project "spin-rig-controller"
 				(path "/333ff0d6-0853-5d27-b186-7dafd8f9db7c/062f95a3-625e-571f-90df-49c2ec61cedd"
-					(reference "H1")
+					(reference "H3")
 					(unit 1)
 				)
 			)
@@ -18269,8 +18173,8 @@
 		(on_board yes)
 		(in_pos_files no)
 		(dnp no)
-		(uuid "43dff0ce-10d3-58cb-9251-9f4684e79a4f")
-		(property "Reference" "H2"
+		(uuid "aa17eb28-cf94-5cca-b693-b0f4e528ab53")
+		(property "Reference" "H5"
 			(at 39.37 288.06 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -18281,7 +18185,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "M3"
+		(property "Value" "M2.5"
 			(at 39.37 292.06 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -18292,7 +18196,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "MountingHole:MountingHole_3.2mm_M3"
+		(property "Footprint" "MountingHole:MountingHole_2.7mm_M2.5"
 			(at 39.37 289.56 0)
 			(hide yes)
 			(show_name no)
@@ -18361,7 +18265,7 @@
 		(instances
 			(project "spin-rig-controller"
 				(path "/333ff0d6-0853-5d27-b186-7dafd8f9db7c/062f95a3-625e-571f-90df-49c2ec61cedd"
-					(reference "H2")
+					(reference "H5")
 					(unit 1)
 				)
 			)
@@ -18377,8 +18281,8 @@
 		(on_board yes)
 		(in_pos_files no)
 		(dnp no)
-		(uuid "6893e2c3-7ea2-5e8e-8ada-383b854218b5")
-		(property "Reference" "H4"
+		(uuid "26cc2828-f90f-5703-82ef-7631c7760652")
+		(property "Reference" "H6"
 			(at 63.5 288.06 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -18389,7 +18293,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "M3"
+		(property "Value" "M2.5"
 			(at 63.5 292.06 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -18400,7 +18304,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "MountingHole:MountingHole_3.2mm_M3"
+		(property "Footprint" "MountingHole:MountingHole_2.7mm_M2.5"
 			(at 63.5 289.56 0)
 			(hide yes)
 			(show_name no)
@@ -18469,7 +18373,7 @@
 		(instances
 			(project "spin-rig-controller"
 				(path "/333ff0d6-0853-5d27-b186-7dafd8f9db7c/062f95a3-625e-571f-90df-49c2ec61cedd"
-					(reference "H4")
+					(reference "H6")
 					(unit 1)
 				)
 			)
@@ -18485,8 +18389,8 @@
 		(on_board yes)
 		(in_pos_files no)
 		(dnp no)
-		(uuid "9bcbe6bb-58b2-59ac-8a62-52ebdc5f6c97")
-		(property "Reference" "H3"
+		(uuid "8f24ee82-43b5-5650-b053-c26a652d4262")
+		(property "Reference" "H7"
 			(at 87.63 288.06 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -18577,655 +18481,7 @@
 		(instances
 			(project "spin-rig-controller"
 				(path "/333ff0d6-0853-5d27-b186-7dafd8f9db7c/062f95a3-625e-571f-90df-49c2ec61cedd"
-					(reference "H3")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Mechanical:MountingHole")
-		(at 110.49 289.56 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom no)
-		(on_board yes)
-		(in_pos_files no)
-		(dnp no)
-		(uuid "aa17eb28-cf94-5cca-b693-b0f4e528ab53")
-		(property "Reference" "H5"
-			(at 110.49 288.06 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "M2.5"
-			(at 110.49 292.06 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "MountingHole:MountingHole_2.7mm_M2.5"
-			(at 110.49 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 110.49 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 110.49 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" ""
-			(at 110.49 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" ""
-			(at 110.49 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "LCSC" ""
-			(at 110.49 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(instances
-			(project "spin-rig-controller"
-				(path "/333ff0d6-0853-5d27-b186-7dafd8f9db7c/062f95a3-625e-571f-90df-49c2ec61cedd"
-					(reference "H5")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Mechanical:MountingHole")
-		(at 134.62 289.56 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom no)
-		(on_board yes)
-		(in_pos_files no)
-		(dnp no)
-		(uuid "26cc2828-f90f-5703-82ef-7631c7760652")
-		(property "Reference" "H6"
-			(at 134.62 288.06 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "M2.5"
-			(at 134.62 292.06 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "MountingHole:MountingHole_2.7mm_M2.5"
-			(at 134.62 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 134.62 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 134.62 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" ""
-			(at 134.62 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" ""
-			(at 134.62 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "LCSC" ""
-			(at 134.62 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(instances
-			(project "spin-rig-controller"
-				(path "/333ff0d6-0853-5d27-b186-7dafd8f9db7c/062f95a3-625e-571f-90df-49c2ec61cedd"
-					(reference "H6")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Mechanical:MountingHole")
-		(at 158.75 289.56 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom no)
-		(on_board yes)
-		(in_pos_files no)
-		(dnp no)
-		(uuid "8f24ee82-43b5-5650-b053-c26a652d4262")
-		(property "Reference" "H7"
-			(at 158.75 288.06 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "M2.5"
-			(at 158.75 292.06 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "MountingHole:MountingHole_2.7mm_M2.5"
-			(at 158.75 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 158.75 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 158.75 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" ""
-			(at 158.75 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" ""
-			(at 158.75 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "LCSC" ""
-			(at 158.75 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(instances
-			(project "spin-rig-controller"
-				(path "/333ff0d6-0853-5d27-b186-7dafd8f9db7c/062f95a3-625e-571f-90df-49c2ec61cedd"
 					(reference "H7")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Mechanical:Fiducial")
-		(at 182.88 289.56 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom no)
-		(on_board yes)
-		(in_pos_files no)
-		(dnp no)
-		(uuid "e52c07b6-afac-5114-a5ff-2482ecec013a")
-		(property "Reference" "FID1"
-			(at 182.88 288.06 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "Fiducial"
-			(at 182.88 292.06 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "Fiducial:Fiducial_1mm_Mask2mm"
-			(at 182.88 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 182.88 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 182.88 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" ""
-			(at 182.88 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" ""
-			(at 182.88 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "LCSC" ""
-			(at 182.88 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(instances
-			(project "spin-rig-controller"
-				(path "/333ff0d6-0853-5d27-b186-7dafd8f9db7c/062f95a3-625e-571f-90df-49c2ec61cedd"
-					(reference "FID1")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Mechanical:Fiducial")
-		(at 207.01 289.56 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom no)
-		(on_board yes)
-		(in_pos_files no)
-		(dnp no)
-		(uuid "dbdf2ecc-2756-5f8f-9839-17cc18bf593b")
-		(property "Reference" "FID2"
-			(at 207.01 288.06 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "Fiducial"
-			(at 207.01 292.06 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "Fiducial:Fiducial_1mm_Mask2mm"
-			(at 207.01 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 207.01 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 207.01 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" ""
-			(at 207.01 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" ""
-			(at 207.01 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "LCSC" ""
-			(at 207.01 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(instances
-			(project "spin-rig-controller"
-				(path "/333ff0d6-0853-5d27-b186-7dafd8f9db7c/062f95a3-625e-571f-90df-49c2ec61cedd"
-					(reference "FID2")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Mechanical:Fiducial")
-		(at 231.14 289.56 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom no)
-		(on_board yes)
-		(in_pos_files no)
-		(dnp no)
-		(uuid "934f9aeb-6acf-51d0-8aaf-13b62851817f")
-		(property "Reference" "FID3"
-			(at 231.14 288.06 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "Fiducial"
-			(at 231.14 292.06 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "Fiducial:Fiducial_1mm_Mask2mm"
-			(at 231.14 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 231.14 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 231.14 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" ""
-			(at 231.14 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" ""
-			(at 231.14 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "LCSC" ""
-			(at 231.14 289.56 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(instances
-			(project "spin-rig-controller"
-				(path "/333ff0d6-0853-5d27-b186-7dafd8f9db7c/062f95a3-625e-571f-90df-49c2ec61cedd"
-					(reference "FID3")
 					(unit 1)
 				)
 			)
@@ -19241,7 +18497,7 @@
 			)
 			(justify left bottom)
 		)
-		(uuid "d2b404da-cffd-57b2-b387-af7db90fdb07")
+		(uuid "dc815b3e-d06b-587e-ab27-0a8e07a6a836")
 	)
 	(text "Power flags (ERC: these nets are fed through passive parts)"
 		(exclude_from_sim no)
@@ -19252,7 +18508,7 @@
 			)
 			(justify left bottom)
 		)
-		(uuid "9cb822da-4831-5c8d-87b3-eda5ff0d9791")
+		(uuid "a41e329f-0010-56a9-b87c-ca87b0ab7cae")
 	)
 	(symbol
 		(lib_id "power:PWR_FLAG")
@@ -19340,7 +18596,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "3b8c7ca3-1281-5586-954e-c5012a4b62a8")
+		(uuid "bbb8e18a-fb06-5a1d-8e05-7efd33ebe86d")
 	)
 	(global_label "VUSB"
 		(shape passive)
@@ -19352,7 +18608,7 @@
 			)
 			(justify right)
 		)
-		(uuid "f4d8a338-210c-5676-9826-b9ea437e3dfe")
+		(uuid "cd368d18-ba5b-55c1-9974-f70b099223fc")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 20.32 392.43 0)
 			(hide yes)
@@ -19452,7 +18708,7 @@
 			(width 0)
 			(type default)
 		)
-		(uuid "c823c8db-2f48-5816-8a76-9ae76829a9af")
+		(uuid "71ba970a-70e9-59e5-aa4c-476a4ba6716f")
 	)
 	(label "VDD_SPI"
 		(at 44.45 392.43 270)
@@ -19462,7 +18718,7 @@
 			)
 			(justify right bottom)
 		)
-		(uuid "51406c48-2a7f-51f6-9910-6c9bdb918add")
+		(uuid "32c2a2bd-d253-5f23-9c4d-122d20463a56")
 	)
 	(embedded_fonts no)
 )

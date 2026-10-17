@@ -1,4 +1,4 @@
-"""Hand-directed fixes for this revision's routing (the Pi-stacking layout, 2026-10-16): the items finalize.sh left,
+"""Hand-directed fixes for this revision's routing (the 67 x 90 Pi-stacking layout, 2026-10-16): the items finalize.sh left,
 each planned against the copper around it (gen/region.py lists a window's copper). They fit this routing result
 only; after a fresh route_best.sh, check what is left and plan again.
 
@@ -76,41 +76,31 @@ def pts(*xy, layer=pcbnew.F_Cu):
     return [(OX + x, OY + y, layer) for x, y in xy]
 
 
-# 1. U101 pin 6 (+3V3): the router's 0.5 mm stub came within 0.1 mm of pin 7's GND stub. Neck it to 0.25.
-for t in find('+3V3', (15.9, 23.2), (16.1, 23.0)):
-    t.SetWidth(mm(0.25))
+# 1. The pre-routed 0.25 mm escape from the ESP32's pin 20 (3.3 V) went unused: the router fed the pin its own
+#    way, so the stub only dangles. Take it out.
+remove(find('+3V3', (34.4, 62.43), (34.4, 65.87)))
 
-# 2. R101's ground via sat 0.2 mm from the 1.5 mm VMAIN trunk (the Motor class wants 0.3). Put it on the pad's
-#    other side, away from the trunk.
-remove(find('GND', (37.71, 22.0)) + find('GND', (37.01, 22.0), (37.71, 22.0)))
-track('GND', [(37.01, 22.0), (36.3, 22.9)], 0.3, 'F.Cu')
-via('GND', (36.3, 22.9))
-
-# 3. J303's 5 V: the feeder via and the router's stub from pin 4 never met.
-track('+5V', [(102.5, 46.6), (105.02, 46.64)], 0.5, 'F.Cu')
-
-# 4. C104's ground pad was walled in by INA_ALERT's loop out to its pull-up R103. Lift the loop, tie C104 to the
-#    ground track just above it, and route R103 back to INA_ALERT another way (step 6).
-remove(find('INA_ALERT', (11.83, 22.07), (11.9, 22.0)) + find('INA_ALERT', (8.36, 22.07), (11.83, 22.07)) +
-       find('INA_ALERT', (8.36, 23.9), (8.36, 22.07)) + find('INA_ALERT', (7.75, 24.51), (8.36, 23.9)))
-track('GND', [(9.5, 22.77), (9.5, 21.01)], 0.3, 'F.Cu')
-
-# 5. The buck's small nets. BUCK_RT's route stays. R113's half of BUCK_EN (R113 to R114) hops under it on B.Cu to
-#    the half at U104 pin 3 and R124. BUCK_BOOT runs west along the channel between the input caps' two pad rows,
-#    drops to B.Cu, passes west of BUCK_EN's new via, and comes up under C112.
-via('BUCK_EN', (17.4, 68.0))
-track('BUCK_EN', [(17.4, 68.0), (12.6, 64.42)], 0.2, 'B.Cu')
-via('BUCK_EN', (12.6, 64.42))
-track('BUCK_BOOT', [(17.44, 60.09), (16.72, 60.81), (13.0, 60.81), (12.6, 61.21), (12.6, 61.6)], 0.2, 'F.Cu')
-via('BUCK_BOOT', (12.6, 61.6))
-track('BUCK_BOOT', [(12.6, 61.6), (11.9, 62.3), (11.9, 65.2), (13.0, 65.9)], 0.2, 'B.Cu')
-via('BUCK_BOOT', (13.0, 65.9))
-track('BUCK_BOOT', [(13.0, 65.9), (13.52, 65.38), (13.52, 65.0)], 0.2, 'F.Cu')
-
-# 6. INA_ALERT: R103 back to the net (U101 pin 3, or its via down to B.Cu)
-ok = pr.route(net('INA_ALERT'), pad_ends('R103', '1'),
-              pad_ends('U101', '3') + pts((14.52, 22.7), layer=pcbnew.B_Cu) + pts((14.52, 22.7)), 0.2)
-print('INA_ALERT', 'routed' if ok else 'NO PATH')
+# 2. The ESP32's 3.3 V pins 2 and 3 were boxed in by the CHIP_PU via beside them, the ring-corner ground via and
+#    an In2 I2C line. Lift CHIP_PU's via and its escape, join pins 2/3 to the 3.3 V copper west of them, then
+#    bring CHIP_PU out under that run to a smaller via.
+remove(find('CHIP_PU', (31.57, 57.6), (31.0, 57.6)) + find('CHIP_PU', (31.0, 57.6), (31.0, 57.46)) +
+       find('CHIP_PU', (31.0, 57.46), (30.73, 57.19)) + find('CHIP_PU', (30.73, 57.19)) +
+       find('CHIP_PU', (30.11, 56.57), (30.73, 57.19)) + find('CHIP_PU', (30.73, 57.19), (30.73, 58.55)) +
+       find('CHIP_PU', (30.73, 57.19), (30.73, 57.19)))
+pr.CLR = 0.17
+ok = pr.route(net('+3V3'), pad_ends('U201', '2') + pad_ends('U201', '3'),
+              pts((28.74, 56.92), (28.74, 55.9), (28.74, 54.85)), 0.2)
+print('+3V3 pins 2/3', 'routed' if ok else 'NO PATH')
+# CHIP_PU: out of pin 4 under the new 3.3 V run to a 0.45 mm via, then on B.Cu to both of its old runs
+track('CHIP_PU', [(31.57, 57.6), (30.85, 57.6), (30.6, 57.35)], 0.2, 'F.Cu')
+v = pcbnew.PCB_VIA(b)
+v.SetPosition(pcbnew.VECTOR2I(mm(OX + 30.6), mm(OY + 57.35)))
+v.SetWidth(mm(0.45))
+v.SetDrill(mm(0.3))
+v.SetNetCode(net('CHIP_PU'))
+b.Add(v)
+track('CHIP_PU', [(30.6, 57.35), (30.11, 56.86), (30.11, 56.57)], 0.2, 'B.Cu')
+track('CHIP_PU', [(30.6, 57.35), (30.73, 57.48), (30.73, 58.55)], 0.2, 'B.Cu')
 
 pcbnew.ZONE_FILLER(b).Fill(b.Zones())
 pcbnew.SaveBoard(pr.PCB, b)

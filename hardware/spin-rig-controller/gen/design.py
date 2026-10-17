@@ -102,7 +102,7 @@ def LED(sheet, ref, color, anode, cathode, block, desc=''):
 
 
 def TP(sheet, ref, net, block):
-    return P(sheet, ref, 'Connector:TestPoint', net, 'TestPoint:TestPoint_Pad_D1.5mm', {1: net}, block=block)
+    return P(sheet, ref, 'Connector:TestPoint', net, 'TestPoint:TestPoint_Pad_D1.0mm', {1: net}, block=block)
 
 
 GND = 'GND'
@@ -309,12 +309,8 @@ TP(s, 'TP203', V33, b)
 TP(s, 'TP204', V5, b)
 TP(s, 'TP205', GND, b)
 TP(s, 'TP206', GND, b)
-for r in ('H1', 'H2', 'H4'):
-    P(s, r, 'Mechanical:MountingHole', 'M3', 'MountingHole:MountingHole_3.2mm_M3', {}, block='Mechanical')
-for r in ('H3', 'H5', 'H6', 'H7'):          # the Pi 4B's 58 x 49 mm pattern (H3 is also a board corner)
+for r in ('H3', 'H5', 'H6', 'H7'):          # the Pi 4B's 58 x 49 mm pattern: the board mounts on the Pi
     P(s, r, 'Mechanical:MountingHole', 'M2.5', 'MountingHole:MountingHole_2.7mm_M2.5', {}, block='Mechanical')
-for r in ('FID1', 'FID2', 'FID3'):
-    P(s, r, 'Mechanical:Fiducial', 'Fiducial', 'Fiducial:Fiducial_1mm_Mask2mm', {}, block='Mechanical')
 
 # ================================================================ IO
 s = 'io'
