@@ -23,10 +23,12 @@
 
 static const char* TAG = "GNSS";
 
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
 // The navigation blocks by the numbers this driver streams and SbfNav decodes.
 static_assert(mosaic::SBF_GPS_NAV == mosaic::kSbfGpsNav && mosaic::SBF_GAL_NAV == mosaic::kSbfGalNav &&
                   mosaic::SBF_BDS_NAV == mosaic::kSbfBdsNav && mosaic::SBF_GPS_ION == mosaic::kSbfGpsIon,
               "SbfParser.h and SbfNav.h must name the same navigation blocks");
+#endif
 
 // 2 Mbaud carries the full 20 Hz set (~66 kB/s measured) at a third of the
 // line; 921600 would run at 71 %, with each epoch's burst filling 35 of its
@@ -61,6 +63,7 @@ static constexpr int64_t  kPpsMinSpacingUs = 200000;
 static constexpr uint32_t kPpsBurstMute    = 20;
 static constexpr int64_t  kPpsUnmuteUs     = 2000000;
 
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
 // The raw outputs (enableRawOutputs). Three epochs (~2.3 kB each, internal
 // RAM): the GNSS task takes them every 5 ms, and two more ride out a pass it
 // spends on an esoc's navigation blocks. 64 navigation blocks in PSRAM: an
@@ -74,6 +77,7 @@ static constexpr UBaseType_t kNavQDepthPsram   = 64;
 static constexpr UBaseType_t kNavQDepthInternal = 24;
 static constexpr int64_t     kPvtCarryMs       = 1000;
 static constexpr int64_t     kPpsPairMaxAgeUs  = 120000000;
+#endif
 
 // The blocks. The FC's streams are 5-10; the bench logger (mosaic_log.py)
 // uses 1-4 on USB1, so both can run at once on the bench.
@@ -236,10 +240,12 @@ void TR_GNSSReceiverMosaicSerial::runLink()
     {
         setups_logged_ = link_.setups();
         logSetup();
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
         // The raw-GNSS filter needs every ephemeris the receiver holds, and
         // OnChange sent them when it first decoded them, before this boot or
         // this link: ask again after each setup.
         if (raw_ != nullptr) nav_resend_.store(true, std::memory_order_relaxed);
+#endif
     }
 }
 
@@ -406,12 +412,14 @@ void TR_GNSSReceiverMosaicSerial::pairPps(double gps_s, int64_t arrival_us)
     }
     int64_t edge = 0;
     if (!pairer_.pair(gps_s, arrival_us, edge)) return;
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
     if (raw_ != nullptr)
     {
         raw_->pair_have = true;
         raw_->pair_gps_s = std::llround(gps_s);
         raw_->pair_edge_us = edge;
     }
+#endif
 
     // An edge IS its GPS second (latency 0), so the line needs no receiver
     // delay calibrated, unlike the LC86G's sentence arrivals.
@@ -499,14 +507,19 @@ void TR_GNSSReceiverMosaicSerial::onBlock(const uint8_t* block, size_t len, size
             {
                 pairPps(h.wnc * 604800.0 + h.tow_ms / 1000U, end_us);
             }
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
             if (raw_ != nullptr) rawPvt(p);   // after the pair: its second's edge is known
+#endif
             break;
         }
         case mosaic::SBF_MEAS_EPOCH:
             n_meas_++;
             noteDelay(h.number, h.tow_ms, h.wnc, end_us);
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
             if (raw_ != nullptr) rawMeasEpoch(block, len, h.tow_ms, end_us);
+#endif
             break;
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
         case mosaic::SBF_GPS_NAV:
         case mosaic::SBF_GAL_NAV:
         case mosaic::SBF_BDS_NAV:
@@ -515,6 +528,7 @@ void TR_GNSSReceiverMosaicSerial::onBlock(const uint8_t* block, size_t len, size
         case mosaic::SBF_GPS_ION:
             if (raw_ != nullptr) rawIon(block, len);
             break;
+#endif
         case mosaic::SBF_MEAS_EXTRA:
             n_extra_++;
             break;
@@ -527,11 +541,11 @@ void TR_GNSSReceiverMosaicSerial::onBlock(const uint8_t* block, size_t len, size
         case mosaic::SBF_RECEIVER_TIME:
         {
             mosaic::ReceiverTime t;
-            if (mosaic::decodeReceiverTime(block, len, t))
-            {
-                if (t.delta_ls != -128) leap_s_ = t.delta_ls;
-                if (raw_ != nullptr) raw_->fine_time = (t.sync_level & 0x04) != 0;   // FINETIME
-            }
+            if (mosaic::decodeReceiverTime(block, len, t) && t.delta_ls != -128) leap_s_ = t.delta_ls;
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+            if (raw_ != nullptr && mosaic::decodeReceiverTime(block, len, t))
+                raw_->fine_time = (t.sync_level & 0x04) != 0;   // FINETIME: the time tag's precondition
+#endif
             break;
         }
         case mosaic::SBF_RECEIVER_STATUS:
@@ -689,13 +703,17 @@ void TR_GNSSReceiverMosaicSerial::logStatus()
                  (disk_.status & 0x08) ? ", logging" : "", (disk_.status & 0x02) ? ", FULL" : "",
                  disk_.used_bytes / 1.0e6, static_cast<unsigned long>(disk_.size_mb), disk_.error);
     }
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
     if (raw_ != nullptr) logRawStatus();
+#endif
     n_meas_ = n_extra_ = n_pvt_ = n_fix_ = 0;
     delay_meas_ = DelayStats{};
     delay_pvt_ = DelayStats{};
 }
 
 // ── Raw outputs for the raw-GNSS navigation filter ──────────────────────
+// The mosaic-only image's alone (TR_GNSS_DRIVER_MOSAIC; the header says why).
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
 
 bool TR_GNSSReceiverMosaicSerial::enableRawOutputs()
 {
@@ -994,3 +1012,4 @@ void TR_GNSSReceiverMosaicSerial::logRawStatus()
              static_cast<unsigned long>(s.pps_over), static_cast<long>(kPpsTagBarUs),
              static_cast<long>(s.pps_last_us));
 }
+#endif  // TR_GNSS_DRIVER_MOSAIC

@@ -26,8 +26,9 @@
 //     is the raw-GNSS filter): each MeasEpoch on the filter's fused grid as a
 //     TimedRawEpoch with its GPS instant on the MCU clock (MosaicRawEpoch.h),
 //     each GPS, Galileo I/NAV and BeiDou MEO/IGSO ephemeris block as it came,
-//     and the latest GPS ionosphere (SbfNav.h). The auto image never calls it,
-//     and then none of this runs or takes memory.
+//     and the latest GPS ionosphere (SbfNav.h). Compiled into that image
+//     alone (TR_GNSS_DRIVER_MOSAIC): the auto image, which carries this
+//     driver too, keeps it exactly as it was.
 // All parsing is in SbfParser / MosaicLink / SbfMeas / SbfNav / MosaicRawEpoch
 // (pure, host-tested); this class owns only the UART, the PPS interrupt and
 // the hand-offs between tasks.
@@ -43,12 +44,14 @@
 
 #include <RocketComputerTypes.h>
 #include <GnssTimeSync.h>      // TR_GNSSReceiverLC86_Serial: the clock line, shared
-#include <RawMeas.h>           // TR_GNSSRaw: gnss_raw::TimedRawEpoch
 #include "MosaicLink.h"
-#include "MosaicRawEpoch.h"
 #include "PpsPairer.h"
-#include "SbfNav.h"
 #include "SbfParser.h"
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#include <RawMeas.h>           // TR_GNSSRaw: gnss_raw::TimedRawEpoch
+#include "MosaicRawEpoch.h"
+#include "SbfNav.h"
+#endif
 
 class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
 {
@@ -118,7 +121,9 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         // them then).
         void requestNavResend() { nav_resend_.store(true, std::memory_order_relaxed); }
 
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
         // ── Raw outputs for the raw-GNSS navigation filter (#1600 on the mosaic) ──
+        // The mosaic-only image's alone (see the top of this file).
         // Off until enableRawOutputs(), called before begin(): it makes the
         // queues and the decode's scratch (false without the memory, and
         // then nothing is kept). Every take is safe from another task than
@@ -185,6 +190,7 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         };
         void rawStats(RawStats& out) const;
         static constexpr int32_t kPpsTagBarUs = 200;   // a right tag leaves ~0.03 ms rms
+#endif
 
     private:
 
@@ -206,6 +212,7 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         void drainUartEvents();
         void logStatus();
         void logSetup();
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
         // the raw outputs (enableRawOutputs), all in the poll task
         void rawMeasEpoch(const uint8_t* block, size_t len, uint32_t tow_ms, int64_t end_us);
         void rawPvt(const mosaic::PvtGeodetic& p);
@@ -213,6 +220,7 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         void rawIon(const uint8_t* block, size_t len);
         bool rawTimeTagOk() const;
         void logRawStatus();
+#endif
 
         uart_port_t _uartPort;
         uint8_t     rx_pin_ = 0;
@@ -286,9 +294,10 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         std::atomic<bool> nav_resend_{false};
         uint32_t          nav_resends_ = 0;
 
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
         // The raw outputs: everything they keep is in one block allocated by
-        // enableRawOutputs(), so an image that never asks for them (the auto
-        // image) carries only this pointer and the lock.
+        // enableRawOutputs(), so a mosaic image that never asks for them (the
+        // -DTR_RAW_GNSS_SHADOW=0 one) carries only this pointer and the lock.
         struct NavItem
         {
             uint8_t len;
@@ -330,6 +339,7 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         };
         RawState*         raw_ = nullptr;
         mutable portMUX_TYPE raw_mux_ = portMUX_INITIALIZER_UNLOCKED;
+#endif
 
         // The 30 s status line
         int64_t           status_us_ = 0;
