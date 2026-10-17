@@ -1,0 +1,45 @@
+# The mosaic-only image (-DTR_GNSS_MOSAIC=1 on a V8 or V9, CMakeLists.txt), on
+# top of sdkconfig.defaults, the V9's overlay (the V8 has none) and
+# sdkconfig.defaults.mosaic.
+# Not applied with -DTR_RAW_GNSS_SHADOW=0, and never to the V8 or V9 auto
+# images: those take sdkconfig.defaults.mosaic too, which is why this is a
+# file of its own.
+#
+# === PSRAM on, for the raw-GNSS navigation filter (#1600 on the mosaic) ===
+# The owner's decision of 2026-10-17, for this image only, behind a 30-minute
+# timing soak; it reverses sdkconfig.defaults' #851 point 1 here and nowhere
+# else. The filter does not fit in internal RAM: about 202 KB with its stacks
+# and ShadowLink against an estimated 150-170 KB free on the P4, before the
+# flight task's 16 KB stack is created. The Beetle puts the same objects in
+# its PSRAM (startRawShadow asks for MALLOC_CAP_SPIRAM first).
+#
+# U17 on the V9 is an ESP32-P4NRW32, 32 MB in the package. The V8's package
+# has not been read; its first boot of this image says what it found ("Found
+# 32MB PSRAM device", or "PSRAM enabled but initialization failed").
+#
+# Option names checked against IDF v6.0 components/esp_psram/esp32p4/
+# Kconfig.spiram and Kconfig.spiram.common:
+#  - HEX (16-line) is the only mode the P4 offers.
+#  - 200 MHz, the P4 default. 250 MHz depends on !ESP32P4_SELECTS_REV_LESS_V3,
+#    which sdkconfig.defaults sets for our v1.x silicon.
+#  - CAPS_ALLOC: only heap_caps_malloc(..., MALLOC_CAP_SPIRAM) lands there.
+#    malloc(), xQueueCreate() and every task stack stay internal, so the I2S TX
+#    queue, the IMU queue and the UART ring keep today's timing. With
+#    USE_MALLOC instead, any malloc() over 16 KB would move to PSRAM silently.
+#  - IGNORE_NOTFOUND: a board whose PSRAM does not come up boots without it
+#    and logs it, rather than panicking before the flight computer runs.
+#    startRawShadow then falls back to internal RAM, as on any board without
+#    PSRAM.
+#  - MEMTEST off: the test walks all 32 MB at every boot (cpu_start.c), and
+#    an in-flight reboot's time to the loop matters more.
+# PSRAM is brought up by the app, not the bootloader, so an image delivered
+# over the air turns it on with no USB flash.
+#
+# The LDO channel that powers it (CONFIG_ESP_LDO_RESERVE_PSRAM, channel 2,
+# 1.8 V) is reserved by IDF's defaults on every P4 build already.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_SPIRAM_USE_CAPS_ALLOC=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+CONFIG_SPIRAM_MEMTEST=n

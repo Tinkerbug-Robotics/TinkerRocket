@@ -129,6 +129,12 @@ jobs:
             project: flight_computer
             board: V8-auto
             flags: -B build_v8_auto -DTR_BOARD_V8=1 -DTR_GNSS_AUTO=1
+          # The V8 flying the mosaic-G5 alone (TR_GNSS_DRIVER_MOSAIC), PSRAM on
+          # for the raw-GNSS filter (sdkconfig.defaults.rawnav): the Goblin's.
+          - line: legacy
+            project: flight_computer
+            board: V8-mosaic
+            flags: -B build_v8_rawnav -DTR_BOARD_V8=1 -DTR_GNSS_MOSAIC=1
           - line: legacy
             project: out_computer
             board: V7

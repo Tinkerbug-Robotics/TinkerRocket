@@ -61,7 +61,9 @@ struct board_pins
     // from the mosaic by what each answers on pins 1-2). Only once it has
     // found the mosaic-G5 does the mosaic's driver read pin 5, as the 1PPS
     // coming through the harness's 1 kOhm; the u-blox path never touches it.
-    // Neither ever drives the pin. J1 here is the V9's J1: the same
+    // The mosaic-only build (-DTR_GNSS_MOSAIC=1, the Goblin's) establishes it
+    // by being built (config.h GNSS_PPS_PIN). None of them ever drives the
+    // pin. J1 here is the V9's J1: the same
     // BM05B-SRSS-TB with the same pins 1-5, so the Goblin's mosaic harness
     // fits it as it is.
     static constexpr uint8_t GNSS_RX = 3;   // FC receives; module TXD drives this
