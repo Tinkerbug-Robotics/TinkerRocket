@@ -1135,6 +1135,31 @@ target_include_directories(test_snapshot_tail_scan PRIVATE
 target_link_libraries(test_snapshot_tail_scan GTest::gtest_main)
 gtest_discover_tests(test_snapshot_tail_scan)
 
+# ---------- test_flight_snapshot_answer ----------
+# The OC's answer to the FC's boot-time GET_FLIGHT_SNAPSHOT: how the FC reads
+# it (flight_snapshot_answer.h, shared) and when the OC may say "no flight"
+# (snapshot_answer_policy.h, OC project). An OC holding no flight used to say
+# nothing, and every FC boot spent all five tries.
+add_executable(test_flight_snapshot_answer
+    test_flight_snapshot_answer.cpp
+    ${LIB_DIR}/CRC/CRC.cpp
+    ${LIB_DIR}/CRC/CRC8.cpp
+    ${LIB_DIR}/CRC/CRC12.cpp
+    ${LIB_DIR}/CRC/CRC16.cpp
+    ${LIB_DIR}/CRC/CRC32.cpp
+    ${LIB_DIR}/CRC/CRC64.cpp
+    ${LIB_DIR}/CRC/CrcFastReverse.cpp
+    ${LIB_DIR}/CRC/FastCRC32.cpp
+)
+target_include_directories(test_flight_snapshot_answer PRIVATE
+    ${SHIM_DIR}   # Must come first so Arduino.h resolves to our shim
+    ${LIB_DIR}/CRC
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_flight_snapshot_answer GTest::gtest_main)
+gtest_discover_tests(test_flight_snapshot_answer)
+
 # ---------- test_pwr_hold_policy (#848) ----------
 # FC power-hold latch boot reconciliation (P4_EN_HOLD): keep/release/assert
 # decision for a hold inherited across a reset. Pure header in the FC project.
