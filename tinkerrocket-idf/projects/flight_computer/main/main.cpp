@@ -3683,11 +3683,15 @@ static void rawShadowTask(void*)
                 TR_GNSSReceiverMosaicSerial::RawStats rs;
                 (void)sensor_collector_hw.getGNSSRawStats(rs);
                 const uint32_t nav_dropped = rs.nav_dropped[0] + rs.nav_dropped[1] + rs.nav_dropped[2];
-                ESP_LOGI(TAG, "[RAWGNSS] mosaic-G5: fused %.1f Hz (%lu ms grid), cap %d sats | epochs %lu seen: "
-                              "%lu untimed, %lu off the grid, %lu queue drops, %lu sats capped out | tracked %d, "
+                gnss_raw::ShadowNav nv = {};
+                sh.navState(nv);
+                ESP_LOGI(TAG, "[RAWGNSS] mosaic-G5: gnss_aided %u, baro_aided %u | fused %.1f Hz (%lu ms grid), cap %d "
+                              "sats | epochs %lu seen: %lu untimed, %lu off the grid, %lu queue drops, %lu sats "
+                              "capped out | tracked %d, "
                               "%d without an ephemeris | eph %d sats, %u of %u store entries, %lu blocks refused, "
                               "%lu nav queue drops | imu ring drops %lu, gaps bridged %lu | PPS tag max %ld us, "
                               "%lu over %ld of %lu | iono %s (%u sets) | pad datum %s, %lu fixes | GNSS log %s",
+                         (unsigned)(sh.running() ? nv.gnss_aided : 0), (unsigned)(sh.running() ? nv.baro_aided : 0),
                          rs.period_ms ? 1000.0 / (double)rs.period_ms : 0.0, (unsigned long)rs.period_ms,
                          sh.config().sat_cap, (unsigned long)mst.epochs, (unsigned long)mst.untimed,
                          (unsigned long)rs.decimated, (unsigned long)rs.dropped, (unsigned long)mst.capped_out,
@@ -8932,6 +8936,13 @@ static void loop_fc()
                     ref_from_nav = true;
                     ref_lat_sum = ref_lon_sum = ref_alt_sum = 0.0;
                     ref_pos_count = 0;
+#if TR_RAW_NAV_MOSAIC
+                    // once, for the pad checks (G7, G10): from here the datum
+                    // is the raw filter's own, and its fix count starts over
+                    ESP_LOGI(TAG, "[RAWGNSS] pad datum: the raw filter's own from here (gnss_aided); its average "
+                                  "starts over (the backstop needs %u fixes)",
+                             (unsigned)config::MAIN_DEPLOY_REF_MIN_FIXES);
+#endif
                 }
                 const bool ref_take = !ref_from_nav || ref_nav_now;
 #else
