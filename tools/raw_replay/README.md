@@ -416,7 +416,12 @@ true 3.8-4.4 m/s in every run; the 12 m/s ramp in the 6 runs of one F52C traject
 too) and as built (every slow ramp calls 0.49-1.20 s early, at a true 4.8-11.7 m/s). The guard latches in every run
 the truth says it should (190, the slow ramps), in no no-fault run, and on a correct filter -- the truth itself --
 in every run with the static port lagging 0.7 s or more, the call then 1.8-2.4 s after the true apogee instead of
-0.2-0.35 s.
+0.2-0.35 s. With the antenna on the IMU (`sim_tables.py r2/main --against r2/lever0`) the no-fault runs at
+magnetometer 0 hold descent p90 0.70 deg median (1.12 worst) against 2.10 (6.56), the drogue's first 3 s 1.00
+(1.57) against 7.84 (41.8), and the filter's velocity vote moves from 15 ms before the truth's to with it. The
+Doppler's refusal count (`r2/exp_reject_persist_rr{3,10,255}`, `--harness-args "--reject-persist-rr N"`, settling,
+stale-satellite and coherent patterns at magnetometer 0): 255 (never let back) flies as the profile's 30; 3 and 10
+make settle40's worst coast excess over the twin 41-43 deg against 28.5.
 
 ## The Beetle's bit-identity check (`bitident.sh`, `../m1_identity.sh`)
 

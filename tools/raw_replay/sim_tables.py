@@ -327,7 +327,8 @@ def against_table(grid, other, L, h):
 
     sets = [(os.path.basename(os.path.normpath(grid)), rows(grid)), (os.path.basename(os.path.normpath(other)),
                                                                      rows(other))]
-    h(f"### Against {other}: no fault, magnetometer 0, the flight design (deg unless noted; median [worst])")
+    h(f"### Against {sets[1][0]} ({other}): no fault, magnetometer 0, the flight design (deg unless noted; median "
+      "[worst])")
     L.append("| Measure | " + " | ".join(n for n, _ in sets) + " |")
     L.append("|---|" + "---|" * len(sets))
 
