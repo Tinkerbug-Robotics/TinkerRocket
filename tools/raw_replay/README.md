@@ -467,7 +467,9 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   it 0.3 m up the nose, which at the drogue's snatch (5 rad/s) moves 1.5 m/s against the IMU. `--rot-lever-axial-m A
   --rot-lever-radial-m R` give every Doppler, in quadrature, the most such an antenna can move:
   A x the rate across the nose + R x the whole rate, both the gyro less its bias at its largest since the epoch
-  before (`RawGnssShadow::rotLeverSigma`; `R` alone is the isotropic bound |omega| r). `--att-hold-rate W
+  before (`RawGnssShadow::rotLeverSigma`; `R` alone is the isotropic bound |omega| r); `--rot-lever-min-rate M` only
+  on an epoch whose rate across the nose reached M rad/s (the snatch, not the boost's weathercocking or the pitch-over
+  at apogee). `--att-hold-rate W
   --att-hold-s S` hold GNSS off the attitude and the gyro bias (the unaided twin's mask) for every epoch whose rate
   across the nose reached W rad/s and for S s after one; a roll alone never holds it. `--rot-after-apogee` lets both
   act only once the flight computer has called apogee (the drogue's snatch and the descent; the boost, the coast and

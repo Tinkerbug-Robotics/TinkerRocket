@@ -278,7 +278,11 @@
 //     rate -- an antenna on the axis does not move as the body rolls, one off
 //     it does. The rate is the gyro less its bias at its largest since the
 //     epoch before, so the epoch's own instant is in it. The boost screen,
-//     the vertical check and the update all judge the Dopplers with it;
+//     the vertical check and the update all judge the Dopplers with it. With
+//     rot_lever_min_rps, only on an epoch whose rate across the nose reached
+//     that: the snatch and a tumble, not a boost's weathercocking or the
+//     pitch-over at apogee, where the votes and the raw vote guard read the
+//     filter's vertical velocity;
 //   - an epoch whose rate across the nose reached att_hold_rate_rps, and each
 //     within att_hold_s after one, keeps GNSS off the attitude and the gyro
 //     bias (the unaided twin's mask, for those epochs): the snatch and a
@@ -448,6 +452,7 @@ public:
         // the turning body). 0: off, the Beetle's filter exactly.
         double   rot_lever_axial_m = 0.0;     // its offset along the nose at most, m
         double   rot_lever_radial_m = 0.0;    //   and across it, m: each Doppler's sigma takes rotLeverSigma
+        double   rot_lever_min_rps = 0.0;     //   on an epoch whose rate across the nose reached this, rad/s
         double   att_hold_rate_rps = 0.0;     // an epoch whose rate across the nose reached this, rad/s, and
         double   att_hold_s = 0.0;            //   every epoch within this long after one: GNSS held off the
                                               //   attitude and the gyro bias (RawGnssEKF::setAttHold)

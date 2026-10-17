@@ -914,7 +914,7 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
         float all = 0.0f, across = 0.0f;
         ekf_.takeRatePeak(all, across);
         const bool acts = !cfg_.rot_after_apogee || (imu_flags & kShadowApogee) != 0;
-        if (acts)
+        if (acts && static_cast<double>(across) >= cfg_.rot_lever_min_rps)
             job_.rot_sigma = rotLeverSigma(cfg_.rot_lever_axial_m, cfg_.rot_lever_radial_m, static_cast<double>(all),
                                            static_cast<double>(across));
         st_.rot_last_sigma_mps = static_cast<float>(job_.rot_sigma);

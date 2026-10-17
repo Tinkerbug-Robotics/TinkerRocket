@@ -1185,6 +1185,15 @@ TEST(RawGnssShadowV9, TheTurningBodysAllowanceIsOnTheDopplersOfTheEpochsItTurned
         }
     }
     EXPECT_EQ(allowed, 6);
+    // with a floor on the rate across the nose: a 2 rad/s turn under a 2.5
+    // floor takes nothing, over a 1.5 floor the whole bound
+    RawGnssShadow::Config cm = mosaicCfg();
+    cm.rot_lever_axial_m = 0.3;
+    cm.rot_lever_radial_m = 0.05;
+    cm.rot_lever_min_rps = 2.5;
+    EXPECT_EQ(flyTen(cm, fl).st.rot_max_sigma_mps, 0.0f);
+    cm.rot_lever_min_rps = 1.5;
+    EXPECT_NEAR(flyTen(cm, fl).st.rot_max_sigma_mps, 0.7f, 0.02f);
 }
 
 TEST(RawGnssShadowV9, TheHoldTakesTheEpochsThatTurnedAcrossTheNoseAndTheTailAfter)

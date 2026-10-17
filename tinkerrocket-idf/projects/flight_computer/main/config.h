@@ -803,17 +803,19 @@ struct config : board_pins
     //     antenna's offset from the IMU is never measured before a flight, and
     //     at the drogue's snatch an antenna 0.3 m up the nose moves 1.5 m/s
     //     against the IMU. Each Doppler can be allowed what the gyro says such
-    //     an antenna could move (axial along the nose, radial across it, m),
-    //     and GNSS held off the attitude while the body turns across the nose
-    //     this fast (rad/s) and for HOLD_S after; with ROT_AFTER_APOGEE both
-    //     only once apogee is called. 0: off, the filter as flown before them
-    //     (exp/v9-robust: Grid B and the real logs decide).
+    //     an antenna could move (axial along the nose, radial across it, m;
+    //     only from MIN_RPS across the nose), and GNSS held off the attitude
+    //     while the body turns across the nose this fast (rad/s) and for
+    //     HOLD_S after; with ROT_AFTER_APOGEE both only once apogee is
+    //     called. 0: off, the filter as flown before them (exp/v9-robust:
+    //     Grid B and the real logs decide).
     static constexpr double   RAW_RESTORE_POS_SIGMA_M   = 100.0;
     static constexpr double   RAW_RESTORE_VEL_SIGMA_MPS = 20.0;
     static constexpr double   RAW_RESTORE_ATT_SIGMA_DEG = 15.0;
     static constexpr uint8_t  RAW_HEADING_GATE          = 1;
     static constexpr double   RAW_ROT_LEVER_AXIAL_M     = 0.0;
     static constexpr double   RAW_ROT_LEVER_RADIAL_M    = 0.0;
+    static constexpr double   RAW_ROT_LEVER_MIN_RPS     = 0.0;
     static constexpr double   RAW_ATT_HOLD_RATE_RPS     = 0.0;
     static constexpr double   RAW_ATT_HOLD_S            = 0.0;
     static constexpr bool     RAW_ROT_AFTER_APOGEE      = false;

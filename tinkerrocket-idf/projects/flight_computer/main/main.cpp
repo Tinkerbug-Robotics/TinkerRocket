@@ -4050,13 +4050,15 @@ static void startRawShadow()
     // (config.h; 0 is off)
     cfg.rot_lever_axial_m = config::RAW_ROT_LEVER_AXIAL_M;
     cfg.rot_lever_radial_m = config::RAW_ROT_LEVER_RADIAL_M;
+    cfg.rot_lever_min_rps = config::RAW_ROT_LEVER_MIN_RPS;
     cfg.att_hold_rate_rps = config::RAW_ATT_HOLD_RATE_RPS;
     cfg.att_hold_s = config::RAW_ATT_HOLD_S;
     cfg.rot_after_apogee = config::RAW_ROT_AFTER_APOGEE;
     if (cfg.rot_lever_axial_m > 0.0 || cfg.rot_lever_radial_m > 0.0 || cfg.att_hold_rate_rps > 0.0)
-        ESP_LOGI(TAG, "[RAWGNSS] turning body: Dopplers allow %.2f m along the nose, %.2f m across; attitude held "
-                      "from %.1f rad/s across the nose and %.2f s after (0: off)%s",
-                 cfg.rot_lever_axial_m, cfg.rot_lever_radial_m, cfg.att_hold_rate_rps, cfg.att_hold_s,
+        ESP_LOGI(TAG, "[RAWGNSS] turning body: Dopplers allow %.2f m along the nose, %.2f m across from %.1f rad/s; "
+                      "attitude held from %.1f rad/s across the nose and %.2f s after (0: off)%s",
+                 cfg.rot_lever_axial_m, cfg.rot_lever_radial_m, cfg.rot_lever_min_rps, cfg.att_hold_rate_rps,
+                 cfg.att_hold_s,
                  cfg.rot_after_apogee ? "; both from the apogee call" : "");
 #ifdef TR_BENCH_BOOST_SCREEN_G
     // bench (the CPU ladder, P1): the boost screen's threshold, g -- 0 screens
