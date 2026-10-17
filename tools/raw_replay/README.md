@@ -98,41 +98,66 @@ check a tree against a base commit:
 
 ```
 tools/raw_replay/bitident.sh BASE [HEAD]   # the filter replayed: a digest of every step, compared
-tools/m1_identity.sh BASE [HEAD]           # the M1 image's main.cpp and sensor collectors, preprocessed, compared
+tools/m1_identity.sh BASE [HEAD]           # the M1 image's main.cpp, main/ and collectors, preprocessed, compared
 ```
 
 BASE and HEAD are commits (archived, so only what is committed counts) or directories holding a source tree (a
-worktree's path, for changes not committed yet); HEAD defaults to `HEAD`. Both exit 0 when identical, 1 on a
-difference and 2 when the check could not run, and keep their scratch directory (printed; `BITIDENT_TMP` and
-`M1_IDENTITY_TMP` name one, which must be new or empty).
+worktree's path, for changes not committed yet); HEAD defaults to `HEAD`. A commit is named as the worktree the
+script is *run from* sees it: `HEAD` is the caller's HEAD, not that of the worktree holding the script, so a lane
+can run another worktree's copy of the scripts from its own worktree. Run from outside every worktree of the
+repository, names are the script's worktree's. The scripts print the commit each name came to; a branch name or a
+worktree path leaves no doubt. Both exit 0 when identical, 1 on a difference and 2 when the check could not run, and
+keep their scratch directory (printed; `BITIDENT_TMP` and `M1_IDENTITY_TMP` name one, which must be new or empty).
 
 ### `bitident.sh`
 
-- The harness is the one frozen at 4b647494 (the commit that added `--digest`), built twice through `SRC_ROOT`:
-  against BASE's firmware sources and against HEAD's, with `RAW_REPLAY_VCHECK` and `RAW_REPLAY_LATCH` on. Later
-  harness work never has to compile against BASE.
+- The harness is the one frozen at 771e8374 (the commit that made the digest take the pad context; 4b647494 added
+  `--digest`), built twice through `SRC_ROOT`: against BASE's firmware sources and against HEAD's, with
+  `RAW_REPLAY_VCHECK` and `RAW_REPLAY_LATCH` on. Later harness work never has to compile against BASE.
 - Each events file in `BITIDENT_IN` is replayed in act (`--heading-mode 2`) and observe (`1`) at magnetometer errors
   0, 10 and 40 deg (`BITIDENT_MAGS`), with `--fw-defaults` (the M1 image's configuration without bench flags) and
   `--digest`. The default inputs are `gnss-attitude-study/rig-replay/bitident-in/` beside the repository: the 25
   Beetle events files, kept out of the repository, and `recorded.txt` ("tag deg", the magnetometer error each log's
   image was built with; 0 if not listed).
-- Every digest is compared byte for byte. A difference names the run, the first step that differs and which of its
-  hashes do. The 150 runs take about 15 s on a Mac.
+- Each of those runs is made three times (`BITIDENT_UNITS`, default `0 100 300`): without a clock, so each epoch is
+  worked in one step, and with the emulated FC clock at 100 and 300 us a reading (`--fc-unit-us`), so epochs are
+  worked a slice a step (`epoch_slice_us`, `epoch_job_max_s`) as on the M1. The emulated clock counts readings: a
+  tree that reads the clock more or less often on the M1's path slices its epochs differently and can differ in the
+  clock runs alone. Read such a difference; it is not noise. The summary counts the runs that differ by clock.
+- Every digest is compared byte for byte. A difference names the run (`TAG_CONFIG_mMAG_uUNIT`), the first step that
+  differs and which of its hashes do. The 450 runs take about 30 s on a Mac.
 - A tree the frozen harness cannot compile (a field it names renamed or gone) fails with status 2: a change to look
   at, not a pass. A tree whose filter needs a source file or include directory the frozen CMakeLists does not list:
   `BITIDENT_EXTRA_SRC` and `BITIDENT_EXTRA_INC` (';'-separated, relative to the tree, each used where it exists).
-- If a rebase rewrites the frozen commit, the script finds it by its subject; otherwise set `BITIDENT_HARNESS`.
+- If a rebase rewrites the frozen commit, the script finds the newest commit carrying its subject; otherwise set
+  `BITIDENT_HARNESS`.
 
 `--digest FILE` (any run of a `RAW_REPLAY_VCHECK` + `RAW_REPLAY_LATCH` build) writes a line each filter step,
 whatever `--every`: the step count, the IMU time (us), then FNV-1a hashes of the `ShadowNav` (every field), the 0x96
-and 0x9B records the step filled and its `HEADING_FIT_MSG` records (`-`: none that step), a named list of the `Stats`
-counters (not the CPU times), and the filter's state and covariance (`stateHash`, as in `test_raw_gnss_shadow.cpp`).
-An `end` line closes it with the step count and the last hashes of the `ShadowNav`, the counters and the state. Every
-field is named in `raw_replay.cpp`, so a tree that only adds fields hashes the same.
+and 0x9B records the step filled, its `HEADING_FIT_MSG` records and its `PAD_CONTEXT_MSG` record (`-`: none that
+step; the pad context is taken as main.cpp's raw task takes it, at most one record each 20 ms), a named list of the
+`Stats` counters (not the CPU times), and the filter's state and covariance (`stateHash`, as in
+`test_raw_gnss_shadow.cpp`). An `end` line closes it with the step count and the last hashes of the `ShadowNav`, the
+counters and the state. Every field is named in `raw_replay.cpp`, so a tree that only adds fields hashes the same.
 
 `--fw-defaults` applies `--pad-sigma-deg`, `--handoff-deg`, `--gate-full` and `--tilt-sigma-deg` only when given, and
-leaves the rest at `RawGnssShadow::Config`'s defaults, so a changed default the Beetle flies shows. Without it the
+leaves the rest at `RawGnssShadow::Config`'s defaults, so the replay flies what the Beetle flies. Without it the
 harness sets all four from its own defaults (30, 10, 0, 0: the earlier rig studies'), as before.
+
+What `bitident.sh` cannot see:
+
+- Code the 25 flight segments barely run, and thresholds they never come near. Each events file starts from a
+  restored pad context 1.4 to 5.6 s before the flight computer calls INFLIGHT and ends about 2 s after the landed
+  flag, so levelling and its gate, resync, the pad's zero-velocity updates and the pad survey run for a few seconds
+  at most. Changing one `RawGnssShadow::Config` default at a time in a copy of fd45b296 left all 450 digests
+  identical for `still_rate_rps` 0.05 -> 0.04, `resync_period_s` 1.0 -> 1.1, `max_epoch_age_s` 0.6 -> 0.5 and
+  `vert_check_mps` 20 -> 19. A changed default is therefore not caught as such: the `Config` pins in the tests guard
+  the default values themselves (A4). Covering the pad and the landing needs an input that starts at boot, with no
+  restore, and runs past landing; there is none yet.
+- `GNSS_CHECK_MSG` (`takeCheckLog`): the events files carry the receiver's fix times, not its fixes, so the harness
+  feeds the filter none and the fix check never runs.
+- The M1's real timing: the emulated clock slices epochs by a count of readings, not by the time the work takes on
+  the ESP32-S3, and the host compiler's floating point is not the Xtensa's. On-target checks (P4) cover those.
 
 ### `m1_identity.sh`
 
@@ -141,25 +166,37 @@ harness sets all four from its own defaults (30, 10, 0, 0: the earlier rig studi
   `dependencies.lock` or `managed_components` is touched. The private `TR_GuidancePN` submodule is never copied, so
   both sides build with its stub.
 - The compile commands of `main.cpp`, `TR_Sensor_Collector.cpp` and `TR_Sensor_Collector_Sim.cpp` are re-run with
-  `-E` (line markers kept). Only each file's own lines are kept (those whose preceding line marker names it), without
-  blank lines. The tree roots, `FW_GIT_SHA`, `FW_GIT_DIRTY` and every integer `__LINE__` produced are normalized.
-  `__LINE__`'s are found exactly: each file is preprocessed again from a copy that starts with `#line 1000001` under
-  the file's own name, and an integer that moved by 1000000 came from `__LINE__`.
-- The own lines are diffed, and so are the `TR_*` and `CONFIG_*` macros `main.cpp` sees (`-dM`). Shared headers are
-  not compared: they gain defaulted fields and methods by design, and what the filter does with them is
-  `bitident.sh`'s job.
+  `-E` (line markers kept). Kept, file by file: the lines of the file itself and of every file under
+  `projects/flight_computer/main/` it includes (`config.h`, `board/*.h`, `raw_nav_adapter.h`, the `*_policy.h` ...),
+  those whose preceding line marker names that file, without blank lines; a file with no lines left is not kept. The
+  tree roots, `FW_GIT_SHA`, `FW_GIT_DIRTY` and every integer `__LINE__` produced are normalized. `__LINE__`'s are found
+  exactly: each compile is run again from a copy of the file, and for `main.cpp` of every source file in `main/`, each
+  starting with `#line 1000001` under its own name, and an integer that moved by 1000000 came from `__LINE__`.
+- Each kept file is diffed (one kept on one side only is a difference), and so are the `TR_*` and `CONFIG_*` macros
+  `main.cpp` sees (`-dM`).
+- Not compared: headers outside `main/` (shared headers gain defaulted fields and methods by design; the filter's
+  sources are `bitident.sh`'s job, the rest the host tests'), compile flags other than those macros, the linker
+  fragments (`main/*.lf`) and the CMake files.
 - A new macro in `config.h`, even one that is 0 on the M1, shows in the `-dM` diff: define a mosaic-only switch from
   the mosaic build's CMake, or read the diff and judge it.
-- About 40 s on a Mac, most of it the two configures.
+- About 30 s on a Mac, most of it the two configures.
 
 ### Checked (2026-10-17, base fd45b296)
 
-- `bitident.sh fd45b296 fd45b296`: 150 runs identical. With `heading_pad_sigma_deg` 10 -> 11 in a scratch copy's
-  `RawGnssShadow::Config`: the 75 act runs differ from their launch step (observe never reads it); status 1. With a
-  `Stats` field renamed: the frozen harness does not build, status 2.
-- `m1_identity.sh fd45b296 fd45b296`: identical. One unguarded line added to `startRawShadow()` in a scratch copy:
-  that line is the whole diff, status 1. Fifteen lines under `#if TR_RAW_NAV_MOSAIC` there and three at the top of the
-  file (every later `__LINE__` moved): identical.
+- `bitident.sh fd45b296 fd45b296`: 450 runs identical. In copies of fd45b296's `RawGnssShadow::Config`:
+  `epoch_job_max_s` 0.3 -> 0.2: 123 runs differ, 27 at 100 us a reading and 96 at 300 us, none without a clock
+  (status 1); `pad_context_delay_s` 6 -> 5: all 450 differ, in the pad context only; `still_rate_rps` 0.05 -> 0.04:
+  identical (above). At 4b647494: `heading_pad_sigma_deg` 10 -> 11 made the act runs differ from their launch step,
+  and a renamed `Stats` field gave status 2.
+- The revised harness (771e8374) against 4b647494 on r21, s10, f3c and a10: the CSVs and every digest column but the
+  new pad context one are byte-identical; each run takes 17 to 21 pad context records.
+- Run from another lane's worktree with `HEAD`, both scripts compared that worktree's HEAD (c178b415, fc/v9raw-core).
+- `m1_identity.sh fd45b296 fd45b296`: identical (main.cpp and 15 headers of main/, the two collectors, 1074 macros). In
+  copies of fd45b296: `FLIGHT_LOOP_UPDATE_RATE` 1000 -> 999 in `config.h` and `kMaxStaleUs` 200000 -> 150000 in
+  `raw_nav_adapter.h`: those two lines are the whole diff, status 1. Blocks under `#if TR_RAW_NAV_MOSAIC` at the top
+  of `config.h`, `raw_nav_adapter.h`, `board/board_m1.h` and `main.cpp`, and a new header included unguarded whose
+  body is all guarded: identical. A `__LINE__` at the end of `config.h`, moved by a guarded block above it:
+  identical. At ca4f8b89: one unguarded line added to `startRawShadow()` was the whole diff, status 1.
 - Main's harness (cd6ebe36) against the one the 2026-10-16 firmware sweeps used (`fw_replay/build_l`, built at 17:58
   that day): on the 25 events files x {flown, unaided} x {0, 10, 40} deg, 120 of 150 CSVs are byte-identical, and all
   150 with the latch off (`--vert-release-mps 0`). The other 30 (c30, gv10, r21, v10 and zz, a copy of r21) differ
