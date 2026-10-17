@@ -7,8 +7,9 @@
 Times are the CSV's t_s (flight time: MCU seconds plus the events file's t_base_s, the MCU clock itself on a log
 with no flight). Every score is a distance or a statistic; nothing here prints or writes a position or a height.
 
-- health: rows, stops (the filter running, then not), non-finite rows, unhealthy rows; the events JSON's stage,
-  feed and Doppler counts beside them.
+- health: rows, stops (the events JSON's: RawGnssShadow's own count, with when and why; a stop on the pad restarts
+  from the seed within the step, so the CSV's running column alone misses it), non-finite rows, unhealthy rows; the
+  events JSON's stage, feed and Doppler counts beside them.
 - velocity in [T0, T1]: mean and rms per axis (N, E, D) and the p95 of the speed. On a static log only a run with
   raw_replay --gnss-only-from-s scores the receiver: the pad's zero-velocity updates and the levelling hold the
   velocity otherwise (tools/raw_replay/README.md).
@@ -163,8 +164,15 @@ def score(a):
     ej = a.csv + ".events.json"
     if os.path.exists(ej):
         j = json.load(open(ej))
+        if "filter" in j:
+            # the filter's own count: a stop on the pad restarts from the seed within the step, which the running
+            # column never shows
+            h = out["health"]
+            h["running_dropouts"] = h["stops"]
+            h["stops"] = int(j["filter"]["stops"])
+            h["stop_at"] = j["filter"]["stop_at"]
         keep = ("stage", "sbf", "doppler", "mag", "eph_from", "time_tag", "pad_zupts", "landed_zupts", "cut",
-                "corrupted_sats", "faults_clock", "sat_cap", "fuse_ms", "unaided", "vert_latched")
+                "corrupted_sats", "faults_clock", "sat_cap", "fuse_ms", "unaided", "vert_latched", "filter")
         out["events"] = {k: j[k] for k in keep if k in j}
         fw = j.get("fw") or {}
         out["events"]["levels"] = fw.get("levels")

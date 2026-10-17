@@ -1950,11 +1950,22 @@ int main(int argc, char** argv)
     std::vector<int> dop_used;
     std::vector<float> dop_nis;
     int dop_rejected = 0, dop_rejected_epochs = 0;
+    // the filter's stops (RawGnssShadow::stop: kStopGap, kStopNotFinite, kStopFar ...) as the rows saw them: a stop
+    // on the pad restarts from the seed within the step, so the running column never shows it
+    uint32_t stops_seen = 0;
+    std::vector<std::pair<double, int>> stop_at;
 #endif
 
     auto writeRow = [&](int64_t t_us) {
         const RawGnssEKF<float>& e = sh.filter();
         const RawGnssShadow::Stats& st = sh.stats();
+#if RAW_REPLAY_MOSAIC
+        if (st.stops != stops_seen)
+        {
+            stops_seen = st.stops;
+            stop_at.emplace_back(t_us * 1e-6 + a.t_base_s, static_cast<int>(st.last_stop));
+        }
+#endif
         const double* lla = e.lla();
         const float* v = e.velNed();
         const float* q = e.quat();
@@ -3004,6 +3015,17 @@ int main(int argc, char** argv)
                                  "\"fuse_ms\": %.0f, ",
                              a.receiver.c_str(), cold ? 1 : 0, a.unaided ? 1 : 0, cfg.sat_cap,
                              fusedEpochPeriod(rx) * 1000.0);
+                {
+                    // each stop at the first row after it (flight time) with RawGnssShadow's reason: 1 sim,
+                    // 2 gap, 3 not finite, 4 far from the seed on the pad
+                    std::string so;
+                    for (size_t i = 0; i < stop_at.size(); ++i)
+                        so += (i ? ", " : "") + std::string("[") + std::to_string(stop_at[i].first) + ", " +
+                              std::to_string(stop_at[i].second) + "]";
+                    std::fprintf(ej, "\"filter\": {\"starts\": %u, \"stops\": %u, \"last_stop\": %u, \"stop_at\": [%s]}, ",
+                                 sh.stats().starts, sh.stats().stops, static_cast<unsigned>(sh.stats().last_stop),
+                                 so.c_str());
+                }
                 std::fprintf(ej, "\"stage\": {\"epochs\": %u, \"untimed\": %u, \"idle\": %u, \"built\": %u, "
                                  "\"eph_added\": %u, \"eph_bad\": %u, \"eph_sats\": %d, \"tracked\": %d, "
                                  "\"tracked_no_eph\": %d, \"capped_out\": %u}, ",
