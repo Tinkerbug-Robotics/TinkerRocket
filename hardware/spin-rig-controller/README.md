@@ -31,7 +31,7 @@ Files:
 - `spin-rig-controller.kicad_pro`: the KiCad 10 project.
 - `.kicad_sch` files: a root sheet plus `power`, `mcu` and `io` sheets.
 - `.kicad_pcb`: the board.
-- `FABRICATION-NOTES.md`: the order notes.
+- `FABRICATION-NOTES.md`: the order notes, and a step-by-step guide to ordering assembled boards from JLC.
 - **Libraries:** the repo's shared ones (`../symbols/Custom.kicad_sym`, `../footprints/Footprints.pretty`, `../3dmodels`). This board added three symbols (TLV3011, UCC27517, AO4264E) and one footprint (R_0805_Kelvin) to them.
 - `gerbers/` (ignored by git), written by `gen/make_fab.py`:
   - a review copy of the gerbers;
@@ -312,7 +312,7 @@ From `gen/`:
   - `silk.py`: references to the fab layer, function labels on the silkscreen, and a name at every pin of the driver's headers;
   - `cleanup.py`: dangling vias and stubs out.
 - `python3 check.py`: DRC with schematic parity.
-- `python3 make_fab.py`: the review package and the JLC BOM/CPL, into `gerbers/`. At order time, plot the gerbers with `tools/plot_gerbers.sh spin-rig-controller` and tag the commit; see `FABRICATION-NOTES.md`.
+- `python3 make_fab.py`: the review package and the JLC BOM/CPL, into `gerbers/`. At order time, plot the gerbers with `tools/plot_gerbers.sh spin-rig-controller --aux-origin` (the CPL's frame) and tag the commit; see `FABRICATION-NOTES.md`.
 
 Freerouting's results vary from run to run. If a rerun leaves more than a few unconnected items, run `route_best.sh` again.
 

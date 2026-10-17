@@ -81,9 +81,15 @@ def main():
         for f in kilib.find(fl, 'field') if fl else []:
             fields[str(kilib.get(f, 'name')[1])] = str(f[-1]) if isinstance(f[-1], str) else ''
         fp = str(kilib.get(c, 'footprint')[1]).split(':')[1]
-        key = (fields.get('LCSC', ''), str(kilib.get(c, 'value')[1]), fp)
-        (hand if ref in HAND else groups).setdefault(
-            key, {'refs': [], 'mpn': fields.get('MPN', ''), 'mfr': fields.get('Mfr', '')})['refs'].append(ref)
+        # one line per part number: JLC's BOM import wants each LCSC code once (BOOT and RESET share a switch)
+        val = str(kilib.get(c, 'value')[1])
+        key = (fields.get('LCSC', '') or fields.get('MPN', '') or val, fp)
+        g = (hand if ref in HAND else groups).setdefault(
+            key, {'refs': [], 'vals': [], 'lcsc': fields.get('LCSC', ''), 'mpn': fields.get('MPN', ''),
+                  'mfr': fields.get('Mfr', '')})
+        g['refs'].append(ref)
+        if val not in g['vals']:
+            g['vals'].append(val)
     os.remove(net)
 
     def sortkey(r):
@@ -94,16 +100,16 @@ def main():
     with open(os.path.join(FAB, NAME + '-bom.csv'), 'w', newline='') as f:
         w = csv.writer(f)
         w.writerow(['Comment', 'Designator', 'Footprint', 'LCSC Part #', 'Manufacturer', 'MPN', 'Quantity'])
-        for (lcsc, val, fp), d in sorted(groups.items(), key=lambda kv: sortkey(sorted(kv[1]['refs'], key=sortkey)[0])):
+        for (_, fp), d in sorted(groups.items(), key=lambda kv: sortkey(sorted(kv[1]['refs'], key=sortkey)[0])):
             refs = sorted(d['refs'], key=sortkey)
-            w.writerow([val, ','.join(refs), fp, lcsc, d['mfr'], d['mpn'], len(refs)])
+            w.writerow([' / '.join(d['vals']), ','.join(refs), fp, d['lcsc'], d['mfr'], d['mpn'], len(refs)])
     print(len(groups), 'BOM lines,', sum(len(d['refs']) for d in groups.values()), 'parts')
     with open(os.path.join(FAB, NAME + '-hand.csv'), 'w', newline='') as f:
         w = csv.writer(f)
         w.writerow(['Designator', 'Part', 'Manufacturer', 'MPN', 'LCSC Part #', 'Footprint', 'Quantity'])
-        for (lcsc, val, fp), d in sorted(hand.items(), key=lambda kv: sortkey(sorted(kv[1]['refs'], key=sortkey)[0])):
+        for (_, fp), d in sorted(hand.items(), key=lambda kv: sortkey(sorted(kv[1]['refs'], key=sortkey)[0])):
             refs = sorted(d['refs'], key=sortkey)
-            w.writerow([','.join(refs), val, d['mfr'], d['mpn'], lcsc, fp, len(refs)])
+            w.writerow([','.join(refs), ' / '.join(d['vals']), d['mfr'], d['mpn'], d['lcsc'], fp, len(refs)])
     print(len(hand), 'hand-soldered lines,', sum(len(d['refs']) for d in hand.values()), 'parts')
 
     run('sch', 'export', 'pdf', '-o', os.path.join(FAB, NAME + '-schematic.pdf'), SCH)

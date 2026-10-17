@@ -177,6 +177,7 @@ def build():
     board = pcbnew.LoadBoard(PCB)
     board.SetCopperLayerCount(4)
     board.SetLayerType(pcbnew.In1_Cu, pcbnew.LT_POWER)   # the router treats it as the GND plane, no wiring
+    board.GetTitleBlock().SetRevision('V1')     # the silkscreen's ${REVISION}; tools/plot_gerbers.sh reads it here
 
     netinfo = {}
     for nm in nets:
@@ -308,7 +309,7 @@ def build():
 
     # USB-C: the two D+ pads and the two D- pads interleave at 0.5 mm. D- joins on F.Cu in a loop behind
     # the row; D+ drops through two 0.45/0.25 mm vias and joins on B.Cu. The router takes it from there.
-    def via(net, xy, d=0.45, drill=0.25):
+    def via(net, xy, d=0.45, drill=0.3):     # 0.45 / 0.30: JLC's standard multilayer via, no small-hole fee
         v = pcbnew.PCB_VIA(board)
         v.SetPosition(pt(*xy))
         v.SetWidth(mm(d))

@@ -138,7 +138,7 @@ def fanout(pad):
             c = pcbnew.VECTOR2I(a.x + mm(rad * math.cos(th)), a.y + mm(rad * math.sin(th)))
             if not inside(c, PLANE[name], 0.8):
                 continue
-            for d, dr in ((0.6, 0.3), (0.45, 0.25)):
+            for d, dr in ((0.6, 0.3), (0.45, 0.3)):
                 if via_ok(c, d, dr, net) and stub_ok(a, c, w, layer, net, pad):
                     add_track(a, c, w, layer, net)
                     add_via(c, net, d, dr)

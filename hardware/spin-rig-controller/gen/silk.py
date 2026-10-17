@@ -200,5 +200,32 @@ for d in b.GetDrawings():
             else:
                 continue
             break
+        blocks.append(d.GetBoundingBox())
+        title = d
+
+# JLC's order-number marker: JLC prints the order number in place of this text when the order picks
+# "Specify a location", instead of somewhere of its own choosing. Beside the title, where it fits.
+for d in list(b.GetDrawings()):
+    if isinstance(d, pcbnew.PCB_TEXT) and d.GetText() == 'JLCJLCJLCJLC':
+        b.Remove(d)
+t = pcbnew.PCB_TEXT(b)
+t.SetText('JLCJLCJLCJLC')
+t.SetLayer(pcbnew.F_SilkS)
+t.SetTextSize(pcbnew.VECTOR2I(mm(1.0), mm(1.0)))
+t.SetTextThickness(mm(0.15))
+tb = title.GetBoundingBox()
+cands = []
+for dy in (1.4, 1.9, 2.4):
+    for dx in (0, -2, 2, -4, 4, -6, 6, -8, 8):
+        cands += [(tb.GetCenter().x + mm(dx), tb.GetTop() - mm(dy)), (tb.GetCenter().x + mm(dx), tb.GetBottom() + mm(dy))]
+cands += [(mm(OX + x), mm(OY + y)) for x in range(10, 100, 2) for y in range(4, 78, 2)]
+for x, y in cands:
+    t.SetPosition(pcbnew.VECTOR2I(int(x), int(y)))
+    if fits(t):
+        b.Add(t)
+        blocks.append(t.GetBoundingBox())
+        break
+else:
+    missed.append('JLC order number')
 pcbnew.SaveBoard(PCB, b)
 print('labels placed', placed, 'missed', missed)
