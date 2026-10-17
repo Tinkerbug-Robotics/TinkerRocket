@@ -2,6 +2,7 @@
 """Turn one OC flight log (.bin) into the event stream raw_replay (the C++ harness) reads.
 
     extract.py OC_LOG OUT.txt [--ref-log OC_LOG_WITH_PAD_CONTEXT]
+    extract.py --sbf OC_LOG OUT.txt          # a V8/V9 log with the mosaic-G5's SBF (raw_replay --receiver mosaic)
 
 What the flight computer's raw task was handed, rebuilt from the log:
   I  the IMU ticks: the flight loop's drain-window means (integer-rounded raw counts, every
@@ -12,8 +13,22 @@ What the flight computer's raw task was handed, rebuilt from the log:
   R  the receiver's RTCM3 frames as they arrived (0x95), MSM7 and ephemerides
   K  the GPS -> MCU clock lines (0x9D), each from the time it was set
   F  the receiver's fixes (GPS week, time of week), for an MSM epoch's week
+  V  the same fixes as the flight loop's GPS voter gets them: fix mode, satellites, height, velocity N E U
+     (raw_replay's apogee quorum, --quorum; ignored otherwise)
   S  the start: the raw filter's own state at the log's first record (0x96 + 0x9B)
   P  the pad context (0x9E): its state at the launch tick, covariance, ephemerides, ionosphere
+
+With --sbf (a V8/V9 log with the mosaic-G5, whose raw filter left no records of its own yet): no S, A or P
+lines -- raw_replay starts the filter on the pad itself (--cold-start) -- and R carries the receiver's SBF blocks
+as they arrived (0x95), its own fix (PVTGeodetic) among them (so no V lines). Every navigation block in the log
+(GPSNav, GALNav, BDSNav, GPSIon) is put at the start as well, marked "preload", unless --nav-as-logged: the logs
+begin long after the receiver did, and it sends a satellite's ephemeris only when it changes. raw_replay files a
+preloaded issue only once a receiver could have had it (the RINEX rule: a GPS set 2 h before its toe, a Galileo batch
+665 s after, a BeiDou set 18 s after), so an issue decoded later in the log is not handed over early. Use
+--nav-as-logged where the flight computer booted inside the log (its store then held only what the log shows) and
+for a comparison with the on-board filter's own records (0x96) when that is so. The flight's time is the log's
+in-flight edge (T+0), or the log's own clock where it has none. A day's broadcast RINEX file goes to raw_replay
+itself (--rinex).
 
 Times are the FC's microseconds, unwrapped to 64 bits.
 """
@@ -139,7 +154,20 @@ def main():
     ap.add_argument("--clock-offset-ms", type=float, default=6.0,
                     help="without clock lines (0x9D): the fixes' stamps sit this far above the driver's line "
                          "(their lower envelope, measured on r20-r25)")
+    ap.add_argument("--sbf", action="store_true",
+                    help="a V8/V9 log with the mosaic-G5's SBF: no raw-filter records needed, the receiver's blocks "
+                         "as R lines (raw_replay --receiver mosaic --cold-start)")
+    ap.add_argument("--nav-as-logged", action="store_true",
+                    help="with --sbf: the navigation blocks only where the log has them, not also at the start (a "
+                         "log the flight computer booted in)")
+    ap.add_argument("--seed-quat-from-log", action="store_true",
+                    help="with --sbf: the cold start's attitude from the log's own flight filter (NonSensor q, the "
+                         "auto image's GpsInsEKF), not the accelerometer's tilt and the pad heading guess the "
+                         "mosaic-only image starts from (META seed_quat). Its heading is then that filter's: never "
+                         "score heading against that filter's quaternion from such a run")
     args = ap.parse_args()
+    if args.sbf:
+        return extract_sbf(args)
 
     recs, _stats, config = P.parse_binary_file(args.log)
     imu = recs["ISM6HG256"]
@@ -299,13 +327,15 @@ def main():
         for r in recs.get(key) or []:
             tu = int(unwrap([r["time_us"]], t_ref)[0])
             events.append((tu, 2, f"M {tu} {r['mag_x']!r} {-r['mag_y']!r} {-r['mag_z']!r}"))
-    # ---- the receiver's fixes: week and time of week
+    # ---- the receiver's fixes: week and time of week (F), and as the flight loop's GPS voter gets them (V)
     for r in recs.get("GNSS") or []:
         if r["year"] < 2020:
             continue
         week, tow_ms = gps_of_fix(r)
         tu = int(unwrap([r["time_us"]], t_ref)[0])
         events.append((tu, 3, f"F {tu} {week} {tow_ms} {r['fix_mode']} {r['num_sats']}"))
+        events.append((tu, 3, f"V {tu} {r['fix_mode']} {r['num_sats']} {r['alt_m']!r} {r['vel_n']!r} "
+                              f"{r['vel_e']!r} {r['vel_u']!r}"))
     # ---- the clock lines (or, without them, one fitted to the fixes' lower envelope)
     if not recs.get("GnssClock"):
         fx = [r for r in recs.get("GNSS") or [] if r["year"] >= 2020 and r["fix_mode"] >= 2]
@@ -345,6 +375,126 @@ def main():
     print(f"{os.path.basename(args.log)}: {len(ticks)} IMU ticks at {ekf_rate:.1f}/s, {len(frames)} RTCM frames "
           f"({dropped} dropped), inflight {t_inflight}, apogee flag {t_apogee}, landed {t_landed}, "
           f"pad context {'missing ' + ','.join(pcx['missing']) if pcx and pcx['missing'] else ('yes' if pcx else 'none')}")
+
+
+SBF_NAV_BLOCKS = (5891, 4002, 4081, 5893)   # GPSNav, GALNav, BDSNav, GPSIon
+
+
+def common_events(recs, config, ekf_rate, t_ref, inflight_of):
+    """The I, B, M, F and K events every log gives the harness. inflight_of(tick_us, k) says whether the loop was in
+    flight at an IMU tick (k: its NonSensor record)."""
+    ns = recs["NonSensor"]
+    state = np.array([r["rocket_state"] for r in ns])
+    apo = np.array([bool(r.get("apogee_flag", False)) for r in ns])
+    landed = np.array([bool(r.get("alt_landed", False)) for r in ns]) | (state == LANDED)
+    nt = unwrap([r["time_us"] for r in ns], t_ref)
+    events = []
+    ticks = imu_ticks(recs, config, ekf_rate, t_ref)
+    ki = np.searchsorted(nt, [tk[0] for tk in ticks], side="right") - 1
+    for tk, k in zip(ticks, ki):
+        k = max(int(k), 0)
+        inf = inflight_of(tk[0], k)
+        lvl = (not inf) or bool(apo[k])
+        lnd = bool(landed[k])
+        flags = (1 if lvl else 0) | (2 if inf else 0) | (8 if lnd else 0)
+        events.append((tk[0], 0, "I %d %r %r %r %r %r %r %d" % (tk[0], *tk[1:], flags)))
+    for r in recs.get("BMP585") or []:
+        tu = int(unwrap([r["time_us"]], t_ref)[0])
+        events.append((tu, 1, f"B {tu} {r['pressure_pa']!r}"))
+    for key in ("IIS2MDC", "MMC5983MA"):
+        for r in recs.get(key) or []:
+            tu = int(unwrap([r["time_us"]], t_ref)[0])
+            events.append((tu, 2, f"M {tu} {r['mag_x']!r} {-r['mag_y']!r} {-r['mag_z']!r}"))
+    for r in recs.get("GNSS") or []:
+        if r["year"] < 2020:
+            continue
+        week, tow_ms = gps_of_fix(r)
+        tu = int(unwrap([r["time_us"]], t_ref)[0])
+        events.append((tu, 3, f"F {tu} {week} {tow_ms} {r['fix_mode']} {r['num_sats']}"))
+    for r in recs.get("GnssClock") or []:
+        tu = int(unwrap([r["time_us"]], t_ref)[0])
+        events.append((tu, 4, f"K {tu} {r['gps0_s']!r} {int(r['mcu0_us'])} {r['a_s']!r} {r['t_ref_s']!r} "
+                              f"{r['drift']!r} {r['latency_s']!r} {1 if r['valid'] else 0}"))
+    return events, len(ticks)
+
+
+def extract_sbf(args):
+    """--sbf: a V8/V9 log with the mosaic-G5's SBF, for raw_replay --receiver mosaic (a cold start on the pad)."""
+    recs, _stats, config = P.parse_binary_file(args.log)
+    imu = recs["ISM6HG256"]
+    t_ref = int(imu[0]["time_us"])
+    ns = recs["NonSensor"]
+    nt = unwrap([r["time_us"] for r in ns], t_ref)
+    if args.ekf_rate:
+        ekf_rate = args.ekf_rate
+    else:
+        ek = np.array([r["ekf_ticks"] for r in ns], dtype=np.int64)
+        ekf_rate = float((np.diff(ek) % 65536).sum() / ((nt[-1] - nt[0]) * 1e-6))
+    state = np.array([r["rocket_state"] for r in ns])
+    apo = np.array([bool(r.get("apogee_flag", False)) for r in ns])
+    landed = np.array([bool(r.get("alt_landed", False)) for r in ns]) | (state == LANDED)
+    k3 = np.flatnonzero(state == INFLIGHT)
+    t_inflight = int(nt[k3[0]]) if k3.size else None
+    ka = np.flatnonzero(apo)
+    t_apogee = int(nt[ka[0]]) if ka.size else None
+    kl = np.flatnonzero(landed)
+    t_landed = int(nt[kl[0]]) if kl.size else None
+    lines = [f"# extract.py --sbf {os.path.basename(args.log)}",
+             f"META ekf_rate {ekf_rate:.3f}",
+             # flight time = MCU s + this: T+0 at the in-flight edge, the log's own clock without one
+             f"META t_base_s {(-t_inflight * 1e-6 if t_inflight is not None else 0.0)!r}",
+             f"META t_inflight_us {t_inflight if t_inflight is not None else -1}",
+             f"META t_apogee_flag_us {t_apogee if t_apogee is not None else -1}",
+             f"META t_landed_flag_us {t_landed if t_landed is not None else -1}"]
+    snap = recs.get("Snapshot") or []
+    gp = [r["ground_pressure_pa"] for r in snap if r.get("ground_pressure_pa", 0) > 0]
+    lines.append(f"META ground_pressure_pa {repr(float(gp[0])) if gp else -1}")
+    if args.seed_quat_from_log:
+        # the log's flight filter's attitude over its first 50 records with a unit quaternion, one sign
+        qs = [np.array([r["q0"], r["q1"], r["q2"], r["q3"]]) for r in ns]
+        qs = [q for q in qs if abs(np.linalg.norm(q) - 1.0) < 0.01][:50]
+        if not qs:
+            raise SystemExit("--seed-quat-from-log: no unit quaternion in the log's NonSensor records")
+        qm = sum(q if np.dot(q, qs[0]) >= 0 else -q for q in qs)
+        qm = qm / np.linalg.norm(qm)
+        lines.append("META seed_quat " + " ".join(repr(float(x)) for x in qm))
+
+    events, n_ticks = common_events(recs, config, ekf_rate, t_ref, lambda tu, k: bool(state[k] == INFLIGHT))
+    frames, dropped = P.join_gnss_rtcm(recs.get("GNSS_RTCM") or [])
+    raw = P.split_gnss_raw_frames(frames)
+    sbf = raw["sbf"]
+    if not sbf:
+        raise SystemExit("no SBF blocks in this log (an LC86G log: extract.py without --sbf)")
+    lines.append(f"META sbf_blocks {len(sbf)} dropped {dropped} bad {raw['bad']}")
+    t0 = min(e[0] for e in events) if events else int(unwrap([sbf[0][0]], t_ref)[0])
+    n_nav = 0
+    if not args.nav_as_logged:
+        # every navigation block of the log, just before its first event (in log order), marked: raw_replay files
+        # each issue when a receiver could first have had it
+        per = {n: 0 for n in SBF_NAV_BLOCKS}
+        for _tu32, b in sbf:
+            if P.sbf_block_number(b) in SBF_NAV_BLOCKS:
+                events.append((t0 - 1, -1, f"R {t0 - 1} {bytes(b).hex()} preload"))
+                n_nav += 1
+                per[P.sbf_block_number(b)] += 1
+        lines.append(f"META nav_preloaded {n_nav} gps {per[5891]} gal {per[4002]} bds {per[4081]} ion {per[5893]}")
+    else:
+        lines.append("META nav_preloaded 0")
+    for tu32, b in sbf:
+        tu = int(unwrap([tu32], t_ref)[0])
+        events.append((tu, 5, f"R {tu} {bytes(b).hex()}"))
+    events.sort(key=lambda e: (e[0], e[1]))
+    lines.extend(e[2] for e in events)
+    with open(args.out, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    names = {}
+    for _t, b in sbf:
+        nm = P.sbf_block_name(b)
+        names[nm] = names.get(nm, 0) + 1
+    top = ", ".join(f"{k} {v}" for k, v in sorted(names.items(), key=lambda kv: -kv[1])[:6])
+    print(f"{os.path.basename(args.log)}: {n_ticks} IMU ticks at {ekf_rate:.1f}/s, {len(sbf)} SBF blocks "
+          f"({dropped} frames dropped, {raw['bad']} bad; {top}), {n_nav} nav blocks preloaded, inflight "
+          f"{t_inflight}, apogee flag {t_apogee}, landed {t_landed}")
 
 
 if __name__ == "__main__":

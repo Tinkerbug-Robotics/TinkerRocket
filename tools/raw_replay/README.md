@@ -91,6 +91,242 @@ fused, levelling, zero-velocity updates, barometer samples fused and held, magne
 same metrics and phases; `onboard_vs_harness.py` puts the two side by side; `run_matrix.py` and `tables.py` run and
 tabulate the configuration matrix.
 
+## The V8/V9 with the mosaic-G5 (`--receiver mosaic`)
+
+On the mosaic-only build (the Goblin's V8 on 2026-10-24) the raw-GNSS filter is the one navigation filter, fed by
+the Septentrio mosaic-G5's SBF instead of the LC86G's RTCM. The same harness replays it from a V8/V9 OC log, with
+the firmware's own decoders, and runs the apogee quorum the flight computer would call from it.
+
+### Build and run
+
+The build makes two binaries from the same sources: `raw_replay`, whose ephemeris store holds the Beetle's 64, and
+`raw_replay_mosaic`, built with `TR_EPH_CAPACITY=128` as the mosaic-only image is. Use `raw_replay_mosaic` for the
+mosaic; each binary warns when it replays the other receiver. `RAW_REPLAY_MOSAIC` (on) compiles the mosaic path;
+turn it off to build against a tree from before fc/v9-raw-primary.
+
+```
+python3 tools/raw_replay/extract.py --sbf OC_LOG run.events          # a V8/V9 log with the mosaic's SBF in 0x95
+tools/raw_replay/build/raw_replay_mosaic --in run.events --out run.csv --receiver mosaic \
+    [--rinex BRDC00WRD_S_20262890000_01D_MN.rnx] [--unaided] [flags]
+```
+
+`extract.py --sbf` writes no S, A or P lines (the 10/16 and 10/17 logs carry no raw-filter records), puts every SBF
+block of 0x95 in R lines as it arrived (PVTGeodetic among them, so no V lines), and every navigation block (GPSNav,
+GALNav, BDSNav, GPSIon) once more just before the first event, marked `preload` (META `nav_preloaded N gps G gal E
+bds C ion I` counts them), unless `--nav-as-logged`: the receiver sends a satellite's ephemeris only when it changes,
+and the logs begin long after it started. The harness files a preloaded issue no earlier than a receiver can first
+have it, by the RINEX rule below (`rinex::availGpsS`), so an issue decoded later in the log is not handed over at
+the start; the GPSIon sets go through the ionosphere rule at once. That is still an estimate: a satellite this
+receiver decoded late (one rising: E02 came 1857 s after its toe on the cone-off log, against the rule's 665 s) can
+be filed before this receiver had it, and an issue the receiver held before the log began and never sent again is
+missing. On the 10/16 cone-off log the rule leaves 2 satellites with an ephemeris at the start (8 from T+367 s, 9
+from T+967 s), where filing everything at the start gave 9 from the first second. Use `--nav-as-logged` for a log
+the flight computer booted in (its esoc burst resends everything the receiver holds, so the log then holds exactly
+what the driver got) and for G9's comparison with the on-board 0x96 from that boot on. T+0 is the log's in-flight
+edge, or the log's own clock where it has none (META `t_base_s`, which a mosaic or cold-start run takes unless
+`--t-base-s` is given). I, B, M, F and K lines are as for the Beetle. `--seed-quat-from-log` writes META `seed_quat`
+from the log's own flight filter (NonSensor, the auto image's GpsInsEKF) for a cold start that should begin from
+its attitude. Its heading is then that filter's, and on a static pad nothing turns it (below), so never score
+heading against the log's quaternion from such a run; the harness warns when it takes META `seed_quat`.
+
+For the Beetle's and other non-SBF logs, `extract.py` (without `--sbf`) now also writes a `V` line beside each `F`:
+the receiver's fix as the flight loop's GPS voter gets it, so `--quorum` has its fourth voter. The 25 bitident files
+predate it and carry none.
+
+### What `--receiver mosaic` sets
+
+What `startRawShadow()` builds under `TR_RAW_NAV_MOSAIC` (build_units D1a; checked against fc/v9raw-d 2502c322):
+
+- `mosaicG5Profile()` (v0), with `--fuse-ms` (`TR_BENCH_RAW_FUSE_MS`) and `--sat-cap` (`TR_BENCH_RAW_SAT_CAP`)
+  applied to it first, then `applyReceiverProfile`;
+- the navigation filter's settings (`primary`, 100 steps a second, 2.5 ms slices, `external_build`);
+- the restore sigmas (100 m, 20 m/s, 15 deg) and the snapshot's accelerometer bias, `level_on_fused_epochs`;
+- the heading at the firmware's defaults (`--fw-defaults`, which now also takes `--heading-mode` to the primary
+  build's `TR_HEADING_FIT` 2 unless given): act, the whole attitude from launch (`RAW_HEADING_GATE` 1), the 10/30 deg
+  prior, no hand-off, the 0.6 deg tilt floor;
+- each epoch handed to the GNSS task's stage 30 ms after its block arrived (`--epoch-delay-ms`; there is no on-board
+  age to match yet, and the P4's build time is not measured).
+
+The SBF blocks go through `mosaic_feed.h`, which does what the driver (`rawMeasEpoch`, `rawPvt`) and the GNSS task
+(`rawGnssMeasTask`) do with them:
+
+- every MeasEpoch's clock jumps are followed (`MosaicJumpState`); those on the fused grid (`onFuseGrid`, the
+  profile's 100 ms) become RawEpochs (`rawEpochFromMeasEpoch`), and an empty one is not handed over;
+- an epoch's GPS time is its receiver time less the clock bias of the last PVTGeodetic that anchors the jump count
+  (`pvtAnchorsJumps`), carried by its drift and the jumps since (`dtrMs`), at most 1 s and while the count has not
+  started over; without one the bias is taken as 0 and counted (`dtr_zero`). The log's clock line (K, the PPS fit)
+  then places it on the MCU clock only where the driver would (`rawTimeTagOk`, `mosaic_feed.h` `TimeTagGate`): the
+  line valid, the receiver's last ReceiverTime saying FINETIME, and a 1PPS edge paired within 120 s (each pairing
+  moves the line, so each K line is one). Before the log's first ReceiverTime and first K line those first ones
+  stand for the earlier (the log begins long after the receiver did); `--time-tag-from-boot` leaves epochs untimed
+  until them, as after a boot. A log with no ReceiverTime at all is untimed, as the driver would leave it, with a
+  warning (`--assume-finetime` times it). The events JSON's `time_tag` counts the untimed epochs by reason;
+- navigation blocks are kept as the driver keeps them (`sbfNavKeep`: no Galileo F/NAV, no BeiDou GEO), decoded
+  (`decodeSbfEphemeris`) and filed with the stage's `addEphemeris`;
+- GPSIon goes through the GNSS task's one ionosphere rule (the firmware's `raw_iono_rule.h` where the tree has it,
+  else the same rule in `mosaic_feed.h`) to the stage and the filter;
+- PVTGeodetic is the flight loop's fix (`gnssDataFromPvt`, the converter's units), and its geoid separation turns
+  the filter's heights for the loop (`RawNavAdapter::setGeoidSeparation`).
+
+The cut, corrupt and relock faults (`--cut-from-s`, `--corrupt-at-s`, `--relock-min-lock-ms`) apply to the decoded
+epochs as for the LC86G. On a mosaic or cold-start replay they are keyed on flight time (the epoch's MCU time, its
+arrival where untimed, plus `t_base_s`: the CSV's `t_s` and the quorum's frame), and the corrupted epoch is the one
+within half a fused period of `--corrupt-at-s`. `--truth-t0-tow` keys them on the GPS time of week less T+0's
+instead, as the Beetle's rig runs are (the rig scenario's by default). A cut that cuts no epoch or a corruption that
+hits no satellite is a warning on every run and fails a mosaic or cold-start run with exit status 3 (the events
+JSON's `cut` and `corrupted_sats`, and `faults_clock`, say what happened). The LC86G's 1 Hz lock-history seeding and
+the A-line age matching apply only to a restored LC86G start.
+
+### The cold start (`--cold-start`; automatic without an S line)
+
+The filter starts on the pad as the mosaic-only image starts it, through `RawNavAdapter` as main.cpp does: at the
+first IMU tick once the receiver's position is known (META `seed_lla` "lat_deg lon_deg h", the height above the
+geoid, else the first PVTGeodetic with a solution), `init()` with that position and the last 16 ticks' mean gyro,
+`setQuaternion()` from the tick's accelerometer and the pad heading guess (`quatFromAccelHeading`,
+`--seed-heading-deg`, `config::PAD_HEADING_DEG` 0; META `seed_quat` "w x y z" instead), `setDeclination()` and
+`setMagReference()` from WMM2025 at the pad (`TR_GeoMag`, on META `decimal_year` or the first fix's date; META
+`declination_rad` and `field_ned_ut` "n e d" instead), with `--mag-error-deg` added to the declination as
+`TR_BENCH_HEADING_ERROR_DEG` does; then `startSeed()`, published once a second as the seed. The ground pressure is
+META `ground_pressure_pa`, else the first second's mean. The NED origin of the CSV is `--pad`, else META `pad_lla`
+"lat_deg lon_deg h", else the seed's position.
+
+### The day's broadcast ephemerides (`--rinex FILE`, repeatable)
+
+`rinex_nav.cpp` reads RINEX 3 navigation files into `gps_eph_t` by `SbfNav.cpp`'s conventions (full GPS week of toe;
+toe and toc in the system's own time, BeiDou's BDT; GPS T_GD, Galileo BGD(E5b,E1) of the I/NAV clock, BeiDou TGD1;
+health 0 usable, with SbfNav's Galileo no-status and no-SISA marks; IODE/IODC, IODnav, AODE/AODC). Galileo F/NAV
+(data source bit 1, or no E5b,E1 clock), BeiDou GEO and every other system are left out. A record reaches the stage
+no earlier than a receiver first has it, by the mosaic's own nav blocks (the 10/15 P1 capture and the 10/16 logs): a
+GPS set 2 h before its toe, a Galileo I/NAV batch 665 s after its toe, a BeiDou set 18 s after (BDT). Before each
+epoch is offered, the two latest such records of each satellite the epoch carries are filed (`addEphemeris`; a
+merged file's repeats of one issue are filed once), and none more than 4 h from the epoch (counted `rinex_stale`).
+The approved file is `gnss-attitude-study/v9-mosaic-filter-plan/reference/rinex-2026-289/`.
+
+### The unaided twin (`--unaided`)
+
+`RawGnssEKFParams::att_gnss_off`: the GNSS rows' gain on the attitude and the gyro bias is masked at the update, as
+the acceptance compares (plan section 4); the levelling, the magnetometer, the barometer and ZUPT act as ever. The
+carrier update is not masked, so `--carrier 2` is refused with it. (The GNSS rows still move the accelerometer bias,
+which the levelling takes out: TR_RawGnssEKF.h says so.)
+
+### The apogee quorum (`--quorum`; on with the mosaic)
+
+`flight_votes.h` runs main.cpp's kinematics block a flight-loop pass at a time (`--loop-hz`, 1000) with the
+firmware's code: `RawNavAdapter` (the filter's published state brought forward through the IMU ticks, its health,
+heights above the geoid), the transonic lockout on its speed, the pad reference (`ref_alt_m`: the receiver's fixes,
+then the filter's own heights from its first GNSS-aided state, frozen at launch), `GnssAscentGate` (admitted against
+the barometer only on the mosaic: `ekf_valid` false), the raw vote guard (`raw_vote_guard.h`, stepped after the gate
+with `baroFusable`, reset at launch; it withholds the filter's two votes once latched, `--vote-guard 0` only reports
+it), `TR_KinematicChecks` (the four leaky voters, the 2-of-N quorum, the Layer-2 backstop) and `tr::burnoutDetectStep`.
+Its inputs: each IMU tick, each barometer sample (pressure altitude on the ground pressure), and the receiver's fix:
+each PVTGeodetic in the log, or `V` events (a sim's, or `extract.py`'s from a non-SBF log's GNSS records).
+
+With the quorum on, the filter's tick flags are the quorum's, as `rawShadowPushImu` builds them
+(`FlightVotes::shadowFlags`): `kShadowApogee` is its own call; the levelling in flight (`kShadowLevel`, the
+firmware's `use_ahrs_acc`) starts at that call, so each twin's descent levelling starts at its own call; and
+`kShadowLanded` is its kinematics' landed flag or the LANDED state. The events file's level bit is ignored in flight
+and its landed bit counts only once the ticks are no longer in flight. The launch and the landing themselves (the
+in-flight flag, `enterInflight`'s resets) are the ticks' own edge by default, a log's state machine; with
+`--flight-state quorum`, or by default for an events file that says META `state_machine none` (a sim, which has no
+flight computer behind its flags), they are the quorum's: INFLIGHT in the pass its kinematics' launch flag latches,
+LANDED after `landing_transition`'s dwell on its landed flag, as main.cpp's state machine does. The barometer
+reaches the filter through the same transonic lockout and stuck-barometer gate the EKF tick applies.
+
+A voter that never existed changes the quorum (2-of-3 instead of 2-of-4, another latency): with no receiver fix or
+no barometer sample (no META `ground_pressure_pa` on a restored run) the harness warns, and a mosaic run exits with
+status 3. With the quorum on, the events JSON leaves out the older `pitch_vote_t`/`vel_vote_t` (first votes from
+`--burnout-s` with simplified thresholds): read `quorum.votes`.
+
+The guard has a gap the coherent coast fault falls in (G4/G5's pattern: the Dopplers and the PVT biased together by a
+ramp from 0 to 5 m/s low over the 3 s before apogee). It latches only on a filter more than 10 m/s below the
+barometer's rate, so at 5 m/s it never does: in `test_raw_replay_votes` (`ACoherentCoastRampIsTheGuardsGap`) the
+filter's velocity votes 0.43 s before the true apogee with the rocket still climbing at 4.2 m/s, and the GPS vote
+joins it for a call 0.17 s early (true vz 1.7 m/s). G5's bar of no raw vote above +2 m/s fails on that pattern
+whatever this guard does; it needs another safeguard or another bar (an open item with the user). The test's 15 m/s
+coherent fault (`ACoherentReceiverFaultIsWhatTheGuardIsFor`) shows the guard working on a fault it is built for,
+not G5's pattern.
+
+The events JSON gains `quorum`: the launch, the kinematics' own launch flag, burnout, GNSS admission (and why), the
+guard's latch (with the filter's vz and the barometer's rate then), the apogee call and the backstop, as flight times;
+each voter's rises and falls (`votes.vel`, `.baro`, `.gps`, `.pitch`: `on` and `off` lists), so a table can count
+votes cast while the true vertical velocity is above +2 m/s; and what stood at the call (`at_call`: which voters
+passed and were available, vz, pitch, the barometer's rate, the receiver's vU, the height). With the mosaic it also
+has `receiver`, `stage` (epochs, untimed, built, ephemerides, `eph_sats`, `tracked_no_eph`, `capped_out`), `sbf`
+(the feed's counts: off the grid, empty, tagged without a bias, clock jumps, nav blocks kept and dropped, ionosphere
+sets, CRC failures), `eph_from` (the log's own, preloaded and when filed, RINEX, N events), `time_tag`,
+`faults_clock`, the pad's zero-velocity updates (`pad_zupt`, `pad_zupts`, `landed_zupts`), `doppler` (each closed
+epoch's Dopplers fused, refused, and its largest NIS: median and p95) and `mag` (samples handed, fused, refused as
+uncalibrated, off the model's size or its dip; the median |B| against the model's). The 25 bitident files carry no
+receiver velocity, so their quorum has three voters unless re-extracted with `V` lines.
+
+### New event lines
+
+| Line | Fields | |
+|---|---|---|
+| `V t fix_mode sats alt_m vel_n vel_e vel_u` | a receiver fix (a sim's PVT, or a non-SBF log's GNSS record): the GPS voter's and GnssAscentGate's | alt above the geoid, the filter's datum |
+| `R t hex preload` | a navigation block `extract.py --sbf` put at the start: filed when a receiver has it | |
+| `META state_machine none` | the ticks' in-flight and landed flags are not a flight computer's (a sim): the quorum's own state | |
+| `N t sys prn week iode iodc health ura toe toc sqrt_a e i0 omega0 omega m0 delta_n idot omega_dot cuc cus crc crs cic cis af0 af1 af2 tgd` | an ephemeris in `gps_eph_t`'s units, to the stage | |
+| `META seed_lla`, `seed_quat`, `decimal_year`, `declination_rad`, `field_ned_ut`, `pad_lla` | the cold start's (above) | |
+
+'F' stays the LC86G's fix (week, time of week, mode, satellites), so the Beetle's files parse as before.
+
+### Scoring a static log: what it can and cannot show
+
+- **Velocity.** On the pad the filter takes a zero-velocity update every 0.1 s while still (`pad_zupt`) and levels
+  against gravity, and between them they hold a static log's velocity to millimetres a second whatever the receiver
+  gives: on the 10/16 outdoor log, the log's own nav (one satellite with an ephemeris) scores 0.006/0.002/0.006 m/s
+  rms, better than RINEX's nineteen (0.018/0.015/0.020). `--gnss-only-from-s T` stops both from flight time T on the
+  ground (the IMU, GNSS and the barometer alone, as in flight), and then the two separate: 0.89/0.24/0.025 m/s with
+  the one satellite, 0.021/0.016/0.021 with RINEX (from 20 s into the log, scored from 2 s later). Score G3's static
+  velocity from such a run, with the `doppler` counts beside it. (`--pad-zupt 0` turns the ZUPT off from the start
+  but keeps the levelling, which on a static pad still holds the horizontal velocity: 0.001/0.005/0.025 with the one
+  satellite.)
+- **Heading.** With the antenna on the IMU (r = 0) a still receiver says nothing about heading, so on a static pad
+  only the magnetometer can, and on the 10/16 logs it never does: they read |B| 70-73 uT against the model's 50.5
+  (uncalibrated), so every sample fails the field's size gate and none is fused. The heading there is the seed's and
+  the gyro's; `--mag-error-deg` changes nothing (byte-identical CSVs at 0 and 40), and the harness warns whenever a
+  run fused no magnetometer sample. So G3's heading p95 and the magnetometer-error arms cannot be tested on these
+  logs as recorded, and seeding from the log's quaternion (`--seed-quat-from-log`) would pass the heading check by
+  construction. They become testable on a log whose magnetometer passes the filter's gates (after the stored
+  calibration, G10), or on the spin rig's turns scored against the rig's own angle, not the log's GpsInsEKF.
+
+### What it does not reproduce
+
+- The driver's 1PPS pairing itself: the log's clock line is used as it was logged, and its K lines stand for the
+  pairings (a pairing whose clock record the driver's queue dropped is missed). The 3-deep epoch queue and the
+  two-slot built-epoch handoff never fill here.
+- The GNSS task's cadence and the P4's build time: one 30 ms delay for every epoch.
+- MeasExtra, the carrier (off on the mosaic), the PPS tag check (`ppsResidualUs`; the driver's console counts it).
+- The flight loop's own rate and phase: the passes are a regular grid; the burnout detector and the launch fallbacks
+  see the IMU tick's mean, not the 3840 Hz samples.
+
+### Checked (2026-10-17, on fa7b2e2b + this lane)
+
+- With no new flag, the 25 Beetle events files give byte-identical CSVs, events JSON and digests against the
+  harness at fa7b2e2b: 150 runs (as recorded, flown, unaided observe, `--fw-defaults` act and observe with the
+  emulated clock, cut and corrupt with the relock rule). The console is identical too but for three cut runs (a10,
+  r19, r26), where it now says the corruption at T+1 hit no satellite.
+- The 10/16 outdoor log (60 s, 3788 Hz IMU): 599 epochs at 10 Hz, all timed (598 with a PVT's bias; ReceiverTime
+  FINETIME, a K line a second), no non-finite row, no stop; the log's own nav gives one satellite an ephemeris
+  (Galileo), RINEX all 19 tracked. With RINEX the static velocity is 0.015-0.020 m/s rms per axis after 20 s with
+  the pad's ZUPT and levelling on, and 0.021/0.016/0.021 on GNSS alone (`--gnss-only-from-s`, above); 16 satellites
+  fused an epoch (the cap). Its magnetometer is never fused (above).
+- The 10/16 cone-off spin-rig log (26 min): Galileo-only from its own nav (no download), but with each preloaded
+  issue filed when a receiver could have it, only 2 satellites have an ephemeris at the start and the filter is
+  unaided for the first ~6 minutes; 8 from T+367 s, 9 from T+967 s (filing everything at the start had shown 9 and
+  aided throughout). With RINEX 26. Its -1 ms clock jump (T+1306 s) steps the clock bias by c x 1 ms with no
+  velocity step above the noise and nothing refused. About 7-10 s a run.
+- RINEX against the SBF decoder: every nav block of both 10/16 captures (GPS 3, Galileo 29, BeiDou 12) has its
+  issue in the day-289 file, and the two place the satellite alike within 0.1 mm and its clock within 1 ps over
+  toe +-2 h, health read the same (`test_rinex_nav`, private run).
+- The quorum on nine Beetle rig logs (`--quorum`, the Beetle's `ekf_valid` gate): the harness's call falls within
+  15 ms of the flight computer's own on eight (velocity and pitch), and 147 ms later on f2 without the receiver's
+  fixes. Re-extracted with `V` lines, f2 calls at T+12.423 on velocity and GPS (GNSS admitted at T+6.52), 1 ms
+  before the flight computer's T+12.424: the GPS voter path reproduces a real call. c30, f3c, r16 and r21 with `V`
+  lines call as before (within 14 ms). The mosaic's barometer-only admission (`ekf_valid` false) has not met a real
+  flight yet.
+
 ## The Beetle's bit-identity check (`bitident.sh`, `../m1_identity.sh`)
 
 Code the Beetle (M1, LC86G) shares with the mosaic-G5 work must leave the Beetle's filter bit-identical. Two scripts
@@ -141,8 +377,10 @@ step; the pad context is taken as main.cpp's raw task takes it, at most one reco
 counters and the state. Every field is named in `raw_replay.cpp`, so a tree that only adds fields hashes the same.
 
 `--fw-defaults` applies `--pad-sigma-deg`, `--handoff-deg`, `--gate-full` and `--tilt-sigma-deg` only when given, and
-leaves the rest at `RawGnssShadow::Config`'s defaults, so the replay flies what the Beetle flies. Without it the
-harness sets all four from its own defaults (30, 10, 0, 0: the earlier rig studies'), as before.
+leaves the rest at `RawGnssShadow::Config`'s defaults, so the replay flies what the Beetle flies; `--heading-mode`,
+when not given, is then the primary build's `TR_HEADING_FIT` (2, act). Without it the harness sets all five from its
+own defaults (observe, 30, 10, 0, 0: the earlier rig studies'), as before. (bitident.sh always gives the heading
+mode, and builds its own frozen harness.)
 
 What `bitident.sh` cannot see:
 
