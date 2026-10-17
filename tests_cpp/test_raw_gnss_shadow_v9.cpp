@@ -10,7 +10,7 @@
 // The flights are test_raw_gnss_shadow.cpp's synthetic sky: the Beetle's own
 // ephemerides (fixtures/raw_meas_golden.h) giving each satellite's
 // pseudorange and range rate for a receiver whose truth the test sets, here
-// an epoch every 0.1 s on the GPS-time grid.
+// an epoch every 0.1 s on the GPS-time grid, through the mosaic-G5's profile.
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -21,6 +21,7 @@
 
 #include "LevelGate.h"
 #include "RawGnssShadow.h"
+#include "ReceiverProfileApply.h"
 #include "RtcmEphemeris.h"
 #include "ShadowLink.h"
 #include "fixtures/raw_meas_golden.h"
@@ -60,23 +61,11 @@ RawGnssShadow::Config primaryCfg()
     return c;
 }
 
-// The mosaic-G5's 10 Hz switches and timing on the navigation filter's
-// config (its profile, ReceiverProfile.h, is to set them)
+// The mosaic-G5's: its profile on the navigation filter's config
 RawGnssShadow::Config mosaicCfg()
 {
     RawGnssShadow::Config c = primaryCfg();
-    c.ekf.rr_lag_s = 0.0;                  // its Dopplers on time
-    c.ekf.cr_mode = gnss_raw::kCarrierOff;
-    c.ekf.reject_persist_rr = 30;          // 3 s at 10 Hz
-    c.meas.carrier = false;
-    c.meas.epoch_period_s = 0.1;
-    c.meas.relock_gap_s = 0.5;
-    c.max_epoch_age_s = 0.3;
-    c.epoch_job_max_s = 0.2;
-    c.pr_period_s = 1.0;
-    c.rr_dyn_window_s = 1.0;
-    c.heading_fit_period_s = 1.0;
-    c.level.min_dt_s = 0.95;
+    gnss_raw::applyReceiverProfile(gnss_raw::mosaicG5Profile(), c);
     c.meas.troposphere = false;            // the synthetic sky has none
     return c;
 }

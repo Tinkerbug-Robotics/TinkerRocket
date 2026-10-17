@@ -1,6 +1,7 @@
 # The raw-GNSS filter's core switches for the mosaic-G5 (fc/v9raw-core): each
 # at its default the Beetle's filter exactly, and at the mosaic's values what
-# the build plan says.
+# the build plan says. The mosaic-G5's profile and the Beetle's tripwires are
+# test_receiver_profile's (tests_cpp/CMakeLists.txt).
 
 # ---------- test_raw_gnss_ekf_v9 ----------
 # TR_RawGnssEKF: the unaided twin (att_gnss_off: GNSS kept off the attitude
@@ -21,7 +22,7 @@ target_link_libraries(test_raw_gnss_ekf_v9 GTest::gtest_main)
 gtest_discover_tests(test_raw_gnss_ekf_v9)
 
 # ---------- test_raw_gnss_shadow_v9 ----------
-# RawGnssShadow and LevelGate at 10 Hz, at the mosaic-G5's settings on the
+# RawGnssShadow and LevelGate at 10 Hz, through the mosaic-G5's profile on the
 # synthetic sky (fixtures/raw_meas_golden.h): the pseudorange once a second
 # with gnss_aided held, the Doppler's stress held a second after burnout, the
 # heading fit an epoch a second, a restored flight's sigmas and accelerometer
