@@ -52,6 +52,7 @@ Patterns (G4/G5):
   slow12, slow15 (a slow coherent ramp, 2 or 2.5 m/s a second, ending at 12 or 15 m/s at the true apogee: it
      starts 6 s before it, never before burnout, then held), slow15b (0 -> 15 m/s over 6 s from burnout, then held):
      the filter accepts these and reads more than 10 m/s low before apogee -- the raw vote guard's own case;
+     slow08 (the same ramp to 8 m/s: between the plan's 5 m/s and the guard's 10 m/s, its gap);
   baro_lagT (T = 0.5, 0.7, 1.0 s: the static port's first-order lag, GNSS clean -- a sensitivity sweep; nothing
      on the Goblin's port is measured).
 The faults are tc_ekf_eval.run's (Grid A's) where it has them, applied before the PRN mapping as it applies them.
@@ -91,8 +92,8 @@ CORRUPT = (0.43, 36.0, 70.0)  # the epoch before a cut: this share of its Dopple
 W_EARTH = np.array([0.0, 0.0, OMGE])
 
 PATTERNS = ("none", "cut05", "cut15", "cut30", "gap05", "gap15", "gap30", "stale_rx", "stale_sats", "settle15",
-            "settle40", "lol0", "lol1", "lol2", "lol3", "coherent", "coherent15", "slow12", "slow15", "slow15b",
-            "baro_lag05", "baro_lag07", "baro_lag10")
+            "settle40", "lol0", "lol1", "lol2", "lol3", "coherent", "coherent15", "slow08", "slow12", "slow15",
+            "slow15b", "baro_lag05", "baro_lag07", "baro_lag10")
 
 
 def cn0_sigma(a, b, cn0):
@@ -351,7 +352,7 @@ def pattern_params(pattern, t_burn, t_apo):
         p["coh"] = (5.0, 3.0, t_apo - 3.0)
     elif pattern == "coherent15":
         p["coh"] = (15.0, 1.0, t_apo - 3.0)
-    elif pattern in ("slow12", "slow15"):
+    elif pattern in ("slow08", "slow12", "slow15"):
         p["coh"] = (float(pattern[4:]), 6.0, max(t_apo - 6.0, t_burn))
     elif pattern == "slow15b":
         p["coh"] = (15.0, 6.0, t_burn)

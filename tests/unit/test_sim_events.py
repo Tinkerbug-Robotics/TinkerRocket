@@ -164,6 +164,8 @@ class PatternTest(unittest.TestCase):
         self.assertEqual(coh[2], 1.19)
         self.assertAlmostEqual(sim_events.coherent_bias(1.19, coh), 0.0)
         self.assertAlmostEqual(sim_events.coherent_bias(6.72, coh), 15.0 * (6.72 - 1.19) / 6.0)
+        self.assertAlmostEqual(sim_events.coherent_bias(t_apo, sim_events.pattern_params(
+            "slow08", t_burn, t_apo)["coh"]), 8.0)
         coh = sim_events.pattern_params("slow15b", t_burn, t_apo)["coh"]
         self.assertAlmostEqual(sim_events.coherent_bias(t_burn + 6.0, coh), 15.0)
         self.assertAlmostEqual(sim_events.coherent_bias(t_apo + 5.0, coh), 15.0)   # held

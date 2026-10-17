@@ -10,14 +10,18 @@ and its unaided twin:
   - "none30": no magnetometer (--mag-flags 0: every sample refused, so the 30 deg prior), the seed's heading a
     guess 30 deg off (+30 on seeds 1 and 3, -30 on 2 and 4).
 The flight design is the mosaic build's defaults (--receiver mosaic: profile v0, the 16-satellite cap, act with
-the whole attitude from launch, the quorum with the raw vote guard); the twin adds --unaided. Each run is scored
-as it finishes (sim_tables.score_run) and its CSV removed unless --keep-csv names its pattern; the scores go to
-OUT/scores/, and sim_tables.py makes the tables. The events files and each flight's truth (truth/<flight>.npz,
-which the scores are made against) are in --events-dir.
+the whole attitude from launch, the quorum with the raw vote guard as flight_votes.h wires it -- D1b's wiring,
+assumed: no firmware tree has it yet); the twin adds --unaided; "noguard" is the flight design with the guard
+observed, not applied (--vote-guard 0: the quorum as RC0's main.cpp has it). Every run also flies the quorum on the
+flight's truth beside it (--truth-nav: the truth's own call). Each run is scored as it finishes
+(sim_tables.score_run) and its CSV removed unless --keep-csv names its pattern; the scores go to OUT/scores/, and
+sim_tables.py makes the tables. The events files and each flight's truth (truth/<flight>.npz, which the scores
+are made against, and truth/<flight>.nav, which the truth's quorum reads) are in --events-dir.
 
     PYTHONPATH=<simbuild>/tinkerrocket-sim/src:<gnss-hf-sim>/sim \\
         python3 tools/raw_replay/sim_grid.py OUT --flights <grid>/flights [--patterns none,cut05,...] \\
-        [--mags 0,+10,...] [--jobs 8] [--binary tools/raw_replay/build/raw_replay_mosaic] [--lever-arm 0.3]
+        [--mags 0,+10,...] [--arms design,unaided,noguard] [--jobs 8] \\
+        [--binary tools/raw_replay/build/raw_replay_mosaic] [--lever-arm 0.3] [--harness-args "..."]
     python3 tools/raw_replay/sim_tables.py OUT
 """
 from __future__ import annotations
@@ -35,6 +39,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 MAGS = ["0", "+10", "-10", "+40", "-40", "none30"]
+ARMS = ["design", "unaided", "noguard"]
 
 
 def make_events(job):
@@ -63,7 +68,7 @@ def read_meta(events):
 
 
 def run_one(job):
-    events, mag, arm, binary, runs_dir, scores_dir, keep = job
+    events, mag, arm, binary, runs_dir, scores_dir, keep, extra = job
     import sim_tables
     base = os.path.basename(events)[:-len(".events")]
     flight, pattern = base.split("__")
@@ -80,6 +85,14 @@ def run_one(job):
         args += ["--mag-error-deg", mag.lstrip("+")]
     if arm == "unaided":
         args.append("--unaided")
+    elif arm == "noguard":
+        args += ["--vote-guard", "0"]
+    elif arm != "design":
+        raise SystemExit(f"unknown arm {arm}")
+    nav = os.path.join(os.path.dirname(events), "truth", flight + ".nav")
+    if os.path.exists(nav):
+        args += ["--truth-nav", nav]
+    args += extra
     t0 = time.time()
     p = subprocess.run(args, capture_output=True, text=True)
     dt = time.time() - t0
@@ -108,7 +121,9 @@ def main():
     ap.add_argument("--flights", required=True, help="E0's grid/flights (the pickles and truth_phases.json)")
     ap.add_argument("--patterns", default="all")
     ap.add_argument("--mags", default=",".join(MAGS))
-    ap.add_argument("--arms", default="design,unaided")
+    ap.add_argument("--arms", default=",".join(ARMS))
+    ap.add_argument("--harness-args", default="", help="more raw_replay arguments for every run (an experiment: "
+                                                         "use a new OUT, the scores record them)")
     ap.add_argument("--only", default="", help="flight names (comma-separated) to run, default every one")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
     ap.add_argument("--binary", default=os.path.join(HERE, "build", "raw_replay_mosaic"))
@@ -144,7 +159,8 @@ def main():
     if not os.path.exists(a.binary):
         raise SystemExit(f"no harness at {a.binary}: build tools/raw_replay first")
     keep = set(a.keep_csv.split(",")) if a.keep_csv else set()
-    rjobs = [(e, m, arm, a.binary, runs_dir, scores_dir, keep) for e in events for m in a.mags.split(",")
+    extra = a.harness_args.split()
+    rjobs = [(e, m, arm, a.binary, runs_dir, scores_dir, keep, extra) for e in events for m in a.mags.split(",")
              for arm in a.arms.split(",")]
     t1 = time.time()
     n = 0
