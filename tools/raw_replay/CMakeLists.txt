@@ -26,12 +26,19 @@ option(RAW_REPLAY_FITGATE "the firmware tree has the Dopplers' fit gate (rr_fit_
 set(LIB_DIR "${SRC_ROOT}/tinkerrocket-idf/components")
 set(FC_MAIN "${SRC_ROOT}/tinkerrocket-idf/projects/flight_computer/main")
 set(SHIM_DIR "${SRC_ROOT}/tests_cpp/host_shim")
+# A later tree whose filter needs a source file or include directory this list does not name: its paths, relative
+# to SRC_ROOT (';'-separated). bitident.sh builds this file as it was frozen, so a tree that grows is linked here,
+# not by editing it.
+set(RAW_REPLAY_EXTRA_SRC "" CACHE STRING "more firmware sources, relative to SRC_ROOT")
+set(RAW_REPLAY_EXTRA_INC "" CACHE STRING "more include directories, relative to SRC_ROOT")
+list(TRANSFORM RAW_REPLAY_EXTRA_SRC PREPEND "${SRC_ROOT}/")
+list(TRANSFORM RAW_REPLAY_EXTRA_INC PREPEND "${SRC_ROOT}/")
 
 set(CARRIER_SRC ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssCarrier.cpp ${LIB_DIR}/TR_GNSSRaw/RawMeasCarrier.cpp)
 if(RAW_REPLAY_OLD)
     set(CARRIER_SRC "")
 endif()
-add_executable(raw_replay raw_replay.cpp ${CARRIER_SRC}
+add_executable(raw_replay raw_replay.cpp ${CARRIER_SRC} ${RAW_REPLAY_EXTRA_SRC}
     ${LIB_DIR}/TR_RawGnssShadow/RawGnssShadow.cpp
     ${LIB_DIR}/TR_RawGnssShadow/RawGnssMeasStage.cpp
     ${LIB_DIR}/TR_RawGnssShadow/PadSurvey.cpp
@@ -57,6 +64,7 @@ target_include_directories(raw_replay PRIVATE
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
     ${LIB_DIR}/TR_RocketComputerTypes
     ${FC_MAIN}
+    ${RAW_REPLAY_EXTRA_INC}
 )
 target_compile_definitions(raw_replay PRIVATE RAW_REPLAY_OLD=$<BOOL:${RAW_REPLAY_OLD}>
     RAW_REPLAY_VCHECK=$<BOOL:${RAW_REPLAY_VCHECK}>

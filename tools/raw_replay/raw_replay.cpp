@@ -28,6 +28,12 @@
 // vertical by the difference, as the magnetometer would have on the pad, and
 // north (the declination the filter takes the magnetometer with) with it.
 // See README.md for what is and is not reproduced.
+//
+// --digest FILE writes one line of hashes per filter step over a fixed, named
+// list of what the step left (the navigation state, the records it would log,
+// its counters, the filter's whole state), and --fw-defaults leaves the
+// heading's settings at the firmware's defaults, as the flight image without
+// bench flags has them: bitident.sh compares two firmware trees that way.
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -40,6 +46,7 @@
 #include <map>
 #include <memory>
 #include <new>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -73,6 +80,9 @@ using namespace gnss_raw;
 #else
 #define CR(x) (x)
 #endif
+
+// --digest names fields the flown design has (the vertical check and its latch): bitident.sh's builds
+#define RAW_REPLAY_DIGEST (!RAW_REPLAY_OLD && RAW_REPLAY_VCHECK && RAW_REPLAY_LATCH)
 
 namespace
 {
@@ -173,6 +183,9 @@ struct Args
     double rr_dyn_tau_s = -1.0;      // the receiver profile's rr_dyn_tau_s (the Doppler's settling) -- a
                                      //   RAW_REPLAY_DYNMEM build
     double max_epoch_age_s = -1.0;   // RawGnssShadow::Config::max_epoch_age_s (0.6 s): later, an epoch is dropped
+    std::string digest;              // a line of hashes per filter step (bitident.sh)
+    bool fw_defaults = false;        // the heading's settings at the firmware's defaults unless given (bitident.sh)
+    std::set<std::string> given;     // the options on the command line
 };
 
 void usage()
@@ -194,7 +207,7 @@ void usage()
                  "  [--boost-screen 0|1|2] [--boost-screen-g X] [--pad-sigma-fallback-deg X] [--mag-recent-s X]\n"
                  "  [--level-heading-free 0|1] [--mag-flags N] [--compare-sequential] [--no-apogee-flag]\n"
                  "  [--max-epoch-age-s X] [--vert-check-mps X] [--boost-screen-window-s X] [--rr-dyn-tau-s X]\n"
-                 "  [--rr-dyn-sigma X] [--vert-release-mps X] [--rr-fit-gate X]\n");
+                 "  [--rr-dyn-sigma X] [--vert-release-mps X] [--rr-fit-gate X] [--fw-defaults] [--digest FILE]\n");
 }
 
 bool parseArgs(int argc, char** argv, Args& a)
@@ -202,6 +215,7 @@ bool parseArgs(int argc, char** argv, Args& a)
     for (int i = 1; i < argc; ++i)
     {
         std::string k = argv[i];
+        a.given.insert(k);
         auto val = [&](void) -> const char* {
             if (i + 1 >= argc)
             {
@@ -272,6 +286,8 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--rr-dyn-sigma") a.rr_dyn_sigma = std::atof(val());
         else if (k == "--vert-release-mps") a.vert_release_mps = std::atof(val());
         else if (k == "--rr-fit-gate") a.rr_fit_gate = std::atof(val());
+        else if (k == "--digest") a.digest = val();
+        else if (k == "--fw-defaults") a.fw_defaults = true;
         else if (k == "--acc-sub")
         {
             if (std::sscanf(val(), "%lf,%lf,%lf", &a.acc_sub[0], &a.acc_sub[1], &a.acc_sub[2]) != 3)
@@ -918,6 +934,263 @@ void guardedEpoch(RawGnssShadow& sh, const BuiltEpoch& b, int64_t t_us, uint8_t 
     f.p_.gate_chi2 = saved.gate_chi2;
 }
 
+#if RAW_REPLAY_DIGEST
+// ---- --digest: what a step left, hashed field by field. The lists below are
+// fixed (bitident.sh builds this file frozen at the commit that added it):
+// every field is named, so a tree that only adds fields hashes the same, and
+// any change to what the Beetle's filter does with today's fields does not.
+struct Fnv
+{
+    uint64_t h = 1469598103934665603ULL;   // FNV-1a, 64-bit
+    void add(const void* p, size_t n)
+    {
+        const uint8_t* b = static_cast<const uint8_t*>(p);
+        for (size_t i = 0; i < n; ++i)
+        {
+            h ^= b[i];
+            h *= 1099511628211ULL;
+        }
+    }
+    template <typename T>
+    void put(const T& v)
+    {
+        add(&v, sizeof(v));
+    }
+};
+
+// tests_cpp/test_raw_gnss_shadow.cpp's stateHash: the filter's state and its whole covariance
+uint64_t stateHash(const RawGnssEKF<float>& f)
+{
+    Fnv h;
+    h.add(f.lla(), 3 * sizeof(double));
+    h.add(f.velNed(), 3 * sizeof(float));
+    h.add(f.quat(), 4 * sizeof(float));
+    h.add(f.accelBias(), 3 * sizeof(float));
+    h.add(f.gyroBias(), 3 * sizeof(float));
+    const double cb = f.clockBias();
+    const float cd = f.clockDrift();
+    h.put(cb);
+    h.put(cd);
+    for (int i = 0; i < RawGnssEKF<float>::N; ++i)
+        for (int j = 0; j < RawGnssEKF<float>::N; ++j)
+        {
+            const float p = f.P(i, j);
+            h.put(p);
+        }
+    return h.h;
+}
+
+// the navigation state the flight loop flies on (ShadowNav), every field
+uint64_t navHash(const ShadowNav& n)
+{
+    Fnv h;
+    h.put(n.time_us);
+    h.put(n.lla);
+    h.put(n.vel_ned);
+    h.put(n.quat);
+    h.put(n.accel_bias);
+    h.put(n.gyro_bias);
+    h.put(n.var);
+    h.put(n.running);
+    h.put(n.gnss_aided);
+    h.put(n.baro_aided);
+    h.put(n.in_flight);
+    h.put(n.epochs);
+    return h.h;
+}
+
+// The counters (RawGnssShadow::Stats), not the CPU times: those are the
+// clock's, and the harness has none unless --fc-unit-us emulates one.
+uint64_t statsHash(const RawGnssShadow::Stats& s)
+{
+    Fnv h;
+    // ticks, starts and stops; epochs seen, idle, stale and applied; ephemerides
+    h.put(s.imu);
+    h.put(s.imu_repeats);
+    h.put(s.starts);
+    h.put(s.stops);
+    h.put(s.last_stop);
+    h.put(s.epochs);
+    h.put(s.epochs_untimed);
+    h.put(s.epochs_idle);
+    h.put(s.epochs_stale);
+    h.put(s.epochs_applied);
+    h.put(s.eph_added);
+    h.put(s.eph_bad);
+    h.put(s.resyncs);
+    h.put(s.step_n);
+    // the last epoch applied: what it used and rejected of each kind, its clock steps, its screens
+    const RawGnssStats& l = s.last;
+    h.put(l.used_pr);
+    h.put(l.used_rr);
+    h.put(l.rejected_pr);
+    h.put(l.rejected_rr);
+    h.put(l.clock_jump_ms);
+    h.put(l.clock_step_m);
+    h.put(l.drift_step_mps);
+    h.put(l.nis_max);
+    h.put(l.used_cr);
+    h.put(l.cr_built);
+    h.put(l.cr_unmatched);
+    h.put(l.cr_in);
+    h.put(l.cr_half);
+    h.put(l.cr_repaired);
+    h.put(l.cr_other);
+    h.put(l.cr_too_few);
+    h.put(l.cr_rms_mps);
+    h.put(l.cr_fit_rms_mps);
+    h.put(l.cr_dv_mps);
+    h.put(l.cr_roll_rev_s);
+    h.put(l.cr_common_mps);
+    h.put(l.screen_rr);
+    h.put(l.screen_refused);
+    h.put(l.screen_seq_used);
+    h.put(l.screen_seq_refused);
+    h.put(l.screen_dropped);
+    h.put(l.screen_fit_n);
+    h.put(l.screen_fit_out);
+    h.put(l.screen_dv_down_mps);
+    h.put(s.last_age_s);
+    h.put(s.last_tow_ms);
+    h.put(s.last_meas);
+    h.put(s.last_pad_corrected);
+    h.put(s.tracked);
+    h.put(s.tracked_no_eph);
+    h.put(s.survey_epochs);
+    h.put(s.iono_sets);
+    // the physics checks, the receiver's fixes
+    h.put(s.last_sats_jumped);
+    h.put(s.sats_jumped);
+    h.put(s.fixes);
+    h.put(s.fixes_untimed);
+    h.put(s.fixes_dropped);
+    // levelling, the barometer, zero velocity, the magnetometer
+    h.put(s.levels);
+    h.put(s.levels_held);
+    h.put(s.baro);
+    h.put(s.baro_fused);
+    h.put(s.baro_held);
+    h.put(s.baro_offset_m);
+    h.put(s.baro_offset_frozen);
+    h.put(s.zupts);
+    h.put(s.pad_zupts);
+    h.put(s.mags);
+    h.put(s.mag_fused);
+    h.put(s.mag_uncal);
+    h.put(s.mag_suspect);
+    h.put(s.mag_dip);
+    h.put(s.mag_dip_err_deg);
+    // restores, bridged IMU holes, pad contexts
+    h.put(s.restores);
+    h.put(s.gaps_bridged);
+    h.put(s.pad_contexts);
+    // the heading from thrust, and act's launch edge, gates and hand-offs
+    h.put(s.heading_seeds);
+    h.put(s.heading_flights);
+    h.put(s.heading_epochs);
+    h.put(s.heading_vel_fails);
+    h.put(s.heading_unset_launches);
+    h.put(s.heading_launch_sigma_deg);
+    h.put(s.heading_launch_mag_age_s);
+    h.put(s.heading_act_launches);
+    h.put(s.heading_mag_launches);
+    h.put(s.heading_launch_prior_deg);
+    h.put(s.heading_launch_mag);
+    h.put(s.heading_gate_apogee);
+    h.put(s.heading_gate_apogee_s);
+    h.put(s.heading_handoffs);
+    h.put(s.heading_rivals);
+    h.put(s.heading_turn_deg);
+    h.put(s.heading_handoff_s);
+    const HeadingFit::Result& r = s.heading_last;
+    h.put(r.ok);
+    h.put(r.psi);
+    h.put(r.sigma);
+    h.put(r.rival);
+    h.put(r.bias);
+    h.put(r.n);
+    h.put(r.n_cut);
+    h.put(r.rms);
+    h.put(r.evals);
+    // the carrier range rates
+    h.put(s.cr_epochs);
+    h.put(s.cr_too_few);
+    h.put(s.cr_built);
+    h.put(s.cr_unmatched);
+    h.put(s.cr_in);
+    h.put(s.cr_half);
+    h.put(s.cr_repaired);
+    h.put(s.cr_other);
+    h.put(s.cr_used);
+    h.put(s.cr_last_rms_mps);
+    h.put(s.cr_last_fit_rms_mps);
+    h.put(s.cr_last_dv_mps);
+    h.put(s.cr_last_common_mps);
+    h.put(s.cr_last_roll_rev_s);
+    // the boost screen, the vertical check and its latch
+    h.put(s.boost_screened);
+    h.put(s.boost_dropped);
+    h.put(s.boost_dropped_dry);
+    h.put(s.boost_last_rr);
+    h.put(s.boost_last_refused);
+    h.put(s.boost_last_dry_used);
+    h.put(s.boost_last_dry_refused);
+    h.put(s.boost_last_g);
+    h.put(s.vert_checked);
+    h.put(s.vert_dropped);
+    h.put(s.vert_last_dv_down);
+    h.put(s.vert_worst_dv_down);
+    h.put(s.vert_latched);
+    return h.h;
+}
+
+std::string hex64(uint64_t v)
+{
+    char b[17];
+    std::snprintf(b, sizeof(b), "%016llx", static_cast<unsigned long long>(v));
+    return b;
+}
+
+// One step's line: its count and IMU time, then the hashes of the navigation
+// state, the RAW_GNSS_EKF_MSG (0x96) and RAW_GNSS_ATT_MSG (0x9B) records and
+// the HEADING_FIT_MSG records it filled ("-": none this step, as main.cpp's
+// raw task would have found), the counters, and the filter's whole state.
+// Taking the records changes nothing the filter does: they are its log's.
+void writeDigest(FILE* out, RawGnssShadow& sh, uint32_t time_us)
+{
+    ShadowNav nav;
+    sh.navState(nav);
+    std::string rec = "-", att = "-", hdg = "-";
+    RawGnssEkfData r;
+    if (sh.takeLog(r))
+    {
+        Fnv h;
+        h.put(r);
+        rec = hex64(h.h);
+    }
+    RawGnssAttData ra;
+    if (sh.takeAttLog(ra))
+    {
+        Fnv h;
+        h.put(ra);
+        att = hex64(h.h);
+    }
+    HeadingFitData hf;
+    Fnv hh;
+    int nh = 0;
+    while (sh.takeHeadingLog(hf))
+    {
+        hh.put(hf);
+        nh++;
+    }
+    if (nh > 0)
+        hdg = hex64(hh.h);
+    std::fprintf(out, "%u %u %s %s %s %s %s %s\n", sh.stats().step_n, time_us, hex64(navHash(nav)).c_str(),
+                 rec.c_str(), att.c_str(), hdg.c_str(), hex64(statsHash(sh.stats())).c_str(),
+                 hex64(stateHash(sh.filter())).c_str());
+}
+#endif
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -967,13 +1240,20 @@ int main(int argc, char** argv)
     cfg.epoch_slice_us = 2500.0;
     cfg.external_build = true;
     cfg.heading_mode = static_cast<uint8_t>(a.heading_mode);
-    cfg.heading_pad_sigma_deg = a.pad_sigma_deg;
-    cfg.heading_handoff_deg = a.handoff_deg;
+    // --fw-defaults: the four bench flags below only where given, the firmware's defaults otherwise -- what
+    // startRawShadow() builds without them, so a default the Beetle flies is replayed, not this harness's
+    auto take = [&](const char* opt) { return !a.fw_defaults || a.given.count(opt) != 0; };
+    if (take("--pad-sigma-deg"))
+        cfg.heading_pad_sigma_deg = a.pad_sigma_deg;
+    if (take("--handoff-deg"))
+        cfg.heading_handoff_deg = a.handoff_deg;
 #if !RAW_REPLAY_OLD
     // act's gate in flight: 0 the heading's, 1 whole from launch (A), 2 the heading's until the apogee call and
     // whole from it (H) -- TR_BENCH_HEADING_GATE_FULL
-    cfg.heading_gate = static_cast<uint8_t>(a.gate_full);
-    cfg.heading_launch_tilt_sigma_deg = a.tilt_sigma_deg;
+    if (take("--gate-full"))
+        cfg.heading_gate = static_cast<uint8_t>(a.gate_full);
+    if (take("--tilt-sigma-deg"))
+        cfg.heading_launch_tilt_sigma_deg = a.tilt_sigma_deg;
     if (a.boost_screen >= 0)
         cfg.boost_screen = static_cast<uint8_t>(a.boost_screen);
     if (a.boost_screen_g >= 0.0)
@@ -1160,6 +1440,26 @@ int main(int argc, char** argv)
                  "epochs,used_pr,used_rr,rej_pr,rej_rr,last_meas,age_ms,eph_sats,tracked,cr_built,cr_in,cr_used,"
                  "cr_half,cr_other,levelled,zupts,baro_fused,baro_held,mag_fused,hdg_fit_psi_deg,hdg_fit_sig_deg,"
                  "hdg_handoffs,stale\n");
+#if RAW_REPLAY_DIGEST
+    FILE* dg = nullptr;
+    uint32_t dg_step = 0;
+    if (!a.digest.empty())
+    {
+        dg = std::fopen(a.digest.c_str(), "w");
+        if (!dg)
+        {
+            std::fprintf(stderr, "cannot write %s\n", a.digest.c_str());
+            return 1;
+        }
+    }
+#else
+    if (!a.digest.empty())
+    {
+        std::fprintf(stderr, "--digest needs a build with RAW_REPLAY_VCHECK and RAW_REPLAY_LATCH (and not "
+                             "RAW_REPLAY_OLD)\n");
+        return 2;
+    }
+#endif
 
     // the pad's NED (the truth's origin)
     const double A = 6378137.0, E2 = 0.0066943799901;
@@ -1813,6 +2113,14 @@ int main(int argc, char** argv)
                     writeRow(ev.t_us);
                 last_step = sh.stats().step_n;
             }
+#if RAW_REPLAY_DIGEST
+            // --digest: a line every step, whatever --every, and the step a stop happened at too
+            if (dg && sh.stats().step_n != dg_step)
+            {
+                dg_step = sh.stats().step_n;
+                writeDigest(dg, sh, s.time_us);
+            }
+#endif
             break;
         }
         default:
@@ -1820,6 +2128,17 @@ int main(int argc, char** argv)
         }
     }
     std::fclose(out);
+#if RAW_REPLAY_DIGEST
+    if (dg)
+    {
+        // and where the replay ended: the counters that move between steps (epochs seen while stopped, say)
+        ShadowNav nav;
+        sh.navState(nav);
+        std::fprintf(dg, "end %u %s %s %s\n", sh.stats().step_n, hex64(navHash(nav)).c_str(),
+                     hex64(statsHash(sh.stats())).c_str(), hex64(stateHash(sh.filter())).c_str());
+        std::fclose(dg);
+    }
+#endif
     {
         FILE* ej = std::fopen((a.out + ".events.json").c_str(), "w");
         if (ej)
