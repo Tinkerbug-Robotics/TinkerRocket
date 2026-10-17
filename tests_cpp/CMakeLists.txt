@@ -1160,6 +1160,19 @@ target_include_directories(test_flight_snapshot_answer PRIVATE
 target_link_libraries(test_flight_snapshot_answer GTest::gtest_main)
 gtest_discover_tests(test_flight_snapshot_answer)
 
+# ---------- test_snapshot_replay_filter (#383, #846) ----------
+# Which of the FC's 10 Hz SNAPSHOT_MSG frames the OC keeps: DMA replays are
+# dropped, clears never are, and a clear sent with no flight in progress (its
+# elapsed is the FC's uptime) no longer becomes the next flight's baseline.
+# Pure header in the OC project.
+add_executable(test_snapshot_replay_filter test_snapshot_replay_filter.cpp)
+target_include_directories(test_snapshot_replay_filter PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_snapshot_replay_filter GTest::gtest_main)
+gtest_discover_tests(test_snapshot_replay_filter)
+
 # ---------- test_pwr_hold_policy (#848) ----------
 # FC power-hold latch boot reconciliation (P4_EN_HOLD): keep/release/assert
 # decision for a hold inherited across a reset. Pure header in the FC project.

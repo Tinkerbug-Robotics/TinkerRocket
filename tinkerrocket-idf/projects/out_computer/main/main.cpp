@@ -82,6 +82,7 @@ static inline std::string itos(int v)
 #include "arm_consent_policy.h"       // #1168: when the OC gives its half of the Beetle's pyro arm
 #include "pyro_fault_trip_policy.h"   // #1553: drop that consent on a shorted e-match mid-pulse
 #include "snapshot_answer_policy.h"   // when the OC may answer the FC's snapshot ask with "no flight"
+#include "snapshot_replay_filter.h"   // #383/#846: which of the FC's snapshots the OC keeps
 
 #include <TR_I2C_Interface.h>
 #include <TR_I2S_Stream.h>
@@ -5659,38 +5660,25 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             // #383: SNAPSHOT_MSG bypasses the sensor-frame dedup (its payload
             // starts with the magic, not a timestamp — putting it in that
             // switch would misread the constant magic as a ts and drop every
-            // snapshot after the first). Guard the MRAM slot here instead: an
+            // snapshot after the first). Guard the stores here instead: an
             // I2S DMA replay delivers a snapshot a few hundred ms OLDER than
             // the one already stored, and overwriting would hand brownout
-            // recovery stale state. Reject slightly-older frames; a frame
-            // MUCH older (>10 s behind) can only be a new flight's near-zero
-            // clock — accept it and re-seed the baseline.
+            // recovery stale state. The rule, and what a clear does to its
+            // baseline, is snapshot_replay_filter.h. A clear (any non-INFLIGHT
+            // frame) is never dropped (#846 SAFETY), but one sent with no
+            // flight in progress carries the FC's uptime and no longer
+            // becomes the baseline the next flight's frames are held to.
             uint32_t elapsed_ms = 0;
             memcpy(&elapsed_ms, payload + offsetof(FlightSnapshotData, flight_elapsed_ms),
                    sizeof(elapsed_ms));
             uint8_t snap_state = 0;
             memcpy(&snap_state, payload + offsetof(FlightSnapshotData, rocket_state),
                    sizeof(snap_state));
-            static uint32_t last_snap_elapsed_ms = 0;
-            constexpr uint32_t NEW_FLIGHT_BACKSTEP_MS = 10'000;
-            // #846 SAFETY: a non-INFLIGHT frame is the FC's "clear" — it can
-            // only ever DISARM (the FC restores solely on INFLIGHT), so it
-            // must never be dropped as a replay. It routinely looks like one:
-            // clearFlightSnapshot() sends elapsed = FC uptime (a few seconds,
-            // launch_time_millis == 0 at boot), which lands inside the 10 s
-            // backstep below a real flight's elapsed. Dropping it left the
-            // store holding a genuine INFLIGHT frame that a later FC panic
-            // would restore ON THE GROUND with pyro channels re-armed.
-            // Elapsed-ms comparisons are meaningless across an FC reboot
-            // anyway; state is the only trustworthy discriminator here.
-            const bool is_clear = (snap_state != (uint8_t)INFLIGHT);
-            const bool stale_replay =
-                !is_clear &&
-                elapsed_ms < last_snap_elapsed_ms &&
-                (last_snap_elapsed_ms - elapsed_ms) <= NEW_FLIGHT_BACKSTEP_MS;
-            if (!stale_replay)
+            static SnapshotReplayFilter::State replay_filter;
+            if (SnapshotReplayFilter::keep(replay_filter,
+                                           snap_state == (uint8_t)INFLIGHT,
+                                           elapsed_ms))
             {
-                last_snap_elapsed_ms = elapsed_ms;
                 // #1150: the FC's snapshot carries the pad reference and the
                 // running maxima this OC lost if it reset in flight. Adopt
                 // them ONCE when INFLIGHT arrives with no reference of our
