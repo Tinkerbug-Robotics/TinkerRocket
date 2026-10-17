@@ -139,6 +139,34 @@ if(NOT TR_BOARD_M1 AND CONFIG_IDF_TARGET AND NOT "${CONFIG_IDF_TARGET}" STREQUAL
         "flight_computer: V7/V8/V9/V10 boards are ESP32-P4, but this build dir is "
         "configured for '${CONFIG_IDF_TARGET}'. Use a fresh build dir per board.")
 endif()
+# PSRAM on a P4 board is the image's choice, so check what the build dir
+# resolved to rather than trusting the overlays. Only the mosaic-only image
+# with the raw-GNSS filter takes sdkconfig.defaults.rawnav (the project
+# CMakeLists.txt); every other P4 image keeps PSRAM off (sdkconfig.defaults,
+# #851). The overlay alone does not decide it: kconfgen keeps a value a
+# defaults file once wrote to a build dir's sdkconfig, so a dir that built the
+# mosaic image still has CONFIG_SPIRAM=y when it is reconfigured as the auto
+# image or with -DTR_RAW_GNSS_SHADOW=0, which is the #851 timing risk on an
+# image that never asked for it. The rule is stated again here, not read from
+# the project file, so a change that moves the overlay to another image fails
+# here too. M1's own overlay turns its PSRAM on, and the target check above
+# guards its build dir.
+if(NOT TR_BOARD_M1)
+    if(TR_GNSS_MOSAIC AND (NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW))
+        if(NOT CONFIG_SPIRAM)
+            message(FATAL_ERROR
+                "flight_computer: the mosaic-only image runs the raw-GNSS filter from PSRAM "
+                "(sdkconfig.defaults.rawnav), but ${CMAKE_BINARY_DIR}/sdkconfig has CONFIG_SPIRAM "
+                "off. Use a fresh build dir, or delete that sdkconfig.")
+        endif()
+    elseif(CONFIG_SPIRAM)
+        message(FATAL_ERROR
+            "flight_computer: this image keeps PSRAM off (#851; only the mosaic-only image with "
+            "the raw-GNSS filter turns it on), but ${CMAKE_BINARY_DIR}/sdkconfig has "
+            "CONFIG_SPIRAM=y, kept from an image built there before. Use a fresh build dir, or "
+            "delete that sdkconfig.")
+    endif()
+endif()
 if(TR_BOARD_M1)
     message(STATUS "flight_computer: board pin map M1 (main/board/board_m1.h, Tinker-Beetle rev1, ESP32-S3)")
 elseif(TR_BOARD_V10)

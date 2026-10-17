@@ -272,6 +272,8 @@ endif()
 # sdkconfig.defaults.mosaic, so PSRAM cannot go there -- and
 # -DTR_RAW_GNSS_SHADOW=0 builds the mosaic image without the filter and
 # without PSRAM, as every board flew before (sdkconfig.defaults, #851).
+# main/CMakeLists.txt checks the resolved sdkconfig against this rule: a build
+# dir's sdkconfig keeps CONFIG_SPIRAM=y once this overlay has written it.
 if(TR_GNSS_MOSAIC)
     if(NOT TR_BOARD_V9 AND NOT TR_BOARD_V8)
         message(FATAL_ERROR "TR_GNSS_MOSAIC is for the V9 (-DTR_BOARD_V9=1) or the V8 (-DTR_BOARD_V8=1): their J1 is where the harness lands")

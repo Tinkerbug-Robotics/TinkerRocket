@@ -27,9 +27,15 @@
 #    queue, the IMU queue and the UART ring keep today's timing. With
 #    USE_MALLOC instead, any malloc() over 16 KB would move to PSRAM silently.
 #  - IGNORE_NOTFOUND: a board whose PSRAM does not come up boots without it
-#    and logs it, rather than panicking before the flight computer runs.
-#    startRawShadow then falls back to internal RAM, as on any board without
-#    PSRAM.
+#    and logs it ("Failed to init external RAM; continuing without it"),
+#    rather than aborting at every boot, an in-flight reboot included, before
+#    the flight computer runs. The raw-GNSS filter does NOT start then:
+#    startRawShadow falls back to internal RAM, which cannot hold it (above),
+#    so it logs "[RAWGNSS] no memory ... not started" and returns, keeping any
+#    block it got before the one that failed. Where that filter is the only
+#    navigation filter, the boot has to say so loudly (a degraded boot status
+#    the app shows, not one log line), so a board without PSRAM is caught on
+#    the bench or the pad.
 #  - MEMTEST off: the test walks all 32 MB at every boot (cpu_start.c), and
 #    an in-flight reboot's time to the loop matters more.
 # PSRAM is brought up by the app, not the bootloader, so an image delivered
