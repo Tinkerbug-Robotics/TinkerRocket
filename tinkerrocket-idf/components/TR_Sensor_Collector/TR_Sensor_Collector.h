@@ -247,6 +247,12 @@ public:
     // receiver first sent them).
     void setGNSSPpsPin(int8_t pin);
     void requestGNSSNavResend();
+    // Leave the GNSS receiver out of this boot: begin() does not look for it,
+    // and isGnssOnline() is false, so the FC flies GNSS-absent (#557). Call
+    // before begin(). The mosaic-G5 build calls it on a boot that follows a
+    // crash restart, so a receiver-triggered fault cannot keep the FC from
+    // finishing its boot and taking an update over the air.
+    void skipGNSSThisBoot() { use_gnss = false; }
     // Raw GNSS measurements for the raw-GNSS shadow filter (#1600), from the
     // LC86G's MSM7 and broadcast ephemeris; never from the u-blox. Off until
     // enableGNSSRawOutputs() (call it before begin()). Safe from any task:

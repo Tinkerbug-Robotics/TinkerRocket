@@ -105,7 +105,7 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         void onLine(const char* line, size_t index) override;
         void onPrompt(const char* port, size_t index) override;
 
-        void uartBegin(uint32_t baud);
+        bool uartBegin(uint32_t baud);   // false: the port would not come up at this baud
         void uartEnd();
         // Read once (up to `wait_ms` for the first byte) and feed the parser.
         size_t pump(uint32_t wait_ms, size_t max_bytes);
@@ -152,8 +152,12 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
 
         // SBF blocks for the flight log. 24 kB: ~0.35 s at the full set,
         // drained by the flight loop every pass; it only rides out the boot.
+        // alignas: IDF's ring buffer asserts its storage is 32-bit aligned on
+        // every send (ringbuf.c rbCHECK_ALIGNED), and as a plain byte array
+        // behind a bool it sat at an odd offset: the first block the receiver
+        // sent crashed the FC.
         static constexpr size_t kRingBytes = 24576;
-        uint8_t           ring_mem_[kRingBytes] = {};
+        alignas(8) uint8_t ring_mem_[kRingBytes] = {};
         StaticRingbuffer_t ring_struct_ = {};
         RingbufHandle_t   ring_ = nullptr;
         uint8_t           item_[4 + GNSS_SBF_MAX_FRAME] = {};
@@ -178,7 +182,7 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         lc86::GnssTimeSync time_sync_;
         static constexpr int kClockQDepth = 4;
         StaticQueue_t     clock_q_struct_ = {};
-        uint8_t           clock_q_mem_[kClockQDepth * sizeof(GnssClockData)] = {};
+        alignas(8) uint8_t clock_q_mem_[kClockQDepth * sizeof(GnssClockData)] = {};
         QueueHandle_t     clock_q_ = nullptr;
         uint32_t          clock_seq_seen_ = 0;
         uint32_t          clock_dropped_ = 0;

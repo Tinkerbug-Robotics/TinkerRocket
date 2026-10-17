@@ -790,10 +790,18 @@ void SensorCollector::startPollingTask(uint8_t imu_execution_core)
         &pollIMUTaskHandle,  // Task handle
         imu_execution_core); // Core to run on
 
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // The mosaic-G5's path from here (the SBF parser, the PPS clock fit, a
+    // console line with floats) runs deeper than the NMEA drivers'; 8 kB keeps
+    // a wide margin, and the P4 has internal RAM to spare.
+    constexpr uint32_t kGnssPollStack = 8192;
+#else
+    constexpr uint32_t kGnssPollStack = 4096;
+#endif
     xTaskCreatePinnedToCore(
         pollGNSSdata,        // Task function
         "Poll GNSS Data",    // Task name
-        4096,                // Stack size (GNSS serial parsing only)
+        kGnssPollStack,      // Stack size (GNSS serial parsing only)
         this,                // Task parameter
         3,                   // Priority (above I2C sender at 2, below IMU at 4)
         &pollGNSSTaskHandle, // Task handle

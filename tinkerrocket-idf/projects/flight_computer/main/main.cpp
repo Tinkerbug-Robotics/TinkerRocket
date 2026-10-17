@@ -5609,6 +5609,24 @@ static void setup_fc()
     if (!sensor_collector.enableGNSSRawOutputs())
         ESP_LOGE(TAG, "[RAWGNSS] no memory for the raw GNSS queues");
 #endif
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // The mosaic-G5 driver is new, and on a mounted rocket the only way to
+    // replace firmware is over the air, which needs a finished boot. So a boot
+    // that follows a crash restart (a panic or a watchdog) leaves the receiver
+    // out: whatever crashed, this boot gets the FC to its loop, GNSS-absent,
+    // where it can take an update. A power-on or a software restart (an OTA)
+    // brings the receiver back. In flight that means a crash costs GNSS for
+    // the rest of the flight, never the flight computer.
+    {
+        const esp_reset_reason_t rr = esp_reset_reason();
+        if (rr == ESP_RST_PANIC || rr == ESP_RST_INT_WDT || rr == ESP_RST_TASK_WDT || rr == ESP_RST_WDT)
+        {
+            ESP_LOGE(TAG, "[GNSS] the last reset was a crash (%s): the mosaic-G5 stays out of this boot",
+                     resetReasonStr(rr));
+            sensor_collector_hw.skipGNSSThisBoot();
+        }
+    }
+#endif
     // The mosaic-G5's 1PPS (J1 pin 5); -1 and a no-op on every other build.
     sensor_collector_hw.setGNSSPpsPin(config::GNSS_PPS_PIN);
     sensor_collector.begin(config::SENSOR_CORE);

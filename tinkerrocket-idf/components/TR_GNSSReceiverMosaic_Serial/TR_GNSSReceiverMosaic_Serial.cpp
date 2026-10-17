@@ -85,9 +85,28 @@ TR_GNSSReceiverMosaicSerial::TR_GNSSReceiverMosaicSerial(uart_port_t uart_port)
 
 // ── UART ────────────────────────────────────────────────────────────────
 
-void TR_GNSSReceiverMosaicSerial::uartBegin(uint32_t baud)
+bool TR_GNSSReceiverMosaicSerial::uartBegin(uint32_t baud)
 {
-    uartEnd();
+    // Installed once; after that a probe's baud change only re-rates the port.
+    // The probe alternates bauds every 400 ms for as long as the receiver is
+    // silent, and tearing the driver down and back up each time (its 16 kB
+    // ring, its event queue, its IRAM interrupt) was churn for nothing. No
+    // ESP_ERROR_CHECK: a port that will not come up means GNSS-absent, never
+    // an abort in the middle of the boot.
+    byte_us_ = 1.0e7 / static_cast<double>(baud);   // 8N1: ten bits a byte
+    if (uart_is_driver_installed(_uartPort))
+    {
+        const esp_err_t e = uart_set_baudrate(_uartPort, baud);
+        if (e != ESP_OK)
+        {
+            ESP_LOGE(TAG, "mosaic UART: baud %lu refused (%s)", static_cast<unsigned long>(baud), esp_err_to_name(e));
+            return false;
+        }
+        uart_flush_input(_uartPort);   // bytes sampled at the old baud
+        drainUartEvents();
+        uart_baud_ = baud;
+        return true;
+    }
 
     uart_config_t uart_cfg = {};
     uart_cfg.baud_rate  = static_cast<int>(baud);
@@ -96,17 +115,30 @@ void TR_GNSSReceiverMosaicSerial::uartBegin(uint32_t baud)
     uart_cfg.stop_bits  = UART_STOP_BITS_1;
     uart_cfg.flow_ctrl  = UART_HW_FLOWCTRL_DISABLE;
     uart_cfg.source_clk = UART_SCLK_DEFAULT;
-    byte_us_ = 1.0e7 / static_cast<double>(baud);   // 8N1: ten bits a byte
-    uart_baud_ = baud;
 
-    ESP_ERROR_CHECK(uart_param_config(_uartPort, &uart_cfg));
-    ESP_ERROR_CHECK(uart_set_pin(_uartPort, static_cast<int>(tx_pin_), static_cast<int>(rx_pin_),
-                                 UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-    // Idle-high while nothing drives RX (a receiver still booting), as the
-    // other GNSS drivers do.
-    gpio_pullup_en(static_cast<gpio_num_t>(rx_pin_));
-    ESP_ERROR_CHECK(uart_driver_install(_uartPort, kUartRxBuf, kUartTxBuf, 16, &uart_events_, 0));
+    esp_err_t e = uart_param_config(_uartPort, &uart_cfg);
+    if (e == ESP_OK)
+    {
+        e = uart_set_pin(_uartPort, static_cast<int>(tx_pin_), static_cast<int>(rx_pin_),
+                         UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    }
+    if (e == ESP_OK)
+    {
+        // Idle-high while nothing drives RX (a receiver still booting), as the
+        // other GNSS drivers do.
+        gpio_pullup_en(static_cast<gpio_num_t>(rx_pin_));
+        e = uart_driver_install(_uartPort, kUartRxBuf, kUartTxBuf, 16, &uart_events_, 0);
+    }
+    if (e != ESP_OK)
+    {
+        ESP_LOGE(TAG, "mosaic UART: setup at %lu baud failed (%s)", static_cast<unsigned long>(baud),
+                 esp_err_to_name(e));
+        uart_events_ = nullptr;
+        return false;
+    }
     uart_set_rx_full_threshold(_uartPort, kRxFullThreshold);
+    uart_baud_ = baud;
+    return true;
 }
 
 void TR_GNSSReceiverMosaicSerial::uartEnd()
@@ -164,7 +196,9 @@ void TR_GNSSReceiverMosaicSerial::runLink()
         if (a.kind == mosaic::LinkAction::NONE) break;
         if (a.kind == mosaic::LinkAction::SET_BAUD)
         {
-            uartBegin(a.baud);
+            // On a failure the probe simply hears nothing at this baud and
+            // moves on; the next change tries the port again.
+            (void)uartBegin(a.baud);
             parser_.reset();   // bytes sampled at the old baud
         }
         else if (a.kind == mosaic::LinkAction::SEND && uart_is_driver_installed(_uartPort))
@@ -208,7 +242,16 @@ bool TR_GNSSReceiverMosaicSerial::begin(uint8_t update_rate_hz,
 
     if (ring_ == nullptr)
     {
-        ring_ = xRingbufferCreateStatic(kRingBytes, RINGBUF_TYPE_NOSPLIT, ring_mem_, &ring_struct_);
+        // Checked here, not trusted: a misaligned ring passes creation and
+        // then asserts on the first send (see ring_mem_).
+        if ((reinterpret_cast<uintptr_t>(ring_mem_) & 0x3U) != 0)
+        {
+            ESP_LOGE(TAG, "mosaic: the log ring is not 32-bit aligned; SBF blocks will not be logged");
+        }
+        else
+        {
+            ring_ = xRingbufferCreateStatic(kRingBytes, RINGBUF_TYPE_NOSPLIT, ring_mem_, &ring_struct_);
+        }
     }
     if (clock_q_ == nullptr)
     {
