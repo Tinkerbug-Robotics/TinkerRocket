@@ -46,8 +46,8 @@ std::vector<uint8_t> pvt(uint32_t tow, double bias_ms, float drift_ppm, double h
     Body b(96);
     b.u8(14, 1);
     b.u8(15, 0);
-    b.f64(16, 0.7);
-    b.f64(24, -1.3);
+    b.f64(16, 0.5);
+    b.f64(24, 2.0);
     b.f64(32, height_m);
     b.f32(40, undulation_m);
     b.f32(44, 0.5f);

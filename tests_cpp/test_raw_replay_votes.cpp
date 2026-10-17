@@ -92,7 +92,7 @@ Flown fly(const Faults& f, bool guard)
     ekf.attach(link.get());
     votes.setInitialized(true);
     const double t0 = 100.0;            // the launch, MCU s
-    const double lat0 = 0.7, lon0 = -1.3, h0 = 150.0;
+    const double lat0 = 0.5, lon0 = 2.0, h0 = 150.0;   // synthetic: nowhere anyone flies
     const double p0 = 101325.0;
     auto pass = [&](double tf, const Sample& s, bool in_flight) {
         const int64_t t_us = static_cast<int64_t>(std::llround((t0 + tf) * 1e6));
@@ -100,7 +100,7 @@ Flown fly(const Faults& f, bool guard)
         // the filter's published state, every pass
         gnss_raw::ShadowNav n{};
         n.time_us = static_cast<uint32_t>(t_us);
-        n.lla[0] = lat0 + (0.0) / 6.37e6;
+        n.lla[0] = lat0;
         n.lla[1] = lon0;
         n.lla[2] = h0 + s.h;
         n.vel_ned[0] = static_cast<float>(s.vh);
