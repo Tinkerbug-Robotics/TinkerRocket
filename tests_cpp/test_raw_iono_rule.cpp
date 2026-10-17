@@ -1,0 +1,101 @@
+// The mosaic-only image's choice of GPS broadcast ionosphere for its raw-GNSS
+// filter (flight_computer/main/raw_iono_rule.h): the app's set from a pad
+// calibration against the receiver's own GPSIon.
+#include <gtest/gtest.h>
+
+#include "raw_iono_rule.h"
+
+namespace
+{
+
+constexpr int8_t kA[8] = {12, 7, -60, -60, 75, 49, -65, -65};   // one day's broadcast bytes
+constexpr int8_t kB[8] = {13, 7, -60, -60, 76, 49, -65, -65};   // another's
+constexpr int8_t kC[8] = {11, 6, -59, -60, 74, 48, -64, -65};
+
+constexpr bool kApp = false;
+constexpr bool kRx = true;
+
+}  // namespace
+
+TEST(RawIonoRule, TheFirstSetFromEitherSourceIsTaken)
+{
+    RawIonoRule::State a, r;
+    EXPECT_TRUE(RawIonoRule::offer(a, kA, 17000, kApp));
+    EXPECT_TRUE(RawIonoRule::offer(r, kA, 17000, kRx));
+    EXPECT_TRUE(a.have && !a.from_rx && a.gps_day == 17000 && a.sets == 1);
+    EXPECT_TRUE(r.have && r.from_rx);
+    EXPECT_EQ(0, std::memcmp(a.raw, kA, 8));
+}
+
+TEST(RawIonoRule, TheSameBytesAreNeverAppliedAgain)
+{
+    // The receiver's GPSIon is offered every pass of the GNSS task: each
+    // re-apply would start the pad survey over
+    RawIonoRule::State st;
+    ASSERT_TRUE(RawIonoRule::offer(st, kA, 17000, kRx));
+    for (int i = 0; i < 100; ++i) EXPECT_FALSE(RawIonoRule::offer(st, kA, 17000, kRx));
+    // nor from the other source, nor on a later day
+    EXPECT_FALSE(RawIonoRule::offer(st, kA, 17000, kApp));
+    EXPECT_FALSE(RawIonoRule::offer(st, kA, 17001, kApp));
+    EXPECT_FALSE(RawIonoRule::offer(st, kA, 17002, kRx));
+    EXPECT_EQ(1u, st.sets);
+    EXPECT_TRUE(st.from_rx);
+    EXPECT_EQ(17000, st.gps_day);
+}
+
+TEST(RawIonoRule, AnOlderSetIsNotTaken)
+{
+    RawIonoRule::State st;
+    ASSERT_TRUE(RawIonoRule::offer(st, kA, 17000, kRx));
+    EXPECT_FALSE(RawIonoRule::offer(st, kB, 16999, kApp));   // last week's file
+    EXPECT_FALSE(RawIonoRule::offer(st, kB, 16999, kRx));
+    EXPECT_EQ(0, std::memcmp(st.raw, kA, 8));
+    // the app's newer file is
+    EXPECT_TRUE(RawIonoRule::offer(st, kB, 17001, kApp));
+    EXPECT_FALSE(st.from_rx);
+    EXPECT_EQ(0, std::memcmp(st.raw, kB, 8));
+}
+
+TEST(RawIonoRule, OnTheSameDayTheReceiversWins)
+{
+    // the app's in use, the receiver's of that day replaces it
+    RawIonoRule::State st;
+    ASSERT_TRUE(RawIonoRule::offer(st, kA, 17000, kApp));
+    EXPECT_TRUE(RawIonoRule::offer(st, kB, 17000, kRx));
+    EXPECT_TRUE(st.from_rx);
+    // and the app's of that day, sent again, does not take it back
+    EXPECT_FALSE(RawIonoRule::offer(st, kA, 17000, kApp));
+    EXPECT_FALSE(RawIonoRule::offer(st, kC, 17000, kApp));
+    EXPECT_EQ(0, std::memcmp(st.raw, kB, 8));
+    // a new upload of a later day does
+    EXPECT_TRUE(RawIonoRule::offer(st, kC, 17001, kApp));
+    EXPECT_FALSE(st.from_rx);
+}
+
+TEST(RawIonoRule, ANewSetOfTheSameSourceAndDayIsTaken)
+{
+    // the receiver decoding a changed set the same day (its OnChange), or the
+    // app's upload replaced the same day: the newer bytes win
+    RawIonoRule::State st;
+    ASSERT_TRUE(RawIonoRule::offer(st, kA, 17000, kRx));
+    EXPECT_TRUE(RawIonoRule::offer(st, kB, 17000, kRx));
+    EXPECT_EQ(0, std::memcmp(st.raw, kB, 8));
+    RawIonoRule::State app;
+    ASSERT_TRUE(RawIonoRule::offer(app, kA, 17000, kApp));
+    EXPECT_TRUE(RawIonoRule::offer(app, kB, 17000, kApp));
+    EXPECT_EQ(2u, app.sets);
+}
+
+TEST(RawIonoRule, TheReceiversSetAcrossDays)
+{
+    // a pad wait across midnight: the receiver's next day's set is taken, its
+    // repeat is not, and yesterday's app file never comes back
+    RawIonoRule::State st;
+    ASSERT_TRUE(RawIonoRule::offer(st, kA, 17000, kApp));
+    EXPECT_TRUE(RawIonoRule::offer(st, kB, 17000, kRx));
+    EXPECT_TRUE(RawIonoRule::offer(st, kC, 17001, kRx));
+    EXPECT_FALSE(RawIonoRule::offer(st, kC, 17001, kRx));
+    EXPECT_FALSE(RawIonoRule::offer(st, kA, 17000, kApp));
+    EXPECT_EQ(3u, st.sets);
+    EXPECT_EQ(17001, st.gps_day);
+}

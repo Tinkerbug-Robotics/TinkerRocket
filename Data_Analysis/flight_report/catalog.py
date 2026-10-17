@@ -1217,6 +1217,18 @@ _P(
         "wrap. Frozen at 0 until the EKF initialises on the first good fix.",
 )
 _P(
+    "FcStatus.fc_raw_votes_withheld", "FC raw votes withheld",
+    note=
+        "The mosaic-only image's raw vote guard latched (FCS_RAW_VOTES_WITHHELD, 5 Hz on "
+        "FC_STATUS_MSG): after burnout its raw-GNSS filter read its vertical velocity more than "
+        "10 m/s below the barometer's climb rate for 1 s, so the filter's velocity and pitch "
+        "apogee votes are withheld for the rest of the flight.",
+    caution=
+        "Always False on every other image, including the V9 and V8 auto images and the Beetle. "
+        "Sticky until the next launch or sim edge; the first frame with it set is the latch time "
+        "to within 200 ms.",
+)
+_P(
     "FcStatus.fc_camera_engaged", "FC camera engaged",
     note=
         "The flight computer's OWN camera state, reported at 5 Hz on FC_STATUS_MSG: rail up, "
@@ -1826,6 +1838,19 @@ _P(
     caution=
         "v5 snapshots only; None on v4 and older. Same reused bytes and the same caveat as "
         "snap_max_alt_m — it mirrors the live running maximum, it does not independently verify it.",
+)
+_P(
+    "Snapshot.snap_geoid_sep_m", "Snapshot geoid separation",
+    unit="m",
+    note=
+        "The receiver's geoid separation (geoid above the ellipsoid) the mosaic-only image's "
+        "raw-GNSS filter turns its heights by, carried so an in-flight reboot with no receiver to "
+        "ask (a crash boot leaves the mosaic out) restores the same heights.",
+    caution=
+        "Mosaic-only image, v5 snapshots; None everywhere else (the slot writes 0). Where it is "
+        "recorded, subtract it from ekf_alt_m (above the ellipsoid) for the height above the geoid "
+        "(MSL). Where it is None the snapshot alone cannot turn ekf_alt_m to MSL: the Beetle's "
+        "raw-filter image writes an ellipsoidal ekf_alt_m too, and records no separation.",
 )
 _P(
     "Snapshot.b2r_q0", "Board-to-rocket quaternion w",

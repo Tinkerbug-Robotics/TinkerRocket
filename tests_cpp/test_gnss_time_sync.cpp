@@ -186,6 +186,28 @@ TEST(GnssTimeSync, TimeRunningBackwardsRestarts)
     EXPECT_FALSE(ts.valid());
 }
 
+// driftFitted (the mosaic driver's PPS tag check judges only once it holds):
+// not while the line answers flat on its first blocks, then from the first
+// fit, and not again after a restart until the new history fits its own.
+TEST(GnssTimeSync, SaysWhenTheDriftIsFitted)
+{
+    Receiver rx;
+    GnssTimeSync ts = calibrated(rx);
+    EXPECT_FALSE(ts.driftFitted());
+    rx.feed(ts, rx.gps0, 15.0);
+    ASSERT_TRUE(ts.valid());
+    EXPECT_FALSE(ts.driftFitted());   // valid, and still flat
+    EXPECT_EQ(ts.driftPpm(), 0.0);
+    rx.feed(ts, rx.gps0 + 15.0, 30.0);
+    EXPECT_TRUE(ts.driftFitted());
+    EXPECT_NEAR(ts.driftPpm(), rx.drift * 1e6, 10.0);
+    EXPECT_FALSE(ts.addSample(rx.gps0 - 30.0, rx.stamp(rx.gps0 + 45.0)));   // time backwards: a restart
+    EXPECT_EQ(ts.restarts(), 1u);
+    EXPECT_FALSE(ts.driftFitted());
+    ts.reset();
+    EXPECT_FALSE(ts.driftFitted());
+}
+
 TEST(GnssTimeSync, CarriesTheDriftAcrossAGapInTheFixes)
 {
     Receiver rx;

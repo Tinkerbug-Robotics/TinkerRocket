@@ -41,6 +41,12 @@ enum SbfBlock : uint16_t
     SBF_RECEIVER_TIME   = 5914,
     SBF_XPPS_OFFSET     = 5911,
     SBF_DISK_STATUS     = 4059,
+    // the raw-GNSS filter's navigation data (SbfNav.h decodes them; the
+    // driver checks these against its kSbf* numbers)
+    SBF_GPS_NAV         = 5891,
+    SBF_GAL_NAV         = 4002,
+    SBF_BDS_NAV         = 4081,
+    SBF_GPS_ION         = 5893,
 };
 // The reduced GNSS log thins exactly these two (gnss_log_policy.h).
 static_assert(SBF_MEAS_EPOCH == gnss_log::kSbfMeasEpoch && SBF_MEAS_EXTRA == gnss_log::kSbfMeasExtra,

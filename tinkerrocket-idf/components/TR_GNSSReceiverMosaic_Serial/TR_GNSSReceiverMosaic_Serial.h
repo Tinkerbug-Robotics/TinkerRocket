@@ -21,9 +21,17 @@
 //   - the MCU clock against GPS time from the 1PPS on J1 pin 5 (GPIO2 on the
 //     V9), logged as GNSS_CLOCK_MSG (0x9D) with GCL_PPS;
 //   - the navigation data again on request (requestNavResend(), at launch),
-//     because the log starts at launch and the receiver sent it long before.
-// All parsing is in SbfParser / MosaicLink (pure, host-tested); this class
-// owns only the UART, the PPS interrupt and the hand-offs between tasks.
+//     because the log starts at launch and the receiver sent it long before;
+//   - with enableRawOutputs() (the mosaic-only image, whose navigation filter
+//     is the raw-GNSS filter): each MeasEpoch on the filter's fused grid as a
+//     TimedRawEpoch with its GPS instant on the MCU clock (MosaicRawEpoch.h),
+//     each GPS, Galileo I/NAV and BeiDou MEO/IGSO ephemeris block as it came,
+//     and the latest GPS ionosphere (SbfNav.h). Compiled into that image
+//     alone (TR_GNSS_DRIVER_MOSAIC): the auto image, which carries this
+//     driver too, keeps it exactly as it was.
+// All parsing is in SbfParser / MosaicLink / SbfMeas / SbfNav / MosaicRawEpoch
+// (pure, host-tested); this class owns only the UART, the PPS interrupt and
+// the hand-offs between tasks.
 #ifndef TRGNSSRECEIVERMOSAIC_H
 #define TRGNSSRECEIVERMOSAIC_H
 
@@ -39,6 +47,11 @@
 #include "MosaicLink.h"
 #include "PpsPairer.h"
 #include "SbfParser.h"
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#include <RawMeas.h>           // TR_GNSSRaw: gnss_raw::TimedRawEpoch
+#include "MosaicRawEpoch.h"
+#include "SbfNav.h"
+#endif
 
 class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
 {
@@ -58,6 +71,13 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         // auto image (TR_GNSSAuto) shortens it when the u-blox driver's own
         // 60 s search ran first, to keep the boot inside its setup watchdog.
         void setBeginTimeoutMs(uint32_t ms) { begin_timeout_ms_ = ms; }
+
+        // Whether begin() waits for the receiver (the default) or only starts
+        // looking and returns true: the poll task (pollNewPVT) then finds and
+        // sets it up whenever it answers, as it does after a receiver reset in
+        // flight. The mosaic-only image's reboot in flight, so the flight
+        // resumes without waiting on the receiver's boot.
+        void setBeginWait(bool wait) { begin_wait_ = wait; }
 
         // Find the receiver and set it up (MosaicLink.h). Waits up to
         // the begin timeout for it, so a receiver that powers up with the FC
@@ -102,8 +122,82 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         }
 
         // Ask the receiver to send every navigation block it holds once more
-        // (exeSBFOnce). Any task; the poll task sends it.
+        // (exeSBFOnce). Any task; the poll task sends it. With the raw outputs
+        // on it is also asked after every link setup: the filter needs the
+        // ephemerides the receiver decoded before this boot (OnChange sent
+        // them then).
         void requestNavResend() { nav_resend_.store(true, std::memory_order_relaxed); }
+
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+        // ── Raw outputs for the raw-GNSS navigation filter (#1600 on the mosaic) ──
+        // The mosaic-only image's alone (see the top of this file).
+        // Off until enableRawOutputs(), called before begin(): it makes the
+        // queues and the decode's scratch (false without the memory, and
+        // then nothing is kept). Every take is safe from another task than
+        // the poll; a full queue drops the newest and counts it, once
+        // something has started taking from it.
+        //
+        // takeRawEpoch: each MeasEpoch on the fused grid (setRawEpochPeriodMs,
+        // GPS-time milliseconds; 0, every epoch, until it is set) with at
+        // least one GPS L1 C/A, Galileo E1 or BeiDou B1I cell
+        // (MosaicRawEpoch.h). Its GPS instant on the MCU clock, mcu_us, is
+        // TOW less the receiver's clock bias then (the last PVTGeodetic whose
+        // own MeasEpoch was seen, carried by its drift and the clock jumps
+        // since), through the 1PPS line -- and 0, untimed, until that line is
+        // valid, while the receiver's time is not FINETIME, or when no edge
+        // has paired with its second for 120 s.
+        //
+        // takeEphemeris: each GPSNav, GALNav or BDSNav block as it came
+        // (CRC checked), for SbfNav's decodeSbfEphemeris. Galileo F/NAV and
+        // BeiDou GEO, which the decoder refuses, are counted and never
+        // queued. A block longer than `cap` is dropped and counted.
+        //
+        // broadcastIono: the last GPSIon's 8 Klobuchar bytes as broadcast and
+        // the GPS day it came (decodeGpsIon); false before one. Not taken:
+        // the caller compares it with what it has.
+        bool enableRawOutputs();
+        void setRawEpochPeriodMs(uint32_t period_ms);
+        bool takeRawEpoch(gnss_raw::TimedRawEpoch& out);
+        bool takeEphemeris(uint8_t* out, size_t cap, size_t& len);
+        bool broadcastIono(int8_t raw[8], uint16_t& gps_day) const;
+
+        // The raw outputs' counts since boot (the 30 s status line, the
+        // [RAWGNSS] console line). Read from any task: a counter may be one
+        // behind another.
+        struct RawStats
+        {
+            bool     enabled = false;
+            bool     nav_in_psram = false;   // the navigation queue: 64 deep in PSRAM, or 24 in internal RAM
+            uint16_t nav_depth = 0;
+            uint32_t period_ms = 0;          // the fused grid
+            // MeasEpoch
+            uint32_t published = 0;          // handed over (timed or not)
+            uint32_t untimed = 0;            //   with mcu_us 0
+            uint32_t no_bias = 0;            //   timed with no PVT bias to carry (dtr 0: up to 0.5 ms off)
+            uint32_t decimated = 0;          // off the grid: their clock jumps noted, nothing handed over
+            uint32_t empty = 0;              // on the grid, refused or with no cell: not handed over
+            uint32_t dropped = 0;            // the queue was full
+            uint32_t pvt_passed = 0;         // PVTGeodetics that could not carry the bias (pvtAnchorsJumps)
+            uint32_t clock_jumps = 0;        // the receiver's 1 ms clock jumps seen
+            uint32_t clock_restarts = 0;     //   and its jump count starting over (a receiver reset)
+            // navigation blocks, by GPS, Galileo, BeiDou
+            uint32_t nav_queued[3] = {};
+            uint32_t nav_filtered[3] = {};   // F/NAV, GEO or too short: what the decoder would refuse
+            uint32_t nav_dropped[3] = {};    // the queue was full
+            uint32_t nav_too_long = 0;       // longer than kSbfNavMaxLen
+            uint32_t nav_short_buffer = 0;   // longer than the taker's buffer
+            uint32_t ions = 0;               // GPSIon blocks decoded
+            uint32_t ions_bad = 0;           //   and refused
+            // the PPS tag check: each whole-second epoch's tag against its
+            // 1PPS edge (ppsResidualUs, with that second's own RxClkBias), or
+            // where the edge was due when the interrupt stamped it late, and
+            // judged once the line has the crystal's drift (notePpsTag); the
+            // bar is kPpsTagBarUs
+            mosaic::PpsTagStats pps;
+        };
+        void rawStats(RawStats& out) const;
+        static constexpr int32_t kPpsTagBarUs = 200;   // a right tag leaves ~0.03 ms rms
+#endif
 
     private:
 
@@ -125,6 +219,15 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         void drainUartEvents();
         void logStatus();
         void logSetup();
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+        // the raw outputs (enableRawOutputs), all in the poll task
+        void rawMeasEpoch(const uint8_t* block, size_t len, uint32_t tow_ms, int64_t end_us);
+        void rawPvt(const mosaic::PvtGeodetic& p);
+        void rawNav(const uint8_t* block, size_t len, uint16_t number);
+        void rawIon(const uint8_t* block, size_t len);
+        bool rawTimeTagOk() const;
+        void logRawStatus();
+#endif
 
         uart_port_t _uartPort;
         uint8_t     rx_pin_ = 0;
@@ -132,6 +235,7 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         int8_t      pps_pin_ = -1;
         uint8_t     update_rate_hz_ = 20;
         uint32_t    begin_timeout_ms_;
+        bool        begin_wait_ = true;
 
         mosaic::SbfParser parser_;
         mosaic::MosaicLink link_;
@@ -197,6 +301,53 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
 
         std::atomic<bool> nav_resend_{false};
         uint32_t          nav_resends_ = 0;
+
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+        // The raw outputs: everything they keep is in one block allocated by
+        // enableRawOutputs(), so a mosaic image that never asks for them (the
+        // -DTR_RAW_GNSS_SHADOW=0 one) carries only this pointer and the lock.
+        struct NavItem
+        {
+            uint8_t len;
+            uint8_t bytes[mosaic::kSbfNavMaxLen];
+        };
+        static_assert(mosaic::kSbfNavMaxLen <= 255, "NavItem::len is a byte");
+        struct RawState
+        {
+            QueueHandle_t epoch_q = nullptr;     // TimedRawEpoch, internal RAM
+            QueueHandle_t nav_q = nullptr;       // NavItem, PSRAM where there is some
+            bool          nav_caps = false;      //   made by xQueueCreateWithCaps (deleted with its own call)
+            std::atomic<uint32_t> period_ms{0};  // the fused grid (setRawEpochPeriodMs)
+            std::atomic<bool> taking_epochs{false};
+            std::atomic<bool> taking_nav{false};
+            gnss_raw::TimedRawEpoch scratch;     // the MeasEpoch being adapted
+            NavItem       nav_item = {};         // the block being queued
+            mosaic::MosaicJumpState jump;        // every MeasEpoch's clock jumps
+            bool          fine_time = false;     // ReceiverTime's FINETIME, last said
+            // the PVT whose RxClkBias the tags carry (pvtAnchorsJumps)
+            bool          pvt_have = false;
+            double        pvt_bias_ms = 0.0;
+            double        pvt_drift_ppm = 0.0;
+            int64_t       pvt_rx_ms = 0;         // its receiver time, WNc * 604800000 + TOW
+            int32_t       pvt_j_ms = 0;          // the jump count then
+            uint32_t      pvt_rebases = 0;
+            // the last PPS edge paired with its GPS second, whichever block paired it
+            bool          pair_have = false;
+            int64_t       pair_gps_s = 0;
+            int64_t       pair_edge_us = 0;
+            // the last whole-second epoch's tag, for the PPS check at its PVT
+            bool          tag_have = false;
+            int64_t       tag_rx_ms = 0;
+            int64_t       tag_mcu_us = 0;
+            // the last GPSIon (under raw_mux_)
+            bool          iono_have = false;
+            int8_t        iono_raw[8] = {};
+            uint16_t      iono_day = 0;
+            RawStats      st;
+        };
+        RawState*         raw_ = nullptr;
+        mutable portMUX_TYPE raw_mux_ = portMUX_INITIALIZER_UNLOCKED;
+#endif
 
         // The 30 s status line
         int64_t           status_us_ = 0;

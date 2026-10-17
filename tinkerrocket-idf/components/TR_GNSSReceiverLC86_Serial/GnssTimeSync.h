@@ -83,6 +83,11 @@ public:
 
     // The MCU crystal against GPS, ppm (positive: the MCU clock runs fast).
     double driftPpm() const { return drift_ * 1.0e6; }
+    // Whether that drift has been fitted yet (three 10 s blocks spanning
+    // 20 s, about 30 s after the first sample). Before, the line runs flat:
+    // valid, but off the MCU clock by the crystal's ppm each second since its
+    // anchor.
+    bool driftFitted() const { return drift_fitted_; }
     // How far above the envelope 90 % of the recent samples sit, ms: the
     // poll's quantisation, what the envelope removes. (Polls that land while
     // the receiver's burst is still arriving backdate exactly, so the median
@@ -151,6 +156,7 @@ private:
     int      bn_ = 0;
     double   a_ = 0.0;      // the envelope at t_ref_, s
     double   drift_ = 0.0;  // d(MCU - GPS) / d(GPS)
+    bool     drift_fitted_ = false;
     double   t_ref_ = 0.0;
     double   env_rms_ms_ = 0.0;
     bool     have_ = false;

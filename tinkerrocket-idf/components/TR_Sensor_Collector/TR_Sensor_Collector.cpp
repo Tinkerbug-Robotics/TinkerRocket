@@ -747,6 +747,10 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     ESP_LOGI(SC_TAG, "Initializing GNSS (RX=%d TX=%d)...", GNSS_RX, GNSS_TX);
     if (use_gnss)
     {
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+        // a reboot in flight: look for it, but leave the rest to the poll task
+        gnss_receiver.setBeginWait(!gnss_defer_);
+#endif
         if (!gnss_receiver.begin((uint8_t)GNSS_UPDATE_RATE,
                                  GNSS_RX,
                                  GNSS_TX,
@@ -770,6 +774,11 @@ void SensorCollector::begin(uint8_t imu_execution_core)
             // The poll task runs at twice the navigation rate of the receiver
             // found: 18 Hz for the u-blox, 20 for the mosaic-G5.
             GNSS_UPDATE_RATE = gnss_receiver.updateRateHz();
+#endif
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+            if (gnss_defer_)
+                ESP_LOGW(SC_TAG, "GNSS bring-up left to the poll task: the receiver comes up when it answers");
+            else
 #endif
             ESP_LOGI(SC_TAG, "GNSS found and initialized");
             // Per-satellite reports (UBX-NAV-SAT) are enabled inside the
@@ -1540,6 +1549,9 @@ bool SensorCollector::enableGNSSRawOutputs()
 {
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
     return gnss_receiver.enableRawOutputs();
+#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // The mosaic-only image's: its MeasEpoch, navigation blocks and GPSIon
+    return gnss_receiver.enableRawOutputs();
 #else
     return false;
 #endif
@@ -1549,6 +1561,10 @@ bool SensorCollector::getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out)
 {
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
     // No semaphore: the driver's queue is safe between the poll task and us.
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.takeRawEpoch(out);
+#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // The same: the driver's queue, the epochs on the fused grid
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.takeRawEpoch(out);
 #else
@@ -1562,11 +1578,35 @@ bool SensorCollector::getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len)
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.takeEphemeris(out, cap, len);
+#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // A whole SBF navigation block; one longer than cap is dropped and
+    // counted by the driver (cap is mosaic::kSbfNavMaxLen)
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.takeEphemeris(out, cap, len);
 #else
     (void)out; (void)cap; (void)len;
     return false;
 #endif
 }
+
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+bool SensorCollector::getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const
+{
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.broadcastIono(raw, gps_day);
+}
+
+void SensorCollector::setGNSSRawEpochPeriodMs(uint32_t period_ms)
+{
+    gnss_receiver.setRawEpochPeriodMs(period_ms);
+}
+
+bool SensorCollector::getGNSSRawStats(TR_GNSSReceiverMosaicSerial::RawStats& out) const
+{
+    gnss_receiver.rawStats(out);
+    return out.enabled;
+}
+#endif
 
 bool SensorCollector::getGNSSFix(gnss_raw::TimedFix& out)
 {

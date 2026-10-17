@@ -53,7 +53,13 @@ public:
 
     // Raw GNSS for the raw-GNSS shadow filter (#1600).  Same rule again: a
     // real sky must not meet a simulated IMU, so while a sim runs the real
-    // epochs and ephemerides are consumed and dropped.
+    // epochs and ephemerides are consumed and dropped.  Except the mosaic-G5's
+    // ephemerides (its navigation blocks), passed on in a sim too: they say
+    // where the satellites are, not what the IMU did, and the filter's stage
+    // only files them; and that receiver sends each one once (when it
+    // changes, or on a resend at link setup and launch), where the LC86G
+    // repeats them every second, so one dropped in a sim on the pad would be
+    // missing until its next upload, hours on.
     bool enableGNSSRawOutputs() { return real_.enableGNSSRawOutputs(); }
     bool getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out);
     bool getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len);
@@ -65,6 +71,14 @@ public:
     // its sky is the flight's, so the receiver's output passes through, and
     // each fix's GPS time sets the replay's clock.
     bool getGNSSFix(gnss_raw::TimedFix& out);
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // The mosaic-only image's GPS ionosphere, by the same rule: a real sky's
+    // while idle or in the rig replay, none while a sim runs. It is the last
+    // one decoded, not consumed, so the GNSS task finds it again after the
+    // sim. The fused grid goes straight to the receiver.
+    bool getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const;
+    void setGNSSRawEpochPeriodMs(uint32_t period_ms) { real_.setGNSSRawEpochPeriodMs(period_ms); }
+#endif
 
     // Debug passthrough
     void getISM6HG256DebugSnapshot(ISM6HG256DebugSnapshot& snapshot_out) const;

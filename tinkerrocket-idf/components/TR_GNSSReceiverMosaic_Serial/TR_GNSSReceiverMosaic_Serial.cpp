@@ -9,15 +9,26 @@
 
 #include <driver/gpio.h>
 #include <esp_attr.h>
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <freertos/idf_additions.h>   // xQueueCreateWithCaps
 #include <freertos/task.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <new>
 
 static const char* TAG = "GNSS";
+
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+// The navigation blocks by the numbers this driver streams and SbfNav decodes.
+static_assert(mosaic::SBF_GPS_NAV == mosaic::kSbfGpsNav && mosaic::SBF_GAL_NAV == mosaic::kSbfGalNav &&
+                  mosaic::SBF_BDS_NAV == mosaic::kSbfBdsNav && mosaic::SBF_GPS_ION == mosaic::kSbfGpsIon,
+              "SbfParser.h and SbfNav.h must name the same navigation blocks");
+#endif
 
 // 2 Mbaud carries the full 20 Hz set (~66 kB/s measured) at a third of the
 // line; 921600 would run at 71 %, with each epoch's burst filling 35 of its
@@ -51,6 +62,22 @@ static constexpr size_t kMaxBytesPerPoll = 4096U;
 static constexpr int64_t  kPpsMinSpacingUs = 200000;
 static constexpr uint32_t kPpsBurstMute    = 20;
 static constexpr int64_t  kPpsUnmuteUs     = 2000000;
+
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+// The raw outputs (enableRawOutputs). Three epochs (~2.3 kB each, internal
+// RAM): the GNSS task takes them every 5 ms, and two more ride out a pass it
+// spends on an esoc's navigation blocks. 64 navigation blocks in PSRAM: an
+// esoc sends about 35 at once, F/NAV and GEO already left out; 24 where there
+// is no PSRAM. An epoch is tagged with the RxClkBias of a PVT at most
+// kPvtCarryMs before it (the PVT before each MeasEpoch is 50 ms old at 20 Hz),
+// and only while some 1PPS edge has paired with its second within
+// kPpsPairMaxAgeUs: the line drifts with the MCU crystal once the edges stop.
+static constexpr UBaseType_t kRawEpochQDepth   = 3;
+static constexpr UBaseType_t kNavQDepthPsram   = 64;
+static constexpr UBaseType_t kNavQDepthInternal = 24;
+static constexpr int64_t     kPvtCarryMs       = 1000;
+static constexpr int64_t     kPpsPairMaxAgeUs  = 120000000;
+#endif
 
 // The blocks. The FC's streams are 5-10; the bench logger (mosaic_log.py)
 // uses 1-4 on USB1, so both can run at once on the bench.
@@ -213,6 +240,12 @@ void TR_GNSSReceiverMosaicSerial::runLink()
     {
         setups_logged_ = link_.setups();
         logSetup();
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+        // The raw-GNSS filter needs every ephemeris the receiver holds, and
+        // OnChange sent them when it first decoded them, before this boot or
+        // this link: ask again after each setup.
+        if (raw_ != nullptr) nav_resend_.store(true, std::memory_order_relaxed);
+#endif
     }
 }
 
@@ -283,6 +316,16 @@ bool TR_GNSSReceiverMosaicSerial::begin(uint8_t update_rate_hz,
     cfg.factory_baud = kFactoryBaud;
     link_.start(cfg, cmds_, n_cmds_, nowMs());
     setups_logged_ = 0;
+
+    if (!begin_wait_)
+    {
+        // setBeginWait(false): the link's first step here (its UART at the
+        // first baud it listens on), every step after it in the poll task
+        runLink();
+        ESP_LOGI(TAG, "Looking for the mosaic-G5 (RX=%u TX=%u PPS=%d) from the poll task, without waiting",
+                 rx_pin_, tx_pin_, pps_pin_);
+        return true;
+    }
 
     ESP_LOGI(TAG, "Looking for the mosaic-G5 (RX=%u TX=%u PPS=%d), up to %lu s...",
              rx_pin_, tx_pin_, pps_pin_, static_cast<unsigned long>(begin_timeout_ms_ / 1000));
@@ -379,6 +422,14 @@ void TR_GNSSReceiverMosaicSerial::pairPps(double gps_s, int64_t arrival_us)
     }
     int64_t edge = 0;
     if (!pairer_.pair(gps_s, arrival_us, edge)) return;
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    if (raw_ != nullptr)
+    {
+        raw_->pair_have = true;
+        raw_->pair_gps_s = std::llround(gps_s);
+        raw_->pair_edge_us = edge;
+    }
+#endif
 
     // An edge IS its GPS second (latency 0), so the line needs no receiver
     // delay calibrated, unlike the LC86G's sentence arrivals.
@@ -466,12 +517,28 @@ void TR_GNSSReceiverMosaicSerial::onBlock(const uint8_t* block, size_t len, size
             {
                 pairPps(h.wnc * 604800.0 + h.tow_ms / 1000U, end_us);
             }
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+            if (raw_ != nullptr) rawPvt(p);   // after the pair: its second's edge is known
+#endif
             break;
         }
         case mosaic::SBF_MEAS_EPOCH:
             n_meas_++;
             noteDelay(h.number, h.tow_ms, h.wnc, end_us);
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+            if (raw_ != nullptr) rawMeasEpoch(block, len, h.tow_ms, end_us);
+#endif
             break;
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+        case mosaic::SBF_GPS_NAV:
+        case mosaic::SBF_GAL_NAV:
+        case mosaic::SBF_BDS_NAV:
+            if (raw_ != nullptr) rawNav(block, len, h.number);
+            break;
+        case mosaic::SBF_GPS_ION:
+            if (raw_ != nullptr) rawIon(block, len);
+            break;
+#endif
         case mosaic::SBF_MEAS_EXTRA:
             n_extra_++;
             break;
@@ -485,6 +552,10 @@ void TR_GNSSReceiverMosaicSerial::onBlock(const uint8_t* block, size_t len, size
         {
             mosaic::ReceiverTime t;
             if (mosaic::decodeReceiverTime(block, len, t) && t.delta_ls != -128) leap_s_ = t.delta_ls;
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+            if (raw_ != nullptr && mosaic::decodeReceiverTime(block, len, t))
+                raw_->fine_time = (t.sync_level & 0x04) != 0;   // FINETIME: the time tag's precondition
+#endif
             break;
         }
         case mosaic::SBF_RECEIVER_STATUS:
@@ -642,7 +713,321 @@ void TR_GNSSReceiverMosaicSerial::logStatus()
                  (disk_.status & 0x08) ? ", logging" : "", (disk_.status & 0x02) ? ", FULL" : "",
                  disk_.used_bytes / 1.0e6, static_cast<unsigned long>(disk_.size_mb), disk_.error);
     }
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    if (raw_ != nullptr) logRawStatus();
+#endif
     n_meas_ = n_extra_ = n_pvt_ = n_fix_ = 0;
     delay_meas_ = DelayStats{};
     delay_pvt_ = DelayStats{};
 }
+
+// ── Raw outputs for the raw-GNSS navigation filter ──────────────────────
+// The mosaic-only image's alone (TR_GNSS_DRIVER_MOSAIC; the header says why).
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+
+bool TR_GNSSReceiverMosaicSerial::enableRawOutputs()
+{
+    if (raw_ != nullptr) return true;
+    // Internal RAM: the poll task adapts each epoch into it at 10 Hz. Only the
+    // navigation queue goes to PSRAM, where its 10 kB costs the flight nothing.
+    void* mem = heap_caps_malloc(sizeof(RawState), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (mem == nullptr)
+    {
+        ESP_LOGE(TAG, "mosaic raw: no memory for the raw outputs (%u B)", static_cast<unsigned>(sizeof(RawState)));
+        return false;
+    }
+    RawState* r = new (mem) RawState();
+    r->epoch_q = xQueueCreate(kRawEpochQDepth, sizeof(gnss_raw::TimedRawEpoch));
+    r->nav_q = xQueueCreateWithCaps(kNavQDepthPsram, sizeof(NavItem), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (r->nav_q != nullptr)
+    {
+        r->nav_caps = true;
+        r->st.nav_in_psram = true;
+        r->st.nav_depth = static_cast<uint16_t>(kNavQDepthPsram);
+    }
+    else
+    {
+        r->nav_q = xQueueCreate(kNavQDepthInternal, sizeof(NavItem));
+        r->st.nav_depth = static_cast<uint16_t>(kNavQDepthInternal);
+    }
+    if (r->epoch_q == nullptr || r->nav_q == nullptr)
+    {
+        // nothing half made: give back what was got
+        ESP_LOGE(TAG, "mosaic raw: no memory for the epoch queue (%u B) or the navigation queue",
+                 static_cast<unsigned>(kRawEpochQDepth * sizeof(gnss_raw::TimedRawEpoch)));
+        if (r->epoch_q != nullptr) vQueueDelete(r->epoch_q);
+        if (r->nav_q != nullptr)
+        {
+            if (r->nav_caps) vQueueDeleteWithCaps(r->nav_q);
+            else vQueueDelete(r->nav_q);
+        }
+        r->~RawState();
+        heap_caps_free(mem);
+        return false;
+    }
+    r->st.enabled = true;
+    raw_ = r;   // before begin(): the poll task does not exist yet
+    ESP_LOGI(TAG, "mosaic raw: outputs on -- %u epochs (%u B, internal), %u navigation blocks in %s, %u B of state",
+             static_cast<unsigned>(kRawEpochQDepth),
+             static_cast<unsigned>(kRawEpochQDepth * sizeof(gnss_raw::TimedRawEpoch)),
+             static_cast<unsigned>(r->st.nav_depth), r->st.nav_in_psram ? "PSRAM" : "internal RAM",
+             static_cast<unsigned>(sizeof(RawState)));
+    return true;
+}
+
+void TR_GNSSReceiverMosaicSerial::setRawEpochPeriodMs(uint32_t period_ms)
+{
+    if (raw_ == nullptr) return;
+    raw_->period_ms.store(period_ms, std::memory_order_relaxed);
+    raw_->st.period_ms = period_ms;
+}
+
+bool TR_GNSSReceiverMosaicSerial::takeRawEpoch(gnss_raw::TimedRawEpoch& out)
+{
+    if (raw_ == nullptr) return false;
+    raw_->taking_epochs.store(true, std::memory_order_relaxed);
+    return xQueueReceive(raw_->epoch_q, &out, 0) == pdTRUE;
+}
+
+bool TR_GNSSReceiverMosaicSerial::takeEphemeris(uint8_t* out, size_t cap, size_t& len)
+{
+    if (raw_ == nullptr) return false;
+    raw_->taking_nav.store(true, std::memory_order_relaxed);
+    NavItem it;
+    while (xQueueReceive(raw_->nav_q, &it, 0) == pdTRUE)
+    {
+        if (it.len > cap)
+        {
+            raw_->st.nav_short_buffer++;   // this task's own counter
+            continue;
+        }
+        std::memcpy(out, it.bytes, it.len);
+        len = it.len;
+        return true;
+    }
+    return false;
+}
+
+bool TR_GNSSReceiverMosaicSerial::broadcastIono(int8_t raw[8], uint16_t& gps_day) const
+{
+    if (raw_ == nullptr) return false;
+    portENTER_CRITICAL(&raw_mux_);
+    const bool have = raw_->iono_have;
+    if (have)
+    {
+        std::memcpy(raw, raw_->iono_raw, sizeof(raw_->iono_raw));
+        gps_day = raw_->iono_day;
+    }
+    portEXIT_CRITICAL(&raw_mux_);
+    return have;
+}
+
+void TR_GNSSReceiverMosaicSerial::rawStats(RawStats& out) const
+{
+    out = (raw_ != nullptr) ? raw_->st : RawStats{};
+}
+
+bool TR_GNSSReceiverMosaicSerial::rawTimeTagOk() const
+{
+    // The line valid; the receiver's own time fine (FINETIME: its clock bias
+    // and so the tag's dtr are meaningful); and an edge paired lately, so the
+    // line is the 1PPS's and not the crystal's drift run on from the last one.
+    const RawState& r = *raw_;
+    return time_sync_.valid() && r.fine_time && r.pair_have && nowUs() - r.pair_edge_us < kPpsPairMaxAgeUs;
+}
+
+void TR_GNSSReceiverMosaicSerial::rawMeasEpoch(const uint8_t* block, size_t len, uint32_t tow_ms, int64_t end_us)
+{
+    RawState& r = *raw_;
+    mosaic::MosaicEpochInfo info;
+    if (!mosaic::onFuseGrid(tow_ms, r.period_ms.load(std::memory_order_relaxed)))
+    {
+        // Off the grid: its header's clock jumps only, so the bias carried to
+        // the next epoch on it misses none (MosaicRawEpoch.h)
+        (void)mosaic::noteMeasEpochClock(block, len, r.jump, info);
+        r.st.decimated++;
+        r.st.clock_jumps = r.jump.jumps;
+        r.st.clock_restarts = r.jump.rebases;
+        return;
+    }
+    gnss_raw::TimedRawEpoch& e = r.scratch;
+    const bool cells = mosaic::rawEpochFromMeasEpoch(block, len, e.epoch, r.jump, info);
+    r.st.clock_jumps = r.jump.jumps;
+    r.st.clock_restarts = r.jump.rebases;
+    if (!cells)
+    {
+        r.st.empty++;   // refused, or nothing the filter takes: not handed over (an empty epoch is no
+                        // epoch to the levelling's steady test either)
+        return;
+    }
+    e.arrival_us = end_us;
+    e.gps_week = info.wnc;
+    e.mcu_us = 0;
+    const int64_t rx_ms = static_cast<int64_t>(info.wnc) * 604800000LL + info.tow_ms;
+    bool no_bias = false;
+    if (rawTimeTagOk())
+    {
+        // t_gps = TOW - RxClkBias: the bias of the last PVT that may carry it,
+        // run on by its drift and by the clock jumps since (dtrMs). Without
+        // one, dtr 0 puts the epoch up to 0.5 ms late or early.
+        double dtr = 0.0;
+        if (r.pvt_have && rx_ms >= r.pvt_rx_ms && rx_ms - r.pvt_rx_ms <= kPvtCarryMs &&
+            r.jump.rebases == r.pvt_rebases)
+        {
+            dtr = mosaic::dtrMs(r.pvt_bias_ms, r.pvt_drift_ppm, static_cast<double>(rx_ms - r.pvt_rx_ms) * 1.0e-3,
+                                info.j_ms - r.pvt_j_ms);
+        }
+        else
+        {
+            no_bias = true;
+        }
+        int64_t mcu = 0;
+        if (time_sync_.mcuAt(mosaic::epochGpsS(info.wnc, info.tow_ms, dtr), mcu)) e.mcu_us = mcu;
+    }
+    if (xQueueSend(r.epoch_q, &e, 0) != pdTRUE)
+    {
+        // full: the GNSS task is not taking them (yet, at boot: not counted)
+        if (r.taking_epochs.load(std::memory_order_relaxed)) r.st.dropped++;
+        return;
+    }
+    r.st.published++;
+    if (e.mcu_us == 0)
+    {
+        r.st.untimed++;
+        return;
+    }
+    if (no_bias) r.st.no_bias++;
+    if (info.tow_ms % 1000U == 0)
+    {
+        // a whole second's tag, for the PPS check when its own PVT comes
+        r.tag_have = true;
+        r.tag_rx_ms = rx_ms;
+        r.tag_mcu_us = e.mcu_us;
+    }
+}
+
+void TR_GNSSReceiverMosaicSerial::rawPvt(const mosaic::PvtGeodetic& p)
+{
+    RawState& r = *raw_;
+    // A solution's clock: RxClkBias is not in has_solution's do-not-use test,
+    // and its do-not-use is -2e10
+    if (!p.has_solution || !std::isfinite(p.rx_clk_bias_ms) || std::fabs(p.rx_clk_bias_ms) > 1000.0 ||
+        !std::isfinite(p.rx_clk_drift_ppm) || std::fabs(p.rx_clk_drift_ppm) > 1000.0f)
+        return;
+    const int64_t rx_ms = static_cast<int64_t>(p.wnc) * 604800000LL + p.tow_ms;
+    if (mosaic::pvtAnchorsJumps(r.jump, p.wnc, p.tow_ms))
+    {
+        r.pvt_have = true;
+        r.pvt_bias_ms = p.rx_clk_bias_ms;
+        r.pvt_drift_ppm = p.rx_clk_drift_ppm;
+        r.pvt_rx_ms = rx_ms;
+        r.pvt_j_ms = r.jump.j_ms;
+        r.pvt_rebases = r.jump.rebases;
+    }
+    else
+    {
+        // its own MeasEpoch was not the last seen: its bias may hold a jump
+        // the count has not (pvtAnchorsJumps); the one before stands in
+        r.st.pvt_passed++;
+    }
+    // The PPS tag check: the whole-second epoch's tag against the edge of
+    // that very GPS second, with this, its own epoch's, RxClkBias
+    // (ppsResidualUs). A slip of a second, a week, a millisecond of jumps or
+    // the bias's sign in the tag shows here as hundreds of microseconds or
+    // more. An edge the interrupt stamped late (a flash write held it off),
+    // and the seconds before the line has the crystal's drift, are kept
+    // apart (notePpsTag).
+    if (r.tag_have && r.tag_rx_ms == rx_ms)
+    {
+        r.tag_have = false;
+        if (r.pair_have && r.pair_gps_s * 1000LL == rx_ms)
+        {
+            int64_t at_s = 0, at_before = 0;
+            const int64_t second_us =
+                time_sync_.mcuAt(static_cast<double>(r.pair_gps_s), at_s) &&
+                        time_sync_.mcuAt(static_cast<double>(r.pair_gps_s - 1), at_before)
+                    ? at_s - at_before
+                    : 1000000;
+            mosaic::notePpsTag(r.st.pps, r.pair_gps_s, r.tag_mcu_us, r.pair_edge_us, second_us,
+                               time_sync_.driftFitted(), p.rx_clk_bias_ms, kPpsTagBarUs);
+        }
+    }
+}
+
+void TR_GNSSReceiverMosaicSerial::rawNav(const uint8_t* block, size_t len, uint16_t number)
+{
+    RawState& r = *raw_;
+    const int k = (number == mosaic::SBF_GPS_NAV) ? 0 : (number == mosaic::SBF_GAL_NAV) ? 1 : 2;
+    if (len > mosaic::kSbfNavMaxLen)
+    {
+        r.st.nav_too_long++;
+        return;
+    }
+    // What the decoder would refuse for its source or orbit (Galileo F/NAV,
+    // BeiDou GEO) or its length never takes a queue place
+    if (!mosaic::sbfNavKeep(block, len))
+    {
+        r.st.nav_filtered[k]++;
+        return;
+    }
+    r.nav_item.len = static_cast<uint8_t>(len);
+    std::memcpy(r.nav_item.bytes, block, len);
+    if (xQueueSend(r.nav_q, &r.nav_item, 0) == pdTRUE)
+        r.st.nav_queued[k]++;
+    else
+        r.st.nav_dropped[k]++;   // a lost ephemeris until the next resend: counted from boot
+}
+
+void TR_GNSSReceiverMosaicSerial::rawIon(const uint8_t* block, size_t len)
+{
+    RawState& r = *raw_;
+    int8_t raw[8];
+    uint16_t day = 0;
+    if (!mosaic::decodeGpsIon(block, len, raw, day))
+    {
+        r.st.ions_bad++;
+        return;
+    }
+    portENTER_CRITICAL(&raw_mux_);
+    std::memcpy(r.iono_raw, raw, sizeof(r.iono_raw));
+    r.iono_day = day;
+    r.iono_have = true;
+    portEXIT_CRITICAL(&raw_mux_);
+    r.st.ions++;
+}
+
+void TR_GNSSReceiverMosaicSerial::logRawStatus()
+{
+    const RawStats& s = raw_->st;
+    const char* tag = !time_sync_.valid() ? "untimed: the PPS line is not valid yet"
+                      : !raw_->fine_time ? "untimed: the receiver's time is not FINETIME"
+                      : !raw_->pair_have || nowUs() - raw_->pair_edge_us >= kPpsPairMaxAgeUs
+                          ? "untimed: no PPS edge paired in 120 s"
+                          : "tagged on the PPS line";
+    ESP_LOGI(TAG, "mosaic raw: epochs on the %lu ms grid: %lu handed over (%lu untimed, %lu without a PVT bias), "
+                  "%lu dropped, %lu empty; %lu off the grid; %s | nav queued/filtered/dropped: GPS %lu/%lu/%lu, "
+                  "GAL %lu/%lu/%lu, BDS %lu/%lu/%lu; too long %lu, short buffer %lu (queue %u in %s) | GPSIon %lu "
+                  "(%lu refused) | clock jumps %lu, restarts %lu, PVTs not carried %lu",
+             static_cast<unsigned long>(s.period_ms), static_cast<unsigned long>(s.published),
+             static_cast<unsigned long>(s.untimed), static_cast<unsigned long>(s.no_bias),
+             static_cast<unsigned long>(s.dropped), static_cast<unsigned long>(s.empty),
+             static_cast<unsigned long>(s.decimated), tag,
+             static_cast<unsigned long>(s.nav_queued[0]), static_cast<unsigned long>(s.nav_filtered[0]),
+             static_cast<unsigned long>(s.nav_dropped[0]), static_cast<unsigned long>(s.nav_queued[1]),
+             static_cast<unsigned long>(s.nav_filtered[1]), static_cast<unsigned long>(s.nav_dropped[1]),
+             static_cast<unsigned long>(s.nav_queued[2]), static_cast<unsigned long>(s.nav_filtered[2]),
+             static_cast<unsigned long>(s.nav_dropped[2]), static_cast<unsigned long>(s.nav_too_long),
+             static_cast<unsigned long>(s.nav_short_buffer), static_cast<unsigned>(s.nav_depth),
+             s.nav_in_psram ? "PSRAM" : "internal RAM", static_cast<unsigned long>(s.ions),
+             static_cast<unsigned long>(s.ions_bad), static_cast<unsigned long>(s.clock_jumps),
+             static_cast<unsigned long>(s.clock_restarts), static_cast<unsigned long>(s.pvt_passed));
+    ESP_LOGI(TAG, "mosaic PPS tag check: %lu whole seconds judged, |residual| max %ld us, %lu over %ld us, "
+                  "last %+ld us | %lu before the line had the crystal's drift (max %ld us, not judged) | %lu edges "
+                  "stamped late (the interrupt held off), up to %ld us past due: judged where due",
+             static_cast<unsigned long>(s.pps.checks), static_cast<long>(s.pps.max_us),
+             static_cast<unsigned long>(s.pps.over), static_cast<long>(kPpsTagBarUs),
+             static_cast<long>(s.pps.last_us), static_cast<unsigned long>(s.pps.settling),
+             static_cast<long>(s.pps.settling_max_us), static_cast<unsigned long>(s.pps.late),
+             static_cast<long>(s.pps.late_max_us));
+}
+#endif  // TR_GNSS_DRIVER_MOSAIC

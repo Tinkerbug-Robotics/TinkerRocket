@@ -144,6 +144,63 @@ foreach(_v TR_BENCH_CARRIER_MODE TR_BENCH_HALF_CYCLE_REPAIR)
         message(STATUS "${_v}=${${_v}} (bench)")
     endif()
 endforeach()
+# Bench (the mosaic-only image's CPU ladder, P1): the raw-GNSS filter's fused
+# grid in ms of GPS time (TR_BENCH_RAW_FUSE_MS: 100 is the profile's 10 Hz,
+# 200 its 5 Hz), the satellites it builds an epoch at most
+# (TR_BENCH_RAW_SAT_CAP: 16 is the profile's), and the boost screen's
+# threshold in g (TR_BENCH_BOOST_SCREEN_G: 0 screens every epoch, its worst
+# cost). Each sets the filter's start (main.cpp startRawShadow). Never set for
+# flight.
+#
+# These and TR_RAW_GNSS_IRAM below act only where the raw-GNSS filter
+# navigates on the mosaic-G5 (main.cpp's TR_RAW_NAV_MOSAIC): any other build
+# refuses them rather than build an image that silently ignores them.
+if(TR_GNSS_MOSAIC AND (NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW))
+    set(_tr_mosaic_rawnav ON)
+else()
+    set(_tr_mosaic_rawnav OFF)
+endif()
+set(_tr_mosaic_rawnav_hooks TR_BENCH_RAW_START_FAIL TR_BENCH_RESTORE_SIM TR_BENCH_PANIC_AT_S
+    TR_BENCH_PANIC_FILTER_AT_S TR_BENCH_RAW_STOP_AT_S)
+foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G TR_RAW_GNSS_IRAM
+        ${_tr_mosaic_rawnav_hooks})
+    if(DEFINED ${_v} AND NOT _tr_mosaic_rawnav)
+        message(FATAL_ERROR "${_v} is for the mosaic-only image's raw-GNSS filter (-DTR_GNSS_MOSAIC=1 on a V8 or V9): this build would ignore it. A build dir keeps every -D value: use a fresh one.")
+    endif()
+endforeach()
+foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G)
+    if(DEFINED ${_v})
+        add_compile_definitions(${_v}=${${_v}})
+        message(STATUS "${_v}=${${_v}} (bench)")
+    endif()
+endforeach()
+# Bench hooks for the mosaic-only image's robustness bench (P3, gate G8), one
+# image each, never flown (main.cpp, TR_RAW_NAV_MOSAIC):
+#   TR_BENCH_RAW_START_FAIL=1     the filter's start fails before it allocates:
+#                                 NO NAVIGATION FILTER and FCB_DEG_SENSORS
+#   TR_BENCH_RESTORE_SIM=1        a sim flight's snapshot is restored like a
+#                                 real one (power cut mid sim), every pyro dry
+#   TR_BENCH_PANIC_AT_S=N         one panic N s after the loop starts, once a
+#                                 power-on: the crash boot after it
+#   TR_BENCH_PANIC_FILTER_AT_S=N  the filter's task aborts N s after the filter
+#                                 runs in flight, every boot: with
+#                                 TR_BENCH_RESTORE_SIM, the crash loop
+#   TR_BENCH_RAW_STOP_AT_S=N      the filter stops N s into each flight: held
+#                                 over and restarted from its last good state
+foreach(_v ${_tr_mosaic_rawnav_hooks})
+    if(DEFINED ${_v})
+        add_compile_definitions(${_v}=${${_v}})
+        message(WARNING "${_v}=${${_v}} -- a BENCH hook of the mosaic-only image (P3): never fly this image")
+    endif()
+endforeach()
+# Bench: the raw-GNSS filter's EKF and measurement builder in internal RAM
+# (main/raw_gnss_iram.lf, the Beetle's placement) on another board too:
+# -DTR_RAW_GNSS_IRAM=1 on the mosaic-only image, to measure what the P4's
+# PSRAM-and-flash fetches cost it. main/CMakeLists.txt places the fragment.
+if(DEFINED TR_RAW_GNSS_IRAM)
+    add_compile_definitions(TR_RAW_GNSS_IRAM=${TR_RAW_GNSS_IRAM})
+    message(STATUS "TR_RAW_GNSS_IRAM=${TR_RAW_GNSS_IRAM} -- the raw-GNSS filter in internal RAM (bench)")
+endif()
 # Bench: a per-section cycle and Xtensa performance-counter profile of the
 # flight task, printed every 5 s (main/loop_profile.h). Never set for flight.
 if(TR_LOOP_PROFILE)
@@ -176,7 +233,29 @@ elseif(TR_BOARD_V7)
 else()
     set(TR_BOARD_SUFFIX "")
 endif()
-set(PROJECT_VER "${TR_GIT_SHA}${TR_BOARD_SUFFIX}+${TR_BUILD_DATE}")
+# Bench marker, as the out_computer stamps its own: a build with any bench
+# switch above -- every TR_BENCH_* the cache holds, whatever its value, and
+# the others as each is applied -- says "-bench" after the board in its
+# version, which the boot log, the app's Firmware screen and OTA show. A bench
+# image installed over the air is then never taken for the flight image it
+# was built beside, and a bench build dir (its cache keeps every -D) reused
+# for a flight build stays marked. Before the date, so esp_app_desc's 31
+# characters clip the date and never the marker.
+set(TR_BENCH_SUFFIX "")
+get_cmake_property(_tr_cache_vars CACHE_VARIABLES)
+foreach(_v ${_tr_cache_vars})
+    if(_v MATCHES "^TR_BENCH_")
+        set(TR_BENCH_SUFFIX "-bench")
+    endif()
+endforeach()
+if(DEFINED TR_RAW_GNSS_IRAM OR TR_LOOP_PROFILE OR TR_HEADING_FIT_BENCH OR TR_I2S_TX_MONITOR OR TR_TEST_SETUP_FAIL
+   OR TR_GNSS_BENCH_COLD_START OR TR_GNSS_COCOM_DIAG OR TR_GNSS_RATE_HZ)
+    set(TR_BENCH_SUFFIX "-bench")
+endif()
+if(TR_BENCH_SUFFIX)
+    message(STATUS "flight_computer: a BENCH image (version marked ${TR_BENCH_SUFFIX}): never fly it")
+endif()
+set(PROJECT_VER "${TR_GIT_SHA}${TR_BOARD_SUFFIX}${TR_BENCH_SUFFIX}+${TR_BUILD_DATE}")
 
 # #1125: the same board suffix reaches the compiler, so the OTA receiver can
 # refuse an image built for a different board. CMake stays the single source of
@@ -291,7 +370,14 @@ if(TR_GNSS_MOSAIC)
     list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.mosaic")
     if(NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW)
         list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.rawnav")
+        # The receiver sends every GPS, Galileo and BeiDou ephemeris it
+        # tracks, ~50 satellites over a 2-4 h pad wait: the raw-GNSS filter's
+        # store holds 128 (the Beetle's 64). Project-wide, before project(),
+        # so TR_GNSSRaw, TR_RawGnssShadow and main lay the pool out alike;
+        # main.cpp checks at boot that they did (ephCapacityAgrees).
+        add_compile_definitions(TR_EPH_CAPACITY=128)
         message(STATUS "flight_computer: GNSS driver Septentrio mosaic-G5 (TR_GNSS_DRIVER_MOSAIC=1), overlays sdkconfig.defaults.mosaic + sdkconfig.defaults.rawnav (PSRAM on)")
+        message(STATUS "flight_computer: raw-GNSS NAVIGATION filter; GpsInsEKF not instantiated (ephemeris store 128)")
     else()
         message(STATUS "flight_computer: GNSS driver Septentrio mosaic-G5 (TR_GNSS_DRIVER_MOSAIC=1), overlay sdkconfig.defaults.mosaic (TR_RAW_GNSS_SHADOW=0: no raw-GNSS filter, PSRAM off)")
     endif()
