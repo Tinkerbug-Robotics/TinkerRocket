@@ -4,11 +4,10 @@
 On a still pad the navigation filter levels on gravity, and an accelerometer offset there is indistinguishable
 from tilt: the pad calibration's one still window cannot separate them, and with GNSS correcting all three axes a
 false tilt becomes a heading error in the boost. Turn each board axis straight up and then straight down: gravity
-flips sign on that axis and the offset does not, so
-
-    offset_i = (reading with axis i up + reading with axis i down) / 2
-
-(a face a few degrees off its axis reads |g| cos(tilt) both ways and cancels; 0.2 mg at 3 deg). The flight computer
+flips sign on that axis and the offset does not. The six faces are solved together as a sphere fit -- the offset and a
+per-axis scale such that every corrected reading is one g long -- so a face a few degrees off square does not bias
+the offset (the per-axis average (up + down) / 2 is the fit's starting point; with faces 4-9 deg off square and
+unequal it alone is up to ~6 mg off, the fit ~1 mg). The flight computer
 stores the offset in NVS ("acc_cal") and its converter takes it off the low-g and high-g readings, in the board
 frame (+X forward, +Y left, +Z up -- before the board->rocket mounting, so a remount keeps it).
 
@@ -30,7 +29,10 @@ import math
 import struct
 import sys
 
-from bleak import BleakClient, BleakScanner
+try:
+    from bleak import BleakClient, BleakScanner
+except ImportError:          # the solve alone (tests) needs no BLE
+    BleakClient = BleakScanner = None
 
 SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 COMMAND_UUID = "cba1d466-344c-4be3-ab3f-189f80dd7518"
@@ -145,17 +147,50 @@ def which_face(mean):
     return ax, sgn, tilt
 
 
+def solve_6x6(A, y):
+    """A x = y by Gauss-Jordan with partial pivoting (6 x 6); None if singular."""
+    n = len(y)
+    M = [list(A[i]) + [y[i]] for i in range(n)]
+    for c in range(n):
+        piv = max(range(c, n), key=lambda r: abs(M[r][c]))
+        if abs(M[piv][c]) < 1e-15:
+            return None
+        M[c], M[piv] = M[piv], M[c]
+        for r in range(n):
+            if r != c:
+                f = M[r][c] / M[c][c]
+                M[r] = [M[r][j] - f * M[c][j] for j in range(n + 1)]
+    return [M[i][n] / M[i][i] for i in range(n)]
+
+
 def solve(faces, g):
-    off, scl = [0.0] * 3, [0.0] * 3
-    for ax in range(3):
-        p, m = faces[(ax, 1)]["mean"][ax], faces[(ax, -1)]["mean"][ax]
-        off[ax] = 0.5 * (p + m)
-        scl[ax] = (p - m) / (2.0 * g)
-    resid = {}
-    for k, f in faces.items():
-        c = [(f["mean"][i] - off[i]) / scl[i] for i in range(3)]
-        resid[k] = math.sqrt(sum(x * x for x in c)) - g
-    return off, scl, resid
+    """The six faces' means -> offset (3), scale (3), converged. A sphere fit: Gauss-Newton on
+    |k * (m - b)| = g over the six faces, b the offset and k = 1 / scale per axis, from the per-axis average."""
+    b = [0.5 * (faces[(ax, 1)]["mean"][ax] + faces[(ax, -1)]["mean"][ax]) for ax in range(3)]
+    k = [1.0, 1.0, 1.0]
+    means = [list(f["mean"]) for f in faces.values()]
+    converged = False
+    for _ in range(20):
+        J, r = [], []
+        for m in means:
+            v = [k[i] * (m[i] - b[i]) for i in range(3)]
+            n = math.sqrt(sum(x * x for x in v))
+            r.append(n - g)
+            J.append([-k[i] * v[i] / n for i in range(3)] + [(m[i] - b[i]) * v[i] / n for i in range(3)])
+        # normal equations (J is 6 x 6 here; this also serves a non-square J)
+        JtJ = [[sum(J[a][i] * J[a][j] for a in range(len(J))) for j in range(6)] for i in range(6)]
+        Jtr = [-sum(J[a][i] * r[a] for a in range(len(J))) for i in range(6)]
+        dp = solve_6x6(JtJ, Jtr)
+        if dp is None:
+            break
+        b = [b[i] + dp[i] for i in range(3)]
+        k = [k[i] + dp[3 + i] for i in range(3)]
+        if max(abs(x) for x in dp) < 1e-9:
+            res = max(abs(math.sqrt(sum((k[i] * (m[i] - b[i])) ** 2 for i in range(3))) - g) for m in means)
+            converged = res < 1e-6
+            break
+    scl = [1.0 / x if x else float("inf") for x in k]
+    return b, scl, converged
 
 
 async def write_offset(link, off):
@@ -225,22 +260,19 @@ async def run(args):
                 print(line + f"  -- {face_name(ax, sgn)} (tilt {tilt:.1f} deg)")
             faces[(ax, sgn)] = f
 
-        off, scl, resid = solve(faces, g)
-        print(f"\nSolved (g = {g:.5f} m/s^2):")
+        off, scl, converged = solve(faces, g)
+        print(f"\nSolved (all six faces together, g = {g:.5f} m/s^2):")
         for ax in range(3):
             print(f"  {AXES[ax]}: offset {off[ax]:+.4f} m/s^2 ({off[ax] / G0 * 1e3:+.2f} mg)   "
                   f"scale {(scl[ax] - 1) * 1e2:+.3f} %")
-        worst = max(abs(r) for r in resid.values())
-        for k, r in resid.items():
-            print(f"  face {face_name(*k)}: |corrected| - g = {r / G0 * 1e3:+.2f} mg")
         bad = [AXES[i] for i in range(3) if abs(off[i]) > OFFSET_MAX]
-        if bad:
-            print(f"\nOffset past {OFFSET_MAX} m/s^2 on {', '.join(bad)} -- the flight computer would refuse it; "
-                  f"redo the faces (was one of them not still, or the wrong way?)")
+        odd = [AXES[i] for i in range(3) if not 0.97 <= scl[i] <= 1.03]
+        if not converged or bad or odd:
+            why = ("the fit did not converge" if not converged else
+                   f"offset past {OFFSET_MAX} m/s^2 on {', '.join(bad)}" if bad else
+                   f"scale outside 0.97-1.03 on {', '.join(odd)}")
+            print(f"\n{why} -- redo the faces (was one of them not still, or the wrong way?)")
             return 1
-        if worst > 5e-3 * G0:
-            print(f"\nNote: a face is {worst / G0 * 1e3:.1f} mg off one g after the correction (over 5) -- the "
-                  f"offset is still good to ~1-2 mg if the faces were squarish; the scale is not used.")
         if args.dry_run:
             print("\n--dry-run: nothing written")
             return 0

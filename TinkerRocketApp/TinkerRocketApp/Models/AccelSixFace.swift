@@ -6,17 +6,20 @@
 //  BLE and the timers: which face a reading is, the solve, the limits, the
 //  rule that picks a face window's result out of the 0xD1 frames, and the
 //  six-face screen's request/answer flow. AccelCalibrationView sends what
-//  AccelCalFlow asks for and feeds it the frames and the timeouts.
+//  AccelCalFlow asks for and feeds it the frames and the timeouts. Also the
+//  screen's live hint: which face the board is on now, from telemetry.
 //
-//  The reference is tools/accel_cal_six_face.py, which this follows step for
-//  step. On a still pad the navigation filter levels on gravity, and an
-//  accelerometer offset there looks exactly like a tilt. Turn each board axis
-//  straight up and then straight down: gravity flips sign on that axis and the
-//  offset does not, so
+//  The reference for the flow is tools/accel_cal_six_face.py. On a still pad
+//  the navigation filter levels on gravity, and an accelerometer offset there
+//  looks exactly like a tilt. Turn each board axis straight up and then
+//  straight down: gravity flips sign on that axis and the offset does not.
+//  The per-axis average
 //
 //      offset_i = (mean with axis i up + mean with axis i down) / 2
 //
-//  A face a few degrees off its axis reads g cos(tilt) both ways and cancels.
+//  cancels a face's tilt only when both faces of the axis are tilted alike,
+//  so it only seeds the solve: one sphere fit, |k * (mean - offset)| = g for
+//  all six faces at once with a scale per axis, which no tilt biases.
 //  The board frame is +X forward, +Y left, +Z up out of the component side,
 //  whatever the board's mounting in the rocket.
 //
@@ -32,8 +35,6 @@ nonisolated enum AccelSixFace {
     static let offsetMax = 1.0
     /// A face whose axis is further off vertical is measured again.
     static let tiltMaxDeg = 10.0
-    /// mg: a face further than this off one g after the correction gets a note.
-    static let residualNoteMg = 5.0
     /// m/s²: how close a read-back must be to what was sent.
     static let readBackTolerance = 1e-5
 
@@ -60,6 +61,21 @@ nonisolated enum AccelSixFace {
             let part = ["Forward end", "Left side", "Component side"][axis]
             return "\(part) \(up ? "up" : "down")"
         }
+
+        /// `howTo` in lower case, inside a sentence: "left side up".
+        var hint: String { howTo.lowercased() }
+
+        /// How to set the board down on this face.
+        var placement: String {
+            switch (axis, up) {
+            case (0, true):  return "stand it on its back end, forward end up."
+            case (0, false): return "stand it on its forward end, forward end down."
+            case (1, true):  return "lay it on its right side, left side up."
+            case (1, false): return "lay it on its left side, left side down."
+            case (2, true):  return "lay it flat, component side up."
+            default:         return "lay it flat, component side down."
+            }
+        }
     }
 
     /// The face a still reading is: the axis nearest vertical (the largest
@@ -71,6 +87,149 @@ nonisolated enum AccelSixFace {
         let norm = (mean[0] * mean[0] + mean[1] * mean[1] + mean[2] * mean[2]).squareRoot()
         let tilt = norm > 0 ? acos(min(1, abs(mean[axis]) / norm)) * 180 / .pi : 90
         return (Face(axis: axis, up: mean[axis] > 0), tilt)
+    }
+
+    // MARK: - Which face it is on now (a hint; a measurement names its own)
+
+    /// The board→rocket mounting rotations: orientCodeToMatrix in
+    /// TR_Orientation.cpp, ported exactly. code = nose_sel * 4 + clock (24
+    /// proper rotations; nose_sel picks the board axis toward the nose: +X,
+    /// -X, +Y, -Y, +Z, -Z), R = Rx(clock) * B[nose_sel], row-major,
+    /// v_rocket = R * v_board.
+    nonisolated enum Mounting {
+        static let codeCount = 24
+
+        /// clock = 0: the shortest arc taking the selected board axis to the
+        /// nose (+X). All entries exact 0 / ±1.
+        private static let noseBase: [[Int]] = [
+            [1, 0, 0, 0, 1, 0, 0, 0, 1],      // +X: identity
+            [-1, 0, 0, 0, -1, 0, 0, 0, 1],    // -X: 180° about board +Z
+            [0, 1, 0, -1, 0, 0, 0, 0, 1],     // +Y: 90° about -Z
+            [0, -1, 0, 1, 0, 0, 0, 0, 1],     // -Y: 90° about +Z
+            [0, 0, 1, 0, 1, 0, -1, 0, 0],     // +Z: 90° about +Y
+            [0, 0, -1, 0, 1, 0, 1, 0, 0],     // -Z: 90° about -Y
+        ]
+        /// A quarter-turn about rocket +X (CCW), after the nose alignment.
+        private static let clockCos: [Int] = [1, 0, -1, 0]
+        private static let clockSin: [Int] = [0, 1, 0, -1]
+
+        /// R for `code`, row-major; nil outside 0...23. (The firmware takes
+        /// such a code as identity; the app gives no hint instead.)
+        static func matrix(_ code: Int) -> [Int]? {
+            guard code >= 0, code < codeCount else { return nil }
+            let b = noseBase[code / 4]
+            let c = clockCos[code % 4]
+            let s = clockSin[code % 4]
+            // R = Rx(clock) * B with Rx = [[1,0,0],[0,c,-s],[0,s,c]]:
+            // row 0 = B row 0, row 1 = c B row 1 - s B row 2, row 2 = s B row 1 + c B row 2.
+            var r = [Int](repeating: 0, count: 9)
+            for j in 0..<3 {
+                r[j] = b[j]
+                r[3 + j] = c * b[3 + j] - s * b[6 + j]
+                r[6 + j] = s * b[3 + j] + c * b[6 + j]
+            }
+            return r
+        }
+
+        /// A rocket-frame vector back in the board frame: R^T * v.
+        static func toBoard(_ rocket: [Double], code: Int) -> [Double]? {
+            guard rocket.count == 3, let r = matrix(code) else { return nil }
+            return (0..<3).map { j -> Double in
+                let fromX: Double = Double(r[j]) * rocket[0]
+                let fromY: Double = Double(r[3 + j]) * rocket[1]
+                let fromZ: Double = Double(r[6 + j]) * rocket[2]
+                return fromX + fromY + fromZ
+            }
+        }
+    }
+
+    /// m/s²: a reading this far off one g (0.1 g) is a board being moved.
+    static let liveMovingTolerance = 0.98
+
+    /// Degrees: under auto-exact, a still reading further than this from
+    /// rocket +X is a board the flight computer has not re-read yet -- it
+    /// re-reads after 2 s still (its ORIENT_ACCEPT_TOL_DEG), and until then
+    /// the code beside the reading still names the face the board was on.
+    static let exactSettledDeg = 5.0
+
+    /// Which face the board is on now, from the newest telemetry frame.
+    enum LiveFace: Equatable {
+        /// No reading yet, a field missing, or no mounting it can be turned
+        /// back with.
+        case waiting
+        /// More than 0.1 g off one g, or, under auto-exact, more than 5° off
+        /// rocket +X: a board the flight computer has not re-read since it
+        /// was moved.
+        case moving
+        /// More than 10° off vertical.
+        case askew(Face, tiltDeg: Double)
+        /// On the face; `tiltDeg` nil when the mounting cannot tell the tilt
+        /// (auto-exact).
+        case on(Face, tiltDeg: Double?)
+
+        /// The checklist row to highlight.
+        var face: Face? {
+            switch self {
+            case .on(let f, _), .askew(let f, _): return f
+            case .waiting, .moving: return nil
+            }
+        }
+    }
+
+    /// The mounting a frame's lx/ly/lz are in, as far as the app can name it.
+    struct LiveMounting: Equatable {
+        /// orientCodeToMatrix's code.
+        let code: Int
+        /// The rotation in use is the code's, so the tilt reads true. In
+        /// auto-exact the flight computer uses the exact pad-gravity rotation
+        /// and reports the code of the board axis nearest up beside it:
+        /// turning back with that code still names the face, but snaps up
+        /// onto its axis, so the tilt reads about 0 and means nothing.
+        let tiltKnown: Bool
+    }
+
+    /// The face from a rocket-frame low-g reading and the mounting it is in:
+    /// turned back to the board frame (R^T), then named as a measurement is.
+    /// Without a true tilt (auto-exact) it is never askew: the measurement
+    /// judges the tilt. And there it names the face only once the reading has
+    /// settled onto rocket +X.
+    static func liveFace(rocket: [Double]?, mounting: LiveMounting?) -> LiveFace {
+        guard let rocket, let mounting,
+              let v = Mounting.toBoard(rocket, code: mounting.code) else { return .waiting }
+        let norm = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).squareRoot()
+        if abs(norm - g0) > liveMovingTolerance { return .moving }
+        let (face, tilt) = identify(v)
+        guard mounting.tiltKnown else {
+            let cosOffNose: Double = max(-1, min(1, rocket[0] / norm))
+            let offNoseDeg: Double = acos(cosOffNose) * 180 / .pi
+            return offNoseDeg > exactSettledDeg ? .moving : .on(face, tiltDeg: nil)
+        }
+        return tilt > tiltMaxDeg ? .askew(face, tiltDeg: tilt) : .on(face, tiltDeg: tilt)
+    }
+
+    /// The mounting a telemetry frame's lx/ly/lz are in. The frame's own
+    /// "imo" (code = imo & 0x1F; 31, the relay's auto-exact, names none)
+    /// when it carries one; the base station's relay does. The rocket's own
+    /// link leaves imo out and reports the mounting in its "imu_orient"
+    /// message instead, re-sent as the pad auto-detect re-racks: its code
+    /// with a true tilt in default, manual and auto-snap mode, and without
+    /// one in auto-exact. nil: no hint.
+    static func liveMounting(imo: Int?, reportedCode: Int?,
+                             reportedMode: IMUOrientationMode) -> LiveMounting? {
+        if let imo { return LiveMounting(code: imo & 0x1F, tiltKnown: true) }
+        guard let code = reportedCode else { return nil }
+        switch reportedMode {
+        case .defaultMounting, .manual, .autoSnap: return LiveMounting(code: code, tiltKnown: true)
+        case .autoExact: return LiveMounting(code: code, tiltKnown: false)
+        case .unknown: return nil
+        }
+    }
+
+    /// The Measure button's label: the live face when the board sits square
+    /// on one. Only a hint: the measurement names its face from its reading.
+    static func measureLabel(live: LiveFace, allCaptured: Bool) -> String {
+        if case .on(let face, _) = live { return "Measure \(face.name)" }
+        return allCaptured ? "Measure a Face Again" : "Measure This Face"
     }
 
     // MARK: - One face window
@@ -164,45 +323,137 @@ nonisolated enum AccelSixFace {
         }
     }
 
-    // MARK: - The solve
+    // MARK: - The solve: one sphere fit over all six faces
+
+    /// Save only scales within this range (1 / k), as a check on the fit.
+    static let scaleMin = 0.97
+    static let scaleMax = 1.03
+    /// Gauss-Newton: stop on a step below `fitStepTolerance`, give up after
+    /// `fitMaxIterations`; converged only on the step, with every face then
+    /// within `fitResidualTolerance` (m/s²) of one g.
+    static let fitMaxIterations = 20
+    static let fitStepTolerance = 1e-9
+    static let fitResidualTolerance = 1e-6
 
     nonisolated struct Solution: Equatable {
         /// m/s², board frame x, y, z: what gets saved.
         let offset: [Double]
-        /// Per axis, (up − down) / 2g: shown for information, never sent.
+        /// Per axis, 1 / k: shown for information, never sent.
         let scale: [Double]
-        /// Each face after the correction, |(mean − offset) / scale| − g, m/s².
-        let residual: [Face: Double]
+        /// The fit stopped on its step size with every face on the sphere.
+        let converged: Bool
+        /// Gauss-Newton steps taken.
+        let iterations: Int
 
         /// The axes past 1.0 m/s², which the flight computer would refuse.
         var tooLargeAxes: [Int] { (0..<3).filter { abs(offset[$0]) > AccelSixFace.offsetMax } }
-        var canSave: Bool { tooLargeAxes.isEmpty }
-
-        var worstResidual: Double { residual.values.map(abs).max() ?? 0 }
-        /// A face more than 5 mg off one g: the offset is still good if the
-        /// faces were squarish, so this only adds a note.
-        var needsResidualNote: Bool { worstResidual > AccelSixFace.residualNoteMg / 1000 * AccelSixFace.g0 }
+        /// The axes whose scale is outside 0.97...1.03.
+        var scaleOutOfRangeAxes: [Int] {
+            (0..<3).filter { !(scale[$0] >= AccelSixFace.scaleMin && scale[$0] <= AccelSixFace.scaleMax) }
+        }
+        var canSave: Bool { converged && tooLargeAxes.isEmpty && scaleOutOfRangeAxes.isEmpty }
 
         /// The command-76 values.
         var payload: [Float] { offset.map(Float.init) }
     }
 
     /// Solve the offset and scale from the six faces' means (nil until all
-    /// six are there).
+    /// six are there): one sphere fit, |k * (m - b)| = g for every face, over
+    /// p = (b_x, b_y, b_z, k_x, k_y, k_z) -- the offset b and k = 1 / scale per
+    /// axis. Six faces, six unknowns: it fits them exactly, so a face a few
+    /// degrees off square does not bias the offset, as it does the per-axis
+    /// average (up + down) / 2 when an axis's two faces are tilted unequally.
+    /// That average seeds it, with k = 1. Gauss-Newton on the normal
+    /// equations, double precision throughout.
     static func solve(_ means: [Face: [Double]], g: Double = g0) -> Solution? {
-        var offset = [0.0, 0.0, 0.0], scale = [0.0, 0.0, 0.0]
+        var rows: [[Double]] = []
+        for face in Face.allCases {
+            guard let m = means[face], m.count == 3 else { return nil }
+            rows.append(m)
+        }
+        var p: [Double] = [0, 0, 0, 1, 1, 1]
         for axis in 0..<3 {
-            guard let up = means[Face(axis: axis, up: true)],
-                  let down = means[Face(axis: axis, up: false)] else { return nil }
-            offset[axis] = 0.5 * (up[axis] + down[axis])
-            scale[axis] = (up[axis] - down[axis]) / (2 * g)
+            let up: Double = rows[2 * axis][axis]
+            let down: Double = rows[2 * axis + 1][axis]
+            p[axis] = 0.5 * (up + down)
         }
-        var residual: [Face: Double] = [:]
-        for (face, mean) in means {
-            let c = (0..<3).map { (mean[$0] - offset[$0]) / scale[$0] }
-            residual[face] = (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).squareRoot() - g
+        var onStep = false
+        var iterations = 0
+        while iterations < fitMaxIterations {
+            guard let fitted = fitResiduals(rows, p, g) else { break }
+            let r = fitted.r
+            let jac = fitted.jac
+            iterations += 1
+            // J^T J dp = -J^T r
+            var a = [[Double]](repeating: [Double](repeating: 0, count: 6), count: 6)
+            var rhs = [Double](repeating: 0, count: 6)
+            for f in 0..<rows.count {
+                for i in 0..<6 {
+                    rhs[i] -= jac[f][i] * r[f]
+                    for j in 0..<6 { a[i][j] += jac[f][i] * jac[f][j] }
+                }
+            }
+            guard let dp = solveLinear(a, rhs) else { break }
+            let next = (0..<6).map { p[$0] + dp[$0] }
+            guard next.allSatisfy({ $0.isFinite }) else { break }
+            p = next
+            if dp.allSatisfy({ abs($0) < fitStepTolerance }) {
+                onStep = true
+                break
+            }
         }
-        return Solution(offset: offset, scale: scale, residual: residual)
+        let onSphere = fitResiduals(rows, p, g)?.r.allSatisfy { abs($0) < fitResidualTolerance } ?? false
+        return Solution(offset: Array(p[0..<3]), scale: (3..<6).map { 1 / p[$0] },
+                        converged: onStep && onSphere, iterations: iterations)
+    }
+
+    /// The fit's residuals |k * (m - b)| - g, one per face, and their
+    /// Jacobian rows: dr/db_i = -k_i v_i / n, dr/dk_i = (m_i - b_i) v_i / n.
+    /// nil when a face sits on the offset (n = 0) or anything is not finite.
+    private static func fitResiduals(_ rows: [[Double]], _ p: [Double],
+                                     _ g: Double) -> (r: [Double], jac: [[Double]])? {
+        var r: [Double] = []
+        var jac: [[Double]] = []
+        for m in rows {
+            let d: [Double] = (0..<3).map { m[$0] - p[$0] }
+            let v: [Double] = (0..<3).map { p[3 + $0] * d[$0] }
+            let n = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).squareRoot()
+            guard n > 1e-9, n.isFinite else { return nil }
+            r.append(n - g)
+            let dB: [Double] = (0..<3).map { -p[3 + $0] * v[$0] / n }
+            let dK: [Double] = (0..<3).map { d[$0] * v[$0] / n }
+            jac.append(dB + dK)
+        }
+        return (r, jac)
+    }
+
+    /// Solve a x = b by Gaussian elimination with partial pivoting; nil when
+    /// singular.
+    private static func solveLinear(_ a: [[Double]], _ b: [Double]) -> [Double]? {
+        let n = b.count
+        var m = a
+        var y = b
+        for c in 0..<n {
+            var pivot = c
+            for row in (c + 1)..<n where abs(m[row][c]) > abs(m[pivot][c]) { pivot = row }
+            guard abs(m[pivot][c]) > 1e-12 else { return nil }
+            if pivot != c {
+                m.swapAt(c, pivot)
+                y.swapAt(c, pivot)
+            }
+            for row in (c + 1)..<n {
+                let f = m[row][c] / m[c][c]
+                for k in c..<n { m[row][k] -= f * m[c][k] }
+                y[row] -= f * y[c]
+            }
+        }
+        var x = [Double](repeating: 0, count: n)
+        for row in stride(from: n - 1, through: 0, by: -1) {
+            var s = y[row]
+            for k in (row + 1)..<n { s -= m[row][k] * x[k] }
+            x[row] = s / m[row][row]
+        }
+        return x
     }
 
     /// A save's read-back: stored, and each component within 1e-5 m/s² of
@@ -289,6 +540,9 @@ nonisolated struct AccelCalFlow: Equatable {
     private(set) var captures = AccelSixFace.Captures()
     private(set) var lastFace: FaceReport?
     private(set) var lastWrite: WriteReport?
+    /// The face whose placement help shows under the checklist: the last row
+    /// tapped, until a measurement starts.
+    private(set) var placementFace: Face?
 
     var isBusy: Bool { wait != .none }
     var isReading: Bool { wait == .reading }
@@ -331,8 +585,15 @@ nonisolated struct AccelCalFlow: Equatable {
     mutating func measure() -> Command? {
         guard !isBusy else { return nil }
         lastWrite = nil   // the faces are changing under it
+        placementFace = nil
         begin(.measuring(AccelSixFace.FaceMeasurement()))
         return .measureFace
+    }
+
+    /// A checklist row was tapped: show how to set the board on that face.
+    /// The rows only explain; the measurement still names its own face.
+    mutating func showPlacement(_ face: Face) {
+        placementFace = face
     }
 
     /// Save the solved offset; nil unless all six faces are in and it is
@@ -503,19 +764,67 @@ nonisolated extension AccelSixFace.Solution {
         String(format: "%+.3f %%", (scale[axis] - 1) * 100)
     }
 
-    /// Why the offset cannot be saved, if it cannot.
-    var tooLargeText: String? {
-        let axes = tooLargeAxes.map { AccelSixFace.axisNames[$0] }.joined(separator: ", ")
-        guard !axes.isEmpty else { return nil }
-        return "Offset past 1.0 m/s² on \(axes) — the flight computer would refuse it. "
-            + "Redo the faces: was one of them not still, or the wrong way up?"
-    }
+    /// The line under the offsets.
+    static let solvedTogetherText =
+        "All six faces are solved together, so a face a few degrees off square does not bias the offset."
 
-    /// The note for a face far off one g after the correction.
-    var residualNoteText: String? {
-        guard needsResidualNote else { return nil }
-        let worstMg = String(format: "%.1f", worstResidual / AccelSixFace.g0 * 1000)
-        return "A face is \(worstMg) mg off one g after the correction (over 5). The offset "
-            + "is still good if the faces were squarish; the scale is not used."
+    static let redoText = "Redo the faces: was one of them not still, or the wrong way up?"
+
+    /// Why the offset cannot be saved, if it cannot: past the flight
+    /// computer's limit, or a fit that did not converge or has a scale outside
+    /// 0.97...1.03.
+    var cannotSaveText: String? {
+        guard !canSave else { return nil }
+        let axes = tooLargeAxes.map { AccelSixFace.axisNames[$0] }.joined(separator: ", ")
+        guard converged, !axes.isEmpty else { return Self.redoText }
+        return "Offset past 1.0 m/s² on \(axes) — the flight computer would refuse it. " + Self.redoText
+    }
+}
+
+nonisolated extension AccelSixFace.LiveFace {
+
+    /// The live line at the top of the checklist. The tilt is in whole
+    /// degrees, and left out when the mounting cannot tell it.
+    var text: String {
+        switch self {
+        case .on(let face, let tilt?):
+            let deg = String(format: "%.0f", tilt)
+            return "On now: \(face.name) (\(face.hint)), \(deg)° off vertical"
+        case .on(let face, nil):
+            return "On now: \(face.name) (\(face.hint))"
+        case .askew(let face, let tilt):
+            let deg = String(format: "%.0f", tilt)
+            return "Set it squarer: \(face.name) is \(deg)° off vertical"
+        case .moving:
+            return "Hold it still"
+        case .waiting:
+            return "Waiting for the rocket's reading…"
+        }
+    }
+}
+
+nonisolated extension AccelSixFace.Face {
+
+    /// The line a tapped checklist row shows under the checklist.
+    var placementText: String { "To measure \(name): \(placement)" }
+}
+
+// MARK: - The live face on a device
+
+extension BLEDevice {
+
+    /// Which face the board is on now, from the newest telemetry frame: its
+    /// lx/ly/lz (rocket frame) turned back through the mounting they are in.
+    /// `.waiting` without a link, without a full reading, or without a
+    /// mounting code (`liveMounting`); no tilt in auto-exact.
+    var accelLiveFace: AccelSixFace.LiveFace {
+        guard isConnected,
+              let x = telemetry.low_g_x, let y = telemetry.low_g_y, let z = telemetry.low_g_z
+        else { return .waiting }
+        let rocket: [Double] = [Double(x), Double(y), Double(z)]
+        let mounting = AccelSixFace.liveMounting(imo: telemetry.imu_orient_packed,
+                                                 reportedCode: imuOrientationCode,
+                                                 reportedMode: imuOrientationMode)
+        return AccelSixFace.liveFace(rocket: rocket, mounting: mounting)
     }
 }

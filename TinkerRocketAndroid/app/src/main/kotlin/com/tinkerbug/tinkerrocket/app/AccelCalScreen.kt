@@ -4,6 +4,9 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
@@ -38,8 +42,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.tinkerbug.tinkerrocket.app.theme.TrTheme
 import com.tinkerbug.tinkerrocket.protocol.AccelCalStatus
@@ -90,12 +97,20 @@ fun AccelCalScreen(
         connected, session.isBaseStation, gate.pwrPinOn, gate.state, gate.booting, simLaunched,
     )
     val canRun = access == AccelSixFace.Access.READY
+    // Which face the board is on now, from each telemetry frame — mapped to
+    // what the screen shows of it, so it recomposes when that changes (the
+    // tilt in whole degrees), not at frame rate.
+    val live by remember(session) {
+        session.accelLiveFace.map { AccelLive.of(it) }.distinctUntilChanged()
+    }.collectAsState(initial = AccelLive.of(AccelSixFace.LiveFace.Waiting))
 
     // The checklist is the board's, so it survives a reconnect (a new session
     // for the same device) but not a different rocket.
     var faces by remember(deviceKey) { mutableStateOf<Map<Face, AccelCalStatus>>(emptyMap()) }
     var lastFace by remember(deviceKey) { mutableStateOf<AccelFaceReport?>(null) }
     var lastWrite by remember(deviceKey) { mutableStateOf<AccelSixFace.WriteReport?>(null) }
+    // The row last tapped: its placement line shows under the checklist.
+    var placementFace by remember(deviceKey) { mutableStateOf<Face?>(null) }
     // One round trip at a time: the answers carry no request id.
     var op by remember { mutableStateOf<AccelCalOp?>(null) }
     var readUnanswered by remember { mutableStateOf(false) }
@@ -128,6 +143,7 @@ fun AccelCalScreen(
         if (op != null) return
         op = AccelCalOp.MEASURING
         windowOpen = false
+        placementFace = null
         lastWrite = null   // the faces are changing under it
         scope.launch {
             try {
@@ -251,7 +267,14 @@ fun AccelCalScreen(
         // ── Six Faces ───────────────────────────────────────────────────
         Section(AccelCalReadout.FACES_TITLE) {
             Caption(AccelCalReadout.FACES_HOW)
-            Face.entries.forEach { FaceRow(it, faces[it]) }
+            Caption(AccelCalReadout.FACES_NO_PICK)
+            ReadoutText(live.line)
+            Face.entries.forEach { face ->
+                FaceRow(face, faces[face], isLive = live.face == face, onTap = { placementFace = face })
+            }
+            placementFace?.let {
+                Text(AccelCalReadout.placement(it), style = MaterialTheme.typography.bodyMedium)
+            }
             if (op == AccelCalOp.MEASURING) {
                 if (windowOpen) {
                     Text(
@@ -264,10 +287,7 @@ fun AccelCalScreen(
                 }
             } else {
                 Button(onClick = ::measure, enabled = canRun && op == null, modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        if (faces.size == Face.entries.size) AccelCalReadout.MEASURE_AGAIN
-                        else AccelCalReadout.MEASURE,
-                    )
+                    Text(AccelCalReadout.measureLabel(live.onFace, allCaptured = faces.size == Face.entries.size))
                 }
                 lastFace?.let { r ->
                     ReadoutText(r.line)
@@ -295,24 +315,8 @@ fun AccelCalScreen(
                         }
                     }
                 }
-                Caption(AccelCalReadout.RESIDUALS)
-                for (axis in 0..2) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        for (up in listOf(1, -1)) {
-                            val face = Face.of(axis, up)
-                            Text(face.label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                            Text(
-                                AccelCalReadout.mg(s.residual.getValue(face)),
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = FontFamily.Monospace,
-                                textAlign = TextAlign.End,
-                                modifier = Modifier.weight(1f),
-                            )
-                        }
-                    }
-                }
-                AccelCalReadout.tooLarge(s)?.let { ReadoutText(it) }
-                AccelCalReadout.residualNote(s)?.let { ReadoutText(it, small = true) }
+                Caption(AccelCalReadout.SOLVED_TOGETHER)
+                AccelCalReadout.cannotSave(s)?.let { ReadoutText(it) }
                 if (op == AccelCalOp.SAVING) {
                     Busy(AccelCalReadout.SAVING)
                 } else {
@@ -390,13 +394,49 @@ private fun Section(title: String?, content: @Composable () -> Unit) {
     }
 }
 
-/** One checklist row: the face, what it means on the board, and its tilt once captured. */
+/** What the screen shows of the live face: its line, its row, and the face to name on Measure. */
+private data class AccelLive(
+    val line: AccelCalReadout.Line,
+    /** The row to highlight: the live face, square or askew. */
+    val face: Face?,
+    /** The face to name on the Measure button: only while on it (square, or under an exact mounting). */
+    val onFace: Face?,
+) {
+    companion object {
+        fun of(l: AccelSixFace.LiveFace): AccelLive = AccelLive(
+            AccelCalReadout.live(l),
+            l.face,
+            when (l) {
+                is AccelSixFace.LiveFace.On -> l.face
+                is AccelSixFace.LiveFace.OnNoTilt -> l.face
+                else -> null
+            },
+        )
+    }
+}
+
+/**
+ * One checklist row: the face, what it means on the board, its tilt once
+ * captured, and — while the board is on it — the app's selection tint and a
+ * "Now" tag.  A tap shows how to place the board for it.
+ */
 @Composable
-private fun FaceRow(face: Face, window: AccelCalStatus?) {
+private fun FaceRow(face: Face, window: AccelCalStatus?, isLive: Boolean, onTap: () -> Unit) {
     val tr = TrTheme.colors
+    val accent = MaterialTheme.colorScheme.primary
+    val shape = RoundedCornerShape(8.dp)
     val done = window != null
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .then(
+                if (isLive) Modifier.background(accent.copy(alpha = 0.12f)).border(1.dp, accent, shape)
+                else Modifier,
+            )
+            .semantics { selected = isLive }
+            .clickable(onClickLabel = AccelCalReadout.ROW_ACTION, role = Role.Button, onClick = onTap)
+            .padding(horizontal = 6.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
@@ -410,6 +450,17 @@ private fun FaceRow(face: Face, window: AccelCalStatus?) {
         }
         window?.let { w ->
             MonoCaption(AccelCalReadout.captured(AccelSixFace.identify(w.faceMean.map { it.toDouble() }).tiltDeg))
+        }
+        if (isLive) {
+            Text(
+                AccelCalReadout.NOW,
+                style = MaterialTheme.typography.labelMedium,
+                color = accent,
+                modifier = Modifier
+                    .padding(start = 8.dp)
+                    .background(accent.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
+            )
         }
     }
 }

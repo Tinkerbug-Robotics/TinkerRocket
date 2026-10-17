@@ -2,8 +2,12 @@ package com.tinkerbug.tinkerrocket.session
 
 import com.tinkerbug.tinkerrocket.protocol.AccelCalStatus
 import com.tinkerbug.tinkerrocket.protocol.AccelFaceState
+import com.tinkerbug.tinkerrocket.protocol.BoardOrientation
+import com.tinkerbug.tinkerrocket.protocol.IMUOrientationMode
+import com.tinkerbug.tinkerrocket.protocol.TelemetryData
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.Access
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.Face
+import com.tinkerbug.tinkerrocket.session.AccelSixFace.LiveFace
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.Measurement
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.Verdict
 import kotlin.math.abs
@@ -143,54 +147,89 @@ class AccelSixFaceTest {
         assertSame(Verdict.Moved, AccelSixFace.judge(w, emptySet()))
     }
 
-    // ── the solve ────────────────────────────────────────────────────────
+    // ── the solve: a sphere fit over all six faces ───────────────────────
+
+    /**
+     * A face's reading with its axis [tiltDeg] off vertical, leaning toward
+     * [azimuthRad] around it, through the board's [scl] and [offset] and the
+     * wire's f32.
+     */
+    private fun leaning(
+        face: Face,
+        tiltDeg: Double,
+        azimuthRad: Double,
+        offset: List<Double>,
+        scl: List<Double>,
+    ): List<Double> {
+        val t = Math.toRadians(tiltDeg)
+        val u = DoubleArray(3)
+        u[face.axis] = face.sign * cos(t)
+        u[(face.axis + 1) % 3] = sin(t) * cos(azimuthRad)
+        u[(face.axis + 2) % 3] = sin(t) * sin(azimuthRad)
+        return (0..2).map { (offset[it] + scl[it] * g * u[it]).toFloat().toDouble() }
+    }
+
+    /** The user's first hand-held run on the Beetle: faces 3.7-9.1° off square, unequal within a pair. */
+    private val userTilts = mapOf(
+        Face.X_UP to 9.1, Face.X_DOWN to 5.0,
+        Face.Y_UP to 6.9, Face.Y_DOWN to 4.5,
+        Face.Z_UP to 3.7, Face.Z_DOWN to 9.0,
+    )
 
     @Test
     fun squareFacesGiveTheOffsetAndScaleBack() {
         val s = AccelSixFace.solve(allSquare())
+        assertTrue(s.converged)
         for (i in 0..2) {
             assertEquals(offMg[i], s.offsetMg[i], 1e-3, "offset axis $i")
             assertEquals(scale[i], s.scale[i], 1e-6, "scale axis $i")
             assertEquals((scale[i] - 1) * 100, s.scalePct[i], 1e-4)
         }
-        for (face in Face.entries) assertEquals(0.0, s.residualMg.getValue(face), 1e-2, face.label)
+        assertTrue(s.maxResidualMps2 < AccelSixFace.FIT_RESIDUAL_TOL_MPS2)
         assertTrue(s.saveAllowed)
-        assertFalse(s.residualNote)
         assertEquals(s.offset.map { it.toFloat() }, s.wireOffset)
     }
 
     /**
-     * Faces held by hand, up to 4° off.  Each pair leaves
-     * g·(cos t_up − cos t_down)/2 in its axis's offset, so pairs tilted
-     * alike cancel: 4° against 3.5° is 0.29 mg, 2° against 3° 0.38 mg,
-     * 2.5° against 3° 0.21 mg.
+     * The fit over the user's tilts: 200 boards (~15 mg offsets, ~0.4 % scale
+     * errors), each face leaning a random way.  The per-axis average — the
+     * old solve, and the fit's seed — leaves g·(cos t_up − cos t_down)/2 in
+     * each offset, several mg with these tilts; six faces on one sphere leave
+     * nothing.
      */
     @Test
-    fun handHeldFacesUpToFourDegreesOffGiveTheOffsetToHalfAMilliG() {
-        val faces = mapOf(
-            Face.X_UP to reading(Face.X_UP, 4.0, toward = 1, towardSign = 1),
-            Face.X_DOWN to reading(Face.X_DOWN, 3.5, toward = 2, towardSign = -1),
-            Face.Y_UP to reading(Face.Y_UP, 2.0, toward = 2, towardSign = 1),
-            Face.Y_DOWN to reading(Face.Y_DOWN, 3.0, toward = 0, towardSign = 1),
-            Face.Z_UP to reading(Face.Z_UP, 2.5, toward = 0, towardSign = -1),
-            Face.Z_DOWN to reading(Face.Z_DOWN, 3.0, toward = 1, towardSign = -1),
-        )
-        // Every one is still told apart and kept.
-        for ((face, mean) in faces) {
-            val v = assertIs<Verdict.Accepted>(AccelSixFace.judge(window(mean), emptySet()), face.label)
-            assertEquals(face, v.face)
+    fun theUsersTiltsDoNotBiasTheFit_theyBiasedThePerAxisAverage() {
+        val rnd = java.util.Random(1629)
+        var worstFit = 0.0
+        var worstSquare = 0.0
+        var worstAverage = 0.0
+        var mostSteps = 0
+        repeat(200) { trial ->
+            val o = List(3) { rnd.nextGaussian() * 15e-3 * g }
+            val k = List(3) { 1 + rnd.nextGaussian() * 0.004 }
+            val faces = Face.entries.associateWith { f ->
+                leaning(f, userTilts.getValue(f), rnd.nextDouble() * 2 * Math.PI, o, k)
+            }
+            val s = AccelSixFace.solve(faces)
+            assertTrue(s.converged, "trial $trial")
+            assertTrue(s.saveAllowed, "trial $trial")
+            mostSteps = maxOf(mostSteps, s.iterations)
+            worstFit = maxOf(worstFit, (0..2).maxOf { abs(s.offsetMg[it] - AccelSixFace.mg(o[it])) })
+            worstAverage = maxOf(
+                worstAverage,
+                (0..2).maxOf {
+                    val average = 0.5 * (faces.getValue(Face.of(it, 1))[it] + faces.getValue(Face.of(it, -1))[it])
+                    abs(AccelSixFace.mg(average - o[it]))
+                },
+            )
+            val square = AccelSixFace.solve(Face.entries.associateWith { f -> leaning(f, 0.0, 0.0, o, k) })
+            assertTrue(square.converged, "trial $trial, square")
+            worstSquare = maxOf(worstSquare, (0..2).maxOf { abs(square.offsetMg[it] - AccelSixFace.mg(o[it])) })
         }
-        val s = AccelSixFace.solve(faces)
-        for (i in 0..2) assertEquals(offMg[i], s.offsetMg[i], 0.5, "offset axis $i, mg")
-        // The scale is the script's formula, whatever the tilt did to it.
-        for (i in 0..2) {
-            val p = faces.getValue(Face.of(i, 1))[i]
-            val m = faces.getValue(Face.of(i, -1))[i]
-            assertEquals((p - m) / (2 * g), s.scale[i], 1e-12)
-        }
-        assertTrue(s.worstResidualMg < AccelSixFace.RESIDUAL_NOTE_MG, "worst ${s.worstResidualMg} mg")
-        assertFalse(s.residualNote)
-        assertTrue(s.saveAllowed)
+        assertTrue(worstFit < 1.5, "the fit's worst offset error $worstFit mg")
+        assertTrue(worstSquare < 0.1, "square faces' worst $worstSquare mg")
+        assertTrue(worstAverage > 1.5, "the per-axis average's worst $worstAverage mg: these tilts must defeat it")
+        assertTrue(mostSteps <= 6, "converges in a few steps, took $mostSteps")
     }
 
     @Test
@@ -198,27 +237,39 @@ class AccelSixFaceTest {
         // A face measured the wrong way up, or moving, solves to nonsense the
         // flight computer would refuse: the screen says "redo the faces".
         val s = AccelSixFace.solve(allSquare(offset = listOf(0.2, 1.2, -0.1)))
+        assertTrue(s.converged)
         assertEquals(1.2, s.offset[1], 1e-5)
         assertEquals(listOf(1), s.axesPastLimit)
         assertFalse(s.saveAllowed)
-        // The script's test is `> 1.0`: exactly the limit still saves.
-        val edge = AccelSixFace.Solution(listOf(1.0, -1.0, 0.0), unit, emptyMap())
+        // The limit itself still saves (|offset| <= 1.0).
+        val edge = AccelSixFace.Solution(
+            offset = listOf(1.0, -1.0, 0.0), scale = unit, converged = true, iterations = 3, maxResidualMps2 = 0.0,
+        )
         assertTrue(edge.saveAllowed)
-        val past = edge.copy(offset = listOf(0.0, -1.0000001, 0.0))
-        assertEquals(listOf(1), past.axesPastLimit)
+        assertEquals(listOf(1), edge.copy(offset = listOf(0.0, -1.0000001, 0.0)).axesPastLimit)
     }
 
     @Test
-    fun aFaceFarOffOneGAfterTheCorrectionIsANoteNotARefusal() {
-        // +X UP set 9° off and +X DOWN square: the X pair no longer agrees on
-        // the scale, and +X UP ends ~12 mg off one g after the correction.
-        val faces = allSquare(offset = flat, scl = unit) +
-            (Face.X_UP to reading(Face.X_UP, 9.0, toward = 1, offset = flat, scl = unit))
-        val s = AccelSixFace.solve(faces)
-        assertTrue(s.worstResidualMg > AccelSixFace.RESIDUAL_NOTE_MG, "worst ${s.worstResidualMg} mg")
-        assertEquals(s.worstResidualMg, abs(s.residualMg.getValue(Face.X_UP)), 1e-9)
-        assertTrue(s.residualNote)
-        assertTrue(s.saveAllowed, "the note never blocks the save")
+    fun aScaleFarOutOfRange_orFacesThatCannotBeSolved_doNotSave() {
+        // A 6 % scale fits — the faces agree with each other — but is no
+        // accelerometer this board carries: redo the faces.
+        val far = AccelSixFace.solve(allSquare(scl = listOf(1.06, 1.0, 1.0)))
+        assertTrue(far.converged)
+        assertEquals(1.06, far.scale[0], 1e-6)
+        assertEquals(listOf(0), far.axesScaleOutOfRange)
+        assertFalse(far.saveAllowed)
+        // +X DOWN read the same as +X UP: nothing to solve the X axis from.
+        val faces = allSquare() + (Face.X_DOWN to allSquare().getValue(Face.X_UP))
+        val bad = AccelSixFace.solve(faces)
+        assertFalse(bad.converged)
+        assertFalse(bad.saveAllowed)
+        // 0.97..1.03 is inclusive; an unconverged fit never saves.
+        val edge = AccelSixFace.Solution(
+            offset = flat, scale = listOf(0.97, 1.0, 1.03), converged = true, iterations = 3, maxResidualMps2 = 0.0,
+        )
+        assertTrue(edge.saveAllowed)
+        assertEquals(listOf(2), edge.copy(scale = listOf(0.97, 1.0, 1.0300001)).axesScaleOutOfRange)
+        assertFalse(edge.copy(converged = false).saveAllowed)
     }
 
     @Test
@@ -226,6 +277,184 @@ class AccelSixFaceTest {
         assertFailsWith<IllegalArgumentException> {
             AccelSixFace.solve(allSquare() - Face.Y_DOWN)
         }
+    }
+
+    // ── the live face, from telemetry ────────────────────────────────────
+
+    private fun frame(x: Float?, y: Float?, z: Float?, imo: Int?) =
+        TelemetryData(lowGX = x, lowGY = y, lowGZ = z, imuOrientPacked = imo)
+
+    /** "imo" as the out computer packs it: (mode << 5) | code, here the pad auto-detect (3). */
+    private fun imo(code: Int) = (3 shl 5) or code
+
+    private fun assertOn(face: Face, tiltDeg: Double, live: LiveFace) {
+        val on = assertIs<LiveFace.On>(live)
+        assertEquals(face, on.face)
+        assertEquals(tiltDeg, on.tiltDeg, 1e-4)
+    }
+
+    @Test
+    fun theLiveFaceTurnsTheReadingBackIntoTheBoardFrame() {
+        // +Z toward the nose (code 16) and +g along the rocket's nose: the board's +Z is up.
+        assertOn(Face.Z_UP, 0.0, AccelSixFace.liveFace(frame(9.8f, 0f, 0f, imo(16))))
+        // Identity mounting (code 0): the rocket's +Y is the board's.
+        assertOn(Face.Y_UP, 0.0, AccelSixFace.liveFace(frame(0f, 9.8f, 0f, imo(0))))
+        // +Y toward the nose (code 8) and -g along the nose: the board's +Y points down.
+        assertOn(Face.Y_DOWN, 0.0, AccelSixFace.liveFace(frame(-9.8f, 0f, 0f, imo(8))))
+        // Mode does not matter, only the code: a manual mounting (mode 2) reads the same.
+        assertOn(Face.Z_UP, 0.0, AccelSixFace.liveFace(frame(9.8f, 0f, 0f, (2 shl 5) or 16)))
+        assertEquals(Face.Z_UP, AccelSixFace.liveFace(frame(9.8f, 0f, 0f, imo(16))).face)
+    }
+
+    /**
+     * The rocket's own link carries no "imo": its frames are turned back with
+     * the "imu_orient" message's code, as on iOS.  A frame's own "imo" wins
+     * (the base station relays it with the reading).  Auto-exact (mode 3)
+     * keeps its code, marked exact: it names the axis nearest "up".
+     */
+    @Test
+    fun theMountingIsTheFramesImo_elseTheImuOrientMessagesCode() {
+        assertEquals(
+            AccelSixFace.LiveMounting(0, exact = false),
+            AccelSixFace.liveMounting(imo(0), 16, IMUOrientationMode.AUTO_EXACT),
+        )
+        for (mode in listOf(IMUOrientationMode.DEFAULT_MOUNTING, IMUOrientationMode.MANUAL, IMUOrientationMode.AUTO_SNAP)) {
+            assertEquals(AccelSixFace.LiveMounting(16, exact = false), AccelSixFace.liveMounting(null, 16, mode), mode.name)
+        }
+        assertEquals(
+            AccelSixFace.LiveMounting(16, exact = true),
+            AccelSixFace.liveMounting(null, 16, IMUOrientationMode.AUTO_EXACT),
+        )
+        assertNull(AccelSixFace.liveMounting(null, 16, IMUOrientationMode.UNKNOWN))
+        assertNull(AccelSixFace.liveMounting(null, null, IMUOrientationMode.AUTO_SNAP))
+        // A direct link's frame: no imo, the message said +Z toward the nose.
+        val direct = frame(9.8f, 0f, 0f, imo = null)
+        assertOn(Face.Z_UP, 0.0, AccelSixFace.liveFace(direct, reportedCode = 16, reportedMode = IMUOrientationMode.AUTO_SNAP))
+        assertSame(LiveFace.Waiting, AccelSixFace.liveFace(direct))
+    }
+
+    /**
+     * Auto-exact: the flight computer applies the exact rotation and reports
+     * beside it only the board axis nearest "up" (orientNearestNoseCode), so
+     * the face is right but a reading turned back through that code always
+     * looks square.  The face, then, without a tilt — never askew — while
+     * modes 1 and 2 keep theirs; and only once the reading sits within 5° of
+     * rocket +X, as it does whenever the flight computer has read the board
+     * where it now lies.
+     */
+    @Test
+    fun anExactMountingNamesTheFace_butNotItsTilt() {
+        val exact = IMUOrientationMode.AUTO_EXACT
+        assertEquals(
+            LiveFace.OnNoTilt(Face.Z_UP),
+            AccelSixFace.liveFace(frame(9.8f, 0f, 0f, imo = null), reportedCode = 16, reportedMode = exact),
+        )
+        // 4° off rocket +X under code 16: settled, the face alone in mode 3, the tilt in modes 1 and 2.
+        val settled = Math.toRadians(4.0)
+        val near = frame((g * cos(settled)).toFloat(), (g * sin(settled)).toFloat(), 0f, imo = null)
+        assertEquals(LiveFace.OnNoTilt(Face.Z_UP), AccelSixFace.liveFace(near, 16, exact))
+        assertOn(Face.Z_UP, 4.0, AccelSixFace.liveFace(near, 16, IMUOrientationMode.AUTO_SNAP))
+        // 15° off: askew in modes 1 and 2; in mode 3 a board the flight computer has not re-read yet.
+        val t = Math.toRadians(15.0)
+        val leaning = frame((g * cos(t)).toFloat(), (g * sin(t)).toFloat(), 0f, imo = null)
+        assertSame(LiveFace.Moving, AccelSixFace.liveFace(leaning, 16, exact))
+        val askew = assertIs<LiveFace.Askew>(AccelSixFace.liveFace(leaning, 16, IMUOrientationMode.AUTO_SNAP))
+        assertEquals(15.0, askew.tiltDeg, 1e-4)
+        assertIs<LiveFace.Askew>(AccelSixFace.liveFace(leaning, 16, IMUOrientationMode.MANUAL))
+        // |v| is the same in any frame: a board being moved still says so.
+        assertSame(LiveFace.Moving, AccelSixFace.liveFace(frame(8.5f, 0f, 0f, imo = null), 16, exact))
+        assertEquals(Face.Z_UP, LiveFace.OnNoTilt(Face.Z_UP).face)
+    }
+
+    /**
+     * Why mode 3 waits for the reading to settle: the flight computer turns
+     * the reading with the exact rotation it last read (orientMatrixFromNoseVector,
+     * ported below) but names the nearest axis's code beside it, so a board set
+     * on another face reads, through that code, as some other face until the
+     * flight computer re-reads it (after 2 s still).  Over exact mountings
+     * 16-40° off each axis and the board then set on any face: never a face it
+     * is not on, where the bare turn-back names a wrong one.
+     */
+    @Test
+    fun anExactMountingNeverNamesAFaceTheBoardIsNotOn() {
+        val exact = IMUOrientationMode.AUTO_EXACT
+        var wrongWithoutTheWait = 0
+        for (nose in Face.entries) for (lean in listOf(16.0, 25.0, 40.0)) for (az in 0 until 360 step 30) {
+            val n = leaned(nose, lean, az.toDouble())
+            val r = exactRotation(n)
+            val code = nearestNoseCode(n)
+            // Settled: the reading is the nose the flight computer read.
+            assertEquals(LiveFace.OnNoTilt(nose), AccelSixFace.liveFace(turned(r, n), code, exact), "$nose $lean $az")
+            for (now in Face.entries) for (tilt in listOf(0.0, 6.0)) {
+                val v = leaned(now, tilt, az + 45.0)
+                val live = AccelSixFace.liveFace(turned(r, v), code, exact)
+                assertTrue(live === LiveFace.Moving || live.face == now, "$nose $lean $az on $now: $live")
+                val bare = AccelSixFace.identify(BoardOrientation.toBoard(code, rotate(r, v)))
+                if (bare.face != now) wrongWithoutTheWait++
+            }
+        }
+        assertTrue(wrongWithoutTheWait > 0, "the case the wait is for")
+    }
+
+    /** A unit vector [leanDeg] off [face]'s up direction, at [azDeg] around it. */
+    private fun leaned(face: Face, leanDeg: Double, azDeg: Double): List<Double> {
+        val u = DoubleArray(3).also { it[face.axis] = face.sign.toDouble() }
+        val p1 = DoubleArray(3).also { it[(face.axis + 1) % 3] = 1.0 }
+        val p2 = DoubleArray(3).also { it[(face.axis + 2) % 3] = 1.0 }
+        val l = Math.toRadians(leanDeg)
+        val a = Math.toRadians(azDeg)
+        return (0..2).map { cos(l) * u[it] + sin(l) * (cos(a) * p1[it] + sin(a) * p2[it]) }
+    }
+
+    /** orientMatrixFromNoseVector: the shortest arc taking unit [a] to rocket +X, row-major. */
+    private fun exactRotation(a: List<Double>): DoubleArray {
+        val c = a[0]
+        if (c < -1.0 + 1e-6) return doubleArrayOf(-1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0)
+        val ky = a[2]
+        val kz = -a[1]
+        val f = 1.0 / (1.0 + c)
+        return doubleArrayOf(
+            1.0 - f * (ky * ky + kz * kz), -kz, ky,
+            kz, 1.0 - f * kz * kz, f * ky * kz,
+            -ky, f * ky * kz, 1.0 - f * ky * ky,
+        )
+    }
+
+    /** orientNearestNoseCode: the clock-0 code of the board axis nearest [v]. */
+    private fun nearestNoseCode(v: List<Double>): Int {
+        var axis = 0
+        for (i in 1..2) if (abs(v[i]) > abs(v[axis])) axis = i
+        return (axis * 2 + if (v[axis] < 0) 1 else 0) * 4
+    }
+
+    private fun rotate(r: DoubleArray, v: List<Double>): List<Double> =
+        (0..2).map { i -> g * (r[3 * i] * v[0] + r[3 * i + 1] * v[1] + r[3 * i + 2] * v[2]) }
+
+    /** A direct-link frame whose lx/ly/lz are the board's one g along [v], turned by [r]. */
+    private fun turned(r: DoubleArray, v: List<Double>): TelemetryData {
+        val w = rotate(r, v)
+        return frame(w[0].toFloat(), w[1].toFloat(), w[2].toFloat(), imo = null)
+    }
+
+    @Test
+    fun theLiveFaceSaysAskewMovingOrWaiting() {
+        val t = Math.toRadians(15.0)
+        val askew = assertIs<LiveFace.Askew>(
+            AccelSixFace.liveFace(frame((g * sin(t)).toFloat(), 0f, (g * cos(t)).toFloat(), imo(0))),
+        )
+        assertEquals(Face.Z_UP, askew.face)
+        assertEquals(15.0, askew.tiltDeg, 1e-4)
+        val square = Math.toRadians(7.0)
+        assertOn(Face.Z_UP, 7.0, AccelSixFace.liveFace(frame((g * sin(square)).toFloat(), 0f, (g * cos(square)).toFloat(), imo(0))))
+        // |v| 8.5: more than 0.1 g short of one g.
+        assertSame(LiveFace.Moving, AccelSixFace.liveFace(frame(0f, 0f, 8.5f, imo(0))))
+        assertNull(LiveFace.Moving.face)
+        // No frame yet, a field missing from the newest, or no discrete code (31 = exact auto).
+        assertSame(LiveFace.Waiting, AccelSixFace.liveFace(TelemetryData()))
+        assertSame(LiveFace.Waiting, AccelSixFace.liveFace(frame(0f, null, 9.8f, imo(0))))
+        assertSame(LiveFace.Waiting, AccelSixFace.liveFace(frame(0f, 0f, 9.8f, null)))
+        assertSame(LiveFace.Waiting, AccelSixFace.liveFace(frame(0f, 0f, 9.8f, imo(31))))
+        assertSame(LiveFace.Waiting, AccelSixFace.liveFace(frame(0f, 0f, 9.8f, imo(24))))
     }
 
     // ── which frame answers a face measurement ───────────────────────────

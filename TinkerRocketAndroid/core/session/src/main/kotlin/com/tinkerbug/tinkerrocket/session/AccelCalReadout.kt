@@ -4,6 +4,7 @@ import com.tinkerbug.tinkerrocket.protocol.AccelCalStatus
 import com.tinkerbug.tinkerrocket.protocol.formatFixed
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.Access
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.Face
+import com.tinkerbug.tinkerrocket.session.AccelSixFace.LiveFace
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.Measurement
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.Solution
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.Verdict
@@ -17,7 +18,9 @@ import com.tinkerbug.tinkerrocket.session.AccelSixFace.WriteReport
  * and is copied here verbatim — the same sentences, capitals and punctuation,
  * as the pad calibration keeps both apps identical.  Numbers follow iOS's
  * String(format:): `%+.2f mg`, `%+.3f %`, `%.1f°`, `%+.3f` m/s².  Kept out of
- * the composable so it can be tested ([PadCalReadout]'s twin).
+ * the composable so it can be tested ([PadCalReadout]'s twin).  The live face,
+ * the "Now" tag, the named Measure button and the placement lines came in a
+ * second round, with the same strings specified for both apps at once.
  */
 public object AccelCalReadout {
 
@@ -53,6 +56,15 @@ public object AccelCalReadout {
             "+Y to the left, +Z up out of the component side. Set the board, or the whole " +
             "rocket, on each face and hold it still for 3 s. Any order: the app tells the face " +
             "from the reading."
+    public const val FACES_NO_PICK: String =
+        "You don't pick the face: set the board on a side, and the app sees which one it is."
+    public const val NOW: String = "Now"
+    /**
+     * The rows' accessibility action — iOS's hint "Shows how to place the
+     * board for this face", as TalkBack phrases an action: "Double-tap to
+     * show how to place the board for this face".
+     */
+    public const val ROW_ACTION: String = "show how to place the board for this face"
     public const val MEASURE: String = "Measure This Face"
     public const val MEASURE_AGAIN: String = "Measure a Face Again"
     public const val STARTING: String = "Starting…"
@@ -61,7 +73,8 @@ public object AccelCalReadout {
     public const val START_OVER: String = "Start Over"
 
     public const val RESULT_TITLE: String = "Offset"
-    public const val RESIDUALS: String = "Each face after the correction, off one g"
+    public const val SOLVED_TOGETHER: String =
+        "All six faces are solved together, so a face a few degrees off square does not bias the offset."
     public const val SAVE: String = "Save to the Flight Computer"
     public const val SAVING: String = "Saving…"
     public const val RESULT_FOOTER: String = "The scale is shown for information; only the offset is saved."
@@ -115,6 +128,45 @@ public object AccelCalReadout {
     /** A captured face's tilt, beside it in the checklist: "3.1° off". */
     public fun captured(tiltDeg: Double): String = formatFixed(tiltDeg, 1) + "° off"
 
+    /** The live line at the top of the checklist, from the newest telemetry frame. */
+    public fun live(l: LiveFace): Line = when (l) {
+        is LiveFace.On -> Line(
+            "On now: ${l.face.label} (${hint(l.face)}), ${formatFixed(l.tiltDeg, 0)}° off vertical",
+            Tone.OK,
+        )
+        // An auto-exact mounting: the face, with no tilt to tell.
+        is LiveFace.OnNoTilt -> Line("On now: ${l.face.label} (${hint(l.face)})", Tone.OK)
+        is LiveFace.Askew ->
+            Line("Set it squarer: ${l.face.label} is ${formatFixed(l.tiltDeg, 0)}° off vertical", Tone.WARN)
+        LiveFace.Moving -> Line("Hold it still", Tone.WARN)
+        LiveFace.Waiting -> Line("Waiting for the rocket's reading…")
+    }
+
+    /**
+     * The Measure button: the live face's name while the board sits square on
+     * one, or on one under an auto-exact mounting ([onFace]), otherwise as
+     * before.  Only a hint — the button works in every live state, and the
+     * window judges its own face.
+     */
+    public fun measureLabel(onFace: Face?, allCaptured: Boolean): String = when {
+        onFace != null -> "Measure ${onFace.label}"
+        allCaptured -> MEASURE_AGAIN
+        else -> MEASURE
+    }
+
+    /** A tapped row's line under the checklist: how to place the board for [face]. */
+    public fun placement(face: Face): String = "To measure ${face.label}: " + when (face) {
+        Face.X_UP -> "stand it on its back end, forward end up."
+        Face.X_DOWN -> "stand it on its forward end, forward end down."
+        Face.Y_UP -> "lay it on its right side, left side up."
+        Face.Y_DOWN -> "lay it on its left side, left side down."
+        Face.Z_UP -> "lay it flat, component side up."
+        Face.Z_DOWN -> "lay it flat, component side down."
+    }
+
+    /** {hint}: the face's description in lower case, "left side up". */
+    private fun hint(face: Face): String = howTo(face).replaceFirstChar { it.lowercaseChar() }
+
     /** The result line under the Measure button for a window that closed. */
     public fun verdict(v: Verdict): Line = when (v) {
         is Verdict.Accepted -> Line(
@@ -152,26 +204,19 @@ public object AccelCalReadout {
     /** "scale +0.123 %": the scale's difference from 1, under an axis's offset. */
     public fun scale(s: Solution, axis: Int): String = "scale " + signed((s.scale[axis] - 1) * 100, 3) + " %"
 
-    /** Why the offset cannot be saved, if it cannot. */
-    public fun tooLarge(s: Solution): Line? {
+    /**
+     * Why the offset cannot be saved, if it cannot: past the flight
+     * computer's limit (the axes named), or a fit that did not converge or
+     * found a scale outside 0.97..1.03 — then the redo line alone.
+     */
+    public fun cannotSave(s: Solution): Line? {
         if (s.saveAllowed) return null
+        if (s.axesPastLimit.isEmpty()) return Line(REDO, Tone.BAD)
         val axes = s.axesPastLimit.joinToString(", ") { AXES[it].toString() }
-        return Line(
-            "Offset past 1.0 m/s² on $axes — the flight computer would refuse it. " +
-                "Redo the faces: was one of them not still, or the wrong way up?",
-            Tone.BAD,
-        )
+        return Line("Offset past 1.0 m/s² on $axes — the flight computer would refuse it. $REDO", Tone.BAD)
     }
 
-    /** The note for a face far off one g after the correction. */
-    public fun residualNote(s: Solution): Line? {
-        if (!s.residualNote) return null
-        return Line(
-            "A face is ${formatFixed(s.worstResidualMg, 1)} mg off one g after the correction " +
-                "(over 5). The offset is still good if the faces were squarish; the scale is not used.",
-            Tone.WARN,
-        )
-    }
+    private const val REDO: String = "Redo the faces: was one of them not still, or the wrong way up?"
 
     /** A save's or a clear's outcome. */
     public fun write(r: WriteReport): Line = when {

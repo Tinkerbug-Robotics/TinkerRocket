@@ -1,6 +1,10 @@
 package com.tinkerbug.tinkerrocket.app
 
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -21,7 +25,9 @@ import com.tinkerbug.tinkerrocket.session.DeviceSession
 import com.tinkerbug.tinkerrocket.session.TrCharacteristic
 import com.tinkerbug.tinkerrocket.session.TransportEvent
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlin.math.cos
 import kotlin.math.roundToInt
+import kotlin.math.sin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -175,6 +181,9 @@ class AccelCalScreenTest {
         compose.onNodeWithText("Measure a Face Again").assertExists()
         compose.onNodeWithText("Offset").assertExists()
         for (v in listOf("+30.00 mg", "-46.00 mg", "+12.00 mg")) compose.onNodeWithText(v).assertExists()
+        compose.onNodeWithText(
+            "All six faces are solved together, so a face a few degrees off square does not bias the offset.",
+        ).assertExists()
 
         tap("Save to the Flight Computer")
         compose.onNodeWithText("Saved and read back").assertExists()
@@ -236,6 +245,89 @@ class AccelCalScreenTest {
         compose.waitForIdle()
         assertEquals(listOf(77), fc.accelCommands)
         compose.onNodeWithText("+4.20 mg").assertExists()
+    }
+
+    /**
+     * Telemetry with the rail on and the low-g reading (rocket frame) the
+     * board gives at [tiltDeg] off its +Y axis, leaning toward +X, |v| = [g].
+     * As the rocket's own link sends it: no "imo" in the frame — the
+     * mounting (here the identity, the pad auto-detect's snap) comes in the
+     * "imu_orient" message.
+     */
+    private fun leaningOnPlusY(fc: Fc, tiltDeg: Double, g: Double = AccelSixFace.G0) {
+        val t = Math.toRadians(tiltDeg)
+        fun n(v: Double) = String.format(java.util.Locale.ROOT, "%.4f", v)
+        fc.telemetry("""{"type":"imu_orient","code":0,"mode":2,"name":"+X","set":255}""")
+        fc.telemetry("""{"st":"READY","fs":16,"lx":${n(g * sin(t))},"ly":${n(g * cos(t))},"lz":0.0}""")
+        compose.waitForIdle()
+    }
+
+    private fun tapRow(face: String) {
+        compose.onNode(hasText(face) and hasClickAction()).performScrollTo().performClick()
+        compose.waitForIdle()
+    }
+
+    @Test
+    fun theLiveFacePreselectsItsRow_namesTheButton_andARowTapShowsHowToPlaceIt() {
+        val fc = Fc()
+        fc.faces += listOf(0.85f, 9.77f, 0.0f)   // the window, if one is measured: +Y UP
+        val session = connect(fc)
+        powered(fc)
+        open(session)
+        compose.onNodeWithText("Waiting for the rocket's reading…").assertExists()
+        compose.onNodeWithText("You don't pick the face: set the board on a side, and the app sees which one it is.")
+            .assertExists()
+
+        leaningOnPlusY(fc, tiltDeg = 5.0)
+        compose.onNodeWithText("On now: +Y UP (left side up), 5° off vertical").assertExists()
+        compose.onNode(hasText("+Y UP") and hasText("Now")).assertIsSelected()
+        compose.onNode(hasText("+X UP") and hasClickAction()).assertIsNotSelected()
+        compose.onNodeWithText("Measure +Y UP").assertIsEnabled()
+
+        // Askew: the row stays the live one, the button stops naming it.
+        leaningOnPlusY(fc, tiltDeg = 15.0)
+        compose.onNodeWithText("Set it squarer: +Y UP is 15° off vertical").assertExists()
+        compose.onNode(hasText("+Y UP") and hasText("Now")).assertIsSelected()
+        compose.onNodeWithText("Measure This Face").assertIsEnabled()
+
+        // Moving: no live row at all.
+        leaningOnPlusY(fc, tiltDeg = 0.0, g = 8.5)
+        compose.onNodeWithText("Hold it still").assertExists()
+        compose.onNodeWithText("Now").assertDoesNotExist()
+        compose.onNodeWithText("Measure This Face").assertIsEnabled()
+
+        // A tap on a row says how to place the board; the next tap replaces it.
+        tapRow("+X DOWN")
+        compose.onNodeWithText("To measure +X DOWN: stand it on its forward end, forward end down.").assertExists()
+        tapRow("+Z UP")
+        compose.onNodeWithText("To measure +Z UP: lay it flat, component side up.").assertExists()
+        compose.onNodeWithText("To measure +X DOWN: stand it on its forward end, forward end down.")
+            .assertDoesNotExist()
+
+        // A measurement clears it.
+        leaningOnPlusY(fc, tiltDeg = 5.0)
+        tap("Measure +Y UP")
+        compose.onNodeWithText("To measure +Z UP: lay it flat, component side up.").assertDoesNotExist()
+        compose.onNodeWithText("+Y UP, 5.0° off vertical").assertExists()
+    }
+
+    /**
+     * The user's Beetle on its bench: the pad auto-detect in exact mode
+     * (mode 3), code 16 (+Z toward the nose), gravity along the nose.  The
+     * face is named and preselected, with no tilt to tell.
+     */
+    @Test
+    fun anAutoExactMounting_namesAndPreselectsTheFace_withoutATilt() {
+        val fc = Fc()
+        val session = connect(fc)
+        powered(fc)
+        open(session)
+        fc.telemetry("""{"type":"imu_orient","code":16,"mode":3,"name":"+Z","set":255}""")
+        fc.telemetry("""{"st":"READY","fs":16,"lx":9.8,"ly":0.0,"lz":0.0}""")
+        compose.waitForIdle()
+        compose.onNodeWithText("On now: +Z UP (component side up)").assertExists()
+        compose.onNode(hasText("+Z UP") and hasText("Now")).assertIsSelected()
+        compose.onNodeWithText("Measure +Z UP").assertIsEnabled()
     }
 
     @Test
