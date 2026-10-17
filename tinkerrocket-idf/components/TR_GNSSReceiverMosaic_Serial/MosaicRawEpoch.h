@@ -43,7 +43,8 @@
 // (pvtAnchorsJumps) carried forward by its drift and by the clock jumps since
 // it (a -1 ms jump takes 1 ms off the bias). ppsResidualUs checks a
 // whole-second epoch's tag against its 1PPS edge, and notePpsTag keeps that
-// check over a run.
+// check over a run. Which PVT may carry the bias how long, and when the 1PPS
+// says the tag can be trusted: MosaicTimeTag.h.
 //
 // Header-only and pure (tests_cpp/test_mosaic_raw_epoch.cpp).
 #ifndef MOSAIC_RAW_EPOCH_H
@@ -62,11 +63,16 @@ namespace mosaic
 
 static constexpr double kMosaicC = 299792458.0;   // m/s, as gnss/atmo.h's GNSS_C
 static constexpr uint32_t kMosaicLockMaxMs = 254000;   // a Type2's LockTime clips at 254 s
+static constexpr int64_t  kMosaicMeasGapMs = 2000;     // MeasEpochs this far apart: a receiver reset (MosaicJumpState)
 
 // The receiver's clock jumps, followed from one MeasEpoch to the next.
 // CumClkJumps is the jumps since the receiver started, in ms mod 256; a step
-// of more than 2 ms, or time going backwards, is a receiver reset (or a
-// different log), and the count starts over there. A driver that adapts only
+// of more than 2 ms, time going backwards, or more than kMosaicMeasGapMs of
+// receiver time since the last MeasEpoch is a receiver reset (or a different
+// log), and the count starts over there. The gap is for a reset whose count
+// lands within 2 ms of the last (CumClkJumps starts again at 0, a count of
+// 254 before reads as a +2 ms jump): a reset is seconds of no MeasEpoch with
+// a time, while a lost sky still sends one every epoch. A driver that adapts only
 // the epochs on its fuse grid shows the others to noteMeasEpochClock, so the
 // count (and the PVT bias it carries forward with dtrMs) misses no jump; a
 // header seen twice (noted, then adapted) counts once. Where the last jump or
@@ -119,7 +125,7 @@ inline void noteClockJumps(const SbfMeasHeader& h, MosaicJumpState& js, MosaicEp
             const int d = static_cast<int8_t>(static_cast<uint8_t>(h.cum_clk_jumps - js.last_cum));
             info.jumped = d != 0;
             info.jump_ms = static_cast<int8_t>(d);
-            if (t < js.last_ms || d > 2 || d < -2)
+            if (t < js.last_ms || t - js.last_ms > kMosaicMeasGapMs || d > 2 || d < -2)
             {
                 js.j_ms = 0;
                 js.rebases++;
@@ -301,7 +307,10 @@ inline double epochGpsS(uint16_t wnc, uint32_t tow_ms, double dtr_ms)
 // (RxClkDrift, positive with the receiver's clock fast), across
 // jumps_since_pvt ms of clock jumps since it (MosaicJumpState::j_ms now less
 // at that PVT, while rebases has not changed): a -1 ms jump takes 1 ms off.
-// Only a PVT that pvtAnchorsJumps accepted may be carried.
+// Only a PVT that pvtAnchorsJumps accepted may be carried. The receiver's
+// clock is free-running (it only steps whole milliseconds, and only with a
+// fix), so the carry holds across a lost sky too: its drift is known to a
+// few ppb, a few microseconds over a minute.
 inline double dtrMs(double pvt_bias_ms, double drift_ppm, double dt_s, int32_t jumps_since_pvt)
 {
     return pvt_bias_ms + drift_ppm * 1.0e-3 * dt_s + jumps_since_pvt;
@@ -315,7 +324,7 @@ inline double dtrMs(double pvt_bias_ms, double drift_ppm, double dt_s, int32_t j
 // CRC failure, an overrun) at a jump, the count would take the jump only at
 // the next MeasEpoch, after the PVT, and every tag carried from that PVT would
 // hold it twice -- 1 ms off until the next PVT. Passed over, the PVT before
-// it (if young enough) or dtr 0 stands in.
+// it (if young enough) stands in.
 inline bool pvtAnchorsJumps(const MosaicJumpState& js, uint16_t wnc, uint32_t tow_ms)
 {
     return js.have && js.last_ms == static_cast<int64_t>(wnc) * 604800000LL + tow_ms;
@@ -353,6 +362,11 @@ struct PpsTagStats
     int32_t  settling_max_us = 0;   //   their largest |residual|
     uint32_t late = 0;              // edges the interrupt stamped late: judged where they were due
     int32_t  late_max_us = 0;       //   the latest, us past due
+    // seconds whose epoch was not handed over timed (the tag held back:
+    // MosaicTimeTag.h), checked all the same, never judged
+    uint32_t held = 0;
+    int32_t  held_max_us = 0;       //   their largest |residual|
+    int32_t  held_last_us = 0;      //   the last one, signed
     // the last second checked and its edge, if that was on time: where the
     // next second's edge is due
     int64_t  prev_s = 0;
@@ -379,8 +393,12 @@ struct PpsTagStats
 //     by the crystal's ppm each second: ~0.4 ms by then at the V9's +16 ppm.
 //     A known, passing error of the line, not a slip in the tag's arithmetic:
 //     those seconds are counted and not judged.
-inline void notePpsTag(PpsTagStats& s, int64_t gps_s, int64_t tag_mcu_us, int64_t edge_us, int64_t second_us,
-                       bool line_settled, double rx_clk_bias_ms, int32_t bar_us)
+// A second whose epoch was not handed over timed (published false: its tag
+// held back) is checked the same way, late edges and all, and counted apart:
+// the judged seconds are what the filter got. Returns the residual, against
+// where the edge was due when it came late.
+inline int32_t notePpsTag(PpsTagStats& s, int64_t gps_s, int64_t tag_mcu_us, int64_t edge_us, int64_t second_us,
+                          bool line_settled, double rx_clk_bias_ms, int32_t bar_us, bool published = true)
 {
     int64_t ref = edge_us;
     bool late = false;
@@ -403,16 +421,24 @@ inline void notePpsTag(PpsTagStats& s, int64_t gps_s, int64_t tag_mcu_us, int64_
 
     const int32_t res = ppsResidualUs(tag_mcu_us, ref, rx_clk_bias_ms);
     const int32_t mag = (res == -2147483647 - 1) ? 2147483647 : (res < 0 ? -res : res);
+    if (!published)
+    {
+        s.held++;
+        s.held_last_us = res;
+        if (mag > s.held_max_us) s.held_max_us = mag;
+        return res;
+    }
     s.last_us = res;
     if (!line_settled)
     {
         s.settling++;
         if (mag > s.settling_max_us) s.settling_max_us = mag;
-        return;
+        return res;
     }
     s.checks++;
     if (mag > s.max_us) s.max_us = mag;
     if (mag > bar_us) s.over++;
+    return res;
 }
 
 }  // namespace mosaic

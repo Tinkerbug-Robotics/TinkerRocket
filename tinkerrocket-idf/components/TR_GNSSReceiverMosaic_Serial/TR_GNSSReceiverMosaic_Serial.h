@@ -50,6 +50,7 @@
 #if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
 #include <RawMeas.h>           // TR_GNSSRaw: gnss_raw::TimedRawEpoch
 #include "MosaicRawEpoch.h"
+#include "MosaicTimeTag.h"
 #include "SbfNav.h"
 #endif
 
@@ -143,9 +144,12 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         // (MosaicRawEpoch.h). Its GPS instant on the MCU clock, mcu_us, is
         // TOW less the receiver's clock bias then (the last PVTGeodetic whose
         // own MeasEpoch was seen, carried by its drift and the clock jumps
-        // since), through the 1PPS line -- and 0, untimed, until that line is
-        // valid, while the receiver's time is not FINETIME, or when no edge
-        // has paired with its second for 120 s.
+        // since, for up to 120 s), through the 1PPS line -- and 0, untimed,
+        // unless it is right: the line valid, the receiver's time FINETIME,
+        // an edge paired with its second within 120 s, a bias to carry, the
+        // last edge on the line, and the bias's chain confirmed by the 1PPS
+        // after any break (a receiver restart, a step in its time against its
+        // clock, a failed PPS check). MosaicTimeTag.h says why.
         //
         // takeEphemeris: each GPSNav, GALNav or BDSNav block as it came
         // (CRC checked), for SbfNav's decodeSbfEphemeris. Galileo F/NAV and
@@ -172,14 +176,14 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
             uint32_t period_ms = 0;          // the fused grid
             // MeasEpoch
             uint32_t published = 0;          // handed over (timed or not)
-            uint32_t untimed = 0;            //   with mcu_us 0
-            uint32_t no_bias = 0;            //   timed with no PVT bias to carry (dtr 0: up to 0.5 ms off)
+            uint32_t untimed = 0;            //   with mcu_us 0 (why: tag.why)
             uint32_t decimated = 0;          // off the grid: their clock jumps noted, nothing handed over
             uint32_t empty = 0;              // on the grid, refused or with no cell: not handed over
             uint32_t dropped = 0;            // the queue was full
-            uint32_t pvt_passed = 0;         // PVTGeodetics that could not carry the bias (pvtAnchorsJumps)
             uint32_t clock_jumps = 0;        // the receiver's 1 ms clock jumps seen
-            uint32_t clock_restarts = 0;     //   and its jump count starting over (a receiver reset)
+            uint32_t clock_restarts = 0;     //   and its jump count starting over (a receiver reset, a gap)
+            uint32_t line_steps = 0;         // the PPS line moved onto a step of its edges (GnssTimeSync)
+            double   line_last_step_ms = 0.0;
             // navigation blocks, by GPS, Galileo, BeiDou
             uint32_t nav_queued[3] = {};
             uint32_t nav_filtered[3] = {};   // F/NAV, GEO or too short: what the decoder would refuse
@@ -188,15 +192,21 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
             uint32_t nav_short_buffer = 0;   // longer than the taker's buffer
             uint32_t ions = 0;               // GPSIon blocks decoded
             uint32_t ions_bad = 0;           //   and refused
-            // the PPS tag check: each whole-second epoch's tag against its
-            // 1PPS edge (ppsResidualUs, with that second's own RxClkBias), or
-            // where the edge was due when the interrupt stamped it late, and
-            // judged once the line has the crystal's drift (notePpsTag); the
-            // bar is kPpsTagBarUs
-            mosaic::PpsTagStats pps;
+            // the time tag (MosaicTimeTag.h): the untimed by why, the
+            // chain's breaks and confirmations, and the PPS tag check: each
+            // whole-second epoch's tag against its 1PPS edge (ppsResidualUs,
+            // with that second's own RxClkBias), or where the edge was due
+            // when the interrupt stamped it late, judged on the seconds handed
+            // over timed once the line has the crystal's drift (notePpsTag);
+            // the bar is kPpsTagBarUs
+            mosaic::MosaicTimeTag::Stats tag;
         };
         void rawStats(RawStats& out) const;
         static constexpr int32_t kPpsTagBarUs = 200;   // a right tag leaves ~0.03 ms rms
+        // An edge this far off the line, or a whole second's tag this far
+        // off its edge, holds the tag back (MosaicTimeTag.h), and the line
+        // follows a step of its edges this big (GnssTimeSync exact_step_s).
+        static constexpr int32_t kPpsOnLineUs = 100;
 #endif
 
     private:
@@ -225,8 +235,10 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         void rawPvt(const mosaic::PvtGeodetic& p);
         void rawNav(const uint8_t* block, size_t len, uint16_t number);
         void rawIon(const uint8_t* block, size_t len);
-        bool rawTimeTagOk() const;
         void logRawStatus();
+#if defined(TR_BENCH_MOSAIC_TAG_TRACE) && TR_BENCH_MOSAIC_TAG_TRACE
+        void benchTagTrace(const mosaic::PvtGeodetic& p);
+#endif
 #endif
 
         uart_port_t _uartPort;
@@ -323,22 +335,14 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
             gnss_raw::TimedRawEpoch scratch;     // the MeasEpoch being adapted
             NavItem       nav_item = {};         // the block being queued
             mosaic::MosaicJumpState jump;        // every MeasEpoch's clock jumps
-            bool          fine_time = false;     // ReceiverTime's FINETIME, last said
-            // the PVT whose RxClkBias the tags carry (pvtAnchorsJumps)
-            bool          pvt_have = false;
-            double        pvt_bias_ms = 0.0;
-            double        pvt_drift_ppm = 0.0;
-            int64_t       pvt_rx_ms = 0;         // its receiver time, WNc * 604800000 + TOW
-            int32_t       pvt_j_ms = 0;          // the jump count then
-            uint32_t      pvt_rebases = 0;
-            // the last PPS edge paired with its GPS second, whichever block paired it
-            bool          pair_have = false;
-            int64_t       pair_gps_s = 0;
-            int64_t       pair_edge_us = 0;
-            // the last whole-second epoch's tag, for the PPS check at its PVT
-            bool          tag_have = false;
-            int64_t       tag_rx_ms = 0;
-            int64_t       tag_mcu_us = 0;
+            // the tag: FINETIME, the anchoring PVT and its chain, the last
+            // edge paired, the whole second's check (MosaicTimeTag.h)
+            mosaic::MosaicTimeTag tag;
+            // the last whole-second epoch's tag as made (a bench trace's)
+            int64_t       sec_rx_ms = 0;
+            double        sec_dtr_ms = 0.0;
+            bool          sec_placed = false;
+            mosaic::MosaicTimeTag::Why sec_why = mosaic::MosaicTimeTag::Why::NO_LINE;
             // the last GPSIon (under raw_mux_)
             bool          iono_have = false;
             int8_t        iono_raw[8] = {};

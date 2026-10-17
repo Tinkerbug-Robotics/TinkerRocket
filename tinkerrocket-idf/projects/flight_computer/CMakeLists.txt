@@ -214,14 +214,24 @@ if(TR_BENCH_IRAM)
     message(STATUS "TR_BENCH_IRAM=${TR_BENCH_IRAM} -- hot code in internal RAM (bench)")
 endif()
 # RF rig bench switches for the mosaic-G5 (never set for flight): a C/N0 and
-# tracking line every 5 s, and a cold start (erst,Soft,PVTData+SatData) after
+# tracking line every 5 s, a cold start (erst,Soft,PVTData+SatData) after
 # the setup at each boot, so a simulated sky is not searched with the real
-# sky's time and ephemerides.
-foreach(_v TR_BENCH_MOSAIC_CN0 TR_BENCH_MOSAIC_COLD_START)
+# sky's time and ephemerides, and a time-tag trace line every whole second
+# (TOW, RxClkBias, CumClkJumps, the bias the tag carried, the 1PPS edge, the
+# PPS check's residual and whether the epoch went out timed: the raw outputs'
+# MosaicTimeTag.h, so it needs the raw-GNSS filter's image).
+foreach(_v TR_BENCH_MOSAIC_CN0 TR_BENCH_MOSAIC_COLD_START TR_BENCH_MOSAIC_TAG_TRACE)
     if(${_v} AND NOT TR_GNSS_MOSAIC)
         message(FATAL_ERROR "${_v} is for the mosaic-only image (-DTR_GNSS_MOSAIC=1 on a V8 or V9)")
     endif()
 endforeach()
+if(TR_BENCH_MOSAIC_TAG_TRACE AND NOT _tr_mosaic_rawnav)
+    message(FATAL_ERROR "TR_BENCH_MOSAIC_TAG_TRACE traces the raw-GNSS filter's time tag: this build has no raw outputs (TR_RAW_GNSS_SHADOW=0)")
+endif()
+if(TR_BENCH_MOSAIC_TAG_TRACE)
+    add_compile_definitions(TR_BENCH_MOSAIC_TAG_TRACE=1)
+    message(WARNING "TR_BENCH_MOSAIC_TAG_TRACE=1 -- mosaic time-tag trace line every whole second (bench)")
+endif()
 if(TR_BENCH_MOSAIC_CN0)
     add_compile_definitions(TR_BENCH_MOSAIC_CN0=1)
     message(WARNING "TR_BENCH_MOSAIC_CN0=1 -- mosaic tracking/C/N0 console line (bench)")
