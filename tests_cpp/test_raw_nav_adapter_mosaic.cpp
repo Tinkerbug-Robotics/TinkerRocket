@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <limits>
 
 #include "TR_RawGnssEKF.h"
 #include "raw_nav_adapter.h"
@@ -302,7 +303,7 @@ TEST(RawNavAdapterMosaic, ItRestartsFromTheLastGoodStateThroughTheRestore)
     ASSERT_TRUE(ekf.stoppedInFlight());
     ASSERT_FALSE(ekf.restorePending());
 
-    ekf.restartFromLastGood();
+    EXPECT_TRUE(ekf.restartFromLastGood());
     EXPECT_TRUE(ekf.restorePending());
     EXPECT_TRUE(ekf.stoppedInFlight());   // held until the filter runs
     ShadowSeed s{};
@@ -423,4 +424,114 @@ TEST(RawNavAdapterMosaic, WithTheHoldOnTheGroundReadsExactlyAsWithoutIt)
     EXPECT_EQ(a.takeMaxAgeUs(), b.takeMaxAgeUs());
     EXPECT_EQ(a.takeMaxForwardUs(), b.takeMaxForwardUs());
     EXPECT_EQ(a.forwardShort(), b.forwardShort());
+}
+
+TEST(RawNavAdapterMosaic, ALastStateThatIsNotFiniteIsNotHeld)
+{
+    // a running state whose attitude went non-finite (the raw filter's own
+    // stop check reads only the position and velocity): no good state to
+    // carry on or restart from, so the stop reads as the Beetle's does
+    ShadowLink link;
+    RawNavAdapter ekf;
+    ekf.attach(&link);
+    ekf.setHoldLastGood(true);
+    EkfGNSSDataLLA pad;
+    pad.alt_m = 3.0;
+    ekf.init(EkfIMUData(), pad, EkfMagData());
+    for (uint32_t t = 900000; t <= 1000000; t += 2500)
+        ekf.noteImu(tick(t, 0.0f));
+    ShadowNav bad = flying(1000000, 500.0);
+    bad.quat[0] = std::numeric_limits<float>::quiet_NaN();
+    link.nav.write(bad);
+    ekf.refresh(1000000);
+    EXPECT_FALSE(ekf.isHealthy());
+    for (uint32_t t = 1002500; t <= 1100000; t += 2500)
+        ekf.noteImu(tick(t, 0.0f));
+    link.nav.write(ShadowNav{});
+    ekf.refresh(1100000);
+    EXPECT_FALSE(ekf.stoppedInFlight());
+    float v[3];
+    ekf.getVelEst(v);
+    EXPECT_FLOAT_EQ(v[2], 0.0f);       // the start's
+    double p[3];
+    ekf.getPosEst(p);
+    EXPECT_NEAR(p[2], 3.0, 1e-9);
+    // a non-finite bias is no good state either
+    ShadowLink link2;
+    RawNavAdapter b2;
+    b2.attach(&link2);
+    b2.setHoldLastGood(true);
+    for (uint32_t t = 900000; t <= 1000000; t += 2500)
+        b2.noteImu(tick(t, 0.0f));
+    ShadowNav nb = flying(1000000, 500.0);
+    nb.gyro_bias[1] = std::numeric_limits<float>::infinity();
+    link2.nav.write(nb);
+    b2.refresh(1000000);
+    link2.nav.write(ShadowNav{});
+    b2.refresh(1010000);
+    EXPECT_FALSE(b2.stoppedInFlight());
+}
+
+TEST(RawNavAdapterMosaic, AHeldStateTheForwardSpoilsIsNeitherRestartedNorKept)
+{
+    ShadowLink link;
+    RawNavAdapter ekf;
+    ekf.attach(&link);
+    ekf.setHoldLastGood(true);
+    EkfGNSSDataLLA pad;
+    pad.alt_m = 3.0;
+    ekf.init(EkfIMUData(), pad, EkfMagData());
+    runThenStop(link, ekf);
+    ASSERT_TRUE(ekf.stoppedInFlight());
+    // a tick that is not finite carries the held state off
+    ShadowImu k = tick(1102500, 0.0f);
+    k.acc[0] = std::numeric_limits<float>::quiet_NaN();
+    ekf.noteImu(k);
+    EXPECT_FALSE(ekf.restartFromLastGood());   // no seed from it
+    EXPECT_FALSE(ekf.restorePending());
+    ShadowSeed s{};
+    ekf.startSeed(s);
+    EXPECT_EQ(s.restore, 0);
+    EXPECT_NEAR(s.lla[2], 3.0, 1e-9);          // the start's, untouched
+    // and the next stop is read in: nothing held
+    link.nav.write(ShadowNav{});
+    ekf.refresh(1110000);
+    EXPECT_FALSE(ekf.stoppedInFlight());
+    double p[3];
+    ekf.getPosEst(p);
+    EXPECT_NEAR(p[2], 3.0, 1e-9);
+}
+
+TEST(RawNavAdapterMosaic, ASnapshotDuringTheRestoresWaitKeepsTheRestoredBiases)
+{
+    // the restore waits for the barometer (up to 3 s), or a crash-loop boot
+    // never starts the filter: the snapshots the OC keeps meanwhile carry the
+    // biases the reboot restored, not the zeros a filter not running publishes
+    EkfStateSnapshot snap{};
+    snap.quat[0] = 1.0f;
+    snap.pos_rrm[2] = 700.0;
+    snap.vel_ned_mps[2] = -40.0f;
+    snap.accel_bias[0] = 0.21f;
+    snap.accel_bias[2] = -0.13f;
+    snap.gyro_bias[1] = 0.004f;
+    ShadowLink link;
+    RawNavAdapter ekf;
+    ekf.attach(&link);
+    ekf.setHoldLastGood(true);
+    ekf.setState(snap);
+    link.nav.write(ShadowNav{});   // the filter's task: waiting
+    ekf.refresh(1000);
+    EkfStateSnapshot out;
+    ekf.getState(out);
+    EXPECT_FLOAT_EQ(out.accel_bias[0], 0.21f);
+    EXPECT_FLOAT_EQ(out.accel_bias[2], -0.13f);
+    EXPECT_FLOAT_EQ(out.gyro_bias[1], 0.004f);
+    EXPECT_NEAR(out.pos_rrm[2], 700.0, 1e-9);
+    EXPECT_FLOAT_EQ(out.vel_ned_mps[2], -40.0f);
+    // once it runs, its own
+    link.nav.write(flying(2000, 690.0));
+    ekf.refresh(2000);
+    ekf.getState(out);
+    EXPECT_FLOAT_EQ(out.accel_bias[0], 0.11f);
+    EXPECT_FLOAT_EQ(out.gyro_bias[1], 0.0f);
 }

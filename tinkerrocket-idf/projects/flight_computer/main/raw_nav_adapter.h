@@ -357,16 +357,48 @@ public:
     // the voters see it unhealthy (running() and isHealthy() false), the
     // snapshot and the landing checks see the flight's state, not the pad's.
     // It ends when the filter runs again, or init() starts over on the pad.
+    // Only a finite state is held: a last state with a non-finite position,
+    // velocity, attitude or bias -- or one the forward has since made so --
+    // is not a good one, and the stop then reads as on the Beetle (the
+    // start's state), with nothing held to restart from.
     void setHoldLastGood(bool on) { hold_last_good_ = on; }
     bool stoppedInFlight() const { return held_; }
 
-    // Starts the raw filter again from the state held: the restore path,
-    // as a reboot's snapshot would (setState), with its accelerometer bias.
-    void restartFromLastGood()
+    // Starts the raw filter again from the state held: the restore path, as
+    // a reboot's snapshot would (setState), with its accelerometer bias.
+    // False, and nothing changed, when that state is not finite: a seed the
+    // raw filter would start from as given. Field by field, not through an
+    // EkfStateSnapshot (its 15 x 15 covariance is ~1 KB of the flight
+    // task's stack, and a restart needs none of it).
+    bool restartFromLastGood()
     {
-        EkfStateSnapshot s;
-        getState(s);
-        setState(s);
+        double p[3];
+        float v[3], q[4];
+        getPosEst(p);
+        p[2] += sep_m_;   // the raw filter's own height, as getState gives a snapshot
+        getVelEst(v);
+        getQuaternion(q);
+        float wb[3], ab[3];
+        getRotRateBias(wb);
+        getAccelBias(ab);
+        for (int i = 0; i < 3; ++i)
+            if (!std::isfinite(p[i]) || !std::isfinite(v[i]) || !std::isfinite(wb[i]) || !std::isfinite(ab[i]))
+                return false;
+        for (int i = 0; i < 4; ++i)
+            if (!std::isfinite(q[i]))
+                return false;
+        for (int i = 0; i < 3; ++i)
+        {
+            start_lla_[i] = p[i];
+            start_vel_[i] = v[i];
+            start_wb_[i] = wb[i];
+            start_ab_[i] = ab[i];
+        }
+        for (int i = 0; i < 4; ++i)
+            start_q_[i] = q[i];
+        has_start_ab_ = true;
+        restore_pending_ = true;
+        return true;
     }
 #endif
 
@@ -466,6 +498,22 @@ public:
         for (int i = 0; i < 15; ++i)
             s.P[i][i] = nav_.var[i];
         s.t_prev_us = fwd_ok_ ? fwd_t_us_ : nav_.time_us;
+#if TR_RAW_NAV_MOSAIC
+        // Before the raw filter runs (a restore's wait for the barometer, a
+        // boot with no filter) its position, velocity and attitude above are
+        // where it will start; so are its biases, not the zeros a filter that
+        // is not running publishes. A snapshot taken then -- the OC holds the
+        // latest through the next reboot -- keeps the restored biases.
+        if (!nav_.running)
+        {
+            for (int i = 0; i < 3; ++i)
+            {
+                s.gyro_bias[i] = start_wb_[i];
+                if (has_start_ab_)
+                    s.accel_bias[i] = start_ab_[i];
+            }
+        }
+#endif
     }
 
     // The raw filter has no shock gate, canopy mode or gyro-bias gate: none trips.
@@ -508,6 +556,9 @@ private:
     // the last good one, carried forward through each tick since. A state
     // the ticks kept no longer reach is carried on from the newest tick. One
     // read, so no stop can slip in between a check and the read it guards.
+    // A last state that is not finite is not held, and a held one that the
+    // forward has made so is dropped: the stop is then read in as refresh()
+    // reads it (the Beetle's: the start's state, nothing to restart from).
     void refreshHolding(uint32_t now_us)
     {
         now_us_ = now_us;
@@ -518,7 +569,7 @@ private:
         if (link_->nav.read(n, seq) && seq != nav_seq_)
         {
             nav_seq_ = seq;
-            if (!n.running && (held_ || (nav_.running && nav_.in_flight)))
+            if (!n.running && (held_ || (nav_.running && nav_.in_flight)) && lastStateFinite())
             {
                 if (!held_)
                 {
@@ -532,14 +583,15 @@ private:
             }
             else
             {
-                // as refresh(): on the ground, or the filter running again
+                // as refresh(): on the ground, the filter running again, or a
+                // last state not fit to hold
+                held_ = false;
                 nav_ = n;
                 nav_rx_us_ = now_us;
                 if (n.running)
                 {
                     restore_pending_ = false;
                     has_run_ = true;
-                    held_ = false;
                 }
                 forwardFromPublished();
             }
@@ -553,6 +605,23 @@ private:
             if (age < 0x80000000u && age > max_age_us_)
                 max_age_us_ = age;
         }
+    }
+
+    // The state the loop reads now (the published one, or carried forward)
+    // and its biases: all finite.
+    bool lastStateFinite() const
+    {
+        const double* lla = fwd_ok_ ? fwd_lla_ : nav_.lla;
+        const float* v = fwd_ok_ ? fwd_v_ : nav_.vel_ned;
+        const float* q = fwd_ok_ ? fwd_q_ : nav_.quat;
+        for (int i = 0; i < 3; ++i)
+            if (!std::isfinite(lla[i]) || !std::isfinite(v[i]) || !std::isfinite(nav_.accel_bias[i])
+                || !std::isfinite(nav_.gyro_bias[i]))
+                return false;
+        for (int i = 0; i < 4; ++i)
+            if (!std::isfinite(q[i]))
+                return false;
+        return true;
     }
 #endif
 

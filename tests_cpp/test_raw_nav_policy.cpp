@@ -1,10 +1,12 @@
 // The mosaic-only image's rules for its one navigation filter
 // (flight_computer/main/raw_nav_policy.h): the crash-loop rule, the transonic
-// lockout's window, the navigation-block resends, the restart in flight and
-// the restored flight's wait for the barometer.
+// lockout's window, its restore and its release on an unhealthy filter, the
+// navigation-block resends, the restart in flight and the restored flight's
+// wait for the barometer.
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstring>
 #include <limits>
 
 #include "fc_rescue_policy.h"
@@ -14,52 +16,123 @@ using namespace RawNavPolicy;
 
 // ---------------------------------------------------------------- crash loop
 
-TEST(RawNavCrashLoop, TheThirdBootAfterTwoCrashesSkipsTheFilter)
+namespace
 {
-    // FcRescuePolicy counts each boot at boot: a power-on reads 1, the boot
-    // after one crash 2, after two crashes 3
-    using namespace FcRescuePolicy;
-    const uint32_t image = 0x10000;
-    BootDecision d = atBoot(Record{}, ResetClass::FreshStart, image);
-    EXPECT_EQ(d.record.unproven_boots, 1);
-    EXPECT_FALSE(crashLoop(false, d.record.unproven_boots));
-    d = atBoot(d.record, ResetClass::Abnormal, image);   // crash 1
-    EXPECT_EQ(d.mode, BootMode::Normal);
-    EXPECT_FALSE(crashLoop(true, d.record.unproven_boots));
-    d = atBoot(d.record, ResetClass::Abnormal, image);   // crash 2
-    EXPECT_EQ(d.mode, BootMode::Normal);
-    EXPECT_EQ(d.record.unproven_boots, 3);
-    EXPECT_TRUE(crashLoop(true, d.record.unproven_boots));
-    // a boot that ran its loop a minute clears the count: the next crash
-    // boot starts the filter again
-    const Record proven = onProven(d.record);
-    d = atBoot(proven, ResetClass::Abnormal, image);
-    EXPECT_FALSE(crashLoop(true, d.record.unproven_boots));
+constexpr uint32_t kImage = 0x10000;
+
+// One boot as main.cpp counts it: FcRescuePolicy's record and the filter's
+// own crash count, both at boot (setup_fc: fcRescueAtBoot, crashAtBoot)
+struct Boards
+{
+    FcRescuePolicy::Record rescue{};
+    CrashRecord crash{};
+    FcRescuePolicy::BootDecision boot(bool crash_reset, uint32_t image = kImage)
+    {
+        using namespace FcRescuePolicy;
+        const ResetClass rc = crash_reset ? ResetClass::Abnormal : ResetClass::FreshStart;
+        BootDecision d = atBoot(rescue, rc, image);
+        rescue = d.record;
+        crash = crashAtBoot(crash, crash_reset, image);
+        return d;
+    }
+    void runAMinute()   // fcMaybeMarkBootProven
+    {
+        rescue = FcRescuePolicy::onProven(rescue);
+        crash = crashOnProven(crash);
+    }
+};
+}  // namespace
+
+TEST(RawNavCrashLoop, InFlightTheThirdBootAfterTwoCrashesSkipsTheFilter)
+{
+    // the pad's boot always runs its minute: the first crash ends a proven
+    // boot, and still counts
+    Boards b;
+    b.boot(false);                     // power-on on the pad
+    EXPECT_FALSE(crashLoop(b.crash));
+    b.runAMinute();                    // minutes on the pad
+    b.boot(true);                      // crash 1, in flight: the restore boot
+    EXPECT_EQ(b.crash.crashes, 1);
+    EXPECT_FALSE(crashLoop(b.crash));  // the filter starts again
+    const FcRescuePolicy::BootDecision d = b.boot(true);   // crash 2, 5 s into it
+    EXPECT_EQ(d.mode, FcRescuePolicy::BootMode::Normal);
+    EXPECT_EQ(b.crash.crashes, 2);
+    EXPECT_TRUE(crashLoop(b.crash));   // the third boot: no filter
+    // FcRescuePolicy's count reads 2 here, not 3: it cannot tell this from
+    // the bench's case below on its own
+    EXPECT_EQ(b.rescue.unproven_boots, 2);
+}
+
+TEST(RawNavCrashLoop, OnTheBenchTheThirdBootToo)
+{
+    // the power-on's boot crashes inside its first minute (a sim started at
+    // once): the same third boot, though FcRescuePolicy's count reads 3
+    Boards b;
+    b.boot(false);
+    b.boot(true);
+    EXPECT_FALSE(crashLoop(b.crash));
+    b.boot(true);
+    EXPECT_TRUE(crashLoop(b.crash));
+    EXPECT_EQ(b.rescue.unproven_boots, 3);
+}
+
+TEST(RawNavCrashLoop, AMinuteOfLoopEndsTheRun)
+{
+    Boards b;
+    b.boot(false);
+    b.boot(true);
+    b.runAMinute();                    // the filter flew a minute this time
+    b.boot(true);
+    EXPECT_EQ(b.crash.crashes, 1);
+    EXPECT_FALSE(crashLoop(b.crash));
 }
 
 TEST(RawNavCrashLoop, APowerCycleAlwaysBringsTheFilterBack)
 {
-    EXPECT_FALSE(crashLoop(false, 3));
-    EXPECT_FALSE(crashLoop(false, 255));
-    using namespace FcRescuePolicy;
-    Record r = freshRecord(7);
-    r.unproven_boots = 5;
-    const BootDecision d = atBoot(sealed(r), ResetClass::FreshStart, 7);
-    EXPECT_EQ(d.record.unproven_boots, 1);
-    EXPECT_FALSE(crashLoop(false, d.record.unproven_boots));
+    Boards b;
+    b.boot(false);
+    b.boot(true);
+    b.boot(true);
+    b.boot(true);
+    ASSERT_TRUE(crashLoop(b.crash));
+    b.boot(false);                     // power cycle, or a brownout
+    EXPECT_EQ(b.crash.crashes, 0);
+    EXPECT_FALSE(crashLoop(b.crash));
+    // and garbage in RTC memory after a cold boot is never read
+    CrashRecord junk;
+    std::memset(&junk, 0xA5, sizeof(junk));
+    EXPECT_FALSE(crashValid(junk));
+    EXPECT_FALSE(crashLoop(junk));
+    EXPECT_EQ(crashAtBoot(junk, true, kImage).crashes, 0);
+    EXPECT_EQ(crashAtBoot(junk, false, kImage).crashes, 0);
+}
+
+TEST(RawNavCrashLoop, AnotherImageStartsOver)
+{
+    // an update's restart, or a rollback: another partition, another count
+    Boards b;
+    b.boot(false);
+    b.boot(true);
+    b.boot(true, kImage + 1);
+    EXPECT_EQ(b.crash.crashes, 0);
+    EXPECT_FALSE(crashLoop(b.crash));
 }
 
 TEST(RawNavCrashLoop, ARescueRefusedForAFlightStillSkipsIt)
 {
-    // the fourth boot is a rescue candidate; with a flight on the OC it boots
-    // normally, counted again, and the filter stays out
+    // a crash loop long enough for rescue mode: with a flight on the OC the
+    // candidate boots normally, and the filter stays out
     using namespace FcRescuePolicy;
-    Record r = freshRecord(9);
-    r.unproven_boots = kMaxUnprovenBoots;
-    const BootDecision d = atBoot(sealed(r), ResetClass::Abnormal, 9);
+    Boards b;
+    b.boot(false);
+    b.boot(true);
+    b.boot(true);   // the filter's crash loop skips it; something else crashes
+    ASSERT_TRUE(crashLoop(b.crash));
+    const BootDecision d = b.boot(true);
     ASSERT_EQ(d.mode, BootMode::RescueCandidate);
-    const Record refused = onRescueRefused(d.record);
-    EXPECT_TRUE(crashLoop(true, refused.unproven_boots));
+    b.rescue = onRescueRefused(d.record);
+    EXPECT_EQ(b.crash.crashes, 3);
+    EXPECT_TRUE(crashLoop(b.crash));
 }
 
 // ---------------------------------------------------------- transonic lockout
@@ -70,6 +143,7 @@ MachInputs boost(float speed)
 {
     MachInputs in;
     in.filter_has_run = true;
+    in.filter_healthy = true;
     in.speed_mps = speed;
     in.in_flight = true;
     return in;
@@ -111,11 +185,96 @@ TEST(RawNavMachLockout, AFalseSpeedLateInTheCoastNeverLocksTheBarometerOut)
 
 TEST(RawNavMachLockout, AFilterThatHasNotRunHasNoSpeed)
 {
-    // a restore's start velocity, or the crash-loop boot's: unlocked, and a
-    // lock carried over is cleared
+    // the crash-loop boot's start velocity, or a restore's under the
+    // lockout's speed: unlocked, and a lock carried over is cleared
     MachInputs in = boost(300.0f);
     in.filter_has_run = false;
+    in.filter_healthy = false;
     EXPECT_FALSE(machLockout(false, in));
+    EXPECT_FALSE(machLockout(true, in));
+}
+
+TEST(RawNavMachLockout, ARestoreInTheTransonicCoastLocksAgain)
+{
+    // a reboot 3 s past burnout at 280 m/s: the snapshot over 260 locks it
+    // from the restore (main.cpp sets it there), the restored filter's own
+    // speed holds it, and under 240 lets it go
+    EXPECT_TRUE(restoreLocks(true, 280.0f));
+    EXPECT_FALSE(restoreLocks(true, 250.0f));
+    EXPECT_FALSE(restoreLocks(false, 280.0f));   // no filter this boot: nothing would release it
+
+    MachInputs in = coast(280.0f, 3000);
+    in.filter_has_run = false;
+    in.filter_healthy = false;
+    in.restored_at_speed = true;
+    in.since_restore_ms = 0;
+    bool locked = true;   // as the restore leaves it
+    for (uint32_t t = 0; t <= 400; t += 100)
+    {
+        in.since_restore_ms = t;   // waiting for its first running state
+        locked = machLockout(locked, in);
+        EXPECT_TRUE(locked) << t;
+    }
+    // the restored filter runs, still fast, 3.5 s past burnout
+    in.filter_has_run = true;
+    in.filter_healthy = true;
+    in.since_burnout_ms = 3500;
+    for (float v = 279.0f; v >= 241.0f; v -= 2.0f)
+    {
+        in.speed_mps = v;
+        locked = machLockout(locked, in);
+        EXPECT_TRUE(locked) << v;
+    }
+    in.speed_mps = 239.0f;
+    EXPECT_FALSE(machLockout(locked, in));
+    // the same reboot without the restore's lock never locks (the window is shut)
+    MachInputs late = coast(280.0f, 3500);
+    EXPECT_FALSE(machLockout(false, late));
+}
+
+TEST(RawNavMachLockout, ARestoresLockEndsIfTheFilterNeverRuns)
+{
+    MachInputs in = coast(280.0f, 3000);
+    in.filter_has_run = false;
+    in.filter_healthy = false;
+    in.restored_at_speed = true;
+    in.since_restore_ms = 4999;
+    EXPECT_TRUE(machLockout(true, in));
+    in.since_restore_ms = 5000;
+    EXPECT_FALSE(machLockout(true, in));
+    // and a sim's reset or a landing (not in flight) ends it too
+    in.since_restore_ms = 0;
+    in.in_flight = false;
+    EXPECT_FALSE(machLockout(true, in));
+}
+
+TEST(RawNavMachLockout, AStoppedFiltersHeldSpeedLetsTheLockGoAfterASecond)
+{
+    // locked in the burn; the filter then stops and its restarts are spent:
+    // the held state's speed (a free INS, here still over 240) holds the
+    // lock no more than a second past its last healthy read
+    MachInputs in = coast(300.0f, 2000);
+    in.filter_healthy = false;
+    in.unhealthy_ms = 0;
+    EXPECT_TRUE(machLockout(true, in));
+    in.unhealthy_ms = 999;
+    EXPECT_TRUE(machLockout(true, in));
+    in.unhealthy_ms = 1000;
+    EXPECT_FALSE(machLockout(true, in));
+    // nor does a held state's speed begin one, even in the burn
+    MachInputs burn = boost(300.0f);
+    burn.filter_healthy = false;
+    EXPECT_FALSE(machLockout(false, burn));
+}
+
+TEST(RawNavMachLockout, ANonFiniteHeldSpeedLetsTheLockGoToo)
+{
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    MachInputs in = coast(nan, 2000);
+    in.filter_healthy = false;   // a NaN state is never healthy
+    in.unhealthy_ms = 500;
+    EXPECT_TRUE(machLockout(true, in));
+    in.unhealthy_ms = 1500;
     EXPECT_FALSE(machLockout(true, in));
 }
 
@@ -145,6 +304,23 @@ TEST(RawNavMachLockout, TheConfigsThresholdsAreUsed)
     EXPECT_FALSE(machLockout(false, coast(101.0f, 0), c));
     EXPECT_TRUE(machLockout(true, coast(95.0f, 5000), c));
     EXPECT_FALSE(machLockout(true, coast(89.0f, 5000), c));
+    c.unhealthy_release_ms = 200;
+    MachInputs sick = coast(95.0f, 5000);
+    sick.filter_healthy = false;
+    sick.unhealthy_ms = 199;
+    EXPECT_TRUE(machLockout(true, sick, c));
+    sick.unhealthy_ms = 200;
+    EXPECT_FALSE(machLockout(true, sick, c));
+    c.restore_lock_max_ms = 300;
+    MachInputs restored = coast(95.0f, 5000);
+    restored.filter_has_run = false;
+    restored.restored_at_speed = true;
+    restored.since_restore_ms = 299;
+    EXPECT_TRUE(machLockout(true, restored, c));
+    restored.since_restore_ms = 300;
+    EXPECT_FALSE(machLockout(true, restored, c));
+    EXPECT_TRUE(restoreLocks(true, 101.0f, c));
+    EXPECT_FALSE(restoreLocks(true, 99.0f, c));
 }
 
 // ------------------------------------------------- navigation blocks again
@@ -237,6 +413,21 @@ TEST(RawNavRestoreHold, WithoutABarometerInThreeSecondsTheSnapshotsHeight)
     EXPECT_EQ(restoreSeedStep(h, true, false, 0x00000200u), RestoreSeed::Wait);
     EXPECT_EQ(restoreSeedStep(h, true, false, 0xFFFFFF00u + 3000u), RestoreSeed::SnapshotHeight);
     EXPECT_EQ(restoreSeedStep(h, true, false, 0xFFFFFF00u + 3001u), RestoreSeed::Publish);
+}
+
+TEST(RawNavRestoreHold, ALockedOutBarometerStartsItAtTheSnapshotsHeightAtOnce)
+{
+    // a restore in the transonic coast: the barometer cannot vouch for a
+    // height, so neither a wait nor a rebase on it
+    RestoreHold h;
+    armRestoreHold(h, 1000);
+    EXPECT_EQ(restoreSeedStep(h, true, true, 1000, true), RestoreSeed::Locked);
+    EXPECT_FALSE(h.armed);
+    EXPECT_EQ(restoreSeedStep(h, true, true, 1001, true), RestoreSeed::Publish);
+    // unlocked, the same pass waits or rebases as before
+    armRestoreHold(h, 1000);
+    EXPECT_EQ(restoreSeedStep(h, true, false, 1000, false), RestoreSeed::Wait);
+    EXPECT_EQ(restoreSeedStep(h, true, true, 1100, false), RestoreSeed::Rebase);
 }
 
 TEST(RawNavRestoreHold, NothingIsHeldWithoutARebootsRestore)

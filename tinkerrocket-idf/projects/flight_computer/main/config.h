@@ -783,8 +783,9 @@ struct config : board_pins
     // (main.cpp startRawShadow; the plan's section 2, 2026-10-17).
     //   RESTORE_*: a flight restored after a reboot starts this unsure on
     //     every axis. The boot asks the OC for a flight before the mosaic's
-    //     bring-up and leaves the receiver out when there is one (main.cpp
-    //     setup_fc), but an OC still booting after a brownout of both is
+    //     bring-up and does not wait on the receiver when there is one (its
+    //     GNSS poll task brings it up; main.cpp setup_fc), but an OC still
+    //     booting after a brownout of both is
     //     asked again after it, so the snapshot can be up to 30 s old
     //     (kBeginTimeoutMs); GpsInsEKF's 5 m / 5 m/s / ~10 deg was sized for
     //     a sub-second reboot. The start's height is the barometer's
