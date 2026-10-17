@@ -74,9 +74,11 @@ BUSY=$(pgrep -fl "$BUILD_RX" | grep -v -e pgrep -e run_v9.sh || true)
 $BUSY"
 [ "$(tr -d ' \n' < "$RIG" 2>/dev/null)" != "active" ] || die "RIG_STATE says active: another session has the rig"
 
-# ---- the FC by its USB serial number (= its MAC), no port opened. The PortaPack is the only other USB serial
-# device allowed: exactly one serial besides it, and it must be the FC's.
-SER=$(ioreg -p IOUSB -l -w0 | grep -o '"USB Serial Number" = "[^"]*"' | grep -vi transceiver | sed 's/.*= "\(.*\)"/\1/')
+# ---- the FC by its USB serial number (= its MAC), no port opened. The PortaPack is the only other USB device with
+# a serial number allowed (Mayhem's "Transceiver", or the HackRF's 32 hex digits if a run left it in HackRF mode):
+# exactly one serial besides it, and it must be the FC's.
+SER=$(ioreg -p IOUSB -l -w0 | grep -o '"USB Serial Number" = "[^"]*"' | grep -vi transceiver | sed 's/.*= "\(.*\)"/\1/' \
+      | grep -v -E '^[0-9a-fA-F]{32}$' || true)
 PORTS=$(ls /dev/cu.usbmodem* 2>/dev/null | grep -v Transceiver || true)
 NSER=$(printf '%s\n' "$SER" | grep -c . || true)
 NPORT=$(printf '%s\n' "$PORTS" | grep -c . || true)
