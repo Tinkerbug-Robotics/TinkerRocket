@@ -25,38 +25,37 @@ USE THE BOARD'S BOTTOM-LEFT CORNER AS 0,0.
 2. SURFACE FINISH: ENIG. FOR THE 0.4 mm PITCH QFN-56 (U201) AND ITS
    4.1 mm EXPOSED PAD.
 
-3. VIAS: 702 THROUGH VIAS, TENTED BOTH SIDES. STANDARD PROCESS: NO
+3. VIAS: 667 THROUGH VIAS, TENTED BOTH SIDES. STANDARD PROCESS: NO
    FILLING, NO CAPPING.
-   685 x 0.60 mm PAD / 0.30 mm DRILL, 13 x 0.80 / 0.40, 4 x 0.45 / 0.30.
+   655 x 0.60 mm PAD / 0.30 mm DRILL, 9 x 0.80 / 0.40, 3 x 0.45 / 0.30.
    NO VIA-IN-PAD: NO VIA SITS IN OR CUTS INTO AN SMD LAND, INCLUDING
    THE EXPOSED PADS OF U201 AND U104.
 
 4. MINIMUM TRACK 0.15 mm, MINIMUM SPACING 0.15 mm (0.30 mm ON THE
-   MOTOR-CURRENT NETS). MINIMUM ANNULAR RING 0.075 mm (THE FOUR
+   MOTOR-CURRENT NETS). MINIMUM ANNULAR RING 0.075 mm (THE THREE
    0.45 / 0.30 VIAS), 0.15 mm ELSEWHERE. COPPER TO BOARD EDGE 0.30 mm.
 
-5. HOLES: 4 x 3.20 mm NON-PLATED (H1-H4, M3), 2 x 0.65 mm NON-PLATED
-   (J201 USB-C PEGS).
+5. HOLES: 3 x 3.20 mm NON-PLATED (H1, H2, H4, M3), 4 x 2.70 mm
+   NON-PLATED (H3, H5-H7, M2.5), 2 x 0.65 mm NON-PLATED (J201 PEGS).
    PLATED: 2 x 2.70 mm (J101 XT60), 2 x 0.60 x 1.70 mm OVAL PLATED
    SLOTS (J101 XT60 PEGS), 2 x 1.70 mm (J102 JST VH), 23 x 1.20 mm
-   (J103, J301, J302, J305: 3.5 mm TERMINAL HEADERS), 5 x 1.00 mm
-   (J202 HEADER), 9 x 0.75 mm (J104, J303, J304: JST PH).
+   (J103, J301, J302, J305: 3.5 mm TERMINAL HEADERS), 40 x 1.00 mm
+   (J202, 2x20 SOCKET), 9 x 0.75 mm (J104, J303, J304: JST PH).
 
-6. USB-C RECEPTACLE J201 OVERHANGS THE BOTTOM EDGE BY ABOUT 0.6 mm
-   ON PURPOSE; ITS SILKSCREEN RUNS TO THE EDGE.
+6. USB-C RECEPTACLE J201 SITS FLUSH WITH THE BOTTOM EDGE.
 
 7. ORDER NUMBER: AT THE "JLCJLCJLCJLC" MARK ABOVE THE TITLE, BOTTOM
    LEFT.
 
 ASSEMBLY
 ECONOMIC PCBA, SINGLE SIDED: ALL SMD PARTS ON THE TOP. BOM AND CPL
-CARRY LCSC CODES.
+CARRY LCSC CODES. J202 (2x20 SOCKET) GOES ON THE BOTTOM, BY HAND.
 DO NOT PLACE R305, R313, R314 (DNP).
 THROUGH-HOLE CONNECTORS J101-J104, J202, J301-J305 ARE NOT IN THE BOM
 OR CPL: THEY ARE HAND-SOLDERED AFTER ASSEMBLY. DO NOT FIT THEM.
 TOOLING HOLES (1.152 mm NPTH), IF NEEDED: PLEASE USE THESE SPOTS,
 CLEAR OF TRACKS ON EVERY LAYER (mm FROM THE BOTTOM-LEFT CORNER):
-X 107.50 Y 71.00, X 3.00 Y 8.25, X 101.75 Y 5.00.
+X 107.50 Y 71.00, X 3.00 Y 8.25, X 105.00 Y 8.25.
 CHECK EVERY IC AND CONNECTOR ROTATION IN THE CPL PREVIEW.
 ```
 
@@ -131,19 +130,19 @@ with the connector edge at the top.
 | U304 (74LVC2G125) | SSOP-8 | 93.5, 59.5 | pin 1 bottom-left (turned 90°) |
 | Q101 (P-FET) | TO-252 | 29.5, 66.0 | tab faces left, toward the XT60; the gate lead is bottom-right |
 | Q102 (AO4264E) | SOIC-8 | 22.5, 34.0 | pin 1 bottom-right (turned 180°) |
-| CR201 (USB ESD) | SOT-143 | 69.0, 12.5 | pin 1 top-left |
+| CR201 (USB ESD) | SOT-143 | 68.5, 13.0 | pin 1 top-left |
 | Y201 (40 MHz) | 4-pad crystal | 68.2, 44.2 | pin 1 bottom-right |
 | D101 (12 V zener) | SOD-123 | 37.8, 60.5 | cathode left |
 | D102 (TVS) | SMC | 29.0, 58.0 | cathode left |
 | D103 (brake diode) | SMC | 14.8, 35.4 | cathode top |
 | D105 (catch diode) | SMC | 17.0, 24.4 | cathode right |
-| D107, D108 (Schottky) | SOD-323 | 67.8, 24.2 and 64.2, 10.5 | cathode left |
-| D104, D202, D203 (LEDs) | 0603 | 36.5, 37.5; 58.2, 9.2; 52.2, 9.2 | cathode bottom |
-| D106, D201 (LEDs) | 0603 | 40.8, 16.5; 55.2, 8.2 | cathode left |
+| D107, D108 (Schottky) | SOD-323 | 67.8, 24.2 and 63.2, 11.0 | cathode left |
+| D104 (LED) | 0603 | 36.5, 37.5 | cathode bottom |
+| D106, D201, D202, D203 (LEDs) | 0603 | 40.8, 16.5; 79.8, 8.5; 76.2, 10.8; 80.0, 10.8 | cathode left |
 | C101 (100 µF) | 8 x 10.5 electrolytic | 38.5, 74.4 | + left |
 
-J201 (USB-C) has no pin 1 to check, but its opening must face the bottom edge. Its footprint origin sits 1.4 mm
-off its pads, so check that it lands on them. Q101's origin is off its pads too (it's KiCad's TO-252).
+J201 (USB-C) has no pin 1 to check, but its opening must face the bottom edge, flush with it. Its footprint origin
+sits 1.4 mm off its pads, so check that it lands on them. Q101's origin is off its pads too (it's KiCad's TO-252).
 
 **5. Order notes.** Paste the block at the top of this file into the order's remark box. If the box is too
 short, keep items 2, 3 and 7 and the ASSEMBLY lines.
@@ -155,7 +154,9 @@ rest, and the plugs, from LCSC or Digi-Key:
   2026-10-16; Digi-Key and Mouser stock Phoenix's range);
 - plugs for the board end of each driver lead: Phoenix MC 1,5/2-ST-3,5 (1840366), MC 1,5/6-ST-3,5 (1840405) x2
   and MC 1,5/9-ST-3,5 (1840434). The driver end uses the CL57T's own plugs;
-- J102 JST B2P-VH (LCSC C160315) and J202 1x5 2.54 mm header (LCSC C492404).
+- J102 JST B2P-VH (LCSC C160315);
+- J202, the Pi socket: a 2x20 2.54 mm female header, 8.5 mm tall, soldered on the underside (Hong Cheng
+  HC-PM254-8.5H-2x20PZ, LCSC C22373925), and four M2.5 x 11 mm standoffs with screws for H3, H5, H6 and H7.
 
 **7. After ordering.** Tag the ordered commit `spin-rig-controller-v1.0.0` and move the board's in-work revision
 to V2 ([`docs/board-versioning.md`](../../docs/board-versioning.md)).

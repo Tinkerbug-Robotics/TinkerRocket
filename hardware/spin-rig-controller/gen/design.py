@@ -283,9 +283,14 @@ R(s, 'R207', '22', 'USB_DN', 'USB_DN_MCU', b)
 C(s, 'C212', '1uF', 'VUSB', GND, b)
 
 b = 'Pi link, expansion, lights, test points'
-P(s, 'J202', 'Connector_Generic:Conn_01x05', 'PI', 'Connector_PinHeader_2.54mm:PinHeader_1x05_P2.54mm_Vertical',
-  {1: '+5V_PI', 2: '+5V_PI', 3: GND, 4: 'PI_RX_H', 5: 'PI_TX_H'}, 'PZ254V-11-05P', 'XFCN',
-  desc='As the SKR Pico\'s P5: to Pi pins 2, 4, 6, 8, 10', block=b)
+# The board stacks on the Pi 4B like a HAT (the Pi's port end sticks out past the bottom edge): 5 V in on pins 2
+# and 4, its UART0 on 8 (TXD) and 10 (RXD), and every ground pin. The 3.3 V pins and the GPIOs stay unconnected.
+PI_HDR = {n: None for n in range(1, 41)}
+PI_HDR.update({2: '+5V_PI', 4: '+5V_PI', 8: 'PI_RX_H', 10: 'PI_TX_H'})
+PI_HDR.update({n: GND for n in (6, 9, 14, 20, 25, 30, 34, 39)})
+P(s, 'J202', 'Connector_Generic:Conn_02x20_Odd_Even', 'PI 4B', 'Connector_PinSocket_2.54mm:PinSocket_2x20_P2.54mm_Vertical',
+  PI_HDR, 'HC-PM254-8.5H-2x20PZ', 'Hong Cheng',
+  desc='2x20 socket, 8.5 mm, on the underside: stacks on the Pi 4B\'s header (11 mm M2.5 standoffs)', block=b)
 R(s, 'R211', '100', 'PI_RX_H', 'PI_RX', b)
 R(s, 'R212', '100', 'PI_TX', 'PI_TX_H', b)
 P(s, 'J203', 'Connector_Generic:Conn_01x04', 'QWIIC', 'Connector_JST:JST_SH_BM04B-SRSS-TB_1x04-1MP_P1.00mm_Vertical',
@@ -304,8 +309,10 @@ TP(s, 'TP203', V33, b)
 TP(s, 'TP204', V5, b)
 TP(s, 'TP205', GND, b)
 TP(s, 'TP206', GND, b)
-for i, r in enumerate(('H1', 'H2', 'H3', 'H4')):
+for r in ('H1', 'H2', 'H4'):
     P(s, r, 'Mechanical:MountingHole', 'M3', 'MountingHole:MountingHole_3.2mm_M3', {}, block='Mechanical')
+for r in ('H3', 'H5', 'H6', 'H7'):          # the Pi 4B's 58 x 49 mm pattern (H3 is also a board corner)
+    P(s, r, 'Mechanical:MountingHole', 'M2.5', 'MountingHole:MountingHole_2.7mm_M2.5', {}, block='Mechanical')
 for r in ('FID1', 'FID2', 'FID3'):
     P(s, r, 'Mechanical:Fiducial', 'Fiducial', 'Fiducial:Fiducial_1mm_Mask2mm', {}, block='Mechanical')
 

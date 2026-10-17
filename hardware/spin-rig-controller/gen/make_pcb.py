@@ -53,14 +53,18 @@ FIXED = {
     'C108': (14.6, 61.4, 90, 'F'), 'C109': (11.0, 61.4, 90, 'F'), 'C110': (7.4, 61.4, 90, 'F'),
     'D105': (17.0, 55.6, 180, 'F'), 'L101': (31.0, 56.0, 0, 'F'),
     'C115': (42.0, 53.2, 0, 'F'), 'C116': (42.0, 56.8, 0, 'F'), 'C117': (42.0, 60.4, 0, 'F'),
-    'F103': (101.0, 60.0, 90, 'F'), 'F102': (88.0, 68.5, 0, 'F'),
+    'F103': (58.0, 59.0, 90, 'F'), 'F102': (88.0, 68.5, 0, 'F'),        # F103 feeds the Pi from the 5 V plane
     # connectors on the edges. The driver's 3.5 mm headers open outward with their faces 0.3 mm inside the edge:
     # control and encoder-out along the top, encoder-in down the right (pin 1 of each at its corner end)
     'J301': (75.8, 8.3, 180, 'F'), 'J305': (99.7, 8.3, 180, 'F'), 'J302': (101.7, 31.45, 90, 'F'),
     'J304': (106.3, 41.35, 90, 'F'), 'J303': (106.3, 52.64, 90, 'F'),
-    'J202': (106.0, 57.5, 0, 'F'), 'J203': (3.3, 20.0, 90, 'F'),     # Qwiic beside the INA238, the other I2C part
-    'J104': (90.0, 74.5, 180, 'F'), 'J201': (70.0, 74.1, 0, 'F'),
-    'SW201': (50.5, 76.0, 0, 'F'), 'SW202': (59.0, 76.0, 0, 'F'),
+    # the Pi 4B stacks underneath like a HAT, turned so its USB/Ethernet end sticks out past the bottom edge: its
+    # GPIO edge runs down x = 56, so its pin 1 sits at (56 - 4.77, 15 + 8.37) and its holes at x 3.5/52.5, y 18.5/76.5.
+    # J202 is the 2x20 socket on the underside (the HAT template's footprint and side, turned with the Pi).
+    'J202': (51.23, 23.37, 180, 'B'), 'H5': (52.5, 18.5, 0, 'F'), 'H6': (52.5, 76.5, 0, 'F'), 'H7': (3.5, 18.5, 0, 'F'),
+    'J203': (15.0, 33.5, 0, 'F'),     # Qwiic beside the INA238, the other I2C part
+    'J104': (90.0, 74.5, 180, 'F'), 'J201': (70.0, 73.5, 0, 'F'),       # J201's face flush with the edge
+    'SW201': (59.5, 76.0, 0, 'F'), 'SW202': (80.5, 76.0, 0, 'F'),
     # logic
     'U201': (72.0, 44.0, 0, 'F'), 'U301': (60.0, 18.0, 0, 'F'), 'U302': (85.0, 18.0, 90, 'F'),
     'Y201': (68.2, 35.8, 90, 'F'), 'L201': (68.0, 38.4, 0, 'F'), 'C202': (70.3, 36.0, 90, 'F'),
@@ -80,7 +84,7 @@ ANCHOR = {
     'U105': ('U201', '20'), 'D107': ('U105', '1'), 'D108': ('J201', 'A4/B9'), 'C118': ('U105', '1'),
     'C119': ('U105', '5'), 'C120': ('U105', '5'), 'C212': ('J201', 'B4/A9'), 'CR201': ('J201', 'A6'),
     'R204': ('J201', 'A5'), 'R205': ('J201', 'B5'), 'R206': ('J201', 'A6'), 'R207': ('J201', 'A7'),
-    'R211': ('J202', '4'), 'R212': ('J202', '5'),
+    'R211': ('J202', '8'), 'R212': ('J202', '10'),
     'R213': ('J203', '3'), 'R214': ('J203', '4'),
     'R119': ('C117', '1'), 'D106': ('C117', '1'),
     'R120': ('U101', '8'), 'R121': ('U101', '8'), 'C121': ('U101', '8'),
@@ -377,13 +381,14 @@ def build():
         via('+5V', (f2[0] + dx, f2[1] + dy), 0.6, 0.3)
         track('+5V', [f2, (f2[0] + dx, f2[1] + dy)], 0.8)
     occ.append(('f102', (f2[0] - 2.0, f2[1] - 1.7, f2[0], f2[1] + 1.7)))
-    # Pi feed: F103 to J202 pins 1 and 2, 1.5 mm
+    # Pi feed: F103 straight up the board's middle to the Pi socket's pins 4 and 2 (its 5 V), 2 mm on F.Cu
     f3b = pad_pos('F103', '2')
-    j1 = pad_pos('J202', '1')
+    j4 = pad_pos('J202', '4')
     j2 = pad_pos('J202', '2')
-    track('+5V_PI', [f3b, (j1[0] - 2.0, f3b[1]), (j1[0] - 2.0, j1[1]), j1], 1.5)
-    track('+5V_PI', [j1, j2], 1.5)
-    occ.append(('pi', (f3b[0] - 0.8, j1[1] - 0.8, j1[0], f3b[1] + 0.8)))
+    track('+5V_PI', [f3b, (f3b[0], j4[1]), j4], 2.0)
+    track('+5V_PI', [j4, j2], 2.0)
+    occ.append(('pi', (f3b[0] - 1.3, j4[1] - 1.3, f3b[0] + 1.3, f3b[1] + 0.5)))
+    occ.append(('pi2', (j4[0], j4[1] - 1.3, f3b[0], j4[1] + 1.3)))
 
     # ESP32-S3: four ground vias in the corners of the ring between its center pad and its pins
     u = fps['U201'].GetPosition()

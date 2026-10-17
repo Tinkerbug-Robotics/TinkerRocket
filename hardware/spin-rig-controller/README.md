@@ -1,6 +1,7 @@
 # Spin rig controller, V1
 
-A 4-layer, 110 x 80 mm board that runs the StepperOnline closed-loop NEMA 23 kit on the rig's 6S pack.
+A 4-layer, 110 x 80 mm board that runs the StepperOnline closed-loop NEMA 23 kit on the rig's 6S pack. It stacks on
+the rig's Raspberry Pi 4B like a HAT (see "Stacking on the Pi").
 
 - **Kit:** 1-CL57T-S20-V41, a 23HS30-5004D-E1000 motor (2 N·m) with a CL57T-V41 driver.
 - **What it does:**
@@ -20,10 +21,10 @@ A 4-layer, 110 x 80 mm board that runs the StepperOnline closed-loop NEMA 23 kit
   - the proto board.
 
 **Status (2026-10-16):** the schematic and board are generated and checked.
-- **This revision** (after the first review): the pack comes in on an XT60, and every lead to the driver plugs into one of the CL57T's own 3.5 mm pluggable headers, in the driver's pin order. The encoder lead passes through the board, and the small signal connectors are through-hole JST PH (see "Leads to the driver").
+- **This revision** (after the first review): the pack comes in on an XT60, and every lead to the driver plugs into one of the CL57T's own 3.5 mm pluggable headers, in the driver's pin order. The encoder lead passes through the board, and the small signal connectors are through-hole JST PH (see "Leads to the driver"). The board stacks on the Pi 4B (see "Stacking on the Pi").
 - **ERC:** 0 errors. Four warnings remain, all from the shared library's SP0503BAHTG symbol (its pins are typed "unspecified"; the Beetle uses the same symbol).
-- **The repo's parity gate** (`tools/check_board_parity.py`): 170 board symbols, all in the layout and linked by path.
-- **DRC:** 0 errors, 0 unconnected items, schematic parity clean. Two warnings remain: the USB-C connector's own silkscreen runs past the board edge, as the connector does.
+- **The repo's parity gate** (`tools/check_board_parity.py`): 173 board symbols, all in the layout and linked by path.
+- **DRC:** 0 errors, 0 warnings, 0 unconnected items, schematic parity clean.
 - **Routing:** an autorouter (Freerouting 2.4.1) did most of it. I pre-routed the parts that matter (Kelvin sense, USB-C pairing, 5 V feeders, driver feed), closed the router's leftovers with a small router of my own and a few planned fixes (`gen/hand_fixes.py`), and checked everything against KiCad's DRC. It is not hand-tuned (see "Before ordering").
 - **Nothing has been ordered.**
 
@@ -53,9 +54,20 @@ Files:
   - JST VH for the brake resistor, as the Mantis battery connector;
   - the rocket boards' 2-pin power convention, pin 1 GND and pin 2 positive, on the XT60 and 5 V AUX.
 - **New here:** an XT60 for the pack, as the rig's pack and anti-spark switch use, and Phoenix MC 1,5 3.5 mm pluggable headers for the driver. Those follow the driver's pin order, not the convention.
-- **The Pi header** is the SKR Pico's P5, pin for pin (5 V, 5 V, GND, RX, TX to Pi pins 2, 4, 6, 8, 10), so the V1 harness plugs straight on.
+- **The Pi link** uses the same Pi pins as the SKR Pico's P5 (5 V on 2 and 4, ground, the UART on 8 and 10), now through a socket that stacks on the Pi (below).
 
 The power stage is new: the rocket boards run from 1S/2S and none of their regulators take 25 V.
+
+## Stacking on the Pi
+
+The board sits on the Pi 4B like a HAT, on the standard 11 mm spacing.
+- **The socket:** J202 is a 2x20, 8.5 mm female socket on the underside, on the Pi's header. It carries 5 V in on pins 2 and 4, the Pi's UART0 on pins 8 (TXD) and 10 (RXD) through R211/R212, and all eight ground pins. The Pi's 3.3 V pins and its other GPIOs are left unconnected.
+- **Mounting:** M2.5 x 11 mm standoffs at H3, H5, H6 and H7, the Pi's 58 x 49 mm pattern.
+- **Orientation:** the Pi is turned so its USB and Ethernet end sticks out past the board's bottom edge, under the left half. Its GPIO edge runs down x = 56. The Pi's USB-A ports sit just left of J201, so the USB lead to the ESP32 is short.
+- **The overhang:** the right half of the board (54 mm) is past the Pi. On the spinning rotor, support it with standoffs at H2 and H4 (M3) to the rotor plate or a bracket.
+- **Clearances over the Pi:** only this board's through-hole pins reach down toward the Pi, and they stick out less than 2.5 mm into the 11 mm gap. The XT60's land over the Pi's display connector, J103's near its USB-C and J102's over a micro-HDMI port. Those are all under 6 mm tall, so the pins clear them by about 3 mm. None of the Pi's tall parts is under the board: its USB and Ethernet are past the edge, and the PoE header has nothing above it. Trim the pins flush if a Pi case or heatsink is taller.
+- **Power:** the Pi runs from this board's 5.13 V through F103 (4 A) and a 2 mm track to its header, which bypasses the Pi's own USB-C input. **Don't plug a supply into the Pi's USB-C while it's stacked:** there is no ideal diode, so the two 5 V sources would fight.
+- **Rotor balance:** the V2 layout put the Pi and the controller opposite each other on the rotor. Stacked, they are one mass, so the rotor layout and its counterweights change.
 
 ## Power
 
@@ -93,9 +105,9 @@ The power stage is new: the rocket boards run from 1S/2S and none of their regul
   - The catch diode's anode lands against their ground pad.
   - Its cathode and the inductor share a short 1.5 mm switch node off pin 8, poured wider.
   - The thermal pad has no vias in it (the 4-layer rule). It connects through the top ground pour at its open end, so expect the IC to run warm at the full 5 V load.
-- **The 5 V output** reaches the In2 plane through five 0.6/0.3 mm vias between the inductor and the output caps. The Pi and AUX fuses draw from it through three and two vias. The Pi feed itself is a 1.5 mm track.
+- **The 5 V output** reaches the In2 plane through five 0.6/0.3 mm vias between the inductor and the output caps. The Pi and AUX fuses draw from it through three and two vias. The Pi feed itself is a 2 mm track up to the socket.
 - **Outputs:**
-  - the Pi header (J202, moved down into the 5 V band), through F103 (4 A);
+  - the Pi, through F103 (4 A) and its socket (J202, pins 2 and 4);
   - J104 AUX (PH 2-pin, 1.5 A resettable fuse), for the V0 SDR board or the Beetle;
   - the driver interface, the clamp and the index sensor.
 
@@ -223,7 +235,7 @@ All of these take any GPIO through the GPIO matrix, so the pin map above doesn't
   - In2: a 5 V plane along the bottom (no tracks there), stepping up to 50 mm under the buck. Three 0.5 mm feeders run up from it to the clamp, the 74ACT244 and the index connector. The rest of In2 carries signals.
   - 3.3 V is routed as tracks. A pour on In2 broke into 32 one-via fragments around the signals there, so I took it out.
   - B.Cu: signals and a ground pour.
-- **Ground stitching:** most of the board's 702 vias tie the outer ground pours to In1, on a 3 mm grid wherever one fits, and on a 1.5 mm grid around the ESP32.
+- **Ground stitching:** most of the board's 667 vias tie the outer ground pours to In1, on a 3 mm grid wherever one fits, and on a 1.5 mm grid around the ESP32.
 - **Parts:** all on the top side.
   - Every connector but USB-C and Qwiic is through-hole and soldered by hand: J101-J104, J202 and J301-J305. `make_fab.py` leaves them out of the JLC BOM and CPL and lists them in `-hand.csv`.
 - **Vias:** tented, none in pads (the rule for the 4-layer rocket boards).
@@ -232,7 +244,7 @@ All of these take any GPIO through the GPIO matrix, so the pin map above doesn't
 - **Crystal:** short F.Cu runs to the 40 MHz crystal and its 24 nH inductor, with no vias.
 - **Net classes:** Default 0.2 / 0.15 mm, Power 0.5 / 0.15 mm, Motor 1.5 / 0.3 mm. The motor nets (pack, bus, driver feed, brake) are also poured 1.2 mm around their tracks on both outer layers.
 - **Kelvin sensing:** R102's sense lines are pre-routed (locked) from its inner sense pads straight to U101, so the router can't tap the current path.
-- **Mechanical:** four M3 holes (not plated, so the board ground doesn't touch the frame).
+- **Mechanical:** three M3 holes (H1, H2, H4) and the Pi's four M2.5 holes (H3, H5-H7), none plated, so the board ground doesn't touch the frame.
   - The board spins with the rotor. At 10 rev/s and 50 mm out it sees about 20 g.
   - The heavy parts (C101, L101, the XT60) are surface-mount or held by their pins. A dab of adhesive on C101 and L101 costs nothing.
 
@@ -318,9 +330,10 @@ Freerouting's results vary from run to run. If a rerun leaves more than a few un
 
 After `finalize.sh`, this revision took the planned fixes in `gen/hand_fixes.py` (KiCad's Python). They fit this routing result only:
 - U101's 3.3 V stub necked to 0.25 mm beside its ground pin;
-- BUCK_BOOT and BUCK_RT routed by hand through the buck's free channels, the second after removing a ground track that looped around R115 (the pour joins those pads anyway);
-- the ESP32's status light given room to escape: PI_TX's via moved and the 3.3 V escape necked;
-- J303's 5 V feeder joined to its pin, and a redundant feeder via removed.
+- R101's ground via moved to the far side of its pad, clear of the VMAIN trunk;
+- J303's 5 V feeder joined to its pin;
+- C104's ground pad, walled in by INA_ALERT's loop to R103, tied to the ground track above it, with R103 re-routed to INA_ALERT;
+- BUCK_EN's two halves joined with a B.Cu hop, and BUCK_BOOT routed between the input caps' pad rows and under C112 on B.Cu.
 
 `extra_pours.py`, `silk.py` and `cleanup.py` ran after that. `gen/region.py` lists a window's copper, which is how I planned each fix.
 

@@ -19,7 +19,7 @@ mm = pcbnew.FromMM
 
 LABELS = {
     'J101': 'PACK', 'J103': 'DRIVER P4', 'J102': 'BRAKE R', 'J301': 'DRIVER P1', 'J305': 'DRIVER P2',
-    'J302': 'ENCODER IN', 'J303': 'INDEX', 'J304': 'GNSS', 'J201': 'USB', 'J202': 'PI',
+    'J302': 'ENCODER IN', 'J303': 'INDEX', 'J304': 'GNSS', 'J201': 'USB', 'J202': 'PI 4B BELOW',
     'J203': 'QWIIC', 'J104': '5V AUX', 'SW201': 'BOOT', 'SW202': 'RESET', 'D104': 'BRAKE', 'D106': '5V',
     'D201': '3V3', 'D202': 'STAT', 'D203': 'FAULT', 'TP201': 'TX', 'TP202': 'RX', 'TP203': '3V3', 'TP204': '5V',
     'TP205': 'GND', 'TP206': 'GND', 'TP301': 'STEP', 'TP302': 'PPS', 'TP303': 'ENC A', 'TP304': 'EVA',
@@ -40,11 +40,12 @@ b = pcbnew.LoadBoard(PCB)
 # 1. every reference on the fab layer
 for fp in b.GetFootprints():
     r = fp.Reference()
-    r.SetLayer(pcbnew.F_Fab)
+    fab = pcbnew.B_Fab if fp.IsFlipped() else pcbnew.F_Fab     # J202 sits on the underside
+    r.SetLayer(fab)
     r.SetTextSize(pcbnew.VECTOR2I(mm(0.5), mm(0.5)))
     r.SetTextThickness(mm(0.08))
     v = fp.Value()
-    v.SetLayer(pcbnew.F_Fab)
+    v.SetLayer(fab)
 
 # remove labels from an earlier run (then save and reload: after removals, KiCad's Python can hand back
 # footprints as bare SWIG pointers)
@@ -92,6 +93,7 @@ for ref, names in PIN_LABELS.items():
     u = (pos['1'].x - pos['2'].x, pos['1'].y - pos['2'].y)
     ul = (u[0] ** 2 + u[1] ** 2) ** 0.5
     u = (u[0] / ul, u[1] / ul)
+    last = str(max(int(n) for n in pos if n))
     for p in fp.Pads():
         if not p.GetNumber() or int(p.GetNumber()) not in names:
             continue
@@ -106,7 +108,14 @@ for ref, names in PIN_LABELS.items():
         bb = t.GetBoundingBox()
         half = (bb.GetHeight() if inward[0] == 0 else bb.GetWidth()) // 2
         ok = False
-        for side in ((0.0, 1.8, 2.2, 2.6) if p.GetNumber() == '1' else (0.0,)):
+        # the end pins may step outward along the row (pin 1 off the footprint's pin-1 mark)
+        if p.GetNumber() == '1':
+            sides = (0.0, 1.8, 2.2, 2.6)
+        elif p.GetNumber() == last:
+            sides = (0.0, 0.6, -0.6, -1.8, -2.2, -2.6)
+        else:
+            sides = (0.0, 0.6, -0.6)
+        for side in sides:
             for k in range(16):
                 d = mm(1.31 + 0.06 + 0.15 + 0.25 * k) + half      # the rear silk line sits 1.31 mm behind the pins
                 t.SetPosition(pcbnew.VECTOR2I(int(pp.x + inward[0] * d + u[0] * mm(side)),
