@@ -1,10 +1,11 @@
 // Host tests for the raw-GNSS measurement stage's mosaic-G5 additions
 // (RawGnssMeasStage.h; registered in v9raw/stage_v9.cmake): an ephemeris a
-// driver decoded itself (addEphemeris), whether a satellite has one
-// (hasEphemeris), and the satellite cap in offer() -- with the cap off,
-// today's build exactly. And the ephemeris store's default size, the
-// Beetle's. The store at the mosaic build's 128 is
-// test_eph_store_pad_wait.cpp's, a target of its own.
+// driver decoded itself (addEphemeris) and what it refuses, whether a
+// satellite has one (hasEphemeris), and the satellite cap in offer(), a pick
+// the elevation mask drops among it -- with the cap off, today's build
+// exactly. And the ephemeris store's default size, the Beetle's. The store
+// at the mosaic build's 128 is test_eph_store_pad_wait.cpp's, a target of
+// its own.
 //
 // The cap's skies are synthetic: Keplerian MEO shells over a receiver on the
 // equator at the prime meridian, no real place. The LC86G's golden epochs
@@ -25,6 +26,12 @@
 #include "fixtures/raw_meas_golden.h"
 #include "gnss/atmo.h"
 #include "gnss/types.h"
+
+// The Beetle's build sets no TR_EPH_CAPACITY, and the headers must not
+// either: tools/m1_identity.sh diffs every TR_* macro main.cpp sees.
+#ifdef TR_EPH_CAPACITY
+#error "TR_EPH_CAPACITY is defined on a default build: EphemerisStore.h must not #define it"
+#endif
 
 using gnss_raw::BuiltEpoch;
 using gnss_raw::EphemerisStore;
@@ -202,6 +209,55 @@ int count(const BuiltEpoch& b, int sys)
     return n;
 }
 
+double elevationDeg(const gps_eph_t& e, double tow)
+{
+    double rr[3], rs[3], clk, az, el;
+    geo_to_ecef(kRxLla[0], kRxLla[1], kRxLla[2], rr);
+    gps_sat_pos(&e, tow + (e.sys == GNSS_SYS_BDS ? BDT_MINUS_GPST : 0.0), rs, nullptr, &clk);
+    const double d[3] = {rs[0] - rr[0], rs[1] - rr[1], rs[2] - rr[2]};
+    gnss_az_el(kRxLla[0], kRxLla[1], d, &az, &el);
+    return el * 180.0 / kPi;
+}
+
+// A GPS satellite of the shell under the builder's 3 deg mask at kTow0 (sky()
+// leaves it out), with its ephemeris and an observation of it at C/N0 cn0;
+// and a later ephemeris of it (toe kTow0 + risen_toe_dt) that puts it where
+// a satellite 15 deg up or more is -- the test's way of having it rise.
+struct LowSat
+{
+    gps_eph_t eph, risen;
+    RawObs    obs;
+};
+
+bool lowGps(float cn0, double risen_toe_dt, LowSat& out)
+{
+    int low = 0, high = 0;
+    for (int prn = 1; prn <= 32; ++prn)
+    {
+        const double el = elevationDeg(orbit(GNSS_SYS_GPS, prn, kTow0), kTow0);
+        if (low == 0 && el > -10.0 && el < 2.0)
+            low = prn;
+        if (high == 0 && el >= 15.0)
+            high = prn;
+    }
+    if (low == 0 || high == 0)
+        return false;
+    out.eph = orbit(GNSS_SYS_GPS, low, kTow0);
+    out.risen = orbit(GNSS_SYS_GPS, high, kTow0 + risen_toe_dt);
+    out.risen.prn = low;
+    out.risen.iode = out.eph.iode + 1;
+    out.obs = RawObs{};
+    out.obs.sys = GNSS_SYS_GPS;
+    out.obs.prn = static_cast<uint8_t>(low);
+    out.obs.has_pr = true;
+    out.obs.has_rate = true;
+    out.obs.cn0_dbhz = cn0;
+    out.obs.pr_m = 2.4e7;
+    out.obs.rate_mps = 100.0;
+    out.obs.lock_ms = 60000;
+    return true;
+}
+
 }  // namespace
 
 // ------------------------------------------------- addEphemeris, hasEphemeris
@@ -336,7 +392,7 @@ TEST(RawGnssMeasStageV9, ThirtySatellitesAreBuiltAsSixteenWithFourGpsFirst)
     EXPECT_EQ(count(b, GNSS_SYS_GPS), 4);
     EXPECT_EQ(st.stats().tracked, 30);               // seen whole
     EXPECT_EQ(st.stats().tracked_no_eph, 0);
-    EXPECT_EQ(st.cappedOut(), 14u);
+    EXPECT_EQ(st.stats().capped_out, 14u);
     // which: the last four GPS (the strongest) and the last twelve others
     std::set<std::pair<int, int>> want;
     for (int i = n_gps - 4; i < n_gps; ++i)
@@ -412,7 +468,7 @@ TEST(RawGnssMeasStageV9, TheCapPicksOnlySatellitesTheBuilderWouldBuild)
         EXPECT_EQ(bad.count(k), 0u) << "sys " << k.first << " prn " << k.second;
     EXPECT_EQ(st.stats().tracked, 25);                // with a pseudorange
     EXPECT_EQ(st.stats().tracked_no_eph, 5);          //   and no ephemeris, while capped
-    EXPECT_EQ(st.cappedOut(), 3u);                    // the candidates: 30 less 15; twelve taken
+    EXPECT_EQ(st.stats().capped_out, 3u);                    // the candidates: 30 less 15; twelve taken
 }
 
 TEST(RawGnssMeasStageV9, ASatelliteBuiltLastEpochKeepsItsPlaceWithinThreeDb)
@@ -535,7 +591,7 @@ TEST(RawGnssMeasStageV9, ACapAboveTheSkyBuildsWhatNoCapBuilds)
             EXPECT_GE(a.n, 7);
             expectSame(a, b);
         }
-        EXPECT_EQ(cap.cappedOut(), 0u);
+        EXPECT_EQ(cap.stats().capped_out, 0u);
         const gnss_raw::ShadowMeasStats& x = off.stats();
         const gnss_raw::ShadowMeasStats& y = cap.stats();
         EXPECT_EQ(x.epochs, y.epochs);
@@ -642,6 +698,216 @@ TEST(RawGnssMeasStageV9, ASatelliteLeftOutKeepsItsLockAge)
     EXPECT_GE(ever_out_and_back.size(), 10u);   // left out a second and back, more than once over
     EXPECT_TRUE(naive_relocked);                // the test can tell
     EXPECT_EQ(st.stats().tracked, 30);
+}
+
+TEST(RawGnssMeasStageV9, AStrongPickUnderTheMaskGivesUpItsPlace)
+{
+    // The cap cannot tell elevations; the build drops a satellite under the
+    // 3 deg mask. One there, the strongest in the sky and a GPS one, is
+    // picked once, dropped, and from then on picked last -- not among the
+    // GPS ones either -- so every epoch after builds the cap's eight. It is
+    // tried again kCapMaskRetryS later, and once it has risen it is built
+    // and keeps its place.
+    static_assert(RawGnssMeasStage::kCapMaskRetryS == 10.0, "the epochs below are 10 s apart");
+    LowSat low;
+    ASSERT_TRUE(lowGps(50.0f, 20.0, low));
+    const std::pair<int, int> lo{GNSS_SYS_GPS, low.obs.prn};
+    RawGnssMeasStage st(capCfg(8));
+    int held = 0;
+    for (int k = 0; k <= 210; ++k)
+    {
+        const double tow = kTow0 + k / 10.0;
+        Sky s = sky(30, tow);
+        ASSERT_EQ(s.e.epoch.n, 30);
+        s.e.mcu_us = kT0 + 100000LL * k;
+        // three GPS satellites besides it: GPS-first then has only those
+        int g = 0;
+        for (int i = 0; i < s.e.epoch.n; ++i)
+            if (s.e.epoch.obs[i].sys == GNSS_SYS_GPS && g++ >= 3)
+                s.e.epoch.obs[i].sys = GNSS_SYS_QZS;
+        s.e.epoch.obs[s.e.epoch.n++] = low.obs;
+        if (k == 0)
+        {
+            addAll(st, s);
+            ASSERT_TRUE(st.addEphemeris(low.eph));
+        }
+        if (k == 151)
+            ASSERT_TRUE(st.addEphemeris(low.risen));   // from 15 s it is placed up
+        int cand = 0;                                  // with an ephemeris, not QZSS: all 40 dB-Hz but it
+        for (int i = 0; i < s.e.epoch.n; ++i)
+            cand += s.e.epoch.obs[i].sys <= GNSS_SYS_BDS
+                        && st.hasEphemeris(s.e.epoch.obs[i].sys, s.e.epoch.obs[i].prn, tow)
+                        ? 1
+                        : 0;
+        ASSERT_GT(cand, 20);
+        const uint32_t out0 = st.stats().capped_out;
+        BuiltEpoch b;
+        ASSERT_TRUE(st.offer(s.e, navAt(kRxLla), b));
+        const bool in = sats(b).count(lo) != 0;
+        const int left = static_cast<int>(st.stats().capped_out - out0);
+        if (k == 0 || k == 100)
+        {
+            // picked (the first time, and tried again 10 s on), not built
+            EXPECT_EQ(b.n, 7) << "epoch " << k;
+            EXPECT_EQ(count(b, GNSS_SYS_GPS), 3) << "epoch " << k;
+            EXPECT_EQ(left, cand - 8) << "epoch " << k;
+        }
+        else if (k < 200)
+        {
+            EXPECT_EQ(b.n, 8) << "epoch " << k;
+            EXPECT_FALSE(in) << "epoch " << k;
+            EXPECT_EQ(count(b, GNSS_SYS_GPS), 3) << "epoch " << k;
+            EXPECT_EQ(left, cand - 1 - 8) << "epoch " << k;   // it is not counted: not buildable
+        }
+        else
+        {
+            // risen: picked when tried again at 20 s, built, and held
+            EXPECT_EQ(b.n, 8) << "epoch " << k;
+            EXPECT_TRUE(in) << "epoch " << k;
+            EXPECT_EQ(count(b, GNSS_SYS_GPS), 4) << "epoch " << k;
+            held += in ? 1 : 0;
+        }
+    }
+    EXPECT_EQ(held, 11);
+}
+
+TEST(RawGnssMeasStageV9, APickUnderTheMaskIsTakenLastWhereThereIsRoom)
+{
+    // Picked last, not left out: with fewer satellites than the cap, the one
+    // under the mask still takes a place no other wants, every epoch, and is
+    // built the first epoch it has risen -- not kCapMaskRetryS later. No
+    // satellite that could be built is ever left out.
+    LowSat low;
+    ASSERT_TRUE(lowGps(50.0f, 0.25, low));
+    const std::pair<int, int> lo{GNSS_SYS_GPS, low.obs.prn};
+    RawGnssMeasStage st(capCfg(16));
+    for (int k = 0; k < 6; ++k)
+    {
+        Sky s = sky(10, kTow0 + k / 10.0);
+        ASSERT_EQ(s.e.epoch.n, 10);
+        s.e.mcu_us = kT0 + 100000LL * k;
+        s.e.epoch.obs[s.e.epoch.n++] = low.obs;
+        if (k == 0)
+        {
+            addAll(st, s);
+            ASSERT_TRUE(st.addEphemeris(low.eph));
+        }
+        if (k == 3)
+            ASSERT_TRUE(st.addEphemeris(low.risen));   // from 0.3 s it is placed up
+        BuiltEpoch b;
+        ASSERT_TRUE(st.offer(s.e, navAt(kRxLla), b));
+        EXPECT_EQ(b.n, k >= 3 ? 11 : 10) << "epoch " << k;
+        EXPECT_EQ(sats(b).count(lo), k >= 3 ? 1u : 0u) << "epoch " << k;
+    }
+    EXPECT_EQ(st.stats().capped_out, 0u);
+}
+
+// ------------------------------------------------------- addEphemeris refuses
+
+TEST(RawGnssMeasStageV9, AnEphemerisTheBuilderCannotPlaceIsRefused)
+{
+    // The RTCM decode never files these; a driver's are held to the same.
+    RawGnssMeasStage st;
+    auto eph = [](int sys, int prn) {
+        gps_eph_t e = orbit(sys == GNSS_SYS_QZS ? GNSS_SYS_GPS : sys, prn, kTow0);
+        e.sys = sys;
+        return e;
+    };
+    EXPECT_FALSE(st.addEphemeris(eph(GNSS_SYS_QZS, 1)));    // a system the builder does not take
+    EXPECT_FALSE(st.addEphemeris(eph(-1, 1)));
+    EXPECT_FALSE(st.addEphemeris(eph(GNSS_SYS_GPS, 0)));    // no PRN 0
+    EXPECT_FALSE(st.addEphemeris(eph(GNSS_SYS_GAL, 64)));   // past the builder's PRNs (a raw SBF SVID)
+    EXPECT_FALSE(st.addEphemeris(eph(GNSS_SYS_GAL, 71)));
+    for (int prn : {1, 5, 59, 63})                          // BeiDou's GEOs: no orbit for them
+        EXPECT_FALSE(st.addEphemeris(eph(GNSS_SYS_BDS, prn))) << prn;
+    EXPECT_EQ(st.stats().eph_bad, 9u);
+    EXPECT_EQ(st.stats().eph_added, 0u);
+    EXPECT_EQ(st.ephemerides().size(), 0u);
+    // the edges that are placed
+    for (int prn : {6, 58})
+        EXPECT_TRUE(st.addEphemeris(eph(GNSS_SYS_BDS, prn))) << prn;
+    EXPECT_TRUE(st.addEphemeris(eph(GNSS_SYS_GPS, 1)));
+    EXPECT_TRUE(st.addEphemeris(eph(GNSS_SYS_GAL, 63)));
+    EXPECT_EQ(st.stats().eph_added, 4u);
+    EXPECT_EQ(st.stats().eph_bad, 9u);
+    EXPECT_EQ(st.ephemerisSatellites(), 4);
+}
+
+TEST(RawGnssMeasStageV9, AnEphemerisFarFromTheReceiversTimeIsRefused)
+{
+    // The store goes by second of week: an ephemeris a week old with
+    // today's toe would be today's. Where the last epoch named its week, a
+    // toe more than 4 h from its time is refused (BeiDou's 14 s behind
+    // GPS's); otherwise nothing is checked.
+    auto at = [](int sys, int prn, int week, double toe) {
+        gps_eph_t e = orbit(sys, prn, kTow0);
+        e.week = week;
+        e.toe = e.toc = toe;
+        return e;
+    };
+    auto epochAt = [](uint16_t week, double tow) {
+        TimedRawEpoch e;
+        e.epoch.tow_s = tow;
+        e.gps_week = week;
+        return e;
+    };
+    const double lim = RawGnssMeasStage::kEphMaxOffsetS;
+    {
+        RawGnssMeasStage st;
+        EXPECT_TRUE(st.addEphemeris(at(GNSS_SYS_GPS, 1, 2439, kTow0)));   // no week yet: filed
+        st.see(epochAt(2440, kTow0));
+        EXPECT_FALSE(st.addEphemeris(at(GNSS_SYS_GPS, 2, 2439, kTow0)));  // a week old
+        EXPECT_FALSE(st.addEphemeris(at(GNSS_SYS_GAL, 2, 2441, kTow0)));  // a week ahead
+        EXPECT_TRUE(st.addEphemeris(at(GNSS_SYS_GPS, 3, 2440, kTow0 + 7200.0)));   // GPS, 2 h ahead
+        EXPECT_TRUE(st.addEphemeris(at(GNSS_SYS_GPS, 4, 2440, kTow0 - lim)));
+        EXPECT_FALSE(st.addEphemeris(at(GNSS_SYS_GPS, 5, 2440, kTow0 - lim - 1.0)));
+        EXPECT_TRUE(st.addEphemeris(at(GNSS_SYS_GAL, 6, 2440, kTow0 + lim)));
+        EXPECT_FALSE(st.addEphemeris(at(GNSS_SYS_GAL, 7, 2440, kTow0 + lim + 1.0)));
+        // BeiDou: its toe in BeiDou time, 14 s less for the same instant
+        EXPECT_TRUE(st.addEphemeris(at(GNSS_SYS_BDS, 20, 2440, kTow0 - lim - 10.0)));
+        EXPECT_FALSE(st.addEphemeris(at(GNSS_SYS_BDS, 21, 2440, kTow0 + lim - 10.0)));
+        EXPECT_TRUE(st.addEphemeris(at(GNSS_SYS_GPS, 8, 0, kTow0)));   // no week from its decoder: not checked
+        EXPECT_EQ(st.stats().eph_bad, 5u);
+        EXPECT_EQ(st.stats().eph_added, 6u);
+    }
+    {
+        // across the week's turn: an epoch 10 s before it, a toe 2 h into the next week
+        RawGnssMeasStage st;
+        st.see(epochAt(2440, 604790.0));
+        EXPECT_TRUE(st.addEphemeris(at(GNSS_SYS_GPS, 1, 2441, 7200.0)));
+        EXPECT_TRUE(st.addEphemeris(at(GNSS_SYS_BDS, 22, 2440, 604800.0 - 14.0 - 600.0)));
+        EXPECT_FALSE(st.addEphemeris(at(GNSS_SYS_GPS, 2, 2440, 7200.0)));   // the same toe, a week early
+        EXPECT_EQ(st.stats().eph_bad, 1u);
+        // past the turn, an epoch that does not name its week: its time of
+        // week is the new week's, the week last named the old one's, so
+        // nothing is checked rather than a new ephemeris refused
+        st.see(epochAt(0, 30.0));
+        EXPECT_TRUE(st.addEphemeris(at(GNSS_SYS_GPS, 3, 2441, 7200.0)));
+        st.see(epochAt(2441, 30.1));
+        EXPECT_TRUE(st.addEphemeris(at(GNSS_SYS_GPS, 4, 2441, 7200.0)));
+        EXPECT_FALSE(st.addEphemeris(at(GNSS_SYS_GPS, 5, 2440, 7200.0)));
+        EXPECT_EQ(st.stats().eph_bad, 2u);
+    }
+    {
+        // the RTCM path is the Beetle's as it was, with no such check: the
+        // golden capture's ephemerides (week 2433) are filed with the
+        // receiver at week 2440, where the same ones from a driver are not
+        RawGnssMeasStage rtcm, own;
+        rtcm.see(epochAt(2440, kTow0));
+        own.see(epochAt(2440, kTow0));
+        for (int i = 0; i < kGoldenRmEphN; ++i)
+        {
+            const GoldenPayload& p = kGoldenRmEph[i];
+            gps_eph_t e;
+            ASSERT_TRUE(gnss_raw::decodeEphemeris(p.bytes, static_cast<size_t>(p.len), 2440, e));
+            EXPECT_EQ(e.week, kGoldenWeek);
+            EXPECT_TRUE(rtcm.onEphemeris(p.bytes, static_cast<size_t>(p.len)));
+            EXPECT_FALSE(own.addEphemeris(e));
+        }
+        EXPECT_EQ(rtcm.stats().eph_bad, 0u);
+        EXPECT_EQ(rtcm.ephemerisSatellites(), kGoldenRmEphN);
+        EXPECT_EQ(own.stats().eph_bad, static_cast<uint32_t>(kGoldenRmEphN));
+    }
 }
 
 // ------------------------------------------------------- the store's size

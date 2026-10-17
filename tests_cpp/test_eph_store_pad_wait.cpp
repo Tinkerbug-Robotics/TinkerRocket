@@ -18,6 +18,12 @@
 // satellites' ephemerides are all nearer a new one than a GPS ephemeris an
 // hour ahead, and that goes, a satellite's only one, until the receiver
 // sends it again (the pad's resend while tracked_no_eph > 0).
+//
+// The same wait through the stage, as the mosaic's driver files them
+// (RawGnssMeasStage::addEphemeris, each with its week, the receiver's
+// epochs seen between): its check of a toe against the receiver's time
+// refuses none of them, across the week's turn too. And the stage, the store
+// and this file are built with one capacity (ephCapacityAgrees).
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -26,10 +32,12 @@
 #include <vector>
 
 #include "EphemerisStore.h"
+#include "RawGnssMeasStage.h"
 #include "gnss/eph.h"
 #include "gnss/types.h"
 
 using gnss_raw::EphemerisStore;
+using gnss_raw::RawGnssMeasStage;
 
 namespace
 {
@@ -67,13 +75,15 @@ struct WaitResult
     int    checks = 0;      // satellite checks made
     int    missing_two = 0; // a satellite up without its two latest
     int    missing_one = 0; // a satellite up with none to be built by, though it was sent one within 2 h
+    uint32_t refused = 0;   // through the stage: ephemerides it refused
 };
 
 // n_sats different satellites over hours, 30 of them up at a time: the
 // first 30 up when the wait starts (the receiver has just started: none of
 // their ephemerides yet), each later one rising as one sets, every pass the
-// same length.
-WaitResult padWait(int n_sats, double hours)
+// same length. Into a store, or through a stage (via_stage) that sees an
+// epoch every 30 s.
+WaitResult padWait(int n_sats, double hours, bool via_stage = false)
 {
     const int kUp = 30;
     const double t0 = kWeek * 2440.0 + kWeek - 2.0 * 3600.0 + 123.0;   // 2 h before a week turns over
@@ -98,11 +108,20 @@ WaitResult padWait(int n_sats, double hours)
         sats.push_back(s);
     }
 
-    EphemerisStore store;
+    EphemerisStore bare;
+    RawGnssMeasStage stage;
+    const EphemerisStore& store = via_stage ? stage.ephemerides() : bare;
     WaitResult r;
     std::vector<std::vector<double>> sent(sats.size());   // each satellite's toes, as sent
     for (double t = t0; t <= t0 + span; t += 30.0)
     {
+        if (via_stage)
+        {
+            gnss_raw::TimedRawEpoch ep;                   // the receiver's time, no satellites
+            ep.epoch.tow_s = sow(t);
+            ep.gps_week = static_cast<uint16_t>(std::floor(t / kWeek));
+            stage.see(ep);
+        }
         int up = 0;
         for (size_t i = 0; i < sats.size(); ++i)
         {
@@ -120,10 +139,11 @@ WaitResult padWait(int n_sats, double hours)
                 e.valid = 1;
                 e.sys = s.sys;
                 e.prn = s.prn;
+                e.week = static_cast<int>(std::floor(toe / kWeek));   // BeiDou's: BDT's + 1356, as SbfNav gives it
                 e.toe = e.toc = sow(toe);
                 e.iode = static_cast<int>(std::fmod(toe / 600.0, 256.0));
                 e.sqrt_a = 5153.7;
-                EXPECT_TRUE(store.add(e));
+                EXPECT_TRUE(via_stage ? stage.addEphemeris(e) : bare.add(e));
                 mine.push_back(toe);
             }
             // the two latest held, and one to build by if one sent is within 2 h
@@ -144,6 +164,7 @@ WaitResult padWait(int n_sats, double hours)
         r.most_up = std::max(r.most_up, up);
         r.peak_used = std::max(r.peak_used, store.size());
     }
+    r.refused = stage.stats().eph_bad;
     return r;
 }
 
@@ -152,6 +173,10 @@ WaitResult padWait(int n_sats, double hours)
 TEST(EphemerisStorePadWait, TheMosaicBuildHolds128)
 {
     static_assert(EphemerisStore::kCapacity == 128, "this target is built with TR_EPH_CAPACITY=128");
+    // EphemerisStore.cpp and RawGnssMeasStage.cpp were built with it too
+    EXPECT_EQ(EphemerisStore::builtCapacity(), 128u);
+    EXPECT_TRUE(RawGnssMeasStage::ephCapacityAgrees(EphemerisStore::kCapacity));
+    EXPECT_FALSE(RawGnssMeasStage::ephCapacityAgrees(64));   // a component built without it
 }
 
 TEST(EphemerisStorePadWait, TwoToFourHoursOfFiftySatellitesKeepTwoEachForEveryOneUp)
@@ -181,5 +206,23 @@ TEST(EphemerisStorePadWait, AFullPoolDropsASetSatellitesEphemerisFirst)
         EXPECT_EQ(r.missing_one, 0) << n << " satellites";
         if (n >= 70)
             EXPECT_EQ(r.peak_used, EphemerisStore::kCapacity) << n;   // full, and evicting
+    }
+}
+
+TEST(EphemerisStorePadWait, TheStageFilesEveryOneWithItsWeek)
+{
+    // As the mosaic's driver files them, each with its week, the receiver's
+    // time known: a GPS toe 2 h ahead, BeiDou's in its own time and the
+    // week's turn are all within the stage's check, and the store keeps what
+    // it keeps when filled directly.
+    for (double hours : {2.0, 4.0})
+    {
+        const WaitResult direct = padWait(50, hours);
+        const WaitResult r = padWait(50, hours, true);
+        EXPECT_EQ(r.refused, 0u) << hours << " h";
+        EXPECT_EQ(r.missing_two, 0) << hours << " h";
+        EXPECT_EQ(r.missing_one, 0) << hours << " h";
+        EXPECT_EQ(r.checks, direct.checks) << hours << " h";
+        EXPECT_EQ(r.peak_used, direct.peak_used) << hours << " h";
     }
 }

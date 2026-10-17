@@ -22,19 +22,31 @@
 
 #include "gnss/eph.h"
 
-#ifndef TR_EPH_CAPACITY
-#define TR_EPH_CAPACITY 64
-#endif
-
 namespace gnss_raw
 {
 
 class EphemerisStore
 {
 public:
-    static constexpr size_t kCapacity = TR_EPH_CAPACITY;   // 64: two each for 32 satellites
+    // No default #define of TR_EPH_CAPACITY: a build that does not set it
+    // sees no macro it did not see before (tools/m1_identity.sh diffs them).
+#ifdef TR_EPH_CAPACITY
+    static constexpr size_t kCapacity = TR_EPH_CAPACITY;
+#else
+    static constexpr size_t kCapacity = 64;   // two each for 32 satellites
+#endif
     static constexpr int    kPerSat   = 2;
     static_assert(kCapacity >= static_cast<size_t>(kPerSat), "TR_EPH_CAPACITY holds at least one satellite's");
+
+#ifdef TR_EPH_CAPACITY
+    // The kCapacity EphemerisStore.cpp was compiled with. Every translation
+    // unit that sees this class lays the pool out by its own kCapacity, and
+    // nothing at link time catches two of them, so a build that sets
+    // TR_EPH_CAPACITY checks at boot that its components agree
+    // (RawGnssMeasStage::ephCapacityAgrees). A component compiled without it
+    // does not define this, and the image does not link.
+    static size_t builtCapacity();
+#endif
 
     EphemerisStore() { clear(); }
     void clear();

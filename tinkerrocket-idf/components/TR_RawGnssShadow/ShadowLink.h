@@ -150,6 +150,7 @@ struct ShadowMeasStats
     int16_t  iono_age_days;
     uint32_t build_us;         // the last epoch's build, wall time (preempted by everything above it)
     uint32_t build_us_max;
+    uint32_t capped_out;       // buildable satellites the stage's sat_cap left out, summed over the epochs built
 };
 
 // Lock-free ring, one producer and one consumer on any cores.
