@@ -248,6 +248,13 @@ void ReplayClock::onFix(double gps_s, int64_t mcu_us)
     }
 }
 
+void ReplayClock::onEpoch(uint16_t gps_week, double tow_s, int64_t mcu_us)
+{
+    if (gps_week == 0 || mcu_us == 0 || !(tow_s >= 0.0 && tow_s < 604800.0))
+        return;
+    onFix(gps_week * 604800.0 + tow_s, mcu_us);
+}
+
 bool ReplayClock::tAt(int64_t mcu_us, double& t_s) const
 {
     if (state_ != kFollowing && state_ != kFrozen)

@@ -398,6 +398,20 @@ void SensorCollectorSim::replayNoteFix(const gnss_raw::TimedFix& f)
         ESP_LOGW("SIM", "RIG REPLAY clock: %s (a fix at t %+.2f s)", clockName(after), t);
 }
 
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+void SensorCollectorSim::replayNoteEpoch(const gnss_raw::TimedRawEpoch& e)
+{
+    portENTER_CRITICAL(&replay_mux_);
+    const uint8_t before = replay_clock_.state();
+    replay_clock_.onEpoch(e.gps_week, e.epoch.tow_s, e.mcu_us);
+    const uint8_t after = replay_clock_.state();
+    const double t = replay_clock_.lastFixT();
+    portEXIT_CRITICAL(&replay_mux_);
+    if (after != before)
+        ESP_LOGW("SIM", "RIG REPLAY clock: %s (the receiver's timed epoch at t %+.2f s)", clockName(after), t);
+}
+#endif
+
 // ============================================================================
 // Data Getters
 // ============================================================================
@@ -589,6 +603,12 @@ bool SensorCollectorSim::getGNSSRtcmFrame(uint8_t* out, size_t cap, size_t& len,
 bool SensorCollectorSim::getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out)
 {
     const bool have = real_.getGNSSRawEpoch(out);
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // The mosaic-G5 hands no timed fix (getGNSSFix is the LC86G's): its timed
+    // epochs set the replay's clock, on the GPS-to-MCU mapping the filter
+    // builds the same epochs with (#1600 rig replay on the V9)
+    if (have && replay_on_) replayNoteEpoch(out);
+#endif
     if (phase_ == SIM_IDLE || replay_on_) return have;
     return false;   // consumed, not forwarded — see the header
 }

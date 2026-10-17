@@ -69,7 +69,8 @@ public:
     //
     // The rig replay is the exception to all four rules above (startReplay):
     // its sky is the flight's, so the receiver's output passes through, and
-    // each fix's GPS time sets the replay's clock.
+    // each fix's GPS time sets the replay's clock -- on the mosaic-G5, which
+    // hands no timed fix, each timed raw epoch's (getGNSSRawEpoch).
     bool getGNSSFix(gnss_raw::TimedFix& out);
 #if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
     // The mosaic-only image's GPS ionosphere, by the same rule: a real sky's
@@ -355,6 +356,9 @@ private:
     // The field the magnetometer reads in that attitude, rocket frame, uT.
     void replayField(const sim_replay::Sample& s, float b[3]) const;
     void replayNoteFix(const gnss_raw::TimedFix& f);
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    void replayNoteEpoch(const gnss_raw::TimedRawEpoch& e);
+#endif
 };
 
 #endif // SENSOR_COLLECTOR_SIM_H

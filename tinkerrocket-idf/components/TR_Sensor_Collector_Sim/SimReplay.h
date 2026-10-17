@@ -23,6 +23,9 @@
 //  IMU's do, and the receiver's fixes are placed by the time sync as they are
 //  in flight. A clock that arrives after that instant never starts the flight
 //  (one would begin mid-boost): the replay stays on the pad and says so.
+//  The mosaic-G5's driver hands no timed fix; its timed raw epochs (the
+//  receiver's GPS week and time of week, that instant on the MCU from the
+//  1PPS line) set the clock instead, ten a second (ReplayClock::onEpoch).
 //
 //  Frames: the firmware's rocket frame, FLU (x nose, y left, z up; see
 //  SimSensorModel.h), and NED at the pad.
@@ -132,6 +135,16 @@ public:
     // A fix: its GPS time (week * 604800 + time of week, s) and that instant
     // on the MCU clock (us); either 0 = not known.
     void onFix(double gps_s, int64_t mcu_us);
+
+    // A timed raw epoch, for a receiver whose driver hands no timed fix (the
+    // mosaic-G5: its epochs are what the time sync places): its full GPS week,
+    // its time of week (s) and that instant on the MCU clock (us). A week or
+    // an instant of 0 is not known yet -- the epoch is not counted. The same
+    // clock as a fix's, at the receiver's epoch rate (10 Hz on the mosaic).
+    // The time of week is the receiver's own, uncorrected: within the 0.5 ms
+    // of its clock bias of the GPS instant the MCU time places, as the filter
+    // pairs the same two.
+    void onEpoch(uint16_t gps_week, double tow_s, int64_t mcu_us);
 
     // The replay's time (s from ignition) at an MCU instant; false until a fix
     // has set the clock (or when it came too late).
