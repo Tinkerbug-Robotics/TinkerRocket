@@ -213,6 +213,23 @@ if(TR_BENCH_IRAM)
     add_compile_definitions(TR_BENCH_IRAM=${TR_BENCH_IRAM})
     message(STATUS "TR_BENCH_IRAM=${TR_BENCH_IRAM} -- hot code in internal RAM (bench)")
 endif()
+# RF rig bench switches for the mosaic-G5 (never set for flight): a C/N0 and
+# tracking line every 5 s, and a cold start (erst,Soft,PVTData+SatData) after
+# the setup at each boot, so a simulated sky is not searched with the real
+# sky's time and ephemerides.
+foreach(_v TR_BENCH_MOSAIC_CN0 TR_BENCH_MOSAIC_COLD_START)
+    if(${_v} AND NOT TR_GNSS_MOSAIC)
+        message(FATAL_ERROR "${_v} is for the mosaic-only image (-DTR_GNSS_MOSAIC=1 on a V8 or V9)")
+    endif()
+endforeach()
+if(TR_BENCH_MOSAIC_CN0)
+    add_compile_definitions(TR_BENCH_MOSAIC_CN0=1)
+    message(WARNING "TR_BENCH_MOSAIC_CN0=1 -- mosaic tracking/C/N0 console line (bench)")
+endif()
+if(TR_BENCH_MOSAIC_COLD_START)
+    add_compile_definitions(TR_BENCH_MOSAIC_COLD_START=1)
+    message(WARNING "TR_BENCH_MOSAIC_COLD_START=1 -- mosaic-G5 cold start at every boot (bench)")
+endif()
 # #491 bench: cold-start the u-blox at every boot, so repeated runs of one file
 # start from the same state. Never set for flight.
 if(TR_GNSS_BENCH_COLD_START)
