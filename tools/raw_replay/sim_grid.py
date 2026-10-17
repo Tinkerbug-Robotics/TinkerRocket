@@ -40,15 +40,37 @@ sys.path.insert(0, HERE)
 
 MAGS = ["0", "+10", "-10", "+40", "-40", "none30"]
 ARMS = ["design", "unaided", "noguard"]
+# --arm-args: an arm's own raw_replay arguments, appended to its run (an experiment's arm beside today's design):
+# NAME=ARGS, the arm flown as the design (or, NAME ending in "_unaided", as its --unaided twin) plus ARGS
+ARM_ARGS = {}
+RIG_STATE = None   # --rig-state: a file that reads "active" while the bench rig needs a quiet machine
+
+
+def rig_wait():
+    """Wait while the rig's state file says active (every 30 s): no events file or run starts meanwhile."""
+    if not RIG_STATE:
+        return
+    while True:
+        try:
+            with open(RIG_STATE) as fh:
+                active = "active" in fh.read().lower()
+        except OSError:
+            active = False
+        if not active:
+            return
+        time.sleep(30.0)
 
 
 def make_events(job):
-    flight, pattern, out_dir, phases_path, lever_arm, force = job
+    flight, pattern, out_dir, phases_path, lever_arm, force, rig = job
+    global RIG_STATE
+    RIG_STATE = rig
     import sim_events
     name = os.path.splitext(os.path.basename(flight))[0]
     path = os.path.join(out_dir, f"{name}__{pattern}.events")
     if os.path.exists(path) and not force:
         return path, None, 0.0
+    rig_wait()
     t0 = time.time()
     phases = json.load(open(phases_path))["flights"]
     path, counts = sim_events.build(flight, pattern, out_dir, phases, lever_arm=lever_arm)
@@ -68,7 +90,9 @@ def read_meta(events):
 
 
 def run_one(job):
-    events, mag, arm, binary, runs_dir, scores_dir, keep, extra = job
+    events, mag, arm, binary, runs_dir, scores_dir, keep, extra, arm_args, rig = job
+    global RIG_STATE
+    RIG_STATE = rig
     import sim_tables
     base = os.path.basename(events)[:-len(".events")]
     flight, pattern = base.split("__")
@@ -87,12 +111,17 @@ def run_one(job):
         args.append("--unaided")
     elif arm == "noguard":
         args += ["--vote-guard", "0"]
+    elif arm in arm_args:
+        if arm.endswith("_unaided"):
+            args.append("--unaided")
+        args += arm_args[arm]
     elif arm != "design":
         raise SystemExit(f"unknown arm {arm}")
     nav = os.path.join(os.path.dirname(events), "truth", flight + ".nav")
     if os.path.exists(nav):
         args += ["--truth-nav", nav]
     args += extra
+    rig_wait()
     t0 = time.time()
     p = subprocess.run(args, capture_output=True, text=True)
     dt = time.time() - t0
@@ -132,6 +161,11 @@ def main():
     ap.add_argument("--events-dir", help="where the events files go (default OUT/events; ~6 MB each, made again "
                                          "in minutes: a scratch directory will do)")
     ap.add_argument("--events-only", action="store_true")
+    ap.add_argument("--arm-args", action="append", default=[],
+                    help="NAME=ARGS: an arm of its own, the design (or with NAME ending _unaided its twin) plus these "
+                         "raw_replay arguments; name it in --arms (repeatable)")
+    ap.add_argument("--rig-state", help="a file that reads 'active' while the bench rig needs a quiet machine: no "
+                                        "events file or run starts while it does (checked every 30 s)")
     ap.add_argument("--force-events", action="store_true")
     a = ap.parse_args()
     import sim_events
@@ -146,7 +180,11 @@ def main():
     for d in (ev_dir, runs_dir, scores_dir):
         os.makedirs(d, exist_ok=True)
     t0 = time.time()
-    jobs = [(f, p, ev_dir, phases, a.lever_arm, a.force_events) for f in flights for p in pats]
+    arm_args = {}
+    for spec in a.arm_args:
+        name, _, rest = spec.partition("=")
+        arm_args[name] = rest.split()
+    jobs = [(f, p, ev_dir, phases, a.lever_arm, a.force_events, a.rig_state) for f in flights for p in pats]
     events = []
     with cf.ProcessPoolExecutor(a.jobs) as ex:
         for path, counts, dt in ex.map(make_events, jobs):
@@ -160,8 +198,8 @@ def main():
         raise SystemExit(f"no harness at {a.binary}: build tools/raw_replay first")
     keep = set(a.keep_csv.split(",")) if a.keep_csv else set()
     extra = a.harness_args.split()
-    rjobs = [(e, m, arm, a.binary, runs_dir, scores_dir, keep, extra) for e in events for m in a.mags.split(",")
-             for arm in a.arms.split(",")]
+    rjobs = [(e, m, arm, a.binary, runs_dir, scores_dir, keep, extra, arm_args, a.rig_state) for e in events
+             for m in a.mags.split(",") for arm in a.arms.split(",")]
     t1 = time.time()
     n = 0
     rcs = {}
