@@ -91,6 +91,80 @@ fused, levelling, zero-velocity updates, barometer samples fused and held, magne
 same metrics and phases; `onboard_vs_harness.py` puts the two side by side; `run_matrix.py` and `tables.py` run and
 tabulate the configuration matrix.
 
+## The Beetle's bit-identity check (`bitident.sh`, `../m1_identity.sh`)
+
+Code the Beetle (M1, LC86G) shares with the mosaic-G5 work must leave the Beetle's filter bit-identical. Two scripts
+check a tree against a base commit:
+
+```
+tools/raw_replay/bitident.sh BASE [HEAD]   # the filter replayed: a digest of every step, compared
+tools/m1_identity.sh BASE [HEAD]           # the M1 image's main.cpp and sensor collectors, preprocessed, compared
+```
+
+BASE and HEAD are commits (archived, so only what is committed counts) or directories holding a source tree (a
+worktree's path, for changes not committed yet); HEAD defaults to `HEAD`. Both exit 0 when identical, 1 on a
+difference and 2 when the check could not run, and keep their scratch directory (printed; `BITIDENT_TMP` and
+`M1_IDENTITY_TMP` name one, which must be new or empty).
+
+### `bitident.sh`
+
+- The harness is the one frozen at 4b647494 (the commit that added `--digest`), built twice through `SRC_ROOT`:
+  against BASE's firmware sources and against HEAD's, with `RAW_REPLAY_VCHECK` and `RAW_REPLAY_LATCH` on. Later
+  harness work never has to compile against BASE.
+- Each events file in `BITIDENT_IN` is replayed in act (`--heading-mode 2`) and observe (`1`) at magnetometer errors
+  0, 10 and 40 deg (`BITIDENT_MAGS`), with `--fw-defaults` (the M1 image's configuration without bench flags) and
+  `--digest`. The default inputs are `gnss-attitude-study/rig-replay/bitident-in/` beside the repository: the 25
+  Beetle events files, kept out of the repository, and `recorded.txt` ("tag deg", the magnetometer error each log's
+  image was built with; 0 if not listed).
+- Every digest is compared byte for byte. A difference names the run, the first step that differs and which of its
+  hashes do. The 150 runs take about 15 s on a Mac.
+- A tree the frozen harness cannot compile (a field it names renamed or gone) fails with status 2: a change to look
+  at, not a pass. A tree whose filter needs a source file or include directory the frozen CMakeLists does not list:
+  `BITIDENT_EXTRA_SRC` and `BITIDENT_EXTRA_INC` (';'-separated, relative to the tree, each used where it exists).
+- If a rebase rewrites the frozen commit, the script finds it by its subject; otherwise set `BITIDENT_HARNESS`.
+
+`--digest FILE` (any run of a `RAW_REPLAY_VCHECK` + `RAW_REPLAY_LATCH` build) writes a line each filter step,
+whatever `--every`: the step count, the IMU time (us), then FNV-1a hashes of the `ShadowNav` (every field), the 0x96
+and 0x9B records the step filled and its `HEADING_FIT_MSG` records (`-`: none that step), a named list of the `Stats`
+counters (not the CPU times), and the filter's state and covariance (`stateHash`, as in `test_raw_gnss_shadow.cpp`).
+An `end` line closes it with the step count and the last hashes of the `ShadowNav`, the counters and the state. Every
+field is named in `raw_replay.cpp`, so a tree that only adds fields hashes the same.
+
+`--fw-defaults` applies `--pad-sigma-deg`, `--handoff-deg`, `--gate-full` and `--tilt-sigma-deg` only when given, and
+leaves the rest at `RawGnssShadow::Config`'s defaults, so a changed default the Beetle flies shows. Without it the
+harness sets all four from its own defaults (30, 10, 0, 0: the earlier rig studies'), as before.
+
+### `m1_identity.sh`
+
+- Both trees are copied into the scratch directory and configured for the M1 (`idf.py -B ... -DTR_BOARD_M1=1
+  reconfigure`; `idf.py` from the PATH, or `IDF_EXPORT`, default `~/esp/esp-idf-v6.0/export.sh`). No tree's
+  `dependencies.lock` or `managed_components` is touched. The private `TR_GuidancePN` submodule is never copied, so
+  both sides build with its stub.
+- The compile commands of `main.cpp`, `TR_Sensor_Collector.cpp` and `TR_Sensor_Collector_Sim.cpp` are re-run with
+  `-E` (line markers kept). Only each file's own lines are kept (those whose preceding line marker names it), without
+  blank lines. The tree roots, `FW_GIT_SHA`, `FW_GIT_DIRTY` and every integer `__LINE__` produced are normalized.
+  `__LINE__`'s are found exactly: each file is preprocessed again from a copy that starts with `#line 1000001` under
+  the file's own name, and an integer that moved by 1000000 came from `__LINE__`.
+- The own lines are diffed, and so are the `TR_*` and `CONFIG_*` macros `main.cpp` sees (`-dM`). Shared headers are
+  not compared: they gain defaulted fields and methods by design, and what the filter does with them is
+  `bitident.sh`'s job.
+- A new macro in `config.h`, even one that is 0 on the M1, shows in the `-dM` diff: define a mosaic-only switch from
+  the mosaic build's CMake, or read the diff and judge it.
+- About 40 s on a Mac, most of it the two configures.
+
+### Checked (2026-10-17, base fd45b296)
+
+- `bitident.sh fd45b296 fd45b296`: 150 runs identical. With `heading_pad_sigma_deg` 10 -> 11 in a scratch copy's
+  `RawGnssShadow::Config`: the 75 act runs differ from their launch step (observe never reads it); status 1. With a
+  `Stats` field renamed: the frozen harness does not build, status 2.
+- `m1_identity.sh fd45b296 fd45b296`: identical. One unguarded line added to `startRawShadow()` in a scratch copy:
+  that line is the whole diff, status 1. Fifteen lines under `#if TR_RAW_NAV_MOSAIC` there and three at the top of the
+  file (every later `__LINE__` moved): identical.
+- Main's harness (cd6ebe36) against the one the 2026-10-16 firmware sweeps used (`fw_replay/build_l`, built at 17:58
+  that day): on the 25 events files x {flown, unaided} x {0, 10, 40} deg, 120 of 150 CSVs are byte-identical, and all
+  150 with the latch off (`--vert-release-mps 0`). The other 30 (c30, gv10, r21, v10 and zz, a copy of r21) differ
+  where the latch engages: build_l predates the latch as committed (4755f128, 19:55).
+
 ## Studies: the scripts beside the harness
 
 ### Layout they expect
