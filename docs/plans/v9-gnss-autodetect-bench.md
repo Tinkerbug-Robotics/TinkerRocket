@@ -276,6 +276,23 @@ over USB after the MAC check. The time is from `Initializing GNSS` to
   to the driver would save that time, but it changes the u-blox path, so it
   isn't in this branch.
 
+## The mosaic on a V8
+
+From 2026-10-17 the V8's auto image gives the mosaic-G5 its 1PPS, as the V9 does. The V8's J1 is the
+V9's: the same BM05B-SRSS-TB, module RXD / TXD / VSYS / VSS on pins 1-4, and GNSS_RXD2 = GPIO2 on pin 5. So
+the Goblin's mosaic harness plugs in unchanged. The plan is one V8 image (`-DTR_BOARD_V8=1
+-DTR_GNSS_AUTO=1`) for two flights with no reflash between them: the Goblin with the mosaic, then another
+rocket with a SAM-M10Q. Each rocket still needs its own settings (pyros, servos, orientation) from the app.
+
+**Before the Goblin flight**, with the mosaic harness on the V8's J1:
+- The boot log shows `GNSS auto: mosaic-G5 on J1`. The readback shows `fc_gnss` "mosaic-G5" and `irmax` 3840.
+- The mosaic stays up on the V8's VSYS. This is the first time a V8 powers it.
+- With a fix and a minute of log: SBF at 20 Hz with none missing, `GnssClock` valid with PPS on every
+  epoch, and the IMU at 3840 Hz with no gaps (as test 6 on the Goblin's V9).
+
+**Back to the SAM-M10Q**: the first boot tries the mosaic first, because the last boot found it, then
+finds the u-blox about a second later. That is the "Back and forth" test above.
+
 ## If something goes wrong
 
 - **The u-blox-only image**, exactly what every V9 ran before this:

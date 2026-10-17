@@ -281,14 +281,15 @@ endif()
 # too, because it may find the mosaic: at 2 Mbaud the UART interrupt has to
 # run through flash writes (gnss_auto_driver.cpp refuses a build dir whose
 # sdkconfig predates it). -DTR_BOARD_V8=1 -DTR_GNSS_AUTO=1 builds it for a V8
-# as well, on request only, for the bench: the V8 carries the same SAM-M10Q
-# carrier on the same GPIO3/GPIO4, so its u-blox path is the V9's.
+# as well, on request: the V8's J1 is the V9's (the SAM-M10Q carrier's UART on
+# GPIO3/GPIO4, the mosaic's 1PPS on pin 5 = GPIO2), so one V8 image flies
+# either receiver. The V8's default build stays u-blox-only.
 if(NOT DEFINED TR_GNSS_AUTO AND TR_BOARD_V9 AND NOT TR_GNSS_MOSAIC)
     set(TR_GNSS_AUTO ON)
 endif()
 if(TR_GNSS_AUTO)
     if(NOT TR_BOARD_V9 AND NOT TR_BOARD_V8)
-        message(FATAL_ERROR "TR_GNSS_AUTO is for the V9 (-DTR_BOARD_V9=1): its J1 takes either receiver (or a V8, for the bench)")
+        message(FATAL_ERROR "TR_GNSS_AUTO is for the V9 (-DTR_BOARD_V9=1) or the V8 (-DTR_BOARD_V8=1): their J1 takes either receiver")
     endif()
     add_compile_definitions(TR_GNSS_DRIVER_AUTO=1)
     # The V8 (legacy) sets no defaults list of its own: start it from the base

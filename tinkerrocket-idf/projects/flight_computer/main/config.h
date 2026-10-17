@@ -222,9 +222,11 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 // mosaic's 1PPS on its harness, and the driver touches it only once the
 // mosaic is found: on the PX1105R carrier it is a receiver input.
 #if defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
-// The V8 too, on request, for the bench: its SAM-M10Q carrier sits on the
-// same GPIO3/GPIO4 (board_v8.h). Its J1 has not been checked for the mosaic
-// harness, so on a V8 the mosaic would get no PPS pin (GNSS_PPS_PIN below).
+// The V8 too, on request (-DTR_BOARD_V8=1 -DTR_GNSS_AUTO=1): its J1 is the
+// V9's, the same connector with the SAM-M10Q carrier's UART on GPIO3/GPIO4
+// and pin 5 on GPIO2 (board_v8.h). So one V8 image flies either receiver, the
+// Goblin's mosaic-G5 with its 1PPS on pin 5 or a SAM-M10Q, with no reflash
+// between the rockets.
 #if !TR_BOARD_V9 && !TR_BOARD_V8
 #error "TR_GNSS_DRIVER_AUTO is the V9's (and a V8 bench build's): its J1 is where the two receivers land"
 #endif
@@ -333,8 +335,10 @@ struct config : board_pins
     // permission file allows 20 Hz). The mosaic build's own is GNSS_UPDATE_RATE.
     static constexpr uint8_t GNSS_MOSAIC_UPDATE_RATE = 20;
 #if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || \
-    (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO && TR_BOARD_V9)
+    (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO && (TR_BOARD_V9 || TR_BOARD_V8))
     // Where the mosaic's 1PPS lands: J1 pin 5 through the harness's 1 kOhm.
+    // On the auto image the mosaic's driver reads it only once the mosaic is
+    // found; a u-blox carrier's TIMEPULSE on the same pin is never read.
     static constexpr int8_t GNSS_PPS_PIN = GNSS_J1_PIN5;
 #else
     static constexpr int8_t GNSS_PPS_PIN = -1;
