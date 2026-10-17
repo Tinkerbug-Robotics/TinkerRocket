@@ -126,6 +126,10 @@ TEST(RocketComputerTypes, FcBootStepContract) {
     EXPECT_EQ(FCB_SERVOS,     4u);
     EXPECT_EQ(FCB_COMPLETE,   5u);
     EXPECT_EQ(FCB_STEP_COUNT, 6u);
+    // Rescue mode is a state, not a step: outside the progress range, and the
+    // apps key their rescue wording on this exact value.
+    EXPECT_EQ(FCB_RESCUE,     64u);
+    EXPECT_GT(FCB_RESCUE, FCB_STEP_COUNT);
     // Degraded bits are independent — a boot can finish with several set.
     EXPECT_EQ(FCB_DEG_SENSORS, 0x01u);
     EXPECT_EQ(FCB_DEG_GNSS,    0x02u);

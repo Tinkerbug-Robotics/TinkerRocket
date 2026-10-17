@@ -438,6 +438,13 @@ struct TelemetryData: Codable {
     /// a newer FC may report a step this build has never heard of.
     enum FcBootStep: Int {
         case links = 0, nvs, sensors, gnss, servos, complete
+        /// FCB_RESCUE: not a step but where a boot that cannot finish ends up.
+        /// The FC's last boots stalled in setup or kept resetting, so it brought
+        /// up only the out-computer link and serves firmware updates and nothing
+        /// else, until an update lands or the rocket is power-cycled
+        /// (flight_computer fc_rescue_policy.h).  Outside the progress range on
+        /// the wire, hence the explicit value.
+        case rescue = 64
         var label: String {
             switch self {
             case .links:    return "Linking to flight computer"
@@ -446,6 +453,7 @@ struct TelemetryData: Codable {
             case .gnss:     return "Starting GNSS"
             case .servos:   return "Starting servos"
             case .complete: return "Flight computer ready"
+            case .rescue:   return "Rescue mode — ready for a firmware update"
             }
         }
     }
@@ -458,6 +466,10 @@ struct TelemetryData: Codable {
         let degradedBits: Int  // "bd"
 
         var knownStep: FcBootStep? { FcBootStep(rawValue: step) }
+
+        /// The FC is in rescue mode: it will not finish booting on its own, and
+        /// a flight computer firmware update is the thing it is waiting for.
+        var isRescue: Bool { knownStep == .rescue }
 
         // FCB_DEG_* (RocketComputerTypes.h).  A set bit means the step finished
         // DEGRADED and boot CONTINUED — nothing stopped, which is exactly why
@@ -503,9 +515,10 @@ struct TelemetryData: Codable {
         /// every frame, so a wedged boot and a just-started one carry the same
         /// "bt" — only the dwell separates them.  FCB_COMPLETE is exempt: the
         /// FC has finished and the app is just waiting for the first real
-        /// NonSensorData to arrive.
+        /// NonSensorData to arrive.  So is rescue mode, which stays put by
+        /// design: "no progress" would only tell the operator to keep waiting.
         func isStalled(dwell: TimeInterval) -> Bool {
-            knownStep != .complete && dwell >= Self.stallAfter(knownStep)
+            knownStep != .complete && !isRescue && dwell >= Self.stallAfter(knownStep)
         }
 
         /// The secondary line.  `dwell` defaults to 0 = "just seen", so a caller

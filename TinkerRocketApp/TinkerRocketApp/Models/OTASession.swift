@@ -65,7 +65,7 @@ final class OTASession: ObservableObject {
     init(fleet: BLEFleet, peripheralID: UUID) {
         self.peripheralID = peripheralID
         self.linkLookup = { [weak fleet] in
-            fleet?.devices.first { $0.peripheral?.identifier == peripheralID }
+            fleet?.devices.first { $0.peripheralID == peripheralID }
         }
     }
 
@@ -196,7 +196,8 @@ final class OTASession: ObservableObject {
                 // never happened. Same shape as the finish handling below.
                 state = .failed(reason: "Device refused OTA_BEGIN: \(st.err ?? "unknown")")
             } else {
-                state = .failed(reason: "Device did not accept OTA_BEGIN within \(Int(beginTimeoutS))s")
+                state = .failed(reason: OTABeginFailure.notAccepted(targetIsFC: targetIsFC,
+                                                                    timeoutS: beginTimeoutS))
             }
             // Every failure exit after OTA_BEGIN aborts, so the device and the
             // app agree the session is over (#1049). A begin the device never

@@ -17,8 +17,29 @@ import SwiftUI
 import Combine
 
 struct SettingsView: View {
+    /// The device Settings was opened on. Only its peripheral is used; the
+    /// screen itself runs on the fleet's live instance (see body).
+    let device: BLEDevice
+    @EnvironmentObject var fleet: BLEFleet   // injected by DashboardView
+
+    /// BLEFleet replaces the BLEDevice on every disconnect/reconnect, and an
+    /// out-computer flash ends in the OC's reboot. Held directly, the opened
+    /// instance went dead: the Version row kept the old firmware, "Update
+    /// firmware…" stayed disabled, and every config push (all guarded on
+    /// `isConnected`) went nowhere until Settings was reopened (2026-10-16).
+    /// Resolved here, like FirmwareUpdateView does, rather than left to the
+    /// presenter: the dashboard resolves its sheets (DashboardSheet.live(in:)),
+    /// but RocketProfileView presents Settings too.
+    var body: some View {
+        SettingsContent(device: fleet.liveDevice(for: device))
+    }
+}
+
+private struct SettingsContent: View {
+    /// The fleet's live instance, swapped in by SettingsView after a
+    /// reconnect. The @State below (tab, edits in progress, the LoRa
+    /// switches) survives the swap; only what is read off the device changes.
     @ObservedObject var device: BLEDevice
-    @EnvironmentObject var fleet: BLEFleet   // injected by DashboardView for FirmwareUpdateView → OTASession lookup
     @EnvironmentObject var store: RocketProfileStore
     @Environment(\.dismiss) var dismiss
 
@@ -74,7 +95,24 @@ struct SettingsView: View {
 
     // Drives the full-screen pyro test-fire cover.  (The per-channel continuity
     // readout state lives in the PyroChannelTestControls child view.)
-    @State private var pyroTestChannel: Int?
+    @State private var pyroTest: PyroTestRun?
+
+    /// A test fire, held on the link it was started on. The screen follows
+    /// the fleet's live instance, but a test must not: if its link drops
+    /// before T-0, PyroTestView aborts ("Link lost before fire", #292), and
+    /// following would send the fire over the rebuilt link instead — after a
+    /// continuity check and a focus latch made on the old one. Closing the
+    /// test and opening it again starts one on the live link.
+    private struct PyroTestRun: Identifiable {
+        let channel: Int
+        let device: BLEDevice
+        var id: Int { channel }
+    }
+
+    /// Screens pushed by value rather than by destination (see body).
+    private enum Screen: Hashable {
+        case firmwareUpdate
+    }
 
     // "Sent" feedback in section headers.
     @State private var servoApplied = false
@@ -126,32 +164,20 @@ struct SettingsView: View {
 
     private var currentFreqMHz: Float { device.rocketConfig?.loraFreqMHz ?? 915.0 }
 
-    private var isInitializing: Bool {
-        device.isConnected && !device.isBaseStation
-            && device.telemetry.state == "INITIALIZATION"
-    }
-
-    /// The power rail is off, so the FC — the thing that actually answers
-    /// config writes — isn't running.  This fails quietly rather than loudly:
-    /// the OC's #366 command queue HOLDS commands while the rail is down and
-    /// drains the batch at power-on, so a user can edit several screens of
-    /// settings and have them land much later, out of order, or not at all.
-    /// Block the sheet exactly as INITIALIZATION does, for the same reason —
-    /// the rocket can't honour the write yet.
-    ///
-    /// Two scoping guards, both load-bearing:
-    ///  - `!isBaseStation`: the BS relay's TelemetryData never carries
-    ///    pwr_pin_on (the LoRa packet has no room for it), so over a
-    ///    base-station link it reads false forever — an unscoped gate would
-    ///    lock Settings permanently on every BS connection.
-    ///  - `hasReceivedTelemetry` (#377): before the first frame `telemetry` is
-    ///    all zeros, and a zeroed pwr_pin_on is indistinguishable from a
-    ///    genuinely-off rocket.  Without this the overlay would flash on every
-    ///    connect, including for a rocket that is already powered on.
-    private var isRocketOff: Bool {
-        device.isConnected && !device.isBaseStation
-            && device.hasReceivedTelemetry
-            && !device.telemetry.pwr_pin_on
+    /// What this sheet may offer right now (SettingsAccess.swift has the rule
+    /// and why).  The flight computer's settings need it running: with its rail
+    /// off or its boot unfinished, the OC's #366 queue HOLDS the writes and
+    /// drains them much later, out of order, or not at all.  The out computer's
+    /// own settings and the firmware update never go through the flight
+    /// computer, so they stay — above all the update, which is how a flight
+    /// computer that cannot finish booting gets a working image.
+    private var access: SettingsAccess {
+        SettingsAccess.evaluate(isConnected: device.isConnected,
+                                isBaseStation: device.isBaseStation,
+                                hasReceivedTelemetry: device.hasReceivedTelemetry,
+                                pwrPinOn: device.telemetry.pwr_pin_on,
+                                state: device.telemetry.state,
+                                bootStepReported: device.telemetry.fc_boot_step != nil)
     }
 
     /// Calibrations run on the rocket, so they need it connected AND powered
@@ -258,7 +284,17 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        NavigationView {
+        // A NavigationStack, with the firmware screen pushed by value. The
+        // Form below picks its layout from the device, and that changes while
+        // the firmware screen is up: a reconnect hands Settings a rebuilt
+        // BLEDevice, which may read `.unknown` until its identity readback or
+        // report the rail off in its first frame, and a flight computer flash
+        // reboots the FC, whose settings are swapped out until it runs again.
+        // A destination link is popped when its row moves to another branch of
+        // the Form (seen in the simulator, 2026-10-16); a value on the stack
+        // is not. The firmware flow always meets one of these: every flash
+        // ends in a reboot.
+        NavigationStack {
             Form {
                 // Firmware update is device-level (not profile-level). BS and
                 // no-profile devices have no tab bar, so they each carry a
@@ -271,22 +307,35 @@ struct SettingsView: View {
                 } else if store.activeProfile == nil {
                     noProfileSection
                     firmwareSection
-                } else if isRocketOff {
-                    // Swap the config sections out rather than covering them with
-                    // an INITIALIZATION-style overlay: firmwareSection lives
-                    // inside rocketSettingsSections (#314), and a full-sheet
-                    // overlay would take Firmware Update down with it. The OC
-                    // flashes ITSELF over BLE and never touches the FC rail, so
-                    // that one genuinely works with the rocket off — it's the
-                    // only thing on this screen that does.
-                    rocketOffSection
-                    firmwareSection
-                } else {
+                } else if access.allowsFlightComputerSettings {
                     rocketSettingsSections
+                } else {
+                    // Swap the flight computer's sections out rather than
+                    // covering the sheet: firmwareSection lives inside
+                    // rocketSettingsSections (#314), and the full-sheet
+                    // "Initializing…" overlay this replaces took Firmware Update
+                    // down with it, so an FC stuck in its boot locked out its
+                    // own fix. What the out computer answers by itself stays.
+                    if access == .rocketOff {
+                        rocketOffSection
+                    } else {
+                        FlightComputerNotRunningSection(device: device)
+                    }
+                    // Nothing below goes through the flight computer: the out
+                    // computer's own radio and network ID, the firmware update,
+                    // and the descent profile, which never leaves the app.
+                    radioSection
+                    networkSection
+                    firmwareSection
+                    recoverySection
                 }
             }
             .navigationTitle(navTitle)
-            .overlay { if isInitializing { initializingOverlay } }
+            .navigationDestination(for: Screen.self) { screen in
+                switch screen {
+                case .firmwareUpdate: FirmwareUpdateView(device: device)
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }
@@ -303,11 +352,8 @@ struct SettingsView: View {
             .onAppear { loadFromProfile() }
             // Test Pyro Channel (from the Pyro tab) presents the same full-screen
             // test-fire flow the dashboard uses.
-            .fullScreenCover(item: Binding<IdentifiableInt?>(
-                get: { pyroTestChannel.map { IdentifiableInt(value: $0) } },
-                set: { pyroTestChannel = $0?.value }
-            )) { item in
-                PyroTestView(device: device, channel: item.value)
+            .fullScreenCover(item: $pyroTest) { run in
+                PyroTestView(device: run.device, channel: run.channel)
             }
             .onChange(of: store.activeId) { _ in loadFromProfile() }
             // Leaving a tab commits its pending text edit; reloading then snaps
@@ -441,9 +487,9 @@ struct SettingsView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
-            NavigationLink {
-                FirmwareUpdateView(device: device)
-            } label: {
+            // By value, so a reconnect that changes the Form's layout can't
+            // pop the screen mid-update (see body).
+            NavigationLink(value: Screen.firmwareUpdate) {
                 Label("Update firmware…", systemImage: "arrow.up.circle")
             }
             .disabled(!device.isConnected)
@@ -711,7 +757,9 @@ struct SettingsView: View {
             // continuity dot and buttons appeared/disappeared as siblings of the
             // focused Delay TextField on every live frame — which disrupted
             // keyboard layout on first focus (negative TUIKeyplane width → hang).
-            PyroChannelTestControls(device: device, channel: ch) { pyroTestChannel = $0 }
+            PyroChannelTestControls(device: device, channel: ch) {
+                pyroTest = PyroTestRun(channel: $0, device: device)
+            }
         }
     }
 
@@ -1331,26 +1379,12 @@ struct SettingsView: View {
                 Image(systemName: "power")
                     .font(.system(size: 40)).foregroundColor(.secondary)
                 Text("Rocket is off").font(.title3.bold())
-                Text("The flight computer answers every setting on this screen, and it isn't running yet. Power on the rocket to configure it.")
+                Text("Most settings live on the flight computer, which isn't powered. Power on the rocket to change them. The radio, network ID and firmware below are on the out computer and work now.")
                     .font(.subheadline).foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 12)
-        }
-    }
-
-    private var initializingOverlay: some View {
-        ZStack {
-            Color(.systemBackground).opacity(0.9).ignoresSafeArea()
-            VStack(spacing: 16) {
-                ProgressView().scaleEffect(1.5)
-                Text("Initializing...").font(.title2.bold())
-                Text("Waiting for sensors to start up.\nSettings can be applied once ready.")
-                    .font(.subheadline).foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-            .padding()
         }
     }
 
@@ -1927,5 +1961,64 @@ private struct PyroChannelTestControls: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Flight computer not running
+
+/// Stands in for the flight computer's settings while its rail is on but it is
+/// not running its flight software: still starting, stuck partway through, not
+/// reporting at all, or in rescue mode.  A child view for the same reason as
+/// PyroChannelTestControls: the boot line comes from live telemetry, and that
+/// churn belongs out of SettingsView's body (#361).
+///
+/// What it says matters more than usual, because the operator reading it may
+/// be looking at a rocket that will not boot.  It names what the flight
+/// computer is doing, says what still works, and points at the one way out
+/// that does not involve opening the airframe: a flight computer update, which
+/// says for itself whether the flight computer answered.
+struct FlightComputerNotRunningSection: View {
+    @ObservedObject var device: BLEDevice
+
+    var body: some View {
+        let boot = device.telemetry.fcBootProgress
+        let rescue = boot?.isRescue == true
+        Section {
+            VStack(spacing: 12) {
+                Image(systemName: rescue ? "lifepreserver" : "hourglass")
+                    .font(.system(size: 40))
+                    .foregroundColor(rescue ? .orange : .secondary)
+                Text(Self.title(boot)).font(.title3.bold())
+                    .multilineTextAlignment(.center)
+                if let boot, !rescue {
+                    // The step it is on (and anything that finished degraded).
+                    // The dashboard carries the stall timing; this just names it.
+                    Text(boot.line())
+                        .font(.subheadline)
+                        .foregroundColor(boot.degradedSubsystems.isEmpty ? .secondary : .orange)
+                        .multilineTextAlignment(.center)
+                }
+                Text(Self.explanation(boot))
+                    .font(.subheadline).foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+        }
+    }
+
+    static func title(_ boot: TelemetryData.FcBootProgress?) -> String {
+        guard let boot else { return "Waiting for flight computer" }
+        return boot.isRescue ? "Flight computer in rescue mode" : "Flight computer starting"
+    }
+
+    static func explanation(_ boot: TelemetryData.FcBootProgress?) -> String {
+        guard let boot else {
+            return "The flight computer hasn't reported in yet. Its settings unlock once it is running. The radio, network ID and firmware below are on the out computer and work now."
+        }
+        if boot.isRescue {
+            return "Its last boots did not finish, so it started only what a firmware update needs. Update the flight computer from Firmware below, or power-cycle the rocket to try a normal boot. Its settings come back once it boots normally."
+        }
+        return "The settings stored on the flight computer unlock once it finishes starting. The radio, network ID and firmware below are on the out computer and work now. If it is stuck, you can still try a flight computer update: the update tells you whether the flight computer answered."
     }
 }

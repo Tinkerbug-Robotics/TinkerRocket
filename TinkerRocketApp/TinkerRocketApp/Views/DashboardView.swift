@@ -29,12 +29,36 @@ enum DashboardSheet: Identifiable {
 
     var id: String {
         switch self {
-        case .simulator(let d):     return "simulator-\(d.peripheral?.identifier.uuidString ?? "")"
-        case .settings(let d):      return "settings-\(d.peripheral?.identifier.uuidString ?? "")"
-        case .servoTest(let d):     return "servoTest-\(d.peripheral?.identifier.uuidString ?? "")"
+        case .simulator(let d):     return "simulator-\(d.peripheralID?.uuidString ?? "")"
+        case .settings(let d):      return "settings-\(d.peripheralID?.uuidString ?? "")"
+        case .servoTest(let d):     return "servoTest-\(d.peripheralID?.uuidString ?? "")"
         case .driftCast:            return "driftCast"
-        case .frequencyScan(let d): return "frequencyScan-\(d.peripheral?.identifier.uuidString ?? "")"
-        case .preflight(let d):     return "preflight-\(d.peripheral?.identifier.uuidString ?? "")"
+        case .frequencyScan(let d): return "frequencyScan-\(d.peripheralID?.uuidString ?? "")"
+        case .preflight(let d):     return "preflight-\(d.peripheralID?.uuidString ?? "")"
+        }
+    }
+
+    /// The same sheet, on the instance the fleet holds NOW for its device.
+    ///
+    /// A case keeps the BLEDevice the sheet was opened with, and BLEFleet
+    /// replaces that object on every disconnect/reconnect. Read straight off
+    /// the case, an open sheet went dead after any reconnect: after an
+    /// out-computer flash (the OC reboots) Settings showed the old firmware
+    /// version with "Update firmware…" disabled, and everything gated on
+    /// `isConnected` — config pushes, Launch Simulation, Apply frequency —
+    /// stayed off until the sheet was closed and opened again. Worse, Servo
+    /// Test's stop on dismiss went to the dead copy, which dropped it, leaving
+    /// the flight computer in servo test mode. The dashboard resolves the case
+    /// on every render, so each sheet follows its link through the swap; `id`
+    /// keys on the peripheral, so the swap leaves the same sheet up.
+    func live(in fleet: BLEFleet) -> DashboardSheet {
+        switch self {
+        case .simulator(let d):     return .simulator(fleet.liveDevice(for: d))
+        case .settings(let d):      return .settings(fleet.liveDevice(for: d))
+        case .servoTest(let d):     return .servoTest(fleet.liveDevice(for: d))
+        case .driftCast:            return .driftCast
+        case .frequencyScan(let d): return .frequencyScan(fleet.liveDevice(for: d))
+        case .preflight(let d):     return .preflight(fleet.liveDevice(for: d))
         }
     }
 }
@@ -301,6 +325,13 @@ struct DashboardView: View {
             }
         }
         .navigationViewStyle(.stack)
+        // The pushed screens need the fleet too, not only the dashboard sheet
+        // (attached outside this modifier, it injects its own below).
+        // RocketProfileView, reached from the rocket icon and the rocket card,
+        // presents Settings, which resolves its live device off the fleet —
+        // and FirmwareUpdateView, behind Settings' "Update firmware…", read it
+        // there with nothing injected.
+        .environmentObject(fleet)
         .onAppear {
             attachActiveDevice()
         }
@@ -339,7 +370,10 @@ struct DashboardView: View {
         }
         .sheet(item: $activeSheet) { sheet in
             Group {
-                switch sheet {
+                // Resolved here, not when the sheet opened: this closure runs
+                // on every fleet change, so a reconnect hands the open sheet
+                // the rebuilt BLEDevice (see DashboardSheet.live(in:)).
+                switch sheet.live(in: fleet) {
                 // Reverse Drift Cast is a standalone wind/trajectory tool — it
                 // runs with no live device (#42).  "Send to Unit" inside the
                 // view is the only part gated on an active connection.
@@ -364,8 +398,8 @@ struct DashboardView: View {
                 }
             }
             // SwiftUI sheets get a fresh environment by default — re-inject
-            // fleet so SettingsView's FirmwareUpdateView can resolve the
-            // OTASession off it (#15 second pass).
+            // fleet: SettingsView resolves its live device off it, and its
+            // FirmwareUpdateView the OTASession (#15 second pass).
             .environmentObject(fleet)
         }
         .sheet(isPresented: $showProvisioning) {
@@ -1320,7 +1354,10 @@ struct RocketStateView: View {
 
     var bootLineColor: Color {
         guard let boot else { return .secondary }   // waiting on a silent FC
-        return (boot.isStalled(dwell: bootDwell) || !boot.degradedSubsystems.isEmpty)
+        // Rescue mode never "stalls" (it stays put by design), but it is no
+        // more a healthy boot than a stalled one is.
+        return (boot.isRescue || boot.isStalled(dwell: bootDwell) ||
+                !boot.degradedSubsystems.isEmpty)
             ? .orange : .secondary
     }
 

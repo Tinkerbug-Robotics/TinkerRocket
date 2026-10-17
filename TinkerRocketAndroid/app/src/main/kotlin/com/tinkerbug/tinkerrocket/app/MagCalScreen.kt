@@ -24,7 +24,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,10 +58,15 @@ import java.util.Locale
  * (plan §1: 2D-projected Canvas, no 3D engine) — same 32 firmware bins,
  * green = covered, amber = partial, plus a dominant-gravity-axis readout
  * from the live low-g accel in place of the rolling ball.
+ *
+ * [deviceKey] is the fleet's id for the device. The fleet builds a new
+ * [session] on every reconnect, and the screen can be handed one while it
+ * stays up, so the key is what says whether it is still the same rocket.
  */
 @Composable
 fun MagCalScreen(
     session: DeviceSession,
+    deviceKey: String,
     syncer: ActiveRocketSyncer?,
     onBack: () -> Unit,
 ) {
@@ -71,7 +75,9 @@ fun MagCalScreen(
     val connected by session.isConnected.collectAsState()
 
     // PR #490: only a live cal frame this session makes APPLIED terminal.
-    var ranCalThisSession by remember { mutableStateOf(false) }
+    // Per device, not per session: a cal that ran before a reconnect is still
+    // this FC's cal, and the teardown below must still abort it.
+    var ranCalThisSession by remember(deviceKey) { mutableStateOf(false) }
     // #148 verify-window |B| accumulators (reset on leave/retry).
     var verifyMin by remember { mutableStateOf<Float?>(null) }
     var verifyMax by remember { mutableStateOf<Float?>(null) }
@@ -124,9 +130,19 @@ fun MagCalScreen(
     // not. `subType != APPLIED` is the part that actually protects anything --
     // everything else in the FC's abort handler is individually guarded and it
     // never writes NVS, so APPLIED is the only state a stray abort can damage.
+    //
+    // Both halves of the teardown are kept per LINK, keyed on the session. A
+    // reconnect hands this screen a new session and re-keys the DisposableEffect
+    // below, so the old effect's dispose runs the old link's teardown: with that
+    // link's own last needsAbort and its own latch (on a reconnect its send goes
+    // nowhere, that session being closed; if another device took the screen, it
+    // ends the cal left running here). Shared, they took the new link's value and
+    // spent the one latch, so Cancel, back and leaving the screen afterwards sent
+    // nothing over the live link, and the FC stayed in MAG_CALIBRATION.
     val needsAbort = midCal || (ranCalThisSession && subType != MagCalSubType.APPLIED)
-    val latestNeedsAbort by rememberUpdatedState(needsAbort)
-    var abortSent by remember { mutableStateOf(false) }
+    val latestNeedsAbort by remember(session) { mutableStateOf(needsAbort) }
+        .apply { value = needsAbort }   // rememberUpdatedState, keyed
+    var abortSent by remember(session) { mutableStateOf(false) }
     fun abortOnce() {
         if (!abortSent) {
             abortSent = true
