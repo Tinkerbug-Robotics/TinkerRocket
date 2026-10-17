@@ -782,10 +782,13 @@ struct config : board_pins
     // The mosaic-only image's one navigation filter, the raw-GNSS filter
     // (main.cpp startRawShadow; the plan's section 2, 2026-10-17).
     //   RESTORE_*: a flight restored after a reboot starts this unsure on
-    //     every axis. The mosaic's bring-up can hold a boot up to 30 s
-    //     (kBeginTimeoutMs) before the OC is asked whether a flight is under
-    //     way, so the snapshot may be that old; GpsInsEKF's 5 m / 5 m/s /
-    //     ~10 deg was sized for a sub-second reboot. Proposals, tuned on replay.
+    //     every axis. The boot asks the OC for a flight before the mosaic's
+    //     bring-up and leaves the receiver out when there is one (main.cpp
+    //     setup_fc), but an OC still booting after a brownout of both is
+    //     asked again after it, so the snapshot can be up to 30 s old
+    //     (kBeginTimeoutMs); GpsInsEKF's 5 m / 5 m/s / ~10 deg was sized for
+    //     a sub-second reboot. The start's height is the barometer's
+    //     (raw_nav_policy.h). Proposals, tuned on replay.
     //   HEADING_GATE: what of the attitude GNSS reaches in flight
     //     (RawGnssShadow::HeadingGate): 1, the whole attitude from launch, as
     //     the Beetle flies. 2 (the heading only until the apogee call) is the

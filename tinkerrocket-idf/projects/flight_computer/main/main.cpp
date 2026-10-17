@@ -6520,6 +6520,26 @@ static void setup_fc()
     // servos, camera or flight recovery). app_main starts fcRescueTask instead
     // of the flight task.
     if (fcRescueTryEnter()) return;
+#if TR_RAW_NAV_MOSAIC
+    // Ask the OC for a flight in progress now, before the mosaic-G5's
+    // bring-up, which can hold this boot up to 30 s (kBeginTimeoutMs) when
+    // the receiver does not answer -- 30 s mid-flight with no flight logic at
+    // all. A flight in progress then leaves the receiver out of this boot, as
+    // a crash boot does: the flight resumes at once and the navigation filter
+    // flies it on the IMU and the barometer. A definitive answer is used
+    // again by the restore below; anything else (the OC still booting after a
+    // brownout of both) is asked again there, as before. On a pad boot this is
+    // the one I2C exchange the later ask would have made.
+    const OcSnapshotAnswer raw_boot_ask = fcAskOcForFlightSnapshot();
+    const bool raw_boot_ask_definitive = raw_boot_ask.valid || raw_boot_ask.answered_no_flight;
+    if (raw_boot_ask.valid)
+    {
+        sensor_collector_hw.skipGNSSThisBoot();
+        ESP_LOGW(TAG, "[RECOVERY] a flight is in progress: the mosaic-G5 stays out of this boot so the flight "
+                      "resumes without waiting on its bring-up (the navigation filter flies it on the IMU and "
+                      "the barometer)");
+    }
+#endif
 
     // Load persistent rocket settings from NVS (factory default from config.h)
     fcBootStatus(FCB_NVS);
@@ -7439,7 +7459,12 @@ static void setup_fc()
         bool refused_inflight = false;
 
         {
+#if TR_RAW_NAV_MOSAIC
+            // the boot's early answer, when it was one (after fcRescueTryEnter)
+            const OcSnapshotAnswer ask = raw_boot_ask_definitive ? raw_boot_ask : fcAskOcForFlightSnapshot();
+#else
             const OcSnapshotAnswer ask = fcAskOcForFlightSnapshot();
+#endif
             snap = ask.snap;
             valid = ask.valid;
             answered_no_flight = ask.answered_no_flight;
