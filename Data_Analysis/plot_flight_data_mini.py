@@ -1830,15 +1830,20 @@ def parse_binary_file(filepath):
                     # other index here is untouched.  Euler was only ever a
                     # cache of the quaternion (still at f[30..33]), so nothing
                     # is lost: a v5 log's attitude is recoverable from ekf_q*.
+                    # The third reclaimed float (reserved_v5) is the receiver's
+                    # geoid separation on the mosaic-only image, whose raw-GNSS
+                    # filter keeps ekf_alt_m above the ELLIPSOID; 0 means not
+                    # recorded (every other image), so None.
                     if version >= 5:
                         ekf_roll = ekf_pitch = ekf_yaw = None
                         snap_max_alt_m     = f[56]
                         snap_max_speed_mps = f[57]
+                        snap_geoid_sep_m   = f[58] if f[58] != 0.0 else None
                     else:
                         ekf_roll  = math.degrees(f[56])
                         ekf_pitch = math.degrees(f[57])
                         ekf_yaw   = math.degrees(f[58])
-                        snap_max_alt_m = snap_max_speed_mps = None
+                        snap_max_alt_m = snap_max_speed_mps = snap_geoid_sep_m = None
                     # GnssAscentGate (reclaimed from pad, no version bump): 0 is
                     # every older writer's padding and means "not recorded" —
                     # None, not "held out".  See SNAPSHOT_GNSS_ADMISSION below.
@@ -1909,6 +1914,7 @@ def parse_binary_file(filepath):
                         # firmware did not carry them at all.
                         "snap_max_alt_m":       snap_max_alt_m,
                         "snap_max_speed_mps":   snap_max_speed_mps,
+                        "snap_geoid_sep_m":     snap_geoid_sep_m,
                         "b2r_q0":               b2r_q[0],
                         "b2r_q1":               b2r_q[1],
                         "b2r_q2":               b2r_q[2],

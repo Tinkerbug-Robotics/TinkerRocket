@@ -4337,7 +4337,13 @@ struct __attribute__((packed)) FlightSnapshotData
     // onward, because max_alt_m/max_speed_mps restart at 0 on boot.
     float    max_alt_m;           // v5 (was ekf_euler[0])
     float    max_speed_mps;       // v5 (was ekf_euler[1])
-    float    reserved_v5;         // v5 (was ekf_euler[2]) — spare, writes 0
+    // v5 (was ekf_euler[2]). The mosaic-only image (TR_RAW_NAV_MOSAIC) writes
+    // the receiver's geoid separation here, m: its raw-GNSS filter keeps heights
+    // above the ellipsoid (ekf_pos_rrm[2] is one) and turns them to MSL with it,
+    // and a reboot in flight may have no receiver to ask (a crash boot leaves
+    // the mosaic out). 0 = not recorded: every other image writes 0, and the
+    // restore then keeps whatever separation it has.
+    float    reserved_v5;
 
     // Board→rocket quaternion ×10000 (v3) — authoritative rotation,
     // covers AUTO_EXACT mountings the discrete code can't express.

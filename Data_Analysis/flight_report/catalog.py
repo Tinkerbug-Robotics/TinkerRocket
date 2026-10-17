@@ -1840,6 +1840,18 @@ _P(
         "snap_max_alt_m — it mirrors the live running maximum, it does not independently verify it.",
 )
 _P(
+    "Snapshot.snap_geoid_sep_m", "Snapshot geoid separation",
+    unit="m",
+    note=
+        "The receiver's geoid separation (geoid above the ellipsoid) the mosaic-only image's "
+        "raw-GNSS filter turns its heights by, carried so an in-flight reboot with no receiver to "
+        "ask (a crash boot leaves the mosaic out) restores the same heights.",
+    caution=
+        "Mosaic-only image, v5 snapshots; None everywhere else (the slot writes 0). On that image "
+        "ekf_alt_m is above the ELLIPSOID: subtract this for MSL. On every other image ekf_alt_m is "
+        "already MSL.",
+)
+_P(
     "Snapshot.b2r_q0", "Board-to-rocket quaternion w",
     note=
         "Scalar part of the board-to-rocket rotation active at launch (v3+), decoded from an int16 "

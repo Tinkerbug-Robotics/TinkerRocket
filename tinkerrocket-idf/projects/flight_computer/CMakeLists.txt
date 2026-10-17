@@ -160,7 +160,8 @@ if(TR_GNSS_MOSAIC AND (NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW))
 else()
     set(_tr_mosaic_rawnav OFF)
 endif()
-set(_tr_mosaic_rawnav_hooks TR_BENCH_RAW_START_FAIL)
+set(_tr_mosaic_rawnav_hooks TR_BENCH_RAW_START_FAIL TR_BENCH_RESTORE_SIM TR_BENCH_PANIC_AT_S
+    TR_BENCH_PANIC_FILTER_AT_S TR_BENCH_RAW_STOP_AT_S)
 foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G TR_RAW_GNSS_IRAM
         ${_tr_mosaic_rawnav_hooks})
     if(DEFINED ${_v} AND NOT _tr_mosaic_rawnav)
@@ -177,6 +178,15 @@ endforeach()
 # image each, never flown (main.cpp, TR_RAW_NAV_MOSAIC):
 #   TR_BENCH_RAW_START_FAIL=1     the filter's start fails before it allocates:
 #                                 NO NAVIGATION FILTER and FCB_DEG_SENSORS
+#   TR_BENCH_RESTORE_SIM=1        a sim flight's snapshot is restored like a
+#                                 real one (power cut mid sim), every pyro dry
+#   TR_BENCH_PANIC_AT_S=N         one panic N s after the loop starts, once a
+#                                 power-on: the crash boot after it
+#   TR_BENCH_PANIC_FILTER_AT_S=N  the filter's task aborts N s after the filter
+#                                 runs in flight, every boot: with
+#                                 TR_BENCH_RESTORE_SIM, the crash loop
+#   TR_BENCH_RAW_STOP_AT_S=N      the filter stops N s into each flight: held
+#                                 over and restarted from its last good state
 foreach(_v ${_tr_mosaic_rawnav_hooks})
     if(DEFINED ${_v})
         add_compile_definitions(${_v}=${${_v}})

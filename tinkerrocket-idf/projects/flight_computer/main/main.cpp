@@ -1051,6 +1051,13 @@ static void buildFlightSnapshot(FlightSnapshotData& snap, uint32_t now_ms, uint8
     snap.max_alt_m     = max_alt_m;
     snap.max_speed_mps = max_speed_mps;
     snap.reserved_v5   = 0.0f;
+#if TR_RAW_NAV_MOSAIC
+    // The receiver's geoid separation the raw filter's heights are turned by:
+    // a reboot in flight leaves the mosaic out (a crash) or cold, with none to
+    // give, and the restore turns the snapshot's ellipsoidal height with this
+    // one. 0 = not recorded (every other image, and before the first fix).
+    snap.reserved_v5   = ekf.geoidSeparation();
+#endif
 
     snap.crc32 = computeSnapshotCRC(snap);
 }
@@ -3114,6 +3121,11 @@ static RawNavDrain::State raw_nav_drain;
 // READY or PRELAUNCH, set by the loop each pass: where the GNSS task may ask
 // the receiver for its navigation blocks again (raw_nav_policy.h)
 static volatile bool raw_nav_on_pad = false;
+// In flight: the restarts of a filter that stopped (at most
+// RawNavPolicy::kMaxRestarts a flight), and a reboot's restore waiting for
+// the barometer to give its start height
+static uint8_t raw_nav_restarts = 0;
+static RawNavPolicy::RestoreHold raw_restore_hold;
 #endif
 
 static int64_t rawShadowClock() { return esp_timer_get_time(); }
@@ -3324,6 +3336,59 @@ static void rawGnssMeasTask(void*)
     }
 }
 
+#if TR_RAW_NAV_MOSAIC && (defined(TR_BENCH_PANIC_FILTER_AT_S) || defined(TR_BENCH_RAW_STOP_AT_S))
+// Bench (P3, G8; refused on any image but the mosaic-only one, never flown):
+// N s after the filter is first seen running in flight -- a launch, a sim's,
+// or a restored flight's -- the filter's task aborts, on every boot
+// (TR_BENCH_PANIC_FILTER_AT_S: over a restored sim flight, the crash loop the
+// third boot ends), or stops the filter, once a flight
+// (TR_BENCH_RAW_STOP_AT_S: the loop holds its last good state and restarts it
+// from there). Back on the ground both count again.
+static void rawBenchFilterHooks(gnss_raw::RawGnssShadow& sh)
+{
+#ifdef TR_BENCH_PANIC_FILTER_AT_S
+    static_assert(TR_BENCH_PANIC_FILTER_AT_S >= 0 && TR_BENCH_PANIC_FILTER_AT_S <= 3600,
+                  "TR_BENCH_PANIC_FILTER_AT_S is 0-3600 s");
+#endif
+#ifdef TR_BENCH_RAW_STOP_AT_S
+    static_assert(TR_BENCH_RAW_STOP_AT_S >= 0 && TR_BENCH_RAW_STOP_AT_S <= 3600, "TR_BENCH_RAW_STOP_AT_S is 0-3600 s");
+#endif
+    static int64_t flight_t0 = 0;   // when it was first seen running in flight (0: not yet)
+    static bool    stopped   = false;
+    gnss_raw::ShadowNav nv;
+    sh.navState(nv);
+    if (nv.running && !nv.in_flight)
+    {
+        flight_t0 = 0;
+        stopped   = false;
+        return;
+    }
+    const int64_t now = esp_timer_get_time();
+    if (nv.running && flight_t0 == 0) flight_t0 = now;
+    if (flight_t0 == 0) return;
+    const int64_t in_flight_us = now - flight_t0;
+#ifdef TR_BENCH_PANIC_FILTER_AT_S
+    if (in_flight_us >= (int64_t)(TR_BENCH_PANIC_FILTER_AT_S) * 1000000)
+    {
+        ESP_LOGE(TAG, "[RAWGNSS] BENCH: the filter's task aborts ON PURPOSE, %d s into the flight "
+                      "(TR_BENCH_PANIC_FILTER_AT_S)",
+                 (int)(TR_BENCH_PANIC_FILTER_AT_S));
+        abort();
+    }
+#endif
+#ifdef TR_BENCH_RAW_STOP_AT_S
+    if (!stopped && nv.running && in_flight_us >= (int64_t)(TR_BENCH_RAW_STOP_AT_S) * 1000000)
+    {
+        stopped = true;
+        ESP_LOGW(TAG, "[RAWGNSS] BENCH: the filter stopped ON PURPOSE, %d s into the flight "
+                      "(TR_BENCH_RAW_STOP_AT_S): the loop holds its last state and restarts it",
+                 (int)(TR_BENCH_RAW_STOP_AT_S));
+        sh.reset();
+    }
+#endif
+}
+#endif
+
 // Core 0: the shadow filter's task.
 static void rawShadowTask(void*)
 {
@@ -3454,6 +3519,9 @@ static void rawShadowTask(void*)
                 else rec_drops++;
             }
         }
+#if TR_RAW_NAV_MOSAIC && (defined(TR_BENCH_PANIC_FILTER_AT_S) || defined(TR_BENCH_RAW_STOP_AT_S))
+        rawBenchFilterHooks(sh);
+#endif
         {
             // and once a pass, so the loop hears that it is waiting, or stopped
             // (and the GNSS task, building at the filter's position, either way)
@@ -3723,7 +3791,7 @@ static void rawShadowTask(void*)
                               "%d without an ephemeris | eph %d sats, %u of %u store entries, %lu blocks refused, "
                               "%lu nav queue drops | imu ring drops %lu, gaps bridged %lu | PPS tag max %ld us, "
                               "%lu over %ld of %lu judged (%lu settling, %lu edges late) | iono %s (%u sets) | pad datum %s, %lu fixes | "
-                              "GNSS log %s | in flight: raw votes %s",
+                              "GNSS log %s | in flight: restarts %u of %u, raw votes %s, transonic lockout %s",
                          (unsigned)(sh.running() ? nv.gnss_aided : 0), (unsigned)(sh.running() ? nv.baro_aided : 0),
                          rs.period_ms ? 1000.0 / (double)rs.period_ms : 0.0, (unsigned long)rs.period_ms,
                          sh.config().sat_cap, (unsigned long)mst.epochs, (unsigned long)mst.untimed,
@@ -3739,7 +3807,8 @@ static void rawShadowTask(void*)
                          (unsigned)raw_iono.sets, ref_from_nav ? "the raw filter's" : "the receiver's",
                          (unsigned long)ref_pos_count,
                          gnss_log_setting == GNSS_LOG_REDUCED ? "REDUCED" : "DETAILED",
-                         raw_guard.latched ? "WITHHELD" : "cast");
+                         (unsigned)raw_nav_restarts, (unsigned)RawNavPolicy::kMaxRestarts,
+                         raw_guard.latched ? "WITHHELD" : "cast", mach_locked_out ? "ON" : "off");
             }
 #endif
             // each satellite's pad correction, at its elevation from the pad:
@@ -3974,6 +4043,21 @@ static void startRawShadow()
     ESP_LOGW(TAG, "[RAWGNSS] BENCH: the boost screen past %.1f g%s (TR_BENCH_BOOST_SCREEN_G)", cfg.boost_screen_g,
              cfg.boost_screen_g <= 0.0 ? " -- every epoch" : "");
 #endif
+    // the robustness bench's hooks (P3), said at every boot of such an image
+#if defined(TR_BENCH_RESTORE_SIM) && TR_BENCH_RESTORE_SIM
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: a sim flight's snapshot is restored like a real flight's, every pyro dry "
+                  "(TR_BENCH_RESTORE_SIM)");
+#endif
+#ifdef TR_BENCH_PANIC_FILTER_AT_S
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: the filter's task aborts %d s after the filter runs in flight, every boot "
+                  "(TR_BENCH_PANIC_FILTER_AT_S)",
+             (int)(TR_BENCH_PANIC_FILTER_AT_S));
+#endif
+#ifdef TR_BENCH_RAW_STOP_AT_S
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: the filter stops %d s into each flight, to be held and restarted "
+                  "(TR_BENCH_RAW_STOP_AT_S)",
+             (int)(TR_BENCH_RAW_STOP_AT_S));
+#endif
 #endif
     // #1626: the epochs are built in the GNSS task (rawGnssMeasTask), with a
     // stage of its own and two built epochs waiting at most, in PSRAM too
@@ -4132,6 +4216,9 @@ static void startRawShadow()
     ekf.attach(&raw_shadow_link);
 #endif
 #if TR_RAW_NAV_MOSAIC
+    // A stop in flight keeps the last good state (a free INS, not healthy)
+    // for the loop to restart from, not the pad's (raw_nav_adapter.h)
+    ekf.setHoldLastGood(true);
     raw_nav_started = true;
 #endif
 }
@@ -5775,6 +5862,20 @@ static OcSnapshotAnswer fcAskOcForFlightSnapshot()
                             definitive = true;
                             break;
                         case flight_snapshot_answer::Verdict::SimFlight:
+#if TR_RAW_NAV_MOSAIC && defined(TR_BENCH_RESTORE_SIM) && TR_BENCH_RESTORE_SIM
+                            // Bench (P3, G8; refused on any image but the
+                            // mosaic-only one, never flown): a sim flight
+                            // stands in for a real one through a power cut
+                            // or a crash. Restored like one, with the
+                            // dry-fire latch set for it (setup_fc): no pyro
+                            // output.
+                            ESP_LOGW(TAG, "[RECOVERY] BENCH: a SIMULATED flight's snapshot, restored with every "
+                                          "pyro dry (TR_BENCH_RESTORE_SIM)");
+                            valid = true;
+                            answer.refused_inflight = false;
+                            definitive = true;
+                            break;
+#endif
                             // The dry-fire gate lives in isSimActive(),
                             // which a reboot resets — restoring here
                             // would fire real pyro outputs on bench
@@ -6925,14 +7026,34 @@ static void setup_fc()
     sensor_collector_hw.setGNSSMosaicRate(config::GNSS_MOSAIC_UPDATE_RATE);
     sensor_collector.begin(config::SENSOR_CORE);
 #if TR_RAW_GNSS_SHADOW
+#if TR_RAW_NAV_MOSAIC
+    // The crash-loop rule (raw_nav_policy.h): the third boot in a row after
+    // crash resets that never let the loop run a minute does not start the
+    // filter, whatever crashed -- the filter is the newest code on this image,
+    // and a loop that runs can take an update. FcRescuePolicy counted this
+    // boot at boot. A power cycle starts the count over.
+    const bool raw_crash_loop = RawNavPolicy::crashLoop(
+        fcRescueResetClass(esp_reset_reason()) == FcRescuePolicy::ResetClass::Abnormal,
+        fc_rescue_rtc.unproven_boots);
+    if (!raw_crash_loop) startRawShadow();
+#else
     startRawShadow();
+#endif
 #endif
 #if TR_RAW_NAV_MOSAIC
     // The raw-GNSS filter is this image's only navigation filter: GpsInsEKF is
     // not built in. If it did not start, nothing navigates -- the voters have
     // the barometer and the receiver's PVT, the main-deploy backstop the
     // barometer -- and the boot must say so where the operator looks.
-    if (!raw_nav_started)
+    if (raw_crash_loop)
+    {
+        ESP_LOGE(TAG, "[RAWGNSS] *** NO NAVIGATION FILTER (crash loop) *** -- the last %u boots ended in a crash "
+                      "before the loop ran %u s: the raw-GNSS filter is not started this boot (a power cycle "
+                      "starts it again)",
+                 (unsigned)(fc_rescue_rtc.unproven_boots - 1U), (unsigned)(FcRescuePolicy::kProvenRunMs / 1000U));
+        fcBootStatus(FCB_SENSORS, FCB_DEG_SENSORS);
+    }
+    else if (!raw_nav_started)
     {
         ESP_LOGE(TAG, "[RAWGNSS] *** NO NAVIGATION FILTER *** (the raw-GNSS filter did not start: see above)");
         fcBootStatus(FCB_SENSORS, FCB_DEG_SENSORS);
@@ -7335,6 +7456,16 @@ static void setup_fc()
 
             // Restore flight state
             rocket_state = INFLIGHT;
+#if TR_RAW_NAV_MOSAIC && defined(TR_BENCH_RESTORE_SIM) && TR_BENCH_RESTORE_SIM
+            if (snap.sim_flight)
+            {
+                // Bench: the restored sim flight stays a sim's -- the dry-fire
+                // gate latched before any pyro channel is serviced, and its
+                // snapshots stamped sim (cleared by the next sim reset)
+                sim_flight_latched = true;
+                ESP_LOGW(TAG, "[RECOVERY] BENCH: restored a SIM flight -- dry-fire latched, no pyro output");
+            }
+#endif
 
             // Rebase timestamps to new time_ms() epoch
             launch_time_millis = now_ms - snap.flight_elapsed_ms;
@@ -7488,6 +7619,20 @@ static void setup_fc()
                 // v5: euler is not on the wire any more. setState() derives it
                 // from the restored quaternion, so leaving it zero here is
                 // correct rather than lossy.
+#if TR_RAW_NAV_MOSAIC
+                // The raw filter's: the geoid separation its heights were
+                // turned by before the reboot (a crash boot leaves the
+                // receiver out, a cold one has none for a while), and its
+                // start waits up to 3 s for the barometer to give the height
+                // it starts at (rawRestoreSeedReady, raw_nav_policy.h)
+                if (std::isfinite(snap.reserved_v5) && snap.reserved_v5 != 0.0f)
+                    ekf.setGeoidSeparation(snap.reserved_v5);
+                RawNavPolicy::armRestoreHold(raw_restore_hold, now_ms);
+                ESP_LOGW(TAG, "[RECOVERY] raw filter: geoid separation %s; its start waits for the barometer "
+                              "(%u s at most)",
+                         snap.reserved_v5 != 0.0f ? "the snapshot's" : "not in the snapshot (0)",
+                         (unsigned)(RawNavPolicy::kRestoreBaroWaitMs / 1000U));
+#endif
                 ekf.setState(ekf_state);
                 // Copy diag to a local before passing to the float(&)[15]
                 // reference — packed-struct fields can't bind directly.
@@ -7690,6 +7835,7 @@ static void resetFlightStateForSim(const char* edge)
     GnssAscentGate::reset(gnss_admit_state);   // back on the pad: GNSS flows, pad offset relearned
 #if TR_RAW_NAV_MOSAIC
     RawVoteGuard::reset(raw_guard);            // the raw filter votes again in the next flight
+    raw_nav_restarts = 0;
 #endif
     gnss_started = false;
     have_gnss_si = false;
@@ -7811,8 +7957,9 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     GnssAscentGate::onLaunch(gnss_admit_state, now_ms);
 #if TR_RAW_NAV_MOSAIC
     // A new flight: the raw filter votes until this flight's barometer says
-    // otherwise
+    // otherwise, and may restart in it kMaxRestarts times
     RawVoteGuard::reset(raw_guard);
+    raw_nav_restarts = 0;
 #endif
     // The mosaic-G5 sent every ephemeris when it first decoded it, long before
     // this flight's log began: ask for them all again so the log holds what a
@@ -8213,6 +8360,83 @@ static void fcOtaHandleAbort()
     sendOtaRelayStatusRobust(OTA_RELAY_ABORTED, 0, 0);
 }
 
+#if TR_RAW_NAV_MOSAIC
+// A reboot's restore (raw_nav_policy.h RestoreHold): the raw filter's seed
+// waits, at most 3 s from the restore, for a barometer that vouches for
+// itself (fresh and in range, as the kinematics block's baro_healthy, and not
+// judged stuck), then
+// starts at the height it gives now -- the pad's datum and the barometer's
+// height above the pad -- not the snapshot's, which is as old as the boot.
+// Without one in time it starts at the snapshot's height and says so. False
+// while it waits: no seed this pass. Heights only, never a position.
+static bool rawRestoreSeedReady(uint32_t now_ms, float pressure_altitude_m)
+{
+    constexpr uint32_t kBaroStaleUs = 500000u;
+    const bool baro_ok = GnssAscentGate::baroFusable(
+        gnss_admit_state, have_bmp_si && baroPressureInRange(bmp_latest_si.pressure) &&
+                              (uint32_t)(time_us() - bmp_latest_si.time_us) < kBaroStaleUs);
+    const uint32_t held_ms = now_ms - raw_restore_hold.t0_ms;
+    switch (RawNavPolicy::restoreSeedStep(raw_restore_hold, ekf.restorePending(), baro_ok, now_ms))
+    {
+        case RawNavPolicy::RestoreSeed::Wait:
+            return false;
+        case RawNavPolicy::RestoreSeed::Rebase:
+        {
+            double before[3];
+            ekf.getPosEst(before);
+            const double h_msl = ref_alt_m + (double)pressure_altitude_m;
+            ekf.rebaseRestoreHeight(h_msl);
+            ESP_LOGW(TAG, "[RAWGNSS] restore: the filter starts at the barometer's height, %.1f m above the pad "
+                          "(%+.1f m from the snapshot's), %u ms after the restore",
+                     (double)pressure_altitude_m, h_msl - before[2], (unsigned)held_ms);
+            return true;
+        }
+        case RawNavPolicy::RestoreSeed::SnapshotHeight:
+            ESP_LOGE(TAG, "[RAWGNSS] restore: no barometer to vouch for a height in %u s -- the filter starts at "
+                          "the snapshot's height",
+                     (unsigned)(RawNavPolicy::kRestoreBaroWaitMs / 1000U));
+            return true;
+        case RawNavPolicy::RestoreSeed::Publish:
+        default:
+            return true;
+    }
+}
+#endif
+
+#if TR_RAW_NAV_MOSAIC && defined(TR_BENCH_PANIC_AT_S)
+// Bench (P3, G8; refused on any image but the mosaic-only one, never flown):
+// one panic, TR_BENCH_PANIC_AT_S s after the loop starts, once a power-on.
+// The crash boot after it leaves the mosaic out and flies the filter
+// GNSS-absent, and must still take an OTA. The flag is in RTC memory, which a
+// panic keeps; a power-on (FcRescuePolicy's fresh start) clears it here.
+RTC_NOINIT_ATTR static uint32_t bench_panic_rtc;
+static void rawBenchPanicOnce(uint32_t now_ms)
+{
+    static_assert(TR_BENCH_PANIC_AT_S >= 1 && TR_BENCH_PANIC_AT_S <= 3600, "TR_BENCH_PANIC_AT_S is 1-3600 s");
+    static constexpr uint32_t kSpent = 0x50414E43u;   // "PANC": this power-on's panic is spent
+    static bool     first = true;
+    static uint32_t loop_t0_ms = 0;
+    if (first)
+    {
+        first = false;
+        loop_t0_ms = now_ms;
+        if (fcRescueResetClass(esp_reset_reason()) == FcRescuePolicy::ResetClass::FreshStart)
+            bench_panic_rtc = 0;
+        if (bench_panic_rtc == kSpent)
+            ESP_LOGW(TAG, "[RAWGNSS] BENCH: this power-on's panic is spent: none this boot (TR_BENCH_PANIC_AT_S)");
+        else
+            ESP_LOGW(TAG, "[RAWGNSS] BENCH: a panic ON PURPOSE %d s from now (TR_BENCH_PANIC_AT_S)",
+                     (int)(TR_BENCH_PANIC_AT_S));
+    }
+    if (bench_panic_rtc == kSpent || now_ms - loop_t0_ms < (uint32_t)(TR_BENCH_PANIC_AT_S) * 1000u)
+        return;
+    bench_panic_rtc = kSpent;
+    ESP_LOGE(TAG, "[RAWGNSS] BENCH: panic ON PURPOSE, %d s after the loop started (TR_BENCH_PANIC_AT_S)",
+             (int)(TR_BENCH_PANIC_AT_S));
+    abort();
+}
+#endif
+
 // ==========================================================================
 // SECTION: Main loop
 // ==========================================================================
@@ -8238,6 +8462,9 @@ static void loop_fc()
 
     fcMaybeMarkOtaValid();   // Layer 4: confirm a freshly OTA'd image after a stable run
     fcMaybeMarkBootProven(); // rescue mode: a minute of this loop clears the boot counts
+#if TR_RAW_NAV_MOSAIC && defined(TR_BENCH_PANIC_AT_S)
+    rawBenchPanicOnce(time_ms());   // bench: the once-only crash
+#endif
 
     // ── OTA image pump: yield the core to the OTA RX parser ──
     // During an FC OTA the board is grounded and its I2S is flipped to slave RX.
@@ -9060,6 +9287,24 @@ static void loop_fc()
                 ekf.refresh(time_us());
             }
 #endif
+#if TR_RAW_NAV_MOSAIC
+            // The one filter stopped in flight: the adapter holds its last good
+            // state, carried forward and not healthy (setHoldLastGood). Start
+            // it again from there through the restore path, at most
+            // RawNavPolicy::kMaxRestarts a flight; the seed goes out on this
+            // pass's EKF tick, not up to a second later.
+            if (RawNavPolicy::restartDue(rocket_state == INFLIGHT, ekf.stoppedInFlight(), ekf.restorePending(),
+                                         raw_nav_restarts))
+            {
+                raw_nav_restarts++;
+                ekf.restartFromLastGood();
+                raw_shadow_seed_ms = 0;
+                ESP_LOGW(TAG, "[RAWGNSS] the filter stopped in flight at T+%.2f s: restarted from its last good "
+                              "state, carried forward (%u of %u this flight)",
+                         (double)((float)(now_ms - launch_time_millis) * 1e-3f), (unsigned)raw_nav_restarts,
+                         (unsigned)RawNavPolicy::kMaxRestarts);
+            }
+#endif
 
             // ── Initialize or update the EKF ──
             // Wait for valid GNSS fix before init — avoids initializing
@@ -9312,11 +9557,19 @@ static void loop_fc()
                                      !sensor_collector.isReplay(),
                                  kinematics.alt_landed_flag || rocket_state == LANDED,
                                  pyro_apogee_detected);
+#if TR_RAW_NAV_MOSAIC
+                // The navigation filter flies a GNSS-absent flight too, on
+                // the IMU and the barometer; a reboot's restore once the
+                // barometer gives its start height (rawRestoreSeedReady)
+                if (rawRestoreSeedReady(now_ms, pressure_altitude_m))
+                    rawShadowPublishSeed(ekf_imu.time_us, rocket_state == READY || rocket_state == PRELAUNCH);
+#else
                 // The navigation filter flies a GNSS-absent flight too, on
                 // the IMU and the barometer
                 if (!gnss_absent_flight || TR_RAW_GNSS_PRIMARY)
                     rawShadowPublishSeed(ekf_imu.time_us,
                                          rocket_state == READY || rocket_state == PRELAUNCH);
+#endif
 #endif
                 // #1418: once the landing detector has called it, the rocket
                 // is a measurement of zero velocity.  Soft and rate-limited
@@ -9389,10 +9642,33 @@ static void loop_fc()
                         const float spd = sqrtf(vel_ned_baro[0] * vel_ned_baro[0] +
                                                 vel_ned_baro[1] * vel_ned_baro[1] +
                                                 vel_ned_baro[2] * vel_ned_baro[2]);
+#if TR_RAW_NAV_MOSAIC
+                        // The speed is the raw filter's, which fuses the GPS
+                        // voter's receiver: never a filter that has not run (a
+                        // restore's start), and begun only under thrust, so a
+                        // filter falsely fast near apogee cannot silence the
+                        // barometer and the raw vote guard (raw_nav_policy.h)
+                        RawNavPolicy::MachInputs mach_in;
+                        mach_in.filter_has_run   = ekf.hasRun();
+                        mach_in.speed_mps        = spd;
+                        mach_in.in_flight        = (rocket_state == INFLIGHT);
+                        mach_in.burnout          = burnout_detected;
+                        mach_in.since_burnout_ms = burnout_detected ? (uint32_t)(now_ms - burnout_time_ms) : 0u;
+                        RawNavPolicy::MachConfig mach_cfg;
+                        mach_cfg.on_mps  = config::BARO_MACH_LOCKOUT_ON;
+                        mach_cfg.off_mps = config::BARO_MACH_LOCKOUT_OFF;
+                        const bool mach_was = mach_locked_out;
+                        mach_locked_out = RawNavPolicy::machLockout(mach_locked_out, mach_in, mach_cfg);
+                        if (mach_locked_out != mach_was)
+                            ESP_LOGW(TAG, "[BARO] transonic lockout %s at T+%.2f s (the raw filter's %.0f m/s)",
+                                     mach_locked_out ? "ON" : "off",
+                                     (double)((float)(now_ms - launch_time_millis) * 1e-3f), (double)spd);
+#else
                         if (!mach_locked_out && spd > config::BARO_MACH_LOCKOUT_ON)
                             mach_locked_out = true;
                         else if (mach_locked_out && spd < config::BARO_MACH_LOCKOUT_OFF)
                             mach_locked_out = false;
+#endif
                         baro_locked = mach_locked_out;
                     }
 
