@@ -398,20 +398,20 @@ def tables(grid, out_md):
         mk = lambda x: f"{x} **FAIL**" if x else "0"   # noqa: E731
         L.append(f"| {PATTERN_NAMES[p]} | {len(rs)} | {mk(ec)} | {mk(ev_)} | {mk(ep)} | {eg} | {eb} | {cb} |")
     if early_list:
-        h("Runs with an early call or raw vote (true vertical velocity at each, m/s):")
-        L.append("| Flight | Pattern | Magnetometer | Call (T+, true vz) | Raw velocity votes | Raw pitch votes | "
-                 "Guard |")
+        h("Runs with an early call or raw vote, by flight (the magnetometer arms that had it; the first arm's times, "
+          "T+ s, and the true vertical velocity at the call, m/s):")
+        L.append("| Flight | Pattern | Arms | Call (true vz) | Raw velocity votes | Raw pitch votes | Guard |")
         L.append("|---|---|---|---|---|---|---|")
-        for r in sorted(early_list, key=lambda r: (r["pattern"], r["flight"], r["mag"]))[:80]:
-            q = r["quorum"]
-            vz = lambda x: x  # noqa: E731
+        groups = collections.OrderedDict()
+        for r in sorted(early_list, key=lambda r: (r["pattern"], r["flight"], MAG_ARMS.index(r["mag"]))):
+            groups.setdefault((r["flight"], r["pattern"]), []).append(r)
+        for (fl, p), rs in groups.items():
+            q = rs[0]["quorum"]
             call = f"{fmt(q['call_t'])} ({fmt(q['call_vz_true'], 1)})" if q["call_t"] is not None else "-"
-            L.append(f"| {r['flight']} | {r['pattern']} | {r['mag']} | {call} | "
+            L.append(f"| {fl} | {p} | {', '.join(r['mag'] for r in rs)} | {call} | "
                      f"{', '.join(fmt(x) for x in q['early_votes']['vel']) or '-'} | "
                      f"{', '.join(fmt(x) for x in q['early_votes']['pitch']) or '-'} | "
                      f"{fmt(q['guard_t']) if q['guard_t'] is not None else '-'} |")
-        if len(early_list) > 80:
-            L.append(f"(and {len(early_list) - 80} more)")
 
     h("### G5: the call's latency after the true apogee and the vertical velocity there (flight design against "
       "unaided)")
