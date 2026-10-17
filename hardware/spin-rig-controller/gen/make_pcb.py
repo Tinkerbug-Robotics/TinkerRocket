@@ -39,10 +39,10 @@ def pt(x, y):
 
 # ref: (x, y, rotation degrees CCW, side)   board coordinates, y down
 FIXED = {
-    # power column: pack -> Q101 (tab up, leads down) -> VMAIN; shunt R102 -> VDRV -> J103
-    'J101': (6.0, 15.5, 90, 'F'), 'Q101': (17.0, 12.5, 90, 'F'), 'C101': (30.0, 12.0, 0, 'F'),
-    'C102': (40.5, 9.5, 0, 'F'), 'C103': (40.5, 13.5, 0, 'F'), 'D102': (27.0, 21.0, 0, 'F'),
-    'R102': (21.0, 27.0, 180, 'F'), 'U101': (14.0, 22.0, 0, 'F'), 'J103': (6.0, 33.0, 90, 'F'),
+    # power column: the XT60 on the top edge -> Q101 (tab toward it) -> VMAIN; shunt R102 -> VDRV -> J103
+    'J101': (11.95, 16.65, 0, 'F'), 'Q101': (29.5, 14.0, 180, 'F'), 'C101': (38.5, 5.6, 0, 'F'),
+    'C102': (38.6, 14.3, 90, 'F'), 'C103': (42.3, 14.3, 90, 'F'), 'D102': (29.0, 22.0, 0, 'F'),
+    'R102': (21.0, 27.0, 180, 'F'), 'U101': (14.0, 22.0, 0, 'F'), 'J103': (8.3, 29.0, 270, 'F'),
     # brake: resistor connector, freewheel diode and switch in a tight loop, with its own bus capacitor
     'J102': (6.0, 47.0, 90, 'F'), 'Q102': (22.5, 46.0, 180, 'F'), 'D103': (14.8, 44.6, 270, 'F'),
     'C123': (21.0, 41.0, 0, 'F'),
@@ -54,19 +54,20 @@ FIXED = {
     'D105': (17.0, 55.6, 180, 'F'), 'L101': (31.0, 56.0, 0, 'F'),
     'C115': (42.0, 53.2, 0, 'F'), 'C116': (42.0, 56.8, 0, 'F'), 'C117': (42.0, 60.4, 0, 'F'),
     'F103': (101.0, 60.0, 90, 'F'), 'F102': (88.0, 68.5, 0, 'F'),
-    # connectors on the top and right edges
-    'J301': (59.75, 6.3, 0, 'F'), 'J302': (84.75, 6.3, 0, 'F'),
-    'J304': (104.5, 16.0, 90, 'F'), 'J303': (104.5, 31.0, 90, 'F'),
-    'J202': (106.0, 57.5, 0, 'F'), 'J203': (105.0, 45.0, 90, 'F'),
+    # connectors on the edges. The driver's 3.5 mm headers open outward with their faces 0.3 mm inside the edge:
+    # control and encoder-out along the top, encoder-in down the right (pin 1 of each at its corner end)
+    'J301': (75.8, 8.3, 180, 'F'), 'J305': (99.7, 8.3, 180, 'F'), 'J302': (101.7, 31.45, 90, 'F'),
+    'J304': (106.3, 41.35, 90, 'F'), 'J303': (106.3, 52.64, 90, 'F'),
+    'J202': (106.0, 57.5, 0, 'F'), 'J203': (3.3, 20.0, 90, 'F'),     # Qwiic beside the INA238, the other I2C part
     'J104': (90.0, 74.5, 180, 'F'), 'J201': (70.0, 74.1, 0, 'F'),
     'SW201': (50.5, 76.0, 0, 'F'), 'SW202': (59.0, 76.0, 0, 'F'),
     # logic
     'U201': (72.0, 44.0, 0, 'F'), 'U301': (60.0, 18.0, 0, 'F'), 'U302': (85.0, 18.0, 90, 'F'),
     'Y201': (68.2, 35.8, 90, 'F'), 'L201': (68.0, 38.4, 0, 'F'), 'C202': (70.3, 36.0, 90, 'F'),
     'C201': (66.0, 34.4, 180, 'F'),
-    'U303': (97.0, 31.0, 90, 'F'), 'U304': (96.0, 20.0, 90, 'F'),
+    'U303': (94.5, 31.0, 90, 'F'), 'U304': (93.5, 20.5, 90, 'F'),
     'H1': HOLES[0] + (0, 'F'), 'H2': HOLES[1] + (0, 'F'), 'H3': HOLES[2] + (0, 'F'), 'H4': HOLES[3] + (0, 'F'),
-    'FID1': (10.0, 3.0, 0, 'F'), 'FID2': (100.0, 66.0, 0, 'F'), 'FID3': (3.0, 58.0, 0, 'F'),
+    'FID1': (3.5, 13.0, 0, 'F'), 'FID2': (100.0, 66.0, 0, 'F'), 'FID3': (3.0, 58.0, 0, 'F'),
 }
 
 # small parts that sit by a particular pad (otherwise: the nearest pad they share a signal net with)
@@ -106,7 +107,7 @@ POUR_NETS = ('VPACK', 'VMAIN', 'VDRV', 'BRAKE_SW', 'BUCK_SW', 'VMAIN_F', '+5V', 
 IN2_5V = [(0.3, 50.0), (47.0, 50.0), (47.0, 56.0), (W - 0.3, 56.0), (W - 0.3, H - 0.3), (0.3, H - 0.3)]  # band
 IN2_3V3 = (58.0, 27.0, 92.0, 55.0)                                          # poured after routing
 # 5 V feeders: pre-routed In2 tracks from the band up to a via by each 5 V cluster outside it
-FEED_5V = [(36.5, 39.5), (64.5, 12.8), (100.5, 27.0)]
+FEED_5V = [(36.5, 39.5), (64.5, 12.8), (102.5, 46.6)]
 
 
 def load_netlist():
@@ -300,7 +301,7 @@ def build():
     ys = [p2[1], p3[1], u10[1], u7[1], gv[1]]
     occ.append(('sense', (min(xs) - 0.4, min(ys) - 0.5, max(xs) + 0.5, max(ys) + 0.6)))
     occ.append(('stubs', (min(p1[0], p4[0]) - 2.6, p1[1] - 0.9, max(p1[0], p4[0]) + 2.6, p1[1] + 0.9)))
-    j = pad_pos('J103', '2')
+    j = pad_pos('J103', '1')       # VDRV
     vd0 = (p4[0] - 2.0 * out, p4[1])
     track('VDRV', [vd0, (j[0] + 1.6, vd0[1]), (j[0], vd0[1] + 1.6), j], 1.5)
     occ.append(('vdrv', (j[0] - 1.5, vd0[1] - 1.0, vd0[0] + 0.5, j[1] + 1.0)))

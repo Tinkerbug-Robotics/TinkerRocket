@@ -4069,7 +4069,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Connector_JST:JST_VH_B2P-VH_1x02_P3.96mm_Vertical"
+		(property "Footprint" "Connector_AMASS:AMASS_XT60PW-M_1x02_P7.20mm_Horizontal"
 			(at 29.21 41.91 0)
 			(hide yes)
 			(show_name no)
@@ -4091,7 +4091,7 @@
 				)
 			)
 		)
-		(property "Description" "6S pack, after the anti-spark switch and the 10 A fuse"
+		(property "Description" "XT60, right angle: the 6S pack, after the anti-spark switch and the 10 A fuse (pin 1 is the footprint's \"-\")"
 			(at 29.21 41.91 0)
 			(hide yes)
 			(show_name no)
@@ -4102,7 +4102,7 @@
 				)
 			)
 		)
-		(property "MPN" "B2P-VH(LF)(SN)"
+		(property "MPN" "XT60PW-M"
 			(at 29.21 41.91 0)
 			(hide yes)
 			(show_name no)
@@ -4113,7 +4113,7 @@
 				)
 			)
 		)
-		(property "Mfr" "JST"
+		(property "Mfr" "Amass"
 			(at 29.21 41.91 0)
 			(hide yes)
 			(show_name no)
@@ -4124,7 +4124,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C160315"
+		(property "LCSC" "C98732"
 			(at 29.21 41.91 0)
 			(hide yes)
 			(show_name no)
@@ -4666,7 +4666,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "DRIVER"
+		(property "Value" "DRIVER PWR"
 			(at 113.03 48.22 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -4677,7 +4677,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Connector_JST:JST_VH_B2P-VH_1x02_P3.96mm_Vertical"
+		(property "Footprint" "Connector_Phoenix_MC:PhoenixContact_MC_1,5_2-G-3.5_1x02_P3.50mm_Horizontal"
 			(at 118.11 41.91 0)
 			(hide yes)
 			(show_name no)
@@ -4699,7 +4699,7 @@
 				)
 			)
 		)
-		(property "Description" "To the CL57T V+ / GND"
+		(property "Description" "To the CL57T's P4 in its order (+Vdc, GND); 3.5 mm pluggable, 8 A"
 			(at 118.11 41.91 0)
 			(hide yes)
 			(show_name no)
@@ -4710,7 +4710,7 @@
 				)
 			)
 		)
-		(property "MPN" "B2P-VH(LF)(SN)"
+		(property "MPN" "1844210"
 			(at 118.11 41.91 0)
 			(hide yes)
 			(show_name no)
@@ -4721,7 +4721,7 @@
 				)
 			)
 		)
-		(property "Mfr" "JST"
+		(property "Mfr" "Phoenix Contact"
 			(at 118.11 41.91 0)
 			(hide yes)
 			(show_name no)
@@ -4732,7 +4732,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C160315"
+		(property "LCSC" "C3584780"
 			(at 118.11 41.91 0)
 			(hide yes)
 			(show_name no)
@@ -4769,9 +4769,30 @@
 		)
 		(uuid "ef765760-5335-5e04-8921-21839f7fee0f")
 	)
+	(label "VDRV"
+		(at 110.49 41.91 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "c7091163-5f04-510b-9168-6949f98f9265")
+	)
+	(wire
+		(pts
+			(xy 113.03 44.45)
+			(xy 110.49 44.45)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "51c14502-86ad-53f3-98a0-06580410bc59")
+	)
 	(symbol
 		(lib_id "power:GND")
-		(at 110.49 41.91 270)
+		(at 110.49 44.45 270)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -4781,7 +4802,7 @@
 		(dnp no)
 		(uuid "b71df06f-c12e-58e1-8717-779e8933aa7e")
 		(property "Reference" "#PWRP02"
-			(at 110.49 41.91 0)
+			(at 110.49 44.45 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -4792,7 +4813,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 111.99 41.91 0)
+			(at 111.99 44.45 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -4803,7 +4824,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 110.49 41.91 0)
+			(at 110.49 44.45 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -4814,7 +4835,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 110.49 41.91 0)
+			(at 110.49 44.45 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -4825,7 +4846,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 110.49 41.91 0)
+			(at 110.49 44.45 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -4846,27 +4867,6 @@
 				)
 			)
 		)
-	)
-	(wire
-		(pts
-			(xy 113.03 44.45)
-			(xy 110.49 44.45)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "51c14502-86ad-53f3-98a0-06580410bc59")
-	)
-	(label "VDRV"
-		(at 110.49 44.45 180)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right bottom)
-		)
-		(uuid "927889eb-b830-5a7e-be42-841dad7acb67")
 	)
 	(symbol
 		(lib_id "Device:R")
@@ -17394,7 +17394,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Connector_JST:JST_PH_B2B-PH-SM4-TB_1x02-1MP_P2.00mm_Vertical"
+		(property "Footprint" "Connector_JST:JST_PH_B2B-PH-K_1x02_P2.00mm_Vertical"
 			(at 31.75 251.46 0)
 			(hide yes)
 			(show_name no)
@@ -17427,7 +17427,7 @@
 				)
 			)
 		)
-		(property "MPN" "B2B-PH-SM4-TB(LF)(SN)"
+		(property "MPN" "B2B-PH-K-S(LF)(SN)"
 			(at 31.75 251.46 0)
 			(hide yes)
 			(show_name no)
@@ -17449,7 +17449,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C160352"
+		(property "LCSC" ""
 			(at 31.75 251.46 0)
 			(hide yes)
 			(show_name no)

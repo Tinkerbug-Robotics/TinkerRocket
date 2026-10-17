@@ -24,9 +24,9 @@ BOARD 110.0 x 80.0 mm, 4 LAYER, 1.6 mm.
 2. SURFACE FINISH: ENIG. FOR THE 0.4 mm PITCH QFN-56 (U201) AND ITS
    4.1 mm EXPOSED PAD.
 
-3. VIAS: 705 THROUGH VIAS, TENTED BOTH SIDES. STANDARD PROCESS: NO
+3. VIAS: 702 THROUGH VIAS, TENTED BOTH SIDES. STANDARD PROCESS: NO
    FILLING, NO CAPPING.
-   690 x 0.60 mm PAD / 0.30 mm DRILL, 12 x 0.80 / 0.40, 3 x 0.45 / 0.25.
+   685 x 0.60 mm PAD / 0.30 mm DRILL, 13 x 0.80 / 0.40, 4 x 0.45 / 0.25.
    NO VIA-IN-PAD: NO VIA SITS IN OR CUTS INTO AN SMD LAND, INCLUDING
    THE EXPOSED PADS OF U201 AND U104.
 
@@ -35,17 +35,20 @@ BOARD 110.0 x 80.0 mm, 4 LAYER, 1.6 mm.
    EDGE 0.30 mm.
 
 5. HOLES: 4 x 3.20 mm NON-PLATED (H1-H4, M3), 2 x 0.65 mm NON-PLATED
-   (J201 USB-C PEGS), 6 x 1.70 mm PLATED (J101-J103, JST VH),
-   5 x 1.00 mm PLATED (J202, 2.54 mm HEADER).
+   (J201 USB-C PEGS).
+   PLATED: 2 x 2.70 mm (J101 XT60), 2 x 0.60 x 1.70 mm OVAL PLATED
+   SLOTS (J101 XT60 PEGS), 2 x 1.70 mm (J102 JST VH), 23 x 1.20 mm
+   (J103, J301, J302, J305: 3.5 mm TERMINAL HEADERS), 5 x 1.00 mm
+   (J202 HEADER), 9 x 0.75 mm (J104, J303, J304: JST PH).
 
 6. USB-C RECEPTACLE J201 OVERHANGS THE BOTTOM EDGE BY ABOUT 0.6 mm
    ON PURPOSE; ITS SILKSCREEN RUNS TO THE EDGE.
 
 ASSEMBLY
 SINGLE SIDED: ALL SMD PARTS ON THE TOP. BOM AND CPL CARRY LCSC CODES.
-DO NOT PLACE R305, R313, R314, R315 (DNP).
-THROUGH-HOLE PARTS J101, J102, J103 (JST B2P-VH) AND J202 (1x5 2.54 mm
-HEADER): HAND-SOLDERED, OR JLC THROUGH-HOLE ASSEMBLY IF ORDERED.
+DO NOT PLACE R305, R313, R314 (DNP).
+THROUGH-HOLE CONNECTORS J101-J104, J202, J301-J305 ARE NOT IN THE BOM
+OR CPL: THEY ARE HAND-SOLDERED AFTER ASSEMBLY. DO NOT FIT THEM.
 CHECK EVERY IC AND CONNECTOR ROTATION IN THE CPL PREVIEW.
 ```
 
@@ -55,8 +58,10 @@ CHECK EVERY IC AND CONNECTOR ROTATION IN THE CPL PREVIEW.
 
 - Plot with [`tools/plot_gerbers.sh spin-rig-controller`](../../tools/plot_gerbers.sh) from a clean tree, and tag the commit `spin-rig-controller-v1.0.0` ([`docs/board-versioning.md`](../../docs/board-versioning.md)).
 - `gen/make_fab.py` writes a review copy of the gerbers, plus the JLC BOM and CPL, into `gerbers/`, which git ignores. The BOM and CPL are what to upload; take the gerbers from `plot_gerbers.sh`.
+- It also writes `spin-rig-controller-hand.csv`: the through-hole connectors to buy and solder by hand, with their plugs listed in the design note ("Leads to the driver").
 - The design note's "Before ordering" list still applies:
   - the routing review;
   - the CL57T bench checks (S3 switch, ENA polarity);
-  - the three look-alike VH power connectors;
+  - the CL57T's terminal pitch (the headers are 3.5 mm);
+  - the XT60's polarity against the pack lead;
   - the 8 mm motor shaft.
