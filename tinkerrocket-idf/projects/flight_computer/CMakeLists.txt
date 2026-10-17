@@ -144,6 +144,27 @@ foreach(_v TR_BENCH_CARRIER_MODE TR_BENCH_HALF_CYCLE_REPAIR)
         message(STATUS "${_v}=${${_v}} (bench)")
     endif()
 endforeach()
+# Bench (the mosaic-only image's CPU ladder, P1): the raw-GNSS filter's fused
+# grid in ms of GPS time (TR_BENCH_RAW_FUSE_MS: 100 is the profile's 10 Hz,
+# 200 its 5 Hz), the satellites it builds an epoch at most
+# (TR_BENCH_RAW_SAT_CAP: 16 is the profile's), and the boost screen's
+# threshold in g (TR_BENCH_BOOST_SCREEN_G: 0 screens every epoch, its worst
+# cost). Each sets the filter's start (main.cpp startRawShadow). Never set for
+# flight.
+foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G)
+    if(DEFINED ${_v})
+        add_compile_definitions(${_v}=${${_v}})
+        message(STATUS "${_v}=${${_v}} (bench)")
+    endif()
+endforeach()
+# Bench: the raw-GNSS filter's EKF and measurement builder in internal RAM
+# (main/raw_gnss_iram.lf, the Beetle's placement) on another board too:
+# -DTR_RAW_GNSS_IRAM=1 on the mosaic-only image, to measure what the P4's
+# PSRAM-and-flash fetches cost it. main/CMakeLists.txt places the fragment.
+if(DEFINED TR_RAW_GNSS_IRAM)
+    add_compile_definitions(TR_RAW_GNSS_IRAM=${TR_RAW_GNSS_IRAM})
+    message(STATUS "TR_RAW_GNSS_IRAM=${TR_RAW_GNSS_IRAM} -- the raw-GNSS filter in internal RAM (bench)")
+endif()
 # Bench: a per-section cycle and Xtensa performance-counter profile of the
 # flight task, printed every 5 s (main/loop_profile.h). Never set for flight.
 if(TR_LOOP_PROFILE)
@@ -291,7 +312,14 @@ if(TR_GNSS_MOSAIC)
     list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.mosaic")
     if(NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW)
         list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.rawnav")
+        # The receiver sends every GPS, Galileo and BeiDou ephemeris it
+        # tracks, ~50 satellites over a 2-4 h pad wait: the raw-GNSS filter's
+        # store holds 128 (the Beetle's 64). Project-wide, before project(),
+        # so TR_GNSSRaw, TR_RawGnssShadow and main lay the pool out alike;
+        # main.cpp checks at boot that they did (ephCapacityAgrees).
+        add_compile_definitions(TR_EPH_CAPACITY=128)
         message(STATUS "flight_computer: GNSS driver Septentrio mosaic-G5 (TR_GNSS_DRIVER_MOSAIC=1), overlays sdkconfig.defaults.mosaic + sdkconfig.defaults.rawnav (PSRAM on)")
+        message(STATUS "flight_computer: raw-GNSS NAVIGATION filter; GpsInsEKF not instantiated (ephemeris store 128)")
     else()
         message(STATUS "flight_computer: GNSS driver Septentrio mosaic-G5 (TR_GNSS_DRIVER_MOSAIC=1), overlay sdkconfig.defaults.mosaic (TR_RAW_GNSS_SHADOW=0: no raw-GNSS filter, PSRAM off)")
     endif()

@@ -12,7 +12,9 @@ set(_ldfrags "")
 # #1600: on the LC86G board (the Beetle) the raw-GNSS filter is the navigation
 # filter (main/config.h): its EKF and measurement builder run from internal RAM
 # (raw_gnss_iram.lf). Where the filter is built out, nothing references them.
-if(TR_BOARD_M1)
+# The mosaic-only image keeps them in flash until a bench measures the P4
+# (-DTR_RAW_GNSS_IRAM=1, the project CMakeLists.txt).
+if(TR_BOARD_M1 OR TR_RAW_GNSS_IRAM)
     list(APPEND _ldfrags "raw_gnss_iram.lf")
 endif()
 # Bench only (-DTR_BENCH_IRAM): the EKF into internal RAM (bench_iram.lf).
