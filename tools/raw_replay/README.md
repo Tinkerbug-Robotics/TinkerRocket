@@ -318,13 +318,14 @@ What the 10/16-17 V9 logs showed (E4; the report and its runner are in
 `gnss-attitude-study/v9-mosaic-filter-plan/evidence/real-logs/`, outside the repo):
 
 - The pad runs as the firmware runs them (ZUPT while still, levelling) hold 0.014-0.025 m/s rms per axis with no
-  stop or non-finite state, and agree with the log's GpsInsEKF tilt to 0.36-0.40 deg p95 on the two 26-minute
+  stop or non-finite state, and agree with the log's GpsInsEKF tilt to 0.36-0.40 deg p95 on the two 25-28 minute
   spin-rig logs. The 60 s logs are too short for the levelling to converge (tilt sigma 6 deg falling to 3 deg).
 - On the turning spin rig the GNSS rows move the heading and the gyro's bias about the rocket's axis, which a still
   antenna does not observe: from the rig's own heading at the start, 15-80 deg p95 over 25 min against the unaided
   twin's 4-8 deg. On the still outdoor log the twins agree.
-- `--gnss-only-from-s` on the turning rig cannot hold the tilt for either twin (3-10 deg off the log's GpsInsEKF), so
-  its 3 s cuts leave 0.3-1.4 m/s; the pad runs' cuts (levelling on, no ZUPT while turning) recover to 0.08-0.12 m/s.
+- `--gnss-only-from-s` on the turning rig holds the tilt for neither twin (3-20 deg off the log's GpsInsEKF), so its
+  3 s cuts leave 0.3-1.6 m/s 2 s after GNSS returns; on the pad runs (levelling on, no ZUPT while turning) the same
+  cuts leave at most 0.08-0.12 m/s (0.06 averaged over the next second), and a corrupted epoch at most 0.04.
 
 ### What it does not reproduce
 
