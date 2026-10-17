@@ -15,17 +15,21 @@
 // still climbs at over 2 m/s. The filter's tick flags follow the quorum: its
 // in-flight levelling starts at the quorum's own call, whatever the events
 // file's level bit says, and with state_from_quorum the launch and the
-// landing are the quorum's too.
+// landing are the quorum's too. The truth read from a file (truth_nav.h,
+// raw_replay --truth-nav) votes exactly as the truth handed over directly.
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "ShadowLink.h"
 #include "flight_votes.h"
+#include "truth_nav.h"
 
 namespace {
 
@@ -89,6 +93,7 @@ struct Flying
     bool state_from_quorum = false;     // launch and landing from the quorum's own kinematics
     double ticks_in_flight_from_s = 0.0;   // the IMU ticks' own in-flight flag rises at this flight time
     double rest_s = 0.0;                // after the flight: at rest on the ground this long (a landing)
+    std::string truth_file;             // the filter's state written here first, then read back (truth_nav.h)
     // each pass, after it: the MCU time (s), the quorum, and the tick's own in-flight flag
     std::function<void(double, const rr::FlightVotes&, bool)> observe;
 };
@@ -136,10 +141,9 @@ Flown fly(const Faults& f, const Flying& how)
         }
         return b;
     };
-    auto pass = [&](double tf, const Sample& s) {
+    // the filter's published state at flight time tf
+    auto navAt = [&](double tf, const Sample& s) {
         const int64_t t_us = static_cast<int64_t>(std::llround((t0 + tf) * 1e6));
-        const bool in_flight = tf >= how.ticks_in_flight_from_s;
-        // the filter's published state, every pass
         gnss_raw::ShadowNav n{};
         n.time_us = static_cast<uint32_t>(t_us);
         n.lla[0] = lat0;
@@ -155,7 +159,40 @@ Flown fly(const Faults& f, const Flying& how)
         n.running = 1;
         n.gnss_aided = 1;
         n.baro_aided = 1;
-        link->nav.write(n);
+        return n;
+    };
+    // the pad
+    const Sample pad{0.0, 0.0, 0.0, 0.0, 85.0 * M_PI / 180.0, kG * std::sin(85.0 * M_PI / 180.0),
+                     -kG * std::cos(85.0 * M_PI / 180.0)};
+    rr::TruthNav truth;
+    if (!how.truth_file.empty())
+    {
+        // every pass's state as raw_replay --truth-nav reads it (floats to 9 digits and the height to 17 read back
+        // exactly)
+        FILE* fp = std::fopen(how.truth_file.c_str(), "w");
+        EXPECT_NE(fp, nullptr);
+        std::fprintf(fp, "# t_us vn ve vd qw qx qy qz h\n");
+        auto row = [&](double tf, const Sample& s) {
+            const gnss_raw::ShadowNav n = navAt(tf, s);
+            std::fprintf(fp, "%u %.9g %.9g %.9g %.9g %.9g %.9g %.9g %.17g\n", n.time_us, n.vel_ned[0], n.vel_ned[1],
+                         n.vel_ned[2], n.quat[0], n.quat[1], n.quat[2], n.quat[3], n.lla[2]);
+        };
+        for (int i = -3000; i < 0; ++i)
+            row(i * 1e-3, pad);
+        for (const Sample& s : tr)
+            row(s.t, s);
+        std::fclose(fp);
+        std::string why;
+        EXPECT_TRUE(truth.load(how.truth_file, &why)) << why;
+    }
+    auto pass = [&](double tf, const Sample& s) {
+        const int64_t t_us = static_cast<int64_t>(std::llround((t0 + tf) * 1e6));
+        const bool in_flight = tf >= how.ticks_in_flight_from_s;
+        // the filter's published state, every pass: handed over, or the file's row for this pass
+        if (how.truth_file.empty())
+            link->nav.write(navAt(tf, s));
+        else
+            EXPECT_TRUE(truth.publish(t_us, *link));
         const int64_t step = static_cast<int64_t>(std::llround(tf * 1000.0));
         if ((step & 1) == 0)   // the EKF ticks, 500 a second
         {
@@ -183,9 +220,6 @@ Flown fly(const Faults& f, const Flying& how)
         if (how.observe)
             how.observe(t0 + tf, votes, in_flight);
     };
-    // the pad
-    const Sample pad{0.0, 0.0, 0.0, 0.0, 85.0 * M_PI / 180.0, kG * std::sin(85.0 * M_PI / 180.0),
-                     -kG * std::cos(85.0 * M_PI / 180.0)};
     for (int i = -3000; i < 0; ++i)
         pass(i * 1e-3, pad);
     for (const Sample& s : tr)
@@ -426,4 +460,88 @@ TEST(RawReplayVotes, PassesRunOnTheLoopsGrid)
     c.loop_period_us = 2000;
     rr::FlightVotes v2(c);
     EXPECT_EQ(v2.nextPass(100500), 102000);
+}
+
+TEST(RawReplayVotes, TheTruthFromAFileVotesAsTheTruthHandedOver)
+{
+    // raw_replay --truth-nav: the quorum on the sim's truth, read from sim_events.py's truth/<flight>.nav and
+    // published a pass at a time, is the quorum on the truth itself -- the same launch, admission, votes and call
+    const Flown direct = fly(Faults{}, true);
+    Flying how;
+    how.truth_file = testing::TempDir() + "raw_replay_votes_truth.nav";
+    const Flown file = fly(Faults{}, how);
+    std::remove(how.truth_file.c_str());
+    const rr::FlightVotes::Report& a = direct.rep;
+    const rr::FlightVotes::Report& b = file.rep;
+    ASSERT_FALSE(std::isnan(b.apogee_s));
+    EXPECT_EQ(b.launch_s, a.launch_s);
+    EXPECT_EQ(b.burnout_s, a.burnout_s);
+    EXPECT_EQ(b.admitted_s, a.admitted_s);
+    EXPECT_EQ(b.apogee_s, a.apogee_s);
+    EXPECT_EQ(b.vel.on, a.vel.on);
+    EXPECT_EQ(b.pitch.on, a.pitch.on);
+    EXPECT_EQ(b.gps.on, a.gps.on);
+    EXPECT_EQ(b.baro.on, a.baro.on);
+    EXPECT_EQ(b.ref_count, a.ref_count);
+    EXPECT_GT(b.apogee_s, file.t_apogee);
+}
+
+TEST(RawReplayVotes, TruthNavPublishesTheRowAtOrBeforeAndRefusesABadFile)
+{
+    const std::string path = testing::TempDir() + "raw_replay_truth_nav.nav";
+    auto write = [&](const char* text) {
+        FILE* fp = std::fopen(path.c_str(), "w");
+        ASSERT_NE(fp, nullptr);
+        std::fputs(text, fp);
+        std::fclose(fp);
+    };
+    write("# t_us vn ve vd qw qx qy qz h\n"
+          "1000 1 2 -3 1 0 0 0 100.5\n"
+          "2000 4 5 -6 0.7071068 0 0.7071068 0 101.5\n"
+          "3000 7 8 -9 1 0 0 0 102.5\n");
+    rr::TruthNav t;
+    std::string why;
+    ASSERT_TRUE(t.load(path, &why)) << why;
+    EXPECT_EQ(t.size(), 3u);
+    gnss_raw::ShadowLink link;
+    RawNavAdapter ekf;
+    ekf.attach(&link);
+    EXPECT_FALSE(t.publish(999, link));   // before the first row: nothing published
+    auto at = [&](int64_t t_us, float (&v)[3], double& h, float& pitch) {
+        EXPECT_TRUE(t.publish(t_us, link));
+        ekf.refresh(static_cast<uint32_t>(t_us));
+        ekf.getVelEst(v);
+        double lla[3];
+        ekf.getPosEst(lla);
+        h = lla[2];
+        float rpy[3];
+        ekf.getOrientEst(rpy);
+        pitch = rpy[1];
+        EXPECT_TRUE(ekf.isHealthy());
+        EXPECT_TRUE(ekf.gnssAided());
+    };
+    float v[3];
+    double h = 0.0;
+    float pitch = 0.0f;
+    at(1999, v, h, pitch);   // the row at or before: the first
+    EXPECT_FLOAT_EQ(v[0], 1.0f);
+    EXPECT_FLOAT_EQ(v[2], -3.0f);
+    EXPECT_DOUBLE_EQ(h, 100.5);
+    at(2000, v, h, pitch);   // exactly on the second
+    EXPECT_FLOAT_EQ(v[1], 5.0f);
+    EXPECT_NEAR(pitch, M_PI / 2.0, 1e-3);
+    at(9000, v, h, pitch);   // past the last: the last held
+    EXPECT_FLOAT_EQ(v[0], 7.0f);
+    EXPECT_DOUBLE_EQ(h, 102.5);
+    // a file whose time runs back, a short row, or none at all, is refused and keeps nothing
+    write("1000 1 2 -3 1 0 0 0 100\n1000 1 2 -3 1 0 0 0 100\n");
+    EXPECT_FALSE(t.load(path, &why));
+    EXPECT_NE(why.find("time runs back"), std::string::npos);
+    EXPECT_EQ(t.size(), 0u);
+    write("1000 1 2 -3 1 0 0\n");
+    EXPECT_FALSE(t.load(path, &why));
+    EXPECT_NE(why.find("bad row"), std::string::npos);
+    std::remove(path.c_str());
+    EXPECT_FALSE(t.load(path, &why));
+    EXPECT_FALSE(t.publish(5000, link));
 }

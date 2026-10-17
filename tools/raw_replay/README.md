@@ -217,7 +217,9 @@ heights above the geoid), the transonic lockout on its speed, the pad reference 
 then the filter's own heights from its first GNSS-aided state, frozen at launch), `GnssAscentGate` (admitted against
 the barometer only on the mosaic: `ekf_valid` false), the raw vote guard (`raw_vote_guard.h`, stepped after the gate
 with `baroFusable`, reset at launch; it withholds the filter's two votes once latched, `--vote-guard 0` only reports
-it), `TR_KinematicChecks` (the four leaky voters, the 2-of-N quorum, the Layer-2 backstop) and `tr::burnoutDetectStep`.
+it -- this is the wiring D1b is to add; no firmware tree steps the guard yet, so `--vote-guard 0` is the image as
+built), `TR_KinematicChecks` (the four leaky voters, the 2-of-N quorum, the Layer-2 backstop) and
+`tr::burnoutDetectStep`.
 Its inputs: each IMU tick, each barometer sample (pressure altitude on the ground pressure), and the receiver's fix:
 each PVTGeodetic in the log, or `V` events (a sim's, or `extract.py`'s from a non-SBF log's GNSS records).
 
@@ -268,6 +270,8 @@ receiver velocity, so their quorum has three voters unless re-extracted with `V`
 | `META state_machine none` | the ticks' in-flight and landed flags are not a flight computer's (a sim): the quorum's own state | |
 | `N t sys prn week iode iodc health ura toe toc sqrt_a e i0 omega0 omega m0 delta_n idot omega_dot cuc cus crc crs cic cis af0 af1 af2 tgd` | an ephemeris in `gps_eph_t`'s units, to the stage | |
 | `META seed_lla`, `seed_quat`, `decimal_year`, `declination_rad`, `field_ned_ut`, `pad_lla` | the cold start's (above) | |
+| `X t mcu_us tow_s week n` then n x `sys prn has_pr has_rr sx sy sz vx vy vz ax ay az pr rr cn0 rr_sig_add` | a sim's epoch, released to the GNSS task at t (`sim_events.py`, below): each satellite placed (ECEF of the transmit time), its corrected pseudorange and range rate, C/N0 and an extra Doppler sigma | through the stage (`sim_epoch.h`), then the filter |
+| `META seed_quat_truth 1` | `seed_quat` is a sim's truth: turned by `--mag-error-deg` (as the declination) and `--seed-heading-error-deg` | |
 
 'F' stays the LC86G's fix (week, time of week, mode, satellites), so the Beetle's files parse as before.
 
@@ -326,6 +330,98 @@ receiver velocity, so their quorum has three voters unless re-extracted with `V`
   before the flight computer's T+12.424: the GPS voter path reproduces a real call. c30, f3c, r16 and r21 with `V`
   lines call as before (within 14 ms). The mosaic's barometer-only admission (`ekf_valid` false) has not met a real
   flight yet.
+
+### Grid B: simulated flights (`sim_events.py`, `sim_grid.py`, `sim_tables.py`)
+
+The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-attitude-study
+`v9-mosaic-filter-plan/grid/flights`: Rolly Polly III on a G80T and the 54 mm Rolly Polly on an F52C, still air and
+4 m/s, four seeds each), each with a fault pattern, against its `--unaided` twin: plan section 4, gates G4 and G5.
+
+- **`sim_events.py FLIGHT.pkl OUT --pattern P`** writes the events file a V8/V9 would be handed: the EKF ticks
+  (every second 1 kHz row), the barometer at 500 Hz, the magnetometer at 100 Hz, the receiver's epochs at its own
+  20 Hz -- each fused-grid one (every 100 ms of GPS time) as an `X` line released 30 ms later, and every one's fix as
+  a `V` line 25 ms after it (the mosaic streams PVTGeodetic at msec50; only the raw epochs are cut to the fused
+  grid) -- and the cold start's META (the seed is the sim's truth: `seed_quat_truth 1`). The receiver (`MosaicRx`,
+  the gnss repo's `RawGNSSModel`'s sky, clock and lock logic) is three Walker shells mapped to GPS 1-24, Galileo
+  1-24 and BeiDou 19-42 on one clock, lock kept to 200 m/s^2 along the line of sight, a dipole-like C/N0 along the
+  nose (46 dB-Hz broadside, 6 dB on the axis), and noise at the mosaic profile v0's fits for each satellite's C/N0
+  (the Doppler's without the profile's 1.5 margin; 0.05 m/s per g of stress against the profile's 0.5). The
+  antenna sits `--lever-arm` m (0.3) along the nose from the IMU; the filter keeps r = 0. The fix is a
+  least-squares solution from the same measurements -- its error added to the truth's velocity of 4-6 ms before
+  the epoch (the PVT's lag) -- so a receiver fault reaches the GPS voter as it reaches the filter. After touchdown
+  it adds a 0.05 s impact and 5 s at rest (the flights end falling at 15 m/s). Once a flight it also writes the
+  truth: `truth/<flight>.npz` (what the scores are made against) and `truth/<flight>.nav` (the same at the IMU, a
+  line a 1 kHz row, for `--truth-nav`).
+- **Patterns:** `none`; `cut05`, `cut15`, `cut30` (every epoch from T+0.5/1.5/3 to T+8 cut, the fused epoch before
+  corrupted as c30's: GNSS comes back at or after the true apogee, so the coast flies unaided and boost and coast
+  pass by construction); `gap05`, `gap15`, `gap30` (the same cut 0.5/1.5/3 s long from burnout: GNSS comes back in
+  coast); `stale_rx` (the receiver at the pad's velocity through the boost, closing with tau 2 s: the closing tail
+  with GNSS after, a bound); `stale_sats` (two Galileo satellites so, tau 4 s -- the filter is not told: no firmware
+  path widens one satellite's Doppler sigma); `settle15`, `settle40` (each Doppler off by A exp(-dt/1.5 s) from
+  burnout; settle40 also 2 m/s rms common to every Doppler over the first 5 s of coast, the rig's rp5
+  `--post-thrust 4,1.5,2`); `lol0`..`lol3` (every satellite's lock lost 0-3 s before the true apogee, re-acquired
+  as the model does); `coherent` (the receiver's velocity biased down by a ramp 0 -> 5 m/s over the 3 s before the
+  true apogee, then held: every Doppler and the fix); `coherent15` (a fast coherent step, 0 -> 15 m/s over 1 s from
+  3 s before apogee: the Doppler gate refuses it, so it is not the guard's case); `slow12`, `slow15` (slow coherent
+  ramps reaching 12/15 m/s at the true apogee over 6 s, never starting before burnout) and `slow15b` (0 -> 15 m/s
+  over 6 s from burnout): the filter accepts them and reads more than 10 m/s low before apogee -- the raw vote
+  guard's own case; `slow08` (the same ramp to 8 m/s: between the plan's 5 m/s and the guard's 10 m/s, its gap); `baro_lag05`, `baro_lag07`, `baro_lag10` (the static port's first-order lag, GNSS clean: a
+  sensitivity sweep of the guard's false-latch case, nothing measured on the Goblin). The GNSS faults are
+  tc_ekf_eval's (Grid A's) where it has them, applied before the PRN mapping; each file says what it did in META
+  `sim_*`.
+- **The X path** (`sim_epoch.h`, `test_raw_replay_sim`): the stage's own `see()`, lock ages, cap and ionosphere
+  choice on a stand-in ephemeris for each satellite the sim names, and the builder's C/N0 floors, elevation mask and
+  noise model mirrored from its config (no stress term: the filter adds it). On the same sky the host test builds,
+  epoch by epoch, exactly what the stage's own `offer()` builds from ephemerides: the same picks, sigmas and lock
+  ages. The X line's `rr_sig_add` is for experiments only; no pattern sets it.
+- **`--truth-nav FILE`** (`truth_nav.h`): the same quorum flown beside the filter's on a perfect one -- the sim's
+  truth published as the filter's state each pass, with the run's own barometer, IMU ticks and fixes -- reported as
+  `truth_quorum` in the events JSON: the truth's own call, which the counters' latency alone gives. It withholds
+  nothing, but says when the guard would have latched on the truth.
+- **`sim_grid.py OUT --flights GRID/flights --events-dir SCRATCH`** makes the events files (16 flights x 24
+  patterns) and replays each in six magnetometer arms -- 0, +10, -10, +40, -40 deg (`--mag-error-deg`, the seed's
+  heading turned with it: a long pad wait) on the 10 deg prior, and none (`--mag-flags 0`, the seed's heading
+  guess 30 deg off, alternating in sign by seed) on the 30 deg prior -- as three arms: the flight design
+  (`--receiver mosaic`, the raw vote guard applied as `flight_votes.h` wires it: D1b's wiring, assumed, since no
+  firmware tree has it yet), its `--unaided` twin, and `noguard` (`--vote-guard 0`: the quorum RC0's main.cpp
+  has). Every run gets `--truth-nav`. Each run is scored as it finishes (`sim_tables.score_run`) into
+  `OUT/scores/`. `--harness-args "..."` adds raw_replay arguments to every run (an experiment: use a new OUT).
+- **`sim_tables.py OUT [--against OTHER_OUT]`** writes `OUT/tables.md` and `OUT/verdict.json`: first what the runs
+  assume (the guard's wiring, the 20 Hz fixes, the P1/G6 placeholders -- the 30 ms hand-over, the 500 Hz EKF
+  tick, the 1 kHz loop, no epoch slicing without `--fc-unit-us` -- the port lags as a sensitivity sweep, and the
+  effective sample: 10 distinct trajectories over 2 airframes, neither the Goblin); then per pattern and phase the
+  runs passing p90 <= max(twin + delta, floor) (boost 1/2, coast 2/3, descent 3/5 deg) with the magnetometer arms
+  pooled as the plan words it, and again per arm (the +-40 and no-magnetometer twins sit at 30-40 deg, so only
+  0 and +-10 can fail), with magnetometer 0 counted once a trajectory; the pitch within +-2 s of the true apogee
+  (and before the drogue's deployment); the worst excess over the twin before apogee and in descent; p90/p99/max per
+  arm; the votes and calls while the true vertical velocity was above +2 m/s, for the design and noguard arms, with
+  the margin to that bar; the call's latency against the twin's and against the truth's own; the vertical velocity
+  at the true apogee; the guard's latches (the filter's error then, the should-latch runs, false latches, latches
+  on the truth); and E3's unit tests. `--against` sets the no-fault runs at magnetometer 0 beside another grid's
+  (the antenna on the IMU against 0.3 m up the nose).
+- **`--reject-persist-rr N`** (an experiment on the filter's own parameter, after the profile): the Doppler's refusal
+  count before a satellite is let back in (the mosaic profile's 30 epochs, 3 s at 10 Hz).
+
+A run takes 0.2-0.6 s (about 70 s of flight, 16 satellites fused an epoch at 10 Hz, ~9 capped out, and the truth's
+quorum beside it); an events file 7-10 s; the whole grid (384 events files, 6912 runs in three arms) about 20
+minutes on 8 workers of a loaded machine. The events are deterministic (per flight the receiver's draws, per flight
+and pattern the fault's: the same bytes on a re-run), and so is a run (its CSV and events JSON byte-identical).
+
+Checked (2026-10-17, gnss-attitude-study `v9-mosaic-filter-plan/evidence/grid-b/r2/main/tables.md`, the antenna
+0.3 m up the nose; `r2/lever0` with it on the IMU): no stop or non-finite row in any of the 6912 runs. No fault:
+pad attitude p90 0.15 deg at magnetometer 0; the quorum on the truth calls 0.18-0.30 s after the true apogee (the GPS
+voter at 20 Hz), and the filter's call is within -8..+48 ms of it. G4 fails as worded and per magnetometer arm. G5
+fails with the guard as assumed (an 8 m/s coherent ramp, under the guard's 10 m/s, calls 0.39-0.46 s early at a
+true 3.8-4.4 m/s in every run; the 12 m/s ramp in the 6 runs of one F52C trajectory and the 15 m/s ramps in one run
+too) and as built (every slow ramp calls 0.49-1.20 s early, at a true 4.8-11.7 m/s). The guard latches in every run
+the truth says it should (190, the slow ramps), in no no-fault run, and on a correct filter -- the truth itself --
+in every run with the static port lagging 0.7 s or more, the call then 1.8-2.4 s after the true apogee instead of
+0.2-0.35 s. With the antenna on the IMU (`sim_tables.py r2/main --against r2/lever0`) the no-fault runs at
+magnetometer 0 hold descent p90 0.70 deg median (1.12 worst) against 2.10 (6.56), the drogue's first 3 s 1.00
+(1.57) against 7.84 (41.8), and the filter's velocity vote moves from 15 ms before the truth's to with it. The
+Doppler's refusal count (`r2/exp_reject_persist_rr{3,10,255}`, `--harness-args "--reject-persist-rr N"`, settling,
+stale-satellite and coherent patterns at magnetometer 0): 255 (never let back) flies as the profile's 30; 3 and 10
+make settle40's worst coast excess over the twin 41-43 deg against 28.5.
 
 ## The Beetle's bit-identity check (`bitident.sh`, `../m1_identity.sh`)
 
