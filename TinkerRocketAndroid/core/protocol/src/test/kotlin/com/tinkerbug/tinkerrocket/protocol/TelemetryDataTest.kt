@@ -571,13 +571,29 @@ class TelemetryDataTest {
             FcBootStep.GNSS to "Starting GNSS",
             FcBootStep.SERVOS to "Starting servos",
             FcBootStep.COMPLETE to "Flight computer ready",
+            FcBootStep.RESCUE to "Rescue mode — ready for a firmware update",
         )
         for ((step, label) in expected) {
             assertEquals(label, step.label)
             assertEquals(label, decodeOk("""{"bs":${step.raw}}""").fcBootStatusLine())
         }
         assertEquals(expected.size, FcBootStep.entries.size)
-        assertEquals(expected.size, FcBootStep.STEP_COUNT, "FCB_STEP_COUNT")
+        // FCB_STEP_COUNT counts the progress steps; RESCUE is a state outside
+        // that range (FCB_RESCUE = 64 in RocketComputerTypes.h).
+        assertEquals(expected.size - 1, FcBootStep.STEP_COUNT, "FCB_STEP_COUNT")
+        assertEquals(64, FcBootStep.RESCUE.raw, "FCB_RESCUE")
+    }
+
+    @Test
+    fun `rescue mode is named and never stalls`() {
+        // It stays put by design: "no progress for 300s" would read as "keep
+        // waiting", the opposite of what the operator should do.
+        val t = decodeOk("""{"st":"INITIALIZATION","bs":64,"bt":412}""")
+        assertEquals(FcBootStep.RESCUE, t.fcBootStep)
+        assertTrue(t.fcRescue)
+        assertFalse(t.fcBootStalled(3600))
+        assertEquals("Rescue mode — ready for a firmware update", t.fcBootStatusLine(3600))
+        assertFalse(decodeOk("""{"st":"INITIALIZATION","bs":2,"bt":199}""").fcRescue)
     }
 
     @Test

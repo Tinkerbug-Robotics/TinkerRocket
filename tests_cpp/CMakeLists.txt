@@ -1949,6 +1949,21 @@ target_include_directories(test_fc_ota_session_policy PRIVATE
 target_link_libraries(test_fc_ota_session_policy GTest::gtest_main)
 gtest_discover_tests(test_fc_ota_session_policy)
 
+# ---------- test_fc_rescue_policy ----------
+# Rescue mode: an FC whose setup_fc() stalls or crash-loops comes up serving
+# only the OTA relay, so the OC can still deliver an image. Which boots count,
+# what clears them, the setup watchdog, and the rule that rescue mode is never
+# entered while the OC could hand back a flight to resume. Pure header in the
+# FC project; includes fc_ota_session_policy.h for the validation-window check.
+add_executable(test_fc_rescue_policy test_fc_rescue_policy.cpp)
+target_include_directories(test_fc_rescue_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/flight_computer/main
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_fc_rescue_policy GTest::gtest_main)
+gtest_discover_tests(test_fc_rescue_policy)
+
 # ---------- test_cmd_queue_admit_policy (#1116) ----------
 # The OC half: the relay queue holds two slots back for OTA_FINISH_CMD /
 # OTA_ABORT_CMD, the FC's only way out of image mode, so a queue full of a

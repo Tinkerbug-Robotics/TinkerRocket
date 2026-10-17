@@ -1766,6 +1766,13 @@ enum FcBootStep : uint8_t
     FCB_SERVOS     = 4,  // servo init + neutral settle
     FCB_COMPLETE   = 5,  // setup_fc done; the state machine takes over
     FCB_STEP_COUNT = 6,
+    // Not a progress step, so it sits outside 0..FCB_STEP_COUNT and a progress
+    // bar never reads it as "past complete". setup_fc stopped after the links
+    // and the FC serves the OTA relay and nothing else, until an update lands
+    // or the rail is power-cycled (flight_computer fc_rescue_policy.h). The FC
+    // repeats it every 500 ms and never sends NonSensorData in this mode, so
+    // the OC keeps forwarding it as "bs" for as long as the mode lasts.
+    FCB_RESCUE     = 64,
 };
 
 // Degraded bits.  Set means "this step finished, but not fully" — boot did NOT

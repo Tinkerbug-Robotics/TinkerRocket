@@ -98,11 +98,26 @@ class BLEFleet: NSObject, ObservableObject {
     /// instance is returned across reconnects for the same peripheral.
     @MainActor
     func otaSession(for device: BLEDevice) -> OTASession {
-        let id = device.peripheral?.identifier ?? UUID()  // transient if no peripheral yet
+        let id = device.peripheralID ?? UUID()  // transient if no peripheral yet
         if let existing = otaSessions[id] { return existing }
         let session = OTASession(fleet: self, peripheralID: id)
         otaSessions[id] = session
         return session
+    }
+
+    /// The instance the fleet holds NOW for `device`'s peripheral.
+    ///
+    /// A screen keeps the BLEDevice it was opened with, and the fleet replaces
+    /// that object on every disconnect/reconnect. After a reboot (the one an
+    /// out-computer OTA causes, for example) the kept object is a dead copy:
+    /// `isConnected` stays false for good and its identity fields stop at the
+    /// drop. Resolving by peripheral, the key `otaSessions` and `bsFocus`
+    /// already use, follows the link across that swap. Between the drop and
+    /// the reconnect there is no live instance, and the kept one, disconnected,
+    /// is the honest answer.
+    func liveDevice(for device: BLEDevice) -> BLEDevice {
+        guard let id = device.peripheralID else { return device }
+        return devices.first { $0.peripheralID == id } ?? device
     }
 
     /// Convenience: the active device, or nil.

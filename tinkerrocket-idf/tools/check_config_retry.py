@@ -36,9 +36,12 @@ too, so neither list can outlive the reason it gives.
 
 LIMITS. The check is textual and covers this one file. It sees the if/else
 around each call, attributes the call to the nearest preceding
-`if (out_pending_command == X`, and fails on any call it cannot parse that way
-rather than guessing. A retry hidden in a helper called from the else is not
-seen, and none exists today. The single-MCU rocket_computer_mini is not
+`if (out_pending_command == X` in the same function, and fails on any call it
+cannot parse that way rather than guessing. A handler that lives in a function
+of its own (the OTA commands, which rescue mode serves through the same
+functions) is attributed to the one dispatch branch whose whole body calls it,
+`if (out_pending_command == X) { fn(); }`. A retry hidden in a helper called
+from the else is not seen, and none exists today. The single-MCU rocket_computer_mini is not
 scanned: its command queue is exactly-once and has no dedup key. The M1 mini's
 flight computer builds this same file.
 
@@ -80,6 +83,12 @@ CALL_RE = re.compile(r"\breadConfigFrame\s*\(")
 IF_OPEN_RE = re.compile(r"\bif\s*\(\s*$")
 HANDLER_RE = re.compile(r"\bif\s*\(\s*out_pending_command\s*==\s*([A-Z][A-Z0-9_]*)")
 RETRY_RE = re.compile(r"\bcfgRetryOnNextPoll\s*\(")
+# A function definition at column 0: `static void fcOtaHandleBegin()` + `{`.
+FUNC_RE = re.compile(
+    r"^(?:static\s+)?(?:inline\s+)?(?:IRAM_ATTR\s+)?[A-Za-z_][\w:<>]*[\s*&]+"
+    r"(\w+)\s*\([^;{}]*\)\s*\{",
+    re.M,
+)
 
 
 def strip_code(src: str) -> str:
@@ -139,6 +148,32 @@ def line_of(code: str, offset: int) -> int:
     return code.count("\n", 0, offset) + 1
 
 
+def enclosing_function(code: str, offset: int):
+    """(name, start) of the column-0 function whose body holds `offset`, or
+    None (a call in loop_fc(), whose definition sits behind an #if, is in no
+    function this regex sees, which is fine: its branches are inline)."""
+    last = None
+    for f in FUNC_RE.finditer(code, 0, offset):
+        last = f
+    if last is None:
+        return None
+    body_close = matching(code, last.end() - 1)
+    if body_close < offset:
+        return None
+    return last.group(1), last.start()
+
+
+def dispatching_command(code: str, fn: str) -> str:
+    """The command of the one dispatch branch whose whole body is `fn();`."""
+    calls = re.findall(
+        r"\bif\s*\(\s*out_pending_command\s*==\s*([A-Z][A-Z0-9_]*)\s*\)\s*\{\s*"
+        + re.escape(fn)
+        + r"\s*\(\s*\)\s*;\s*\}",
+        code,
+    )
+    return calls[0] if len(calls) == 1 else "?"
+
+
 def scan(code: str):
     """Yield (handler, line, retries, problem) for each readConfigFrame call.
     `problem` is set when the call's shape could not be parsed."""
@@ -146,8 +181,13 @@ def scan(code: str):
         line = line_of(code, m.start())
         if re.search(r"\bbool\s*$", code[: m.start()]):
             continue  # the definition
-        handlers = HANDLER_RE.findall(code, 0, m.start())
-        handler = handlers[-1] if handlers else "?"
+        handlers = list(HANDLER_RE.finditer(code, 0, m.start()))
+        handler = handlers[-1].group(1) if handlers else "?"
+        fn = enclosing_function(code, m.start())
+        if fn is not None and (not handlers or handlers[-1].start() < fn[1]):
+            # The handler is a function of its own: no dispatch branch opens
+            # inside it. Attribute the call to the branch that calls it.
+            handler = dispatching_command(code, fn[0])
         if_open = IF_OPEN_RE.search(code, 0, m.start())
         if not if_open:
             yield handler, line, False, "not the `if (readConfigFrame(...))` shape"

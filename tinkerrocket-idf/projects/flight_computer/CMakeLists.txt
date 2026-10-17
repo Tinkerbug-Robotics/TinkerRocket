@@ -71,6 +71,16 @@ if(TR_I2S_TX_MONITOR)
     add_compile_definitions(TR_I2S_TX_MONITOR=1)
     message(STATUS "TR_I2S_TX_MONITOR=1 -- I2S TX monitor ENABLED (bench)")
 endif()
+# Bench only: make setup_fc() fail at the sensor step, to exercise the setup
+# watchdog and rescue mode (main/fc_rescue_policy.h) on a board. 1 = park there
+# forever (a stall: restarts into rescue mode after the setup watchdog), 2 =
+# abort() there (a crash loop: rescue mode after three boots). Flash it over
+# USB: an image delivered over the air rolls back on its first restart, which
+# tests the rollback instead. Never set for flight.
+if(TR_TEST_SETUP_FAIL)
+    add_compile_definitions(TR_TEST_SETUP_FAIL=${TR_TEST_SETUP_FAIL})
+    message(WARNING "TR_TEST_SETUP_FAIL=${TR_TEST_SETUP_FAIL} -- setup_fc() fails ON PURPOSE (bench rescue-mode test image)")
+endif()
 # #1600 phase 4: the raw-GNSS shadow filter runs wherever the LC86G driver does
 # (main/config.h). -DTR_RAW_GNSS_SHADOW=0 builds an LC86G image without it, for
 # a bench A/B of what it costs on core 0.

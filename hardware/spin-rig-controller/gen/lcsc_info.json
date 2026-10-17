@@ -1,0 +1,471 @@
+{
+ "B2P-VH(LF)(SN)": {
+  "lcsc": "C160315",
+  "type": "expand",
+  "unit": 0.0624,
+  "qty": 3,
+  "stock": 274300
+ },
+ "NCE60P50K": {
+  "lcsc": "C19626227",
+  "type": "expand",
+  "unit": 0.62,
+  "qty": 1,
+  "stock": 7288
+ },
+ "0402WGF4702TCE": {
+  "lcsc": "C25792",
+  "type": "base",
+  "unit": 0.0026,
+  "qty": 1,
+  "stock": 5021585
+ },
+ "BZT52C12": {
+  "lcsc": "C173429",
+  "type": "expand",
+  "unit": 0.0162,
+  "qty": 1,
+  "stock": 331597
+ },
+ "SMCJ30A": {
+  "lcsc": "C224048",
+  "type": "expand",
+  "unit": 0.2966,
+  "qty": 1,
+  "stock": 17761
+ },
+ "RVT1H101M0810": {
+  "lcsc": "C72480",
+  "type": "expand",
+  "unit": 0.0562,
+  "qty": 1,
+  "stock": 93461
+ },
+ "GRM32ER71H475KA88L": {
+  "lcsc": "C86052",
+  "type": "expand",
+  "unit": 0.1563,
+  "qty": 5,
+  "stock": 44644
+ },
+ "PA0805FRF870R002L": {
+  "lcsc": "C5823973",
+  "type": "expand",
+  "unit": 0.1156,
+  "qty": 1,
+  "stock": 3716
+ },
+ "INA238AIDGSR": {
+  "lcsc": "C2868250",
+  "type": "expand",
+  "unit": 8.0168,
+  "qty": 1,
+  "stock": 448
+ },
+ "CL05B104KO5NNNC": {
+  "lcsc": "C1525",
+  "type": "base",
+  "unit": 0.0039,
+  "qty": 13,
+  "stock": 24909450
+ },
+ "0402WGF1002TCE": {
+  "lcsc": "C25744",
+  "type": "base",
+  "unit": 0.0016,
+  "qty": 16,
+  "stock": 20942085
+ },
+ "0402WGF2003TCE": {
+  "lcsc": "C25764",
+  "type": "base",
+  "unit": 0.0018,
+  "qty": 2,
+  "stock": 2134610
+ },
+ "0402WGF1004TCE": {
+  "lcsc": "C26083",
+  "type": "base",
+  "unit": 0.0024,
+  "qty": 3,
+  "stock": 1964626
+ },
+ "0402B102K500NT": {
+  "lcsc": "C1523",
+  "type": "base",
+  "unit": 0.0038,
+  "qty": 3,
+  "stock": 3038604
+ },
+ "TLV3011AIDBVR": {
+  "lcsc": "C2870632",
+  "type": "expand",
+  "unit": 1.8762,
+  "qty": 1,
+  "stock": 7649
+ },
+ "0402WGF4701TCE": {
+  "lcsc": "C25900",
+  "type": "base",
+  "unit": 0.0022,
+  "qty": 6,
+  "stock": 15781028
+ },
+ "UCC27517DBVR": {
+  "lcsc": "C99395",
+  "type": "expand",
+  "unit": 0.3211,
+  "qty": 1,
+  "stock": 44389
+ },
+ "CL05A105KA5NQNC": {
+  "lcsc": "C52923",
+  "type": "base",
+  "unit": 0.0068,
+  "qty": 6,
+  "stock": 9440475
+ },
+ "0402WGF100JTCE": {
+  "lcsc": "C25077",
+  "type": "base",
+  "unit": 0.0013,
+  "qty": 1,
+  "stock": 3927572
+ },
+ "0402WGF1003TCE": {
+  "lcsc": "C25741",
+  "type": "base",
+  "unit": 0.0016,
+  "qty": 3,
+  "stock": 9484307
+ },
+ "AO4264E": {
+  "lcsc": "C334232",
+  "type": "expand",
+  "unit": 0.3043,
+  "qty": 1,
+  "stock": 11031
+ },
+ "B560C-13-F": {
+  "lcsc": "C85100",
+  "type": "expand",
+  "unit": 0.1932,
+  "qty": 2,
+  "stock": 147138
+ },
+ "0402WGF1001TCE": {
+  "lcsc": "C11702",
+  "type": "base",
+  "unit": 0.0035,
+  "qty": 7,
+  "stock": 14042645
+ },
+ "KT-0603R": {
+  "lcsc": "C2286",
+  "type": "base",
+  "unit": 0.0076,
+  "qty": 4,
+  "stock": 7727892
+ },
+ "0402WGF2002TCE": {
+  "lcsc": "C25765",
+  "type": "base",
+  "unit": 0.0013,
+  "qty": 1,
+  "stock": 2484690
+ },
+ "0466002.NRHF": {
+  "lcsc": "C3105",
+  "type": "expand",
+  "unit": 0.0731,
+  "qty": 1,
+  "stock": 31072
+ },
+ "TPS54560BDDAR": {
+  "lcsc": "C1850354",
+  "type": "expand",
+  "unit": 1.0229,
+  "qty": 1,
+  "stock": 87711
+ },
+ "CL05B104KB54PNC": {
+  "lcsc": "C307331",
+  "type": "base",
+  "unit": 0.0099,
+  "qty": 1,
+  "stock": 24373076
+ },
+ "0402WGF3302TCE": {
+  "lcsc": "C25779",
+  "type": "base",
+  "unit": 0.0058,
+  "qty": 2,
+  "stock": 1059537
+ },
+ "MWSA1004S-6R8MT": {
+  "lcsc": "C408485",
+  "type": "expand",
+  "unit": 0.2534,
+  "qty": 1,
+  "stock": 2482
+ },
+ "0402WGF1502TCE": {
+  "lcsc": "C25756",
+  "type": "base",
+  "unit": 0.001,
+  "qty": 1,
+  "stock": 2033561
+ },
+ "0402B472K500NT": {
+  "lcsc": "C1538",
+  "type": "base",
+  "unit": 0.0038,
+  "qty": 1,
+  "stock": 1194344
+ },
+ "0402CG470J500NT": {
+  "lcsc": "C1567",
+  "type": "base",
+  "unit": 0.0081,
+  "qty": 1,
+  "stock": 594156
+ },
+ "0402WGF5101TCE": {
+  "lcsc": "C25905",
+  "type": "base",
+  "unit": 0.0023,
+  "qty": 3,
+  "stock": 5141789
+ },
+ "GRM32ER61C476KE15L": {
+  "lcsc": "C77101",
+  "type": "expand",
+  "unit": 0.21,
+  "qty": 3,
+  "stock": 104445
+ },
+ "0402WGF2201TCE": {
+  "lcsc": "C25879",
+  "type": "base",
+  "unit": 0.0011,
+  "qty": 1,
+  "stock": 2140136
+ },
+ "SMD1206P150TF": {
+  "lcsc": "C46970782",
+  "type": "expand",
+  "unit": 0.1271,
+  "qty": 1,
+  "stock": 6776
+ },
+ "B2B-PH-SM4-TB(LF)(SN)": {
+  "lcsc": "C160352",
+  "type": "expand",
+  "unit": 0.2046,
+  "qty": 1,
+  "stock": 87635
+ },
+ "0466004.NRHF": {
+  "lcsc": "C187596",
+  "type": "expand",
+  "unit": 0.0895,
+  "qty": 1,
+  "stock": 4046
+ },
+ "B5819WS": {
+  "lcsc": "C22624",
+  "type": "expand",
+  "unit": 0.027,
+  "qty": 2,
+  "stock": 502028
+ },
+ "AP2112K-3.3TRG1": {
+  "lcsc": "C22365427",
+  "type": "expand",
+  "unit": 0.0793,
+  "qty": 1,
+  "stock": 44733
+ },
+ "CL05A106MQ5NUNC": {
+  "lcsc": "C15525",
+  "type": "base",
+  "unit": 0.0257,
+  "qty": 3,
+  "stock": 10476615
+ },
+ "ESP32-S3FN8": {
+  "lcsc": "C2913196",
+  "type": "expand",
+  "unit": 3.3379,
+  "qty": 1,
+  "stock": 1964
+ },
+ "ECS-400-10-37B2-CKY-TR": {
+  "lcsc": "C5357833",
+  "type": "expand",
+  "unit": 0.6722,
+  "qty": 1,
+  "stock": 263
+ },
+ "LQW15AN24NH00D": {
+  "lcsc": "C913699",
+  "type": "expand",
+  "unit": 0.1177,
+  "qty": 1,
+  "stock": 3869
+ },
+ "0402CG120J500NT": {
+  "lcsc": "C1547",
+  "type": "base",
+  "unit": 0.0034,
+  "qty": 2,
+  "stock": 1698566
+ },
+ "CL05B103KB5NNNC": {
+  "lcsc": "C15195",
+  "type": "base",
+  "unit": 0.0041,
+  "qty": 1,
+  "stock": 6255317
+ },
+ "TS-1187A-B-A-B": {
+  "lcsc": "C318884",
+  "type": "base",
+  "unit": 0.0206,
+  "qty": 2,
+  "stock": 298396
+ },
+ "USB4110-GF-A": {
+  "lcsc": "C5143397",
+  "type": "expand",
+  "unit": 1.4814,
+  "qty": 1,
+  "stock": 4586
+ },
+ "SP0503BAHTG": {
+  "lcsc": "C3040626",
+  "type": "expand",
+  "unit": 0.1032,
+  "qty": 1,
+  "stock": 57379
+ },
+ "0402WGF220JTCE": {
+  "lcsc": "C25092",
+  "type": "base",
+  "unit": 0.0011,
+  "qty": 2,
+  "stock": 4011633
+ },
+ "PZ254V-11-05P": {
+  "lcsc": "C492404",
+  "type": "expand",
+  "unit": 0.0353,
+  "qty": 1,
+  "stock": 178728
+ },
+ "0402WGF1000TCE": {
+  "lcsc": "C25076",
+  "type": "base",
+  "unit": 0.0012,
+  "qty": 6,
+  "stock": 8114998
+ },
+ "BM04B-SRSS-TB(LF)(SN)": {
+  "lcsc": "C160390",
+  "type": "expand",
+  "unit": 0.2539,
+  "qty": 1,
+  "stock": 36842
+ },
+ "KT-0603W": {
+  "lcsc": "C2290",
+  "type": "base",
+  "unit": 0.0122,
+  "qty": 1,
+  "stock": 1791476
+ },
+ "SN74ACT244PWR": {
+  "lcsc": "C6930",
+  "type": "expand",
+  "unit": 0.2213,
+  "qty": 1,
+  "stock": 95016
+ },
+ "0402WGF330JTCE": {
+  "lcsc": "C25105",
+  "type": "base",
+  "unit": 0.0012,
+  "qty": 3,
+  "stock": 1367362
+ },
+ "B10B-PH-SM4-TB(LF)(SN)": {
+  "lcsc": "C264997",
+  "type": "expand",
+  "unit": 0.7978,
+  "qty": 1,
+  "stock": 1219
+ },
+ "AM26LV32EIDR": {
+  "lcsc": "C527448",
+  "type": "expand",
+  "unit": 0.7423,
+  "qty": 1,
+  "stock": 40838
+ },
+ "B8B-PH-SM4-TB(LF)(SN)": {
+  "lcsc": "C495548",
+  "type": "expand",
+  "unit": 0.6233,
+  "qty": 1,
+  "stock": 2435
+ },
+ "0402WGF0000TCE": {
+  "lcsc": "C17168",
+  "type": "base",
+  "unit": 0.0011,
+  "qty": 1,
+  "stock": 8943172
+ },
+ "B4B-PH-SM4-TB(LF)(SN)": {
+  "lcsc": "C160354",
+  "type": "expand",
+  "unit": 0.2707,
+  "qty": 1,
+  "stock": 39721
+ },
+ "0402WGF3300TCE": {
+  "lcsc": "C25104",
+  "type": "base",
+  "unit": 0.0012,
+  "qty": 1,
+  "stock": 1317149
+ },
+ "0402CG101J500NT": {
+  "lcsc": "C1546",
+  "type": "base",
+  "unit": 0.0033,
+  "qty": 1,
+  "stock": 3864826
+ },
+ "SN74LVC1G17DBVR": {
+  "lcsc": "C49365816",
+  "type": "expand",
+  "unit": 0.0421,
+  "qty": 1,
+  "stock": 57907
+ },
+ "SN74LVC2G125DCTR": {
+  "lcsc": "C206035",
+  "type": "expand",
+  "unit": 0.5188,
+  "qty": 1,
+  "stock": 6391
+ },
+ "B3B-PH-SM4-TB(LF)(SN)": {
+  "lcsc": "C160353",
+  "type": "expand",
+  "unit": 0.2519,
+  "qty": 1,
+  "stock": 10279
+ }
+}

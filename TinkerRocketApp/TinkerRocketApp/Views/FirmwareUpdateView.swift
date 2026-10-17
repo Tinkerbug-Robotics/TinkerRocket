@@ -14,7 +14,9 @@ import UniformTypeIdentifiers
 import CryptoKit
 
 struct FirmwareUpdateView: View {
-    @ObservedObject var device: BLEDevice
+    /// The device the screen was opened on. Only its peripheral is used; the
+    /// screen itself runs on the fleet's live instance (see body).
+    let device: BLEDevice
     @EnvironmentObject var fleet: BLEFleet
 
     /// OTASession lives on BLEFleet (not BLEDevice) because BLEFleet
@@ -23,12 +25,22 @@ struct FirmwareUpdateView: View {
     /// lastValidRocketFixes. The fleet returns the same session instance
     /// for this peripheral across reconnects, so the .verified result
     /// survives the view being torn down + re-shown. See #15 second pass.
+    ///
+    /// The device is re-resolved for the same reason. Settings hands in the
+    /// instance it was opened with, and an out-computer flash reboots the OC,
+    /// so that instance goes dead mid-screen. Held directly, it kept the Flash
+    /// button disabled (`isConnected` false for good) for the FC flash that
+    /// follows, until the operator left Settings and came back (2026-10-16).
     var body: some View {
-        FirmwareUpdateContent(device: device, session: fleet.otaSession(for: device))
+        let live = fleet.liveDevice(for: device)
+        FirmwareUpdateContent(device: live, session: fleet.otaSession(for: live))
     }
 }
 
 private struct FirmwareUpdateContent: View {
+    /// The fleet's live instance, swapped in by FirmwareUpdateView after a
+    /// reconnect. The @State below (picked file, target, verdict) survives
+    /// the swap; only what is read off the device changes.
     @ObservedObject var device: BLEDevice
     @ObservedObject var session: OTASession
     @State private var showingFilePicker = false
