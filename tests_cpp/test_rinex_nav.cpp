@@ -8,7 +8,8 @@
 // record a broadcast file carries for it and must come back to 1 cm of
 // satellite position and 1 ns of clock, with the same issue, week, health
 // and times. Then what is left out (Galileo F/NAV, BeiDou GEO, other
-// systems), the Galileo health marks, the dates, the availability times.
+// systems), the Galileo health marks, the dates, the availability times (the
+// rule a preloaded SBF nav block is filed by too).
 // With TR_SBF_PRIVATE_CAPTURE (the 10/16 V9 captures) and TR_RINEX_NAV (the
 // day-289 broadcast file) set, every navigation block of the captures is
 // compared with the RINEX record of the same issue: statistics only.
@@ -333,6 +334,9 @@ TEST(RinexNav, DatesWeeksAndAvailability)
             EXPECT_EQ(r.toe_gps_s, toe + 14.0);
             EXPECT_EQ(r.avail_gps_s, toe + 14.0 + 18.0);
         }
+        // the same rule from the ephemeris alone: what a preloaded SBF nav block is filed by
+        EXPECT_EQ(rinex::toeGpsS(r.eph), r.toe_gps_s);
+        EXPECT_EQ(rinex::availGpsS(r.eph), r.avail_gps_s);
     }
 }
 

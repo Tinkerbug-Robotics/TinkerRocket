@@ -163,7 +163,9 @@ struct Args
     double tight_g = 2.0, gate_chi2 = 0.0;
     // a boost dropout, synthesized: every epoch whose GPS time falls in [cut_from_s, cut_to_s) of flight time is
     // dropped; and one epoch (the one nearest corrupt_at_s) corrupted like c30's T+1: on 3 of its satellites the
-    // range rate off by 30..70 m/s and the pseudorange by 20..40 m, signs and satellites drawn from corrupt_seed
+    // range rate off by 30..70 m/s and the pseudorange by 20..40 m, signs and satellites drawn from corrupt_seed.
+    // Flight time is the epoch's GPS time of week less truth_t0_tow (the rig scenario's), or, on a mosaic or cold
+    // start replay without --truth-t0-tow, its MCU time plus t_base_s (the CSV's t_s)
     double cut_from_s = 1.0e9, cut_to_s = 1.0e9;
     // the relock rule: before the flight computer's apogee call, a satellite whose lock time (MSM7's) is under
     // this many ms gives no range rate -- a relocked loop's Doppler settles over a second or two
@@ -219,6 +221,14 @@ struct Args
     double seed_heading_deg = 0.0;   // the cold start's heading guess (config::PAD_HEADING_DEG)
     int sat_cap = -1;                // TR_BENCH_RAW_SAT_CAP: the stage's satellites an epoch (-1: the profile's)
     double fuse_ms = -1.0;           // TR_BENCH_RAW_FUSE_MS: the fused epochs' period (-1: the profile's)
+    std::string flight_state;        // the launch and landing: "log" (the ticks' flags), "quorum" (the quorum's own
+                                     //   state machine); default the ticks', the quorum's where META state_machine none
+    bool time_tag_from_boot = false; // the mosaic's time tag as after a boot: untimed until the log's first
+                                     //   ReceiverTime says FINETIME and its first K line (a 1PPS pairing)
+    bool assume_finetime = false;    // a log with no ReceiverTime at all: its epochs timed as FINETIME
+    int pad_zupt = -1;               // RawGnssShadow::Config::pad_zupt (-1: the firmware's, on)
+    double gnss_only_from_s = 1.0e9; // a static log scored on GNSS: from this flight time on the ground, no pad ZUPT
+                                     //   and no levelling (the IMU, GNSS and the barometer alone, as in flight)
     std::set<std::string> given;     // the options on the command line
 };
 
@@ -245,7 +255,8 @@ void usage()
                  "  [--truth-t0-tow X]\n"
                  "  the mosaic-G5 (a RAW_REPLAY_MOSAIC build): [--receiver lc86g|mosaic] [--cold-start] [--unaided]\n"
                  "  [--rinex FILE]... [--quorum] [--vote-guard 0|1] [--loop-hz X] [--seed-heading-deg X]\n"
-                 "  [--sat-cap N] [--fuse-ms X]\n");
+                 "  [--sat-cap N] [--fuse-ms X] [--flight-state log|quorum] [--time-tag-from-boot]\n"
+                 "  [--assume-finetime] [--pad-zupt 0|1] [--gnss-only-from-s X]\n");
 }
 
 bool parseArgs(int argc, char** argv, Args& a)
@@ -337,6 +348,11 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--seed-heading-deg") a.seed_heading_deg = std::atof(val());
         else if (k == "--sat-cap") a.sat_cap = std::atoi(val());
         else if (k == "--fuse-ms") a.fuse_ms = std::atof(val());
+        else if (k == "--flight-state") a.flight_state = val();
+        else if (k == "--time-tag-from-boot") a.time_tag_from_boot = true;
+        else if (k == "--assume-finetime") a.assume_finetime = true;
+        else if (k == "--pad-zupt") a.pad_zupt = std::atoi(val());
+        else if (k == "--gnss-only-from-s") a.gnss_only_from_s = std::atof(val());
         else if (k == "--acc-sub")
         {
             if (std::sscanf(val(), "%lf,%lf,%lf", &a.acc_sub[0], &a.acc_sub[1], &a.acc_sub[2]) != 3)
@@ -495,9 +511,12 @@ bool readInput(const std::string& path, Input& in)
             }
             else if (e.kind == 'R')
             {
-                std::string h;
+                std::string h, mark;
                 ss >> h;
                 e.bytes = unhex(h);
+                // extract.py --sbf: a navigation block put at the start (preloaded), filed when a receiver has it
+                if (ss >> mark && mark == "preload")
+                    e.flags = 1;
             }
             else if (e.kind == 'V')
             {
@@ -1304,11 +1323,18 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "--receiver is lc86g or mosaic, not %s\n", a.receiver.c_str());
         return 2;
     }
+    if (!a.flight_state.empty() && a.flight_state != "log" && a.flight_state != "quorum")
+    {
+        std::fprintf(stderr, "--flight-state is log or quorum, not %s\n", a.flight_state.c_str());
+        return 2;
+    }
 #if !RAW_REPLAY_MOSAIC
-    if (mosaic || a.cold_start || a.unaided || !a.rinex.empty() || a.quorum || a.sat_cap >= 0 || a.fuse_ms > 0.0)
+    if (mosaic || a.cold_start || a.unaided || !a.rinex.empty() || a.quorum || a.sat_cap >= 0 || a.fuse_ms > 0.0 ||
+        a.flight_state == "quorum" || a.time_tag_from_boot || a.assume_finetime)
     {
         std::fprintf(stderr, "this build has no mosaic-G5 path (RAW_REPLAY_MOSAIC=OFF): --receiver mosaic, "
-                             "--cold-start, --unaided, --rinex, --quorum, --sat-cap and --fuse-ms need it\n");
+                             "--cold-start, --unaided, --rinex, --quorum, --sat-cap, --fuse-ms, --flight-state "
+                             "quorum, --time-tag-from-boot and --assume-finetime need it\n");
         return 2;
     }
 #endif
@@ -1407,6 +1433,15 @@ int main(int argc, char** argv)
 #endif
     if (a.max_epoch_age_s > 0.0)
         cfg.max_epoch_age_s = a.max_epoch_age_s;
+#if !RAW_REPLAY_OLD
+    // the pad's zero-velocity updates off (the pad ZUPT holds a static log's velocity to millimetres a second
+    // whatever the receiver gives; the levelling stays: --gnss-only-from-s stops both)
+    if (a.pad_zupt >= 0)
+        cfg.pad_zupt = a.pad_zupt != 0;
+#else
+    if (a.pad_zupt >= 0 || a.gnss_only_from_s < 1.0e8)
+        std::fprintf(stderr, "WARNING: this build is the old code: --pad-zupt and --gnss-only-from-s are ignored\n");
+#endif
 #if RAW_REPLAY_FITGATE
     if (a.rr_fit_gate >= 0.0)
         cfg.ekf.rr_fit_gate = a.rr_fit_gate;
@@ -1546,19 +1581,72 @@ int main(int argc, char** argv)
             k = k1;
         }
     };
+    // ---- the nav blocks extract.py put at the start (R ... preload): the log begins long after the receiver did,
+    // and it sends an issue only when it changes. Each is filed by the rule a RINEX record is (rinex::availGpsS:
+    // when a receiver first has that issue), so one the receiver decoded later in the log (a later Galileo batch, a
+    // new GPS upload) reaches the stage no earlier than it could have; its own line, where it was logged, files it
+    // there as well
+    struct PreNav
+    {
+        gps_eph_t eph;
+        double avail_gps_s;
+    };
+    std::vector<PreNav> nav_pre;
+    size_t nav_pre_next = 0, nav_pre_sorted = 0;
+    int eph_pre = 0, eph_pre_filed = 0;
+    auto preFeed = [&](double gps_s) {
+        if (nav_pre_sorted != nav_pre.size())
+        {
+            std::stable_sort(nav_pre.begin() + static_cast<long>(nav_pre_next), nav_pre.end(),
+                             [](const PreNav& x, const PreNav& y) { return x.avail_gps_s < y.avail_gps_s; });
+            nav_pre_sorted = nav_pre.size();
+        }
+        for (; nav_pre_next < nav_pre.size() && nav_pre[nav_pre_next].avail_gps_s <= gps_s; ++nav_pre_next)
+            if (stage.addEphemeris(nav_pre[nav_pre_next].eph))
+                eph_pre_filed++;
+    };
+    // ---- the driver's time tag (rawTimeTagOk, mosaic_feed.h TimeTagGate): the clock line valid, FINETIME, a 1PPS
+    // edge paired within 120 s (each pairing moves the line: a K line). Before the log's first ReceiverTime and K
+    // line those first ones stand for the earlier (--time-tag-from-boot: nothing before them); a log with no
+    // ReceiverTime at all is untimed (--assume-finetime: timed)
+    rr::TimeTagGate tag_gate;
+    tag_gate.from_boot = a.time_tag_from_boot;
+    tag_gate.assume_finetime = a.assume_finetime;
+    for (const Event& e : in.ev)
+    {
+        mosaic::SbfHeader h;
+        mosaic::ReceiverTime rt;
+        if (e.kind == 'R' && e.bytes.size() >= 8 && e.bytes[0] == '$' && e.bytes[1] == '@' &&
+            mosaic::sbfHeader(e.bytes.data(), e.bytes.size(), h) && h.number == mosaic::SBF_RECEIVER_TIME &&
+            mosaic::decodeReceiverTime(e.bytes.data(), e.bytes.size(), rt))
+        {
+            tag_gate.first_rt = (rt.sync_level & 0x04) ? 1 : 0;
+            break;
+        }
+    }
+    const int first_rt = tag_gate.first_rt;
+    int untimed_not_fine = 0, untimed_pps_stale = 0, untimed_no_line = 0;
     // ---- the flight loop's view (RawNavAdapter) and its apogee quorum (flight_votes.h)
     std::unique_ptr<gnss_raw::ShadowLink> linkp(new gnss_raw::ShadowLink());
     std::unique_ptr<RawNavAdapter> adapterp(new RawNavAdapter());
     RawNavAdapter& nav_adapter = *adapterp;
     nav_adapter.attach(linkp.get());
-    const bool use_votes = mosaic || a.quorum;
+    // the flight's state (launch, landing): the IMU ticks' flags, a log's own state machine -- or, for an events
+    // file with none behind it (a sim: META state_machine none) or --flight-state quorum, the quorum's own
+    // (enterInflight on its launch flag, LANDED by landing_transition), which needs the quorum
+    const bool state_from_quorum =
+        a.flight_state == "quorum" ||
+        (a.flight_state.empty() && in.meta.count("state_machine") && in.meta["state_machine"] == "none");
+    const bool use_votes = mosaic || a.quorum || state_from_quorum;
     rr::FlightVotes::Config vcfg;
+    vcfg.state_from_quorum = state_from_quorum;
     vcfg.gate_ekf_valid = !mosaic;   // the mosaic build admits GNSS against the barometer only (ga.ekf_valid false)
     vcfg.guard = a.vote_guard >= 0 ? a.vote_guard != 0 : mosaic;
     vcfg.loop_period_us = static_cast<uint32_t>(std::llround(1.0e6 / std::max(1.0, a.loop_hz)));
     std::unique_ptr<rr::FlightVotes> votesp(new rr::FlightVotes(vcfg));
     rr::FlightVotes& votes = *votesp;
     int64_t next_pass_us = INT64_MIN;
+    int quorum_baro = 0;   // barometer samples the quorum got (none without a ground pressure)
 #endif
 
     // ---- the pad's ephemerides and ionosphere (the pad context)
@@ -1728,6 +1816,9 @@ int main(int argc, char** argv)
     if (!a.given.count("--pad") && in.meta.count("pad_lla"))
         std::sscanf(in.meta["pad_lla"].c_str(), "%lf %lf %lf", &a.pad_lat, &a.pad_lon, &a.pad_h);
     const bool pad_from_seed = cold && !a.given.count("--pad") && !in.meta.count("pad_lla");
+#if !RAW_REPLAY_MOSAIC
+    (void)pad_from_seed;   // a cold start is the mosaic path's
+#endif
     const double A = 6378137.0, E2 = 0.0066943799901;
     double RN = 0.0, RE = 0.0;
     auto setPad = [&](double lat_deg, double lon_deg, double h) {
@@ -1742,11 +1833,16 @@ int main(int argc, char** argv)
     setPad(a.pad_lat, a.pad_lon, a.pad_h);
 
     // the clock line: each K event from its time on; before the log's first one, that first one (the lines move
-    // by a millisecond or so a minute) -- the driver's earlier lines never reached the log
+    // by a millisecond or so a minute) -- the driver's earlier lines never reached the log. Each K line is a 1PPS
+    // edge paired (the mosaic's time tag needs one within 120 s): the first stands for the earlier ones too
     ClockLine line;
     for (const Event& e : in.ev)
         if (e.kind == 'K')
         {
+#if RAW_REPLAY_MOSAIC
+            if (!a.time_tag_from_boot)
+                tag_gate.pair_us = e.t_us;
+#endif
             line.valid = e.flags != 0;
             line.gps0_s = e.v[0];
             line.mcu0_us = static_cast<int64_t>(e.v[1]);
@@ -1839,6 +1935,14 @@ int main(int argc, char** argv)
     std::vector<ScreenCmp> cmps;           // --compare-sequential
     uint8_t last_flags = 0;
     int nonfinite_rows = 0, unhealthy_rows = 0;
+#if RAW_REPLAY_MOSAIC
+    int mag_handed = 0;                    // magnetometer samples handed to the filter, and their sizes (uT)
+    std::vector<double> mag_norms;
+    uint32_t dop_applied = 0;              // the epochs the filter closed: Dopplers fused, refused, largest NIS
+    std::vector<int> dop_used;
+    std::vector<float> dop_nis;
+    int dop_rejected = 0, dop_rejected_epochs = 0;
+#endif
 
     auto writeRow = [&](int64_t t_us) {
         const RawGnssEKF<float>& e = sh.filter();
@@ -1909,6 +2013,7 @@ int main(int argc, char** argv)
     }
     float gyro_ring[16][3] = {};
     int gyro_n = 0;
+    double model_field_ut = have_pnav && (static_cast<int>(in.pnav[34]) & 0x10) ? in.pnav[23] : 0.0;
     auto coldSeed = [&](const ShadowImu& s, int64_t ev_t_now) {
         EkfIMUData imu;
         imu.time_us = s.time_us;
@@ -1937,6 +2042,10 @@ int main(int argc, char** argv)
         {
             for (int i = 0; i < 4; ++i)
                 q[i] = static_cast<float>(mq[i]);
+            std::fprintf(stderr, "WARNING: the cold start's attitude is META seed_quat (extract.py --seed-quat-from-log: "
+                                 "the log's own flight filter's). Its heading is that filter's, so a heading scored "
+                                 "against that filter's quaternion passes by construction where nothing else turns "
+                                 "it (a static pad)\n");
         }
         else
         {
@@ -1988,6 +2097,8 @@ int main(int argc, char** argv)
             TR_GeoMag::fieldNED_uT(cold_lla[0], cold_lla[1], cold_lla[2], year, ned);
         }
         nav_adapter.setMagReference(ned);
+        model_field_ut = std::sqrt(static_cast<double>(ned[0]) * ned[0] + static_cast<double>(ned[1]) * ned[1] +
+                                   static_cast<double>(ned[2]) * ned[2]);
         nav_adapter.startSeed(seed);
         seed.on_pad = 1;
         seed.pad_valid = 0;
@@ -2002,6 +2113,17 @@ int main(int argc, char** argv)
     };
 #endif
 
+    // The synthesized faults' clock. The rig's restored LC86G runs (and any run given --truth-t0-tow): each epoch's
+    // GPS time of week less the scenario's T+0. A mosaic or cold-start replay has no scenario behind it: its MCU
+    // time (the arrival where untimed) plus t_base_s, the flight time its CSV and quorum report in. The corrupted
+    // epoch is the one nearest --corrupt-at-s: within half the epoch period (the LC86G's 1 s, else the fused grid's).
+    const bool faults_on_flight_time = (mosaic || cold) && !a.given.count("--truth-t0-tow");
+    double corrupt_tol_s = 0.5;
+#if RAW_REPLAY_MOSAIC
+    if (faults_on_flight_time)
+        corrupt_tol_s = 0.5 * fusedEpochPeriod(rx) + 1.0e-6;
+#endif
+
     // An epoch decoded and placed on the MCU clock (te.mcu_us; 0 untimed), as it leaves the receiver's driver:
     // the synthesized faults (--cut-*, --corrupt-*), the relock rule, then on to the GNSS task. The LC86G's
     // restored start (lc86g_restored) also seeds the pad's lock history and hands the epoch over at its
@@ -2011,13 +2133,16 @@ int main(int argc, char** argv)
         if (te.mcu_us == 0)
             epochs_untimed++;
         {
-            const double t_gps = te.epoch.tow_s - a.truth_t0_tow;   // its GPS time, flight time
+            // its flight time
+            const double t_gps = faults_on_flight_time
+                                     ? static_cast<double>(te.mcu_us != 0 ? te.mcu_us : arr_us) * 1.0e-6 + a.t_base_s
+                                     : te.epoch.tow_s - a.truth_t0_tow;
             if (t_gps >= a.cut_from_s && t_gps < a.cut_to_s)
             {
                 epochs_cut++;
                 return;   // the receiver gave nothing
             }
-            if (!corrupted && std::fabs(t_gps - a.corrupt_at_s) < 0.5)
+            if (!corrupted && std::fabs(t_gps - a.corrupt_at_s) < corrupt_tol_s)
             {
                 corrupted = true;
                 uint32_t st = 2463534242u + static_cast<uint32_t>(a.corrupt_seed) * 7919u;
@@ -2109,9 +2234,16 @@ int main(int argc, char** argv)
             for (; k < gnss_task.size() && gnss_task[k].release_us <= ev.t_us; ++k)
             {
 #if RAW_REPLAY_MOSAIC
-                // the day's broadcast ephemerides a receiver would have had by now, for this epoch's satellites
-                if (!rnx.empty() && gnss_task[k].e.gps_week != 0)
-                    rinexFeed(gnss_task[k].e.epoch, gnss_task[k].e.gps_week * 604800.0 + gnss_task[k].e.epoch.tow_s);
+                // the preloaded issues and the day's broadcast ephemerides a receiver would have had by now (the
+                // latter for this epoch's satellites)
+                if (gnss_task[k].e.gps_week != 0)
+                {
+                    const double gps_s = gnss_task[k].e.gps_week * 604800.0 + gnss_task[k].e.epoch.tow_s;
+                    if (nav_pre_next < nav_pre.size())
+                        preFeed(gps_s);
+                    if (!rnx.empty())
+                        rinexFeed(gnss_task[k].e.epoch, gps_s);
+                }
 #endif
                 ShadowNav nav;
                 sh.navState(nav);
@@ -2131,10 +2263,13 @@ int main(int argc, char** argv)
 #if RAW_REPLAY_MOSAIC
             // the loop's pressure altitude above the pad, each sample (bmp_new_for_kf)
             if (use_votes && p_ground > 0.0)
+            {
+                quorum_baro++;
                 votes.onBaro(ev.t_us,
                              44330.0f * (1.0f - std::pow(static_cast<float>(bmp_p) / static_cast<float>(p_ground),
                                                          1.0f / 5.255f)),
                              static_cast<float>(bmp_p));
+            }
 #endif
             break;
 #if RAW_REPLAY_MOSAIC
@@ -2172,6 +2307,9 @@ int main(int argc, char** argv)
             break;
         case 'K':
             have_line_ever = true;
+#if RAW_REPLAY_MOSAIC
+            tag_gate.pair_us = ev.t_us;
+#endif
             line.valid = ev.flags != 0;
             line.gps0_s = ev.v[0];
             line.mcu0_us = static_cast<int64_t>(ev.v[1]);
@@ -2196,16 +2334,33 @@ int main(int argc, char** argv)
                     {
                     case rr::MosaicFeed::Kind::EPOCH:
                     {
-                        // its GPS time on the clock line (the PPS-fitted 0x9D), only once the receiver says FINETIME
+                        // its GPS time on the clock line (the PPS-fitted 0x9D), where the driver would tag it:
+                        // FINETIME, a 1PPS edge paired within 120 s, the line valid (rawTimeTagOk)
                         int64_t mcu = 0;
-                        if ((!feed.haveTime() || feed.finetime()) && line.mcuAt(feed.gpsS(), mcu))
-                            te.mcu_us = mcu + static_cast<int64_t>(a.epoch_shift_ms * 1000.0);
+                        switch (tag_gate.judge(feed.haveTime(), feed.finetime(), line.valid, ev.t_us))
+                        {
+                        case rr::TimeTagGate::Why::NOT_FINETIME: untimed_not_fine++; break;
+                        case rr::TimeTagGate::Why::PPS_STALE: untimed_pps_stale++; break;
+                        case rr::TimeTagGate::Why::NO_LINE: untimed_no_line++; break;
+                        case rr::TimeTagGate::Why::TIMED:
+                            if (line.mcuAt(feed.gpsS(), mcu))
+                                te.mcu_us = mcu + static_cast<int64_t>(a.epoch_shift_ms * 1000.0);
+                            break;
+                        }
                         handOver(te, ev.t_us, false);
                         break;
                     }
                     case rr::MosaicFeed::Kind::NAV:
-                        if (stage.addEphemeris(feed.eph()))
+                        if (ev.flags == 1)
+                        {
+                            // preloaded: filed when a receiver has it (preFeed)
+                            nav_pre.push_back({feed.eph(), rinex::availGpsS(feed.eph())});
+                            eph_pre++;
+                        }
+                        else if (stage.addEphemeris(feed.eph()))
+                        {
                             eph_nav++;
+                        }
                         eph_flight++;
                         break;
                     case rr::MosaicFeed::Kind::ION:
@@ -2322,11 +2477,29 @@ int main(int argc, char** argv)
 #if RAW_REPLAY_MOSAIC
             if (use_votes)
             {
-                // the quorum's own call is the flight computer's (pyro_apogee_detected), on every tick from it,
-                // not the log's
-                s.flags = static_cast<uint8_t>(s.flags & ~kShadowApogee);
-                if (a.apogee_flag && votes.apogee())
-                    s.flags |= kShadowApogee;
+                // the tick's flags from the quorum, as rawShadowPushImu builds them (FlightVotes::shadowFlags): the
+                // apogee call (pyro_apogee_detected) and the levelling in flight (use_ahrs_acc) from the quorum's own
+                // call, landed from its kinematics -- not the events file's, which were the logged filter's or a
+                // sim's truth-timed ones; in flight and LANDED too with the quorum's own state (--flight-state)
+                s.flags = votes.shadowFlags(static_cast<uint8_t>(ev.flags));
+                if (!a.apogee_flag)
+                    s.flags = static_cast<uint8_t>(s.flags & ~kShadowApogee);
+            }
+#endif
+#if !RAW_REPLAY_OLD
+            // --gnss-only-from-s: from then on the ground the filter holds its velocity and tilt by GNSS, the IMU and
+            // the barometer alone -- the pad's zero-velocity updates and its levelling hold a static log's velocity
+            // to millimetres a second whatever the receiver gives, so they would score the pad, not GNSS
+            if (a.gnss_only_from_s < 1.0e8 && ev.t_us * 1e-6 + a.t_base_s >= a.gnss_only_from_s &&
+                !(s.flags & kShadowInFlight))
+            {
+                if (sh.cfg_.pad_zupt)
+                {
+                    sh.cfg_.pad_zupt = false;
+                    std::fprintf(stderr, "GNSS only from T%+.3f s: no pad ZUPT, no levelling\n",
+                                 ev.t_us * 1e-6 + a.t_base_s);
+                }
+                s.flags = static_cast<uint8_t>(s.flags & ~kShadowLevel);
             }
 #endif
             last_flags = s.flags;
@@ -2345,7 +2518,7 @@ int main(int argc, char** argv)
             if (use_votes)
             {
                 votes.setInitialized(seed_ready);
-                votes.onImu(ev.t_us, s.acc, s.gyro, (s.flags & kShadowInFlight) != 0);
+                votes.onImu(ev.t_us, s.acc, s.gyro, (ev.flags & kShadowInFlight) != 0);   // the tick's own edge
                 if (next_pass_us == INT64_MIN)
                     next_pass_us = votes.nextPass(ev.t_us);
             }
@@ -2360,6 +2533,10 @@ int main(int argc, char** argv)
                 for (int i = 0; i < 3; ++i)
                     m.mag[i] = static_cast<float>(mag_v[i]);
                 sh.onMag(m);
+#if RAW_REPLAY_MOSAIC
+                mag_handed++;
+                mag_norms.push_back(std::sqrt(mag_v[0] * mag_v[0] + mag_v[1] * mag_v[1] + mag_v[2] * mag_v[2]));
+#endif
             }
             // the seed, once a second (on the pad while not in flight)
             if (seed_ready && (!started || ev.t_us - last_seed_us >= 1000000))
@@ -2465,6 +2642,17 @@ int main(int argc, char** argv)
                 ShadowNav nv;
                 sh.navState(nv);
                 linkp->nav.write(nv);
+                // each epoch the filter closed: its Dopplers fused and refused, its largest NIS
+                if (sh.stats().epochs_applied != dop_applied)
+                {
+                    dop_applied = sh.stats().epochs_applied;
+                    const RawGnssStats& l = sh.stats().last;
+                    dop_used.push_back(l.used_rr);
+                    dop_rejected += l.rejected_rr;
+                    if (l.rejected_rr > 0)
+                        dop_rejected_epochs++;
+                    dop_nis.push_back(l.nis_max);
+                }
             }
 #endif
 #if RAW_REPLAY_VCHECK
@@ -2810,12 +2998,52 @@ int main(int argc, char** argv)
                              fc.meas, fc.meas_bad, fc.off_grid, fc.empty, fc.epochs, fc.dtr_anchored, fc.dtr_zero,
                              fc.jumps, fc.rebases, fc.pvt, fc.pvt_fix, fc.nav, fc.nav_ok, fc.nav_dropped, fc.nav_bad,
                              fc.ion, fc.ion_applied, sbfp->crcFails());
-                std::fprintf(ej, "\"eph_from\": {\"log\": %d, \"rinex\": %d, \"rinex_stale\": %d, \"events\": %d}, ",
-                             eph_nav, eph_rinex, rinex_stale, eph_n);
+                std::fprintf(ej, "\"eph_from\": {\"log\": %d, \"preloaded\": %d, \"preloaded_filed\": %d, "
+                                 "\"preloaded_unfiled\": %d, \"rinex\": %d, \"rinex_stale\": %d, \"events\": %d}, ",
+                             eph_nav, eph_pre, eph_pre_filed, static_cast<int>(nav_pre.size() - nav_pre_next), eph_rinex,
+                             rinex_stale, eph_n);
+                // the driver's time tag: why epochs were left untimed (the log's first ReceiverTime: -1 none, else
+                // its FINETIME)
+                std::fprintf(ej, "\"time_tag\": {\"receiver_time_in_log\": %d, \"from_boot\": %d, "
+                                 "\"assume_finetime\": %d, \"untimed_not_finetime\": %d, \"untimed_pps_stale\": %d, "
+                                 "\"untimed_no_line\": %d}, ",
+                             first_rt, a.time_tag_from_boot ? 1 : 0, a.assume_finetime ? 1 : 0, untimed_not_fine,
+                             untimed_pps_stale, untimed_no_line);
+                // the faults' clock, the pad's zero-velocity updates (with the levelling they hold a static log's
+                // velocity unless --gnss-only-from-s), each closed epoch's Dopplers and largest NIS, and the
+                // magnetometer
+                auto median = [](std::vector<double> v) {
+                    if (v.empty())
+                        return std::string("null");
+                    std::sort(v.begin(), v.end());
+                    return std::to_string(v[v.size() / 2]);
+                };
+                auto p95 = [](std::vector<double> v) {
+                    if (v.empty())
+                        return std::string("null");
+                    std::sort(v.begin(), v.end());
+                    return std::to_string(v[std::min(v.size() - 1, static_cast<size_t>(0.95 * v.size()))]);
+                };
+                const RawGnssShadow::Stats& fs = sh.stats();
+                std::fprintf(ej, "\"faults_clock\": \"%s\", \"pad_zupt\": %d, \"pad_zupts\": %u, \"landed_zupts\": %u, ",
+                             faults_on_flight_time ? "flight_time" : "tow", sh.cfg_.pad_zupt ? 1 : 0, fs.pad_zupts,
+                             fs.zupts);
+                std::fprintf(ej, "\"doppler\": {\"epochs\": %zu, \"used_rr_median\": %s, \"rejected_rr\": %d, "
+                                 "\"rejected_rr_epochs\": %d, \"nis_max_median\": %s, \"nis_max_p95\": %s}, ",
+                             dop_used.size(), median(std::vector<double>(dop_used.begin(), dop_used.end())).c_str(),
+                             dop_rejected, dop_rejected_epochs,
+                             median(std::vector<double>(dop_nis.begin(), dop_nis.end())).c_str(),
+                             p95(std::vector<double>(dop_nis.begin(), dop_nis.end())).c_str());
+                std::fprintf(ej, "\"mag\": {\"handed\": %d, \"fused\": %u, \"uncal\": %u, \"suspect\": %u, "
+                                 "\"dip\": %u, \"norm_median_ut\": %s, \"model_ut\": %s}, ",
+                             mag_handed, fs.mag_fused, fs.mag_uncal, fs.mag_suspect, fs.mag_dip,
+                             median(mag_norms).c_str(), num(model_field_ut > 0.0 ? model_field_ut : NAN).c_str());
                 if (use_votes)
                 {
                     const rr::FlightVotes::Report& r = votes.report();
-                    std::fprintf(ej, "\"quorum\": {\"guard_applied\": %d, \"launch_t\": %s, \"kc_launch_t\": %s, "
+                    std::fprintf(ej, "\"quorum\": {\"flight_state\": \"%s\", \"landed_t\": %s, ",
+                                 state_from_quorum ? "quorum" : "log", ft(r.landed_s).c_str());
+                    std::fprintf(ej, "\"guard_applied\": %d, \"launch_t\": %s, \"kc_launch_t\": %s, "
                                      "\"burnout_t\": %s, \"gnss_admitted_t\": %s, \"gnss_admitted_reason\": %d, "
                                      "\"guard_latch_t\": %s, \"guard_vz\": %s, \"guard_baro_rate\": %s, "
                                      "\"apogee_t\": %s, \"backstop_t\": %s, ",
@@ -2839,10 +3067,20 @@ int main(int argc, char** argv)
                 }
             }
 #endif
-            std::fprintf(ej, "\"pitch_vote_t\": %s, \"vel_vote_t\": %s, \"gate_switch_t\": %s}\n",
-                         pitch_vote_t > -1e8 ? std::to_string(pitch_vote_t).c_str() : "null",
-                         vel_vote_t > -1e8 ? std::to_string(vel_vote_t).c_str() : "null",
-                         gate_switched ? std::to_string(gate_switch_us * 1e-6 + a.t_base_s).c_str() : "null");
+            bool legacy_votes = true;
+#if RAW_REPLAY_MOSAIC
+            // with the quorum, its own voters (quorum.votes) say when each voted: the older first-vote times, from
+            // --burnout-s and simplified thresholds, are left out so they cannot be read for them
+            legacy_votes = !use_votes;
+#endif
+            if (legacy_votes)
+                std::fprintf(ej, "\"pitch_vote_t\": %s, \"vel_vote_t\": %s, \"gate_switch_t\": %s}\n",
+                             pitch_vote_t > -1e8 ? std::to_string(pitch_vote_t).c_str() : "null",
+                             vel_vote_t > -1e8 ? std::to_string(vel_vote_t).c_str() : "null",
+                             gate_switched ? std::to_string(gate_switch_us * 1e-6 + a.t_base_s).c_str() : "null");
+            else
+                std::fprintf(ej, "\"gate_switch_t\": %s}\n",
+                             gate_switched ? std::to_string(gate_switch_us * 1e-6 + a.t_base_s).c_str() : "null");
             std::fclose(ej);
         }
     }
@@ -2885,7 +3123,78 @@ int main(int argc, char** argv)
                      ft(r.launch_s), ft(r.burnout_s), ft(r.admitted_s), ft(r.guard_s),
                      vcfg.guard ? "applied" : "observed", ft(r.apogee_s), r.call_vel ? 1 : 0, r.call_baro ? 1 : 0,
                      r.call_gps ? 1 : 0, r.call_pitch ? 1 : 0, ft(r.backstop_s));
+        if (state_from_quorum)
+            std::fprintf(stderr, "  flight state from the quorum: INFLIGHT T%+.3f, LANDED T%+.3f  [-1e9: never]\n",
+                         ft(r.launch_s), ft(r.landed_s));
     }
 #endif
-    return 0;
+    // A fault asked for that never happened is a test that tested nothing: say so. On a mosaic or cold-start
+    // replay (faults on flight time) it fails the run.
+    int rc = 0;
+    {
+        const bool cut_asked = a.given.count("--cut-from-s") || a.given.count("--cut-to-s");
+        const bool corrupt_asked = a.given.count("--corrupt-at-s") != 0;
+        const char* clock = faults_on_flight_time ? "flight time (MCU s + t_base_s)" : "GPS time of week less --truth-t0-tow";
+        if (cut_asked && epochs_cut == 0)
+            std::fprintf(stderr, "WARNING: --cut-from-s %.3f --cut-to-s %.3f cut no epoch (on %s)\n", a.cut_from_s,
+                         a.cut_to_s, clock);
+        if (corrupt_asked && epochs_corrupted_sats == 0)
+            std::fprintf(stderr, "WARNING: --corrupt-at-s %.3f corrupted no satellite (on %s)\n", a.corrupt_at_s, clock);
+        if (faults_on_flight_time &&
+            ((cut_asked && epochs_cut == 0) || (corrupt_asked && epochs_corrupted_sats == 0)))
+            rc = 3;
+    }
+#if RAW_REPLAY_MOSAIC
+    if (mosaic || cold)
+    {
+        if (untimed_not_fine + untimed_pps_stale + untimed_no_line > 0)
+            std::fprintf(stderr, "  time tag: untimed %d not FINETIME (ReceiverTime %s), %d with no 1PPS edge paired "
+                                 "within 120 s, %d with no valid clock line\n",
+                         untimed_not_fine, first_rt < 0 ? "never in the log" : "in the log", untimed_pps_stale,
+                         untimed_no_line);
+        if (first_rt < 0 && epochs_decoded > 0)
+            std::fprintf(stderr, "WARNING: no ReceiverTime in the log: the driver times nothing without FINETIME%s\n",
+                         a.assume_finetime ? " (--assume-finetime: timed all the same)" : " (--assume-finetime to time them)");
+        if (eph_pre > 0)
+            std::fprintf(stderr, "  preloaded nav: %d decoded, %d filed when a receiver had them, %d never due in the "
+                                 "log (filed where logged)\n",
+                         eph_pre, eph_pre_filed, static_cast<int>(nav_pre.size() - nav_pre_next));
+        const RawGnssShadow::Stats& fs = sh.stats();
+        if (fs.pad_zupts > 0 && a.gnss_only_from_s >= 1.0e8)
+            std::fprintf(stderr, "  pad ZUPTs %u: they and the levelling hold a static velocity whatever the receiver "
+                                 "gives (--gnss-only-from-s scores GNSS alone)\n",
+                         fs.pad_zupts);
+        if (mag_handed > 0 && fs.mag_fused == 0)
+        {
+            std::vector<double> mn = mag_norms;
+            std::sort(mn.begin(), mn.end());
+            std::fprintf(stderr, "WARNING: %d magnetometer samples, none fused (uncalibrated %u, off the model's size "
+                                 "%u, off its dip %u; |B| median %.1f uT, the model's %.1f): the heading is the seed's "
+                                 "and the gyro's, and --mag-error-deg %s\n",
+                         mag_handed, fs.mag_uncal, fs.mag_suspect, fs.mag_dip, mn[mn.size() / 2], model_field_ut,
+                         cold ? "changes nothing here" : "turns only the start's heading");
+        }
+    }
+    if (use_votes)
+    {
+        // a voter that never existed leaves a 2- or 3-of-N quorum with another latency: say so (and fail a mosaic run)
+        const rr::FlightVotes::Report& r = votes.report();
+        bool missing = false;
+        if (r.fixes == 0)
+        {
+            std::fprintf(stderr, "WARNING: the quorum had no receiver fix (no PVTGeodetic, no V lines): the GPS voter "
+                                 "and GnssAscentGate's admission never existed\n");
+            missing = true;
+        }
+        if (quorum_baro == 0)
+        {
+            std::fprintf(stderr, "WARNING: the quorum had no barometer (%s): the barometer voter never existed\n",
+                         p_ground > 0.0 ? "no B lines" : "no META ground_pressure_pa");
+            missing = true;
+        }
+        if (missing && mosaic)
+            rc = 3;
+    }
+#endif
+    return rc;
 }

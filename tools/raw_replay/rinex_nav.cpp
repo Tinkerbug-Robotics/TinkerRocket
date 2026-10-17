@@ -113,7 +113,6 @@ Took parseRecord(const std::vector<std::string>& L, NavRecord& r)
     e.omega_dot = o[3][3];
     e.idot = o[4][0];
 
-    double lag = 0.0;
     if (sys == 'G')
     {
         if (prn < 1 || prn > 37)
@@ -125,7 +124,6 @@ Took parseRecord(const std::vector<std::string>& L, NavRecord& r)
         e.health = static_cast<int>(std::lround(o[5][1])) & 0x3F;
         e.tgd = o[5][2];
         e.iodc = static_cast<int>(std::lround(o[5][3]));
-        lag = kGpsLeadS;
     }
     else if (sys == 'E')
     {
@@ -149,7 +147,6 @@ Took parseRecord(const std::vector<std::string>& L, NavRecord& r)
         if (e.ura == 255)
             e.health |= mosaic::kGalHealthNoSisa;
         e.tgd = o[5][3];                                             // BGD(E5b,E1)
-        lag = kGalLagS;
     }
     else
     {
@@ -164,18 +161,28 @@ Took parseRecord(const std::vector<std::string>& L, NavRecord& r)
         e.health = static_cast<int>(std::lround(o[5][1]));           // SatH1
         e.tgd = o[5][2];                                             // TGD1, B1I
         e.iodc = static_cast<int>(std::lround(o[6][1]));             // AODC
-        lag = kBdsLagS;
     }
     if (!std::isfinite(e.sqrt_a) || e.sqrt_a <= 0.0 || !std::isfinite(e.toe))
         return Took::BAD;
     e.valid = 1;
     r.eph = e;
-    r.toe_gps_s = e.week * 604800.0 + e.toe - (e.sys == GNSS_SYS_BDS ? BDT_MINUS_GPST : 0.0);
-    r.avail_gps_s = r.toe_gps_s + lag;
+    r.toe_gps_s = toeGpsS(e);
+    r.avail_gps_s = availGpsS(e);
     return Took::OK;
 }
 
 }  // namespace
+
+double toeGpsS(const gps_eph_t& e)
+{
+    return e.week * 604800.0 + e.toe - (e.sys == GNSS_SYS_BDS ? BDT_MINUS_GPST : 0.0);
+}
+
+double availGpsS(const gps_eph_t& e)
+{
+    const double lag = e.sys == GNSS_SYS_GAL ? kGalLagS : (e.sys == GNSS_SYS_BDS ? kBdsLagS : kGpsLeadS);
+    return toeGpsS(e) + lag;
+}
 
 long daysFromGpsEpoch(int year, int month, int day)
 {

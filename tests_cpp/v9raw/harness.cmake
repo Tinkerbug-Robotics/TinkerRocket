@@ -8,7 +8,7 @@ set(RAW_REPLAY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../tools/raw_replay)
 # The day's broadcast RINEX 3 file as gps_eph_t, by SbfNav's conventions:
 # every golden RTCM ephemeris written as its RINEX record comes back to 1 cm
 # and 1 ns, F/NAV, GEO and other systems are left out, the Galileo health
-# marks, dates and availability. With TR_SBF_PRIVATE_CAPTURE and
+# marks, dates and availability (the rule preloaded nav blocks are filed by). With TR_SBF_PRIVATE_CAPTURE and
 # TR_RINEX_NAV set, the 10/16 captures' own nav blocks against the file.
 add_executable(test_rinex_nav test_rinex_nav.cpp
     ${RAW_REPLAY_DIR}/rinex_nav.cpp
@@ -35,7 +35,8 @@ gtest_discover_tests(test_rinex_nav)
 # What the harness does with each SBF block (mosaic_feed.h): epochs on the
 # fused grid, their GPS time from the anchoring PVT's clock bias through the
 # clock jumps, a lost MeasEpoch's PVT anchoring nothing, nav blocks kept as
-# the driver keeps them, the one ionosphere rule, PVTGeodetic as the fix.
+# the driver keeps them, the one ionosphere rule, PVTGeodetic as the fix, and
+# the driver's time tag (FINETIME, a 1PPS pairing within 120 s, the line).
 add_executable(test_raw_replay_mosaic test_raw_replay_mosaic.cpp
     ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial/SbfNav.cpp
     ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial/SbfMeas.cpp
@@ -61,8 +62,12 @@ gtest_discover_tests(test_raw_replay_mosaic)
 # The flight computer's apogee quorum as the harness runs it (flight_votes.h):
 # TR_KinematicChecks, GnssAscentGate, the burnout detector, the raw vote guard
 # and RawNavAdapter on a synthetic flight -- the call just after the true
-# apogee on the truth, the guard latching on a filter reading low, and a
-# coherent receiver fault calling early without the guard and not with it.
+# apogee on the truth, the guard latching on a filter reading low, a
+# coherent receiver fault calling early without the guard and not with it,
+# the plan's coherent coast ramp as the guard's gap (a raw vote above
+# +2 m/s, the guard silent), the filter's tick flags from the quorum (its
+# levelling in flight from the quorum's call), and with state_from_quorum
+# the launch and landing from its own kinematics.
 add_executable(test_raw_replay_votes test_raw_replay_votes.cpp
     ${LIB_DIR}/TR_KinematicChecks/TR_KinematicChecks.cpp
 )

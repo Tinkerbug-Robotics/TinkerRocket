@@ -13,15 +13,22 @@ What the flight computer's raw task was handed, rebuilt from the log:
   R  the receiver's RTCM3 frames as they arrived (0x95), MSM7 and ephemerides
   K  the GPS -> MCU clock lines (0x9D), each from the time it was set
   F  the receiver's fixes (GPS week, time of week), for an MSM epoch's week
+  V  the same fixes as the flight loop's GPS voter gets them: fix mode, satellites, height, velocity N E U
+     (raw_replay's apogee quorum, --quorum; ignored otherwise)
   S  the start: the raw filter's own state at the log's first record (0x96 + 0x9B)
   P  the pad context (0x9E): its state at the launch tick, covariance, ephemerides, ionosphere
 
 With --sbf (a V8/V9 log with the mosaic-G5, whose raw filter left no records of its own yet): no S, A or P
 lines -- raw_replay starts the filter on the pad itself (--cold-start) -- and R carries the receiver's SBF blocks
-as they arrived (0x95), its own fix (PVTGeodetic) among them. Every navigation block in the log (GPSNav, GALNav,
-BDSNav, GPSIon) is put at the start as well, unless --nav-as-logged: the logs begin long after the receiver did,
-and it sends a satellite's ephemeris only when it changes. The flight's time is the log's in-flight edge (T+0),
-or the log's own clock where it has none. A day's broadcast RINEX file goes to raw_replay itself (--rinex).
+as they arrived (0x95), its own fix (PVTGeodetic) among them (so no V lines). Every navigation block in the log
+(GPSNav, GALNav, BDSNav, GPSIon) is put at the start as well, marked "preload", unless --nav-as-logged: the logs
+begin long after the receiver did, and it sends a satellite's ephemeris only when it changes. raw_replay files a
+preloaded issue only once a receiver could have had it (the RINEX rule: a GPS set 2 h before its toe, a Galileo batch
+665 s after, a BeiDou set 18 s after), so an issue decoded later in the log is not handed over early. Use
+--nav-as-logged where the flight computer booted inside the log (its store then held only what the log shows) and
+for a comparison with the on-board filter's own records (0x96) when that is so. The flight's time is the log's
+in-flight edge (T+0), or the log's own clock where it has none. A day's broadcast RINEX file goes to raw_replay
+itself (--rinex).
 
 Times are the FC's microseconds, unwrapped to 64 bits.
 """
@@ -151,11 +158,13 @@ def main():
                     help="a V8/V9 log with the mosaic-G5's SBF: no raw-filter records needed, the receiver's blocks "
                          "as R lines (raw_replay --receiver mosaic --cold-start)")
     ap.add_argument("--nav-as-logged", action="store_true",
-                    help="with --sbf: the navigation blocks only where the log has them, not also at the start")
+                    help="with --sbf: the navigation blocks only where the log has them, not also at the start (a "
+                         "log the flight computer booted in)")
     ap.add_argument("--seed-quat-from-log", action="store_true",
                     help="with --sbf: the cold start's attitude from the log's own flight filter (NonSensor q, the "
                          "auto image's GpsInsEKF), not the accelerometer's tilt and the pad heading guess the "
-                         "mosaic-only image starts from (META seed_quat)")
+                         "mosaic-only image starts from (META seed_quat). Its heading is then that filter's: never "
+                         "score heading against that filter's quaternion from such a run")
     args = ap.parse_args()
     if args.sbf:
         return extract_sbf(args)
@@ -318,13 +327,15 @@ def main():
         for r in recs.get(key) or []:
             tu = int(unwrap([r["time_us"]], t_ref)[0])
             events.append((tu, 2, f"M {tu} {r['mag_x']!r} {-r['mag_y']!r} {-r['mag_z']!r}"))
-    # ---- the receiver's fixes: week and time of week
+    # ---- the receiver's fixes: week and time of week (F), and as the flight loop's GPS voter gets them (V)
     for r in recs.get("GNSS") or []:
         if r["year"] < 2020:
             continue
         week, tow_ms = gps_of_fix(r)
         tu = int(unwrap([r["time_us"]], t_ref)[0])
         events.append((tu, 3, f"F {tu} {week} {tow_ms} {r['fix_mode']} {r['num_sats']}"))
+        events.append((tu, 3, f"V {tu} {r['fix_mode']} {r['num_sats']} {r['alt_m']!r} {r['vel_n']!r} "
+                              f"{r['vel_e']!r} {r['vel_u']!r}"))
     # ---- the clock lines (or, without them, one fitted to the fixes' lower envelope)
     if not recs.get("GnssClock"):
         fx = [r for r in recs.get("GNSS") or [] if r["year"] >= 2020 and r["fix_mode"] >= 2]
@@ -458,12 +469,17 @@ def extract_sbf(args):
     t0 = min(e[0] for e in events) if events else int(unwrap([sbf[0][0]], t_ref)[0])
     n_nav = 0
     if not args.nav_as_logged:
-        # every navigation block of the log, just before its first event (in log order)
+        # every navigation block of the log, just before its first event (in log order), marked: raw_replay files
+        # each issue when a receiver could first have had it
+        per = {n: 0 for n in SBF_NAV_BLOCKS}
         for _tu32, b in sbf:
             if P.sbf_block_number(b) in SBF_NAV_BLOCKS:
-                events.append((t0 - 1, -1, f"R {t0 - 1} {bytes(b).hex()}"))
+                events.append((t0 - 1, -1, f"R {t0 - 1} {bytes(b).hex()} preload"))
                 n_nav += 1
-        lines.append(f"META nav_preloaded {n_nav}")
+                per[P.sbf_block_number(b)] += 1
+        lines.append(f"META nav_preloaded {n_nav} gps {per[5891]} gal {per[4002]} bds {per[4081]} ion {per[5893]}")
+    else:
+        lines.append("META nav_preloaded 0")
     for tu32, b in sbf:
         tu = int(unwrap([tu32], t_ref)[0])
         events.append((tu, 5, f"R {tu} {bytes(b).hex()}"))

@@ -28,10 +28,20 @@
 //     kinematicChecks with ekf_healthy && !latched;
 //   - in flight, burnout from the body x acceleration (50 passes negative,
 //     after 200 ms), read by the next pass's vote as on the flight computer.
-// The launch (enterInflight) is the replay's in-flight edge, the flags the
-// log or the sim gives the IMU ticks: GnssAscentGate::onLaunch, the guard
-// reset, the reference frozen. The pass rate is the flight loop's (1 kHz by
-// default); the leaky counters count passes.
+// The launch (enterInflight: GnssAscentGate::onLaunch, the guard reset, the
+// reference frozen, the kinematics' apogee and landing flags cleared) is, by
+// default, the replay's in-flight edge: the flags a log's own state machine
+// gave the IMU ticks. With Config::state_from_quorum it is this quorum's own,
+// as main.cpp's state machine takes it: enterInflight in the pass the
+// kinematics' launch flag latches, and LANDED once landing_transition's dwell
+// on its landed flag passes -- for a sim, whose events file has no flight
+// computer behind it. The pass rate is the flight loop's (1 kHz by default);
+// the leaky counters count passes.
+//
+// shadowFlags() is what the raw filter's tick is given from that state
+// (rawShadowPushImu): in flight, levelled while not in flight or once the
+// kinematics have called apogee (use_ahrs_acc), landed on the kinematics'
+// landed flag or the LANDED state, and the apogee call (pyro_apogee_detected).
 //
 // Pure, given the host shim's millis() (tests_cpp/test_raw_replay_votes.cpp).
 #ifndef RAW_REPLAY_FLIGHT_VOTES_H
@@ -45,7 +55,9 @@
 
 #include "BurnoutDetector.h"
 #include "GnssAscentGate.h"
+#include "ShadowLink.h"
 #include "TR_KinematicChecks.h"
+#include "landing_transition_policy.h"
 #include "raw_nav_adapter.h"
 #include "raw_vote_guard.h"
 
@@ -69,6 +81,7 @@ public:
     {
         bool     gate_ekf_valid = false;  // GnssAscentGate may admit on the filter's own altitude (not on the mosaic)
         bool     guard = true;            // the raw vote guard withholds the filter's two votes once latched
+        bool     state_from_quorum = false;   // launch and landing from these kinematics, not the IMU ticks' flags
         uint32_t loop_period_us = 1000;   // the flight loop's pass (config::FLIGHT_LOOP_UPDATE_RATE)
         // config.h
         float    mach_on_mps = 260.0f, mach_off_mps = 240.0f;   // BARO_MACH_LOCKOUT_ON/OFF
@@ -97,7 +110,7 @@ public:
     struct Report
     {
         double launch_s = NAN, kc_launch_s = NAN, burnout_s = NAN, admitted_s = NAN, guard_s = NAN;
-        double apogee_s = NAN, backstop_s = NAN;
+        double apogee_s = NAN, backstop_s = NAN, landed_s = NAN;   // landed_s: LANDED (state_from_quorum only)
         int    admitted_reason = 0;   // GnssAscentGate::Reason
         Edges  vel, baro, gps, pitch;
         // at the call: the voters that were available and passed, and what the loop read
@@ -124,6 +137,8 @@ public:
     void setInitialized(bool v) { initialized_ = v; }
 
     // Each IMU tick the filter is handed (an EKF tick): body FRD, m/s^2, rad/s.
+    // in_flight: the tick's own in-flight flag (the launch edge unless
+    // state_from_quorum).
     void onImu(int64_t t_us, const float acc[3], const float gyro[3], bool in_flight)
     {
         have_imu_ = true;
@@ -169,22 +184,13 @@ public:
         const double t = t_us * 1.0e-6;
         ekf.refresh(static_cast<uint32_t>(t_us));
 
-        // the launch edge (enterInflight)
-        if (in_flight_next_ && !in_flight_)
+        // the launch edge (enterInflight) from the ticks' flags: a log's own state machine
+        if (!cfg_.state_from_quorum)
         {
-            in_flight_ = true;
-            launch_ms_ = now_ms;
-            rep_.launch_s = t;
-            burnout_ = false;
-            burnout_neg_ = 0;
-            GnssAscentGate::onLaunch(gate_, now_ms);
-            RawVoteGuard::reset(guard_);
-            if (have_ref_)
-                ref_frozen_ = true;
-        }
-        else if (!in_flight_next_ && in_flight_)
-        {
-            in_flight_ = false;   // landed or back on the pad: the call stays as made
+            if (in_flight_next_ && !in_flight_)
+                enterInflight(now_ms, t);
+            else if (!in_flight_next_ && in_flight_)
+                in_flight_ = false;   // landed or back on the pad: the call stays as made
         }
 
         // the EKF tick's part: the lockout on the filter's speed, its outputs
@@ -326,13 +332,57 @@ public:
         if (kin_.apogee_flag)
             pyro_apogee_ = true;
 
-        // later in the pass, in flight: burnout (the next pass's vote reads it)
-        if (in_flight_ && imu_fresh &&
-            tr::burnoutDetectStep(burnout_, burnout_neg_, acc_x_, now_ms - launch_ms_, cfg_.burnout_neg_hysteresis))
-            rep_.burnout_s = t;
+        // later in the pass, the state machine's switch on this pass's state
+        if (cfg_.state_from_quorum && !in_flight_)
+        {
+            // READY/PRELAUNCH (INITIALIZATION too): the launch flag enters INFLIGHT (enterInflight); LANDED stays
+            if (!landed_state_ && kin_.launch_flag)
+                enterInflight(now_ms, t);
+        }
+        else if (in_flight_)
+        {
+            // INFLIGHT: burnout (the next pass's vote reads it), then the landing's dwell
+            if (imu_fresh &&
+                tr::burnoutDetectStep(burnout_, burnout_neg_, acc_x_, now_ms - launch_ms_, cfg_.burnout_neg_hysteresis))
+                rep_.burnout_s = t;
+            if (cfg_.state_from_quorum &&
+                landing_transition::step(landed_debounce_, kin_.alt_landed_flag, imu_fresh, roll_dps_, now_ms) ==
+                    landing_transition::Action::Land)
+            {
+                in_flight_ = false;
+                landed_state_ = true;
+                rep_.landed_s = t;
+            }
+        }
 
         rep_.ref_count = ref_n_;
         rep_.ref_from_nav = ref_from_nav_;
+    }
+
+    // The flags the raw filter's IMU tick gets from the state after the last
+    // pass (rawShadowPushImu), given the tick's own (the events file's):
+    // in flight (the quorum's state, else the tick's); levelling while not in
+    // flight or once the kinematics have called apogee (use_ahrs_acc); landed
+    // on the kinematics' landed flag or the LANDED state (a log's: its tick
+    // landed and not in flight); the apogee call (pyro_apogee_detected). Other
+    // bits (the sim's) pass through.
+    uint8_t shadowFlags(uint8_t tick_flags) const
+    {
+        using namespace gnss_raw;
+        const bool tick_in_flight = (tick_flags & kShadowInFlight) != 0;
+        const bool in_flight = cfg_.state_from_quorum ? in_flight_ : tick_in_flight;
+        const bool landed_state =
+            cfg_.state_from_quorum ? landed_state_ : ((tick_flags & kShadowLanded) != 0 && !tick_in_flight);
+        uint8_t f = static_cast<uint8_t>(tick_flags & ~(kShadowLevel | kShadowInFlight | kShadowLanded | kShadowApogee));
+        if (in_flight)
+            f |= kShadowInFlight;
+        if (!in_flight || kin_.apogee_flag)
+            f |= kShadowLevel;
+        if (kin_.alt_landed_flag || landed_state)
+            f |= kShadowLanded;
+        if (pyro_apogee_)
+            f |= kShadowApogee;
+        return f;
     }
 
     // The next pass due at or after t_us.
@@ -348,10 +398,37 @@ public:
     const RawVoteGuard::State& guard() const { return guard_; }
     bool apogee() const { return pyro_apogee_; }
     bool burnout() const { return burnout_; }
+    bool inFlight() const { return in_flight_; }
+    bool landed() const { return landed_state_; }
     double refAlt() const { return ref_alt_; }
     const Config& config() const { return cfg_; }
 
 private:
+    // enterInflight's part in this: the launch time, burnout, GnssAscentGate's
+    // launch, the guard reset, the reference frozen, and the kinematics' and
+    // pyro logic's apogee and landing flags cleared (launch_flag kept)
+    void enterInflight(uint32_t now_ms, double t)
+    {
+        in_flight_ = true;
+        launch_ms_ = now_ms;
+        rep_.launch_s = t;
+        burnout_ = false;
+        burnout_neg_ = 0;
+        GnssAscentGate::onLaunch(gate_, now_ms);
+        RawVoteGuard::reset(guard_);
+        if (have_ref_)
+            ref_frozen_ = true;
+        landed_debounce_ = landing_transition::State{};
+        kin_.alt_apogee_flag = false;
+        kin_.vel_u_apogee_flag = false;
+        kin_.gps_apogee_flag = false;
+        kin_.pitch_apogee_flag = false;
+        kin_.apogee_flag = false;
+        kin_.alt_landed_flag = false;
+        kin_.max_speed = 0.0f;
+        pyro_apogee_ = false;
+    }
+
     Config cfg_;
     Report rep_;
     TR_KinematicChecks kin_;
@@ -363,6 +440,8 @@ private:
     int64_t imu_t_us_ = 0;
     float acc_x_ = 0.0f, acc_norm_ = 0.0f, roll_dps_ = 0.0f;
     bool in_flight_next_ = false, in_flight_ = false;
+    bool landed_state_ = false;                     // LANDED (state_from_quorum)
+    landing_transition::State landed_debounce_;
     uint32_t launch_ms_ = 0;
     bool burnout_ = false;
     uint16_t burnout_neg_ = 0;

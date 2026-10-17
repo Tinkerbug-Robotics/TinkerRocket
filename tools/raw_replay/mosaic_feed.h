@@ -25,12 +25,13 @@
 //     voter and GnssAscentGate; and its geoid separation.
 //   - ReceiverTime: the leap seconds and FINETIME.
 // The driver's PPS pairing and the clock line are the log's own (0x9D, the
-// harness's K lines): the caller turns the GPS time into MCU time.
+// harness's K lines: each is a pairing): the caller turns the GPS time into
+// MCU time, where TimeTagGate (below) says the driver would have tagged it.
 //
 // The glue mirrors the driver's (TR_GNSSReceiverMosaic_Serial.cpp,
-// rawMeasEpoch/rawPvt: the 1 s carry, the start-over check, the PVT's clock
-// sanity) and the GNSS task's (main.cpp, rawGnssMeasTask); what it cannot see
-// in a log is the driver's PPS pairing (the clock line is the log's 0x9D).
+// rawMeasEpoch/rawPvt/rawTimeTagOk: the 1 s carry, the start-over check, the
+// PVT's clock sanity, the tag's FINETIME and 120 s pairing age) and the GNSS
+// task's (main.cpp, rawGnssMeasTask).
 // Header-only and pure (tests_cpp/test_raw_replay_mosaic.cpp).
 #ifndef RAW_REPLAY_MOSAIC_FEED_H
 #define RAW_REPLAY_MOSAIC_FEED_H
@@ -100,6 +101,43 @@ private:
     gnss_raw::ShadowIono cur_ = {};
 #endif
     uint32_t applied_ = 0;
+};
+
+// The driver's time tag (rawTimeTagOk): an epoch gets its MCU time only with
+// the clock line valid, the receiver's time FINETIME (its last ReceiverTime)
+// and a 1PPS edge paired with its second within 120 s (the line drifts with
+// the MCU crystal once the edges stop). A log begins long after the receiver
+// did, so until its first ReceiverTime and its first pairing those first ones
+// stand for the earlier, as the harness's clock line does; from_boot: nothing
+// before them, as after a boot. A log with no ReceiverTime at all is left
+// untimed, as the driver would leave it (assume_finetime: timed).
+struct TimeTagGate
+{
+    static constexpr int64_t kPpsPairMaxAgeUs = 120000000;   // TR_GNSSReceiverMosaic_Serial.cpp
+    enum class Why : uint8_t
+    {
+        TIMED,
+        NOT_FINETIME,   // the receiver's time is not FINETIME (or not known to be)
+        PPS_STALE,      // no 1PPS edge paired within 120 s
+        NO_LINE,        // the clock line is not valid
+    };
+    int first_rt = -1;              // the log's first ReceiverTime: -1 none, else its FINETIME (0 or 1)
+    bool from_boot = false;
+    bool assume_finetime = false;
+    int64_t pair_us = INT64_MIN;    // the last pairing (MCU us); before the log's first, that first (unless from_boot)
+
+    // have_time/finetime: the feed's last ReceiverTime so far (MosaicFeed::haveTime, finetime)
+    Why judge(bool have_time, bool finetime, bool line_valid, int64_t now_us) const
+    {
+        const bool fine = have_time ? finetime : (first_rt < 0 ? assume_finetime : (!from_boot && first_rt == 1));
+        if (!fine)
+            return Why::NOT_FINETIME;
+        if (pair_us == INT64_MIN || now_us - pair_us >= kPpsPairMaxAgeUs)
+            return Why::PPS_STALE;
+        if (!line_valid)
+            return Why::NO_LINE;
+        return Why::TIMED;
+    }
 };
 
 class MosaicFeed

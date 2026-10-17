@@ -66,6 +66,12 @@ struct NavFile
     int bad = 0;                   // records that did not parse
 };
 
+// An issue's toe as continuous GPS seconds (BeiDou's BDT moved to GPS time),
+// and when a receiver first has it (the leads and lags above): what a RINEX
+// record is filed by, and the nav blocks extract.py preloads.
+double toeGpsS(const gps_eph_t& e);
+double availGpsS(const gps_eph_t& e);
+
 // Days from 1980-01-06 to a civil date (proleptic Gregorian).
 long daysFromGpsEpoch(int year, int month, int day);
 

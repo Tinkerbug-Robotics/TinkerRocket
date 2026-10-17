@@ -6,8 +6,10 @@
 // anchors the jump count, carried by its drift and the jumps since; a PVT
 // whose own MeasEpoch was lost anchors nothing; an empty epoch is not handed
 // over; navigation blocks are kept as the driver keeps them; GPSIon goes
-// through the one ionosphere rule; and PVTGeodetic is the fix the flight
-// loop's GPS voter gets. Synthetic blocks only (sbf_build.h, sbf_meas_build.h).
+// through the one ionosphere rule; PVTGeodetic is the fix the flight loop's
+// GPS voter gets; and an epoch is timed only where the driver would time it
+// (FINETIME, a 1PPS edge paired within 120 s, the clock line valid).
+// Synthetic blocks only (sbf_build.h, sbf_meas_build.h).
 #include <gtest/gtest.h>
 
 #include <cmath>
@@ -317,4 +319,64 @@ TEST(RawReplayMosaic, ThePvtIsTheLoopsFix)
     EXPECT_EQ(g.time_us, 123456789u);   // stamped on arrival
     EXPECT_TRUE(f.pvt().has_solution);
     EXPECT_EQ(f.counts().pvt_fix, 1u);
+}
+
+// ReceiverTime (5914): the leap seconds and SyncLevel (bit 2 FINETIME).
+std::vector<uint8_t> receiverTime(uint32_t tow, uint8_t sync_level)
+{
+    Body b(24);
+    b.u8(20, 18);
+    b.u8(21, sync_level);
+    return sbftest::block(mosaic::SBF_RECEIVER_TIME, 0, tow, kWnc, b.v);
+}
+
+TEST(RawReplayMosaic, TheTimeTagWhereTheDriverWouldGiveIt)
+{
+    // rawTimeTagOk: the clock line valid, FINETIME, and a 1PPS edge paired within 120 s
+    using Why = rr::TimeTagGate::Why;
+    const int64_t t = 500000000;
+    rr::TimeTagGate g;
+    g.pair_us = t - 1000000;
+    // a log that begins mid-session: its first ReceiverTime (FINETIME) stands for the ones before it
+    g.first_rt = 1;
+    EXPECT_EQ(g.judge(false, false, true, t), Why::TIMED);
+    // as after a boot: nothing until a ReceiverTime says FINETIME
+    g.from_boot = true;
+    EXPECT_EQ(g.judge(false, false, true, t), Why::NOT_FINETIME);
+    EXPECT_EQ(g.judge(true, true, true, t), Why::TIMED);
+    g.from_boot = false;
+    // once the receiver has said, its word: not FINETIME is untimed
+    EXPECT_EQ(g.judge(true, false, true, t), Why::NOT_FINETIME);
+    g.first_rt = 0;
+    EXPECT_EQ(g.judge(false, false, true, t), Why::NOT_FINETIME);
+    // a log with no ReceiverTime at all: untimed, as the driver would leave it, unless assumed
+    g.first_rt = -1;
+    EXPECT_EQ(g.judge(false, false, true, t), Why::NOT_FINETIME);
+    g.assume_finetime = true;
+    EXPECT_EQ(g.judge(false, false, true, t), Why::TIMED);
+    g.assume_finetime = false;
+    g.first_rt = 1;
+    // the 1PPS pairing: under 120 s old (the log's first K line, later than the epoch, stands for the earlier)
+    g.pair_us = t - 119999999;
+    EXPECT_EQ(g.judge(true, true, true, t), Why::TIMED);
+    g.pair_us = t - 120000000;
+    EXPECT_EQ(g.judge(true, true, true, t), Why::PPS_STALE);
+    g.pair_us = INT64_MIN;
+    EXPECT_EQ(g.judge(true, true, true, t), Why::PPS_STALE);
+    g.pair_us = t + 5000000;
+    EXPECT_EQ(g.judge(true, true, true, t), Why::TIMED);
+    // the clock line
+    EXPECT_EQ(g.judge(true, true, false, t), Why::NO_LINE);
+
+    // with the feed: a ReceiverTime without FINETIME, then one with it
+    MosaicFeed f;
+    gnss_raw::TimedRawEpoch te;
+    EXPECT_FALSE(f.haveTime());
+    const std::vector<uint8_t> coarse = receiverTime(kTow0, 0x03);
+    f.onBlock(coarse.data(), coarse.size(), 1000, te);
+    ASSERT_TRUE(f.haveTime());
+    EXPECT_EQ(g.judge(f.haveTime(), f.finetime(), true, t), Why::NOT_FINETIME);
+    const std::vector<uint8_t> fine = receiverTime(kTow0 + 1000, 0x07);
+    f.onBlock(fine.data(), fine.size(), 2000, te);
+    EXPECT_EQ(g.judge(f.haveTime(), f.finetime(), true, t), Why::TIMED);
 }
