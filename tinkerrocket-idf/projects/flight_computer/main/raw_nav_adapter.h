@@ -45,7 +45,16 @@
 // the same state -- is not healthy, however often it says so, and the
 // forward never carries more than that on the IMU alone.
 //
-// Header-only, host-tested (tests_cpp/test_raw_nav_adapter.cpp).
+// The mosaic-only image (TR_RAW_NAV_MOSAIC: the raw filter is the Goblin's
+// one navigation filter, with no GpsInsEKF to fall back on) adds, under its
+// own guards so the Beetle's adapter is unchanged: the geoid separation for
+// the snapshot, whether the filter has run (the transonic lockout), a
+// restore's start height rebased to the barometer and its accelerometer bias,
+// and a stop in flight held over as the last good state, carried forward,
+// to restart from (setHoldLastGood, restartFromLastGood).
+//
+// Header-only, host-tested (tests_cpp/test_raw_nav_adapter.cpp; the mosaic
+// additions in tests_cpp/test_raw_nav_adapter_mosaic.cpp).
 #pragma once
 
 #include <cmath>
@@ -69,6 +78,13 @@ public:
     // now_us is the loop's clock (micros()), for its freshness.
     void refresh(uint32_t now_us)
     {
+#if TR_RAW_NAV_MOSAIC
+        if (hold_last_good_)
+        {
+            refreshHolding(now_us);   // a stop in flight keeps the last good state
+            return;
+        }
+#endif
         now_us_ = now_us;
         if (link_ == nullptr)
             return;
@@ -82,6 +98,13 @@ public:
             if (n.running)
                 restore_pending_ = false;   // it runs: from the pad or the restore
             forwardFromPublished();
+#if TR_RAW_NAV_MOSAIC
+            if (n.running)
+            {
+                has_run_ = true;
+                held_ = false;              // running again: its own state from here
+            }
+#endif
         }
         // how old the state the loop now reads is, and how far it was brought
         // forward from the filter's (#1600: an epoch fused in one pass held
@@ -140,6 +163,10 @@ public:
     // The raw filter runs, has said so lately, and what it said is recent.
     bool running() const
     {
+#if TR_RAW_NAV_MOSAIC
+        if (held_)
+            return false;   // the last good state, held over a stop: not the filter's
+#endif
         if (nav_.running == 0 || (uint32_t)(now_us_ - nav_rx_us_) > kMaxStaleUs)
             return false;
         const int32_t age = (int32_t)(now_us_ - nav_.time_us);   // a state stamped after the loop's clock: fresh
@@ -172,6 +199,16 @@ public:
         start_q_[0] = 1.0f;
         start_q_[1] = start_q_[2] = start_q_[3] = 0.0f;
         restore_pending_ = false;
+#if TR_RAW_NAV_MOSAIC
+        has_start_ab_ = false;
+        if (held_)
+        {
+            // back on the pad (a sim's reset): the start's, not a flight's held state
+            held_ = false;
+            nav_ = gnss_raw::ShadowNav{};
+            fwd_ok_ = false;
+        }
+#endif
         start_gen_++;
     }
     // The attitude it starts from (the accelerometer's tilt, a heading guess).
@@ -250,6 +287,12 @@ public:
         }
         for (int i = 0; i < 4; ++i)
             start_q_[i] = s.quat[i];
+#if TR_RAW_NAV_MOSAIC
+        // and its accelerometer bias, for the restore's seed (startSeed)
+        for (int i = 0; i < 3; ++i)
+            start_ab_[i] = s.accel_bias[i];
+        has_start_ab_ = true;
+#endif
         restore_pending_ = true;
     }
     void setCovFromDiag(const float (&)[15]) {}
@@ -274,8 +317,58 @@ public:
         s.have_dip = mag_ref_valid_ ? 1 : 0;
         s.restore = restore_pending_ ? 1 : 0;
         s.start_gen = start_gen_;
+#if TR_RAW_NAV_MOSAIC
+        // a restored flight's accelerometer bias: the snapshot's, or the last
+        // good state's (restartFromLastGood) -- RawGnssShadow::Config::
+        // restore_seed_bias takes it in place of zero
+        s.has_accel_bias = (restore_pending_ && has_start_ab_) ? 1 : 0;
+        for (int i = 0; i < 3; ++i)
+            s.accel_bias[i] = s.has_accel_bias ? start_ab_[i] : 0.0f;
+#endif
     }
     bool restorePending() const { return restore_pending_; }
+
+#if TR_RAW_NAV_MOSAIC
+    // ------------------------------- the mosaic-only image's one filter (D2)
+
+    // The receiver's geoid separation the heights are turned by. The snapshot
+    // carries it (FlightSnapshotData::reserved_v5), so a reboot whose receiver
+    // has none yet -- or is left out after a crash -- turns them as before.
+    float geoidSeparation() const { return sep_m_; }
+
+    // Whether the raw filter has published a running state this boot. Until
+    // it has, getVelEst is where it will start -- after a restore the
+    // snapshot's velocity, seconds old -- not a speed anything measured.
+    bool hasRun() const { return has_run_; }
+
+    // A restored flight starts at the height the barometer gives now (h_msl,
+    // above the geoid, as GpsInsEKF's), not the snapshot's: while the restore
+    // waits for its start, and only then.
+    void rebaseRestoreHeight(double h_msl)
+    {
+        if (restore_pending_)
+            start_lla_[2] = h_msl + sep_m_;
+    }
+
+    // In flight, a stop publishes "not running", and on its own the adapter
+    // would then answer the start's state -- the pad's, or a restore's. With
+    // this on, a stop after a running state in flight keeps that last good
+    // state and carries it forward on each IMU tick (noteImu) as a free INS:
+    // the voters see it unhealthy (running() and isHealthy() false), the
+    // snapshot and the landing checks see the flight's state, not the pad's.
+    // It ends when the filter runs again, or init() starts over on the pad.
+    void setHoldLastGood(bool on) { hold_last_good_ = on; }
+    bool stoppedInFlight() const { return held_; }
+
+    // Starts the raw filter again from the state held: the restore path,
+    // as a reboot's snapshot would (setState), with its accelerometer bias.
+    void restartFromLastGood()
+    {
+        EkfStateSnapshot s;
+        getState(s);
+        setState(s);
+    }
+#endif
 
     // ---------------------------------------------------- the state
 
@@ -408,6 +501,61 @@ public:
     uint32_t ticks() const { return ticks_; }
 
 private:
+#if TR_RAW_NAV_MOSAIC
+    // refresh() with the hold on: one read of the link, as refresh() makes,
+    // with a stop published after a running state in flight taken (its
+    // sequence moves on) but not read in -- the state the loop reads stays
+    // the last good one, carried forward through each tick since. A state
+    // the ticks kept no longer reach is carried on from the newest tick. One
+    // read, so no stop can slip in between a check and the read it guards.
+    void refreshHolding(uint32_t now_us)
+    {
+        now_us_ = now_us;
+        if (link_ == nullptr)
+            return;
+        gnss_raw::ShadowNav n;
+        uint32_t seq = 0;
+        if (link_->nav.read(n, seq) && seq != nav_seq_)
+        {
+            nav_seq_ = seq;
+            if (!n.running && (held_ || (nav_.running && nav_.in_flight)))
+            {
+                if (!held_)
+                {
+                    held_ = true;
+                    if (!fwd_ok_ && imu_n_ > 0)
+                    {
+                        fwd_t_us_ = imu_[(imu_head_ + kTicks - 1) % kTicks].t_us;
+                        fwd_ok_ = true;
+                    }
+                }
+            }
+            else
+            {
+                // as refresh(): on the ground, or the filter running again
+                nav_ = n;
+                nav_rx_us_ = now_us;
+                if (n.running)
+                {
+                    restore_pending_ = false;
+                    has_run_ = true;
+                    held_ = false;
+                }
+                forwardFromPublished();
+            }
+        }
+        if (nav_.running)
+        {
+            const uint32_t behind = now_us - nav_.time_us;
+            if (behind < 0x80000000u && behind > max_fwd_us_)
+                max_fwd_us_ = behind;
+            const uint32_t age = now_us - (fwd_ok_ ? fwd_t_us_ : nav_.time_us);
+            if (age < 0x80000000u && age > max_age_us_)
+                max_age_us_ = age;
+        }
+    }
+#endif
+
     struct Tick
     {
         uint32_t t_us;
@@ -547,4 +695,12 @@ private:
     uint8_t  mag_flags_ = 0;         // gnss_raw::kShadowMag*: none until main.cpp says
     uint32_t mag_time_us_ = 0;
     uint32_t ticks_ = 0;
+#if TR_RAW_NAV_MOSAIC
+    // the mosaic-only image's one filter
+    bool     has_run_ = false;        // a running state seen this boot
+    bool     hold_last_good_ = false;
+    bool     held_ = false;           // a stop in flight: the last good state, carried forward
+    bool     has_start_ab_ = false;   // a restore's accelerometer bias (setState)
+    float    start_ab_[3] = {};
+#endif
 };
