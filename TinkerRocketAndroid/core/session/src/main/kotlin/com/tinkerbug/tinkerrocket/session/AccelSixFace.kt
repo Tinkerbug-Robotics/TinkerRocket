@@ -2,6 +2,9 @@ package com.tinkerbug.tinkerrocket.session
 
 import com.tinkerbug.tinkerrocket.protocol.AccelCalStatus
 import com.tinkerbug.tinkerrocket.protocol.AccelFaceState
+import com.tinkerbug.tinkerrocket.protocol.BoardOrientation
+import com.tinkerbug.tinkerrocket.protocol.IMUOrientationMode
+import com.tinkerbug.tinkerrocket.protocol.TelemetryData
 import kotlin.math.abs
 import kotlin.math.acos
 import kotlin.math.sqrt
@@ -15,13 +18,15 @@ import kotlin.math.sqrt
  * On a still pad the flight computer finds "level" from gravity, and an
  * accelerometer offset there looks exactly like a tilt.  Turn each board axis
  * straight up and then straight down: gravity flips sign on that axis and the
- * offset does not, so
+ * offset does not.  The per-axis average of the two,
  *
  *     offset_i = (reading with axis i up + reading with axis i down) / 2
  *
- * A face a few degrees off its axis reads g·cos(tilt) along it, so a pair
- * leaves g·(cos t_up − cos t_down)/2 in the offset: nothing when the two
- * tilts match, 0.3 mg for 4° against 3.5°.
+ * cancels a face's tilt only when both faces of the axis lean alike: it
+ * leaves g·(cos t_up − cos t_down)/2 behind, which reached ~6 mg on the
+ * user's first hand-held run (faces 3.7-9.1° off square).  So the solve fits
+ * all six faces together to |reading| = g — a sphere fit with a per-axis
+ * scale, [solve] — which no tilt biases; the average only seeds it.
  *
  * Board frame throughout: +X forward, +Y left, +Z up out of the component
  * side, whatever way the board sits in the rocket.  The offset is a property
@@ -38,11 +43,18 @@ public object AccelSixFace {
     /** A face whose axis is further than this off vertical is measured again. */
     public const val TILT_MAX_DEG: Double = 10.0
 
-    /** mg: a face this far off one g after the correction earns a note, not a refusal. */
-    public const val RESIDUAL_NOTE_MG: Double = 5.0
+    /** The fitted scales Save accepts: outside this the faces did not make sense. */
+    public const val SCALE_MIN: Double = 0.97
+    public const val SCALE_MAX: Double = 1.03
 
-    /** The same limit in m/s², computed as the script computes it. */
-    private const val RESIDUAL_NOTE_MPS2: Double = 5e-3 * G0
+    /** The fit's Gauss-Newton steps: at most this many. */
+    public const val FIT_MAX_ITERATIONS: Int = 20
+
+    /** It stops when no unknown moves more than this in a step. */
+    public const val FIT_STEP_TOL: Double = 1e-9
+
+    /** m/s²: converged also needs every face this close to one g at the end. */
+    public const val FIT_RESIDUAL_TOL_MPS2: Double = 1e-6
 
     /** m/s²: how close the read-back must give back each component that was sent. */
     public const val READBACK_TOL_MPS2: Double = 1e-5
@@ -98,6 +110,125 @@ public object AccelSixFace {
         return Reading(Face.of(axis, sign), tilt)
     }
 
+    /** m/s²: a live reading this far from one g (0.1 g) is a board being moved. */
+    public const val LIVE_G_TOL_MPS2: Double = 0.98
+
+    /**
+     * Degrees: under an auto-exact mounting, a still reading further than this
+     * from rocket +X is a board the flight computer has not re-read yet — it
+     * re-reads after 2 s still (its ORIENT_ACCEPT_TOL_DEG), and until then the
+     * code beside the reading still names the face the board was on before.
+     */
+    public const val EXACT_SETTLED_DEG: Double = 5.0
+
+    /**
+     * Which face the board is on now, from the newest telemetry frame.  Only a
+     * hint, to preselect the checklist row and name the Measure button: a
+     * measurement still tells its face from its own window.
+     */
+    public sealed interface LiveFace {
+        /** The face it reads, square or askew; null while waiting or moving. */
+        public val face: Face? get() = null
+
+        /** No frame yet, a field missing from the newest one, or a mounting with no discrete code. */
+        public data object Waiting : LiveFace
+
+        /**
+         * |reading| more than [LIVE_G_TOL_MPS2] from one g, or, under an
+         * auto-exact mounting, more than [EXACT_SETTLED_DEG] from rocket +X:
+         * a board the flight computer has not re-read since it was moved.
+         */
+        public data object Moving : LiveFace
+
+        /** Still, but its axis more than [TILT_MAX_DEG] off vertical. */
+        public data class Askew(override val face: Face, val tiltDeg: Double) : LiveFace
+
+        /** On [face], square enough to measure. */
+        public data class On(override val face: Face, val tiltDeg: Double) : LiveFace
+
+        /**
+         * On [face], under an auto-exact mounting, where the tilt cannot be
+         * read back: the flight computer applies the exact rotation, and the
+         * code beside it only names the board axis nearest "up", so the
+         * reading turned back through that code always looks square.  The
+         * face is right; the measurement judges the tilt.
+         */
+        public data class OnNoTilt(override val face: Face) : LiveFace
+    }
+
+    /**
+     * The mounting a reading is in: a discrete [code], and whether the flight
+     * computer actually applies an [exact] rotation beside it (auto-exact,
+     * where the code is only the board axis nearest "up").
+     */
+    public data class LiveMounting(val code: Int, val exact: Boolean)
+
+    /**
+     * The live face from a rocket-frame low-g reading and the mounting it is
+     * in ([BoardOrientation]): turned back into the board frame (Rᵀ), then
+     * told as a measurement's face is ([identify]).  Waiting without a
+     * reading or without a code that names a rotation; under an exact
+     * mounting, the face without its tilt ([LiveFace.OnNoTilt]), never askew,
+     * and only once the reading has settled onto rocket +X.
+     */
+    public fun liveFace(rocket: List<Double>?, mounting: LiveMounting?): LiveFace {
+        if (rocket == null || mounting == null || !BoardOrientation.isValid(mounting.code)) {
+            return LiveFace.Waiting
+        }
+        val board = BoardOrientation.toBoard(mounting.code, rocket)
+        val norm = sqrt(board.sumOf { it * it })
+        if (abs(norm - G0) > LIVE_G_TOL_MPS2) return LiveFace.Moving
+        if (mounting.exact && Math.toDegrees(acos((rocket[0] / norm).coerceIn(-1.0, 1.0))) > EXACT_SETTLED_DEG) {
+            return LiveFace.Moving
+        }
+        val r = identify(board)
+        return when {
+            mounting.exact -> LiveFace.OnNoTilt(r.face)
+            r.tiltDeg > TILT_MAX_DEG -> LiveFace.Askew(r.face, r.tiltDeg)
+            else -> LiveFace.On(r.face, r.tiltDeg)
+        }
+    }
+
+    /**
+     * The mounting a telemetry frame's lx/ly/lz are in.  The frame's own
+     * "imo" (code = imo & 0x1F) when it carries one, which the base station's
+     * relay does; the reading and its code then arrive together and always
+     * agree, and an exact auto rotation there has no code at all (31).  The
+     * rocket's own link leaves "imo" out and reports the mounting in its
+     * "imu_orient" message instead, re-sent as the pad auto-detect re-racks:
+     * default, manual and snapped modes as they are, and auto-exact (mode 3)
+     * with its code marked [LiveMounting.exact].  Null: no hint.
+     */
+    public fun liveMounting(imo: Int?, reportedCode: Int?, reportedMode: IMUOrientationMode): LiveMounting? {
+        if (imo != null) return LiveMounting(imo and 0x1F, exact = false)
+        val code = reportedCode ?: return null
+        return when (reportedMode) {
+            IMUOrientationMode.DEFAULT_MOUNTING, IMUOrientationMode.MANUAL, IMUOrientationMode.AUTO_SNAP ->
+                LiveMounting(code, exact = false)
+            IMUOrientationMode.AUTO_EXACT -> LiveMounting(code, exact = true)
+            IMUOrientationMode.UNKNOWN -> null
+        }
+    }
+
+    /**
+     * The live face from one telemetry frame (lx/ly/lz; a field missing from
+     * it is no hint) and, for a link whose frames carry no "imo", the mounting
+     * the "imu_orient" message last reported.
+     */
+    public fun liveFace(
+        t: TelemetryData,
+        reportedCode: Int? = null,
+        reportedMode: IMUOrientationMode = IMUOrientationMode.UNKNOWN,
+    ): LiveFace {
+        val x = t.lowGX ?: return LiveFace.Waiting
+        val y = t.lowGY ?: return LiveFace.Waiting
+        val z = t.lowGZ ?: return LiveFace.Waiting
+        return liveFace(
+            listOf(x.toDouble(), y.toDouble(), z.toDouble()),
+            liveMounting(t.imuOrientPacked, reportedCode, reportedMode),
+        )
+    }
+
     /** What a finished face window comes to. */
     public sealed interface Verdict {
         /** Kept.  [replaced]: this face was captured before, and this one replaces it. */
@@ -123,65 +254,137 @@ public object AccelSixFace {
         return Verdict.Accepted(r.face, r.tiltDeg, replaced = r.face in captured)
     }
 
-    /** The solve, in m/s² and the board frame. */
+    /** The fit, in m/s² and the board frame. */
     public data class Solution(
-        /** offset_i = (m_up[i] + m_down[i]) / 2 — what is saved. */
+        /** The offset b — what is saved. */
         val offset: List<Double>,
-        /** scale_i = (m_up[i] − m_down[i]) / 2g — for information only, never sent. */
+        /** Per axis 1 / k: shown for information, never sent. */
         val scale: List<Double>,
-        /** Each face's |(m − offset) / scale| − g, elementwise division. */
-        val residual: Map<Face, Double>,
+        /**
+         * The fit stopped on its step size, not its iteration cap, with every
+         * face within [FIT_RESIDUAL_TOL_MPS2] of one g.
+         */
+        val converged: Boolean,
+        /** Gauss-Newton steps taken. */
+        val iterations: Int,
+        /** The largest | |k ⊙ (m − b)| − g | over the six faces at the end, m/s². */
+        val maxResidualMps2: Double,
     ) {
         public val offsetMg: List<Double> get() = offset.map { mg(it) }
 
         /** Each scale as a % from 1. */
         public val scalePct: List<Double> get() = scale.map { (it - 1.0) * 100.0 }
 
-        public val residualMg: Map<Face, Double> get() = residual.mapValues { mg(it.value) }
-
-        /** The largest |residual|, mg. */
-        public val worstResidualMg: Double get() = mg(residual.values.maxOf { abs(it) })
-
         /** The axes (0 = X) whose offset the flight computer would refuse. */
-        public val axesPastLimit: List<Int> get() = (0..2).filter { abs(offset[it]) > OFFSET_MAX_MPS2 }
+        public val axesPastLimit: List<Int> get() = (0..2).filter { !(abs(offset[it]) <= OFFSET_MAX_MPS2) }
 
-        /** Nothing past the limit.  Otherwise there is nothing to save: redo the faces. */
-        public val saveAllowed: Boolean get() = axesPastLimit.isEmpty()
+        /** The axes whose scale is outside [SCALE_MIN]..[SCALE_MAX]. */
+        public val axesScaleOutOfRange: List<Int>
+            get() = (0..2).filter { !(scale[it] in SCALE_MIN..SCALE_MAX) }
 
-        /**
-         * A face is more than [RESIDUAL_NOTE_MG] off one g after the
-         * correction.  Worth a note — the offset is still good if the faces
-         * were squarish — never a refusal.
-         */
-        public val residualNote: Boolean get() = residual.values.maxOf { abs(it) } > RESIDUAL_NOTE_MPS2
+        /** Converged, every offset within the limit and every scale in range; otherwise redo the faces. */
+        public val saveAllowed: Boolean
+            get() = converged && axesPastLimit.isEmpty() && axesScaleOutOfRange.isEmpty()
 
         /** The offset as command 76 carries it. */
         public val wireOffset: List<Float> get() = offset.map { it.toFloat() }
     }
 
-    /** The script's solve over all six faces' mean readings, m/s². */
+    /**
+     * The sphere fit over all six faces' mean readings, m/s²: the offset b
+     * and per-axis k = 1 / scale that put every face at |k ⊙ (m − b)| = g.
+     * Six faces, six unknowns, so it fits exactly, and a face that is a few
+     * degrees off square is still a point on that sphere: nothing to bias.
+     * Gauss-Newton, seeded with b = the per-axis average and k = 1; each step
+     * solves the normal equations (JᵀJ) dp = −Jᵀr with partial pivoting.
+     * Identical in the iOS app and tools/accel_cal_six_face.py.
+     */
     public fun solve(faces: Map<Face, List<Double>>, g: Double = G0): Solution {
         val missing = Face.entries.filter { it !in faces }
         require(missing.isEmpty()) { "the solve needs all six faces; missing ${missing.map { it.label }}" }
-        val off = DoubleArray(3)
-        val scl = DoubleArray(3)
+        val means = Face.entries.map { faces.getValue(it) }
+        // p = (b_x, b_y, b_z, k_x, k_y, k_z).
+        val p = DoubleArray(6)
         for (ax in 0..2) {
-            val p = faces.getValue(Face.of(ax, 1))[ax]
-            val m = faces.getValue(Face.of(ax, -1))[ax]
-            off[ax] = 0.5 * (p + m)
-            scl[ax] = (p - m) / (2.0 * g)
+            p[ax] = 0.5 * (faces.getValue(Face.of(ax, 1))[ax] + faces.getValue(Face.of(ax, -1))[ax])
+            p[3 + ax] = 1.0
         }
-        val resid = LinkedHashMap<Face, Double>()
-        for (face in Face.entries) {
-            val mean = faces.getValue(face)
-            var sum = 0.0
-            for (i in 0..2) {
-                val c = (mean[i] - off[i]) / scl[i]
-                sum += c * c
+        var stoppedOnStep = false
+        var iterations = 0
+        while (iterations < FIT_MAX_ITERATIONS) {
+            iterations++
+            val (r, jac) = residualsAndJacobian(means, p, g) ?: break
+            val jtj = Array(6) { i -> DoubleArray(6) { j -> (0..5).sumOf { f -> jac[f][i] * jac[f][j] } } }
+            val rhs = DoubleArray(6) { i -> -(0..5).sumOf { f -> jac[f][i] * r[f] } }
+            val dp = solveLinear(jtj, rhs) ?: break
+            for (i in 0..5) p[i] += dp[i]
+            if (dp.maxOf { abs(it) } < FIT_STEP_TOL) {
+                stoppedOnStep = true
+                break
             }
-            resid[face] = sqrt(sum) - g
         }
-        return Solution(off.toList(), scl.toList(), resid)
+        val maxResidual = residualsAndJacobian(means, p, g)?.first?.maxOf { abs(it) } ?: Double.POSITIVE_INFINITY
+        return Solution(
+            offset = listOf(p[0], p[1], p[2]),
+            scale = listOf(1.0 / p[3], 1.0 / p[4], 1.0 / p[5]),
+            converged = stoppedOnStep && maxResidual < FIT_RESIDUAL_TOL_MPS2,
+            iterations = iterations,
+            maxResidualMps2 = maxResidual,
+        )
+    }
+
+    /**
+     * Each face's r = |v| − g with v = k ⊙ (m − b), and its Jacobian row
+     * dr/db_i = −k_i·v_i / |v|, dr/dk_i = (m_i − b_i)·v_i / |v|; null when a
+     * face sits exactly on the offset (|v| = 0).
+     */
+    private fun residualsAndJacobian(
+        means: List<List<Double>>,
+        p: DoubleArray,
+        g: Double,
+    ): Pair<DoubleArray, Array<DoubleArray>>? {
+        val r = DoubleArray(means.size)
+        val jac = Array(means.size) { DoubleArray(6) }
+        for ((f, m) in means.withIndex()) {
+            val v = DoubleArray(3) { p[3 + it] * (m[it] - p[it]) }
+            val n = sqrt(v.sumOf { it * it })
+            if (!(n > 0.0)) return null
+            r[f] = n - g
+            for (i in 0..2) {
+                jac[f][i] = -p[3 + i] * v[i] / n
+                jac[f][3 + i] = (m[i] - p[i]) * v[i] / n
+            }
+        }
+        return r to jac
+    }
+
+    /** A·x = b by Gaussian elimination with partial pivoting; null when A is singular. */
+    private fun solveLinear(a: Array<DoubleArray>, b: DoubleArray): DoubleArray? {
+        val n = b.size
+        val m = Array(n) { a[it].copyOf() }
+        val x = b.copyOf()
+        val scale = m.maxOf { row -> row.maxOf { abs(it) } }
+        for (col in 0 until n) {
+            var piv = col
+            for (row in col + 1 until n) if (abs(m[row][col]) > abs(m[piv][col])) piv = row
+            if (!(abs(m[piv][col]) > 1e-12 * scale)) return null
+            if (piv != col) {
+                val t = m[piv]; m[piv] = m[col]; m[col] = t
+                val tx = x[piv]; x[piv] = x[col]; x[col] = tx
+            }
+            for (row in col + 1 until n) {
+                val factor = m[row][col] / m[col][col]
+                for (k in col until n) m[row][k] -= factor * m[col][k]
+                x[row] -= factor * x[col]
+            }
+        }
+        val out = DoubleArray(n)
+        for (row in n - 1 downTo 0) {
+            var s = x[row]
+            for (k in row + 1 until n) s -= m[row][k] * out[k]
+            out[row] = s / m[row][row]
+        }
+        return out
     }
 
     /** What one face measurement (command 78) came to. */

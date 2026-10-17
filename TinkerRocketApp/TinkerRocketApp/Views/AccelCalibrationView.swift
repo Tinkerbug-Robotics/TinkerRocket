@@ -16,6 +16,12 @@
 //  0xD1 frames. The offset is a board property that only this screen writes:
 //  it is in no rocket profile and no connect-time sync.
 //
+//  While the board turns, a live line names the face it is on now (from
+//  telemetry's lx/ly/lz turned back through the mounting, BLEDevice
+//  .accelLiveFace), tints that row and names it on the Measure button. It is
+//  only a hint: the measurement names its face from its own reading. Tapping
+//  a row shows how to set the board on that face.
+//
 
 import SwiftUI
 
@@ -147,11 +153,22 @@ struct AccelCalibrationView: View {
     }
 
     private var facesSection: some View {
-        Section("Six Faces") {
-            Text("Board axes: +X points forward (to the nose when the board is mounted nose-forward), +Y to the left, +Z up out of the component side. Set the board, or the whole rocket, on each face and hold it still for 3 s. Any order: the app tells the face from the reading.")
-                .font(.caption).foregroundColor(.secondary)
-            ForEach(Face.allCases) { face in faceRow(face) }
-            measureRow
+        // From the newest telemetry frame: a hint that follows the board as it
+        // turns. The measurement still names its face from its own reading.
+        let live = device.accelLiveFace
+        return Section("Six Faces") {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Board axes: +X points forward (to the nose when the board is mounted nose-forward), +Y to the left, +Z up out of the component side. Set the board, or the whole rocket, on each face and hold it still for 3 s. Any order: the app tells the face from the reading.")
+                Text("You don't pick the face: set the board on a side, and the app sees which one it is.")
+            }
+            .font(.caption).foregroundColor(.secondary)
+            liveRow(live)
+            ForEach(Face.allCases) { face in faceRow(face, isLive: live.face == face) }
+            if let face = flow.placementFace {
+                Label(face.placementText, systemImage: "info.circle")
+                    .font(.callout).foregroundColor(.secondary)
+            }
+            measureRow(live)
             if let report = flow.lastFace, !flow.isMeasuring { faceReportRow(report) }
             if !flow.captures.faces.isEmpty {
                 Button("Start Over") { flow.startOver() }
@@ -161,24 +178,54 @@ struct AccelCalibrationView: View {
         }
     }
 
-    private func faceRow(_ face: Face) -> some View {
-        let capture = flow.captures.faces[face]
-        return HStack(spacing: 12) {
-            Image(systemName: capture == nil ? "circle" : "checkmark.circle.fill")
-                .foregroundColor(capture == nil ? .secondary : .green)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(face.name)
-                Text(face.howTo).font(.caption).foregroundColor(.secondary)
-            }
-            Spacer()
-            if let c = capture {
-                Text(String(format: "%.1f° off", c.tiltDeg))
-                    .font(.caption).monospacedDigit().foregroundColor(.secondary)
-            }
+    /// The live line at the top of the checklist.
+    private func liveRow(_ live: AccelSixFace.LiveFace) -> some View {
+        let icon: String
+        let color: Color
+        switch live {
+        case .on:      icon = "cube.fill"; color = .accentColor
+        case .askew:   icon = "exclamationmark.triangle.fill"; color = .orange
+        case .moving:  icon = "hand.raised.fill"; color = .orange
+        case .waiting: icon = "hourglass"; color = .secondary
         }
+        return Label(live.text, systemImage: icon).foregroundColor(color)
     }
 
-    @ViewBuilder private var measureRow: some View {
+    /// A checklist row. Tapping it shows how to set the board on that face;
+    /// the live face's row is tinted and tagged "Now".
+    private func faceRow(_ face: Face, isLive: Bool) -> some View {
+        let capture = flow.captures.faces[face]
+        return Button(action: { flow.showPlacement(face) }) {
+            HStack(spacing: 12) {
+                Image(systemName: capture == nil ? "circle" : "checkmark.circle.fill")
+                    .foregroundColor(capture == nil ? .secondary : .green)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(face.name).foregroundColor(.primary)
+                    Text(face.howTo).font(.caption).foregroundColor(.secondary)
+                }
+                Spacer()
+                if let c = capture {
+                    Text(String(format: "%.1f° off", c.tiltDeg))
+                        .font(.caption).monospacedDigit().foregroundColor(.secondary)
+                }
+                if isLive { nowTag }
+            }
+            .contentShape(Rectangle())
+        }
+        .listRowBackground(isLive ? Color.accentColor.opacity(0.12) : nil)
+        .accessibilityHint("Shows how to place the board for this face")
+    }
+
+    private var nowTag: some View {
+        Text("Now")
+            .font(.caption.weight(.semibold))
+            .foregroundColor(.white)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(Color.accentColor))
+    }
+
+    @ViewBuilder private func measureRow(_ live: AccelSixFace.LiveFace) -> some View {
         if flow.isMeasuring {
             if flow.windowOpen, let start = windowOpenedAt {
                 TimelineView(.periodic(from: start, by: 0.1)) { context in
@@ -194,8 +241,10 @@ struct AccelCalibrationView: View {
                 }
             }
         } else {
+            // Named for the live face as a hint; enabled whatever the hint
+            // says, since the measurement judges the face itself.
             Button(action: { run(flow.measure()) }) {
-                Label(flow.captures.isComplete ? "Measure a Face Again" : "Measure This Face",
+                Label(AccelSixFace.measureLabel(live: live, allCaptured: flow.captures.isComplete),
                       systemImage: "scope")
             }
             .disabled(!canRun || flow.isBusy)
@@ -226,13 +275,10 @@ struct AccelCalibrationView: View {
                     }
                 }
             }
-            residualRow(s)
-            if let text = s.tooLargeText {
+            Text(AccelSixFace.Solution.solvedTogetherText)
+                .font(.caption).foregroundColor(.secondary)
+            if let text = s.cannotSaveText {
                 Label(text, systemImage: "xmark.octagon.fill").foregroundColor(.red)
-            }
-            if let text = s.residualNoteText {
-                Label(text, systemImage: "info.circle")
-                    .font(.caption).foregroundColor(.orange)
             }
             if case .save(_)? = flow.writing {
                 HStack(spacing: 10) {
@@ -250,27 +296,6 @@ struct AccelCalibrationView: View {
             Text("Offset")
         } footer: {
             Text("The scale is shown for information; only the offset is saved.")
-        }
-    }
-
-    /// Each face after the correction, off one g, in two columns: up, down.
-    private func residualRow(_ s: AccelSixFace.Solution) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Each face after the correction, off one g")
-                .font(.caption).foregroundColor(.secondary)
-            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 4) {
-                ForEach(0..<3, id: \.self) { axis in
-                    GridRow {
-                        ForEach([true, false], id: \.self) { up in
-                            let face = Face(axis: axis, up: up)
-                            Text(face.name).font(.caption)
-                            Text(AccelCalStatus.mg(s.residual[face] ?? 0))
-                                .font(.caption).monospacedDigit()
-                                .gridColumnAlignment(.trailing)
-                        }
-                    }
-                }
-            }
         }
     }
 

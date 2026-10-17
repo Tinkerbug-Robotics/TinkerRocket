@@ -241,6 +241,18 @@ public class DeviceSession(
     public val imuOrientationMode: StateFlow<IMUOrientationMode> = _imuOrientationMode.asStateFlow()
 
     /**
+     * #1629: the mounting code in the newest "imu_orient" message (0..23; in
+     * auto-exact the nearest code, not the rotation in use).  The rocket's own
+     * link leaves "imo" out of telemetry, so the six-face screen's live hint
+     * turns lx/ly/lz back with this ([accelLiveFace]).  Null until a message
+     * carries one, and wiped on disconnect — unlike the name and mode above —
+     * so a hint never runs on an earlier link's mounting (iOS
+     * imuOrientationCode).
+     */
+    private val _imuOrientationCode = MutableStateFlow<Int?>(null)
+    public val imuOrientationCode: StateFlow<Int?> = _imuOrientationCode.asStateFlow()
+
+    /**
      * iOS `contTestPendingUntil` twin: per-channel deadline (session-clock
      * millis) while a manual continuity test round-trips BLE→OC→I2C→FC and
      * back through telemetry "ps" bits (#411).  Displays show TESTING
@@ -322,6 +334,19 @@ public class DeviceSession(
      */
     private val _accelCalFrames = MutableSharedFlow<AccelCalStatus>(extraBufferCapacity = 16)
     public val accelCalFrames: SharedFlow<AccelCalStatus> = _accelCalFrames.asSharedFlow()
+
+    /**
+     * #1629: which face the board is on now, from the newest telemetry frame
+     * — iOS BLEDevice.accelLiveFace.  Its lx/ly/lz turned back through the
+     * mounting they are in: the frame's own "imo" (the base station's relay
+     * carries it), else the "imu_orient" message's code (the rocket's own
+     * link).  Waiting while not connected: the telemetry mirror outlives the
+     * link, and a hint must not.
+     */
+    public val accelLiveFace: Flow<AccelSixFace.LiveFace> =
+        combine(telemetry, imuOrientationCode, imuOrientationMode, isConnected) { t, code, mode, connected ->
+            if (connected) AccelSixFace.liveFace(t, code, mode) else AccelSixFace.LiveFace.Waiting
+        }.distinctUntilChanged()
 
     private val _rocketStorage = MutableStateFlow<RocketStorageStats?>(null)
     public val rocketStorage: StateFlow<RocketStorageStats?> = _rocketStorage.asStateFlow()
@@ -566,7 +591,8 @@ public class DeviceSession(
     /**
      * Wipe exactly what iOS `onDisconnect()` wipes.  NOT wiped (also exactly
      * like iOS): telemetry mirror, identity, remote-rocket roster, scan
-     * results, storage stats, otaStatus, IMU orientation, focus pin.
+     * results, storage stats, otaStatus, IMU orientation name and mode (its
+     * #1629 code is wiped), focus pin.
      */
     private fun onDisconnect() {
         _isConnected.value = false
@@ -594,8 +620,10 @@ public class DeviceSession(
         // reflashed.  iOS gets the same from a BLEDevice per connection.
         _padCalStatus.value = null
         // #1629: the stored offset belongs to the board on THIS link; the
-        // next connection may be another board, or this one reflashed.
+        // next connection may be another board, or this one reflashed.  So
+        // does the mounting code the live face hint turns lx/ly/lz with.
         _accelCalStatus.value = null
+        _imuOrientationCode.value = null
         // #435: per-connection live state — a stale echo could "confirm" a
         // send made over a new connection to a rebooted FC.
         _guidanceEcho.value = null
@@ -848,6 +876,7 @@ public class DeviceSession(
     private fun onImuOrient(msg: ImuOrientMsg) {
         msg.name?.let { _imuOrientationName.value = it }
         msg.mode?.let { _imuOrientationMode.value = it }
+        msg.code?.let { _imuOrientationCode.value = it }
         // iOS caches "set" into rocketConfig ONLY when a config already
         // exists (`if let set..., var cfg = rocketConfig`).
         val setting = msg.setting

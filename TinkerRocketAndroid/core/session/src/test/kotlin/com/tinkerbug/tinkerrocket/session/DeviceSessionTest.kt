@@ -11,6 +11,7 @@ import com.tinkerbug.tinkerrocket.protocol.PadCalState
 import com.tinkerbug.tinkerrocket.protocol.PyroChannelConfig
 import com.tinkerbug.tinkerrocket.protocol.TelemetryData
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -1349,6 +1350,45 @@ class DeviceSessionTest {
         val a = run.await()
         assertNull(a.answer)
         assertFalse(AccelSixFace.cleared(a.final), "the stored offset is still there")
+    }
+
+    /**
+     * The rocket's own link: telemetry without "imo", the mounting in the
+     * "imu_orient" message.  The live face follows the message's code, and
+     * waits once the link is gone (the telemetry mirror outlives it).
+     */
+    @Test
+    fun accelLiveFace_onADirectLink_followsTheImuOrientMessage_andWaitsOffline() = runTest {
+        val h = startedSession()
+        advanceTimeBy(1000)
+        runCurrent()
+        assertSame(AccelSixFace.LiveFace.Waiting, h.session.accelLiveFace.first())
+
+        // +Z toward the nose, the pad auto-detect's snap; gravity along the nose.
+        h.fw.emitTelemetryJson("""{"type":"imu_orient","code":16,"mode":2,"name":"+Z","set":255}""")
+        h.fw.emitTelemetryJson("""{"st":"READY","fs":16,"lx":9.8,"ly":0.0,"lz":0.0}""")
+        runCurrent()
+        assertEquals(16, h.session.imuOrientationCode.value)
+        val on = assertIs<AccelSixFace.LiveFace.On>(h.session.accelLiveFace.first())
+        assertEquals(AccelSixFace.Face.Z_UP, on.face)
+
+        // Re-racked to the identity: the same board face now reads along rocket +Z.
+        h.fw.emitTelemetryJson("""{"type":"imu_orient","code":0,"mode":2,"name":"+X","set":255}""")
+        h.fw.emitTelemetryJson("""{"st":"READY","fs":16,"lx":0.0,"ly":0.0,"lz":9.8}""")
+        runCurrent()
+        assertEquals(AccelSixFace.Face.Z_UP, h.session.accelLiveFace.first().face)
+
+        // Auto-exact (mode 3), as the user's Beetle reports a face a few
+        // degrees off square: the face from the code, no tilt.
+        h.fw.emitTelemetryJson("""{"type":"imu_orient","code":16,"mode":3,"name":"+Z","set":255}""")
+        h.fw.emitTelemetryJson("""{"st":"READY","fs":16,"lx":9.8,"ly":0.0,"lz":0.0}""")
+        runCurrent()
+        assertEquals(AccelSixFace.LiveFace.OnNoTilt(AccelSixFace.Face.Z_UP), h.session.accelLiveFace.first())
+
+        h.fw.fireDisconnect()
+        runCurrent()
+        assertNull(h.session.imuOrientationCode.value)
+        assertSame(AccelSixFace.LiveFace.Waiting, h.session.accelLiveFace.first())
     }
 
     @Test

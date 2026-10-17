@@ -194,6 +194,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// mounting before arming. Empty until a v3-orientation FC reports it.
     @Published var imuOrientationName: String = ""
     @Published var imuOrientationMode: IMUOrientationMode = .unknown
+    /// The mounting code in that "imu_orient" message (0...23; in auto-exact
+    /// the nearest code, not the rotation in use). The rocket's own link
+    /// leaves "imo" out of telemetry, so the six-face screen's live hint
+    /// turns lx/ly/lz back with this. nil until a message carries one; reset
+    /// on disconnect, so a hint never runs on an earlier link's mounting.
+    @Published var imuOrientationCode: Int?
 
     /// Live guidance-target echo (#435): FC-authoritative state of the
     /// station-keep aim point ("guid_target" frames relayed by the OC).
@@ -421,6 +427,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         padCalStatus = nil
         padCalGeneration += 1
         accelCalStatus = nil
+        imuOrientationCode = nil
         pyroTestRefusal = nil
         // #435: the guidance-target echo is per-connection live state; the
         // OC re-pushes it in the connect-time config readback, so a stale
@@ -2572,6 +2579,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             if let mode = dict["mode"] as? Int {
                 imuOrientationMode = IMUOrientationMode(rawValue: mode) ?? .unknown
             }
+            if let code = dict["code"] as? Int { imuOrientationCode = code }
             if let set = dict["set"] as? Int, var cfg = rocketConfig {
                 cfg.imuOrientSetting = UInt8(clamping: set)
                 rocketConfig = cfg

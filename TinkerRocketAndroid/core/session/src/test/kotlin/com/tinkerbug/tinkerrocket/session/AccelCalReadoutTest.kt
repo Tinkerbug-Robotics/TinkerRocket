@@ -6,6 +6,7 @@ import com.tinkerbug.tinkerrocket.session.AccelCalReadout.Line
 import com.tinkerbug.tinkerrocket.session.AccelCalReadout.Tone
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.Access
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.Face
+import com.tinkerbug.tinkerrocket.session.AccelSixFace.LiveFace
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.Measurement
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.Verdict
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.WriteReport
@@ -101,16 +102,20 @@ class AccelCalReadoutTest {
         val s = AccelSixFace.Solution(
             offset = listOf(0.0412, -0.0273, 0.0156),
             scale = listOf(1.002, 0.997, 1.0),
-            residual = Face.entries.associateWith { 0.001 },
+            converged = true,
+            iterations = 3,
+            maxResidualMps2 = 1e-12,
         )
         assertEquals("+4.20 mg", AccelCalReadout.mg(s.offset[0]))
         assertEquals(
             listOf("scale +0.200 %", "scale -0.300 %", "scale +0.000 %"),
             (0..2).map { AccelCalReadout.scale(s, it) },
         )
-        assertEquals("+0.10 mg", AccelCalReadout.mg(s.residual.getValue(Face.X_UP)))
-        assertNull(AccelCalReadout.tooLarge(s))
-        assertNull(AccelCalReadout.residualNote(s))
+        assertEquals(
+            "All six faces are solved together, so a face a few degrees off square does not bias the offset.",
+            AccelCalReadout.SOLVED_TOGETHER,
+        )
+        assertNull(AccelCalReadout.cannotSave(s))
 
         assertEquals(
             Line(
@@ -118,12 +123,62 @@ class AccelCalReadoutTest {
                     "Redo the faces: was one of them not still, or the wrong way up?",
                 Tone.BAD,
             ),
-            AccelCalReadout.tooLarge(s.copy(offset = listOf(0.0412, 1.3, -1.1))),
+            AccelCalReadout.cannotSave(s.copy(offset = listOf(0.0412, 1.3, -1.1))),
+        )
+        // A fit that did not converge, or a scale out of range: the redo line alone.
+        val redo = Line("Redo the faces: was one of them not still, or the wrong way up?", Tone.BAD)
+        assertEquals(redo, AccelCalReadout.cannotSave(s.copy(converged = false)))
+        assertEquals(redo, AccelCalReadout.cannotSave(s.copy(scale = listOf(1.06, 1.0, 1.0))))
+    }
+
+    @Test
+    fun theLiveFaceLine() {
+        assertEquals(
+            Line("On now: +Y UP (left side up), 5° off vertical", Tone.OK),
+            AccelCalReadout.live(LiveFace.On(Face.Y_UP, 5.3)),
         )
         assertEquals(
-            "A face is 7.1 mg off one g after the correction (over 5). The offset is still " +
-                "good if the faces were squarish; the scale is not used.",
-            AccelCalReadout.residualNote(s.copy(residual = s.residual + (Face.Y_DOWN to -0.07)))?.text,
+            "On now: +X DOWN (forward end down), 0° off vertical",
+            AccelCalReadout.live(LiveFace.On(Face.X_DOWN, 0.2)).text,
+        )
+        assertEquals(
+            Line("Set it squarer: +Z UP is 15° off vertical", Tone.WARN),
+            AccelCalReadout.live(LiveFace.Askew(Face.Z_UP, 14.6)),
+        )
+        // Auto-exact: the face, and no tilt to tell.
+        assertEquals(
+            Line("On now: +Z UP (component side up)", Tone.OK),
+            AccelCalReadout.live(LiveFace.OnNoTilt(Face.Z_UP)),
+        )
+        assertEquals(Line("Hold it still", Tone.WARN), AccelCalReadout.live(LiveFace.Moving))
+        assertEquals(Line("Waiting for the rocket's reading…"), AccelCalReadout.live(LiveFace.Waiting))
+        assertEquals(
+            "You don't pick the face: set the board on a side, and the app sees which one it is.",
+            AccelCalReadout.FACES_NO_PICK,
+        )
+        assertEquals("Now", AccelCalReadout.NOW)
+    }
+
+    @Test
+    fun theMeasureButtonNamesTheLiveFace() {
+        assertEquals("Measure +Y UP", AccelCalReadout.measureLabel(Face.Y_UP, allCaptured = false))
+        assertEquals("Measure +Y UP", AccelCalReadout.measureLabel(Face.Y_UP, allCaptured = true))
+        assertEquals("Measure This Face", AccelCalReadout.measureLabel(null, allCaptured = false))
+        assertEquals("Measure a Face Again", AccelCalReadout.measureLabel(null, allCaptured = true))
+    }
+
+    @Test
+    fun aTappedRowSaysHowToPlaceTheBoard() {
+        assertEquals(
+            listOf(
+                "To measure +X UP: stand it on its back end, forward end up.",
+                "To measure +X DOWN: stand it on its forward end, forward end down.",
+                "To measure +Y UP: lay it on its right side, left side up.",
+                "To measure +Y DOWN: lay it on its left side, left side down.",
+                "To measure +Z UP: lay it flat, component side up.",
+                "To measure +Z DOWN: lay it flat, component side down.",
+            ),
+            Face.entries.map { AccelCalReadout.placement(it) },
         )
     }
 
