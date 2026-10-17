@@ -131,7 +131,7 @@ def run_one(job):
         json.dump(sc, fh)
     os.replace(score_path + ".tmp", score_path)
     if not (keep and (pattern in keep or "all" in keep)):
-        for f in (csv, csv + ".events.json"):
+        for f in (csv, csv + ".events.json", csv + ".epochs.csv"):
             if os.path.exists(f):
                 os.remove(f)
     return rid, p.returncode, dt

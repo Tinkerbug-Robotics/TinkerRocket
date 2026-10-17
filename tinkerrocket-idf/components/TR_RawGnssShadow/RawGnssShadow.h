@@ -284,6 +284,10 @@
 //     bias (the unaided twin's mask, for those epochs): the snatch and a
 //     tumble. Roll alone never holds it: a spinning rocket keeps its GNSS
 //     attitude.
+// With rot_after_apogee both act only once the flight computer has called
+// apogee: the drogue's snatch and the descent. The boost and the coast --
+// where a boost that weathercocks would be held, and where the votes and the
+// raw vote guard read the filter -- fly as without them.
 //
 // Stopping. A sensor sim, a hole in the IMU longer than max_gap_s, a state
 // that is not finite, or (on the pad) one pad_reset_m from the flight
@@ -447,6 +451,7 @@ public:
         double   att_hold_rate_rps = 0.0;     // an epoch whose rate across the nose reached this, rad/s, and
         double   att_hold_s = 0.0;            //   every epoch within this long after one: GNSS held off the
                                               //   attitude and the gyro bias (RawGnssEKF::setAttHold)
+        bool     rot_after_apogee = false;    // both only after the flight computer's apogee call
     };
 
     // When the boost screen runs (Config::boost_screen).

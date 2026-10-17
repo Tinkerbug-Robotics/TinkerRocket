@@ -905,20 +905,24 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
     // the turning body (RawGnssShadow.h): the rate since the epoch before
     // sets this epoch's allowance on its Dopplers (jobChecks) and whether GNSS
     // is held off the attitude for it -- on the filter itself, so the boost
-    // screen's scratch copy takes the hold along
+    // screen's scratch copy takes the hold along. With rot_after_apogee,
+    // neither before the apogee call (the rate is still taken, so the first
+    // epoch after it reads only its own interval's)
     job_.rot_sigma = 0.0;
     if (rotOn())
     {
         float all = 0.0f, across = 0.0f;
         ekf_.takeRatePeak(all, across);
-        job_.rot_sigma = rotLeverSigma(cfg_.rot_lever_axial_m, cfg_.rot_lever_radial_m, static_cast<double>(all),
-                                       static_cast<double>(across));
+        const bool acts = !cfg_.rot_after_apogee || (imu_flags & kShadowApogee) != 0;
+        if (acts)
+            job_.rot_sigma = rotLeverSigma(cfg_.rot_lever_axial_m, cfg_.rot_lever_radial_m, static_cast<double>(all),
+                                           static_cast<double>(across));
         st_.rot_last_sigma_mps = static_cast<float>(job_.rot_sigma);
         if (st_.rot_last_sigma_mps > st_.rot_max_sigma_mps)
             st_.rot_max_sigma_mps = st_.rot_last_sigma_mps;
         st_.rot_last_across_rps = across;
         bool hold = false;
-        if (cfg_.att_hold_rate_rps > 0.0)
+        if (cfg_.att_hold_rate_rps > 0.0 && acts)
         {
             if (static_cast<double>(across) >= cfg_.att_hold_rate_rps)
                 att_hold_until_ = te + cfg_.att_hold_s;

@@ -323,6 +323,7 @@ struct TenFlight
     double turn_rps = 0.0;
     int    turn_axis = 1;
     double lever_m = 0.0;
+    double apogee_t = -1.0;              // the flight computer calls apogee from here (kShadowApogee)
 };
 
 TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
@@ -398,6 +399,8 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
             s.acc[i] = float(f_b[i]);
         s.gyro[fl.turn_axis] = float(w_turn);
         s.flags = t < kIgn ? gnss_raw::kShadowLevel : (t >= kIgn + 0.1 ? gnss_raw::kShadowInFlight : 0);
+        if (fl.apogee_t >= 0.0 && t >= fl.apogee_t)
+            s.flags |= gnss_raw::kShadowApogee;
         sh.onImu(s, t64);
         // each epoch as it closes
         if (sh.stats().last_tow_ms != last_tow_ms)
@@ -1156,6 +1159,32 @@ TEST(RawGnssShadowV9, TheTurningBodysAllowanceIsOnTheDopplersOfTheEpochsItTurned
     // the radial 0.05 m takes it, 0.05 x 5
     const TenRun roll = flyTen(c, turningCoast(5.0, 0, 0.0));
     EXPECT_NEAR(roll.st.rot_max_sigma_mps, 0.25f, 0.01f);
+    // only after the apogee call (rot_after_apogee): called at 7.5 s, the
+    // epochs of the turn handed over before it take nothing
+    c.rot_after_apogee = true;
+    TenFlight late = fl;
+    late.apogee_t = 7.5;
+    const TenRun after = flyTen(c, late), after_bare = flyTen(mosaicCfg(), late);
+    int allowed = 0;
+    for (int k = 30; k <= 95; ++k)
+    {
+        const double t = k / 10.0;
+        const ClosedEpoch* a = epochAt(after, t);
+        const ClosedEpoch* b = epochAt(after_bare, t);
+        ASSERT_NE(a, nullptr) << t;
+        ASSERT_NE(b, nullptr) << t;
+        const double a2 = double(a->sigma_rr_min) * a->sigma_rr_min, b2 = double(b->sigma_rr_min) * b->sigma_rr_min;
+        if (t > 7.5 - 1e-6 && t < 8.0 + 1e-6)
+        {
+            EXPECT_NEAR(a2 - b2, 0.49, 0.02) << t;
+            allowed++;
+        }
+        else
+        {
+            EXPECT_NEAR(a2, b2, 1e-4 * b2) << t;
+        }
+    }
+    EXPECT_EQ(allowed, 6);
 }
 
 TEST(RawGnssShadowV9, TheHoldTakesTheEpochsThatTurnedAcrossTheNoseAndTheTailAfter)
@@ -1186,6 +1215,21 @@ TEST(RawGnssShadowV9, TheHoldTakesTheEpochsThatTurnedAcrossTheNoseAndTheTailAfte
     // under the threshold, nothing is held: 1.4 rad/s
     const TenRun slow = flyTen(c, turningCoast(1.4, 1, 0.0));
     EXPECT_EQ(slow.st.att_held, 0u);
+    // only after the apogee call: called at 7.5 s, the epochs of the turn
+    // handed over before it are not held, those after it and the tail are
+    c.rot_after_apogee = true;
+    TenFlight fl = turningCoast(2.0, 1, 0.0);
+    fl.apogee_t = 7.5;
+    const TenRun late = flyTen(c, fl);
+    for (const ClosedEpoch& e : late.eps)
+    {
+        const bool want = e.t > 7.5 - 1e-6 && e.t < 8.2 + 1e-6;
+        EXPECT_EQ(e.held, want) << e.t;
+    }
+    EXPECT_EQ(late.st.att_held, 8u);
+    // and with no call at all, none
+    const TenRun never = flyTen(c, turningCoast(2.0, 1, 0.0));
+    EXPECT_EQ(never.st.att_held, 0u);
 }
 
 TEST(RawGnssShadowV9, KeepingTheRateForTheAllowancesChangesNothingUntilOneActs)

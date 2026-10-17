@@ -263,6 +263,7 @@ struct Args
     // GNSS held off the attitude from a rate across the nose and for a while after
     double rot_lever_axial_m = -1.0, rot_lever_radial_m = -1.0;
     double att_hold_rate_rps = -1.0, att_hold_s = -1.0;
+    bool rot_after_apogee = false;   // both only once the flight computer has called apogee
     std::set<std::string> given;     // the options on the command line
 };
 
@@ -296,7 +297,7 @@ void usage()
                  "  [--assume-finetime] [--pad-zupt 0|1] [--gnss-only-from-s X] [--gnss-only-gate launch|ground]\n"
                  "  [--pvt-out FILE]\n"
                  "  the turning body (a RAW_REPLAY_ROT build): [--rot-lever-axial-m X] [--rot-lever-radial-m X]\n"
-                 "  [--att-hold-rate X] [--att-hold-s X]\n");
+                 "  [--att-hold-rate X] [--att-hold-s X] [--rot-after-apogee]\n");
 }
 
 bool parseArgs(int argc, char** argv, Args& a)
@@ -427,6 +428,7 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--rot-lever-radial-m") a.rot_lever_radial_m = std::atof(val());
         else if (k == "--att-hold-rate") a.att_hold_rate_rps = std::atof(val());
         else if (k == "--att-hold-s") a.att_hold_s = std::atof(val());
+        else if (k == "--rot-after-apogee") a.rot_after_apogee = true;
         else if (k == "--acc-sub")
         {
             if (std::sscanf(val(), "%lf,%lf,%lf", &a.acc_sub[0], &a.acc_sub[1], &a.acc_sub[2]) != 3)
@@ -1640,10 +1642,13 @@ int main(int argc, char** argv)
         cfg.att_hold_rate_rps = a.att_hold_rate_rps;
     if (a.att_hold_s >= 0.0)
         cfg.att_hold_s = a.att_hold_s;
+    cfg.rot_after_apogee = a.rot_after_apogee;
 #else
-    if (a.rot_lever_axial_m >= 0.0 || a.rot_lever_radial_m >= 0.0 || a.att_hold_rate_rps >= 0.0 || a.att_hold_s >= 0.0)
+    if (a.rot_lever_axial_m >= 0.0 || a.rot_lever_radial_m >= 0.0 || a.att_hold_rate_rps >= 0.0 || a.att_hold_s >= 0.0
+        || a.rot_after_apogee)
         std::fprintf(stderr, "WARNING: this build has no turning-body allowances (RAW_REPLAY_ROT=OFF): "
-                             "--rot-lever-axial-m, --rot-lever-radial-m, --att-hold-rate and --att-hold-s are ignored\n");
+                             "--rot-lever-axial-m, --rot-lever-radial-m, --att-hold-rate, --att-hold-s and "
+                             "--rot-after-apogee are ignored\n");
 #endif
 #if RAW_REPLAY_MOSAIC
     const bool mosaic_eph_cap = gnss_raw::EphemerisStore::kCapacity == 128;
@@ -3339,9 +3344,10 @@ int main(int argc, char** argv)
 #endif
 #if RAW_REPLAY_ROT
                 std::fprintf(ej, "\"rot\": {\"axial_m\": %.3f, \"radial_m\": %.3f, \"hold_rps\": %.3f, \"hold_s\": %.3f, "
-                                 "\"max_sigma_mps\": %.3f, \"held\": %u}, ",
+                                 "\"after_apogee\": %d, \"max_sigma_mps\": %.3f, \"held\": %u}, ",
                              sh.cfg_.rot_lever_axial_m, sh.cfg_.rot_lever_radial_m, sh.cfg_.att_hold_rate_rps,
-                             sh.cfg_.att_hold_s, static_cast<double>(fs.rot_max_sigma_mps), fs.att_held);
+                             sh.cfg_.att_hold_s, sh.cfg_.rot_after_apogee ? 1 : 0,
+                             static_cast<double>(fs.rot_max_sigma_mps), fs.att_held);
 #endif
                 std::fprintf(ej, "\"screen_compare\": [");
                 for (size_t i = 0; i < cmps.size(); ++i)
