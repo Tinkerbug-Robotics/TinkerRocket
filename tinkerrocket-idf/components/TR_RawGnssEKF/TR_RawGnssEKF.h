@@ -161,6 +161,13 @@ struct RawGnssEKFParams
     // Raw measurement gating
     double gate_chi2      = 10.83;     // p = 0.001, 1 dof
     int    reject_persist = 3;         // refused this many epochs running: let back in
+    // The Doppler's own count (below 0: reject_persist's). The count is of
+    // epochs, and the Beetle's 3 is 3 s at its 1 Hz: a receiver fused at 10 Hz
+    // would let a stale or recovering satellite's Doppler back in after 0.3 s,
+    // the tail the vertical check's latch was built for. Its pseudorange, fused
+    // once a second there (RawGnssShadow's pr_period_s), keeps reject_persist.
+    // The boost screen's let-in (screenRangeRates) takes the same count.
+    int    reject_persist_rr = -1;
     // A step in every pseudorange (or range rate) at once is the receiver's clock
     double clock_step_m          = 1000.0;
     double clock_step_spread_m   = 200.0;
@@ -176,6 +183,14 @@ struct RawGnssEKFParams
     // stays the gyro's and the levelling's. For a filter that learns its
     // heading in flight (the heading fit's hand-off, RawGnssShadow).
     bool   att_gate_vertical = false;
+    // GNSS never reaches the attitude or the gyro bias: the pseudorange and
+    // Doppler updates' gain on them masked (Joseph form, so P stays
+    // consistent), the levelling, the magnetometer, the barometer and zero
+    // velocity untouched. The "unaided" twin a raw filter's attitude is judged
+    // against (the replay harness's --unaided): the same firmware, its
+    // attitude the IMU's, gravity's and the magnetometer's only. Not the
+    // carrier's update: the harness refuses it with the carrier fused.
+    bool   att_gnss_off = false;
     // Initial sigmas, in the state's units (the attitude's: a half-angle).
     // p0_att: the tilt's, about north and east; p0_hdg: the heading's, about
     // the vertical of init's attitude (#1626 N10). p0_hdg was pi ("any
@@ -326,6 +341,24 @@ public:
     // Forget which satellites were refused (reject_persist's count): ones
     // refused under a wrong heading come back on their own merits.
     void clearRejects();
+    // Whether updateGnssRawPart fuses the pseudoranges (the default) or only
+    // the Dopplers. A receiver faster than 1 Hz has its code fused once a
+    // second (RawGnssShadow's pr_period_s): each code update's correlated part
+    // is inflated by the time since that satellite's last (corrInflation), so
+    // fused ten times a second the gate opens about sqrt(10) wider for the
+    // same information. Off, an epoch's pseudoranges still start and step the
+    // clock (initClockFrom, beginGnssRaw), and each satellite's code refusals
+    // and last update stand as they were. A copy of the filter takes it along.
+    void setFusePr(bool on) { fuse_pr_ = on; }
+    bool fusePr() const { return fuse_pr_; }
+    // A flight restored after a reboot: the position's, velocity's and
+    // attitude's 1-sigmas set to these on every axis (the attitude's a
+    // rotation, rad), their cross-covariances dropped. A block whose sigma is
+    // not above 0 is left as it was.
+    void inflateRestoreSigmas(T pos_m, T vel_mps, T att_rad);
+    // The accelerometer bias (m/s^2, body), its covariance kept: a restored
+    // flight's, the snapshot's.
+    void setAccelBias(const T ab[3]);
 
     // IMU time update: specific force (m/s^2) and rate (rad/s), body FRD.
     void propagate(const T acc[3], const T gyro[3], T dt);
@@ -373,7 +406,8 @@ public:
     // stands, after beginGnssRaw and before any update: each with the
     // innovation, variance and chi-square updateGnssRawPart would give it as
     // the epoch's first update (a satellite refused reject_persist epochs
-    // running passes: the update lets it in). How many were gated and
+    // running -- reject_persist_rr where set -- passes: the update lets it
+    // in). How many were gated and
     // refused, in st.screen_rr and st.screen_refused; nothing else changes.
     void screenRangeRates(const RawMeas* m, int n, double age_s, RawGnssStats& st) const;
     // the vertical check's fit leaves out a Doppler this many of its own 1-sigmas off the rest's fit
@@ -467,6 +501,12 @@ private:
     // else none).
     static void gateGain(T K[N], T att, const T* att_axis);
     const T* gnssAttAxis(T vert[3]) const;
+    // reject_persist for a kind (0 pseudorange, 1 range rate): the Doppler's
+    // own count where it has one (reject_persist_rr)
+    int    rejectPersist(int kind) const
+    {
+        return kind == 1 && p_.reject_persist_rr >= 0 ? p_.reject_persist_rr : p_.reject_persist;
+    }
     // One carrier rate with the epoch's common rate c: x and c jointly (its
     // H 1; P_xc, P_cc beside P), Joseph form, the gain gated as above. dc:
     // c's correction.
@@ -519,6 +559,7 @@ private:
     T      P_[N][N] = {};
     double t_ = 0.0;
     bool   clk_ready_ = false;
+    bool   fuse_pr_ = true;      // setFusePr
     T      a_ned_[3] = {};
     T      g_excess_ = 0;
     T      g_peak_ = 0;

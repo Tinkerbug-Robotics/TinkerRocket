@@ -306,6 +306,33 @@ void RawGnssEKF<T>::clearRejects()
 }
 
 template <typename T>
+void RawGnssEKF<T>::inflateRestoreSigmas(T pos_m, T vel_mps, T att_rad)
+{
+    // the state is the attitude's half-angle: a rotation sigma is sigma/2 there
+    const T var[3] = {pos_m * pos_m, vel_mps * vel_mps, T(0.25) * att_rad * att_rad};
+    const bool set[3] = {pos_m > T(0), vel_mps > T(0), att_rad > T(0)};
+    const int base[3] = {kPos, kVel, kAtt};
+    for (int b = 0; b < 3; ++b)
+    {
+        if (!set[b])
+            continue;
+        for (int i = base[b]; i < base[b] + 3; ++i)
+        {
+            for (int j = 0; j < N; ++j)
+                P_[i][j] = P_[j][i] = T(0);
+            P_[i][i] = var[b];
+        }
+    }
+}
+
+template <typename T>
+void RawGnssEKF<T>::setAccelBias(const T ab[3])
+{
+    for (int i = 0; i < 3; ++i)
+        ab_[i] = ab[i];
+}
+
+template <typename T>
 T RawGnssEKF<T>::isb(int sys) const
 {
     return sys == GNSS_SYS_GAL ? isb_[0] : (sys == GNSS_SYS_BDS ? isb_[1] : T(0));
@@ -1311,12 +1338,16 @@ void RawGnssEKF<T>::updateGnssRawPart(const RawMeas* m, int i0, int i1, double a
     const T att = attGate();
     T vert[3];                            // the vertical in the body frame (att_gate_vertical)
     const T* axis = gnssAttAxis(vert);
+    // att_gnss_off: the attitude and the gyro bias kept out of every GNSS row
+    // here, and only here (scalarUpdate's other callers -- the levelling, the
+    // height, zero velocity, the magnetometer -- keep theirs)
+    const uint32_t kmask = p_.att_gnss_off ? ~((0x7u << kAtt) | (0x7u << kGyroBias)) : 0xFFFFFFFFu;
     for (int i = i0; i < i1; ++i)
     {
         const RawMeas& mi = m[i];
         if (mi.sys > GNSS_SYS_BDS || mi.prn >= 64)
             continue;
-        if (!mi.has_pr && !mi.has_rr)
+        if ((!mi.has_pr || !fuse_pr_) && !mi.has_rr)
             continue;
         // The geometry once per satellite, at the state every satellite
         // before it left (the prototype redoes it per measurement too, but
@@ -1332,7 +1363,7 @@ void RawGnssEKF<T>::updateGnssRawPart(const RawMeas* m, int i0, int i1, double a
             u_ned[a] = T(Tm[a][0] * L.u[0] + Tm[a][1] * L.u[1] + Tm[a][2] * L.u[2]);
         for (int kind = 0; kind < 2; ++kind)
         {
-            if (kind == 0 ? !mi.has_pr : !mi.has_rr)
+            if (kind == 0 ? (!mi.has_pr || !fuse_pr_) : !mi.has_rr)
                 continue;
             double pred_rate = 0.0;
             if (kind == 1)
@@ -1407,7 +1438,7 @@ void RawGnssEKF<T>::updateGnssRawPart(const RawMeas* m, int i0, int i1, double a
 
             uint8_t& rej = rejects_[mi.sys][mi.prn][kind];
             T gate = T(p_.gate_chi2);
-            if (rej >= p_.reject_persist)
+            if (rej >= rejectPersist(kind))
             {
                 // persistent disagreement: the filter is the suspect, so let
                 // it in, its variance scaled by its NIS over the gate (the
@@ -1419,7 +1450,7 @@ void RawGnssEKF<T>::updateGnssRawPart(const RawMeas* m, int i0, int i1, double a
             }
             T dx[N];
             T nis = T(0);
-            const bool ok = scalarUpdate(hidx, hval, hn, y, R, gate, att, dx, &nis, 0xFFFFFFFFu, axis) == 1;
+            const bool ok = scalarUpdate(hidx, hval, hn, y, R, gate, att, dx, &nis, kmask, axis) == 1;
             if (ok)
             {
                 inject(dx);
