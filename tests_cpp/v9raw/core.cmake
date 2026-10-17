@@ -20,3 +20,38 @@ target_include_directories(test_raw_gnss_ekf_v9 PRIVATE
 target_link_libraries(test_raw_gnss_ekf_v9 GTest::gtest_main)
 gtest_discover_tests(test_raw_gnss_ekf_v9)
 
+# ---------- test_raw_gnss_shadow_v9 ----------
+# RawGnssShadow and LevelGate at 10 Hz, at the mosaic-G5's settings on the
+# synthetic sky (fixtures/raw_meas_golden.h): the pseudorange once a second
+# with gnss_aided held, the Doppler's stress held a second after burnout, the
+# heading fit an epoch a second, a restored flight's sigmas and accelerometer
+# bias, levelling on fused epochs only (empty epochs under a chute), and the
+# steady test on epochs a second apart.
+add_executable(test_raw_gnss_shadow_v9 test_raw_gnss_shadow_v9.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/RawGnssShadow.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/RawGnssMeasStage.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/PadSurvey.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/SatJumpCheck.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/FixCheck.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/EphemerisFrames.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/HeadingFit.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssCarrier.cpp
+    ${LIB_DIR}/TR_GNSSRaw/eph.c
+    ${LIB_DIR}/TR_GNSSRaw/atmo.c
+    ${LIB_DIR}/TR_GNSSRaw/RtcmEphemeris.cpp
+    ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasCarrier.cpp
+)
+target_include_directories(test_raw_gnss_shadow_v9 PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RawGnssShadow
+    ${LIB_DIR}/TR_RawGnssEKF
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_raw_gnss_shadow_v9 GTest::gtest_main)
+gtest_discover_tests(test_raw_gnss_shadow_v9)

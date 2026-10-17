@@ -70,8 +70,11 @@
 // It learns the barometer's offset with or without a fix of its own (a flight
 // without GNSS has the barometer and the IMU). A seed marked restore -- a
 // flight the flight computer restored after a reboot -- starts it in flight,
-// the barometer's offset taken from its first sample. Its state goes to the
-// flight loop every step (navState, ShadowLink::nav).
+// the barometer's offset taken from its first sample; with restore_*_sigma,
+// its position, velocity and attitude declared that unsure (the reboot's gap
+// was flown on nothing), and with restore_seed_bias the snapshot's
+// accelerometer bias in place of zero. Its state goes to the flight loop
+// every step (navState, ShadowLink::nav).
 //
 // Levelling. Where the flight filter takes its accelerometer as gravity (the
 // ground, and after apogee) the shadow does too -- in flight only once its
@@ -238,6 +241,26 @@
 // second: with the roll rate beside it, the carrier wind-up) are in the
 // stats and on the console.
 //
+// A receiver fused faster than 1 Hz (the mosaic-G5's 10 Hz). The safeguards
+// above were set on the LC86G's epoch a second, and some count epochs, so a
+// faster profile keeps their time instead:
+//   - the pseudoranges are fused only on epochs on a pr_period_s GPS-time grid
+//     (1 s): each code update's correlated part is inflated by the time since
+//     that satellite's last, so fused every 0.1 s the gate would open sqrt(10)
+//     wider for no more information. gnss_aided still means a pseudorange
+//     fused within 2 s;
+//   - a Doppler refused the EKF's reject_persist_rr epochs running is let in
+//     (30 at 10 Hz: the Beetle's 3 s);
+//   - the Doppler's stress takes the IMU's peak over rr_dyn_window_s (1 s,
+//     the LC86G's epoch), not the 0.1 s since the epoch before: a loop still
+//     settling after burnout is weighted as the Beetle weighs it;
+//   - the levelling's steady test takes epochs LevelGate's min_dt_s apart, and
+//     the heading fit one epoch a heading_fit_period_s (its 64 would fill in
+//     6.4 s);
+//   - with level_on_fused_epochs an epoch that fused nothing is no levelling
+//     epoch: under a chute with the sky gone the mosaic still sends its empty
+//     epochs, and the outage's levelling would never start.
+//
 // Stopping. A sensor sim, a hole in the IMU longer than max_gap_s, a state
 // that is not finite, or (on the pad) one pad_reset_m from the flight
 // filter's stops it; it starts again from the next pad seed.
@@ -375,6 +398,24 @@ public:
                                                  //   the filter's is dropped (0: off)
         double   vert_release_mps = 5.0;         //   and, after one, every epoch after it until one's fitted
                                                  //   vertical is back within this (0: no latch)
+        // A receiver fused faster than 1 Hz (below; the mosaic-G5's profile
+        // sets them, ReceiverProfileApply.h). 0 or false: an epoch at a time,
+        // as the Beetle's LC86G flies.
+        double   pr_period_s = 0.0;              // the pseudoranges fused only on epochs on this GPS-time grid
+        double   rr_dyn_window_s = 0.0;          // the Doppler's stress (meas.rr_dyn_sigma) on the IMU's peak over
+                                                 //   this long, not only since the epoch before
+        double   heading_fit_period_s = 0.0;     // the heading fit takes an epoch at most this often
+        bool     level_on_fused_epochs = false;  // the levelling's steady test takes only epochs that fused something
+        int      sat_cap = 0;                    // the GNSS task's stage: at most this many satellites built an
+                                                 //   epoch (0: all)
+        // A flight restored after a reboot (the navigation filter): its
+        // start's 1-sigmas, every axis (0: the start's own -- the attitude the
+        // seed's, known), and the snapshot's accelerometer bias
+        // (ShadowSeed::has_accel_bias)
+        double   restore_pos_sigma_m = 0.0;
+        double   restore_vel_sigma_mps = 0.0;
+        double   restore_att_sigma_deg = 0.0;
+        bool     restore_seed_bias = false;
     };
 
     // When the boost screen runs (Config::boost_screen).
@@ -747,6 +788,9 @@ private:
     bool          handed_ = false;      // the heading handed over this flight
     bool          gate_full_ = false;   // act: the whole attitude's gate is open this flight
     double        boost_seen_t_ = -1.0e9;   // the filter's time the IMU last read past boost_screen_g
+    double        g_hold_ = 0.0;        // rr_dyn_window_s: the largest g excess an epoch has carried lately,
+    double        g_hold_te_ = -1.0e9;  //   and that epoch's time
+    double        fit_last_te_ = -1.0;  // heading_fit_period_s: the last epoch the fit took (< 0: none this flight)
     bool          vert_latch_ = false;  // a vertical drop, and no epoch back within vert_release_mps since
     bool          launch_seen_ = false; // a launch edge since the start (a restored flight has none)
     void          setFlightGate(bool full);
