@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <vector>
 
 #include "RocketComputerTypes.h"
@@ -130,18 +131,30 @@ double gnssRtcmInflow(const Flight& f)
     return 0.0;
 }
 
-// RAW_GNSS_EKF_MSG: the raw-GNSS shadow filter's state (#1600), 10 a second
-// where it runs (config.h TR_RAW_GNSS_SHADOW: the LC86G boards), and its
-// check of each receiver fix against the IMU (GNSS_CHECK_MSG, #1508), one per
-// fix at the receiver's 10 Hz, and the attitude 1-sigma and IMU biases beside
-// each state record (RAW_GNSS_ATT_MSG).
+// RAW_GNSS_EKF_MSG: the raw-GNSS filter's state (#1600), 10 a second where
+// it runs (config.h TR_RAW_GNSS_SHADOW: the LC86G boards, and the mosaic-only
+// image, where it is the one navigation filter), and the attitude 1-sigma and
+// IMU biases beside each state record (RAW_GNSS_ATT_MSG). On the LC86G also
+// its check of each receiver fix against the IMU (GNSS_CHECK_MSG, #1508), one
+// per fix at the receiver's 10 Hz; the mosaic-G5's driver hands over no fixes
+// to check, so none there. The clock line (GNSS_CLOCK_MSG) once a second, and
+// the heading from thrust (HEADING_FIT_MSG) once a second in flight: each
+// LC86G epoch, and the mosaic-G5's fused 10 Hz taken a second apart
+// (heading_fit_period_s).
 double rawGnssShadowInflow()
 {
+#if TR_RAW_GNSS_SHADOW
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
     return framed(sizeof(RawGnssEkfData), 10.0) + framed(sizeof(RawGnssAttData), 10.0)
          + framed(sizeof(GnssCheckData), 10.0)
          + framed(sizeof(GnssClockData), 1.0)    // the clock line, once a second with a fix
          + framed(sizeof(HeadingFitData), 1.0);  // the heading from thrust, each raw epoch in flight
+#else
+    return framed(sizeof(RawGnssEkfData), 10.0) + framed(sizeof(RawGnssAttData), 10.0)
+         + framed(sizeof(GnssCheckData), 0.0)    // no fixes to check
+         + framed(sizeof(GnssClockData), 1.0)    // the 1PPS line, once a second
+         + framed(sizeof(HeadingFitData), 1.0);  // the heading from thrust, an epoch a second in flight
+#endif
 #else
     return 0.0;
 #endif
@@ -149,14 +162,23 @@ double rawGnssShadowInflow()
 
 // PAD_CONTEXT_MSG: written once, from 6 s after launch -- inside a guided
 // coast -- one record each config::PAD_CONTEXT_PERIOD_MS, at worst all the
-// largest kind's. Not steady: about 1.5 s of it. Zero on u-blox boards, which
-// have no raw-GNSS filter (the flight loop's one PCX_CAL record is noise).
+// largest kind's. Not steady: about 1.5 s of it. Zero where there is no
+// raw-GNSS filter (the flight loop's one PCX_CAL record is noise). On the
+// mosaic-only image the filter's ephemerides are not in it (the receiver's
+// own navigation blocks are in the log's SBF), so its largest record is the
+// state's, the covariance's or the pad survey's.
 double padContextBurst()
 {
+#if TR_RAW_GNSS_SHADOW
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
     const size_t largest = sizeof(PadContextHeader)
                          + std::max({sizeof(PadContextNav), padContextCovWireSize(PCX_COV_PER_PART),
                                      padContextSurveyWireSize(PCX_SURVEY_PER_PART), PCX_EPH_MAX_FRAME});
+#else
+    const size_t largest = sizeof(PadContextHeader)
+                         + std::max({sizeof(PadContextNav), padContextCovWireSize(PCX_COV_PER_PART),
+                                     padContextSurveyWireSize(PCX_SURVEY_PER_PART)});
+#endif
     return framed(largest, 1000.0 / (double)config::PAD_CONTEXT_PERIOD_MS);
 #else
     return 0.0;
@@ -339,6 +361,52 @@ TEST(OcFlashBudget, TheModelGivesTheGoblinsLog) {
     const double model = logInflow(f) - gnssRtcmInflow(f) + 60000.0
                        - framed(sizeof(GuidanceTelemData), (double)config::GUIDANCE_TELEM_RATE_HZ);
     EXPECT_NEAR(model, 221000.0, 221000.0 * 0.02) << model;
+}
+#endif
+
+TEST(I2SLinkBudget, TheRawFilterIsCountedWhereItRuns) {
+    // Its state, attitude, clock and heading records (and its pad context) on
+    // every image that runs it: the Beetle's LC86G and the mosaic-only image,
+    // where it is the one navigation filter. Nowhere else.
+#if TR_RAW_GNSS_SHADOW
+    EXPECT_GT(rawGnssShadowInflow(), 0.0);
+    EXPECT_GT(padContextBurst(), 0.0);
+#else
+    EXPECT_EQ(rawGnssShadowInflow(), 0.0);
+    EXPECT_EQ(padContextBurst(), 0.0);
+#endif
+}
+
+#if TR_RAW_GNSS_SHADOW && defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+TEST(I2SLinkBudget, TheMosaicRawFilterFitsBothLogSettings) {
+    // The mosaic-only image with its raw-GNSS filter: the detailed GNSS log at
+    // its 3840 Hz and the reduced one at the board's top rate (the V9's 7680;
+    // the V8's own top is 3840, so the Goblin's V8 flies 3840 either way),
+    // each with the filter's records and its pad context, on the link and on
+    // the OC's flash. On the V9 the reduced log at 7680 is the thin one (the
+    // drain model's ~94 %, as a u-blox flight's). The detailed log at a top
+    // rate above 3840 is not a flight the image can fly (imuRateMaxForGnss
+    // holds it there); its figures are printed for the record, not asserted.
+    for (const Flight& f : flights())
+    {
+        const double link = (guidedCoastInflow(f) + padContextBurst()) / kLinkBytesPerSec;
+        const double flash = logInflow(f) / kOcFlashDrainBytesPerSec;
+        std::printf("[ link budget ] %s at %.0f Hz with the raw-GNSS filter: link %.1f %% (with the pad context), "
+                    "OC flash %.1f %% (%.0f B/s)\n",
+                    f.receiver, f.imu_hz, link * 100.0, flash * 100.0, logInflow(f));
+        EXPECT_LT(link, 0.95) << f.receiver;
+        EXPECT_LT(flash, 0.95) << f.receiver;
+    }
+    for (const Flight& f : flights())
+    {
+        if (f.gnss_log != GNSS_LOG_DETAILED || config::IMU_RATE_MAX_HZ <= f.imu_hz) continue;
+        Flight top = f;
+        top.imu_hz = (double)config::IMU_RATE_MAX_HZ;
+        std::printf("[ link budget ] (not flown) %s at %.0f Hz with the raw-GNSS filter: link %.1f %%, "
+                    "OC flash %.1f %% (%.0f B/s)\n",
+                    top.receiver, top.imu_hz, (guidedCoastInflow(top) + padContextBurst()) / kLinkBytesPerSec * 100.0,
+                    logInflow(top) / kOcFlashDrainBytesPerSec * 100.0, logInflow(top));
+    }
 }
 #endif
 
