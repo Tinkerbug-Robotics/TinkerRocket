@@ -3362,7 +3362,7 @@ static void rawBenchFilterHooks(gnss_raw::RawGnssShadow& sh)
     static_assert(TR_BENCH_RAW_STOP_AT_S >= 0 && TR_BENCH_RAW_STOP_AT_S <= 3600, "TR_BENCH_RAW_STOP_AT_S is 0-3600 s");
 #endif
     static int64_t flight_t0 = 0;   // when it was first seen running in flight (0: not yet)
-    static bool    stopped   = false;
+    [[maybe_unused]] static bool stopped = false;   // TR_BENCH_RAW_STOP_AT_S's
     gnss_raw::ShadowNav nv;
     sh.navState(nv);
     if (nv.running && !nv.in_flight)
