@@ -181,7 +181,12 @@ the A-line age matching apply only to a restored LC86G start.
 
 The filter starts on the pad as the mosaic-only image starts it, through `RawNavAdapter` as main.cpp does: at the
 first IMU tick once the receiver's position is known (META `seed_lla` "lat_deg lon_deg h", the height above the
-geoid, else the first PVTGeodetic with a solution), `init()` with that position and the last 16 ticks' mean gyro,
+geoid, else the first PVTGeodetic with a solution) and 16 ticks are in the gyro ring, `init()` with that position and
+the last 16 ticks' mean gyro (main.cpp's `initGyroRing`, which a boot fills long before the receiver's first fix: a
+log that begins after that fix, as the 10/16-17 V9 logs do a few ms in, would otherwise seed the gyro bias from one
+or two of the ISM6's quantized tick means, 0.13 deg/s off about the rocket's axis on the cone-on log, and nothing on a
+still pad observes that bias without the magnetometer; `--seed-gyro-dps x,y,z`, body FRD, gives the seed instead,
+for a log that begins while the payload turns: the cone-off spin-rig log),
 `setQuaternion()` from the tick's accelerometer and the pad heading guess (`quatFromAccelHeading`,
 `--seed-heading-deg`, `config::PAD_HEADING_DEG` 0; META `seed_quat` "w x y z" instead), `setDeclination()` and
 `setMagReference()` from WMM2025 at the pad (`TR_GeoMag`, on META `decimal_year` or the first fix's date; META
@@ -290,6 +295,36 @@ receiver velocity, so their quorum has three voters unless re-extracted with `V`
   logs as recorded, and seeding from the log's quaternion (`--seed-quat-from-log`) would pass the heading check by
   construction. They become testable on a log whose magnetometer passes the filter's gates (after the stored
   calibration, G10), or on the spin rig's turns scored against the rig's own angle, not the log's GpsInsEKF.
+
+### Scoring a static or spin-rig log (`score_static.py`)
+
+```
+tools/raw_replay/score_static.py RUN.csv --from-s T0 [--to-s T1] [--log OC_LOG] [--rig RIG.npz] \
+    [--ref NOFAULT.csv (--cut-from-s A --cut-to-s B | --corrupt-at-s T)] [--json OUT.json]
+```
+
+Gate G3's numbers from one run, distances and statistics only (no position or height is printed or written): stops,
+non-finite and unhealthy rows; the velocity's mean and rms per axis in [T0, T1]; per closed epoch the satellites
+tracked and with an ephemeris, the Dopplers and pseudoranges used and refused and the measurement rows the update
+worked (the CPU counts); with `--log`, tilt (the angle between the two filters' gravity directions) and heading (the
+twist about NED down, as is and from T0) against the log's own flight filter (NonSensor q, the auto image's GpsInsEKF;
+its NonSensor is cached beside the run); with `--rig`, board +Z's bearing against the spin rig's own (an npz of
+t_mcu_s and bearing_deg, deg true); each whole-millisecond step of the receiver clock with the velocity across it
+(the epoch before and after, and the 1 s means, beside the same at every other epoch) and the refusals within 5 s;
+and with `--ref`, the velocity and tilt against the no-fault run 2 s after GNSS returns (one sample, and the mean
+over the next second), paired step for step so a fault run written `--every 10` pairs exactly.
+
+What the 10/16-17 V9 logs showed (E4; the report and its runner are in
+`gnss-attitude-study/v9-mosaic-filter-plan/evidence/real-logs/`, outside the repo):
+
+- The pad runs as the firmware runs them (ZUPT while still, levelling) hold 0.014-0.025 m/s rms per axis with no
+  stop or non-finite state, and agree with the log's GpsInsEKF tilt to 0.36-0.40 deg p95 on the two 26-minute
+  spin-rig logs. The 60 s logs are too short for the levelling to converge (tilt sigma 6 deg falling to 3 deg).
+- On the turning spin rig the GNSS rows move the heading and the gyro's bias about the rocket's axis, which a still
+  antenna does not observe: from the rig's own heading at the start, 15-80 deg p95 over 25 min against the unaided
+  twin's 4-8 deg. On the still outdoor log the twins agree.
+- `--gnss-only-from-s` on the turning rig cannot hold the tilt for either twin (3-10 deg off the log's GpsInsEKF), so
+  its 3 s cuts leave 0.3-1.4 m/s; the pad runs' cuts (levelling on, no ZUPT while turning) recover to 0.08-0.12 m/s.
 
 ### What it does not reproduce
 

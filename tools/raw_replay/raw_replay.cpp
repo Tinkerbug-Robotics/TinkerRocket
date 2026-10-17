@@ -219,6 +219,8 @@ struct Args
     int vote_guard = -1;             // the raw vote guard withholds the filter's votes (-1: the mosaic's yes)
     double loop_hz = 1000.0;         // the flight loop's passes a second (config::FLIGHT_LOOP_UPDATE_RATE)
     double seed_heading_deg = 0.0;   // the cold start's heading guess (config::PAD_HEADING_DEG)
+    bool have_seed_gyro = false;     // --seed-gyro-dps: the cold start's gyro bias given, not the ring's mean
+    double seed_gyro_dps[3] = {};    //   (body FRD, deg/s): a log that begins while the payload turns
     int sat_cap = -1;                // TR_BENCH_RAW_SAT_CAP: the stage's satellites an epoch (-1: the profile's)
     double fuse_ms = -1.0;           // TR_BENCH_RAW_FUSE_MS: the fused epochs' period (-1: the profile's)
     std::string flight_state;        // the launch and landing: "log" (the ticks' flags), "quorum" (the quorum's own
@@ -255,6 +257,7 @@ void usage()
                  "  [--truth-t0-tow X]\n"
                  "  the mosaic-G5 (a RAW_REPLAY_MOSAIC build): [--receiver lc86g|mosaic] [--cold-start] [--unaided]\n"
                  "  [--rinex FILE]... [--quorum] [--vote-guard 0|1] [--loop-hz X] [--seed-heading-deg X]\n"
+                 "  [--seed-gyro-dps x,y,z]\n"
                  "  [--sat-cap N] [--fuse-ms X] [--flight-state log|quorum] [--time-tag-from-boot]\n"
                  "  [--assume-finetime] [--pad-zupt 0|1] [--gnss-only-from-s X]\n");
 }
@@ -346,6 +349,11 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--vote-guard") a.vote_guard = std::atoi(val());
         else if (k == "--loop-hz") a.loop_hz = std::atof(val());
         else if (k == "--seed-heading-deg") a.seed_heading_deg = std::atof(val());
+        else if (k == "--seed-gyro-dps")
+        {
+            a.have_seed_gyro = std::sscanf(val(), "%lf,%lf,%lf", &a.seed_gyro_dps[0], &a.seed_gyro_dps[1],
+                                           &a.seed_gyro_dps[2]) == 3;
+        }
         else if (k == "--sat-cap") a.sat_cap = std::atoi(val());
         else if (k == "--fuse-ms") a.fuse_ms = std::atof(val());
         else if (k == "--flight-state") a.flight_state = val();
@@ -2028,6 +2036,12 @@ int main(int argc, char** argv)
         imu.gyro_x = n > 0 ? gm[0] / n * kR2D : 0.0;
         imu.gyro_y = n > 0 ? gm[1] / n * kR2D : 0.0;
         imu.gyro_z = n > 0 ? gm[2] / n * kR2D : 0.0;
+        if (a.have_seed_gyro)
+        {
+            imu.gyro_x = a.seed_gyro_dps[0];
+            imu.gyro_y = a.seed_gyro_dps[1];
+            imu.gyro_z = a.seed_gyro_dps[2];
+        }
         EkfGNSSDataLLA g;
         g.time_us = s.time_us;
         g.lat_rad = cold_lla[0];
@@ -2106,10 +2120,11 @@ int main(int argc, char** argv)
             setPad(cold_lla[0] * kR2D, cold_lla[1] * kR2D, cold_lla[2] + cold_sep);
         const double sinp = 2.0 * (static_cast<double>(q[0]) * q[2] - static_cast<double>(q[3]) * q[1]);
         std::fprintf(stderr, "cold start at T%+.3f s: pitch %.2f deg, heading guess %.1f deg, declination %s, "
-                             "field %.1f uT\n",
+                             "field %.1f uT, gyro bias %.3f/%.3f/%.3f deg/s (%s)\n",
                      ev_t_now * 1e-6 + a.t_base_s, std::asin(std::max(-1.0, std::min(1.0, sinp))) * kR2D,
                      a.seed_heading_deg, in.meta.count("declination_rad") ? "META's" : "WMM2025's",
-                     std::sqrt(ned[0] * ned[0] + ned[1] * ned[1] + ned[2] * ned[2]));
+                     std::sqrt(ned[0] * ned[0] + ned[1] * ned[1] + ned[2] * ned[2]), imu.gyro_x, imu.gyro_y,
+                     imu.gyro_z, a.have_seed_gyro ? "--seed-gyro-dps" : "the last 16 ticks' mean");
     };
 #endif
 
@@ -2510,7 +2525,11 @@ int main(int argc, char** argv)
             for (int i = 0; i < 3; ++i)
                 gyro_ring[gyro_n % 16][i] = s.gyro[i];
             gyro_n++;
-            if (cold && !seed_ready && cold_pos_known)
+            // main.cpp seeds the gyro bias from its 16-tick ring, which a boot has filled long before the
+            // receiver's first fix; a log that begins after that fix (the 10/16-17 V9 logs, a few ms in) would
+            // otherwise seed from one or two ticks, 0.1 deg/s off on the ISM6's quantized means, and no static
+            // pad observes the bias about the vertical
+            if (cold && !seed_ready && cold_pos_known && (gyro_n >= 16 || a.have_seed_gyro))
             {
                 coldSeed(s, ev.t_us);
                 seed_ready = true;
