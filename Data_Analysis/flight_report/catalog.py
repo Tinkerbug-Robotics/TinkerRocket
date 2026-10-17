@@ -1847,9 +1847,10 @@ _P(
         "raw-GNSS filter turns its heights by, carried so an in-flight reboot with no receiver to "
         "ask (a crash boot leaves the mosaic out) restores the same heights.",
     caution=
-        "Mosaic-only image, v5 snapshots; None everywhere else (the slot writes 0). On that image "
-        "ekf_alt_m is above the ELLIPSOID: subtract this for MSL. On every other image ekf_alt_m is "
-        "already MSL.",
+        "Mosaic-only image, v5 snapshots; None everywhere else (the slot writes 0). Where it is "
+        "recorded, subtract it from ekf_alt_m (above the ellipsoid) for the height above the geoid "
+        "(MSL). Where it is None the snapshot alone cannot turn ekf_alt_m to MSL: the Beetle's "
+        "raw-filter image writes an ellipsoidal ekf_alt_m too, and records no separation.",
 )
 _P(
     "Snapshot.b2r_q0", "Board-to-rocket quaternion w",
