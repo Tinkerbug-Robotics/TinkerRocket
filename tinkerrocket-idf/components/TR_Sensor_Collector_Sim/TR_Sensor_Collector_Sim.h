@@ -53,7 +53,13 @@ public:
 
     // Raw GNSS for the raw-GNSS shadow filter (#1600).  Same rule again: a
     // real sky must not meet a simulated IMU, so while a sim runs the real
-    // epochs and ephemerides are consumed and dropped.
+    // epochs and ephemerides are consumed and dropped.  Except the mosaic-G5's
+    // ephemerides (its navigation blocks), passed on in a sim too: they say
+    // where the satellites are, not what the IMU did, and the filter's stage
+    // only files them; and that receiver sends each one once (when it
+    // changes, or on a resend at link setup and launch), where the LC86G
+    // repeats them every second, so one dropped in a sim on the pad would be
+    // missing until its next upload, hours on.
     bool enableGNSSRawOutputs() { return real_.enableGNSSRawOutputs(); }
     bool getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out);
     bool getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len);

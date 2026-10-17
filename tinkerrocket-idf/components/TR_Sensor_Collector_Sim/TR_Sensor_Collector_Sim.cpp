@@ -604,8 +604,13 @@ bool SensorCollectorSim::getGNSSFix(gnss_raw::TimedFix& out)
 bool SensorCollectorSim::getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len)
 {
     const bool have = real_.getGNSSEphemeris(out, cap, len);
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // The mosaic-G5's are passed on while a sim runs too -- see the header
+    return have;
+#else
     if (phase_ == SIM_IDLE || replay_on_) return have;
     return false;   // consumed, not forwarded — see the header
+#endif
 }
 
 #if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
