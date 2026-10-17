@@ -1217,6 +1217,18 @@ _P(
         "wrap. Frozen at 0 until the EKF initialises on the first good fix.",
 )
 _P(
+    "FcStatus.fc_raw_votes_withheld", "FC raw votes withheld",
+    note=
+        "The mosaic-only image's raw vote guard latched (FCS_RAW_VOTES_WITHHELD, 5 Hz on "
+        "FC_STATUS_MSG): after burnout its raw-GNSS filter read its vertical velocity more than "
+        "10 m/s below the barometer's climb rate for 1 s, so the filter's velocity and pitch "
+        "apogee votes are withheld for the rest of the flight.",
+    caution=
+        "Always False on every other image, including the V9 and V8 auto images and the Beetle. "
+        "Sticky until the next launch or sim edge; the first frame with it set is the latch time "
+        "to within 200 ms.",
+)
+_P(
     "FcStatus.fc_camera_engaged", "FC camera engaged",
     note=
         "The flight computer's OWN camera state, reported at 5 Hz on FC_STATUS_MSG: rail up, "

@@ -84,6 +84,8 @@
 #include <esp_memory_utils.h>     // esp_ptr_external_ram: where the filter's blocks went
 #include "raw_iono_rule.h"        // which broadcast ionosphere it builds with (host-tested)
 #include "raw_nav_drain.h"        // when it files the receiver's navigation blocks (host-tested)
+#include "raw_nav_policy.h"       // crash loop, transonic lockout, nav resends, restarts, restore wait (host-tested)
+#include "raw_vote_guard.h"       // the filter's apogee votes against the barometer's climb (host-tested)
 #endif
 #include <gnss/types.h>           // GNSS_SYS_* (the console's satellite names)
 #include <esp_log.h>
@@ -554,6 +556,15 @@ static MainDeployGate::Source main_deploy_last_src = MainDeployGate::Source::Non
 // in scope; the EKF block reads it on the next pass, which can only delay an
 // admission by one tick, never advance it.
 static GnssAscentGate::State gnss_admit_state;
+#if TR_RAW_NAV_MOSAIC
+// The raw vote guard (raw_vote_guard.h): on the mosaic-only image the raw
+// filter is the one navigation filter, so after burnout its vertical velocity
+// is held against the barometer's climb rate, and a filter reading 10 m/s
+// below it for a second casts no velocity or pitch apogee vote for the rest
+// of the flight. Stepped in the kinematics block after GnssAscentGate; reset
+// at launch and on the sim edge.
+static RawVoteGuard::State raw_guard;
+#endif
 static float max_alt_m = 0.0f;
 static float max_speed_mps = 0.0f;
 #if TR_RAW_GNSS_PRIMARY
@@ -3100,6 +3111,9 @@ static gnss_raw::SeqLock<gnss_raw::ShadowIono> raw_iono_chosen;
 // The GNSS task's navigation blocks (raw_nav_drain.h): held until an epoch
 // names the receiver's week, and how many SbfNav would not decode.
 static RawNavDrain::State raw_nav_drain;
+// READY or PRELAUNCH, set by the loop each pass: where the GNSS task may ask
+// the receiver for its navigation blocks again (raw_nav_policy.h)
+static volatile bool raw_nav_on_pad = false;
 #endif
 
 static int64_t rawShadowClock() { return esp_timer_get_time(); }
@@ -3215,6 +3229,9 @@ static void rawGnssMeasTask(void*)
     // and in PSRAM beside the stage (startRawShadow), not internal RAM
     gnss_raw::TimedRawEpoch& epoch = *raw_meas_epoch;
     uint32_t iono_seq = 0;
+#if TR_RAW_NAV_MOSAIC
+    RawNavPolicy::PadResend pad_resend;
+#endif
     for (;;)
     {
         gnss_raw::ShadowIono io;
@@ -3290,6 +3307,19 @@ static void rawGnssMeasTask(void*)
             if (st.offer(epoch, nav, *slot)) raw_built.publish();
         }
         if (seen) raw_shadow_link.meas.write(st.stats());
+#if TR_RAW_NAV_MOSAIC
+        // On the pad, a satellite tracked with no ephemeris asks the receiver
+        // for its navigation blocks again, at most every 30 s: one the queue
+        // dropped, or refused before the week was known, comes back before
+        // launch (raw_nav_policy.h). In flight only the launch's ask.
+        if (RawNavPolicy::padResendDue(pad_resend, millis(), raw_nav_on_pad, st.stats().tracked_no_eph))
+        {
+            sensor_collector_hw.requestGNSSNavResend();
+            ESP_LOGI(TAG, "[RAWGNSS] on the pad, %d tracked without an ephemeris: the receiver's navigation "
+                          "blocks asked for again (%lu so far)",
+                     (int)st.stats().tracked_no_eph, (unsigned long)pad_resend.sent);
+        }
+#endif
         vTaskDelay(pdMS_TO_TICKS(5));
     }
 }
@@ -3693,7 +3723,7 @@ static void rawShadowTask(void*)
                               "%d without an ephemeris | eph %d sats, %u of %u store entries, %lu blocks refused, "
                               "%lu nav queue drops | imu ring drops %lu, gaps bridged %lu | PPS tag max %ld us, "
                               "%lu over %ld of %lu judged (%lu settling, %lu edges late) | iono %s (%u sets) | pad datum %s, %lu fixes | "
-                              "GNSS log %s",
+                              "GNSS log %s | in flight: raw votes %s",
                          (unsigned)(sh.running() ? nv.gnss_aided : 0), (unsigned)(sh.running() ? nv.baro_aided : 0),
                          rs.period_ms ? 1000.0 / (double)rs.period_ms : 0.0, (unsigned long)rs.period_ms,
                          sh.config().sat_cap, (unsigned long)mst.epochs, (unsigned long)mst.untimed,
@@ -3708,7 +3738,8 @@ static void rawShadowTask(void*)
                          !raw_iono.have ? "none" : (raw_iono.from_rx ? "the receiver's GPSIon" : "the app's"),
                          (unsigned)raw_iono.sets, ref_from_nav ? "the raw filter's" : "the receiver's",
                          (unsigned long)ref_pos_count,
-                         gnss_log_setting == GNSS_LOG_REDUCED ? "REDUCED" : "DETAILED");
+                         gnss_log_setting == GNSS_LOG_REDUCED ? "REDUCED" : "DETAILED",
+                         raw_guard.latched ? "WITHHELD" : "cast");
             }
 #endif
             // each satellite's pad correction, at its elevation from the pad:
@@ -3829,6 +3860,13 @@ static void rawNavGiveBack(void* mem, void* stage_mem, void* built_mem, void* ep
 static void startRawShadow()
 {
 #if TR_RAW_NAV_MOSAIC
+#if defined(TR_BENCH_RAW_START_FAIL) && TR_BENCH_RAW_START_FAIL
+    // Bench (P3, G8; never flown): the start fails before it allocates
+    // anything, as a failure would, so the boot's NO NAVIGATION FILTER line
+    // and FCB_DEG_SENSORS can be seen with the loop running.
+    ESP_LOGE(TAG, "[RAWGNSS] BENCH: the filter's start fails ON PURPOSE (TR_BENCH_RAW_START_FAIL): not started");
+    return;
+#endif
     // Every component lays the ephemeris pool out by its own TR_EPH_CAPACITY
     // (the project's 128, flight_computer/CMakeLists.txt), and nothing at link
     // time catches two sizes: they would corrupt the pool. No filter, then.
@@ -7650,6 +7688,9 @@ static void resetFlightStateForSim(const char* edge)
     ref_from_nav = false;
     ekf_gnss_feed.reset();
     GnssAscentGate::reset(gnss_admit_state);   // back on the pad: GNSS flows, pad offset relearned
+#if TR_RAW_NAV_MOSAIC
+    RawVoteGuard::reset(raw_guard);            // the raw filter votes again in the next flight
+#endif
     gnss_started = false;
     have_gnss_si = false;
     // #557: a sim injects synthetic GNSS, so re-evaluate the degraded path from
@@ -7768,6 +7809,11 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     // qualifies after burnout.  The GNSS-minus-baro pad offset it will be
     // judged against is frozen now.
     GnssAscentGate::onLaunch(gnss_admit_state, now_ms);
+#if TR_RAW_NAV_MOSAIC
+    // A new flight: the raw filter votes until this flight's barometer says
+    // otherwise
+    RawVoteGuard::reset(raw_guard);
+#endif
     // The mosaic-G5 sent every ephemeris when it first decoded it, long before
     // this flight's log began: ask for them all again so the log holds what a
     // replay of its raw measurements needs. A flag for the GNSS poll task;
@@ -11895,6 +11941,53 @@ static void loop_fc()
                 }
             }
 
+#if TR_RAW_NAV_MOSAIC
+            // The raw vote guard (raw_vote_guard.h): after burnout and before
+            // apogee, a filter whose vertical velocity reads 10 m/s below the
+            // barometer's climb rate for a second -- with a barometer that can
+            // vouch (GnssAscentGate's verdict on it too), not mach-locked --
+            // casts no velocity or pitch vote for the rest of the flight.
+            // Stepped after GnssAscentGate, on the rate it read: the previous
+            // pass's, about 1 ms old.
+            {
+                RawVoteGuard::Inputs gi;
+                gi.now_ms           = now_ms;
+                gi.after_burnout    = burnout_detected;
+                gi.apogee           = kinematics.apogee_flag || pyro_apogee_detected;
+                gi.baro_healthy     = GnssAscentGate::baroFusable(gnss_admit_state, baro_healthy);
+                gi.mach_locked      = mach_locked_out;
+                gi.filter_healthy   = ekf_healthy;
+                gi.filter_vz_up_mps = imu_vel[2];
+                gi.baro_rate_mps    = kinematics.d_alt_est_;
+                const bool was_withheld = raw_guard.latched;
+                RawVoteGuard::step(raw_guard, gi);
+                if (!was_withheld && raw_guard.latched)
+                    ESP_LOGE(TAG, "[RAWGNSS] raw votes withheld at T+%.2f s: the filter's vertical velocity "
+                                  "%+.1f m/s against the barometer's %+.1f m/s for 1 s -- its velocity and "
+                                  "pitch cast no apogee vote for the rest of the flight",
+                             (double)((float)(now_ms - launch_time_millis) * 1e-3f),
+                             (double)gi.filter_vz_up_mps, (double)gi.baro_rate_mps);
+            }
+            // Only the votes: control, GnssAscentGate and telemetry keep ekf_healthy
+            const bool ekf_may_vote = ekf_healthy && !raw_guard.latched;
+            kinematics.kinematicChecks(pressure_altitude_m,
+                                       ism6_fresh_kc ? accel_norm : 0.0f,
+                                       imu_pos,
+                                       imu_vel,
+                                       roll_rate_dps,
+                                       bmp_new_for_kf,
+                                       (float)gnss_latest_si.alt,
+                                       gps_new_for_kc,
+                                       imu_rpy[1],
+                                       burnout_detected,
+                                       mach_locked_out,
+                                       (float)gnss_latest_si.vel_u,
+                                       ekf_may_vote,
+                                       baro_healthy,
+                                       ism6_fresh_kc,    // #1108 imu_healthy
+                                       // GnssAscentGate: no apogee vote until admitted
+                                       GnssAscentGate::gnssVotes(gnss_admit_state));
+#else
             kinematics.kinematicChecks(pressure_altitude_m,
                                        ism6_fresh_kc ? accel_norm : 0.0f,
                                        imu_pos,
@@ -11912,6 +12005,7 @@ static void loop_fc()
                                        ism6_fresh_kc,    // #1108 imu_healthy
                                        // GnssAscentGate: no apogee vote until admitted
                                        GnssAscentGate::gnssVotes(gnss_admit_state));
+#endif
             TR_LP_LAP(KINEMATICS);
 
             // #834 item 4: step the main-deploy gate here, where baro_healthy
@@ -13101,6 +13195,24 @@ static void loop_fc()
 
         TR_LP_LAP(STATE);
 
+#if TR_RAW_NAV_MOSAIC
+        // The receiver's navigation blocks again (raw_nav_policy.h): the GNSS
+        // task asks on the pad while a tracked satellite has no ephemeris;
+        // here, once on PRELAUNCH entry and once 5 s into LANDED, so the log
+        // around the flight holds them all (the launch asks in enterInflight)
+        {
+            static RawNavPolicy::ResendEdges resend_edges;
+            raw_nav_on_pad = (rocket_state == READY || rocket_state == PRELAUNCH);
+            if (RawNavPolicy::edgeResendDue(resend_edges, rocket_state == PRELAUNCH, rocket_state == LANDED,
+                                            now_ms))
+            {
+                sensor_collector_hw.requestGNSSNavResend();
+                ESP_LOGI(TAG, "[RAWGNSS] %s: the receiver's navigation blocks asked for again",
+                         rocket_state == PRELAUNCH ? "PRELAUNCH" : "landed 5 s");
+            }
+        }
+#endif
+
         // ==========================================================================
         // SECTION: Simulator re-arm and diagnostics
         // ==========================================================================
@@ -13531,6 +13643,10 @@ static void loop_fc()
                 fc_status.time_us = logic_now_us;
                 fc_status.flags   =
                     (uint8_t)(camera_engaged ? FCS_CAMERA_ENGAGED : 0u);
+#if TR_RAW_NAV_MOSAIC
+                // the raw vote guard has withheld the filter's apogee votes
+                if (raw_guard.latched) fc_status.flags |= FCS_RAW_VOTES_WITHHELD;
+#endif
                 uint8_t fc_status_buf[sizeof(FcStatusData)];
                 memcpy(fc_status_buf, &fc_status, sizeof(fc_status_buf));
                 (void)enqueueI2STx(FC_STATUS_MSG,

@@ -1787,6 +1787,12 @@ def parse_binary_file(filepath):
                     # the camera rail comes up, several hundred ms before a
                     # GoPro or RunCam actually rolls.
                     "fc_camera_engaged": bool(fcs_flags & 0x01),
+                    # FCS_RAW_VOTES_WITHHELD: the mosaic-only image's raw vote
+                    # guard latched -- the raw-GNSS filter read >10 m/s below
+                    # the barometer's climb for 1 s after burnout, and its
+                    # velocity and pitch apogee votes are withheld until the
+                    # next launch. Always False on every other image.
+                    "fc_raw_votes_withheld": bool(fcs_flags & 0x02),
                 })
             elif msg_type == MSG_SNAPSHOT and msg_len == SNAPSHOT_LEN:
                 # #752: the FC's crash-recovery snapshot, 10 Hz through INFLIGHT.

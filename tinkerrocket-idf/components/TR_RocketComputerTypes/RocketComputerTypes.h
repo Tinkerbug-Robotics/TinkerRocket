@@ -1569,6 +1569,14 @@ static_assert(sizeof(FcStatusData) == 5,
 // two agree by construction.
 static constexpr uint8_t FCS_CAMERA_ENGAGED = (1u << 0);
 
+// The mosaic-only image's raw vote guard (flight_computer main/raw_vote_guard.h)
+// has latched this flight: the raw-GNSS filter -- that image's one navigation
+// filter -- read its vertical velocity more than 10 m/s below the barometer's
+// climb rate for a second after burnout, so its velocity and pitch apogee votes
+// are withheld until the next launch (or sim edge). Never set on any other
+// image. A flight log reads the latch time from the first frame with it set.
+static constexpr uint8_t FCS_RAW_VOTES_WITHHELD = (1u << 1);
+
 // ── RawGnssEkfData (RAW_GNSS_EKF_MSG 0x96, 10 Hz) ───────────────────────────
 // #1600 phase 4.  The raw-GNSS shadow filter (TR_RawGnssEKF, run by
 // TR_RawGnssShadow on core 0): a tightly coupled GNSS/INS filter fed the

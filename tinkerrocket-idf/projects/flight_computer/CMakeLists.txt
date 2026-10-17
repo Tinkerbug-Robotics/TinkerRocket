@@ -160,7 +160,9 @@ if(TR_GNSS_MOSAIC AND (NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW))
 else()
     set(_tr_mosaic_rawnav OFF)
 endif()
-foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G TR_RAW_GNSS_IRAM)
+set(_tr_mosaic_rawnav_hooks TR_BENCH_RAW_START_FAIL)
+foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G TR_RAW_GNSS_IRAM
+        ${_tr_mosaic_rawnav_hooks})
     if(DEFINED ${_v} AND NOT _tr_mosaic_rawnav)
         message(FATAL_ERROR "${_v} is for the mosaic-only image's raw-GNSS filter (-DTR_GNSS_MOSAIC=1 on a V8 or V9): this build would ignore it. A build dir keeps every -D value: use a fresh one.")
     endif()
@@ -169,6 +171,16 @@ foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G)
     if(DEFINED ${_v})
         add_compile_definitions(${_v}=${${_v}})
         message(STATUS "${_v}=${${_v}} (bench)")
+    endif()
+endforeach()
+# Bench hooks for the mosaic-only image's robustness bench (P3, gate G8), one
+# image each, never flown (main.cpp, TR_RAW_NAV_MOSAIC):
+#   TR_BENCH_RAW_START_FAIL=1     the filter's start fails before it allocates:
+#                                 NO NAVIGATION FILTER and FCB_DEG_SENSORS
+foreach(_v ${_tr_mosaic_rawnav_hooks})
+    if(DEFINED ${_v})
+        add_compile_definitions(${_v}=${${_v}})
+        message(WARNING "${_v}=${${_v}} -- a BENCH hook of the mosaic-only image (P3): never fly this image")
     endif()
 endforeach()
 # Bench: the raw-GNSS filter's EKF and measurement builder in internal RAM

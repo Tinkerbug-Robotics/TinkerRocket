@@ -1383,6 +1383,8 @@ CATALOG_EMPTY_ON_EVERY_FIXTURE = {
     # repo, so no committed log carries one. The row stays because the next
     # flight recorded on current firmware will produce it.
     "FcStatus.fc_camera_engaged",
+    # The mosaic-only image's raw vote guard bit rides the same frame.
+    "FcStatus.fc_raw_votes_withheld",
 }
 
 
