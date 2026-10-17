@@ -17,6 +17,8 @@ For how it works, see "The rig replay" in [docs/plans/1600-realtime-raw-gnss.md]
 | `baro_port_check.py` | The barometer's error through the flight beside the filter's static-port model |
 | `score_heading.py` | The heading from thrust (0x9F): each fit on the flight's time, its 1-sigma, the hand-off and its cost; with `--ref`, two runs' turns side by side |
 | `truth.py` | Loads a flight's truth and scenario for the scorers |
+| `run_v9.sh` | One run on the V9 with the mosaic-G5 (below): the MAC check, the rig marked busy, the FC reset and its console, the sky conducted, the run voided if the replay clock is late |
+| `score_v9.py` | Scores a V9 run: its console alone, plus the OC's log if downloaded, plus that log through the offline harness on request |
 
 ## What you need
 
@@ -82,3 +84,107 @@ python3 tools/rig_replay/score_heading.py OUTDIR_B/flight_....bin --ref OUTDIR_A
 - **The console's "up" is relative.** It's the filter's height above its own pad reference, so an absolute height error on the pad only shows in `score_log.py`, in the raw filter's ellipsoidal records.
 - **The receiver isn't repeatable on the rig.** In 2026-10 the LC86G lost the rig's sky at different points in different runs (on the pad, at launch, under the drogue), with no command from the FC. Check each run's fix count over time (`[REPLAY] ... fixes=`) before comparing two runs.
 - **One run per boot.** The replay plays from boot as a sim, with the pyros in dry-fire, then holds the landed state until a reboot.
+
+## The V9 with the mosaic-G5
+
+The Goblin's V9 flies the raw-GNSS filter as its one navigation filter, fed by a Septentrio mosaic-G5 (the
+mosaic-only image, `-DTR_GNSS_MOSAIC=1`). Its rig replay is the same idea as the Beetle's, with these differences:
+
+- **The replay's clock comes from the receiver's timed raw epochs**, ten a second (`ReplayClock::onEpoch`). The
+  mosaic's driver hands no timed fix. An epoch counts once the 1PPS line is valid, the receiver says FINETIME and an
+  edge has paired within 120 s. After a cold start that is about 70 s after the sky starts (10/17 pad check), so
+  around file second 70, t = -110 s. The clock must arm before T-5 s (file second 175), or the flight never starts.
+  The epoch's time of week is the receiver's own, so the replayed IMU sits up to 0.5 ms (the receiver's clock bias)
+  from GPS time. `score_v9.py --log` prints that bias at ignition.
+- **The receiver cold-starts at every boot** (`erst,Soft,PVTData+SatData` after its setup). This is on in every
+  replay build of the mosaic image, through the bench switch `TR_BENCH_MOSAIC_COLD_START`. The receiver then sets
+  itself up a second time, about 5 s after boot, and `run_v9.sh` transmits once it has.
+- **The ionosphere: the rig sky's wins.** The rig plays a recorded day, 2026-08-29. Under the flight rule, an app or
+  NVS set from a later real-sky day would beat the receiver's GPSIon. In a replay build the receiver's set wins
+  whatever the days (`RawIonoRule::offerRigReplay`). GPS broadcasts it only once every 12.5 min (subframe 4 page
+  18), so many 180 s pads hear none. Then any app set stands, and with none (the Goblin V9's NVS held none on 10/17)
+  the filter builds without one. Only the pseudoranges carry it, a few metres; the Doppler and the attitude do not.
+- **A navigation line to score.** `[REPLAY-NAV]` prints 10 times a second in flight and once a second on the
+  ground. It carries the replayed flight's time, the attitude, velocity and position, the four apogee voters, the
+  call, the backstop, the GPS admission, the raw vote guard and the transonic lockout. So the console alone scores a
+  run.
+- **Conducted, not radiated.** The PortaPack Mayhem (HackRF) feeds the mosaic's SMA through the pad stack and a DC
+  block. The mosaic-go powers its antenna port. The receiver's own USB is never connected.
+
+### Build and stage (bench only)
+
+```
+python3 tools/sim_replay_blob.py $COCOM_SDR/scenarios/sim_rp5_0829_sensors.csv.gz \
+    $COCOM_SDR/scenarios/real_sim_rp5_0829_sky3d_pad180.json /abs/sim_replay_rp5_0829.bin
+cd tinkerrocket-idf/projects/flight_computer
+idf.py -B build_rig_rp5_0829 -DTR_BOARD_V9=1 -DTR_GNSS_MOSAIC=1 -DTR_SIM_REPLAY_BLOB=/abs/sim_replay_rp5_0829.bin \
+    -DTR_BENCH_MOSAIC_CN0=1 reconfigure
+cmake --build build_rig_rp5_0829 -j 4
+```
+
+- The image is about 2.1 MB with the 1.28 MB blob, inside the 3 MB `ota_0` slot.
+- Build the CPU profile variant with `-DTR_LOOP_PROFILE=1` (`[LP]`). Then, after `reconfigure`, append
+  `CONFIG_FREERTOS_USE_TRACE_FACILITY=y` and `CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y` to the build dir's
+  `sdkconfig` (`[CPU]`). Both perturb timing, so keep them out of the scored runs.
+- The build is marked `-bench`. It plays a canned flight from boot as a sim, with every pyro dry.
+- It is refused on the mosaic image built without the filter (no epochs to clock from) and on any board but the M1
+  and the mosaic image.
+- The staged images, their blobs and the exact commands are in `firmware-ota/v9-rig-replay/<flight>/`.
+
+### A run
+
+1. **Flash the FC only, after the MAC check**, with the owner's OK. `ioreg -p IOUSB -l -w0 | grep 'USB Serial
+   Number'` must show the FC, 80:F1:B2:D0:94:A7. `run_v9.sh` never flashes.
+2. **Fly it:** `tools/rig_replay/run_v9.sh sim_rp5_0829 7 r1`
+   - The arguments are the flight, the conducted TX gain and the run's tag. On 10/17, `-x 3` read GPS 40 dB-Hz on
+     the pad.
+   - The script refuses while a build runs, and while `RIG_STATE` says another session has the rig.
+   - It finds the FC by its USB serial without opening a port, and marks the rig active.
+   - It resets the FC and logs its console (`tools/bench_capture_boot.py`). It checks that the image carries this
+     flight. It waits for the receiver's second setup (the cold start), then transmits.
+   - The run is **VOID** if the replay clock is not on the receiver's by file second 170, or if it says MISSED. The
+     transmission then stops (`KEEP_ON_VOID=1` keeps it going).
+   - After the file it keeps 120 s of console, then leaves the radio idle and the rig idle, on any exit.
+   - The run folder holds `fc_console.txt`, `hackrf.txt`, `run.json` (image version, blob SHA-256, gain, times,
+     void) and `VOID` when void.
+   - `DRY_RUN=1` prints the plan after the checks.
+3. **Download the OC's log** if the run needs more than the console. Use `tools/ble_flight_download.py`, with
+   `TARGET_NAME` set to "RC V9". At about 221 kB/s of log, a run is 20-30 MB, about 10-15 min over BLE. **Delete the
+   rig logs from the Goblin's OC before 10/23.**
+4. **Score it:**
+   ```
+   python3 tools/rig_replay/score_v9.py rig_runs/run_r1 [--log OC_LOG [--harness build/raw_replay_mosaic]]
+   ```
+   - The attitude error per phase is the plan's (e = 2 acos|q_est . q_true|): p90, p99 and max for boost, coast
+     and descent, plus the pitch error within 2 s of the apogee.
+   - Velocity and position errors per phase.
+   - Each apogee voter: its first vote, its latency against the true apogee, the true vertical velocity then, and
+     any vote while still climbing at more than 2 m/s.
+   - The epoch age and build, the filter's step and core-0 share, `[CPU]`/`[LP]`, the loop and IMU rates.
+   - The PPS tag check, what the receiver tracked through each phase, and the replay clock.
+   - With `--log`: the on-board records (0x96) on the same metrics, each voter's NonSensor flag, the receiver's own
+     PVT against the truth, its clock drift (about +0.1 ppm on the rig) and its bias at ignition.
+   - With `--harness`: the log through `raw_replay_mosaic` from the on-board filter's own start
+     (`extract.py --sbf --rig`), aided and unaided (att_gnss_off), scored against the plan's section 4 bars and
+     against the on-board records.
+5. **Afterwards** (plan risk 10):
+   - Cold-start the receiver once more, then give it 15 min of real sky before the Goblin's pad. It otherwise
+     carries the rig's day, place and ephemerides.
+   - Put a flight image back on the FC.
+   - Set the IMU back to 4k Dynamic and GNSS logging to Detailed.
+
+### The rig's own limits on these runs
+
+- **C/N0 tops out at about 38-40 dB-Hz whatever the gain.** The real sky reads GPS 44-46 at mid and high
+  elevation. The receiver keeps GPS through the boost but loses most satellites under the drogue on these skies.
+  Read `score_v9.py`'s tracked table before blaming the filter for a descent.
+- **The high-g channel adds the V9's bias.**
+  - rp5_0829 rides the low-g rail for 48 ms at ignition (18.8 g peak), eagleclaw_0517 for 22 ms, gtv67_0509 not at
+    all.
+  - Over those samples the converter takes the high-g channel less the V9's NVS high-g bias, which the replay never
+    put in: about 1.3 m/s^2.
+  - The replayed flight is off its truth by 0.03-0.06 m/s, a replay artifact.
+- **The pad is not in the OC log.** It records from launch, with about 0.4 s of prelaunch ring. The pad's numbers
+  come from the console.
+- **The skies are not the Goblin's motor.** These are the three flights with full truth: rp5_0829, eagleclaw_0517,
+  and gtv67_0509 (the windy one).

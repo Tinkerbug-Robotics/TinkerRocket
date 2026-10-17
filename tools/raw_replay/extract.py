@@ -146,8 +146,8 @@ def main():
     ap.add_argument("log")
     ap.add_argument("out")
     ap.add_argument("--ekf-rate", type=float, help="the flight loop's EKF ticks a second (default: the log's)")
-    ap.add_argument("--blob", default=os.path.join(HERE, "..", "replay", "sim_replay.bin"),
-                    help="the replay file the image carried: its ignition edge puts the log on the flight's time")
+    ap.add_argument("--blob", help="the replay file the image carried: its ignition edge puts the log on the "
+                                   "flight's time (default tools/replay/sim_replay.bin; with --sbf, only with --rig)")
     ap.add_argument("--borrow", help="for a log without a pad context (an OC image that dropped 0x9B-0x9F): "
                                      "another run's event file (the same replay, the same bench heading error) to "
                                      "take the pad's covariance, ephemerides, ionosphere and IMU biases from")
@@ -160,14 +160,23 @@ def main():
     ap.add_argument("--nav-as-logged", action="store_true",
                     help="with --sbf: the navigation blocks only where the log has them, not also at the start (a "
                          "log the flight computer booted in)")
+    ap.add_argument("--rig", action="store_true",
+                    help="with --sbf: a rig replay of the mosaic-only image (tools/rig_replay/run_v9.sh): the flight's "
+                         "time from the replay's ignition edge (--blob) against the log's accelerometer, and the start "
+                         "from the on-board filter's own records (S, A, the pad context) -- the OC log begins at "
+                         "launch, so a cold start would begin in the boost")
     ap.add_argument("--seed-quat-from-log", action="store_true",
                     help="with --sbf: the cold start's attitude from the log's own flight filter (NonSensor q, the "
                          "auto image's GpsInsEKF), not the accelerometer's tilt and the pad heading guess the "
                          "mosaic-only image starts from (META seed_quat). Its heading is then that filter's: never "
                          "score heading against that filter's quaternion from such a run")
     args = ap.parse_args()
+    if args.rig and not args.sbf:
+        raise SystemExit("--rig is for a mosaic log (--sbf); an LC86G rig log takes --blob alone")
     if args.sbf:
         return extract_sbf(args)
+    if args.blob is None:
+        args.blob = DEFAULT_BLOB
 
     recs, _stats, config = P.parse_binary_file(args.log)
     imu = recs["ISM6HG256"]
@@ -218,6 +227,86 @@ def main():
     gp = [r["ground_pressure_pa"] for r in snap if r.get("ground_pressure_pa", 0) > 0]
     lines.append(f"META ground_pressure_pa {repr(float(gp[0])) if gp else -1}")
 
+    lines.extend(start_lines(recs, args, t_ref, pcx, gp))
+
+    events = []
+    # ---- IMU ticks with the loop's flags
+    ticks = imu_ticks(recs, config, ekf_rate, t_ref)
+    ki = np.searchsorted(nt, [tk[0] for tk in ticks], side="right") - 1
+    for tk, k in zip(ticks, ki):
+        k = max(int(k), 0)
+        if pcx and pcx["nav"]:
+            inf = tk[0] >= t_inflight and state[k] != LANDED     # the shadow's own launch tick
+        else:
+            inf = state[k] == INFLIGHT
+        lvl = (not inf) or bool(apo[k])
+        lnd = bool(landed[k])
+        flags = (1 if lvl else 0) | (2 if inf else 0) | (8 if lnd else 0)
+        events.append((tk[0], 0, "I %d %r %r %r %r %r %r %d" % (tk[0], *tk[1:], flags)))
+    # ---- barometer
+    for r in recs.get("BMP585") or []:
+        tu = int(unwrap([r["time_us"]], t_ref)[0])
+        events.append((tu, 1, f"B {tu} {r['pressure_pa']!r}"))
+    # ---- magnetometer (rocket FLU -> FRD)
+    for key in ("IIS2MDC", "MMC5983MA"):
+        for r in recs.get(key) or []:
+            tu = int(unwrap([r["time_us"]], t_ref)[0])
+            events.append((tu, 2, f"M {tu} {r['mag_x']!r} {-r['mag_y']!r} {-r['mag_z']!r}"))
+    # ---- the receiver's fixes: week and time of week (F), and as the flight loop's GPS voter gets them (V)
+    for r in recs.get("GNSS") or []:
+        if r["year"] < 2020:
+            continue
+        week, tow_ms = gps_of_fix(r)
+        tu = int(unwrap([r["time_us"]], t_ref)[0])
+        events.append((tu, 3, f"F {tu} {week} {tow_ms} {r['fix_mode']} {r['num_sats']}"))
+        events.append((tu, 3, f"V {tu} {r['fix_mode']} {r['num_sats']} {r['alt_m']!r} {r['vel_n']!r} "
+                              f"{r['vel_e']!r} {r['vel_u']!r}"))
+    # ---- the clock lines (or, without them, one fitted to the fixes' lower envelope)
+    if not recs.get("GnssClock"):
+        fx = [r for r in recs.get("GNSS") or [] if r["year"] >= 2020 and r["fix_mode"] >= 2]
+        if len(fx) >= 20:
+            g = np.array([gps_of_fix(r)[0] * 604800 + gps_of_fix(r)[1] * 1e-3 for r in fx])
+            st = unwrap([r["time_us"] for r in fx], t_ref) * 1e-6
+            g0 = g[0]
+            x = g - g0
+            y = st - x
+            # the lowest stamp of each 5 s, a line through them, then down by the measured offset
+            b = np.floor(x / 5.0)
+            xs, ys = [], []
+            for k in np.unique(b):
+                m = b == k
+                j = np.argmin(y[m])
+                xs.append(x[m][j]); ys.append(y[m][j])
+            drift, a_s = np.polyfit(xs, ys, 1)
+            a_s -= args.clock_offset_ms * 1e-3
+            tu = int(unwrap([fx[0]["time_us"]], t_ref)[0])
+            events.append((tu - 1, 4, f"K {tu - 1} {float(g0)!r} 0 {float(a_s * 1.0)!r} 0.0 {float(drift)!r} 0.0 1"))
+            lines.append(f"META clock_fitted drift_ppm {drift * 1e6:.2f} from {len(fx)} fixes")
+    for r in recs.get("GnssClock") or []:
+        tu = int(unwrap([r["time_us"]], t_ref)[0])
+        events.append((tu, 4, f"K {tu} {r['gps0_s']!r} {int(r['mcu0_us'])} {r['a_s']!r} {r['t_ref_s']!r} "
+                              f"{r['drift']!r} {r['latency_s']!r} {1 if r['valid'] else 0}"))
+    # ---- the receiver's RTCM3 frames
+    frames, dropped = P.join_gnss_rtcm(recs.get("GNSS_RTCM") or [])
+    lines.append(f"META rtcm_frames {len(frames)} dropped {dropped}")
+    for tu32, fr in frames:
+        tu = int(unwrap([tu32], t_ref)[0])
+        events.append((tu, 5, f"R {tu} {bytes(fr).hex()}"))
+
+    events.sort(key=lambda e: (e[0], e[1]))
+    lines.extend(e[2] for e in events)
+    with open(args.out, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"{os.path.basename(args.log)}: {len(ticks)} IMU ticks at {ekf_rate:.1f}/s, {len(frames)} RTCM frames "
+          f"({dropped} dropped), inflight {t_inflight}, apogee flag {t_apogee}, landed {t_landed}, "
+          f"pad context {'missing ' + ','.join(pcx['missing']) if pcx and pcx['missing'] else ('yes' if pcx else 'none')}")
+
+
+def start_lines(recs, args, t_ref, pcx, gp):
+    """The S, A and pad-context lines: the raw filter's own state at its first running pad record (0x96 and its 0x9B
+    companion) as the start, each epoch's age when it closed it, and the pad context (0x9E) or a borrowed one.
+    gp: the ground pressures the Snapshot records hold (for the barometer's offset at the start)."""
+    lines = []
     # ---- the start: the raw filter's first record on the pad (0x96 and its 0x9B companion)
     sh = recs["RawGnssEkf"]
     att = {r["time_us"]: r for r in recs.get("RawGnssAtt") or []}
@@ -303,81 +392,10 @@ def main():
         lines.append("META pcx_missing " + (",".join(pcx["missing"]) or "none"))
     else:
         lines.append("META pcx_missing all")
-
-    events = []
-    # ---- IMU ticks with the loop's flags
-    ticks = imu_ticks(recs, config, ekf_rate, t_ref)
-    ki = np.searchsorted(nt, [tk[0] for tk in ticks], side="right") - 1
-    for tk, k in zip(ticks, ki):
-        k = max(int(k), 0)
-        if pcx and pcx["nav"]:
-            inf = tk[0] >= t_inflight and state[k] != LANDED     # the shadow's own launch tick
-        else:
-            inf = state[k] == INFLIGHT
-        lvl = (not inf) or bool(apo[k])
-        lnd = bool(landed[k])
-        flags = (1 if lvl else 0) | (2 if inf else 0) | (8 if lnd else 0)
-        events.append((tk[0], 0, "I %d %r %r %r %r %r %r %d" % (tk[0], *tk[1:], flags)))
-    # ---- barometer
-    for r in recs.get("BMP585") or []:
-        tu = int(unwrap([r["time_us"]], t_ref)[0])
-        events.append((tu, 1, f"B {tu} {r['pressure_pa']!r}"))
-    # ---- magnetometer (rocket FLU -> FRD)
-    for key in ("IIS2MDC", "MMC5983MA"):
-        for r in recs.get(key) or []:
-            tu = int(unwrap([r["time_us"]], t_ref)[0])
-            events.append((tu, 2, f"M {tu} {r['mag_x']!r} {-r['mag_y']!r} {-r['mag_z']!r}"))
-    # ---- the receiver's fixes: week and time of week (F), and as the flight loop's GPS voter gets them (V)
-    for r in recs.get("GNSS") or []:
-        if r["year"] < 2020:
-            continue
-        week, tow_ms = gps_of_fix(r)
-        tu = int(unwrap([r["time_us"]], t_ref)[0])
-        events.append((tu, 3, f"F {tu} {week} {tow_ms} {r['fix_mode']} {r['num_sats']}"))
-        events.append((tu, 3, f"V {tu} {r['fix_mode']} {r['num_sats']} {r['alt_m']!r} {r['vel_n']!r} "
-                              f"{r['vel_e']!r} {r['vel_u']!r}"))
-    # ---- the clock lines (or, without them, one fitted to the fixes' lower envelope)
-    if not recs.get("GnssClock"):
-        fx = [r for r in recs.get("GNSS") or [] if r["year"] >= 2020 and r["fix_mode"] >= 2]
-        if len(fx) >= 20:
-            g = np.array([gps_of_fix(r)[0] * 604800 + gps_of_fix(r)[1] * 1e-3 for r in fx])
-            st = unwrap([r["time_us"] for r in fx], t_ref) * 1e-6
-            g0 = g[0]
-            x = g - g0
-            y = st - x
-            # the lowest stamp of each 5 s, a line through them, then down by the measured offset
-            b = np.floor(x / 5.0)
-            xs, ys = [], []
-            for k in np.unique(b):
-                m = b == k
-                j = np.argmin(y[m])
-                xs.append(x[m][j]); ys.append(y[m][j])
-            drift, a_s = np.polyfit(xs, ys, 1)
-            a_s -= args.clock_offset_ms * 1e-3
-            tu = int(unwrap([fx[0]["time_us"]], t_ref)[0])
-            events.append((tu - 1, 4, f"K {tu - 1} {float(g0)!r} 0 {float(a_s * 1.0)!r} 0.0 {float(drift)!r} 0.0 1"))
-            lines.append(f"META clock_fitted drift_ppm {drift * 1e6:.2f} from {len(fx)} fixes")
-    for r in recs.get("GnssClock") or []:
-        tu = int(unwrap([r["time_us"]], t_ref)[0])
-        events.append((tu, 4, f"K {tu} {r['gps0_s']!r} {int(r['mcu0_us'])} {r['a_s']!r} {r['t_ref_s']!r} "
-                              f"{r['drift']!r} {r['latency_s']!r} {1 if r['valid'] else 0}"))
-    # ---- the receiver's RTCM3 frames
-    frames, dropped = P.join_gnss_rtcm(recs.get("GNSS_RTCM") or [])
-    lines.append(f"META rtcm_frames {len(frames)} dropped {dropped}")
-    for tu32, fr in frames:
-        tu = int(unwrap([tu32], t_ref)[0])
-        events.append((tu, 5, f"R {tu} {bytes(fr).hex()}"))
-
-    events.sort(key=lambda e: (e[0], e[1]))
-    lines.extend(e[2] for e in events)
-    with open(args.out, "w") as f:
-        f.write("\n".join(lines) + "\n")
-    print(f"{os.path.basename(args.log)}: {len(ticks)} IMU ticks at {ekf_rate:.1f}/s, {len(frames)} RTCM frames "
-          f"({dropped} dropped), inflight {t_inflight}, apogee flag {t_apogee}, landed {t_landed}, "
-          f"pad context {'missing ' + ','.join(pcx['missing']) if pcx and pcx['missing'] else ('yes' if pcx else 'none')}")
-
+    return lines
 
 SBF_NAV_BLOCKS = (5891, 4002, 4081, 5893)   # GPSNav, GALNav, BDSNav, GPSIon
+DEFAULT_BLOB = os.path.join(HERE, "..", "replay", "sim_replay.bin")
 
 
 def common_events(recs, config, ekf_rate, t_ref, inflight_of):
@@ -439,10 +457,20 @@ def extract_sbf(args):
     t_apogee = int(nt[ka[0]]) if ka.size else None
     kl = np.flatnonzero(landed)
     t_landed = int(nt[kl[0]]) if kl.size else None
+    if args.rig:
+        # a rig replay: the flight's time from the replay's ignition edge, as an LC86G rig log's (truth.py)
+        os.environ.setdefault("COCOM_SDR", os.path.join(WT, "gnss", "cocom-rig", "sdr"))
+        sys.path.insert(0, os.path.join(WT, "tools", "rig_replay"))
+        import truth as TR  # noqa: E402
+        with open(args.blob or DEFAULT_BLOB, "rb") as f:
+            edge = TR.blob_edge_t(f.read())
+        base = [f"META t_base_s {float(TR.log_time_base(recs, edge))!r}", f"META edge_s {float(edge)!r}"]
+    else:
+        # flight time = MCU s + this: T+0 at the in-flight edge, the log's own clock without one
+        base = [f"META t_base_s {(-t_inflight * 1e-6 if t_inflight is not None else 0.0)!r}"]
     lines = [f"# extract.py --sbf {os.path.basename(args.log)}",
              f"META ekf_rate {ekf_rate:.3f}",
-             # flight time = MCU s + this: T+0 at the in-flight edge, the log's own clock without one
-             f"META t_base_s {(-t_inflight * 1e-6 if t_inflight is not None else 0.0)!r}",
+             *base,
              f"META t_inflight_us {t_inflight if t_inflight is not None else -1}",
              f"META t_apogee_flag_us {t_apogee if t_apogee is not None else -1}",
              f"META t_landed_flag_us {t_landed if t_landed is not None else -1}"]
@@ -459,7 +487,16 @@ def extract_sbf(args):
         qm = qm / np.linalg.norm(qm)
         lines.append("META seed_quat " + " ".join(repr(float(x)) for x in qm))
 
-    events, n_ticks = common_events(recs, config, ekf_rate, t_ref, lambda tu, k: bool(state[k] == INFLIGHT))
+    inflight_of = lambda tu, k: bool(state[k] == INFLIGHT)  # noqa: E731
+    if args.rig:
+        # the on-board filter's start (S, A) and pad context, as an LC86G log's; in flight from the filter's own
+        # launch tick where the pad context gives it, as there
+        pcx = P.join_pad_context(recs.get("PadContext") or [])
+        lines.extend(start_lines(recs, args, t_ref, pcx, gp))
+        if pcx and pcx["nav"]:
+            t_launch = int(unwrap([pcx["nav"]["filter_time_us"]], t_ref)[0])
+            inflight_of = lambda tu, k: tu >= t_launch and state[k] != LANDED  # noqa: E731
+    events, n_ticks = common_events(recs, config, ekf_rate, t_ref, inflight_of)
     frames, dropped = P.join_gnss_rtcm(recs.get("GNSS_RTCM") or [])
     raw = P.split_gnss_raw_frames(frames)
     sbf = raw["sbf"]

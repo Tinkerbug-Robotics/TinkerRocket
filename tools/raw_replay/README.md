@@ -136,6 +136,14 @@ from the log's own flight filter (NonSensor, the auto image's GpsInsEKF) for a c
 its attitude. Its heading is then that filter's, and on a static pad nothing turns it (below), so never score
 heading against the log's quaternion from such a run; the harness warns when it takes META `seed_quat`.
 
+A rig replay of the mosaic-only image (`tools/rig_replay/run_v9.sh`) takes `extract.py --sbf --rig OC_LOG run.events
+--blob REPLAY.bin`. Its OC log begins at launch, less about 0.4 s of prelaunch ring, so a cold start would begin in
+the boost. With `--rig`, the events file starts from the on-board filter's own records instead, as an LC86G rig log
+does: S at its first running pad record, A, and the pad context (PNAV, PCOV, PSUR) when the log has it. T+0 comes
+from the replay's ignition edge against the log's accelerometer (META `t_base_s`, `edge_s`), and the ticks are in
+flight from the pad context's launch tick. `raw_replay_mosaic --receiver mosaic --quorum` then restores that state
+(`tools/rig_replay/score_v9.py --harness` runs it, aided and `--unaided`).
+
 For the Beetle's and other non-SBF logs, `extract.py` (without `--sbf`) now also writes a `V` line beside each `F`:
 the receiver's fix as the flight loop's GPS voter gets it, so `--quorum` has its fourth voter. The 25 bitident files
 predate it and carry none.
