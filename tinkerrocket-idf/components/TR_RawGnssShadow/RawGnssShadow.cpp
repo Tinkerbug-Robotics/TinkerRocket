@@ -608,6 +608,15 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
         acc_sum_[i] = gyro_sum_[i] = 0.0;
     }
 
+    if (cfg_.dv_check != kDvOff)
+    {
+        // the Doppler change check's lever-arm allowance: the body's rate now, and its largest since the check
+        const float wn = std::sqrt(gyro[0] * gyro[0] + gyro[1] * gyro[1] + gyro[2] * gyro[2]);
+        for (int i = 0; i < 3; ++i)
+            dv_w_now_[i] = gyro[i];
+        if (wn > dv_w_peak_)
+            dv_w_peak_ = wn;
+    }
     const int64_t c0 = now();
     ekf_.propagate(acc, gyro, static_cast<float>(span));
     if (static_cast<double>(ekf_.gExcess()) + 1.0 > cfg_.boost_screen_g)
@@ -745,6 +754,7 @@ void RawGnssShadow::start(double t)
     gate_full_ = false;
     boost_seen_t_ = -1.0e9;
     vert_latch_ = false;
+    dvReset();
     n_g_held_ = 0;
     pr_period_k_ = -1;
     fit_last_te_ = -1.0;
@@ -904,7 +914,7 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
         built_ = pend_built_[pb_head_];
         pb_head_ ^= 1;
         npend_built_--;
-        job_.phase = kJobChecks;
+        job_.phase = cfg_.dv_check != kDvOff ? kJobDvCheck : kJobChecks;
         job_.build_us = built_.build_us;  // the GNSS task's (wall), then the checks here
     }
     else
@@ -977,7 +987,11 @@ void RawGnssShadow::jobUnit(double t)
     {
     case kJobBuild:
         if (stage_.next(built_, 1))
-            job_.phase = kJobChecks;
+            job_.phase = cfg_.dv_check != kDvOff ? kJobDvCheck : kJobChecks;
+        break;
+    case kJobDvCheck:
+        jobDvCheck(age);
+        job_.phase = kJobChecks;
         break;
     case kJobChecks:
         jobChecks(age, t);
@@ -1101,6 +1115,308 @@ void RawGnssShadow::jobChecks(double age, double t)
         }
     }
     st_.last_pad_corrected = use_broadcast_ ? 0 : survey_.correct(m, n, built_.r_approx);
+}
+
+void RawGnssShadow::dvReset()
+{
+    dv_ref_.valid = false;
+    dv_ref_.n = 0;
+    n_dv_hold_ = 0;
+    dv_epoch_until_ = -1.0e9;
+    dv_epoch_excess_ = 0.0f;
+    for (int i = 0; i < 3; ++i)
+        dv_w_now_[i] = dv_w_ref_[i] = 0.0f;
+    dv_w_peak_ = 0.0f;
+    for (int i = 0; i < RawEpoch::kMaxObs; ++i)
+        dv_S_[i] = dv_V_[i] = 0.0;
+    for (int i = 0; i < 3; ++i)
+    {
+        dv_SW_[i] = dv_SF_[i] = 0.0;
+        for (int j = 0; j < 3; ++j)
+            dv_CW_[i][j] = 0.0;
+    }
+    dv_SB_ = dv_SL_ = 0.0;
+    dv_noise_var_ = 0.0;
+    dv_noise_te_ = 0.0;
+}
+
+// The Doppler change check (RawGnssShadow.h, DopplerChange.h), the epoch's
+// first unit: before the stress term goes on the Dopplers (jobChecks), whose
+// own allowance here is the IMU's peak since the epoch before (dv_sigma_per_g)
+// -- a loop's error under stress changes with the stress, not the window's
+// hold. Then, acting, the Dopplers held out are no Dopplers for the rest of
+// the epoch: the heading fit, the vertical check, the boost screen and the
+// update all see the rest.
+void RawGnssShadow::jobDvCheck(double age)
+{
+    const double te = job_.te;
+    DopplerChangeImu imu;
+    const int nr = ekf_.dopplerChange(built_.meas, built_.n, age, dv_ref_, dv_next_, dv_rows_, imu);
+    const double g_ex = job_.g_peak > 0.0 ? job_.g_peak : 0.0;
+    const double dyn = cfg_.dv_sigma_per_g * g_ex;
+    // the measured noise, as the epochs before left it (each change has two Dopplers' worth)
+    const bool noise = cfg_.dv_noise_tau_s > 0.0;
+    double nvar = 0.0;
+    if (noise)
+    {
+        const double dt_n = te - dv_noise_te_;
+        nvar = dv_noise_var_ * (dt_n > 0.0 ? std::exp(-dt_n / cfg_.dv_noise_tau_s) : 1.0);
+    }
+    double model2[RawEpoch::kMaxObs];     // each change's variance as the model gives it (scratch)
+    for (int k = 0; k < nr; ++k)
+    {
+        const double s = dv_rows_[k].s;
+        model2[k] = s * s + cfg_.dv_floor_mps * cfg_.dv_floor_mps + dyn * dyn;
+        dv_rows_[k].s = std::sqrt(model2[k] + 2.0 * nvar);
+    }
+    // four unknowns and one to spare
+    dvc::Fit f;
+    if (nr >= 5)
+        f = dvc::fit(dv_rows_, nr, cfg_.dv_sat_k);
+    if (noise)
+    {
+        // this epoch's excess, the median's (half the rows can be off on their own): a change's residual has
+        // its two Dopplers' variance, and chi-square(1)'s median is 0.455
+        if (f.ok)
+        {
+            double r2[RawEpoch::kMaxObs], m2[RawEpoch::kMaxObs];
+            for (int k = 0; k < nr; ++k)
+            {
+                const double r = dv_rows_[k].e * dv_rows_[k].s;
+                r2[k] = r * r;
+                m2[k] = model2[k];
+            }
+            const double ex = 0.5 * (ekf_detail::medianOf(r2, nr) / 0.455 - ekf_detail::medianOf(m2, nr));
+            if (ex > nvar)
+                nvar = ex;
+        }
+        dv_noise_var_ = nvar;
+        dv_noise_te_ = te;
+        st_.dv_noise_mps = static_cast<float>(std::sqrt(nvar));
+        if (st_.dv_noise_mps > st_.dv_noise_max_mps)
+            st_.dv_noise_max_mps = st_.dv_noise_mps;
+    }
+    const bool win = cfg_.dv_window_s > 0.0;
+    const double lam = win && imu.ok ? std::exp(-imu.dt / cfg_.dv_window_s) : 0.0;
+    for (int i = 0; i < dv_next_.n; ++i)
+        dv_S2_[i] = dv_V2_[i] = 0.0;
+    bool epoch_fail = false;
+    int sat_fails = 0;
+    if (f.ok)
+    {
+        st_.dv_checks++;
+        const double k2 = cfg_.dv_sat_k * cfg_.dv_sat_k;
+        for (int k = 0; k < nr; ++k)
+        {
+            dvc::Row& r = dv_rows_[k];
+            bool fail = r.e * r.e > k2;
+            const double ae = std::fabs(r.e);
+            if (static_cast<float>(ae) > st_.dv_max_e)
+                st_.dv_max_e = static_cast<float>(ae);
+            double excess = ae * r.s;
+            if (win && r.iout >= 0)
+            {
+                // The satellite's residual summed, leaky: a drift adds up, an epoch's noise does not -- each
+                // change is this epoch's Doppler less the one before, so the sum is this epoch's less a
+                // weighted mean of the earlier ones (the weights summing to 1), whatever the noise's own
+                // correlation. Its variance at most this end's plus that mean's, each half a change's
+                // (dv_V_: the changes' variance, its leaky mean -- the first change's alone).
+                const double s2 = r.s * r.s;
+                const double Vm = dv_V_[r.iref] > 0.0 ? lam * dv_V_[r.iref] + (1.0 - lam) * s2 : s2;
+                const double S = lam * dv_S_[r.iref] + r.e * r.s;
+                const double V = 0.5 * (s2 + Vm);
+                dv_S2_[r.iout] = S;
+                dv_V2_[r.iout] = Vm;
+                if (!fail && S * S > k2 * V)
+                {
+                    fail = true;
+                    excess = std::fabs(S);
+                    st_.dv_sat_win_fails++;
+                }
+            }
+            if (!fail)
+                continue;
+            sat_fails++;
+            st_.dv_sat_fails++;
+            // held out from this epoch to dv_hold_s after it
+            const uint8_t sys = built_.meas[r.im].sys, prn = built_.meas[r.im].prn;
+            int h = 0;
+            while (h < n_dv_hold_ && !(dv_hold_[h].sys == sys && dv_hold_[h].prn == prn))
+                h++;
+            if (h == n_dv_hold_)
+            {
+                if (n_dv_hold_ == kDvHold)
+                {
+                    // full: the one whose hold ends first gives way
+                    h = 0;
+                    for (int j = 1; j < n_dv_hold_; ++j)
+                        if (dv_hold_[j].until < dv_hold_[h].until)
+                            h = j;
+                }
+                else
+                {
+                    n_dv_hold_++;
+                }
+                dv_hold_[h].sys = sys;
+                dv_hold_[h].prn = prn;
+            }
+            dv_hold_[h].until = te + cfg_.dv_hold_s;
+            dv_hold_[h].excess = static_cast<float>(excess);
+        }
+        // the epoch: its change against the IMU's, the allowances in
+        const double w[3] = {f.x[0], f.x[1], f.x[2]};
+        double Cw[3][3];
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j)
+                Cw[i][j] = f.C[i][j];
+        const double sf[3] = {imu.dv_sf[0], imu.dv_sf[1], imu.dv_sf[2]};
+        double dw2 = 0.0;
+        for (int i = 0; i < 3; ++i)
+        {
+            const double d = static_cast<double>(dv_w_now_[i]) - static_cast<double>(dv_w_ref_[i]);
+            dw2 += d * d;
+        }
+        const double wp = static_cast<double>(dv_w_peak_);
+        const double lever = cfg_.dv_lever_allow_m * (std::sqrt(dw2) + wp * wp * imu.dt);
+        dvc::Allow a;
+        a.att_rad = cfg_.dv_att_allow_deg / kRad2Deg;
+        a.scale = cfg_.dv_scale_allow;
+        a.bias_mps = cfg_.dv_bias_allow_mps2 * imu.dt;
+        a.lever_mps = lever;
+        const double chi2 = dvc::epochChi2(w, Cw, sf, a);
+        const double ke2 = cfg_.dv_epoch_k * cfg_.dv_epoch_k;
+        st_.dv_last_chi2 = static_cast<float>(chi2);
+        st_.dv_last_along = static_cast<float>(dvc::alongSf(w, sf));
+        if (static_cast<float>(chi2) > st_.dv_max_chi2)
+            st_.dv_max_chi2 = static_cast<float>(chi2);
+        double excess = std::sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
+        epoch_fail = chi2 < 0.0 || chi2 > ke2 || 2 * sat_fails > nr;
+        if (win)
+        {
+            // the change summed as each satellite's (above): its noise this epoch's covariance and the leaky
+            // mean's, each half; what the IMU can be off by adds up as it goes (the specific force's change
+            // summed, the bias's and the lever arm's allowances summed)
+            const bool first = !(dv_CW_[0][0] > 0.0);
+            double Cs[3][3];
+            for (int i = 0; i < 3; ++i)
+            {
+                dv_SW_[i] = lam * dv_SW_[i] + w[i];
+                dv_SF_[i] = lam * dv_SF_[i] + sf[i];
+                for (int j = 0; j < 3; ++j)
+                {
+                    dv_CW_[i][j] = first ? Cw[i][j] : lam * dv_CW_[i][j] + (1.0 - lam) * Cw[i][j];
+                    Cs[i][j] = 0.5 * (Cw[i][j] + dv_CW_[i][j]);
+                }
+            }
+            dv_SB_ = lam * dv_SB_ + a.bias_mps;
+            dv_SL_ = lam * dv_SL_ + a.lever_mps;
+            dvc::Allow aw = a;
+            aw.bias_mps = dv_SB_;
+            aw.lever_mps = dv_SL_;
+            const double chi2w = dvc::epochChi2(dv_SW_, Cs, dv_SF_, aw);
+            st_.dv_last_chi2_win = static_cast<float>(chi2w);
+            if (!epoch_fail && chi2w > ke2)
+            {
+                epoch_fail = true;
+                excess = std::sqrt(dv_SW_[0] * dv_SW_[0] + dv_SW_[1] * dv_SW_[1] + dv_SW_[2] * dv_SW_[2]);
+                st_.dv_epoch_win_fails++;
+            }
+        }
+        if (epoch_fail)
+        {
+            st_.dv_epoch_fails++;
+            dv_epoch_until_ = te + cfg_.dv_epoch_hold_s;
+            dv_epoch_excess_ = static_cast<float>(excess);
+        }
+    }
+    else
+    {
+        // nothing to sum across: the window starts over
+        for (int i = 0; i < 3; ++i)
+        {
+            dv_SW_[i] = dv_SF_[i] = 0.0;
+            for (int j = 0; j < 3; ++j)
+                dv_CW_[i][j] = 0.0;
+        }
+        dv_SB_ = dv_SL_ = 0.0;
+    }
+    // this epoch is the next one's start
+    dv_ref_ = dv_next_;
+    for (int i = 0; i < dv_ref_.n; ++i)
+    {
+        dv_S_[i] = dv_S2_[i];
+        dv_V_[i] = dv_V2_[i];
+    }
+    for (int i = 0; i < 3; ++i)
+        dv_w_ref_[i] = dv_w_now_[i];
+    dv_w_peak_ = std::sqrt(dv_w_now_[0] * dv_w_now_[0] + dv_w_now_[1] * dv_w_now_[1] + dv_w_now_[2] * dv_w_now_[2]);
+    // the holds that have run out
+    int nh = 0;
+    for (int h = 0; h < n_dv_hold_; ++h)
+        if (dv_hold_[h].until >= te)
+            dv_hold_[nh++] = dv_hold_[h];
+    n_dv_hold_ = nh;
+    if (cfg_.dv_check != kDvAct || !(job_.in_flight || cfg_.dv_ground))
+        return;
+    // acting: held out (or de-weighted) for the rest of the epoch; the measured noise on every Doppler
+    bool all = te <= dv_epoch_until_;
+    if (!all && cfg_.dv_hold_all_frac < 1.0)
+    {
+        int nrr = 0, nheld = 0;
+        for (int i = 0; i < built_.n; ++i)
+        {
+            const RawMeas& mi = built_.meas[i];
+            if (!mi.has_rr)
+                continue;
+            nrr++;
+            for (int h = 0; h < n_dv_hold_; ++h)
+                if (dv_hold_[h].sys == mi.sys && dv_hold_[h].prn == mi.prn)
+                {
+                    nheld++;
+                    break;
+                }
+        }
+        if (nheld > 0 && static_cast<double>(nheld) > cfg_.dv_hold_all_frac * static_cast<double>(nrr))
+        {
+            all = true;
+            st_.dv_all_held++;
+        }
+    }
+    const float nsig2 = static_cast<float>(nvar);
+    int held = 0;
+    for (int i = 0; i < built_.n; ++i)
+    {
+        RawMeas& mi = built_.meas[i];
+        if (!mi.has_rr)
+            continue;
+        if (nsig2 > 0.0f)
+            mi.sigma_rr = std::sqrt(mi.sigma_rr * mi.sigma_rr + nsig2);
+        float excess = 0.0f;
+        bool hold = false;
+        if (all)
+        {
+            hold = true;
+            excess = dv_epoch_excess_;
+        }
+        for (int h = 0; h < n_dv_hold_; ++h)
+            if (dv_hold_[h].sys == mi.sys && dv_hold_[h].prn == mi.prn)
+            {
+                hold = true;
+                if (dv_hold_[h].excess > excess)
+                    excess = dv_hold_[h].excess;
+                break;
+            }
+        if (!hold)
+            continue;
+        held++;
+        if (cfg_.dv_deweight)
+            mi.sigma_rr = std::sqrt(mi.sigma_rr * mi.sigma_rr + excess * excess);
+        else
+            mi.has_rr = false;
+    }
+    st_.dv_held_rr += static_cast<uint32_t>(held);
+    if (held > 0)
+        st_.dv_held_epochs++;
 }
 
 // The vertical check and the boost screen (RawGnssShadow.h), their first

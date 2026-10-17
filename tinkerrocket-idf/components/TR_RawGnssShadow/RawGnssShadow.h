@@ -241,6 +241,50 @@
 // second: with the roll rate beside it, the carrier wind-up) are in the
 // stats and on the console.
 //
+// The Doppler change check (dv_check; off by default: DopplerChange.h). A
+// loop still settling after the thrust, or a receiver handing over an old
+// velocity, can sit inside the innovation gate, which judges each Doppler by
+// the filter's velocity -- one the stale Dopplers have already pulled. How
+// each Doppler CHANGED since the epoch before cannot hide so: the IMU says
+// how the receiver's velocity changed, and each range rate must have changed
+// by that along its line of sight, plus the satellite's own change and the
+// clock drift's, which every satellite shares. The filter's velocity is at
+// both ends and drops out, so a filter already wrong does not judge the data
+// by itself (the boost screen's weakness). Each epoch, before anything of it
+// is fused (its first unit, before the stress term goes on the Dopplers):
+//   - a satellite whose change is more than dv_sat_k of its 1-sigmas off the
+//     epoch's own fit -- one velocity change and one clock rate fitted to
+//     every satellite, so an attitude error, an antenna off the IMU turning
+//     with the body or the IMU's scale, each one change for the receiver as a
+//     whole, is taken out -- fails, and its Doppler is held out of the update
+//     until dv_hold_s after its last failure;
+//   - the epoch fails if that fitted change is more than dv_epoch_k sigmas
+//     off the IMU's, its allowances in: the IMU's specific-force change
+//     turned by dv_att_allow_deg (so an attitude error, which only turns it,
+//     leaves the part along it to judge: a lagging loop reports less of the
+//     change, along it), off by dv_scale_allow of itself, an accelerometer
+//     bias of dv_bias_allow_mps2 over the interval, and dv_lever_allow_m of
+//     antenna offset at the gyro's change of rate and turn; or if more than
+//     half its satellites fail. Then every Doppler is held out until
+//     dv_epoch_hold_s after the last failed epoch.
+// With dv_noise_tau_s, the epoch's changes also measure the Dopplers' own
+// noise: their residuals' spread off the fit (a robust one, the median's)
+// past what the model gives them, held at its peak and let fall with that
+// time constant, goes on every Doppler's variance (acting, in flight) and on
+// the changes' own -- a loop settling after the thrust is noisy on every
+// satellite at once, and holding all but the few that pass by luck fuses
+// those few at a sigma the loop is not keeping. Holding out more than
+// dv_hold_all_frac of an epoch's Dopplers holds out all of them: what is
+// left is the luck's, on a thin geometry.
+// With dv_window_s, each satellite's residual and the epoch's change are
+// also summed over that long (leaky) and judged so: a slow settling moves a
+// Doppler by a few cm/s an epoch, under one epoch's noise, but by tens of
+// cm/s a second. dv_deweight grows the failed Doppler's sigma by its excess
+// instead of holding it out. Observe counts and holds nothing. It acts in
+// flight only (dv_ground: on the pad too, where zero velocity holds the
+// velocity anyway); held-out Dopplers count as neither fused nor refused, so
+// the update's refusal persistence (reject_persist_rr) does not see them.
+//
 // A receiver fused faster than 1 Hz (the mosaic-G5's 10 Hz). The safeguards
 // above were set on the LC86G's epoch a second, and some count epochs, so a
 // faster profile keeps their time instead:
@@ -402,6 +446,27 @@ public:
                                                  //   the filter's is dropped (0: off)
         double   vert_release_mps = 5.0;         //   and, after one, every epoch after it until one's fitted
                                                  //   vertical is back within this (0: no latch)
+        // the Doppler change check (above; DvCheck, off by default)
+        uint8_t  dv_check = 0;
+        double   dv_sat_k = 5.0;                 // a satellite this many 1-sigmas off the epoch's fit fails
+        double   dv_epoch_k = 5.0;               // an epoch whose change is this many sigmas off the IMU's fails
+                                                 //   (the root of a 3-dof chi-square, the allowances in)
+        double   dv_floor_mps = 0.03;            // each change's 1-sigma: its two Dopplers', this,
+        double   dv_sigma_per_g = 0.1;           //   and this much per g of the IMU's peak excess since the epoch
+                                                 //   before (a loop under stress), in quadrature
+        double   dv_att_allow_deg = 30.0;        // the epoch test's allowances: the IMU's change turned this much,
+        double   dv_scale_allow = 0.01;          //   its specific force's part off by this fraction,
+        double   dv_bias_allow_mps2 = 0.1;       //   an accelerometer bias this size,
+        double   dv_lever_allow_m = 0.3;         //   an antenna this far from the IMU, turning with the body
+        double   dv_hold_s = 1.0;                // a failed satellite held out until this long after its last failure
+        double   dv_epoch_hold_s = 0.5;          // a failed epoch: every Doppler held out until this long after
+        double   dv_window_s = 0.0;              // also judged summed over this long, leaky (0: epoch by epoch only)
+        bool     dv_deweight = false;            // grow a failed Doppler's sigma by its excess, not hold it out
+        bool     dv_ground = false;              // act on the ground too (else in flight only)
+        double   dv_noise_tau_s = 0.0;           // the Dopplers' measured excess noise on their variance, let fall
+                                                 //   with this time constant (0: not measured)
+        double   dv_hold_all_frac = 0.5;         // more than this share of an epoch's Dopplers held: all of them
+                                                 //   (1: never)
         // A receiver fused faster than 1 Hz (below; the mosaic-G5's profile
         // sets them, ReceiverProfileApply.h). 0 or false: an epoch at a time,
         // as the Beetle's LC86G flies.
@@ -420,6 +485,14 @@ public:
         double   restore_vel_sigma_mps = 0.0;
         double   restore_att_sigma_deg = 0.0;
         bool     restore_seed_bias = false;
+    };
+
+    // The Doppler change check (Config::dv_check).
+    enum DvCheck : uint8_t
+    {
+        kDvOff = 0,
+        kDvObserve = 1,        // checked and counted, nothing held
+        kDvAct = 2,            // and the failed Dopplers held out (or de-weighted)
     };
 
     // When the boost screen runs (Config::boost_screen).
@@ -584,6 +657,22 @@ public:
         float    vert_last_dv_down = 0.0f; //   the last one's: its vertical against the filter's, m/s
         float    vert_worst_dv_down = 0.0f;//   and the largest kept (|.|), m/s
         uint32_t vert_latched = 0;         // epochs dropped after a vertical drop, not yet back (vert_release_mps)
+        // the Doppler change check
+        uint32_t dv_checks = 0;            // epochs checked: a reference, the IMU's history across, five changes
+        uint32_t dv_sat_fails = 0;         //   satellites that failed (epoch by epoch, or summed)
+        uint32_t dv_sat_win_fails = 0;     //     of them, on the window's sum alone
+        uint32_t dv_epoch_fails = 0;       //   epochs that failed (their change, or over half their satellites)
+        uint32_t dv_epoch_win_fails = 0;   //     of them, on the window's sum alone
+        uint32_t dv_held_rr = 0;           // Dopplers held out (or de-weighted): acting
+        uint32_t dv_held_epochs = 0;       //   epochs with any
+        float    dv_last_chi2 = 0.0f;      // the last epoch checked: its chi-square (3 dof)
+        float    dv_last_along = 0.0f;     //   its change less the IMU's, along the specific force's, m/s
+        float    dv_last_chi2_win = 0.0f;  //   the window's chi-square (dv_window_s)
+        float    dv_max_chi2 = 0.0f;       // the largest epoch chi-square seen
+        float    dv_max_e = 0.0f;          // the largest satellite residual seen, 1-sigmas
+        float    dv_noise_mps = 0.0f;      // the Dopplers' measured excess noise (dv_noise_tau_s), 1-sigma, now
+        float    dv_noise_max_mps = 0.0f;  //   and its largest
+        uint32_t dv_all_held = 0;          // epochs whose Dopplers were all held for the share held (dv_hold_all_frac)
     };
 
     using Clock = int64_t (*)();
@@ -689,6 +778,7 @@ private:
     void workJob(double t);
     void jobUnit(double t);
     void jobChecks(double age, double t);
+    void jobDvCheck(double age);
     void jobScreen(double age);
     void jobScreenDry();
     void screenVerdict(bool drop, bool dry);
@@ -715,8 +805,8 @@ private:
     BuiltEpoch    pend_built_[2];       // built epochs waiting for it (external_build)
     int           pb_head_ = 0, npend_built_ = 0;
     // the epoch being worked (startJob .. closeJob), a slice a step
-    enum : int { kJobBuild, kJobChecks, kJobHeading, kJobHeadingFit, kJobClock, kJobScreen, kJobScreenDry, kJobFuse,
-                 kJobCarrier, kJobCarrierFuse, kJobClose };
+    enum : int { kJobBuild, kJobDvCheck, kJobChecks, kJobHeading, kJobHeadingFit, kJobClock, kJobScreen,
+                 kJobScreenDry, kJobFuse, kJobCarrier, kJobCarrierFuse, kJobClose };
     struct Job
     {
         bool          active = false;
@@ -808,6 +898,34 @@ private:
     int64_t       pr_period_k_ = -1;    // pr_period_s: the period the code was last fused in (< 0: none since the start)
     double        fit_last_te_ = -1.0;  // heading_fit_period_s: the last epoch the fit took (< 0: none this flight)
     bool          vert_latch_ = false;  // a vertical drop, and no epoch back within vert_release_mps since
+    // the Doppler change check (dv_check)
+    DopplerRef    dv_ref_;              // the last epoch's Dopplers, the next change's start
+    DopplerRef    dv_next_;             //   this epoch's, taken by the check
+    dvc::Row      dv_rows_[RawEpoch::kMaxObs] = {};
+    struct DvHold
+    {
+        uint8_t       sys, prn;
+        double        until;            // held out to this epoch time (the filter's clock)
+        float         excess;           // m/s: dv_deweight's
+    };
+    static constexpr int kDvHold = 24;
+    DvHold        dv_hold_[kDvHold] = {};
+    int           n_dv_hold_ = 0;
+    double        dv_epoch_until_ = -1.0e9;   // every Doppler held out to this epoch time
+    float         dv_epoch_excess_ = 0.0f;
+    float         dv_w_now_[3] = {};    // the gyro's last step (rad/s, body), for the lever arm's allowance
+    float         dv_w_ref_[3] = {};    //   at the last check
+    float         dv_w_peak_ = 0.0f;    //   and its largest |rate| since
+    // dv_window_s: the leaky sums -- each satellite's residual (m/s) and the
+    // leaky mean of its change's variance, in dv_ref_'s order; the epoch's
+    // change and the leaky mean of its covariance, the IMU's specific-force
+    // change and the bias and lever allowances, summed
+    double        dv_S_[RawEpoch::kMaxObs] = {}, dv_V_[RawEpoch::kMaxObs] = {};
+    double        dv_S2_[RawEpoch::kMaxObs] = {}, dv_V2_[RawEpoch::kMaxObs] = {};
+    double        dv_SW_[3] = {}, dv_CW_[3][3] = {}, dv_SF_[3] = {}, dv_SB_ = 0.0, dv_SL_ = 0.0;
+    double        dv_noise_var_ = 0.0;  // dv_noise_tau_s: the Dopplers' excess variance, (m/s)^2
+    double        dv_noise_te_ = 0.0;   //   the epoch it was last updated at
+    void          dvReset();
     bool          launch_seen_ = false; // a launch edge since the start (a restored flight has none)
     void          setFlightGate(bool full);
     void          setGroundGate();
