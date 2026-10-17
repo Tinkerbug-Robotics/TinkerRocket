@@ -1340,7 +1340,9 @@ void RawGnssEKF<T>::updateGnssRawPart(const RawMeas* m, int i0, int i1, double a
     const T* axis = gnssAttAxis(vert);
     // att_gnss_off: the attitude and the gyro bias kept out of every GNSS row
     // here, and only here (scalarUpdate's other callers -- the levelling, the
-    // height, zero velocity, the magnetometer -- keep theirs)
+    // height, zero velocity, the magnetometer -- keep theirs). The
+    // accelerometer bias keeps its gain (RawGnssEKFParams::att_gnss_off says
+    // what that leaves).
     const uint32_t kmask = p_.att_gnss_off ? ~((0x7u << kAtt) | (0x7u << kGyroBias)) : 0xFFFFFFFFu;
     for (int i = i0; i < i1; ++i)
     {

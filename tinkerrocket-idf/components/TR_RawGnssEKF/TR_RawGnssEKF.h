@@ -183,13 +183,18 @@ struct RawGnssEKFParams
     // stays the gyro's and the levelling's. For a filter that learns its
     // heading in flight (the heading fit's hand-off, RawGnssShadow).
     bool   att_gate_vertical = false;
-    // GNSS never reaches the attitude or the gyro bias: the pseudorange and
+    // GNSS never corrects the attitude or the gyro bias: the pseudorange and
     // Doppler updates' gain on them masked (Joseph form, so P stays
     // consistent), the levelling, the magnetometer, the barometer and zero
     // velocity untouched. The "unaided" twin a raw filter's attitude is judged
     // against (the replay harness's --unaided): the same firmware, its
-    // attitude the IMU's, gravity's and the magnetometer's only. Not the
-    // carrier's update: the harness refuses it with the carrier fused.
+    // attitude corrected only by gravity and the magnetometer. Not wholly
+    // free of GNSS: those rows still move the accelerometer bias (and its
+    // covariance with the attitude), and the levelling takes the
+    // accelerometer less that bias as gravity -- so a bias the GNSS taught it,
+    // or got wrong, tilts the twin wherever it levels. Small on a still pad;
+    // more after a boost and coast that moved the bias. Not the carrier's
+    // update: the harness refuses it with the carrier fused.
     bool   att_gnss_off = false;
     // Initial sigmas, in the state's units (the attitude's: a half-angle).
     // p0_att: the tilt's, about north and east; p0_hdg: the heading's, about
