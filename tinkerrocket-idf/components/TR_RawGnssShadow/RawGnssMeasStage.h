@@ -24,7 +24,21 @@
 // (the filter then takes the pad survey's corrections). A built epoch says
 // which, and when the choice changed: the pad survey starts over then.
 //
-// Pure C++: tests_cpp/test_raw_gnss_shadow.cpp.
+// The satellite cap (Config::sat_cap; 0, none, is the Beetle's). Every
+// satellite costs the flight computer a build and a fusion each epoch, and a
+// receiver that tracks 30 of them at 10 Hz may ask more than its core has
+// to spare, so offer() can build at most sat_cap of them: up to four GPS
+// first (the filter's clock is GPS's; Galileo and BeiDou each carry a bias
+// against it), then the rest by C/N0, each satellite built the epoch before
+// counting 3 dB more so the set does not churn between two of about the same
+// strength. Only satellites the builder would build are picked (a
+// pseudorange at or above the system's C/N0 floor, an ephemeris). The whole
+// epoch is still seen and noted, so tracked_no_eph and every satellite's
+// lock age stay those of the sky: a satellite left out for a while comes
+// back with its lock age, not as a relock. (The carrier range rate, off
+// where the cap is used, would start over for it.)
+//
+// Pure C++: tests_cpp/test_raw_gnss_shadow.cpp, tests_cpp/test_raw_gnss_stage_v9.cpp.
 #ifndef RAW_GNSS_MEAS_STAGE_H
 #define RAW_GNSS_MEAS_STAGE_H
 
@@ -63,7 +77,11 @@ public:
         RawMeasBuilder::Config meas;
         uint16_t default_week = 2440;    // until an epoch names the GPS week (2026-10)
         int      iono_max_age_days = 30; // broadcast parameters older than this are not used
+        int      sat_cap = 0;            // satellites built an epoch at most (offer); 0: all
     };
+
+    static constexpr int kCapGps = 4;          // GPS satellites the cap takes first, where there are any
+    static constexpr float kCapHoldDb = 3.0f;  // what a satellite built the epoch before counts more by
 
     using Clock = int64_t (*)();
 
@@ -74,6 +92,12 @@ public:
     // A broadcast ephemeris (RTCM3 payload): into the store. False if it did
     // not decode.
     bool onEphemeris(const uint8_t* payload, size_t len);
+    // ... or one a driver decoded itself (the mosaic-G5's SBF navigation
+    // blocks): the same from there on. False if it is not valid.
+    bool addEphemeris(const gps_eph_t& e);
+    // Whether sys/prn has an ephemeris to be built by at GPS time of week
+    // tow_gps, as the builder picks it (BeiDou's in its own time).
+    bool hasEphemeris(int sys, int prn, double tow_gps) const;
     // The broadcast ionosphere a pad calibration brought (or NVS kept).
     void setIono(const ShadowIono& io);
     // A satellite the filter found jumped at tow: relocked then.
@@ -96,7 +120,8 @@ public:
     // The GNSS task's turn for each epoch the receiver sends: seen, then
     // built (true: out is it, to hand the filter's task) if it has its MCU
     // time and the filter runs (nav: the filter's state, its position the
-    // receiver's); otherwise its satellites' lock ages only.
+    // receiver's); otherwise its satellites' lock ages only. With sat_cap,
+    // built from the cap's picks.
     bool offer(const TimedRawEpoch& e, const ShadowNav& nav, BuiltEpoch& out);
     // ... or, when the handoff to the filter's task is full (the two before
     // it not yet taken), not built: seen, and its lock ages kept.
@@ -110,9 +135,13 @@ public:
     const EphemerisStore& ephemerides() const { return store_; }
     const RawMeasBuilder& builder() const { return builder_; }
     const ShadowMeasStats& stats() const { return st_; }
+    // The satellites the cap has left out, over every epoch it built (each
+    // one the builder would have built).
+    uint32_t cappedOut() const { return capped_out_; }
 
 private:
     void chooseIono(bool in_flight, BuiltEpoch& out);
+    void capEpoch(const TimedRawEpoch& e);
     int64_t now() const { return clock_ ? clock_() : 0; }
 
     Config           cfg_;
@@ -128,6 +157,11 @@ private:
     bool             iono_dirty_ = true; // the builder's model is to be chosen again
     bool             use_broadcast_ = false;
     ShadowMeasStats  st_ = {};
+    // the cap (sat_cap): the epoch of its picks, being built; the satellites
+    // it picked the last epoch it built, a bit a PRN by system
+    TimedRawEpoch    sel_;
+    uint64_t         picked_[3] = {};
+    uint32_t         capped_out_ = 0;
 };
 
 }  // namespace gnss_raw
