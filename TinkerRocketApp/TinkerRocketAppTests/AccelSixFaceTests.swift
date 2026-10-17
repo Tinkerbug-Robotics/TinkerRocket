@@ -188,8 +188,11 @@ final class AccelSixFaceTests: XCTestCase {
     func testTheReadBackToleranceIs1e5() {
         let sent: [Float] = [0.0412, -0.0273, 0.0156]
         XCTAssertTrue(AccelSixFace.readBackMatches(.stored(sent), sent: sent))
-        XCTAssertTrue(AccelSixFace.readBackMatches(.stored([0.0412 + 8e-6, -0.0273, 0.0156]), sent: sent))
-        XCTAssertFalse(AccelSixFace.readBackMatches(.stored([0.0412, -0.0273 - 2e-5, 0.0156]), sent: sent))
+        // typed Float before they go in: Xcode 26.3's checker reads literal sums inside a [Float] literal as Double
+        let withinTolerance: Float = 0.0412 + 8e-6
+        let pastTolerance: Float = -0.0273 - 2e-5
+        XCTAssertTrue(AccelSixFace.readBackMatches(.stored([withinTolerance, -0.0273, 0.0156]), sent: sent))
+        XCTAssertFalse(AccelSixFace.readBackMatches(.stored([0.0412, pastTolerance, 0.0156]), sent: sent))
         XCTAssertFalse(AccelSixFace.readBackMatches(.stored(nil), sent: sent), "not stored")
     }
 
