@@ -1,0 +1,18 @@
+--- a/tinkerrocket-idf/components/TR_RawGnssShadow/RawGnssShadow.cpp
++++ b/tinkerrocket-idf/components/TR_RawGnssShadow/RawGnssShadow.cpp
+@@ -563,6 +563,15 @@
+     {
+         if (ground ? level_gate_.gSized(acc) : level_gate_.allow(t, acc))
+         {
++            if (!ground)
++            {
++                // EXPERIMENT (offline replay only, not firmware): gravity carries no heading, so under the chute
++                // the levelling must not turn it through the heading's correlations with the tilt and the biases:
++                // those are taken out first, the heading's own variance kept (setHeadingSigma at its current size)
++                float sg[3];
++                ekf_.attSigmaNed(sg);
++                ekf_.setHeadingSigma(sg[2]);
++            }
+             ekf_.updateAccelLevel(acc);
+             levelled_ = true;
+             st_.levels++;
