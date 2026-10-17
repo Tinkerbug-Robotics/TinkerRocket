@@ -2740,6 +2740,23 @@ static void sendPadContextCal()
     r.c.mmc_offset_counts[2] = oz;
     static_assert(sizeof(r) == sizeof(PadContextHeader) + sizeof(PadContextCal), "PCX_CAL record is packed");
     (void)enqueueI2STx(PAD_CONTEXT_MSG, reinterpret_cast<const uint8_t*>(&r), sizeof(r));
+    // PCX_ACC: the low-g accelerometer's hand-calibrated offset (#1629), which
+    // the converter takes off after the log
+    struct __attribute__((packed))
+    {
+        PadContextHeader h;
+        PadContextAcc    a;
+    } ra = {};
+    ra.h.time_us = r.h.time_us;
+    ra.h.kind    = PCX_ACC;
+    ra.h.part    = 0;
+    ra.h.parts   = 1;
+    ra.a.applied = sensor_converter.lowGOffsetApplied() ? 1U : 0U;
+    ra.a.offset_mps2[0] = sensor_converter.lowGOffsetX();
+    ra.a.offset_mps2[1] = sensor_converter.lowGOffsetY();
+    ra.a.offset_mps2[2] = sensor_converter.lowGOffsetZ();
+    static_assert(sizeof(ra) == sizeof(PadContextHeader) + sizeof(PadContextAcc), "PCX_ACC record is packed");
+    (void)enqueueI2STx(PAD_CONTEXT_MSG, reinterpret_cast<const uint8_t*>(&ra), sizeof(ra));
 }
 
 // ==========================================================================
@@ -3975,6 +3992,96 @@ static void publishSensorCalFromNVS()
     uint8_t buf[sizeof(SensorCalStatusData)];
     memcpy(buf, &s, sizeof(buf));
     (void)enqueueI2STx(SENSOR_CAL_STATUS_MSG, buf, sizeof(buf));
+}
+
+// #1629 — the low-g accelerometer's hand calibration (RocketComputerTypes.h,
+// ACC_CAL_*).  tools/accel_cal_six_face.py turns the board through six faces,
+// asks for a face window on each (BLE 78), solves the offset from them and
+// writes it (BLE 76); BLE 77 reads it back.  A face window averages every
+// low-g sample the drain hands over for ACC_FACE_WINDOW_US, in the board frame
+// with no offset (SensorConverter::lowGBoardRaw).
+struct AccFaceWindow
+{
+    bool     active = false;
+    int64_t  t0_us = 0;
+    double   sum[3] = {};
+    double   sumsq[3] = {};
+    uint32_t n = 0;
+    uint8_t  state = ACC_FACE_IDLE;
+    float    mean[3] = {};
+    float    sd[3] = {};
+};
+static AccFaceWindow acc_face;
+
+static bool accCalStored(Preferences& p)
+{
+    return p.isKey("ver") && p.getUChar("ver", 0) == ACC_CAL_NVS_SCHEMA_VERSION && p.getBool("done", false);
+}
+
+static void publishAccelCalStatus()
+{
+    AccelCalStatusData s{};
+    Preferences p;
+    p.begin("acc_cal", true);  // read-only (boot creates the namespace)
+    const bool stored = accCalStored(p);
+    if (stored)
+    {
+        s.offset_mps2[0] = p.getFloat("ox", 0.0f);
+        s.offset_mps2[1] = p.getFloat("oy", 0.0f);
+        s.offset_mps2[2] = p.getFloat("oz", 0.0f);
+    }
+    p.end();
+    s.flags = (uint8_t)((stored ? ACCF_STORED : 0u) | (sensor_converter.lowGOffsetApplied() ? ACCF_APPLIED : 0u));
+    s.face_state = acc_face.state;
+    for (int i = 0; i < 3; ++i)
+    {
+        s.face_mean_mps2[i] = acc_face.mean[i];
+        s.face_sd_mps2[i] = acc_face.sd[i];
+    }
+    s.face_n = (uint16_t)(acc_face.n > 0xFFFFu ? 0xFFFFu : acc_face.n);
+    uint8_t buf[sizeof(AccelCalStatusData)];
+    memcpy(buf, &s, sizeof(buf));
+    (void)enqueueI2STx(ACC_CAL_STATUS_MSG, buf, sizeof(buf));
+}
+
+static void accFaceAdd(const ISM6HG256Data& d)
+{
+    double v[3];
+    sensor_converter.lowGBoardRaw(d, v);
+    for (int i = 0; i < 3; ++i)
+    {
+        acc_face.sum[i] += v[i];
+        acc_face.sumsq[i] += v[i] * v[i];
+    }
+    acc_face.n++;
+}
+
+// The window's verdict: still (every axis's SD at most ACC_FACE_STILL_SD) and
+// one g (|mean| within ACC_FACE_G_TOL of 9.80665), else failed -- its numbers
+// are sent either way.
+static void accFaceFinish()
+{
+    acc_face.active = false;
+    double m2 = 0.0, sd_max = 0.0;
+    for (int i = 0; i < 3; ++i)
+    {
+        const double n = acc_face.n > 0 ? (double)acc_face.n : 1.0;
+        const double mean = acc_face.sum[i] / n;
+        const double var = acc_face.sumsq[i] / n - mean * mean;
+        const double sd = var > 0.0 ? sqrt(var) : 0.0;
+        acc_face.mean[i] = (float)mean;
+        acc_face.sd[i] = (float)sd;
+        m2 += mean * mean;
+        if (sd > sd_max) sd_max = sd;
+    }
+    const double g = sqrt(m2);
+    const bool ok = acc_face.n >= 100 && sd_max <= (double)ACC_FACE_STILL_SD &&
+                    fabs(g - 9.80665) <= (double)ACC_FACE_G_TOL;
+    acc_face.state = ok ? ACC_FACE_DONE : ACC_FACE_FAILED;
+    ESP_LOGI(TAG, "[ACCCAL] face %s: mean (%.4f, %.4f, %.4f) m/s² |g| %.4f, SD max %.4f, %lu samples",
+             ok ? "done" : "FAILED (moving, or not one g)", (double)acc_face.mean[0], (double)acc_face.mean[1],
+             (double)acc_face.mean[2], g, sd_max, (unsigned long)acc_face.n);
+    publishAccelCalStatus();
 }
 
 // ==========================================================================
@@ -5747,6 +5854,28 @@ static void setup_fc()
     }
     prefs.end();
 
+    // The low-g accelerometer's hand-calibrated offset (#1629), board frame
+    prefs.begin("acc_cal", false);  // read-write (creates the namespace on first boot)
+    if (accCalStored(prefs))
+    {
+        const float ox = prefs.getFloat("ox", 0.0f);
+        const float oy = prefs.getFloat("oy", 0.0f);
+        const float oz = prefs.getFloat("oz", 0.0f);
+        sensor_converter.setLowGOffset(ox, oy, oz);
+        ESP_LOGI(TAG, "NVS low-g offset: %.4f, %.4f, %.4f m/s² (%.1f, %.1f, %.1f mg)", (double)ox, (double)oy,
+                 (double)oz, (double)ox / 9.80665e-3, (double)oy / 9.80665e-3, (double)oz / 9.80665e-3);
+    }
+    else if (prefs.isKey("ver") && prefs.getUChar("ver", 0) != ACC_CAL_NVS_SCHEMA_VERSION)
+    {
+        ESP_LOGW(TAG, "NVS low-g offset: schema %u, not %u -- ignored (calibrate again)",
+                 (unsigned)prefs.getUChar("ver", 0), (unsigned)ACC_CAL_NVS_SCHEMA_VERSION);
+    }
+    else
+    {
+        ESP_LOGW(TAG, "NVS low-g offset: none -- the accelerometer is not hand-calibrated (#1629)");
+    }
+    prefs.end();
+
     // The broadcast ionosphere the last pad calibration stored (#1600 phase 5)
     padCalLoadIono();
 
@@ -7202,6 +7331,8 @@ static void loop_fc()
             TR_LP_SAMPLE();
             fc_ism6_win.add(ism6hg256_data);
             ism6_drained_this_pass = true;
+            if (acc_face.active)
+                accFaceAdd(ism6hg256_data);   // #1629: a six-face calibration's window
 
             memcpy(&ism6_batch[ism6BatchWireSize(ism6_batch_n)],
                    &ism6hg256_data,
@@ -7218,6 +7349,8 @@ static void loop_fc()
             ism6_batch[0] = ism6_batch_n;
             (void)enqueueI2STx(ISM6_BATCH_MSG, ism6_batch, ism6BatchWireSize(ism6_batch_n));
         }
+        if (acc_face.active && esp_timer_get_time() - acc_face.t0_us >= (int64_t)ACC_FACE_WINDOW_US)
+            accFaceFinish();
 
         if (ism6_drained_this_pass)
         {
@@ -7539,6 +7672,8 @@ static void loop_fc()
                 dbg_ism6_passes++;
                 if (fc_ism6_win.n > dbg_ism6_win_max) dbg_ism6_win_max = fc_ism6_win.n;
 
+                // #1629: the hand-calibrated offset is the real IMU's -- not the sim's truth counts
+                sensor_converter.setLowGOffsetEnabled(!sensor_collector.isSimActive());
                 sensor_converter.convertISM6HG256Data(ism6_mean_raw, ism6_latest_si);
                 have_ism6_si = true;
                 // The low-g near-rail verdict comes from the window's WORST raw
@@ -9487,6 +9622,89 @@ static void loop_fc()
             {
                 ESP_LOGI(TAG, "[SENSORCAL] READ -> publish status from NVS");
                 publishSensorCalFromNVS();
+            }
+            // #1629 — the low-g accelerometer's hand calibration: store and apply
+            // the offset the six faces solved (BLE 76; all zero clears it), read
+            // it back (BLE 77), average one face (BLE 78).  Locked out like the
+            // other cal pushes.
+            else if (out_pending_command == ACC_CAL_APPLY_PENDING)
+            {
+                if (isCommandLockoutState(rocket_state) || post_flight_lockout)
+                {
+                    ESP_LOGW(TAG, "[ACCCAL] apply refused: state=%u (INFLIGHT/MAG_CALIBRATION, or post-flight)",
+                             (unsigned)rocket_state);
+                }
+                else
+                {
+                    delay_ms(1);
+                    uint8_t cfg_payload[sizeof(AccelCalApplyData)];
+                    size_t  cfg_len = 0;
+                    if (readConfigFrame(ACC_CAL_APPLY_MSG, sizeof(AccelCalApplyData),
+                                        cfg_payload, sizeof(cfg_payload), cfg_len)
+                        && cfg_len >= sizeof(AccelCalApplyData))
+                    {
+                        AccelCalApplyData ap;
+                        memcpy(&ap, cfg_payload, sizeof(ap));
+                        bool sane = true, zero = true;
+                        for (int i = 0; i < 3; ++i)
+                        {
+                            const float o = ap.offset_mps2[i];
+                            if (!(o == o) || fabsf(o) > ACC_CAL_OFFSET_MAX_MPS2)
+                                sane = false;
+                            if (o != 0.0f)
+                                zero = false;
+                        }
+                        if (!sane)
+                        {
+                            ESP_LOGW(TAG, "[ACCCAL] apply refused: offset (%.4f, %.4f, %.4f) m/s² past %.1f -- "
+                                          "a bad solve?", (double)ap.offset_mps2[0], (double)ap.offset_mps2[1],
+                                     (double)ap.offset_mps2[2], (double)ACC_CAL_OFFSET_MAX_MPS2);
+                        }
+                        else
+                        {
+                            prefs.begin("acc_cal", false);
+                            prefs.putUChar("ver",  ACC_CAL_NVS_SCHEMA_VERSION);
+                            prefs.putBool ("done", !zero);
+                            prefs.putFloat("ox",   ap.offset_mps2[0]);
+                            prefs.putFloat("oy",   ap.offset_mps2[1]);
+                            prefs.putFloat("oz",   ap.offset_mps2[2]);
+                            prefs.end();
+                            sensor_converter.setLowGOffset(ap.offset_mps2[0], ap.offset_mps2[1], ap.offset_mps2[2]);
+                            ESP_LOGI(TAG, "[ACCCAL] APPLY+saved: (%.4f, %.4f, %.4f) m/s²%s",
+                                     (double)ap.offset_mps2[0], (double)ap.offset_mps2[1],
+                                     (double)ap.offset_mps2[2], zero ? " -- cleared" : "");
+                        }
+                        publishAccelCalStatus();
+                    }
+                    else
+                    {
+                        cfgRetryOnNextPoll("ACCCAL APPLY");   // #1112
+                    }
+                }
+            }
+            else if (out_pending_command == ACC_CAL_READ)
+            {
+                ESP_LOGI(TAG, "[ACCCAL] READ -> publish status");
+                publishAccelCalStatus();
+            }
+            else if (out_pending_command == ACC_FACE_PENDING)
+            {
+                if (isCommandLockoutState(rocket_state) || post_flight_lockout || sensor_collector.isSimActive())
+                {
+                    ESP_LOGW(TAG, "[ACCCAL] face refused: state=%u%s", (unsigned)rocket_state,
+                             sensor_collector.isSimActive() ? " (sim)" : "");
+                    acc_face = AccFaceWindow{};
+                    acc_face.state = ACC_FACE_FAILED;
+                }
+                else if (!acc_face.active)
+                {
+                    acc_face = AccFaceWindow{};
+                    acc_face.active = true;
+                    acc_face.t0_us = esp_timer_get_time();
+                    acc_face.state = ACC_FACE_MEASURING;
+                    ESP_LOGI(TAG, "[ACCCAL] face window open (%.1f s)", (double)ACC_FACE_WINDOW_US * 1e-6);
+                }
+                publishAccelCalStatus();
             }
             else if (out_pending_command == OTA_BEGIN_PENDING)
             {

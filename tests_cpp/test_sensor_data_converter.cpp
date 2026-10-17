@@ -596,3 +596,51 @@ TEST(SensorConverterIIS2MDCFrame, TheReflectionIsTheIIS2MDCsAlone) {
     chipToBoard(conv, m);
     EXPECT_NEAR(det3(m), 1.0, 1e-9);
 }
+
+// #1629: the low-g accelerometer's hand-calibrated offset is a board-frame fact,
+// taken off the low-g AND the high-g reading (the high-g bias is measured
+// against the raw low-g) after the chip's Z rotation and before the mounting
+// rotation; off while disabled (sim), and never in lowGBoardRaw (what the six
+// faces average).
+TEST_F(SensorConverterB2RTest, LowGOffset_OffBothAccelerometers_InBoardFrame_BeforeB2R) {
+    conv.setLowGOffset(0.1f, 0.2f, 0.3f);
+    configureNose(16);  // +Z nose: rocket x=+z_b, y=+y_b, z=-x_b
+    ISM6HG256Data raw{};
+    ISM6HG256DataSI si{};
+    conv.convertISM6HG256Data(raw, si);
+    EXPECT_NEAR(si.low_g_acc_x, -0.3, 1e-6);
+    EXPECT_NEAR(si.low_g_acc_y, -0.2, 1e-6);
+    EXPECT_NEAR(si.low_g_acc_z,  0.1, 1e-6);
+    EXPECT_NEAR(si.high_g_acc_x, -0.3, 1e-6);
+    EXPECT_NEAR(si.high_g_acc_y, -0.2, 1e-6);
+    EXPECT_NEAR(si.high_g_acc_z,  0.1, 1e-6);
+    EXPECT_TRUE(conv.lowGOffsetApplied());
+    // the high-g's own bias stacks on it
+    conv.setHighGBias(1.0f, 0.0f, 0.0f);
+    conv.convertISM6HG256Data(raw, si);
+    EXPECT_NEAR(si.high_g_acc_z, 1.1, 1e-6);   // board x (-1 - 0.1) lands on rocket -z
+}
+
+TEST_F(SensorConverterTest, LowGOffset_DisabledInSim_AndNeverInTheRawBoardReading) {
+    conv.configureISM6HG256RotationZ(-45.0f);
+    conv.setLowGOffset(0.05f, -0.07f, 0.02f);
+    ISM6HG256Data raw{};
+    raw.acc_low_raw.x = 1000;
+    raw.acc_low_raw.y = -2000;
+    raw.acc_low_raw.z = 20000;
+    ISM6HG256DataSI on{}, off{};
+    conv.convertISM6HG256Data(raw, on);
+    conv.setLowGOffsetEnabled(false);
+    EXPECT_FALSE(conv.lowGOffsetApplied());
+    conv.convertISM6HG256Data(raw, off);
+    EXPECT_NEAR(off.low_g_acc_x - on.low_g_acc_x, 0.05, 1e-6);
+    EXPECT_NEAR(off.low_g_acc_y - on.low_g_acc_y, -0.07, 1e-6);
+    EXPECT_NEAR(off.low_g_acc_z - on.low_g_acc_z, 0.02, 1e-6);
+    // lowGBoardRaw is the converter's board-frame low-g with no offset at all
+    conv.setLowGOffsetEnabled(true);
+    double b[3];
+    conv.lowGBoardRaw(raw, b);
+    EXPECT_NEAR(b[0], off.low_g_acc_x, 1e-9);
+    EXPECT_NEAR(b[1], off.low_g_acc_y, 1e-9);
+    EXPECT_NEAR(b[2], off.low_g_acc_z, 1e-9);
+}

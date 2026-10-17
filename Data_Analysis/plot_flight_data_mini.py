@@ -622,13 +622,17 @@ def gnss_clock_mcu_us(rec, gps_s):
 # raw-GNSS filter at the launch tick -- "nav" its state and what it took from
 # the pad, "cov" its covariance (the upper triangle of its 19 error states, in
 # four parts), "survey" the pad survey's corrections (in parts) -- and "eph",
-# each broadcast ephemeris it held as a whole RTCM3 frame, one a record.
+# each broadcast ephemeris it held as a whole RTCM3 frame, one a record; "acc",
+# beside "cal", the low-g accelerometer's hand-calibrated offset (#1629), which
+# the converter takes off the low-g and high-g after the log.
 # join_pad_context() puts a launch's records back together.
 FMT_PAD_CONTEXT_HDR = '<I B B B'
 PAD_CONTEXT_HDR_LEN = struct.calcsize(FMT_PAD_CONTEXT_HDR)   # 7
-PAD_CONTEXT_KINDS = {1: "cal", 2: "nav", 3: "cov", 4: "survey", 5: "eph"}
+PAD_CONTEXT_KINDS = {1: "cal", 2: "nav", 3: "cov", 4: "survey", 5: "eph", 6: "acc"}
 FMT_PCX_CAL = '<3h 3f 3h B f 3i'
 SIZE_OF_PCX_CAL = struct.calcsize(FMT_PCX_CAL)               # 41
+FMT_PCX_ACC = '<B 3f'
+SIZE_OF_PCX_ACC = struct.calcsize(FMT_PCX_ACC)               # 13
 FMT_PCX_NAV = '<I 3d 3f 4f 3f 3f d 6f 8b H B B'
 SIZE_OF_PCX_NAV = struct.calcsize(FMT_PCX_NAV)               # 124
 PCX_NAV_FLAGS = {"running": 0x01, "clock_set": 0x02, "has_baro": 0x04, "has_iono": 0x08,
@@ -663,6 +667,14 @@ def decode_pad_context(payload):
             "mag_offset_set":   bool(f[9]),
             "cal_gravity_mps2": f[10],
             "mmc_offset_counts": f[11:14],   # the MMC5983MA's: subtracted after the log, before scaling
+        })
+    elif name == "acc":
+        if len(body) != SIZE_OF_PCX_ACC:
+            return None
+        f = struct.unpack(FMT_PCX_ACC, body)
+        rec.update({
+            "applied":     bool(f[0]),    # the converter took it off this flight (stored, not in sim)
+            "offset_mps2": f[1:4],        # board frame: off the low-g and the high-g, after the log
         })
     elif name == "nav":
         if len(body) != SIZE_OF_PCX_NAV:
@@ -725,7 +737,7 @@ def join_pad_context(recs, launch=0):
     """The decoded PadContext records of a log -> its launch-th launch's pad
     context (from 0), or None if there is no such launch.
 
-    {"cal", "nav", "cov", "survey", "eph_frames", "missing"}: "cov" the 19x19
+    {"cal", "acc", "nav", "cov", "survey", "eph_frames", "missing"}: "cov" the 19x19
     covariance (symmetric, nested lists) and "survey" the summary with every
     correction, each None unless all its parts arrived (a part of one is not
     it); "eph_frames" each ephemeris that arrived, a whole RTCM3 frame, for a
@@ -738,9 +750,9 @@ def join_pad_context(recs, launch=0):
     for r in recs:
         k = r["kind"]
         if not launches or k == "cal" or (k == "nav" and launches[-1]["nav"] is not None):
-            launches.append({"cal": None, "nav": None, "cov": {}, "survey": {}, "eph": [], "parts": {}})
+            launches.append({"cal": None, "acc": None, "nav": None, "cov": {}, "survey": {}, "eph": [], "parts": {}})
         cur = launches[-1]
-        if k in ("cal", "nav"):
+        if k in ("cal", "nav", "acc"):
             cur[k] = r
         elif k == "eph":
             cur["eph"].append(r)
@@ -767,7 +779,7 @@ def join_pad_context(recs, launch=0):
         s0 = cur["survey"][0]
         survey = {k: s0[k] for k in ("tracked", "settling", "corrected", "pad_ok", "rms_m", "pad_offset_m")}
         survey["corrections"] = [c for p in sorted(cur["survey"]) for c in cur["survey"][p]["corrections"]]
-    out = {"cal": cur["cal"], "nav": cur["nav"], "cov": cov, "survey": survey,
+    out = {"cal": cur["cal"], "acc": cur["acc"], "nav": cur["nav"], "cov": cov, "survey": survey,
            "eph_frames": [r["frame"] for r in cur["eph"]]}
     out["missing"] = [k for k in ("cal", "nav", "cov", "survey") if out[k] is None]
     if cur["eph"] and len(cur["eph"]) < cur["eph"][0]["parts"]:
@@ -1806,6 +1818,14 @@ def parse_binary_file(filepath):
     rot_rad = math.radians(config["ism6_rot_z_deg"])
     c_rot, s_rot = math.cos(rot_rad), math.sin(rot_rad)
     hg_bx, hg_by, hg_bz = config["hg_bias"]
+    # #1629: the low-g's hand-calibrated offset, board frame, off the low-g and
+    # the high-g as SensorConverter takes it -- the flight's PCX_ACC record (a
+    # log without one: none, as before the calibration existed)
+    lg_ox = lg_oy = lg_oz = 0.0
+    for pr in records["PadContext"]:
+        if pr.get("kind") == "acc" and pr.get("applied"):
+            lg_ox, lg_oy, lg_oz = pr["offset_mps2"]
+    config["lg_offset"] = (lg_ox, lg_oy, lg_oz)
     low_g_rail_lsb = low_g_near_rail_lsb(config["low_g_fs_g"])
 
     # Board→rocket mounting rotation (matches SensorConverter: applied LAST,
@@ -1833,12 +1853,12 @@ def parse_binary_file(filepath):
         gy_y = r["gy_y"] * gyro_scale
         gy_z = r["gy_z"] * gyro_scale
 
-        low = apply_b2r(lg_x * c_rot - lg_y * s_rot,
-                        lg_x * s_rot + lg_y * c_rot,
-                        lg_z)
-        high = apply_b2r((hg_x * c_rot - hg_y * s_rot) - hg_bx,
-                         (hg_x * s_rot + hg_y * c_rot) - hg_by,
-                         hg_z - hg_bz)
+        low = apply_b2r(lg_x * c_rot - lg_y * s_rot - lg_ox,
+                        lg_x * s_rot + lg_y * c_rot - lg_oy,
+                        lg_z - lg_oz)
+        high = apply_b2r((hg_x * c_rot - hg_y * s_rot) - hg_bx - lg_ox,
+                         (hg_x * s_rot + hg_y * c_rot) - hg_by - lg_oy,
+                         hg_z - hg_bz - lg_oz)
         gyro = apply_b2r(gy_x * c_rot - gy_y * s_rot,
                          gy_x * s_rot + gy_y * c_rot,
                          gy_z)

@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <initializer_list>
 #include <limits>
@@ -1885,6 +1886,12 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(PAD_CONTEXT_MSG),
         // the heading from thrust, each fit, log-only.
         MT(HEADING_FIT_MSG),
+        // the low-g accelerometer's six-face hand calibration (#1629): the
+        // apply pair, the read, the face window and the FC's status reply --
+        // the 0x80 block's first codes.
+        MT(ACC_CAL_APPLY_PENDING),    MT(ACC_CAL_APPLY_MSG),
+        MT(ACC_CAL_READ),             MT(ACC_CAL_STATUS_MSG),
+        MT(ACC_FACE_PENDING),
     };
 #undef MT
 
@@ -1932,7 +1939,10 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     // 108 = 107 + PAD_CONTEXT_MSG (0x9E, the pad, written once after launch).
     // 109 = 108 + HEADING_FIT_MSG (0x9F, the heading from thrust): the 0x90
     //       block is full; new codes go in 0x09-0x8F.
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 109u)
+    // 114 = 109 + the low-g hand calibration's ACC_CAL_APPLY_PENDING /
+    //       ACC_CAL_APPLY_MSG / ACC_CAL_READ / ACC_CAL_STATUS_MSG /
+    //       ACC_FACE_PENDING (0x80-0x84, #1629).
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 114u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }
@@ -2735,4 +2745,18 @@ TEST(PadContextRecord, ThePartsCoverTheCovarianceAndFitAFrame)
     EXPECT_LE(sizeof(PadContextHeader) + sizeof(PadContextCov), MAX_PAYLOAD);
     EXPECT_LE(sizeof(PadContextHeader) + sizeof(PadContextSurvey), MAX_PAYLOAD);
     EXPECT_LE(sizeof(PadContextHeader) + PCX_EPH_MAX_FRAME, MAX_PAYLOAD);
+}
+
+// #1629: the low-g accelerometer's hand calibration rides the OC<->FC link and
+// BLE byte for byte -- tools/accel_cal_six_face.py packs and unpacks these.
+TEST(RocketComputerTypes, AccelCalStructsKeepTheirWireSizes) {
+    EXPECT_EQ(sizeof(AccelCalApplyData), 12u);
+    EXPECT_EQ(sizeof(AccelCalStatusData), 40u);
+    EXPECT_EQ(sizeof(PadContextAcc), 13u);
+    EXPECT_EQ(offsetof(AccelCalStatusData, offset_mps2), 2u);
+    EXPECT_EQ(offsetof(AccelCalStatusData, face_mean_mps2), 14u);
+    EXPECT_EQ(offsetof(AccelCalStatusData, face_sd_mps2), 26u);
+    EXPECT_EQ(offsetof(AccelCalStatusData, face_n), 38u);
+    EXPECT_NE(PCX_ACC, PCX_CAL);
+    EXPECT_NE(PCX_ACC, PCX_EPH);
 }

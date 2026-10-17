@@ -188,3 +188,45 @@ def test_parser_files_it_as_a_stream(tmp_path):
     assert [r["kind"] for r in recs] == ["cal", "nav"] + ["cov"] * 4 + ["survey"] + ["eph"] * 3
     assert pfd.join_pad_context(recs)["missing"] == []
     assert stats["type_counts"]["PadContext"] >= 10
+
+
+def acc(applied=1, offset=(0.0412, -0.0273, 0.0156), time_us=6_000_000) -> bytes:
+    return header(6, time_us=time_us) + struct.pack("<B3f", applied, *offset)
+
+
+def test_decode_the_hand_calibrated_accelerometer_offset():
+    # #1629: PCX_ACC, beside PCX_CAL -- the low-g's offset, board frame
+    r = pfd.decode_pad_context(acc())
+    assert r["kind"] == "acc"
+    assert r["applied"] is True
+    assert r["offset_mps2"] == pytest_approx((0.0412, -0.0273, 0.0156))
+    assert pfd.decode_pad_context(acc()[:-1]) is None            # a short body is not decoded
+    ctx = pfd.join_pad_context([pfd.decode_pad_context(p) for p in [cal(), acc()] + launch()[1:]])
+    assert ctx["acc"]["applied"] is True
+    assert ctx["missing"] == []                                  # an older log without it misses nothing
+
+
+def pytest_approx(t):
+    import pytest
+    return pytest.approx(t, abs=1e-6)
+
+
+def test_the_offset_comes_off_the_low_g_and_high_g_as_the_converter_takes_it(tmp_path):
+    # One ISM6 record, decoded with and without the flight's PCX_ACC: the low-g
+    # and the high-g both come out the offset lower (board frame, the mounting
+    # identity), the gyro untouched; a record whose offset was not applied (sim)
+    # changes nothing.
+    ism6 = struct.pack("<I hhh hhh hhh", 1_000_000, 1200, -900, 20000, 40, -30, 1250, 5, -6, 7)
+
+    def decode(extra):
+        p = tmp_path / f"flight_{len(extra)}.bin"
+        p.write_bytes(b"".join([frame(0xA2, ism6)] + [frame(0x9E, e) for e in extra]) + b"\x00" * 16)
+        records, _stats, _config = pfd.parse_binary_file(str(p))
+        return records["ISM6HG256"][0]
+
+    base, cal_on, cal_sim = decode([]), decode([acc()]), decode([acc(applied=0)])
+    for axis, off in zip("xyz", (0.0412, -0.0273, 0.0156)):
+        assert base[f"low_acc_{axis}"] - cal_on[f"low_acc_{axis}"] == pytest_approx(off)
+        assert base[f"high_acc_{axis}"] - cal_on[f"high_acc_{axis}"] == pytest_approx(off)
+        assert base[f"gyro_{axis}"] == cal_on[f"gyro_{axis}"]
+        assert base[f"low_acc_{axis}"] == cal_sim[f"low_acc_{axis}"]

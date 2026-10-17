@@ -72,6 +72,21 @@ public:
     float highGBiasX() const { return hg_bias_x_; }
     float highGBiasY() const { return hg_bias_y_; }
     float highGBiasZ() const { return hg_bias_z_; }
+
+    // The low-g accelerometer's hand-calibrated offset (m/s^2, board frame:
+    // after the Z rotation, before the board->rocket mounting; #1629), taken
+    // off the low-g AND the high-g reading -- the high-g bias is measured
+    // against the raw low-g, so the pair keeps its meaning.  Off while
+    // setLowGOffsetEnabled(false): in sim the counts are the truth's.
+    void setLowGOffset(float ox, float oy, float oz);
+    void setLowGOffsetEnabled(bool on) { lg_off_on_ = on; }
+    bool lowGOffsetApplied() const { return lg_off_on_ && (lg_off_x_ != 0.0f || lg_off_y_ != 0.0f || lg_off_z_ != 0.0f); }
+    float lowGOffsetX() const { return lg_off_x_; }
+    float lowGOffsetY() const { return lg_off_y_; }
+    float lowGOffsetZ() const { return lg_off_z_; }
+    // One sample's low-g reading in the board frame (m/s^2), with no offset and
+    // no mounting rotation: what the six-face calibration averages.
+    void lowGBoardRaw(const ISM6HG256Data& in, double out[3]) const;
     float iis2mdcRotationZDeg() const
         { return iis2mdc_rot_z_rad * (180.0f / (float)PI); }
 
@@ -145,6 +160,8 @@ private:
 
     // High-g accelerometer bias (m/s², body frame)
     float hg_bias_x_ = 0.0f, hg_bias_y_ = 0.0f, hg_bias_z_ = 0.0f;
+    float lg_off_x_ = 0.0f, lg_off_y_ = 0.0f, lg_off_z_ = 0.0f;
+    bool  lg_off_on_ = true;
 
     // Board→rocket mounting rotation (row-major; identity by default).
     // b2r_identity_ short-circuits the matrix multiply on the hot path

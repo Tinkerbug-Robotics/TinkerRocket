@@ -4651,6 +4651,11 @@ static bool isKnownMessageType(uint8_t type)
         case GET_FLIGHT_SNAPSHOT:    // FC→OC over I2C at boot recovery
         case MAG_CAL_STATUS_MSG:     // FC→OC over I2S — issue #96
         case SENSOR_CAL_STATUS_MSG:  // FC→OC over I2S — sensor-cal readback (#132)
+        case ACC_CAL_APPLY_PENDING:  // #1629: the low-g hand calibration — OC→FC only,
+        case ACC_CAL_APPLY_MSG:      // listed like the other cal pairs
+        case ACC_CAL_READ:
+        case ACC_FACE_PENDING:
+        case ACC_CAL_STATUS_MSG:     // FC→OC over I2S — its readback and face windows
         case OTA_STATUS_MSG:         // FC→OC over I2S — OTA relay status (#8 Phase 4)
         case FLIGHT_SETTINGS_MSG:    // FC→OC over I2S at flight-start — issue #165
         case FC_IDENTITY:            // FC→OC over I2C — FC firmware version (#8 Phase 4)
@@ -5209,6 +5214,15 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         if (payload_len >= sizeof(SensorCalStatusData))
         {
             ble_app.sendSensorCalStatus(payload, sizeof(SensorCalStatusData));
+        }
+    }
+    else if (type == ACC_CAL_STATUS_MSG)
+    {
+        // #1629: the low-g hand calibration's readback and face windows,
+        // forwarded to BLE on file-ops behind 0xD1.
+        if (payload_len >= sizeof(AccelCalStatusData))
+        {
+            ble_app.sendAccelCalStatus(payload, sizeof(AccelCalStatusData));
         }
     }
     else if (type == PAD_CAL_STATUS_MSG)
@@ -13320,6 +13334,36 @@ static void loop_oc()
         {
             setPendingCommand(SENSOR_CAL_READ);
             ESP_LOGI("BLE", "Sensor cal READ -> FlightComputer");
+        }
+        // #1629 — the low-g accelerometer's six-face hand calibration
+        // (tools/accel_cal_six_face.py): store and apply the solved offset
+        // (12-byte AccelCalApplyData, board frame m/s^2; all zero clears it).
+        else if (ble_cmd == 76)
+        {
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= sizeof(AccelCalApplyData))
+            {
+                setPendingCommandWithConfig(ACC_CAL_APPLY_PENDING, ACC_CAL_APPLY_MSG, payload, sizeof(AccelCalApplyData));
+                ESP_LOGI("BLE", "Accel cal APPLY queued for FlightComputer");
+            }
+            else
+            {
+                ESP_LOGW("BLE", "Accel cal APPLY: payload too short (%u < %u)",
+                              (unsigned)plen, (unsigned)sizeof(AccelCalApplyData));
+            }
+        }
+        // #1629 — read the stored low-g offset and the last face window back.
+        else if (ble_cmd == 77)
+        {
+            setPendingCommand(ACC_CAL_READ);
+            ESP_LOGI("BLE", "Accel cal READ -> FlightComputer");
+        }
+        // #1629 — average the low-g accelerometer over one face, the board still.
+        else if (ble_cmd == 78)
+        {
+            setPendingCommand(ACC_FACE_PENDING);
+            ESP_LOGI("BLE", "Accel cal FACE -> FlightComputer");
         }
         else if (ble_cmd == 69)
         {
