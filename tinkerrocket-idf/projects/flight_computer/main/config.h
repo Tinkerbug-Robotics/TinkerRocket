@@ -202,14 +202,16 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 #endif
 #endif
 
-// The V9 flying a Septentrio mosaic-G5 on J1 (-DTR_GNSS_MOSAIC=1,
+// The V9 or the V8 flying a Septentrio mosaic-G5 on J1 (-DTR_GNSS_MOSAIC=1,
 // CMakeLists.txt). The driver is the build's choice, like the M1's LC86G; the
 // harness puts the receiver's 1PPS on J1 pin 5, which only this build reads,
-// and only as an input (board_v9.h). Refused anywhere else: the M1's receiver
-// is soldered on, and no other board's J1 has been checked for this harness.
+// and only as an input (board_v9.h, board_v8.h). The V8's J1 is the V9's,
+// GPIO3/GPIO4 and pin 5 on GPIO2 (#1642), and the Goblin flies a V8.
+// Refused anywhere else: the M1's receiver is soldered on, and no other
+// board's J1 has been checked for this harness.
 #if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
-#if !TR_BOARD_V9
-#error "TR_GNSS_DRIVER_MOSAIC is a V9 build (-DTR_BOARD_V9=1 -DTR_GNSS_MOSAIC=1)"
+#if !TR_BOARD_V9 && !TR_BOARD_V8
+#error "TR_GNSS_DRIVER_MOSAIC is a V9 or V8 build (-DTR_BOARD_V9=1 or -DTR_BOARD_V8=1, with -DTR_GNSS_MOSAIC=1)"
 #endif
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
 #error "One GNSS driver per build: TR_GNSS_DRIVER_MOSAIC and TR_GNSS_DRIVER_LC86 are both set"

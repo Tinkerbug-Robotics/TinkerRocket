@@ -256,22 +256,45 @@ elseif(TR_BOARD_V9)
     message(STATUS "flight_computer: magnetometer driver auto (IIS2MDC or QMC5883P, TR_MAG_DRIVER_AUTO=1)")
     message(STATUS "flight_computer: sdkconfig overlay sdkconfig.defaults.v9 (comments only since #916 — boot NOR keeps the base 8 MB declaration, sized to the partition table)")
 endif()
-# A V9 flying a Septentrio mosaic-G5 on J1 instead of its u-blox carrier
-# (`idf.py -B build_v9_mosaic -DTR_BOARD_V9=1 -DTR_GNSS_MOSAIC=1 build`). The
-# same seam as TR_GNSS_DRIVER_LC86 on the M1: the driver is the build's
-# choice, and config.h refuses it on any other board. Its own overlay puts the
-# UART interrupt in IRAM: at 2 Mbaud the RX FIFO lasts 0.64 ms, shorter than a
+# A V9 or a V8 flying a Septentrio mosaic-G5 on J1 instead of its u-blox
+# carrier (`idf.py -B build_v9_mosaic -DTR_BOARD_V9=1 -DTR_GNSS_MOSAIC=1 build`,
+# or `-B build_v8_rawnav -DTR_BOARD_V8=1 -DTR_GNSS_MOSAIC=1`: the Goblin's
+# V8). The same seam as TR_GNSS_DRIVER_LC86 on the M1: the driver is the
+# build's choice, and config.h refuses it on any other board. The V8's J1 is
+# the V9's (the receiver's UART on GPIO3/GPIO4, its 1PPS on pin 5 = GPIO2), so
+# the harness lands the same way on both. Its own overlay puts the UART
+# interrupt in IRAM: at 2 Mbaud the RX FIFO lasts 0.64 ms, shorter than a
 # flash write keeps a cache-dependent interrupt waiting.
+#
+# sdkconfig.defaults.rawnav turns the in-package PSRAM on, for the raw-GNSS
+# navigation filter this image runs (#1600 on the mosaic): it does not fit in
+# internal RAM. Only this image takes it -- the V9 and V8 auto images also take
+# sdkconfig.defaults.mosaic, so PSRAM cannot go there -- and
+# -DTR_RAW_GNSS_SHADOW=0 builds the mosaic image without the filter and
+# without PSRAM, as every board flew before (sdkconfig.defaults, #851).
+# main/CMakeLists.txt checks the resolved sdkconfig against this rule: a build
+# dir's sdkconfig keeps CONFIG_SPIRAM=y once this overlay has written it.
 if(TR_GNSS_MOSAIC)
-    if(NOT TR_BOARD_V9)
-        message(FATAL_ERROR "TR_GNSS_MOSAIC is for the V9 (-DTR_BOARD_V9=1): its J1 is where the harness lands")
+    if(NOT TR_BOARD_V9 AND NOT TR_BOARD_V8)
+        message(FATAL_ERROR "TR_GNSS_MOSAIC is for the V9 (-DTR_BOARD_V9=1) or the V8 (-DTR_BOARD_V8=1): their J1 is where the harness lands")
     endif()
     if(TR_GNSS_AUTO)
         message(FATAL_ERROR "TR_GNSS_MOSAIC and TR_GNSS_AUTO are both on: the mosaic-only image or the image that finds either receiver, not both")
     endif()
     add_compile_definitions(TR_GNSS_DRIVER_MOSAIC=1)
+    # The V8 (legacy) sets no defaults list of its own: start it from the base
+    # file, as the auto image below does, or the overlays alone would replace
+    # it and the build lose its P4 target.
+    if(NOT SDKCONFIG_DEFAULTS)
+        set(SDKCONFIG_DEFAULTS "sdkconfig.defaults")
+    endif()
     list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.mosaic")
-    message(STATUS "flight_computer: GNSS driver Septentrio mosaic-G5 (TR_GNSS_DRIVER_MOSAIC=1), overlay sdkconfig.defaults.mosaic")
+    if(NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW)
+        list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.rawnav")
+        message(STATUS "flight_computer: GNSS driver Septentrio mosaic-G5 (TR_GNSS_DRIVER_MOSAIC=1), overlays sdkconfig.defaults.mosaic + sdkconfig.defaults.rawnav (PSRAM on)")
+    else()
+        message(STATUS "flight_computer: GNSS driver Septentrio mosaic-G5 (TR_GNSS_DRIVER_MOSAIC=1), overlay sdkconfig.defaults.mosaic (TR_RAW_GNSS_SHADOW=0: no raw-GNSS filter, PSRAM off)")
+    endif()
 endif()
 # The V9 image finds its GNSS receiver at boot: the stock u-blox SAM-M10Q
 # carrier or the mosaic-G5 harness, both on J1 (TR_Sensor_Collector's
@@ -283,7 +306,8 @@ endif()
 # sdkconfig predates it). -DTR_BOARD_V8=1 -DTR_GNSS_AUTO=1 builds it for a V8
 # as well, on request: the V8's J1 is the V9's (the SAM-M10Q carrier's UART on
 # GPIO3/GPIO4, the mosaic's 1PPS on pin 5 = GPIO2), so one V8 image flies
-# either receiver. The V8's default build stays u-blox-only.
+# either receiver. The V8's default build stays u-blox-only. Neither auto
+# image takes sdkconfig.defaults.rawnav: they fly GpsInsEKF, PSRAM off.
 if(NOT DEFINED TR_GNSS_AUTO AND TR_BOARD_V9 AND NOT TR_GNSS_MOSAIC)
     set(TR_GNSS_AUTO ON)
 endif()
