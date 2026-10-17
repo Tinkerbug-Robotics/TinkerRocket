@@ -102,7 +102,9 @@ def main():
         w.writerow(['Comment', 'Designator', 'Footprint', 'LCSC Part #', 'Manufacturer', 'MPN', 'Quantity'])
         for (_, fp), d in sorted(groups.items(), key=lambda kv: sortkey(sorted(kv[1]['refs'], key=sortkey)[0])):
             refs = sorted(d['refs'], key=sortkey)
-            w.writerow([' / '.join(d['vals']), ','.join(refs), fp, d['lcsc'], d['mfr'], d['mpn'], len(refs)])
+            # plain ASCII: JLC's BOM import can reject a file with an ohm or micro sign in it
+            comment = ' / '.join(d['vals']).replace('Ω', 'ohm').replace('µ', 'u')
+            w.writerow([comment, ','.join(refs), fp, d['lcsc'], d['mfr'], d['mpn'], len(refs)])
     print(len(groups), 'BOM lines,', sum(len(d['refs']) for d in groups.values()), 'parts')
     with open(os.path.join(FAB, NAME + '-hand.csv'), 'w', newline='') as f:
         w = csv.writer(f)
