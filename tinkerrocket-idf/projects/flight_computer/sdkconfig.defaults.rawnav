@@ -31,11 +31,13 @@
 #    rather than aborting at every boot, an in-flight reboot included, before
 #    the flight computer runs. The raw-GNSS filter does NOT start then:
 #    startRawShadow falls back to internal RAM, which cannot hold it (above),
-#    so it logs "[RAWGNSS] no memory ... not started" and returns, keeping any
-#    block it got before the one that failed. Where that filter is the only
-#    navigation filter, the boot has to say so loudly (a degraded boot status
-#    the app shows, not one log line), so a board without PSRAM is caught on
-#    the bench or the pad.
+#    so an allocation fails or the blocks it did get leave internal RAM's
+#    largest block under its 56 KB floor (config::RAW_INTERNAL_FLOOR_B); it
+#    logs which, gives back every block it took, and returns. The filter is
+#    this image's only navigation filter, so the boot then says
+#    "*** NO NAVIGATION FILTER ***" and reports FCB_DEG_SENSORS (a degraded
+#    boot status the app shows, not one log line): a board without PSRAM is
+#    caught on the bench or the pad.
 #  - MEMTEST off: the test walks all 32 MB at every boot (cpu_start.c), and
 #    an in-flight reboot's time to the loop matters more.
 # PSRAM is brought up by the app, not the bootloader, so an image delivered
