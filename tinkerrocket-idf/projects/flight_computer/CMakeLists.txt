@@ -158,6 +158,18 @@ if(TR_BENCH_IRAM)
 endif()
 # #491 bench: cold-start the u-blox at every boot, so repeated runs of one file
 # start from the same state. Never set for flight.
+# RF rig bench switches for the mosaic-G5 (never set for flight): a C/N0 and
+# tracking line every 5 s, and a cold start (erst,Soft,PVTData+SatData) after
+# the setup at each boot, so a simulated sky is not searched with the real
+# sky's time and ephemerides.
+if(TR_BENCH_MOSAIC_CN0)
+    add_compile_definitions(TR_BENCH_MOSAIC_CN0=1)
+    message(WARNING "TR_BENCH_MOSAIC_CN0=1 -- mosaic tracking/C/N0 console line (bench)")
+endif()
+if(TR_BENCH_MOSAIC_COLD_START)
+    add_compile_definitions(TR_BENCH_MOSAIC_COLD_START=1)
+    message(WARNING "TR_BENCH_MOSAIC_COLD_START=1 -- mosaic-G5 cold start at every boot (bench)")
+endif()
 if(TR_GNSS_BENCH_COLD_START)
     add_compile_definitions(TR_GNSS_BENCH_COLD_START=1)
     message(STATUS "TR_GNSS_BENCH_COLD_START=1 -- u-blox cold start at every boot (bench)")

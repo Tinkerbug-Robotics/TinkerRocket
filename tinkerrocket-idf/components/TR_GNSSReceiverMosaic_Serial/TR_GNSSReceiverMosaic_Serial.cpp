@@ -4,6 +4,9 @@
 // itself (mosaic-G5 P3, firmware 1.0.0, permission file "Maximum Data Rate:
 // Permitted up to 20 Hz"), as the 2026-10-15 spin-rig sessions logged it.
 #include "TR_GNSSReceiverMosaic_Serial.h"
+#if defined(TR_BENCH_MOSAIC_CN0) && TR_BENCH_MOSAIC_CN0
+#include "SbfMeas.h"
+#endif
 
 #include <GnssClockRecord.h>
 
@@ -302,6 +305,13 @@ bool TR_GNSSReceiverMosaicSerial::begin(uint8_t update_rate_hz,
                  static_cast<unsigned long>(begin_timeout_ms_ / 1000), static_cast<unsigned>(link_.state()));
         return false;
     }
+#if defined(TR_BENCH_MOSAIC_COLD_START) && TR_BENCH_MOSAIC_COLD_START
+    // Bench only (RF rig): forget the real sky's time, position, ephemerides and
+    // almanac before a simulated one, as the hotshot runs did over the receiver's
+    // USB. The soft reset keeps the boot configuration the setup just saved.
+    ESP_LOGW(TAG, "BENCH: mosaic-G5 cold start (erst,Soft,PVTData+SatData) %s",
+             link_.queueCommand("erst,Soft,PVTData+SatData") ? "queued" : "NOT queued");
+#endif
     return true;
 }
 
@@ -411,6 +421,51 @@ void TR_GNSSReceiverMosaicSerial::noteDelay(uint16_t number, uint32_t tow_ms, ui
 
 // ── Blocks, lines, prompts (the parser's sink) ──────────────────────────
 
+#if defined(TR_BENCH_MOSAIC_CN0) && TR_BENCH_MOSAIC_CN0
+// Bench only (RF rig): every 5 s, what the receiver tracks, per system, from one
+// MeasEpoch -- the L1-band signal the raw filter uses (GPS L1CA 0, Galileo E1 17,
+// BeiDou B1I 28) with its C/N0 median and max, and every signal counted. Tells a
+// rig run's level and acquisition apart from the fix, which the status line has.
+static void benchCn0Line(const uint8_t* block, size_t len)
+{
+    static int64_t last_us = 0;
+    const int64_t now = esp_timer_get_time();
+    if (now - last_us < 5000000) return;
+    last_us = now;
+    mosaic::SbfMeasReader r;
+    const mosaic::SbfStatus st = r.begin(block, len);
+    if (st != mosaic::SbfStatus::OK)
+    {
+        ESP_LOGI("GNSS", "[RIG] MeasEpoch not readable yet (status %u: 5 = no time)", static_cast<unsigned>(st));
+        return;
+    }
+    float cn[3][64];
+    int n[3] = {0, 0, 0}, all = 0, other = 0;
+    mosaic::SbfMeasSignal g;
+    while (r.next(g))
+    {
+        all++;
+        int k = -1;
+        if (g.svid >= 1 && g.svid <= 37 && g.sig == 0) k = 0;
+        else if (g.svid >= 71 && g.svid <= 106 && g.sig == 17) k = 1;
+        else if (((g.svid >= 141 && g.svid <= 180) || (g.svid >= 223 && g.svid <= 245)) && g.sig == 28) k = 2;
+        if (k < 0) { other++; continue; }
+        if (g.cn0Valid() && n[k] < 64) cn[k][n[k]++] = static_cast<float>(g.cn0Dbhz());
+    }
+    float med[3] = {0, 0, 0}, mx[3] = {0, 0, 0};
+    for (int k = 0; k < 3; k++)
+    {
+        if (!n[k]) continue;
+        std::sort(cn[k], cn[k] + n[k]);
+        med[k] = cn[k][n[k] / 2];
+        mx[k] = cn[k][n[k] - 1];
+    }
+    ESP_LOGI("GNSS", "[RIG] tracked: GPS L1CA %d (C/N0 med %.1f max %.1f) | GAL E1 %d (%.1f / %.1f) | "
+                     "BDS B1I %d (%.1f / %.1f) | %d signals, %d other",
+             n[0], med[0], mx[0], n[1], med[1], mx[1], n[2], med[2], mx[2], all, other);
+}
+#endif
+
 void TR_GNSSReceiverMosaicSerial::onBlock(const uint8_t* block, size_t len, size_t index)
 {
     const int64_t end_us = rd_us_ - static_cast<int64_t>(
@@ -471,6 +526,9 @@ void TR_GNSSReceiverMosaicSerial::onBlock(const uint8_t* block, size_t len, size
         case mosaic::SBF_MEAS_EPOCH:
             n_meas_++;
             noteDelay(h.number, h.tow_ms, h.wnc, end_us);
+#if defined(TR_BENCH_MOSAIC_CN0) && TR_BENCH_MOSAIC_CN0
+            benchCn0Line(block, len);
+#endif
             break;
         case mosaic::SBF_MEAS_EXTRA:
             n_extra_++;
