@@ -54,13 +54,19 @@ struct board_pins
     // 1 PPS the SAM-M10Q carrier already routes to a P4 GPIO is being thrown
     // away because the header called it a UART line.
     //
-    // Nothing in firmware distinguishes the carriers at runtime — the board
-    // header hard-selects the UBlox driver and TR_GNSSReceiverUBlox_Serial has
-    // no carrier identification.  So GPIO2 stays unused: do not use it without
-    // first establishing which carrier is fitted (NVS, or the UBX MON-VER that
-    // begin() already reads).
+    // Do not use GPIO2 without first establishing which carrier is fitted. The
+    // default V8 image never does (it hard-selects the UBlox driver), so it
+    // leaves GPIO2 alone. The auto image (-DTR_GNSS_AUTO=1) establishes it at
+    // boot, as on the V9 (TR_Sensor_Collector's gnss_detect.h tells the u-blox
+    // from the mosaic by what each answers on pins 1-2). Only once it has
+    // found the mosaic-G5 does the mosaic's driver read pin 5, as the 1PPS
+    // coming through the harness's 1 kOhm; the u-blox path never touches it.
+    // Neither ever drives the pin. J1 here is the V9's J1: the same
+    // BM05B-SRSS-TB with the same pins 1-5, so the Goblin's mosaic harness
+    // fits it as it is.
     static constexpr uint8_t GNSS_RX = 3;   // FC receives; module TXD drives this
     static constexpr uint8_t GNSS_TX = 4;   // FC drives;   module RXD listens here
+    static constexpr int8_t  GNSS_J1_PIN5 = 2;   // net GNSS_RXD2: carrier-dependent, see above
     static constexpr int8_t GNSS_RESET_N = -1;
     static constexpr int8_t GNSS_SAFEBOOT_N = -1;
 
