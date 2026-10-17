@@ -190,7 +190,7 @@ BUILDER_FIELDS = ("el_mask_deg", "troposphere", "doppler_step_hz", "pr_corr_scal
 EKF_FIELDS = ("clk_bias_psd", "clk_drift_psd", "isb_psd", "clock_step_m", "clock_step_spread_m", "drift_step_mps",
               "drift_step_spread_mps", "rr_lag_s", "p0_clk_bias", "p0_clk_drift", "p0_isb", "cr_mode",
               "cr_sigma_per_rev_s", "cr_common_sigma_mps", "cr_screen_k", "cr_screen_floor_mps", "cr_half_cycle",
-              "cr_carrier_hz", "cr_half_cycle_unflagged")
+              "cr_carrier_hz", "cr_half_cycle_unflagged", "reject_persist", "reject_persist_rr", "att_gnss_off")
 
 
 def test_the_lc86g_profile_is_the_bound_defaults():
@@ -210,9 +210,13 @@ def test_the_lc86g_profile_is_the_bound_defaults():
     rg.apply_profile(p, e1)
     for f in EKF_FIELDS:
         assert getattr(e1, f) == getattr(e0, f), f
-    # the others: the LC86G's numbers, UNMEASURED
+    # every epoch fused, each safeguard on its count
+    assert (p.fuse_epoch_period_s, p.pr_period_s, p.sat_cap, p.reject_persist_s) == (0.0, 0.0, 0, 0.0)
+    assert (p.level_min_dt_s, p.heading_fit_period_s, p.rr_dyn_window_s) == (0.0, 0.0, 0.0)
+    assert (p.max_epoch_age_s, p.epoch_job_max_s) == (0.6, 0.3)
+    # the stubs: the LC86G's numbers, UNMEASURED
     for make, rx in ((rg.neo_m8t_profile, rg.RX_NEO_M8T), (rg.px1105r_profile, rg.RX_PX1105R),
-                     (rg.mosaic_g5_profile, rg.RX_MOSAIC_G5), (rg.generic_profile, rg.RX_GENERIC)):
+                     (rg.generic_profile, rg.RX_GENERIC)):
         q = make()
         assert not q.measured and q.type == rx and rg.profile_for(rx).name == q.name
         assert q.cr_sigma_floor_mps == p.cr_sigma_floor_mps and q.rr_lag_s == p.rr_lag_s
@@ -220,6 +224,28 @@ def test_the_lc86g_profile_is_the_bound_defaults():
     p.cr_mode = rg.CARRIER_OFF
     rg.apply_profile(p, b1)
     assert not b1.carrier
+
+
+def test_the_mosaic_g5_v0_profile():
+    # v0 from its rig runs (test_receiver_profile.cpp pins every number): fused at 10 Hz, the code once a
+    # second, no lag on its Doppler, the carrier off, UNMEASURED in flight
+    q = rg.mosaic_g5_profile()
+    assert q.name == "mosaic-G5" and not q.measured and q.type == rg.RX_MOSAIC_G5
+    assert rg.profile_for(rg.RX_MOSAIC_G5).name == q.name
+    assert q.rr_lag_s == 0.0 and q.cr_mode == rg.CARRIER_OFF
+    assert (q.raw_epoch_period_s, q.fuse_epoch_period_s, q.pr_period_s) == (0.05, 0.1, 1.0)
+    assert (q.sat_cap, q.reject_persist_s, q.rr_dyn_window_s) == (16, 3.0, 1.0)
+    assert (q.level_min_dt_s, q.heading_fit_period_s) == (0.95, 1.0)
+    assert (q.max_epoch_age_s, q.epoch_job_max_s) == (0.3, 0.2)
+    # applied: the builder's epochs 0.1 s apart, no rates; the filter's refusals let in after the
+    # Beetle's 3 s -- 30 Doppler epochs, 3 of the code -- and never the unaided twin
+    b = rg.BuilderConfig()
+    rg.apply_profile(q, b)
+    assert b.epoch_period_s == 0.1 and not b.carrier
+    e = rg.RawGnssEKFParams()
+    rg.apply_profile(q, e)
+    assert (e.reject_persist, e.reject_persist_rr, e.rr_lag_s) == (3, 30, 0.0)
+    assert not e.att_gnss_off
 
 
 def test_an_epoch_carries_its_carrier_phase():

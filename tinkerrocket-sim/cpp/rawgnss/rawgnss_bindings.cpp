@@ -556,6 +556,7 @@ PYBIND11_MODULE(_rawgnss, m)
         .def_readwrite("isb_psd", &RawGnssEKFParams::isb_psd)
         .def_readwrite("gate_chi2", &RawGnssEKFParams::gate_chi2)
         .def_readwrite("reject_persist", &RawGnssEKFParams::reject_persist)
+        .def_readwrite("reject_persist_rr", &RawGnssEKFParams::reject_persist_rr)
         .def_readwrite("clock_step_m", &RawGnssEKFParams::clock_step_m)
         .def_readwrite("clock_step_spread_m", &RawGnssEKFParams::clock_step_spread_m)
         .def_readwrite("drift_step_mps", &RawGnssEKFParams::drift_step_mps)
@@ -563,6 +564,7 @@ PYBIND11_MODULE(_rawgnss, m)
         .def_readwrite("rr_lag_s", &RawGnssEKFParams::rr_lag_s)
         .def_readwrite("att_gate_cos4", &RawGnssEKFParams::att_gate_cos4)
         .def_readwrite("att_gate_vertical", &RawGnssEKFParams::att_gate_vertical)
+        .def_readwrite("att_gnss_off", &RawGnssEKFParams::att_gnss_off)
         .def_readwrite("p0_pos", &RawGnssEKFParams::p0_pos)
         .def_readwrite("p0_vel", &RawGnssEKFParams::p0_vel)
         .def_readwrite("p0_att", &RawGnssEKFParams::p0_att)
@@ -627,6 +629,15 @@ PYBIND11_MODULE(_rawgnss, m)
         .def_readwrite("rr_lag_s", &GnssReceiverProfile::rr_lag_s)
         .def_readwrite("epoch_latency_s", &GnssReceiverProfile::epoch_latency_s)
         .def_readwrite("raw_epoch_period_s", &GnssReceiverProfile::raw_epoch_period_s)
+        .def_readwrite("fuse_epoch_period_s", &GnssReceiverProfile::fuse_epoch_period_s)
+        .def_readwrite("pr_period_s", &GnssReceiverProfile::pr_period_s)
+        .def_readwrite("sat_cap", &GnssReceiverProfile::sat_cap)
+        .def_readwrite("reject_persist_s", &GnssReceiverProfile::reject_persist_s)
+        .def_readwrite("level_min_dt_s", &GnssReceiverProfile::level_min_dt_s)
+        .def_readwrite("heading_fit_period_s", &GnssReceiverProfile::heading_fit_period_s)
+        .def_readwrite("rr_dyn_window_s", &GnssReceiverProfile::rr_dyn_window_s)
+        .def_readwrite("max_epoch_age_s", &GnssReceiverProfile::max_epoch_age_s)
+        .def_readwrite("epoch_job_max_s", &GnssReceiverProfile::epoch_job_max_s)
         .def_readwrite("pr_white_a", &GnssReceiverProfile::pr_white_a)
         .def_readwrite("pr_white_b", &GnssReceiverProfile::pr_white_b)
         .def_readwrite("pr_corr_a", &GnssReceiverProfile::pr_corr_a)
@@ -665,7 +676,7 @@ PYBIND11_MODULE(_rawgnss, m)
     m.def("lc86g_profile", &lc86gProfile, "the Quectel LC86G's (the Beetle's), measured");
     m.def("neo_m8t_profile", &neoM8tProfile, "u-blox NEO-M8T: UNMEASURED placeholders");
     m.def("px1105r_profile", &px1105rProfile, "SkyTraq PX1105R: UNMEASURED placeholders");
-    m.def("mosaic_g5_profile", &mosaicG5Profile, "Septentrio mosaic-G5: UNMEASURED placeholders");
+    m.def("mosaic_g5_profile", &mosaicG5Profile, "Septentrio mosaic-G5: v0, from its rig runs, UNMEASURED in flight");
     m.def("generic_profile", &genericProfile, "a receiver with none: UNMEASURED placeholders");
     m.def("profile_for", [](int type) { return profileFor(static_cast<GnssReceiverType>(type)); }, py::arg("type"));
     m.def("apply_profile", [](const GnssReceiverProfile& p, RawMeasBuilder::Config& c) { applyReceiverProfile(p, c); },
