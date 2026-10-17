@@ -67,7 +67,9 @@ gtest_discover_tests(test_raw_replay_mosaic)
 # the plan's coherent coast ramp as the guard's gap (a raw vote above
 # +2 m/s, the guard silent), the filter's tick flags from the quorum (its
 # levelling in flight from the quorum's call), and with state_from_quorum
-# the launch and landing from its own kinematics.
+# the launch and landing from its own kinematics. The truth read from a file
+# (truth_nav.h, raw_replay --truth-nav) votes exactly as the truth handed
+# over, and a bad file is refused.
 add_executable(test_raw_replay_votes test_raw_replay_votes.cpp
     ${LIB_DIR}/TR_KinematicChecks/TR_KinematicChecks.cpp
 )

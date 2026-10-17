@@ -54,6 +54,8 @@
 // builder's floors, mask and noise model (sim_epoch.h) -- and handed to the
 // filter as a built epoch. Its faults are in the events; the decoded-epoch
 // faults (--cut-*, --corrupt-at-s, --relock-min-lock-ms) are refused with it.
+// With --truth-nav (the sim's truth, truth_nav.h) a second quorum runs on a
+// perfect filter beside the first, report only: the truth's own call.
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -101,6 +103,7 @@
 #include "mosaic_feed.h"
 #include "rinex_nav.h"
 #include "sim_epoch.h"
+#include "truth_nav.h"
 #endif
 
 using namespace gnss_raw;
@@ -228,6 +231,7 @@ struct Args
     double loop_hz = 1000.0;         // the flight loop's passes a second (config::FLIGHT_LOOP_UPDATE_RATE)
     double seed_heading_deg = 0.0;   // the cold start's heading guess (config::PAD_HEADING_DEG)
     double seed_heading_error_deg = 0.0;   // ... and a sim's: its seed (META seed_quat) turned this far off about down
+    std::string truth_nav;           // a sim's truth (sim_events.py truth/<flight>.nav): a second quorum on it
     int reject_persist_rr = -1;      // RawGnssEKFParams::reject_persist_rr after the profile (-1: the profile's; the
                                      //   mosaic's 30 epochs, 3 s at 10 Hz): a Doppler refused this many epochs running
                                      //   is let back in
@@ -267,7 +271,7 @@ void usage()
                  "  [--truth-t0-tow X]\n"
                  "  the mosaic-G5 (a RAW_REPLAY_MOSAIC build): [--receiver lc86g|mosaic] [--cold-start] [--unaided]\n"
                  "  [--rinex FILE]... [--quorum] [--vote-guard 0|1] [--loop-hz X] [--seed-heading-deg X]\n"
-                 "  [--seed-heading-error-deg X] [--reject-persist-rr N]\n"
+                 "  [--seed-heading-error-deg X] [--reject-persist-rr N] [--truth-nav FILE]\n"
                  "  [--sat-cap N] [--fuse-ms X] [--flight-state log|quorum] [--time-tag-from-boot]\n"
                  "  [--assume-finetime] [--pad-zupt 0|1] [--gnss-only-from-s X]\n");
 }
@@ -361,6 +365,7 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--seed-heading-deg") a.seed_heading_deg = std::atof(val());
         else if (k == "--seed-heading-error-deg") a.seed_heading_error_deg = std::atof(val());
         else if (k == "--reject-persist-rr") a.reject_persist_rr = std::atoi(val());
+        else if (k == "--truth-nav") a.truth_nav = val();
         else if (k == "--sat-cap") a.sat_cap = std::atoi(val());
         else if (k == "--fuse-ms") a.fuse_ms = std::atof(val());
         else if (k == "--flight-state") a.flight_state = val();
@@ -1388,11 +1393,13 @@ int main(int argc, char** argv)
     }
 #if !RAW_REPLAY_MOSAIC
     if (mosaic || a.cold_start || a.unaided || !a.rinex.empty() || a.quorum || a.sat_cap >= 0 || a.fuse_ms > 0.0 ||
-        a.flight_state == "quorum" || a.time_tag_from_boot || a.assume_finetime || a.seed_heading_error_deg != 0.0)
+        a.flight_state == "quorum" || a.time_tag_from_boot || a.assume_finetime || a.seed_heading_error_deg != 0.0 ||
+        !a.truth_nav.empty())
     {
         std::fprintf(stderr, "this build has no mosaic-G5 path (RAW_REPLAY_MOSAIC=OFF): --receiver mosaic, "
                              "--cold-start, --unaided, --rinex, --quorum, --sat-cap, --fuse-ms, --flight-state "
-                             "quorum, --time-tag-from-boot, --assume-finetime and --seed-heading-error-deg need it\n");
+                             "quorum, --time-tag-from-boot, --assume-finetime, --seed-heading-error-deg and "
+                             "--truth-nav need it\n");
         return 2;
     }
 #endif
@@ -1725,6 +1732,35 @@ int main(int argc, char** argv)
     vcfg.loop_period_us = static_cast<uint32_t>(std::llround(1.0e6 / std::max(1.0, a.loop_hz)));
     std::unique_ptr<rr::FlightVotes> votesp(new rr::FlightVotes(vcfg));
     rr::FlightVotes& votes = *votesp;
+    // --truth-nav: the same quorum on a perfect filter (the sim's truth published as the filter's state, the
+    // run's own barometer, fixes and IMU ticks), report only -- its call is the one the counters' latency alone
+    // gives, which the filter's is measured against. It withholds nothing (no guard) but says when the guard
+    // would have latched on the truth
+    rr::TruthNav truth_nav;
+    std::unique_ptr<gnss_raw::ShadowLink> tlinkp;
+    std::unique_ptr<RawNavAdapter> tadapterp;
+    std::unique_ptr<rr::FlightVotes> tvotesp;
+    if (!a.truth_nav.empty())
+    {
+        std::string why;
+        if (!truth_nav.load(a.truth_nav, &why))
+        {
+            std::fprintf(stderr, "--truth-nav: %s\n", why.c_str());
+            return 2;
+        }
+        if (!use_votes)
+        {
+            std::fprintf(stderr, "--truth-nav needs the quorum (--quorum, a mosaic or a sim)\n");
+            return 2;
+        }
+        rr::FlightVotes::Config tcfg = vcfg;
+        tcfg.guard = false;
+        tlinkp.reset(new gnss_raw::ShadowLink());
+        tadapterp.reset(new RawNavAdapter());
+        tadapterp->attach(tlinkp.get());
+        tvotesp.reset(new rr::FlightVotes(tcfg));
+        tvotesp->setInitialized(true);
+    }
     int64_t next_pass_us = INT64_MIN;
     int quorum_baro = 0;   // barometer samples the quorum got (none without a ground pressure)
     rr::SimCounts sim_counts;   // a sim's epochs (X) through the stage
@@ -2323,7 +2359,11 @@ int main(int argc, char** argv)
         // the flight loop's passes up to this event (the apogee quorum): each reads what came before it
         if (use_votes && next_pass_us != INT64_MIN)
             for (; next_pass_us < ev.t_us; next_pass_us += vcfg.loop_period_us)
+            {
                 votes.pass(next_pass_us, nav_adapter);
+                if (tvotesp && truth_nav.publish(next_pass_us, *tlinkp))
+                    tvotesp->pass(next_pass_us, *tadapterp);
+            }
 #endif
         // the GNSS task: each epoch built once its build is done (the filter's
         // position at that time), handed to the filter's task
@@ -2364,10 +2404,11 @@ int main(int argc, char** argv)
             if (use_votes && p_ground > 0.0)
             {
                 quorum_baro++;
-                votes.onBaro(ev.t_us,
-                             44330.0f * (1.0f - std::pow(static_cast<float>(bmp_p) / static_cast<float>(p_ground),
-                                                         1.0f / 5.255f)),
-                             static_cast<float>(bmp_p));
+                const float palt =
+                    44330.0f * (1.0f - std::pow(static_cast<float>(bmp_p) / static_cast<float>(p_ground), 1.0f / 5.255f));
+                votes.onBaro(ev.t_us, palt, static_cast<float>(bmp_p));
+                if (tvotesp)
+                    tvotesp->onBaro(ev.t_us, palt, static_cast<float>(bmp_p));
             }
 #endif
             break;
@@ -2385,6 +2426,8 @@ int main(int argc, char** argv)
             f.vel_u = ev.v[5];
             if (use_votes)
                 votes.onFix(f);
+            if (tvotesp)
+                tvotesp->onFix(f);
             break;
         }
         case 'X':
@@ -2508,6 +2551,8 @@ int main(int argc, char** argv)
                         f.vel_u = g.vel_u_mmps * 1e-3;
                         if (use_votes)
                             votes.onFix(f);
+                        if (tvotesp)
+                            tvotesp->onFix(f);
                         if (cold && !cold_pos_known && p.has_solution)
                         {
                             // the cold start's position: the receiver's first fix (above the geoid, and its
@@ -2641,6 +2686,8 @@ int main(int argc, char** argv)
             {
                 votes.setInitialized(seed_ready);
                 votes.onImu(ev.t_us, s.acc, s.gyro, (ev.flags & kShadowInFlight) != 0);   // the tick's own edge
+                if (tvotesp)
+                    tvotesp->onImu(ev.t_us, s.acc, s.gyro, (ev.flags & kShadowInFlight) != 0);
                 if (next_pass_us == INT64_MIN)
                     next_pass_us = votes.nextPass(ev.t_us);
             }
@@ -3191,6 +3238,24 @@ int main(int argc, char** argv)
                     std::fprintf(ej, "\"passes\": %u, \"fixes\": %u, \"ref_count\": %u, \"ref_from_nav\": %d, "
                                      "\"mach_lockouts\": %u}, ",
                                  r.passes, r.fixes, r.ref_count, r.ref_from_nav ? 1 : 0, r.mach_lockouts);
+                    if (tvotesp)
+                    {
+                        // the same quorum on the truth (--truth-nav): its launch, admission, call and votes
+                        const rr::FlightVotes::Report& t = tvotesp->report();
+                        std::fprintf(ej, "\"truth_quorum\": {\"launch_t\": %s, \"burnout_t\": %s, "
+                                         "\"gnss_admitted_t\": %s, \"guard_latch_t\": %s, \"apogee_t\": %s, "
+                                         "\"backstop_t\": %s, \"landed_t\": %s, ",
+                                     ft(t.launch_s).c_str(), ft(t.burnout_s).c_str(), ft(t.admitted_s).c_str(),
+                                     ft(t.guard_s).c_str(), ft(t.apogee_s).c_str(), ft(t.backstop_s).c_str(),
+                                     ft(t.landed_s).c_str());
+                        std::fprintf(ej, "\"votes\": {\"vel\": %s, \"baro\": %s, \"gps\": %s, \"pitch\": %s}, ",
+                                     edges(t.vel).c_str(), edges(t.baro).c_str(), edges(t.gps).c_str(),
+                                     edges(t.pitch).c_str());
+                        std::fprintf(ej, "\"at_call\": {\"vel\": %d, \"baro\": %d, \"gps\": %d, \"pitch\": %d}, "
+                                         "\"rows\": %zu}, ",
+                                     t.call_vel ? 1 : 0, t.call_baro ? 1 : 0, t.call_gps ? 1 : 0, t.call_pitch ? 1 : 0,
+                                     truth_nav.size());
+                    }
                 }
             }
 #endif
@@ -3253,6 +3318,14 @@ int main(int argc, char** argv)
         if (state_from_quorum)
             std::fprintf(stderr, "  flight state from the quorum: INFLIGHT T%+.3f, LANDED T%+.3f  [-1e9: never]\n",
                          ft(r.launch_s), ft(r.landed_s));
+        if (tvotesp)
+        {
+            const rr::FlightVotes::Report& t = tvotesp->report();
+            std::fprintf(stderr, "  quorum on the truth (--truth-nav): apogee call T%+.3f (vel %d baro %d gps %d pitch %d), "
+                                 "guard would latch T%+.3f  [-1e9: never]\n",
+                         ft(t.apogee_s), t.call_vel ? 1 : 0, t.call_baro ? 1 : 0, t.call_gps ? 1 : 0,
+                         t.call_pitch ? 1 : 0, ft(t.guard_s));
+        }
     }
 #endif
     // A fault asked for that never happened is a test that tested nothing: say so. On a mosaic or cold-start
