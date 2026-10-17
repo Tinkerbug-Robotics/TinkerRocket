@@ -264,6 +264,9 @@ public:
     // finishing its boot and taking an update over the air; the V9 image
     // does the same when its last boot found the mosaic (gnssLastBootType()).
     void skipGNSSThisBoot() { use_gnss = false; }
+    // Whether begin() looks for the receiver this boot: built in, and not
+    // left out by skipGNSSThisBoot().
+    bool gnssWantedThisBoot() const { return use_gnss; }
     // Which receiver the FC talks to (GNSS_TYPE_*): the build's own, or on the
     // V9 image the one begin() found; GNSS_TYPE_NONE when none came up, so
     // the FC is GNSS-absent. What the FC names in its identity push and what
@@ -274,16 +277,30 @@ public:
     // none yet).
     uint8_t gnssLastBootType();
     // Raw GNSS measurements for the raw-GNSS shadow filter (#1600), from the
-    // LC86G's MSM7 and broadcast ephemeris; never from the u-blox. Off until
-    // enableGNSSRawOutputs() (call it before begin()). Safe from any task:
-    // the driver hands them over through queues. See
-    // TR_GNSSReceiverLC86Serial::takeRawEpoch / takeEphemeris.
+    // LC86G's MSM7 and broadcast ephemeris, or the mosaic-G5's MeasEpoch and
+    // SBF navigation blocks on the mosaic-only image; never from the u-blox,
+    // nor on the auto image. Off until enableGNSSRawOutputs() (call it before
+    // begin()). Safe from any task: the driver hands them over through
+    // queues. getGNSSEphemeris gives an RTCM3 payload (1019/1046/1042) on the
+    // LC86G and a whole GPSNav/GALNav/BDSNav block on the mosaic-G5
+    // (SbfNav.h decodes it). See TR_GNSSReceiverLC86Serial::takeRawEpoch /
+    // takeEphemeris and TR_GNSSReceiverMosaicSerial's.
     bool enableGNSSRawOutputs();
     bool getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out);
     bool getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len);
     // The receiver's own fixes with their GPS instant on the MCU clock, for
     // the shadow's check of each fix against the IMU (#1508). LC86G only.
     bool getGNSSFix(gnss_raw::TimedFix& out);
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // The mosaic-only image's raw outputs beside those (its driver's
+    // broadcastIono, setRawEpochPeriodMs and rawStats): the last GPS
+    // ionosphere the receiver decoded (the 8 broadcast bytes and their GPS
+    // day; false before one, not consumed); the fused grid its epochs are
+    // handed over on (GPS-time ms, the receiver profile's); and its counts.
+    bool getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const;
+    void setGNSSRawEpochPeriodMs(uint32_t period_ms);
+    bool getGNSSRawStats(TR_GNSSReceiverMosaicSerial::RawStats& out) const;
+#endif
     // The GPS-to-MCU clock line each time it moves (GNSS_CLOCK_MSG): the
     // LC86G's from its sentences' arrival, the mosaic-G5's from its 1PPS;
     // false on the u-blox.

@@ -65,6 +65,14 @@ public:
     // its sky is the flight's, so the receiver's output passes through, and
     // each fix's GPS time sets the replay's clock.
     bool getGNSSFix(gnss_raw::TimedFix& out);
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // The mosaic-only image's GPS ionosphere, by the same rule: a real sky's
+    // while idle or in the rig replay, none while a sim runs. It is the last
+    // one decoded, not consumed, so the GNSS task finds it again after the
+    // sim. The fused grid goes straight to the receiver.
+    bool getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const;
+    void setGNSSRawEpochPeriodMs(uint32_t period_ms) { real_.setGNSSRawEpochPeriodMs(period_ms); }
+#endif
 
     // Debug passthrough
     void getISM6HG256DebugSnapshot(ISM6HG256DebugSnapshot& snapshot_out) const;

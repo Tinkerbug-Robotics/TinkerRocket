@@ -1540,6 +1540,9 @@ bool SensorCollector::enableGNSSRawOutputs()
 {
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
     return gnss_receiver.enableRawOutputs();
+#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // The mosaic-only image's: its MeasEpoch, navigation blocks and GPSIon
+    return gnss_receiver.enableRawOutputs();
 #else
     return false;
 #endif
@@ -1549,6 +1552,10 @@ bool SensorCollector::getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out)
 {
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
     // No semaphore: the driver's queue is safe between the poll task and us.
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.takeRawEpoch(out);
+#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // The same: the driver's queue, the epochs on the fused grid
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.takeRawEpoch(out);
 #else
@@ -1562,11 +1569,35 @@ bool SensorCollector::getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len)
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.takeEphemeris(out, cap, len);
+#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // A whole SBF navigation block; one longer than cap is dropped and
+    // counted by the driver (cap is mosaic::kSbfNavMaxLen)
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.takeEphemeris(out, cap, len);
 #else
     (void)out; (void)cap; (void)len;
     return false;
 #endif
 }
+
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+bool SensorCollector::getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const
+{
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.broadcastIono(raw, gps_day);
+}
+
+void SensorCollector::setGNSSRawEpochPeriodMs(uint32_t period_ms)
+{
+    gnss_receiver.setRawEpochPeriodMs(period_ms);
+}
+
+bool SensorCollector::getGNSSRawStats(TR_GNSSReceiverMosaicSerial::RawStats& out) const
+{
+    gnss_receiver.rawStats(out);
+    return out.enabled;
+}
+#endif
 
 bool SensorCollector::getGNSSFix(gnss_raw::TimedFix& out)
 {

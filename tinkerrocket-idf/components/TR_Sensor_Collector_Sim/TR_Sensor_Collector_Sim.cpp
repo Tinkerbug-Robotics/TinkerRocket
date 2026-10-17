@@ -608,6 +608,14 @@ bool SensorCollectorSim::getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len)
     return false;   // consumed, not forwarded — see the header
 }
 
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+bool SensorCollectorSim::getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const
+{
+    if (phase_ == SIM_IDLE || replay_on_) return real_.getGNSSBroadcastIono(raw, gps_day);
+    return false;   // the real sky's: not while a sim runs (kept, not consumed) — see the header
+}
+#endif
+
 // ============================================================================
 // Physics
 // ============================================================================
