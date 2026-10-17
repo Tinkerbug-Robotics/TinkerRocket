@@ -85,6 +85,11 @@ struct ShadowSeed
     uint8_t  have_dip;         // dip_rad is the model's
     uint8_t  restore;          // a flight restored after a reboot: start in flight from this state
     uint8_t  start_gen;        // a new one on the pad (the flight computer started over): start again
+    // a restored flight's accelerometer bias, the snapshot's (RawGnssShadow::
+    // Config::restore_seed_bias): without it the filter restarts at zero and
+    // a tilt takes up what the pad had learned
+    uint8_t  has_accel_bias;
+    float    accel_bias[3];    // m/s^2, body FRD
 };
 
 // The raw filter's navigation state, every step (core 0 -> core 1): what the

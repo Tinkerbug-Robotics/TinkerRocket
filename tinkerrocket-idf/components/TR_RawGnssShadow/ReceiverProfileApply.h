@@ -11,6 +11,8 @@
 #ifndef RAW_GNSS_RECEIVER_PROFILE_APPLY_H
 #define RAW_GNSS_RECEIVER_PROFILE_APPLY_H
 
+#include <cmath>
+
 #include "RawGnssShadow.h"
 #include "RawMeasBuilder.h"
 #include "ReceiverProfile.h"
@@ -18,6 +20,21 @@
 
 namespace gnss_raw
 {
+
+// The period the filter's epochs come at: the fused grid's where the profile
+// has one, else the receiver's own.
+inline double fusedEpochPeriod(const GnssReceiverProfile& p)
+{
+    return p.fuse_epoch_period_s > 0.0 ? p.fuse_epoch_period_s : p.raw_epoch_period_s;
+}
+
+// reject_persist_s in epochs of period_s, at least 1 and at most what the
+// EKF's per-satellite count (a uint8_t) reaches
+inline int persistEpochs(double persist_s, double period_s)
+{
+    const long n = std::lround(persist_s / period_s);
+    return n < 1 ? 1 : (n > 255 ? 255 : static_cast<int>(n));
+}
 
 inline void applyReceiverProfile(const GnssReceiverProfile& p, RawMeasBuilder::Config& c)
 {
@@ -41,7 +58,8 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawMeasBuilder::C
     c.rr_relock_sigma = p.rr_relock_sigma;
     c.carrier = p.cr_mode != kCarrierOff;
     c.cr_min_lock_ms = p.cr_min_lock_ms;
-    c.epoch_period_s = p.raw_epoch_period_s;
+    // the epochs it builds: consecutive ones are the fused grid's apart
+    c.epoch_period_s = fusedEpochPeriod(p);
     c.cr_max_interval_s = p.cr_max_interval_s;
     c.cr_sigma_floor_mps = p.cr_sigma_floor_mps;
 }
@@ -70,6 +88,14 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssEKFParams&
         e.cr_carrier_hz[k] = p.sig[k].carrier_hz;
         e.cr_half_cycle_unflagged[k] = p.sig[k].half_cycle_unflagged;
     }
+    // A refusal's let-in in time, not epochs: the Doppler counts every fused
+    // epoch, the pseudorange only those it is fused on (pr_period_s)
+    const double fused = fusedEpochPeriod(p);
+    if (p.reject_persist_s > 0.0 && fused > 0.0)
+    {
+        e.reject_persist = persistEpochs(p.reject_persist_s, p.pr_period_s > fused ? p.pr_period_s : fused);
+        e.reject_persist_rr = persistEpochs(p.reject_persist_s, fused);
+    }
 }
 
 // The one call: the shadow's own settings, its builder's (the GNSS task's
@@ -77,6 +103,13 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssEKFParams&
 inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssShadow::Config& c)
 {
     c.epoch_latency_s = p.epoch_latency_s;
+    c.max_epoch_age_s = p.max_epoch_age_s;
+    c.epoch_job_max_s = p.epoch_job_max_s;
+    c.pr_period_s = p.pr_period_s;
+    c.rr_dyn_window_s = p.rr_dyn_window_s;
+    c.heading_fit_period_s = p.heading_fit_period_s;
+    c.sat_cap = p.sat_cap;
+    c.level.min_dt_s = p.level_min_dt_s;
     applyReceiverProfile(p, c.meas);
     applyReceiverProfile(p, c.ekf);
 }

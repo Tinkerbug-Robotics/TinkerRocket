@@ -41,6 +41,22 @@ int32_t sat32(double v)
     return static_cast<int32_t>(std::llround(v));
 }
 
+// The period of GPS time of week a time falls in (pr_period_s: each whole
+// second of a 10 Hz stream), on the millisecond the receivers tag their
+// epochs on
+int64_t periodIndex(double tow_s, double period_s)
+{
+    const long long p = std::llround(period_s * 1000.0);
+    const long long ms = std::llround(tow_s * 1000.0);
+    if (p <= 0)
+        return ms;
+    return ms >= 0 ? ms / p : -((p - 1 - ms) / p);
+}
+
+// heading_fit_period_s: an epoch this much early still counts as the period's
+// (half a 20 Hz epoch: the epochs' own times jitter)
+constexpr double kFitPeriodSlackS = 0.025;
+
 }  // namespace
 
 RawGnssMeasStage::Config RawGnssShadow::stageConfig(const Config& c)
@@ -728,6 +744,9 @@ void RawGnssShadow::start(double t)
     gate_full_ = false;
     boost_seen_t_ = -1.0e9;
     vert_latch_ = false;
+    n_g_held_ = 0;
+    pr_period_k_ = -1;
+    fit_last_te_ = -1.0;
     if (cfg_.heading_mode == kHeadingAct)
     {
         if (restored_)
@@ -739,7 +758,20 @@ void RawGnssShadow::start(double t)
         ekf_.setQuaternion(seed_.quat);
     ekf_.seedGyroBias(seed_.gyro_bias);
     if (restored_)
+    {
         st_.restores++;
+        // A restored flight is the snapshot's state seconds later: the reboot's
+        // gap was flown on nothing, so where it is, how fast and its attitude
+        // are only roughly the snapshot's (restore_*_sigma), not known to the
+        // start's p0 or setQuaternion's 1e-6. Its accelerometer bias is the
+        // snapshot's, not zero (restore_seed_bias).
+        if (cfg_.restore_pos_sigma_m > 0.0 || cfg_.restore_vel_sigma_mps > 0.0 || cfg_.restore_att_sigma_deg > 0.0)
+            ekf_.inflateRestoreSigmas(static_cast<float>(cfg_.restore_pos_sigma_m),
+                                      static_cast<float>(cfg_.restore_vel_sigma_mps),
+                                      static_cast<float>(cfg_.restore_att_sigma_deg / kRad2Deg));
+        if (cfg_.restore_seed_bias && seed_.has_accel_bias)
+            ekf_.setAccelBias(seed_.accel_bias);
+    }
     running_ = true;
     own_fix_ = false;
     t_prev_ = t;
@@ -885,6 +917,14 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
         job_.phase = kJobBuild;
         job_.build_us = 0;
     }
+    // the pseudoranges once in each pr_period_s (RawGnssShadow.h): on this
+    // epoch if none in its period was fused yet (closeJob); the boost
+    // screen's scratch copy takes the switch along
+    if (cfg_.pr_period_s > 0.0)
+    {
+        job_.pr_k = periodIndex(built_.tow_s, cfg_.pr_period_s);
+        ekf_.setFusePr(job_.pr_k != pr_period_k_);
+    }
     job_.fused = 0;
     job_.cr_screened = false;
     job_.rs = RawGnssStats();
@@ -983,6 +1023,28 @@ void RawGnssShadow::jobUnit(double t)
     }
 }
 
+// rr_dyn_window_s: the largest g excess an epoch carried within the window,
+// this one's included -- the window's peak, however the thrust fell inside it.
+// Kept are the epochs that could still be it: those the window has not left,
+// each larger than every one after it. With more of them in the window than
+// there is room for (kGHeld), the newest takes the last one's larger excess:
+// held a little longer, never let go early.
+double RawGnssShadow::holdGExcess(double te, double g)
+{
+    int n = 0;
+    for (int i = 0; i < n_g_held_; ++i)
+        if (te - g_held_[i].te <= cfg_.rr_dyn_window_s)
+            g_held_[n++] = g_held_[i];
+    while (n > 0 && g_held_[n - 1].g <= g)
+        n--;
+    if (n < kGHeld)
+        g_held_[n++] = {te, g};
+    else
+        g_held_[n - 1].te = te;
+    n_g_held_ = n;
+    return g_held_[0].g;
+}
+
 void RawGnssShadow::jobChecks(double age, double t)
 {
     const int n = built_.n;
@@ -990,8 +1052,14 @@ void RawGnssShadow::jobChecks(double age, double t)
     const double tow = built_.tow_s;
     // The Doppler of a loop under stress: the IMU's largest specific force
     // since the last epoch (RawMeasBuilder's rr_dyn_sigma), added here, where
-    // the IMU is, whoever built the epoch
-    const double s_dyn = cfg_.meas.rr_dyn_sigma * (job_.g_peak > 0.0 ? job_.g_peak : 0.0);
+    // the IMU is, whoever built the epoch. With rr_dyn_window_s, the largest
+    // any epoch carried within that long (holdGExcess), so at 10 Hz the
+    // epochs after burnout keep the boost's weighting for the second the
+    // LC86G's one epoch kept it.
+    double g_ex = job_.g_peak > 0.0 ? job_.g_peak : 0.0;
+    if (cfg_.rr_dyn_window_s > 0.0)
+        g_ex = holdGExcess(job_.te, g_ex);
+    const double s_dyn = cfg_.meas.rr_dyn_sigma * g_ex;
     if (s_dyn > 0.0)
         for (int i = 0; i < n; ++i)
         {
@@ -1195,12 +1263,20 @@ void RawGnssShadow::closeJob(double age, double t)
     st_.last_meas = n;
     st_.last_tow_ms = static_cast<uint32_t>(std::llround(std::fmod(built_.tow_s, 604800.0) * 1000.0));
     st_.epochs_applied++;
-    level_gate_.onEpoch(t, ekf_.velNed());
+    // level_on_fused_epochs: an epoch that fused nothing says nothing of the
+    // velocity's steadiness, nor that there are satellites (the outage)
+    if (!cfg_.level_on_fused_epochs || rs.used_pr + rs.used_rr > 0)
+        level_gate_.onEpoch(t, ekf_.velNed());
     if (rs.used_pr > 0)
     {
         own_fix_ = true;
         last_aided_t_ = t;
     }
+    // pr_period_s: its pseudoranges went through the update (fused or
+    // refused), the period's code -- an epoch whose clock could not be taken
+    // fused none, and one dropped never comes here
+    if (cfg_.pr_period_s > 0.0 && job_.fused > 0)
+        pr_period_k_ = job_.pr_k;
     if (rs.clock_jump_ms != 0 || rs.clock_step_m != 0.0 || rs.drift_step_mps != 0.0)
         pend_flags_ |= RGE_CLOCK_STEP;
     job_.active = false;
@@ -1241,6 +1317,7 @@ void RawGnssShadow::stepHeading(double t, const float acc[3], const float gyro[3
     {
         // the launch edge
         fit_launch_t_ = t;
+        fit_last_te_ = -1.0;
         launch_seen_ = true;
         fit_flight_ = fit_.started() && t - fit_.t0() <= cfg_.heading_seed_max_s;
         handed_ = false;
@@ -1331,6 +1408,11 @@ bool RawGnssShadow::jobHeading(double age)
         return false;
     if (job_.te - fit_launch_t_ > cfg_.heading_fit_max_s)
         return false;
+    // at most one epoch a heading_fit_period_s: the fit holds 64, a minute of
+    // the LC86G's, 6.4 s at 10 Hz
+    if (cfg_.heading_fit_period_s > 0.0 && fit_last_te_ >= 0.0
+        && job_.te - fit_last_te_ < cfg_.heading_fit_period_s - kFitPeriodSlackS)
+        return false;
     const int64_t c0 = now();
     double r[3], v[3];
     ekf_.receiverEcefAt(age, r, v);
@@ -1351,6 +1433,7 @@ bool RawGnssShadow::jobHeading(double age)
     const double td = job_.te - cfg_.ekf.rr_lag_s;
     if (!fit_.gnss(td, v_ned, var_h))
         return false;                     // too slow sideways yet, or past the fit's history
+    fit_last_te_ = job_.te;
     st_.heading_epochs++;
     for (int i = 0; i < 3; ++i)
         job_.hdg_v[i] = v_ned[i];

@@ -715,7 +715,7 @@ void RawGnssEKF<T>::screenRangeRates(const RawMeas* m, int n, double age_s, RawG
         const double dt_i = t_ - last_upd_[mi.sys][mi.prn][1];
         const T R = T(s_r * s_r * corrInflation(dt_i, static_cast<double>(mi.tau_rr)));
         st.screen_rr++;
-        if (rejects_[mi.sys][mi.prn][1] >= p_.reject_persist)
+        if (rejects_[mi.sys][mi.prn][1] >= rejectPersist(1))
             continue;                     // the update lets it in, whatever its innovation
         // S and the test as scalarUpdate forms them
         T HP[N] = {};
