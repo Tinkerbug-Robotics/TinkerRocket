@@ -226,18 +226,71 @@ TEST(RawReplayMosaic, APvtWhoseMeasEpochWasLostAnchorsNothing)
     EXPECT_DOUBLE_EQ(f.dtrMs(), mosaic::dtrMs(0.20, 0.25f, 0.1, 0));
 }
 
-TEST(RawReplayMosaic, APvtOlderThanASecondIsNotCarried)
+// The driver's carry (MosaicTimeTag): a PVT's bias rides out two minutes
+// of lost sky on the receiver's free-running clock, and no further; with
+// none the epoch is untimed (the caller leaves it so), never tagged with a
+// bias of 0.
+TEST(RawReplayMosaic, APvtIsCarriedTwoMinutesAndNoMore)
 {
     MosaicFeed f;
     gnss_raw::TimedRawEpoch te;
     feed(f, meas(kTow0, 10), te);
     feed(f, pvt(kTow0, 0.20, 0.25f), te);
-    ASSERT_EQ(feed(f, meas(kTow0 + 1000, 10), te), MosaicFeed::Kind::EPOCH);
-    EXPECT_TRUE(f.anchored());
     ASSERT_EQ(feed(f, meas(kTow0 + 1100, 10), te), MosaicFeed::Kind::EPOCH);
+    EXPECT_TRUE(f.anchored());
+    // the MeasEpochs keep coming through a lost sky (none more than 2 s apart: no restart of the jump count)
+    for (uint32_t ms = 2000; ms <= 120000; ms += 1000)
+        feed(f, meas(kTow0 + ms, 10), te);
+    ASSERT_EQ(feed(f, meas(kTow0 + 120000, 10), te), MosaicFeed::Kind::EPOCH);
+    EXPECT_TRUE(f.anchored());
+    EXPECT_DOUBLE_EQ(f.dtrMs(), mosaic::dtrMs(0.20, 0.25f, 120.0, 0));
+    ASSERT_EQ(feed(f, meas(kTow0 + 120100, 10), te), MosaicFeed::Kind::EPOCH);
     EXPECT_FALSE(f.anchored());
     EXPECT_EQ(f.dtrMs(), 0.0);
     EXPECT_EQ(f.counts().dtr_zero, 2u);   // and the first, before any PVT
+    EXPECT_EQ(f.counts().rebases, 0u);
+}
+
+// The driver's chain of biases and its hold (MosaicTimeTag), as the harness
+// drives it: a log's first chain stands for one confirmed before it began;
+// a PVT whose bias steps off the one carried to it holds the tags until two
+// whole seconds' tags check out against their edges (each K line an edge
+// against its line); and from a boot the first chain waits for the 1PPS too.
+TEST(RawReplayMosaic, TheChainIsHeldAsTheDriverHoldsIt)
+{
+    for (bool from_boot : {false, true})
+    {
+        MosaicFeed f;
+        if (!from_boot)
+            f.assumeConfirmedAtStart();
+        gnss_raw::TimedRawEpoch te;
+        const int64_t s0 = static_cast<int64_t>(kWnc) * 604800 + kTow0 / 1000;
+        auto second = [&](int k, double bias_ms, int64_t tag_off_us) {
+            const uint32_t tow = kTow0 + 1000u * static_cast<uint32_t>(k);
+            const int64_t edge = 3000000000LL + 1000000LL * k;
+            f.notePair(s0 + k, edge, true, edge);   // the K line of the second, its edge on the line
+            EXPECT_EQ(feed(f, meas(tow, 10), te), MosaicFeed::Kind::EPOCH);
+            // placed where the line puts TOW less the carried bias (with a bias to carry)
+            if (f.anchored())
+                f.noteWholeSecond(edge - static_cast<int64_t>(std::llround(f.dtrMs() * 1000.0)) + tag_off_us, true);
+            feed(f, pvt(tow, bias_ms, 0.0f), te);
+        };
+        second(0, 0.30, 0);
+        EXPECT_EQ(f.timeTag().held(), from_boot) << from_boot;
+        second(1, 0.30, 0);
+        second(2, 0.30, 0);
+        EXPECT_FALSE(f.timeTag().held()) << from_boot;
+        // the receiver's time steps 6.85 ms against its clock (the RF rig's underrun)
+        second(3, 7.15, 0);
+        EXPECT_TRUE(f.timeTag().held());
+        EXPECT_EQ(f.timeTag().holdBreak(), mosaic::MosaicTimeTag::Break::BIAS_STEP);
+        second(4, 7.15, 0);
+        EXPECT_TRUE(f.timeTag().held());
+        second(5, 7.15, 0);
+        EXPECT_FALSE(f.timeTag().held());
+        EXPECT_EQ(f.timeTag().stats().breaks[static_cast<int>(mosaic::MosaicTimeTag::Break::FIRST)], from_boot ? 1u : 0u);
+        EXPECT_EQ(f.timeTag().stats().confirmed, from_boot ? 2u : 1u);
+    }
 }
 
 TEST(RawReplayMosaic, AnEmptyEpochIsNotHandedOver)

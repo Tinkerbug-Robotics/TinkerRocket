@@ -668,6 +668,12 @@ struct ClockLine
         out = mcu0_us + static_cast<int64_t>(std::llround(rel * 1.0e6));
         return true;
     }
+    // GnssTimeSync::gpsAt: the GPS time of an MCU instant
+    double gpsAt(int64_t mcu_us) const
+    {
+        const double rel = static_cast<double>(mcu_us - mcu0_us) * 1.0e-6;
+        return gps0_s + (rel - a_s + drift * t_ref_s + latency_s) / (1.0 + drift);
+    }
 };
 
 // An emulated FC clock: each call costs fc_unit_us, so the shadow's job
@@ -1756,6 +1762,11 @@ int main(int argc, char** argv)
     }
     const int first_rt = tag_gate.first_rt;
     int untimed_not_fine = 0, untimed_pps_stale = 0, untimed_no_line = 0;
+    // and the driver's MosaicTimeTag (mosaic_feed.h): no PVT's bias to carry, the last edge off the line, the chain
+    // of biases not confirmed by the 1PPS since a break; a log's first chain stands for one confirmed before it
+    int untimed_no_bias = 0, untimed_edge_off = 0, untimed_held = 0;
+    if (!a.time_tag_from_boot)
+        feed.assumeConfirmedAtStart();
     // ---- the flight loop's view (RawNavAdapter) and its apogee quorum (flight_votes.h)
     std::unique_ptr<gnss_raw::ShadowLink> linkp(new gnss_raw::ShadowLink());
     std::unique_ptr<RawNavAdapter> adapterp(new RawNavAdapter());
@@ -2609,6 +2620,18 @@ int main(int argc, char** argv)
             line.t_ref_s = ev.v[3];
             line.drift = ev.v[4];
             line.latency_s = ev.v[5];
+#if RAW_REPLAY_MOSAIC
+            if (mosaic)
+            {
+                // each K line is a 1PPS edge paired (the record's time) and the line it moved: the edge against
+                // that line's place for its second, as the driver's pairPps hands MosaicTimeTag
+                const int64_t gs = std::llround(line.gpsAt(ev.t_us));
+                int64_t at = 0;
+                const bool on = line.mcuAt(static_cast<double>(gs), at);
+                feed.notePair(gs, ev.t_us, on, at);
+                feed.setLineSecondUs(static_cast<int64_t>(std::llround(1.0e6 * (1.0 + line.drift))));
+            }
+#endif
             break;
         case 'R':
         {
@@ -2627,18 +2650,29 @@ int main(int argc, char** argv)
                     case rr::MosaicFeed::Kind::EPOCH:
                     {
                         // its GPS time on the clock line (the PPS-fitted 0x9D), where the driver would tag it:
-                        // FINETIME, a 1PPS edge paired within 120 s, the line valid (rawTimeTagOk)
+                        // FINETIME, a 1PPS edge paired within 120 s, the line valid, a PVT's bias to carry, the
+                        // last edge on the line, the chain confirmed (rawMeasEpoch, MosaicTimeTag)
                         int64_t mcu = 0;
-                        switch (tag_gate.judge(feed.haveTime(), feed.finetime(), line.valid, ev.t_us))
+                        const bool placed = feed.anchored() && line.mcuAt(feed.gpsS(), mcu);
+                        const rr::TimeTagGate::Why why =
+                            tag_gate.judge(feed.haveTime(), feed.finetime(), line.valid, ev.t_us, feed.anchored(),
+                                           feed.timeTag().edgeOnLine(), feed.timeTag().held());
+                        switch (why)
                         {
                         case rr::TimeTagGate::Why::NOT_FINETIME: untimed_not_fine++; break;
                         case rr::TimeTagGate::Why::PPS_STALE: untimed_pps_stale++; break;
                         case rr::TimeTagGate::Why::NO_LINE: untimed_no_line++; break;
+                        case rr::TimeTagGate::Why::NO_BIAS: untimed_no_bias++; break;
+                        case rr::TimeTagGate::Why::EDGE_OFF: untimed_edge_off++; break;
+                        case rr::TimeTagGate::Why::HELD: untimed_held++; break;
                         case rr::TimeTagGate::Why::TIMED:
-                            if (line.mcuAt(feed.gpsS(), mcu))
+                            if (placed)
                                 te.mcu_us = mcu + static_cast<int64_t>(a.epoch_shift_ms * 1000.0);
                             break;
                         }
+                        // a whole second's tag, timed or held back, for its PVT's check against its edge
+                        if (placed)
+                            feed.noteWholeSecond(mcu, te.mcu_us != 0);
                         handOver(te, ev.t_us, false);
                         break;
                     }
@@ -3403,11 +3437,23 @@ int main(int argc, char** argv)
                              rinex_stale, eph_n);
                 // the driver's time tag: why epochs were left untimed (the log's first ReceiverTime: -1 none, else
                 // its FINETIME)
-                std::fprintf(ej, "\"time_tag\": {\"receiver_time_in_log\": %d, \"from_boot\": %d, "
-                                 "\"assume_finetime\": %d, \"untimed_not_finetime\": %d, \"untimed_pps_stale\": %d, "
-                                 "\"untimed_no_line\": %d}, ",
-                             first_rt, a.time_tag_from_boot ? 1 : 0, a.assume_finetime ? 1 : 0, untimed_not_fine,
-                             untimed_pps_stale, untimed_no_line);
+                {
+                    const mosaic::MosaicTimeTag::Stats& ts = feed.timeTag().stats();
+                    using Brk = mosaic::MosaicTimeTag::Break;
+                    std::fprintf(ej, "\"time_tag\": {\"receiver_time_in_log\": %d, \"from_boot\": %d, "
+                                     "\"assume_finetime\": %d, \"untimed_not_finetime\": %d, \"untimed_pps_stale\": %d, "
+                                     "\"untimed_no_line\": %d, \"untimed_no_bias\": %d, \"untimed_edge_off\": %d, "
+                                     "\"untimed_held\": %d, \"breaks_first\": %u, \"breaks_rebase\": %u, "
+                                     "\"breaks_expired\": %u, \"breaks_bias_step\": %u, \"breaks_check_failed\": %u, "
+                                     "\"confirmed\": %u, \"edges_off\": %u, \"pps_judged\": %u, \"pps_max_us\": %d, "
+                                     "\"pps_over\": %u, \"pps_held\": %u}, ",
+                                 first_rt, a.time_tag_from_boot ? 1 : 0, a.assume_finetime ? 1 : 0, untimed_not_fine,
+                                 untimed_pps_stale, untimed_no_line, untimed_no_bias, untimed_edge_off, untimed_held,
+                                 ts.breaks[static_cast<int>(Brk::FIRST)], ts.breaks[static_cast<int>(Brk::REBASE)],
+                                 ts.breaks[static_cast<int>(Brk::EXPIRED)], ts.breaks[static_cast<int>(Brk::BIAS_STEP)],
+                                 ts.breaks[static_cast<int>(Brk::CHECK_FAILED)], ts.confirmed, ts.edges_off,
+                                 ts.pps.checks, ts.pps.max_us, ts.pps.over, ts.pps.held);
+                }
                 // the faults' clock, the pad's zero-velocity updates (with the levelling they hold a static log's
                 // velocity unless --gnss-only-from-s), each closed epoch's Dopplers and largest NIS, and the
                 // magnetometer
@@ -3572,11 +3618,25 @@ int main(int argc, char** argv)
 #if RAW_REPLAY_MOSAIC
     if (mosaic || cold)
     {
-        if (untimed_not_fine + untimed_pps_stale + untimed_no_line > 0)
+        if (untimed_not_fine + untimed_pps_stale + untimed_no_line + untimed_no_bias + untimed_edge_off +
+                untimed_held > 0)
             std::fprintf(stderr, "  time tag: untimed %d not FINETIME (ReceiverTime %s), %d with no 1PPS edge paired "
-                                 "within 120 s, %d with no valid clock line\n",
+                                 "within 120 s, %d with no valid clock line, %d with no PVT bias to carry, %d with the "
+                                 "last edge off the line, %d held (the chain of biases not yet confirmed)\n",
                          untimed_not_fine, first_rt < 0 ? "never in the log" : "in the log", untimed_pps_stale,
-                         untimed_no_line);
+                         untimed_no_line, untimed_no_bias, untimed_edge_off, untimed_held);
+        if (mosaic)
+        {
+            const mosaic::MosaicTimeTag::Stats& ts = feed.timeTag().stats();
+            using Brk = mosaic::MosaicTimeTag::Break;
+            std::fprintf(stderr, "  time tag chain: breaks %u first, %u jump count restart, %u expired, %u bias step "
+                                 "(last %+.3f ms), %u check failed; %u confirmed by the 1PPS; %u edges off the line; "
+                                 "PPS check judged %u (max %d us, %u over 200 us), held back %u\n",
+                         ts.breaks[static_cast<int>(Brk::FIRST)], ts.breaks[static_cast<int>(Brk::REBASE)],
+                         ts.breaks[static_cast<int>(Brk::EXPIRED)], ts.breaks[static_cast<int>(Brk::BIAS_STEP)],
+                         ts.last_bias_step_ms, ts.breaks[static_cast<int>(Brk::CHECK_FAILED)], ts.confirmed,
+                         ts.edges_off, ts.pps.checks, ts.pps.max_us, ts.pps.over, ts.pps.held);
+        }
         if (first_rt < 0 && epochs_decoded > 0)
             std::fprintf(stderr, "WARNING: no ReceiverTime in the log: the driver times nothing without FINETIME%s\n",
                          a.assume_finetime ? " (--assume-finetime: timed all the same)" : " (--assume-finetime to time them)");

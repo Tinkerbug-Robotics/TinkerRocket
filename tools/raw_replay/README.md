@@ -160,14 +160,21 @@ The SBF blocks go through `mosaic_feed.h`, which does what the driver (`rawMeasE
 - every MeasEpoch's clock jumps are followed (`MosaicJumpState`); those on the fused grid (`onFuseGrid`, the
   profile's 100 ms) become RawEpochs (`rawEpochFromMeasEpoch`), and an empty one is not handed over;
 - an epoch's GPS time is its receiver time less the clock bias of the last PVTGeodetic that anchors the jump count
-  (`pvtAnchorsJumps`), carried by its drift and the jumps since (`dtrMs`), at most 1 s and while the count has not
-  started over; without one the bias is taken as 0 and counted (`dtr_zero`). The log's clock line (K, the PPS fit)
-  then places it on the MCU clock only where the driver would (`rawTimeTagOk`, `mosaic_feed.h` `TimeTagGate`): the
-  line valid, the receiver's last ReceiverTime saying FINETIME, and a 1PPS edge paired within 120 s (each pairing
-  moves the line, so each K line is one). Before the log's first ReceiverTime and first K line those first ones
-  stand for the earlier (the log begins long after the receiver did); `--time-tag-from-boot` leaves epochs untimed
-  until them, as after a boot. A log with no ReceiverTime at all is untimed, as the driver would leave it, with a
-  warning (`--assume-finetime` times it). The events JSON's `time_tag` counts the untimed epochs by reason;
+  (`pvtAnchorsJumps`), carried by its drift and the jumps since (`dtrMs`), at most two minutes and while the count
+  has not started over; without one the epoch is untimed and counted (`dtr_zero`), as the driver leaves it
+  (`MosaicTimeTag.h`, since the 10/17 rig underrun: the bias 0 it took before was up to 0.5 ms off with a fix and
+  anything at all after a receiver restart). The log's clock line (K, the PPS fit) then places it on the MCU clock
+  only where the driver would (`rawMeasEpoch`, `mosaic_feed.h` `TimeTagGate`): the line valid, the receiver's last
+  ReceiverTime saying FINETIME, a 1PPS edge paired within 120 s (each K line is a pairing), a bias to carry, the
+  last edge on the line (each K line's edge against that line, within 100 us), and the chain of PVT biases
+  confirmed by the 1PPS: after a break (a restart of the jump count, an anchor too old, a PVT 0.1 ms off the bias
+  carried to it, a failed check) the tags are held until two whole seconds' tags check out against their edges
+  with their own PVT's bias. Before the log's first ReceiverTime and first K line those first ones stand for the
+  earlier, and so does its first chain (the log begins long after the receiver did); `--time-tag-from-boot` leaves
+  epochs untimed until them, as after a boot. A log with no ReceiverTime at all is untimed, as the driver would
+  leave it, with a warning (`--assume-finetime` times it). The events JSON's `time_tag` counts the untimed epochs by
+  reason, the chain's breaks and the PPS check; the console's `time tag chain` line says the same. Logs from before
+  the mosaic image logged a K line at every edge carry one only where the line moved;
 - navigation blocks are kept as the driver keeps them (`sbfNavKeep`: no Galileo F/NAV, no BeiDou GEO), decoded
   (`decodeSbfEphemeris`) and filed with the stage's `addEphemeris`;
 - GPSIon goes through the GNSS task's one ionosphere rule (the firmware's `raw_iono_rule.h` where the tree has it,
