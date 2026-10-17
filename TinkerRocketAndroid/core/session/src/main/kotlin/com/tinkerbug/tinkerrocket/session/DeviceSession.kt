@@ -1,5 +1,6 @@
 package com.tinkerbug.tinkerrocket.session
 
+import com.tinkerbug.tinkerrocket.protocol.AccelCalStatus
 import com.tinkerbug.tinkerrocket.protocol.BaseStationStorageStats
 import com.tinkerbug.tinkerrocket.protocol.BleCommandId
 import com.tinkerbug.tinkerrocket.protocol.Commands
@@ -47,6 +48,7 @@ import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
 import java.time.Instant
 import java.time.ZoneOffset
@@ -300,6 +302,26 @@ public class DeviceSession(
      */
     private val _padCalStatus = MutableStateFlow<PadCalStatus?>(null)
     public val padCalStatus: StateFlow<PadCalStatus?> = _padCalStatus.asStateFlow()
+
+    /**
+     * The latest six-face accelerometer calibration status (0xD1, #1629);
+     * null until one arrives on this connection.  The flight computer sends
+     * it only when asked (commands 76/77/78) and when a face window closes,
+     * so null says nothing has asked yet, not that the rocket lacks it.
+     * Every frame carries the stored offset, so this is also what the screen
+     * shows as stored.
+     */
+    private val _accelCalStatus = MutableStateFlow<AccelCalStatus?>(null)
+    public val accelCalStatus: StateFlow<AccelCalStatus?> = _accelCalStatus.asStateFlow()
+
+    /**
+     * Every 0xD1 frame as it arrives.  Two refusals are byte-identical and a
+     * read-back can equal the save's own answer, so a StateFlow would swallow
+     * exactly the frames the round trips below wait for ([sensorCalFrames]
+     * exists for the same reason).
+     */
+    private val _accelCalFrames = MutableSharedFlow<AccelCalStatus>(extraBufferCapacity = 16)
+    public val accelCalFrames: SharedFlow<AccelCalStatus> = _accelCalFrames.asSharedFlow()
 
     private val _rocketStorage = MutableStateFlow<RocketStorageStats?>(null)
     public val rocketStorage: StateFlow<RocketStorageStats?> = _rocketStorage.asStateFlow()
@@ -571,6 +593,9 @@ public class DeviceSession(
         // over 21, and the rocket on the next connection may have been
         // reflashed.  iOS gets the same from a BLEDevice per connection.
         _padCalStatus.value = null
+        // #1629: the stored offset belongs to the board on THIS link; the
+        // next connection may be another board, or this one reflashed.
+        _accelCalStatus.value = null
         // #435: per-connection live state — a stale echo could "confirm" a
         // send made over a new connection to a rebooted FC.
         _guidanceEcho.value = null
@@ -853,6 +878,10 @@ public class DeviceSession(
                 _sensorCalFrames.tryEmit(msg.status)
             }
             is FileOpsMessage.PadCal -> _padCalStatus.value = msg.status
+            is FileOpsMessage.AccelCal -> {
+                _accelCalStatus.value = msg.status
+                _accelCalFrames.tryEmit(msg.status)
+            }
             is FileOpsMessage.RocketStorage -> _rocketStorage.value = msg.stats
             is FileOpsMessage.BsStorage -> _bsStorage.value = msg.stats
             is FileOpsMessage.PyroRefusal -> {
@@ -1648,6 +1677,75 @@ public class DeviceSession(
             flow.onTimeout()
         }
         return flow.verdict
+    }
+
+    // ── #1629: the six-face accelerometer calibration ────────────────────
+    //
+    // Three round trips over one frame kind, 0xD1.  Callable from any
+    // dispatcher, as ActiveRocketSyncer.runPadCalibration is: they only
+    // collect [accelCalFrames] and queue their write on the session's own
+    // dispatcher, subscribed before it goes out so a fast answer cannot slip
+    // past.  The flight computer's answers carry no request id, so the screen
+    // runs one at a time; overlapping them would make the attribution a guess.
+
+    /**
+     * Read the stored offset back (command 77): the first 0xD1 frame inside
+     * [timeoutMs], or null — which is also what a flight computer without
+     * the calibration gives.
+     */
+    public suspend fun readAccelCal(timeoutMs: Long = AccelSixFace.READ_TIMEOUT_MS): AccelCalStatus? =
+        awaitAccelCalFrame(Commands.bare(BleCommandId.ACC_CAL_READ), timeoutMs)
+
+    /**
+     * One face window (command 78), attributed by [AccelSixFace.Sequencer]:
+     * frames before this window's MEASURING are ignored, a FAILED with no
+     * samples in its place is a refusal, and the first DONE or FAILED after
+     * it is the result.  [onWindowOpen] runs, on the caller's dispatcher,
+     * when the MEASURING lands: the 3 s the board must be held still start
+     * then.
+     */
+    public suspend fun measureAccelFace(
+        timeoutMs: Long = AccelSixFace.FACE_TIMEOUT_MS,
+        onWindowOpen: () -> Unit = {},
+    ): AccelSixFace.Measurement {
+        if (!_isConnected.value) return AccelSixFace.Measurement.NotConnected
+        val seq = AccelSixFace.Sequencer()
+        withTimeoutOrNull(timeoutMs) {
+            _accelCalFrames
+                .onSubscription { sendCommandFrame(Commands.bare(BleCommandId.ACC_FACE_MEASURE)) }
+                .first { frame ->
+                    val wasOpen = seq.windowOpen
+                    val settled = seq.onFrame(frame) != null
+                    if (!wasOpen && seq.windowOpen) onWindowOpen()
+                    settled
+                }
+        }
+        return seq.outcome ?: AccelSixFace.Measurement.NoAnswer
+    }
+
+    /**
+     * Store and apply an offset (command 76: board frame, m/s²; all zero
+     * clears it), then read it back (77) — the script's write_offset: the
+     * answer to 76 first, for up to [applyTimeoutMs], then the 77.  A flight
+     * computer that refuses the write in flight or after landing sends
+     * nothing for it, and the read-back then shows what it kept.
+     */
+    public suspend fun applyAccelCal(
+        offsetX: Float,
+        offsetY: Float,
+        offsetZ: Float,
+        applyTimeoutMs: Long = AccelSixFace.APPLY_TIMEOUT_MS,
+        readTimeoutMs: Long = AccelSixFace.READ_TIMEOUT_MS,
+    ): AccelSixFace.Applied {
+        val answer = awaitAccelCalFrame(Commands.accelCalApply(offsetX, offsetY, offsetZ), applyTimeoutMs)
+        return AccelSixFace.Applied(answer, readAccelCal(readTimeoutMs))
+    }
+
+    private suspend fun awaitAccelCalFrame(frame: ByteArray, timeoutMs: Long): AccelCalStatus? {
+        if (!_isConnected.value) return null
+        return withTimeoutOrNull(timeoutMs) {
+            _accelCalFrames.onSubscription { sendCommandFrame(frame) }.first()
+        }
     }
 
     // ── DeviceIdentityPusher (#547 registry push-through) ────────────────

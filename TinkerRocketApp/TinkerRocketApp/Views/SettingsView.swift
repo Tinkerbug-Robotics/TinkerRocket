@@ -864,6 +864,19 @@ private struct SettingsContent: View {
             Text("Place the rocket on its pad and keep it still. The gyro & accel calibration takes about 10 s; the GNSS survey keeps going until launch.")
                 .font(.caption).foregroundColor(.secondary)
 
+            // Six-face accelerometer calibration (#1629): an offset stored on
+            // the flight computer itself, which only this screen writes -- it
+            // is in no rocket profile and no connect-time sync. Gated like
+            // the magnetometer's: it needs the rocket connected and powered.
+            NavigationLink {
+                AccelCalibrationView(device: device)
+            } label: {
+                Label("Accelerometer Calibration (Six Faces)", systemImage: "cube")
+            }
+            .disabled(!canCalibrate)
+            Text("Measures the accelerometer's offset with the board on each of its six faces. Once per flight computer; stored on the board.")
+                .font(.caption).foregroundColor(.secondary)
+
             if !canCalibrate {
                 Label("Power on the rocket to run calibrations.", systemImage: "bolt.slash")
                     .font(.caption).foregroundColor(.orange)

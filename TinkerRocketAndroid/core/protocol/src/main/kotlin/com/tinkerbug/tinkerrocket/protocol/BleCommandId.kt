@@ -139,4 +139,31 @@ public object BleCommandId {
      * why 21 stays.
      */
     public const val PAD_CAL_RUN: Int = 75
+
+    // #1629: the low-g accelerometer's six-face hand calibration
+    // (tools/accel_cal_six_face.py is the reference flow).  The offset is a
+    // property of the flight computer board, kept in its NVS: only the
+    // calibration screen writes it — never a profile push, never the
+    // connect-time sync.  Every answer is a 0xD1 file-ops frame
+    // ([AccelCalStatus]).
+
+    /**
+     * `[offset_x f32][offset_y f32][offset_z f32]` (AccelCalApplyData 12 B),
+     * board frame, m/s²: store and apply; all zero clears it.  Refused past
+     * 1.0 m/s² on any axis (answered with what it kept) and in flight or
+     * after landing (not answered at all), so the read-back (77) is what
+     * tells.
+     */
+    public const val ACC_CAL_APPLY: Int = 76
+
+    /** No payload: answered with one 0xD1 frame (the stored offset, the last face window). */
+    public const val ACC_CAL_READ: Int = 77
+
+    /**
+     * No payload: average the low-g accelerometer over one 3 s face window.
+     * A MEASURING 0xD1 frame comes back at once, then DONE or FAILED; a
+     * refusal (in flight, after landing, in a sim) is a FAILED frame with no
+     * samples and no MEASURING before it.
+     */
+    public const val ACC_FACE_MEASURE: Int = 78
 }

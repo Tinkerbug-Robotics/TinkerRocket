@@ -1,5 +1,6 @@
 package com.tinkerbug.tinkerrocket.session
 
+import com.tinkerbug.tinkerrocket.protocol.AccelCalStatus
 import com.tinkerbug.tinkerrocket.protocol.BleCommandId
 import com.tinkerbug.tinkerrocket.protocol.Commands
 import com.tinkerbug.tinkerrocket.protocol.GuidanceSendFlow
@@ -23,6 +24,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import com.tinkerbug.tinkerrocket.protocol.ConfigIdentityMsg
 
@@ -1169,5 +1171,203 @@ class DeviceSessionTest {
             before,
             h.fw.commandFrames.count { it[0].toInt() == BleCommandId.FILE_DELETE },
         )
+    }
+
+    // ── #1629: the six-face accelerometer calibration ────────────────────
+
+    private fun Harness.sentSince(before: Int): List<Int> =
+        fw.commandFrames.drop(before).map { it[0].toInt() and 0xFF }
+
+    private val storedOffset = listOf(0.0412f, -0.0273f, 0.0156f)
+
+    /** A 0xD1 frame from a board holding [storedOffset], its last window in [state]. */
+    private fun FakeFirmware.accelFrame(
+        state: Int,
+        mean: List<Float> = listOf(0f, 0f, 9.81f),
+        n: Int = 2880,
+    ): ByteArray = accelCalStatusFrame(
+        flags = AccelCalStatus.FLAG_STORED or AccelCalStatus.FLAG_APPLIED,
+        faceState = state,
+        offset = storedOffset,
+        faceMean = mean,
+        faceSd = listOf(0.012f, 0.013f, 0.014f),
+        faceN = n,
+    )
+
+    @Test
+    fun accelCalStatus_keepsEveryFrame_andIsWipedOnDisconnect() = runTest {
+        val h = startedSession()
+        advanceTimeBy(1000)
+        runCurrent()
+        assertNull(h.session.accelCalStatus.value)
+        val seen = mutableListOf<AccelCalStatus>()
+        backgroundScope.launch { h.session.accelCalFrames.collect { seen += it } }
+        runCurrent()
+
+        val frame = h.fw.accelFrame(state = 2)
+        h.fw.emitFileOpsFrame(frame)
+        h.fw.emitFileOpsFrame(frame)   // byte-identical, as two refusals or a read-back can be
+        runCurrent()
+        assertEquals(2, seen.size, "every frame, equal ones included")
+        val s = assertNotNull(h.session.accelCalStatus.value)
+        assertTrue(s.stored)
+        assertEquals(storedOffset, s.offset)
+
+        // One byte short: dropped, and not read as a file list either.
+        h.fw.emitFileOpsFrame(frame.copyOf(40))
+        runCurrent()
+        assertEquals(2, seen.size)
+        assertTrue(h.session.files.value.isEmpty())
+
+        h.fw.fireDisconnect()
+        runCurrent()
+        assertNull(h.session.accelCalStatus.value)
+    }
+
+    @Test
+    fun measureAccelFace_ignoresAStaleDoneUntilItsOwnMeasuring() = runTest {
+        val h = startedSession()
+        advanceTimeBy(1000)
+        runCurrent()
+        var opened = 0
+        val before = h.fw.commandFrames.size
+        val run = async { h.session.measureAccelFace(onWindowOpen = { opened++ }) }
+        runCurrent()
+        assertEquals(listOf(BleCommandId.ACC_FACE_MEASURE), h.sentSince(before))
+        assertEquals(1, h.fw.commandFrames.last().size, "78 carries no payload")
+
+        // A late answer to an earlier 77 carries the previous window's DONE.
+        h.fw.emitFileOpsFrame(h.fw.accelFrame(state = 2, mean = listOf(0f, 0f, 9.81f)))
+        runCurrent()
+        assertFalse(run.isCompleted, "a DONE before this window's MEASURING is not this face")
+        assertEquals(0, opened)
+
+        h.fw.emitFileOpsFrame(h.fw.accelFrame(state = 1, mean = listOf(0f, 0f, 0f), n = 0))
+        runCurrent()
+        assertEquals(1, opened, "the hold-still clock starts at the MEASURING")
+        assertFalse(run.isCompleted)
+
+        advanceTimeBy(3_000)
+        h.fw.emitFileOpsFrame(h.fw.accelFrame(state = 2, mean = listOf(-9.79f, 0.1f, 0.05f)))
+        runCurrent()
+        val m = assertIs<AccelSixFace.Measurement.Finished>(run.await())
+        assertEquals(listOf(-9.79f, 0.1f, 0.05f), m.window.faceMean)
+        assertEquals(1, opened)
+        assertEquals(listOf(BleCommandId.ACC_FACE_MEASURE), h.sentSince(before), "one 78, nothing else")
+    }
+
+    @Test
+    fun measureAccelFace_aFailedWithNoSamplesInPlaceOfMeasuringIsARefusal() = runTest {
+        val h = startedSession()
+        advanceTimeBy(1000)
+        runCurrent()
+        var opened = false
+        val run = async { h.session.measureAccelFace(onWindowOpen = { opened = true }) }
+        runCurrent()
+        advanceTimeBy(400)
+        h.fw.emitFileOpsFrame(h.fw.accelFrame(state = 3, mean = listOf(0f, 0f, 0f), n = 0))
+        runCurrent()
+        val r = assertIs<AccelSixFace.Measurement.Refused>(run.await())
+        assertEquals(0, r.status.faceN)
+        assertFalse(opened)
+    }
+
+    @Test
+    fun measureAccelFace_noAnswerTimesOut_andWithoutALinkSendsNothing() = runTest {
+        val h = startedSession()
+        advanceTimeBy(1000)
+        runCurrent()
+        val run = async { h.session.measureAccelFace() }
+        runCurrent()
+        // The MEASURING alone does not settle it.
+        h.fw.emitFileOpsFrame(h.fw.accelFrame(state = 1, n = 0))
+        advanceTimeBy(AccelSixFace.FACE_TIMEOUT_MS - 1)
+        runCurrent()
+        assertFalse(run.isCompleted)
+        advanceTimeBy(1)
+        runCurrent()
+        assertSame(AccelSixFace.Measurement.NoAnswer, run.await())
+
+        h.fw.fireDisconnect()
+        runCurrent()
+        val before = h.fw.commandFrames.size
+        assertSame(AccelSixFace.Measurement.NotConnected, h.session.measureAccelFace())
+        runCurrent()
+        assertEquals(before, h.fw.commandFrames.size)
+    }
+
+    /**
+     * The script's write_offset: 76, its answer, and only then the 77 whose
+     * answer is the read-back.
+     */
+    @Test
+    fun applyAccelCal_waitsForTheAnswerThenReadsBack() = runTest {
+        val h = startedSession()
+        advanceTimeBy(1000)
+        runCurrent()
+        val before = h.fw.commandFrames.size
+        val run = async { h.session.applyAccelCal(storedOffset[0], storedOffset[1], storedOffset[2]) }
+        runCurrent()
+        assertContentEquals(
+            Commands.accelCalApply(storedOffset[0], storedOffset[1], storedOffset[2]),
+            h.fw.commandFrames.last(),
+        )
+        advanceTimeBy(5_000)
+        runCurrent()
+        assertEquals(listOf(BleCommandId.ACC_CAL_APPLY), h.sentSince(before), "no read-back before the answer")
+
+        h.fw.emitFileOpsFrame(h.fw.accelFrame(state = 0))
+        runCurrent()
+        assertEquals(listOf(BleCommandId.ACC_CAL_APPLY, BleCommandId.ACC_CAL_READ), h.sentSince(before))
+        assertFalse(run.isCompleted)
+        h.fw.emitFileOpsFrame(h.fw.accelFrame(state = 0))   // byte-identical: the read-back
+        runCurrent()
+        val a = run.await()
+        assertNotNull(a.answer)
+        assertNotNull(a.readBack)
+        assertTrue(AccelSixFace.savedAsSent(storedOffset, a.final))
+    }
+
+    @Test
+    fun applyAccelCal_aWriteRefusedInFlightIsStillReadBack() = runTest {
+        // The flight computer answers nothing to a 76 it refuses in flight or
+        // after landing; the 77 goes after 8 s anyway, and shows what it kept.
+        val h = startedSession()
+        advanceTimeBy(1000)
+        runCurrent()
+        val before = h.fw.commandFrames.size
+        val run = async { h.session.applyAccelCal(0f, 0f, 0f) }
+        runCurrent()
+        advanceTimeBy(AccelSixFace.APPLY_TIMEOUT_MS - 1)
+        runCurrent()
+        assertEquals(listOf(BleCommandId.ACC_CAL_APPLY), h.sentSince(before))
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(listOf(BleCommandId.ACC_CAL_APPLY, BleCommandId.ACC_CAL_READ), h.sentSince(before))
+        h.fw.emitFileOpsFrame(h.fw.accelFrame(state = 0))
+        runCurrent()
+        val a = run.await()
+        assertNull(a.answer)
+        assertFalse(AccelSixFace.cleared(a.final), "the stored offset is still there")
+    }
+
+    @Test
+    fun readAccelCal_isTheNextFrame_orNullWhenNothingAnswers() = runTest {
+        val h = startedSession()
+        advanceTimeBy(1000)
+        runCurrent()
+        val run = async { h.session.readAccelCal() }
+        runCurrent()
+        assertContentEquals(byteArrayOf(BleCommandId.ACC_CAL_READ.toByte()), h.fw.commandFrames.last())
+        h.fw.emitFileOpsFrame(h.fw.accelFrame(state = 0))
+        runCurrent()
+        assertEquals(storedOffset, run.await()?.offset)
+
+        // Firmware older than the calibration never answers.
+        val silent = async { h.session.readAccelCal() }
+        runCurrent()
+        advanceTimeBy(AccelSixFace.READ_TIMEOUT_MS)
+        runCurrent()
+        assertNull(silent.await())
     }
 }

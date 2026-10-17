@@ -155,6 +155,10 @@
  "size": 41,
  "notes": "PadCalStatusData behind 0xD0 (#1600 phase 5); frame = 41 B"},
  {
+ "file": "fileops/accelcal_0xD1_40.bin",
+ "size": 41,
+ "notes": "AccelCalStatusData behind 0xD1 (#1629); frame = 41 B"},
+ {
  "file": "commands/cmd05_simconfig_16.bin",
  "size": 17,
  "notes": "sim config; mass is GRAMS on the wire (OC /1000 -> SimConfigData.mass_kg)"},
@@ -234,6 +238,10 @@
  "file": "commands/cmd62_sensorcal_18.bin",
  "size": 19,
  "notes": "SensorCalApplyData"},
+ {
+ "file": "commands/cmd76_accelcal_12.bin",
+ "size": 13,
+ "notes": "AccelCalApplyData"},
  {
  "file": "commands/cmd64_imuorient_auto.bin",
  "size": 2,

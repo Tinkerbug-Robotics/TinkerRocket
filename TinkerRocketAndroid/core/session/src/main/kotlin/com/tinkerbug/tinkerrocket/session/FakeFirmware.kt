@@ -7,6 +7,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
+import com.tinkerbug.tinkerrocket.protocol.AccelCalStatus
 import com.tinkerbug.tinkerrocket.protocol.PadCalStatus
 import com.tinkerbug.tinkerrocket.protocol.SensorCalStatus
 
@@ -358,6 +359,33 @@ public class FakeFirmware(
     }
 
     private var padCalTimeUs = 0L
+
+    /**
+     * `[0xD1][AccelCalStatusData 40 B]` six-face accelerometer calibration
+     * status (#1629).  [faceState] is the raw ACC_FACE_* value (0 idle,
+     * 1 measuring, 2 done, 3 failed); the fields left out stay 0.
+     */
+    public fun accelCalStatusFrame(
+        flags: Int = 0,
+        faceState: Int = 0,
+        offset: List<Float> = listOf(0f, 0f, 0f),
+        faceMean: List<Float> = listOf(0f, 0f, 0f),
+        faceSd: List<Float> = listOf(0f, 0f, 0f),
+        faceN: Int = 0,
+    ): ByteArray {
+        val p = ByteArray(1 + AccelCalStatus.SIZE)
+        p[0] = 0xD1.toByte()
+        p[1] = flags.toByte()
+        p[2] = faceState.toByte()
+        for (i in 0 until 3) {
+            writeF32(p, 3 + 4 * i, offset[i])
+            writeF32(p, 15 + 4 * i, faceMean[i])
+            writeF32(p, 27 + 4 * i, faceSd[i])
+        }
+        p[39] = faceN.toByte()
+        p[40] = (faceN ushr 8).toByte()
+        return p
+    }
 
     /** `[0xAA][start f32][step f32][n u8][rssi i8 × n]` scan-result frame. */
     public fun scanFrame(startMhz: Float, stepKhz: Float, rssiDbm: List<Int>): ByteArray {
