@@ -217,6 +217,34 @@ endif()
 # tracking line every 5 s, and a cold start (erst,Soft,PVTData+SatData) after
 # the setup at each boot, so a simulated sky is not searched with the real
 # sky's time and ephemerides.
+#
+# The rig replay (#1600: -DTR_SIM_REPLAY_BLOB=FILE, TR_Sensor_Collector_Sim/
+# CMakeLists.txt) plays a flight's sensors against the receiver's GPS time,
+# which only two receivers give it: the M1's LC86G (its timed fixes) and the
+# mosaic-only image's mosaic-G5 (the raw-GNSS filter's timed epochs, which its
+# GNSS task drains). Any other build would play the pad for ever, so it is
+# refused. On the mosaic-only image a replay build
+#   - cold-starts the receiver at each boot, as TR_BENCH_MOSAIC_COLD_START
+#     does (the LC86G's replay build does its own,
+#     TR_GNSSReceiverLC86_Serial/CMakeLists.txt): the rig's sky is another
+#     day and place than the one the receiver last tracked, and every good rig
+#     capture of the mosaic was cold-started first;
+#   - tells main.cpp it flies the rig's sky (TR_RAW_NAV_RIG_REPLAY): the
+#     receiver's broadcast ionosphere wins over the app's or NVS's, whatever
+#     their days (raw_iono_rule.h offerRigReplay), and the console carries the
+#     navigation state the rig's scorer reads (tools/rig_replay/score_v9.py).
+if(TR_SIM_REPLAY_BLOB)
+    if(TR_GNSS_MOSAIC AND NOT _tr_mosaic_rawnav)
+        message(FATAL_ERROR "TR_SIM_REPLAY_BLOB on the mosaic-only image takes its clock from the raw-GNSS filter's timed epochs: build it with the filter (no -DTR_RAW_GNSS_SHADOW=0)")
+    elseif(NOT TR_GNSS_MOSAIC AND NOT TR_BOARD_M1)
+        message(FATAL_ERROR "TR_SIM_REPLAY_BLOB needs a receiver whose time sets the replay's clock: the M1's LC86G (-DTR_BOARD_M1=1) or the mosaic-only image (-DTR_GNSS_MOSAIC=1 on a V8 or V9)")
+    endif()
+    if(TR_GNSS_MOSAIC)
+        set(TR_BENCH_MOSAIC_COLD_START ON)
+        add_compile_definitions(TR_RAW_NAV_RIG_REPLAY=1)
+        message(STATUS "flight_computer: RIG REPLAY of the mosaic-only image (TR_RAW_NAV_RIG_REPLAY=1): the receiver cold-starts at boot, its broadcast ionosphere wins")
+    endif()
+endif()
 foreach(_v TR_BENCH_MOSAIC_CN0 TR_BENCH_MOSAIC_COLD_START)
     if(${_v} AND NOT TR_GNSS_MOSAIC)
         message(FATAL_ERROR "${_v} is for the mosaic-only image (-DTR_GNSS_MOSAIC=1 on a V8 or V9)")
@@ -265,8 +293,10 @@ foreach(_v ${_tr_cache_vars})
         set(TR_BENCH_SUFFIX "-bench")
     endif()
 endforeach()
+# A rig replay image (TR_SIM_REPLAY_BLOB) plays a canned flight from boot as a
+# sim, every pyro dry: the last image to take for the flight one.
 if(DEFINED TR_RAW_GNSS_IRAM OR TR_LOOP_PROFILE OR TR_HEADING_FIT_BENCH OR TR_I2S_TX_MONITOR OR TR_TEST_SETUP_FAIL
-   OR TR_GNSS_BENCH_COLD_START OR TR_GNSS_COCOM_DIAG OR TR_GNSS_RATE_HZ)
+   OR TR_GNSS_BENCH_COLD_START OR TR_GNSS_COCOM_DIAG OR TR_GNSS_RATE_HZ OR TR_SIM_REPLAY_BLOB)
     set(TR_BENCH_SUFFIX "-bench")
 endif()
 if(TR_BENCH_SUFFIX)

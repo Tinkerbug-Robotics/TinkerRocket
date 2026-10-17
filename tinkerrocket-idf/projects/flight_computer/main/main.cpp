@@ -3227,7 +3227,13 @@ static const char* ionoName(uint8_t src)
 // sources (raw_iono_rule.h), applied only when it changes.
 static void rawIonoOffer(const gnss_raw::ShadowIono& io, bool from_rx, gnss_raw::RawGnssMeasStage& st)
 {
+#if TR_RAW_NAV_RIG_REPLAY
+    // The rig replay: the rig's sky is a recorded day's, so its broadcast
+    // ionosphere wins over the app's whatever their days
+    if (!RawIonoRule::offerRigReplay(raw_iono, io.raw, io.gps_day, from_rx)) return;
+#else
     if (!RawIonoRule::offer(raw_iono, io.raw, io.gps_day, from_rx)) return;
+#endif
     st.setIono(io);
     raw_iono_chosen.write(io);
 }
@@ -12378,6 +12384,42 @@ static void loop_fc()
                                        ism6_fresh_kc,    // #1108 imu_healthy
                                        // GnssAscentGate: no apogee vote until admitted
                                        GnssAscentGate::gnssVotes(gnss_admit_state));
+#if TR_RAW_NAV_RIG_REPLAY
+            // The rig replay of the mosaic-only image: the navigation state
+            // the voters just read, its attitude too, at the replayed flight's
+            // own time -- 10 a second in flight, once a second on the ground
+            // -- so a run's console alone scores the flight phase by phase
+            // against its truth (tools/rig_replay/score_v9.py). The votes:
+            // velocity, barometer, GPS, pitch; then the call and the backstop.
+            if (sensor_collector.isReplay())
+            {
+                static uint32_t replay_nav_ms = 0;
+                if (now_ms - replay_nav_ms >= (rocket_state == INFLIGHT ? 100u : 1000u))
+                {
+                    replay_nav_ms = now_ms;
+                    SensorCollectorSim::ReplayStatus rs;
+                    sensor_collector.replayStatus(rs);
+                    float q[4];
+                    ekf.getQuaternion(q);
+                    ESP_LOGI(TAG, "[REPLAY-NAV] t=%+.3f%s st=%u ekf=%d vote=%d q=(%.5f,%.5f,%.5f,%.5f) "
+                                  "pos=(%.2f,%.2f,%.2f) vel=(%.3f,%.3f,%.3f) baro=(%.2f,%+.2f) gps_vu=%+.2f "
+                                  "votes=%d%d%d%d call=%d backstop=%d burnout=%d gps_admitted=%d guard=%d mach=%d",
+                             (double)rs.t_s, rs.have_t ? "" : "(pad, no clock)", (unsigned)rocket_state,
+                             ekf_healthy ? 1 : 0, ekf_may_vote ? 1 : 0,
+                             (double)q[0], (double)q[1], (double)q[2], (double)q[3],
+                             (double)imu_pos[0], (double)imu_pos[1], (double)imu_pos[2],
+                             (double)imu_vel[0], (double)imu_vel[1], (double)imu_vel[2],
+                             (double)pressure_altitude_m, (double)kinematics.d_alt_est_,
+                             (double)gnss_latest_si.vel_u,
+                             kinematics.vel_u_apogee_flag ? 1 : 0, kinematics.alt_apogee_flag ? 1 : 0,
+                             kinematics.gps_apogee_flag ? 1 : 0, kinematics.pitch_apogee_flag ? 1 : 0,
+                             kinematics.apogee_flag ? 1 : 0, kinematics.apogee_backstop_flag ? 1 : 0,
+                             burnout_detected ? 1 : 0,
+                             gnss_admit_state.phase == GnssAscentGate::Phase::Admitted ? 1 : 0,
+                             raw_guard.latched ? 1 : 0, mach_locked_out ? 1 : 0);
+                }
+            }
+#endif
 #else
             // KEEP IN STEP with the TR_RAW_NAV_MOSAIC copy above: it passes
             // ekf_may_vote (the raw vote guard) where this passes ekf_healthy,

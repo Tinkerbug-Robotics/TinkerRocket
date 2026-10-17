@@ -42,6 +42,7 @@ struct FakeReceiver
     uint32_t saved_baud = 115200;
     bool saved_streaming = false;
     int saves = 0;
+    uint32_t reset_dark_ms = 9000;   // erst: from its reply to its boot
     std::vector<std::string> received;
 
     void reboot(uint32_t at_ms)
@@ -142,6 +143,15 @@ struct Harness
             reply("$R: " + t);
             prompt();
             rx.baud = static_cast<uint32_t>(std::stoul(t.substr(std::strlen("scs, COM1, baud"))));
+            return;
+        }
+        if (startsWith(t, "erst"))
+        {
+            // a soft reset: the reply, then dark while it boots again on its
+            // saved setup (Reference Guide erst: the configuration is kept)
+            reply("$R: " + t);
+            prompt();
+            rx.reboot(now + rx.reset_dark_ms);
             return;
         }
         if (startsWith(t, "sso, Stream7, COM1")) rx.streaming = true;
@@ -302,6 +312,32 @@ TEST(MosaicLink, AOneOffCommandGoesOnceWhileRunning)
     EXPECT_TRUE(h.link.queueCommand("esoc, {cd}, BDSNav"));
     h.run(100);
     EXPECT_EQ(h.count("esoc, COM1, BDSNav"), 1u);
+}
+
+TEST(MosaicLink, AColdStartIsSentOnceThenTheReceiverIsSetUpAgain)
+{
+    // The rig replay's cold start (TR_BENCH_MOSAIC_COLD_START, on in every
+    // replay build of the mosaic-only image): queued once the setup is done,
+    // the receiver replies, goes dark while it resets, and comes back on its
+    // saved setup -- found and set up again, not saved twice, erst not resent
+    Harness h;
+    h.start();
+    h.run(5000);
+    ASSERT_TRUE(h.link.running());
+    ASSERT_EQ(h.link.setups(), 1u);
+    EXPECT_TRUE(h.link.queueCommand("erst,Soft,PVTData+SatData"));
+    h.run(20000);
+    EXPECT_EQ(h.count("erst,Soft,PVTData+SatData"), 1u);
+    EXPECT_EQ(h.link.oneOffsSent(), 1u);
+    EXPECT_EQ(h.link.oneOffsRefused(), 0u);
+    ASSERT_TRUE(h.link.running());
+    EXPECT_EQ(h.link.relinks(), 1u);
+    EXPECT_EQ(h.link.setups(), 2u);
+    EXPECT_EQ(h.rx.saves, 1);
+    EXPECT_TRUE(h.rx.streaming);
+    // the setup after it went out in full again
+    EXPECT_EQ(h.count("sso, Stream7"), 2u);
+    EXPECT_EQ(h.count("srd, High, Unlimited"), 2u);
 }
 
 TEST(MosaicLink, NoReceiverMeansNoSetup)

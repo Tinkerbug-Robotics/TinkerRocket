@@ -99,3 +99,91 @@ TEST(RawIonoRule, TheReceiversSetAcrossDays)
     EXPECT_EQ(3u, st.sets);
     EXPECT_EQ(17001, st.gps_day);
 }
+
+// ---- the rig replay (offerRigReplay: a TR_SIM_REPLAY_BLOB build of the
+// mosaic-only image). The rig's sky is a recorded day: rp5_0829's broadcast
+// file is GPS day 17,037 (2026-08-29), the V9's NVS set from an October
+// download is about 49 days later.
+
+namespace
+{
+constexpr uint16_t kRigDay = 17037;
+constexpr uint16_t kNvsDay = 17086;   // 2026-10-17
+}  // namespace
+
+TEST(RawIonoRuleRig, TheFlightRuleKeepsALaterAppSetOverTheRigsOwn)
+{
+    // why the rig needs its own rule: by the date rule the NVS set from the
+    // real sky's day beats the rig receiver's GPSIon
+    RawIonoRule::State st;
+    ASSERT_TRUE(RawIonoRule::offer(st, kA, kNvsDay, kApp));
+    EXPECT_FALSE(RawIonoRule::offer(st, kB, kRigDay, kRx));
+    EXPECT_FALSE(st.from_rx);
+}
+
+TEST(RawIonoRuleRig, TheRigReceiversSetReplacesALaterAppSet)
+{
+    RawIonoRule::State st;
+    // the NVS set at boot, before the receiver has heard GPSIon
+    ASSERT_TRUE(RawIonoRule::offerRigReplay(st, kA, kNvsDay, kApp));
+    EXPECT_FALSE(st.from_rx);
+    // the rig's, whatever its day
+    EXPECT_TRUE(RawIonoRule::offerRigReplay(st, kB, kRigDay, kRx));
+    EXPECT_TRUE(st.from_rx);
+    EXPECT_EQ(kRigDay, st.gps_day);
+    EXPECT_EQ(0, std::memcmp(st.raw, kB, 8));
+    EXPECT_EQ(2u, st.sets);
+    // offered every pass after: never applied again
+    for (int i = 0; i < 10; ++i) EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kB, kRigDay, kRx));
+    EXPECT_EQ(2u, st.sets);
+}
+
+TEST(RawIonoRuleRig, AnAppSetNeverDisplacesTheRigReceivers)
+{
+    RawIonoRule::State st;
+    ASSERT_TRUE(RawIonoRule::offerRigReplay(st, kB, kRigDay, kRx));
+    // a pad calibration sent mid-run, of any day
+    EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kA, kNvsDay, kApp));
+    EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kC, kRigDay, kApp));
+    EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kC, kRigDay - 1, kApp));
+    EXPECT_TRUE(st.from_rx);
+    EXPECT_EQ(0, std::memcmp(st.raw, kB, 8));
+    EXPECT_EQ(1u, st.sets);
+}
+
+TEST(RawIonoRuleRig, WithoutTheReceiversTheAppSetStands)
+{
+    // GPSIon comes once every 12.5 min (subframe 4 page 18): many a 180 s pad
+    // gives none, and the app's set is what there is
+    RawIonoRule::State st;
+    EXPECT_TRUE(RawIonoRule::offerRigReplay(st, kA, kNvsDay, kApp));
+    EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kA, kNvsDay, kApp));
+    // a newer app set by the date rule, as on the real sky
+    EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kC, kNvsDay - 1, kApp));
+    EXPECT_TRUE(RawIonoRule::offerRigReplay(st, kC, kNvsDay + 1, kApp));
+    EXPECT_EQ(2u, st.sets);
+}
+
+TEST(RawIonoRuleRig, TheReceiversOwnSetsKeepTheDateRule)
+{
+    RawIonoRule::State st;
+    ASSERT_TRUE(RawIonoRule::offerRigReplay(st, kA, kRigDay, kRx));
+    EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kB, kRigDay - 1, kRx));   // an older one
+    EXPECT_TRUE(RawIonoRule::offerRigReplay(st, kB, kRigDay, kRx));        // changed the same day
+    EXPECT_TRUE(RawIonoRule::offerRigReplay(st, kC, kRigDay + 1, kRx));
+    EXPECT_EQ(3u, st.sets);
+}
+
+TEST(RawIonoRuleRig, TheReceiverConfirmingTheAppsBytesTakesItOverWithoutApplyingIt)
+{
+    // an app set of the rig's own day (the scenario's file loaded through the
+    // app): the receiver's identical GPSIon changes nothing the stage uses,
+    // and from then on an app set no longer displaces it
+    RawIonoRule::State st;
+    ASSERT_TRUE(RawIonoRule::offerRigReplay(st, kA, kRigDay, kApp));
+    EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kA, kRigDay, kRx));
+    EXPECT_TRUE(st.from_rx);
+    EXPECT_EQ(1u, st.sets);
+    EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kB, kNvsDay, kApp));
+    EXPECT_EQ(0, std::memcmp(st.raw, kA, 8));
+}
