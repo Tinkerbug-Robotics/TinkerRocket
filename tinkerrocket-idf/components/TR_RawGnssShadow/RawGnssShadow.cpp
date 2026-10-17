@@ -1169,10 +1169,20 @@ void RawGnssShadow::jobDvCheck(double age)
         model2[k] = s * s + cfg_.dv_floor_mps * cfg_.dv_floor_mps + dyn * dyn;
         dv_rows_[k].s = std::sqrt(model2[k] + 2.0 * nvar);
     }
+    // a satellite on hold stays out of the fit (its slow bias would pass into the receiver's change, and
+    // the epoch's test would hold the whole sky for it): judged against the rest
+    for (int k = 0; k < nr; ++k)
+    {
+        const RawMeas& mk = built_.meas[dv_rows_[k].im];
+        bool held = false;
+        for (int h = 0; h < n_dv_hold_ && !held; ++h)
+            held = dv_hold_[h].sys == mk.sys && dv_hold_[h].prn == mk.prn && dv_hold_[h].until >= te;
+        dv_rows_[k].in = !held;
+    }
     // four unknowns and one to spare
     dvc::Fit f;
     if (nr >= 5)
-        f = dvc::fit(dv_rows_, nr, cfg_.dv_sat_k);
+        f = dvc::fit(dv_rows_, nr, cfg_.dv_sat_k, 6, true);
     if (noise)
     {
         // this epoch's excess, the median's (half the rows can be off on their own): a change's residual has

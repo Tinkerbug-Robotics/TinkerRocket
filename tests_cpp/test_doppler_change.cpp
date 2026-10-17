@@ -243,6 +243,37 @@ TEST(DopplerChange, SixStayInTheFit)
     EXPECT_EQ(f.nout, 1);
 }
 
+TEST(DopplerChange, ASatelliteAlreadyOutStaysOutOfTheFit)
+{
+    // a satellite on hold drifting 0.3 m/s an epoch (6 sigmas): kept out, the receiver's change is the rest's
+    const double w[3] = {0.0, 0.0, 0.0};
+    auto r = rowsFor(w, 0.0, 10);
+    for (dvc::Row& x : r)
+        x.in = true;
+    r[2].z += 0.3;
+    r[2].in = false;
+    const dvc::Fit f = dvc::fit(r.data(), 10, 5.0, 6, true);
+    ASSERT_TRUE(f.ok);
+    EXPECT_FALSE(r[2].in);
+    EXPECT_EQ(f.nin, 9);
+    for (int a = 0; a < 3; ++a)
+        EXPECT_NEAR(f.x[a], 0.0, 1e-9);
+    EXPECT_NEAR(r[2].e, 6.0, 1e-6);      // judged against the rest
+    // taken back in, it pulls the fit and its own residual shrinks
+    auto r2 = rowsFor(w, 0.0, 10);
+    r2[2].z += 0.3;
+    const dvc::Fit f2 = dvc::fit(r2.data(), 10, 5.0);
+    EXPECT_TRUE(r2[2].in);
+    EXPECT_LT(std::fabs(r2[2].e), 6.0);
+    // with under five left in, every row goes back in
+    auto r3 = rowsFor(w, 0.0, 6);
+    for (dvc::Row& x : r3)
+        x.in = false;
+    r3[0].in = r3[1].in = r3[2].in = r3[3].in = true;
+    const dvc::Fit f3 = dvc::fit(r3.data(), 6, 5.0, 6, true);
+    EXPECT_EQ(f3.nin, 6);
+}
+
 TEST(DopplerChange, UnderFourRowsOrNoVelocityIsNoFit)
 {
     const double w[3] = {0.1, 0.2, 0.3};

@@ -162,14 +162,26 @@ inline void residuals(Row* r, int n, const double x[4])
 // min_in rows are in, the one most of its own 1-sigmas off the fit, past k,
 // is left out and the rest fitted again (the vertical check's way,
 // TR_RawGnssEKF::verticalFit). Every row's e is then off the last fit, in or
-// out. Not ok under four rows or with no velocity in the geometry.
-inline Fit fit(Row* r, int n, double k, int min_in = 6)
+// out. keep_out: the rows whose in is false at the call start out of it --
+// satellites already found stale, whose slow bias would otherwise pass into
+// the receiver's change -- unless that leaves under five in. Not ok under
+// four rows or with no velocity in the geometry.
+inline Fit fit(Row* r, int n, double k, int min_in = 6, bool keep_out = false)
 {
     Fit f;
     f.n = n;
-    for (int i = 0; i < n; ++i)
-        r[i].in = true;
-    f.nin = n;
+    int nin = 0;
+    if (keep_out)
+        for (int i = 0; i < n; ++i)
+            nin += r[i].in ? 1 : 0;
+    if (!keep_out || nin < 5)
+    {
+        for (int i = 0; i < n; ++i)
+            r[i].in = true;
+        nin = n;
+    }
+    f.nin = nin;
+    f.nout = n - nin;
     for (;;)
     {
         if (!solve(r, n, f.x, f.C))
