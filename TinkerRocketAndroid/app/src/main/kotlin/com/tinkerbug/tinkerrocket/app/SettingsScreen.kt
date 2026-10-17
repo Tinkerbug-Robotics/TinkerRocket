@@ -184,6 +184,29 @@ fun SettingsScreen(
     val imuRateMaxHz: Int? =
         if (connected && haveConfig) reportedImuRateMax ?: RocketProfile.IMU_RATE_BASELINE_MAX_HZ
         else null
+    // The GNSS log setting the rocket reports ("glog", cmd 79): null on
+    // firmware that has no such setting, and the receiver its FC found.
+    val reportedGnssLog: Int? by remember(session) {
+        val f: kotlinx.coroutines.flow.Flow<Int?> =
+            session?.rocketConfig
+                ?.map { it?.gnssLogSetting }
+                ?.distinctUntilChanged()
+                ?: kotlinx.coroutines.flow.flowOf(null)
+        f
+    }.collectAsState(initial = null)
+    val fcGnss: String? by remember(session) {
+        val f: kotlinx.coroutines.flow.Flow<String?> =
+            session?.identity
+                ?.map { it.fcGnss }
+                ?.distinctUntilChanged()
+                ?: kotlinx.coroutines.flow.flowOf(null)
+        f
+    }.collectAsState(initial = null)
+    // The connected rocket's mosaic-G5 is logging its detailed data, and that
+    // is what holds the IMU at 4k.
+    val gnssLogHoldsImuAt4k = connected && haveConfig && fcGnss == "mosaic-G5" &&
+        reportedGnssLog == RocketProfile.GNSS_LOG_DETAILED &&
+        (imuRateMaxHz ?: RocketProfile.IMU_RATE_BASELINE_MAX_HZ) <= RocketProfile.IMU_RATE_BASELINE_MAX_HZ
     val inflight by remember(session) {
         session?.telemetry?.map { it.state == "INFLIGHT" }?.distinctUntilChanged()
             ?: kotlinx.coroutines.flow.flowOf(false)
@@ -538,7 +561,12 @@ fun SettingsScreen(
                 "Rate", shown.map { it.first }, shown.indexOfFirst { it.second == active.imuRateHz },
                 { i -> edit(ConfigGroup.IMU_RATE) { it.copy(imuRateHz = shown[i].second) } },
             )
-            Caption(imuRateCaption(active.imuRateHz, imuRateMaxHz))
+            Caption(imuRateCaption(active.imuRateHz, imuRateMaxHz, gnssLogHoldsImuAt4k))
+        }
+
+        // ── GNSS Logging (iOS General-tab section, under the rate) ───────
+        GnssLogSection(active.gnssLogSetting, connected, haveConfig, reportedGnssLog, fcGnss, inflight) { v ->
+            edit(ConfigGroup.GNSS_LOG) { it.copy(gnssLogSetting = v) }
         }
 
         // ── Camera (iOS Camera tab; raw-int field replaced by the picker) ─
@@ -1766,10 +1794,15 @@ private val IMU_RATE_CHOICES: List<Pair<String, Int>> = listOf(
 )
 
 /** iOS `SettingsView.imuRateFooter`. */
-private fun imuRateCaption(rate: Int, maxHz: Int?): String {
+private fun imuRateCaption(rate: Int, maxHz: Int?, gnssLogHoldsImuAt4k: Boolean = false): String {
+    // The mosaic-G5's detailed GNSS log is what holds this rocket at 4k.
+    val gnssHint = if (gnssLogHoldsImuAt4k) " The 8k rates need GNSS Logging set to Reduced (below)." else ""
     if (maxHz != null && RocketProfile.imuRatePeakHz(rate) > maxHz) {
         return "This rocket logs at up to $maxHz Hz. It keeps its current rate until you " +
-            "pick one it can fly."
+            "pick one it can fly." + gnssHint
+    }
+    if (gnssHint.isNotEmpty()) {
+        return "With the mosaic-G5 logging its detailed GNSS data, this rocket logs at up to 4k." + gnssHint
     }
     return when (rate) {
         RocketProfile.IMU_RATE_DYNAMIC ->
@@ -1788,6 +1821,62 @@ private fun imuRateCaption(rate: Int, maxHz: Int?): String {
                 "loop is unaffected. 8k fills the log twice as fast as 4k. Applies on the " +
                 "pad — never mid-flight."
     }
+}
+
+/**
+ * GNSS log, cmd 79 (iOS General-tab "GNSS Logging" section): what the rocket
+ * logs of a Septentrio mosaic-G5's data, all of it with the IMU at most 4k or
+ * its position and once-a-second raw measurements with the 8k rates open.
+ * Beside the rate because it moves the rate's limit; the rate menu follows
+ * the rocket's `irmax`. Locked while flying, and until the rocket says it has
+ * the setting.
+ */
+@Composable
+private fun GnssLogSection(
+    setting: Int,
+    connected: Boolean,
+    haveConfig: Boolean,
+    reported: Int?,
+    receiver: String?,
+    inflight: Boolean,
+    onSelect: (Int) -> Unit,
+) {
+    Section("GNSS Logging") {
+        GatedControls(enabled = !connected || (reported != null && !inflight)) {
+            SegmentedPicker(listOf("Detailed", "Reduced"), setting.coerceIn(0, 1), onSelect)
+        }
+        Caption(gnssLogCaption(setting, connected, haveConfig, reported, receiver, inflight))
+    }
+}
+
+/** iOS `SettingsView.gnssLogFooter`. */
+private fun gnssLogCaption(
+    setting: Int,
+    connected: Boolean,
+    haveConfig: Boolean,
+    reported: Int?,
+    receiver: String?,
+    inflight: Boolean,
+): String {
+    if (connected) {
+        if (inflight) return "Locked while the rocket is flying."
+        if (haveConfig && reported == null) {
+            return "This rocket’s firmware doesn’t have this setting. Update it to use this."
+        }
+    }
+    var text = if (setting == RocketProfile.GNSS_LOG_REDUCED) {
+        "Reduced: logs the mosaic-G5’s position 20 times a second and its raw measurements " +
+            "once a second, which leaves room for the 8k IMU rates."
+    } else {
+        "Detailed: logs all of the mosaic-G5’s data, raw measurements included, 20 times a " +
+            "second. That fills the log about as fast as the IMU at 4k, so the IMU logs at up to 4k."
+    }
+    text += " The receiver’s own microSD card keeps all of its data either way."
+    if (connected && receiver != null && receiver != "mosaic-G5") {
+        text = "This rocket’s receiver is the $receiver, not a Septentrio mosaic-G5, so this " +
+            "changes nothing on it. " + text
+    }
+    return text
 }
 
 /**

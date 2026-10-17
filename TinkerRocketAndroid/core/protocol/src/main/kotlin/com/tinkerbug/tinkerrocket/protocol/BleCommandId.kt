@@ -166,4 +166,14 @@ public object BleCommandId {
      * samples and no MEASURING before it.
      */
     public const val ACC_FACE_MEASURE: Int = 78
+
+    /**
+     * GNSS log: `[setting u8]` — 0 detailed (all of a Septentrio mosaic-G5's
+     * data in the log, the IMU at most 4k), 1 reduced (its position at 20 Hz
+     * and raw measurements once a second, the 8k rates open). The out
+     * computer relays it to the flight computer, which keeps it in its NVS,
+     * reports it as the config readback's `glog`, and moves `irmax` with it.
+     * Firmware that predates it ignores it.
+     */
+    public const val GNSS_LOG: Int = 79
 }

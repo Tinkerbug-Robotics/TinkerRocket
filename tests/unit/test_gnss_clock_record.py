@@ -78,6 +78,15 @@ def test_the_line_places_an_epoch_as_mcuat_does():
     assert pfd.gnss_clock_mcu_us(pfd.decode_gnss_clock(record(flags=0x02)), GPS0 + 1.0) is None
 
 
+def test_pps_flag_decodes():
+    # GCL_PPS: the V9's line, fitted to the mosaic-G5's 1PPS edges on GPIO2
+    # rather than to when sentences arrived, so it takes out no latency
+    assert pfd.GNSS_CLOCK_FLAGS["pps"] == 0x04
+    rec = pfd.decode_gnss_clock(record(flags=0x07))
+    assert rec["pps"] and rec["valid"] and rec["started"] and rec["latency_s"] == 0.0
+    assert not pfd.decode_gnss_clock(record())["pps"]     # the LC86G's, fitted to $PQTMPVT
+
+
 def test_wrong_size_is_not_decoded():
     assert pfd.decode_gnss_clock(b"\x00" * 67) is None
     assert pfd.decode_gnss_clock(b"\x00" * 69) is None

@@ -766,6 +766,11 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         }
         else
         {
+#if defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+            // The poll task runs at twice the navigation rate of the receiver
+            // found: 18 Hz for the u-blox, 20 for the mosaic-G5.
+            GNSS_UPDATE_RATE = gnss_receiver.updateRateHz();
+#endif
             ESP_LOGI(SC_TAG, "GNSS found and initialized");
             // Per-satellite reports (UBX-NAV-SAT) are enabled inside the
             // u-blox driver's begin() now — they feed the GNSS_SAT_MSG flight
@@ -773,6 +778,8 @@ void SensorCollector::begin(uint8_t imu_execution_core)
             // longer has an enable step of its own.
         }
     }
+
+    gnss_begun_ = true;
 
     // TODO Calibrate low and high g accel
     
@@ -790,10 +797,19 @@ void SensorCollector::startPollingTask(uint8_t imu_execution_core)
         &pollIMUTaskHandle,  // Task handle
         imu_execution_core); // Core to run on
 
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO)
+    // The mosaic-G5's path from here (the SBF parser, the PPS clock fit, a
+    // console line with floats) runs deeper than the NMEA drivers'; 8 kB keeps
+    // a wide margin, and the P4 has internal RAM to spare. The V9 image may
+    // find a mosaic, so it takes the same.
+    constexpr uint32_t kGnssPollStack = 8192;
+#else
+    constexpr uint32_t kGnssPollStack = 4096;
+#endif
     xTaskCreatePinnedToCore(
         pollGNSSdata,        // Task function
         "Poll GNSS Data",    // Task name
-        4096,                // Stack size (GNSS serial parsing only)
+        kGnssPollStack,      // Stack size (GNSS serial parsing only)
         this,                // Task parameter
         3,                   // Priority (above I2C sender at 2, below IMU at 4)
         &pollGNSSTaskHandle, // Task handle
@@ -1274,7 +1290,8 @@ void SensorCollector::pollGNSSdata(void* parameter)
         const uint32_t gnss_elapsed = time_us() - gnss_t0;
         self->pt_gnss_calls++;
 
-#if defined(TR_GNSS_COCOM_DIAG) && TR_GNSS_COCOM_DIAG && !(defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86)
+#if defined(TR_GNSS_COCOM_DIAG) && TR_GNSS_COCOM_DIAG && !(defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86) \
+    && !(defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC)
         // ~1 Hz, and after the poll so the NAV-PVT cache is fresh. Deliberately
         // outside the timing accounting above: this is diagnostic load and
         // should not be charged to the GNSS parse budget it would distort.
@@ -1453,9 +1470,69 @@ bool SensorCollector::getGNSSRtcmFrame(uint8_t* out, size_t cap, size_t& len,
     // No semaphore: the driver's ring is safe between the poll task and us.
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.pollRtcmFrame(out, cap, len, time_us);
+#elif (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO)
+    // SBF blocks, through the driver's ring like the LC86G's frames (none
+    // while the V9 image flies a u-blox).
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.pollRawFrame(out, cap, len, time_us);
 #else
     (void)out; (void)cap; (void)len; (void)time_us;
     return false;
+#endif
+}
+
+void SensorCollector::setGNSSPpsPin(int8_t pin)
+{
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO)
+    gnss_receiver.setPpsPin(pin);
+#else
+    (void)pin;
+#endif
+}
+
+void SensorCollector::setGNSSMosaicRate(uint8_t rate_hz)
+{
+#if defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+    // The mosaic build passes its rate as GNSS_UPDATE_RATE; the V9 image's
+    // GNSS_UPDATE_RATE is the u-blox's.
+    gnss_receiver.setMosaicRateHz(rate_hz);
+#else
+    (void)rate_hz;
+#endif
+}
+
+void SensorCollector::requestGNSSNavResend()
+{
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO)
+    // An atomic flag: the GNSS poll task sends the command.
+    if (use_gnss && gnss_online_) gnss_receiver.requestNavResend();
+#endif
+}
+
+uint8_t SensorCollector::gnssType() const
+{
+    if (!gnss_begun_ || !isGnssOnline()) return GNSS_TYPE_NONE;
+#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+    return GNSS_TYPE_LC86G;
+#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    return GNSS_TYPE_MOSAIC;
+#elif defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+    return gnss_receiver.type();
+#else
+    return GNSS_TYPE_UBLOX;
+#endif
+}
+
+uint8_t SensorCollector::gnssLastBootType()
+{
+#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+    return GNSS_TYPE_LC86G;
+#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    return GNSS_TYPE_MOSAIC;
+#elif defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+    return gnss_receiver.rememberedType();
+#else
+    return GNSS_TYPE_UBLOX;
 #endif
 }
 
@@ -1507,6 +1584,9 @@ bool SensorCollector::getGNSSClockLine(GnssClockData& out)
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.takeClockLine(out);   // the driver's queue: no semaphore
+#elif (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO)
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.takeClockLine(out);   // its PPS line (GCL_PPS)
 #else
     (void)out;
     return false;
@@ -1516,6 +1596,9 @@ bool SensorCollector::getGNSSClockLine(GnssClockData& out)
 bool SensorCollector::getGNSSGeoidSeparation(float& sep_m) const
 {
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.geoidSeparationM(sep_m);
+#elif (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO)
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.geoidSeparationM(sep_m);
 #else

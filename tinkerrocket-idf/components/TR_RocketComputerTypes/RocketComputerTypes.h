@@ -920,6 +920,44 @@ static constexpr int8_t magTypeChipSign(uint8_t mag_type, int axis)
                                            : (axis == 0 ? -1 : 1);
 }
 
+// Which GNSS receiver the flight computer talks to.  The build chooses it on
+// most boards (the u-blox on V7-V10, the LC86G on the Beetle); the V9 image
+// finds it at boot, because its J1 takes either the stock u-blox SAM-M10Q
+// carrier or a Septentrio mosaic-G5 harness (TR_Sensor_Collector's
+// TR_GNSS_DRIVER_AUTO, gnss_detect.h).  The FC names it in its FC_IDENTITY
+// push (BoardIdentity.h encodePayload) and the OC relays the name to the apps
+// as fc_identity's "fc_gnss", so the pad shows which receiver the FC found.
+// NONE: no receiver came up (the FC flies GNSS-absent, #557), the FC is in
+// rescue mode, or the FC predates this.
+static constexpr uint8_t GNSS_TYPE_NONE   = 0;
+static constexpr uint8_t GNSS_TYPE_UBLOX  = 1;   // u-blox SAM-M10Q: UBX
+static constexpr uint8_t GNSS_TYPE_MOSAIC = 2;   // Septentrio mosaic-G5: SBF
+static constexpr uint8_t GNSS_TYPE_LC86G  = 3;   // Quectel LC86G (the Beetle): NMEA and RTCM3
+
+// The name each type goes by on the wire and on screen ("" for NONE).
+constexpr const char* gnssTypeName(uint8_t type)
+{
+    return type == GNSS_TYPE_UBLOX  ? "u-blox"
+         : type == GNSS_TYPE_MOSAIC ? "mosaic-G5"
+         : type == GNSS_TYPE_LC86G  ? "LC86G"
+         : "";
+}
+
+// gnssTypeName() read back: NONE for an empty name or one this firmware does
+// not know (a newer FC's receiver), never a guess.
+constexpr uint8_t gnssTypeFromName(const char* name)
+{
+    if (name == nullptr || name[0] == '\0') return GNSS_TYPE_NONE;
+    for (uint8_t t = GNSS_TYPE_UBLOX; t <= GNSS_TYPE_LC86G; t++)
+    {
+        const char* a = gnssTypeName(t);
+        size_t i = 0;
+        while (a[i] != '\0' && a[i] == name[i]) i++;
+        if (a[i] == '\0' && name[i] == '\0') return t;
+    }
+    return GNSS_TYPE_NONE;
+}
+
 // Payload sent with OUT_STATUS_QUERY so the OUT processor can configure
 // its SensorConverter consistently with the FlightComputer.
 typedef struct __attribute__((packed))
@@ -1630,6 +1668,11 @@ static_assert(sizeof(GnssClockData) == 68,
               "GnssClockData must be 68 bytes");
 static constexpr uint8_t GCL_VALID   = 0x01;  // the line answers (mcuAt): 10 s of history
 static constexpr uint8_t GCL_STARTED = 0x02;  // a sample has started the history
+// The line's samples are 1PPS edges on an MCU pin, each paired with its GPS
+// second, not sentence arrivals (the mosaic-G5 on the V9: J1 pin 5). An edge
+// IS its GPS second, so latency_s is 0 and needs no calibration; time_us is
+// the edge that moved the line.
+static constexpr uint8_t GCL_PPS     = 0x04;
 
 // ── PAD_CONTEXT_MSG (0x9E): the pad, written once after launch ──────────────
 // The log's pre-launch ring keeps about 0.5-1 s before ignition, so what was
@@ -2846,7 +2889,18 @@ static constexpr uint8_t ISM6_BATCH_MAX      = 10;
 // bytes.  A frame longer than one chunk (an MSM7 with 14+ satellites of one
 // constellation) goes as consecutive parts with the same time_us; the reader
 // joins them.  No-op on u-blox boards, whose driver emits none.
-static constexpr uint8_t GNSS_RTCM_MSG       = 0x95;  // FC→OC over I2S: GnssRtcmHeader + the GNSS receiver's raw RTCM3 frame
+//
+// On the V9 with a Septentrio mosaic-G5 (TR_GNSS_DRIVER_MOSAIC) the same
+// record carries that receiver's own output instead: every SBF block whose
+// CRC checks, verbatim from "$@" ("$@" vs 0xD3 tells a reader which).  The
+// G5 has no RTCM3 output, and SBF carries more: per signal the pseudorange,
+// carrier phase, Doppler, C/N0 and lock time (MeasEpoch, 20 Hz), the
+// receiver's own noise estimates and multipath corrections (MeasExtra,
+// 20 Hz), its fix (PVTGeodetic, 20 Hz), status at 1 Hz and the navigation
+// data.  The blocks joined in order ARE a standard .sbf file
+// (Data_Analysis/extract_gnss_sbf.py).  A block takes up to 15 parts
+// (GNSS_SBF_MAX_FRAME); MeasEpoch and MeasExtra take 7-9.
+static constexpr uint8_t GNSS_RTCM_MSG       = 0x95;  // FC→OC over I2S: GnssRtcmHeader + the GNSS receiver's own frame (RTCM3 or SBF)
                                                       // (or one part of it), straight to the log.  VARIABLE length.
 
 // FC→OC over I2S: the raw-GNSS shadow filter's state (#1600), 10 Hz while it
@@ -2873,7 +2927,7 @@ static constexpr uint8_t IMU_TEMP_MSG        = 0x9C;  // FC→OC over I2S: Ism6T
                                                       // second; straight to the log.
 static constexpr uint8_t GNSS_CLOCK_MSG      = 0x9D;  // FC→OC over I2S: GnssClockData, the MCU clock against GPS time
                                                       // each time its line moves (~1 Hz); straight to the log.  LC86G
-                                                      // boards only.
+                                                      // boards, and the V9 with a mosaic-G5 (from its 1PPS: GCL_PPS).
 static constexpr uint8_t PAD_CONTEXT_MSG     = 0x9E;  // FC→OC over I2S: PadContextHeader + its kind's body, what a
                                                       // replay needs from the pad, once after launch; straight to the
                                                       // log.  VARIABLE length.
@@ -3105,6 +3159,13 @@ static constexpr uint8_t FIN_CONFIG_MSG          = 0xF3;  // 18-byte FinConfigDa
 // the 44100 Hz I2S link can carry (3840 ≈ 156 of 176 KB/s framed).
 static constexpr uint8_t IMU_RATE_CONFIG_PENDING = 0xF5;  // OC→FC: payload follows as IMU_RATE_CONFIG_MSG
 static constexpr uint8_t IMU_RATE_CONFIG_MSG     = 0xF6;  // 2-byte ImuRateConfigData
+// GNSS log detail (user setting, BLE cmd 79): how much of the mosaic-G5's SBF
+// the FC logs, and so how fast the IMU may run beside it (GnssLogConfigData).
+// 0xA0-0xFD and the 0x90 block are full, 0x80-0x84 are the accelerometer
+// calibration's (#1637, on main after this branch was cut) and 0x9F is held
+// by branches not merged yet, so this pair takes the top of the 0x80 block.
+static constexpr uint8_t GNSS_LOG_CONFIG_PENDING = 0x8E;  // OC→FC: payload follows as GNSS_LOG_CONFIG_MSG
+static constexpr uint8_t GNSS_LOG_CONFIG_MSG     = 0x8F;  // OC→FC: 1-byte GnssLogConfigData
 // Drift-Cast guidance aim point (#435, BLE cmd 28): OC→FC two-phase like the
 // other config pairs.  Payload is byte-for-byte the app's 20-byte
 // {lat f64, lon f64, alt f32} LE frame (GuidancePointData).  0xF7-0xFD were
@@ -3432,6 +3493,88 @@ constexpr uint16_t imuRateResolve(uint16_t setting_hz, bool deployed)
 {
     if (!imuRateIsDynamic(setting_hz)) return setting_hz;
     return deployed ? IMU_RATE_DYNAMIC_POST_HZ : imuRatePeakHz(setting_hz);
+}
+
+// GNSS log detail (GNSS_LOG_CONFIG_MSG payload, BLE cmd 79): what the FC
+// logs of a mosaic-G5's SBF.
+//   DETAILED (the default): every block the receiver sends, as before this
+//     setting. Its raw measurements are about the IMU's size at 3840 Hz, so
+//     the IMU stops there (imuRateMaxForGnss).
+//   REDUCED: PVTGeodetic at 20 Hz, the status and navigation blocks, and the
+//     raw measurements (MeasEpoch, MeasExtra) once a second
+//     (gnss_log_policy.h). The IMU flies the board's own limit, 8k included.
+// The receiver streams the full set either way, to the FC, which parses all
+// of it, and to its own microSD card; only the FC's log is cut. No other
+// receiver has a stream this touches (the u-blox sends no raw data, and the
+// LC86G's RTCM3 is ~0.6 kB/s), so for them the setting changes nothing.
+// Kept like the IMU rate: the OC stores it and relays it, the FC stores it
+// and applies it (never INFLIGHT), and both start a fresh board on DETAILED.
+static constexpr uint8_t GNSS_LOG_DETAILED = 0;
+static constexpr uint8_t GNSS_LOG_REDUCED  = 1;
+
+typedef struct __attribute__((packed))
+{
+    uint8_t setting;  // GNSS_LOG_DETAILED or GNSS_LOG_REDUCED
+} GnssLogConfigData;
+static_assert(sizeof(GnssLogConfigData) == 1, "GnssLogConfigData must be 1 byte");
+
+constexpr bool gnssLogSettingValid(uint8_t setting)
+{
+    return setting == GNSS_LOG_DETAILED || setting == GNSS_LOG_REDUCED;
+}
+
+// For log lines.
+constexpr const char* gnssLogName(uint8_t setting)
+{
+    return setting == GNSS_LOG_DETAILED ? "detailed"
+         : setting == GNSS_LOG_REDUCED  ? "reduced"
+         : "?";
+}
+
+// The fastest IMU rate a board flies with this GNSS receiver and GNSS log
+// setting. The mosaic-G5's SBF blocks (MeasEpoch, MeasExtra and PVTGeodetic
+// at 20 Hz: ~66 kB/s on a 33-satellite sky) share the FC->OC link and the
+// OC's flash with the IMU. At 7680 Hz the link would run at ~92 %
+// (test_i2s_link_budget, budgeted at 130 signals) and the log would outrun
+// the OC's ~310 kB/s flash drain (measured 221 kB/s at 3840 Hz with the SBF
+// on the Goblin's V9, 2026-10-16, and 7680 Hz adds another ~115 kB/s). So
+// with it and the DETAILED log the IMU stops at 3840 Hz. The REDUCED log
+// keeps ~9 kB/s of the SBF, which 7680 Hz has room for (the log at ~94 % of
+// the drain in a guided coast, a u-blox flight's ~91 %), and every other
+// receiver flies the board's own IMU_RATE_MAX_HZ whatever the setting. The FC
+// applies this once its receiver is known and the OC once the FC has named
+// it (FC_IDENTITY). Both still take any IMU setting the board flies, and keep
+// it, and the FC flies imuRateSettingClamp() of it; the OC reports that
+// ("irate") and this limit ("irmax"), so the apps' menus offer only what
+// flies. A gnss_log that is no setting reads as DETAILED: the limit that is
+// safe for every log.
+static constexpr uint16_t IMU_RATE_MAX_HZ_MOSAIC = 3840;
+constexpr uint16_t imuRateMaxForGnss(uint16_t board_max_hz, uint8_t gnss_type,
+                                     uint8_t gnss_log = GNSS_LOG_DETAILED)
+{
+    return (gnss_type == GNSS_TYPE_MOSAIC && gnss_log != GNSS_LOG_REDUCED &&
+            board_max_hz > IMU_RATE_MAX_HZ_MOSAIC)
+               ? IMU_RATE_MAX_HZ_MOSAIC
+               : board_max_hz;
+}
+
+// A setting brought within max_hz: a dynamic mode that does not fit becomes
+// "4k Dynamic", a fixed rate the fastest step at or below max_hz. What the
+// FC flies and the OC reports when the receiver lowers the limit; both keep
+// the setting the user chose in NVS, so a board whose receiver no longer
+// lowers it gets it back. A value that is no setting at all comes back as
+// it went in, for the caller's own validation to refuse.
+constexpr uint16_t imuRateSettingClamp(uint16_t setting_hz, uint16_t max_hz)
+{
+    if (imuRatePeakHz(setting_hz) == 0) return setting_hz;
+    if (imuRateSettingValid(setting_hz, max_hz)) return setting_hz;
+    if (imuRateIsDynamic(setting_hz)) return IMU_RATE_DYNAMIC;
+    uint16_t best = 0;
+    for (uint16_t opt : IMU_RATE_OPTIONS_HZ)
+    {
+        if (opt <= max_hz && opt > best) best = opt;
+    }
+    return best != 0 ? best : setting_hz;
 }
 
 // Pyro trigger modes
@@ -4488,6 +4631,13 @@ static constexpr uint8_t gnssRtcmParts(size_t frame_len)
 }
 static_assert(gnssRtcmParts(GNSS_RTCM_MAX_FRAME) <= 15,
               "GNSS_RTCM_MSG: the part count must fit its nibble");
+
+// The longest SBF block GNSS_RTCM_MSG carries: fifteen full parts (3,285 B).
+// The mosaic-G5's longest block, MeasExtra, is 16 B a signal: 1,812 B at the
+// ~100 signals of an open sky (2026-10-15 spin-rig capture), so ~200 fit.
+static constexpr size_t GNSS_SBF_MAX_FRAME = 15 * GNSS_RTCM_MAX_CHUNK;
+static_assert(gnssRtcmParts(GNSS_SBF_MAX_FRAME) == 15,
+              "GNSS_SBF_MAX_FRAME: fifteen parts, no more");
 
 // Frame: [0xAA][0x55][0xAA][0x55] + type + length + payload + CRC16
 static constexpr size_t MAX_FRAME = 4 + 1 + 1 + MAX_PAYLOAD + 2;

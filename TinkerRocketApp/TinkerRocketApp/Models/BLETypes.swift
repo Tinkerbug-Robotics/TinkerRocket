@@ -255,6 +255,9 @@ struct RocketConfig {
     /// #1485: the fastest IMU rate this rocket flies ("irmax"). nil = firmware
     /// from before the 8k rates, which tops out at 3840 Hz.
     var imuRateMaxHz: UInt16? = nil
+    /// The GNSS log setting ("glog", cmd 79): `RocketProfile.gnssLogDetailed`
+    /// or `.gnssLogReduced`. nil = firmware that has no such setting.
+    var gnssLogSetting: UInt8? = nil
     var loraFreqMHz: Float? = nil
     var loraSF: UInt8? = nil
     var loraBwKHz: Float? = nil

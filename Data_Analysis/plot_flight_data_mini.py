@@ -25,6 +25,7 @@ Usage:
 import sys
 import struct
 import zlib
+import binascii
 import os
 import math
 import numpy as np
@@ -156,8 +157,9 @@ MSG_OUT_STATUS_QUERY  = 0xA0
 MSG_GNSS              = 0xA1
 MSG_GNSS_SAT          = 0x90  # GNSSSatData: per-satellite C/N0 at every GNSS epoch,
                               # variable length 10 + 6*n (first code of the 0x90 block)
-MSG_GNSS_RTCM         = 0x95  # GnssRtcmHeader + a raw RTCM3 frame (or one part of it),
-                              # variable length 5 + up to 219 (LC86G MSM7)
+MSG_GNSS_RTCM         = 0x95  # GnssRtcmHeader + one of the receiver's own frames, verbatim (or one
+                              # part of it): RTCM3 (LC86G) or an SBF block (mosaic-G5);
+                              # variable length 5 + up to 219
 MSG_RAW_GNSS_EKF      = 0x96  # RawGnssEkfData: the raw-GNSS shadow filter, 10 Hz (#1600)
 MSG_PAD_CAL_STATUS    = 0x99  # PadCalStatusData: the pad calibration's progress, 1 Hz on the ground (#1600 phase 5)
 MSG_GNSS_CHECK        = 0x9A  # GnssCheckData: each receiver fix against the IMU, 10 Hz (#1508)
@@ -332,8 +334,11 @@ def decode_gnss_sat(payload):
         "sats":          sats,
     }
 # GNSS_RTCM_MSG: GnssRtcmHeader (time_us u32, part u8: index << 4 | count),
-# then the frame bytes. A frame longer than one record goes as consecutive
-# parts with the same time_us (RocketComputerTypes.h, gnssRtcmParts).
+# then the frame bytes: the receiver's own frames, verbatim -- RTCM3 frames
+# from the Beetle's LC86G, SBF blocks from the V9's mosaic-G5. A frame longer
+# than one record goes as consecutive parts with the same time_us
+# (RocketComputerTypes.h, gnssRtcmParts); join_gnss_rtcm() puts them back
+# together and split_gnss_raw_frames() tells the two kinds apart.
 FMT_GNSS_RTCM_HDR = '<I B'
 GNSS_RTCM_HDR_LEN = struct.calcsize(FMT_GNSS_RTCM_HDR)
 
@@ -354,11 +359,14 @@ def join_gnss_rtcm(recs):
     """GNSS_RTCM records in log order -> ([(time_us, frame bytes)], dropped).
 
     Parts of one frame are consecutive and share time_us; a frame missing any
-    part (a record lost on the link) is dropped whole and counted, so every
-    frame returned is exactly one the receiver sent.
+    part (a record lost on the link) is dropped whole and counted once -- the
+    later parts of a frame already counted are not counted again (an SBF
+    MeasEpoch is seven records) -- so every frame returned is exactly one the
+    receiver sent: an RTCM3 frame or an SBF block (split_gnss_raw_frames()).
     """
     frames, dropped = [], 0
     pending = None                     # (time_us, parts, [chunks])
+    lost = None                        # (time_us, parts, part) last seen of a frame counted dropped
     for r in recs:
         if r["part"] == 0:
             if pending is not None:
@@ -370,8 +378,12 @@ def join_gnss_rtcm(recs):
         else:
             if pending is not None:
                 dropped += 1
+                lost = (pending[0], pending[1], len(pending[2]) - 1)
             pending = None
-            dropped += 1               # a part with no frame to belong to
+            if (lost is None or lost[:2] != (r["time_us"], r["parts"])
+                    or r["part"] <= lost[2]):
+                dropped += 1           # a part with no frame to belong to
+            lost = (r["time_us"], r["parts"], r["part"])
             continue
         if pending is not None and len(pending[2]) == pending[1]:
             frames.append((pending[0], b"".join(pending[2])))
@@ -379,6 +391,148 @@ def join_gnss_rtcm(recs):
     if pending is not None:
         dropped += 1
     return frames, dropped
+
+
+# SBF, Septentrio Binary Format: the mosaic-G5's own output, logged block by
+# block in GNSS_RTCM_MSG. A block is "$@", CRC (u16), ID (u16: the block number
+# in bits 0-12, its revision in 13-15), Length (u16: the whole block, header
+# included, a multiple of 4), then the body, which starts with the receiver's
+# time stamp: TOW (u32, ms into the GPS week) and WNc (u16, GPS weeks, not
+# modulo 1024). All little-endian. The CRC is CRC-CCITT (0x1021, seed 0, no
+# reflection) from ID to the end: binascii.crc_hqx. Joined in log order the
+# blocks are a standard .sbf file (extract_gnss_sbf.py).
+SBF_SYNC = b"$@"
+FMT_SBF_HDR = '<2s H H H'                    # sync, CRC, ID, Length
+SBF_HDR_LEN = struct.calcsize(FMT_SBF_HDR)   # 8
+SBF_TOW_DNU = 4294967295                     # do-not-use: the receiver has no time yet
+SBF_WNC_DNU = 65535
+SBF_WEEK_MS = 604800000
+
+# The blocks the V9's firmware streams, by block number (the names are the SBF
+# reference guide's).
+SBF_BLOCK_NAMES = {
+    # measurements and the receiver's own fix, 20 Hz
+    4027: "MeasEpoch", 4000: "MeasExtra", 4007: "PVTGeodetic",
+    # the receiver's status, 1 Hz
+    4014: "ReceiverStatus", 4082: "QualityInd", 4092: "RFStatus", 4012: "SatVisibility",
+    4013: "ChannelStatus", 4001: "DOP", 5914: "ReceiverTime", 4059: "DiskStatus",
+    5911: "xPPSOffset",
+    # navigation messages: ephemerides, then ionosphere, UTC and system time offsets
+    5891: "GPSNav", 4042: "GPSCNav", 4002: "GALNav", 4081: "BDSNav", 4251: "BDSCNav1",
+    4004: "GLONav", 4095: "QZSNav",
+    5893: "GPSIon", 5894: "GPSUtc", 4030: "GALIon", 4031: "GALUtc", 4032: "GALGstGps",
+    4120: "BDSIon", 4121: "BDSUtc", 4036: "GLOTime",
+    # how the receiver is set up, the commands it took and the messages it logged
+    5902: "ReceiverSetup", 4015: "Commands", 4103: "RxMessage",
+}
+SBF_MEAS_EPOCH = 4027
+
+
+def sbf_block_ok(block):
+    """A whole SBF block: its sync, a Length that is its own length and a
+    multiple of 4, and its CRC."""
+    if len(block) < SBF_HDR_LEN or block[:2] != SBF_SYNC:
+        return False
+    _sync, crc, _id, length = struct.unpack_from(FMT_SBF_HDR, block, 0)
+    if length != len(block) or length % 4:
+        return False
+    return binascii.crc_hqx(block[4:], 0) == crc
+
+
+def sbf_block_number(block):
+    """The block number: the ID's low 13 bits."""
+    return struct.unpack_from('<H', block, 4)[0] & 0x1FFF
+
+
+def sbf_block_revision(block):
+    """The block's revision: the ID's top 3 bits."""
+    return struct.unpack_from('<H', block, 4)[0] >> 13
+
+
+def sbf_block_name(block):
+    """The block's name from SBF_BLOCK_NAMES, or "block <number>" for one not in it."""
+    n = sbf_block_number(block)
+    return SBF_BLOCK_NAMES.get(n, f"block {n}")
+
+
+def sbf_tow_wnc(block):
+    """(TOW ms, WNc) of the block's time stamp. Each is None where the receiver
+    says do-not-use (no time yet), both where the block is too short to carry one."""
+    if len(block) < SBF_HDR_LEN + 6:
+        return None, None
+    tow, wnc = struct.unpack_from('<I H', block, SBF_HDR_LEN)
+    return (None if tow == SBF_TOW_DNU else tow,
+            None if wnc == SBF_WNC_DNU else wnc)
+
+
+def sbf_gps_ms(block):
+    """The block's time stamp as ms since the GPS epoch (WNc weeks + TOW), or
+    None while either is do-not-use."""
+    tow, wnc = sbf_tow_wnc(block)
+    if tow is None or wnc is None:
+        return None
+    return wnc * SBF_WEEK_MS + tow
+
+
+def sbf_epoch_rate(blocks, number=SBF_MEAS_EPOCH):
+    """[(time_us, block)] -> (epochs, span_s, rate_hz) of one block number by
+    the receiver's own time stamps (MeasEpoch's by default: one block an
+    epoch): how many distinct stamps, first to last, and (epochs - 1) / span.
+    span_s and rate_hz are None under two epochs."""
+    stamps = sorted({sbf_gps_ms(b) for _, b in blocks if sbf_block_number(b) == number}
+                    - {None})
+    if len(stamps) < 2:
+        return len(stamps), None, None
+    span_s = (stamps[-1] - stamps[0]) / 1000.0
+    return len(stamps), span_s, (len(stamps) - 1) / span_s
+
+
+def split_gnss_raw_frames(frames):
+    """join_gnss_rtcm()'s frames -> {"rtcm3": [(time_us, frame)],
+    "sbf": [(time_us, block)], "bad": count}, each list in log order.
+
+    A frame that starts 0xD3 is RTCM3 (its CRC-24Q is the RTCM3 reader's to
+    check: extract_gnss_rtcm.frame_ok); one that starts "$@" and checks
+    (sbf_block_ok) is an SBF block. Anything else, an SBF block that fails
+    included, is counted as bad.
+    """
+    out = {"rtcm3": [], "sbf": [], "bad": 0}
+    for t, f in frames:
+        if f[:1] == b"\xd3":
+            out["rtcm3"].append((t, f))
+        elif sbf_block_ok(f):
+            out["sbf"].append((t, f))
+        else:
+            out["bad"] += 1
+    return out
+
+
+def print_gnss_sbf_summary(recs):
+    """Print what a log's GNSS_RTCM records hold as SBF blocks: the blocks by
+    name, MeasEpoch's rate over the receiver's own time stamps, and what the
+    link lost. Prints nothing for a log without SBF (the LC86G's RTCM3)."""
+    frames, dropped = join_gnss_rtcm(recs)
+    raw = split_gnss_raw_frames(frames)
+    if not raw["sbf"]:
+        return
+    counts = {}
+    for _, b in raw["sbf"]:
+        name = sbf_block_name(b)
+        counts[name] = counts.get(name, 0) + 1
+    rtcm3 = f", {len(raw['rtcm3']):,} RTCM3 frames" if raw["rtcm3"] else ""
+    print("  GNSS receiver blocks (SBF, mosaic-G5):")
+    print(f"    {len(recs):,} records -> {len(raw['sbf']):,} blocks{rtcm3}")
+    print(f"    Dropped: {dropped:,} incomplete (a record lost), "
+          f"{raw['bad']:,} bad (sync, Length or CRC)")
+    for name, n in sorted(counts.items(), key=lambda x: (-x[1], x[0])):
+        print(f"    {name:<24s} {n:>8,}")
+    epochs, span_s, rate_hz = sbf_epoch_rate(raw["sbf"])
+    if rate_hz is None:
+        print(f"    MeasEpoch: {epochs} epochs, too few for a rate")
+    else:
+        print(f"    MeasEpoch: {epochs:,} epochs over {span_s:.2f} s of receiver time "
+              f"-> {rate_hz:.2f} Hz")
+    print()
 
 
 # ISM6HG256Data: 22 bytes (time_us + 3×Vec3i16)
@@ -567,12 +721,17 @@ def decode_imu_temp(payload):
 # GnssClockData (GNSS_CLOCK_MSG 0x9D), 68 bytes packed: the MCU clock against
 # GPS time as the LC86G driver's GnssTimeSync holds it (no 1PPS on the Beetle:
 # a line fitted to when each $PQTMPVT arrived), each time the line moves -- a
-# new GPS second filed, or a restart. Every raw epoch and fix the flight placed
-# on the IMU's clock went through it, so gnss_clock_mcu_us() on the latest
-# record logged before an epoch's last frame places it exactly as the flight did.
+# new GPS second filed, or a restart. A record flagged "pps" was fitted to the
+# receiver's 1PPS edges instead (the V9's mosaic-G5). Every raw epoch and fix
+# the flight placed on the IMU's clock went through it, so gnss_clock_mcu_us()
+# on the latest record logged before an epoch's last frame places it exactly
+# as the flight did.
 FMT_GNSS_CLOCK = '<I I I q d d d d f f I H B B'
 SIZE_OF_GNSS_CLOCK = struct.calcsize(FMT_GNSS_CLOCK)  # 68
-GNSS_CLOCK_FLAGS = {"valid": 0x01, "started": 0x02}
+# GCL_* in RocketComputerTypes.h. "pps" (GCL_PPS): the line was fitted to the
+# receiver's 1PPS edges captured on the V9's GPIO2, not to sentence arrival
+# times -- such a record's time_us is that edge's FC time, and its latency_s is 0.
+GNSS_CLOCK_FLAGS = {"valid": 0x01, "started": 0x02, "pps": 0x04}
 
 
 def decode_gnss_clock(payload):
@@ -1153,7 +1312,7 @@ def parse_binary_file(filepath):
     records = {
         "GNSS":           [],
         "GNSS_SAT":       [],
-        "GNSS_RTCM":      [],   # 0x95 raw RTCM3 frame parts; join_gnss_rtcm() reassembles
+        "GNSS_RTCM":      [],   # 0x95 the receiver's raw frame parts (RTCM3 or SBF); join_gnss_rtcm() reassembles
         "RawGnssEkf":     [],   # 0x96 the raw-GNSS shadow filter, 10 Hz (#1600)
         "PadCalStatus":   [],   # 0x99 the pad calibration's progress, 1 Hz on the ground (#1600 phase 5)
         "GnssCheck":      [],   # 0x9A each receiver fix against the IMU, 10 Hz (#1508)
@@ -2913,6 +3072,8 @@ def main(filepath=BINARY_FILE, output_dir=OUTPUT_DIR, show_plots=SHOW_PLOTS,
     for name, count in sorted(stats["type_counts"].items(), key=lambda x: -x[1]):
         print(f"    {name:<24s} {count:>8,}")
     print()
+    # The mosaic-G5's SBF blocks, if this log has them (nothing otherwise)
+    print_gnss_sbf_summary(records["GNSS_RTCM"])
 
     # Print sensor configuration
     print("  Sensor configuration:")

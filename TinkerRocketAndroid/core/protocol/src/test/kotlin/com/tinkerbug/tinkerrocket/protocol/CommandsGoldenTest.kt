@@ -80,6 +80,7 @@ class CommandsGoldenTest {
         "cmd70_otabegin_37.bin",
         "cmd75_padcal_10.bin",
         "cmd76_accelcal_12.bin",
+        "cmd79_gnsslog_1.bin",
     )
 
     @Test
@@ -386,6 +387,12 @@ class CommandsGoldenTest {
     fun `cmd67 imu rate`() {
         val s = side("cmd67_imurate_2.bin")
         assertMatchesFixture("cmd67_imurate_2.bin", Commands.imuRate(s.i("rate_hz")))
+    }
+
+    @Test
+    fun `cmd79 gnss log`() {
+        val s = side("cmd79_gnsslog_1.bin")
+        assertMatchesFixture("cmd79_gnsslog_1.bin", Commands.gnssLog(s.i("setting")))
     }
 
     @Test

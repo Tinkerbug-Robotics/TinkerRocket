@@ -81,6 +81,8 @@ static inline std::string itos(int v)
 #include "landed_lockout_policy.h"    // #317, #1235 item 5: no new log session after LANDED
 #include "arm_consent_policy.h"       // #1168: when the OC gives its half of the Beetle's pyro arm
 #include "pyro_fault_trip_policy.h"   // #1553: drop that consent on a shorted e-match mid-pulse
+#include "snapshot_answer_policy.h"   // when the OC may answer the FC's snapshot ask with "no flight"
+#include "snapshot_replay_filter.h"   // #383/#846: which of the FC's snapshots the OC keeps
 
 #include <TR_I2C_Interface.h>
 #include <TR_I2S_Stream.h>
@@ -102,6 +104,7 @@ static inline std::string itos(int v)
 #include <TR_FlightLog.h>
 #include <SnapshotTailScan.h>   // #846: boot re-seed of the snapshot cache
 #include <ground_baseline_policy.h>   // #1150: the pad reference after an in-flight OC reset
+#include <flight_snapshot_answer.h>   // the snapshot answer as the FC reads it, and "no flight"
 #include <TR_NandBackend_esp.h>
 #include <NvsBitmapStore.h>
 #include <NandBitmapStore.h>   // #398: bitmap on NAND (not NVS) — no cache-disable stall
@@ -958,8 +961,23 @@ static bool pwr_pin_on = false;
 // inherited, and the FC re-validates magic/version/state/CRC32/sim on its
 // side — a stale or garbage cache can never restore a flight.
 static constexpr size_t kSnapFrameLen = 4 + 1 + 1 + sizeof(FlightSnapshotData) + 2;
+static_assert(kSnapFrameLen == flight_snapshot_answer::kFrameLen,
+              "the FC reads exactly the frame the OC stages (#399)");
 static uint8_t  snapshot_cache[kSnapFrameLen];
 static bool     snapshot_cache_valid = false;
+// True once this boot's NAND re-seed has run, or the V7/V8 MRAM slot is
+// readable: from then on, "nothing servable" means no flight even on a
+// recovery boot (snapshot_answer_policy.h). Set in initLoggingSubsystem().
+static bool     snapshot_stores_settled = false;
+
+// The FC's snapshot CRC32 (flight_computer computeSnapshotCRC), for the
+// explicit "no flight" answer, which is the only snapshot the OC writes itself.
+static uint32_t snapshotCrc(const FlightSnapshotData& s)
+{
+    CRC32 crc;
+    crc.add(reinterpret_cast<const uint8_t*>(&s), flight_snapshot_answer::kCrcBytes);
+    return crc.calc();
+}
 
 // ==========================================================================
 // SECTION: #1176 flight token — durable evidence that a flight was in progress
@@ -1157,6 +1175,59 @@ static bool snapshotServable(const uint8_t* frame, uint32_t age_ms)
     if (snap.magic != FlightSnapshotData::MAGIC) return false;
     if (snap.rocket_state != (uint8_t)INFLIGHT) return false;   // a clear
     return snap.flight_elapsed_ms < kSnapshotServeTtlMs;
+}
+
+// The rocket state a snapshot wire frame carries.
+static uint8_t snapshotFrameState(const uint8_t* frame)
+{
+    FlightSnapshotData snap = {};
+    memcpy(&snap, frame + 6, sizeof(snap));   // past SOF(4)+type+len
+    return snap.rocket_state;
+}
+
+// The V7/V8 MRAM slot read back as neither empty (the zeros a #1176
+// retirement writes) nor a snapshot (its magic): bytes that may be a torn
+// flight frame, which the OC never answers "no flight" over
+// (snapshot_answer_policy.h).
+static bool snapshotSlotGarbled(const uint8_t* frame)
+{
+    FlightSnapshotData snap = {};
+    memcpy(&snap, frame + 6, sizeof(snap));   // past SOF(4)+type+len
+    if (snap.magic == FlightSnapshotData::MAGIC) return false;
+    for (size_t i = 0; i < kSnapFrameLen; ++i)
+    {
+        if (frame[i] != 0) return true;
+    }
+    return false;
+}
+
+// Stage the explicit "no flight in progress" answer to GET_FLIGHT_SNAPSHOT
+// (snapshot_answer_policy.h). Kept out of processFrame() so its ~460 B of
+// locals never sit on the I2S parser task's stack, which holds processFrame()'s
+// frame twice over during a batch unpack (#1485); the ask only ever arrives
+// over the I2C ingress.
+static __attribute__((noinline)) void stageNoFlightAnswer()
+{
+    FlightSnapshotData none = flight_snapshot_answer::noFlightPayload();
+    none.crc32 = snapshotCrc(none);
+    uint8_t frame[kSnapFrameLen];
+    size_t frame_len = 0;
+    if (TR_I2C_Interface::packMessage(SNAPSHOT_MSG,
+                                      reinterpret_cast<const uint8_t*>(&none),
+                                      sizeof(none), frame, sizeof(frame),
+                                      frame_len) &&
+        frame_len == kSnapFrameLen)
+    {
+        i2c_interface.writeToSlave(frame, frame_len, 0);
+        ESP_LOGI("OC", "[RECOVERY] FC asked for a flight snapshot: no flight "
+                       "in progress, answered so");
+    }
+    else
+    {
+        ESP_LOGE("OC", "[RECOVERY] could not pack the no-flight answer (%u B) — "
+                       "sending no reply",
+                 (unsigned)frame_len);
+    }
 }
 // #825: false after a boot rail restore — our reset wiped the commanded
 // camera state while the FC (kept alive by the restored rail) may still be
@@ -1497,6 +1568,20 @@ static void stageImuRateConfig()
     cfg.rate_hz = cfg_imu_rate;
         setPendingCommandWithConfig(IMU_RATE_CONFIG_PENDING, IMU_RATE_CONFIG_MSG, &cfg, sizeof(cfg));
 }
+
+// GNSS log setting (BLE cmd 79): every SBF block of a mosaic-G5 in the log
+// (DETAILED, the default) or the REDUCED set, which lets the IMU fly 8k.
+// Kept like the IMU rate: cached here for the readback ("glog") and for the
+// IMU limit the apps' menus follow (imuRateMaxNow), relayed to the FC, which
+// keeps its own copy in NVS and applies it at boot.
+static uint8_t cfg_gnss_log = GNSS_LOG_DETAILED;
+
+static void stageGnssLogConfig()
+{
+    GnssLogConfigData cfg;
+    cfg.setting = cfg_gnss_log;
+    setPendingCommandWithConfig(GNSS_LOG_CONFIG_PENDING, GNSS_LOG_CONFIG_MSG, &cfg, sizeof(cfg));
+}
 // Pyro config cache (4 channels on new PCB)
 static bool    cfg_pyro_enabled[4]      = { false, false, false, false };
 static uint8_t cfg_pyro_trigger_mode[4] = { 0, 0, 0, 0 };
@@ -1707,6 +1792,25 @@ static char          fc_fw_version[40]  = {0};
 static char          fc_board_rev[board_identity::kMaxRev + 1] = {0};
 static char          oc_board_rev[board_identity::kMaxRev + 1] = {0};
 static volatile bool fc_identity_dirty  = false;
+// The GNSS receiver the FC found (GNSS_TYPE_*), the third field of its
+// FC_IDENTITY push: GNSS_TYPE_NONE until an FC that sends it has, and while
+// the FC flies GNSS-absent. Relayed to the app as fc_identity's "fc_gnss",
+// and it sets the IMU limit below.
+static volatile uint8_t fc_gnss_type = GNSS_TYPE_NONE;
+// The "config" frame carries "irmax" and "irate", and the receiver and the
+// GNSS log setting move both (a mosaic-G5 with the detailed log caps the IMU
+// at 3840 Hz): send the readback again when they do.
+static volatile bool config_readback_dirty = false;
+
+// The fastest IMU rate the FC flies now: this board's, lowered by the
+// receiver the FC found with the GNSS log setting (imuRateMaxForGnss, the
+// rule the FC applies itself). What the apps filter their menus on
+// ("irmax"), and what the readback's "irate" is brought within, so it says
+// what the FC flies.
+static uint16_t imuRateMaxNow()
+{
+    return imuRateMaxForGnss(config::IMU_RATE_MAX_HZ, fc_gnss_type, cfg_gnss_log);
+}
 
 // FC's active board→rocket mounting orientation, mirrored from the v3
 // status query.  Re-published to the app when it changes mid-connection
@@ -4646,6 +4750,8 @@ static bool isKnownMessageType(uint8_t type)
         case ORIENT_CONFIG_MSG:
         case IMU_RATE_CONFIG_PENDING:
         case IMU_RATE_CONFIG_MSG:
+        case GNSS_LOG_CONFIG_PENDING:
+        case GNSS_LOG_CONFIG_MSG:
         case LORA_MSG:
         case SNAPSHOT_MSG:           // FC→OC over I2S during INFLIGHT
         case GET_FLIGHT_SNAPSHOT:    // FC→OC over I2C at boot recovery
@@ -4771,12 +4877,27 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         board_identity::decodePayload(
             reinterpret_cast<const char*>(payload), payload_len,
             incoming, sizeof(incoming), incoming_rev, sizeof(incoming_rev));
+        // Then the receiver it found, where the FC sends one (an older FC
+        // sends none, which reads as none).
+        char incoming_gnss[16] = {0};
+        board_identity::decodeGnss(reinterpret_cast<const char*>(payload), payload_len,
+                                   incoming_gnss, sizeof(incoming_gnss));
+        const uint8_t gnss = gnssTypeFromName(incoming_gnss);
         if (strncmp(incoming, fc_fw_version, sizeof(fc_fw_version)) != 0 ||
-            strncmp(incoming_rev, fc_board_rev, sizeof(fc_board_rev)) != 0)
+            strncmp(incoming_rev, fc_board_rev, sizeof(fc_board_rev)) != 0 ||
+            gnss != fc_gnss_type)
         {
+            const uint16_t imu_max_was = imuRateMaxNow();
             memcpy(fc_fw_version, incoming, sizeof(fc_fw_version));
             memcpy(fc_board_rev, incoming_rev, sizeof(fc_board_rev));
+            fc_gnss_type = gnss;
             fc_identity_dirty = true;
+            if (imuRateMaxNow() != imu_max_was)
+            {
+                ESP_LOGI("CFG", "FC GNSS receiver %s: IMU rates up to %u Hz",
+                         gnss != GNSS_TYPE_NONE ? gnssTypeName(gnss) : "none", (unsigned)imuRateMaxNow());
+                config_readback_dirty = true;
+            }
         }
         return;
     }
@@ -5539,38 +5660,25 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             // #383: SNAPSHOT_MSG bypasses the sensor-frame dedup (its payload
             // starts with the magic, not a timestamp — putting it in that
             // switch would misread the constant magic as a ts and drop every
-            // snapshot after the first). Guard the MRAM slot here instead: an
+            // snapshot after the first). Guard the stores here instead: an
             // I2S DMA replay delivers a snapshot a few hundred ms OLDER than
             // the one already stored, and overwriting would hand brownout
-            // recovery stale state. Reject slightly-older frames; a frame
-            // MUCH older (>10 s behind) can only be a new flight's near-zero
-            // clock — accept it and re-seed the baseline.
+            // recovery stale state. The rule, and what a clear does to its
+            // baseline, is snapshot_replay_filter.h. A clear (any non-INFLIGHT
+            // frame) is never dropped (#846 SAFETY), but one sent with no
+            // flight in progress carries the FC's uptime and no longer
+            // becomes the baseline the next flight's frames are held to.
             uint32_t elapsed_ms = 0;
             memcpy(&elapsed_ms, payload + offsetof(FlightSnapshotData, flight_elapsed_ms),
                    sizeof(elapsed_ms));
             uint8_t snap_state = 0;
             memcpy(&snap_state, payload + offsetof(FlightSnapshotData, rocket_state),
                    sizeof(snap_state));
-            static uint32_t last_snap_elapsed_ms = 0;
-            constexpr uint32_t NEW_FLIGHT_BACKSTEP_MS = 10'000;
-            // #846 SAFETY: a non-INFLIGHT frame is the FC's "clear" — it can
-            // only ever DISARM (the FC restores solely on INFLIGHT), so it
-            // must never be dropped as a replay. It routinely looks like one:
-            // clearFlightSnapshot() sends elapsed = FC uptime (a few seconds,
-            // launch_time_millis == 0 at boot), which lands inside the 10 s
-            // backstep below a real flight's elapsed. Dropping it left the
-            // store holding a genuine INFLIGHT frame that a later FC panic
-            // would restore ON THE GROUND with pyro channels re-armed.
-            // Elapsed-ms comparisons are meaningless across an FC reboot
-            // anyway; state is the only trustworthy discriminator here.
-            const bool is_clear = (snap_state != (uint8_t)INFLIGHT);
-            const bool stale_replay =
-                !is_clear &&
-                elapsed_ms < last_snap_elapsed_ms &&
-                (last_snap_elapsed_ms - elapsed_ms) <= NEW_FLIGHT_BACKSTEP_MS;
-            if (!stale_replay)
+            static SnapshotReplayFilter::State replay_filter;
+            if (SnapshotReplayFilter::keep(replay_filter,
+                                           snap_state == (uint8_t)INFLIGHT,
+                                           elapsed_ms))
             {
-                last_snap_elapsed_ms = elapsed_ms;
                 // #1150: the FC's snapshot carries the pad reference and the
                 // running maxima this OC lost if it reset in flight. Adopt
                 // them ONCE when INFLIGHT arrives with no reference of our
@@ -5665,23 +5773,26 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         }
         portEXIT_CRITICAL(&snapshot_cache_mux);
 
+        // The MRAM slot read back as neither the zeros of a retired slot nor a
+        // snapshot: possibly a torn flight frame, so never "no flight".
+        bool mram_garbled = false;
         if (had_cache && snapshotServable(snap_frame, cache_age))
         {
             have = true;
             snapshot_served = true;   // #846: consumed — see the boot re-seed
         }
-        else if (!had_cache &&
-                 logger.mramRawRead(config::SNAPSHOT_REGION_BASE,
-                                    snap_frame, sizeof(snap_frame)) &&
-                 snapshotServable(snap_frame, 0))
+        if (!have && !had_cache &&
+            logger.mramRawRead(config::SNAPSHOT_REGION_BASE,
+                               snap_frame, sizeof(snap_frame)))
         {
             // V7/V8 fallback. Age is unknown (the slot has no clock), so only
             // the frame's own flight_elapsed_ms bounds it — enough to refuse
             // a slot left INFLIGHT by a flight that has since timed out.
-            have = true;
+            if (snapshotServable(snap_frame, 0)) have = true;
+            else mram_garbled = snapshotSlotGarbled(snap_frame);
         }
-        else if (boot_token_restore && boot_token.have_frame &&
-                 snapshotServable(boot_token.snap, 0))
+        if (!have && boot_token_restore && boot_token.have_frame &&
+            snapshotServable(boot_token.snap, 0))
         {
             // #1176 third source, and on V9/V10 it is the ONLY one for a reboot
             // in the first half second of a flight: the log session is still
@@ -5714,28 +5825,40 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             ESP_LOGW("OC", "[RECOVERY] serving the snapshot carried in the "
                            "flight token");
         }
-        else if (had_cache)
+        // A cached in-flight frame that is too old to serve is worth a line;
+        // the FC's own LANDED clear, which every boot now leaves here, is not.
+        if (!have && had_cache && snapshotFrameState(snap_frame) == (uint8_t)INFLIGHT)
         {
-            ESP_LOGW("OC", "[RECOVERY] cached snapshot not servable (age %lu ms, "
-                           "or not an in-flight frame) — not serving it",
+            ESP_LOGW("OC", "[RECOVERY] cached in-flight snapshot not servable "
+                           "(age %lu ms, or past the flight time) — not serving it",
                      (unsigned long)cache_age);
         }
-        if (have)
+
+        const bool recovery_context = boot_rail_restored || boot_token_powered;
+        switch (SnapshotAnswerPolicy::decide(have, mram_garbled, recovery_context,
+                                             snapshot_stores_settled))
         {
+        case SnapshotAnswerPolicy::Reply::Serve:
             // Non-blocking write — if the TX ringbuffer is full, drop;
             // FC's masterRead retry path will handle it.
             i2c_interface.writeToSlave(snap_frame, sizeof(snap_frame), 0);
-        }
-        else
-        {
-            // No cache (nothing received this session, no boot re-seed) and
-            // no MRAM. The FC handles the missing reply safely — masterRead
-            // fails or the SOF scan finds nothing, it retries (#364), then
-            // cold-starts — but from the OC side the request would otherwise
-            // vanish without trace. Fires at most once per FC reset per retry.
-            ESP_LOGW("OC", "[RECOVERY] FC asked for a flight snapshot and "
-                           "none is available (no cached frame, no MRAM) — "
-                           "sending no reply");
+            break;
+        case SnapshotAnswerPolicy::Reply::NoFlight:
+            // Say so, so the FC stops asking at the first exchange. This used
+            // to stage nothing: the FC's read then returned the last staged
+            // status reply, which is not an answer, so every boot spent all
+            // five tries.
+            stageNoFlightAnswer();
+            break;
+        case SnapshotAnswerPolicy::Reply::Silent:
+            // Not certain there is no flight, so say nothing, as before: the
+            // FC retries (#364) and a logger retry or a clean second read can
+            // still serve it. Fires at most once per FC ask.
+            ESP_LOGW("OC", "[RECOVERY] FC asked for a flight snapshot and none "
+                           "is servable yet (%s) — sending no reply",
+                     mram_garbled ? "the MRAM slot read back garbled"
+                                  : "a recovery boot whose logger has not come up");
+            break;
         }
     }
     else if (type == I2C_TX_RESYNC)
@@ -6607,16 +6730,19 @@ static void sendFcIdentity()
     // empty rather than becoming "unknown" — the app must be able to tell "this
     // board says it is a V9" from "this board has never been asked", and a
     // placeholder string would erase that difference.
-    char buf[160];
+    // The GNSS receiver the FC found rides along the same way: "" when none
+    // (GNSS-absent, rescue mode, or an FC that does not say), never a guess.
+    char buf[192];
     snprintf(buf, sizeof(buf),
              "{\"type\":\"fc_identity\",\"fc_fw\":\"%s\","
-             "\"fc_board\":\"%s\",\"oc_board\":\"%s\"}",
-             fc_fw, fc_board_rev, oc_board_rev);
+             "\"fc_board\":\"%s\",\"oc_board\":\"%s\",\"fc_gnss\":\"%s\"}",
+             fc_fw, fc_board_rev, oc_board_rev, gnssTypeName(fc_gnss_type));
     enqueueConfigReadback(String(buf));   // #398 item 3
-    ESP_LOGI("CFG", "Queued fc_identity (fc_fw=%s fc_board=%s oc_board=%s)",
+    ESP_LOGI("CFG", "Queued fc_identity (fc_fw=%s fc_board=%s oc_board=%s fc_gnss=%s)",
              fc_fw,
              fc_board_rev[0] ? fc_board_rev : "unprovisioned",
-             oc_board_rev[0] ? oc_board_rev : "unprovisioned");
+             oc_board_rev[0] ? oc_board_rev : "unprovisioned",
+             fc_gnss_type != GNSS_TYPE_NONE ? gnssTypeName(fc_gnss_type) : "none");
 }
 
 // Publish the FC's active board→rocket mounting orientation as its own
@@ -6875,6 +7001,8 @@ static void sendCurrentConfig()
     // pass would enqueue 9 + 4 frames against the 12-deep readback ring and
     // evict the main "config" frame (see CFG_RB_CAP).
     fc_config_report_dirty = false;
+    // Likewise a re-publish for a new IMU limit: this burst states it.
+    config_readback_dirty = false;
 
     // Split config into two smaller JSON messages to stay within MTU limits.
     // Message 1: servo/PID/LoRa config ("config" type)
@@ -6905,10 +7033,18 @@ static void sendCurrentConfig()
     // Current apps take the camera from config_pyro (which says where it came
     // from) and treat this key as unverified.
     j += ",\"camt\":"; j += itos(cameraReadback().type);
-    j += ",\"irate\":"; j += itos(cfg_imu_rate);
-    // #1485: the fastest IMU rate this board flies. Absent from older
-    // firmware, which the apps read as 3840 (nothing older could do more).
-    j += ",\"irmax\":"; j += itos(config::IMU_RATE_MAX_HZ);
+    // The setting as the FC flies it: brought within the limit its receiver
+    // sets (8k Dynamic flies as 4k Dynamic with a mosaic-G5). The stored
+    // setting is kept, for when the receiver no longer lowers the limit.
+    j += ",\"irate\":"; j += itos(imuRateSettingClamp(cfg_imu_rate, imuRateMaxNow()));
+    // #1485: the fastest IMU rate this board flies, with the receiver its FC
+    // found and the GNSS log setting. Absent from older firmware, which the
+    // apps read as 3840 (nothing older could do more).
+    j += ",\"irmax\":"; j += itos(imuRateMaxNow());
+    // The GNSS log setting (cmd 79): 0 detailed, 1 reduced. Absent from
+    // firmware that has no such setting, which the apps read as "this rocket
+    // cannot change it".
+    j += ",\"glog\":"; j += itos(cfg_gnss_log);
     // LoRa settings
     j += ",\"lf\":";  j += fmtf(lora_freq_mhz, 3);   // #1155 item 9: 0.1 MHz hid a 902.25 -> "902.20" (channel centres end in .125/.25)
     j += ",\"lsf\":"; j += itos(lora_sf);
@@ -9185,6 +9321,17 @@ static void loadCachedPeripheralConfigFromNvs()
     else
         ESP_LOGI("CFG", "NVS IMU logging rate: %u Hz", (unsigned)cfg_imu_rate);
 
+    // Load cached GNSS log setting. Readback/cache and the IMU limit only:
+    // the FC owns applying it (its own NVS), as with the rate above.
+    prefs.begin("gnsslog", false);
+    {
+        const uint8_t nvs_log = prefs.getUChar("set", cfg_gnss_log);
+        if (gnssLogSettingValid(nvs_log)) cfg_gnss_log = nvs_log;
+        else ESP_LOGW("CFG", "NVS GNSS log setting %u invalid — keeping detailed", (unsigned)nvs_log);
+    }
+    prefs.end();
+    ESP_LOGI("CFG", "NVS GNSS log: %s", gnssLogName(cfg_gnss_log));
+
     // #1271: outstanding blind-window losses, carried across the power cycle
     // between the lost flight and the operator connecting to download. This
     // is the whole reason the record is persisted rather than a RAM counter:
@@ -9772,6 +9919,12 @@ static bool initLoggingSubsystem()
                 }
             }
         }
+
+        // The stores this boot serves from have had their chance: the MRAM
+        // slot is readable from here on, or the re-seed above has run, whatever
+        // it found. From now on the OC may answer "no flight" even on a
+        // recovery boot (snapshot_answer_policy.h).
+        snapshot_stores_settled = logger.isMramEnabled() || flightlog.isInitialized();
 
         // -------------------------------------------------------------------
         // DIAGNOSTIC ONE-SHOT — wipes the entire filesystem at boot.
@@ -11753,6 +11906,19 @@ static void loop_oc()
         ble_was_connected = ble_now;
     }
 
+    // The FC's receiver or the GNSS log setting (cmd 79) moved the IMU limit
+    // the "config" frame states: the whole readback again, as cmd 20 sends
+    // it (fc_identity included), once the ring has drained. Two bursts in it
+    // at once would evict the first one's frames (CFG_RB_CAP); a connect
+    // burst still going out is what usually precedes this, and it already
+    // carries the new limit.
+    if (config_readback_dirty && cfg_rb_count == 0 &&
+        ble_app.isConnected() && ble_app.isReadyForNotify())
+    {
+        fc_identity_dirty = false;
+        sendCurrentConfig();   // clears config_readback_dirty
+    }
+
     // Re-publish the FC version to the app when it changes mid-connection: an FC
     // OTA reboots the FC (new version) but never drops the OC<->app BLE link, so
     // the connect-time fc_identity won't refresh on its own. This is what lets
@@ -13004,7 +13170,12 @@ static void loop_oc()
             // Dynamic"), IMU_RATE_DYNAMIC_8K (1) or a whitelisted ISM6HG256
             // ODR, up to this board's IMU_RATE_MAX_HZ.  Relayed to the FC,
             // which applies the ODR live (except INFLIGHT) and persists it in
-            // FC NVS.  The FC checks the same limit for the same board.
+            // FC NVS.  The FC checks the same limit for the same board.  Where
+            // its receiver lowers the limit (imuRateMaxNow: the mosaic-G5) both
+            // keep the setting as sent and the FC flies the fastest that fits,
+            // which the readback's "irate" reports: checking the lower limit
+            // here would refuse what the FC keeps, or keep what it refuses
+            // before its identity push has named the receiver.
             const uint8_t* payload = ble_app.getCommandPayload();
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= 2)
@@ -13035,6 +13206,43 @@ static void loop_oc()
                     ESP_LOGW("BLE", "IMU logging rate setting %u rejected "
                                     "(not dynamic or an ODR step up to %u Hz)",
                              (unsigned)rate_hz, (unsigned)config::IMU_RATE_MAX_HZ);
+                }
+            }
+        }
+        else if (ble_cmd == 79)
+        {
+            // GNSS log setting: [setting:1] — GNSS_LOG_DETAILED (0, every SBF
+            // block of a mosaic-G5) or GNSS_LOG_REDUCED (1, its raw
+            // measurements once a second, which lets the IMU fly 8k).
+            // Relayed to the FC, which applies it (except INFLIGHT) and keeps
+            // it in FC NVS. With a mosaic-G5 it moves the IMU limit, so the
+            // readback goes out again and the apps' rate menus follow.
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= 1)
+            {
+                const uint8_t setting = payload[0];
+                if (gnssLogSettingValid(setting))
+                {
+                    const uint16_t imu_max_was = imuRateMaxNow();
+                    cfg_gnss_log = setting;
+                    stageGnssLogConfig();
+                    Preferences p2;
+                    p2.begin("gnsslog", false);
+                    p2.putUChar("set", cfg_gnss_log);
+                    p2.end();
+                    ESP_LOGI("BLE", "GNSS log: %s -> FlightComputer", gnssLogName(setting));
+                    if (imuRateMaxNow() != imu_max_was)
+                    {
+                        ESP_LOGI("CFG", "GNSS log %s with the %s: IMU rates up to %u Hz",
+                                 gnssLogName(setting), gnssTypeName(fc_gnss_type), (unsigned)imuRateMaxNow());
+                        config_readback_dirty = true;
+                    }
+                }
+                else
+                {
+                    ESP_LOGW("BLE", "GNSS log setting %u rejected (not detailed or reduced)",
+                             (unsigned)setting);
                 }
             }
         }

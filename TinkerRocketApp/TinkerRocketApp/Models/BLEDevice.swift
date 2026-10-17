@@ -181,6 +181,11 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// gets wrong forever.
     @Published var fcBoardRev: String?
     @Published var ocBoardRev: String?
+    /// The GNSS receiver the flight computer found ("fc_identity" / "fc_gnss"):
+    /// "u-blox", "mosaic-G5" or "LC86G". The V9 finds its receiver at boot,
+    /// so the pad shows which one it took. nil when the FC found none (it
+    /// flies GNSS-absent) or its firmware does not say.
+    @Published var fcGnss: String?
 
     /// Latest OTA status frame from the device (#8 phase 2). Driven by
     /// ota_status JSON notifications on the file-ops characteristic.
@@ -1149,6 +1154,20 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         sendRawCommand(67, payload: payload)
         if var cfg = rocketConfig {
             cfg.imuRateHz = rateHz
+            rocketConfig = cfg
+        }
+    }
+
+    /// GNSS log — `RocketProfile.gnssLogDetailed` (0) or `.gnssLogReduced`
+    /// (1): all of a mosaic-G5's data in the log with the IMU at most 4k, or
+    /// its position and once-a-second raw measurements with the 8k rates
+    /// open. The FC applies it on the pad and persists it in FC NVS; the out
+    /// computer then re-sends the readback, whose `irmax` the rate menu
+    /// follows.
+    func sendGnssLogConfig(_ setting: UInt8) {
+        sendRawCommand(79, payload: Data([setting]))
+        if var cfg = rocketConfig {
+            cfg.gnssLogSetting = setting
             rocketConfig = cfg
         }
     }
@@ -2375,6 +2394,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             if let irmax = dict["irmax"] as? Int, let hz = UInt16(exactly: irmax) {
                 cfg.imuRateMaxHz = hz
             }
+            // Only the two settings land: anything else reads as "not reported".
+            if let glog = dict["glog"] as? Int, let s = UInt8(exactly: glog), s <= RocketProfile.gnssLogReduced {
+                cfg.gnssLogSetting = s
+            }
             cfg.loraFreqMHz = parseFloat(dict["lf"])
             cfg.loraSF = (dict["lsf"] as? Int).map { UInt8($0) }
             cfg.loraBwKHz = parseFloat(dict["lbw"])
@@ -2561,9 +2584,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             // "unprovisioned" and must stay nil rather than becoming "".
             fcBoardRev = (dict["fc_board"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             ocBoardRev = (dict["oc_board"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            // The receiver the FC found: "" is none (GNSS-absent), so it
+            // clears; an OC that predates the key leaves the value alone.
+            if let gnss = dict["fc_gnss"] as? String { fcGnss = gnss.isEmpty ? nil : gnss }
             print("[CFG] FC identity: fc_fw=\(fcFirmwareVersion) "
                   + "fc_board=\(fcBoardRev ?? "unprovisioned") "
-                  + "oc_board=\(ocBoardRev ?? "unprovisioned")")
+                  + "oc_board=\(ocBoardRev ?? "unprovisioned") "
+                  + "fc_gnss=\(fcGnss ?? "none")")
             return
         }
 

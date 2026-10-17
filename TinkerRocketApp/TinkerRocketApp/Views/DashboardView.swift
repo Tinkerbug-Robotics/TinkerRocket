@@ -936,6 +936,7 @@ struct ConnectedDashboardView: View {
                 trackingHealthy: dataStatus == .live,
                 directOrientationName: device.imuOrientationName,
                 directOrientationMode: device.imuOrientationMode,
+                directGnssReceiver: device.fcGnss,
                 staleOpacity: staleOpacity,
                 // Same signal the STALE banner above is drawn from, so the
                 // banner and the held verdict can never disagree.
@@ -1038,6 +1039,9 @@ struct RocketTelemetryCards: View {
     /// instead, so callers only supply the direct-link values.
     var directOrientationName: String = ""
     var directOrientationMode: IMUOrientationMode = .unknown
+    /// The GNSS receiver the flight computer found, for a DIRECT link (the
+    /// OC's fc_identity readback; a BS link does not relay it).
+    var directGnssReceiver: String? = nil
     /// Dimming applied while the stream is stale; 1.0 when live.
     var staleOpacity: Double = 1.0
     /// Age of the newest frame while the stream is NOT live, else nil.  Only
@@ -1108,7 +1112,8 @@ struct RocketTelemetryCards: View {
 
             Group {
                 if showRocketViews {
-                    GPSView(telemetry: telemetry, compact: true)
+                    GPSView(telemetry: telemetry, compact: true,
+                            receiver: isBaseStation ? nil : directGnssReceiver)
                         .opacity(staleOpacity)
                 }
 
@@ -2092,12 +2097,23 @@ struct BatteryRow: View {
 struct GPSView: View {
     let telemetry: TelemetryData
     var compact: Bool = false
+    /// The receiver the flight computer found ("u-blox", "mosaic-G5"), under
+    /// the title: a V9 finds its receiver at boot, and this is how the pad
+    /// sees which. nil shows nothing.
+    var receiver: String? = nil
 
     var body: some View {
         if compact {
             HStack(spacing: 12) {
-                Text("GPS")
-                    .font(.headline)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("GPS")
+                        .font(.headline)
+                    if let receiver {
+                        Text(receiver)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
                 Text(telemetry.coordinatesDisplay)
                     .font(.system(.caption, design: .monospaced))
                 Spacer()
@@ -2119,6 +2135,9 @@ struct GPSView: View {
                 HStack(spacing: 20) {
                     DataItem(label: "Satellites", value: "\(telemetry.num_sats)")
                     DataItem(label: "GDOP", value: telemetry.gdop.map { String(format: "%.1f", $0) } ?? "N/A")
+                    if let receiver {
+                        DataItem(label: "Receiver", value: receiver)
+                    }
                 }
             }
             .padding()

@@ -525,7 +525,9 @@ fun DashboardScreen(
 
         if (!session.isBaseStation && showValues) FlightSummaryCard(telemetry)
 
-        if (showValues) GpsRow(telemetry)
+        // The receiver the FC found rides the direct link's fc_identity; a BS
+        // link does not relay it (iOS GPSView's receiver).
+        if (showValues) GpsRow(telemetry, receiver = if (session.isBaseStation) null else identity.fcGnss)
 
         // Direction/distance to rocket (BS links only — the recovery walk).
         // Reads the LATCHED lastValidRocketFix, never per-frame lat/lon:
@@ -2327,16 +2329,29 @@ private fun ImuCard(
     }
 }
 
-/** iOS GPSView (compact) twin: lat, lon + sat count on one row. */
+/**
+ * iOS GPSView (compact) twin: lat, lon + sat count on one row, and under the
+ * title the receiver the FC found, when it says (a V9 finds its receiver at
+ * boot: this is how the pad sees which).
+ */
 @Composable
-private fun GpsRow(telemetry: TelemetryData) {
+private fun GpsRow(telemetry: TelemetryData, receiver: String? = null) {
     val mono = androidx.compose.ui.text.font.FontFamily.Monospace
     Card(Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth().padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("GPS", style = MaterialTheme.typography.titleMedium)
+            Column {
+                Text("GPS", style = MaterialTheme.typography.titleMedium)
+                if (receiver != null) {
+                    Text(
+                        receiver,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             Text(
                 // #1071: was `latitude ?: 0.0`, which printed the null island
                 // as a six-decimal fix. The formatter is in :core:protocol

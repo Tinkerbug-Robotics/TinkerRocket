@@ -1023,6 +1023,10 @@ void buildCommands(Builder& b) {
           Json().u("cmd", 67).u("rate_hz", 1920).done(),
           "ImuRateConfigData; valid values 960/1920/3840");
 
+    b.add("commands", "cmd79_gnsslog_1.bin", cmd(79, bytesOf(GnssLogConfigData{GNSS_LOG_REDUCED})),
+          Json().u("cmd", 79).u("setting", GNSS_LOG_REDUCED).done(),
+          "GnssLogConfigData; 0 detailed, 1 reduced");
+
     {
         // Pad calibration (#1600 phase 5): 2026-10-13's GPS broadcast
         // ionosphere (NOAA brdc2860.26n) and its file's GPS day.

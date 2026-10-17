@@ -259,6 +259,10 @@
  "size": 3,
  "notes": "ImuRateConfigData; valid values 960/1920/3840"},
  {
+ "file": "commands/cmd79_gnsslog_1.bin",
+ "size": 2,
+ "notes": "GnssLogConfigData; 0 detailed, 1 reduced"},
+ {
  "file": "commands/cmd75_padcal_10.bin",
  "size": 11,
  "notes": "PadCalConfigData: [iono i8 x8][gps_day u16]; gps_day 0 = no ionosphere"},

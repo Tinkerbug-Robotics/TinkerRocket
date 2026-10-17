@@ -1896,6 +1896,9 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(ACC_CAL_APPLY_PENDING),    MT(ACC_CAL_APPLY_MSG),
         MT(ACC_CAL_READ),             MT(ACC_CAL_STATUS_MSG),
         MT(ACC_FACE_PENDING),
+        // GNSS log setting (BLE cmd 79): two codes from the top of the 0x80
+        // block.
+        MT(GNSS_LOG_CONFIG_PENDING),  MT(GNSS_LOG_CONFIG_MSG),
     };
 #undef MT
 
@@ -1946,7 +1949,10 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     // 114 = 109 + the low-g hand calibration's ACC_CAL_APPLY_PENDING /
     //       ACC_CAL_APPLY_MSG / ACC_CAL_READ / ACC_CAL_STATUS_MSG /
     //       ACC_FACE_PENDING (0x80-0x84, #1629).
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 114u)
+    // 116 = 114 + the GNSS log setting pair GNSS_LOG_CONFIG_PENDING /
+    //       GNSS_LOG_CONFIG_MSG (0x8E/0x8F, BLE cmd 79), from the top of
+    //       the 0x80 block.
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 116u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }

@@ -205,6 +205,24 @@ class RocketProfileCodecTest {
     }
 
     @Test
+    fun gnssLogSetting_roundTripsAndDefaultsToDetailed() {
+        // cmd 79: 0 detailed (the default, and what a profile from before the
+        // setting reads as), 1 reduced; anything else is the default, as the
+        // firmware reads its NVS.
+        assertEquals(RocketProfile.GNSS_LOG_DETAILED, RocketProfile.makeDefault("x", 0).gnssLogSetting)
+        val reduced = RocketProfile.makeDefault("Goblin", 0).copy(gnssLogSetting = RocketProfile.GNSS_LOG_REDUCED)
+        val back = RocketProfileCodec.decode(RocketProfileCodec.encode(reduced), nowMs = 0)
+        assertNotNull(back)
+        assertEquals(RocketProfile.GNSS_LOG_REDUCED, back.gnssLogSetting)
+        val legacy = RocketProfileCodec.decode("""{"name":"Old","imuRateHz":0}""", nowMs = 0)
+        assertNotNull(legacy)
+        assertEquals(RocketProfile.GNSS_LOG_DETAILED, legacy.gnssLogSetting)
+        val corrupt = RocketProfileCodec.decode("""{"name":"Odd","gnssLogSetting":9}""", nowMs = 0)
+        assertNotNull(corrupt)
+        assertEquals(RocketProfile.GNSS_LOG_DETAILED, corrupt.gnssLogSetting)
+    }
+
+    @Test
     fun eightKRates_surviveDecode() {
         // #1485: "8k Dynamic" (sentinel 1) and a fixed 7680 Hz are settings
         // now; a stored one must come back, not fall to the default.
@@ -390,7 +408,7 @@ class ActiveRocketSyncerTest {
 
         val sent = r.sentCommandIds().toSet()
         // The fourteen config frames #915 removed from the connect path.
-        for (cmd in listOf(12, 13, 14, 22, 31, 26, 65, 66, 33, 64, 67, 11, 34)) {
+        for (cmd in listOf(12, 13, 14, 22, 31, 26, 65, 66, 33, 64, 67, 79, 11, 34)) {
             assertTrue(cmd !in sent, "cmd $cmd was pushed on connect (sent: $sent)")
         }
         // Cal is still READ (a question, not a write) — the profile has none.
@@ -437,7 +455,7 @@ class ActiveRocketSyncerTest {
         runCurrent()
 
         val sent = r.sentCommandIds().drop(before).toSet()
-        for (cmd in listOf(12, 13, 14, 22, 31, 26, 65, 66, 33, 64, 67, 34)) {
+        for (cmd in listOf(12, 13, 14, 22, 31, 26, 65, 66, 33, 64, 67, 79, 34)) {
             assertTrue(cmd in sent, "cmd $cmd missing from the explicit push (sent: $sent)")
         }
         assertFalse(11 in sent, "cmd 11 (piezo sounds) is retired and must not be sent")
@@ -468,7 +486,7 @@ class ActiveRocketSyncerTest {
         assertIs<ActiveRocketSyncer.SyncState.Idle>(r.syncer.syncState.value)
         // The session's own connect choreography still runs (cmd 20 etc.) —
         // only PROFILE writes are forbidden on a BS link.
-        val profileCmds = setOf(12, 13, 14, 22, 31, 26, 65, 66, 33, 64, 67, 11, 34, 55, 61, 62, 63)
+        val profileCmds = setOf(12, 13, 14, 22, 31, 26, 65, 66, 33, 64, 67, 79, 11, 34, 55, 61, 62, 63)
         val sentAfter = r.sentCommandIds().drop(before)
         assertTrue(
             sentAfter.none { it in profileCmds },
@@ -1144,6 +1162,20 @@ class ActiveRocketSyncerTest {
         assertEquals(emptyList(), r.changed)
         assertEquals(120f, r.profile.rateCapDps)
         assertEquals(5f, r.profile.kpAngle)
+    }
+
+    @Test
+    fun theRocketsGnssLogSetting_isAdopted() {
+        val p = RocketProfile.makeDefault("x", 0)
+        val r = ActiveRocketSyncer.adopt(
+            p, matchingConfig().copy(gnssLogSetting = RocketProfile.GNSS_LOG_REDUCED),
+        )
+        assertEquals(listOf(ActiveRocketSyncer.GROUP_GNSS_LOG), r.changed)
+        assertEquals(RocketProfile.GNSS_LOG_REDUCED, r.profile.gnssLogSetting)
+        // Firmware without the setting leaves the profile's value alone.
+        val kept = ActiveRocketSyncer.adopt(r.profile, matchingConfig().copy(gnssLogSetting = null))
+        assertEquals(emptyList(), kept.changed)
+        assertEquals(RocketProfile.GNSS_LOG_REDUCED, kept.profile.gnssLogSetting)
     }
 
     /** Firmware too old to report a field leaves the profile's value alone. */

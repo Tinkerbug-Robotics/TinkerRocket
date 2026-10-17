@@ -38,6 +38,7 @@
 #include <RocketComputerTypes.h>
 #include <GuidancePointGate.h>    // #435: pure cmd-28 acceptance gate (host-tested)
 #include <RollProfileGate.h>      // #1115: total wrap180f + roll-profile acceptance gate (host-tested)
+#include <gnss_log_policy.h>      // the REDUCED GNSS log's SBF cut (host-tested)
 #include <TR_OTA_Receiver.h>      // FC-side OTA relay receiver (#8 Phase 4)
 #include <TR_OTA_Backend_esp.h>
 #include <esp_system.h>           // esp_restart after a verified relayed OTA
@@ -46,6 +47,7 @@
 #include <esp_ota_ops.h>          // Layer 4: esp_ota_mark_app_valid_cancel_rollback (#8/#13)
 #include <esp_app_desc.h>         // esp_app_get_description() for FC_IDENTITY version push (#8)
 #include <BoardIdentity.h>       // #773 step 2: provisioned board revision
+#include <flight_snapshot_answer.h>   // how the OC's answer to GET_FLIGHT_SNAPSHOT reads (host-tested)
 #include <driver/gpio.h>
 #include <esp_attr.h>            // RTC_NOINIT_ATTR for the #848 power-hold latch flag
 #include "pwr_hold_policy.h"     // #848: boot reconciliation decision table
@@ -740,6 +742,26 @@ static uint16_t burnout_neg_count = 0;
 // on purpose: in dynamic mode the live rate changes mid-flight, and the
 // setting must not.
 static uint16_t imu_rate_setting = IMU_RATE_DYNAMIC;
+// The setting as the user chose it (NVS "imu"/"rate"). imu_rate_setting is
+// this brought within imu_rate_max_hz, and the two differ only while the
+// limit is lower than the setting: kept so the setting comes back when the
+// limit rises again (a u-blox next boot, or the REDUCED GNSS log now).
+static uint16_t imu_rate_user_setting = IMU_RATE_DYNAMIC;
+// The fastest IMU rate this boot flies: the board's, lowered to 3840 Hz once
+// the GNSS bring-up has found a mosaic-G5 and the GNSS log setting below is
+// DETAILED, since all of its SBF then shares the link and the OC's flash
+// (RocketComputerTypes.h imuRateMaxForGnss). A setting above it is kept (NVS,
+// and the OC's copy) and flown as the fastest that fits; the OC reports what
+// flies, and limits the app's menu, once the FC's identity push names the
+// receiver. Until the receiver is known it is the board's.
+static uint16_t imu_rate_max_hz = config::IMU_RATE_MAX_HZ;
+// The GNSS log setting (BLE cmd 79, NVS "gnsslog"/"set"): every SBF block a
+// mosaic-G5 sends into the log (DETAILED, the default), or PVTGeodetic at
+// 20 Hz with the raw measurements once a second (REDUCED), which leaves the
+// IMU the board's own limit. Nothing else logs SBF, so with any other
+// receiver it changes nothing.
+static uint8_t gnss_log_setting = GNSS_LOG_DETAILED;
+static gnss_log::SbfCut sbf_log_cut;   // the REDUCED log's place in the SBF stream
 
 // #1485: the board's limit must be a rate the chip can be set to, and the
 // default setting must fit under it, or a fresh board would refuse its own
@@ -772,6 +794,21 @@ static void applyImuRateForFlightPhase()
 {
     const uint16_t hz = imuRateResolve(imu_rate_setting, deployment_detected);
     if (hz != sensor_collector_hw.ism6Rate()) sensor_collector_hw.setIsm6Rate(hz);
+}
+
+// The IMU limit from the receiver found and the GNSS log setting, and the
+// user's setting flown within it (NVS untouched). Once the GNSS bring-up has
+// found the receiver, and whenever the GNSS log setting changes.
+static void refreshImuRateLimit()
+{
+    imu_rate_max_hz = imuRateMaxForGnss(config::IMU_RATE_MAX_HZ, sensor_collector_hw.gnssType(),
+                                        gnss_log_setting);
+    const uint16_t flown = imuRateSettingClamp(imu_rate_user_setting, imu_rate_max_hz);
+    if (flown != imu_rate_setting)
+    {
+        imu_rate_setting = flown;
+        applyImuRateForFlightPhase();
+    }
 }
 
 static bool mach_locked_out = false;    // promoted from baro block for apogee voting
@@ -5348,7 +5385,11 @@ struct OcSnapshotAnswer
 {
     FlightSnapshotData snap;
     bool valid;                // a live, non-sim, in-flight snapshot to restore
-    bool answered_no_flight;   // a definitive "no flight": a sim frame or a LANDED clear
+    bool answered_no_flight;   // a definitive "no flight": a sim frame, a LANDED clear,
+                               // or the OC saying it holds none
+    bool refused_inflight;     // of those, an in-flight frame this FC won't restore
+                               // (a sim flight, another snapshot VERSION): the OC's
+                               // store still holds it, so the boot clears it
 };
 
 static OcSnapshotAnswer fcAskOcForFlightSnapshot()
@@ -5363,14 +5404,15 @@ static OcSnapshotAnswer fcAskOcForFlightSnapshot()
         // probe misses — the OC is still bringing its I2C slave up — and
         // a silently-skipped recovery mid-descent is a ballistic. Five
         // attempts ~350 ms apart bound the extra boot time at ~1.75 s,
-        // spent ONLY on unexpected-reset boots. Between attempts the OC
-        // gets a fresh OUT_STATUS_QUERY (full-length read — an aborted
-        // short read would desync its V2 slave TX ring, #399), and a
-        // failed snapshot read gets an I2C_TX_RESYNC first (#402; the
-        // bus is idle here by construction — nothing else polls during
-        // setup). A definitive answer (valid restore, sim refusal, or a
-        // LANDED/garbage frame that parsed) stops the retries; only
-        // transport failures continue.
+        // spent only while the OC is not answering. A failed or frameless
+        // read gets an I2C_TX_RESYNC first (#402; the bus is idle here by
+        // construction — nothing else polls during setup). A definitive
+        // answer (flight_snapshot_answer.h: a restore, a sim refusal, the
+        // OC's "no flight in progress", or a snapshot that is no flight to
+        // restore) stops the retries; only transport failures and garbage
+        // continue. An OC from before that answer stays silent when it
+        // holds no flight, so on one every boot still spends the five
+        // tries.
         constexpr int kRecoveryAttempts = 5;
         (void)out_ready;   // no longer a precondition — see below
         bool definitive = false;
@@ -5400,6 +5442,8 @@ static OcSnapshotAnswer fcAskOcForFlightSnapshot()
             delay_ms(20);  // let OC service the request and queue the response
 
             constexpr size_t kRespFrameLen = 4 + 1 + 1 + sizeof(FlightSnapshotData) + 2;
+            static_assert(kRespFrameLen == flight_snapshot_answer::kFrameLen,
+                          "the FC reads exactly the frame the OC stages (#399)");
             // Read EXACTLY the staged frame size. The OC stages
             // kRespFrameLen bytes; under the V2 slave driver, clocking out
             // more than was staged underflows the TX path (the +16 "SOF
@@ -5450,42 +5494,56 @@ static OcSnapshotAnswer fcAskOcForFlightSnapshot()
                         type == SNAPSHOT_MSG &&
                         payload_len == sizeof(FlightSnapshotData)) {
                         memcpy(&snap, payload, sizeof(FlightSnapshotData));
-                        if (snap.magic   == FlightSnapshotData::MAGIC &&
-                            snap.version == FlightSnapshotData::VERSION &&
-                            snap.rocket_state == (uint8_t)INFLIGHT &&
-                            snap.crc32 == computeSnapshotCRC(snap)) {
-                            if (snap.sim_flight) {
-                                // The dry-fire gate lives in isSimActive(),
-                                // which a reboot resets — restoring here
-                                // would fire real pyro outputs on bench
-                                // igniters mid-sim.
-                                ESP_LOGW(TAG, "[RECOVERY] Snapshot is from a SIMULATED flight — refusing restore");
+                        const bool crc_ok = (snap.crc32 == computeSnapshotCRC(snap));
+                        const flight_snapshot_answer::Verdict verdict =
+                            flight_snapshot_answer::classify(snap, crc_ok);
+                        answer.refused_inflight =
+                            flight_snapshot_answer::refusedInflight(verdict, snap);
+                        switch (verdict) {
+                        case flight_snapshot_answer::Verdict::Restore:
+                            valid = true;
+                            definitive = true;
+                            break;
+                        case flight_snapshot_answer::Verdict::SimFlight:
+                            // The dry-fire gate lives in isSimActive(),
+                            // which a reboot resets — restoring here
+                            // would fire real pyro outputs on bench
+                            // igniters mid-sim.
+                            ESP_LOGW(TAG, "[RECOVERY] Snapshot is from a SIMULATED flight — refusing restore");
+                            answered_no_flight = true;
+                            definitive = true;
+                            break;
+                        case flight_snapshot_answer::Verdict::NoFlight:
+                            // The OC saying it holds no flight, or a
+                            // snapshot that is no flight to restore: the
+                            // FC's LANDED clear, or another VERSION's frame.
+                            // The VERSION mismatch is the one worth a
+                            // warning.
+                            if (flight_snapshot_answer::isNoFlightAnswer(snap, crc_ok)) {
+                                ESP_LOGI(TAG, "[RECOVERY] The out computer holds no flight in progress");
+                            } else if (snap.version != FlightSnapshotData::VERSION &&
+                                       snap.rocket_state == (uint8_t)INFLIGHT) {
+                                ESP_LOGW(TAG, "[RECOVERY] Snapshot is version %u, this image reads %u — not restoring",
+                                         snap.version, FlightSnapshotData::VERSION);
                             } else {
-                                valid = true;
+                                ESP_LOGI(TAG, "[RECOVERY] Snapshot is a cleared flight (state %u) — nothing to restore",
+                                         snap.rocket_state);
                             }
-                            if (!valid) answered_no_flight = true;
-                            definitive = true;   // a real answer, either way
-                            // The OC demonstrably answered — latch it for
-                            // the #848/#859 hold reconciliation just below,
-                            // which would otherwise inherit a stale false.
-                            out_ready = true;
-                            out_ready_last_ms = millis();   // #1137 item 9
-                        } else {
+                            answered_no_flight = true;
+                            definitive = true;
+                            break;
+                        case flight_snapshot_answer::Verdict::Garbage:
+                            // Keeps retrying: could be a torn TX ring.
                             ESP_LOGW(TAG, "[RECOVERY] Snapshot invalid (magic=0x%08lX state=%u crc=%s)",
                                      (unsigned long)snap.magic, snap.rocket_state,
-                                     (snap.crc32 == computeSnapshotCRC(snap)) ? "OK" : "FAIL");
-                            // A frame that PARSED but fails validation is
-                            // also definitive when it is a LANDED clear —
-                            // the flight genuinely ended. Garbage keeps
-                            // retrying (could be a torn TX ring).
-                            if (snap.magic == FlightSnapshotData::MAGIC &&
-                                snap.crc32 == computeSnapshotCRC(snap)) {
-                                definitive = true;
-                                answered_no_flight = true;
-                            }
-                            out_ready = true;   // the OC answered
-                            out_ready_last_ms = millis();   // #1137 item 9
+                                     crc_ok ? "OK" : "FAIL");
+                            break;
                         }
+                        // The OC demonstrably answered — latch it for the
+                        // #848/#859 hold reconciliation just below, which
+                        // would otherwise inherit a stale false.
+                        out_ready = true;
+                        out_ready_last_ms = millis();   // #1137 item 9
                         frame_seen = true;
                     }
                 }
@@ -6325,6 +6383,7 @@ static void setup_fc()
                      (unsigned)nvs_rate, (unsigned)config::IMU_RATE_MAX_HZ);
         }
     }
+    imu_rate_user_setting = imu_rate_setting;
     {
         const uint16_t boot_hz = imuRateResolve(imu_rate_setting, /*deployed=*/false);
         sensor_collector_hw.setIsm6Rate(boot_hz);
@@ -6342,6 +6401,28 @@ static void setup_fc()
         }
     }
     prefs.end();
+
+    // The GNSS log setting (BLE cmd 79): what the log keeps of a mosaic-G5's
+    // SBF, and with it the IMU limit, which follows once the receiver is
+    // known (refreshImuRateLimit, after the GNSS bring-up). Whitelisted on
+    // read like the rate: an unknown value logs every block, as before.
+    prefs.begin("gnsslog", false);
+    if (prefs.isKey("set"))
+    {
+        const uint8_t nvs_log = prefs.getUChar("set", GNSS_LOG_DETAILED);
+        if (gnssLogSettingValid(nvs_log))
+        {
+            gnss_log_setting = nvs_log;
+        }
+        else
+        {
+            ESP_LOGW(TAG, "NVS GNSS log setting %u invalid — using detailed", (unsigned)nvs_log);
+        }
+    }
+    prefs.end();
+    ESP_LOGI(TAG, "GNSS log: %s", gnss_log_setting == GNSS_LOG_REDUCED
+                                      ? "reduced (a mosaic-G5's raw measurements once a second)"
+                                      : "detailed (every SBF block)");
 
     // Restore high-g accelerometer bias from NVS (namespace "cal")
     prefs.begin("cal", false);  // read-write (creates namespace on first boot)
@@ -6530,6 +6611,31 @@ static void setup_fc()
     if (!sensor_collector.enableGNSSRawOutputs())
         ESP_LOGE(TAG, "[RAWGNSS] no memory for the raw GNSS queues");
 #endif
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO)
+    // The mosaic-G5 driver is new, and on a mounted rocket the only way to
+    // replace firmware is over the air, which needs a finished boot. So a boot
+    // that follows a crash restart (a panic or a watchdog) leaves the receiver
+    // out: whatever crashed, this boot gets the FC to its loop, GNSS-absent,
+    // where it can take an update. A power-on or a software restart (an OTA)
+    // brings the receiver back. In flight that means a crash costs GNSS for
+    // the rest of the flight, never the flight computer. The V9 image does it
+    // where its last boot found the mosaic, and only there: a u-blox board
+    // keeps its receiver through a crash, as it always has.
+    {
+        const esp_reset_reason_t rr = esp_reset_reason();
+        if ((rr == ESP_RST_PANIC || rr == ESP_RST_INT_WDT || rr == ESP_RST_TASK_WDT || rr == ESP_RST_WDT) &&
+            sensor_collector_hw.gnssLastBootType() == GNSS_TYPE_MOSAIC)
+        {
+            ESP_LOGE(TAG, "[GNSS] the last reset was a crash (%s): the mosaic-G5 stays out of this boot",
+                     resetReasonStr(rr));
+            sensor_collector_hw.skipGNSSThisBoot();
+        }
+    }
+#endif
+    // The mosaic-G5's 1PPS (J1 pin 5); -1 and a no-op on every other build.
+    // The V9 image's mosaic rate as well; its GNSS_UPDATE_RATE is the u-blox's.
+    sensor_collector_hw.setGNSSPpsPin(config::GNSS_PPS_PIN);
+    sensor_collector_hw.setGNSSMosaicRate(config::GNSS_MOSAIC_UPDATE_RATE);
     sensor_collector.begin(config::SENSOR_CORE);
 #if TR_RAW_GNSS_SHADOW
     startRawShadow();
@@ -6563,6 +6669,25 @@ static void setup_fc()
     // the receiver never came up, rather than only finding out from a missing
     // fix later.
     fcBootStatus(FCB_GNSS, gnss_absent_mode ? FCB_DEG_GNSS : 0);
+    // The receiver now known, the IMU limit that goes with it: a mosaic-G5
+    // with the DETAILED GNSS log leaves the IMU at most 3840 Hz. A setting
+    // above it flies as the fastest that fits (8k Dynamic as 4k Dynamic,
+    // 7680 Hz as 3840 Hz) without touching NVS, so the board gets the user's
+    // setting back with a u-blox, or with the REDUCED GNSS log.
+    {
+        const uint8_t gnss_type = sensor_collector_hw.gnssType();
+        refreshImuRateLimit();
+        ESP_LOGI(TAG, "[GNSS] Receiver: %s; IMU rates up to %u Hz",
+                 gnss_type != GNSS_TYPE_NONE ? gnssTypeName(gnss_type) : "none",
+                 (unsigned)imu_rate_max_hz);
+        if (imu_rate_setting != imu_rate_user_setting)
+        {
+            ESP_LOGW(TAG, "[GNSS] the %s caps the IMU at %u Hz: the logging rate setting %u flies as %u "
+                          "(the setting is kept)",
+                     gnssTypeName(gnss_type), (unsigned)imu_rate_max_hz, (unsigned)imu_rate_user_setting,
+                     (unsigned)imu_rate_setting);
+        }
+    }
     sensor_converter.configureISM6HG256FullScale(
         static_cast<ISM6LowGFullScale>(config::ISM6_LOW_G_FS_G),
         static_cast<ISM6HighGFullScale>(config::ISM6_HIGH_G_FS_G),
@@ -6862,9 +6987,13 @@ static void setup_fc()
     // servable INFLIGHT frame" now means "a flight really is in progress".
     //
     // The cost on a normal boot is one I2C exchange, because the retry loop
-    // stops the moment the OC answers ANYTHING. The retries only accumulate
-    // when the OC does not answer at all, which is the one case where cold
-    // starting mid-descent would be unrecoverable.
+    // stops at the first definitive answer and the OC says "no flight" when it
+    // holds none (snapshot_answer_policy.h). The retries only accumulate when
+    // the OC does not answer at all, which is the one case where cold
+    // starting mid-descent would be unrecoverable. An OC from before that
+    // answer stays silent when it holds no flight, so on one a normal boot
+    // spends all five tries (~1.5 s, five "[RECOVERY] read OK but no SNAPSHOT
+    // frame" lines with the OC's last status reply, AA 55 AA 55 A9).
     {
         esp_reset_reason_t rst = esp_reset_reason();
         ESP_LOGI(TAG, "Reset reason: %s (%d)", resetReasonStr(rst), (int)rst);
@@ -6876,12 +7005,14 @@ static void setup_fc()
         // difference between safely clearing the record and destroying the one
         // the next brownout would have needed (#834 item 3).
         bool answered_no_flight = false;
+        bool refused_inflight = false;
 
         {
             const OcSnapshotAnswer ask = fcAskOcForFlightSnapshot();
             snap = ask.snap;
             valid = ask.valid;
             answered_no_flight = ask.answered_no_flight;
+            refused_inflight = ask.refused_inflight;
         }
 
         if (valid) {
@@ -7132,9 +7263,19 @@ static void setup_fc()
         //
         // Expressed on the answer instead, it is strictly tighter: no answer
         // means no clear, on every reset reason. A genuinely ended flight is
-        // still cleared here (the OC serves the LANDED frame), by the LANDED
-        // one-shot, and by the OC's own retirement of its stores.
-        if (!reboot_recovery && answered_no_flight) {
+        // cleared by the LANDED one-shot and by the OC's own retirement of its
+        // stores.
+        //
+        // What this clear retires is an in-flight frame the OC handed back
+        // and this FC refused (a sim flight, another snapshot VERSION), which
+        // would otherwise be offered again on every boot until it ages out.
+        // The OC's own "no flight in progress" needs none: its stores hold
+        // nothing to retire. And a clear sent then would do harm: it carries
+        // the FC's uptime as its flight_elapsed_ms, and the OC's #846 replay
+        // filter would drop the next flight's INFLIGHT frames as replays until
+        // their elapsed time passed it, leaving the first seconds of that
+        // flight unrecoverable.
+        if (!reboot_recovery && answered_no_flight && refused_inflight) {
             clearFlightSnapshot();
         }
     }
@@ -7355,6 +7496,11 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     // qualifies after burnout.  The GNSS-minus-baro pad offset it will be
     // judged against is frozen now.
     GnssAscentGate::onLaunch(gnss_admit_state, now_ms);
+    // The mosaic-G5 sent every ephemeris when it first decoded it, long before
+    // this flight's log began: ask for them all again so the log holds what a
+    // replay of its raw measurements needs. A flag for the GNSS poll task;
+    // no-op on other receivers.
+    sensor_collector_hw.requestGNSSNavResend();
     ESP_LOGI(TAG, "[GNSS] Vertical held out of the EKF and the apogee vote until it "
                   "agrees with the barometer after burnout (pad offset %+.1f m%s)",
              (double)gnss_admit_state.pad_offset_m,
@@ -8017,18 +8163,30 @@ static void loop_fc()
     // The receiver's raw RTCM3 frames (GNSS_RTCM_MSG), verbatim, so a flight
     // can be reconstructed later: on the mini the LC86G's MSM7, ~5 frames once
     // a second, and one ephemeris message a second; ~600 B/s with the
-    // framing.  Log-only.  A frame longer than one
-    // payload goes as consecutive parts (gnssRtcmParts).  Bounded per pass so
-    // a backlog from boot drains over a few passes rather than in one burst
-    // into the I2S queue.  Static buffers: ~1.3 kB off this task's stack.
+    // framing.  On a V9 with a mosaic-G5 the same record carries its SBF
+    // blocks: ~60 a second, ~70 kB/s with the framing, or ~9 kB/s with the
+    // REDUCED GNSS log, which keeps the raw measurements once a second
+    // (gnss_log_policy.h).  Log-only.  A frame longer than one payload goes
+    // as consecutive parts (gnssRtcmParts).
+    // Bounded per pass so a backlog from boot drains over a few passes rather
+    // than in one burst into the I2S queue.  Static buffers: ~1.3 kB (~3.5 kB
+    // on the mosaic build and the V9 image) off this task's stack.
     {
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO)
+        static uint8_t rtcm_frame[GNSS_SBF_MAX_FRAME];   // an SBF block, up to 15 parts
+#else
         static uint8_t rtcm_frame[GNSS_RTCM_MAX_FRAME];
+#endif
         static uint8_t rtcm_record[MAX_PAYLOAD];
         size_t   frame_len = 0;
         uint32_t frame_us  = 0;
         for (int i = 0; i < 8 && sensor_collector.getGNSSRtcmFrame(rtcm_frame, sizeof(rtcm_frame),
                                                                    frame_len, frame_us); i++)
         {
+            if (!gnss_log::keep(sbf_log_cut, rtcm_frame, frame_len, gnss_log_setting == GNSS_LOG_REDUCED))
+            {
+                continue;
+            }
             const uint8_t parts = gnssRtcmParts(frame_len);
             for (uint8_t k = 0; k < parts; k++)
             {
@@ -9241,9 +9399,13 @@ static void loop_fc()
                     // BOARD itself was provisioned with, so the two can be
                     // compared. Rides this same variable-length message: an OC
                     // that predates it reads up to the NUL and never notices.
+                    // Then the GNSS receiver the FC found, for the pad, and for
+                    // the OC's IMU limit (imuRateMaxForGnss); an OC that
+                    // predates that field reads up to the revision's NUL.
                     char id_payload[64];
                     const size_t id_len = board_identity::encodePayload(
-                        v, provisioned_board_rev, id_payload, sizeof(id_payload));
+                        v, provisioned_board_rev, id_payload, sizeof(id_payload),
+                        gnssTypeName(sensor_collector_hw.gnssType()));
                     (void)i2c_interface.sendMessage(
                         FC_IDENTITY, reinterpret_cast<const uint8_t*>(id_payload),
                         id_len, 10);
@@ -10415,11 +10577,25 @@ static void loop_fc()
                     }
                     else if (imuRateSettingValid(rate_hz, config::IMU_RATE_MAX_HZ))
                     {
-                        imu_rate_setting = rate_hz;
+                        // Any setting the board flies is kept as sent, here
+                        // and in the OC's copy, and flown as the fastest that
+                        // fits the receiver's limit, as at boot: an 8k setting
+                        // sent before the OC knew of a mosaic-G5 flies as 4k
+                        // and comes back with a u-blox or the REDUCED GNSS
+                        // log, and the two copies never disagree.
+                        imu_rate_user_setting = rate_hz;
+                        imu_rate_setting = imuRateSettingClamp(rate_hz, imu_rate_max_hz);
                         applyImuRateForFlightPhase();
                         prefs.begin("imu", false);
                         prefs.putUShort("rate", rate_hz);
                         prefs.end();
+                        if (imu_rate_setting != rate_hz)
+                        {
+                            ESP_LOGW(TAG, "[CFG] IMU logging rate setting %u flies as %u: the %s caps the IMU "
+                                          "at %u Hz",
+                                     (unsigned)rate_hz, (unsigned)imu_rate_setting,
+                                     gnssTypeName(sensor_collector_hw.gnssType()), (unsigned)imu_rate_max_hz);
+                        }
                         if (imuRateIsDynamic(rate_hz))
                         {
                             ESP_LOGI(TAG, "[CFG] IMU logging rate: DYNAMIC "
@@ -10445,6 +10621,50 @@ static void loop_fc()
                 else
                 {
                     cfgRetryOnNextPoll("IMU RATE CFG");   // #1112
+                }
+            }
+            else if (out_pending_command == GNSS_LOG_CONFIG_PENDING)
+            {
+                delay_ms(1);
+                uint8_t cfg_payload[sizeof(GnssLogConfigData)];
+                size_t  cfg_len = 0;
+                if (readConfigFrame(GNSS_LOG_CONFIG_MSG, sizeof(GnssLogConfigData),
+                                    cfg_payload, sizeof(cfg_payload), cfg_len)
+                    && cfg_len >= sizeof(GnssLogConfigData))
+                {
+                    const uint8_t setting = cfg_payload[0];
+                    if (rocket_state == INFLIGHT)
+                    {
+                        // It moves the IMU limit, and the IMU rate never
+                        // changes mid-flight (IMU_RATE_CONFIG above).
+                        ESP_LOGW(TAG, "[CFG] GNSS log change ignored INFLIGHT");
+                    }
+                    else if (gnssLogSettingValid(setting))
+                    {
+                        gnss_log_setting = setting;
+                        prefs.begin("gnsslog", false);
+                        prefs.putUChar("set", setting);
+                        prefs.end();
+                        const uint16_t max_was = imu_rate_max_hz;
+                        refreshImuRateLimit();
+                        ESP_LOGI(TAG, "[CFG] GNSS log: %s (persisted)", gnssLogName(setting));
+                        if (imu_rate_max_hz != max_was)
+                        {
+                            ESP_LOGI(TAG, "[CFG] with the %s, IMU rates up to %u Hz now: the logging rate "
+                                          "setting %u flies as %u",
+                                     gnssTypeName(sensor_collector_hw.gnssType()), (unsigned)imu_rate_max_hz,
+                                     (unsigned)imu_rate_user_setting, (unsigned)imu_rate_setting);
+                        }
+                    }
+                    else
+                    {
+                        ESP_LOGW(TAG, "[CFG] GNSS log setting %u rejected (not detailed or reduced)",
+                                 (unsigned)setting);
+                    }
+                }
+                else
+                {
+                    cfgRetryOnNextPoll("GNSS LOG CFG");   // #1112
                 }
             }
             else if (out_pending_command == PYRO_CONFIG_PENDING)
@@ -13442,7 +13662,8 @@ static void fcRescueTask(void*)
                     const char* v = (d && d->version[0]) ? d->version : "unknown";
                     char id_payload[64];
                     const size_t id_len = board_identity::encodePayload(
-                        v, provisioned_board_rev, id_payload, sizeof(id_payload));
+                        v, provisioned_board_rev, id_payload, sizeof(id_payload),
+                        gnssTypeName(sensor_collector_hw.gnssType()));   // none in rescue mode
                     (void)i2c_interface.sendMessage(
                         FC_IDENTITY, reinterpret_cast<const uint8_t*>(id_payload),
                         id_len, 10);

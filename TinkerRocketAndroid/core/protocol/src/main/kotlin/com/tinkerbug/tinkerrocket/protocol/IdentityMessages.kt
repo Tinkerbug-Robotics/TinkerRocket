@@ -66,6 +66,10 @@ public data class FcIdentityMsg(
     // never treat that as agreement with anything.
     val fcBoardRev: String? = null,   // "fc_board"
     val ocBoardRev: String? = null,   // "oc_board"
+    // The GNSS receiver the FC found: "u-blox", "mosaic-G5", "LC86G". The V9
+    // finds its receiver at boot, so the pad shows which. "" is a real answer
+    // (none came up: GNSS-absent); null is an OC that predates the key.
+    val fcGnss: String? = null,       // "fc_gnss"
 ) {
     public companion object {
         public fun parse(json: JsonObject): FcIdentityMsg =
@@ -73,6 +77,7 @@ public data class FcIdentityMsg(
                 fcFirmwareVersion = JsonBridging.nsString(json, "fc_fw"),
                 fcBoardRev = JsonBridging.nsString(json, "fc_board")?.ifEmpty { null },
                 ocBoardRev = JsonBridging.nsString(json, "oc_board")?.ifEmpty { null },
+                fcGnss = JsonBridging.nsString(json, "fc_gnss"),
             )
     }
 }

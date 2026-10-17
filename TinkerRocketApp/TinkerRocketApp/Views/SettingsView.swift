@@ -930,6 +930,8 @@ private struct SettingsContent: View {
                 .font(.caption).foregroundColor(.secondary)
         }
 
+        gnssLogSection
+
         radioSection
 
         // Device-level firmware update lives on the General tab only (#314).
@@ -1046,8 +1048,14 @@ private struct SettingsContent: View {
     private var imuRateFooter: String {
         let rate = profile.imuRateHz
         let peak = RocketProfile.imuRateChoices.first { $0.setting == rate }?.peakHz ?? 0
+        // The mosaic-G5's detailed GNSS log is what holds this rocket at 4k.
+        let gnssHint = gnssLogHoldsImuAt4k
+            ? " The 8k rates need GNSS Logging set to Reduced (below)." : ""
         if let maxHz = imuRateMaxHz, peak > maxHz {
-            return "This rocket logs at up to \(maxHz) Hz. It keeps its current rate until you pick one it can fly."
+            return "This rocket logs at up to \(maxHz) Hz. It keeps its current rate until you pick one it can fly." + gnssHint
+        }
+        if !gnssHint.isEmpty {
+            return "With the mosaic-G5 logging its detailed GNSS data, this rocket logs at up to 4k." + gnssHint
         }
         switch rate {
         case RocketProfile.imuRateDynamic:
@@ -1066,6 +1074,68 @@ private struct SettingsContent: View {
             set: { hz in
                 updateProfile { $0.imuRateHz = hz }
                 if device.isConnected { device.sendImuRateConfig(hz) }
+            })
+    }
+
+    // MARK: GNSS log (cmd 79)
+
+    /// What the rocket logs of a Septentrio mosaic-G5's data: all of it with
+    /// the IMU at most 4k, or its position and once-a-second raw measurements
+    /// with the 8k rates open. Beside the rate because it moves the rate's
+    /// limit; the rate menu follows the rocket's `irmax`.
+    @ViewBuilder
+    private var gnssLogSection: some View {
+        Section(header: Text("GNSS Logging"), footer: Text(gnssLogFooter)) {
+            Picker("GNSS data", selection: gnssLogBinding) {
+                Text("Detailed").tag(RocketProfile.gnssLogDetailed)
+                Text("Reduced").tag(RocketProfile.gnssLogReduced)
+            }
+            .pickerStyle(.segmented)
+            .disabled(device.isConnected
+                      && (!gnssLogSettingSupported || device.telemetry.state == "INFLIGHT"))
+        }
+    }
+
+    /// True once a readback has arrived and carried `glog`; a readback
+    /// without it is firmware that has no such setting.
+    private var gnssLogSettingSupported: Bool {
+        device.rocketConfig?.gnssLogSetting != nil
+    }
+
+    /// The connected rocket's mosaic-G5 is logging its detailed data, and
+    /// that is what holds the IMU at 4k.
+    private var gnssLogHoldsImuAt4k: Bool {
+        guard device.isConnected, device.fcGnss == "mosaic-G5",
+              let cfg = device.rocketConfig, cfg.gnssLogSetting == RocketProfile.gnssLogDetailed
+        else { return false }
+        return (cfg.imuRateMaxHz ?? RocketProfile.imuRateBaselineMaxHz) <= RocketProfile.imuRateBaselineMaxHz
+    }
+
+    private var gnssLogFooter: String {
+        if device.isConnected {
+            if device.telemetry.state == "INFLIGHT" {
+                return "Locked while the rocket is flying."
+            }
+            if device.rocketConfig != nil, !gnssLogSettingSupported {
+                return "This rocket\u{2019}s firmware doesn\u{2019}t have this setting. Update it to use this."
+            }
+        }
+        var text = profile.gnssLogSetting == RocketProfile.gnssLogReduced
+            ? "Reduced: logs the mosaic-G5\u{2019}s position 20 times a second and its raw measurements once a second, which leaves room for the 8k IMU rates."
+            : "Detailed: logs all of the mosaic-G5\u{2019}s data, raw measurements included, 20 times a second. That fills the log about as fast as the IMU at 4k, so the IMU logs at up to 4k."
+        text += " The receiver\u{2019}s own microSD card keeps all of its data either way."
+        if device.isConnected, let receiver = device.fcGnss, receiver != "mosaic-G5" {
+            text = "This rocket\u{2019}s receiver is the \(receiver), not a Septentrio mosaic-G5, so this changes nothing on it. " + text
+        }
+        return text
+    }
+
+    private var gnssLogBinding: Binding<UInt8> {
+        Binding(
+            get: { profile.gnssLogSetting },
+            set: { setting in
+                updateProfile { $0.gnssLogSetting = setting }
+                if device.isConnected { device.sendGnssLogConfig(setting) }
             })
     }
 

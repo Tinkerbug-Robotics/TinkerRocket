@@ -356,6 +356,12 @@ public object Commands {
     public fun imuRate(rateHz: Int): ByteArray =
         frame(BleCommandId.IMU_RATE) { u16(rateHz) }
 
+    /** cmd 79 — GNSS log: `[setting u8]`, 0 detailed or 1 reduced (what the
+     *  rocket logs of a mosaic-G5's data, and so whether the 8k IMU rates
+     *  fit). */
+    public fun gnssLog(setting: Int): ByteArray =
+        frame(BleCommandId.GNSS_LOG) { u8(setting) }
+
     // ------------------------------------------------------------------ pyro
 
     /** cmd 34 — PyroConfigData, 24 B: 4 × `[enabled u8][mode u8][value f32]`.

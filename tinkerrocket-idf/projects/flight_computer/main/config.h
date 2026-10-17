@@ -202,6 +202,37 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 #endif
 #endif
 
+// The V9 flying a Septentrio mosaic-G5 on J1 (-DTR_GNSS_MOSAIC=1,
+// CMakeLists.txt). The driver is the build's choice, like the M1's LC86G; the
+// harness puts the receiver's 1PPS on J1 pin 5, which only this build reads,
+// and only as an input (board_v9.h). Refused anywhere else: the M1's receiver
+// is soldered on, and no other board's J1 has been checked for this harness.
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if !TR_BOARD_V9
+#error "TR_GNSS_DRIVER_MOSAIC is a V9 build (-DTR_BOARD_V9=1 -DTR_GNSS_MOSAIC=1)"
+#endif
+#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+#error "One GNSS driver per build: TR_GNSS_DRIVER_MOSAIC and TR_GNSS_DRIVER_LC86 are both set"
+#endif
+#endif
+
+// The V9 image (CMakeLists.txt, TR_GNSS_AUTO, on unless -DTR_GNSS_AUTO=0):
+// whichever receiver is on J1, the u-blox carrier or the mosaic-G5 harness,
+// found at boot (TR_Sensor_Collector/gnss_auto_driver.h). J1 pin 5 is the
+// mosaic's 1PPS on its harness, and the driver touches it only once the
+// mosaic is found: on the PX1105R carrier it is a receiver input.
+#if defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+// The V8 too, on request, for the bench: its SAM-M10Q carrier sits on the
+// same GPIO3/GPIO4 (board_v8.h). Its J1 has not been checked for the mosaic
+// harness, so on a V8 the mosaic would get no PPS pin (GNSS_PPS_PIN below).
+#if !TR_BOARD_V9 && !TR_BOARD_V8
+#error "TR_GNSS_DRIVER_AUTO is the V9's (and a V8 bench build's): its J1 is where the two receivers land"
+#endif
+#if (defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86) || (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC)
+#error "One GNSS driver per build: TR_GNSS_DRIVER_AUTO is set with TR_GNSS_DRIVER_LC86 or TR_GNSS_DRIVER_MOSAIC"
+#endif
+#endif
+
 // #1600 phase 4: the raw-GNSS shadow filter (TR_RawGnssShadow, main.cpp's
 // "raw-GNSS shadow filter" section).  It needs the LC86G's raw MSM7, so it
 // runs wherever that driver is and nowhere else; -DTR_RAW_GNSS_SHADOW=0 builds
@@ -289,8 +320,24 @@ struct config : board_pins
     static constexpr uint16_t GNSS_UPDATE_RATE = TR_GNSS_RATE_HZ;
     static_assert(TR_GNSS_RATE_HZ >= 1 && TR_GNSS_RATE_HZ <= 25,
                   "TR_GNSS_RATE_HZ must be 1-25 Hz");
+#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // Not an over-request: the mosaic-G5 makes what its streams ask for, and
+    // its permission file allows 20 Hz, position and measurements alike. The
+    // poll task runs at twice this (every 25 ms).
+    static constexpr uint16_t GNSS_UPDATE_RATE = 20;
 #else
+    // The u-blox's; on the V9 image, the rate when it finds the u-blox.
     static constexpr uint16_t GNSS_UPDATE_RATE = 18;
+#endif
+    // The mosaic-G5's rate on the V9 image, when it finds the mosaic (its
+    // permission file allows 20 Hz). The mosaic build's own is GNSS_UPDATE_RATE.
+    static constexpr uint8_t GNSS_MOSAIC_UPDATE_RATE = 20;
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || \
+    (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO && TR_BOARD_V9)
+    // Where the mosaic's 1PPS lands: J1 pin 5 through the harness's 1 kOhm.
+    static constexpr int8_t GNSS_PPS_PIN = GNSS_J1_PIN5;
+#else
+    static constexpr int8_t GNSS_PPS_PIN = -1;
 #endif
     static constexpr uint16_t BMP585_UPDATE_RATE = 500;
     // MMC5983MA hardware supports 1/10/20/50/100/200/1000 Hz only.
@@ -319,6 +366,13 @@ struct config : board_pins
     // Bench gauges for any new rate: [GAP DIAG] imu_q_drops, [IMU FIFO],
     // FC I2S enqueue drops, OC rx_ovf/ring_peak, the OC's "[I2S] imu
     // batches" line, and the .bin per-type rates.
+    //
+    // With a mosaic-G5 on the V9 its SBF blocks (GNSS_RTCM_MSG) are the other
+    // big stream, about the IMU's size at 3840 Hz, and the IMU stops there
+    // (imuRateMaxForGnss) unless the GNSS log setting (cmd 79) is REDUCED,
+    // which keeps ~9 kB/s of it and lets the IMU fly 7680 Hz: the test
+    // budgets the V9 image for both receivers and both settings, on the link
+    // and on the OC's flash.
     static constexpr uint16_t ISM6HG256_UPDATE_RATE = 1920;
 
     // #1485: the highest IMU logging rate this board can fly, fixed or as a

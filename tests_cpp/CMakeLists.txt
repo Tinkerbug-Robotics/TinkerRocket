@@ -1135,6 +1135,44 @@ target_include_directories(test_snapshot_tail_scan PRIVATE
 target_link_libraries(test_snapshot_tail_scan GTest::gtest_main)
 gtest_discover_tests(test_snapshot_tail_scan)
 
+# ---------- test_flight_snapshot_answer ----------
+# The OC's answer to the FC's boot-time GET_FLIGHT_SNAPSHOT: how the FC reads
+# it (flight_snapshot_answer.h, shared) and when the OC may say "no flight"
+# (snapshot_answer_policy.h, OC project). An OC holding no flight used to say
+# nothing, and every FC boot spent all five tries.
+add_executable(test_flight_snapshot_answer
+    test_flight_snapshot_answer.cpp
+    ${LIB_DIR}/CRC/CRC.cpp
+    ${LIB_DIR}/CRC/CRC8.cpp
+    ${LIB_DIR}/CRC/CRC12.cpp
+    ${LIB_DIR}/CRC/CRC16.cpp
+    ${LIB_DIR}/CRC/CRC32.cpp
+    ${LIB_DIR}/CRC/CRC64.cpp
+    ${LIB_DIR}/CRC/CrcFastReverse.cpp
+    ${LIB_DIR}/CRC/FastCRC32.cpp
+)
+target_include_directories(test_flight_snapshot_answer PRIVATE
+    ${SHIM_DIR}   # Must come first so Arduino.h resolves to our shim
+    ${LIB_DIR}/CRC
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_flight_snapshot_answer GTest::gtest_main)
+gtest_discover_tests(test_flight_snapshot_answer)
+
+# ---------- test_snapshot_replay_filter (#383, #846) ----------
+# Which of the FC's 10 Hz SNAPSHOT_MSG frames the OC keeps: DMA replays are
+# dropped, clears never are, and a clear sent with no flight in progress (its
+# elapsed is the FC's uptime) no longer becomes the next flight's baseline.
+# Pure header in the OC project.
+add_executable(test_snapshot_replay_filter test_snapshot_replay_filter.cpp)
+target_include_directories(test_snapshot_replay_filter PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_snapshot_replay_filter GTest::gtest_main)
+gtest_discover_tests(test_snapshot_replay_filter)
+
 # ---------- test_pwr_hold_policy (#848) ----------
 # FC power-hold latch boot reconciliation (P4_EN_HOLD): keep/release/assert
 # decision for a hold inherited across a reset. Pure header in the FC project.
@@ -1403,10 +1441,26 @@ foreach(BOARD V7 V8 V9 V10 M1)
             TR_MAG_DRIVER_QMC5883P=1 TR_GNSS_DRIVER_LC86=1)
     elseif(BOARD STREQUAL "V10")
         target_compile_definitions(test_i2s_link_budget_${BOARD} PRIVATE TR_MAG_DRIVER_QMC5883P=1)
+    elseif(BOARD STREQUAL "V9")
+        # The V9 image finds its receiver at boot, so it flies either: the
+        # budget is checked for both (TR_GNSS_DRIVER_AUTO, CMakeLists.txt).
+        target_compile_definitions(test_i2s_link_budget_${BOARD} PRIVATE TR_GNSS_DRIVER_AUTO=1)
     endif()
     target_link_libraries(test_i2s_link_budget_${BOARD} GTest::gtest_main)
     gtest_discover_tests(test_i2s_link_budget_${BOARD} TEST_PREFIX "${BOARD}.")
 endforeach()
+# The V9 flying a mosaic-G5 (-DTR_GNSS_MOSAIC=1): its SBF stream on the same link,
+# at the IMU limit the mosaic sets (imuRateMaxForGnss).
+add_executable(test_i2s_link_budget_V9_MOSAIC test_i2s_link_budget.cpp)
+target_include_directories(test_i2s_link_budget_V9_MOSAIC PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+target_compile_definitions(test_i2s_link_budget_V9_MOSAIC PRIVATE TR_BOARD_V9=1 TR_GNSS_DRIVER_MOSAIC=1)
+target_link_libraries(test_i2s_link_budget_V9_MOSAIC GTest::gtest_main)
+gtest_discover_tests(test_i2s_link_budget_V9_MOSAIC TEST_PREFIX "V9_MOSAIC.")
 
 # ---------- test_imu_rate_board_parity (#1485) ----------
 # The FC and the OC each state the fastest IMU rate their board flies: the FC
@@ -1538,6 +1592,72 @@ target_include_directories(test_lc86_parser PRIVATE
 )
 target_link_libraries(test_lc86_parser GTest::gtest_main)
 gtest_discover_tests(test_lc86_parser)
+
+# ---------- test_sbf_parser / test_mosaic_link ----------
+# The protocol half of the V9's Septentrio mosaic-G5 driver
+# (TR_GNSSReceiverMosaic_Serial): SbfParser.cpp splits the receiver's stream
+# into CRC-checked SBF blocks, command-reply lines and prompts and decodes the
+# blocks the driver reads (PVTGeodetic -> GNSSData on the u-blox driver's
+# scale); MosaicLink.cpp finds and sets up the receiver whatever state it is
+# in (booting, factory baud, already saved, reset in flight) against a
+# scripted receiver; PpsPairer.h pairs 1PPS edges with GPS seconds. All three
+# are IDF-free; the UART and interrupt glue is not compiled here.
+add_executable(test_sbf_parser test_sbf_parser.cpp
+    ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial/SbfParser.cpp
+)
+target_include_directories(test_sbf_parser PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_sbf_parser GTest::gtest_main)
+gtest_discover_tests(test_sbf_parser)
+
+add_executable(test_mosaic_link test_mosaic_link.cpp
+    ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial/MosaicLink.cpp
+)
+target_include_directories(test_mosaic_link PRIVATE
+    ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial
+)
+target_link_libraries(test_mosaic_link GTest::gtest_main)
+gtest_discover_tests(test_mosaic_link)
+
+# ---------- test_gnss_detect ----------
+# The V9 image finds its receiver at boot (TR_Sensor_Collector/gnss_detect.cpp,
+# TR_GNSS_DRIVER_AUTO): the u-blox SAM-M10Q or the mosaic-G5 on J1, each in
+# the state a boot finds it in (set up or factory, booting, absent), against a
+# serial line simulated bit by bit, so a receiver heard at the wrong baud
+# gives what a real UART gives. The mosaic's stream is recorded
+# (fixtures/gnss_detect_sbf.h). Also the order of things at boot (BringUp),
+# the receiver's name in the FC's identity push (BoardIdentity.h) and the IMU
+# limit it sets (RocketComputerTypes.h imuRateMaxForGnss).
+add_executable(test_gnss_detect test_gnss_detect.cpp
+    ${LIB_DIR}/TR_Sensor_Collector/gnss_detect.cpp
+    ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial/SbfParser.cpp
+)
+target_include_directories(test_gnss_detect PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_Sensor_Collector
+    ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_gnss_detect GTest::gtest_main)
+gtest_discover_tests(test_gnss_detect)
+
+# ---------- test_gnss_log_policy ----------
+# The GNSS log setting (BLE cmd 79): the IMU limit each value gives
+# (RocketComputerTypes.h imuRateMaxForGnss) and the REDUCED log's SBF cut
+# (TR_RocketComputerTypes/gnss_log_policy.h), on made-up streams and on a
+# recorded mosaic-G5 epoch (fixtures/gnss_detect_sbf.h).
+add_executable(test_gnss_log_policy test_gnss_log_policy.cpp)
+target_include_directories(test_gnss_log_policy PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_gnss_log_policy GTest::gtest_main)
+gtest_discover_tests(test_gnss_log_policy)
 
 # ---------- test_gnss_raw ----------
 # Host test for TR_GNSSRaw, what a raw-measurement (tightly coupled) GNSS/INS
