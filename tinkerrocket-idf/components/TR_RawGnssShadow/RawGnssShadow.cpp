@@ -65,6 +65,7 @@ RawGnssMeasStage::Config RawGnssShadow::stageConfig(const Config& c)
     s.meas = c.meas;
     s.default_week = c.default_week;
     s.iono_max_age_days = c.iono_max_age_days;
+    s.sat_cap = c.sat_cap;  // the profile's cap (the mosaic's 16; the LC86G's 0, none)
     return s;
 }
 
