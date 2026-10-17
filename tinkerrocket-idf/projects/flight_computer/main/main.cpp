@@ -83,6 +83,7 @@
 #include <SbfNav.h>               // the mosaic-G5's navigation blocks as gps_eph_t (TR_GNSSReceiverMosaic_Serial)
 #include <esp_memory_utils.h>     // esp_ptr_external_ram: where the filter's blocks went
 #include "raw_iono_rule.h"        // which broadcast ionosphere it builds with (host-tested)
+#include "raw_nav_drain.h"        // when it files the receiver's navigation blocks (host-tested)
 #endif
 #include <gnss/types.h>           // GNSS_SYS_* (the console's satellite names)
 #include <esp_log.h>
@@ -3096,7 +3097,9 @@ static bool raw_nav_started = false;
 // in use.
 static RawIonoRule::State raw_iono;
 static gnss_raw::SeqLock<gnss_raw::ShadowIono> raw_iono_chosen;
-static uint32_t raw_nav_refused = 0;   // navigation blocks SbfNav would not decode (the GNSS task's)
+// The GNSS task's navigation blocks (raw_nav_drain.h): held until an epoch
+// names the receiver's week, and how many SbfNav would not decode.
+static RawNavDrain::State raw_nav_drain;
 #endif
 
 static int64_t rawShadowClock() { return esp_timer_get_time(); }
@@ -3212,11 +3215,6 @@ static void rawGnssMeasTask(void*)
     // and in PSRAM beside the stage (startRawShadow), not internal RAM
     gnss_raw::TimedRawEpoch& epoch = *raw_meas_epoch;
     uint32_t iono_seq = 0;
-#if TR_RAW_NAV_MOSAIC
-    // the receiver's current week, for a navigation block whose own WNc stamp
-    // is do-not-use (decodeSbfEphemeris's near_wnc)
-    uint16_t near_wnc = mosaic::kWncDnu;
-#endif
     for (;;)
     {
         gnss_raw::ShadowIono io;
@@ -3243,22 +3241,16 @@ static void rawGnssMeasTask(void*)
         bool seen = false;
 #if TR_RAW_NAV_MOSAIC
         // The mosaic-G5's navigation blocks (GPSNav, GALNav I/NAV, BDSNav MEO
-        // and IGSO), decoded here into the stage's store. None goes on to the
+        // and IGSO), decoded here into the stage's store -- none until an
+        // epoch has named the receiver's week, so the stage can tell a stored
+        // copy weeks old from today's (raw_nav_drain.h). None goes on to the
         // filter's task: the pad context carries no ephemeris on this image,
         // and the flight log's 0x95 holds the blocks themselves.
-        {
-            uint8_t nav[mosaic::kSbfNavMaxLen];
-            size_t len = 0;
-            while (sensor_collector.getGNSSEphemeris(nav, sizeof(nav), len))
-            {
-                gps_eph_t eph;
-                if (mosaic::decodeSbfEphemeris(nav, len, near_wnc, eph) == mosaic::SbfEphStatus::OK)
-                    (void)st.addEphemeris(eph);   // the stage counts what it files and refuses
-                else
-                    raw_nav_refused++;
-                seen = true;
-            }
-        }
+        if (RawNavDrain::drain(
+                raw_nav_drain,
+                [](uint8_t* b, size_t cap, size_t& n) { return sensor_collector.getGNSSEphemeris(b, cap, n); },
+                [&st](const gps_eph_t& e) { (void)st.addEphemeris(e); }))
+            seen = true;
 #else
         gnss_raw::ShadowEphFrame ef;
         size_t len = 0;
@@ -3274,7 +3266,17 @@ static void rawGnssMeasTask(void*)
         {
             seen = true;
 #if TR_RAW_NAV_MOSAIC
-            if (epoch.gps_week != 0) near_wnc = epoch.gps_week;
+            if (RawNavDrain::noteWeek(raw_nav_drain, epoch.gps_week))
+            {
+                // The blocks waited for this week; any the full queue dropped
+                // meanwhile are asked for again, now that they can be checked
+                TR_GNSSReceiverMosaicSerial::RawStats rs;
+                (void)sensor_collector_hw.getGNSSRawStats(rs);
+                const uint32_t dropped = rs.nav_dropped[0] + rs.nav_dropped[1] + rs.nav_dropped[2];
+                ESP_LOGI(TAG, "[RAWGNSS] the receiver's week %u: its navigation blocks are filed from here%s",
+                         (unsigned)epoch.gps_week, dropped > 0 ? "; those the queue dropped asked for again" : "");
+                if (dropped > 0) sensor_collector_hw.requestGNSSNavResend();
+            }
 #endif
             gnss_raw::BuiltEpoch* slot = raw_built.claim();
             if (slot == nullptr)
@@ -3697,7 +3699,7 @@ static void rawShadowTask(void*)
                          (unsigned long)rs.decimated, (unsigned long)rs.dropped, (unsigned long)mst.capped_out,
                          mst.tracked, mst.tracked_no_eph, mst.eph_sats,
                          (unsigned)(raw_meas ? raw_meas->ephemerides().size() : 0),
-                         (unsigned)gnss_raw::EphemerisStore::kCapacity, (unsigned long)raw_nav_refused,
+                         (unsigned)gnss_raw::EphemerisStore::kCapacity, (unsigned long)raw_nav_drain.refused,
                          (unsigned long)nav_dropped, (unsigned long)raw_shadow_link.imu.dropped(),
                          (unsigned long)st.gaps_bridged, (long)rs.pps_max_us, (unsigned long)rs.pps_over,
                          (long)TR_GNSSReceiverMosaicSerial::kPpsTagBarUs, (unsigned long)rs.pps_checks,
