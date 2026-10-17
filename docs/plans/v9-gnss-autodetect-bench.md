@@ -293,6 +293,26 @@ rocket with a SAM-M10Q. Each rocket still needs its own settings (pyros, servos,
 **Back to the SAM-M10Q**: the first boot tries the mosaic first, because the last boot found it, then
 finds the u-blox about a second later. That is the "Back and forth" test above.
 
+### Results, 2026-10-17 (the mosaic on a V8)
+
+The V8 "RC V8" (FC 30:ED:A0:E3:6A:5B) in the Goblin, with the mosaic-G5 harness on J1, running FC and OC
+185b4951-v8 (#1642). It was read over BLE only, so there's no FC console.
+- **First boot after the swap from the SAM-M10Q, with a u-blox hint**: found in about 65 s. One probe
+  round missed the mosaic, the u-blox driver searched for 60 s, and the last look found the mosaic.
+  `fc_gnss` "mosaic-G5", `irmax` 3840. The board now remembers the mosaic.
+- **Power cycle, with the mosaic hint** (cmd 8 off for 15 s, then on): `fc_gnss` "mosaic-G5" and READY
+  about 3 s after the rail came on.
+- **Health**: GNSS present (GNSS-absent clear); storage, IMU, baro and mag OK. No fix until the V8 moved
+  close to the window. Then 11-16 sats, h_acc 4-8 m, and READY -> PRELAUNCH by itself.
+- **Power**: the FC and the mosaic draw about 340 mA from the pack, and the OC alone 41 mA.
+- **A 71 s log** (cmd 23 start/stop, downloaded over BLE with tools/ble_flight_download.py):
+  - SBF: 4932 blocks, 0 incomplete, 0 bad. MeasEpoch, MeasExtra and PVTGeodetic x1420 over 70.95 s =
+    20.00 Hz, none missing. The 1 Hz blocks, xPPSOffset among them, x71.
+  - GNSSData: 1420 at 20.00 Hz, all 3D.
+  - PPS clock line: GnssClock x71 at 1.000 s, every one valid with PPS, 0 restarts, envelope RMS
+    0.0034 ms. This V8's crystal is -34.7 ppm against GPS (the Goblin's V9 was +16.2 ppm).
+  - IMU: 276,867 samples at 3899 Hz (3840 nominal), 0 gaps over 1 ms, `fc_imu_drop` 0.
+
 ## If something goes wrong
 
 - **The u-blox-only image**, exactly what every V9 ran before this:
