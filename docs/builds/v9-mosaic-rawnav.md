@@ -69,6 +69,22 @@ offline harness calls too. The boot prints them on one `[RAWGNSS] flight safegua
   nose reached 2 rad/s: the drogue's snatch or a tumble, not the pitch-over at apogee.
 - **GNSS on the whole attitude from launch** (`config::RAW_HEADING_GATE` 1).
 
+### The GNSS antenna offset (BLE cmd 81)
+
+An owner setting in both apps (Settings, "GNSS Antenna Offset"): Unknown, the default, or Measured, with the IMU to
+the antenna's phase center in millimeters along the board's own axes. The out computer stores and relays it; the
+flight computer keeps it in NVS (`antenna`/`ofs`), turns it into the filter's frame with the IMU's mounting, and
+takes it only on the ground.
+
+- **Unknown** flies the image as described above: the turning body's 0.30 m and 0.03 m bounds stand in for the
+  antenna nobody measured.
+- **Measured:** every Doppler and pseudorange is predicted at the antenna, and a few centimeters of doubt on the
+  value (`antenna_sigma_*`) replace those bounds and the change check's lever allowance. The offset's roll terms
+  are observed and logged, never fused.
+- **The log:** the pad context gains a record, `PCX_ANT`, beside the calibrations at launch + 5 s: the setting, the
+  same in the filter's frame, and whether the filter used it. `tools/raw_replay/extract.py` passes it to the
+  harness, which replays the flight with it unless given `--antenna-m none`.
+
 ### The log-only vote guard
 
 With one filter, the barometer's climb rate is the only independent check on the filter's apogee votes
@@ -132,8 +148,10 @@ This is a statement about behavior, not bytes.
 - **The Beetle's filter is bit-identical to main's:** `tools/raw_replay/bitident.sh` reports 450 of 450 runs
   IDENTICAL. `tools/m1_identity.sh` reports its `main.cpp` and sensor collectors preprocess IDENTICAL. Neither
   covers GnssTimeSync; the host tests cover its default path.
-- **The wire:** no new message, record or BLE command number. FcStatus bit 1 and the snapshot's spare float are set
-  only by this image; every other image leaves them 0.
+- **The wire:** the antenna offset adds BLE command 81, the out computer's ANTENNA_CONFIG_PENDING/MSG pair
+  (0x8C/0x8D) and the pad context's `PCX_ANT` record (every board but the Beetle writes it). Firmware that predates
+  them ignores the command, and a log reader that predates them skips the record. FcStatus bit 1 and the snapshot's
+  spare float are set only by this image; every other image leaves them 0.
 
 ## Bench and rig tools
 
