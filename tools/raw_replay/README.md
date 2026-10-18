@@ -77,6 +77,20 @@ Experiments that change no firmware (each one a switch the harness throws on the
 | `--corrupt-rr-mps lo,hi`, `--corrupt-pr-m lo,hi` | the corruption's sizes instead (each drawn uniform in [lo, hi] with a random sign): under the gate, say, `0.05,0.12` and `5,10` on the mosaic |
 | `--corrupt-pr-epoch` | the first epoch at or after X on a whole GPS second instead (on a 10 Hz receiver its pseudoranges are fused there, `pr_period_s` 1 s) |
 
+The spinning body (fc/v9-windup; a `RAW_REPLAY_WINDUP` build, on by default; every switch off unless given, the
+image as flown):
+
+| option | what it does |
+|---|---|
+| `--windup-k K` | each Doppler (and carrier rate) less the carrier wind-up an antenna on the nose carries, K cycles a turn, from the gyro's roll at the Doppler's own instant (`RawGnssShadow::Config::windup_k`; the Goblin's helix: 0.99) |
+| `--windup-geom 1` | Wu's whole rate from each satellite's line of sight, not the roll alone |
+| `--windup-monitor 1` | observe: the roll rate the Dopplers' wind-up implies between wavelengths, against the gyro's |
+| `--att-exact 1` | the covariance's attitude transition exact, exp(-[w x] dt) (`RawGnssEKFParams::att_exact`) |
+| `--dv-lever-mode 1`, `--dv-lever-radial-m X` | the change check's lever allowance on the nose's own turn and a radial bound, not the whole rate |
+
+The epochs file then also carries each epoch's clock drift, screen and check numbers and the spinning body's
+(`clk_d_mps` .. `att_sig_d_deg`), and the events JSON a `windup` block.
+
 A sidecar `<csv>.events.json` records the guards' counts, the apogee votes the run's own estimate gives, and when the
 gate switched. A mosaic or cold-start replay also writes `<csv>.epochs.csv`: one row per epoch the filter closed,
 whatever `--every` (its time, the codes and Dopplers used and refused, the largest NIS, the longest any one satellite

@@ -177,6 +177,49 @@ class PatternTest(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_SIM, "the sim's modules are not on PYTHONPATH")
+class RolledAntennaTest(unittest.TestCase):
+    def test_the_rolled_truth_turns_an_antenna_off_the_axis_at_5_rev_s(self):
+        # --roll with --lever-arm-b: the antenna's truth (antenna_truth) takes the rolled body's attitude and rate
+        # (roll_overlay), so the Goblin's antenna (r_b FRD, 12.6 mm off the nose's axis) circles the axis at the roll
+        # rate while its part along the nose stays put, and its velocity is its offset's rate of change
+        import sim_roll
+        dt = 1e-3
+        t = np.arange(-1.0, 3.0 + dt / 2, dt)
+        n = len(t)
+        nose_up = np.array([math.cos(math.pi / 4), 0.0, -math.sin(math.pi / 4), 0.0])   # synthetic_flight's
+        p = np.zeros((n, 3))
+        p[:, 2] = -50.0 * t
+        f = dict(t=t, q=np.tile(nose_up, (n, 1)), v=np.tile([0.0, 0.0, -50.0], (n, 1)), acc=np.zeros((n, 3)),
+                 gyr=np.zeros((n, 3)))
+        ph = dict(thrust_start_s=0.0, burnout_s=1.0, apogee_s=10.0, deploy_s=11.0)
+        w_body, C_n2b, facts = sim_events.roll_overlay(f, ph, sim_roll.parse_profile("const:5"))
+        self.assertAlmostEqual(facts["peak_rps"], 5.0, places=6)
+        r_b = np.array([0.04696, -0.01138, 0.00548])
+        rho = math.hypot(r_b[1], r_b[2])
+        p_ant, v_ant = sim_events.antenna_truth(p, f["v"], C_n2b, w_body, r_b)
+        on = (t > 0.2) & (t < 2.8)                    # past the profile's 0.1 s ramp
+        d = (p_ant - p)[on]
+        nose = C_n2b[on, 0, :]                        # body x in NED, as build takes it (vertical here)
+        np.testing.assert_allclose(np.abs(nose[:, 2]), 1.0, atol=1e-12)
+        np.testing.assert_allclose(np.einsum("ni,ni->n", d, nose), r_b[0], atol=1e-9)   # along the nose: r_a
+        np.testing.assert_allclose(np.hypot(d[:, 0], d[:, 1]), rho, atol=1e-9)       # across it: rho
+        ang = np.unwrap(np.arctan2(d[:, 1], d[:, 0]))
+        rate = np.polyfit(t[on], ang, 1)[0]
+        self.assertAlmostEqual(abs(rate) / sim_roll.TWO_PI, 5.0, places=6)
+        # its velocity: the offset's turn, rho times the roll rate (0.40 m/s), as the offset's own derivative
+        dv = (v_ant - f["v"])[on]
+        np.testing.assert_allclose(np.linalg.norm(dv, axis=1), rho * 5.0 * sim_roll.TWO_PI, rtol=1e-6)
+        dd = np.gradient(p_ant - p, t, axis=0)[on]     # (a central difference: its chord 1.6e-4 short at 1 ms)
+        np.testing.assert_allclose(dv, dd, atol=1e-3 * rho * 5.0 * sim_roll.TWO_PI)
+        # with no roll the same antenna stays where the body put it
+        f0 = dict(t=t, q=np.tile(nose_up, (n, 1)), v=f["v"], acc=np.zeros((n, 3)), gyr=np.zeros((n, 3)))
+        w0, C0, _ = sim_events.roll_overlay(f0, ph, None)
+        p0, v0 = sim_events.antenna_truth(p, f["v"], C0, w0, r_b)
+        np.testing.assert_allclose(np.ptp(p0 - p, axis=0), 0.0, atol=1e-9)
+        np.testing.assert_allclose(v0 - f["v"], 0.0, atol=1e-9)
+
+
+@unittest.skipUnless(HAVE_SIM, "the sim's modules are not on PYTHONPATH")
 class EventsFileTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

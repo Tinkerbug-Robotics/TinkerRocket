@@ -142,6 +142,12 @@ struct GnssReceiverProfile
     double   cr_screen_k = 0.0;           // the screen: a rate off the epoch's median by more than this
     double   cr_screen_floor_mps = 0.0;   //   many sigmas, and this much, is suspect
     uint8_t  cr_half_cycle = kHalfCycleReject;   // HalfCycleAction
+
+    // the carrier wind-up (RawGnssShadow's windup_*; TR_RawGnssEKF/RawGnssWindup.h): cycles a turn about
+    // the antenna's boresight (the nose) its Dopplers carry, taken off from the gyro (0: off), and the
+    // observe-only monitor of the roll rate they imply against the gyro's
+    double   windup_k = 0.0;
+    bool     windup_monitor = false;
 };
 
 // The carrier phase's 1-sigma (m) at cn0 (dB-Hz): interpolated in dB --
@@ -350,6 +356,15 @@ inline GnssReceiverProfile mosaicG5Profile()
     // the carrier: off -- at 0.1 s a carrier rate only matches the Doppler;
     // the SBF is logged (0x95) for offline work (plan)
     p.cr_mode = kCarrierOff;
+
+    // the carrier wind-up: measured on the Goblin's helix at +0.991 / +0.994
+    // cycles per clockwise turn from above, nose up, every band within 0.5 %
+    // (V9 rig 10/16): k = 0.99 turns the correction on. Off in this profile
+    // (the image as flown, RC3): the clock drift's walk of 100 takes the common
+    // part at any roll rate the windup study tried (evidence/windup); 0.99 is
+    // the value to turn it on with.
+    p.windup_k = 0.0;
+    p.windup_monitor = false;
 
     // the safeguards that count epochs, in the LC86G's time
     p.sat_cap = 16;                 // plan: the CPU ladder's first rung (the L1 sky peaks at 28)

@@ -287,6 +287,12 @@ struct Args
     double ant_m[3] = {0.0, 0.0, 0.0};
     double ant_sigma_axial_m = -1.0, ant_sigma_radial_m = -1.0, ant_min_rps = -1.0;
     int ant_att_mode = -1;
+    // the spinning body (a RAW_REPLAY_WINDUP build; -1: the firmware's, off): the carrier wind-up taken off each
+    // Doppler from the gyro (RawGnssShadow::Config::windup_k, cycles a turn), Wu's whole rate, the monitor; the
+    // covariance's exact attitude transition (RawGnssEKFParams::att_exact); the change check's lever mode
+    double windup_k = -1.0;
+    int windup_geom = -1, windup_monitor = -1, att_exact = -1, dv_lever_mode = -1;
+    double windup_monitor_k = -1.0, dv_lever_radial_m = -1.0;
     std::set<std::string> given;     // the options on the command line
 };
 
@@ -333,7 +339,10 @@ void usage()
                  "  [--rot-after-apogee]\n"
                  "  the antenna's offset (a RAW_REPLAY_ANTENNA build): [--antenna-m x,y,z|none] (default: the events\n"
                  "  file's META antenna_m, what the flight flew with, else unknown) [--antenna-sigma-m axial,radial]\n"
-                 "  [--antenna-min-rate X] [--antenna-att-mode 0|1|2]\n");
+                 "  [--antenna-min-rate X] [--antenna-att-mode 0|1|2]\n"
+                 "  the spinning body (a RAW_REPLAY_WINDUP build): [--windup-k K] [--windup-geom 0|1]\n"
+                 "  [--windup-monitor 0|1] [--windup-monitor-k K] [--att-exact 0|1] [--dv-lever-mode 0|1]\n"
+                 "  [--dv-lever-radial-m X]\n");
 }
 
 bool parseArgs(int argc, char** argv, Args& a)
@@ -513,6 +522,13 @@ bool parseArgs(int argc, char** argv, Args& a)
         }
         else if (k == "--antenna-min-rate") a.ant_min_rps = std::atof(val());
         else if (k == "--antenna-att-mode") a.ant_att_mode = std::atoi(val());
+        else if (k == "--windup-k") a.windup_k = std::atof(val());
+        else if (k == "--windup-geom") a.windup_geom = std::atoi(val());
+        else if (k == "--windup-monitor") a.windup_monitor = std::atoi(val());
+        else if (k == "--windup-monitor-k") a.windup_monitor_k = std::atof(val());
+        else if (k == "--att-exact") a.att_exact = std::atoi(val());
+        else if (k == "--dv-lever-mode") a.dv_lever_mode = std::atoi(val());
+        else if (k == "--dv-lever-radial-m") a.dv_lever_radial_m = std::atof(val());
         else if (k == "--acc-sub")
         {
             if (std::sscanf(val(), "%lf,%lf,%lf", &a.acc_sub[0], &a.acc_sub[1], &a.acc_sub[2]) != 3)
@@ -1919,6 +1935,28 @@ int main(int argc, char** argv)
                              "--rot-lever-axial-m, --rot-lever-radial-m, --rot-lever-min-rate, --att-hold-rate, "
                              "--att-hold-s, --rot-skip-rate, --rot-skip-s and --rot-after-apogee are ignored\n");
 #endif
+    // the spinning body (RawGnssShadow.h): the firmware's unless given (off)
+#if RAW_REPLAY_WINDUP
+    if (a.windup_k >= 0.0)
+        cfg.windup_k = a.windup_k;
+    if (a.windup_geom >= 0)
+        cfg.windup_geom = a.windup_geom != 0;
+    if (a.windup_monitor >= 0)
+        cfg.windup_monitor = a.windup_monitor != 0;
+    if (a.windup_monitor_k > 0.0)
+        cfg.windup_monitor_k = a.windup_monitor_k;
+    if (a.att_exact >= 0)
+        cfg.ekf.att_exact = a.att_exact != 0;
+    if (a.dv_lever_mode >= 0)
+        cfg.dv_lever_mode = static_cast<uint8_t>(a.dv_lever_mode);
+    if (a.dv_lever_radial_m >= 0.0)
+        cfg.dv_lever_radial_m = a.dv_lever_radial_m;
+#else
+    if (a.windup_k >= 0.0 || a.windup_geom >= 0 || a.windup_monitor >= 0 || a.att_exact >= 0 || a.dv_lever_mode >= 0
+        || a.dv_lever_radial_m >= 0.0 || a.windup_monitor_k > 0.0)
+        std::fprintf(stderr, "WARNING: this build has no spinning-body switches (RAW_REPLAY_WINDUP=OFF): --windup-*, "
+                             "--att-exact and --dv-lever-* are ignored\n");
+#endif
 #if RAW_REPLAY_MOSAIC
     const bool mosaic_eph_cap = gnss_raw::EphemerisStore::kCapacity == 128;
     if (mosaic != mosaic_eph_cap)
@@ -2270,11 +2308,19 @@ int main(int argc, char** argv)
         epf = std::fopen((a.out + ".epochs.csv").c_str(), "w");
         if (epf)
             std::fprintf(epf, "t_s,t_close_s,tow_ms,used_pr,rej_pr,used_rr,rej_rr,nis_max,rej_run_pr_s,rej_run_rr_s,"
-                              "corrupt_rr,corrupt_pr%s\n",
+                              "corrupt_rr,corrupt_pr%s%s\n",
 #if RAW_REPLAY_ANTENNA
                          // the lever roll (RawGnssShadow.h: the change check's epochs fitted for it so far, the
                          // last one's roll correction and 1-sigma, deg) and the Dopplers' turning-body allowance
-                         ",lever_roll_epochs,lever_roll_deg,lever_roll_sigma_deg,rot_sigma_mps"
+                         ",lever_roll_epochs,lever_roll_deg,lever_roll_sigma_deg,rot_sigma_mps",
+#else
+                         "",
+#endif
+#if RAW_REPLAY_WINDUP
+                         // the epoch's clock drift, screens and checks, and the spinning body's (the windup study)
+                         ",clk_d_mps,screen_rr,screen_refused,vert_dv_down,dv_chi2,dv_c_mps,dv_wu_dc_mps,"
+                         "dv_lever_mps,dv_held_rr,wu_p_rps,wu_l1_mps,wumon_p_rps,wumon_sig_rps,wumon_dp_rps,"
+                         "wumon_dp_sig_rps,att_sig_n_deg,att_sig_e_deg,att_sig_d_deg"
 #else
                          ""
 #endif
@@ -3475,6 +3521,31 @@ int main(int argc, char** argv)
                                      static_cast<double>(sh.stats().lever_roll_last_sigma_deg),
                                      static_cast<double>(sh.stats().rot_last_sigma_mps));
 #endif
+#if RAW_REPLAY_WINDUP
+                        {
+                            // the epoch's clock drift, screens and checks, and the spinning body's: what each did at
+                            // each roll rate (the windup study). The change check's per-epoch numbers are its last
+                            // check's; its held count the change since the row before.
+                            const RawGnssShadow::Stats& S = sh.stats();
+                            float sg[3];
+                            sh.filter().attSigmaNed(sg);
+                            static uint32_t held0 = 0;
+                            const uint32_t held = S.dv_held_rr - held0;
+                            held0 = S.dv_held_rr;
+                            std::fprintf(epf, ",%.4f,%d,%d,%.3f,%.2f,%.4f,%.4f,%.3f,%u,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,"
+                                              "%.3f,%.3f,%.3f",
+                                         static_cast<double>(sh.filter().clockDrift()), l.screen_rr, l.screen_refused,
+                                         static_cast<double>(l.screen_dv_down_mps), static_cast<double>(S.dv_last_chi2),
+                                         static_cast<double>(S.dv_last_c_mps), static_cast<double>(S.dv_last_wu_dc_mps),
+                                         static_cast<double>(S.dv_last_lever_mps), held,
+                                         sh.job_.wu_ok ? sh.job_.wu_p : std::nan(""),
+                                         static_cast<double>(S.windup_last_l1_mps),
+                                         static_cast<double>(S.wumon_last_p_rps),
+                                         static_cast<double>(S.wumon_last_sig_rps), static_cast<double>(S.wumon_dp_rps),
+                                         static_cast<double>(S.wumon_dp_sig_rps), sg[0] * 57.29577951308232,
+                                         sg[1] * 57.29577951308232, sg[2] * 57.29577951308232);
+                        }
+#endif
                         std::fprintf(epf, "\n");
                     }
                 }
@@ -3830,6 +3901,18 @@ int main(int argc, char** argv)
                              sh.cfg_.ekf.lever_b_m[2], sh.cfg_.antenna_sigma_axial_m, sh.cfg_.antenna_sigma_radial_m,
                              sh.cfg_.antenna_min_rps, static_cast<unsigned>(sh.cfg_.ekf.lever_att_mode),
                              fs.lever_roll_epochs, fs.lever_roll_info, fs.lever_roll_hy);
+#endif
+#if RAW_REPLAY_WINDUP
+                std::fprintf(ej, "\"windup\": {\"k\": %.4f, \"geom\": %d, \"monitor\": %d, \"att_exact\": %d, "
+                                 "\"dv_lever_mode\": %d, \"dv_lever_radial_m\": %.3f, \"epochs\": %u, \"misses\": %u, "
+                                 "\"cr_misses\": %u, \"max_l1_mps\": %.4f, \"mon_epochs\": %u, \"mon_max_z\": %.3f, "
+                                 "\"mon_dp_rps\": %.4f, \"mon_dp_sig_rps\": %.4f}, ",
+                             sh.cfg_.windup_k, sh.cfg_.windup_geom ? 1 : 0, sh.cfg_.windup_monitor ? 1 : 0,
+                             sh.cfg_.ekf.att_exact ? 1 : 0, static_cast<int>(sh.cfg_.dv_lever_mode),
+                             sh.cfg_.dv_lever_radial_m, fs.windup_epochs, fs.windup_misses, fs.windup_cr_misses,
+                             static_cast<double>(fs.windup_max_l1_mps), fs.wumon_epochs,
+                             static_cast<double>(fs.wumon_max_z), static_cast<double>(fs.wumon_dp_rps),
+                             static_cast<double>(fs.wumon_dp_sig_rps));
 #endif
                 std::fprintf(ej, "\"screen_compare\": [");
                 for (size_t i = 0; i < cmps.size(); ++i)

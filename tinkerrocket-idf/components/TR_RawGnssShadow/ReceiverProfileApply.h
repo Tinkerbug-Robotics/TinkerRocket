@@ -110,6 +110,8 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssShadow::Co
     c.heading_fit_period_s = p.heading_fit_period_s;
     c.sat_cap = p.sat_cap;
     c.level.min_dt_s = p.level_min_dt_s;
+    c.windup_k = p.windup_k;
+    c.windup_monitor = p.windup_monitor;
     applyReceiverProfile(p, c.meas);
     applyReceiverProfile(p, c.ekf);
 }

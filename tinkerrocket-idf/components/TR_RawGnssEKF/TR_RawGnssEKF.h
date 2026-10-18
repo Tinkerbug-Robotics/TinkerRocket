@@ -285,6 +285,16 @@ struct RawGnssEKFParams
     // The velocity-increment history keeps an entry per this much time, s
     // (128 entries: 0.5 s at 4 ms; at a 200 Hz IMU, every sample)
     double hist_spacing_s = 0.004;
+    // The covariance's attitude transition over a step: first order, I - [w x]
+    // dt (false, the flight filter's and the Beetle's), or exact, the
+    // rotation exp(-[w x] dt) and the gyro bias's integral through it (true).
+    // First order is no rotation: it stretches the attitude's variance across
+    // the rate by 1 + (|w| dt)^2 a step, exp(|w|^2 dt) a second -- x1.5 a
+    // second at 1 rev/s of roll in 10 ms steps, x19,000 at 5 rev/s -- so a
+    // fast roll pins the tilt's 1-sigma at its cap and the next GNSS rows
+    // turn the tilt on noise (windup study, 2026-10-18). Exact, a roll only
+    // turns that variance about the nose.
+    bool   att_exact = false;
     // The carrier range rate (ReceiverProfile.h's cr_*)
     uint8_t cr_mode             = kCarrierObserve;   // CarrierMode
     double  cr_sigma_per_rev_s  = 0.023;             // m/s more (in quadrature) per rev/s of roll
@@ -681,6 +691,10 @@ private:
     // f_b: the specific force less the accelerometer bias, body (the tilt's
     // Jacobian is its, not the kinematic acceleration's: #1626 E1)
     void   propagateCovariance(const T Tb2n[3][3], const T f_b[3], const T w_b[3], T g_d, T dt);
+    // att_exact's blocks of Phi over a step at the rate w_b (rad/s, body):
+    // Ra = exp(-[w x] dt), the attitude's own, and Ga = -1/2 int_0^dt
+    // exp(-[w x] s) ds, its gyro bias's (TR_RawGnssCarrier.cpp)
+    void   attExactBlocks(const T w_b[3], T dt, T Ra[3][3], T Ga[3][3]) const;
     void   stabilize();
     void   symmetrize();
     T      hph(const int* hidx, const T* hval, int hn) const;

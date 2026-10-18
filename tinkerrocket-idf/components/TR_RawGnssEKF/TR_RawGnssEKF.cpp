@@ -552,6 +552,13 @@ void RawGnssEKF<T>::propagateCovariance(const T Tb2n[3][3], const T f_b[3], cons
     }
     const T f52 = T(2) * g_d / T(kRe);
     const T half = T(0.5);
+    // att_exact: the attitude's own block of Phi, Ra = exp(-[w x] dt), and its
+    // gyro bias's, Ga, in place of I - [w x] dt and -I dt / 2
+    // (attExactBlocks, TR_RawGnssCarrier.cpp: in flash on the Beetle, which
+    // never turns it on)
+    T Ra[3][3] = {}, Ga[3][3] = {};
+    if (p_.att_exact)
+        attExactBlocks(w_b, dt, Ra, Ga);
 
     // rows: A = (I + F dt) P
     T A[N][N];
@@ -569,15 +576,29 @@ void RawGnssEKF<T>::propagateCovariance(const T Tb2n[3][3], const T f_b[3], cons
                 s += f52 * P_[2][j];
             A[3 + i][j] += dt * s;
         }
-    for (int i = 0; i < 3; ++i)
-        for (int j = 0; j < N; ++j)
-        {
-            T s = T(0);
-            for (int k = 0; k < 3; ++k)
-                s += Fww[i][k] * P_[6 + k][j];
-            s -= half * P_[12 + i][j];
-            A[6 + i][j] += dt * s;
-        }
+    if (!p_.att_exact)
+    {
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < N; ++j)
+            {
+                T s = T(0);
+                for (int k = 0; k < 3; ++k)
+                    s += Fww[i][k] * P_[6 + k][j];
+                s -= half * P_[12 + i][j];
+                A[6 + i][j] += dt * s;
+            }
+    }
+    else
+    {
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < N; ++j)
+            {
+                T s = T(0);
+                for (int k = 0; k < 3; ++k)
+                    s += Ra[i][k] * P_[6 + k][j] + Ga[i][k] * P_[12 + k][j];
+                A[6 + i][j] = s;
+            }
+    }
     const T dab = T(1) + dt * f_ab_, dwb = T(1) + dt * f_wb_;
     for (int i = 0; i < 3; ++i)
         for (int j = 0; j < N; ++j)
@@ -606,13 +627,26 @@ void RawGnssEKF<T>::propagateCovariance(const T Tb2n[3][3], const T f_b[3], cons
                 s += f52 * Ai[2];
             Pi[3 + j] += dt * s;
         }
-        for (int j = 0; j < 3; ++j)
+        if (!p_.att_exact)
         {
-            T s = T(0);
-            for (int k = 0; k < 3; ++k)
-                s += Ai[6 + k] * Fww[j][k];
-            s -= half * Ai[12 + j];
-            Pi[6 + j] += dt * s;
+            for (int j = 0; j < 3; ++j)
+            {
+                T s = T(0);
+                for (int k = 0; k < 3; ++k)
+                    s += Ai[6 + k] * Fww[j][k];
+                s -= half * Ai[12 + j];
+                Pi[6 + j] += dt * s;
+            }
+        }
+        else
+        {
+            for (int j = 0; j < 3; ++j)
+            {
+                T s = T(0);
+                for (int k = 0; k < 3; ++k)
+                    s += Ai[6 + k] * Ra[j][k] + Ai[12 + k] * Ga[j][k];
+                Pi[6 + j] = s;
+            }
         }
         for (int j = 0; j < 3; ++j)
         {

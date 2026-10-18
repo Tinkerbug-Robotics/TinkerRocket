@@ -68,6 +68,13 @@ if(RAW_REPLAY_MOSAIC_SAFEGUARDS AND NOT (RAW_REPLAY_MOSAIC AND RAW_REPLAY_DVCHEC
                    "off): --receiver mosaic will not apply the image's flight safeguards")
     set(RAW_REPLAY_MOSAIC_SAFEGUARDS OFF)
 endif()
+# the spinning body (the windup study, fc/v9-windup): the carrier wind-up's correction and monitor, the exact attitude
+# transition and the change check's lever mode (RawGnssShadow::Config::windup_*, dv_lever_mode;
+# RawGnssEKFParams::att_exact)
+option(RAW_REPLAY_WINDUP "the firmware tree has the carrier wind-up's switches (windup_k, att_exact, dv_lever_mode)" ON)
+if(RAW_REPLAY_WINDUP AND NOT (RAW_REPLAY_MOSAIC AND RAW_REPLAY_DVCHECK AND RAW_REPLAY_ROT))
+    set(RAW_REPLAY_WINDUP OFF)
+endif()
 set(LIB_DIR "${SRC_ROOT}/tinkerrocket-idf/components")
 set(FC_MAIN "${SRC_ROOT}/tinkerrocket-idf/projects/flight_computer/main")
 set(SHIM_DIR "${SRC_ROOT}/tests_cpp/host_shim")
@@ -146,7 +153,8 @@ function(raw_replay_target name)
         RAW_REPLAY_ROT=$<BOOL:${RAW_REPLAY_ROT}>
         RAW_REPLAY_DVHDG=$<BOOL:${RAW_REPLAY_DVHDG}>
         RAW_REPLAY_ANTENNA=$<BOOL:${RAW_REPLAY_ANTENNA}>
-        RAW_REPLAY_MOSAIC_SAFEGUARDS=$<BOOL:${RAW_REPLAY_MOSAIC_SAFEGUARDS}>)
+        RAW_REPLAY_MOSAIC_SAFEGUARDS=$<BOOL:${RAW_REPLAY_MOSAIC_SAFEGUARDS}>
+        RAW_REPLAY_WINDUP=$<BOOL:${RAW_REPLAY_WINDUP}>)
 endfunction()
 
 raw_replay_target(raw_replay)

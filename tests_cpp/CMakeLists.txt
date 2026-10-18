@@ -1745,6 +1745,27 @@ target_include_directories(test_raw_gnss_ekf PRIVATE
 target_link_libraries(test_raw_gnss_ekf GTest::gtest_main)
 gtest_discover_tests(test_raw_gnss_ekf)
 
+# ---------- test_raw_gnss_windup ----------
+# The carrier wind-up (TR_RawGnssEKF/RawGnssWindup.h) and the covariance's
+# exact attitude transition (RawGnssEKFParams::att_exact), the windup study
+# (2026-10-18): the model's sign against the spin rig, Wu's rate form, the
+# two-band and one-band roll rates, the gyro's history, the monitor; a fast
+# roll the first-order transition stretches into the tilt's variance and the
+# exact one only turns. The shadow's correction end to end is
+# test_raw_gnss_shadow's.
+add_executable(test_raw_gnss_windup test_raw_gnss_windup.cpp
+    ${LIB_DIR}/TR_GNSSRaw/atmo.c
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssCarrier.cpp
+)
+target_include_directories(test_raw_gnss_windup PRIVATE
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+    ${LIB_DIR}/TR_RawGnssEKF
+)
+target_link_libraries(test_raw_gnss_windup GTest::gtest_main)
+gtest_discover_tests(test_raw_gnss_windup)
+
 # ---------- test_raw_gnss_carrier ----------
 # TR_RawGnssEKF's carrier range rate (#1600): a synthetic sky with exact
 # carrier phases beside its pseudoranges and Dopplers, a receiver clock with

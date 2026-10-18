@@ -53,6 +53,16 @@ int64_t periodIndex(double tow_s, double period_s)
     return ms >= 0 ? ms / p : -((p - 1 - ms) / p);
 }
 
+// v (body) into NED by q (scalar first, body -> NED): q v q*
+void bodyToNed(const float q[4], const double v[3], double out[3])
+{
+    const double qw = q[0], qx = q[1], qy = q[2], qz = q[3];
+    const double t[3] = {2.0 * (qy * v[2] - qz * v[1]), 2.0 * (qz * v[0] - qx * v[2]), 2.0 * (qx * v[1] - qy * v[0])};
+    out[0] = v[0] + qw * t[0] + (qy * t[2] - qz * t[1]);
+    out[1] = v[1] + qw * t[1] + (qz * t[0] - qx * t[2]);
+    out[2] = v[2] + qw * t[2] + (qx * t[1] - qy * t[0]);
+}
+
 // heading_fit_period_s: an epoch this much early still counts as the period's
 // (half a 20 Hz epoch: the epochs' own times jitter)
 constexpr double kFitPeriodSlackS = 0.025;
@@ -660,6 +670,37 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
     if (static_cast<double>(ekf_.gExcess()) + 1.0 > cfg_.boost_screen_g)
         boost_seen_t_ = ekf_.time();      // the boost screen's window (startJob)
     t_prev_ = t;
+    if (windupRingOn() || (cfg_.dv_check != kDvOff && cfg_.dv_lever_mode == 1))
+    {
+        // the body's rate over the step (the gyro less its bias): the carrier wind-up's history
+        const float* wb = ekf_.gyroBias();
+        const float wr[3] = {gyro[0] - wb[0], gyro[1] - wb[1], gyro[2] - wb[2]};
+        if (windupRingOn())
+            wu_ring_.push(t, wr);   // the MCU's clock, as each epoch's instant (te)
+        if (cfg_.dv_check != kDvOff && cfg_.dv_lever_mode == 1)
+        {
+            // the change check's lever allowance (dv_lever_mode 1): the nose's own rate in NED, R (w x x), and
+            // how fast it changes -- a roll about the nose changes neither
+            const double wx[3] = {0.0, static_cast<double>(wr[2]), -static_cast<double>(wr[1])};
+            double nd[3];
+            bodyToNed(ekf_.quat(), wx, nd);
+            if (dv_nd_have_)
+            {
+                double d2 = 0.0;
+                for (int i = 0; i < 3; ++i)
+                    d2 += (nd[i] - dv_nd_now_[i]) * (nd[i] - dv_nd_now_[i]);
+                const float ndd = static_cast<float>(std::sqrt(d2) / span);
+                if (ndd > dv_ndd_peak_)
+                    dv_ndd_peak_ = ndd;
+            }
+            for (int i = 0; i < 3; ++i)
+                dv_nd_now_[i] = static_cast<float>(nd[i]);
+            dv_nd_have_ = true;
+            const float wp = std::sqrt(wr[1] * wr[1] + wr[2] * wr[2]);
+            if (wp > dv_wp_peak_)
+                dv_wp_peak_ = wp;
+        }
+    }
     // Where the flight filter levels: on the ground at g's size (not on a
     // motor burning before the launch detector says so); in flight (under a
     // chute) only once steady and at g's size (LevelGate.h)
@@ -812,6 +853,9 @@ void RawGnssShadow::start(double t)
     boost_seen_t_ = -1.0e9;
     vert_latch_ = false;
     dvReset();
+    wu_ring_.reset();
+    wu_mon_.reset();
+    wu_mon_.setTau(cfg_.windup_monitor_tau_s);
     n_g_held_ = 0;
     att_hold_until_ = -1.0e9;
     rot_skip_until_ = -1.0e9;
@@ -1018,7 +1062,9 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
         built_ = pend_built_[pb_head_];
         pb_head_ ^= 1;
         npend_built_--;
-        job_.phase = cfg_.dv_check != kDvOff ? kJobDvCheck : kJobChecks;
+        if (windupRingOn())
+            applyWindup(t_prev_ - te);
+        job_.phase = dvJobOn() ? kJobDvCheck : kJobChecks;
         job_.build_us = built_.build_us;  // the GNSS task's (wall), then the checks here
     }
     else
@@ -1091,7 +1137,11 @@ void RawGnssShadow::jobUnit(double t)
     {
     case kJobBuild:
         if (stage_.next(built_, 1))
-            job_.phase = cfg_.dv_check != kDvOff ? kJobDvCheck : kJobChecks;
+        {
+            if (windupRingOn())
+                applyWindup(age);
+            job_.phase = dvJobOn() ? kJobDvCheck : kJobChecks;
+        }
         break;
     case kJobDvCheck:
         jobDvCheck(age);
@@ -1171,6 +1221,136 @@ double RawGnssShadow::holdGExcess(double te, double g)
         g_held_[n - 1].te = te;
     n_g_held_ = n;
     return g_held_[0].g;
+}
+
+// The carrier wind-up (windup_k; RawGnssShadow.h, RawGnssWindup.h): the
+// gyro's rate at the Doppler's own instant, and with windup_k each Doppler
+// less what the roll about the nose (or, with windup_geom, the whole rate
+// toward that satellite) put on it at its system's wavelength, each carrier
+// rate less what the roll angle over its interval put on its phase. Before
+// anything judges the epoch. An instant the history no longer holds leaves the
+// epoch as it came (counted); a carrier interval it does not hold drops that
+// rate.
+void RawGnssShadow::applyWindup(double age)
+{
+    job_.wu_ok = false;
+    job_.wu_p = 0.0;
+    const double td = job_.te - (cfg_.ekf.rr_lag_s > 0.0 ? cfg_.ekf.rr_lag_s : 0.0);
+    float w[3];
+    if (!wu_ring_.rateAt(td, w))
+    {
+        if (cfg_.windup_k > 0.0)
+            st_.windup_misses++;
+        return;
+    }
+    job_.wu_ok = true;
+    job_.wu_p = static_cast<double>(w[0]);
+    const double k = cfg_.windup_k;
+    if (!(k > 0.0))
+        return;
+    const double wd[3] = {static_cast<double>(w[0]), static_cast<double>(w[1]), static_cast<double>(w[2])};
+    // windup_geom: each line of sight in the body, at the receiver the epoch is taken back to
+    double r_e[3] = {}, ne[3][3] = {};
+    if (cfg_.windup_geom)
+    {
+        double v_e[3];
+        ekf_.receiverEcefAt(age, r_e, v_e);
+        const double* lla = ekf_.lla();
+        const double sl = std::sin(lla[0]), cl = std::cos(lla[0]), so = std::sin(lla[1]), co = std::cos(lla[1]);
+        const double rows[3][3] = {{-sl * co, -sl * so, cl}, {-so, co, 0.0}, {-cl * co, -cl * so, -sl}};
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j)
+                ne[i][j] = rows[i][j];
+    }
+    const float* q = ekf_.quat();
+    const float qc[4] = {q[0], -q[1], -q[2], -q[3]};   // NED -> body
+    for (int i = 0; i < built_.n; ++i)
+    {
+        RawMeas& m = built_.meas[i];
+        const int sys = m.sys < kProfileSys ? m.sys : 0;
+        const double lam = GNSS_C / cfg_.ekf.cr_carrier_hz[sys];
+        if (m.has_rr)
+        {
+            double c = -windup::rollRate(lam, k, wd[0]);
+            if (cfg_.windup_geom)
+            {
+                double d[3], dn[3], eb[3];
+                double n2 = 0.0;
+                for (int a = 0; a < 3; ++a)
+                {
+                    d[a] = m.sat_pos[a] - r_e[a];
+                    n2 += d[a] * d[a];
+                }
+                const double inv = n2 > 0.0 ? 1.0 / std::sqrt(n2) : 0.0;
+                for (int a = 0; a < 3; ++a)
+                    dn[a] = (ne[a][0] * d[0] + ne[a][1] * d[1] + ne[a][2] * d[2]) * inv;
+                bodyToNed(qc, dn, eb);
+                c = -windup::wuRate(lam, k, wd, eb);
+            }
+            m.rr += c;
+        }
+        if (m.has_cr)
+        {
+            double dphi = 0.0;
+            if (wu_ring_.rollOver(td - static_cast<double>(m.cr_dt), td, dphi))
+                m.cr_dphi_m += k * lam * dphi / windup::kTwoPi;
+            else
+            {
+                m.has_cr = false;
+                st_.windup_cr_misses++;
+            }
+        }
+    }
+    st_.windup_epochs++;
+    const float l1 = static_cast<float>(-windup::rollRate(GNSS_C / GNSS_FREQ_L1_HZ, k, wd[0]));
+    st_.windup_last_p_rps = w[0];
+    st_.windup_last_l1_mps = l1;
+    if (std::fabs(l1) > st_.windup_max_l1_mps)
+        st_.windup_max_l1_mps = std::fabs(l1);
+}
+
+// windup_monitor (observe): this epoch's Dopplers at the prior (the change
+// check's dv_next_: each less its prediction at the filter's velocity, the
+// clock's drift in it) fitted for a velocity, a clock rate and the roll rate
+// whose wind-up differs between wavelengths (RawGnssWindup.h's InterbandFit,
+// L1/E1 the reference): what is left after windup_k's correction, plus what
+// it took off, against the gyro's at the same instant. Nothing changes.
+void RawGnssShadow::windupMonitor()
+{
+    if (!job_.wu_ok)
+        return;
+    const double km = cfg_.windup_monitor_k > 0.0 ? cfg_.windup_monitor_k : 1.0;
+    const double lam_ref = GNSS_C / GNSS_FREQ_L1_HZ;
+    // each Doppler's sigma as built, and the loop's stress the update will add (jobChecks: the builder's
+    // rr_dyn_sigma per g of the IMU's peak since the epoch before)
+    const double g_ex = job_.g_peak > 0.0 ? job_.g_peak : 0.0;
+    const double s_dyn = cfg_.meas.rr_dyn_sigma * g_ex;
+    windup::InterbandFit fit;
+    for (int i = 0; i < dv_next_.n; ++i)
+    {
+        const int sys = dv_next_.sys[i] < kProfileSys ? dv_next_.sys[i] : 0;
+        const double lam = GNSS_C / cfg_.ekf.cr_carrier_hz[sys];
+        const double u[3] = {dv_next_.u[i][0], dv_next_.u[i][1], dv_next_.u[i][2]};
+        const double si = static_cast<double>(dv_next_.s[i]);
+        fit.add(u, dv_next_.y[i], std::sqrt(si * si + s_dyn * s_dyn), -km * (lam - lam_ref) / windup::kTwoPi);
+    }
+    double p_res = 0.0, sig = 0.0;
+    if (!fit.solve(p_res, sig))
+        return;
+    const double p_wu = p_res + (cfg_.windup_k > 0.0 ? cfg_.windup_k / km : 0.0) * job_.wu_p;
+    wu_mon_.add(job_.te, p_wu, sig, job_.wu_p);
+    st_.wumon_epochs++;
+    st_.wumon_last_p_rps = static_cast<float>(p_wu);
+    st_.wumon_last_sig_rps = static_cast<float>(sig);
+    st_.wumon_last_gyro_rps = static_cast<float>(job_.wu_p);
+    st_.wumon_dp_rps = static_cast<float>(wu_mon_.diff());
+    st_.wumon_dp_sig_rps = static_cast<float>(wu_mon_.diffSigma());
+    if (wu_mon_.count() >= 10 && wu_mon_.diffSigma() > 0.0)
+    {
+        const float z = static_cast<float>(std::fabs(wu_mon_.diff()) / wu_mon_.diffSigma());
+        if (z > st_.wumon_max_z)
+            st_.wumon_max_z = z;
+    }
 }
 
 void RawGnssShadow::jobChecks(double age, double t)
@@ -1263,6 +1443,14 @@ void RawGnssShadow::dvReset()
     dv_latch_ = false;
     dv_hdg_known_ = false;    // a flight restored in the air never knows
     lev_ref_ok_ = false;
+    for (int i = 0; i < 3; ++i)
+        dv_nd_now_[i] = dv_nd_ref_[i] = 0.0f;
+    dv_ndd_peak_ = 0.0f;
+    dv_nd_have_ = false;
+    dv_wp_peak_ = 0.0f;
+    dv_wpwin_ = 0.0;
+    wu_ref_ok_ = false;
+    wu_ref_p_ = 0.0;
 }
 
 // The lever roll: this end's lever velocity and nose (the Doppler's instant),
@@ -1396,7 +1584,17 @@ void RawGnssShadow::jobDvCheck(double age)
 {
     const double te = job_.te;
     DopplerChangeImu imu;
+    if (cfg_.dv_check == kDvOff)
+    {
+        // the wind-up monitor alone (windup_monitor): this epoch's Dopplers at the prior, no change taken
+        // (dv_ref_ stays as dvReset left it, invalid: the check is off)
+        (void)ekf_.dopplerChange(built_.meas, built_.n, age, dv_ref_, dv_next_, dv_rows_, imu);
+        windupMonitor();
+        return;
+    }
     const int nr = ekf_.dopplerChange(built_.meas, built_.n, age, dv_ref_, dv_next_, dv_rows_, imu);
+    if (cfg_.windup_monitor)
+        windupMonitor();
     const double g_ex = job_.g_peak > 0.0 ? job_.g_peak : 0.0;
     const double dyn = cfg_.dv_sigma_per_g * g_ex;
     // the measured noise, as the epochs before left it (each change has two Dopplers' worth)
@@ -1460,6 +1658,17 @@ void RawGnssShadow::jobDvCheck(double age)
     if (f.ok)
     {
         st_.dv_checks++;
+        // the clock rate's change it fitted, and (the gyro's history kept) the L1 wind-up's change over the
+        // same interval: with windup_k off, the one should carry the other
+        st_.dv_last_c_mps = static_cast<float>(f.x[3]);
+        st_.dv_last_wu_dc_mps = 0.0f;
+        if (windupRingOn() && job_.wu_ok && wu_ref_ok_)
+        {
+            const double k = cfg_.windup_k > 0.0 ? cfg_.windup_k : cfg_.windup_monitor_k;
+            const double lam = GNSS_C / GNSS_FREQ_L1_HZ;
+            st_.dv_last_wu_dc_mps =
+                static_cast<float>(windup::rollRate(lam, k, job_.wu_p) - windup::rollRate(lam, k, wu_ref_p_));
+        }
         const double k2 = cfg_.dv_sat_k * cfg_.dv_sat_k;
         for (int k = 0; k < nr; ++k)
         {
@@ -1551,7 +1760,24 @@ void RawGnssShadow::jobDvCheck(double age)
             arm = dvc::knownLeverArm(w, dv_lev, std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]), dvLeverM(),
                                      dv_hdg_known_, a.att_rad, wu);
         }
-        const double lever = arm * (std::sqrt(dw2) + wp * wp * imu.dt);
+        // the arm times the whole rate's change, and the turn the peak rate can make in a step; or (dv_lever_mode
+        // 1) an antenna on the nose's axis moves only as the nose turns: its velocity change between the two
+        // checks' steps, and what the nose's turn can add between each step and its epoch's instant; one across
+        // the axis (dv_lever_radial_m) turns with the whole rate, its velocity's change at most twice its speed
+        double lever = arm * (std::sqrt(dw2) + wp * wp * imu.dt);
+        if (cfg_.dv_lever_mode == 1)
+        {
+            double dn2 = 0.0;
+            for (int i = 0; i < 3; ++i)
+            {
+                const double d = static_cast<double>(dv_nd_now_[i]) - static_cast<double>(dv_nd_ref_[i]);
+                dn2 += d * d;
+            }
+            const double ax = arm * (std::sqrt(dn2) + 2.0 * age * static_cast<double>(dv_ndd_peak_));
+            const double turn = std::fmin(2.0 * wp, wp * wp * imu.dt);
+            lever = ax + cfg_.dv_lever_radial_m * (std::sqrt(dw2) + turn);
+        }
+        st_.dv_last_lever_mps = static_cast<float>(lever);
         a.scale = cfg_.dv_scale_allow;
         a.bias_mps = cfg_.dv_bias_allow_mps2 * imu.dt;
         a.lever_mps = lever;
@@ -1600,6 +1826,16 @@ void RawGnssShadow::jobDvCheck(double age)
             dvc::Allow aw = a;
             aw.bias_mps = dv_SB_;
             aw.lever_mps = std::fmin(dv_SL_, arm * (wn + dv_wwin_));
+            if (cfg_.dv_lever_mode == 1)
+            {
+                // the axial antenna's speed is the arm times the rate across the nose; the radial one's, the
+                // whole rate's
+                dv_wpwin_ = std::fmax(lam * dv_wpwin_, static_cast<double>(dv_wp_peak_));
+                const double wpn = std::sqrt(static_cast<double>(dv_w_now_[1]) * dv_w_now_[1]
+                                             + static_cast<double>(dv_w_now_[2]) * dv_w_now_[2]);
+                aw.lever_mps =
+                    std::fmin(dv_SL_, arm * (wpn + dv_wpwin_) + cfg_.dv_lever_radial_m * (wn + dv_wwin_));
+            }
             const double chi2w = dvc::epochChi2(dv_SW_, Cs, dv_SF_, aw);
             st_.dv_last_chi2_win = static_cast<float>(chi2w);
             if (!epoch_fail && chi2w > ke2)
@@ -1627,6 +1863,7 @@ void RawGnssShadow::jobDvCheck(double age)
         }
         dv_SB_ = dv_SL_ = 0.0;
         dv_wwin_ = 0.0;
+        dv_wpwin_ = 0.0;
     }
     // this epoch is the next one's start: its Dopplers, and (lever_on) the lever's velocity they were predicted
     // with, as dopplerChange took it, and the nose then (the lever roll's); a reference taken with the offset
@@ -1648,6 +1885,15 @@ void RawGnssShadow::jobDvCheck(double age)
     for (int i = 0; i < 3; ++i)
         dv_w_ref_[i] = dv_w_now_[i];
     dv_w_peak_ = std::sqrt(dv_w_now_[0] * dv_w_now_[0] + dv_w_now_[1] * dv_w_now_[1] + dv_w_now_[2] * dv_w_now_[2]);
+    if (cfg_.dv_lever_mode == 1)
+    {
+        for (int i = 0; i < 3; ++i)
+            dv_nd_ref_[i] = dv_nd_now_[i];
+        dv_ndd_peak_ = 0.0f;
+        dv_wp_peak_ = std::sqrt(dv_w_now_[1] * dv_w_now_[1] + dv_w_now_[2] * dv_w_now_[2]);
+    }
+    wu_ref_p_ = job_.wu_p;
+    wu_ref_ok_ = job_.wu_ok;
     // the holds that have run out
     int nh = 0;
     for (int h = 0; h < n_dv_hold_; ++h)

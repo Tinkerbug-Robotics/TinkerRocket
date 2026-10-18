@@ -436,6 +436,28 @@
 // / g' C^-1 g (C the fit's covariance of w), its 1-sigma 1 / sqrt(g' C^-1 g);
 // the sums since the start give the run's. Counted and logged, nothing fused.
 //
+// The spinning body (all off by default; the windup study, 2026-10-18). An
+// antenna turning about its boresight winds its carrier: -k lambda p / 2pi on
+// every Doppler at a roll rate p (RawGnssWindup.h), 0.19 m/s per rev/s on
+// L1/E1 and 1.7 mm/s per rev/s more on BeiDou B1I. The clock drift's walk
+// (the mosaic's 100 m^2/s^3) takes the common part; nothing takes the
+// difference between wavelengths, or the part a rate across the boresight
+// gives each satellite. With windup_k, each epoch just built has it taken
+// off every Doppler (and carrier rate) before anything judges it -- the
+// change check, the satellite checks, the heading fit, the vertical check,
+// the boost screen, the update: the gyro's rate (less its bias) about the
+// nose at the Doppler's own instant (the epoch's less rr_lag_s, read from the
+// last 0.64 s of steps; an epoch older than that is left as it came and
+// counted), times each system's wavelength (the EKF's cr_carrier_hz). With
+// windup_geom, Wu's in full from each satellite's line of sight in the body
+// (the filter's attitude). No antenna offset is needed: only the boresight's
+// direction, the nose. With windup_monitor (observe), each epoch's Dopplers at
+// the prior are fitted for the roll rate their wind-up differs by between
+// wavelengths (RawGnssWindup.h's interband fit) and set against the gyro's.
+// With dv_lever_mode 1, the change check's lever allowance takes the nose's
+// own turn (a roll does not move an antenna on the nose's axis) and a radial
+// bound, not the whole rate.
+//
 // Stopping. A sensor sim, a hole in the IMU longer than max_gap_s, a state
 // that is not finite, or (on the pad) one pad_reset_m from the flight
 // filter's stops it; it starts again from the next pad seed.
@@ -472,6 +494,7 @@
 #include "RawMeasBuilder.h"
 #include "SatJumpCheck.h"
 #include "ShadowLink.h"
+#include "RawGnssWindup.h"
 #include "TR_RawGnssEKF.h"
 
 namespace gnss_raw
@@ -643,6 +666,27 @@ public:
         double   antenna_sigma_radial_m = 0.02;  //   and across it
         double   antenna_min_rps = 0.0;          // on the Dopplers from this rate across the nose, rad/s (0: any)
         uint8_t  antenna_att_mode = 1;           // the EKF's lever_att_mode when known (LeverAttMode: observe)
+        // The carrier wind-up (above: the spinning body; RawGnssWindup.h). 0
+        // or false: off, the Beetle's filter and the V9 mosaic image as flown.
+        double   windup_k = 0.0;              // cycles a turn about the boresight (the nose) each Doppler and
+                                              //   carrier rate carries, taken off from the gyro (0: off; the
+                                              //   Goblin's helix 0.99, spin rig 10/16)
+        bool     windup_geom = false;         //   and the part the rate across the boresight gives each
+                                              //   satellite (Wu's in full, from its line of sight)
+        bool     windup_monitor = false;      // observe: the roll rate the Dopplers' wind-up implies against
+                                              //   the gyro (RawGnssWindup.h's interband fit, each epoch)
+        double   windup_monitor_k = 0.99;     //   its k
+        double   windup_monitor_tau_s = 1.0;  //   its leaky mean's time constant
+        // The Doppler change check's lever-arm allowance (dv_lever_allow_m):
+        // 0, the body's whole rate (dv_lever_allow_m (|dw| + |w|^2 dt)); 1,
+        // an antenna dv_lever_allow_m along the nose turns only with the nose
+        // -- the change of the nose's own rate in NED, which a roll about it
+        // leaves alone -- and one dv_lever_radial_m across it with the whole
+        // rate (its turn capped at twice its speed). At 1 rev/s of roll, 0
+        // allows 1.2 m/s an epoch and a coherent ramp goes through; 1 allows
+        // what the nose's turn and the radial bound do.
+        uint8_t  dv_lever_mode = 0;
+        double   dv_lever_radial_m = 0.01;
     };
 
     // The Doppler change check (Config::dv_check).
@@ -863,6 +907,25 @@ public:
         float    lever_roll_last_sigma_deg = 0.0f; //   its 1-sigma, deg (0: none)
         double   lever_roll_info = 0.0;    // summed since the start: g' C^-1 g, 1/rad^2
         double   lever_roll_hy = 0.0;      //   and g' C^-1 w, 1/rad: their ratio the roll the whole run points to
+        // the carrier wind-up (windup_k)
+        uint32_t windup_epochs = 0;        // epochs whose Dopplers (and carrier rates) were corrected
+        uint32_t windup_misses = 0;        //   whose Doppler instant the gyro's history no longer held: left as is
+        uint32_t windup_cr_misses = 0;     //   carrier rates whose interval it did not hold: dropped
+        float    windup_last_p_rps = 0.0f; // the last epoch's: the gyro's roll rate at its Doppler instant, rad/s
+        float    windup_last_l1_mps = 0.0f;//   the correction an L1/E1 Doppler took, m/s
+        float    windup_max_l1_mps = 0.0f; // the largest of those
+        // the wind-up monitor (windup_monitor)
+        uint32_t wumon_epochs = 0;         // epochs it fitted (two wavelengths, six Dopplers or more)
+        float    wumon_last_p_rps = 0.0f;  //   the last: the roll rate its Dopplers' wind-up implies, rad/s
+        float    wumon_last_sig_rps = 0.0f;//     its 1-sigma
+        float    wumon_last_gyro_rps = 0.0f;//    the gyro's then
+        float    wumon_dp_rps = 0.0f;      // implied less the gyro's, leaky mean (windup_monitor_tau_s), rad/s
+        float    wumon_dp_sig_rps = 0.0f;  //   its 1-sigma
+        float    wumon_max_z = 0.0f;       // the largest |that| / its 1-sigma, once 10 epochs are in
+        // the change check's clock and lever, the last epoch checked
+        float    dv_last_c_mps = 0.0f;     // its fitted change of the clock rate, m/s
+        float    dv_last_wu_dc_mps = 0.0f; //   the L1 wind-up's change the gyro gives over the same interval
+        float    dv_last_lever_mps = 0.0f; //   the lever allowance the epoch test took
     };
 
     using Clock = int64_t (*)();
@@ -1035,6 +1098,9 @@ private:
         double        hdg_var = 0.0;
         double        hdg_t = 0.0;
         int           hdg_sats = 0;
+        // the carrier wind-up: the gyro's roll rate at the Doppler's instant (rad/s), and whether it had one
+        double        wu_p = 0.0;
+        bool          wu_ok = false;
     };
     Job           job_;
     BuiltEpoch    built_;               // its measurements: built in the job, or handed over
@@ -1174,6 +1240,29 @@ private:
     bool          ant_known_ = false;
     double        ant_b_m_[3] = {};
     void          applyAntenna();
+    // the carrier wind-up (windup_k, windup_monitor): the gyro's steps (less
+    // its bias, rad/s) to read a Doppler's own instant from, 0.64 s of them at
+    // 100 steps a second -- an epoch is dropped 0.3 s old on the mosaic
+    static constexpr int kWindupRing = 64;
+    windup::RateRing<kWindupRing> wu_ring_;
+    windup::Monitor wu_mon_;
+    double        wu_ref_p_ = 0.0;      // the roll rate at the change check's reference epoch (rad/s)
+    bool          wu_ref_ok_ = false;
+    bool          windupRingOn() const { return cfg_.windup_k > 0.0 || cfg_.windup_monitor; }
+    bool          dvJobOn() const { return cfg_.dv_check != kDvOff || cfg_.windup_monitor; }
+    // the epoch just built (built_), age s old: its Dopplers less the
+    // wind-up (windup_k), and the gyro's rate at its Doppler instant (job_.wu_p)
+    void          applyWindup(double age);
+    // windup_monitor: this epoch's Dopplers at the prior (dv_next_), fitted
+    void          windupMonitor();
+    // dv_lever_mode 1: the nose's rate in NED (R (w x x_body), rad/s) at the
+    // last step and at the last check, its largest change a second since the
+    // check, and the largest rate across the nose since it and in the window
+    float         dv_nd_now_[3] = {}, dv_nd_ref_[3] = {};
+    float         dv_ndd_peak_ = 0.0f;
+    bool          dv_nd_have_ = false;
+    float         dv_wp_peak_ = 0.0f;
+    double        dv_wpwin_ = 0.0;
     bool          launch_seen_ = false; // a launch edge since the start (a restored flight has none)
     void          setFlightGate(bool full);
     void          setGroundGate();

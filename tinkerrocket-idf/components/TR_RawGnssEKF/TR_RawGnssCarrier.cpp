@@ -1237,6 +1237,43 @@ int RawGnssEKF<T>::leverRows(const T u_ned[3], const LeverEpoch& lv, int* hidx, 
     return hn;
 }
 
+// att_exact's blocks of Phi (TR_RawGnssEKF.h, propagateCovariance). With K =
+// [w x] / |w| and th = |w| dt (Rodrigues),
+//   exp(-[w x] s)            = I - sin(|w| s) K + (1 - cos(|w| s)) K^2,
+//   int_0^dt exp(-[w x] s) ds = dt I - (1 - cos th) / |w| K + (dt - sin th / |w|) K^2.
+// Per step, not per epoch, but only with att_exact: here, in flash on the
+// Beetle, which never turns it on.
+template <typename T>
+void RawGnssEKF<T>::attExactBlocks(const T w_b[3], T dt, T Ra[3][3], T Ga[3][3]) const
+{
+    const T wn = std::sqrt(w_b[0] * w_b[0] + w_b[1] * w_b[1] + w_b[2] * w_b[2]);
+    T a = T(0), b = T(0), c = T(0), d = T(0);
+    T K[3][3] = {};
+    if (wn > T(1e-9))
+    {
+        const T th = wn * dt;
+        const T k[3] = {w_b[0] / wn, w_b[1] / wn, w_b[2] / wn};
+        K[0][1] = -k[2];
+        K[0][2] = k[1];
+        K[1][0] = k[2];
+        K[1][2] = -k[0];
+        K[2][0] = -k[1];
+        K[2][1] = k[0];
+        a = std::sin(th);
+        b = T(1) - std::cos(th);
+        c = b / wn;
+        d = dt - a / wn;
+    }
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+        {
+            const T k2 = K[i][0] * K[0][j] + K[i][1] * K[1][j] + K[i][2] * K[2][j];
+            const T I = i == j ? T(1) : T(0);
+            Ra[i][j] = I - a * K[i][j] + b * k2;
+            Ga[i][j] = T(-0.5) * (dt * I - c * K[i][j] + d * k2);
+        }
+}
+
 // Each member here, for both scalars (TR_RawGnssEKF.cpp instantiates the rest).
 #define TR_RAW_GNSS_CARRIER_INSTANTIATE(T)                                                                        \
     template void RawGnssEKF<T>::crSnapshot(double, const T[3]);                                                 \
@@ -1261,7 +1298,8 @@ int RawGnssEKF<T>::leverRows(const T u_ned[3], const LeverEpoch& lv, int* hidx, 
     template void RawGnssEKF<T>::pushLever(const T[3]);                                                          \
     template void RawGnssEKF<T>::leverAt(double, T[3], T[3], T[3], T[4]) const;                                  \
     template void RawGnssEKF<T>::leverBack(double, double, T[3], T[3], T[3], LeverEpoch&) const;                 \
-    template int RawGnssEKF<T>::leverRows(const T[3], const LeverEpoch&, int*, T*, int, T&) const;
+    template int RawGnssEKF<T>::leverRows(const T[3], const LeverEpoch&, int*, T*, int, T&) const;              \
+    template void RawGnssEKF<T>::attExactBlocks(const T[3], T, T[3][3], T[3][3]) const;
 TR_RAW_GNSS_CARRIER_INSTANTIATE(float)
 TR_RAW_GNSS_CARRIER_INSTANTIATE(double)
 #undef TR_RAW_GNSS_CARRIER_INSTANTIATE

@@ -123,6 +123,7 @@ void expectSameEkf(const RawGnssEKFParams& a, const RawGnssEKFParams& b)
     EXPECT_EQ(a.p0_isb, b.p0_isb);
     EXPECT_EQ(a.gravity_wgs84, b.gravity_wgs84);
     EXPECT_EQ(a.hist_spacing_s, b.hist_spacing_s);
+    EXPECT_EQ(a.att_exact, b.att_exact);
     EXPECT_EQ(a.cr_mode, b.cr_mode);
     EXPECT_EQ(a.cr_sigma_per_rev_s, b.cr_sigma_per_rev_s);
     EXPECT_EQ(a.cr_common_sigma_mps, b.cr_common_sigma_mps);
@@ -152,6 +153,8 @@ void expectSameShadowSettings(const RawGnssShadow::Config& a, const RawGnssShado
     EXPECT_EQ(a.heading_fit_period_s, b.heading_fit_period_s);
     EXPECT_EQ(a.sat_cap, b.sat_cap);
     EXPECT_EQ(a.level.min_dt_s, b.level.min_dt_s);
+    EXPECT_EQ(a.windup_k, b.windup_k);
+    EXPECT_EQ(a.windup_monitor, b.windup_monitor);
 }
 
 // Every field of a profile but its name, type and measured mark.
@@ -180,6 +183,8 @@ void expectSameNumbers(const GnssReceiverProfile& a, const GnssReceiverProfile& 
     EXPECT_EQ(a.rr_dyn_window_s, b.rr_dyn_window_s);
     EXPECT_EQ(a.max_epoch_age_s, b.max_epoch_age_s);
     EXPECT_EQ(a.epoch_job_max_s, b.epoch_job_max_s);
+    EXPECT_EQ(a.windup_k, b.windup_k);
+    EXPECT_EQ(a.windup_monitor, b.windup_monitor);
     RawGnssShadow::Config sa, sb;
     gnss_raw::applyReceiverProfile(a, sa);
     gnss_raw::applyReceiverProfile(b, sb);
@@ -197,9 +202,9 @@ static_assert(sizeof(void*) != 8 || sizeof(RawMeasBuilder::Config) == 312,
               "RawMeasBuilder::Config changed: add the field to expectSameBuilder, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 32,
               "GnssSignalProfile changed: add the field to expectSameSignal, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 520,
+static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 536,
               "GnssReceiverProfile changed: add the field to expectSameNumbers, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1680,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1728,
               "RawGnssShadow::Config changed: pin the field in TheShadowSafeguardDefaultsAreTheBeetles, then update "
               "this size");
 
@@ -512,9 +517,15 @@ TEST(ReceiverProfile, TheMosaicG5V0Profile)
     EXPECT_EQ(e.rr_lag_s, 0.0);
     EXPECT_EQ(e.cr_mode, gnss_raw::kCarrierOff);
     EXPECT_FALSE(e.att_gnss_off);                         // the harness's switch, never a profile's
+    EXPECT_FALSE(e.att_exact);                            // the windup study's switch: off as flown
     // the shadow's
     RawGnssShadow::Config s;
     gnss_raw::applyReceiverProfile(p, s);
+    // the carrier wind-up: off as flown (RC3); 0.99 turns it on
+    EXPECT_EQ(p.windup_k, 0.0);
+    EXPECT_FALSE(p.windup_monitor);
+    EXPECT_EQ(s.windup_k, 0.0);
+    EXPECT_FALSE(s.windup_monitor);
     EXPECT_EQ(s.epoch_latency_s, 0.0);
     EXPECT_EQ(s.max_epoch_age_s, 0.3);
     EXPECT_EQ(s.epoch_job_max_s, 0.2);
@@ -825,6 +836,15 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_EQ(c.antenna_sigma_radial_m, 0.02);
     EXPECT_EQ(c.antenna_min_rps, 0.0);
     EXPECT_EQ(c.antenna_att_mode, gnss_raw::kLeverAttObserve);
+    // the spinning body (the windup study): the wind-up off, its monitor off, the change check's lever on the
+    // whole rate
+    EXPECT_EQ(c.windup_k, 0.0);
+    EXPECT_FALSE(c.windup_geom);
+    EXPECT_FALSE(c.windup_monitor);
+    EXPECT_EQ(c.windup_monitor_k, 0.99);
+    EXPECT_EQ(c.windup_monitor_tau_s, 1.0);
+    EXPECT_EQ(c.dv_lever_mode, 0);
+    EXPECT_EQ(c.dv_lever_radial_m, 0.01);
 
     // its EKF's, literally (the profile's part is the LC86G's, above)
     const RawGnssEKFParams& e = c.ekf;
@@ -869,6 +889,7 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     for (int k = 0; k < 3; ++k)
         EXPECT_EQ(e.lever_b_m[k], 0.0) << k;
     EXPECT_EQ(e.lever_att_mode, gnss_raw::kLeverAttOff);
+    EXPECT_FALSE(e.att_exact);
     RawGnssEKFParams lc;
     gnss_raw::applyReceiverProfile(gnss_raw::lc86gProfile(), lc);
     expectSameEkf(e, lc);

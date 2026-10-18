@@ -4433,3 +4433,221 @@ TEST(RawGnssShadow, TheBoostScreenWorksTheEpochThroughForWhatThePriorsGatePasses
     EXPECT_EQ(kept.st.boost_dropped, 0u);
 }
 
+
+// ---------------------------------------------------------------- the spinning body (the windup study)
+
+namespace
+{
+
+constexpr double kLambdaL1 = 299792458.0 / GNSS_FREQ_L1_HZ;
+constexpr double kLambdaB1I = 299792458.0 / 1561.098e6;
+
+struct SpinOpts
+{
+    double rev_s = 10.0;        // the roll from ignition, rev/s about the nose
+    double k_true = 0.99;       // the wind-up the Dopplers carry (cycles a turn)
+    double k_fix = 0.0;         // RawGnssShadow::Config::windup_k
+    bool   monitor = false;     //   windup_monitor
+    bool   gal_b1i = false;     // Galileo's Dopplers on B1I's wavelength too (the golden sky has one BeiDou: three more
+                                // on the second wavelength)
+    uint8_t dv_check = 0;       // RawGnssShadow::kDv*
+    uint8_t dv_lever_mode = 0;
+    double sigma_rr = 0.05;     // the sky's Doppler noise
+};
+
+struct SpinRun
+{
+    RawGnssShadow::Stats st;
+    double drift_end = 0.0;     // the filter's clock drift at the end, m/s
+    double drift_true = 0.0;
+    float  lever_last = 0.0f;   // the change check's lever allowance, its last epoch's
+};
+
+// flyCarrier's pad and boost, the carrier off, rolling at o.rev_s from ignition, each epoch's Dopplers carrying the
+// wind-up of an antenna on the nose (RawGnssWindup.h's rollRate, each system's wavelength: GPS and Galileo L1/E1's,
+// BeiDou B1I's), the covariance's
+// attitude transition exact (the first order's is its own test)
+SpinRun flySpin(const SpinOpts& o, double t_end = 12.0)
+{
+    double lat, lon, h;
+    ecef_to_geo(kGoldenRmRx, &lat, &lon, &h);
+    double r0[3];
+    geo_to_ecef(lat, lon, h, r0);
+    const double sl = std::sin(lat), cl = std::cos(lat), so = std::sin(lon), co = std::cos(lon);
+    auto nedToEcefVec = [&](const double n[3], double out[3]) {
+        const double e[3] = {n[1], n[0], -n[2]};
+        out[0] = -so * e[0] - sl * co * e[1] + cl * co * e[2];
+        out[1] = co * e[0] - sl * so * e[1] + cl * so * e[2];
+        out[2] = cl * e[1] + sl * e[2];
+    };
+    RawGnssShadow::Config cfg = primaryCfg();
+    cfg.external_build = true;
+    cfg.meas.troposphere = false;
+    cfg.ekf.cr_mode = gnss_raw::kCarrierOff;
+    cfg.meas.carrier = false;
+    cfg.ekf.att_exact = true;
+    cfg.windup_k = o.k_fix;
+    cfg.windup_monitor = o.monitor;
+    cfg.dv_check = o.dv_check;
+    cfg.dv_lever_mode = o.dv_lever_mode;
+    if (o.gal_b1i)
+        cfg.ekf.cr_carrier_hz[GNSS_SYS_GAL] = 1561.098e6;
+    RawGnssShadow sh(cfg);
+    gnss_raw::RawGnssMeasStage stage(RawGnssShadow::stageConfig(cfg));
+    gnss_raw::BuiltEpoch built;
+    for (int i = 0; i < kGoldenRmEphN; ++i)
+    {
+        sh.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+        stage.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+    }
+    CarrierSky sky(cfg.meas);
+    sky.tow0 = goldenEpochs()[0].epoch.tow_s;
+    sky.sigma_rr = o.sigma_rr;
+    sky.wind_cyc_s = 0.0;
+    ShadowSeed seed = padSeed(kT0, lat, lon, h);
+    const float q_up[4] = {float(std::cos(kPi / 4)), 0.0f, float(std::sin(kPi / 4)), 0.0f};   // body x up
+    for (int i = 0; i < 4; ++i)
+        seed.quat[i] = q_up[i];
+    sh.onSeed(seed);
+    const double t_ign = 4.0, t_det = 4.1, dt = 0.005, rr_lag = cfg.ekf.rr_lag_s;
+    const double p = o.rev_s * 2.0 * kPi;
+    double p_ned[3] = {}, v_ned[3] = {};
+    std::vector<std::array<double, 3>> vel_hist;
+    int next_epoch = 1;
+    std::vector<TimedRawEpoch> due;
+    for (double t = dt; t <= t_end + 1e-9; t += dt)
+    {
+        double a_n[3] = {0.0, 0.0, 0.0};
+        double fx = kG;
+        if (t > t_ign)
+        {
+            fx = t <= t_ign + 2.0 ? 3.0 * kG : 0.0;
+            a_n[2] = -fx + kG;
+        }
+        for (int i = 0; i < 3; ++i)
+        {
+            p_ned[i] += v_ned[i] * dt + 0.5 * a_n[i] * dt * dt;
+            v_ned[i] += a_n[i] * dt;
+        }
+        vel_hist.push_back({v_ned[0], v_ned[1], v_ned[2]});
+        ShadowImu s{};
+        const int64_t t64 = kT0 + static_cast<int64_t>(std::llround(t * 1e6));
+        s.time_us = static_cast<uint32_t>(t64);
+        s.acc[0] = float(fx);
+        const bool spinning = t > t_ign;
+        s.gyro[0] = spinning ? float(p) : 0.0f;
+        s.flags = t < t_ign ? gnss_raw::kShadowLevel : (t >= t_det ? gnss_raw::kShadowInFlight : 0);
+        sh.onImu(s, t64);
+        if (t + 1e-9 >= next_epoch)
+        {
+            const int lag_steps = static_cast<int>(std::lround(rr_lag / dt));
+            const auto& vl = vel_hist[vel_hist.size() > static_cast<size_t>(lag_steps)
+                                          ? vel_hist.size() - 1 - lag_steps : 0];
+            double dr[3], r[3], vlag_e[3];
+            nedToEcefVec(p_ned, dr);
+            nedToEcefVec(vl.data(), vlag_e);
+            for (int i = 0; i < 3; ++i)
+                r[i] = r0[i] + dr[i];
+            TimedRawEpoch e;
+            e.epoch = sky.epoch(sky.tow0 + next_epoch, r, vlag_e);
+            // the antenna's wind-up at the Doppler's instant (rr_lag before the tag): range-like, each system's
+            // wavelength
+            const bool spun = t - rr_lag > t_ign;
+            for (int j = 0; j < e.epoch.n; ++j)
+            {
+                gnss_raw::RawObs& ob = e.epoch.obs[j];
+                const double lam = ob.sys == GNSS_SYS_BDS || (o.gal_b1i && ob.sys == GNSS_SYS_GAL) ? kLambdaB1I
+                                                                                                     : kLambdaL1;
+                if (spun)
+                    ob.rate_mps += gnss_raw::windup::rollRate(lam, o.k_true, p);
+            }
+            e.mcu_us = t64;
+            e.gps_week = kGoldenWeek;
+            due.push_back(e);
+            next_epoch++;
+        }
+        while (!due.empty() && t64 - due.front().mcu_us >= 200000)
+        {
+            offerBuilt(sh, stage, due.front(), built);
+            due.erase(due.begin());
+        }
+    }
+    SpinRun run;
+    run.st = sh.stats();
+    run.drift_end = static_cast<double>(sh.filter().clockDrift());
+    run.drift_true = sky.drift_mps;
+    run.lever_last = sh.stats().dv_last_lever_mps;
+    return run;
+}
+
+}  // namespace
+
+TEST(RawGnssShadow, AtTenRevsASecondTheClockDriftTakesTheWindupUnlessItIsTakenOff)
+{
+    // An antenna on the nose rolling at 10 rev/s winds every L1/E1 Doppler by -k lambda p / 2pi = -1.88 m/s. Off
+    // (the Beetle's and RC3's filter), the clock drift takes it: it reads the true drift plus that. With windup_k
+    // the gyro's roll takes it off each Doppler first, and the drift reads the receiver's own. That pins the sign
+    // end to end: taken off the wrong way, the drift would be off by twice the wind-up.
+    SpinOpts o;
+    const SpinRun off = flySpin(o);
+    o.k_fix = 0.99;
+    const SpinRun on = flySpin(o);
+    const double wu = gnss_raw::windup::rollRate(kLambdaL1, 0.99, 10.0 * 2.0 * kPi);
+    EXPECT_NEAR(wu, -1.884, 0.002);
+    EXPECT_NEAR(off.drift_end, off.drift_true + wu, 0.05);
+    EXPECT_NEAR(on.drift_end, on.drift_true, 0.05);
+    EXPECT_EQ(off.st.windup_epochs, 0u);
+    EXPECT_GE(on.st.windup_epochs, 7u);
+    EXPECT_EQ(on.st.windup_misses, 0u);
+    EXPECT_NEAR(on.st.windup_last_p_rps, 10.0 * 2.0 * kPi, 1e-3);
+    EXPECT_NEAR(on.st.windup_last_l1_mps, -wu, 1e-3);
+}
+
+TEST(RawGnssShadow, TheMonitorReadsTheRollRateFromTwoWavelengthsAndSetsItAgainstTheGyro)
+{
+    // Galileo on a second wavelength (B1I's, 0.92 % longer): the Dopplers' wind-up differs between the systems by
+    // 1.7 mm/s per rev/s, which the monitor fits for the roll rate (observe: nothing in the filter changes). At
+    // 20 rev/s with quiet Dopplers it reads the gyro's rate; with the correction on it reads the same (what was
+    // taken off, plus what is left); with a wind-up of k 0.9 under a k 0.99 correction, 10 % less.
+    SpinOpts o;
+    o.rev_s = 20.0;
+    o.gal_b1i = true;
+    o.monitor = true;
+    o.sigma_rr = 0.0005;
+    const double p = 20.0 * 2.0 * kPi;
+    const SpinRun mon = flySpin(o);
+    ASSERT_GE(mon.st.wumon_epochs, 6u);
+    EXPECT_NEAR(mon.st.wumon_last_gyro_rps, p, 1e-3);
+    EXPECT_NEAR(mon.st.wumon_last_p_rps, p, 0.05 * p);
+    EXPECT_GT(mon.st.wumon_last_sig_rps, 0.0f);
+    o.k_fix = 0.99;
+    const SpinRun both = flySpin(o);
+    EXPECT_NEAR(both.st.wumon_last_p_rps, p, 0.05 * p);
+    // observing changes nothing the filter does
+    SpinOpts q = o;
+    q.monitor = false;
+    const SpinRun plain = flySpin(q);
+    EXPECT_EQ(plain.drift_end, both.drift_end);
+    // a gyro that reads 10 % more than the wind-up says
+    o.k_true = 0.9;
+    const SpinRun lo = flySpin(o);
+    EXPECT_NEAR(lo.st.wumon_last_p_rps, 0.9 / 0.99 * p, 0.05 * p);
+    EXPECT_LT(lo.st.wumon_dp_rps, -0.05 * p);
+}
+
+TEST(RawGnssShadow, TheChangeChecksLeverAllowanceTakesTheNosesTurnNotTheRoll)
+{
+    // A roll about the nose does not move an antenna on the nose's axis. The change check's allowance on the whole
+    // rate (dv_lever_mode 0) gives 0.3 m x |w|^2 dt: a thousand m/s an epoch at 10 rev/s, nothing left to judge.
+    // On the nose's own turn (1) it is the radial bound's 1 cm at twice its speed: 1.3 m/s.
+    SpinOpts o;
+    o.k_fix = 0.99;
+    o.dv_check = RawGnssShadow::kDvObserve;
+    const SpinRun whole = flySpin(o);
+    o.dv_lever_mode = 1;
+    const SpinRun nose = flySpin(o);
+    EXPECT_GE(whole.st.dv_checks, 5u);
+    EXPECT_GT(whole.lever_last, 100.0f);
+    EXPECT_LT(nose.lever_last, 1.4f);
+    EXPECT_GT(nose.lever_last, 1.0f);
+}
