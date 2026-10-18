@@ -147,7 +147,7 @@ This is a statement about behavior, not bytes.
     alignment) and 208 B of `.bss`, so about 1.5 KB less internal RAM.
   - The antenna offset adds, against the configuration without it (28373202): the Beetle 4,924 B of flash code,
     184 B of flash data and 212 B of IRAM code; the V9 auto image 2,370 B of flash and 8 B of `.bss`; this image
-    10,558 B of flash and 48 B of internal RAM. The filter object grows by about 9.5 KB, in PSRAM.
+    10,558 B of flash and 48 B of internal RAM. The filter object grows by about 10.5 KB, in PSRAM.
 - **The Beetle's filter is bit-identical to main's:** `tools/raw_replay/bitident.sh` reports 450 of 450 runs
   IDENTICAL. `tools/m1_identity.sh` reports its `main.cpp` and sensor collectors preprocess IDENTICAL. Neither
   covers GnssTimeSync; the host tests cover its default path.

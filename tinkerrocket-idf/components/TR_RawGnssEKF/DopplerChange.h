@@ -237,6 +237,31 @@ inline double headingChord(double hdg_rad)
     return hdg_rad >= 3.141592653589793 ? 2.0 : 2.0 * std::sin(0.5 * hdg_rad);
 }
 
+// The lever allowance where the antenna's offset is known (RawGnssShadow's
+// antenna offset, the EKF's lever_on). Each end's Dopplers are then predicted
+// at the antenna -- the IMU's velocity plus the lever's, C (omega x r) at the
+// filter's attitude -- so w is the change less the lever's predicted change,
+// and what is left of the lever's is what that prediction can be off by: the
+// offset's own doubt (doubt_m) at the gyro's rates, and the attitude's error
+// turning the predicted change. With the heading known that turn is within
+// the attitude allowance: its chord of the offset (r_m, its size). With the
+// heading unset it is any heading's, up to twice the change itself, so the
+// prediction is taken back out: dv_lev is this end's lever velocity less the
+// reference's, as the two ends' predictions took them, and w + dv_lev is the
+// change the IMU alone predicts (the fit is linear: a velocity common to
+// every row of one end moves its change by that velocity, less only that
+// velocity times the line of sight's turn between the ends, 1e-4 rad), whose
+// lever is allowed as an unknown offset's bound is, at the whole offset:
+// r_m + doubt_m. Returns the arm (m) the allowance's rate term takes; wu is
+// the change the epoch test and its window judge.
+inline double knownLeverArm(const double w[3], const double dv_lev[3], double r_m, double doubt_m, bool hdg_known,
+                            double att_rad, double wu[3])
+{
+    for (int i = 0; i < 3; ++i)
+        wu[i] = hdg_known ? w[i] : w[i] + dv_lev[i];
+    return hdg_known ? doubt_m + headingChord(att_rad) * r_m : r_m + doubt_m;
+}
+
 // The epoch test's covariance: Cw (the fit's, w's 3x3) plus the allowances
 // about sf (the IMU's specific-force velocity change, NED, m/s):
 //   att^2 (|sf|^2 I - sf sf') + scale^2 sf sf' + (bias^2 + lever^2) I

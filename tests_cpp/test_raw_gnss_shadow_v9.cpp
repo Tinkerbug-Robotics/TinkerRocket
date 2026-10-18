@@ -287,6 +287,7 @@ struct ClosedEpoch
     float sigma_rr_max = 0.0f, sigma_rr_min = 0.0f;
     bool held = false;                    // GNSS held off the attitude for it (att_hold_rate_rps)
     bool skipped = false;                 // nothing of it fused while the body turned (rot_skip_rate_rps)
+    uint32_t dv_epoch_fails = 0;          // the Doppler change check's failed epochs so far
 };
 
 struct TenRun
@@ -328,6 +329,20 @@ struct TenFlight
     double lever_y_m = 0.0;              // and this far along body y (across the nose)
     double apogee_t = -1.0;              // the flight computer calls apogee from here (kShadowApogee)
     double seed_heading_err_deg = 0.0;   // the pad seed's heading this far off the body's (about the down axis)
+    // the whole receiver stale (test_doppler_change.cpp's pattern, sim_events.py's): its Dopplers at the pad's
+    // velocity through the boost, closing on the truth with this time constant from burnout (0: none)
+    double stale_tau = 0.0;
+    // a coherent ramp (test_doppler_change.cpp's, sim_events.py's slow pattern): every Doppler at the receiver's
+    // velocity plus coh_rate m/s a second down from coh_from s, held at coh_max (coh_from < 0: none)
+    double coh_from = -1.0;
+    double coh_rate = 0.0;
+    double coh_max = 0.0;
+    // a weathercocking body: from wc_t for wc_s, its rate about the turn's axis a sine of wc_rps at wc_hz
+    // (on top of any turn above)
+    double wc_t = -1.0;
+    double wc_s = 1.0;
+    double wc_rps = 0.0;
+    double wc_hz = 2.0;
 };
 
 TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
@@ -370,6 +385,17 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
             const bool out = t <= fl.turn_t + fl.turn_s + 1e-9;
             w_turn = out ? fl.turn_rps : -fl.turn_rps;
             ang = fl.turn_rps * (out ? t - fl.turn_t : fl.turn_t + 2.0 * fl.turn_s - t);
+        }
+        if (fl.wc_rps > 0.0 && t > fl.wc_t + 1e-9)
+        {
+            // the angle at t and the step's mean rate (the gyro's), the sine's integral
+            const double k = 2.0 * kPi * fl.wc_hz;
+            auto wcAng = [&](double at) {
+                const double s = std::min(at, fl.wc_t + fl.wc_s) - fl.wc_t;
+                return s > 0.0 ? fl.wc_rps / k * (1.0 - std::cos(k * s)) : 0.0;
+            };
+            ang += wcAng(t);
+            w_turn += (wcAng(t) - wcAng(t - dt)) / dt;
         }
         const double ax[3] = {fl.turn_axis == 0 ? 1.0 : 0.0, fl.turn_axis == 1 ? 1.0 : 0.0, 0.0};
         const Mat3 Cn = mat3Mul(Ct, rotAbout(ax, ang));      // body -> NED, turned
@@ -423,6 +449,7 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
             }
             c.held = sh.stats().att_last_held;
             c.skipped = sh.stats().rot_last_skipped;
+            c.dv_epoch_fails = sh.stats().dv_epoch_fails;
             run.eps.push_back(c);
         }
         gnss_raw::ShadowNav nav;
@@ -464,6 +491,14 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
                 double v_rx[3] = {v_ned[0] + wxr_n[0], v_ned[1] + wxr_n[1], v_ned[2] + wxr_n[2]};
                 if (std::fabs(ms / 1000.0 - fl.bad_vertical_t) < 1e-6)
                     v_rx[2] += 40.0;
+                if (fl.stale_tau > 0.0 && t > kIgn)
+                {
+                    const double L = t <= kBurnout ? 1.0 : std::exp(-(t - kBurnout) / fl.stale_tau);
+                    for (int i = 0; i < 3; ++i)
+                        v_rx[i] -= L * v_ned[i];
+                }
+                if (fl.coh_from >= 0.0 && t > fl.coh_from)
+                    v_rx[2] += std::min(fl.coh_rate * (t - fl.coh_from), fl.coh_max);
                 nedToEcefVec(v_rx, ve);
                 for (int i = 0; i < 3; ++i)
                     r[i] = r0[i] + dr[i];
@@ -1583,4 +1618,122 @@ TEST(RawGnssShadowV9, AnAntennaSetInFlightWaitsForTheGround)
         EXPECT_EQ(sh.filter().params().lever_b_m[i], 0.0);
     EXPECT_EQ(sh.filter().params().lever_att_mode, gnss_raw::kLeverAttOff);
     EXPECT_EQ(sh.stats().antenna_sets, 2u);
+}
+
+namespace
+{
+
+// The image's flight with no magnetometer heading at launch (the V9's), the
+// offset known this far up the nose (0: unknown), and settled tracking, as
+// minutes on a pad leave it (TheLeverRollReadsARollAboutTheNoseFromTheChangeCheck:
+// the builder's relock term would leave the change check's fit a 1 m/s 1-sigma)
+RawGnssShadow::Config unsetCfg(double axial_m)
+{
+    RawGnssShadow::Config c = safeguardsCfg();
+    c.meas.rr_relock_sigma = 0.0;
+    if (axial_m > 0.0)
+    {
+        gnss_raw::AntennaOffset a;
+        a.known = true;
+        a.b_m[0] = axial_m;
+        gnss_raw::applyAntennaOffset(a, c);
+    }
+    return c;
+}
+
+// A swing from `from` for secs: the rate about body y a 2 Hz sine of rps at its peak (0.6 rad/s, a coast
+// weathercocking: up to 0.75 rad/s in an epoch's 0.1 s; 5, a drogue-like swing); the antenna r up the nose, the
+// pad's heading hdg off
+TenFlight swing(double rps, double from, double secs, double r, double hdg)
+{
+    TenFlight fl;
+    fl.wc_t = from;
+    fl.wc_s = secs;
+    fl.wc_rps = rps;
+    fl.lever_m = r;
+    fl.seed_heading_err_deg = hdg;
+    return fl;
+}
+
+// the change check's failed epochs closed from t0 up to t1
+uint32_t dvFailsBetween(const TenRun& r, double t0, double t1)
+{
+    uint32_t a = 0, b = 0;
+    for (const ClosedEpoch& c : r.eps)
+    {
+        if (c.t < t0 - 1e-6)
+            a = c.dv_epoch_fails;
+        if (c.t < t1 + 1e-6)
+            b = c.dv_epoch_fails;
+    }
+    return b - a;
+}
+
+}  // namespace
+
+TEST(RawGnssShadowV9, AKnownAntennaWithTheHeadingUnsetPassesTheChangeCheckThroughASwing)
+{
+    // Known, each end's Dopplers are predicted at the antenna at the
+    // filter's attitude, and with no magnetometer heading the filter's
+    // heading is any distance off: the predicted lever's change turns with
+    // it. 01b9a163 allowed it only the offset's 5 cm of doubt: the
+    // weathercock failed 2 (0.3 m, 60 deg) to 8 (0.5 m, 180 deg) epochs and
+    // the swing 2 to 6 (chi-square up to 505), each latching the Dopplers
+    // out. Now the prediction comes back out of the change and the whole
+    // offset is allowed (DopplerChange.h knownLeverArm): none fails, as none
+    // does unknown.
+    for (double hdg : {60.0, 180.0})
+        for (double r : {0.3, 0.5})
+        {
+            SCOPED_TRACE(testing::Message() << r << " m, " << hdg << " deg");
+            const TenRun wc = flyTen(unsetCfg(r), swing(0.6, 6.5, 1.0, r, hdg));
+            const TenRun dr = flyTen(unsetCfg(r), swing(5.0, 7.0, 0.5, r, hdg));
+            EXPECT_EQ(wc.st.dv_hdg_unset, 1);
+            EXPECT_GT(wc.st.dv_checks, 50u);
+            EXPECT_EQ(wc.st.dv_epoch_fails, 0u);
+            EXPECT_EQ(wc.st.dv_latches, 0u);
+            EXPECT_GT(dr.st.dv_checks, 50u);
+            EXPECT_EQ(dr.st.dv_epoch_fails, 0u);
+            EXPECT_EQ(dr.st.dv_latches, 0u);
+            if (hdg == 60.0)
+            {
+                EXPECT_EQ(flyTen(unsetCfg(0.0), swing(0.6, 6.5, 1.0, r, hdg)).st.dv_epoch_fails, 0u);
+                EXPECT_EQ(flyTen(unsetCfg(0.0), swing(5.0, 7.0, 0.5, r, hdg)).st.dv_epoch_fails, 0u);
+            }
+        }
+}
+
+TEST(RawGnssShadowV9, AKnownAntennaWithTheHeadingUnsetStillCatchesAStaleOrRampingReceiver)
+{
+    // The same allowance does not hide a receiver gone wrong through the
+    // swing. The whole receiver stale through the boost and closing on the
+    // truth from burnout (tau 1 s) while the coast weathercocks from burnout:
+    // every epoch of the weathercock and the half second after fails, as
+    // unknown. Every Doppler ramping 2 m/s a second down from 6.6 s, held at
+    // 2 m/s, through the weathercock from 6.5 s: unknown fails 6 (0.3 m) and
+    // 7 (0.5 m) epochs from 6.5 to 8 s, known 6 and 4 (the larger offset's
+    // allowance the wider).
+    struct Case
+    {
+        double r, hdg;
+        uint32_t ramp_min;
+    };
+    for (const Case& c : {Case{0.3, 60.0, 5u}, Case{0.5, 180.0, 3u}})
+    {
+        SCOPED_TRACE(testing::Message() << c.r << " m, " << c.hdg << " deg");
+        TenFlight st = swing(0.6, kBurnout, 1.0, c.r, c.hdg);
+        st.stale_tau = 1.0;
+        const TenRun kn = flyTen(unsetCfg(c.r), st), unk = flyTen(unsetCfg(0.0), st);
+        EXPECT_GE(dvFailsBetween(kn, kBurnout, kBurnout + 1.5), 15u);
+        EXPECT_EQ(dvFailsBetween(kn, kBurnout, kBurnout + 1.5), dvFailsBetween(unk, kBurnout, kBurnout + 1.5));
+        EXPECT_GT(kn.st.dv_held_epochs, 0u);
+        TenFlight rp = swing(0.6, 6.5, 1.0, c.r, c.hdg);
+        rp.coh_from = 6.6;
+        rp.coh_rate = 2.0;
+        rp.coh_max = 2.0;
+        const TenRun kr = flyTen(unsetCfg(c.r), rp), ur = flyTen(unsetCfg(0.0), rp);
+        EXPECT_GE(dvFailsBetween(kr, 6.5, 8.0), c.ramp_min);
+        EXPECT_GE(dvFailsBetween(ur, 6.5, 8.0), 5u);
+        EXPECT_GT(kr.st.dv_held_epochs, 0u);
+    }
 }

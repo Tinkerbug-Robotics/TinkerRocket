@@ -3,7 +3,9 @@
 // antenna's offset and velocity the filter keeps beside its history and
 // takes at each measurement's own instant (leverAt), every range rate and
 // pseudorange predicted at the antenna, the Doppler change check's changes
-// the antenna's, the offset's roll terms observed or fused (lever_att_mode),
+// the antenna's (and what an attitude error does to the lever's predicted
+// change: knownLeverArm), the offset's roll terms observed or fused
+// (lever_att_mode, the gyro bias's at the Doppler's instant),
 // and the owner's setting -- the board's frame, mm -- in the filter's
 // (antennaOffsetInBody, applyAntennaOffset). Off, the filter is the one the
 // Beetle flies, bit for bit. The sky is test_raw_gnss_rot.cpp's: ten
@@ -547,6 +549,201 @@ TEST(RawGnssAntenna, KnownTheChangeChecksChangesAreTheAntennas)
         EXPECT_NEAR(rows[i].z, 0.0, 0.02) << i;
 }
 
+TEST(RawGnssAntenna, TheChangeChecksLeverComesBackOutOfItsFit)
+{
+    // Where the heading is unset, RawGnssShadow's change check takes the
+    // lever's predicted change back out of the fitted change: w + (v_lev now
+    // - v_lev then), each end's lever velocity as dopplerChange took it
+    // (imu.v_lev). That is the unknown filter's fit: each end's prediction is
+    // linear in the velocity it takes, and the fit (a velocity change and a
+    // clock rate) moves by a velocity common to every row of an end, less
+    // only that velocity times the line of sight's turn between the ends.
+    // Two filters, the lever known and not, through a 5 rad/s pitch with the
+    // antenna 0.3 m up the nose, epochs 0.05 and 0.15 s into it: the fits
+    // differ by the lever's change (0.74 m/s), and taken back out by under
+    // 1 mm/s; with and without a Doppler's lag.
+    for (double lag : {0.0, 0.03})
+    {
+        SCOPED_TRACE(lag);
+        Rig rig;
+        rig.w = 5.0;
+        rig.t_turn = 5.0;
+        rig.r_b[0] = 0.3;
+        RawGnssEKFParams p_off = quietParams(), p_on = leverParams(rig.r_b);
+        p_off.rr_lag_s = p_on.rr_lag_s = lag;
+        Rig r_off = rig, r_on = rig;
+        RawGnssEKF<float> off = r_off.filter(p_off), on = r_on.filter(p_on);
+        r_off.run(off, 0.05);
+        r_on.run(on, 0.05);
+        gnss_raw::DopplerRef ref_off, ref_on, out;
+        gnss_raw::dvc::Row rows_off[gnss_raw::RawEpoch::kMaxObs], rows_on[gnss_raw::RawEpoch::kMaxObs];
+        gnss_raw::DopplerChangeImu imu_off, imu_ref, imu_on;
+        const auto m0 = r_on.epoch();
+        off.dopplerChange(m0.data(), static_cast<int>(m0.size()), 0.0, gnss_raw::DopplerRef(), ref_off, rows_off,
+                          imu_off);
+        on.dopplerChange(m0.data(), static_cast<int>(m0.size()), 0.0, gnss_raw::DopplerRef(), ref_on, rows_on,
+                         imu_ref);
+        EXPECT_EQ(imu_off.v_lev[0], 0.0f);           // unknown: none
+        r_off.run(off, 0.1);
+        r_on.run(on, 0.1);
+        const auto m1 = r_on.epoch();
+        const int n_off = off.dopplerChange(m1.data(), static_cast<int>(m1.size()), 0.0, ref_off, out, rows_off, imu_off);
+        const int n_on = on.dopplerChange(m1.data(), static_cast<int>(m1.size()), 0.0, ref_on, out, rows_on, imu_on);
+        ASSERT_EQ(n_off, 10);
+        ASSERT_EQ(n_on, 10);
+        const gnss_raw::dvc::Fit f_off = gnss_raw::dvc::fit(rows_off, n_off, 5.0);
+        const gnss_raw::dvc::Fit f_on = gnss_raw::dvc::fit(rows_on, n_on, 5.0);
+        ASSERT_TRUE(f_off.ok);
+        ASSERT_TRUE(f_on.ok);
+        double dv_lev[3], wu[3];
+        for (int i = 0; i < 3; ++i)
+            dv_lev[i] = double(imu_on.v_lev[i]) - double(imu_ref.v_lev[i]);
+        const double arm = gnss_raw::dvc::knownLeverArm(f_on.x, dv_lev, 0.3, 0.05, false, 0.17, wu);
+        EXPECT_DOUBLE_EQ(arm, 0.35);                 // the whole offset and its doubt
+        double moved = 0.0, back = 0.0;
+        for (int i = 0; i < 3; ++i)
+        {
+            moved += (f_on.x[i] - f_off.x[i]) * (f_on.x[i] - f_off.x[i]);
+            back = std::max(back, std::fabs(wu[i] - f_off.x[i]));
+        }
+        EXPECT_NEAR(std::sqrt(moved), 0.74, 0.02);   // 2 x 1.5 m/s x sin(0.25): the lever's change between the ends
+        EXPECT_LT(back, 1e-3);
+        EXPECT_NEAR(f_on.x[3], f_off.x[3], 1e-3);    // the clock's rate untouched
+    }
+}
+
+namespace
+{
+
+// The Doppler change check's epoch test (RawGnssShadow::jobDvCheck,
+// DopplerChange.h) on one interval set here: the antenna r_b on a body going
+// from C1 to C2 while its rate goes from w1 to w2 (its largest wp), over dt,
+// the IMU's specific-force change sf (NED); the filter's attitude the truth's
+// turned by E at both ends, so its predictions -- the IMU's change and the
+// lever's -- are turned by E. The fit's covariance 3 cm/s a side; the mosaic
+// image's allowances (10 deg, 1 %, 0.1 m/s^2; the heading's any where unset).
+struct LeverStep
+{
+    M3 C1, C2;
+    double w1[3], w2[3];
+    double wp, dt;
+    double sf[3];
+};
+
+enum LeverDesign
+{
+    kUnknown,         // the offset unknown: the bound, 0.3 m
+    kKnownAsItWas,    // known, the prediction kept and only its doubt allowed (01b9a163)
+    kKnown,           // known: knownLeverArm
+};
+
+double leverStepChi2(const LeverStep& s, const double r_b[3], const M3& E, LeverDesign d, bool hdg_known)
+{
+    auto cross = [](const double a[3], const double b[3], double o[3]) {
+        o[0] = a[1] * b[2] - a[2] * b[1];
+        o[1] = a[2] * b[0] - a[0] * b[2];
+        o[2] = a[0] * b[1] - a[1] * b[0];
+    };
+    double wr1[3], wr2[3], vt1[3], vt2[3], vp1[3], vp2[3], sf_f[3];
+    cross(s.w1, r_b, wr1);
+    cross(s.w2, r_b, wr2);
+    apply(s.C1, wr1, vt1);
+    apply(s.C2, wr2, vt2);
+    apply(E, vt1, vp1);
+    apply(E, vt2, vp2);
+    apply(E, s.sf, sf_f);
+    double w_unk[3], w_kn[3], dv_lev[3], dw2 = 0.0;
+    for (int i = 0; i < 3; ++i)
+    {
+        dv_lev[i] = vp2[i] - vp1[i];
+        w_unk[i] = (s.sf[i] - sf_f[i]) + (vt2[i] - vt1[i]);
+        w_kn[i] = w_unk[i] - dv_lev[i];
+        dw2 += (s.w2[i] - s.w1[i]) * (s.w2[i] - s.w1[i]);
+    }
+    const double rates = std::sqrt(dw2) + s.wp * s.wp * s.dt;
+    double Cw[3][3] = {};
+    for (int i = 0; i < 3; ++i)
+        Cw[i][i] = 0.03 * 0.03;
+    gnss_raw::dvc::Allow a;
+    a.att_rad = 10.0 * kPi / 180.0;
+    a.scale = 0.01;
+    a.bias_mps = 0.1 * s.dt;
+    if (!hdg_known)
+        a.hdg_rad = kPi;
+    if (d == kUnknown)
+    {
+        a.lever_mps = 0.3 * rates;
+        return gnss_raw::dvc::epochChi2(w_unk, Cw, sf_f, a);
+    }
+    if (d == kKnownAsItWas)
+    {
+        a.lever_mps = 0.05 * rates;
+        return gnss_raw::dvc::epochChi2(w_kn, Cw, sf_f, a);
+    }
+    double wu[3];
+    const double r = std::sqrt(r_b[0] * r_b[0] + r_b[1] * r_b[1] + r_b[2] * r_b[2]);
+    a.lever_mps = gnss_raw::dvc::knownLeverArm(w_kn, dv_lev, r, 0.05, hdg_known, a.att_rad, wu) * rates;
+    return gnss_raw::dvc::epochChi2(wu, Cw, sf_f, a);
+}
+
+}  // namespace
+
+TEST(RawGnssAntenna, KnownTheChangeCheckAllowsWhatTheAttitudeDoesToThePredictedLever)
+{
+    // Known, each end's Dopplers are predicted at the antenna, its velocity
+    // C (omega x r) at the filter's attitude: an attitude error turns the
+    // predicted change. With the heading unset (no magnetometer: the V9's
+    // launch) any heading can be off, up to twice the change. Allowed only
+    // the offset's 5 cm of doubt (as 01b9a163 had it), a weathercocking coast
+    // (the rate swinging 0.75 rad/s in 0.1 s, at most 0.6) 60 deg off failed
+    // the 4-sigma test that unknown passed (0.3 m: 19.9 against 0.89), and so
+    // did a drogue's snatch on a coast near vertical (3 to 5 rad/s in 0.1 s,
+    // 1 g along the tail) 180 deg off (0.5 m: 47 against 0.86). Now the
+    // prediction is taken back out and the whole offset allowed: each passes
+    // at 0.3 and 0.5 m, as unknown does. With the heading known, an attitude
+    // error within the 10 deg allowance turns the prediction by at most its
+    // chord: allowed, it passes too.
+    const double kE = 16.0;                      // dv_epoch_k 4, squared
+    const double y[3] = {0.0, 1.0, 0.0}, down[3] = {0.0, 0.0, 1.0};
+    const M3 up = rot(y, kPi / 2.0);             // nose up: body x along NED -z
+    LeverStep wc{up, up, {0.0, 0.375, 0.0}, {0.0, -0.375, 0.0}, 0.6, 0.1, {0, 0, 0}};
+    LeverStep dr{mul(up, rot(y, -0.2)), mul(up, rot(y, 0.2)), {0.0, 3.0, 0.0}, {0.0, 5.0, 0.0}, 5.0, 0.1, {0, 0, 0}};
+    const double snatch_b[3] = {-kG * 0.1, 0.0, 0.0};
+    apply(up, snatch_b, dr.sf);                  // the chute's pull along the tail, at the interval's middle
+    struct Case
+    {
+        const char* name;
+        const LeverStep* s;
+        double hdg_deg, r;
+    };
+    const Case cases[] = {{"weathercock 0.3 m, 60 deg", &wc, 60.0, 0.3},
+                          {"weathercock 0.5 m, 60 deg", &wc, 60.0, 0.5},
+                          {"drogue 0.3 m, 180 deg", &dr, 180.0, 0.3},
+                          {"drogue 0.5 m, 180 deg", &dr, 180.0, 0.5}};
+    for (const Case& c : cases)
+    {
+        SCOPED_TRACE(c.name);
+        const double r_b[3] = {c.r, 0.0, 0.0};
+        const M3 E = rot(down, c.hdg_deg * kPi / 180.0);
+        const double unk = leverStepChi2(*c.s, r_b, E, kUnknown, false);
+        const double was = leverStepChi2(*c.s, r_b, E, kKnownAsItWas, false);
+        const double now = leverStepChi2(*c.s, r_b, E, kKnown, false);
+        EXPECT_LT(unk, kE);
+        EXPECT_GT(was, kE);
+        EXPECT_LT(now, kE);
+        EXPECT_LE(now, unk);                     // the measured size, not the bound
+    }
+    // the heading known, the attitude 9 deg off about a tilted axis
+    const double ax[3] = {1.0 / std::sqrt(3.0), 1.0 / std::sqrt(3.0), 1.0 / std::sqrt(3.0)};
+    const M3 E9 = rot(ax, 9.0 * kPi / 180.0);
+    for (const LeverStep* s : {&wc, &dr})
+        for (double r : {0.3, 0.5})
+        {
+            const double r_b[3] = {r, 0.0, 0.0};
+            EXPECT_LT(leverStepChi2(*s, r_b, E9, kKnown, true), 4.0) << r;
+        }
+}
+
 // ---- the offset's roll terms fused (lever_att_mode fuse)
 
 TEST(RawGnssAntenna, FusedTheLeversRollTermsTakeOutARollAboutAVerticalNose)
@@ -607,6 +804,94 @@ TEST(RawGnssAntenna, FusedTheLeversRollTermsTakeOutARollAboutAVerticalNose)
         EXPECT_LT(err(fuse, r_fuse), c.fused_below) << c.w;
         EXPECT_GT(err(fuse, r_fuse), c.fused_above) << c.w;
     }
+}
+
+TEST(RawGnssAntenna, FusedTheGyroBiasTermIsTheBodysAtTheDopplersInstant)
+{
+    // A Doppler's lever term on the gyro bias (leverRows): a bias db turns
+    // the rate the body had at the Doppler's instant, in the body as it stood
+    // then -- C_l (-db x r) -- not as it stands when the epoch is fused. A
+    // nose-up body rolling at 10 rad/s, the antenna 0.3 m across the nose, an
+    // epoch fused 0.155 s after its instant: the body has turned 89 deg
+    // since. The term, as the update fuses it, read from its gain: with the
+    // biases' covariance set apart from the rest (setBiases), one Doppler
+    // fused alone moves the gyro bias along P h' = sigma^2 h. Against the
+    // finite difference of the antenna's range rate in the gyro bias at the
+    // truth's attitude then: within a degree (the filter's own attitude, a
+    // step's interpolation). The term taken with the attitude now (as
+    // 01b9a163 had it, which this matched to 0.01 deg) is 82 deg off: the
+    // body's turn about the nose, less the term's part along it.
+    const double y[3] = {0.0, 1.0, 0.0};
+    Rig rig;
+    rig.C0 = rot(y, kPi / 2.0);
+    rig.ax[0] = 1.0;
+    rig.ax[1] = 0.0;
+    rig.w = 10.0;
+    rig.t_turn = 5.0;
+    rig.r_b[1] = 0.3;
+    RawGnssEKFParams lp = leverParams(rig.r_b, gnss_raw::kLeverAttFuse);
+    lp.att_gate_cos4 = false;
+    RawGnssEKF<float> f = rig.filter(lp);
+    rig.run(f, 0.3);                             // into the roll
+    const auto m = rig.epoch();
+    const M3 C_l = rig.C(rig.t);                 // the Doppler's instant (no lag here)
+    const double age = 0.155;
+    rig.run(f, age);
+    const M3 C_now = rig.C(rig.t);
+    // GPS 3, 70 deg up: mostly along the nose, so its term is across it, where the roll turns it
+    RawMeas one = m[0];
+    ASSERT_EQ(one.prn, 3);
+    one.has_pr = false;
+    one.rr += 0.05;                              // an innovation to move the bias by
+    const float ab[3] = {f.accelBias()[0], f.accelBias()[1], f.accelBias()[2]};
+    const float wb[3] = {f.gyroBias()[0], f.gyroBias()[1], f.gyroBias()[2]};
+    float Pb[6][6] = {};
+    for (int i = 3; i < 6; ++i)
+        Pb[i][i] = 0.05f * 0.05f;
+    f.setBiases(ab, wb, Pb);
+    RawGnssStats st;
+    f.updateGnssRawPart(&one, 0, 1, age, st);
+    ASSERT_EQ(st.used_rr, 1);
+    double db[3];
+    for (int i = 0; i < 3; ++i)
+        db[i] = double(f.gyroBias()[i]) - double(wb[i]);
+    // the antenna's part of the range rate, -u . C ((w - db) x r), u the line of sight (NED)
+    const double el = 70.0 * kPi / 180.0;
+    const double u[3] = {std::cos(el), 0.0, -std::sin(el)};
+    auto rate = [&](const M3& C, const double d[3]) {
+        const double wv[3] = {rig.w - d[0], -d[1], -d[2]};
+        const double* r = rig.r_b;
+        const double wxr[3] = {wv[1] * r[2] - wv[2] * r[1], wv[2] * r[0] - wv[0] * r[2], wv[0] * r[1] - wv[1] * r[0]};
+        double v[3];
+        apply(C, wxr, v);
+        return -(u[0] * v[0] + u[1] * v[1] + u[2] * v[2]);
+    };
+    double h_l[3];
+    const double eps = 1e-6;
+    for (int j = 0; j < 3; ++j)
+    {
+        double dp[3] = {0.0, 0.0, 0.0}, dm[3] = {0.0, 0.0, 0.0};
+        dp[j] = eps;
+        dm[j] = -eps;
+        h_l[j] = (rate(C_l, dp) - rate(C_l, dm)) / (2.0 * eps);
+    }
+    // the term as it was taken, -(u x p)' C with C now: the same NED vector, C_l h_l, read in the body now
+    double g[3], h_now[3];
+    apply(C_l, h_l, g);
+    for (int j = 0; j < 3; ++j)
+        h_now[j] = C_now.m[0][j] * g[0] + C_now.m[1][j] * g[1] + C_now.m[2][j] * g[2];
+    auto angleDeg = [](const double a[3], const double b[3]) {
+        const double ab = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        const double na = std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+        const double nb = std::sqrt(b[0] * b[0] + b[1] * b[1] + b[2] * b[2]);
+        return std::acos(std::max(-1.0, std::min(1.0, ab / (na * nb)))) * 180.0 / kPi;
+    };
+    // the arm times the line of sight's part across it: at least its part along the nose, sin 70
+    const double hn = std::sqrt(h_l[0] * h_l[0] + h_l[1] * h_l[1] + h_l[2] * h_l[2]);
+    EXPECT_GT(hn, 0.3 * std::sin(el));
+    EXPECT_LT(hn, 0.3);
+    EXPECT_LT(angleDeg(db, h_l), 1.0);
+    EXPECT_GT(angleDeg(db, h_now), 75.0);
 }
 
 // ---- the owner's setting into the filter's frame

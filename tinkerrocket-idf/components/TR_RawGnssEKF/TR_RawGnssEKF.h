@@ -391,6 +391,8 @@ struct DopplerChangeImu
     double dt = 0.0;       // the interval, s
     float  dv[3] = {};     // the IMU's velocity change over it, NED (specific force and gravity, no corrections)
     float  dv_sf[3] = {};  //   the specific force's part
+    float  v_lev[3] = {};  // lever_on: the antenna's velocity against the IMU at this end's Dopplers, NED, as
+                           //   every prediction here took it (0 with the lever off; set with or without a ref)
 };
 
 template <typename T>
@@ -632,26 +634,33 @@ public:
     // The antenna against the IMU age_s ago (lever_on): its offset C r (m)
     // and velocity C (omega x r) (m/s), NED, interpolated between the
     // history's entries (the oldest's before them, the newest's after), and
-    // the nose (body x) then, NED, where asked. All zero with lever_on off;
-    // with no history yet, at the attitude now and no velocity.
-    void leverAt(double age_s, T p_ned[3], T v_ned[3], T nose_ned[3] = nullptr) const;
+    // where asked the nose (body x) then, NED, and the attitude then (body ->
+    // NED, scalar first, as quat(); between two entries their normalized
+    // mean, the nose its first column). All zero with lever_on off; with no
+    // history yet, at the attitude now and no velocity.
+    void leverAt(double age_s, T p_ned[3], T v_ned[3], T nose_ned[3] = nullptr, T q_ned[4] = nullptr) const;
 
 private:
     // The antenna at an epoch (lever_on): its offset at the epoch (age_s
-    // ago) and its velocity there and at the Doppler's instant (tau before
-    // it), NED -- what leverBack takes off the history's change so the
-    // receiver the predictions back-date is the antenna, not the IMU.
+    // ago) and its velocity there, and at the Doppler's instant (tau before
+    // it) its offset, its velocity and the attitude (body -> NED), NED --
+    // what leverBack takes off the history's change so the receiver the
+    // predictions back-date is the antenna, not the IMU, and what leverRows
+    // takes for the gyro bias's term at the Doppler's instant.
     struct LeverEpoch
     {
-        T p_e[3], v_e[3], v_l[3];
+        T p_e[3], v_e[3], p_l[3], v_l[3];
+        T C_l[3][3];
     };
     void   leverBack(double age_s, double tau, T dp_e[3], T dv_e[3], T dv_l[3], LeverEpoch& lv) const;
-    // propagate's: the antenna's offset and velocity at the step's end, into
-    // the history entry the step went into (lev_)
+    // propagate's: the antenna's offset and velocity and the attitude at the
+    // step's end, into the history entry the step went into (lev_)
     void   pushLever(const T w_b[3]);
     // A Doppler row's lever terms (lever_on): the attitude's, 2 (u x v)' C,
-    // and the gyro bias's, -(u x p)' C (u the line of sight, v and p the
-    // antenna's velocity and offset, NED; C body -> NED). Fuse
+    // and the gyro bias's, -(u x p)' C_l (u the line of sight, v and p the
+    // antenna's velocity and offset at the Doppler's instant, NED; C body ->
+    // NED now, the attitude state's frame, and C_l then: a bias turns the
+    // rate the body had then, in the body as it stood then). Fuse
     // (lever_att_mode): appended to the row's H at hidx/hval (hn so far);
     // returns the new count. Otherwise they are considered, not fused: R
     // takes what the attitude's and gyro bias's own uncertainty does to the
@@ -772,10 +781,11 @@ private:
     mutable bool   vfit_in_[RawEpoch::kMaxObs] = {};
 
     Hist   hist_[kHist] = {};
-    // lever_on: each history entry's antenna offset C r (0-2), velocity
-    // C (omega x r) (3-5) and nose C x (6-8), NED, at the entry's end (beside
-    // hist_, slot for slot; written only with the lever on)
-    T      lev_[kHist][9] = {};
+    // lever_on: each history entry's antenna offset C r (0-2) and velocity
+    // C (omega x r) (3-5), NED, and the attitude q (6-9, body -> NED, scalar
+    // first), at the entry's end (beside hist_, slot for slot; written only
+    // with the lever on: an entry from before it has q zero)
+    T      lev_[kHist][10] = {};
     int    hhead_ = 0;        // next slot
     int    hn_ = 0;
     double hopen_ = 0.0;      // start of the newest entry's span

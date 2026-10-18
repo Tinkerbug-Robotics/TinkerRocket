@@ -1520,9 +1520,26 @@ void RawGnssShadow::jobDvCheck(double age)
             dw2 += d * d;
         }
         const double wp = static_cast<double>(dv_w_peak_);
-        const double lever = dvLeverM() * (std::sqrt(dw2) + wp * wp * imu.dt);
         dvc::Allow a;
         a.att_rad = cfg_.dv_att_allow_deg / kRad2Deg;
+        // the lever arm the allowance takes: the bound, or with the offset known what its prediction can be
+        // off by (DopplerChange.h knownLeverArm) -- where the heading is unset, the prediction taken back out
+        // of the change (wu) and the whole offset allowed. The lever roll reads the change as fitted (w).
+        double arm = dvLeverM();
+        double wu[3] = {w[0], w[1], w[2]};
+        if (cfg_.ekf.lever_on)
+        {
+            const double* r = cfg_.ekf.lever_b_m;
+            double dv_lev[3];
+            for (int i = 0; i < 3; ++i)
+            {
+                const float ref = lev_ref_ok_ ? lev_ref_v_[i] : 0.0f;
+                dv_lev[i] = static_cast<double>(imu.v_lev[i]) - static_cast<double>(ref);
+            }
+            arm = dvc::knownLeverArm(w, dv_lev, std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]), dvLeverM(),
+                                     dv_hdg_known_, a.att_rad, wu);
+        }
+        const double lever = arm * (std::sqrt(dw2) + wp * wp * imu.dt);
         a.scale = cfg_.dv_scale_allow;
         a.bias_mps = cfg_.dv_bias_allow_mps2 * imu.dt;
         a.lever_mps = lever;
@@ -1530,16 +1547,16 @@ void RawGnssShadow::jobDvCheck(double age)
         // any distance off, and the horizontal change only as sure as that
         if (cfg_.dv_hdg_unset_deg > 0.0 && !dv_hdg_known_)
             a.hdg_rad = cfg_.dv_hdg_unset_deg / kRad2Deg;
-        const double chi2 = dvc::epochChi2(w, Cw, sf, a);
+        const double chi2 = dvc::epochChi2(wu, Cw, sf, a);
         // the lever roll (RawGnssShadow.h): the fitted change against the roll a turning antenna points to
         if (cfg_.ekf.lever_on && cfg_.ekf.lever_att_mode == kLeverAttObserve && lev_ref_ok_ && imu.ok)
             leverRoll(age, w, Cw, imu);
         const double ke2 = cfg_.dv_epoch_k * cfg_.dv_epoch_k;
         st_.dv_last_chi2 = static_cast<float>(chi2);
-        st_.dv_last_along = static_cast<float>(dvc::alongSf(w, sf));
+        st_.dv_last_along = static_cast<float>(dvc::alongSf(wu, sf));
         if (static_cast<float>(chi2) > st_.dv_max_chi2)
             st_.dv_max_chi2 = static_cast<float>(chi2);
-        double excess = std::sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
+        double excess = std::sqrt(wu[0] * wu[0] + wu[1] * wu[1] + wu[2] * wu[2]);
         epoch_fail = chi2 < 0.0 || chi2 > ke2 || 2 * sat_fails > nr;
         if (win)
         {
@@ -1550,7 +1567,7 @@ void RawGnssShadow::jobDvCheck(double age)
             double Cs[3][3];
             for (int i = 0; i < 3; ++i)
             {
-                dv_SW_[i] = lam * dv_SW_[i] + w[i];
+                dv_SW_[i] = lam * dv_SW_[i] + wu[i];
                 dv_SF_[i] = lam * dv_SF_[i] + sf[i];
                 for (int j = 0; j < 3; ++j)
                 {
@@ -1570,7 +1587,7 @@ void RawGnssShadow::jobDvCheck(double age)
                                         + static_cast<double>(dv_w_now_[2]) * dv_w_now_[2]);
             dvc::Allow aw = a;
             aw.bias_mps = dv_SB_;
-            aw.lever_mps = std::fmin(dv_SL_, dvLeverM() * (wn + dv_wwin_));
+            aw.lever_mps = std::fmin(dv_SL_, arm * (wn + dv_wwin_));
             const double chi2w = dvc::epochChi2(dv_SW_, Cs, dv_SF_, aw);
             st_.dv_last_chi2_win = static_cast<float>(chi2w);
             if (!epoch_fail && chi2w > ke2)
@@ -1599,13 +1616,17 @@ void RawGnssShadow::jobDvCheck(double age)
         dv_SB_ = dv_SL_ = 0.0;
         dv_wwin_ = 0.0;
     }
-    // this epoch is the next one's start
+    // this epoch is the next one's start: its Dopplers, and (lever_on) the lever's velocity they were predicted
+    // with, as dopplerChange took it, and the nose then (the lever roll's); a reference taken with the offset
+    // unknown has none
     dv_ref_ = dv_next_;
-    if (cfg_.ekf.lever_on && cfg_.ekf.lever_att_mode == kLeverAttObserve)
+    lev_ref_ok_ = cfg_.ekf.lever_on;
+    if (lev_ref_ok_)
     {
-        float lp[3];
-        ekf_.leverAt(age + cfg_.ekf.rr_lag_s, lp, lev_ref_v_, lev_ref_n_);
-        lev_ref_ok_ = true;
+        float lp[3], lv[3];
+        ekf_.leverAt(age + cfg_.ekf.rr_lag_s, lp, lv, lev_ref_n_);
+        for (int i = 0; i < 3; ++i)
+            lev_ref_v_[i] = imu.v_lev[i];
     }
     for (int i = 0; i < dv_ref_.n; ++i)
     {
