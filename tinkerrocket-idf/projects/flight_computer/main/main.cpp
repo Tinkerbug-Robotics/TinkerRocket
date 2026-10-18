@@ -3229,8 +3229,13 @@ static void rawIonoOffer(const gnss_raw::ShadowIono& io, bool from_rx, gnss_raw:
 {
 #if TR_RAW_NAV_RIG_REPLAY
     // The rig replay: the rig's sky is a recorded day's, so its broadcast
-    // ionosphere wins over the app's whatever their days
-    if (!RawIonoRule::offerRigReplay(raw_iono, io.raw, io.gps_day, from_rx)) return;
+    // ionosphere wins over the app's whatever their days, and no set from
+    // another day is taken. Before the replay starts (the end of setup) the
+    // sky's day is not known: the NVS set this task reads first, and a
+    // GPSIon the receiver kept from the real sky, are dropped, not taken
+    const uint16_t sky_day = sensor_collector.replaySkyGpsDay();
+    if (sky_day == 0 || !RawIonoRule::offerRigReplay(raw_iono, io.raw, io.gps_day, from_rx, sky_day))
+        return;
 #else
     if (!RawIonoRule::offer(raw_iono, io.raw, io.gps_day, from_rx)) return;
 #endif
@@ -9003,6 +9008,12 @@ static void loop_fc()
 
                 // #1629: the hand-calibrated offset is the real IMU's -- not the sim's truth counts
                 sensor_converter.setLowGOffsetEnabled(!sensor_collector.isSimActive());
+#if TR_RAW_NAV_RIG_REPLAY
+                // the rig replay's high-g counts carry the bias the converter
+                // takes off (TR_Sensor_Collector_Sim's packISM6)
+                sensor_collector.setReplayHighGBias(sensor_converter.highGBiasX(), sensor_converter.highGBiasY(),
+                                                    sensor_converter.highGBiasZ());
+#endif
                 sensor_converter.convertISM6HG256Data(ism6_mean_raw, ism6_latest_si);
                 have_ism6_si = true;
                 // The low-g near-rail verdict comes from the window's WORST raw
@@ -12387,25 +12398,85 @@ static void loop_fc()
 #if TR_RAW_NAV_RIG_REPLAY
             // The rig replay of the mosaic-only image: the navigation state
             // the voters just read, its attitude too, at the replayed flight's
-            // own time -- 10 a second in flight, once a second on the ground
-            // -- so a run's console alone scores the flight phase by phase
-            // against its truth (tools/rig_replay/score_v9.py). The votes:
-            // velocity, barometer, GPS, pitch; then the call and the backstop.
+            // own time -- 50 a second from launch to burnout, 10 a second
+            // after, once a second on the ground -- so a run's console alone
+            // scores the flight phase by phase against its truth
+            // (tools/rig_replay/score_v9.py). The votes: velocity, barometer,
+            // GPS, pitch; then the call and the backstop.
             if (sensor_collector.isReplay())
             {
+                // Each change of a voter, the call, the backstop, burnout,
+                // the GNSS admission, the guard, the transonic lockout or the
+                // vote's own guard, at the replay's time: a vote can last
+                // 6 ms (a leaky counter's 6 counts at the loop's rate), which
+                // the sampled line below can miss, so G5's hard bar and each
+                // voter's latency are judged from these. At most 50 a second;
+                // the next printed says how many changes were not.
+                {
+                    const uint16_t flags = (kinematics.vel_u_apogee_flag ? 0x001u : 0u) |
+                                           (kinematics.alt_apogee_flag ? 0x002u : 0u) |
+                                           (kinematics.gps_apogee_flag ? 0x004u : 0u) |
+                                           (kinematics.pitch_apogee_flag ? 0x008u : 0u) |
+                                           (kinematics.apogee_flag ? 0x010u : 0u) |
+                                           (kinematics.apogee_backstop_flag ? 0x020u : 0u) |
+                                           (burnout_detected ? 0x040u : 0u) |
+                                           (gnss_admit_state.phase == GnssAscentGate::Phase::Admitted ? 0x080u : 0u) |
+                                           (raw_guard.latched ? 0x100u : 0u) | (mach_locked_out ? 0x200u : 0u) |
+                                           (ekf_may_vote ? 0x400u : 0u);
+                    static uint16_t replay_flags = 0;
+                    static uint32_t vote_window_ms = 0, vote_lines = 0, vote_unprinted = 0;
+                    if (flags != replay_flags)
+                    {
+                        replay_flags = flags;
+                        if (now_ms - vote_window_ms >= 1000u)
+                        {
+                            vote_window_ms = now_ms;
+                            vote_lines = 0;
+                        }
+                        if (vote_lines < 50u)
+                        {
+                            vote_lines++;
+                            // the replay's time now: the change is this pass's
+                            double vt = 0.0;
+                            const bool have_vt = sensor_collector.replayTAt(time_us(), vt);
+                            ESP_LOGI(TAG, "[REPLAY-VOTE] t=%+.4f%s st=%u votes=%d%d%d%d call=%d backstop=%d burnout=%d "
+                                          "gps_admitted=%d guard=%d mach=%d vote=%d unprinted=%lu",
+                                     vt, have_vt ? "" : "(pad, no clock)", (unsigned)rocket_state,
+                                     (flags & 0x001u) ? 1 : 0, (flags & 0x002u) ? 1 : 0, (flags & 0x004u) ? 1 : 0,
+                                     (flags & 0x008u) ? 1 : 0, (flags & 0x010u) ? 1 : 0, (flags & 0x020u) ? 1 : 0,
+                                     (flags & 0x040u) ? 1 : 0, (flags & 0x080u) ? 1 : 0, (flags & 0x100u) ? 1 : 0,
+                                     (flags & 0x200u) ? 1 : 0, (flags & 0x400u) ? 1 : 0,
+                                     (unsigned long)vote_unprinted);
+                            vote_unprinted = 0;
+                        }
+                        else
+                        {
+                            vote_unprinted++;
+                        }
+                    }
+                }
                 static uint32_t replay_nav_ms = 0;
-                if (now_ms - replay_nav_ms >= (rocket_state == INFLIGHT ? 100u : 1000u))
+                const uint32_t nav_every_ms =
+                    rocket_state != INFLIGHT ? 1000u
+                    : (!burnout_detected && now_ms - launch_time_millis < 5000u) ? 20u : 100u;
+                if (now_ms - replay_nav_ms >= nav_every_ms)
                 {
                     replay_nav_ms = now_ms;
                     SensorCollectorSim::ReplayStatus rs;
                     sensor_collector.replayStatus(rs);
+                    // at the state's own instant: the IMU tick it was carried
+                    // to, the window's middle, a pass behind the loop's clock
+                    // every other pass -- ~1 ms, 0.1-0.2 m/s in boost
+                    uint32_t state_us = 0;
+                    double nt = 0.0;
+                    const bool have_nt = ekf.stateTimeUs(state_us) && sensor_collector.replayTAt(state_us, nt);
                     float q[4];
                     ekf.getQuaternion(q);
-                    ESP_LOGI(TAG, "[REPLAY-NAV] t=%+.3f%s st=%u ekf=%d vote=%d q=(%.5f,%.5f,%.5f,%.5f) "
+                    ESP_LOGI(TAG, "[REPLAY-NAV] t=%+.4f%s st=%u ekf=%d vote=%d q=(%.5f,%.5f,%.5f,%.5f) "
                                   "pos=(%.2f,%.2f,%.2f) vel=(%.3f,%.3f,%.3f) baro=(%.2f,%+.2f) gps_vu=%+.2f "
                                   "votes=%d%d%d%d call=%d backstop=%d burnout=%d gps_admitted=%d guard=%d mach=%d",
-                             (double)rs.t_s, rs.have_t ? "" : "(pad, no clock)", (unsigned)rocket_state,
-                             ekf_healthy ? 1 : 0, ekf_may_vote ? 1 : 0,
+                             have_nt ? nt : (double)rs.t_s, (have_nt || rs.have_t) ? "" : "(pad, no clock)",
+                             (unsigned)rocket_state, ekf_healthy ? 1 : 0, ekf_may_vote ? 1 : 0,
                              (double)q[0], (double)q[1], (double)q[2], (double)q[3],
                              (double)imu_pos[0], (double)imu_pos[1], (double)imu_pos[2],
                              (double)imu_vel[0], (double)imu_vel[1], (double)imu_vel[2],
@@ -12417,6 +12488,20 @@ static void loop_fc()
                              burnout_detected ? 1 : 0,
                              gnss_admit_state.phase == GnssAscentGate::Phase::Admitted ? 1 : 0,
                              raw_guard.latched ? 1 : 0, mach_locked_out ? 1 : 0);
+                    // A replay image on a real sky: every epoch outside the
+                    // rig file's span for 10 min. It plays a canned pad for
+                    // ever and never sees a real launch -- the flight image
+                    // belongs on this board
+                    static uint32_t real_sky_warn_ms = 0;
+                    if (rs.clock_state == sim_replay::ReplayClock::kWaiting && rs.outside > 0 && now_ms > 600000u &&
+                        now_ms - real_sky_warn_ms >= 60000u)
+                    {
+                        real_sky_warn_ms = now_ms;
+                        ESP_LOGE(TAG, "[REPLAY] a RIG REPLAY image on a real sky: %lu epochs outside the rig file's "
+                                      "span and none in it -- this image plays a canned pad and never sees a real "
+                                      "launch; flash the flight image",
+                                 (unsigned long)rs.outside);
+                    }
                 }
             }
 #endif

@@ -921,6 +921,7 @@ void TR_GNSSReceiverMosaicSerial::rawMeasEpoch(const uint8_t* block, size_t len,
     e.arrival_us = end_us;
     e.gps_week = info.wnc;
     e.mcu_us = 0;
+    e.tag_dtr_ms = 0.0f;
     const int64_t rx_ms = static_cast<int64_t>(info.wnc) * 604800000LL + info.tow_ms;
     bool no_bias = false;
     if (rawTimeTagOk())
@@ -940,7 +941,11 @@ void TR_GNSSReceiverMosaicSerial::rawMeasEpoch(const uint8_t* block, size_t len,
             no_bias = true;
         }
         int64_t mcu = 0;
-        if (time_sync_.mcuAt(mosaic::epochGpsS(info.wnc, info.tow_ms, dtr), mcu)) e.mcu_us = mcu;
+        if (time_sync_.mcuAt(mosaic::epochGpsS(info.wnc, info.tow_ms, dtr), mcu))
+        {
+            e.mcu_us = mcu;
+            e.tag_dtr_ms = static_cast<float>(dtr);   // what the tag took off: the rig replay's clock takes it too
+        }
     }
     if (xQueueSend(r.epoch_q, &e, 0) != pdTRUE)
     {

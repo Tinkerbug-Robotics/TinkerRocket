@@ -84,6 +84,48 @@ TEST(ReplayClockEpochs, TenASecondFollowThePadAndFreezeBeforeIgnition)
     EXPECT_NEAR(c.lastFixT(), 20.0, 1e-6);
 }
 
+TEST(ReplayClockEpochs, TheClockIsTheTagsGpsInstantNotTheReceiversTimeOfWeek)
+{
+    // The mosaic-G5's epochs carry the receiver's own time of week (its clock
+    // within the 0.5 ms jump threshold of GPS); the driver's tag places the
+    // GPS instant TOW - dtr on the MCU (TimedRawEpoch::tag_dtr_ms). The clock
+    // must take that instant, or the replayed IMU sits dtr off the sky's GPS
+    // time: 0.4 ms is 0.07 m/s at 18 g.
+    const double dtr_s = 0.4e-3;   // receiver minus GPS
+    ReplayClock c;
+    c.reset(rigHeader());
+    for (double t = -140.0; t < -5.05; t += 0.1)
+    {
+        // the receiver's epoch on its own 100 ms grid at t; its GPS instant is
+        // dtr earlier, and the MCU stands at 55 s + (that instant + 140 s)
+        const double gps = kIgnitionGps + t;
+        const double mcu_s = 55.0 + (t - dtr_s + 140.0);
+        c.onEpoch(kWeek, gps - kWeek * 604800.0, static_cast<int64_t>(std::llround(mcu_s * 1e6)), dtr_s);
+    }
+    ASSERT_EQ(c.state(), ReplayClock::kFollowing);
+    // the replay's time at an MCU instant is that instant's GPS time
+    double tr = 0.0;
+    ASSERT_TRUE(c.tAt(static_cast<int64_t>((55.0 + 100.0) * 1e6), tr));
+    EXPECT_NEAR(tr, -40.0, 2e-6);
+    // without the bias it came out dtr late on the sky: the old pairing
+    ReplayClock old;
+    old.reset(rigHeader());
+    for (double t = -140.0; t < -5.05; t += 0.1)
+    {
+        const double gps = kIgnitionGps + t;
+        old.onEpoch(kWeek, gps - kWeek * 604800.0,
+                    static_cast<int64_t>(std::llround((55.0 + (t - dtr_s + 140.0)) * 1e6)));
+    }
+    ASSERT_TRUE(old.tAt(static_cast<int64_t>((55.0 + 100.0) * 1e6), tr));
+    EXPECT_NEAR(tr, -40.0 + dtr_s, 2e-6);
+    // a bias that is not a number is no epoch's
+    ReplayClock nan_c;
+    nan_c.reset(rigHeader());
+    nan_c.onEpoch(kWeek, kIgnitionTow - 100.0, 40000000, std::nan(""));
+    EXPECT_EQ(nan_c.state(), ReplayClock::kWaiting);
+    EXPECT_EQ(nan_c.fixes(), 0u);
+}
+
 TEST(ReplayClockEpochs, AnEpochWithoutItsTimeIsNotCounted)
 {
     ReplayClock c;
@@ -173,6 +215,141 @@ TEST(ReplayClockEpochs, AFlightAcrossTheWeeksEndKeepsOneClock)
     double tr = 0.0;
     ASSERT_TRUE(c.tAt(110000000, tr));
     EXPECT_NEAR(tr, 40.0, 1e-6);
+}
+
+// ---- the freeze against the 1PPS edge (ReplayClock::onTagCheck)
+//
+// The driver's tags come from its clock line, which follows a sky that came
+// late (a transmitter underrun) only after about a minute; the 1PPS edges
+// follow it at once, and its check says how far each whole second's tag sat
+// from its edge. The 10/17 pad check on the rig: -6855 us for 27 s and more.
+
+namespace
+{
+
+constexpr double kMcu0 = 55.0;   // the MCU at t = -140 s, running at GPS rate
+
+// The MCU instant the line tags the GPS instant t with (it never moved)
+double tagged(double t) { return kMcu0 + (t + 140.0); }
+
+// Ten epochs a second from `from` to before `to`, as the line tags them; the
+// sky slipped `late_s` late from `slip_t` on (the edges with it), and each
+// whole second's 1PPS check follows its epoch with the residual the driver
+// would find: the tag less the edge
+void feed(ReplayClock& c, double from, double to, double late_s = 0.0, double slip_t = 1e9, bool checks = true)
+{
+    for (int k = 0; from + 0.1 * k < to - 1e-9; ++k)
+    {
+        const double t = from + 0.1 * k;
+        epochAt(c, t, tagged(t));
+        const double whole = std::round(t);
+        if (checks && std::fabs(t - whole) < 1e-6)
+        {
+            const double edge_late = t >= slip_t ? late_s : 0.0;
+            c.onTagCheck(kIgnitionGps + whole, static_cast<int32_t>(std::lround(-edge_late * 1e6)));
+        }
+    }
+}
+
+int64_t us(double s) { return static_cast<int64_t>(std::llround(s * 1e6)); }
+
+}  // namespace
+
+TEST(ReplayClockPpsCheck, AFreezeTheEdgeAgreesWithIsKept)
+{
+    ReplayClock c;
+    c.reset(rigHeader());
+    feed(c, -140.0, -1.0, 30e-6, -1e9);   // every tag 30 us early: the line's own noise
+    ASSERT_EQ(c.state(), ReplayClock::kFrozen);
+    EXPECT_EQ(c.check(), ReplayClock::kKept);
+    EXPECT_NEAR(c.checkT(), -5.0, 1e-6);   // the freeze's own second
+    EXPECT_EQ(c.checkResidualUs(), -30);
+    EXPECT_NEAR(c.checkMoveUs(), -30.0, 1.0);
+    double tr = 0.0;
+    ASSERT_TRUE(c.tAt(us(tagged(3.0)), tr));
+    EXPECT_NEAR(tr, 3.0, 1e-6);   // the tags' clock, unmoved
+}
+
+TEST(ReplayClockPpsCheck, AFreezeOnALineThatHasNotFollowedALateSkyMovesOntoTheEdge)
+{
+    // the sky slips 6.856 ms late at t = -40 s; the line still tags with the
+    // old mapping at the freeze, so the tags' clock is the sky's less 6.9 ms
+    const double late = 6.856e-3;
+    ReplayClock c;
+    c.reset(rigHeader());
+    feed(c, -140.0, -5.05, late, -40.0);
+    ASSERT_EQ(c.state(), ReplayClock::kFollowing);
+    double tr = 0.0;
+    ASSERT_TRUE(c.tAt(us(tagged(-10.0) + late), tr));
+    EXPECT_NEAR(tr, -10.0 + late, 1e-6);   // following the tags: the IMU 6.9 ms ahead of the sky
+    feed(c, -5.0, -1.0, late, -40.0);
+    ASSERT_EQ(c.state(), ReplayClock::kFrozen);
+    ASSERT_EQ(c.check(), ReplayClock::kMoved);
+    EXPECT_NEAR(c.checkT(), -5.0, 1e-6);
+    EXPECT_EQ(c.checkResidualUs(), -6856);
+    EXPECT_NEAR(c.checkMoveUs(), -6856.0, 1.0);
+    // the flight on the sky's time: the instant the sky shows t is t
+    for (double t : {0.0, 2.5, 11.7, 60.0})
+    {
+        ASSERT_TRUE(c.tAt(us(tagged(t) + late), tr));
+        EXPECT_NEAR(tr, t, 2e-6) << t;
+    }
+    // and a check after check_by_s never moves it again (the line catching up)
+    feed(c, -1.0, 5.0, 0.0, -1e9);
+    EXPECT_EQ(c.check(), ReplayClock::kMoved);
+    ASSERT_TRUE(c.tAt(us(tagged(2.5) + late), tr));
+    EXPECT_NEAR(tr, 2.5, 2e-6);
+}
+
+TEST(ReplayClockPpsCheck, ASlipInTheLastSecondBeforeTheFreezeIsCaughtByItsOwnSecond)
+{
+    // the slip at -5.5 s: the check of -6 s says nothing of it, the check of
+    // the freeze's own second (-5 s) does
+    const double late = 3.4e-3;
+    ReplayClock c;
+    c.reset(rigHeader());
+    feed(c, -140.0, -1.0, late, -5.5);
+    ASSERT_EQ(c.check(), ReplayClock::kMoved);
+    EXPECT_NEAR(c.checkT(), -5.0, 1e-6);
+    double tr = 0.0;
+    ASSERT_TRUE(c.tAt(us(tagged(1.0) + late), tr));
+    EXPECT_NEAR(tr, 1.0, 2e-6);
+}
+
+TEST(ReplayClockPpsCheck, NoCheckByTheDeadlineLeavesTheFreezeUnchecked)
+{
+    ReplayClock c;
+    c.reset(rigHeader());
+    feed(c, -140.0, -5.05);
+    feed(c, -5.0, 3.0, 5e-3, -1e9, false);   // no PVT, no check, through the deadline
+    EXPECT_EQ(c.check(), ReplayClock::kUnchecked);
+    // a check that comes later moves nothing: the replayed rocket is flying
+    feed(c, 3.0, 6.0, 5e-3, -1e9);
+    EXPECT_EQ(c.check(), ReplayClock::kUnchecked);
+    double tr = 0.0;
+    ASSERT_TRUE(c.tAt(us(tagged(4.0)), tr));
+    EXPECT_NEAR(tr, 4.0, 1e-6);
+}
+
+TEST(ReplayClockPpsCheck, OnlyACountedSecondIsPairedAndOnlyAfterTheFreeze)
+{
+    ReplayClock c;
+    c.reset(rigHeader());
+    // a check of a second no epoch gave (the real sky's, or not drained yet)
+    c.onTagCheck(kIgnitionGps - 60.0, -7000);
+    EXPECT_EQ(c.tagChecks(), 0u);
+    // while following, a bad check moves nothing (the pad: the freeze decides)
+    feed(c, -140.0, -20.0, 7e-3, -30.0);
+    EXPECT_GT(c.tagChecks(), 100u);
+    EXPECT_EQ(c.check(), ReplayClock::kNotChecked);
+    double tr = 0.0;
+    ASSERT_TRUE(c.tAt(us(tagged(-25.0)), tr));
+    EXPECT_NEAR(tr, -25.0, 1e-6);
+    // a check of a second two back is not kept (only the last two whole seconds)
+    feed(c, -20.0, -17.0);
+    const uint32_t n = c.tagChecks();
+    c.onTagCheck(kIgnitionGps - 20.0, 0);
+    EXPECT_EQ(c.tagChecks(), n);
 }
 
 // ---- the carried flight at the V9's IMU rate

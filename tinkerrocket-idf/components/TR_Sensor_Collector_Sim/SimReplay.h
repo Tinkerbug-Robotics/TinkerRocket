@@ -117,6 +117,11 @@ public:
                                    // clock after it never starts the flight
         double margin_s = 30.0;    // fixes this far outside the rig file's span are not the rig's
         double restart_s = 0.5;    // a step this large in the fixes' clock is a new run of the file
+        // the freeze checked against the 1PPS edge (onTagCheck): by a second
+        // from the freeze's own on and no later than this, s from ignition --
+        // still the pad, where the replayed rocket stands still
+        double check_by_s = -2.0;
+        double check_bar_us = 200.0;   // the edge this far from the frozen clock moves it (the driver's bar)
     };
 
     enum State : uint8_t
@@ -125,6 +130,15 @@ public:
         kFollowing,     // on the pad, on the fixes' clock
         kFrozen,        // from arm_by_s on: the MCU's crystal
         kMissed,        // the first clock came after arm_by_s: the pad for good
+    };
+
+    // The freeze against the 1PPS edge (onTagCheck)
+    enum Check : uint8_t
+    {
+        kNotChecked = 0,   // not frozen yet, or no check of a second after the freeze yet
+        kKept,             // the edge agreed with the frozen clock within check_bar_us
+        kMoved,            // it did not: the clock moved onto the edge
+        kUnchecked,        // no check came by check_by_s: the freeze stands as the tags placed it
     };
 
     ReplayClock() = default;
@@ -138,13 +152,34 @@ public:
 
     // A timed raw epoch, for a receiver whose driver hands no timed fix (the
     // mosaic-G5: its epochs are what the time sync places): its full GPS week,
-    // its time of week (s) and that instant on the MCU clock (us). A week or
-    // an instant of 0 is not known yet -- the epoch is not counted. The same
-    // clock as a fix's, at the receiver's epoch rate (10 Hz on the mosaic).
-    // The time of week is the receiver's own, uncorrected: within the 0.5 ms
-    // of its clock bias of the GPS instant the MCU time places, as the filter
-    // pairs the same two.
-    void onEpoch(uint16_t gps_week, double tow_s, int64_t mcu_us);
+    // its time of week (s), that instant on the MCU clock (us), and the
+    // receiver's clock bias its tag took off that time of week (s,
+    // TimedRawEpoch::tag_dtr_ms). A week or an instant of 0 is not known yet
+    // -- the epoch is not counted. The same clock as a fix's, at the
+    // receiver's epoch rate (10 Hz on the mosaic). The time of week is the
+    // receiver's own: the GPS instant mcu_us places is tow_s - dtr_s, and
+    // that instant is the one the replay's time is set from -- so the clock
+    // is the 1PPS line's own, and the replayed IMU sits on the sky's GPS time
+    // (not up to the 0.5 ms of the bias off it), whatever the tag did.
+    void onEpoch(uint16_t gps_week, double tow_s, int64_t mcu_us, double dtr_s = 0.0);
+
+    // The mosaic-G5 driver's 1PPS check of a whole second's tag
+    // (TR_GNSSReceiverMosaicSerial::RawStats::pps: the second, week * 604800 +
+    // the receiver's time of week, s, and its residual, ppsResidualUs): the
+    // tag of that second's epoch sat residual_us off where its 1PPS edge puts
+    // it (about 0.03 ms when right). The tags come from the driver's clock
+    // line, which follows a sky that came late -- a transmitter underrun --
+    // only after about a minute (GnssTimeSync's envelope: the third-lowest of
+    // the last 64 seconds); the edges follow it at once. A freeze inside that
+    // minute would hold the replayed IMU that far off the sky for the whole
+    // flight, consistent with the tags while they stay wrong, so the filter
+    // would not see it either. So the first check of a second from the
+    // freeze's own on (by check_by_s) confirms the freeze: where the edge puts
+    // that second more than check_bar_us from where the frozen clock does,
+    // the clock moves onto the edge -- the sky's own time, which the receiver
+    // tracks -- on the pad, where the replayed rocket stands still. Never
+    // after check_by_s. A second whose epoch was not counted is not paired.
+    void onTagCheck(double sec_gps_s, int32_t residual_us);
 
     // The replay's time (s from ignition) at an MCU instant; false until a fix
     // has set the clock (or when it came too late).
@@ -155,8 +190,17 @@ public:
     uint32_t outside() const { return outside_; }   // fixes outside its span (another time, a stale clock)
     uint32_t restarts() const { return restarts_; }
     double lastFixT() const { return last_fix_t_; } // the latest rig fix, s from ignition
+    // The freeze's check (onTagCheck): the state, the checked second (s from
+    // ignition), its residual (us) and the move it made (us, edge less frozen)
+    Check check() const { return check_; }
+    double checkT() const { return check_t_; }
+    int32_t checkResidualUs() const { return check_res_us_; }
+    double checkMoveUs() const { return check_move_us_; }
+    uint32_t tagChecks() const { return tag_checks_; }   // checks paired with a counted second
 
 private:
+    void noteCheckDeadline(double t);
+
     Config  cfg_;
     double  ignition_gps_s_ = 0.0;
     double  lo_s_ = 0.0, hi_s_ = 0.0;
@@ -164,6 +208,22 @@ private:
     State   state_ = kWaiting;
     uint32_t fixes_ = 0, outside_ = 0, restarts_ = 0;
     double  last_fix_t_ = 0.0;
+    double  freeze_t_ = 0.0;        // the freezing fix's time, s from ignition
+    // the last two counted whole seconds' epochs, for onTagCheck: the
+    // receiver's second, the epoch's time from ignition and the base its tag gave
+    struct Second
+    {
+        int64_t sec = -1;
+        double  t = 0.0;
+        double  base = 0.0;
+    };
+    Second  secs_[2];
+    uint8_t sec_next_ = 0;
+    Check   check_ = kNotChecked;
+    double  check_t_ = 0.0;
+    int32_t check_res_us_ = 0;
+    double  check_move_us_ = 0.0;
+    uint32_t tag_checks_ = 0;
 };
 
 }  // namespace sim_replay

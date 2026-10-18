@@ -230,9 +230,18 @@ endif()
 #     day and place than the one the receiver last tracked, and every good rig
 #     capture of the mosaic was cold-started first;
 #   - tells main.cpp it flies the rig's sky (TR_RAW_NAV_RIG_REPLAY): the
-#     receiver's broadcast ionosphere wins over the app's or NVS's, whatever
-#     their days (raw_iono_rule.h offerRigReplay), and the console carries the
-#     navigation state the rig's scorer reads (tools/rig_replay/score_v9.py).
+#     sky's broadcast ionosphere wins over the app's or NVS's, whatever their
+#     days, and no set dated more than a day from the sky's is taken
+#     (raw_iono_rule.h offerRigReplay); the console carries the navigation
+#     state at its own instant and each apogee voter's changes, which the
+#     rig's scorer reads (tools/rig_replay/score_v9.py); and the replayed
+#     high-g counts carry the converter's high-g bias, so where the low-g rail
+#     hands over the flight's own force comes out (SimHighGBias.h; the low-g
+#     hand offset is off in any sim, #1629).
+# The rig's files are too short to broadcast GPSIon, so the build should carry
+# the sky's own set: -DTR_SIM_REPLAY_GPS_IONO=$(tools/rig_replay/
+# rinex_gps_iono.py <the scenario's RINEX>) (TR_Sensor_Collector_Sim). Without
+# it the filter builds the rig's sky with no Klobuchar.
 if(TR_SIM_REPLAY_BLOB)
     if(TR_GNSS_MOSAIC AND NOT _tr_mosaic_rawnav)
         message(FATAL_ERROR "TR_SIM_REPLAY_BLOB on the mosaic-only image takes its clock from the raw-GNSS filter's timed epochs: build it with the filter (no -DTR_RAW_GNSS_SHADOW=0)")
@@ -242,8 +251,14 @@ if(TR_SIM_REPLAY_BLOB)
     if(TR_GNSS_MOSAIC)
         set(TR_BENCH_MOSAIC_COLD_START ON)
         add_compile_definitions(TR_RAW_NAV_RIG_REPLAY=1)
-        message(STATUS "flight_computer: RIG REPLAY of the mosaic-only image (TR_RAW_NAV_RIG_REPLAY=1): the receiver cold-starts at boot, its broadcast ionosphere wins")
+        message(STATUS "flight_computer: RIG REPLAY of the mosaic-only image (TR_RAW_NAV_RIG_REPLAY=1): the receiver cold-starts at boot, the sky's broadcast ionosphere wins")
+        if(NOT TR_SIM_REPLAY_GPS_IONO)
+            message(WARNING "flight_computer: RIG REPLAY without the sky's ionosphere (-DTR_SIM_REPLAY_GPS_IONO): the rig's files never broadcast GPSIon, so the filter builds the sky with no Klobuchar (a few metres in the pseudoranges)")
+        endif()
     endif()
+endif()
+if(TR_SIM_REPLAY_GPS_IONO AND NOT (TR_SIM_REPLAY_BLOB AND TR_GNSS_MOSAIC))
+    message(FATAL_ERROR "TR_SIM_REPLAY_GPS_IONO is the rig sky's ionosphere for a rig replay (-DTR_SIM_REPLAY_BLOB) of the mosaic-only image (-DTR_GNSS_MOSAIC=1)")
 endif()
 foreach(_v TR_BENCH_MOSAIC_CN0 TR_BENCH_MOSAIC_COLD_START)
     if(${_v} AND NOT TR_GNSS_MOSAIC)
