@@ -265,8 +265,12 @@ TEST(RawGnssEKFV9, TheUnaidedTwinsAttitudeIsTheImusAlone)
     }
     EXPECT_GT(used, 300);                                 // GNSS was fused, every satellite most epochs
     // the attitude: the IMU's alone (the inject's renormalization aside), and
-    // the gyro bias and the attitude and gyro-bias covariance exactly so
-    EXPECT_LT(attErrDeg(unaided.quat(), imu_only.quat()), 1e-9);
+    // the gyro bias and the attitude and gyro-bias covariance exactly so.
+    // Component by component: the renormalization can leave the last bit
+    // different (x86 does, arm64 does not), and the angle between two
+    // quaternions through acos turns one bit into ~2e-6 deg
+    for (int i = 0; i < 4; ++i)
+        EXPECT_NEAR(unaided.quat()[i], imu_only.quat()[i], 1e-12) << i;
     for (int i = 0; i < 3; ++i)
         EXPECT_EQ(unaided.gyroBias()[i], imu_only.gyroBias()[i]);
     constexpr int kAtt = RawGnssEKF<double>::kAtt, kGb = RawGnssEKF<double>::kGyroBias;
