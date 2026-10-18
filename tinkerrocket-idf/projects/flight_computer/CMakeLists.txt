@@ -149,8 +149,9 @@ endforeach()
 # 200 its 5 Hz), the satellites it builds an epoch at most
 # (TR_BENCH_RAW_SAT_CAP: 16 is the profile's), and the boost screen's
 # threshold in g (TR_BENCH_BOOST_SCREEN_G: 0 screens every epoch, its worst
-# cost). Each sets the filter's start (main.cpp startRawShadow). Never set for
-# flight.
+# cost), and the Doppler change check (TR_BENCH_DV_CHECK: 1 observes, 2 acts,
+# at Grid B's recommended settings; exp/v9-dvcheck). Each sets the filter's
+# start (main.cpp startRawShadow). Never set for flight.
 #
 # These and TR_RAW_GNSS_IRAM below act only where the raw-GNSS filter
 # navigates on the mosaic-G5 (main.cpp's TR_RAW_NAV_MOSAIC): any other build
@@ -162,13 +163,13 @@ else()
 endif()
 set(_tr_mosaic_rawnav_hooks TR_BENCH_RAW_START_FAIL TR_BENCH_RESTORE_SIM TR_BENCH_PANIC_AT_S
     TR_BENCH_PANIC_FILTER_AT_S TR_BENCH_RAW_STOP_AT_S)
-foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G TR_RAW_GNSS_IRAM
+foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G TR_BENCH_DV_CHECK TR_RAW_GNSS_IRAM
         ${_tr_mosaic_rawnav_hooks})
     if(DEFINED ${_v} AND NOT _tr_mosaic_rawnav)
         message(FATAL_ERROR "${_v} is for the mosaic-only image's raw-GNSS filter (-DTR_GNSS_MOSAIC=1 on a V8 or V9): this build would ignore it. A build dir keeps every -D value: use a fresh one.")
     endif()
 endforeach()
-foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G)
+foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G TR_BENCH_DV_CHECK)
     if(DEFINED ${_v})
         add_compile_definitions(${_v}=${${_v}})
         message(STATUS "${_v}=${${_v}} (bench)")

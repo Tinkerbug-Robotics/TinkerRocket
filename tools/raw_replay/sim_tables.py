@@ -214,6 +214,7 @@ def score_run(csv_path, json_path, truth, meta):
     out["fw"] = {k: fw.get(k) for k in ("prior_deg", "prior_mag", "mag_fused", "levels", "levels_held", "screened",
                                         "dropped", "act_launches")}
     out["vert"] = dict(dropped=ev.get("vert", {}).get("dropped"), latched=ev.get("vert_latched"))
+    out["dv"] = ev.get("dv")
     out["doppler"] = ev.get("doppler")
     out["sim"] = ev.get("sim")
     out["stage"] = {k: ev.get("stage", {}).get(k) for k in ("built", "capped_out", "eph_sats")}

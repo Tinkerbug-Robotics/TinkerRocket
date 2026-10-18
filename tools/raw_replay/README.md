@@ -462,6 +462,19 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   (the antenna on the IMU against 0.3 m up the nose).
 - **`--reject-persist-rr N`** (an experiment on the filter's own parameter, after the profile): the Doppler's refusal
   count before a satellite is let back in (the mosaic profile's 30 epochs, 3 s at 10 Hz).
+- **`--arm-args NAME=ARGS`** (repeatable): an arm of an experiment's own beside today's design -- the design flown
+  with ARGS (raw_replay arguments) added, or, with NAME ending `_unaided`, its `--unaided` twin; name it in
+  `--arms`. **`--rig-state FILE`**: no events file or run starts while FILE reads `active` (checked every 30 s),
+  for a machine shared with the bench rig.
+- **The Doppler change check** (`RawGnssShadow::Config::dv_*`, off by default; a `RAW_REPLAY_DVCHECK` build):
+  `--dv-check 0|1|2` (off, observe, act), `--dv-sat-k`, `--dv-epoch-k` (the satellite and the epoch tests'
+  sigmas), `--dv-floor`, `--dv-per-g`, `--dv-att-deg`, `--dv-scale`, `--dv-bias`, `--dv-lever-m` (the change's
+  floor and the epoch test's allowances), `--dv-hold-s`, `--dv-epoch-hold-s`, `--dv-window-s` (the leaky sum),
+  `--dv-latch-k` (a failed epoch holds every Doppler until the Dopplers' level agrees with the filter's velocity
+  within this many sigmas), `--dv-deweight`, `--dv-ground`, `--dv-noise-tau-s`, `--dv-hold-all-frac`. The events
+  JSON gets `"dv"`: the counts (checks, satellite and epoch fails, Dopplers and epochs held, latches begun and let
+  go, epochs latched) and when each epoch failed, had satellites fail or had Dopplers held. `RAW_REPLAY_DVLOG=1`
+  prints each check (2: the window's sums and allowances too). `sim_tables.score_run` keeps the block.
 
 A run takes 0.2-0.6 s (about 70 s of flight, 16 satellites fused an epoch at 10 Hz, ~9 capped out, and the truth's
 quorum beside it); an events file 7-10 s; the whole grid (384 events files, 6912 runs in three arms) about 20

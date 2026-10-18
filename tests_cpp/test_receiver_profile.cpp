@@ -186,7 +186,7 @@ static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 32,
               "GnssSignalProfile changed: add the field to expectSameSignal, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 520,
               "GnssReceiverProfile changed: add the field to expectSameNumbers, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1352,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1480,
               "RawGnssShadow::Config changed: pin the field in TheShadowSafeguardDefaultsAreTheBeetles, then update "
               "this size");
 
@@ -631,6 +631,24 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_EQ(c.boost_screen_window_s, 1.5);
     EXPECT_EQ(c.vert_check_mps, 20.0);
     EXPECT_EQ(c.vert_release_mps, 5.0);
+    // the Doppler change check: off (exp/v9-dvcheck); its settings act only when it is on
+    EXPECT_EQ(c.dv_check, RawGnssShadow::kDvOff);
+    EXPECT_EQ(c.dv_sat_k, 5.0);
+    EXPECT_EQ(c.dv_epoch_k, 5.0);
+    EXPECT_EQ(c.dv_floor_mps, 0.03);
+    EXPECT_EQ(c.dv_sigma_per_g, 0.1);
+    EXPECT_EQ(c.dv_att_allow_deg, 30.0);
+    EXPECT_EQ(c.dv_scale_allow, 0.01);
+    EXPECT_EQ(c.dv_bias_allow_mps2, 0.1);
+    EXPECT_EQ(c.dv_lever_allow_m, 0.3);
+    EXPECT_EQ(c.dv_hold_s, 1.0);
+    EXPECT_EQ(c.dv_epoch_hold_s, 0.5);
+    EXPECT_EQ(c.dv_window_s, 0.0);
+    EXPECT_FALSE(c.dv_deweight);
+    EXPECT_FALSE(c.dv_ground);
+    EXPECT_EQ(c.dv_noise_tau_s, 0.0);
+    EXPECT_EQ(c.dv_hold_all_frac, 0.5);
+    EXPECT_EQ(c.dv_latch_k, 0.0);
     // a receiver fused faster than 1 Hz, and a restored flight: all off
     EXPECT_EQ(c.pr_period_s, 0.0);
     EXPECT_EQ(c.rr_dyn_window_s, 0.0);

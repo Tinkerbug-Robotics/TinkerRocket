@@ -107,6 +107,7 @@
 
 #include <cstdint>
 
+#include "DopplerChange.h"
 #include "RawMeas.h"
 #include "ReceiverProfile.h"
 
@@ -282,6 +283,32 @@ struct CarrierInfo
     double  y;          // its innovation at the prior before the common rate, m/s (a repair taken out)
 };
 
+// One epoch's Doppler range rates as the next epoch's change is taken from
+// (RawGnssEKF::dopplerChange, RawGnssShadow's dv_check)
+struct DopplerRef
+{
+    bool    valid = false;
+    double  t = 0.0;                         // the Dopplers' instant (the epoch's less rr_lag_s), filter time
+    float   v_ned[3] = {};                   // the filter's velocity then, as it stood when taken: the base
+                                             //   both ends predict from (it cancels)
+    int     n = 0;
+    uint8_t sys[RawEpoch::kMaxObs] = {};
+    uint8_t prn[RawEpoch::kMaxObs] = {};
+    double  y[RawEpoch::kMaxObs] = {};       // each Doppler less its prediction at v_ned (the clock's drift in it)
+    float   s[RawEpoch::kMaxObs] = {};       // its 1-sigma, m/s
+    float   u[RawEpoch::kMaxObs][3] = {};    // its line of sight, NED, receiver to satellite (the latch's level
+                                             //   fit, RawGnssShadow's dv_latch_k)
+};
+
+// What the IMU did over a Doppler change's interval (RawGnssEKF::dopplerChange)
+struct DopplerChangeImu
+{
+    bool   ok = false;     // the history covers the interval (else no rows)
+    double dt = 0.0;       // the interval, s
+    float  dv[3] = {};     // the IMU's velocity change over it, NED (specific force and gravity, no corrections)
+    float  dv_sf[3] = {};  //   the specific force's part
+};
+
 template <typename T>
 class RawGnssEKF
 {
@@ -421,6 +448,18 @@ public:
                                  double x[4]);
     static bool verticalFit(const double H[][4], const double* y, const double* s, bool* in, int n, double x[4],
                             int& nin, int& nout);
+    // The Doppler change check's rows (DopplerChange.h; RawGnssShadow's
+    // dv_check), an epoch age_s ago, before any of it is fused: each Doppler
+    // (has_rr) whose satellite ref also has, its change since ref less the
+    // change predicted at ref's velocity carried by the IMU's own velocity
+    // change since (imuMotion: no filter correction in it) -- the satellite's
+    // own motion from its ephemeris, the clock's drift left to the fit. Its s:
+    // its sigma_rr and ref's, in quadrature. out is this epoch's reference for
+    // the next (at the filter's velocity as it stands). rows (up to kMaxObs)
+    // and how many; 0 with no ref, or if the IMU's history does not cover the
+    // interval (imu.ok false). Nothing in the filter changes.
+    int  dopplerChange(const RawMeas* m, int n, double age_s, const DopplerRef& ref, DopplerRef& out,
+                       dvc::Row* rows, DopplerChangeImu& imu) const;
     // The epoch begun is dropped, none of it fused: its receiver is no
     // carrier rate's earlier end, so the next epoch's rates across it go
     // unmatched. endCarrier still closes it.
