@@ -4284,15 +4284,18 @@ static void startRawShadow()
     cfg.heading_gate = config::RAW_HEADING_GATE;
     // The flight safeguards (ReceiverProfileApply.h, one place for the image
     // and tools/raw_replay's --receiver mosaic): the Doppler change check,
-    // GNSS's heading gain by how well the moment observes it, and the turning
-    // body's Doppler allowance. Each fails toward unaided, and none needs the
-    // antenna's offset. The bench overrides below come after.
+    // GNSS's heading gain by how well the moment observes it, the turning
+    // body's Doppler allowance, and the spinning body's (the exact attitude
+    // transition, the change check's lever on the nose's own turn, the
+    // carrier wind-up taken off each Doppler). None needs the antenna's
+    // offset. The bench overrides below come after.
     gnss_raw::applyMosaicFlightSafeguards(cfg);
     ESP_LOGI(TAG, "[RAWGNSS] flight safeguards: Doppler change check %s (window %.1f s, attitude allowance %.0f deg, "
                   "%.0f deg about the vertical after a launch with no magnetometer heading, epoch %.0f and latch "
                   "%.0f sigmas, %s) | heading share %s (full at %.1f m/s^2 over %.1f s, open past %.1f g within "
                   "%.1f s, %s) | turning body: Dopplers allow %.2f m along the nose and %.2f m across from %.1f "
-                  "rad/s%s",
+                  "rad/s%s | spinning body: attitude transition %s, the change check's lever on %s (radial %.3f m), "
+                  "wind-up %.2f cycles a turn taken off",
              cfg.dv_check == gnss_raw::RawGnssShadow::kDvAct
                  ? "ACTING"
                  : (cfg.dv_check == gnss_raw::RawGnssShadow::kDvObserve ? "observing" : "off"),
@@ -4304,7 +4307,9 @@ static void startRawShadow()
              cfg.ekf.hdg_obs_fh_mps2, cfg.ekf.hdg_obs_tau_s, cfg.ekf.hdg_obs_open_g, cfg.ekf.hdg_obs_open_hold_s,
              cfg.heading_obs_scope == gnss_raw::RawGnssShadow::kObsEverywhere ? "everywhere" : "in flight",
              cfg.rot_lever_axial_m, cfg.rot_lever_radial_m, cfg.rot_lever_min_rps,
-             cfg.rot_lever_axial_m > 0.0 || cfg.rot_lever_radial_m > 0.0 ? "" : " (off)");
+             cfg.rot_lever_axial_m > 0.0 || cfg.rot_lever_radial_m > 0.0 ? "" : " (off)",
+             cfg.ekf.att_exact ? "EXACT" : "first order",
+             cfg.dv_lever_mode == 1 ? "the nose's own turn" : "the whole rate", cfg.dv_lever_radial_m, cfg.windup_k);
     // The GNSS antenna's offset where the owner measured it (BLE cmd 81), in
     // the filter's frame by the mounting as it stands (rawAntennaPublish
     // brings a later change): every Doppler and pseudorange predicted at the

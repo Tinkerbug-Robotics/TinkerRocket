@@ -77,8 +77,10 @@ Experiments that change no firmware (each one a switch the harness throws on the
 | `--corrupt-rr-mps lo,hi`, `--corrupt-pr-m lo,hi` | the corruption's sizes instead (each drawn uniform in [lo, hi] with a random sign): under the gate, say, `0.05,0.12` and `5,10` on the mosaic |
 | `--corrupt-pr-epoch` | the first epoch at or after X on a whole GPS second instead (on a 10 Hz receiver its pseudoranges are fused there, `pr_period_s` 1 s) |
 
-The spinning body (fc/v9-windup; a `RAW_REPLAY_WINDUP` build, on by default; every switch off unless given, the
-image as flown):
+The spinning body (fc/v9-windup; a `RAW_REPLAY_WINDUP` build, on by default): each switch the firmware's unless
+given -- off, but for what `--receiver mosaic`'s flight safeguards set since fc/v9-highroll (`--att-exact 1
+--dv-lever-mode 1 --dv-lever-radial-m 0 --windup-k 0.99`; the image as built before them: `--att-exact 0
+--dv-lever-mode 0 --windup-k 0`):
 
 | option | what it does |
 |---|---|
@@ -86,7 +88,7 @@ image as flown):
 | `--windup-geom 1` | Wu's whole rate from each satellite's line of sight, not the roll alone |
 | `--windup-monitor 1` | observe: the roll rate the Dopplers' wind-up implies between wavelengths, against the gyro's |
 | `--att-exact 1` | the covariance's attitude transition exact, exp(-[w x] dt) (`RawGnssEKFParams::att_exact`) |
-| `--dv-lever-mode 1`, `--dv-lever-radial-m X` | the change check's lever allowance on the nose's own turn and a radial bound, not the whole rate |
+| `--dv-lever-mode 1`, `--dv-lever-radial-m X` | the change check's lever allowance on the nose's own turn and a radial bound, not the whole rate (the arm: `dv_lever_allow_m`, or with the offset known `knownLeverArm`'s) |
 | `--clk-drift-psd X` | the clock drift's walk (m^2/s^3) in place of the profile's 100: a tighter clock, which the wind-up correction is a prerequisite for |
 
 The epochs file then also carries each epoch's clock drift, screen and check numbers and the spinning body's
@@ -176,13 +178,15 @@ What `startRawShadow()` builds under `TR_RAW_NAV_MOSAIC` (build_units D1a; check
   `ReceiverProfileApply.h`; a `RAW_REPLAY_MOSAIC_SAFEGUARDS` build): the Doppler change check acting in flight
   (`--dv-check 2 --dv-window-s 1 --dv-att-deg 10 --dv-epoch-k 4 --dv-latch-k 5`, and any heading about the
   vertical after a launch with no magnetometer heading: `--dv-hdg-unset-deg 180`), GNSS's heading gain by the
-  horizontal specific force (`--hdg-obs-mode 1 --hdg-obs-fh 5 --hdg-obs-tau 1 --hdg-obs-scope 0`) and the turning
-  body's Doppler allowance (`--rot-lever-axial-m 0.3 --rot-lever-radial-m 0.03 --rot-lever-min-rate 2`). It runs
-  right after the profile, so each `--dv-*`, `--hdg-obs-*` and `--rot-*` flag still changes its own value for an
-  experiment. Today's design before them (and its `--unaided` twin) is
-  `--dv-check 0 --hdg-obs-mode 0 --rot-lever-axial-m 0 --rot-lever-radial-m 0 --rot-lever-min-rate 0`. A build
-  without them (`RAW_REPLAY_MOSAIC_SAFEGUARDS` off, which any of `RAW_REPLAY_DVCHECK`, `HDGOBS` and `ROT` off turns
-  off, saying so at configure) warns on every `--receiver mosaic` run that it flies none of the three;
+  horizontal specific force (`--hdg-obs-mode 1 --hdg-obs-fh 5 --hdg-obs-tau 1 --hdg-obs-scope 0`), the turning
+  body's Doppler allowance (`--rot-lever-axial-m 0.3 --rot-lever-radial-m 0.03 --rot-lever-min-rate 2`) and the
+  spinning body's settings (fc/v9-highroll: `--att-exact 1 --dv-lever-mode 1 --dv-lever-radial-m 0 --windup-k 0.99`).
+  It runs right after the profile, so each `--dv-*`, `--hdg-obs-*`, `--rot-*`, `--att-exact` and `--windup-*` flag
+  still changes its own value for an experiment. Today's design before them (and its `--unaided` twin) is
+  `--dv-check 0 --hdg-obs-mode 0 --rot-lever-axial-m 0 --rot-lever-radial-m 0 --rot-lever-min-rate 0`; the image as
+  built before the spinning body's, `--att-exact 0 --dv-lever-mode 0 --windup-k 0`. A build without them
+  (`RAW_REPLAY_MOSAIC_SAFEGUARDS` off, which any of `RAW_REPLAY_DVCHECK`, `HDGOBS` and `ROT` off turns off, saying
+  so at configure) warns on every `--receiver mosaic` run that it flies none of them;
 - the heading at the firmware's defaults (`--fw-defaults`, which now also takes `--heading-mode` to the primary
   build's `TR_HEADING_FIT` 2 unless given): act, the whole attitude from launch (`RAW_HEADING_GATE` 1), the 10/30 deg
   prior, no hand-off, the 0.6 deg tilt floor;

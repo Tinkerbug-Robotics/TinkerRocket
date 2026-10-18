@@ -517,11 +517,12 @@ TEST(ReceiverProfile, TheMosaicG5V0Profile)
     EXPECT_EQ(e.rr_lag_s, 0.0);
     EXPECT_EQ(e.cr_mode, gnss_raw::kCarrierOff);
     EXPECT_FALSE(e.att_gnss_off);                         // the harness's switch, never a profile's
-    EXPECT_FALSE(e.att_exact);                            // the windup study's switch: off as flown
+    EXPECT_FALSE(e.att_exact);                            // the flight image's (applyMosaicFlightSafeguards)
     // the shadow's
     RawGnssShadow::Config s;
     gnss_raw::applyReceiverProfile(p, s);
-    // the carrier wind-up: off as flown (RC3); 0.99 turns it on
+    // the carrier wind-up: off in the profile, which every build with the mosaic driver takes (k is the antenna's:
+    // the mosaic-only flight image sets 0.99 with its safeguards)
     EXPECT_EQ(p.windup_k, 0.0);
     EXPECT_FALSE(p.windup_monitor);
     EXPECT_EQ(s.windup_k, 0.0);
@@ -610,12 +611,16 @@ void takeFlightSafeguards(RawGnssShadow::Config& r, const RawGnssShadow::Config&
     r.antenna_sigma_radial_m = b.antenna_sigma_radial_m;
     r.antenna_min_rps = b.antenna_min_rps;
     r.antenna_att_mode = b.antenna_att_mode;
+    r.ekf.att_exact = b.ekf.att_exact;
+    r.dv_lever_mode = b.dv_lever_mode;
+    r.dv_lever_radial_m = b.dv_lever_radial_m;
+    r.windup_k = b.windup_k;
 }
 
 TEST(ReceiverProfile, TheMosaicFlightSafeguards)
 {
     // gnss_raw::applyMosaicFlightSafeguards: every value the mosaic-only image
-    // flies its three safeguards at, from one place (main.cpp's startRawShadow
+    // flies its safeguards at, from one place (main.cpp's startRawShadow
     // under TR_RAW_NAV_MOSAIC, and tools/raw_replay's --receiver mosaic)
     static_assert(std::is_trivially_copyable<RawGnssShadow::Config>::value,
                   "the byte comparison below copies the config whole");
@@ -676,6 +681,15 @@ TEST(ReceiverProfile, TheMosaicFlightSafeguards)
     EXPECT_EQ(c.antenna_min_rps, 0.0);
     EXPECT_EQ(c.antenna_att_mode, gnss_raw::kLeverAttObserve);
     EXPECT_FALSE(c.ekf.lever_on);                  // unknown until applyAntennaOffset
+    // the spinning body (the high-roll port): the exact attitude transition, the change check's lever on the nose's
+    // own turn with no radial bound, the Goblin's helix's wind-up (0.99) taken off each Doppler; Wu's whole rate and
+    // the monitor off
+    EXPECT_TRUE(c.ekf.att_exact);
+    EXPECT_EQ(c.dv_lever_mode, 1);
+    EXPECT_EQ(c.dv_lever_radial_m, 0.0);
+    EXPECT_EQ(c.windup_k, 0.99);
+    EXPECT_FALSE(c.windup_geom);
+    EXPECT_FALSE(c.windup_monitor);
     // and nothing else: the profile's settings, the builder's, the EKF's, the
     // vertical check (20 m/s), the boost screen and the heading gate as they
     // were, byte for byte once the safeguards' own fields are put back
@@ -685,9 +699,9 @@ TEST(ReceiverProfile, TheMosaicFlightSafeguards)
     EXPECT_EQ(0, std::memcmp(&back, &base, sizeof(back)));
     EXPECT_EQ(c.vert_check_mps, 20.0);
     EXPECT_EQ(c.heading_gate, RawGnssShadow::kGateFullLaunch);
-    expectSameShadowSettings(c, base);
+    expectSameShadowSettings(back, base);          // the profile's own (its wind-up k is the safeguards' here)
 
-    // The Beetle's: its defaults and the LC86G's profile keep all three off
+    // The Beetle's: its defaults and the LC86G's profile keep them all off
     // (main.cpp never calls the function on M1)
     RawGnssShadow::Config m1;
     gnss_raw::applyReceiverProfile(gnss_raw::lc86gProfile(), m1);
@@ -701,6 +715,9 @@ TEST(ReceiverProfile, TheMosaicFlightSafeguards)
         EXPECT_EQ(d->rot_lever_min_rps, 0.0);
         EXPECT_EQ(d->att_hold_rate_rps, 0.0);
         EXPECT_EQ(d->rot_skip_rate_rps, 0.0);
+        EXPECT_FALSE(d->ekf.att_exact);
+        EXPECT_EQ(d->dv_lever_mode, 0);
+        EXPECT_EQ(d->windup_k, 0.0);
     }
     const RawGnssEKFParams params;
     EXPECT_EQ(params.hdg_obs_mode, gnss_raw::kHdgObsOff);

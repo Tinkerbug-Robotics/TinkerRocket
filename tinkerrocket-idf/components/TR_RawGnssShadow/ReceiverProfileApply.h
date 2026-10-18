@@ -121,10 +121,10 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssShadow::Co
 // and before any bench override, and tools/raw_replay's --receiver mosaic calls
 // it too, so a replay flies the image's settings by construction. The LC86G
 // and generic paths never call it: every field below defaults off, the
-// Beetle's filter. Each one fails toward unaided -- the check holds Dopplers
-// out, the share lowers GNSS's heading gain, the allowance widens the
-// Dopplers' sigma -- and none needs the antenna's offset, which is never
-// measured before a flight (a bound only).
+// Beetle's filter. Each of the first three fails toward unaided -- the check
+// holds Dopplers out, the share lowers GNSS's heading gain, the allowance
+// widens the Dopplers' sigma -- and none needs the antenna's offset, which is
+// never measured before a flight (a bound only).
 //   - The Doppler change check (RawGnssShadow.h), acting in flight only: each
 //     Doppler's change between epochs against the IMU's velocity change along
 //     its line of sight, summed over a leaky 1 s window, the epoch's change
@@ -149,6 +149,30 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssShadow::Co
 //     2 rad/s (the drogue's snatch, not a boost's weathercocking), at any time
 //     (motor ejection can snatch before the apogee call). The hold and the
 //     skip stay off.
+//   - The spinning body (the high-roll port, fc/v9-highroll; the windup
+//     study, 2026-10-18), none needing the offset either:
+//     - the covariance's exact attitude transition (TR_RawGnssEKF.h
+//       att_exact): first order stretched the tilt's variance by
+//       1 + (|w| dt)^2 a step under a roll, x1.5 a second at 1 rev/s and to
+//       its cap within a second at 5, and Doppler noise then turned the
+//       attitude;
+//     - the change check's lever allowance on the nose's own turn
+//       (dv_lever_mode 1), no radial bound: the arm (dv_lever_allow_m, or
+//       with the offset known knownLeverArm's) times the nose's turn, not
+//       the whole rate, which with the roll in it allowed 1.1 m/s over the
+//       window at 0.3 rev/s and 1.9 at 0.5 (the Goblin's past flights held
+//       0.32-0.85 rev/s): by the model no slow ramp was caught there. It
+//       fails toward unaided too: an antenna off the roll axis that nothing
+//       predicts holds the coast's Dopplers at a fast roll;
+//     - the carrier wind-up taken off each Doppler from the gyro's roll
+//       (windup_k 0.99: the Goblin's helix on the 10/16 spin rig). The clock
+//       drift takes the common part either way (no ascent median moved more
+//       than 0.03 deg); taken off, the drift the flight logs stays the
+//       receiver's own. k belongs to the antenna: it lives here, with the
+//       flight images' settings (the V9's and the V8's alike: the V8 is
+//       taken to fly the Goblin's helix too, boresight along the nose), not
+//       in the mosaic's profile, which the replay and the simulator take
+//       too.
 inline void applyMosaicFlightSafeguards(RawGnssShadow::Config& c)
 {
     // the Doppler change check
@@ -196,6 +220,14 @@ inline void applyMosaicFlightSafeguards(RawGnssShadow::Config& c)
     c.antenna_sigma_radial_m = 0.02;
     c.antenna_min_rps = 0.0;
     c.antenna_att_mode = kLeverAttObserve;
+    // the spinning body: the exact attitude transition, the change check's
+    // lever on the nose's own turn with no radial bound, and the Goblin's
+    // helix's carrier wind-up taken off each Doppler (the monitor and Wu's
+    // whole rate stay off)
+    c.ekf.att_exact = true;
+    c.dv_lever_mode = 1;
+    c.dv_lever_radial_m = 0.0;
+    c.windup_k = 0.99;
 }
 
 // The antenna's offset from the IMU, where the rocket's owner measured it: an

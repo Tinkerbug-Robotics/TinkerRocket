@@ -67,7 +67,57 @@ offline harness calls too. The boot prints them on one `[RAWGNSS] flight safegua
 - **The turning body's Doppler allowance.** Each Doppler's sigma widens by what a turning body swings an antenna
   offset nobody measured (bounds of 0.30 m along the nose and 0.03 m across it), on an epoch whose rate across the
   nose reached 2 rad/s: the drogue's snatch or a tumble, not the pitch-over at apogee.
+- **The spinning body's settings** (below): the exact attitude transition, the change check's lever allowance on
+  the nose's own turn, and the carrier wind-up taken off each Doppler.
 - **GNSS on the whole attitude from launch** (`config::RAW_HEADING_GATE` 1).
+
+### The spinning body (high roll)
+
+The Goblin's past flights rolled at 0.32-0.85 rev/s (a 1 s mean). Three settings keep the filter and the change
+check working under a roll (fc/v9-highroll, from the windup study of 2026-10-18):
+
+- **The exact attitude transition** (`att_exact`). Each 10 ms step turns the attitude's uncertainty with the body by
+  exp(-[w x] dt), not by I - [w x] dt. The first-order step stretched the tilt's variance by 1 + (|w| dt)^2 a step:
+  1.5 times a second at 1 rev/s, and to its cap within a second at 5 rev/s, where Doppler noise then turned the
+  attitude.
+- **The change check's lever allowance on the nose's own turn** (`dv_lever_mode` 1, no radial bound). The allowance
+  for an antenna off the IMU is the arm (0.3 m, or with the offset known what its prediction can be off by) times
+  how fast the nose turns, not the whole rate: a roll about the nose does not move an antenna on the nose's axis.
+  With the roll in it, the check's 1 s window allowed 1.1 m/s at 0.3 rev/s and 1.9 m/s at 0.5, so by the model no
+  slow receiver ramp (2-2.5 m/s^2) was caught at the Goblin's own roll rates, and the raw vote guard only logs. The
+  nose's turn is tracked in float each step.
+- **The carrier wind-up taken off each Doppler** (`windup_k` 0.99: the Goblin's helix, measured on the 10/16 spin
+  rig). A circularly polarized antenna turning about its boresight adds about 0.19 m/s per rev/s to every L1/E1
+  Doppler. The filter's clock drift takes that common part either way (no ascent median moved more than 0.03 deg in
+  the study), but with it taken off, the drift the flight logs is the receiver's own. k belongs to the antenna, so it
+  is set with the image's flight settings and the receiver profile keeps 0. In the firmware only the mosaic-only
+  images take that profile, the V9's and the V8's (`config.h` stops a raw-GNSS build with the auto driver), and both
+  call `applyMosaicFlightSafeguards`, so both fly 0.99: the V8 is taken to fly the Goblin's helix too, its boresight
+  along the nose. The profile's other users keep 0: `raw_replay --receiver mosaic` built without
+  `RAW_REPLAY_MOSAIC_SAFEGUARDS`, and the simulator's bindings (`mosaic_g5_profile`, `profile_for`). A wrong k is
+  common to every Doppler of one band, and the clock drift takes it.
+
+Where it fails toward unaided, and what it leaves out:
+
+- **An antenna off the roll axis that nothing predicts** (the offset Unknown, or Measured with no magnetometer
+  heading) changes the Dopplers between epochs by up to twice its own speed, which the allowance no longer covers.
+  At a fast roll the check then holds the coast's Dopplers and the filter coasts unaided: for the Goblin's 12.6 mm, by
+  the model, from about 3.5 to 9 rev/s and above about 11 rev/s; at 1.5 rev/s or less, nothing. A radial bound of
+  about 4 mm would keep those Dopplers but lose the slow-ramp catch from about 7.5 rev/s; it is not taken.
+- **A roll axis off the board's x** cones the nose at the roll rate, which the allowance takes as a radial bound of
+  the arm times the tilt (5.2 mm a degree with the offset unknown): at 1 deg the slow ramps are caught to about
+  5 rev/s. `sim_events.py --roll-axis-tilt-deg` puts it in the simulated flights.
+- **The gyro's rail** (about 17.6 rev/s of pure roll on the V9) is not handled: every filter fails there alike.
+
+The windup study's grid (48,000 runs with a roll laid over Grid B, the antenna on the roll axis) passed every adopted
+bar from 0 to 15 rev/s with the exact transition and the nose lever on, where the image as built failed the coast
+from 1.5 rev/s and let the slow ramps through from 1 rev/s
+(`gnss-attitude-study/v9-mosaic-filter-plan/evidence/windup/`). The grid at the Goblin's own antenna offset, with
+it known and unknown, has not been run yet. Nor has the V9's step time (the filter's `prop_us` and `step_us_max`,
+these settings on against off): take it on the flight image's placement. With `-DTR_RAW_GNSS_IRAM=1` the filter
+runs from internal RAM, but the exact transition's blocks (`attExactBlocks`) stay in flash with the carrier's code
+(`main/raw_gnss_iram.lf`), so that bench pays a flash fetch every 10 ms step that neither the flight image nor an
+internal-RAM placement would. The boot line `[RAWGNSS] flight safeguards:` names the three settings.
 
 ### The GNSS antenna offset (BLE cmd 81)
 
@@ -167,6 +217,11 @@ This is a statement about behavior, not bytes.
     Beetle 5,736 B of flash code, 184 B of flash data and 212 B of IRAM code; the V9 auto image 3,772 B of flash and
     16 B of `.bss`; this image 13,500 B of flash and 96 B of internal RAM. The filter object grows by about 10.5 KB,
     in PSRAM, and the lever's stack frames by under 0.1 KB on every board.
+  - The spinning body (fc/v9-highroll) adds, against main at 6276a563 (`idf.py size`, both sides built from a git
+    archive with the guidance stub): this image and the V8's 9,642 B of flash (9,338 B of code, 304 B of constants)
+    and no internal RAM; the Beetle 8,220 B of flash code, 96 B of flash data and 372 B of IRAM code, no `.bss`; the
+    V9 auto image nothing. The shadow object grows by about 1.8 KB on every board that builds it (the gyro's history
+    for the wind-up, dormant on the Beetle), in PSRAM where the filter is.
 - **The Beetle's filter is bit-identical to main's:** `tools/raw_replay/bitident.sh` reports 450 of 450 runs
   IDENTICAL. `tools/m1_identity.sh` reports its `main.cpp` and sensor collectors preprocess IDENTICAL. Neither
   covers GnssTimeSync; the host tests cover its default path.

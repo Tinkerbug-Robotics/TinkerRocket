@@ -800,9 +800,10 @@ struct config : board_pins
     //     block is at least this after its objects are allocated: its two
     //     tasks' stacks (14 KB) and the flight task's 16 KB come out of what
     //     is left, and G6 wants 40 KB free with the flight task running.
-    //   The flight safeguards (the Doppler change check, the heading share and
-    //     the turning body's Doppler allowance) are not here: they are set in
-    //     one place, gnss_raw::applyMosaicFlightSafeguards
+    //   The flight safeguards (the Doppler change check, the heading share,
+    //     the turning body's Doppler allowance and the spinning body's
+    //     settings) are not here: they are set in one place,
+    //     gnss_raw::applyMosaicFlightSafeguards
     //     (TR_RawGnssShadow/ReceiverProfileApply.h), which tools/raw_replay's
     //     --receiver mosaic calls too.
     static constexpr double   RAW_RESTORE_POS_SIGMA_M   = 100.0;

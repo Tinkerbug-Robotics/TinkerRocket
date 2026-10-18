@@ -1598,13 +1598,14 @@ TEST(RawGnssShadowV9, AKnownAntennaTakesTheTurnsSwingOutOfTheAttitude)
     // The turning boost (boostTurn: 5 rad/s about body y for 0.25 s and back)
     // with the antenna 0.3 m up the nose. Unknown, the image's allowance
     // takes the swing's Dopplers at 1.65 m/s and what is left still turns the
-    // attitude: over 0.5 deg from 6 s on. Known, the swing is predicted and,
-    // with the launch's heading the magnetometer's, the Dopplers allow only
-    // what the offset could be off by (0.05 m along the nose and 0.02 across:
-    // 0.35 m/s); with no magnetometer, also what any heading does to the
-    // predicted swing (leverUnsetM: twice the 0.3 m, 3.35 m/s). Either: under
-    // 0.25 deg. The offset wrong by 5 cm either way is still better than
-    // leaving it out.
+    // attitude: over 0.45 deg from 6 s on (about 0.50 to 0.66 with the
+    // spinning body's settings, over 0.5 before them). Known, the swing is
+    // predicted and, with the launch's heading the magnetometer's, the
+    // Dopplers allow only what the offset could be off by (0.05 m along the
+    // nose and 0.02 across: 0.35 m/s); with no magnetometer, also what any
+    // heading does to the predicted swing (leverUnsetM: twice the 0.3 m,
+    // 3.35 m/s). Either: under 0.25 deg. The offset wrong by 5 cm either way
+    // is still better than leaving it out.
     const TenFlight fl = boostTurn(0.3, 0.0);
     TenFlight fm = fl;
     fm.mag_on_pad = true;
@@ -1617,7 +1618,7 @@ TEST(RawGnssShadowV9, AKnownAntennaTakesTheTurnsSwingOutOfTheAttitude)
     EXPECT_NEAR(kn.st.rot_max_sigma_mps, 3.35f, 0.02f);
     for (double t = 6.0; t <= 8.5 + 1e-9; t += 0.25)
     {
-        EXPECT_GT(errAt(unk, t), 0.5) << t;
+        EXPECT_GT(errAt(unk, t), 0.45) << t;
         EXPECT_LT(errAt(kn, t), 0.25) << t;
         EXPECT_LT(errAt(km, t), 0.25) << t;
         EXPECT_LT(errAt(lo, t), errAt(unk, t)) << t;

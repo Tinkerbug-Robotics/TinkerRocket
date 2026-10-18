@@ -359,13 +359,18 @@ inline GnssReceiverProfile mosaicG5Profile()
 
     // the carrier wind-up: measured on the Goblin's helix at +0.991 / +0.994
     // cycles per clockwise turn from above, nose up, every band within 0.5 %
-    // (V9 rig 10/16): k = 0.99 turns the correction on. Off in this profile
-    // (the image as flown, RC3). With the drift's walk at 100 the clock takes
-    // the common part (the windup study, 2026-10-18, Grid B with a roll laid
-    // over it: the coast's drift moved by the L1 wind-up within 0.01 m/s from
-    // 1 to 15 rev/s, and with the exact attitude transition, taking it off
-    // moved no ascent median by more than 0.03 deg); it is the prerequisite
-    // for a tighter clock, and 0.99 is the value to turn it on with.
+    // (V9 rig 10/16): k = 0.99 turns the correction on. Off in this profile:
+    // k belongs to the antenna, not the receiver, so the mosaic-only images
+    // (the V9's and the V8's, the only firmware that takes this profile) set
+    // it with their other flight settings (ReceiverProfileApply.h
+    // applyMosaicFlightSafeguards, 0.99) until a per-rocket antenna setting
+    // exists; the profile's other users, raw_replay without the image's
+    // safeguards and the simulator's bindings, keep 0. With the drift's walk
+    // at 100 the clock takes the common part (the windup study, 2026-10-18,
+    // Grid B with a roll laid over it: the coast's drift moved by the L1
+    // wind-up within 0.01 m/s from 1 to 15 rev/s, and with the exact attitude
+    // transition, taking it off moved no ascent median by more than
+    // 0.03 deg); it is the prerequisite for a tighter clock.
     p.windup_k = 0.0;
     p.windup_monitor = false;
 
