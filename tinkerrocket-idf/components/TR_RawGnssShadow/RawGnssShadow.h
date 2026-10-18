@@ -394,10 +394,17 @@
 // rot_lever_axial_m and rot_lever_radial_m, from antenna_min_rps across the
 // nose in place of rot_lever_min_rps, and the Doppler change check's lever
 // allowance (whose changes are now the antenna's) the larger of the two
-// sigmas in place of dv_lever_allow_m. The hold and the skip are untouched.
-// The offset is a prior, never the truth: a phase centre a few cm from where
-// the owner measured is what the sigmas are for. setAntenna in flight waits
-// for the ground.
+// sigmas in place of dv_lever_allow_m -- plus what the attitude's error does
+// to the lever's change both ends predicted (DopplerChange.h knownLeverArm):
+// with the heading known, the attitude allowance's chord of the offset; with
+// it unset (dv_hdg_unset_deg's judgment), any heading turns the predicted
+// change, up to twice its size (0.3 m on a coast weathercocking with the
+// heading 60 deg off: a chi-square of 19.9 against the 4-sigma test's 16,
+// unknown's 0.89), so there the prediction is taken back out of the fitted
+// change and the whole offset allowed, its size plus the larger sigma. The hold and the skip are untouched. The offset is a
+// prior, never the truth: a phase centre a few cm from where the owner
+// measured is what the sigmas are for. setAntenna in flight waits for the
+// ground.
 //
 // The lever roll (the EKF's lever_att_mode observe; the change check on). A
 // turning antenna's velocity turns with the body, so it says how the body is
@@ -1133,7 +1140,9 @@ private:
         return cfg_.ekf.lever_on ? std::fmax(cfg_.antenna_sigma_axial_m, cfg_.antenna_sigma_radial_m)
                                  : cfg_.dv_lever_allow_m;
     }
-    // the lever roll's other end: the last checked epoch's lever velocity and nose, NED
+    // the Doppler change check's other end with the offset known (dv_ref_'s): the lever velocity its
+    // Dopplers were predicted with and the nose then, NED (the lever roll's too); ok: dv_ref_ was taken
+    // with the offset known
     float         lev_ref_v_[3] = {}, lev_ref_n_[3] = {};
     bool          lev_ref_ok_ = false;
     // setAntenna's, waiting for the ground
