@@ -262,7 +262,7 @@ struct Args
     int dv_check = -1;               // 0 off (the firmware's), 1 observe, 2 act
     double dv_sat_k = -1.0, dv_epoch_k = -1.0, dv_floor = -1.0, dv_per_g = -1.0, dv_att_deg = -1.0,
            dv_scale = -1.0, dv_bias = -1.0, dv_lever_m = -1.0, dv_hold_s = -1.0, dv_epoch_hold_s = -1.0,
-           dv_window_s = -1.0, dv_noise_tau_s = -1.0, dv_hold_all_frac = -1.0;
+           dv_window_s = -1.0, dv_noise_tau_s = -1.0, dv_hold_all_frac = -1.0, dv_latch_k = -1.0;
     int dv_deweight = -1, dv_ground = -1;
     std::set<std::string> given;     // the options on the command line
 };
@@ -299,7 +299,7 @@ void usage()
                  "  the Doppler change check (a RAW_REPLAY_DVCHECK build): [--dv-check 0|1|2] [--dv-sat-k X]\n"
                  "  [--dv-epoch-k X] [--dv-floor X] [--dv-per-g X] [--dv-att-deg X] [--dv-scale X] [--dv-bias X]\n"
                  "  [--dv-lever-m X] [--dv-hold-s X] [--dv-epoch-hold-s X] [--dv-window-s X] [--dv-deweight 0|1]\n"
-                 "  [--dv-ground 0|1] [--dv-noise-tau-s X] [--dv-hold-all-frac X]\n");
+                 "  [--dv-ground 0|1] [--dv-noise-tau-s X] [--dv-hold-all-frac X] [--dv-latch-k X]\n");
 }
 
 bool parseArgs(int argc, char** argv, Args& a)
@@ -418,6 +418,7 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--dv-ground") a.dv_ground = std::atoi(val());
         else if (k == "--dv-noise-tau-s") a.dv_noise_tau_s = std::atof(val());
         else if (k == "--dv-hold-all-frac") a.dv_hold_all_frac = std::atof(val());
+        else if (k == "--dv-latch-k") a.dv_latch_k = std::atof(val());
         else if (k == "--truth-nav") a.truth_nav = val();
         else if (k == "--seed-gyro-dps")
         {
@@ -1656,6 +1657,8 @@ int main(int argc, char** argv)
         cfg.dv_noise_tau_s = a.dv_noise_tau_s;
     if (a.dv_hold_all_frac >= 0.0)
         cfg.dv_hold_all_frac = a.dv_hold_all_frac;
+    if (a.dv_latch_k >= 0.0)
+        cfg.dv_latch_k = a.dv_latch_k;
 #else
     if (a.dv_check >= 0)
         std::fprintf(stderr, "WARNING: this build has no Doppler change check (RAW_REPLAY_DVCHECK=OFF): --dv-* are "
@@ -3061,12 +3064,20 @@ int main(int argc, char** argv)
                 }
                 if (std::getenv("RAW_REPLAY_DVLOG") && sh.stats().dv_checks != dv_checks0)
                     std::fprintf(stderr, "dv t=%.3f chi2=%.2f win=%.2f noise=%.3f along=%.3f epoch_fails+%u "
-                                         "sat_fails+%u held+%u\n", te_dv,
+                                         "sat_fails+%u held+%u latch=%u level=%.2f\n", te_dv,
                                  static_cast<double>(sh.stats().dv_last_chi2),
                                  static_cast<double>(sh.stats().dv_last_chi2_win),
                                  static_cast<double>(sh.stats().dv_noise_mps),
                                  static_cast<double>(sh.stats().dv_last_along), sh.stats().dv_epoch_fails - dv_ef0,
-                                 sh.stats().dv_sat_fails - dv_sf0, sh.stats().dv_held_rr - dv_held0);
+                                 sh.stats().dv_sat_fails - dv_sf0, sh.stats().dv_held_rr - dv_held0,
+                                 sh.dv_latch_ ? 1u : 0u, static_cast<double>(sh.stats().dv_last_level_chi2));
+                if (std::getenv("RAW_REPLAY_DVLOG") && std::atoi(std::getenv("RAW_REPLAY_DVLOG")) > 1
+                    && sh.stats().dv_checks != dv_checks0)
+                    std::fprintf(stderr, "  win sum %+.3f %+.3f %+.3f sf %+.2f %+.2f %+.2f bias %.3f lever %.3f "
+                                         "cov %.4f %.4f %.4f\n",
+                                 sh.dv_SW_[0], sh.dv_SW_[1], sh.dv_SW_[2], sh.dv_SF_[0], sh.dv_SF_[1], sh.dv_SF_[2],
+                                 sh.dv_SB_, sh.dv_SL_, std::sqrt(sh.dv_CW_[0][0]), std::sqrt(sh.dv_CW_[1][1]),
+                                 std::sqrt(sh.dv_CW_[2][2]));
             }
 #endif
 #if RAW_REPLAY_MOSAIC
@@ -3421,13 +3432,15 @@ int main(int argc, char** argv)
                                      "\"epoch_fails\": %u, \"epoch_win_fails\": %u, \"held_rr\": %u, "
                                      "\"held_epochs\": %u, \"max_chi2\": %.2f, \"max_e\": %.2f, "
                                      "\"epoch_fail_t\": %s, \"sat_fail_t\": %s, \"sat_fail_n\": %s, \"held_t\": %s, "
-                                     "\"held_n\": %s, \"noise_max\": %.3f, \"all_held\": %u}, ",
+                                     "\"held_n\": %s, \"noise_max\": %.3f, \"all_held\": %u, \"latches\": %u, "
+                                     "\"latch_releases\": %u, \"latch_epochs\": %u}, ",
                                  sh.cfg_.dv_check, fs.dv_checks, fs.dv_sat_fails, fs.dv_sat_win_fails,
                                  fs.dv_epoch_fails, fs.dv_epoch_win_fails, fs.dv_held_rr, fs.dv_held_epochs,
                                  static_cast<double>(fs.dv_max_chi2), static_cast<double>(fs.dv_max_e),
                                  list(dv_epoch_fail_t).c_str(), list(dv_sat_fail_t).c_str(),
                                  ilist(dv_sat_fail_n).c_str(), list(dv_held_t).c_str(), ilist(dv_held_n).c_str(),
-                                 static_cast<double>(fs.dv_noise_max_mps), fs.dv_all_held);
+                                 static_cast<double>(fs.dv_noise_max_mps), fs.dv_all_held, fs.dv_latches,
+                                 fs.dv_latch_releases, fs.dv_latch_epochs);
                 }
 #endif
                 std::fprintf(ej, "\"screen_compare\": [");
