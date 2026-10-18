@@ -261,6 +261,38 @@ class TelemetryDispatchTest {
     }
 
     @Test
+    fun `config antenna offset says whose report it is`() {
+        // "antsrc": "fc" when the four keys are the flight computer's own
+        // report, "oc" when they are the out computer's copy of the last
+        // cmd 81 it relayed (the rail off, or a flight computer too old to
+        // report it). Only "fc" counts; absent is an out computer that
+        // predates the key, which can only hold its copy.
+        val fc = config("""{"type":"config","antk":1,"antx":312,"anty":-25,"antz":4,"antsrc":"fc"}""")
+        assertEquals(AntennaOffset(true, 312, -25, 4), fc.antennaOffset)
+        assertTrue(fc.antennaOffsetFromFlightComputer)
+
+        val oc = config("""{"type":"config","antk":1,"antx":312,"anty":-25,"antz":4,"antsrc":"oc"}""")
+        assertEquals(AntennaOffset(true, 312, -25, 4), oc.antennaOffset)
+        assertFalse(oc.antennaOffsetFromFlightComputer)
+
+        val absent = config("""{"type":"config","antk":0,"antx":0,"anty":0,"antz":0}""")
+        assertEquals(AntennaOffset.UNKNOWN, absent.antennaOffset)
+        assertFalse(absent.antennaOffsetFromFlightComputer)
+
+        assertFalse(config("""{"type":"config","antk":0,"antx":0,"anty":0,"antz":0,"antsrc":"FC"}""")
+            .antennaOffsetFromFlightComputer)
+        assertFalse(config("""{"type":"config","antk":0,"antx":0,"anty":0,"antz":0,"antsrc":1}""")
+            .antennaOffsetFromFlightComputer)
+        // No offset, nothing to vouch for.
+        val none = config("""{"type":"config","antsrc":"fc"}""")
+        assertNull(none.antennaOffset)
+        assertFalse(none.antennaOffsetFromFlightComputer)
+        // A fresh readback says it again: the source never carries over.
+        assertFalse(config("""{"type":"config","antk":0,"antx":0,"anty":0,"antz":0}""", previous = fc)
+            .antennaOffsetFromFlightComputer)
+    }
+
+    @Test
     fun `antenna offset typed millimeters`() {
         assertEquals(312, AntennaOffset.parseMm("312"))
         assertEquals(-25, AntennaOffset.parseMm("-25"))

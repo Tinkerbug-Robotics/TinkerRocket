@@ -629,7 +629,11 @@ final class ActiveRocketSyncer: ObservableObject {
             p.gnssLogSetting = log
             changed.append(groupGnssLog)
         }
-        if let antenna = cfg.antennaOffset, p.antennaOffset != antenna {
+        // Only the flight computer's own antenna offset ("antsrc":"fc").
+        // Anything else is the out computer's copy of the last cmd 81 it
+        // relayed, which the flight computer may not hold (the #1472 camera
+        // rule).
+        if cfg.antennaOffsetFromFlightComputer, let antenna = cfg.antennaOffset, p.antennaOffset != antenna {
             p.antennaOffset = antenna
             changed.append(groupAntennaOffset)
         }

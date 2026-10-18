@@ -22,9 +22,12 @@ class AntennaOffsetCaptionTest {
         connected: Boolean = true,
         haveConfig: Boolean = true,
         reported: AntennaOffset? = AntennaOffset.UNKNOWN,
+        fromFc: Boolean = true,
         receiver: String? = "mosaic-G5",
         inflight: Boolean = false,
-    ): String = antennaOffsetCaption(measuredShown, profile, connected, haveConfig, reported, receiver, inflight)
+    ): String = antennaOffsetCaption(
+        measuredShown, profile, connected, haveConfig, reported, fromFc, receiver, inflight,
+    )
 
     @Test
     fun unknown_explains_the_default_and_says_it_is_in_use() {
@@ -50,18 +53,41 @@ class AntennaOffsetCaptionTest {
     }
 
     @Test
+    fun the_out_computers_copy_is_not_called_in_use() {
+        // "antsrc":"oc" (or absent): the out computer's copy of what it last
+        // relayed — the rail off, a flight computer too old to report it, or
+        // the app's own mirror of a send before the readback lands.
+        val sent = caption(measuredShown = true, profile = measured, reported = measured, fromFc = false)
+        assertTrue(sent.endsWith(" Sent to the rocket; the flight computer has not reported it yet."))
+        assertFalse("In use" in sent)
+        val held = caption(profile = AntennaOffset.UNKNOWN, reported = measured, fromFc = false)
+        assertTrue(held.endsWith(
+            " The out computer holds X 312, Y -25, Z 4 mm; the flight computer has not reported it yet.",
+        ))
+        assertFalse("flight computer reports" in held)
+    }
+
+    @Test
     fun a_draft_is_not_sent_yet() {
         val text = caption(measuredShown = true, profile = AntennaOffset.UNKNOWN)
         assertTrue(text.endsWith(" Not sent yet: enter all three, then tap Done."))
+        assertTrue(
+            caption(measuredShown = true, profile = AntennaOffset.UNKNOWN, fromFc = false)
+                .endsWith(" Not sent yet: enter all three, then tap Done."),
+        )
     }
 
     @Test
     fun firmware_without_the_setting_and_flight_are_said() {
         assertTrue(caption(reported = null).endsWith(" This rocket’s firmware has no antenna offset setting."))
         assertTrue(caption(inflight = true).endsWith(" Locked while the rocket is flying."))
-        // No readback yet, or not connected: no status at all.
-        assertFalse("flight computer reports" in caption(haveConfig = false, reported = null))
-        assertFalse("In use" in caption(connected = false))
+        // No readback yet, or not connected: no status at all, only the
+        // explanation itself.
+        val bare = caption(connected = false)
+        assertTrue(bare.endsWith(" turns fast, as when the drogue opens."))
+        assertEquals(bare, caption(haveConfig = false, reported = null))
+        assertEquals(bare, caption(connected = false, reported = null))
+        assertEquals(bare, caption(connected = false, reported = measured, fromFc = false, inflight = true))
     }
 
     @Test

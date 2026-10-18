@@ -162,6 +162,49 @@ final class AntennaOffsetSettingTests: XCTestCase {
         XCTAssertEqual(rocket.rocketConfig?.antennaOffset, AntennaOffset.unknown)
     }
 
+    /// "antsrc": "fc" when the four keys are the flight computer's own
+    /// report, "oc" when they are the out computer's copy of the last cmd 81
+    /// it relayed (the rail off, or a flight computer too old to report it).
+    /// Only "fc" counts; absent is an out computer that predates the key,
+    /// which can only hold its copy.
+    func testTheReadbackSaysWhoseOffsetItIs() {
+        let rocket = makeRocket()
+        feed(rocket, #"{"type":"config","antk":1,"antx":312,"anty":-25,"antz":4,"antsrc":"fc"}"#)
+        XCTAssertEqual(rocket.rocketConfig?.antennaOffset, measured(312, -25, 4))
+        XCTAssertEqual(rocket.rocketConfig?.antennaOffsetFromFlightComputer, true)
+
+        feed(rocket, #"{"type":"config","antk":1,"antx":312,"anty":-25,"antz":4,"antsrc":"oc"}"#)
+        XCTAssertEqual(rocket.rocketConfig?.antennaOffset, measured(312, -25, 4))
+        XCTAssertEqual(rocket.rocketConfig?.antennaOffsetFromFlightComputer, false)
+
+        // A fresh readback says it again: the source never carries over.
+        feed(rocket, #"{"type":"config","antk":0,"antx":0,"anty":0,"antz":0,"antsrc":"fc"}"#)
+        feed(rocket, #"{"type":"config","antk":0,"antx":0,"anty":0,"antz":0}"#)
+        XCTAssertEqual(rocket.rocketConfig?.antennaOffset, AntennaOffset.unknown)
+        XCTAssertEqual(rocket.rocketConfig?.antennaOffsetFromFlightComputer, false)
+
+        feed(rocket, #"{"type":"config","antk":0,"antx":0,"anty":0,"antz":0,"antsrc":"FC"}"#)
+        XCTAssertEqual(rocket.rocketConfig?.antennaOffsetFromFlightComputer, false)
+        feed(rocket, #"{"type":"config","antk":0,"antx":0,"anty":0,"antz":0,"antsrc":1}"#)
+        XCTAssertEqual(rocket.rocketConfig?.antennaOffsetFromFlightComputer, false)
+        // No offset, nothing to vouch for.
+        feed(rocket, #"{"type":"config","antsrc":"fc"}"#)
+        XCTAssertNil(rocket.rocketConfig?.antennaOffset)
+        XCTAssertEqual(rocket.rocketConfig?.antennaOffsetFromFlightComputer, false)
+    }
+
+    /// The cached readback follows a send at once, but as what was sent, not
+    /// as the flight computer's report: the screen says so until the next
+    /// readback does.
+    func testASentOffsetIsNotTheFlightComputersReportYet() {
+        let rocket = makeRocket()
+        rocket.commandTap = { _, _ in }
+        feed(rocket, #"{"type":"config","antk":0,"antx":0,"anty":0,"antz":0,"antsrc":"fc"}"#)
+        rocket.sendAntennaOffsetConfig(measured(312, -25, 4))
+        XCTAssertEqual(rocket.rocketConfig?.antennaOffset, measured(312, -25, 4))
+        XCTAssertEqual(rocket.rocketConfig?.antennaOffsetFromFlightComputer, false)
+    }
+
     // MARK: The profile
 
     func testTheProfileKeepsIt() throws {
@@ -211,11 +254,17 @@ final class AntennaOffsetSettingTests: XCTestCase {
 
     // MARK: The syncer
 
+    /// A readback carrying `offset` as the flight computer's own report.
+    private func fcReport(_ offset: AntennaOffset) -> RocketConfig {
+        var cfg = RocketConfig()
+        cfg.antennaOffset = offset
+        cfg.antennaOffsetFromFlightComputer = true
+        return cfg
+    }
+
     func testTheRocketsOffsetIsAdopted() {
         var p = RocketProfile.makeDefault(name: "Goblin")
-        var cfg = RocketConfig()
-        cfg.antennaOffset = measured(312, -25, 4)
-        let changed = ActiveRocketSyncer.adopt(&p, from: cfg)
+        let changed = ActiveRocketSyncer.adopt(&p, from: fcReport(measured(312, -25, 4)))
         XCTAssertTrue(changed.contains(ActiveRocketSyncer.groupAntennaOffset))
         XCTAssertEqual(p.antennaOffset, measured(312, -25, 4))
     }
@@ -223,9 +272,7 @@ final class AntennaOffsetSettingTests: XCTestCase {
     func testTheRocketsUnknownIsAdopted() {
         var p = RocketProfile.makeDefault(name: "Goblin")
         p.antennaOffset = measured(312, -25, 4)
-        var cfg = RocketConfig()
-        cfg.antennaOffset = .unknown
-        let changed = ActiveRocketSyncer.adopt(&p, from: cfg)
+        let changed = ActiveRocketSyncer.adopt(&p, from: fcReport(.unknown))
         XCTAssertTrue(changed.contains(ActiveRocketSyncer.groupAntennaOffset))
         XCTAssertEqual(p.antennaOffset, AntennaOffset.unknown)
     }
@@ -233,10 +280,44 @@ final class AntennaOffsetSettingTests: XCTestCase {
     func testAMatchingOffsetIsNotAChange() {
         var p = RocketProfile.makeDefault(name: "Goblin")
         p.antennaOffset = measured(312, -25, 4)
-        var cfg = RocketConfig()
-        cfg.antennaOffset = measured(312, -25, 4)
-        let changed = ActiveRocketSyncer.adopt(&p, from: cfg)
+        let changed = ActiveRocketSyncer.adopt(&p, from: fcReport(measured(312, -25, 4)))
         XCTAssertFalse(changed.contains(ActiveRocketSyncer.groupAntennaOffset))
+    }
+
+    /// Only the flight computer's own report ("antsrc":"fc"). The out
+    /// computer's copy of the last cmd 81 it relayed — the rail off, or a
+    /// flight computer too old to report it — is not adopted, whatever it
+    /// holds.
+    func testTheOutComputersCopyIsNotAdopted() {
+        for copy in [AntennaOffset.unknown, measured(10, 20, 30)] {
+            var p = RocketProfile.makeDefault(name: "Goblin")
+            p.antennaOffset = measured(312, -25, 4)
+            var cfg = RocketConfig()
+            cfg.antennaOffset = copy
+            cfg.antennaOffsetFromFlightComputer = false
+            let changed = ActiveRocketSyncer.adopt(&p, from: cfg)
+            XCTAssertFalse(changed.contains(ActiveRocketSyncer.groupAntennaOffset), "\(copy)")
+            XCTAssertEqual(p.antennaOffset, measured(312, -25, 4), "\(copy)")
+        }
+    }
+
+    /// The same through the readback parser: what "oc" or no "antsrc" brings
+    /// in is left out of the profile, what "fc" brings in is taken.
+    func testOnlyAnFcReadbackIsAdopted() throws {
+        for (frame, adopted) in [
+            (#"{"type":"config","antk":0,"antx":0,"anty":0,"antz":0,"antsrc":"oc"}"#, false),
+            (#"{"type":"config","antk":0,"antx":0,"anty":0,"antz":0}"#, false),
+            (#"{"type":"config","antk":0,"antx":0,"anty":0,"antz":0,"antsrc":"fc"}"#, true),
+        ] {
+            let rocket = makeRocket()
+            feed(rocket, frame)
+            var p = RocketProfile.makeDefault(name: "Goblin")
+            p.antennaOffset = measured(312, -25, 4)
+            let cfg = try XCTUnwrap(rocket.rocketConfig)
+            let changed = ActiveRocketSyncer.adopt(&p, from: cfg)
+            XCTAssertEqual(changed.contains(ActiveRocketSyncer.groupAntennaOffset), adopted, frame)
+            XCTAssertEqual(p.antennaOffset, adopted ? .unknown : measured(312, -25, 4), frame)
+        }
     }
 
     func testARocketThatDoesNotReportItLeavesTheProfileAlone() {
