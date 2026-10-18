@@ -336,6 +336,29 @@ TEST(DopplerChange, WithNoAllowanceTheChiSquareIsThePlainOne)
 
 // ------------------------------------------------------------------ the EKF's rows
 
+TEST(DopplerChange, TheLevelTestTakesTheFiltersOwnVelocityUncertainty)
+{
+    // a receiver 1 m/s off the filter's velocity, down: against a tight fit alone it is far off; against a
+    // filter 1 m/s unsure it is one sigma; the floor adds the same way
+    const double off[3] = {0.0, 0.0, 1.0};
+    double Cw[3][3] = {}, P0[3][3] = {}, P1[3][3] = {};
+    for (int i = 0; i < 3; ++i)
+    {
+        Cw[i][i] = 0.02 * 0.02;
+        P1[i][i] = 1.0;
+    }
+    EXPECT_NEAR(dvc::levelChi2(off, Cw, P0, 0.0), 1.0 / (0.02 * 0.02), 1e-6);
+    EXPECT_NEAR(dvc::levelChi2(off, Cw, P1, 0.0), 1.0 / (1.0 + 0.02 * 0.02), 1e-9);
+    EXPECT_NEAR(dvc::levelChi2(off, Cw, P0, 0.25), 1.0 / (0.25 + 0.02 * 0.02), 1e-9);
+    // only the down variance matters for a down offset
+    double Ph[3][3] = {};
+    Ph[0][0] = Ph[1][1] = 100.0;
+    EXPECT_NEAR(dvc::levelChi2(off, Cw, Ph, 0.0), 1.0 / (0.02 * 0.02), 1e-6);
+    // singular: no answer
+    const double Z[3][3] = {};
+    EXPECT_LT(dvc::levelChi2(off, Z, Z, 0.0), 0.0);
+}
+
 namespace
 {
 
@@ -516,6 +539,11 @@ struct DvFlight
     double stale_tau = 1.0;
     int drift_sat = -1;
     double drift_mps2 = 0.0;
+    // a coherent fault (sim_events.py's coherent and slow patterns): every Doppler at the receiver's velocity
+    // plus coh_rate m/s a second down from coh_from s, held at coh_max (coh_from < 0: none)
+    double coh_from = -1.0;
+    double coh_rate = 0.0;
+    double coh_max = 0.0;
 };
 
 struct DvRun
@@ -523,6 +551,8 @@ struct DvRun
     RawGnssShadow::Stats st;
     gnss_raw::ShadowNav nav{};
     double v_err_coast_max = 0.0;         // |filter - truth| velocity, the largest from 1 s after burnout
+    double v_err_end = 0.0;               //   at the end
+    uint32_t held_last = 0;               // Dopplers held in the last second
 };
 
 RawGnssShadow::Config dvCfg(uint8_t mode)
@@ -557,6 +587,7 @@ DvRun flyDv(const DvFlight& o)
     std::vector<gnss_raw::BuiltEpoch> due;
     int next_ms = 100;
     DvRun run;
+    uint32_t held_at_last_s = 0;
     for (int k = 1; k <= static_cast<int>(t_end / dt); ++k)
     {
         const double t = k * dt;
@@ -585,14 +616,20 @@ DvRun flyDv(const DvFlight& o)
             s.acc[2] = float(a[2] - kG);
             s.flags = t < t_ign ? gnss_raw::kShadowLevel : gnss_raw::kShadowInFlight;
             const uint32_t ef0 = sh.stats().dv_epoch_fails, sf0 = sh.stats().dv_sat_fails;
+            const uint32_t le0 = sh.stats().dv_latch_epochs;
             sh.onImu(s, t64);
             // DV_TRACE=1: each check that failed something; 2: every tick
             const char* trace = std::getenv("DV_TRACE");
-            if (trace && (sh.stats().dv_epoch_fails != ef0 || sh.stats().dv_sat_fails != sf0 || std::atoi(trace) > 1))
-                std::printf("t %.3f checks %u epoch fails %u sat fails %u chi2 %.1f along %.3f max_e %.1f\n", t,
-                            sh.stats().dv_checks, sh.stats().dv_epoch_fails, sh.stats().dv_sat_fails,
+            if (trace && (sh.stats().dv_epoch_fails != ef0 || sh.stats().dv_sat_fails != sf0 || std::atoi(trace) > 1
+                          || sh.stats().dv_latch_epochs != le0))
+                std::printf("t %.3f checks %u epoch fails %u sat fails %u chi2 %.1f along %.3f max_e %.1f latch %u/%u "
+                            "level %.1f vz %.3f\n",
+                            t, sh.stats().dv_checks, sh.stats().dv_epoch_fails, sh.stats().dv_sat_fails,
                             static_cast<double>(sh.stats().dv_last_chi2),
-                            static_cast<double>(sh.stats().dv_last_along), static_cast<double>(sh.stats().dv_max_e));
+                            static_cast<double>(sh.stats().dv_last_along), static_cast<double>(sh.stats().dv_max_e),
+                            sh.stats().dv_latches, sh.stats().dv_latch_releases,
+                            static_cast<double>(sh.stats().dv_last_level_chi2),
+                            sh.running() ? static_cast<double>(sh.filter().velNed()[2]) - v[2] : 0.0);
             while (!due.empty() && t64 >= due.front().mcu_us + 30000)
             {
                 sh.onBuilt(due.front());
@@ -604,7 +641,10 @@ DvRun flyDv(const DvFlight& o)
                 const double e = std::sqrt((fv[0] - v[0]) * (fv[0] - v[0]) + (fv[1] - v[1]) * (fv[1] - v[1])
                                            + (fv[2] - v[2]) * (fv[2] - v[2]));
                 run.v_err_coast_max = std::max(run.v_err_coast_max, e);
+                run.v_err_end = e;
             }
+            if (std::fabs(t - (t_end - 1.0)) < 0.5 * dt * 4)
+                held_at_last_s = sh.stats().dv_held_rr;
         }
         if (k == next_ms)
         {
@@ -618,6 +658,15 @@ DvRun flyDv(const DvFlight& o)
             double vs_n[3] = {(1.0 - L) * v[0], (1.0 - L) * v[1], (1.0 - L) * v[2]}, vs[3];
             nedToEcef(kLla0[0], kLla0[1], vs_n, vs);
             std::vector<const double*> vrr(sky.size(), nullptr);
+            double vb[3];
+            if (o.coh_from >= 0.0 && t > o.coh_from)
+            {
+                const double b = std::min(o.coh_rate * (t - o.coh_from), o.coh_max);
+                const double vb_n[3] = {v[0], v[1], v[2] + b};
+                nedToEcef(kLla0[0], kLla0[1], vb_n, vb);
+                for (size_t i = 0; i < sky.size(); ++i)
+                    vrr[i] = vb;
+            }
             for (int i : o.stale)
                 vrr[static_cast<size_t>(i)] = vs;
             auto m = measure(sky, r, ve, 1000.0 + 2.0 * t, 2.0, vrr);
@@ -639,6 +688,7 @@ DvRun flyDv(const DvFlight& o)
         }
     }
     run.st = sh.stats();
+    run.held_last = run.st.dv_held_rr - held_at_last_s;
     sh.navState(run.nav);
     return run;
 }
@@ -653,6 +703,7 @@ TEST(DopplerChange, TheChecksDefaultIsOff)
     EXPECT_EQ(c.dv_noise_tau_s, 0.0);
     EXPECT_FALSE(c.dv_deweight);
     EXPECT_FALSE(c.dv_ground);
+    EXPECT_EQ(c.dv_latch_k, 0.0);
 }
 
 TEST(DopplerChange, ObserveLeavesTheFilterAsOff)
@@ -748,4 +799,62 @@ TEST(DopplerChange, MostOfAnEpochHeldHoldsAllOfIt)
     o.cfg.dv_hold_all_frac = 1.0;
     const DvRun some = flyDv(o);
     EXPECT_EQ(some.st.dv_all_held, 0u);
+}
+
+TEST(DopplerChange, TheLatchKeepsOutAReceiverThatRampedAwayAndStays)
+{
+    // every Doppler 3 m/s a second further down from just after burnout, held at 6 m/s: the window holds them
+    // while the ramp runs; once it stops, their change agrees with the IMU's again and without the latch they
+    // come back 6 m/s off. With it they stay out: their level never comes back to the filter's velocity.
+    DvFlight o;
+    o.coh_from = 4.7;
+    o.coh_rate = 3.0;
+    o.coh_max = 6.0;
+    o.cfg = dvCfg(RawGnssShadow::kDvAct);
+    o.cfg.dv_window_s = 1.0;
+    const DvRun win = flyDv(o);
+    o.cfg.dv_latch_k = 5.0;
+    const DvRun latch = flyDv(o);
+    EXPECT_GT(win.st.dv_epoch_fails, 0u);
+    EXPECT_EQ(win.held_last, 0u) << "the window lets the biased Dopplers back";
+    EXPECT_GT(win.v_err_end, 2.0);
+    EXPECT_GE(latch.st.dv_latches, 1u);
+    EXPECT_EQ(latch.st.dv_latch_releases, 0u);
+    EXPECT_GT(latch.held_last, 50u);
+    EXPECT_LT(latch.v_err_end, 1.0) << "window " << win.v_err_end << ", latch " << latch.v_err_end;
+}
+
+TEST(DopplerChange, TheLatchLetsGoWhenTheReceiverIsBackWithTheFilter)
+{
+    // the whole receiver at the pad's velocity through the boost, closing with tau 1 s: the latch holds from
+    // the boost's first epoch and lets go once the tail is within what the IMU can have carried the filter off
+    // by since; the last second is fused
+    DvFlight o;
+    o.stale = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+    o.cfg = dvCfg(RawGnssShadow::kDvAct);
+    o.cfg.dv_latch_k = 5.0;
+    const DvRun latch = flyDv(o);
+    EXPECT_GE(latch.st.dv_latches, 1u);
+    EXPECT_GE(latch.st.dv_latch_releases, 1u);
+    EXPECT_GT(latch.st.dv_latch_epochs, 30u);
+    EXPECT_EQ(latch.held_last, 0u);
+    EXPECT_LT(latch.v_err_end, 0.3);
+}
+
+TEST(DopplerChange, ObservedTheLatchIsCountedAndNothingHeld)
+{
+    DvFlight o;
+    o.coh_from = 4.7;
+    o.coh_rate = 3.0;
+    o.coh_max = 6.0;
+    o.cfg = dvCfg(RawGnssShadow::kDvOff);
+    const DvRun off = flyDv(o);
+    o.cfg = dvCfg(RawGnssShadow::kDvObserve);
+    o.cfg.dv_window_s = 1.0;
+    o.cfg.dv_latch_k = 5.0;
+    const DvRun obs = flyDv(o);
+    EXPECT_GE(obs.st.dv_latches, 1u);
+    EXPECT_EQ(obs.st.dv_held_rr, 0u);
+    EXPECT_EQ(0, std::memcmp(off.nav.vel_ned, obs.nav.vel_ned, sizeof(off.nav.vel_ned)));
+    EXPECT_EQ(0, std::memcmp(off.nav.quat, obs.nav.quat, sizeof(off.nav.quat)));
 }

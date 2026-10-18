@@ -920,6 +920,8 @@ int RawGnssEKF<T>::dopplerChange(const RawMeas* m, int n, double age_s, const Do
             out.prn[out.n] = mi.prn;
             out.y[out.n] = mi.rr - pred(v_now);
             out.s[out.n] = mi.sigma_rr;
+            for (int a = 0; a < 3; ++a)
+                out.u[out.n][a] = static_cast<float>(u_ned[a]);
             out.n++;
         }
         if (!imu.ok)

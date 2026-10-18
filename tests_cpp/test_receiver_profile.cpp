@@ -186,7 +186,7 @@ static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 32,
               "GnssSignalProfile changed: add the field to expectSameSignal, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 520,
               "GnssReceiverProfile changed: add the field to expectSameNumbers, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1472,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1480,
               "RawGnssShadow::Config changed: pin the field in TheShadowSafeguardDefaultsAreTheBeetles, then update "
               "this size");
 
@@ -648,6 +648,7 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_FALSE(c.dv_ground);
     EXPECT_EQ(c.dv_noise_tau_s, 0.0);
     EXPECT_EQ(c.dv_hold_all_frac, 0.5);
+    EXPECT_EQ(c.dv_latch_k, 0.0);
     // a receiver fused faster than 1 Hz, and a restored flight: all off
     EXPECT_EQ(c.pr_period_s, 0.0);
     EXPECT_EQ(c.rr_dyn_window_s, 0.0);

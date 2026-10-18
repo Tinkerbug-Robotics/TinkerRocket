@@ -279,7 +279,21 @@
 // With dv_window_s, each satellite's residual and the epoch's change are
 // also summed over that long (leaky) and judged so: a slow settling moves a
 // Doppler by a few cm/s an epoch, under one epoch's noise, but by tens of
-// cm/s a second. dv_deweight grows the failed Doppler's sigma by its excess
+// cm/s a second. The window's lever-arm allowance is capped at the arm times
+// the body's rate now and its largest in the window: the antenna's velocity
+// changes telescope like the Dopplers', so summed epoch by epoch a
+// weathercocking coast's turns would add up to a window that misses a slow
+// ramp. With dv_latch_k, a failed epoch holds every Doppler not for
+// dv_epoch_hold_s but until the epoch's Dopplers as they stand agree with the
+// filter's velocity -- the IMU's, the barometer's and the pseudoranges' while
+// they were held -- within dv_latch_k sigmas of the filter's velocity
+// covariance, the fit's and dv_floor_mps. No lever-arm allowance there: an
+// antenna off the IMU only keeps the latch on while the body turns, where the
+// allowance would let a bias of that size back in at a drogue's deployment. A
+// receiver whose velocity ramped away and stays there (a coherent bias the
+// window saw while it grew) then never comes back as a step the update would
+// take partly into the attitude, and one that settles back to the truth comes
+// back when it has. dv_deweight grows the failed Doppler's sigma by its excess
 // instead of holding it out. Observe counts and holds nothing. It acts in
 // flight only (dv_ground: on the pad too, where zero velocity holds the
 // velocity anyway); held-out Dopplers count as neither fused nor refused, so
@@ -467,6 +481,9 @@ public:
                                                  //   with this time constant (0: not measured)
         double   dv_hold_all_frac = 0.5;         // more than this share of an epoch's Dopplers held: all of them
                                                  //   (1: never)
+        double   dv_latch_k = 0.0;               // a failed epoch holds every Doppler until the epoch's Dopplers
+                                                 //   agree with the filter's velocity within this many sigmas
+                                                 //   (0: off, dv_epoch_hold_s instead)
         // A receiver fused faster than 1 Hz (below; the mosaic-G5's profile
         // sets them, ReceiverProfileApply.h). 0 or false: an epoch at a time,
         // as the Beetle's LC86G flies.
@@ -673,6 +690,10 @@ public:
         float    dv_noise_mps = 0.0f;      // the Dopplers' measured excess noise (dv_noise_tau_s), 1-sigma, now
         float    dv_noise_max_mps = 0.0f;  //   and its largest
         uint32_t dv_all_held = 0;          // epochs whose Dopplers were all held for the share held (dv_hold_all_frac)
+        uint32_t dv_latches = 0;           // dv_latch_k: latches begun (a failed epoch, none on)
+        uint32_t dv_latch_releases = 0;    //   and let go (the Dopplers back with the filter's velocity)
+        uint32_t dv_latch_epochs = 0;      //   epochs checked while one was on
+        float    dv_last_level_chi2 = 0.0f;//   the last level test's chi-square (3 dof; -1: no fit)
     };
 
     using Clock = int64_t (*)();
@@ -923,9 +944,12 @@ private:
     double        dv_S_[RawEpoch::kMaxObs] = {}, dv_V_[RawEpoch::kMaxObs] = {};
     double        dv_S2_[RawEpoch::kMaxObs] = {}, dv_V2_[RawEpoch::kMaxObs] = {};
     double        dv_SW_[3] = {}, dv_CW_[3][3] = {}, dv_SF_[3] = {}, dv_SB_ = 0.0, dv_SL_ = 0.0;
+    double        dv_wwin_ = 0.0;       //   the body's largest rate in the window (leaky), rad/s
     double        dv_noise_var_ = 0.0;  // dv_noise_tau_s: the Dopplers' excess variance, (m/s)^2
     double        dv_noise_te_ = 0.0;   //   the epoch it was last updated at
+    bool          dv_latch_ = false;    // dv_latch_k: a failed epoch's latch, on
     void          dvReset();
+    double        dvLevelChi2(double row_var);
     bool          launch_seen_ = false; // a launch edge since the start (a restored flight has none)
     void          setFlightGate(bool full);
     void          setGroundGate();

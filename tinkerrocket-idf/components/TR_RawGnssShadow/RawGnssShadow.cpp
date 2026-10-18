@@ -1136,8 +1136,54 @@ void RawGnssShadow::dvReset()
             dv_CW_[i][j] = 0.0;
     }
     dv_SB_ = dv_SL_ = 0.0;
+    dv_wwin_ = 0.0;
     dv_noise_var_ = 0.0;
     dv_noise_te_ = 0.0;
+    dv_latch_ = false;
+}
+
+// dv_latch_k's level test (DopplerChange.h levelChi2): this epoch's Dopplers
+// as they stand (dv_next_: each less its prediction at the filter's velocity,
+// the clock's drift in it), the satellites on hold kept out, fitted for one
+// velocity offset and one clock rate -- the offset's chi-square against the
+// fit's covariance, the filter's velocity covariance and the floor; -1 with
+// no fit. Each row's 1-sigma is its own and row_var in quadrature. The rows
+// go in dv_rows_: the change check is done with them by then.
+double RawGnssShadow::dvLevelChi2(double row_var)
+{
+    const double te = job_.te;
+    int n = 0;
+    for (int i = 0; i < dv_next_.n && n < RawEpoch::kMaxObs; ++i)
+    {
+        dvc::Row& r = dv_rows_[n++];
+        for (int a = 0; a < 3; ++a)
+            r.u[a] = static_cast<double>(dv_next_.u[i][a]);
+        r.z = dv_next_.y[i];
+        const double s = static_cast<double>(dv_next_.s[i]);
+        r.s = std::sqrt(s * s + row_var);
+        r.im = r.iref = r.iout = -1;
+        r.e = 0.0;
+        bool held = false;
+        for (int h = 0; h < n_dv_hold_ && !held; ++h)
+            held = dv_hold_[h].sys == dv_next_.sys[i] && dv_hold_[h].prn == dv_next_.prn[i] && dv_hold_[h].until >= te;
+        r.in = !held;
+    }
+    if (n < 5)
+        return -1.0;
+    const dvc::Fit f = dvc::fit(dv_rows_, n, cfg_.dv_sat_k, 6, true);
+    if (!f.ok)
+        return -1.0;
+    double off[3], Cw[3][3], Pv[3][3];
+    for (int i = 0; i < 3; ++i)
+    {
+        off[i] = f.x[i];
+        for (int j = 0; j < 3; ++j)
+        {
+            Cw[i][j] = f.C[i][j];
+            Pv[i][j] = static_cast<double>(ekf_.P(RawGnssEKF<float>::kVel + i, RawGnssEKF<float>::kVel + j));
+        }
+    }
+    return dvc::levelChi2(off, Cw, Pv, cfg_.dv_floor_mps * cfg_.dv_floor_mps);
 }
 
 // The Doppler change check (RawGnssShadow.h, DopplerChange.h), the epoch's
@@ -1320,9 +1366,17 @@ void RawGnssShadow::jobDvCheck(double age)
             }
             dv_SB_ = lam * dv_SB_ + a.bias_mps;
             dv_SL_ = lam * dv_SL_ + a.lever_mps;
+            // an antenna off the IMU: its velocity's changes telescope like the Dopplers' -- the sum is its
+            // lever velocity now less a weighted mean of the earlier ones, at most the arm times the rate now
+            // and the largest in the window -- so the summed allowance is capped there (summed alone, a
+            // weathercocking coast's turns add up to a window that misses a slow ramp)
+            dv_wwin_ = std::fmax(lam * dv_wwin_, wp);
+            const double wn = std::sqrt(static_cast<double>(dv_w_now_[0]) * dv_w_now_[0]
+                                        + static_cast<double>(dv_w_now_[1]) * dv_w_now_[1]
+                                        + static_cast<double>(dv_w_now_[2]) * dv_w_now_[2]);
             dvc::Allow aw = a;
             aw.bias_mps = dv_SB_;
-            aw.lever_mps = dv_SL_;
+            aw.lever_mps = std::fmin(dv_SL_, cfg_.dv_lever_allow_m * (wn + dv_wwin_));
             const double chi2w = dvc::epochChi2(dv_SW_, Cs, dv_SF_, aw);
             st_.dv_last_chi2_win = static_cast<float>(chi2w);
             if (!epoch_fail && chi2w > ke2)
@@ -1349,6 +1403,7 @@ void RawGnssShadow::jobDvCheck(double age)
                 dv_CW_[i][j] = 0.0;
         }
         dv_SB_ = dv_SL_ = 0.0;
+        dv_wwin_ = 0.0;
     }
     // this epoch is the next one's start
     dv_ref_ = dv_next_;
@@ -1366,10 +1421,38 @@ void RawGnssShadow::jobDvCheck(double age)
         if (dv_hold_[h].until >= te)
             dv_hold_[nh++] = dv_hold_[h];
     n_dv_hold_ = nh;
+    // dv_latch_k: a failed epoch latches, and the latch holds every Doppler until the epoch's Dopplers as they
+    // stand agree with the filter's velocity, which the IMU, the barometer and the pseudoranges carried
+    // meanwhile (in flight, or on the ground with dv_ground)
+    if (cfg_.dv_latch_k > 0.0)
+    {
+        if (!(job_.in_flight || cfg_.dv_ground))
+        {
+            dv_latch_ = false;
+        }
+        else if (epoch_fail && !dv_latch_)
+        {
+            dv_latch_ = true;
+            st_.dv_latches++;
+        }
+        else if (dv_latch_ && !epoch_fail)
+        {
+            // each Doppler's noise as the change's model gives it (one Doppler's, not two)
+            const double c2 = dvLevelChi2(cfg_.dv_floor_mps * cfg_.dv_floor_mps + dyn * dyn + nvar);
+            st_.dv_last_level_chi2 = static_cast<float>(c2);
+            if (c2 >= 0.0 && c2 <= cfg_.dv_latch_k * cfg_.dv_latch_k)
+            {
+                dv_latch_ = false;
+                st_.dv_latch_releases++;
+            }
+        }
+        if (dv_latch_)
+            st_.dv_latch_epochs++;
+    }
     if (cfg_.dv_check != kDvAct || !(job_.in_flight || cfg_.dv_ground))
         return;
     // acting: held out (or de-weighted) for the rest of the epoch; the measured noise on every Doppler
-    bool all = te <= dv_epoch_until_;
+    bool all = cfg_.dv_latch_k > 0.0 ? dv_latch_ : te <= dv_epoch_until_;
     if (!all && cfg_.dv_hold_all_frac < 1.0)
     {
         int nrr = 0, nheld = 0;

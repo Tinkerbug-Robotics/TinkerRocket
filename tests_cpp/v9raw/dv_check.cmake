@@ -6,7 +6,8 @@
 # lever-arm allowances), the EKF's rows (RawGnssEKF::dopplerChange: the
 # filter's own velocity drops out), and the shadow acting on them (observe is
 # the filter bit for bit; a stale satellite and a stale receiver's tail held
-# out; the window's sum sees a drift no epoch does).
+# out; the window's sum sees a drift no epoch does; the latch keeps out a
+# receiver that ramped away and stays, and lets one back that settled).
 add_executable(test_doppler_change test_doppler_change.cpp
     ${LIB_DIR}/TR_RawGnssShadow/RawGnssShadow.cpp
     ${LIB_DIR}/TR_RawGnssShadow/RawGnssMeasStage.cpp

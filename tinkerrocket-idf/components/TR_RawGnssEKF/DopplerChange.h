@@ -263,6 +263,27 @@ inline double epochChi2(const double w[3], const double Cw[3][3], const double s
     return chi2Sym3(w, S);
 }
 
+// The latch's release (RawGnssShadow's dv_latch_k): the epoch's Dopplers as
+// they stand, each less its prediction at the filter's velocity, fitted for
+// one velocity offset dv (fit) -- how far the receiver's velocity is from the
+// filter's -- against the fit's covariance Cw, the filter's own velocity
+// covariance Pv (what the IMU, the barometer and the pseudoranges leave it
+// unsure of while the Dopplers are held) and an isotropic floor:
+// dv' (Cw + Pv + floor_var I)^-1 dv, 3 dof; -1 if singular. No lever-arm
+// allowance: an antenna off the IMU shows here only while the body turns,
+// and that allowance at a drogue's deployment (1.5 m/s at 5 rad/s and 0.3 m)
+// would let a receiver still biased by more than that back in; a turn only
+// keeps the latch on longer. Nor the epoch test's attitude allowance on the
+// specific force since: a deployment's shock across it swamps the bias too.
+inline double levelChi2(const double dv[3], const double Cw[3][3], const double Pv[3][3], double floor_var)
+{
+    double S[3][3];
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+            S[i][j] = Cw[i][j] + Pv[i][j] + (i == j ? floor_var : 0.0);
+    return chi2Sym3(dv, S);
+}
+
 // w's part along the specific force's change (m/s; 0 with none): a loop that
 // lags reports less of the change, so this reads negative
 inline double alongSf(const double w[3], const double sf[3])

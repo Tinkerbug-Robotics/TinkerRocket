@@ -296,6 +296,8 @@ struct DopplerRef
     uint8_t prn[RawEpoch::kMaxObs] = {};
     double  y[RawEpoch::kMaxObs] = {};       // each Doppler less its prediction at v_ned (the clock's drift in it)
     float   s[RawEpoch::kMaxObs] = {};       // its 1-sigma, m/s
+    float   u[RawEpoch::kMaxObs][3] = {};    // its line of sight, NED, receiver to satellite (the latch's level
+                                             //   fit, RawGnssShadow's dv_latch_k)
 };
 
 // What the IMU did over a Doppler change's interval (RawGnssEKF::dopplerChange)
