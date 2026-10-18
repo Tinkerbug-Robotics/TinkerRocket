@@ -25,7 +25,8 @@ endif()
 # before the mosaic-G5's decoders, the stage's addEphemeris and the unaided switch (fc/v9-raw-primary), RAW_REPLAY_ROT=OFF
 # before the turning body's allowances (exp/v9-robust), RAW_REPLAY_DVHDG=OFF before the change check's heading
 # allowance for a launch with no magnetometer heading (fc/v9raw-dopp after 357e7021), RAW_REPLAY_ANTENNA=OFF before
-# the antenna's offset where it is known (fc/v9-antenna-offset). DYNMEM and
+# the antenna's offset where it is known (fc/v9-antenna-offset), RAW_REPLAY_DOPAVG=OFF before the Dopplers in pairs
+# (exp/v9-dop-avg). DYNMEM and
 # FITGATE are experiments the firmware does not carry: build them against a copy with experiments/*.patch applied
 # (README.md).
 set(SRC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." CACHE PATH "the tree whose firmware sources are compiled")
@@ -40,6 +41,7 @@ option(RAW_REPLAY_HDGOBS "the firmware tree has the heading gain by its observab
 option(RAW_REPLAY_ROT "the firmware tree has the turning body's allowances (rot_lever_*, att_hold_*: exp/v9-robust)" ON)
 option(RAW_REPLAY_DVHDG "the firmware tree has the change check's heading allowance for a launch with no magnetometer heading (dv_hdg_unset_deg)" ON)
 option(RAW_REPLAY_ANTENNA "the firmware tree has the antenna's offset where it is known (lever_on, applyAntennaOffset: fc/v9-antenna-offset)" ON)
+option(RAW_REPLAY_DOPAVG "the firmware tree has the Dopplers in pairs (rr_pair_avg, averageDopplerPairs: exp/v9-dop-avg)" ON)
 if(RAW_REPLAY_OLD AND RAW_REPLAY_MOSAIC)
     message(STATUS "raw_replay: RAW_REPLAY_OLD turns RAW_REPLAY_MOSAIC off")
     set(RAW_REPLAY_MOSAIC OFF)
@@ -59,6 +61,9 @@ if(RAW_REPLAY_OLD AND RAW_REPLAY_ROT)
 endif()
 if(NOT RAW_REPLAY_ROT AND RAW_REPLAY_ANTENNA)
     set(RAW_REPLAY_ANTENNA OFF)
+endif()
+if(NOT RAW_REPLAY_MOSAIC AND RAW_REPLAY_DOPAVG)
+    set(RAW_REPLAY_DOPAVG OFF)
 endif()
 # the mosaic-only image's flight safeguards in one call (gnss_raw::applyMosaicFlightSafeguards, ReceiverProfileApply.h):
 # a tree with all three of the features it sets
@@ -146,6 +151,7 @@ function(raw_replay_target name)
         RAW_REPLAY_ROT=$<BOOL:${RAW_REPLAY_ROT}>
         RAW_REPLAY_DVHDG=$<BOOL:${RAW_REPLAY_DVHDG}>
         RAW_REPLAY_ANTENNA=$<BOOL:${RAW_REPLAY_ANTENNA}>
+        RAW_REPLAY_DOPAVG=$<BOOL:${RAW_REPLAY_DOPAVG}>
         RAW_REPLAY_MOSAIC_SAFEGUARDS=$<BOOL:${RAW_REPLAY_MOSAIC_SAFEGUARDS}>)
 endfunction()
 

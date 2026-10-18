@@ -46,7 +46,14 @@
 // check over a run. Which PVT may carry the bias how long, and when the 1PPS
 // says the tag can be trusted: MosaicTimeTag.h.
 //
-// Header-only and pure (tests_cpp/test_mosaic_raw_epoch.cpp).
+// The Dopplers in pairs (off unless the profile's rr_pair_avg is set): the
+// epoch between two on the fused grid read for its Dopplers alone
+// (noteMeasEpochDopplers), and each grid epoch's Doppler averaged with it
+// where the two are one lock's, consecutive and close (averageDopplerPairs;
+// the rule is with them, below).
+//
+// Header-only and pure (tests_cpp/test_mosaic_raw_epoch.cpp,
+// test_mosaic_doppler_pair.cpp).
 #ifndef MOSAIC_RAW_EPOCH_H
 #define MOSAIC_RAW_EPOCH_H
 
@@ -320,6 +327,33 @@ inline bool noteMeasEpochClock(const uint8_t* b, size_t len, MosaicJumpState& js
     return true;
 }
 
+// Whether a signal is one the filter takes: GPS L1 C/A, Galileo E1 or
+// BeiDou B1I from the main antenna (TAKE, with its gnss_sys_t and PRN), a
+// BeiDou GEO's B1I (GEO: left out and counted), or anything else (SKIP).
+// rawEpochFromMeasEpoch's pick, and noteMeasEpochDopplers' (below), so the
+// two see the same cells.
+enum class MosaicPick : uint8_t { TAKE, GEO, SKIP };
+
+inline MosaicPick mosaicL1Pick(const SbfMeasSignal& s, uint8_t& gsys, uint8_t& prn)
+{
+    if (s.antenna != 0)
+        return MosaicPick::SKIP;
+    const SbfSys sys = sbfSvid(s.svid, prn);
+    if (sys == SbfSys::GPS && s.sig == SBF_SIG_GPS_L1CA)
+        gsys = GNSS_SYS_GPS;
+    else if (sys == SbfSys::GAL && s.sig == SBF_SIG_GAL_E1)
+        gsys = GNSS_SYS_GAL;
+    else if (sys == SbfSys::BDS && s.sig == SBF_SIG_BDS_B1I)
+    {
+        if (prn <= 5 || prn >= 59)
+            return MosaicPick::GEO;
+        gsys = GNSS_SYS_BDS;
+    }
+    else
+        return MosaicPick::SKIP;
+    return MosaicPick::TAKE;
+}
+
 // One MeasEpoch block (CRC checked) into out: GPS L1 C/A, Galileo E1 and
 // BeiDou B1I, one cell per satellite, in block order. False, with out.n = 0,
 // for a block the reader refuses (wrong, short, bad layout, scrambled, no
@@ -345,25 +379,14 @@ inline bool rawEpochFromMeasEpoch(const uint8_t* b, size_t len, gnss_raw::RawEpo
     SbfMeasSignal s;
     while (rd.next(s))
     {
-        if (s.antenna != 0)
-            continue;
-        uint8_t prn;
-        const SbfSys sys = sbfSvid(s.svid, prn);
-        uint8_t gsys;
-        if (sys == SbfSys::GPS && s.sig == SBF_SIG_GPS_L1CA)
-            gsys = GNSS_SYS_GPS;
-        else if (sys == SbfSys::GAL && s.sig == SBF_SIG_GAL_E1)
-            gsys = GNSS_SYS_GAL;
-        else if (sys == SbfSys::BDS && s.sig == SBF_SIG_BDS_B1I)
+        uint8_t gsys = 0, prn = 0;
+        const MosaicPick pick = mosaicL1Pick(s, gsys, prn);
+        if (pick == MosaicPick::GEO)
         {
-            if (prn <= 5 || prn >= 59)
-            {
-                info.geo++;
-                continue;
-            }
-            gsys = GNSS_SYS_BDS;
+            info.geo++;
+            continue;
         }
-        else
+        if (pick != MosaicPick::TAKE)
             continue;
 
         const bool cn0_ok = s.cn0Valid();
@@ -420,6 +443,256 @@ inline bool rawEpochFromMeasEpoch(const uint8_t* b, size_t len, gnss_raw::RawEpo
 inline bool onFuseGrid(uint32_t tow_ms, uint32_t period_ms)
 {
     return tow_ms != kTowDnu && (period_ms == 0 || tow_ms % period_ms == 0);
+}
+
+// ── The epochs between the grid's: their Dopplers in pairs ─────────────
+//
+// The mosaic measures every 50 ms and the filter fuses every 100 ms, so every
+// second MeasEpoch carries Dopplers the filter never sees. Averaged with the
+// next grid epoch's own, each pair halves the white part of that Doppler's
+// variance (where consecutive Dopplers are uncorrelated) while the filter
+// still fuses one row a satellite at 10 Hz, at no CPU cost to it. The mean of
+// two range rates 50 ms apart is the range rate at their middle, 25 ms before
+// the grid epoch: exactly so while the line-of-sight acceleration holds, off
+// by the jerk times (50 ms)^2 / 8 where it changes (a thrust step at the
+// middle of the pair, its size times 12.5 ms). The receiver's clock drift is
+// in both and averages the same way; the filter's drift state takes it. The
+// filter predicts the pair at that instant (the profile's rr_pair_avg adds
+// half the receiver's period to rr_lag_s). A Doppler left alone keeps the
+// grid epoch's own value, whose instant is the epoch's: the filter then takes
+// it 25 ms early, nothing standing still and the line-of-sight acceleration
+// times 25 ms in flight.
+//
+// A grid epoch's Doppler (valid, its C/N0 at or above its system's floor:
+// one the builder would use) is averaged with the epoch before's when:
+//   - that epoch is exactly dt_ms (the receiver's 50 ms) before it on the
+//     receiver's clock, and was read whole (a lost or refused one: none);
+//   - no clock jump or start-over came at the grid epoch, that is between
+//     the two. The Doppler does not move at a jump (only the code and the
+//     carrier step c * 1 ms), but the jump's epoch is a millisecond off its
+//     grid and every lock counts from it: one pair an hour is not worth an
+//     exception;
+//   - the satellite is in both, its Doppler valid in both and its C/N0 at or
+//     above the floor in both;
+//   - its carrier lock is the same one: the lock time (1 s steps, held to
+//     254 s and to the time since a clock jump, as the cells carry it) is no
+//     less at the grid epoch than at the one before. A relock between them
+//     drops it to 0 s; one within a satellite's first second of lock (0 s at
+//     both) is not seen, and neither is a signal with no lock time at both
+//     ends (no carrier: 0 at both);
+//   - the two are within max_diff_mps of each other. 15 m/s in 50 ms is
+//     300 m/s^2, about 30 g along the line of sight: three times the Grid B
+//     boosts' largest 50 ms change (5.3 m/s at the G80T's 10 g), with room for
+//     a hotter motor and the TCXO's 1 ppb/g step at ignition. Two values
+//     further apart are a slip or a false lock, which averaging would spread
+//     over the pair, so the grid epoch's own is kept.
+// The pair's mean takes the grid epoch's place; the cell's C/N0, lock and
+// sigma stay its own.
+
+// One off-grid epoch's Dopplers, as rawEpochFromMeasEpoch would have built
+// its cells: the satellite, whether it had a code and a Doppler, its C/N0,
+// lock time (held as the cells' are) and range rate.
+struct MosaicDopplerCell
+{
+    uint8_t  sys = 0;
+    uint8_t  prn = 0;
+    bool     has_pr = false;
+    bool     has_rate = false;
+    float    cn0_dbhz = 0.0f;
+    uint32_t lock_ms = 0;
+    double   rate_mps = 0.0;
+};
+
+struct MosaicDopplerSet
+{
+    bool     valid = false;   // read whole; cleared once a grid epoch has looked at it
+    int64_t  rx_ms = 0;       // its receiver time, ms (WNc * 604800000 + TOW)
+    int      n = 0;
+    MosaicDopplerCell c[gnss_raw::RawEpoch::kMaxObs];
+};
+
+struct MosaicDopplerPairConfig
+{
+    uint32_t dt_ms = 50;                       // the receiver's epochs this far apart
+    float    cn0_min[GNSS_SYS_COUNT] = {};     // dB-Hz by gnss_sys_t: the profile's cn0_min_rr, at both ends
+    double   max_diff_mps = 15.0;              // the pair at most this far apart
+};
+
+// Counts since the pairing started (the driver's RawStats, the harness's
+// summary): grid epochs, then their usable Dopplers, paired or left alone by
+// the first rule each one failed.
+struct MosaicDopplerPairStats
+{
+    uint32_t epochs = 0;          // grid epochs with a usable Doppler
+    uint32_t epochs_no_prev = 0;  //   with no epoch dt_ms before them read whole (lost, refused, a gap)
+    uint32_t epochs_jump = 0;     //   with a clock jump or start-over between: none paired
+    uint32_t dopplers = 0;        // usable Dopplers in those epochs
+    uint32_t pairs = 0;           //   averaged
+    uint32_t alone_epoch = 0;     //   left alone with their epoch (the two above)
+    uint32_t alone_mate = 0;      //   the satellite or its Doppler not in the epoch before
+    uint32_t alone_cn0 = 0;       //   its C/N0 under the floor in the epoch before
+    uint32_t alone_lock = 0;      //   its lock time went down between them: a relock
+    uint32_t alone_diff = 0;      //   the two more than max_diff_mps apart
+    float    diff_max_mps = 0.0f; // the largest |difference| averaged
+};
+
+// An off-grid MeasEpoch: noteMeasEpochClock's work on the clock-jump count,
+// and its Dopplers into set (the cells rawEpochFromMeasEpoch would build:
+// the same picks, one per satellite, a second copy only replacing a first
+// that had no code). Only what a pair needs is read: no code, carrier or
+// unit beyond the range rate. False, set not valid, if the reader refuses
+// the block. arrival_us as noteClockJumps takes it.
+inline bool noteMeasEpochDopplers(const uint8_t* b, size_t len, MosaicJumpState& js, MosaicEpochInfo& info,
+                                  MosaicDopplerSet& set, int64_t arrival_us = kMosaicNoArrival)
+{
+    set.valid = false;
+    set.n = 0;
+    info = MosaicEpochInfo{};
+    SbfMeasReader rd;
+    info.status = rd.begin(b, len);
+    const SbfMeasHeader& h = rd.header();
+    info.tow_ms = h.tow_ms;
+    info.wnc = h.wnc;
+    info.common_flags = h.common_flags;
+    if (info.status != SbfStatus::OK)
+        return false;
+    noteClockJumps(h, js, info, arrival_us);
+    info.lock_cap_ms = lockCapMs(h, js);
+    set.rx_ms = static_cast<int64_t>(h.wnc) * 604800000LL + h.tow_ms;
+
+    SbfMeasSignal s;
+    while (rd.next(s))
+    {
+        uint8_t gsys = 0, prn = 0;
+        if (mosaicL1Pick(s, gsys, prn) != MosaicPick::TAKE)
+            continue;
+        const bool cn0_ok = s.cn0Valid();
+        const bool has_pr = cn0_ok && s.pr_valid;
+        int at = set.n;
+        for (int i = 0; i < set.n; ++i)
+            if (set.c[i].sys == gsys && set.c[i].prn == prn)
+            {
+                at = i;
+                break;
+            }
+        if (at < set.n)
+        {
+            if (set.c[at].has_pr || !has_pr)
+                continue;
+        }
+        else if (set.n >= gnss_raw::RawEpoch::kMaxObs)
+        {
+            continue;
+        }
+        else
+        {
+            set.n++;
+        }
+        MosaicDopplerCell& c = set.c[at];
+        c.sys = gsys;
+        c.prn = prn;
+        c.has_pr = has_pr;
+        c.cn0_dbhz = cn0_ok ? static_cast<float>(s.cn0Dbhz()) : 0.0f;
+        c.has_rate = cn0_ok && s.dop_valid;
+        c.rate_mps = c.has_rate ? -(kMosaicC / sbfCarrierHz(s.sig)) * s.doppler_hz : 0.0;
+        const uint32_t lock_ms = static_cast<uint32_t>(s.lock_s) * 1000U;
+        c.lock_ms = s.lockValid() ? (lock_ms < info.lock_cap_ms ? lock_ms : info.lock_cap_ms) : 0U;
+    }
+    set.valid = true;
+    return true;
+}
+
+// The same set from cells already built (a sim's epochs, which come as cells).
+inline void dopplerSetFromRawEpoch(const gnss_raw::RawEpoch& e, int64_t rx_ms, MosaicDopplerSet& set)
+{
+    set.rx_ms = rx_ms;
+    set.n = 0;
+    for (int i = 0; i < e.n && set.n < gnss_raw::RawEpoch::kMaxObs; ++i)
+    {
+        const gnss_raw::RawObs& o = e.obs[i];
+        MosaicDopplerCell& c = set.c[set.n++];
+        c.sys = o.sys;
+        c.prn = o.prn;
+        c.has_pr = o.has_pr;
+        c.has_rate = o.has_rate;
+        c.cn0_dbhz = o.cn0_dbhz;
+        c.lock_ms = o.lock_ms;
+        c.rate_mps = o.rate_mps;
+    }
+    set.valid = true;
+}
+
+// A grid epoch's Dopplers (e, its receiver time rx_ms; clock_cut: a clock
+// jump or start-over at it) averaged with prev's by the rule above. Returns
+// how many were; paired, if given, has bit i set for each cell i averaged.
+// prev is only read: the caller clears it once a grid epoch has looked.
+inline int averageDopplerPairs(gnss_raw::RawEpoch& e, int64_t rx_ms, bool clock_cut, const MosaicDopplerSet& prev,
+                               const MosaicDopplerPairConfig& c, MosaicDopplerPairStats& st,
+                               uint64_t* paired = nullptr)
+{
+    static_assert(gnss_raw::RawEpoch::kMaxObs <= 64, "the paired mask is 64 bits");
+    if (paired != nullptr)
+        *paired = 0;
+    auto floor_of = [&](uint8_t sys) { return sys < GNSS_SYS_COUNT ? c.cn0_min[sys] : 0.0f; };
+    int usable = 0;
+    for (int i = 0; i < e.n; ++i)
+        if (e.obs[i].has_rate && !(e.obs[i].cn0_dbhz < floor_of(e.obs[i].sys)))
+            usable++;
+    if (usable == 0)
+        return 0;
+    st.epochs++;
+    st.dopplers += static_cast<uint32_t>(usable);
+    const bool have_prev = prev.valid && prev.rx_ms == rx_ms - static_cast<int64_t>(c.dt_ms);
+    if (!have_prev || clock_cut)
+    {
+        if (!have_prev)
+            st.epochs_no_prev++;
+        else
+            st.epochs_jump++;
+        st.alone_epoch += static_cast<uint32_t>(usable);
+        return 0;
+    }
+    int n = 0;
+    for (int i = 0; i < e.n; ++i)
+    {
+        gnss_raw::RawObs& o = e.obs[i];
+        const float fl = floor_of(o.sys);
+        if (!o.has_rate || o.cn0_dbhz < fl)
+            continue;
+        const MosaicDopplerCell* m = nullptr;
+        for (int j = 0; j < prev.n && m == nullptr; ++j)
+            if (prev.c[j].sys == o.sys && prev.c[j].prn == o.prn)
+                m = &prev.c[j];
+        if (m == nullptr || !m->has_rate)
+        {
+            st.alone_mate++;
+            continue;
+        }
+        if (m->cn0_dbhz < fl)
+        {
+            st.alone_cn0++;
+            continue;
+        }
+        if (o.lock_ms < m->lock_ms)
+        {
+            st.alone_lock++;
+            continue;
+        }
+        const double d = std::fabs(o.rate_mps - m->rate_mps);
+        if (!(d <= c.max_diff_mps))
+        {
+            st.alone_diff++;
+            continue;
+        }
+        o.rate_mps = 0.5 * (o.rate_mps + m->rate_mps);
+        if (static_cast<float>(d) > st.diff_max_mps)
+            st.diff_max_mps = static_cast<float>(d);
+        if (paired != nullptr)
+            *paired |= uint64_t{1} << i;
+        n++;
+    }
+    st.pairs += static_cast<uint32_t>(n);
+    return n;
 }
 
 // An epoch's GPS time, continuous seconds (week * 604800 + time of week),

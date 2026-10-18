@@ -98,6 +98,10 @@ public:
     // real sky before its cold start. Read from the GNSS task.
     uint16_t replaySkyGpsDay() const { return replay_sky_day_.load(std::memory_order_acquire); }
     void setGNSSRawEpochPeriodMs(uint32_t period_ms) { real_.setGNSSRawEpochPeriodMs(period_ms); }
+    bool setGNSSRawDopplerPairing(const mosaic::MosaicDopplerPairConfig& c)
+    {
+        return real_.setGNSSRawDopplerPairing(c);
+    }
 #endif
 
     // Debug passthrough

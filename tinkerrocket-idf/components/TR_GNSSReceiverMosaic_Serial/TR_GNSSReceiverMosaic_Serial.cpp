@@ -898,6 +898,31 @@ void TR_GNSSReceiverMosaicSerial::setRawEpochPeriodMs(uint32_t period_ms)
     raw_->st.period_ms = period_ms;
 }
 
+bool TR_GNSSReceiverMosaicSerial::setRawDopplerPairing(const mosaic::MosaicDopplerPairConfig& c)
+{
+    if (raw_ == nullptr) return false;
+    if (raw_->pairing.load(std::memory_order_acquire) != nullptr) return true;
+    // Internal RAM, as the rest of the raw state: the poll task reads it at
+    // 20 Hz. Filled before it is published, so the poll task never sees it half made
+    void* mem = heap_caps_malloc(sizeof(RawState::Pairing), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (mem == nullptr)
+    {
+        ESP_LOGE(TAG, "mosaic raw: no memory for the Doppler pairs (%u B): every epoch's own Dopplers",
+                 static_cast<unsigned>(sizeof(RawState::Pairing)));
+        return false;
+    }
+    RawState::Pairing* p = new (mem) RawState::Pairing();
+    p->cfg = c;
+    raw_->st.pair_on = true;
+    raw_->pairing.store(p, std::memory_order_release);
+    ESP_LOGI(TAG, "mosaic raw: Dopplers in pairs -- each grid epoch's with the epoch %lu ms before it, at most "
+                  "%.1f m/s apart, C/N0 floors %.1f/%.1f/%.1f dB-Hz (GPS/GAL/BDS), %u B of state",
+             static_cast<unsigned long>(c.dt_ms), c.max_diff_mps, static_cast<double>(c.cn0_min[GNSS_SYS_GPS]),
+             static_cast<double>(c.cn0_min[GNSS_SYS_GAL]), static_cast<double>(c.cn0_min[GNSS_SYS_BDS]),
+             static_cast<unsigned>(sizeof(RawState::Pairing)));
+    return true;
+}
+
 bool TR_GNSSReceiverMosaicSerial::takeRawEpoch(gnss_raw::TimedRawEpoch& out)
 {
     if (raw_ == nullptr) return false;
@@ -947,11 +972,25 @@ void TR_GNSSReceiverMosaicSerial::rawMeasEpoch(const uint8_t* block, size_t len,
 {
     RawState& r = *raw_;
     mosaic::MosaicEpochInfo info;
+    RawState::Pairing* const pairing = r.pairing.load(std::memory_order_acquire);
     if (!mosaic::onFuseGrid(tow_ms, r.period_ms.load(std::memory_order_relaxed)))
     {
         // Off the grid: its header's clock jumps only, so the bias carried to
-        // the next epoch on it misses none (MosaicRawEpoch.h)
-        (void)mosaic::noteMeasEpochClock(block, len, r.jump, info, end_us);
+        // the next epoch on it misses none (MosaicRawEpoch.h); with the
+        // Dopplers in pairs, its Dopplers too, for the next grid epoch
+        if (pairing == nullptr)
+        {
+            (void)mosaic::noteMeasEpochClock(block, len, r.jump, info, end_us);
+        }
+        else
+        {
+            const int64_t t0 = nowUs();
+            (void)mosaic::noteMeasEpochDopplers(block, len, r.jump, info, pairing->prev, end_us);
+            const uint32_t us = static_cast<uint32_t>(nowUs() - t0);
+            r.st.pair_reads++;
+            r.st.pair_read_us_sum += us;
+            if (us > r.st.pair_read_us_max) r.st.pair_read_us_max = us;
+        }
         r.st.decimated++;
         r.st.clock_jumps = r.jump.jumps;
         r.st.clock_restarts = r.jump.rebases;
@@ -961,11 +1000,31 @@ void TR_GNSSReceiverMosaicSerial::rawMeasEpoch(const uint8_t* block, size_t len,
     }
     gnss_raw::TimedRawEpoch& e = r.scratch;
     // the arrival places a jump the count shows only mod 256 (MosaicJumpState)
+    const int64_t t_adapt = pairing != nullptr ? nowUs() : 0;
     const bool cells = mosaic::rawEpochFromMeasEpoch(block, len, e.epoch, r.jump, info, end_us);
     r.st.clock_jumps = r.jump.jumps;
     r.st.clock_restarts = r.jump.rebases;
     r.st.clock_resets = r.jump.resets;
     r.st.clock_resolved = r.jump.resolved;
+    if (pairing != nullptr)
+    {
+        const int64_t t_avg = nowUs();
+        const uint32_t us = static_cast<uint32_t>(t_avg - t_adapt);
+        r.st.pair_adapts++;
+        r.st.pair_adapt_us_sum += us;
+        if (us > r.st.pair_adapt_us_max) r.st.pair_adapt_us_max = us;
+        // each Doppler with the epoch before's, where the two are a pair
+        // (MosaicRawEpoch.h): the epoch is handed over with the means
+        if (cells && info.status == mosaic::SbfStatus::OK)
+        {
+            const int64_t rx = static_cast<int64_t>(info.wnc) * 604800000LL + info.tow_ms;
+            (void)mosaic::averageDopplerPairs(e.epoch, rx, info.jumped || info.rebased, pairing->prev,
+                                              pairing->cfg, r.st.pair);
+            const uint32_t avg_us = static_cast<uint32_t>(nowUs() - t_avg);
+            if (avg_us > r.st.pair_avg_us_max) r.st.pair_avg_us_max = avg_us;
+        }
+        pairing->prev.valid = false;   // one grid epoch's mate only
+    }
     if (info.status != mosaic::SbfStatus::OK)
     {
         r.st.empty++;   // refused: no time to place

@@ -1606,6 +1606,16 @@ bool SensorCollector::getGNSSRawStats(TR_GNSSReceiverMosaicSerial::RawStats& out
     gnss_receiver.rawStats(out);
     return out.enabled;
 }
+
+bool SensorCollector::setGNSSRawDopplerPairing(const mosaic::MosaicDopplerPairConfig& c)
+{
+    return gnss_receiver.setRawDopplerPairing(c);
+}
+
+uint32_t SensorCollector::gnssPollStackFree() const
+{
+    return pollGNSSTaskHandle != nullptr ? static_cast<uint32_t>(uxTaskGetStackHighWaterMark(pollGNSSTaskHandle)) : 0U;
+}
 #endif
 
 bool SensorCollector::getGNSSFix(gnss_raw::TimedFix& out)

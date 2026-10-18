@@ -7,7 +7,10 @@
 // so a replay runs the flight code from the bytes the OC logged (0x95):
 //   - MeasEpoch: every one's CumClkJumps followed (MosaicJumpState); those on
 //     the fused grid (onFuseGrid at the profile's fuse_epoch_period_s) made a
-//     RawEpoch (rawEpochFromMeasEpoch), an empty one not handed over. Its GPS
+//     RawEpoch (rawEpochFromMeasEpoch), an empty one not handed over. With the
+//     Dopplers in pairs (Config::pair, the profile's rr_pair_avg), each one off
+//     the grid read for its Dopplers (noteMeasEpochDopplers) and each grid
+//     epoch's averaged with them (averageDopplerPairs), as the driver does. Its GPS
 //     time is its receiver time less the receiver's clock bias: the last
 //     PVTGeodetic that anchors the jump count (pvtAnchorsJumps), carried by
 //     its drift and the jumps since (dtrMs), while it is no more than two
@@ -65,6 +68,11 @@
 #include "SbfParser.h"
 #include "ShadowLink.h"
 #include "gnss/eph.h"
+
+// A tree with the Dopplers in pairs (MosaicRawEpoch.h averageDopplerPairs); raw_replay's RAW_REPLAY_DOPAVG says
+#ifndef RAW_REPLAY_DOPAVG
+#define RAW_REPLAY_DOPAVG 1
+#endif
 
 #if __has_include("raw_iono_rule.h")
 #include "raw_iono_rule.h"
@@ -177,6 +185,10 @@ public:
     {
         uint32_t fuse_period_ms = 100;   // the profile's fuse_epoch_period_s: epochs on this GPS-time grid
         double   pvt_max_age_s = 120.0;  // a PVT's clock bias is carried at most this long (the driver's kPvtCarryMs)
+#if RAW_REPLAY_DOPAVG
+        bool     pair = false;           // the Dopplers in pairs (the driver's setRawDopplerPairing)
+        mosaic::MosaicDopplerPairConfig pair_cfg;
+#endif
     };
 
     enum class Kind : uint8_t
@@ -338,6 +350,11 @@ public:
     uint16_t lastWnc() const { return last_wnc_; }
     const Counts& counts() const { return n_; }
     const Config& config() const { return cfg_; }
+#if RAW_REPLAY_DOPAVG
+    // the Dopplers in pairs: the counts so far, and which cells of the last EPOCH were averaged (bit i: cell i)
+    const mosaic::MosaicDopplerPairStats& pairStats() const { return pair_st_; }
+    uint64_t lastPaired() const { return pair_mask_; }
+#endif
 
 private:
     Kind onMeasEpoch(const uint8_t* b, size_t len, int64_t t_arr_us, gnss_raw::TimedRawEpoch& te)
@@ -351,7 +368,19 @@ private:
         if (header_ok && mosaic::onFuseGrid(tow, cfg_.fuse_period_ms))
         {
             te = gnss_raw::TimedRawEpoch();
-            if (mosaic::rawEpochFromMeasEpoch(b, len, te.epoch, js_, info_, t_arr_us))
+            const bool built = mosaic::rawEpochFromMeasEpoch(b, len, te.epoch, js_, info_, t_arr_us);
+#if RAW_REPLAY_DOPAVG
+            if (cfg_.pair)
+            {
+                // as the driver's rawMeasEpoch: with the epoch before, then that one is spent
+                pair_mask_ = 0;
+                if (built && info_.status == mosaic::SbfStatus::OK)
+                    (void)mosaic::averageDopplerPairs(te.epoch, rxMs(), info_.jumped || info_.rebased, pair_prev_,
+                                                      cfg_.pair_cfg, pair_st_, &pair_mask_);
+                pair_prev_.valid = false;
+            }
+#endif
+            if (built)
             {
                 te.gps_week = info_.wnc;
                 te.arrival_us = t_arr_us;
@@ -370,7 +399,13 @@ private:
         }
         else
         {
-            if (!mosaic::noteMeasEpochClock(b, len, js_, info_, t_arr_us))
+#if RAW_REPLAY_DOPAVG
+            const bool noted = cfg_.pair ? mosaic::noteMeasEpochDopplers(b, len, js_, info_, pair_prev_, t_arr_us)
+                                         : mosaic::noteMeasEpochClock(b, len, js_, info_, t_arr_us);
+#else
+            const bool noted = mosaic::noteMeasEpochClock(b, len, js_, info_, t_arr_us);
+#endif
+            if (!noted)
                 n_.meas_bad++;
             else
                 n_.off_grid++;
@@ -447,6 +482,12 @@ private:
     int leap_s_ = -128;
     uint16_t pdop_x100_ = 0;
     bool have_time_ = false, finetime_ = false;
+#if RAW_REPLAY_DOPAVG
+    // the Dopplers in pairs: the last off-grid epoch's, the counts, the last EPOCH's averaged cells
+    mosaic::MosaicDopplerSet pair_prev_;
+    mosaic::MosaicDopplerPairStats pair_st_;
+    uint64_t pair_mask_ = 0;
+#endif
 };
 
 }  // namespace rr

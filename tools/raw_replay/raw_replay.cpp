@@ -57,6 +57,7 @@
 // With --truth-nav (the sim's truth, truth_nav.h) a second quorum runs on a
 // perfect filter beside the first, report only: the truth's own call.
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstddef>
@@ -253,6 +254,14 @@ struct Args
     double seed_gyro_dps[3] = {};    //   (body FRD, deg/s): a log that begins while the payload turns
     int sat_cap = -1;                // TR_BENCH_RAW_SAT_CAP: the stage's satellites an epoch (-1: the profile's)
     double fuse_ms = -1.0;           // TR_BENCH_RAW_FUSE_MS: the fused epochs' period (-1: the profile's)
+    // the Dopplers in pairs (TR_BENCH_RAW_DOP_AVG, the profile's rr_pair_avg; a RAW_REPLAY_DOPAVG build): each grid
+    // epoch's averaged with the receiver's epoch before it, as the driver does (MosaicRawEpoch.h), the filter taking
+    // the mean half an epoch earlier; -1: the profile's (off)
+    int rr_pair_avg = -1;
+    double rr_pair_max_diff = -1.0;  //   the pair at most this far apart, m/s (-1: the profile's 15)
+    double rr_pair_sigma = -1.0;     //   offline only: each averaged Doppler's sigma scaled by this (no firmware path)
+    bool sim_fuse_grid = false;      // a sim's epochs (X) cut to the fused grid as the driver cuts the receiver's
+                                     //   (implied by --rr-pair-avg 1: the epochs between are read, not fused)
     std::string flight_state;        // the launch and landing: "log" (the ticks' flags), "quorum" (the quorum's own
                                      //   state machine); default the ticks', the quorum's where META state_machine none
     bool time_tag_from_boot = false; // the mosaic's time tag as after a boot: untimed until the log's first
@@ -317,6 +326,7 @@ void usage()
                  "  [--seed-heading-error-deg X] [--reject-persist-rr N] [--truth-nav FILE]\n"
                  "  [--seed-gyro-dps x,y,z]\n"
                  "  [--sat-cap N] [--fuse-ms X] [--flight-state log|quorum] [--time-tag-from-boot]\n"
+                 "  [--rr-pair-avg 0|1] [--rr-pair-max-diff X] [--rr-pair-sigma X] [--sim-fuse-grid]\n"
                  "  [--assume-finetime] [--pad-zupt 0|1] [--gnss-only-from-s X] [--gnss-only-gate launch|ground]\n"
                  "  [--pvt-out FILE] [--gnss-only-keep-level]\n"
                  "  the Doppler change check (a RAW_REPLAY_DVCHECK build): [--dv-check 0|1|2] [--dv-sat-k X]\n"
@@ -472,6 +482,10 @@ bool parseArgs(int argc, char** argv, Args& a)
         }
         else if (k == "--sat-cap") a.sat_cap = std::atoi(val());
         else if (k == "--fuse-ms") a.fuse_ms = std::atof(val());
+        else if (k == "--rr-pair-avg") a.rr_pair_avg = std::atoi(val());
+        else if (k == "--rr-pair-max-diff") a.rr_pair_max_diff = std::atof(val());
+        else if (k == "--rr-pair-sigma") a.rr_pair_sigma = std::atof(val());
+        else if (k == "--sim-fuse-grid") a.sim_fuse_grid = true;
         else if (k == "--flight-state") a.flight_state = val();
         else if (k == "--time-tag-from-boot") a.time_tag_from_boot = true;
         else if (k == "--assume-finetime") a.assume_finetime = true;
@@ -1574,6 +1588,14 @@ int main(int argc, char** argv)
         return 2;
     }
 #endif
+#if !(RAW_REPLAY_MOSAIC && RAW_REPLAY_DOPAVG)
+    if (a.rr_pair_avg > 0 || a.rr_pair_max_diff >= 0.0 || a.rr_pair_sigma >= 0.0 || a.sim_fuse_grid)
+    {
+        std::fprintf(stderr, "this build has no Dopplers in pairs (RAW_REPLAY_MOSAIC and RAW_REPLAY_DOPAVG): "
+                             "--rr-pair-avg, --rr-pair-max-diff, --rr-pair-sigma and --sim-fuse-grid need it\n");
+        return 2;
+    }
+#endif
     Input in;
     if (!readInput(a.in, in) || (!a.cold_start && !mosaic && in.s.size() < 20))
     {
@@ -1656,6 +1678,19 @@ int main(int argc, char** argv)
         rx.fuse_epoch_period_s = a.fuse_ms * 1.0e-3;   // TR_BENCH_RAW_FUSE_MS
     if (a.sat_cap >= 0)
         rx.sat_cap = a.sat_cap;                         // TR_BENCH_RAW_SAT_CAP
+#if RAW_REPLAY_DOPAVG
+    if (a.rr_pair_avg >= 0)
+        rx.rr_pair_avg = a.rr_pair_avg != 0;            // TR_BENCH_RAW_DOP_AVG
+    if (a.rr_pair_max_diff >= 0.0)
+        rx.rr_pair_max_diff_mps = a.rr_pair_max_diff;
+    if (rx.rr_pair_avg && !dopplerPairsFit(rx))
+    {
+        std::fprintf(stderr, "--rr-pair-avg 1 needs a fused grid of two receiver epochs (the mosaic's --fuse-ms 100), "
+                             "not %.0f ms over %.0f ms epochs\n",
+                     rx.fuse_epoch_period_s * 1000.0, rx.raw_epoch_period_s * 1000.0);
+        return 2;
+    }
+#endif
 #else
     GnssReceiverProfile rx = lc86gProfile();
 #endif
@@ -1944,6 +1979,60 @@ int main(int argc, char** argv)
     // epochs on the profile's fused grid
     rr::MosaicFeed::Config fcfg;
     fcfg.fuse_period_ms = static_cast<uint32_t>(std::llround(fusedEpochPeriod(rx) * 1000.0));
+#if RAW_REPLAY_DOPAVG
+    // the Dopplers in pairs, as main.cpp's startRawShadow sets the driver
+    fcfg.pair = rx.rr_pair_avg;
+    fcfg.pair_cfg.dt_ms = static_cast<uint32_t>(std::llround(rx.raw_epoch_period_s * 1000.0));
+    for (int k = 0; k < GNSS_SYS_COUNT; ++k)
+        fcfg.pair_cfg.cn0_min[k] = rx.sig[k].cn0_min_rr;
+    fcfg.pair_cfg.max_diff_mps = rx.rr_pair_max_diff_mps;
+    // a sim's epochs (X) take the same rule here: the ones between the grid's read for their Dopplers only
+    const bool sim_grid = a.sim_fuse_grid || rx.rr_pair_avg;
+    std::unique_ptr<mosaic::MosaicDopplerSet> sim_prevp(new mosaic::MosaicDopplerSet());
+    std::unique_ptr<rr::SimEpoch> sim_pairp(new rr::SimEpoch());
+    std::unique_ptr<RawEpoch> sim_rawp(new RawEpoch());
+    mosaic::MosaicDopplerPairStats sim_pair_st;
+    uint32_t sim_off_grid = 0;
+    // offline only (--rr-pair-sigma): the averaged Dopplers by epoch (time of week, ms) and satellite (sys << 8 | prn),
+    // their sigma scaled once built; and where epochs were left with Dopplers alone (flight time, usable, averaged)
+    std::map<int64_t, std::vector<uint16_t>> paired_sats;
+    std::vector<std::array<double, 3>> pair_alone_at;
+    auto notePaired = [&](const RawEpoch& ep, uint64_t mask, double t_flight, int usable) {
+        if (a.rr_pair_sigma > 0.0 && mask != 0)
+        {
+            std::vector<uint16_t>& v = paired_sats[std::llround(ep.tow_s * 1000.0)];
+            for (int i = 0; i < ep.n; ++i)
+                if (mask & (uint64_t{1} << i))
+                    v.push_back(static_cast<uint16_t>(ep.obs[i].sys << 8 | ep.obs[i].prn));
+        }
+        int n = 0;
+        for (int i = 0; i < ep.n; ++i)
+            n += (mask >> i) & 1u;
+        if (n < usable)
+            pair_alone_at.push_back({t_flight, static_cast<double>(usable), static_cast<double>(n)});
+    };
+    auto scalePaired = [&](BuiltEpoch& b) {
+        if (!(a.rr_pair_sigma > 0.0))
+            return;
+        auto it = paired_sats.find(std::llround(b.tow_s * 1000.0));
+        if (it == paired_sats.end())
+            return;
+        for (int i = 0; i < b.n; ++i)
+            if (b.meas[i].has_rr &&
+                std::find(it->second.begin(), it->second.end(),
+                          static_cast<uint16_t>(b.meas[i].sys << 8 | b.meas[i].prn)) != it->second.end())
+                b.meas[i].sigma_rr = static_cast<float>(b.meas[i].sigma_rr * a.rr_pair_sigma);
+        paired_sats.erase(it);
+    };
+    auto usableRates = [&](const RawEpoch& ep) {
+        int u = 0;
+        for (int i = 0; i < ep.n; ++i)
+            if (ep.obs[i].has_rate && !(ep.obs[i].sys < GNSS_SYS_COUNT &&
+                                        ep.obs[i].cn0_dbhz < fcfg.pair_cfg.cn0_min[ep.obs[i].sys]))
+                u++;
+        return u;
+    };
+#endif
     std::unique_ptr<rr::MosaicFeed> feedp(new rr::MosaicFeed(fcfg));
     rr::MosaicFeed& feed = *feedp;
     std::unique_ptr<mosaic::SbfParser> sbfp(new mosaic::SbfParser());
@@ -2894,6 +2983,9 @@ int main(int argc, char** argv)
                                 }
                     }
 #endif
+#if RAW_REPLAY_MOSAIC && RAW_REPLAY_DOPAVG
+                    scalePaired(*slot);
+#endif
                     sh.onBuilt(*slot);
                 }
                 sh.onMeasStats(stage.stats());
@@ -2945,7 +3037,54 @@ int main(int argc, char** argv)
             // a built one. The receiver's GPSIon set, as the mosaic sends it on the pad, before the first
             if (ev.flags < 0 || ev.flags >= static_cast<int>(in.xep.size()))
                 break;
-            const rr::SimEpoch& x = in.xep[static_cast<size_t>(ev.flags)];
+            const rr::SimEpoch* xp = &in.xep[static_cast<size_t>(ev.flags)];
+#if RAW_REPLAY_DOPAVG
+            if (sim_grid)
+            {
+                // the driver's cut to the fused grid, and with the Dopplers in pairs its rule (MosaicRawEpoch.h): a
+                // sim's cells carry no lock time or clock jump, so a pair is two consecutive epochs' Dopplers of one
+                // satellite, both at their floor, within the bound
+                const rr::SimEpoch& x0 = *xp;
+                const int64_t tow_ms = std::llround(x0.tow_s * 1000.0);
+                const int64_t rx_ms = static_cast<int64_t>(x0.week) * 604800000LL + tow_ms;
+                RawEpoch& ep = *sim_rawp;
+                ep.tow_s = x0.tow_s;
+                ep.n = x0.n;
+                for (int i = 0; i < x0.n; ++i)
+                {
+                    RawObs& o = ep.obs[i];
+                    o = RawObs{};
+                    o.sys = x0.meas[i].sys;
+                    o.prn = x0.meas[i].prn;
+                    o.has_pr = x0.meas[i].has_pr;
+                    o.has_rate = x0.meas[i].has_rr;
+                    o.cn0_dbhz = x0.meas[i].cn0_dbhz;
+                    o.pr_m = x0.meas[i].pr;
+                    o.rate_mps = x0.meas[i].rr;
+                }
+                if (tow_ms % static_cast<int64_t>(fcfg.fuse_period_ms) != 0)
+                {
+                    sim_off_grid++;
+                    if (rx.rr_pair_avg)
+                        mosaic::dopplerSetFromRawEpoch(ep, rx_ms, *sim_prevp);
+                    break;   // the driver hands over none of these
+                }
+                if (rx.rr_pair_avg)
+                {
+                    uint64_t mask = 0;
+                    const int usable = usableRates(ep);
+                    (void)mosaic::averageDopplerPairs(ep, rx_ms, false, *sim_prevp, fcfg.pair_cfg, sim_pair_st, &mask);
+                    sim_prevp->valid = false;
+                    rr::SimEpoch& xq = *sim_pairp;
+                    xq = x0;
+                    for (int i = 0; i < x0.n; ++i)
+                        xq.meas[i].rr = ep.obs[i].rate_mps;
+                    notePaired(ep, mask, ev.t_us * 1.0e-6 + a.t_base_s, usable);
+                    xp = &xq;
+                }
+            }
+#endif
+            const rr::SimEpoch& x = *xp;
             if (!sim_iono)
             {
                 sim_iono = true;
@@ -2957,7 +3096,12 @@ int main(int argc, char** argv)
             ShadowNav nav;
             sh.navState(nav);
             if (rr::simOffer(stage, x, nav, *slot, sim_counts))
+            {
+#if RAW_REPLAY_DOPAVG
+                scalePaired(*slot);
+#endif
                 sh.onBuilt(*slot);
+            }
             sh.onMeasStats(stage.stats());
             break;
         }
@@ -3051,6 +3195,11 @@ int main(int argc, char** argv)
                         // a whole second's tag, timed or held back, for its PVT's check against its edge
                         if (placed)
                             feed.noteWholeSecond(mcu, te.mcu_us != 0);
+#if RAW_REPLAY_DOPAVG
+                        if (fcfg.pair)
+                            notePaired(te.epoch, feed.lastPaired(), ev.t_us * 1.0e-6 + a.t_base_s,
+                                       usableRates(te.epoch));
+#endif
                         handOver(te, ev.t_us, false);
                         break;
                     }
@@ -3874,6 +4023,32 @@ int main(int argc, char** argv)
                                      "\"below_cn0\": %u, \"below_mask\": %u, \"meas_built\": %u}, ",
                                  sim_counts.epochs, sim_counts.built, sim_counts.eph_standins, sim_counts.below_cn0,
                                  sim_counts.below_mask, sim_counts.meas_built);
+#if RAW_REPLAY_DOPAVG
+                if (rx.rr_pair_avg || sim_grid)
+                {
+                    // the Dopplers in pairs: the driver's counts (the sim's where it has epochs), the rr_lag_s the
+                    // filter took them at, and each grid epoch left with a Doppler alone (flight time, usable, averaged)
+                    const mosaic::MosaicDopplerPairStats& ps = in.xep.empty() ? feed.pairStats() : sim_pair_st;
+                    std::string al;
+                    char b[64];
+                    for (size_t i = 0; i < pair_alone_at.size(); ++i)
+                    {
+                        std::snprintf(b, sizeof(b), "%s[%.3f, %.0f, %.0f]", i ? ", " : "", pair_alone_at[i][0],
+                                      pair_alone_at[i][1], pair_alone_at[i][2]);
+                        al += b;
+                    }
+                    std::fprintf(ej, "\"pairs\": {\"on\": %d, \"rr_lag_s\": %.4f, \"max_diff_mps\": %.2f, "
+                                     "\"sigma_scale\": %.4f, \"sim_off_grid\": %u, \"epochs\": %u, \"epochs_no_prev\": %u, "
+                                     "\"epochs_jump\": %u, \"dopplers\": %u, \"pairs\": %u, \"alone_epoch\": %u, "
+                                     "\"alone_mate\": %u, \"alone_cn0\": %u, \"alone_lock\": %u, \"alone_diff\": %u, "
+                                     "\"diff_max_mps\": %.3f, \"alone_at\": [%s]}, ",
+                                 rx.rr_pair_avg ? 1 : 0, cfg.ekf.rr_lag_s, fcfg.pair_cfg.max_diff_mps,
+                                 a.rr_pair_sigma > 0.0 ? a.rr_pair_sigma : 1.0, sim_off_grid, ps.epochs,
+                                 ps.epochs_no_prev, ps.epochs_jump, ps.dopplers, ps.pairs, ps.alone_epoch,
+                                 ps.alone_mate, ps.alone_cn0, ps.alone_lock, ps.alone_diff,
+                                 static_cast<double>(ps.diff_max_mps), al.c_str());
+                }
+#endif
                 {
                     // each stop at the first row after it (flight time) with RawGnssShadow's reason: 1 sim,
                     // 2 gap, 3 not finite, 4 far from the seed on the pad

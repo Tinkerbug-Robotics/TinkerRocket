@@ -180,6 +180,8 @@ void expectSameNumbers(const GnssReceiverProfile& a, const GnssReceiverProfile& 
     EXPECT_EQ(a.rr_dyn_window_s, b.rr_dyn_window_s);
     EXPECT_EQ(a.max_epoch_age_s, b.max_epoch_age_s);
     EXPECT_EQ(a.epoch_job_max_s, b.epoch_job_max_s);
+    EXPECT_EQ(a.rr_pair_avg, b.rr_pair_avg);
+    EXPECT_EQ(a.rr_pair_max_diff_mps, b.rr_pair_max_diff_mps);
     RawGnssShadow::Config sa, sb;
     gnss_raw::applyReceiverProfile(a, sa);
     gnss_raw::applyReceiverProfile(b, sb);
@@ -197,7 +199,7 @@ static_assert(sizeof(void*) != 8 || sizeof(RawMeasBuilder::Config) == 312,
               "RawMeasBuilder::Config changed: add the field to expectSameBuilder, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 32,
               "GnssSignalProfile changed: add the field to expectSameSignal, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 520,
+static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 536,
               "GnssReceiverProfile changed: add the field to expectSameNumbers, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1680,
               "RawGnssShadow::Config changed: pin the field in TheShadowSafeguardDefaultsAreTheBeetles, then update "
@@ -529,6 +531,45 @@ TEST(ReceiverProfile, TheMosaicG5V0Profile)
     EXPECT_FALSE(s.level_on_fused_epochs);
     EXPECT_EQ(s.restore_pos_sigma_m, 0.0);
     EXPECT_FALSE(s.restore_seed_bias);
+}
+
+TEST(ReceiverProfile, TheDopplersInPairsMoveTheLagOnlyWhereSet)
+{
+    // off in every profile; the Doppler's lag is the profile's own
+    const GnssReceiverProfile m = gnss_raw::mosaicG5Profile();
+    EXPECT_FALSE(m.rr_pair_avg);
+    EXPECT_EQ(m.rr_pair_max_diff_mps, 15.0);
+    EXPECT_FALSE(gnss_raw::lc86gProfile().rr_pair_avg);
+    EXPECT_FALSE(gnss_raw::genericProfile().rr_pair_avg);
+    gnss_raw::RawGnssEKFParams e;
+    applyReceiverProfile(m, e);
+    EXPECT_EQ(e.rr_lag_s, 0.0);
+    // the mosaic's grid is two of its epochs: on, the pair's middle, 25 ms before the epoch
+    EXPECT_TRUE(gnss_raw::dopplerPairsFit(m));
+    GnssReceiverProfile on = m;
+    on.rr_pair_avg = true;
+    applyReceiverProfile(on, e);
+    EXPECT_DOUBLE_EQ(e.rr_lag_s, 0.025);
+    // on top of a receiver's own lag
+    on.rr_lag_s = 0.004;
+    applyReceiverProfile(on, e);
+    EXPECT_DOUBLE_EQ(e.rr_lag_s, 0.029);
+    // every epoch fused (20 Hz), or a 5 Hz grid: no epoch between to pair with, the lag untouched
+    for (double fuse : {0.05, 0.2, 0.0})
+    {
+        GnssReceiverProfile g = m;
+        g.rr_pair_avg = true;
+        g.fuse_epoch_period_s = fuse;
+        EXPECT_FALSE(gnss_raw::dopplerPairsFit(g)) << fuse;
+        applyReceiverProfile(g, e);
+        EXPECT_EQ(e.rr_lag_s, 0.0) << fuse;
+    }
+    // the LC86G (one epoch a second, every one fused) never pairs
+    GnssReceiverProfile lc = gnss_raw::lc86gProfile();
+    lc.rr_pair_avg = true;
+    EXPECT_FALSE(gnss_raw::dopplerPairsFit(lc));
+    applyReceiverProfile(lc, e);
+    EXPECT_EQ(e.rr_lag_s, 0.0555);
 }
 
 TEST(ReceiverProfile, ARefusalsLetInIsKeptInTime)

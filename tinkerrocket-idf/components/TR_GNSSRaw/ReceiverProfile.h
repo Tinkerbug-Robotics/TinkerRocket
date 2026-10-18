@@ -108,6 +108,14 @@ struct GnssReceiverProfile
                                           //   epoch before)
     double max_epoch_age_s = 0.6;         // an epoch later than this is dropped (RawGnssShadow)
     double epoch_job_max_s = 0.3;         //   and one this old is worked at once, not a slice a step
+    // The receiver's epochs between the fused ones: each fused epoch's Doppler
+    // averaged with the one raw_epoch_period_s before it, where the two are a
+    // pair (the mosaic's MosaicRawEpoch.h says when), and the filter taking the
+    // pair's mean at their middle (rr_lag_s plus half raw_epoch_period_s).
+    // Only where the fused grid is exactly two of the receiver's epochs
+    // (dopplerPairsFit); the sigmas stay the profile's. Off: every receiver.
+    bool   rr_pair_avg = false;
+    double rr_pair_max_diff_mps = 15.0;   // the pair at most this far apart (300 m/s^2 over 50 ms)
 
     // its measurements' noise (RawMeasBuilder): sigma^2 = a^2 + b^2 * 10^(-(C/N0 - 35)/10)
     double pr_white_a = 0.0, pr_white_b = 0.0;   // the pseudorange's white part, m
@@ -143,6 +151,15 @@ struct GnssReceiverProfile
     double   cr_screen_floor_mps = 0.0;   //   many sigmas, and this much, is suspect
     uint8_t  cr_half_cycle = kHalfCycleReject;   // HalfCycleAction
 };
+
+// Whether a profile's Dopplers can go in pairs: its fused grid exactly two of
+// the receiver's epochs (the mosaic's 100 ms over its 50), so each fused
+// epoch has one of the receiver's between it and the last.
+inline bool dopplerPairsFit(const GnssReceiverProfile& p)
+{
+    return p.raw_epoch_period_s > 0.0 &&
+           std::fabs(p.fuse_epoch_period_s - 2.0 * p.raw_epoch_period_s) < 1.0e-3 * p.raw_epoch_period_s;
+}
 
 // The carrier phase's 1-sigma (m) at cn0 (dB-Hz): interpolated in dB --
 // log-linear between the 35 and 45 dB-Hz anchors, as a thermal-noise sigma
@@ -303,6 +320,8 @@ inline GnssReceiverProfile mosaicG5Profile()
     p.epoch_latency_s = 0.0;        // the 1PPS line: an edge is its GPS second
     p.raw_epoch_period_s = 0.05;    // V9 rig 10/16: every MeasEpoch 50 ms after the last
     p.fuse_epoch_period_s = 0.1;    // plan: 10 Hz, on the GPS-time grid
+    p.rr_pair_avg = false;          // the epochs between the grid's averaged in: off until benched
+                                    //   (TR_BENCH_RAW_DOP_AVG; the driver's pairs, MosaicRawEpoch.h)
 
     // the code: sigma^2 = a^2 + b^2 * 10^(-(C/N0 - 35)/10)
     p.pr_white_a = 0.10;            // V9 rig 10/16: 0.144 m at 44 dB-Hz, above the receiver's own
