@@ -76,8 +76,12 @@ the antenna's phase center in millimeters along the board's own axes. The out co
 flight computer keeps it in NVS (`antenna`/`ofs`), turns it into the filter's frame with the IMU's mounting, and
 takes it only on the ground: one relayed in flight is held and applied once the flight computer is not INFLIGHT.
 The flight computer reports the offset it holds in its config report (`ConfigReportData` v4), and the apps' readback
-shows that one (`antsrc` "fc"); the out computer's copy stands in only without a report, and a flight computer with
-no offset of its own (a fresh board, or its NVS erased) is sent the out computer's again. The Beetle's out computer
+shows that one (`antsrc` "fc") once the flight computer has taken the offset last sent and keeps one of its own (or
+both are Unknown). Until then the out computer's copy stands in (`antsrc` "oc"): a flight computer with no offset of
+its own (a fresh board, or its NVS erased) is sent the out computer's again, and its first report after power-on
+comes before it takes one queued with its rail off. One that does not take it shows its own again once the command
+has been served. The rule is in
+[`antenna_readback_policy.h`](../../tinkerrocket-idf/projects/out_computer/main/antenna_readback_policy.h). The Beetle's out computer
 leaves the setting out of its readback, so the apps lock it there. The apps send nothing until all three values
 are entered, and take a readback into the rocket's profile only when the flight computer reported it.
 
