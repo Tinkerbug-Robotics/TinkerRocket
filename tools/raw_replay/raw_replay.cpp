@@ -335,7 +335,7 @@ void usage()
                  "  the antenna's offset (a RAW_REPLAY_ANTENNA build): [--antenna-m x,y,z|none] (default: the events\n"
                  "  file's META antenna_m, what the flight flew with, else unknown) [--antenna-sigma-m axial,radial]\n"
                  "  [--antenna-min-rate X] [--antenna-att-mode 0|1|2]\n"
-                 "  the cheaper epoch build (a RAW_REPLAY_BUILD_LITE build): [--build-lite]\n");
+                 "  the cheaper epoch build (a RAW_REPLAY_BUILD_LITE build, --receiver mosaic only): [--build-lite]\n");
 }
 
 bool parseArgs(int argc, char** argv, Args& a)
@@ -1558,6 +1558,14 @@ int main(int argc, char** argv)
     if (a.receiver != "lc86g" && !mosaic)
     {
         std::fprintf(stderr, "--receiver is lc86g or mosaic, not %s\n", a.receiver.c_str());
+        return 2;
+    }
+    // the cheaper epoch build as the firmware allows it: on the mosaic-only image alone (its CMakeLists refuses
+    // TR_BENCH_RAW_BUILD_LITE elsewhere), so never on the LC86G's profile
+    if (a.build_lite && !mosaic)
+    {
+        std::fprintf(stderr, "--build-lite is for the mosaic-G5 (--receiver mosaic) alone, as TR_BENCH_RAW_BUILD_LITE "
+                             "is for the mosaic-only image\n");
         return 2;
     }
     if (!a.flight_state.empty() && a.flight_state != "log" && a.flight_state != "quorum")
