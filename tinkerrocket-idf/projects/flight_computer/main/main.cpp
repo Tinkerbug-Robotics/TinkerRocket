@@ -4239,6 +4239,13 @@ static void startRawShadow()
     rx.sat_cap = TR_BENCH_RAW_SAT_CAP;
     ESP_LOGW(TAG, "[RAWGNSS] BENCH: at most %d satellites an epoch (TR_BENCH_RAW_SAT_CAP)", rx.sat_cap);
 #endif
+#ifdef TR_BENCH_RAW_BUILD_LITE
+    // bench (the CPU work after 10/24): the cheaper epoch build
+    // (RawMeasBuilder.h, lite) on (1) or off (0)
+    static_assert(TR_BENCH_RAW_BUILD_LITE == 0 || TR_BENCH_RAW_BUILD_LITE == 1, "TR_BENCH_RAW_BUILD_LITE is 0 or 1");
+    rx.build_lite = (TR_BENCH_RAW_BUILD_LITE) != 0;
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: the cheaper epoch build %s (TR_BENCH_RAW_BUILD_LITE)", rx.build_lite ? "ON" : "off");
+#endif
 #endif
 #ifdef TR_BENCH_CARRIER_MODE
     // bench: the carrier range rates off (0), observed (1) or fused (2)

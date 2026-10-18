@@ -41,6 +41,12 @@
 // relock. (The carrier range rate, off where the cap is used, would start
 // over for it.) stats().capped_out counts the buildable satellites left out.
 //
+// The cheaper build (Config::meas.lite, RawMeasBuilder.h; off unless the
+// receiver profile's build_lite sets it): offer() then hands the builder the
+// filter's geodetic position as it has it (nav.lla, not worked back out of
+// ECEF), looks each observation's ephemeris up once an epoch (see(), for the
+// cap and the builder both), and notes the cap's picks' lock ages once.
+//
 // Pure C++: tests_cpp/test_raw_gnss_shadow.cpp, tests_cpp/test_raw_gnss_stage_v9.cpp.
 #ifndef RAW_GNSS_MEAS_STAGE_H
 #define RAW_GNSS_MEAS_STAGE_H
@@ -158,6 +164,7 @@ private:
     static constexpr int kPrns = 64;    // PRNs a system, 0-63, as the builder keeps them
 
     void chooseIono(bool in_flight, BuiltEpoch& out);
+    void offerLite(const TimedRawEpoch& e, const ShadowNav& nav, const double r[3], BuiltEpoch& out);
     void capEpoch(const TimedRawEpoch& e);
     void capBuilt(const BuiltEpoch& out);
     int64_t now() const { return clock_ ? clock_() : 0; }
@@ -184,6 +191,10 @@ private:
     uint64_t         picked_[3] = {};
     uint64_t         masked_[3] = {};
     double           masked_tow_ = 0.0;
+    // the cheaper build: each observation's ephemeris as see() looked it up
+    // for the epoch offer() builds (by e's observations; by the cap's picks)
+    const gps_eph_t* eph_of_[RawEpoch::kMaxObs] = {};
+    const gps_eph_t* sel_eph_[RawEpoch::kMaxObs] = {};
 };
 
 }  // namespace gnss_raw

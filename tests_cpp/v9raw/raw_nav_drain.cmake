@@ -15,6 +15,7 @@ add_executable(test_raw_nav_drain test_raw_nav_drain.cpp
     ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
     ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
     ${LIB_DIR}/TR_GNSSRaw/RawMeasCarrier.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilderLite.cpp
 )
 target_include_directories(test_raw_nav_drain PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}

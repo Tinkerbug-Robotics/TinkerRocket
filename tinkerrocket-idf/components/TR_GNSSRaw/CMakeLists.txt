@@ -6,5 +6,5 @@
 # receiver's own (gnss repo receiver/core); everything here is IDF-free, so
 # tests_cpp/test_gnss_raw.cpp and test_raw_gnss_meas.cpp compile it directly.
 idf_component_register(SRCS "eph.c" "atmo.c" "RtcmEphemeris.cpp" "EphemerisStore.cpp" "RawMeasBuilder.cpp"
-                            "RawMeasCarrier.cpp"
+                            "RawMeasCarrier.cpp" "RawMeasBuilderLite.cpp"
                        INCLUDE_DIRS "include" ".")

@@ -287,6 +287,7 @@ struct Args
     double ant_m[3] = {0.0, 0.0, 0.0};
     double ant_sigma_axial_m = -1.0, ant_sigma_radial_m = -1.0, ant_min_rps = -1.0;
     int ant_att_mode = -1;
+    bool build_lite = false;         // TR_BENCH_RAW_BUILD_LITE: the cheaper epoch build (a RAW_REPLAY_BUILD_LITE build)
     std::set<std::string> given;     // the options on the command line
 };
 
@@ -333,7 +334,8 @@ void usage()
                  "  [--rot-after-apogee]\n"
                  "  the antenna's offset (a RAW_REPLAY_ANTENNA build): [--antenna-m x,y,z|none] (default: the events\n"
                  "  file's META antenna_m, what the flight flew with, else unknown) [--antenna-sigma-m axial,radial]\n"
-                 "  [--antenna-min-rate X] [--antenna-att-mode 0|1|2]\n");
+                 "  [--antenna-min-rate X] [--antenna-att-mode 0|1|2]\n"
+                 "  the cheaper epoch build (a RAW_REPLAY_BUILD_LITE build): [--build-lite]\n");
 }
 
 bool parseArgs(int argc, char** argv, Args& a)
@@ -471,6 +473,7 @@ bool parseArgs(int argc, char** argv, Args& a)
                                            &a.seed_gyro_dps[2]) == 3;
         }
         else if (k == "--sat-cap") a.sat_cap = std::atoi(val());
+        else if (k == "--build-lite") a.build_lite = true;
         else if (k == "--fuse-ms") a.fuse_ms = std::atof(val());
         else if (k == "--flight-state") a.flight_state = val();
         else if (k == "--time-tag-from-boot") a.time_tag_from_boot = true;
@@ -1656,6 +1659,16 @@ int main(int argc, char** argv)
         rx.fuse_epoch_period_s = a.fuse_ms * 1.0e-3;   // TR_BENCH_RAW_FUSE_MS
     if (a.sat_cap >= 0)
         rx.sat_cap = a.sat_cap;                         // TR_BENCH_RAW_SAT_CAP
+#if RAW_REPLAY_BUILD_LITE
+    if (a.build_lite)
+        rx.build_lite = true;                           // TR_BENCH_RAW_BUILD_LITE
+#else
+    if (a.build_lite)
+    {
+        std::fprintf(stderr, "this build has no cheaper epoch build (RAW_REPLAY_BUILD_LITE=OFF): --build-lite needs it\n");
+        return 2;
+    }
+#endif
 #else
     GnssReceiverProfile rx = lc86gProfile();
 #endif
@@ -2116,6 +2129,7 @@ int main(int argc, char** argv)
     int64_t next_pass_us = INT64_MIN;
     int quorum_baro = 0;   // barometer samples the quorum got (none without a ground pressure)
     rr::SimCounts sim_counts;   // a sim's epochs (X) through the stage
+    rr::SimLite sim_lite;       //   and, with --build-lite, the elevations it keeps
     bool sim_iono = false;      //   and the broadcast ionosphere its receiver had on the pad, once
 #endif
 
@@ -2956,7 +2970,7 @@ int main(int argc, char** argv)
             }
             ShadowNav nav;
             sh.navState(nav);
-            if (rr::simOffer(stage, x, nav, *slot, sim_counts))
+            if (rr::simOffer(stage, x, nav, *slot, sim_counts, &sim_lite))
                 sh.onBuilt(*slot);
             sh.onMeasStats(stage.stats());
             break;
@@ -3869,6 +3883,9 @@ int main(int argc, char** argv)
                                  "\"fuse_ms\": %.0f, ",
                              a.receiver.c_str(), cold ? 1 : 0, a.unaided ? 1 : 0, cfg.sat_cap,
                              fusedEpochPeriod(rx) * 1000.0);
+#if RAW_REPLAY_BUILD_LITE
+                std::fprintf(ej, "\"build_lite\": %d, ", rx.build_lite ? 1 : 0);
+#endif
                 if (!in.xep.empty())
                     std::fprintf(ej, "\"sim\": {\"epochs\": %u, \"built\": %u, \"eph_standins\": %u, "
                                      "\"below_cn0\": %u, \"below_mask\": %u, \"meas_built\": %u}, ",

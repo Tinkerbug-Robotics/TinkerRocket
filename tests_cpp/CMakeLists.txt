@@ -1711,6 +1711,7 @@ add_executable(test_raw_gnss_meas test_raw_gnss_meas.cpp
     ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
     ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
     ${LIB_DIR}/TR_GNSSRaw/RawMeasCarrier.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilderLite.cpp
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Lc86Parser.cpp
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
 )
@@ -1788,6 +1789,7 @@ add_executable(test_raw_gnss_shadow test_raw_gnss_shadow.cpp
     ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
     ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
     ${LIB_DIR}/TR_GNSSRaw/RawMeasCarrier.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilderLite.cpp
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Lc86Parser.cpp
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
 )
@@ -1826,6 +1828,7 @@ add_executable(test_receiver_profile test_receiver_profile.cpp
     ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
     ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
     ${LIB_DIR}/TR_GNSSRaw/RawMeasCarrier.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilderLite.cpp
 )
 target_include_directories(test_receiver_profile PRIVATE
     ${SHIM_DIR}

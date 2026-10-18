@@ -66,10 +66,11 @@ gps_eph_t orbit(int sys, int prn)
 
 // The mosaic-G5's stage: its profile v0 (floors, noise model, relock gap) and the cap, as the shadow's
 // stageConfig gives it.
-RawGnssMeasStage::Config mosaicStage()
+RawGnssMeasStage::Config mosaicStage(bool lite = false)
 {
     RawGnssMeasStage::Config c;
-    const gnss_raw::GnssReceiverProfile p = gnss_raw::mosaicG5Profile();
+    gnss_raw::GnssReceiverProfile p = gnss_raw::mosaicG5Profile();
+    p.build_lite = lite;                  // the cheaper epoch build (a bench image's TR_BENCH_RAW_BUILD_LITE)
     gnss_raw::applyReceiverProfile(p, c.meas);
     c.sat_cap = p.sat_cap;
     return c;
@@ -210,9 +211,10 @@ void expectSameBuild(const BuiltEpoch& a, const BuiltEpoch& b, int epoch)
 // stage's own offer builds from the receiver's raw epoch and ephemerides:
 // the same 16 satellites, sigmas, lock ages and ionosphere choice, and the
 // same counts.
-TEST(RawReplaySim, TheSimPathBuildsWhatTheStagesOfferBuilds)
+void simPathBuildsWhatTheStagesOfferBuilds(bool lite)
 {
-    RawGnssMeasStage real(mosaicStage()), sim(mosaicStage());
+    RawGnssMeasStage real(mosaicStage(lite)), sim(mosaicStage(lite));
+    rr::SimLite kept;                     // the cheaper build's elevations, as raw_replay keeps them
     gnss_raw::ShadowIono io{};
     io.gps_day = static_cast<uint16_t>(kWeek * 7 + 3);
     real.setIono(io);
@@ -235,7 +237,7 @@ TEST(RawReplaySim, TheSimPathBuildsWhatTheStagesOfferBuilds)
         ASSERT_GT(p.raw.epoch.n, 20);
         BuiltEpoch a, b;
         ASSERT_TRUE(real.offer(p.raw, navHere(), a));
-        ASSERT_TRUE(rr::simOffer(sim, p.sim, navHere(), b, c));
+        ASSERT_TRUE(rr::simOffer(sim, p.sim, navHere(), b, c, &kept));
         expectSameBuild(a, b, k);
         // the cap's 16, less a pick under the mask (the cap cannot tell; picked last from then on)
         EXPECT_LE(b.n, 16);
@@ -249,6 +251,13 @@ TEST(RawReplaySim, TheSimPathBuildsWhatTheStagesOfferBuilds)
     EXPECT_EQ(c.built, static_cast<uint32_t>(built));
     EXPECT_GT(c.eph_standins, 20u);
 }
+
+TEST(RawReplaySim, TheSimPathBuildsWhatTheStagesOfferBuilds) { simPathBuildsWhatTheStagesOfferBuilds(false); }
+
+// ... and with the cheaper epoch build (RawMeasBuilder.h, lite) on both: the
+// sim path mirrors its noise (RawMeasBuilder::liteSigmas) and its elevations
+// kept for a second.
+TEST(RawReplaySim, TheSimPathBuildsWhatTheStagesCheaperBuildBuilds) { simPathBuildsWhatTheStagesOfferBuilds(true); }
 
 // The relock: a satellite missing longer than the profile's relock_gap_s
 // comes back with its lock age 0 -- its code carrying the relock sigma, its

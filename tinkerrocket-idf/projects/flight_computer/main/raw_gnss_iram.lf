@@ -21,3 +21,7 @@ entries:
     * (noflash)
     # but the carrier range rate's ends, once a satellite an epoch: in flash
     RawMeasCarrier (default)
+    # and the cheaper epoch build, which the Beetle does not use (its
+    # profile's build_lite is off): in flash, on a TR_RAW_GNSS_IRAM bench
+    # image of the mosaic too
+    RawMeasBuilderLite (default)
