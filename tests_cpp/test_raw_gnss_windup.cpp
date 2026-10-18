@@ -281,3 +281,75 @@ TEST(RawGnssEKFExact, TheFloatBlocksAreTheDoubleOnesWithinAMillionth)
     EXPECT_LT(worst_ra, 1e-6);
     EXPECT_LT(worst_ga, 1e-6);
 }
+
+TEST(RawGnssEKFExact, TheBlocksAreTheTransitionsByItsDefinition)
+{
+    // F's attitude rows are -[w x] on the attitude and -I/2 on the gyro's bias, so over a step Phi's blocks are
+    // Ra = exp(-[w x] dt) and Ga = -1/2 int_0^dt exp(-[w x] s) ds. attExactBlocks (double) against those from their
+    // definitions: the exponential as its series (40 terms), the integral by Simpson's rule (400 intervals) on the
+    // same series, a turn th = |w| dt a step from 1e-3 to pi about 20 axes each: Ra within 1e-12 and a rotation
+    // (Ra Ra' = I), Ga within 1e-12. (The float blocks against these double ones: the test above.)
+    gnss_raw::RawGnssEKFParams prm;
+    const gnss_raw::RawGnssEKF<double> fd(prm);
+    // exp(-[w x] s), its series
+    auto expm = [](const double w[3], double s, double E[3][3]) {
+        const double A[3][3] = {{0.0, w[2] * s, -w[1] * s}, {-w[2] * s, 0.0, w[0] * s}, {w[1] * s, -w[0] * s, 0.0}};
+        double term[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j)
+                E[i][j] = term[i][j];
+        for (int k = 1; k <= 40; ++k)
+        {
+            double nt[3][3];
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    nt[i][j] = (term[i][0] * A[0][j] + term[i][1] * A[1][j] + term[i][2] * A[2][j]) / k;
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                {
+                    term[i][j] = nt[i][j];
+                    E[i][j] += nt[i][j];
+                }
+        }
+    };
+    std::mt19937 rng(11);
+    std::normal_distribution<double> n01(0.0, 1.0);
+    const double dt = 0.01;
+    const int ns = 400;
+    double worst_ra = 0.0, worst_ga = 0.0, worst_orth = 0.0;
+    int n = 0;
+    for (double th : {1e-3, 1e-2, 0.1, 0.5, 1.0, 2.0, 3.0, kPi})
+        for (int k = 0; k < 20; ++k)
+        {
+            double w[3] = {n01(rng), n01(rng), n01(rng)};
+            const double wn = std::sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
+            for (double& c : w)
+                c *= th / dt / wn;
+            double Ra[3][3], Ga[3][3];
+            fd.attExactBlocks(w, dt, Ra, Ga);
+            double E[3][3], I[3][3] = {};
+            expm(w, dt, E);
+            for (int m = 0; m <= ns; ++m)
+            {
+                double Em[3][3];
+                expm(w, dt * m / ns, Em);
+                const double c = (m == 0 || m == ns) ? 1.0 : (m % 2 == 1 ? 4.0 : 2.0);
+                for (int i = 0; i < 3; ++i)
+                    for (int j = 0; j < 3; ++j)
+                        I[i][j] += c * Em[i][j] * dt / (3.0 * ns);
+            }
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                {
+                    worst_ra = std::max(worst_ra, std::fabs(Ra[i][j] - E[i][j]));
+                    worst_ga = std::max(worst_ga, std::fabs(Ga[i][j] + 0.5 * I[i][j]));
+                    const double rr = Ra[i][0] * Ra[j][0] + Ra[i][1] * Ra[j][1] + Ra[i][2] * Ra[j][2];
+                    worst_orth = std::max(worst_orth, std::fabs(rr - (i == j ? 1.0 : 0.0)));
+                }
+            n++;
+        }
+    EXPECT_EQ(n, 160);
+    EXPECT_LT(worst_ra, 1e-12);
+    EXPECT_LT(worst_orth, 1e-12);
+    EXPECT_LT(worst_ga, 1e-12);
+}

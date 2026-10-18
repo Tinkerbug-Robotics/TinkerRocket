@@ -4445,6 +4445,7 @@ constexpr double kLambdaB1I = 299792458.0 / 1561.098e6;
 struct SpinOpts
 {
     double rev_s = 10.0;        // the roll from ignition, rev/s about the nose
+    double spinup_rev_s2 = 0.0; //   or (> 0) a spin-up from ignition instead: this many rev/s more each second
     double k_true = 0.99;       // the wind-up the Dopplers carry (cycles a turn)
     double k_fix = 0.0;         // RawGnssShadow::Config::windup_k
     bool   monitor = false;     //   windup_monitor
@@ -4462,6 +4463,7 @@ struct SpinRun
     double drift_end = 0.0;     // the filter's clock drift at the end, m/s
     double drift_true = 0.0;
     float  lever_last = 0.0f;   // the change check's lever allowance, its last epoch's
+    double te_last = 0.0;       // the last epoch handed over: its tag, s of MCU time from the start
 };
 
 // flyCarrier's pad and boost, the carrier off, rolling at o.rev_s from ignition, each epoch's Dopplers carrying the
@@ -4513,6 +4515,11 @@ SpinRun flySpin(const SpinOpts& o, double t_end = 12.0)
     sh.onSeed(seed);
     const double t_ign = 4.0, t_det = 4.1, dt = 0.005, rr_lag = cfg.ekf.rr_lag_s;
     const double p = o.rev_s * 2.0 * kPi;
+    // the roll rate at time at (rad/s); a spin-up's rate grows from ignition
+    auto rollAt = [&](double at) {
+        return at > t_ign ? (o.spinup_rev_s2 > 0.0 ? o.spinup_rev_s2 * 2.0 * kPi * (at - t_ign) : p) : 0.0;
+    };
+    double te_last = 0.0;
     double p_ned[3] = {}, v_ned[3] = {};
     std::vector<std::array<double, 3>> vel_hist;
     int next_epoch = 1;
@@ -4537,7 +4544,7 @@ SpinRun flySpin(const SpinOpts& o, double t_end = 12.0)
         s.time_us = static_cast<uint32_t>(t64);
         s.acc[0] = float(fx);
         const bool spinning = t > t_ign;
-        s.gyro[0] = spinning ? float(p) : 0.0f;
+        s.gyro[0] = spinning ? float(o.spinup_rev_s2 > 0.0 ? rollAt(t - 0.5 * dt) : p) : 0.0f;   // the step's mean
         s.flags = t < t_ign ? gnss_raw::kShadowLevel : (t >= t_det ? gnss_raw::kShadowInFlight : 0);
         sh.onImu(s, t64);
         if (t + 1e-9 >= next_epoch)
@@ -4561,7 +4568,8 @@ SpinRun flySpin(const SpinOpts& o, double t_end = 12.0)
                 const double lam = ob.sys == GNSS_SYS_BDS || (o.gal_b1i && ob.sys == GNSS_SYS_GAL) ? kLambdaB1I
                                                                                                      : kLambdaL1;
                 if (spun)
-                    ob.rate_mps += gnss_raw::windup::rollRate(lam, o.k_true, p);
+                    ob.rate_mps += gnss_raw::windup::rollRate(lam, o.k_true,
+                                                              o.spinup_rev_s2 > 0.0 ? rollAt(t - rr_lag) : p);
             }
             e.mcu_us = t64;
             e.gps_week = kGoldenWeek;
@@ -4570,6 +4578,7 @@ SpinRun flySpin(const SpinOpts& o, double t_end = 12.0)
         }
         while (!due.empty() && t64 - due.front().mcu_us >= 200000)
         {
+            te_last = static_cast<double>(due.front().mcu_us - kT0) * 1e-6;
             offerBuilt(sh, stage, due.front(), built);
             due.erase(due.begin());
         }
@@ -4579,6 +4588,7 @@ SpinRun flySpin(const SpinOpts& o, double t_end = 12.0)
     run.drift_end = static_cast<double>(sh.filter().clockDrift());
     run.drift_true = sky.drift_mps;
     run.lever_last = sh.stats().dv_last_lever_mps;
+    run.te_last = te_last;
     return run;
 }
 
@@ -4603,6 +4613,26 @@ TEST(RawGnssShadow, AtTenRevsASecondTheClockDriftTakesTheWindupUnlessItIsTakenOf
     EXPECT_EQ(on.st.windup_misses, 0u);
     EXPECT_NEAR(on.st.windup_last_p_rps, 10.0 * 2.0 * kPi, 1e-3);
     EXPECT_NEAR(on.st.windup_last_l1_mps, -wu, 1e-3);
+}
+
+TEST(RawGnssShadow, ThroughASpinUpTheWindupIsTakenAtTheDopplersOwnInstant)
+{
+    // The roll spinning up from ignition at 1 rev/s more each second (about 7 rev/s by the last epoch), each
+    // epoch's Dopplers carrying the wind-up at their own instant, rr_lag_s (55.5 ms) before the tag. The correction
+    // reads the gyro's roll there: the last epoch's rate is the gyro's at te - rr_lag_s, within its 10 ms filter step
+    // (0.063 rad/s), where read at the tag it would be 0.35 rad/s off and a quarter second late 1.6. With the
+    // correction, the clock drift stays the receiver's own through the ramp.
+    SpinOpts o;
+    o.spinup_rev_s2 = 1.0;
+    o.k_fix = 0.99;
+    const SpinRun on = flySpin(o);
+    const double a = 2.0 * kPi, lag = gnss_raw::RawGnssEKFParams().rr_lag_s;
+    EXPECT_NEAR(lag, 0.0555, 1e-9);
+    EXPECT_NEAR(on.te_last, 11.0, 1e-3);
+    EXPECT_GE(on.st.windup_epochs, 7u);
+    EXPECT_EQ(on.st.windup_misses, 0u);
+    EXPECT_NEAR(on.st.windup_last_p_rps, a * (on.te_last - lag - 4.0), a * 0.01);
+    EXPECT_NEAR(on.drift_end, on.drift_true, 0.05);
 }
 
 TEST(RawGnssShadow, TheMonitorReadsTheRollRateFromTwoWavelengthsAndSetsItAgainstTheGyro)
