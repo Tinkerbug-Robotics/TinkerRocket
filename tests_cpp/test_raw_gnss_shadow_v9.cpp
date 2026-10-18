@@ -1090,6 +1090,84 @@ EmptySky flyEmptySky(bool level_on_fused, double t_end = 15.0)
 
 }  // namespace
 
+TEST(RawGnssShadowV9, EachEpochIsTakenInPairsOrAsItCameByItsMark)
+{
+    // The mosaic's Dopplers in pairs: each epoch's job takes the epoch's mark
+    // (TimedRawEpoch / BuiltEpoch rr_paired) to the filter, so an epoch in
+    // pairs has its Dopplers 25 ms further back and the next, as it came, at
+    // its own instant -- built here or by the GNSS task. With the pairs off
+    // (no pair lag: every profile as it is) a mark changes nothing.
+    const uint8_t marks[] = {1, 1, 0, 1, 0, 0, 1, 0};
+    for (bool pairs_on : {true, false})
+        for (bool external : {false, true})
+        {
+            SCOPED_TRACE(testing::Message() << (pairs_on ? "pairs on" : "pairs off")
+                                            << (external ? ", built by the GNSS task" : ", built here"));
+            gnss_raw::GnssReceiverProfile p = gnss_raw::mosaicG5Profile();
+            p.rr_pair_avg = pairs_on;
+            RawGnssShadow::Config cfg = primaryCfg();
+            gnss_raw::applyReceiverProfile(p, cfg);
+            cfg.external_build = external;
+            EXPECT_EQ(cfg.ekf.rr_lag_s, 0.0);
+            EXPECT_EQ(cfg.ekf.rr_pair_lag_s, pairs_on ? 0.025 : 0.0);
+            RawGnssShadow sh(cfg);
+            sh.onSeed(padSeed(kT0, kPadLat, kPadLon, 1400.0));
+            const double dt = 0.005;
+            std::vector<TimedRawEpoch> due;
+            int next_epoch = 1, checked = 0, pending = -1;
+            for (int step = 1; step <= 600; ++step)
+            {
+                const int64_t t64 = kT0 + static_cast<int64_t>(std::llround(step * dt * 1e6));
+                ShadowImu s{};
+                s.time_us = static_cast<uint32_t>(t64);
+                s.acc[2] = static_cast<float>(-kG);
+                sh.onImu(s, t64);
+                if (pending >= 0)
+                {
+                    // the epoch handed over before this step: its job ran in it
+                    const bool want = pairs_on && pending == 1;
+                    EXPECT_EQ(sh.filter().rrPaired(), want) << "epoch " << checked;
+                    EXPECT_EQ(sh.filter().rrLag(), want ? 0.025 : 0.0);
+                    checked++;
+                    pending = -1;
+                }
+                if (step % 20 == 0)
+                {
+                    TimedRawEpoch e;
+                    e.epoch.tow_s = kGoldenRmTowA + next_epoch / 10.0;   // empty: the mark alone matters here
+                    e.mcu_us = t64;
+                    e.gps_week = kGoldenWeek;
+                    e.rr_paired = marks[next_epoch % 8];
+                    due.push_back(e);
+                    next_epoch++;
+                }
+                while (!due.empty() && t64 - due.front().mcu_us >= 50000)
+                {
+                    const TimedRawEpoch& e = due.front();
+                    if (sh.running())
+                    {
+                        if (external)
+                        {
+                            gnss_raw::BuiltEpoch b;
+                            b.mcu_us = e.mcu_us;
+                            b.tow_s = e.epoch.tow_s;
+                            b.gps_week = e.gps_week;
+                            b.rr_paired = e.rr_paired;
+                            sh.onBuilt(b);
+                        }
+                        else
+                        {
+                            sh.onEpoch(e);
+                        }
+                        pending = e.rr_paired;
+                    }
+                    due.erase(due.begin());
+                }
+            }
+            EXPECT_GT(checked, 20);
+        }
+}
+
 TEST(RawGnssShadowV9, EmptyEpochsNoLongerKeepTheLevellingFromItsOutage)
 {
     // Every empty epoch counted as a levelling epoch: the velocity the 5 deg

@@ -683,7 +683,7 @@ void RawGnssEKF<T>::screenRangeRates(const RawMeas* m, int n, double age_s, RawG
     int nfit = 0;
     if (age_s < 0.0)
         age_s = 0.0;
-    const double tau = p_.rr_lag_s > 0.0 ? p_.rr_lag_s : 0.0;
+    const double tau = rrLag();
     T dp_e[3], dv_e[3], dp_l[3], dv_l[3];
     historyChange(age_s, dv_e, dp_e);
     historyChange(age_s + tau, dv_l, dp_l);
@@ -737,7 +737,9 @@ void RawGnssEKF<T>::screenRangeRates(const RawMeas* m, int n, double age_s, RawG
             Lr.rate = 0.0;
             for (int a = 0; a < 3; ++a)
                 Lr.rate += L.u[a] * (L.vs[a] - v_l[a]);
-            pred_rate = tau > 0.0 ? Lr.rate - tau * satRangeAccel(mi, Lr, v_l) : Lr.rate;
+            pred_rate = tau > 0.0
+                          ? Lr.rate - tau * (rr_paired_ ? pairAccel(i, mi, Lr, v_l) : satRangeAccel(mi, Lr, v_l))
+                          : Lr.rate;
         }
         int hidx[10];
         T hval[10];
@@ -888,6 +890,38 @@ bool RawGnssEKF<T>::fitVelocityClock(const double H[][4], const double* y, const
     return true;
 }
 
+// An epoch in pairs (setRrPaired): the satellite's own range acceleration,
+// which its Doppler's every consumer backs out over the epoch's lag -- the
+// change check (twice), the boost screen, the update and the screen's scratch
+// copy of it -- taken by the first and reused by the rest: four or five a
+// satellite an epoch become one (16 us each on the V9's soft doubles: 1.0-1.3
+// ms an epoch at 16 satellites, half of it in the change check's unbroken
+// unit, become 0.26 ms). The rest would have taken it at the receiver's
+// velocity as they see it, which differs from the first's by the filter's
+// corrections, the lever's velocity and the IMU's motion between the units:
+// metres per second at most, which move the term by ~4e-4 m/s^2 each (twice
+// the satellite's speed over its range). Over the pair's 25 ms that is at most
+// 3e-6 m/s on Grid B's boosts and coasts (exp/v9-dop-avg's replays), a
+// ten-thousandth of the Doppler's noise. An epoch not in pairs takes it each
+// time, as before.
+template <typename T>
+double RawGnssEKF<T>::pairAccel(int i, const RawMeas& m, const Los& L, const double v[3]) const
+{
+    const bool slot = i >= 0 && i < RawEpoch::kMaxObs;
+    const uint64_t bit = slot ? uint64_t{1} << i : 0;
+    if (slot && (acc_memo_.have & bit) != 0 && acc_memo_.sys[i] == m.sys && acc_memo_.prn[i] == m.prn)
+        return acc_memo_.a[i];
+    const double a = satRangeAccel(m, L, v);
+    if (slot)
+    {
+        acc_memo_.have |= bit;
+        acc_memo_.sys[i] = m.sys;
+        acc_memo_.prn[i] = m.prn;
+        acc_memo_.a[i] = a;
+    }
+    return a;
+}
+
 // The Doppler change check's rows (TR_RawGnssEKF.h, DopplerChange.h). Each
 // end predicted as updateGnssRawPart predicts a Doppler: the receiver taken
 // back to the epoch by the history, the satellite's motion over the signal's
@@ -904,7 +938,7 @@ int RawGnssEKF<T>::dopplerChange(const RawMeas* m, int n, double age_s, const Do
     imu = DopplerChangeImu();
     if (age_s < 0.0)
         age_s = 0.0;
-    const double tau = p_.rr_lag_s > 0.0 ? p_.rr_lag_s : 0.0;
+    const double tau = rrLag();
     T dp_e[3], dv_e[3], dp_l[3], dv_l[3];
     historyChange(age_s, dv_e, dp_e);
     historyChange(age_s + tau, dv_l, dp_l);
@@ -1006,7 +1040,8 @@ int RawGnssEKF<T>::dopplerChange(const RawMeas* m, int n, double age_s, const Do
                 ve[a] = Tm[0][a] * vn[0] + Tm[1][a] * vn[1] + Tm[2][a] * vn[2];
             Los Lr = L;
             Lr.rate = us - (L.u[0] * ve[0] + L.u[1] * ve[1] + L.u[2] * ve[2]);
-            return tau > 0.0 ? Lr.rate - tau * satRangeAccel(mi, Lr, ve) : Lr.rate;
+            return tau > 0.0 ? Lr.rate - tau * (rr_paired_ ? pairAccel(i, mi, Lr, ve) : satRangeAccel(mi, Lr, ve))
+                             : Lr.rate;
         };
         const int iout = out.n;
         if (out.n < RawEpoch::kMaxObs)
@@ -1566,6 +1601,7 @@ void RawGnssEKF<T>::attExactBlocks(const T w_b[3], T dt, T Ra[3][3], T Ga[3][3])
                                              int&, int&);                                                       \
     template int RawGnssEKF<T>::dopplerChange(const RawMeas*, int, double, const DopplerRef&, DopplerRef&,         \
                                               dvc::Row*, DopplerChangeImu&) const;                              \
+    template double RawGnssEKF<T>::pairAccel(int, const RawMeas&, const Los&, const double[3]) const;           \
     template T RawGnssEKF<T>::hdgObsScaleNow(double) const;                                                     \
     template void RawGnssEKF<T>::setLever(bool, const double[3], uint8_t);                                       \
     template void RawGnssEKF<T>::pushLever(const T[3]);                                                          \

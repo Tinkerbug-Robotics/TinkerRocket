@@ -45,7 +45,8 @@
 // 0.1-0.25 s late): age_s says how long ago it was, and the receiver is
 // taken back by the IMU's own velocity increments since (a ring of them,
 // ~0.5 s). The Doppler is the range rate rr_lag_s before the epoch's tag
-// (55.5 ms on the LC86G), predicted the same way.
+// (55.5 ms on the LC86G), predicted the same way; an epoch whose Dopplers are
+// pairs' means (setRrPaired) has them rr_pair_lag_s further back.
 //
 // The carrier range rate (RawMeas has_cr: a satellite's carrier phase range
 // over the interval since its epoch before, RawMeasBuilder), after the
@@ -177,6 +178,11 @@ struct RawGnssEKFParams
     // The Doppler is the range rate this long before the epoch's tag (LC86G
     // MSM7, fitted against the rig's truth in boost and coast, 2026-10-12)
     double rr_lag_s       = 0.0555;
+    // An epoch whose Dopplers are pairs' means (the mosaic-G5's Dopplers in
+    // pairs: setRrPaired) has them this much further back again: the pair's
+    // middle, half the receiver's period (the receiver profile's
+    // rr_pair_avg). 0: no epoch is (every receiver but that one).
+    double rr_pair_lag_s  = 0.0;
     bool   att_gate_cos4  = true;      // false: GNSS corrections reach the attitude in full
     // GNSS corrections to the attitude about the vertical only (wins over
     // att_gate_cos4): the heading, and the gyro biases only along the
@@ -412,7 +418,7 @@ struct CarrierInfo
 struct DopplerRef
 {
     bool    valid = false;
-    double  t = 0.0;                         // the Dopplers' instant (the epoch's less rr_lag_s), filter time
+    double  t = 0.0;                         // the Dopplers' instant (the epoch's less its lag, rrLag), filter time
     float   v_ned[3] = {};                   // the filter's velocity then, as it stood when taken: the base
                                              //   both ends predict from (it cancels)
     int     n = 0;
@@ -434,6 +440,11 @@ struct DopplerChangeImu
     float  v_lev[3] = {};  // lever_on: the antenna's velocity against the IMU at this end's Dopplers, NED, as
                            //   every prediction here took it (0 with the lever off; set with or without a ref)
 };
+
+namespace ekf_geom
+{
+struct Los;   // a satellite's predicted range, rate and line of sight (RawGnssEKFGeometry.h)
+}
 
 template <typename T>
 class RawGnssEKF
@@ -535,6 +546,29 @@ public:
     // takes it along; init lets it go.
     void setAttHold(bool on) { att_hold_ = on; }
     bool attHold() const { return att_hold_; }
+    // The epoch about to be worked has its Dopplers in pairs (rr_pair_lag_s;
+    // RawGnssShadow sets it at each epoch's start where the params have a
+    // pair lag, from the epoch's BuiltEpoch::rr_paired): its Dopplers are
+    // taken rr_pair_lag_s further back by every consumer -- the update, the
+    // boost screen and vertical check, the change check -- and each
+    // satellite's own range acceleration is taken once for them all
+    // (pairAccel). An epoch not in pairs takes rr_lag_s alone, as every epoch
+    // did before; with no pair lag in the params none is. A copy of the
+    // filter takes it along.
+    void setRrPaired(bool on)
+    {
+        rr_paired_ = on && p_.rr_pair_lag_s > 0.0;
+        acc_memo_.have = 0;
+    }
+    bool rrPaired() const { return rr_paired_; }
+    // The epoch's Dopplers' lag (s, at least 0): rr_lag_s, plus rr_pair_lag_s
+    // on an epoch in pairs. rrPairLag() is the second part alone (0 off one).
+    double rrLag() const
+    {
+        const double tau = rr_paired_ ? p_.rr_lag_s + p_.rr_pair_lag_s : p_.rr_lag_s;
+        return tau > 0.0 ? tau : 0.0;
+    }
+    double rrPairLag() const { return rr_paired_ ? p_.rr_pair_lag_s : 0.0; }
     // A flight restored after a reboot: the position's, velocity's and
     // attitude's 1-sigmas set to these on every axis (the attitude's a
     // rotation, rad), their cross-covariances dropped. A block whose sigma is
@@ -803,6 +837,12 @@ private:
     // The carrier's: the history's excess (ex) over the last tau.
     void   historyExcess(double tau, double ex[3]) const;
     void   receiverState(double r[3], double v[3], double Tm[3][3]) const;
+    // An epoch in pairs (setRrPaired): m's own range acceleration
+    // (satRangeAccel at L and the receiver's velocity v, ECEF), m being the
+    // epoch's measurement i -- taken once a satellite an epoch (acc_memo_).
+    // In TR_RawGnssCarrier.cpp (flash on the Beetle, which never pairs: its
+    // per-step code keeps only the call).
+    double pairAccel(int i, const RawMeas& m, const ekf_geom::Los& L, const double v[3]) const;
 
     RawGnssEKFParams p_;
     // process noise, from p_
@@ -938,6 +978,23 @@ private:
         double  rad_lat = 0.0, rad_rew = 0.0, rad_rns = 0.0, rad_s = 0.0, rad_c = 1.0;
     };
     mutable LosShare los_;
+
+    // The Dopplers in pairs (setRrPaired), after share_los's los_ and last,
+    // so no member before them moves: this epoch's, and each satellite's own range acceleration as the first
+    // of its Doppler's consumers took it (pairAccel), by its index in the
+    // epoch's measurements (bit i of have: m[i], checked by its satellite;
+    // the rest not zeroed, read only under their bit), emptied by setRrPaired
+    // at each epoch's start
+    bool rr_paired_ = false;
+    struct AccMemo
+    {
+        uint64_t have = 0;
+        uint8_t  sys[RawEpoch::kMaxObs];
+        uint8_t  prn[RawEpoch::kMaxObs];
+        double   a[RawEpoch::kMaxObs];
+    };
+    static_assert(RawEpoch::kMaxObs <= 64, "AccMemo::have is 64 bits");
+    mutable AccMemo acc_memo_;
 };
 
 extern template class RawGnssEKF<float>;

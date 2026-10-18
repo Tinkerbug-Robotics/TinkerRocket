@@ -82,6 +82,11 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssEKFParams&
     e.rr_lag_s = p.rr_lag_s;
     e.share_los = p.share_los;
     e.rr_float = p.rr_float;
+    // the Dopplers in pairs: the mean of two raw_epoch_period_s apart is the
+    // range rate halfway between them, before the fused epoch's tag -- on the
+    // epochs handed over in pairs (TimedRawEpoch::rr_paired); the rest keep
+    // rr_lag_s
+    e.rr_pair_lag_s = p.rr_pair_avg && dopplerPairsFit(p) ? 0.5 * p.raw_epoch_period_s : 0.0;
     e.cr_mode = p.cr_mode;
     e.cr_sigma_per_rev_s = p.cr_sigma_per_rev_s;
     e.cr_common_sigma_mps = p.cr_common_sigma_mps;

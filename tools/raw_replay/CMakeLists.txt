@@ -27,8 +27,9 @@ endif()
 # allowance for a launch with no magnetometer heading (fc/v9raw-dopp after 357e7021), RAW_REPLAY_ANTENNA=OFF before
 # the antenna's offset where it is known (fc/v9-antenna-offset), RAW_REPLAY_BUILD_LITE=OFF before the cheaper epoch
 # build (exp/v9-cpu-build; off by itself where the tree has no RawMeasBuilderLite.cpp), RAW_REPLAY_SHARELOS=OFF
-# before the shared epoch geometry (exp/v9-cpu-los). DYNMEM and FITGATE are experiments the firmware does not carry:
-# build them against a copy with experiments/*.patch applied (README.md).
+# before the shared epoch geometry (exp/v9-cpu-los), RAW_REPLAY_DOPAVG=OFF before the Dopplers in pairs
+# (exp/v9-dop-avg). DYNMEM and FITGATE are experiments the firmware does not carry: build them against a copy with
+# experiments/*.patch applied (README.md).
 set(SRC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." CACHE PATH "the tree whose firmware sources are compiled")
 option(RAW_REPLAY_OLD "the firmware tree has no receiver profile or carrier (aef947c5)" OFF)
 option(RAW_REPLAY_VCHECK "the firmware tree has the vertical check and the boost window (fc/gnss-heading-fuse 7966f2cb)" ON)
@@ -43,6 +44,7 @@ option(RAW_REPLAY_DVHDG "the firmware tree has the change check's heading allowa
 option(RAW_REPLAY_ANTENNA "the firmware tree has the antenna's offset where it is known (lever_on, applyAntennaOffset: fc/v9-antenna-offset)" ON)
 option(RAW_REPLAY_BUILD_LITE "the firmware tree has the cheaper epoch build (RawMeasBuilder::Config::lite, build_lite: exp/v9-cpu-build)" ON)
 option(RAW_REPLAY_SHARELOS "the firmware tree has the shared epoch geometry (share_los, rr_float: exp/v9-cpu-los)" ON)
+option(RAW_REPLAY_DOPAVG "the firmware tree has the Dopplers in pairs (rr_pair_avg, averageDopplerPairs: exp/v9-dop-avg)" ON)
 if(RAW_REPLAY_OLD AND RAW_REPLAY_MOSAIC)
     message(STATUS "raw_replay: RAW_REPLAY_OLD turns RAW_REPLAY_MOSAIC off")
     set(RAW_REPLAY_MOSAIC OFF)
@@ -62,6 +64,9 @@ if(RAW_REPLAY_OLD AND RAW_REPLAY_ROT)
 endif()
 if(NOT RAW_REPLAY_ROT AND RAW_REPLAY_ANTENNA)
     set(RAW_REPLAY_ANTENNA OFF)
+endif()
+if(NOT RAW_REPLAY_MOSAIC AND RAW_REPLAY_DOPAVG)
+    set(RAW_REPLAY_DOPAVG OFF)
 endif()
 # the mosaic-only image's flight safeguards in one call (gnss_raw::applyMosaicFlightSafeguards, ReceiverProfileApply.h):
 # a tree with all three of the features it sets
@@ -168,6 +173,7 @@ function(raw_replay_target name)
         RAW_REPLAY_DVHDG=$<BOOL:${RAW_REPLAY_DVHDG}>
         RAW_REPLAY_ANTENNA=$<BOOL:${RAW_REPLAY_ANTENNA}>
         RAW_REPLAY_BUILD_LITE=$<BOOL:${RAW_REPLAY_BUILD_LITE}>
+        RAW_REPLAY_DOPAVG=$<BOOL:${RAW_REPLAY_DOPAVG}>
         RAW_REPLAY_MOSAIC_SAFEGUARDS=$<BOOL:${RAW_REPLAY_MOSAIC_SAFEGUARDS}>
         RAW_REPLAY_WINDUP=$<BOOL:${RAW_REPLAY_WINDUP}>)
 endfunction()

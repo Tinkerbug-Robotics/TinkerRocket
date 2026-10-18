@@ -76,6 +76,7 @@ struct SimEpoch
     int64_t  mcu_us = 0;
     double   tow_s = 0.0;
     uint16_t week = 0;
+    uint8_t  rr_paired = 0;   // its Dopplers pairs' means (the harness's pairs: TimedRawEpoch::rr_paired)
     int      n = 0;
     SimMeas  meas[gnss_raw::RawEpoch::kMaxObs];
 };
@@ -229,6 +230,7 @@ inline bool simOffer(gnss_raw::RawGnssMeasStage& st, const SimEpoch& x, const gn
     out.mcu_us = te.mcu_us;
     out.tow_s = te.epoch.tow_s;
     out.gps_week = te.gps_week;
+    out.rr_paired = x.rr_paired;
     for (int k = 0; k < 3; ++k)
         out.r_approx[k] = r[k];
     out.build_us = 0;

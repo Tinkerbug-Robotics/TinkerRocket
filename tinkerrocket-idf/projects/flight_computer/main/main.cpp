@@ -3241,6 +3241,9 @@ static TaskHandle_t raw_meas_task = nullptr;
 // The mosaic-only image: the raw-GNSS filter is its one navigation filter, so
 // whether it started is the boot's to say aloud (setup_fc), not only its log.
 static bool raw_nav_started = false;
+// The Dopplers in pairs set on the driver (startRawShadow, rawPairsStart):
+// the console asks for their counts only then
+static bool raw_pairs_on = false;
 // The ionosphere the GNSS task builds with, chosen by one rule from both of
 // its sources (raw_iono_rule.h): the set a pad calibration brought (NVS, core
 // 1's raw_shadow_link.iono) and the receiver's own GPSIon. The filter's task
@@ -3582,6 +3585,61 @@ static void rawBenchFilterHooks(gnss_raw::RawGnssShadow& sh)
         sh.reset();
     }
 #endif
+}
+#endif
+
+#if TR_RAW_NAV_MOSAIC
+// The Dopplers in pairs (the profile's rr_pair_avg, set): the driver set to
+// average them (MosaicRawEpoch.h). False where it cannot -- the profile's
+// grid not two of the receiver's epochs, or the driver without its raw
+// outputs or the memory -- and the pairs stay off. A frame of its own, while
+// startRawShadow calls it with them on.
+static __attribute__((noinline)) bool rawPairsStart(const gnss_raw::GnssReceiverProfile& rx)
+{
+    if (!gnss_raw::dopplerPairsFit(rx))
+    {
+        ESP_LOGW(TAG, "[RAWGNSS] Dopplers in pairs need a fused grid of two receiver epochs (%.0f ms, %.0f ms "
+                      "epochs): off", rx.fuse_epoch_period_s * 1000.0, rx.raw_epoch_period_s * 1000.0);
+        return false;
+    }
+    mosaic::MosaicDopplerPairConfig pc;
+    pc.dt_ms = (uint32_t)llround(rx.raw_epoch_period_s * 1000.0);
+    for (int k = 0; k < GNSS_SYS_COUNT; ++k)
+        pc.cn0_min[k] = rx.sig[k].cn0_min_rr;
+    pc.max_diff_mps = rx.rr_pair_max_diff_mps;
+    if (!sensor_collector.setGNSSRawDopplerPairing(pc))
+    {
+        ESP_LOGW(TAG, "[RAWGNSS] Dopplers in pairs: the driver could not (no raw outputs or memory): off");
+        return false;
+    }
+    return true;
+}
+
+// The Dopplers in pairs (the profile's rr_pair_avg; never called with them
+// off) on the [RAWGNSS] console: the epochs in pairs and as they came, each
+// Doppler averaged, left at its epoch's instant or dropped, and what the GNSS
+// poll task spent on them (counts and times since they were turned on). A
+// frame of its own, while the console calls it, not the filter task's every
+// pass.
+static __attribute__((noinline)) void rawPairsConsole()
+{
+    TR_GNSSReceiverMosaicSerial::RawPairStats ps;
+    if (!sensor_collector_hw.getGNSSRawPairStats(ps)) return;
+    const mosaic::MosaicDopplerPairStats& pp = ps.pair;
+    const uint32_t as_came = pp.epochs_no_prev + pp.epochs_jump + pp.epochs_few;
+    ESP_LOGI(TAG, "[RAWGNSS] Doppler pairs: %lu of %lu averaged (largest difference %.2f m/s) | epochs: %lu in pairs, "
+                  "%lu as they came (%lu with none before, %lu at a clock jump, %lu with few pairs; %lu Dopplers at "
+                  "their own instant) | dropped from epochs in pairs: %lu no mate, %lu C/N0, %lu relock, %lu too far "
+                  "apart | poll task: off-grid read %.0f us mean, %lu max (%lu); grid adapt %.0f us mean, %lu max; "
+                  "averaging %lu us max; stack free %lu B",
+             (unsigned long)pp.pairs, (unsigned long)pp.dopplers, (double)pp.diff_max_mps,
+             (unsigned long)(pp.epochs - as_came), (unsigned long)as_came, (unsigned long)pp.epochs_no_prev,
+             (unsigned long)pp.epochs_jump, (unsigned long)pp.epochs_few, (unsigned long)pp.alone_epoch,
+             (unsigned long)pp.alone_mate, (unsigned long)pp.alone_cn0, (unsigned long)pp.alone_lock,
+             (unsigned long)pp.alone_diff, ps.reads ? (double)ps.read_us_sum / (double)ps.reads : 0.0,
+             (unsigned long)ps.read_us_max, (unsigned long)ps.reads,
+             ps.adapts ? (double)ps.adapt_us_sum / (double)ps.adapts : 0.0, (unsigned long)ps.adapt_us_max,
+             (unsigned long)ps.avg_us_max, (unsigned long)sensor_collector_hw.gnssPollStackFree());
 }
 #endif
 
@@ -4042,6 +4100,7 @@ static void rawShadowTask(void*)
                          (unsigned long)st.dv_latch_releases, (unsigned long)st.dv_held_rr,
                          sh.running() ? (double)sh.filter().hdgObsScale() : 1.0, (double)st.rot_max_sigma_mps,
                          (unsigned)(raw_flight_task ? uxTaskGetStackHighWaterMark(raw_flight_task) : 0));
+                if (raw_pairs_on) rawPairsConsole();
             }
 #ifdef TR_BENCH_DV_CHECK
             // the Doppler change check (bench, exp/v9-dvcheck): counts since boot
@@ -4256,6 +4315,20 @@ static void startRawShadow()
     ESP_LOGW(TAG, "[RAWGNSS] BENCH: the epoch's geometry %s, the Doppler's prediction in %s (TR_BENCH_RAW_SHARE_LOS)",
              rx.share_los ? "SHARED by its units" : "per unit", rx.rr_float ? "FLOAT" : "double");
 #endif
+#ifdef TR_BENCH_RAW_DOP_AVG
+    // bench (exp/v9-dop-avg): each grid epoch's Doppler averaged with the
+    // receiver's epoch 50 ms before it (the driver's pairs, MosaicRawEpoch.h),
+    // the filter taking the mean 25 ms before the epoch. Never set for flight
+    static_assert(TR_BENCH_RAW_DOP_AVG == 0 || TR_BENCH_RAW_DOP_AVG == 1, "TR_BENCH_RAW_DOP_AVG is 0 or 1");
+    rx.rr_pair_avg = (TR_BENCH_RAW_DOP_AVG) != 0;
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: Dopplers in pairs %s (TR_BENCH_RAW_DOP_AVG)", rx.rr_pair_avg ? "ON" : "off");
+#endif
+    // The Dopplers in pairs (the profile's rr_pair_avg, off unless set): the
+    // driver is set to average them before the filter is told where their
+    // means fall (rr_pair_lag_s, applyReceiverProfile), so a filter told so
+    // never runs on a driver that could not
+    if (rx.rr_pair_avg) rx.rr_pair_avg = rawPairsStart(rx);
+    raw_pairs_on = rx.rr_pair_avg;
 #endif
 #ifdef TR_BENCH_CARRIER_MODE
     // bench: the carrier range rates off (0), observed (1) or fused (2)

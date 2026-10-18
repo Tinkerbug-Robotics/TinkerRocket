@@ -471,6 +471,33 @@ TEST(RawGnssMeasStageV9, TheCapPicksOnlySatellitesTheBuilderWouldBuild)
     EXPECT_EQ(st.stats().capped_out, 3u);                    // the candidates: 30 less 15; twelve taken
 }
 
+TEST(RawGnssMeasStageV9, AnEpochsDopplersInPairsMarkReachesTheBuiltEpoch)
+{
+    // The mosaic's Dopplers in pairs (TimedRawEpoch::rr_paired): the built
+    // epoch carries the mark to the filter, through the cap's picks or not,
+    // and an epoch as it came after one in pairs is unmarked again
+    for (int cap : {0, 12})
+    {
+        SCOPED_TRACE(testing::Message() << "cap " << cap);
+        Sky s = sky(30);
+        RawGnssMeasStage st(capCfg(cap));
+        addAll(st, s);
+        BuiltEpoch b;
+        s.e.rr_paired = 1;
+        ASSERT_TRUE(st.offer(s.e, navAt(kRxLla), b));
+        EXPECT_EQ(b.rr_paired, 1);
+        EXPECT_GT(b.n, 0);
+        s.e.rr_paired = 0;
+        s.e.epoch.tow_s += 0.1;
+        s.e.mcu_us += 100000;
+        ASSERT_TRUE(st.offer(s.e, navAt(kRxLla), b));
+        EXPECT_EQ(b.rr_paired, 0);
+    }
+    // and the mark sits in padding: neither struct grew
+    static_assert(sizeof(void*) != 8 || sizeof(gnss_raw::TimedRawEpoch) == 1960,
+                  "TimedRawEpoch grew: rr_paired was to fit its padding");
+}
+
 TEST(RawGnssMeasStageV9, ASatelliteBuiltLastEpochKeepsItsPlaceWithinThreeDb)
 {
     Sky s = sky(30);
