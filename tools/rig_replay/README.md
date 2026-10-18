@@ -94,8 +94,11 @@ mosaic-only image, `-DTR_GNSS_MOSAIC=1`). Its rig replay is the same idea as the
   mosaic's driver hands no timed fix. An epoch counts only when the driver hands it over timed: the 1PPS line valid,
   the receiver FINETIME, an edge paired within 120 s, and (with the time-tag fix, `MosaicTimeTag.h`) a clock bias
   carried to it and the tag confirmed by the 1PPS. An untimed or held epoch carries `mcu_us` and `tag_dtr_ms` 0 and
-  sets nothing. After a cold start the first timed epoch comes about 70 s after the sky starts (10/17 pad check), so
-  around file second 70, t = -110 s. The clock must arm before T-5 s (file second 175), or the flight never starts.
+  sets nothing. After a cold start the first timed epoch came about 70 s after the sky started on the 10/17 pad
+  check, an image from before the time-tag fix. With the fix the first anchor is also held until two 1PPS checks
+  confirm it (the first epochs timed about 12-15 s after the first paired edge: `firmware-ota/v9-tagfix2/`), so
+  expect the clock a little later than that. It must arm before T-5 s (file second 175), or the flight never starts,
+  and `run_v9.sh` voids a run with no clock by file second 170.
   The clock takes each epoch's GPS instant (the receiver's time of week less the clock bias the driver's tag took
   off, `TimedRawEpoch::tag_dtr_ms`), so the replayed IMU sits on the sky's GPS time.
 - **The freeze is checked against the 1PPS edge.** Before the time-tag fix the driver's clock line followed a sky
@@ -107,10 +110,20 @@ mosaic-only image, `-DTR_GNSS_MOSAIC=1`). Its rig replay is the same idea as the
   (`ReplayClock::onTagCheck`). It takes the driver's last residual with its own second (`PpsTagStats::last_s`), a
   second handed over timed; a held second's check is the driver's alone. The console says which: `RIG REPLAY clock:
   the freeze checked against the 1PPS edge ... kept` or `... MOVED`, with the driver's check counts at that moment
-  (and, with the fix, the seconds held back). A hold across T-5 s keeps the clock following the old sky until the
-  first timed epoch after the release, which freezes it on the new sky's time; after T-2 s that freeze is
-  unchecked, and `score_v9.py` marks it. Epochs the filter got untimed between the freeze and the landing are a mark
-  too: it flew those without GNSS.
+  (and, with the fix, the seconds the driver checked but did not hand over timed: held back, or a timed epoch the
+  full queue refused, or an empty one).
+- **A hold across T-5 s moves the freeze.** Only a timed epoch moves the clock, so through a hold it runs on the old
+  sky's clock, and the first timed epoch after the release puts it on the late sky's and freezes it there. The
+  console says when: `RIG REPLAY clock: frozen for the flight (the receiver's timed epoch at t X s)`.
+  - Released on the pad (X < 0): the step is on a still rocket, and the clock is on the sky's time. `score_v9.py`
+    marks a freeze more than 0.5 s past T-5 s; one after T-2 s is also unchecked, a second mark.
+  - Released after ignition (X >= 0): the replayed flight started on the old sky's clock, and the freeze steps the
+    replayed IMU back by the slip (and the crystal's drift through the hold) during the flight, so that much of it
+    plays twice. `run_v9.sh` stops the sky and `score_v9.py` voids the run. With the 10/17 underrun (the sky lost
+    for 15 s, the tag held about 5 s after the first fix in the simulated bench) that is a slip from about T-23 s
+    to T-5 s; longer if the hold runs toward the 20 s `firmware-ota/v9-tagfix2/` allows. A slip after T-5 s is
+    already void (`tx_log.py`: after the freeze).
+  Epochs the filter got untimed between the freeze and the landing are a mark too: it flew those without GNSS.
 - **The receiver cold-starts at every boot** (`erst,Soft,PVTData+SatData` after its setup). This is on in every
   replay build of the mosaic image, through the bench switch `TR_BENCH_MOSAIC_COLD_START`. The receiver then sets
   itself up a second time, about 5 s after boot, and `run_v9.sh` transmits once it has.
@@ -156,7 +169,9 @@ cmake --build build_rig_rp5_0829 -j 4
 - The build is marked `-bench`. It plays a canned flight from boot as a sim, with every pyro dry.
 - It is refused on the mosaic image built without the filter (no epochs to clock from) and on any board but the M1
   and the mosaic image.
-- The staged images, their blobs and the exact commands are in `firmware-ota/v9-rig-replay/<flight>/`.
+- The staged images, their blobs and the exact commands are in `firmware-ota/v9-rig-replay-rc3/<flight>/` (RC3's
+  commit; the older `firmware-ota/v9-rig-replay/` is 48f9b61a's). `run_v9.sh` reads `firmware-ota/v9-rig-replay/`
+  unless `RIG_IMAGE_DIR` names the folder: set it to the one flashed, so the run records that image's SHA256SUMS.
 
 ### A run
 
@@ -172,10 +187,11 @@ cmake --build build_rig_rp5_0829 -j 4
    - It resets the FC and logs its console (`tools/bench_capture_boot.py`). It checks that the image carries this
      flight, waits for the cold start to be queued and the receiver's second setup, and checks the IMU reads at the
      flight's rate (about 3780 a second: 4k Dynamic) and GNSS logging is Detailed. Then it transmits.
-   - The run is **VOID** if the replay clock is not on the receiver's by file second 170, or says MISSED; if the
-     console capture ends or the FC boots again before the file is done; or if the transmitter underran (or fell
-     short on the host) after the freeze, failed, or stopped short of the file (`tx_log.py` puts each underrun on
-     the file's timeline). The transmission stops at a VOID found during it (`KEEP_ON_VOID=1` keeps it going).
+   - The run is **VOID** if the replay clock is not on the receiver's by file second 170, or says MISSED; if it
+     froze only after ignition (above); if the console capture ends or the FC boots again before the file is done;
+     or if the transmitter underran (or fell short on the host) after the freeze, failed, or stopped short of the
+     file (`tx_log.py` puts each underrun on the file's timeline). The transmission stops at a VOID found during it
+     (`KEEP_ON_VOID=1` keeps it going).
    - After the file it keeps 120 s of console, then leaves the radio idle and the rig idle, on any exit, and says
      the FC still runs the RIG REPLAY image: **flash the flight image back before any flight.**
    - The run folder (default `gnss-attitude-study/rig-replay/v9-runs/run_TAG` beside the repository, never inside a
@@ -190,24 +206,33 @@ cmake --build build_rig_rp5_0829 -j 4
    ```
    python3 tools/rig_replay/score_v9.py RUN_DIR [--log OC_LOG [--harness build/raw_replay_mosaic]]
    ```
-   - First whether the run counts: run_v9.sh's verdict, the transmitter's slips after the freeze, a second boot
-     before the landing, and any second the 1PPS tag check judged over 200 us from the freeze's check to the
-     landing (the filter's own tags off the sky and the IMU while the driver's line lagged a slip). A VOID run's
-     flight is not scored; `--score-void` scores it for diagnosis only.
+   - First whether the run counts: run_v9.sh's verdict, the clock frozen after ignition, the transmitter's slips
+     after the freeze, a second boot before the landing, and any second the 1PPS tag check judged over 200 us from
+     the freeze's check to the landing (the filter's own tags off the sky and the IMU: before the time-tag fix the
+     driver's line lagging a slip, with it a tag handed over wrong). A VOID run's flight is not scored;
+     `--score-void` scores it for diagnosis only. A late freeze on the pad, a freeze not checked, and epochs the
+     filter got untimed in flight are marks beside the scores.
+   - The bars are the ones adopted on 2026-10-17 (`gnss-attitude-study/v9-mosaic-filter-plan/impl/README.md`),
+     which replace the plan's section 4 and G4/G5's per-phase bars: the apogee call within +-2 s of the true apogee
+     and never while the true vertical velocity is above 20 m/s (a hard fail); the votes reported, not barred;
+     boost and coast attitude p90 <= max(unaided p90 + 3 deg, 10 deg) (the grid's: in >= 90 % of runs, with the
+     median better than unaided); the descent reported, no bar.
    - The attitude error per phase is the plan's (e = 2 acos|q_est . q_true|): p90, p99 and max for boost, coast
      and descent, plus the pitch error within 2 s of the apogee.
    - Velocity and position errors per phase.
    - Each apogee voter from the `[REPLAY-VOTE]` changes: its first vote, its latency against the true apogee, the
-     true vertical velocity then, and any vote while still climbing at more than 2 m/s (G5's hard bar). From an
-     image without those lines G5 is not judged: 10 Hz samples miss a 6 ms vote.
+     true vertical velocity then, and any vote while still climbing at more than 2 m/s (reported, not barred). From
+     an image without those lines the votes come from 10 Hz samples, which miss a 6 ms vote. The apogee bar takes
+     the call from the `[PYRO]` line.
    - The epoch age and build, the filter's step and core-0 share, `[CPU]`/`[LP]`, the loop and IMU rates.
    - The PPS tag check, what the receiver tracked through each phase, and the replay clock.
    - With `--log`: the on-board records (0x96) on the same metrics, each voter's NonSensor flag, the receiver's own
      PVT against the truth, its clock drift (about +0.1 ppm on the rig) and its bias at ignition.
    - With `--harness`: the log through `raw_replay_mosaic` from the on-board filter's own start
-     (`extract.py --sbf --rig`), aided and unaided (att_gnss_off), scored against the plan's section 4 bars (the
-     attitude p90 per phase, the pitch near apogee, the call's latency, vz at the true apogee, G5's hard bar, no
-     boost/coast p90 more than 5 deg above the twin) and against the on-board records. Both twins start from the
+     (`extract.py --sbf --rig`), aided and unaided (att_gnss_off), judged by the adopted bars one run can show (boost
+     and coast p90 against max(unaided + 3, 10) deg, the aided quorum's call within +-2 s and never above 20 m/s of
+     true climb), with the descent, the medians, the pitch near apogee, the call's latency, vz at the true apogee
+     and the votes while climbing reported beside them, and against the on-board records. Both twins start from the
      aided filter's state about 0.4 s before launch (the OC log has no pad), so this is GNSS's effect in flight only,
      not on the pad alignment.
 5. **Afterwards** (plan risk 10):
@@ -222,8 +247,11 @@ cmake --build build_rig_rp5_0829 -j 4
   elevation. The receiver keeps GPS through the boost but loses most satellites under the drogue on these skies.
   Read `score_v9.py`'s tracked table before blaming the filter for a descent.
 - **Transmitter underruns.** The LC86G runs logged 2-7 underruns a run, some of 10-18 ms. One after the freeze voids
-  the run. One in the minute before it leaves the driver's line lagging into the flight, which the 1PPS tag check
-  then shows and the scorer voids on. Keep the Mac quiet (no builds) while transmitting.
+  the run. Before the time-tag fix, one in the minute before it left the driver's line lagging into the flight,
+  which the 1PPS tag check then showed and the scorer voided on. With the fix the line steps and the tag holds, so
+  one before the freeze costs a few seconds of untimed epochs (a mark), and the freeze waits for the release: on
+  the pad that is the sky's time, after ignition the run is void (above). Keep the Mac quiet (no builds) while
+  transmitting.
 - **The pad is not in the OC log.** It records from launch, with about 0.4 s of prelaunch ring. The pad's numbers
   come from the console.
 - **The skies are not the Goblin's motor.** These are the three flights with full truth: rp5_0829, eagleclaw_0517,

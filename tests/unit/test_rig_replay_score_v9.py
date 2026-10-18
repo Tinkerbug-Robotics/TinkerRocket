@@ -72,9 +72,11 @@ def flight():
 
 
 def console(cols, t_apo, t_land, early_in_samples=True, pps=((-20.0, 0, 5), (5.0, 0, 30)),
-            iono_at_launch="none (0 sets)", extra=(), untimed=None, raw_votes="cast", time_tag=False):
+            iono_at_launch="none (0 sets)", extra=(), untimed=None, raw_votes="cast", time_tag=False, freeze_t=-5.0,
+            call_dt=0.6):
     """The console; `pps` the 5 s lines' (t, over, judged) PPS tag check counts and `untimed` their untimed epochs,
-    `extra` lines as (t, text); `time_tag`: the driver's lines as an image with the time-tag fix prints them."""
+    `extra` lines as (t, text); `time_tag`: the driver's lines as an image with the time-tag fix prints them;
+    `freeze_t` when the replay clock froze; `call_dt` the [PYRO] call against the true apogee."""
     t, q = cols["t_s"], np.stack([cols[k] for k in ("qw", "qx", "qy", "qz")], axis=1)
     off = np.array([math.cos(math.radians(ERR_DEG) / 2), 0.0, math.sin(math.radians(ERR_DEG) / 2), 0.0])
 
@@ -87,12 +89,14 @@ def console(cols, t_apo, t_land, early_in_samples=True, pps=((-20.0, 0, 5), (5.0
          "W (4146) SIM: RIG REPLAY: 'sim_test', 100 samples at 500 Hz",
          "I (5064) GNSS: mosaic-G5 set up: \"mosaic-G5 P3\" firmware 1.0.0 on COM1 at 2000000 baud (setup 2)",
          f"W ({ms(-130.0)}) SIM: RIG REPLAY clock: on the receiver's clock (the receiver's timed epoch at t -130.00 s)",
-         f"W ({ms(-5.0)}) SIM: RIG REPLAY clock: frozen for the flight (the receiver's timed epoch at t -5.00 s)",
+         f"W ({ms(freeze_t)}) SIM: RIG REPLAY clock: frozen for the flight (the receiver's timed epoch at t "
+         f"{freeze_t:+.2f} s)",
          f"I ({ms(-100.0)}) FC: [STATE] READY -> PRELAUNCH",
          f"I ({ms(0.05)}) FC: [STATE] PRELAUNCH -> INFLIGHT (ground_p=101325)",
          f"I ({ms(0.05)}) FC: [LAUNCH] latched by accel + baro-confirmed climb",
          f"I ({ms(2.1)}) FC: [GUID] Burnout detected at T+2050 ms",
-         f"I ({ms(t_apo + 0.6)}) FC: [PYRO] Apogee detected at t={ms(t_apo + 0.6)} ms (vel=1 baro=0 gps=0 pitch=1 backstop=0)",
+         f"I ({ms(t_apo + call_dt)}) FC: [PYRO] Apogee detected at t={ms(t_apo + call_dt)} ms (vel=1 baro=0 gps=0 "
+         f"pitch=1 backstop=0)",
          f"I ({ms(t_land + 4)}) FC: [STATE] INFLIGHT -> LANDED"]
     for tt, text in extra:
         L.append(f"I ({ms(tt)}) {text}")
@@ -212,13 +216,16 @@ class ScoreV9ConsoleTest(unittest.TestCase):
         self.assertAlmostEqual(v["pitch"]["latency"], 0.5, delta=0.11)
         self.assertAlmostEqual(v["baro"]["latency"], 0.8, delta=0.11)
         self.assertIsNone(v["gps"]["first"])
-        # the early velocity vote at T+5 s, climbing at about 60 m/s: G5's hard bar sees it
+        # the early velocity vote at T+5 s, climbing at about 60 m/s: reported, not barred (the adopted bars)
         self.assertEqual(v["vel"]["climbing_samples"], 1)
         self.assertAlmostEqual(v["vel"]["first_climbing"], 5.0, delta=0.06)
         self.assertEqual(v["pitch"]["climbing_samples"], 0)
-        # the call, from the [PYRO] line on the replay's time
+        self.assertEqual(v["climbing_votes"]["vel"], 1)
+        # the call, from the [PYRO] line on the replay's time: the apogee bar's
         self.assertAlmostEqual(v["call_exact"]["latency"], 0.6, delta=0.01)
         self.assertEqual(v["call_voters"]["pitch"], 1)
+        self.assertTrue(v["apogee_bar"]["pass"])
+        self.assertAlmostEqual(v["apogee_bar"]["latency"], 0.6, delta=0.01)
 
     def test_the_clock_and_the_run(self):
         c = self.r["clock"]
@@ -298,8 +305,9 @@ def hackrf_log(underrun_at_file_s=None, seconds=257):
 
 
 class ScoreV9RunRulesTest(unittest.TestCase):
-    """What makes a run count: the [REPLAY-VOTE] edges for G5, the freeze's check and the 1PPS tag check after it,
-    the transmitter's slips, the ionosphere."""
+    """What makes a run count and what decides it: the [REPLAY-VOTE] edges for the votes, the apogee bar on the call,
+    when the clock froze, the freeze's check and the 1PPS tag check after it, the transmitter's slips, the
+    ionosphere."""
 
     @classmethod
     def setUpClass(cls):
@@ -322,12 +330,12 @@ class ScoreV9RunRulesTest(unittest.TestCase):
 
     def checked(self, residual, moved, judged, over, held=None):
         what = f"MOVED onto the edge by {residual:+d}" if moved else f"kept, the edge within {residual:+d}"
-        tail = "" if held is None else f"; {held} held back (untimed, not judged)"
+        tail = "" if held is None else f"; {held} held back or not handed over (not judged)"
         return (-4.9, f"SIM: RIG REPLAY clock: the freeze checked against the 1PPS edge of the second at t -5 s: "
                       f"residual {residual:+d} us, {what} us; PPS tag check so far {judged} judged, {over} over 200 "
                       f"us{tail}")
 
-    def test_a_six_ms_vote_between_two_samples_fails_g5_from_the_edges(self):
+    def test_a_six_ms_vote_between_two_samples_is_reported_from_the_edges(self):
         text = console(self.cols, self.t_apo, self.t_land, early_in_samples=False, extra=vote_edges(self.t_apo))
         r = score_run(self.d, "edges", text, self.files)
         v = r["votes"]
@@ -335,16 +343,101 @@ class ScoreV9RunRulesTest(unittest.TestCase):
         self.assertTrue(v["complete"])
         self.assertAlmostEqual(v["vel"]["first"], 5.003, delta=1e-6)
         self.assertEqual(v["vel"]["climbing_samples"], 1)
-        self.assertFalse(v["g5_hard"]["pass"])
+        # a vote while climbing is reported, not barred: the apogee bar is the call's
+        self.assertEqual(v["climbing_votes"]["vel"], 1)
+        self.assertTrue(v["apogee_bar"]["pass"])
+        self.assertNotIn("g5_hard", v)
         # the latencies to the loop's instant, not to a 10 Hz sample (the truth's apogee is a 10 ms sample's)
         self.assertAlmostEqual(v["pitch"]["latency"], 0.5, delta=0.011)
         self.assertAlmostEqual(v["baro"]["latency"] - v["pitch"]["latency"], 0.3, delta=1e-4)
-        # the samples alone never see that vote: from them G5 is not judged at all
+        # the samples alone never see that vote: the report says they are not complete; the call is the [PYRO] line's
         r2 = score_run(self.d, "samples", console(self.cols, self.t_apo, self.t_land, early_in_samples=False),
                        self.files)
         self.assertEqual(r2["votes"]["vel"]["climbing_samples"], 0)
-        self.assertFalse(r2["votes"]["g5_judged"])
-        self.assertNotIn("g5_hard", r2["votes"])
+        self.assertFalse(r2["votes"]["complete"])
+        self.assertTrue(r2["votes"]["apogee_bar"]["pass"])
+
+    def test_the_apogee_bar_is_the_call_within_2_s_and_never_above_20_mps(self):
+        # 1.9 s early, at about 18.6 m/s of true climb: a pass (the old +2 m/s bar would have failed it)
+        r = score_run(self.d, "call_early_ok", console(self.cols, self.t_apo, self.t_land, call_dt=-1.9), self.files)
+        ab = r["votes"]["apogee_bar"]
+        self.assertTrue(ab["pass"], ab)
+        self.assertAlmostEqual(ab["true_vu"], 1.9 * 9.80665, delta=0.2)
+        # 2.5 s late: out of the window
+        r = score_run(self.d, "call_late", console(self.cols, self.t_apo, self.t_land, call_dt=2.5), self.files)
+        ab = r["votes"]["apogee_bar"]
+        self.assertFalse(ab["pass"])
+        self.assertFalse(ab["in_window"])
+        self.assertFalse(ab["climbing"])
+        # 6 s early, near 59 m/s of climb: the hard fail
+        r = score_run(self.d, "call_climbing", console(self.cols, self.t_apo, self.t_land, call_dt=-6.0), self.files)
+        ab = r["votes"]["apogee_bar"]
+        self.assertFalse(ab["pass"])
+        self.assertTrue(ab["climbing"])
+        self.assertIn("hard fail", ab["why"])
+        # no call at all, the console well past the window
+        text = "\n".join(ln for ln in console(self.cols, self.t_apo, self.t_land).splitlines() if "[PYRO]" not in ln)
+        r = score_run(self.d, "no_call", text + "\n", self.files)
+        self.assertFalse(r["votes"]["apogee_bar"]["pass"])
+        self.assertEqual(r["votes"]["apogee_bar"]["why"], "no call")
+
+    def test_the_twins_are_judged_by_the_adopted_bars(self):
+        st = type("T", (), {})()
+        st.apogee = 10.0
+        st.t = np.array([0.0, 10.0, 20.0])
+        st.vel = np.array([[0.0, 0.0, -100.0], [0.0, 0.0, 0.0], [0.0, 0.0, 10.0]])   # NED: up 100 m/s at T+0
+
+        def arm(boost, coast, descent, call):
+            att = lambda p90, med: {"n": 50, "p90": p90, "p99": p90, "max": p90, "median": med}  # noqa: E731
+            return {"boost": {"att": att(*boost)}, "coast": {"att": att(*coast)}, "descent": {"att": att(*descent)},
+                    "pitch_near_apogee": {"max": 4.0}, "vz_at_apogee": -0.4, "quorum": {"apogee_t": call},
+                    "apogee_bar": score_v9.apogee_bar(call, st), "climbing_votes": {"vel": [9.5], "pitch": [],
+                                                                                    "call": []}}
+        # boost 9 deg against an unaided 2: under the 10 deg floor, a pass; coast 12 against 8: over 8 + 3, a fail;
+        # descent 40 against 5: reported, no bar
+        A = arm((9.0, 4.0), (12.0, 6.0), (40.0, 20.0), 11.5)
+        U = arm((2.0, 1.0), (8.0, 5.0), (5.0, 3.0), 10.3)
+        acc, rep = score_v9.judge_twins(A, U, st)
+        self.assertTrue(acc["boost"]["pass"])
+        self.assertEqual(acc["boost"]["bar"], 10.0)
+        self.assertFalse(acc["coast"]["pass"])
+        self.assertEqual(acc["coast"]["bar"], 11.0)
+        self.assertIsNone(acc["descent"]["bar"])
+        self.assertIsNone(acc["descent"]["pass"])
+        self.assertEqual(acc["coast"]["aided_median"], 6.0)
+        self.assertTrue(acc["apogee_bar"]["pass"])                 # 1.5 s after the true apogee
+        # the plan's section 4 numbers: reported, no verdict
+        self.assertEqual(rep["pitch_near_apogee"], {"aided_max": 4.0, "unaided_max": 4.0})
+        self.assertAlmostEqual(rep["latency"]["aided_s"], 1.5)
+        self.assertEqual(rep["climbing_votes"]["vel"], [9.5])
+        for x in rep.values():
+            self.assertNotIn("pass", x)
+
+    def test_a_freeze_in_flight_voids_the_run_and_a_late_one_on_the_pad_is_marked(self):
+        # a time-tag hold across T-5 s and T+0 (test_mosaic_time_tag: ARigReplayHoldPastIgnitionFreezesInFlight);
+        # the next epoch after the freeze is past T-2 s, so the freeze goes unchecked at once
+        def unchecked(t):
+            return (t, f"SIM: RIG REPLAY clock: the freeze NOT checked against the 1PPS (no check of a second from the "
+                       f"freeze on by t {t:+.1f} s); PPS tag check so far 18 judged, 0 over 200 us; 7 held back or not "
+                       f"handed over (not judged)")
+        text = console(self.cols, self.t_apo, self.t_land, freeze_t=4.11, time_tag=True, extra=[unchecked(4.21)])
+        r = score_run(self.d, "freeze_flight", text, self.files)
+        self.assertTrue(r["clock"]["void"])
+        self.assertIn("froze at t +4.11 s, in flight", r["clock"]["void_why"])
+        self.assertAlmostEqual(r["sky_time"]["frozen_t"], 4.11)
+        self.assertFalse(r["scored"])
+        # released on the pad, after T-2 s (ARigReplayFreezeInsideTheHoldWaitsForATimedEpoch): marked, not void
+        text = console(self.cols, self.t_apo, self.t_land, freeze_t=-0.89, time_tag=True, extra=[unchecked(-0.79)])
+        r = score_run(self.d, "freeze_late", text, self.files)
+        self.assertFalse(r["clock"]["void"])
+        marks = r["sky_time"]["marks"]
+        self.assertTrue(any("froze late, at t -0.89 s" in m for m in marks), marks)
+        self.assertTrue(any("NOT checked" in m for m in marks), marks)
+        self.assertEqual(r["sky_time"]["pps_tag_check"]["freeze_check"]["held"], 7)
+        self.assertIn("nav", r)
+        # on time: neither
+        r = score_run(self.d, "freeze_on_time", console(self.cols, self.t_apo, self.t_land), self.files)
+        self.assertFalse(any("froze" in m for m in r["sky_time"]["marks"]))
 
     def test_a_second_over_200_us_after_the_freeze_voids_the_run_and_nothing_is_scored(self):
         text = console(self.cols, self.t_apo, self.t_land, pps=((-20.0, 0, 20), (5.0, 3, 40)),

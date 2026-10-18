@@ -41,7 +41,8 @@
 # Detailed. The run folder: fc_console.txt; hackrf.txt; tx.json (tx_log.py: each underrun on the file's timeline,
 # the exit status, the bytes sent); run.json (the image's version and ionosphere, the IMU rate, the blob's SHA-256,
 # the gain, the times, the transmitter's verdict, VOID and why); and VOID when void -- no replay clock by VOID_BY_S,
-# an underrun after the replay clock froze (the sky late on the replayed IMU for the rest of the flight), or a
+# the clock frozen only after ignition (a time-tag hold across T-5 s and T+0: the replayed IMU steps in flight), an
+# underrun after the replay clock froze (the sky late on the replayed IMU for the rest of the flight), or a
 # transmitter that failed or stopped short of the file. An underrun while the clock still followed the 1PPS line
 # leaves the run DEGRADED: score_v9.py judges the freeze's check against the 1PPS edge and the PPS tag check after
 # it. A console capture that ends early (the FC's USB went away: a reset or a crash) or a second boot of the FC
@@ -112,7 +113,8 @@ if [ -n "${DRY_RUN:-}" ]; then
     echo "refuse:   no 'RIG REPLAY' line of $FLIGHT; the cold start NOT queued; the console capture ended; the FC's"
     echo "          port moved; [SENSOR] ism6 outside 3400-4200/s; GNSS log not DETAILED"
     echo "transmit: caffeinate -dimsu $TX ${TX_ARGS[*]}"
-    echo "void:     no 'RIG REPLAY clock: on the receiver's clock' by file second $VOID_BY, or MISSED; the console capture"
+    echo "void:     no 'RIG REPLAY clock: on the receiver's clock' by file second $VOID_BY, or MISSED; 'frozen for the"
+    echo "          flight' at t >= 0 (a time-tag hold across T-5 s and T+0); the console capture"
     echo "          ending or the FC booting again before the file is done; an underrun or host shortfall after file"
     echo "          second $FREEZE_S (the freeze) and before $LAND_S (the landing); the transmitter failing or short"
     echo "          (score_v9.py adds: a 1PPS tag check over 200 us from the freeze to the landing)"
@@ -215,7 +217,7 @@ caffeinate -dimsu "$TX" "${TX_ARGS[@]}" > "$OUT/hackrf.txt" 2>&1 &
 TPID=$!
 
 # ---- the replay clock must be on the receiver's clock by file second VOID_BY; each underrun said as it comes
-VOID=""; WHY=""; ARMED_T=""; UNDER=0
+VOID=""; WHY=""; ARMED_T=""; FROZEN_T=""; UNDER=0
 while kill -0 "$TPID" 2>/dev/null; do
     sleep 1
     FS=$(python3 -c "import time; print(int(time.time() - $T_TX))")
@@ -226,6 +228,19 @@ while kill -0 "$TPID" 2>/dev/null; do
     fi
     if grep -a -q "RIG REPLAY clock: MISSED" "$CON"; then
         VOID=1; WHY="the replay clock's first time came after T-5 s (MISSED): the flight never starts"; break
+    fi
+    # the clock frozen in flight: only a timed epoch moves it, so a time-tag hold across T-5 s and T+0 freezes it
+    # on the late sky at the first timed epoch after the release, stepping the replayed IMU during the flight
+    if [ -z "$FROZEN_T" ]; then
+        FROZEN_T=$(grep -a -o "RIG REPLAY clock: frozen for the flight ([^)]*t [-+0-9.]*" "$CON" | head -1 \
+            | sed 's/.* t //')
+        if [ -n "$FROZEN_T" ]; then
+            say "replay clock frozen at t $FROZEN_T s"
+            if FT="$FROZEN_T" python3 -c 'import os, sys; sys.exit(0 if float(os.environ["FT"]) >= 0 else 1)'; then
+                VOID=1; WHY="the replay clock froze at t $FROZEN_T s, in flight (a time-tag hold across T-5 s and T+0)"
+                break
+            fi
+        fi
     fi
     if ! kill -0 "$CPID" 2>/dev/null; then
         VOID=1; WHY="the console capture ended at TX second $FS (the FC's USB went away: a reset or a crash)"; break

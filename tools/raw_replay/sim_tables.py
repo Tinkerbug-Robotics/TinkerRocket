@@ -2,6 +2,12 @@
 """Grid B's scores and tables (G4 and G5, plan section 4): each sim run of raw_replay_mosaic against the truth, the
 flight design against its --unaided twin.
 
+The verdicts here are the plan's section 4 bars, SUPERSEDED on 2026-10-17 by the bars the user adopted
+(gnss-attitude-study/v9-mosaic-filter-plan/impl/README.md: the call within +-2 s of the true apogee and never above
+20 m/s of true climb, the votes reported, boost and coast p90 <= max(unaided p90 + 3, 10) deg in >= 90 % of runs
+with the median better than unaided, the descent reported). A FAIL here (the +2 m/s vote bar, the per-phase deltas,
+the latency and vz bars) is not a no-go; the tables are kept as they were so grids stay comparable.
+
 score_run() scores one run (sim_grid.py calls it as each run finishes and keeps only the scores):
   - the total attitude error e = 2 acos|q_est . q_true| (deg) at every filter step, per phase: boost (T+0 to the
     burnout label), the tail-off ([burnout, thrust end), reported on its own and inside coast), coast (burnout to the
@@ -42,7 +48,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from scorelib import att_errors, pitch_deg  # noqa: E402
 
-# plan section 4: (delta, floor) per phase
+# plan section 4 (superseded 2026-10-17, see above): (delta, floor) per phase
 BARS = {"boost": (1.0, 2.0), "coast": (2.0, 3.0), "descent": (3.0, 5.0)}
 PITCH_NEAR_APOGEE_DEG = 2.0
 PRE_APOGEE_TWIN_MAX = 5.0
@@ -50,6 +56,8 @@ DESCENT_TWIN_MAX = 10.0
 PASS_FRACTION = 0.95
 LAT_MEDIAN_S, LAT_P95_S = 0.2, 0.5
 VZ_P95_MPS, VZ_TWIN_MPS = 1.0, 0.5
+SUPERSEDED = ("superseded 2026-10-17 by the adopted bars, gnss-attitude-study/v9-mosaic-filter-plan/impl/README.md: "
+              "a FAIL here is not a no-go")
 
 PATTERN_NAMES = collections.OrderedDict([
     ("none", "No fault"),
@@ -808,9 +816,11 @@ def tables(grid, out_md, against=None):
     verdict["G5"]["text"] = "PASS" if (hard.get("design", {}).get("ok") and g5_common) else "FAIL"
     verdict["G5"]["text_noguard"] = "PASS" if (hard.get("noguard", {}).get("ok") and g5_lat_ok and g5_vz_ok) \
         else "FAIL"
-    L.insert(0, f"Verdicts: G4 as worded {verdict['G4']['text']}, per informative arm "
-                f"{verdict['G4']['text_per_informative_arm']}; G5 with the guard as assumed {verdict['G5']['text']}, "
-                f"as built (noguard: the hard bar, latency and vz) {verdict['G5']['text_noguard']}.")
+    verdict["bars"] = SUPERSEDED
+    L.insert(0, f"Verdicts by the plan's section 4 bars ({SUPERSEDED}): G4 as worded {verdict['G4']['text']}, per "
+                f"informative arm {verdict['G4']['text_per_informative_arm']}; G5 with the guard as assumed "
+                f"{verdict['G5']['text']}, as built (noguard: the hard bar, latency and vz) "
+                f"{verdict['G5']['text_noguard']}.")
     with open(out_md, "w") as fh:
         fh.write("\n".join(L) + "\n")
     with open(os.path.join(grid, "verdict.json"), "w") as fh:
@@ -825,7 +835,8 @@ def main():
     ap.add_argument("--against", help="another grid's OUT: its no-fault magnetometer-0 runs set beside these")
     a = ap.parse_args()
     v = tables(a.grid, a.report or os.path.join(a.grid, "tables.md"), a.against)
-    print(json.dumps({k: {kk: vv for kk, vv in v[k].items() if kk.startswith("text")} for k in v}))
+    print(json.dumps({k: ({kk: vv for kk, vv in v[k].items() if kk.startswith("text")} if isinstance(v[k], dict)
+                          else v[k]) for k in v}))
 
 
 if __name__ == "__main__":

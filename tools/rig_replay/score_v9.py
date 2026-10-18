@@ -6,15 +6,24 @@ downloaded, and on request the same log through the offline harness.
                 [--log OC_LOG [--harness RAW_REPLAY_MOSAIC]] [--json OUT.json] [--score-void]
 
 First, whether the run counts. VOID if the replay clock was not on the receiver's clock by file second 170 (as
-run_v9.sh judges); if the transmitter underran or fell short after the clock froze, or failed or stopped short of the
-file (hackrf.txt, tx_log.py: the sky late on the replayed IMU from then on); or if the 1PPS tag check judged any
-second over 200 us from the freeze's check to the landing (the filter's own time tags off the sky and the IMU: the
-driver's clock line lagging a slip before the time-tag fix, a tag handed over wrong after it). The freeze itself is
-checked against the 1PPS edge by the firmware and moved onto it when the line lagged ("RIG REPLAY clock: the freeze
-checked"). Epochs the driver handed over untimed between the freeze and the landing (an image with the time-tag fix
-holds the tag after a break until the 1PPS confirms it) only mark the run: the filter flew those without GNSS. A VOID
-run's flight is not scored (no attitude, velocity, voters, OC log or harness numbers) unless --score-void asks for
-them, for diagnosis only.
+run_v9.sh judges); if it froze after ignition (a time-tag hold across T-5 s and T+0: the replayed flight started on
+the old sky's clock and the freeze stepped the replayed IMU onto the late sky's in flight); if the transmitter
+underran or fell short after the clock froze, or failed or stopped short of the file (hackrf.txt, tx_log.py: the sky
+late on the replayed IMU from then on); or if the 1PPS tag check judged any second over 200 us from the freeze's
+check to the landing (the filter's own time tags off the sky and the IMU: the driver's clock line lagging a slip
+before the time-tag fix, a tag handed over wrong after it). The freeze itself is checked against the 1PPS edge by the
+firmware and moved onto it when the line lagged ("RIG REPLAY clock: the freeze checked"). A freeze later than T-5 s
+(a hold across it, released on the pad), a freeze not checked, and epochs the driver handed over untimed between the
+freeze and the landing (an image with the time-tag fix holds the tag after a break until the 1PPS confirms it) only
+mark the run: the filter flew those without GNSS. A VOID run's flight is not scored (no attitude, velocity, voters,
+OC log or harness numbers) unless --score-void asks for them, for diagnosis only.
+
+The bars are the ones adopted on 2026-10-17 (gnss-attitude-study/v9-mosaic-filter-plan/impl/README.md), which
+replace the plan's section 4 and G4/G5's per-phase bars: the apogee call within +-2 s of the TRUE apogee and never
+while the true vertical velocity is above 20 m/s (a hard fail); the votes reported, not barred; boost and coast
+attitude p90 <= max(unaided p90 + 3 deg, 10 deg) (the grid's: in >= 90 % of runs, with the median better than
+unaided); the descent reported, no bar. The old bars (the +2 m/s vote bar, the pitch near apogee, the call's
+latency, vz at apogee, the per-phase deltas) are reported as numbers, never as a verdict.
 
 From the console alone (a TR_SIM_REPLAY_BLOB build of the mosaic-only image prints [REPLAY-NAV] 50 a second from
 launch to burnout, 10 a second after, at the navigation state's own instant, and [REPLAY-VOTE] at each change of a
@@ -26,9 +35,10 @@ voter, the call or a guard):
     "up" is relative, as the [REPLAY] line's);
   - each apogee voter (velocity, barometer, GPS, pitch), the call and the backstop, from the [REPLAY-VOTE] edges (a
     vote can last 6 ms): first vote, latency against the true apogee, the true vertical velocity then, and any vote
-    while the rocket still climbs faster than 2 m/s (gate G5's hard bar); the vertical velocity estimate at the true
-    apogee. An image from before [REPLAY-VOTE] falls back to the 10 Hz samples, and G5 is then NOT judged: a
-    console-only G5 result from samples is never a pass;
+    while the rocket still climbs faster than 2 m/s (reported, not barred); the vertical velocity estimate at the
+    true apogee. The apogee bar takes the call from the [PYRO] line (exact): within +-2 s of the true apogee, never
+    while the true vertical velocity is above 20 m/s. An image from before [REPLAY-VOTE] falls back to the 10 Hz
+    samples for the votes, which can miss a vote of a few milliseconds: the vote report then says so;
   - the receiver's epochs' age and build, the filter's step and busy share, [CPU] and [LP] where the image has them,
     the loop and IMU rates -- pad, flight and ground apart;
   - the bias-corrected PPS tag check (and the seconds held back), the 1PPS line's drift, the driver's untimed epochs
@@ -39,10 +49,12 @@ With --log, the OC's flight log too: the on-board filter's records (0x96, 10 Hz)
 flag (NonSensor), the epoch age the filter recorded, and the receiver's own PVT (its SBF) against the truth with its
 clock drift (about +0.1 ppm on the rig) and its clock bias at ignition. With --harness, the log through the offline
 harness from the on-board filter's own start (extract.py --sbf --rig): the harness against the on-board records, and
-the aided filter against its unaided twin (att_gnss_off) by the plan's section 4 bars a run can be judged by: the
-attitude p90 per phase, the pitch within 2 s of the true apogee, the call's latency, the vertical velocity at the true
-apogee, G5's hard bar, and no boost/coast p90 more than 5 deg (descent 10) above the twin. Both twins start from the
-aided filter's state about 0.4 s before launch (the OC log has no pad), so this is GNSS's effect in flight only.
+the aided filter against its unaided twin (att_gnss_off) by the adopted bars one run can be judged by: boost and
+coast attitude p90 <= max(unaided p90 + 3, 10) deg, and the aided quorum's call within +-2 s of the true apogee and
+never above 20 m/s of true climb; beside them, reported only: the descent, the medians against the twin's, the pitch
+within 2 s of the true apogee, the call's latency against the twin's, the vertical velocity at the true apogee and
+the votes while climbing. Both twins start from the aided filter's state about 0.4 s before launch (the OC log has no
+pad), so this is GNSS's effect in flight only.
 
 Positions are only ever printed as errors; the console, the log and every intermediate stay in the run folder.
 """
@@ -66,13 +78,14 @@ import tx_log  # noqa: E402
 from truth import Truth as RigTruth, edge_t, flight_files  # noqa: E402
 
 PHASES = ("boost", "coast", "descent")
-# plan section 4: a run passes a phase if p90(aided) <= max(p90(unaided) + delta, floor)
-BARS = {"boost": (1.0, 2.0), "coast": (2.0, 3.0), "descent": (3.0, 5.0)}
-CLIMB_MPS = 2.0                 # G5: no vote while the true vertical velocity is above this
-PITCH_NEAR_APOGEE_DEG = 2.0     # plan section 4: the pitch within 2 s of the true apogee <= unaided + this (max)
-LATENCY_S = 0.2                 #   the call's latency <= unaided + this (a run's: the median bar's)
-VZ_APOGEE_MPS, VZ_TWIN_MPS = 1.0, 0.5   # |vz at the true apogee| <= this, and <= unaided + that
-PRE_APOGEE_TWIN_DEG, DESCENT_TWIN_DEG = 5.0, 10.0   # the grid's: no run's boost/coast p90 this far above its twin
+# The acceptance bars adopted 2026-10-17 (gnss-attitude-study/v9-mosaic-filter-plan/impl/README.md), which replace
+# the plan's section 4 and G4/G5's per-phase bars. The descent is reported, no bar; so are the votes.
+ASCENT = ("boost", "coast")
+ASCENT_TWIN_DEG, ASCENT_FLOOR_DEG = 3.0, 10.0   # boost and coast: p90(aided) <= max(p90(unaided) + this, that)
+CALL_WINDOW_S = 2.0             # the quorum's call within +-this of the TRUE apogee
+CALL_CLIMB_MPS = 20.0           # and never while the true vertical velocity is above this (a hard fail)
+CLIMB_MPS = 2.0                 # votes while the true vertical velocity is above this: reported (the old +2 m/s
+                                # bar the adopted ones replace), not barred
 # What the harness's twins compare: both start from the on-board aided filter's own state at the OC log's first
 # record (extract.py --rig), about 0.4 s before launch -- the OC records from launch, with a prelaunch ring -- so
 # the unaided twin flies from the aided filter's pad attitude and biases. The comparison is GNSS's effect in flight
@@ -81,6 +94,7 @@ PRE_APOGEE_TWIN_DEG, DESCENT_TWIN_DEG = 5.0, 10.0   # the grid's: no run's boost
 TWIN_SCOPE = ("both twins start from the on-board aided filter's state ~0.4 s before launch (the OC log has no pad): "
               "this is GNSS's effect in flight only, not on the pad alignment")
 FREEZE_T = -5.0                 # the replay clock freezes here (ReplayClock::Config::arm_by_s)
+FREEZE_LATE_S = 0.5             # a freeze this far past it is late: no timed epoch at T-5 s (a time-tag hold)
 VOID_BY_FILE_S = 170.0          # run_v9.sh's: the replay clock on the receiver's by this file second
 VOTERS = ("vel", "baro", "gps", "pitch")
 LEAP_S = 18
@@ -423,7 +437,7 @@ def intervals(t, on):
 
 def score_votes(t, flags, st, true_vu, call_t=None):
     """Each voter's first vote, its latency against the true apogee and the true vertical velocity then; any vote
-    while the rocket climbs faster than CLIMB_MPS (G5's hard bar)."""
+    while the rocket climbs faster than CLIMB_MPS (reported, not barred)."""
     out = {"true_apogee": st.apogee}
     for k, on in flags.items():
         on = np.asarray(on, bool)
@@ -444,8 +458,9 @@ EDGE_FLAGS = ("vel", "baro", "gps", "pitch", "call", "backstop", "burnout", "gps
 
 def score_vote_edges(edges, st, call_t=None):
     """Each voter from the [REPLAY-VOTE] lines: the full state at each change, at the replay's time, so a vote of a
-    few milliseconds is there and its first instant is the loop's. A vote is climbing (G5's hard bar) when the true
-    vertical velocity anywhere in it, after T+0, is above CLIMB_MPS. Complete only when no change went unprinted."""
+    few milliseconds is there and its first instant is the loop's. A vote is climbing (reported, not barred) when the
+    true vertical velocity anywhere in it, after T+0, is above CLIMB_MPS. Complete only when no change went
+    unprinted."""
     rows = [(t, f) for _ms, t, have, _st, f, _u in edges if have]
     out = {"true_apogee": st.apogee, "from": "the [REPLAY-VOTE] edges",
            "complete": all(u == 0 for *_x, u in edges), "unprinted": int(sum(u for *_x, u in edges))}
@@ -473,8 +488,26 @@ def score_vote_edges(edges, st, call_t=None):
     if call_t is not None:
         out["call_exact"] = {"t": call_t, "latency": call_t - st.apogee,
                              "true_vu": float(np.interp(call_t, st.t, true_vu))}
-    out["g5_judged"] = out["complete"]
     return out
+
+
+def apogee_bar(call_t, st):
+    """The adopted apogee bar on one call (s from ignition; None: no call): within +-CALL_WINDOW_S of the TRUE
+    apogee, and never while the true vertical velocity is above CALL_CLIMB_MPS (a hard fail)."""
+    if call_t is None:
+        return {"t": None, "latency": None, "true_vu": None, "in_window": False, "climbing": False, "pass": False,
+                "why": "no call"}
+    true_vu = float(np.interp(call_t, st.t, -st.vel[:, 2]))
+    lat = call_t - st.apogee
+    in_window = abs(lat) <= CALL_WINDOW_S
+    climbing = true_vu > CALL_CLIMB_MPS
+    why = []
+    if climbing:
+        why.append(f"called at {true_vu:+.1f} m/s of true climb (hard fail)")
+    if not in_window:
+        why.append(f"called {lat:+.2f} s from the true apogee")
+    return {"t": call_t, "latency": lat, "true_vu": true_vu, "in_window": in_window, "climbing": climbing,
+            "pass": in_window and not climbing, "why": "; ".join(why)}
 
 
 def console_votes(con, st):
@@ -484,7 +517,7 @@ def console_votes(con, st):
         out = score_vote_edges(con.votes_edges, st, call_t)
     if out is None:
         # an image from before [REPLAY-VOTE]: the 10 Hz samples, where a vote of a few milliseconds can fall between
-        # two -- G5's hard bar and the latencies are not judged from them
+        # two -- the votes and their latencies from them are approximate (the apogee bar takes the [PYRO] call)
         n = con.nav
         if n is None:
             return None
@@ -495,14 +528,23 @@ def console_votes(con, st):
                  "call": n["call"][m], "backstop": n["backstop"][m], "guard": n["guard"][m], "mach": n["mach"][m],
                  "gps_admitted": n["gps_admitted"][m]}
         out = score_votes(t, flags, st, true_vu, call_t)
-        out["from"] = "the [REPLAY-NAV] samples (10 a second): G5 and the latencies not judged"
-        out["g5_judged"] = False
+        out["from"] = "the [REPLAY-NAV] samples (10 a second): a vote of a few ms can fall between two"
+        out["complete"] = False
     if con.apogee:
         out["call_voters"] = dict(zip(("vel", "baro", "gps", "pitch", "backstop"), con.apogee[1]))
-    # G5's hard bar on the console: no call, no raw velocity and no raw pitch vote while climbing
-    if out.get("g5_judged"):
-        early = {k: out[k]["climbing_samples"] for k in ("vel", "pitch", "call") if out.get(k)}
-        out["g5_hard"] = {"early": early, "pass": not any(early.values())}
+    # the votes while climbing: reported, not barred (the adopted bars)
+    out["climbing_votes"] = {k: out[k]["climbing_samples"] for k in ("vel", "pitch", "call") if out.get(k)}
+    # the adopted apogee bar on the call: the [PYRO] line's instant (exact); without it the [REPLAY-VOTE] edges'
+    # first call; a console that runs past the window with neither had no call
+    if out.get("call_exact"):
+        out["apogee_bar"] = apogee_bar(out["call_exact"]["t"], st)
+    elif out.get("complete") and (out.get("call") or {}).get("first") is not None:
+        out["apogee_bar"] = apogee_bar(out["call"]["first"], st)
+    else:
+        n = con.nav
+        tt = None if n is None else n["t"][(n["have_t"] > 0) & np.isfinite(n["t"])]
+        if tt is not None and tt.size and tt.max() > st.apogee + CALL_WINDOW_S:
+            out["apogee_bar"] = apogee_bar(None, st)
     return out
 
 
@@ -667,6 +709,12 @@ def score_sky_time(con, st, run, run_dir, clock):
       - The freeze: the firmware checks it against the 1PPS edge of its own second ("RIG REPLAY clock: the freeze
         checked", ReplayClock::onTagCheck) and moves it onto the edge when the driver's clock line had not yet
         followed a slip; so from the freeze on the replayed IMU is on the sky's time.
+      - When it froze ("RIG REPLAY clock: frozen for the flight (... at t X s)"): only a timed epoch moves the
+        clock, so a time-tag hold across T-5 s keeps it running on the old sky's clock until the first timed epoch
+        after the release, which puts it on the late sky's and freezes it there. Released on the pad (X < 0), that
+        step is on a still rocket and the clock is on the sky's time: a mark (X past T-2 s also leaves the freeze
+        unchecked, a mark of its own). Released in flight (X >= 0), the replayed flight started on the old sky's
+        clock and the freeze stepped the replayed IMU back by the slip during it: VOID.
       - The filter's own tags: before the time-tag fix the driver's line followed a late sky only after about a
         minute, and while it lagged its tags -- the filter's epochs' instants -- were that far off the sky and the
         IMU. With the fix (MosaicTimeTag.h) a tag is right or the epoch untimed: the line steps onto its edges, and
@@ -699,6 +747,20 @@ def score_sky_time(con, st, run, run_dir, clock):
     fc = con.freeze_check
     void, marks = [], []
     pps = {"freeze_check": fc}
+    frozen = [t for _ms, s, t in con.clock if s.startswith("frozen for the flight")]
+    out["frozen_t"] = frozen[0] if frozen else None
+    if frozen and np.isfinite(frozen[0]):
+        if frozen[0] >= 0.0:
+            void.append(f"the replay clock froze at t {frozen[0]:+.2f} s, in flight: no timed epoch from T-5 s to "
+                        f"then (a time-tag hold across both), so the replayed flight started on the old sky's clock "
+                        f"and the freeze stepped the replayed IMU onto the late sky's during it")
+        elif frozen[0] > FREEZE_T + FREEZE_LATE_S:
+            marks.append(f"the replay clock froze late, at t {frozen[0]:+.2f} s (no timed epoch at T-5 s: a time-tag "
+                         f"hold across it): the first timed epoch after the release froze it on the pad, on the sky's "
+                         f"time")
+    elif armed_t is not None:
+        marks.append("the replay clock never froze (no timed epoch from T-5 s on): the replayed flight ran on the "
+                     "clock the last timed epoch set")
     if fc is not None:
         base = (con.t_of_ms(fc["ms"]), fc["over"], fc["judged"])
         if not fc["checked"]:
@@ -741,8 +803,8 @@ def score_sky_time(con, st, run, run_dir, clock):
         marks += out["transmitter"]["degraded_why"]
     if pps.get("over_after_freeze"):
         void.append(f"the 1PPS tag check judged {pps['over_after_freeze']} second(s) over 200 us between the freeze "
-                    f"and the landing: the filter's own time tags off the sky and the replayed IMU then (the driver's "
-                    f"clock line lagging a slip)")
+                    f"and the landing: the filter's own time tags off the sky and the replayed IMU then (before the "
+                    f"time-tag fix, the driver's clock line lagging a slip; with it, a tag handed over wrong)")
     elif "over_after_freeze" not in pps:
         marks.append("the 1PPS tag check could not be read across the flight (no 5 s [RAWGNSS] mosaic-G5 lines)")
     elif not pps.get("judged_after_freeze"):
@@ -896,9 +958,9 @@ def phase_metrics(series, st):
     return out
 
 
-def harness_g5(q, st):
-    """G5's hard bar on a harness arm's own quorum (its events JSON, every step): no call, no raw velocity vote and
-    no raw pitch vote while the true vertical velocity is above CLIMB_MPS, after its launch."""
+def harness_climbing_votes(q, st):
+    """A harness arm's own quorum (its events JSON, every step): the raw velocity and pitch votes and the call while
+    the true vertical velocity is above CLIMB_MPS, after its launch. Reported, not barred."""
     true_vu = -st.vel[:, 2]
     launch = q.get("launch_t") if q.get("launch_t") is not None else 0.0
     early = {}
@@ -907,7 +969,42 @@ def harness_g5(q, st):
         early[k] = [x for x in ons if np.interp(x, st.t, true_vu) > CLIMB_MPS]
     call = q.get("apogee_t")
     early["call"] = [call] if call is not None and np.interp(call, st.t, true_vu) > CLIMB_MPS else []
-    return {"early": early, "pass": not any(early.values())}
+    return early
+
+
+def judge_twins(A, U, st):
+    """The aided arm against its unaided twin (phase_metrics, with each arm's quorum, apogee_bar and
+    climbing_votes): the adopted bars a run is judged by -- boost and coast p90(aided) <= max(p90(unaided) + 3, 10)
+    deg, and the aided quorum's call within +-2 s of the true apogee, never above 20 m/s of true climb -- with the
+    descent and the medians beside them (the grid's: the median better than unaided), and, reported only, what the
+    plan's section 4 barred before 2026-10-17. Returns (acceptance, reported)."""
+    acceptance = {}
+    for ph in PHASES:
+        a = (A.get(ph) or {}).get("att")
+        u = (U.get(ph) or {}).get("att")
+        if a and u:
+            row = {"aided_p90": a["p90"], "unaided_p90": u["p90"], "aided_median": a["median"],
+                   "unaided_median": u["median"], "bar": None, "pass": None}
+            if ph in ASCENT:
+                row["bar"] = max(u["p90"] + ASCENT_TWIN_DEG, ASCENT_FLOOR_DEG)
+                row["pass"] = a["p90"] <= row["bar"]
+            acceptance[ph] = row
+    if A.get("apogee_bar") is not None:
+        acceptance["apogee_bar"] = A["apogee_bar"]
+    reported = {}
+    pa, pu = A.get("pitch_near_apogee"), U.get("pitch_near_apogee")
+    if pa and pu:
+        reported["pitch_near_apogee"] = {"aided_max": pa["max"], "unaided_max": pu["max"]}
+    ca, cu = (A.get("quorum") or {}).get("apogee_t"), (U.get("quorum") or {}).get("apogee_t")
+    if ca is not None or cu is not None:
+        reported["latency"] = {"aided_s": None if ca is None else ca - st.apogee,
+                               "unaided_s": None if cu is None else cu - st.apogee}
+    va, vu = A.get("vz_at_apogee"), U.get("vz_at_apogee")
+    if va is not None and vu is not None:
+        reported["vz_at_apogee"] = {"aided_abs": abs(va), "unaided_abs": abs(vu)}
+    if A.get("climbing_votes") is not None:
+        reported["climbing_votes"] = A["climbing_votes"]
+    return acceptance, reported
 
 
 def run_harness(binary, log, blob, outdir, recs, base, st):
@@ -939,46 +1036,10 @@ def run_harness(binary, log, blob, outdir, recs, base, st):
         res[arm]["quorum"] = {k: q.get(k) for k in ("launch_t", "burnout_t", "gnss_admitted_t", "guard_latch_t",
                                                     "apogee_t", "backstop_t") if k in q}
         res[arm]["quorum"]["at_call"] = q.get("at_call")
-        res[arm]["g5_hard"] = harness_g5(q, st) if q else None
+        res[arm]["climbing_votes"] = harness_climbing_votes(q, st) if q else None
+        res[arm]["apogee_bar"] = apogee_bar(q.get("apogee_t"), st) if q else None
         res[arm]["exit"] = p.returncode
-    # the plan's bar per phase: p90(aided) <= max(p90(unaided) + delta, floor)
-    res["acceptance"] = {}
-    for ph in PHASES:
-        a = (res["aided"].get(ph) or {}).get("att")
-        u = (res["unaided"].get(ph) or {}).get("att")
-        if a and u:
-            d, floor = BARS[ph]
-            bar = max(u["p90"] + d, floor)
-            res["acceptance"][ph] = {"aided_p90": a["p90"], "unaided_p90": u["p90"], "bar": bar,
-                                     "pass": a["p90"] <= bar}
-    # the per-run bars beside them (plan section 4, as sim_tables.py words them for one run)
-    A, U = res["aided"], res["unaided"]
-    pa, pu = A.get("pitch_near_apogee"), U.get("pitch_near_apogee")
-    if pa and pu:
-        res["acceptance"]["pitch_near_apogee"] = {"aided_max": pa["max"], "unaided_max": pu["max"],
-                                                  "bar": pu["max"] + PITCH_NEAR_APOGEE_DEG,
-                                                  "pass": pa["max"] <= pu["max"] + PITCH_NEAR_APOGEE_DEG}
-    ca, cu = A["quorum"].get("apogee_t"), U["quorum"].get("apogee_t")
-    if ca is not None or cu is not None:
-        la = None if ca is None else ca - st.apogee
-        lu = None if cu is None else cu - st.apogee
-        res["acceptance"]["latency"] = {"aided_s": la, "unaided_s": lu,
-                                        "bar": None if lu is None else lu + LATENCY_S,
-                                        "pass": la is not None and (lu is None or la <= lu + LATENCY_S)}
-    va, vu = A.get("vz_at_apogee"), U.get("vz_at_apogee")
-    if va is not None and vu is not None:
-        bar = min(VZ_APOGEE_MPS, abs(vu) + VZ_TWIN_MPS)
-        res["acceptance"]["vz_at_apogee"] = {"aided_abs": abs(va), "unaided_abs": abs(vu), "bar": bar,
-                                             "pass": abs(va) <= bar}
-    # the grid's per-run limits: no pre-apogee p90 more than 5 deg above its twin, no descent p90 more than 10
-    for key, phs, lim in (("pre_apogee_twin", ("boost", "coast"), PRE_APOGEE_TWIN_DEG),
-                          ("descent_twin", ("descent",), DESCENT_TWIN_DEG)):
-        gaps = {ph: (A[ph]["att"]["p90"] - U[ph]["att"]["p90"]) for ph in phs
-                if (A.get(ph) or {}).get("att") and (U.get(ph) or {}).get("att")}
-        if gaps:
-            res["acceptance"][key] = {"gap_p90": gaps, "limit": lim, "pass": max(gaps.values()) <= lim}
-    if A.get("g5_hard") is not None:
-        res["acceptance"]["g5_hard"] = A["g5_hard"]
+    res["acceptance"], res["reported"] = judge_twins(res["aided"], res["unaided"], st)
     res["scope"] = TWIN_SCOPE
     # the twins alike to the last digit: no GNSS reached the attitude (no ephemeris, no time, a dead sky)
     res["twins_identical"] = all(
@@ -1020,7 +1081,9 @@ def report(r):
         fz = ("none (an image from before it)" if not fc else "NOT checked" if not fc.get("checked") else
               f"second t {fc['t']:+.0f}: residual {fc['residual_us']:+d} us, "
               f"{'MOVED %+d us onto the edge' % fc['move_us'] if fc['moved'] else 'kept'}")
-        w(f"the freeze against the 1PPS edge: {fz}")
+        ft = sk.get("frozen_t")
+        w(f"the replay clock froze at {'t %+.2f s' % ft if ft is not None else 'no time (never)'}; the freeze against "
+          f"the 1PPS edge: {fz}")
         w(f"1PPS tag check: over 200 us before the freeze {p.get('over_before_freeze', '-')}, from it to the landing "
           f"{p.get('over_after_freeze', '-')} (of {p.get('judged_after_freeze', '-')} judged)")
     for m in sk.get("marks", []):
@@ -1048,7 +1111,7 @@ def report(r):
     if v:
         w(f"\n## Apogee voters ({v.get('from', 'console')}; the true apogee T+{v['true_apogee']:.2f})")
         if v.get("from", "").startswith("the [REPLAY-VOTE]") and not v.get("complete", True):
-            w(f"  !! {v['unprinted']} changes went unprinted (more than 50 a second): G5 not judged")
+            w(f"  !! {v['unprinted']} changes went unprinted (more than 50 a second): the votes below may miss some")
         for k in VOTERS + ("call", "backstop", "guard", "mach"):
             x = v.get(k)
             if not x:
@@ -1056,12 +1119,15 @@ def report(r):
             fr = "never" if x["first"] is None else f"T+{x['first']:.2f} ({x['latency']:+.2f} s, true vz {x['true_vu_at_first']:+.2f})"
             w(f"  {k:9s} first {fr}; votes while climbing > {CLIMB_MPS:g} m/s: {x['climbing_samples']}"
               f"{'' if x['first_climbing'] is None else ' (first T+%.2f)' % x['first_climbing']}")
-        if v.get("g5_hard"):
-            g = v["g5_hard"]
-            w(f"  G5 hard bar (no call, raw velocity or pitch vote while climbing > {CLIMB_MPS:g} m/s): "
-              f"{'PASS' if g['pass'] else 'FAIL'} {g['early']}")
-        elif v:
-            w("  G5 hard bar: not judged from this console")
+        w(f"  votes while climbing > {CLIMB_MPS:g} m/s: reported, not barred (the bars adopted 2026-10-17) "
+          f"{v.get('climbing_votes')}")
+        ab = v.get("apogee_bar")
+        if ab:
+            w(f"  apogee bar (the call within +-{CALL_WINDOW_S:g} s of the true apogee, never above "
+              f"{CALL_CLIMB_MPS:g} m/s of true climb): {'PASS' if ab['pass'] else 'FAIL'}"
+              f"{' -- ' + ab['why'] if ab['why'] else ''}")
+        else:
+            w("  apogee bar: not judged (no call line, and the console ends before the window closes)")
         if v.get("call_exact"):
             ce = v["call_exact"]
             w(f"  call (exact, [PYRO]) T+{ce['t']:.3f}: {ce['latency']:+.3f} s from the true apogee, true vz "
@@ -1120,34 +1186,35 @@ def report(r):
     hz = r.get("harness")
     if hz:
         w("\n## Offline harness from the on-board start (aided = as flown; unaided = att_gnss_off; GNSS's in-flight "
-          "effect only)")
+          "effect only; the bars adopted 2026-10-17)")
+        acc = hz["acceptance"]
         for ph in PHASES:
             a, u = hz["aided"][ph], hz["unaided"][ph]
-            acc = hz["acceptance"].get(ph)
-            w(f"  {ph:8s} aided {fmt(a['att'])}  unaided {fmt(u['att'])}  -> "
-              f"{'PASS' if acc and acc['pass'] else 'FAIL' if acc else '-'}"
-              f"{'' if not acc else ' (bar %.2f)' % acc['bar']}")
-        acc = hz["acceptance"]
-        if "pitch_near_apogee" in acc:
-            x = acc["pitch_near_apogee"]
-            w(f"  pitch within 2 s of the true apogee (max): aided {x['aided_max']:.2f}, unaided {x['unaided_max']:.2f} "
-              f"deg -> {'PASS' if x['pass'] else 'FAIL'} (bar {x['bar']:.2f})")
-        if "latency" in acc:
-            x = acc["latency"]
+            x = acc.get(ph)
+            verdict = ("-" if not x else "reported, no bar" if x["bar"] is None else
+                       "%s (bar max(unaided + %g, %g) = %.2f)" % ("PASS" if x["pass"] else "FAIL", ASCENT_TWIN_DEG,
+                                                                ASCENT_FLOOR_DEG, x["bar"]))
+            med = "" if not x else f"; median aided {x['aided_median']:.2f}, unaided {x['unaided_median']:.2f}"
+            w(f"  {ph:8s} aided {fmt(a['att'])}  unaided {fmt(u['att'])}  -> {verdict}{med}")
+        if "apogee_bar" in acc:
+            ab = acc["apogee_bar"]
+            w(f"  apogee bar (aided quorum's call within +-{CALL_WINDOW_S:g} s of the true apogee, never above "
+              f"{CALL_CLIMB_MPS:g} m/s of true climb): {'PASS' if ab['pass'] else 'FAIL'}"
+              f"{' -- ' + ab['why'] if ab['why'] else ''}")
+        rp = hz.get("reported") or {}
+        if "pitch_near_apogee" in rp:
+            x = rp["pitch_near_apogee"]
+            w(f"  reported: pitch within 2 s of the true apogee (max): aided {x['aided_max']:.2f}, unaided "
+              f"{x['unaided_max']:.2f} deg")
+        if "latency" in rp:
+            x = rp["latency"]
             f2 = lambda v: "none" if v is None else f"{v:+.3f}"  # noqa: E731
-            w(f"  the call's latency: aided {f2(x['aided_s'])} s, unaided {f2(x['unaided_s'])} s -> "
-              f"{'PASS' if x['pass'] else 'FAIL'}")
-        if "vz_at_apogee" in acc:
-            x = acc["vz_at_apogee"]
-            w(f"  |vz| at the true apogee: aided {x['aided_abs']:.2f}, unaided {x['unaided_abs']:.2f} m/s -> "
-              f"{'PASS' if x['pass'] else 'FAIL'} (bar {x['bar']:.2f})")
-        if "g5_hard" in acc:
-            w(f"  G5 hard bar (aided): {'PASS' if acc['g5_hard']['pass'] else 'FAIL'} {acc['g5_hard']['early']}")
-        for key, what in (("pre_apogee_twin", "boost/coast p90 above the twin"), ("descent_twin", "descent p90 above the twin")):
-            if key in acc:
-                x = acc[key]
-                gaps = ", ".join(f"{ph} {v:+.2f}" for ph, v in x["gap_p90"].items())
-                w(f"  {what} (<= {x['limit']:g} deg): {gaps} -> {'PASS' if x['pass'] else 'FAIL'}")
+            w(f"  reported: the call's latency: aided {f2(x['aided_s'])} s, unaided {f2(x['unaided_s'])} s")
+        if "vz_at_apogee" in rp:
+            x = rp["vz_at_apogee"]
+            w(f"  reported: |vz| at the true apogee: aided {x['aided_abs']:.2f}, unaided {x['unaided_abs']:.2f} m/s")
+        if "climbing_votes" in rp:
+            w(f"  reported: aided votes while climbing > {CLIMB_MPS:g} m/s: {rp['climbing_votes']}")
         w(f"  scope: {TWIN_SCOPE}")
         if hz.get("twins_identical"):
             w("  !! aided and unaided are identical: no GNSS reached the attitude in the harness (its stderr says why)")

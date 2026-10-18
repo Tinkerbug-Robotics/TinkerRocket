@@ -10,11 +10,17 @@ where it was, so the sky is late by the padding. Both are slips here; the paddin
 the file's timeline after a shortfall is read up to that much late. The replay's clock follows the 1PPS line until T-5 s and then runs on the MCU's crystal, so
   - an underrun after the freeze (file second 175) and before the landing moves the sky against the replayed IMU for
     the rest of the flight: the run is VOID;
-  - one between the clock's arming and the freeze: the edges move with the sky at once, the driver's clock line
-    (a lower envelope of them) only after about a minute, and the replay's clock takes the line's tags. The freeze
-    is checked against the edge (the firmware moves it onto the edge, "RIG REPLAY clock: the freeze checked"), but
-    while the line still lags the filter's own tags are that far off the sky: DEGRADED here, and the PPS tag check
-    after the freeze decides (score_v9.py voids on any second over 200 us from the freeze to the landing);
+  - one between the clock's arming and the freeze: DEGRADED here, and score_v9.py decides. The edges move with the
+    sky at once. Before the time-tag fix the driver's clock line (a lower envelope of them) followed only after
+    about a minute, and the replay's clock took the line's tags: the freeze is checked against the edge (the
+    firmware moves it onto the edge, "RIG REPLAY clock: the freeze checked"), but while the line lagged the
+    filter's own tags were that far off the sky, which the PPS tag check after the freeze shows (score_v9.py voids
+    on any second over 200 us from the freeze to the landing). With the fix (MosaicTimeTag.h) the tag is held after
+    the slip, its epochs untimed, until the 1PPS confirms the late sky, and the replay's clock takes only timed
+    epochs: it runs on through the hold on the old sky, and the first timed epoch after the release puts it on the
+    late one, freezing it there when the hold spanned T-5 s. Released on the pad, that is the sky's time (a release
+    after T-2 s leaves the freeze unchecked, a mark); released after ignition, the replayed IMU steps back by the
+    slip in flight, and score_v9.py voids the run ("frozen for the flight (... at t X s)" with X >= 0);
   - one before the clock, or after the landing, does not touch the scored flight;
   - the last stats line, printed after the transmitter stopped, is the end of the file draining: not judged.
 The counts are cumulative and "longest" is the longest gap so far, so a line whose count rose by n with the longest
@@ -106,7 +112,8 @@ def judge(tx, armed_file_s=None, freeze_file_s=175.0, landing_file_s=None, exit_
             e["window"] = "between the clock and the freeze"
             degraded.append(f"{e['added']} {e.get('kind', 'underrun')}(s) at file second {e['file_s_from']:.1f}-"
                             f"{e['file_s_to']:.1f} (up to {e['slip_ms_max']:.2f} ms) while the clock followed the "
-                            f"1PPS line: the freeze's check against the edge and the PPS tag check after it decide")
+                            f"1PPS line: when the clock froze (in flight: VOID), the freeze's check against the edge "
+                            f"and the PPS tag check after it decide")
         else:
             e["window"] = "before the clock"
     if not stopped:
