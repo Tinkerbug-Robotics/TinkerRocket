@@ -1580,9 +1580,10 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "cannot read %s (or no start state)\n", a.in.c_str());
         return 1;
     }
-    // the antenna's offset the flight flew with (extract.py: the log's PCX_ANT record, body FRD, m), where
+    // the antenna's offset the flight's filter flew with (extract.py: the log's PCX_ANT record, body FRD, m), where
     // --antenna-m gives none: a replay of a flight predicts at the antenna as its filter did
-    if (!a.ant_known && !a.ant_none && in.meta.count("antenna_m"))
+    const bool ant_given = a.ant_known || a.ant_none;
+    if (!ant_given && in.meta.count("antenna_m"))
     {
         if (std::sscanf(in.meta["antenna_m"].c_str(), "%lf %lf %lf", &a.ant_m[0], &a.ant_m[1], &a.ant_m[2]) != 3)
         {
@@ -1590,11 +1591,12 @@ int main(int argc, char** argv)
             return 1;
         }
         a.ant_known = true;
-        std::fprintf(stderr, "the antenna's offset from the log: %.3f, %.3f, %.3f m (body FRD; --antenna-m none "
-                             "replays it unknown)\n", a.ant_m[0], a.ant_m[1], a.ant_m[2]);
+        std::fprintf(stderr, "the antenna's offset the flight's filter flew with, from the log: %.3f, %.3f, %.3f m "
+                             "(body FRD; --antenna-m none replays it unknown)\n", a.ant_m[0], a.ant_m[1], a.ant_m[2]);
     }
-    // one set on the flight that its filter did not fly with (META antenna_m_set): replayed unknown, as it flew
-    else if (!a.ant_known && !a.ant_none && in.meta.count("antenna_m_set"))
+    // a setting on the flight that its filter did not fly with (META antenna_m_set): the filter was on an earlier
+    // offset (META antenna_m, flown above) or on none (replayed unknown, as it flew); only named
+    if (!ant_given && in.meta.count("antenna_m_set"))
     {
         double m[3];
         if (std::sscanf(in.meta["antenna_m_set"].c_str(), "%lf %lf %lf", &m[0], &m[1], &m[2]) != 3)
@@ -1603,8 +1605,11 @@ int main(int argc, char** argv)
             return 1;
         }
         std::fprintf(stderr, "the flight had an antenna offset set (%.3f, %.3f, %.3f m, body FRD) that its navigation "
-                             "filter did not fly with: replayed unknown, as it flew (--antenna-m %.3f,%.3f,%.3f "
-                             "applies it)\n", m[0], m[1], m[2], m[0], m[1], m[2]);
+                             "filter did not fly with: %s (--antenna-m %.3f,%.3f,%.3f applies the setting)\n",
+                     m[0], m[1], m[2],
+                     in.meta.count("antenna_m") ? "the replay flies the offset the filter flew"
+                                                : "replayed unknown, as it flew",
+                     m[0], m[1], m[2]);
     }
     // a mosaic log has no record of the filter's own (no 0x96 yet): it starts on the pad
     const bool cold = a.cold_start || in.s.size() < 20;

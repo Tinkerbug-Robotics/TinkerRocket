@@ -93,10 +93,11 @@ are entered, and take a readback into the rocket's profile only when the flight 
   share of the offset; with no magnetometer heading, it takes the prediction back out and allows the whole offset,
   as Unknown does with its 0.3 m. The offset's roll terms are observed and logged, never fused.
 - **The log:** the pad context gains a record, `PCX_ANT`, beside the calibrations at launch + 5 s: the setting, the
-  same in the filter's frame, and whether the navigation filter flew with this offset (it started, and had the
-  offset on at the record). `tools/raw_replay/extract.py` passes an offset the filter flew with to the harness
-  (`META antenna_m`), which replays the flight with it unless given `--antenna-m none`; one set but not flown with
-  is `META antenna_m_set`, replayed unknown, as it flew.
+  same in the filter's frame, the offset the navigation filter had on at the record (the one it flew with: an
+  earlier one while a setting sent just before launch waits for the ground), and whether that was the setting.
+  `tools/raw_replay/extract.py` passes the offset the filter flew with to the harness (`META antenna_m`), which
+  replays the flight with it unless given `--antenna-m none`; a setting not flown with is `META antenna_m_set`,
+  only named.
 
 ### The log-only vote guard
 

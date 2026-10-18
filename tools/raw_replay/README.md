@@ -580,11 +580,13 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   also observed (the image's: the change check's lever roll), or fused. The epochs file gains `lever_roll_epochs`,
   `lever_roll_deg`, `lever_roll_sigma_deg` (the lever roll so far and the last epoch's, RawGnssShadow's
   `lever_roll_*`) and `rot_sigma_mps` (the epoch's turning-body allowance); the events JSON an `antenna` block (the
-  settings and the run's lever-roll sums). A flight's log carries the offset set on it (the pad context's
-  `PCX_ANT`; its `used`: the navigation filter flew with this offset). `extract.py` writes one the filter flew with
-  as `META antenna_m` (and `antenna_used 1`): the harness takes it where `--antenna-m` gives none, says so on
-  stderr, and `--antenna-m none` replays the flight unknown. One set but not flown with is `META antenna_m_set` (and
-  `antenna_used 0`, no `antenna_m`): the harness replays the flight unknown, as it flew, and says on stderr that
+  settings and the run's lever-roll sums). A flight's log carries the offset set on it and the one its navigation
+  filter flew with (the pad context's `PCX_ANT`: `applied_body_m`, which a setting sent just before launch may not
+  have replaced yet; its `used`: the filter flew with the setting). `extract.py` writes the one the filter flew with
+  as `META antenna_m` (and `antenna_used`, 1 if that was the setting): the harness takes it where `--antenna-m`
+  gives none, says so on stderr, and `--antenna-m none` replays the flight unknown. A setting the filter did not fly
+  with (it was still on an earlier offset, or on none) is `META antenna_m_set` (and `antenna_used 0`): the harness
+  only names it on stderr, flying the earlier offset (`antenna_m`) or unknown, as the flight did, and says that
   `--antenna-m x,y,z` applies it. With a known offset the boost guards' Doppler fit (`--guard-doppler-rms`,
   `--guard-dv-*`) and `--diag-from-s`'s innovations predict at the antenna too, as the filter does.
   `sim_events.py --lever-arm-b x,y,z` (and `sim_grid.py`'s) puts the truth's antenna anywhere in the body, not only

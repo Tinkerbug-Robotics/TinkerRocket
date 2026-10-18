@@ -251,25 +251,44 @@ def test_decode_the_high_g_alignment():
     assert ctx["missing"] == []                                  # an older log without it misses nothing
 
 
-def ant(known=1, board_mm=(120, -15, 40), body_m=(0.12, 0.015, -0.04), used=1, time_us=6_000_000) -> bytes:
-    return header(8, time_us=time_us) + struct.pack("<B3h3fB", known, *board_mm, *body_m, used)
+ANT_BODY_M = (0.12, 0.015, -0.04)    # the setting, body FRD
+ANT_EARLIER_M = (0.30, 0.0, -0.02)   # an earlier setting the filter was still on (one sent just before launch waits)
+ANT_NONE = dict(known=0, board_mm=(0, 0, 0), body_m=(0.0, 0.0, 0.0), used=0)   # the setting unknown
+
+
+def ant(known=1, board_mm=(120, -15, 40), body_m=ANT_BODY_M, used=1, applied=None, time_us=6_000_000) -> bytes:
+    """applied: the offset the navigation filter had on (body FRD); None is the setting if used, else none on."""
+    if applied is None and used:
+        applied = body_m
+    a_known, a_m = (1, applied) if applied is not None else (0, (0.0, 0.0, 0.0))
+    return header(8, time_us=time_us) + struct.pack("<B3h3fBB3f", known, *board_mm, *body_m, used, a_known, *a_m)
 
 
 def test_decode_the_antenna_offset():
-    # PCX_ANT, beside PCX_CAL -- the GNSS antenna's offset set on the flight, the setting and the filter's, and
-    # whether the navigation filter flew with it
+    # PCX_ANT, beside PCX_CAL -- the GNSS antenna's offset set on the flight, the setting and the filter's, whether
+    # the navigation filter flew with it, and the offset that filter did fly with
     r = pfd.decode_pad_context(ant())
     assert r["kind"] == "ant"
     assert r["known"] is True and r["used"] is True
     assert r["board_mm"] == (120, -15, 40)
-    assert r["body_m"] == pytest_approx((0.12, 0.015, -0.04))
+    assert r["body_m"] == pytest_approx(ANT_BODY_M)
+    assert r["applied_known"] is True and r["applied_body_m"] == pytest_approx(ANT_BODY_M)
     assert pfd.decode_pad_context(ant()[:-1]) is None
-    u = pfd.decode_pad_context(ant(known=0, board_mm=(0, 0, 0), body_m=(0.0, 0.0, 0.0), used=0))
-    assert u["known"] is False and u["used"] is False
-    s = pfd.decode_pad_context(ant(used=0))                      # set, but the filter did not fly with it
+    assert pfd.decode_pad_context(ant()[:-13]) is None          # the record is only ever its full size
+    u = pfd.decode_pad_context(ant(**ANT_NONE))
+    assert u["known"] is False and u["used"] is False and u["applied_known"] is False
+    assert u["applied_body_m"] == (0.0, 0.0, 0.0)
+    s = pfd.decode_pad_context(ant(used=0, applied=ANT_EARLIER_M))   # set, the filter still on an earlier one
     assert s["known"] is True and s["used"] is False
     assert s["board_mm"] == (120, -15, 40)
-    assert s["body_m"] == pytest_approx((0.12, 0.015, -0.04))
+    assert s["body_m"] == pytest_approx(ANT_BODY_M)
+    assert s["applied_known"] is True and s["applied_body_m"] == pytest_approx(ANT_EARLIER_M)
+    e = pfd.decode_pad_context(ant(**ANT_NONE, applied=ANT_EARLIER_M))   # set Unknown, the filter on an earlier one
+    assert e["known"] is False and e["used"] is False
+    assert e["applied_known"] is True and e["applied_body_m"] == pytest_approx(ANT_EARLIER_M)
+    n = pfd.decode_pad_context(ant(used=0))                      # set, but the filter never started
+    assert n["known"] is True and n["used"] is False and n["applied_known"] is False
+    assert n["applied_body_m"] == (0.0, 0.0, 0.0)
     ctx = pfd.join_pad_context([pfd.decode_pad_context(p) for p in [cal(), acc(), hg(), ant()] + launch()[1:]])
     assert ctx["ant"]["board_mm"] == (120, -15, 40)
     assert ctx["missing"] == []                                  # an older log without it misses nothing
@@ -278,29 +297,46 @@ def test_decode_the_antenna_offset():
 
 
 def test_the_replay_extractor_passes_the_antenna_on():
-    # tools/raw_replay/extract.py: an offset the navigation filter flew with becomes META antenna_m (body FRD) for
-    # raw_replay; one set but not flown with, META antenna_m_set only (the replay flies it unknown, as the flight
-    # did); unknown or an older log without the record, none
+    # tools/raw_replay/extract.py: the offset the navigation filter flew with becomes META antenna_m (body FRD) for
+    # raw_replay, which flies it; a setting the filter did not fly with, META antenna_m_set beside it, which the
+    # replay only names; META antenna_used says whether the filter flew with the setting; neither known, or an
+    # older log without the record, none
     import importlib.util
     spec = importlib.util.spec_from_file_location(
         "raw_replay_extract", Path(__file__).resolve().parents[2] / "tools" / "raw_replay" / "extract.py")
     ex = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(ex)
-    ctx = pfd.join_pad_context([pfd.decode_pad_context(p) for p in [cal(), ant()] + launch()[1:]])
-    lines = ex.antenna_lines(ctx)
-    assert len(lines) == 2 and lines[0].startswith("META antenna_m ")
+
+    def lines_of(*recs):
+        return ex.antenna_lines(pfd.join_pad_context([pfd.decode_pad_context(p) for p in [cal(), *recs]]))
+
+    def xyz(line):
+        return [float(x) for x in line.split()[2:]]
+
+    # flown with the setting
+    lines = lines_of(ant(), *launch()[1:])
+    assert [ln.split()[1] for ln in lines] == ["antenna_m", "antenna_used"]
+    assert xyz(lines[0]) == pytest_approx(ANT_BODY_M)
     assert lines[1] == "META antenna_used 1"
-    assert [float(x) for x in lines[0].split()[2:]] == pytest_approx((0.12, 0.015, -0.04))
-    not_flown = pfd.join_pad_context([pfd.decode_pad_context(p) for p in [cal(), ant(used=0)] + launch()[1:]])
-    lines = ex.antenna_lines(not_flown)
-    assert len(lines) == 2 and lines[0].startswith("META antenna_m_set ")
+    # a setting the filter did not take yet, flying an earlier known one: the replay flies the earlier one
+    lines = lines_of(ant(used=0, applied=ANT_EARLIER_M), *launch()[1:])
+    assert [ln.split()[1] for ln in lines] == ["antenna_m", "antenna_m_set", "antenna_used"]
+    assert xyz(lines[0]) == pytest_approx(ANT_EARLIER_M)
+    assert xyz(lines[1]) == pytest_approx(ANT_BODY_M)
+    assert lines[2] == "META antenna_used 0"
+    # the setting Unknown, the filter still on an earlier known one: that one flies, nothing set to name
+    lines = lines_of(ant(**ANT_NONE, applied=ANT_EARLIER_M), *launch()[1:])
+    assert [ln.split()[1] for ln in lines] == ["antenna_m", "antenna_used"]
+    assert xyz(lines[0]) == pytest_approx(ANT_EARLIER_M)
     assert lines[1] == "META antenna_used 0"
-    assert [float(x) for x in lines[0].split()[2:]] == pytest_approx((0.12, 0.015, -0.04))
-    assert not any(ln.startswith("META antenna_m ") for ln in lines)
-    unknown = pfd.join_pad_context([pfd.decode_pad_context(p) for p in
-                                    [cal(), ant(known=0, board_mm=(0, 0, 0), body_m=(0.0, 0.0, 0.0), used=0)]])
-    assert ex.antenna_lines(unknown) == []
-    assert ex.antenna_lines(pfd.join_pad_context([pfd.decode_pad_context(cal())])) == []
+    # set, but the filter never started: named only, the replay flies unknown as the flight did
+    lines = lines_of(ant(used=0))
+    assert [ln.split()[1] for ln in lines] == ["antenna_m_set", "antenna_used"]
+    assert xyz(lines[0]) == pytest_approx(ANT_BODY_M)
+    assert lines[1] == "META antenna_used 0"
+    # unknown, and nothing applied
+    assert lines_of(ant(**ANT_NONE)) == []
+    assert lines_of() == []
     assert ex.antenna_lines(None) == []
 
 
