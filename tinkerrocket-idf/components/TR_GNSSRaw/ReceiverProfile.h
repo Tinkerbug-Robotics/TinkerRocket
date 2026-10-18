@@ -100,6 +100,8 @@ struct GnssReceiverProfile
     double pr_period_s = 0.0;             // the pseudoranges fused once in each this long of GPS time (the
                                           //   Dopplers every epoch)
     int    sat_cap = 0;                   // at most this many satellites built an epoch (0: all)
+    int    sat_cap_max = 0;               //   and the cap governor raises that to at most this while the filter
+                                          //   keeps up (CapGovernor.h); at or under sat_cap: off, the cap fixed
     double reject_persist_s = 0.0;        // a satellite refused this long running is let back in: the EKF's
                                           //   reject_persist and reject_persist_rr in fused epochs (0: theirs)
     double level_min_dt_s = 0.0;          // the levelling's steady test takes epochs this far apart (LevelGate)
@@ -111,8 +113,6 @@ struct GnssReceiverProfile
     double epoch_slice_us = 2500.0;       // the navigation filter works an epoch at most this long a 10 ms step
                                           //   (RawGnssShadow's epoch_slice_us; main.cpp's primary filter takes it,
                                           //   not applyReceiverProfile: a shadow works an epoch at once)
-    int    sat_cap_max = 0;               // the cap governor raises sat_cap to at most this while the filter
-                                          //   keeps up (CapGovernor.h); at or under sat_cap: off, the cap fixed
 
     // its measurements' noise (RawMeasBuilder): sigma^2 = a^2 + b^2 * 10^(-(C/N0 - 35)/10)
     double pr_white_a = 0.0, pr_white_b = 0.0;   // the pseudorange's white part, m

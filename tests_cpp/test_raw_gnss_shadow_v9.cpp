@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <memory>
 #include <random>
 #include <vector>
 
@@ -2192,7 +2193,10 @@ TEST(RawGnssShadowV9, TheGovernorNeverTouchesTheFilter)
     // cap the stage builds with) and one without: their states are the same
     // at every step -- the governor only tells the stage how many to build --
     // through the pad's climb, a late stretch, a lost epoch, the boost and
-    // the coast; so is all of their navigation state but the cap
+    // the coast; so is all of their navigation state but the cap. (Its one
+    // other act, cutting an epoch built above the floor whose job starts in
+    // the boost to the floor's, has nothing to cut here: each epoch is built
+    // as it is handed over. The test after this one has the pipeline.)
     GovFlight fl;
     fl.launch_t = 12.0;
     fl.t_end = 20.0;
@@ -2205,6 +2209,7 @@ TEST(RawGnssShadowV9, TheGovernorNeverTouchesTheFilter)
     EXPECT_EQ(r.state, r.state2);
     EXPECT_GT(r.gov.raises, 0u);
     EXPECT_GT(r.gov.cuts + r.gov.floors, 0u);
+    EXPECT_EQ(r.gov.trims, 0u);
     EXPECT_EQ(on.stats().epochs_applied, off.stats().epochs_applied);
     EXPECT_EQ(on.stats().epochs_stale, off.stats().epochs_stale);
     gnss_raw::ShadowNav na, nb;
@@ -2224,6 +2229,193 @@ TEST(RawGnssShadowV9, TheGovernorNeverTouchesTheFilter)
     EXPECT_EQ(na.baro_aided, nb.baro_aided);
     EXPECT_EQ(na.in_flight, nb.in_flight);
     EXPECT_EQ(na.epochs, nb.epochs);
+}
+
+namespace
+{
+
+// The launch pipeline (the review of 4aa08dd7): the GNSS task builds an
+// epoch some 20 ms after its tag at the navigation state's cap, and the
+// filter starts its job after the build and the epoch before it close (here
+// 80 ms after the tag). An ignition at 10.05 s falls between the build and
+// the job of the epoch tagged 10.0. prelaunch_t: the ticks carry
+// kShadowPrelaunch on the pad from then (< 0: never, a launch from READY).
+struct PipeClose
+{
+    uint32_t tow_ms;
+    int meas;
+    bool screened;
+};
+
+struct PipeRun
+{
+    int probe_cap = -1, probe_n = -1;      // the epoch tagged 10.0: the cap it was built with, its satellites
+    int cap_at_4_9 = -1;                   // the navigation state's cap at 4.9 s
+    int gov_at_probe_hand = -1;            // the governor's cap when the probe was handed over
+    uint32_t probe_tow_ms = 0;
+    std::vector<PipeClose> closed;         // each job closed (one a step here)
+    gnss_raw::CapGovernor::Stats gov;
+};
+
+PipeRun flyPipe(double prelaunch_t)
+{
+    RawGnssShadow::Config cfg = govCfg(8, 12);
+    cfg.boost_screen = RawGnssShadow::kScreenOn;
+    cfg.boost_screen_g = 2.0;
+    std::unique_ptr<RawGnssShadow> shp(new RawGnssShadow(cfg));
+    RawGnssShadow& sh = *shp;
+    double lat, lon, h;
+    ecef_to_geo(kGoldenRmRx, &lat, &lon, &h);
+    double r0[3];
+    geo_to_ecef(lat, lon, h, r0);
+    gnss_raw::RawGnssMeasStage stage(RawGnssShadow::stageConfig(sh.config()));
+    for (int i = 0; i < kGoldenRmEphN; ++i)
+        stage.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+    SynthSky sky(sh.config().meas);
+    const Mat3 Ct = leaningBody(0.0, 70.0);
+    ShadowSeed seed = padSeed(kT0, lat, lon, h);
+    quatOf(Ct, seed.quat);
+    sh.onSeed(seed);
+    const double tow0 = kGoldenRmTowA, dt = 0.005;
+    const double launch_t = 10.05;
+    struct Pend
+    {
+        TimedRawEpoch e;
+        int64_t build_us = 0, hand_us = 0;
+        double tag = 0.0;
+        bool built = false;
+        int nav_cap = 0;
+        gnss_raw::BuiltEpoch b;
+    };
+    std::vector<std::unique_ptr<Pend>> q;
+    PipeRun run;
+    run.probe_tow_ms = static_cast<uint32_t>(std::llround(std::fmod(tow0 + 10.0, 604800.0) * 1000.0));
+    uint32_t last_tow_ms = 0, screened = 0;
+    for (int step = 1; step * dt <= 12.0 + 1e-9; ++step)
+    {
+        const double t = step * dt;
+        const bool flying = t > launch_t;
+        double f_b[3] = {0.0, 0.0, 0.0};
+        if (flying)
+            f_b[0] = 3.0 * kG;
+        else
+        {
+            const double up[3] = {0, 0, -kG};
+            Mat3 CtT{};
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    CtT.m[i][j] = Ct.m[j][i];
+            mat3Vec(CtT, up, f_b);
+        }
+        const int64_t t64 = kT0 + static_cast<int64_t>(std::llround(t * 1e6));
+        ShadowImu s{};
+        s.time_us = static_cast<uint32_t>(t64);
+        for (int i = 0; i < 3; ++i)
+            s.acc[i] = float(f_b[i]);
+        s.flags = !flying ? gnss_raw::kShadowLevel : (t >= launch_t + 0.1 ? gnss_raw::kShadowInFlight : 0);
+        if (prelaunch_t >= 0.0 && t >= prelaunch_t && !(s.flags & gnss_raw::kShadowInFlight))
+            s.flags |= gnss_raw::kShadowPrelaunch;
+        sh.onImu(s, t64);
+        if (sh.stats().last_tow_ms != last_tow_ms)
+        {
+            last_tow_ms = sh.stats().last_tow_ms;
+            run.closed.push_back({last_tow_ms, sh.stats().last_meas, sh.stats().boost_screened != screened});
+            screened = sh.stats().boost_screened;
+        }
+        if (step % 20 == 0)
+        {
+            const double ve[3] = {0, 0, 0};
+            std::unique_ptr<Pend> p(new Pend());
+            p->e.epoch = sky.epoch(tow0 + std::round(t * 10.0) / 10.0, r0, ve);
+            p->e.mcu_us = t64;
+            p->e.gps_week = kGoldenWeek;
+            p->build_us = t64 + 20000;
+            p->hand_us = t64 + 80000;
+            p->tag = t;
+            q.push_back(std::move(p));
+        }
+        for (size_t k = 0; k < q.size();)
+        {
+            Pend& p = *q[k];
+            if (!p.built && t64 >= p.build_us)
+            {
+                gnss_raw::ShadowNav nav;
+                sh.navState(nav);
+                p.built = stage.offer(p.e, nav, p.b);
+                p.nav_cap = nav.sat_cap;
+                sh.onMeasStats(stage.stats());
+                if (std::fabs(p.tag - 4.9) < 1e-6)
+                    run.cap_at_4_9 = nav.sat_cap;
+            }
+            if (p.built && t64 >= p.hand_us)
+            {
+                if (std::fabs(p.tag - 10.0) < 1e-6)
+                {
+                    run.probe_cap = p.nav_cap;
+                    run.probe_n = p.b.n;
+                    run.gov_at_probe_hand = sh.capGovernor().cap();
+                }
+                sh.onBuilt(p.b);
+                q.erase(q.begin() + static_cast<long>(k));
+                continue;
+            }
+            ++k;
+        }
+    }
+    run.gov = sh.capGovernor().stats();
+    return run;
+}
+
+}  // namespace
+
+// A launch from READY (no PRELAUNCH: #382's gates unmet): the epoch tagged
+// 10.0 is built at the pad's cap (12) and its job starts after the IMU passed
+// boost_screen_g; the boost screen judges it -- the scratch copy and every
+// satellite twice, at the cap the boost is held at the floor to keep off. The
+// job keeps only the floor's (8) satellites, and no screened job has more.
+TEST(RawGnssShadowV9, AnEpochBuiltAtThePadsCapWhoseJobStartsInTheBoostIsWorkedAsTheFloors)
+{
+    const PipeRun r = flyPipe(-1.0);
+    EXPECT_EQ(r.probe_cap, 12);               // built at the pad's cap
+    EXPECT_EQ(r.probe_n, 12);
+    EXPECT_EQ(r.gov_at_probe_hand, 8);        // the IMU's boost sign floored the governor already
+    bool found = false;
+    size_t n_screened = 0;
+    for (const PipeClose& c : r.closed)
+    {
+        if (c.tow_ms == r.probe_tow_ms)
+        {
+            found = true;
+            EXPECT_TRUE(c.screened);
+            EXPECT_LE(c.meas, 8);             // the screened job: the floor's satellites
+            EXPECT_GE(c.meas, 4);
+        }
+        if (c.screened)
+        {
+            n_screened++;
+            EXPECT_LE(c.meas, 8) << "tow_ms " << c.tow_ms;   // no screened job above the floor
+        }
+    }
+    EXPECT_TRUE(found);
+    EXPECT_GE(n_screened, 5u);
+    EXPECT_EQ(r.gov.trims, 1u);
+    EXPECT_EQ(r.gov.trimmed, 4u);
+}
+
+// The same launch from PRELAUNCH (from 5 s): the cap climbed in READY, and
+// the pad holds the floor from PRELAUNCH, so the epochs built for the
+// launch's first jobs are the floor's -- nothing to cut
+TEST(RawGnssShadowV9, PrelaunchHoldsTheFloorSoTheLaunchsFirstEpochsAreBuiltAtIt)
+{
+    const PipeRun r = flyPipe(5.0);
+    EXPECT_GT(r.cap_at_4_9, 8);               // READY: climbing
+    EXPECT_EQ(r.probe_cap, 8);                // PRELAUNCH: the floor
+    EXPECT_EQ(r.probe_n, 8);
+    for (const PipeClose& c : r.closed)
+        if (c.screened)
+            EXPECT_LE(c.meas, 8) << "tow_ms " << c.tow_ms;
+    EXPECT_EQ(r.gov.trims, 0u);
+    EXPECT_EQ(r.gov.boosts, 1u);              // one hold, from PRELAUNCH through the boost
 }
 
 TEST(RawGnssShadowV9, OffTheNavigationStateCarriesNoCap)

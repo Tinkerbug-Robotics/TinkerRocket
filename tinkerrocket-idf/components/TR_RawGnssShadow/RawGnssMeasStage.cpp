@@ -241,7 +241,10 @@ void RawGnssMeasStage::useNavCap(const ShadowNav& nav)
 // always gives the same picks. The cap knows
 // no elevations: a satellite its build dropped under the mask (capBuilt) is
 // picked only after every other, and not among the GPS ones, until it is
-// tried again. sel_ keeps e's order.
+// tried again. sel_ keeps e's order. Above the stage's own sat_cap (the
+// governor's), its first sat_cap picks are the ones a build at sat_cap
+// makes, each pass taking the same satellites in the same order up to it:
+// floor_picked_.
 void RawGnssMeasStage::capEpoch(const TimedRawEpoch& e)
 {
     static constexpr int8_t kNot = -1, kCand = 0, kPicked = 1, kMasked = 2;
@@ -300,8 +303,14 @@ void RawGnssMeasStage::capEpoch(const TimedRawEpoch& e)
             picked[sys] |= uint64_t{1} << prn;
             sats++;
             kept += from == kCand ? 1 : 0;
+            if (sats == cfg_.sat_cap)
+                for (int s = 0; s < 3; ++s)
+                    floor_picked_[s] = picked[s];
         }
     }
+    if (sats < cfg_.sat_cap)
+        for (int s = 0; s < 3; ++s)
+            floor_picked_[s] = picked[s];
     sel_.epoch.tow_s = in.tow_s;
     int k = 0;
     for (int i = 0; i < n; ++i)
@@ -319,8 +328,10 @@ void RawGnssMeasStage::capEpoch(const TimedRawEpoch& e)
 // After the build of the cap's picks: the hold is for the satellites built,
 // and a pick the build dropped -- under the elevation mask, the one test the
 // cap cannot make -- is picked last from now on (capEpoch), so it does not
-// keep a place a satellite that can be built is waiting for.
-void RawGnssMeasStage::capBuilt(const BuiltEpoch& out)
+// keep a place a satellite that can be built is waiting for. Built at the
+// governor's cap above sat_cap, the epoch says which of its measurements a
+// build at sat_cap would have made, where it has others (floor_keep).
+void RawGnssMeasStage::capBuilt(BuiltEpoch& out)
 {
     uint64_t built[3] = {};
     for (int i = 0; i < out.n; ++i)
@@ -334,6 +345,25 @@ void RawGnssMeasStage::capBuilt(const BuiltEpoch& out)
     }
     if (none && (masked_[0] | masked_[1] | masked_[2]) != 0)
         masked_tow_ = out.tow_s;
+    out.floor_trim = 0;
+    out.floor_keep = 0;
+    if (cap_ > cfg_.sat_cap)
+        floorKeep(out);
+}
+
+// Built above sat_cap: its measurements of the floor's picks (floor_picked_),
+// and whether it has others.
+__attribute__((noinline)) void RawGnssMeasStage::floorKeep(BuiltEpoch& out) const
+{
+    int kept = 0;
+    for (int i = 0; i < out.n; ++i)
+        if (out.meas[i].sys <= GNSS_SYS_BDS && out.meas[i].prn < kPrns
+            && ((floor_picked_[out.meas[i].sys] >> out.meas[i].prn) & 1u) != 0)
+        {
+            out.floor_keep |= uint64_t{1} << i;
+            kept++;
+        }
+    out.floor_trim = kept < out.n ? 1 : 0;
 }
 
 #ifdef TR_EPH_CAPACITY

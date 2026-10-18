@@ -43,7 +43,13 @@
 // Where the filter's cap governor runs (CapGovernor.h), the cap is the one
 // the navigation state offer() builds at carries (ShadowNav::sat_cap): the
 // same picks with their hold, so a raise adds the strongest satellite left
-// out and a cut drops the weakest picked.
+// out and a cut drops the weakest picked. An epoch built above the stage's
+// own sat_cap (the governor's floor) says which of its measurements a build
+// at the floor would have made (BuiltEpoch::floor_keep): the cap's first
+// sat_cap picks, in the order it picks them. The filter keeps only those of
+// an epoch whose job starts in the boost (RawGnssShadow::trimToFloor), so an
+// epoch built on the pad at the governor's cap just before the ignition is
+// worked as the floor's.
 //
 // Pure C++: tests_cpp/test_raw_gnss_shadow.cpp, tests_cpp/test_raw_gnss_stage_v9.cpp.
 #ifndef RAW_GNSS_MEAS_STAGE_H
@@ -67,6 +73,8 @@ struct BuiltEpoch
     int64_t  mcu_us = 0;            // the epoch's GPS instant on the MCU clock (TimedRawEpoch)
     double   tow_s = 0.0;           // its GPS time of week
     uint16_t gps_week = 0;
+    uint8_t  floor_trim = 0;        // built at the cap governor's cap, above the stage's own sat_cap (the floor),
+                                    //   with satellites a build at the floor would have left out: floor_keep
     int      n = 0;                 // measurements
     RawMeas  meas[RawEpoch::kMaxObs] = {};
     double   lock_age_s[RawEpoch::kMaxObs] = {};  // each one's satellite's relock age (the pad survey's)
@@ -74,7 +82,10 @@ struct BuiltEpoch
     uint8_t  use_broadcast = 0;     // the ionosphere taken out with the broadcast parameters
     uint8_t  iono_changed = 0;      //   chosen anew for it: the pad survey starts over
     uint32_t build_us = 0;          // its build (with a clock)
+    uint64_t floor_keep = 0;        // with floor_trim, the measurements a build at the floor would have made (bit
+                                    //   i: meas[i]): what the filter keeps of it in the boost (RawGnssShadow)
 };
+static_assert(RawEpoch::kMaxObs <= 64, "BuiltEpoch::floor_keep has a bit a measurement");
 
 class RawGnssMeasStage
 {
@@ -169,7 +180,8 @@ private:
 
     void chooseIono(bool in_flight, BuiltEpoch& out);
     void capEpoch(const TimedRawEpoch& e);
-    void capBuilt(const BuiltEpoch& out);
+    void capBuilt(BuiltEpoch& out);
+    void floorKeep(BuiltEpoch& out) const;
     int64_t now() const { return clock_ ? clock_() : 0; }
 
     Config           cfg_;
@@ -193,6 +205,7 @@ private:
     TimedRawEpoch    sel_;
     int              cap_ = 0;           // the cap in use: cfg_.sat_cap, or the governor's (useNavCap)
     uint64_t         picked_[3] = {};
+    uint64_t         floor_picked_[3] = {};  // of picked_ before the build, the first cfg_.sat_cap (cap_ above it)
     uint64_t         masked_[3] = {};
     double           masked_tow_ = 0.0;
 };

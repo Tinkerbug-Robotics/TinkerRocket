@@ -33,12 +33,26 @@
 // then, not every second. The settle_epochs closes after a change were built
 // before it: they neither raise nor cut softly (a hard one still floors).
 //
-// The boost. From the boost's first sign -- the launch, the IMU past the
-// boost screen's threshold, an epoch the boost screen judges -- to
-// boost_hold_s after its last, the cap is the floor: that is when the CPU is
-// tightest (the screen's scratch copy doubles the fusion) and the boost's
-// Dopplers are the least trusted. The climb back starts after it, a satellite
-// a raise_epochs.
+// The boost. From the boost's first sign -- the flight computer armed on
+// the pad (PRELAUNCH), the launch, the IMU past the boost screen's
+// threshold, an epoch the boost screen judges -- to boost_hold_s after its
+// last, the cap is the floor: that is when the CPU is tightest (the screen's
+// scratch copy doubles the fusion) and the boost's Dopplers are the least
+// trusted. The climb back starts after it, a satellite a raise_epochs.
+// Armed on the pad counts because the cap reaches only the epochs built
+// after it moves: an epoch is built 20-80 ms before its job starts, so a
+// floor taken at the ignition would leave the launch's first jobs built at
+// the pad's cap. Their build is spent by then -- 24 satellites' some 20 ms
+// more, which alone takes the second's pseudorange epoch, the boost's
+// heaviest, past the at-once point in 13 of 200 launches in the CPU model,
+// where a fixed 16 has none -- and the screen would judge every satellite of
+// it twice. So the pad holds the floor from PRELAUNCH (READY, and an indoor
+// bench, climb).
+// And where the boost comes without it (a launch from READY, #382's gates
+// unmet; a bench's), the filter keeps only what a build at the floor would
+// have made of an epoch whose job starts while the boost holds the cap
+// (RawGnssShadow::trimToFloor, onTrim here): no job in the boost works more
+// than the floor's satellites.
 //
 // Only the count changes: the stage's picks keep their 3 dB hold
 // (RawGnssMeasStage::capEpoch), so a raise adds the strongest satellite left
@@ -86,7 +100,9 @@ public:
         uint32_t floors = 0;           // back to the floor from above it: worked at once, too old or lost
         uint32_t late = 0;             // epochs worked at once or closed hard_age_s old (at the floor too)
         uint32_t lost = 0;             // epochs lost on the way (at the floor too)
-        uint32_t boosts = 0;           // boost holds begun
+        uint32_t boosts = 0;           // boost holds begun (armed on the pad, or the boost)
+        uint32_t trims = 0;            // epochs built above the floor, their jobs started in the boost: cut to it
+        uint32_t trimmed = 0;          //   the measurements those left out
         double   last_age_s = 0.0;     // the last epoch's age at its close
         double   max_age_s = 0.0;     // the oldest since takeWindow
         int      win_min = 0;          // the cap's least and most since takeWindow
@@ -181,8 +197,9 @@ public:
         toFloor(t);
     }
 
-    // A sign of the boost at t (the launch, the IMU past the screen's
-    // threshold, an epoch the screen judges): the floor until boost_hold_s on.
+    // A sign of the boost at t (armed on the pad, the launch, the IMU past
+    // the screen's threshold, an epoch the screen judges): the floor until
+    // boost_hold_s on.
     void onBoost(double t)
     {
         if (!on())
@@ -202,6 +219,14 @@ public:
     }
 
     bool boostHeld(double t) const { return t < boost_until_; }
+
+    // An epoch built above the floor, its job started while the boost holds
+    // the cap: dropped measurements left out of it, to the floor's.
+    void onTrim(int dropped)
+    {
+        st_.trims++;
+        st_.trimmed += static_cast<uint32_t>(dropped > 0 ? dropped : 0);
+    }
 
     // The console's window: the cap's least and most, and the oldest close,
     // since the last call (then started again).

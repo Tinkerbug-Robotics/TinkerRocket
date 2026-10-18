@@ -38,6 +38,8 @@ static constexpr uint8_t kShadowSim      = 0x04;  // a sensor sim runs: the IMU 
 static constexpr uint8_t kShadowLanded   = 0x08;  // the landing detector has called it: zero velocity
 static constexpr uint8_t kShadowApogee   = 0x10;  // the flight computer has called apogee (pyro_apogee_detected:
                                                   //   latched for the flight, restored after a reboot)
+static constexpr uint8_t kShadowPrelaunch = 0x20; // rocket_state is PRELAUNCH: on the pad, the launch can come any
+                                                  //   tick (the mosaic-only image's; the cap governor's hold)
 
 // A magnetometer sample (body FRD, uT): the flight filter's input. The raw
 // filter takes it as a heading on the ground where it is the navigation
@@ -97,6 +99,8 @@ struct ShadowSeed
 struct ShadowNav
 {
     uint32_t time_us;          // the IMU tick it is at
+    uint8_t  sat_cap;          // the satellites the GNSS task's stage builds an epoch at most, the filter's cap
+                               // governor's (CapGovernor.h); 0: the stage's own sat_cap (in time_us's padding)
     double   lla[3];           // rad, rad, m (ellipsoidal)
     float    vel_ned[3];       // m/s
     float    quat[4];          // body FRD -> NED, scalar first (as GpsInsEKF)
@@ -109,8 +113,6 @@ struct ShadowNav
     uint8_t  baro_aided;       // a barometer sample fused within the last 1 s
     uint8_t  in_flight;        // its last IMU tick was INFLIGHT (the GNSS task keeps its ionosphere then)
     uint32_t epochs;           // raw epochs applied since it started
-    uint8_t  sat_cap;          // the satellites the GNSS task's stage builds an epoch at most, the filter's cap
-                               // governor's (CapGovernor.h); 0: the stage's own sat_cap
 };
 
 // The GPS broadcast ionosphere the app uploaded with a pad calibration
@@ -155,10 +157,10 @@ struct ShadowMeasStats
     uint8_t  last_timed;       // the last epoch had its MCU time
     uint8_t  iono_age_known;   // the broadcast ionosphere's age by the receiver's date
     int16_t  iono_age_days;
+    int16_t  sat_cap;          // the cap the last epoch was built with (0: none; in the padding before build_us)
     uint32_t build_us;         // the last epoch's build, wall time (preempted by everything above it)
     uint32_t build_us_max;
     uint32_t capped_out;       // buildable satellites the stage's sat_cap left out, summed over the epochs built
-    int16_t  sat_cap;          // the cap the last epoch was built with (0: none)
 };
 
 // Lock-free ring, one producer and one consumer on any cores.

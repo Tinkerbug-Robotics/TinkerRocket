@@ -1038,3 +1038,85 @@ TEST(RawGnssMeasStageV9, ARaiseAddsTheStrongestLeftOutAndACutDropsTheWeakestPick
         prev_cap = caps[k];
     }
 }
+
+TEST(RawGnssMeasStageV9, AnEpochBuiltAboveTheFloorSaysWhatABuildAtTheFloorWouldHaveMade)
+{
+    // The filter cuts an epoch built at the governor's cap to the floor's
+    // when its job starts in the boost (RawGnssShadow::trimToFloor), by
+    // floor_keep: the cap's first sat_cap picks. Two stages see the same
+    // epochs, built at the floor (16); on the last, one is told 24. What it
+    // marks is the other's build, measurement for measurement -- the four GPS
+    // first however weak, the 3 dB hold of the epochs before, the order.
+    Sky s = sky(30);
+    ASSERT_EQ(s.e.epoch.n, 30);
+    RawGnssMeasStage at_floor(capCfg(16)), above(capCfg(16));
+    addAll(at_floor, s);
+    addAll(above, s);
+    gnss_raw::ShadowNav nav = navAt(kRxLla);
+    BuiltEpoch bf, ba;
+    for (int k = 0; k < 6; ++k)
+    {
+        for (int i = 0; i < s.e.epoch.n; ++i)
+        {
+            // the GPS ones weakest; the others 30-44.5 dB-Hz, a third of them
+            // wandering 2 dB (inside the hold) from epoch to epoch
+            const bool gps = s.e.epoch.obs[i].sys == GNSS_SYS_GPS;
+            s.e.epoch.obs[i].cn0_dbhz = gps ? 28.0f + 0.25f * static_cast<float>(i % 8)
+                                            : 30.0f + 0.5f * static_cast<float>((i * 7) % 30)
+                                                  + ((i % 3 == 0 && k % 2 == 1) ? 2.0f : 0.0f);
+        }
+        s.e.epoch.tow_s = kTow0 + 0.1 * k;
+        s.e.mcu_us = kT0 + 100000 * k;
+        const bool last = k == 5;
+        nav.sat_cap = 0;
+        ASSERT_TRUE(at_floor.offer(s.e, nav, bf));
+        nav.sat_cap = last ? 24 : 0;
+        ASSERT_TRUE(above.offer(s.e, nav, ba));
+        if (!last)
+        {
+            ASSERT_EQ(ba.n, 16);
+            EXPECT_EQ(ba.floor_trim, 0);  // built at the floor: nothing to cut
+            continue;
+        }
+        ASSERT_EQ(bf.n, 16);
+        ASSERT_EQ(ba.n, 24);
+        ASSERT_EQ(ba.floor_trim, 1);
+        int k_f = 0;
+        for (int i = 0; i < ba.n; ++i)
+        {
+            if (((ba.floor_keep >> i) & 1u) == 0)
+                continue;
+            ASSERT_LT(k_f, bf.n);
+            EXPECT_EQ(ba.meas[i].sys, bf.meas[k_f].sys) << i;
+            EXPECT_EQ(ba.meas[i].prn, bf.meas[k_f].prn) << i;
+            EXPECT_EQ(ba.meas[i].pr, bf.meas[k_f].pr) << i;
+            EXPECT_EQ(ba.meas[i].rr, bf.meas[k_f].rr) << i;
+            EXPECT_EQ(ba.meas[i].sigma_pr, bf.meas[k_f].sigma_pr) << i;
+            EXPECT_EQ(ba.meas[i].sigma_rr, bf.meas[k_f].sigma_rr) << i;
+            EXPECT_EQ(ba.lock_age_s[i], bf.lock_age_s[k_f]) << i;
+            k_f++;
+        }
+        EXPECT_EQ(k_f, bf.n);
+        int gps = 0;
+        for (int i = 0; i < bf.n; ++i)
+            gps += bf.meas[i].sys == GNSS_SYS_GPS ? 1 : 0;
+        EXPECT_EQ(gps, 4);                // the weak GPS four are in it
+    }
+    // the buffer's next epoch built at the floor says nothing is to cut
+    nav.sat_cap = 0;
+    s.e.epoch.tow_s += 0.1;
+    s.e.mcu_us += 100000;
+    ASSERT_TRUE(above.offer(s.e, nav, ba));
+    EXPECT_EQ(ba.n, 16);
+    EXPECT_EQ(ba.floor_trim, 0);
+    EXPECT_EQ(ba.floor_keep, 0u);
+
+    // A sky no larger than the floor built at a cap above it: nothing to cut
+    Sky few = sky(12);
+    RawGnssMeasStage small(capCfg(16));
+    addAll(small, few);
+    nav.sat_cap = 24;
+    ASSERT_TRUE(small.offer(few.e, nav, ba));
+    EXPECT_EQ(ba.n, few.e.epoch.n);
+    EXPECT_EQ(ba.floor_trim, 0);
+}

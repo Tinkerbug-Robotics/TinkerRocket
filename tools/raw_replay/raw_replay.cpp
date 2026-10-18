@@ -3954,10 +3954,12 @@ int main(int argc, char** argv)
                     const CapGovernor::Stats& gs = sh.capGovernor().stats();
                     std::fprintf(ej, "\"cap_gov\": {\"on\": %d, \"floor\": %d, \"ceiling\": %d, \"cap\": %d, "
                                      "\"closes\": %u, \"raises\": %u, \"cuts\": %u, \"floors\": %u, \"late\": %u, "
-                                     "\"lost\": %u, \"boosts\": %u, \"slice_us\": %.0f}, ",
+                                     "\"lost\": %u, \"boosts\": %u, \"trims\": %u, \"trimmed\": %u, "
+                                     "\"slice_us\": %.0f}, ",
                                  sh.capGovernor().on() ? 1 : 0, sh.capGovernor().config().floor,
                                  sh.capGovernor().config().ceiling, sh.capGovernor().cap(), gs.closes, gs.raises,
-                                 gs.cuts, gs.floors, gs.late, gs.lost, gs.boosts, cfg.epoch_slice_us);
+                                 gs.cuts, gs.floors, gs.late, gs.lost, gs.boosts, gs.trims, gs.trimmed,
+                                 cfg.epoch_slice_us);
                 }
 #endif
                 std::fprintf(ej, "\"stage\": {\"epochs\": %u, \"untimed\": %u, \"idle\": %u, \"built\": %u, "

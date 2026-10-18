@@ -3332,6 +3332,11 @@ static inline void rawShadowPushImu(const EkfIMUData& imu, bool level, bool in_f
     s.flags = (uint8_t)((level ? gnss_raw::kShadowLevel : 0) | (in_flight ? gnss_raw::kShadowInFlight : 0)
                         | (sim ? gnss_raw::kShadowSim : 0) | (landed ? gnss_raw::kShadowLanded : 0)
                         | (apogee ? gnss_raw::kShadowApogee : 0));
+#if TR_RAW_NAV_MOSAIC && !(defined(TR_BENCH_RAW_CAP_PAD) && TR_BENCH_RAW_CAP_PAD)
+    // the satellite cap's governor holds the floor from PRELAUNCH (CapGovernor.h):
+    // the epochs built for the launch's first jobs are the floor's
+    if (rocket_state == PRELAUNCH) s.flags |= gnss_raw::kShadowPrelaunch;
+#endif
     raw_shadow_link.imu.push(s);   // a full ring drops the tick and counts it
 #if TR_RAW_GNSS_PRIMARY
     // and the navigation state the loop reads, brought forward through it
@@ -4053,13 +4058,16 @@ static void rawShadowTask(void*)
                     sh.takeCapWindow(cap_min, cap_max, age_max_s);
                     ESP_LOGI(TAG, "[RAWGNSS] satellite cap: %d now, %d-%d this window (floor %d, ceiling %d), the "
                                   "last epoch built with %d | raised %lu, cut %lu, to the floor %lu (epochs late %lu, "
-                                  "lost %lu), boost holds %lu%s | epoch age at close: last %.0f ms, oldest this "
+                                  "lost %lu), floor holds (PRELAUNCH, the boost) %lu%s, epochs cut to the floor in "
+                                  "them %lu (%lu measurements) | epoch age at close: last %.0f ms, oldest this "
                                   "window %.0f (raised at %.0f or under, cut at %.0f, floor at %.0f) | backoff %.0f s",
                              g.cap(), cap_min, cap_max, g.config().floor, g.config().ceiling, (int)mst.sat_cap,
                              (unsigned long)g.stats().raises, (unsigned long)g.stats().cuts,
                              (unsigned long)g.stats().floors, (unsigned long)g.stats().late,
                              (unsigned long)g.stats().lost, (unsigned long)g.stats().boosts,
-                             g.boostHeld(sh.filter().time()) ? " (holding now)" : "", g.stats().last_age_s * 1000.0,
+                             g.boostHeld(sh.filter().time()) ? " (holding now)" : "",
+                             (unsigned long)g.stats().trims, (unsigned long)g.stats().trimmed,
+                             g.stats().last_age_s * 1000.0,
                              age_max_s * 1000.0, g.raiseAgeS() * 1000.0, g.cutAgeS() * 1000.0,
                              g.config().hard_age_s * 1000.0, g.backoff());
                 }
@@ -4265,10 +4273,15 @@ static void startRawShadow()
     // from the cap above (the floor) up to this (CapGovernor.h)
     static_assert(TR_BENCH_RAW_CAP_MAX >= 1 && TR_BENCH_RAW_CAP_MAX <= 48, "TR_BENCH_RAW_CAP_MAX is 1-48");
     rx.sat_cap_max = TR_BENCH_RAW_CAP_MAX;
+#if defined(TR_BENCH_RAW_CAP_PAD) && TR_BENCH_RAW_CAP_PAD
+    [[maybe_unused]] const char* cap_pad = "climbing in PRELAUNCH too (TR_BENCH_RAW_CAP_PAD)";
+#else
+    [[maybe_unused]] const char* cap_pad = "at the floor from PRELAUNCH";
+#endif
     if (rx.sat_cap > 0 && rx.sat_cap_max > rx.sat_cap)
         ESP_LOGW(TAG, "[RAWGNSS] BENCH: the satellite cap follows the filter's slack, %d to %d an epoch "
-                      "(TR_BENCH_RAW_CAP_MAX)",
-                 rx.sat_cap, rx.sat_cap_max);
+                      "(TR_BENCH_RAW_CAP_MAX), %s",
+                 rx.sat_cap, rx.sat_cap_max, cap_pad);
     else
         ESP_LOGE(TAG, "[RAWGNSS] BENCH: TR_BENCH_RAW_CAP_MAX %d is not above the cap %d: the cap stays fixed",
                  rx.sat_cap_max, rx.sat_cap);

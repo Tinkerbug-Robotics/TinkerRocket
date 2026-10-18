@@ -159,7 +159,9 @@ What `startRawShadow()` builds under `TR_RAW_NAV_MOSAIC` (build_units D1a; check
   (`TR_BENCH_RAW_SLICE_US`: the profile's `epoch_slice_us`), then `applyReceiverProfile`. Without a clock the
   harness works every epoch at once, so the governor sees only the handover's delay in the ages: `--fc-unit-us`
   slices them; neither prices a satellite's build, so where the cap settles on the flight computer is the bench's
-  (or a CPU model's) to say, not the harness's;
+  (or a CPU model's) to say, not the harness's. The logs' ticks carry no PRELAUNCH (`kShadowPrelaunch`, which holds
+  the cap at the floor on the flight computer's pad), so a replay climbs on the pad as in READY, and an epoch built
+  above the floor whose job starts in the boost is cut to the floor's (`trims`, `trimmed` in `cap_gov`);
 - the navigation filter's settings (`primary`, 100 steps a second, the profile's 2.5 ms slices, `external_build`);
 - the restore sigmas (100 m, 20 m/s, 15 deg) and the snapshot's accelerometer bias, `level_on_fused_epochs`;
 - the flight safeguards, by the firmware's own call (`gnss_raw::applyMosaicFlightSafeguards`,

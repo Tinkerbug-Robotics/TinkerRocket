@@ -33,7 +33,9 @@ gtest_discover_tests(test_raw_gnss_ekf_v9)
 # (skipped until the stage has one), and the cap governor in the filter's loop
 # through a stage (up on the pad, the floor through the boost and its hold, cut
 # on late epochs, the floor on one too old or lost, held by the boost screen on
-# every epoch, never touching the filter, off on every profile).
+# every epoch, never touching the filter, off on every profile; the floor from
+# PRELAUNCH, and an epoch built at the pad's cap whose job starts in the boost
+# worked as the floor's).
 add_executable(test_raw_gnss_shadow_v9 test_raw_gnss_shadow_v9.cpp
     ${LIB_DIR}/TR_RawGnssShadow/RawGnssShadow.cpp
     ${LIB_DIR}/TR_RawGnssShadow/RawGnssMeasStage.cpp

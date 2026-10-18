@@ -200,9 +200,9 @@ static_assert(sizeof(void*) != 8 || sizeof(RawMeasBuilder::Config) == 312,
               "RawMeasBuilder::Config changed: add the field to expectSameBuilder, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 32,
               "GnssSignalProfile changed: add the field to expectSameSignal, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 536,
+static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 528,
               "GnssReceiverProfile changed: add the field to expectSameNumbers, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1776,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1680,
               "RawGnssShadow::Config changed: pin the field in TheShadowSafeguardDefaultsAreTheBeetles, then update "
               "this size");
 
@@ -817,20 +817,22 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_FALSE(c.level_on_fused_epochs);
     EXPECT_EQ(c.sat_cap, 0);
     EXPECT_EQ(c.sat_cap_max, 0);                          // the cap governor: off
-    EXPECT_EQ(c.cap_gov.floor, 0);
-    EXPECT_EQ(c.cap_gov.ceiling, 0);
-    EXPECT_EQ(c.cap_gov.hard_age_s, 0.2);
-    EXPECT_EQ(c.cap_gov.cut_frac, 0.8);
-    EXPECT_EQ(c.cap_gov.cut_count, 2);
-    EXPECT_EQ(c.cap_gov.cut_window, 4);
-    EXPECT_EQ(c.cap_gov.cut_step, 2);
-    EXPECT_EQ(c.cap_gov.raise_frac, 0.6);
-    EXPECT_EQ(c.cap_gov.raise_epochs, 10);
-    EXPECT_EQ(c.cap_gov.settle_epochs, 2);
-    EXPECT_EQ(c.cap_gov.backoff_s, 10.0);
-    EXPECT_EQ(c.cap_gov.backoff_max_s, 80.0);
-    EXPECT_EQ(c.cap_gov.boost_hold_s, 2.0);
-    EXPECT_EQ(c.cap_gov.gap_s, 0.15);
+    const gnss_raw::CapGovernor::Config g;                // its thresholds, its own (the shadow sets the rest)
+    EXPECT_EQ(g.floor, 0);
+    EXPECT_EQ(g.ceiling, 0);
+    EXPECT_EQ(g.hard_age_s, 0.2);
+    EXPECT_EQ(g.cut_frac, 0.8);
+    EXPECT_EQ(g.cut_count, 2);
+    EXPECT_EQ(g.cut_window, 4);
+    EXPECT_EQ(g.cut_step, 2);
+    EXPECT_EQ(g.raise_frac, 0.6);
+    EXPECT_EQ(g.raise_epochs, 10);
+    EXPECT_EQ(g.settle_epochs, 2);
+    EXPECT_EQ(g.backoff_s, 10.0);
+    EXPECT_EQ(g.backoff_max_s, 80.0);
+    EXPECT_EQ(g.boost_hold_s, 2.0);
+    EXPECT_EQ(g.gap_s, 0.15);
+    EXPECT_FALSE(RawGnssShadow(c).capGovernor().on());
     EXPECT_EQ(c.restore_pos_sigma_m, 0.0);
     EXPECT_EQ(c.restore_vel_sigma_mps, 0.0);
     EXPECT_EQ(c.restore_att_sigma_deg, 0.0);

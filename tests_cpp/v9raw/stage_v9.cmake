@@ -6,7 +6,8 @@
 # satellite's lock age kept, nothing changed with the cap off or above the
 # sky -- the cap governor's cap from the navigation state (a raise adds the
 # strongest left out, a cut drops the weakest picked; none on a stage with no
-# cap), what addEphemeris refuses, and the store's default size, the Beetle's,
+# cap; built above the floor, the floor's own build marked), what addEphemeris
+# refuses, and the store's default size, the Beetle's,
 # with no TR_EPH_CAPACITY macro of its own.
 add_executable(test_raw_gnss_stage_v9 test_raw_gnss_stage_v9.cpp
     ${LIB_DIR}/TR_RawGnssShadow/RawGnssMeasStage.cpp

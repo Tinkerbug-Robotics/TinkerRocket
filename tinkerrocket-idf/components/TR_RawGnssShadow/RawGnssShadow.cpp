@@ -73,11 +73,11 @@ RawGnssShadow::RawGnssShadow() : RawGnssShadow(Config()) {}
 
 // The cap governor's settings from the shadow's: between the stage's cap and
 // sat_cap_max, its hard age the at-once point, a gap 1.5 of the builder's
-// epoch period (the fused grid's). Off without external_build: only the GNSS
-// task's stage caps an epoch.
+// epoch period (the fused grid's), its thresholds its own defaults. Off
+// without external_build: only the GNSS task's stage caps an epoch.
 CapGovernor::Config RawGnssShadow::capGovConfig(const Config& c)
 {
-    CapGovernor::Config g = c.cap_gov;
+    CapGovernor::Config g;
     g.floor = c.sat_cap;
     g.ceiling = c.external_build ? c.sat_cap_max : 0;
     g.hard_age_s = c.epoch_job_max_s;
@@ -500,6 +500,22 @@ void RawGnssShadow::onEpoch(const TimedRawEpoch& e)
     pending_[npending_++] = e;
 }
 
+// Into the two waiting (the older dropped stale when both are taken): true
+// if one was dropped. Inline, so onBuilt still ends in the copy.
+__attribute__((always_inline)) inline bool RawGnssShadow::pushBuilt(const BuiltEpoch& b)
+{
+    const bool full = npend_built_ == 2;
+    if (full)
+    {
+        dropFront();
+        st_.epochs_stale++;
+        pend_flags_ |= RGE_STALE;
+    }
+    pend_built_[(pb_head_ + npend_built_) & 1] = b;
+    npend_built_++;
+    return full;
+}
+
 void RawGnssShadow::onBuilt(const BuiltEpoch& b)
 {
     if (!cfg_.external_build)
@@ -511,22 +527,23 @@ void RawGnssShadow::onBuilt(const BuiltEpoch& b)
     }
     if (gov_.on())
     {
-        // the cap governor: an epoch on the grid between this one and the
-        // last never came (the handoff or the driver's queue was full, or it
-        // was not built), and one dropped below is lost too
-        if (gov_last_tow_ >= 0.0 && gps_time_diff(b.tow_s, gov_last_tow_) > gov_.config().gap_s)
-            gov_.onLoss(t_tick_);
-        gov_last_tow_ = b.tow_s;
+        govBuilt(b);                      // the cap governor's look at it, then the same as below
+        return;
     }
-    if (npend_built_ == 2)
-    {
-        dropFront();
-        st_.epochs_stale++;
-        pend_flags_ |= RGE_STALE;
+    pushBuilt(b);
+}
+
+// The cap governor, an epoch handed over: one on the grid between it and the
+// last never came (the handoff or the driver's queue was full, or it was not
+// built), and one dropped for it (the two before it not yet taken) is lost
+// too.
+__attribute__((noinline, cold)) void RawGnssShadow::govBuilt(const BuiltEpoch& b)
+{
+    if (gov_last_tow_ >= 0.0 && gps_time_diff(b.tow_s, gov_last_tow_) > gov_.config().gap_s)
         gov_.onLoss(t_tick_);
-    }
-    pend_built_[(pb_head_ + npend_built_) & 1] = b;
-    npend_built_++;
+    gov_last_tow_ = b.tow_s;
+    if (pushBuilt(b))
+        gov_.onLoss(t_tick_);
 }
 
 void RawGnssShadow::onMeasStats(const ShadowMeasStats& m)
@@ -688,17 +705,7 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
         boost_seen_t_ = ekf_.time();      // the boost screen's window (startJob)
     t_prev_ = t;
     if (gov_.on())
-    {
-        // the cap governor's boost: the launch edge, and the boost screen's
-        // own test (the IMU past boost_screen_g within its window, before the
-        // apogee call) whether the screen runs or not
-        const bool in_flight = (s.flags & kShadowInFlight) != 0;
-        if ((in_flight && !gov_in_flight_)
-            || (!(s.flags & kShadowApogee) && cfg_.boost_screen_g > 0.0
-                && ekf_.time() - boost_seen_t_ <= cfg_.boost_screen_window_s))
-            gov_.onBoost(t);
-        gov_in_flight_ = in_flight;
-    }
+        govImu(s.flags, t);
     // Where the flight filter levels: on the ground at g's size (not on a
     // motor burning before the launch detector says so); in flight (under a
     // chute) only once steady and at g's size (LevelGate.h)
@@ -823,6 +830,20 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
         if (next_log_t_ <= t)
             next_log_t_ = t + cfg_.log_period_s;
     }
+}
+
+// The cap governor's boost, each IMU step: armed on the pad (PRELAUNCH, so
+// no epoch built for the launch's first jobs is above the floor), the launch
+// edge, and the boost screen's own test (the IMU past boost_screen_g within
+// its window, before the apogee call) whether the screen runs or not.
+__attribute__((noinline, cold)) void RawGnssShadow::govImu(uint8_t imu_flags, double t)
+{
+    const bool in_flight = (imu_flags & kShadowInFlight) != 0;
+    if ((in_flight && !gov_in_flight_) || (!in_flight && (imu_flags & kShadowPrelaunch))
+        || (!(imu_flags & kShadowApogee) && cfg_.boost_screen_g > 0.0
+            && ekf_.time() - boost_seen_t_ <= cfg_.boost_screen_window_s))
+        gov_.onBoost(t);
+    gov_in_flight_ = in_flight;
 }
 
 void RawGnssShadow::start(double t)
@@ -981,13 +1002,60 @@ void RawGnssShadow::applyDueEpochs(double t, uint8_t imu_flags)
             st_.epochs_stale++;
             pend_flags_ |= RGE_STALE;
             dropFront();
-            gov_.onLoss(t);
+            if (gov_.on())
+                govLoss(t);
             continue;
         }
         startJob(te, imu_flags);
-        if (job_.screen)
-            gov_.onBoost(t);              // the cap governor: a boost epoch, the floor
+        if (gov_.on())
+            govJobStart(t);
     }
+}
+
+// The cap governor: an epoch lost on the way (dropped as too late).
+__attribute__((noinline, cold)) void RawGnssShadow::govLoss(double t)
+{
+    gov_.onLoss(t);
+}
+
+// The cap governor at a job's start, before any of its units: an epoch the
+// boost screen judges is a boost sign (the floor), and a job that starts
+// while the boost holds the cap keeps only what a build at the floor would
+// have made of an epoch built above it (trimToFloor).
+__attribute__((noinline, cold)) void RawGnssShadow::govJobStart(double t)
+{
+    if (job_.screen)
+        gov_.onBoost(t);
+    if (built_.floor_trim && gov_.boostHeld(t))
+        trimToFloor();
+}
+
+// An epoch built at the governor's cap above the floor, its job started in
+// the boost: only the measurements of the cap's first sat_cap picks are kept
+// (BuiltEpoch::floor_keep), in their order -- the epoch a build at the floor
+// would have handed over, measurement for measurement. Nothing of the others
+// has reached the filter's per-satellite state yet (the change check's
+// previous epoch, the satellite check, the rejection counts, the
+// pseudorange's last update): they are left out as the cap leaves out a
+// satellite.
+__attribute__((noinline, cold)) void RawGnssShadow::trimToFloor()
+{
+    int k = 0;
+    for (int i = 0; i < built_.n; ++i)
+    {
+        if (((built_.floor_keep >> i) & 1u) == 0)
+            continue;
+        if (k != i)
+        {
+            built_.meas[k] = built_.meas[i];
+            built_.lock_age_s[k] = built_.lock_age_s[i];
+        }
+        k++;
+    }
+    gov_.onTrim(built_.n - k);
+    built_.n = k;
+    built_.floor_trim = 0;
+    built_.floor_keep = 0;
 }
 
 // An epoch's work is a job of units: each observation built (here, unless a
@@ -1895,11 +1963,18 @@ void RawGnssShadow::screenVerdict(bool drop, bool dry)
     job_.phase = drop ? kJobClose : kJobFuse;
 }
 
+// The cap governor: an epoch closed, age old, some of it worked at once or not.
+__attribute__((noinline, cold)) void RawGnssShadow::govClose(double age, double t)
+{
+    gov_.onClose(age, job_.late, t);
+}
+
 void RawGnssShadow::closeJob(double age, double t)
 {
     const int n = built_.n;
     RawGnssStats& rs = job_.rs;
-    gov_.onClose(age, job_.late, t);      // the cap governor: how far behind the filter closed it
+    if (gov_.on())
+        govClose(age, t);                 // the cap governor: how far behind the filter closed it
     if (rotOn())
     {
         st_.rot_last_skipped = job_.rot_dropped;
