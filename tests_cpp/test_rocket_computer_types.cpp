@@ -2850,11 +2850,13 @@ TEST(RocketComputerTypes, HighGCalStructsKeepTheirWireSizes) {
     EXPECT_NE(PCX_HG, PCX_ACC);
     EXPECT_NE(PCX_HG, PCX_EPH);
     // the GNSS antenna's offset beside them (BLE cmd 81): the setting, the
-    // filter's frame, and whether the filter used it
-    EXPECT_EQ(sizeof(PadContextAnt), 20u);
+    // filter's frame, whether the filter used it, and the one it flew with
+    EXPECT_EQ(sizeof(PadContextAnt), 33u);
     EXPECT_EQ(offsetof(PadContextAnt, board_mm), 1u);
     EXPECT_EQ(offsetof(PadContextAnt, body_m), 7u);
     EXPECT_EQ(offsetof(PadContextAnt, used), 19u);
+    EXPECT_EQ(offsetof(PadContextAnt, applied_known), 20u);
+    EXPECT_EQ(offsetof(PadContextAnt, applied_body_m), 21u);
     EXPECT_LE(sizeof(PadContextHeader) + sizeof(PadContextAnt), MAX_PAYLOAD);
     EXPECT_NE(PCX_ANT, PCX_HG);
     EXPECT_NE(PCX_ANT, PCX_EPH);

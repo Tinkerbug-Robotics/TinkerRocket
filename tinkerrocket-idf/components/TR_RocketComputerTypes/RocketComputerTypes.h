@@ -1753,10 +1753,11 @@ typedef struct __attribute__((packed))
 static_assert(sizeof(PadContextHg) == 37, "PadContextHg must be 37 bytes");
 
 // PCX_ANT: the GNSS antenna's offset from the IMU (AntennaOffsetConfigData,
-// BLE cmd 81) the flight flew with: the owner's setting in the board's frame,
-// and the same turned into the navigation filter's by the mounting. Every
-// board but the Beetle writes it; a flight without the record had none
-// (unknown), as before it existed.
+// BLE cmd 81) on the flight: the owner's setting in the board's frame, the
+// same turned into the navigation filter's by the mounting, and the offset
+// that filter flew with -- an earlier one while a setting sent just before
+// launch waits for the ground in it. Every board but the Beetle writes it; a
+// flight without the record had none (unknown), as before it existed.
 typedef struct __attribute__((packed))
 {
     uint8_t known;               // 1 measured, 0 unknown (the rest 0)
@@ -1766,8 +1767,11 @@ typedef struct __attribute__((packed))
                                  // image's raw-GNSS filter started and had body_m on at the record; 0
                                  // otherwise (unknown, another image, a filter that never started, or
                                  // one still on an earlier offset)
+    uint8_t applied_known;       // 1 if that filter started and had a known offset on at the record
+                                 // (the one it flew with); 0 otherwise (the rest 0)
+    float   applied_body_m[3];   // that offset, body FRD, m
 } PadContextAnt;
-static_assert(sizeof(PadContextAnt) == 20, "PadContextAnt must be 20 bytes");
+static_assert(sizeof(PadContextAnt) == 33, "PadContextAnt must be 33 bytes");
 
 // PCX_NAV: the raw-GNSS filter at the IMU tick the flight computer called
 // INFLIGHT, and what it had taken from the pad.

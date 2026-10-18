@@ -187,6 +187,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `PadCalStatusData` | 40 |
 | `PadContextHg` | 37 |
 | `MagCalStatusData` | 36 |
+| `PadContextAnt` | 33 |
 | `HeadingFitData` | 32 |
 | `LogBufferStatsData` | 28 |
 | `BaseStationStorageStatsData` | 26 |
@@ -199,7 +200,6 @@ that changes size fails the build rather than corrupting a log silently.
 | `ServoConfigData` | 22 |
 | `GuidancePointData` | 20 |
 | `PIDConfigData` | 20 |
-| `PadContextAnt` | 20 |
 | `RollControlConfigData` | 20 |
 | `GuidanceTelemData` | 19 |
 | `SensorCalStatusData` | 19 |

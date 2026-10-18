@@ -802,7 +802,7 @@ static bool antenna_held_set = false;
 #endif
 #if TR_RAW_NAV_MOSAIC
 static void rawAntennaPublish();
-static bool rawAntennaFlown(const gnss_raw::AntennaOffset& ant);
+static bool rawAntennaFlown(const gnss_raw::AntennaOffset& ant, gnss_raw::AntennaOffset& on);
 #endif
 
 // #1485: the board's limit must be a rate the chip can be set to, and the
@@ -2866,9 +2866,10 @@ static void sendPadContextCal()
     static_assert(sizeof(rg) == sizeof(PadContextHeader) + sizeof(PadContextHg), "PCX_HG record is packed");
     (void)enqueueI2STx(PAD_CONTEXT_MSG, reinterpret_cast<const uint8_t*>(&rg), sizeof(rg));
 #if !TR_BOARD_M1
-    // PCX_ANT: the GNSS antenna's offset (BLE cmd 81) and the same in the
-    // filter's frame; neither changes in flight (one sent INFLIGHT is held
-    // for the ground), and `used` says whether the filter flew with it
+    // PCX_ANT: the GNSS antenna's offset (BLE cmd 81), the same in the
+    // filter's frame, and the one the filter flew with; none changes in
+    // flight (one sent INFLIGHT is held for the ground), and `used` says
+    // whether the filter flew with the setting
     struct __attribute__((packed))
     {
         PadContextHeader h;
@@ -2885,10 +2886,17 @@ static void sendPadContextCal()
     memcpy(rn.a.board_mm, board_mm, sizeof(board_mm));   // packed: through a copy
     memcpy(rn.a.body_m, body_m, sizeof(body_m));
 #if TR_RAW_NAV_MOSAIC
-    // the one image whose filter takes it: used only if that filter started
-    // and has this offset on (a setting sent just before launch may still
-    // wait for the ground in it)
-    rn.a.used = rawAntennaFlown(ant) ? 1U : 0U;
+    // the one image whose filter takes it: the offset that filter has on, and
+    // used only if that is this one (a setting sent just before launch may
+    // still wait for the ground in it, the filter on an earlier one)
+    gnss_raw::AntennaOffset on;
+    rn.a.used = rawAntennaFlown(ant, on) ? 1U : 0U;
+    if (on.known)
+    {
+        const float on_m[3] = {(float)on.b_m[0], (float)on.b_m[1], (float)on.b_m[2]};
+        rn.a.applied_known = 1U;
+        memcpy(rn.a.applied_body_m, on_m, sizeof(on_m));
+    }
 #endif
     static_assert(sizeof(rn) == sizeof(PadContextHeader) + sizeof(PadContextAnt), "PCX_ANT record is packed");
     (void)enqueueI2STx(PAD_CONTEXT_MSG, reinterpret_cast<const uint8_t*>(&rn), sizeof(rn));
@@ -3252,7 +3260,8 @@ static void rawAntennaPublish()
 // The offset the filter has on (its config's lever_on and lever_b_m): written
 // by the filter's task whenever that changes -- setAntenna takes one on the
 // ground at once, in flight at the first ground tick -- for the pad
-// context's PCX_ANT, which says whether the filter flew with the setting.
+// context's PCX_ANT, which logs the offset the filter flew with and whether
+// that was the setting.
 static gnss_raw::SeqLock<gnss_raw::AntennaOffset> raw_antenna_applied;
 static void rawAntennaAppliedPublish(const gnss_raw::RawGnssShadow& sh, gnss_raw::AntennaOffset& last, bool& sent)
 {
@@ -3268,13 +3277,15 @@ static void rawAntennaAppliedPublish(const gnss_raw::RawGnssShadow& sh, gnss_raw
     last = now;
     sent = true;
 }
-// Whether the filter started and has `ant` on (within a micrometer): known
-// offsets only, read on the flight loop's core
-static bool rawAntennaFlown(const gnss_raw::AntennaOffset& ant)
+// The offset the filter has on, into `on` (unknown if it never started), and
+// whether that is `ant` (within a micrometer): known offsets only, read on
+// the flight loop's core
+static bool rawAntennaFlown(const gnss_raw::AntennaOffset& ant, gnss_raw::AntennaOffset& on)
 {
-    gnss_raw::AntennaOffset on;
     uint32_t seq = 0;
-    if (!raw_nav_started || !ant.known || !raw_antenna_applied.read(on, seq) || !on.known)
+    if (!raw_nav_started || !raw_antenna_applied.read(on, seq))
+        on = gnss_raw::AntennaOffset{};
+    if (!ant.known || !on.known)
         return false;
     for (int i = 0; i < 3; ++i)
         if (std::fabs(on.b_m[i] - ant.b_m[i]) > 1e-6)
