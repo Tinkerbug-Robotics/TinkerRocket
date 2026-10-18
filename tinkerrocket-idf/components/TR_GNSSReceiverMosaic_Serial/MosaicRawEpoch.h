@@ -493,8 +493,9 @@ struct PpsTagStats
     int32_t  settling_max_us = 0;   //   their largest |residual|
     uint32_t late = 0;              // edges the interrupt stamped late: judged where they were due
     int32_t  late_max_us = 0;       //   the latest, us past due
-    // seconds whose epoch was not handed over timed (the tag held back:
-    // MosaicTimeTag.h), checked all the same, never judged
+    // seconds whose epoch was not handed over timed, checked all the same,
+    // never judged: the tag held back (MosaicTimeTag.h), and also a timed
+    // epoch the full queue refused or an empty one (the driver hands neither)
     uint32_t held = 0;
     int32_t  held_max_us = 0;       //   their largest |residual|
     int32_t  held_last_us = 0;      //   the last one, signed

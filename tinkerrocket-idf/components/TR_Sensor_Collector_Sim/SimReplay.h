@@ -26,6 +26,13 @@
 //  The mosaic-G5's driver hands no timed fix; its timed raw epochs (the
 //  receiver's GPS week and time of week, that instant on the MCU from the
 //  1PPS line) set the clock instead, ten a second (ReplayClock::onEpoch).
+//  Only a timed epoch moves the clock, so through a time-tag hold
+//  (MosaicTimeTag.h) it runs on the last one's base, and a hold across
+//  arm_by_s freezes it at the first timed epoch after the release, on that
+//  epoch's base: on the pad that is the sky's time; after ignition it steps
+//  the replayed flight by the slip in mid-air, a run the rig's scorer voids
+//  (tools/rig_replay/score_v9.py, from the console's "frozen for the flight
+//  (... at t X s)").
 //
 //  Frames: the firmware's rocket frame, FLU (x nose, y left, z up; see
 //  SimSensorModel.h), and NED at the pad.
@@ -234,5 +241,44 @@ private:
     double  check_move_us_ = 0.0;
     uint32_t tag_checks_ = 0;
 };
+
+// The mosaic-G5 driver's 1PPS check as the replay reads it for
+// ReplayClock::onTagCheck (TR_GNSSReceiverMosaicSerial::RawStats::tag.pps,
+// mosaic::PpsTagStats): how many seconds it has checked that were handed
+// over timed (checks + settling: a held second's check counts in held,
+// never here), and the last of them with its residual (last_s, last_us). The
+// last second checked (prev_s) is not it: a held second's check moves that
+// on too.
+struct TagCheckRead
+{
+    uint32_t n = 0;              // seconds checked that were handed over timed
+    int64_t  sec = 0;            // the last one's second (week * 604800 + the receiver's time of week, s)
+    int32_t  residual_us = 0;    // its residual (us)
+};
+
+// Read from the driver's stats (a template: the driver's types stay out of
+// this header).
+template <typename PpsStats>
+TagCheckRead tagCheckRead(const PpsStats& p)
+{
+    TagCheckRead r;
+    r.n = p.checks + p.settling;
+    r.sec = p.last_s;
+    r.residual_us = p.last_us;
+    return r;
+}
+
+// Whether two reads of the driver's check, taken one after the other, hold
+// a check the clock has not had yet: the driver's poll task writes them on
+// the other core, so only two reads that agree are taken, and only when the
+// count moved past seen (which then moves on). The check to hand over is
+// then either read's.
+inline bool newTagCheck(const TagCheckRead& a, const TagCheckRead& b, uint32_t& seen)
+{
+    if (a.n != b.n || a.sec != b.sec || a.residual_us != b.residual_us || a.n == seen)
+        return false;
+    seen = a.n;
+    return true;
+}
 
 }  // namespace sim_replay

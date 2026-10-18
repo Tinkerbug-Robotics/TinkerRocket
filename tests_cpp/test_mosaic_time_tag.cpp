@@ -1267,6 +1267,10 @@ struct RigReplayRun
     int checks = 0;                 // 1PPS checks handed to the clock
     int checks_not_timed = 0;       //   of a second not handed over timed: never
     double freeze_t = -1.0;         // the bench time of the epoch that froze the clock
+    double freeze_at_t = 0.0;       //   its replay time, s from ignition: the console's "frozen for the
+                                    //   flight (the receiver's timed epoch at t X s)"
+    double freeze_step_us = 0.0;    //   how far it moved the clock at its own MCU instant (us)
+    double freeze_sky_step_us = 0.0;   //   the sky's: its time less the MCU's since the last epoch counted
     double ignition_gps_s = 0.0;
 };
 
@@ -1287,16 +1291,18 @@ void rigReplay(double ignition_t, Driver& d, RigReplayRun& rr)
     rr.clock.reset(h);
     std::set<int64_t> timed_seconds;
     uint32_t seen = 0;
+    double last_counted_t = -1.0;
     run(b, d, 330.0, 1e9, nullptr, [&](const Out& o) {
         rr.handed++;
-        // the driver's checks so far, before this epoch's own PVT (the sim
-        // reads them as it drains the epoch)
-        const PpsTagStats& p = d.tag.stats().pps;
-        const uint32_t n = p.checks + p.settling;
-        const bool new_check = n != seen;
-        seen = n;
+        // the driver's checks so far, before this epoch's own PVT, read as the
+        // sim reads them as it drains the epoch (replayNoteEpoch: two reads,
+        // taken when they agree; here nothing writes between the two)
+        const sim_replay::TagCheckRead chk = sim_replay::tagCheckRead(d.tag.stats().pps);
+        const bool new_check = sim_replay::newTagCheck(chk, sim_replay::tagCheckRead(d.tag.stats().pps), seen);
         const auto before = rr.clock.state();
         const uint32_t fixes = rr.clock.fixes();
+        double t_before = 0.0;
+        const bool had_t = rr.clock.tAt(o.mcu_us, t_before);
         rr.clock.onEpoch(static_cast<uint16_t>(o.rx_ms / kWeekMs), static_cast<double>(o.rx_ms % kWeekMs) * 1e-3,
                          o.mcu_us, o.dtr_ms * 1e-3);
         if (o.mcu_us == 0)
@@ -1313,13 +1319,24 @@ void rigReplay(double ignition_t, Driver& d, RigReplayRun& rr)
                 timed_seconds.insert(o.rx_ms / 1000);
         }
         if (before != sim_replay::ReplayClock::kFrozen && rr.clock.state() == sim_replay::ReplayClock::kFrozen)
+        {
             rr.freeze_t = o.t;
+            rr.freeze_at_t = rr.clock.lastFixT();
+            double t_after = 0.0;
+            if (had_t && rr.clock.tAt(o.mcu_us, t_after))
+                rr.freeze_step_us = (t_after - t_before) * 1e6;
+            if (last_counted_t >= 0.0)
+                rr.freeze_sky_step_us = (skyGpsS(b, o.t) - skyGpsS(b, last_counted_t)) * 1e6 -
+                                        (b.mcuUs(o.t) - b.mcuUs(last_counted_t));
+        }
+        if (rr.clock.fixes() != fixes)
+            last_counted_t = o.t;
         if (new_check)
         {
             rr.checks++;
-            if (timed_seconds.count(p.last_s) == 0)
+            if (timed_seconds.count(chk.sec) == 0)
                 rr.checks_not_timed++;
-            rr.clock.onTagCheck(static_cast<double>(p.last_s), p.last_us);
+            rr.clock.onTagCheck(static_cast<double>(chk.sec), chk.residual_us);
         }
     });
 }
@@ -1366,6 +1383,9 @@ TEST(MosaicTimeTag, TheRigReplaysClockTakesOnlyTheTimedEpochs)
     EXPECT_EQ(rr.checks_not_timed, 0);
     ASSERT_EQ(rr.clock.state(), sim_replay::ReplayClock::kFrozen);
     EXPECT_NEAR(rr.freeze_t, 225.0, 0.11);
+    EXPECT_GE(rr.freeze_at_t, -5.0);         // the arming instant, as score_v9.py reads it: no mark
+    EXPECT_LT(rr.freeze_at_t, -4.89);
+    EXPECT_LT(std::fabs(rr.freeze_step_us), 25.0);   // on the sky it followed a tenth of a second before
     EXPECT_EQ(rr.clock.check(), sim_replay::ReplayClock::kKept);
     EXPECT_NEAR(rr.clock.checkT(), -5.0, 0.01);   // the freeze's own second: the receiver's, its bias off GPS
     EXPECT_LT(std::fabs(rr.clock.checkMoveUs()), 25.0);
@@ -1376,21 +1396,115 @@ TEST(MosaicTimeTag, TheRigReplaysClockTakesOnlyTheTimedEpochs)
 // The freeze inside the hold (5 s before an ignition 6 s after the first
 // fix): the clock follows the old sky through the hold, never a held epoch,
 // and the first timed epoch after the release freezes it on the late sky's
-// time -- the stale clock, 6.854 ms ahead, is never frozen.
+// time -- the stale clock, 6.854 ms ahead and the crystal's drift since, is
+// never frozen. The release comes
+// after T-2 s, so the freeze goes unchecked (score_v9.py marks it), and the
+// step onto the late sky is on the pad, where the replayed rocket stands
+// still.
 TEST(MosaicTimeTag, ARigReplayFreezeInsideTheHoldWaitsForATimedEpoch)
 {
     Driver d(false);
     RigReplayRun rr;
     rigReplay(183.0, d, rr);
-    std::printf("[rig] hold: handed %d: timed %d, untimed %d (counted %d); froze at %.2f s (t %+.2f), check %d "
-                "(t %+.1f s, residual %d us, move %.1f us)\n",
-                rr.handed, rr.timed, rr.untimed, rr.untimed_counted, rr.freeze_t, rr.freeze_t - 183.0,
+    std::printf("[rig] hold: handed %d: timed %d, untimed %d (counted %d); froze at %.2f s (t %+.2f, step %+.0f us), "
+                "check %d (t %+.1f s, residual %d us, move %.1f us)\n",
+                rr.handed, rr.timed, rr.untimed, rr.untimed_counted, rr.freeze_t, rr.freeze_at_t, rr.freeze_step_us,
                 (int)rr.clock.check(), rr.clock.checkT(), rr.clock.checkResidualUs(), rr.clock.checkMoveUs());
     EXPECT_EQ(rr.untimed_counted, 0);
     EXPECT_EQ(rr.clock.restarts(), 0u);
     ASSERT_EQ(rr.clock.state(), sim_replay::ReplayClock::kFrozen);
     EXPECT_GT(rr.freeze_t, 178.0);          // not at the arming instant: its epochs were held
-    EXPECT_NE(rr.clock.check(), sim_replay::ReplayClock::kMoved);
+    EXPECT_GT(rr.freeze_at_t, -2.0);        // after the check's deadline...
+    EXPECT_LT(rr.freeze_at_t, 0.0);         // ...and before ignition: on the pad
+    // the step onto the late sky: the slip, and the crystal's 16 ppm over the
+    // 22 s the clock ran on its own
+    EXPECT_NEAR(rr.freeze_step_us, rr.freeze_sky_step_us, 25.0);
+    EXPECT_LT(rr.freeze_step_us, -6854.0);
+    EXPECT_GT(rr.freeze_step_us, -6854.0 - 16e-6 * 25e6);
+    EXPECT_EQ(rr.clock.check(), sim_replay::ReplayClock::kUnchecked);
     for (double t : {rr.freeze_t + 0.05, 190.0, 200.0, 250.0})
         EXPECT_LT(std::fabs(rigClockErrUs(rr, t)), 25.0) << t;
+}
+
+// The hold across both T-5 s and ignition (the 10/17 underrun 18 s before
+// an ignition at bench second 178: the sky lost from T-18 s, back at T-3 s,
+// the first fix at T-1 s, the tag released at T+4.1 s): the clock follows
+// the old sky through the hold, so the replayed flight starts on the stale
+// clock, and the first timed epoch after the release freezes it in flight on
+// the late sky, stepping the replayed IMU back by the slip and the crystal's
+// drift since (7.2 ms) -- that much of the boost replayed twice. Nothing in the
+// firmware stops it; the console's "frozen for the flight (the receiver's
+// timed epoch at t X s)" with X >= 0 is what score_v9.py voids the run on.
+TEST(MosaicTimeTag, ARigReplayHoldPastIgnitionFreezesInFlight)
+{
+    Driver d(false);
+    RigReplayRun rr;
+    rigReplay(178.0, d, rr);
+    std::printf("[rig] hold past ignition: handed %d: timed %d, untimed %d (counted %d); froze at %.2f s (t %+.2f, "
+                "step %+.0f us), check %d\n",
+                rr.handed, rr.timed, rr.untimed, rr.untimed_counted, rr.freeze_t, rr.freeze_at_t, rr.freeze_step_us,
+                (int)rr.clock.check());
+    EXPECT_EQ(rr.untimed_counted, 0);
+    ASSERT_EQ(rr.clock.state(), sim_replay::ReplayClock::kFrozen);
+    EXPECT_GT(rr.freeze_at_t, 0.0);         // in flight: score_v9.py's VOID
+    EXPECT_NEAR(rr.freeze_at_t, rr.freeze_t - 178.0, 0.01);
+    EXPECT_NEAR(rr.freeze_step_us, rr.freeze_sky_step_us, 25.0);   // the slip and the crystal, as above
+    EXPECT_LT(rr.freeze_step_us, -6854.0);
+    EXPECT_EQ(rr.clock.check(), sim_replay::ReplayClock::kUnchecked);
+}
+
+// The replay's read of the driver's 1PPS check (sim_replay::tagCheckRead and
+// newTagCheck, as replayNoteEpoch reads RawStats::tag.pps): a second handed
+// over timed is a new check with its own second and residual; a held
+// second's check moves prev_s and held only, never the count or last_s; two
+// reads that differ (the poll task wrote between them) are no check.
+TEST(MosaicTimeTag, TheRigReplayReadsTheDriversCheckOnlyWhenTwoReadsAgree)
+{
+    using sim_replay::newTagCheck;
+    using sim_replay::tagCheckRead;
+    PpsTagStats s;
+    uint32_t seen = 0;
+    const int64_t sec_us = 1000000;
+    // a judged second
+    notePpsTag(s, 1000, 5000000 + 30, 5000000, sec_us, true, 0.0, 200, true);
+    sim_replay::TagCheckRead a = tagCheckRead(s);
+    EXPECT_EQ(a.n, 1u);
+    EXPECT_EQ(a.sec, 1000);
+    EXPECT_EQ(a.residual_us, 30);
+    EXPECT_TRUE(newTagCheck(a, tagCheckRead(s), seen));
+    EXPECT_EQ(seen, 1u);
+    EXPECT_FALSE(newTagCheck(a, tagCheckRead(s), seen));   // the same check again
+    // a held second: the driver's alone
+    notePpsTag(s, 1001, 6000000 + 7000, 6000000, sec_us, true, 0.0, 200, false);
+    EXPECT_EQ(s.prev_s, 1001);
+    EXPECT_EQ(s.held, 1u);
+    a = tagCheckRead(s);
+    EXPECT_EQ(a.n, 1u);
+    EXPECT_EQ(a.sec, 1000);                  // last_s, not prev_s
+    EXPECT_EQ(a.residual_us, 30);
+    EXPECT_FALSE(newTagCheck(a, tagCheckRead(s), seen));
+    // a check written between the two reads
+    a = tagCheckRead(s);
+    notePpsTag(s, 1002, 7000000 - 20, 7000000, sec_us, true, 0.0, 200, true);
+    EXPECT_FALSE(newTagCheck(a, tagCheckRead(s), seen));
+    EXPECT_EQ(seen, 1u);
+    // a torn read of one check: the count agrees, the second or the residual does not
+    sim_replay::TagCheckRead torn = tagCheckRead(s);
+    torn.sec = 1001;
+    EXPECT_FALSE(newTagCheck(torn, tagCheckRead(s), seen));
+    torn = tagCheckRead(s);
+    torn.residual_us = 30;
+    EXPECT_FALSE(newTagCheck(torn, tagCheckRead(s), seen));
+    // then two that agree: that check, its own second
+    a = tagCheckRead(s);
+    EXPECT_TRUE(newTagCheck(a, tagCheckRead(s), seen));
+    EXPECT_EQ(seen, 2u);
+    EXPECT_EQ(a.sec, 1002);
+    EXPECT_EQ(a.residual_us, -20);
+    // a settling second counts as a check handed over (not judged by the bar, but the clock's to pair)
+    notePpsTag(s, 1003, 8000000 + 400, 8000000, sec_us, false, 0.0, 200, true);
+    a = tagCheckRead(s);
+    EXPECT_TRUE(newTagCheck(a, tagCheckRead(s), seen));
+    EXPECT_EQ(a.n, 3u);
+    EXPECT_EQ(a.sec, 1003);
 }

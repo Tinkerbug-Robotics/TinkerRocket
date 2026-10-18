@@ -429,20 +429,18 @@ void SensorCollectorSim::replayNoteEpoch(const gnss_raw::TimedRawEpoch& e)
     // so the residual is taken with its own second (last_s), not the last
     // checked (prev_s, which a held second moves on). Read twice and taken
     // only when the reads agree: the driver's poll task writes them on the
-    // other core. Static: only the GNSS task drains the epochs, and a
-    // RawStats is too big for its stack twice over (and only a replay build,
-    // which is the only one that comes here, keeps them).
+    // other core (sim_replay::tagCheckRead and newTagCheck, host-tested).
+    // Static: only the GNSS task drains the epochs, and a RawStats is too big
+    // for its stack twice over (and only a replay build, which is the only
+    // one that comes here, keeps them).
     bool new_check = false;
+    sim_replay::TagCheckRead chk;
 #if defined(TR_SIM_REPLAY) && TR_SIM_REPLAY
     static TR_GNSSReceiverMosaicSerial::RawStats s1, s2;
     if (real_.getGNSSRawStats(s1) && real_.getGNSSRawStats(s2))
     {
-        const mosaic::PpsTagStats& p1 = s1.tag.pps;
-        const mosaic::PpsTagStats& p2 = s2.tag.pps;
-        const uint32_t n1 = p1.checks + p1.settling;
-        const uint32_t n2 = p2.checks + p2.settling;
-        new_check = n1 == n2 && n1 != replay_pps_seen_ && p1.last_s == p2.last_s && p1.last_us == p2.last_us;
-        if (new_check) replay_pps_seen_ = n1;
+        chk = sim_replay::tagCheckRead(s1.tag.pps);
+        new_check = sim_replay::newTagCheck(chk, sim_replay::tagCheckRead(s2.tag.pps), replay_pps_seen_);
     }
 #else
     TR_GNSSReceiverMosaicSerial::RawStats s1;   // no replay runs in this build: nothing below is reached
@@ -455,7 +453,7 @@ void SensorCollectorSim::replayNoteEpoch(const gnss_raw::TimedRawEpoch& e)
     // bias the tag took off): the clock is then the 1PPS line's own. An
     // untimed or held epoch (mcu_us 0, tag_dtr_ms 0) sets nothing
     replay_clock_.onEpoch(e.gps_week, e.epoch.tow_s, e.mcu_us, (double)e.tag_dtr_ms * 1.0e-3);
-    if (new_check) replay_clock_.onTagCheck((double)pps.last_s, pps.last_us);
+    if (new_check) replay_clock_.onTagCheck((double)chk.sec, chk.residual_us);
     const uint8_t after = replay_clock_.state();
     const uint8_t check_after = replay_clock_.check();
     const double t = replay_clock_.lastFixT();
@@ -473,7 +471,7 @@ void SensorCollectorSim::replayNoteEpoch(const gnss_raw::TimedRawEpoch& e)
     {
         ESP_LOGE("SIM", "RIG REPLAY clock: the freeze NOT checked against the 1PPS (no check of a second from the "
                         "freeze on by t %+.1f s); PPS tag check so far %lu judged, %lu over %ld us; %lu held back "
-                        "(untimed, not judged)",
+                        "or not handed over (not judged)",
                  t, (unsigned long)pps.checks, (unsigned long)pps.over,
                  (long)TR_GNSSReceiverMosaicSerial::kPpsTagBarUs, (unsigned long)pps.held);
         return;
@@ -481,7 +479,7 @@ void SensorCollectorSim::replayNoteEpoch(const gnss_raw::TimedRawEpoch& e)
     const bool moved = check_after == sim_replay::ReplayClock::kMoved;
     ESP_LOGW("SIM", "RIG REPLAY clock: the freeze checked against the 1PPS edge of the second at t %+.0f s: residual "
                     "%+ld us, %s %+.0f us; PPS tag check so far %lu judged, %lu over %ld us; %lu held back "
-                    "(untimed, not judged)",
+                    "or not handed over (not judged)",
              check_t, (long)check_res, moved ? "MOVED onto the edge by" : "kept, the edge within", check_move,
              (unsigned long)pps.checks, (unsigned long)pps.over, (long)TR_GNSSReceiverMosaicSerial::kPpsTagBarUs,
              (unsigned long)pps.held);
