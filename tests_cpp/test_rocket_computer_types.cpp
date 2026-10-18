@@ -1133,9 +1133,9 @@ TEST(LoraMinValidSnrDb, AcceptsGenuineBorderlinePackets) {
 // field after it — and the app would then display the result as VERIFIED,
 // which is worse than the "cannot verify" state this frame exists to remove.
 TEST(RocketComputerTypes, ConfigReportData_Layout) {
-    // v3 (#1472): v2's 193 bytes (v1's 169 + the 24-byte PyroConfigData)
-    // + the one-byte camera type.
-    EXPECT_EQ(sizeof(ConfigReportData), 194u);
+    // v4: v3's 194 bytes (v2's 193 + the one-byte camera type, #1472) + the
+    // 7-byte GNSS antenna offset.
+    EXPECT_EQ(sizeof(ConfigReportData), 201u);
     // Rides the same I2S frame path as everything else FC→OC.
     EXPECT_LE(sizeof(ConfigReportData), MAX_PAYLOAD);
 
@@ -1163,7 +1163,14 @@ TEST(RocketComputerTypes, ConfigReportData_Layout) {
     EXPECT_EQ(offsetof(ConfigReportData, camera_type),      193u);
     EXPECT_EQ(offsetof(ConfigReportData, pyro) + sizeof(PyroConfigData),
               offsetof(ConfigReportData, camera_type));
+    // v4: appended AFTER camera_type, so a v3 report is a byte-exact prefix
+    // of v4 — the OC copies a v3 frame by exactly this many bytes and serves
+    // the OC's cached antenna offset for it.  Move it and a v3 sender is
+    // misparsed, and a v3 FC's zero would read as "unknown".
+    EXPECT_EQ(offsetof(ConfigReportData, antenna),          194u);
     EXPECT_EQ(offsetof(ConfigReportData, camera_type) + sizeof(uint8_t),
+              offsetof(ConfigReportData, antenna));
+    EXPECT_EQ(offsetof(ConfigReportData, antenna) + sizeof(AntennaOffsetConfigData),
               sizeof(ConfigReportData));
 
     // The starts are the running sum of the nested sizes — spelled out so a
@@ -1174,17 +1181,57 @@ TEST(RocketComputerTypes, ConfigReportData_Layout) {
     EXPECT_EQ(sizeof(GuidanceConfigData), 45u);
     EXPECT_EQ(sizeof(RollProfileData),    76u);
     EXPECT_EQ(sizeof(PyroConfigData),     24u);
+    EXPECT_EQ(sizeof(AntennaOffsetConfigData), 7u);
 
     // Flag bits are wire ABI: the OC reads F_ORIENT_FROM_NVS to decide
     // whether to leave the FC's orientation alone or re-push its own, and
     // relays F_PYRO_FROM_NVS to the app as "fnv" so an all-disabled report
     // can be told apart from a board that has never been configured, and
-    // F_CAMERA_FROM_NVS (#1472) as "camfnv" for the same reason.
+    // F_CAMERA_FROM_NVS (#1472) as "camfnv" for the same reason; and reads
+    // F_ANTENNA_FROM_NVS (v4) to re-send its antenna offset to an FC with
+    // none of its own, as it does the orientation.
     // Bit 0 was F_SOUNDS; retired with the piezo and left unassigned.
     EXPECT_EQ(ConfigReportData::F_ORIENT_FROM_NVS,  1u);
     EXPECT_EQ(ConfigReportData::F_PYRO_FROM_NVS,    2u);
     EXPECT_EQ(ConfigReportData::F_CAMERA_FROM_NVS,  3u);
-    EXPECT_EQ(ConfigReportData::VERSION,            3u);
+    EXPECT_EQ(ConfigReportData::F_ANTENNA_FROM_NVS, 4u);
+    EXPECT_EQ(ConfigReportData::VERSION,            4u);
+}
+
+// The OC accepts every older report by copying the length that version
+// implies (its CONFIG_REPORT_MSG handler): each is the whole of the next
+// version's prefix, and a v4 report copied whole carries the antenna at the
+// offset the FC wrote it.
+TEST(RocketComputerTypes, ConfigReportData_V4PrefixRoundTrip) {
+    ConfigReportData r;
+    memset(&r, 0, sizeof(r));
+    r.version     = ConfigReportData::VERSION;
+    r.camera_type = CAM_TYPE_GOPRO;
+    r.flags       = (uint8_t)(1U << ConfigReportData::F_ANTENNA_FROM_NVS);
+    r.antenna.known = 1;
+    r.antenna.x_mm  = -12;
+    r.antenna.y_mm  = 34;
+    r.antenna.z_mm  = 2000;
+    uint8_t wire[sizeof(ConfigReportData)];
+    memcpy(wire, &r, sizeof(r));
+
+    // a v4 OC reading the whole frame
+    ConfigReportData v4 = {};
+    memcpy(&v4, wire, sizeof(v4));
+    EXPECT_EQ((unsigned)v4.antenna.known, 1u);
+    EXPECT_EQ((int)v4.antenna.x_mm, -12);
+    EXPECT_EQ((int)v4.antenna.y_mm, 34);
+    EXPECT_EQ((int)v4.antenna.z_mm, 2000);
+    EXPECT_TRUE(antennaOffsetValid(v4.antenna));
+    EXPECT_EQ((unsigned)v4.camera_type, (unsigned)CAM_TYPE_GOPRO);
+
+    // a v3 sender's frame, copied by v3's length: the camera type arrives,
+    // the antenna stays the zero the OC never serves
+    ConfigReportData v3 = {};
+    memcpy(&v3, wire, offsetof(ConfigReportData, antenna));
+    EXPECT_EQ((unsigned)v3.camera_type, (unsigned)CAM_TYPE_GOPRO);
+    EXPECT_EQ((unsigned)v3.antenna.known, 0u);
+    EXPECT_EQ((int)v3.antenna.z_mm, 0);
 }
 
 // --- Flight settings snapshot (#165) ---

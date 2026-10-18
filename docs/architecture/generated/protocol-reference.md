@@ -117,7 +117,7 @@ this list is CI-enforced for uniqueness.
 | `0xF4` | `I2C_TX_RESYNC` | — |  |
 | `0xF9` | `LORA_UPLINK_MSG` | OC → log | OC→self: 13-byte LoRaUplinkData, one per uplink decode, straight to the log |
 | `0xFA` | `FC_BOOT_STATUS_MSG` | FC → OC | FC→OC: 4-byte FcBootStatusData, boot progress during setup_fc only |
-| `0xFB` | `CONFIG_REPORT_MSG` | FC → OC | FC→OC: 194-byte ConfigReportData, everything the app's config |
+| `0xFB` | `CONFIG_REPORT_MSG` | FC → OC | FC→OC: 201-byte ConfigReportData, everything the app's config |
 | `0x90` | `GNSS_SAT_MSG` | FC → OC | FC→OC over I2S: GNSSSatData, per-satellite C/N0 at every GNSS |
 | `0x91` | `RECOVERY_END_PENDING` | OC → FC |  |
 | `0x93` | `ISM6_BATCH_MSG` | FC → OC | FC→OC over I2S: a count byte, then that many ISM6HG256Data records |
@@ -163,7 +163,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `FlightSnapshotData` | 224 |
 | `FlightSettingsData` | 223 |
 | `GNSSSatData` | 202 |
-| `ConfigReportData` | 194 |
+| `ConfigReportData` | 201 |
 | `PadContextNav` | 124 |
 | `AccelCalStatusFrame` | 114 |
 | `RawGnssEkfData` | 90 |

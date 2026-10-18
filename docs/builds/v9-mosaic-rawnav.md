@@ -74,7 +74,11 @@ offline harness calls too. The boot prints them on one `[RAWGNSS] flight safegua
 An owner setting in both apps (Settings, "GNSS Antenna Offset"): Unknown, the default, or Measured, with the IMU to
 the antenna's phase center in millimeters along the board's own axes. The out computer stores and relays it; the
 flight computer keeps it in NVS (`antenna`/`ofs`), turns it into the filter's frame with the IMU's mounting, and
-takes it only on the ground.
+takes it only on the ground: one relayed in flight is held and applied once the flight computer is not INFLIGHT.
+The flight computer reports the offset it holds in its config report (`ConfigReportData` v4), and the apps' readback
+shows that one (`antsrc` "fc"); the out computer's copy stands in only without a report, and a flight computer with
+no offset of its own (a fresh board, or its NVS erased) is sent the out computer's again. The Beetle's out computer
+leaves the setting out of its readback, so the apps lock it there.
 
 - **Unknown** flies the image as described above: the turning body's 0.30 m and 0.03 m bounds stand in for the
   antenna nobody measured.
@@ -82,8 +86,9 @@ takes it only on the ground.
   value (`antenna_sigma_*`) replace those bounds and the change check's lever allowance. The offset's roll terms
   are observed and logged, never fused.
 - **The log:** the pad context gains a record, `PCX_ANT`, beside the calibrations at launch + 5 s: the setting, the
-  same in the filter's frame, and whether the filter used it. `tools/raw_replay/extract.py` passes it to the
-  harness, which replays the flight with it unless given `--antenna-m none`.
+  same in the filter's frame, and whether the navigation filter flew with this offset (it started, and had the
+  offset on at the record). `tools/raw_replay/extract.py` passes it to the harness, which replays the flight with it
+  unless given `--antenna-m none`.
 
 ### The log-only vote guard
 
@@ -152,9 +157,11 @@ This is a statement about behavior, not bytes.
   IDENTICAL. `tools/m1_identity.sh` reports its `main.cpp` and sensor collectors preprocess IDENTICAL. Neither
   covers GnssTimeSync; the host tests cover its default path.
 - **The wire:** the antenna offset adds BLE command 81, the out computer's ANTENNA_CONFIG_PENDING/MSG pair
-  (0x8C/0x8D) and the pad context's `PCX_ANT` record (every board but the Beetle writes it). Firmware that predates
-  them ignores the command, and a log reader that predates them skips the record. FcStatus bit 1 and the snapshot's
-  spare float are set only by this image; every other image leaves them 0.
+  (0x8C/0x8D), the config report's version 4 (`ConfigReportData`, 201 bytes: the offset the flight computer holds,
+  and `F_ANTENNA_FROM_NVS`) and the pad context's `PCX_ANT` record (every board but the Beetle writes it). Firmware
+  that predates them ignores the command, an out computer that predates version 4 refuses the newer report (the OTA
+  relay updates the out computer first), and a log reader that predates them skips the record. FcStatus bit 1 and
+  the snapshot's spare float are set only by this image; every other image leaves them 0.
 
 ## Bench and rig tools
 

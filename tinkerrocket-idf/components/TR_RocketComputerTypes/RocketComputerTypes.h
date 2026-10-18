@@ -1762,8 +1762,10 @@ typedef struct __attribute__((packed))
     uint8_t known;               // 1 measured, 0 unknown (the rest 0)
     int16_t board_mm[3];         // the setting: board FLU, mm
     float   body_m[3];           // the same in body FRD by the mounting, m (antennaOffsetInBody)
-    uint8_t used;                // 1 if the image's navigation filter predicted at the antenna (the
-                                 // mosaic-only image, known); 0 if it flew as if unknown
+    uint8_t used;                // 1 if the navigation filter flew with this offset: the mosaic-only
+                                 // image's raw-GNSS filter started and had body_m on at the record; 0
+                                 // otherwise (unknown, another image, a filter that never started, or
+                                 // one still on an earlier offset)
 } PadContextAnt;
 static_assert(sizeof(PadContextAnt) == 20, "PadContextAnt must be 20 bytes");
 
@@ -3227,7 +3229,7 @@ static constexpr uint8_t LOG_BUFFER_STATS_MSG = 0xE2;  // OC→self: 28-byte Log
 // the I2S telemetry stream exists, which is the whole point — see
 // FcBootStatusData above.  Stops once the FC enters loop_fc().
 static constexpr uint8_t FC_BOOT_STATUS_MSG   = 0xFA;  // FC→OC: 4-byte FcBootStatusData, boot progress during setup_fc only
-static constexpr uint8_t CONFIG_REPORT_MSG   = 0xFB;  // FC→OC: 194-byte ConfigReportData, everything the app's config
+static constexpr uint8_t CONFIG_REPORT_MSG   = 0xFB;  // FC→OC: 201-byte ConfigReportData, everything the app's config
                                                       // readback cannot otherwise see (#915).  PUSHED, not requested —
                                                       // see the struct comment.  0xFC/0xFD have since gone to the base
                                                       // station's own log records: 0xA0-0xFD is FULL.  New codes open
@@ -3666,7 +3668,9 @@ constexpr const char* gnssLogName(uint8_t setting)
 // pseudorange at the antenna (TR_RawGnssEKF.h lever_on), with a few cm of
 // uncertainty on the value. Kept like the GNSS log: the OC stores it and
 // relays it, the FC stores it (every board but the Beetle's) and applies it,
-// never INFLIGHT; both start a fresh board on unknown.
+// never INFLIGHT (one that arrives then is held until the FC is not); both
+// start a fresh board on unknown. The FC reports the one it holds in its
+// config report (ConfigReportData v4), and the OC's readback serves that.
 static constexpr int16_t ANTENNA_OFFSET_MAX_MM = 2000;   // each component's size at most
 
 typedef struct __attribute__((packed))
@@ -4217,7 +4221,10 @@ static_assert(sizeof(FlightSettingsData) == 223,
 // camera type the FC will act on: the readback's "camt" was the OC's cache
 // too, the apps adopted it into the profile on connect, and "Send all" then
 // wrote it to the FC — which is how a GoPro rocket could be switched to
-// RunCam mode by an OC copy the FC never agreed to.
+// RunCam mode by an OC copy the FC never agreed to.  Since v4 also the GNSS
+// antenna offset the FC holds (BLE cmd 81), for the same reason: the
+// readback's "antk".."antz" were the OC's cache, so a setting the FC never
+// applied (or an FC whose NVS was erased) still read as the rocket's.
 //
 // Why not extend FlightSettingsData: that struct is 219 bytes against a
 // MAX_PAYLOAD of 224, and the fin layout plus the guidance parameters need
@@ -4237,14 +4244,15 @@ static_assert(sizeof(FlightSettingsData) == 223,
 struct __attribute__((packed)) ConfigReportData
 {
     // v1 (#915): 169 bytes, through `roll`.  v2 (#1231): + `pyro`, 193
-    // bytes.  v3 (#1472): + `camera_type`, 194 bytes.  Each version is a
-    // byte-exact PREFIX of the next — the OC accepts all three and simply
-    // has nothing FC-sourced to serve for the groups an older sender lacks.
+    // bytes.  v3 (#1472): + `camera_type`, 194 bytes.  v4 (BLE cmd 81): +
+    // `antenna`, 201 bytes.  Each version is a byte-exact PREFIX of the next
+    // — the OC accepts all four and simply has nothing FC-sourced to serve
+    // for the groups an older sender lacks.
     // An OC OLDER than its FC refuses the newer version outright (it will
-    // not reinterpret a layout it does not know), so a v3 FC behind a
-    // pre-#1472 OC has no report at all until the OC is updated — the OTA
+    // not reinterpret a layout it does not know), so a v4 FC behind a
+    // pre-v4 OC has no report at all until the OC is updated — the OTA
     // relay updates the OC first, which is the order that never hits this.
-    static constexpr uint8_t VERSION = 3;
+    static constexpr uint8_t VERSION = 4;
 
     // flags bit positions
     // bit 0: retired (was F_SOUNDS, piezo sounds enabled).  Never set by
@@ -4270,6 +4278,14 @@ struct __attribute__((packed)) ConfigReportData
     // default of a board that has never been told.  Never set by a v1/v2
     // sender, which has no `camera_type` at all.
     static constexpr uint8_t F_CAMERA_FROM_NVS = 3;
+    // v4.  Set when `antenna` below is a stored record (the FC's NVS
+    // `antenna`/`ofs`, or an antenna frame applied this boot — written to
+    // NVS in the same step) rather than the unknown a board that has never
+    // been told starts on.  Both can read "unknown" on the wire; only the
+    // first is a setting somebody chose, and the OC re-sends its own copy to
+    // the second, as it does the orientation (F_ORIENT_FROM_NVS).  Never set
+    // by the Beetle's FC (TR_BOARD_M1), which keeps no antenna offset.
+    static constexpr uint8_t F_ANTENNA_FROM_NVS = 4;
 
     uint32_t time_us;              // micros() at build — first, so the generic
                                    // frame parser's "timestamp = first 4
@@ -4298,9 +4314,16 @@ struct __attribute__((packed)) ConfigReportData
     // the last cmd 33 it relayed.  Appended after `pyro` so a v2 report stays
     // a prefix; see VERSION.
     uint8_t            camera_type;
+    // v4.  The GNSS antenna offset the FC holds (AntennaOffsetConfigData,
+    // BLE cmd 81): the setting in the board's frame that the mosaic-only
+    // image's filter is given on the ground, not the OC's copy of the last
+    // cmd 81 it relayed.  All zero (unknown) with F_ANTENNA_FROM_NVS clear
+    // on the Beetle's FC.  Appended after `camera_type` so a v3 report stays
+    // a prefix; see VERSION.
+    AntennaOffsetConfigData antenna;
 };
-static_assert(sizeof(ConfigReportData) == 194,
-              "ConfigReportData layout check (v3, #1472: v2 193 + camera_type 1)");
+static_assert(sizeof(ConfigReportData) == 201,
+              "ConfigReportData layout check (v4: v3 194 + antenna 7)");
 // Nested-struct starts are wire ABI: the OC parses this by memcpy of the
 // whole thing, so a member reordered here silently reinterprets every field
 // after it.
@@ -4309,15 +4332,18 @@ static_assert(offsetof(ConfigReportData, servo) == 8 &&
               offsetof(ConfigReportData, guidance) == 48 &&
               offsetof(ConfigReportData, roll) == 93 &&
               offsetof(ConfigReportData, pyro) == 169 &&
-              offsetof(ConfigReportData, camera_type) == 193,
+              offsetof(ConfigReportData, camera_type) == 193 &&
+              offsetof(ConfigReportData, antenna) == 194,
               "ConfigReportData member order is wire ABI");
 // The OC copies an older report by these lengths, so each must equal the
 // whole of that version's layout — v1 is everything before `pyro`, v2
-// everything before `camera_type`.
+// everything before `camera_type`, v3 everything before `antenna`.
 static_assert(offsetof(ConfigReportData, pyro) == 169,
               "v1 ConfigReportData must remain a byte-exact prefix of v2");
 static_assert(offsetof(ConfigReportData, camera_type) == 193,
               "v2 ConfigReportData must remain a byte-exact prefix of v3");
+static_assert(offsetof(ConfigReportData, antenna) == 194,
+              "v3 ConfigReportData must remain a byte-exact prefix of v4");
 
 // --- Log Buffer Stats Data (OC self-emitted, ~1 Hz while logging) -----------
 // Snapshot of the OC's ring-buffer health written into the flight log so the
