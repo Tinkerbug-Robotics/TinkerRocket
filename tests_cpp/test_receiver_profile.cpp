@@ -625,9 +625,11 @@ TEST(ReceiverProfile, TheMosaicFlightSafeguards)
     EXPECT_FALSE(c.dv_deweight);
     EXPECT_EQ(c.dv_noise_tau_s, 0.0);
     EXPECT_EQ(c.dv_hold_all_frac, 0.5);
-    // GNSS's heading gain by its observability: off in this step
-    EXPECT_EQ(c.ekf.hdg_obs_mode, gnss_raw::kHdgObsOff);
-    EXPECT_EQ(c.ekf.hdg_obs_fh_mps2, 2.0);
+    // GNSS's heading gain by its observability: the rows' heading part
+    // scaled by the 1 s mean horizontal specific force over 5 m/s^2, open past
+    // 2 g within 0.2 s, no floor, everywhere (the pad included)
+    EXPECT_EQ(c.ekf.hdg_obs_mode, gnss_raw::kHdgObsForce);
+    EXPECT_EQ(c.ekf.hdg_obs_fh_mps2, 5.0);
     EXPECT_EQ(c.ekf.hdg_obs_tau_s, 1.0);
     EXPECT_EQ(c.ekf.hdg_obs_open_g, 2.0);
     EXPECT_EQ(c.ekf.hdg_obs_open_hold_s, 0.2);

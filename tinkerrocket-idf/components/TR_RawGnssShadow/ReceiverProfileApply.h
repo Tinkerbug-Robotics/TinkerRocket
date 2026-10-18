@@ -163,9 +163,9 @@ inline void applyMosaicFlightSafeguards(RawGnssShadow::Config& c)
     c.dv_deweight = false;
     c.dv_noise_tau_s = 0.0;
     c.dv_hold_all_frac = 0.5;
-    // GNSS's heading gain by its observability: off in this step
-    c.ekf.hdg_obs_mode = kHdgObsOff;
-    c.ekf.hdg_obs_fh_mps2 = 2.0;
+    // GNSS's heading gain by its observability
+    c.ekf.hdg_obs_mode = kHdgObsForce;
+    c.ekf.hdg_obs_fh_mps2 = 5.0;
     c.ekf.hdg_obs_tau_s = 1.0;
     c.ekf.hdg_obs_open_g = 2.0;
     c.ekf.hdg_obs_open_hold_s = 0.2;

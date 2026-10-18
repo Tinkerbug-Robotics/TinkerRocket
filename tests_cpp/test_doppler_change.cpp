@@ -554,6 +554,7 @@ struct DvRun
     double v_err_coast_max = 0.0;         // |filter - truth| velocity, the largest from 1 s after burnout
     double v_err_end = 0.0;               //   at the end
     uint32_t held_last = 0;               // Dopplers held in the last second
+    double hdg_share_end = 1.0;           // the last epoch's heading share (hdg_obs_mode; 1 with it off)
 };
 
 RawGnssShadow::Config dvCfg(uint8_t mode)
@@ -690,6 +691,7 @@ DvRun flyDv(const DvFlight& o)
     }
     run.st = sh.stats();
     run.held_last = run.st.dv_held_rr - held_at_last_s;
+    run.hdg_share_end = static_cast<double>(sh.filter().hdgObsScale());
     sh.navState(run.nav);
     return run;
 }
@@ -879,6 +881,9 @@ TEST(DopplerChange, TheMosaicFlightSafeguardsHoldNothingWithNoFault)
     EXPECT_EQ(fl.st.dv_latches, 0u);
     EXPECT_LT(fl.v_err_coast_max, off.v_err_coast_max + 0.05)
         << "off " << off.v_err_coast_max << ", safeguards " << fl.v_err_coast_max;
+    // the coast pushes nothing sideways: GNSS's heading gain is closed
+    EXPECT_EQ(off.hdg_share_end, 1.0);
+    EXPECT_LT(fl.hdg_share_end, 0.05);
 }
 
 TEST(DopplerChange, TheMosaicFlightSafeguardsHoldOutAStaleReceiverAndLetItBack)
