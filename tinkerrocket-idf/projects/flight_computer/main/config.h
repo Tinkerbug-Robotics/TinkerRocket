@@ -206,7 +206,8 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 // CMakeLists.txt). The driver is the build's choice, like the M1's LC86G; the
 // harness puts the receiver's 1PPS on J1 pin 5, which only this build reads,
 // and only as an input (board_v9.h, board_v8.h). The V8's J1 is the V9's,
-// GPIO3/GPIO4 and pin 5 on GPIO2 (#1642), and the Goblin flies a V8.
+// GPIO3/GPIO4 and pin 5 on GPIO2 (#1642). The Goblin flies the V9 on
+// 2026-10-24 (its V8 lost its barometer); the V8 build stays supported.
 // Refused anywhere else: the M1's receiver is soldered on, and no other
 // board's J1 has been checked for this harness.
 #if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
@@ -262,7 +263,7 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 #endif
 
 // #1600: where the raw-GNSS filter runs it is the navigation filter: the
-// Beetle, and the mosaic-only image (the Goblin's V8 on 10/24). GpsInsEKF does
+// Beetle, and the mosaic-only image (the Goblin's V9 on 10/24). GpsInsEKF does
 // not run there; main.cpp's `ekf` is RawNavAdapter (raw_nav_adapter.h),
 // GpsInsEKF's face on the raw filter's state. The V9 and V8 auto images keep
 // GpsInsEKF on the receiver's fix. On the LC86G, -DTR_RAW_GNSS_PRIMARY=0 flies

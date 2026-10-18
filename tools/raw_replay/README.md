@@ -100,9 +100,10 @@ tabulate the configuration matrix.
 
 ## The V8/V9 with the mosaic-G5 (`--receiver mosaic`)
 
-On the mosaic-only build (the Goblin's V8 on 2026-10-24) the raw-GNSS filter is the one navigation filter, fed by
-the Septentrio mosaic-G5's SBF instead of the LC86G's RTCM. The same harness replays it from a V8/V9 OC log, with
-the firmware's own decoders, and runs the apogee quorum the flight computer would call from it.
+On the mosaic-only build (the Goblin's V9 on 2026-10-24; [the configuration](../../docs/builds/v9-mosaic-rawnav.md))
+the raw-GNSS filter is the one navigation filter, fed by the Septentrio mosaic-G5's SBF instead of the LC86G's RTCM.
+The same harness replays it from a V8/V9 OC log, with the firmware's own decoders, and runs the apogee quorum the
+flight computer would call from it.
 
 ### Build and run
 

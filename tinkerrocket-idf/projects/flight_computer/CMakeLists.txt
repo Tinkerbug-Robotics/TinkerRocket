@@ -409,10 +409,11 @@ elseif(TR_BOARD_V9)
     message(STATUS "flight_computer: sdkconfig overlay sdkconfig.defaults.v9 (comments only since #916 — boot NOR keeps the base 8 MB declaration, sized to the partition table)")
 endif()
 # A V9 or a V8 flying a Septentrio mosaic-G5 on J1 instead of its u-blox
-# carrier (`idf.py -B build_v9_mosaic -DTR_BOARD_V9=1 -DTR_GNSS_MOSAIC=1 build`,
-# or `-B build_v8_rawnav -DTR_BOARD_V8=1 -DTR_GNSS_MOSAIC=1`: the Goblin's
-# V8). The same seam as TR_GNSS_DRIVER_LC86 on the M1: the driver is the
-# build's choice, and config.h refuses it on any other board. The V8's J1 is
+# carrier (`idf.py -B build_v9_rawnav -DTR_BOARD_V9=1 -DTR_GNSS_MOSAIC=1 build`,
+# the Goblin's, or `-B build_v8_rawnav -DTR_BOARD_V8=1 -DTR_GNSS_MOSAIC=1`;
+# docs/builds/v9-mosaic-rawnav.md names the configuration). The same seam as
+# TR_GNSS_DRIVER_LC86 on the M1: the driver is the build's choice, and
+# config.h refuses it on any other board. The V8's J1 is
 # the V9's (the receiver's UART on GPIO3/GPIO4, its 1PPS on pin 5 = GPIO2), so
 # the harness lands the same way on both. Its own overlay puts the UART
 # interrupt in IRAM: at 2 Mbaud the RX FIFO lasts 0.64 ms, shorter than a
