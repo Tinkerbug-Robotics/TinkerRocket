@@ -1569,13 +1569,13 @@ int main(int argc, char** argv)
     }
 #if !RAW_REPLAY_MOSAIC
     if (mosaic || a.cold_start || a.unaided || !a.rinex.empty() || a.quorum || a.sat_cap >= 0 || a.fuse_ms > 0.0 ||
-        a.flight_state == "quorum" || a.time_tag_from_boot || a.assume_finetime || a.seed_heading_error_deg != 0.0 ||
-        !a.truth_nav.empty())
+        a.share_los >= 0 || a.flight_state == "quorum" || a.time_tag_from_boot || a.assume_finetime ||
+        a.seed_heading_error_deg != 0.0 || !a.truth_nav.empty())
     {
         std::fprintf(stderr, "this build has no mosaic-G5 path (RAW_REPLAY_MOSAIC=OFF): --receiver mosaic, "
-                             "--cold-start, --unaided, --rinex, --quorum, --sat-cap, --fuse-ms, --flight-state "
-                             "quorum, --time-tag-from-boot, --assume-finetime, --seed-heading-error-deg and "
-                             "--truth-nav need it\n");
+                             "--cold-start, --unaided, --rinex, --quorum, --sat-cap, --fuse-ms, --share-los, "
+                             "--flight-state quorum, --time-tag-from-boot, --assume-finetime, "
+                             "--seed-heading-error-deg and --truth-nav need it\n");
         return 2;
     }
 #endif
