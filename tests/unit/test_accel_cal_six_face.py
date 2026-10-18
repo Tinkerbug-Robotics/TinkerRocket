@@ -190,3 +190,14 @@ def test_the_status_frame_with_and_without_the_high_g():
     import struct
     payload = struct.pack(acs.FMT_HG_APPLY, acs.HG_OP_STORE, *([1.0] * 9), 0.1, 0.2, 0.3)
     assert len(payload) == 49
+
+
+def test_check_puts_the_stored_correction_on_a_new_attitude():
+    # --check: the stored M and b make an attitude the fit never saw read as the low-g (a 45 deg tilt here)
+    M, b = truth_alignment()
+    a = [G * math.cos(math.radians(45)), 0.0, G * math.sin(math.radians(45))]
+    l = [S_LG[i] * a[i] + O_LG[i] for i in range(3)]
+    h = [sum(S_HG[i][j] * a[j] for j in range(3)) + C_HG[i] for i in range(3)]
+    d = acs.check_face({"mean": l, "hg": {"mean": h}}, {"hg": {"matrix": M, "bias": b}})
+    assert max(abs(x) for x in d) < 1e-9
+    assert acs.check_face({"mean": l, "hg": None}, {"hg": {"matrix": M, "bias": b}}) is None

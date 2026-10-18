@@ -526,6 +526,7 @@ final class AccelSixFaceTests: XCTestCase {
             case .read?: device.sendAccelCalRead()
             case .measureFace?: device.sendAccelFaceMeasure()
             case .apply(let o)?: device.sendAccelCalApply(x: o[0], y: o[1], z: o[2])
+            case .applyHighG(let w)?: device.sendHighGCalApply(op: w.op, matrix: w.matrix, bias: w.bias)
             case nil: break
             }
         }

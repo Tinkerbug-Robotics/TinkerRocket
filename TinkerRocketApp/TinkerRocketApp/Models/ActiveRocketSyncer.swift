@@ -903,6 +903,21 @@ final class ActiveRocketSyncer: ObservableObject {
         sensorCalAdvisory = status.valid ? .rocketHasUnsavedCal : .missing
     }
 
+    /// After the six-face screen saved the high-g's alignment: the profile's
+    /// sensor cal with the bias the flight computer now uses -- when the cal is
+    /// this board's, whose connect-time push would otherwise put the older
+    /// bias back under the new alignment. nil: nothing to change (no cal, or
+    /// another board's, which is never pushed).
+    static func sensorCalAfterHighGSave(profileCal: SensorCalData?, deviceUnitID: String,
+                                        bias: [Float]) -> SensorCalData? {
+        guard var cal = profileCal, !deviceUnitID.isEmpty, cal.calibratedOnUnitID == deviceUnitID,
+              bias.count == 3 else { return nil }
+        cal.hgX = bias[0]
+        cal.hgY = bias[1]
+        cal.hgZ = bias[2]
+        return cal
+    }
+
     func importRocketSensorCalIntoActiveProfile() {
         // #1074: same empty-unit-id guard as the mag-cal import above.
         guard let device, let store,

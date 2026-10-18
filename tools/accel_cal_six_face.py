@@ -28,6 +28,7 @@ commands. Run from the Terminal panel (BLE).
     accel_cal_six_face.py                 # the six faces, then write on a yes
     accel_cal_six_face.py --read          # what the flight computer has stored
     accel_cal_six_face.py --clear         # remove the stored offset (on a yes)
+    accel_cal_six_face.py --check         # after a save: any attitude, the corrected high-g against the low-g
     accel_cal_six_face.py --name "Mini V1" --lat 39.47 --dry-run
 """
 import argparse
@@ -378,6 +379,17 @@ async def write_high_g(link, op, matrix=IDENTITY, bias=(0.0, 0.0, 0.0)):
     return back or st
 
 
+def check_face(st, stored):
+    """One window's corrected high-g (M h - b - o) less its calibrated low-g (l - o), m/s^2, by the stored
+    calibration -- what the flight computer's converter makes of that attitude. None without a high-g."""
+    h = st.get("hg")
+    if h is None or stored.get("hg") is None:
+        return None
+    m, b = stored["hg"]["matrix"], stored["hg"]["bias"]
+    mh = mat_vec(m, h["mean"])
+    return [mh[i] - b[i] - st["mean"][i] for i in range(3)]
+
+
 def high_g_read_back_ok(back, matrix, bias):
     h = back.get("hg") if back else None
     return (h is not None and bool(h["flags"] & HGF_STORED) and h["bias_src"] == 2
@@ -409,6 +421,24 @@ async def run(args):
         print("now:")
         show_status(st)
         if args.read:
+            return 0
+        if args.check:
+            if st.get("hg") is None or not st["hg"]["flags"] & HGF_STORED:
+                print("no high-g alignment stored -- nothing to check")
+                return 1
+            print("\nAny attitude, still, then Enter: the stored calibration's corrected high-g against the "
+                  "calibrated low-g (q + Enter to stop).")
+            while (await ask("Enter to measure, q to stop ... ")).strip().lower() != "q":
+                f = await measure_face(link)
+                if f is None or f["face_state"] != 2:
+                    print("  no answer, or it moved -- again")
+                    continue
+                d = check_face(f, st)
+                if d is None:
+                    print("  this frame has no high-g")
+                    continue
+                print(f"  low-g ({f['mean'][0]:+.3f}, {f['mean'][1]:+.3f}, {f['mean'][2]:+.3f}) m/s^2:  "
+                      f"high-g - low-g ({d[0] / G0 * 1e3:+.2f}, {d[1] / G0 * 1e3:+.2f}, {d[2] / G0 * 1e3:+.2f}) mg")
             return 0
         if args.clear:
             if (await ask("Remove the stored offset (and the high-g alignment; its bias stays)? [y/N] ")).strip().lower() != "y":
@@ -503,6 +533,8 @@ def main():
     ap.add_argument("--name", default="Mini V1", help="the rocket's BLE name (default: Mini V1, the Beetle)")
     ap.add_argument("--read", action="store_true", help="only read what is stored")
     ap.add_argument("--clear", action="store_true", help="remove the stored offset")
+    ap.add_argument("--check", action="store_true",
+                    help="after a save: measure any attitude and show the corrected high-g less the low-g")
     ap.add_argument("--dry-run", action="store_true", help="measure and solve, write nothing")
     ap.add_argument("--lat", type=float, help="the site's latitude, deg (local gravity for the scale check)")
     ap.add_argument("--height", type=float, default=0.0, help="the site's height, m")

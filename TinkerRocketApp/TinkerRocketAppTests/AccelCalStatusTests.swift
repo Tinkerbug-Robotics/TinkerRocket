@@ -171,14 +171,25 @@ extension AccelCalStatus {
                        faceMean: [0, 0, 0], faceSD: [0, 0, 0], faceN: 0)
     }
 
-    /// The [0xD1][AccelCalStatusData] frame for this status. Only drives the
-    /// device in tests; the golden pins the layout (see the round-trip test).
+    /// The [0xD1][AccelCalStatusData] frame for this status, and the
+    /// AccelCalHighGStatus after it when it has a high-g part. Only drives the
+    /// device in tests; the goldens pin the layout (see the round-trip tests).
     var wireFrame: Data {
         var d = Data([0xD1, flags, faceState])
         for v in offset + faceMean + faceSD {
             withUnsafeBytes(of: v.bitPattern.littleEndian) { d.append(contentsOf: $0) }
         }
         withUnsafeBytes(of: faceN.littleEndian) { d.append(contentsOf: $0) }
+        if let h = highG {
+            for v in h.faceMean + h.faceSD {
+                withUnsafeBytes(of: v.bitPattern.littleEndian) { d.append(contentsOf: $0) }
+            }
+            d.append(h.flags)
+            d.append(h.biasSource)
+            for v in h.matrix + h.bias {
+                withUnsafeBytes(of: v.bitPattern.littleEndian) { d.append(contentsOf: $0) }
+            }
+        }
         return d
     }
 }
