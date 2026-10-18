@@ -401,10 +401,26 @@
 // change, up to twice its size (0.3 m on a coast weathercocking with the
 // heading 60 deg off: a chi-square of 19.9 against the 4-sigma test's 16,
 // unknown's 0.89), so there the prediction is taken back out of the fitted
-// change and the whole offset allowed, its size plus the larger sigma. The
-// hold and the skip are untouched. The offset is a prior, never the truth: a
-// phase centre a few cm from where the owner measured is what the sigmas are
-// for. setAntenna in flight waits for the ground.
+// change and the whole offset allowed, its size plus the larger sigma; and
+// out of the latch's level (dv_latch_k), which would otherwise hold up to
+// twice the lever's velocity where unknown's holds it once, and the latch
+// longer than unknown's. The Dopplers the latch then lets go to the update
+// are still predicted at that heading, so with it unset each Doppler's sigma
+// also takes what any heading does to the predicted lever's velocity
+// (leverUnsetM: rotLeverSigma of twice the offset's part along the nose and
+// twice its part across), from rot_lever_min_rps across the nose, where the
+// bounds start: below it unknown's own filter takes the lever's whole
+// velocity unallowed. Without it, 0.3 m in a 5 rad/s swing just after a
+// latched epoch, the heading 180 deg off, took the velocity 5.5 m/s off, and
+// the latch held the good Dopplers out against it (unknown's: 0.31 m/s).
+// Grid B with no magnetometer: the ascent within 0.1 deg of without it (one
+// coast 0.55 deg worse, to unknown's), the descent's p90 worse by over
+// 0.5 deg in 42 of 384 runs (79 at 0.3 m), the price of keeping a swing's
+// mis-predicted Dopplers out (from any rate: 70 and 109, and the vertical
+// velocity at apogee moved too). The hold and the skip are untouched. The
+// offset is a prior, never the truth: a phase centre a few cm from where the
+// owner measured is what the sigmas are for. setAntenna in flight waits for
+// the ground.
 //
 // The lever roll (the EKF's lever_att_mode observe; the change check on). A
 // turning antenna's velocity turns with the body, so it says how the body is
@@ -1120,7 +1136,7 @@ private:
                                         //   each step; in flight, as the launch left it)
     void          dvReset();
     void          leverRoll(double age, const double w[3], const double C[3][3], const DopplerChangeImu& imu);
-    double        dvLevelChi2(double row_var);
+    double        dvLevelChi2(double row_var, const float v_lev[3]);
     double        att_hold_until_ = -1.0e9;   // att_hold_s: epochs up to this instant are held (filter's clock)
     double        rot_skip_until_ = -1.0e9;   // rot_skip_s: epochs up to this instant fuse nothing (filter's clock)
     bool          rotOn() const
@@ -1133,6 +1149,14 @@ private:
     double        leverRadialM() const
     {
         return cfg_.ekf.lever_on ? cfg_.antenna_sigma_radial_m : cfg_.rot_lever_radial_m;
+    }
+    // and with the offset known and the heading unset (!dv_hdg_known_, as the latch's dvLevelChi2 and the
+    // change's knownLeverArm take it), what any heading does to the lever's velocity each Doppler is still
+    // predicted with: up to twice its size, so the offset's part along the nose (axial) or across it, twice over
+    double        leverUnsetM(bool axial) const
+    {
+        const double* r = cfg_.ekf.lever_b_m;
+        return 2.0 * (axial ? std::fabs(r[0]) : std::sqrt(r[1] * r[1] + r[2] * r[2]));
     }
     double        leverMinRps() const { return cfg_.ekf.lever_on ? cfg_.antenna_min_rps : cfg_.rot_lever_min_rps; }
     double        dvLeverM() const

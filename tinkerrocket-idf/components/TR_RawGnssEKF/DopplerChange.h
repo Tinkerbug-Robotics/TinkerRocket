@@ -326,6 +326,15 @@ inline double epochChi2(const double w[3], const double Cw[3][3], const double s
 // would let a receiver still biased by more than that back in; a turn only
 // keeps the latch on longer. Nor the epoch test's attitude allowance on the
 // specific force since: a deployment's shock across it swamps the bias too.
+// Where the offset is known each prediction takes the lever's velocity at
+// the filter's attitude, so dv is the antenna's velocity less the filter's
+// and that prediction; with the heading unset the prediction can be any
+// heading's, and dv up to twice the lever's velocity where unknown's is
+// once (0.3 m at 5 rad/s, 180 deg off: 3 m/s), so the caller puts it back
+// (dv + v_lev, every row of the end moved by the same velocity:
+// knownLeverArm's way) and the latch lets go where unknown's does; the
+// Dopplers it lets go allow what any heading does to their prediction
+// (RawGnssShadow's leverUnsetM).
 inline double levelChi2(const double dv[3], const double Cw[3][3], const double Pv[3][3], double floor_var)
 {
     double S[3][3];

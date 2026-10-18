@@ -978,6 +978,11 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
         if (acts && static_cast<double>(across) >= leverMinRps())
             job_.rot_sigma = rotLeverSigma(leverAxialM(), leverRadialM(), static_cast<double>(all),
                                            static_cast<double>(across));
+        // the offset known and the heading unset: what any heading does to the predicted lever's velocity,
+        // from the rate the bounds start at (RawGnssShadow.h)
+        if (acts && cfg_.ekf.lever_on && !dv_hdg_known_ && static_cast<double>(across) >= cfg_.rot_lever_min_rps)
+            job_.rot_sigma += rotLeverSigma(leverUnsetM(true), leverUnsetM(false), static_cast<double>(all),
+                                            static_cast<double>(across));
         st_.rot_last_sigma_mps = static_cast<float>(job_.rot_sigma);
         if (st_.rot_last_sigma_mps > st_.rot_max_sigma_mps)
             st_.rot_max_sigma_mps = st_.rot_last_sigma_mps;
@@ -1335,8 +1340,14 @@ void RawGnssShadow::leverRoll(double age, const double w[3], const double C[3][3
 // velocity offset and one clock rate -- the offset's chi-square against the
 // fit's covariance, the filter's velocity covariance and the floor; -1 with
 // no fit. Each row's 1-sigma is its own and row_var in quadrature. The rows
-// go in dv_rows_: the change check is done with them by then.
-double RawGnssShadow::dvLevelChi2(double row_var)
+// go in dv_rows_: the change check is done with them by then. With the offset
+// known each prediction took the lever's velocity at the filter's attitude
+// (v_lev: this end's, as dopplerChange took it); where the heading is unset
+// that attitude's heading can be any, so v_lev goes back on the fitted
+// offset, as on the epoch test's change (knownLeverArm's wu): the antenna's
+// velocity less the filter's, unknown's level. The Dopplers it lets go to
+// the update allow for that heading too (leverUnsetM).
+double RawGnssShadow::dvLevelChi2(double row_var, const float v_lev[3])
 {
     const double te = job_.te;
     int n = 0;
@@ -1360,10 +1371,11 @@ double RawGnssShadow::dvLevelChi2(double row_var)
     const dvc::Fit f = dvc::fit(dv_rows_, n, cfg_.dv_sat_k, 6, true);
     if (!f.ok)
         return -1.0;
+    const bool unlever = cfg_.ekf.lever_on && !dv_hdg_known_;
     double off[3], Cw[3][3], Pv[3][3];
     for (int i = 0; i < 3; ++i)
     {
-        off[i] = f.x[i];
+        off[i] = unlever ? f.x[i] + static_cast<double>(v_lev[i]) : f.x[i];
         for (int j = 0; j < 3; ++j)
         {
             Cw[i][j] = f.C[i][j];
@@ -1659,7 +1671,7 @@ void RawGnssShadow::jobDvCheck(double age)
         else if (dv_latch_ && !epoch_fail)
         {
             // each Doppler's noise as the change's model gives it (one Doppler's, not two)
-            const double c2 = dvLevelChi2(cfg_.dv_floor_mps * cfg_.dv_floor_mps + dyn * dyn + nvar);
+            const double c2 = dvLevelChi2(cfg_.dv_floor_mps * cfg_.dv_floor_mps + dyn * dyn + nvar, imu.v_lev);
             st_.dv_last_level_chi2 = static_cast<float>(c2);
             if (c2 >= 0.0 && c2 <= cfg_.dv_latch_k * cfg_.dv_latch_k)
             {
