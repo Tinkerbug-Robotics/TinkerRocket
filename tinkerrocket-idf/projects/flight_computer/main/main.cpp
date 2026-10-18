@@ -3820,6 +3820,19 @@ static void rawShadowTask(void*)
                          raw_guard.latched ? "WITHHELD" : "cast", mach_locked_out ? "ON" : "off",
                          (unsigned)(raw_flight_task ? uxTaskGetStackHighWaterMark(raw_flight_task) : 0));
             }
+#ifdef TR_BENCH_DV_CHECK
+            // the Doppler change check (bench, exp/v9-dvcheck): counts since boot
+            ESP_LOGI(TAG, "[RAWGNSS] dv check: %lu epochs checked | satellites failed %lu (%lu on the window) | "
+                          "epochs failed %lu (%lu on the window) | latches %lu, let go %lu, %lu epochs latched | "
+                          "Dopplers held %lu in %lu epochs | chi2 last %.1f, window %.1f, largest %.1f | largest "
+                          "satellite %.1f sigmas | level chi2 %.1f",
+                     (unsigned long)st.dv_checks, (unsigned long)st.dv_sat_fails, (unsigned long)st.dv_sat_win_fails,
+                     (unsigned long)st.dv_epoch_fails, (unsigned long)st.dv_epoch_win_fails,
+                     (unsigned long)st.dv_latches, (unsigned long)st.dv_latch_releases,
+                     (unsigned long)st.dv_latch_epochs, (unsigned long)st.dv_held_rr,
+                     (unsigned long)st.dv_held_epochs, (double)st.dv_last_chi2, (double)st.dv_last_chi2_win,
+                     (double)st.dv_max_chi2, (double)st.dv_max_e, (double)st.dv_last_level_chi2);
+#endif
 #endif
             // each satellite's pad correction, at its elevation from the pad:
             // a common pattern in sin(el) is the pad's height, one system's
@@ -4052,6 +4065,25 @@ static void startRawShadow()
     cfg.boost_screen_g = (double)(TR_BENCH_BOOST_SCREEN_G);
     ESP_LOGW(TAG, "[RAWGNSS] BENCH: the boost screen past %.1f g%s (TR_BENCH_BOOST_SCREEN_G)", cfg.boost_screen_g,
              cfg.boost_screen_g <= 0.0 ? " -- every epoch" : "");
+#endif
+#ifdef TR_BENCH_DV_CHECK
+    // bench (exp/v9-dvcheck): the Doppler change check, 1 observing (counted,
+    // nothing held: the filter is RC0's) or 2 acting, at the settings Grid B
+    // recommends -- a 1 s window, a 10 deg attitude allowance, the epoch test
+    // at 4 sigmas and its latch at 5 -- and on the pad too, so its counts and
+    // its cost show on a still bench: what it costs the filter task a sky
+    static_assert(TR_BENCH_DV_CHECK == 1 || TR_BENCH_DV_CHECK == 2,
+                  "TR_BENCH_DV_CHECK is 1 (observe) or 2 (act)");
+    cfg.dv_check = (uint8_t)(TR_BENCH_DV_CHECK);
+    cfg.dv_window_s = 1.0;
+    cfg.dv_att_allow_deg = 10.0;
+    cfg.dv_epoch_k = 4.0;
+    cfg.dv_latch_k = 5.0;
+    cfg.dv_ground = true;
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: the Doppler change check %s, on the pad too: window %.1f s, attitude allowance "
+                  "%.0f deg, epoch %.0f and latch %.0f sigmas (TR_BENCH_DV_CHECK)",
+             cfg.dv_check == gnss_raw::RawGnssShadow::kDvAct ? "ACTING" : "observing", cfg.dv_window_s,
+             cfg.dv_att_allow_deg, cfg.dv_epoch_k, cfg.dv_latch_k);
 #endif
     // the robustness bench's hooks (P3), said at every boot of such an image
 #if defined(TR_BENCH_RESTORE_SIM) && TR_BENCH_RESTORE_SIM
