@@ -1,9 +1,11 @@
-"""tools/raw_replay/sim_grid.py: an events file already made is reused only for the truth's antenna it was made with.
+"""tools/raw_replay/sim_grid.py: an events file already made is reused only for the truth's antenna and spinning body
+it was made with.
 
 sim_grid names an events file by flight and pattern alone (run_one splits the name on "__"), so a grid run with
-another --lever-arm or --lever-arm-b would otherwise score its runs against the old file's antenna. The rule is
-events_match (the file's META lever_arm_m and lever_arm_b_m against the ones asked for); make_events reuses a file
-only when it holds. No sim runs here: sim_events is replaced by a stand-in that records what it was asked to build.
+another --lever-arm, --lever-arm-b or roll would otherwise score its runs against the old file's truth. The rule is
+events_match (the file's META lever_arm_m, lever_arm_b_m, sim_roll_* and sim_windup_k against the ones asked for);
+make_events reuses a file only when it holds. No sim runs here: sim_events is replaced by a stand-in that records
+what it was asked to build.
 """
 from __future__ import annotations
 
@@ -54,6 +56,33 @@ def test_a_file_that_does_not_say_is_made_again(tmp_path):
     assert not sim_grid.events_match(p, 0.3, [0.1, 0.05, -0.02])
 
 
+ROLLED = ("META sim_roll_profile const:5", "META sim_roll_peak_rev_s 5.0000", "META sim_gyro_clip_dps 4587.0",
+          "META sim_gyro_clipped_s 0.0000", "META sim_windup_k 0.99")
+SPIN5 = dict(roll="const:5", windup_k=0.99, gyro_clip_dps=4587.0)
+
+
+def test_a_rolled_file_is_reused_only_for_its_own_roll(tmp_path):
+    # the roll (sim_events.py --roll, --windup-k, --gyro-clip-dps, --gyro-scale-ppm, --roll-axis-tilt-deg) is the
+    # truth's too: a file made with one is not a no-roll run's, nor another profile's, rail, scale or tilt
+    p = events_file(tmp_path / "f_s1__none.events", lever_arm="0.3", extra=ROLLED)
+    assert sim_grid.events_match(p, 0.3, None, SPIN5)
+    assert sim_grid.events_match(p, 0.3, None, dict(SPIN5, gyro_scale_ppm=0.0, roll_axis_tilt_deg=0.0))
+    assert not sim_grid.events_match(p, 0.3, None)
+    assert not sim_grid.events_match(p, 0.3, None, dict(SPIN5, roll="const:10"))
+    assert not sim_grid.events_match(p, 0.3, None, dict(SPIN5, windup_k=0.0))
+    assert not sim_grid.events_match(p, 0.3, None, dict(SPIN5, gyro_clip_dps=None))
+    assert not sim_grid.events_match(p, 0.3, None, dict(SPIN5, roll_axis_tilt_deg=1.0))
+    tilted = events_file(tmp_path / "tilt.events", lever_arm="0.3",
+                         extra=ROLLED + ("META sim_roll_axis_tilt_deg 1.0",))
+    assert sim_grid.events_match(tilted, 0.3, None, dict(SPIN5, roll_axis_tilt_deg=1.0))
+    assert not sim_grid.events_match(tilted, 0.3, None, SPIN5)
+    # and a file with no roll is not a rolled run's; the wind-up alone counts too
+    plain = events_file(tmp_path / "plain.events", lever_arm="0.3")
+    assert sim_grid.events_match(plain, 0.3, None, dict(roll=None, windup_k=0.0))
+    assert not sim_grid.events_match(plain, 0.3, None, SPIN5)
+    assert not sim_grid.events_match(plain, 0.3, None, dict(windup_k=0.99))
+
+
 def fake_sim_events(calls):
     def build(flight, pattern, out_dir, phases, lever_arm=0.3, lever_b=None):
         calls.append((pattern, lever_arm, lever_b))
@@ -82,6 +111,29 @@ def test_make_events_reuses_only_a_matching_file(tmp_path, monkeypatch):
     assert calls[-1] == ("none", 0.3, [0.3, 0.0, 0.0])
     sim_grid.make_events(job(0.3, force=True))                     # --force-events: made again regardless
     assert len(calls) == 3
+
+
+def test_make_events_builds_the_roll_it_was_asked_for(tmp_path, monkeypatch):
+    calls = []
+
+    def build(flight, pattern, out_dir, phases, lever_arm=0.3, lever_b=None, **spin):
+        calls.append((pattern, lever_arm, lever_b, spin))
+        return str(Path(out_dir) / f"{Path(flight).stem}__{pattern}.events"), {"sim_epochs": 1}
+
+    monkeypatch.setitem(sys.modules, "sim_events", types.SimpleNamespace(build=build))
+    phases = tmp_path / "truth_phases.json"
+    phases.write_text(json.dumps({"flights": {"f_s1": {}}}))
+    ev = tmp_path / "events"
+    ev.mkdir()
+    path = events_file(ev / "f_s1__none.events", lever_arm="0.3", extra=ROLLED)
+    job = ("flights/f_s1.pkl", "none", str(ev), str(phases), 0.3, False, None, None)
+    assert sim_grid.make_events(job + (SPIN5,)) == (path, None, 0.0)     # the same roll: kept
+    assert calls == []
+    sim_grid.make_events(job)                                             # no roll asked: made again, without one
+    assert calls[-1] == ("none", 0.3, None, {})
+    spin10 = dict(SPIN5, roll="const:10")
+    sim_grid.make_events(job + (spin10,))                                 # another profile: made again with it
+    assert calls[-1] == ("none", 0.3, None, spin10)
 
 
 def test_a_score_older_than_its_events_file_is_run_again(tmp_path):

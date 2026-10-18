@@ -468,7 +468,9 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   nose (46 dB-Hz broadside, 6 dB on the axis), and noise at the mosaic profile v0's fits for each satellite's C/N0
   (the Doppler's without the profile's 1.5 margin; 0.05 m/s per g of stress against the profile's 0.5). The
   antenna sits `--lever-arm` m (0.3) along the nose from the IMU (`--lever-arm-b x,y,z`: anywhere in the body);
-  the filter keeps r = 0 unless given it (`--antenna-m`). The fix is a
+  the filter keeps r = 0 unless given it (`--antenna-m`). `--roll` lays a roll over the flight (sim_roll.py's
+  profiles, with `--windup-k`, `--gyro-clip-dps` and `--gyro-scale-ppm`), and `--roll-axis-tilt-deg D` rolls it
+  about an axis D deg off the nose toward body +y (a spin axis off the board's x: the nose cones about it). The fix is a
   least-squares solution from the same measurements -- its error added to the truth's velocity of 4-6 ms before
   the epoch (the PVT's lag) -- so a receiver fault reaches the GPS voter as it reaches the filter. After touchdown
   it adds a 0.05 s impact and 5 s at rest (the flights end falling at 15 m/s). Once a flight it also writes the
@@ -509,8 +511,10 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   has). Every run gets `--truth-nav`. Each run is scored as it finishes (`sim_tables.score_run`) into
   `OUT/scores/`. `--harness-args "..."` adds raw_replay arguments to every run (an experiment: use a new OUT).
   An events file already in `--events-dir` is reused only when its truth's antenna (`META lever_arm_m`,
-  `lever_arm_b_m`) is the one asked for (`--lever-arm`, `--lever-arm-b`); otherwise, or with `--force-events`, it
-  is made again.
+  `lever_arm_b_m`) and spinning body (`sim_roll_*`, `sim_windup_k`) are the ones asked for (`--lever-arm`,
+  `--lever-arm-b`; `--roll`, `--windup-k`, `--gyro-clip-dps`, `--gyro-scale-ppm`, `--roll-axis-tilt-deg`, as
+  `sim_events.py` takes them); otherwise, or with `--force-events`, it is made again. A file is named by flight and
+  pattern alone, so give each roll profile its own `--events-dir` (its truth turns with it).
 - **`sim_tables.py OUT [--against OTHER_OUT]`** writes `OUT/tables.md` and `OUT/verdict.json`: first what the runs
   assume (the guard's wiring, the 20 Hz fixes, the P1/G6 placeholders -- the 30 ms hand-over, the 500 Hz EKF
   tick, the 1 kHz loop, no epoch slicing without `--fc-unit-us` -- the port lags as a sensitivity sweep, and the

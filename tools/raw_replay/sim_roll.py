@@ -7,7 +7,8 @@ The overlay. A flight's attitude q (body FRD -> NED, scalar first) is turned abo
 integral of the profile's added rate: q' = q (x) qx(phi). The trajectory, the nose's direction (the C/N0 model's
 dipole), the barometer are the flight's own, so the cases across roll rates are paired; the magnetometer, the IMU and
 the antenna's wind-up follow q'. With R the body -> NED matrix, R' = R Rx(phi) and a body vector v reads
-Rx(phi)^T v in the rolled body. The rolled body's rate is Rx(phi)^T w + phi_dot x (rad/s, body FRD).
+Rx(phi)^T v in the rolled body. The rolled body's rate is Rx(phi)^T w + phi_dot x (rad/s, body FRD). With a roll
+axis a tilted off the nose (sim_events.py --roll-axis-tilt-deg: roll_axis, rot), Rx and x are Ra and a throughout.
 
 The IMU. Its errors are the sensor's own, in the sensor's frame: the flight's specific force f and rate w less their
 truth (f_true = C (a - g), w_true from the attitude) are kept as they were, and the truth's part is turned:
@@ -113,6 +114,28 @@ def rx(phi):
     return R
 
 
+def roll_axis(tilt_deg):
+    """The roll's axis in the body (unit, FRD) for --roll-axis-tilt-deg: the nose, +x, turned tilt_deg toward +y -- a
+    rocket that spins about an axis off the board's x (the holder's mounting, the IMU's own axes). The nose then cones
+    about the roll axis at the roll rate, tilt_deg off it, its own rate p sin(tilt) across it. None at 0: exactly +x,
+    rx's."""
+    if not tilt_deg:
+        return None
+    d = math.radians(tilt_deg)
+    return np.array([math.cos(d), math.sin(d), 0.0])
+
+
+def rot(phi, axis=None):
+    """The rotation about axis (unit, body; None: +x, rx itself) by phi, one 3x3 a row (rolled body -> body)."""
+    if axis is None:
+        return rx(phi)
+    phi = np.asarray(phi, float)
+    a = np.asarray(axis, float)
+    c, s = np.cos(phi)[..., None, None], np.sin(phi)[..., None, None]
+    K = np.array([[0.0, -a[2], a[1]], [a[2], 0.0, -a[0]], [-a[1], a[0], 0.0]])
+    return c * np.eye(3) + (1.0 - c) * np.outer(a, a) + s * K
+
+
 def qmul(a, b):
     """Hamilton product, scalar first, row by row."""
     w1, x1, y1, z1 = np.moveaxis(np.asarray(a, float), -1, 0)
@@ -121,16 +144,20 @@ def qmul(a, b):
                      w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2, w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2], axis=-1)
 
 
-def roll_quat(q, phi):
-    """q (x) qx(phi): the attitude turned about its own nose by phi."""
+def roll_quat(q, phi, axis=None):
+    """q (x) qx(phi): the attitude turned about its own nose by phi (or about axis, unit in the body: roll_axis)."""
     phi = np.asarray(phi, float)
-    qx = np.stack([np.cos(0.5 * phi), np.sin(0.5 * phi), np.zeros_like(phi), np.zeros_like(phi)], axis=-1)
+    if axis is None:
+        qx = np.stack([np.cos(0.5 * phi), np.sin(0.5 * phi), np.zeros_like(phi), np.zeros_like(phi)], axis=-1)
+    else:
+        sh = np.sin(0.5 * phi)
+        qx = np.stack([np.cos(0.5 * phi), sh * axis[0], sh * axis[1], sh * axis[2]], axis=-1)
     out = qmul(q, qx)
     return out / np.linalg.norm(out, axis=-1, keepdims=True)
 
 
 def turn(R, v):
-    """R^T v row by row: a body vector read in the rolled body (R = rx(phi))."""
+    """R^T v row by row: a body vector read in the rolled body (R = rx(phi), or rot(phi, axis))."""
     return np.einsum("nji,nj->ni", R, v)
 
 

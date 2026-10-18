@@ -153,3 +153,29 @@ def test_profiles():
     r = sim_roll.profile_rate(np.array([mid - 0.1, mid + 0.5, mid + 1.1]), rv, ph) / sim_roll.TWO_PI
     assert r == pytest.approx([10.0, 0.0, -10.0])
     assert sim_roll.parse_profile("none") is None
+
+
+def test_a_roll_axis_tilted_off_the_nose_cones_the_nose_about_it():
+    # --roll-axis-tilt-deg: the roll about an axis tilt deg off the nose, toward body +y. Untilted, the nose itself
+    # (rot is rx, exactly). Tilted 2 deg, the nose turned by it stays 2 deg off the axis and sweeps a cone, so its own
+    # rate is p sin(tilt) across it; the quaternion turns the attitude as the matrix does.
+    phi = np.linspace(0.0, sim_roll.TWO_PI, 721)
+    assert sim_roll.roll_axis(0.0) is None
+    assert np.array_equal(sim_roll.rot(phi, None), sim_roll.rx(phi))
+    np.testing.assert_allclose(sim_roll.rot(phi, np.array([1.0, 0.0, 0.0])), sim_roll.rx(phi), atol=1e-15)
+    tilt = 2.0
+    a = sim_roll.roll_axis(tilt)
+    assert a == pytest.approx([math.cos(math.radians(tilt)), math.sin(math.radians(tilt)), 0.0])
+    R = sim_roll.rot(phi, a)
+    np.testing.assert_allclose(np.einsum("nij,nkj->nik", R, R), np.tile(np.eye(3), (len(phi), 1, 1)), atol=1e-14)
+    nose = R[:, :, 0]                                   # +x turned about a
+    np.testing.assert_allclose(nose @ a, math.cos(math.radians(tilt)), atol=1e-15)
+    rate = np.linalg.norm(np.gradient(nose, phi, axis=0), axis=1)[1:-1]   # per radian of roll
+    np.testing.assert_allclose(rate, math.sin(math.radians(tilt)), rtol=1e-3)
+    assert np.max(np.linalg.norm(nose - nose[0], axis=1)) == pytest.approx(2.0 * math.sin(math.radians(tilt)),
+                                                                            rel=1e-3)
+    q0 = np.array([0.9, 0.1, -0.3, 0.2])
+    q0 /= np.linalg.norm(q0)
+    q1 = sim_roll.roll_quat(np.tile(q0, (len(phi), 1)), phi, a)
+    for i in (0, 200, 500):
+        np.testing.assert_allclose(dcm(q1[i]), dcm(q0) @ R[i], atol=1e-12)

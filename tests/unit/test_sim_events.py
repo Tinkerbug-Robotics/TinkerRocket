@@ -218,6 +218,29 @@ class RolledAntennaTest(unittest.TestCase):
         np.testing.assert_allclose(np.ptp(p0 - p, axis=0), 0.0, atol=1e-9)
         np.testing.assert_allclose(v0 - f["v"], 0.0, atol=1e-9)
 
+    def test_a_roll_axis_tilted_2_deg_turns_the_nose_at_p_sin_2_deg(self):
+        # --roll-axis-tilt-deg: rolled at 5 rev/s about an axis 2 deg off the nose, the body's rate across its nose is
+        # p sin(2 deg) (1.1 rad/s) and the nose cones 2 deg about the axis; the gyro reads the added rate along it
+        import sim_roll
+        dt = 1e-3
+        t = np.arange(-1.0, 3.0 + dt / 2, dt)
+        n = len(t)
+        nose_up = np.array([math.cos(math.pi / 4), 0.0, -math.sin(math.pi / 4), 0.0])
+        f = dict(t=t, q=np.tile(nose_up, (n, 1)), v=np.tile([0.0, 0.0, -50.0], (n, 1)), acc=np.zeros((n, 3)),
+                 gyr=np.zeros((n, 3)))
+        ph = dict(thrust_start_s=0.0, burnout_s=1.0, apogee_s=10.0, deploy_s=11.0)
+        w_body, C_n2b, _ = sim_events.roll_overlay(f, ph, sim_roll.parse_profile("const:5"), tilt_deg=2.0)
+        on = (t > 0.2) & (t < 2.8)
+        p = 5.0 * sim_roll.TWO_PI
+        s2 = math.sin(math.radians(2.0))
+        np.testing.assert_allclose(np.hypot(w_body[on, 1], w_body[on, 2]), p * s2, rtol=1e-6)
+        nose = C_n2b[on, 0, :]
+        self.assertAlmostEqual(float(np.max(np.linalg.norm(nose - nose[0], axis=1))), 2.0 * s2, places=4)
+        a = sim_roll.roll_axis(2.0)
+        np.testing.assert_allclose(f["gyr"][on] @ a, p, rtol=1e-6)
+        np.testing.assert_allclose(np.linalg.norm(f["gyr"][on] - np.outer(f["gyr"][on] @ a, a), axis=1), 0.0,
+                                   atol=1e-9)
+
 
 @unittest.skipUnless(HAVE_SIM, "the sim's modules are not on PYTHONPATH")
 class EventsFileTest(unittest.TestCase):
