@@ -572,7 +572,7 @@ def build(flight_path, pattern, out_dir, phases_all, lever_arm=0.3, shells=3, ra
         f"META field_ned_ut {field[0]!r} {field[1]!r} {field[2]!r}",
         f"META flight {name}",
         f"META pattern {pattern}",
-        f"META lever_arm_m {lever_arm if lever_b is None else float(r_b[0])}",
+        f"META lever_arm_m {float(r_b[0])!r}",
         f"META receiver_model mosaic-like shells {shells} rate_hz {rate_hz} pvt_hz {pvt_hz} lock_los_accel 200 "
         f"rr_dyn_true 0.05 cn0_broadside 46 cn0_axis_loss 6 el_mask 3",
         f"META fix_vel_lag_s {lag_v:.4f}",
@@ -584,7 +584,7 @@ def build(flight_path, pattern, out_dir, phases_all, lever_arm=0.3, shells=3, ra
         lines.append(f"META truth_{k} {ph[k]!r}")
     lines.append(f"META truth_touchdown_s {touch!r}")
     if lever_b is not None:
-        lines.append(f"META lever_arm_b_m {r_b[0]!r} {r_b[1]!r} {r_b[2]!r}")
+        lines.append("META lever_arm_b_m " + " ".join(repr(float(x)) for x in r_b))
     if lol_t is not None:
         lines.append(f"META sim_lol_t {lol_t!r}")
     if baro_tau is not None:

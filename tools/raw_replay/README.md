@@ -493,6 +493,9 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   firmware tree has it yet), its `--unaided` twin, and `noguard` (`--vote-guard 0`: the quorum RC0's main.cpp
   has). Every run gets `--truth-nav`. Each run is scored as it finishes (`sim_tables.score_run`) into
   `OUT/scores/`. `--harness-args "..."` adds raw_replay arguments to every run (an experiment: use a new OUT).
+  An events file already in `--events-dir` is reused only when its truth's antenna (`META lever_arm_m`,
+  `lever_arm_b_m`) is the one asked for (`--lever-arm`, `--lever-arm-b`); otherwise, or with `--force-events`, it
+  is made again.
 - **`sim_tables.py OUT [--against OTHER_OUT]`** writes `OUT/tables.md` and `OUT/verdict.json`: first what the runs
   assume (the guard's wiring, the 20 Hz fixes, the P1/G6 placeholders -- the 30 ms hand-over, the 500 Hz EKF
   tick, the 1 kHz loop, no epoch slicing without `--fc-unit-us` -- the port lags as a sensitivity sweep, and the
