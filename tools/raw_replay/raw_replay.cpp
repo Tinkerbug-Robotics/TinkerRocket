@@ -915,6 +915,14 @@ void diagEpoch(RawGnssShadow& sh, const BuiltEpoch& b, int64_t t_us, uint8_t fla
             float dp_e[3], dv_e[3], dp_l[3], dv_l[3];
             f.historyChange(ag, dv_e, dp_e);
             f.historyChange(ag + tau, dv_l, dp_l);
+#if RAW_REPLAY_ANTENNA
+            // a known offset: the antenna, as the filter's update back-dates it
+            if (f.p_.lever_on)
+            {
+                RawGnssEKF<float>::LeverEpoch lv;
+                f.leverBack(ag, tau, dp_e, dv_e, dv_l, lv);
+            }
+#endif
             double r[3], v[3], Tm[3][3], r_e[3], v_e[3];
             f.receiverState(r, v, Tm);
             for (int i = 0; i < 3; ++i)
@@ -1037,6 +1045,14 @@ void guardedEpoch(RawGnssShadow& sh, const BuiltEpoch& b, int64_t t_us, uint8_t 
             float dp_e[3], dv_e[3], dp_l[3], dv_l[3];
             f.historyChange(ag, dv_e, dp_e);
             f.historyChange(ag + tau, dv_l, dp_l);
+#if RAW_REPLAY_ANTENNA
+            // a known offset: the antenna's, as the filter predicts them (its turning is not a velocity error)
+            if (f.p_.lever_on)
+            {
+                RawGnssEKF<float>::LeverEpoch lv;
+                f.leverBack(ag, tau, dp_e, dv_e, dv_l, lv);
+            }
+#endif
             double r[3], v[3], Tm[3][3], r_e[3], v_e[3];
             f.receiverState(r, v, Tm);
             for (int i = 0; i < 3; ++i)
