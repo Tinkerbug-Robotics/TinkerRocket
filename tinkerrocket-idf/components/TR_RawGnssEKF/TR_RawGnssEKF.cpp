@@ -815,11 +815,16 @@ void RawGnssEKF<T>::gateGain(T K[N], T att, const T* att_axis)
 template <typename T>
 void RawGnssEKF<T>::inject(const T dx[N])
 {
-    double rew, rns;
-    earthRad(lla_[0], rew, rns);
-    lla_[2] -= static_cast<double>(dx[2]);
-    lla_[0] += static_cast<double>(dx[0]) / (rns + lla_[2]);
-    lla_[1] += static_cast<double>(dx[1]) / ((rew + lla_[2]) * std::cos(lla_[0]));
+    if (p_.share_los)
+        injectLla(dx);   // the radii kept, the frame carried (TR_RawGnssCarrier.cpp)
+    else
+    {
+        double rew, rns;
+        earthRad(lla_[0], rew, rns);
+        lla_[2] -= static_cast<double>(dx[2]);
+        lla_[0] += static_cast<double>(dx[0]) / (rns + lla_[2]);
+        lla_[1] += static_cast<double>(dx[1]) / ((rew + lla_[2]) * std::cos(lla_[0]));
+    }
     for (int i = 0; i < 3; ++i)
     {
         v_[i] += dx[kVel + i];
@@ -1181,7 +1186,10 @@ void RawGnssEKF<T>::receiverEcefAt(double age_s, double r_e[3], double v_e[3]) c
 {
     double r[3], v[3], Tm[3][3];
     T dp[3], dv[3];
-    receiverState(r, v, Tm);
+    if (p_.share_los)
+        frameOf(r, v, Tm);
+    else
+        receiverState(r, v, Tm);
     historyChange(age_s, dv, dp);
     backDate(r, v, Tm, dp, dv, r_e, v_e);
 }
@@ -1306,7 +1314,10 @@ bool RawGnssEKF<T>::beginGnssRaw(const RawMeas* m, int n, double age_s, RawGnssS
     // Receiver clock steps: every satellite's innovation agrees on one
     {
         double r[3], v[3], Tm[3][3], r_e[3], v_e[3];
-        receiverState(r, v, Tm);
+        if (p_.share_los)
+            frameOf(r, v, Tm);
+        else
+            receiverState(r, v, Tm);
         backDate(r, v, Tm, dp_e, dv_e, r_e, v_e);
         double inn[RawEpoch::kMaxObs], inn_rr[RawEpoch::kMaxObs], dev[RawEpoch::kMaxObs];
         int ni = 0, nr = 0;
@@ -1316,7 +1327,14 @@ bool RawGnssEKF<T>::beginGnssRaw(const RawMeas* m, int n, double age_s, RawGnssS
             if (m[i].sys > GNSS_SYS_BDS)
                 continue;
             Los L;
-            lineOfSight(m[i], r_e, v_e, L);
+            if (p_.share_los)
+            {
+                // the epoch's (TR_RawGnssEKF.h share_los), the rate as lineOfSight forms it
+                L.rho = losOf(m, n, i, t_ - age_s, r_e, L.u, L.vs);
+                L.rate = L.u[0] * (L.vs[0] - v_e[0]) + L.u[1] * (L.vs[1] - v_e[1]) + L.u[2] * (L.vs[2] - v_e[2]);
+            }
+            else
+                lineOfSight(m[i], r_e, v_e, L);
             if (m[i].has_pr && ni < RawEpoch::kMaxObs)
                 inn[ni++] = m[i].pr - (L.rho + b_e + static_cast<double>(isb(m[i].sys)));
             if (m[i].has_rr && nr < RawEpoch::kMaxObs)
@@ -1419,10 +1437,29 @@ void RawGnssEKF<T>::updateGnssRawPart(const RawMeas* m, int i0, int i1, double a
         // this satellite's own pseudorange update moves the receiver by
         // metres at most, turning its line of sight by ~1e-7 rad).
         double r[3], v[3], Tm[3][3], r_e[3], v_e[3];
-        receiverState(r, v, Tm);
-        backDate(r, v, Tm, dp_e, dv_e, r_e, v_e);
         Los L;
-        lineOfSight(mi, r_e, v_e, L);
+        if (p_.share_los)
+        {
+            // the epoch's line of sight (TR_RawGnssEKF.h share_los) at the
+            // receiver back-dated as below, the frame kept: no velocity here
+            // (its rate is the Doppler's own, below)
+            frameOf(r, nullptr, Tm);
+            for (int a = 0; a < 3; ++a)
+            {
+                double sp = 0.0;
+                for (int k = 0; k < 3; ++k)
+                    sp += Tm[k][a] * static_cast<double>(dp_e[k]);
+                r_e[a] = r[a] - sp;
+            }
+            L.rho = losOf(m, 0, i, t_ - age_s, r_e, L.u, L.vs);
+            L.rate = 0.0;
+        }
+        else
+        {
+            receiverState(r, v, Tm);
+            backDate(r, v, Tm, dp_e, dv_e, r_e, v_e);
+            lineOfSight(mi, r_e, v_e, L);
+        }
         T u_ned[3];
         for (int a = 0; a < 3; ++a)
             u_ned[a] = T(Tm[a][0] * L.u[0] + Tm[a][1] * L.u[1] + Tm[a][2] * L.u[2]);
@@ -1431,7 +1468,15 @@ void RawGnssEKF<T>::updateGnssRawPart(const RawMeas* m, int i0, int i1, double a
             if (kind == 0 ? (!mi.has_pr || !fuse_pr_) : !mi.has_rr)
                 continue;
             double pred_rate = 0.0;
-            if (kind == 1)
+            if (kind == 1 && p_.rr_float && p_.share_los && tau <= 0.0)
+            {
+                // rr_float (TR_RawGnssEKF.h): the receiver's part in NED, float
+                T vl[3];
+                for (int a = 0; a < 3; ++a)
+                    vl[a] = v_[a] - dv_e[a];
+                pred_rate = rrFloat(L.u[0] * L.vs[0] + L.u[1] * L.vs[1] + L.u[2] * L.vs[2], u_ned, vl);
+            }
+            else if (kind == 1)
             {
                 // the receiver's velocity as the pseudorange update left it,
                 // taken back to the Doppler's instant (a late Doppler: tau

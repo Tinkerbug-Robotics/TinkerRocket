@@ -1765,6 +1765,41 @@ target_include_directories(test_raw_gnss_carrier PRIVATE
 target_link_libraries(test_raw_gnss_carrier GTest::gtest_main)
 gtest_discover_tests(test_raw_gnss_carrier)
 
+# ---------- test_raw_gnss_share_los ----------
+# TR_RawGnssEKF's shared epoch geometry (RawGnssEKFParams share_los, rr_float):
+# off by default and in every profile; the units before any update give the
+# same bits shared or not; an epoch worked in slices stays within micrometres
+# of the unshared filter and uses the same measurements; the ranges follow the
+# receiver and are taken again past the limit, for another epoch or another
+# measurement; the frame kept; the boost screen's copy; the Doppler in float.
+add_executable(test_raw_gnss_share_los test_raw_gnss_share_los.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/RawGnssShadow.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/RawGnssMeasStage.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/PadSurvey.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/SatJumpCheck.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/FixCheck.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/EphemerisFrames.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/HeadingFit.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssCarrier.cpp
+    ${LIB_DIR}/TR_GNSSRaw/eph.c
+    ${LIB_DIR}/TR_GNSSRaw/atmo.c
+    ${LIB_DIR}/TR_GNSSRaw/RtcmEphemeris.cpp
+    ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasCarrier.cpp
+)
+target_include_directories(test_raw_gnss_share_los PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RawGnssShadow
+    ${LIB_DIR}/TR_RawGnssEKF
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_raw_gnss_share_los GTest::gtest_main)
+gtest_discover_tests(test_raw_gnss_share_los)
+
 # ---------- test_raw_gnss_shadow ----------
 # The raw-GNSS shadow filter's flight-computer side (#1600 phase 4): the
 # core-1 -> core-0 handoffs (ShadowLink.h: a lock-free ring and a seqlock,

@@ -77,6 +77,8 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssEKFParams&
     e.p0_clk_drift = p.p0_clk_drift;
     e.p0_isb = p.p0_isb;
     e.rr_lag_s = p.rr_lag_s;
+    e.share_los = p.share_los;
+    e.rr_float = p.rr_float;
     e.cr_mode = p.cr_mode;
     e.cr_sigma_per_rev_s = p.cr_sigma_per_rev_s;
     e.cr_common_sigma_mps = p.cr_common_sigma_mps;

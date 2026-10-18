@@ -4239,6 +4239,16 @@ static void startRawShadow()
     rx.sat_cap = TR_BENCH_RAW_SAT_CAP;
     ESP_LOGW(TAG, "[RAWGNSS] BENCH: at most %d satellites an epoch (TR_BENCH_RAW_SAT_CAP)", rx.sat_cap);
 #endif
+#ifdef TR_BENCH_RAW_SHARE_LOS
+    // bench (the filter's CPU): an epoch's geometry taken once and shared by
+    // its units (1), and with it the Doppler's prediction in float (2)
+    // (TR_RawGnssEKF.h share_los, rr_float)
+    static_assert(TR_BENCH_RAW_SHARE_LOS >= 0 && TR_BENCH_RAW_SHARE_LOS <= 2, "TR_BENCH_RAW_SHARE_LOS is 0, 1 or 2");
+    rx.share_los = (TR_BENCH_RAW_SHARE_LOS) >= 1;
+    rx.rr_float = (TR_BENCH_RAW_SHARE_LOS) >= 2;
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: the epoch's geometry %s, the Doppler's prediction in %s (TR_BENCH_RAW_SHARE_LOS)",
+             rx.share_los ? "SHARED by its units" : "per unit", rx.rr_float ? "FLOAT" : "double");
+#endif
 #endif
 #ifdef TR_BENCH_CARRIER_MODE
     // bench: the carrier range rates off (0), observed (1) or fused (2)

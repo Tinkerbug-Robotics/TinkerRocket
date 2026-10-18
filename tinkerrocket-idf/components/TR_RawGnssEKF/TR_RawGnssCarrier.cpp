@@ -5,7 +5,9 @@
 // the heading share (hdgObsScaleNow) and the antenna's offset where it is
 // known (lever_on: its history, its back-dating, its rows -- the history's
 // one write a step, pushLever, is the exception to what follows; the Beetle
-// never turns it on). Once an epoch, so apart from the
+// never turns it on), and the epoch's shared geometry (share_los: losOf,
+// frameOf, and injectLla, which every update's inject takes with it on;
+// the Beetle never turns it on either). Once an epoch, so apart from the
 // filter's per-step code: on the Beetle this file stays in flash where the
 // rest of the filter runs from internal RAM (raw_gnss_iram.lf), 11 kB less of
 // it. Its per-step part -- the receiver snapshots that every correction moves
@@ -688,7 +690,11 @@ void RawGnssEKF<T>::screenRangeRates(const RawMeas* m, int n, double age_s, RawG
     if (p_.lever_on)
         leverBack(age_s, tau, dp_e, dv_e, dv_l, lv);
     double r[3], v[3], Tm[3][3], r_e[3], v_e[3];
-    receiverState(r, v, Tm);
+    const bool share = p_.share_los;
+    if (share)
+        frameOf(r, v, Tm);
+    else
+        receiverState(r, v, Tm);
     backDate(r, v, Tm, dp_e, dv_e, r_e, v_e);
     double vr[3], v_l[3];
     for (int a = 0; a < 3; ++a)
@@ -698,21 +704,39 @@ void RawGnssEKF<T>::screenRangeRates(const RawMeas* m, int n, double age_s, RawG
     for (int a = 0; a < 3; ++a)
         v_l[a] = vr[a] - (Tm[0][a] * static_cast<double>(dv[0]) + Tm[1][a] * static_cast<double>(dv[1])
                           + Tm[2][a] * static_cast<double>(dv[2]));
+    // rr_float: the update's prediction, the receiver's part in NED (TR_RawGnssEKF.h)
+    const bool rrf = share && p_.rr_float && tau <= 0.0;
+    T vl_ned[3];
+    for (int a = 0; a < 3; ++a)
+        vl_ned[a] = v_[a] - dv[a];
+    const double te = t_ - age_s;
     for (int i = 0; i < n; ++i)
     {
         const RawMeas& mi = m[i];
         if (mi.sys > GNSS_SYS_BDS || mi.prn >= 64 || !mi.has_rr)
             continue;
         Los L;
-        lineOfSight(mi, r_e, v_e, L);
+        if (share)
+        {
+            L.rho = losOf(m, n, i, te, r_e, L.u, L.vs);   // the epoch's (TR_RawGnssEKF.h share_los)
+            L.rate = 0.0;
+        }
+        else
+            lineOfSight(mi, r_e, v_e, L);
         T u_ned[3];
         for (int a = 0; a < 3; ++a)
             u_ned[a] = T(Tm[a][0] * L.u[0] + Tm[a][1] * L.u[1] + Tm[a][2] * L.u[2]);
-        Los Lr = L;
-        Lr.rate = 0.0;
-        for (int a = 0; a < 3; ++a)
-            Lr.rate += L.u[a] * (L.vs[a] - v_l[a]);
-        const double pred_rate = tau > 0.0 ? Lr.rate - tau * satRangeAccel(mi, Lr, v_l) : Lr.rate;
+        double pred_rate;
+        if (rrf)
+            pred_rate = rrFloat(L.u[0] * L.vs[0] + L.u[1] * L.vs[1] + L.u[2] * L.vs[2], u_ned, vl_ned);
+        else
+        {
+            Los Lr = L;
+            Lr.rate = 0.0;
+            for (int a = 0; a < 3; ++a)
+                Lr.rate += L.u[a] * (L.vs[a] - v_l[a]);
+            pred_rate = tau > 0.0 ? Lr.rate - tau * satRangeAccel(mi, Lr, v_l) : Lr.rate;
+        }
         int hidx[10];
         T hval[10];
         int hn = 0;
@@ -883,7 +907,11 @@ int RawGnssEKF<T>::dopplerChange(const RawMeas* m, int n, double age_s, const Do
     historyChange(age_s, dv_e, dp_e);
     historyChange(age_s + tau, dv_l, dp_l);
     double r[3], v[3], Tm[3][3], r_e[3], v_e[3];
-    receiverState(r, v, Tm);
+    const bool share = p_.share_los;
+    if (share)
+        frameOf(r, v, Tm);
+    else
+        receiverState(r, v, Tm);
     backDate(r, v, Tm, dp_e, dv_e, r_e, v_e);
     const T* dv = tau > 0.0 ? dv_l : dv_e;
     // the filter's velocity at this end's Doppler (NED), and its time
@@ -931,13 +959,22 @@ int RawGnssEKF<T>::dopplerChange(const RawMeas* m, int n, double age_s, const Do
         out.v_ned[a] = static_cast<float>(v_now[a]);
     out.n = 0;
     int nr = 0;
+    // rr_float: the update's prediction, the receiver's part in NED (TR_RawGnssEKF.h)
+    const bool rrf = share && p_.rr_float && tau <= 0.0;
+    const double te = t_ - age_s;
     for (int i = 0; i < n; ++i)
     {
         const RawMeas& mi = m[i];
         if (mi.sys > GNSS_SYS_BDS || mi.prn >= 64 || !mi.has_rr)
             continue;
         Los L;
-        lineOfSight(mi, r_e, v_e, L);
+        if (share)
+        {
+            L.rho = losOf(m, n, i, te, r_e, L.u, L.vs);   // the epoch's (TR_RawGnssEKF.h share_los)
+            L.rate = 0.0;
+        }
+        else
+            lineOfSight(mi, r_e, v_e, L);
         double u_ned[3];
         for (int a = 0; a < 3; ++a)
             u_ned[a] = Tm[a][0] * L.u[0] + Tm[a][1] * L.u[1] + Tm[a][2] * L.u[2];
@@ -945,6 +982,10 @@ int RawGnssEKF<T>::dopplerChange(const RawMeas* m, int n, double age_s, const Do
         double us = 0.0;
         for (int a = 0; a < 3; ++a)
             us += L.u[a] * L.vs[a];
+        T uf[3] = {};
+        if (rrf)
+            for (int a = 0; a < 3; ++a)
+                uf[a] = T(u_ned[a]);
         auto pred = [&](const double vi[3]) {
             double ve[3], va[3];
             const double* vn = vi;
@@ -953,6 +994,11 @@ int RawGnssEKF<T>::dopplerChange(const RawMeas* m, int n, double age_s, const Do
                 for (int a = 0; a < 3; ++a)
                     va[a] = vi[a] + v_lev[a];   // the antenna's
                 vn = va;
+            }
+            if (rrf)
+            {
+                const T vf[3] = {T(vn[0]), T(vn[1]), T(vn[2])};
+                return rrFloat(us, uf, vf);
             }
             for (int a = 0; a < 3; ++a)
                 ve[a] = Tm[0][a] * vn[0] + Tm[1][a] * vn[1] + Tm[2][a] * vn[2];
@@ -996,6 +1042,219 @@ int RawGnssEKF<T>::dopplerChange(const RawMeas* m, int n, double age_s, const Do
     }
     return nr;
 }
+
+// share_los (TR_RawGnssEKF.h): the epoch's lines of sight, every satellite's
+// at once, at the receiver r its first unit back-dates to. Here, in flash with
+// the rest of the once-an-epoch code: the Beetle never turns it on.
+template <typename T>
+void RawGnssEKF<T>::losFill(const RawMeas* m, int n, double te, const double r[3]) const
+{
+    LosShare& S = los_;
+    const double still[3] = {0.0, 0.0, 0.0};
+    S.te = te;
+    S.n = n < RawEpoch::kMaxObs ? n : RawEpoch::kMaxObs;
+    for (int a = 0; a < 3; ++a)
+        S.r0[a] = r[a];
+    for (int i = 0; i < S.n; ++i)
+    {
+        const RawMeas& mi = m[i];
+        S.sys[i] = mi.sys;
+        S.prn[i] = mi.prn;
+        S.sx[i] = mi.sat_pos[0];
+        S.ok[i] = mi.sys <= GNSS_SYS_BDS;
+        if (!S.ok[i])
+            continue;
+        Los L;
+        lineOfSight(mi, r, still, L);
+        S.rho[i] = L.rho;
+        for (int a = 0; a < 3; ++a)
+        {
+            S.u[i][a] = L.u[a];
+            S.vs[i][a] = L.vs[a];
+        }
+    }
+    S.valid = true;
+}
+
+// Satellite i's range, line of sight and turned velocity at r: from the
+// epoch's (taken first, by a unit with n), to second order in d = r - r0 --
+// rho(r) = rho0 - u0.d, u(r) = u0 - (d - u0 (u0.d)) / rho0 -- and the same
+// bits at r0 itself. The satellite's turn by the Earth's rotation over the
+// travel moves with the range by 2.4e-13 rad a metre: kept. Where they cannot
+// serve (another epoch's, another measurement at i, a unit with no n before
+// any was taken), lineOfSight's own.
+template <typename T>
+double RawGnssEKF<T>::losOf(const RawMeas* m, int n, int i, double te, const double r[3], double u[3],
+                            double vs[3]) const
+{
+    LosShare& S = los_;
+    const RawMeas& mi = m[i];
+    bool epoch = S.valid && std::fabs(te - S.te) <= kLosSameEpochS;
+    bool same = epoch && r[0] == S.r0[0] && r[1] == S.r0[1] && r[2] == S.r0[2];
+    double d[3] = {0.0, 0.0, 0.0};
+    if (epoch && !same)
+    {
+        for (int a = 0; a < 3; ++a)
+            d[a] = r[a] - S.r0[a];
+        if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > kLosRetakeM * kLosRetakeM)
+        {
+            losFill(m, n > 0 ? n : S.n, te, r);   // corrections past kLosRetakeM since: again, here
+            same = true;
+        }
+    }
+    else if (!epoch && n > 0)
+    {
+        losFill(m, n, te, r);                     // the epoch's first unit
+        epoch = same = true;
+    }
+    if (!(epoch && i < S.n && S.ok[i] && S.sys[i] == mi.sys && S.prn[i] == mi.prn && S.sx[i] == mi.sat_pos[0]))
+    {
+        const double still[3] = {0.0, 0.0, 0.0};
+        Los L;
+        lineOfSight(mi, r, still, L);
+        for (int a = 0; a < 3; ++a)
+        {
+            u[a] = L.u[a];
+            vs[a] = L.vs[a];
+        }
+        return L.rho;
+    }
+    const double* u0 = S.u[i];
+    for (int a = 0; a < 3; ++a)
+        vs[a] = S.vs[i][a];
+    if (same)
+    {
+        for (int a = 0; a < 3; ++a)
+            u[a] = u0[a];
+        return S.rho[i];
+    }
+    const double p = u0[0] * d[0] + u0[1] * d[1] + u0[2] * d[2];
+    const double k = 1.0 / S.rho[i];
+    for (int a = 0; a < 3; ++a)
+        u[a] = u0[a] - (d[a] - u0[a] * p) * k;
+    return S.rho[i] - p;
+}
+
+// receiverState's position and frame, kept while lla_ is the one they were
+// taken at bit for bit (then the same bits), or carried there by inject's own
+// corrections (injectLla). v, if asked, from the velocity as it stands.
+template <typename T>
+void RawGnssEKF<T>::frameOf(double r[3], double v[3], double Tm[3][3]) const
+{
+    LosShare& S = los_;
+    if (!(S.frame_ok && lla_[0] == S.f_lla[0] && lla_[1] == S.f_lla[1] && lla_[2] == S.f_lla[2]))
+    {
+        double vv[3];
+        receiverState(S.f_r, vv, S.f_Tm);
+        for (int a = 0; a < 3; ++a)
+        {
+            S.f_lla[a] = lla_[a];
+            r[a] = S.f_r[a];
+            if (v != nullptr)
+                v[a] = vv[a];
+            for (int b = 0; b < 3; ++b)
+                Tm[a][b] = S.f_Tm[a][b];
+        }
+        S.carried_m = 0.0;
+        S.frame_ok = true;
+        return;
+    }
+    for (int a = 0; a < 3; ++a)
+    {
+        r[a] = S.f_r[a];
+        for (int b = 0; b < 3; ++b)
+            Tm[a][b] = S.f_Tm[a][b];
+    }
+    // receiverState's own expression, so a frame kept gives its very bits
+    if (v != nullptr)
+        for (int i = 0; i < 3; ++i)
+            v[i] = Tm[0][i] * static_cast<double>(v_[0]) + Tm[1][i] * static_cast<double>(v_[1])
+                 + Tm[2][i] * static_cast<double>(v_[2]);
+}
+
+// inject's position part with share_los: the earth radii (and the latitude's
+// sine and cosine) kept while the latitude moves under kRadiiKeepRad -- the
+// radii then within 3e-9 of their own, the cosine taken to first order from
+// them -- and the frame (frameOf) carried along: the position's ECEF change is
+// the NED correction turned by the frame, to 1.6e-7 m for a metre's, its axes
+// left as they were (1.6e-7 rad a metre), until kFrameCarryM in all.
+template <typename T>
+void RawGnssEKF<T>::injectLla(const T dx[N])
+{
+    LosShare& S = los_;
+    const bool carry = S.frame_ok && lla_[0] == S.f_lla[0] && lla_[1] == S.f_lla[1] && lla_[2] == S.f_lla[2];
+    if (!(S.rad_ok && std::fabs(lla_[0] - S.rad_lat) <= kRadiiKeepRad))
+    {
+        // TR_RawGnssEKF.cpp's earthRad, its expressions
+        constexpr double kRe = 6378137.0, kE2 = 0.0066943799901;
+        const double s = std::sin(lla_[0]);
+        const double dd = std::fabs(1.0 - kE2 * s * s);
+        S.rad_rew = kRe / std::sqrt(dd);
+        S.rad_rns = kRe * (1.0 - kE2) / (dd * std::sqrt(dd));
+        S.rad_s = s;
+        S.rad_c = std::cos(lla_[0]);
+        S.rad_lat = lla_[0];
+        S.rad_ok = true;
+    }
+    lla_[2] -= static_cast<double>(dx[2]);
+    lla_[0] += static_cast<double>(dx[0]) / (S.rad_rns + lla_[2]);
+    const double c = S.rad_c - S.rad_s * (lla_[0] - S.rad_lat);
+    lla_[1] += static_cast<double>(dx[1]) / ((S.rad_rew + lla_[2]) * c);
+    if (!carry)
+        return;
+    const double d[3] = {static_cast<double>(dx[0]), static_cast<double>(dx[1]), static_cast<double>(dx[2])};
+    S.carried_m += std::fabs(d[0]) + std::fabs(d[1]) + std::fabs(d[2]);
+    if (S.carried_m > kFrameCarryM)
+    {
+        S.frame_ok = false;
+        return;
+    }
+    for (int i = 0; i < 3; ++i)
+    {
+        S.f_r[i] += S.f_Tm[0][i] * d[0] + S.f_Tm[1][i] * d[1] + S.f_Tm[2][i] * d[2];
+        S.f_lla[i] = lla_[i];
+    }
+}
+
+template <typename T>
+const double* RawGnssEKF<T>::sharedRanges(const RawMeas* m, int n, double age_s, const double r[3]) const
+{
+    if (!p_.share_los)
+        return nullptr;
+    const double te = t_ - (age_s > 0.0 ? age_s : 0.0);
+    LosShare& S = los_;
+    double u[3], vs[3];
+    const int nn = n < RawEpoch::kMaxObs ? n : RawEpoch::kMaxObs;
+    for (int i = 0; i < nn; ++i)
+        S.rng[i] = m[i].has_pr && m[i].sys <= GNSS_SYS_BDS ? losOf(m, n, i, te, r, u, vs) : 0.0;
+    return S.rng;
+}
+
+// The Doppler's prediction with rr_float (TR_RawGnssEKF.h): the satellite's
+// part us = u.vs (double), less the receiver's velocity v (NED) along the line
+// of sight u_ned in float.
+template <typename T>
+double RawGnssEKF<T>::rrFloat(double us, const T u_ned[3], const T v_ned[3])
+{
+    const float uv = static_cast<float>(u_ned[0]) * static_cast<float>(v_ned[0])
+                   + static_cast<float>(u_ned[1]) * static_cast<float>(v_ned[1])
+                   + static_cast<float>(u_ned[2]) * static_cast<float>(v_ned[2]);
+    return us - static_cast<double>(uv);
+}
+
+// The share_los members' own instantiations (the macro below has the rest of
+// this file's).
+#define TR_RAW_GNSS_LOS_INSTANTIATE(T)                                                                            \
+    template void RawGnssEKF<T>::losFill(const RawMeas*, int, double, const double[3]) const;                    \
+    template double RawGnssEKF<T>::losOf(const RawMeas*, int, int, double, const double[3], double[3], double[3])  \
+        const;                                                                                                    \
+    template void RawGnssEKF<T>::frameOf(double[3], double[3], double[3][3]) const;                              \
+    template void RawGnssEKF<T>::injectLla(const T[RawGnssEKF<T>::N]);                                           \
+    template const double* RawGnssEKF<T>::sharedRanges(const RawMeas*, int, double, const double[3]) const;      \
+    template double RawGnssEKF<T>::rrFloat(double, const T[3], const T[3]);
+TR_RAW_GNSS_LOS_INSTANTIATE(float)
+TR_RAW_GNSS_LOS_INSTANTIATE(double)
+#undef TR_RAW_GNSS_LOS_INSTANTIATE
 
 // hdg_obs_mode's s (TR_RawGnssEKF.h): how much of a GNSS row's heading
 // correction an epoch age_s old may make. Open (1) with the mode off or not

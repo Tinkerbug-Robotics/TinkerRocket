@@ -264,6 +264,36 @@ struct RawGnssEKFParams
     bool    lever_on           = false;
     double  lever_b_m[3]       = {0.0, 0.0, 0.0};   // body FRD, the IMU to the antenna's phase centre, m
     uint8_t lever_att_mode     = 0;                 // LeverAttMode
+    // The epoch's geometry once (off by default: today's filter). Every unit
+    // of an epoch -- the Doppler change check, the satellite check, the
+    // clock, the boost screen, each satellite's update and the close --
+    // predicts each satellite's line of sight in double: its range, unit
+    // vector and Sagnac-turned velocity, six times a satellite an epoch, and
+    // each satellite's update takes the receiver's frame again (receiverState:
+    // four double sines and cosines) and each row inject's earth radii. With
+    // share_los the lines of sight are taken once, at the epoch's first unit
+    // that asks (at the receiver it back-dates to), and every later unit's
+    // receiver r takes them to second order in its distance d from that one
+    // (rho - u.d, and u less d's part across u over rho): the same bits where
+    // the receiver is the same (the units of a slice before any update),
+    // within (d / rho)^2 of the line of sight elsewhere (2.5e-15 for a
+    // metre's correction) and 6.5e-6 of d in the range (the Sagnac turn's own
+    // change), and taken again past kLosRetakeM. The frame is kept while the
+    // position stands and carried by the update's own corrections within a
+    // slice (first order: 1.6e-7 m and rad per metre^2, at most kFrameCarryM),
+    // inject's radii while the latitude moves under kRadiiKeepRad. For the
+    // mosaic-only image's CPU (the bench's TR_BENCH_RAW_SHARE_LOS).
+    bool    share_los          = false;
+    // The Doppler rows' prediction in float (off by default; with share_los,
+    // and only where the Doppler has no lag, rr_lag_s 0: the mosaic-G5's).
+    // A range rate is the satellite's part along the line of sight, u.vs (up
+    // to 3.9 km/s: kept in double), less the receiver's, u.v (the rocket's
+    // few hundred m/s): that one in the NED frame the velocity already has,
+    // float, within 2e-5 m/s of the double prediction -- no ECEF velocity
+    // turned from it in double for each satellite. The update, the boost
+    // screen and the Doppler change check alike, so the screen still gates
+    // what the update would fuse.
+    bool    rr_float           = false;
     // Initial sigmas, in the state's units (the attitude's: a half-angle).
     // p0_att: the tilt's, about north and east; p0_hdg: the heading's, about
     // the vertical of init's attitude (#1626 N10). p0_hdg was pi ("any
@@ -625,6 +655,11 @@ public:
     // epoch that age is applied (#1508's satellite check: before an update,
     // the IMU's propagation from the last one).
     void receiverEcefAt(double age_s, double r[3], double v[3]) const;
+    // share_los: each pseudorange's satellite's range from r (ECEF, m), as
+    // sagnacRange gives it, from the epoch's lines of sight (the epoch age_s
+    // ago; 0 for a measurement with no pseudorange): the satellite check's.
+    // Null with share_los off.
+    const double* sharedRanges(const RawMeas* m, int n, double age_s, const double r[3]) const;
     // What the IMU alone did between filter times t1 <= t2 (s), NED: its
     // velocity change (specific force and gravity, no filter corrections) and
     // the displacement that change adds, the integral of v(t) - v(t1). From a
@@ -821,6 +856,53 @@ private:
     // displacement is the position's less this one's change.
     double      cr_ex_[3] = {};
     CrFit       cr_fit_;
+
+    // share_los (RawGnssEKFParams): the epoch's geometry, kept between its
+    // units (TR_RawGnssCarrier.cpp). losOf: satellite i's range (returned),
+    // line of sight (ECEF, receiver to satellite) and Sagnac-turned velocity at
+    // the receiver r (ECEF) of the epoch at filter time te -- from the epoch's
+    // lines of sight (taken here, at r, by the epoch's first unit with its n
+    // measurements; n 0: a unit that only reads them), or lineOfSight's own
+    // where they cannot serve. frameOf: receiverState's, from the frame kept
+    // while the position stands (v may be null: not wanted). injectLla:
+    // inject's position part, with the radii kept and the frame carried.
+    // rrFloat: rr_float's Doppler prediction from the satellite's part us
+    // (u.vs, ECEF), the line of sight and the receiver's velocity (NED).
+    static constexpr double kLosRetakeM = 10.0;       // a receiver this far from where they were taken: again
+    static constexpr double kFrameCarryM = 1.0;       // the frame carried this far at most, then taken again
+    static constexpr double kRadiiKeepRad = 1.0e-6;   // inject's radii kept while the latitude moves this little
+    static constexpr double kLosSameEpochS = 1.0e-3;  // an epoch's units agree on its filter time to this
+    double losOf(const RawMeas* m, int n, int i, double te, const double r[3], double u[3], double vs[3]) const;
+    void   losFill(const RawMeas* m, int n, double te, const double r[3]) const;
+    void   frameOf(double r[3], double v[3], double Tm[3][3]) const;
+    void   injectLla(const T dx[N]);
+    static double rrFloat(double us, const T u_ned[3], const T v_ned[3]);
+    // A member, not the stack's (the filter's task has ~1.7 KB free on the
+    // bench): 3.8 kB, in the filter's own storage, which the boost screen's
+    // copy takes along. (Scratch: written before it is read, so not zeroed.)
+    struct LosShare
+    {
+        bool    valid = false;                // lines of sight taken (and te, n, r0 theirs)
+        double  te = 0.0;                     // the epoch's filter time
+        int     n = 0;                        // its measurements
+        double  r0[3];                        // the receiver they were taken at, ECEF
+        uint8_t sys[RawEpoch::kMaxObs];       // each measurement's satellite, and
+        uint8_t prn[RawEpoch::kMaxObs];
+        bool    ok[RawEpoch::kMaxObs];        //   whether it was taken (GPS, Galileo, BeiDou)
+        double  sx[RawEpoch::kMaxObs];        //   its position's x (the measurement it was taken for)
+        double  rho[RawEpoch::kMaxObs];
+        double  u[RawEpoch::kMaxObs][3];
+        double  vs[RawEpoch::kMaxObs][3];
+        double  rng[RawEpoch::kMaxObs];       // sharedRanges' answer
+        // receiverState's at lla bit for bit (carried: moved by corrections since, carried_m of them)
+        bool    frame_ok = false;
+        double  f_lla[3], f_r[3], f_Tm[3][3];
+        double  carried_m = 0.0;
+        // inject's radii at latitude rad_lat, and its sine and cosine
+        bool    rad_ok = false;
+        double  rad_lat = 0.0, rad_rew = 0.0, rad_rns = 0.0, rad_s = 0.0, rad_c = 1.0;
+    };
+    mutable LosShare los_;
 };
 
 extern template class RawGnssEKF<float>;
