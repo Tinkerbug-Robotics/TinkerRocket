@@ -252,6 +252,8 @@ struct Args
     bool have_seed_gyro = false;     // --seed-gyro-dps: the cold start's gyro bias given, not the ring's mean
     double seed_gyro_dps[3] = {};    //   (body FRD, deg/s): a log that begins while the payload turns
     int sat_cap = -1;                // TR_BENCH_RAW_SAT_CAP: the stage's satellites an epoch (-1: the profile's)
+    int cap_max = -1;                // TR_BENCH_RAW_CAP_MAX: the cap governor's ceiling (-1: the profile's, off)
+    double slice_us = -1.0;          // TR_BENCH_RAW_SLICE_US: the filter's slice a step (-1: the profile's 2500)
     double fuse_ms = -1.0;           // TR_BENCH_RAW_FUSE_MS: the fused epochs' period (-1: the profile's)
     std::string flight_state;        // the launch and landing: "log" (the ticks' flags), "quorum" (the quorum's own
                                      //   state machine); default the ticks', the quorum's where META state_machine none
@@ -319,6 +321,8 @@ void usage()
                  "  [--sat-cap N] [--fuse-ms X] [--flight-state log|quorum] [--time-tag-from-boot]\n"
                  "  [--assume-finetime] [--pad-zupt 0|1] [--gnss-only-from-s X] [--gnss-only-gate launch|ground]\n"
                  "  [--pvt-out FILE] [--gnss-only-keep-level]\n"
+                 "  the satellite cap's governor and the profile's slice (a RAW_REPLAY_CAPGOV build): [--cap-max N]\n"
+                 "  [--slice-us X]\n"
                  "  the Doppler change check (a RAW_REPLAY_DVCHECK build): [--dv-check 0|1|2] [--dv-sat-k X]\n"
                  "  [--dv-epoch-k X] [--dv-floor X] [--dv-per-g X] [--dv-att-deg X] [--dv-scale X] [--dv-bias X]\n"
                  "  [--dv-lever-m X] [--dv-hold-s X] [--dv-epoch-hold-s X] [--dv-window-s X] [--dv-deweight 0|1]\n"
@@ -471,6 +475,8 @@ bool parseArgs(int argc, char** argv, Args& a)
                                            &a.seed_gyro_dps[2]) == 3;
         }
         else if (k == "--sat-cap") a.sat_cap = std::atoi(val());
+        else if (k == "--cap-max") a.cap_max = std::atoi(val());
+        else if (k == "--slice-us") a.slice_us = std::atof(val());
         else if (k == "--fuse-ms") a.fuse_ms = std::atof(val());
         else if (k == "--flight-state") a.flight_state = val();
         else if (k == "--time-tag-from-boot") a.time_tag_from_boot = true;
@@ -1656,6 +1662,16 @@ int main(int argc, char** argv)
         rx.fuse_epoch_period_s = a.fuse_ms * 1.0e-3;   // TR_BENCH_RAW_FUSE_MS
     if (a.sat_cap >= 0)
         rx.sat_cap = a.sat_cap;                         // TR_BENCH_RAW_SAT_CAP
+#if RAW_REPLAY_CAPGOV
+    if (a.cap_max >= 0)
+        rx.sat_cap_max = a.cap_max;                     // TR_BENCH_RAW_CAP_MAX
+    if (a.slice_us > 0.0)
+        rx.epoch_slice_us = a.slice_us;                 // TR_BENCH_RAW_SLICE_US
+#else
+    if (a.cap_max >= 0 || a.slice_us > 0.0)
+        std::fprintf(stderr, "WARNING: this build has no cap governor or profile slice (RAW_REPLAY_CAPGOV=OFF): "
+                             "--cap-max and --slice-us are ignored\n");
+#endif
 #else
     GnssReceiverProfile rx = lc86gProfile();
 #endif
@@ -1732,7 +1748,13 @@ int main(int argc, char** argv)
 #endif
     cfg.primary = true;
     cfg.min_step_s = 0.01;
+#if RAW_REPLAY_CAPGOV
+    // the mosaic-only image takes the profile's (main.cpp startRawShadow); the M1 keeps its own 2500, which is
+    // every profile's
+    cfg.epoch_slice_us = mosaic ? rx.epoch_slice_us : 2500.0;
+#else
     cfg.epoch_slice_us = 2500.0;
+#endif
     cfg.external_build = true;
     cfg.heading_mode = static_cast<uint8_t>(a.heading_mode);
     // --fw-defaults: the four bench flags below only where given, the firmware's defaults otherwise -- what
@@ -3926,6 +3948,18 @@ int main(int argc, char** argv)
                                  static_cast<long long>(corrupt_tow_ms), a.corrupt_pr_epoch ? 1 : 0, cs.c_str(),
                                  corrupt_built_rr, corrupt_built_pr);
                 }
+#if RAW_REPLAY_CAPGOV
+                {
+                    // the satellite cap's governor (--cap-max): what moved it
+                    const CapGovernor::Stats& gs = sh.capGovernor().stats();
+                    std::fprintf(ej, "\"cap_gov\": {\"on\": %d, \"floor\": %d, \"ceiling\": %d, \"cap\": %d, "
+                                     "\"closes\": %u, \"raises\": %u, \"cuts\": %u, \"floors\": %u, \"late\": %u, "
+                                     "\"lost\": %u, \"boosts\": %u, \"slice_us\": %.0f}, ",
+                                 sh.capGovernor().on() ? 1 : 0, sh.capGovernor().config().floor,
+                                 sh.capGovernor().config().ceiling, sh.capGovernor().cap(), gs.closes, gs.raises,
+                                 gs.cuts, gs.floors, gs.late, gs.lost, gs.boosts, cfg.epoch_slice_us);
+                }
+#endif
                 std::fprintf(ej, "\"stage\": {\"epochs\": %u, \"untimed\": %u, \"idle\": %u, \"built\": %u, "
                                  "\"eph_added\": %u, \"eph_bad\": %u, \"eph_sats\": %d, \"tracked\": %d, "
                                  "\"tracked_no_eph\": %d, \"capped_out\": %u}, ",
