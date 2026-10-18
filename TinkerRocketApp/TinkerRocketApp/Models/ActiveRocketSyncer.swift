@@ -116,8 +116,9 @@ final class ActiveRocketSyncer: ObservableObject {
     private var cameraAdoptArmed = false
     /// The same for the GNSS antenna offset, adopted only from the flight
     /// computer ("antsrc":"fc").  Held apart from `cancellables` so a profile
-    /// switch can cancel it: the profile the user chose is not the one the
-    /// connect-time readback was reconciled against.
+    /// switch and the user's own cmd 81 can cancel it (see
+    /// armAntennaAdoptIfNeeded).  A cmd 81 also sets the flag, so the
+    /// one-shot is never armed after one.
     private var antennaAdoptArmed = false
     private var antennaAdopt: AnyCancellable?
     /// The profile id THIS syncer made active while binding the board.  The
@@ -200,6 +201,14 @@ final class ActiveRocketSyncer: ObservableObject {
             .dropFirst()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.handleActiveProfileSwitch() }
+            .store(in: &cancellables)
+
+        // Any cmd 81 this attach is the user's act (pushProfileToRocket, or
+        // the settings screen's own send): the late antenna adopt stands
+        // down.  Not hopped to the main queue: the sends run on it, and the
+        // one-shot is disarmed before the send returns.
+        device.antennaOffsetSent
+            .sink { [weak self] _ in self?.disarmAntennaAdopt() }
             .store(in: &cancellables)
     }
 
@@ -311,9 +320,9 @@ final class ActiveRocketSyncer: ObservableObject {
     /// Take the rocket's reported settings into the bound profile.  Nothing is
     /// written to the rocket.
     ///
-    /// `fromExtras`: the re-run of armExtrasAdoptIfNeeded.  It leaves the
-    /// antenna to armAntennaAdoptIfNeeded once that has armed, and adds the
-    /// groups it changed to an existing `.adopted` instead of replacing it.
+    /// `fromExtras`: the re-run of armExtrasAdoptIfNeeded.  It never takes the
+    /// GNSS antenna offset (see armAntennaAdoptIfNeeded), and adds the groups
+    /// it changed to an existing `.adopted` instead of replacing it.
     private func adoptRocketConfig(fromExtras: Bool = false) {
         guard let device, let store, device.isConnected else {
             syncState = .idle
@@ -331,7 +340,9 @@ final class ActiveRocketSyncer: ObservableObject {
         unreportedGroups = cfg.unreportedGroups
 
         var probe = profile
-        let changed = Self.adopt(&probe, from: cfg, takeAntenna: !(fromExtras && antennaAdoptArmed))
+        // The connect-time pass takes an "fc" antenna and an "oc" one arms
+        // the late antenna adopt, so the extras re-run has none to take.
+        let changed = Self.adopt(&probe, from: cfg, takeAntenna: !fromExtras)
         if !changed.isEmpty { store.update(profile.id) { $0 = probe } }
 
         // What the connect-time pass and the late one-shots already said
@@ -379,8 +390,7 @@ final class ActiveRocketSyncer: ObservableObject {
     /// disagreeing with the phone.
     ///
     /// The re-run adds the groups it changed to those already reported, and
-    /// does not touch the GNSS antenna offset once armAntennaAdoptIfNeeded
-    /// has armed (see there).
+    /// never touches the GNSS antenna offset (see armAntennaAdoptIfNeeded).
     private func armExtrasAdoptIfNeeded(device: BLEDevice, cfg: RocketConfig) {
         // Keyed on the three report groups, not on unreportedGroups: that list
         // also names the camera (#1472), which an out computer predating
@@ -418,25 +428,35 @@ final class ActiveRocketSyncer: ObservableObject {
     /// The GNSS antenna offset is adopted only from the flight computer, by the
     /// camera's rule: with the rail off at connect the out computer offers only
     /// its copy of the last cmd 81, so adopt the flight computer's once its
-    /// report lands.  Only while unverified, only once, and only on a rocket
-    /// that reports the setting at all.
+    /// report lands.  Armed once per attach, by an adoption pass whose readback
+    /// carries the setting but not as the flight computer's; never re-armed.
     ///
-    /// It is written only into the profile it was armed on, still holding the
-    /// offset it held then.  A user who sets the offset after it armed (with
-    /// the rail off, the cmd 81 waits in the out computer) is not overwritten
-    /// by the flight computer's boot report, which still carries its old
-    /// value: that report is dropped and nothing is said.
+    /// The first flight computer report is written only into the profile the
+    /// one-shot was armed on, still holding the offset it held then, and only
+    /// if it differs; otherwise it is dropped and nothing is said.  Either way
+    /// the one-shot is spent.
     ///
-    /// Once armed, the antenna is this one-shot's for the rest of the attach:
-    /// while it waits, after it fires or drops a report, and after a profile
-    /// switch cancels it.  The one other late writer is the extras re-adopt
-    /// (armExtrasAdoptIfNeeded), whose adoptRocketConfig re-run can read a
-    /// readback that already holds the boot report (config_servo/guid/roll
-    /// copy the current readback, the "fc" offset with it); it keeps the
-    /// profile's offset and leaves "GNSS antenna offset" out of what it
-    /// reports.  That is all that is held back: the connect-time adoption,
-    /// which runs before this arms, still takes an "fc" offset, and the
-    /// extras re-adopt still takes every other group.
+    /// The user's act disarms it.  Any cmd 81 this attach (pushProfileToRocket,
+    /// the push on a profile switch, the settings screen's own send, all
+    /// through BLEDevice.antennaOffsetSent) cancels it, and one sent before it
+    /// armed keeps it from arming: with the rail off the cmd 81 waits in the
+    /// out computer, and the flight computer's boot report still carries its
+    /// old value as "fc".  The id and offset check cannot tell an untouched
+    /// profile from one the user sent unchanged, or changed and set back, so
+    /// it is kept only as a second guard.  A profile switch and a detach
+    /// cancel the one-shot too.
+    ///
+    /// The other writers of the antenna: the connect-time adoption, which runs
+    /// before this arms, takes an "fc" offset; the extras re-adopt
+    /// (armExtrasAdoptIfNeeded) never takes it, since its readback can already
+    /// hold the boot report (config_servo/guid/roll copy the current readback,
+    /// the "fc" offset with it).
+    ///
+    /// Known limit: across a disconnect and reconnect before the flight
+    /// computer applies a staged cmd 81, the new attach's connect-time
+    /// adoption can take the flight computer's old value.  The out computer
+    /// firmware is being changed to keep "antsrc":"oc" until a staged cmd 81
+    /// is confirmed, which resolves it.
     private func armAntennaAdoptIfNeeded(device: BLEDevice, cfg: RocketConfig) {
         guard cfg.antennaOffset != nil, !cfg.antennaOffsetFromFlightComputer,
               !antennaAdoptArmed, let armedOn = store?.activeProfile else { return }
@@ -451,6 +471,14 @@ final class ActiveRocketSyncer: ObservableObject {
             .sink { [weak self] in
                 self?.adoptAntennaOnly(from: $0, armedId: armedId, armedOffset: armedOffset)
             }
+    }
+
+    /// The user sent the antenna offset (cmd 81): the late antenna adopt is
+    /// cancelled, and the flag stays set so it is not armed again this attach
+    /// (see armAntennaAdoptIfNeeded).
+    private func disarmAntennaAdopt() {
+        antennaAdoptArmed = true
+        antennaAdopt = nil
     }
 
     private func adoptOrientationOnly() {
@@ -625,7 +653,7 @@ final class ActiveRocketSyncer: ObservableObject {
     ///
     /// `takeAntenna` false: the profile keeps its GNSS antenna offset and the
     /// group is not named, whatever the rocket reported — the extras
-    /// re-adopt's call once the late antenna adopt owns it.
+    /// re-adopt's call, every time (see armAntennaAdoptIfNeeded).
     static func adopt(_ p: inout RocketProfile, from cfg: RocketConfig,
                       takeAntenna: Bool = true) -> [String] {
         var changed: [String] = []

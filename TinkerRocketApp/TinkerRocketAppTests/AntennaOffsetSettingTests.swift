@@ -338,8 +338,7 @@ final class AntennaOffsetSettingTests: XCTestCase {
         XCTAssertEqual(p.antennaOffset, measured(312, -25, 4))
     }
 
-    /// takeAntenna false: the extras re-adopt's call once the late antenna
-    /// adopt owns it.
+    /// takeAntenna false: the extras re-adopt's call, every time.
     func testWithoutTheAntennaTheProfileKeepsItsOffsetAndItIsNotNamed() {
         var p = RocketProfile.makeDefault(name: "Goblin")
         p.antennaOffset = measured(50, 60, 70)
@@ -480,6 +479,61 @@ final class AntennaOffsetSettingTests: XCTestCase {
         XCTAssertFalse(adoptedGroups(syncer).contains(ActiveRocketSyncer.groupAntennaOffset))
     }
 
+    /// Send All with the rail off: the cmd 81 carries the profile's offset
+    /// unchanged, so the profile still holds what the one-shot armed with,
+    /// but the send is the user's act.  The flight computer's boot report
+    /// (its old value, as "fc") is not adopted over it.
+    func testRailOffAtConnect_SendAllDisarmsTheLateAdopt() {
+        let (syncer, store, rocket) = connect(
+            profile: measured(312, -25, 4),
+            antennaKeys: #""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"oc""#)
+
+        var sent: [(UInt8, Data)] = []
+        rocket.commandTap = { sent.append(($0, $1)) }
+        syncer.pushProfileToRocket()
+        settleMainQueue()
+        XCTAssertEqual(sent.filter { $0.0 == 81 }.map { $0.1 }, [measured(312, -25, 4).payload])
+
+        feed(rocket, Self.configFrame(#""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"fc""#))
+        settleMainQueue()
+
+        XCTAssertEqual(rocket.rocketConfig?.antennaOffset, measured(10, 20, 30))
+        XCTAssertEqual(rocket.rocketConfig?.antennaOffsetFromFlightComputer, true)
+        XCTAssertEqual(store.activeProfile?.antennaOffset, measured(312, -25, 4),
+                       "the pushed offset stands")
+        XCTAssertFalse(adoptedGroups(syncer).contains(ActiveRocketSyncer.groupAntennaOffset))
+    }
+
+    /// The user changes the offset and sets it back before the flight
+    /// computer reports, through the settings screen's own sends: the profile
+    /// holds the offset the one-shot armed with again, but both sends were
+    /// the user's.  The boot report's old value is not adopted over them.
+    func testRailOffAtConnect_AnOffsetChangedAndSetBackIsNotOverwrittenByTheLateReport() throws {
+        let (syncer, store, rocket) = connect(
+            profile: measured(312, -25, 4),
+            antennaKeys: #""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"oc""#)
+        let before = syncer.syncState
+
+        let id = try XCTUnwrap(store.activeId)
+        var sent: [UInt8] = []
+        rocket.commandTap = { command, _ in sent.append(command) }
+        for offset in [measured(50, 60, 70), measured(312, -25, 4)] {
+            store.update(id) { $0.antennaOffset = offset }
+            rocket.sendAntennaOffsetConfig(offset)
+            settleMainQueue()
+        }
+        XCTAssertEqual(sent, [81, 81])
+
+        feed(rocket, Self.configFrame(#""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"fc""#))
+        settleMainQueue()
+
+        XCTAssertEqual(rocket.rocketConfig?.antennaOffsetFromFlightComputer, true)
+        XCTAssertEqual(store.activeProfile?.antennaOffset, measured(312, -25, 4),
+                       "the user's offset stands")
+        XCTAssertFalse(adoptedGroups(syncer).contains(ActiveRocketSyncer.groupAntennaOffset))
+        XCTAssertEqual(syncer.syncState, before)
+    }
+
     /// The three #915 config-report frames the out computer relays after the
     /// config frame, each one a copy of the current readback plus its group.
     private func feedConfigReport(_ rocket: BLEDevice, servoBias2: Int) {
@@ -493,9 +547,8 @@ final class AntennaOffsetSettingTests: XCTestCase {
     /// (the out computer's normal boot state): the extras re-adopt is armed
     /// beside the antenna's.  When the rail comes up the flight computer's
     /// boot report (its old offset, as "fc") lands, then the report groups,
-    /// which carry it along; the extras re-adopt takes those groups but not
-    /// the antenna, which belongs to the late antenna adopt.  The user's
-    /// value stands.
+    /// which carry it along; the extras re-adopt takes those groups but never
+    /// the antenna.  The user's value stands.
     func testRailOffAtConnect_TheExtrasReAdoptDoesNotOverwriteAnOffsetTheUserSetSince() throws {
         let (syncer, store, rocket) = connect(
             profile: measured(312, -25, 4),
@@ -545,5 +598,31 @@ final class AntennaOffsetSettingTests: XCTestCase {
         XCTAssertEqual(Array(groups.prefix(said.count)), said, "what was said stands: \(groups)")
         XCTAssertTrue(groups.contains(ActiveRocketSyncer.groupServoTrim24), "\(groups)")
         XCTAssertEqual(Set(groups).count, groups.count, "\(groups)")
+    }
+
+    /// The extras re-adopt never takes the antenna, even when the late
+    /// antenna adopt never armed: here the connect-time readback lacks the
+    /// setting (a lost frame), so nothing armed it, and the readback the
+    /// report groups carry along holds the flight computer's offset.  The
+    /// profile keeps its own; the other groups are adopted.
+    func testTheExtrasReAdoptNeverTakesTheAntennaEvenWhenTheLateAdoptNeverArmed() throws {
+        let (syncer, store, rocket) = connect(profile: measured(312, -25, 4),
+                                              antennaKeys: #""irate":0"#)
+        let atConnect = try XCTUnwrap(rocket.rocketConfig)
+        XCTAssertNil(atConnect.antennaOffset, "no antenna at connect: the late antenna adopt is not armed")
+        XCTAssertTrue(atConnect.configReportGroupsMissing, "no report groups at connect")
+
+        feed(rocket, Self.configFrame(#""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"fc""#))
+        settleMainQueue()
+        feedConfigReport(rocket, servoBias2: 40)
+        settleMainQueue()
+
+        let cfg = try XCTUnwrap(rocket.rocketConfig)
+        XCTAssertFalse(cfg.configReportGroupsMissing)
+        XCTAssertEqual(cfg.antennaOffset, measured(10, 20, 30))
+        XCTAssertTrue(cfg.antennaOffsetFromFlightComputer)
+        XCTAssertEqual(store.activeProfile?.servoBias2, 40, "the extras re-adopt ran")
+        XCTAssertEqual(store.activeProfile?.antennaOffset, measured(312, -25, 4))
+        XCTAssertFalse(adoptedGroups(syncer).contains(ActiveRocketSyncer.groupAntennaOffset))
     }
 }

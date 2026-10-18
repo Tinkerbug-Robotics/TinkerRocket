@@ -122,6 +122,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// coalesce changes that come close together.
     let accelCalFrames = PassthroughSubject<AccelCalStatus, Never>()
 
+    /// Every GNSS antenna offset this link sends (cmd 81), as sent. Whoever
+    /// sent it (Send All, the push on a profile switch, the settings screen),
+    /// it is the user's act: the profile syncer's late antenna adopt stands
+    /// down on it (ActiveRocketSyncer.armAntennaAdoptIfNeeded).
+    let antennaOffsetSent = PassthroughSubject<AntennaOffset, Never>()
+
     /// Latest flash-space stats: rocketStorage on a direct rocket link (0xCC),
     /// bsStorage on a base-station link (0xCD). Each is shown by its own bar.
     @Published var rocketStorage: RocketStorageStats?
@@ -1177,9 +1183,11 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// Unknown goes out as known 0 with zeros. The FC refuses a component
     /// outside ±2000 mm, so such a value is never sent. The FC keeps it in its
     /// NVS and reports it as the readback's `antk`/`antx`/`anty`/`antz`.
+    /// Each send is published on `antennaOffsetSent`.
     func sendAntennaOffsetConfig(_ offset: AntennaOffset) {
         guard offset.isSendable else { return }
         sendRawCommand(81, payload: offset.payload)
+        antennaOffsetSent.send(offset)
         // Only over a readback that carries the setting: firmware without it
         // ignores the command, and the screen must keep saying so. It is what
         // was sent, not what the flight computer reported, so the screen says
