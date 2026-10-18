@@ -635,10 +635,12 @@ TEST(ReceiverProfile, TheMosaicFlightSafeguards)
     EXPECT_EQ(c.ekf.hdg_obs_open_hold_s, 0.2);
     EXPECT_EQ(c.ekf.hdg_obs_floor, 0.0);
     EXPECT_EQ(c.heading_obs_scope, RawGnssShadow::kObsEverywhere);
-    // the turning body: off in this step
-    EXPECT_EQ(c.rot_lever_axial_m, 0.0);
-    EXPECT_EQ(c.rot_lever_radial_m, 0.0);
-    EXPECT_EQ(c.rot_lever_min_rps, 0.0);
+    // the turning body: each Doppler allowed what an antenna up to 0.3 m along
+    // the nose and 0.03 m across it could move, from 2 rad/s across the nose,
+    // at any time (motor ejection can snatch before the call); no hold, no skip
+    EXPECT_EQ(c.rot_lever_axial_m, 0.30);
+    EXPECT_EQ(c.rot_lever_radial_m, 0.03);
+    EXPECT_EQ(c.rot_lever_min_rps, 2.0);
     EXPECT_FALSE(c.rot_after_apogee);
     EXPECT_EQ(c.att_hold_rate_rps, 0.0);
     EXPECT_EQ(c.att_hold_s, 0.0);

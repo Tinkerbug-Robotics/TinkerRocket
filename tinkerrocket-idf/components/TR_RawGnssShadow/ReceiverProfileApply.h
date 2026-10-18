@@ -171,10 +171,11 @@ inline void applyMosaicFlightSafeguards(RawGnssShadow::Config& c)
     c.ekf.hdg_obs_open_hold_s = 0.2;
     c.ekf.hdg_obs_floor = 0.0;
     c.heading_obs_scope = RawGnssShadow::kObsEverywhere;
-    // the turning body: off in this step
-    c.rot_lever_axial_m = 0.0;
-    c.rot_lever_radial_m = 0.0;
-    c.rot_lever_min_rps = 0.0;
+    // the turning body's Doppler allowance (bounds on the antenna's offset,
+    // not measured ones); its attitude hold and its epoch skip stay off
+    c.rot_lever_axial_m = 0.30;
+    c.rot_lever_radial_m = 0.03;
+    c.rot_lever_min_rps = 2.0;
     c.rot_after_apogee = false;
     c.att_hold_rate_rps = 0.0;
     c.att_hold_s = 0.0;

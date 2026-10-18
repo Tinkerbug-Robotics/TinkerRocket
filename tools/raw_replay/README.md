@@ -148,6 +148,14 @@ What `startRawShadow()` builds under `TR_RAW_NAV_MOSAIC` (build_units D1a; check
   applied to it first, then `applyReceiverProfile`;
 - the navigation filter's settings (`primary`, 100 steps a second, 2.5 ms slices, `external_build`);
 - the restore sigmas (100 m, 20 m/s, 15 deg) and the snapshot's accelerometer bias, `level_on_fused_epochs`;
+- the flight safeguards, by the firmware's own call (`gnss_raw::applyMosaicFlightSafeguards`,
+  `ReceiverProfileApply.h`; a `RAW_REPLAY_MOSAIC_SAFEGUARDS` build): the Doppler change check acting in flight
+  (`--dv-check 2 --dv-window-s 1 --dv-att-deg 10 --dv-epoch-k 4 --dv-latch-k 5`), GNSS's heading gain by the
+  horizontal specific force (`--hdg-obs-mode 1 --hdg-obs-fh 5 --hdg-obs-tau 1 --hdg-obs-scope 0`) and the turning
+  body's Doppler allowance (`--rot-lever-axial-m 0.3 --rot-lever-radial-m 0.03 --rot-lever-min-rate 2`). It runs
+  right after the profile, so each `--dv-*`, `--hdg-obs-*` and `--rot-*` flag still changes its own value for an
+  experiment. Today's design before them (and its `--unaided` twin) is
+  `--dv-check 0 --hdg-obs-mode 0 --rot-lever-axial-m 0 --rot-lever-radial-m 0 --rot-lever-min-rate 0`;
 - the heading at the firmware's defaults (`--fw-defaults`, which now also takes `--heading-mode` to the primary
   build's `TR_HEADING_FIT` 2 unless given): act, the whole attitude from launch (`RAW_HEADING_GATE` 1), the 10/30 deg
   prior, no hand-off, the 0.6 deg tilt floor;

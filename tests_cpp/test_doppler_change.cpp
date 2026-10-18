@@ -884,6 +884,8 @@ TEST(DopplerChange, TheMosaicFlightSafeguardsHoldNothingWithNoFault)
     // the coast pushes nothing sideways: GNSS's heading gain is closed
     EXPECT_EQ(off.hdg_share_end, 1.0);
     EXPECT_LT(fl.hdg_share_end, 0.05);
+    // and a body that never turns takes no rotation allowance
+    EXPECT_EQ(fl.st.rot_max_sigma_mps, 0.0f);
 }
 
 TEST(DopplerChange, TheMosaicFlightSafeguardsHoldOutAStaleReceiverAndLetItBack)

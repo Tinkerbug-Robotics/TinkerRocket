@@ -1210,6 +1210,20 @@ TEST(RawGnssShadowV9, TheTurningBodysAllowanceIsOnTheDopplersOfTheEpochsItTurned
     EXPECT_NEAR(flyTen(cm, fl).st.rot_max_sigma_mps, 0.7f, 0.02f);
 }
 
+TEST(RawGnssShadowV9, TheFlightSafeguardsAllowASnatchNotAWeathercockOrARoll)
+{
+    // The mosaic image's allowance (applyMosaicFlightSafeguards: 0.3 m along
+    // the nose, 0.03 m across, from 2 rad/s across the nose): a 3 rad/s turn
+    // about body y takes 0.3 x 3 + 0.03 x 3 m/s; a 1.5 rad/s one (a boost's
+    // weathercocking) and a 5 rad/s roll (nothing across the nose) take none
+    RawGnssShadow::Config c = mosaicCfg();
+    gnss_raw::applyMosaicFlightSafeguards(c);
+    EXPECT_NEAR(flyTen(c, turningCoast(3.0, 1, 0.0)).st.rot_max_sigma_mps, 0.99f, 0.03f);
+    EXPECT_EQ(flyTen(c, turningCoast(1.5, 1, 0.0)).st.rot_max_sigma_mps, 0.0f);
+    EXPECT_EQ(flyTen(c, turningCoast(5.0, 0, 0.0)).st.rot_max_sigma_mps, 0.0f);
+    EXPECT_EQ(flyTen(c, turningCoast(3.0, 1, 0.0)).st.att_held, 0u);
+}
+
 TEST(RawGnssShadowV9, TheHoldTakesTheEpochsThatTurnedAcrossTheNoseAndTheTailAfter)
 {
     // Held from 1.5 rad/s across the nose and for 0.25 s after: a 2 rad/s
