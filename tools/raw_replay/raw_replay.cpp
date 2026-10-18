@@ -930,7 +930,7 @@ void diagEpoch(RawGnssShadow& sh, const BuiltEpoch& b, int64_t t_us, uint8_t fla
         if (phase == RawGnssShadow::kJobFuse && k < sh.built_.n)
         {
             const RawMeas& mi = sh.built_.meas[k];
-            const double tau = f.p_.rr_lag_s > 0.0 ? f.p_.rr_lag_s : 0.0;
+            const double tau = f.rrLag();   // the epoch's (startJob set whether it is in pairs)
             const double ag = t - te;
             float dp_e[3], dv_e[3], dp_l[3], dv_l[3];
             f.historyChange(ag, dv_e, dp_e);
@@ -1059,8 +1059,10 @@ void guardedEpoch(RawGnssShadow& sh, const BuiltEpoch& b, int64_t t_us, uint8_t 
              a.dv_vert_hold > 0.0) && !block)
         {
             // the epoch's Dopplers against the filter, a common velocity and clock rate fitted to them: their
-            // spread about the fit
-            const double tau = f.p_.rr_lag_s > 0.0 ? f.p_.rr_lag_s : 0.0;
+            // spread about the fit (the Dopplers' instant as the epoch's job will take it, RawGnssEKF::rrLag)
+            const double lag =
+                f.p_.rr_lag_s + (b.rr_paired != 0 && f.p_.rr_pair_lag_s > 0.0 ? f.p_.rr_pair_lag_s : 0.0);
+            const double tau = lag > 0.0 ? lag : 0.0;
             const double ag = t - te;
             float dp_e[3], dv_e[3], dp_l[3], dv_l[3];
             f.historyChange(ag, dv_e, dp_e);
@@ -3082,12 +3084,17 @@ int main(int argc, char** argv)
                 {
                     uint64_t mask = 0;
                     const int usable = usableRates(ep);
-                    (void)mosaic::averageDopplerPairs(ep, rx_ms, false, *sim_prevp, fcfg.pair_cfg, sim_pair_st, &mask);
+                    const int np =
+                        mosaic::averageDopplerPairs(ep, rx_ms, false, *sim_prevp, fcfg.pair_cfg, sim_pair_st, &mask);
                     sim_prevp->valid = false;
                     rr::SimEpoch& xq = *sim_pairp;
                     xq = x0;
+                    xq.rr_paired = np > 0 ? 1 : 0;   // in pairs, or as it came (MosaicRawEpoch.h)
                     for (int i = 0; i < x0.n; ++i)
+                    {
                         xq.meas[i].rr = ep.obs[i].rate_mps;
+                        xq.meas[i].has_rr = ep.obs[i].has_rate;   // one left alone in an epoch in pairs: dropped
+                    }
                     if (a.sim_pair_exact && truth_nav.size() > 1 && mask != 0)
                     {
                         // the diagnostic: the mean of the receiver's velocity at the pair's two instants less its
@@ -4088,8 +4095,9 @@ int main(int argc, char** argv)
 #if RAW_REPLAY_DOPAVG
                 if (rx.rr_pair_avg || sim_grid)
                 {
-                    // the Dopplers in pairs: the driver's counts (the sim's where it has epochs), the rr_lag_s the
-                    // filter took them at, and each grid epoch left with a Doppler alone (flight time, usable, averaged)
+                    // the Dopplers in pairs: the driver's counts (the sim's where it has epochs), the filter's lag for
+                    // an epoch as it came and the more for one in pairs, and each grid epoch with a Doppler not averaged
+                    // (flight time, usable, averaged: as it came, or in pairs with the rest dropped)
                     const mosaic::MosaicDopplerPairStats& ps = in.xep.empty() ? feed.pairStats() : sim_pair_st;
                     std::string al;
                     char b[64];
@@ -4099,14 +4107,16 @@ int main(int argc, char** argv)
                                       pair_alone_at[i][1], pair_alone_at[i][2]);
                         al += b;
                     }
-                    std::fprintf(ej, "\"pairs\": {\"on\": %d, \"rr_lag_s\": %.4f, \"max_diff_mps\": %.2f, "
-                                     "\"sigma_scale\": %.4f, \"sim_off_grid\": %u, \"epochs\": %u, \"epochs_no_prev\": %u, "
-                                     "\"epochs_jump\": %u, \"dopplers\": %u, \"pairs\": %u, \"alone_epoch\": %u, "
-                                     "\"alone_mate\": %u, \"alone_cn0\": %u, \"alone_lock\": %u, \"alone_diff\": %u, "
-                                     "\"diff_max_mps\": %.3f, \"alone_at\": [%s]}, ",
-                                 rx.rr_pair_avg ? 1 : 0, cfg.ekf.rr_lag_s, fcfg.pair_cfg.max_diff_mps,
-                                 a.rr_pair_sigma > 0.0 ? a.rr_pair_sigma : 1.0, sim_off_grid, ps.epochs,
-                                 ps.epochs_no_prev, ps.epochs_jump, ps.dopplers, ps.pairs, ps.alone_epoch,
+                    std::fprintf(ej, "\"pairs\": {\"on\": %d, \"rr_lag_s\": %.4f, \"rr_pair_lag_s\": %.4f, "
+                                     "\"max_diff_mps\": %.2f, \"sigma_scale\": %.4f, \"sim_off_grid\": %u, \"epochs\": %u, "
+                                     "\"epochs_no_prev\": %u, \"epochs_jump\": %u, \"epochs_few\": %u, \"dopplers\": %u, "
+                                     "\"pairs\": %u, \"alone_epoch\": %u, \"dropped\": %u, \"alone_mate\": %u, "
+                                     "\"alone_cn0\": %u, \"alone_lock\": %u, \"alone_diff\": %u, \"diff_max_mps\": %.3f, "
+                                     "\"alone_at\": [%s]}, ",
+                                 rx.rr_pair_avg ? 1 : 0, cfg.ekf.rr_lag_s, cfg.ekf.rr_pair_lag_s,
+                                 fcfg.pair_cfg.max_diff_mps, a.rr_pair_sigma > 0.0 ? a.rr_pair_sigma : 1.0, sim_off_grid,
+                                 ps.epochs, ps.epochs_no_prev, ps.epochs_jump, ps.epochs_few, ps.dopplers, ps.pairs,
+                                 ps.alone_epoch, ps.alone_mate + ps.alone_cn0 + ps.alone_lock + ps.alone_diff,
                                  ps.alone_mate, ps.alone_cn0, ps.alone_lock, ps.alone_diff,
                                  static_cast<double>(ps.diff_max_mps), al.c_str());
                 }

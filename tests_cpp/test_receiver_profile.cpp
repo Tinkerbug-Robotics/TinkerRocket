@@ -101,6 +101,7 @@ void expectSameEkf(const RawGnssEKFParams& a, const RawGnssEKFParams& b)
     EXPECT_EQ(a.drift_step_mps, b.drift_step_mps);
     EXPECT_EQ(a.drift_step_spread_mps, b.drift_step_spread_mps);
     EXPECT_EQ(a.rr_lag_s, b.rr_lag_s);
+    EXPECT_EQ(a.rr_pair_lag_s, b.rr_pair_lag_s);
     EXPECT_EQ(a.att_gate_cos4, b.att_gate_cos4);
     EXPECT_EQ(a.att_gate_vertical, b.att_gate_vertical);
     EXPECT_EQ(a.att_gnss_off, b.att_gnss_off);
@@ -193,7 +194,7 @@ void expectSameNumbers(const GnssReceiverProfile& a, const GnssReceiverProfile& 
 // TheShadowSafeguardDefaultsAreTheBeetles) before its size goes in here: the
 // Beetle's filter is its defaults, and the M1 build applies the LC86G's
 // profile over them. The sizes are a 64-bit host's (macOS and Linux alike).
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssEKFParams) == 464,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssEKFParams) == 472,
               "RawGnssEKFParams changed: add the field to expectSameEkf, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(RawMeasBuilder::Config) == 312,
               "RawMeasBuilder::Config changed: add the field to expectSameBuilder, then update this size");
@@ -201,7 +202,7 @@ static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 32,
               "GnssSignalProfile changed: add the field to expectSameSignal, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 536,
               "GnssReceiverProfile changed: add the field to expectSameNumbers, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1680,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1688,
               "RawGnssShadow::Config changed: pin the field in TheShadowSafeguardDefaultsAreTheBeetles, then update "
               "this size");
 
@@ -249,6 +250,7 @@ TEST(ReceiverProfile, TheLc86gProfileIsWhatTheFilterFlewWith)
     RawGnssEKFParams e;
     gnss_raw::applyReceiverProfile(gnss_raw::lc86gProfile(), e);
     EXPECT_EQ(e.rr_lag_s, 0.0555);
+    EXPECT_EQ(e.rr_pair_lag_s, 0.0);
     EXPECT_EQ(e.clk_bias_psd, 0.009);
     EXPECT_EQ(e.clk_drift_psd, 100.0);
     EXPECT_EQ(e.isb_psd, 1.0e-4);
@@ -544,17 +546,21 @@ TEST(ReceiverProfile, TheDopplersInPairsMoveTheLagOnlyWhereSet)
     gnss_raw::RawGnssEKFParams e;
     applyReceiverProfile(m, e);
     EXPECT_EQ(e.rr_lag_s, 0.0);
-    // the mosaic's grid is two of its epochs: on, the pair's middle, 25 ms before the epoch
+    EXPECT_EQ(e.rr_pair_lag_s, 0.0);
+    // the mosaic's grid is two of its epochs: on, an epoch in pairs at the pairs' middle, 25 ms before the
+    // epoch; one as it came keeps the profile's own lag
     EXPECT_TRUE(gnss_raw::dopplerPairsFit(m));
     GnssReceiverProfile on = m;
     on.rr_pair_avg = true;
     applyReceiverProfile(on, e);
-    EXPECT_DOUBLE_EQ(e.rr_lag_s, 0.025);
+    EXPECT_EQ(e.rr_lag_s, 0.0);
+    EXPECT_DOUBLE_EQ(e.rr_pair_lag_s, 0.025);
     // on top of a receiver's own lag
     on.rr_lag_s = 0.004;
     applyReceiverProfile(on, e);
-    EXPECT_DOUBLE_EQ(e.rr_lag_s, 0.029);
-    // every epoch fused (20 Hz), or a 5 Hz grid: no epoch between to pair with, the lag untouched
+    EXPECT_EQ(e.rr_lag_s, 0.004);
+    EXPECT_DOUBLE_EQ(e.rr_pair_lag_s, 0.025);
+    // every epoch fused (20 Hz), or a 5 Hz grid: no epoch between to pair with, no pair lag
     for (double fuse : {0.05, 0.2, 0.0})
     {
         GnssReceiverProfile g = m;
@@ -563,6 +569,7 @@ TEST(ReceiverProfile, TheDopplersInPairsMoveTheLagOnlyWhereSet)
         EXPECT_FALSE(gnss_raw::dopplerPairsFit(g)) << fuse;
         applyReceiverProfile(g, e);
         EXPECT_EQ(e.rr_lag_s, 0.0) << fuse;
+        EXPECT_EQ(e.rr_pair_lag_s, 0.0) << fuse;
     }
     // the LC86G (one epoch a second, every one fused) never pairs
     GnssReceiverProfile lc = gnss_raw::lc86gProfile();
@@ -570,6 +577,7 @@ TEST(ReceiverProfile, TheDopplersInPairsMoveTheLagOnlyWhereSet)
     EXPECT_FALSE(gnss_raw::dopplerPairsFit(lc));
     applyReceiverProfile(lc, e);
     EXPECT_EQ(e.rr_lag_s, 0.0555);
+    EXPECT_EQ(e.rr_pair_lag_s, 0.0);
 }
 
 TEST(ReceiverProfile, ARefusalsLetInIsKeptInTime)

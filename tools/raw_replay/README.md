@@ -597,15 +597,19 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   unless the tree is older than exp/v9-dop-avg): `--rr-pair-avg 1` is the bench image's `TR_BENCH_RAW_DOP_AVG=1`.
   The feed reads each MeasEpoch off the fused grid for its Dopplers (`noteMeasEpochDopplers`) and averages each grid
   epoch's with them by the driver's rule (`averageDopplerPairs`: the epoch 50 ms before, read whole, no clock jump
-  between, valid and at the floor at both ends, the lock time not down, within `--rr-pair-max-diff`, 15 m/s), and
-  the profile adds 25 ms to `rr_lag_s`. It needs the 100 ms grid over the receiver's 50 ms (`--fuse-ms 100`). A sim's
+  between, valid and at the floor at both ends, the lock time not down, within `--rr-pair-max-diff`, 15 m/s). An
+  epoch with at least half its Dopplers in pairs is handed over in pairs (`TimedRawEpoch::rr_paired`): their means,
+  each one left alone dropped, and the filter takes its Dopplers the profile's 25 ms further back (`rr_pair_lag_s`);
+  any other epoch (none before it, a clock jump, fewer pairs) as it came, at its own instant. It needs the 100 ms
+  grid over the receiver's 50 ms (`--fuse-ms 100`). A sim's
   20 Hz epochs (`sim_events.py` at rate 20) are cut to the fused grid first, as the driver cuts the receiver's
   (`--sim-fuse-grid` does the cut alone: on Grid B it is byte-identical to the rate-10 events, whose draws are the
   same), and paired by the same rule (a sim has no lock time or clock jump). `--rr-pair-sigma X` scales each averaged
-  Doppler's sigma, offline only (no firmware path). The events JSON gains a `pairs` block: the counts, why each
-  Doppler left alone was, and each grid epoch with one (flight time, usable, averaged). Two offline diagnostics:
-  `--rr-lag-ms X` sets the filter's `rr_lag_s` after the profile (the pairs taken at the grid epoch's instant, or
-  today's taken 25 ms early), and `--sim-pair-exact` (a sim with `--truth-nav`) puts the truth's second-order term
+  Doppler's sigma, offline only (no firmware path). The events JSON gains a `pairs` block: the counts (the epochs as
+  they came and why, the Dopplers dropped and why), the two lags, and each grid epoch with a Doppler not averaged
+  (flight time, usable, averaged). Two offline diagnostics: `--rr-lag-ms X` sets the filter's `rr_lag_s` after the
+  profile (every epoch's own lag; an epoch in pairs adds `rr_pair_lag_s` to it), and `--sim-pair-exact` (a sim with
+  `--truth-nav`) puts the truth's second-order term
   back into each averaged Doppler, so the pair is the range rate at its middle exactly.
 - **`sim_compare.py BASE NAME=EXP ...`** sets experiment grids (each a `sim_grid.py --arms design --harness-args
   "..."` run into its own OUT) beside the base grid's design and unaided twin, flight by flight: the phase bars per

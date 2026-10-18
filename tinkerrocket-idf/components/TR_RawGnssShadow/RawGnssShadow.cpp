@@ -1032,6 +1032,13 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
         job_.phase = kJobBuild;
         job_.build_us = 0;
     }
+    // the Dopplers in pairs (the params' rr_pair_lag_s, the receiver
+    // profile's rr_pair_avg): whether this epoch's are pairs' means, taken at
+    // the pairs' middle by every consumer (RawGnssEKF::setRrPaired); an epoch
+    // handed over as it came takes its Dopplers at its own instant. Never
+    // called without a pair lag: every other receiver's epochs as before
+    if (ekf_.params().rr_pair_lag_s > 0.0)
+        ekf_.setRrPaired(built_.rr_paired != 0);
     // the pseudoranges once in each pr_period_s (RawGnssShadow.h): on this
     // epoch if none in its period was fused yet (closeJob); the boost
     // screen's scratch copy takes the switch along
@@ -1271,7 +1278,7 @@ void RawGnssShadow::dvReset()
 void RawGnssShadow::leverRoll(double age, const double w[3], const double C[3][3], const DopplerChangeImu& imu)
 {
     float p2[3], v2[3], n2[3];
-    ekf_.leverAt(age + cfg_.ekf.rr_lag_s, p2, v2, n2);
+    ekf_.leverAt(age + (cfg_.ekf.rr_lag_s + ekf_.rrPairLag()), p2, v2, n2);
     double a1[3], a2[3], nm[3];
     for (int i = 0; i < 3; ++i)
     {
@@ -1636,7 +1643,7 @@ void RawGnssShadow::jobDvCheck(double age)
     if (lev_ref_ok_)
     {
         float lp[3], lv[3];
-        ekf_.leverAt(age + cfg_.ekf.rr_lag_s, lp, lv, lev_ref_n_);
+        ekf_.leverAt(age + (cfg_.ekf.rr_lag_s + ekf_.rrPairLag()), lp, lv, lev_ref_n_);
         for (int i = 0; i < 3; ++i)
             lev_ref_v_[i] = imu.v_lev[i];
     }
@@ -2080,7 +2087,7 @@ bool RawGnssShadow::jobHeading(double age)
         st_.heading_vel_fails++;
         return false;
     }
-    const double td = job_.te - cfg_.ekf.rr_lag_s;
+    const double td = job_.te - (cfg_.ekf.rr_lag_s + ekf_.rrPairLag());   // the Dopplers' instant
     if (!fit_.gnss(td, v_ned, var_h))
         return false;                     // too slow sideways yet, or past the fit's history
     fit_last_te_ = job_.te;

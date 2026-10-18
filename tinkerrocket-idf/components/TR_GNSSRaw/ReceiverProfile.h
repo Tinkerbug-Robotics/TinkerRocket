@@ -111,9 +111,11 @@ struct GnssReceiverProfile
     // The receiver's epochs between the fused ones: each fused epoch's Doppler
     // averaged with the one raw_epoch_period_s before it, where the two are a
     // pair (the mosaic's MosaicRawEpoch.h says when), and the filter taking the
-    // pair's mean at their middle (rr_lag_s plus half raw_epoch_period_s).
-    // Only where the fused grid is exactly two of the receiver's epochs
-    // (dopplerPairsFit); the sigmas stay the profile's. Off: every receiver.
+    // pairs' means at their middle (the filter's rr_pair_lag_s: half
+    // raw_epoch_period_s more than rr_lag_s, on an epoch handed over in pairs;
+    // one handed over as it came keeps rr_lag_s). Only where the fused grid is
+    // exactly two of the receiver's epochs (dopplerPairsFit); the sigmas stay
+    // the profile's. Off: every receiver.
     bool   rr_pair_avg = false;
     double rr_pair_max_diff_mps = 15.0;   // the pair at most this far apart (300 m/s^2 over 50 ms)
 

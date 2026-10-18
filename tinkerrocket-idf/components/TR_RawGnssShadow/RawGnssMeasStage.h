@@ -69,6 +69,7 @@ struct BuiltEpoch
     double   r_approx[3] = {};      // the receiver it was built at, ECEF (0: none)
     uint8_t  use_broadcast = 0;     // the ionosphere taken out with the broadcast parameters
     uint8_t  iono_changed = 0;      //   chosen anew for it: the pad survey starts over
+    uint8_t  rr_paired = 0;         // its Dopplers pairs' means (TimedRawEpoch's; in the padding before build_us)
     uint32_t build_us = 0;          // its build (with a clock)
 };
 

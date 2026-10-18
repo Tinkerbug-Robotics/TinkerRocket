@@ -168,7 +168,7 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         // its Dopplers, and each grid epoch's averaged with them by the rule
         // there before it is handed over. Call once, after
         // enableRawOutputs(), from any task; false without the memory for
-        // its state (~1.2 kB, internal RAM), and then nothing changes. Never
+        // its state (~1.3 kB, internal RAM), and then nothing changes. Never
         // called, every epoch is handed over exactly as before.
         bool setRawDopplerPairing(const mosaic::MosaicDopplerPairConfig& c);
         bool takeRawEpoch(gnss_raw::TimedRawEpoch& out);
@@ -215,21 +215,28 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
             // over timed once the line has the crystal's drift (notePpsTag);
             // the bar is kPpsTagBarUs
             mosaic::MosaicTimeTag::Stats tag;
-            // the Dopplers in pairs (setRawDopplerPairing), once on: the
-            // pairs and why each Doppler left alone was, and what the poll
-            // task spent on them -- each off-grid epoch's read, and each grid
-            // epoch's adapting (rawEpochFromMeasEpoch) and averaging, us
-            bool     pair_on = false;
-            mosaic::MosaicDopplerPairStats pair;
-            uint32_t pair_reads = 0;
-            uint32_t pair_read_us_max = 0;
-            uint64_t pair_read_us_sum = 0;
-            uint32_t pair_adapts = 0;
-            uint32_t pair_adapt_us_max = 0;
-            uint64_t pair_adapt_us_sum = 0;
-            uint32_t pair_avg_us_max = 0;
         };
         void rawStats(RawStats& out) const;
+        // The Dopplers in pairs (setRawDopplerPairing), once on: the epochs
+        // in pairs and as they came, each Doppler averaged, left or dropped
+        // (MosaicDopplerPairStats), and what the poll task spent on them --
+        // each off-grid epoch's read, and each grid epoch's adapting
+        // (rawEpochFromMeasEpoch) and averaging, us. Kept with the pairs'
+        // state, apart from RawStats, which tasks copy onto their stacks.
+        // False, out zeroed, with the pairs off. As rawStats: a counter may be
+        // one behind another.
+        struct RawPairStats
+        {
+            mosaic::MosaicDopplerPairStats pair;
+            uint32_t reads = 0;
+            uint32_t read_us_max = 0;
+            uint64_t read_us_sum = 0;
+            uint32_t adapts = 0;
+            uint32_t adapt_us_max = 0;
+            uint64_t adapt_us_sum = 0;
+            uint32_t avg_us_max = 0;
+        };
+        bool rawPairStats(RawPairStats& out) const;
         static constexpr int32_t kPpsTagBarUs = 200;   // a right tag leaves ~0.03 ms rms
         // An edge this far off the line, or a whole second's tag this far
         // off its edge, holds the tag back (MosaicTimeTag.h), and the line
@@ -388,11 +395,13 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
             uint16_t      iono_day = 0;
             RawStats      st;
             // the Dopplers in pairs: made by setRawDopplerPairing, null (off)
-            // until then; the poll task alone reads and writes what it points to
+            // until then; the poll task alone writes what it points to (and
+            // reads all but st, which rawPairStats copies for any task)
             struct Pairing
             {
                 mosaic::MosaicDopplerPairConfig cfg;
                 mosaic::MosaicDopplerSet prev;   // the last off-grid epoch's Dopplers
+                RawPairStats st;
             };
             std::atomic<Pairing*> pairing{nullptr};
         };

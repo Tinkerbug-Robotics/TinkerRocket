@@ -913,7 +913,6 @@ bool TR_GNSSReceiverMosaicSerial::setRawDopplerPairing(const mosaic::MosaicDoppl
     }
     RawState::Pairing* p = new (mem) RawState::Pairing();
     p->cfg = c;
-    raw_->st.pair_on = true;
     raw_->pairing.store(p, std::memory_order_release);
     ESP_LOGI(TAG, "mosaic raw: Dopplers in pairs -- each grid epoch's with the epoch %lu ms before it, at most "
                   "%.1f m/s apart, C/N0 floors %.1f/%.1f/%.1f dB-Hz (GPS/GAL/BDS), %u B of state",
@@ -968,6 +967,13 @@ void TR_GNSSReceiverMosaicSerial::rawStats(RawStats& out) const
     out = (raw_ != nullptr) ? raw_->st : RawStats{};
 }
 
+bool TR_GNSSReceiverMosaicSerial::rawPairStats(RawPairStats& out) const
+{
+    const RawState::Pairing* p = raw_ != nullptr ? raw_->pairing.load(std::memory_order_acquire) : nullptr;
+    out = p != nullptr ? p->st : RawPairStats{};
+    return p != nullptr;
+}
+
 void TR_GNSSReceiverMosaicSerial::rawMeasEpoch(const uint8_t* block, size_t len, uint32_t tow_ms, int64_t end_us)
 {
     RawState& r = *raw_;
@@ -987,9 +993,10 @@ void TR_GNSSReceiverMosaicSerial::rawMeasEpoch(const uint8_t* block, size_t len,
             const int64_t t0 = nowUs();
             (void)mosaic::noteMeasEpochDopplers(block, len, r.jump, info, pairing->prev, end_us);
             const uint32_t us = static_cast<uint32_t>(nowUs() - t0);
-            r.st.pair_reads++;
-            r.st.pair_read_us_sum += us;
-            if (us > r.st.pair_read_us_max) r.st.pair_read_us_max = us;
+            RawPairStats& ps = pairing->st;
+            ps.reads++;
+            ps.read_us_sum += us;
+            if (us > ps.read_us_max) ps.read_us_max = us;
         }
         r.st.decimated++;
         r.st.clock_jumps = r.jump.jumps;
@@ -1010,18 +1017,23 @@ void TR_GNSSReceiverMosaicSerial::rawMeasEpoch(const uint8_t* block, size_t len,
     {
         const int64_t t_avg = nowUs();
         const uint32_t us = static_cast<uint32_t>(t_avg - t_adapt);
-        r.st.pair_adapts++;
-        r.st.pair_adapt_us_sum += us;
-        if (us > r.st.pair_adapt_us_max) r.st.pair_adapt_us_max = us;
+        RawPairStats& ps = pairing->st;
+        ps.adapts++;
+        ps.adapt_us_sum += us;
+        if (us > ps.adapt_us_max) ps.adapt_us_max = us;
         // each Doppler with the epoch before's, where the two are a pair
-        // (MosaicRawEpoch.h): the epoch is handed over with the means
+        // (MosaicRawEpoch.h): the epoch is handed over in pairs, with the
+        // means and none alone, or as it came, and marked for the filter,
+        // which takes an epoch in pairs at the pairs' middle
+        e.rr_paired = 0;
         if (cells && info.status == mosaic::SbfStatus::OK)
         {
             const int64_t rx = static_cast<int64_t>(info.wnc) * 604800000LL + info.tow_ms;
-            (void)mosaic::averageDopplerPairs(e.epoch, rx, info.jumped || info.rebased, pairing->prev,
-                                              pairing->cfg, r.st.pair);
+            const int n = mosaic::averageDopplerPairs(e.epoch, rx, info.jumped || info.rebased, pairing->prev,
+                                                      pairing->cfg, ps.pair);
+            e.rr_paired = n > 0 ? 1 : 0;
             const uint32_t avg_us = static_cast<uint32_t>(nowUs() - t_avg);
-            if (avg_us > r.st.pair_avg_us_max) r.st.pair_avg_us_max = avg_us;
+            if (avg_us > ps.avg_us_max) ps.avg_us_max = avg_us;
         }
         pairing->prev.valid = false;   // one grid epoch's mate only
     }

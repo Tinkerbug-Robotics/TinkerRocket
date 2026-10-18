@@ -3,13 +3,15 @@
 // off-grid epoch read for its Dopplers alone gives the very cells the full
 // adapter would (the same picks, duplicates, units, C/N0 and lock time) and
 // follows the clock jumps as noteMeasEpochClock does; a grid epoch's Doppler
-// becomes the mean of the pair only when the epoch before is exactly 50 ms
-// earlier and read whole, no clock jump came between, the satellite's
-// Doppler is valid and above the floor at both ends, its lock did not go
-// down, and the two are within the bound -- each refusal counted once, by the
-// first rule it failed, and its Doppler left exactly as the receiver gave it;
-// and the harness's feed (tools/raw_replay/mosaic_feed.h) pairs as the
-// driver does, and with the pairs off hands over what it always did.
+// pairs only when the epoch before is exactly 50 ms earlier and read whole,
+// no clock jump came between, the satellite's Doppler is valid and above the
+// floor at both ends, its lock did not go down, and the two are within the
+// bound; an epoch with at least half its Dopplers in pairs takes their means
+// and drops every one left alone -- each counted once, by the first rule it
+// failed -- and one with fewer, or none, is left exactly as the receiver gave
+// it; and the harness's feed (tools/raw_replay/mosaic_feed.h) pairs and marks
+// the epochs as the driver does, and with the pairs off hands over what it
+// always did.
 // Synthetic blocks only (sbf_meas_build.h).
 #include <gtest/gtest.h>
 
@@ -224,10 +226,18 @@ TEST(MosaicDopplerPair, TheOffGridReadFollowsTheClockAsNoteMeasEpochClock)
     expectSameJumps(c, b);
 }
 
-TEST(MosaicDopplerPair, APairIsTheMeanAndEveryOtherDopplerIsLeftAsItCame)
+// The epoch before (T - 50 ms) and the grid epoch (T): one satellite for each
+// rule, and with more_pairs five more that pair, so the pairs are the most
+namespace {
+struct RuleEpochs
 {
-    // the epoch before (T - 50 ms) and the grid epoch (T): one satellite for each rule
-    const double h = 50.0;   // Hz between the two: 9.5 m/s
+    MosaicDopplerSet prev;
+    RawEpoch ep;
+};
+constexpr double kRuleHz = 50.0;   // Hz between G10's two: 9.5 m/s
+
+RuleEpochs ruleEpochs(bool more_pairs)
+{
     std::vector<MeasT1> before = {
         gps(3, -1500.0),                        // a pair
         gps(5, -900.0).dopplerHz(-900.0),       // its Doppler lost before: alone (mate)
@@ -235,7 +245,7 @@ TEST(MosaicDopplerPair, APairIsTheMeanAndEveryOtherDopplerIsLeftAsItCame)
         gps(7, 250.0, 128, 30),                 // lock 30 s before, 0 now: a relock, alone (lock)
         gps(8, 100.0),                          // 85 Hz apart: 16 m/s, past the bound, alone (diff)
         gps(9, 300.0),                          // under the floor now: not a usable Doppler at all
-        gps(10, -700.0 - h),                    // a pair 9.5 m/s apart: within the bound
+        gps(10, -700.0 - kRuleHz),              // a pair 9.5 m/s apart: within the bound
         gal(11, 2000.0),                        // a pair, Galileo
     };
     before[1].doppler = kDopDnu;
@@ -250,56 +260,124 @@ TEST(MosaicDopplerPair, APairIsTheMeanAndEveryOtherDopplerIsLeftAsItCame)
         gps(10, -700.0),
         gal(11, 2000.5),
     };
+    if (more_pairs)
+        for (uint8_t prn : {12, 13, 14, 15, 16})
+        {
+            before.push_back(gps(prn, 100.0 * prn));
+            grid.push_back(gps(prn, 100.0 * prn + 2.0));
+        }
     const std::vector<uint8_t> b0 = epoch(kTow0 - 50, before);
     const std::vector<uint8_t> b1 = epoch(kTow0, grid);
+    RuleEpochs r;
     MosaicJumpState js;
     MosaicEpochInfo info;
-    MosaicDopplerSet prev;
-    ASSERT_TRUE(noteMeasEpochDopplers(b0.data(), b0.size(), js, info, prev));
-    RawEpoch ep;
-    ASSERT_TRUE(rawEpochFromMeasEpoch(b1.data(), b1.size(), ep, js, info));
-    ASSERT_FALSE(info.jumped || info.rebased);
+    EXPECT_TRUE(noteMeasEpochDopplers(b0.data(), b0.size(), js, info, r.prev));
+    EXPECT_TRUE(rawEpochFromMeasEpoch(b1.data(), b1.size(), r.ep, js, info));
+    EXPECT_FALSE(info.jumped || info.rebased);
+    return r;
+}
+}  // namespace
+
+TEST(MosaicDopplerPair, AnEpochInPairsTakesTheMeansAndDropsEveryDopplerLeftAlone)
+{
+    RuleEpochs r = ruleEpochs(true);
+    RawEpoch& ep = r.ep;
     const RawEpoch own = ep;
 
     MosaicDopplerPairStats st;
     uint64_t mask = 0;
-    const int n = averageDopplerPairs(ep, rxMs(kTow0), false, prev, pairConfig(), st, &mask);
-    EXPECT_EQ(n, 3);
+    const int n = averageDopplerPairs(ep, rxMs(kTow0), false, r.prev, pairConfig(), st, &mask);
+    EXPECT_EQ(n, 8);              // 8 of the 13 usable: at least half, so the epoch is in pairs
     EXPECT_EQ(st.epochs, 1u);
-    EXPECT_EQ(st.dopplers, 8u);   // all but G09
-    EXPECT_EQ(st.pairs, 3u);
+    EXPECT_EQ(st.epochs_few, 0u);
+    EXPECT_EQ(st.dopplers, 13u);  // all but G09
+    EXPECT_EQ(st.pairs, 8u);
     EXPECT_EQ(st.alone_mate, 2u);
     EXPECT_EQ(st.alone_cn0, 1u);
     EXPECT_EQ(st.alone_lock, 1u);
     EXPECT_EQ(st.alone_diff, 1u);
     EXPECT_EQ(st.alone_epoch, 0u);
     EXPECT_EQ(accounted(st), st.dopplers);
-    EXPECT_NEAR(st.diff_max_mps, kLamL1 * h, 1e-4);
+    EXPECT_NEAR(st.diff_max_mps, kLamL1 * kRuleHz, 1e-4);
     for (int i = 0; i < ep.n; ++i)
     {
         SCOPED_TRACE(testing::Message() << "prn " << int(ep.obs[i].prn) << " sys " << int(ep.obs[i].sys));
         const bool paired = (mask >> i) & 1u;
-        const bool want = (ep.obs[i].sys == GNSS_SYS_GPS && (ep.obs[i].prn == 3 || ep.obs[i].prn == 10)) ||
+        const bool want = (ep.obs[i].sys == GNSS_SYS_GPS && (ep.obs[i].prn == 3 || ep.obs[i].prn >= 10)) ||
                           ep.obs[i].sys == GNSS_SYS_GAL;
         EXPECT_EQ(paired, want);
-        if (!paired)
-        {
-            EXPECT_EQ(ep.obs[i].rate_mps, own.obs[i].rate_mps);   // exactly the receiver's
-            continue;
-        }
-        const MosaicDopplerCell* m = nullptr;
-        for (int j = 0; j < prev.n; ++j)
-            if (prev.c[j].sys == ep.obs[i].sys && prev.c[j].prn == ep.obs[i].prn) m = &prev.c[j];
-        ASSERT_NE(m, nullptr);
-        EXPECT_EQ(ep.obs[i].rate_mps, 0.5 * (own.obs[i].rate_mps + m->rate_mps));
         // everything else the cell carries is the grid epoch's own
         EXPECT_EQ(ep.obs[i].cn0_dbhz, own.obs[i].cn0_dbhz);
         EXPECT_EQ(ep.obs[i].lock_ms, own.obs[i].lock_ms);
+        EXPECT_EQ(ep.obs[i].has_pr, own.obs[i].has_pr);
         EXPECT_EQ(ep.obs[i].pr_m, own.obs[i].pr_m);
+        EXPECT_EQ(ep.obs[i].has_phase, own.obs[i].has_phase);
         EXPECT_EQ(ep.obs[i].phase_m, own.obs[i].phase_m);
+        if (!paired)
+        {
+            // G09 (under the floor here: the builder's to leave out) as it came; every other one left alone
+            // dropped -- its 25 ms would be the epoch's lag in error -- its value untouched
+            EXPECT_EQ(ep.obs[i].rate_mps, own.obs[i].rate_mps);
+            EXPECT_EQ(ep.obs[i].has_rate, ep.obs[i].prn == 9 && own.obs[i].has_rate);
+            continue;
+        }
+        EXPECT_TRUE(ep.obs[i].has_rate);
+        const MosaicDopplerCell* m = nullptr;
+        for (int j = 0; j < r.prev.n; ++j)
+            if (r.prev.c[j].sys == ep.obs[i].sys && r.prev.c[j].prn == ep.obs[i].prn) m = &r.prev.c[j];
+        ASSERT_NE(m, nullptr);
+        EXPECT_EQ(ep.obs[i].rate_mps, 0.5 * (own.obs[i].rate_mps + m->rate_mps));
     }
     // G03: the mean of -1500 and -1501 Hz, as a range rate
     EXPECT_NEAR(cell(ep, GNSS_SYS_GPS, 3)->rate_mps, -kLamL1 * -1500.5, 1e-9);
+}
+
+TEST(MosaicDopplerPair, AnEpochWithFewPairsIsHandedOverAsItCame)
+{
+    // 3 of its 8 usable Dopplers pair: fewer than half, so none is averaged or dropped -- every one at the
+    // epoch's own instant, as with the pairs off
+    RuleEpochs r = ruleEpochs(false);
+    RawEpoch& ep = r.ep;
+    const RawEpoch own = ep;
+    MosaicDopplerPairStats st;
+    uint64_t mask = 0;
+    EXPECT_EQ(averageDopplerPairs(ep, rxMs(kTow0), false, r.prev, pairConfig(), st, &mask), 0);
+    EXPECT_EQ(mask, 0u);
+    EXPECT_EQ(st.epochs, 1u);
+    EXPECT_EQ(st.epochs_few, 1u);
+    EXPECT_EQ(st.dopplers, 8u);
+    EXPECT_EQ(st.alone_epoch, 8u);
+    EXPECT_EQ(st.pairs, 0u);
+    EXPECT_EQ(st.alone_mate + st.alone_cn0 + st.alone_lock + st.alone_diff, 0u);
+    EXPECT_EQ(accounted(st), st.dopplers);
+    for (int i = 0; i < ep.n; ++i)
+    {
+        EXPECT_EQ(ep.obs[i].rate_mps, own.obs[i].rate_mps);
+        EXPECT_EQ(ep.obs[i].has_rate, own.obs[i].has_rate);
+    }
+
+    // exactly half is enough: two usable, one pair -- the other dropped
+    RawEpoch two;
+    two.n = 2;
+    for (int i = 0; i < 2; ++i)
+    {
+        two.obs[i].sys = GNSS_SYS_GAL;
+        two.obs[i].prn = static_cast<uint8_t>(4 + i);
+        two.obs[i].has_rate = true;
+        two.obs[i].cn0_dbhz = 40.0f;
+        two.obs[i].rate_mps = 100.0;
+        two.obs[i].lock_ms = 5000;
+    }
+    RawEpoch before = two;
+    before.n = 1;   // GAL05 not in the epoch before
+    MosaicDopplerSet prev;
+    dopplerSetFromRawEpoch(before, rxMs(kTow0 - 50), prev);
+    MosaicDopplerPairStats sh;
+    EXPECT_EQ(averageDopplerPairs(two, rxMs(kTow0), false, prev, pairConfig(), sh), 1);
+    EXPECT_TRUE(two.obs[0].has_rate);
+    EXPECT_FALSE(two.obs[1].has_rate);
+    EXPECT_EQ(sh.alone_mate, 1u);
+    EXPECT_EQ(sh.epochs_few, 0u);
 }
 
 TEST(MosaicDopplerPair, NoPairWithoutTheEpochJustBeforeOrAcrossAClockJump)
@@ -319,7 +397,10 @@ TEST(MosaicDopplerPair, NoPairWithoutTheEpochJustBeforeOrAcrossAClockJump)
         const RawEpoch own = ep;
         const int n = averageDopplerPairs(ep, rxMs(kTow0), cut, prev, c, st);
         for (int i = 0; i < ep.n; ++i)
+        {
             EXPECT_EQ(ep.obs[i].rate_mps, own.obs[i].rate_mps);
+            EXPECT_EQ(ep.obs[i].has_rate, own.obs[i].has_rate);
+        }
         return n;
     };
     MosaicDopplerPairStats st;
@@ -350,32 +431,42 @@ TEST(MosaicDopplerPair, NoPairWithoutTheEpochJustBeforeOrAcrossAClockJump)
 
 TEST(MosaicDopplerPair, TheBoundIsInclusiveAndConfigurable)
 {
-    // 15 m/s apart exactly pairs; just past it does not; a tighter bound refuses it
+    // 15 m/s apart exactly pairs; just past it does not; a tighter bound refuses it. GAL05 beside it always
+    // pairs, so the epoch is in pairs and GAL04 refused is dropped
     RawEpoch ep;
-    ep.n = 1;
-    ep.obs[0].sys = GNSS_SYS_GAL;
-    ep.obs[0].prn = 4;
-    ep.obs[0].has_rate = true;
-    ep.obs[0].cn0_dbhz = 40.0f;
+    ep.n = 2;
+    for (int i = 0; i < 2; ++i)
+    {
+        ep.obs[i].sys = GNSS_SYS_GAL;
+        ep.obs[i].prn = static_cast<uint8_t>(4 + i);
+        ep.obs[i].has_rate = true;
+        ep.obs[i].cn0_dbhz = 40.0f;
+        ep.obs[i].lock_ms = 5000;
+    }
     ep.obs[0].rate_mps = 115.0;
-    ep.obs[0].lock_ms = 5000;
+    ep.obs[1].rate_mps = -40.0;
     RawEpoch before = ep;
     before.obs[0].rate_mps = 100.0;
+    before.obs[1].rate_mps = -41.0;
     MosaicDopplerSet prev;
     dopplerSetFromRawEpoch(before, rxMs(kTow0 - 50), prev);
     MosaicDopplerPairStats st;
     RawEpoch e1 = ep;
-    EXPECT_EQ(averageDopplerPairs(e1, rxMs(kTow0), false, prev, pairConfig(), st), 1);
+    EXPECT_EQ(averageDopplerPairs(e1, rxMs(kTow0), false, prev, pairConfig(), st), 2);
     EXPECT_EQ(e1.obs[0].rate_mps, 107.5);
+    EXPECT_EQ(e1.obs[1].rate_mps, -40.5);
     RawEpoch e2 = ep;
     e2.obs[0].rate_mps = 115.001;
-    EXPECT_EQ(averageDopplerPairs(e2, rxMs(kTow0), false, prev, pairConfig(), st), 0);
+    EXPECT_EQ(averageDopplerPairs(e2, rxMs(kTow0), false, prev, pairConfig(), st), 1);
+    EXPECT_FALSE(e2.obs[0].has_rate);
     EXPECT_EQ(e2.obs[0].rate_mps, 115.001);
     MosaicDopplerPairConfig tight = pairConfig();
     tight.max_diff_mps = 5.0;
     RawEpoch e3 = ep;
-    EXPECT_EQ(averageDopplerPairs(e3, rxMs(kTow0), false, prev, tight, st), 0);
+    EXPECT_EQ(averageDopplerPairs(e3, rxMs(kTow0), false, prev, tight, st), 1);
+    EXPECT_FALSE(e3.obs[0].has_rate);
     EXPECT_EQ(st.alone_diff, 2u);
+    EXPECT_EQ(accounted(st), st.dopplers);
     // the floor per system: Galileo's raised past this C/N0, none paired; the grid's own under it, none counted
     MosaicDopplerPairConfig gal_floor = pairConfig();
     gal_floor.cn0_min[GNSS_SYS_GAL] = 45.0f;
@@ -385,6 +476,7 @@ TEST(MosaicDopplerPair, TheBoundIsInclusiveAndConfigurable)
     EXPECT_EQ(sf.dopplers, 0u);
     EXPECT_EQ(sf.epochs, 0u);
     EXPECT_EQ(e4.obs[0].rate_mps, 115.0);
+    EXPECT_TRUE(e4.obs[0].has_rate);
 }
 
 TEST(MosaicDopplerPair, TheHarnessFeedPairsAsTheDriver)
@@ -401,6 +493,7 @@ TEST(MosaicDopplerPair, TheHarnessFeedPairsAsTheDriver)
     ASSERT_EQ(off.onBlock(b1.data(), b1.size(), arrival(kTow0), te_off), rr::MosaicFeed::Kind::EPOCH);
     EXPECT_EQ(off.lastPaired(), 0u);
     EXPECT_EQ(off.pairStats().epochs, 0u);
+    EXPECT_EQ(te_off.rr_paired, 0);
 
     rr::MosaicFeed::Config c;
     c.pair = true;
@@ -411,6 +504,7 @@ TEST(MosaicDopplerPair, TheHarnessFeedPairsAsTheDriver)
     ASSERT_EQ(on.onBlock(b1.data(), b1.size(), arrival(kTow0), te_on), rr::MosaicFeed::Kind::EPOCH);
     EXPECT_EQ(on.lastPaired(), 3u);
     EXPECT_EQ(on.pairStats().pairs, 2u);
+    EXPECT_EQ(te_on.rr_paired, 1);   // the filter takes it at the pairs' middle
     EXPECT_EQ(on.counts().off_grid, off.counts().off_grid);
     ASSERT_EQ(te_on.epoch.n, te_off.epoch.n);
     for (int i = 0; i < te_on.epoch.n; ++i)
@@ -425,5 +519,6 @@ TEST(MosaicDopplerPair, TheHarnessFeedPairsAsTheDriver)
     ASSERT_EQ(on.onBlock(b3.data(), b3.size(), arrival(kTow0 + 100), te_on), rr::MosaicFeed::Kind::EPOCH);
     EXPECT_EQ(on.lastPaired(), 0u);
     EXPECT_EQ(on.pairStats().epochs_no_prev, 1u);
+    EXPECT_EQ(te_on.rr_paired, 0);   // as it came: at its own instant
     EXPECT_NEAR(cell(te_on.epoch, GNSS_SYS_GPS, 3)->rate_mps, -kLamL1 * -1504.0, 1e-9);
 }

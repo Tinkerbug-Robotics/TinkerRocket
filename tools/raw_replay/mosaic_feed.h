@@ -10,7 +10,8 @@
 //     RawEpoch (rawEpochFromMeasEpoch), an empty one not handed over. With the
 //     Dopplers in pairs (Config::pair, the profile's rr_pair_avg), each one off
 //     the grid read for its Dopplers (noteMeasEpochDopplers) and each grid
-//     epoch's averaged with them (averageDopplerPairs), as the driver does. Its GPS
+//     epoch's averaged with them (averageDopplerPairs) and marked in pairs or
+//     not (TimedRawEpoch::rr_paired), as the driver does. Its GPS
 //     time is its receiver time less the receiver's clock bias: the last
 //     PVTGeodetic that anchors the jump count (pvtAnchorsJumps), carried by
 //     its drift and the jumps since (dtrMs), while it is no more than two
@@ -372,11 +373,13 @@ private:
 #if RAW_REPLAY_DOPAVG
             if (cfg_.pair)
             {
-                // as the driver's rawMeasEpoch: with the epoch before, then that one is spent
+                // as the driver's rawMeasEpoch: with the epoch before, then that one is spent; the epoch
+                // handed over in pairs or as it came, and marked so
                 pair_mask_ = 0;
                 if (built && info_.status == mosaic::SbfStatus::OK)
-                    (void)mosaic::averageDopplerPairs(te.epoch, rxMs(), info_.jumped || info_.rebased, pair_prev_,
-                                                      cfg_.pair_cfg, pair_st_, &pair_mask_);
+                    te.rr_paired = mosaic::averageDopplerPairs(te.epoch, rxMs(), info_.jumped || info_.rebased,
+                                                               pair_prev_, cfg_.pair_cfg, pair_st_, &pair_mask_) > 0
+                                       ? 1 : 0;
                 pair_prev_.valid = false;
             }
 #endif

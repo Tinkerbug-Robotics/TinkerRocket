@@ -153,6 +153,7 @@ void RawGnssMeasStage::begin(const TimedRawEpoch& e, const double* r_approx, boo
     out.mcu_us = e.mcu_us;
     out.tow_s = e.epoch.tow_s;
     out.gps_week = e.gps_week;
+    out.rr_paired = e.rr_paired;
     out.n = 0;
     for (int k = 0; k < 3; ++k)
         out.r_approx[k] = r_approx != nullptr ? r_approx[k] : 0.0;
@@ -298,6 +299,7 @@ void RawGnssMeasStage::capEpoch(const TimedRawEpoch& e)
     sel_.mcu_us = e.mcu_us;
     sel_.arrival_us = e.arrival_us;
     sel_.gps_week = e.gps_week;
+    sel_.rr_paired = e.rr_paired;
     for (int s = 0; s < 3; ++s)
         picked_[s] = picked[s];
     st_.capped_out += static_cast<uint32_t>(cand_sats - kept);

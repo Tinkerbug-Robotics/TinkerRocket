@@ -457,11 +457,15 @@ inline bool onFuseGrid(uint32_t tow_ms, uint32_t period_ms)
 // by the jerk times (50 ms)^2 / 8 where it changes (a thrust step at the
 // middle of the pair, its size times 12.5 ms). The receiver's clock drift is
 // in both and averages the same way; the filter's drift state takes it. The
-// filter predicts the pair at that instant (the profile's rr_pair_avg adds
-// half the receiver's period to rr_lag_s). A Doppler left alone keeps the
-// grid epoch's own value, whose instant is the epoch's: the filter then takes
-// it 25 ms early, nothing standing still and the line-of-sight acceleration
-// times 25 ms in flight.
+// filter predicts the pair at that instant: an epoch handed over in pairs
+// (TimedRawEpoch::rr_paired) has its Dopplers taken half the receiver's
+// period further back (the filter's rr_pair_lag_s, from the profile's
+// rr_pair_avg). So no Doppler of an epoch in pairs may be its own: one left
+// alone there is dropped (its 25 ms would be the line-of-sight acceleration
+// times 25 ms in flight, 0.3-0.4 m/s of vertical velocity over a coast that
+// lost its off-grid epochs). An epoch with no pair, or with fewer than half
+// its Dopplers in pairs, is handed over as it came instead: every Doppler its
+// own, at the epoch's instant, as with the pairs off.
 //
 // A grid epoch's Doppler (valid, its C/N0 at or above its system's floor:
 // one the builder would use) is averaged with the epoch before's when:
@@ -485,9 +489,11 @@ inline bool onFuseGrid(uint32_t tow_ms, uint32_t period_ms)
 //     boosts' largest 50 ms change (5.3 m/s at the G80T's 10 g), with room for
 //     a hotter motor and the TCXO's 1 ppb/g step at ignition. Two values
 //     further apart are a slip or a false lock, which averaging would spread
-//     over the pair, so the grid epoch's own is kept.
-// The pair's mean takes the grid epoch's place; the cell's C/N0, lock and
-// sigma stay its own.
+//     over the pair.
+// Where at least half of the grid epoch's Dopplers make pairs, each pair's
+// mean takes the grid epoch's place (the cell's C/N0, lock and sigma stay its
+// own) and each one left alone is dropped (its has_rate cleared: its code and
+// carrier stay); otherwise none is averaged.
 
 // One off-grid epoch's Dopplers, as rawEpochFromMeasEpoch would have built
 // its cells: the satellite, whether it had a code and a Doppler, its C/N0,
@@ -518,21 +524,24 @@ struct MosaicDopplerPairConfig
     double   max_diff_mps = 15.0;              // the pair at most this far apart
 };
 
-// Counts since the pairing started (the driver's RawStats, the harness's
-// summary): grid epochs, then their usable Dopplers, paired or left alone by
-// the first rule each one failed.
+// Counts since the pairing started (the driver's pair stats, the harness's
+// summary): grid epochs, handed over in pairs or as they came (and why), then
+// their usable Dopplers, averaged, left at their epoch's instant with it, or
+// dropped from an epoch in pairs by the first rule each one failed. dopplers
+// = pairs + alone_epoch + the four drops.
 struct MosaicDopplerPairStats
 {
-    uint32_t epochs = 0;          // grid epochs with a usable Doppler
+    uint32_t epochs = 0;          // grid epochs with a usable Doppler; handed over as they came:
     uint32_t epochs_no_prev = 0;  //   with no epoch dt_ms before them read whole (lost, refused, a gap)
-    uint32_t epochs_jump = 0;     //   with a clock jump or start-over between: none paired
+    uint32_t epochs_jump = 0;     //   with a clock jump or start-over between
+    uint32_t epochs_few = 0;      //   with fewer than half their Dopplers in pairs; the rest in pairs
     uint32_t dopplers = 0;        // usable Dopplers in those epochs
     uint32_t pairs = 0;           //   averaged
-    uint32_t alone_epoch = 0;     //   left alone with their epoch (the two above)
-    uint32_t alone_mate = 0;      //   the satellite or its Doppler not in the epoch before
-    uint32_t alone_cn0 = 0;       //   its C/N0 under the floor in the epoch before
-    uint32_t alone_lock = 0;      //   its lock time went down between them: a relock
-    uint32_t alone_diff = 0;      //   the two more than max_diff_mps apart
+    uint32_t alone_epoch = 0;     //   left as they came, with their epoch (the three above)
+    uint32_t alone_mate = 0;      //   dropped: the satellite or its Doppler not in the epoch before
+    uint32_t alone_cn0 = 0;       //   dropped: its C/N0 under the floor in the epoch before
+    uint32_t alone_lock = 0;      //   dropped: its lock time went down between them, a relock
+    uint32_t alone_diff = 0;      //   dropped: the two more than max_diff_mps apart
     float    diff_max_mps = 0.0f; // the largest |difference| averaged
 };
 
@@ -623,9 +632,12 @@ inline void dopplerSetFromRawEpoch(const gnss_raw::RawEpoch& e, int64_t rx_ms, M
 }
 
 // A grid epoch's Dopplers (e, its receiver time rx_ms; clock_cut: a clock
-// jump or start-over at it) averaged with prev's by the rule above. Returns
-// how many were; paired, if given, has bit i set for each cell i averaged.
-// prev is only read: the caller clears it once a grid epoch has looked.
+// jump or start-over at it) with prev's by the rule above: where at least
+// half of its usable Dopplers make pairs, each pair averaged and each usable
+// one left alone dropped; else e as it came. Returns how many were averaged:
+// e is to be handed over in pairs (TimedRawEpoch::rr_paired) if any were.
+// paired, if given, has bit i set for each cell i averaged. prev is only
+// read: the caller clears it once a grid epoch has looked.
 inline int averageDopplerPairs(gnss_raw::RawEpoch& e, int64_t rx_ms, bool clock_cut, const MosaicDopplerSet& prev,
                                const MosaicDopplerPairConfig& c, MosaicDopplerPairStats& st,
                                uint64_t* paired = nullptr)
@@ -634,9 +646,10 @@ inline int averageDopplerPairs(gnss_raw::RawEpoch& e, int64_t rx_ms, bool clock_
     if (paired != nullptr)
         *paired = 0;
     auto floor_of = [&](uint8_t sys) { return sys < GNSS_SYS_COUNT ? c.cn0_min[sys] : 0.0f; };
+    auto usableAt = [&](int i) { return e.obs[i].has_rate && !(e.obs[i].cn0_dbhz < floor_of(e.obs[i].sys)); };
     int usable = 0;
     for (int i = 0; i < e.n; ++i)
-        if (e.obs[i].has_rate && !(e.obs[i].cn0_dbhz < floor_of(e.obs[i].sys)))
+        if (usableAt(i))
             usable++;
     if (usable == 0)
         return 0;
@@ -652,44 +665,66 @@ inline int averageDopplerPairs(gnss_raw::RawEpoch& e, int64_t rx_ms, bool clock_
         st.alone_epoch += static_cast<uint32_t>(usable);
         return 0;
     }
-    int n = 0;
-    for (int i = 0; i < e.n; ++i)
-    {
-        gnss_raw::RawObs& o = e.obs[i];
-        const float fl = floor_of(o.sys);
-        if (!o.has_rate || o.cn0_dbhz < fl)
-            continue;
-        const MosaicDopplerCell* m = nullptr;
+    // a usable Doppler's mate in prev, or the first rule the two fail
+    enum : uint8_t { kPair, kMate, kCn0, kLock, kDiff };
+    auto mateOf = [&](const gnss_raw::RawObs& o, const MosaicDopplerCell*& m) -> uint8_t {
+        m = nullptr;
         for (int j = 0; j < prev.n && m == nullptr; ++j)
             if (prev.c[j].sys == o.sys && prev.c[j].prn == o.prn)
                 m = &prev.c[j];
         if (m == nullptr || !m->has_rate)
-        {
-            st.alone_mate++;
-            continue;
-        }
-        if (m->cn0_dbhz < fl)
-        {
-            st.alone_cn0++;
-            continue;
-        }
+            return kMate;
+        if (m->cn0_dbhz < floor_of(o.sys))
+            return kCn0;
         if (o.lock_ms < m->lock_ms)
+            return kLock;
+        if (!(std::fabs(o.rate_mps - m->rate_mps) <= c.max_diff_mps))
+            return kDiff;
+        return kPair;
+    };
+    int n = 0;
+    const MosaicDopplerCell* m = nullptr;
+    for (int i = 0; i < e.n; ++i)
+        if (usableAt(i) && mateOf(e.obs[i], m) == kPair)
+            n++;
+    if (2 * n < usable)
+    {
+        // too few pairs to take the epoch at their middle: as it came
+        st.epochs_few++;
+        st.alone_epoch += static_cast<uint32_t>(usable);
+        return 0;
+    }
+    for (int i = 0; i < e.n; ++i)
+    {
+        if (!usableAt(i))
+            continue;
+        gnss_raw::RawObs& o = e.obs[i];
+        switch (mateOf(o, m))
         {
+        case kPair:
+        {
+            const double d = std::fabs(o.rate_mps - m->rate_mps);
+            o.rate_mps = 0.5 * (o.rate_mps + m->rate_mps);
+            if (static_cast<float>(d) > st.diff_max_mps)
+                st.diff_max_mps = static_cast<float>(d);
+            if (paired != nullptr)
+                *paired |= uint64_t{1} << i;
+            continue;
+        }
+        case kMate:
+            st.alone_mate++;
+            break;
+        case kCn0:
+            st.alone_cn0++;
+            break;
+        case kLock:
             st.alone_lock++;
-            continue;
-        }
-        const double d = std::fabs(o.rate_mps - m->rate_mps);
-        if (!(d <= c.max_diff_mps))
-        {
+            break;
+        default:
             st.alone_diff++;
-            continue;
+            break;
         }
-        o.rate_mps = 0.5 * (o.rate_mps + m->rate_mps);
-        if (static_cast<float>(d) > st.diff_max_mps)
-            st.diff_max_mps = static_cast<float>(d);
-        if (paired != nullptr)
-            *paired |= uint64_t{1} << i;
-        n++;
+        o.has_rate = false;   // its instant is not the pairs': dropped
     }
     st.pairs += static_cast<uint32_t>(n);
     return n;

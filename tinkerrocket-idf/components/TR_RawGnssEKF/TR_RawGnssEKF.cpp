@@ -1379,8 +1379,9 @@ void RawGnssEKF<T>::updateGnssRawPart(const RawMeas* m, int i0, int i1, double a
     if (age_s < 0.0)
         age_s = 0.0;
     // the receiver's history back to the epoch, and to its Doppler's instant,
-    // as it stands now: a part fused later takes the epoch back further
-    const double tau = p_.rr_lag_s > 0.0 ? p_.rr_lag_s : 0.0;
+    // as it stands now: a part fused later takes the epoch back further (the
+    // instant: rr_lag_s before, and on an epoch in pairs rr_pair_lag_s more)
+    const double tau = rrLag();
     T dp_e[3], dv_e[3], dp_l[3], dv_l[3];
     historyChange(age_s, dv_e, dp_e);
     historyChange(age_s + tau, dv_l, dp_l);
@@ -1436,7 +1437,8 @@ void RawGnssEKF<T>::updateGnssRawPart(const RawMeas* m, int i0, int i1, double a
                 // the receiver's velocity as the pseudorange update left it,
                 // taken back to the Doppler's instant (a late Doppler: tau
                 // before the epoch, the satellite's own range acceleration
-                // backed out)
+                // backed out -- on an epoch in pairs as its first consumer
+                // took it, pairAccel)
                 double vr[3], v_l[3];
                 for (int a = 0; a < 3; ++a)
                     vr[a] = Tm[0][a] * static_cast<double>(v_[0]) + Tm[1][a] * static_cast<double>(v_[1])
@@ -1449,7 +1451,9 @@ void RawGnssEKF<T>::updateGnssRawPart(const RawMeas* m, int i0, int i1, double a
                 Lr.rate = 0.0;
                 for (int a = 0; a < 3; ++a)
                     Lr.rate += L.u[a] * (L.vs[a] - v_l[a]);
-                pred_rate = tau > 0.0 ? Lr.rate - tau * satRangeAccel(mi, Lr, v_l) : Lr.rate;
+                pred_rate =
+                    tau > 0.0 ? Lr.rate - tau * (rr_paired_ ? pairAccel(i, mi, Lr, v_l) : satRangeAccel(mi, Lr, v_l))
+                              : Lr.rate;
             }
 
             int hidx[10];
