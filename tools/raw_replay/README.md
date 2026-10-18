@@ -603,7 +603,10 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   (`--sim-fuse-grid` does the cut alone: on Grid B it is byte-identical to the rate-10 events, whose draws are the
   same), and paired by the same rule (a sim has no lock time or clock jump). `--rr-pair-sigma X` scales each averaged
   Doppler's sigma, offline only (no firmware path). The events JSON gains a `pairs` block: the counts, why each
-  Doppler left alone was, and each grid epoch with one (flight time, usable, averaged).
+  Doppler left alone was, and each grid epoch with one (flight time, usable, averaged). Two offline diagnostics:
+  `--rr-lag-ms X` sets the filter's `rr_lag_s` after the profile (the pairs taken at the grid epoch's instant, or
+  today's taken 25 ms early), and `--sim-pair-exact` (a sim with `--truth-nav`) puts the truth's second-order term
+  back into each averaged Doppler, so the pair is the range rate at its middle exactly.
 - **`sim_compare.py BASE NAME=EXP ...`** sets experiment grids (each a `sim_grid.py --arms design --harness-args
   "..."` run into its own OUT) beside the base grid's design and unaided twin, flight by flight: the phase bars per
   pattern (pooled over the informative magnetometer arms and over all of them), the worst excess, the deployment's

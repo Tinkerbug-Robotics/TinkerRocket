@@ -262,6 +262,8 @@ struct Args
     double rr_pair_sigma = -1.0;     //   offline only: each averaged Doppler's sigma scaled by this (no firmware path)
     bool sim_fuse_grid = false;      // a sim's epochs (X) cut to the fused grid as the driver cuts the receiver's
     double rr_lag_ms = -1.0;         // offline only: the filter's rr_lag_s in place of the profile's, ms (-1: the profile's)
+    bool sim_pair_exact = false;     // offline only, a sim with --truth-nav: each averaged Doppler made the range rate
+                                     //   at the pair's middle exactly (the truth's second-order term taken out)
                                      //   (implied by --rr-pair-avg 1: the epochs between are read, not fused)
     std::string flight_state;        // the launch and landing: "log" (the ticks' flags), "quorum" (the quorum's own
                                      //   state machine); default the ticks', the quorum's where META state_machine none
@@ -328,6 +330,7 @@ void usage()
                  "  [--seed-gyro-dps x,y,z]\n"
                  "  [--sat-cap N] [--fuse-ms X] [--flight-state log|quorum] [--time-tag-from-boot]\n"
                  "  [--rr-pair-avg 0|1] [--rr-pair-max-diff X] [--rr-pair-sigma X] [--sim-fuse-grid] [--rr-lag-ms X]\n"
+                 "  [--sim-pair-exact]\n"
                  "  [--assume-finetime] [--pad-zupt 0|1] [--gnss-only-from-s X] [--gnss-only-gate launch|ground]\n"
                  "  [--pvt-out FILE] [--gnss-only-keep-level]\n"
                  "  the Doppler change check (a RAW_REPLAY_DVCHECK build): [--dv-check 0|1|2] [--dv-sat-k X]\n"
@@ -488,6 +491,7 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--rr-pair-sigma") a.rr_pair_sigma = std::atof(val());
         else if (k == "--sim-fuse-grid") a.sim_fuse_grid = true;
         else if (k == "--rr-lag-ms") a.rr_lag_ms = std::atof(val());
+        else if (k == "--sim-pair-exact") a.sim_pair_exact = true;
         else if (k == "--flight-state") a.flight_state = val();
         else if (k == "--time-tag-from-boot") a.time_tag_from_boot = true;
         else if (k == "--assume-finetime") a.assume_finetime = true;
@@ -3084,6 +3088,59 @@ int main(int argc, char** argv)
                     xq = x0;
                     for (int i = 0; i < x0.n; ++i)
                         xq.meas[i].rr = ep.obs[i].rate_mps;
+                    if (a.sim_pair_exact && truth_nav.size() > 1 && mask != 0)
+                    {
+                        // the diagnostic: the mean of the receiver's velocity at the pair's two instants less its
+                        // velocity at their middle (the truth's, at the IMU), along each averaged satellite's line
+                        // of sight, put back -- so the pair is the range rate at its middle exactly
+                        auto vAt = [&](int64_t t_us, double v[3]) {
+                            size_t lo = 0, hi = truth_nav.size() - 1;
+                            if (t_us <= truth_nav.row(0).t_us) hi = 0;
+                            while (hi - lo > 1)
+                            {
+                                const size_t mid = (lo + hi) / 2;
+                                (truth_nav.row(mid).t_us <= t_us ? lo : hi) = mid;
+                            }
+                            const rr::TruthNav::Row& r0 = truth_nav.row(lo);
+                            const rr::TruthNav::Row& r1 = truth_nav.row(hi);
+                            const double w = r1.t_us > r0.t_us ? static_cast<double>(t_us - r0.t_us) /
+                                                                     static_cast<double>(r1.t_us - r0.t_us) : 0.0;
+                            const double ww = std::min(1.0, std::max(0.0, w));
+                            for (int k = 0; k < 3; ++k)
+                                v[k] = r0.v[k] + ww * (r1.v[k] - r0.v[k]);
+                        };
+                        const int64_t te_us = x0.mcu_us;
+                        double va[3], vb[3], vm[3], dn[3];
+                        vAt(te_us, va);
+                        vAt(te_us - 50000, vb);
+                        vAt(te_us - 25000, vm);
+                        for (int k = 0; k < 3; ++k)
+                            dn[k] = 0.5 * (va[k] + vb[k]) - vm[k];
+                        ShadowNav nv;
+                        sh.navState(nv);
+                        double rx_e[3];
+                        geo_to_ecef(nv.lla[0], nv.lla[1], nv.lla[2], rx_e);
+                        const double sl = std::sin(nv.lla[0]), cl = std::cos(nv.lla[0]);
+                        const double so = std::sin(nv.lla[1]), co = std::cos(nv.lla[1]);
+                        const double de[3] = {dn[0] * -sl * co + dn[1] * -so + dn[2] * -cl * co,
+                                              dn[0] * -sl * so + dn[1] * co + dn[2] * -cl * so,
+                                              dn[0] * cl + dn[2] * -sl};
+                        for (int i = 0; i < x0.n; ++i)
+                        {
+                            if (!(mask & (uint64_t{1} << i)))
+                                continue;
+                            double u[3], nu = 0.0;
+                            for (int k = 0; k < 3; ++k)
+                            {
+                                u[k] = x0.meas[i].sat_pos[k] - rx_e[k];
+                                nu += u[k] * u[k];
+                            }
+                            nu = std::sqrt(nu);
+                            if (!(nu > 1.0e6))
+                                continue;
+                            xq.meas[i].rr += (u[0] * de[0] + u[1] * de[1] + u[2] * de[2]) / nu;
+                        }
+                    }
                     notePaired(ep, mask, ev.t_us * 1.0e-6 + a.t_base_s, usable);
                     xp = &xq;
                 }
