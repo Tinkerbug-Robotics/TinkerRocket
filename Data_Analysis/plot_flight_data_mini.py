@@ -786,8 +786,9 @@ def gnss_clock_mcu_us(rec, gps_s):
 # the converter takes off the low-g and high-g after the log; "hg", beside it,
 # the high-g's six-face alignment to the low-g (HG_CAL_*), which the converter
 # applies to the high-g after the log, before its bias and that offset; "ant",
-# beside them, the GNSS antenna's offset from the IMU (BLE cmd 81) the flight
-# flew with, in the board's frame and in the filter's.
+# beside them, the GNSS antenna's offset from the IMU (BLE cmd 81) set on the
+# flight, in the board's frame and in the filter's, and whether the navigation
+# filter flew with it.
 # join_pad_context() puts a launch's records back together.
 FMT_PAD_CONTEXT_HDR = '<I B B B'
 PAD_CONTEXT_HDR_LEN = struct.calcsize(FMT_PAD_CONTEXT_HDR)   # 7
@@ -859,7 +860,7 @@ def decode_pad_context(payload):
             "known":    bool(f[0]),       # measured (BLE cmd 81); unknown: the rest 0
             "board_mm": f[1:4],           # the setting: board FLU, the IMU to the antenna's phase centre
             "body_m":   f[4:7],           # the same in body FRD by the mounting
-            "used":     bool(f[7]),       # the navigation filter predicted at the antenna (the mosaic-only image)
+            "used":     bool(f[7]),       # the navigation filter flew with this offset (predicted at the antenna)
         })
     elif name == "nav":
         if len(body) != SIZE_OF_PCX_NAV:

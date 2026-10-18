@@ -304,14 +304,17 @@ def main():
 
 
 def antenna_lines(pcx):
-    """The GNSS antenna's offset the flight flew with (the pad context's PCX_ANT, BLE cmd 81), in the filter's body
-    frame, for raw_replay: META antenna_m, which it takes where --antenna-m gives none. A log without the record, or
-    with an unknown offset, gives none."""
+    """The GNSS antenna's offset set on the flight (the pad context's PCX_ANT, BLE cmd 81), in the filter's body
+    frame, for raw_replay. One the navigation filter flew with (PCX_ANT's used) is META antenna_m, which it takes
+    where --antenna-m gives none; one set but not flown with is META antenna_m_set, which it only names (the replay
+    flies it unknown, as the flight did). A log without the record, or with an unknown offset, gives none."""
     ant = pcx.get("ant") if pcx else None
     if not ant or not ant["known"]:
         return []
-    return ["META antenna_m " + " ".join(repr(float(x)) for x in ant["body_m"]),
-            f"META antenna_used {1 if ant['used'] else 0}"]
+    xyz = " ".join(repr(float(x)) for x in ant["body_m"])
+    if ant["used"]:
+        return [f"META antenna_m {xyz}", "META antenna_used 1"]
+    return [f"META antenna_m_set {xyz}", "META antenna_used 0"]
 
 
 def start_lines(recs, args, t_ref, pcx, gp):
