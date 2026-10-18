@@ -127,6 +127,17 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 #    something concrete needs the space, and re-measure loop timing and the
 #    gap counters (#910) if it is ever turned on.
 #
+#    Revisited 2026-10-17 for ONE image: the mosaic-only build
+#    (-DTR_GNSS_MOSAIC=1, the Goblin's V9 for 2026-10-24) runs the raw-GNSS
+#    navigation filter (#1600), which needs about 202 KB and does not fit in
+#    internal RAM. The owner approved PSRAM for that build only, in
+#    sdkconfig.defaults.rawnav (caps-only allocation, so nothing moves there
+#    by accident), behind a 30-minute bench soak of loop timing and the gap
+#    counters. On the P4 the 128 KB L2 cache holds flash code and PSRAM data
+#    alike, so the filter's PSRAM traffic can evict the flight loop's code;
+#    that is the risk the soak measures. Every other image, the V8 and V9
+#    auto images included, keeps PSRAM off as decided here.
+#
 # 2) Y3, the FC's 32.768 kHz crystal, is fitted but unused: no
 #    CONFIG_RTC_CLK_SRC_EXT_CRYS, so the RTC runs on the internal RC.  That
 #    is fine here — the crystal matters for light-sleep and accurate RTC

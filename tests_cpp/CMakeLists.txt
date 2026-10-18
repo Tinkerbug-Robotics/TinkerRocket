@@ -2263,3 +2263,14 @@ target_include_directories(test_landed_lockout_policy PRIVATE
 )
 target_link_libraries(test_landed_lockout_policy GTest::gtest_main)
 gtest_discover_tests(test_landed_lockout_policy)
+
+# ---------- v9raw/*.cmake ----------
+# The raw-GNSS filter on the mosaic-G5 V8/V9 (fc/v9-raw-primary): each piece
+# registers its own tests in tests_cpp/v9raw/<piece>.cmake, so pieces built at
+# the same time never edit this file. Each .cmake uses LIB_DIR and SHIM_DIR as
+# the targets above do.
+file(GLOB V9RAW_CMAKE CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/v9raw/*.cmake)
+list(SORT V9RAW_CMAKE)
+foreach(_v9raw_cmake IN LISTS V9RAW_CMAKE)
+    include(${_v9raw_cmake})
+endforeach()

@@ -85,6 +85,11 @@ struct ShadowSeed
     uint8_t  have_dip;         // dip_rad is the model's
     uint8_t  restore;          // a flight restored after a reboot: start in flight from this state
     uint8_t  start_gen;        // a new one on the pad (the flight computer started over): start again
+    // a restored flight's accelerometer bias, the snapshot's (RawGnssShadow::
+    // Config::restore_seed_bias): without it the filter restarts at zero and
+    // a tilt takes up what the pad had learned
+    uint8_t  has_accel_bias;
+    float    accel_bias[3];    // m/s^2, body FRD
 };
 
 // The raw filter's navigation state, every step (core 0 -> core 1): what the
@@ -150,6 +155,7 @@ struct ShadowMeasStats
     int16_t  iono_age_days;
     uint32_t build_us;         // the last epoch's build, wall time (preempted by everything above it)
     uint32_t build_us_max;
+    uint32_t capped_out;       // buildable satellites the stage's sat_cap left out, summed over the epochs built
 };
 
 // Lock-free ring, one producer and one consumer on any cores.

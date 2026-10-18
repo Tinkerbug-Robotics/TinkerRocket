@@ -96,6 +96,10 @@ TinkerRocketApp/DerivedData/
 # Bench run artifacts (tools/bench_session.py --out): timestamped console dumps
 # and timelines. The evidence that matters is quoted into the tracking issue.
 runs/
+# RF-rig replay runs (tools/rig_replay/run.sh, run_v9.sh with RIG_OUT pointed
+# here): the consoles carry the rig pad's position. run_v9.sh refuses a folder
+# inside a checkout; this keeps the Beetle's run.sh default out of git too.
+rig_runs/
 
 # The GNSS receiver work moved to the private gnss/ submodule (2026-10-05). Its
 # old paths stay ignored so that leftovers in older checkouts (IQ-file links, run

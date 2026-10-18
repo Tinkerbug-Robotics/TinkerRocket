@@ -3,10 +3,12 @@
 // receiver's behaviour rather than physics, in one place, chosen by the
 // board's receiver and overridable per build.
 //
-// The Beetle's LC86G is the one measured. The NEO-M8T, PX1105R and
-// mosaic-G5 profiles are stubs, the LC86G's numbers as placeholders, marked
-// UNMEASURED: a board that carries one starts from them and measures its own.
-// The generic profile is the same placeholders for a receiver with none.
+// The Beetle's LC86G is the one measured. The mosaic-G5's is v0: its numbers
+// from the receiver's own logs on the V9 spin rig and the COCOM rig, still
+// UNMEASURED in flight. The NEO-M8T and PX1105R profiles are stubs, the
+// LC86G's numbers as placeholders, marked UNMEASURED: a board that carries one
+// starts from them and measures its own. The generic profile is the same
+// placeholders for a receiver with none.
 //
 // One function puts a profile into the filter's configs (RawGnssShadow's
 // ReceiverProfileApply.h: the shadow's, the builder's and the EKF's). The
@@ -90,6 +92,23 @@ struct GnssReceiverProfile
     double epoch_latency_s = 0.0;         // the delay the receiver's time sync leaves in
     double raw_epoch_period_s = 0.0;      // its raw epochs come this often
 
+    // Its epochs as the filter fuses them. A receiver faster than the LC86G's
+    // once a second is fused on a coarser grid, and the safeguards that count
+    // epochs keep the time they had at 1 Hz (RawGnssShadow.h, "A receiver
+    // fused faster than 1 Hz"). 0: every epoch, as the LC86G's.
+    double fuse_epoch_period_s = 0.0;     // the GNSS task builds only the epochs on this GPS-time grid
+    double pr_period_s = 0.0;             // the pseudoranges fused once in each this long of GPS time (the
+                                          //   Dopplers every epoch)
+    int    sat_cap = 0;                   // at most this many satellites built an epoch (0: all)
+    double reject_persist_s = 0.0;        // a satellite refused this long running is let back in: the EKF's
+                                          //   reject_persist and reject_persist_rr in fused epochs (0: theirs)
+    double level_min_dt_s = 0.0;          // the levelling's steady test takes epochs this far apart (LevelGate)
+    double heading_fit_period_s = 0.0;    // the heading fit takes an epoch at most this often
+    double rr_dyn_window_s = 0.0;         // the Doppler's stress on the IMU's peak over this long (0: since the
+                                          //   epoch before)
+    double max_epoch_age_s = 0.6;         // an epoch later than this is dropped (RawGnssShadow)
+    double epoch_job_max_s = 0.3;         //   and one this old is worked at once, not a slice a step
+
     // its measurements' noise (RawMeasBuilder): sigma^2 = a^2 + b^2 * 10^(-(C/N0 - 35)/10)
     double pr_white_a = 0.0, pr_white_b = 0.0;   // the pseudorange's white part, m
     double pr_corr_a = 0.0, pr_corr_b = 0.0;     //   its time-correlated part (first-order Gauss-Markov), m
@@ -170,6 +189,18 @@ inline GnssReceiverProfile lc86gProfile()
     p.epoch_latency_s = 0.0;        // existing default (uncalibrated)
     p.raw_epoch_period_s = 1.0;     // existing default (MSM7 once a second at any fix rate, 2026-09-25..27)
 
+    // its epochs as fused: every one, each safeguard on its count -- all
+    // existing default
+    p.fuse_epoch_period_s = 0.0;
+    p.pr_period_s = 0.0;
+    p.sat_cap = 0;
+    p.reject_persist_s = 0.0;       // the EKF's 3 epochs: 3 s
+    p.level_min_dt_s = 0.0;
+    p.heading_fit_period_s = 0.0;
+    p.rr_dyn_window_s = 0.0;        // the peak since the epoch before: a second
+    p.max_epoch_age_s = 0.6;
+    p.epoch_job_max_s = 0.3;
+
     // noise: the PX1105R's C/N0 fit (20 min static, 2026-09-26), the LC86G's
     // scale on it (COCOM rig, 2026-10-12) -- all existing default
     p.pr_white_a = 0.026;
@@ -234,8 +265,101 @@ inline GnssReceiverProfile neoM8tProfile() { return placeholderProfile(kRxNeoM8t
 // its Doppler is rounded to 1 Hz, doppler_step_hz.)
 inline GnssReceiverProfile px1105rProfile() { return placeholderProfile(kRxPx1105r, "PX1105R"); }
 
-// Septentrio mosaic-G5: UNMEASURED.
-inline GnssReceiverProfile mosaicG5Profile() { return placeholderProfile(kRxMosaicG5, "mosaic-G5"); }
+// Septentrio mosaic-G5 (the Goblin, V8/V9 J1), v0: UNMEASURED in flight. Set
+// up as the driver sets it (High dynamics, 20 Hz MeasEpoch, no smoothing) and
+// fused at 10 Hz, one signal a system, the carrier off. Each number's source:
+//   "V9 rig 10/16": the V9, the mosaic and the Goblin's helix on the spin rig,
+//     2026-10-16, runs 20261016-140427 (nose cone off) and 20261016-163239
+//     (on), the receiver's own SBF;
+//   "COCOM rig": the mosaic through the COCOM rig's 10-40 g hotshot (gnss
+//     repo, b4989e8 and 1701bbd);
+//   "the LC86G's": its number kept, for the reason given;
+//   "plan": the 10/24 build plan's choice, the bench's to change (its CPU
+//     ladder: 10 Hz x 16 satellites, then 5 x 16, then 5 x 12).
+// The rest (the carrier's floors, anchors, flags and intervals) are the
+// LC86G's, unused with the carrier off.
+inline GnssReceiverProfile mosaicG5Profile()
+{
+    GnssReceiverProfile p = placeholderProfile(kRxMosaicG5, "mosaic-G5");
+
+    // One signal per system: GPS L1 C/A, Galileo E1 and BeiDou B1I -- its group
+    // delay is BDSNav's TGD1, as the RTCM path's (plan); QZSS as GPS (dropped).
+    // A C/N0 floor of 25 dB-Hz on the code and the Doppler: below 30 the L1
+    // lost lock 9-436 times an hour and its Doppler scattered 0.17-0.18 m/s
+    // (V9 rig 10/16); 25 trims only that tail.
+    p.sig[GNSS_SYS_GPS].carrier_hz = GNSS_FREQ_L1_HZ;
+    p.sig[GNSS_SYS_GAL].carrier_hz = GNSS_FREQ_L1_HZ;
+    p.sig[GNSS_SYS_BDS].carrier_hz = 1561.098e6;
+    p.sig[GNSS_SYS_QZS].carrier_hz = GNSS_FREQ_L1_HZ;
+    for (int k = 0; k < kProfileSys; ++k)
+    {
+        p.sig[k].cn0_min_pr = 25.0f;
+        p.sig[k].cn0_min_rr = 25.0f;
+    }
+
+    // timing
+    p.rr_lag_s = 0.0;               // V9 rig 10/16: the Doppler against the carrier, 0 +- 2-4 ms on every
+                                    //   signal (the LC86G's lags 55.5 ms)
+    p.epoch_latency_s = 0.0;        // the 1PPS line: an edge is its GPS second
+    p.raw_epoch_period_s = 0.05;    // V9 rig 10/16: every MeasEpoch 50 ms after the last
+    p.fuse_epoch_period_s = 0.1;    // plan: 10 Hz, on the GPS-time grid
+
+    // the code: sigma^2 = a^2 + b^2 * 10^(-(C/N0 - 35)/10)
+    p.pr_white_a = 0.10;            // V9 rig 10/16: 0.144 m at 44 dB-Hz, above the receiver's own
+    p.pr_white_b = 0.30;            //   L1 C/A CodeVar (0.12-0.13 m)
+    p.pr_corr_a = 1.94;             // the LC86G's: mostly the sky's (the ionosphere's residual, the
+    p.pr_corr_b = 3.5;              //   broadcast orbits and clocks, multipath), not the receiver's; its
+    p.pr_corr_scale = 0.5;          //   PVT agrees (V9 rig 10/16: height sd 1.2 m, HAcc 2.9-3.9 m at 95 %)
+    p.pr_tau_s = 15.0;              // the LC86G's, and fused once a second (below): the Beetle's code
+    p.pr_period_s = 1.0;            //   weighting and gate exactly (plan)
+
+    // the Doppler
+    p.rr_white_a = 0.01;            // V9 rig 10/16: fitted to the L1 C/N0 bins, 176/99/56/32/18 mm/s
+    p.rr_white_b = 0.075;           //   against 176/105/57/28/18.6 measured
+    p.rr_scale = 1.5;               // plan: a margin for flight vibration and the TCXO's phase noise,
+                                    //   neither measured
+    p.rr_tau_s = 0.0;               // V9 rig 10/16: white -- lag-1 correlation ~0, lag-2 -0.56 to -0.61
+    p.doppler_step_hz = 0.0;        // its resolution is 0.1 mHz
+    p.rr_dyn_sigma = 0.5;           // the LC86G's until the hotshot is replayed (COCOM rig: High left
+                                    //   0.12-0.26 m/s at 10-40 g, its 4-6 ms lag out)
+    p.rr_dyn_window_s = 1.0;        // the LC86G's: its one epoch a second, in time
+    p.rr_relock_sigma = 3.0;        // the LC86G's, conservative
+
+    // a relock
+    p.relock_sigma_m = 40.0;        // the LC86G's, conservative (the mosaic does no smoothing: its
+    p.relock_tau_s = 10.0;          //   relock bias is likely small)
+    p.relock_gap_s = 0.5;           // plan: 10 of its epochs (at 2.5, a 150 ms hiccup would relock every
+                                    //   satellite and blind the Doppler for 10 s)
+
+    // the clock: the LC86G's, its drift's walk 100 on purpose. Standing still
+    // the mosaic's drift walks only 0.001-0.01 m^2/s^3 (V9 rig 10/16), but in
+    // flight the TCXO's g-sensitivity, the roll's wind-up and burnout step
+    // every Doppler at once: at 0.01 a 1 g step would be refused on every row
+    // and the boost screen would drop the boost
+    p.clk_bias_psd = 0.009;
+    p.clk_drift_psd = 100.0;
+    p.isb_psd = 1.0e-4;
+    p.clock_step_m = 1000.0;        // its 1 ms jumps the EKF's whole-millisecond branch takes
+    p.clock_step_spread_m = 200.0;
+    p.drift_step_mps = 10.0;
+    p.drift_step_spread_mps = 2.0;
+    p.p0_clk_bias = 30.0;
+    p.p0_clk_drift = 5.0;           // the first epoch's median sets its 76-86 m/s (V9 rig 10/16)
+    p.p0_isb = 30.0;
+
+    // the carrier: off -- at 0.1 s a carrier rate only matches the Doppler;
+    // the SBF is logged (0x95) for offline work (plan)
+    p.cr_mode = kCarrierOff;
+
+    // the safeguards that count epochs, in the LC86G's time
+    p.sat_cap = 16;                 // plan: the CPU ladder's first rung (the L1 sky peaks at 28)
+    p.reject_persist_s = 3.0;       // the LC86G's 3 epochs: the Doppler 30 at 10 Hz, the pseudorange 3
+    p.max_epoch_age_s = 0.3;        // plan: 3 epochs at 10 Hz (MeasEpoch reaches the V9 20 ms after its
+    p.epoch_job_max_s = 0.2;        //   epoch, p95 26 ms: V9 rig 10/16), 2 to work at once
+    p.level_min_dt_s = 0.95;        // the LC86G's steady test, epochs a second apart
+    p.heading_fit_period_s = 1.0;   // the LC86G's: the fit's 64 epochs a minute (it only logs in act)
+    return p;
+}
 
 // A receiver with no profile of its own: UNMEASURED.
 inline GnssReceiverProfile genericProfile() { return placeholderProfile(kRxGeneric, "generic"); }

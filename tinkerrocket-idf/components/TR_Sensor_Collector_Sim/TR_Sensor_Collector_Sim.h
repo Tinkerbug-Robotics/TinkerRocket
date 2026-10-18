@@ -22,6 +22,9 @@
 #include "SimSensorModel.h"
 #include "sim_landed_hold.h"
 #include <freertos/FreeRTOS.h>
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#include <atomic>
+#endif
 
 class SensorCollectorSim
 {
@@ -53,7 +56,13 @@ public:
 
     // Raw GNSS for the raw-GNSS shadow filter (#1600).  Same rule again: a
     // real sky must not meet a simulated IMU, so while a sim runs the real
-    // epochs and ephemerides are consumed and dropped.
+    // epochs and ephemerides are consumed and dropped.  Except the mosaic-G5's
+    // ephemerides (its navigation blocks), passed on in a sim too: they say
+    // where the satellites are, not what the IMU did, and the filter's stage
+    // only files them; and that receiver sends each one once (when it
+    // changes, or on a resend at link setup and launch), where the LC86G
+    // repeats them every second, so one dropped in a sim on the pad would be
+    // missing until its next upload, hours on.
     bool enableGNSSRawOutputs() { return real_.enableGNSSRawOutputs(); }
     bool getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out);
     bool getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len);
@@ -63,8 +72,33 @@ public:
     //
     // The rig replay is the exception to all four rules above (startReplay):
     // its sky is the flight's, so the receiver's output passes through, and
-    // each fix's GPS time sets the replay's clock.
+    // each fix's GPS time sets the replay's clock -- on the mosaic-G5, which
+    // hands no timed fix, each timed raw epoch's (getGNSSRawEpoch).
     bool getGNSSFix(gnss_raw::TimedFix& out);
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // The mosaic-only image's GPS ionosphere, by the same rule: a real sky's
+    // while idle or in the rig replay, none while a sim runs. It is the last
+    // one decoded, not consumed, so the GNSS task finds it again after the
+    // sim. The fused grid goes straight to the receiver.
+    //
+    // A replay build that carries the rig sky's own set
+    // (-DTR_SIM_REPLAY_GPS_IONO, the Klobuchar bytes of its SignalSim
+    // scenario's broadcast file) hands that set over instead, dated the sky's
+    // day, as the receiver's: the rig's files are too short to broadcast
+    // GPSIon (subframe 4 page 18 comes once every 12.5 min; the three flights'
+    // files hold pages 21-25 and 1-4 only), so without it the filter builds
+    // the sky with whatever set NVS kept, or none.
+    bool getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const;
+    // The rig replay's sky: its GPS day (days since 1980-01-06, the carried
+    // flight's ignition); 0 until the replay starts (startReplay, at the end
+    // of setup -- after the GNSS task has read the NVS set) or when none runs.
+    // main.cpp's ionosphere rule takes no set before it is known, and none
+    // dated more than a day from it (raw_iono_rule.h offerRigReplay): neither
+    // a pad calibration's from today nor a set the receiver decoded from the
+    // real sky before its cold start. Read from the GNSS task.
+    uint16_t replaySkyGpsDay() const { return replay_sky_day_.load(std::memory_order_acquire); }
+    void setGNSSRawEpochPeriodMs(uint32_t period_ms) { real_.setGNSSRawEpochPeriodMs(period_ms); }
+#endif
 
     // Debug passthrough
     void getISM6HG256DebugSnapshot(ISM6HG256DebugSnapshot& snapshot_out) const;
@@ -178,6 +212,23 @@ public:
         float    last_fix_t_s = 0.0f; // the latest of the rig's fixes, s from ignition
     };
     void replayStatus(ReplayStatus& out) const;
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // The replay's time (s from ignition) at a recent 32-bit MCU stamp
+    // (micros(): a sample's, a navigation state's); false before the clock.
+    bool replayTAt(uint32_t time_us, double& t_s) const;
+    // The high-g bias the converter takes off (m/s^2, board frame:
+    // SensorConverter::setHighGBias), which the replayed high-g counts then
+    // carry (packISM6): where the low-g rail hands over to the high-g channel
+    // the flight's own specific force comes out, and the log's conversion and
+    // the offline harness, which take the logged bias off, agree with the
+    // flight computer. main.cpp hands the converter's over each IMU window.
+    void setReplayHighGBias(float bx, float by, float bz)
+    {
+        replay_hg_bias_[0] = bx;
+        replay_hg_bias_[1] = by;
+        replay_hg_bias_[2] = bz;
+    }
+#endif
 
 private:
     // ========================================================================
@@ -335,12 +386,20 @@ private:
     float replay_last_t_ = 0.0f;             // the latest IMU sample's (replayStatus)
     bool  replay_last_have_t_ = false;
     uint8_t replay_last_phase_ = 0;
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    float replay_hg_bias_[3] = {};           // setReplayHighGBias
+    std::atomic<uint16_t> replay_sky_day_{0};   // replaySkyGpsDay
+    uint32_t replay_pps_seen_ = 0;           // the driver's 1PPS checks handed to the clock (replayNoteEpoch)
+#endif
 
     // The flight at a sensor sample's instant (its 32-bit stamp, micros()).
     void replaySampleAt(uint32_t time_us, sim_replay::Sample& s, bool is_imu);
     // The field the magnetometer reads in that attitude, rocket frame, uT.
     void replayField(const sim_replay::Sample& s, float b[3]) const;
     void replayNoteFix(const gnss_raw::TimedFix& f);
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    void replayNoteEpoch(const gnss_raw::TimedRawEpoch& e);
+#endif
 };
 
 #endif // SENSOR_COLLECTOR_SIM_H

@@ -38,6 +38,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 README = REPO / "README.md"
 DOCS = REPO / "docs/architecture"
+# One page per named build configuration (what it includes, what it leaves
+# alone, where its evidence is): checked like the architecture pages.
+BUILDS = REPO / "docs/builds"
 WORKFLOWS = REPO / ".github/workflows"
 FW_BUILD = WORKFLOWS / "firmware-build.yml"
 TYPES_H = REPO / "tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h"
@@ -75,7 +78,8 @@ MSG_PROSE = re.compile(r"`?(0[xX][0-9A-Fa-f]{2})`?\s*\([^)]*?(\d+)\s*B\)")
 
 
 def markdown_files():
-    """Root-level docs plus the architecture pages. See the scope note above.
+    """Root-level docs plus the architecture and build-configuration pages. See
+    the scope note above.
 
     CONTRIBUTING.md and CLA.md are included because they are the first thing a
     new contributor reads -- a broken link there costs someone their first
@@ -87,6 +91,8 @@ def markdown_files():
              REPO / "hardware/README.md"]
     if DOCS.is_dir():
         files += sorted(DOCS.rglob("*.md"))
+    if BUILDS.is_dir():
+        files += sorted(BUILDS.rglob("*.md"))
     return [f for f in files if f.exists()]
 
 

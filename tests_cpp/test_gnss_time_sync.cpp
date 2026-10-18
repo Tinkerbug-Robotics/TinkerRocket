@@ -186,6 +186,28 @@ TEST(GnssTimeSync, TimeRunningBackwardsRestarts)
     EXPECT_FALSE(ts.valid());
 }
 
+// driftFitted (the mosaic driver's PPS tag check judges only once it holds):
+// not while the line answers flat on its first blocks, then from the first
+// fit, and not again after a restart until the new history fits its own.
+TEST(GnssTimeSync, SaysWhenTheDriftIsFitted)
+{
+    Receiver rx;
+    GnssTimeSync ts = calibrated(rx);
+    EXPECT_FALSE(ts.driftFitted());
+    rx.feed(ts, rx.gps0, 15.0);
+    ASSERT_TRUE(ts.valid());
+    EXPECT_FALSE(ts.driftFitted());   // valid, and still flat
+    EXPECT_EQ(ts.driftPpm(), 0.0);
+    rx.feed(ts, rx.gps0 + 15.0, 30.0);
+    EXPECT_TRUE(ts.driftFitted());
+    EXPECT_NEAR(ts.driftPpm(), rx.drift * 1e6, 10.0);
+    EXPECT_FALSE(ts.addSample(rx.gps0 - 30.0, rx.stamp(rx.gps0 + 45.0)));   // time backwards: a restart
+    EXPECT_EQ(ts.restarts(), 1u);
+    EXPECT_FALSE(ts.driftFitted());
+    ts.reset();
+    EXPECT_FALSE(ts.driftFitted());
+}
+
 TEST(GnssTimeSync, CarriesTheDriftAcrossAGapInTheFixes)
 {
     Receiver rx;
@@ -281,4 +303,235 @@ TEST(GnssTimeSync, TheLineSeqCountsEachSecondFiledAndEachRestart)
     EXPECT_FALSE(s.valid);                 // 10 s of history before it answers again
     EXPECT_EQ(s.bins, 1);
     EXPECT_GT(ts.lineSeq(), 30u);
+}
+
+// ---- exact samples: a 1PPS line (Config::exact_step_s, the mosaic-G5's)
+
+namespace
+{
+
+// The 1PPS edges of a GPS second each, on an MCU clock 16 ppm fast (the
+// V9's), each stamped a few microseconds late by the interrupt; from
+// step_from_s on, the receiver's 1PPS sits step_ms later (the sky it tracks
+// was delayed: on the RF rig, a transmitter underrun).
+struct PpsEdges
+{
+    double  gps0 = 2440 * 604800.0 + 302400.0;
+    double  drift = 16e-6;
+    int64_t mcu0 = 50000000;
+    double  step_from_s = 1e9;   // s after gps0
+    double  step_ms = 0.0;
+
+    double mcuUs(double gps) const { return mcu0 + (gps - gps0) * (1.0 + drift) * 1.0e6; }
+    int64_t edge(int k) const
+    {
+        const double at = mcuUs(gps0 + k) + (k >= step_from_s ? step_ms * 1.0e3 : 0.0);
+        return static_cast<int64_t>(std::llround(at)) + (k * 7919) % 5;   // 0-4 us of interrupt latency
+    }
+    void feed(GnssTimeSync& ts, int from, int to) const
+    {
+        for (int k = from; k < to; ++k)
+            ts.addSample(gps0 + k, edge(k));
+    }
+    // the line's place for second k against its edge, us
+    double offUs(const GnssTimeSync& ts, int k) const
+    {
+        int64_t mcu = 0;
+        EXPECT_TRUE(ts.mcuAt(gps0 + k, mcu));
+        return static_cast<double>(edge(k) - mcu);
+    }
+};
+
+GnssTimeSync ppsLine()
+{
+    GnssTimeSync::Config cfg;
+    cfg.exact_step_s = 100e-6;
+    return GnssTimeSync(cfg);
+}
+
+}  // namespace
+
+// The 10/17 bench (V9, RF rig): a 6.854 ms transmitter underrun delayed the
+// sky, and the receiver's 1PPS followed it when it re-acquired. The lower
+// envelope keeps the minute of seconds before: every tag placed on it was
+// 6.854 ms early (the PPS tag check read -6855 us at each whole second) until
+// those seconds left its window. As the LC86G's line (exact_step_s 0) it
+// still does that; as a 1PPS line it moves onto the step after three edges,
+// with the crystal's drift kept.
+TEST(GnssTimeSync, APpsLineFollowsAStepLaterOfItsEdges)
+{
+    PpsEdges pps;
+    pps.step_from_s = 120;
+    pps.step_ms = 6.854;
+
+    GnssTimeSync lc86;   // the envelope alone
+    pps.feed(lc86, 0, 150);
+    EXPECT_NEAR(pps.offUs(lc86, 150), 6854.0, 10.0);   // half a minute after the step: still the old seconds
+    pps.feed(lc86, 150, 175);
+    EXPECT_GT(pps.offUs(lc86, 175), 4000.0);            // its drift blocks starting to tilt it: still ms off
+    EXPECT_EQ(lc86.restarts(), 0u);
+
+    GnssTimeSync ts = ppsLine();
+    pps.feed(ts, 0, 120);
+    ASSERT_TRUE(ts.driftFitted());
+    const double drift_before = ts.driftPpm();
+    EXPECT_NEAR(drift_before, 16.0, 0.5);
+    EXPECT_NEAR(pps.offUs(ts, 120), 6854.0, 20.0);     // the first edge after the step
+    // the first two later edges are set aside, the line where it was
+    EXPECT_FALSE(ts.addSample(pps.gps0 + 120, pps.edge(120)));
+    EXPECT_FALSE(ts.addSample(pps.gps0 + 121, pps.edge(121)));
+    EXPECT_NEAR(pps.offUs(ts, 122), 6854.0, 20.0);
+    EXPECT_EQ(ts.steps(), 0u);
+    // the third moves the history onto them
+    EXPECT_TRUE(ts.addSample(pps.gps0 + 122, pps.edge(122)));
+    EXPECT_EQ(ts.steps(), 1u);
+    EXPECT_NEAR(ts.lastStepMs(), 6.854, 0.01);
+    EXPECT_EQ(ts.restarts(), 0u);
+    EXPECT_TRUE(ts.valid());
+    for (int k = 123; k < 400; ++k)
+    {
+        EXPECT_LT(std::fabs(pps.offUs(ts, k)), 20.0) << "second " << k;
+        ts.addSample(pps.gps0 + k, pps.edge(k));
+    }
+    EXPECT_NEAR(ts.driftPpm(), drift_before, 0.5);   // the crystal did not step
+    EXPECT_EQ(ts.steps(), 1u);
+}
+
+// A step earlier: the envelope takes it after three seconds, but its drift
+// blocks keep both levels for ten minutes and the drift comes out wrong. A
+// 1PPS line moves the whole history instead.
+TEST(GnssTimeSync, APpsLineFollowsAStepEarlierWithItsDriftKept)
+{
+    PpsEdges pps;
+    pps.step_from_s = 120;
+    pps.step_ms = -6.854;
+    GnssTimeSync lc86;
+    pps.feed(lc86, 0, 200);
+    GnssTimeSync ts = ppsLine();
+    pps.feed(ts, 0, 200);
+    EXPECT_EQ(ts.steps(), 1u);
+    EXPECT_NEAR(ts.lastStepMs(), -6.854, 0.01);
+    EXPECT_NEAR(ts.driftPpm(), 16.0, 0.5);
+    EXPECT_GT(std::fabs(lc86.driftPpm() - 16.0), 5.0);   // the envelope's blocks across the step
+    for (int k = 200; k < 260; ++k)
+    {
+        EXPECT_LT(std::fabs(pps.offUs(ts, k)), 20.0) << "second " << k;
+        ts.addSample(pps.gps0 + k, pps.edge(k));
+    }
+}
+
+// What is no step: an edge stamped late (a flash write held the interrupt
+// off), two in a row, or three that do not agree; and nothing before the
+// drift is fitted, while a flat line parts from the edges by the crystal.
+TEST(GnssTimeSync, APpsLineTakesNoLateEdgeForAStep)
+{
+    PpsEdges pps;
+    GnssTimeSync ts = ppsLine();
+    pps.feed(ts, 0, 60);
+    ASSERT_TRUE(ts.driftFitted());
+    // one 3 ms late, then two 3 ms late, then three late by 1, 2.5 and 4 ms
+    EXPECT_FALSE(ts.addSample(pps.gps0 + 60, pps.edge(60) + 3000));
+    pps.feed(ts, 61, 70);
+    EXPECT_FALSE(ts.addSample(pps.gps0 + 70, pps.edge(70) + 3000));
+    EXPECT_FALSE(ts.addSample(pps.gps0 + 71, pps.edge(71) + 3000));
+    pps.feed(ts, 72, 80);
+    EXPECT_FALSE(ts.addSample(pps.gps0 + 80, pps.edge(80) + 1000));
+    EXPECT_FALSE(ts.addSample(pps.gps0 + 81, pps.edge(81) + 2500));
+    EXPECT_FALSE(ts.addSample(pps.gps0 + 82, pps.edge(82) + 4000));
+    pps.feed(ts, 83, 100);
+    EXPECT_EQ(ts.steps(), 0u);
+    EXPECT_EQ(ts.restarts(), 0u);
+    EXPECT_LT(std::fabs(pps.offUs(ts, 100)), 20.0);
+
+    // before the drift is fitted the line runs flat and the edges part from
+    // it by 16 us a second: no step taken for that
+    GnssTimeSync fresh = ppsLine();
+    for (int k = 0; k < 40 && !fresh.driftFitted(); ++k)
+        fresh.addSample(pps.gps0 + k, pps.edge(k));
+    EXPECT_EQ(fresh.steps(), 0u);
+}
+
+// exact_step_s left at 0 (the LC86G): the line is the envelope it was, sample
+// for sample, through the same late edges and step.
+TEST(GnssTimeSync, WithoutExactStepsTheLineIsTheEnvelopeItWas)
+{
+    PpsEdges pps;
+    pps.step_from_s = 100;
+    pps.step_ms = 6.854;
+    GnssTimeSync a, b;
+    GnssTimeSync::Config c;
+    c.exact_step_s = 0.0;
+    b.setConfig(c);
+    for (int k = 0; k < 200; ++k)
+    {
+        const int64_t e = pps.edge(k) + (k == 50 ? 3000 : 0);
+        EXPECT_EQ(a.addSample(pps.gps0 + k, e), b.addSample(pps.gps0 + k, e));
+        GnssTimeSync::Snapshot sa, sb;
+        a.snapshot(sa);
+        b.snapshot(sb);
+        EXPECT_EQ(sa.a_s, sb.a_s);
+        EXPECT_EQ(sa.drift, sb.drift);
+    }
+    EXPECT_EQ(b.steps(), 0u);
+}
+
+// A step later needs the caller's reason (may_step_later): edges stamped late
+// the same each second (an interrupt held off by something with the 1PPS's
+// phase) are set aside however many come, and the line keeps the seconds
+// before, so nothing it places moves; with the reason (the mosaic's PVTs
+// moved by as much) it steps after three. A step earlier needs none, and
+// the LC86G's line (exact_step_s 0) is the same either way.
+TEST(GnssTimeSync, APpsLineStepsLaterOnlyWithAReason)
+{
+    PpsEdges pps;
+    GnssTimeSync ts = ppsLine();
+    pps.feed(ts, 0, 120);
+    ASSERT_TRUE(ts.driftFitted());
+    // 30 edges 2 ms late (up to 60 us apart), no reason
+    for (int k = 120; k < 150; ++k)
+        EXPECT_FALSE(ts.addSample(pps.gps0 + k, pps.edge(k) + 2000 + (k * 37) % 61, false)) << k;
+    EXPECT_EQ(ts.steps(), 0u);
+    EXPECT_EQ(ts.laterRefused(), 30u);
+    EXPECT_EQ(ts.restarts(), 0u);
+    EXPECT_LT(std::fabs(pps.offUs(ts, 150)), 20.0);   // the line still where the on-time edges are
+    pps.feed(ts, 150, 160);
+    EXPECT_EQ(ts.steps(), 0u);
+    EXPECT_NEAR(ts.driftPpm(), 16.0, 0.5);
+
+    // the receiver's 1PPS really moves 6.854 ms later: the first two without
+    // the reason yet (the PVT that states the step comes after), then with it
+    PpsEdges moved = pps;
+    moved.step_from_s = 160;
+    moved.step_ms = 6.854;
+    EXPECT_FALSE(ts.addSample(moved.gps0 + 160, moved.edge(160), false));
+    EXPECT_FALSE(ts.addSample(moved.gps0 + 161, moved.edge(161), true));
+    EXPECT_FALSE(ts.addSample(moved.gps0 + 162, moved.edge(162), true));
+    EXPECT_EQ(ts.steps(), 0u);
+    EXPECT_TRUE(ts.addSample(moved.gps0 + 163, moved.edge(163), true));
+    EXPECT_EQ(ts.steps(), 1u);
+    EXPECT_NEAR(ts.lastStepMs(), 6.854, 0.01);
+    EXPECT_LT(std::fabs(moved.offUs(ts, 164)), 20.0);
+
+    // back 6.854 ms earlier: no reason needed
+    PpsEdges back = moved;
+    back.step_from_s = 1e9;
+    for (int k = 164; k < 168; ++k)
+        ts.addSample(back.gps0 + k, back.edge(k), false);
+    EXPECT_EQ(ts.steps(), 2u);
+    EXPECT_NEAR(ts.lastStepMs(), -6.854, 0.01);
+    EXPECT_LT(std::fabs(back.offUs(ts, 168)), 20.0);
+
+    // the LC86G's line: the reason changes nothing
+    GnssTimeSync a, b;
+    for (int k = 0; k < 200; ++k)
+    {
+        const int64_t e = pps.edge(k) + (k >= 100 && k < 130 ? 2000 : 0);
+        EXPECT_EQ(a.addSample(pps.gps0 + k, e, true), b.addSample(pps.gps0 + k, e, false));
+        GnssTimeSync::Snapshot sa, sb;
+        a.snapshot(sa);
+        b.snapshot(sb);
+        EXPECT_EQ(sa.a_s, sb.a_s);
+        EXPECT_EQ(sa.drift, sb.drift);
+    }
+    EXPECT_EQ(b.laterRefused(), 0u);
 }

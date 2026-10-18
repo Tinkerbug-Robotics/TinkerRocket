@@ -202,14 +202,17 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 #endif
 #endif
 
-// The V9 flying a Septentrio mosaic-G5 on J1 (-DTR_GNSS_MOSAIC=1,
+// The V9 or the V8 flying a Septentrio mosaic-G5 on J1 (-DTR_GNSS_MOSAIC=1,
 // CMakeLists.txt). The driver is the build's choice, like the M1's LC86G; the
 // harness puts the receiver's 1PPS on J1 pin 5, which only this build reads,
-// and only as an input (board_v9.h). Refused anywhere else: the M1's receiver
-// is soldered on, and no other board's J1 has been checked for this harness.
+// and only as an input (board_v9.h, board_v8.h). The V8's J1 is the V9's,
+// GPIO3/GPIO4 and pin 5 on GPIO2 (#1642). The Goblin flies the V9 on
+// 2026-10-24 (its V8 lost its barometer); the V8 build stays supported.
+// Refused anywhere else: the M1's receiver is soldered on, and no other
+// board's J1 has been checked for this harness.
 #if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
-#if !TR_BOARD_V9
-#error "TR_GNSS_DRIVER_MOSAIC is a V9 build (-DTR_BOARD_V9=1 -DTR_GNSS_MOSAIC=1)"
+#if !TR_BOARD_V9 && !TR_BOARD_V8
+#error "TR_GNSS_DRIVER_MOSAIC is a V9 or V8 build (-DTR_BOARD_V9=1 or -DTR_BOARD_V8=1, with -DTR_GNSS_MOSAIC=1)"
 #endif
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
 #error "One GNSS driver per build: TR_GNSS_DRIVER_MOSAIC and TR_GNSS_DRIVER_LC86 are both set"
@@ -236,31 +239,53 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 #endif
 
 // #1600 phase 4: the raw-GNSS shadow filter (TR_RawGnssShadow, main.cpp's
-// "raw-GNSS shadow filter" section).  It needs the LC86G's raw MSM7, so it
-// runs wherever that driver is and nowhere else; -DTR_RAW_GNSS_SHADOW=0 builds
-// an LC86G image without it (flight_computer/CMakeLists.txt passes it on), for
-// a bench A/B of what it costs.
+// "raw-GNSS shadow filter" section).  It needs a receiver's raw measurements,
+// so it runs wherever a driver hands them over and nowhere else: the LC86G's
+// MSM7 (the Beetle) and the mosaic-G5's MeasEpoch (the mosaic-only image on
+// the V8 or V9). -DTR_RAW_GNSS_SHADOW=0 builds either image without it
+// (flight_computer/CMakeLists.txt passes it on): an LC86G image for a bench
+// A/B of what it costs, a mosaic image that flies GpsInsEKF alone, with PSRAM
+// off. The auto image (TR_GNSS_DRIVER_AUTO) never has it: it finds its
+// receiver at boot, and choosing its one filter then waits for after 10/24.
+// (No TR_GNSS_HAS_RAW macro: the Beetle's image must see no new one.)
 #ifndef TR_RAW_GNSS_SHADOW
-#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+#if (defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86) || (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC)
 #define TR_RAW_GNSS_SHADOW 1
 #else
 #define TR_RAW_GNSS_SHADOW 0
 #endif
 #endif
-#if TR_RAW_GNSS_SHADOW && !(defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86)
-#error "TR_RAW_GNSS_SHADOW needs the LC86G driver's raw MSM7 (TR_GNSS_DRIVER_LC86=1)"
+#if TR_RAW_GNSS_SHADOW && defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+#error "TR_RAW_GNSS_SHADOW is not for the auto image: it finds its receiver at boot and flies GpsInsEKF (the mosaic-only image, -DTR_GNSS_MOSAIC=1, flies the raw-GNSS filter)"
+#endif
+#if TR_RAW_GNSS_SHADOW && !((defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86) || (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC))
+#error "TR_RAW_GNSS_SHADOW needs raw measurements: the LC86G's MSM7 (TR_GNSS_DRIVER_LC86=1) or the mosaic-G5's MeasEpoch (TR_GNSS_DRIVER_MOSAIC=1)"
 #endif
 
-// #1600: where the raw-GNSS filter runs (the Beetle) it is the navigation
-// filter. GpsInsEKF does not run there; main.cpp's `ekf` is RawNavAdapter
-// (raw_nav_adapter.h), GpsInsEKF's face on the raw filter's state. The V9
-// keeps GpsInsEKF on the SAM-M10Q's fix. -DTR_RAW_GNSS_PRIMARY=0 flies
+// #1600: where the raw-GNSS filter runs it is the navigation filter: the
+// Beetle, and the mosaic-only image (the Goblin's V9 on 10/24). GpsInsEKF does
+// not run there; main.cpp's `ekf` is RawNavAdapter (raw_nav_adapter.h),
+// GpsInsEKF's face on the raw filter's state. The V9 and V8 auto images keep
+// GpsInsEKF on the receiver's fix. On the LC86G, -DTR_RAW_GNSS_PRIMARY=0 flies
 // GpsInsEKF with the raw filter as a shadow beside it, as before.
 #ifndef TR_RAW_GNSS_PRIMARY
 #define TR_RAW_GNSS_PRIMARY TR_RAW_GNSS_SHADOW
 #endif
 #if TR_RAW_GNSS_PRIMARY && !TR_RAW_GNSS_SHADOW
 #error "TR_RAW_GNSS_PRIMARY needs the raw-GNSS filter (TR_RAW_GNSS_SHADOW=1)"
+#endif
+// One navigation filter on the mosaic-G5 (owner, 2026-10-17): the raw-GNSS
+// filter, or with -DTR_RAW_GNSS_SHADOW=0 GpsInsEKF alone -- never both.
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC && TR_RAW_GNSS_SHADOW && !TR_RAW_GNSS_PRIMARY
+#error "the mosaic-G5 image flies one navigation filter: the raw-GNSS filter, or GpsInsEKF alone with -DTR_RAW_GNSS_SHADOW=0"
+#endif
+// The mosaic-only image's own paths for its one filter (main.cpp: the
+// profile, the restore's sigmas, the start's checks, the navigation blocks
+// and the ionosphere). Defined there and only there, so `#if
+// TR_RAW_NAV_MOSAIC` reads 0 everywhere else and the Beetle's image sees
+// neither the macro nor any of those lines.
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC && TR_RAW_GNSS_PRIMARY
+#define TR_RAW_NAV_MOSAIC 1
 #endif
 
 // The heading from thrust (TR_RawGnssShadow/HeadingFit.h): in flight the raw
@@ -753,6 +778,49 @@ struct config : board_pins
     // converged filter, flag one that hasn't converged or is pinned at the cap.
     static constexpr float    EKF_ATT_VAR_OK        = 0.1f;   // rad²,  worst attitude axis (~18° 1σ)
     static constexpr float    EKF_VEL_VAR_OK        = 4.0f;   // (m/s)², worst velocity axis (~2 m/s 1σ)
+
+#if TR_RAW_NAV_MOSAIC
+    // The mosaic-only image's one navigation filter, the raw-GNSS filter
+    // (main.cpp startRawShadow; the plan's section 2, 2026-10-17).
+    //   RESTORE_*: a flight restored after a reboot starts this unsure on
+    //     every axis. The boot asks the OC for a flight before the mosaic's
+    //     bring-up and does not wait on the receiver when there is one (its
+    //     GNSS poll task brings it up; main.cpp setup_fc), but an OC still
+    //     booting after a brownout of both is
+    //     asked again after it, so the snapshot can be up to 30 s old
+    //     (kBeginTimeoutMs); GpsInsEKF's 5 m / 5 m/s / ~10 deg was sized for
+    //     a sub-second reboot. The start's height is the barometer's
+    //     (raw_nav_policy.h). Proposals, tuned on replay.
+    //   HEADING_GATE: what of the attitude GNSS reaches in flight
+    //     (RawGnssShadow::HeadingGate): 1, the whole attitude from launch, as
+    //     the Beetle flies. 2 (the heading only until the apogee call) is the
+    //     user's to choose; TR_BENCH_HEADING_GATE_FULL overrides either on a
+    //     bench image.
+    //   INTERNAL_FLOOR: the filter does not start unless the largest internal
+    //     block is at least this after its objects are allocated: its two
+    //     tasks' stacks (14 KB) and the flight task's 16 KB come out of what
+    //     is left, and G6 wants 40 KB free with the flight task running.
+    //   The flight safeguards (the Doppler change check, the heading share and
+    //     the turning body's Doppler allowance) are not here: they are set in
+    //     one place, gnss_raw::applyMosaicFlightSafeguards
+    //     (TR_RawGnssShadow/ReceiverProfileApply.h), which tools/raw_replay's
+    //     --receiver mosaic calls too.
+    static constexpr double   RAW_RESTORE_POS_SIGMA_M   = 100.0;
+    static constexpr double   RAW_RESTORE_VEL_SIGMA_MPS = 20.0;
+    static constexpr double   RAW_RESTORE_ATT_SIGMA_DEG = 15.0;
+    static constexpr uint8_t  RAW_HEADING_GATE          = 1;
+    static constexpr uint32_t RAW_INTERNAL_FLOOR_B      = 56u * 1024u;
+    static constexpr uint32_t RAW_MEAS_STACK_B          = 6144;   // the GNSS task: SBF decoding, a 128-entry store
+    // The raw vote guard (raw_vote_guard.h) only logs on this image: it still
+    // judges the filter against the barometer's climb rate and says when it
+    // would have withheld the filter's apogee votes (console, FCS bit 1), but
+    // the votes are cast. The user's apogee bar (2026-10-17): the call within
+    // 2 s of the true apogee, never above 20 m/s of climb. Without the guard
+    // the grid's worst early call from a GNSS fault was 1.2 s early at 12 m/s;
+    // with it, a lagging static port tripped it on a good filter and the call
+    // came up to 2.4 s late.
+    static constexpr bool     RAW_VOTE_GUARD_ACTS       = false;
+#endif
 
     // #1190 EKF shock gate: a SATURATED gyro or accelerometer axis is not a
     // measurement, so the filter holds its attitude through it.  The

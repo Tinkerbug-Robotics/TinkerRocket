@@ -1569,6 +1569,14 @@ static_assert(sizeof(FcStatusData) == 5,
 // two agree by construction.
 static constexpr uint8_t FCS_CAMERA_ENGAGED = (1u << 0);
 
+// The mosaic-only image's raw vote guard (flight_computer main/raw_vote_guard.h)
+// has latched this flight: the raw-GNSS filter -- that image's one navigation
+// filter -- read its vertical velocity more than 10 m/s below the barometer's
+// climb rate for a second after burnout, so its velocity and pitch apogee votes
+// are withheld until the next launch (or sim edge). Never set on any other
+// image. A flight log reads the latch time from the first frame with it set.
+static constexpr uint8_t FCS_RAW_VOTES_WITHHELD = (1u << 1);
+
 // ── RawGnssEkfData (RAW_GNSS_EKF_MSG 0x96, 10 Hz) ───────────────────────────
 // #1600 phase 4.  The raw-GNSS shadow filter (TR_RawGnssEKF, run by
 // TR_RawGnssShadow on core 0): a tightly coupled GNSS/INS filter fed the
@@ -1671,7 +1679,11 @@ static constexpr uint8_t GCL_STARTED = 0x02;  // a sample has started the histor
 // The line's samples are 1PPS edges on an MCU pin, each paired with its GPS
 // second, not sentence arrivals (the mosaic-G5 on the V9: J1 pin 5). An edge
 // IS its GPS second, so latency_s is 0 and needs no calibration; time_us is
-// the edge that moved the line.
+// the edge that moved the line (the driver took it a few ms later, when the
+// block naming the edge's second arrived). The mosaic-only image logs one at
+// every edge paired, moved or not (seq repeats, and moves by at most 1 from
+// one record to the next: more is a record lost): a replay judges each edge
+// against the line, as its raw epochs' time tag does (MosaicTimeTag.h).
 static constexpr uint8_t GCL_PPS     = 0x04;
 
 // ── PAD_CONTEXT_MSG (0x9E): the pad, written once after launch ──────────────
@@ -4419,7 +4431,13 @@ struct __attribute__((packed)) FlightSnapshotData
     // onward, because max_alt_m/max_speed_mps restart at 0 on boot.
     float    max_alt_m;           // v5 (was ekf_euler[0])
     float    max_speed_mps;       // v5 (was ekf_euler[1])
-    float    reserved_v5;         // v5 (was ekf_euler[2]) — spare, writes 0
+    // v5 (was ekf_euler[2]). The mosaic-only image (TR_RAW_NAV_MOSAIC) writes
+    // the receiver's geoid separation here, m: its raw-GNSS filter keeps heights
+    // above the ellipsoid (ekf_pos_rrm[2] is one) and turns them to MSL with it,
+    // and a reboot in flight may have no receiver to ask (a crash boot leaves
+    // the mosaic out). 0 = not recorded: every other image writes 0, and the
+    // restore then keeps whatever separation it has.
+    float    reserved_v5;
 
     // Board→rocket quaternion ×10000 (v3) — authoritative rotation,
     // covers AUTO_EXACT mountings the discrete code can't express.

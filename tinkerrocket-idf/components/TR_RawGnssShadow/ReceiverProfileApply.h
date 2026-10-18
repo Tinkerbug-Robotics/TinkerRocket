@@ -11,6 +11,8 @@
 #ifndef RAW_GNSS_RECEIVER_PROFILE_APPLY_H
 #define RAW_GNSS_RECEIVER_PROFILE_APPLY_H
 
+#include <cmath>
+
 #include "RawGnssShadow.h"
 #include "RawMeasBuilder.h"
 #include "ReceiverProfile.h"
@@ -18,6 +20,21 @@
 
 namespace gnss_raw
 {
+
+// The period the filter's epochs come at: the fused grid's where the profile
+// has one, else the receiver's own.
+inline double fusedEpochPeriod(const GnssReceiverProfile& p)
+{
+    return p.fuse_epoch_period_s > 0.0 ? p.fuse_epoch_period_s : p.raw_epoch_period_s;
+}
+
+// reject_persist_s in epochs of period_s, at least 1 and at most what the
+// EKF's per-satellite count (a uint8_t) reaches
+inline int persistEpochs(double persist_s, double period_s)
+{
+    const long n = std::lround(persist_s / period_s);
+    return n < 1 ? 1 : (n > 255 ? 255 : static_cast<int>(n));
+}
 
 inline void applyReceiverProfile(const GnssReceiverProfile& p, RawMeasBuilder::Config& c)
 {
@@ -41,7 +58,8 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawMeasBuilder::C
     c.rr_relock_sigma = p.rr_relock_sigma;
     c.carrier = p.cr_mode != kCarrierOff;
     c.cr_min_lock_ms = p.cr_min_lock_ms;
-    c.epoch_period_s = p.raw_epoch_period_s;
+    // the epochs it builds: consecutive ones are the fused grid's apart
+    c.epoch_period_s = fusedEpochPeriod(p);
     c.cr_max_interval_s = p.cr_max_interval_s;
     c.cr_sigma_floor_mps = p.cr_sigma_floor_mps;
 }
@@ -70,6 +88,14 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssEKFParams&
         e.cr_carrier_hz[k] = p.sig[k].carrier_hz;
         e.cr_half_cycle_unflagged[k] = p.sig[k].half_cycle_unflagged;
     }
+    // A refusal's let-in in time, not epochs: the Doppler counts every fused
+    // epoch, the pseudorange only those it is fused on (pr_period_s)
+    const double fused = fusedEpochPeriod(p);
+    if (p.reject_persist_s > 0.0 && fused > 0.0)
+    {
+        e.reject_persist = persistEpochs(p.reject_persist_s, p.pr_period_s > fused ? p.pr_period_s : fused);
+        e.reject_persist_rr = persistEpochs(p.reject_persist_s, fused);
+    }
 }
 
 // The one call: the shadow's own settings, its builder's (the GNSS task's
@@ -77,8 +103,89 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssEKFParams&
 inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssShadow::Config& c)
 {
     c.epoch_latency_s = p.epoch_latency_s;
+    c.max_epoch_age_s = p.max_epoch_age_s;
+    c.epoch_job_max_s = p.epoch_job_max_s;
+    c.pr_period_s = p.pr_period_s;
+    c.rr_dyn_window_s = p.rr_dyn_window_s;
+    c.heading_fit_period_s = p.heading_fit_period_s;
+    c.sat_cap = p.sat_cap;
+    c.level.min_dt_s = p.level_min_dt_s;
     applyReceiverProfile(p, c.meas);
     applyReceiverProfile(p, c.ekf);
+}
+
+// The mosaic-only image's flight safeguards (wave 3, 2026-10-18), in one place:
+// main.cpp's startRawShadow calls it under TR_RAW_NAV_MOSAIC after the profile
+// and before any bench override, and tools/raw_replay's --receiver mosaic calls
+// it too, so a replay flies the image's settings by construction. The LC86G
+// and generic paths never call it: every field below defaults off, the
+// Beetle's filter. Each one fails toward unaided -- the check holds Dopplers
+// out, the share lowers GNSS's heading gain, the allowance widens the
+// Dopplers' sigma -- and none needs the antenna's offset, which is never
+// measured before a flight (a bound only).
+//   - The Doppler change check (RawGnssShadow.h), acting in flight only: each
+//     Doppler's change between epochs against the IMU's velocity change along
+//     its line of sight, summed over a leaky 1 s window, the epoch's change
+//     at 4 sigmas with a 10 deg attitude allowance, and a failed epoch's
+//     latch let go at 5. Grid B: a loop settling after the thrust, a stale
+//     receiver and the slow ramps no longer turn the coast's heading (worst
+//     pre-apogee excess over the unaided twin 62 -> 1.3 deg on the settling
+//     pattern), with no-fault runs unchanged run for run. A launch with no
+//     magnetometer heading (the V9's until its magnetometer is calibrated in
+//     flight configuration) takes any heading about the vertical as well
+//     (dv_hdg_unset_deg 180): with a pad heading 120-180 deg off, the 10 deg
+//     allowance alone held the Dopplers out of no-fault flights.
+//   - GNSS's heading gain by how well the moment observes it (TR_RawGnssEKF.h
+//     hdg_obs_mode): the rows' gain on the attitude about the vertical and the
+//     gyro bias along it scaled by the 1 s mean horizontal specific force over
+//     5 m/s^2, open whenever the IMU read past 2 g within 0.2 s, everywhere
+//     (the pad too). It ends the real logs' heading walk on a slowly turning
+//     pad and halves the consistent ramps the check cannot see.
+//   - The turning body's Doppler allowance: each Doppler's sigma takes what
+//     an antenna up to 0.3 m along the nose and 0.03 m across it could move
+//     while the body turns, on an epoch whose rate across the nose reached
+//     2 rad/s (the drogue's snatch, not a boost's weathercocking), at any time
+//     (motor ejection can snatch before the apogee call). The hold and the
+//     skip stay off.
+inline void applyMosaicFlightSafeguards(RawGnssShadow::Config& c)
+{
+    // the Doppler change check
+    c.dv_check = RawGnssShadow::kDvAct;
+    c.dv_window_s = 1.0;
+    c.dv_att_allow_deg = 10.0;
+    c.dv_epoch_k = 4.0;
+    c.dv_latch_k = 5.0;
+    c.dv_ground = false;
+    c.dv_sat_k = 5.0;
+    c.dv_floor_mps = 0.03;
+    c.dv_sigma_per_g = 0.1;
+    c.dv_scale_allow = 0.01;
+    c.dv_bias_allow_mps2 = 0.1;
+    c.dv_lever_allow_m = 0.3;   // a bound on the offset, not a measured one
+    c.dv_hold_s = 1.0;
+    c.dv_epoch_hold_s = 0.5;
+    c.dv_deweight = false;
+    c.dv_noise_tau_s = 0.0;
+    c.dv_hold_all_frac = 0.5;
+    c.dv_hdg_unset_deg = 180.0;   // no magnetometer heading at launch: any heading
+    // GNSS's heading gain by its observability
+    c.ekf.hdg_obs_mode = kHdgObsForce;
+    c.ekf.hdg_obs_fh_mps2 = 5.0;
+    c.ekf.hdg_obs_tau_s = 1.0;
+    c.ekf.hdg_obs_open_g = 2.0;
+    c.ekf.hdg_obs_open_hold_s = 0.2;
+    c.ekf.hdg_obs_floor = 0.0;
+    c.heading_obs_scope = RawGnssShadow::kObsEverywhere;
+    // the turning body's Doppler allowance (bounds on the antenna's offset,
+    // not measured ones); its attitude hold and its epoch skip stay off
+    c.rot_lever_axial_m = 0.30;
+    c.rot_lever_radial_m = 0.03;
+    c.rot_lever_min_rps = 2.0;
+    c.rot_after_apogee = false;
+    c.att_hold_rate_rps = 0.0;
+    c.att_hold_s = 0.0;
+    c.rot_skip_rate_rps = 0.0;
+    c.rot_skip_s = 0.0;
 }
 
 }  // namespace gnss_raw

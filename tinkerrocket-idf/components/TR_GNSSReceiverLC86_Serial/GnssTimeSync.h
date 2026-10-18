@@ -30,6 +30,32 @@
 // all. Five samples in a row far from the line (a step in the receiver's
 // time, a reset) restart it.
 //
+// Exact samples (Config::exact_step_s, off unless set: the mosaic-G5's 1PPS
+// edges) also follow a smaller step in their own time scale. A lower envelope
+// cannot: a step later stays under the minute of older seconds until they
+// leave the window, and a step earlier is taken after three seconds but sits
+// in the drift's 10 s blocks for ten minutes. On the RF rig a transmitter
+// underrun delays the whole sky, and the receiver's 1PPS follows it once it
+// re-acquires (6.854 ms on 2026-10-17: every tag on the old line was that far
+// off for the next minute). So once the drift is fitted, kExactStepCount
+// samples in a row more than exact_step_s off the line, and within it of each
+// other, are set aside and then move the whole history onto them, the drift
+// kept: the MCU crystal did not step. A step later needs a reason the caller
+// knows (addSample's may_step_later): an edge stamped late is also what an
+// interrupt held off gives, the same each second if what holds it off is, so
+// without one a later sample is set aside and the line keeps the seconds
+// before (the mosaic's time tag gives the reason: its PVTs' bias moved by
+// as much, MosaicTimeTag.h). A step earlier needs none: an interrupt is never
+// early. And until the blocks have fitted the
+// drift (about 30 s), exact samples give the line a provisional one from the
+// seconds it holds (a median of slopes, from kProvisionalBins seconds on),
+// so it does not run flat: an edge is good to microseconds, and a flat line
+// parts from them by the crystal's ppm every second (0.15 ms by the time it
+// is valid at the V9's 16 ppm). driftFitted() still waits for the blocks.
+// The LC86G's sentence stamps sit up to a poll above the line, which the
+// envelope is there to sort out, and a minute of them is too short for a
+// slope: it leaves exact_step_s at 0.
+//
 // Pure and host-testable (tests_cpp/test_gnss_time_sync.cpp).
 #ifndef GNSS_TIME_SYNC_H
 #define GNSS_TIME_SYNC_H
@@ -50,11 +76,17 @@ public:
         double latency_s = 0.0;
         // A sample this far from the line counts toward a restart, s.
         double max_step_s = 0.5;
+        // Exact samples only (see the top of this file): once the drift is
+        // fitted, a sample this far off the line counts toward a step that
+        // moves the history, s. 0: off.
+        double exact_step_s = 0.0;
     };
 
     static constexpr int    kBins       = 64;     // GPS seconds with samples: about a minute
     static constexpr int    kAnchorRank = 3;      // the envelope sits on the 3rd-lowest second
     static constexpr int    kStepCount  = 5;      // samples in a row off the line to restart
+    static constexpr int    kExactStepCount = 3;  // exact samples in a row, one step apart, to move the history
+    static constexpr int    kProvisionalBins = 5; // exact samples: seconds held before a provisional drift
     static constexpr double kMinSpanS   = 10.0;   // history before answering, s
     static constexpr double kNearS      = 1.0e-3; // seconds this close to the line count as on it
     static constexpr int    kBlocks     = 60;     // drift baseline: 10 minutes of ...
@@ -72,7 +104,10 @@ public:
     // One epoch: its GPS time (continuous seconds, week * 604800 + time of
     // week) and the MCU time (esp_timer, us) its sentence ended. False if the
     // sample was set aside as an outlier or restarted the history.
-    bool addSample(double gps_s, int64_t mcu_us);
+    // may_step_later (exact samples only): whether this sample, if it sits
+    // more than exact_step_s after the line, may take part in a step later
+    // (see the top of this file); false sets it aside.
+    bool addSample(double gps_s, int64_t mcu_us, bool may_step_later = true);
 
     // Enough history to answer: seconds spanning kMinSpanS.
     bool valid() const;
@@ -83,6 +118,11 @@ public:
 
     // The MCU crystal against GPS, ppm (positive: the MCU clock runs fast).
     double driftPpm() const { return drift_ * 1.0e6; }
+    // Whether that drift has been fitted yet (three 10 s blocks spanning
+    // 20 s, about 30 s after the first sample). Before, the line runs flat:
+    // valid, but off the MCU clock by the crystal's ppm each second since its
+    // anchor (exact samples: on a provisional drift, see the top).
+    bool driftFitted() const { return drift_fitted_; }
     // How far above the envelope 90 % of the recent samples sit, ms: the
     // poll's quantisation, what the envelope removes. (Polls that land while
     // the receiver's burst is still arriving backdate exactly, so the median
@@ -93,6 +133,13 @@ public:
     double envelopeRmsMs() const { return env_rms_ms_; }
     uint32_t samples() const { return samples_; }
     uint32_t restarts() const { return restarts_; }
+    // Steps the history moved onto (exact_step_s), and the last one's size,
+    // ms (positive: the samples came later). Never reset.
+    uint32_t steps() const { return steps_; }
+    double lastStepMs() const { return last_step_ms_; }
+    // Samples set aside as later than the line with no reason to step
+    // (may_step_later false). Never reset.
+    uint32_t laterRefused() const { return later_refused_; }
 
     // The line as mcuAt applies it, for a log a replay can place epochs by
     // exactly as the flight did: with t = gps_s - gps0_s,
@@ -139,6 +186,7 @@ private:
     void   refit();
     void   refitDrift();
     void   start(double gps_s, int64_t mcu_us);
+    void   shiftHistory(double by_s);
 
     Config   cfg_;
     double   gps0_ = 0.0;   // references that keep the doubles small
@@ -151,10 +199,16 @@ private:
     int      bn_ = 0;
     double   a_ = 0.0;      // the envelope at t_ref_, s
     double   drift_ = 0.0;  // d(MCU - GPS) / d(GPS)
+    bool     drift_fitted_ = false;
     double   t_ref_ = 0.0;
     double   env_rms_ms_ = 0.0;
     bool     have_ = false;
     int      off_run_ = 0;
+    int      step_run_ = 0;                    // exact samples set aside toward a step
+    double   step_e_[kExactStepCount] = {};    //   each one's offset from the line, s
+    uint32_t steps_ = 0;                       // steps() and lastStepMs(): not reset
+    double   last_step_ms_ = 0.0;
+    uint32_t later_refused_ = 0;               // laterRefused(): not reset
     uint32_t samples_ = 0;
     uint32_t restarts_ = 0;
     uint32_t seq_ = 0;          // lineSeq(): not reset

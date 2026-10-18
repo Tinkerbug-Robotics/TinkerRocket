@@ -31,6 +31,13 @@
 // drogue's drag on the rig settled to within 1 degree of vertical about 7 s
 // after it opened, its size within 0.4 m/s^2 of g after 2.
 //
+// The steady test counts epochs, and the Beetle's come once a second. At 10
+// Hz (the mosaic-G5) two steady changes would be 0.2 s, a pendulum's turning
+// point under a drogue, its drag far off vertical. So with min_dt_s the test
+// takes an epoch only once it is that long after the last one it took (0.95 s:
+// the 1 Hz test at 10 Hz); every epoch still counts as a sign of satellites
+// for the outage. At 0 every epoch is taken, as before.
+//
 // Pure, header-only: RawGnssShadow drives it, tests_cpp/test_level_gate.cpp
 // tests it.
 #ifndef LEVEL_GATE_H
@@ -52,6 +59,7 @@ public:
         double max_gap_s      = 2.5;   // epochs further apart do not make a change (start over)
         double outage_s       = 2.0;   // no epoch for this long: no satellites
         double g_hold_s       = 5.0;   // then level once the force has been g's size this long
+        double min_dt_s       = 0.0;   // the steady test takes epochs at least this far apart (0: every one)
     };
 
     static constexpr double kG = 9.80665;
@@ -62,6 +70,7 @@ public:
     void reset()
     {
         have_ = false;
+        seen_ = false;
         steady_n_ = 0;
         g_since_ = -1.0;
     }
@@ -69,6 +78,10 @@ public:
     // The filter's velocity (NED, m/s) just after an epoch's update, at t (s).
     void onEpoch(double t, const float v[3])
     {
+        seen_ = true;
+        t_seen_ = t;
+        if (have_ && cfg_.min_dt_s > 0.0 && t >= t_ && t - t_ < cfg_.min_dt_s)
+            return;                       // too soon after the last one the test took
         if (have_)
         {
             const double dt = t - t_;
@@ -115,7 +128,7 @@ public:
     {
         if (!gSized(acc))
             return false;
-        const bool outage = !have_ || t - t_ > cfg_.outage_s;
+        const bool outage = !seen_ || t - t_seen_ > cfg_.outage_s;
         if (!outage)
             return steady();
         return g_since_ >= 0.0 && t - g_since_ >= cfg_.g_hold_s;
@@ -123,9 +136,11 @@ public:
 
 private:
     Config cfg_;
-    bool   have_ = false;
+    bool   have_ = false;   // the steady test's last epoch: when, and the velocity then
     double t_ = 0.0;
     double v_[3] = {};
+    bool   seen_ = false;   // any epoch's (the outage's clock)
+    double t_seen_ = 0.0;
     int    steady_n_ = 0;
     double g_since_ = -1.0;   // the force g's size since (s), < 0: not now
 };
