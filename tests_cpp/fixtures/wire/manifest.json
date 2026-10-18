@@ -271,6 +271,10 @@
  "size": 2,
  "notes": "GnssLogConfigData; 0 detailed, 1 reduced"},
  {
+ "file": "commands/cmd81_antenna_7.bin",
+ "size": 8,
+ "notes": "AntennaOffsetConfigData; known 0 unknown (all 0), 1 measured: board-frame mm, each within +-2000"},
+ {
  "file": "commands/cmd75_padcal_10.bin",
  "size": 11,
  "notes": "PadCalConfigData: [iono i8 x8][gps_day u16]; gps_day 0 = no ionosphere"},

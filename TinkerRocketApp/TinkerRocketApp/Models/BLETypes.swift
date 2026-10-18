@@ -258,6 +258,10 @@ struct RocketConfig {
     /// The GNSS log setting ("glog", cmd 79): `RocketProfile.gnssLogDetailed`
     /// or `.gnssLogReduced`. nil = firmware that has no such setting.
     var gnssLogSetting: UInt8? = nil
+    /// The GNSS antenna offset ("antk"/"antx"/"anty"/"antz", cmd 81), in the
+    /// board's own axes. nil = firmware that has no such setting, or a report
+    /// missing a key or holding a value the firmware would refuse.
+    var antennaOffset: AntennaOffset? = nil
     var loraFreqMHz: Float? = nil
     var loraSF: UInt8? = nil
     var loraBwKHz: Float? = nil

@@ -452,7 +452,8 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   1-24 and BeiDou 19-42 on one clock, lock kept to 200 m/s^2 along the line of sight, a dipole-like C/N0 along the
   nose (46 dB-Hz broadside, 6 dB on the axis), and noise at the mosaic profile v0's fits for each satellite's C/N0
   (the Doppler's without the profile's 1.5 margin; 0.05 m/s per g of stress against the profile's 0.5). The
-  antenna sits `--lever-arm` m (0.3) along the nose from the IMU; the filter keeps r = 0. The fix is a
+  antenna sits `--lever-arm` m (0.3) along the nose from the IMU (`--lever-arm-b x,y,z`: anywhere in the body);
+  the filter keeps r = 0 unless given it (`--antenna-m`). The fix is a
   least-squares solution from the same measurements -- its error added to the truth's velocity of 4-6 ms before
   the epoch (the PVT's lag) -- so a receiver fault reaches the GPS voter as it reaches the filter. After touchdown
   it adds a 0.05 s impact and 5 s at rest (the flights end falling at 15 m/s). Once a flight it also writes the
@@ -566,6 +567,20 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
     to read back (one coherent-fault run diverged to 48 deg where the allowance recovered to 1.4). Acting only
     from the apogee call misses a snatch that comes before the call (a late call, an early ejection).
   - On the four real V9 logs the floored allowances never act (byte-identical to the design).
+- **The antenna's offset, known** (`RawGnssShadow.h`, "The antenna's offset"; a `RAW_REPLAY_ANTENNA` build, on unless
+  the tree is older than fc/v9-antenna-offset): `--antenna-m x,y,z` (body FRD, m: the IMU to the antenna's phase
+  centre) gives the filter the offset the owner's setting (BLE cmd 81) gives the image, through
+  `gnss_raw::applyAntennaOffset` after the safeguards, as `startRawShadow()` does: every Doppler and pseudorange is
+  predicted at the antenna, and what the offset could be off by (`--antenna-sigma-m axial,radial`, the image's 0.05,
+  0.02, from `--antenna-min-rate` rad/s across the nose, the image's 0: any) replaces the turning body's 0.3 m bound
+  and the change check's lever allowance. `--antenna-att-mode 0|1|2`: the offset's attitude terms considered only,
+  also observed (the image's: the change check's lever roll), or fused. The epochs file gains `lever_roll_epochs`,
+  `lever_roll_deg`, `lever_roll_sigma_deg` (the lever roll so far and the last epoch's, RawGnssShadow's
+  `lever_roll_*`) and `rot_sigma_mps` (the epoch's turning-body allowance); the events JSON an `antenna` block (the
+  settings and the run's lever-roll sums). `sim_events.py --lever-arm-b x,y,z` (and `sim_grid.py`'s) puts the
+  truth's antenna anywhere in the body, not only up the nose. The evaluation (Grid B with the antenna 0.10 m and 0.3
+  m up the nose, the offset given right, 3 or 5 cm wrong, and not given) is in
+  gnss-attitude-study/v9-mosaic-filter-plan/evidence/antenna-offset/ (outside the repo).
 - **`sim_compare.py BASE NAME=EXP ...`** sets experiment grids (each a `sim_grid.py --arms design --harness-args
   "..."` run into its own OUT) beside the base grid's design and unaided twin, flight by flight: the phase bars per
   pattern (pooled over the informative magnetometer arms and over all of them), the worst excess, the deployment's

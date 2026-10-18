@@ -1582,6 +1582,18 @@ static void stageGnssLogConfig()
     cfg.setting = cfg_gnss_log;
     setPendingCommandWithConfig(GNSS_LOG_CONFIG_PENDING, GNSS_LOG_CONFIG_MSG, &cfg, sizeof(cfg));
 }
+
+// GNSS antenna offset (BLE cmd 81): where the antenna sits from the FC's IMU,
+// in the board's own frame, or unknown (the default). Kept like the GNSS log:
+// cached here for the readback ("antk", "antx", "anty", "antz"), relayed to
+// the FC, which keeps its own copy in NVS and applies it on the ground.
+static AntennaOffsetConfigData cfg_antenna = {};
+
+static void stageAntennaConfig()
+{
+    AntennaOffsetConfigData cfg = cfg_antenna;
+    setPendingCommandWithConfig(ANTENNA_CONFIG_PENDING, ANTENNA_CONFIG_MSG, &cfg, sizeof(cfg));
+}
 // Pyro config cache (4 channels on new PCB)
 static bool    cfg_pyro_enabled[4]      = { false, false, false, false };
 static uint8_t cfg_pyro_trigger_mode[4] = { 0, 0, 0, 0 };
@@ -4752,6 +4764,8 @@ static bool isKnownMessageType(uint8_t type)
         case IMU_RATE_CONFIG_MSG:
         case GNSS_LOG_CONFIG_PENDING:
         case GNSS_LOG_CONFIG_MSG:
+        case ANTENNA_CONFIG_PENDING:
+        case ANTENNA_CONFIG_MSG:
         case LORA_MSG:
         case SNAPSHOT_MSG:           // FC→OC over I2S during INFLIGHT
         case GET_FLIGHT_SNAPSHOT:    // FC→OC over I2C at boot recovery
@@ -7050,6 +7064,12 @@ static void sendCurrentConfig()
     // firmware that has no such setting, which the apps read as "this rocket
     // cannot change it".
     j += ",\"glog\":"; j += itos(cfg_gnss_log);
+    // The GNSS antenna offset (cmd 81): 0 unknown or 1 measured, and the board
+    // frame's mm (0 when unknown). Absent from firmware with no such setting.
+    j += ",\"antk\":"; j += itos(cfg_antenna.known);
+    j += ",\"antx\":"; j += itos(cfg_antenna.x_mm);
+    j += ",\"anty\":"; j += itos(cfg_antenna.y_mm);
+    j += ",\"antz\":"; j += itos(cfg_antenna.z_mm);
     // LoRa settings
     j += ",\"lf\":";  j += fmtf(lora_freq_mhz, 3);   // #1155 item 9: 0.1 MHz hid a 902.25 -> "902.20" (channel centres end in .125/.25)
     j += ",\"lsf\":"; j += itos(lora_sf);
@@ -9336,6 +9356,21 @@ static void loadCachedPeripheralConfigFromNvs()
     }
     prefs.end();
     ESP_LOGI("CFG", "NVS GNSS log: %s", gnssLogName(cfg_gnss_log));
+
+    // Load the cached GNSS antenna offset, readback only (the FC applies its own).
+    prefs.begin("antenna", false);
+    if (prefs.isKey("ofs"))
+    {
+        AntennaOffsetConfigData a = {};
+        if (prefs.getBytes("ofs", &a, sizeof(a)) == sizeof(a) && antennaOffsetValid(a)) cfg_antenna = a;
+        else ESP_LOGW("CFG", "NVS GNSS antenna offset invalid — keeping unknown");
+    }
+    prefs.end();
+    if (cfg_antenna.known)
+        ESP_LOGI("CFG", "NVS GNSS antenna offset: board X %d, Y %d, Z %d mm", (int)cfg_antenna.x_mm,
+                 (int)cfg_antenna.y_mm, (int)cfg_antenna.z_mm);
+    else
+        ESP_LOGI("CFG", "NVS GNSS antenna offset: unknown");
 
     // #1271: outstanding blind-window losses, carried across the power cycle
     // between the lost flight and the operator connecting to download. This
@@ -13248,6 +13283,42 @@ static void loop_oc()
                 {
                     ESP_LOGW("BLE", "GNSS log setting %u rejected (not detailed or reduced)",
                              (unsigned)setting);
+                }
+            }
+        }
+        else if (ble_cmd == 81)
+        {
+            // GNSS antenna offset: [known:1][x_mm:2][y_mm:2][z_mm:2], LE — the
+            // antenna's phase centre from the FC's IMU in the board's own frame
+            // (known 1), or unknown (known 0, every component 0). Relayed to the
+            // FC, which keeps it in FC NVS and gives it to the mosaic image's
+            // navigation filter on the ground (never INFLIGHT).
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= sizeof(AntennaOffsetConfigData))
+            {
+                AntennaOffsetConfigData a;
+                memcpy(&a, payload, sizeof(a));
+                if (antennaOffsetValid(a))
+                {
+                    cfg_antenna = a;
+                    stageAntennaConfig();
+                    Preferences p2;
+                    p2.begin("antenna", false);
+                    p2.putBytes("ofs", &cfg_antenna, sizeof(cfg_antenna));
+                    p2.end();
+                    if (a.known)
+                        ESP_LOGI("BLE", "GNSS antenna offset: board X %d, Y %d, Z %d mm -> FlightComputer",
+                                 (int)a.x_mm, (int)a.y_mm, (int)a.z_mm);
+                    else
+                        ESP_LOGI("BLE", "GNSS antenna offset: unknown -> FlightComputer");
+                    config_readback_dirty = true;
+                }
+                else
+                {
+                    ESP_LOGW("BLE", "GNSS antenna offset rejected (known %u, %d/%d/%d mm: over %d mm, or not 0 "
+                                    "when unknown)",
+                             (unsigned)a.known, (int)a.x_mm, (int)a.y_mm, (int)a.z_mm, (int)ANTENNA_OFFSET_MAX_MM);
                 }
             }
         }

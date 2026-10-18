@@ -57,6 +57,60 @@ public data class RocketGuidanceExtras(
 /** One reported roll-profile waypoint (#915). */
 public data class ReportedRollWaypoint(val timeS: Float, val angleDeg: Float)
 
+/**
+ * GNSS antenna offset (cmd 81) — port of iOS `AntennaOffset`: from the flight
+ * computer's IMU to the GNSS antenna's phase center, mm along the board's own
+ * axes, or unknown.  One value for the profile, the
+ * `"antk"/"antx"/"anty"/"antz"` readback and the cmd-81 frame.  Unknown
+ * always carries zeros, as it goes on the wire — build it through [of] or
+ * use [UNKNOWN].
+ */
+public data class AntennaOffset(
+    val known: Boolean,
+    val xMm: Int,
+    val yMm: Int,
+    val zMm: Int,
+) {
+    /** True when every component is one the firmware takes. */
+    public val isSendable: Boolean
+        get() = xMm in RANGE_MM && yMm in RANGE_MM && zMm in RANGE_MM
+
+    /** How the settings screen says it, e.g. "X 312, Y -25, Z 4 mm". */
+    public val label: String
+        get() = if (known) "X $xMm, Y $yMm, Z $zMm mm" else "Unknown"
+
+    public companion object {
+        public val UNKNOWN: AntennaOffset = AntennaOffset(false, 0, 0, 0)
+
+        /** The firmware refuses a component outside ±2000 mm. */
+        public const val LIMIT_MM: Int = 2000
+        public val RANGE_MM: IntRange = -LIMIT_MM..LIMIT_MM
+
+        /** Unknown keeps zeros whatever is passed. */
+        public fun of(known: Boolean, xMm: Int, yMm: Int, zMm: Int): AntennaOffset =
+            if (known) AntennaOffset(true, xMm, yMm, zMm) else UNKNOWN
+
+        /**
+         * From the readback's integers: null unless all four are present,
+         * `known` is 0 or 1 and every component is within ±2000 mm.
+         */
+        public fun fromWire(known: Long?, xMm: Long?, yMm: Long?, zMm: Long?): AntennaOffset? {
+            if (known == null || xMm == null || yMm == null || zMm == null) return null
+            if (known != 0L && known != 1L) return null
+            val r = -LIMIT_MM.toLong()..LIMIT_MM.toLong()
+            if (xMm !in r || yMm !in r || zMm !in r) return null
+            return of(known == 1L, xMm.toInt(), yMm.toInt(), zMm.toInt())
+        }
+
+        /**
+         * One typed component: a whole number of millimeters within ±2000,
+         * or null (empty, not a whole number, or out of range).
+         */
+        public fun parseMm(text: String): Int? =
+            text.trim().toIntOrNull()?.takeIf { it in RANGE_MM }
+    }
+}
+
 public data class RocketConfig(
     val servoBias1: Int = 0,                    // i16, "sb1" (#561: match RocketProfile/config.h)
     val servoHz: Int = 333,                     // i16, "shz"
@@ -114,6 +168,10 @@ public data class RocketConfig(
     /** The GNSS log setting, cmd 79: 0 detailed, 1 reduced (null = firmware
      *  that has no such setting). */
     val gnssLogSetting: Int? = null,            // u8?, "glog"
+    /** The GNSS antenna offset, cmd 81, in the board's own axes (null =
+     *  firmware that has no such setting, or a report missing a key or
+     *  holding a value the firmware would refuse). */
+    val antennaOffset: AntennaOffset? = null,   // "antk"/"antx"/"anty"/"antz"
     val loraFreqMHz: Float? = null,             // "lf"
     val loraSF: Int? = null,                    // u8?, "lsf"
     val loraBwKHz: Float? = null,               // "lbw"
@@ -293,6 +351,10 @@ public data class ConfigMessage(
     val irate: Long? = null,
     val irmax: Long? = null,
     val glog: Long? = null,
+    val antk: Long? = null,
+    val antx: Long? = null,
+    val anty: Long? = null,
+    val antz: Long? = null,
     val lf: Float? = null,
     val lsf: Long? = null,
     val lbw: Float? = null,
@@ -357,6 +419,9 @@ public data class ConfigMessage(
             imuRateMaxHz = irmax?.takeIf { it in 0..0xFFFF }?.toInt(),
             // Only the two settings land: anything else reads as not reported (iOS).
             gnssLogSetting = glog?.takeIf { it in 0..1 }?.toInt(),
+            // All four or none; a value the firmware would refuse reads as
+            // not reported (iOS).
+            antennaOffset = AntennaOffset.fromWire(antk, antx, anty, antz),
             loraFreqMHz = lf,
             loraSF = lsf?.coerceIn(0, 0xFF)?.toInt(),
             loraBwKHz = lbw,
@@ -418,6 +483,10 @@ public data class ConfigMessage(
             irate = JsonBridging.nsInt(json, "irate"),
             irmax = JsonBridging.nsInt(json, "irmax"),
             glog = JsonBridging.nsInt(json, "glog"),
+            antk = JsonBridging.nsInt(json, "antk"),
+            antx = JsonBridging.nsInt(json, "antx"),
+            anty = JsonBridging.nsInt(json, "anty"),
+            antz = JsonBridging.nsInt(json, "antz"),
             lf = JsonBridging.parseFloatIos(json, "lf"),
             lsf = JsonBridging.nsInt(json, "lsf"),
             lbw = JsonBridging.parseFloatIos(json, "lbw"),

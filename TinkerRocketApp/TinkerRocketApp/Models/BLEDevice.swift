@@ -1172,6 +1172,22 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
     }
 
+    /// GNSS antenna offset (cmd 81, 7 bytes): `[known u8][x_mm i16][y_mm i16]
+    /// [z_mm i16]`, little-endian, in the flight computer board's own axes.
+    /// Unknown goes out as known 0 with zeros. The FC refuses a component
+    /// outside ±2000 mm, so such a value is never sent. The FC keeps it in its
+    /// NVS and reports it as the readback's `antk`/`antx`/`anty`/`antz`.
+    func sendAntennaOffsetConfig(_ offset: AntennaOffset) {
+        guard offset.isSendable else { return }
+        sendRawCommand(81, payload: offset.payload)
+        // Only over a readback that carries the setting: firmware without it
+        // ignores the command, and the screen must keep saying so.
+        if var cfg = rocketConfig, cfg.antennaOffset != nil {
+            cfg.antennaOffset = offset
+            rocketConfig = cfg
+        }
+    }
+
     /// 4-channel pyro config. Each tuple is (enabled, trigger_mode, trigger_value).
     /// Wire layout (24 bytes): 4 × {u8 enabled, u8 mode, f32 value}.
     func sendPyroConfig(channels: [(enabled: Bool, mode: UInt8, value: Float)]) {
@@ -2404,6 +2420,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             // Only the two settings land: anything else reads as "not reported".
             if let glog = dict["glog"] as? Int, let s = UInt8(exactly: glog), s <= RocketProfile.gnssLogReduced {
                 cfg.gnssLogSetting = s
+            }
+            // All four keys or none: anything missing, or a value the
+            // firmware would refuse, reads as "not reported".
+            if let k = dict["antk"] as? Int, let x = dict["antx"] as? Int,
+               let y = dict["anty"] as? Int, let z = dict["antz"] as? Int {
+                cfg.antennaOffset = AntennaOffset(known: k, xMm: x, yMm: y, zMm: z)
             }
             cfg.loraFreqMHz = parseFloat(dict["lf"])
             cfg.loraSF = (dict["lsf"] as? Int).map { UInt8($0) }

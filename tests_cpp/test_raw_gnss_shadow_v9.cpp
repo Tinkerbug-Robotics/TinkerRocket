@@ -325,6 +325,7 @@ struct TenFlight
     double turn_rps = 0.0;
     int    turn_axis = 1;
     double lever_m = 0.0;
+    double lever_y_m = 0.0;              // and this far along body y (across the nose)
     double apogee_t = -1.0;              // the flight computer calls apogee from here (kShadowApogee)
     double seed_heading_err_deg = 0.0;   // the pad seed's heading this far off the body's (about the down axis)
 };
@@ -449,7 +450,7 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
             if (!fl.lose_whole_seconds || ms % 1000 != 0)
             {
                 // the antenna: lever_m up the nose, moving omega x r with the turn
-                const double r_b[3] = {fl.lever_m, 0.0, 0.0};
+                const double r_b[3] = {fl.lever_m, fl.lever_y_m, 0.0};
                 const double w_b[3] = {ax[0] * w_turn, ax[1] * w_turn, 0.0};
                 const double wxr[3] = {w_b[1] * r_b[2] - w_b[2] * r_b[1], w_b[2] * r_b[0] - w_b[0] * r_b[2],
                                        w_b[0] * r_b[1] - w_b[1] * r_b[0]};
@@ -1439,4 +1440,147 @@ TEST(RawGnssShadowV9, ASkippedTurnLeavesItsHeadingErrorForTheEpochsAfter)
         EXPECT_LT(errAt(sk, t), 0.5) << t;
         EXPECT_GT(errAt(hd, t), 5.0) << t;
     }
+}
+
+// ---- the antenna's offset, known (RawGnssShadow.h; applyAntennaOffset, setAntenna)
+
+namespace
+{
+
+RawGnssShadow::Config knownCfg(double axial_m, uint8_t att_mode = gnss_raw::kLeverAttObserve)
+{
+    RawGnssShadow::Config c = actCfg();
+    gnss_raw::applyMosaicFlightSafeguards(c);
+    c.antenna_att_mode = att_mode;
+    gnss_raw::AntennaOffset a;
+    a.known = true;
+    a.b_m[0] = axial_m;
+    gnss_raw::applyAntennaOffset(a, c);
+    return c;
+}
+
+RawGnssShadow::Config safeguardsCfg()
+{
+    RawGnssShadow::Config c = actCfg();
+    gnss_raw::applyMosaicFlightSafeguards(c);
+    return c;
+}
+
+}  // namespace
+
+TEST(RawGnssShadowV9, AKnownAntennaTakesTheTurnsSwingOutOfTheAttitude)
+{
+    // The turning boost (boostTurn: 5 rad/s about body y for 0.25 s and back)
+    // with the antenna 0.3 m up the nose. Unknown, the image's allowance
+    // takes the swing's Dopplers at 1.65 m/s and what is left still turns the
+    // attitude: over 0.5 deg from 6 s on. Known, the swing is predicted and
+    // the Dopplers allow only what the offset could be off by (0.05 m along
+    // the nose and 0.02 across: 0.35 m/s): under 0.25 deg. The offset wrong by
+    // 5 cm either way is still better than leaving it out.
+    const TenFlight fl = boostTurn(0.3, 0.0);
+    const TenRun unk = flyTen(safeguardsCfg(), fl), kn = flyTen(knownCfg(0.3), fl), lo = flyTen(knownCfg(0.25), fl),
+                 hi = flyTen(knownCfg(0.35), fl);
+    EXPECT_NEAR(unk.st.rot_max_sigma_mps, 1.65f, 0.02f);
+    EXPECT_NEAR(kn.st.rot_max_sigma_mps, 0.35f, 0.01f);
+    for (double t = 6.0; t <= 8.5 + 1e-9; t += 0.25)
+    {
+        EXPECT_GT(errAt(unk, t), 0.5) << t;
+        EXPECT_LT(errAt(kn, t), 0.25) << t;
+        EXPECT_LT(errAt(lo, t), errAt(unk, t)) << t;
+        EXPECT_LT(errAt(hi, t), errAt(unk, t)) << t;
+    }
+}
+
+TEST(RawGnssShadowV9, AKnownAntennasAllowanceIsWhatItCouldBeOffByAtAnyRate)
+{
+    // Known, each Doppler takes rotLeverSigma at the offset's sigmas (0.05 m
+    // along the nose, 0.02 across) from any rate: a 2 rad/s pitch 0.14 m/s, a
+    // 1.5 rad/s one (under the unknown's 2 rad/s floor) 0.105, a 5 rad/s roll
+    // the radial 0.10; the epochs before the turn are as the unknown's
+    EXPECT_NEAR(flyTen(knownCfg(0.0), turningCoast(2.0, 1, 0.0)).st.rot_max_sigma_mps, 0.14f, 0.005f);
+    EXPECT_NEAR(flyTen(knownCfg(0.0), turningCoast(1.5, 1, 0.0)).st.rot_max_sigma_mps, 0.105f, 0.005f);
+    EXPECT_EQ(flyTen(safeguardsCfg(), turningCoast(1.5, 1, 0.0)).st.rot_max_sigma_mps, 0.0f);
+    EXPECT_NEAR(flyTen(knownCfg(0.0), turningCoast(5.0, 0, 0.0)).st.rot_max_sigma_mps, 0.10f, 0.005f);
+    // still, nothing moves: the known filter on a flight with no turn is the unknown one's
+    const TenRun a = flyTen(safeguardsCfg(), 0.0, 8.0), b = flyTen(knownCfg(0.0), 0.0, 8.0);
+    ASSERT_EQ(a.att_err_deg.size(), b.att_err_deg.size());
+    for (size_t i = 0; i < a.att_err_deg.size(); ++i)
+        EXPECT_NEAR(a.att_err_deg[i], b.att_err_deg[i], 1e-3) << i;
+}
+
+TEST(RawGnssShadowV9, TheLeverRollReadsARollAboutTheNoseFromTheChangeCheck)
+{
+    // A nose-up coast rolling at 5 rad/s about the nose for 0.5 s and back,
+    // the antenna 0.1 m across it: the swing turns with the body, and the
+    // pad's heading 10 deg off (about the down axis: -10 about the nose that
+    // points up) turns the predicted swing with it. The change check's lever
+    // roll reads the +10 deg correction within two of its 1-sigmas (10.6
+    // +- 2.0 deg here); unknown, or with the terms fused, it reads nothing
+    // (no epochs fitted for it).
+    TenFlight fl;
+    fl.turn_t = 7.0;
+    fl.turn_s = 0.5;
+    fl.turn_rps = 5.0;
+    fl.turn_axis = 0;
+    fl.lever_y_m = 0.1;
+    fl.seed_heading_err_deg = 10.0;
+    RawGnssShadow::Config c = safeguardsCfg();
+    // settled tracking, as minutes on a pad leave it: every satellite of this
+    // synthetic sky starts locked at the flight's start, and the builder's
+    // relock term (3 m/s on each Doppler, decaying over 10 s) would leave the
+    // change check's fit a 1 m/s 1-sigma through the roll
+    c.meas.rr_relock_sigma = 0.0;
+    gnss_raw::AntennaOffset a;
+    a.known = true;
+    a.b_m[1] = 0.1;
+    gnss_raw::applyAntennaOffset(a, c);
+    const TenRun r = flyTen(c, fl);
+    ASSERT_GT(r.st.lever_roll_epochs, 0u);
+    ASSERT_GT(r.st.lever_roll_info, 0.0);
+    const double roll = r.st.lever_roll_hy / r.st.lever_roll_info * 57.29577951308232;
+    const double sig = 57.29577951308232 / std::sqrt(r.st.lever_roll_info);
+    EXPECT_LT(sig, 3.0);
+    EXPECT_NEAR(roll, 10.0, std::max(2.0 * sig, 1.0));
+    EXPECT_EQ(flyTen(safeguardsCfg(), fl).st.lever_roll_epochs, 0u);
+    RawGnssShadow::Config cf = c;
+    cf.antenna_att_mode = gnss_raw::kLeverAttFuse;
+    cf.ekf.lever_att_mode = gnss_raw::kLeverAttFuse;
+    EXPECT_EQ(flyTen(cf, fl).st.lever_roll_epochs, 0u);
+}
+
+TEST(RawGnssShadowV9, AnAntennaSetInFlightWaitsForTheGround)
+{
+    // setAntenna on the ground: taken at once; in flight: held until the
+    // first ground tick, then taken; unknown again: the bounds, the offset
+    // gone from the filter
+    RawGnssShadow sh(safeguardsCfg());
+    const double b[3] = {0.2, 0.0, -0.01};
+    ShadowImu s{};
+    s.acc[2] = float(-kG);
+    s.time_us = static_cast<uint32_t>(kT0);
+    s.flags = gnss_raw::kShadowLevel;
+    sh.onImu(s, kT0);
+    sh.setAntenna(true, b);
+    EXPECT_TRUE(sh.filter().params().lever_on);
+    EXPECT_EQ(sh.filter().params().lever_b_m[0], 0.2);
+    EXPECT_EQ(sh.filter().params().lever_att_mode, gnss_raw::kLeverAttObserve);
+    EXPECT_EQ(sh.stats().antenna_sets, 1u);
+    s.time_us += 10000;
+    s.flags = gnss_raw::kShadowInFlight;
+    sh.onImu(s, kT0 + 10000);
+    sh.setAntenna(false, b);
+    EXPECT_EQ(sh.stats().antenna_pending, 1);
+    EXPECT_TRUE(sh.filter().params().lever_on);          // still the flight's
+    s.time_us += 10000;
+    sh.onImu(s, kT0 + 20000);
+    EXPECT_TRUE(sh.filter().params().lever_on);
+    s.time_us += 10000;
+    s.flags = gnss_raw::kShadowLevel;                     // landed, on the ground
+    sh.onImu(s, kT0 + 30000);
+    EXPECT_EQ(sh.stats().antenna_pending, 0);
+    EXPECT_FALSE(sh.filter().params().lever_on);
+    for (int i = 0; i < 3; ++i)
+        EXPECT_EQ(sh.filter().params().lever_b_m[i], 0.0);
+    EXPECT_EQ(sh.filter().params().lever_att_mode, gnss_raw::kLeverAttOff);
+    EXPECT_EQ(sh.stats().antenna_sets, 2u);
 }

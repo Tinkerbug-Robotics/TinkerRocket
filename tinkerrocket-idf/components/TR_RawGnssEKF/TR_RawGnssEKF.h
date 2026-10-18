@@ -238,6 +238,32 @@ struct RawGnssEKFParams
     double  hdg_obs_open_g     = 2.0;   // the boost: the IMU's specific force past this many g ...
     double  hdg_obs_open_hold_s = 0.2;  //   ... within this long of the epoch: open
     double  hdg_obs_floor      = 0.0;   // s at least this
+    // The antenna's offset from the IMU, where the rocket's owner measured it
+    // (an optional per-rocket setting; unknown, off, by default: the antenna
+    // taken at the IMU, today's filter exactly). While the body turns at
+    // omega, an antenna r from the IMU moves C (omega x r) against it -- 0.5
+    // m/s at a drogue's 5 rad/s snatch with 0.1 m on the nose -- and sits
+    // C r from it. With lever_on every range rate is predicted at the
+    // antenna's velocity and every pseudorange at its position, each at its
+    // own instant: the attitude and the gyro's rate (less its bias) the
+    // filter had then, kept beside the velocity history (lev_). It is a
+    // prior, not the truth: what the measurement could be off by is
+    // RawGnssShadow's (its antenna_sigma_*, on the Dopplers' sigma and the
+    // Doppler change check's lever allowance). The carrier's rate keeps the
+    // IMU's point (the mosaic-G5's profile has it off). lever_att_mode: the
+    // offset's own information on the attitude -- a turning antenna's
+    // velocity turns with the attitude, so it says how the body is rolled
+    // about the nose, which nothing else on a vertical thrust does -- unused
+    // (off), counted (observe: RawGnssShadow's Doppler change check fits it
+    // epoch by epoch; within one epoch it looks just like a velocity error),
+    // or fused (fuse: the Doppler rows' terms on the attitude and the gyro
+    // bias, d(C (omega x r)), the filter's own velocity telling the two apart
+    // as the turn goes on). Not fused, those terms are considered: each
+    // Doppler's variance takes what the attitude's own uncertainty does to
+    // the antenna's velocity (leverRows).
+    bool    lever_on           = false;
+    double  lever_b_m[3]       = {0.0, 0.0, 0.0};   // body FRD, the IMU to the antenna's phase centre, m
+    uint8_t lever_att_mode     = 0;                 // LeverAttMode
     // Initial sigmas, in the state's units (the attitude's: a half-angle).
     // p0_att: the tilt's, about north and east; p0_hdg: the heading's, about
     // the vertical of init's attitude (#1626 N10). p0_hdg was pi ("any
@@ -279,6 +305,14 @@ enum HdgObsMode : uint8_t
     kHdgObsForce = 1,    // by the horizontal specific force
     kHdgObsInfo = 2,     // by the heading's information from it, against its own
     kHdgObsWindow = 3,   // none in the coast's first seconds
+};
+
+// RawGnssEKFParams::lever_att_mode
+enum LeverAttMode : uint8_t
+{
+    kLeverAttOff = 0,      // the offset predicted, its attitude terms unused
+    kLeverAttObserve = 1,  // and the roll they point to counted (RawGnssShadow's change check), nothing fused
+    kLeverAttFuse = 2,     // and fused: the Doppler rows' attitude and gyro-bias terms
 };
 
 struct RawGnssStats
@@ -383,6 +417,11 @@ public:
     // hdg_obs_mode applied (true, the default) or not (s = 1): where it
     // applies is the shadow's (heading_obs_scope)
     void setHdgObsOn(bool on) { hdg_obs_on_ = on; }
+    // The antenna's offset (lever_on, lever_b_m, lever_att_mode), set on the
+    // ground where the owner's setting changes: the history's earlier
+    // entries keep the offset they were taken with (on the ground the body
+    // is still, so its velocity term was 0 anyway).
+    void setLever(bool on, const double b_m[3], uint8_t att_mode);
     // s for an epoch age_s old at the state as it stands (hdg_obs_mode), and
     // the one the last epoch begun took (1 with the mode off)
     T hdgObsScaleNow(double age_s) const;
@@ -590,8 +629,36 @@ public:
     // state at t1, the IMU predicts p(t2) = p(t1) + v(t1) (t2 - t1) + dp.
     // False, with both zero, unless the history covers [t1, t2].
     bool imuMotion(double t1, double t2, T dv[3], T dp[3]) const;
+    // The antenna against the IMU age_s ago (lever_on): its offset C r (m)
+    // and velocity C (omega x r) (m/s), NED, interpolated between the
+    // history's entries (the oldest's before them, the newest's after), and
+    // the nose (body x) then, NED, where asked. All zero with lever_on off;
+    // with no history yet, at the attitude now and no velocity.
+    void leverAt(double age_s, T p_ned[3], T v_ned[3], T nose_ned[3] = nullptr) const;
 
 private:
+    // The antenna at an epoch (lever_on): its offset at the epoch (age_s
+    // ago) and its velocity there and at the Doppler's instant (tau before
+    // it), NED -- what leverBack takes off the history's change so the
+    // receiver the predictions back-date is the antenna, not the IMU.
+    struct LeverEpoch
+    {
+        T p_e[3], v_e[3], v_l[3];
+    };
+    void   leverBack(double age_s, double tau, T dp_e[3], T dv_e[3], T dv_l[3], LeverEpoch& lv) const;
+    // propagate's: the antenna's offset and velocity at the step's end, into
+    // the history entry the step went into (lev_)
+    void   pushLever(const T w_b[3]);
+    // A Doppler row's lever terms (lever_on): the attitude's, 2 (u x v)' C,
+    // and the gyro bias's, -(u x p)' C (u the line of sight, v and p the
+    // antenna's velocity and offset, NED; C body -> NED). Fuse
+    // (lever_att_mode): appended to the row's H at hidx/hval (hn so far);
+    // returns the new count. Otherwise they are considered, not fused: R
+    // takes what the attitude's and gyro bias's own uncertainty does to the
+    // antenna's velocity, h P h' -- the predicted velocity is turned by any
+    // attitude error, and a heading 10 deg off turns a 1.5 m/s swing by
+    // 0.26 m/s -- and hn is returned as it was.
+    int    leverRows(const T u_ned[3], const LeverEpoch& lv, int* hidx, T* hval, int hn, T& R) const;
     struct Hist
     {
         double t;      // end of the entry's span, filter time
@@ -705,6 +772,10 @@ private:
     mutable bool   vfit_in_[RawEpoch::kMaxObs] = {};
 
     Hist   hist_[kHist] = {};
+    // lever_on: each history entry's antenna offset C r (0-2), velocity
+    // C (omega x r) (3-5) and nose C x (6-8), NED, at the entry's end (beside
+    // hist_, slot for slot; written only with the lever on)
+    T      lev_[kHist][9] = {};
     int    hhead_ = 0;        // next slot
     int    hn_ = 0;
     double hopen_ = 0.0;      // start of the newest entry's span

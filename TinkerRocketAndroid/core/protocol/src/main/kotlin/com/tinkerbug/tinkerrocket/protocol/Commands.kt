@@ -362,6 +362,30 @@ public object Commands {
     public fun gnssLog(setting: Int): ByteArray =
         frame(BleCommandId.GNSS_LOG) { u8(setting) }
 
+    /**
+     * cmd 81 — GNSS antenna offset, 7 B: `[known u8][x_mm i16][y_mm i16]
+     * [z_mm i16]`, in the flight computer board's own axes.  Unknown
+     * (`known = false`) always goes out as zeros, whatever is passed.  A
+     * measured component outside [AntennaOffset.RANGE_MM] fails loudly (the
+     * #1054 rule): the firmware would refuse it, so no caller may build one.
+     */
+    public fun antennaOffset(known: Boolean, xMm: Int, yMm: Int, zMm: Int): ByteArray {
+        val limit = AntennaOffset.RANGE_MM
+        require(!known || (xMm in limit && yMm in limit && zMm in limit)) {
+            "antenna offset out of range: $xMm, $yMm, $zMm"
+        }
+        return frame(BleCommandId.ANTENNA_OFFSET) {
+            bool(known)
+            i16(if (known) xMm else 0)
+            i16(if (known) yMm else 0)
+            i16(if (known) zMm else 0)
+        }
+    }
+
+    /** cmd 81 from one [AntennaOffset] value (profile push, settings edit). */
+    public fun antennaOffset(offset: AntennaOffset): ByteArray =
+        antennaOffset(offset.known, offset.xMm, offset.yMm, offset.zMm)
+
     // ------------------------------------------------------------------ pyro
 
     /** cmd 34 — PyroConfigData, 24 B: 4 × `[enabled u8][mode u8][value f32]`.

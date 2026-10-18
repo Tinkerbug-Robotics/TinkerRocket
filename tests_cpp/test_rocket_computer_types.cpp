@@ -1901,6 +1901,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         // GNSS log setting (BLE cmd 79): two codes from the top of the 0x80
         // block.
         MT(GNSS_LOG_CONFIG_PENDING),  MT(GNSS_LOG_CONFIG_MSG),
+        // GNSS antenna offset (BLE cmd 81): the pair below the GNSS log's.
+        MT(ANTENNA_CONFIG_PENDING),   MT(ANTENNA_CONFIG_MSG),
     };
 #undef MT
 
@@ -1956,7 +1958,9 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     //       the 0x80 block.
     // 118 = 116 + the high-g alignment's HG_CAL_APPLY_PENDING /
     //       HG_CAL_APPLY_MSG (0x85/0x86, BLE cmd 80).
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 118u)
+    // 120 = 118 + the GNSS antenna offset pair ANTENNA_CONFIG_PENDING /
+    //       ANTENNA_CONFIG_MSG (0x8C/0x8D, BLE cmd 81), below the GNSS log's.
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 120u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }

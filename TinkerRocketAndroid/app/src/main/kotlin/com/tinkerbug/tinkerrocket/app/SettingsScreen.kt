@@ -51,6 +51,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.tinkerbug.tinkerrocket.BuildConfig
 import com.tinkerbug.tinkerrocket.app.theme.TrPyroContinuityBadge
+import com.tinkerbug.tinkerrocket.protocol.AntennaOffset
 import com.tinkerbug.tinkerrocket.protocol.BleCommandId
 import com.tinkerbug.tinkerrocket.protocol.Commands
 import com.tinkerbug.tinkerrocket.protocol.PyroContinuity
@@ -190,6 +191,16 @@ fun SettingsScreen(
         val f: kotlinx.coroutines.flow.Flow<Int?> =
             session?.rocketConfig
                 ?.map { it?.gnssLogSetting }
+                ?.distinctUntilChanged()
+                ?: kotlinx.coroutines.flow.flowOf(null)
+        f
+    }.collectAsState(initial = null)
+    // The GNSS antenna offset the rocket reports ("antk"/"antx"/"anty"/"antz",
+    // cmd 81): null on firmware that has no such setting.
+    val reportedAntenna: AntennaOffset? by remember(session) {
+        val f: kotlinx.coroutines.flow.Flow<AntennaOffset?> =
+            session?.rocketConfig
+                ?.map { it?.antennaOffset }
                 ?.distinctUntilChanged()
                 ?: kotlinx.coroutines.flow.flowOf(null)
         f
@@ -567,6 +578,16 @@ fun SettingsScreen(
         // ── GNSS Logging (iOS General-tab section, under the rate) ───────
         GnssLogSection(active.gnssLogSetting, connected, haveConfig, reportedGnssLog, fcGnss, inflight) { v ->
             edit(ConfigGroup.GNSS_LOG) { it.copy(gnssLogSetting = v) }
+        }
+
+        // ── GNSS Antenna Offset (iOS General-tab section, under the log) ─
+        val antennaLocked = connected && (reportedAntenna == null || inflight)
+        AntennaOffsetSection(
+            active.antennaOffset, connected, haveConfig, reportedAntenna, fcGnss, inflight,
+        ) { o ->
+            // Locked (in flight, or firmware without it): keep it in the
+            // profile, but nothing goes to the rocket.
+            edit(if (antennaLocked) null else ConfigGroup.ANTENNA_OFFSET) { it.withAntennaOffset(o) }
         }
 
         // ── Camera (iOS Camera tab; raw-int field replaced by the picker) ─
@@ -1875,6 +1896,148 @@ private fun gnssLogCaption(
     if (connected && receiver != null && receiver != "mosaic-G5") {
         text = "This rocket’s receiver is the $receiver, not a Septentrio mosaic-G5, so this " +
             "changes nothing on it. " + text
+    }
+    return text
+}
+
+/**
+ * GNSS antenna offset, cmd 81 (iOS General-tab "GNSS Antenna Offset"
+ * section): where the GNSS antenna sits relative to the flight computer's
+ * IMU, in the board's own axes, for the mosaic-G5's navigation filter.
+ * Unknown is sent at once; Measured only opens the three fields, and the
+ * offset goes out when they are committed (blur / Done) with all three valid
+ * — zeros sent on the switch would tell the filter the antenna sits on the
+ * IMU. Locked while flying, and until the rocket says it has the setting.
+ */
+@Composable
+private fun AntennaOffsetSection(
+    offset: AntennaOffset,
+    connected: Boolean,
+    haveConfig: Boolean,
+    reported: AntennaOffset?,
+    receiver: String?,
+    inflight: Boolean,
+    onCommit: (AntennaOffset) -> Unit,
+) {
+    // Local, so the picker can say Measured before anything is stored
+    // (iOS antennaDraft). Re-seeded when the profile's own value flips. Each
+    // field re-seeds on its OWN component only (the NumField rule), so one
+    // field's commit landing cannot reset another mid-edit.
+    var measured by remember(offset.known) { mutableStateOf(offset.known) }
+    var xText by remember(offset.xMm) { mutableStateOf(offset.xMm.toString()) }
+    var yText by remember(offset.yMm) { mutableStateOf(offset.yMm.toString()) }
+    var zText by remember(offset.zMm) { mutableStateOf(offset.zMm.toString()) }
+    val focusManager = LocalFocusManager.current
+    // Reads the CURRENT state, so a field disposed after the switch to
+    // Unknown cannot commit its text and undo it.
+    val commit: () -> Unit = {
+        val x = AntennaOffset.parseMm(xText)
+        val y = AntennaOffset.parseMm(yText)
+        val z = AntennaOffset.parseMm(zText)
+        if (measured && x != null && y != null && z != null) {
+            val next = AntennaOffset.of(true, x, y, z)
+            if (next != offset) onCommit(next)
+        }
+    }
+    Section("GNSS Antenna Offset") {
+        GatedControls(enabled = !connected || (reported != null && !inflight)) {
+            SegmentedPicker(listOf("Unknown", "Measured"), if (measured) 1 else 0) { i ->
+                if (i == 1) {
+                    measured = true
+                } else {
+                    measured = false
+                    focusManager.clearFocus()
+                    onCommit(AntennaOffset.UNKNOWN)
+                }
+            }
+            if (measured) {
+                val pending by androidx.compose.runtime.rememberUpdatedState(commit)
+                androidx.compose.runtime.DisposableEffect(Unit) {
+                    onDispose { pending() }
+                }
+                AntennaMmField("Board X", xText, { xText = it }, commit)
+                AntennaMmField("Board Y", yText, { yText = it }, commit)
+                AntennaMmField("Board Z", zText, { zText = it }, commit)
+                antennaInputError(xText, yText, zText)?.let { error ->
+                    Text(
+                        error,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        }
+        Caption(
+            antennaOffsetCaption(
+                measured, offset, connected, haveConfig, reported, receiver, inflight,
+            ),
+        )
+    }
+}
+
+/** One millimeter field: commits on blur or Done (the NumField rule). */
+@Composable
+private fun AntennaMmField(label: String, text: String, onText: (String) -> Unit, onCommit: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+    OutlinedTextField(
+        value = text,
+        onValueChange = onText,
+        label = { Text(label) },
+        suffix = { Text("mm") },
+        singleLine = true,
+        isError = AntennaOffset.parseMm(text) == null,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+        modifier = Modifier.fillMaxWidth().onFocusChanged { st ->
+            if (focused && !st.isFocused) onCommit()
+            focused = st.isFocused
+        },
+    )
+}
+
+/** iOS `SettingsView.antennaInputError`: which typed fields the firmware would refuse. */
+internal fun antennaInputError(x: String, y: String, z: String): String? {
+    val bad = listOf("X" to x, "Y" to y, "Z" to z)
+        .filter { AntennaOffset.parseMm(it.second) == null }
+        .map { it.first }
+    if (bad.isEmpty()) return null
+    return "Board " + bad.joinToString(", ") +
+        ": enter whole millimeters from -2000 to 2000. Nothing is sent until all three are."
+}
+
+/** iOS `SettingsView.antennaOffsetFooter`. */
+internal fun antennaOffsetCaption(
+    measuredShown: Boolean,
+    profile: AntennaOffset,
+    connected: Boolean,
+    haveConfig: Boolean,
+    reported: AntennaOffset?,
+    receiver: String?,
+    inflight: Boolean,
+): String {
+    var text = if (measuredShown) {
+        "From the flight computer’s IMU chip to the center of the GNSS antenna, along the " +
+            "board’s own X, Y and Z axes (Z out of the component side), in millimeters. Within " +
+            "2 to 3 cm is enough. Board axes: +X points forward (to the nose when the board is " +
+            "mounted nose-forward), +Y to the left, +Z up out of the component side."
+    } else {
+        "Unknown (the default): the flight computer allows for a GNSS antenna up to 30 cm from " +
+            "its IMU. If you have measured where the antenna sits, choose Measured: the " +
+            "navigation filter then models it, which sharpens the attitude while the rocket " +
+            "turns fast, as when the drogue opens."
+    }
+    if (!connected) return text
+    if (inflight) return "$text Locked while the rocket is flying."
+    if (!haveConfig) return text
+    if (reported == null) return "$text This rocket’s firmware has no antenna offset setting."
+    text += when {
+        measuredShown && !profile.known -> " Not sent yet: enter all three, then tap Done."
+        reported == profile -> " In use by the flight computer."
+        else -> " The flight computer reports ${reported.label}."
+    }
+    if (receiver != null && receiver != "mosaic-G5") {
+        text += " Only the mosaic-G5’s navigation filter uses it; the rocket keeps it for when one does."
     }
     return text
 }

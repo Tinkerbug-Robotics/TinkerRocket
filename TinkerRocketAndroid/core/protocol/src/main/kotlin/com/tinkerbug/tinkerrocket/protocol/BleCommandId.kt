@@ -187,4 +187,17 @@ public object BleCommandId {
      * flight or out computer does not answer it at all.
      */
     public const val HG_CAL_APPLY: Int = 80
+
+    /**
+     * GNSS antenna offset: `[known u8][x_mm i16][y_mm i16][z_mm i16]` (7 B,
+     * little-endian) — from the flight computer's IMU to the GNSS antenna's
+     * phase center along the board's own axes (+X forward, +Y left, +Z up out
+     * of the component side), or unknown (known 0, then all zeros). The
+     * flight computer refuses a component outside -2000..2000 mm, keeps the
+     * rest in its NVS, rotates it into the rocket frame with its own mounting
+     * setting, and reports it as the config readback's `antk`/`antx`/`anty`/
+     * `antz`. Only the mosaic-G5's navigation filter uses it. Firmware that
+     * predates it ignores it.
+     */
+    public const val ANTENNA_OFFSET: Int = 81
 }

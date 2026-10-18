@@ -80,6 +80,8 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         GUIDANCE, FIN_LAYOUT, CAMERA, IMU_ORIENT, IMU_RATE,
         // cmd 79, after the rate as on iOS: it moves the rate's limit.
         GNSS_LOG,
+        // cmd 81, after the GNSS log as on iOS.
+        ANTENNA_OFFSET,
         PYRO,
     }
 
@@ -592,6 +594,12 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
             ConfigGroup.IMU_RATE -> s.sendCommandFrame(Commands.imuRate(profile.imuRateHz))
             // An out computer without cmd 79 ignores it.
             ConfigGroup.GNSS_LOG -> s.sendCommandFrame(Commands.gnssLog(profile.gnssLogSetting))
+            // And one without cmd 81 this.  Never a value the firmware would
+            // refuse (the profile cannot hold one; the encoder would throw).
+            ConfigGroup.ANTENNA_OFFSET -> profile.antennaOffset.takeIf { it.isSendable }?.let {
+                s.sendCommandFrame(Commands.antennaOffset(it))
+                s.mirrorAntennaOffset(it)
+            }
             ConfigGroup.PYRO -> {
                 val channels = listOf(
                     PyroChannelConfig(profile.pyro1Enabled, profile.pyro1TriggerMode, profile.pyro1TriggerValue),
@@ -886,6 +894,7 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         public const val GROUP_IMU_ORIENTATION: String = "IMU orientation"
         public const val GROUP_IMU_RATE: String = "IMU rate"
         public const val GROUP_GNSS_LOG: String = "GNSS log"
+        public const val GROUP_ANTENNA_OFFSET: String = "GNSS antenna offset"
 
         // #915 firmware follow-up: reachable only once the rocket reports them.
         public const val GROUP_SERVO_TRIM_24: String = "Servo trim 2-4"
@@ -1018,6 +1027,12 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
                 if (p.gnssLogSetting != it) {
                     p = p.copy(gnssLogSetting = it)
                     changed += GROUP_GNSS_LOG
+                }
+            }
+            cfg.antennaOffset?.let {
+                if (p.antennaOffset != it) {
+                    p = p.withAntennaOffset(it)
+                    changed += GROUP_ANTENNA_OFFSET
                 }
             }
 

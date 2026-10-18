@@ -3268,6 +3268,11 @@ static constexpr uint8_t IMU_RATE_CONFIG_MSG     = 0xF6;  // 2-byte ImuRateConfi
 // by branches not merged yet, so this pair takes the top of the 0x80 block.
 static constexpr uint8_t GNSS_LOG_CONFIG_PENDING = 0x8E;  // OC→FC: payload follows as GNSS_LOG_CONFIG_MSG
 static constexpr uint8_t GNSS_LOG_CONFIG_MSG     = 0x8F;  // OC→FC: 1-byte GnssLogConfigData
+// GNSS antenna offset (user setting, BLE cmd 81): where the GNSS antenna sits
+// from the FC's IMU, if the owner measured it (AntennaOffsetConfigData). The
+// next pair down from the GNSS log's.
+static constexpr uint8_t ANTENNA_CONFIG_PENDING  = 0x8C;  // OC→FC: payload follows as ANTENNA_CONFIG_MSG
+static constexpr uint8_t ANTENNA_CONFIG_MSG      = 0x8D;  // OC→FC: 7-byte AntennaOffsetConfigData
 // Drift-Cast guidance aim point (#435, BLE cmd 28): OC→FC two-phase like the
 // other config pairs.  Payload is byte-for-byte the app's 20-byte
 // {lat f64, lon f64, alt f32} LE frame (GuidancePointData).  0xF7-0xFD were
@@ -3631,6 +3636,40 @@ constexpr const char* gnssLogName(uint8_t setting)
     return setting == GNSS_LOG_DETAILED ? "detailed"
          : setting == GNSS_LOG_REDUCED  ? "reduced"
          : "?";
+}
+
+// GNSS antenna offset (ANTENNA_CONFIG_MSG payload, BLE cmd 81): the GNSS
+// antenna's phase centre from the FC's IMU, where the owner measured it, in
+// the BOARD's own frame (FLU: +X, +Y, +Z as the board carries them, Z out of
+// the component side), mm. The FC turns it into the rocket's frame with the
+// mounting it applies to the IMU (b2r), so the setting holds whatever the
+// mounting -- an auto-detected roll clocking included. Unknown (known 0, the
+// default) is the antenna nobody measured: the navigation filter allows for
+// one up to 0.3 m from the IMU (the mosaic-only image's flight safeguards).
+// Known, the mosaic-only image's raw-GNSS filter predicts every Doppler and
+// pseudorange at the antenna (TR_RawGnssEKF.h lever_on), with a few cm of
+// uncertainty on the value. Kept like the GNSS log: the OC stores it and
+// relays it, the FC stores it (every board but the Beetle's) and applies it,
+// never INFLIGHT; both start a fresh board on unknown.
+static constexpr int16_t ANTENNA_OFFSET_MAX_MM = 2000;   // each component's size at most
+
+typedef struct __attribute__((packed))
+{
+    uint8_t known;   // 0 unknown (the default; x, y, z 0), 1 measured
+    int16_t x_mm;    // the IMU to the antenna's phase centre, board X
+    int16_t y_mm;    //   board Y
+    int16_t z_mm;    //   board Z (out of the component side)
+} AntennaOffsetConfigData;
+static_assert(sizeof(AntennaOffsetConfigData) == 7, "AntennaOffsetConfigData must be 7 bytes");
+
+// A setting the FC and OC take: known 0 with every component 0, or known 1
+// with each component within ANTENNA_OFFSET_MAX_MM.
+constexpr bool antennaOffsetValid(const AntennaOffsetConfigData& a)
+{
+    return a.known == 0 ? (a.x_mm == 0 && a.y_mm == 0 && a.z_mm == 0)
+         : a.known == 1 && a.x_mm >= -ANTENNA_OFFSET_MAX_MM && a.x_mm <= ANTENNA_OFFSET_MAX_MM &&
+               a.y_mm >= -ANTENNA_OFFSET_MAX_MM && a.y_mm <= ANTENNA_OFFSET_MAX_MM &&
+               a.z_mm >= -ANTENNA_OFFSET_MAX_MM && a.z_mm <= ANTENNA_OFFSET_MAX_MM;
 }
 
 // The fastest IMU rate a board flies with this GNSS receiver and GNSS log

@@ -478,6 +478,7 @@ final class ActiveRocketSyncer: ObservableObject {
         device.sendImuOrientationConfig(profile.imuOrientSetting)
         device.sendImuRateConfig(profile.imuRateHz)
         device.sendGnssLogConfig(profile.gnssLogSetting)   // an out computer without cmd 79 ignores it
+        device.sendAntennaOffsetConfig(profile.antennaOffset)   // and one without cmd 81 this
         device.sendPyroConfig(channels: [
             (profile.pyro1Enabled, profile.pyro1TriggerMode, profile.pyro1TriggerValue),
             (profile.pyro2Enabled, profile.pyro2TriggerMode, profile.pyro2TriggerValue),
@@ -516,6 +517,7 @@ final class ActiveRocketSyncer: ObservableObject {
     static let groupImuOrientation = "IMU orientation"
     static let groupImuRate        = "IMU rate"
     static let groupGnssLog        = "GNSS log"
+    static let groupAntennaOffset  = "GNSS antenna offset"
     // #915 firmware follow-up: reachable only once the rocket reports them.
     static let groupServoTrim24    = "Servo trim 2-4"
     static let groupFinTravel      = "Fin travel"
@@ -626,6 +628,10 @@ final class ActiveRocketSyncer: ObservableObject {
         if let log = cfg.gnssLogSetting, p.gnssLogSetting != log {
             p.gnssLogSetting = log
             changed.append(groupGnssLog)
+        }
+        if let antenna = cfg.antennaOffset, p.antennaOffset != antenna {
+            p.antennaOffset = antenna
+            changed.append(groupAntennaOffset)
         }
 
         let pyro: [(Bool, UInt8, Float)] = [

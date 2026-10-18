@@ -1,6 +1,7 @@
 package com.tinkerbug.tinkerrocket.session
 
 import com.tinkerbug.tinkerrocket.protocol.AccelCalStatus
+import com.tinkerbug.tinkerrocket.protocol.AntennaOffset
 import com.tinkerbug.tinkerrocket.protocol.BaseStationStorageStats
 import com.tinkerbug.tinkerrocket.protocol.BleCommandId
 import com.tinkerbug.tinkerrocket.protocol.Commands
@@ -1569,6 +1570,20 @@ public class DeviceSession(
                 pyro4TriggerMode = channels[3].mode,
                 pyro4TriggerValue = channels[3].value,
             )
+        }
+    }
+
+    /**
+     * Mirror a cmd-81 antenna offset into the cached readback — iOS
+     * `sendAntennaOffsetConfig`.  Only over a readback that already carries
+     * the setting: firmware without it ignores the command, and the settings
+     * screen must keep saying so rather than show a value nobody stored.
+     */
+    public fun mirrorAntennaOffset(offset: AntennaOffset) {
+        sessionScope.launch {
+            val cfg = _rocketConfig.value ?: return@launch
+            if (cfg.antennaOffset == null) return@launch
+            _rocketConfig.value = cfg.copy(antennaOffset = offset)
         }
     }
 

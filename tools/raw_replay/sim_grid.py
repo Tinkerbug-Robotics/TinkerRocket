@@ -21,7 +21,8 @@ are made against, and truth/<flight>.nav, which the truth's quorum reads) are in
     PYTHONPATH=<simbuild>/tinkerrocket-sim/src:<gnss-hf-sim>/sim \\
         python3 tools/raw_replay/sim_grid.py OUT --flights <grid>/flights [--patterns none,cut05,...] \\
         [--mags 0,+10,...] [--arms design,unaided,noguard] [--jobs 8] \\
-        [--binary tools/raw_replay/build/raw_replay_mosaic] [--lever-arm 0.3] [--harness-args "..."] \\
+        [--binary tools/raw_replay/build/raw_replay_mosaic] [--lever-arm 0.3 | --lever-arm-b x,y,z] \\
+        [--harness-args "..."] \\
         [--pause-file FILE]
     python3 tools/raw_replay/sim_tables.py OUT
 
@@ -67,7 +68,7 @@ def rig_wait():
 
 
 def make_events(job):
-    flight, pattern, out_dir, phases_path, lever_arm, force, rig = job
+    flight, pattern, out_dir, phases_path, lever_arm, force, rig, lever_b = job
     global RIG_STATE
     RIG_STATE = rig
     import sim_events
@@ -78,7 +79,7 @@ def make_events(job):
     rig_wait()
     t0 = time.time()
     phases = json.load(open(phases_path))["flights"]
-    path, counts = sim_events.build(flight, pattern, out_dir, phases, lever_arm=lever_arm)
+    path, counts = sim_events.build(flight, pattern, out_dir, phases, lever_arm=lever_arm, lever_b=lever_b)
     return path, counts, time.time() - t0
 
 
@@ -162,6 +163,8 @@ def main():
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
     ap.add_argument("--binary", default=os.path.join(HERE, "build", "raw_replay_mosaic"))
     ap.add_argument("--lever-arm", type=float, default=0.3)
+    ap.add_argument("--lever-arm-b", help="x,y,z: the truth's antenna anywhere in the body (FRD, m; wins over "
+                                          "--lever-arm)")
     ap.add_argument("--keep-csv", default="none", help="patterns whose CSVs are kept (comma-separated; 'all')")
     ap.add_argument("--events-dir", help="where the events files go (default OUT/events; ~6 MB each, made again "
                                          "in minutes: a scratch directory will do)")
@@ -191,7 +194,8 @@ def main():
     for spec in a.arm_args:
         name, _, rest = spec.partition("=")
         arm_args[name] = rest.split()
-    jobs = [(f, p, ev_dir, phases, a.lever_arm, a.force_events, a.rig_state) for f in flights for p in pats]
+    lever_b = [float(x) for x in a.lever_arm_b.split(",")] if a.lever_arm_b else None
+    jobs = [(f, p, ev_dir, phases, a.lever_arm, a.force_events, a.rig_state, lever_b) for f in flights for p in pats]
     events = []
     with cf.ProcessPoolExecutor(a.jobs) as ex:
         for path, counts, dt in ex.map(make_events, jobs):

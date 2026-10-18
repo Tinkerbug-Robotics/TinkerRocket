@@ -186,6 +186,61 @@ inline void applyMosaicFlightSafeguards(RawGnssShadow::Config& c)
     c.att_hold_s = 0.0;
     c.rot_skip_rate_rps = 0.0;
     c.rot_skip_s = 0.0;
+    // where the owner measured the antenna's offset (applyAntennaOffset, below):
+    // what it could be off by, in place of the bounds above (Grid B, 0.10 m up
+    // the nose: 3 to 10 cm all take the snatch's worst excess from 13 deg to
+    // 3; 5 and 2 cm keep an offset given 5 cm short the closest to it)
+    c.antenna_sigma_axial_m = 0.05;
+    c.antenna_sigma_radial_m = 0.02;
+    c.antenna_min_rps = 0.0;
+    c.antenna_att_mode = kLeverAttObserve;
+}
+
+// The antenna's offset from the IMU, where the rocket's owner measured it: an
+// optional per-rocket setting (the apps' Antenna offset, BLE cmd 81), unknown
+// unless set.
+struct AntennaOffset
+{
+    bool   known = false;
+    double b_m[3] = {0.0, 0.0, 0.0};   // body FRD (the filter's frame), the IMU to the antenna's phase centre, m
+};
+
+// The owner's setting (BLE cmd 81, AntennaOffsetConfigData: the board's own
+// frame, FLU, mm) in the filter's: turned into the rocket's frame by the
+// mounting the flight computer turns the IMU by (b2r: row-major, v_rocket = R
+// v_board, both FLU), then FRD (y and z negated), in metres. Unknown, or a
+// setting that is no setting (antennaOffsetValid), is unknown.
+inline AntennaOffset antennaOffsetInBody(const AntennaOffsetConfigData& s, const float b2r[9])
+{
+    AntennaOffset a;
+    if (s.known != 1 || !antennaOffsetValid(s))
+        return a;
+    const double rb[3] = {s.x_mm * 1.0e-3, s.y_mm * 1.0e-3, s.z_mm * 1.0e-3};
+    double rr[3];
+    for (int i = 0; i < 3; ++i)
+        rr[i] = static_cast<double>(b2r[3 * i]) * rb[0] + static_cast<double>(b2r[3 * i + 1]) * rb[1] +
+                static_cast<double>(b2r[3 * i + 2]) * rb[2];
+    a.known = true;
+    a.b_m[0] = rr[0];
+    a.b_m[1] = -rr[1];
+    a.b_m[2] = -rr[2];
+    return a;
+}
+
+// The offset on the filter (RawGnssShadow.h, the antenna's offset): known,
+// every Doppler and pseudorange is predicted at the antenna, and what the
+// offset could be off by (antenna_sigma_*, applyMosaicFlightSafeguards)
+// takes the place of the bounds on the Dopplers and in the change check.
+// Unknown changes nothing: the filter as the image flies it without one.
+// After the safeguards; RawGnssShadow::setAntenna does the same on the ground.
+inline void applyAntennaOffset(const AntennaOffset& a, RawGnssShadow::Config& c)
+{
+    if (!a.known)
+        return;
+    c.ekf.lever_on = true;
+    for (int i = 0; i < 3; ++i)
+        c.ekf.lever_b_m[i] = a.b_m[i];
+    c.ekf.lever_att_mode = c.antenna_att_mode;
 }
 
 }  // namespace gnss_raw
