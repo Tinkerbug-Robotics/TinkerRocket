@@ -87,6 +87,32 @@ double RawGnssShadow::rotLeverSigma(double axial_m, double radial_m, double rate
     return a + r;
 }
 
+void RawGnssShadow::setAntenna(bool known, const double b_m[3])
+{
+    ant_known_ = known;
+    for (int i = 0; i < 3; ++i)
+        ant_b_m_[i] = known ? b_m[i] : 0.0;
+    ant_pending_ = true;
+    st_.antenna_pending = 1;
+    if (!(imu_flags_ & kShadowInFlight))
+        applyAntenna();
+}
+
+// The offset on the filter (and in the config: its allowances read it, and a
+// scratch copy of the filter takes the filter's own)
+void RawGnssShadow::applyAntenna()
+{
+    cfg_.ekf.lever_on = ant_known_;
+    for (int i = 0; i < 3; ++i)
+        cfg_.ekf.lever_b_m[i] = ant_b_m_[i];
+    cfg_.ekf.lever_att_mode = ant_known_ ? cfg_.antenna_att_mode : static_cast<uint8_t>(kLeverAttOff);
+    ekf_.setLever(ant_known_, ant_b_m_, cfg_.antenna_att_mode);
+    ekf_.setTrackRate(rotOn());
+    ant_pending_ = false;
+    st_.antenna_pending = 0;
+    st_.antenna_sets++;
+}
+
 void RawGnssShadow::reset()
 {
     if (running_)
@@ -549,6 +575,8 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
     else
     {
         pcx_armed_ = true;
+        if (ant_pending_)
+            applyAntenna();               // an offset set in flight: back on the ground
     }
     const double t = static_cast<double>(time64_us) * 1.0e-6;
     // A sensor sim's IMU is not the sky's: the shadow stops. The navigation
@@ -947,9 +975,14 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
         float all = 0.0f, across = 0.0f;
         ekf_.takeRatePeak(all, across);
         const bool acts = !cfg_.rot_after_apogee || (imu_flags & kShadowApogee) != 0;
-        if (acts && static_cast<double>(across) >= cfg_.rot_lever_min_rps)
-            job_.rot_sigma = rotLeverSigma(cfg_.rot_lever_axial_m, cfg_.rot_lever_radial_m, static_cast<double>(all),
+        if (acts && static_cast<double>(across) >= leverMinRps())
+            job_.rot_sigma = rotLeverSigma(leverAxialM(), leverRadialM(), static_cast<double>(all),
                                            static_cast<double>(across));
+        // the offset known and the heading unset: what any heading does to the predicted lever's velocity,
+        // from the rate the bounds start at (RawGnssShadow.h)
+        if (acts && cfg_.ekf.lever_on && !dv_hdg_known_ && static_cast<double>(across) >= cfg_.rot_lever_min_rps)
+            job_.rot_sigma += rotLeverSigma(leverUnsetM(true), leverUnsetM(false), static_cast<double>(all),
+                                            static_cast<double>(across));
         st_.rot_last_sigma_mps = static_cast<float>(job_.rot_sigma);
         if (st_.rot_last_sigma_mps > st_.rot_max_sigma_mps)
             st_.rot_max_sigma_mps = st_.rot_last_sigma_mps;
@@ -1229,6 +1262,76 @@ void RawGnssShadow::dvReset()
     dv_noise_te_ = 0.0;
     dv_latch_ = false;
     dv_hdg_known_ = false;    // a flight restored in the air never knows
+    lev_ref_ok_ = false;
+}
+
+// The lever roll: this end's lever velocity and nose (the Doppler's instant),
+// the other end's kept by the epoch before; g = n2 x v2 - n1 x v1 + n x dv_sf
+// (n the two ends' mean nose); then g' C^-1 w and g' C^-1 g by C's Cholesky.
+void RawGnssShadow::leverRoll(double age, const double w[3], const double C[3][3], const DopplerChangeImu& imu)
+{
+    float p2[3], v2[3], n2[3];
+    ekf_.leverAt(age + cfg_.ekf.rr_lag_s, p2, v2, n2);
+    double a1[3], a2[3], nm[3];
+    for (int i = 0; i < 3; ++i)
+    {
+        a1[i] = lev_ref_v_[i];
+        a2[i] = v2[i];
+        nm[i] = 0.5 * (static_cast<double>(lev_ref_n_[i]) + n2[i]);
+    }
+    auto cross = [](const double a[3], const double b[3], double o[3]) {
+        o[0] = a[1] * b[2] - a[2] * b[1];
+        o[1] = a[2] * b[0] - a[0] * b[2];
+        o[2] = a[0] * b[1] - a[1] * b[0];
+    };
+    const double n1d[3] = {lev_ref_n_[0], lev_ref_n_[1], lev_ref_n_[2]};
+    const double n2d[3] = {n2[0], n2[1], n2[2]};
+    const double sf[3] = {imu.dv_sf[0], imu.dv_sf[1], imu.dv_sf[2]};
+    double c1[3], c2[3], c3[3], g[3];
+    cross(n2d, a2, c2);
+    cross(n1d, a1, c1);
+    cross(nm, sf, c3);
+    for (int i = 0; i < 3; ++i)
+        g[i] = c2[i] - c1[i] + c3[i];
+    // C = L L' (C is the fit's covariance: symmetric, positive definite)
+    double L[3][3] = {};
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j <= i; ++j)
+        {
+            double sum = C[i][j];
+            for (int k = 0; k < j; ++k)
+                sum -= L[i][k] * L[j][k];
+            if (i == j)
+            {
+                if (!(sum > 0.0))
+                    return;
+                L[i][i] = std::sqrt(sum);
+            }
+            else
+            {
+                L[i][j] = sum / L[j][j];
+            }
+        }
+    // L^-1 g and L^-1 w: g' C^-1 g = |L^-1 g|^2, g' C^-1 w = (L^-1 g) . (L^-1 w)
+    double lg[3], lw[3];
+    for (int i = 0; i < 3; ++i)
+    {
+        double sg = g[i], sw = w[i];
+        for (int k = 0; k < i; ++k)
+        {
+            sg -= L[i][k] * lg[k];
+            sw -= L[i][k] * lw[k];
+        }
+        lg[i] = sg / L[i][i];
+        lw[i] = sw / L[i][i];
+    }
+    const double info = lg[0] * lg[0] + lg[1] * lg[1] + lg[2] * lg[2];
+    const double hy = lg[0] * lw[0] + lg[1] * lw[1] + lg[2] * lw[2];
+    st_.lever_roll_epochs++;
+    st_.lever_roll_info += info;
+    st_.lever_roll_hy += hy;
+    st_.lever_roll_last_deg = info > 0.0 ? static_cast<float>(hy / info * kRad2Deg) : 0.0f;
+    st_.lever_roll_last_sigma_deg = info > 0.0 ? static_cast<float>(kRad2Deg / std::sqrt(info)) : 0.0f;
 }
 
 // dv_latch_k's level test (DopplerChange.h levelChi2): this epoch's Dopplers
@@ -1237,8 +1340,14 @@ void RawGnssShadow::dvReset()
 // velocity offset and one clock rate -- the offset's chi-square against the
 // fit's covariance, the filter's velocity covariance and the floor; -1 with
 // no fit. Each row's 1-sigma is its own and row_var in quadrature. The rows
-// go in dv_rows_: the change check is done with them by then.
-double RawGnssShadow::dvLevelChi2(double row_var)
+// go in dv_rows_: the change check is done with them by then. With the offset
+// known each prediction took the lever's velocity at the filter's attitude
+// (v_lev: this end's, as dopplerChange took it); where the heading is unset
+// that attitude's heading can be any, so v_lev goes back on the fitted
+// offset, as on the epoch test's change (knownLeverArm's wu): the antenna's
+// velocity less the filter's, unknown's level. The Dopplers it lets go to
+// the update allow for that heading too (leverUnsetM).
+double RawGnssShadow::dvLevelChi2(double row_var, const float v_lev[3])
 {
     const double te = job_.te;
     int n = 0;
@@ -1262,10 +1371,11 @@ double RawGnssShadow::dvLevelChi2(double row_var)
     const dvc::Fit f = dvc::fit(dv_rows_, n, cfg_.dv_sat_k, 6, true);
     if (!f.ok)
         return -1.0;
+    const bool unlever = cfg_.ekf.lever_on && !dv_hdg_known_;
     double off[3], Cw[3][3], Pv[3][3];
     for (int i = 0; i < 3; ++i)
     {
-        off[i] = f.x[i];
+        off[i] = unlever ? f.x[i] + static_cast<double>(v_lev[i]) : f.x[i];
         for (int j = 0; j < 3; ++j)
         {
             Cw[i][j] = f.C[i][j];
@@ -1422,9 +1532,26 @@ void RawGnssShadow::jobDvCheck(double age)
             dw2 += d * d;
         }
         const double wp = static_cast<double>(dv_w_peak_);
-        const double lever = cfg_.dv_lever_allow_m * (std::sqrt(dw2) + wp * wp * imu.dt);
         dvc::Allow a;
         a.att_rad = cfg_.dv_att_allow_deg / kRad2Deg;
+        // the lever arm the allowance takes: the bound, or with the offset known what its prediction can be
+        // off by (DopplerChange.h knownLeverArm) -- where the heading is unset, the prediction taken back out
+        // of the change (wu) and the whole offset allowed. The lever roll reads the change as fitted (w).
+        double arm = dvLeverM();
+        double wu[3] = {w[0], w[1], w[2]};
+        if (cfg_.ekf.lever_on)
+        {
+            const double* r = cfg_.ekf.lever_b_m;
+            double dv_lev[3];
+            for (int i = 0; i < 3; ++i)
+            {
+                const float ref = lev_ref_ok_ ? lev_ref_v_[i] : 0.0f;
+                dv_lev[i] = static_cast<double>(imu.v_lev[i]) - static_cast<double>(ref);
+            }
+            arm = dvc::knownLeverArm(w, dv_lev, std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]), dvLeverM(),
+                                     dv_hdg_known_, a.att_rad, wu);
+        }
+        const double lever = arm * (std::sqrt(dw2) + wp * wp * imu.dt);
         a.scale = cfg_.dv_scale_allow;
         a.bias_mps = cfg_.dv_bias_allow_mps2 * imu.dt;
         a.lever_mps = lever;
@@ -1432,13 +1559,16 @@ void RawGnssShadow::jobDvCheck(double age)
         // any distance off, and the horizontal change only as sure as that
         if (cfg_.dv_hdg_unset_deg > 0.0 && !dv_hdg_known_)
             a.hdg_rad = cfg_.dv_hdg_unset_deg / kRad2Deg;
-        const double chi2 = dvc::epochChi2(w, Cw, sf, a);
+        const double chi2 = dvc::epochChi2(wu, Cw, sf, a);
+        // the lever roll (RawGnssShadow.h): the fitted change against the roll a turning antenna points to
+        if (cfg_.ekf.lever_on && cfg_.ekf.lever_att_mode == kLeverAttObserve && lev_ref_ok_ && imu.ok)
+            leverRoll(age, w, Cw, imu);
         const double ke2 = cfg_.dv_epoch_k * cfg_.dv_epoch_k;
         st_.dv_last_chi2 = static_cast<float>(chi2);
-        st_.dv_last_along = static_cast<float>(dvc::alongSf(w, sf));
+        st_.dv_last_along = static_cast<float>(dvc::alongSf(wu, sf));
         if (static_cast<float>(chi2) > st_.dv_max_chi2)
             st_.dv_max_chi2 = static_cast<float>(chi2);
-        double excess = std::sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
+        double excess = std::sqrt(wu[0] * wu[0] + wu[1] * wu[1] + wu[2] * wu[2]);
         epoch_fail = chi2 < 0.0 || chi2 > ke2 || 2 * sat_fails > nr;
         if (win)
         {
@@ -1449,7 +1579,7 @@ void RawGnssShadow::jobDvCheck(double age)
             double Cs[3][3];
             for (int i = 0; i < 3; ++i)
             {
-                dv_SW_[i] = lam * dv_SW_[i] + w[i];
+                dv_SW_[i] = lam * dv_SW_[i] + wu[i];
                 dv_SF_[i] = lam * dv_SF_[i] + sf[i];
                 for (int j = 0; j < 3; ++j)
                 {
@@ -1469,7 +1599,7 @@ void RawGnssShadow::jobDvCheck(double age)
                                         + static_cast<double>(dv_w_now_[2]) * dv_w_now_[2]);
             dvc::Allow aw = a;
             aw.bias_mps = dv_SB_;
-            aw.lever_mps = std::fmin(dv_SL_, cfg_.dv_lever_allow_m * (wn + dv_wwin_));
+            aw.lever_mps = std::fmin(dv_SL_, arm * (wn + dv_wwin_));
             const double chi2w = dvc::epochChi2(dv_SW_, Cs, dv_SF_, aw);
             st_.dv_last_chi2_win = static_cast<float>(chi2w);
             if (!epoch_fail && chi2w > ke2)
@@ -1498,8 +1628,18 @@ void RawGnssShadow::jobDvCheck(double age)
         dv_SB_ = dv_SL_ = 0.0;
         dv_wwin_ = 0.0;
     }
-    // this epoch is the next one's start
+    // this epoch is the next one's start: its Dopplers, and (lever_on) the lever's velocity they were predicted
+    // with, as dopplerChange took it, and the nose then (the lever roll's); a reference taken with the offset
+    // unknown has none
     dv_ref_ = dv_next_;
+    lev_ref_ok_ = cfg_.ekf.lever_on;
+    if (lev_ref_ok_)
+    {
+        float lp[3], lv[3];
+        ekf_.leverAt(age + cfg_.ekf.rr_lag_s, lp, lv, lev_ref_n_);
+        for (int i = 0; i < 3; ++i)
+            lev_ref_v_[i] = imu.v_lev[i];
+    }
     for (int i = 0; i < dv_ref_.n; ++i)
     {
         dv_S_[i] = dv_S2_[i];
@@ -1531,7 +1671,7 @@ void RawGnssShadow::jobDvCheck(double age)
         else if (dv_latch_ && !epoch_fail)
         {
             // each Doppler's noise as the change's model gives it (one Doppler's, not two)
-            const double c2 = dvLevelChi2(cfg_.dv_floor_mps * cfg_.dv_floor_mps + dyn * dyn + nvar);
+            const double c2 = dvLevelChi2(cfg_.dv_floor_mps * cfg_.dv_floor_mps + dyn * dyn + nvar, imu.v_lev);
             st_.dv_last_level_chi2 = static_cast<float>(c2);
             if (c2 >= 0.0 && c2 <= cfg_.dv_latch_k * cfg_.dv_latch_k)
             {

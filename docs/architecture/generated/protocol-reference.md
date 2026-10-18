@@ -22,7 +22,7 @@ Start-of-frame bytes from [`TR_I2C_Interface.h`](https://github.com/Tinkerbug-Ro
 
 ## FC ↔ OC message types
 
-116 codes. The dispatch on both ends is a flat first-match chain, so
+118 codes. The dispatch on both ends is a flat first-match chain, so
 two handlers sharing a value means the second is silently dead — which is why
 this list is CI-enforced for uniqueness.
 
@@ -117,7 +117,7 @@ this list is CI-enforced for uniqueness.
 | `0xF4` | `I2C_TX_RESYNC` | — |  |
 | `0xF9` | `LORA_UPLINK_MSG` | OC → log | OC→self: 13-byte LoRaUplinkData, one per uplink decode, straight to the log |
 | `0xFA` | `FC_BOOT_STATUS_MSG` | FC → OC | FC→OC: 4-byte FcBootStatusData, boot progress during setup_fc only |
-| `0xFB` | `CONFIG_REPORT_MSG` | FC → OC | FC→OC: 194-byte ConfigReportData, everything the app's config |
+| `0xFB` | `CONFIG_REPORT_MSG` | FC → OC | FC→OC: 201-byte ConfigReportData, everything the app's config |
 | `0x90` | `GNSS_SAT_MSG` | FC → OC | FC→OC over I2S: GNSSSatData, per-satellite C/N0 at every GNSS |
 | `0x91` | `RECOVERY_END_PENDING` | OC → FC |  |
 | `0x93` | `ISM6_BATCH_MSG` | FC → OC | FC→OC over I2S: a count byte, then that many ISM6HG256Data records |
@@ -144,8 +144,10 @@ this list is CI-enforced for uniqueness.
 | `0x86` | `HG_CAL_APPLY_MSG` | FC → OC | 49-byte HighGCalApplyData payload |
 | `0x8E` | `GNSS_LOG_CONFIG_PENDING` | OC → FC | OC→FC: payload follows as GNSS_LOG_CONFIG_MSG |
 | `0x8F` | `GNSS_LOG_CONFIG_MSG` | OC → FC | OC→FC: 1-byte GnssLogConfigData |
+| `0x8C` | `ANTENNA_CONFIG_PENDING` | OC → FC | OC→FC: payload follows as ANTENNA_CONFIG_MSG |
+| `0x8D` | `ANTENNA_CONFIG_MSG` | OC → FC | OC→FC: 7-byte AntennaOffsetConfigData |
 
-> 54 of these 116 codes carry no comment in the header,
+> 54 of these 118 codes carry no comment in the header,
 > so the Notes column is blank for them. Direction is inferred from the
 > `_PENDING` / `_CMD` / `_MSG` suffix in that case, which is a convention,
 > not a guarantee. A trailing `// OC→FC: what it does` on the constant
@@ -161,7 +163,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `FlightSnapshotData` | 224 |
 | `FlightSettingsData` | 223 |
 | `GNSSSatData` | 202 |
-| `ConfigReportData` | 194 |
+| `ConfigReportData` | 201 |
 | `PadContextNav` | 124 |
 | `AccelCalStatusFrame` | 114 |
 | `RawGnssEkfData` | 90 |
@@ -185,6 +187,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `PadCalStatusData` | 40 |
 | `PadContextHg` | 37 |
 | `MagCalStatusData` | 36 |
+| `PadContextAnt` | 33 |
 | `HeadingFitData` | 32 |
 | `LogBufferStatsData` | 28 |
 | `BaseStationStorageStatsData` | 26 |
@@ -219,6 +222,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `BsEventHeader` | 9 |
 | `RollWaypoint` | 9 |
 | `ServoTestAnglesData` | 8 |
+| `AntennaOffsetConfigData` | 7 |
 | `LoRaFrameHeader` | 7 |
 | `PadContextHeader` | 7 |
 | `GNSSSatBlock` | 6 |
@@ -246,7 +250,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 
 ### app to Out Computer
 
-62 commands.
+63 commands.
 
 | Cmd | Constant | Description |
 |-----|----------|-------------|
@@ -311,6 +315,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 78 |  | #1629 — average the low-g accelerometer over one face, the board still |
 | 79 |  | GNSS log setting: [setting:1] — GNSS_LOG_DETAILED (0, every SBF block of a mosaic-G5) or GNSS_LOG_REDUCED (1,… |
 | 80 |  | The high-g's six-face alignment to the low-g: store and apply the fitted matrix and bias, or clear the matrix… |
+| 81 |  | GNSS antenna offset: [known:1][x_mm:2][y_mm:2][z_mm:2], LE — the antenna's phase centre from the FC's IMU in… |
 | 200 |  | Bench-only: arm config-frame drops, see test_cfg_drop_count |
 
 > 8 of these have no comment in the dispatch and so no

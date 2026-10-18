@@ -69,6 +69,40 @@ offline harness calls too. The boot prints them on one `[RAWGNSS] flight safegua
   nose reached 2 rad/s: the drogue's snatch or a tumble, not the pitch-over at apogee.
 - **GNSS on the whole attitude from launch** (`config::RAW_HEADING_GATE` 1).
 
+### The GNSS antenna offset (BLE cmd 81)
+
+An owner setting in both apps (Settings, "GNSS Antenna Offset"): Unknown, the default, or Measured, with the IMU to
+the antenna's phase center in millimeters along the board's own axes. The out computer stores and relays it; the
+flight computer keeps it in NVS (`antenna`/`ofs`), turns it into the filter's frame with the IMU's mounting, and
+takes it only on the ground: one relayed in flight is held and applied once the flight computer is not INFLIGHT.
+The flight computer reports the offset it holds in its config report (`ConfigReportData` v4), and the apps' readback
+shows that one (`antsrc` "fc") once the flight computer has taken the offset last sent and keeps one of its own (or
+both are Unknown). Until then the out computer's copy stands in (`antsrc` "oc"): a flight computer with no offset of
+its own (a fresh board, or its NVS erased) is sent the out computer's again, and its first report after power-on
+comes before it takes one queued with its rail off. One that does not take it shows its own again once the command
+has been served. The rule is in
+[`antenna_readback_policy.h`](../../tinkerrocket-idf/projects/out_computer/main/antenna_readback_policy.h). The Beetle's out computer
+leaves the setting out of its readback, so the apps lock it there. The apps send nothing until all three values
+are entered, and take a readback into the rocket's profile only when the flight computer reported it.
+
+- **Unknown** flies the image as described above: the turning body's 0.30 m and 0.03 m bounds stand in for the
+  antenna nobody measured.
+- **Measured:** every Doppler and pseudorange is predicted at the antenna, and a few centimeters of doubt on the
+  value (`antenna_sigma_*`) replace those bounds and the change check's lever allowance. The change check also
+  allows for the attitude turning the antenna's predicted motion: with the heading known, the attitude allowance's
+  share of the offset; with no magnetometer heading, it takes the prediction back out and allows the whole offset,
+  as Unknown does with its 0.3 m, and its latch lets go at Unknown's level the same way. With no magnetometer
+  heading, each Doppler's sigma also allows twice the offset (any heading can turn the predicted motion that far)
+  once the body turns at 2 rad/s or more across the nose, where Unknown's bounds start, so a swing's Dopplers let in
+  after a latch cannot pull the velocity off. That costs some descent accuracy and next to none in the ascent. The
+  offset's roll terms are observed and logged, never fused.
+- **The log:** the pad context gains a record, `PCX_ANT`, beside the calibrations at launch + 5 s: the setting, the
+  same in the filter's frame, the offset the navigation filter had on at the record (the one it flew with: an
+  earlier one while a setting sent just before launch waits for the ground), and whether that was the setting.
+  `tools/raw_replay/extract.py` passes the offset the filter flew with to the harness (`META antenna_m`), which
+  replays the flight with it unless given `--antenna-m none`; a setting not flown with is `META antenna_m_set`,
+  only named.
+
 ### The log-only vote guard
 
 With one filter, the barometer's climb rate is the only independent check on the filter's apogee votes
@@ -129,11 +163,19 @@ This is a statement about behavior, not bytes.
   - the V9 and V8 auto images by 1,968 B (flash code and constants, and 184 B of `.bss`);
   - the Beetle by 23,792 B: 21,872 B of flash code, 1,132 B of IRAM code (1,280 B of internal RAM with its
     alignment) and 208 B of `.bss`, so about 1.5 KB less internal RAM.
+  - The antenna offset adds, against the configuration without it (main at 9f813b15, the same real guidance): the
+    Beetle 5,736 B of flash code, 184 B of flash data and 212 B of IRAM code; the V9 auto image 3,772 B of flash and
+    16 B of `.bss`; this image 13,500 B of flash and 96 B of internal RAM. The filter object grows by about 10.5 KB,
+    in PSRAM, and the lever's stack frames by under 0.1 KB on every board.
 - **The Beetle's filter is bit-identical to main's:** `tools/raw_replay/bitident.sh` reports 450 of 450 runs
   IDENTICAL. `tools/m1_identity.sh` reports its `main.cpp` and sensor collectors preprocess IDENTICAL. Neither
   covers GnssTimeSync; the host tests cover its default path.
-- **The wire:** no new message, record or BLE command number. FcStatus bit 1 and the snapshot's spare float are set
-  only by this image; every other image leaves them 0.
+- **The wire:** the antenna offset adds BLE command 81, the out computer's ANTENNA_CONFIG_PENDING/MSG pair
+  (0x8C/0x8D), the config report's version 4 (`ConfigReportData`, 201 bytes: the offset the flight computer holds,
+  and `F_ANTENNA_FROM_NVS`) and the pad context's `PCX_ANT` record (every board but the Beetle writes it). Firmware
+  that predates them ignores the command, an out computer that predates version 4 refuses the newer report (the OTA
+  relay updates the out computer first), and a log reader that predates them skips the record. FcStatus bit 1 and
+  the snapshot's spare float are set only by this image; every other image leaves them 0.
 
 ## Bench and rig tools
 

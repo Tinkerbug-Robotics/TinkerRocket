@@ -383,6 +383,59 @@
 // coast -- where a boost that weathercocks would be held, and where the votes
 // and the raw vote guard read the filter -- fly as without them.
 //
+// The antenna's offset where the rocket's owner measured it (an optional
+// per-rocket setting, unknown by default: then everything above is as it
+// was, bit for bit). Known (the EKF's lever_on: applyAntennaOffset at the
+// start, setAntenna on the ground), every Doppler and pseudorange is
+// predicted at the antenna -- C (omega x r) and C r, each at its own instant
+// (TR_RawGnssEKF.h) -- and the bounds above give way to what the measured
+// offset could be off by: each Doppler's sigma takes rotLeverSigma with
+// antenna_sigma_axial_m and antenna_sigma_radial_m in place of
+// rot_lever_axial_m and rot_lever_radial_m, from antenna_min_rps across the
+// nose in place of rot_lever_min_rps, and the Doppler change check's lever
+// allowance (whose changes are now the antenna's) the larger of the two
+// sigmas in place of dv_lever_allow_m -- plus what the attitude's error does
+// to the lever's change both ends predicted (DopplerChange.h knownLeverArm):
+// with the heading known, the attitude allowance's chord of the offset; with
+// it unset (dv_hdg_unset_deg's judgment), any heading turns the predicted
+// change, up to twice its size (0.3 m on a coast weathercocking with the
+// heading 60 deg off: a chi-square of 19.9 against the 4-sigma test's 16,
+// unknown's 0.89), so there the prediction is taken back out of the fitted
+// change and the whole offset allowed, its size plus the larger sigma; and
+// out of the latch's level (dv_latch_k), which would otherwise hold up to
+// twice the lever's velocity where unknown's holds it once, and the latch
+// longer than unknown's. The Dopplers the latch then lets go to the update
+// are still predicted at that heading, so with it unset each Doppler's sigma
+// also takes what any heading does to the predicted lever's velocity
+// (leverUnsetM: rotLeverSigma of twice the offset's part along the nose and
+// twice its part across), from rot_lever_min_rps across the nose, where the
+// bounds start: below it unknown's own filter takes the lever's whole
+// velocity unallowed. Without it, 0.3 m in a 5 rad/s swing just after a
+// latched epoch, the heading 180 deg off, took the velocity 5.5 m/s off, and
+// the latch held the good Dopplers out against it (unknown's: 0.31 m/s).
+// Grid B with no magnetometer: the ascent within 0.1 deg of without it (one
+// coast 0.55 deg worse, to unknown's), the descent's p90 worse by over
+// 0.5 deg in 42 of 384 runs (79 at 0.3 m), the price of keeping a swing's
+// mis-predicted Dopplers out (from any rate: 70 and 109, and the vertical
+// velocity at apogee moved too). The hold and the skip are untouched. The
+// offset is a prior, never the truth: a phase centre a few cm from where the
+// owner measured is what the sigmas are for. setAntenna in flight waits for
+// the ground.
+//
+// The lever roll (the EKF's lever_att_mode observe; the change check on). A
+// turning antenna's velocity turns with the body, so it says how the body is
+// rolled about the nose -- which nothing else on a vertical thrust does. In
+// one epoch a roll error delta looks just like a velocity error (the antenna's
+// velocity turned by delta about the nose, the same along every line of
+// sight), so it is read where the IMU ties the velocity: each checked epoch's
+// fitted change w (the antenna's velocity change less the IMU's and the
+// lever's, predicted at the filter's attitude) against g, the change a radian
+// of roll would make -- n2 x v2 - n1 x v1 for the lever's velocity v and the
+// nose n at the two ends, plus n x dv_sf for the IMU's specific-force change
+// (none for a thrust along the nose). The epoch's roll correction is g' C^-1 w
+// / g' C^-1 g (C the fit's covariance of w), its 1-sigma 1 / sqrt(g' C^-1 g);
+// the sums since the start give the run's. Counted and logged, nothing fused.
+//
 // Stopping. A sensor sim, a hole in the IMU longer than max_gap_s, a state
 // that is not finite, or (on the pad) one pad_reset_m from the flight
 // filter's stops it; it starts again from the next pad seed.
@@ -402,6 +455,7 @@
 #ifndef RAW_GNSS_SHADOW_H
 #define RAW_GNSS_SHADOW_H
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 
@@ -583,6 +637,12 @@ public:
         double   rot_skip_rate_rps = 0.0;     // an epoch whose rate across the nose reached this, rad/s, and
         double   rot_skip_s = 0.0;            //   every epoch within this long after one: nothing fused (dropped)
         bool     rot_after_apogee = false;    // all three only after the flight computer's apogee call
+        // The antenna's offset, known (the EKF's lever_on, above): what it
+        // could be off by. The offset itself is the EKF's lever_b_m.
+        double   antenna_sigma_axial_m = 0.05;   // along the nose, 1-sigma, m
+        double   antenna_sigma_radial_m = 0.02;  //   and across it
+        double   antenna_min_rps = 0.0;          // on the Dopplers from this rate across the nose, rad/s (0: any)
+        uint8_t  antenna_att_mode = 1;           // the EKF's lever_att_mode when known (LeverAttMode: observe)
     };
 
     // The Doppler change check (Config::dv_check).
@@ -792,6 +852,17 @@ public:
         bool     att_last_held = false;    //   the last one's
         uint32_t rot_skipped = 0;          // epochs that fused nothing while the body turned (rot_skip_rate_rps)
         bool     rot_last_skipped = false; //   the last one's
+        // the antenna's offset (setAntenna)
+        uint32_t antenna_sets = 0;         // offsets taken (known or unknown)
+        uint8_t  antenna_pending = 0;      // one waits for the ground
+        // its roll terms observed (the EKF's lever_att_mode observe, with the
+        // change check): each checked epoch's fitted change, w, against the
+        // roll a turning antenna points to (lever roll, below)
+        uint32_t lever_roll_epochs = 0;    // epochs fitted for it
+        float    lever_roll_last_deg = 0.0f;       // the last one's roll correction, deg (0: no turn to see it)
+        float    lever_roll_last_sigma_deg = 0.0f; //   its 1-sigma, deg (0: none)
+        double   lever_roll_info = 0.0;    // summed since the start: g' C^-1 g, 1/rad^2
+        double   lever_roll_hy = 0.0;      //   and g' C^-1 w, 1/rad: their ratio the roll the whole run points to
     };
 
     using Clock = int64_t (*)();
@@ -806,6 +877,11 @@ public:
     // + radial |omega| (along the nose only the cross rate moves it; across,
     // any rate does, up to its whole size). Below 0 counts as 0.
     static double rotLeverSigma(double axial_m, double radial_m, double rate_rps, double across_rps);
+    // The antenna's offset from the IMU (body FRD, m; known false: unknown,
+    // the bounds), as the owner's setting has it now: taken at once on the
+    // ground, at the first ground tick after a flight. The same as
+    // applyAntennaOffset gives a start (ReceiverProfileApply.h).
+    void setAntenna(bool known, const double b_m[3]);
     void setClock(Clock c) { clock_ = c; }
     const Config& config() const { return cfg_; }
 
@@ -1059,14 +1135,45 @@ private:
     bool          dv_hdg_known_ = false;// dv_hdg_unset_deg: the heading is the magnetometer's (on the ground,
                                         //   each step; in flight, as the launch left it)
     void          dvReset();
-    double        dvLevelChi2(double row_var);
+    void          leverRoll(double age, const double w[3], const double C[3][3], const DopplerChangeImu& imu);
+    double        dvLevelChi2(double row_var, const float v_lev[3]);
     double        att_hold_until_ = -1.0e9;   // att_hold_s: epochs up to this instant are held (filter's clock)
     double        rot_skip_until_ = -1.0e9;   // rot_skip_s: epochs up to this instant fuse nothing (filter's clock)
     bool          rotOn() const
     {
         return cfg_.rot_lever_axial_m > 0.0 || cfg_.rot_lever_radial_m > 0.0 || cfg_.att_hold_rate_rps > 0.0
-               || cfg_.rot_skip_rate_rps > 0.0;
+               || cfg_.rot_skip_rate_rps > 0.0 || cfg_.ekf.lever_on;
     }
+    // the Dopplers' allowance for the antenna: the bounds, or with the offset known what it could be off by
+    double        leverAxialM() const { return cfg_.ekf.lever_on ? cfg_.antenna_sigma_axial_m : cfg_.rot_lever_axial_m; }
+    double        leverRadialM() const
+    {
+        return cfg_.ekf.lever_on ? cfg_.antenna_sigma_radial_m : cfg_.rot_lever_radial_m;
+    }
+    // and with the offset known and the heading unset (!dv_hdg_known_, as the latch's dvLevelChi2 and the
+    // change's knownLeverArm take it), what any heading does to the lever's velocity each Doppler is still
+    // predicted with: up to twice its size, so the offset's part along the nose (axial) or across it, twice over
+    double        leverUnsetM(bool axial) const
+    {
+        const double* r = cfg_.ekf.lever_b_m;
+        return 2.0 * (axial ? std::fabs(r[0]) : std::sqrt(r[1] * r[1] + r[2] * r[2]));
+    }
+    double        leverMinRps() const { return cfg_.ekf.lever_on ? cfg_.antenna_min_rps : cfg_.rot_lever_min_rps; }
+    double        dvLeverM() const
+    {
+        return cfg_.ekf.lever_on ? std::fmax(cfg_.antenna_sigma_axial_m, cfg_.antenna_sigma_radial_m)
+                                 : cfg_.dv_lever_allow_m;
+    }
+    // the Doppler change check's other end with the offset known (dv_ref_'s): the lever velocity its
+    // Dopplers were predicted with and the nose then, NED (the lever roll's too); ok: dv_ref_ was taken
+    // with the offset known
+    float         lev_ref_v_[3] = {}, lev_ref_n_[3] = {};
+    bool          lev_ref_ok_ = false;
+    // setAntenna's, waiting for the ground
+    bool          ant_pending_ = false;
+    bool          ant_known_ = false;
+    double        ant_b_m_[3] = {};
+    void          applyAntenna();
     bool          launch_seen_ = false; // a launch edge since the start (a restored flight has none)
     void          setFlightGate(bool full);
     void          setGroundGate();

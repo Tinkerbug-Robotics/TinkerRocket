@@ -129,6 +129,10 @@ void expectSameEkf(const RawGnssEKFParams& a, const RawGnssEKFParams& b)
     EXPECT_EQ(a.cr_screen_k, b.cr_screen_k);
     EXPECT_EQ(a.cr_screen_floor_mps, b.cr_screen_floor_mps);
     EXPECT_EQ(a.cr_half_cycle, b.cr_half_cycle);
+    EXPECT_EQ(a.lever_on, b.lever_on);
+    for (int k = 0; k < 3; ++k)
+        EXPECT_EQ(a.lever_b_m[k], b.lever_b_m[k]) << k;
+    EXPECT_EQ(a.lever_att_mode, b.lever_att_mode);
     for (int k = 0; k < gnss_raw::kProfileSys; ++k)
     {
         EXPECT_EQ(a.cr_carrier_hz[k], b.cr_carrier_hz[k]) << "sys " << k;
@@ -187,7 +191,7 @@ void expectSameNumbers(const GnssReceiverProfile& a, const GnssReceiverProfile& 
 // TheShadowSafeguardDefaultsAreTheBeetles) before its size goes in here: the
 // Beetle's filter is its defaults, and the M1 build applies the LC86G's
 // profile over them. The sizes are a 64-bit host's (macOS and Linux alike).
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssEKFParams) == 424,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssEKFParams) == 464,
               "RawGnssEKFParams changed: add the field to expectSameEkf, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(RawMeasBuilder::Config) == 312,
               "RawMeasBuilder::Config changed: add the field to expectSameBuilder, then update this size");
@@ -195,7 +199,7 @@ static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 32,
               "GnssSignalProfile changed: add the field to expectSameSignal, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 520,
               "GnssReceiverProfile changed: add the field to expectSameNumbers, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1608,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1680,
               "RawGnssShadow::Config changed: pin the field in TheShadowSafeguardDefaultsAreTheBeetles, then update "
               "this size");
 
@@ -591,6 +595,10 @@ void takeFlightSafeguards(RawGnssShadow::Config& r, const RawGnssShadow::Config&
     r.att_hold_s = b.att_hold_s;
     r.rot_skip_rate_rps = b.rot_skip_rate_rps;
     r.rot_skip_s = b.rot_skip_s;
+    r.antenna_sigma_axial_m = b.antenna_sigma_axial_m;
+    r.antenna_sigma_radial_m = b.antenna_sigma_radial_m;
+    r.antenna_min_rps = b.antenna_min_rps;
+    r.antenna_att_mode = b.antenna_att_mode;
 }
 
 TEST(ReceiverProfile, TheMosaicFlightSafeguards)
@@ -650,6 +658,13 @@ TEST(ReceiverProfile, TheMosaicFlightSafeguards)
     EXPECT_EQ(c.att_hold_s, 0.0);
     EXPECT_EQ(c.rot_skip_rate_rps, 0.0);
     EXPECT_EQ(c.rot_skip_s, 0.0);
+    // where the owner measured the antenna (applyAntennaOffset): 5 cm along
+    // the nose and 2 cm across it, from any rate, its roll observed
+    EXPECT_EQ(c.antenna_sigma_axial_m, 0.05);
+    EXPECT_EQ(c.antenna_sigma_radial_m, 0.02);
+    EXPECT_EQ(c.antenna_min_rps, 0.0);
+    EXPECT_EQ(c.antenna_att_mode, gnss_raw::kLeverAttObserve);
+    EXPECT_FALSE(c.ekf.lever_on);                  // unknown until applyAntennaOffset
     // and nothing else: the profile's settings, the builder's, the EKF's, the
     // vertical check (20 m/s), the boost screen and the heading gate as they
     // were, byte for byte once the safeguards' own fields are put back
@@ -805,6 +820,11 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_EQ(c.rot_skip_rate_rps, 0.0);
     EXPECT_EQ(c.rot_skip_s, 0.0);
     EXPECT_FALSE(c.rot_after_apogee);
+    // the antenna's offset, known: what it could be off by (the EKF's lever_on, below, is off)
+    EXPECT_EQ(c.antenna_sigma_axial_m, 0.05);
+    EXPECT_EQ(c.antenna_sigma_radial_m, 0.02);
+    EXPECT_EQ(c.antenna_min_rps, 0.0);
+    EXPECT_EQ(c.antenna_att_mode, gnss_raw::kLeverAttObserve);
 
     // its EKF's, literally (the profile's part is the LC86G's, above)
     const RawGnssEKFParams& e = c.ekf;
@@ -844,6 +864,11 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_EQ(e.p0_wbias, 0.01745);
     EXPECT_FALSE(e.gravity_wgs84);
     EXPECT_EQ(e.hist_spacing_s, 0.004);
+    // the antenna's offset: unknown (the antenna taken at the IMU)
+    EXPECT_FALSE(e.lever_on);
+    for (int k = 0; k < 3; ++k)
+        EXPECT_EQ(e.lever_b_m[k], 0.0) << k;
+    EXPECT_EQ(e.lever_att_mode, gnss_raw::kLeverAttOff);
     RawGnssEKFParams lc;
     gnss_raw::applyReceiverProfile(gnss_raw::lc86gProfile(), lc);
     expectSameEkf(e, lc);

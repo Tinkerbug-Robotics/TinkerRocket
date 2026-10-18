@@ -82,6 +82,7 @@ class CommandsGoldenTest {
         "cmd76_accelcal_12.bin",
         "cmd79_gnsslog_1.bin",
         "cmd80_hgcal_49.bin",
+        "cmd81_antenna_7.bin",
     )
 
     @Test
@@ -394,6 +395,38 @@ class CommandsGoldenTest {
     fun `cmd79 gnss log`() {
         val s = side("cmd79_gnsslog_1.bin")
         assertMatchesFixture("cmd79_gnsslog_1.bin", Commands.gnssLog(s.i("setting")))
+    }
+
+    @Test
+    fun `cmd81 antenna offset`() {
+        val s = side("cmd81_antenna_7.bin")
+        assertEquals(81, s.i("cmd"))
+        assertMatchesFixture(
+            "cmd81_antenna_7.bin",
+            Commands.antennaOffset(s.i("known") == 1, s.i("x_mm"), s.i("y_mm"), s.i("z_mm")),
+        )
+    }
+
+    @Test
+    fun `cmd81 antenna offset packs signed little-endian millimeters`() {
+        // 312 = 0x0138, -25 = 0xFFE7, 4 = 0x0004 — the same bytes the iOS
+        // AntennaOffsetSettingTests pin.
+        assertEquals("51" + "01" + "3801" + "e7ff" + "0400", Commands.antennaOffset(true, 312, -25, 4).toHex())
+        assertEquals(
+            "51" + "01" + "30f8" + "d007" + "0000",
+            Commands.antennaOffset(AntennaOffset(true, -2000, 2000, 0)).toHex(),
+        )
+        // Unknown always goes out as zeros, whatever is passed.
+        assertEquals("51" + "00" + "0000" + "0000" + "0000", Commands.antennaOffset(false, 7, 8, 9).toHex())
+        assertEquals("51" + "00" + "0000" + "0000" + "0000", Commands.antennaOffset(AntennaOffset.UNKNOWN).toHex())
+        assertEquals(1 + 7, Commands.antennaOffset(AntennaOffset.UNKNOWN).size)   // cmd byte + payload
+    }
+
+    @Test
+    fun `cmd81 antenna offset refuses what the firmware would`() {
+        assertFailsWith<IllegalArgumentException> { Commands.antennaOffset(true, 2001, 0, 0) }
+        assertFailsWith<IllegalArgumentException> { Commands.antennaOffset(true, 0, -2001, 0) }
+        assertFailsWith<IllegalArgumentException> { Commands.antennaOffset(true, 0, 0, 40000) }
     }
 
     @Test

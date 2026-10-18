@@ -93,6 +93,18 @@ private struct SettingsContent: View {
     @State private var sMainDeployAlt = ""
     @State private var sDragK = ""
 
+    // GNSS antenna offset (cmd 81), in the board's own axes, edited as
+    // strings and sent when the three fields lose focus. `antennaDraft`: the
+    // picker says Measured but nothing is sent yet — zeros would tell the
+    // filter the antenna sits on the IMU, so the numbers come first, and the
+    // fields start empty. `antennaTyped`: typing not yet sent; until the user
+    // types, an empty field is no error.
+    @State private var sAntX = ""
+    @State private var sAntY = ""
+    @State private var sAntZ = ""
+    @State private var antennaDraft = false
+    @State private var antennaTyped = false
+
     // Drives the full-screen pyro test-fire cover.  (The per-channel continuity
     // readout state lives in the PyroChannelTestControls child view.)
     @State private var pyroTest: PyroTestRun?
@@ -215,6 +227,7 @@ private struct SettingsContent: View {
         case wpTime(Int), wpAngle(Int)
         case pyroValue(Int)   // ch index 0..3
         case drogueRate, mainRate, mainDeployAlt, dragK
+        case antennaX, antennaY, antennaZ
     }
 
     /// Fin-angle range implied by the pulse + travel fields as they are being
@@ -242,7 +255,7 @@ private struct SettingsContent: View {
         .font(.subheadline)
     }
 
-    private enum EditGroup { case servo, pid, rollControl, guidance, rollWaypoints, pyro, recovery }
+    private enum EditGroup { case servo, pid, rollControl, guidance, rollWaypoints, pyro, recovery, antennaOffset }
 
     private func group(of field: EditField?) -> EditGroup? {
         switch field {
@@ -254,6 +267,7 @@ private struct SettingsContent: View {
         case .wpTime, .wpAngle: return .rollWaypoints
         case .pyroValue: return .pyro
         case .drogueRate, .mainRate, .mainDeployAlt, .dragK: return .recovery
+        case .antennaX, .antennaY, .antennaZ: return .antennaOffset
         case nil: return nil
         }
     }
@@ -267,6 +281,7 @@ private struct SettingsContent: View {
         case .rollWaypoints: applyRollProfile()
         case .pyro: applyPyroConfig()
         case .recovery: applyRecoveryConfig()
+        case .antennaOffset: applyAntennaOffset()
         }
     }
 
@@ -932,6 +947,8 @@ private struct SettingsContent: View {
 
         gnssLogSection
 
+        antennaOffsetSection
+
         radioSection
 
         // Device-level firmware update lives on the General tab only (#314).
@@ -1137,6 +1154,157 @@ private struct SettingsContent: View {
                 updateProfile { $0.gnssLogSetting = setting }
                 if device.isConnected { device.sendGnssLogConfig(setting) }
             })
+    }
+
+    // MARK: GNSS antenna offset (cmd 81)
+
+    /// Where the GNSS antenna sits relative to the flight computer's IMU, in
+    /// the board's own axes, for the mosaic-G5's navigation filter. Unknown
+    /// (the default) lets the filter allow for an antenna up to 30 cm away.
+    /// Locked while flying, and until the rocket says it has the setting —
+    /// the GNSS log rule.
+    @ViewBuilder
+    private var antennaOffsetSection: some View {
+        Section(header: Text("GNSS Antenna Offset"), footer: Text(antennaOffsetFooter)) {
+            Group {
+                Picker("Antenna offset", selection: antennaMeasuredBinding) {
+                    Text("Unknown").tag(false)
+                    Text("Measured").tag(true)
+                }
+                .pickerStyle(.segmented)
+                if antennaMeasuredShown {
+                    // No placeholder: the Measured draft starts empty, and a
+                    // grey "0" there would look like a zero already entered.
+                    stringRow("Board X", text: antennaText($sAntX), field: .antennaX, unit: "mm",
+                              placeholder: "")
+                    stringRow("Board Y", text: antennaText($sAntY), field: .antennaY, unit: "mm",
+                              placeholder: "")
+                    stringRow("Board Z", text: antennaText($sAntZ), field: .antennaZ, unit: "mm",
+                              placeholder: "")
+                    if let error = antennaInputError {
+                        Text(error)
+                            .font(.caption).foregroundColor(.red)
+                    }
+                }
+            }
+            .disabled(antennaOffsetLocked)
+        }
+    }
+
+    /// The picker reads Measured for a measured profile, and for one the user
+    /// has just switched to Measured but not yet entered.
+    private var antennaMeasuredShown: Bool {
+        profile.antennaOffsetKnown || antennaDraft
+    }
+
+    /// True once a readback has arrived and carried all four `ant*` keys; a
+    /// readback without them is firmware that has no such setting.
+    private var antennaOffsetSupported: Bool {
+        device.rocketConfig?.antennaOffset != nil
+    }
+
+    private var antennaOffsetLocked: Bool {
+        device.isConnected
+            && (!antennaOffsetSupported || device.telemetry.state == "INFLIGHT")
+    }
+
+    /// Which typed fields the firmware would refuse; nil when all three are
+    /// fine, and before the user has typed: a fresh draft's empty fields are
+    /// no mistake yet.
+    private var antennaInputError: String? {
+        guard antennaTyped else { return nil }
+        let bad = [("X", sAntX), ("Y", sAntY), ("Z", sAntZ)]
+            .filter { AntennaOffset.parseMm($0.1) == nil }
+            .map { $0.0 }
+        guard !bad.isEmpty else { return nil }
+        let which = bad.count == 1 ? "Board \(bad[0])" : "Board " + bad.joined(separator: ", ")
+        return "\(which): enter whole millimeters from -2000 to 2000. Nothing is sent until all three are."
+    }
+
+    private var antennaOffsetFooter: String {
+        var text = antennaMeasuredShown
+            ? "From the flight computer\u{2019}s IMU chip to the center of the GNSS antenna, along the board\u{2019}s own X, Y and Z axes (Z out of the component side), in millimeters. Within 2 to 3 cm is enough. Board axes: +X points forward (to the nose when the board is mounted nose-forward), +Y to the left, +Z up out of the component side."
+            : "Unknown (the default): the flight computer allows for a GNSS antenna up to 30 cm from its IMU. If you have measured where the antenna sits, choose Measured: the navigation filter then models it, which sharpens the attitude while the rocket turns fast, as when the drogue opens."
+        guard device.isConnected else { return text }
+        if device.telemetry.state == "INFLIGHT" {
+            return text + " Locked while the rocket is flying."
+        }
+        guard let cfg = device.rocketConfig else { return text }
+        guard let reported = cfg.antennaOffset else {
+            return text + " This rocket\u{2019}s firmware has no antenna offset setting."
+        }
+        // "antsrc": the flight computer's own report, or the out computer's
+        // copy of what it last relayed (and the app's mirror of a send).
+        let fromFc = cfg.antennaOffsetFromFlightComputer
+        if antennaDraft && !profile.antennaOffsetKnown {
+            text += " Not sent yet: enter all three, then tap Done."
+        } else if reported == profile.antennaOffset && fromFc {
+            text += " In use by the flight computer."
+        } else if reported == profile.antennaOffset {
+            text += " Sent to the rocket; the flight computer has not reported it yet."
+        } else if fromFc {
+            text += " The flight computer reports \(reported.label)."
+        } else {
+            text += " The out computer holds \(reported.label); the flight computer has not reported it yet."
+        }
+        if let receiver = device.fcGnss, receiver != "mosaic-G5" {
+            text += " Only the mosaic-G5\u{2019}s navigation filter uses it; the rocket keeps it for when one does."
+        }
+        return text
+    }
+
+    /// Unknown is sent at once (known 0 and zeros). Measured only opens the
+    /// three fields, empty: the offset goes out when they are committed.
+    private var antennaMeasuredBinding: Binding<Bool> {
+        Binding(
+            get: { antennaMeasuredShown },
+            set: { measured in
+                if measured {
+                    guard !profile.antennaOffsetKnown else { return }
+                    antennaDraft = true
+                    loadAntennaFields(.unknown)
+                } else {
+                    antennaDraft = false
+                    updateProfile { $0.antennaOffset = .unknown }
+                    loadAntennaFields(.unknown)
+                    if device.isConnected { device.sendAntennaOffsetConfig(.unknown) }
+                }
+            })
+    }
+
+    /// A field's text, marking the draft typed when the user changes it.
+    private func antennaText(_ text: Binding<String>) -> Binding<String> {
+        Binding(
+            get: { text.wrappedValue },
+            set: { typed in
+                if typed != text.wrappedValue { antennaTyped = true }
+                text.wrappedValue = typed
+            })
+    }
+
+    /// The three fields for `offset`: its millimeters when measured, empty
+    /// when unknown — an Unknown profile's zeros are no measurement.
+    private func loadAntennaFields(_ offset: AntennaOffset) {
+        sAntX = offset.known ? String(offset.xMm) : ""
+        sAntY = offset.known ? String(offset.yMm) : ""
+        sAntZ = offset.known ? String(offset.zMm) : ""
+        antennaTyped = false
+    }
+
+    /// Commit the three fields: all three valid, or nothing is stored or sent
+    /// (the inline error stays up). A no-op once the picker is back on
+    /// Unknown, so a field that loses focus after that cannot undo it.
+    private func applyAntennaOffset() {
+        guard antennaMeasuredShown,
+              let x = AntennaOffset.parseMm(sAntX),
+              let y = AntennaOffset.parseMm(sAntY),
+              let z = AntennaOffset.parseMm(sAntZ)
+        else { return }
+        let offset = AntennaOffset(known: true, xMm: x, yMm: y, zMm: z)
+        antennaDraft = false
+        loadAntennaFields(offset)
+        updateProfile { $0.antennaOffset = offset }
+        if device.isConnected, !antennaOffsetLocked { device.sendAntennaOffsetConfig(offset) }
     }
 
     @ViewBuilder
@@ -1600,6 +1768,8 @@ private struct SettingsContent: View {
         sMainRate = formatInt(p.mainRateFps)
         sMainDeployAlt = formatInt(p.mainDeployAltAglFt)
         sDragK = formatDecimal(p.ballisticDragK)
+        loadAntennaFields(p.antennaOffset)
+        antennaDraft = false
         reloadPyroValueStrings()
     }
 
@@ -1661,12 +1831,14 @@ private struct SettingsContent: View {
 
     // MARK: - Helpers
 
+    /// `placeholder` nil shows a grey "0" ("0.0" in a decimal field).
     private func stringRow(_ label: String, text: Binding<String>, field: EditField,
-                           unit: String? = nil, decimal: Bool = false) -> some View {
+                           unit: String? = nil, decimal: Bool = false,
+                           placeholder: String? = nil) -> some View {
         HStack {
             Text(label)
             Spacer()
-            TextField(decimal ? "0.0" : "0", text: text)
+            TextField(placeholder ?? (decimal ? "0.0" : "0"), text: text)
                 .keyboardType(decimal ? .decimalPad : .numbersAndPunctuation)
                 .multilineTextAlignment(.trailing)
                 .frame(width: 80)

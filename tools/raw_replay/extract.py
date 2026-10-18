@@ -228,6 +228,7 @@ def main():
     lines.append(f"META ground_pressure_pa {repr(float(gp[0])) if gp else -1}")
 
     lines.extend(start_lines(recs, args, t_ref, pcx, gp))
+    lines.extend(antenna_lines(pcx))
 
     events = []
     # ---- IMU ticks with the loop's flags
@@ -300,6 +301,25 @@ def main():
     print(f"{os.path.basename(args.log)}: {len(ticks)} IMU ticks at {ekf_rate:.1f}/s, {len(frames)} RTCM frames "
           f"({dropped} dropped), inflight {t_inflight}, apogee flag {t_apogee}, landed {t_landed}, "
           f"pad context {'missing ' + ','.join(pcx['missing']) if pcx and pcx['missing'] else ('yes' if pcx else 'none')}")
+
+
+def antenna_lines(pcx):
+    """The GNSS antenna's offset on the flight (the pad context's PCX_ANT, BLE cmd 81), in the filter's body frame,
+    for raw_replay. The one the navigation filter flew with (PCX_ANT's applied) is META antenna_m, which it takes
+    where --antenna-m gives none; a setting the filter did not fly with (it was still on an earlier offset, or had
+    none on) is META antenna_m_set, which it only names. META antenna_used is 1 when the filter flew with the
+    setting. A log without the record, or with neither known, gives none."""
+    ant = pcx.get("ant") if pcx else None
+    if not ant or not (ant["known"] or ant["applied_known"]):
+        return []
+    xyz = lambda v: " ".join(repr(float(x)) for x in v)  # noqa: E731
+    lines = []
+    if ant["applied_known"]:
+        lines.append(f"META antenna_m {xyz(ant['applied_body_m'])}")
+    if ant["known"] and not ant["used"]:
+        lines.append(f"META antenna_m_set {xyz(ant['body_m'])}")
+    lines.append(f"META antenna_used {1 if ant['used'] else 0}")
+    return lines
 
 
 def start_lines(recs, args, t_ref, pcx, gp):
@@ -488,10 +508,11 @@ def extract_sbf(args):
         lines.append("META seed_quat " + " ".join(repr(float(x)) for x in qm))
 
     inflight_of = lambda tu, k: bool(state[k] == INFLIGHT)  # noqa: E731
+    pcx = P.join_pad_context(recs.get("PadContext") or [])
+    lines.extend(antenna_lines(pcx))
     if args.rig:
         # the on-board filter's start (S, A) and pad context, as an LC86G log's; in flight from the filter's own
         # launch tick where the pad context gives it, as there
-        pcx = P.join_pad_context(recs.get("PadContext") or [])
         lines.extend(start_lines(recs, args, t_ref, pcx, gp))
         if pcx and pcx["nav"]:
             t_launch = int(unwrap([pcx["nav"]["filter_time_us"]], t_ref)[0])

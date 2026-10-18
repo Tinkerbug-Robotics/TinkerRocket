@@ -27,7 +27,9 @@ broadside, 6 dB on the axis), and noise at the mosaic profile's v0 fits for that
 (0.10/0.30) and correlated (1.94/3.5 x 0.5, 15 s) parts, the Doppler's white (0.01/0.075, without the profile's 1.5
 margin), 0.05 m/s per g of stress (the profile allows 0.5), a TCXO with 1 ppb/g, no Doppler lag. It measures at
 its own 20 Hz (--pvt-rate), as the mosaic does; every second epoch is on the fused 10 Hz grid (--rate) and goes to
-the filter. The antenna is --lever-arm m along the nose from the IMU (0.3 by default; the filter keeps r = 0).
+the filter. The antenna is --lever-arm m along the nose from the IMU (0.3 by default; the filter keeps r = 0 unless
+told the offset: raw_replay --antenna-m), or --lever-arm-b x,y,z m anywhere in the body (FRD; it wins over
+--lever-arm).
 
 Patterns (G4/G5):
   none;
@@ -365,7 +367,8 @@ def pattern_params(pattern, t_burn, t_apo):
 
 # ------------------------------------------------------------------ the events file
 
-def build(flight_path, pattern, out_dir, phases_all, lever_arm=0.3, shells=3, rate_hz=10.0, pvt_hz=20.0):
+def build(flight_path, pattern, out_dir, phases_all, lever_arm=0.3, shells=3, rate_hz=10.0, pvt_hz=20.0,
+          lever_b=None):
     name = os.path.splitext(os.path.basename(flight_path))[0]
     ph = phases_all[name]
     rng_land = np.random.default_rng(stable_seed(name, "landing"))
@@ -380,8 +383,9 @@ def build(flight_path, pattern, out_dir, phases_all, lever_arm=0.3, shells=3, ra
     t_burn, t_apo = ph["burnout_s"], ph["apogee_s"]
     ref = (cfg["ref_lat_deg"], cfg["ref_lon_deg"], cfg["ref_alt_m"])
 
-    # the antenna: lever_arm m along the nose from the IMU (truth only; the filter keeps r = 0)
-    r_b = np.array([lever_arm, 0.0, 0.0])
+    # the antenna: lever_arm m along the nose from the IMU, or lever_b anywhere in the body (truth only: the filter
+    # keeps r = 0 unless the replay gives it one)
+    r_b = np.array([lever_arm, 0.0, 0.0]) if lever_b is None else np.asarray(lever_b, float)
     R_b2n = np.transpose(C_n2b, (0, 2, 1))
     p_ant = p + np.einsum("nij,j->ni", R_b2n, r_b)
     v_ant = v + np.einsum("nij,nj->ni", R_b2n, np.cross(w_body, r_b))
@@ -568,7 +572,7 @@ def build(flight_path, pattern, out_dir, phases_all, lever_arm=0.3, shells=3, ra
         f"META field_ned_ut {field[0]!r} {field[1]!r} {field[2]!r}",
         f"META flight {name}",
         f"META pattern {pattern}",
-        f"META lever_arm_m {lever_arm}",
+        f"META lever_arm_m {float(r_b[0])!r}",
         f"META receiver_model mosaic-like shells {shells} rate_hz {rate_hz} pvt_hz {pvt_hz} lock_los_accel 200 "
         f"rr_dyn_true 0.05 cn0_broadside 46 cn0_axis_loss 6 el_mask 3",
         f"META fix_vel_lag_s {lag_v:.4f}",
@@ -579,6 +583,8 @@ def build(flight_path, pattern, out_dir, phases_all, lever_arm=0.3, shells=3, ra
               "landing_s"):
         lines.append(f"META truth_{k} {ph[k]!r}")
     lines.append(f"META truth_touchdown_s {touch!r}")
+    if lever_b is not None:
+        lines.append("META lever_arm_b_m " + " ".join(repr(float(x)) for x in r_b))
     if lol_t is not None:
         lines.append(f"META sim_lol_t {lol_t!r}")
     if baro_tau is not None:
@@ -628,13 +634,15 @@ def main():
     ap.add_argument("--pattern", default="none", choices=PATTERNS)
     ap.add_argument("--truth-phases", help="truth_phases.json (default: beside the flight)")
     ap.add_argument("--lever-arm", type=float, default=0.3, help="the antenna along the nose from the IMU, m")
+    ap.add_argument("--lever-arm-b", help="x,y,z: the antenna anywhere in the body (FRD, m; wins over --lever-arm)")
     ap.add_argument("--shells", type=int, default=3)
     ap.add_argument("--rate", type=float, default=10.0, help="the fused epochs a second (the filter's)")
     ap.add_argument("--pvt-rate", type=float, default=20.0, help="the receiver's epochs and fixes a second")
     a = ap.parse_args()
     tp = a.truth_phases or os.path.join(os.path.dirname(os.path.abspath(a.flight)), "truth_phases.json")
     phases = json.load(open(tp))["flights"]
-    out, counts = build(a.flight, a.pattern, a.out_dir, phases, a.lever_arm, a.shells, a.rate, a.pvt_rate)
+    lever_b = [float(x) for x in a.lever_arm_b.split(",")] if a.lever_arm_b else None
+    out, counts = build(a.flight, a.pattern, a.out_dir, phases, a.lever_arm, a.shells, a.rate, a.pvt_rate, lever_b)
     print(out, json.dumps(counts))
 
 

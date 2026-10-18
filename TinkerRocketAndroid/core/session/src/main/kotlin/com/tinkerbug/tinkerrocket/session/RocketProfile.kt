@@ -1,5 +1,6 @@
 package com.tinkerbug.tinkerrocket.session
 
+import com.tinkerbug.tinkerrocket.protocol.AntennaOffset
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -101,6 +102,18 @@ public data class RocketProfile(
     // receiver's own microSD card keeps everything either way; no other
     // receiver has data this changes.
     val gnssLogSetting: Int = GNSS_LOG_DETAILED,
+    // GNSS antenna offset, cmd 81 (iOS antennaOffsetKnown / antennaX-Y-ZMm):
+    // from the flight computer's IMU to the GNSS antenna's phase center, mm
+    // along the BOARD's own axes (+X forward, +Y left, +Z up out of the
+    // component side). The flight computer rotates it into the rocket frame
+    // with its own mounting setting. Unknown (the default) is today's
+    // behavior: the filter allows for an antenna up to 30 cm away. Unknown
+    // always stores zeros, as it goes on the wire. Only the mosaic-G5's
+    // navigation filter uses it.
+    val antennaOffsetKnown: Boolean = false,
+    val antennaXMm: Int = 0,
+    val antennaYMm: Int = 0,
+    val antennaZMm: Int = 0,
 
     // Servo (#561: bias defaults 0 — a generic default must not carry trim)
     val servoBias1: Int = 0,
@@ -157,6 +170,16 @@ public data class RocketProfile(
     /** #449 derived fin calibration — endpoint angles are ±travel/2, always. */
     public val finMinDeg: Float get() = -finTravelDeg / 2.0f
     public val finMaxDeg: Float get() = finTravelDeg / 2.0f
+
+    /** The four antenna fields as one value (unknown reads as zeros). */
+    public val antennaOffset: AntennaOffset
+        get() = AntennaOffset.of(antennaOffsetKnown, antennaXMm, antennaYMm, antennaZMm)
+
+    /** This profile holding [offset]; unknown stores zeros. */
+    public fun withAntennaOffset(offset: AntennaOffset): RocketProfile {
+        val o = AntennaOffset.of(offset.known, offset.xMm, offset.yMm, offset.zMm)
+        return copy(antennaOffsetKnown = o.known, antennaXMm = o.xMm, antennaYMm = o.yMm, antennaZMm = o.zMm)
+    }
 
     public val controlModeLabel: String
         get() = when {
@@ -291,6 +314,10 @@ public object RocketProfileCodec {
         put("imuOrientSetting", JsonPrimitive(p.imuOrientSetting))
         put("imuRateHz", JsonPrimitive(p.imuRateHz))
         put("gnssLogSetting", JsonPrimitive(p.gnssLogSetting))
+        put("antennaOffsetKnown", JsonPrimitive(p.antennaOffsetKnown))
+        put("antennaXMm", JsonPrimitive(p.antennaXMm))
+        put("antennaYMm", JsonPrimitive(p.antennaYMm))
+        put("antennaZMm", JsonPrimitive(p.antennaZMm))
         put("servoBias1", JsonPrimitive(p.servoBias1))
         put("servoBias2", JsonPrimitive(p.servoBias2))
         put("servoBias3", JsonPrimitive(p.servoBias3))
@@ -391,6 +418,20 @@ public object RocketProfileCodec {
         val finSlots = o.intList("finServoAtSlot") ?: d.finServoAtSlot
         val finRev = o.boolList("finReverse") ?: d.finReverse
         val finRollRev = o.boolList("finRollReverse") ?: d.finRollReverse
+        // The antenna offset reads as one value: a profile from before the
+        // setting, or one holding anything the firmware would refuse (a
+        // component outside ±2000 mm, a wrong type, a missing key), reads as
+        // Unknown — iOS's decoder does the same.
+        val antenna = if (o.bool("antennaOffsetKnown") == true) {
+            AntennaOffset.fromWire(
+                1L,
+                o.int("antennaXMm")?.toLong(),
+                o.int("antennaYMm")?.toLong(),
+                o.int("antennaZMm")?.toLong(),
+            )
+        } else {
+            null
+        } ?: AntennaOffset.UNKNOWN
 
         return RocketProfile(
             id = uuid("id") ?: UUID.randomUUID(),
@@ -443,6 +484,10 @@ public object RocketProfileCodec {
             // Neither setting reads as the default, as the firmware reads its NVS.
             gnssLogSetting = (o.int("gnssLogSetting") ?: d.gnssLogSetting)
                 .let { if (it == RocketProfile.GNSS_LOG_DETAILED || it == RocketProfile.GNSS_LOG_REDUCED) it else d.gnssLogSetting },
+            antennaOffsetKnown = antenna.known,
+            antennaXMm = antenna.xMm,
+            antennaYMm = antenna.yMm,
+            antennaZMm = antenna.zMm,
             servoBias1 = o.int("servoBias1") ?: d.servoBias1,
             servoBias2 = o.int("servoBias2") ?: d.servoBias2,
             servoBias3 = o.int("servoBias3") ?: d.servoBias3,

@@ -21,7 +21,8 @@ are made against, and truth/<flight>.nav, which the truth's quorum reads) are in
     PYTHONPATH=<simbuild>/tinkerrocket-sim/src:<gnss-hf-sim>/sim \\
         python3 tools/raw_replay/sim_grid.py OUT --flights <grid>/flights [--patterns none,cut05,...] \\
         [--mags 0,+10,...] [--arms design,unaided,noguard] [--jobs 8] \\
-        [--binary tools/raw_replay/build/raw_replay_mosaic] [--lever-arm 0.3] [--harness-args "..."] \\
+        [--binary tools/raw_replay/build/raw_replay_mosaic] [--lever-arm 0.3 | --lever-arm-b x,y,z] \\
+        [--harness-args "..."] \\
         [--pause-file FILE]
     python3 tools/raw_replay/sim_tables.py OUT
 
@@ -66,19 +67,35 @@ def rig_wait():
         time.sleep(30.0)
 
 
+def events_match(path, lever_arm, lever_b):
+    """Whether the events file at path was made with this truth's antenna (its META lever_arm_m and lever_arm_b_m,
+    as sim_events.build writes them): a file made for another --lever-arm or --lever-arm-b, or one that does not say,
+    is not reused (its runs would be scored against the wrong antenna)."""
+    meta = read_meta(path)
+    try:
+        arm = float(meta["lever_arm_m"])
+        arm_b = [float(x) for x in meta["lever_arm_b_m"].split()] if "lever_arm_b_m" in meta else None
+    except (KeyError, ValueError):
+        return False
+    same = lambda x, y: abs(x - float(y)) <= 1e-9   # noqa: E731
+    if lever_b is None:
+        return arm_b is None and same(arm, lever_arm)
+    return arm_b is not None and len(arm_b) == 3 and all(map(same, arm_b, lever_b)) and same(arm, lever_b[0])
+
+
 def make_events(job):
-    flight, pattern, out_dir, phases_path, lever_arm, force, rig = job
+    flight, pattern, out_dir, phases_path, lever_arm, force, rig, lever_b = job
     global RIG_STATE
     RIG_STATE = rig
-    import sim_events
     name = os.path.splitext(os.path.basename(flight))[0]
     path = os.path.join(out_dir, f"{name}__{pattern}.events")
-    if os.path.exists(path) and not force:
+    if os.path.exists(path) and not force and events_match(path, lever_arm, lever_b):
         return path, None, 0.0
+    import sim_events
     rig_wait()
     t0 = time.time()
     phases = json.load(open(phases_path))["flights"]
-    path, counts = sim_events.build(flight, pattern, out_dir, phases, lever_arm=lever_arm)
+    path, counts = sim_events.build(flight, pattern, out_dir, phases, lever_arm=lever_arm, lever_b=lever_b)
     return path, counts, time.time() - t0
 
 
@@ -94,6 +111,12 @@ def read_meta(events):
     return meta
 
 
+def score_current(score_path, events):
+    """A run's score is kept only when it is at least as new as its events file: make_events rebuilds an events file
+    whose truth antenna no longer matches (--lever-arm, --lever-arm-b), and the runs on the old one go with it."""
+    return os.path.exists(score_path) and os.path.getmtime(score_path) >= os.path.getmtime(events)
+
+
 def run_one(job):
     events, mag, arm, binary, runs_dir, scores_dir, keep, extra, arm_args, rig = job
     global RIG_STATE
@@ -103,7 +126,7 @@ def run_one(job):
     flight, pattern = base.split("__")
     rid = f"{base}__{mag}__{arm}"
     score_path = os.path.join(scores_dir, rid + ".json")
-    if os.path.exists(score_path):
+    if score_current(score_path, events):
         return rid, "kept", 0.0
     csv = os.path.join(runs_dir, rid + ".csv")
     args = [binary, "--in", events, "--out", csv, "--receiver", "mosaic"]
@@ -162,6 +185,8 @@ def main():
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
     ap.add_argument("--binary", default=os.path.join(HERE, "build", "raw_replay_mosaic"))
     ap.add_argument("--lever-arm", type=float, default=0.3)
+    ap.add_argument("--lever-arm-b", help="x,y,z: the truth's antenna anywhere in the body (FRD, m; wins over "
+                                          "--lever-arm)")
     ap.add_argument("--keep-csv", default="none", help="patterns whose CSVs are kept (comma-separated; 'all')")
     ap.add_argument("--events-dir", help="where the events files go (default OUT/events; ~6 MB each, made again "
                                          "in minutes: a scratch directory will do)")
@@ -191,7 +216,8 @@ def main():
     for spec in a.arm_args:
         name, _, rest = spec.partition("=")
         arm_args[name] = rest.split()
-    jobs = [(f, p, ev_dir, phases, a.lever_arm, a.force_events, a.rig_state) for f in flights for p in pats]
+    lever_b = [float(x) for x in a.lever_arm_b.split(",")] if a.lever_arm_b else None
+    jobs = [(f, p, ev_dir, phases, a.lever_arm, a.force_events, a.rig_state, lever_b) for f in flights for p in pats]
     events = []
     with cf.ProcessPoolExecutor(a.jobs) as ex:
         for path, counts, dt in ex.map(make_events, jobs):

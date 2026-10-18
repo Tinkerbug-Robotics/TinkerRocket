@@ -513,7 +513,7 @@ static uint8_t b2r_setting = IMU_ORIENT_AUTO;
 static bool b2r_setting_from_nvs = false;
 
 // #915 full config report.  Set by any handler that changes a field the
-// report carries; drained in loop_fc so the 194-byte enqueue never happens
+// report carries; drained in loop_fc so the 201-byte enqueue never happens
 // inside the I2C command path the OC is waiting on.  Declared up here rather
 // than beside buildConfigReport() because persistOrientSetting() — which sits
 // with the orientation code above it — is one of the setters.
@@ -780,6 +780,30 @@ static uint16_t imu_rate_max_hz = config::IMU_RATE_MAX_HZ;
 // receiver it changes nothing.
 static uint8_t gnss_log_setting = GNSS_LOG_DETAILED;
 static gnss_log::SbfCut sbf_log_cut;   // the REDUCED log's place in the SBF stream
+#if !TR_BOARD_M1
+// The GNSS antenna's offset from the IMU (BLE cmd 81, NVS "antenna"/"ofs"):
+// where the owner measured it, in the board's own frame, or unknown (the
+// default). Kept on every board but the Beetle's, so a setting survives a
+// change of image; only the mosaic-only image's raw-GNSS filter uses it,
+// turned into its frame by the mounting the IMU is turned by
+// (rawAntennaPublish, again whenever the mounting changes).
+static AntennaOffsetConfigData antenna_cfg = {};
+// True once antenna_cfg is a stored record -- loaded from NVS at boot, or a
+// frame applied (and written to NVS) this boot -- rather than the unknown a
+// board that has never been told starts on. Reported to the OC as
+// F_ANTENNA_FROM_NVS, which re-sends its copy to an FC without one.
+static bool antenna_cfg_from_nvs = false;
+// A setting the OC relayed INFLIGHT (a sim flight, or the recovery poll after
+// a reboot in flight): checked and held here, and applied -- NVS, the filter,
+// the config report -- once the FC is not INFLIGHT (serviceAntennaHeld). A
+// later frame replaces it.
+static AntennaOffsetConfigData antenna_held = {};
+static bool antenna_held_set = false;
+#endif
+#if TR_RAW_NAV_MOSAIC
+static void rawAntennaPublish();
+static bool rawAntennaFlown(const gnss_raw::AntennaOffset& ant, gnss_raw::AntennaOffset& on);
+#endif
 
 // #1485: the board's limit must be a rate the chip can be set to, and the
 // default setting must fit under it, or a fresh board would refuse its own
@@ -2459,6 +2483,10 @@ static void applyBoardToRocketRotation(const float R[9], uint8_t code,
         out_status_query_data.b2r_q[i] =
             (int16_t)lroundf(b2r_active_quat[i] * ORIENT_QUAT_WIRE_SCALE);
     }
+#if TR_RAW_NAV_MOSAIC
+    // the antenna's offset is the board's: the filter's frame turned with it
+    rawAntennaPublish();
+#endif
 
     ESP_LOGI(TAG, "Board→rocket orientation: %s (code %u, mode %u, residual %.2f°)",
              orientCodeName(code), (unsigned)code, (unsigned)mode,
@@ -2837,6 +2865,42 @@ static void sendPadContextCal()
     memcpy(rg.g.matrix, rg_m, sizeof(rg_m));
     static_assert(sizeof(rg) == sizeof(PadContextHeader) + sizeof(PadContextHg), "PCX_HG record is packed");
     (void)enqueueI2STx(PAD_CONTEXT_MSG, reinterpret_cast<const uint8_t*>(&rg), sizeof(rg));
+#if !TR_BOARD_M1
+    // PCX_ANT: the GNSS antenna's offset (BLE cmd 81), the same in the
+    // filter's frame, and the one the filter flew with; none changes in
+    // flight (one sent INFLIGHT is held for the ground), and `used` says
+    // whether the filter flew with the setting
+    struct __attribute__((packed))
+    {
+        PadContextHeader h;
+        PadContextAnt    a;
+    } rn = {};
+    rn.h.time_us = r.h.time_us;
+    rn.h.kind    = PCX_ANT;
+    rn.h.part    = 0;
+    rn.h.parts   = 1;
+    const gnss_raw::AntennaOffset ant = gnss_raw::antennaOffsetInBody(antenna_cfg, b2r_active_R);
+    rn.a.known = antenna_cfg.known;
+    const int16_t board_mm[3] = {antenna_cfg.x_mm, antenna_cfg.y_mm, antenna_cfg.z_mm};
+    const float body_m[3] = {(float)ant.b_m[0], (float)ant.b_m[1], (float)ant.b_m[2]};
+    memcpy(rn.a.board_mm, board_mm, sizeof(board_mm));   // packed: through a copy
+    memcpy(rn.a.body_m, body_m, sizeof(body_m));
+#if TR_RAW_NAV_MOSAIC
+    // the one image whose filter takes it: the offset that filter has on, and
+    // used only if that is this one (a setting sent just before launch may
+    // still wait for the ground in it, the filter on an earlier one)
+    gnss_raw::AntennaOffset on;
+    rn.a.used = rawAntennaFlown(ant, on) ? 1U : 0U;
+    if (on.known)
+    {
+        const float on_m[3] = {(float)on.b_m[0], (float)on.b_m[1], (float)on.b_m[2]};
+        rn.a.applied_known = 1U;
+        memcpy(rn.a.applied_body_m, on_m, sizeof(on_m));
+    }
+#endif
+    static_assert(sizeof(rn) == sizeof(PadContextHeader) + sizeof(PadContextAnt), "PCX_ANT record is packed");
+    (void)enqueueI2STx(PAD_CONTEXT_MSG, reinterpret_cast<const uint8_t*>(&rn), sizeof(rn));
+#endif
 }
 
 // ==========================================================================
@@ -2852,7 +2916,7 @@ static void sendPadContextCal()
 // makes it survive an OC that rebooted on its own — with request/response the
 // OC would have to know to ask again, and it has no way to know it missed one.
 
-// Repeat cadence while not INFLIGHT.  194 bytes every 5 s against a 22 kHz
+// Repeat cadence while not INFLIGHT.  201 bytes every 5 s against a 22 kHz
 // I2S stream is noise; the point is bounded staleness after an OC reboot, not
 // throughput.
 static constexpr uint32_t CONFIG_REPORT_PERIOD_MS = 5000;
@@ -2911,6 +2975,14 @@ static void buildConfigReport(ConfigReportData &r)
 
     // #1472: the type cameraStart() dispatches on, for the same reason.
     r.camera_type = runtime_camera_type;
+
+#if !TR_BOARD_M1
+    // The GNSS antenna offset the FC holds and gives its filter, not one held
+    // INFLIGHT for the ground (that one is reported once it is applied).
+    // The Beetle keeps none: zero, flag clear.
+    r.antenna = antenna_cfg;
+    if (antenna_cfg_from_nvs) r.flags |= (1U << ConfigReportData::F_ANTENNA_FROM_NVS);
+#endif
 }
 
 static void sendConfigReport()
@@ -2950,6 +3022,15 @@ static void sendConfigReport()
                  camera_type_from_nvs ? "nvs" : "dflt",
                  r.camera_type == CAM_TYPE_GOPRO ? "GoPro" :
                  r.camera_type == CAM_TYPE_RUNCAM ? "RunCam" : "None");
+#if !TR_BOARD_M1
+        // its own line: the Beetle keeps no antenna offset
+        if (r.antenna.known)
+            ESP_LOGI(TAG, "[CFG] Config report antenna(%s): board X %d, Y %d, Z %d mm",
+                     antenna_cfg_from_nvs ? "nvs" : "dflt", (int)r.antenna.x_mm, (int)r.antenna.y_mm,
+                     (int)r.antenna.z_mm);
+        else
+            ESP_LOGI(TAG, "[CFG] Config report antenna(%s): unknown", antenna_cfg_from_nvs ? "nvs" : "dflt");
+#endif
     }
 }
 
@@ -2965,6 +3046,40 @@ static void serviceConfigReport()
         sendConfigReport();
     }
 }
+
+#if !TR_BOARD_M1
+// A checked GNSS antenna offset (BLE cmd 81) made the FC's: kept in NVS,
+// given to the mosaic-only image's filter (which takes it on the ground) and
+// reported to the OC, whose readback serves the report. Never INFLIGHT: one
+// that arrives then waits in antenna_held for serviceAntennaHeld.
+static void applyAntennaConfig(const AntennaOffsetConfigData& a)
+{
+    antenna_cfg = a;
+    prefs.begin("antenna", false);
+    prefs.putBytes("ofs", &a, sizeof(a));
+    prefs.end();
+    antenna_cfg_from_nvs = true;
+    if (a.known)
+        ESP_LOGI(TAG, "[CFG] GNSS antenna offset: board X %d, Y %d, Z %d mm (persisted)", (int)a.x_mm, (int)a.y_mm,
+                 (int)a.z_mm);
+    else
+        ESP_LOGI(TAG, "[CFG] GNSS antenna offset: unknown (persisted)");
+#if TR_RAW_NAV_MOSAIC
+    rawAntennaPublish();
+#endif
+    config_report_dirty = true; log_next_report_send = true;   // #915: the app hears what the FC now holds
+}
+
+// Called from loop_fc, before the config report: the setting held INFLIGHT,
+// applied at the first pass the FC is not.
+static void serviceAntennaHeld()
+{
+    if (!antenna_held_set || rocket_state == INFLIGHT) return;
+    antenna_held_set = false;
+    ESP_LOGI(TAG, "[CFG] GNSS antenna offset held INFLIGHT: applied now (state %u)", (unsigned)rocket_state);
+    applyAntennaConfig(antenna_held);
+}
+#endif
 
 static SemaphoreHandle_t i2c_bus_mutex = nullptr;
 
@@ -3133,6 +3248,50 @@ static bool raw_nav_started = false;
 // in use.
 static RawIonoRule::State raw_iono;
 static gnss_raw::SeqLock<gnss_raw::ShadowIono> raw_iono_chosen;
+// The antenna's offset in the filter's frame (antenna_cfg turned by the
+// mounting): written on the flight loop's core when the setting or the
+// mounting changes, taken by the filter's task (RawGnssShadow::setAntenna,
+// which waits for the ground).
+static gnss_raw::SeqLock<gnss_raw::AntennaOffset> raw_antenna;
+static void rawAntennaPublish()
+{
+    raw_antenna.write(gnss_raw::antennaOffsetInBody(antenna_cfg, b2r_active_R));
+}
+// The offset the filter has on (its config's lever_on and lever_b_m): written
+// by the filter's task whenever that changes -- setAntenna takes one on the
+// ground at once, in flight at the first ground tick -- for the pad
+// context's PCX_ANT, which logs the offset the filter flew with and whether
+// that was the setting.
+static gnss_raw::SeqLock<gnss_raw::AntennaOffset> raw_antenna_applied;
+static void rawAntennaAppliedPublish(const gnss_raw::RawGnssShadow& sh, gnss_raw::AntennaOffset& last, bool& sent)
+{
+    const gnss_raw::RawGnssEKFParams& e = sh.config().ekf;
+    gnss_raw::AntennaOffset now;
+    now.known = e.lever_on;
+    for (int i = 0; i < 3; ++i)
+        now.b_m[i] = e.lever_on ? e.lever_b_m[i] : 0.0;
+    if (sent && now.known == last.known && now.b_m[0] == last.b_m[0] && now.b_m[1] == last.b_m[1] &&
+        now.b_m[2] == last.b_m[2])
+        return;
+    raw_antenna_applied.write(now);
+    last = now;
+    sent = true;
+}
+// The offset the filter has on, into `on` (unknown if it never started), and
+// whether that is `ant` (within a micrometer): known offsets only, read on
+// the flight loop's core
+static bool rawAntennaFlown(const gnss_raw::AntennaOffset& ant, gnss_raw::AntennaOffset& on)
+{
+    uint32_t seq = 0;
+    if (!raw_nav_started || !raw_antenna_applied.read(on, seq))
+        on = gnss_raw::AntennaOffset{};
+    if (!ant.known || !on.known)
+        return false;
+    for (int i = 0; i < 3; ++i)
+        if (std::fabs(on.b_m[i] - ant.b_m[i]) > 1e-6)
+            return false;
+    return true;
+}
 // The GNSS task's navigation blocks (raw_nav_drain.h): held until an epoch
 // names the receiver's week, and how many SbfNav would not decode.
 static RawNavDrain::State raw_nav_drain;
@@ -3481,6 +3640,11 @@ static void rawShadowTask(void*)
     uint32_t vert_dropped = 0;     // epochs the vertical check dropped, said so
     uint32_t vert_latched = 0;     //   and after a drop, not yet back within vert_release_mps, said so
     uint32_t act_launches = 0;     // act's launch priors, said so
+#if TR_RAW_NAV_MOSAIC
+    uint32_t ant_seq = 0;          // the antenna offset last taken (raw_antenna)
+    gnss_raw::AntennaOffset ant_on;   // the offset the filter has on, last written (raw_antenna_applied)
+    bool ant_on_sent = false;
+#endif
     for (;;)
     {
         const int64_t a0 = esp_timer_get_time();
@@ -3504,6 +3668,25 @@ static void rawShadowTask(void*)
             iono_seq = seq;
             sh.setIono(io);
         }
+#if TR_RAW_NAV_MOSAIC
+        // the owner's antenna offset, or the mounting it is turned by, changed:
+        // taken now on the ground, else at the first ground tick
+        {
+            gnss_raw::AntennaOffset ant;
+            if (raw_antenna.read(ant, seq) && seq != ant_seq)
+            {
+                ant_seq = seq;
+                sh.setAntenna(ant.known, ant.b_m);
+                if (ant.known)
+                    ESP_LOGI(TAG, "[RAWGNSS] antenna offset %.3f, %.3f, %.3f m (body FRD)%s", ant.b_m[0], ant.b_m[1],
+                             ant.b_m[2], sh.stats().antenna_pending ? " -- taken back on the ground" : "");
+                else
+                    ESP_LOGI(TAG, "[RAWGNSS] antenna offset unknown%s",
+                             sh.stats().antenna_pending ? " -- taken back on the ground" : "");
+            }
+            rawAntennaAppliedPublish(sh, ant_on, ant_on_sent);   // the start's, or one just taken
+        }
+#endif
         // the GNSS task's side (#1626): each ephemeris it decoded, for the pad
         // context; its counts; and the epochs it built, held for their time
         gnss_raw::ShadowEphFrame ef;
@@ -3556,6 +3739,9 @@ static void rawShadowTask(void*)
                 else rec_drops++;
             }
         }
+#if TR_RAW_NAV_MOSAIC
+        rawAntennaAppliedPublish(sh, ant_on, ant_on_sent);   // one waiting for the ground, taken by a step
+#endif
 #if TR_RAW_NAV_MOSAIC && (defined(TR_BENCH_PANIC_FILTER_AT_S) || defined(TR_BENCH_RAW_STOP_AT_S))
         rawBenchFilterHooks(sh);
 #endif
@@ -4119,6 +4305,27 @@ static void startRawShadow()
              cfg.heading_obs_scope == gnss_raw::RawGnssShadow::kObsEverywhere ? "everywhere" : "in flight",
              cfg.rot_lever_axial_m, cfg.rot_lever_radial_m, cfg.rot_lever_min_rps,
              cfg.rot_lever_axial_m > 0.0 || cfg.rot_lever_radial_m > 0.0 ? "" : " (off)");
+    // The GNSS antenna's offset where the owner measured it (BLE cmd 81), in
+    // the filter's frame by the mounting as it stands (rawAntennaPublish
+    // brings a later change): every Doppler and pseudorange predicted at the
+    // antenna, and what it could be off by in place of the bounds above.
+    // Unknown leaves the filter as above.
+    {
+        const gnss_raw::AntennaOffset ant = gnss_raw::antennaOffsetInBody(antenna_cfg, b2r_active_R);
+        gnss_raw::applyAntennaOffset(ant, cfg);
+        if (ant.known)
+            ESP_LOGI(TAG, "[RAWGNSS] antenna offset: %.3f, %.3f, %.3f m from the IMU (body FRD; board X %d, Y %d, "
+                          "Z %d mm) | its Dopplers allow %.2f m along the nose and %.2f m across from %.1f rad/s, "
+                          "the change check %.2f m | the offset's roll terms %s",
+                     ant.b_m[0], ant.b_m[1], ant.b_m[2], (int)antenna_cfg.x_mm, (int)antenna_cfg.y_mm,
+                     (int)antenna_cfg.z_mm, cfg.antenna_sigma_axial_m, cfg.antenna_sigma_radial_m,
+                     cfg.antenna_min_rps, std::fmax(cfg.antenna_sigma_axial_m, cfg.antenna_sigma_radial_m),
+                     cfg.ekf.lever_att_mode == gnss_raw::kLeverAttFuse      ? "FUSED"
+                     : cfg.ekf.lever_att_mode == gnss_raw::kLeverAttObserve ? "observed"
+                                                                            : "off");
+        else
+            ESP_LOGI(TAG, "[RAWGNSS] antenna offset: unknown (the turning body's bounds above)");
+    }
 #ifdef TR_BENCH_BOOST_SCREEN_G
     // bench (the CPU ladder, P1): the boost screen's threshold, g -- 0 screens
     // every epoch before the apogee call, its worst cost
@@ -6989,6 +7196,34 @@ static void setup_fc()
     ESP_LOGI(TAG, "GNSS log: %s", gnss_log_setting == GNSS_LOG_REDUCED
                                       ? "reduced (a mosaic-G5's raw measurements once a second)"
                                       : "detailed (every SBF block)");
+#if !TR_BOARD_M1
+    // The GNSS antenna's offset (BLE cmd 81): a record that is no setting
+    // reads as unknown, the antenna nobody measured, and is not reported as
+    // a record (F_ANTENNA_FROM_NVS), so the OC sends its own copy again.
+    prefs.begin("antenna", false);
+    if (prefs.isKey("ofs"))
+    {
+        AntennaOffsetConfigData a = {};
+        if (prefs.getBytes("ofs", &a, sizeof(a)) == sizeof(a) && antennaOffsetValid(a))
+        {
+            antenna_cfg = a;
+            antenna_cfg_from_nvs = true;
+        }
+        else
+        {
+            ESP_LOGW(TAG, "NVS GNSS antenna offset invalid — unknown");
+        }
+    }
+    prefs.end();
+    if (antenna_cfg.known)
+        ESP_LOGI(TAG, "GNSS antenna offset: board X %d, Y %d, Z %d mm from the IMU", (int)antenna_cfg.x_mm,
+                 (int)antenna_cfg.y_mm, (int)antenna_cfg.z_mm);
+    else
+        ESP_LOGI(TAG, "GNSS antenna offset: unknown%s", antenna_cfg_from_nvs ? "" : " (no record)");
+#if TR_RAW_NAV_MOSAIC
+    rawAntennaPublish();   // the filter's task takes the stored one, not one the mounting sent before this read
+#endif
+#endif
 
     // Restore high-g accelerometer bias from NVS (namespace "cal")
     prefs.begin("cal", false);  // read-write (creates namespace on first boot)
@@ -9037,8 +9272,11 @@ static void loop_fc()
     // SECTION: Full config report (#915)
     // ==========================================================================
     // Drained here rather than sent from the I2C command handlers: those run
-    // inside the OC's poll window, and a 194-byte enqueue there would sit in
+    // inside the OC's poll window, and a 201-byte enqueue there would sit in
     // the same path the OC is waiting on.
+#if !TR_BOARD_M1
+    serviceAntennaHeld();   // a GNSS antenna offset held INFLIGHT: applied, and in this pass's report
+#endif
     serviceConfigReport();
 
     // ==========================================================================
@@ -11645,6 +11883,53 @@ static void loop_fc()
                     cfgRetryOnNextPoll("GNSS LOG CFG");   // #1112
                 }
             }
+#if !TR_BOARD_M1
+            else if (out_pending_command == ANTENNA_CONFIG_PENDING)
+            {
+                delay_ms(1);
+                uint8_t cfg_payload[sizeof(AntennaOffsetConfigData)];
+                size_t  cfg_len = 0;
+                if (readConfigFrame(ANTENNA_CONFIG_MSG, sizeof(AntennaOffsetConfigData),
+                                    cfg_payload, sizeof(cfg_payload), cfg_len)
+                    && cfg_len >= sizeof(AntennaOffsetConfigData))
+                {
+                    AntennaOffsetConfigData a;
+                    memcpy(&a, cfg_payload, sizeof(a));
+                    if (!antennaOffsetValid(a))
+                    {
+                        ESP_LOGW(TAG, "[CFG] GNSS antenna offset rejected (known %u, %d/%d/%d mm: over %d mm, "
+                                      "or not 0 when unknown)",
+                                 (unsigned)a.known, (int)a.x_mm, (int)a.y_mm, (int)a.z_mm,
+                                 (int)ANTENNA_OFFSET_MAX_MM);
+                    }
+                    else if (rocket_state == INFLIGHT)
+                    {
+                        // A sim flight, or the recovery poll after a reboot
+                        // in flight. The OC retires the command once it is
+                        // read, so it is held, not dropped: no NVS write in
+                        // flight, and the filter takes it on the ground only.
+                        antenna_held = a;
+                        antenna_held_set = true;
+                        if (a.known)
+                            ESP_LOGW(TAG, "[CFG] GNSS antenna offset board X %d, Y %d, Z %d mm received INFLIGHT: "
+                                          "held until the FC is not",
+                                     (int)a.x_mm, (int)a.y_mm, (int)a.z_mm);
+                        else
+                            ESP_LOGW(TAG, "[CFG] GNSS antenna offset unknown received INFLIGHT: held until the FC "
+                                          "is not");
+                    }
+                    else
+                    {
+                        antenna_held_set = false;   // a later frame replaces a held one
+                        applyAntennaConfig(a);
+                    }
+                }
+                else
+                {
+                    cfgRetryOnNextPoll("ANTENNA CFG");   // #1112
+                }
+            }
+#endif
             else if (out_pending_command == PYRO_CONFIG_PENDING)
             {
                 delay_ms(1);

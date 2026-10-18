@@ -279,6 +279,14 @@ struct Args
     double att_hold_rate_rps = -1.0, att_hold_s = -1.0;
     double rot_skip_rate_rps = -1.0, rot_skip_s = -1.0;   // or nothing fused from a rate across the nose
     bool rot_after_apogee = false;   // all three only once the flight computer has called apogee
+    // the antenna's offset, known (RawGnssShadow.h, applyAntennaOffset; a RAW_REPLAY_ANTENNA build): body FRD, m,
+    // and what it could be off by (-1: the firmware's, the mosaic safeguards'), from a rate across the nose, and the
+    // lever's attitude terms (LeverAttMode: 0 off, 1 observe, 2 fuse)
+    bool ant_known = false;
+    bool ant_none = false;           // --antenna-m none: unknown, whatever the events file's META antenna_m says
+    double ant_m[3] = {0.0, 0.0, 0.0};
+    double ant_sigma_axial_m = -1.0, ant_sigma_radial_m = -1.0, ant_min_rps = -1.0;
+    int ant_att_mode = -1;
     std::set<std::string> given;     // the options on the command line
 };
 
@@ -322,7 +330,10 @@ void usage()
                  "  the turning body (a RAW_REPLAY_ROT build): [--rot-lever-axial-m X] [--rot-lever-radial-m X]\n"
                  "  [--rot-lever-min-rate X]\n"
                  "  [--att-hold-rate X] [--att-hold-s X] [--rot-skip-rate X] [--rot-skip-s X]\n"
-                 "  [--rot-after-apogee]\n");
+                 "  [--rot-after-apogee]\n"
+                 "  the antenna's offset (a RAW_REPLAY_ANTENNA build): [--antenna-m x,y,z|none] (default: the events\n"
+                 "  file's META antenna_m, what the flight flew with, else unknown) [--antenna-sigma-m axial,radial]\n"
+                 "  [--antenna-min-rate X] [--antenna-att-mode 0|1|2]\n");
 }
 
 bool parseArgs(int argc, char** argv, Args& a)
@@ -485,6 +496,23 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--rot-skip-rate") a.rot_skip_rate_rps = std::atof(val());
         else if (k == "--rot-skip-s") a.rot_skip_s = std::atof(val());
         else if (k == "--rot-after-apogee") a.rot_after_apogee = true;
+        else if (k == "--antenna-m")
+        {
+            const char* v = val();
+            if (std::strcmp(v, "none") == 0)
+                a.ant_none = true;
+            else if (std::sscanf(v, "%lf,%lf,%lf", &a.ant_m[0], &a.ant_m[1], &a.ant_m[2]) != 3)
+                return false;
+            else
+                a.ant_known = true;
+        }
+        else if (k == "--antenna-sigma-m")
+        {
+            if (std::sscanf(val(), "%lf,%lf", &a.ant_sigma_axial_m, &a.ant_sigma_radial_m) != 2)
+                return false;
+        }
+        else if (k == "--antenna-min-rate") a.ant_min_rps = std::atof(val());
+        else if (k == "--antenna-att-mode") a.ant_att_mode = std::atoi(val());
         else if (k == "--acc-sub")
         {
             if (std::sscanf(val(), "%lf,%lf,%lf", &a.acc_sub[0], &a.acc_sub[1], &a.acc_sub[2]) != 3)
@@ -887,6 +915,14 @@ void diagEpoch(RawGnssShadow& sh, const BuiltEpoch& b, int64_t t_us, uint8_t fla
             float dp_e[3], dv_e[3], dp_l[3], dv_l[3];
             f.historyChange(ag, dv_e, dp_e);
             f.historyChange(ag + tau, dv_l, dp_l);
+#if RAW_REPLAY_ANTENNA
+            // a known offset: the antenna, as the filter's update back-dates it
+            if (f.p_.lever_on)
+            {
+                RawGnssEKF<float>::LeverEpoch lv;
+                f.leverBack(ag, tau, dp_e, dv_e, dv_l, lv);
+            }
+#endif
             double r[3], v[3], Tm[3][3], r_e[3], v_e[3];
             f.receiverState(r, v, Tm);
             for (int i = 0; i < 3; ++i)
@@ -1009,6 +1045,14 @@ void guardedEpoch(RawGnssShadow& sh, const BuiltEpoch& b, int64_t t_us, uint8_t 
             float dp_e[3], dv_e[3], dp_l[3], dv_l[3];
             f.historyChange(ag, dv_e, dp_e);
             f.historyChange(ag + tau, dv_l, dp_l);
+#if RAW_REPLAY_ANTENNA
+            // a known offset: the antenna's, as the filter predicts them (its turning is not a velocity error)
+            if (f.p_.lever_on)
+            {
+                RawGnssEKF<float>::LeverEpoch lv;
+                f.leverBack(ag, tau, dp_e, dv_e, dv_l, lv);
+            }
+#endif
             double r[3], v[3], Tm[3][3], r_e[3], v_e[3];
             f.receiverState(r, v, Tm);
             for (int i = 0; i < 3; ++i)
@@ -1536,6 +1580,37 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "cannot read %s (or no start state)\n", a.in.c_str());
         return 1;
     }
+    // the antenna's offset the flight's filter flew with (extract.py: the log's PCX_ANT record, body FRD, m), where
+    // --antenna-m gives none: a replay of a flight predicts at the antenna as its filter did
+    const bool ant_given = a.ant_known || a.ant_none;
+    if (!ant_given && in.meta.count("antenna_m"))
+    {
+        if (std::sscanf(in.meta["antenna_m"].c_str(), "%lf %lf %lf", &a.ant_m[0], &a.ant_m[1], &a.ant_m[2]) != 3)
+        {
+            std::fprintf(stderr, "cannot read META antenna_m: %s\n", in.meta["antenna_m"].c_str());
+            return 1;
+        }
+        a.ant_known = true;
+        std::fprintf(stderr, "the antenna's offset the flight's filter flew with, from the log: %.3f, %.3f, %.3f m "
+                             "(body FRD; --antenna-m none replays it unknown)\n", a.ant_m[0], a.ant_m[1], a.ant_m[2]);
+    }
+    // a setting on the flight that its filter did not fly with (META antenna_m_set): the filter was on an earlier
+    // offset (META antenna_m, flown above) or on none (replayed unknown, as it flew); only named
+    if (!ant_given && in.meta.count("antenna_m_set"))
+    {
+        double m[3];
+        if (std::sscanf(in.meta["antenna_m_set"].c_str(), "%lf %lf %lf", &m[0], &m[1], &m[2]) != 3)
+        {
+            std::fprintf(stderr, "cannot read META antenna_m_set: %s\n", in.meta["antenna_m_set"].c_str());
+            return 1;
+        }
+        std::fprintf(stderr, "the flight had an antenna offset set (%.3f, %.3f, %.3f m, body FRD) that its navigation "
+                             "filter did not fly with: %s (--antenna-m %.3f,%.3f,%.3f applies the setting)\n",
+                     m[0], m[1], m[2],
+                     in.meta.count("antenna_m") ? "the replay flies the offset the filter flew"
+                                                : "replayed unknown, as it flew",
+                     m[0], m[1], m[2]);
+    }
     // a mosaic log has no record of the filter's own (no 0x96 yet): it starts on the pad
     const bool cold = a.cold_start || in.s.size() < 20;
 #if RAW_REPLAY_MOSAIC
@@ -1811,7 +1886,32 @@ int main(int argc, char** argv)
         cfg.rot_skip_s = a.rot_skip_s;
     if (a.rot_after_apogee)
         cfg.rot_after_apogee = true;
+#endif
+    // the antenna's offset, known: after the safeguards and every flag above (startRawShadow's order)
+#if RAW_REPLAY_ANTENNA
+    if (a.ant_sigma_axial_m >= 0.0)
+        cfg.antenna_sigma_axial_m = a.ant_sigma_axial_m;
+    if (a.ant_sigma_radial_m >= 0.0)
+        cfg.antenna_sigma_radial_m = a.ant_sigma_radial_m;
+    if (a.ant_min_rps >= 0.0)
+        cfg.antenna_min_rps = a.ant_min_rps;
+    if (a.ant_att_mode >= 0)
+        cfg.antenna_att_mode = static_cast<uint8_t>(a.ant_att_mode);
+    if (a.ant_known)
+    {
+        AntennaOffset ao;
+        ao.known = true;
+        for (int i = 0; i < 3; ++i)
+            ao.b_m[i] = a.ant_m[i];
+        applyAntennaOffset(ao, cfg);
+    }
 #else
+    if (a.ant_known || a.ant_sigma_axial_m >= 0.0 || a.ant_sigma_radial_m >= 0.0 || a.ant_min_rps >= 0.0 ||
+        a.ant_att_mode >= 0)
+        std::fprintf(stderr, "WARNING: this build has no antenna offset (RAW_REPLAY_ANTENNA=OFF): --antenna-* are "
+                             "ignored\n");
+#endif
+#if !RAW_REPLAY_ROT
     if (a.rot_lever_axial_m >= 0.0 || a.rot_lever_radial_m >= 0.0 || a.rot_lever_min_rps >= 0.0
         || a.att_hold_rate_rps >= 0.0 || a.att_hold_s >= 0.0 || a.rot_skip_rate_rps >= 0.0 || a.rot_skip_s >= 0.0
         || a.rot_after_apogee)
@@ -2170,7 +2270,15 @@ int main(int argc, char** argv)
         epf = std::fopen((a.out + ".epochs.csv").c_str(), "w");
         if (epf)
             std::fprintf(epf, "t_s,t_close_s,tow_ms,used_pr,rej_pr,used_rr,rej_rr,nis_max,rej_run_pr_s,rej_run_rr_s,"
-                              "corrupt_rr,corrupt_pr\n");
+                              "corrupt_rr,corrupt_pr%s\n",
+#if RAW_REPLAY_ANTENNA
+                         // the lever roll (RawGnssShadow.h: the change check's epochs fitted for it so far, the
+                         // last one's roll correction and 1-sigma, deg) and the Dopplers' turning-body allowance
+                         ",lever_roll_epochs,lever_roll_deg,lever_roll_sigma_deg,rot_sigma_mps"
+#else
+                         ""
+#endif
+            );
     }
     // --pvt-out: each receiver fix with a solution, its height above the ellipsoid (the pad height's score)
     FILE* pvtf = nullptr;
@@ -3356,11 +3464,18 @@ int main(int argc, char** argv)
                         const double run_s[2] = {run_n[0] * period[0], run_n[1] * period[1]};
                         const int64_t tow_ms = static_cast<int64_t>(sh.stats().last_tow_ms);
                         const bool is_corrupt = corrupt_tow_ms >= 0 && tow_ms == corrupt_tow_ms;
-                        std::fprintf(epf, "%.6f,%.6f,%lld,%d,%d,%d,%d,%.3f,%.3f,%.3f,%d,%d\n", te,
+                        std::fprintf(epf, "%.6f,%.6f,%lld,%d,%d,%d,%d,%.3f,%.3f,%.3f,%d,%d", te,
                                      ev.t_us * 1e-6 + a.t_base_s, static_cast<long long>(tow_ms), l.used_pr,
                                      l.rejected_pr, l.used_rr, l.rejected_rr, static_cast<double>(l.nis_max), run_s[0],
                                      run_s[1], is_corrupt ? std::max(corrupt_built_rr, 0) : 0,
                                      is_corrupt ? std::max(corrupt_built_pr, 0) : 0);
+#if RAW_REPLAY_ANTENNA
+                        std::fprintf(epf, ",%u,%.4f,%.4f,%.4f", sh.stats().lever_roll_epochs,
+                                     static_cast<double>(sh.stats().lever_roll_last_deg),
+                                     static_cast<double>(sh.stats().lever_roll_last_sigma_deg),
+                                     static_cast<double>(sh.stats().rot_last_sigma_mps));
+#endif
+                        std::fprintf(epf, "\n");
                     }
                 }
             }
@@ -3706,6 +3821,15 @@ int main(int argc, char** argv)
                              sh.cfg_.att_hold_s, sh.cfg_.rot_skip_rate_rps, sh.cfg_.rot_skip_s,
                              sh.cfg_.rot_after_apogee ? 1 : 0,
                              static_cast<double>(fs.rot_max_sigma_mps), fs.att_held, fs.rot_skipped);
+#endif
+#if RAW_REPLAY_ANTENNA
+                std::fprintf(ej, "\"antenna\": {\"known\": %d, \"b_m\": [%.4f, %.4f, %.4f], \"sigma_axial_m\": %.4f, "
+                                 "\"sigma_radial_m\": %.4f, \"min_rps\": %.3f, \"att_mode\": %u, "
+                                 "\"roll_epochs\": %u, \"roll_info\": %.6g, \"roll_hy\": %.6g}, ",
+                             sh.cfg_.ekf.lever_on ? 1 : 0, sh.cfg_.ekf.lever_b_m[0], sh.cfg_.ekf.lever_b_m[1],
+                             sh.cfg_.ekf.lever_b_m[2], sh.cfg_.antenna_sigma_axial_m, sh.cfg_.antenna_sigma_radial_m,
+                             sh.cfg_.antenna_min_rps, static_cast<unsigned>(sh.cfg_.ekf.lever_att_mode),
+                             fs.lever_roll_epochs, fs.lever_roll_info, fs.lever_roll_hy);
 #endif
                 std::fprintf(ej, "\"screen_compare\": [");
                 for (size_t i = 0; i < cmps.size(); ++i)

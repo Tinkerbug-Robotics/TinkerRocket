@@ -785,17 +785,23 @@ def gnss_clock_mcu_us(rec, gps_s):
 # beside "cal", the low-g accelerometer's hand-calibrated offset (#1629), which
 # the converter takes off the low-g and high-g after the log; "hg", beside it,
 # the high-g's six-face alignment to the low-g (HG_CAL_*), which the converter
-# applies to the high-g after the log, before its bias and that offset.
+# applies to the high-g after the log, before its bias and that offset; "ant",
+# beside them, the GNSS antenna's offset from the IMU (BLE cmd 81) set on the
+# flight, in the board's frame and in the filter's, whether the navigation
+# filter flew with it, and the offset that filter did fly with (an earlier one
+# while a setting sent just before launch waits for the ground in it).
 # join_pad_context() puts a launch's records back together.
 FMT_PAD_CONTEXT_HDR = '<I B B B'
 PAD_CONTEXT_HDR_LEN = struct.calcsize(FMT_PAD_CONTEXT_HDR)   # 7
-PAD_CONTEXT_KINDS = {1: "cal", 2: "nav", 3: "cov", 4: "survey", 5: "eph", 6: "acc", 7: "hg"}
+PAD_CONTEXT_KINDS = {1: "cal", 2: "nav", 3: "cov", 4: "survey", 5: "eph", 6: "acc", 7: "hg", 8: "ant"}
 FMT_PCX_CAL = '<3h 3f 3h B f 3i'
 SIZE_OF_PCX_CAL = struct.calcsize(FMT_PCX_CAL)               # 41
 FMT_PCX_ACC = '<B 3f'
 SIZE_OF_PCX_ACC = struct.calcsize(FMT_PCX_ACC)               # 13
 FMT_PCX_HG = '<B 9f'
 SIZE_OF_PCX_HG = struct.calcsize(FMT_PCX_HG)                 # 37
+FMT_PCX_ANT = '<B 3h 3f B B 3f'
+SIZE_OF_PCX_ANT = struct.calcsize(FMT_PCX_ANT)               # 33
 FMT_PCX_NAV = '<I 3d 3f 4f 3f 3f d 6f 8b H B B'
 SIZE_OF_PCX_NAV = struct.calcsize(FMT_PCX_NAV)               # 124
 PCX_NAV_FLAGS = {"running": 0x01, "clock_set": 0x02, "has_baro": 0x04, "has_iono": 0x08,
@@ -846,6 +852,18 @@ def decode_pad_context(payload):
         rec.update({
             "applied": bool(f[0]),        # the converter applied it this flight (stored, not in sim)
             "matrix":  f[1:10],           # row-major, board frame: high = M h - bias - offset, after the log
+        })
+    elif name == "ant":
+        if len(body) != SIZE_OF_PCX_ANT:
+            return None
+        f = struct.unpack(FMT_PCX_ANT, body)
+        rec.update({
+            "known":          bool(f[0]),   # measured (BLE cmd 81); unknown: the rest 0
+            "board_mm":       f[1:4],       # the setting: board FLU, the IMU to the antenna's phase centre
+            "body_m":         f[4:7],       # the same in body FRD by the mounting
+            "used":           bool(f[7]),   # the navigation filter flew with this offset (predicted at the antenna)
+            "applied_known":  bool(f[8]),   # the navigation filter started and had a known offset on
+            "applied_body_m": f[9:12],      # that offset, the one it flew with: body FRD (unknown: 0)
         })
     elif name == "nav":
         if len(body) != SIZE_OF_PCX_NAV:
@@ -908,7 +926,7 @@ def join_pad_context(recs, launch=0):
     """The decoded PadContext records of a log -> its launch-th launch's pad
     context (from 0), or None if there is no such launch.
 
-    {"cal", "acc", "hg", "nav", "cov", "survey", "eph_frames", "missing"}: "cov" the 19x19
+    {"cal", "acc", "hg", "ant", "nav", "cov", "survey", "eph_frames", "missing"}: "cov" the 19x19
     covariance (symmetric, nested lists) and "survey" the summary with every
     correction, each None unless all its parts arrived (a part of one is not
     it); "eph_frames" each ephemeris that arrived, a whole RTCM3 frame, for a
@@ -921,10 +939,10 @@ def join_pad_context(recs, launch=0):
     for r in recs:
         k = r["kind"]
         if not launches or k == "cal" or (k == "nav" and launches[-1]["nav"] is not None):
-            launches.append({"cal": None, "acc": None, "hg": None, "nav": None, "cov": {}, "survey": {}, "eph": [],
-                             "parts": {}})
+            launches.append({"cal": None, "acc": None, "hg": None, "ant": None, "nav": None, "cov": {}, "survey": {},
+                             "eph": [], "parts": {}})
         cur = launches[-1]
-        if k in ("cal", "nav", "acc", "hg"):
+        if k in ("cal", "nav", "acc", "hg", "ant"):
             cur[k] = r
         elif k == "eph":
             cur["eph"].append(r)
@@ -951,8 +969,8 @@ def join_pad_context(recs, launch=0):
         s0 = cur["survey"][0]
         survey = {k: s0[k] for k in ("tracked", "settling", "corrected", "pad_ok", "rms_m", "pad_offset_m")}
         survey["corrections"] = [c for p in sorted(cur["survey"]) for c in cur["survey"][p]["corrections"]]
-    out = {"cal": cur["cal"], "acc": cur["acc"], "hg": cur["hg"], "nav": cur["nav"], "cov": cov, "survey": survey,
-           "eph_frames": [r["frame"] for r in cur["eph"]]}
+    out = {"cal": cur["cal"], "acc": cur["acc"], "hg": cur["hg"], "ant": cur["ant"], "nav": cur["nav"], "cov": cov,
+           "survey": survey, "eph_frames": [r["frame"] for r in cur["eph"]]}
     out["missing"] = [k for k in ("cal", "nav", "cov", "survey") if out[k] is None]
     if cur["eph"] and len(cur["eph"]) < cur["eph"][0]["parts"]:
         out["missing"].append("eph")

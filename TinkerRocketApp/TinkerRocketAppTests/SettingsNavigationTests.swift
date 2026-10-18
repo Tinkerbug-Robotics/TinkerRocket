@@ -117,9 +117,9 @@ final class SettingsNavigationTests: XCTestCase {
             .environmentObject(fleet)
             .environmentObject(store))
         // The General tab: the tab picker, Rocket, Calibration, IMU Mounting,
-        // IMU Logging Rate, GNSS Logging, Radio, then Firmware: Version,
-        // "Update firmware…".
-        try await open(row: IndexPath(item: 1, section: 7), expecting: "Firmware update", in: root)
+        // IMU Logging Rate, GNSS Logging, GNSS Antenna Offset, Radio, then
+        // Firmware: Version, "Update firmware…".
+        try await open(row: IndexPath(item: 1, section: 8), expecting: "Firmware update", in: root)
 
         drop(opened, from: fleet)
         let rebuilt = LinkedDevice(link)
@@ -150,7 +150,7 @@ final class SettingsNavigationTests: XCTestCase {
         let root = await host(SettingsView(device: oc)
             .environmentObject(fleet)
             .environmentObject(store))
-        try await open(row: IndexPath(item: 1, section: 7), expecting: "Firmware update", in: root)
+        try await open(row: IndexPath(item: 1, section: 8), expecting: "Firmware update", in: root)
 
         feed(oc, railOn: true, state: "INITIALIZATION")
         await settle()

@@ -83,6 +83,9 @@ static inline std::string itos(int v)
 #include "pyro_fault_trip_policy.h"   // #1553: drop that consent on a shorted e-match mid-pulse
 #include "snapshot_answer_policy.h"   // when the OC may answer the FC's snapshot ask with "no flight"
 #include "snapshot_replay_filter.h"   // #383/#846: which of the FC's snapshots the OC keeps
+#if !TR_BOARD_M1
+#include "antenna_readback_policy.h"  // whose GNSS antenna offset the config readback serves
+#endif
 
 #include <TR_I2C_Interface.h>
 #include <TR_I2S_Stream.h>
@@ -1582,6 +1585,100 @@ static void stageGnssLogConfig()
     cfg.setting = cfg_gnss_log;
     setPendingCommandWithConfig(GNSS_LOG_CONFIG_PENDING, GNSS_LOG_CONFIG_MSG, &cfg, sizeof(cfg));
 }
+
+// GNSS antenna offset (BLE cmd 81): where the antenna sits from the FC's IMU,
+// in the board's own frame, or unknown (the default). Kept like the GNSS log:
+// cached here, relayed to the FC, which keeps its own copy in NVS and applies
+// it on the ground. The readback ("antk", "antx", "anty", "antz") serves the
+// FC's own copy from its config report once the FC has taken what was sent
+// and remembers a setting, and this cache until then (antennaReadback,
+// antenna_readback_policy.h); an FC that reports none of its own is sent it
+// again. loop_oc writes it (cmd 81) while the I2S parser task reads it (the
+// config report's comparison and self-heal), so every access goes through the
+// mux: a torn copy would pass antennaOffsetValid and could be sent to the FC.
+static AntennaOffsetConfigData cfg_antenna = {};
+static portMUX_TYPE cfg_antenna_mux = portMUX_INITIALIZER_UNLOCKED;
+static AntennaOffsetConfigData antennaCache()
+{
+    portENTER_CRITICAL(&cfg_antenna_mux);
+    const AntennaOffsetConfigData a = cfg_antenna;
+    portEXIT_CRITICAL(&cfg_antenna_mux);
+    return a;
+}
+static void setAntennaCache(const AntennaOffsetConfigData& a)
+{
+    portENTER_CRITICAL(&cfg_antenna_mux);
+    cfg_antenna = a;
+    portEXIT_CRITICAL(&cfg_antenna_mux);
+}
+
+#if !TR_BOARD_M1
+// An antenna command staged for the FC and not yet confirmed by its config
+// report, and the value staged: while it stands the readback serves the cache
+// (antenna_readback_policy.h has why). Set by stageAntennaConfig, on loop_oc
+// (cmd 81) and on the I2S parser task (the report's self-heal); settled by
+// the report's handler (the parser) when a report carries ant_staged, or when
+// the command has left the queue for good (none queued, none being served:
+// queueOutStatusResponse clears the serving slot after its deliveries) and a
+// report still does not.
+//
+// Both tasks run on core 1, and the parser (prio 6) preempts loop_oc (prio 5)
+// anywhere, never the other way round: the hazard is the parser running in
+// the middle of a loop_oc sequence. Every access is one critical section on
+// cmd_queue_mux, the queue's own lock, so the settle reads the flag, the value
+// and the queue in one piece. The mark comes AFTER the enqueue: a report the
+// parser handles between the two finds the command queued and settles nothing
+// it should not, where marking first would let it find a staged value with
+// nothing queued, settle it, and serve the FC's old value.
+static bool                    ant_unconfirmed = false;
+static AntennaOffsetConfigData ant_staged      = {};
+#endif
+
+static void stageAntennaConfig(const AntennaOffsetConfigData& cfg)
+{
+    setPendingCommandWithConfig(ANTENNA_CONFIG_PENDING, ANTENNA_CONFIG_MSG, &cfg, sizeof(cfg));
+#if !TR_BOARD_M1
+    portENTER_CRITICAL(&cmd_queue_mux);   // after the enqueue: see ant_unconfirmed
+    ant_staged      = cfg;
+    ant_unconfirmed = true;
+    portEXIT_CRITICAL(&cmd_queue_mux);
+#endif
+}
+
+#if !TR_BOARD_M1
+static bool antennaUnconfirmed()
+{
+    portENTER_CRITICAL(&cmd_queue_mux);
+    const bool u = ant_unconfirmed;
+    portEXIT_CRITICAL(&cmd_queue_mux);
+    return u;
+}
+
+// The report's handler, with a report that carries the antenna: settles an
+// unconfirmed command (AntennaReadbackPolicy::reportSettles). True when it
+// gave one up that the report does not hold, with that value in *staged_out
+// for the log.
+static bool settleStagedAntenna(const AntennaOffsetConfigData& reported, AntennaOffsetConfigData* staged_out)
+{
+    bool gave_up = false;
+    portENTER_CRITICAL(&cmd_queue_mux);
+    if (ant_unconfirmed)
+    {
+        bool queued = pending_out_command == ANTENNA_CONFIG_PENDING;
+        for (size_t i = 0; i < cmd_queue_count && !queued; i++)
+            queued = cmd_queue[(cmd_queue_head + i) % CMD_QUEUE_DEPTH].cmd == ANTENNA_CONFIG_PENDING;
+        const bool holds = memcmp(&reported, &ant_staged, sizeof(reported)) == 0;
+        if (AntennaReadbackPolicy::reportSettles(holds, !queued))
+        {
+            ant_unconfirmed = false;
+            gave_up         = !holds;
+            *staged_out     = ant_staged;
+        }
+    }
+    portEXIT_CRITICAL(&cmd_queue_mux);
+    return gave_up;
+}
+#endif
 // Pyro config cache (4 channels on new PCB)
 static bool    cfg_pyro_enabled[4]      = { false, false, false, false };
 static uint8_t cfg_pyro_trigger_mode[4] = { 0, 0, 0, 0 };
@@ -1836,8 +1933,11 @@ static bool             fc_config_report_has_pyro = false;
 // #1472: false for a v1/v2 report, which has no `camera_type` — its zero
 // would otherwise read as CAM_TYPE_NONE, a real camera setting.
 static bool             fc_config_report_has_camera = false;
+// False for a v1-v3 report, which has no `antenna` — its zero would
+// otherwise read as "unknown", a real antenna setting.
+static bool             fc_config_report_has_antenna = false;
 // #1149 item 3: the same treatment last_query_cfg got, for the same reason.
-// This 194-byte struct is overwritten WHOLESALE by the I2S parser task (core 1,
+// This 201-byte struct is overwritten WHOLESALE by the I2S parser task (core 1,
 // prio 6) and was read field-by-field by loop_oc (core 1, prio 5) through a
 // reference held across dozens of statements and three String builds. The
 // parser strictly preempts loopTask, so a config readback could mix two report
@@ -1845,20 +1945,73 @@ static bool             fc_config_report_has_camera = false;
 static portMUX_TYPE fc_config_report_mux = portMUX_INITIALIZER_UNLOCKED;
 static inline ConfigReportData snapshotConfigReport(bool* valid_out,
                                                     bool* has_pyro_out = nullptr,
-                                                    bool* has_camera_out = nullptr)
+                                                    bool* has_camera_out = nullptr,
+                                                    bool* has_antenna_out = nullptr)
 {
     portENTER_CRITICAL(&fc_config_report_mux);
     const ConfigReportData snap = fc_config_report;
     const bool valid = fc_config_report_valid;
     const bool has_pyro = fc_config_report_has_pyro;
     const bool has_camera = fc_config_report_has_camera;
+    const bool has_antenna = fc_config_report_has_antenna;
     portEXIT_CRITICAL(&fc_config_report_mux);
     if (valid_out) *valid_out = valid;
     if (has_pyro_out) *has_pyro_out = has_pyro;
     if (has_camera_out) *has_camera_out = has_camera;
+    if (has_antenna_out) *has_antenna_out = has_antenna;
     return snap;
 }
 static volatile bool    fc_config_report_dirty = false;
+
+#if !TR_BOARD_M1
+// The GNSS antenna offset the readback reports ("antk".."antz"), and where it
+// came from ("antsrc") — the FC's own when the FC is up with a report that
+// carries one (v4), has taken the antenna command the OC last staged, and
+// remembers a setting (or the cache is Unknown too); the OC's cache (what the
+// phone last pushed) otherwise. antenna_readback_policy.h has the rule: the
+// apps adopt only the FC's, so it must never be a value the FC is about to be
+// sent. The cache used to be the only answer, so a cmd 81 the FC never
+// applied, or an FC whose NVS was erased, still read as the rocket's.
+// Defined up here because the report's handler compares it before and after
+// each report, to send the "config" frame again when what it says moves.
+// Not on the Beetle, whose FC keeps no antenna offset: the readback leaves
+// the keys out, and the apps lock the setting.
+struct AntennaReadback
+{
+    AntennaOffsetConfigData cfg;
+    bool                    from_fc;
+};
+static AntennaReadback antennaReadback()
+{
+    // The unconfirmed flag before the report: called from loop_oc, this can be
+    // preempted by a report that settles the flag, and a stale flag with the
+    // newer report only serves the cache once more. The other order could
+    // pair the settled flag with the report from before, and serve the FC's
+    // old value as its own.
+    AntennaReadbackPolicy::Inputs in;
+    in.staged_unconfirmed = antennaUnconfirmed();
+    bool valid = false, has_antenna = false;
+    const ConfigReportData r = snapshotConfigReport(&valid, nullptr, nullptr, &has_antenna);
+    const AntennaOffsetConfigData cache = antennaCache();
+    in.rail_on            = pwr_pin_on;
+    in.report_valid       = valid;
+    in.report_has_antenna = has_antenna;
+    in.fc_remembers       = (r.flags & (1U << ConfigReportData::F_ANTENNA_FROM_NVS)) != 0U;
+    in.cache_known        = cache.known == 1U;
+    AntennaReadback a;
+    a.from_fc = AntennaReadbackPolicy::serveFc(in);
+    a.cfg     = a.from_fc ? r.antenna : cache;
+    return a;
+}
+
+// The antenna self-heal (the report's handler): an FC whose report carries
+// the antenna without F_ANTENNA_FROM_NVS has never been told (a fresh board,
+// or its NVS erased), and is sent the cache once when that is measured; the
+// readback serves the cache until the FC remembers a setting. Once per FC
+// boot — cleared by its boot frames — so an FC that does not take it is not
+// sent it on every 5 s report.
+static volatile bool ant_heal_sent = false;
+#endif
 
 // FC's guidance-target echo (#435), mirrored from the v5 status query and
 // re-published as a compact "guid_target" JSON frame whenever it changes —
@@ -4752,6 +4905,8 @@ static bool isKnownMessageType(uint8_t type)
         case IMU_RATE_CONFIG_MSG:
         case GNSS_LOG_CONFIG_PENDING:
         case GNSS_LOG_CONFIG_MSG:
+        case ANTENNA_CONFIG_PENDING:
+        case ANTENNA_CONFIG_MSG:
         case LORA_MSG:
         case SNAPSHOT_MSG:           // FC→OC over I2S during INFLIGHT
         case GET_FLIGHT_SNAPSHOT:    // FC→OC over I2C at boot recovery
@@ -4915,7 +5070,8 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         // Version byte first, then the length that version implies.  v1
         // (#915, 169 bytes) is a byte-exact prefix of v2 (#1231, 193 bytes:
         // + the live deployment configuration), which is a prefix of v3
-        // (#1472, 194 bytes: + the camera type), so an older sender is still
+        // (#1472, 194 bytes: + the camera type), which is a prefix of v4
+        // (201 bytes: + the GNSS antenna offset), so an older sender is still
         // accepted — with nothing to serve for the blocks it lacks — rather
         // than refused.  The FC image is relayed through the OC, so an OC
         // updated ahead of its FC is the normal OTA order; refusing an older
@@ -4923,14 +5079,23 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         // list for that whole window.
         constexpr size_t kV1Bytes   = offsetof(ConfigReportData, pyro);
         constexpr size_t kV2Bytes   = offsetof(ConfigReportData, camera_type);
+        constexpr size_t kV3Bytes   = offsetof(ConfigReportData, antenna);
         constexpr size_t kVersionAt = offsetof(ConfigReportData, version);
         const uint8_t ver = (payload_len > kVersionAt) ? payload[kVersionAt] : 0xFF;
         ConfigReportData incoming = {};
         bool has_pyro = false;
         bool has_camera = false;
+        bool has_antenna = false;
         if (ver == ConfigReportData::VERSION && payload_len >= sizeof(ConfigReportData))
         {
             memcpy(&incoming, payload, sizeof(incoming));
+            has_pyro = true;
+            has_camera = true;
+            has_antenna = true;
+        }
+        else if (ver == 3U && payload_len >= kV3Bytes)
+        {
+            memcpy(&incoming, payload, kV3Bytes);   // antenna stays zeroed, and is never served
             has_pyro = true;
             has_camera = true;
         }
@@ -4967,11 +5132,15 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             memcmp((const uint8_t*)&incoming + sizeof(incoming.time_us),
                    (const uint8_t*)&fc_config_report + sizeof(incoming.time_us),
                    sizeof(incoming) - sizeof(incoming.time_us)) != 0;
+#if !TR_BOARD_M1
+        const AntennaReadback ant_was = antennaReadback();
+#endif
         portENTER_CRITICAL(&fc_config_report_mux);   // #1149 item 3
         fc_config_report = incoming;
         fc_config_report_valid = true;
         fc_config_report_has_pyro = has_pyro;
         fc_config_report_has_camera = has_camera;
+        fc_config_report_has_antenna = has_antenna;
         portEXIT_CRITICAL(&fc_config_report_mux);
         if (changed) fc_config_report_dirty = true;
 
@@ -5029,6 +5198,77 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             }
             cam_diverged = differs;
         }
+
+#if !TR_BOARD_M1
+        // The GNSS antenna offset. First the report settles an antenna
+        // command the OC staged (ant_unconfirmed): confirmed when it carries
+        // the value, given up on once the command has left the queue and the
+        // FC still reports something else (it refused it, or never got it).
+        // Then the same comparison as above, and the same rule — the cache is
+        // not overwritten from here.  Then a self-heal like the orientation's
+        // (the status query's, F_ORIENT_FROM_NVS): an FC that reports no
+        // record of its own has never been told (a fresh board, or its NVS
+        // erased), so a measured offset the OC still holds is sent again —
+        // once per FC boot (ant_heal_sent), and never INFLIGHT.  An FC with a
+        // record keeps it, whatever the cache says.
+        if (has_antenna)
+        {
+            AntennaOffsetConfigData staged = {};
+            if (settleStagedAntenna(incoming.antenna, &staged))
+            {
+                ESP_LOGW("CFG", "FC did not take the GNSS antenna offset the OC sent (%u/%d/%d/%d): it reports "
+                                "%u/%d/%d/%d (known/x/y/z mm)",
+                         (unsigned)staged.known, (int)staged.x_mm, (int)staged.y_mm, (int)staged.z_mm,
+                         (unsigned)incoming.antenna.known, (int)incoming.antenna.x_mm,
+                         (int)incoming.antenna.y_mm, (int)incoming.antenna.z_mm);
+            }
+
+            static bool ant_diverged = false;
+            const AntennaOffsetConfigData cache = antennaCache();
+            const bool fc_remembers = (incoming.flags & (1U << ConfigReportData::F_ANTENNA_FROM_NVS)) != 0U;
+            const bool differs = memcmp(&incoming.antenna, &cache, sizeof(cache)) != 0;
+            if (differs && (!ant_diverged || changed))
+            {
+                ESP_LOGW("CFG", "FC GNSS antenna offset differs from OC cache — FC(%s)=%u/%d/%d/%d "
+                                "OC=%u/%d/%d/%d (known/x/y/z mm); the app is shown the %s",
+                         fc_remembers ? "nvs" : "dflt", (unsigned)incoming.antenna.known,
+                         (int)incoming.antenna.x_mm, (int)incoming.antenna.y_mm, (int)incoming.antenna.z_mm,
+                         (unsigned)cache.known, (int)cache.x_mm, (int)cache.y_mm, (int)cache.z_mm,
+                         antennaReadback().from_fc ? "FC's" : "OC's");
+            }
+            else if (!differs && ant_diverged)
+            {
+                ESP_LOGI("CFG", "FC GNSS antenna offset matches OC cache again");
+            }
+            ant_diverged = differs;
+
+            if (!fc_remembers && !ant_heal_sent && latest_rocket_state != INFLIGHT)
+            {
+                // Read again, not the copy compared above: the log lines can
+                // block on the console's lock, and a cmd 81 loop_oc handled
+                // meanwhile would be replaced in the queue by that older copy
+                // (the queue keeps the payload staged last).
+                const AntennaOffsetConfigData heal = antennaCache();
+                if (heal.known == 1U)
+                {
+                    ant_heal_sent = true;
+                    stageAntennaConfig(heal);
+                    ESP_LOGI("CFG", "FC has no GNSS antenna offset of its own: re-staged the OC's (board X %d, "
+                                    "Y %d, Z %d mm)",
+                             (int)heal.x_mm, (int)heal.y_mm, (int)heal.z_mm);
+                }
+            }
+        }
+
+        // The antenna rides the "config" frame, which a report change does
+        // not re-send on its own: the whole readback goes again when what it
+        // says moves (the IMU limit's path), so the app hears an offset the
+        // FC applied, or one it never did, without a reconnect. Compared
+        // after the settle and the heal, which move it too.
+        const AntennaReadback ant_now = antennaReadback();
+        if (ant_now.from_fc != ant_was.from_fc || memcmp(&ant_now.cfg, &ant_was.cfg, sizeof(ant_now.cfg)) != 0)
+            config_readback_dirty = true;
+#endif
         return;
     }
 
@@ -5419,6 +5659,9 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             if (fc_boot_status.step != FCB_COMPLETE)
             {
                 fc_boot_retire_pending = true;
+#if !TR_BOARD_M1
+                ant_heal_sent = false;   // a new FC session: its first report may need the antenna again
+#endif
             }
             ESP_LOGI("OC", "[FC BOOT] step=%u degraded=0x%02X t=%u ms",
                      (unsigned)fc_boot_status.step,
@@ -7050,6 +7293,20 @@ static void sendCurrentConfig()
     // firmware that has no such setting, which the apps read as "this rocket
     // cannot change it".
     j += ",\"glog\":"; j += itos(cfg_gnss_log);
+#if !TR_BOARD_M1
+    // The GNSS antenna offset (cmd 81): 0 unknown or 1 measured, and the board
+    // frame's mm (0 when unknown); "antsrc" "fc" when it is the FC's report,
+    // "oc" when the cache stands in: until the FC has taken what was sent and
+    // remembers a setting (antennaReadback). Absent from firmware with no such
+    // setting, and from the Beetle's, whose FC keeps none: the apps then lock
+    // the setting.
+    const AntennaReadback ant = antennaReadback();
+    j += ",\"antk\":"; j += itos(ant.cfg.known);
+    j += ",\"antx\":"; j += itos(ant.cfg.x_mm);
+    j += ",\"anty\":"; j += itos(ant.cfg.y_mm);
+    j += ",\"antz\":"; j += itos(ant.cfg.z_mm);
+    j += ",\"antsrc\":\""; j += ant.from_fc ? "fc" : "oc"; j += "\"";
+#endif
     // LoRa settings
     j += ",\"lf\":";  j += fmtf(lora_freq_mhz, 3);   // #1155 item 9: 0.1 MHz hid a 902.25 -> "902.20" (channel centres end in .125/.25)
     j += ",\"lsf\":"; j += itos(lora_sf);
@@ -7066,6 +7323,14 @@ static void sendCurrentConfig()
     j += "}";
     enqueueConfigReadback(j);   // #398 item 3: paced drain in loop_oc, no delay()
     ESP_LOGI("CFG", "Queued config readback (%u bytes)", (unsigned)j.length());
+#if !TR_BOARD_M1
+    // Its own line, like the camera type's
+    if (ant.cfg.known)
+        ESP_LOGI("CFG", "GNSS antenna offset readback: board X %d, Y %d, Z %d mm (from %s)", (int)ant.cfg.x_mm,
+                 (int)ant.cfg.y_mm, (int)ant.cfg.z_mm, ant.from_fc ? "FC report" : "OC cache");
+    else
+        ESP_LOGI("CFG", "GNSS antenna offset readback: unknown (from %s)", ant.from_fc ? "FC report" : "OC cache");
+#endif
 
     // Message 2: pyro config ("config_pyro" type) — 4 channels, from the FC's
     // report when it can be (#1231), else the OC cache.
@@ -9336,6 +9601,22 @@ static void loadCachedPeripheralConfigFromNvs()
     }
     prefs.end();
     ESP_LOGI("CFG", "NVS GNSS log: %s", gnssLogName(cfg_gnss_log));
+
+    // Load the cached GNSS antenna offset, readback only (the FC applies its own).
+    prefs.begin("antenna", false);
+    if (prefs.isKey("ofs"))
+    {
+        AntennaOffsetConfigData a = {};
+        if (prefs.getBytes("ofs", &a, sizeof(a)) == sizeof(a) && antennaOffsetValid(a)) setAntennaCache(a);
+        else ESP_LOGW("CFG", "NVS GNSS antenna offset invalid — keeping unknown");
+    }
+    prefs.end();
+    const AntennaOffsetConfigData ant_boot = antennaCache();
+    if (ant_boot.known)
+        ESP_LOGI("CFG", "NVS GNSS antenna offset: board X %d, Y %d, Z %d mm", (int)ant_boot.x_mm,
+                 (int)ant_boot.y_mm, (int)ant_boot.z_mm);
+    else
+        ESP_LOGI("CFG", "NVS GNSS antenna offset: unknown");
 
     // #1271: outstanding blind-window losses, carried across the power cycle
     // between the lost flight and the operator connecting to download. This
@@ -13248,6 +13529,45 @@ static void loop_oc()
                 {
                     ESP_LOGW("BLE", "GNSS log setting %u rejected (not detailed or reduced)",
                              (unsigned)setting);
+                }
+            }
+        }
+        else if (ble_cmd == 81)
+        {
+            // GNSS antenna offset: [known:1][x_mm:2][y_mm:2][z_mm:2], LE — the
+            // antenna's phase centre from the FC's IMU in the board's own frame
+            // (known 1), or unknown (known 0, every component 0). Relayed to the
+            // FC, which keeps it in FC NVS and gives it to the mosaic image's
+            // navigation filter on the ground (one it gets INFLIGHT is held
+            // until it is not). The readback serves this value until an FC
+            // report carries it (or the FC is found not to take it), then the
+            // FC's report, so the app hears what the FC applied.
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= sizeof(AntennaOffsetConfigData))
+            {
+                AntennaOffsetConfigData a;
+                memcpy(&a, payload, sizeof(a));
+                if (antennaOffsetValid(a))
+                {
+                    setAntennaCache(a);
+                    stageAntennaConfig(a);
+                    Preferences p2;
+                    p2.begin("antenna", false);
+                    p2.putBytes("ofs", &a, sizeof(a));
+                    p2.end();
+                    if (a.known)
+                        ESP_LOGI("BLE", "GNSS antenna offset: board X %d, Y %d, Z %d mm -> FlightComputer",
+                                 (int)a.x_mm, (int)a.y_mm, (int)a.z_mm);
+                    else
+                        ESP_LOGI("BLE", "GNSS antenna offset: unknown -> FlightComputer");
+                    config_readback_dirty = true;
+                }
+                else
+                {
+                    ESP_LOGW("BLE", "GNSS antenna offset rejected (known %u, %d/%d/%d mm: over %d mm, or not 0 "
+                                    "when unknown)",
+                             (unsigned)a.known, (int)a.x_mm, (int)a.y_mm, (int)a.z_mm, (int)ANTENNA_OFFSET_MAX_MM);
                 }
             }
         }

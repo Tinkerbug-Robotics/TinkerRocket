@@ -122,6 +122,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// coalesce changes that come close together.
     let accelCalFrames = PassthroughSubject<AccelCalStatus, Never>()
 
+    /// Every GNSS antenna offset this link sends (cmd 81), as sent. Whoever
+    /// sent it (Send All, the push on a profile switch, the settings screen),
+    /// it is the user's act: the profile syncer's late antenna adopt stands
+    /// down on it (ActiveRocketSyncer.armAntennaAdoptIfNeeded).
+    let antennaOffsetSent = PassthroughSubject<AntennaOffset, Never>()
+
     /// Latest flash-space stats: rocketStorage on a direct rocket link (0xCC),
     /// bsStorage on a base-station link (0xCD). Each is shown by its own bar.
     @Published var rocketStorage: RocketStorageStats?
@@ -1168,6 +1174,27 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         sendRawCommand(79, payload: Data([setting]))
         if var cfg = rocketConfig {
             cfg.gnssLogSetting = setting
+            rocketConfig = cfg
+        }
+    }
+
+    /// GNSS antenna offset (cmd 81, 7 bytes): `[known u8][x_mm i16][y_mm i16]
+    /// [z_mm i16]`, little-endian, in the flight computer board's own axes.
+    /// Unknown goes out as known 0 with zeros. The FC refuses a component
+    /// outside ±2000 mm, so such a value is never sent. The FC keeps it in its
+    /// NVS and reports it as the readback's `antk`/`antx`/`anty`/`antz`.
+    /// Each send is published on `antennaOffsetSent`.
+    func sendAntennaOffsetConfig(_ offset: AntennaOffset) {
+        guard offset.isSendable else { return }
+        sendRawCommand(81, payload: offset.payload)
+        antennaOffsetSent.send(offset)
+        // Only over a readback that carries the setting: firmware without it
+        // ignores the command, and the screen must keep saying so. It is what
+        // was sent, not what the flight computer reported, so the screen says
+        // "not reported yet" until the next readback says "fc".
+        if var cfg = rocketConfig, cfg.antennaOffset != nil {
+            cfg.antennaOffset = offset
+            cfg.antennaOffsetFromFlightComputer = false
             rocketConfig = cfg
         }
     }
@@ -2405,6 +2432,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             if let glog = dict["glog"] as? Int, let s = UInt8(exactly: glog), s <= RocketProfile.gnssLogReduced {
                 cfg.gnssLogSetting = s
             }
+            // All four keys or none: anything missing, or a value the
+            // firmware would refuse, reads as "not reported".
+            if let k = dict["antk"] as? Int, let x = dict["antx"] as? Int,
+               let y = dict["anty"] as? Int, let z = dict["antz"] as? Int {
+                cfg.antennaOffset = AntennaOffset(known: k, xMm: x, yMm: y, zMm: z)
+            }
+            // Anything but "fc", absence included, is the out computer's copy.
+            cfg.antennaOffsetFromFlightComputer = cfg.antennaOffset != nil && dict["antsrc"] as? String == "fc"
             cfg.loraFreqMHz = parseFloat(dict["lf"])
             cfg.loraSF = (dict["lsf"] as? Int).map { UInt8($0) }
             cfg.loraBwKHz = parseFloat(dict["lbw"])

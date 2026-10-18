@@ -199,6 +199,36 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     static let gnssLogDetailed: UInt8 = 0
     static let gnssLogReduced: UInt8 = 1
 
+    /// GNSS antenna offset (BLE cmd 81): from the flight computer's IMU to
+    /// the GNSS antenna's phase center, in millimeters along the BOARD's own
+    /// axes (+X forward, +Y left, +Z up out of the component side — the axes
+    /// the six-face accelerometer calibration names). The flight computer
+    /// rotates it into the rocket frame with its own mounting setting, so the
+    /// app never needs the mounting. Unknown (the default) is today's
+    /// behavior: the navigation filter allows for an antenna up to 30 cm
+    /// away. Unknown always stores zeros, as it goes on the wire. Only the
+    /// mosaic-G5's navigation filter uses it.
+    var antennaOffsetKnown: Bool = false
+    var antennaXMm: Int16 = 0
+    var antennaYMm: Int16 = 0
+    var antennaZMm: Int16 = 0
+
+    /// The four antenna fields as one value. Setting `.unknown` (or any
+    /// offset with `known == false`) stores zeros.
+    var antennaOffset: AntennaOffset {
+        get {
+            antennaOffsetKnown
+                ? AntennaOffset(known: true, xMm: antennaXMm, yMm: antennaYMm, zMm: antennaZMm)
+                : .unknown
+        }
+        set {
+            antennaOffsetKnown = newValue.known
+            antennaXMm = newValue.known ? newValue.xMm : 0
+            antennaYMm = newValue.known ? newValue.yMm : 0
+            antennaZMm = newValue.known ? newValue.zMm : 0
+        }
+    }
+
     // MARK: Servo
     // #561: default 0 (neutral) to match config.h SERVO_BIAS_N and biases 2-4.
     // The old 85 (~10° on the ±60° / 1000-2000µs fin cal) baked a servo-1 trim
@@ -397,6 +427,23 @@ extension RocketProfile {
         // firmware reads its NVS.
         let gnssLog = try c.decodeIfPresent(UInt8.self, forKey: .gnssLogSetting) ?? defaults.gnssLogSetting
         gnssLogSetting = gnssLog <= RocketProfile.gnssLogReduced ? gnssLog : defaults.gnssLogSetting
+        // The antenna offset reads as one value: a profile from before the
+        // setting, or one holding anything the firmware would refuse (a
+        // component outside ±2000 mm, a wrong type), reads as Unknown rather
+        // than failing the whole profile. Decoded as Int, not Int16, so an
+        // out-of-range number is a value to reject rather than a throw.
+        let antKnown = try? c.decodeIfPresent(Bool.self, forKey: .antennaOffsetKnown)
+        let antX = try? c.decodeIfPresent(Int.self, forKey: .antennaXMm)
+        let antY = try? c.decodeIfPresent(Int.self, forKey: .antennaYMm)
+        let antZ = try? c.decodeIfPresent(Int.self, forKey: .antennaZMm)
+        var ant: AntennaOffset? = nil
+        if antKnown == true, let x = antX, let y = antY, let z = antZ {
+            ant = AntennaOffset(known: 1, xMm: x, yMm: y, zMm: z)
+        }
+        antennaOffsetKnown = ant?.known ?? false
+        antennaXMm = ant?.xMm ?? 0
+        antennaYMm = ant?.yMm ?? 0
+        antennaZMm = ant?.zMm ?? 0
 
         servoBias1 = try c.decodeIfPresent(Int16.self, forKey: .servoBias1) ?? defaults.servoBias1
         servoBias2 = try c.decodeIfPresent(Int16.self, forKey: .servoBias2) ?? defaults.servoBias2
@@ -452,5 +499,72 @@ extension RocketProfile {
 
         magCal = try c.decodeIfPresent(MagCalData.self, forKey: .magCal)
         sensorCal = try c.decodeIfPresent(SensorCalData.self, forKey: .sensorCal)
+    }
+}
+
+// MARK: - GNSS antenna offset (cmd 81)
+
+/// Where the GNSS antenna's phase center sits relative to the flight
+/// computer's IMU, in millimeters along the board's own axes — or unknown.
+/// One value for the profile, the `"antk"/"antx"/"anty"/"antz"` readback and
+/// the cmd-81 frame `[known u8][x_mm i16][y_mm i16][z_mm i16]`. Unknown always
+/// carries zeros, as it goes on the wire.
+nonisolated struct AntennaOffset: Equatable {
+    var known: Bool
+    var xMm: Int16
+    var yMm: Int16
+    var zMm: Int16
+
+    static let unknown = AntennaOffset(known: false, xMm: 0, yMm: 0, zMm: 0)
+
+    /// The firmware refuses a component outside ±2000 mm, so the app never
+    /// holds or sends one.
+    static let limitMm = 2000
+    static let rangeMm: ClosedRange<Int> = -limitMm...limitMm
+
+    init(known: Bool, xMm: Int16, yMm: Int16, zMm: Int16) {
+        self.known = known
+        self.xMm = known ? xMm : 0
+        self.yMm = known ? yMm : 0
+        self.zMm = known ? zMm : 0
+    }
+
+    /// From the wire's integers: nil unless `known` is 0 or 1 and every
+    /// component is within ±2000 mm. Unknown keeps zeros whatever came with it.
+    init?(known: Int, xMm: Int, yMm: Int, zMm: Int) {
+        guard known == 0 || known == 1,
+              Self.rangeMm.contains(xMm), Self.rangeMm.contains(yMm), Self.rangeMm.contains(zMm)
+        else { return nil }
+        self.init(known: known == 1, xMm: Int16(xMm), yMm: Int16(yMm), zMm: Int16(zMm))
+    }
+
+    /// True when the firmware would take it.
+    var isSendable: Bool {
+        Self.rangeMm.contains(Int(xMm)) && Self.rangeMm.contains(Int(yMm))
+            && Self.rangeMm.contains(Int(zMm))
+    }
+
+    /// The cmd-81 payload, 7 bytes little-endian.
+    var payload: Data {
+        var data = Data([known ? 1 : 0])
+        for v in [xMm, yMm, zMm] {
+            let bits = UInt16(bitPattern: v)
+            data.append(UInt8(bits & 0xFF))
+            data.append(UInt8(bits >> 8))
+        }
+        return data
+    }
+
+    /// One typed component: a whole number of millimeters within ±2000, or
+    /// nil (empty, not a whole number, or out of range).
+    static func parseMm(_ text: String) -> Int16? {
+        guard let v = Int(text.trimmingCharacters(in: .whitespaces)), rangeMm.contains(v)
+        else { return nil }
+        return Int16(v)
+    }
+
+    /// How the settings screen says it, e.g. "X 312, Y -25, Z 4 mm".
+    var label: String {
+        known ? "X \(xMm), Y \(yMm), Z \(zMm) mm" : "Unknown"
     }
 }

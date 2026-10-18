@@ -287,6 +287,9 @@ struct ClosedEpoch
     float sigma_rr_max = 0.0f, sigma_rr_min = 0.0f;
     bool held = false;                    // GNSS held off the attitude for it (att_hold_rate_rps)
     bool skipped = false;                 // nothing of it fused while the body turned (rot_skip_rate_rps)
+    uint32_t dv_epoch_fails = 0;          // the Doppler change check's failed epochs so far
+    uint32_t dv_latch_releases = 0;       //   its latches let go so far (dv_latch_k)
+    float dv_level_chi2 = 0.0f;           //   and the last level test's chi-square
 };
 
 struct TenRun
@@ -294,6 +297,7 @@ struct TenRun
     std::vector<ClosedEpoch> eps;
     std::vector<uint64_t> state;          // stateHash every 0.25 s
     std::vector<double> att_err_deg;      //   and the attitude's error then against the truth, deg
+    double vel_err_max_mps = 0.0;         // the velocity's largest error against the truth's from ignition, m/s
     std::vector<HeadingFitData> fits;
     double first_aided_t = -1.0;          // flight time gnss_aided first came up
     int unaided_ticks_after = 0;          //   ticks without it after that
@@ -325,8 +329,26 @@ struct TenFlight
     double turn_rps = 0.0;
     int    turn_axis = 1;
     double lever_m = 0.0;
+    double lever_y_m = 0.0;              // and this far along body y (across the nose)
     double apogee_t = -1.0;              // the flight computer calls apogee from here (kShadowApogee)
     double seed_heading_err_deg = 0.0;   // the pad seed's heading this far off the body's (about the down axis)
+    // the whole receiver stale (test_doppler_change.cpp's pattern, sim_events.py's): its Dopplers at the pad's
+    // velocity through the boost, closing on the truth with this time constant from burnout (0: none)
+    double stale_tau = 0.0;
+    // a coherent ramp (test_doppler_change.cpp's, sim_events.py's slow pattern): every Doppler at the receiver's
+    // velocity plus coh_rate m/s a second down from coh_from s, held at coh_max (coh_from < 0: none)
+    double coh_from = -1.0;
+    double coh_rate = 0.0;
+    double coh_max = 0.0;
+    // a weathercocking body: from wc_t for wc_s, its rate about the turn's axis a sine of wc_rps at wc_hz
+    // (on top of any turn above)
+    double wc_t = -1.0;
+    double wc_s = 1.0;
+    double wc_rps = 0.0;
+    double wc_hz = 2.0;
+    // a calibrated magnetometer on the pad (the truth's field, 50 Hz, to ignition): the launch's heading is
+    // the magnetometer's (the Doppler change check's dv_hdg_unset_deg judges it known)
+    bool   mag_on_pad = false;
 };
 
 TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
@@ -352,6 +374,18 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
     ShadowSeed seed = padSeed(kT0, lat, lon, h);
     const double down[3] = {0.0, 0.0, 1.0};
     quatOf(mat3Mul(rotAbout(down, fl.seed_heading_err_deg * 0.017453292519943295), Ct), seed.quat);
+    const double b_ned[3] = {21.0, -4.3, 45.5};              // the field, uT (test_raw_gnss_shadow.cpp's RailPad)
+    float b_body[3] = {};
+    if (fl.mag_on_pad)
+    {
+        seed.declination_rad = float(std::atan2(b_ned[1], b_ned[0]));
+        seed.field_ut = float(std::sqrt(b_ned[0] * b_ned[0] + b_ned[1] * b_ned[1] + b_ned[2] * b_ned[2]));
+        seed.have_declination = 1;
+        seed.dip_rad = float(std::atan2(b_ned[2], std::hypot(b_ned[0], b_ned[1])));
+        seed.have_dip = 1;
+        for (int i = 0; i < 3; ++i)
+            b_body[i] = float(Ct.m[0][i] * b_ned[0] + Ct.m[1][i] * b_ned[1] + Ct.m[2][i] * b_ned[2]);
+    }
     sh.onSeed(seed);
     const double tow0 = kGoldenRmTowA, dt = 0.005;
     double p_ned[3] = {}, v_ned[3] = {};
@@ -369,6 +403,17 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
             const bool out = t <= fl.turn_t + fl.turn_s + 1e-9;
             w_turn = out ? fl.turn_rps : -fl.turn_rps;
             ang = fl.turn_rps * (out ? t - fl.turn_t : fl.turn_t + 2.0 * fl.turn_s - t);
+        }
+        if (fl.wc_rps > 0.0 && t > fl.wc_t + 1e-9)
+        {
+            // the angle at t and the step's mean rate (the gyro's), the sine's integral
+            const double k = 2.0 * kPi * fl.wc_hz;
+            auto wcAng = [&](double at) {
+                const double s = std::min(at, fl.wc_t + fl.wc_s) - fl.wc_t;
+                return s > 0.0 ? fl.wc_rps / k * (1.0 - std::cos(k * s)) : 0.0;
+            };
+            ang += wcAng(t);
+            w_turn += (wcAng(t) - wcAng(t - dt)) / dt;
         }
         const double ax[3] = {fl.turn_axis == 0 ? 1.0 : 0.0, fl.turn_axis == 1 ? 1.0 : 0.0, 0.0};
         const Mat3 Cn = mat3Mul(Ct, rotAbout(ax, ang));      // body -> NED, turned
@@ -405,7 +450,24 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
         s.flags = t < kIgn ? gnss_raw::kShadowLevel : (t >= kIgn + 0.1 ? gnss_raw::kShadowInFlight : 0);
         if (fl.apogee_t >= 0.0 && t >= fl.apogee_t)
             s.flags |= gnss_raw::kShadowApogee;
+        if (fl.mag_on_pad && t < kIgn && step % 4 == 0)
+        {
+            gnss_raw::ShadowMag mg{};
+            mg.time_us = s.time_us;
+            for (int i = 0; i < 3; ++i)
+                mg.mag[i] = b_body[i];
+            mg.flags = gnss_raw::kShadowMagSim;
+            sh.onMag(mg);
+        }
         sh.onImu(s, t64);
+        if (t > kIgn)
+        {
+            const float* vf = sh.filter().velNed();
+            double e2 = 0.0;
+            for (int i = 0; i < 3; ++i)
+                e2 += (double(vf[i]) - v_ned[i]) * (double(vf[i]) - v_ned[i]);
+            run.vel_err_max_mps = std::max(run.vel_err_max_mps, std::sqrt(e2));
+        }
         // each epoch as it closes
         if (sh.stats().last_tow_ms != last_tow_ms)
         {
@@ -422,6 +484,9 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
             }
             c.held = sh.stats().att_last_held;
             c.skipped = sh.stats().rot_last_skipped;
+            c.dv_epoch_fails = sh.stats().dv_epoch_fails;
+            c.dv_latch_releases = sh.stats().dv_latch_releases;
+            c.dv_level_chi2 = sh.stats().dv_last_level_chi2;
             run.eps.push_back(c);
         }
         gnss_raw::ShadowNav nav;
@@ -449,7 +514,7 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
             if (!fl.lose_whole_seconds || ms % 1000 != 0)
             {
                 // the antenna: lever_m up the nose, moving omega x r with the turn
-                const double r_b[3] = {fl.lever_m, 0.0, 0.0};
+                const double r_b[3] = {fl.lever_m, fl.lever_y_m, 0.0};
                 const double w_b[3] = {ax[0] * w_turn, ax[1] * w_turn, 0.0};
                 const double wxr[3] = {w_b[1] * r_b[2] - w_b[2] * r_b[1], w_b[2] * r_b[0] - w_b[0] * r_b[2],
                                        w_b[0] * r_b[1] - w_b[1] * r_b[0]};
@@ -463,6 +528,14 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
                 double v_rx[3] = {v_ned[0] + wxr_n[0], v_ned[1] + wxr_n[1], v_ned[2] + wxr_n[2]};
                 if (std::fabs(ms / 1000.0 - fl.bad_vertical_t) < 1e-6)
                     v_rx[2] += 40.0;
+                if (fl.stale_tau > 0.0 && t > kIgn)
+                {
+                    const double L = t <= kBurnout ? 1.0 : std::exp(-(t - kBurnout) / fl.stale_tau);
+                    for (int i = 0; i < 3; ++i)
+                        v_rx[i] -= L * v_ned[i];
+                }
+                if (fl.coh_from >= 0.0 && t > fl.coh_from)
+                    v_rx[2] += std::min(fl.coh_rate * (t - fl.coh_from), fl.coh_max);
                 nedToEcefVec(v_rx, ve);
                 for (int i = 0; i < 3; ++i)
                     r[i] = r0[i] + dr[i];
@@ -1439,4 +1512,402 @@ TEST(RawGnssShadowV9, ASkippedTurnLeavesItsHeadingErrorForTheEpochsAfter)
         EXPECT_LT(errAt(sk, t), 0.5) << t;
         EXPECT_GT(errAt(hd, t), 5.0) << t;
     }
+}
+
+// ---- the antenna's offset, known (RawGnssShadow.h; applyAntennaOffset, setAntenna)
+
+namespace
+{
+
+RawGnssShadow::Config knownCfg(double axial_m, uint8_t att_mode = gnss_raw::kLeverAttObserve)
+{
+    RawGnssShadow::Config c = actCfg();
+    gnss_raw::applyMosaicFlightSafeguards(c);
+    c.antenna_att_mode = att_mode;
+    gnss_raw::AntennaOffset a;
+    a.known = true;
+    a.b_m[0] = axial_m;
+    gnss_raw::applyAntennaOffset(a, c);
+    return c;
+}
+
+RawGnssShadow::Config safeguardsCfg()
+{
+    RawGnssShadow::Config c = actCfg();
+    gnss_raw::applyMosaicFlightSafeguards(c);
+    return c;
+}
+
+}  // namespace
+
+TEST(RawGnssShadowV9, AKnownAntennaTakesTheTurnsSwingOutOfTheAttitude)
+{
+    // The turning boost (boostTurn: 5 rad/s about body y for 0.25 s and back)
+    // with the antenna 0.3 m up the nose. Unknown, the image's allowance
+    // takes the swing's Dopplers at 1.65 m/s and what is left still turns the
+    // attitude: over 0.5 deg from 6 s on. Known, the swing is predicted and,
+    // with the launch's heading the magnetometer's, the Dopplers allow only
+    // what the offset could be off by (0.05 m along the nose and 0.02 across:
+    // 0.35 m/s); with no magnetometer, also what any heading does to the
+    // predicted swing (leverUnsetM: twice the 0.3 m, 3.35 m/s). Either: under
+    // 0.25 deg. The offset wrong by 5 cm either way is still better than
+    // leaving it out.
+    const TenFlight fl = boostTurn(0.3, 0.0);
+    TenFlight fm = fl;
+    fm.mag_on_pad = true;
+    const TenRun unk = flyTen(safeguardsCfg(), fl), kn = flyTen(knownCfg(0.3), fl), km = flyTen(knownCfg(0.3), fm),
+                 lo = flyTen(knownCfg(0.25), fl), hi = flyTen(knownCfg(0.35), fl);
+    EXPECT_NEAR(unk.st.rot_max_sigma_mps, 1.65f, 0.02f);
+    EXPECT_EQ(km.st.dv_hdg_unset, 0);
+    EXPECT_NEAR(km.st.rot_max_sigma_mps, 0.35f, 0.01f);
+    EXPECT_EQ(kn.st.dv_hdg_unset, 1);
+    EXPECT_NEAR(kn.st.rot_max_sigma_mps, 3.35f, 0.02f);
+    for (double t = 6.0; t <= 8.5 + 1e-9; t += 0.25)
+    {
+        EXPECT_GT(errAt(unk, t), 0.5) << t;
+        EXPECT_LT(errAt(kn, t), 0.25) << t;
+        EXPECT_LT(errAt(km, t), 0.25) << t;
+        EXPECT_LT(errAt(lo, t), errAt(unk, t)) << t;
+        EXPECT_LT(errAt(hi, t), errAt(unk, t)) << t;
+    }
+}
+
+TEST(RawGnssShadowV9, AKnownAntennasAllowanceIsWhatItCouldBeOffByAtAnyRate)
+{
+    // Known, each Doppler takes rotLeverSigma at the offset's sigmas (0.05 m
+    // along the nose, 0.02 across) from any rate: a 2 rad/s pitch 0.14 m/s, a
+    // 1.5 rad/s one (under the unknown's 2 rad/s floor) 0.105, a 5 rad/s roll
+    // the radial 0.10; the epochs before the turn are as the unknown's
+    EXPECT_NEAR(flyTen(knownCfg(0.0), turningCoast(2.0, 1, 0.0)).st.rot_max_sigma_mps, 0.14f, 0.005f);
+    EXPECT_NEAR(flyTen(knownCfg(0.0), turningCoast(1.5, 1, 0.0)).st.rot_max_sigma_mps, 0.105f, 0.005f);
+    EXPECT_EQ(flyTen(safeguardsCfg(), turningCoast(1.5, 1, 0.0)).st.rot_max_sigma_mps, 0.0f);
+    EXPECT_NEAR(flyTen(knownCfg(0.0), turningCoast(5.0, 0, 0.0)).st.rot_max_sigma_mps, 0.10f, 0.005f);
+    // still, nothing moves: the known filter on a flight with no turn is the unknown one's
+    const TenRun a = flyTen(safeguardsCfg(), 0.0, 8.0), b = flyTen(knownCfg(0.0), 0.0, 8.0);
+    ASSERT_EQ(a.att_err_deg.size(), b.att_err_deg.size());
+    for (size_t i = 0; i < a.att_err_deg.size(); ++i)
+        EXPECT_NEAR(a.att_err_deg[i], b.att_err_deg[i], 1e-3) << i;
+}
+
+TEST(RawGnssShadowV9, TheLeverRollReadsARollAboutTheNoseFromTheChangeCheck)
+{
+    // A nose-up coast rolling at 5 rad/s about the nose for 0.5 s and back,
+    // the antenna 0.1 m across it: the swing turns with the body, and the
+    // pad's heading 10 deg off (about the down axis: -10 about the nose that
+    // points up) turns the predicted swing with it. The change check's lever
+    // roll reads the +10 deg correction within two of its 1-sigmas (10.6
+    // +- 2.0 deg here); unknown, or with the terms fused, it reads nothing
+    // (no epochs fitted for it).
+    TenFlight fl;
+    fl.turn_t = 7.0;
+    fl.turn_s = 0.5;
+    fl.turn_rps = 5.0;
+    fl.turn_axis = 0;
+    fl.lever_y_m = 0.1;
+    fl.seed_heading_err_deg = 10.0;
+    RawGnssShadow::Config c = safeguardsCfg();
+    // settled tracking, as minutes on a pad leave it: every satellite of this
+    // synthetic sky starts locked at the flight's start, and the builder's
+    // relock term (3 m/s on each Doppler, decaying over 10 s) would leave the
+    // change check's fit a 1 m/s 1-sigma through the roll
+    c.meas.rr_relock_sigma = 0.0;
+    gnss_raw::AntennaOffset a;
+    a.known = true;
+    a.b_m[1] = 0.1;
+    gnss_raw::applyAntennaOffset(a, c);
+    const TenRun r = flyTen(c, fl);
+    ASSERT_GT(r.st.lever_roll_epochs, 0u);
+    ASSERT_GT(r.st.lever_roll_info, 0.0);
+    const double roll = r.st.lever_roll_hy / r.st.lever_roll_info * 57.29577951308232;
+    const double sig = 57.29577951308232 / std::sqrt(r.st.lever_roll_info);
+    EXPECT_LT(sig, 3.0);
+    EXPECT_NEAR(roll, 10.0, std::max(2.0 * sig, 1.0));
+    EXPECT_EQ(flyTen(safeguardsCfg(), fl).st.lever_roll_epochs, 0u);
+    RawGnssShadow::Config cf = c;
+    cf.antenna_att_mode = gnss_raw::kLeverAttFuse;
+    cf.ekf.lever_att_mode = gnss_raw::kLeverAttFuse;
+    EXPECT_EQ(flyTen(cf, fl).st.lever_roll_epochs, 0u);
+}
+
+TEST(RawGnssShadowV9, AnAntennaSetInFlightWaitsForTheGround)
+{
+    // setAntenna on the ground: taken at once; in flight: held until the
+    // first ground tick, then taken; unknown again: the bounds, the offset
+    // gone from the filter
+    RawGnssShadow sh(safeguardsCfg());
+    const double b[3] = {0.2, 0.0, -0.01};
+    ShadowImu s{};
+    s.acc[2] = float(-kG);
+    s.time_us = static_cast<uint32_t>(kT0);
+    s.flags = gnss_raw::kShadowLevel;
+    sh.onImu(s, kT0);
+    sh.setAntenna(true, b);
+    EXPECT_TRUE(sh.filter().params().lever_on);
+    EXPECT_EQ(sh.filter().params().lever_b_m[0], 0.2);
+    EXPECT_EQ(sh.filter().params().lever_att_mode, gnss_raw::kLeverAttObserve);
+    EXPECT_EQ(sh.stats().antenna_sets, 1u);
+    s.time_us += 10000;
+    s.flags = gnss_raw::kShadowInFlight;
+    sh.onImu(s, kT0 + 10000);
+    sh.setAntenna(false, b);
+    EXPECT_EQ(sh.stats().antenna_pending, 1);
+    EXPECT_TRUE(sh.filter().params().lever_on);          // still the flight's
+    s.time_us += 10000;
+    sh.onImu(s, kT0 + 20000);
+    EXPECT_TRUE(sh.filter().params().lever_on);
+    s.time_us += 10000;
+    s.flags = gnss_raw::kShadowLevel;                     // landed, on the ground
+    sh.onImu(s, kT0 + 30000);
+    EXPECT_EQ(sh.stats().antenna_pending, 0);
+    EXPECT_FALSE(sh.filter().params().lever_on);
+    for (int i = 0; i < 3; ++i)
+        EXPECT_EQ(sh.filter().params().lever_b_m[i], 0.0);
+    EXPECT_EQ(sh.filter().params().lever_att_mode, gnss_raw::kLeverAttOff);
+    EXPECT_EQ(sh.stats().antenna_sets, 2u);
+}
+
+namespace
+{
+
+// The image's flight with no magnetometer heading at launch (the V9's), the
+// offset known this far up the nose (0: unknown), and settled tracking, as
+// minutes on a pad leave it (TheLeverRollReadsARollAboutTheNoseFromTheChangeCheck:
+// the builder's relock term would leave the change check's fit a 1 m/s 1-sigma)
+RawGnssShadow::Config unsetCfg(double axial_m)
+{
+    RawGnssShadow::Config c = safeguardsCfg();
+    c.meas.rr_relock_sigma = 0.0;
+    if (axial_m > 0.0)
+    {
+        gnss_raw::AntennaOffset a;
+        a.known = true;
+        a.b_m[0] = axial_m;
+        gnss_raw::applyAntennaOffset(a, c);
+    }
+    return c;
+}
+
+// A swing from `from` for secs: the rate about body y a 2 Hz sine of rps at its peak (0.6 rad/s, a coast
+// weathercocking: up to 0.75 rad/s in an epoch's 0.1 s; 5, a drogue-like swing); the antenna r up the nose, the
+// pad's heading hdg off
+TenFlight swing(double rps, double from, double secs, double r, double hdg)
+{
+    TenFlight fl;
+    fl.wc_t = from;
+    fl.wc_s = secs;
+    fl.wc_rps = rps;
+    fl.lever_m = r;
+    fl.seed_heading_err_deg = hdg;
+    return fl;
+}
+
+// the change check's failed epochs closed from t0 up to t1
+uint32_t dvFailsBetween(const TenRun& r, double t0, double t1)
+{
+    uint32_t a = 0, b = 0;
+    for (const ClosedEpoch& c : r.eps)
+    {
+        if (c.t < t0 - 1e-6)
+            a = c.dv_epoch_fails;
+        if (c.t < t1 + 1e-6)
+            b = c.dv_epoch_fails;
+    }
+    return b - a;
+}
+
+}  // namespace
+
+TEST(RawGnssShadowV9, AKnownAntennaWithTheHeadingUnsetPassesTheChangeCheckThroughASwing)
+{
+    // Known, each end's Dopplers are predicted at the antenna at the
+    // filter's attitude, and with no magnetometer heading the filter's
+    // heading is any distance off: the predicted lever's change turns with
+    // it. 01b9a163 allowed it only the offset's 5 cm of doubt: the
+    // weathercock failed 2 (0.3 m, 60 deg) to 8 (0.5 m, 180 deg) epochs and
+    // the swing 2 to 6 (chi-square up to 505), each latching the Dopplers
+    // out. Now the prediction comes back out of the change and the whole
+    // offset is allowed (DopplerChange.h knownLeverArm): none fails, as none
+    // does unknown.
+    for (double hdg : {60.0, 180.0})
+        for (double r : {0.3, 0.5})
+        {
+            SCOPED_TRACE(testing::Message() << r << " m, " << hdg << " deg");
+            const TenRun wc = flyTen(unsetCfg(r), swing(0.6, 6.5, 1.0, r, hdg));
+            const TenRun dr = flyTen(unsetCfg(r), swing(5.0, 7.0, 0.5, r, hdg));
+            EXPECT_EQ(wc.st.dv_hdg_unset, 1);
+            EXPECT_GT(wc.st.dv_checks, 50u);
+            EXPECT_EQ(wc.st.dv_epoch_fails, 0u);
+            EXPECT_EQ(wc.st.dv_latches, 0u);
+            EXPECT_GT(dr.st.dv_checks, 50u);
+            EXPECT_EQ(dr.st.dv_epoch_fails, 0u);
+            EXPECT_EQ(dr.st.dv_latches, 0u);
+            if (hdg == 60.0)
+            {
+                EXPECT_EQ(flyTen(unsetCfg(0.0), swing(0.6, 6.5, 1.0, r, hdg)).st.dv_epoch_fails, 0u);
+                EXPECT_EQ(flyTen(unsetCfg(0.0), swing(5.0, 7.0, 0.5, r, hdg)).st.dv_epoch_fails, 0u);
+            }
+        }
+}
+
+TEST(RawGnssShadowV9, AKnownAntennaWithTheHeadingUnsetStillCatchesAStaleOrRampingReceiver)
+{
+    // The same allowance does not hide a receiver gone wrong through the
+    // swing. The whole receiver stale through the boost and closing on the
+    // truth from burnout (tau 1 s) while the coast weathercocks from burnout:
+    // every epoch of the weathercock and the half second after fails, as
+    // unknown. Every Doppler ramping 2 m/s a second down from 6.6 s, held at
+    // 2 m/s, through the weathercock from 6.5 s: unknown fails 6 (0.3 m) and
+    // 7 (0.5 m) epochs from 6.5 to 8 s, known 6 and 4 (the larger offset's
+    // allowance the wider). The 0.5 m case's count sits near the 4-sigma
+    // line: CI's Linux runner, whose math library rounds differently from
+    // macOS's, fails 2 of them; what the test holds it to is that the ramp
+    // fails at least one epoch and its Dopplers are held.
+    struct Case
+    {
+        double r, hdg;
+        uint32_t ramp_min;
+    };
+    for (const Case& c : {Case{0.3, 60.0, 5u}, Case{0.5, 180.0, 1u}})
+    {
+        SCOPED_TRACE(testing::Message() << c.r << " m, " << c.hdg << " deg");
+        TenFlight st = swing(0.6, kBurnout, 1.0, c.r, c.hdg);
+        st.stale_tau = 1.0;
+        const TenRun kn = flyTen(unsetCfg(c.r), st), unk = flyTen(unsetCfg(0.0), st);
+        EXPECT_GE(dvFailsBetween(kn, kBurnout, kBurnout + 1.5), 15u);
+        EXPECT_EQ(dvFailsBetween(kn, kBurnout, kBurnout + 1.5), dvFailsBetween(unk, kBurnout, kBurnout + 1.5));
+        EXPECT_GT(kn.st.dv_held_epochs, 0u);
+        TenFlight rp = swing(0.6, 6.5, 1.0, c.r, c.hdg);
+        rp.coh_from = 6.6;
+        rp.coh_rate = 2.0;
+        rp.coh_max = 2.0;
+        const TenRun kr = flyTen(unsetCfg(c.r), rp), ur = flyTen(unsetCfg(0.0), rp);
+        EXPECT_GE(dvFailsBetween(kr, 6.5, 8.0), c.ramp_min);
+        EXPECT_GE(dvFailsBetween(ur, 6.5, 8.0), 5u);
+        EXPECT_GT(kr.st.dv_held_epochs, 0u);
+    }
+}
+
+namespace
+{
+
+// the epoch that let the change check's first latch go (none: nullptr)
+const ClosedEpoch* firstRelease(const TenRun& r)
+{
+    for (const ClosedEpoch& c : r.eps)
+        if (c.dv_latch_releases > 0)
+            return &c;
+    return nullptr;
+}
+
+}  // namespace
+
+TEST(RawGnssShadowV9, AKnownAntennaWithTheHeadingUnsetLetsTheLatchGoAtUnknownsLevel)
+{
+    // The latch's level test fits the epoch's Dopplers as they stand, each
+    // less its prediction: known, at the antenna, the lever's velocity at the
+    // filter's attitude in it. With no magnetometer heading that attitude's
+    // heading is any distance off, and a swing's predicted lever velocity
+    // turns with it: 180 deg off, the level is the swing across the nose
+    // twice over where unknown's is once. Now the prediction goes back on the
+    // fitted offset, as on the epoch test's change (knownLeverArm), and the
+    // latch lets go where unknown's does. An epoch 40 m/s off vertically
+    // latches at 7.0 s (its change in, and out at 7.1); the coast pitches at
+    // 3 rad/s from 7.15 s, 0.3 s out and back, the antenna 0.3 m up the nose
+    // (0.9 m/s), the pad's heading 180 deg off. Unknown lets go at 7.2 s, its
+    // level's chi-square 11.2 against dv_latch_k's 25; known now at the same
+    // epoch and level. Before (a0ca93cf), known's was 42.6 there and 29.9 at
+    // 7.3 s, and the latch held to 7.4.
+    TenFlight fl;
+    fl.bad_vertical_t = 7.0;
+    fl.turn_t = 7.15;
+    fl.turn_s = 0.3;
+    fl.turn_rps = 3.0;
+    fl.turn_axis = 1;
+    fl.lever_m = 0.3;
+    fl.seed_heading_err_deg = 180.0;
+    fl.t_end = 9.0;
+    const TenRun unk = flyTen(unsetCfg(0.0), fl), kn = flyTen(unsetCfg(0.3), fl);
+    EXPECT_EQ(kn.st.dv_hdg_unset, 1);
+    ASSERT_EQ(unk.st.dv_latches, 1u);
+    ASSERT_EQ(kn.st.dv_latches, 1u);
+    const ClosedEpoch* ru = firstRelease(unk);
+    const ClosedEpoch* rk = firstRelease(kn);
+    ASSERT_NE(ru, nullptr);
+    ASSERT_NE(rk, nullptr);
+    EXPECT_GT(ru->t, fl.turn_t);                          // let go in the swing
+    EXPECT_LT(ru->t, fl.turn_t + 2.0 * fl.turn_s);
+    EXPECT_GT(ru->dv_level_chi2, 4.0f);                   //   the swing in its level
+    EXPECT_NEAR(rk->t, ru->t, 1e-6);
+    EXPECT_EQ(kn.st.dv_latch_epochs, unk.st.dv_latch_epochs);
+    EXPECT_NEAR(rk->dv_level_chi2, ru->dv_level_chi2, 0.02f * ru->dv_level_chi2);
+}
+
+TEST(RawGnssShadowV9, AKnownAntennaWithTheHeadingUnsetAllowsTheSwingsDopplersWhatAnyHeadingDoes)
+{
+    // The latch lets go at unknown's level (above), so the swing's Dopplers
+    // reach the update, each still predicted with the lever's velocity at the
+    // filter's heading: 180 deg off, the swing across the nose the wrong way,
+    // 3 m/s off at 5 rad/s with 0.3 m, where the offset's doubt allowed 0.35.
+    // An epoch 40 m/s off vertically latches at 7.0 s; the coast pitches at
+    // 5 rad/s from 7.1 s, 0.3 s out and back. Before (697808d3) the update
+    // took the swing's Dopplers and the velocity went 5.5 m/s off by 12 s,
+    // and the latch, latched again, held the good Dopplers out against it (49
+    // epochs); unknown's stayed within 0.31 m/s (8 epochs). Now each Doppler
+    // also allows what any heading does to the predicted swing (leverUnsetM:
+    // twice the offset along the nose, 3.35 m/s here): 0.16 m/s and 8 epochs.
+    // That allowance starts where the bounds do (rot_lever_min_rps, 2 rad/s
+    // across the nose): a 1.5 rad/s turn takes the doubt's 0.105 m/s only, a
+    // 2.5 rad/s one 0.175 and 1.5 for the heading.
+    TenFlight fl;
+    fl.bad_vertical_t = 7.0;
+    fl.turn_t = 7.1;
+    fl.turn_s = 0.3;
+    fl.turn_rps = 5.0;
+    fl.turn_axis = 1;
+    fl.lever_m = 0.3;
+    fl.seed_heading_err_deg = 180.0;
+    fl.t_end = 12.0;
+    const TenRun unk = flyTen(unsetCfg(0.0), fl), kn = flyTen(unsetCfg(0.3), fl);
+    EXPECT_EQ(kn.st.dv_hdg_unset, 1);
+    EXPECT_NEAR(kn.st.rot_max_sigma_mps, 3.35f, 0.02f);
+    EXPECT_GT(unk.st.dv_latch_epochs, 0u);
+    EXPECT_LE(kn.vel_err_max_mps, unk.vel_err_max_mps + 0.5);
+    EXPECT_LE(kn.st.dv_latch_epochs, unk.st.dv_latch_epochs + 3u);
+    EXPECT_NEAR(flyTen(unsetCfg(0.3), turningCoast(1.5, 1, 0.3)).st.rot_max_sigma_mps, 0.105f, 0.005f);
+    EXPECT_NEAR(flyTen(unsetCfg(0.3), turningCoast(2.5, 1, 0.3)).st.rot_max_sigma_mps, 1.675f, 0.01f);
+}
+
+TEST(RawGnssShadowV9, AKnownAntennaWithTheMagnetometersHeadingKeepsTheLatchsLevelAsFitted)
+{
+    // With the launch's heading the magnetometer's, the lever's velocity
+    // predicted at the filter's attitude is the antenna's own: the latch's
+    // level is the fit's offset as it stands (no v_lev put back), and the
+    // Dopplers allow only the offset's doubt (no leverUnsetM). So where a
+    // swing holds unknown's latch on (its level the swing's 1.5 m/s), known's
+    // lets go. An epoch 40 m/s off vertically latches at 7.0 s; the coast
+    // pitches at 5 rad/s from 7.15 s, 0.3 s out and back, the antenna 0.3 m
+    // up the nose, a calibrated magnetometer on the pad. Unknown's level is
+    // 26.7 to 31.1 against dv_latch_k's 25 to 7.5 s, and it lets go at 7.6
+    // (19.5); known at 7.3 (0.1). With v_lev put back here too, known held to
+    // 7.6 at unknown's level.
+    TenFlight fl;
+    fl.bad_vertical_t = 7.0;
+    fl.turn_t = 7.15;
+    fl.turn_s = 0.3;
+    fl.turn_rps = 5.0;
+    fl.turn_axis = 1;
+    fl.lever_m = 0.3;
+    fl.mag_on_pad = true;
+    fl.t_end = 9.0;
+    const TenRun unk = flyTen(unsetCfg(0.0), fl), kn = flyTen(unsetCfg(0.3), fl);
+    EXPECT_EQ(unk.st.dv_hdg_unset, 0);
+    EXPECT_EQ(kn.st.dv_hdg_unset, 0);
+    EXPECT_NEAR(kn.st.rot_max_sigma_mps, 0.35f, 0.01f);
+    const ClosedEpoch* ru = firstRelease(unk);
+    const ClosedEpoch* rk = firstRelease(kn);
+    ASSERT_NE(ru, nullptr);
+    ASSERT_NE(rk, nullptr);
+    EXPECT_GT(ru->dv_level_chi2, 4.0f);
+    EXPECT_LT(rk->dv_level_chi2, 1.0f);
+    EXPECT_LT(rk->t, ru->t - 0.15);
 }

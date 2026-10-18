@@ -506,6 +506,8 @@ void RawGnssEKF<T>::propagate(const T acc[3], const T gyro[3], T dt)
             hdg_open_t_ = t_;
     }
     pushHistory(dt, a_ned_);
+    if (p_.lever_on)
+        pushLever(w);
     // the carrier's noise grows with the roll rate (body x, the nose): its
     // mean size until the next screen
     if (p_.cr_mode != kCarrierOff)
@@ -1382,6 +1384,10 @@ void RawGnssEKF<T>::updateGnssRawPart(const RawMeas* m, int i0, int i1, double a
     T dp_e[3], dv_e[3], dp_l[3], dv_l[3];
     historyChange(age_s, dv_e, dp_e);
     historyChange(age_s + tau, dv_l, dp_l);
+    // lever_on: the antenna, not the IMU, at the epoch and the Doppler's instant
+    LeverEpoch lv;
+    if (p_.lever_on)
+        leverBack(age_s, tau, dp_e, dv_e, dv_l, lv);
 
     const T att = attGate();
     T vert[3];                            // the vertical in the body frame (att_gate_vertical)
@@ -1446,8 +1452,8 @@ void RawGnssEKF<T>::updateGnssRawPart(const RawMeas* m, int i0, int i1, double a
                 pred_rate = tau > 0.0 ? Lr.rate - tau * satRangeAccel(mi, Lr, v_l) : Lr.rate;
             }
 
-            int hidx[9];
-            T hval[9];
+            int hidx[10];
+            T hval[10];
             int hn = 0;
             T y, R;
             const double dt_i = t_ - last_upd_[mi.sys][mi.prn][kind];
@@ -1493,6 +1499,8 @@ void RawGnssEKF<T>::updateGnssRawPart(const RawMeas* m, int i0, int i1, double a
                 y = T(mi.rr - (pred_rate + static_cast<double>(clk_d_)));
                 const double s_r = static_cast<double>(mi.sigma_rr);
                 R = T(s_r * s_r * corrInflation(dt_i, static_cast<double>(mi.tau_rr)));
+                if (p_.lever_on)
+                    hn = leverRows(u_ned, lv, hidx, hval, hn, R);
             }
 
             uint8_t& rej = rejects_[mi.sys][mi.prn][kind];

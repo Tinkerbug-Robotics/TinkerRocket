@@ -1,8 +1,11 @@
 // TR_RawGnssCarrier.cpp — TR_RawGnssEKF's carrier range rate (see
 // TR_RawGnssEKF.h): the screen, the fusion with the epoch's common rate, the
 // epoch's close, and the integration's excess back-dated; the boost screen's
-// gate (screenRangeRates); the Doppler change check's rows (dopplerChange)
-// and the heading share (hdgObsScaleNow). Once an epoch, so apart from the
+// gate (screenRangeRates); the Doppler change check's rows (dopplerChange),
+// the heading share (hdgObsScaleNow) and the antenna's offset where it is
+// known (lever_on: its history, its back-dating, its rows -- the history's
+// one write a step, pushLever, is the exception to what follows; the Beetle
+// never turns it on). Once an epoch, so apart from the
 // filter's per-step code: on the Beetle this file stays in flash where the
 // rest of the filter runs from internal RAM (raw_gnss_iram.lf), 11 kB less of
 // it. Its per-step part -- the receiver snapshots that every correction moves
@@ -43,6 +46,18 @@ using ekf_geom::corrInflation;
 using ekf_geom::backDate;
 
 constexpr double kNever = -1.0e9;   // no boost yet (TR_RawGnssEKF.cpp's kNever)
+
+// body -> NED from the filter's q (scalar first; TR_RawGnssEKF.cpp's quat2dcm
+// is NED -> body, this its transpose)
+template <typename T>
+void bodyToNed(const T q[4], T C[3][3])
+{
+    const T w = q[0], x = q[1], y = q[2], z = q[3];
+    const T one = T(1), two = T(2);
+    C[0][0] = one - two * (y * y + z * z); C[1][0] = two * (x * y + w * z);       C[2][0] = two * (x * z - w * y);
+    C[0][1] = two * (x * y - w * z);       C[1][1] = one - two * (x * x + z * z); C[2][1] = two * (y * z + w * x);
+    C[0][2] = two * (x * z + w * y);       C[1][2] = two * (y * z - w * x);       C[2][2] = one - two * (x * x + y * y);
+}
 
 }  // namespace
 
@@ -668,6 +683,10 @@ void RawGnssEKF<T>::screenRangeRates(const RawMeas* m, int n, double age_s, RawG
     T dp_e[3], dv_e[3], dp_l[3], dv_l[3];
     historyChange(age_s, dv_e, dp_e);
     historyChange(age_s + tau, dv_l, dp_l);
+    // lever_on: the antenna's, as the update predicts them
+    LeverEpoch lv;
+    if (p_.lever_on)
+        leverBack(age_s, tau, dp_e, dv_e, dv_l, lv);
     double r[3], v[3], Tm[3][3], r_e[3], v_e[3];
     receiverState(r, v, Tm);
     backDate(r, v, Tm, dp_e, dv_e, r_e, v_e);
@@ -694,8 +713,8 @@ void RawGnssEKF<T>::screenRangeRates(const RawMeas* m, int n, double age_s, RawG
         for (int a = 0; a < 3; ++a)
             Lr.rate += L.u[a] * (L.vs[a] - v_l[a]);
         const double pred_rate = tau > 0.0 ? Lr.rate - tau * satRangeAccel(mi, Lr, v_l) : Lr.rate;
-        int hidx[4];
-        T hval[4];
+        int hidx[10];
+        T hval[10];
         int hn = 0;
         for (int a = 0; a < 3; ++a)
         {
@@ -705,6 +724,10 @@ void RawGnssEKF<T>::screenRangeRates(const RawMeas* m, int n, double age_s, RawG
         hidx[hn] = kClkDrift;
         hval[hn++] = T(1);
         const T y = T(mi.rr - (pred_rate + static_cast<double>(clk_d_)));
+        // lever_on: the update's lever terms, fused or considered (R below takes them)
+        T r_lev = T(0);
+        if (p_.lever_on)
+            hn = leverRows(u_ned, lv, hidx, hval, hn, r_lev);
         if (nfit < RawEpoch::kMaxObs)
         {
             for (int a = 0; a < 3; ++a)
@@ -716,7 +739,7 @@ void RawGnssEKF<T>::screenRangeRates(const RawMeas* m, int n, double age_s, RawG
         }
         const double s_r = static_cast<double>(mi.sigma_rr);
         const double dt_i = t_ - last_upd_[mi.sys][mi.prn][1];
-        const T R = T(s_r * s_r * corrInflation(dt_i, static_cast<double>(mi.tau_rr)));
+        const T R = T(s_r * s_r * corrInflation(dt_i, static_cast<double>(mi.tau_rr))) + r_lev;
         st.screen_rr++;
         if (rejects_[mi.sys][mi.prn][1] >= rejectPersist(1))
             continue;                     // the update lets it in, whatever its innovation
@@ -868,6 +891,20 @@ int RawGnssEKF<T>::dopplerChange(const RawMeas* m, int n, double age_s, const Do
     for (int a = 0; a < 3; ++a)
         v_now[a] = static_cast<double>(v_[a]) - static_cast<double>(dv[a]);
     const double t_now = t_ - age_s - tau;
+    // lever_on: the antenna's velocity against the IMU at this end, in every
+    // prediction here (ref's has its own end's in its y), so the change is
+    // the antenna's: the IMU's change and the lever's
+    double v_lev[3] = {0.0, 0.0, 0.0};
+    if (p_.lever_on)
+    {
+        T pl[3], vl[3];
+        leverAt(age_s + tau, pl, vl);
+        for (int a = 0; a < 3; ++a)
+        {
+            v_lev[a] = static_cast<double>(vl[a]);
+            imu.v_lev[a] = static_cast<float>(vl[a]);
+        }
+    }
     // ref's velocity carried to this end by the IMU alone
     double v_imu[3] = {0.0, 0.0, 0.0};
     if (ref.valid && ref.n > 0)
@@ -908,8 +945,15 @@ int RawGnssEKF<T>::dopplerChange(const RawMeas* m, int n, double age_s, const Do
         double us = 0.0;
         for (int a = 0; a < 3; ++a)
             us += L.u[a] * L.vs[a];
-        auto pred = [&](const double vn[3]) {
-            double ve[3];
+        auto pred = [&](const double vi[3]) {
+            double ve[3], va[3];
+            const double* vn = vi;
+            if (p_.lever_on)
+            {
+                for (int a = 0; a < 3; ++a)
+                    va[a] = vi[a] + v_lev[a];   // the antenna's
+                vn = va;
+            }
             for (int a = 0; a < 3; ++a)
                 ve[a] = Tm[0][a] * vn[0] + Tm[1][a] * vn[1] + Tm[2][a] * vn[2];
             Los Lr = L;
@@ -1001,6 +1045,198 @@ T RawGnssEKF<T>::hdgObsScaleNow(double age_s) const
     return T(s < 1.0 ? s : 1.0);
 }
 
+// The antenna's offset (TR_RawGnssEKF.h lever_on): set where the owner's
+// setting changes, on the ground. Here, in flash, with the rest of the lever's
+// code: the Beetle never turns it on, and its per-step code in internal RAM
+// keeps only the calls.
+template <typename T>
+void RawGnssEKF<T>::setLever(bool on, const double b_m[3], uint8_t att_mode)
+{
+    p_.lever_on = on;
+    for (int i = 0; i < 3; ++i)
+        p_.lever_b_m[i] = on ? b_m[i] : 0.0;
+    p_.lever_att_mode = on ? att_mode : static_cast<uint8_t>(kLeverAttOff);
+}
+
+// Each step's antenna, into the history entry the step went into (the newest:
+// pushHistory either opened it or added the step to it). The body's rate is
+// the step's (the gyro less its bias, its mean over the step), the attitude
+// the step's end.
+template <typename T>
+void RawGnssEKF<T>::pushLever(const T w_b[3])
+{
+    T C[3][3];
+    bodyToNed(q_, C);
+    const T r[3] = {T(p_.lever_b_m[0]), T(p_.lever_b_m[1]), T(p_.lever_b_m[2])};
+    const T wr[3] = {w_b[1] * r[2] - w_b[2] * r[1], w_b[2] * r[0] - w_b[0] * r[2], w_b[0] * r[1] - w_b[1] * r[0]};
+    T* e = lev_[(hhead_ + kHist - 1) % kHist];
+    for (int i = 0; i < 3; ++i)
+    {
+        e[i] = C[i][0] * r[0] + C[i][1] * r[1] + C[i][2] * r[2];
+        e[3 + i] = C[i][0] * wr[0] + C[i][1] * wr[1] + C[i][2] * wr[2];
+    }
+    for (int i = 0; i < 4; ++i)
+        e[6 + i] = q_[i];
+}
+
+template <typename T>
+void RawGnssEKF<T>::leverAt(double age_s, T p_ned[3], T v_ned[3], T nose_ned[3], T q_ned[4]) const
+{
+    T qs[4];
+    T* q = q_ned != nullptr ? q_ned : qs;
+    for (int i = 0; i < 3; ++i)
+        p_ned[i] = v_ned[i] = T(0);
+    for (int i = 0; i < 4; ++i)
+        q[i] = T(0);
+    if (p_.lever_on && hn_ < 1)
+    {
+        // no history yet: where the antenna sits now, not moving
+        T C[3][3];
+        bodyToNed(q_, C);
+        for (int i = 0; i < 3; ++i)
+            p_ned[i] = T(C[i][0] * T(p_.lever_b_m[0]) + C[i][1] * T(p_.lever_b_m[1]) + C[i][2] * T(p_.lever_b_m[2]));
+        for (int i = 0; i < 4; ++i)
+            q[i] = q_[i];
+    }
+    else if (p_.lever_on)
+    {
+        auto slot = [&](int k) { return (hhead_ + kHist - hn_ + k) % kHist; };
+        const double t0 = t_ - (age_s > 0.0 ? age_s : 0.0);
+        // the newest entry ending at or before t0 is k - 1, the one after it k
+        int k = hn_ - 1;
+        while (k > 0 && hist_[slot(k - 1)].t >= t0)
+            --k;
+        const T* b = lev_[slot(k)];
+        if (k == 0 || hist_[slot(k)].t <= t0)
+        {
+            // before the oldest entry's end, or after the newest's: that entry's
+            for (int i = 0; i < 3; ++i)
+            {
+                p_ned[i] = b[i];
+                v_ned[i] = b[3 + i];
+            }
+            for (int i = 0; i < 4; ++i)
+                q[i] = b[6 + i];
+        }
+        else
+        {
+            const T* a = lev_[slot(k - 1)];
+            const double ta = hist_[slot(k - 1)].t, tb = hist_[slot(k)].t;
+            const T w = tb > ta ? T((t0 - ta) / (tb - ta)) : T(1);
+            for (int i = 0; i < 3; ++i)
+            {
+                p_ned[i] = a[i] + w * (b[i] - a[i]);
+                v_ned[i] = a[3 + i] + w * (b[3 + i] - a[3 + i]);
+            }
+            // the attitude: the two entries' quaternions on one side (q and -q are one attitude), their
+            // weighted mean normalized -- a step apart, within 4 urad of the arc at 10 rad/s and 10 ms
+            const T* qa = a + 6;
+            const T* qb = b + 6;
+            const T sb = qa[0] * qb[0] + qa[1] * qb[1] + qa[2] * qb[2] + qa[3] * qb[3] < T(0) ? T(-1) : T(1);
+            T n2 = T(0);
+            for (int i = 0; i < 4; ++i)
+            {
+                q[i] = qa[i] + w * (sb * qb[i] - qa[i]);
+                n2 += q[i] * q[i];
+            }
+            if (n2 > T(0))
+            {
+                const T s = T(1) / std::sqrt(n2);
+                for (int i = 0; i < 4; ++i)
+                    q[i] *= s;
+            }
+        }
+    }
+    if (nose_ned != nullptr)
+    {
+        // body x, NED: C(q)'s first column in its homogeneous form, so none where there is no attitude (the
+        // lever off, or an entry from before it was on)
+        nose_ned[0] = q[0] * q[0] + q[1] * q[1] - q[2] * q[2] - q[3] * q[3];
+        nose_ned[1] = T(2) * (q[1] * q[2] + q[0] * q[3]);
+        nose_ned[2] = T(2) * (q[1] * q[3] - q[0] * q[2]);
+    }
+}
+
+// The history's change from the epoch (dp_e, dv_e) and from the Doppler's
+// instant (dv_l) is the IMU's; less the antenna's offset and velocity there,
+// back-dating takes the receiver to the antenna: r_e = r - (dp_e - p_lev),
+// v = v_now - (dv - v_lev). The Doppler's instant's offset and attitude are
+// leverRows'.
+template <typename T>
+void RawGnssEKF<T>::leverBack(double age_s, double tau, T dp_e[3], T dv_e[3], T dv_l[3], LeverEpoch& lv) const
+{
+    T q_l[4];
+    leverAt(age_s, lv.p_e, lv.v_e, nullptr, q_l);
+    if (tau > 0.0)
+    {
+        leverAt(age_s + tau, lv.p_l, lv.v_l, nullptr, q_l);
+    }
+    else
+    {
+        for (int i = 0; i < 3; ++i)
+        {
+            lv.p_l[i] = lv.p_e[i];
+            lv.v_l[i] = lv.v_e[i];
+        }
+    }
+    bodyToNed(q_l, lv.C_l);
+    for (int i = 0; i < 3; ++i)
+    {
+        dp_e[i] -= lv.p_e[i];
+        dv_e[i] -= lv.v_e[i];
+        dv_l[i] -= lv.v_l[i];
+    }
+}
+
+template <typename T>
+int RawGnssEKF<T>::leverRows(const T u_ned[3], const LeverEpoch& lv, int* hidx, T* hval, int hn, T& R) const
+{
+    T C[3][3];
+    bodyToNed(q_, C);
+    const T* v = lv.v_l;
+    const T* p = lv.p_l;
+    const T (&Cl)[3][3] = lv.C_l;
+    // u x v and u x p, NED
+    const T uv[3] = {u_ned[1] * v[2] - u_ned[2] * v[1], u_ned[2] * v[0] - u_ned[0] * v[2],
+                     u_ned[0] * v[1] - u_ned[1] * v[0]};
+    const T up[3] = {u_ned[1] * p[2] - u_ned[2] * p[1], u_ned[2] * p[0] - u_ned[0] * p[2],
+                     u_ned[0] * p[1] - u_ned[1] * p[0]};
+    // the attitude's (the state a half-angle, in the body now: a rotation 2a turns the antenna's velocity
+    // by 2 a x v in the body, C (2 a x (w x r)) = -2 [v x] C a -- an error turns NED alike then and now --
+    // which the range rate sees as +2 (u x v)' C a), and the gyro bias's (a bias db turns the rate the
+    // body had at the Doppler's instant by -db, in the body as it stood then: C_l (-db x r) = [p x] C_l db,
+    // seen as -(u x p)' C_l db; C now would be off by the body's turn since, 89 deg at 10 rad/s and 0.155 s)
+    T h[6];
+    for (int j = 0; j < 3; ++j)
+    {
+        h[j] = T(2) * (uv[0] * C[0][j] + uv[1] * C[1][j] + uv[2] * C[2][j]);
+        h[3 + j] = -(up[0] * Cl[0][j] + up[1] * Cl[1][j] + up[2] * Cl[2][j]);
+    }
+    if (p_.lever_att_mode == kLeverAttFuse)
+    {
+        for (int j = 0; j < 3; ++j)
+        {
+            hidx[hn] = kAtt + j;
+            hval[hn++] = h[j];
+        }
+        for (int j = 0; j < 3; ++j)
+        {
+            hidx[hn] = kGyroBias + j;
+            hval[hn++] = h[3 + j];
+        }
+        return hn;
+    }
+    // considered: h P h' over the attitude and gyro bias (their cross-covariances in), onto R
+    const int idx[6] = {kAtt, kAtt + 1, kAtt + 2, kGyroBias, kGyroBias + 1, kGyroBias + 2};
+    T hph6 = T(0);
+    for (int a = 0; a < 6; ++a)
+        for (int b = 0; b < 6; ++b)
+            hph6 += h[a] * P_[idx[a]][idx[b]] * h[b];
+    if (hph6 > T(0))
+        R += hph6;
+    return hn;
+}
+
 // Each member here, for both scalars (TR_RawGnssEKF.cpp instantiates the rest).
 #define TR_RAW_GNSS_CARRIER_INSTANTIATE(T)                                                                        \
     template void RawGnssEKF<T>::crSnapshot(double, const T[3]);                                                 \
@@ -1020,7 +1256,12 @@ T RawGnssEKF<T>::hdgObsScaleNow(double age_s) const
                                              int&, int&);                                                       \
     template int RawGnssEKF<T>::dopplerChange(const RawMeas*, int, double, const DopplerRef&, DopplerRef&,         \
                                               dvc::Row*, DopplerChangeImu&) const;                              \
-    template T RawGnssEKF<T>::hdgObsScaleNow(double) const;
+    template T RawGnssEKF<T>::hdgObsScaleNow(double) const;                                                     \
+    template void RawGnssEKF<T>::setLever(bool, const double[3], uint8_t);                                       \
+    template void RawGnssEKF<T>::pushLever(const T[3]);                                                          \
+    template void RawGnssEKF<T>::leverAt(double, T[3], T[3], T[3], T[4]) const;                                  \
+    template void RawGnssEKF<T>::leverBack(double, double, T[3], T[3], T[3], LeverEpoch&) const;                 \
+    template int RawGnssEKF<T>::leverRows(const T[3], const LeverEpoch&, int*, T*, int, T&) const;
 TR_RAW_GNSS_CARRIER_INSTANTIATE(float)
 TR_RAW_GNSS_CARRIER_INSTANTIATE(double)
 #undef TR_RAW_GNSS_CARRIER_INSTANTIATE

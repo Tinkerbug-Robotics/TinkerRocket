@@ -1077,6 +1077,10 @@ void buildCommands(Builder& b) {
           Json().u("cmd", 79).u("setting", GNSS_LOG_REDUCED).done(),
           "GnssLogConfigData; 0 detailed, 1 reduced");
 
+    b.add("commands", "cmd81_antenna_7.bin", cmd(81, bytesOf(AntennaOffsetConfigData{1, 312, -25, 4})),
+          Json().u("cmd", 81).u("known", 1).i("x_mm", 312).i("y_mm", -25).i("z_mm", 4).done(),
+          "AntennaOffsetConfigData; known 0 unknown (all 0), 1 measured: board-frame mm, each within +-2000");
+
     {
         // Pad calibration (#1600 phase 5): 2026-10-13's GPS broadcast
         // ionosphere (NOAA brdc2860.26n) and its file's GPS day.
