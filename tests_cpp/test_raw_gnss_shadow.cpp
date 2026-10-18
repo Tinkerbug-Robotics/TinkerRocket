@@ -4452,6 +4452,7 @@ struct SpinOpts
                                 // on the second wavelength)
     uint8_t dv_check = 0;       // RawGnssShadow::kDv*
     uint8_t dv_lever_mode = 0;
+    double dv_lever_radial_m = 0.0;
     double sigma_rr = 0.05;     // the sky's Doppler noise
 };
 
@@ -4490,6 +4491,7 @@ SpinRun flySpin(const SpinOpts& o, double t_end = 12.0)
     cfg.windup_monitor = o.monitor;
     cfg.dv_check = o.dv_check;
     cfg.dv_lever_mode = o.dv_lever_mode;
+    cfg.dv_lever_radial_m = o.dv_lever_radial_m;
     if (o.gal_b1i)
         cfg.ekf.cr_carrier_hz[GNSS_SYS_GAL] = 1561.098e6;
     RawGnssShadow sh(cfg);
@@ -4639,15 +4641,19 @@ TEST(RawGnssShadow, TheChangeChecksLeverAllowanceTakesTheNosesTurnNotTheRoll)
 {
     // A roll about the nose does not move an antenna on the nose's axis. The change check's allowance on the whole
     // rate (dv_lever_mode 0) gives 0.3 m x |w|^2 dt: a thousand m/s an epoch at 10 rev/s, nothing left to judge.
-    // On the nose's own turn (1) it is the radial bound's 1 cm at twice its speed: 1.3 m/s.
+    // On the nose's own turn (1) it is what the nose turned (nothing, here: it points up throughout), and with a
+    // radial bound, the bound at twice its speed: 1 cm, 1.3 m/s.
     SpinOpts o;
     o.k_fix = 0.99;
     o.dv_check = RawGnssShadow::kDvObserve;
     const SpinRun whole = flySpin(o);
     o.dv_lever_mode = 1;
     const SpinRun nose = flySpin(o);
+    o.dv_lever_radial_m = 0.01;
+    const SpinRun radial = flySpin(o);
     EXPECT_GE(whole.st.dv_checks, 5u);
     EXPECT_GT(whole.lever_last, 100.0f);
-    EXPECT_LT(nose.lever_last, 1.4f);
-    EXPECT_GT(nose.lever_last, 1.0f);
+    EXPECT_LT(nose.lever_last, 0.05f);
+    EXPECT_LT(radial.lever_last, 1.4f);
+    EXPECT_GT(radial.lever_last, 1.0f);
 }

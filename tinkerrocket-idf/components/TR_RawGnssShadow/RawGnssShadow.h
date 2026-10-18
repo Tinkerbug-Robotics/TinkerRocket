@@ -683,10 +683,14 @@ public:
         // -- the change of the nose's own rate in NED, which a roll about it
         // leaves alone -- and one dv_lever_radial_m across it with the whole
         // rate (its turn capped at twice its speed). At 1 rev/s of roll, 0
-        // allows 1.2 m/s an epoch and a coherent ramp goes through; 1 allows
-        // what the nose's turn and the radial bound do.
+        // allows 1.4 m/s an epoch and a slow coherent ramp goes through (the
+        // windup study: 0 of 192 caught from 1 rev/s on). The radial bound
+        // costs the same way: 1 cm lost them from 5 rev/s, 3 cm from 3. None
+        // (0, the default) caught every one from 0 to 20 rev/s; with the
+        // antenna truly 1 cm off the roll axis it held Dopplers in 1 run of
+        // 48 at 9.5 rev/s, at no attitude cost.
         uint8_t  dv_lever_mode = 0;
-        double   dv_lever_radial_m = 0.01;
+        double   dv_lever_radial_m = 0.0;
     };
 
     // The Doppler change check (Config::dv_check).

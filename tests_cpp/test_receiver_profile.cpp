@@ -844,7 +844,7 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_EQ(c.windup_monitor_k, 0.99);
     EXPECT_EQ(c.windup_monitor_tau_s, 1.0);
     EXPECT_EQ(c.dv_lever_mode, 0);
-    EXPECT_EQ(c.dv_lever_radial_m, 0.01);
+    EXPECT_EQ(c.dv_lever_radial_m, 0.0);
 
     // its EKF's, literally (the profile's part is the LC86G's, above)
     const RawGnssEKFParams& e = c.ekf;
