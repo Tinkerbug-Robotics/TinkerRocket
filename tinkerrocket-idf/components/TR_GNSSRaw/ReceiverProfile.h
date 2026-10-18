@@ -100,6 +100,8 @@ struct GnssReceiverProfile
     double pr_period_s = 0.0;             // the pseudoranges fused once in each this long of GPS time (the
                                           //   Dopplers every epoch)
     int    sat_cap = 0;                   // at most this many satellites built an epoch (0: all)
+    int    sat_cap_max = 0;               //   and the cap governor raises that to at most this while the filter
+                                          //   keeps up (CapGovernor.h); at or under sat_cap: off, the cap fixed
     bool   share_los = false;             // an epoch's geometry taken once and shared by its units, and
     bool   rr_float = false;              //   with it the Doppler's prediction in float (RawGnssEKFParams)
     double reject_persist_s = 0.0;        // a satellite refused this long running is let back in: the EKF's
@@ -125,6 +127,9 @@ struct GnssReceiverProfile
     // the profile's. Off: every receiver.
     bool   rr_pair_avg = false;
     double rr_pair_max_diff_mps = 15.0;   // the pair at most this far apart (300 m/s^2 over 50 ms)
+    double epoch_slice_us = 2500.0;       // the navigation filter works an epoch at most this long a 10 ms step
+                                          //   (RawGnssShadow's epoch_slice_us; main.cpp's primary filter takes it,
+                                          //   not applyReceiverProfile: a shadow works an epoch at once)
 
     // its measurements' noise (RawMeasBuilder): sigma^2 = a^2 + b^2 * 10^(-(C/N0 - 35)/10)
     double pr_white_a = 0.0, pr_white_b = 0.0;   // the pseudorange's white part, m
@@ -226,12 +231,15 @@ inline GnssReceiverProfile lc86gProfile()
     p.fuse_epoch_period_s = 0.0;
     p.pr_period_s = 0.0;
     p.sat_cap = 0;
+    p.sat_cap_max = 0;
     p.reject_persist_s = 0.0;       // the EKF's 3 epochs: 3 s
     p.level_min_dt_s = 0.0;
     p.heading_fit_period_s = 0.0;
     p.rr_dyn_window_s = 0.0;        // the peak since the epoch before: a second
     p.max_epoch_age_s = 0.6;
     p.epoch_job_max_s = 0.3;
+    p.epoch_slice_us = 2500.0;      // existing default (main.cpp's, rig r9: 14 satellites in one pass held the
+                                    //   state 40 ms)
 
     // noise: the PX1105R's C/N0 fit (20 min static, 2026-09-26), the LC86G's
     // scale on it (COCOM rig, 2026-10-12) -- all existing default
@@ -404,6 +412,9 @@ inline GnssReceiverProfile mosaicG5Profile()
 
     // the safeguards that count epochs, in the LC86G's time
     p.sat_cap = 16;                 // plan: the CPU ladder's first rung (the L1 sky peaks at 28)
+    p.sat_cap_max = 0;              // existing default: the cap fixed (CapGovernor, a bench's to try)
+    p.epoch_slice_us = 2500.0;      // existing default: 25 ms of an epoch's work in each 100 ms (open-sky
+                                    //   bench 2026-10-18: 16 satellites closed at 109 ms median, 149 at most)
     p.reject_persist_s = 3.0;       // the LC86G's 3 epochs: the Doppler 30 at 10 Hz, the pseudorange 3
     p.max_epoch_age_s = 0.3;        // plan: 3 epochs at 10 Hz (MeasEpoch reaches the V9 20 ms after its
     p.epoch_job_max_s = 0.2;        //   epoch, p95 26 ms: V9 rig 10/16), 2 to work at once

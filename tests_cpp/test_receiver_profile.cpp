@@ -158,6 +158,7 @@ void expectSameShadowSettings(const RawGnssShadow::Config& a, const RawGnssShado
     EXPECT_EQ(a.rr_dyn_window_s, b.rr_dyn_window_s);
     EXPECT_EQ(a.heading_fit_period_s, b.heading_fit_period_s);
     EXPECT_EQ(a.sat_cap, b.sat_cap);
+    EXPECT_EQ(a.sat_cap_max, b.sat_cap_max);
     EXPECT_EQ(a.level.min_dt_s, b.level.min_dt_s);
     EXPECT_EQ(a.windup_k, b.windup_k);
     EXPECT_EQ(a.windup_monitor, b.windup_monitor);
@@ -196,6 +197,8 @@ void expectSameNumbers(const GnssReceiverProfile& a, const GnssReceiverProfile& 
     EXPECT_EQ(a.build_lite, b.build_lite);
     EXPECT_EQ(a.rr_pair_avg, b.rr_pair_avg);
     EXPECT_EQ(a.rr_pair_max_diff_mps, b.rr_pair_max_diff_mps);
+    EXPECT_EQ(a.epoch_slice_us, b.epoch_slice_us);
+    EXPECT_EQ(a.sat_cap_max, b.sat_cap_max);
     RawGnssShadow::Config sa, sb;
     gnss_raw::applyReceiverProfile(a, sa);
     gnss_raw::applyReceiverProfile(b, sb);
@@ -213,7 +216,7 @@ static_assert(sizeof(void*) != 8 || sizeof(RawMeasBuilder::Config) == 336,
               "RawMeasBuilder::Config changed: add the field to expectSameBuilder, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 32,
               "GnssSignalProfile changed: add the field to expectSameSignal, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 552,
+static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 568,
               "GnssReceiverProfile changed: add the field to expectSameNumbers, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1760,
               "RawGnssShadow::Config changed: pin the field in TheShadowSafeguardDefaultsAreTheBeetles, then update "
@@ -418,6 +421,8 @@ TEST(ReceiverProfile, TheLc86gFusesEveryEpochOnItsOwnCounts)
     EXPECT_EQ(p.rr_dyn_window_s, 0.0);
     EXPECT_EQ(p.max_epoch_age_s, 0.6);
     EXPECT_EQ(p.epoch_job_max_s, 0.3);
+    EXPECT_EQ(p.sat_cap_max, 0);                          // no cap governor
+    EXPECT_EQ(p.epoch_slice_us, 2500.0);                  // main.cpp's slice on the M1 (it keeps its own)
     RawMeasBuilder::Config b;
     gnss_raw::applyReceiverProfile(p, b);
     EXPECT_EQ(b.epoch_period_s, 1.0);                     // its raw epochs' period
@@ -508,6 +513,8 @@ TEST(ReceiverProfile, TheMosaicG5V0Profile)
     EXPECT_EQ(p.cr_half_cycle, lc.cr_half_cycle);
     // the limits
     EXPECT_EQ(p.sat_cap, 16);
+    EXPECT_EQ(p.sat_cap_max, 0);                          // the cap fixed: the governor is a bench's
+    EXPECT_EQ(p.epoch_slice_us, 2500.0);                  // the slice main.cpp set before the profile had it
     EXPECT_EQ(p.reject_persist_s, 3.0);
     EXPECT_EQ(p.max_epoch_age_s, 0.3);
     EXPECT_EQ(p.epoch_job_max_s, 0.2);
@@ -561,6 +568,8 @@ TEST(ReceiverProfile, TheMosaicG5V0Profile)
     EXPECT_EQ(s.rr_dyn_window_s, 1.0);
     EXPECT_EQ(s.heading_fit_period_s, 1.0);
     EXPECT_EQ(s.sat_cap, 16);
+    EXPECT_EQ(s.sat_cap_max, 0);
+    EXPECT_EQ(s.epoch_slice_us, 0.0);                     // the slice is main.cpp's to take, not the apply's
     EXPECT_EQ(s.level.min_dt_s, 0.95);
     EXPECT_EQ(s.meas.epoch_period_s, 0.1);
     EXPECT_EQ(s.ekf.reject_persist_rr, 30);
@@ -907,6 +916,23 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_EQ(c.heading_fit_period_s, 0.0);
     EXPECT_FALSE(c.level_on_fused_epochs);
     EXPECT_EQ(c.sat_cap, 0);
+    EXPECT_EQ(c.sat_cap_max, 0);                          // the cap governor: off
+    const gnss_raw::CapGovernor::Config g;                // its thresholds, its own (the shadow sets the rest)
+    EXPECT_EQ(g.floor, 0);
+    EXPECT_EQ(g.ceiling, 0);
+    EXPECT_EQ(g.hard_age_s, 0.2);
+    EXPECT_EQ(g.cut_frac, 0.8);
+    EXPECT_EQ(g.cut_count, 2);
+    EXPECT_EQ(g.cut_window, 4);
+    EXPECT_EQ(g.cut_step, 2);
+    EXPECT_EQ(g.raise_frac, 0.6);
+    EXPECT_EQ(g.raise_epochs, 10);
+    EXPECT_EQ(g.settle_epochs, 2);
+    EXPECT_EQ(g.backoff_s, 10.0);
+    EXPECT_EQ(g.backoff_max_s, 80.0);
+    EXPECT_EQ(g.boost_hold_s, 2.0);
+    EXPECT_EQ(g.gap_s, 0.15);
+    EXPECT_FALSE(RawGnssShadow(c).capGovernor().on());
     EXPECT_EQ(c.restore_pos_sigma_m, 0.0);
     EXPECT_EQ(c.restore_vel_sigma_mps, 0.0);
     EXPECT_EQ(c.restore_att_sigma_deg, 0.0);

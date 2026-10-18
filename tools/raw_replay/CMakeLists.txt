@@ -28,7 +28,8 @@ endif()
 # the antenna's offset where it is known (fc/v9-antenna-offset), RAW_REPLAY_BUILD_LITE=OFF before the cheaper epoch
 # build (exp/v9-cpu-build; off by itself where the tree has no RawMeasBuilderLite.cpp), RAW_REPLAY_SHARELOS=OFF
 # before the shared epoch geometry (exp/v9-cpu-los), RAW_REPLAY_DOPAVG=OFF before the Dopplers in pairs
-# (exp/v9-dop-avg). DYNMEM and FITGATE are experiments the firmware does not carry: build them against a copy with
+# (exp/v9-dop-avg), RAW_REPLAY_CAPGOV=OFF before the satellite cap's governor and the profile's slice
+# (exp/v9-cap-adapt). DYNMEM and FITGATE are experiments the firmware does not carry: build them against a copy with
 # experiments/*.patch applied (README.md).
 set(SRC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." CACHE PATH "the tree whose firmware sources are compiled")
 option(RAW_REPLAY_OLD "the firmware tree has no receiver profile or carrier (aef947c5)" OFF)
@@ -45,6 +46,7 @@ option(RAW_REPLAY_ANTENNA "the firmware tree has the antenna's offset where it i
 option(RAW_REPLAY_BUILD_LITE "the firmware tree has the cheaper epoch build (RawMeasBuilder::Config::lite, build_lite: exp/v9-cpu-build)" ON)
 option(RAW_REPLAY_SHARELOS "the firmware tree has the shared epoch geometry (share_los, rr_float: exp/v9-cpu-los)" ON)
 option(RAW_REPLAY_DOPAVG "the firmware tree has the Dopplers in pairs (rr_pair_avg, averageDopplerPairs: exp/v9-dop-avg)" ON)
+option(RAW_REPLAY_CAPGOV "the firmware tree has the satellite cap's governor and the profile's slice (sat_cap_max, epoch_slice_us: exp/v9-cap-adapt)" ON)
 if(RAW_REPLAY_OLD AND RAW_REPLAY_MOSAIC)
     message(STATUS "raw_replay: RAW_REPLAY_OLD turns RAW_REPLAY_MOSAIC off")
     set(RAW_REPLAY_MOSAIC OFF)
@@ -67,6 +69,9 @@ if(NOT RAW_REPLAY_ROT AND RAW_REPLAY_ANTENNA)
 endif()
 if(NOT RAW_REPLAY_MOSAIC AND RAW_REPLAY_DOPAVG)
     set(RAW_REPLAY_DOPAVG OFF)
+endif()
+if(NOT RAW_REPLAY_MOSAIC AND RAW_REPLAY_CAPGOV)
+    set(RAW_REPLAY_CAPGOV OFF)
 endif()
 # the mosaic-only image's flight safeguards in one call (gnss_raw::applyMosaicFlightSafeguards, ReceiverProfileApply.h):
 # a tree with all three of the features it sets
@@ -174,6 +179,7 @@ function(raw_replay_target name)
         RAW_REPLAY_ANTENNA=$<BOOL:${RAW_REPLAY_ANTENNA}>
         RAW_REPLAY_BUILD_LITE=$<BOOL:${RAW_REPLAY_BUILD_LITE}>
         RAW_REPLAY_DOPAVG=$<BOOL:${RAW_REPLAY_DOPAVG}>
+        RAW_REPLAY_CAPGOV=$<BOOL:${RAW_REPLAY_CAPGOV}>
         RAW_REPLAY_MOSAIC_SAFEGUARDS=$<BOOL:${RAW_REPLAY_MOSAIC_SAFEGUARDS}>
         RAW_REPLAY_WINDUP=$<BOOL:${RAW_REPLAY_WINDUP}>)
 endfunction()

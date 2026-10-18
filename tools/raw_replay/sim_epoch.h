@@ -223,6 +223,9 @@ inline bool simOffer(gnss_raw::RawGnssMeasStage& st, const SimEpoch& x, const gn
     const TimedRawEpoch* use = &te;
     if (st.cfg_.sat_cap > 0)
     {
+#if defined(RAW_REPLAY_CAPGOV) && RAW_REPLAY_CAPGOV
+        st.useNavCap(nav);   // the filter's cap governor's cap, as offer() takes it
+#endif
         st.capEpoch(te);
         use = &st.sel_;
     }

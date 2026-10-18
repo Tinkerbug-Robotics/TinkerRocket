@@ -157,8 +157,12 @@ endforeach()
 # TR_RawGnssEKF.h share_los, rr_float), and the Dopplers in pairs
 # (TR_BENCH_RAW_DOP_AVG=1: each grid epoch's averaged with the receiver's
 # epoch 50 ms before it, the filter taking the mean 25 ms early;
-# exp/v9-dop-avg). Each sets the filter's start (main.cpp startRawShadow).
-# Never set for flight.
+# exp/v9-dop-avg). And (exp/v9-cap-adapt) the satellite cap that follows the
+# filter's slack, up to TR_BENCH_RAW_CAP_MAX from the cap above (CapGovernor.h;
+# TR_BENCH_RAW_CAP_PAD=1 lets it climb in PRELAUNCH too, which it holds at the
+# floor, to watch the climb under an open sky), and the filter's slice of an
+# epoch's work a step in us (TR_BENCH_RAW_SLICE_US: the profile's 2500). Each
+# sets the filter's start (main.cpp startRawShadow). Never set for flight.
 #
 # These and TR_RAW_GNSS_IRAM below act only where the raw-GNSS filter
 # navigates on the mosaic-G5 (main.cpp's TR_RAW_NAV_MOSAIC): any other build
@@ -171,13 +175,14 @@ endif()
 set(_tr_mosaic_rawnav_hooks TR_BENCH_RAW_START_FAIL TR_BENCH_RESTORE_SIM TR_BENCH_PANIC_AT_S
     TR_BENCH_PANIC_FILTER_AT_S TR_BENCH_RAW_STOP_AT_S)
 foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G TR_BENCH_DV_CHECK TR_BENCH_RAW_BUILD_LITE
-        TR_BENCH_RAW_SHARE_LOS TR_BENCH_RAW_DOP_AVG TR_RAW_GNSS_IRAM ${_tr_mosaic_rawnav_hooks})
+        TR_BENCH_RAW_SHARE_LOS TR_BENCH_RAW_DOP_AVG TR_RAW_GNSS_IRAM TR_BENCH_RAW_CAP_MAX TR_BENCH_RAW_CAP_PAD
+        TR_BENCH_RAW_SLICE_US ${_tr_mosaic_rawnav_hooks})
     if(DEFINED ${_v} AND NOT _tr_mosaic_rawnav)
         message(FATAL_ERROR "${_v} is for the mosaic-only image's raw-GNSS filter (-DTR_GNSS_MOSAIC=1 on a V8 or V9): this build would ignore it. A build dir keeps every -D value: use a fresh one.")
     endif()
 endforeach()
 foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G TR_BENCH_DV_CHECK TR_BENCH_RAW_BUILD_LITE
-        TR_BENCH_RAW_SHARE_LOS TR_BENCH_RAW_DOP_AVG)
+        TR_BENCH_RAW_SHARE_LOS TR_BENCH_RAW_DOP_AVG TR_BENCH_RAW_CAP_MAX TR_BENCH_RAW_CAP_PAD TR_BENCH_RAW_SLICE_US)
     if(DEFINED ${_v})
         add_compile_definitions(${_v}=${${_v}})
         message(STATUS "${_v}=${${_v}} (bench)")
