@@ -87,6 +87,7 @@ image as flown):
 | `--windup-monitor 1` | observe: the roll rate the Dopplers' wind-up implies between wavelengths, against the gyro's |
 | `--att-exact 1` | the covariance's attitude transition exact, exp(-[w x] dt) (`RawGnssEKFParams::att_exact`) |
 | `--dv-lever-mode 1`, `--dv-lever-radial-m X` | the change check's lever allowance on the nose's own turn and a radial bound, not the whole rate |
+| `--clk-drift-psd X` | the clock drift's walk (m^2/s^3) in place of the profile's 100: a tighter clock, which the wind-up correction is a prerequisite for |
 
 The epochs file then also carries each epoch's clock drift, screen and check numbers and the spinning body's
 (`clk_d_mps` .. `att_sig_d_deg`), and the events JSON a `windup` block.

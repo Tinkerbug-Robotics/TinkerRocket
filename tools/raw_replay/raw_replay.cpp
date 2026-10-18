@@ -293,6 +293,8 @@ struct Args
     double windup_k = -1.0;
     int windup_geom = -1, windup_monitor = -1, att_exact = -1, dv_lever_mode = -1;
     double windup_monitor_k = -1.0, dv_lever_radial_m = -1.0;
+    double clk_drift_psd = -1.0;     // RawGnssEKFParams::clk_drift_psd after the profile (-1: the profile's; the
+                                     //   mosaic's and the LC86G's 100 m^2/s^3): an experiment on the clock's walk
     std::set<std::string> given;     // the options on the command line
 };
 
@@ -342,7 +344,7 @@ void usage()
                  "  [--antenna-min-rate X] [--antenna-att-mode 0|1|2]\n"
                  "  the spinning body (a RAW_REPLAY_WINDUP build): [--windup-k K] [--windup-geom 0|1]\n"
                  "  [--windup-monitor 0|1] [--windup-monitor-k K] [--att-exact 0|1] [--dv-lever-mode 0|1]\n"
-                 "  [--dv-lever-radial-m X]\n");
+                 "  [--dv-lever-radial-m X] [--clk-drift-psd X]\n");
 }
 
 bool parseArgs(int argc, char** argv, Args& a)
@@ -529,6 +531,7 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--att-exact") a.att_exact = std::atoi(val());
         else if (k == "--dv-lever-mode") a.dv_lever_mode = std::atoi(val());
         else if (k == "--dv-lever-radial-m") a.dv_lever_radial_m = std::atof(val());
+        else if (k == "--clk-drift-psd") a.clk_drift_psd = std::atof(val());
         else if (k == "--acc-sub")
         {
             if (std::sscanf(val(), "%lf,%lf,%lf", &a.acc_sub[0], &a.acc_sub[1], &a.acc_sub[2]) != 3)
@@ -1935,6 +1938,10 @@ int main(int argc, char** argv)
                              "--rot-lever-axial-m, --rot-lever-radial-m, --rot-lever-min-rate, --att-hold-rate, "
                              "--att-hold-s, --rot-skip-rate, --rot-skip-s and --rot-after-apogee are ignored\n");
 #endif
+    // an experiment on the clock drift's walk (the profile's 100 m^2/s^3 unless given): a tighter clock, which the
+    // carrier wind-up's correction is a prerequisite for
+    if (a.clk_drift_psd >= 0.0)
+        cfg.ekf.clk_drift_psd = a.clk_drift_psd;
     // the spinning body (RawGnssShadow.h): the firmware's unless given (off)
 #if RAW_REPLAY_WINDUP
     if (a.windup_k >= 0.0)
