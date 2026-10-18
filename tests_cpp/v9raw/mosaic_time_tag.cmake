@@ -5,7 +5,9 @@
 # with the rule before (-6855 us at every whole second) and right or untimed
 # with MosaicTimeTag and the PPS line that follows its edges; the ways a
 # receiver may come back, a real sky's dropout, a receiver reset, a late edge
-# and the boot's line; and the rule piece by piece.
+# and the boot's line; the review's cases (the 1PPS late to the step, runs of
+# late edges, a sky back early by k * 256 ms, a backed-up link); and the rule
+# piece by piece.
 add_executable(test_mosaic_time_tag test_mosaic_time_tag.cpp
     ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial/SbfMeas.cpp
     ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial/SbfParser.cpp

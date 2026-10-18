@@ -33,7 +33,7 @@ void GnssTimeSync::start(double gps_s, int64_t mcu_us)
     have_ = true;
 }
 
-bool GnssTimeSync::addSample(double gps_s, int64_t mcu_us)
+bool GnssTimeSync::addSample(double gps_s, int64_t mcu_us, bool may_step_later)
 {
     if (!have_)
         start(gps_s, mcu_us);
@@ -73,6 +73,16 @@ bool GnssTimeSync::addSample(double gps_s, int64_t mcu_us)
                 // one step: each offset within exact_step_s of the run's first
                 if (step_run_ > 0 && std::fabs(e - step_e_[0]) > cfg_.exact_step_s)
                     step_run_ = 0;
+                // A later sample may be the interrupt held off, never early: it
+                // starts or adds to a later step only where the caller knows a
+                // reason for the samples to come later (see the header), and is
+                // set aside otherwise, the line kept on the seconds before
+                if (e > 0.0 && !may_step_later)
+                {
+                    step_run_ = 0;
+                    later_refused_++;
+                    return false;
+                }
                 step_e_[step_run_++] = e;
                 if (step_run_ < kExactStepCount)
                     return false;                         // set aside

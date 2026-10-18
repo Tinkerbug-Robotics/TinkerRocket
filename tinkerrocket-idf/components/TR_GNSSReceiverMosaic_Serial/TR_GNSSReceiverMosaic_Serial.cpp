@@ -444,24 +444,45 @@ void TR_GNSSReceiverMosaicSerial::pairPps(double gps_s, int64_t arrival_us)
         pps_tail_++;
         pps_edges_seen_++;
     }
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // A link backed up a second (a relink at a low baud rate, the 20 Hz
+    // streams queued) would hand this block the next second's edge: a line
+    // labelled a second off that the PPS check cannot see (its tags and its
+    // edges carry the same label). The last MeasEpoch's lateness against the
+    // earliest arrival lately says how far behind the link is (MosaicJumpState).
+    if (raw_ != nullptr && raw_->jump.arr_have && raw_->jump.late_us > kPairMaxLateUs)
+    {
+        pairs_refused_late_++;
+        return;
+    }
+#endif
     int64_t edge = 0;
     if (!pairer_.pair(gps_s, arrival_us, edge)) return;
 
     // An edge IS its GPS second (latency 0), so the line needs no receiver
     // delay calibrated, unlike the LC86G's sentence arrivals.
-    time_sync_.addSample(gps_s, edge);
 #if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // the line steps later onto an edge only where the PVTs moved by as much:
+    // a late edge with no reason is an interrupt held off (MosaicTimeTag.h)
+    const bool later_ok = raw_ == nullptr || raw_->tag.edgeOnChain(std::llround(gps_s), edge);
+    time_sync_.addSample(gps_s, edge, later_ok);
     if (raw_ != nullptr)
     {
         // the edge against the line it moved, which places it from the
-        // seconds before: an edge off it holds the tags back (MosaicTimeTag.h)
+        // seconds before, and against the chain: an edge off either holds the
+        // tags back (MosaicTimeTag.h)
         int64_t at = 0;
         const bool on = time_sync_.mcuAt(gps_s, at);
-        raw_->tag.notePair(std::llround(gps_s), edge, on, at);
+        raw_->tag.notePair(std::llround(gps_s), edge, on, at, time_sync_.driftPpm() * 1.0e-6, time_sync_.restarts());
         raw_->st.tag = raw_->tag.stats();
         raw_->st.line_steps = time_sync_.steps();
         raw_->st.line_last_step_ms = time_sync_.lastStepMs();
+        raw_->st.line_later_refused = time_sync_.laterRefused();
+        raw_->st.line_restarts = time_sync_.restarts();
+        raw_->st.pairs_refused_late = pairs_refused_late_;
     }
+#else
+    time_sync_.addSample(gps_s, edge);
 #endif
     // The line each time it moves; on the mosaic-only image each edge paired,
     // moved or not, so a replay judges every edge against the line as the tag
@@ -654,6 +675,11 @@ void TR_GNSSReceiverMosaicSerial::onBlock(const uint8_t* block, size_t len, size
             if (mosaic::decodeXppsOffset(block, len, x) && x.time_scale == 1 &&
                 x.tow_ms != mosaic::kTowDnu && x.wnc != mosaic::kWncDnu)
             {
+#if defined(TR_BENCH_MOSAIC_TAG_TRACE) && TR_BENCH_MOSAIC_TAG_TRACE
+                // the pulse's SyncAge: how long since the receiver last aligned it to its fix
+                xpps_s_ = static_cast<int64_t>(x.wnc) * 604800 + (x.tow_ms + 500U) / 1000U;
+                xpps_sync_age_ = x.sync_age_s;
+#endif
                 pairPps(x.wnc * 604800.0 + (x.tow_ms + 500U) / 1000U, end_us);
             }
             break;
@@ -771,10 +797,10 @@ void TR_GNSSReceiverMosaicSerial::logStatus()
              static_cast<unsigned long>(uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t)));
     if (pps_pin_ >= 0)
     {
-        ESP_LOGI(TAG, "mosaic PPS: %lu edges, %lu paired, %lu glitches%s; %s",
+        ESP_LOGI(TAG, "mosaic PPS: %lu edges, %lu paired, %lu glitches%s; %s; clock records dropped %lu",
                  static_cast<unsigned long>(pps_edges_seen_), static_cast<unsigned long>(pairer_.pairs()),
                  static_cast<unsigned long>(pps_glitches_), pps_muted_ ? ", MUTED" : "",
-                 time_sync_.valid() ? "line valid" : "line not valid yet");
+                 time_sync_.valid() ? "line valid" : "line not valid yet", static_cast<unsigned long>(clock_dropped_));
         if (time_sync_.valid())
         {
             ESP_LOGI(TAG, "mosaic PPS line: MCU crystal %+.2f ppm against GPS, rms %.3f ms; receiver delay "
@@ -925,16 +951,21 @@ void TR_GNSSReceiverMosaicSerial::rawMeasEpoch(const uint8_t* block, size_t len,
     {
         // Off the grid: its header's clock jumps only, so the bias carried to
         // the next epoch on it misses none (MosaicRawEpoch.h)
-        (void)mosaic::noteMeasEpochClock(block, len, r.jump, info);
+        (void)mosaic::noteMeasEpochClock(block, len, r.jump, info, end_us);
         r.st.decimated++;
         r.st.clock_jumps = r.jump.jumps;
         r.st.clock_restarts = r.jump.rebases;
+        r.st.clock_resets = r.jump.resets;
+        r.st.clock_resolved = r.jump.resolved;
         return;
     }
     gnss_raw::TimedRawEpoch& e = r.scratch;
-    const bool cells = mosaic::rawEpochFromMeasEpoch(block, len, e.epoch, r.jump, info);
+    // the arrival places a jump the count shows only mod 256 (MosaicJumpState)
+    const bool cells = mosaic::rawEpochFromMeasEpoch(block, len, e.epoch, r.jump, info, end_us);
     r.st.clock_jumps = r.jump.jumps;
     r.st.clock_restarts = r.jump.rebases;
+    r.st.clock_resets = r.jump.resets;
+    r.st.clock_resolved = r.jump.resolved;
     if (info.status != mosaic::SbfStatus::OK)
     {
         r.st.empty++;   // refused: no time to place
@@ -1062,15 +1093,16 @@ void TR_GNSSReceiverMosaicSerial::logRawStatus()
     auto brk = [&](Break b) { return static_cast<unsigned long>(t.breaks[static_cast<int>(b)]); };
     const mosaic::MosaicTimeTag& tag = raw_->tag;
     ESP_LOGI(TAG, "mosaic raw: epochs on the %lu ms grid: %lu handed over (%lu untimed: no line %lu, not FINETIME %lu, "
-                  "no edge %lu, no bias %lu, edge off the line %lu, held %lu), %lu dropped, %lu empty; %lu off the "
-                  "grid; last whole second %s | nav queued/filtered/dropped: GPS %lu/%lu/%lu, GAL %lu/%lu/%lu, BDS "
-                  "%lu/%lu/%lu; too long %lu, short buffer %lu (queue %u in %s) | GPSIon %lu (%lu refused) | clock "
-                  "jumps %lu, restarts %lu, PVTs not carried %lu",
+                  "no edge %lu, no bias %lu, edge off the line %lu, edge off the chain %lu, held %lu), %lu dropped, "
+                  "%lu empty; %lu off the grid; last whole second %s | nav queued/filtered/dropped: GPS %lu/%lu/%lu, "
+                  "GAL %lu/%lu/%lu, BDS %lu/%lu/%lu; too long %lu, short buffer %lu (queue %u in %s) | GPSIon %lu "
+                  "(%lu refused) | clock jumps %lu, restarts %lu (clock lost %lu; jumps placed past 256 ms %lu), "
+                  "PVTs not carried %lu",
              static_cast<unsigned long>(s.period_ms), static_cast<unsigned long>(s.published),
              static_cast<unsigned long>(s.untimed), why(Why::NO_LINE), why(Why::NOT_FINETIME), why(Why::PPS_STALE),
-             why(Why::NO_BIAS), why(Why::EDGE_OFF), why(Why::HELD), static_cast<unsigned long>(s.dropped),
-             static_cast<unsigned long>(s.empty), static_cast<unsigned long>(s.decimated),
-             mosaic::MosaicTimeTag::whyName(raw_->sec_why),
+             why(Why::NO_BIAS), why(Why::EDGE_OFF), why(Why::OFF_CHAIN), why(Why::HELD),
+             static_cast<unsigned long>(s.dropped), static_cast<unsigned long>(s.empty),
+             static_cast<unsigned long>(s.decimated), mosaic::MosaicTimeTag::whyName(raw_->sec_why),
              static_cast<unsigned long>(s.nav_queued[0]), static_cast<unsigned long>(s.nav_filtered[0]),
              static_cast<unsigned long>(s.nav_dropped[0]), static_cast<unsigned long>(s.nav_queued[1]),
              static_cast<unsigned long>(s.nav_filtered[1]), static_cast<unsigned long>(s.nav_dropped[1]),
@@ -1079,7 +1111,8 @@ void TR_GNSSReceiverMosaicSerial::logRawStatus()
              static_cast<unsigned long>(s.nav_short_buffer), static_cast<unsigned>(s.nav_depth),
              s.nav_in_psram ? "PSRAM" : "internal RAM", static_cast<unsigned long>(s.ions),
              static_cast<unsigned long>(s.ions_bad), static_cast<unsigned long>(s.clock_jumps),
-             static_cast<unsigned long>(s.clock_restarts), static_cast<unsigned long>(t.pvt_passed));
+             static_cast<unsigned long>(s.clock_restarts), static_cast<unsigned long>(s.clock_resets),
+             static_cast<unsigned long>(s.clock_resolved), static_cast<unsigned long>(t.pvt_passed));
     ESP_LOGI(TAG, "mosaic PPS tag check: %lu whole seconds judged, |residual| max %ld us, %lu over %ld us, "
                   "last %+ld us | %lu before the line had the crystal's drift (max %ld us, not judged) | %lu edges "
                   "stamped late (the interrupt held off), up to %ld us past due: judged where due | %lu held back "
@@ -1090,32 +1123,41 @@ void TR_GNSSReceiverMosaicSerial::logRawStatus()
              static_cast<long>(t.pps.settling_max_us), static_cast<unsigned long>(t.pps.late),
              static_cast<long>(t.pps.late_max_us), static_cast<unsigned long>(t.pps.held),
              static_cast<long>(t.pps.held_max_us), static_cast<long>(t.pps.held_last_us));
-    ESP_LOGI(TAG, "mosaic tag: %s%s; holds %lu (first anchor %lu, jump count restart %lu, anchor expired %lu, "
-                  "bias step %lu (last %+.3f ms), check failed %lu), released by the 1PPS %lu | edges off the line "
-                  "by over %ld us: %lu (last edge %+lld us) | the line moved onto a step of its edges %lu times "
-                  "(last %+.3f ms)",
+    unsigned long holds = 0;
+    for (int b = 1; b < static_cast<int>(Break::COUNT); ++b) holds += t.breaks[b];
+    ESP_LOGI(TAG, "mosaic tag: %s%s; holds %lu (first anchor %lu, receiver clock lost %lu, jump count restart %lu, "
+                  "anchor expired %lu, bias step %lu (last %+.3f ms), check failed %lu, line restart %lu, edge off "
+                  "the chain %lu), released by the 1PPS %lu | since the reference: PVTs %+.3f ms, last edge %+.3f ms "
+                  "(%s); references dropped %lu | edges off the line by over %ld us: %lu (last %+lld us), off the "
+                  "chain: %lu | the line stepped onto its edges %lu times (last %+.3f ms), set aside %lu later edges "
+                  "with no PVT step, restarted %lu times | pairings refused with the link behind: %lu",
              tag.held() ? "HELD after a " : "trusted", tag.held() ? mosaic::MosaicTimeTag::breakName(tag.holdBreak()) : "",
-             brk(Break::FIRST) + brk(Break::REBASE) + brk(Break::EXPIRED) +
-                 brk(Break::BIAS_STEP) + brk(Break::CHECK_FAILED),
-             brk(Break::FIRST), brk(Break::REBASE), brk(Break::EXPIRED), brk(Break::BIAS_STEP),
-             t.last_bias_step_ms, brk(Break::CHECK_FAILED), static_cast<unsigned long>(t.confirmed),
-             static_cast<long>(kPpsOnLineUs), static_cast<unsigned long>(t.edges_off),
-             static_cast<long long>(tag.edgeOffLineUs()), static_cast<unsigned long>(s.line_steps),
-             s.line_last_step_ms);
+             holds, brk(Break::FIRST), brk(Break::RESET), brk(Break::REBASE), brk(Break::EXPIRED),
+             brk(Break::BIAS_STEP), t.last_bias_step_ms, brk(Break::CHECK_FAILED), brk(Break::LINE_RESTART),
+             brk(Break::OFF_CHAIN), static_cast<unsigned long>(t.confirmed), tag.chainMs(),
+             tag.edgeRefUs() * 1.0e-3, !tag.refHave() ? "no reference" : (tag.onChain() ? "on the chain" : "OFF the chain"),
+             static_cast<unsigned long>(t.refs_dropped), static_cast<long>(kPpsOnLineUs),
+             static_cast<unsigned long>(t.edges_off), static_cast<long long>(tag.edgeOffLineUs()),
+             static_cast<unsigned long>(t.edges_off_chain), static_cast<unsigned long>(s.line_steps),
+             s.line_last_step_ms, static_cast<unsigned long>(s.line_later_refused),
+             static_cast<unsigned long>(s.line_restarts), static_cast<unsigned long>(s.pairs_refused_late));
 }
 
 #if defined(TR_BENCH_MOSAIC_TAG_TRACE) && TR_BENCH_MOSAIC_TAG_TRACE
 // Bench only (RF rig): every whole second, at its PVTGeodetic, what the time
 // tag was made of and what the 1PPS said of it -- the receiver's time and its
 // own RxClkBias, its jump count, the bias the tag carried (dtr), the edge
-// paired with the second and its offset from the line, the PPS check's
-// residual, and whether the epoch was handed over timed. No position.
+// paired with the second and its offset from the line, how far the PVTs and
+// the edge (and the line) moved since the reference (they agree: on the
+// chain), the pulse's SyncAge, the PPS check's residual, and whether the
+// epoch was handed over timed. No position.
 void TR_GNSSReceiverMosaicSerial::benchTagTrace(const mosaic::PvtGeodetic& p)
 {
     RawState& r = *raw_;
     const mosaic::MosaicTimeTag& tag = r.tag;
     const int64_t rx_ms = static_cast<int64_t>(p.wnc) * 604800000LL + p.tow_ms;
-    const bool fix = p.has_solution && std::isfinite(p.rx_clk_bias_ms) && std::fabs(p.rx_clk_bias_ms) <= 1000.0;
+    const bool fix = p.has_solution && std::isfinite(p.rx_clk_bias_ms) &&
+                     std::fabs(p.rx_clk_bias_ms) <= mosaic::MosaicTimeTag::kMaxBiasMs;
     char dtr[48];
     if (r.sec_rx_ms != rx_ms)
         std::snprintf(dtr, sizeof(dtr), "no epoch");
@@ -1123,28 +1165,48 @@ void TR_GNSSReceiverMosaicSerial::benchTagTrace(const mosaic::PvtGeodetic& p)
         std::snprintf(dtr, sizeof(dtr), "not placed");
     else
         std::snprintf(dtr, sizeof(dtr), "%+.4f ms", r.sec_dtr_ms);
+    const bool edge_now = tag.pairHave() && tag.pairGpsS() * 1000LL == rx_ms;
     char edge[64];
-    if (tag.pairHave() && tag.pairGpsS() * 1000LL == rx_ms)
+    if (edge_now)
         std::snprintf(edge, sizeof(edge), "%lld us, line %+lld us", static_cast<long long>(tag.pairEdgeUs()),
                       static_cast<long long>(tag.edgeOffLineUs()));
     else
         std::snprintf(edge, sizeof(edge), "none");
+    // since the reference: the PVTs' displacement, the last edge's and the line's (the edge's less its offset
+    // from the line); on the chain while the first two agree
+    char chain[112];
+    if (tag.refHave())
+        std::snprintf(chain, sizeof(chain), "PVTs %+.3f ms, edge %+.3f ms, line %+.3f ms (%s), %lld s old",
+                      tag.chainMs(), tag.edgeRefUs() * 1.0e-3, (tag.edgeRefUs() - tag.edgeOffLineUs()) * 1.0e-3,
+                      tag.onChain() ? "on the chain" : "OFF the chain",
+                      static_cast<long long>((tag.pairEdgeUs() - tag.refMcuUs()) / 1000000));
+    else
+        std::snprintf(chain, sizeof(chain), "no reference (PVTs %+.3f ms)", tag.chainMs());
+    char sync[24];
+    if (xpps_sync_age_ >= 0 && xpps_s_ * 1000LL == rx_ms)
+        std::snprintf(sync, sizeof(sync), "%d s", xpps_sync_age_);
+    else
+        std::snprintf(sync, sizeof(sync), "none");
     const mosaic::MosaicTimeTag::LastCheck& c = tag.lastCheck();
-    char res[48];
+    char res[64];
     if (c.have && c.rx_ms == rx_ms)
-        std::snprintf(res, sizeof(res), "%+ld us (%s)", static_cast<long>(c.residual_us), c.published ? "handed over" : "held back");
+        std::snprintf(res, sizeof(res), "%+ld us (%s%s)", static_cast<long>(c.residual_us),
+                      c.published ? "handed over" : "held back", c.on_chain ? "" : ", edge off the chain");
     else
         std::snprintf(res, sizeof(res), "none");
     ESP_LOGI(TAG, "[TAG] WNc %u TOW %lu | PVT %s RxClkBias %+.4f ms drift %+.3f ppm | CumClkJumps %u j %+ld ms "
-                  "restarts %lu | dtr %s | edge %s | residual %s | epoch %s; %s%s, passes %u | line %s%s, steps %lu",
+                  "jsum %+lld ms restarts %lu lost %lu late %lld ms | dtr %s | edge %s, SyncAge %s | since ref: %s | "
+                  "residual %s | epoch %s; %s%s, passes %u | line %s%s, steps %lu, restarts %lu",
              static_cast<unsigned>(p.wnc), static_cast<unsigned long>(p.tow_ms / 1000U), fix ? "fix" : "no fix",
              fix ? p.rx_clk_bias_ms : 0.0, fix ? static_cast<double>(p.rx_clk_drift_ppm) : 0.0,
              static_cast<unsigned>(r.jump.last_cum), static_cast<long>(r.jump.j_ms),
-             static_cast<unsigned long>(r.jump.rebases), dtr, edge, res,
-             r.sec_rx_ms == rx_ms ? mosaic::MosaicTimeTag::whyName(r.sec_why) : "none",
+             static_cast<long long>(r.jump.jsum_ms), static_cast<unsigned long>(r.jump.rebases),
+             static_cast<unsigned long>(r.jump.resets), static_cast<long long>(r.jump.late_us / 1000), dtr, edge,
+             sync, chain, res, r.sec_rx_ms == rx_ms ? mosaic::MosaicTimeTag::whyName(r.sec_why) : "none",
              tag.held() ? "held after a " : "trusted", tag.held() ? mosaic::MosaicTimeTag::breakName(tag.holdBreak()) : "",
              static_cast<unsigned>(tag.passes()), time_sync_.valid() ? "valid" : "not valid",
-             time_sync_.driftFitted() ? " fitted" : "", static_cast<unsigned long>(time_sync_.steps()));
+             time_sync_.driftFitted() ? " fitted" : "", static_cast<unsigned long>(time_sync_.steps()),
+             static_cast<unsigned long>(time_sync_.restarts()));
 }
 #endif
 #endif  // TR_GNSS_DRIVER_MOSAIC

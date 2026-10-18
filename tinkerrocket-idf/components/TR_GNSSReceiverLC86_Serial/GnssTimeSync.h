@@ -40,7 +40,13 @@
 // off for the next minute). So once the drift is fitted, kExactStepCount
 // samples in a row more than exact_step_s off the line, and within it of each
 // other, are set aside and then move the whole history onto them, the drift
-// kept: the MCU crystal did not step. And until the blocks have fitted the
+// kept: the MCU crystal did not step. A step later needs a reason the caller
+// knows (addSample's may_step_later): an edge stamped late is also what an
+// interrupt held off gives, the same each second if what holds it off is, so
+// without one a later sample is set aside and the line keeps the seconds
+// before (the mosaic's time tag gives the reason: its PVTs' bias moved by
+// as much, MosaicTimeTag.h). A step earlier needs none: an interrupt is never
+// early. And until the blocks have fitted the
 // drift (about 30 s), exact samples give the line a provisional one from the
 // seconds it holds (a median of slopes, from kProvisionalBins seconds on),
 // so it does not run flat: an edge is good to microseconds, and a flat line
@@ -98,7 +104,10 @@ public:
     // One epoch: its GPS time (continuous seconds, week * 604800 + time of
     // week) and the MCU time (esp_timer, us) its sentence ended. False if the
     // sample was set aside as an outlier or restarted the history.
-    bool addSample(double gps_s, int64_t mcu_us);
+    // may_step_later (exact samples only): whether this sample, if it sits
+    // more than exact_step_s after the line, may take part in a step later
+    // (see the top of this file); false sets it aside.
+    bool addSample(double gps_s, int64_t mcu_us, bool may_step_later = true);
 
     // Enough history to answer: seconds spanning kMinSpanS.
     bool valid() const;
@@ -128,6 +137,9 @@ public:
     // ms (positive: the samples came later). Never reset.
     uint32_t steps() const { return steps_; }
     double lastStepMs() const { return last_step_ms_; }
+    // Samples set aside as later than the line with no reason to step
+    // (may_step_later false). Never reset.
+    uint32_t laterRefused() const { return later_refused_; }
 
     // The line as mcuAt applies it, for a log a replay can place epochs by
     // exactly as the flight did: with t = gps_s - gps0_s,
@@ -196,6 +208,7 @@ private:
     double   step_e_[kExactStepCount] = {};    //   each one's offset from the line, s
     uint32_t steps_ = 0;                       // steps() and lastStepMs(): not reset
     double   last_step_ms_ = 0.0;
+    uint32_t later_refused_ = 0;               // laterRefused(): not reset
     uint32_t samples_ = 0;
     uint32_t restarts_ = 0;
     uint32_t seq_ = 0;          // lineSeq(): not reset

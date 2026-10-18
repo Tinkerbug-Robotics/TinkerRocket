@@ -147,9 +147,11 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         // since, for up to 120 s), through the 1PPS line -- and 0, untimed,
         // unless it is right: the line valid, the receiver's time FINETIME,
         // an edge paired with its second within 120 s, a bias to carry, the
-        // last edge on the line, and the bias's chain confirmed by the 1PPS
+        // last edge on the line and where the PVTs' own account of GPS time
+        // puts it (the chain), and the bias's chain confirmed by the 1PPS
         // after any break (a receiver restart, a step in its time against its
-        // clock, a failed PPS check). MosaicTimeTag.h says why.
+        // clock, a failed PPS check, a restart of the line). MosaicTimeTag.h
+        // says why.
         //
         // takeEphemeris: each GPSNav, GALNav or BDSNav block as it came
         // (CRC checked), for SbfNav's decodeSbfEphemeris. Galileo F/NAV and
@@ -181,9 +183,14 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
             uint32_t empty = 0;              // on the grid, refused or with no cell: not handed over
             uint32_t dropped = 0;            // the queue was full
             uint32_t clock_jumps = 0;        // the receiver's 1 ms clock jumps seen
-            uint32_t clock_restarts = 0;     //   and its jump count starting over (a receiver reset, a gap)
+            uint32_t clock_restarts = 0;     //   and its jump count starting over (a reset, a gap, a big jump)
+            uint32_t clock_resets = 0;       //   of which the receiver's clock was lost (MosaicJumpState::resets)
+            uint32_t clock_resolved = 0;     //   jumps the arrivals placed past the count's 256 ms
             uint32_t line_steps = 0;         // the PPS line moved onto a step of its edges (GnssTimeSync)
             double   line_last_step_ms = 0.0;
+            uint32_t line_later_refused = 0; // edges set aside as later than the line with no PVT step
+            uint32_t line_restarts = 0;      // the PPS line's restarts
+            uint32_t pairs_refused_late = 0; // 1PPS pairings refused while the link was backed up
             // navigation blocks, by GPS, Galileo, BeiDou
             uint32_t nav_queued[3] = {};
             uint32_t nav_filtered[3] = {};   // F/NAV, GEO or too short: what the decoder would refuse
@@ -207,6 +214,10 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         // off its edge, holds the tag back (MosaicTimeTag.h), and the line
         // follows a step of its edges this big (GnssTimeSync exact_step_s).
         static constexpr int32_t kPpsOnLineUs = 100;
+        // No 1PPS edge pairs while the last MeasEpoch came this much later
+        // than the earliest lately (MosaicJumpState::late_us): a block a
+        // second behind would pair the next second's edge.
+        static constexpr int64_t kPairMaxLateUs = 300000;
 #endif
 
     private:
@@ -310,6 +321,13 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         QueueHandle_t     clock_q_ = nullptr;
         uint32_t          clock_seq_seen_ = 0;
         uint32_t          clock_dropped_ = 0;
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+        uint32_t          pairs_refused_late_ = 0;   // pairings refused while the link was backed up
+#endif
+#if defined(TR_BENCH_MOSAIC_TAG_TRACE) && TR_BENCH_MOSAIC_TAG_TRACE
+        int64_t           xpps_s_ = 0;               // the last xPPSOffset's GPS second
+        int               xpps_sync_age_ = -1;       //   and its SyncAge, s
+#endif
 
         std::atomic<bool> nav_resend_{false};
         uint32_t          nav_resends_ = 0;

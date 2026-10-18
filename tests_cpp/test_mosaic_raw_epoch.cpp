@@ -431,6 +431,151 @@ TEST(MosaicRawEpoch, JumpCountWrapsAndStartsOver)
     EXPECT_EQ(a.ep.obs[0].lock_ms, 50u);
 }
 
+// With each MeasEpoch's arrival (the driver's end_us), the count's 256 ms
+// ambiguity is resolved: a clock stepped forward 256 ms (or 1023: a count of
+// -1) skips its epochs ahead of their arrivals by that, and is that jump, a
+// start-over that keeps the clock (jsum_ms, no reset). A stamp late by tens of
+// ms is no jump; a step ahead by what no k * 256 ms explains is a reset; and
+// how late the last came against the earliest lately is late_us. Without the
+// arrivals the count reads as before.
+TEST(MosaicRawEpoch, TheArrivalsPlaceAJumpTheCountCannotShow)
+{
+    MosaicJumpState js;
+    const int64_t t0 = int64_t(2440) * 604800000LL + 100000000;
+    // the receiver's clock against the MCU's: an epoch at receiver time rx arrives 13 ms after it, less the
+    // jumps (a step forward makes the same instant read later), plus any lateness
+    int64_t jumps_ms = 0;
+    auto at = [&](int64_t rx, uint8_t cum, int64_t late_us = 0) {
+        MeasEpochSpec s;
+        s.tow = static_cast<uint32_t>(rx % 604800000LL);
+        s.wnc = static_cast<uint16_t>(rx / 604800000LL);
+        s.cum = cum;
+        s.t1 = {sat(1, 0, 1)};
+        const auto blk = sbftest::measEpoch(s);
+        MosaicEpochInfo info;
+        EXPECT_TRUE(noteMeasEpochClock(blk.data(), blk.size(), js, info, (rx - jumps_ms) * 1000 + 13000 + late_us));
+        return info;
+    };
+    int64_t rx = t0;
+    for (int k = 0; k < 20; ++k, rx += 50)
+        at(rx, 10);
+    EXPECT_EQ(js.late_us, 0);
+    // a stamp 40 ms late, then on time: no jump
+    MosaicEpochInfo i = at(rx, 10, 40000);
+    EXPECT_FALSE(i.jumped);
+    EXPECT_NEAR(static_cast<double>(js.late_us), 40000.0, 50.0);   // less what the earliest forgot in 50 ms
+    rx += 50;
+    i = at(rx, 10);
+    EXPECT_FALSE(i.jumped);
+    EXPECT_FALSE(i.rebased);
+    EXPECT_LT(js.late_us, 100);
+    // a -1 ms jump, counted
+    rx += 50;
+    jumps_ms -= 1;
+    i = at(rx, 9);
+    EXPECT_EQ(i.jump_full_ms, -1);
+    EXPECT_FALSE(i.rebased);
+    EXPECT_EQ(js.jsum_ms, -1);
+    // forward 256 ms: the count shows 0, the epochs skip ahead
+    rx += 50;
+    jumps_ms += 256;
+    rx += 250;   // the next epoch on its 50 ms grid: 300 ms of receiver time, 44 ms of the MCU's
+    i = at(rx, 9);
+    EXPECT_TRUE(i.jumped);
+    EXPECT_EQ(i.jump_ms, 0);
+    EXPECT_EQ(i.jump_full_ms, 256);
+    EXPECT_TRUE(i.rebased);
+    EXPECT_FALSE(i.reset);
+    EXPECT_EQ(js.jsum_ms, 255);
+    EXPECT_EQ(js.resolved, 1u);
+    EXPECT_EQ(js.resets, 0u);
+    rx += 50;
+    i = at(rx, 9);
+    EXPECT_FALSE(i.jumped);
+    EXPECT_FALSE(i.rebased);
+    // forward 1023 ms: a count of -1
+    jumps_ms += 1023;
+    rx += 1050;
+    i = at(rx, 8);
+    EXPECT_EQ(i.jump_ms, -1);
+    EXPECT_EQ(i.jump_full_ms, 1023);
+    EXPECT_EQ(js.jsum_ms, 1278);
+    EXPECT_EQ(js.resets, 0u);
+    // ahead by 150 ms with nothing counted (its epochs skip ahead 200 ms in 50 ms of arrivals): the receiver's
+    // time moved by what the count does not hold
+    rx += 200;
+    i = at(rx, 8, -150000);
+    EXPECT_TRUE(i.reset);
+    EXPECT_EQ(js.resets, 1u);
+    EXPECT_EQ(js.jsum_ms, 0);
+    rx += 50;
+    i = at(rx, 8, -150000);   // its new level: no jump
+    EXPECT_FALSE(i.rebased);
+    // back 200 ms with its epochs going on on their grid (a count of +56): the next one comes 250 ms later
+    rx += 50;
+    i = at(rx, 8, -150000);
+    jumps_ms -= 200;
+    rx += 50;
+    i = at(rx, 64, -150000);
+    EXPECT_EQ(i.jump_ms, 56);
+    EXPECT_EQ(i.jump_full_ms, -200);
+    EXPECT_FALSE(i.reset);
+    EXPECT_EQ(js.jsum_ms, -200);
+    // behind by 256 ms with no step counted: a late stamp, not a jump
+    rx += 50;
+    i = at(rx, 64, -150000 + 256000);
+    EXPECT_FALSE(i.jumped);
+    EXPECT_FALSE(i.rebased);
+    rx += 50;
+    i = at(rx, 64, -150000);
+    EXPECT_FALSE(i.jumped);
+    // forward 200 ms again (a count of -56, its epochs skipping ahead)
+    jumps_ms += 200;
+    rx += 250;
+    i = at(rx, 8, -150000);
+    EXPECT_EQ(i.jump_full_ms, 200);
+    EXPECT_EQ(js.jsum_ms, 0);
+    // back 200 ms (a count of +56) repeating its epochs' times, its arrivals going on: placed, no reset
+    jumps_ms -= 200;
+    const int64_t before = rx;
+    rx += 50 - 200;
+    i = at(rx, 64, -150000);
+    EXPECT_LT(rx, before);
+    EXPECT_EQ(i.jump_ms, 56);
+    EXPECT_EQ(i.jump_full_ms, -200);
+    EXPECT_TRUE(i.rebased);
+    EXPECT_FALSE(i.reset);
+    EXPECT_EQ(js.jsum_ms, -200);
+    // back by the count's own step (-100 ms, labels back 50 ms): no reset either
+    jumps_ms -= 100;
+    rx += 50 - 100;
+    i = at(rx, static_cast<uint8_t>(64 - 100), -150000);
+    EXPECT_EQ(i.jump_full_ms, -100);
+    EXPECT_FALSE(i.reset);
+    EXPECT_EQ(js.jsum_ms, -300);
+    // time going back 5 s (its arrival later, as arrivals are): a reset
+    i = at(rx - 5000, 8, 5000000 - 150000 + 50000);
+    EXPECT_TRUE(i.reset);
+    EXPECT_EQ(js.resets, 2u);
+
+    // without the arrivals: the count alone, a 256 ms step unseen
+    MosaicJumpState plain;
+    MeasEpochSpec s;
+    s.wnc = 2440;
+    s.t1 = {sat(1, 0, 1)};
+    MosaicEpochInfo pi;
+    s.tow = 100000000;
+    s.cum = 9;
+    auto b0 = sbftest::measEpoch(s);
+    noteMeasEpochClock(b0.data(), b0.size(), plain, pi);
+    s.tow = 100000300;
+    auto b1 = sbftest::measEpoch(s);
+    noteMeasEpochClock(b1.data(), b1.size(), plain, pi);
+    EXPECT_FALSE(pi.jumped);
+    EXPECT_EQ(plain.resolved, 0u);
+    EXPECT_FALSE(plain.arr_have);
+}
+
 TEST(MosaicRawEpoch, LockTimeHeldToTheType2Clip)
 {
     // G05's L1 C/A as the master at 600 s, then as a Type2 (clipped at 254)

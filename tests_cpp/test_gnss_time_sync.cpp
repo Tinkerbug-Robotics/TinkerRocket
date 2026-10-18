@@ -474,3 +474,64 @@ TEST(GnssTimeSync, WithoutExactStepsTheLineIsTheEnvelopeItWas)
     }
     EXPECT_EQ(b.steps(), 0u);
 }
+
+// A step later needs the caller's reason (may_step_later): edges stamped late
+// the same each second (an interrupt held off by something with the 1PPS's
+// phase) are set aside however many come, and the line keeps the seconds
+// before, so nothing it places moves; with the reason (the mosaic's PVTs
+// moved by as much) it steps after three. A step earlier needs none, and
+// the LC86G's line (exact_step_s 0) is the same either way.
+TEST(GnssTimeSync, APpsLineStepsLaterOnlyWithAReason)
+{
+    PpsEdges pps;
+    GnssTimeSync ts = ppsLine();
+    pps.feed(ts, 0, 120);
+    ASSERT_TRUE(ts.driftFitted());
+    // 30 edges 2 ms late (up to 60 us apart), no reason
+    for (int k = 120; k < 150; ++k)
+        EXPECT_FALSE(ts.addSample(pps.gps0 + k, pps.edge(k) + 2000 + (k * 37) % 61, false)) << k;
+    EXPECT_EQ(ts.steps(), 0u);
+    EXPECT_EQ(ts.laterRefused(), 30u);
+    EXPECT_EQ(ts.restarts(), 0u);
+    EXPECT_LT(std::fabs(pps.offUs(ts, 150)), 20.0);   // the line still where the on-time edges are
+    pps.feed(ts, 150, 160);
+    EXPECT_EQ(ts.steps(), 0u);
+    EXPECT_NEAR(ts.driftPpm(), 16.0, 0.5);
+
+    // the receiver's 1PPS really moves 6.854 ms later: the first two without
+    // the reason yet (the PVT that states the step comes after), then with it
+    PpsEdges moved = pps;
+    moved.step_from_s = 160;
+    moved.step_ms = 6.854;
+    EXPECT_FALSE(ts.addSample(moved.gps0 + 160, moved.edge(160), false));
+    EXPECT_FALSE(ts.addSample(moved.gps0 + 161, moved.edge(161), true));
+    EXPECT_FALSE(ts.addSample(moved.gps0 + 162, moved.edge(162), true));
+    EXPECT_EQ(ts.steps(), 0u);
+    EXPECT_TRUE(ts.addSample(moved.gps0 + 163, moved.edge(163), true));
+    EXPECT_EQ(ts.steps(), 1u);
+    EXPECT_NEAR(ts.lastStepMs(), 6.854, 0.01);
+    EXPECT_LT(std::fabs(moved.offUs(ts, 164)), 20.0);
+
+    // back 6.854 ms earlier: no reason needed
+    PpsEdges back = moved;
+    back.step_from_s = 1e9;
+    for (int k = 164; k < 168; ++k)
+        ts.addSample(back.gps0 + k, back.edge(k), false);
+    EXPECT_EQ(ts.steps(), 2u);
+    EXPECT_NEAR(ts.lastStepMs(), -6.854, 0.01);
+    EXPECT_LT(std::fabs(back.offUs(ts, 168)), 20.0);
+
+    // the LC86G's line: the reason changes nothing
+    GnssTimeSync a, b;
+    for (int k = 0; k < 200; ++k)
+    {
+        const int64_t e = pps.edge(k) + (k >= 100 && k < 130 ? 2000 : 0);
+        EXPECT_EQ(a.addSample(pps.gps0 + k, e, true), b.addSample(pps.gps0 + k, e, false));
+        GnssTimeSync::Snapshot sa, sb;
+        a.snapshot(sa);
+        b.snapshot(sb);
+        EXPECT_EQ(sa.a_s, sb.a_s);
+        EXPECT_EQ(sa.drift, sb.drift);
+    }
+    EXPECT_EQ(b.laterRefused(), 0u);
+}

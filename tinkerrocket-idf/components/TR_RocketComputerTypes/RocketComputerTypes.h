@@ -1679,9 +1679,11 @@ static constexpr uint8_t GCL_STARTED = 0x02;  // a sample has started the histor
 // The line's samples are 1PPS edges on an MCU pin, each paired with its GPS
 // second, not sentence arrivals (the mosaic-G5 on the V9: J1 pin 5). An edge
 // IS its GPS second, so latency_s is 0 and needs no calibration; time_us is
-// the edge that moved the line. The mosaic-only image logs one at every edge
-// paired, moved or not (seq repeats): a replay judges each edge against the
-// line, as its raw epochs' time tag does (MosaicTimeTag.h).
+// the edge that moved the line (the driver took it a few ms later, when the
+// block naming the edge's second arrived). The mosaic-only image logs one at
+// every edge paired, moved or not (seq repeats, and moves by at most 1 from
+// one record to the next: more is a record lost): a replay judges each edge
+// against the line, as its raw epochs' time tag does (MosaicTimeTag.h).
 static constexpr uint8_t GCL_PPS     = 0x04;
 
 // ── PAD_CONTEXT_MSG (0x9E): the pad, written once after launch ──────────────

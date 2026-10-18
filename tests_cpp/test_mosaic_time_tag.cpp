@@ -1,9 +1,11 @@
 // Host tests for the mosaic-G5's raw-epoch time tag across a lost and
 // regained sky (TR_GNSSReceiverMosaic_Serial/MosaicTimeTag.h), through the
 // driver's own pure pieces in the driver's order: MeasEpoch blocks
-// (sbf_meas_build.h) into rawEpochFromMeasEpoch / noteMeasEpochClock, the
-// 1PPS edges into PpsPairer and the PPS line (GnssTimeSync, exact_step_s as
-// the mosaic image sets it), and each PVTGeodetic's RxClkBias.
+// (sbf_meas_build.h) and their arrivals into rawEpochFromMeasEpoch /
+// noteMeasEpochClock, the 1PPS edges into PpsPairer (none while the link is
+// backed up) and the PPS line (GnssTimeSync, exact_step_s as the mosaic
+// image sets it, stepping later only onto edges on the chain), and each
+// PVTGeodetic's RxClkBias.
 //
 // A simulated bench: an MCU crystal 16 ppm fast (the V9's); a receiver clock
 // 0.27 ppm fast that steps whole milliseconds with a fix when its bias passes
@@ -18,7 +20,13 @@
 // 15 s later with its bias 6.85 ms larger, stepped its clock 7 ms and moved
 // its 1PPS. With the driver's rule then, every whole second read -6855 us.
 // With MosaicTimeTag the tag is right or the epoch untimed, and the tags come
-// back within seconds.
+// back within seconds. The review's cases after it (2026-10-17): the 1PPS
+// late to the step by 1 to 10 s (the PPS check reads 0 there and the chain
+// keeps the tags untimed), runs of edges stamped late the same each second
+// (the line never steps later onto them), a sky back early by whole quarters
+// of a second (a jump the count shows mod 256, placed by the arrivals), and a
+// link backed up a second (no edge paired: a line labelled a second off would
+// pass every check).
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -73,7 +81,12 @@ struct Bench
     double  lost_from_s = 1e9, lost_to_s = -1.0;   // no satellite tracked
     double  fix_after_s = 2.0;      // tracked again: the first fix this much later
     int     partial_sats = 0;       // tracked in the loss's last part without a fix (0: none)
-    bool    pps_lags_a_second = false;   // the 1PPS moves to a new sky a second after the fix
+    bool    pps_lags_a_second = false;   // the 1PPS moves to a new sky after the fix ...
+    double  pps_lag_s = 1.0;            //   ... this long after it
+    int64_t late_from_k = -1, late_to_k = -2;   // a run of 1PPS edges stamped late (the same hold-off each second)
+    int64_t late_run_us = 0;            //   by this, plus up to 60 us
+    double  backlog_from_s = 1e9, backlog_to_s = -1.0;   // the link backed up: every block this much later
+    double  backlog_s = 0.0;
     bool    jump_with_first_fix = false; // the first fix's PVT states its bias after the step
     double  reset_at_s = 1e9;       // the receiver resets: no blocks for reset_gap_s, then its time anew
     double  reset_gap_s = 12.0;
@@ -160,13 +173,15 @@ struct Driver
     {
         mcu_out = 0;
         MosaicEpochInfo info;
+        // the new rule's count places a jump past 256 ms by the arrival (MosaicJumpState)
+        const int64_t arrival = legacy ? kMosaicNoArrival : now_us;
         if (!onFuseGrid(tow, period_ms))
         {
-            (void)noteMeasEpochClock(blk.data(), blk.size(), js, info);
+            (void)noteMeasEpochClock(blk.data(), blk.size(), js, info, arrival);
             return false;
         }
         gnss_raw::RawEpoch ep;
-        const bool cells = rawEpochFromMeasEpoch(blk.data(), blk.size(), ep, js, info);
+        const bool cells = rawEpochFromMeasEpoch(blk.data(), blk.size(), ep, js, info, arrival);
         if (info.status != SbfStatus::OK)
             return false;
         const int64_t rx_ms = static_cast<int64_t>(info.wnc) * kWeekMs + info.tow_ms;
@@ -211,19 +226,20 @@ struct Driver
     // a PVTGeodetic arriving at arrival_us
     void pvt(const PvtGeodetic& p, int64_t arrival_us)
     {
-        if (p.tow_ms % 1000 == 0)
+        if (p.tow_ms % 1000 == 0 && (legacy || !pair_guard || !(js.arr_have && js.late_us > 300000)))
         {
             const double gs = p.wnc * 604800.0 + p.tow_ms / 1000;
             int64_t e = 0;
             if (pairer.pair(gs, arrival_us, e))
             {
-                sync.addSample(gs, e);
+                // the line steps later onto an edge only where the PVTs moved by as much
+                sync.addSample(gs, e, legacy || tag.edgeOnChain(std::llround(gs), e));
                 pair_have = true;
                 pair_s = std::llround(gs);
                 pair_edge = e;
                 int64_t at = 0;
                 const bool on = sync.mcuAt(gs, at);
-                tag.notePair(std::llround(gs), e, on, at);
+                tag.notePair(std::llround(gs), e, on, at, sync.driftPpm() * 1e-6, sync.restarts());
             }
         }
         const int64_t rx_ms = static_cast<int64_t>(p.wnc) * kWeekMs + p.tow_ms;
@@ -268,14 +284,18 @@ struct Driver
         if (trace && p.tow_ms % 1000 == 0)
         {
             const auto& c = tag.lastCheck();
-            std::printf("  [trace] tow %u fix %d bias %+.4f | held %d (%s) passes %u edge_on %d (%+lld us) | check %+d "
-                        "(%s) | line steps %u\n", p.tow_ms / 1000, p.has_solution, p.rx_clk_bias_ms, tag.held(),
+            std::printf("  [trace] tow %u fix %d bias %+.4f | held %d (%s) passes %u edge_on %d (%+lld us) | chain "
+                        "%+.3f ms edge %+.3f ms (%s) | check %+d (%s) | line steps %u restarts %u | jumps resolved %u "
+                        "resets %u\n", p.tow_ms / 1000, p.has_solution, p.rx_clk_bias_ms, tag.held(),
                         MosaicTimeTag::breakName(tag.holdBreak()), tag.passes(), tag.edgeOnLine(),
-                        (long long)tag.edgeOffLineUs(), c.rx_ms == rx_ms ? c.residual_us : 0,
-                        c.rx_ms == rx_ms ? (c.published ? "out" : "held") : "-", sync.steps());
+                        (long long)tag.edgeOffLineUs(), tag.chainMs(), tag.edgeRefUs() * 1e-3,
+                        !tag.refHave() ? "no ref" : (tag.onChain() ? "on" : "OFF"),
+                        c.rx_ms == rx_ms ? c.residual_us : 0, c.rx_ms == rx_ms ? (c.published ? "out" : "held") : "-",
+                        sync.steps(), sync.restarts(), js.resolved, js.resets);
         }
     }
     bool trace = false;
+    bool pair_guard = true;   // the driver's: no pairing while the link is backed up (kPairMaxLateUs)
 };
 
 struct BenchRun
@@ -298,6 +318,8 @@ BenchRun run(Bench b, Driver& d, double seconds, double after_s = 1e9, double* f
     bool resumed = false;
     double first_after = -1.0;
     int64_t jitter = 0;
+    double t_prev = -1e9;
+    double last_edge_t = -1e9;   // a pulse moved back is never sent into the past: the next one comes on time
     while (true)
     {
         double t = b.tOf(rx_ms);
@@ -323,13 +345,20 @@ BenchRun run(Bench b, Driver& d, double seconds, double after_s = 1e9, double* f
             rx_ms = static_cast<int64_t>(std::ceil(rx_end_ms / 50.0)) * 50;
             continue;
         }
-        // a step decided at the last fix applies from this epoch
+        // a step decided at the last fix applies from this epoch; a step
+        // forward skips the epochs its clock jumped past (they stay on its
+        // own 50 ms grid)
         if (b.pending_jump_ms != 0.0)
         {
             b.jumps_ms += b.pending_jump_ms;
             b.cum = static_cast<uint8_t>(b.cum + static_cast<int>(b.pending_jump_ms));
             b.pending_jump_ms = 0.0;
             t = b.tOf(rx_ms);
+            while (t <= t_prev)
+            {
+                rx_ms += 50;
+                t = b.tOf(rx_ms);
+            }
         }
         const bool lost = b.lost(t);
         const bool after_loss = t >= b.lost_to_s && b.lost_to_s > 0;
@@ -345,7 +374,13 @@ BenchRun run(Bench b, Driver& d, double seconds, double after_s = 1e9, double* f
             b.jumps_ms += j;
             b.cum = static_cast<uint8_t>(b.cum + static_cast<int>(j));
             t = b.tOf(rx_ms);
+            while (t <= t_prev)
+            {
+                rx_ms += 50;
+                t = b.tOf(rx_ms);
+            }
         }
+        t_prev = t;
         if (fix)
         {
             b.fine = true;   // FINETIME from the first fix (after a reset: cleared until then)
@@ -353,22 +388,27 @@ BenchRun run(Bench b, Driver& d, double seconds, double after_s = 1e9, double* f
         }
         // the receiver's 1PPS: on its GPS time, as it knew the sky at its last fix
         const double pps_known_ms =
-            (b.pps_lags_a_second && fix && t - (after_loss ? b.lost_to_s + b.fix_after_s : 0.0) < 1.5)
+            (b.pps_lags_a_second && fix && t - (after_loss ? b.lost_to_s + b.fix_after_s : 0.0) < b.pps_lag_s + 0.5)
                 ? b.pps_delay_known_ms
                 : (fix ? b.skyDelayMs(t) : b.pps_delay_known_ms);
         b.pps_delay_known_ms = pps_known_ms;
         const bool pps_on = b.last_fix_s > -1e8 && t - b.last_fix_s < 60.0 && !(after_reset && b.last_fix_s < b.reset_done_s);
-        const int64_t meas_arrival = static_cast<int64_t>(std::llround(b.mcuUs(t + 0.013)));
+        const double backlog = t >= b.backlog_from_s && t < b.backlog_to_s ? b.backlog_s : 0.0;
+        const int64_t meas_arrival = static_cast<int64_t>(std::llround(b.mcuUs(t + 0.013 + backlog)));
         while (true)
         {
             const double t_edge = (next_pps * 1000 - b.gps0_ms) * 1e-3 + b.pps_delay_known_ms * 1e-3;
-            if (t_edge > t + 0.013)
+            if (t_edge > t + 0.013 + backlog)   // the edges up to when the blocks are taken
                 break;
-            if (pps_on && !b.resetting(t_edge))
+            if (pps_on && !b.resetting(t_edge) && t_edge > last_edge_t + 0.5)
             {
+                last_edge_t = t_edge;
                 int64_t e = static_cast<int64_t>(std::llround(b.mcuUs(t_edge))) + (jitter++ * 7919) % 4;
                 if (next_pps == b.late_edge_k + b.gps0_ms / 1000)
                     e += b.late_edge_us;
+                const int64_t k = next_pps - b.gps0_ms / 1000;
+                if (k >= b.late_from_k && k <= b.late_to_k)
+                    e += b.late_run_us + (k * 37) % 61;
                 d.edge(e);
             }
             next_pps++;
@@ -421,7 +461,7 @@ BenchRun run(Bench b, Driver& d, double seconds, double after_s = 1e9, double* f
             b.pending_jump_ms = -std::round(bias);   // the clock steps at the next epoch
         p.rx_clk_bias_ms = fix ? bias : -2e10;
         p.rx_clk_drift_ppm = static_cast<float>(b.rx_ppm);
-        d.pvt(p, static_cast<int64_t>(std::llround(b.mcuUs(t + 0.016))));
+        d.pvt(p, static_cast<int64_t>(std::llround(b.mcuUs(t + 0.016 + backlog))));
         rx_ms += 50;
     }
     if (first_timed_after != nullptr)
@@ -686,6 +726,191 @@ TEST(MosaicTimeTag, TheBootsFlatLineIsNeverHandedOverOffTheEdges)
     EXPECT_GE(r.timed.size(), 400u);
 }
 
+// The 1PPS late to the step (review, 2026-10-17): a receiver that re-aligns
+// its pulse to the new sky only some seconds after its first fix leaves the
+// edges, and the line on them, on the old sky while its PVTs state the new
+// one. The PPS check reads 0 there (the line on its edges, the carry on its
+// PVT) while every tag is off by the whole step; the chain's displacement
+// (6.854 ms) against the edges' (0) keeps them untimed until the pulse moves
+// and the line follows it. However long it lags, with the step at the first
+// fix or after it.
+TEST(MosaicTimeTag, AOnePpsLateToTheStepNeverConfirmsIt)
+{
+    for (double lag : {1.0, 2.0, 3.0, 5.0, 10.0})
+        for (bool jwf : {false, true})
+        {
+            Bench b = underrun();
+            b.pps_lags_a_second = true;
+            b.pps_lag_s = lag;
+            b.jump_with_first_fix = jwf;
+            Driver d(false);
+            d.trace = std::getenv("TAG_TRACE") != nullptr;
+            double back = -1.0;
+            const BenchRun r = run(b, d, 330.0, 177.0, &back);
+            const auto& st = d.tag.stats();
+            std::printf("[pps %.0f s late, step %s] timed %zu, worst %.1f us, back %.1f s after the first fix; PPS "
+                        "judged max %d us over %u; untimed off the chain %u; line steps %u, later set aside %u\n",
+                        lag, jwf ? "with the fix" : "after it", r.timed.size(), r.worst_us, back - 177.0,
+                        st.pps.max_us, st.pps.over, st.why[(int)Why::OFF_CHAIN], d.sync.steps(), d.sync.laterRefused());
+            EXPECT_LT(r.worst_us, 20.0) << lag << " " << jwf;
+            EXPECT_EQ(st.pps.over, 0u);
+            EXPECT_GT(st.why[(int)Why::OFF_CHAIN], 0u);
+            EXPECT_EQ(d.sync.steps(), 1u);
+            EXPECT_GT(back, 0.0);
+            EXPECT_LT(back - 177.0, lag + 10.0);
+        }
+}
+
+// A run of 1PPS edges stamped late by the same few hundred us or ms each
+// second (an interrupt held off by something on the pulse's phase; review,
+// 2026-10-17): with no step in the PVTs there is no reason for the line to
+// step later, so it never does; those seconds are untimed and no tag is
+// wrong, however long the run.
+TEST(MosaicTimeTag, ARunOfLateEdgesNeverMovesTheLine)
+{
+    for (int n : {2, 3, 5, 10, 30})
+        for (int64_t late : {300, 2000})
+        {
+            Bench b;
+            b.late_from_k = 150;
+            b.late_to_k = 150 + n - 1;
+            b.late_run_us = late;
+            Driver d(false);
+            double back = -1.0;
+            const BenchRun r = run(b, d, 260.0, 150.0 + n, &back);
+            const auto& st = d.tag.stats();
+            std::printf("[late run %d x %lld us] timed %zu, worst %.1f us, back %.1f s after it; line steps %u, later "
+                        "set aside %u; holds check %u off chain %u; PPS judged over %u\n",
+                        n, (long long)late, r.timed.size(), r.worst_us, back - 150.0 - n, d.sync.steps(),
+                        d.sync.laterRefused(), st.breaks[(int)Break::CHECK_FAILED], st.breaks[(int)Break::OFF_CHAIN],
+                        st.pps.over);
+            EXPECT_LT(r.worst_us, 20.0) << n << " x " << late;
+            EXPECT_EQ(d.sync.steps(), 0u);
+            EXPECT_EQ(st.pps.over, 0u);
+            EXPECT_GE(d.sync.laterRefused(), static_cast<uint32_t>(n));
+            EXPECT_LT(back - 150.0 - n, 1.5) << n << " x " << late;
+        }
+}
+
+// A sky come back early by whole quarters of a second (review, 2026-10-17):
+// the receiver steps its clock forward by about k * 256 ms, which its jump
+// count (mod 256) shows as 0 or -1 ms, and its epochs skip ahead. The
+// arrivals place the jump (MosaicJumpState), so the chain carries the bias
+// across it and sees the sky's step whether the first fix states it before
+// the clock steps or after; a pre-step bias of a second or more anchors too.
+// Nothing is timed wrong; the 1PPS moved more than half a second restarts
+// the line (10 s to valid).
+TEST(MosaicTimeTag, ASkyBackEarlyByWholeQuartersOfASecondIsSeen)
+{
+    for (double adv : {100.0, 256.0, 512.0, 1023.0, 1280.0})
+        for (bool jwf : {false, true})
+        {
+            Bench b;
+            b.sky_delay_ms = -adv;
+            b.sky_delay_at_s = 160.0;
+            b.lost_from_s = 160.0;
+            b.lost_to_s = 175.0;
+            b.fix_after_s = 2.0;
+            b.jump_with_first_fix = jwf;
+            Driver d(false);
+            d.trace = std::getenv("TAG_TRACE") != nullptr;
+            double back = -1.0;
+            const BenchRun r = run(b, d, 260.0, 177.0, &back);
+            const auto& st = d.tag.stats();
+            std::printf("[sky %.0f ms early, step %s] timed %zu, worst %.1f us, back %.1f s after the first fix; "
+                        "jumps placed %u, resets %u; breaks rebase %u bias step %u (%+.3f ms) line restart %u; line "
+                        "steps %u restarts %u\n",
+                        adv, jwf ? "with the fix" : "after it", r.timed.size(), r.worst_us, back - 177.0, d.js.resolved,
+                        d.js.resets, st.breaks[(int)Break::REBASE], st.breaks[(int)Break::BIAS_STEP],
+                        st.last_bias_step_ms, st.breaks[(int)Break::LINE_RESTART], d.sync.steps(), d.sync.restarts());
+            EXPECT_LT(r.worst_us, 20.0) << adv << " " << jwf;
+            EXPECT_EQ(st.pps.over, 0u);
+            EXPECT_EQ(d.js.resets, 0u);
+            EXPECT_GT(back, 0.0);
+            EXPECT_LT(back - 177.0, 25.0) << adv << " " << jwf;
+        }
+}
+
+// A sky come back late by a tenth to most of a second (the rig's run 2 started
+// a little before the sky's own time: the later step pc1 had, larger): the
+// receiver steps its clock back by that, its epochs going on on their grid,
+// and its count shows the step mod 256 (-200 ms reads +56). The arrivals
+// place it, so the chain sees the sky's step; the 1PPS moves later by as
+// much, onto the chain, and the line steps later onto it (a step over half a
+// second restarts it instead). Nothing is timed wrong. A step of exactly
+// k * 256 ms (a count of 0) is not placed: a late stamp looks the same.
+TEST(MosaicTimeTag, ASkyBackLateIsSeen)
+{
+    for (double late : {6.854, 100.0, 200.0, 300.0, 450.0, 600.0})
+        for (bool jwf : {false, true})
+        {
+            Bench b;
+            b.sky_delay_ms = late;
+            b.sky_delay_at_s = 160.0;
+            b.lost_from_s = 160.0;
+            b.lost_to_s = 175.0;
+            b.fix_after_s = 2.0;
+            b.jump_with_first_fix = jwf;
+            Driver d(false);
+            d.trace = std::getenv("TAG_TRACE") != nullptr;
+            double back = -1.0;
+            const BenchRun r = run(b, d, 260.0, 177.0, &back);
+            const auto& st = d.tag.stats();
+            std::printf("[sky %.3f ms late, step %s] timed %zu, worst %.1f us, back %.1f s after the first fix; "
+                        "jumps placed %u, resets %u; breaks rebase %u bias step %u (%+.3f ms) line restart %u; line "
+                        "steps %u (%+.3f ms) restarts %u\n",
+                        late, jwf ? "with the fix" : "after it", r.timed.size(), r.worst_us, back - 177.0,
+                        d.js.resolved, d.js.resets, st.breaks[(int)Break::REBASE], st.breaks[(int)Break::BIAS_STEP],
+                        st.last_bias_step_ms, st.breaks[(int)Break::LINE_RESTART], d.sync.steps(), d.sync.lastStepMs(),
+                        d.sync.restarts());
+            EXPECT_LT(r.worst_us, 20.0) << late << " " << jwf;
+            EXPECT_EQ(st.pps.over, 0u);
+            EXPECT_EQ(d.js.resets, 0u);
+            EXPECT_GT(back, 0.0);
+            EXPECT_LT(back - 177.0, 25.0) << late << " " << jwf;
+            if (late < 500.0)
+                EXPECT_EQ(d.sync.steps(), 1u) << late << " " << jwf;
+        }
+}
+
+// A link backed up a second for two and a half minutes (a relink at a low
+// baud rate with the 20 Hz streams queued): a block that comes a second late
+// pairs the next second's edge, and a line on those labels passes every PPS
+// check (its tags and its edges carry the same wrong second). The driver
+// pairs nothing while its MeasEpochs come that late against the earliest
+// lately. Without that, once the reference is too old to object, the
+// mislabelled line is confirmed and its tags go out a second wrong.
+TEST(MosaicTimeTag, ABackedUpLinkPairsNoEdge)
+{
+    for (bool guard : {true, false})
+    {
+        Bench b;
+        b.backlog_from_s = 150.0;
+        b.backlog_to_s = 300.0;
+        b.backlog_s = 1.0;
+        Driver d(false);
+        d.pair_guard = guard;
+        double back = -1.0;
+        const BenchRun r = run(b, d, 360.0, 300.0, &back);
+        const auto& st = d.tag.stats();
+        std::printf("[backlog 1 s for 150 s, guard %d] timed %zu, worst %.0f us, back %.1f s after it; line restarts "
+                    "%u; holds line restart %u off chain %u; references dropped %u\n",
+                    guard, r.timed.size(), r.worst_us, back - 300.0, d.sync.restarts(),
+                    st.breaks[(int)Break::LINE_RESTART], st.breaks[(int)Break::OFF_CHAIN], st.refs_dropped);
+        if (guard)
+        {
+            EXPECT_LT(r.worst_us, 20.0);
+            EXPECT_EQ(d.sync.restarts(), 0u);
+            EXPECT_GT(back, 0.0);
+            EXPECT_LT(back - 300.0, 6.0);
+        }
+        else
+        {
+            EXPECT_GT(r.worst_us, 9.0e5);   // what the guard is for
+        }
+    }
+}
+
 // ---- the rule piece by piece
 
 namespace
@@ -786,7 +1011,7 @@ TEST(MosaicTimeTag, ABiasStepBreaksTheChain)
     {
         const int64_t rx = t0 + 1000 * k;
         noteAt(js, rx, 10);
-        tag.notePair(rx / 1000, 777000000 + k, true, 777000000 + k);
+        tag.notePair(rx / 1000, 777000000 + k, true, 777000000 + k, 0.0, 0u);
         tag.noteWholeSecond(rx, 777000000 + k - 490, false);
         tag.notePvt(pvtAt(rx, 0.49 + 0.3e-3 * k), js, 1000000, true);
     }
@@ -826,7 +1051,7 @@ TEST(MosaicTimeTag, TheHoldWantsTwoChecksInARow)
         const int64_t rx = t0 + 1000 * k;
         noteAt(js, rx, 10);
         const int64_t edge = 900000000 + 1000000LL * k;
-        tag.notePair(rx / 1000, edge, true, edge_on ? edge - 3 : edge - 500);
+        tag.notePair(rx / 1000, edge, true, edge_on ? edge - 3 : edge - 500, 0.0, 0u);
         tag.noteWholeSecond(rx, edge - 250 + tag_off_us, published);
         tag.notePvt(pvtAt(rx, 0.25), js, 1000000, true);
     };
@@ -877,11 +1102,122 @@ TEST(MosaicTimeTag, ACheckFromBeforeABreakDoesNotConfirm)
     // was), and the bias step breaks the chain after it
     const int64_t rx = t0 + 1000;
     noteAt(js, rx, 10);
-    tag.notePair(rx / 1000, 5000000, true, 5000000);
+    tag.notePair(rx / 1000, 5000000, true, 5000000, 0.0, 0u);
     tag.noteWholeSecond(rx, 5000000 - 2250, false);   // right for the new bias, so the check passes...
     tag.notePvt(pvtAt(rx, 2.25), js, 1000000, true);
     EXPECT_FALSE(tag.held() && tag.holdBreak() == Break::FIRST);   // ...and releases the first chain
     EXPECT_TRUE(tag.held());                                       // then the step holds the next
     EXPECT_EQ(tag.holdBreak(), Break::BIAS_STEP);
     EXPECT_EQ(tag.passes(), 0u);
+}
+
+// The edges against the chain, piece by piece: a release sets the reference;
+// an edge that moved while the PVTs did not is off the chain (untimed, and on
+// the line it breaks the chain); one that moved with them is on it and lets
+// the line step later onto it (edgeOnChain); a restart of the line breaks the
+// chain; a reference left two minutes is dropped and the next chain is the
+// 1PPS's alone; a bias carried across a big jump (a start-over that kept the
+// clock) shows the sky's step, and across a lost clock nothing is carried.
+TEST(MosaicTimeTag, TheEdgesAgainstTheChain)
+{
+    MosaicTimeTag tag;
+    MosaicJumpState js;
+    const int64_t t0 = int64_t(2440) * kWeekMs + 100000000;
+    tag.noteFineTime(true);
+    int64_t moved_us = 0;     // the 1PPS against the reference
+    uint32_t restarts = 0;
+    auto second = [&](int k, double bias_ms, int64_t line_off_us = 0) {
+        const int64_t rx = t0 + 1000 * k;
+        noteAt(js, rx, 10);
+        const int64_t edge = 900000000 + 1000000LL * k + moved_us;
+        tag.notePair(rx / 1000, edge, true, edge - 2 - line_off_us, 0.0, restarts);
+        tag.noteWholeSecond(rx, edge - 2 - line_off_us - static_cast<int64_t>(std::llround(bias_ms * 1000.0)),
+                            false);
+        tag.notePvt(pvtAt(rx, bias_ms, 0.0), js, 1000000, true);
+    };
+    second(0, 0.25);
+    EXPECT_FALSE(tag.refHave());          // the first anchor: no chain before it
+    second(1, 0.25);
+    second(2, 0.25);
+    ASSERT_FALSE(tag.held());
+    EXPECT_TRUE(tag.refHave());           // the release set it
+    EXPECT_EQ(tag.judge(true, true, 902000000), Why::TIMED);
+
+    // the edge moves 3 ms later, the PVTs do not: off the line and the chain, no hold
+    moved_us = 3000;
+    EXPECT_FALSE(tag.edgeOnChain((t0 + 3000) / 1000, 903000000 + 3000));
+    second(3, 0.25, 3000);   // the line still where it was
+    EXPECT_FALSE(tag.onChain());
+    EXPECT_EQ(tag.judge(true, true, 903000000), Why::EDGE_OFF);
+    EXPECT_FALSE(tag.held());
+    // the line follows it anyway: on the line, off the chain -> held
+    second(4, 0.25);
+    EXPECT_EQ(tag.judge(true, true, 904000000), Why::OFF_CHAIN);
+    EXPECT_TRUE(tag.held());
+    EXPECT_EQ(tag.holdBreak(), Break::OFF_CHAIN);
+    // its checks pass (the line on its edges, the carry on its PVT) and confirm nothing
+    second(5, 0.25);
+    second(6, 0.25);
+    EXPECT_TRUE(tag.held());
+    EXPECT_EQ(tag.passes(), 0u);
+    // the PVTs move 3 ms too: on the chain, and the line may step later onto such an edge
+    second(7, 3.25);
+    EXPECT_NEAR(tag.chainMs(), 3.0, 1e-9);
+    EXPECT_TRUE(tag.edgeOnChain((t0 + 8000) / 1000, 908000000 + 3000));
+    EXPECT_FALSE(tag.edgeOnChain((t0 + 8000) / 1000, 908000000));
+    second(8, 3.25);
+    EXPECT_TRUE(tag.onChain());
+    second(9, 3.25);
+    EXPECT_FALSE(tag.held());
+    EXPECT_NEAR(tag.chainMs(), 0.0, 1e-9);   // the release moved the reference up
+    EXPECT_EQ(tag.edgeRefUs(), 2);
+
+    // a restart of the line: held until confirmed anew
+    restarts = 1;
+    second(10, 3.25);
+    EXPECT_TRUE(tag.held());
+    EXPECT_EQ(tag.holdBreak(), Break::LINE_RESTART);
+    second(11, 3.25);
+    second(12, 3.25);
+    EXPECT_FALSE(tag.held());
+
+    // two minutes and more with no trusted edge (edges off the line all along, no whole second's epoch to
+    // check): the reference is dropped, the chain held, and the 1PPS alone confirms the next one
+    for (int k = 13; k < 140; ++k)
+    {
+        const int64_t rx = t0 + 1000 * k;
+        noteAt(js, rx, 10);
+        const int64_t edge = 900000000 + 1000000LL * k + moved_us;
+        tag.notePair(rx / 1000, edge, true, edge - 500, 0.0, restarts);
+        EXPECT_EQ(tag.judge(true, true, edge), Why::EDGE_OFF);
+        tag.notePvt(pvtAt(rx, 3.25, 0.0), js, 1000000, true);
+    }
+    EXPECT_FALSE(tag.refHave());
+    EXPECT_EQ(tag.stats().refs_dropped, 1u);
+    EXPECT_TRUE(tag.held());
+    EXPECT_EQ(tag.holdBreak(), Break::OFF_CHAIN);
+    second(140, 3.25);
+    second(141, 3.25);
+    EXPECT_FALSE(tag.held());
+    EXPECT_TRUE(tag.refHave());
+
+    // a big jump the count starts over at (a -7 ms step: the clock kept) with the sky 6.854 ms later: the
+    // chain carries across it and sees the step
+    MosaicTimeTag t2;
+    MosaicJumpState j2;
+    noteAt(j2, t0, 20);
+    t2.notePvt(pvtAt(t0, 0.30, 0.0), j2, 1000000, true);
+    noteAt(j2, t0 + 50, 13);
+    EXPECT_EQ(j2.rebases, 1u);
+    EXPECT_EQ(j2.resets, 0u);
+    EXPECT_EQ(j2.jsum_ms, -7);
+    t2.notePvt(pvtAt(t0 + 50, 0.30 + 6.854 - 7.0, 0.0), j2, 1000000, true);
+    EXPECT_EQ(t2.holdBreak(), Break::REBASE);
+    EXPECT_NEAR(t2.chainMs(), 6.854, 1e-9);
+    // a reset (time going back): its new bias says nothing of the sky
+    noteAt(j2, t0 - 4000, 0);
+    EXPECT_EQ(j2.resets, 1u);
+    t2.notePvt(pvtAt(t0 - 4000, 12.3, 0.0), j2, 1000000, true);
+    EXPECT_EQ(t2.holdBreak(), Break::RESET);
+    EXPECT_NEAR(t2.chainMs(), 6.854, 1e-9);   // the sky taken not to have moved since
 }

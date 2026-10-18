@@ -32,14 +32,21 @@
 // whole second's placed tag (noteWholeSecond), and each PVT checks the
 // second's tag against its edge. A log begins long after the boot, so its
 // first chain stands for one confirmed before it (assumeConfirmedAtStart).
+// A K line is stamped with its edge, but the driver took it when the block
+// that paired the edge arrived (the first xPPSOffset or whole-second
+// PVTGeodetic naming its second: pairingSecond), a few ms later and maybe
+// after that second's MeasEpoch was placed: the caller holds each K line
+// until that block, so the epochs between go on the line before it, as they
+// did in flight.
 //
 // The glue mirrors the driver's (TR_GNSSReceiverMosaic_Serial.cpp,
-// rawMeasEpoch/rawPvt/pairPps: the two-minute carry, the start-over check,
-// the PVT's clock sanity, the chain's breaks and the 1PPS's confirmation, the
-// tag's FINETIME and 120 s pairing age) and the GNSS task's (main.cpp,
-// rawGnssMeasTask). Not mirrored: a whole second whose epoch has no cell is
-// not checked here (the driver checks it too), and a K line from the edge
-// of a second stands from its edge on, a few ms before the driver took it.
+// rawMeasEpoch/rawPvt/pairPps: the two-minute carry, the jump count with its
+// arrivals, the PVT's clock sanity, the chain's breaks, its reference and the
+// 1PPS's confirmation, the tag's FINETIME and 120 s pairing age) and the GNSS
+// task's (main.cpp, rawGnssMeasTask). Not mirrored: a whole second whose
+// epoch has no cell is not checked here (the driver checks it too), and the
+// line's permit to step later (GnssTimeSync's may_step_later) is in the K
+// lines already.
 // Header-only and pure (tests_cpp/test_raw_replay_mosaic.cpp).
 #ifndef RAW_REPLAY_MOSAIC_FEED_H
 #define RAW_REPLAY_MOSAIC_FEED_H
@@ -131,6 +138,7 @@ struct TimeTagGate
         NO_LINE,        // the clock line is not valid
         NO_BIAS,        // no PVT's bias carries to it (MosaicTimeTag)
         EDGE_OFF,       // the last edge sat off the line
+        OFF_CHAIN,      // the last edge sat off the chain: the 1PPS and the PVTs state different GPS times
         HELD,           // the chain of PVT biases is not confirmed by the 1PPS yet
     };
     int first_rt = -1;              // the log's first ReceiverTime: -1 none, else its FINETIME (0 or 1)
@@ -139,9 +147,9 @@ struct TimeTagGate
     int64_t pair_us = INT64_MIN;    // the last pairing (MCU us); before the log's first, that first (unless from_boot)
 
     // have_time/finetime: the feed's last ReceiverTime so far (MosaicFeed::haveTime, finetime); anchored,
-    // edge_on_line, held: the feed's MosaicTimeTag (MosaicFeed::anchored, timeTag())
+    // edge_on_line, held, on_chain: the feed's MosaicTimeTag (MosaicFeed::anchored, timeTag())
     Why judge(bool have_time, bool finetime, bool line_valid, int64_t now_us, bool anchored = true,
-              bool edge_on_line = true, bool held = false) const
+              bool edge_on_line = true, bool held = false, bool on_chain = true) const
     {
         const bool fine = have_time ? finetime : (first_rt < 0 ? assume_finetime : (!from_boot && first_rt == 1));
         if (!fine)
@@ -154,6 +162,8 @@ struct TimeTagGate
             return Why::NO_BIAS;
         if (!edge_on_line)
             return Why::EDGE_OFF;
+        if (!on_chain)
+            return Why::OFF_CHAIN;
         if (held)
             return Why::HELD;
         return Why::TIMED;
@@ -185,6 +195,7 @@ public:
         uint32_t meas = 0, meas_bad = 0, off_grid = 0, empty = 0, epochs = 0;
         uint32_t dtr_anchored = 0, dtr_zero = 0;   // epochs with a PVT's bias to carry, or with none (untimed)
         uint32_t jumps = 0, rebases = 0;
+        uint32_t resets = 0, resolved = 0;   // of the rebases, the clock lost; jumps the arrivals placed past 256 ms
         uint32_t pvt = 0, pvt_fix = 0, pvt_anchor = 0;
         uint32_t nav = 0, nav_ok = 0, nav_dropped = 0, nav_bad = 0;
         uint32_t ion = 0, ion_applied = 0;
@@ -198,10 +209,39 @@ public:
     const mosaic::MosaicTimeTag& timeTag() const { return tag_; }
     void assumeConfirmedAtStart() { tag_.assumeConfirmedAtStart(); }
     // A 1PPS edge paired with GPS second gps_s (a K line: its time and the
-    // line it moved), against that line's place for the second.
-    void notePair(int64_t gps_s, int64_t edge_us, bool line_valid, int64_t line_mcu_us)
+    // line it moved), against that line's place for the second; line_drift
+    // the line's d(MCU - GPS)/d(GPS), line_restarts its restarts so far.
+    void notePair(int64_t gps_s, int64_t edge_us, bool line_valid, int64_t line_mcu_us, double line_drift,
+                  uint32_t line_restarts)
     {
-        tag_.notePair(gps_s, edge_us, line_valid, line_mcu_us);
+        tag_.notePair(gps_s, edge_us, line_valid, line_mcu_us, line_drift, line_restarts);
+    }
+
+    // The GPS second a block would pair with a 1PPS edge, as the driver's
+    // onBlock names it: a whole-second PVTGeodetic, or an xPPSOffset on GPS
+    // time (its TOW the pulse's, rounded). False for any other block.
+    static bool pairingSecond(const uint8_t* b, size_t len, int64_t& gps_s)
+    {
+        mosaic::SbfHeader h;
+        if (!mosaic::sbfHeader(b, len, h))
+            return false;
+        if (h.number == mosaic::SBF_PVT_GEODETIC)
+        {
+            if (h.tow_ms == mosaic::kTowDnu || h.wnc == mosaic::kWncDnu || h.tow_ms % 1000U != 0)
+                return false;
+            gps_s = static_cast<int64_t>(h.wnc) * 604800 + h.tow_ms / 1000U;
+            return true;
+        }
+        if (h.number == mosaic::SBF_XPPS_OFFSET)
+        {
+            mosaic::XppsOffset x;
+            if (!mosaic::decodeXppsOffset(b, len, x) || x.time_scale != 1 || x.tow_ms == mosaic::kTowDnu ||
+                x.wnc == mosaic::kWncDnu)
+                return false;
+            gps_s = static_cast<int64_t>(x.wnc) * 604800 + (x.tow_ms + 500U) / 1000U;
+            return true;
+        }
+        return false;
     }
     // The last EPOCH, if a whole second, placed at mcu_us (handed over timed
     // or not): its PPS check comes with its PVT.
@@ -311,7 +351,7 @@ private:
         if (header_ok && mosaic::onFuseGrid(tow, cfg_.fuse_period_ms))
         {
             te = gnss_raw::TimedRawEpoch();
-            if (mosaic::rawEpochFromMeasEpoch(b, len, te.epoch, js_, info_))
+            if (mosaic::rawEpochFromMeasEpoch(b, len, te.epoch, js_, info_, t_arr_us))
             {
                 te.gps_week = info_.wnc;
                 te.arrival_us = t_arr_us;
@@ -330,7 +370,7 @@ private:
         }
         else
         {
-            if (!mosaic::noteMeasEpochClock(b, len, js_, info_))
+            if (!mosaic::noteMeasEpochClock(b, len, js_, info_, t_arr_us))
                 n_.meas_bad++;
             else
                 n_.off_grid++;
@@ -340,6 +380,8 @@ private:
             last_wnc_ = info_.wnc;
         n_.jumps += js_.jumps - j0;
         n_.rebases += js_.rebases - r0;
+        n_.resets = js_.resets;
+        n_.resolved = js_.resolved;
         return k;
     }
 
@@ -376,7 +418,8 @@ private:
         // a solution's clock, as the driver takes it: RxClkBias is not in has_solution's do-not-use test; only a
         // PVT whose own MeasEpoch was the last noted holds the jump count it states its bias at (counted here; the
         // driver's MosaicTimeTag decides, and checks its second's tag against the edge first)
-        if (pvt_.has_solution && std::isfinite(pvt_.rx_clk_bias_ms) && std::fabs(pvt_.rx_clk_bias_ms) <= 1000.0 &&
+        if (pvt_.has_solution && std::isfinite(pvt_.rx_clk_bias_ms) &&
+            std::fabs(pvt_.rx_clk_bias_ms) <= mosaic::MosaicTimeTag::kMaxBiasMs &&
             std::isfinite(pvt_.rx_clk_drift_ppm) && std::fabs(pvt_.rx_clk_drift_ppm) <= 1000.0f &&
             mosaic::pvtAnchorsJumps(js_, pvt_.wnc, pvt_.tow_ms))
             n_.pvt_anchor++;

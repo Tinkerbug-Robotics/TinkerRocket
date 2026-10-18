@@ -64,12 +64,18 @@ namespace mosaic
 static constexpr double kMosaicC = 299792458.0;   // m/s, as gnss/atmo.h's GNSS_C
 static constexpr uint32_t kMosaicLockMaxMs = 254000;   // a Type2's LockTime clips at 254 s
 static constexpr int64_t  kMosaicMeasGapMs = 2000;     // MeasEpochs this far apart: a receiver reset (MosaicJumpState)
+static constexpr int64_t  kMosaicNoArrival = INT64_MIN; // a MeasEpoch's arrival not given: the count alone
+static constexpr double   kMosaicAliasTolMs = 64.0;     // the arrivals place a jump the count shows mod 256 within this
+static constexpr long     kMosaicAliasMaxK = 8;         //   up to 8 * 256 ms either way (more: a reset)
+static constexpr double   kMosaicArrDecayPerS = 100e-6; // the earliest arrival forgets 100 us a second (crystals, delays)
 
 // The receiver's clock jumps, followed from one MeasEpoch to the next.
 // CumClkJumps is the jumps since the receiver started, in ms mod 256; a step
-// of more than 2 ms, time going backwards, or more than kMosaicMeasGapMs of
-// receiver time since the last MeasEpoch is a receiver reset (or a different
-// log), and the count starts over there. The gap is for a reset whose count
+// of more than 2 ms (a step in the sky it tracks, on the RF rig), time going
+// backwards, or more than kMosaicMeasGapMs of receiver time since the last
+// MeasEpoch, and the count starts over there (j_ms, rebases). The last two
+// are a receiver reset (or a different log): its clock is lost (resets);
+// across a big step it is kept (jsum_ms). The gap is for a reset whose count
 // lands within 2 ms of the last (CumClkJumps starts again at 0, a count of
 // 254 before reads as a +2 ms jump): a reset is seconds of no MeasEpoch with
 // a time, while a lost sky still sends one every epoch. A driver that adapts only
@@ -78,6 +84,32 @@ static constexpr int64_t  kMosaicMeasGapMs = 2000;     // MeasEpochs this far ap
 // header seen twice (noted, then adapted) counts once. Where the last jump or
 // start-over was seen (cut_ms) holds every later cell's lock time
 // (lockCapMs).
+//
+// Given each MeasEpoch's arrival on the MCU clock, the count's 256 ms
+// ambiguity is resolved too. The receiver's time less the arrival stamp
+// stays put but for the clock jumps (the crystals move it microseconds a
+// second, the receiver's delay a few ms), and a stamp can be late (the
+// reading task held off) but never early: so its most lately (arr_hi_us, run
+// on by the jumps and forgetting kMosaicArrDecayPerS) is where an on-time
+// epoch sits. An epoch that sits ahead of it by about a k * 256 ms the count
+// cannot show (a sky come back early on the RF rig: the receiver steps its
+// clock forward by that and its epochs skip ahead) is that jump, k > 0: a
+// count of 0 or -1 ms read alone would carry the bias across it 256 ms or
+// more wrong. Ahead by anything else, or by k * 256 ms plus more than
+// kMosaicAliasTolMs, the time moved by something the count does not hold:
+// a reset. A sky come back late makes the receiver step its clock back:
+// where its epochs go on on their grid the arrivals fall behind by the step,
+// which is the count's plus k * 256 ms, k < 0, placed only where the count
+// shows a step (behind with none is a late stamp); where it repeats its
+// epochs' times, time goes backwards, which is a reset unless the arrivals
+// show it as the count's step plus k * 256 ms, k <= 0. Either way the
+// arrival itself must come later than the last. |k| beyond
+// kMosaicAliasMaxK is a reset: a receiver whose time moved seconds set it
+// anew.
+// jsum_ms keeps the resolved jumps across a big jump's start-over, so the
+// time tag can carry a bias across one (MosaicTimeTag.h); only a reset
+// (resets) loses it. And how late the last epoch came against the earliest
+// (late_us) tells how far the link is backed up.
 struct MosaicJumpState
 {
     bool     have = false;        // an epoch with CumClkJumps seen since the last start-over
@@ -88,6 +120,15 @@ struct MosaicJumpState
     uint32_t rebases = 0;         // start-overs after the first epoch
     bool     cut = false;         // a jump or a start-over seen: the carrier is continuous only since cut_ms
     int64_t  cut_ms = 0;          // the receiver time of the epoch that showed it, ms
+    // across the start-overs a big jump makes (the receiver's clock kept)
+    int64_t  jsum_ms = 0;         // the clock jumps since the last reset, ms, each resolved (d + 256 k)
+    uint32_t resets = 0;          // start-overs that lost the clock: a gap, time back, a jump the count cannot hold
+    uint32_t resolved = 0;        // jumps the arrivals placed past the count's 256 ms (k != 0)
+    // the receiver's time against the arrival stamps (when given)
+    bool     arr_have = false;
+    int64_t  arr_hi_us = 0;       // receiver time less arrival, us: the most lately (the earliest arrival)
+    int64_t  late_us = 0;         // how far the last epoch sat below it: its stamp's lateness, us
+    int64_t  last_arr_us = 0;     // the last epoch's arrival
 };
 
 // What one MeasEpoch gave, beside the cells.
@@ -99,7 +140,9 @@ struct MosaicEpochInfo
     uint8_t   common_flags = 0;
     bool      jumped = false;    // the clock jumped jump_ms at this epoch
     bool      rebased = false;   // the jump count started over at this epoch (j_ms from 0)
-    int8_t    jump_ms = 0;
+    bool      reset = false;     //   and lost the receiver's clock (MosaicJumpState::resets)
+    int8_t    jump_ms = 0;       // CumClkJumps's step, mod 256
+    int32_t   jump_full_ms = 0;  // the step the arrivals placed (jump_ms + 256 k), or jump_ms
     uint32_t  lock_cap_ms = kMosaicLockMaxMs;   // every cell's lock_ms at most this (lockCapMs)
     int32_t   j_ms = 0;          // MosaicJumpState::j_ms after this epoch
     uint8_t   n_gps = 0, n_gal = 0, n_bds = 0;
@@ -109,31 +152,100 @@ struct MosaicEpochInfo
 };
 
 // Follow CumClkJumps across one epoch's header (revision 1 on; a revision-0
-// block says nothing, and nothing changes).
-inline void noteClockJumps(const SbfMeasHeader& h, MosaicJumpState& js, MosaicEpochInfo& info)
+// block says nothing, and nothing changes). arrival_us: the block's arrival
+// on the MCU clock (its last byte, as the driver stamps it), or
+// kMosaicNoArrival for the count alone (see MosaicJumpState).
+inline void noteClockJumps(const SbfMeasHeader& h, MosaicJumpState& js, MosaicEpochInfo& info,
+                           int64_t arrival_us = kMosaicNoArrival)
 {
     if (h.has_cum_clk_jumps)
     {
         const int64_t t = static_cast<int64_t>(h.wnc) * 604800000LL + h.tow_ms;
+        const bool arr = arrival_us != kMosaicNoArrival;
+        const int64_t o_us = arr ? t * 1000 - arrival_us : 0;
+        // the earliest arrival lately, run on to this epoch (the jump at it not yet in)
+        const int64_t hi_us = js.arr_hi_us - static_cast<int64_t>(std::llround(
+                                  kMosaicArrDecayPerS * static_cast<double>(t > js.last_ms ? t - js.last_ms : 0) * 1.0e3));
+        int32_t jump = 0;
         if (!js.have)
         {
             js.j_ms = 0;
+            js.jsum_ms = 0;
             info.rebased = true;
         }
         else
         {
             const int d = static_cast<int8_t>(static_cast<uint8_t>(h.cum_clk_jumps - js.last_cum));
-            info.jumped = d != 0;
+            jump = d;
+            bool uncounted = false;
+            bool back_counted = false;
+            if (arr && js.arr_have && arrival_us > js.last_arr_us)
+            {
+                // against the earliest arrival, beyond what the count says: k * 256 ms the count
+                // cannot show, or something it does not hold at all
+                const double past_ms = static_cast<double>(o_us - hi_us) * 1.0e-3 - d;
+                const long k = std::lround(past_ms / 256.0);
+                const bool placed = k != 0 && k >= -kMosaicAliasMaxK && k <= kMosaicAliasMaxK &&
+                                    std::fabs(past_ms - 256.0 * static_cast<double>(k)) <= kMosaicAliasTolMs;
+                if (t >= js.last_ms)
+                {
+                    // ahead (a late stamp only sits lower): a forward step past the count
+                    if (past_ms > kMosaicAliasTolMs)
+                    {
+                        if (placed && k > 0)
+                        {
+                            jump = d + static_cast<int32_t>(256 * k);
+                            js.resolved++;
+                        }
+                        else
+                        {
+                            uncounted = true;
+                        }
+                    }
+                    // behind, where the count shows a step: a step back past it, its epochs going on
+                    // on their grid (behind with no step counted is a late stamp)
+                    else if (past_ms < -kMosaicAliasTolMs && d != 0 && placed && k < 0)
+                    {
+                        jump = d + static_cast<int32_t>(256 * k);
+                        js.resolved++;
+                    }
+                }
+                else if (placed && k < 0)
+                {
+                    // time back by a step back past the count (a sky come back late)
+                    jump = d + static_cast<int32_t>(256 * k);
+                    js.resolved++;
+                    back_counted = true;
+                }
+                else if (std::fabs(past_ms) <= kMosaicAliasTolMs)
+                {
+                    back_counted = true;   // time back by the step the count shows
+                }
+            }
+            info.jumped = jump != 0;
             info.jump_ms = static_cast<int8_t>(d);
-            if (t < js.last_ms || t - js.last_ms > kMosaicMeasGapMs || d > 2 || d < -2)
+            info.jump_full_ms = jump;
+            const bool reset = (t < js.last_ms && !back_counted) || t - js.last_ms > kMosaicMeasGapMs || uncounted;
+            if (reset || jump > 2 || jump < -2)
             {
                 js.j_ms = 0;
                 js.rebases++;
                 info.rebased = true;
+                if (reset)
+                {
+                    js.resets++;
+                    js.jsum_ms = 0;
+                    info.reset = true;
+                }
+                else
+                {
+                    js.jsum_ms += jump;
+                }
             }
             else
             {
-                js.j_ms += d;
+                js.j_ms += jump;
+                js.jsum_ms += jump;
             }
             if (info.jumped) js.jumps++;
             if (info.jumped || info.rebased)
@@ -141,6 +253,21 @@ inline void noteClockJumps(const SbfMeasHeader& h, MosaicJumpState& js, MosaicEp
                 js.cut = true;
                 js.cut_ms = t;
             }
+        }
+        if (arr)
+        {
+            if (!js.arr_have || info.reset)
+            {
+                js.arr_hi_us = o_us;
+            }
+            else
+            {
+                const int64_t run_on = hi_us + static_cast<int64_t>(jump) * 1000;
+                js.arr_hi_us = o_us > run_on ? o_us : run_on;
+            }
+            js.arr_have = true;
+            js.late_us = js.arr_hi_us - o_us;
+            js.last_arr_us = arrival_us;
         }
         js.have = true;
         js.last_cum = h.cum_clk_jumps;
@@ -175,8 +302,10 @@ inline uint32_t lockCapMs(const SbfMeasHeader& h, const MosaicJumpState& js)
 }
 
 // The clock-jump count of a MeasEpoch that is not adapted (off the fuse
-// grid): its header only. False if the reader refuses the block.
-inline bool noteMeasEpochClock(const uint8_t* b, size_t len, MosaicJumpState& js, MosaicEpochInfo& info)
+// grid): its header only. False if the reader refuses the block. arrival_us
+// as noteClockJumps takes it.
+inline bool noteMeasEpochClock(const uint8_t* b, size_t len, MosaicJumpState& js, MosaicEpochInfo& info,
+                               int64_t arrival_us = kMosaicNoArrival)
 {
     info = MosaicEpochInfo{};
     SbfMeasReader rd;
@@ -187,16 +316,17 @@ inline bool noteMeasEpochClock(const uint8_t* b, size_t len, MosaicJumpState& js
     info.common_flags = h.common_flags;
     if (info.status != SbfStatus::OK)
         return false;
-    noteClockJumps(h, js, info);
+    noteClockJumps(h, js, info, arrival_us);
     return true;
 }
 
 // One MeasEpoch block (CRC checked) into out: GPS L1 C/A, Galileo E1 and
 // BeiDou B1I, one cell per satellite, in block order. False, with out.n = 0,
 // for a block the reader refuses (wrong, short, bad layout, scrambled, no
-// time) or one with no cell to give; info says which.
+// time) or one with no cell to give; info says which. arrival_us as
+// noteClockJumps takes it.
 inline bool rawEpochFromMeasEpoch(const uint8_t* b, size_t len, gnss_raw::RawEpoch& out, MosaicJumpState& js,
-                                  MosaicEpochInfo& info)
+                                  MosaicEpochInfo& info, int64_t arrival_us = kMosaicNoArrival)
 {
     out.n = 0;
     info = MosaicEpochInfo{};
@@ -208,7 +338,7 @@ inline bool rawEpochFromMeasEpoch(const uint8_t* b, size_t len, gnss_raw::RawEpo
     info.common_flags = h.common_flags;
     if (info.status != SbfStatus::OK)
         return false;
-    noteClockJumps(h, js, info);
+    noteClockJumps(h, js, info, arrival_us);
     info.lock_cap_ms = lockCapMs(h, js);
     out.tow_s = h.tow_ms * 1.0e-3;
 
