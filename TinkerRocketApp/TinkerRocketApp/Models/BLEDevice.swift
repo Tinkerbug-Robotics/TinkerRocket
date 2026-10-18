@@ -1181,9 +1181,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         guard offset.isSendable else { return }
         sendRawCommand(81, payload: offset.payload)
         // Only over a readback that carries the setting: firmware without it
-        // ignores the command, and the screen must keep saying so.
+        // ignores the command, and the screen must keep saying so. It is what
+        // was sent, not what the flight computer reported, so the screen says
+        // "not reported yet" until the next readback says "fc".
         if var cfg = rocketConfig, cfg.antennaOffset != nil {
             cfg.antennaOffset = offset
+            cfg.antennaOffsetFromFlightComputer = false
             rocketConfig = cfg
         }
     }
@@ -2427,6 +2430,8 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                let y = dict["anty"] as? Int, let z = dict["antz"] as? Int {
                 cfg.antennaOffset = AntennaOffset(known: k, xMm: x, yMm: y, zMm: z)
             }
+            // Anything but "fc", absence included, is the out computer's copy.
+            cfg.antennaOffsetFromFlightComputer = cfg.antennaOffset != nil && dict["antsrc"] as? String == "fc"
             cfg.loraFreqMHz = parseFloat(dict["lf"])
             cfg.loraSF = (dict["lsf"] as? Int).map { UInt8($0) }
             cfg.loraBwKHz = parseFloat(dict["lbw"])

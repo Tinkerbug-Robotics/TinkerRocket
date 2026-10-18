@@ -262,6 +262,13 @@ struct RocketConfig {
     /// board's own axes. nil = firmware that has no such setting, or a report
     /// missing a key or holding a value the firmware would refuse.
     var antennaOffset: AntennaOffset? = nil
+    /// True when `antennaOffset` is the flight computer's own report
+    /// ("antsrc":"fc"). False for the out computer's copy of the last cmd 81
+    /// it relayed ("oc": the rail off, or a flight computer too old to report
+    /// it), which the flight computer may not hold; an out computer that
+    /// predates the key reads the same. Only the flight computer's is adopted
+    /// into the profile.
+    var antennaOffsetFromFlightComputer: Bool = false
     var loraFreqMHz: Float? = nil
     var loraSF: UInt8? = nil
     var loraBwKHz: Float? = nil

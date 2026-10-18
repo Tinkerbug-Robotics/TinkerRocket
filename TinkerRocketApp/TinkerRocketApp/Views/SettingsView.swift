@@ -96,11 +96,14 @@ private struct SettingsContent: View {
     // GNSS antenna offset (cmd 81), in the board's own axes, edited as
     // strings and sent when the three fields lose focus. `antennaDraft`: the
     // picker says Measured but nothing is sent yet — zeros would tell the
-    // filter the antenna sits on the IMU, so the numbers come first.
+    // filter the antenna sits on the IMU, so the numbers come first, and the
+    // fields start empty. `antennaTyped`: typing not yet sent; until the user
+    // types, an empty field is no error.
     @State private var sAntX = ""
     @State private var sAntY = ""
     @State private var sAntZ = ""
     @State private var antennaDraft = false
+    @State private var antennaTyped = false
 
     // Drives the full-screen pyro test-fire cover.  (The per-channel continuity
     // readout state lives in the PyroChannelTestControls child view.)
@@ -1170,9 +1173,9 @@ private struct SettingsContent: View {
                 }
                 .pickerStyle(.segmented)
                 if antennaMeasuredShown {
-                    stringRow("Board X", text: $sAntX, field: .antennaX, unit: "mm")
-                    stringRow("Board Y", text: $sAntY, field: .antennaY, unit: "mm")
-                    stringRow("Board Z", text: $sAntZ, field: .antennaZ, unit: "mm")
+                    stringRow("Board X", text: antennaText($sAntX), field: .antennaX, unit: "mm")
+                    stringRow("Board Y", text: antennaText($sAntY), field: .antennaY, unit: "mm")
+                    stringRow("Board Z", text: antennaText($sAntZ), field: .antennaZ, unit: "mm")
                     if let error = antennaInputError {
                         Text(error)
                             .font(.caption).foregroundColor(.red)
@@ -1200,8 +1203,11 @@ private struct SettingsContent: View {
             && (!antennaOffsetSupported || device.telemetry.state == "INFLIGHT")
     }
 
-    /// Which typed fields the firmware would refuse; nil when all three are fine.
+    /// Which typed fields the firmware would refuse; nil when all three are
+    /// fine, and before the user has typed: a fresh draft's empty fields are
+    /// no mistake yet.
     private var antennaInputError: String? {
+        guard antennaTyped else { return nil }
         let bad = [("X", sAntX), ("Y", sAntY), ("Z", sAntZ)]
             .filter { AntennaOffset.parseMm($0.1) == nil }
             .map { $0.0 }
@@ -1222,12 +1228,19 @@ private struct SettingsContent: View {
         guard let reported = cfg.antennaOffset else {
             return text + " This rocket\u{2019}s firmware has no antenna offset setting."
         }
+        // "antsrc": the flight computer's own report, or the out computer's
+        // copy of what it last relayed (and the app's mirror of a send).
+        let fromFc = cfg.antennaOffsetFromFlightComputer
         if antennaDraft && !profile.antennaOffsetKnown {
             text += " Not sent yet: enter all three, then tap Done."
-        } else if reported == profile.antennaOffset {
+        } else if reported == profile.antennaOffset && fromFc {
             text += " In use by the flight computer."
-        } else {
+        } else if reported == profile.antennaOffset {
+            text += " Sent to the rocket; the flight computer has not reported it yet."
+        } else if fromFc {
             text += " The flight computer reports \(reported.label)."
+        } else {
+            text += " The out computer holds \(reported.label); the flight computer has not reported it yet."
         }
         if let receiver = device.fcGnss, receiver != "mosaic-G5" {
             text += " Only the mosaic-G5\u{2019}s navigation filter uses it; the rocket keeps it for when one does."
@@ -1236,7 +1249,7 @@ private struct SettingsContent: View {
     }
 
     /// Unknown is sent at once (known 0 and zeros). Measured only opens the
-    /// three fields: the offset goes out when they are committed.
+    /// three fields, empty: the offset goes out when they are committed.
     private var antennaMeasuredBinding: Binding<Bool> {
         Binding(
             get: { antennaMeasuredShown },
@@ -1244,16 +1257,33 @@ private struct SettingsContent: View {
                 if measured {
                     guard !profile.antennaOffsetKnown else { return }
                     antennaDraft = true
-                    sAntX = String(profile.antennaXMm)
-                    sAntY = String(profile.antennaYMm)
-                    sAntZ = String(profile.antennaZMm)
+                    loadAntennaFields(.unknown)
                 } else {
                     antennaDraft = false
                     updateProfile { $0.antennaOffset = .unknown }
-                    sAntX = "0"; sAntY = "0"; sAntZ = "0"
+                    loadAntennaFields(.unknown)
                     if device.isConnected { device.sendAntennaOffsetConfig(.unknown) }
                 }
             })
+    }
+
+    /// A field's text, marking the draft typed when the user changes it.
+    private func antennaText(_ text: Binding<String>) -> Binding<String> {
+        Binding(
+            get: { text.wrappedValue },
+            set: { typed in
+                if typed != text.wrappedValue { antennaTyped = true }
+                text.wrappedValue = typed
+            })
+    }
+
+    /// The three fields for `offset`: its millimeters when measured, empty
+    /// when unknown — an Unknown profile's zeros are no measurement.
+    private func loadAntennaFields(_ offset: AntennaOffset) {
+        sAntX = offset.known ? String(offset.xMm) : ""
+        sAntY = offset.known ? String(offset.yMm) : ""
+        sAntZ = offset.known ? String(offset.zMm) : ""
+        antennaTyped = false
     }
 
     /// Commit the three fields: all three valid, or nothing is stored or sent
@@ -1267,7 +1297,7 @@ private struct SettingsContent: View {
         else { return }
         let offset = AntennaOffset(known: true, xMm: x, yMm: y, zMm: z)
         antennaDraft = false
-        sAntX = String(x); sAntY = String(y); sAntZ = String(z)
+        loadAntennaFields(offset)
         updateProfile { $0.antennaOffset = offset }
         if device.isConnected, !antennaOffsetLocked { device.sendAntennaOffsetConfig(offset) }
     }
@@ -1733,9 +1763,7 @@ private struct SettingsContent: View {
         sMainRate = formatInt(p.mainRateFps)
         sMainDeployAlt = formatInt(p.mainDeployAltAglFt)
         sDragK = formatDecimal(p.ballisticDragK)
-        sAntX = String(p.antennaXMm)
-        sAntY = String(p.antennaYMm)
-        sAntZ = String(p.antennaZMm)
+        loadAntennaFields(p.antennaOffset)
         antennaDraft = false
         reloadPyroValueStrings()
     }

@@ -1578,12 +1578,14 @@ public class DeviceSession(
      * `sendAntennaOffsetConfig`.  Only over a readback that already carries
      * the setting: firmware without it ignores the command, and the settings
      * screen must keep saying so rather than show a value nobody stored.
+     * It is what was sent, not what the flight computer reported, so the
+     * screen says "not reported yet" until the next readback says "fc".
      */
     public fun mirrorAntennaOffset(offset: AntennaOffset) {
         sessionScope.launch {
             val cfg = _rocketConfig.value ?: return@launch
             if (cfg.antennaOffset == null) return@launch
-            _rocketConfig.value = cfg.copy(antennaOffset = offset)
+            _rocketConfig.value = cfg.copy(antennaOffset = offset, antennaOffsetFromFlightComputer = false)
         }
     }
 

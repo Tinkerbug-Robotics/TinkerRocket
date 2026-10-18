@@ -1029,7 +1029,11 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
                     changed += GROUP_GNSS_LOG
                 }
             }
-            cfg.antennaOffset?.let {
+            // Only the flight computer's own antenna offset ("antsrc":"fc").
+            // Anything else is the out computer's copy of the last cmd 81 it
+            // relayed, which the flight computer may not hold (the #1472
+            // camera rule).
+            cfg.antennaOffset?.takeIf { cfg.antennaOffsetFromFlightComputer }?.let {
                 if (p.antennaOffset != it) {
                     p = p.withAntennaOffset(it)
                     changed += GROUP_ANTENNA_OFFSET
