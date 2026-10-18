@@ -1749,8 +1749,9 @@ void TR_BLE_To_APP::sendPadCalStatus(const uint8_t* status_bytes, size_t len)
 void TR_BLE_To_APP::sendAccelCalStatus(const uint8_t* status_bytes, size_t len)
 {
     if (!device_connected_ || status_bytes == nullptr || len == 0) return;
-    // 0xD1 marker + payload (sizeof(AccelCalStatusData)); cap defensively.
-    constexpr size_t MAX_PAYLOAD = 64;
+    // 0xD1 marker + payload (AccelCalStatusData, and AccelCalHighGStatus after
+    // it from an FC that sends one: 114 B); cap defensively.
+    constexpr size_t MAX_PAYLOAD = 128;
     if (len > MAX_PAYLOAD) len = MAX_PAYLOAD;
 
     uint8_t buf[1 + MAX_PAYLOAD];

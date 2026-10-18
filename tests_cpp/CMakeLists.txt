@@ -429,6 +429,24 @@ target_include_directories(test_sensor_cal_math PRIVATE
 target_link_libraries(test_sensor_cal_math GTest::gtest_main)
 gtest_discover_tests(test_sensor_cal_math)
 
+# ---------- test_high_g_cal ----------
+# The high-g's six-face alignment to the low-g (HG_CAL_*): what the FC stores,
+# the converter with and without it (bit for bit the original without), the
+# pad calibration after it, and the model end to end through counts.
+add_executable(test_high_g_cal test_high_g_cal.cpp
+    ${LIB_DIR}/TR_Sensor_Data_Converter/TR_Sensor_Data_Converter.cpp
+    ${LIB_DIR}/TR_Orientation/TR_Orientation.cpp
+)
+target_include_directories(test_high_g_cal PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_Sensor_Data_Converter
+    ${LIB_DIR}/TR_Sensor_Collector
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/TR_Orientation
+)
+target_link_libraries(test_high_g_cal GTest::gtest_main)
+gtest_discover_tests(test_high_g_cal)
+
 # ---------- test_sensor_cal_session (#1114) ----------
 # The request/answer handshake around the pad-calibration window: the flight
 # task posts a seq and keeps flying, the poll task answers with it, a cancel

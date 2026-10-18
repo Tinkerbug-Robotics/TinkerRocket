@@ -230,3 +230,47 @@ def test_the_offset_comes_off_the_low_g_and_high_g_as_the_converter_takes_it(tmp
         assert base[f"high_acc_{axis}"] - cal_on[f"high_acc_{axis}"] == pytest_approx(off)
         assert base[f"gyro_{axis}"] == cal_on[f"gyro_{axis}"]
         assert base[f"low_acc_{axis}"] == cal_sim[f"low_acc_{axis}"]
+
+
+HG_M = (1.0081, 0.0042, -0.0031, -0.0027, 0.9934, 0.0056, 0.0018, -0.0049, 1.0122)
+
+
+def hg(applied=1, matrix=HG_M, time_us=6_000_000) -> bytes:
+    return header(7, time_us=time_us) + struct.pack("<B9f", applied, *matrix)
+
+
+def test_decode_the_high_g_alignment():
+    # PCX_HG, beside PCX_CAL and PCX_ACC -- the high-g's six-face alignment to the low-g
+    r = pfd.decode_pad_context(hg())
+    assert r["kind"] == "hg"
+    assert r["applied"] is True
+    assert r["matrix"] == pytest_approx(HG_M)
+    assert pfd.decode_pad_context(hg()[:-1]) is None
+    ctx = pfd.join_pad_context([pfd.decode_pad_context(p) for p in [cal(), acc(), hg()] + launch()[1:]])
+    assert ctx["hg"]["matrix"] == pytest_approx(HG_M)
+    assert ctx["missing"] == []                                  # an older log without it misses nothing
+
+
+def test_the_alignment_comes_before_the_high_g_bias_and_offset(tmp_path):
+    # The high-g of one ISM6 record with the flight's PCX_HG: M times the board-frame reading (after the ISM6's
+    # Z rotation; the mounting identity), then the bias and the offset as before; the low-g and gyro untouched;
+    # an alignment not applied (sim) changes nothing.
+    ism6 = struct.pack("<I hhh hhh hhh", 1_000_000, 1200, -900, 20000, 40, -30, 1250, 5, -6, 7)
+
+    def decode(extra):
+        p = tmp_path / f"flight_hg_{len(extra)}_{extra[-1][7] if extra else 0}.bin"
+        p.write_bytes(b"".join([frame(0xA2, ism6)] + [frame(0x9E, e) for e in extra]) + b"\x00" * 16)
+        records, _stats, config = pfd.parse_binary_file(str(p))
+        return records["ISM6HG256"][0], config
+
+    (base, cfg), (on, _), (sim, _) = decode([acc()]), decode([acc(), hg()]), decode([acc(), hg(applied=0)])
+    _, s_hi, _ = pfd.ism6_scales(cfg["low_g_fs_g"], cfg["high_g_fs_g"], cfg["gyro_fs_dps"])
+    import math
+    r = math.radians(cfg["ism6_rot_z_deg"])
+    h = [(40 * math.cos(r) + 30 * math.sin(r)) * s_hi, (40 * math.sin(r) - 30 * math.cos(r)) * s_hi, 1250 * s_hi]
+    hb, off = cfg["hg_bias"], (0.0412, -0.0273, 0.0156)
+    for i, axis in enumerate("xyz"):
+        want = sum(HG_M[3 * i + j] * h[j] for j in range(3)) - hb[i] - off[i]
+        assert on[f"high_acc_{axis}"] == pytest_approx(want)
+        assert on[f"low_acc_{axis}"] == base[f"low_acc_{axis}"]
+        assert sim[f"high_acc_{axis}"] == base[f"high_acc_{axis}"]

@@ -77,7 +77,9 @@ public:
     // after the Z rotation, before the board->rocket mounting; #1629), taken
     // off the low-g AND the high-g reading -- the high-g bias is measured
     // against the raw low-g, so the pair keeps its meaning.  Off while
-    // setLowGOffsetEnabled(false): in sim the counts are the truth's.
+    // setLowGOffsetEnabled(false): in sim the counts are the truth's.  The
+    // same switch turns the high-g alignment below off with it: both are the
+    // six-face hand calibration of the real IMU.
     void setLowGOffset(float ox, float oy, float oz);
     void setLowGOffsetEnabled(bool on) { lg_off_on_ = on; }
     bool lowGOffsetApplied() const { return lg_off_on_ && (lg_off_x_ != 0.0f || lg_off_y_ != 0.0f || lg_off_z_ != 0.0f); }
@@ -87,6 +89,18 @@ public:
     // One sample's low-g reading in the board frame (m/s^2), with no offset and
     // no mounting rotation: what the six-face calibration averages.
     void lowGBoardRaw(const ISM6HG256Data& in, double out[3]) const;
+    // And its high-g reading the same way: no alignment, bias or offset.
+    void highGBoardRaw(const ISM6HG256Data& in, double out[3]) const;
+
+    // The high-g accelerometer's alignment to the low-g (row-major 3x3, board
+    // frame; RocketComputerTypes.h, HG_CAL_*): high = M * h - bias - offset.
+    // The identity (the default, and what clearHighGAlignment() sets) leaves
+    // the original arithmetic in place, bit for bit.
+    void setHighGAlignment(const float m[9]);
+    void clearHighGAlignment();
+    bool highGAlignmentSet() const { return hg_m_set_; }
+    bool highGAlignmentApplied() const { return lg_off_on_ && hg_m_set_; }
+    void highGAlignment(float out[9]) const;
     float iis2mdcRotationZDeg() const
         { return iis2mdc_rot_z_rad * (180.0f / (float)PI); }
 
@@ -162,6 +176,11 @@ private:
     float hg_bias_x_ = 0.0f, hg_bias_y_ = 0.0f, hg_bias_z_ = 0.0f;
     float lg_off_x_ = 0.0f, lg_off_y_ = 0.0f, lg_off_z_ = 0.0f;
     bool  lg_off_on_ = true;
+    // The high-g alignment (row-major); hg_m_set_ false while it is the identity.
+    float hg_m_[9] = {1.0f, 0.0f, 0.0f,
+                      0.0f, 1.0f, 0.0f,
+                      0.0f, 0.0f, 1.0f};
+    bool  hg_m_set_ = false;
 
     // Board→rocket mounting rotation (row-major; identity by default).
     // b2r_identity_ short-circuits the matrix multiply on the hot path
