@@ -2,9 +2,12 @@
 # The builder's cheaper build (RawMeasBuilder.h, Config::lite; the receiver
 # profile's build_lite, off everywhere but a bench image): off, it is the
 # full build; on, each second's first epoch gets the full build's corrections
-# and the others keep them, the orbit solves spread over their 5 s, the noise
-# is the full model's, and the GNSS task's stage builds the same picks. The
-# Beetle's two MSM7 epochs (fixtures/raw_meas_golden.h) stepped at 10 Hz.
+# and the others keep them (the troposphere's mapping carried on at its
+# rate), the orbit solves spread over their 5 s and over the first epochs
+# after a gap (the cap holding the picks that wait), the noise is the full
+# model's, and the GNSS task's stage builds the same picks. The Beetle's two
+# MSM7 epochs (fixtures/raw_meas_golden.h) stepped at 10 Hz, and the
+# fixture's orbits through two hours.
 add_executable(test_raw_meas_lite test_raw_meas_lite.cpp
     ${LIB_DIR}/TR_RawGnssShadow/RawGnssMeasStage.cpp
     ${LIB_DIR}/TR_GNSSRaw/eph.c

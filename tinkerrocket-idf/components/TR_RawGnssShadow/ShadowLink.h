@@ -109,6 +109,8 @@ struct ShadowNav
     uint8_t  baro_aided;       // a barometer sample fused within the last 1 s
     uint8_t  in_flight;        // its last IMU tick was INFLIGHT (the GNSS task keeps its ionosphere then)
     uint32_t epochs;           // raw epochs applied since it started
+    uint8_t  clock;            // its receiver clock taken since it (re)started: the GNSS task's cheaper build
+                               // spreads the orbit solves after a gap only then (RawGnssMeasStage)
 };
 
 // The GPS broadcast ionosphere the app uploaded with a pad calibration

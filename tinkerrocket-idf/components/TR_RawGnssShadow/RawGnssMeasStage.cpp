@@ -237,7 +237,10 @@ bool RawGnssMeasStage::offer(const TimedRawEpoch& e, const ShadowNav& nav, Built
 // offer()'s build in the cheaper build: the same epoch built from the same
 // picks, with the filter's geodetic position as it has it, each
 // observation's ephemeris as see() looked it up, and the picks' lock ages
-// noted once (with the whole sky's, at the same time).
+// noted once (with the whole sky's, at the same time). Once the filter has
+// taken its receiver clock (nav.clock: from its first epoch with a code since
+// it started, the whole sky), the orbits that come due at once are solved a
+// few an epoch (spread).
 void RawGnssMeasStage::offerLite(const TimedRawEpoch& e, const ShadowNav& nav, const double r[3], BuiltEpoch& out)
 {
     builder_.noteEpoch(e.epoch);
@@ -251,7 +254,7 @@ void RawGnssMeasStage::offerLite(const TimedRawEpoch& e, const ShadowNav& nav, c
     }
     const int64_t c0 = now();
     chooseIono(nav.in_flight != 0, out);
-    builder_.beginWith(use->epoch, r, nav.lla, 0.0, true);
+    builder_.beginWith(use->epoch, r, nav.lla, 0.0, true, nav.clock != 0);
     out.mcu_us = use->mcu_us;
     out.tow_s = use->epoch.tow_s;
     out.gps_week = use->gps_week;
@@ -357,13 +360,18 @@ void RawGnssMeasStage::capEpoch(const TimedRawEpoch& e)
 // After the build of the cap's picks: the hold is for the satellites built,
 // and a pick the build dropped -- under the elevation mask, the one test the
 // cap cannot make -- is picked last from now on (capEpoch), so it does not
-// keep a place a satellite that can be built is waiting for.
+// keep a place a satellite that can be built is waiting for. A pick the
+// cheaper build left out while its orbit's solve waits (RawMeasBuilder::
+// waiting) was not dropped: it keeps its hold.
 void RawGnssMeasStage::capBuilt(const BuiltEpoch& out)
 {
     uint64_t built[3] = {};
     for (int i = 0; i < out.n; ++i)
         if (out.meas[i].sys <= GNSS_SYS_BDS && out.meas[i].prn < kPrns)
             built[out.meas[i].sys] |= uint64_t{1} << out.meas[i].prn;
+    if (cfg_.meas.lite)
+        for (int s = 0; s < 3; ++s)
+            built[s] |= builder_.waiting(s);
     const bool none = (masked_[0] | masked_[1] | masked_[2]) == 0;
     for (int s = 0; s < 3; ++s)
     {

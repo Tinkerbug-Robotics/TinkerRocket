@@ -77,7 +77,8 @@ void RawMeasBuilder::liteSigmas(const Config& c, double cn0, double age_s, doubl
     liteRelock(c, age_s, g_over, s_corr, s_rr2, sigma_pr_corr, sigma_rr);
 }
 
-void RawMeasBuilder::beginWith(const RawEpoch& ep, const double* r_approx, const double* lla, double g_peak, bool noted)
+void RawMeasBuilder::beginWith(const RawEpoch& ep, const double* r_approx, const double* lla, double g_peak, bool noted,
+                               bool spread)
 {
     if (!cfg_.lite)
     {
@@ -111,7 +112,7 @@ void RawMeasBuilder::beginWith(const RawEpoch& ep, const double* r_approx, const
     cr_n_[cr_side_ ^ 1] = 0;
     cr_done_ = false;
     cr_model_ = have_pos_ ? static_cast<uint8_t>(1u | (static_cast<unsigned>(iono_gen_) << 1)) : 0;
-    beginLite(ep);
+    beginLite(ep, spread);
 }
 
 int RawMeasBuilder::nextWith(const RawEpoch& ep, const EphemerisStore& eph, const gps_eph_t* const* eph_of,
@@ -122,42 +123,140 @@ int RawMeasBuilder::nextWith(const RawEpoch& ep, const EphemerisStore& eph, cons
     return nextLite(ep, eph, eph_of, out, n, cap, max_obs);
 }
 
-// The epoch's part: its atmosphere period, and nothing of the receiver's
+// The epoch's part: its atmosphere period, nothing of the receiver's
 // trigonometry or troposphere worked out yet (atmoLite and zenithLite, when a
-// satellite first needs them).
-void RawMeasBuilder::beginLite(const RawEpoch& ep)
+// satellite first needs them), and no orbit solved, ranked or waiting yet.
+void RawMeasBuilder::beginLite(const RawEpoch& ep, bool spread)
 {
     lite_k_ = cfg_.atmo_period_s > 0.0 ? litePeriodOf(ep.tow_s, cfg_.atmo_period_s) : -1;
     lite_geo_ = false;
     lite_zen_ = false;
+    lite_spread_ = spread && cfg_.lite_solves > 0 && cfg_.sat_refresh_s > 0.0;
+    lite_ranked_ = false;
+    lite_solved_ = 0;
+    lite_reserved_ = 0;
+    for (int s = 0; s < kSys; ++s)
+        lite_allow_[s] = lite_wait_[s] = 0;
+}
+
+// The satellite's cache slot (-1: none).
+int RawMeasBuilder::findLite(int sys, int prn) const
+{
+    for (int i = 0; i < kSatCache; ++i)
+    {
+        const SatState& c = cache_[i];
+        if (c.valid && c.sys == sys && c.prn == prn)
+            return i;
+    }
+    return -1;
+}
+
+// Whether a satellite's kept orbit (its slot, findLite; -1: none) is within
+// sat_refresh_s of t_sv, so it may be built from that; else it must be solved
+// to be built.
+bool RawMeasBuilder::keptLite(int slot, double t_sv) const
+{
+    return slot >= 0 && cfg_.sat_refresh_s > 0.0
+           && std::fabs(gps_time_diff(t_sv, cache_[slot].t_ref)) <= cfg_.sat_refresh_s;
+}
+
+// next()'s first tests of ep.obs[i]: whether it is built (a pseudorange, a
+// system and PRN the builder keeps, its signal's C/N0 floor, an ephemeris),
+// and then its ephemeris and transmit time.
+bool RawMeasBuilder::liteObs(const RawEpoch& ep, const EphemerisStore& eph, const gps_eph_t* const* eph_of, int i,
+                             const gps_eph_t*& e, double& t_sv) const
+{
+    const RawObs& o = ep.obs[i];
+    if (!o.has_pr || o.sys >= kSys || o.prn >= kPrn)
+        return false;
+    if (o.cn0_dbhz < cfg_.sig[o.sys].cn0_min_pr)   // the receiver's signal of that system
+        return false;
+    // each ephemeris keeps its own system's time: BeiDou runs 14 s behind GPS
+    const double to_sys = o.sys == GNSS_SYS_BDS ? kBdtMinusGpst : 0.0;
+    e = eph_of != nullptr ? eph_of[i] : eph.select(o.sys, o.prn, ep.tow_s + to_sys);
+    if (e == nullptr)
+        return false;
+    // transmit time: the travel time, then the satellite's own clock
+    t_sv = ep.tow_s - o.pr_m / GNSS_C + to_sys;
+    return true;
+}
+
+// Where the epoch's orbits are held to lite_solves (spread) and a satellite
+// from ep.obs[from] on must be solved to be built (not keptLite): which of
+// those the epoch's solves left go to, in the cap's order
+// (RawGnssMeasStage::capEpoch) -- GPS first, then by C/N0, a tie to the lower
+// system, then the lower PRN. Once an epoch, at its first such satellite.
+void RawMeasBuilder::rankLite(const RawEpoch& ep, const EphemerisStore& eph, const gps_eph_t* const* eph_of, int from)
+{
+    static_assert(RawEpoch::kMaxObs <= 64, "an epoch's observations, a bit each");
+    lite_ranked_ = true;
+    const int n = ep.n < RawEpoch::kMaxObs ? ep.n : RawEpoch::kMaxObs;
+    uint64_t must[kSys] = {};
+    uint64_t cand = 0;                    // the observations of those satellites, a bit each
+    for (int j = from; j < n; ++j)
+    {
+        const gps_eph_t* e = nullptr;
+        double t_sv = 0.0;
+        if (!liteObs(ep, eph, eph_of, j, e, t_sv))
+            continue;
+        const RawObs& o = ep.obs[j];
+        const uint64_t bit = uint64_t{1} << o.prn;
+        if ((must[o.sys] & bit) != 0 || !keptLite(findLite(o.sys, o.prn), t_sv))
+        {
+            must[o.sys] |= bit;
+            cand |= uint64_t{1} << j;
+        }
+    }
+    auto better = [&](const RawObs& a, const RawObs& b) {
+        const bool ga = a.sys == GNSS_SYS_GPS, gb = b.sys == GNSS_SYS_GPS;
+        if (ga != gb)
+            return ga;
+        if (a.cn0_dbhz != b.cn0_dbhz)
+            return a.cn0_dbhz > b.cn0_dbhz;
+        if (a.sys != b.sys)
+            return a.sys < b.sys;
+        return a.prn < b.prn;
+    };
+    const int left = cfg_.lite_solves - lite_solved_;
+    while (lite_reserved_ < left)
+    {
+        int best = -1;
+        for (int j = from; j < n; ++j)
+        {
+            const RawObs& o = ep.obs[j];
+            if (((cand >> j) & 1u) != 0 && ((lite_allow_[o.sys] >> o.prn) & 1u) == 0
+                && (best < 0 || better(o, ep.obs[best])))
+                best = j;
+        }
+        if (best < 0)
+            break;
+        lite_allow_[ep.obs[best].sys] |= uint64_t{1} << ep.obs[best].prn;
+        lite_reserved_++;
+    }
 }
 
 // satState() with each slot's solve on a phase of its own: kept while it is
 // the same ephemeris's, within sat_refresh_s, and short of its slot's next
 // grid time (t_next); solved again in place otherwise (its atmosphere kept: a
-// new solve or ephemeris moves the satellite by metres at most). A slot taken
-// for a new satellite works its atmosphere out anew.
-int RawMeasBuilder::satSlotLite(const gps_eph_t& e, int sys, int prn, double t_sv)
+// new solve or ephemeris moves the satellite by metres at most) -- or, where
+// the epoch's solves are held to lite_solves (spread) and spent or promised
+// (rankLite), kept still while within sat_refresh_s. A slot taken for a new
+// satellite works its atmosphere out anew. slot: findLite's; kept: keptLite's.
+int RawMeasBuilder::satSlotLite(const gps_eph_t& e, int sys, int prn, double t_sv, int slot, bool kept)
 {
     cache_tick_++;
-    int slot = -1;
-    for (int i = 0; i < kSatCache; ++i)
+    if (slot >= 0)
     {
-        SatState& c = cache_[i];
-        if (c.valid && c.sys == sys && c.prn == prn)
+        SatState& c = cache_[slot];
+        if (kept && ((c.iode == e.iode && c.toe == e.toe && gps_time_diff(t_sv, lite_[slot].t_next) < 0.0)
+                     || (lite_spread_ && lite_solved_ + lite_reserved_ >= cfg_.lite_solves)))
         {
-            if (c.iode == e.iode && c.toe == e.toe && cfg_.sat_refresh_s > 0.0
-                && std::fabs(gps_time_diff(t_sv, c.t_ref)) <= cfg_.sat_refresh_s
-                && gps_time_diff(t_sv, lite_[i].t_next) < 0.0)
-            {
-                c.used = cache_tick_;
-                return i;
-            }
-            slot = i;                     // stale, or its phase came round: solved again in place
-            break;
+            c.used = cache_tick_;
+            return slot;
         }
+        // stale, or its phase came round: solved again in place
     }
-    if (slot < 0)
+    else
     {
         slot = 0;
         for (int i = 0; i < kSatCache; ++i)
@@ -195,6 +294,7 @@ int RawMeasBuilder::satSlotLite(const gps_eph_t& e, int sys, int prn, double t_s
     c.clk = dts;
     c.clk_rate = dts2 - dts1;
     c.used = cache_tick_;
+    lite_solved_++;
     // its next solve: the first time after t_sv on the slot's own grid of
     // sat_refresh_s, so at most sat_refresh_s from now and on no other
     // slot's phase
@@ -237,8 +337,11 @@ void RawMeasBuilder::zenithLite()
 // signal's carrier) and the cosine of its zenith angle, which maps the
 // troposphere, at the epoch's receiver, into a -- as next() works them out
 // (gnss_az_el and tropo_saastamoinen in the same arithmetic, iono_klobuchar
-// as klobucharLite), with the receiver's trigonometry once an epoch.
-void RawMeasBuilder::atmoLite(const GnssSignalProfile& sig, const double rs[3], double tow, LiteSat& a)
+// as klobucharLite), with the receiver's trigonometry once an epoch -- and
+// that cosine's rate from the satellite's own motion (vs: its velocity, ECEF
+// m/s), which carries it on to the period's other epochs.
+void RawMeasBuilder::atmoLite(const GnssSignalProfile& sig, const double rs[3], const double vs[3], double tow,
+                              LiteSat& a)
 {
     if (!lite_geo_)
     {
@@ -252,9 +355,12 @@ void RawMeasBuilder::atmoLite(const GnssSignalProfile& sig, const double rs[3], 
     const double e = -lite_so_ * d[0] + lite_co_ * d[1];
     const double n = -lite_sl_ * lite_co_ * d[0] - lite_sl_ * lite_so_ * d[1] + lite_cl_ * d[2];
     const double u = lite_cl_ * lite_co_ * d[0] + lite_cl_ * lite_so_ * d[1] + lite_sl_ * d[2];
-    a.el = std::asin(u / std::sqrt(e * e + n * n + u * u));
+    const double rho = std::sqrt(e * e + n * n + u * u);
+    a.el = std::asin(u / rho);
     a.atmo_k = lite_k_;
     a.atmo_gen = iono_gen_;
+    a.t_atmo = tow;
+    a.cz_rate = 0.0f;
     a.iono = a.cz = 0.0;
     if (a.el < el_mask_)
         return;                           // under the mask: built from neither
@@ -265,7 +371,15 @@ void RawMeasBuilder::atmoLite(const GnssSignalProfile& sig, const double rs[3], 
     const double fr = GNSS_FREQ_L1_HZ / sig.carrier_hz;
     a.iono = klobucharLite(ca, sa, a.el, tow) * fr * fr;
     if (a.el > 0.0)
+    {
         a.cz = std::cos(kPi / 2.0 - a.el);
+        // the cosine is sin(el) = u / rho: its rate (u' - sin(el) rho') / rho,
+        // with u' the satellite's velocity up and rho' along the line of sight
+        // (the receiver's own motion moves it a tenth as fast at 300 m/s)
+        const double up_v = lite_cl_ * lite_co_ * vs[0] + lite_cl_ * lite_so_ * vs[1] + lite_sl_ * vs[2];
+        const double rho_v = (d[0] * vs[0] + d[1] * vs[1] + d[2] * vs[2]) / rho;
+        a.cz_rate = static_cast<float>((up_v - u / rho * rho_v) / rho);
+    }
 }
 
 // iono_klobuchar (atmo.c: IS-GPS-200 20.3.3.5.2.5) at the epoch's receiver,
@@ -308,20 +422,35 @@ int RawMeasBuilder::nextLite(const RawEpoch& ep, const EphemerisStore& eph, cons
     {
         const int i = next_obs_++;
         const RawObs& o = ep.obs[i];
-        if (!o.has_pr || o.sys >= kSys || o.prn >= kPrn)
+        const gps_eph_t* e = nullptr;
+        double t_sv = 0.0;
+        if (!liteObs(ep, eph, eph_of, i, e, t_sv))
             continue;
         const GnssSignalProfile& sig = cfg_.sig[o.sys];   // the receiver's signal of that system
-        if (o.cn0_dbhz < sig.cn0_min_pr)
-            continue;
-        // each ephemeris keeps its own system's time: BeiDou runs 14 s behind GPS
-        const double to_sys = o.sys == GNSS_SYS_BDS ? kBdtMinusGpst : 0.0;
-        const gps_eph_t* e = eph_of != nullptr ? eph_of[i] : eph.select(o.sys, o.prn, ep.tow_s + to_sys);
-        if (e == nullptr)
-            continue;
 
-        // transmit time: the travel time, then the satellite's own clock
-        const double t_sv = ep.tow_s - o.pr_m / GNSS_C + to_sys;
-        const int slot = satSlotLite(*e, o.sys, o.prn, t_sv);
+        // its orbit: kept, or solved -- where the epoch's solves are held to
+        // lite_solves (spread), one that must be solved to be built in its
+        // turn (rankLite), else left out for now
+        const int found = findLite(o.sys, o.prn);
+        const bool kept = keptLite(found, t_sv);
+        const uint64_t bit = uint64_t{1} << o.prn;
+        const bool must = lite_spread_ && !kept;
+        if (must)
+        {
+            if (!lite_ranked_)
+                rankLite(ep, eph, eph_of, i);
+            if ((lite_allow_[o.sys] & bit) == 0)
+            {
+                lite_wait_[o.sys] |= bit;
+                continue;
+            }
+        }
+        const int slot = satSlotLite(*e, o.sys, o.prn, t_sv, found, kept);
+        if (must)
+        {
+            lite_allow_[o.sys] &= ~bit;   // solved: its other signals are built from it
+            lite_reserved_--;
+        }
         const SatState& c = cache_[slot];
         const double t_tx = t_sv - (c.clk + c.clk_rate * gps_time_diff(t_sv, c.t_ref));
         const double dt = gps_time_diff(t_tx, c.t_ref);
@@ -337,17 +466,21 @@ int RawMeasBuilder::nextLite(const RawEpoch& ep, const EphemerisStore& eph, cons
             // the satellite's elevation and ionosphere as worked out in this
             // period, unless the ionosphere changed since or its carrier
             // phase is built on; the troposphere this epoch's receiver's,
-            // mapped by the kept elevation (a climb changes it fastest)
+            // mapped by the kept elevation's sine carried on at its rate (a
+            // period holds no week's turn: tow_s - t_atmo is under a period)
             LiteSat& a = lite_[slot];
             if (!(cfg_.atmo_period_s > 0.0 && a.atmo_k == lite_k_ && a.atmo_gen == iono_gen_
                   && !(cfg_.carrier && o.has_phase)))
-                atmoLite(sig, rs, ep.tow_s, a);
+                atmoLite(sig, rs, c.vel, ep.tow_s, a);
             if (a.el < el_mask_)
                 continue;
             if (!lite_zen_)
                 zenithLite();
             iono = a.iono;
-            trop = lite_trop_ok_ && a.cz > 0.0 ? lite_dry_z_ / a.cz + lite_wet_z_ / a.cz : 0.0;
+            double cz = a.cz;
+            if (ep.tow_s != a.t_atmo)
+                cz += static_cast<double>(a.cz_rate) * (ep.tow_s - a.t_atmo);
+            trop = lite_trop_ok_ && cz > 0.0 ? lite_dry_z_ / cz + lite_wet_z_ / cz : 0.0;
             corr -= iono + trop;
         }
 

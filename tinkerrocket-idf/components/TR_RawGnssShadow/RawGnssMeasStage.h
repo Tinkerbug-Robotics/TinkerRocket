@@ -45,7 +45,10 @@
 // receiver profile's build_lite sets it): offer() then hands the builder the
 // filter's geodetic position as it has it (nav.lla, not worked back out of
 // ECEF), looks each observation's ephemeris up once an epoch (see(), for the
-// cap and the builder both), and notes the cap's picks' lock ages once.
+// cap and the builder both), and notes the cap's picks' lock ages once. Once
+// the filter has taken its receiver clock (nav.clock), the orbits that come
+// due at once after a gap are solved a few an epoch, and the epoch built from
+// those solved; a pick left out until its solve keeps its place in the cap.
 //
 // Pure C++: tests_cpp/test_raw_gnss_shadow.cpp, tests_cpp/test_raw_gnss_stage_v9.cpp.
 #ifndef RAW_GNSS_MEAS_STAGE_H

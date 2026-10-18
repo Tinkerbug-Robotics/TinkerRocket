@@ -75,6 +75,7 @@ void expectSameBuilder(const RawMeasBuilder::Config& a, const RawMeasBuilder::Co
     EXPECT_EQ(a.cr_sigma_floor_mps, b.cr_sigma_floor_mps);
     EXPECT_EQ(a.lite, b.lite);
     EXPECT_EQ(a.atmo_period_s, b.atmo_period_s);
+    EXPECT_EQ(a.lite_solves, b.lite_solves);
 }
 
 void expectSameEkf(const RawGnssEKFParams& a, const RawGnssEKFParams& b)
@@ -196,13 +197,13 @@ void expectSameNumbers(const GnssReceiverProfile& a, const GnssReceiverProfile& 
 // profile over them. The sizes are a 64-bit host's (macOS and Linux alike).
 static_assert(sizeof(void*) != 8 || sizeof(RawGnssEKFParams) == 464,
               "RawGnssEKFParams changed: add the field to expectSameEkf, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawMeasBuilder::Config) == 328,
+static_assert(sizeof(void*) != 8 || sizeof(RawMeasBuilder::Config) == 336,
               "RawMeasBuilder::Config changed: add the field to expectSameBuilder, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 32,
               "GnssSignalProfile changed: add the field to expectSameSignal, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 528,
               "GnssReceiverProfile changed: add the field to expectSameNumbers, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1696,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1704,
               "RawGnssShadow::Config changed: pin the field in TheShadowSafeguardDefaultsAreTheBeetles, then update "
               "this size");
 
@@ -518,6 +519,7 @@ TEST(ReceiverProfile, TheMosaicG5V0Profile)
     gnss_raw::applyReceiverProfile(pl, bl);
     EXPECT_TRUE(bl.lite);
     EXPECT_EQ(bl.atmo_period_s, 1.0);
+    EXPECT_EQ(bl.lite_solves, 4);         // after a gap, four orbit solves an epoch (RawMeasBuilder.h)
     EXPECT_EQ(b.relock_gap_s, 0.5);
     EXPECT_EQ(b.rr_tau_s, 0.0);
     // the EKF's: the Beetle's 3 s of refusals, the Doppler's 30 epochs at 10

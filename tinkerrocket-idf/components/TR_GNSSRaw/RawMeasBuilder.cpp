@@ -158,7 +158,7 @@ void RawMeasBuilder::begin(const RawEpoch& ep, const double* r_approx, double g_
     cr_done_ = false;
     cr_model_ = have_pos_ ? static_cast<uint8_t>(1u | (static_cast<unsigned>(iono_gen_) << 1)) : 0;
     if (cfg_.lite)
-        beginLite(ep);                    // the cheaper build's epoch (RawMeasBuilderLite.cpp)
+        beginLite(ep, false);             // the cheaper build's epoch (RawMeasBuilderLite.cpp): its solves at once
 }
 
 int RawMeasBuilder::next(const RawEpoch& ep, const EphemerisStore& eph, RawMeas* out, int n, int cap, int max_obs)
