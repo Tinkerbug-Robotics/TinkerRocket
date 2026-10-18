@@ -1,10 +1,11 @@
 // TR_RawGnssCarrier.cpp — TR_RawGnssEKF's carrier range rate (see
 // TR_RawGnssEKF.h): the screen, the fusion with the epoch's common rate, the
-// epoch's close, and the integration's excess back-dated; and the boost
-// screen's gate (screenRangeRates). Once an epoch, so apart from the filter's
-// per-step code: on the Beetle this file stays in flash where the rest of the
-// filter runs from internal RAM (raw_gnss_iram.lf), 11 kB less of it. Its
-// per-step part -- the receiver snapshots that every correction moves
+// epoch's close, and the integration's excess back-dated; the boost screen's
+// gate (screenRangeRates); the Doppler change check's rows (dopplerChange)
+// and the heading share (hdgObsScaleNow). Once an epoch, so apart from the
+// filter's per-step code: on the Beetle this file stays in flash where the
+// rest of the filter runs from internal RAM (raw_gnss_iram.lf), 11 kB less of
+// it. Its per-step part -- the receiver snapshots that every correction moves
 // (inject), the roll rate and the integration's excess (propagate,
 // pushHistory) -- is TR_RawGnssEKF.cpp's, and the geometry both predict with
 // RawGnssEKFGeometry.h's.
@@ -40,6 +41,8 @@ using ekf_geom::lineOfSight;
 using ekf_geom::satRangeAccel;
 using ekf_geom::corrInflation;
 using ekf_geom::backDate;
+
+constexpr double kNever = -1.0e9;   // no boost yet (TR_RawGnssEKF.cpp's kNever)
 
 }  // namespace
 
@@ -950,6 +953,54 @@ int RawGnssEKF<T>::dopplerChange(const RawMeas* m, int n, double age_s, const Do
     return nr;
 }
 
+// hdg_obs_mode's s (TR_RawGnssEKF.h): how much of a GNSS row's heading
+// correction an epoch age_s old may make. Open (1) with the mode off or not
+// applied, and in the boost: the IMU past hdg_obs_open_g at any time from
+// hdg_obs_open_hold_s before the epoch's own time until now. (The window
+// starts again at any later step past it -- a drogue's snatch can be one --
+// so where the window applies in the descent, the scope says.) Once an epoch
+// (beginGnssRaw), and only with the mode on: here, so on the Beetle, which
+// never turns it on, it stays in flash (raw_gnss_iram.lf).
+template <typename T>
+T RawGnssEKF<T>::hdgObsScaleNow(double age_s) const
+{
+    if (p_.hdg_obs_mode == kHdgObsOff || !hdg_obs_on_)
+        return T(1);
+    const double since_boost = t_ - (age_s > 0.0 ? age_s : 0.0) - hdg_open_t_;
+    if (since_boost <= p_.hdg_obs_open_hold_s)
+        return T(1);
+    double s = 1.0;
+    const double fh = std::sqrt(static_cast<double>(fh_ew_[0]) * static_cast<double>(fh_ew_[0])
+                                + static_cast<double>(fh_ew_[1]) * static_cast<double>(fh_ew_[1]));
+    switch (p_.hdg_obs_mode)
+    {
+    case kHdgObsForce:
+        s = p_.hdg_obs_fh_mps2 > 0.0 ? fh / p_.hdg_obs_fh_mps2 : 1.0;
+        break;
+    case kHdgObsInfo:
+    {
+        // the velocity a 1-sigma heading error makes over tau, in the
+        // Doppler velocity's own noise: a heading-only update's gain on it
+        T sig[3];
+        attSigmaNed(sig);
+        const double x = p_.hdg_obs_sigma_v > 0.0
+                             ? fh * p_.hdg_obs_tau_s * static_cast<double>(sig[2]) / p_.hdg_obs_sigma_v
+                             : 1.0e9;
+        s = x * x / (1.0 + x * x);
+        break;
+    }
+    case kHdgObsWindow:
+        // closed for the window after a boost; open before any (the pad) and after
+        s = hdg_open_t_ > kNever && since_boost <= p_.hdg_obs_open_hold_s + p_.hdg_obs_window_s ? 0.0 : 1.0;
+        break;
+    default:
+        break;
+    }
+    if (s < p_.hdg_obs_floor)
+        s = p_.hdg_obs_floor;
+    return T(s < 1.0 ? s : 1.0);
+}
+
 // Each member here, for both scalars (TR_RawGnssEKF.cpp instantiates the rest).
 #define TR_RAW_GNSS_CARRIER_INSTANTIATE(T)                                                                        \
     template void RawGnssEKF<T>::crSnapshot(double, const T[3]);                                                 \
@@ -968,7 +1019,8 @@ int RawGnssEKF<T>::dopplerChange(const RawMeas* m, int n, double age_s, const Do
     template bool RawGnssEKF<T>::verticalFit(const double[][4], const double*, const double*, bool*, int, double[4],  \
                                              int&, int&);                                                       \
     template int RawGnssEKF<T>::dopplerChange(const RawMeas*, int, double, const DopplerRef&, DopplerRef&,         \
-                                              dvc::Row*, DopplerChangeImu&) const;
+                                              dvc::Row*, DopplerChangeImu&) const;                              \
+    template T RawGnssEKF<T>::hdgObsScaleNow(double) const;
 TR_RAW_GNSS_CARRIER_INSTANTIATE(float)
 TR_RAW_GNSS_CARRIER_INSTANTIATE(double)
 #undef TR_RAW_GNSS_CARRIER_INSTANTIATE

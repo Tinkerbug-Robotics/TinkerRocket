@@ -881,52 +881,6 @@ const T* RawGnssEKF<T>::gnssAttAxis(T vert[3]) const
     return p_.att_gate_vertical ? vert : nullptr;
 }
 
-// hdg_obs_mode's s (TR_RawGnssEKF.h): how much of a GNSS row's heading
-// correction an epoch age_s old may make. Open (1) with the mode off or not
-// applied, and in the boost: the IMU past hdg_obs_open_g at any time from
-// hdg_obs_open_hold_s before the epoch's own time until now. (The window
-// starts again at any later step past it -- a drogue's snatch can be one --
-// so where the window applies in the descent, the scope says.)
-template <typename T>
-T RawGnssEKF<T>::hdgObsScaleNow(double age_s) const
-{
-    if (p_.hdg_obs_mode == kHdgObsOff || !hdg_obs_on_)
-        return T(1);
-    const double since_boost = t_ - (age_s > 0.0 ? age_s : 0.0) - hdg_open_t_;
-    if (since_boost <= p_.hdg_obs_open_hold_s)
-        return T(1);
-    double s = 1.0;
-    const double fh = std::sqrt(static_cast<double>(fh_ew_[0]) * static_cast<double>(fh_ew_[0])
-                                + static_cast<double>(fh_ew_[1]) * static_cast<double>(fh_ew_[1]));
-    switch (p_.hdg_obs_mode)
-    {
-    case kHdgObsForce:
-        s = p_.hdg_obs_fh_mps2 > 0.0 ? fh / p_.hdg_obs_fh_mps2 : 1.0;
-        break;
-    case kHdgObsInfo:
-    {
-        // the velocity a 1-sigma heading error makes over tau, in the
-        // Doppler velocity's own noise: a heading-only update's gain on it
-        T sig[3];
-        attSigmaNed(sig);
-        const double x = p_.hdg_obs_sigma_v > 0.0
-                             ? fh * p_.hdg_obs_tau_s * static_cast<double>(sig[2]) / p_.hdg_obs_sigma_v
-                             : 1.0e9;
-        s = x * x / (1.0 + x * x);
-        break;
-    }
-    case kHdgObsWindow:
-        // closed for the window after a boost; open before any (the pad) and after
-        s = hdg_open_t_ > kNever && since_boost <= p_.hdg_obs_open_hold_s + p_.hdg_obs_window_s ? 0.0 : 1.0;
-        break;
-    default:
-        break;
-    }
-    if (s < p_.hdg_obs_floor)
-        s = p_.hdg_obs_floor;
-    return T(s < 1.0 ? s : 1.0);
-}
-
 template <typename T>
 void RawGnssEKF<T>::updateAccelLevel(const T acc[3])
 {
