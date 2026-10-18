@@ -235,6 +235,7 @@ void RawGnssShadow::navState(ShadowNav& out) const
     out.baro_aided = t - last_baro_fused_t_ <= 1.0 ? 1 : 0;
     out.in_flight = (imu_flags_ & kShadowInFlight) ? 1 : 0;
     out.epochs = st_.epochs_applied;
+    out.clock = ekf_.clockReady() ? 1 : 0;
 }
 
 void RawGnssShadow::applyBaro(double t, uint8_t imu_flags)

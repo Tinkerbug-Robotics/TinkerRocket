@@ -30,6 +30,11 @@
 // comes from a gap it sees, and the mosaic's own Doppler variance is decoded
 // but not used), so sim_events.py's patterns leave it 0.
 // The carrier is off on the mosaic, so has_cr is never set.
+// With the cheaper build (the profile's build_lite, the builder's Config::lite)
+// the mirror is that build's: the noise from RawMeasBuilder::liteSigmas, the
+// filter's geodetic position as given, and each satellite's elevation kept
+// for its atmo_period_s (a SimLite's, the caller's). A sim has no orbit to
+// solve and no atmosphere, so the rest of that build never runs here.
 //
 // The stage's private members are the caller's to open: include this after
 // RawGnssMeasStage.h is read with private and protected public, as
@@ -86,6 +91,49 @@ struct SimCounts
     uint32_t meas_built = 0;       // measurements built
 };
 
+// The cheaper build's mirror, where the tree has that build (raw_replay's
+// RAW_REPLAY_BUILD_LITE; a test, built with its own tree, has it).
+#ifndef RAW_REPLAY_BUILD_LITE
+#define RAW_REPLAY_BUILD_LITE 1
+#endif
+#if RAW_REPLAY_BUILD_LITE
+inline bool simLiteOn(const gnss_raw::RawMeasBuilder::Config& c) { return c.lite; }
+inline double simLitePeriod(const gnss_raw::RawMeasBuilder::Config& c) { return c.atmo_period_s; }
+inline int64_t simLitePeriodOf(double tow_s, double period_s)
+{
+    return gnss_raw::RawMeasBuilder::litePeriodOf(tow_s, period_s);
+}
+inline void simLiteSigmas(const gnss_raw::RawMeasBuilder::Config& c, double cn0, double age_s, double carrier_hz,
+                          gnss_raw::RawMeas& m)
+{
+    gnss_raw::RawMeasBuilder::liteSigmas(c, cn0, age_s, carrier_hz, 0.0, m.sigma_pr, m.sigma_pr_corr, m.sigma_rr);
+    m.tau_pr = static_cast<float>(c.pr_tau_s);
+    m.tau_rr = static_cast<float>(c.rr_tau_s);
+}
+#else
+inline bool simLiteOn(const gnss_raw::RawMeasBuilder::Config&) { return false; }
+inline double simLitePeriod(const gnss_raw::RawMeasBuilder::Config&) { return 0.0; }
+inline int64_t simLitePeriodOf(double, double) { return INT64_MIN; }
+inline void simLiteSigmas(const gnss_raw::RawMeasBuilder::Config&, double, double, double, gnss_raw::RawMeas&) {}
+#endif
+
+// The cheaper build's elevations for a sim's epochs: each satellite's as
+// worked out on the first epoch of each atmo_period_s it was built in.
+struct SimLite
+{
+    int64_t k[3][64];
+    double  el[3][64];
+    SimLite()
+    {
+        for (int s = 0; s < 3; ++s)
+            for (int p = 0; p < 64; ++p)
+            {
+                k[s][p] = INT64_MIN;
+                el[s][p] = 0.0;
+            }
+    }
+};
+
 // The noise the builder gives a measurement at C/N0 cn0 and lock age age_s
 // (RawMeasBuilder::next, g_peak 0): sigma_pr, sigma_pr_corr, tau_pr,
 // sigma_rr, tau_rr.
@@ -111,9 +159,10 @@ inline void simSigmas(const gnss_raw::RawMeasBuilder::Config& c, double cn0, dou
 // The GNSS task's turn for a sim epoch (RawGnssMeasStage::offer): true, and
 // out is the epoch to hand the filter's task, if it is timed and the filter
 // runs (nav: its state; the build's position is its). first: the first
-// epoch this stage builds (its ionosphere then chosen).
+// epoch this stage builds (its ionosphere then chosen). lite: the cheaper
+// build's kept elevations (nullptr: each worked out every epoch).
 inline bool simOffer(gnss_raw::RawGnssMeasStage& st, const SimEpoch& x, const gnss_raw::ShadowNav& nav,
-                     gnss_raw::BuiltEpoch& out, SimCounts& c)
+                     gnss_raw::BuiltEpoch& out, SimCounts& c, SimLite* lite = nullptr)
 {
     using namespace gnss_raw;
     c.epochs++;
@@ -188,8 +237,21 @@ inline bool simOffer(gnss_raw::RawGnssMeasStage& st, const SimEpoch& x, const gn
     const bool have_pos = std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]) > 6.0e6;
     double lat = 0.0, lon = 0.0, hgt = 0.0;
     if (have_pos)
-        ecef_to_geo(r, &lat, &lon, &hgt);
+    {
+        if (simLiteOn(bc))
+        {
+            lat = nav.lla[0];             // as the stage hands the cheaper build its position
+            lon = nav.lla[1];
+            hgt = nav.lla[2];
+        }
+        else
+        {
+            ecef_to_geo(r, &lat, &lon, &hgt);
+        }
+    }
     const double el_mask = bc.el_mask_deg * M_PI / 180.0;
+    const bool keep_el = simLiteOn(bc) && lite != nullptr && simLitePeriod(bc) > 0.0;
+    const int64_t el_k = keep_el ? simLitePeriodOf(te.epoch.tow_s, simLitePeriod(bc)) : INT64_MIN;
     for (int i = 0; i < use->epoch.n; ++i)
     {
         const RawObs& o = use->epoch.obs[i];
@@ -209,9 +271,21 @@ inline bool simOffer(gnss_raw::RawGnssMeasStage& st, const SimEpoch& x, const gn
             continue;
         if (have_pos)
         {
-            const double d[3] = {s->sat_pos[0] - r[0], s->sat_pos[1] - r[1], s->sat_pos[2] - r[2]};
             double az, el;
-            gnss_az_el(lat, lon, d, &az, &el);
+            if (keep_el && lite->k[o.sys][o.prn] == el_k)
+            {
+                el = lite->el[o.sys][o.prn];
+            }
+            else
+            {
+                const double d[3] = {s->sat_pos[0] - r[0], s->sat_pos[1] - r[1], s->sat_pos[2] - r[2]};
+                gnss_az_el(lat, lon, d, &az, &el);
+                if (keep_el)
+                {
+                    lite->k[o.sys][o.prn] = el_k;
+                    lite->el[o.sys][o.prn] = el;
+                }
+            }
             if (el < el_mask)
             {
                 c.below_mask++;
@@ -233,7 +307,12 @@ inline bool simOffer(gnss_raw::RawGnssMeasStage& st, const SimEpoch& x, const gn
         m.has_rr = o.has_rate && !(o.cn0_dbhz < sig.cn0_min_rr);
         m.rr = m.has_rr ? s->rr : 0.0;
         const double age = st.builder_.relockAge(o.sys, o.prn, te.epoch.tow_s);
-        simSigmas(bc, static_cast<double>(o.cn0_dbhz), age, sig.carrier_hz, m);
+        if (simLiteOn(bc))
+            simLiteSigmas(bc, static_cast<double>(o.cn0_dbhz), age, sig.carrier_hz, m);
+        else
+        {
+            simSigmas(bc, static_cast<double>(o.cn0_dbhz), age, sig.carrier_hz, m);
+        }
         if (s->rr_sig_add > 0.0f)
             m.sigma_rr = std::hypot(m.sigma_rr, s->rr_sig_add);
         m.has_cr = false;

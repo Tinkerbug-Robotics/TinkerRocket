@@ -152,6 +152,7 @@ if (os.path.exists("cpp/rawgnss/rawgnss_bindings.cpp") and
                 os.path.join(gnss_raw_dir, "EphemerisStore.cpp"),
                 os.path.join(gnss_raw_dir, "RawMeasBuilder.cpp"),
                 os.path.join(gnss_raw_dir, "RawMeasCarrier.cpp"),
+                os.path.join(gnss_raw_dir, "RawMeasBuilderLite.cpp"),
                 os.path.join(raw_ekf_dir, "TR_RawGnssEKF.cpp"),
                 os.path.join(raw_ekf_dir, "TR_RawGnssCarrier.cpp"),
                 os.path.join(shadow_dir, "HeadingFit.cpp"),

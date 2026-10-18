@@ -73,6 +73,9 @@ void expectSameBuilder(const RawMeasBuilder::Config& a, const RawMeasBuilder::Co
     EXPECT_EQ(a.epoch_period_s, b.epoch_period_s);
     EXPECT_EQ(a.cr_max_interval_s, b.cr_max_interval_s);
     EXPECT_EQ(a.cr_sigma_floor_mps, b.cr_sigma_floor_mps);
+    EXPECT_EQ(a.lite, b.lite);
+    EXPECT_EQ(a.atmo_period_s, b.atmo_period_s);
+    EXPECT_EQ(a.lite_solves, b.lite_solves);
 }
 
 void expectSameEkf(const RawGnssEKFParams& a, const RawGnssEKFParams& b)
@@ -185,6 +188,7 @@ void expectSameNumbers(const GnssReceiverProfile& a, const GnssReceiverProfile& 
     EXPECT_EQ(a.epoch_job_max_s, b.epoch_job_max_s);
     EXPECT_EQ(a.windup_k, b.windup_k);
     EXPECT_EQ(a.windup_monitor, b.windup_monitor);
+    EXPECT_EQ(a.build_lite, b.build_lite);
     RawGnssShadow::Config sa, sb;
     gnss_raw::applyReceiverProfile(a, sa);
     gnss_raw::applyReceiverProfile(b, sb);
@@ -198,13 +202,13 @@ void expectSameNumbers(const GnssReceiverProfile& a, const GnssReceiverProfile& 
 // profile over them. The sizes are a 64-bit host's (macOS and Linux alike).
 static_assert(sizeof(void*) != 8 || sizeof(RawGnssEKFParams) == 464,
               "RawGnssEKFParams changed: add the field to expectSameEkf, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawMeasBuilder::Config) == 312,
+static_assert(sizeof(void*) != 8 || sizeof(RawMeasBuilder::Config) == 336,
               "RawMeasBuilder::Config changed: add the field to expectSameBuilder, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 32,
               "GnssSignalProfile changed: add the field to expectSameSignal, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 536,
+static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 544,
               "GnssReceiverProfile changed: add the field to expectSameNumbers, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1728,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1752,
               "RawGnssShadow::Config changed: pin the field in TheShadowSafeguardDefaultsAreTheBeetles, then update "
               "this size");
 
@@ -227,6 +231,7 @@ TEST(ReceiverProfile, TheLc86gProfileIsWhatTheFilterFlewWith)
     EXPECT_EQ(b.rr_dyn_sigma, 0.5);
     EXPECT_EQ(b.rr_relock_sigma, 3.0);
     EXPECT_EQ(b.sat_refresh_s, 5.0);
+    EXPECT_FALSE(b.lite);                 // the full build, as the Beetle flies it
     // the noise model's fit, the builder's constants
     EXPECT_EQ(b.pr_white_a, 0.026);
     EXPECT_EQ(b.pr_white_b, 0.157);
@@ -500,12 +505,26 @@ TEST(ReceiverProfile, TheMosaicG5V0Profile)
     EXPECT_EQ(p.epoch_job_max_s, 0.2);
     EXPECT_EQ(p.level_min_dt_s, 0.95);
     EXPECT_EQ(p.heading_fit_period_s, 1.0);
+    // the cheaper epoch build: off (a bench image's TR_BENCH_RAW_BUILD_LITE)
+    EXPECT_FALSE(p.build_lite);
 
-    // applied: the builder's epochs the fused grid's apart, no carrier
+    // applied: the builder's epochs the fused grid's apart, no carrier, the
+    // full build
     RawMeasBuilder::Config b;
     gnss_raw::applyReceiverProfile(p, b);
     EXPECT_EQ(b.epoch_period_s, 0.1);
     EXPECT_FALSE(b.carrier);
+    EXPECT_FALSE(b.lite);
+    EXPECT_EQ(b.atmo_period_s, 0.0);
+    // ... and with build_lite, the atmosphere once in each period the code is
+    // fused in
+    GnssReceiverProfile pl = p;
+    pl.build_lite = true;
+    RawMeasBuilder::Config bl;
+    gnss_raw::applyReceiverProfile(pl, bl);
+    EXPECT_TRUE(bl.lite);
+    EXPECT_EQ(bl.atmo_period_s, 1.0);
+    EXPECT_EQ(bl.lite_solves, 4);         // after a gap, four orbit solves an epoch (RawMeasBuilder.h)
     EXPECT_EQ(b.relock_gap_s, 0.5);
     EXPECT_EQ(b.rr_tau_s, 0.0);
     // the EKF's: the Beetle's 3 s of refusals, the Doppler's 30 epochs at 10

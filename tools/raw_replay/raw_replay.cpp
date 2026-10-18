@@ -295,6 +295,7 @@ struct Args
     double windup_monitor_k = -1.0, dv_lever_radial_m = -1.0;
     double clk_drift_psd = -1.0;     // RawGnssEKFParams::clk_drift_psd after the profile (-1: the profile's; the
                                      //   mosaic's and the LC86G's 100 m^2/s^3): an experiment on the clock's walk
+    bool build_lite = false;         // TR_BENCH_RAW_BUILD_LITE: the cheaper epoch build (a RAW_REPLAY_BUILD_LITE build)
     std::set<std::string> given;     // the options on the command line
 };
 
@@ -344,7 +345,8 @@ void usage()
                  "  [--antenna-min-rate X] [--antenna-att-mode 0|1|2]\n"
                  "  the spinning body (a RAW_REPLAY_WINDUP build): [--windup-k K] [--windup-geom 0|1]\n"
                  "  [--windup-monitor 0|1] [--windup-monitor-k K] [--att-exact 0|1] [--dv-lever-mode 0|1]\n"
-                 "  [--dv-lever-radial-m X] [--clk-drift-psd X]\n");
+                 "  [--dv-lever-radial-m X] [--clk-drift-psd X]\n"
+                 "  the cheaper epoch build (a RAW_REPLAY_BUILD_LITE build, --receiver mosaic only): [--build-lite]\n");
 }
 
 bool parseArgs(int argc, char** argv, Args& a)
@@ -482,6 +484,7 @@ bool parseArgs(int argc, char** argv, Args& a)
                                            &a.seed_gyro_dps[2]) == 3;
         }
         else if (k == "--sat-cap") a.sat_cap = std::atoi(val());
+        else if (k == "--build-lite") a.build_lite = true;
         else if (k == "--fuse-ms") a.fuse_ms = std::atof(val());
         else if (k == "--flight-state") a.flight_state = val();
         else if (k == "--time-tag-from-boot") a.time_tag_from_boot = true;
@@ -1576,6 +1579,14 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "--receiver is lc86g or mosaic, not %s\n", a.receiver.c_str());
         return 2;
     }
+    // the cheaper epoch build as the firmware allows it: on the mosaic-only image alone (its CMakeLists refuses
+    // TR_BENCH_RAW_BUILD_LITE elsewhere), so never on the LC86G's profile
+    if (a.build_lite && !mosaic)
+    {
+        std::fprintf(stderr, "--build-lite is for the mosaic-G5 (--receiver mosaic) alone, as TR_BENCH_RAW_BUILD_LITE "
+                             "is for the mosaic-only image\n");
+        return 2;
+    }
     if (!a.flight_state.empty() && a.flight_state != "log" && a.flight_state != "quorum")
     {
         std::fprintf(stderr, "--flight-state is log or quorum, not %s\n", a.flight_state.c_str());
@@ -1675,6 +1686,16 @@ int main(int argc, char** argv)
         rx.fuse_epoch_period_s = a.fuse_ms * 1.0e-3;   // TR_BENCH_RAW_FUSE_MS
     if (a.sat_cap >= 0)
         rx.sat_cap = a.sat_cap;                         // TR_BENCH_RAW_SAT_CAP
+#if RAW_REPLAY_BUILD_LITE
+    if (a.build_lite)
+        rx.build_lite = true;                           // TR_BENCH_RAW_BUILD_LITE
+#else
+    if (a.build_lite)
+    {
+        std::fprintf(stderr, "this build has no cheaper epoch build (RAW_REPLAY_BUILD_LITE=OFF): --build-lite needs it\n");
+        return 2;
+    }
+#endif
 #else
     GnssReceiverProfile rx = lc86gProfile();
 #endif
@@ -2161,6 +2182,7 @@ int main(int argc, char** argv)
     int64_t next_pass_us = INT64_MIN;
     int quorum_baro = 0;   // barometer samples the quorum got (none without a ground pressure)
     rr::SimCounts sim_counts;   // a sim's epochs (X) through the stage
+    rr::SimLite sim_lite;       //   and, with --build-lite, the elevations it keeps
     bool sim_iono = false;      //   and the broadcast ionosphere its receiver had on the pad, once
 #endif
 
@@ -3009,7 +3031,7 @@ int main(int argc, char** argv)
             }
             ShadowNav nav;
             sh.navState(nav);
-            if (rr::simOffer(stage, x, nav, *slot, sim_counts))
+            if (rr::simOffer(stage, x, nav, *slot, sim_counts, &sim_lite))
                 sh.onBuilt(*slot);
             sh.onMeasStats(stage.stats());
             break;
@@ -3959,6 +3981,9 @@ int main(int argc, char** argv)
                                  "\"fuse_ms\": %.0f, ",
                              a.receiver.c_str(), cold ? 1 : 0, a.unaided ? 1 : 0, cfg.sat_cap,
                              fusedEpochPeriod(rx) * 1000.0);
+#if RAW_REPLAY_BUILD_LITE
+                std::fprintf(ej, "\"build_lite\": %d, ", rx.build_lite ? 1 : 0);
+#endif
                 if (!in.xep.empty())
                     std::fprintf(ej, "\"sim\": {\"epochs\": %u, \"built\": %u, \"eph_standins\": %u, "
                                      "\"below_cn0\": %u, \"below_mask\": %u, \"meas_built\": %u}, ",

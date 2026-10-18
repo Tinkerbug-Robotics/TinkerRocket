@@ -105,15 +105,22 @@ void RawGnssMeasStage::see(const TimedRawEpoch& e)
     last_tow_s_ = e.epoch.tow_s;
     st_.last_timed = e.mcu_us != 0 ? 1 : 0;
     // which satellites the receiver tracks that it has not sent the ephemeris of
+    // (the cheaper build keeps each one found, for offer)
+    const bool lite = cfg_.meas.lite;
     int tracked = 0, no_eph = 0;
     for (int i = 0; i < e.epoch.n; ++i)
     {
         const RawObs& o = e.epoch.obs[i];
+        if (lite && i < RawEpoch::kMaxObs)
+            eph_of_[i] = nullptr;
         if (!o.has_pr || o.sys > GNSS_SYS_BDS)
             continue;
         tracked++;
         const double to_sys = o.sys == GNSS_SYS_BDS ? BDT_MINUS_GPST : 0.0;   // as the builder picks
-        if (store_.select(o.sys, o.prn, e.epoch.tow_s + to_sys) == nullptr)
+        const gps_eph_t* eph = store_.select(o.sys, o.prn, e.epoch.tow_s + to_sys);
+        if (lite && i < RawEpoch::kMaxObs)
+            eph_of_[i] = eph;
+        if (eph == nullptr)
             no_eph++;
     }
     st_.tracked = sat16s(tracked);
@@ -204,6 +211,12 @@ bool RawGnssMeasStage::offer(const TimedRawEpoch& e, const ShadowNav& nav, Built
     }
     double r[3];
     geo_to_ecef(nav.lla[0], nav.lla[1], nav.lla[2], r);
+    if (cfg_.meas.lite)
+    {
+        offerLite(e, nav, r, out);
+        st_.built++;
+        return true;
+    }
     if (cfg_.sat_cap > 0)
     {
         // every satellite's lock age from the whole sky, then the build from
@@ -219,6 +232,43 @@ bool RawGnssMeasStage::offer(const TimedRawEpoch& e, const ShadowNav& nav, Built
     }
     st_.built++;
     return true;
+}
+
+// offer()'s build in the cheaper build: the same epoch built from the same
+// picks, with the filter's geodetic position as it has it, each
+// observation's ephemeris as see() looked it up, and the picks' lock ages
+// noted once (with the whole sky's, at the same time). Once the filter has
+// taken its receiver clock (nav.clock: from its first epoch with a code since
+// it started, the whole sky), the orbits that come due at once are solved a
+// few an epoch (spread).
+void RawGnssMeasStage::offerLite(const TimedRawEpoch& e, const ShadowNav& nav, const double r[3], BuiltEpoch& out)
+{
+    builder_.noteEpoch(e.epoch);
+    const TimedRawEpoch* use = &e;
+    const gps_eph_t* const* eph = eph_of_;
+    if (cfg_.sat_cap > 0)
+    {
+        capEpoch(e);
+        use = &sel_;
+        eph = sel_eph_;
+    }
+    const int64_t c0 = now();
+    chooseIono(nav.in_flight != 0, out);
+    builder_.beginWith(use->epoch, r, nav.lla, 0.0, true, nav.clock != 0);
+    out.mcu_us = use->mcu_us;
+    out.tow_s = use->epoch.tow_s;
+    out.gps_week = use->gps_week;
+    for (int k = 0; k < 3; ++k)
+        out.r_approx[k] = r[k];
+    out.n = builder_.nextWith(use->epoch, store_, eph, out.meas, 0, RawEpoch::kMaxObs, RawEpoch::kMaxObs);
+    for (int i = 0; i < out.n; ++i)
+        out.lock_age_s[i] = builder_.relockAge(out.meas[i].sys, out.meas[i].prn, out.tow_s);
+    out.build_us = static_cast<uint32_t>(now() - c0);
+    st_.build_us = out.build_us;
+    if (out.build_us > st_.build_us_max)
+        st_.build_us_max = out.build_us;
+    if (cfg_.sat_cap > 0)
+        capBuilt(out);
 }
 
 // The cap's picks from e into sel_: of the satellites the builder would build
@@ -247,7 +297,7 @@ void RawGnssMeasStage::capEpoch(const TimedRawEpoch& e)
         state[i] = kNot;
         score[i] = 0.0f;
         if (!o.has_pr || o.sys > GNSS_SYS_BDS || o.prn >= kPrns || o.cn0_dbhz < cfg_.meas.sig[o.sys].cn0_min_pr
-            || !hasEphemeris(o.sys, o.prn, in.tow_s))
+            || !(cfg_.meas.lite ? eph_of_[i] != nullptr : hasEphemeris(o.sys, o.prn, in.tow_s)))
             continue;
         bool first = true;                // a satellite's first observation counts it
         for (int j = 0; j < i; ++j)
@@ -293,7 +343,11 @@ void RawGnssMeasStage::capEpoch(const TimedRawEpoch& e)
     int k = 0;
     for (int i = 0; i < n; ++i)
         if (state[i] == kPicked)
+        {
+            if (cfg_.meas.lite)
+                sel_eph_[k] = eph_of_[i];   // see()'s, for the cheaper build
             sel_.epoch.obs[k++] = in.obs[i];
+        }
     sel_.epoch.n = k;
     sel_.mcu_us = e.mcu_us;
     sel_.arrival_us = e.arrival_us;
@@ -306,13 +360,18 @@ void RawGnssMeasStage::capEpoch(const TimedRawEpoch& e)
 // After the build of the cap's picks: the hold is for the satellites built,
 // and a pick the build dropped -- under the elevation mask, the one test the
 // cap cannot make -- is picked last from now on (capEpoch), so it does not
-// keep a place a satellite that can be built is waiting for.
+// keep a place a satellite that can be built is waiting for. A pick the
+// cheaper build left out while its orbit's solve waits (RawMeasBuilder::
+// waiting) was not dropped: it keeps its hold.
 void RawGnssMeasStage::capBuilt(const BuiltEpoch& out)
 {
     uint64_t built[3] = {};
     for (int i = 0; i < out.n; ++i)
         if (out.meas[i].sys <= GNSS_SYS_BDS && out.meas[i].prn < kPrns)
             built[out.meas[i].sys] |= uint64_t{1} << out.meas[i].prn;
+    if (cfg_.meas.lite)
+        for (int s = 0; s < 3; ++s)
+            built[s] |= builder_.waiting(s);
     const bool none = (masked_[0] | masked_[1] | masked_[2]) == 0;
     for (int s = 0; s < 3; ++s)
     {

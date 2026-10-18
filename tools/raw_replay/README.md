@@ -683,6 +683,8 @@ keep their scratch directory (printed; `BITIDENT_TMP` and `M1_IDENTITY_TMP` name
 - A tree the frozen harness cannot compile (a field it names renamed or gone) fails with status 2: a change to look
   at, not a pass. A tree whose filter needs a source file or include directory the frozen CMakeLists does not list:
   `BITIDENT_EXTRA_SRC` and `BITIDENT_EXTRA_INC` (';'-separated, relative to the tree, each used where it exists).
+  Those the script knows of are in its `DEFAULT_EXTRA_SRC`, used where a tree has them, so the command above needs
+  no variable: today the builder's cheaper build, `TR_GNSSRaw/RawMeasBuilderLite.cpp`.
 - If a rebase rewrites the frozen commit, the script finds the newest commit carrying its subject; otherwise set
   `BITIDENT_HARNESS`.
 

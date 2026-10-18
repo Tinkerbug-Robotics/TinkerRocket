@@ -108,6 +108,11 @@ struct GnssReceiverProfile
                                           //   epoch before)
     double max_epoch_age_s = 0.6;         // an epoch later than this is dropped (RawGnssShadow)
     double epoch_job_max_s = 0.3;         //   and one this old is worked at once, not a slice a step
+    // The cheaper epoch build (RawMeasBuilder.h, Config::lite): each
+    // satellite's elevation and atmosphere once in each pr_period_s, its orbit
+    // solves spread over their 5 s, the noise on one exp. Off in every profile;
+    // a mosaic-only bench image turns it on (TR_BENCH_RAW_BUILD_LITE).
+    bool   build_lite = false;
 
     // its measurements' noise (RawMeasBuilder): sigma^2 = a^2 + b^2 * 10^(-(C/N0 - 35)/10)
     double pr_white_a = 0.0, pr_white_b = 0.0;   // the pseudorange's white part, m

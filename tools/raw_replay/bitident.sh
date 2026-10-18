@@ -40,12 +40,18 @@
 #   BITIDENT_EXTRA_SRC, BITIDENT_EXTRA_INC
 #                     ';'-separated source files and include directories, relative to the tree, that a later
 #                     tree's filter needs and the frozen CMakeLists does not name; each is used where it exists.
+#                     Added to DEFAULT_EXTRA_SRC below, which names those the script knows of (each, too, only
+#                     in a tree that has it, so an older tree builds as it did).
 #
 # Exit status: 0 identical, 1 a difference, 2 the check could not run (a build or a run failed).
 set -euo pipefail
 
 FROZEN=771e837449dd1ed5315a6c8376cf4f12b7d8aeee
 FROZEN_SUBJECT="the frozen harness for the Beetle's bit-identity check"
+# Sources a later tree's filter needs that the frozen CMakeLists does not
+# name, each used where the tree has it: the builder's cheaper build
+# (RawMeasBuilder.cpp calls it from 99be729c on).
+DEFAULT_EXTRA_SRC="tinkerrocket-idf/components/TR_GNSSRaw/RawMeasBuilderLite.cpp"
 
 if [ $# -lt 1 ] || [ $# -gt 2 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
     sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
@@ -133,7 +139,7 @@ build() {
     echo "building the frozen harness against $side..." >&2
     if ! { cmake -S "$TMP/harness/tools/raw_replay" -B "$TMP/build_$side" -DSRC_ROOT="$root" \
                -DCMAKE_BUILD_TYPE=Release -DRAW_REPLAY_VCHECK=ON -DRAW_REPLAY_LATCH=ON \
-               -DRAW_REPLAY_EXTRA_SRC="$(extra "$root" "${BITIDENT_EXTRA_SRC:-}")" \
+               -DRAW_REPLAY_EXTRA_SRC="$(extra "$root" "$DEFAULT_EXTRA_SRC${BITIDENT_EXTRA_SRC:+;$BITIDENT_EXTRA_SRC}")" \
                -DRAW_REPLAY_EXTRA_INC="$(extra "$root" "${BITIDENT_EXTRA_INC:-}")" &&
            cmake --build "$TMP/build_$side" -j "$JOBS"; } > "$TMP/build_$side.log" 2>&1; then
         tail -30 "$TMP/build_$side.log" >&2

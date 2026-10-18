@@ -62,6 +62,9 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawMeasBuilder::C
     c.epoch_period_s = fusedEpochPeriod(p);
     c.cr_max_interval_s = p.cr_max_interval_s;
     c.cr_sigma_floor_mps = p.cr_sigma_floor_mps;
+    // the cheaper build: the atmosphere once in each period the code is fused in
+    c.lite = p.build_lite;
+    c.atmo_period_s = p.build_lite ? p.pr_period_s : 0.0;
 }
 
 inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssEKFParams& e)
