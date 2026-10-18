@@ -1241,8 +1241,12 @@ int RawGnssEKF<T>::leverRows(const T u_ned[3], const LeverEpoch& lv, int* hidx, 
 // [w x] / |w| and th = |w| dt (Rodrigues),
 //   exp(-[w x] s)            = I - sin(|w| s) K + (1 - cos(|w| s)) K^2,
 //   int_0^dt exp(-[w x] s) ds = dt I - (1 - cos th) / |w| K + (dt - sin th / |w|) K^2.
-// Per step, not per epoch, but only with att_exact: here, in flash on the
-// Beetle, which never turns it on.
+// Per step, not per epoch, but only with att_exact: here, with the carrier's
+// code, which main/raw_gnss_iram.lf leaves in flash. On the Beetle, which
+// never turns it on, that costs nothing. On a -DTR_RAW_GNSS_IRAM=1 bench of
+// the mosaic image, propagateCovariance runs from internal RAM but fetches
+// this from flash every step, so that bench's prop_us is not the cost of an
+// internal-RAM placement (the flight image keeps the whole filter in flash).
 template <typename T>
 void RawGnssEKF<T>::attExactBlocks(const T w_b[3], T dt, T Ra[3][3], T Ga[3][3]) const
 {
