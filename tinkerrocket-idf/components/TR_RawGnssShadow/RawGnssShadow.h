@@ -456,7 +456,7 @@
 // wavelengths (RawGnssWindup.h's interband fit) and set against the gyro's.
 // With dv_lever_mode 1, the change check's lever allowance takes the nose's
 // own turn (a roll does not move an antenna on the nose's axis) and a radial
-// bound, not the whole rate.
+// bound (none by default), not the whole rate.
 //
 // Stopping. A sensor sim, a hole in the IMU longer than max_gap_s, a state
 // that is not finite, or (on the pad) one pad_reset_m from the flight
@@ -677,18 +677,20 @@ public:
                                               //   the gyro (RawGnssWindup.h's interband fit, each epoch)
         double   windup_monitor_k = 0.99;     //   its k
         double   windup_monitor_tau_s = 1.0;  //   its leaky mean's time constant
-        // The Doppler change check's lever-arm allowance (dv_lever_allow_m):
-        // 0, the body's whole rate (dv_lever_allow_m (|dw| + |w|^2 dt)); 1,
-        // an antenna dv_lever_allow_m along the nose turns only with the nose
-        // -- the change of the nose's own rate in NED, which a roll about it
-        // leaves alone -- and one dv_lever_radial_m across it with the whole
-        // rate (its turn capped at twice its speed). At 1 rev/s of roll, 0
-        // allows 1.4 m/s an epoch and a slow coherent ramp goes through (the
-        // windup study: 0 of 192 caught from 1 rev/s on). The radial bound
-        // costs the same way: 1 cm lost them from 5 rev/s, 3 cm from 3. None
-        // (0, the default) caught every one from 0 to 20 rev/s; with the
-        // antenna truly 1 cm off the roll axis it held Dopplers in 1 run of
-        // 48 at 9.5 rev/s, at no attitude cost.
+        // The Doppler change check's lever-arm allowance: the arm
+        // (dv_lever_allow_m, or with the offset known DopplerChange.h
+        // knownLeverArm's) times 0, the body's whole rate (|dw| + |w|^2 dt);
+        // 1, the nose's own turn, for an antenna along the nose -- the change
+        // of the nose's own rate in NED, which a roll about it leaves alone --
+        // plus one dv_lever_radial_m across it with the whole rate (its turn
+        // capped at twice its speed). At 1 rev/s of roll, 0 allows 1.4 m/s an
+        // epoch and a slow coherent ramp goes through (the windup study: 0 of
+        // 192 caught from 1 rev/s on). The radial bound costs the same way:
+        // 1 cm lost them from 5 rev/s, 3 cm from 3. None (0, the default)
+        // caught every one from 0 to 20 rev/s on the axis; with the antenna
+        // truly 1 cm off the roll axis it held about every coast Doppler at 5,
+        // 7.5 and 15 rev/s (and 176 to 192 of them in 8 runs of 48 at 9.5):
+        // the bars still passed, but the coast is then the unaided filter's.
         uint8_t  dv_lever_mode = 0;
         double   dv_lever_radial_m = 0.0;
     };
