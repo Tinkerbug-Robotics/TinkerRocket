@@ -303,7 +303,9 @@ def solve_high_g(faces, lg_offset, lg_scale, g):
     own = {k: {"mean": faces[k]["hg"]["mean"]} for k in order}
     own_off, own_scl, own_conv = solve(own, g)
     Minv = inverse([M[0:3], M[3:6], M[6:9]])
-    zero = mat_vec([x for row in Minv for x in row], [b[i] + lg_offset[i] for i in range(3)]) if Minv else [math.nan] * 3
+    if Minv is None:
+        return {"problems": ["fit"]}
+    zero = mat_vec([x for row in Minv for x in row], [b[i] + lg_offset[i] for i in range(3)])
     d_off = [zero[i] - own_off[i] for i in range(3)]
     d_scl = [M[4 * i] - lg_scale[i] / own_scl[i] for i in range(3)]
     sig_d_off, sig_d_scl, disagree = [], [], []
@@ -445,7 +447,8 @@ async def run(args):
                 print("left as it is")
                 return 0
             back = await write_offset(link, (0.0, 0.0, 0.0))
-            if back is not None and back.get("hg") is not None:
+            # the high-g's alignment too when one is stored (an older flight computer would not answer 80)
+            if st.get("hg") is not None and st["hg"]["flags"] & HGF_STORED:
                 back = await write_high_g(link, HG_OP_CLEAR) or back
             print("after:")
             if back is None:

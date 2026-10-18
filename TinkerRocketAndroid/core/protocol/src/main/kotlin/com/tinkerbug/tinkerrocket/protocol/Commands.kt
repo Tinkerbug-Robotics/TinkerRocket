@@ -508,6 +508,27 @@ public object Commands {
     public fun accelCalApply(offsetX: Float, offsetY: Float, offsetZ: Float): ByteArray =
         frame(BleCommandId.ACC_CAL_APPLY) { f32(offsetX); f32(offsetY); f32(offsetZ) }
 
+    /**
+     * cmd 80 — HighGCalApplyData, 49 B (#1629, the high-g):
+     * `[op u8][matrix f32 ×9][bias f32 ×3]`, the high-g's alignment to the
+     * low-g, M row-major and b in m/s², board frame.  [HighGCalApply.OP_STORE]
+     * stores and applies them; [HighGCalApply.OP_CLEAR] (the identity and
+     * zeros, which it ignores) sets M back to identity and keeps b.
+     */
+    public fun highGCalApply(
+        op: Int,
+        matrix: List<Float> = HighGCalApply.IDENTITY,
+        bias: List<Float> = HighGCalApply.ZERO_BIAS,
+    ): ByteArray {
+        require(matrix.size == 9) { "the alignment is a 3x3, got ${matrix.size} entries" }
+        require(bias.size == 3) { "the bias has three axes, got ${bias.size}" }
+        return frame(BleCommandId.HG_CAL_APPLY) {
+            u8(op)
+            matrix.forEach { f32(it) }
+            bias.forEach { f32(it) }
+        }
+    }
+
     // ------------------------------------------------------------------ scan
 
     /** cmd 60 (BS only) — frequency scan, 12 B:

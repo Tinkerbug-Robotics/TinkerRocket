@@ -176,4 +176,15 @@ public object BleCommandId {
      * Firmware that predates it ignores it.
      */
     public const val GNSS_LOG: Int = 79
+
+    /**
+     * #1629, the high-g: HighGCalApplyData 49 B, `[op u8][matrix f32 ×9]
+     * [bias f32 ×3]` ([HighGCalApply]) — the high-g accelerometer's six-face
+     * alignment to the low-g, M row-major and b in m/s², board frame.  op 1
+     * stores and applies them; op 0 clears M back to identity and keeps b.
+     * Answered, like 76, with a 0xD1 frame that now carries the high-g, and
+     * read back with 77.  Refused past HG_CAL_* and in flight; an older
+     * flight or out computer does not answer it at all.
+     */
+    public const val HG_CAL_APPLY: Int = 80
 }

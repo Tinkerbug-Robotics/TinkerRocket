@@ -1165,7 +1165,9 @@ nonisolated extension AccelSixFace.HighGSolution {
         guard let p = problems.first else { return nil }
         switch p {
         case .residual:
-            return "A face fits the low-g worse than 3 mg — did it move, or warm up between faces? Measure the faces again."
+            let limit = String(format: "%.0f", AccelSixFace.highGResidualMax / AccelSixFace.g0 * 1000)
+            return "A face fits the low-g worse than \(limit) mg — did it move, or warm up between faces? "
+                + "Measure the faces again."
         case .scale:
             return "A scale is outside 0.97–1.03."
         case .cross:

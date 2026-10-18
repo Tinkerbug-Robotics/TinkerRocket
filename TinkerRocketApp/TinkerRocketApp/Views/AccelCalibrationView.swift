@@ -110,11 +110,13 @@ struct AccelCalibrationView: View {
         }
         .onReceive(device.accelCalFrames) { frame in
             let wasOpen = flow.windowOpen
-            let hadHighGReport = flow.lastHighGWrite != nil
             let next = flow.take(frame)
             if flow.windowOpen, !wasOpen { windowOpenedAt = Date() }
-            if !hadHighGReport, let w = flow.lastHighGWrite { highGWritten(w) }
             run(next)
+        }
+        // A high-g save's report, whether its read-back came or timed out.
+        .onChange(of: flow.lastHighGWrite) { w in
+            if let w { highGWritten(w) }
         }
         .confirmationDialog(highGStored ? "Clear the stored calibration?" : "Clear the stored offset?",
                             isPresented: $confirmClear, titleVisibility: .visible) {

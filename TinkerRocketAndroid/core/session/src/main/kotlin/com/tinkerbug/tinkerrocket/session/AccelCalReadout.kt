@@ -1,14 +1,21 @@
 package com.tinkerbug.tinkerrocket.session
 
 import com.tinkerbug.tinkerrocket.protocol.AccelCalStatus
+import com.tinkerbug.tinkerrocket.protocol.HighGBiasSource
 import com.tinkerbug.tinkerrocket.protocol.formatFixed
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.Access
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.Face
+import com.tinkerbug.tinkerrocket.session.AccelSixFace.HighGProblem
+import com.tinkerbug.tinkerrocket.session.AccelSixFace.HighGResult
+import com.tinkerbug.tinkerrocket.session.AccelSixFace.HighGSolution
+import com.tinkerbug.tinkerrocket.session.AccelSixFace.HighGWrite
+import com.tinkerbug.tinkerrocket.session.AccelSixFace.HighGWriteReport
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.LiveFace
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.Measurement
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.Solution
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.Verdict
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.WriteReport
+import kotlin.math.abs
 
 /**
  * Every word the six-face accelerometer calibration shows (#1629), as the iOS
@@ -20,7 +27,8 @@ import com.tinkerbug.tinkerrocket.session.AccelSixFace.WriteReport
  * String(format:): `%+.2f mg`, `%+.3f %`, `%.1f°`, `%+.3f` m/s².  Kept out of
  * the composable so it can be tested ([PadCalReadout]'s twin).  The live face,
  * the "Now" tag, the named Measure button and the placement lines came in a
- * second round, with the same strings specified for both apps at once.
+ * second round, with the same strings specified for both apps at once; the
+ * high-g's section, rows and clear wording in a third, from iOS's.
  */
 public object AccelCalReadout {
 
@@ -91,6 +99,33 @@ public object AccelCalReadout {
     public const val CLEAR_CONFIRM: String = "Clear Offset"
     public const val CANCEL: String = "Cancel"
     public const val READ_IT_BACK: String = "Read It Back"
+
+    // With a high-g alignment stored, the clear takes it too, and says so.
+    public const val CLEAR_ALL: String = "Clear the Stored Calibration…"
+    public const val CLEAR_ALL_FOOTER: String =
+        "Removes the offset and the high-g alignment from the flight computer, which then uses " +
+            "the low-g reading as it is and the high-g with its bias alone."
+    public const val CLEAR_ALL_CONFIRM_TITLE: String = "Clear the stored calibration?"
+    public const val CLEAR_ALL_CONFIRM_TEXT: String =
+        "The flight computer goes back to the low-g reading as it is and to the high-g without " +
+            "its alignment (it keeps the high-g's bias until the next pad calibration). You can " +
+            "measure and save again at any time."
+    public const val CLEAR_ALL_CONFIRM: String = "Clear Calibration"
+
+    // ── The high-g ────────────────────────────────────────────────────────
+
+    public const val HG_TITLE: String = "High-g Accelerometer"
+    public const val HG_SAVING: String = "Saving the high-g…"
+    public const val HG_PASSED: String = "Passed: saved with the offset"
+    public const val HG_FOOTER: String =
+        "The high-g is fitted to the low-g, the more accurate channel on the bench, so the " +
+            "flight computer reads the same acceleration when it switches to the high-g near " +
+            "16 g. ± is one standard deviation from these faces. The pad calibration keeps this " +
+            "alignment and measures the high-g's offset again on the day."
+    /** Under the stored offset, from a frame with no high-g part. */
+    public const val HG_NOT_SENT: String =
+        "This firmware sends no high-g calibration: update the flight computer and the out " +
+            "computer to calibrate the high-g."
 
     // ── The Settings entry (iOS SettingsView's Calibration section) ───────
 
@@ -233,6 +268,114 @@ public object AccelCalReadout {
     public fun readBack(r: WriteReport): String? {
         val back = r.readBack ?: return null
         return if (r.confirmed) null else "Read back: " + offsets(back)
+    }
+
+    // ── The high-g's lines ───────────────────────────────────────────────
+
+    /** "scale +0.812 % ± 0.041": the scale's difference from 1 and its 1-sigma. */
+    public fun hgScale(s: HighGSolution, axis: Int): String =
+        "scale " + signed((s.matrix[4 * axis] - 1) * 100, 3) + " % ± " + formatFixed(s.sigmaMatrix[4 * axis] * 100, 3)
+
+    /** "offset +66.4 mg ± 0.24": the offset against the low-g. */
+    public fun hgOffset(s: HighGSolution, axis: Int): String =
+        "offset " + signed(s.bias[axis] / AccelSixFace.G0 * 1000, 1) + " mg ± " +
+            formatFixed(s.sigmaBias[axis] / AccelSixFace.G0 * 1000, 2)
+
+    public fun hgCross(s: HighGSolution): String =
+        "Cross-axis: up to ${formatFixed(s.crossDeg, 2)}° (± ${formatFixed(s.sigmaCrossDeg, 3)}°)"
+
+    public fun hgResidual(s: HighGSolution): String =
+        "Fit to the low-g: ${formatFixed(s.residualRms / AccelSixFace.G0 * 1000, 2)} mg rms, " +
+            "${formatFixed(s.residualMax / AccelSixFace.G0 * 1000, 2)} mg at most " +
+            "(limit ${formatFixed(AccelSixFace.HG_RESIDUAL_MAX_MPS2 / AccelSixFace.G0 * 1000, 0)} mg)"
+
+    /**
+     * The two fits' agreement: the high-g's own gravity fit against what the
+     * alignment to the low-g implies.  WARN (iOS's orange) when they disagree.
+     */
+    public fun hgAgreement(s: HighGSolution): Line {
+        val first = s.disagreeAxes.firstOrNull()
+            ?: return Line("Its own gravity fit agrees with the alignment to the low-g within their noise.")
+        val axes = s.disagreeAxes.joinToString(", ") { AXES[it].toString() }
+        val off = abs(s.diffOffset[first]) / AccelSixFace.G0 * 1000
+        val lim = AccelSixFace.HG_AGREE_SIGMAS * s.sigmaDiffOffset[first] / AccelSixFace.G0 * 1000
+        val scl = abs(s.diffScale[first]) * 100
+        val sLim = AccelSixFace.HG_AGREE_SIGMAS * s.sigmaDiffScale[first] * 100
+        val numbers = "${formatFixed(off, 1)} mg (3σ ${formatFixed(lim, 1)}) and " +
+            "${formatFixed(scl, 3)} % (3σ ${formatFixed(sLim, 3)})"
+        return Line(
+            "Its own gravity fit differs on $axes by $numbers: the alignment to the low-g, the " +
+                "bench's reference, is what gets saved.",
+            Tone.WARN,
+        )
+    }
+
+    /** Why the alignment is not saved, if it is not: the first problem. */
+    public fun hgProblem(s: HighGSolution): String? = when (s.problems.firstOrNull()) {
+        null -> null
+        HighGProblem.RESIDUAL ->
+            "A face fits the low-g worse than 3 mg — did it move, or warm up between faces? Measure the faces again."
+        HighGProblem.SCALE -> "A scale is outside 0.97–1.03."
+        HighGProblem.CROSS -> "A cross-axis term is past 0.03 (1.7°)."
+        HighGProblem.BIAS -> "An offset is past 11 m/s²."
+    }
+
+    /** The section's verdict: saved with the offset, or why not. */
+    public fun hgVerdict(s: HighGSolution): Line =
+        hgProblem(s)?.let { Line("Not saved: $it", Tone.BAD) } ?: Line(HG_PASSED, Tone.OK)
+
+    /** The line when there is nothing to show: no high-g with the faces, or no fit. */
+    public fun hgUnavailable(r: HighGResult): String? = when (r) {
+        HighGResult.NoReading ->
+            "The faces came without the high-g reading. Update the flight computer and the out " +
+                "computer to calibrate the high-g; the low-g offset saves as before."
+        HighGResult.Singular -> "The high-g fit failed: are the six faces six different sides?"
+        is HighGResult.Solved -> null
+    }
+
+    /** A high-g save's or clear's outcome. */
+    public fun hgWrite(r: HighGWriteReport): Line {
+        val back = r.readBack
+            ?: return Line("No answer about the high-g from the flight computer — read it back to check", Tone.WARN)
+        if (back.highG == null) {
+            return Line("The answer has no high-g in it: update the flight computer and the out computer", Tone.WARN)
+        }
+        return when (r.write) {
+            is HighGWrite.Save ->
+                if (r.confirmed) Line("High-g alignment saved and read back", Tone.OK)
+                else Line("The high-g read-back does not match what was sent", Tone.WARN)
+            HighGWrite.Clear ->
+                if (r.confirmed) Line("Cleared: no high-g alignment stored", Tone.OK)
+                else Line("The flight computer still has a high-g alignment stored", Tone.WARN)
+        }
+    }
+
+    /** "X +0.812 %, Y -0.664 %, Z +1.224 %": the stored alignment's scales. */
+    public fun hgScales(h: AccelCalStatus.HighG): String =
+        (0..2).joinToString(", ") { "${AXES[it]} " + signed((h.matrix[4 * it].toDouble() - 1) * 100, 3) + " %" }
+
+    /** "X -66.4 mg, Y +150.9 mg, Z -31.9 mg": the bias in use. */
+    public fun hgBias(h: AccelCalStatus.HighG): String =
+        (0..2).joinToString(", ") { "${AXES[it]} " + signed(h.bias[it].toDouble() / AccelSixFace.G0 * 1000, 1) + " mg" }
+
+    /** The stored-section row: "High-g bias: X -66.4 mg, …". */
+    public fun hgBiasRow(h: AccelCalStatus.HighG): String = "High-g bias: " + hgBias(h)
+
+    /** What wrote the bias in use, lower case as iOS's sourceText. */
+    public fun hgSource(h: AccelCalStatus.HighG): String = when (h.source) {
+        HighGBiasSource.PAD_CAL -> "measured by the pad calibration"
+        HighGBiasSource.SIX_FACES -> "from the six faces"
+        HighGBiasSource.NONE, null -> "source not recorded"
+    }
+
+    /** The stored-section row under the bias: [hgSource] capitalized. */
+    public fun hgSourceRow(h: AccelCalStatus.HighG): String = hgSource(h).replaceFirstChar { it.uppercaseChar() }
+
+    /** What the flight computer does with the stored alignment. */
+    public fun hgAlignment(h: AccelCalStatus.HighG): String = when {
+        h.stored && h.applied -> "High-g alignment in use: " + hgScales(h)
+        h.stored -> "High-g alignment stored, but not in use while a sim runs"
+        else -> "No high-g alignment stored"
     }
 
     /** Why the screen cannot calibrate now; null when it can. */

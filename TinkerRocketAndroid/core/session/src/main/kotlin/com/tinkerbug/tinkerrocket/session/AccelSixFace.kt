@@ -3,10 +3,13 @@ package com.tinkerbug.tinkerrocket.session
 import com.tinkerbug.tinkerrocket.protocol.AccelCalStatus
 import com.tinkerbug.tinkerrocket.protocol.AccelFaceState
 import com.tinkerbug.tinkerrocket.protocol.BoardOrientation
+import com.tinkerbug.tinkerrocket.protocol.HighGBiasSource
+import com.tinkerbug.tinkerrocket.protocol.HighGCalApply
 import com.tinkerbug.tinkerrocket.protocol.IMUOrientationMode
 import com.tinkerbug.tinkerrocket.protocol.TelemetryData
 import kotlin.math.abs
 import kotlin.math.acos
+import kotlin.math.atan
 import kotlin.math.sqrt
 
 /**
@@ -31,6 +34,19 @@ import kotlin.math.sqrt
  * Board frame throughout: +X forward, +Y left, +Z up out of the component
  * side, whatever way the board sits in the rocket.  The offset is a property
  * of the board, stored on it; nothing here touches a profile.
+ *
+ * The same windows average the high-g accelerometer (a flight and out
+ * computer that send it).  Its correction is fitted to the low-g, the
+ * accurate channel on the bench: the matrix M (scale and cross-axis) and the
+ * offset b with
+ *
+ *     l = M · h − b   on every face (least squares)
+ *
+ * l the raw low-g, h the raw high-g, so the high-g reads as the calibrated
+ * low-g and takes over at the low-g's rail with no step (RocketComputerTypes.h,
+ * HG_CAL_*).  The high-g's own sphere fit is shown beside it as a check; when
+ * the two disagree beyond their noise, the alignment to the low-g is what is
+ * saved ([solveHighG]).
  */
 public object AccelSixFace {
 
@@ -387,6 +403,202 @@ public object AccelSixFace {
         return out
     }
 
+    // ── The high-g, aligned to the low-g ─────────────────────────────────
+
+    /**
+     * What the flight computer refuses (HG_CAL_SCALE_MIN..MAX,
+     * HG_CAL_CROSS_MAX, HG_CAL_BIAS_MAX_MPS2) and what the screen refuses on
+     * top: a face fitted worse than [HG_RESIDUAL_MAX_MPS2], ~7x the residual
+     * of a still 3 s face.
+     */
+    public const val HG_SCALE_MIN: Double = 0.97
+    public const val HG_SCALE_MAX: Double = 1.03
+    public const val HG_CROSS_MAX: Double = 0.03
+    public const val HG_BIAS_MAX_MPS2: Double = 11.0
+    public const val HG_RESIDUAL_MAX_MPS2: Double = 0.03
+
+    /**
+     * m/s²: each face mean's error beyond its samples' SD / √n (the offset's
+     * drift while the board is handled, ~2 mg/°C, and slow noise).
+     */
+    public const val HG_NOISE_FLOOR_MPS2: Double = 0.002
+
+    /** The floors under the two fits' agreement test, and its width. */
+    public const val HG_AGREE_FLOOR_OFFSET_MPS2: Double = 0.005
+    public const val HG_AGREE_FLOOR_SCALE: Double = 2e-4
+    public const val HG_AGREE_SIGMAS: Double = 3.0
+
+    /** How close a read-back's matrix must be to what was sent. */
+    public const val MATRIX_READBACK_TOL: Double = 1e-6
+
+    /** The off-diagonal entries of a row-major 3x3. */
+    public val CROSS_INDICES: List<Int> = listOf(1, 2, 3, 5, 6, 7)
+
+    /** What the high-g's fit came to. */
+    public sealed interface HighGResult {
+        /** The faces came without the high-g reading: an older flight or out computer. */
+        public data object NoReading : HighGResult
+
+        /** The fit could not be solved (the faces do not span three axes). */
+        public data object Singular : HighGResult
+
+        public data class Solved(val solution: HighGSolution) : HighGResult
+    }
+
+    /** Why a high-g alignment may not be saved. */
+    public enum class HighGProblem { RESIDUAL, SCALE, CROSS, BIAS }
+
+    /** The high-g's alignment to the low-g, in m/s² and the board frame. */
+    public data class HighGSolution(
+        /** M, row-major, and b: l = M h − b. */
+        val matrix: List<Double>,
+        val bias: List<Double>,
+        /** m/s², over the six faces' 18 equations. */
+        val residualRms: Double,
+        val residualMax: Double,
+        /** 1-sigma of each M entry and of b, from the faces' noise. */
+        val sigmaMatrix: List<Double>,
+        val sigmaBias: List<Double>,
+        /**
+         * The high-g's own sphere fit, and the zero-g the alignment implies
+         * for it, M⁻¹ (b + the low-g's offset).
+         */
+        val ownOffset: List<Double>,
+        val ownScale: List<Double>,
+        val impliedZero: List<Double>,
+        /**
+         * Per axis: the alignment less the own fit (offset, m/s²; scale), the
+         * difference's 1-sigma, and the axes where it is past 3 sigma.
+         */
+        val diffOffset: List<Double>,
+        val diffScale: List<Double>,
+        val sigmaDiffOffset: List<Double>,
+        val sigmaDiffScale: List<Double>,
+        val disagreeAxes: List<Int>,
+        val problems: List<HighGProblem>,
+    ) {
+        /**
+         * Within the limits: saved with the offset.  A disagreement is not a
+         * problem: the alignment to the low-g is saved either way.
+         */
+        public val saveAllowed: Boolean get() = problems.isEmpty()
+
+        /** M and b as command 80 carries them. */
+        public val wireMatrix: List<Float> get() = matrix.map { it.toFloat() }
+        public val wireBias: List<Float> get() = bias.map { it.toFloat() }
+
+        /** The largest cross-axis term, as an angle, degrees. */
+        public val crossDeg: Double
+            get() = Math.toDegrees(atan(CROSS_INDICES.maxOf { abs(matrix[it]) }))
+
+        public val sigmaCrossDeg: Double get() = Math.toDegrees(CROSS_INDICES.maxOf { sigmaMatrix[it] })
+    }
+
+    /**
+     * The high-g's alignment to the low-g from the six face windows, with the
+     * low-g's own fit ([lowG], for the agreement check): one row of M (and b)
+     * at a time, [h_x h_y h_z −1] (M_i, b_i) = l_i over the six faces — four
+     * unknowns, six equations.  Its 1-sigma comes from the faces' noise (each
+     * mean's SD / √n, the high-g's through M, and the noise floor), not the
+     * residuals, two degrees of freedom a row being too few to judge by.
+     * tools/accel_cal_six_face.py's solve_high_g, number for number, as iOS
+     * AccelSixFace.solveHighG is.
+     */
+    public fun solveHighG(faces: Map<Face, AccelCalStatus>, lowG: Solution, g: Double = G0): HighGResult {
+        val windows = Face.entries.map { faces[it] ?: return HighGResult.NoReading }
+        val high = windows.map { it.highG ?: return HighGResult.NoReading }
+        val l = windows.map { w -> w.faceMean.map { it.toDouble() } }
+        val sl = windows.map { w -> w.faceSd.map { it.toDouble() } }
+        val n = windows.map { maxOf(it.faceN, 1).toDouble() }
+        val h = high.map { hg -> hg.faceMean.map { it.toDouble() } }
+        val sh = high.map { hg -> hg.faceSd.map { it.toDouble() } }
+
+        val x = h.map { it + -1.0 }
+        val xtx = Array(4) { i -> DoubleArray(4) { j -> (0..5).sumOf { f -> x[f][i] * x[f][j] } } }
+        val xtxInv = invert(xtx) ?: return HighGResult.Singular
+        val m = DoubleArray(9)
+        val b = DoubleArray(3)
+        for (i in 0..2) {
+            val rhs = DoubleArray(4) { j -> (0..5).sumOf { f -> x[f][j] * l[f][i] } }
+            for (j in 0..3) {
+                val t = (0..3).sumOf { k -> xtxInv[j][k] * rhs[k] }
+                if (j < 3) m[3 * i + j] = t else b[i] = t
+            }
+        }
+        if (!(m + b).all { it.isFinite() }) return HighGResult.Singular
+
+        var sumSq = 0.0
+        var worst = 0.0
+        for (f in 0..5) {
+            val mh = mul(m, h[f])
+            for (i in 0..2) {
+                val r = mh[i] - b[i] - l[f][i]
+                sumSq += r * r
+                worst = maxOf(worst, abs(r))
+            }
+        }
+        val rms = sqrt(sumSq / 18)
+        // each row's noise: the mean over the faces of every reading's variance in that row's equation
+        val sigRow = (0..2).map { i ->
+            var v = 0.0
+            for (f in 0..5) {
+                val hv = (0..2).sumOf { j -> (m[3 * i + j] * sh[f][j]).let { it * it } }
+                v += (sl[f][i] * sl[f][i] + hv) / n[f] + HG_NOISE_FLOOR_MPS2 * HG_NOISE_FLOOR_MPS2
+            }
+            sqrt(v / 6)
+        }
+        val sigM = (0..8).map { k -> sigRow[k / 3] * sqrt(xtxInv[k % 3][k % 3]) }
+        val sigB = (0..2).map { sigRow[it] * sqrt(xtxInv[3][3]) }
+
+        // the high-g's own gravity fit, and what the alignment says it should have found
+        val own = solve(Face.entries.withIndex().associate { (f, face) -> face to h[f] }, g)
+        val mInv = invert(Array(3) { r -> DoubleArray(3) { c -> m[3 * r + c] } }) ?: return HighGResult.Singular
+        val zero = mul(DoubleArray(9) { mInv[it / 3][it % 3] }, (0..2).map { b[it] + lowG.offset[it] })
+        val dOff = (0..2).map { zero[it] - own.offset[it] }
+        val dScl = (0..2).map { m[4 * it] - lowG.scale[it] / own.scale[it] }
+        val sdOff = ArrayList<Double>(3)
+        val sdScl = ArrayList<Double>(3)
+        val disagree = ArrayList<Int>()
+        for (i in 0..2) {
+            val up = Face.entries.indexOf(Face.of(i, 1))
+            val down = Face.entries.indexOf(Face.of(i, -1))
+            val ownVar = sh[up][i] * sh[up][i] / n[up] + sh[down][i] * sh[down][i] / n[down] +
+                2 * HG_NOISE_FLOOR_MPS2 * HG_NOISE_FLOOR_MPS2
+            sdOff += sqrt(ownVar / 4 + sigB[i] * sigB[i] + HG_AGREE_FLOOR_OFFSET_MPS2 * HG_AGREE_FLOOR_OFFSET_MPS2)
+            sdScl += sqrt(ownVar / (4 * g * g) + sigM[4 * i] * sigM[4 * i] + HG_AGREE_FLOOR_SCALE * HG_AGREE_FLOOR_SCALE)
+            if (!(abs(dOff[i]) <= HG_AGREE_SIGMAS * sdOff[i] && abs(dScl[i]) <= HG_AGREE_SIGMAS * sdScl[i])) {
+                disagree += i
+            }
+        }
+
+        val problems = buildList {
+            if (worst > HG_RESIDUAL_MAX_MPS2) add(HighGProblem.RESIDUAL)
+            if ((0..2).any { !(m[4 * it] >= HG_SCALE_MIN && m[4 * it] <= HG_SCALE_MAX) }) add(HighGProblem.SCALE)
+            if (CROSS_INDICES.any { abs(m[it]) > HG_CROSS_MAX }) add(HighGProblem.CROSS)
+            if (b.any { abs(it) > HG_BIAS_MAX_MPS2 }) add(HighGProblem.BIAS)
+        }
+        return HighGResult.Solved(
+            HighGSolution(
+                matrix = m.toList(), bias = b.toList(), residualRms = rms, residualMax = worst,
+                sigmaMatrix = sigM, sigmaBias = sigB,
+                ownOffset = own.offset, ownScale = own.scale, impliedZero = zero,
+                diffOffset = dOff, diffScale = dScl, sigmaDiffOffset = sdOff, sigmaDiffScale = sdScl,
+                disagreeAxes = disagree, problems = problems,
+            ),
+        )
+    }
+
+    /** [m] · [v], m row-major 3x3. */
+    private fun mul(m: DoubleArray, v: List<Double>): List<Double> =
+        (0..2).map { i -> m[3 * i] * v[0] + m[3 * i + 1] * v[1] + m[3 * i + 2] * v[2] }
+
+    /** The inverse of a small square matrix, column by column; null when singular. */
+    private fun invert(a: Array<DoubleArray>): Array<DoubleArray>? {
+        val n = a.size
+        val cols = (0 until n).map { c -> solveLinear(a, DoubleArray(n) { if (it == c) 1.0 else 0.0 }) ?: return null }
+        return Array(n) { r -> DoubleArray(n) { c -> cols[c][r] } }
+    }
+
     /** What one face measurement (command 78) came to. */
     public sealed interface Measurement {
         /** The window closed, DONE or FAILED: [judge] says what to do with it. */
@@ -471,6 +683,74 @@ public object AccelSixFace {
         public val confirmed: Boolean
             get() = if (isClear) cleared(readBack) else savedAsSent(sent, readBack)
     }
+
+    /**
+     * A high-g save took: an alignment stored from the six faces, M within
+     * [MATRIX_READBACK_TOL] and b within [READBACK_TOL_MPS2] of what was sent.
+     * A bias the pad calibration wrote since is not this save's.
+     */
+    public fun highGSavedAsSent(matrix: List<Float>, bias: List<Float>, back: AccelCalStatus?): Boolean {
+        val h = back?.highG ?: return false
+        return h.stored && h.source == HighGBiasSource.SIX_FACES &&
+            (0..8).all { abs(h.matrix[it].toDouble() - matrix[it].toDouble()) < MATRIX_READBACK_TOL } &&
+            (0..2).all { abs(h.bias[it].toDouble() - bias[it].toDouble()) < READBACK_TOL_MPS2 }
+    }
+
+    /** A high-g clear took: the answer carries the high-g, and no alignment is stored. */
+    public fun highGCleared(back: AccelCalStatus?): Boolean = back?.highG?.let { !it.stored } ?: false
+
+    /** A write of the high-g's alignment (command 80) — iOS's AccelCalFlow.HighGWrite. */
+    public sealed interface HighGWrite {
+        /** [HighGCalApply.OP_STORE] or [HighGCalApply.OP_CLEAR]. */
+        public val op: Int
+        public val matrix: List<Float>
+        public val bias: List<Float>
+
+        /** Store and apply M and b. */
+        public data class Save(override val matrix: List<Float>, override val bias: List<Float>) : HighGWrite {
+            override val op: Int get() = HighGCalApply.OP_STORE
+        }
+
+        /** M back to identity; the flight computer keeps b. */
+        public data object Clear : HighGWrite {
+            override val op: Int get() = HighGCalApply.OP_CLEAR
+            override val matrix: List<Float> get() = HighGCalApply.IDENTITY
+            override val bias: List<Float> get() = HighGCalApply.ZERO_BIAS
+        }
+    }
+
+    /** The high-g's save or clear, and what its read-back said — iOS's HighGWriteReport. */
+    public data class HighGWriteReport(
+        val write: HighGWrite,
+        /** The read-back, else the answer to 80; null when neither came. */
+        val readBack: AccelCalStatus?,
+    ) {
+        public val confirmed: Boolean
+            get() = when (write) {
+                is HighGWrite.Save -> highGSavedAsSent(write.matrix, write.bias, readBack)
+                HighGWrite.Clear -> highGCleared(readBack)
+            }
+    }
+
+    /**
+     * The high-g write that follows a save: the alignment, when the faces
+     * carried the high-g and its fit is within its limits; null otherwise, and
+     * the offset is saved alone.
+     */
+    public fun highGAfterSave(fit: HighGResult?): HighGWrite? =
+        ((fit as? HighGResult.Solved)?.solution)?.takeIf { it.saveAllowed }
+            ?.let { HighGWrite.Save(it.wireMatrix, it.wireBias) }
+
+    /**
+     * The high-g write that follows a clear: a clear only when the board says
+     * an alignment is stored ([status], the last 0xD1 frame) — an older
+     * flight computer would not answer 80.
+     */
+    public fun highGAfterClear(status: AccelCalStatus?): HighGWrite? =
+        if (status?.highG?.stored == true) HighGWrite.Clear else null
+
+    /** A save's or a clear's two reports: the offset's, and the high-g's when one followed. */
+    public data class Written(val offset: WriteReport, val highG: HighGWriteReport?)
 
     /**
      * Why the screen may not measure, save or clear right now (and so does
