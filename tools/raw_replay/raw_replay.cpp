@@ -1579,6 +1579,13 @@ int main(int argc, char** argv)
                              "ignored\n");
 #endif
     applyReceiverProfile(rx, cfg);
+#if RAW_REPLAY_MOSAIC_SAFEGUARDS
+    // the mosaic-only image's flight safeguards, where startRawShadow() sets them: after the profile, before any
+    // bench flag -- so --receiver mosaic flies the image's settings, and the --dv-*, --hdg-obs-* and --rot-* flags
+    // below change them for an experiment (0 turns one off: today's design before them, and its twin)
+    if (mosaic)
+        applyMosaicFlightSafeguards(cfg);
+#endif
     // an experiment on the filter's own parameter: the Doppler's refusal count before it is let back in (the
     // profile sets it from reject_persist_s; a field of the fc/v9-raw-primary tree, as the mosaic path's)
 #if RAW_REPLAY_MOSAIC
@@ -1590,7 +1597,7 @@ int main(int argc, char** argv)
                              "--reject-persist-rr is ignored\n");
 #endif
     // an experiment on the filter's heading gain (exp/v9-observ): scaled by how well the moment observes the heading
-    // (RawGnssEKFParams::hdg_obs_mode; off, the firmware's, unless given)
+    // (RawGnssEKFParams::hdg_obs_mode; the firmware's unless given: the mosaic's flight safeguards, else off)
 #if RAW_REPLAY_HDGOBS
     if (a.hdg_obs_mode >= 0)
         cfg.ekf.hdg_obs_mode = static_cast<uint8_t>(a.hdg_obs_mode);
@@ -1687,7 +1694,7 @@ int main(int argc, char** argv)
                              "--vert-check-mps and --boost-screen-window-s are ignored\n");
 #endif
 #if RAW_REPLAY_DVCHECK
-    // the Doppler change check: each given switch over the firmware's (off) defaults
+    // the Doppler change check: each given switch over the firmware's (the mosaic's flight safeguards, else off)
     if (a.dv_check >= 0)
         cfg.dv_check = static_cast<uint8_t>(a.dv_check);
     if (a.dv_sat_k >= 0.0)
@@ -1750,7 +1757,8 @@ int main(int argc, char** argv)
         cfg.ekf.att_gnss_off = true;
     }
 #endif
-    // the turning body's allowances (RawGnssShadow.h): off unless given
+    // the turning body's allowances (RawGnssShadow.h): the firmware's unless given (the mosaic's flight safeguards,
+    // else off)
 #if RAW_REPLAY_ROT
     if (a.rot_lever_axial_m >= 0.0)
         cfg.rot_lever_axial_m = a.rot_lever_axial_m;
@@ -1766,7 +1774,8 @@ int main(int argc, char** argv)
         cfg.rot_skip_rate_rps = a.rot_skip_rate_rps;
     if (a.rot_skip_s >= 0.0)
         cfg.rot_skip_s = a.rot_skip_s;
-    cfg.rot_after_apogee = a.rot_after_apogee;
+    if (a.rot_after_apogee)
+        cfg.rot_after_apogee = true;
 #else
     if (a.rot_lever_axial_m >= 0.0 || a.rot_lever_radial_m >= 0.0 || a.rot_lever_min_rps >= 0.0
         || a.att_hold_rate_rps >= 0.0 || a.att_hold_s >= 0.0 || a.rot_skip_rate_rps >= 0.0 || a.rot_skip_s >= 0.0

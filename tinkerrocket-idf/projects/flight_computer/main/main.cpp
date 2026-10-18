@@ -3784,9 +3784,11 @@ static void rawShadowTask(void*)
                 // its sky is cut down -- the fused grid and the satellite cap,
                 // the epochs and ephemerides that did not reach it, the time
                 // tag's check against the 1PPS, the IMU's handoff, and where
-                // the pad's datum comes from. Counts since boot. The loop's
-                // reads of ref_* and the receiver's counters are a console
-                // line's: a value may be one pass old.
+                // the pad's datum comes from; and the flight safeguards' work
+                // (the Doppler change check's counts, the last epoch's heading
+                // share, the largest turning-body allowance). Counts since
+                // boot. The loop's reads of ref_* and the receiver's counters
+                // are a console line's: a value may be one pass old.
                 const gnss_raw::ShadowMeasStats& mst = sh.measStats();
                 TR_GNSSReceiverMosaicSerial::RawStats rs;
                 (void)sensor_collector_hw.getGNSSRawStats(rs);
@@ -3800,7 +3802,8 @@ static void rawShadowTask(void*)
                               "%lu nav queue drops | imu ring drops %lu, gaps bridged %lu | PPS tag max %ld us, "
                               "%lu over %ld of %lu judged (%lu settling, %lu edges late) | iono %s (%u sets) | pad datum %s, %lu fixes | "
                               "GNSS log %s | in flight: restarts %u of %u, raw votes %s, transonic lockout %s | "
-                              "flight task stack free %u B",
+                              "dv check: %lu epochs checked, %lu failed, latches %lu let go %lu, %lu Dopplers held | "
+                              "heading share %.2f | rotation allowance max %.2f m/s | flight task stack free %u B",
                          (unsigned)(sh.running() ? nv.gnss_aided : 0), (unsigned)(sh.running() ? nv.baro_aided : 0),
                          rs.period_ms ? 1000.0 / (double)rs.period_ms : 0.0, (unsigned long)rs.period_ms,
                          sh.config().sat_cap, (unsigned long)mst.epochs, (unsigned long)mst.untimed,
@@ -3818,7 +3821,10 @@ static void rawShadowTask(void*)
                          gnss_log_setting == GNSS_LOG_REDUCED ? "REDUCED" : "DETAILED",
                          (unsigned)raw_nav_restarts, (unsigned)RawNavPolicy::kMaxRestarts,
                          raw_guard.latched ? (config::RAW_VOTE_GUARD_ACTS ? "WITHHELD" : "cast (guard latched, log only)") : "cast",
-                         mach_locked_out ? "ON" : "off",
+                         mach_locked_out ? "ON" : "off", (unsigned long)st.dv_checks,
+                         (unsigned long)st.dv_epoch_fails, (unsigned long)st.dv_latches,
+                         (unsigned long)st.dv_latch_releases, (unsigned long)st.dv_held_rr,
+                         sh.running() ? (double)sh.filter().hdgObsScale() : 1.0, (double)st.rot_max_sigma_mps,
                          (unsigned)(raw_flight_task ? uxTaskGetStackHighWaterMark(raw_flight_task) : 0));
             }
 #ifdef TR_BENCH_DV_CHECK
@@ -4060,24 +4066,28 @@ static void startRawShadow()
     cfg.restore_seed_bias = true;
     cfg.level_on_fused_epochs = true;
     cfg.heading_gate = config::RAW_HEADING_GATE;
-    // the turning body: an antenna off the IMU by an offset nobody measured
-    // (config.h; 0 is off)
-    cfg.rot_lever_axial_m = config::RAW_ROT_LEVER_AXIAL_M;
-    cfg.rot_lever_radial_m = config::RAW_ROT_LEVER_RADIAL_M;
-    cfg.rot_lever_min_rps = config::RAW_ROT_LEVER_MIN_RPS;
-    cfg.att_hold_rate_rps = config::RAW_ATT_HOLD_RATE_RPS;
-    cfg.att_hold_s = config::RAW_ATT_HOLD_S;
-    cfg.rot_skip_rate_rps = config::RAW_ROT_SKIP_RATE_RPS;
-    cfg.rot_skip_s = config::RAW_ROT_SKIP_S;
-    cfg.rot_after_apogee = config::RAW_ROT_AFTER_APOGEE;
-    if (cfg.rot_lever_axial_m > 0.0 || cfg.rot_lever_radial_m > 0.0 || cfg.att_hold_rate_rps > 0.0
-        || cfg.rot_skip_rate_rps > 0.0)
-        ESP_LOGI(TAG, "[RAWGNSS] turning body: Dopplers allow %.2f m along the nose, %.2f m across from %.1f rad/s; "
-                      "attitude held from %.1f rad/s across the nose and %.2f s after; epochs skipped from %.1f "
-                      "rad/s and %.2f s after (0: off)%s",
-                 cfg.rot_lever_axial_m, cfg.rot_lever_radial_m, cfg.rot_lever_min_rps, cfg.att_hold_rate_rps,
-                 cfg.att_hold_s, cfg.rot_skip_rate_rps, cfg.rot_skip_s,
-                 cfg.rot_after_apogee ? "; all from the apogee call" : "");
+    // The flight safeguards (ReceiverProfileApply.h, one place for the image
+    // and tools/raw_replay's --receiver mosaic): the Doppler change check,
+    // GNSS's heading gain by how well the moment observes it, and the turning
+    // body's Doppler allowance. Each fails toward unaided, and none needs the
+    // antenna's offset. The bench overrides below come after.
+    gnss_raw::applyMosaicFlightSafeguards(cfg);
+    ESP_LOGI(TAG, "[RAWGNSS] flight safeguards: Doppler change check %s (window %.1f s, attitude allowance %.0f deg, "
+                  "epoch %.0f and latch %.0f sigmas, %s) | heading share %s (full at %.1f m/s^2 over %.1f s, open "
+                  "past %.1f g within %.1f s, %s) | turning body: Dopplers allow %.2f m along the nose and %.2f m "
+                  "across from %.1f rad/s%s",
+             cfg.dv_check == gnss_raw::RawGnssShadow::kDvAct
+                 ? "ACTING"
+                 : (cfg.dv_check == gnss_raw::RawGnssShadow::kDvObserve ? "observing" : "off"),
+             cfg.dv_window_s, cfg.dv_att_allow_deg, cfg.dv_epoch_k, cfg.dv_latch_k,
+             cfg.dv_ground ? "on the pad too" : "in flight only",
+             cfg.ekf.hdg_obs_mode == gnss_raw::kHdgObsForce ? "by the horizontal specific force"
+                                                             : (cfg.ekf.hdg_obs_mode == gnss_raw::kHdgObsOff ? "off"
+                                                                                                             : "other"),
+             cfg.ekf.hdg_obs_fh_mps2, cfg.ekf.hdg_obs_tau_s, cfg.ekf.hdg_obs_open_g, cfg.ekf.hdg_obs_open_hold_s,
+             cfg.heading_obs_scope == gnss_raw::RawGnssShadow::kObsEverywhere ? "everywhere" : "in flight",
+             cfg.rot_lever_axial_m, cfg.rot_lever_radial_m, cfg.rot_lever_min_rps,
+             cfg.rot_lever_axial_m > 0.0 || cfg.rot_lever_radial_m > 0.0 ? "" : " (off)");
 #ifdef TR_BENCH_BOOST_SCREEN_G
     // bench (the CPU ladder, P1): the boost screen's threshold, g -- 0 screens
     // every epoch before the apogee call, its worst cost
@@ -4086,18 +4096,13 @@ static void startRawShadow()
              cfg.boost_screen_g <= 0.0 ? " -- every epoch" : "");
 #endif
 #ifdef TR_BENCH_DV_CHECK
-    // bench (exp/v9-dvcheck): the Doppler change check, 1 observing (counted,
-    // nothing held: the filter is RC0's) or 2 acting, at the settings Grid B
-    // recommends -- a 1 s window, a 10 deg attitude allowance, the epoch test
-    // at 4 sigmas and its latch at 5 -- and on the pad too, so its counts and
-    // its cost show on a still bench: what it costs the filter task a sky
+    // bench: the Doppler change check, 1 observing (counted, nothing held) or
+    // 2 acting, at the flight safeguards' settings above, and on the pad too,
+    // so its counts and its cost show on a still bench (the flight image acts
+    // in flight only): what it costs the filter task a sky
     static_assert(TR_BENCH_DV_CHECK == 1 || TR_BENCH_DV_CHECK == 2,
                   "TR_BENCH_DV_CHECK is 1 (observe) or 2 (act)");
     cfg.dv_check = (uint8_t)(TR_BENCH_DV_CHECK);
-    cfg.dv_window_s = 1.0;
-    cfg.dv_att_allow_deg = 10.0;
-    cfg.dv_epoch_k = 4.0;
-    cfg.dv_latch_k = 5.0;
     cfg.dv_ground = true;
     ESP_LOGW(TAG, "[RAWGNSS] BENCH: the Doppler change check %s, on the pad too: window %.1f s, attitude allowance "
                   "%.0f deg, epoch %.0f and latch %.0f sigmas (TR_BENCH_DV_CHECK)",

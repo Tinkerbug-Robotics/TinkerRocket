@@ -50,6 +50,12 @@ if(RAW_REPLAY_OLD AND RAW_REPLAY_ROT)
     message(STATUS "raw_replay: RAW_REPLAY_OLD turns RAW_REPLAY_ROT off")
     set(RAW_REPLAY_ROT OFF)
 endif()
+# the mosaic-only image's flight safeguards in one call (gnss_raw::applyMosaicFlightSafeguards, ReceiverProfileApply.h):
+# a tree with all three of the features it sets
+option(RAW_REPLAY_MOSAIC_SAFEGUARDS "the firmware tree sets the mosaic's flight safeguards in one call (applyMosaicFlightSafeguards)" ON)
+if(NOT (RAW_REPLAY_MOSAIC AND RAW_REPLAY_DVCHECK AND RAW_REPLAY_HDGOBS AND RAW_REPLAY_ROT))
+    set(RAW_REPLAY_MOSAIC_SAFEGUARDS OFF)
+endif()
 set(LIB_DIR "${SRC_ROOT}/tinkerrocket-idf/components")
 set(FC_MAIN "${SRC_ROOT}/tinkerrocket-idf/projects/flight_computer/main")
 set(SHIM_DIR "${SRC_ROOT}/tests_cpp/host_shim")
@@ -125,7 +131,8 @@ function(raw_replay_target name)
         RAW_REPLAY_MOSAIC=$<BOOL:${RAW_REPLAY_MOSAIC}>
         RAW_REPLAY_DVCHECK=$<BOOL:${RAW_REPLAY_DVCHECK}>
         RAW_REPLAY_HDGOBS=$<BOOL:${RAW_REPLAY_HDGOBS}>
-        RAW_REPLAY_ROT=$<BOOL:${RAW_REPLAY_ROT}>)
+        RAW_REPLAY_ROT=$<BOOL:${RAW_REPLAY_ROT}>
+        RAW_REPLAY_MOSAIC_SAFEGUARDS=$<BOOL:${RAW_REPLAY_MOSAIC_SAFEGUARDS}>)
 endfunction()
 
 raw_replay_target(raw_replay)

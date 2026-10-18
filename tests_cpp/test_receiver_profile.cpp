@@ -11,6 +11,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <type_traits>
 
 #include "EphemerisStore.h"
 #include "RawGnssShadow.h"
@@ -551,6 +552,123 @@ TEST(ReceiverProfile, ARefusalsLetInIsKeptInTime)
     p.reject_persist_s = 0.01;
     gnss_raw::applyReceiverProfile(p, e);
     EXPECT_EQ(e.reject_persist_rr, 1);
+}
+
+// The flight safeguards' fields (applyMosaicFlightSafeguards sets these and
+// nothing else): r takes each from b.
+void takeFlightSafeguards(RawGnssShadow::Config& r, const RawGnssShadow::Config& b)
+{
+    r.dv_check = b.dv_check;
+    r.dv_window_s = b.dv_window_s;
+    r.dv_att_allow_deg = b.dv_att_allow_deg;
+    r.dv_epoch_k = b.dv_epoch_k;
+    r.dv_latch_k = b.dv_latch_k;
+    r.dv_ground = b.dv_ground;
+    r.dv_sat_k = b.dv_sat_k;
+    r.dv_floor_mps = b.dv_floor_mps;
+    r.dv_sigma_per_g = b.dv_sigma_per_g;
+    r.dv_scale_allow = b.dv_scale_allow;
+    r.dv_bias_allow_mps2 = b.dv_bias_allow_mps2;
+    r.dv_lever_allow_m = b.dv_lever_allow_m;
+    r.dv_hold_s = b.dv_hold_s;
+    r.dv_epoch_hold_s = b.dv_epoch_hold_s;
+    r.dv_deweight = b.dv_deweight;
+    r.dv_noise_tau_s = b.dv_noise_tau_s;
+    r.dv_hold_all_frac = b.dv_hold_all_frac;
+    r.ekf.hdg_obs_mode = b.ekf.hdg_obs_mode;
+    r.ekf.hdg_obs_fh_mps2 = b.ekf.hdg_obs_fh_mps2;
+    r.ekf.hdg_obs_tau_s = b.ekf.hdg_obs_tau_s;
+    r.ekf.hdg_obs_open_g = b.ekf.hdg_obs_open_g;
+    r.ekf.hdg_obs_open_hold_s = b.ekf.hdg_obs_open_hold_s;
+    r.ekf.hdg_obs_floor = b.ekf.hdg_obs_floor;
+    r.heading_obs_scope = b.heading_obs_scope;
+    r.rot_lever_axial_m = b.rot_lever_axial_m;
+    r.rot_lever_radial_m = b.rot_lever_radial_m;
+    r.rot_lever_min_rps = b.rot_lever_min_rps;
+    r.rot_after_apogee = b.rot_after_apogee;
+    r.att_hold_rate_rps = b.att_hold_rate_rps;
+    r.att_hold_s = b.att_hold_s;
+    r.rot_skip_rate_rps = b.rot_skip_rate_rps;
+    r.rot_skip_s = b.rot_skip_s;
+}
+
+TEST(ReceiverProfile, TheMosaicFlightSafeguards)
+{
+    // gnss_raw::applyMosaicFlightSafeguards: every value the mosaic-only image
+    // flies its three safeguards at, from one place (main.cpp's startRawShadow
+    // under TR_RAW_NAV_MOSAIC, and tools/raw_replay's --receiver mosaic)
+    static_assert(std::is_trivially_copyable<RawGnssShadow::Config>::value,
+                  "the byte comparison below copies the config whole");
+    RawGnssShadow::Config base;
+    gnss_raw::applyReceiverProfile(gnss_raw::mosaicG5Profile(), base);
+    RawGnssShadow::Config c;
+    std::memcpy(&c, &base, sizeof(c));
+    gnss_raw::applyMosaicFlightSafeguards(c);
+    // the Doppler change check: acting, in flight only, a 1 s window, the
+    // epoch at 4 sigmas with a 10 deg attitude allowance, the latch at 5; the
+    // rest at the check's own defaults (dv_lever_allow_m a bound, not the
+    // antenna's offset)
+    EXPECT_EQ(c.dv_check, RawGnssShadow::kDvAct);
+    EXPECT_EQ(c.dv_window_s, 1.0);
+    EXPECT_EQ(c.dv_att_allow_deg, 10.0);
+    EXPECT_EQ(c.dv_epoch_k, 4.0);
+    EXPECT_EQ(c.dv_latch_k, 5.0);
+    EXPECT_FALSE(c.dv_ground);
+    EXPECT_EQ(c.dv_sat_k, 5.0);
+    EXPECT_EQ(c.dv_floor_mps, 0.03);
+    EXPECT_EQ(c.dv_sigma_per_g, 0.1);
+    EXPECT_EQ(c.dv_scale_allow, 0.01);
+    EXPECT_EQ(c.dv_bias_allow_mps2, 0.1);
+    EXPECT_EQ(c.dv_lever_allow_m, 0.3);
+    EXPECT_EQ(c.dv_hold_s, 1.0);
+    EXPECT_EQ(c.dv_epoch_hold_s, 0.5);
+    EXPECT_FALSE(c.dv_deweight);
+    EXPECT_EQ(c.dv_noise_tau_s, 0.0);
+    EXPECT_EQ(c.dv_hold_all_frac, 0.5);
+    // GNSS's heading gain by its observability: off in this step
+    EXPECT_EQ(c.ekf.hdg_obs_mode, gnss_raw::kHdgObsOff);
+    EXPECT_EQ(c.ekf.hdg_obs_fh_mps2, 2.0);
+    EXPECT_EQ(c.ekf.hdg_obs_tau_s, 1.0);
+    EXPECT_EQ(c.ekf.hdg_obs_open_g, 2.0);
+    EXPECT_EQ(c.ekf.hdg_obs_open_hold_s, 0.2);
+    EXPECT_EQ(c.ekf.hdg_obs_floor, 0.0);
+    EXPECT_EQ(c.heading_obs_scope, RawGnssShadow::kObsEverywhere);
+    // the turning body: off in this step
+    EXPECT_EQ(c.rot_lever_axial_m, 0.0);
+    EXPECT_EQ(c.rot_lever_radial_m, 0.0);
+    EXPECT_EQ(c.rot_lever_min_rps, 0.0);
+    EXPECT_FALSE(c.rot_after_apogee);
+    EXPECT_EQ(c.att_hold_rate_rps, 0.0);
+    EXPECT_EQ(c.att_hold_s, 0.0);
+    EXPECT_EQ(c.rot_skip_rate_rps, 0.0);
+    EXPECT_EQ(c.rot_skip_s, 0.0);
+    // and nothing else: the profile's settings, the builder's, the EKF's, the
+    // vertical check (20 m/s), the boost screen and the heading gate as they
+    // were, byte for byte once the safeguards' own fields are put back
+    RawGnssShadow::Config back;
+    std::memcpy(&back, &c, sizeof(back));
+    takeFlightSafeguards(back, base);
+    EXPECT_EQ(0, std::memcmp(&back, &base, sizeof(back)));
+    EXPECT_EQ(c.vert_check_mps, 20.0);
+    EXPECT_EQ(c.heading_gate, RawGnssShadow::kGateFullLaunch);
+    expectSameShadowSettings(c, base);
+
+    // The Beetle's: its defaults and the LC86G's profile keep all three off
+    // (main.cpp never calls the function on M1)
+    RawGnssShadow::Config m1;
+    gnss_raw::applyReceiverProfile(gnss_raw::lc86gProfile(), m1);
+    for (const RawGnssShadow::Config* d : {&m1, &base})
+    {
+        EXPECT_EQ(d->dv_check, RawGnssShadow::kDvOff);
+        EXPECT_EQ(d->ekf.hdg_obs_mode, gnss_raw::kHdgObsOff);
+        EXPECT_EQ(d->rot_lever_axial_m, 0.0);
+        EXPECT_EQ(d->rot_lever_radial_m, 0.0);
+        EXPECT_EQ(d->rot_lever_min_rps, 0.0);
+        EXPECT_EQ(d->att_hold_rate_rps, 0.0);
+        EXPECT_EQ(d->rot_skip_rate_rps, 0.0);
+    }
+    const RawGnssEKFParams params;
+    EXPECT_EQ(params.hdg_obs_mode, gnss_raw::kHdgObsOff);
 }
 
 TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)

@@ -21,6 +21,7 @@
 #include "DopplerChange.h"
 #include "RawGnssShadow.h"
 #include "RawMeas.h"
+#include "ReceiverProfileApply.h"
 #include "TR_RawGnssEKF.h"
 #include "gnss/atmo.h"
 #include "gnss/types.h"
@@ -857,4 +858,45 @@ TEST(DopplerChange, ObservedTheLatchIsCountedAndNothingHeld)
     EXPECT_EQ(obs.st.dv_held_rr, 0u);
     EXPECT_EQ(0, std::memcmp(off.nav.vel_ned, obs.nav.vel_ned, sizeof(off.nav.vel_ned)));
     EXPECT_EQ(0, std::memcmp(off.nav.quat, obs.nav.quat, sizeof(off.nav.quat)));
+}
+
+// ------------------------------------------------------- the mosaic image's flight safeguards
+
+TEST(DopplerChange, TheMosaicFlightSafeguardsHoldNothingWithNoFault)
+{
+    // gnss_raw::applyMosaicFlightSafeguards as the mosaic-only image flies
+    // them (ReceiverProfileApply.h): a clean flight is checked every epoch in
+    // flight, and nothing is held or latched
+    DvFlight o;
+    o.cfg = dvCfg(RawGnssShadow::kDvOff);
+    const DvRun off = flyDv(o);
+    gnss_raw::applyMosaicFlightSafeguards(o.cfg);
+    const DvRun fl = flyDv(o);
+    EXPECT_GT(fl.st.dv_checks, 50u);
+    EXPECT_EQ(fl.st.dv_sat_fails, 0u);
+    EXPECT_EQ(fl.st.dv_epoch_fails, 0u);
+    EXPECT_EQ(fl.st.dv_held_rr, 0u);
+    EXPECT_EQ(fl.st.dv_latches, 0u);
+    EXPECT_LT(fl.v_err_coast_max, off.v_err_coast_max + 0.05)
+        << "off " << off.v_err_coast_max << ", safeguards " << fl.v_err_coast_max;
+}
+
+TEST(DopplerChange, TheMosaicFlightSafeguardsHoldOutAStaleReceiverAndLetItBack)
+{
+    // the whole receiver at the pad's velocity through the boost, closing
+    // with tau 1 s (Grid B's stale receiver): held out while its change
+    // disagrees with the IMU's, and let back once it agrees with the filter
+    DvFlight o;
+    o.stale = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+    o.cfg = dvCfg(RawGnssShadow::kDvOff);
+    const DvRun off = flyDv(o);
+    gnss_raw::applyMosaicFlightSafeguards(o.cfg);
+    const DvRun fl = flyDv(o);
+    EXPECT_GT(fl.st.dv_epoch_fails, 0u);
+    EXPECT_GT(fl.st.dv_held_epochs, 0u);
+    EXPECT_GT(off.v_err_coast_max, 0.5);
+    EXPECT_LT(fl.v_err_coast_max, 0.5 * off.v_err_coast_max)
+        << "off " << off.v_err_coast_max << ", safeguards " << fl.v_err_coast_max;
+    EXPECT_EQ(fl.st.dv_latches, fl.st.dv_latch_releases);
+    EXPECT_EQ(fl.held_last, 0u);
 }
