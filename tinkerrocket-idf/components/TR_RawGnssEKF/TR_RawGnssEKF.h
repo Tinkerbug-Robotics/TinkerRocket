@@ -574,8 +574,18 @@ public:
     // step every satellite agrees on; false with no clock yet), then
     // updateGnssRawPart the satellites [i0, i1), each part at the age the
     // epoch has when it is fused. updateGnssRaw is the two at one age.
-    bool beginGnssRaw(const RawMeas* m, int n, double age_s, RawGnssStats& st);
-    void updateGnssRawPart(const RawMeas* m, int i0, int i1, double age_s, RawGnssStats& st);
+    // (Each is its share_los form or today's, RawGnssEKFUpdate.h.)
+    bool beginGnssRaw(const RawMeas* m, int n, double age_s, RawGnssStats& st)
+    {
+        return p_.share_los ? beginGnssRawAs<true>(m, n, age_s, st) : beginGnssRawAs<false>(m, n, age_s, st);
+    }
+    void updateGnssRawPart(const RawMeas* m, int i0, int i1, double age_s, RawGnssStats& st)
+    {
+        if (p_.share_los)
+            updateGnssRawPartAs<true>(m, i0, i1, age_s, st);
+        else
+            updateGnssRawPartAs<false>(m, i0, i1, age_s, st);
+    }
     // The epoch's Doppler range rates (has_rr) gated at the state as it
     // stands, after beginGnssRaw and before any update: each with the
     // innovation, variance and chi-square updateGnssRawPart would give it as
@@ -868,6 +878,10 @@ private:
     // inject's position part, with the radii kept and the frame carried.
     // rrFloat: rr_float's Doppler prediction from the satellite's part us
     // (u.vs, ECEF), the line of sight and the receiver's velocity (NED).
+    // beginGnssRawAs, updateGnssRawPartAs: beginGnssRaw's and
+    // updateGnssRawPart's bodies (RawGnssEKFUpdate.h), kShare true with
+    // share_los (TR_RawGnssCarrier.cpp's: in flash on the Beetle, which never
+    // turns it on), false today's (TR_RawGnssEKF.cpp's).
     static constexpr double kLosRetakeM = 10.0;       // a receiver this far from where they were taken: again
     static constexpr double kFrameCarryM = 1.0;       // the frame carried this far at most, then taken again
     static constexpr double kRadiiKeepRad = 1.0e-6;   // inject's radii kept while the latitude moves this little
@@ -877,11 +891,18 @@ private:
     void   frameOf(double r[3], double v[3], double Tm[3][3]) const;
     void   injectLla(const T dx[N]);
     static double rrFloat(double us, const T u_ned[3], const T v_ned[3]);
+    template <bool kShare>
+    bool   beginGnssRawAs(const RawMeas* m, int n, double age_s, RawGnssStats& st);
+    template <bool kShare>
+    void   updateGnssRawPartAs(const RawMeas* m, int i0, int i1, double age_s, RawGnssStats& st);
     // A member, not the stack's (the filter's task has ~1.7 KB free on the
     // bench): 3.8 kB, in the filter's own storage, which the boost screen's
     // copy takes along. (Scratch: written before it is read, so not zeroed.)
+    // Its constructor, the initializers below, is TR_RawGnssCarrier.cpp's: not
+    // inlined into the filter's, in internal RAM on the Beetle.
     struct LosShare
     {
+        LosShare();
         bool    valid = false;                // lines of sight taken (and te, n, r0 theirs)
         double  te = 0.0;                     // the epoch's filter time
         int     n = 0;                        // its measurements

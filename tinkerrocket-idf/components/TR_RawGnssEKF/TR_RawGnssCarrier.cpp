@@ -6,7 +6,8 @@
 // known (lever_on: its history, its back-dating, its rows -- the history's
 // one write a step, pushLever, is the exception to what follows; the Beetle
 // never turns it on), and the epoch's shared geometry (share_los: losOf,
-// frameOf, and injectLla, which every update's inject takes with it on;
+// frameOf, injectLla, which every update's inject takes with it on, and the
+// share_los form of beginGnssRaw and updateGnssRawPart, RawGnssEKFUpdate.h's;
 // the Beetle never turns it on either). Once an epoch, so apart from the
 // filter's per-step code: on the Beetle this file stays in flash where the
 // rest of the filter runs from internal RAM (raw_gnss_iram.lf), 11 kB less of
@@ -22,6 +23,7 @@
 #include <cstring>
 
 #include "RawGnssEKFGeometry.h"
+#include "RawGnssEKFUpdate.h"
 #include "gnss/types.h"
 
 namespace gnss_raw
@@ -1242,8 +1244,13 @@ double RawGnssEKF<T>::rrFloat(double us, const T u_ned[3], const T v_ned[3])
     return us - static_cast<double>(uv);
 }
 
+// LosShare's initializers (TR_RawGnssEKF.h), out of the filter's constructor.
+template <typename T>
+RawGnssEKF<T>::LosShare::LosShare() = default;
+
 // The share_los members' own instantiations (the macro below has the rest of
-// this file's).
+// this file's), and beginGnssRaw's and updateGnssRawPart's share_los form
+// (RawGnssEKFUpdate.h; TR_RawGnssEKF.cpp has the other).
 #define TR_RAW_GNSS_LOS_INSTANTIATE(T)                                                                            \
     template void RawGnssEKF<T>::losFill(const RawMeas*, int, double, const double[3]) const;                    \
     template double RawGnssEKF<T>::losOf(const RawMeas*, int, int, double, const double[3], double[3], double[3])  \
@@ -1251,7 +1258,10 @@ double RawGnssEKF<T>::rrFloat(double us, const T u_ned[3], const T v_ned[3])
     template void RawGnssEKF<T>::frameOf(double[3], double[3], double[3][3]) const;                              \
     template void RawGnssEKF<T>::injectLla(const T[RawGnssEKF<T>::N]);                                           \
     template const double* RawGnssEKF<T>::sharedRanges(const RawMeas*, int, double, const double[3]) const;      \
-    template double RawGnssEKF<T>::rrFloat(double, const T[3], const T[3]);
+    template double RawGnssEKF<T>::rrFloat(double, const T[3], const T[3]);                                      \
+    template RawGnssEKF<T>::LosShare::LosShare();                                                                 \
+    template bool RawGnssEKF<T>::beginGnssRawAs<true>(const RawMeas*, int, double, RawGnssStats&);               \
+    template void RawGnssEKF<T>::updateGnssRawPartAs<true>(const RawMeas*, int, int, double, RawGnssStats&);
 TR_RAW_GNSS_LOS_INSTANTIATE(float)
 TR_RAW_GNSS_LOS_INSTANTIATE(double)
 #undef TR_RAW_GNSS_LOS_INSTANTIATE
