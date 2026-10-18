@@ -115,6 +115,17 @@ Mat3 rotAbout(const double axis[3], double a)
     return r;
 }
 
+// R's rotation vector (R = exp([v x]), |v| below pi)
+void rotVec(const Mat3& R, double v[3])
+{
+    const double c = std::max(-1.0, std::min(1.0, 0.5 * (R.m[0][0] + R.m[1][1] + R.m[2][2] - 1.0)));
+    const double th = std::acos(c);
+    const double f = th > 1e-9 ? 0.5 * th / std::sin(th) : 0.5;
+    v[0] = f * (R.m[2][1] - R.m[1][2]);
+    v[1] = f * (R.m[0][2] - R.m[2][0]);
+    v[2] = f * (R.m[1][0] - R.m[0][1]);
+}
+
 // A nose-up body leaning lean_deg toward azimuth toward_deg: body -> NED
 Mat3 leaningBody(double lean_deg, double toward_deg)
 {
@@ -290,6 +301,9 @@ struct ClosedEpoch
     uint32_t dv_epoch_fails = 0;          // the Doppler change check's failed epochs so far
     uint32_t dv_latch_releases = 0;       //   its latches let go so far (dv_latch_k)
     float dv_level_chi2 = 0.0f;           //   and the last level test's chi-square
+    float dv_lever_mps = 0.0f;            //   the lever allowance its last epoch test took
+    float dv_lever_win_mps = 0.0f;        //     and its window's
+    uint32_t dv_epoch_win_fails = 0;      //   its failed epochs on the window's sum alone so far
 };
 
 struct TenRun
@@ -347,6 +361,11 @@ struct TenFlight
     double wc_s = 1.0;
     double wc_rps = 0.0;
     double wc_hz = 2.0;
+    // a roll about the nose at roll_rps (rad/s) from roll_t, on top of the turn and the weathercock (theirs then
+    // about their axis as it stood before the roll, fixed in NED: the nose turns as it would without the roll), the
+    // gyro each step's whole turn (0: none)
+    double roll_t = -1.0;
+    double roll_rps = 0.0;
     // a calibrated magnetometer on the pad (the truth's field, 50 Hz, to ignition): the launch's heading is
     // the magnetometer's (the Doppler change check's dv_hdg_unset_deg judges it known)
     bool   mag_on_pad = false;
@@ -394,6 +413,7 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
     int next_epoch = 1;                                       // tenths of a second
     uint32_t last_tow_ms = 0;
     TenRun run;
+    Mat3 C_prev = Ct;                                         // the roll's: the attitude a step before
     for (int step = 1; step * dt <= t_end + 1e-9; ++step)
     {
         const double t = step * dt;
@@ -417,7 +437,11 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
             w_turn += (wcAng(t) - wcAng(t - dt)) / dt;
         }
         const double ax[3] = {fl.turn_axis == 0 ? 1.0 : 0.0, fl.turn_axis == 1 ? 1.0 : 0.0, 0.0};
-        const Mat3 Cn = mat3Mul(Ct, rotAbout(ax, ang));      // body -> NED, turned
+        const Mat3 Cturn = mat3Mul(Ct, rotAbout(ax, ang));   // body -> NED, turned
+        const double nose[3] = {1.0, 0.0, 0.0};
+        const double roll = fl.roll_rps != 0.0 && t > fl.roll_t + 1e-9 ? fl.roll_rps * (t - fl.roll_t) : 0.0;
+        const Mat3 Croll = rotAbout(nose, roll);
+        const Mat3 Cn = fl.roll_rps != 0.0 ? mat3Mul(Cturn, Croll) : Cturn;   //   and rolled
         double f_b[3] = {0.0, 0.0, 0.0}, a_n[3] = {0.0, 0.0, 0.0};
         if (t > kIgn)
         {
@@ -447,7 +471,23 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
         s.time_us = static_cast<uint32_t>(t64);
         for (int i = 0; i < 3; ++i)
             s.acc[i] = float(f_b[i]);
-        s.gyro[fl.turn_axis] = float(w_turn);
+        if (fl.roll_rps != 0.0)
+        {
+            // the step's whole turn (the roll and the turn do not commute): C_prev' Cn's rotation vector over dt
+            Mat3 CpT{};
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    CpT.m[i][j] = C_prev.m[j][i];
+            double rv[3];
+            rotVec(mat3Mul(CpT, Cn), rv);
+            for (int i = 0; i < 3; ++i)
+                s.gyro[i] = float(rv[i] / dt);
+            C_prev = Cn;
+        }
+        else
+        {
+            s.gyro[fl.turn_axis] = float(w_turn);
+        }
         s.flags = t < kIgn ? gnss_raw::kShadowLevel : (t >= kIgn + 0.1 ? gnss_raw::kShadowInFlight : 0);
         if (fl.apogee_t >= 0.0 && t >= fl.apogee_t)
             s.flags |= gnss_raw::kShadowApogee;
@@ -488,6 +528,9 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
             c.dv_epoch_fails = sh.stats().dv_epoch_fails;
             c.dv_latch_releases = sh.stats().dv_latch_releases;
             c.dv_level_chi2 = sh.stats().dv_last_level_chi2;
+            c.dv_lever_mps = sh.stats().dv_last_lever_mps;
+            c.dv_lever_win_mps = sh.stats().dv_last_lever_win_mps;
+            c.dv_epoch_win_fails = sh.stats().dv_epoch_win_fails;
             run.eps.push_back(c);
         }
         gnss_raw::ShadowNav nav;
@@ -516,7 +559,16 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
             {
                 // the antenna: lever_m up the nose, moving omega x r with the turn
                 const double r_b[3] = {fl.lever_m, fl.lever_y_m, fl.lever_z_m};
-                const double w_b[3] = {ax[0] * w_turn, ax[1] * w_turn, 0.0};
+                double w_b[3] = {ax[0] * w_turn, ax[1] * w_turn, 0.0};
+                if (fl.roll_rps != 0.0)
+                {
+                    // rolled: the turn's rate in the rolled body, and the roll
+                    const double wt[3] = {w_b[0], w_b[1], w_b[2]};
+                    for (int i = 0; i < 3; ++i)
+                        w_b[i] = Croll.m[0][i] * wt[0] + Croll.m[1][i] * wt[1] + Croll.m[2][i] * wt[2];
+                    if (roll != 0.0)
+                        w_b[0] += fl.roll_rps;
+                }
                 const double wxr[3] = {w_b[1] * r_b[2] - w_b[2] * r_b[1], w_b[2] * r_b[0] - w_b[0] * r_b[2],
                                        w_b[0] * r_b[1] - w_b[1] * r_b[0]};
                 double r_n[3], wxr_n[3], p_ant[3];
@@ -2041,4 +2093,113 @@ TEST(RawGnssShadowV9, AnAntennaOffTheRollAxisUnpredictedHoldsTheDopplersAtFiveRe
     EXPECT_GT(unset.st.dv_held_epochs, 20u);
     const double axis[3] = {kGoblinAnt[0], 0.0, 0.0};
     EXPECT_EQ(flyTen(leverCfg(1, nullptr), rolling(5.0, axis, false)).st.dv_epoch_fails, 0u);
+}
+
+namespace
+{
+
+// rolling() at rev_s with a pitch-over too: from 6.5 s the nose turns at 1 rad/s about body y as it stood before
+// the roll (fixed in NED) for 1 s, then back as fast for as long
+TenFlight pitchingOver(double rev_s, const double r[3], bool mag)
+{
+    TenFlight fl = rolling(rev_s, r, mag);
+    fl.roll_t = fl.turn_t;
+    fl.roll_rps = fl.turn_rps;
+    fl.turn_axis = 1;
+    fl.turn_t = 6.5;
+    fl.turn_s = 1.0;
+    fl.turn_rps = 1.0;
+    return fl;
+}
+
+}  // namespace
+
+TEST(RawGnssShadowV9, UnderARollTheNoseLeverIsTheCasesArmTimesThePitchOversTurn)
+{
+    // A pitch-over at a steady 1 rad/s under a 1 rev/s roll (pitchingOver), the Goblin's antenna in the truth, on the
+    // nose's own turn (mode 1). Between two checks 0.1 s apart the nose's rate n' turns by 2 sin(0.05) =
+    // 0.09996 rad/s; each epoch is checked 55 ms after its tag (handed over at 50 ms, the next step), so the pad adds
+    // 2 x 0.055 s x 1 rad/s^2: the epoch's allowance is the arm times 0.20996 rad/s, the arm the offset's case's
+    // (knownLeverArm) -- unknown, dv_lever_allow_m 0.3 m; known with the magnetometer's heading, 0.05 m + chord(10
+    // deg) x 0.0486 m = 0.0585 m; known with the heading unset, 0.0486 + 0.05 = 0.0986 m. Taken in the body, or
+    // turned the wrong way, n' would turn with the roll as well. The window's allowance is capped at the arm times
+    // the rate across the nose now and its largest: 2 x arm x 1 rad/s. Once the turn is over, nothing is left
+    // (under 0.01 m/s): each check starts the nose's change and its |n''| over. No epoch fails in any case.
+    const double rn = std::sqrt(kGoblinAnt[0] * kGoblinAnt[0] + kGoblinAnt[1] * kGoblinAnt[1]
+                                + kGoblinAnt[2] * kGoblinAnt[2]);
+    const double turn = 2.0 * std::sin(0.05) + 2.0 * 0.055;
+    struct Case
+    {
+        const double* r;
+        bool mag;
+        double arm;
+        const char* what;
+    };
+    for (const Case& c : {Case{nullptr, false, 0.3, "unknown"},
+                          Case{kGoblinAnt, true, 0.05 + 2.0 * std::sin(5.0 * kPi / 180.0) * rn,
+                               "known, the magnetometer's heading"},
+                          Case{kGoblinAnt, false, rn + 0.05, "known, the heading unset"}})
+    {
+        SCOPED_TRACE(c.what);
+        const TenRun run = flyTen(leverCfg(1, c.r), pitchingOver(1.0, kGoblinAnt, c.mag));
+        EXPECT_EQ(run.st.dv_hdg_unset, c.r != nullptr && c.mag ? 0 : 1);
+        EXPECT_EQ(run.st.dv_epoch_fails, 0u);
+        int steady = 0, after = 0;
+        for (const ClosedEpoch& e : run.eps)
+        {
+            // the turn steady across the whole interval: out 6.6-7.4 s, back 7.6-8.4 s
+            if ((e.t > 6.55 && e.t < 7.45) || (e.t > 7.55 && e.t < 8.45))
+            {
+                EXPECT_NEAR(e.dv_lever_mps, c.arm * turn, 0.02 * c.arm * turn) << e.t;
+                EXPECT_NEAR(e.dv_lever_win_mps, 2.0 * c.arm, 0.01 * c.arm) << e.t;
+                steady++;
+            }
+            else if (e.t > 8.55)
+            {
+                EXPECT_LT(e.dv_lever_mps, 0.01f) << e.t;
+                after++;
+            }
+        }
+        EXPECT_EQ(steady, 18);
+        EXPECT_EQ(after, 14);
+    }
+}
+
+TEST(RawGnssShadowV9, TheNoseLeversWindowIsCappedAtTheArmTimesTheRateAcrossTheNose)
+{
+    // A coast rolling at 1 rev/s and weathercocking (0.3 rad/s at 2 Hz from 6 s, about body y as it stood before the
+    // roll), the offset unknown, the Goblin's antenna in the truth, on the nose's own turn. The nose's rate changes
+    // fast: each epoch's lever allowance is 0.13-0.23 m/s, which summed over the 1 s window would allow about
+    // 1.8 m/s. But the antenna's velocity change over the window telescopes, so the window's allowance is capped at
+    // the arm times the rate across the nose now and its largest: 0.3 m x 0.6 rad/s = 0.18 m/s (on the whole rate,
+    // mode 0, 3.8 m/s with the roll in it). So slow12 through it fails on the window's sum alone, from about 7.2 s,
+    // where the epoch's own test passes it and the whole rate fails nothing; without the ramp nothing fails either
+    // way.
+    TenFlight fl = pitchingOver(1.0, kGoblinAnt, false);
+    fl.turn_t = -1.0;                    // no pitch-over
+    fl.wc_t = 6.0;
+    fl.wc_s = 4.0;
+    fl.wc_rps = 0.3;
+    const TenRun quiet = flyTen(leverCfg(1, nullptr), fl), whole = flyTen(leverCfg(0, nullptr), fl);
+    EXPECT_EQ(quiet.st.dv_epoch_fails, 0u);
+    EXPECT_EQ(whole.st.dv_epoch_fails, 0u);
+    double sum = 0.0;
+    int n = 0;
+    for (const ClosedEpoch& e : quiet.eps)
+        if (e.t > 6.45)
+        {
+            EXPECT_LE(e.dv_lever_win_mps, 0.3 * 0.6 + 1e-3) << e.t;
+            sum += e.dv_lever_mps;
+            n++;
+        }
+    ASSERT_EQ(n, 35);
+    EXPECT_GT(sum / n, 0.15);
+    for (const ClosedEpoch& e : whole.eps)
+        if (e.t > 6.45)
+            EXPECT_GT(e.dv_lever_win_mps, 3.5f) << e.t;
+    const TenRun nose = flyTen(leverCfg(1, nullptr), ramped(fl));
+    EXPECT_GE(nose.st.dv_epoch_win_fails, 10u);
+    EXPECT_EQ(nose.st.dv_epoch_fails, nose.st.dv_epoch_win_fails);
+    EXPECT_GT(nose.st.dv_held_epochs, 10u);
+    EXPECT_EQ(flyTen(leverCfg(0, nullptr), ramped(fl)).st.dv_epoch_fails, 0u);
 }

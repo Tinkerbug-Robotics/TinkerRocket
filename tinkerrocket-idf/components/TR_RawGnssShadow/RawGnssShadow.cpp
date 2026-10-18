@@ -1814,6 +1814,7 @@ void RawGnssShadow::jobDvCheck(double age)
                 aw.lever_mps =
                     std::fmin(dv_SL_, arm * (wpn + dv_wpwin_) + cfg_.dv_lever_radial_m * (wn + dv_wwin_));
             }
+            st_.dv_last_lever_win_mps = static_cast<float>(aw.lever_mps);
             const double chi2w = dvc::epochChi2(dv_SW_, Cs, dv_SF_, aw);
             st_.dv_last_chi2_win = static_cast<float>(chi2w);
             if (!epoch_fail && chi2w > ke2)

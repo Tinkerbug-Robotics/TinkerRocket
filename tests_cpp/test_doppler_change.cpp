@@ -1096,3 +1096,87 @@ TEST(DopplerChange, TheNosesTurnInFloatIsTheDoublesWithinTenPpm)
         }
     }
 }
+
+TEST(DopplerChange, ThePitchOverUnderARollIsTheNosesOwnTurnInNed)
+{
+    // The nose pitching over at a steady 0.5 rad/s about an axis fixed in NED, the body rolling about the nose at 0
+    // and 5 rev/s (the gyro's rate: the pitch-over's turned into the body, plus the roll). n' = C (w x x) turns with
+    // the nose at 0.5 rad/s, roll or none: over each 0.1 s check it changes by 2 x 0.5 sin(0.025) = 0.025 rad/s, and
+    // |n''| is 0.5^2 = 0.25 rad/s^2 a step. Taken in the body (w x x not turned) or turned the wrong way (NED ->
+    // body), n' would turn with the roll as well: about 1.0 rad/s over a check at 5 rev/s, half a turn. So the
+    // allowance, the arm (0.3 m) times |dn'| + 2 age |n''|max (age 60 ms), is 0.0165 m/s at either roll.
+    const double W = 0.5, dt = 0.01, T = 0.1;
+    auto qmul = [](const double a[4], const double b[4], double r[4]) {
+        r[0] = a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3];
+        r[1] = a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2];
+        r[2] = a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1];
+        r[3] = a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0];
+    };
+    // v turned by q (scalar first): q v q*, or with conj q* v q
+    auto turn = [&](const double q[4], const double v[3], bool conj, double o[3]) {
+        const double qq[4] = {q[0], conj ? -q[1] : q[1], conj ? -q[2] : q[2], conj ? -q[3] : q[3]};
+        const double qc[4] = {qq[0], -qq[1], -qq[2], -qq[3]};
+        const double vq[4] = {0.0, v[0], v[1], v[2]};
+        double a[4], b[4];
+        qmul(qq, vq, a);
+        qmul(a, qc, b);
+        for (int i = 0; i < 3; ++i)
+            o[i] = b[i + 1];
+    };
+    double q0[4] = {0.69, 0.08, -0.71, 0.12};             // the nose a few degrees off vertical
+    const double qn = std::sqrt(q0[0] * q0[0] + q0[1] * q0[1] + q0[2] * q0[2] + q0[3] * q0[3]);
+    for (double& c : q0)
+        c /= qn;
+    const double x[3] = {1.0, 0.0, 0.0};
+    double n0[3];
+    turn(q0, x, false, n0);
+    // the pitch-over's axis: across the nose, fixed in NED
+    double ax[3] = {n0[1] * x[2] - n0[2] * x[1], n0[2] * x[0] - n0[0] * x[2], n0[0] * x[1] - n0[1] * x[0]};
+    const double an = std::sqrt(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]);
+    for (double& c : ax)
+        c /= an;
+    const double want_dn = 2.0 * W * std::sin(0.5 * W * T);           // 0.0249974
+    const double want_ndd = 2.0 * W * std::sin(0.5 * W * dt) / dt;    // 0.2499997
+    double allow[2] = {};
+    int r = 0;
+    for (double rev : {0.0, 5.0})
+    {
+        SCOPED_TRACE(rev);
+        const double p = rev * 2.0 * kPi;
+        dvc::NoseTurn<float> nf;
+        int checks = 0;
+        for (int k = 1; k <= 200; ++k)
+        {
+            // q(t) = (the pitch-over by W t about ax, in NED) q0 (the roll by p t about the nose, in the body)
+            const double t = dt * k;
+            const double qw[4] = {std::cos(0.5 * W * t), ax[0] * std::sin(0.5 * W * t), ax[1] * std::sin(0.5 * W * t),
+                                  ax[2] * std::sin(0.5 * W * t)};
+            const double qr[4] = {std::cos(0.5 * p * t), std::sin(0.5 * p * t), 0.0, 0.0};
+            double a[4], q[4];
+            qmul(qw, q0, a);
+            qmul(a, qr, q);
+            // the body's rate: W ax turned into the body, and the roll
+            const double wn[3] = {W * ax[0], W * ax[1], W * ax[2]};
+            double wb[3];
+            turn(q, wn, true, wb);
+            wb[0] += p;
+            const float qf[4] = {float(q[0]), float(q[1]), float(q[2]), float(q[3])};
+            const float wf[3] = {float(wb[0]), float(wb[1]), float(wb[2])};
+            nf.step(qf, wf, float(dt));
+            if (k % 10 != 0)
+                continue;
+            if (k > 10)                                   // the first check's interval starts before the first step
+            {
+                EXPECT_NEAR(nf.change(), want_dn, 2e-4) << t;
+                EXPECT_NEAR(nf.ndd_peak, want_ndd, 2e-3) << t;
+                allow[r] = 0.3 * (double(nf.change()) + 2.0 * 0.06 * double(nf.ndd_peak));
+                checks++;
+            }
+            nf.rebase();
+        }
+        EXPECT_EQ(checks, 19);
+        r++;
+    }
+    EXPECT_NEAR(allow[0], 0.3 * (want_dn + 0.12 * want_ndd), 1e-4);
+    EXPECT_NEAR(allow[1], allow[0], 1e-4);
+}

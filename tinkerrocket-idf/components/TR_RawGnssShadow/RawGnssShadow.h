@@ -932,6 +932,7 @@ public:
         float    dv_last_c_mps = 0.0f;     // its fitted change of the clock rate, m/s
         float    dv_last_wu_dc_mps = 0.0f; //   the L1 wind-up's change the gyro gives over the same interval
         float    dv_last_lever_mps = 0.0f; //   the lever allowance the epoch test took
+        float    dv_last_lever_win_mps = 0.0f; // and the window's (dv_window_s), as capped
     };
 
     using Clock = int64_t (*)();
