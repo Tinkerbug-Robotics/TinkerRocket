@@ -1714,6 +1714,7 @@ static constexpr uint8_t PCX_SURVEY = 4;  // PadContextSurvey, in parts
 static constexpr uint8_t PCX_EPH    = 5;  // a broadcast ephemeris: a whole RTCM3 frame, one per record
 static constexpr uint8_t PCX_ACC    = 6;  // PadContextAcc, from the flight loop beside PCX_CAL
 static constexpr uint8_t PCX_HG     = 7;  // PadContextHg, from the flight loop beside PCX_CAL
+static constexpr uint8_t PCX_ANT    = 8;  // PadContextAnt, from the flight loop beside PCX_CAL
 
 // PCX_CAL: what the flight flew with that the logged counts do not carry.
 typedef struct __attribute__((packed))
@@ -1750,6 +1751,21 @@ typedef struct __attribute__((packed))
     float   matrix[9];           // row-major, board frame: high = M * h - bias - offset
 } PadContextHg;
 static_assert(sizeof(PadContextHg) == 37, "PadContextHg must be 37 bytes");
+
+// PCX_ANT: the GNSS antenna's offset from the IMU (AntennaOffsetConfigData,
+// BLE cmd 81) the flight flew with: the owner's setting in the board's frame,
+// and the same turned into the navigation filter's by the mounting. Every
+// board but the Beetle writes it; a flight without the record had none
+// (unknown), as before it existed.
+typedef struct __attribute__((packed))
+{
+    uint8_t known;               // 1 measured, 0 unknown (the rest 0)
+    int16_t board_mm[3];         // the setting: board FLU, mm
+    float   body_m[3];           // the same in body FRD by the mounting, m (antennaOffsetInBody)
+    uint8_t used;                // 1 if the image's navigation filter predicted at the antenna (the
+                                 // mosaic-only image, known); 0 if it flew as if unknown
+} PadContextAnt;
+static_assert(sizeof(PadContextAnt) == 20, "PadContextAnt must be 20 bytes");
 
 // PCX_NAV: the raw-GNSS filter at the IMU tick the flight computer called
 // INFLIGHT, and what it had taken from the pad.

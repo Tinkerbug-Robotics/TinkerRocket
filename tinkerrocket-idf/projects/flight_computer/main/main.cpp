@@ -2853,6 +2853,31 @@ static void sendPadContextCal()
     memcpy(rg.g.matrix, rg_m, sizeof(rg_m));
     static_assert(sizeof(rg) == sizeof(PadContextHeader) + sizeof(PadContextHg), "PCX_HG record is packed");
     (void)enqueueI2STx(PAD_CONTEXT_MSG, reinterpret_cast<const uint8_t*>(&rg), sizeof(rg));
+#if !TR_BOARD_M1
+    // PCX_ANT: the GNSS antenna's offset (BLE cmd 81) and the same in the
+    // filter's frame; neither changes in flight (refused INFLIGHT), so this
+    // is what the filter flew with
+    struct __attribute__((packed))
+    {
+        PadContextHeader h;
+        PadContextAnt    a;
+    } rn = {};
+    rn.h.time_us = r.h.time_us;
+    rn.h.kind    = PCX_ANT;
+    rn.h.part    = 0;
+    rn.h.parts   = 1;
+    const gnss_raw::AntennaOffset ant = gnss_raw::antennaOffsetInBody(antenna_cfg, b2r_active_R);
+    rn.a.known = antenna_cfg.known;
+    const int16_t board_mm[3] = {antenna_cfg.x_mm, antenna_cfg.y_mm, antenna_cfg.z_mm};
+    const float body_m[3] = {(float)ant.b_m[0], (float)ant.b_m[1], (float)ant.b_m[2]};
+    memcpy(rn.a.board_mm, board_mm, sizeof(board_mm));   // packed: through a copy
+    memcpy(rn.a.body_m, body_m, sizeof(body_m));
+#if TR_RAW_NAV_MOSAIC
+    rn.a.used = ant.known ? 1U : 0U;   // the one image whose filter takes it
+#endif
+    static_assert(sizeof(rn) == sizeof(PadContextHeader) + sizeof(PadContextAnt), "PCX_ANT record is packed");
+    (void)enqueueI2STx(PAD_CONTEXT_MSG, reinterpret_cast<const uint8_t*>(&rn), sizeof(rn));
+#endif
 }
 
 // ==========================================================================

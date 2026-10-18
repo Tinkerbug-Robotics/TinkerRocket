@@ -251,6 +251,27 @@ def test_decode_the_high_g_alignment():
     assert ctx["missing"] == []                                  # an older log without it misses nothing
 
 
+def ant(known=1, board_mm=(120, -15, 40), body_m=(0.12, 0.015, -0.04), used=1, time_us=6_000_000) -> bytes:
+    return header(8, time_us=time_us) + struct.pack("<B3h3fB", known, *board_mm, *body_m, used)
+
+
+def test_decode_the_antenna_offset():
+    # PCX_ANT, beside PCX_CAL -- the GNSS antenna's offset the flight flew with, the setting and the filter's
+    r = pfd.decode_pad_context(ant())
+    assert r["kind"] == "ant"
+    assert r["known"] is True and r["used"] is True
+    assert r["board_mm"] == (120, -15, 40)
+    assert r["body_m"] == pytest_approx((0.12, 0.015, -0.04))
+    assert pfd.decode_pad_context(ant()[:-1]) is None
+    u = pfd.decode_pad_context(ant(known=0, board_mm=(0, 0, 0), body_m=(0.0, 0.0, 0.0), used=0))
+    assert u["known"] is False and u["used"] is False
+    ctx = pfd.join_pad_context([pfd.decode_pad_context(p) for p in [cal(), acc(), hg(), ant()] + launch()[1:]])
+    assert ctx["ant"]["board_mm"] == (120, -15, 40)
+    assert ctx["missing"] == []                                  # an older log without it misses nothing
+    old = pfd.join_pad_context([pfd.decode_pad_context(p) for p in [cal()] + launch()[1:]])
+    assert old["ant"] is None
+
+
 def test_the_alignment_comes_before_the_high_g_bias_and_offset(tmp_path):
     # The high-g of one ISM6 record with the flight's PCX_HG: M times the board-frame reading (after the ISM6's
     # Z rotation; the mounting identity), then the bias and the offset as before; the low-g and gyro untouched;

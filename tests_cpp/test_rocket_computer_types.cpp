@@ -2802,6 +2802,15 @@ TEST(RocketComputerTypes, HighGCalStructsKeepTheirWireSizes) {
     EXPECT_LE(sizeof(PadContextHeader) + sizeof(PadContextHg), MAX_PAYLOAD);
     EXPECT_NE(PCX_HG, PCX_ACC);
     EXPECT_NE(PCX_HG, PCX_EPH);
+    // the GNSS antenna's offset beside them (BLE cmd 81): the setting, the
+    // filter's frame, and whether the filter used it
+    EXPECT_EQ(sizeof(PadContextAnt), 20u);
+    EXPECT_EQ(offsetof(PadContextAnt, board_mm), 1u);
+    EXPECT_EQ(offsetof(PadContextAnt, body_m), 7u);
+    EXPECT_EQ(offsetof(PadContextAnt, used), 19u);
+    EXPECT_LE(sizeof(PadContextHeader) + sizeof(PadContextAnt), MAX_PAYLOAD);
+    EXPECT_NE(PCX_ANT, PCX_HG);
+    EXPECT_NE(PCX_ANT, PCX_EPH);
     // the OC stages config payloads behind its status frame in one 96-byte read
     EXPECT_LE(sizeof(HighGCalApplyData), 76u);
 }
