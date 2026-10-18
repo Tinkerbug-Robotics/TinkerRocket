@@ -1378,7 +1378,8 @@ void RawGnssShadow::jobChecks(double age, double t)
     // jumped is taken as relocked, its sigma the builder's relock sigma
     double r_prior[3], v_prior[3];
     ekf_.receiverEcefAt(age, r_prior, v_prior);
-    const int jumped = satcheck_.check(m, n, tow, r_prior, jumped_);
+    // (share_los: the ranges from the epoch's lines of sight, the filter's)
+    const int jumped = satcheck_.check(m, n, tow, r_prior, jumped_, ekf_.sharedRanges(m, n, age, r_prior));
     for (int i = 0; i < n && jumped > 0; ++i)
     {
         if (!jumped_[i])
@@ -2131,7 +2132,7 @@ void RawGnssShadow::closeJob(double age, double t)
     }
     double r_post[3], v_post[3];
     ekf_.receiverEcefAt(age, r_post, v_post);
-    satcheck_.commit(built_.meas, n, built_.tow_s, r_post);
+    satcheck_.commit(built_.meas, n, built_.tow_s, r_post, ekf_.sharedRanges(built_.meas, n, age, r_post));
     st_.last = rs;
     st_.last_age_s = age;
     st_.last_meas = n;

@@ -26,9 +26,9 @@ endif()
 # before the turning body's allowances (exp/v9-robust), RAW_REPLAY_DVHDG=OFF before the change check's heading
 # allowance for a launch with no magnetometer heading (fc/v9raw-dopp after 357e7021), RAW_REPLAY_ANTENNA=OFF before
 # the antenna's offset where it is known (fc/v9-antenna-offset), RAW_REPLAY_BUILD_LITE=OFF before the cheaper epoch
-# build (exp/v9-cpu-build; off by itself where the tree has no RawMeasBuilderLite.cpp). DYNMEM and
-# FITGATE are experiments the firmware does not carry: build them against a copy with experiments/*.patch applied
-# (README.md).
+# build (exp/v9-cpu-build; off by itself where the tree has no RawMeasBuilderLite.cpp), RAW_REPLAY_SHARELOS=OFF
+# before the shared epoch geometry (exp/v9-cpu-los). DYNMEM and FITGATE are experiments the firmware does not carry:
+# build them against a copy with experiments/*.patch applied (README.md).
 set(SRC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." CACHE PATH "the tree whose firmware sources are compiled")
 option(RAW_REPLAY_OLD "the firmware tree has no receiver profile or carrier (aef947c5)" OFF)
 option(RAW_REPLAY_VCHECK "the firmware tree has the vertical check and the boost window (fc/gnss-heading-fuse 7966f2cb)" ON)
@@ -42,6 +42,7 @@ option(RAW_REPLAY_ROT "the firmware tree has the turning body's allowances (rot_
 option(RAW_REPLAY_DVHDG "the firmware tree has the change check's heading allowance for a launch with no magnetometer heading (dv_hdg_unset_deg)" ON)
 option(RAW_REPLAY_ANTENNA "the firmware tree has the antenna's offset where it is known (lever_on, applyAntennaOffset: fc/v9-antenna-offset)" ON)
 option(RAW_REPLAY_BUILD_LITE "the firmware tree has the cheaper epoch build (RawMeasBuilder::Config::lite, build_lite: exp/v9-cpu-build)" ON)
+option(RAW_REPLAY_SHARELOS "the firmware tree has the shared epoch geometry (share_los, rr_float: exp/v9-cpu-los)" ON)
 if(RAW_REPLAY_OLD AND RAW_REPLAY_MOSAIC)
     message(STATUS "raw_replay: RAW_REPLAY_OLD turns RAW_REPLAY_MOSAIC off")
     set(RAW_REPLAY_MOSAIC OFF)
@@ -162,6 +163,7 @@ function(raw_replay_target name)
         RAW_REPLAY_MOSAIC=$<BOOL:${RAW_REPLAY_MOSAIC}>
         RAW_REPLAY_DVCHECK=$<BOOL:${RAW_REPLAY_DVCHECK}>
         RAW_REPLAY_HDGOBS=$<BOOL:${RAW_REPLAY_HDGOBS}>
+        RAW_REPLAY_SHARELOS=$<BOOL:${RAW_REPLAY_SHARELOS}>
         RAW_REPLAY_ROT=$<BOOL:${RAW_REPLAY_ROT}>
         RAW_REPLAY_DVHDG=$<BOOL:${RAW_REPLAY_DVHDG}>
         RAW_REPLAY_ANTENNA=$<BOOL:${RAW_REPLAY_ANTENNA}>

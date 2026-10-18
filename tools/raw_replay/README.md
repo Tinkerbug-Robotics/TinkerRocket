@@ -170,8 +170,9 @@ predate it and carry none.
 
 What `startRawShadow()` builds under `TR_RAW_NAV_MOSAIC` (build_units D1a; checked against fc/v9raw-d 2502c322):
 
-- `mosaicG5Profile()` (v0), with `--fuse-ms` (`TR_BENCH_RAW_FUSE_MS`) and `--sat-cap` (`TR_BENCH_RAW_SAT_CAP`)
-  applied to it first, then `applyReceiverProfile`;
+- `mosaicG5Profile()` (v0), with `--fuse-ms` (`TR_BENCH_RAW_FUSE_MS`), `--sat-cap` (`TR_BENCH_RAW_SAT_CAP`) and
+  `--share-los` (`TR_BENCH_RAW_SHARE_LOS`: 1, the epoch's geometry taken once and shared by its units; 2, and the
+  Doppler's prediction in float; a `RAW_REPLAY_SHARELOS` build) applied to it first, then `applyReceiverProfile`;
 - the navigation filter's settings (`primary`, 100 steps a second, 2.5 ms slices, `external_build`);
 - the restore sigmas (100 m, 20 m/s, 15 deg) and the snapshot's accelerometer bias, `level_on_fused_epochs`;
 - the flight safeguards, by the firmware's own call (`gnss_raw::applyMosaicFlightSafeguards`,

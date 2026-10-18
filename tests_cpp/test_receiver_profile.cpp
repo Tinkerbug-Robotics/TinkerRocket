@@ -137,6 +137,8 @@ void expectSameEkf(const RawGnssEKFParams& a, const RawGnssEKFParams& b)
     for (int k = 0; k < 3; ++k)
         EXPECT_EQ(a.lever_b_m[k], b.lever_b_m[k]) << k;
     EXPECT_EQ(a.lever_att_mode, b.lever_att_mode);
+    EXPECT_EQ(a.share_los, b.share_los);
+    EXPECT_EQ(a.rr_float, b.rr_float);
     for (int k = 0; k < gnss_raw::kProfileSys; ++k)
     {
         EXPECT_EQ(a.cr_carrier_hz[k], b.cr_carrier_hz[k]) << "sys " << k;
@@ -175,6 +177,8 @@ void expectSameNumbers(const GnssReceiverProfile& a, const GnssReceiverProfile& 
     expectSameEkf(ea, eb);
     EXPECT_EQ(a.epoch_latency_s, b.epoch_latency_s);
     EXPECT_EQ(a.raw_epoch_period_s, b.raw_epoch_period_s);
+    EXPECT_EQ(a.share_los, b.share_los);
+    EXPECT_EQ(a.rr_float, b.rr_float);
     EXPECT_EQ(a.cr_mode, b.cr_mode);
     EXPECT_EQ(a.cr_half_cycle, b.cr_half_cycle);
     EXPECT_EQ(a.fuse_epoch_period_s, b.fuse_epoch_period_s);

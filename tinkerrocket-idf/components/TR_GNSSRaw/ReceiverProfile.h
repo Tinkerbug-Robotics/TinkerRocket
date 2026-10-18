@@ -100,6 +100,8 @@ struct GnssReceiverProfile
     double pr_period_s = 0.0;             // the pseudoranges fused once in each this long of GPS time (the
                                           //   Dopplers every epoch)
     int    sat_cap = 0;                   // at most this many satellites built an epoch (0: all)
+    bool   share_los = false;             // an epoch's geometry taken once and shared by its units, and
+    bool   rr_float = false;              //   with it the Doppler's prediction in float (RawGnssEKFParams)
     double reject_persist_s = 0.0;        // a satellite refused this long running is let back in: the EKF's
                                           //   reject_persist and reject_persist_rr in fused epochs (0: theirs)
     double level_min_dt_s = 0.0;          // the levelling's steady test takes epochs this far apart (LevelGate)
@@ -384,6 +386,11 @@ inline GnssReceiverProfile mosaicG5Profile()
     p.reject_persist_s = 3.0;       // the LC86G's 3 epochs: the Doppler 30 at 10 Hz, the pseudorange 3
     p.max_epoch_age_s = 0.3;        // plan: 3 epochs at 10 Hz (MeasEpoch reaches the V9 20 ms after its
     p.epoch_job_max_s = 0.2;        //   epoch, p95 26 ms: V9 rig 10/16), 2 to work at once
+    // the epoch's geometry once, shared by its units, and the Doppler's
+    // prediction in float (TR_RawGnssEKF.h share_los, rr_float): off as the
+    // image flies; the bench turns them on (TR_BENCH_RAW_SHARE_LOS)
+    p.share_los = false;
+    p.rr_float = false;
     p.level_min_dt_s = 0.95;        // the LC86G's steady test, epochs a second apart
     p.heading_fit_period_s = 1.0;   // the LC86G's: the fit's 64 epochs a minute (it only logs in act)
     return p;

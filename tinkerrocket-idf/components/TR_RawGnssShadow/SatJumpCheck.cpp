@@ -48,7 +48,8 @@ void SatJumpCheck::reset()
     sum_ = Summary();
 }
 
-int SatJumpCheck::check(const RawMeas* m, int n, double tow_s, const double r_prior[3], bool* flagged)
+int SatJumpCheck::check(const RawMeas* m, int n, double tow_s, const double r_prior[3], bool* flagged,
+                        const double* range)
 {
     sum_ = Summary();
     double d[RawEpoch::kMaxObs] = {};
@@ -67,7 +68,7 @@ int SatJumpCheck::check(const RawMeas* m, int n, double tow_s, const double r_pr
         if (!(dt > 0.0 && dt <= cfg_.max_dt_s) || nd >= RawEpoch::kMaxObs)
             continue;
         // the pseudorange's change less the range's, as the IMU carried the receiver
-        d[nd] = (mi.pr - s.pr) - (sagnacRange(mi, r_prior) - s.range);
+        d[nd] = (mi.pr - s.pr) - ((range != nullptr ? range[i] : sagnacRange(mi, r_prior)) - s.range);
         idx[nd++] = i;
     }
     sum_.judged = nd;
@@ -92,7 +93,7 @@ int SatJumpCheck::check(const RawMeas* m, int n, double tow_s, const double r_pr
     return sum_.flagged;
 }
 
-void SatJumpCheck::commit(const RawMeas* m, int n, double tow_s, const double r_post[3])
+void SatJumpCheck::commit(const RawMeas* m, int n, double tow_s, const double r_post[3], const double* range)
 {
     for (int i = 0; i < n; ++i)
     {
@@ -103,7 +104,7 @@ void SatJumpCheck::commit(const RawMeas* m, int n, double tow_s, const double r_
         if (s.tow_new != tow_s)
             continue;                     // check() did not see it this epoch
         s.pr = s.pr_new;
-        s.range = sagnacRange(mi, r_post);
+        s.range = range != nullptr ? range[i] : sagnacRange(mi, r_post);
         s.tow = tow_s;
     }
 }
