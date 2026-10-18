@@ -60,6 +60,47 @@ inline bool offer(State& st, const int8_t raw[8], uint16_t gps_day, bool from_rx
     return true;
 }
 
+// The rig replay's rule (a TR_SIM_REPLAY_BLOB build of the mosaic-only image,
+// main.cpp's TR_RAW_NAV_RIG_REPLAY). The rig plays a recorded day's sky -- its
+// scenario's broadcast file, weeks or months before the day the app's set was
+// downloaded -- so by the date rule above an app or NVS set would always beat
+// the receiver's own GPSIon, and the filter would build the rig's epochs with
+// another day's ionosphere. Here the sky's set wins whatever the days:
+//   - no set dated more than a day from the sky's (sky_day: the replayed
+//     flight's GPS day; 0, not known, judges none) is taken, from either
+//     source -- a pad calibration's from today, or one the receiver decoded
+//     from the real sky before its cold start;
+//   - an app set is taken only while the receiver has given none (by the rule
+//     above), and never displaces one of the receiver's;
+//   - the receiver's set replaces an app set, whatever their days;
+//   - between two of the receiver's sets the rule above stands (no older day;
+//     the same bytes never applied twice -- the receiver's bytes matching the
+//     app set in use only make it the receiver's).
+// The rig's files never broadcast GPSIon: subframe 4 page 18 comes once every
+// 12.5 min, and the three flights' files (TOW 573606 on, 241-257 s) hold pages
+// 21-25 and 1-4 only. So a replay build carries the sky's own set
+// (-DTR_SIM_REPLAY_GPS_IONO), which the sim wrapper hands over as the
+// receiver's; without it no set passes the day test above, and the filter
+// builds the sky with none.
+inline bool offerRigReplay(State& st, const int8_t raw[8], uint16_t gps_day, bool from_rx, uint16_t sky_day = 0)
+{
+    if (sky_day != 0 && (gps_day > sky_day + 1 || gps_day + 1 < sky_day))
+        return false;   // not the sky's day: another day's ionosphere
+    if (st.have && st.from_rx != from_rx)
+    {
+        if (!from_rx)
+            return false;   // an app or NVS set never displaces the receiver's
+        if (std::memcmp(raw, st.raw, sizeof(st.raw)) == 0)
+        {
+            st.from_rx = true;   // the receiver's own bytes already in use: nothing to apply
+            st.gps_day = gps_day;
+            return false;
+        }
+        st.have = false;    // the receiver's replaces the app's, whatever their days
+    }
+    return offer(st, raw, gps_day, from_rx);
+}
+
 }  // namespace RawIonoRule
 
 #endif  // RAW_IONO_RULE_H

@@ -6,12 +6,14 @@
 # with MosaicTimeTag and the PPS line that follows its edges; the ways a
 # receiver may come back, a real sky's dropout, a receiver reset, a late edge
 # and the boot's line; the review's cases (the 1PPS late to the step, runs of
-# late edges, a sky back early by k * 256 ms, a backed-up link); and the rule
-# piece by piece.
+# late edges, a sky back early by k * 256 ms, a backed-up link); the rule
+# piece by piece; and the rig replay's clock (SimReplay's ReplayClock) on the
+# epochs the driver hands over across the underrun: the timed ones only.
 add_executable(test_mosaic_time_tag test_mosaic_time_tag.cpp
     ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial/SbfMeas.cpp
     ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial/SbfParser.cpp
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/GnssTimeSync.cpp
+    ${LIB_DIR}/TR_Sensor_Collector_Sim/SimReplay.cpp
 )
 target_include_directories(test_mosaic_time_tag PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -21,6 +23,7 @@ target_include_directories(test_mosaic_time_tag PRIVATE
     ${LIB_DIR}/TR_GNSSRaw
     ${LIB_DIR}/TR_GNSSRaw/include
     ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/TR_Sensor_Collector_Sim
 )
 target_link_libraries(test_mosaic_time_tag GTest::gtest_main)
 gtest_discover_tests(test_mosaic_time_tag)

@@ -488,6 +488,7 @@ struct PpsTagStats
     uint32_t over = 0;              //   with |residual| over the bar
     int32_t  max_us = 0;            //   the largest |residual|
     int32_t  last_us = 0;           // the last residual, signed, judged or not
+    int64_t  last_s = 0;            //   its GPS second (a held one's never: see held_last_us)
     uint32_t settling = 0;          // seconds checked before the line had the drift: not judged
     int32_t  settling_max_us = 0;   //   their largest |residual|
     uint32_t late = 0;              // edges the interrupt stamped late: judged where they were due
@@ -559,6 +560,7 @@ inline int32_t notePpsTag(PpsTagStats& s, int64_t gps_s, int64_t tag_mcu_us, int
         return res;
     }
     s.last_us = res;
+    s.last_s = gps_s;
     if (!line_settled)
     {
         s.settling++;

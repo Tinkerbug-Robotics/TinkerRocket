@@ -99,3 +99,145 @@ TEST(RawIonoRule, TheReceiversSetAcrossDays)
     EXPECT_EQ(3u, st.sets);
     EXPECT_EQ(17001, st.gps_day);
 }
+
+// ---- the rig replay (offerRigReplay: a TR_SIM_REPLAY_BLOB build of the
+// mosaic-only image). The rig's sky is a recorded day: rp5_0829's broadcast
+// file is GPS day 17,037 (2026-08-29), the V9's NVS set from an October
+// download is about 49 days later.
+
+namespace
+{
+constexpr uint16_t kRigDay = 17037;
+constexpr uint16_t kNvsDay = 17086;   // 2026-10-17
+}  // namespace
+
+TEST(RawIonoRuleRig, TheFlightRuleKeepsALaterAppSetOverTheRigsOwn)
+{
+    // why the rig needs its own rule: by the date rule the NVS set from the
+    // real sky's day beats the rig receiver's GPSIon
+    RawIonoRule::State st;
+    ASSERT_TRUE(RawIonoRule::offer(st, kA, kNvsDay, kApp));
+    EXPECT_FALSE(RawIonoRule::offer(st, kB, kRigDay, kRx));
+    EXPECT_FALSE(st.from_rx);
+}
+
+TEST(RawIonoRuleRig, TheRigReceiversSetReplacesALaterAppSet)
+{
+    RawIonoRule::State st;
+    // the NVS set at boot, before the receiver has heard GPSIon
+    ASSERT_TRUE(RawIonoRule::offerRigReplay(st, kA, kNvsDay, kApp));
+    EXPECT_FALSE(st.from_rx);
+    // the rig's, whatever its day
+    EXPECT_TRUE(RawIonoRule::offerRigReplay(st, kB, kRigDay, kRx));
+    EXPECT_TRUE(st.from_rx);
+    EXPECT_EQ(kRigDay, st.gps_day);
+    EXPECT_EQ(0, std::memcmp(st.raw, kB, 8));
+    EXPECT_EQ(2u, st.sets);
+    // offered every pass after: never applied again
+    for (int i = 0; i < 10; ++i) EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kB, kRigDay, kRx));
+    EXPECT_EQ(2u, st.sets);
+}
+
+TEST(RawIonoRuleRig, AnAppSetNeverDisplacesTheRigReceivers)
+{
+    RawIonoRule::State st;
+    ASSERT_TRUE(RawIonoRule::offerRigReplay(st, kB, kRigDay, kRx));
+    // a pad calibration sent mid-run, of any day
+    EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kA, kNvsDay, kApp));
+    EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kC, kRigDay, kApp));
+    EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kC, kRigDay - 1, kApp));
+    EXPECT_TRUE(st.from_rx);
+    EXPECT_EQ(0, std::memcmp(st.raw, kB, 8));
+    EXPECT_EQ(1u, st.sets);
+}
+
+TEST(RawIonoRuleRig, WithoutTheReceiversTheAppSetStands)
+{
+    // with the sky's day not known (0): GPSIon comes once every 12.5 min
+    // (subframe 4 page 18), and the rig's three files never carry it, so the
+    // app's set is what there is -- the reason a replay build passes the
+    // sky's day (below) and carries the sky's own set
+    RawIonoRule::State st;
+    EXPECT_TRUE(RawIonoRule::offerRigReplay(st, kA, kNvsDay, kApp));
+    EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kA, kNvsDay, kApp));
+    // a newer app set by the date rule, as on the real sky
+    EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kC, kNvsDay - 1, kApp));
+    EXPECT_TRUE(RawIonoRule::offerRigReplay(st, kC, kNvsDay + 1, kApp));
+    EXPECT_EQ(2u, st.sets);
+}
+
+TEST(RawIonoRuleRig, TheReceiversOwnSetsKeepTheDateRule)
+{
+    RawIonoRule::State st;
+    ASSERT_TRUE(RawIonoRule::offerRigReplay(st, kA, kRigDay, kRx));
+    EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kB, kRigDay - 1, kRx));   // an older one
+    EXPECT_TRUE(RawIonoRule::offerRigReplay(st, kB, kRigDay, kRx));        // changed the same day
+    EXPECT_TRUE(RawIonoRule::offerRigReplay(st, kC, kRigDay + 1, kRx));
+    EXPECT_EQ(3u, st.sets);
+}
+
+TEST(RawIonoRuleRig, TheReceiverConfirmingTheAppsBytesTakesItOverWithoutApplyingIt)
+{
+    // an app set of the rig's own day (the scenario's file loaded through the
+    // app): the receiver's identical GPSIon changes nothing the stage uses,
+    // and from then on an app set no longer displaces it
+    RawIonoRule::State st;
+    ASSERT_TRUE(RawIonoRule::offerRigReplay(st, kA, kRigDay, kApp));
+    EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kA, kRigDay, kRx));
+    EXPECT_TRUE(st.from_rx);
+    EXPECT_EQ(1u, st.sets);
+    EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kB, kNvsDay, kApp));
+    EXPECT_EQ(0, std::memcmp(st.raw, kA, 8));
+}
+
+// ---- the sky's day (main.cpp passes the replayed flight's GPS day): the
+// guard the reviewers asked for. The rig's files (TOW 573606 on, 241-257 s)
+// hold LNAV subframe 4 pages 21-25 and 1-4, never page 18, so without it the
+// NVS set of the pad calibration's day stood for the whole run.
+
+TEST(RawIonoRuleRig, NoSetFromAnotherDayThanTheSkysIsTaken)
+{
+    RawIonoRule::State st;
+    // the V9's NVS set from an October pad calibration, at boot
+    EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kA, kNvsDay, kApp, kRigDay));
+    // one the receiver decoded from the real sky before its cold start
+    EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kC, kNvsDay, kRx, kRigDay));
+    // and an older download than the sky's
+    EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kC, kRigDay - 2, kApp, kRigDay));
+    EXPECT_FALSE(st.have);
+    EXPECT_EQ(0u, st.sets);
+    // nothing taken: the filter builds the sky with no Klobuchar, as before
+    // any set, rather than with another day's
+}
+
+TEST(RawIonoRuleRig, TheSkysOwnSetIsTakenOnceWhateverWasOfferedFirst)
+{
+    // a replay build's stand-in for the GPSIon the file never broadcasts
+    // (TR_Sensor_Collector_Sim's getGNSSBroadcastIono): offered as the
+    // receiver's on every pass of the GNSS task, dated the sky's day
+    RawIonoRule::State st;
+    EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kA, kNvsDay, kApp, kRigDay));   // the NVS set first
+    EXPECT_TRUE(RawIonoRule::offerRigReplay(st, kB, kRigDay, kRx, kRigDay));
+    for (int i = 0; i < 10; ++i) EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kB, kRigDay, kRx, kRigDay));
+    // a pad calibration mid-run changes nothing
+    EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kA, kNvsDay, kApp, kRigDay));
+    EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kC, kRigDay, kApp, kRigDay));
+    EXPECT_TRUE(st.from_rx);
+    EXPECT_EQ(kRigDay, st.gps_day);
+    EXPECT_EQ(0, std::memcmp(st.raw, kB, 8));
+    EXPECT_EQ(1u, st.sets);
+}
+
+TEST(RawIonoRuleRig, ASetWithinADayOfTheSkysPasses)
+{
+    // the sky's file starts 180 s before ignition and may cross midnight; an
+    // app set loaded from the scenario's own broadcast file is the sky's
+    for (int d : {-1, 0, 1})
+    {
+        RawIonoRule::State st;
+        EXPECT_TRUE(RawIonoRule::offerRigReplay(st, kA, static_cast<uint16_t>(kRigDay + d), kApp, kRigDay)) << d;
+    }
+    RawIonoRule::State st;
+    EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kA, kRigDay + 2, kApp, kRigDay));
+    EXPECT_FALSE(RawIonoRule::offerRigReplay(st, kA, kRigDay - 2, kRx, kRigDay));
+}

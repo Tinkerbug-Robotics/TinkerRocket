@@ -55,6 +55,12 @@ struct TimedRawEpoch
     int64_t  mcu_us = 0;      // the epoch's GPS instant on the MCU clock (esp_timer, us); 0 = not known yet
     int64_t  arrival_us = 0;  // when its last frame arrived (MCU, us)
     uint16_t gps_week = 0;    // its full GPS week; 0 = not known yet
+    // The receiver's clock bias (ms, receiver minus GPS) its tag took off the
+    // time of week: epoch.tow_s - tag_dtr_ms / 1000 is the GPS instant mcu_us
+    // places. The mosaic-G5's (its time of week is the receiver's own); 0
+    // where the driver's time of week is GPS time already. In the struct's
+    // tail padding, so its size is unchanged.
+    float    tag_dtr_ms = 0.0f;
 };
 
 // The receiver's own fix as a driver hands it to the raw-GNSS shadow, which

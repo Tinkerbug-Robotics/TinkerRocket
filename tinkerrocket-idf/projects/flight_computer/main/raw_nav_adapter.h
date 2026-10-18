@@ -516,6 +516,21 @@ public:
 #endif
     }
 
+#if TR_RAW_NAV_MOSAIC
+    // The instant (micros()) the state the loop reads is at: the latest IMU
+    // tick it was carried forward to, or the filter's own as published; false
+    // before the filter runs. The loop's own clock has moved on since -- by a
+    // pass, every other pass (EKF_DECIMATION) -- so a state judged against a
+    // truth is judged at this (the rig replay's [REPLAY-NAV]).
+    bool stateTimeUs(uint32_t& t_us) const
+    {
+        if (!nav_.running)
+            return false;
+        t_us = fwd_ok_ ? fwd_t_us_ : nav_.time_us;
+        return true;
+    }
+#endif
+
     // The raw filter has no shock gate, canopy mode or gyro-bias gate: none trips.
     bool     underCanopy() const { return false; }
     uint32_t shockGateTrips() const { return 0; }

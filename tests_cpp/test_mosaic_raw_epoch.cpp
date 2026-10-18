@@ -842,6 +842,36 @@ TEST(MosaicRawEpoch, ALateEdgeOnThePpsLine)
     EXPECT_LT(edge_alone_worst, -4900);   // what the check read before
 }
 
+// The last residual and its own second (last_s): a second handed over timed,
+// judged or settling. A held second (published false) is checked all the same
+// and moves where the next edge is due (prev_s) but never the last residual:
+// the rig replay pairs last_us with last_s (TR_Sensor_Collector_Sim's
+// replayNoteEpoch), a held second's epoch having set no clock.
+TEST(MosaicRawEpoch, TheLastResidualKeepsItsOwnSecond)
+{
+    PpsTagStats s;
+    const int64_t s0 = int64_t(2440) * 604800 + 302400;
+    const int64_t e0 = 4000000000LL;
+    // a handed-over second, its tag 30 us late of its edge (no bias)
+    notePpsTag(s, s0, e0 + 30, e0, 1000000, true, 0.0, 200);
+    EXPECT_EQ(s.last_s, s0);
+    EXPECT_EQ(s.last_us, 30);
+    EXPECT_EQ(s.checks, 1u);
+    // a held second, 6.9 ms off: the driver's alone
+    notePpsTag(s, s0 + 1, e0 + 1000000 - 6900, e0 + 1000000, 1000000, true, 0.0, 200, false);
+    EXPECT_EQ(s.held, 1u);
+    EXPECT_EQ(s.held_last_us, -6900);
+    EXPECT_EQ(s.prev_s, s0 + 1);
+    EXPECT_EQ(s.last_s, s0);
+    EXPECT_EQ(s.last_us, 30);
+    EXPECT_EQ(s.checks, 1u);
+    // a settling second (the line before the drift) is handed over: it moves both
+    notePpsTag(s, s0 + 2, e0 + 2000000 - 40, e0 + 2000000, 1000000, false, 0.0, 200);
+    EXPECT_EQ(s.settling, 1u);
+    EXPECT_EQ(s.last_s, s0 + 2);
+    EXPECT_EQ(s.last_us, -40);
+}
+
 // The whole tag on a simulated bench: a mosaic whose clock runs 0.27 ppm
 // fast from +0.4996 ms and steps -1 ms at a whole second, its MeasEpoch at
 // 20 Hz from 10 s before the end of GPS week 2440 to 10 s into 2441, a PVT

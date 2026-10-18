@@ -12,6 +12,9 @@
 #include "TR_Sensor_Collector_Sim.h"
 #include "SimPadAlign.h"
 #include "SimSensorModel.h"
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#include "SimHighGBias.h"
+#endif
 #include <TR_GeoMag.h>
 #include <cmath>
 #include <esp_timer.h>
@@ -324,6 +327,9 @@ bool SensorCollectorSim::startReplay()
     for (int i = 0; i < 9; ++i) pad_align_[i] = (i % 4 == 0) ? 1.0f : 0.0f;
     replay_last_have_t_ = false;
     replay_on_ = true;
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    replay_sky_day_.store(static_cast<uint16_t>(std::floor(h.ignition_gps_s / 86400.0)), std::memory_order_release);
+#endif
     phase_ = SIM_PRELAUNCH;   // active: what the dry-fire gate and the log key on
     phase_start_ms_ = millis();
     const double week = std::floor(h.ignition_gps_s / 604800.0);
@@ -334,6 +340,20 @@ bool SensorCollectorSim::startReplay()
              h.ignition_gps_s - week * 604800.0, h.scen_start_s, h.scen_end_s, h.lat_deg, h.lon_deg,
              h.alt_m, (double)replay_b_ned_[0], (double)replay_b_ned_[1], (double)replay_b_ned_[2],
              (double)h.decimal_year);
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if defined(TR_SIM_REPLAY_GPS_IONO)
+    {
+        static constexpr int8_t kSky[8] = {TR_SIM_REPLAY_GPS_IONO};
+        ESP_LOGW("SIM", "RIG REPLAY ionosphere: the rig sky's own GPS Klobuchar (%d %d %d %d / %d %d %d %d, GPS day "
+                 "%u) stands in for the GPSIon its file never broadcasts: the filter takes it as the receiver's",
+                 kSky[0], kSky[1], kSky[2], kSky[3], kSky[4], kSky[5], kSky[6], kSky[7],
+                 (unsigned)replaySkyGpsDay());
+    }
+#else
+    ESP_LOGW("SIM", "RIG REPLAY ionosphere: none carried (no -DTR_SIM_REPLAY_GPS_IONO): the filter takes only a set "
+             "dated within a day of the sky's (GPS day %u) -- on these files, none", (unsigned)replaySkyGpsDay());
+#endif
+#endif
     return true;
 #else
     return false;
@@ -397,6 +417,87 @@ void SensorCollectorSim::replayNoteFix(const gnss_raw::TimedFix& f)
     if (after != before)
         ESP_LOGW("SIM", "RIG REPLAY clock: %s (a fix at t %+.2f s)", clockName(after), t);
 }
+
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+void SensorCollectorSim::replayNoteEpoch(const gnss_raw::TimedRawEpoch& e)
+{
+    // The driver's 1PPS check of a whole second's tag, when a new one has come
+    // (its counts moved), for the freeze's check (ReplayClock::onTagCheck).
+    // Only a second handed over timed counts (MosaicTimeTag.h: the tag right
+    // or untimed): a held second's check is the driver's alone (pps.held),
+    // never the replay's -- its epoch went out untimed and set no clock --
+    // so the residual is taken with its own second (last_s), not the last
+    // checked (prev_s, which a held second moves on). Read twice and taken
+    // only when the reads agree: the driver's poll task writes them on the
+    // other core. Static: only the GNSS task drains the epochs, and a
+    // RawStats is too big for its stack twice over (and only a replay build,
+    // which is the only one that comes here, keeps them).
+    bool new_check = false;
+#if defined(TR_SIM_REPLAY) && TR_SIM_REPLAY
+    static TR_GNSSReceiverMosaicSerial::RawStats s1, s2;
+    if (real_.getGNSSRawStats(s1) && real_.getGNSSRawStats(s2))
+    {
+        const mosaic::PpsTagStats& p1 = s1.tag.pps;
+        const mosaic::PpsTagStats& p2 = s2.tag.pps;
+        const uint32_t n1 = p1.checks + p1.settling;
+        const uint32_t n2 = p2.checks + p2.settling;
+        new_check = n1 == n2 && n1 != replay_pps_seen_ && p1.last_s == p2.last_s && p1.last_us == p2.last_us;
+        if (new_check) replay_pps_seen_ = n1;
+    }
+#else
+    TR_GNSSReceiverMosaicSerial::RawStats s1;   // no replay runs in this build: nothing below is reached
+#endif
+    const mosaic::PpsTagStats& pps = s1.tag.pps;
+    portENTER_CRITICAL(&replay_mux_);
+    const uint8_t before = replay_clock_.state();
+    const uint8_t check_before = replay_clock_.check();
+    // the GPS instant the tag placed (the receiver's time of week less the
+    // bias the tag took off): the clock is then the 1PPS line's own. An
+    // untimed or held epoch (mcu_us 0, tag_dtr_ms 0) sets nothing
+    replay_clock_.onEpoch(e.gps_week, e.epoch.tow_s, e.mcu_us, (double)e.tag_dtr_ms * 1.0e-3);
+    if (new_check) replay_clock_.onTagCheck((double)pps.last_s, pps.last_us);
+    const uint8_t after = replay_clock_.state();
+    const uint8_t check_after = replay_clock_.check();
+    const double t = replay_clock_.lastFixT();
+    const double check_t = replay_clock_.checkT();
+    const int32_t check_res = replay_clock_.checkResidualUs();
+    const double check_move = replay_clock_.checkMoveUs();
+    portEXIT_CRITICAL(&replay_mux_);
+    if (after != before)
+        ESP_LOGW("SIM", "RIG REPLAY clock: %s (the receiver's timed epoch at t %+.2f s)", clockName(after), t);
+    if (check_after == check_before)
+        return;
+    // The freeze against the 1PPS edge, with the driver's check counts then:
+    // the scorer judges every second after it (tools/rig_replay/score_v9.py)
+    if (check_after == sim_replay::ReplayClock::kUnchecked)
+    {
+        ESP_LOGE("SIM", "RIG REPLAY clock: the freeze NOT checked against the 1PPS (no check of a second from the "
+                        "freeze on by t %+.1f s); PPS tag check so far %lu judged, %lu over %ld us; %lu held back "
+                        "(untimed, not judged)",
+                 t, (unsigned long)pps.checks, (unsigned long)pps.over,
+                 (long)TR_GNSSReceiverMosaicSerial::kPpsTagBarUs, (unsigned long)pps.held);
+        return;
+    }
+    const bool moved = check_after == sim_replay::ReplayClock::kMoved;
+    ESP_LOGW("SIM", "RIG REPLAY clock: the freeze checked against the 1PPS edge of the second at t %+.0f s: residual "
+                    "%+ld us, %s %+.0f us; PPS tag check so far %lu judged, %lu over %ld us; %lu held back "
+                    "(untimed, not judged)",
+             check_t, (long)check_res, moved ? "MOVED onto the edge by" : "kept, the edge within", check_move,
+             (unsigned long)pps.checks, (unsigned long)pps.over, (long)TR_GNSSReceiverMosaicSerial::kPpsTagBarUs,
+             (unsigned long)pps.held);
+}
+
+bool SensorCollectorSim::replayTAt(uint32_t time_us, double& t_s) const
+{
+    // the stamp's instant on the 64-bit clock it was cut from, as replaySampleAt
+    const int64_t now = esp_timer_get_time();
+    const int64_t mcu = now - (int64_t)(int32_t)((uint32_t)now - time_us);
+    portENTER_CRITICAL(&replay_mux_);
+    const bool have = replay_on_ && replay_clock_.tAt(mcu, t_s);
+    portEXIT_CRITICAL(&replay_mux_);
+    return have;
+}
+#endif
 
 // ============================================================================
 // Data Getters
@@ -589,6 +690,12 @@ bool SensorCollectorSim::getGNSSRtcmFrame(uint8_t* out, size_t cap, size_t& len,
 bool SensorCollectorSim::getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out)
 {
     const bool have = real_.getGNSSRawEpoch(out);
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // The mosaic-G5 hands no timed fix (getGNSSFix is the LC86G's): its timed
+    // epochs set the replay's clock, on the GPS-to-MCU mapping the filter
+    // builds the same epochs with (#1600 rig replay on the V9)
+    if (have && replay_on_) replayNoteEpoch(out);
+#endif
     if (phase_ == SIM_IDLE || replay_on_) return have;
     return false;   // consumed, not forwarded — see the header
 }
@@ -616,6 +723,18 @@ bool SensorCollectorSim::getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len)
 #if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
 bool SensorCollectorSim::getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const
 {
+#if defined(TR_SIM_REPLAY_GPS_IONO)
+    const uint16_t sky_day = replaySkyGpsDay();
+    if (sky_day != 0)
+    {
+        // The rig sky's own set, the bytes its page 18 would carry: every pass
+        // (the rule applies it once), and never a set the receiver kept
+        static constexpr int8_t kSky[8] = {TR_SIM_REPLAY_GPS_IONO};
+        memcpy(raw, kSky, sizeof(kSky));
+        gps_day = sky_day;
+        return true;
+    }
+#endif
     if (phase_ == SIM_IDLE || replay_on_) return real_.getGNSSBroadcastIono(raw, gps_day);
     return false;   // the real sky's: not while a sim runs (kept, not consumed) — see the header
 }
@@ -904,6 +1023,20 @@ void SensorCollectorSim::packISM6(uint32_t time_us, float ax, float ay, float az
         lroundf(sensor_ay / ACC_HIGH_MS2_PER_LSB), -32768, 32767);
     out.acc_high_raw.z = (int16_t)constrain(
         lroundf(sensor_az / ACC_HIGH_MS2_PER_LSB), -32768, 32767);
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    if (replay_on_)
+    {
+        // The rig replay: these counts carry the high-g bias the converter
+        // takes off, so where the low-g rail hands over to them the flight's
+        // own specific force comes out (SimHighGBias.h, setReplayHighGBias)
+        const float f_board[3] = {ax, ay, az};
+        int16_t hg[3];
+        sim_high_g::countsCarryingBias(f_board, replay_hg_bias_, ism6_inv_c_, ism6_inv_s_, ACC_HIGH_MS2_PER_LSB, hg);
+        out.acc_high_raw.x = hg[0];
+        out.acc_high_raw.y = hg[1];
+        out.acc_high_raw.z = hg[2];
+    }
+#endif
 
     rocketToBoard(gx_dps, gy_dps, gz_dps);
     const float sensor_gx =  gx_dps * ism6_inv_c_ + gy_dps * ism6_inv_s_;

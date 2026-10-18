@@ -209,6 +209,36 @@ TEST(RawNavAdapterMosaic, HasRunIsFalseUntilARunningStateIsPublished)
     EXPECT_TRUE(ekf.hasRun());
 }
 
+TEST(RawNavAdapterMosaic, TheStatesOwnTimeIsTheTickItWasCarriedTo)
+{
+    // The rig replay's [REPLAY-NAV] judges the state the loop reads against
+    // the truth at this instant, not at the loop's: the loop's clock is a
+    // pass on from the last EKF tick every other pass, and the IMU window's
+    // stamp is its middle (main.cpp)
+    ShadowLink link;
+    RawNavAdapter ekf;
+    ekf.attach(&link);
+    uint32_t t_us = 0;
+    EXPECT_FALSE(ekf.stateTimeUs(t_us));   // before the filter runs: no state of its own
+    for (uint32_t t = 990000; t <= 1000000; t += 2500)
+        ekf.noteImu(tick(t, 2.0f));
+    link.nav.write(flying(1000000, 500.0, false));
+    ekf.refresh(1000000);
+    ASSERT_TRUE(ekf.stateTimeUs(t_us));
+    EXPECT_EQ(t_us, 1000000u);   // as published
+    ekf.noteImu(tick(1002500, 2.0f));
+    ekf.noteImu(tick(1005000, 2.0f));
+    ASSERT_TRUE(ekf.stateTimeUs(t_us));
+    EXPECT_EQ(t_us, 1005000u);   // carried forward through the ticks since
+    float v[3];
+    ekf.getVelEst(v);
+    EXPECT_NEAR(v[0], 5.0f + 2.0f * 0.005f, 2e-3f);   // the velocity at that tick, not at the loop's now
+    // a stop on the ground (no hold): no state of its own again
+    link.nav.write(ShadowNav{});
+    ekf.refresh(1010000);
+    EXPECT_FALSE(ekf.stateTimeUs(t_us));
+}
+
 TEST(RawNavAdapterMosaic, WithTheHoldOnAStopInFlightKeepsTheLastGoodStateGoing)
 {
     ShadowLink link;

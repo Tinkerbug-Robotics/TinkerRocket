@@ -33,6 +33,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
+#include <set>
 #include <vector>
 
 #include "GnssTimeSync.h"
@@ -40,6 +42,7 @@
 #include "MosaicTimeTag.h"
 #include "PpsPairer.h"
 #include "SbfParser.h"
+#include "SimReplay.h"
 #include "sbf_meas_build.h"
 
 using namespace mosaic;
@@ -125,6 +128,7 @@ struct Out
     int64_t mcu_us = 0;
     double  err_us = 0.0;     // against the true instant (timed only)
     double  t = 0.0;
+    double  dtr_ms = 0.0;     // the bias the tag took off (TimedRawEpoch::tag_dtr_ms; timed only)
 };
 
 // The driver's pieces, in the driver's order (TR_GNSSReceiverMosaic_Serial.cpp
@@ -134,6 +138,7 @@ struct Out
 struct Driver
 {
     bool legacy = false;
+    double last_dtr_ms = 0.0;   // the last epoch's tag_dtr_ms: its bias if handed over timed, else 0
     lc86::GnssTimeSync sync;
     PpsPairer pairer;
     MosaicJumpState js;
@@ -212,11 +217,15 @@ struct Driver
         const bool placed = carried && sync.mcuAt(epochGpsS(info.wnc, info.tow_ms, dtr), mcu);
         const Why why = tag.judge(sync.valid(), carried, now_us);
         const bool timed = placed && why == Why::TIMED;
+        last_dtr_ms = 0.0;
         if (cells)
         {
             tag.countEpoch(timed ? Why::TIMED : why);
             if (timed)
+            {
                 mcu_out = mcu;
+                last_dtr_ms = dtr;
+            }
         }
         if (info.tow_ms % 1000 == 0 && placed)
             tag.noteWholeSecond(rx_ms, mcu, cells && timed);
@@ -307,8 +316,10 @@ struct BenchRun
     int64_t first_timed_after_rx = -1;   // rx_ms
 };
 
-// Run the bench for `seconds` through the driver.
-BenchRun run(Bench b, Driver& d, double seconds, double after_s = 1e9, double* first_timed_after = nullptr)
+// Run the bench for `seconds` through the driver; on_handed sees every epoch
+// handed over, timed or not (mcu_us 0), as the GNSS task drains it.
+BenchRun run(Bench b, Driver& d, double seconds, double after_s = 1e9, double* first_timed_after = nullptr,
+             const std::function<void(const Out&)>& on_handed = {})
 {
     BenchRun out;
     b.cum = b.cum0;
@@ -433,12 +444,22 @@ BenchRun run(Bench b, Driver& d, double seconds, double after_s = 1e9, double* f
         if (handed)
         {
             out.handed++;
+            if (on_handed)
+            {
+                Out h;
+                h.rx_ms = rx_ms;
+                h.mcu_us = mcu;
+                h.t = t;
+                h.dtr_ms = d.last_dtr_ms;
+                on_handed(h);
+            }
             if (mcu != 0)
             {
                 Out o;
                 o.rx_ms = rx_ms;
                 o.mcu_us = mcu;
                 o.t = t;
+                o.dtr_ms = d.last_dtr_ms;
                 o.err_us = static_cast<double>(mcu) - b.mcuUs(t);
                 if (std::fabs(o.err_us) > out.worst_us)
                 {
@@ -1220,4 +1241,156 @@ TEST(MosaicTimeTag, TheEdgesAgainstTheChain)
     t2.notePvt(pvtAt(t0 - 4000, 12.3, 0.0), j2, 1000000, true);
     EXPECT_EQ(t2.holdBreak(), Break::RESET);
     EXPECT_NEAR(t2.chainMs(), 6.854, 1e-9);   // the sky taken not to have moved since
+}
+
+// ---- the rig replay's clock on the tag (#1600 on the V9 mosaic image)
+//
+// A rig replay build sets the replay's clock from the epochs the driver hands
+// over (TR_Sensor_Collector_Sim replayNoteEpoch, ReplayClock::onEpoch): a
+// timed one at its tag's GPS instant (the receiver's time of week less the
+// bias the tag took off, TimedRawEpoch::tag_dtr_ms), an untimed or held one
+// (mcu_us and tag_dtr_ms 0) not at all. The freeze's 1PPS check takes the
+// driver's last residual with its own second (PpsTagStats::last_s): only a
+// second handed over timed is judged there, a held one's check is the
+// driver's alone. The 10/17 underrun on the rig's pad: the sky 6.854 ms late
+// at 160 s, lost 15 s, the tag held after the first fix until the 1PPS
+// confirms the new chain.
+
+namespace
+{
+
+struct RigReplayRun
+{
+    sim_replay::ReplayClock clock;
+    int handed = 0, timed = 0, untimed = 0;
+    int untimed_counted = 0;        // untimed epochs the clock counted: never
+    int checks = 0;                 // 1PPS checks handed to the clock
+    int checks_not_timed = 0;       //   of a second not handed over timed: never
+    double freeze_t = -1.0;         // the bench time of the epoch that froze the clock
+    double ignition_gps_s = 0.0;
+};
+
+// The bench's sky GPS time (s) at bench time t: the receiver's time less its bias
+double skyGpsS(const Bench& b, double t) { return b.gps0_ms * 1e-3 + t - b.skyDelayMs(t) * 1e-3; }
+
+// The underrun bench through the driver, its epochs drained as a replay
+// build's GNSS task drains them (replayNoteEpoch), ignition at bench time
+// ignition_t on the sky's time.
+void rigReplay(double ignition_t, Driver& d, RigReplayRun& rr)
+{
+    const Bench b = underrun();
+    rr.ignition_gps_s = skyGpsS(b, ignition_t);
+    sim_replay::Header h;
+    h.ignition_gps_s = rr.ignition_gps_s;
+    h.scen_start_s = -ignition_t;          // the rig file spans the whole bench
+    h.scen_end_s = 330.0 - ignition_t;
+    rr.clock.reset(h);
+    std::set<int64_t> timed_seconds;
+    uint32_t seen = 0;
+    run(b, d, 330.0, 1e9, nullptr, [&](const Out& o) {
+        rr.handed++;
+        // the driver's checks so far, before this epoch's own PVT (the sim
+        // reads them as it drains the epoch)
+        const PpsTagStats& p = d.tag.stats().pps;
+        const uint32_t n = p.checks + p.settling;
+        const bool new_check = n != seen;
+        seen = n;
+        const auto before = rr.clock.state();
+        const uint32_t fixes = rr.clock.fixes();
+        rr.clock.onEpoch(static_cast<uint16_t>(o.rx_ms / kWeekMs), static_cast<double>(o.rx_ms % kWeekMs) * 1e-3,
+                         o.mcu_us, o.dtr_ms * 1e-3);
+        if (o.mcu_us == 0)
+        {
+            rr.untimed++;
+            EXPECT_EQ(o.dtr_ms, 0.0);
+            if (rr.clock.fixes() != fixes)
+                rr.untimed_counted++;
+        }
+        else
+        {
+            rr.timed++;
+            if (o.rx_ms % 1000 == 0)
+                timed_seconds.insert(o.rx_ms / 1000);
+        }
+        if (before != sim_replay::ReplayClock::kFrozen && rr.clock.state() == sim_replay::ReplayClock::kFrozen)
+            rr.freeze_t = o.t;
+        if (new_check)
+        {
+            rr.checks++;
+            if (timed_seconds.count(p.last_s) == 0)
+                rr.checks_not_timed++;
+            rr.clock.onTagCheck(static_cast<double>(p.last_s), p.last_us);
+        }
+    });
+}
+
+// The replayed flight's time at bench time t against the sky's, us, from the
+// freeze on: the sky's time at the freezing epoch, carried on by the MCU's
+// crystal (16 ppm fast here) as the frozen clock is by design (SimReplay.h:
+// the samples run on the MCU's crystal from the freeze, as a real IMU's do).
+double rigClockErrUs(const RigReplayRun& rr, double t)
+{
+    const Bench b = underrun();
+    double tr = 0.0;
+    if (!rr.clock.tAt(static_cast<int64_t>(std::llround(b.mcuUs(t))), tr))
+        return 1e12;
+    const double crystal_s = (b.mcuUs(t) - b.mcuUs(rr.freeze_t)) * 1e-6 - (skyGpsS(b, t) - skyGpsS(b, rr.freeze_t));
+    return (tr - (skyGpsS(b, t) - rr.ignition_gps_s) - crystal_s) * 1e6;
+}
+
+}  // namespace
+
+// The freeze 50 s after the underrun: the held epochs set nothing, the clock
+// follows the timed ones back onto the late sky, and the freeze and its
+// 1PPS check stand on the sky's time.
+TEST(MosaicTimeTag, TheRigReplaysClockTakesOnlyTheTimedEpochs)
+{
+    Driver d(false);
+    RigReplayRun rr;
+    rigReplay(230.0, d, rr);
+    const auto& pps = d.tag.stats().pps;
+    std::printf("[rig] handed %d: timed %d, untimed %d (counted %d); clock fixes %u, outside %u, restarts %u; froze "
+                "at %.2f s, check %d (t %+.1f s, residual %d us, move %.1f us); checks %d (%d not timed); driver: "
+                "judged %u, held %u\n",
+                rr.handed, rr.timed, rr.untimed, rr.untimed_counted, rr.clock.fixes(), rr.clock.outside(),
+                rr.clock.restarts(), rr.freeze_t, (int)rr.clock.check(), rr.clock.checkT(),
+                rr.clock.checkResidualUs(), rr.clock.checkMoveUs(), rr.checks, rr.checks_not_timed, pps.checks,
+                pps.held);
+    EXPECT_GT(rr.untimed, 20);             // the hold after the first fix
+    EXPECT_GT(pps.held, 1u);               // whose seconds the driver checked, not judged
+    EXPECT_EQ(rr.untimed_counted, 0);
+    EXPECT_EQ(rr.clock.fixes(), static_cast<uint32_t>(rr.timed));
+    EXPECT_EQ(rr.clock.outside(), 0u);
+    EXPECT_EQ(rr.clock.restarts(), 0u);
+    EXPECT_GT(rr.checks, 100);
+    EXPECT_EQ(rr.checks_not_timed, 0);
+    ASSERT_EQ(rr.clock.state(), sim_replay::ReplayClock::kFrozen);
+    EXPECT_NEAR(rr.freeze_t, 225.0, 0.11);
+    EXPECT_EQ(rr.clock.check(), sim_replay::ReplayClock::kKept);
+    EXPECT_NEAR(rr.clock.checkT(), -5.0, 0.01);   // the freeze's own second: the receiver's, its bias off GPS
+    EXPECT_LT(std::fabs(rr.clock.checkMoveUs()), 25.0);
+    for (double t : {226.0, 230.0, 241.7, 300.0, 329.0})
+        EXPECT_LT(std::fabs(rigClockErrUs(rr, t)), 25.0) << t;
+}
+
+// The freeze inside the hold (5 s before an ignition 6 s after the first
+// fix): the clock follows the old sky through the hold, never a held epoch,
+// and the first timed epoch after the release freezes it on the late sky's
+// time -- the stale clock, 6.854 ms ahead, is never frozen.
+TEST(MosaicTimeTag, ARigReplayFreezeInsideTheHoldWaitsForATimedEpoch)
+{
+    Driver d(false);
+    RigReplayRun rr;
+    rigReplay(183.0, d, rr);
+    std::printf("[rig] hold: handed %d: timed %d, untimed %d (counted %d); froze at %.2f s (t %+.2f), check %d "
+                "(t %+.1f s, residual %d us, move %.1f us)\n",
+                rr.handed, rr.timed, rr.untimed, rr.untimed_counted, rr.freeze_t, rr.freeze_t - 183.0,
+                (int)rr.clock.check(), rr.clock.checkT(), rr.clock.checkResidualUs(), rr.clock.checkMoveUs());
+    EXPECT_EQ(rr.untimed_counted, 0);
+    EXPECT_EQ(rr.clock.restarts(), 0u);
+    ASSERT_EQ(rr.clock.state(), sim_replay::ReplayClock::kFrozen);
+    EXPECT_GT(rr.freeze_t, 178.0);          // not at the arming instant: its epochs were held
+    EXPECT_NE(rr.clock.check(), sim_replay::ReplayClock::kMoved);
+    for (double t : {rr.freeze_t + 0.05, 190.0, 200.0, 250.0})
+        EXPECT_LT(std::fabs(rigClockErrUs(rr, t)), 25.0) << t;
 }

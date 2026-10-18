@@ -208,6 +208,14 @@ void ReplayClock::reset(const Header& h)
     state_ = kWaiting;
     fixes_ = outside_ = restarts_ = 0;
     last_fix_t_ = 0.0;
+    freeze_t_ = 0.0;
+    secs_[0] = secs_[1] = Second{};
+    sec_next_ = 0;
+    check_ = kNotChecked;
+    check_t_ = 0.0;
+    check_res_us_ = 0;
+    check_move_us_ = 0.0;
+    tag_checks_ = 0;
 }
 
 void ReplayClock::onFix(double gps_s, int64_t mcu_us)
@@ -241,10 +249,76 @@ void ReplayClock::onFix(double gps_s, int64_t mcu_us)
             restarts_++;
         base_s_ = base;
         if (t >= cfg_.arm_by_s)
+        {
             state_ = kFrozen;
+            freeze_t_ = t;
+        }
+        break;
+    case kFrozen:
+        noteCheckDeadline(t);
         break;
     default:
         break;
+    }
+}
+
+void ReplayClock::noteCheckDeadline(double t)
+{
+    if (check_ == kNotChecked && t > cfg_.check_by_s)
+        check_ = kUnchecked;
+}
+
+void ReplayClock::onEpoch(uint16_t gps_week, double tow_s, int64_t mcu_us, double dtr_s)
+{
+    if (gps_week == 0 || mcu_us == 0 || !(tow_s >= 0.0 && tow_s < 604800.0) || !std::isfinite(dtr_s))
+        return;
+    const double gps_s = gps_week * 604800.0 + tow_s - dtr_s;
+    const uint32_t counted = fixes_;
+    onFix(gps_s, mcu_us);
+    // A whole second the clock counted: kept for its 1PPS check (onTagCheck),
+    // which comes with the receiver's PVT of the same second
+    const double whole = std::round(tow_s);
+    if (fixes_ != counted && std::fabs(tow_s - whole) < 1.0e-4)
+    {
+        Second& s = secs_[sec_next_];
+        s.sec = static_cast<int64_t>(gps_week) * 604800 + static_cast<int64_t>(whole);
+        s.t = gps_s - ignition_gps_s_;
+        s.base = s.t - static_cast<double>(mcu_us) * 1.0e-6;
+        sec_next_ = static_cast<uint8_t>((sec_next_ + 1) % 2);
+    }
+}
+
+void ReplayClock::onTagCheck(double sec_gps_s, int32_t residual_us)
+{
+    const int64_t sec = static_cast<int64_t>(std::llround(sec_gps_s));
+    const Second* s = nullptr;
+    for (const Second& c : secs_)
+        if (c.sec == sec)
+            s = &c;
+    if (s == nullptr)
+        return;   // not a second the clock counted (another time, or the epoch not drained yet)
+    tag_checks_++;
+    if (state_ != kFrozen)
+        return;
+    noteCheckDeadline(s->t);
+    // the freeze's own second on: a check of one before it says nothing of a
+    // sky that slipped between the two
+    if (check_ != kNotChecked || s->t < freeze_t_ - 1.0e-3)
+        return;
+    // the tag sat residual_us late of the edge: the edge's MCU instant is the
+    // tag's less it, so the sky's own clock at that second is
+    const double edge_base = s->base + static_cast<double>(residual_us) * 1.0e-6;
+    check_t_ = s->t;
+    check_res_us_ = residual_us;
+    check_move_us_ = (edge_base - base_s_) * 1.0e6;
+    if (std::fabs(check_move_us_) > cfg_.check_bar_us)
+    {
+        base_s_ = edge_base;
+        check_ = kMoved;
+    }
+    else
+    {
+        check_ = kKept;
     }
 }
 

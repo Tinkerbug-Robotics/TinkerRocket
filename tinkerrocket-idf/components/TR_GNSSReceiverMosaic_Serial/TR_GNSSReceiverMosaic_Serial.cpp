@@ -1002,6 +1002,10 @@ void TR_GNSSReceiverMosaicSerial::rawMeasEpoch(const uint8_t* block, size_t len,
         e.arrival_us = end_us;
         e.gps_week = info.wnc;
         e.mcu_us = timed ? mcu : 0;
+        // what the tag took off the time of week, with the tag only: the rig
+        // replay's clock takes the timed ones' GPS instant (TOW - dtr), and
+        // an untimed or held epoch carries none to take
+        e.tag_dtr_ms = timed ? static_cast<float>(dtr) : 0.0f;
         if (xQueueSend(r.epoch_q, &e, 0) == pdTRUE)
         {
             handed = true;
