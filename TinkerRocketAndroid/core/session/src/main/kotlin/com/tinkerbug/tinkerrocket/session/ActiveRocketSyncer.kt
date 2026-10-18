@@ -381,8 +381,12 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
     /**
      * Take the rocket's reported settings into the bound profile.  Nothing is
      * written to the rocket.
+     *
+     * [fromExtras]: the re-run of [armExtrasAdopt].  It leaves the antenna to
+     * [armAntennaAdopt] once that has armed, and adds the groups it changed to
+     * an existing [SyncState.Adopted] instead of replacing it.
      */
-    private fun adoptRocketConfig() {
+    private fun adoptRocketConfig(fromExtras: Boolean = false) {
         val s = session
         val st = store
         if (s == null || st == null || !s.isConnected.value) {
@@ -400,15 +404,21 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
 
         _unreportedGroups.value = cfg.unreportedGroups
 
-        val result = adopt(profile, cfg)
+        val result = adopt(profile, cfg, takeAntenna = !(fromExtras && antennaAdoptArmed))
         if (result.changed.isNotEmpty()) st.update(profile.id) { result.profile }
+
+        // What the connect-time pass and the late one-shots already said
+        // stands; the extras re-run adds to it.
+        val existing =
+            if (fromExtras) (_syncState.value as? SyncState.Adopted)?.groups.orEmpty() else emptyList()
+        val groups = existing + result.changed.filter { it !in existing }
 
         // A profile we just created from this same readback matches the rocket
         // by construction — reporting its every factory-default field as
         // "changed" would be noise.  createdProfileName covers it.
         _syncState.value =
-            if (result.changed.isEmpty() || _createdProfileName.value != null) SyncState.Synced
-            else SyncState.Adopted(result.changed)
+            if (groups.isEmpty() || _createdProfileName.value != null) SyncState.Synced
+            else SyncState.Adopted(groups)
 
         armOrientationAdopt(s, cfg)
         armExtrasAdopt(s, cfg)
@@ -452,6 +462,10 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
      * up the fin layout and guidance parameters without a reconnect.  Armed
      * once per attach, so a later user edit — which also flows back through
      * the report — is not reported as the rocket disagreeing with the phone.
+     *
+     * The re-run adds the groups it changed to those already reported, and
+     * does not touch the GNSS antenna offset once [armAntennaAdopt] has armed
+     * (see there).
      */
     private fun armExtrasAdopt(s: DeviceSession, cfg: RocketConfig) {
         // Keyed on the three report groups, not on unreportedGroups: that list
@@ -464,7 +478,7 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
                 .filterNotNull()
                 .filter { !it.configReportGroupsMissing }
                 .first()
-            adoptRocketConfig()
+            adoptRocketConfig(fromExtras = true)
         }
     }
 
@@ -511,6 +525,18 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
      * the rail off, the cmd 81 waits in the out computer) is not overwritten
      * by the flight computer's boot report, which still carries its old
      * value: that report is dropped and nothing is said.
+     *
+     * Once armed, the antenna is this one-shot's for the rest of the attach:
+     * while it waits, after it fires or drops a report, and after a profile
+     * switch cancels it.  The one other late writer is the extras re-adopt
+     * ([armExtrasAdopt]), whose [adoptRocketConfig] re-run can read a
+     * readback that already holds the boot report (config_servo/guid/roll
+     * copy the current readback, the "fc" offset with it); it keeps the
+     * profile's offset and leaves "GNSS antenna offset" out of what it
+     * reports.  That
+     * is all that is held back: the connect-time adoption, which runs before
+     * this arms, still takes an "fc" offset, and the extras re-adopt still
+     * takes every other group.
      */
     private fun armAntennaAdopt(s: DeviceSession, cfg: RocketConfig) {
         if (cfg.antennaOffset == null || cfg.antennaOffsetFromFlightComputer || antennaAdoptArmed) return
@@ -982,8 +1008,16 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
          * Comparisons run at the precision the value crossed the wire at, so a
          * profile Kp of 0.12 doesn't "differ" from a rocket reporting 0.1200
          * every single connect.
+         *
+         * [takeAntenna] false: the profile keeps its GNSS antenna offset and
+         * the group is not named, whatever the rocket reported — the extras
+         * re-adopt's call once the late antenna adopt owns it.
          */
-        public fun adopt(profile: RocketProfile, cfg: RocketConfig): AdoptionResult {
+        public fun adopt(
+            profile: RocketProfile,
+            cfg: RocketConfig,
+            takeAntenna: Boolean = true,
+        ): AdoptionResult {
             var p = profile
             val changed = mutableListOf<String>()
 
@@ -1092,7 +1126,7 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
             // Anything else is the out computer's copy of the last cmd 81 it
             // relayed, which the flight computer may not hold (the #1472
             // camera rule).
-            cfg.antennaOffset?.takeIf { cfg.antennaOffsetFromFlightComputer }?.let {
+            cfg.antennaOffset?.takeIf { takeAntenna && cfg.antennaOffsetFromFlightComputer }?.let {
                 if (p.antennaOffset != it) {
                     p = p.withAntennaOffset(it)
                     changed += GROUP_ANTENNA_OFFSET

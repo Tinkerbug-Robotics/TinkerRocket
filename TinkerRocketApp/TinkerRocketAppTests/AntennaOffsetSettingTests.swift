@@ -338,6 +338,16 @@ final class AntennaOffsetSettingTests: XCTestCase {
         XCTAssertEqual(p.antennaOffset, measured(312, -25, 4))
     }
 
+    /// takeAntenna false: the extras re-adopt's call once the late antenna
+    /// adopt owns it.
+    func testWithoutTheAntennaTheProfileKeepsItsOffsetAndItIsNotNamed() {
+        var p = RocketProfile.makeDefault(name: "Goblin")
+        p.antennaOffset = measured(50, 60, 70)
+        let changed = ActiveRocketSyncer.adopt(&p, from: fcReport(measured(10, 20, 30)), takeAntenna: false)
+        XCTAssertFalse(changed.contains(ActiveRocketSyncer.groupAntennaOffset))
+        XCTAssertEqual(p.antennaOffset, measured(50, 60, 70))
+    }
+
     // MARK: The syncer, end to end
 
     private static let identityFrame =
@@ -468,5 +478,72 @@ final class AntennaOffsetSettingTests: XCTestCase {
         settleMainQueue()
         XCTAssertEqual(store.activeProfile?.antennaOffset, measured(50, 60, 70))
         XCTAssertFalse(adoptedGroups(syncer).contains(ActiveRocketSyncer.groupAntennaOffset))
+    }
+
+    /// The three #915 config-report frames the out computer relays after the
+    /// config frame, each one a copy of the current readback plus its group.
+    private func feedConfigReport(_ rocket: BLEDevice, servoBias2: Int) {
+        feed(rocket, #"{"type":"config_servo","sb2":"# + "\(servoBias2)"
+             + #","sb3":0,"sb4":0,"fmn":-60.00,"fmx":60.00,"faz":[0.0,90.0,180.0,270.0],"frv":0,"frrv":0}"#)
+        feed(rocket, #"{"type":"config_guid","gng":3.00,"gma":30.0,"gaf":0.50,"gmf":15.0,"gms":30.0,"gcd":0,"gtm":0,"gte":0.0,"gtn":0.0,"gta":0.0,"gkp":0.00,"gkd":0.00,"glw":0}"#)
+        feed(rocket, #"{"type":"config_roll","n":0,"wp":[]}"#)
+    }
+
+    /// The same user edit, with the report groups also missing at connect
+    /// (the out computer's normal boot state): the extras re-adopt is armed
+    /// beside the antenna's.  When the rail comes up the flight computer's
+    /// boot report (its old offset, as "fc") lands, then the report groups,
+    /// which carry it along; the extras re-adopt takes those groups but not
+    /// the antenna, which belongs to the late antenna adopt.  The user's
+    /// value stands.
+    func testRailOffAtConnect_TheExtrasReAdoptDoesNotOverwriteAnOffsetTheUserSetSince() throws {
+        let (syncer, store, rocket) = connect(
+            profile: measured(312, -25, 4),
+            antennaKeys: #""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"oc""#)
+        XCTAssertEqual(rocket.rocketConfig?.configReportGroupsMissing, true, "no report groups at connect")
+        XCTAssertEqual(store.activeProfile?.servoBias2, 0)
+
+        let id = try XCTUnwrap(store.activeId)
+        store.update(id) { $0.antennaOffset = measured(50, 60, 70) }
+        rocket.sendAntennaOffsetConfig(measured(50, 60, 70))
+        settleMainQueue()
+
+        feed(rocket, Self.configFrame(#""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"fc""#))
+        settleMainQueue()
+        feedConfigReport(rocket, servoBias2: 40)
+        settleMainQueue()
+
+        let cfg = try XCTUnwrap(rocket.rocketConfig)
+        XCTAssertFalse(cfg.configReportGroupsMissing)
+        XCTAssertEqual(cfg.antennaOffset, measured(10, 20, 30))
+        XCTAssertTrue(cfg.antennaOffsetFromFlightComputer)
+        XCTAssertEqual(store.activeProfile?.servoBias2, 40, "the extras re-adopt ran")
+        XCTAssertEqual(store.activeProfile?.antennaOffset, measured(50, 60, 70),
+                       "the user's offset stands")
+        XCTAssertFalse(adoptedGroups(syncer).contains(ActiveRocketSyncer.groupAntennaOffset))
+    }
+
+    /// The extras re-adopt still takes the other groups, and adds what it
+    /// changed to what was already said: here the late antenna adopt's
+    /// "GNSS antenna offset", which it used to replace.
+    func testRailOffAtConnect_TheExtrasReAdoptTakesTheOtherGroupsAndAddsToTheAdoptedSet() {
+        let (syncer, store, rocket) = connect(
+            profile: measured(312, -25, 4),
+            antennaKeys: #""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"oc""#)
+
+        feed(rocket, Self.configFrame(#""antk":1,"antx":100,"anty":0,"antz":-50,"antsrc":"fc""#))
+        settleMainQueue()
+        let said = adoptedGroups(syncer)
+        XCTAssertTrue(said.contains(ActiveRocketSyncer.groupAntennaOffset))
+
+        feedConfigReport(rocket, servoBias2: 40)
+        settleMainQueue()
+
+        XCTAssertEqual(store.activeProfile?.servoBias2, 40)
+        XCTAssertEqual(store.activeProfile?.antennaOffset, measured(100, 0, -50))
+        let groups = adoptedGroups(syncer)
+        XCTAssertEqual(Array(groups.prefix(said.count)), said, "what was said stands: \(groups)")
+        XCTAssertTrue(groups.contains(ActiveRocketSyncer.groupServoTrim24), "\(groups)")
+        XCTAssertEqual(Set(groups).count, groups.count, "\(groups)")
     }
 }
