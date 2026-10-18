@@ -13,6 +13,10 @@ import XCTest
 /// three fields through UIKit, and read what reaches the rocket's command
 /// tap. They are async so that the teardown which releases the hosted screen
 /// runs inside a task (iOS 26.2, see SettingsNavigationTests).
+///
+/// The footer tests read the section's footer as VoiceOver would, and check
+/// the endings Android's AntennaOffsetCaptionTest checks, so the two apps'
+/// wording cannot drift apart.
 @MainActor
 final class AntennaOffsetDraftTests: XCTestCase {
 
@@ -23,6 +27,9 @@ final class AntennaOffsetDraftTests: XCTestCase {
     private var defaults: UserDefaults!
     private var window: UIWindow?
     private var sent: [(UInt8, Data)] = []
+    /// The simulator's accessibility automation setting before a footer test
+    /// turned it on; put back in tearDown.
+    private var automationWas: Int32?
 
     override func setUpWithError() throws {
         tempDir = FileManager.default.temporaryDirectory
@@ -35,6 +42,8 @@ final class AntennaOffsetDraftTests: XCTestCase {
     override func tearDown() async throws {
         window?.isHidden = true
         window = nil
+        if let was = automationWas { AccessibilityAutomation.set(was) }
+        automationWas = nil
         try? FileManager.default.removeItem(at: tempDir)
         defaults.removePersistentDomain(forName: suiteName)
     }
@@ -53,6 +62,8 @@ final class AntennaOffsetDraftTests: XCTestCase {
         XCTAssertEqual(fields.count, 3)
         XCTAssertEqual(fields.map { $0.text ?? "" }, ["", "", ""],
                        "an Unknown profile's zeros are no measurement")
+        XCTAssertEqual(fields.map { $0.placeholder ?? "" }, ["", "", ""],
+                       "a grey 0 would look like a zero entered")
         // The picker and the three fields; the error row waits for typing.
         XCTAssertEqual(try antennaRowCount(root), 4, "no error before the user types")
         XCTAssertTrue(antennaFrames.isEmpty, "the switch itself sends nothing")
@@ -133,12 +144,64 @@ final class AntennaOffsetDraftTests: XCTestCase {
         XCTAssertEqual(try antennaFields(root).map { $0.text ?? "" }, ["312", "-25", "4"])
     }
 
+    // MARK: - The footer
+
+    func testTheFooterSaysAnAgreeingFlightComputerReportIsInUse() async throws {
+        try readFooters()
+        let offset = AntennaOffset(known: true, xMm: 312, yMm: -25, zMm: 4)
+        let (_, root) = await openSettings(profile: offset)
+
+        let footer = try antennaFooter(root)
+        XCTAssertTrue(footer.hasPrefix("From the flight computer\u{2019}s IMU chip to the center of the GNSS antenna"),
+                      footer)
+        XCTAssertTrue(footer.hasSuffix(" In use by the flight computer."), footer)
+    }
+
+    /// A commit sends the offset, and the readback's mirror of it is what was
+    /// sent, not the flight computer's report.
+    func testTheFooterSaysACommitIsSentButNotYetReported() async throws {
+        try readFooters()
+        let (_, root) = await openSettings(profile: .unknown)
+        XCTAssertTrue(try antennaFooter(root).hasSuffix(" In use by the flight computer."))
+        try await chooseMeasured(root)
+        XCTAssertTrue(try antennaFooter(root).hasSuffix(" Not sent yet: enter all three, then tap Done."))
+
+        let fields = try antennaFields(root)
+        await enter("312", in: fields[0])
+        await enter("-25", in: fields[1])
+        await enter("4", in: fields[2])
+        fields[2].resignFirstResponder()
+        await settle()
+
+        XCTAssertEqual(antennaFrames.count, 1)
+        let footer = try antennaFooter(root)
+        XCTAssertTrue(footer.hasSuffix(" Sent to the rocket; the flight computer has not reported it yet."),
+                      footer)
+        XCTAssertFalse(footer.contains("In use"), footer)
+    }
+
+    func testTheFooterSaysADifferentOutComputerCopyIsTheOutComputers() async throws {
+        try readFooters()
+        let copy = AntennaOffset(known: true, xMm: 312, yMm: -25, zMm: 4)
+        let (_, root) = await openSettings(profile: .unknown, report: copy, source: "oc")
+
+        let footer = try antennaFooter(root)
+        XCTAssertTrue(footer.hasPrefix("Unknown (the default): the flight computer allows for a GNSS antenna up to 30 cm"),
+                      footer)
+        XCTAssertTrue(footer.hasSuffix(
+            " The out computer holds X 312, Y -25, Z 4 mm; the flight computer has not reported it yet."),
+                      footer)
+        XCTAssertFalse(footer.contains("flight computer reports"), footer)
+    }
+
     // MARK: - The screen
 
     /// Settings on a connected, running rocket whose readback carries the
-    /// setting as the flight computer's (so the section is unlocked), with
-    /// every command it is sent recorded.
-    private func openSettings(profile offset: AntennaOffset) async
+    /// setting (so the section is unlocked): `report` from `source`, the
+    /// profile's own offset from the flight computer unless a test says
+    /// otherwise. Every command the rocket is sent is recorded.
+    private func openSettings(profile offset: AntennaOffset, report: AntennaOffset? = nil,
+                              source: String = "fc") async
         -> (RocketProfileStore, UIViewController) {
         let fleet = BLEFleet()
         let store = RocketProfileStore(directory: tempDir, defaults: defaults)
@@ -151,9 +214,9 @@ final class AntennaOffsetDraftTests: XCTestCase {
         rocket.isConnected = true
         rocket.commandTap = { [weak self] in self?.sent.append(($0, $1)) }
         rocket.parseTelemetryData(#"{"st":"READY","fs":16}"#.data(using: .utf8)!)
-        let k = offset.known ? 1 : 0
+        let r = report ?? offset
         rocket.parseTelemetryData("""
-            {"type":"config","antk":\(k),"antx":\(offset.xMm),"anty":\(offset.yMm),"antz":\(offset.zMm),"antsrc":"fc"}
+            {"type":"config","antk":\(r.known ? 1 : 0),"antx":\(r.xMm),"anty":\(r.yMm),"antz":\(r.zMm),"antsrc":"\(source)"}
             """.data(using: .utf8)!)
 
         let root = await host(SettingsView(device: rocket)
@@ -240,5 +303,48 @@ final class AntennaOffsetDraftTests: XCTestCase {
 
     private func views<T: UIView>(_ type: T.Type, in view: UIView) -> [T] {
         ((view as? T).map { [$0] } ?? []) + view.subviews.flatMap { views(type, in: $0) }
+    }
+
+    /// SwiftUI draws its text itself and builds the accessibility tree only
+    /// for an accessibility client, so a footer test first turns on the
+    /// simulator's accessibility automation setting (tearDown puts it back).
+    private func readFooters() throws {
+        automationWas = try XCTUnwrap(AccessibilityAutomation.get(), "no accessibility automation setting")
+        AccessibilityAutomation.set(1)
+    }
+
+    /// The section's footer text, as VoiceOver reads it.
+    private func antennaFooter(_ root: UIViewController) throws -> String {
+        let (form, section) = try antennaSection(root)
+        let footer = try XCTUnwrap(form.supplementaryView(
+            forElementKind: UICollectionView.elementKindSectionFooter,
+            at: IndexPath(item: 0, section: section)), "the section drew no footer")
+        return try XCTUnwrap(accessibilityLabels(footer).first, "the footer has no text")
+    }
+
+    private func accessibilityLabels(_ element: Any) -> [String] {
+        guard let o = element as? NSObject else { return [] }
+        if o.isAccessibilityElement, let label = o.accessibilityLabel, !label.isEmpty { return [label] }
+        let children = (o.accessibilityElements ?? []) + ((o as? UIView)?.subviews ?? [])
+        return children.flatMap { accessibilityLabels($0) }
+    }
+}
+
+/// The simulator's accessibility automation setting, from libAccessibility
+/// (private API, the AccessibilitySnapshot library's way in); `get` is nil
+/// where the library or its symbols are missing.
+private enum AccessibilityAutomation {
+    private typealias Getter = @convention(c) () -> Int32
+    private typealias Setter = @convention(c) (Int32) -> Void
+    private static let library = dlopen("/usr/lib/libAccessibility.dylib", RTLD_NOW)
+
+    static func get() -> Int32? {
+        guard let symbol = dlsym(library, "_AXSAutomationEnabled") else { return nil }
+        return unsafeBitCast(symbol, to: Getter.self)()
+    }
+
+    static func set(_ on: Int32) {
+        guard let symbol = dlsym(library, "_AXSSetAutomationEnabled") else { return }
+        unsafeBitCast(symbol, to: Setter.self)(on)
     }
 }

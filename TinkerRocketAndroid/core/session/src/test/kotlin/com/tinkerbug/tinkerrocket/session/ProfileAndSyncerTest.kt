@@ -743,6 +743,74 @@ class ActiveRocketSyncerTest {
         assertTrue(ActiveRocketSyncer.GROUP_ANTENNA_OFFSET in r.adoptedGroups())
     }
 
+    /**
+     * Connected with the rail off: only the out computer's copy is on offer,
+     * so the profile keeps its own; when the flight computer's report lands
+     * (the out computer sends the readback again) its offset is adopted, and
+     * said so — the camera's late adopt.
+     */
+    @Test
+    fun railOffAtConnect_theFlightComputersAntennaOffsetIsAdoptedWhenItArrives() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA").withAntennaOffset(AntennaOffset(true, 312, -25, 4)) }
+        r.fw.configJson = antennaConfigJson(""""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"oc"""")
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        assertEquals(AntennaOffset(true, 312, -25, 4), r.store.activeProfile?.antennaOffset)
+        assertFalse(ActiveRocketSyncer.GROUP_ANTENNA_OFFSET in r.adoptedGroups())
+
+        r.fw.emitTelemetryJson(antennaConfigJson(""""antk":1,"antx":100,"anty":0,"antz":-50,"antsrc":"fc""""))
+        runCurrent()
+
+        assertEquals(AntennaOffset(true, 100, 0, -50), r.store.activeProfile?.antennaOffset,
+            "the flight computer's own offset is the rocket's")
+        assertTrue(ActiveRocketSyncer.GROUP_ANTENNA_OFFSET in r.adoptedGroups())
+    }
+
+    /** The same, with the flight computer agreeing with the profile: nothing to say. */
+    @Test
+    fun railOffAtConnect_aFlightComputerThatAgreesIsNoAdoption() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA").withAntennaOffset(AntennaOffset(true, 312, -25, 4)) }
+        r.fw.configJson = antennaConfigJson(""""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"oc"""")
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        val before = r.syncer.syncState.value
+
+        r.fw.emitTelemetryJson(antennaConfigJson(""""antk":1,"antx":312,"anty":-25,"antz":4,"antsrc":"fc""""))
+        runCurrent()
+
+        assertEquals(true, r.session.rocketConfig.value?.antennaOffsetFromFlightComputer)
+        assertEquals(AntennaOffset(true, 312, -25, 4), r.store.activeProfile?.antennaOffset)
+        assertFalse(ActiveRocketSyncer.GROUP_ANTENNA_OFFSET in r.adoptedGroups())
+        assertEquals(before, r.syncer.syncState.value)
+    }
+
+    /**
+     * Switching profiles disarms it: the profile now active was not the one
+     * reconciled at connect, and was just sent to the rocket as it stands.
+     */
+    @Test
+    fun railOffAtConnect_aProfileSwitchDisarmsTheLateAntennaAdopt() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA").withAntennaOffset(AntennaOffset(true, 312, -25, 4)) }
+        val first = assertNotNull(r.store.activeId.value)
+        r.fw.configJson = antennaConfigJson(""""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"oc"""")
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+
+        val second = r.store.add("Backup")
+        r.store.setActive(second.id)
+        runCurrent()
+        r.fw.emitTelemetryJson(antennaConfigJson(""""antk":1,"antx":100,"anty":0,"antz":-50,"antsrc":"fc""""))
+        runCurrent()
+
+        assertEquals(AntennaOffset.UNKNOWN, r.store.activeProfile?.antennaOffset)
+        assertEquals(AntennaOffset(true, 312, -25, 4),
+            r.store.profiles.value.first { it.id == first }.antennaOffset)
+        assertFalse(ActiveRocketSyncer.GROUP_ANTENNA_OFFSET in r.adoptedGroups())
+    }
+
     @Test
     fun pushGroup_antennaOffset_doesNotInventTheSettingOnOlderFirmware() = runTest {
         val r = rig { it.copy(lastUsedUnitID = "boardA") }

@@ -1173,9 +1173,14 @@ private struct SettingsContent: View {
                 }
                 .pickerStyle(.segmented)
                 if antennaMeasuredShown {
-                    stringRow("Board X", text: antennaText($sAntX), field: .antennaX, unit: "mm")
-                    stringRow("Board Y", text: antennaText($sAntY), field: .antennaY, unit: "mm")
-                    stringRow("Board Z", text: antennaText($sAntZ), field: .antennaZ, unit: "mm")
+                    // No placeholder: the Measured draft starts empty, and a
+                    // grey "0" there would look like a zero already entered.
+                    stringRow("Board X", text: antennaText($sAntX), field: .antennaX, unit: "mm",
+                              placeholder: "")
+                    stringRow("Board Y", text: antennaText($sAntY), field: .antennaY, unit: "mm",
+                              placeholder: "")
+                    stringRow("Board Z", text: antennaText($sAntZ), field: .antennaZ, unit: "mm",
+                              placeholder: "")
                     if let error = antennaInputError {
                         Text(error)
                             .font(.caption).foregroundColor(.red)
@@ -1826,12 +1831,14 @@ private struct SettingsContent: View {
 
     // MARK: - Helpers
 
+    /// `placeholder` nil shows a grey "0" ("0.0" in a decimal field).
     private func stringRow(_ label: String, text: Binding<String>, field: EditField,
-                           unit: String? = nil, decimal: Bool = false) -> some View {
+                           unit: String? = nil, decimal: Bool = false,
+                           placeholder: String? = nil) -> some View {
         HStack {
             Text(label)
             Spacer()
-            TextField(decimal ? "0.0" : "0", text: text)
+            TextField(placeholder ?? (decimal ? "0.0" : "0"), text: text)
                 .keyboardType(decimal ? .decimalPad : .numbersAndPunctuation)
                 .multilineTextAlignment(.trailing)
                 .frame(width: 80)

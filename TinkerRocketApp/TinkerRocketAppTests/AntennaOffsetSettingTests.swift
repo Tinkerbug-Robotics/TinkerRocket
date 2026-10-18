@@ -8,6 +8,16 @@ import XCTest
 /// all four absent on firmware without the setting.
 final class AntennaOffsetSettingTests: XCTestCase {
 
+    private var tempDir: URL!
+    private var defaults: UserDefaults!
+
+    override func setUp() {
+        super.setUp()
+        tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defaults = UserDefaults(suiteName: "antenna-offset-tests-\(UUID().uuidString)")
+    }
+
     private func makeRocket() -> BLEDevice {
         let d = BLEDevice(peripheral: nil, name: "TR-R-Test")
         d.isConnected = true
@@ -326,5 +336,99 @@ final class AntennaOffsetSettingTests: XCTestCase {
         let changed = ActiveRocketSyncer.adopt(&p, from: RocketConfig())
         XCTAssertFalse(changed.contains(ActiveRocketSyncer.groupAntennaOffset))
         XCTAssertEqual(p.antennaOffset, measured(312, -25, 4))
+    }
+
+    // MARK: The syncer, end to end
+
+    private static let identityFrame =
+        #"{"type":"config_identity","uid":"boardA","un":"Atlas","nid":5,"rid":1,"dt":"R","fw":"test"}"#
+
+    private static func configFrame(_ antennaKeys: String) -> String {
+        #"{"type":"config","# + antennaKeys + "}"
+    }
+
+    private func settleMainQueue(_ turns: Int = 5) {
+        for _ in 0..<turns {
+            let exp = expectation(description: "main-queue turn")
+            DispatchQueue.main.async { exp.fulfill() }
+            wait(for: [exp], timeout: 1)
+        }
+    }
+
+    /// The board's own profile holding `offset`, and the rocket connected
+    /// with a readback carrying `antennaKeys`: the connect-time sync is done.
+    private func connect(profile offset: AntennaOffset, antennaKeys: String)
+        -> (ActiveRocketSyncer, RocketProfileStore, BLEDevice) {
+        let syncer = ActiveRocketSyncer()
+        let store = RocketProfileStore(directory: tempDir, defaults: defaults)
+        let mine = store.add(name: "Atlas")
+        store.update(mine.id) { $0.lastUsedUnitID = "boardA"; $0.antennaOffset = offset }
+        store.setActive(mine.id)
+
+        let rocket = makeRocket()
+        syncer.attach(device: rocket, store: store)
+        feed(rocket, Self.configFrame(antennaKeys))
+        feed(rocket, Self.identityFrame)
+        settleMainQueue()
+        return (syncer, store, rocket)
+    }
+
+    private func adoptedGroups(_ syncer: ActiveRocketSyncer) -> [String] {
+        if case .adopted(let groups) = syncer.syncState { return groups }
+        return []
+    }
+
+    /// Connected with the rail off: only the out computer's copy is on offer,
+    /// so the profile keeps its own; when the flight computer's report lands
+    /// (the out computer sends the readback again) its offset is adopted, and
+    /// said so — the camera's late adopt.
+    func testRailOffAtConnect_TheFlightComputersOffsetIsAdoptedWhenItArrives() {
+        let (syncer, store, rocket) = connect(
+            profile: measured(312, -25, 4),
+            antennaKeys: #""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"oc""#)
+        XCTAssertEqual(store.activeProfile?.antennaOffset, measured(312, -25, 4))
+        XCTAssertFalse(adoptedGroups(syncer).contains(ActiveRocketSyncer.groupAntennaOffset))
+
+        feed(rocket, Self.configFrame(#""antk":1,"antx":100,"anty":0,"antz":-50,"antsrc":"fc""#))
+        settleMainQueue()
+
+        XCTAssertEqual(store.activeProfile?.antennaOffset, measured(100, 0, -50),
+                       "the flight computer's own offset is the rocket's")
+        XCTAssertTrue(adoptedGroups(syncer).contains(ActiveRocketSyncer.groupAntennaOffset))
+    }
+
+    /// The same, with the flight computer agreeing with the profile: nothing to say.
+    func testRailOffAtConnect_AFlightComputerThatAgreesIsNoAdoption() {
+        let (syncer, store, rocket) = connect(
+            profile: measured(312, -25, 4),
+            antennaKeys: #""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"oc""#)
+        let before = syncer.syncState
+
+        feed(rocket, Self.configFrame(#""antk":1,"antx":312,"anty":-25,"antz":4,"antsrc":"fc""#))
+        settleMainQueue()
+
+        XCTAssertEqual(rocket.rocketConfig?.antennaOffsetFromFlightComputer, true)
+        XCTAssertEqual(store.activeProfile?.antennaOffset, measured(312, -25, 4))
+        XCTAssertFalse(adoptedGroups(syncer).contains(ActiveRocketSyncer.groupAntennaOffset))
+        XCTAssertEqual(syncer.syncState, before)
+    }
+
+    /// Switching profiles disarms it: the profile now active was not the one
+    /// reconciled at connect, and was just sent to the rocket as it stands.
+    func testRailOffAtConnect_AProfileSwitchDisarmsTheLateAdopt() throws {
+        let (syncer, store, rocket) = connect(
+            profile: measured(312, -25, 4),
+            antennaKeys: #""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"oc""#)
+        let first = try XCTUnwrap(store.activeId)
+
+        let second = store.add(name: "Backup")
+        store.setActive(second.id)
+        settleMainQueue()
+        feed(rocket, Self.configFrame(#""antk":1,"antx":100,"anty":0,"antz":-50,"antsrc":"fc""#))
+        settleMainQueue()
+
+        XCTAssertEqual(store.activeProfile?.antennaOffset, AntennaOffset.unknown)
+        XCTAssertEqual(store.profiles.first { $0.id == first }?.antennaOffset, measured(312, -25, 4))
+        XCTAssertFalse(adoptedGroups(syncer).contains(ActiveRocketSyncer.groupAntennaOffset))
     }
 }

@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -165,6 +166,15 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
     private var cameraAdoptArmed = false
 
     /**
+     * The same for the GNSS antenna offset, adopted only from the flight
+     * computer ("antsrc":"fc").  Its job is kept apart so a profile switch
+     * can cancel it: the profile the user chose is not the one the
+     * connect-time readback was reconciled against.
+     */
+    private var antennaAdoptArmed = false
+    private var antennaAdoptJob: Job? = null
+
+    /**
      * Role at attach time.  A renamed device can mis-parse its type from the
      * BLE name until config_identity lands (the SUBSONIC case), so the role
      * isn't final — a role flip falls through to a full re-attach (#375).
@@ -276,6 +286,10 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
                     return@collect
                 }
                 selfSelectedProfileId = null
+                // Any other switch: the active profile is no longer the one
+                // reconciled at connect, so the flight computer's late
+                // antenna offset is not adopted into it.
+                antennaAdoptJob?.cancel()
                 _suggestedProfileId.value = null   // user has chosen
                 _createdProfileName.value = null
                 // Choosing a different profile for a CONNECTED rocket is the
@@ -300,6 +314,8 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         orientAdoptArmed = false
         extrasAdoptArmed = false
         cameraAdoptArmed = false
+        antennaAdoptArmed = false
+        antennaAdoptJob = null
         _syncState.value = SyncState.Idle
         _magCalAdvisory.value = CalAdvisory.None
         _sensorCalAdvisory.value = CalAdvisory.None
@@ -397,6 +413,7 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         armOrientationAdopt(s, cfg)
         armExtrasAdopt(s, cfg)
         armCameraAdopt(s, cfg)
+        armAntennaAdopt(s, cfg)
 
         syncCal(profile, s)
     }
@@ -480,6 +497,37 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
                 _syncState.value = SyncState.Adopted(existing + GROUP_CAMERA)
             }
         }
+    }
+
+    /**
+     * The GNSS antenna offset is adopted only from the flight computer, by the
+     * camera's rule: with the rail off at connect the out computer offers only
+     * its copy of the last cmd 81, so adopt the flight computer's once its
+     * report lands.  Only while unverified, only once, and only on a rocket
+     * that reports the setting at all.
+     */
+    private fun armAntennaAdopt(s: DeviceSession, cfg: RocketConfig) {
+        if (cfg.antennaOffset == null || cfg.antennaOffsetFromFlightComputer || antennaAdoptArmed) return
+        antennaAdoptArmed = true
+        val job = scope.launch {
+            val reported = s.rocketConfig
+                .filterNotNull()
+                .filter { it.antennaOffsetFromFlightComputer }
+                .mapNotNull { it.antennaOffset }
+                .first()
+            val st = this@ActiveRocketSyncer.store ?: return@launch
+            if (!s.isConnected.value) return@launch
+            val profile = st.activeProfile ?: return@launch
+            if (profile.antennaOffset == reported) return@launch
+            st.update(profile.id) { it.withAntennaOffset(reported) }
+            if (_createdProfileName.value != null) return@launch
+            val existing = (_syncState.value as? SyncState.Adopted)?.groups.orEmpty()
+            if (GROUP_ANTENNA_OFFSET !in existing) {
+                _syncState.value = SyncState.Adopted(existing + GROUP_ANTENNA_OFFSET)
+            }
+        }
+        antennaAdoptJob = job
+        jobs += job
     }
 
     /**

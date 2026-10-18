@@ -114,6 +114,12 @@ final class ActiveRocketSyncer: ObservableObject {
     /// connected before power-on.  Fires when a flight-computer-sourced one
     /// lands; never re-armed, so a later user edit isn't mistaken for a report.
     private var cameraAdoptArmed = false
+    /// The same for the GNSS antenna offset, adopted only from the flight
+    /// computer ("antsrc":"fc").  Held apart from `cancellables` so a profile
+    /// switch can cancel it: the profile the user chose is not the one the
+    /// connect-time readback was reconciled against.
+    private var antennaAdoptArmed = false
+    private var antennaAdopt: AnyCancellable?
     /// The profile id THIS syncer made active while binding the board.  The
     /// active-profile subscription is delivered on a later main-queue turn,
     /// so it cannot tell our own bind from a user tap — without this, binding
@@ -207,6 +213,8 @@ final class ActiveRocketSyncer: ObservableObject {
         orientAdoptArmed = false
         extrasAdoptArmed = false
         cameraAdoptArmed = false
+        antennaAdoptArmed = false
+        antennaAdopt = nil
         selfSelectedProfileId = nil
         syncState = .idle
         magCalAdvisory = .none
@@ -232,6 +240,10 @@ final class ActiveRocketSyncer: ObservableObject {
             selfSelectedProfileId = nil
             return
         }
+        // Any other switch, the delete fallback below included: the active
+        // profile is no longer the one reconciled at connect, so the flight
+        // computer's late antenna offset is not adopted into it.
+        antennaAdopt = nil
         // #1043: the store fell back to a surviving profile because the ACTIVE
         // one was deleted. Also not a user choice — `profiles` is name-sorted,
         // so this is the alphabetically first profile, and pushing it would
@@ -327,6 +339,7 @@ final class ActiveRocketSyncer: ObservableObject {
         armOrientationAdoptIfNeeded(device: device, cfg: cfg)
         armExtrasAdoptIfNeeded(device: device, cfg: cfg)
         armCameraAdoptIfNeeded(device: device, cfg: cfg)
+        armAntennaAdoptIfNeeded(device: device, cfg: cfg)
 
         syncMagCal(profile: profile, device: device)
         syncSensorCal(profile: profile, device: device)
@@ -388,6 +401,23 @@ final class ActiveRocketSyncer: ObservableObject {
             .store(in: &cancellables)
     }
 
+    /// The GNSS antenna offset is adopted only from the flight computer, by the
+    /// camera's rule: with the rail off at connect the out computer offers only
+    /// its copy of the last cmd 81, so adopt the flight computer's once its
+    /// report lands.  Only while unverified, only once, and only on a rocket
+    /// that reports the setting at all.
+    private func armAntennaAdoptIfNeeded(device: BLEDevice, cfg: RocketConfig) {
+        guard cfg.antennaOffset != nil, !cfg.antennaOffsetFromFlightComputer,
+              !antennaAdoptArmed else { return }
+        antennaAdoptArmed = true
+        antennaAdopt = device.$rocketConfig
+            .compactMap { $0 }
+            .filter { $0.antennaOffsetFromFlightComputer && $0.antennaOffset != nil }
+            .first()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.adoptAntennaOnly(from: $0) }
+    }
+
     private func adoptOrientationOnly() {
         guard let device, let store, device.isConnected,
               let profile = store.activeProfile,
@@ -418,6 +448,22 @@ final class ActiveRocketSyncer: ObservableObject {
         if case .adopted(let existing) = syncState { groups = existing }
         if !groups.contains(Self.groupCamera) {
             groups.append(Self.groupCamera)
+        }
+        syncState = .adopted(groups)
+    }
+
+    private func adoptAntennaOnly(from reported: RocketConfig) {
+        guard let device, let store, device.isConnected,
+              reported.antennaOffsetFromFlightComputer,
+              let antenna = reported.antennaOffset,
+              let profile = store.activeProfile, antenna != profile.antennaOffset
+        else { return }
+        store.update(profile.id) { $0.antennaOffset = antenna }
+        guard createdProfileName == nil else { return }
+        var groups: [String] = []
+        if case .adopted(let existing) = syncState { groups = existing }
+        if !groups.contains(Self.groupAntennaOffset) {
+            groups.append(Self.groupAntennaOffset)
         }
         syncState = .adopted(groups)
     }
