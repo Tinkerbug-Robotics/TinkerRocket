@@ -253,6 +253,9 @@ struct Args
     double seed_gyro_dps[3] = {};    //   (body FRD, deg/s): a log that begins while the payload turns
     int sat_cap = -1;                // TR_BENCH_RAW_SAT_CAP: the stage's satellites an epoch (-1: the profile's)
     double fuse_ms = -1.0;           // TR_BENCH_RAW_FUSE_MS: the fused epochs' period (-1: the profile's)
+    int share_los = -1;              // TR_BENCH_RAW_SHARE_LOS: 1 the epoch's geometry shared by its units, 2 and the
+                                     //   Doppler's prediction in float (-1: the profile's, off; a RAW_REPLAY_SHARELOS
+                                     //   build)
     std::string flight_state;        // the launch and landing: "log" (the ticks' flags), "quorum" (the quorum's own
                                      //   state machine); default the ticks', the quorum's where META state_machine none
     bool time_tag_from_boot = false; // the mosaic's time tag as after a boot: untimed until the log's first
@@ -319,6 +322,7 @@ void usage()
                  "  [--sat-cap N] [--fuse-ms X] [--flight-state log|quorum] [--time-tag-from-boot]\n"
                  "  [--assume-finetime] [--pad-zupt 0|1] [--gnss-only-from-s X] [--gnss-only-gate launch|ground]\n"
                  "  [--pvt-out FILE] [--gnss-only-keep-level]\n"
+                 "  the epoch's geometry (a RAW_REPLAY_SHARELOS build): [--share-los 0|1|2]\n"
                  "  the Doppler change check (a RAW_REPLAY_DVCHECK build): [--dv-check 0|1|2] [--dv-sat-k X]\n"
                  "  [--dv-epoch-k X] [--dv-floor X] [--dv-per-g X] [--dv-att-deg X] [--dv-scale X] [--dv-bias X]\n"
                  "  [--dv-lever-m X] [--dv-hold-s X] [--dv-epoch-hold-s X] [--dv-window-s X] [--dv-deweight 0|1]\n"
@@ -472,6 +476,7 @@ bool parseArgs(int argc, char** argv, Args& a)
         }
         else if (k == "--sat-cap") a.sat_cap = std::atoi(val());
         else if (k == "--fuse-ms") a.fuse_ms = std::atof(val());
+        else if (k == "--share-los") a.share_los = std::atoi(val());
         else if (k == "--flight-state") a.flight_state = val();
         else if (k == "--time-tag-from-boot") a.time_tag_from_boot = true;
         else if (k == "--assume-finetime") a.assume_finetime = true;
@@ -1656,6 +1661,17 @@ int main(int argc, char** argv)
         rx.fuse_epoch_period_s = a.fuse_ms * 1.0e-3;   // TR_BENCH_RAW_FUSE_MS
     if (a.sat_cap >= 0)
         rx.sat_cap = a.sat_cap;                         // TR_BENCH_RAW_SAT_CAP
+#if RAW_REPLAY_SHARELOS
+    if (a.share_los >= 0)
+    {
+        rx.share_los = a.share_los >= 1;                // TR_BENCH_RAW_SHARE_LOS
+        rx.rr_float = a.share_los >= 2;
+    }
+#else
+    if (a.share_los >= 0)
+        std::fprintf(stderr, "WARNING: this build has no shared epoch geometry (RAW_REPLAY_SHARELOS=OFF): --share-los "
+                             "is ignored\n");
+#endif
 #else
     GnssReceiverProfile rx = lc86gProfile();
 #endif
