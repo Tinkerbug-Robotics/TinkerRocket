@@ -9,9 +9,12 @@ First, whether the run counts. VOID if the replay clock was not on the receiver'
 run_v9.sh judges); if the transmitter underran or fell short after the clock froze, or failed or stopped short of the
 file (hackrf.txt, tx_log.py: the sky late on the replayed IMU from then on); or if the 1PPS tag check judged any
 second over 200 us from the freeze's check to the landing (the filter's own time tags off the sky and the IMU: the
-driver's clock line lagging a slip). The freeze itself is checked against the 1PPS edge by the firmware and moved
-onto it when the line lagged ("RIG REPLAY clock: the freeze checked"). A VOID run's flight is not scored (no
-attitude, velocity, voters, OC log or harness numbers) unless --score-void asks for them, for diagnosis only.
+driver's clock line lagging a slip before the time-tag fix, a tag handed over wrong after it). The freeze itself is
+checked against the 1PPS edge by the firmware and moved onto it when the line lagged ("RIG REPLAY clock: the freeze
+checked"). Epochs the driver handed over untimed between the freeze and the landing (an image with the time-tag fix
+holds the tag after a break until the 1PPS confirms it) only mark the run: the filter flew those without GNSS. A VOID
+run's flight is not scored (no attitude, velocity, voters, OC log or harness numbers) unless --score-void asks for
+them, for diagnosis only.
 
 From the console alone (a TR_SIM_REPLAY_BLOB build of the mosaic-only image prints [REPLAY-NAV] 50 a second from
 launch to burnout, 10 a second after, at the navigation state's own instant, and [REPLAY-VOTE] at each change of a
@@ -28,7 +31,8 @@ voter, the call or a guard):
     console-only G5 result from samples is never a pass;
   - the receiver's epochs' age and build, the filter's step and busy share, [CPU] and [LP] where the image has them,
     the loop and IMU rates -- pad, flight and ground apart;
-  - the bias-corrected PPS tag check, the 1PPS line's drift, the driver's untimed epochs and drops;
+  - the bias-corrected PPS tag check (and the seconds held back), the 1PPS line's drift, the driver's untimed epochs
+    (by why, on an image with the time-tag fix) and drops;
   - what the receiver tracked through each phase (the [RIG] C/N0 line), and the ionosphere: the set the image
     carried (the rig sky's own, -DTR_SIM_REPLAY_GPS_IONO) and the one in use at launch, flagged when they differ.
 With --log, the OC's flight log too: the on-board filter's records (0x96, 10 Hz) on the same metrics, each voter's
@@ -93,18 +97,20 @@ RX_REPLAY = re.compile(r"\[REPLAY\] t=" + F + r"(\(pad, no clock\))? phase=(\d) 
                        + r", outside=(\d+), restarts=(\d+)\) ekf=(\d)")
 RX_VOTE = re.compile(r"\[REPLAY-VOTE\] t=" + F + r"(\(pad, no clock\))? st=(\d+) votes=(\d)(\d)(\d)(\d) call=(\d) "
                      r"backstop=(\d) burnout=(\d) gps_admitted=(\d) guard=(\d) mach=(\d) vote=(\d) unprinted=(\d+)")
+# (an image with the time-tag fix adds the seconds the driver held back: "; N held back")
 RX_CHECKED = re.compile(r"RIG REPLAY clock: the freeze checked against the 1PPS edge of the second at t ([-+]?\d+) s: "
                         r"residual ([-+]?\d+) us, (MOVED onto the edge by|kept, the edge within) ([-+]?\d+) us; PPS "
-                        r"tag check so far (\d+) judged, (\d+) over (\d+) us")
+                        r"tag check so far (\d+) judged, (\d+) over (\d+) us(?:; (\d+) held back)?")
 RX_UNCHECKED = re.compile(r"RIG REPLAY clock: the freeze NOT checked against the 1PPS .*?PPS tag check so far (\d+) "
-                          r"judged, (\d+) over (\d+) us")
+                          r"judged, (\d+) over (\d+) us(?:; (\d+) held back)?")
 RX_IONO = re.compile(r"RIG REPLAY ionosphere: (.*)")
 RX_CLOCK = re.compile(r"RIG REPLAY clock: (.*?) \((?:the receiver's timed epoch|a fix) at t " + F + r" s\)")
 RX_STATE = re.compile(r"\[STATE\] (\S+) -> (\S+)")
 RX_BURNOUT = re.compile(r"\[GUID\] Burnout detected at T\+(\d+) ms")
 RX_APOGEE = re.compile(r"\[PYRO\] Apogee detected at t=(\d+) ms \(vel=(\d) baro=(\d) gps=(\d) pitch=(\d) backstop=(\d)\)")
 RX_ADMIT = re.compile(r"\[GNSS\] Vertical admitted to the EKF at T\+" + F + r" s: (.*)")
-RX_WITHHELD = re.compile(r"\[RAWGNSS\] raw votes withheld at T\+" + F + r" s")
+# the raw vote guard: "raw votes withheld" before the log-only guard (aff1aef2), "raw vote guard latched" after it
+RX_WITHHELD = re.compile(r"\[RAWGNSS\] raw (?:votes withheld|vote guard latched) at T\+" + F + r" s")
 RX_RAW5 = re.compile(r"\[RAWGNSS\] (\w+) \(starts (\d+), stops (\d+), last (\d+)\) \| imu (\d+)/s, step (\d+) us \(max "
                      r"(\d+)\) \| epochs (\d+): applied (\d+), no time (\d+), idle (\d+), stale (\d+) \| last: (\d+) meas, "
                      r"pr (\d+)\+(\d+) rej, rr (\d+)\+(\d+) rej, age (\d+) ms, build (\d+) us, update (\d+) us \(max "
@@ -119,12 +125,16 @@ RX_MOSAIC = re.compile(r"\[RAWGNSS\] mosaic-G5: gnss_aided (\d+), baro_aided (\d
                        r"untimed, (\d+) off the grid, (\d+) queue drops, (\d+) sats capped out \| tracked (\d+), (\d+) "
                        r"without an ephemeris \| eph (\d+) sats.*?\| PPS tag max (\d+) us, (\d+) over 200 of (\d+) "
                        r"judged \((\d+) settling, (\d+) edges late\) \| iono ([^|]*?) \| pad datum ([^|]*?) \|.*?in "
-                       r"flight: restarts (\d+) of 3, raw votes (\w+), transonic lockout (\w+)")
-RX_RAWDRV = re.compile(r"mosaic raw: epochs on the (\d+) ms grid: (\d+) handed over \((\d+) untimed, (\d+) without a "
-                       r"PVT bias\), (\d+) dropped, (\d+) empty")
+                       r"flight: restarts (\d+) of 3, raw votes (\w+(?: \([^)]*\))?), transonic lockout (\w+)")
+# the driver's epochs: "(N untimed, N without a PVT bias)" before the time-tag fix, "(N untimed: no line N, ...,
+# held N)" after it
+RX_RAWDRV = re.compile(r"mosaic raw: epochs on the (\d+) ms grid: (\d+) handed over \((\d+) untimed(?:, (\d+) without a "
+                       r"PVT bias|: ([^)]*))\), (\d+) dropped, (\d+) empty")
+RX_UNTIMED_WHY = re.compile(r"([a-zA-Z ]+?) (\d+)(?:, |$)")
 RX_PPSCHK = re.compile(r"mosaic PPS tag check: (\d+) whole seconds judged, \|residual\| max (\d+) us, (\d+) over 200 "
                        r"us, last ([-+]?\d+) us \| (\d+) before the line had the crystal's drift \(max (\d+) us, not "
-                       r"judged\) \| (\d+) edges stamped late")
+                       r"judged\) \| (\d+) edges stamped late(?:.*?\| (\d+) held back \(checked, not judged: max "
+                       r"(\d+) us)?")
 RX_PPSLINE = re.compile(r"mosaic PPS line: MCU crystal " + F + r" ppm against GPS, rms " + F + r" ms; receiver delay "
                         r"to the block's last byte: MeasEpoch mean " + F + r" ms \(max " + F + r", n (\d+)\), "
                         r"PVTGeodetic mean " + F + r" ms \(max " + F)
@@ -211,11 +221,12 @@ class Console:
                 g = m.groups()
                 self.freeze_check = {"checked": True, "ms": ms, "t": fl(g[0]), "residual_us": int(g[1]),
                                      "moved": g[2].startswith("MOVED"), "move_us": int(g[3]), "judged": int(g[4]),
-                                     "over": int(g[5])}
+                                     "over": int(g[5]), "held": None if g[7] is None else int(g[7])}
                 continue
             m = RX_UNCHECKED.search(msg)
             if m:
-                self.freeze_check = {"checked": False, "ms": ms, "judged": int(m.group(1)), "over": int(m.group(2))}
+                self.freeze_check = {"checked": False, "ms": ms, "judged": int(m.group(1)), "over": int(m.group(2)),
+                                     "held": None if m.group(4) is None else int(m.group(4))}
                 continue
             m = RX_REPLAY.search(msg)
             if m:
@@ -262,6 +273,8 @@ class Console:
                 for rx, kind in ((RX_ADMIT, "gps admitted"), (RX_WITHHELD, "raw votes withheld")):
                     m = rx.search(msg)
                     if m:
+                        if rx is RX_WITHHELD and "guard latched" in msg:
+                            kind = "raw vote guard latched" + (" (log only)" if "log only" in msg else "")
                         self.events.append((ms, kind, fl(m.group(1)), msg))
                 m = RX_IONO.search(msg)
                 if m and self.ionosphere is None:
@@ -563,6 +576,9 @@ def score_receiver(con, st):
         out["pps_tag_check"] = {"judged": int(g[0]), "max_us": int(g[1]), "over_200us": int(g[2]), "last_us": int(g[3]),
                                 "settling": int(g[4]), "settling_max_us": int(g[5]), "late_edges": int(g[6]),
                                 "pass": int(g[2]) == 0}
+        if g[7] is not None:
+            # the time-tag fix's: seconds whose epoch went out untimed, checked, never judged
+            out["pps_tag_check"].update({"held_back": int(g[7]), "held_back_max_us": int(g[8])})
     if con.ppsline:
         g = con.ppsline[-1][1]
         out["pps_line"] = {"crystal_ppm": fl(g[0]), "rms_ms": fl(g[1]), "meas_delay_mean_ms": fl(g[2]),
@@ -573,7 +589,14 @@ def score_receiver(con, st):
     if con.rawdrv:
         g = con.rawdrv[-1][1]
         out["driver_epochs"] = {"grid_ms": int(g[0]), "handed_over": int(g[1]), "untimed": int(g[2]),
-                                "no_pvt_bias": int(g[3]), "dropped": int(g[4]), "empty": int(g[5])}
+                                "dropped": int(g[5]), "empty": int(g[6])}
+        if g[3] is not None:
+            out["driver_epochs"]["no_pvt_bias"] = int(g[3])
+        else:
+            # the time-tag fix's untimed epochs by why (MosaicTimeTag::Why)
+            why = {k.strip().replace(" ", "_"): int(v) for k, v in RX_UNTIMED_WHY.findall(g[4])}
+            out["driver_epochs"]["untimed_why"] = why
+            out["driver_epochs"]["no_pvt_bias"] = why.get("no_bias", 0)
     if con.link:
         g = con.link[-1][1]
         out["link"] = {"meas_per_s": fl(g[0]), "uart_overflows": int(g[1]), "relinks": int(g[2]), "nav_resends": int(g[3])}
@@ -644,12 +667,17 @@ def score_sky_time(con, st, run, run_dir, clock):
       - The freeze: the firmware checks it against the 1PPS edge of its own second ("RIG REPLAY clock: the freeze
         checked", ReplayClock::onTagCheck) and moves it onto the edge when the driver's clock line had not yet
         followed a slip; so from the freeze on the replayed IMU is on the sky's time.
-      - The filter's own tags: the driver's line follows a late sky only after about a minute, and while it lags,
-        its tags -- the filter's epochs' instants -- are that far off the sky and the IMU. Any second the PPS tag
-        check judges over 200 us from the freeze's check to the landing is such a second: VOID. The counts come
-        from the freeze-check line (the driver's counts at that moment) and the first 5 s [RAWGNSS] mosaic-G5 line at
-        or after the landing; without the freeze-check line (an image from before it, or no check came), from the
-        last 5 s line at least a second before the freeze, so the seconds around it are judged too.
+      - The filter's own tags: before the time-tag fix the driver's line followed a late sky only after about a
+        minute, and while it lagged its tags -- the filter's epochs' instants -- were that far off the sky and the
+        IMU. With the fix (MosaicTimeTag.h) a tag is right or the epoch untimed: the line steps onto its edges, and
+        after a break the tag is held until the 1PPS confirms two seconds in a row, its seconds checked but never
+        judged. Either way any second the PPS tag check judges over 200 us from the freeze's check to the landing is
+        a tag handed over off the sky: VOID. The counts come from the freeze-check line (the driver's counts at that
+        moment) and the first 5 s [RAWGNSS] mosaic-G5 line at or after the landing; without the freeze-check line
+        (an image from before it, or no check came), from the last 5 s line at least a second before the freeze, so
+        the seconds around it are judged too.
+      - Epochs handed over untimed between the freeze and the landing (the 5 s line's "untimed"): the filter flew
+        those without GNSS (a hold after a slip, no 1PPS). A mark, not VOID: the run is what the filter does then.
     Seconds over 200 us between the clock's arming and the freeze only mark the run: the freeze's check took the
     edge. Each mark is written beside the scores."""
     out = {}
@@ -665,8 +693,9 @@ def score_sky_time(con, st, run, run_dir, clock):
         out["transmitter"] = {k: tx[k] for k in ("verdict", "void_why", "degraded_why", "underruns", "longest_bytes",
                                                  "host_shortfalls", "sent_gb", "file_gb", "complete", "exit_status",
                                                  "events")}
-    # the PPS tag check's cumulative counts (over, judged) on the replay's time
+    # the PPS tag check's cumulative counts (over, judged) on the replay's time, and the untimed epochs
     rows = [(con.t_of_ms(ms), int(g[11]), int(g[12])) for ms, g in con.mosaic if con.t_of_ms(ms) is not None]
+    untimed = [(con.t_of_ms(ms), int(g[3])) for ms, g in con.mosaic if con.t_of_ms(ms) is not None]
     fc = con.freeze_check
     void, marks = [], []
     pps = {"freeze_check": fc}
@@ -693,6 +722,10 @@ def score_sky_time(con, st, run, run_dir, clock):
         pps["judged_after_freeze"] = end[2] - base[2]
     if a is not None and base is not None:
         pps["over_before_freeze"] = max(0, base[1] - a[1])
+    u0 = [x for x in untimed if x[0] <= FREEZE_T]
+    u1 = [x for x in untimed if x[0] >= st.landed]
+    if u0 and u1:
+        pps["untimed_after_freeze"] = u1[0][1] - u0[-1][1]
     out["pps_tag_check"] = pps
     if con.reboot_ms is not None:
         tr = con.t_of_ms(con.reboot_ms)
@@ -717,6 +750,9 @@ def score_sky_time(con, st, run, run_dir, clock):
     if pps.get("over_before_freeze"):
         marks.append(f"the 1PPS tag check judged {pps['over_before_freeze']} second(s) over 200 us while the clock "
                      f"followed it (none from the freeze on)")
+    if pps.get("untimed_after_freeze"):
+        marks.append(f"{pps['untimed_after_freeze']} epoch(s) went to the filter untimed between the freeze and the "
+                     f"landing (the time tag held, or no 1PPS): it flew those without GNSS")
     out["void"], out["void_why"], out["marks"] = bool(void), void, marks
     return out
 

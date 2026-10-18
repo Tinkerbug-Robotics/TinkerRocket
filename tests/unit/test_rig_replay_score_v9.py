@@ -72,8 +72,9 @@ def flight():
 
 
 def console(cols, t_apo, t_land, early_in_samples=True, pps=((-20.0, 0, 5), (5.0, 0, 30)),
-            iono_at_launch="none (0 sets)", extra=()):
-    """The console; `pps` the 5 s lines' (t, over, judged) PPS tag check counts, `extra` lines as (t, text)."""
+            iono_at_launch="none (0 sets)", extra=(), untimed=None, raw_votes="cast", time_tag=False):
+    """The console; `pps` the 5 s lines' (t, over, judged) PPS tag check counts and `untimed` their untimed epochs,
+    `extra` lines as (t, text); `time_tag`: the driver's lines as an image with the time-tag fix prints them."""
     t, q = cols["t_s"], np.stack([cols[k] for k in ("qw", "qx", "qy", "qz")], axis=1)
     off = np.array([math.cos(math.radians(ERR_DEG) / 2), 0.0, math.sin(math.radians(ERR_DEG) / 2), 0.0])
 
@@ -96,7 +97,7 @@ def console(cols, t_apo, t_land, early_in_samples=True, pps=((-20.0, 0, 5), (5.0
     for tt, text in extra:
         L.append(f"I ({ms(tt)}) {text}")
     # the 5 s lines, one on the pad and one in flight (the firmware's formats, made-up numbers)
-    for (tt, over, judged), age in zip(pps, (57, 81)):
+    for (tt, over, judged), age, unt in zip(pps, (57, 81, 81), untimed or (504,) * len(pps)):
         L.append(f"I ({ms(tt)}) FC: [RAWGNSS] running (starts 1, stops 0, last 0) | imu 486/s, step 552 us (max 2168) "
                  f"| epochs 747: applied 242, no time 504, idle 0, stale {0 if tt < 0 else 3} | last: 11 meas, pr 0+0 "
                  f"rej, rr 11+0 rej, age {age} ms, build 20585 us, update 6019 us (max 43711/8588) | eph 11 sats, 0 "
@@ -110,13 +111,14 @@ def console(cols, t_apo, t_land, early_in_samples=True, pps=((-20.0, 0, 5), (5.0
         L.append(f"I ({ms(tt)}) FC: [RAWGNSS] gnss task: built 243, not taken 0 | last build 15.7 ms (max 42.7, wall) "
                  f"| stack free: filter 1884 B, gnss 4300 B | eph dropped 0")
         L.append(f"I ({ms(tt)}) FC: [RAWGNSS] mosaic-G5: gnss_aided 1, baro_aided 1 | fused 10.0 Hz (100 ms grid), cap "
-                 f"16 sats | epochs 747 seen: 504 untimed, 1395 off the grid, 0 queue drops, 0 sats capped out | "
+                 f"16 sats | epochs 747 seen: {unt} untimed, 1395 off the grid, 0 queue drops, 0 sats capped out | "
                  f"tracked 11, 0 without an ephemeris | eph 11 sats, 11 of 128 store entries, 0 blocks refused, 0 nav "
                  f"queue drops | imu ring drops 0, gaps bridged 0 | PPS tag max 32 us, {over} over 200 of {judged} "
                  f"judged (20 settling, 0 edges late) | iono {iono_at_launch} | pad datum the raw filter's, 483 fixes "
                  f"| GNSS log "
-                 f"DETAILED | in flight: restarts 0 of 3, raw votes cast, transonic lockout off | flight task stack "
-                 f"free 11688 B")
+                 f"DETAILED | in flight: restarts 0 of 3, raw votes {raw_votes}, transonic lockout off | dv check: "
+                 f"0 epochs checked, 0 failed, latches 0 let go 0, 0 Dopplers held | heading share 0.00 | rotation "
+                 f"allowance max 0.00 m/s | flight task stack free 11688 B")
         L.append(f"I ({ms(tt)}) GNSS: [RIG] tracked: GPS L1CA {5 if tt < 0 else 4} (C/N0 med 37.5 max 39.5) | GAL E1 4 "
                  f"(36.0 / 36.8) | BDS B1I 2 (37.5 / 37.5) | 11 signals, 0 other")
         L.append(f"I ({ms(tt)}) FC: [CPU]  flight@1 98.6% IDLE0@0 54.0% Poll IMU Data@0 17.5% Raw GNSS@0 13.3%")
@@ -124,11 +126,22 @@ def console(cols, t_apo, t_land, early_in_samples=True, pps=((-20.0, 0, 5), (5.0
         L.append("[LP] window 5.0 s cfg 1 (pm0=instructions(100xIPC) pm1=cycles@CINTLEVEL>0) | passes 209986 = "
                  "41997.1/s, mean 23.8 us, max 6053 us | gated 4867 ekf 0 | imu 3784/s 0.1/pass | coverage 100.1 %")
         L.append("[LP]   imu_drain        41997.1       2.0       2.0      106    8.4    0.0    0.0")
-    L.append(f"I ({ms(30.0)}) GNSS: mosaic raw: epochs on the 100 ms grid: 1271 handed over (504 untimed, 26 without "
-             f"a PVT bias), 0 dropped, 249 empty; 2046 off the grid; tagged on the PPS line")
-    L.append(f"I ({ms(30.0)}) GNSS: mosaic PPS tag check: 53 whole seconds judged, |residual| max 39 us, 0 over 200 "
-             f"us, last -8 us | 20 before the line had the crystal's drift (max 441 us, not judged) | 0 edges stamped "
-             f"late (the interrupt held off), up to 0 us past due: judged where due")
+    if time_tag:
+        L.append(f"I ({ms(30.0)}) GNSS: mosaic raw: epochs on the 100 ms grid: 1271 handed over (504 untimed: no line "
+                 f"300, not FINETIME 120, no edge 0, no bias 26, edge off the line 2, edge off the chain 0, held 56), "
+                 f"0 dropped, 249 empty; 2046 off the grid; last whole second timed | nav queued/filtered/dropped: GPS "
+                 f"40/0/0, GAL 30/2/0, BDS 20/1/0; too long 0, short buffer 0 (queue 64 in PSRAM) | GPSIon 0 (0 "
+                 f"refused) | clock jumps 0, restarts 1 (clock lost 0; jumps placed past 256 ms 0), PVTs not carried 0")
+        L.append(f"I ({ms(30.0)}) GNSS: mosaic PPS tag check: 53 whole seconds judged, |residual| max 39 us, 0 over 200 "
+                 f"us, last -8 us | 20 before the line had the crystal's drift (max 441 us, not judged) | 0 edges "
+                 f"stamped late (the interrupt held off), up to 0 us past due: judged where due | 7 held back "
+                 f"(checked, not judged: max 6855 us, last -12 us)")
+    else:
+        L.append(f"I ({ms(30.0)}) GNSS: mosaic raw: epochs on the 100 ms grid: 1271 handed over (504 untimed, 26 "
+                 f"without a PVT bias), 0 dropped, 249 empty; 2046 off the grid; tagged on the PPS line")
+        L.append(f"I ({ms(30.0)}) GNSS: mosaic PPS tag check: 53 whole seconds judged, |residual| max 39 us, 0 over 200 "
+                 f"us, last -8 us | 20 before the line had the crystal's drift (max 441 us, not judged) | 0 edges "
+                 f"stamped late (the interrupt held off), up to 0 us past due: judged where due")
     L.append(f"I ({ms(30.0)}) GNSS: mosaic PPS line: MCU crystal +16.28 ppm against GPS, rms 0.002 ms; receiver delay "
              f"to the block's last byte: MeasEpoch mean 18.3 ms (max 32.8, n 600), PVTGeodetic mean 20.8 ms (max "
              f"34.4, n 600)")
@@ -307,10 +320,12 @@ class ScoreV9RunRulesTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
-    def checked(self, residual, moved, judged, over):
+    def checked(self, residual, moved, judged, over, held=None):
         what = f"MOVED onto the edge by {residual:+d}" if moved else f"kept, the edge within {residual:+d}"
+        tail = "" if held is None else f"; {held} held back (untimed, not judged)"
         return (-4.9, f"SIM: RIG REPLAY clock: the freeze checked against the 1PPS edge of the second at t -5 s: "
-                      f"residual {residual:+d} us, {what} us; PPS tag check so far {judged} judged, {over} over 200 us")
+                      f"residual {residual:+d} us, {what} us; PPS tag check so far {judged} judged, {over} over 200 "
+                      f"us{tail}")
 
     def test_a_six_ms_vote_between_two_samples_fails_g5_from_the_edges(self):
         text = console(self.cols, self.t_apo, self.t_land, early_in_samples=False, extra=vote_edges(self.t_apo))
@@ -363,6 +378,41 @@ class ScoreV9RunRulesTest(unittest.TestCase):
         r = score_run(self.d, "nocheck", text, self.files)
         self.assertTrue(r["clock"]["void"])
         self.assertTrue(any("no freeze-check line" in m for m in r["sky_time"]["marks"]))
+
+    def test_an_image_with_the_time_tag_fix_is_read_whole(self):
+        # the driver's lines in the time-tag fix's formats; a hold in flight (26 epochs untimed between the freeze
+        # and the landing) and the log-only vote guard latched: each a mark or an event, the run still counts
+        guard = (8.0, "FC: [RAWGNSS] raw vote guard latched at T+8.00 s: the filter's vertical velocity +30.0 m/s "
+                      "against the barometer's +10.0 m/s for 1 s -- log only: its votes are still cast "
+                      "(config::RAW_VOTE_GUARD_ACTS)")
+        text = console(self.cols, self.t_apo, self.t_land, pps=((-20.0, 0, 20), (5.0, 0, 30), (self.t_land + 5, 0, 70)),
+                       untimed=(504, 510, 530), raw_votes="cast (guard latched, log only)", time_tag=True,
+                       extra=[self.checked(-12, False, 18, 0, held=7), guard])
+        r = score_run(self.d, "timetag", text, self.files)
+        self.assertFalse(r["clock"]["void"])
+        fc = r["sky_time"]["pps_tag_check"]
+        self.assertEqual(fc["freeze_check"]["held"], 7)
+        self.assertFalse(fc["freeze_check"]["moved"])
+        self.assertEqual(fc["over_after_freeze"], 0)
+        self.assertEqual(fc["untimed_after_freeze"], 26)
+        self.assertTrue(any("26 epoch(s) went to the filter untimed" in m for m in r["sky_time"]["marks"]))
+        rx = r["receiver"]
+        self.assertEqual(rx["driver_epochs"]["untimed"], 504)
+        self.assertEqual(rx["driver_epochs"]["untimed_why"]["held"], 56)
+        self.assertEqual(rx["driver_epochs"]["untimed_why"]["edge_off_the_line"], 2)
+        self.assertEqual(rx["driver_epochs"]["no_pvt_bias"], 26)
+        self.assertEqual(rx["driver_epochs"]["dropped"], 0)
+        self.assertEqual(rx["driver_epochs"]["empty"], 249)
+        self.assertEqual(rx["pps_tag_check"]["held_back"], 7)
+        self.assertEqual(rx["pps_tag_check"]["held_back_max_us"], 6855)
+        self.assertEqual(rx["end"]["raw_votes"], "cast (guard latched, log only)")
+        self.assertTrue(any(e["what"] == "raw vote guard latched (log only)" and abs(e["t"] - 8.0) < 0.1
+                            for e in r["events"]))
+        # the lines before the fix still read as they did
+        r2 = score_run(self.d, "oldtag", console(self.cols, self.t_apo, self.t_land), self.files)
+        self.assertEqual(r2["receiver"]["driver_epochs"]["no_pvt_bias"], 26)
+        self.assertNotIn("untimed_why", r2["receiver"]["driver_epochs"])
+        self.assertNotIn("held_back", r2["receiver"]["pps_tag_check"])
 
     def test_a_transmitter_underrun_after_the_freeze_voids_the_run(self):
         text = console(self.cols, self.t_apo, self.t_land)

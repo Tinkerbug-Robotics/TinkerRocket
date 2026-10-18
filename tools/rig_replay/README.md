@@ -91,17 +91,26 @@ The Goblin's V9 flies the raw-GNSS filter as its one navigation filter, fed by a
 mosaic-only image, `-DTR_GNSS_MOSAIC=1`). Its rig replay is the same idea as the Beetle's, with these differences:
 
 - **The replay's clock comes from the receiver's timed raw epochs**, ten a second (`ReplayClock::onEpoch`). The
-  mosaic's driver hands no timed fix. An epoch counts once the 1PPS line is valid, the receiver says FINETIME and an
-  edge has paired within 120 s. After a cold start that is about 70 s after the sky starts (10/17 pad check), so
+  mosaic's driver hands no timed fix. An epoch counts only when the driver hands it over timed: the 1PPS line valid,
+  the receiver FINETIME, an edge paired within 120 s, and (with the time-tag fix, `MosaicTimeTag.h`) a clock bias
+  carried to it and the tag confirmed by the 1PPS. An untimed or held epoch carries `mcu_us` and `tag_dtr_ms` 0 and
+  sets nothing. After a cold start the first timed epoch comes about 70 s after the sky starts (10/17 pad check), so
   around file second 70, t = -110 s. The clock must arm before T-5 s (file second 175), or the flight never starts.
   The clock takes each epoch's GPS instant (the receiver's time of week less the clock bias the driver's tag took
   off, `TimedRawEpoch::tag_dtr_ms`), so the replayed IMU sits on the sky's GPS time.
-- **The freeze is checked against the 1PPS edge.** The driver's tags come from its clock line, which follows a sky
-  that came late (a transmitter underrun) only after about a minute; the edges follow it at once. So the first 1PPS
-  check of a second from the freeze on (by T-2 s) confirms the freeze, and where the edge puts that second more than
-  200 us from the frozen clock, the clock moves onto the edge, on the pad (`ReplayClock::onTagCheck`). The console
-  says which: `RIG REPLAY clock: the freeze checked against the 1PPS edge ... kept` or `... MOVED`, with the
-  driver's check counts at that moment.
+- **The freeze is checked against the 1PPS edge.** Before the time-tag fix the driver's clock line followed a sky
+  that came late (a transmitter underrun) only after about a minute, while the edges follow it at once. With the fix
+  the line steps onto its edges and, after such a slip, the tag is held (the epochs untimed) until the 1PPS confirms
+  two seconds in a row: a slip shows as a few seconds of untimed epochs, not as wrong tags. The check stays as the
+  freeze's guard: the first 1PPS check of a second from the freeze on (by T-2 s) confirms the freeze, and where the
+  edge puts that second more than 200 us from the frozen clock, the clock moves onto the edge, on the pad
+  (`ReplayClock::onTagCheck`). It takes the driver's last residual with its own second (`PpsTagStats::last_s`), a
+  second handed over timed; a held second's check is the driver's alone. The console says which: `RIG REPLAY clock:
+  the freeze checked against the 1PPS edge ... kept` or `... MOVED`, with the driver's check counts at that moment
+  (and, with the fix, the seconds held back). A hold across T-5 s keeps the clock following the old sky until the
+  first timed epoch after the release, which freezes it on the new sky's time; after T-2 s that freeze is
+  unchecked, and `score_v9.py` marks it. Epochs the filter got untimed between the freeze and the landing are a mark
+  too: it flew those without GNSS.
 - **The receiver cold-starts at every boot** (`erst,Soft,PVTData+SatData` after its setup). This is on in every
   replay build of the mosaic image, through the bench switch `TR_BENCH_MOSAIC_COLD_START`. The receiver then sets
   itself up a second time, about 5 s after boot, and `run_v9.sh` transmits once it has.
