@@ -154,9 +154,10 @@ This is a statement about behavior, not bytes.
   - the V9 and V8 auto images by 1,968 B (flash code and constants, and 184 B of `.bss`);
   - the Beetle by 23,792 B: 21,872 B of flash code, 1,132 B of IRAM code (1,280 B of internal RAM with its
     alignment) and 208 B of `.bss`, so about 1.5 KB less internal RAM.
-  - The antenna offset adds, against the configuration without it (28373202): the Beetle 4,924 B of flash code,
-    184 B of flash data and 212 B of IRAM code; the V9 auto image 2,370 B of flash and 8 B of `.bss`; this image
-    10,558 B of flash and 48 B of internal RAM. The filter object grows by about 10.5 KB, in PSRAM.
+  - The antenna offset adds, against the configuration without it (main at 9f813b15, the same real guidance): the
+    Beetle 5,736 B of flash code, 184 B of flash data and 212 B of IRAM code; the V9 auto image 3,772 B of flash and
+    16 B of `.bss`; this image 13,500 B of flash and 96 B of internal RAM. The filter object grows by about 10.5 KB,
+    in PSRAM, and the lever's stack frames by under 0.1 KB on every board.
 - **The Beetle's filter is bit-identical to main's:** `tools/raw_replay/bitident.sh` reports 450 of 450 runs
   IDENTICAL. `tools/m1_identity.sh` reports its `main.cpp` and sensor collectors preprocess IDENTICAL. Neither
   covers GnssTimeSync; the host tests cover its default path.
