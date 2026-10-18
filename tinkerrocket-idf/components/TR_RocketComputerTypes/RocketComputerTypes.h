@@ -1701,6 +1701,7 @@ static constexpr uint8_t PCX_COV    = 3;  // PadContextCov, in parts
 static constexpr uint8_t PCX_SURVEY = 4;  // PadContextSurvey, in parts
 static constexpr uint8_t PCX_EPH    = 5;  // a broadcast ephemeris: a whole RTCM3 frame, one per record
 static constexpr uint8_t PCX_ACC    = 6;  // PadContextAcc, from the flight loop beside PCX_CAL
+static constexpr uint8_t PCX_HG     = 7;  // PadContextHg, from the flight loop beside PCX_CAL
 
 // PCX_CAL: what the flight flew with that the logged counts do not carry.
 typedef struct __attribute__((packed))
@@ -1726,6 +1727,17 @@ typedef struct __attribute__((packed))
     float   offset_mps2[3];      // board frame, m/s^2
 } PadContextAcc;
 static_assert(sizeof(PadContextAcc) == 13, "PadContextAcc must be 13 bytes");
+
+// PCX_HG: the high-g accelerometer's alignment to the low-g (HighGCalApplyData's
+// matrix), which the converter applies after the log, before the high-g bias
+// (PCX_CAL's hg_bias_mps2) and the low-g offset (PCX_ACC) come off. A flight
+// without the record flew without one (identity), as before it existed.
+typedef struct __attribute__((packed))
+{
+    uint8_t applied;             // 1 if the converter applied it this flight (stored, and not in sim)
+    float   matrix[9];           // row-major, board frame: high = M * h - bias - offset
+} PadContextHg;
+static_assert(sizeof(PadContextHg) == 37, "PadContextHg must be 37 bytes");
 
 // PCX_NAV: the raw-GNSS filter at the IMU tick the flight computer called
 // INFLIGHT, and what it had taken from the pad.
@@ -1943,6 +1955,80 @@ typedef struct __attribute__((packed))
     uint16_t face_n;             // its samples
 } AccelCalStatusData;
 static_assert(sizeof(AccelCalStatusData) == 40, "AccelCalStatusData must be 40 bytes");
+
+// ── The high-g accelerometer's six-face calibration (aligned to the low-g) ──
+// One model for the high-g, board frame (after the ISM6's Z rotation, before
+// the board->rocket mounting), m/s^2:
+//
+//     high = M * h - b - o
+//
+//   h  the high-g reading (counts at the configured full scale);
+//   M  the alignment: a 3x3 (scale and cross-axis) that makes the high-g read
+//      as the low-g does. The six faces fit it, by least squares, to the RAW
+//      low-g reading l on every face: l = M * h - b. The low-g is the
+//      reference (on the bench it is the accurate channel), so the high-g
+//      takes over from it at its rail with no step. Identity until a six-face
+//      fit is saved: then the converter runs exactly the arithmetic it ran
+//      before this existed.
+//   b  the high-g's offset against the raw low-g (NVS "cal" hgbx/hgby/hgbz,
+//      SensorCalApplyData's hg_x/y/z): the six faces' fit, or the pad
+//      calibration, which measures it again on the day (the high-g offset
+//      drifts by tens of mg between days: about 2 mg/degC) as
+//      mean(M * h) - mean(l) over its still window, keeping M. Today's
+//      high-g bias is this b with M = identity, so it carries over as it is.
+//   o  the low-g's six-face offset (ACC_CAL_*), off both channels.
+//
+// M lives in NVS "hg_cal" (keys ver = HG_CAL_NVS_SCHEMA_VERSION, done, m: 9
+// floats row-major), b in "cal" beside the gyro (plus hgsrc: HG_BIAS_SRC_*).
+// "acc_cal" is untouched, so an older image still reads the low-g offset (it
+// ignores "hg_cal" and flies the high-g with M = identity). Off in sim, like
+// the low-g offset. The apps and tools/accel_cal_six_face.py solve it; the
+// flight computer checks it against the limits below and stores it.
+static constexpr uint8_t HG_CAL_NVS_SCHEMA_VERSION = 1;
+static constexpr float   HG_CAL_SCALE_MIN      = 0.97f;  // the alignment's diagonal: each channel's sensitivity
+static constexpr float   HG_CAL_SCALE_MAX      = 1.03f;  //   is trimmed to +-1 %, so the ratio is within 2 %
+static constexpr float   HG_CAL_CROSS_MAX      = 0.03f;  // |off-diagonal| (1.7 deg of misalignment)
+static constexpr float   HG_CAL_BIAS_MAX_MPS2  = 11.0f;  // |b|: the high-g's zero-g is within +-1000 mg, the low-g's +-65 mg
+static constexpr uint8_t HG_CAL_OP_CLEAR       = 0;      // M back to identity; b is kept (a pad calibration re-measures it)
+static constexpr uint8_t HG_CAL_OP_STORE       = 1;      // store M and b, and apply them
+static constexpr uint8_t HG_BIAS_SRC_NONE      = 0;      // none stored, or written before hgsrc existed
+static constexpr uint8_t HG_BIAS_SRC_PAD       = 1;      // the pad calibration, or a saved one the app pushed back (cmd 62)
+static constexpr uint8_t HG_BIAS_SRC_SIX_FACE  = 2;      // the six-face fit (HG_CAL_APPLY)
+static constexpr uint8_t HGF_STORED            = 1u << 0; // an alignment is in NVS
+static constexpr uint8_t HGF_APPLIED           = 1u << 1; //   and the converter applies it (not in sim)
+static constexpr uint8_t HGF_BIAS              = 1u << 2; // a high-g bias is in NVS ("cal")
+
+// HG_CAL_APPLY_MSG payload (BLE 80): the six faces' alignment and offset.
+typedef struct __attribute__((packed))
+{
+    uint8_t op;                  // HG_CAL_OP_*
+    float   matrix[9];           // M, row-major (ignored by a clear)
+    float   bias_mps2[3];        // b, board frame (ignored by a clear)
+} HighGCalApplyData;
+static_assert(sizeof(HighGCalApplyData) == 49, "HighGCalApplyData must be 49 bytes");
+
+// What a flight computer that knows the high-g sends after AccelCalStatusData
+// in the same ACC_CAL_STATUS_MSG (AccelCalStatusFrame): the face window's
+// high-g reading and the stored alignment. A frame of only the first 40 bytes
+// is an older flight computer's -- or an older out computer's, which relays
+// sizeof(AccelCalStatusData) of whatever comes -- and carries no high-g.
+typedef struct __attribute__((packed))
+{
+    float    face_hg_mean_mps2[3];  // the last face window's mean high-g reading, board frame, before M, b and o
+    float    face_hg_sd_mps2[3];    // each axis's sample SD over it
+    uint8_t  hg_flags;              // HGF_*
+    uint8_t  hg_bias_src;           // HG_BIAS_SRC_*: what wrote the bias in use
+    float    hg_matrix[9];          // the stored M, row-major (identity when none)
+    float    hg_bias_mps2[3];       // the bias in use, b ("cal"; 0 when none)
+} AccelCalHighGStatus;
+static_assert(sizeof(AccelCalHighGStatus) == 74, "AccelCalHighGStatus must be 74 bytes");
+
+typedef struct __attribute__((packed))
+{
+    AccelCalStatusData  lg;
+    AccelCalHighGStatus hg;
+} AccelCalStatusFrame;
+static_assert(sizeof(AccelCalStatusFrame) == 114, "AccelCalStatusFrame must be 114 bytes");
 
 // ── Pad calibration (#1600 phase 5) ──────────────────────────────────────────
 // OC→FC, after PAD_CAL_PENDING: the GPS broadcast (Klobuchar) ionosphere the
@@ -3091,6 +3177,10 @@ static constexpr uint8_t ACC_CAL_APPLY_MSG     = 0x81;  // 12-byte AccelCalApply
 static constexpr uint8_t ACC_CAL_READ          = 0x82;  // OC→FC: publish the stored offset as a status frame
 static constexpr uint8_t ACC_CAL_STATUS_MSG    = 0x83;  // FC→OC over I2S: AccelCalStatusData
 static constexpr uint8_t ACC_FACE_PENDING      = 0x84;  // OC→FC: average the low-g over one face window
+// The high-g's alignment to the low-g (HighGCalApplyData; BLE 80). Answered,
+// like 76, with ACC_CAL_STATUS_MSG, which then carries the high-g.
+static constexpr uint8_t HG_CAL_APPLY_PENDING  = 0x85;  // OC→FC: payload follows as HG_CAL_APPLY_MSG
+static constexpr uint8_t HG_CAL_APPLY_MSG      = 0x86;  // 49-byte HighGCalApplyData payload
 
 // FC→OC over I2S, emitted once at the PRELAUNCH→INFLIGHT transition. A
 // snapshot of the active roll-control / IMU settings so the per-flight .bin
@@ -4587,12 +4677,15 @@ static_assert(sizeof(PadContextHeader) + sizeof(PadContextNav) <= MAX_PAYLOAD &&
               sizeof(PadContextHeader) + sizeof(PadContextCal) <= MAX_PAYLOAD &&
               sizeof(PadContextHeader) + padContextCovWireSize(PCX_COV_PER_PART) <= MAX_PAYLOAD &&
               sizeof(PadContextHeader) + padContextSurveyWireSize(PCX_SURVEY_PER_PART) <= MAX_PAYLOAD &&
-              sizeof(PadContextHeader) + PCX_EPH_MAX_FRAME <= MAX_PAYLOAD,
+              sizeof(PadContextHeader) + PCX_EPH_MAX_FRAME <= MAX_PAYLOAD &&
+              sizeof(PadContextHeader) + sizeof(PadContextHg) <= MAX_PAYLOAD,
               "every PAD_CONTEXT_MSG record must fit one I2S frame payload");
 static_assert(sizeof(HeadingFitData) <= MAX_PAYLOAD,
               "HeadingFitData must fit one I2S frame payload");
 static_assert(sizeof(PadCalStatusData) <= MAX_PAYLOAD,
               "PadCalStatusData must fit one I2S frame payload");
+static_assert(sizeof(AccelCalStatusFrame) <= MAX_PAYLOAD,
+              "AccelCalStatusFrame must fit one I2S frame payload");
 static_assert(sizeof(GnssCheckData) <= MAX_PAYLOAD,
               "GnssCheckData must fit one I2S frame payload");
 

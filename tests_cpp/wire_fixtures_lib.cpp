@@ -781,6 +781,39 @@ void buildFileops(Builder& b) {
               .f("face_sd_y", ac.face_sd_mps2[1]).f("face_sd_z", ac.face_sd_mps2[2]).u("face_n", ac.face_n)
               .done(),
           "AccelCalStatusData behind 0xD1 (#1629); frame = 41 B");
+
+    // 0xD1 from a flight computer that sends the high-g (and an out computer
+    // that relays all of it): the low-g's 40 bytes above, then
+    // AccelCalHighGStatus -- a stored alignment from the six faces.
+    AccelCalStatusFrame acf{};
+    acf.lg = ac;
+    acf.hg.face_hg_mean_mps2[0] = 0.9012f;
+    acf.hg.face_hg_mean_mps2[1] = -1.3577f;
+    acf.hg.face_hg_mean_mps2[2] = 10.4419f;
+    acf.hg.face_hg_sd_mps2[0] = 0.5618f;
+    acf.hg.face_hg_sd_mps2[1] = 0.5613f;
+    acf.hg.face_hg_sd_mps2[2] = 0.5252f;
+    acf.hg.hg_flags = HGF_STORED | HGF_APPLIED | HGF_BIAS;
+    acf.hg.hg_bias_src = HG_BIAS_SRC_SIX_FACE;
+    const float hgm[9] = {1.0081f, 0.0042f, -0.0031f, -0.0027f, 0.9934f, 0.0056f, 0.0018f, -0.0049f, 1.0122f};
+    memcpy(acf.hg.hg_matrix, hgm, sizeof(hgm));
+    acf.hg.hg_bias_mps2[0] = -0.6512f;
+    acf.hg.hg_bias_mps2[1] = 1.48f;
+    acf.hg.hg_bias_mps2[2] = -0.3127f;
+    std::vector<uint8_t> acfF{0xD1};
+    append(acfF, bytesOf(acf));
+    b.add("fileops", "accelcal_0xD1_114.bin", acfF,
+          Json().u("flags", ac.flags).u("face_state", ac.face_state).u("face_n", ac.face_n)
+              .f("hg_face_mean_x", acf.hg.face_hg_mean_mps2[0]).f("hg_face_mean_y", acf.hg.face_hg_mean_mps2[1])
+              .f("hg_face_mean_z", acf.hg.face_hg_mean_mps2[2]).f("hg_face_sd_x", acf.hg.face_hg_sd_mps2[0])
+              .f("hg_face_sd_y", acf.hg.face_hg_sd_mps2[1]).f("hg_face_sd_z", acf.hg.face_hg_sd_mps2[2])
+              .u("hg_flags", acf.hg.hg_flags).u("hg_bias_src", acf.hg.hg_bias_src)
+              .f("m00", hgm[0]).f("m01", hgm[1]).f("m02", hgm[2]).f("m10", hgm[3]).f("m11", hgm[4])
+              .f("m12", hgm[5]).f("m20", hgm[6]).f("m21", hgm[7]).f("m22", hgm[8])
+              .f("hg_bias_x", acf.hg.hg_bias_mps2[0]).f("hg_bias_y", acf.hg.hg_bias_mps2[1])
+              .f("hg_bias_z", acf.hg.hg_bias_mps2[2])
+              .done(),
+          "AccelCalStatusFrame behind 0xD1: AccelCalStatusData then AccelCalHighGStatus; frame = 115 B");
 }
 
 // App→device command payloads: [cmd u8][payload], byte-exact.  Struct-backed
@@ -978,6 +1011,23 @@ void buildCommands(Builder& b) {
         b.add("commands", "cmd76_accelcal_12.bin", cmd(76, bytesOf(a)),
               Json().u("cmd", 76).f("offset_x", 0.0412f).f("offset_y", -0.0273f).f("offset_z", 0.0156f).done(),
               "AccelCalApplyData");
+    }
+
+    {
+        // the high-g's six-face alignment to the low-g (BLE 80)
+        HighGCalApplyData h{};
+        h.op = HG_CAL_OP_STORE;
+        const float m[9] = {1.0081f, 0.0042f, -0.0031f, -0.0027f, 0.9934f, 0.0056f, 0.0018f, -0.0049f, 1.0122f};
+        memcpy(h.matrix, m, sizeof(m));
+        h.bias_mps2[0] = -0.6512f;
+        h.bias_mps2[1] = 1.48f;
+        h.bias_mps2[2] = -0.3127f;
+        b.add("commands", "cmd80_hgcal_49.bin", cmd(80, bytesOf(h)),
+              Json().u("cmd", 80).u("op", 1)
+                  .f("m00", m[0]).f("m01", m[1]).f("m02", m[2]).f("m10", m[3]).f("m11", m[4])
+                  .f("m12", m[5]).f("m20", m[6]).f("m21", m[7]).f("m22", m[8])
+                  .f("bias_x", -0.6512f).f("bias_y", 1.48f).f("bias_z", -0.3127f).done(),
+              "HighGCalApplyData; op 1 store (0 clears the matrix and keeps the bias)");
     }
 
     b.add("commands", "cmd64_imuorient_auto.bin", cmd(64, bytesOf(ImuOrientConfigData{IMU_ORIENT_AUTO})),

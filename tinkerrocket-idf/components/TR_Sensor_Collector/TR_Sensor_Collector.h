@@ -313,7 +313,10 @@ public:
     //   cancelCalibration()     drop the outstanding window — its answer is
     //                           discarded when it lands.  Nothing changes.
     //   calibrationInProgress() a window is outstanding.
-    bool          startCalibration(float rotation_z_deg = 0.0f);
+    // hg_alignment: the high-g's six-face alignment to the low-g in use (9
+    // floats, row-major; HG_CAL_*), copied here, or nullptr for none.  With
+    // one, the high-g bias is measured after it (sensor_cal_math.h).
+    bool          startCalibration(float rotation_z_deg = 0.0f, const float* hg_alignment = nullptr);
     SensorCalPoll pollCalibration();
     void          cancelCalibration();
     bool          calibrationInProgress() const { return cal_session_.waiting(); }
@@ -403,6 +406,8 @@ private:
     SensorCalWindow   cal_window_;            // poll-task private
     SensorCalSession  cal_session_;           // flight-task private
     float             cal_rotation_z_deg_ = 0.0f;  // flight-task private, captured by startCalibration()
+    float             cal_hg_m_[9] = {};           //   and the high-g alignment with it,
+    bool              cal_hg_m_on_ = false;        //   when there is one
     uint32_t          cal_started_ms_ = 0;         // flight-task private: bound on a poll task that never answers
     SensorCalSums     cal_sums_;              // written by the poll task while its window is open; read by the flight task only for the seq it accepted
     SemaphoreHandle_t cal_done_sem_ = nullptr;   // created in begin(); given once per window

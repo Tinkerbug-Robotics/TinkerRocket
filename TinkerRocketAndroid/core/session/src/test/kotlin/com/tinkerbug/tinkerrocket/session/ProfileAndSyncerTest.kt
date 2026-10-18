@@ -778,6 +778,34 @@ class ActiveRocketSyncerTest {
         assertIs<ActiveRocketSyncer.CalAdvisory.None>(r.syncer.sensorCalAdvisory.value)
     }
 
+    /**
+     * #1629: a confirmed high-g save on the six-face screen hands its bias to
+     * the active profile's sensor cal when that cal is this board's — else the
+     * connect-time push would put the older bias back under the new alignment
+     * — and to nothing else.
+     */
+    @Test
+    fun aHighGSave_givesThisBoardsSensorCalTheNewBias_andNoOtherBoards() = runTest {
+        val cal = SensorCalData(
+            gyroX = 3, gyroY = -2, gyroZ = 1, hgX = -0.65f, hgY = -0.57f, hgZ = 0.91f,
+            calibratedOnUnitID = "boardA", calibratedAtMs = 5,
+        )
+        val r = rig(mutate = { it.copy(lastUsedUnitID = "boardA", sensorCal = cal) })
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        r.syncer.adoptHighGBias("boardA", listOf(-0.6512f, 1.48f, -0.3127f))
+        runCurrent()
+        val got = assertNotNull(r.store.activeProfile?.sensorCal)
+        assertEquals(listOf(-0.6512f, 1.48f, -0.3127f), listOf(got.hgX, got.hgY, got.hgZ))
+        assertEquals(cal.copy(hgX = got.hgX, hgY = got.hgY, hgZ = got.hgZ), got, "the gyro and the tag stay")
+
+        // Another board's save leaves this board's cal alone.
+        r.syncer.adoptHighGBias("boardB", listOf(0f, 0f, 0f))
+        runCurrent()
+        assertEquals(got, r.store.activeProfile?.sensorCal)
+    }
+
     @Test
     fun sensorCalImport_refusesAnInvalidCalAndAnEmptyBoardId() = runTest {
         // An invalid cal is not a cal; and a cal tagged "" would take

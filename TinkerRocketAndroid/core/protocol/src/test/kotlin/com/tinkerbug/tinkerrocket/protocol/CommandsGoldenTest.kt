@@ -81,6 +81,7 @@ class CommandsGoldenTest {
         "cmd75_padcal_10.bin",
         "cmd76_accelcal_12.bin",
         "cmd79_gnsslog_1.bin",
+        "cmd80_hgcal_49.bin",
     )
 
     @Test
@@ -430,7 +431,36 @@ class CommandsGoldenTest {
         assertMatchesFixture("cmd76_accelcal_12.bin", built)
     }
 
+    @Test
+    fun `cmd80 high-g cal apply`() {
+        val s = side("cmd80_hgcal_49.bin")
+        val m = listOf("m00", "m01", "m02", "m10", "m11", "m12", "m20", "m21", "m22").map { s.f(it) }
+        val built = Commands.highGCalApply(
+            op = s.i("op"),
+            matrix = m,
+            bias = listOf(s.f("bias_x"), s.f("bias_y"), s.f("bias_z")),
+        )
+        assertEquals(1 + HighGCalApply.PAYLOAD_LENGTH, built.size, "HighGCalApplyData frame must be 1+49 bytes")
+        assertEquals(HighGCalApply.OP_STORE, s.i("op"))
+        assertMatchesFixture("cmd80_hgcal_49.bin", built)
+    }
+
     // ----------------------------------- hand pins (no fixture / iOS XCTest)
+
+    @Test
+    fun `cmd80 clear is op 0 with the identity and zeros`() {
+        // The flight computer ignores the matrix and bias of a clear; the app
+        // sends the identity and zeros, as iOS and the script do.
+        val clear = Commands.highGCalApply(HighGCalApply.OP_CLEAR)
+        assertEquals(50, clear.size)
+        assertEquals(80, clear[0].toInt())
+        assertEquals(0, clear[1].toInt())
+        val b = LeBuffer(clear, position = 2)
+        assertEquals(listOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f), List(9) { b.f32() })
+        assertEquals(listOf(0f, 0f, 0f), List(3) { b.f32() })
+        assertFailsWith<IllegalArgumentException> { Commands.highGCalApply(1, matrix = listOf(1f, 0f, 0f)) }
+        assertFailsWith<IllegalArgumentException> { Commands.highGCalApply(1, bias = listOf(0f)) }
+    }
 
     @Test
     fun `cmd76 from the solved offset as the screen sends it`() {

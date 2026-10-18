@@ -10,6 +10,7 @@
 // Libraries
 #include <TR_Sensor_Collector.h>
 #include <imu_drain_window.h>     // #1191: mean + worst-sample stats over each IMU drain pass
+#include <hg_cal_math.h>          // the high-g's six-face alignment to the low-g (HG_CAL_*)
 #include <TR_Sensor_Collector_Sim.h>
 #include <TR_I2C_Interface.h>
 #include <TR_I2S_Stream.h>
@@ -2795,6 +2796,23 @@ static void sendPadContextCal()
     ra.a.offset_mps2[2] = sensor_converter.lowGOffsetZ();
     static_assert(sizeof(ra) == sizeof(PadContextHeader) + sizeof(PadContextAcc), "PCX_ACC record is packed");
     (void)enqueueI2STx(PAD_CONTEXT_MSG, reinterpret_cast<const uint8_t*>(&ra), sizeof(ra));
+    // PCX_HG: the high-g's six-face alignment to the low-g, which the
+    // converter applies after the log, before the bias above comes off
+    struct __attribute__((packed))
+    {
+        PadContextHeader h;
+        PadContextHg     g;
+    } rg = {};
+    rg.h.time_us = r.h.time_us;
+    rg.h.kind    = PCX_HG;
+    rg.h.part    = 0;
+    rg.h.parts   = 1;
+    rg.g.applied = sensor_converter.highGAlignmentApplied() ? 1U : 0U;
+    float rg_m[9];   // packed members are not float-aligned: through a copy
+    sensor_converter.highGAlignment(rg_m);
+    memcpy(rg.g.matrix, rg_m, sizeof(rg_m));
+    static_assert(sizeof(rg) == sizeof(PadContextHeader) + sizeof(PadContextHg), "PCX_HG record is packed");
+    (void)enqueueI2STx(PAD_CONTEXT_MSG, reinterpret_cast<const uint8_t*>(&rg), sizeof(rg));
 }
 
 // ==========================================================================
@@ -4037,28 +4055,46 @@ static void publishSensorCalFromNVS()
 // asks for a face window on each (BLE 78), solves the offset from them and
 // writes it (BLE 76); BLE 77 reads it back.  A face window averages every
 // low-g sample the drain hands over for ACC_FACE_WINDOW_US, in the board frame
-// with no offset (SensorConverter::lowGBoardRaw).
+// with no offset (SensorConverter::lowGBoardRaw), and the high-g reading of
+// the same samples (highGBoardRaw), from which the apps fit the high-g's
+// alignment to the low-g (HG_CAL_*, BLE 80).
 struct AccFaceWindow
 {
     bool     active = false;
     int64_t  t0_us = 0;
     double   sum[3] = {};
     double   sumsq[3] = {};
+    double   hsum[3] = {};
+    double   hsumsq[3] = {};
     uint32_t n = 0;
     uint8_t  state = ACC_FACE_IDLE;
     float    mean[3] = {};
     float    sd[3] = {};
+    float    hmean[3] = {};
+    float    hsd[3] = {};
 };
 static AccFaceWindow acc_face;
+
+// The high-g's six-face alignment is stored ("hg_cal", HG_CAL_NVS_SCHEMA_VERSION).
+static bool hgCalStored(Preferences& p, float m[9])
+{
+    if (!(p.isKey("ver") && p.getUChar("ver", 0) == HG_CAL_NVS_SCHEMA_VERSION && p.getBool("done", false)))
+        return false;
+    return p.getBytes("m", m, 9 * sizeof(float)) == 9 * sizeof(float);
+}
 
 static bool accCalStored(Preferences& p)
 {
     return p.isKey("ver") && p.getUChar("ver", 0) == ACC_CAL_NVS_SCHEMA_VERSION && p.getBool("done", false);
 }
 
+// The low-g's status (AccelCalStatusData) and, after it, the high-g's
+// (AccelCalHighGStatus): an out computer that knows only the first relays
+// those 40 bytes, and the apps then know this link carries no high-g.
 static void publishAccelCalStatus()
 {
-    AccelCalStatusData s{};
+    AccelCalStatusFrame f{};
+    AccelCalStatusData& s = f.lg;
     Preferences p;
     p.begin("acc_cal", true);  // read-only (boot creates the namespace)
     const bool stored = accCalStored(p);
@@ -4077,19 +4113,46 @@ static void publishAccelCalStatus()
         s.face_sd_mps2[i] = acc_face.sd[i];
     }
     s.face_n = (uint16_t)(acc_face.n > 0xFFFFu ? 0xFFFFu : acc_face.n);
-    uint8_t buf[sizeof(AccelCalStatusData)];
-    memcpy(buf, &s, sizeof(buf));
+
+    AccelCalHighGStatus& h = f.hg;
+    for (int i = 0; i < 3; ++i)
+    {
+        h.face_hg_mean_mps2[i] = acc_face.hmean[i];
+        h.face_hg_sd_mps2[i] = acc_face.hsd[i];
+    }
+    float m[9];
+    p.begin("hg_cal", true);
+    const bool hg_stored = hgCalStored(p, m);
+    p.end();
+    float held[9];
+    sensor_converter.highGAlignment(held);   // what the converter holds: identity when none
+    memcpy(h.hg_matrix, held, sizeof(held));
+    p.begin("cal", true);
+    const bool has_bias = p.isKey("hgbx");
+    h.hg_bias_src = has_bias ? p.getUChar("hgsrc", HG_BIAS_SRC_NONE) : HG_BIAS_SRC_NONE;
+    p.end();
+    h.hg_bias_mps2[0] = sensor_converter.highGBiasX();
+    h.hg_bias_mps2[1] = sensor_converter.highGBiasY();
+    h.hg_bias_mps2[2] = sensor_converter.highGBiasZ();
+    h.hg_flags = (uint8_t)((hg_stored ? HGF_STORED : 0u) |
+                           (sensor_converter.highGAlignmentApplied() ? HGF_APPLIED : 0u) |
+                           (has_bias ? HGF_BIAS : 0u));
+    uint8_t buf[sizeof(AccelCalStatusFrame)];
+    memcpy(buf, &f, sizeof(buf));
     (void)enqueueI2STx(ACC_CAL_STATUS_MSG, buf, sizeof(buf));
 }
 
 static void accFaceAdd(const ISM6HG256Data& d)
 {
-    double v[3];
+    double v[3], h[3];
     sensor_converter.lowGBoardRaw(d, v);
+    sensor_converter.highGBoardRaw(d, h);
     for (int i = 0; i < 3; ++i)
     {
         acc_face.sum[i] += v[i];
         acc_face.sumsq[i] += v[i] * v[i];
+        acc_face.hsum[i] += h[i];
+        acc_face.hsumsq[i] += h[i] * h[i];
     }
     acc_face.n++;
 }
@@ -4111,6 +4174,10 @@ static void accFaceFinish()
         acc_face.sd[i] = (float)sd;
         m2 += mean * mean;
         if (sd > sd_max) sd_max = sd;
+        const double hmean = acc_face.hsum[i] / n;
+        const double hvar = acc_face.hsumsq[i] / n - hmean * hmean;
+        acc_face.hmean[i] = (float)hmean;
+        acc_face.hsd[i] = (float)(hvar > 0.0 ? sqrt(hvar) : 0.0);
     }
     const double g = sqrt(m2);
     const bool ok = acc_face.n >= 100 && sd_max <= (double)ACC_FACE_STILL_SD &&
@@ -4119,6 +4186,9 @@ static void accFaceFinish()
     ESP_LOGI(TAG, "[ACCCAL] face %s: mean (%.4f, %.4f, %.4f) m/s² |g| %.4f, SD max %.4f, %lu samples",
              ok ? "done" : "FAILED (moving, or not one g)", (double)acc_face.mean[0], (double)acc_face.mean[1],
              (double)acc_face.mean[2], g, sd_max, (unsigned long)acc_face.n);
+    ESP_LOGI(TAG, "[ACCCAL] face high-g: mean (%.4f, %.4f, %.4f) m/s², SD (%.4f, %.4f, %.4f)",
+             (double)acc_face.hmean[0], (double)acc_face.hmean[1], (double)acc_face.hmean[2],
+             (double)acc_face.hsd[0], (double)acc_face.hsd[1], (double)acc_face.hsd[2]);
     publishAccelCalStatus();
 }
 
@@ -4239,7 +4309,12 @@ static SensorCalStart startSensorCal()
         ESP_LOGW(TAG, "[CAL] Sensor calibration already running — request ignored");
         return SensorCalStart::Busy;
     }
-    if (!sensor_collector.startCalibration(config::ISM6HG256_ROT_Z_DEG))
+    // With a six-face alignment in use the window measures the high-g's bias
+    // after it (HG_CAL_*: high = M * h - b - o), and M stays.
+    float hg_m[9];
+    sensor_converter.highGAlignment(hg_m);
+    if (!sensor_collector.startCalibration(config::ISM6HG256_ROT_Z_DEG,
+                                           sensor_converter.highGAlignmentApplied() ? hg_m : nullptr))
     {
         // Not started: no IMU, poll task down, or a sim running — the
         // SENSORS/SIM line above says which.  Nothing changed; push the
@@ -6469,6 +6544,43 @@ static void setup_fc()
     else
     {
         ESP_LOGW(TAG, "NVS low-g offset: none -- the accelerometer is not hand-calibrated (#1629)");
+    }
+    prefs.end();
+
+    // The high-g's six-face alignment to the low-g (HG_CAL_*), board frame.
+    // Without one the high-g flies M = identity: the bias above alone, as
+    // before the alignment existed.
+    prefs.begin("hg_cal", false);  // read-write (creates the namespace on first boot)
+    {
+        float m[9];
+        if (hgCalStored(prefs, m))
+        {
+            HighGCalApplyData chk{};
+            chk.op = HG_CAL_OP_STORE;
+            memcpy(chk.matrix, m, sizeof(chk.matrix));
+            const char* why = hg_cal::refusal(chk);   // the bias is checked where it is stored
+            if (why == nullptr)
+            {
+                sensor_converter.setHighGAlignment(m);
+                ESP_LOGI(TAG, "NVS high-g alignment: diag %.5f, %.5f, %.5f; off-diag max %.5f", (double)m[0],
+                         (double)m[4], (double)m[8],
+                         (double)fmaxf(fmaxf(fmaxf(fabsf(m[1]), fabsf(m[2])), fmaxf(fabsf(m[3]), fabsf(m[5]))),
+                                       fmaxf(fabsf(m[6]), fabsf(m[7]))));
+            }
+            else
+            {
+                ESP_LOGW(TAG, "NVS high-g alignment ignored: %s (calibrate again)", why);
+            }
+        }
+        else if (prefs.isKey("ver") && prefs.getUChar("ver", 0) != HG_CAL_NVS_SCHEMA_VERSION)
+        {
+            ESP_LOGW(TAG, "NVS high-g alignment: schema %u, not %u -- ignored (calibrate again)",
+                     (unsigned)prefs.getUChar("ver", 0), (unsigned)HG_CAL_NVS_SCHEMA_VERSION);
+        }
+        else
+        {
+            ESP_LOGI(TAG, "NVS high-g alignment: none -- the high-g flies its bias alone");
+        }
     }
     prefs.end();
 
@@ -10289,9 +10401,17 @@ static void loop_fc()
                         out_status_query_data.hg_bias_z_cmss = encodeHgBiasCmss(ap.hg_z);
 
                         prefs.begin("cal", false);
+                        // The push of a profile's saved cal: a bias equal to the
+                        // one stored (the app saved the six faces' into the
+                        // profile) keeps what wrote it; any other is a pad
+                        // calibration's.
+                        const bool same_hg = prefs.isKey("hgbx") && prefs.getFloat("hgbx", 0.0f) == ap.hg_x &&
+                                             prefs.getFloat("hgby", 0.0f) == ap.hg_y &&
+                                             prefs.getFloat("hgbz", 0.0f) == ap.hg_z;
                         prefs.putFloat("hgbx", ap.hg_x);
                         prefs.putFloat("hgby", ap.hg_y);
                         prefs.putFloat("hgbz", ap.hg_z);
+                        if (!same_hg) prefs.putUChar("hgsrc", HG_BIAS_SRC_PAD);
                         prefs.putShort("gx", ap.gyro_x);
                         prefs.putShort("gy", ap.gyro_y);
                         prefs.putShort("gz", ap.gyro_z);
@@ -10395,6 +10515,76 @@ static void loop_fc()
                     ESP_LOGI(TAG, "[ACCCAL] face window open (%.1f s)", (double)ACC_FACE_WINDOW_US * 1e-6);
                 }
                 publishAccelCalStatus();
+            }
+            // The high-g's six-face alignment to the low-g (HG_CAL_*, BLE 80):
+            // store and apply the matrix and bias the apps fitted, or clear the
+            // matrix (the bias stays until a pad calibration measures it
+            // again).  Answered with the status frame, which carries both.
+            else if (out_pending_command == HG_CAL_APPLY_PENDING)
+            {
+                if (isCommandLockoutState(rocket_state) || post_flight_lockout)
+                {
+                    ESP_LOGW(TAG, "[HGCAL] apply refused: state=%u (INFLIGHT/MAG_CALIBRATION, or post-flight)",
+                             (unsigned)rocket_state);
+                }
+                else
+                {
+                    delay_ms(1);
+                    uint8_t cfg_payload[sizeof(HighGCalApplyData)];
+                    size_t  cfg_len = 0;
+                    if (readConfigFrame(HG_CAL_APPLY_MSG, sizeof(HighGCalApplyData),
+                                        cfg_payload, sizeof(cfg_payload), cfg_len)
+                        && cfg_len >= sizeof(HighGCalApplyData))
+                    {
+                        HighGCalApplyData ap;
+                        memcpy(&ap, cfg_payload, sizeof(ap));
+                        const char* why = hg_cal::refusal(ap);
+                        if (why != nullptr)
+                        {
+                            ESP_LOGW(TAG, "[HGCAL] apply refused: %s -- a bad solve?", why);
+                        }
+                        else if (ap.op == HG_CAL_OP_CLEAR)
+                        {
+                            prefs.begin("hg_cal", false);
+                            prefs.putUChar("ver", HG_CAL_NVS_SCHEMA_VERSION);
+                            prefs.putBool ("done", false);
+                            prefs.remove("m");
+                            prefs.end();
+                            sensor_converter.clearHighGAlignment();
+                            ESP_LOGI(TAG, "[HGCAL] alignment cleared (identity); the high-g bias is kept");
+                        }
+                        else
+                        {
+                            float m[9];   // the packed payload's floats are not aligned: through a copy
+                            memcpy(m, ap.matrix, sizeof(m));
+                            prefs.begin("hg_cal", false);
+                            prefs.putUChar("ver", HG_CAL_NVS_SCHEMA_VERSION);
+                            prefs.putBytes("m", m, sizeof(m));
+                            prefs.putBool ("done", !hg_cal::isIdentity(m));
+                            prefs.end();
+                            prefs.begin("cal", false);
+                            prefs.putFloat("hgbx", ap.bias_mps2[0]);
+                            prefs.putFloat("hgby", ap.bias_mps2[1]);
+                            prefs.putFloat("hgbz", ap.bias_mps2[2]);
+                            prefs.putUChar("hgsrc", HG_BIAS_SRC_SIX_FACE);
+                            prefs.end();
+                            sensor_converter.setHighGAlignment(m);
+                            sensor_converter.setHighGBias(ap.bias_mps2[0], ap.bias_mps2[1], ap.bias_mps2[2]);
+                            out_status_query_data.hg_bias_x_cmss = encodeHgBiasCmss(ap.bias_mps2[0]);
+                            out_status_query_data.hg_bias_y_cmss = encodeHgBiasCmss(ap.bias_mps2[1]);
+                            out_status_query_data.hg_bias_z_cmss = encodeHgBiasCmss(ap.bias_mps2[2]);
+                            ESP_LOGI(TAG, "[HGCAL] APPLY+saved: diag (%.5f, %.5f, %.5f), bias (%.4f, %.4f, %.4f) m/s²",
+                                     (double)ap.matrix[0], (double)ap.matrix[4], (double)ap.matrix[8],
+                                     (double)ap.bias_mps2[0], (double)ap.bias_mps2[1], (double)ap.bias_mps2[2]);
+                            publishSensorCalFromNVS();   // the bias is the profile's too (0xCB)
+                        }
+                        publishAccelCalStatus();
+                    }
+                    else
+                    {
+                        cfgRetryOnNextPoll("HGCAL APPLY");   // #1112
+                    }
+                }
             }
             else if (out_pending_command == OTA_BEGIN_PENDING)
             {
@@ -11457,6 +11647,7 @@ static void loop_fc()
                         prefs.putFloat("hgbx", sensor_collector.hg_bias_x);
                         prefs.putFloat("hgby", sensor_collector.hg_bias_y);
                         prefs.putFloat("hgbz", sensor_collector.hg_bias_z);
+                        prefs.putUChar("hgsrc", HG_BIAS_SRC_PAD);
                         prefs.putShort("gx", sensor_collector_hw.gyro_cal_x);
                         prefs.putShort("gy", sensor_collector_hw.gyro_cal_y);
                         prefs.putShort("gz", sensor_collector_hw.gyro_cal_z);

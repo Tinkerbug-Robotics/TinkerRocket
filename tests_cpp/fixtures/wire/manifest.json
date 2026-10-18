@@ -159,6 +159,10 @@
  "size": 41,
  "notes": "AccelCalStatusData behind 0xD1 (#1629); frame = 41 B"},
  {
+ "file": "fileops/accelcal_0xD1_114.bin",
+ "size": 115,
+ "notes": "AccelCalStatusFrame behind 0xD1: AccelCalStatusData then AccelCalHighGStatus; frame = 115 B"},
+ {
  "file": "commands/cmd05_simconfig_16.bin",
  "size": 17,
  "notes": "sim config; mass is GRAMS on the wire (OC /1000 -> SimConfigData.mass_kg)"},
@@ -242,6 +246,10 @@
  "file": "commands/cmd76_accelcal_12.bin",
  "size": 13,
  "notes": "AccelCalApplyData"},
+ {
+ "file": "commands/cmd80_hgcal_49.bin",
+ "size": 50,
+ "notes": "HighGCalApplyData; op 1 store (0 clears the matrix and keeps the bias)"},
  {
  "file": "commands/cmd64_imuorient_auto.bin",
  "size": 2,

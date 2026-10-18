@@ -1896,6 +1896,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(ACC_CAL_APPLY_PENDING),    MT(ACC_CAL_APPLY_MSG),
         MT(ACC_CAL_READ),             MT(ACC_CAL_STATUS_MSG),
         MT(ACC_FACE_PENDING),
+        // the high-g's six-face alignment to the low-g: the apply pair (BLE 80).
+        MT(HG_CAL_APPLY_PENDING),     MT(HG_CAL_APPLY_MSG),
         // GNSS log setting (BLE cmd 79): two codes from the top of the 0x80
         // block.
         MT(GNSS_LOG_CONFIG_PENDING),  MT(GNSS_LOG_CONFIG_MSG),
@@ -1952,7 +1954,9 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     // 116 = 114 + the GNSS log setting pair GNSS_LOG_CONFIG_PENDING /
     //       GNSS_LOG_CONFIG_MSG (0x8E/0x8F, BLE cmd 79), from the top of
     //       the 0x80 block.
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 116u)
+    // 118 = 116 + the high-g alignment's HG_CAL_APPLY_PENDING /
+    //       HG_CAL_APPLY_MSG (0x85/0x86, BLE cmd 80).
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 118u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }
@@ -2769,4 +2773,31 @@ TEST(RocketComputerTypes, AccelCalStructsKeepTheirWireSizes) {
     EXPECT_EQ(offsetof(AccelCalStatusData, face_n), 38u);
     EXPECT_NE(PCX_ACC, PCX_CAL);
     EXPECT_NE(PCX_ACC, PCX_EPH);
+}
+
+// The high-g's six-face alignment: its apply payload (BLE 80), the high-g
+// part an FC sends after AccelCalStatusData, and its pad-context record --
+// the apps and tools/accel_cal_six_face.py pack and unpack these byte for byte.
+TEST(RocketComputerTypes, HighGCalStructsKeepTheirWireSizes) {
+    EXPECT_EQ(sizeof(HighGCalApplyData), 49u);
+    EXPECT_EQ(offsetof(HighGCalApplyData, matrix), 1u);
+    EXPECT_EQ(offsetof(HighGCalApplyData, bias_mps2), 37u);
+    EXPECT_EQ(sizeof(AccelCalHighGStatus), 74u);
+    EXPECT_EQ(offsetof(AccelCalHighGStatus, face_hg_sd_mps2), 12u);
+    EXPECT_EQ(offsetof(AccelCalHighGStatus, hg_flags), 24u);
+    EXPECT_EQ(offsetof(AccelCalHighGStatus, hg_bias_src), 25u);
+    EXPECT_EQ(offsetof(AccelCalHighGStatus, hg_matrix), 26u);
+    EXPECT_EQ(offsetof(AccelCalHighGStatus, hg_bias_mps2), 62u);
+    // the low-g's 40 bytes first, unchanged, so an older app or out computer
+    // reads (or relays) them as before
+    EXPECT_EQ(sizeof(AccelCalStatusFrame), 114u);
+    EXPECT_EQ(offsetof(AccelCalStatusFrame, lg), 0u);
+    EXPECT_EQ(offsetof(AccelCalStatusFrame, hg), sizeof(AccelCalStatusData));
+    EXPECT_LE(sizeof(AccelCalStatusFrame), MAX_PAYLOAD);
+    EXPECT_EQ(sizeof(PadContextHg), 37u);
+    EXPECT_LE(sizeof(PadContextHeader) + sizeof(PadContextHg), MAX_PAYLOAD);
+    EXPECT_NE(PCX_HG, PCX_ACC);
+    EXPECT_NE(PCX_HG, PCX_EPH);
+    // the OC stages config payloads behind its status frame in one 96-byte read
+    EXPECT_LE(sizeof(HighGCalApplyData), 76u);
 }

@@ -9,6 +9,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -82,22 +83,35 @@ class FileOpsDispatchGoldenTest {
                     assertEquals(side["pos_sigma_cm"]!!.jsonPrimitive.int, m.status.posSigmaCm, rel)
                 }
                 f.name.startsWith("accelcal_") -> {
-                    // Every field: the six-face solve reads the means and the
-                    // save's read-back compares the offsets to 1e-5 m/s², so a
-                    // byte out of place anywhere in the 40 matters.
+                    // Every field the sidecar records: the six-face solve reads
+                    // the means and the save's read-back compares the offsets
+                    // to 1e-5 m/s², so a byte out of place anywhere matters.
+                    // The 114-byte frame's sidecar records the high-g part (and
+                    // the low-g's flags, state and n); the 40-byte one has none.
                     val s = assertIs<FileOpsMessage.AccelCal>(msg, rel).status
                     fun f(key: String): Float = side[key]!!.jsonPrimitive.float
+                    fun f3(prefix: String): List<Float> = listOf(f("${prefix}_x"), f("${prefix}_y"), f("${prefix}_z"))
                     val flags = side["flags"]!!.jsonPrimitive.int
                     assertEquals(flags, s.flags, rel)
                     assertEquals(flags and 0x01 != 0, s.stored, rel)
                     assertEquals(flags and 0x02 != 0, s.applied, rel)
                     assertEquals(side["face_state"]!!.jsonPrimitive.int, s.faceState.raw, rel)
-                    assertEquals(listOf(f("offset_x"), f("offset_y"), f("offset_z")), s.offset, rel)
-                    assertEquals(
-                        listOf(f("face_mean_x"), f("face_mean_y"), f("face_mean_z")), s.faceMean, rel,
-                    )
-                    assertEquals(listOf(f("face_sd_x"), f("face_sd_y"), f("face_sd_z")), s.faceSd, rel)
+                    if ("offset_x" in side) assertEquals(f3("offset"), s.offset, rel)
+                    if ("face_mean_x" in side) assertEquals(f3("face_mean"), s.faceMean, rel)
+                    if ("face_sd_x" in side) assertEquals(f3("face_sd"), s.faceSd, rel)
                     assertEquals(side["face_n"]!!.jsonPrimitive.int, s.faceN, rel)
+                    if ("hg_flags" in side) {
+                        val h = assertNotNull(s.highG, rel)
+                        assertEquals(1 + AccelCalStatus.HIGH_G_SIZE, WireFixtures.bytes(rel).size, rel)
+                        assertEquals(f3("hg_face_mean"), h.faceMean, rel)
+                        assertEquals(f3("hg_face_sd"), h.faceSd, rel)
+                        assertEquals(side["hg_flags"]!!.jsonPrimitive.int, h.flags, rel)
+                        assertEquals(side["hg_bias_src"]!!.jsonPrimitive.int, h.biasSource, rel)
+                        assertEquals(MATRIX_KEYS.map { f(it) }, h.matrix, rel)
+                        assertEquals(f3("hg_bias"), h.bias, rel)
+                    } else {
+                        assertNull(s.highG, "$rel: a 40-byte frame carries no high-g")
+                    }
                 }
                 else -> throw AssertionError("unmapped fixture $rel — extend this walk")
             }
@@ -199,6 +213,66 @@ class FileOpsDispatchGoldenTest {
         // sequencing ignores, rather than as a result.
         val odd = ByteArray(41).also { it[0] = 0xD1.toByte(); it[2] = 9 }
         assertEquals(AccelFaceState.IDLE, assertIs<FileOpsMessage.AccelCal>(FileOpsDispatch.parse(odd)).status.faceState)
+    }
+
+    @Test
+    fun `accel cal high-g golden decodes every high-g field`() {
+        // [0xD1][AccelCalStatusData 40 B][AccelCalHighGStatus 74 B], 115 on
+        // the wire: the golden the C++ side packs from the real structs.
+        val rel = "fileops/accelcal_0xD1_114.bin"
+        val frame = WireFixtures.bytes(rel)
+        val side = WireFixtures.sidecar(rel)
+        fun f(key: String): Float = side[key]!!.jsonPrimitive.float
+        assertEquals(115, frame.size)
+        val s = assertIs<FileOpsMessage.AccelCal>(FileOpsDispatch.parse(frame)).status
+        assertEquals(side["face_n"]!!.jsonPrimitive.int, s.faceN)
+        val h = assertNotNull(s.highG)
+        assertEquals(listOf(f("hg_face_mean_x"), f("hg_face_mean_y"), f("hg_face_mean_z")), h.faceMean)
+        assertEquals(listOf(f("hg_face_sd_x"), f("hg_face_sd_y"), f("hg_face_sd_z")), h.faceSd)
+        assertEquals(side["hg_flags"]!!.jsonPrimitive.int, h.flags)
+        assertEquals(side["hg_bias_src"]!!.jsonPrimitive.int, h.biasSource)
+        assertEquals(MATRIX_KEYS.map { f(it) }, h.matrix)
+        assertEquals(listOf(f("hg_bias_x"), f("hg_bias_y"), f("hg_bias_z")), h.bias)
+        assertTrue(h.stored)
+        assertTrue(h.applied)
+        assertTrue(h.hasBias)
+        assertEquals(HighGBiasSource.SIX_FACES, h.source)
+        // Its first 40 bytes are the 40-byte golden's, field for field.
+        val short = assertIs<FileOpsMessage.AccelCal>(
+            FileOpsDispatch.parse(WireFixtures.bytes("fileops/accelcal_0xD1_40.bin")),
+        ).status
+        assertEquals(short, s.copy(highG = null))
+    }
+
+    @Test
+    fun `a 40-byte accel cal frame carries no high-g, nor does one cut inside it`() {
+        // An older flight computer, or an older out computer relaying only the
+        // first 40 bytes: the low-g alone.
+        val short = assertIs<FileOpsMessage.AccelCal>(
+            FileOpsDispatch.parse(WireFixtures.bytes("fileops/accelcal_0xD1_40.bin")),
+        ).status
+        assertNull(short.highG)
+        // A frame cut anywhere inside the high-g part is still read as the low-g.
+        val long = WireFixtures.bytes("fileops/accelcal_0xD1_114.bin")
+        for (cut in listOf(41, 42, 100, 114)) {
+            val s = assertIs<FileOpsMessage.AccelCal>(FileOpsDispatch.parse(long.copyOf(cut)), "cut at $cut").status
+            assertNull(s.highG, "cut at $cut")
+            assertEquals(side114FaceN(), s.faceN)
+        }
+        assertNotNull(assertIs<FileOpsMessage.AccelCal>(FileOpsDispatch.parse(long)).status.highG)
+        // A bias source this app does not know is kept raw, with no name.
+        val odd = long.copyOf().also { it[1 + 65] = 9 }
+        val h = assertNotNull(assertIs<FileOpsMessage.AccelCal>(FileOpsDispatch.parse(odd)).status.highG)
+        assertEquals(9, h.biasSource)
+        assertNull(h.source)
+    }
+
+    private fun side114FaceN(): Int =
+        WireFixtures.sidecar("fileops/accelcal_0xD1_114.bin")["face_n"]!!.jsonPrimitive.int
+
+    private companion object {
+        /** M's entries in a sidecar, row-major. */
+        val MATRIX_KEYS = listOf("m00", "m01", "m02", "m10", "m11", "m12", "m20", "m21", "m22")
     }
 
     @Test

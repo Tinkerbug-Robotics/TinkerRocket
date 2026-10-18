@@ -353,6 +353,7 @@ public:
     // Send the low-g accelerometer hand calibration's status (#1629) on the
     // file-ops characteristic.  Format:
     //   [0][0xD1 marker] [1..40][AccelCalStatusData LE bytes]
+    //   [41..114][AccelCalHighGStatus LE bytes] from an FC that sends the high-g
     // The next discriminator after 0xD0.
     void sendAccelCalStatus(const uint8_t* status_bytes, size_t len);
 

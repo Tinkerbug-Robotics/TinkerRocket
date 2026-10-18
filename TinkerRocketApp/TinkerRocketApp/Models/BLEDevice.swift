@@ -1550,6 +1550,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// FAILED frame with no samples and no MEASURING before it.
     func sendAccelFaceMeasure() { sendRawCommand(78) }
 
+    /// The high-g's six-face alignment to the low-g: HighGCalApplyData, 49
+    /// bytes (op, M row-major, b). Answered with a 0xD1 frame that carries the
+    /// high-g as stored; an older flight or out computer does not answer.
+    func sendHighGCalApply(op: UInt8, matrix: [Float] = HighGCalApply.identity, bias: [Float] = [0, 0, 0]) {
+        sendRawCommand(80, payload: HighGCalApply.payload(op: op, matrix: matrix, bias: bias))
+    }
+
     func sendToggleLogging() {
         sendCommand(23)
     }
@@ -2834,7 +2841,8 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     }
 
     /// 0xD1 — accelerometer calibration status (#1629): [0xD1][40-byte
-    /// AccelCalStatusData]. A short frame is dropped whole.
+    /// AccelCalStatusData], and the 74-byte AccelCalHighGStatus after it from
+    /// a flight computer that sends the high-g. A short frame is dropped whole.
     private func parseAccelCalStatus(_ data: Data) {
         let bytes = [UInt8](data)
         guard bytes.count >= 1 + AccelCalStatus.payloadLength, bytes[0] == 0xD1,

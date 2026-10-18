@@ -77,7 +77,7 @@ public:
     // while a sim is active — synthetic data has no bias to measure.  The
     // values below are copied from the real collector on Committed and are
     // unchanged otherwise.
-    bool          startCalibration(float rotation_z_deg = 0.0f);
+    bool          startCalibration(float rotation_z_deg = 0.0f, const float* hg_alignment = nullptr);
     SensorCalPoll pollCalibration();
     void          cancelCalibration();
     bool          calibrationInProgress() const { return real_.calibrationInProgress(); }

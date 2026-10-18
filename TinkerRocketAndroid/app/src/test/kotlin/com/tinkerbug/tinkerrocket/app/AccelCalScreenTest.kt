@@ -16,12 +16,17 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.tinkerbug.tinkerrocket.protocol.AccelCalStatus
 import com.tinkerbug.tinkerrocket.protocol.AccelFaceState
 import com.tinkerbug.tinkerrocket.protocol.BleCommandId
+import com.tinkerbug.tinkerrocket.protocol.HighGCalApply
 import com.tinkerbug.tinkerrocket.protocol.LeBuffer
 import com.tinkerbug.tinkerrocket.session.AccelSixFace
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.Face
+import com.tinkerbug.tinkerrocket.session.ActiveProfileStorage
+import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer
 import com.tinkerbug.tinkerrocket.session.BleDeviceType
 import com.tinkerbug.tinkerrocket.session.BleTransport
 import com.tinkerbug.tinkerrocket.session.DeviceSession
+import com.tinkerbug.tinkerrocket.session.RocketProfileStore
+import com.tinkerbug.tinkerrocket.session.SensorCalData
 import com.tinkerbug.tinkerrocket.session.TrCharacteristic
 import com.tinkerbug.tinkerrocket.session.TransportEvent
 import java.util.concurrent.CopyOnWriteArrayList
@@ -43,7 +48,10 @@ import org.junit.runner.RunWith
  * The six-face accelerometer calibration screen (#1629), composed over a real
  * session on a link that answers commands 76/77/78 the way the flight computer
  * does: the opening read, six faces in any order, the solve, Save with its
- * read-back, a refusal, and Clear behind its confirmation.
+ * read-back, a refusal, and Clear behind its confirmation.  A flight computer
+ * that sends the high-g answers 80 too, with 114-byte frames: the High-g
+ * section, its save after the offset, the stored rows, and the clear that
+ * takes both.
  */
 @RunWith(AndroidJUnit4::class)
 class AccelCalScreenTest {
@@ -65,12 +73,31 @@ class AccelCalScreenTest {
         /** Answer 78 as in flight: FAILED, no samples, no window. */
         var refuse = false
 
+        /**
+         * A flight and out computer that send the high-g: 114-byte frames, and
+         * 80 answered.  False is an older one: 40 bytes, and 80 unanswered.
+         */
+        var sendsHighG = false
+
+        /** The high-g windows' mean readings, beside [faces]. */
+        val hgFaces = ArrayDeque<List<Float>>()
+
+        /** The high-g alignment M in NVS, row-major; null when none is stored. */
+        var hgMatrix: List<Float>? = null
+
+        /** The high-g bias in use, and what wrote it (HG_BIAS_SRC_*); null when none. */
+        var hgBias: List<Float>? = null
+        var hgSource = 0
+
         private var faceState = 0
         private var faceMean = listOf(0f, 0f, 0f)
+        private var hgMean = listOf(0f, 0f, 0f)
         private var faceN = 0
 
         val accelCommands: List<Int>
-            get() = commands.filter { it in BleCommandId.ACC_CAL_APPLY..BleCommandId.ACC_FACE_MEASURE }
+            get() = commands.filter {
+                it in BleCommandId.ACC_CAL_APPLY..BleCommandId.ACC_FACE_MEASURE || it == BleCommandId.HG_CAL_APPLY
+            }
 
         override suspend fun connect() = Unit
         override suspend fun requestMtu(target: Int): Int = 185
@@ -89,12 +116,26 @@ class AccelCalScreenTest {
                     window(AccelFaceState.FAILED.raw, listOf(0f, 0f, 0f), 0)
                 } else {
                     window(AccelFaceState.MEASURING.raw, listOf(0f, 0f, 0f), 0)
-                    window(AccelFaceState.DONE.raw, faces.removeFirst(), 2880)
+                    window(AccelFaceState.DONE.raw, faces.removeFirst(), 2880, hgFaces.removeFirstOrNull())
                 }
                 BleCommandId.ACC_CAL_APPLY -> {
                     val b = LeBuffer(bytes, position = 1)
                     val o = listOf(b.f32(), b.f32(), b.f32())
                     stored = if (o.all { it == 0f }) null else o
+                    report()
+                }
+                BleCommandId.HG_CAL_APPLY -> if (sendsHighG) {
+                    val b = LeBuffer(bytes, position = 1)
+                    val op = b.u8()
+                    val m = List(9) { b.f32() }
+                    val bias = List(3) { b.f32() }
+                    if (op == HighGCalApply.OP_STORE) {
+                        hgMatrix = m
+                        hgBias = bias
+                        hgSource = 2
+                    } else {
+                        hgMatrix = null   // the flight computer keeps the bias
+                    }
                     report()
                 }
             }
@@ -104,16 +145,20 @@ class AccelCalScreenTest {
             fromFc.tryEmit(TransportEvent.Notification(TrCharacteristic.TELEMETRY, json.encodeToByteArray()))
         }
 
-        private fun window(state: Int, mean: List<Float>, n: Int) {
+        private fun window(state: Int, mean: List<Float>, n: Int, hg: List<Float>? = null) {
             faceState = state
             faceMean = mean
+            hgMean = hg ?: listOf(0f, 0f, 0f)
             faceN = n
             report()
         }
 
-        /** `[0xD1][AccelCalStatusData]`: flags, face state, offset, mean, SD, n. */
+        /**
+         * `[0xD1][AccelCalStatusData]`: flags, face state, offset, mean, SD,
+         * n; and AccelCalHighGStatus after it when [sendsHighG].
+         */
         private fun report() {
-            val p = ByteArray(1 + AccelCalStatus.SIZE)
+            val p = ByteArray(1 + if (sendsHighG) AccelCalStatus.HIGH_G_SIZE else AccelCalStatus.SIZE)
             p[0] = 0xD1.toByte()
             val o = stored
             p[1] = (if (o != null) AccelCalStatus.FLAG_STORED or AccelCalStatus.FLAG_APPLIED else 0).toByte()
@@ -129,6 +174,18 @@ class AccelCalScreenTest {
             }
             p[39] = faceN.toByte()
             p[40] = (faceN ushr 8).toByte()
+            if (sendsHighG) {
+                val m = hgMatrix
+                val b = hgBias
+                for (i in 0 until 3) {
+                    f32(41 + 4 * i, hgMean[i])
+                    f32(53 + 4 * i, 0.56f)
+                    f32(103 + 4 * i, b?.get(i) ?: 0f)
+                }
+                p[65] = ((if (m != null) 0x03 else 0) or (if (b != null) 0x04 else 0)).toByte()
+                p[66] = hgSource.toByte()
+                for (i in 0 until 9) f32(67 + 4 * i, (m ?: HighGCalApply.IDENTITY)[i])
+            }
             fromFc.tryEmit(TransportEvent.Notification(TrCharacteristic.FILE_OPS, p))
         }
     }
@@ -147,8 +204,8 @@ class AccelCalScreenTest {
     /** Telemetry with the rail on, in [state]. */
     private fun powered(fc: Fc, state: String = "READY") = fc.telemetry("""{"st":"$state","fs":16}""")
 
-    private fun open(session: DeviceSession) {
-        compose.setContent { AccelCalScreen(session, deviceKey = "rocket", onBack = {}) }
+    private fun open(session: DeviceSession, syncer: ActiveRocketSyncer? = null) {
+        compose.setContent { AccelCalScreen(session, deviceKey = "rocket", syncer = syncer, onBack = {}) }
         compose.waitForIdle()
     }
 
@@ -171,6 +228,11 @@ class AccelCalScreenTest {
         // The opening read shows what the board holds, axis by axis.
         for (v in listOf("+4.20 mg", "-2.78 mg", "+1.59 mg")) compose.onNodeWithText(v).assertExists()
         compose.onNodeWithText("In use by the flight computer").assertExists()
+        // This link's frames are the low-g's 40 bytes: an older flight computer.
+        compose.onNodeWithText(
+            "This firmware sends no high-g calibration: update the flight computer and the out " +
+                "computer to calibrate the high-g.",
+        ).assertExists()
 
         tap("Measure This Face")
         // The offset itself leans each face: 55 mg sideways is 3.1° here.
@@ -183,6 +245,13 @@ class AccelCalScreenTest {
         for (v in listOf("+30.00 mg", "-46.00 mg", "+12.00 mg")) compose.onNodeWithText(v).assertExists()
         compose.onNodeWithText(
             "All six faces are solved together, so a face a few degrees off square does not bias the offset.",
+        ).assertExists()
+        // The faces came without the high-g: the section says why, and the
+        // offset still saves on its own.
+        compose.onNodeWithText("High-g Accelerometer").assertExists()
+        compose.onNodeWithText(
+            "The faces came without the high-g reading. Update the flight computer and the out " +
+                "computer to calibrate the high-g; the low-g offset saves as before.",
         ).assertExists()
 
         tap("Save to the Flight Computer")
@@ -347,5 +416,154 @@ class AccelCalScreenTest {
         assertNull(fc.stored)
         // Nothing stored: nothing to clear.
         compose.onNodeWithText("Clear the Stored Offset…").assertIsNotEnabled()
+    }
+
+    // ── The high-g ────────────────────────────────────────────────────────
+
+    /**
+     * A board whose two accelerometers differ as real ones do (iOS
+     * HighGCalTests' synthetic board): the low-g with 30 / -46 / 12 mg of
+     * offset, the high-g through a full 3x3 and its own zero-g.  Square faces,
+     * in the order the Fc measures them.
+     */
+    private fun loadBoard(fc: Fc) {
+        val off = listOf(30.0, -46.0, 12.0).map { it / 1e3 * AccelSixFace.G0 }
+        val sHG = listOf(0.9921, -0.0047, 0.0030, 0.0029, 1.0068, -0.0054, -0.0016, 0.0051, 0.9880)
+        val cHG = listOf(0.98, -1.47, 0.62)
+        for (face in listOf(Face.Z_UP, Face.X_DOWN, Face.Y_UP, Face.Z_DOWN, Face.X_UP, Face.Y_DOWN)) {
+            val a = (0..2).map { if (it == face.axis) face.sign * AccelSixFace.G0 else 0.0 }
+            fc.faces += (0..2).map { (off[it] + a[it]).toFloat() }
+            fc.hgFaces += (0..2).map { i ->
+                (sHG[3 * i] * a[0] + sHG[3 * i + 1] * a[1] + sHG[3 * i + 2] * a[2] + cHG[i]).toFloat()
+            }
+        }
+    }
+
+    /** A syncer attached with [session] to a profile store whose active profile holds [cal]. */
+    private fun syncerWith(session: DeviceSession, cal: SensorCalData): Pair<ActiveRocketSyncer, RocketProfileStore> {
+        val dir = java.nio.file.Files.createTempDirectory("accelcal").toFile()
+        val store = RocketProfileStore(
+            dir,
+            object : ActiveProfileStorage {
+                var v: String? = null
+                override fun loadActiveId() = v
+                override fun saveActiveId(id: String?) { v = id }
+            },
+        )
+        val p = store.add("Atlas")
+        store.update(p.id) { it.copy(sensorCal = cal) }
+        store.setActive(p.id)
+        val syncer = ActiveRocketSyncer(CoroutineScope(Dispatchers.Unconfined))
+        syncer.attach(session, store)
+        return syncer to store
+    }
+
+    @Test
+    fun withTheHighG_theSectionShowsItsFit_andSaveSendsItAfterTheOffset() {
+        val fc = Fc().apply {
+            sendsHighG = true
+            hgBias = listOf(0.9f, -1.4f, 0.6f)
+            hgSource = 1   // the pad calibration's
+        }
+        loadBoard(fc)
+        val session = connect(fc)
+        fc.telemetry("""{"type":"config_identity","uid":"boardA","un":"Atlas","nid":5,"rid":1,"dt":"R"}""")
+        val cal = SensorCalData(3, -2, 1, 0.9f, -1.4f, 0.6f, calibratedOnUnitID = "boardA", calibratedAtMs = 5)
+        val (syncer, store) = syncerWith(session, cal)
+        powered(fc)
+        open(session, syncer)
+        // The stored rows: no alignment yet, and the pad calibration's bias.
+        compose.onNodeWithText("No high-g alignment stored").assertExists()
+        compose.onNodeWithText("High-g bias: X +91.8 mg, Y -142.8 mg, Z +61.2 mg").assertExists()
+        compose.onNodeWithText("Measured by the pad calibration").assertExists()
+        compose.onNodeWithText("Clear the Stored Offset…").assertIsEnabled()
+
+        repeat(6) { tap("Measure This Face") }
+        compose.onNodeWithText("High-g Accelerometer").assertExists()
+        // Per axis the scale and the offset, each with its 1-sigma.
+        compose.onAllNodes(hasText(" % ± ", substring = true)).assertCountEquals(3)
+        compose.onAllNodes(hasText(" mg ± ", substring = true)).assertCountEquals(3)
+        compose.onNode(hasText("Cross-axis: up to ", substring = true)).assertExists()
+        compose.onNode(hasText("Fit to the low-g: ", substring = true) and hasText("(limit 3 mg)", substring = true))
+            .assertExists()
+        compose.onNodeWithText("Its own gravity fit agrees with the alignment to the low-g within their noise.")
+            .assertExists()
+        compose.onNodeWithText("Passed: saved with the offset").assertExists()
+        compose.onNodeWithText(
+            "The high-g is fitted to the low-g, the more accurate channel on the bench, so the flight " +
+                "computer reads the same acceleration when it switches to the high-g near 16 g. ± is one " +
+                "standard deviation from these faces. The pad calibration keeps this alignment and measures " +
+                "the high-g's offset again on the day.",
+        ).assertExists()
+
+        tap("Save to the Flight Computer")
+        compose.onNodeWithText("Saved and read back").assertExists()
+        compose.onNodeWithText("High-g alignment saved and read back").assertExists()
+        // The read, six windows, the offset and its read-back, then the high-g and its own.
+        assertEquals(listOf(77, 78, 78, 78, 78, 78, 78, 76, 77, 80, 77), fc.accelCommands)
+        val m = requireNotNull(fc.hgMatrix) { "no high-g alignment stored" }
+        assertEquals(1 / 0.9921, m[0].toDouble(), 2e-4)   // the low-g's scale over the high-g's
+        assertEquals(2, fc.hgSource)
+        // The stored rows follow the read-back.
+        compose.onNode(hasText("High-g alignment in use: X +", substring = true)).assertExists()
+        compose.onNodeWithText("From the six faces").assertExists()
+        compose.onNodeWithText("Clear the Stored Calibration…").assertIsEnabled()
+        // This board's profile sensor cal now holds the bias the flight computer uses.
+        val saved = requireNotNull(store.activeProfile?.sensorCal) { "the profile lost its sensor cal" }
+        assertEquals(fc.hgBias, listOf(saved.hgX, saved.hgY, saved.hgZ))
+        assertEquals(3, saved.gyroX)
+    }
+
+    @Test
+    fun aClearWithAHighGStored_asksAboutTheCalibration_andClearsBoth() {
+        val fc = Fc().apply {
+            sendsHighG = true
+            hgMatrix = listOf(1.01f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
+            hgBias = listOf(0.98f, -1.47f, 0.62f)
+            hgSource = 2
+        }
+        val session = connect(fc)
+        powered(fc)
+        open(session)
+        compose.onNodeWithText("High-g alignment in use: X +1.000 %, Y +0.000 %, Z +0.000 %").assertExists()
+        compose.onNodeWithText(
+            "Removes the offset and the high-g alignment from the flight computer, which then uses the " +
+                "low-g reading as it is and the high-g with its bias alone.",
+        ).assertExists()
+        tap("Clear the Stored Calibration…")
+        compose.onNodeWithText("Clear the stored calibration?").assertExists()
+        compose.onNodeWithText(
+            "The flight computer goes back to the low-g reading as it is and to the high-g without its " +
+                "alignment (it keeps the high-g's bias until the next pad calibration). You can measure and " +
+                "save again at any time.",
+        ).assertExists()
+        assertEquals("nothing is sent before the confirmation", listOf(77), fc.accelCommands)
+        compose.onNodeWithText("Clear Calibration").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf(77, 76, 77, 80, 77), fc.accelCommands)
+        compose.onNodeWithText("Cleared: no offset stored").assertExists()
+        compose.onNodeWithText("Cleared: no high-g alignment stored").assertExists()
+        compose.onNodeWithText("No high-g alignment stored").assertExists()
+        assertNull(fc.stored)
+        assertNull(fc.hgMatrix)
+        // The bias stays until the next pad calibration, and there is nothing left to clear.
+        compose.onNodeWithText("High-g bias: X +99.9 mg, Y -149.9 mg, Z +63.2 mg").assertExists()
+        compose.onNodeWithText("Clear the Stored Offset…").assertIsNotEnabled()
+    }
+
+    @Test
+    fun aClearWithOnlyTheOffsetStored_sendsNo80() {
+        val fc = Fc().apply { sendsHighG = true }
+        val session = connect(fc)
+        powered(fc)
+        open(session)
+        compose.onNodeWithText("No high-g alignment stored").assertExists()
+        tap("Clear the Stored Offset…")
+        compose.onNodeWithText("Clear the stored offset?").assertExists()
+        compose.onNodeWithText("Clear Offset").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf(77, 76, 77), fc.accelCommands)
+        compose.onNodeWithText("Cleared: no offset stored").assertExists()
+        compose.onNodeWithText("Cleared: no high-g alignment stored").assertDoesNotExist()
     }
 }

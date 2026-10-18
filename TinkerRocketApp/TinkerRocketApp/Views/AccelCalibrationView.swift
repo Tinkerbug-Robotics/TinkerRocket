@@ -16,6 +16,14 @@
 //  0xD1 frames. The offset is a board property that only this screen writes:
 //  it is in no rocket profile and no connect-time sync.
 //
+//  The same windows carry the high-g's reading (a flight and out computer
+//  that send it): the screen fits it to the low-g (AccelSixFace.solveHighG),
+//  shows its scale, offset, cross-axis, fit and its own gravity fit's
+//  agreement, and saves it after the offset (80, read back with 77). The
+//  pad calibration then keeps the alignment and re-measures only the
+//  high-g's bias; a rocket profile holding this board's sensor cal gets the
+//  new bias, so its connect-time push does not put the old one back.
+//
 //  While the board turns, a live line names the face it is on now (from
 //  telemetry's lx/ly/lz turned back through the mounting, BLEDevice
 //  .accelLiveFace), tints that row and names it on the Measure button. It is
@@ -27,6 +35,7 @@ import SwiftUI
 
 struct AccelCalibrationView: View {
     @ObservedObject var device: BLEDevice
+    @EnvironmentObject var store: RocketProfileStore
 
     @State private var flow = AccelCalFlow()
     /// When the open face window's MEASURING frame came: drives the 3 s bar.
@@ -34,6 +43,13 @@ struct AccelCalibrationView: View {
     @State private var confirmClear = false
 
     private typealias Face = AccelSixFace.Face
+
+    /// `initialFlow`: where the screen starts (a fresh flow; the tests' screen
+    /// renders start from captured faces).
+    init(device: BLEDevice, initialFlow: AccelCalFlow = AccelCalFlow()) {
+        _device = ObservedObject(wrappedValue: device)
+        _flow = State(initialValue: initialFlow)
+    }
 
     private var status: AccelCalStatus? { device.accelCalStatus }
 
@@ -67,12 +83,16 @@ struct AccelCalibrationView: View {
 
     private var canRun: Bool { blockedReason == nil }
 
+    /// A high-g alignment is stored on the board.
+    private var highGStored: Bool { status?.highG?.isStored == true }
+
     var body: some View {
         Form {
             whySection
             storedSection
             facesSection
             if let solution = flow.captures.solution { resultSection(solution) }
+            if let highG = flow.captures.highG { highGSection(highG) }
             clearSection
         }
         .navigationTitle("Accelerometer Calibration")
@@ -94,12 +114,20 @@ struct AccelCalibrationView: View {
             if flow.windowOpen, !wasOpen { windowOpenedAt = Date() }
             run(next)
         }
-        .confirmationDialog("Clear the stored offset?", isPresented: $confirmClear,
-                            titleVisibility: .visible) {
-            Button("Clear Offset", role: .destructive) { run(flow.clear()) }
+        // A high-g save's report, whether its read-back came or timed out.
+        .onChange(of: flow.lastHighGWrite) { w in
+            if let w { highGWritten(w) }
+        }
+        .confirmationDialog(highGStored ? "Clear the stored calibration?" : "Clear the stored offset?",
+                            isPresented: $confirmClear, titleVisibility: .visible) {
+            Button(highGStored ? "Clear Calibration" : "Clear Offset", role: .destructive) {
+                run(flow.clear(highG: highGStored))
+            }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("The flight computer goes back to the accelerometer's reading as it is. You can measure and save again at any time.")
+            Text(highGStored
+                 ? "The flight computer goes back to the low-g reading as it is and to the high-g without its alignment (it keeps the high-g's bias until the next pad calibration). You can measure and save again at any time."
+                 : "The flight computer goes back to the accelerometer's reading as it is. You can measure and save again at any time.")
         }
     }
 
@@ -131,6 +159,21 @@ struct AccelCalibrationView: View {
                 }
                 Label(s.useText, systemImage: s.isStored ? "checkmark.seal.fill" : "circle.dashed")
                     .foregroundColor(.secondary)
+                if let h = s.highG {
+                    Label(h.alignmentText, systemImage: h.isStored ? "checkmark.seal.fill" : "circle.dashed")
+                        .foregroundColor(.secondary)
+                    if h.hasBias {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("High-g bias: \(h.biasText)").monospacedDigit()
+                            Text(h.sourceText.prefix(1).uppercased() + h.sourceText.dropFirst())
+                        }
+                        .font(.caption).foregroundColor(.secondary)
+                    }
+                } else {
+                    Label("This firmware sends no high-g calibration: update the flight computer and the out computer to calibrate the high-g.",
+                          systemImage: "info.circle")
+                        .font(.caption).foregroundColor(.secondary)
+                }
             } else if flow.isReading {
                 HStack(spacing: 10) {
                     ProgressView()
@@ -301,19 +344,91 @@ struct AccelCalibrationView: View {
 
     private var clearSection: some View {
         Section {
-            if flow.writing == .clear {
+            if flow.writing == .clear || flow.writingHighG == .clear {
                 HStack(spacing: 10) {
                     ProgressView()
                     Text("Clearing…")
                 }
             } else {
-                Button("Clear the Stored Offset…", role: .destructive) { confirmClear = true }
-                    .disabled(!canRun || flow.isBusy || status?.isStored != true)
+                Button(highGStored ? "Clear the Stored Calibration…" : "Clear the Stored Offset…",
+                       role: .destructive) { confirmClear = true }
+                    .disabled(!canRun || flow.isBusy || (status?.isStored != true && !highGStored))
             }
             if let w = flow.lastWrite, w.write == .clear { writeReportRows(w) }
+            if let w = flow.lastHighGWrite, w.write == .clear { highGWriteReportRows(w) }
         } footer: {
-            Text("Removes the offset from the flight computer, which then uses the accelerometer's reading as it is.")
+            Text(highGStored
+                 ? "Removes the offset and the high-g alignment from the flight computer, which then uses the low-g reading as it is and the high-g with its bias alone."
+                 : "Removes the offset from the flight computer, which then uses the accelerometer's reading as it is.")
         }
+    }
+
+    // MARK: - The high-g
+
+    private func highGSection(_ result: AccelSixFace.HighGResult) -> some View {
+        Section {
+            switch result {
+            case .solved(let h):
+                ForEach(0..<3, id: \.self) { i in
+                    HStack {
+                        Text(AccelSixFace.axisNames[i])
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text("scale \(h.scaleText(i))").monospacedDigit()
+                            Text("offset \(h.offsetText(i))")
+                                .font(.caption).monospacedDigit().foregroundColor(.secondary)
+                        }
+                    }
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(h.crossText)
+                    Text(h.residualText)
+                }
+                .font(.caption).monospacedDigit().foregroundColor(.secondary)
+                Label(h.agreementText, systemImage: h.disagreeAxes.isEmpty ? "checkmark.circle" : "info.circle")
+                    .font(.callout)
+                    .foregroundColor(h.disagreeAxes.isEmpty ? .secondary : .orange)
+                if let problem = h.problemText {
+                    Label("Not saved: \(problem)", systemImage: "xmark.octagon.fill").foregroundColor(.red)
+                } else {
+                    Label("Passed: saved with the offset", systemImage: "checkmark.seal.fill")
+                        .foregroundColor(.green)
+                }
+            case .noReading, .singular:
+                Label(result.unavailableText ?? "", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundColor(.orange)
+            }
+            if case .save? = flow.writingHighG {
+                HStack(spacing: 10) {
+                    ProgressView()
+                    Text("Saving the high-g…")
+                }
+            }
+            if let w = flow.lastHighGWrite, w.write != .clear { highGWriteReportRows(w) }
+        } header: {
+            Text("High-g Accelerometer")
+        } footer: {
+            Text("The high-g is fitted to the low-g, the more accurate channel on the bench, so the flight computer reads the same acceleration when it switches to the high-g near 16 g. ± is one standard deviation from these faces. The pad calibration keeps this alignment and measures the high-g's offset again on the day.")
+        }
+    }
+
+    @ViewBuilder private func highGWriteReportRows(_ w: AccelCalFlow.HighGWriteReport) -> some View {
+        Label(w.text, systemImage: w.confirmed ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+            .foregroundColor(w.confirmed ? .green : .orange)
+        if w.readBack == nil {
+            Button("Read It Back") { run(flow.readBackAgain()) }
+                .disabled(!canRun || flow.isBusy)
+        }
+    }
+
+    /// A confirmed high-g save: the active profile's sensor cal (this
+    /// board's) takes the new bias, so the connect-time push keeps it.
+    private func highGWritten(_ w: AccelCalFlow.HighGWriteReport) {
+        guard w.confirmed, case .save(_, let bias) = w.write, let id = store.activeId,
+              let updated = ActiveRocketSyncer.sensorCalAfterHighGSave(
+                profileCal: store.activeProfile?.sensorCal, deviceUnitID: device.unitID, bias: bias)
+        else { return }
+        store.update(id) { $0.sensorCal = updated }
     }
 
     /// A save's or a clear's outcome; with no answer, a way to read it back.
@@ -346,6 +461,8 @@ struct AccelCalibrationView: View {
             device.sendAccelFaceMeasure()
         case .apply(let o):
             device.sendAccelCalApply(x: o[0], y: o[1], z: o[2])
+        case .applyHighG(let w):
+            device.sendHighGCalApply(op: w.op, matrix: w.matrix, bias: w.bias)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
             run(flow.timedOut(gen))

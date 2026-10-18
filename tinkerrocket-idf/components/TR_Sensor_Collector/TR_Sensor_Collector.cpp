@@ -1692,7 +1692,7 @@ void SensorCollector::resetPollTimingSnapshot()
 //  • Gravity magnitude from low-g: a plausibility gate on the whole result.
 // The rocket must be stationary for the whole window (e.g. on the launch
 // pad); the caller cancels the moment it stops being so.
-bool SensorCollector::startCalibration(float rotation_z_deg)
+bool SensorCollector::startCalibration(float rotation_z_deg, const float* hg_alignment)
 {
     if (!use_ism6hg256)
     {
@@ -1716,6 +1716,8 @@ bool SensorCollector::startCalibration(float rotation_z_deg)
     // costing pollCalibration() an extra pass.
     (void)xSemaphoreTake(cal_done_sem_, 0);
     cal_rotation_z_deg_ = rotation_z_deg;
+    cal_hg_m_on_        = (hg_alignment != nullptr);
+    for (int i = 0; i < 9; i++) cal_hg_m_[i] = cal_hg_m_on_ ? hg_alignment[i] : 0.0f;
     cal_started_ms_     = time_ms();
     cal_request_seq_    = seq;   // the request, in one store
 
@@ -1764,7 +1766,8 @@ SensorCalPoll SensorCollector::pollCalibration()
     SensorCalResult r;
     cal_gravity_mag = 0.0f;   // this window's, once it has one
     if (!sensor_cal::compute(cal_sums_, cal_rotation_z_deg_,
-                             ism6_low_g_fs_g_, ism6_high_g_fs_g_, r))
+                             ism6_low_g_fs_g_, ism6_high_g_fs_g_, r,
+                             cal_hg_m_on_ ? cal_hg_m_ : nullptr))
     {
         ESP_LOGW(SC_TAG, "No IMU samples in the calibration window — previous calibration kept");
         return SensorCalPoll::Rejected;
@@ -1796,6 +1799,11 @@ SensorCalPoll SensorCollector::pollCalibration()
              (double)r.lg_body[0], (double)r.lg_body[1], (double)r.lg_body[2]);
     ESP_LOGI(SC_TAG, "High-g avg (body): %.3f, %.3f, %.3f m/s²",
              (double)r.hg_body[0], (double)r.hg_body[1], (double)r.hg_body[2]);
+    if (cal_hg_m_on_)
+    {
+        ESP_LOGI(SC_TAG, "High-g aligned:    %.3f, %.3f, %.3f m/s² (the six-face alignment, kept)",
+                 (double)r.hg_aligned[0], (double)r.hg_aligned[1], (double)r.hg_aligned[2]);
+    }
     ESP_LOGI(SC_TAG, "HG bias:           %.3f, %.3f, %.3f m/s²",
              (double)hg_bias_x, (double)hg_bias_y, (double)hg_bias_z);
     ESP_LOGI(SC_TAG, "Gravity magnitude: %.3f m/s²", (double)cal_gravity_mag);

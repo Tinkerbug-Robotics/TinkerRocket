@@ -4762,6 +4762,8 @@ static bool isKnownMessageType(uint8_t type)
         case ACC_CAL_READ:
         case ACC_FACE_PENDING:
         case ACC_CAL_STATUS_MSG:     // FC→OC over I2S — its readback and face windows
+        case HG_CAL_APPLY_PENDING:   // the high-g's six-face alignment — OC→FC only
+        case HG_CAL_APPLY_MSG:
         case OTA_STATUS_MSG:         // FC→OC over I2S — OTA relay status (#8 Phase 4)
         case FLIGHT_SETTINGS_MSG:    // FC→OC over I2S at flight-start — issue #165
         case FC_IDENTITY:            // FC→OC over I2C — FC firmware version (#8 Phase 4)
@@ -5340,10 +5342,13 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
     else if (type == ACC_CAL_STATUS_MSG)
     {
         // #1629: the low-g hand calibration's readback and face windows,
-        // forwarded to BLE on file-ops behind 0xD1.
+        // forwarded to BLE on file-ops behind 0xD1 -- with the high-g's part
+        // after it when the FC sends one (AccelCalStatusFrame): all of it, so
+        // the app can tell an FC without the high-g from one with it.
         if (payload_len >= sizeof(AccelCalStatusData))
         {
-            ble_app.sendAccelCalStatus(payload, sizeof(AccelCalStatusData));
+            const size_t n = payload_len < sizeof(AccelCalStatusFrame) ? payload_len : sizeof(AccelCalStatusFrame);
+            ble_app.sendAccelCalStatus(payload, n);
         }
     }
     else if (type == PAD_CAL_STATUS_MSG)
@@ -13572,6 +13577,24 @@ static void loop_oc()
         {
             setPendingCommand(ACC_FACE_PENDING);
             ESP_LOGI("BLE", "Accel cal FACE -> FlightComputer");
+        }
+        // The high-g's six-face alignment to the low-g: store and apply the
+        // fitted matrix and bias, or clear the matrix (49-byte
+        // HighGCalApplyData). Read back with 77, as the low-g offset is.
+        else if (ble_cmd == 80)
+        {
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= sizeof(HighGCalApplyData))
+            {
+                setPendingCommandWithConfig(HG_CAL_APPLY_PENDING, HG_CAL_APPLY_MSG, payload, sizeof(HighGCalApplyData));
+                ESP_LOGI("BLE", "High-g cal APPLY queued for FlightComputer");
+            }
+            else
+            {
+                ESP_LOGW("BLE", "High-g cal APPLY: payload too short (%u < %u)",
+                              (unsigned)plen, (unsigned)sizeof(HighGCalApplyData));
+            }
         }
         else if (ble_cmd == 69)
         {
