@@ -332,7 +332,7 @@ void usage()
                  "  [--att-hold-rate X] [--att-hold-s X] [--rot-skip-rate X] [--rot-skip-s X]\n"
                  "  [--rot-after-apogee]\n"
                  "  the antenna's offset (a RAW_REPLAY_ANTENNA build): [--antenna-m x,y,z|none] (default: the events\n"
-                 "  file's META antenna_m, the flight's, else unknown) [--antenna-sigma-m axial,radial]\n"
+                 "  file's META antenna_m, what the flight flew with, else unknown) [--antenna-sigma-m axial,radial]\n"
                  "  [--antenna-min-rate X] [--antenna-att-mode 0|1|2]\n");
 }
 
@@ -915,6 +915,14 @@ void diagEpoch(RawGnssShadow& sh, const BuiltEpoch& b, int64_t t_us, uint8_t fla
             float dp_e[3], dv_e[3], dp_l[3], dv_l[3];
             f.historyChange(ag, dv_e, dp_e);
             f.historyChange(ag + tau, dv_l, dp_l);
+#if RAW_REPLAY_ANTENNA
+            // a known offset: the antenna, as the filter's update back-dates it
+            if (f.p_.lever_on)
+            {
+                RawGnssEKF<float>::LeverEpoch lv;
+                f.leverBack(ag, tau, dp_e, dv_e, dv_l, lv);
+            }
+#endif
             double r[3], v[3], Tm[3][3], r_e[3], v_e[3];
             f.receiverState(r, v, Tm);
             for (int i = 0; i < 3; ++i)
@@ -1037,6 +1045,14 @@ void guardedEpoch(RawGnssShadow& sh, const BuiltEpoch& b, int64_t t_us, uint8_t 
             float dp_e[3], dv_e[3], dp_l[3], dv_l[3];
             f.historyChange(ag, dv_e, dp_e);
             f.historyChange(ag + tau, dv_l, dp_l);
+#if RAW_REPLAY_ANTENNA
+            // a known offset: the antenna's, as the filter predicts them (its turning is not a velocity error)
+            if (f.p_.lever_on)
+            {
+                RawGnssEKF<float>::LeverEpoch lv;
+                f.leverBack(ag, tau, dp_e, dv_e, dv_l, lv);
+            }
+#endif
             double r[3], v[3], Tm[3][3], r_e[3], v_e[3];
             f.receiverState(r, v, Tm);
             for (int i = 0; i < 3; ++i)
@@ -1576,6 +1592,19 @@ int main(int argc, char** argv)
         a.ant_known = true;
         std::fprintf(stderr, "the antenna's offset from the log: %.3f, %.3f, %.3f m (body FRD; --antenna-m none "
                              "replays it unknown)\n", a.ant_m[0], a.ant_m[1], a.ant_m[2]);
+    }
+    // one set on the flight that its filter did not fly with (META antenna_m_set): replayed unknown, as it flew
+    else if (!a.ant_known && !a.ant_none && in.meta.count("antenna_m_set"))
+    {
+        double m[3];
+        if (std::sscanf(in.meta["antenna_m_set"].c_str(), "%lf %lf %lf", &m[0], &m[1], &m[2]) != 3)
+        {
+            std::fprintf(stderr, "cannot read META antenna_m_set: %s\n", in.meta["antenna_m_set"].c_str());
+            return 1;
+        }
+        std::fprintf(stderr, "the flight had an antenna offset set (%.3f, %.3f, %.3f m, body FRD) that its navigation "
+                             "filter did not fly with: replayed unknown, as it flew (--antenna-m %.3f,%.3f,%.3f "
+                             "applies it)\n", m[0], m[1], m[2], m[0], m[1], m[2]);
     }
     // a mosaic log has no record of the filter's own (no 0x96 yet): it starts on the pad
     const bool cold = a.cold_start || in.s.size() < 20;

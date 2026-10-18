@@ -256,7 +256,8 @@ def ant(known=1, board_mm=(120, -15, 40), body_m=(0.12, 0.015, -0.04), used=1, t
 
 
 def test_decode_the_antenna_offset():
-    # PCX_ANT, beside PCX_CAL -- the GNSS antenna's offset the flight flew with, the setting and the filter's
+    # PCX_ANT, beside PCX_CAL -- the GNSS antenna's offset set on the flight, the setting and the filter's, and
+    # whether the navigation filter flew with it
     r = pfd.decode_pad_context(ant())
     assert r["kind"] == "ant"
     assert r["known"] is True and r["used"] is True
@@ -265,6 +266,10 @@ def test_decode_the_antenna_offset():
     assert pfd.decode_pad_context(ant()[:-1]) is None
     u = pfd.decode_pad_context(ant(known=0, board_mm=(0, 0, 0), body_m=(0.0, 0.0, 0.0), used=0))
     assert u["known"] is False and u["used"] is False
+    s = pfd.decode_pad_context(ant(used=0))                      # set, but the filter did not fly with it
+    assert s["known"] is True and s["used"] is False
+    assert s["board_mm"] == (120, -15, 40)
+    assert s["body_m"] == pytest_approx((0.12, 0.015, -0.04))
     ctx = pfd.join_pad_context([pfd.decode_pad_context(p) for p in [cal(), acc(), hg(), ant()] + launch()[1:]])
     assert ctx["ant"]["board_mm"] == (120, -15, 40)
     assert ctx["missing"] == []                                  # an older log without it misses nothing
@@ -273,8 +278,9 @@ def test_decode_the_antenna_offset():
 
 
 def test_the_replay_extractor_passes_the_antenna_on():
-    # tools/raw_replay/extract.py: a known offset becomes META antenna_m (body FRD) for raw_replay; unknown or an
-    # older log without the record, none
+    # tools/raw_replay/extract.py: an offset the navigation filter flew with becomes META antenna_m (body FRD) for
+    # raw_replay; one set but not flown with, META antenna_m_set only (the replay flies it unknown, as the flight
+    # did); unknown or an older log without the record, none
     import importlib.util
     spec = importlib.util.spec_from_file_location(
         "raw_replay_extract", Path(__file__).resolve().parents[2] / "tools" / "raw_replay" / "extract.py")
@@ -282,8 +288,15 @@ def test_the_replay_extractor_passes_the_antenna_on():
     spec.loader.exec_module(ex)
     ctx = pfd.join_pad_context([pfd.decode_pad_context(p) for p in [cal(), ant()] + launch()[1:]])
     lines = ex.antenna_lines(ctx)
+    assert len(lines) == 2 and lines[0].startswith("META antenna_m ")
     assert lines[1] == "META antenna_used 1"
     assert [float(x) for x in lines[0].split()[2:]] == pytest_approx((0.12, 0.015, -0.04))
+    not_flown = pfd.join_pad_context([pfd.decode_pad_context(p) for p in [cal(), ant(used=0)] + launch()[1:]])
+    lines = ex.antenna_lines(not_flown)
+    assert len(lines) == 2 and lines[0].startswith("META antenna_m_set ")
+    assert lines[1] == "META antenna_used 0"
+    assert [float(x) for x in lines[0].split()[2:]] == pytest_approx((0.12, 0.015, -0.04))
+    assert not any(ln.startswith("META antenna_m ") for ln in lines)
     unknown = pfd.join_pad_context([pfd.decode_pad_context(p) for p in
                                     [cal(), ant(known=0, board_mm=(0, 0, 0), body_m=(0.0, 0.0, 0.0), used=0)]])
     assert ex.antenna_lines(unknown) == []

@@ -493,6 +493,9 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   firmware tree has it yet), its `--unaided` twin, and `noguard` (`--vote-guard 0`: the quorum RC0's main.cpp
   has). Every run gets `--truth-nav`. Each run is scored as it finishes (`sim_tables.score_run`) into
   `OUT/scores/`. `--harness-args "..."` adds raw_replay arguments to every run (an experiment: use a new OUT).
+  An events file already in `--events-dir` is reused only when its truth's antenna (`META lever_arm_m`,
+  `lever_arm_b_m`) is the one asked for (`--lever-arm`, `--lever-arm-b`); otherwise, or with `--force-events`, it
+  is made again.
 - **`sim_tables.py OUT [--against OTHER_OUT]`** writes `OUT/tables.md` and `OUT/verdict.json`: first what the runs
   assume (the guard's wiring, the 20 Hz fixes, the P1/G6 placeholders -- the 30 ms hand-over, the 500 Hz EKF
   tick, the 1 kHz loop, no epoch slicing without `--fc-unit-us` -- the port lags as a sensitivity sweep, and the
@@ -577,13 +580,17 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   also observed (the image's: the change check's lever roll), or fused. The epochs file gains `lever_roll_epochs`,
   `lever_roll_deg`, `lever_roll_sigma_deg` (the lever roll so far and the last epoch's, RawGnssShadow's
   `lever_roll_*`) and `rot_sigma_mps` (the epoch's turning-body allowance); the events JSON an `antenna` block (the
-  settings and the run's lever-roll sums). A flight's log carries the offset it flew with (the pad context's
-  `PCX_ANT`), and `extract.py` writes it as `META antenna_m` (and `antenna_used`): the harness takes it where
-  `--antenna-m` gives none, says so on stderr, and `--antenna-m none` replays the flight unknown.
-  `sim_events.py --lever-arm-b x,y,z` (and `sim_grid.py`'s) puts the
-  truth's antenna anywhere in the body, not only up the nose. The evaluation (Grid B with the antenna 0.10 m and 0.3
-  m up the nose, the offset given right, 3 or 5 cm wrong, and not given) is in
-  gnss-attitude-study/v9-mosaic-filter-plan/evidence/antenna-offset/ (outside the repo).
+  settings and the run's lever-roll sums). A flight's log carries the offset set on it (the pad context's
+  `PCX_ANT`; its `used`: the navigation filter flew with this offset). `extract.py` writes one the filter flew with
+  as `META antenna_m` (and `antenna_used 1`): the harness takes it where `--antenna-m` gives none, says so on
+  stderr, and `--antenna-m none` replays the flight unknown. One set but not flown with is `META antenna_m_set` (and
+  `antenna_used 0`, no `antenna_m`): the harness replays the flight unknown, as it flew, and says on stderr that
+  `--antenna-m x,y,z` applies it. With a known offset the boost guards' Doppler fit (`--guard-doppler-rms`,
+  `--guard-dv-*`) and `--diag-from-s`'s innovations predict at the antenna too, as the filter does.
+  `sim_events.py --lever-arm-b x,y,z` (and `sim_grid.py`'s) puts the truth's antenna anywhere in the body, not only
+  up the nose. The evaluation (Grid B with the antenna 0.10 m and 0.3 m up the nose, the offset given right, 3 or
+  5 cm wrong, and not given) is in gnss-attitude-study/v9-mosaic-filter-plan/evidence/antenna-offset/ (outside the
+  repo).
 - **`sim_compare.py BASE NAME=EXP ...`** sets experiment grids (each a `sim_grid.py --arms design --harness-args
   "..."` run into its own OUT) beside the base grid's design and unaided twin, flight by flight: the phase bars per
   pattern (pooled over the informative magnetometer arms and over all of them), the worst excess, the deployment's

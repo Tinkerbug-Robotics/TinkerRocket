@@ -67,15 +67,31 @@ def rig_wait():
         time.sleep(30.0)
 
 
+def events_match(path, lever_arm, lever_b):
+    """Whether the events file at path was made with this truth's antenna (its META lever_arm_m and lever_arm_b_m,
+    as sim_events.build writes them): a file made for another --lever-arm or --lever-arm-b, or one that does not say,
+    is not reused (its runs would be scored against the wrong antenna)."""
+    meta = read_meta(path)
+    try:
+        arm = float(meta["lever_arm_m"])
+        arm_b = [float(x) for x in meta["lever_arm_b_m"].split()] if "lever_arm_b_m" in meta else None
+    except (KeyError, ValueError):
+        return False
+    same = lambda x, y: abs(x - float(y)) <= 1e-9   # noqa: E731
+    if lever_b is None:
+        return arm_b is None and same(arm, lever_arm)
+    return arm_b is not None and len(arm_b) == 3 and all(map(same, arm_b, lever_b)) and same(arm, lever_b[0])
+
+
 def make_events(job):
     flight, pattern, out_dir, phases_path, lever_arm, force, rig, lever_b = job
     global RIG_STATE
     RIG_STATE = rig
-    import sim_events
     name = os.path.splitext(os.path.basename(flight))[0]
     path = os.path.join(out_dir, f"{name}__{pattern}.events")
-    if os.path.exists(path) and not force:
+    if os.path.exists(path) and not force and events_match(path, lever_arm, lever_b):
         return path, None, 0.0
+    import sim_events
     rig_wait()
     t0 = time.time()
     phases = json.load(open(phases_path))["flights"]
