@@ -577,7 +577,10 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   also observed (the image's: the change check's lever roll), or fused. The epochs file gains `lever_roll_epochs`,
   `lever_roll_deg`, `lever_roll_sigma_deg` (the lever roll so far and the last epoch's, RawGnssShadow's
   `lever_roll_*`) and `rot_sigma_mps` (the epoch's turning-body allowance); the events JSON an `antenna` block (the
-  settings and the run's lever-roll sums). `sim_events.py --lever-arm-b x,y,z` (and `sim_grid.py`'s) puts the
+  settings and the run's lever-roll sums). A flight's log carries the offset it flew with (the pad context's
+  `PCX_ANT`), and `extract.py` writes it as `META antenna_m` (and `antenna_used`): the harness takes it where
+  `--antenna-m` gives none, says so on stderr, and `--antenna-m none` replays the flight unknown.
+  `sim_events.py --lever-arm-b x,y,z` (and `sim_grid.py`'s) puts the
   truth's antenna anywhere in the body, not only up the nose. The evaluation (Grid B with the antenna 0.10 m and 0.3
   m up the nose, the offset given right, 3 or 5 cm wrong, and not given) is in
   gnss-attitude-study/v9-mosaic-filter-plan/evidence/antenna-offset/ (outside the repo).

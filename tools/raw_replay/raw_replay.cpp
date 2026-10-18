@@ -283,6 +283,7 @@ struct Args
     // and what it could be off by (-1: the firmware's, the mosaic safeguards'), from a rate across the nose, and the
     // lever's attitude terms (LeverAttMode: 0 off, 1 observe, 2 fuse)
     bool ant_known = false;
+    bool ant_none = false;           // --antenna-m none: unknown, whatever the events file's META antenna_m says
     double ant_m[3] = {0.0, 0.0, 0.0};
     double ant_sigma_axial_m = -1.0, ant_sigma_radial_m = -1.0, ant_min_rps = -1.0;
     int ant_att_mode = -1;
@@ -330,7 +331,8 @@ void usage()
                  "  [--rot-lever-min-rate X]\n"
                  "  [--att-hold-rate X] [--att-hold-s X] [--rot-skip-rate X] [--rot-skip-s X]\n"
                  "  [--rot-after-apogee]\n"
-                 "  the antenna's offset (a RAW_REPLAY_ANTENNA build): [--antenna-m x,y,z] [--antenna-sigma-m axial,radial]\n"
+                 "  the antenna's offset (a RAW_REPLAY_ANTENNA build): [--antenna-m x,y,z|none] (default: the events\n"
+                 "  file's META antenna_m, the flight's, else unknown) [--antenna-sigma-m axial,radial]\n"
                  "  [--antenna-min-rate X] [--antenna-att-mode 0|1|2]\n");
 }
 
@@ -496,9 +498,13 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--rot-after-apogee") a.rot_after_apogee = true;
         else if (k == "--antenna-m")
         {
-            if (std::sscanf(val(), "%lf,%lf,%lf", &a.ant_m[0], &a.ant_m[1], &a.ant_m[2]) != 3)
+            const char* v = val();
+            if (std::strcmp(v, "none") == 0)
+                a.ant_none = true;
+            else if (std::sscanf(v, "%lf,%lf,%lf", &a.ant_m[0], &a.ant_m[1], &a.ant_m[2]) != 3)
                 return false;
-            a.ant_known = true;
+            else
+                a.ant_known = true;
         }
         else if (k == "--antenna-sigma-m")
         {
@@ -1557,6 +1563,19 @@ int main(int argc, char** argv)
     {
         std::fprintf(stderr, "cannot read %s (or no start state)\n", a.in.c_str());
         return 1;
+    }
+    // the antenna's offset the flight flew with (extract.py: the log's PCX_ANT record, body FRD, m), where
+    // --antenna-m gives none: a replay of a flight predicts at the antenna as its filter did
+    if (!a.ant_known && !a.ant_none && in.meta.count("antenna_m"))
+    {
+        if (std::sscanf(in.meta["antenna_m"].c_str(), "%lf %lf %lf", &a.ant_m[0], &a.ant_m[1], &a.ant_m[2]) != 3)
+        {
+            std::fprintf(stderr, "cannot read META antenna_m: %s\n", in.meta["antenna_m"].c_str());
+            return 1;
+        }
+        a.ant_known = true;
+        std::fprintf(stderr, "the antenna's offset from the log: %.3f, %.3f, %.3f m (body FRD; --antenna-m none "
+                             "replays it unknown)\n", a.ant_m[0], a.ant_m[1], a.ant_m[2]);
     }
     // a mosaic log has no record of the filter's own (no 0x96 yet): it starts on the pad
     const bool cold = a.cold_start || in.s.size() < 20;

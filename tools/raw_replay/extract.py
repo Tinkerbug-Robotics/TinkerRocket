@@ -228,6 +228,7 @@ def main():
     lines.append(f"META ground_pressure_pa {repr(float(gp[0])) if gp else -1}")
 
     lines.extend(start_lines(recs, args, t_ref, pcx, gp))
+    lines.extend(antenna_lines(pcx))
 
     events = []
     # ---- IMU ticks with the loop's flags
@@ -300,6 +301,17 @@ def main():
     print(f"{os.path.basename(args.log)}: {len(ticks)} IMU ticks at {ekf_rate:.1f}/s, {len(frames)} RTCM frames "
           f"({dropped} dropped), inflight {t_inflight}, apogee flag {t_apogee}, landed {t_landed}, "
           f"pad context {'missing ' + ','.join(pcx['missing']) if pcx and pcx['missing'] else ('yes' if pcx else 'none')}")
+
+
+def antenna_lines(pcx):
+    """The GNSS antenna's offset the flight flew with (the pad context's PCX_ANT, BLE cmd 81), in the filter's body
+    frame, for raw_replay: META antenna_m, which it takes where --antenna-m gives none. A log without the record, or
+    with an unknown offset, gives none."""
+    ant = pcx.get("ant") if pcx else None
+    if not ant or not ant["known"]:
+        return []
+    return ["META antenna_m " + " ".join(repr(float(x)) for x in ant["body_m"]),
+            f"META antenna_used {1 if ant['used'] else 0}"]
 
 
 def start_lines(recs, args, t_ref, pcx, gp):
@@ -488,10 +500,11 @@ def extract_sbf(args):
         lines.append("META seed_quat " + " ".join(repr(float(x)) for x in qm))
 
     inflight_of = lambda tu, k: bool(state[k] == INFLIGHT)  # noqa: E731
+    pcx = P.join_pad_context(recs.get("PadContext") or [])
+    lines.extend(antenna_lines(pcx))
     if args.rig:
         # the on-board filter's start (S, A) and pad context, as an LC86G log's; in flight from the filter's own
         # launch tick where the pad context gives it, as there
-        pcx = P.join_pad_context(recs.get("PadContext") or [])
         lines.extend(start_lines(recs, args, t_ref, pcx, gp))
         if pcx and pcx["nav"]:
             t_launch = int(unwrap([pcx["nav"]["filter_time_us"]], t_ref)[0])

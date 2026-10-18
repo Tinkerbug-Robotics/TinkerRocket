@@ -272,6 +272,25 @@ def test_decode_the_antenna_offset():
     assert old["ant"] is None
 
 
+def test_the_replay_extractor_passes_the_antenna_on():
+    # tools/raw_replay/extract.py: a known offset becomes META antenna_m (body FRD) for raw_replay; unknown or an
+    # older log without the record, none
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "raw_replay_extract", Path(__file__).resolve().parents[2] / "tools" / "raw_replay" / "extract.py")
+    ex = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ex)
+    ctx = pfd.join_pad_context([pfd.decode_pad_context(p) for p in [cal(), ant()] + launch()[1:]])
+    lines = ex.antenna_lines(ctx)
+    assert lines[1] == "META antenna_used 1"
+    assert [float(x) for x in lines[0].split()[2:]] == pytest_approx((0.12, 0.015, -0.04))
+    unknown = pfd.join_pad_context([pfd.decode_pad_context(p) for p in
+                                    [cal(), ant(known=0, board_mm=(0, 0, 0), body_m=(0.0, 0.0, 0.0), used=0)]])
+    assert ex.antenna_lines(unknown) == []
+    assert ex.antenna_lines(pfd.join_pad_context([pfd.decode_pad_context(cal())])) == []
+    assert ex.antenna_lines(None) == []
+
+
 def test_the_alignment_comes_before_the_high_g_bias_and_offset(tmp_path):
     # The high-g of one ISM6 record with the flight's PCX_HG: M times the board-frame reading (after the ISM6's
     # Z rotation; the mounting identity), then the bias and the offset as before; the low-g and gyro untouched;
