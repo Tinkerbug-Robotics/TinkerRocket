@@ -3669,8 +3669,8 @@ constexpr const char* gnssLogName(uint8_t setting)
 // uncertainty on the value. Kept like the GNSS log: the OC stores it and
 // relays it, the FC stores it (every board but the Beetle's) and applies it,
 // never INFLIGHT (one that arrives then is held until the FC is not); both
-// start a fresh board on unknown. The FC reports the one it holds in its
-// config report (ConfigReportData v4), and the OC's readback serves that.
+// start a fresh board on unknown. The FC reports its own (ConfigReportData
+// v4); the OC's readback serves it once the FC took what was sent and keeps it.
 static constexpr int16_t ANTENNA_OFFSET_MAX_MM = 2000;   // each component's size at most
 
 typedef struct __attribute__((packed))
