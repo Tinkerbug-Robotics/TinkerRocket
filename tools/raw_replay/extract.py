@@ -11,7 +11,7 @@ What the flight computer's raw task was handed, rebuilt from the log:
   B  barometer samples (time, pressure) -- the harness applies the ground pressure and BaroGatePolicy
   M  magnetometer samples, body FRD, uT
   R  the receiver's RTCM3 frames as they arrived (0x95), MSM7 and ephemerides
-  K  the GPS -> MCU clock lines (0x9D), each from the time it was set
+  K  the GPS -> MCU clock lines (0x9D), each from the time it was set (then the record's seq and restarts)
   F  the receiver's fixes (GPS week, time of week), for an MSM epoch's week
   V  the same fixes as the flight loop's GPS voter gets them: fix mode, satellites, height, velocity N E U
      (raw_replay's apogee quorum, --quorum; ignored otherwise)
@@ -360,7 +360,7 @@ def main():
     for r in recs.get("GnssClock") or []:
         tu = int(unwrap([r["time_us"]], t_ref)[0])
         events.append((tu, 4, f"K {tu} {r['gps0_s']!r} {int(r['mcu0_us'])} {r['a_s']!r} {r['t_ref_s']!r} "
-                              f"{r['drift']!r} {r['latency_s']!r} {1 if r['valid'] else 0}"))
+                              f"{r['drift']!r} {r['latency_s']!r} {1 if r['valid'] else 0} {r['seq']} {r['restarts']}"))
     # ---- the receiver's RTCM3 frames
     frames, dropped = P.join_gnss_rtcm(recs.get("GNSS_RTCM") or [])
     lines.append(f"META rtcm_frames {len(frames)} dropped {dropped}")
@@ -414,7 +414,7 @@ def common_events(recs, config, ekf_rate, t_ref, inflight_of):
     for r in recs.get("GnssClock") or []:
         tu = int(unwrap([r["time_us"]], t_ref)[0])
         events.append((tu, 4, f"K {tu} {r['gps0_s']!r} {int(r['mcu0_us'])} {r['a_s']!r} {r['t_ref_s']!r} "
-                              f"{r['drift']!r} {r['latency_s']!r} {1 if r['valid'] else 0}"))
+                              f"{r['drift']!r} {r['latency_s']!r} {1 if r['valid'] else 0} {r['seq']} {r['restarts']}"))
     return events, len(ticks)
 
 

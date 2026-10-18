@@ -157,8 +157,10 @@ What `startRawShadow()` builds under `TR_RAW_NAV_MOSAIC` (build_units D1a; check
 The SBF blocks go through `mosaic_feed.h`, which does what the driver (`rawMeasEpoch`, `rawPvt`) and the GNSS task
 (`rawGnssMeasTask`) do with them:
 
-- every MeasEpoch's clock jumps are followed (`MosaicJumpState`); those on the fused grid (`onFuseGrid`, the
-  profile's 100 ms) become RawEpochs (`rawEpochFromMeasEpoch`), and an empty one is not handed over;
+- every MeasEpoch's clock jumps are followed (`MosaicJumpState`), with its logged arrival placing a jump the count
+  shows only mod 256 (a sky come back early or late on the RF rig) and telling a reset from a big step; those on
+  the fused grid (`onFuseGrid`, the profile's 100 ms) become RawEpochs (`rawEpochFromMeasEpoch`), and an empty one
+  is not handed over;
 - an epoch's GPS time is its receiver time less the clock bias of the last PVTGeodetic that anchors the jump count
   (`pvtAnchorsJumps`), carried by its drift and the jumps since (`dtrMs`), at most two minutes and while the count
   has not started over; without one the epoch is untimed and counted (`dtr_zero`), as the driver leaves it
@@ -166,15 +168,24 @@ The SBF blocks go through `mosaic_feed.h`, which does what the driver (`rawMeasE
   anything at all after a receiver restart). The log's clock line (K, the PPS fit) then places it on the MCU clock
   only where the driver would (`rawMeasEpoch`, `mosaic_feed.h` `TimeTagGate`): the line valid, the receiver's last
   ReceiverTime saying FINETIME, a 1PPS edge paired within 120 s (each K line is a pairing), a bias to carry, the
-  last edge on the line (each K line's edge against that line, within 100 us), and the chain of PVT biases
-  confirmed by the 1PPS: after a break (a restart of the jump count, an anchor too old, a PVT 0.1 ms off the bias
-  carried to it, a failed check) the tags are held until two whole seconds' tags check out against their edges
-  with their own PVT's bias. Before the log's first ReceiverTime and first K line those first ones stand for the
-  earlier, and so does its first chain (the log begins long after the receiver did); `--time-tag-from-boot` leaves
-  epochs untimed until them, as after a boot. A log with no ReceiverTime at all is untimed, as the driver would
-  leave it, with a warning (`--assume-finetime` times it). The events JSON's `time_tag` counts the untimed epochs by
-  reason, the chain's breaks and the PPS check; the console's `time tag chain` line says the same. Logs from before
-  the mosaic image logged a K line at every edge carry one only where the line moved;
+  last edge on the line (each K line's edge against that line, within 100 us) and on the chain (moved from the
+  last trusted line by as much as the PVTs' bias moved against the receiver's clock: a 1PPS still on the old sky
+  after a step reads 0 in the PPS check), and the chain of PVT biases confirmed by the 1PPS: after a break (the
+  receiver's clock lost, a restart of the jump count, an anchor too old, a PVT 0.1 ms off the bias carried to it, a
+  failed check, a restart of the line, an edge on the line off the chain) the tags are held until two whole
+  seconds' tags check out against edges on the chain with their own PVT's bias. Each K line is taken where the
+  driver took it, at the first block that paired its edge (an xPPSOffset or a whole-second PVTGeodetic naming its
+  second), not at the edge it is stamped with, so the epochs that came between go on the line before it, as they
+  did in flight; one whose block never comes is taken at the next K line (`k_unpaired`). K lines extracted with the
+  record's seq and restarts (extract.py since the tag fix) count the records the driver's queue or the log lost
+  (`k_lost`, with a warning: the edges the driver judged are then not all here) and give the line's restarts; older
+  ones count a restart where the line's references moved. Before the log's first ReceiverTime and first K line
+  those first ones stand for the earlier, and so does its first chain (the log begins long after the receiver
+  did); `--time-tag-from-boot` leaves epochs untimed until them, as after a boot. A log with no ReceiverTime at all
+  is untimed, as the driver would leave it, with a warning (`--assume-finetime` times it). The events JSON's
+  `time_tag` counts the untimed epochs by reason, the chain's breaks, the jumps placed and resets, the K lines
+  unpaired and lost, and the PPS check; the console's `time tag chain` line says the same. Logs from before the
+  mosaic image logged a K line at every edge carry one only where the line moved;
 - navigation blocks are kept as the driver keeps them (`sbfNavKeep`: no Galileo F/NAV, no BeiDou GEO), decoded
   (`decodeSbfEphemeris`) and filed with the stage's `addEphemeris`;
 - GPSIon goes through the GNSS task's one ionosphere rule (the firmware's `raw_iono_rule.h` where the tree has it,
@@ -366,8 +377,9 @@ What the 10/16-17 V9 logs showed (E4, revised after the 10/17 review; the report
 ### What it does not reproduce
 
 - The driver's 1PPS pairing itself: the log's clock line is used as it was logged, and its K lines stand for the
-  pairings (a pairing whose clock record the driver's queue dropped is missed). The 3-deep epoch queue and the
-  two-slot built-epoch handoff never fill here.
+  pairings (a pairing whose clock record the driver's queue dropped is missed: `k_lost` counts them where the K
+  lines carry the seq). Its permit for the line to step later is in the K lines already. The 3-deep epoch queue and
+  the two-slot built-epoch handoff never fill here.
 - The GNSS task's cadence and the P4's build time: one 30 ms delay for every epoch.
 - MeasExtra, the carrier (off on the mosaic), the PPS tag check (`ppsResidualUs`; the driver's console counts it).
 - The flight loop's own rate and phase: the passes are a regular grid; the burnout detector and the launch fallbacks
