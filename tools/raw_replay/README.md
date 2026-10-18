@@ -320,6 +320,12 @@ receiver velocity, so their quorum has three voters unless re-extracted with `V`
   logs as recorded, and seeding from the log's quaternion (`--seed-quat-from-log`) would pass the heading check by
   construction. They become testable on a log whose magnetometer passes the filter's gates (after the stored
   calibration, G10), or on the spin rig's turns scored against the rig's own angle, not the log's GpsInsEKF.
+- **The descent as flown on a turning payload.** `--gnss-only-keep-level` (with `--gnss-only-from-s T`; from
+  exp/v9-gyrobias) keeps the levelling on and hands the filter no magnetometer from T: no pad ZUPT, act's launch edge
+  on the attitude, the IMU, GNSS, the barometer and the levelling -- what the filter has under a slowly turning
+  drogue (in flight it levels once the drag is steady and g's size, LevelGate.h, which a payload turning steadily on
+  the spin rig passes throughout; the ground's size test stands for it). With `--gnss-only-from-s` alone the
+  levelling is off too: GNSS alone on the attitude, not a configuration that flies.
 
 ### Scoring a static or spin-rig log (`score_static.py`)
 

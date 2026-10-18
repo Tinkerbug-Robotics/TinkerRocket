@@ -263,6 +263,7 @@ struct Args
                                      //   and no levelling (the IMU, GNSS and the barometer alone, as in flight)
     int gnss_only_gate = 1;          //   and act's launch edge on the attitude (1, launch: gnss_only_arm.h), or the
                                      //   ground's gate kept (0, ground)
+    bool gnss_only_keep_level = false; //   with the levelling kept on: the descent as flown (gnss_only_arm.h)
     std::string pvt_out;             // each receiver fix's height above the ellipsoid, for the pad height's score
     // the Doppler change check (RawGnssShadow::Config::dv_*; a RAW_REPLAY_DVCHECK build; -1: the firmware's)
     int dv_check = -1;               // 0 off (the firmware's), 1 observe, 2 act
@@ -308,7 +309,7 @@ void usage()
                  "  [--seed-gyro-dps x,y,z]\n"
                  "  [--sat-cap N] [--fuse-ms X] [--flight-state log|quorum] [--time-tag-from-boot]\n"
                  "  [--assume-finetime] [--pad-zupt 0|1] [--gnss-only-from-s X] [--gnss-only-gate launch|ground]\n"
-                 "  [--pvt-out FILE]\n"
+                 "  [--pvt-out FILE] [--gnss-only-keep-level]\n"
                  "  the Doppler change check (a RAW_REPLAY_DVCHECK build): [--dv-check 0|1|2] [--dv-sat-k X]\n"
                  "  [--dv-epoch-k X] [--dv-floor X] [--dv-per-g X] [--dv-att-deg X] [--dv-scale X] [--dv-bias X]\n"
                  "  [--dv-lever-m X] [--dv-hold-s X] [--dv-epoch-hold-s X] [--dv-window-s X] [--dv-deweight 0|1]\n"
@@ -422,6 +423,7 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--seed-heading-deg") a.seed_heading_deg = std::atof(val());
         else if (k == "--seed-heading-error-deg") a.seed_heading_error_deg = std::atof(val());
         else if (k == "--reject-persist-rr") a.reject_persist_rr = std::atoi(val());
+        else if (k == "--gnss-only-keep-level") a.gnss_only_keep_level = true;
         else if (k == "--dv-check") a.dv_check = std::atoi(val());
         else if (k == "--dv-sat-k") a.dv_sat_k = std::atof(val());
         else if (k == "--dv-epoch-k") a.dv_epoch_k = std::atof(val());
@@ -2303,8 +2305,9 @@ int main(int argc, char** argv)
     uint8_t last_flags = 0;
     int nonfinite_rows = 0, unhealthy_rows = 0;
 #if RAW_REPLAY_MOSAIC
-    rr::GnssOnlyArm gnss_only(a.gnss_only_from_s, a.gnss_only_gate == 1 ? rr::GnssOnlyArm::kGateLaunch
-                                                                        : rr::GnssOnlyArm::kGateGround);
+    rr::GnssOnlyArm gnss_only(a.gnss_only_from_s,
+                              a.gnss_only_gate == 1 ? rr::GnssOnlyArm::kGateLaunch : rr::GnssOnlyArm::kGateGround,
+                              a.gnss_only_keep_level);
     int mag_handed = 0;                    // magnetometer samples handed to the filter, and their sizes (uT)
     std::vector<double> mag_norms;
     uint32_t dop_applied = 0;              // the epochs the filter closed: Dopplers fused, refused, largest NIS
@@ -2974,8 +2977,9 @@ int main(int argc, char** argv)
                 const int launches0 = gnss_only.launches();
                 s.flags = gnss_only.tick(sh, ev.t_us * 1e-6 + a.t_base_s, ev.t_us * 1e-6, s.flags);
                 if (!was_on && gnss_only.on())
-                    std::fprintf(stderr, "GNSS only from T%+.3f s: no pad ZUPT, no levelling, %s\n",
+                    std::fprintf(stderr, "GNSS only from T%+.3f s: no pad ZUPT, %s, %s\n",
                                  ev.t_us * 1e-6 + a.t_base_s,
+                                 gnss_only.keepLevel() ? "the levelling kept (the descent as flown)" : "no levelling",
                                  gnss_only.gate() == rr::GnssOnlyArm::kGateLaunch
                                      ? "act's launch edge on the attitude"
                                      : "the ground's attitude gate kept (--gnss-only-gate ground)");
@@ -3033,7 +3037,13 @@ int main(int argc, char** argv)
                     next_pass_us = votes.nextPass(ev.t_us);
             }
 #endif
-            // the magnetometer the loop handed the adapter this tick
+            // the magnetometer the loop handed the adapter this tick. The descent arm (--gnss-only-keep-level)
+            // flies as in flight from its switch on, where the filter takes no magnetometer (RawGnssShadow takes it
+            // on the ground only): none handed after it
+#if RAW_REPLAY_MOSAIC
+            if (mag_new && gnss_only.on() && gnss_only.keepLevel())
+                mag_new = false;
+#endif
             if (mag_new)
             {
                 mag_new = false;

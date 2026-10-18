@@ -19,6 +19,15 @@
 // does the arm. kGateGround keeps the ground's gate: E4's first arm, before
 // the 10/17 review, for comparison.
 //
+// With keep_level (raw_replay --gnss-only-keep-level) the levelling stays on:
+// the descent under a chute as flown, where the shadow levels once the drag is
+// steady and g's size (LevelGate.h). A payload turning steadily on the spin
+// rig passes that test throughout, so the ground's size test stands for it.
+// No pad ZUPT, act's launch edge on the attitude, the levelling and no
+// magnetometer (raw_replay hands none from the switch on: in flight the
+// filter takes none): what the filter has under a slowly turning drogue, not
+// GNSS alone.
+//
 // It reaches into RawGnssShadow (its config, its EKF, setFlightGate): include
 // RawGnssShadow.h with its private members open first, as raw_replay.cpp
 // does. Pure C++: tests_cpp/test_raw_replay_gnss_only.cpp.
@@ -41,11 +50,13 @@ public:
         kGateLaunch = 1,   // act's launch edge: the flight gate, the heading prior, the tilt floor (the default)
     };
 
-    GnssOnlyArm(double from_s, Gate gate) : from_s_(from_s), gate_(gate) {}
+    GnssOnlyArm(double from_s, Gate gate, bool keep_level = false)
+        : from_s_(from_s), gate_(gate), keep_level_(keep_level) {}
 
     bool asked() const { return from_s_ < 1.0e8; }
     bool on() const { return on_; }
     Gate gate() const { return gate_; }
+    bool keepLevel() const { return keep_level_; }
     // how many times the arm took act's launch edge (the switch, then each restart)
     int launches() const { return launches_; }
     // the heading prior it set last, deg (-1: none, observe or off)
@@ -70,7 +81,7 @@ public:
             launches_++;
             prior_deg_ = launchEdge(sh, t_s);
         }
-        return static_cast<uint8_t>(flags & ~gnss_raw::kShadowLevel);
+        return keep_level_ ? flags : static_cast<uint8_t>(flags & ~gnss_raw::kShadowLevel);
     }
 
     // What act's launch edge does to the attitude (RawGnssShadow::stepHeading),
@@ -95,6 +106,7 @@ private:
     static constexpr double kR2D = 57.29577951308232;
     double from_s_;
     Gate gate_;
+    bool keep_level_;
     bool on_ = false;
     uint32_t starts_seen_ = 0;
     int launches_ = 0;
