@@ -505,9 +505,18 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
      * its copy of the last cmd 81, so adopt the flight computer's once its
      * report lands.  Only while unverified, only once, and only on a rocket
      * that reports the setting at all.
+     *
+     * It is written only into the profile it was armed on, still holding the
+     * offset it held then.  A user who sets the offset after it armed (with
+     * the rail off, the cmd 81 waits in the out computer) is not overwritten
+     * by the flight computer's boot report, which still carries its old
+     * value: that report is dropped and nothing is said.
      */
     private fun armAntennaAdopt(s: DeviceSession, cfg: RocketConfig) {
         if (cfg.antennaOffset == null || cfg.antennaOffsetFromFlightComputer || antennaAdoptArmed) return
+        val armedOn = store?.activeProfile ?: return
+        val armedId = armedOn.id
+        val armedOffset = armedOn.antennaOffset
         antennaAdoptArmed = true
         val job = scope.launch {
             val reported = s.rocketConfig
@@ -518,6 +527,8 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
             val st = this@ActiveRocketSyncer.store ?: return@launch
             if (!s.isConnected.value) return@launch
             val profile = st.activeProfile ?: return@launch
+            // Another profile, or this one edited since: the user's value stands.
+            if (profile.id != armedId || profile.antennaOffset != armedOffset) return@launch
             if (profile.antennaOffset == reported) return@launch
             st.update(profile.id) { it.withAntennaOffset(reported) }
             if (_createdProfileName.value != null) return@launch

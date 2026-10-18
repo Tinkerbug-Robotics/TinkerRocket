@@ -811,6 +811,46 @@ class ActiveRocketSyncerTest {
         assertFalse(ActiveRocketSyncer.GROUP_ANTENNA_OFFSET in r.adoptedGroups())
     }
 
+    /**
+     * The user sets the offset after it armed: with the rail off the cmd 81
+     * waits in the out computer, and the flight computer's boot report still
+     * carries its old value as its own.  That report is not the rocket
+     * disagreeing with the phone: the user's value stands, nothing is said,
+     * and the one-shot is spent.
+     */
+    @Test
+    fun railOffAtConnect_anOffsetTheUserSetSinceIsNotOverwrittenByTheLateReport() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA").withAntennaOffset(AntennaOffset(true, 312, -25, 4)) }
+        r.fw.configJson = antennaConfigJson(""""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"oc"""")
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        val before = r.syncer.syncState.value
+
+        val id = assertNotNull(r.store.activeId.value)
+        r.store.update(id) { it.withAntennaOffset(AntennaOffset(true, 50, 60, 70)) }
+        val sent = r.fw.commandFrames.size
+        r.syncer.pushGroup(ActiveRocketSyncer.ConfigGroup.ANTENNA_OFFSET)
+        runCurrent()
+        assertContentEquals(Commands.antennaOffset(true, 50, 60, 70), r.fw.commandFrames.drop(sent).single())
+
+        r.fw.emitTelemetryJson(antennaConfigJson(""""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"fc""""))
+        runCurrent()
+
+        assertEquals(AntennaOffset(true, 10, 20, 30), r.session.rocketConfig.value?.antennaOffset)
+        assertEquals(true, r.session.rocketConfig.value?.antennaOffsetFromFlightComputer)
+        assertEquals(AntennaOffset(true, 50, 60, 70), r.store.activeProfile?.antennaOffset,
+            "the user's offset stands")
+        assertFalse(ActiveRocketSyncer.GROUP_ANTENNA_OFFSET in r.adoptedGroups())
+        assertEquals(before, r.syncer.syncState.value)
+
+        // Spent: a later report of the flight computer's is not adopted either.
+        r.fw.emitTelemetryJson(antennaConfigJson(""""antk":1,"antx":100,"anty":0,"antz":-50,"antsrc":"fc""""))
+        runCurrent()
+        assertEquals(AntennaOffset(true, 50, 60, 70), r.store.activeProfile?.antennaOffset)
+        assertFalse(ActiveRocketSyncer.GROUP_ANTENNA_OFFSET in r.adoptedGroups())
+    }
+
     @Test
     fun pushGroup_antennaOffset_doesNotInventTheSettingOnOlderFirmware() = runTest {
         val r = rig { it.copy(lastUsedUnitID = "boardA") }

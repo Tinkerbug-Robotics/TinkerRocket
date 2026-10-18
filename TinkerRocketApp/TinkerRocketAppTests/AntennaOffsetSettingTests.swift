@@ -431,4 +431,42 @@ final class AntennaOffsetSettingTests: XCTestCase {
         XCTAssertEqual(store.profiles.first { $0.id == first }?.antennaOffset, measured(312, -25, 4))
         XCTAssertFalse(adoptedGroups(syncer).contains(ActiveRocketSyncer.groupAntennaOffset))
     }
+
+    /// The user sets the offset after it armed: with the rail off the cmd 81
+    /// waits in the out computer, and the flight computer's boot report still
+    /// carries its old value as its own.  That report is not the rocket
+    /// disagreeing with the phone: the user's value stands, nothing is said,
+    /// and the one-shot is spent.
+    func testRailOffAtConnect_AnOffsetTheUserSetSinceIsNotOverwrittenByTheLateReport() throws {
+        let (syncer, store, rocket) = connect(
+            profile: measured(312, -25, 4),
+            antennaKeys: #""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"oc""#)
+        let before = syncer.syncState
+
+        // The settings screen's commit: the profile, then cmd 81.
+        let id = try XCTUnwrap(store.activeId)
+        var sent: [(UInt8, Data)] = []
+        rocket.commandTap = { sent.append(($0, $1)) }
+        store.update(id) { $0.antennaOffset = measured(50, 60, 70) }
+        rocket.sendAntennaOffsetConfig(measured(50, 60, 70))
+        settleMainQueue()
+        XCTAssertEqual(sent.map { $0.0 }, [81])
+        XCTAssertEqual(sent.first?.1, measured(50, 60, 70).payload)
+
+        feed(rocket, Self.configFrame(#""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"fc""#))
+        settleMainQueue()
+
+        XCTAssertEqual(rocket.rocketConfig?.antennaOffset, measured(10, 20, 30))
+        XCTAssertEqual(rocket.rocketConfig?.antennaOffsetFromFlightComputer, true)
+        XCTAssertEqual(store.activeProfile?.antennaOffset, measured(50, 60, 70),
+                       "the user's offset stands")
+        XCTAssertFalse(adoptedGroups(syncer).contains(ActiveRocketSyncer.groupAntennaOffset))
+        XCTAssertEqual(syncer.syncState, before)
+
+        // Spent: a later report of the flight computer's is not adopted either.
+        feed(rocket, Self.configFrame(#""antk":1,"antx":100,"anty":0,"antz":-50,"antsrc":"fc""#))
+        settleMainQueue()
+        XCTAssertEqual(store.activeProfile?.antennaOffset, measured(50, 60, 70))
+        XCTAssertFalse(adoptedGroups(syncer).contains(ActiveRocketSyncer.groupAntennaOffset))
+    }
 }

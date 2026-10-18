@@ -406,16 +406,26 @@ final class ActiveRocketSyncer: ObservableObject {
     /// its copy of the last cmd 81, so adopt the flight computer's once its
     /// report lands.  Only while unverified, only once, and only on a rocket
     /// that reports the setting at all.
+    ///
+    /// It is written only into the profile it was armed on, still holding the
+    /// offset it held then.  A user who sets the offset after it armed (with
+    /// the rail off, the cmd 81 waits in the out computer) is not overwritten
+    /// by the flight computer's boot report, which still carries its old
+    /// value: that report is dropped and nothing is said.
     private func armAntennaAdoptIfNeeded(device: BLEDevice, cfg: RocketConfig) {
         guard cfg.antennaOffset != nil, !cfg.antennaOffsetFromFlightComputer,
-              !antennaAdoptArmed else { return }
+              !antennaAdoptArmed, let armedOn = store?.activeProfile else { return }
+        let armedId = armedOn.id
+        let armedOffset = armedOn.antennaOffset
         antennaAdoptArmed = true
         antennaAdopt = device.$rocketConfig
             .compactMap { $0 }
             .filter { $0.antennaOffsetFromFlightComputer && $0.antennaOffset != nil }
             .first()
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] in self?.adoptAntennaOnly(from: $0) }
+            .sink { [weak self] in
+                self?.adoptAntennaOnly(from: $0, armedId: armedId, armedOffset: armedOffset)
+            }
     }
 
     private func adoptOrientationOnly() {
@@ -452,11 +462,15 @@ final class ActiveRocketSyncer: ObservableObject {
         syncState = .adopted(groups)
     }
 
-    private func adoptAntennaOnly(from reported: RocketConfig) {
+    private func adoptAntennaOnly(from reported: RocketConfig, armedId: UUID,
+                                  armedOffset: AntennaOffset) {
         guard let device, let store, device.isConnected,
               reported.antennaOffsetFromFlightComputer,
               let antenna = reported.antennaOffset,
-              let profile = store.activeProfile, antenna != profile.antennaOffset
+              let profile = store.activeProfile,
+              // Another profile, or this one edited since: the user's value stands.
+              profile.id == armedId, profile.antennaOffset == armedOffset,
+              antenna != profile.antennaOffset
         else { return }
         store.update(profile.id) { $0.antennaOffset = antenna }
         guard createdProfileName == nil else { return }
