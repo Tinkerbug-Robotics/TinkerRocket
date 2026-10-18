@@ -485,6 +485,44 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   call. The events JSON gets `hdg_obs` (the settings and each closed epoch's share), and `sim_tables.score_run` the
   mean and least share per phase.
 - **`sim_grid.py --pause-while FILE`**: the same as `--rig-state FILE` (exp/v9-observ's name for it).
+- **The turning body** (`RawGnssShadow::Config`, off by default; a `RAW_REPLAY_ROT` build, on unless the tree is
+  older than exp/v9-robust): the antenna's offset from the IMU is never measured before a flight, and the sim puts
+  it 0.3 m up the nose, which at the drogue's snatch (5 rad/s) moves 1.5 m/s against the IMU. `--rot-lever-axial-m A
+  --rot-lever-radial-m R` give every Doppler, in quadrature, the most such an antenna can move:
+  A x the rate across the nose + R x the whole rate, both the gyro less its bias at its largest since the epoch
+  before (`RawGnssShadow::rotLeverSigma`; `R` alone is the isotropic bound |omega| r); `--rot-lever-min-rate M` only
+  on an epoch whose rate across the nose reached M rad/s (the snatch, not the boost's weathercocking or the pitch-over
+  at apogee). `--att-hold-rate W
+  --att-hold-s S` hold GNSS off the attitude and the gyro bias (the unaided twin's mask) for every epoch whose rate
+  across the nose reached W rad/s and for S s after one; a roll alone never holds it. `--rot-skip-rate W
+  --rot-skip-s S` fuse nothing of those epochs instead (each closed as the vertical check closes one it drops): the
+  heading error the turn builds into the velocity is then still there for the first epoch after it, where a hold
+  would have let the velocity take it. `--rot-after-apogee` lets all three act only once the flight computer has
+  called apogee (the drogue's snatch and the descent; the boost, the coast and the votes fly as without them). The
+  events JSON's `rot` gives the settings, the largest allowance taken, the epochs held and the epochs skipped. The
+  firmware's switches are config.h's `RAW_ROT_LEVER_*`, `RAW_ATT_HOLD_*` and `RAW_ROT_SKIP_*` (mosaic only, 0 or
+  false: off).
+  Results (2026-10-17, gnss-attitude-study/v9-mosaic-filter-plan/evidence/wave3/robust/scorecard.md, outside the
+  repo; 15 patterns x 6 magnetometer arms x 16 flights an arm, the antenna 0.3 m up the nose and on the IMU):
+  - The allowance only on epochs that turned across the nose at 2 rad/s or more (`--rot-lever-axial-m 0.3
+    --rot-lever-radial-m 0.03 --rot-lever-min-rate 2`) takes out 76 % of the snatch's no-fault error (its first 3 s,
+    p90 median 7.8 -> 2.6 deg, worst 41.8 -> 10.4) and leaves every apogee item the design's (a windy boost that
+    reaches the rate moves vz at apogee by mm/s). On the IMU, a heading already wrong at the snatch is corrected
+    about a second later, which the descent p90 and the pitch near apogee count; under the drogue it costs
+    nothing. A 2.5 rad/s floor never acts before apogee here but misses the still-air flights' gentler snatch.
+  - Without a floor the allowance weakens the filter's vz near apogee: more early calls (102 -> 120). The hold lets
+    the velocity take the snatch's epochs and loses the heading error they carry (the descent's worst excess over
+    the twin 29 -> 92 deg). The skip keeps it, but after a long turn the velocity error it leaves can be too large
+    to read back (one coherent-fault run diverged to 48 deg where the allowance recovered to 1.4). Acting only
+    from the apogee call misses a snatch that comes before the call (a late call, an early ejection).
+  - On the four real V9 logs the floored allowances never act (byte-identical to the design).
+- **`sim_compare.py BASE NAME=EXP ...`** sets experiment grids (each a `sim_grid.py --arms design --harness-args
+  "..."` run into its own OUT) beside the base grid's design and unaided twin, flight by flight: the phase bars per
+  pattern (pooled over the informative magnetometer arms and over all of them), the worst excess, the deployment's
+  first 3 s, the pitch near apogee and the quorum (early calls and raw votes, latency, vz at apogee, guard latches).
+  Every arm is judged against today's twin.
+- **`sim_grid.py --pause-file FILE`**: before each events file and each run the workers wait, checking every 30 s,
+  while FILE says "active" (a bench rig's timing run needs the machine quiet).
 
 A run takes 0.2-0.6 s (about 70 s of flight, 16 satellites fused an epoch at 10 Hz, ~9 capped out, and the truth's
 quorum beside it); an events file 7-10 s; the whole grid (384 events files, 6912 runs in three arms) about 20

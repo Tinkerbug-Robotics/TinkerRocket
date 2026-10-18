@@ -270,6 +270,13 @@ struct Args
            dv_scale = -1.0, dv_bias = -1.0, dv_lever_m = -1.0, dv_hold_s = -1.0, dv_epoch_hold_s = -1.0,
            dv_window_s = -1.0, dv_noise_tau_s = -1.0, dv_hold_all_frac = -1.0, dv_latch_k = -1.0;
     int dv_deweight = -1, dv_ground = -1;
+    // the turning body (RawGnssShadow::Config, a RAW_REPLAY_ROT build; -1: the firmware's, off): the antenna's
+    // offset from the IMU bounded along the nose and across it (each Doppler's sigma takes rotLeverSigma), and
+    // GNSS held off the attitude from a rate across the nose and for a while after
+    double rot_lever_axial_m = -1.0, rot_lever_radial_m = -1.0, rot_lever_min_rps = -1.0;
+    double att_hold_rate_rps = -1.0, att_hold_s = -1.0;
+    double rot_skip_rate_rps = -1.0, rot_skip_s = -1.0;   // or nothing fused from a rate across the nose
+    bool rot_after_apogee = false;   // all three only once the flight computer has called apogee
     std::set<std::string> given;     // the options on the command line
 };
 
@@ -308,7 +315,11 @@ void usage()
                  "  [--dv-ground 0|1] [--dv-noise-tau-s X] [--dv-hold-all-frac X] [--dv-latch-k X]\n"
                  "  the heading's gain by its observability (a RAW_REPLAY_HDGOBS build): [--hdg-obs-mode 0|1|2|3]\n"
                  "  [--hdg-obs-fh X] [--hdg-obs-tau X] [--hdg-obs-sigma-v X] [--hdg-obs-window X] [--hdg-obs-open-g X]\n"
-                 "  [--hdg-obs-open-hold X] [--hdg-obs-floor X] [--hdg-obs-scope 0|1|2]\n");
+                 "  [--hdg-obs-open-hold X] [--hdg-obs-floor X] [--hdg-obs-scope 0|1|2]\n"
+                 "  the turning body (a RAW_REPLAY_ROT build): [--rot-lever-axial-m X] [--rot-lever-radial-m X]\n"
+                 "  [--rot-lever-min-rate X]\n"
+                 "  [--att-hold-rate X] [--att-hold-s X] [--rot-skip-rate X] [--rot-skip-s X]\n"
+                 "  [--rot-after-apogee]\n");
 }
 
 bool parseArgs(int argc, char** argv, Args& a)
@@ -461,6 +472,14 @@ bool parseArgs(int argc, char** argv, Args& a)
                 return false;
         }
         else if (k == "--pvt-out") a.pvt_out = val();
+        else if (k == "--rot-lever-axial-m") a.rot_lever_axial_m = std::atof(val());
+        else if (k == "--rot-lever-radial-m") a.rot_lever_radial_m = std::atof(val());
+        else if (k == "--rot-lever-min-rate") a.rot_lever_min_rps = std::atof(val());
+        else if (k == "--att-hold-rate") a.att_hold_rate_rps = std::atof(val());
+        else if (k == "--att-hold-s") a.att_hold_s = std::atof(val());
+        else if (k == "--rot-skip-rate") a.rot_skip_rate_rps = std::atof(val());
+        else if (k == "--rot-skip-s") a.rot_skip_s = std::atof(val());
+        else if (k == "--rot-after-apogee") a.rot_after_apogee = true;
         else if (k == "--acc-sub")
         {
             if (std::sscanf(val(), "%lf,%lf,%lf", &a.acc_sub[0], &a.acc_sub[1], &a.acc_sub[2]) != 3)
@@ -1730,6 +1749,33 @@ int main(int argc, char** argv)
         }
         cfg.ekf.att_gnss_off = true;
     }
+#endif
+    // the turning body's allowances (RawGnssShadow.h): off unless given
+#if RAW_REPLAY_ROT
+    if (a.rot_lever_axial_m >= 0.0)
+        cfg.rot_lever_axial_m = a.rot_lever_axial_m;
+    if (a.rot_lever_radial_m >= 0.0)
+        cfg.rot_lever_radial_m = a.rot_lever_radial_m;
+    if (a.rot_lever_min_rps >= 0.0)
+        cfg.rot_lever_min_rps = a.rot_lever_min_rps;
+    if (a.att_hold_rate_rps >= 0.0)
+        cfg.att_hold_rate_rps = a.att_hold_rate_rps;
+    if (a.att_hold_s >= 0.0)
+        cfg.att_hold_s = a.att_hold_s;
+    if (a.rot_skip_rate_rps >= 0.0)
+        cfg.rot_skip_rate_rps = a.rot_skip_rate_rps;
+    if (a.rot_skip_s >= 0.0)
+        cfg.rot_skip_s = a.rot_skip_s;
+    cfg.rot_after_apogee = a.rot_after_apogee;
+#else
+    if (a.rot_lever_axial_m >= 0.0 || a.rot_lever_radial_m >= 0.0 || a.rot_lever_min_rps >= 0.0
+        || a.att_hold_rate_rps >= 0.0 || a.att_hold_s >= 0.0 || a.rot_skip_rate_rps >= 0.0 || a.rot_skip_s >= 0.0
+        || a.rot_after_apogee)
+        std::fprintf(stderr, "WARNING: this build has no turning-body allowances (RAW_REPLAY_ROT=OFF): "
+                             "--rot-lever-axial-m, --rot-lever-radial-m, --rot-lever-min-rate, --att-hold-rate, "
+                             "--att-hold-s, --rot-skip-rate, --rot-skip-s and --rot-after-apogee are ignored\n");
+#endif
+#if RAW_REPLAY_MOSAIC
     const bool mosaic_eph_cap = gnss_raw::EphemerisStore::kCapacity == 128;
     if (mosaic != mosaic_eph_cap)
         std::fprintf(stderr, "WARNING: this binary's ephemeris store holds %u (the %s build's); the %s build's holds "
@@ -3496,6 +3542,16 @@ int main(int argc, char** argv)
                                  static_cast<double>(fs.dv_noise_max_mps), fs.dv_all_held, fs.dv_latches,
                                  fs.dv_latch_releases, fs.dv_latch_epochs);
                 }
+#endif
+#if RAW_REPLAY_ROT
+                std::fprintf(ej, "\"rot\": {\"axial_m\": %.3f, \"radial_m\": %.3f, \"min_rps\": %.3f, \"hold_rps\": %.3f, \"hold_s\": %.3f, "
+                                 "\"skip_rps\": %.3f, \"skip_s\": %.3f, "
+                                 "\"after_apogee\": %d, \"max_sigma_mps\": %.3f, \"held\": %u, \"skipped\": %u}, ",
+                             sh.cfg_.rot_lever_axial_m, sh.cfg_.rot_lever_radial_m, sh.cfg_.rot_lever_min_rps,
+                             sh.cfg_.att_hold_rate_rps,
+                             sh.cfg_.att_hold_s, sh.cfg_.rot_skip_rate_rps, sh.cfg_.rot_skip_s,
+                             sh.cfg_.rot_after_apogee ? 1 : 0,
+                             static_cast<double>(fs.rot_max_sigma_mps), fs.att_held, fs.rot_skipped);
 #endif
                 std::fprintf(ej, "\"screen_compare\": [");
                 for (size_t i = 0; i < cmps.size(); ++i)

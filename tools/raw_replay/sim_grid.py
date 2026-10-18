@@ -21,8 +21,13 @@ are made against, and truth/<flight>.nav, which the truth's quorum reads) are in
     PYTHONPATH=<simbuild>/tinkerrocket-sim/src:<gnss-hf-sim>/sim \\
         python3 tools/raw_replay/sim_grid.py OUT --flights <grid>/flights [--patterns none,cut05,...] \\
         [--mags 0,+10,...] [--arms design,unaided,noguard] [--jobs 8] \\
-        [--binary tools/raw_replay/build/raw_replay_mosaic] [--lever-arm 0.3] [--harness-args "..."]
+        [--binary tools/raw_replay/build/raw_replay_mosaic] [--lever-arm 0.3] [--harness-args "..."] \\
+        [--pause-file FILE]
     python3 tools/raw_replay/sim_tables.py OUT
+
+--rig-state (or --pause-file) names a file another job writes "active" into while it needs the machine quiet (a bench
+rig's timing run, say): before each events file and each run the workers read it and wait, checking every 30 s, while
+it says so.
 """
 from __future__ import annotations
 
@@ -138,7 +143,7 @@ def run_one(job):
         json.dump(sc, fh)
     os.replace(score_path + ".tmp", score_path)
     if not (keep and (pattern in keep or "all" in keep)):
-        for f in (csv, csv + ".events.json"):
+        for f in (csv, csv + ".events.json", csv + ".epochs.csv"):
             if os.path.exists(f):
                 os.remove(f)
     return rid, p.returncode, dt
@@ -167,7 +172,8 @@ def main():
     ap.add_argument("--rig-state", help="a file that reads 'active' while the bench rig needs a quiet machine: no "
                                         "events file or run starts while it does (checked every 30 s)")
     ap.add_argument("--force-events", action="store_true")
-    ap.add_argument("--pause-while", dest="rig_state", help="the same as --rig-state (exp/v9-observ's name)")
+    ap.add_argument("--pause-while", "--pause-file", dest="rig_state",
+                    help="the same as --rig-state (exp/v9-observ's and exp/v9-robust's names)")
     a = ap.parse_args()
     import sim_events
     pats = list(sim_events.PATTERNS) if a.patterns == "all" else a.patterns.split(",")

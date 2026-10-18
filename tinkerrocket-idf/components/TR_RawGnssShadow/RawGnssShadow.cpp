@@ -75,6 +75,16 @@ RawGnssShadow::RawGnssShadow(const Config& cfg)
     : cfg_(cfg), ekf_(cfg.ekf), stage_(stageConfig(cfg)), survey_(cfg.survey), satcheck_(cfg.sat_check),
       fixcheck_(cfg.fix_check), level_gate_(cfg.level), fit_(cfg.heading_fit)
 {
+    // the turning body's allowances read the filter's rate; without them it
+    // keeps none, and steps as the Beetle's always has
+    ekf_.setTrackRate(rotOn());
+}
+
+double RawGnssShadow::rotLeverSigma(double axial_m, double radial_m, double rate_rps, double across_rps)
+{
+    const double a = axial_m > 0.0 && across_rps > 0.0 ? axial_m * across_rps : 0.0;
+    const double r = radial_m > 0.0 && rate_rps > 0.0 ? radial_m * rate_rps : 0.0;
+    return a + r;
 }
 
 void RawGnssShadow::reset()
@@ -766,6 +776,8 @@ void RawGnssShadow::start(double t)
     vert_latch_ = false;
     dvReset();
     n_g_held_ = 0;
+    att_hold_until_ = -1.0e9;
+    rot_skip_until_ = -1.0e9;
     pr_period_k_ = -1;
     fit_last_te_ = -1.0;
     if (cfg_.heading_mode == kHeadingAct)
@@ -911,6 +923,46 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
     job_.te = te;
     job_.in_flight = (imu_flags & kShadowInFlight) != 0;
     job_.g_peak = static_cast<double>(ekf_.takeGPeak());
+    // the turning body (RawGnssShadow.h): the rate since the epoch before
+    // sets this epoch's allowance on its Dopplers (jobChecks), whether GNSS
+    // is held off the attitude for it -- on the filter itself, so the boost
+    // screen's scratch copy takes the hold along -- and whether it is fused at
+    // all (kJobClock). With rot_after_apogee, none of them before the apogee
+    // call (the rate is still taken, so the first epoch after it reads only
+    // its own interval's)
+    job_.rot_sigma = 0.0;
+    job_.rot_skip = false;
+    job_.rot_dropped = false;
+    if (rotOn())
+    {
+        float all = 0.0f, across = 0.0f;
+        ekf_.takeRatePeak(all, across);
+        const bool acts = !cfg_.rot_after_apogee || (imu_flags & kShadowApogee) != 0;
+        if (acts && static_cast<double>(across) >= cfg_.rot_lever_min_rps)
+            job_.rot_sigma = rotLeverSigma(cfg_.rot_lever_axial_m, cfg_.rot_lever_radial_m, static_cast<double>(all),
+                                           static_cast<double>(across));
+        st_.rot_last_sigma_mps = static_cast<float>(job_.rot_sigma);
+        if (st_.rot_last_sigma_mps > st_.rot_max_sigma_mps)
+            st_.rot_max_sigma_mps = st_.rot_last_sigma_mps;
+        st_.rot_last_across_rps = across;
+        bool hold = false;
+        if (cfg_.att_hold_rate_rps > 0.0 && acts)
+        {
+            if (static_cast<double>(across) >= cfg_.att_hold_rate_rps)
+                att_hold_until_ = te + cfg_.att_hold_s;
+            hold = te <= att_hold_until_;
+        }
+        ekf_.setAttHold(hold);
+        st_.att_last_held = hold;
+        if (hold)
+            st_.att_held++;
+        if (cfg_.rot_skip_rate_rps > 0.0 && acts)
+        {
+            if (static_cast<double>(across) >= cfg_.rot_skip_rate_rps)
+                rot_skip_until_ = te + cfg_.rot_skip_s;
+            job_.rot_skip = te <= rot_skip_until_;
+        }
+    }
     // the boost screen judges this epoch: no apogee call yet (a drogue's
     // snatch is no boost), and the IMU past boost_screen_g within the last
     // boost_screen_window_s (0 g: every epoch)
@@ -1015,8 +1067,17 @@ void RawGnssShadow::jobUnit(double t)
         job_.phase = kJobClock;
         break;
     case kJobClock:
-        job_.phase = !ekf_.beginGnssRaw(built_.meas, built_.n, age, job_.rs) ? kJobClose
-                     : (job_.screen || job_.vcheck ? kJobScreen : kJobFuse);
+        // a skipped epoch (startJob: the body turning) takes its clock's step,
+        // and nothing else: closed as a dropped one
+        if (!ekf_.beginGnssRaw(built_.meas, built_.n, age, job_.rs))
+            job_.phase = kJobClose;
+        else if (job_.rot_skip)
+        {
+            job_.rot_dropped = true;
+            job_.phase = kJobClose;
+        }
+        else
+            job_.phase = job_.screen || job_.vcheck ? kJobScreen : kJobFuse;
         break;
     case kJobScreen:
         jobScreen(age);
@@ -1090,6 +1151,14 @@ void RawGnssShadow::jobChecks(double age, double t)
         {
             const double s = static_cast<double>(m[i].sigma_rr);
             m[i].sigma_rr = static_cast<float>(std::sqrt(s * s + s_dyn * s_dyn));
+        }
+    // the turning body's allowance (startJob): what an antenna off the IMU
+    // can add to every Doppler while the body turns
+    if (job_.rot_sigma > 0.0)
+        for (int i = 0; i < n; ++i)
+        {
+            const double s = static_cast<double>(m[i].sigma_rr);
+            m[i].sigma_rr = static_cast<float>(std::sqrt(s * s + job_.rot_sigma * job_.rot_sigma));
         }
     // the ionosphere chosen anew on the pad: the survey's residuals were
     // against the other model
@@ -1627,10 +1696,17 @@ void RawGnssShadow::closeJob(double age, double t)
 {
     const int n = built_.n;
     RawGnssStats& rs = job_.rs;
-    if (rs.screen_dropped)
+    if (rotOn())
     {
-        // Dropped by the vertical check or the boost screen: none of it fused, and nothing of it
-        // kept -- its receiver is no carrier rate's earlier end (the next
+        st_.rot_last_skipped = job_.rot_dropped;
+        if (job_.rot_dropped)
+            st_.rot_skipped++;
+    }
+    if (rs.screen_dropped || job_.rot_dropped)
+    {
+        // Dropped by the vertical check or the boost screen, or skipped while
+        // the body turned (rot_skip_rate_rps): none of it fused, and nothing
+        // of it kept -- its receiver is no carrier rate's earlier end (the next
         // epoch's rates across it go unmatched), its pseudoranges no satellite
         // check's reference, its velocity no levelling epoch. The clock's step
         // (beginGnssRaw) stands: every satellite agreed on it.
