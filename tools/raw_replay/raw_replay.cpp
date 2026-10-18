@@ -261,6 +261,7 @@ struct Args
     double rr_pair_max_diff = -1.0;  //   the pair at most this far apart, m/s (-1: the profile's 15)
     double rr_pair_sigma = -1.0;     //   offline only: each averaged Doppler's sigma scaled by this (no firmware path)
     bool sim_fuse_grid = false;      // a sim's epochs (X) cut to the fused grid as the driver cuts the receiver's
+    double rr_lag_ms = -1.0;         // offline only: the filter's rr_lag_s in place of the profile's, ms (-1: the profile's)
                                      //   (implied by --rr-pair-avg 1: the epochs between are read, not fused)
     std::string flight_state;        // the launch and landing: "log" (the ticks' flags), "quorum" (the quorum's own
                                      //   state machine); default the ticks', the quorum's where META state_machine none
@@ -326,7 +327,7 @@ void usage()
                  "  [--seed-heading-error-deg X] [--reject-persist-rr N] [--truth-nav FILE]\n"
                  "  [--seed-gyro-dps x,y,z]\n"
                  "  [--sat-cap N] [--fuse-ms X] [--flight-state log|quorum] [--time-tag-from-boot]\n"
-                 "  [--rr-pair-avg 0|1] [--rr-pair-max-diff X] [--rr-pair-sigma X] [--sim-fuse-grid]\n"
+                 "  [--rr-pair-avg 0|1] [--rr-pair-max-diff X] [--rr-pair-sigma X] [--sim-fuse-grid] [--rr-lag-ms X]\n"
                  "  [--assume-finetime] [--pad-zupt 0|1] [--gnss-only-from-s X] [--gnss-only-gate launch|ground]\n"
                  "  [--pvt-out FILE] [--gnss-only-keep-level]\n"
                  "  the Doppler change check (a RAW_REPLAY_DVCHECK build): [--dv-check 0|1|2] [--dv-sat-k X]\n"
@@ -486,6 +487,7 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--rr-pair-max-diff") a.rr_pair_max_diff = std::atof(val());
         else if (k == "--rr-pair-sigma") a.rr_pair_sigma = std::atof(val());
         else if (k == "--sim-fuse-grid") a.sim_fuse_grid = true;
+        else if (k == "--rr-lag-ms") a.rr_lag_ms = std::atof(val());
         else if (k == "--flight-state") a.flight_state = val();
         else if (k == "--time-tag-from-boot") a.time_tag_from_boot = true;
         else if (k == "--assume-finetime") a.assume_finetime = true;
@@ -1723,6 +1725,9 @@ int main(int argc, char** argv)
                              "(RAW_REPLAY_MOSAIC_SAFEGUARDS=OFF): --receiver mosaic replays with the Doppler change "
                              "check, the heading share and the turning body's allowance off unless set by flag\n");
 #endif
+    // an experiment on the Doppler's instant: the filter's rr_lag_s in place of the profile's (offline only)
+    if (a.rr_lag_ms >= 0.0)
+        cfg.ekf.rr_lag_s = a.rr_lag_ms * 1.0e-3;
     // an experiment on the filter's own parameter: the Doppler's refusal count before it is let back in (the
     // profile sets it from reject_persist_s; a field of the fc/v9-raw-primary tree, as the mosaic path's)
 #if RAW_REPLAY_MOSAIC

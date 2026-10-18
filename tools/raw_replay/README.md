@@ -593,6 +593,17 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   up the nose. The evaluation (Grid B with the antenna 0.10 m and 0.3 m up the nose, the offset given right, 3 or
   5 cm wrong, and not given) is in gnss-attitude-study/v9-mosaic-filter-plan/evidence/antenna-offset/ (outside the
   repo).
+- **The Dopplers in pairs** (`MosaicRawEpoch.h`, "The epochs between the grid's"; a `RAW_REPLAY_DOPAVG` build, on
+  unless the tree is older than exp/v9-dop-avg): `--rr-pair-avg 1` is the bench image's `TR_BENCH_RAW_DOP_AVG=1`.
+  The feed reads each MeasEpoch off the fused grid for its Dopplers (`noteMeasEpochDopplers`) and averages each grid
+  epoch's with them by the driver's rule (`averageDopplerPairs`: the epoch 50 ms before, read whole, no clock jump
+  between, valid and at the floor at both ends, the lock time not down, within `--rr-pair-max-diff`, 15 m/s), and
+  the profile adds 25 ms to `rr_lag_s`. It needs the 100 ms grid over the receiver's 50 ms (`--fuse-ms 100`). A sim's
+  20 Hz epochs (`sim_events.py` at rate 20) are cut to the fused grid first, as the driver cuts the receiver's
+  (`--sim-fuse-grid` does the cut alone: on Grid B it is byte-identical to the rate-10 events, whose draws are the
+  same), and paired by the same rule (a sim has no lock time or clock jump). `--rr-pair-sigma X` scales each averaged
+  Doppler's sigma, offline only (no firmware path). The events JSON gains a `pairs` block: the counts, why each
+  Doppler left alone was, and each grid epoch with one (flight time, usable, averaged).
 - **`sim_compare.py BASE NAME=EXP ...`** sets experiment grids (each a `sim_grid.py --arms design --harness-args
   "..."` run into its own OUT) beside the base grid's design and unaided twin, flight by flight: the phase bars per
   pattern (pooled over the informative magnetometer arms and over all of them), the worst excess, the deployment's
