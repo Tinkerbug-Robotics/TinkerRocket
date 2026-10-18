@@ -11,8 +11,15 @@
 #include <cmath>
 #include <random>
 
+#include "DopplerChange.h"
 #include "RawGnssWindup.h"
+#include "RawMeas.h"
+#include "ReceiverProfile.h"
+
+// attExactBlocks is the filter's own (private): read here directly, its float blocks against its double ones
+#define private public
 #include "TR_RawGnssEKF.h"
+#undef private
 
 namespace w = gnss_raw::windup;
 
@@ -229,4 +236,48 @@ TEST(RawGnssEKFExact, AtNoRateTheExactTransitionIsTheFirstOrdersToItsOwnRounding
     rollFor(0.0, true, s1, x1);
     EXPECT_NEAR(s1, s0, 1e-4 * s0);
     EXPECT_NEAR(x1, x0, 1e-4 * x0);
+}
+
+TEST(RawGnssEKFExact, TheFloatBlocksAreTheDoubleOnesWithinAMillionth)
+{
+    // The flight filter is RawGnssEKF<float>: its blocks come from sinf and cosf, and 1 - cos th cancels at a
+    // small turn -- an absolute error of about 6e-8, against the I beside it. Against the double blocks for the
+    // same rate (the float one, widened), a turn th = |w| dt a step from 1e-6 to pi about axes in every direction:
+    // both within 1e-6. (Ga's (1 - cos th) / |w| term is off by up to its own size at a small turn, 2.5e-7 at most
+    // in a 10 ms step: a term first order leaves out altogether.)
+    gnss_raw::RawGnssEKFParams prm;
+    const gnss_raw::RawGnssEKF<float> ff(prm);
+    const gnss_raw::RawGnssEKF<double> fd(prm);
+    std::mt19937 rng(7);
+    std::normal_distribution<double> n01(0.0, 1.0);
+    const float dt = 0.01f;
+    double worst_ra = 0.0, worst_ga = 0.0;
+    int n = 0;
+    for (double th : {1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 0.1, 0.3, 1.0, 2.0, 3.0, kPi})
+        for (int k = 0; k < 20; ++k)
+        {
+            double a[3] = {n01(rng), n01(rng), n01(rng)};
+            const double an = std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+            float wf[3];
+            double wd[3];
+            for (int i = 0; i < 3; ++i)
+            {
+                wf[i] = static_cast<float>(a[i] / an * th / dt);
+                wd[i] = wf[i];
+            }
+            float Rf[3][3], Gf[3][3];
+            double Rd[3][3], Gd[3][3];
+            ff.attExactBlocks(wf, dt, Rf, Gf);
+            fd.attExactBlocks(wd, static_cast<double>(dt), Rd, Gd);
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                {
+                    worst_ra = std::max(worst_ra, std::fabs(static_cast<double>(Rf[i][j]) - Rd[i][j]));
+                    worst_ga = std::max(worst_ga, std::fabs(static_cast<double>(Gf[i][j]) - Gd[i][j]));
+                }
+            n++;
+        }
+    EXPECT_EQ(n, 220);
+    EXPECT_LT(worst_ra, 1e-6);
+    EXPECT_LT(worst_ga, 1e-6);
 }

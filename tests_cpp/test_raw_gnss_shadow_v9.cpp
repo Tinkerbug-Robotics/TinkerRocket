@@ -330,6 +330,7 @@ struct TenFlight
     int    turn_axis = 1;
     double lever_m = 0.0;
     double lever_y_m = 0.0;              // and this far along body y (across the nose)
+    double lever_z_m = 0.0;              //   and body z
     double apogee_t = -1.0;              // the flight computer calls apogee from here (kShadowApogee)
     double seed_heading_err_deg = 0.0;   // the pad seed's heading this far off the body's (about the down axis)
     // the whole receiver stale (test_doppler_change.cpp's pattern, sim_events.py's): its Dopplers at the pad's
@@ -514,7 +515,7 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
             if (!fl.lose_whole_seconds || ms % 1000 != 0)
             {
                 // the antenna: lever_m up the nose, moving omega x r with the turn
-                const double r_b[3] = {fl.lever_m, fl.lever_y_m, 0.0};
+                const double r_b[3] = {fl.lever_m, fl.lever_y_m, fl.lever_z_m};
                 const double w_b[3] = {ax[0] * w_turn, ax[1] * w_turn, 0.0};
                 const double wxr[3] = {w_b[1] * r_b[2] - w_b[2] * r_b[1], w_b[2] * r_b[0] - w_b[0] * r_b[2],
                                        w_b[0] * r_b[1] - w_b[1] * r_b[0]};
@@ -1910,4 +1911,134 @@ TEST(RawGnssShadowV9, AKnownAntennaWithTheMagnetometersHeadingKeepsTheLatchsLeve
     EXPECT_GT(ru->dv_level_chi2, 4.0f);
     EXPECT_LT(rk->dv_level_chi2, 1.0f);
     EXPECT_LT(rk->t, ru->t - 0.15);
+}
+
+// ---- the change check's lever allowance on the nose's own turn (dv_lever_mode 1; the high-roll port)
+
+namespace
+{
+
+// The Goblin's antenna from its IMU (the V9 holder as measured; body FRD, m): 47 mm up the nose and 12.6 mm across it
+constexpr double kGoblinAnt[3] = {0.04696, -0.01138, 0.00548};
+
+// A flight rolling about the nose at rev_s from half a second into the boost to the end (the rate a step, then
+// steady), the truth's antenna at r (body FRD, m), the pad's magnetometer calibrated or not
+TenFlight rolling(double rev_s, const double r[3], bool mag)
+{
+    TenFlight fl;
+    fl.turn_t = kIgn + 0.5;
+    fl.turn_s = 100.0;                   // never back
+    fl.turn_rps = rev_s * 2.0 * kPi;
+    fl.turn_axis = 0;
+    fl.lever_m = r[0];
+    fl.lever_y_m = r[1];
+    fl.lever_z_m = r[2];
+    fl.mag_on_pad = mag;
+    return fl;
+}
+
+// The image's safeguards with the exact attitude transition (a roll's tilt variance turned, not stretched), the
+// change check's lever mode, settled tracking (unsetCfg's), and the offset known at r (nullptr: unknown). The
+// wind-up stays off: the synthetic sky's Dopplers carry none.
+RawGnssShadow::Config leverCfg(uint8_t mode, const double* r)
+{
+    RawGnssShadow::Config c = safeguardsCfg();
+    c.meas.rr_relock_sigma = 0.0;
+    c.ekf.att_exact = true;
+    c.windup_k = 0.0;
+    c.dv_lever_mode = mode;
+    c.dv_lever_radial_m = 0.0;
+    if (r != nullptr)
+    {
+        gnss_raw::AntennaOffset a;
+        a.known = true;
+        for (int i = 0; i < 3; ++i)
+            a.b_m[i] = r[i];
+        gnss_raw::applyAntennaOffset(a, c);
+    }
+    return c;
+}
+
+// every Doppler ramping 2 m/s a second down from 6.6 s, held at 4 m/s (sim_events.py's slow12)
+TenFlight ramped(TenFlight fl)
+{
+    fl.coh_from = 6.6;
+    fl.coh_rate = 2.0;
+    fl.coh_max = 4.0;
+    return fl;
+}
+
+}  // namespace
+
+TEST(RawGnssShadowV9, TheNoseLeverTakesNothingFromARollAboutTheNose)
+{
+    // The Goblin's antenna known, the coast rolling at a steady 5 rev/s about a nose that points straight up: the
+    // nose does not turn, so on its own turn (mode 1) the epoch's lever allowance is the arm times nothing (under
+    // 0.01 m/s), where on the whole rate (mode 0) it is the arm times |w|^2 dt: 5.8 m/s with the magnetometer's
+    // heading (0.05 + chord(10 deg) x 0.0486 m) and 9.7 with the heading unset (0.0486 + 0.05 m). With the heading
+    // the magnetometer's, the roll's lever velocity is predicted and no epoch fails on the nose's turn either.
+    for (bool mag : {true, false})
+    {
+        SCOPED_TRACE(mag ? "the magnetometer's heading" : "the heading unset");
+        const TenRun nose = flyTen(leverCfg(1, kGoblinAnt), rolling(5.0, kGoblinAnt, mag));
+        const TenRun whole = flyTen(leverCfg(0, kGoblinAnt), rolling(5.0, kGoblinAnt, mag));
+        EXPECT_EQ(nose.st.dv_hdg_unset, mag ? 0 : 1);
+        EXPECT_GT(nose.st.dv_checks, 50u);
+        EXPECT_LT(nose.st.dv_last_lever_mps, 0.01f);
+        EXPECT_NEAR(whole.st.dv_last_lever_mps, mag ? 5.77f : 9.73f, 0.1f);
+        if (mag)
+        {
+            EXPECT_EQ(nose.st.dv_epoch_fails, 0u);
+            EXPECT_EQ(nose.st.dv_held_epochs, 0u);
+        }
+    }
+}
+
+TEST(RawGnssShadowV9, TheNoseLeverCatchesASlowRampThatTheWholeRateMisses)
+{
+    // Every Doppler ramping 2 m/s a second (slow12) through a coast rolling at 1 rev/s, the Goblin's antenna in the
+    // truth: on the whole rate (mode 0) the lever allowance takes the roll (0.39 m/s an epoch with the offset known
+    // and the heading unset, 1.2 unknown) and no epoch fails; on the nose's own turn (mode 1) the ramp fails epoch
+    // after epoch (20 or so from 6.6 to 9 s) and its Dopplers are held -- the offset unknown, or known with the
+    // heading unset or the magnetometer's. Without the ramp none fails either way: 12.6 mm across the nose at
+    // 1 rev/s changes an epoch's Dopplers by 0.05 m/s. At 5 rev/s with the magnetometer's heading (the one case
+    // whose own roll passes there: below), the same.
+    struct Case
+    {
+        const double* r;
+        bool mag;
+        const char* what;
+    };
+    for (const Case& c : {Case{nullptr, false, "unknown"}, Case{kGoblinAnt, false, "known, the heading unset"},
+                          Case{kGoblinAnt, true, "known, the magnetometer's heading"}})
+    {
+        SCOPED_TRACE(c.what);
+        const TenFlight fl = rolling(1.0, kGoblinAnt, c.mag);
+        const TenRun nose = flyTen(leverCfg(1, c.r), ramped(fl)), whole = flyTen(leverCfg(0, c.r), ramped(fl));
+        EXPECT_GE(dvFailsBetween(nose, 6.6, 9.0), 10u);
+        EXPECT_GT(nose.st.dv_held_epochs, 10u);
+        EXPECT_EQ(whole.st.dv_epoch_fails, 0u);
+        EXPECT_EQ(flyTen(leverCfg(1, c.r), fl).st.dv_epoch_fails, 0u);
+        EXPECT_EQ(flyTen(leverCfg(0, c.r), fl).st.dv_epoch_fails, 0u);
+    }
+    const TenFlight fast = rolling(5.0, kGoblinAnt, true);
+    EXPECT_GE(dvFailsBetween(flyTen(leverCfg(1, kGoblinAnt), ramped(fast)), 6.6, 9.0), 10u);
+    EXPECT_EQ(flyTen(leverCfg(0, kGoblinAnt), ramped(fast)).st.dv_epoch_fails, 0u);
+}
+
+TEST(RawGnssShadowV9, AnAntennaOffTheRollAxisUnpredictedHoldsTheDopplersAtFiveRevS)
+{
+    // With no radial bound (dv_lever_radial_m 0) the nose's own turn allows nothing for an antenna across the roll
+    // axis that the filter does not predict: the offset unknown, or known with the heading unset (the prediction
+    // taken back out of the change). At 5 rev/s the Goblin's 12.6 mm turns an epoch's Dopplers by 0.79 m/s, and the
+    // coast's epochs fail and hold their Dopplers -- towards the unaided filter, the documented price. On the axis
+    // nothing fails.
+    const TenRun unk = flyTen(leverCfg(1, nullptr), rolling(5.0, kGoblinAnt, false));
+    const TenRun unset = flyTen(leverCfg(1, kGoblinAnt), rolling(5.0, kGoblinAnt, false));
+    EXPECT_GE(unk.st.dv_epoch_fails, 20u);
+    EXPECT_GT(unk.st.dv_held_epochs, 20u);
+    EXPECT_GE(unset.st.dv_epoch_fails, 20u);
+    EXPECT_GT(unset.st.dv_held_epochs, 20u);
+    const double axis[3] = {kGoblinAnt[0], 0.0, 0.0};
+    EXPECT_EQ(flyTen(leverCfg(1, nullptr), rolling(5.0, axis, false)).st.dv_epoch_fails, 0u);
 }
