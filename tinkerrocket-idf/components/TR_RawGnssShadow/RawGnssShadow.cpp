@@ -978,6 +978,11 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
         if (acts && static_cast<double>(across) >= leverMinRps())
             job_.rot_sigma = rotLeverSigma(leverAxialM(), leverRadialM(), static_cast<double>(all),
                                            static_cast<double>(across));
+        // the offset known and the heading unset: what any heading does to the predicted lever's velocity,
+        // from the rate the bounds start at (RawGnssShadow.h)
+        if (acts && cfg_.ekf.lever_on && !dv_hdg_known_ && static_cast<double>(across) >= cfg_.rot_lever_min_rps)
+            job_.rot_sigma += rotLeverSigma(leverUnsetM(true), leverUnsetM(false), static_cast<double>(all),
+                                            static_cast<double>(across));
         st_.rot_last_sigma_mps = static_cast<float>(job_.rot_sigma);
         if (st_.rot_last_sigma_mps > st_.rot_max_sigma_mps)
             st_.rot_max_sigma_mps = st_.rot_last_sigma_mps;
@@ -1340,7 +1345,8 @@ void RawGnssShadow::leverRoll(double age, const double w[3], const double C[3][3
 // (v_lev: this end's, as dopplerChange took it); where the heading is unset
 // that attitude's heading can be any, so v_lev goes back on the fitted
 // offset, as on the epoch test's change (knownLeverArm's wu): the antenna's
-// velocity less the filter's, unknown's level.
+// velocity less the filter's, unknown's level. The Dopplers it lets go to
+// the update allow for that heading too (leverUnsetM).
 double RawGnssShadow::dvLevelChi2(double row_var, const float v_lev[3])
 {
     const double te = job_.te;

@@ -87,7 +87,11 @@ are entered, and take a readback into the rocket's profile only when the flight 
   value (`antenna_sigma_*`) replace those bounds and the change check's lever allowance. The change check also
   allows for the attitude turning the antenna's predicted motion: with the heading known, the attitude allowance's
   share of the offset; with no magnetometer heading, it takes the prediction back out and allows the whole offset,
-  as Unknown does with its 0.3 m. The offset's roll terms are observed and logged, never fused.
+  as Unknown does with its 0.3 m, and its latch lets go at Unknown's level the same way. With no magnetometer
+  heading, each Doppler's sigma also allows twice the offset (any heading can turn the predicted motion that far)
+  once the body turns at 2 rad/s or more across the nose, where Unknown's bounds start, so a swing's Dopplers let in
+  after a latch cannot pull the velocity off. That costs some descent accuracy and next to none in the ascent. The
+  offset's roll terms are observed and logged, never fused.
 - **The log:** the pad context gains a record, `PCX_ANT`, beside the calibrations at launch + 5 s: the setting, the
   same in the filter's frame, and whether the navigation filter flew with this offset (it started, and had the
   offset on at the record). `tools/raw_replay/extract.py` passes an offset the filter flew with to the harness

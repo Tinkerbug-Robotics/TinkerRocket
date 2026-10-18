@@ -332,7 +332,9 @@ inline double epochChi2(const double w[3], const double Cw[3][3], const double s
 // heading's, and dv up to twice the lever's velocity where unknown's is
 // once (0.3 m at 5 rad/s, 180 deg off: 3 m/s), so the caller puts it back
 // (dv + v_lev, every row of the end moved by the same velocity:
-// knownLeverArm's way) and the latch lets go where unknown's does.
+// knownLeverArm's way) and the latch lets go where unknown's does; the
+// Dopplers it lets go allow what any heading does to their prediction
+// (RawGnssShadow's leverUnsetM).
 inline double levelChi2(const double dv[3], const double Cw[3][3], const double Pv[3][3], double floor_var)
 {
     double S[3][3];
