@@ -58,7 +58,9 @@ endif()
 # the mosaic-only image's flight safeguards in one call (gnss_raw::applyMosaicFlightSafeguards, ReceiverProfileApply.h):
 # a tree with all three of the features it sets
 option(RAW_REPLAY_MOSAIC_SAFEGUARDS "the firmware tree sets the mosaic's flight safeguards in one call (applyMosaicFlightSafeguards)" ON)
-if(NOT (RAW_REPLAY_MOSAIC AND RAW_REPLAY_DVCHECK AND RAW_REPLAY_HDGOBS AND RAW_REPLAY_ROT))
+if(RAW_REPLAY_MOSAIC_SAFEGUARDS AND NOT (RAW_REPLAY_MOSAIC AND RAW_REPLAY_DVCHECK AND RAW_REPLAY_HDGOBS AND RAW_REPLAY_ROT))
+    message(STATUS "raw_replay: RAW_REPLAY_MOSAIC_SAFEGUARDS off (one of RAW_REPLAY_MOSAIC, DVCHECK, HDGOBS and ROT is "
+                   "off): --receiver mosaic will not apply the image's flight safeguards")
     set(RAW_REPLAY_MOSAIC_SAFEGUARDS OFF)
 endif()
 set(LIB_DIR "${SRC_ROOT}/tinkerrocket-idf/components")

@@ -156,7 +156,9 @@ What `startRawShadow()` builds under `TR_RAW_NAV_MOSAIC` (build_units D1a; check
   body's Doppler allowance (`--rot-lever-axial-m 0.3 --rot-lever-radial-m 0.03 --rot-lever-min-rate 2`). It runs
   right after the profile, so each `--dv-*`, `--hdg-obs-*` and `--rot-*` flag still changes its own value for an
   experiment. Today's design before them (and its `--unaided` twin) is
-  `--dv-check 0 --hdg-obs-mode 0 --rot-lever-axial-m 0 --rot-lever-radial-m 0 --rot-lever-min-rate 0`;
+  `--dv-check 0 --hdg-obs-mode 0 --rot-lever-axial-m 0 --rot-lever-radial-m 0 --rot-lever-min-rate 0`. A build
+  without them (`RAW_REPLAY_MOSAIC_SAFEGUARDS` off, which any of `RAW_REPLAY_DVCHECK`, `HDGOBS` and `ROT` off turns
+  off, saying so at configure) warns on every `--receiver mosaic` run that it flies none of the three;
 - the heading at the firmware's defaults (`--fw-defaults`, which now also takes `--heading-mode` to the primary
   build's `TR_HEADING_FIT` 2 unless given): act, the whole attitude from launch (`RAW_HEADING_GATE` 1), the 10/30 deg
   prior, no hand-off, the 0.6 deg tilt floor;
@@ -519,8 +521,9 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   would have let the velocity take it. `--rot-after-apogee` lets all three act only once the flight computer has
   called apogee (the drogue's snatch and the descent; the boost, the coast and the votes fly as without them). The
   events JSON's `rot` gives the settings, the largest allowance taken, the epochs held and the epochs skipped. The
-  firmware's switches are config.h's `RAW_ROT_LEVER_*`, `RAW_ATT_HOLD_*` and `RAW_ROT_SKIP_*` (mosaic only, 0 or
-  false: off).
+  mosaic image sets them in `gnss_raw::applyMosaicFlightSafeguards` (`TR_RawGnssShadow/ReceiverProfileApply.h`),
+  which `--receiver mosaic` applies too: `rot_lever_axial_m` 0.30, `rot_lever_radial_m` 0.03, `rot_lever_min_rps`
+  2.0, the hold and the skip off (every other image: all off).
   Results (2026-10-17, gnss-attitude-study/v9-mosaic-filter-plan/evidence/wave3/robust/scorecard.md, outside the
   repo; 15 patterns x 6 magnetometer arms x 16 flights an arm, the antenna 0.3 m up the nose and on the IMU):
   - The allowance only on epochs that turned across the nose at 2 rad/s or more (`--rot-lever-axial-m 0.3

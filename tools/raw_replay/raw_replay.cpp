@@ -1590,6 +1590,13 @@ int main(int argc, char** argv)
     // below change them for an experiment (0 turns one off: today's design before them, and its twin)
     if (mosaic)
         applyMosaicFlightSafeguards(cfg);
+#else
+    // a build without them (an older tree, or one of RAW_REPLAY_DVCHECK, HDGOBS and ROT off) flies none of the
+    // three: not the image
+    if (mosaic)
+        std::fprintf(stderr, "WARNING: this build does not apply the mosaic image's flight safeguards "
+                             "(RAW_REPLAY_MOSAIC_SAFEGUARDS=OFF): --receiver mosaic replays with the Doppler change "
+                             "check, the heading share and the turning body's allowance off unless set by flag\n");
 #endif
     // an experiment on the filter's own parameter: the Doppler's refusal count before it is let back in (the
     // profile sets it from reject_persist_s; a field of the fc/v9-raw-primary tree, as the mosaic path's)
