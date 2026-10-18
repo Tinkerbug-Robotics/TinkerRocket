@@ -462,6 +462,17 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   (the antenna on the IMU against 0.3 m up the nose).
 - **`--reject-persist-rr N`** (an experiment on the filter's own parameter, after the profile): the Doppler's refusal
   count before a satellite is let back in (the mosaic profile's 30 epochs, 3 s at 10 Hz).
+- **`--hdg-obs-mode 0|1|2|3`** (exp/v9-observ, a `RAW_REPLAY_HDGOBS` build): GNSS's gain on the heading -- the
+  attitude about the vertical and the gyro bias along it -- scaled by how well the moment observes it
+  (`RawGnssEKFParams::hdg_obs_mode`, off by default): 1 by the filter's own horizontal specific force
+  (`--hdg-obs-fh X`, m/s^2, averaged over `--hdg-obs-tau X` s), 2 by the heading's information from it against the
+  heading's own sigma (`--hdg-obs-tau`, `--hdg-obs-sigma-v X`), 3 closed for `--hdg-obs-window X` s after the boost;
+  open whenever the IMU read past `--hdg-obs-open-g X` (2 g) within `--hdg-obs-open-hold X` (0.2 s) of the epoch,
+  at least `--hdg-obs-floor X`; `--hdg-obs-scope 0|1|2` everywhere (the pad too), in flight, or launch to the apogee
+  call. The events JSON gets `hdg_obs` (the settings and each closed epoch's share), and `sim_tables.score_run` the
+  mean and least share per phase.
+- **`sim_grid.py --pause-while FILE`**: every events file and run waits while FILE says "active" (a bench rig that
+  needs a quiet machine), checked every 30 s.
 
 A run takes 0.2-0.6 s (about 70 s of flight, 16 satellites fused an epoch at 10 Hz, ~9 capped out, and the truth's
 quorum beside it); an events file 7-10 s; the whole grid (384 events files, 6912 runs in three arms) about 20

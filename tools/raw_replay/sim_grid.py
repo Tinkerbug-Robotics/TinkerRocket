@@ -42,8 +42,25 @@ MAGS = ["0", "+10", "-10", "+40", "-40", "none30"]
 ARMS = ["design", "unaided", "noguard"]
 
 
+def wait_quiet():
+    """Pause while the file --pause-while names (SIM_GRID_PAUSE_FILE) says "active": a bench rig that needs a quiet
+    machine. Checked before each events file and each run, every 30 s while it holds."""
+    path = os.environ.get("SIM_GRID_PAUSE_FILE")
+    if not path:
+        return
+    while True:
+        try:
+            with open(path) as fh:
+                if "active" not in fh.read():
+                    return
+        except OSError:
+            return
+        time.sleep(30)
+
+
 def make_events(job):
     flight, pattern, out_dir, phases_path, lever_arm, force = job
+    wait_quiet()
     import sim_events
     name = os.path.splitext(os.path.basename(flight))[0]
     path = os.path.join(out_dir, f"{name}__{pattern}.events")
@@ -76,6 +93,7 @@ def run_one(job):
     score_path = os.path.join(scores_dir, rid + ".json")
     if os.path.exists(score_path):
         return rid, "kept", 0.0
+    wait_quiet()
     csv = os.path.join(runs_dir, rid + ".csv")
     args = [binary, "--in", events, "--out", csv, "--receiver", "mosaic"]
     if mag == "none30":
@@ -133,7 +151,11 @@ def main():
                                          "in minutes: a scratch directory will do)")
     ap.add_argument("--events-only", action="store_true")
     ap.add_argument("--force-events", action="store_true")
+    ap.add_argument("--pause-while", help="a file: every events file and run waits while it says 'active' (checked "
+                                          "every 30 s; a bench rig that needs a quiet machine)")
     a = ap.parse_args()
+    if a.pause_while:
+        os.environ["SIM_GRID_PAUSE_FILE"] = a.pause_while
     import sim_events
     pats = list(sim_events.PATTERNS) if a.patterns == "all" else a.patterns.split(",")
     flights = sorted(glob.glob(os.path.join(a.flights, "*.pkl")))

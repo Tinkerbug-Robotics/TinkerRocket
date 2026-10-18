@@ -240,6 +240,12 @@ struct Args
     double seed_heading_deg = 0.0;   // the cold start's heading guess (config::PAD_HEADING_DEG)
     double seed_heading_error_deg = 0.0;   // ... and a sim's: its seed (META seed_quat) turned this far off about down
     std::string truth_nav;           // a sim's truth (sim_events.py truth/<flight>.nav): a second quorum on it
+    // RawGnssEKFParams::hdg_obs_* and RawGnssShadow::Config::heading_obs_scope (a RAW_REPLAY_HDGOBS build): GNSS's
+    // heading gain by how well the moment observes it (-1 / below 0: the firmware's, off)
+    int hdg_obs_mode = -1;
+    double hdg_obs_fh = -1.0, hdg_obs_tau = -1.0, hdg_obs_sigma_v = -1.0, hdg_obs_window = -1.0;
+    double hdg_obs_open_g = -1.0, hdg_obs_open_hold = -1.0, hdg_obs_floor = -1.0;
+    int hdg_obs_scope = -1;
     int reject_persist_rr = -1;      // RawGnssEKFParams::reject_persist_rr after the profile (-1: the profile's; the
                                      //   mosaic's 30 epochs, 3 s at 10 Hz): a Doppler refused this many epochs running
                                      //   is let back in
@@ -289,7 +295,10 @@ void usage()
                  "  [--seed-gyro-dps x,y,z]\n"
                  "  [--sat-cap N] [--fuse-ms X] [--flight-state log|quorum] [--time-tag-from-boot]\n"
                  "  [--assume-finetime] [--pad-zupt 0|1] [--gnss-only-from-s X] [--gnss-only-gate launch|ground]\n"
-                 "  [--pvt-out FILE]\n");
+                 "  [--pvt-out FILE]\n"
+                 "  the heading's gain by its observability (a RAW_REPLAY_HDGOBS build): [--hdg-obs-mode 0|1|2|3]\n"
+                 "  [--hdg-obs-fh X] [--hdg-obs-tau X] [--hdg-obs-sigma-v X] [--hdg-obs-window X] [--hdg-obs-open-g X]\n"
+                 "  [--hdg-obs-open-hold X] [--hdg-obs-floor X] [--hdg-obs-scope 0|1|2]\n");
 }
 
 bool parseArgs(int argc, char** argv, Args& a)
@@ -392,6 +401,15 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--seed-heading-deg") a.seed_heading_deg = std::atof(val());
         else if (k == "--seed-heading-error-deg") a.seed_heading_error_deg = std::atof(val());
         else if (k == "--reject-persist-rr") a.reject_persist_rr = std::atoi(val());
+        else if (k == "--hdg-obs-mode") a.hdg_obs_mode = std::atoi(val());
+        else if (k == "--hdg-obs-fh") a.hdg_obs_fh = std::atof(val());
+        else if (k == "--hdg-obs-tau") a.hdg_obs_tau = std::atof(val());
+        else if (k == "--hdg-obs-sigma-v") a.hdg_obs_sigma_v = std::atof(val());
+        else if (k == "--hdg-obs-window") a.hdg_obs_window = std::atof(val());
+        else if (k == "--hdg-obs-open-g") a.hdg_obs_open_g = std::atof(val());
+        else if (k == "--hdg-obs-open-hold") a.hdg_obs_open_hold = std::atof(val());
+        else if (k == "--hdg-obs-floor") a.hdg_obs_floor = std::atof(val());
+        else if (k == "--hdg-obs-scope") a.hdg_obs_scope = std::atoi(val());
         else if (k == "--truth-nav") a.truth_nav = val();
         else if (k == "--seed-gyro-dps")
         {
@@ -1525,6 +1543,32 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "WARNING: this build has no reject_persist_rr (RAW_REPLAY_MOSAIC=OFF): "
                              "--reject-persist-rr is ignored\n");
 #endif
+    // an experiment on the filter's heading gain (exp/v9-observ): scaled by how well the moment observes the heading
+    // (RawGnssEKFParams::hdg_obs_mode; off, the firmware's, unless given)
+#if RAW_REPLAY_HDGOBS
+    if (a.hdg_obs_mode >= 0)
+        cfg.ekf.hdg_obs_mode = static_cast<uint8_t>(a.hdg_obs_mode);
+    if (a.hdg_obs_fh >= 0.0)
+        cfg.ekf.hdg_obs_fh_mps2 = a.hdg_obs_fh;
+    if (a.hdg_obs_tau >= 0.0)
+        cfg.ekf.hdg_obs_tau_s = a.hdg_obs_tau;
+    if (a.hdg_obs_sigma_v >= 0.0)
+        cfg.ekf.hdg_obs_sigma_v = a.hdg_obs_sigma_v;
+    if (a.hdg_obs_window >= 0.0)
+        cfg.ekf.hdg_obs_window_s = a.hdg_obs_window;
+    if (a.hdg_obs_open_g >= 0.0)
+        cfg.ekf.hdg_obs_open_g = a.hdg_obs_open_g;
+    if (a.hdg_obs_open_hold >= 0.0)
+        cfg.ekf.hdg_obs_open_hold_s = a.hdg_obs_open_hold;
+    if (a.hdg_obs_floor >= 0.0)
+        cfg.ekf.hdg_obs_floor = a.hdg_obs_floor;
+    if (a.hdg_obs_scope >= 0)
+        cfg.heading_obs_scope = static_cast<uint8_t>(a.hdg_obs_scope);
+#else
+    if (a.hdg_obs_mode >= 0 || a.hdg_obs_scope >= 0)
+        std::fprintf(stderr, "WARNING: this build has no heading observability scale (RAW_REPLAY_HDGOBS=OFF): "
+                             "--hdg-obs-* are ignored\n");
+#endif
 #else
     // the rig's r20-r26 code (aef947c5): no receiver profile, no carrier, no full gate or tilt floor
     if (a.carrier > 0 || a.gate_full || a.tilt_sigma_deg > 0.0)
@@ -2142,6 +2186,10 @@ int main(int argc, char** argv)
     // on the pad restarts from the seed within the step, so the running column never shows it
     uint32_t stops_seen = 0;
     std::vector<std::pair<double, int>> stop_at;
+#endif
+#if RAW_REPLAY_HDGOBS
+    // hdg_obs_mode's share of the heading each closed epoch took (flight time, s), with the mode on
+    std::vector<std::pair<double, float>> hdg_obs_at;
 #endif
 
     auto writeRow = [&](int64_t t_us) {
@@ -2985,6 +3033,10 @@ int main(int argc, char** argv)
                     if (l.rejected_rr > 0)
                         dop_rejected_epochs++;
                     dop_nis.push_back(l.nis_max);
+#if RAW_REPLAY_HDGOBS
+                    if (cfg.ekf.hdg_obs_mode != 0 && hdg_obs_at.size() < 20000)
+                        hdg_obs_at.emplace_back(sh.built_.mcu_us * 1e-6 + a.t_base_s, sh.filter().hdgObsScale());
+#endif
                     if (epf)
                     {
                         // the longest any one satellite has been refused running, each kind's: the EKF's own count
@@ -3363,6 +3415,26 @@ int main(int argc, char** argv)
                                  sh.stats().starts, sh.stats().stops, static_cast<unsigned>(sh.stats().last_stop),
                                  so.c_str());
                 }
+#if RAW_REPLAY_HDGOBS
+                if (cfg.ekf.hdg_obs_mode != 0)
+                {
+                    // the experiment's settings, and each closed epoch's share of the heading (flight time, s)
+                    std::string hs;
+                    char b[48];
+                    for (size_t i = 0; i < hdg_obs_at.size(); ++i)
+                    {
+                        std::snprintf(b, sizeof(b), "%s[%.3f, %.4f]", i ? ", " : "", hdg_obs_at[i].first,
+                                      static_cast<double>(hdg_obs_at[i].second));
+                        hs += b;
+                    }
+                    std::fprintf(ej, "\"hdg_obs\": {\"mode\": %d, \"scope\": %d, \"fh_mps2\": %.3f, \"tau_s\": %.3f, "
+                                     "\"sigma_v\": %.3f, \"window_s\": %.3f, \"open_g\": %.3f, \"open_hold_s\": %.3f, "
+                                     "\"floor\": %.3f, \"s_at\": [%s]}, ",
+                                 cfg.ekf.hdg_obs_mode, cfg.heading_obs_scope, cfg.ekf.hdg_obs_fh_mps2,
+                                 cfg.ekf.hdg_obs_tau_s, cfg.ekf.hdg_obs_sigma_v, cfg.ekf.hdg_obs_window_s,
+                                 cfg.ekf.hdg_obs_open_g, cfg.ekf.hdg_obs_open_hold_s, cfg.ekf.hdg_obs_floor, hs.c_str());
+                }
+#endif
                 if (gnss_only.asked())
                     std::fprintf(ej, "\"gnss_only\": {\"from_s\": %.3f, \"gate\": \"%s\", \"launches\": %d, "
                                      "\"prior_deg\": %.1f, \"tilt_floor_deg\": %.2f}, ",

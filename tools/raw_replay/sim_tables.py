@@ -217,6 +217,18 @@ def score_run(csv_path, json_path, truth, meta):
     out["doppler"] = ev.get("doppler")
     out["sim"] = ev.get("sim")
     out["stage"] = {k: ev.get("stage", {}).get(k) for k in ("built", "capped_out", "eph_sats")}
+    # an experiment's heading share (raw_replay --hdg-obs-mode, exp/v9-observ): its settings and, per phase, the
+    # mean and least share the closed epochs took
+    ho = ev.get("hdg_obs")
+    if ho is not None:
+        sa = np.asarray(ho.get("s_at") or [], float).reshape(-1, 2)
+        per = {}
+        for name, (a, b) in (("pad", (-1e9, 0.0)), ("boost", (0.0, t_burn)), ("coast", (t_burn, t_apo)),
+                             ("early_coast", (t_burn, t_burn + 3.0)), ("descent", (t_apo, t_touch))):
+            k = (sa[:, 0] >= a) & (sa[:, 0] < b) if sa.size else np.zeros(0, bool)
+            per[name] = dict(n=int(k.sum()), mean=float(sa[k, 1].mean()) if k.any() else None,
+                             min=float(sa[k, 1].min()) if k.any() else None)
+        out["hdg_obs"] = dict({k: v for k, v in ho.items() if k != "s_at"}, share=per)
     return out
 
 

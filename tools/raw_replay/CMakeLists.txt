@@ -32,9 +32,13 @@ option(RAW_REPLAY_DYNMEM "the firmware tree has the Doppler's settling (rr_dyn_t
 option(RAW_REPLAY_LATCH "the firmware tree has the vertical check's latch (vert_release_mps)" ON)
 option(RAW_REPLAY_FITGATE "the firmware tree has the Dopplers' fit gate (rr_fit_gate: experiments/doppler_fit_gate.patch)" OFF)
 option(RAW_REPLAY_MOSAIC "the firmware tree has the mosaic-G5 path (SBF decoders, addEphemeris, att_gnss_off, the raw vote guard)" ON)
+option(RAW_REPLAY_HDGOBS "the firmware tree has the heading gain by its observability (hdg_obs_mode, exp/v9-observ)" ON)
 if(RAW_REPLAY_OLD AND RAW_REPLAY_MOSAIC)
     message(STATUS "raw_replay: RAW_REPLAY_OLD turns RAW_REPLAY_MOSAIC off")
     set(RAW_REPLAY_MOSAIC OFF)
+endif()
+if(NOT RAW_REPLAY_MOSAIC AND RAW_REPLAY_HDGOBS)
+    set(RAW_REPLAY_HDGOBS OFF)
 endif()
 set(LIB_DIR "${SRC_ROOT}/tinkerrocket-idf/components")
 set(FC_MAIN "${SRC_ROOT}/tinkerrocket-idf/projects/flight_computer/main")
@@ -108,7 +112,8 @@ function(raw_replay_target name)
         RAW_REPLAY_DYNMEM=$<BOOL:${RAW_REPLAY_DYNMEM}>
         RAW_REPLAY_LATCH=$<BOOL:${RAW_REPLAY_LATCH}>
         RAW_REPLAY_FITGATE=$<BOOL:${RAW_REPLAY_FITGATE}>
-        RAW_REPLAY_MOSAIC=$<BOOL:${RAW_REPLAY_MOSAIC}>)
+        RAW_REPLAY_MOSAIC=$<BOOL:${RAW_REPLAY_MOSAIC}>
+        RAW_REPLAY_HDGOBS=$<BOOL:${RAW_REPLAY_HDGOBS}>)
 endfunction()
 
 raw_replay_target(raw_replay)
