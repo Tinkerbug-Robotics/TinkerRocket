@@ -805,6 +805,15 @@ struct config : board_pins
     static constexpr uint8_t  RAW_HEADING_GATE          = 1;
     static constexpr uint32_t RAW_INTERNAL_FLOOR_B      = 56u * 1024u;
     static constexpr uint32_t RAW_MEAS_STACK_B          = 6144;   // the GNSS task: SBF decoding, a 128-entry store
+    // The raw vote guard (raw_vote_guard.h) only logs on this image: it still
+    // judges the filter against the barometer's climb rate and says when it
+    // would have withheld the filter's apogee votes (console, FCS bit 1), but
+    // the votes are cast. The user's apogee bar (2026-10-17): the call within
+    // 2 s of the true apogee, never above 20 m/s of climb. Without the guard
+    // the grid's worst early call from a GNSS fault was 1.2 s early at 12 m/s;
+    // with it, a lagging static port tripped it on a good filter and the call
+    // came up to 2.4 s late.
+    static constexpr bool     RAW_VOTE_GUARD_ACTS       = false;
 #endif
 
     // #1190 EKF shock gate: a SATURATED gyro or accelerometer axis is not a

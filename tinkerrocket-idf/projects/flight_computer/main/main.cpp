@@ -3817,7 +3817,8 @@ static void rawShadowTask(void*)
                          (unsigned long)ref_pos_count,
                          gnss_log_setting == GNSS_LOG_REDUCED ? "REDUCED" : "DETAILED",
                          (unsigned)raw_nav_restarts, (unsigned)RawNavPolicy::kMaxRestarts,
-                         raw_guard.latched ? "WITHHELD" : "cast", mach_locked_out ? "ON" : "off",
+                         raw_guard.latched ? (config::RAW_VOTE_GUARD_ACTS ? "WITHHELD" : "cast (guard latched, log only)") : "cast",
+                         mach_locked_out ? "ON" : "off",
                          (unsigned)(raw_flight_task ? uxTaskGetStackHighWaterMark(raw_flight_task) : 0));
             }
 #endif
@@ -12350,14 +12351,16 @@ static void loop_fc()
                 const bool was_withheld = raw_guard.latched;
                 RawVoteGuard::step(raw_guard, gi);
                 if (!was_withheld && raw_guard.latched)
-                    ESP_LOGE(TAG, "[RAWGNSS] raw votes withheld at T+%.2f s: the filter's vertical velocity "
-                                  "%+.1f m/s against the barometer's %+.1f m/s for 1 s -- its velocity and "
-                                  "pitch cast no apogee vote for the rest of the flight",
+                    ESP_LOGE(TAG, "[RAWGNSS] raw vote guard latched at T+%.2f s: the filter's vertical velocity "
+                                  "%+.1f m/s against the barometer's %+.1f m/s for 1 s -- %s",
                              (double)((float)(now_ms - launch_time_millis) * 1e-3f),
-                             (double)gi.filter_vz_up_mps, (double)gi.baro_rate_mps);
+                             (double)gi.filter_vz_up_mps, (double)gi.baro_rate_mps,
+                             config::RAW_VOTE_GUARD_ACTS
+                                 ? "its velocity and pitch cast no apogee vote for the rest of the flight"
+                                 : "log only: its votes are still cast (config::RAW_VOTE_GUARD_ACTS)");
             }
             // Only the votes: control, GnssAscentGate and telemetry keep ekf_healthy
-            const bool ekf_may_vote = ekf_healthy && !raw_guard.latched;
+            const bool ekf_may_vote = ekf_healthy && !(config::RAW_VOTE_GUARD_ACTS && raw_guard.latched);
             // KEEP IN STEP with the #else copy below (every other image's):
             // the two differ only in ekf_may_vote for ekf_healthy, and an
             // argument changed in one must change in the other.
@@ -14038,7 +14041,8 @@ static void loop_fc()
                 fc_status.flags   =
                     (uint8_t)(camera_engaged ? FCS_CAMERA_ENGAGED : 0u);
 #if TR_RAW_NAV_MOSAIC
-                // the raw vote guard has withheld the filter's apogee votes
+                // the raw vote guard latched (it withholds the filter's apogee votes only
+                // where config::RAW_VOTE_GUARD_ACTS; otherwise it is the would-have)
                 if (raw_guard.latched) fc_status.flags |= FCS_RAW_VOTES_WITHHELD;
 #endif
                 uint8_t fc_status_buf[sizeof(FcStatusData)];

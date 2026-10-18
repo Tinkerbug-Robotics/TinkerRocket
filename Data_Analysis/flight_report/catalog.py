@@ -1221,8 +1221,9 @@ _P(
     note=
         "The mosaic-only image's raw vote guard latched (FCS_RAW_VOTES_WITHHELD, 5 Hz on "
         "FC_STATUS_MSG): after burnout its raw-GNSS filter read its vertical velocity more than "
-        "10 m/s below the barometer's climb rate for 1 s, so the filter's velocity and pitch "
-        "apogee votes are withheld for the rest of the flight.",
+        "10 m/s below the barometer's climb rate for 1 s. Where the image's guard acts, the "
+        "filter's velocity and pitch apogee votes are withheld for the rest of the flight; on the "
+        "2026-10-17 images it only logs (config::RAW_VOTE_GUARD_ACTS false) and the votes are cast.",
     caution=
         "Always False on every other image, including the V9 and V8 auto images and the Beetle. "
         "Sticky until the next launch or sim edge; the first frame with it set is the latch time "

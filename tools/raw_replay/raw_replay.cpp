@@ -235,7 +235,7 @@ struct Args
     bool unaided = false;            // RawGnssEKFParams::att_gnss_off: the twin the acceptance compares against
     std::vector<std::string> rinex;  // RINEX 3 navigation files: the day's broadcast ephemerides
     bool quorum = false;             // the apogee quorum (always with the mosaic)
-    int vote_guard = -1;             // the raw vote guard withholds the filter's votes (-1: the mosaic's yes)
+    int vote_guard = -1;             // the raw vote guard withholds the filter's votes (-1: the firmware's: no, log only)
     double loop_hz = 1000.0;         // the flight loop's passes a second (config::FLIGHT_LOOP_UPDATE_RATE)
     double seed_heading_deg = 0.0;   // the cold start's heading guess (config::PAD_HEADING_DEG)
     double seed_heading_error_deg = 0.0;   // ... and a sim's: its seed (META seed_quat) turned this far off about down
@@ -1771,7 +1771,9 @@ int main(int argc, char** argv)
     rr::FlightVotes::Config vcfg;
     vcfg.state_from_quorum = state_from_quorum;
     vcfg.gate_ekf_valid = !mosaic;   // the mosaic build admits GNSS against the barometer only (ga.ekf_valid false)
-    vcfg.guard = a.vote_guard >= 0 ? a.vote_guard != 0 : mosaic;
+    // the firmware's config::RAW_VOTE_GUARD_ACTS: the guard only logs on the mosaic image (it is judged and
+    // reported either way); --vote-guard 1 makes it act
+    vcfg.guard = a.vote_guard >= 0 ? a.vote_guard != 0 : false;
     vcfg.loop_period_us = static_cast<uint32_t>(std::llround(1.0e6 / std::max(1.0, a.loop_hz)));
     std::unique_ptr<rr::FlightVotes> votesp(new rr::FlightVotes(vcfg));
     rr::FlightVotes& votes = *votesp;
