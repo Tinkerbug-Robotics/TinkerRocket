@@ -12,6 +12,7 @@
 // Synthetic blocks only (sbf_build.h, sbf_meas_build.h).
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <vector>
@@ -98,8 +99,18 @@ std::vector<uint8_t> meas(uint32_t tow, uint8_t cum, bool empty = false)
     return sbftest::measEpoch(s);
 }
 
-MosaicFeed::Kind feed(MosaicFeed& f, const std::vector<uint8_t>& b, gnss_raw::TimedRawEpoch& te, int64_t t = 1000)
+// A block arrived at t on the MCU clock; by default 13 ms after its own
+// receiver time (from kTow0 at 1 s), as a stream that keeps up delivers it:
+// the jump count reads each MeasEpoch's arrival (MosaicJumpState).
+MosaicFeed::Kind feed(MosaicFeed& f, const std::vector<uint8_t>& b, gnss_raw::TimedRawEpoch& te, int64_t t = -1)
 {
+    if (t < 0)
+    {
+        mosaic::SbfHeader h;
+        t = mosaic::sbfHeader(b.data(), b.size(), h) && h.tow_ms != mosaic::kTowDnu
+                ? 1000000 + (static_cast<int64_t>(h.tow_ms) - kTow0) * 1000 + 13000
+                : 1000;
+    }
     return f.onBlock(b.data(), b.size(), t, te);
 }
 
@@ -226,18 +237,115 @@ TEST(RawReplayMosaic, APvtWhoseMeasEpochWasLostAnchorsNothing)
     EXPECT_DOUBLE_EQ(f.dtrMs(), mosaic::dtrMs(0.20, 0.25f, 0.1, 0));
 }
 
-TEST(RawReplayMosaic, APvtOlderThanASecondIsNotCarried)
+// The driver's carry (MosaicTimeTag): a PVT's bias rides out two minutes
+// of lost sky on the receiver's free-running clock, and no further; with
+// none the epoch is untimed (the caller leaves it so), never tagged with a
+// bias of 0.
+TEST(RawReplayMosaic, APvtIsCarriedTwoMinutesAndNoMore)
 {
     MosaicFeed f;
     gnss_raw::TimedRawEpoch te;
     feed(f, meas(kTow0, 10), te);
     feed(f, pvt(kTow0, 0.20, 0.25f), te);
-    ASSERT_EQ(feed(f, meas(kTow0 + 1000, 10), te), MosaicFeed::Kind::EPOCH);
-    EXPECT_TRUE(f.anchored());
     ASSERT_EQ(feed(f, meas(kTow0 + 1100, 10), te), MosaicFeed::Kind::EPOCH);
+    EXPECT_TRUE(f.anchored());
+    // the MeasEpochs keep coming through a lost sky (none more than 2 s apart: no restart of the jump count)
+    for (uint32_t ms = 2000; ms <= 120000; ms += 1000)
+        feed(f, meas(kTow0 + ms, 10), te);
+    ASSERT_EQ(feed(f, meas(kTow0 + 120000, 10), te), MosaicFeed::Kind::EPOCH);
+    EXPECT_TRUE(f.anchored());
+    EXPECT_DOUBLE_EQ(f.dtrMs(), mosaic::dtrMs(0.20, 0.25f, 120.0, 0));
+    ASSERT_EQ(feed(f, meas(kTow0 + 120100, 10), te), MosaicFeed::Kind::EPOCH);
     EXPECT_FALSE(f.anchored());
     EXPECT_EQ(f.dtrMs(), 0.0);
     EXPECT_EQ(f.counts().dtr_zero, 2u);   // and the first, before any PVT
+    EXPECT_EQ(f.counts().rebases, 0u);
+}
+
+// The driver's chain of biases and its hold (MosaicTimeTag), as the harness
+// drives it: a log's first chain stands for one confirmed before it began;
+// a PVT whose bias steps off the one carried to it holds the tags until the
+// 1PPS has moved by as much and two whole seconds' tags check out against
+// their edges (each K line an edge against its line); and from a boot the
+// first chain waits for the 1PPS too.
+TEST(RawReplayMosaic, TheChainIsHeldAsTheDriverHoldsIt)
+{
+    for (bool from_boot : {false, true})
+        for (int pps_lag : {0, 3})
+        {
+            MosaicFeed f;
+            if (!from_boot)
+                f.assumeConfirmedAtStart();
+            gnss_raw::TimedRawEpoch te;
+            const int64_t s0 = static_cast<int64_t>(kWnc) * 604800 + kTow0 / 1000;
+            // the receiver's time steps 6.85 ms against its clock at second 3 (the RF rig's underrun); its 1PPS,
+            // and the line on it, follow pps_lag seconds later
+            auto second = [&](int k, double bias_ms, int64_t tag_off_us) {
+                const uint32_t tow = kTow0 + 1000u * static_cast<uint32_t>(k);
+                const int64_t edge = 3000000000LL + 1000000LL * k + (k >= 3 + pps_lag ? 6850 : 0);
+                f.notePair(s0 + k, edge, true, edge, 0.0, 0u);   // the K line of the second, its edge on the line
+                EXPECT_EQ(feed(f, meas(tow, 10), te), MosaicFeed::Kind::EPOCH);
+                // placed where the line puts TOW less the carried bias (with a bias to carry)
+                if (f.anchored())
+                    f.noteWholeSecond(edge - static_cast<int64_t>(std::llround(f.dtrMs() * 1000.0)) + tag_off_us,
+                                      true);
+                feed(f, pvt(tow, bias_ms, 0.0f), te);
+            };
+            second(0, 0.30, 0);
+            EXPECT_EQ(f.timeTag().held(), from_boot) << from_boot;
+            second(1, 0.30, 0);
+            second(2, 0.30, 0);
+            EXPECT_FALSE(f.timeTag().held()) << from_boot;
+            second(3, 7.15, 0);
+            EXPECT_TRUE(f.timeTag().held());
+            EXPECT_EQ(f.timeTag().holdBreak(), mosaic::MosaicTimeTag::Break::BIAS_STEP);
+            EXPECT_NEAR(f.timeTag().chainMs(), 6.85, 1e-6);
+            // the 1PPS still on the old sky: its checks read 0 and confirm nothing
+            for (int k = 4; k < 3 + pps_lag; ++k)
+            {
+                second(k, 7.15, 0);
+                EXPECT_TRUE(f.timeTag().held()) << k;
+                EXPECT_FALSE(f.timeTag().onChain()) << k;
+            }
+            // then two checks against edges on the chain (the moved pulse's first edge, late against the one
+            // before, counts neither way)
+            int k = 3 + std::max(pps_lag, 1);
+            for (; k < 12 && f.timeTag().held(); ++k)
+                second(k, 7.15, 0);
+            EXPECT_FALSE(f.timeTag().held()) << pps_lag;
+            EXPECT_EQ(k, pps_lag == 0 ? 6 : 6 + pps_lag) << pps_lag;
+            EXPECT_TRUE(f.timeTag().onChain());
+            EXPECT_EQ(f.timeTag().stats().breaks[static_cast<int>(mosaic::MosaicTimeTag::Break::FIRST)],
+                      from_boot ? 1u : 0u);
+            EXPECT_EQ(f.timeTag().stats().confirmed, from_boot ? 2u : 1u);
+        }
+}
+
+// The block that pairs a 1PPS edge, as the driver's onBlock names its second
+// (the harness holds each K line until it): a whole-second PVTGeodetic or an
+// xPPSOffset on GPS time; nothing else.
+TEST(RawReplayMosaic, TheBlockThatPairsAnEdge)
+{
+    int64_t s = 0;
+    const std::vector<uint8_t> p = pvt(kTow0 + 3000, 0.3, 0.0f);
+    ASSERT_TRUE(MosaicFeed::pairingSecond(p.data(), p.size(), s));
+    EXPECT_EQ(s, static_cast<int64_t>(kWnc) * 604800 + kTow0 / 1000 + 3);
+    const std::vector<uint8_t> p50 = pvt(kTow0 + 3050, 0.3, 0.0f);
+    EXPECT_FALSE(MosaicFeed::pairingSecond(p50.data(), p50.size(), s));
+    const std::vector<uint8_t> m = meas(kTow0 + 3000, 10);
+    EXPECT_FALSE(MosaicFeed::pairingSecond(m.data(), m.size(), s));
+    // xPPSOffset: SyncAge, TimeScale (1 GPS), Offset; stamped just before the pulse's second
+    for (uint8_t scale : {1, 2})
+    {
+        Body b(20);
+        b.u8(14, 0);
+        b.u8(15, scale);
+        b.f32(16, 3.5f);
+        const std::vector<uint8_t> x = sbftest::block(mosaic::SBF_XPPS_OFFSET, 0, kTow0 + 4999, kWnc, b.v);
+        EXPECT_EQ(MosaicFeed::pairingSecond(x.data(), x.size(), s), scale == 1);
+        if (scale == 1)
+            EXPECT_EQ(s, static_cast<int64_t>(kWnc) * 604800 + kTow0 / 1000 + 5);
+    }
 }
 
 TEST(RawReplayMosaic, AnEmptyEpochIsNotHandedOver)

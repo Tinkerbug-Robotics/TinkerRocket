@@ -36,7 +36,8 @@ gtest_discover_tests(test_rinex_nav)
 # fused grid, their GPS time from the anchoring PVT's clock bias through the
 # clock jumps, a lost MeasEpoch's PVT anchoring nothing, nav blocks kept as
 # the driver keeps them, the one ionosphere rule, PVTGeodetic as the fix, and
-# the driver's time tag (FINETIME, a 1PPS pairing within 120 s, the line).
+# the driver's time tag (FINETIME, a 1PPS pairing within 120 s, the line, the
+# two-minute carry and the chain of biases held until the 1PPS confirms it).
 add_executable(test_raw_replay_mosaic test_raw_replay_mosaic.cpp
     ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial/SbfNav.cpp
     ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial/SbfMeas.cpp

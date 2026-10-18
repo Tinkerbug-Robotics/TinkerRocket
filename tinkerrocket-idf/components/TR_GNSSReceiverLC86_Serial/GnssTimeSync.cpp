@@ -20,6 +20,7 @@ void GnssTimeSync::reset()
     t_ref_ = 0.0;
     env_rms_ms_ = 0.0;
     off_run_ = 0;
+    step_run_ = 0;
     late_n_ = 0;
     late_head_ = 0;
 }
@@ -32,7 +33,7 @@ void GnssTimeSync::start(double gps_s, int64_t mcu_us)
     have_ = true;
 }
 
-bool GnssTimeSync::addSample(double gps_s, int64_t mcu_us)
+bool GnssTimeSync::addSample(double gps_s, int64_t mcu_us, bool may_step_later)
 {
     if (!have_)
         start(gps_s, mcu_us);
@@ -57,6 +58,41 @@ bool GnssTimeSync::addSample(double gps_s, int64_t mcu_us)
     else
     {
         off_run_ = 0;
+        // Exact samples: a step in their own time scale (see the header).
+        // Only with the drift fitted: until then a flat line parts from them
+        // by the crystal's ppm, which is no step.
+        if (cfg_.exact_step_s > 0.0 && drift_fitted_ && valid())
+        {
+            const double e = d - line(t);
+            if (std::fabs(e) <= cfg_.exact_step_s)
+            {
+                step_run_ = 0;
+            }
+            else
+            {
+                // one step: each offset within exact_step_s of the run's first
+                if (step_run_ > 0 && std::fabs(e - step_e_[0]) > cfg_.exact_step_s)
+                    step_run_ = 0;
+                // A later sample may be the interrupt held off, never early: it
+                // starts or adds to a later step only where the caller knows a
+                // reason for the samples to come later (see the header), and is
+                // set aside otherwise, the line kept on the seconds before
+                if (e > 0.0 && !may_step_later)
+                {
+                    step_run_ = 0;
+                    later_refused_++;
+                    return false;
+                }
+                step_e_[step_run_++] = e;
+                if (step_run_ < kExactStepCount)
+                    return false;                         // set aside
+                double m[kExactStepCount];
+                std::copy(step_e_, step_e_ + kExactStepCount, m);
+                std::nth_element(m, m + kExactStepCount / 2, m + kExactStepCount);
+                shiftHistory(m[kExactStepCount / 2]);
+                step_run_ = 0;
+            }
+        }
     }
     samples_++;
 
@@ -111,6 +147,19 @@ bool GnssTimeSync::addSample(double gps_s, int64_t mcu_us)
     }
     seq_++;                      // the line moved (refit, the first second, or a restart)
     return kept;
+}
+
+void GnssTimeSync::shiftHistory(double by_s)
+{
+    // Every second and block held moves together, so the drift they give is
+    // the same and the envelope sits on the new level at once.
+    for (int k = 0; k < n_; ++k)
+        bins_[(head_ + kBins - n_ + k) % kBins].d += by_s;
+    for (int k = 0; k < bn_; ++k)
+        blocks_[(bhead_ + kBlocks - bn_ + k) % kBlocks].d += by_s;
+    a_ += by_s;
+    steps_++;
+    last_step_ms_ = by_s * 1.0e3;
 }
 
 void GnssTimeSync::snapshot(Snapshot& s) const
@@ -172,7 +221,11 @@ void GnssTimeSync::refitDrift()
     for (int k = 0; k < m; ++k)
         rs[k] = std::fabs(r[k] - med);
     std::nth_element(rs, rs + m / 2, rs + m);
-    const double sigma = std::max(5.0e-5, 1.4826 * rs[m / 2]);   // >= 50 us: no block is that exact
+    // >= 50 us: no block of sentence stamps is that exact; a 1PPS edge is
+    // good to microseconds (exact samples: 5 us), and a floor sized for the
+    // stamps would shrink its drift a ppm toward zero, tens of us of line
+    const double floor_s = cfg_.exact_step_s > 0.0 ? 5.0e-6 : 5.0e-5;
+    const double sigma = std::max(floor_s, 1.4826 * rs[m / 2]);
     double st = 0, sd = 0, stt = 0, std_ = 0;
     int q = 0;
     for (int k = 0; k < m; ++k)
@@ -205,6 +258,30 @@ void GnssTimeSync::refit()
     const int first = (head_ + kBins - n_) % kBins;
     auto at = [&](int k) -> const Bin& { return bins_[(first + k) % kBins]; };
     const double t_new = at(n_ - 1).t;
+
+    // Exact samples, before the blocks fit the drift: a provisional one from
+    // the seconds held, the median of the slopes from each second of the
+    // first half to its partner in the second (a late edge spoils one). An
+    // edge is good to microseconds, so a few seconds give the crystal to a
+    // ppm or two, where a flat line would part from the edges by its whole
+    // drift each second. The blocks' fit replaces it (refitDrift).
+    if (cfg_.exact_step_s > 0.0 && !drift_fitted_ && n_ >= kProvisionalBins)
+    {
+        double sl[kBins / 2 + 1];
+        int ns = 0;
+        const int half = n_ / 2;
+        for (int k = 0; k + half < n_ && ns < kBins / 2 + 1; ++k)
+        {
+            const double dt = at(k + half).t - at(k).t;
+            if (dt > 0.5)
+                sl[ns++] = (at(k + half).d - at(k).d) / dt;
+        }
+        if (ns > 0)
+        {
+            std::nth_element(sl, sl + ns / 2, sl + ns);
+            drift_ = std::max(-kMaxDrift, std::min(kMaxDrift, sl[ns / 2]));
+        }
+    }
 
     // The anchor: the kAnchorRank-th lowest second about the drift's slope.
     double r[kBins];
