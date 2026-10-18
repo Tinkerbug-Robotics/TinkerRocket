@@ -686,6 +686,15 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
     prop_n_++;
 
     stepHeading(t, acc, gyro, static_cast<float>(span), s.flags);
+    // The EKF's hdg_obs_mode where its scope says, before this step's epochs
+    if (cfg_.ekf.hdg_obs_mode != 0 && cfg_.heading_obs_scope != kObsEverywhere)
+    {
+        if (ground)
+            obs_apogee_ = false;
+        else if (s.flags & kShadowApogee)
+            obs_apogee_ = true;
+        ekf_.setHdgObsOn(!ground && (cfg_.heading_obs_scope == kObsFlight || !obs_apogee_));
+    }
 
     // the pad: the flight filter's attitude (and, before an epoch of our
     // own, its position and velocity), once a resync_period_s
@@ -752,6 +761,7 @@ void RawGnssShadow::start(double t)
     // apogee call (which the snapshot restores) opens it whole at the first
     // step after.
     gate_full_ = false;
+    obs_apogee_ = false;
     boost_seen_t_ = -1.0e9;
     vert_latch_ = false;
     dvReset();

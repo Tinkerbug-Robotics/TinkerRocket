@@ -475,6 +475,16 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   JSON gets `"dv"`: the counts (checks, satellite and epoch fails, Dopplers and epochs held, latches begun and let
   go, epochs latched) and when each epoch failed, had satellites fail or had Dopplers held. `RAW_REPLAY_DVLOG=1`
   prints each check (2: the window's sums and allowances too). `sim_tables.score_run` keeps the block.
+- **`--hdg-obs-mode 0|1|2|3`** (exp/v9-observ, a `RAW_REPLAY_HDGOBS` build): GNSS's gain on the heading -- the
+  attitude about the vertical and the gyro bias along it -- scaled by how well the moment observes it
+  (`RawGnssEKFParams::hdg_obs_mode`, off by default): 1 by the filter's own horizontal specific force
+  (`--hdg-obs-fh X`, m/s^2, averaged over `--hdg-obs-tau X` s), 2 by the heading's information from it against the
+  heading's own sigma (`--hdg-obs-tau`, `--hdg-obs-sigma-v X`), 3 closed for `--hdg-obs-window X` s after the boost;
+  open whenever the IMU read past `--hdg-obs-open-g X` (2 g) within `--hdg-obs-open-hold X` (0.2 s) of the epoch,
+  at least `--hdg-obs-floor X`; `--hdg-obs-scope 0|1|2` everywhere (the pad too), in flight, or launch to the apogee
+  call. The events JSON gets `hdg_obs` (the settings and each closed epoch's share), and `sim_tables.score_run` the
+  mean and least share per phase.
+- **`sim_grid.py --pause-while FILE`**: the same as `--rig-state FILE` (exp/v9-observ's name for it).
 
 A run takes 0.2-0.6 s (about 70 s of flight, 16 satellites fused an epoch at 10 Hz, ~9 capped out, and the truth's
 quorum beside it); an events file 7-10 s; the whole grid (384 events files, 6912 runs in three arms) about 20

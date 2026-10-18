@@ -103,6 +103,14 @@ void expectSameEkf(const RawGnssEKFParams& a, const RawGnssEKFParams& b)
     EXPECT_EQ(a.att_gate_cos4, b.att_gate_cos4);
     EXPECT_EQ(a.att_gate_vertical, b.att_gate_vertical);
     EXPECT_EQ(a.att_gnss_off, b.att_gnss_off);
+    EXPECT_EQ(a.hdg_obs_mode, b.hdg_obs_mode);
+    EXPECT_EQ(a.hdg_obs_fh_mps2, b.hdg_obs_fh_mps2);
+    EXPECT_EQ(a.hdg_obs_tau_s, b.hdg_obs_tau_s);
+    EXPECT_EQ(a.hdg_obs_sigma_v, b.hdg_obs_sigma_v);
+    EXPECT_EQ(a.hdg_obs_window_s, b.hdg_obs_window_s);
+    EXPECT_EQ(a.hdg_obs_open_g, b.hdg_obs_open_g);
+    EXPECT_EQ(a.hdg_obs_open_hold_s, b.hdg_obs_open_hold_s);
+    EXPECT_EQ(a.hdg_obs_floor, b.hdg_obs_floor);
     EXPECT_EQ(a.p0_pos, b.p0_pos);
     EXPECT_EQ(a.p0_vel, b.p0_vel);
     EXPECT_EQ(a.p0_att, b.p0_att);
@@ -178,7 +186,7 @@ void expectSameNumbers(const GnssReceiverProfile& a, const GnssReceiverProfile& 
 // TheShadowSafeguardDefaultsAreTheBeetles) before its size goes in here: the
 // Beetle's filter is its defaults, and the M1 build applies the LC86G's
 // profile over them. The sizes are a 64-bit host's (macOS and Linux alike).
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssEKFParams) == 368,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssEKFParams) == 424,
               "RawGnssEKFParams changed: add the field to expectSameEkf, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(RawMeasBuilder::Config) == 312,
               "RawMeasBuilder::Config changed: add the field to expectSameBuilder, then update this size");
@@ -186,7 +194,7 @@ static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 32,
               "GnssSignalProfile changed: add the field to expectSameSignal, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 520,
               "GnssReceiverProfile changed: add the field to expectSameNumbers, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1480,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1536,
               "RawGnssShadow::Config changed: pin the field in TheShadowSafeguardDefaultsAreTheBeetles, then update "
               "this size");
 
@@ -626,6 +634,7 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_EQ(c.heading_launch_tilt_sigma_deg, 0.6);
     EXPECT_EQ(c.heading_gate, RawGnssShadow::kGateFullLaunch);
     EXPECT_EQ(c.heading_handoff_vel_mps, 3.0);
+    EXPECT_EQ(c.heading_obs_scope, RawGnssShadow::kObsEverywhere);   // where the EKF's hdg_obs_mode (off) applies
     EXPECT_EQ(c.boost_screen, RawGnssShadow::kScreenAct);
     EXPECT_EQ(c.boost_screen_g, 2.0);
     EXPECT_EQ(c.boost_screen_window_s, 1.5);
@@ -681,6 +690,15 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_TRUE(e.att_gate_cos4);
     EXPECT_FALSE(e.att_gate_vertical);
     EXPECT_FALSE(e.att_gnss_off);
+    // the heading's share by its observability (exp/v9-observ): off, and its settings
+    EXPECT_EQ(e.hdg_obs_mode, gnss_raw::kHdgObsOff);
+    EXPECT_EQ(e.hdg_obs_fh_mps2, 2.0);
+    EXPECT_EQ(e.hdg_obs_tau_s, 1.0);
+    EXPECT_EQ(e.hdg_obs_sigma_v, 0.1);
+    EXPECT_EQ(e.hdg_obs_window_s, 3.0);
+    EXPECT_EQ(e.hdg_obs_open_g, 2.0);
+    EXPECT_EQ(e.hdg_obs_open_hold_s, 0.2);
+    EXPECT_EQ(e.hdg_obs_floor, 0.0);
     EXPECT_EQ(e.p0_pos, 10.0);
     EXPECT_EQ(e.p0_vel, 1.0);
     EXPECT_EQ(e.p0_att, 0.34906);

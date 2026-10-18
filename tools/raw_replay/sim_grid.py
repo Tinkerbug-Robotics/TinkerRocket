@@ -167,6 +167,7 @@ def main():
     ap.add_argument("--rig-state", help="a file that reads 'active' while the bench rig needs a quiet machine: no "
                                         "events file or run starts while it does (checked every 30 s)")
     ap.add_argument("--force-events", action="store_true")
+    ap.add_argument("--pause-while", dest="rig_state", help="the same as --rig-state (exp/v9-observ's name)")
     a = ap.parse_args()
     import sim_events
     pats = list(sim_events.PATTERNS) if a.patterns == "all" else a.patterns.split(",")
