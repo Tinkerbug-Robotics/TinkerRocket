@@ -1589,11 +1589,27 @@ static void stageGnssLogConfig()
 // it on the ground. The readback ("antk", "antx", "anty", "antz") serves the
 // FC's own copy from its config report, and this cache only without one
 // (antennaReadback); an FC that reports none of its own is sent it again.
+// loop_oc writes it (cmd 81) while the I2S parser task reads it (the config
+// report's comparison and self-heal), so every access goes through the mux:
+// a torn copy would pass antennaOffsetValid and could be sent to the FC.
 static AntennaOffsetConfigData cfg_antenna = {};
-
-static void stageAntennaConfig()
+static portMUX_TYPE cfg_antenna_mux = portMUX_INITIALIZER_UNLOCKED;
+static AntennaOffsetConfigData antennaCache()
 {
-    AntennaOffsetConfigData cfg = cfg_antenna;
+    portENTER_CRITICAL(&cfg_antenna_mux);
+    const AntennaOffsetConfigData a = cfg_antenna;
+    portEXIT_CRITICAL(&cfg_antenna_mux);
+    return a;
+}
+static void setAntennaCache(const AntennaOffsetConfigData& a)
+{
+    portENTER_CRITICAL(&cfg_antenna_mux);
+    cfg_antenna = a;
+    portEXIT_CRITICAL(&cfg_antenna_mux);
+}
+
+static void stageAntennaConfig(const AntennaOffsetConfigData& cfg)
+{
     setPendingCommandWithConfig(ANTENNA_CONFIG_PENDING, ANTENNA_CONFIG_MSG, &cfg, sizeof(cfg));
 }
 // Pyro config cache (4 channels on new PCB)
@@ -1902,7 +1918,7 @@ static AntennaReadback antennaReadback()
     const ConfigReportData r = snapshotConfigReport(&valid, nullptr, nullptr, &has_antenna);
     AntennaReadback a;
     a.from_fc = pwr_pin_on && valid && has_antenna;
-    a.cfg     = a.from_fc ? r.antenna : cfg_antenna;
+    a.cfg     = a.from_fc ? r.antenna : antennaCache();
     return a;
 }
 
@@ -5120,7 +5136,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         if (has_antenna)
         {
             static bool ant_diverged = false;
-            const AntennaOffsetConfigData cache = cfg_antenna;
+            const AntennaOffsetConfigData cache = antennaCache();
             const bool fc_remembers = (incoming.flags & (1U << ConfigReportData::F_ANTENNA_FROM_NVS)) != 0U;
             const bool differs = memcmp(&incoming.antenna, &cache, sizeof(cache)) != 0;
             if (differs && (!ant_diverged || changed))
@@ -5140,7 +5156,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             if (!fc_remembers && cache.known == 1U && !ant_heal_sent && latest_rocket_state != INFLIGHT)
             {
                 ant_heal_sent = true;
-                stageAntennaConfig();
+                stageAntennaConfig(cache);   // the copy just checked, not a second read
                 ESP_LOGI("CFG", "FC has no GNSS antenna offset of its own: re-staged the OC's (board X %d, "
                                 "Y %d, Z %d mm)",
                          (int)cache.x_mm, (int)cache.y_mm, (int)cache.z_mm);
@@ -9484,13 +9500,14 @@ static void loadCachedPeripheralConfigFromNvs()
     if (prefs.isKey("ofs"))
     {
         AntennaOffsetConfigData a = {};
-        if (prefs.getBytes("ofs", &a, sizeof(a)) == sizeof(a) && antennaOffsetValid(a)) cfg_antenna = a;
+        if (prefs.getBytes("ofs", &a, sizeof(a)) == sizeof(a) && antennaOffsetValid(a)) setAntennaCache(a);
         else ESP_LOGW("CFG", "NVS GNSS antenna offset invalid — keeping unknown");
     }
     prefs.end();
-    if (cfg_antenna.known)
-        ESP_LOGI("CFG", "NVS GNSS antenna offset: board X %d, Y %d, Z %d mm", (int)cfg_antenna.x_mm,
-                 (int)cfg_antenna.y_mm, (int)cfg_antenna.z_mm);
+    const AntennaOffsetConfigData ant_boot = antennaCache();
+    if (ant_boot.known)
+        ESP_LOGI("CFG", "NVS GNSS antenna offset: board X %d, Y %d, Z %d mm", (int)ant_boot.x_mm,
+                 (int)ant_boot.y_mm, (int)ant_boot.z_mm);
     else
         ESP_LOGI("CFG", "NVS GNSS antenna offset: unknown");
 
@@ -13425,11 +13442,11 @@ static void loop_oc()
                 memcpy(&a, payload, sizeof(a));
                 if (antennaOffsetValid(a))
                 {
-                    cfg_antenna = a;
-                    stageAntennaConfig();
+                    setAntennaCache(a);
+                    stageAntennaConfig(a);
                     Preferences p2;
                     p2.begin("antenna", false);
-                    p2.putBytes("ofs", &cfg_antenna, sizeof(cfg_antenna));
+                    p2.putBytes("ofs", &a, sizeof(a));
                     p2.end();
                     if (a.known)
                         ESP_LOGI("BLE", "GNSS antenna offset: board X %d, Y %d, Z %d mm -> FlightComputer",

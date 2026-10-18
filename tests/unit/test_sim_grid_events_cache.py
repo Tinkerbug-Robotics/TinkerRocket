@@ -82,3 +82,17 @@ def test_make_events_reuses_only_a_matching_file(tmp_path, monkeypatch):
     assert calls[-1] == ("none", 0.3, [0.3, 0.0, 0.0])
     sim_grid.make_events(job(0.3, force=True))                     # --force-events: made again regardless
     assert len(calls) == 3
+
+
+def test_a_score_older_than_its_events_file_is_run_again(tmp_path):
+    # rerunning the same OUT with another antenna rebuilds the events file; the runs scored on the old one go with it
+    import os
+    ev = events_file(tmp_path / "f_s1__none.events")
+    score = tmp_path / "f_s1__none__0__design.json"
+    score.write_text("{}")
+    os.utime(ev, (1_000, 1_000))
+    os.utime(score, (2_000, 2_000))
+    assert sim_grid.score_current(str(score), ev)
+    os.utime(ev, (3_000, 3_000))                                   # the events file was made again
+    assert not sim_grid.score_current(str(score), ev)
+    assert not sim_grid.score_current(str(tmp_path / "missing.json"), ev)

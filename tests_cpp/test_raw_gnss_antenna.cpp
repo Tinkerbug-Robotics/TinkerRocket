@@ -587,7 +587,8 @@ TEST(RawGnssAntenna, TheChangeChecksLeverComesBackOutOfItsFit)
         r_off.run(off, 0.1);
         r_on.run(on, 0.1);
         const auto m1 = r_on.epoch();
-        const int n_off = off.dopplerChange(m1.data(), static_cast<int>(m1.size()), 0.0, ref_off, out, rows_off, imu_off);
+        const int n_off =
+            off.dopplerChange(m1.data(), static_cast<int>(m1.size()), 0.0, ref_off, out, rows_off, imu_off);
         const int n_on = on.dopplerChange(m1.data(), static_cast<int>(m1.size()), 0.0, ref_on, out, rows_on, imu_on);
         ASSERT_EQ(n_off, 10);
         ASSERT_EQ(n_on, 10);

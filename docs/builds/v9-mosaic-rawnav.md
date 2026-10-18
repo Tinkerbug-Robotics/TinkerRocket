@@ -78,17 +78,21 @@ takes it only on the ground: one relayed in flight is held and applied once the 
 The flight computer reports the offset it holds in its config report (`ConfigReportData` v4), and the apps' readback
 shows that one (`antsrc` "fc"); the out computer's copy stands in only without a report, and a flight computer with
 no offset of its own (a fresh board, or its NVS erased) is sent the out computer's again. The Beetle's out computer
-leaves the setting out of its readback, so the apps lock it there.
+leaves the setting out of its readback, so the apps lock it there. The apps send nothing until all three values
+are entered, and take a readback into the rocket's profile only when the flight computer reported it.
 
 - **Unknown** flies the image as described above: the turning body's 0.30 m and 0.03 m bounds stand in for the
   antenna nobody measured.
 - **Measured:** every Doppler and pseudorange is predicted at the antenna, and a few centimeters of doubt on the
-  value (`antenna_sigma_*`) replace those bounds and the change check's lever allowance. The offset's roll terms
-  are observed and logged, never fused.
+  value (`antenna_sigma_*`) replace those bounds and the change check's lever allowance. The change check also
+  allows for the attitude turning the antenna's predicted motion: with the heading known, the attitude allowance's
+  share of the offset; with no magnetometer heading, it takes the prediction back out and allows the whole offset,
+  as Unknown does with its 0.3 m. The offset's roll terms are observed and logged, never fused.
 - **The log:** the pad context gains a record, `PCX_ANT`, beside the calibrations at launch + 5 s: the setting, the
   same in the filter's frame, and whether the navigation filter flew with this offset (it started, and had the
-  offset on at the record). `tools/raw_replay/extract.py` passes it to the harness, which replays the flight with it
-  unless given `--antenna-m none`.
+  offset on at the record). `tools/raw_replay/extract.py` passes an offset the filter flew with to the harness
+  (`META antenna_m`), which replays the flight with it unless given `--antenna-m none`; one set but not flown with
+  is `META antenna_m_set`, replayed unknown, as it flew.
 
 ### The log-only vote guard
 

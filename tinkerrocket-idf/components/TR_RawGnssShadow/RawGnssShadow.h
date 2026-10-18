@@ -401,10 +401,10 @@
 // change, up to twice its size (0.3 m on a coast weathercocking with the
 // heading 60 deg off: a chi-square of 19.9 against the 4-sigma test's 16,
 // unknown's 0.89), so there the prediction is taken back out of the fitted
-// change and the whole offset allowed, its size plus the larger sigma. The hold and the skip are untouched. The offset is a
-// prior, never the truth: a phase centre a few cm from where the owner
-// measured is what the sigmas are for. setAntenna in flight waits for the
-// ground.
+// change and the whole offset allowed, its size plus the larger sigma. The
+// hold and the skip are untouched. The offset is a prior, never the truth: a
+// phase centre a few cm from where the owner measured is what the sigmas are
+// for. setAntenna in flight waits for the ground.
 //
 // The lever roll (the EKF's lever_att_mode observe; the change check on). A
 // turning antenna's velocity turns with the body, so it says how the body is

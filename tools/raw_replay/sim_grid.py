@@ -111,6 +111,12 @@ def read_meta(events):
     return meta
 
 
+def score_current(score_path, events):
+    """A run's score is kept only when it is at least as new as its events file: make_events rebuilds an events file
+    whose truth antenna no longer matches (--lever-arm, --lever-arm-b), and the runs on the old one go with it."""
+    return os.path.exists(score_path) and os.path.getmtime(score_path) >= os.path.getmtime(events)
+
+
 def run_one(job):
     events, mag, arm, binary, runs_dir, scores_dir, keep, extra, arm_args, rig = job
     global RIG_STATE
@@ -120,7 +126,7 @@ def run_one(job):
     flight, pattern = base.split("__")
     rid = f"{base}__{mag}__{arm}"
     score_path = os.path.join(scores_dir, rid + ".json")
-    if os.path.exists(score_path):
+    if score_current(score_path, events):
         return rid, "kept", 0.0
     csv = os.path.join(runs_dir, rid + ".csv")
     args = [binary, "--in", events, "--out", csv, "--receiver", "mosaic"]
