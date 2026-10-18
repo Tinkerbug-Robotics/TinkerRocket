@@ -8,6 +8,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import com.tinkerbug.tinkerrocket.protocol.AccelCalStatus
+import com.tinkerbug.tinkerrocket.protocol.HighGBiasSource
+import com.tinkerbug.tinkerrocket.protocol.HighGCalApply
 import com.tinkerbug.tinkerrocket.protocol.PadCalStatus
 import com.tinkerbug.tinkerrocket.protocol.SensorCalStatus
 
@@ -33,7 +35,10 @@ import com.tinkerbug.tinkerrocket.protocol.SensorCalStatus
  *    scrambled offset fields);
  *  - cmd 50 emits a scripted mag-cal ladder of 0xCA frames;
  *  - cmd 60 emits a scripted 0xAA scan result;
- *  - cmd 8 optionally answers with a pwr_pin_on telemetry frame.
+ *  - cmd 8 optionally answers with a pwr_pin_on telemetry frame;
+ *  - with an [accelCal] board, cmds 76, 77 and 80 answer with its 0xD1
+ *    frame as the flight computer does (#1629), the high-g part included
+ *    unless it models an older flight or out computer.
  *
  * Every reply has a per-op latency knob so tests can order events
  * deterministically under runTest virtual time.  All GATT ops are recorded
@@ -111,6 +116,13 @@ public class FakeFirmware(
 
     /** Non-null: cmd 8 answers with a pwr_pin_on telemetry frame after this delay. */
     public var powerToggleReplyDelayMs: Long? = null
+
+    /**
+     * Non-null: a flight computer with the six-face calibration behind this
+     * link, answering 76, 77 and 80 with its 0xD1 frame (#1629).  Null keeps
+     * them unanswered, for tests that script each frame themselves.
+     */
+    public var accelCal: AccelCalBoard? = null
 
     // ── Transport implementation ─────────────────────────────────────────
 
@@ -362,7 +374,8 @@ public class FakeFirmware(
 
     /**
      * `[0xD1][AccelCalStatusData 40 B]` six-face accelerometer calibration
-     * status (#1629).  [faceState] is the raw ACC_FACE_* value (0 idle,
+     * status (#1629), and AccelCalHighGStatus's 74 B after it when [highG] is
+     * given (114 in all).  [faceState] is the raw ACC_FACE_* value (0 idle,
      * 1 measuring, 2 done, 3 failed); the fields left out stay 0.
      */
     public fun accelCalStatusFrame(
@@ -372,8 +385,9 @@ public class FakeFirmware(
         faceMean: List<Float> = listOf(0f, 0f, 0f),
         faceSd: List<Float> = listOf(0f, 0f, 0f),
         faceN: Int = 0,
+        highG: AccelCalStatus.HighG? = null,
     ): ByteArray {
-        val p = ByteArray(1 + AccelCalStatus.SIZE)
+        val p = ByteArray(1 + if (highG != null) AccelCalStatus.HIGH_G_SIZE else AccelCalStatus.SIZE)
         p[0] = 0xD1.toByte()
         p[1] = flags.toByte()
         p[2] = faceState.toByte()
@@ -384,6 +398,17 @@ public class FakeFirmware(
         }
         p[39] = faceN.toByte()
         p[40] = (faceN ushr 8).toByte()
+        // [0xD1][AccelCalStatusData 40 B][AccelCalHighGStatus 74 B]
+        if (highG != null) {
+            for (i in 0 until 3) {
+                writeF32(p, 41 + 4 * i, highG.faceMean[i])
+                writeF32(p, 53 + 4 * i, highG.faceSd[i])
+            }
+            p[65] = highG.flags.toByte()
+            p[66] = highG.biasSource.toByte()
+            for (i in 0 until 9) writeF32(p, 67 + 4 * i, highG.matrix[i])
+            for (i in 0 until 3) writeF32(p, 103 + 4 * i, highG.bias[i])
+        }
         return p
     }
 
@@ -450,8 +475,41 @@ public class FakeFirmware(
                 }
             }
 
+            BleCommandId.ACC_CAL_READ -> accelCal?.let { answerAccelCal(it) }
+
+            BleCommandId.ACC_CAL_APPLY -> accelCal?.let { board ->
+                if (payload.size < 12) return
+                val b = LeBuffer(payload)
+                val o = List(3) { b.f32() }
+                board.offset = if (o.all { it == 0f }) null else o
+                answerAccelCal(board)
+            }
+
+            // An older flight computer, or an older out computer that does not
+            // relay 80, sends nothing for it.
+            BleCommandId.HG_CAL_APPLY -> accelCal?.takeIf { it.knowsHighG }?.let { board ->
+                if (payload.size < HighGCalApply.PAYLOAD_LENGTH) return
+                val b = LeBuffer(payload)
+                val op = b.u8()
+                val m = List(9) { b.f32() }
+                val bias = List(3) { b.f32() }
+                if (op == HighGCalApply.OP_STORE) {
+                    board.hgMatrix = m
+                    board.hgBias = bias
+                    board.hgBiasSource = HighGBiasSource.SIX_FACES.raw
+                } else {
+                    board.hgMatrix = null   // the bias stays, as the flight computer keeps it
+                }
+                answerAccelCal(board)
+            }
+
             else -> Unit
         }
+    }
+
+    private fun answerAccelCal(board: AccelCalBoard) {
+        val frame = board.frame(this)
+        scope.launch { emitFileOpsFrame(frame) }
     }
 
     private fun handleGuidancePoint(payload: ByteArray) {
@@ -532,6 +590,52 @@ public class FakeFirmware(
     }
 
     // ── Nested types / canned data ───────────────────────────────────────
+
+    /**
+     * The six-face calibration's state on the modeled flight computer: what
+     * 76 and 80 store and every 0xD1 answer reports.  The last face window is
+     * not modeled (its numbers are 0); tests that measure faces script those
+     * frames themselves.
+     */
+    public class AccelCalBoard(
+        /** The low-g offset in NVS, m/s²; null when none is stored. */
+        public var offset: List<Float>? = null,
+        /** The high-g alignment M in NVS, row-major; null when none is stored. */
+        public var hgMatrix: List<Float>? = null,
+        /** The high-g bias in use, b, m/s²; null when none is stored. */
+        public var hgBias: List<Float>? = null,
+        /** HG_BIAS_SRC_*: what wrote [hgBias]. */
+        public var hgBiasSource: Int = HighGBiasSource.NONE.raw,
+        /**
+         * False: an older flight computer, or a new one behind an older out
+         * computer — 80 goes unanswered and every frame is the low-g's 40 bytes.
+         */
+        public var knowsHighG: Boolean = true,
+    ) {
+        internal fun frame(fw: FakeFirmware): ByteArray {
+            val o = offset
+            val m = hgMatrix
+            val b = hgBias
+            val highG = if (!knowsHighG) {
+                null
+            } else {
+                AccelCalStatus.HighG(
+                    faceMean = listOf(0f, 0f, 0f),
+                    faceSd = listOf(0f, 0f, 0f),
+                    flags = (if (m != null) AccelCalStatus.HighG.FLAG_STORED or AccelCalStatus.HighG.FLAG_APPLIED else 0) or
+                        (if (b != null) AccelCalStatus.HighG.FLAG_BIAS else 0),
+                    biasSource = hgBiasSource,
+                    matrix = m ?: HighGCalApply.IDENTITY,
+                    bias = b ?: HighGCalApply.ZERO_BIAS,
+                )
+            }
+            return fw.accelCalStatusFrame(
+                flags = if (o != null) AccelCalStatus.FLAG_STORED or AccelCalStatus.FLAG_APPLIED else 0,
+                offset = o ?: listOf(0f, 0f, 0f),
+                highG = highG,
+            )
+        }
+    }
 
     /** One on-device file; [reportedSize] overrides the list's "size" field. */
     public class FakeFile(

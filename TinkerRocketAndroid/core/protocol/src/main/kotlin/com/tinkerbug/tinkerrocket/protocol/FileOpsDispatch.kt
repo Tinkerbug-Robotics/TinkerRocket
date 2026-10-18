@@ -75,7 +75,9 @@ public object FileOpsDispatch {
             }
             0xD1 -> {
                 // #1629.  Like 0xD0 before it, this byte used to fall
-                // through to the file-list parser and be dropped there.
+                // through to the file-list parser and be dropped there.  The
+                // gate is the low-g's 40 bytes: a flight computer that sends
+                // the high-g sends 114, and decode reads that part too.
                 if (frame.size < 1 + AccelCalStatus.SIZE) return null
                 AccelCalStatus.decode(frame.copyOfRange(1, frame.size))
                     ?.let { FileOpsMessage.AccelCal(it) }

@@ -1714,7 +1714,8 @@ public class DeviceSession(
 
     // ── #1629: the six-face accelerometer calibration ────────────────────
     //
-    // Three round trips over one frame kind, 0xD1.  Callable from any
+    // Four round trips over one frame kind, 0xD1 (the fourth, 80, the
+    // high-g's alignment).  Callable from any
     // dispatcher, as ActiveRocketSyncer.runPadCalibration is: they only
     // collect [accelCalFrames] and queue their write on the session's own
     // dispatcher, subscribed before it goes out so a fast answer cannot slip
@@ -1772,6 +1773,44 @@ public class DeviceSession(
     ): AccelSixFace.Applied {
         val answer = awaitAccelCalFrame(Commands.accelCalApply(offsetX, offsetY, offsetZ), applyTimeoutMs)
         return AccelSixFace.Applied(answer, readAccelCal(readTimeoutMs))
+    }
+
+    /**
+     * Store or clear the high-g's alignment (command 80), then read it back
+     * (77) — the script's write_high_g, in [applyAccelCal]'s shape: the
+     * answer to 80 first, for up to [applyTimeoutMs], then the 77.  An older
+     * flight computer, or an older out computer that does not relay 80, sends
+     * nothing for it, and its read-back then carries no high-g.
+     */
+    public suspend fun applyHighGCal(
+        write: AccelSixFace.HighGWrite,
+        applyTimeoutMs: Long = AccelSixFace.APPLY_TIMEOUT_MS,
+        readTimeoutMs: Long = AccelSixFace.READ_TIMEOUT_MS,
+    ): AccelSixFace.Applied {
+        val answer = awaitAccelCalFrame(Commands.highGCalApply(write.op, write.matrix, write.bias), applyTimeoutMs)
+        return AccelSixFace.Applied(answer, readAccelCal(readTimeoutMs))
+    }
+
+    /**
+     * A save or a clear of the calibration, in iOS AccelCalFlow's order: the
+     * offset (76) and its read-back, then — when [highG] is given
+     * ([AccelSixFace.highGAfterSave] / [AccelSixFace.highGAfterClear]) — the
+     * high-g's write (80) and its read-back.  The high-g goes out whatever
+     * the offset's read-back said, as on iOS.  [onOffset] runs, on the
+     * caller's dispatcher, as soon as the offset's report is in, so the
+     * screen can show it while the high-g's is still out.
+     */
+    public suspend fun writeAccelCal(
+        isClear: Boolean,
+        sent: List<Float>,
+        highG: AccelSixFace.HighGWrite?,
+        onOffset: (AccelSixFace.WriteReport) -> Unit = {},
+    ): AccelSixFace.Written {
+        val a = applyAccelCal(sent[0], sent[1], sent[2])
+        val offset = AccelSixFace.WriteReport(isClear, sent, a.final)
+        onOffset(offset)
+        val w = highG ?: return AccelSixFace.Written(offset, null)
+        return AccelSixFace.Written(offset, AccelSixFace.HighGWriteReport(w, applyHighGCal(w).final))
     }
 
     private suspend fun awaitAccelCalFrame(frame: ByteArray, timeoutMs: Long): AccelCalStatus? {

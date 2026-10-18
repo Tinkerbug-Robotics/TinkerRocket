@@ -103,8 +103,9 @@ fun DashboardScreen(
             SensorCalScreen(session, syncer, container?.ionosphere, onBack = { onTool(null) })
             return
         }
-        // #1629: no syncer — the offset is the board's, never the profile's.
-        "accelcal" -> { AccelCalScreen(session, device.deviceId, onBack = { onTool(null) }); return }
+        // #1629: the offset is the board's, never the profile's; the syncer
+        // only hands a saved high-g bias to this board's profile sensor cal.
+        "accelcal" -> { AccelCalScreen(session, device.deviceId, syncer, onBack = { onTool(null) }); return }
         "preflight" -> {
             if (container != null && profileStore != null) {
                 PreflightRunScreen(

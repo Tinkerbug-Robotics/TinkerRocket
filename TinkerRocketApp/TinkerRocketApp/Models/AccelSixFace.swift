@@ -23,6 +23,19 @@
 //  The board frame is +X forward, +Y left, +Z up out of the component side,
 //  whatever the board's mounting in the rocket.
 //
+//  The same windows average the high-g accelerometer (a flight and out
+//  computer that send it). Its correction is fitted to the low-g, the
+//  accurate channel on the bench: the matrix M (scale and cross-axis) and
+//  the offset b with
+//
+//      l = M * h - b   on every face (least squares)
+//
+//  l the raw low-g, h the raw high-g, so the high-g reads as the calibrated
+//  low-g and takes over at the low-g's rail with no step (RocketComputerTypes.h,
+//  HG_CAL_*). The high-g's own sphere fit is shown beside it as a check; when
+//  the two disagree beyond their noise, the alignment to the low-g is what is
+//  saved.
+//
 
 import Foundation
 
@@ -292,15 +305,23 @@ nonisolated enum AccelSixFace {
     /// A captured face: its window's numbers.
     nonisolated struct Capture: Equatable {
         let mean: [Double]
+        let sd: [Double]
         let sdMax: Double
         let samples: Int
         let tiltDeg: Double
+        /// The same window's high-g mean and SD (board frame, m/s²); nil when
+        /// the frame carried none.
+        let highGMean: [Double]?
+        let highGSD: [Double]?
 
         init(_ frame: AccelCalStatus, tiltDeg: Double) {
             mean = frame.faceMean.map(Double.init)
-            sdMax = frame.faceSD.map(Double.init).max() ?? 0
+            sd = frame.faceSD.map(Double.init)
+            sdMax = sd.max() ?? 0
             samples = Int(frame.faceN)
             self.tiltDeg = tiltDeg
+            highGMean = frame.highG.map { $0.faceMean.map(Double.init) }
+            highGSD = frame.highG.map { $0.faceSD.map(Double.init) }
         }
     }
 
@@ -320,6 +341,12 @@ nonisolated enum AccelSixFace {
         /// The solve, once all six are in.
         var solution: Solution? {
             isComplete ? AccelSixFace.solve(faces.mapValues(\.mean)) : nil
+        }
+
+        /// The high-g's alignment to the low-g, once all six are in.
+        var highG: HighGResult? {
+            guard isComplete, let lowG = solution else { return nil }
+            return AccelSixFace.solveHighG(faces, lowG: lowG)
         }
     }
 
@@ -463,12 +490,237 @@ nonisolated enum AccelSixFace {
             abs(Double(status.offset[$0]) - Double(sent[$0])) < readBackTolerance
         }
     }
+
+    // MARK: - The high-g, aligned to the low-g
+
+    /// What the flight computer refuses (HG_CAL_SCALE_MIN...MAX,
+    /// HG_CAL_CROSS_MAX, HG_CAL_BIAS_MAX_MPS2) and what the screen refuses on
+    /// top: a face fitted worse than `highGResidualMax`, ~7x the residual of a
+    /// still 3 s face.
+    static let highGScaleMin = 0.97
+    static let highGScaleMax = 1.03
+    static let highGCrossMax = 0.03
+    static let highGBiasMax = 11.0
+    static let highGResidualMax = 0.03
+    /// m/s²: each face mean's error beyond its samples' SD / sqrt(n) (the
+    /// offset's drift while the board is handled, ~2 mg/°C, and slow noise).
+    static let highGNoiseFloor = 0.002
+    /// The floors under the two fits' agreement test, and its width.
+    static let highGAgreeFloorOffset = 0.005
+    static let highGAgreeFloorScale = 2e-4
+    static let highGAgreeSigmas = 3.0
+    /// How close a read-back's matrix must be to what was sent.
+    static let matrixReadBackTolerance = 1e-6
+    /// The off-diagonal entries of a row-major 3x3.
+    static let crossIndices = [1, 2, 3, 5, 6, 7]
+
+    nonisolated enum HighGResult: Equatable {
+        /// The faces came without the high-g reading: an older flight or out
+        /// computer.
+        case noReading
+        /// The fit could not be solved (the faces do not span three axes).
+        case singular
+        case solved(HighGSolution)
+    }
+
+    nonisolated struct HighGSolution: Equatable {
+        enum Problem: Equatable {
+            case residual, scale, cross, bias
+        }
+
+        /// M, row-major, and b (m/s², board frame): l = M h - b.
+        let matrix: [Double]
+        let bias: [Double]
+        /// m/s², over the six faces' 18 equations.
+        let residualRMS: Double
+        let residualMax: Double
+        /// 1-sigma of each M entry and of b, from the faces' noise.
+        let sigmaMatrix: [Double]
+        let sigmaBias: [Double]
+        /// The high-g's own sphere fit, and the zero-g the alignment implies
+        /// for it, M^-1 (b + the low-g's offset).
+        let ownOffset: [Double]
+        let ownScale: [Double]
+        let impliedZero: [Double]
+        /// Per axis: the alignment less the own fit (offset, m/s²; scale), the
+        /// difference's 1-sigma, and the axes where it is past 3 sigma.
+        let diffOffset: [Double]
+        let diffScale: [Double]
+        let sigmaDiffOffset: [Double]
+        let sigmaDiffScale: [Double]
+        let disagreeAxes: [Int]
+        let problems: [Problem]
+
+        /// Within the limits: saved with the offset. A disagreement is not a
+        /// problem: the alignment to the low-g is saved either way.
+        var canSave: Bool { problems.isEmpty }
+        var payloadMatrix: [Float] { matrix.map(Float.init) }
+        var payloadBias: [Float] { bias.map(Float.init) }
+        /// The largest cross-axis term, as an angle, degrees.
+        var crossDeg: Double {
+            atan(AccelSixFace.crossIndices.map { abs(matrix[$0]) }.max() ?? 0) * 180 / .pi
+        }
+        var sigmaCrossDeg: Double {
+            (AccelSixFace.crossIndices.map { sigmaMatrix[$0] }.max() ?? 0) * 180 / .pi
+        }
+    }
+
+    /// The high-g's alignment to the low-g from the six captures, with the
+    /// low-g's own fit (`lowG`, for the agreement check): one row of M (and b)
+    /// at a time, [h_x h_y h_z -1] (M_i, b_i) = l_i over the six faces -- four
+    /// unknowns, six equations. Its 1-sigma comes from the faces' noise (each
+    /// mean's SD / sqrt(n), the high-g's through M, and the noise floor), not
+    /// the residuals, two degrees of freedom a row being too few to judge by.
+    /// tools/accel_cal_six_face.py's solve_high_g, number for number.
+    static func solveHighG(_ faces: [Face: Capture], lowG: Solution, g: Double = g0) -> HighGResult {
+        var l: [[Double]] = []
+        var h: [[Double]] = []
+        var sl: [[Double]] = []
+        var sh: [[Double]] = []
+        var n: [Double] = []
+        for face in Face.allCases {
+            guard let c = faces[face], let hm = c.highGMean, let hs = c.highGSD else { return .noReading }
+            l.append(c.mean)
+            h.append(hm)
+            sl.append(c.sd)
+            sh.append(hs)
+            n.append(Double(max(c.samples, 1)))
+        }
+        let x: [[Double]] = h.map { $0 + [-1] }
+        var xtx = [[Double]](repeating: [Double](repeating: 0, count: 4), count: 4)
+        for f in 0..<6 {
+            for i in 0..<4 {
+                for j in 0..<4 { xtx[i][j] += x[f][i] * x[f][j] }
+            }
+        }
+        guard let xtxInv = invert(xtx) else { return .singular }
+        var m = [Double](repeating: 0, count: 9)
+        var b = [Double](repeating: 0, count: 3)
+        for i in 0..<3 {
+            var rhs = [Double](repeating: 0, count: 4)
+            for f in 0..<6 {
+                for j in 0..<4 { rhs[j] += x[f][j] * l[f][i] }
+            }
+            for j in 0..<4 {
+                var t: Double = 0
+                for k in 0..<4 { t += xtxInv[j][k] * rhs[k] }
+                if j < 3 { m[3 * i + j] = t } else { b[i] = t }
+            }
+        }
+        guard (m + b).allSatisfy({ $0.isFinite }) else { return .singular }
+
+        var sumSq: Double = 0
+        var worst: Double = 0
+        for f in 0..<6 {
+            let mh = mul(m, h[f])
+            for i in 0..<3 {
+                let r: Double = mh[i] - b[i] - l[f][i]
+                sumSq += r * r
+                worst = max(worst, abs(r))
+            }
+        }
+        let rms = (sumSq / 18).squareRoot()
+        // each row's noise: the mean over the faces of every reading's variance in that row's equation
+        var sigRow: [Double] = []
+        for i in 0..<3 {
+            var v: Double = 0
+            for f in 0..<6 {
+                var hv: Double = 0
+                for j in 0..<3 {
+                    let mj: Double = m[3 * i + j] * sh[f][j]
+                    hv += mj * mj
+                }
+                let lv: Double = sl[f][i] * sl[f][i]
+                v += (lv + hv) / n[f] + highGNoiseFloor * highGNoiseFloor
+            }
+            sigRow.append((v / 6).squareRoot())
+        }
+        var sigM: [Double] = []
+        for i in 0..<3 {
+            for j in 0..<3 { sigM.append(sigRow[i] * xtxInv[j][j].squareRoot()) }
+        }
+        let sigB: [Double] = (0..<3).map { sigRow[$0] * xtxInv[3][3].squareRoot() }
+
+        // the high-g's own gravity fit, and what the alignment says it should have found
+        var ownMeans: [Face: [Double]] = [:]
+        for (i, face) in Face.allCases.enumerated() { ownMeans[face] = h[i] }
+        guard let own = solve(ownMeans, g: g),
+              let mInv = invert([Array(m[0..<3]), Array(m[3..<6]), Array(m[6..<9])]) else { return .singular }
+        let shifted: [Double] = (0..<3).map { b[$0] + lowG.offset[$0] }
+        let zero: [Double] = mul(mInv.flatMap { $0 }, shifted)
+        var dOff: [Double] = []
+        var dScl: [Double] = []
+        var sdOff: [Double] = []
+        var sdScl: [Double] = []
+        var disagree: [Int] = []
+        for i in 0..<3 {
+            dOff.append(zero[i] - own.offset[i])
+            dScl.append(m[4 * i] - lowG.scale[i] / own.scale[i])
+            let up = Face(axis: i, up: true), down = Face(axis: i, up: false)
+            let iu = Face.allCases.firstIndex(of: up)!, id = Face.allCases.firstIndex(of: down)!
+            let ownVar: Double = sh[iu][i] * sh[iu][i] / n[iu] + sh[id][i] * sh[id][i] / n[id]
+                + 2 * highGNoiseFloor * highGNoiseFloor
+            let offVar: Double = ownVar / 4 + sigB[i] * sigB[i] + highGAgreeFloorOffset * highGAgreeFloorOffset
+            let sclVar: Double = ownVar / (4 * g * g) + sigM[4 * i] * sigM[4 * i]
+                + highGAgreeFloorScale * highGAgreeFloorScale
+            sdOff.append(offVar.squareRoot())
+            sdScl.append(sclVar.squareRoot())
+            if !(abs(dOff[i]) <= highGAgreeSigmas * sdOff[i] && abs(dScl[i]) <= highGAgreeSigmas * sdScl[i]) {
+                disagree.append(i)
+            }
+        }
+
+        var problems: [HighGSolution.Problem] = []
+        if worst > highGResidualMax { problems.append(.residual) }
+        if (0..<3).contains(where: { !(m[4 * $0] >= highGScaleMin && m[4 * $0] <= highGScaleMax) }) {
+            problems.append(.scale)
+        }
+        if crossIndices.contains(where: { abs(m[$0]) > highGCrossMax }) { problems.append(.cross) }
+        if b.contains(where: { abs($0) > highGBiasMax }) { problems.append(.bias) }
+        return .solved(HighGSolution(matrix: m, bias: b, residualRMS: rms, residualMax: worst,
+                                     sigmaMatrix: sigM, sigmaBias: sigB, ownOffset: own.offset,
+                                     ownScale: own.scale, impliedZero: zero, diffOffset: dOff, diffScale: dScl,
+                                     sigmaDiffOffset: sdOff, sigmaDiffScale: sdScl, disagreeAxes: disagree,
+                                     problems: problems))
+    }
+
+    /// m * v, m row-major 3x3.
+    private static func mul(_ m: [Double], _ v: [Double]) -> [Double] {
+        (0..<3).map { i -> Double in
+            let a: Double = m[3 * i] * v[0]
+            let b: Double = m[3 * i + 1] * v[1]
+            let c: Double = m[3 * i + 2] * v[2]
+            return a + b + c
+        }
+    }
+
+    /// The inverse of a small square matrix, column by column; nil when singular.
+    private static func invert(_ a: [[Double]]) -> [[Double]]? {
+        let n = a.count
+        var cols: [[Double]] = []
+        for c in 0..<n {
+            let e: [Double] = (0..<n).map { $0 == c ? 1 : 0 }
+            guard let col = solveLinear(a, e) else { return nil }
+            cols.append(col)
+        }
+        return (0..<n).map { r in (0..<n).map { cols[$0][r] } }
+    }
+
+    /// A high-g save's read-back: an alignment stored from the six faces, M
+    /// within 1e-6 and b within 1e-5 m/s² of what was sent.
+    static func highGReadBackMatches(_ status: AccelCalStatus, matrix: [Float], bias: [Float]) -> Bool {
+        guard let h = status.highG, h.isStored, h.source == .sixFaces else { return false }
+        let mOK = (0..<9).allSatisfy { abs(Double(h.matrix[$0]) - Double(matrix[$0])) < matrixReadBackTolerance }
+        let bOK = (0..<3).allSatisfy { abs(Double(h.bias[$0]) - Double(bias[$0])) < readBackTolerance }
+        return mOK && bOK
+    }
 }
 
 // MARK: - The screen's flow
 
 /// The six-face screen's requests and answers, one at a time: a read (77), a
-/// face (78), a save or a clear (76, then 77 to read it back). Pure: the view
+/// face (78), a save or a clear (76, then 77 to read it back; and with the
+/// high-g, 80 and 77 again after it). Pure: the view
 /// sends the `Command` each step returns, arms a timer for `timeout` with the
 /// `generation` it had, and hands back every 0xD1 frame (`take`) and every
 /// timer that fires (`timedOut`).
@@ -480,6 +732,28 @@ nonisolated struct AccelCalFlow: Equatable {
         case read                // 77
         case measureFace         // 78
         case apply([Float])      // 76: board-frame m/s², all zero clears
+        case applyHighG(HighGWrite)  // 80
+    }
+
+    /// A write of the high-g's alignment.
+    enum HighGWrite: Equatable {
+        case save(matrix: [Float], bias: [Float])
+        case clear
+
+        var op: UInt8 {
+            switch self {
+            case .save: return HighGCalApply.opStore
+            case .clear: return HighGCalApply.opClear
+            }
+        }
+        var matrix: [Float] {
+            if case .save(let m, _) = self { return m }
+            return HighGCalApply.identity
+        }
+        var bias: [Float] {
+            if case .save(_, let b) = self { return b }
+            return [0, 0, 0]
+        }
     }
 
     /// A write to the flight computer.
@@ -506,6 +780,10 @@ nonisolated struct AccelCalFlow: Equatable {
         case applying(Write)
         /// Then 77: the read-back (the apply's own answer is the fallback).
         case readingBack(Write, applyAnswer: AccelCalStatus?)
+        /// After it, 80 is out: the answer to the high-g's write.
+        case applyingHighG(HighGWrite)
+        /// Then 77 again.
+        case readingBackHighG(HighGWrite, applyAnswer: AccelCalStatus?)
     }
 
     /// The last face measurement, as the screen reports it.
@@ -515,6 +793,21 @@ nonisolated struct AccelCalFlow: Equatable {
         let frame: AccelCalStatus?
         /// It replaced an earlier capture of the same face.
         let replaced: Bool
+    }
+
+    /// The high-g's save or clear, and what its read-back said.
+    struct HighGWriteReport: Equatable {
+        let write: HighGWrite
+        /// nil: no answer to the apply or the read-back.
+        let readBack: AccelCalStatus?
+
+        var confirmed: Bool {
+            guard let b = readBack else { return false }
+            switch write {
+            case .save(let m, let bias): return AccelSixFace.highGReadBackMatches(b, matrix: m, bias: bias)
+            case .clear: return b.highG.map { !$0.isStored } ?? false
+            }
+        }
     }
 
     /// A save or a clear, and what the read-back said.
@@ -540,6 +833,10 @@ nonisolated struct AccelCalFlow: Equatable {
     private(set) var captures = AccelSixFace.Captures()
     private(set) var lastFace: FaceReport?
     private(set) var lastWrite: WriteReport?
+    /// The high-g's part of the last save or clear; nil when it had none.
+    private(set) var lastHighGWrite: HighGWriteReport?
+    /// The high-g write that follows the low-g's, while that is out.
+    private(set) var pendingHighG: HighGWrite?
     /// The face whose placement help shows under the checklist: the last row
     /// tapped, until a measurement starts.
     private(set) var placementFace: Face?
@@ -562,14 +859,21 @@ nonisolated struct AccelCalFlow: Equatable {
         default: return nil
         }
     }
+    /// The high-g write in progress, if any.
+    var writingHighG: HighGWrite? {
+        switch wait {
+        case .applyingHighG(let w), .readingBackHighG(let w, _): return w
+        default: return nil
+        }
+    }
 
     /// The current wait's timeout, s (the reference script's: 10 s for a face).
     var timeout: TimeInterval {
         switch wait {
         case .none: return 0
-        case .reading, .readingBack: return 6
+        case .reading, .readingBack, .readingBackHighG: return 6
         case .measuring: return 10
-        case .applying: return 8
+        case .applying, .applyingHighG: return 8
         }
     }
 
@@ -585,6 +889,7 @@ nonisolated struct AccelCalFlow: Equatable {
     mutating func measure() -> Command? {
         guard !isBusy else { return nil }
         lastWrite = nil   // the faces are changing under it
+        lastHighGWrite = nil
         placementFace = nil
         begin(.measuring(AccelSixFace.FaceMeasurement()))
         return .measureFace
@@ -597,28 +902,46 @@ nonisolated struct AccelCalFlow: Equatable {
     }
 
     /// Save the solved offset; nil unless all six faces are in and it is
-    /// within the flight computer's limit.
+    /// within the flight computer's limit. The high-g's alignment follows it
+    /// when that is within its limits too.
     mutating func save() -> Command? {
         guard !isBusy, let s = captures.solution, s.canSave else { return nil }
         let o = s.payload
         lastWrite = nil
+        lastHighGWrite = nil
+        pendingHighG = nil
+        if case .solved(let h)? = captures.highG, h.canSave {
+            pendingHighG = .save(matrix: h.payloadMatrix, bias: h.payloadBias)
+        }
         begin(.applying(.save(o)))
         return .apply(o)
     }
 
-    mutating func clear() -> Command? {
+    /// Clear the stored offset, and the high-g's alignment after it when
+    /// `highG` (one is stored: an older flight computer would not answer 80).
+    mutating func clear(highG: Bool = false) -> Command? {
         guard !isBusy else { return nil }
         lastWrite = nil
+        lastHighGWrite = nil
+        pendingHighG = highG ? .clear : nil
         begin(.applying(.clear))
         return .apply(Write.clear.sent)
     }
 
     /// After a write that got no answer: read it back again.
     mutating func readBackAgain() -> Command? {
-        guard !isBusy, let w = lastWrite, w.readBack == nil else { return nil }
-        lastWrite = nil
-        begin(.readingBack(w.write, applyAnswer: nil))
-        return .read
+        guard !isBusy else { return nil }
+        if let w = lastWrite, w.readBack == nil {
+            lastWrite = nil
+            begin(.readingBack(w.write, applyAnswer: nil))
+            return .read
+        }
+        if let w = lastHighGWrite, w.readBack == nil {
+            lastHighGWrite = nil
+            begin(.readingBackHighG(w.write, applyAnswer: nil))
+            return .read
+        }
+        return nil
     }
 
     /// Drop the captured faces.
@@ -627,6 +950,7 @@ nonisolated struct AccelCalFlow: Equatable {
         captures = AccelSixFace.Captures()
         lastFace = nil
         lastWrite = nil
+        lastHighGWrite = nil
     }
 
     // MARK: Answers
@@ -653,9 +977,26 @@ nonisolated struct AccelCalFlow: Equatable {
             return .read
         case .readingBack(let w, _):
             lastWrite = WriteReport(write: w, readBack: frame)
+            return nextHighG()
+        case .applyingHighG(let w):
+            begin(.readingBackHighG(w, applyAnswer: frame))
+            return .read
+        case .readingBackHighG(let w, _):
+            lastHighGWrite = HighGWriteReport(write: w, readBack: frame)
             wait = .none
             return nil
         }
+    }
+
+    /// The low-g's write is done: the high-g's, if one follows.
+    private mutating func nextHighG() -> Command? {
+        guard let w = pendingHighG else {
+            wait = .none
+            return nil
+        }
+        pendingHighG = nil
+        begin(.applyingHighG(w))
+        return .applyHighG(w)
     }
 
     /// A timer armed at `generation` fired.
@@ -678,6 +1019,12 @@ nonisolated struct AccelCalFlow: Equatable {
             return .read
         case .readingBack(let w, let applyAnswer):
             lastWrite = WriteReport(write: w, readBack: applyAnswer)
+            return nextHighG()
+        case .applyingHighG(let w):
+            begin(.readingBackHighG(w, applyAnswer: nil))
+            return .read
+        case .readingBackHighG(let w, let applyAnswer):
+            lastHighGWrite = HighGWriteReport(write: w, readBack: applyAnswer)
             wait = .none
             return nil
         }
@@ -753,6 +1100,129 @@ nonisolated extension AccelCalFlow.WriteReport {
             return confirmed ? "Saved and read back" : "The read-back does not match what was sent"
         case (.clear, _?):
             return confirmed ? "Cleared: no offset stored" : "The flight computer still has an offset stored"
+        }
+    }
+}
+
+nonisolated extension AccelCalFlow.HighGWriteReport {
+
+    var text: String {
+        switch (write, readBack) {
+        case (_, nil):
+            return "No answer about the high-g from the flight computer — read it back to check"
+        case (_, let b?) where b.highG == nil:
+            return "The answer has no high-g in it: update the flight computer and the out computer"
+        case (.save, _?):
+            return confirmed ? "High-g alignment saved and read back"
+                : "The high-g read-back does not match what was sent"
+        case (.clear, _?):
+            return confirmed ? "Cleared: no high-g alignment stored"
+                : "The flight computer still has a high-g alignment stored"
+        }
+    }
+}
+
+nonisolated extension AccelSixFace.HighGSolution {
+
+    /// "+0.812 % ± 0.041": the scale's difference from 1 and its 1-sigma.
+    func scaleText(_ axis: Int) -> String {
+        String(format: "%+.3f %% ± %.3f", (matrix[4 * axis] - 1) * 100, sigmaMatrix[4 * axis] * 100)
+    }
+
+    /// "+66.4 mg ± 0.24": the offset against the low-g.
+    func offsetText(_ axis: Int) -> String {
+        String(format: "%+.1f mg ± %.2f", bias[axis] / AccelSixFace.g0 * 1000,
+               sigmaBias[axis] / AccelSixFace.g0 * 1000)
+    }
+
+    var crossText: String {
+        String(format: "Cross-axis: up to %.2f° (± %.3f°)", crossDeg, sigmaCrossDeg)
+    }
+
+    var residualText: String {
+        String(format: "Fit to the low-g: %.2f mg rms, %.2f mg at most (limit %.0f mg)",
+               residualRMS / AccelSixFace.g0 * 1000, residualMax / AccelSixFace.g0 * 1000,
+               AccelSixFace.highGResidualMax / AccelSixFace.g0 * 1000)
+    }
+
+    /// The two fits' agreement: the high-g's own gravity fit against what the
+    /// alignment to the low-g implies.
+    var agreementText: String {
+        guard let first = disagreeAxes.first else {
+            return "Its own gravity fit agrees with the alignment to the low-g within their noise."
+        }
+        let axes = disagreeAxes.map { AccelSixFace.axisNames[$0] }.joined(separator: ", ")
+        let off = abs(diffOffset[first]) / AccelSixFace.g0 * 1000
+        let lim = AccelSixFace.highGAgreeSigmas * sigmaDiffOffset[first] / AccelSixFace.g0 * 1000
+        let scl = abs(diffScale[first]) * 100
+        let sLim = AccelSixFace.highGAgreeSigmas * sigmaDiffScale[first] * 100
+        let numbers = String(format: "%.1f mg (3σ %.1f) and %.3f %% (3σ %.3f)", off, lim, scl, sLim)
+        return "Its own gravity fit differs on \(axes) by \(numbers): the alignment to the low-g, the "
+            + "bench's reference, is what gets saved."
+    }
+
+    var problemText: String? {
+        guard let p = problems.first else { return nil }
+        switch p {
+        case .residual:
+            let limit = String(format: "%.0f", AccelSixFace.highGResidualMax / AccelSixFace.g0 * 1000)
+            return "A face fits the low-g worse than \(limit) mg — did it move, or warm up between faces? "
+                + "Measure the faces again."
+        case .scale:
+            return "A scale is outside 0.97–1.03."
+        case .cross:
+            return "A cross-axis term is past 0.03 (1.7°)."
+        case .bias:
+            return "An offset is past 11 m/s²."
+        }
+    }
+}
+
+nonisolated extension AccelSixFace.HighGResult {
+
+    /// The line when there is nothing to show: no high-g with the faces, or
+    /// no fit.
+    var unavailableText: String? {
+        switch self {
+        case .noReading:
+            return "The faces came without the high-g reading. Update the flight computer and the out "
+                + "computer to calibrate the high-g; the low-g offset saves as before."
+        case .singular:
+            return "The high-g fit failed: are the six faces six different sides?"
+        case .solved:
+            return nil
+        }
+    }
+}
+
+nonisolated extension AccelCalStatus.HighG {
+
+    /// "X +0.812 %, Y -0.664 %, Z +1.224 %": the stored alignment's scales.
+    var scalesText: String {
+        (0..<3).map { String(format: "\(AccelSixFace.axisNames[$0]) %+.3f %%", (Double(matrix[4 * $0]) - 1) * 100) }
+            .joined(separator: ", ")
+    }
+
+    /// "X -66.4 mg, Y +150.9 mg, Z -31.9 mg": the bias in use.
+    var biasText: String {
+        (0..<3).map { String(format: "\(AccelSixFace.axisNames[$0]) %+.1f mg",
+                             Double(bias[$0]) / AccelSixFace.g0 * 1000) }
+            .joined(separator: ", ")
+    }
+
+    var sourceText: String {
+        switch source {
+        case .padCal?: return "measured by the pad calibration"
+        case .sixFaces?: return "from the six faces"
+        case .none?, nil: return "source not recorded"
+        }
+    }
+
+    var alignmentText: String {
+        switch (isStored, isApplied) {
+        case (true, true): return "High-g alignment in use: \(scalesText)"
+        case (true, false): return "High-g alignment stored, but not in use while a sim runs"
+        case (false, _): return "No high-g alignment stored"
         }
     }
 }

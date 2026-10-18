@@ -53,6 +53,8 @@ import com.tinkerbug.tinkerrocket.protocol.AccelCalStatus
 import com.tinkerbug.tinkerrocket.session.AccelCalReadout
 import com.tinkerbug.tinkerrocket.session.AccelSixFace
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.Face
+import com.tinkerbug.tinkerrocket.session.AccelSixFace.HighGWrite
+import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer
 import com.tinkerbug.tinkerrocket.session.DeviceSession
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -71,14 +73,23 @@ import kotlinx.coroutines.launch
  * readAccelCal / measureAccelFace / applyAccelCal.  This screen is the
  * checklist, the buttons and the report.
  *
- * The offset is a property of the board, stored on it.  Nothing here touches
- * the rocket profile, and nothing pushes it on connect: this screen is the one
- * place that writes it.
+ * The offset is a property of the board, stored on it.  It is in no rocket
+ * profile, and nothing pushes it on connect: this screen is the one place that
+ * writes it.
+ *
+ * The same windows carry the high-g's reading (a flight and out computer that
+ * send it): the screen fits it to the low-g ([AccelSixFace.solveHighG]), shows
+ * its scale, offset, cross-axis, fit and its own gravity fit's agreement, and
+ * saves it after the offset (80, read back with 77).  The pad calibration
+ * then keeps the alignment and re-measures only the high-g's bias; a rocket
+ * profile holding this board's sensor cal gets the new bias ([syncer]'s
+ * adoptHighGBias), so its connect-time push does not put the old one back.
  */
 @Composable
 fun AccelCalScreen(
     session: DeviceSession,
     deviceKey: String,
+    syncer: ActiveRocketSyncer? = null,
     onBack: () -> Unit,
 ) {
     val tr = TrTheme.colors
@@ -109,6 +120,8 @@ fun AccelCalScreen(
     var faces by remember(deviceKey) { mutableStateOf<Map<Face, AccelCalStatus>>(emptyMap()) }
     var lastFace by remember(deviceKey) { mutableStateOf<AccelFaceReport?>(null) }
     var lastWrite by remember(deviceKey) { mutableStateOf<AccelSixFace.WriteReport?>(null) }
+    // The high-g's part of the last save or clear; null when it had none.
+    var lastHighGWrite by remember(deviceKey) { mutableStateOf<AccelSixFace.HighGWriteReport?>(null) }
     // The row last tapped: its placement line shows under the checklist.
     var placementFace by remember(deviceKey) { mutableStateOf<Face?>(null) }
     // One round trip at a time: the answers carry no request id.
@@ -145,6 +158,7 @@ fun AccelCalScreen(
         windowOpen = false
         placementFace = null
         lastWrite = null   // the faces are changing under it
+        lastHighGWrite = null
         scope.launch {
             try {
                 val m = session.measureAccelFace(onWindowOpen = { windowOpen = true })
@@ -170,15 +184,40 @@ fun AccelCalScreen(
         }
     }
 
-    /** A save ([clear] false, [sent] the offset) or a clear: 76, then the read-back. */
-    fun write(clear: Boolean, sent: List<Float>) {
+    // The high-g's alignment to the low-g, once all six are in.
+    val highGFit = remember(faces, solution) { solution?.let { AccelSixFace.solveHighG(faces, it) } }
+
+    // A high-g alignment is stored on the board.
+    val highGStored = status?.highG?.stored == true
+
+    /**
+     * A confirmed high-g save: the active profile's sensor cal (this board's)
+     * takes the new bias, so the connect-time push keeps it.
+     */
+    fun highGWritten(r: AccelSixFace.HighGWriteReport) {
+        val w = r.write as? HighGWrite.Save ?: return
+        if (r.confirmed) syncer?.adoptHighGBias(session.identity.value.unitId, w.bias)
+    }
+
+    /**
+     * A save ([clear] false, [sent] the offset) or a clear: 76, then the
+     * read-back; and with [highG], 80 and its read-back after it.
+     */
+    fun write(clear: Boolean, sent: List<Float>, highG: HighGWrite?) {
         if (op != null) return
         op = if (clear) AccelCalOp.CLEARING else AccelCalOp.SAVING
         lastWrite = null
+        lastHighGWrite = null
         scope.launch {
             try {
-                val a = session.applyAccelCal(sent[0], sent[1], sent[2])
-                lastWrite = AccelSixFace.WriteReport(clear, sent, a.final)
+                val w = session.writeAccelCal(clear, sent, highG) { offset ->
+                    lastWrite = offset
+                    if (highG != null && !clear) op = AccelCalOp.SAVING_HIGH_G
+                }
+                w.highG?.let {
+                    lastHighGWrite = it
+                    highGWritten(it)
+                }
             } finally {
                 op = null
             }
@@ -199,11 +238,28 @@ fun AccelCalScreen(
         }
     }
 
+    /** After a high-g write that got no answer: read it back again. */
+    fun readHighGBack(w: AccelSixFace.HighGWriteReport) {
+        if (op != null) return
+        op = if (w.write == HighGWrite.Clear) AccelCalOp.CLEARING else AccelCalOp.SAVING_HIGH_G
+        lastHighGWrite = null
+        scope.launch {
+            try {
+                val r = w.copy(readBack = session.readAccelCal())
+                lastHighGWrite = r
+                highGWritten(r)
+            } finally {
+                op = null
+            }
+        }
+    }
+
     fun startOver() {
         if (op != null) return
         faces = emptyMap()
         lastFace = null
         lastWrite = null
+        lastHighGWrite = null
     }
 
     // The 3 s the board must be held still, from the window's MEASURING frame.
@@ -245,6 +301,20 @@ fun AccelCalScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    val h = s.highG
+                    if (h != null) {
+                        Text(
+                            AccelCalReadout.hgAlignment(h),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (h.hasBias) {
+                            MonoCaption(AccelCalReadout.hgBiasRow(h))
+                            Caption(AccelCalReadout.hgSourceRow(h))
+                        }
+                    } else {
+                        Caption(AccelCalReadout.HG_NOT_SENT)
+                    }
                 }
                 op == AccelCalOp.READING -> Busy(AccelCalReadout.READING)
                 readUnanswered -> {
@@ -321,7 +391,9 @@ fun AccelCalScreen(
                     Busy(AccelCalReadout.SAVING)
                 } else {
                     Button(
-                        onClick = { write(clear = false, sent = s.wireOffset) },
+                        onClick = {
+                            write(clear = false, sent = s.wireOffset, highG = AccelSixFace.highGAfterSave(highGFit))
+                        },
                         enabled = canRun && op == null && s.saveAllowed,
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text(AccelCalReadout.SAVE) }
@@ -333,6 +405,47 @@ fun AccelCalScreen(
             }
         }
 
+        // ── The high-g, aligned to the low-g ────────────────────────────
+        highGFit?.let { r ->
+            Section(AccelCalReadout.HG_TITLE) {
+                if (r is AccelSixFace.HighGResult.Solved) {
+                    val h = r.solution
+                    for (i in 0..2) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text(AXIS_NAMES[i], style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    AccelCalReadout.hgScale(h, i),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontFamily = FontFamily.Monospace,
+                                )
+                                MonoCaption(AccelCalReadout.hgOffset(h, i))
+                            }
+                        }
+                    }
+                    MonoCaption(AccelCalReadout.hgCross(h))
+                    MonoCaption(AccelCalReadout.hgResidual(h))
+                    // Agreeing is said quietly, as iOS's secondary line; a
+                    // disagreement in the warn color.
+                    val agreement = AccelCalReadout.hgAgreement(h)
+                    Text(
+                        agreement.text,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (agreement.tone == AccelCalReadout.Tone.WARN) tr.statusWarn
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    ReadoutText(AccelCalReadout.hgVerdict(h))
+                } else {
+                    ReadoutText(AccelCalReadout.Line(AccelCalReadout.hgUnavailable(r) ?: "", AccelCalReadout.Tone.WARN))
+                }
+                if (op == AccelCalOp.SAVING_HIGH_G) Busy(AccelCalReadout.HG_SAVING)
+                lastHighGWrite?.takeIf { it.write != HighGWrite.Clear }?.let { w ->
+                    HighGWriteReportRows(w, canReadBack = canRun && op == null) { readHighGBack(w) }
+                }
+                Caption(AccelCalReadout.HG_FOOTER)
+            }
+        }
+
         // ── Clear: out of the way, and behind a confirmation ────────────
         Section(title = null) {
             if (op == AccelCalOp.CLEARING) {
@@ -340,30 +453,37 @@ fun AccelCalScreen(
             } else {
                 TextButton(
                     onClick = { confirmClear = true },
-                    enabled = canRun && op == null && status?.stored == true,
+                    enabled = canRun && op == null && (status?.stored == true || highGStored),
                     colors = ButtonDefaults.textButtonColors(contentColor = tr.statusBad),
-                ) { Text(AccelCalReadout.CLEAR) }
+                ) { Text(if (highGStored) AccelCalReadout.CLEAR_ALL else AccelCalReadout.CLEAR) }
             }
             lastWrite?.takeIf { it.isClear }?.let { w ->
                 WriteReportRows(w, canReadBack = canRun && op == null) { readItBack(w) }
             }
-            Caption(AccelCalReadout.CLEAR_FOOTER)
+            lastHighGWrite?.takeIf { it.write == HighGWrite.Clear }?.let { w ->
+                HighGWriteReportRows(w, canReadBack = canRun && op == null) { readHighGBack(w) }
+            }
+            Caption(if (highGStored) AccelCalReadout.CLEAR_ALL_FOOTER else AccelCalReadout.CLEAR_FOOTER)
         }
     }
 
     if (confirmClear) {
         AlertDialog(
             onDismissRequest = { confirmClear = false },
-            title = { Text(AccelCalReadout.CLEAR_CONFIRM_TITLE) },
-            text = { Text(AccelCalReadout.CLEAR_CONFIRM_TEXT) },
+            title = {
+                Text(if (highGStored) AccelCalReadout.CLEAR_ALL_CONFIRM_TITLE else AccelCalReadout.CLEAR_CONFIRM_TITLE)
+            },
+            text = {
+                Text(if (highGStored) AccelCalReadout.CLEAR_ALL_CONFIRM_TEXT else AccelCalReadout.CLEAR_CONFIRM_TEXT)
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
                         confirmClear = false
-                        write(clear = true, sent = listOf(0f, 0f, 0f))
+                        write(clear = true, sent = listOf(0f, 0f, 0f), highG = AccelSixFace.highGAfterClear(status))
                     },
                     colors = ButtonDefaults.textButtonColors(contentColor = tr.statusBad),
-                ) { Text(AccelCalReadout.CLEAR_CONFIRM) }
+                ) { Text(if (highGStored) AccelCalReadout.CLEAR_ALL_CONFIRM else AccelCalReadout.CLEAR_CONFIRM) }
             },
             dismissButton = {
                 TextButton(onClick = { confirmClear = false }) { Text(AccelCalReadout.CANCEL) }
@@ -374,8 +494,13 @@ fun AccelCalScreen(
 
 private val AXIS_NAMES = listOf("X", "Y", "Z")
 
-/** The round trip in flight; the screen runs one at a time. */
-private enum class AccelCalOp { READING, MEASURING, SAVING, CLEARING }
+/**
+ * The round trip in flight; the screen runs one at a time.  A clear is
+ * CLEARING through its high-g part too; a save's high-g part is its own, as
+ * on iOS, where the offset's Save button comes back (disabled) while the
+ * high-g section says it is saving.
+ */
+private enum class AccelCalOp { READING, MEASURING, SAVING, SAVING_HIGH_G, CLEARING }
 
 /** The gate's telemetry inputs: power, state, and whether a boot step is still reported. */
 private data class AccelCalGate(val pwrPinOn: Boolean, val state: String, val booting: Boolean)
@@ -479,6 +604,15 @@ private fun ValueRow(label: String, value: String) {
 private fun WriteReportRows(w: AccelSixFace.WriteReport, canReadBack: Boolean, onReadBack: () -> Unit) {
     ReadoutText(AccelCalReadout.write(w))
     AccelCalReadout.readBack(w)?.let { MonoCaption(it) }
+    if (w.readBack == null) {
+        TextButton(onClick = onReadBack, enabled = canReadBack) { Text(AccelCalReadout.READ_IT_BACK) }
+    }
+}
+
+/** A high-g save's or clear's outcome; with no answer, a way to read it back. */
+@Composable
+private fun HighGWriteReportRows(w: AccelSixFace.HighGWriteReport, canReadBack: Boolean, onReadBack: () -> Unit) {
+    ReadoutText(AccelCalReadout.hgWrite(w))
     if (w.readBack == null) {
         TextButton(onClick = onReadBack, enabled = canReadBack) { Text(AccelCalReadout.READ_IT_BACK) }
     }

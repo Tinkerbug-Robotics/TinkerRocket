@@ -94,6 +94,44 @@ void SensorConverter::lowGBoardRaw(const ISM6HG256Data& in, double out[3]) const
     out[2] = (double)in.acc_low_raw.z * (double)acc_low_ms2_per_lsb;
 }
 
+void SensorConverter::highGBoardRaw(const ISM6HG256Data& in, double out[3]) const
+{
+    const double c = (double)cosf(ism6_rot_z_rad);
+    const double s = (double)sinf(ism6_rot_z_rad);
+    const double hg_x = (double)in.acc_high_raw.x * (double)acc_high_ms2_per_lsb;
+    const double hg_y = (double)in.acc_high_raw.y * (double)acc_high_ms2_per_lsb;
+    out[0] = (hg_x * c) - (hg_y * s);
+    out[1] = (hg_x * s) + (hg_y * c);
+    out[2] = (double)in.acc_high_raw.z * (double)acc_high_ms2_per_lsb;
+}
+
+void SensorConverter::setHighGAlignment(const float m[9])
+{
+    bool identity = true;
+    for (int i = 0; i < 9; i++)
+    {
+        hg_m_[i] = m[i];
+        if (m[i] != ((i % 4 == 0) ? 1.0f : 0.0f)) identity = false;
+    }
+    hg_m_set_ = !identity;
+#ifdef ESP_PLATFORM
+    ESP_LOGI("Converter", "High-g alignment %s: [%.5f %.5f %.5f; %.5f %.5f %.5f; %.5f %.5f %.5f]",
+             hg_m_set_ ? "set" : "identity (none)", (double)m[0], (double)m[1], (double)m[2],
+             (double)m[3], (double)m[4], (double)m[5], (double)m[6], (double)m[7], (double)m[8]);
+#endif
+}
+
+void SensorConverter::clearHighGAlignment()
+{
+    for (int i = 0; i < 9; i++) hg_m_[i] = (i % 4 == 0) ? 1.0f : 0.0f;
+    hg_m_set_ = false;
+}
+
+void SensorConverter::highGAlignment(float out[9]) const
+{
+    for (int i = 0; i < 9; i++) out[i] = hg_m_[i];
+}
+
 void SensorConverter::setHighGBias(float bx, float by, float bz)
 {
     if (bx == hg_bias_x_ && by == hg_bias_y_ && bz == hg_bias_z_)
@@ -281,9 +319,24 @@ void SensorConverter::convertISM6HG256Data(const ISM6HG256Data& in, ISM6HG256Dat
     // board→rocket rotation below.
     const double hg_x = (double)in.acc_high_raw.x * (double)acc_high_ms2_per_lsb;
     const double hg_y = (double)in.acc_high_raw.y * (double)acc_high_ms2_per_lsb;
-    out.high_g_acc_x = (hg_x * c) - (hg_y * s) - (double)hg_bias_x_ - ox;
-    out.high_g_acc_y = (hg_x * s) + (hg_y * c) - (double)hg_bias_y_ - oy;
-    out.high_g_acc_z = (double)in.acc_high_raw.z * (double)acc_high_ms2_per_lsb - (double)hg_bias_z_ - oz;
+    if (!(lg_off_on_ && hg_m_set_))
+    {
+        out.high_g_acc_x = (hg_x * c) - (hg_y * s) - (double)hg_bias_x_ - ox;
+        out.high_g_acc_y = (hg_x * s) + (hg_y * c) - (double)hg_bias_y_ - oy;
+        out.high_g_acc_z = (double)in.acc_high_raw.z * (double)acc_high_ms2_per_lsb - (double)hg_bias_z_ - oz;
+    }
+    else
+    {
+        // The six-face alignment to the low-g (HG_CAL_*), board frame, before
+        // the bias: high = M * h - bias - offset.
+        const double h[3] = {(hg_x * c) - (hg_y * s), (hg_x * s) + (hg_y * c),
+                             (double)in.acc_high_raw.z * (double)acc_high_ms2_per_lsb};
+        double m[9];
+        for (int i = 0; i < 9; i++) m[i] = (double)hg_m_[i];
+        out.high_g_acc_x = m[0] * h[0] + m[1] * h[1] + m[2] * h[2] - (double)hg_bias_x_ - ox;
+        out.high_g_acc_y = m[3] * h[0] + m[4] * h[1] + m[5] * h[2] - (double)hg_bias_y_ - oy;
+        out.high_g_acc_z = m[6] * h[0] + m[7] * h[1] + m[8] * h[2] - (double)hg_bias_z_ - oz;
+    }
 
     // Gyro (deg/s), then rotate about +Z to board frame.
     const double g_x = (double)in.gyro_raw.x * (double)gyro_dps_per_lsb;

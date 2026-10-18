@@ -22,7 +22,7 @@ Start-of-frame bytes from [`TR_I2C_Interface.h`](https://github.com/Tinkerbug-Ro
 
 ## FC ↔ OC message types
 
-114 codes. The dispatch on both ends is a flat first-match chain, so
+116 codes. The dispatch on both ends is a flat first-match chain, so
 two handlers sharing a value means the second is silently dead — which is why
 this list is CI-enforced for uniqueness.
 
@@ -140,10 +140,12 @@ this list is CI-enforced for uniqueness.
 | `0x82` | `ACC_CAL_READ` | OC → FC | OC→FC: publish the stored offset as a status frame |
 | `0x83` | `ACC_CAL_STATUS_MSG` | FC → OC | FC→OC over I2S: AccelCalStatusData |
 | `0x84` | `ACC_FACE_PENDING` | OC → FC | OC→FC: average the low-g over one face window |
+| `0x85` | `HG_CAL_APPLY_PENDING` | OC → FC | OC→FC: payload follows as HG_CAL_APPLY_MSG |
+| `0x86` | `HG_CAL_APPLY_MSG` | FC → OC | 49-byte HighGCalApplyData payload |
 | `0x8E` | `GNSS_LOG_CONFIG_PENDING` | OC → FC | OC→FC: payload follows as GNSS_LOG_CONFIG_MSG |
 | `0x8F` | `GNSS_LOG_CONFIG_MSG` | OC → FC | OC→FC: 1-byte GnssLogConfigData |
 
-> 54 of these 114 codes carry no comment in the header,
+> 54 of these 116 codes carry no comment in the header,
 > so the Notes column is blank for them. Direction is inferred from the
 > `_PENDING` / `_CMD` / `_MSG` suffix in that case, which is a convention,
 > not a guarantee. A trailing `// OC→FC: what it does` on the constant
@@ -161,14 +163,17 @@ that changes size fails the build rather than corrupting a log silently.
 | `GNSSSatData` | 202 |
 | `ConfigReportData` | 194 |
 | `PadContextNav` | 124 |
+| `AccelCalStatusFrame` | 114 |
 | `RawGnssEkfData` | 90 |
 | `RollProfileData` | 76 |
 | `RollProfileData` | 76 |
+| `AccelCalHighGStatus` | 74 |
 | `GnssClockData` | 68 |
 | `LoRaFastData` | 55 |
 | `LoRaFastData` | 55 |
 | `NonSensorData` | 52 |
 | `NonSensorData` | 52 |
+| `HighGCalApplyData` | 49 |
 | `RawGnssAttData` | 46 |
 | `GuidanceConfigData` | 45 |
 | `GNSSData` | 42 |
@@ -178,6 +183,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `PadContextCal` | 41 |
 | `AccelCalStatusData` | 40 |
 | `PadCalStatusData` | 40 |
+| `PadContextHg` | 37 |
 | `MagCalStatusData` | 36 |
 | `HeadingFitData` | 32 |
 | `LogBufferStatsData` | 28 |
@@ -240,7 +246,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 
 ### app to Out Computer
 
-61 commands.
+62 commands.
 
 | Cmd | Constant | Description |
 |-----|----------|-------------|
@@ -304,6 +310,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 77 |  | #1629 — read the stored low-g offset and the last face window back |
 | 78 |  | #1629 — average the low-g accelerometer over one face, the board still |
 | 79 |  | GNSS log setting: [setting:1] — GNSS_LOG_DETAILED (0, every SBF block of a mosaic-G5) or GNSS_LOG_REDUCED (1,… |
+| 80 |  | The high-g's six-face alignment to the low-g: store and apply the fitted matrix and bias, or clear the matrix… |
 | 200 |  | Bench-only: arm config-frame drops, see test_cfg_drop_count |
 
 > 8 of these have no comment in the dispatch and so no

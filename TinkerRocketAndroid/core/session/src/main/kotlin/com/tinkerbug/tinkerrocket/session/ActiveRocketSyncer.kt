@@ -715,6 +715,24 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         return true
     }
 
+    /**
+     * After the six-face screen saved the high-g's alignment (#1629): the
+     * active profile's sensor cal takes the bias the flight computer now uses
+     * — when the cal is [unitId]'s, the board the screen saved to, whose
+     * connect-time push would otherwise put the older bias back under the new
+     * alignment.  Nothing for no cal, or another board's (never pushed).  iOS
+     * AccelCalibrationView.highGWritten; the rule is [sensorCalAfterHighGSave].
+     * On [scope], the store's single writer.
+     */
+    public fun adoptHighGBias(unitId: String, bias: List<Float>) {
+        scope.launch {
+            val st = store ?: return@launch
+            val profile = st.activeProfile ?: return@launch
+            val updated = sensorCalAfterHighGSave(profile.sensorCal, unitId, bias) ?: return@launch
+            st.update(profile.id) { it.copy(sensorCal = updated) }
+        }
+    }
+
     /** What came of a pad calibration started by [runOnPadSensorCal]. */
     public sealed interface SensorCalRun {
         /**
@@ -1216,6 +1234,24 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
                 cal.calibratedOnUnitID == deviceUnitId -> CalAction.Push(mag = cal)
                 else -> CalAction.WarnMismatch(cal.calibratedOnUnitID, deviceUnitId)
             }
+
+        /**
+         * The profile's sensor cal with the high-g bias a six-face save just
+         * stored ([bias], board frame m/s²), when the cal is this board's
+         * ([deviceUnitId]); the gyro offsets and the date stay the pad
+         * calibration's.  Null: nothing to change — no cal, another board's
+         * (never pushed), or no board id yet.  iOS
+         * ActiveRocketSyncer.sensorCalAfterHighGSave.
+         */
+        public fun sensorCalAfterHighGSave(
+            profileCal: SensorCalData?,
+            deviceUnitId: String,
+            bias: List<Float>,
+        ): SensorCalData? {
+            val cal = profileCal ?: return null
+            if (deviceUnitId.isEmpty() || cal.calibratedOnUnitID != deviceUnitId || bias.size != 3) return null
+            return cal.copy(hgX = bias[0], hgY = bias[1], hgZ = bias[2])
+        }
 
         public fun sensorCalSyncAction(cal: SensorCalData?, deviceUnitId: String): CalAction =
             when {

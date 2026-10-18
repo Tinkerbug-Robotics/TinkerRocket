@@ -70,7 +70,7 @@ void SensorCollectorSim::resetPollTimingSnapshot()
 // Calibration (no-op — sim data is synthetic, no real bias to correct)
 // ============================================================================
 
-bool SensorCollectorSim::startCalibration(float rotation_z_deg)
+bool SensorCollectorSim::startCalibration(float rotation_z_deg, const float* hg_alignment)
 {
     if (isSimActive())
     {
@@ -80,7 +80,7 @@ bool SensorCollectorSim::startCalibration(float rotation_z_deg)
         return false;
     }
     // Sim not active — delegate to real hardware
-    return real_.startCalibration(rotation_z_deg);
+    return real_.startCalibration(rotation_z_deg, hg_alignment);
 }
 
 SensorCalPoll SensorCollectorSim::pollCalibration()
