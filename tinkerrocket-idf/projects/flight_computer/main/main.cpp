@@ -2808,7 +2808,9 @@ static void sendPadContextCal()
     rg.h.part    = 0;
     rg.h.parts   = 1;
     rg.g.applied = sensor_converter.highGAlignmentApplied() ? 1U : 0U;
-    sensor_converter.highGAlignment(rg.g.matrix);
+    float rg_m[9];   // packed members are not float-aligned: through a copy
+    sensor_converter.highGAlignment(rg_m);
+    memcpy(rg.g.matrix, rg_m, sizeof(rg_m));
     static_assert(sizeof(rg) == sizeof(PadContextHeader) + sizeof(PadContextHg), "PCX_HG record is packed");
     (void)enqueueI2STx(PAD_CONTEXT_MSG, reinterpret_cast<const uint8_t*>(&rg), sizeof(rg));
 }
@@ -4122,7 +4124,9 @@ static void publishAccelCalStatus()
     p.begin("hg_cal", true);
     const bool hg_stored = hgCalStored(p, m);
     p.end();
-    sensor_converter.highGAlignment(h.hg_matrix);   // what the converter holds: identity when none
+    float held[9];
+    sensor_converter.highGAlignment(held);   // what the converter holds: identity when none
+    memcpy(h.hg_matrix, held, sizeof(held));
     p.begin("cal", true);
     const bool has_bias = p.isKey("hgbx");
     h.hg_bias_src = has_bias ? p.getUChar("hgsrc", HG_BIAS_SRC_NONE) : HG_BIAS_SRC_NONE;
@@ -10397,10 +10401,17 @@ static void loop_fc()
                         out_status_query_data.hg_bias_z_cmss = encodeHgBiasCmss(ap.hg_z);
 
                         prefs.begin("cal", false);
+                        // The push of a profile's saved cal: a bias equal to the
+                        // one stored (the app saved the six faces' into the
+                        // profile) keeps what wrote it; any other is a pad
+                        // calibration's.
+                        const bool same_hg = prefs.isKey("hgbx") && prefs.getFloat("hgbx", 0.0f) == ap.hg_x &&
+                                             prefs.getFloat("hgby", 0.0f) == ap.hg_y &&
+                                             prefs.getFloat("hgbz", 0.0f) == ap.hg_z;
                         prefs.putFloat("hgbx", ap.hg_x);
                         prefs.putFloat("hgby", ap.hg_y);
                         prefs.putFloat("hgbz", ap.hg_z);
-                        prefs.putUChar("hgsrc", HG_BIAS_SRC_PAD);
+                        if (!same_hg) prefs.putUChar("hgsrc", HG_BIAS_SRC_PAD);
                         prefs.putShort("gx", ap.gyro_x);
                         prefs.putShort("gy", ap.gyro_y);
                         prefs.putShort("gz", ap.gyro_z);
@@ -10544,10 +10555,12 @@ static void loop_fc()
                         }
                         else
                         {
+                            float m[9];   // the packed payload's floats are not aligned: through a copy
+                            memcpy(m, ap.matrix, sizeof(m));
                             prefs.begin("hg_cal", false);
                             prefs.putUChar("ver", HG_CAL_NVS_SCHEMA_VERSION);
-                            prefs.putBytes("m", ap.matrix, sizeof(ap.matrix));
-                            prefs.putBool ("done", !hg_cal::isIdentity(ap.matrix));
+                            prefs.putBytes("m", m, sizeof(m));
+                            prefs.putBool ("done", !hg_cal::isIdentity(m));
                             prefs.end();
                             prefs.begin("cal", false);
                             prefs.putFloat("hgbx", ap.bias_mps2[0]);
@@ -10555,7 +10568,7 @@ static void loop_fc()
                             prefs.putFloat("hgbz", ap.bias_mps2[2]);
                             prefs.putUChar("hgsrc", HG_BIAS_SRC_SIX_FACE);
                             prefs.end();
-                            sensor_converter.setHighGAlignment(ap.matrix);
+                            sensor_converter.setHighGAlignment(m);
                             sensor_converter.setHighGBias(ap.bias_mps2[0], ap.bias_mps2[1], ap.bias_mps2[2]);
                             out_status_query_data.hg_bias_x_cmss = encodeHgBiasCmss(ap.bias_mps2[0]);
                             out_status_query_data.hg_bias_y_cmss = encodeHgBiasCmss(ap.bias_mps2[1]);
