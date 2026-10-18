@@ -196,6 +196,47 @@ struct RawGnssEKFParams
     // more after a boost and coast that moved the bias. Not the carrier's
     // update: the harness refuses it with the carrier fused.
     bool   att_gnss_off = false;
+    // How far a GNSS row may turn the heading, by how well the moment
+    // observes it (hdg_obs_mode, HdgObsMode; off by default: today's filter).
+    // A heading error turns the specific force's horizontal part f_h, so it
+    // grows a velocity error at |f_h| per radian. In a boost that is tens of
+    // m/s^2; in the coast only the drag's small sideways part, a tenth of that
+    // or less, ties velocity to heading. A velocity error the receiver hands
+    // over there (its loops settling after the thrust, a stale satellite, a
+    // coherent ramp) is then "fixed" by turning the heading through the
+    // correlation the boost left: in Grid B (2026-10-17) 11-44 deg past the
+    // unaided twin in the coast, the heading's own 1-sigma reading 8. The
+    // rows' gain on the attitude about the vertical, and on the gyro bias
+    // along it, is scaled by s in [hdg_obs_floor, 1] -- the tilt's and every
+    // other state's untouched, Joseph form so P stays consistent -- with
+    //   kHdgObsForce:  s = |f_h| / hdg_obs_fh_mps2, f_h the horizontal
+    //                  specific force (NED) averaged over hdg_obs_tau_s (an
+    //                  exponential mean of the vector: a coning or rolling
+    //                  body's sideways force averages out);
+    //   kHdgObsInfo:   s = x^2 / (1 + x^2), x = |f_h| tau sigma_psi /
+    //                  hdg_obs_sigma_v: the velocity a 1-sigma heading error
+    //                  makes over tau, in the Doppler velocity's noise -- the
+    //                  gain a heading-only update on that alone would have, so
+    //                  a heading already sure is held harder than one that is
+    //                  not (the 30 deg no-magnetometer prior);
+    //   kHdgObsWindow: s = 0 for hdg_obs_window_s after the boost (the
+    //                  coast's start, where the loops settle), 1 otherwise
+    //                  (before any boost too: the pad as today);
+    // and s = 1 whenever the IMU read past hdg_obs_open_g within
+    // hdg_obs_open_hold_s of the epoch's own time: the boost keeps the full
+    // gate. Set once an epoch (beginGnssRaw), so slicing an epoch does not
+    // change it. Only the pseudorange and Doppler rows (the carrier's update
+    // is not scaled), and nothing with att_gnss_off (already masked).
+    // RawGnssShadow's heading_obs_scope says where it applies (everywhere, in
+    // flight, or launch to the apogee call: setHdgObsOn).
+    uint8_t hdg_obs_mode       = 0;     // HdgObsMode
+    double  hdg_obs_fh_mps2    = 2.0;   // kHdgObsForce: open at this |f_h|
+    double  hdg_obs_tau_s      = 1.0;   // f_h's averaging time (and kHdgObsInfo's window)
+    double  hdg_obs_sigma_v    = 0.1;   // kHdgObsInfo: the Doppler velocity's noise, m/s
+    double  hdg_obs_window_s   = 3.0;   // kHdgObsWindow: closed this long after the boost
+    double  hdg_obs_open_g     = 2.0;   // the boost: the IMU's specific force past this many g ...
+    double  hdg_obs_open_hold_s = 0.2;  //   ... within this long of the epoch: open
+    double  hdg_obs_floor      = 0.0;   // s at least this
     // Initial sigmas, in the state's units (the attitude's: a half-angle).
     // p0_att: the tilt's, about north and east; p0_hdg: the heading's, about
     // the vertical of init's attitude (#1626 N10). p0_hdg was pi ("any
@@ -228,6 +269,15 @@ struct RawGnssEKFParams
     // steps can come unflagged (gnss_sys_t: GPS, Galileo, BeiDou, QZSS)
     double  cr_carrier_hz[kProfileSys] = {GNSS_FREQ_L1_HZ, GNSS_FREQ_L1_HZ, 1561.098e6, GNSS_FREQ_L1_HZ};
     bool    cr_half_cycle_unflagged[kProfileSys] = {true, false, true, true};
+};
+
+// RawGnssEKFParams::hdg_obs_mode
+enum HdgObsMode : uint8_t
+{
+    kHdgObsOff = 0,      // the full gate: today's
+    kHdgObsForce = 1,    // by the horizontal specific force
+    kHdgObsInfo = 2,     // by the heading's information from it, against its own
+    kHdgObsWindow = 3,   // none in the coast's first seconds
 };
 
 struct RawGnssStats
@@ -303,6 +353,18 @@ public:
     // att_gate_cos4, switched in flight (act's full gate: GNSS corrections
     // reach the whole attitude, att_gate_vertical off as well)
     void setAttGateCos4(bool on) { p_.att_gate_cos4 = on; }
+    // hdg_obs_mode applied (true, the default) or not (s = 1): where it
+    // applies is the shadow's (heading_obs_scope)
+    void setHdgObsOn(bool on) { hdg_obs_on_ = on; }
+    // s for an epoch age_s old at the state as it stands (hdg_obs_mode), and
+    // the one the last epoch begun took (1 with the mode off)
+    T hdgObsScaleNow(double age_s) const;
+    T hdgObsScale() const { return hdg_obs_s_; }
+    // the horizontal specific force as kHdgObsForce and kHdgObsInfo average
+    // it (NED north, east; m/s^2), and the filter time the IMU last read past
+    // hdg_obs_open_g (-1e9: never since init) -- tracked only with the mode on
+    const T* hdgObsForce() const { return fh_ew_; }
+    double hdgObsOpenT() const { return hdg_open_t_; }
 
     // Start at a position (lat, lon rad; ellipsoidal height m), NED velocity
     // and attitude, at filter time t0 (s; any clock the IMU steps share).
@@ -496,10 +558,12 @@ private:
     // vector (att_gate_vertical: the vertical). att_off_axis: the gain's
     // attitude and gyro-bias rows along this body-frame unit vector zeroed
     // (the levelling, the vertical: the attitude about it and the gyro bias
-    // along it keep their estimates and covariance).
+    // along it keep their estimates and covariance). off_keep: the share of
+    // those rows along att_off_axis kept instead (0, the levelling's: none;
+    // the GNSS rows' hdg_obs_mode scale).
     int    scalarUpdate(const int* hidx, const T* hval, int hn, T y, T R, T gate, T att,
                         T dx[N], T* nis, uint32_t kmask = 0xFFFFFFFFu, const T* att_axis = nullptr,
-                        const T* att_off_axis = nullptr);
+                        const T* att_off_axis = nullptr, T off_keep = T(0));
     // The gain's attitude rows as the GNSS updates have them: scaled by att,
     // and (att_axis) the attitude's and gyro bias's projected onto that axis
     // (gnssAttAxis: the vertical in the body frame with att_gate_vertical,
@@ -568,6 +632,12 @@ private:
     T      a_ned_[3] = {};
     T      g_excess_ = 0;
     T      g_peak_ = 0;
+    // hdg_obs_mode: the horizontal specific force's mean, NED (m/s^2); when
+    // the IMU last read past hdg_obs_open_g; applied or not; the last epoch's s
+    T      fh_ew_[2] = {};
+    double hdg_open_t_ = -1.0e9;
+    bool   hdg_obs_on_ = true;
+    T      hdg_obs_s_ = T(1);
     // screenRangeRates' vertical-check fit: its rows, scratch (kept off the task's stack)
     mutable double vfit_h_[RawEpoch::kMaxObs][4] = {};
     mutable double vfit_y_[RawEpoch::kMaxObs] = {};

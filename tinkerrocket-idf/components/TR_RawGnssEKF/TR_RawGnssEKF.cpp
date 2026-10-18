@@ -130,6 +130,10 @@ void RawGnssEKF<T>::init(const double lla[3], const T v_ned[3], const T q[4], do
     clk_ready_ = false;
     g_excess_ = g_peak_ = T(0);
     t_ = t0;
+    // hdg_obs_mode: no push and no boost yet (applied or not stays the shadow's)
+    fh_ew_[0] = fh_ew_[1] = T(0);
+    hdg_open_t_ = kNever;
+    hdg_obs_s_ = T(1);
 
     std::memset(P_, 0, sizeof(P_));
     const double d[N] = {
@@ -467,6 +471,21 @@ void RawGnssEKF<T>::propagate(const T acc[3], const T gyro[3], T dt)
     propagateCovariance(Tb2n, f_b, w, g[2], dt);
     clk_b_ += static_cast<double>(clk_d_) * static_cast<double>(dt);
     t_ += static_cast<double>(dt);
+    if (p_.hdg_obs_mode != kHdgObsOff)
+    {
+        // what turns a heading error into a velocity error: the specific
+        // force's horizontal part (gravity has none to speak of), its vector
+        // averaged over hdg_obs_tau_s; and the boost, which keeps the gate open
+        const T tau = T(p_.hdg_obs_tau_s);
+        const T k = tau > dt ? dt / tau : T(1);
+        for (int i = 0; i < 2; ++i)
+        {
+            const T fh = Tb2n[i][0] * f_b[0] + Tb2n[i][1] * f_b[1] + Tb2n[i][2] * f_b[2];
+            fh_ew_[i] += k * (fh - fh_ew_[i]);
+        }
+        if (static_cast<double>(g_excess_) + 1.0 > p_.hdg_obs_open_g)
+            hdg_open_t_ = t_;
+    }
     pushHistory(dt, a_ned_);
     // the carrier's noise grows with the roll rate (body x, the nose): its
     // mean size until the next screen
@@ -679,7 +698,8 @@ T RawGnssEKF<T>::hph(const int* hidx, const T* hval, int hn) const
 // applied, 0 refused by the gate, -1 for a non-positive S.
 template <typename T>
 int RawGnssEKF<T>::scalarUpdate(const int* hidx, const T* hval, int hn, T y, T R, T gate, T att,
-                                T dx[N], T* nis, uint32_t kmask, const T* att_axis, const T* att_off_axis)
+                                T dx[N], T* nis, uint32_t kmask, const T* att_axis, const T* att_off_axis,
+                                T off_keep)
 {
     T HP[N] = {};
     for (int m = 0; m < hn; ++m)
@@ -717,7 +737,12 @@ int RawGnssEKF<T>::scalarUpdate(const int* hidx, const T* hval, int hn, T y, T R
         const int bases[2] = {kAtt, kGyroBias};
         for (int base : bases)
         {
-            const T d = att_off_axis[0] * K[base] + att_off_axis[1] * K[base + 1] + att_off_axis[2] * K[base + 2];
+            T d = att_off_axis[0] * K[base] + att_off_axis[1] * K[base + 1] + att_off_axis[2] * K[base + 2];
+            // off_keep: that share along the axis kept, the rest taken off
+            // (0, the levelling's, takes it all: the line skipped, so the
+            // arithmetic is the levelling's own)
+            if (off_keep != T(0))
+                d *= T(1) - off_keep;
             for (int a = 0; a < 3; ++a)
                 K[base + a] -= att_off_axis[a] * d;
         }
@@ -835,6 +860,52 @@ const T* RawGnssEKF<T>::gnssAttAxis(T vert[3]) const
     for (int a = 0; a < 3; ++a)
         vert[a] = M[a][2];
     return p_.att_gate_vertical ? vert : nullptr;
+}
+
+// hdg_obs_mode's s (TR_RawGnssEKF.h): how much of a GNSS row's heading
+// correction an epoch age_s old may make. Open (1) with the mode off or not
+// applied, and in the boost: the IMU past hdg_obs_open_g at any time from
+// hdg_obs_open_hold_s before the epoch's own time until now. (The window
+// starts again at any later step past it -- a drogue's snatch can be one --
+// so where the window applies in the descent, the scope says.)
+template <typename T>
+T RawGnssEKF<T>::hdgObsScaleNow(double age_s) const
+{
+    if (p_.hdg_obs_mode == kHdgObsOff || !hdg_obs_on_)
+        return T(1);
+    const double since_boost = t_ - (age_s > 0.0 ? age_s : 0.0) - hdg_open_t_;
+    if (since_boost <= p_.hdg_obs_open_hold_s)
+        return T(1);
+    double s = 1.0;
+    const double fh = std::sqrt(static_cast<double>(fh_ew_[0]) * static_cast<double>(fh_ew_[0])
+                                + static_cast<double>(fh_ew_[1]) * static_cast<double>(fh_ew_[1]));
+    switch (p_.hdg_obs_mode)
+    {
+    case kHdgObsForce:
+        s = p_.hdg_obs_fh_mps2 > 0.0 ? fh / p_.hdg_obs_fh_mps2 : 1.0;
+        break;
+    case kHdgObsInfo:
+    {
+        // the velocity a 1-sigma heading error makes over tau, in the
+        // Doppler velocity's own noise: a heading-only update's gain on it
+        T sig[3];
+        attSigmaNed(sig);
+        const double x = p_.hdg_obs_sigma_v > 0.0
+                             ? fh * p_.hdg_obs_tau_s * static_cast<double>(sig[2]) / p_.hdg_obs_sigma_v
+                             : 1.0e9;
+        s = x * x / (1.0 + x * x);
+        break;
+    }
+    case kHdgObsWindow:
+        // closed for the window after a boost; open before any (the pad) and after
+        s = hdg_open_t_ > kNever && since_boost <= p_.hdg_obs_open_hold_s + p_.hdg_obs_window_s ? 0.0 : 1.0;
+        break;
+    default:
+        break;
+    }
+    if (s < p_.hdg_obs_floor)
+        s = p_.hdg_obs_floor;
+    return T(s < 1.0 ? s : 1.0);
 }
 
 template <typename T>
@@ -1320,6 +1391,10 @@ bool RawGnssEKF<T>::beginGnssRaw(const RawMeas* m, int n, double age_s, RawGnssS
     // take it, before they correct it (each correction from here moves it)
     if (p_.cr_mode != kCarrierOff)
         crSnapshot(age_s, dp_e);
+    // hdg_obs_mode's share of the heading, once for the whole epoch: its parts
+    // fused over later steps take the same
+    if (p_.hdg_obs_mode != kHdgObsOff)
+        hdg_obs_s_ = hdgObsScaleNow(age_s);
     return true;
 }
 
@@ -1344,6 +1419,14 @@ void RawGnssEKF<T>::updateGnssRawPart(const RawMeas* m, int i0, int i1, double a
     // accelerometer bias keeps its gain (RawGnssEKFParams::att_gnss_off says
     // what that leaves).
     const uint32_t kmask = p_.att_gnss_off ? ~((0x7u << kAtt) | (0x7u << kGyroBias)) : 0xFFFFFFFFu;
+    // hdg_obs_mode: the rows' heading part -- the attitude about the vertical,
+    // the gyro bias along it -- scaled by the epoch's s (beginGnssRaw); none
+    // to scale with att_gnss_off, and none with s 1 (the mode off: today's)
+    const bool hdg_scaled = p_.hdg_obs_mode != kHdgObsOff && !p_.att_gnss_off && hdg_obs_s_ < T(1);
+    T hvert[3];
+    if (hdg_scaled)
+        gnssAttAxis(hvert);
+    const T* hdg_axis = hdg_scaled ? hvert : nullptr;
     for (int i = i0; i < i1; ++i)
     {
         const RawMeas& mi = m[i];
@@ -1452,7 +1535,8 @@ void RawGnssEKF<T>::updateGnssRawPart(const RawMeas* m, int i0, int i1, double a
             }
             T dx[N];
             T nis = T(0);
-            const bool ok = scalarUpdate(hidx, hval, hn, y, R, gate, att, dx, &nis, kmask, axis) == 1;
+            const bool ok =
+                scalarUpdate(hidx, hval, hn, y, R, gate, att, dx, &nis, kmask, axis, hdg_axis, hdg_obs_s_) == 1;
             if (ok)
             {
                 inject(dx);

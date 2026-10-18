@@ -392,6 +392,13 @@ public:
         uint8_t  heading_gate = 1;               // act: what of the attitude GNSS reaches in flight, and
                                                  //   when each opens (HeadingGate: all of it from launch)
         double   heading_handoff_vel_mps = 3.0;  // act: the velocity let go to this at the hand-off
+        // Where the EKF's hdg_obs_mode (GNSS's heading gain by how well the
+        // moment observes it; off by default) applies (HeadingObsScope):
+        // everywhere, the pad too -- where nothing horizontal pushes, so GNSS
+        // stops moving the gyro bias about the vertical -- or in flight only,
+        // or from launch to the flight computer's apogee call (the drogue's
+        // descent then fully open, as today).
+        uint8_t  heading_obs_scope = 0;
         // the boost screen (above)
         uint8_t  boost_screen = 1;               // BoostScreen: off, in act only (the default), always
         double   boost_screen_g = 2.0;           // a boost epoch: the IMU's specific force above this many g,
@@ -447,6 +454,13 @@ public:
         kGateFullLaunch = 1,   // the whole attitude -- neither that gate nor cos^4 -- from launch (A, the default)
         kGateFullApogee = 2,   // the heading only from launch, the whole attitude from the flight
                                //   computer's apogee call (kShadowApogee) to the ground (H)
+    };
+    // Where the EKF's hdg_obs_mode applies (Config::heading_obs_scope)
+    enum HeadingObsScope : uint8_t
+    {
+        kObsEverywhere = 0,
+        kObsFlight = 1,        // from launch until back on the ground
+        kObsAscent = 2,        // from launch to the apogee call (kShadowApogee)
     };
     static const char* headingGateName(uint8_t gate)
     {
@@ -792,6 +806,7 @@ private:
     double        fit_launch_t_ = 0.0;
     bool          handed_ = false;      // the heading handed over this flight
     bool          gate_full_ = false;   // act: the whole attitude's gate is open this flight
+    bool          obs_apogee_ = false;  // heading_obs_scope kObsAscent: the apogee call seen this flight
     double        boost_seen_t_ = -1.0e9;   // the filter's time the IMU last read past boost_screen_g
     // rr_dyn_window_s: the epochs within the window whose g excess could
     // still be its largest -- each larger than every one after it, so the
