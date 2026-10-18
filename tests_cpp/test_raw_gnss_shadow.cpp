@@ -1652,6 +1652,57 @@ TEST(RawGnssShadow, ActsLaunchPriorIsTheMagnetometersOnlyWhenItsHeadingIsRecent)
     }
 }
 
+TEST(RawGnssShadow, TheChangeChecksHeadingAllowanceIsTheLaunchsWithNoMagnetometerHeading)
+{
+    // The Doppler change check's dv_hdg_unset_deg: taken where the launch had
+    // no magnetometer heading, as act's launch prior judges it (a sample
+    // through the gates fused within heading_mag_recent_s of the edge), kept
+    // in flight
+    constexpr uint8_t kCal = gnss_raw::kShadowMagCalibrated;
+    auto cfg = [] {
+        RawGnssShadow::Config c = actCfg();
+        c.dv_check = RawGnssShadow::kDvAct;
+        c.dv_hdg_unset_deg = 180.0;
+        return c;
+    };
+    {
+        SCOPED_TRACE("calibrated to the launch");
+        RawGnssShadow sh(cfg());
+        launchPrior(sh, {{10.0, kCal, 0.0}});
+        EXPECT_EQ(sh.stats().heading_launch_mag, 1);
+        EXPECT_EQ(sh.stats().dv_hdg_unset, 0);
+    }
+    {
+        SCOPED_TRACE("uncalibrated: none fused");
+        RawGnssShadow sh(cfg());
+        launchPrior(sh, {{10.0, 0, 0.0}});
+        EXPECT_EQ(sh.stats().heading_launch_mag, 0);
+        EXPECT_EQ(sh.stats().dv_hdg_unset, 1);
+    }
+    {
+        SCOPED_TRACE("stale: calibrated, then refused for the last 6 s");
+        RawGnssShadow sh(cfg());
+        launchPrior(sh, {{10.0, kCal, 0.0}, {6.0, 0, 0.0}});
+        EXPECT_EQ(sh.stats().heading_launch_mag, 0);
+        EXPECT_EQ(sh.stats().dv_hdg_unset, 1);
+    }
+    {
+        SCOPED_TRACE("recent: refused for the last 4 s only");
+        RawGnssShadow sh(cfg());
+        launchPrior(sh, {{10.0, kCal, 0.0}, {4.0, 0, 0.0}});
+        EXPECT_EQ(sh.stats().heading_launch_mag, 1);
+        EXPECT_EQ(sh.stats().dv_hdg_unset, 0);
+    }
+    {
+        SCOPED_TRACE("off (the Beetle's): never taken");
+        RawGnssShadow::Config c = cfg();
+        c.dv_hdg_unset_deg = 0.0;
+        RawGnssShadow sh(c);
+        launchPrior(sh, {{10.0, 0, 0.0}});
+        EXPECT_EQ(sh.stats().dv_hdg_unset, 0);
+    }
+}
+
 TEST(RawGnssShadow, TheNavigationFilterStartsInFlightFromARestoredFlight)
 {
     RawGnssShadow sh(primaryCfg());

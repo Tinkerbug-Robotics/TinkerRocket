@@ -3802,7 +3802,7 @@ static void rawShadowTask(void*)
                               "%lu nav queue drops | imu ring drops %lu, gaps bridged %lu | PPS tag max %ld us, "
                               "%lu over %ld of %lu judged (%lu settling, %lu edges late) | iono %s (%u sets) | pad datum %s, %lu fixes | "
                               "GNSS log %s | in flight: restarts %u of %u, raw votes %s, transonic lockout %s | "
-                              "dv check: %lu epochs checked, %lu failed, latches %lu let go %lu, %lu Dopplers held | "
+                              "dv check: %lu epochs checked%s, %lu failed, latches %lu let go %lu, %lu Dopplers held | "
                               "heading share %.2f | rotation allowance max %.2f m/s | flight task stack free %u B",
                          (unsigned)(sh.running() ? nv.gnss_aided : 0), (unsigned)(sh.running() ? nv.baro_aided : 0),
                          rs.period_ms ? 1000.0 / (double)rs.period_ms : 0.0, (unsigned long)rs.period_ms,
@@ -3822,6 +3822,7 @@ static void rawShadowTask(void*)
                          (unsigned)raw_nav_restarts, (unsigned)RawNavPolicy::kMaxRestarts,
                          raw_guard.latched ? (config::RAW_VOTE_GUARD_ACTS ? "WITHHELD" : "cast (guard latched, log only)") : "cast",
                          mach_locked_out ? "ON" : "off", (unsigned long)st.dv_checks,
+                         st.dv_hdg_unset ? " (no magnetometer heading: any heading)" : "",
                          (unsigned long)st.dv_epoch_fails, (unsigned long)st.dv_latches,
                          (unsigned long)st.dv_latch_releases, (unsigned long)st.dv_held_rr,
                          sh.running() ? (double)sh.filter().hdgObsScale() : 1.0, (double)st.rot_max_sigma_mps,
@@ -4073,13 +4074,14 @@ static void startRawShadow()
     // antenna's offset. The bench overrides below come after.
     gnss_raw::applyMosaicFlightSafeguards(cfg);
     ESP_LOGI(TAG, "[RAWGNSS] flight safeguards: Doppler change check %s (window %.1f s, attitude allowance %.0f deg, "
-                  "epoch %.0f and latch %.0f sigmas, %s) | heading share %s (full at %.1f m/s^2 over %.1f s, open "
-                  "past %.1f g within %.1f s, %s) | turning body: Dopplers allow %.2f m along the nose and %.2f m "
-                  "across from %.1f rad/s%s",
+                  "%.0f deg about the vertical after a launch with no magnetometer heading, epoch %.0f and latch "
+                  "%.0f sigmas, %s) | heading share %s (full at %.1f m/s^2 over %.1f s, open past %.1f g within "
+                  "%.1f s, %s) | turning body: Dopplers allow %.2f m along the nose and %.2f m across from %.1f "
+                  "rad/s%s",
              cfg.dv_check == gnss_raw::RawGnssShadow::kDvAct
                  ? "ACTING"
                  : (cfg.dv_check == gnss_raw::RawGnssShadow::kDvObserve ? "observing" : "off"),
-             cfg.dv_window_s, cfg.dv_att_allow_deg, cfg.dv_epoch_k, cfg.dv_latch_k,
+             cfg.dv_window_s, cfg.dv_att_allow_deg, cfg.dv_hdg_unset_deg, cfg.dv_epoch_k, cfg.dv_latch_k,
              cfg.dv_ground ? "on the pad too" : "in flight only",
              cfg.ekf.hdg_obs_mode == gnss_raw::kHdgObsForce ? "by the horizontal specific force"
                                                              : (cfg.ekf.hdg_obs_mode == gnss_raw::kHdgObsOff ? "off"

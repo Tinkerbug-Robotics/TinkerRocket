@@ -36,7 +36,10 @@
 //     scaled by a scale allowance, a bias allowance's velocity over the
 //     interval, and a lever arm's change at the gyro's rates. A receiver
 //     whose loops lag reports less of the change, along it: that is what is
-//     left to see.
+//     left to see. Where nothing measured the heading (no magnetometer on
+//     the pad), a heading allowance about the vertical too: a heading 150
+//     deg off reverses the horizontal change, which no small attitude
+//     allowance covers, and the vertical is left to judge.
 //
 // Pure and host-compilable (tests_cpp/test_doppler_change.cpp).
 #ifndef RAW_GNSS_DOPPLER_CHANGE_H
@@ -219,11 +222,25 @@ struct Allow
     double scale = 0.0;     // the accelerometer's scale: that change off by this fraction, along it
     double bias_mps = 0.0;  // a bias over the interval: this much on every axis (m/s)
     double lever_mps = 0.0; // an antenna off the IMU turning with the body: this much on every axis (m/s)
+    double hdg_rad = 0.0;   // the heading: that change turned this far about the vertical (pi or more: any
+                            //   heading; 0: att_rad alone)
 };
+
+// The heading allowance's size, per unit of the specific force's horizontal
+// change: a turn by h about the vertical moves the horizontal part by
+// 2 sin(h/2) of its size (the chord), in a direction that depends on h's sign
+// and size -- so as an isotropic horizontal 1-sigma. att_rad's small-angle
+// form takes only the part across the change; a heading 150 deg off also
+// reverses most of the part along it, which only this allows.
+inline double headingChord(double hdg_rad)
+{
+    return hdg_rad >= 3.141592653589793 ? 2.0 : 2.0 * std::sin(0.5 * hdg_rad);
+}
 
 // The epoch test's covariance: Cw (the fit's, w's 3x3) plus the allowances
 // about sf (the IMU's specific-force velocity change, NED, m/s):
 //   att^2 (|sf|^2 I - sf sf') + scale^2 sf sf' + (bias^2 + lever^2) I
+//   + chord(hdg)^2 |sf_horizontal|^2 on north and east (hdg_rad > 0 only)
 inline void allowCov(const double Cw[3][3], const double sf[3], const Allow& a, double S[3][3])
 {
     const double s2 = sf[0] * sf[0] + sf[1] * sf[1] + sf[2] * sf[2];
@@ -232,6 +249,15 @@ inline void allowCov(const double Cw[3][3], const double sf[3], const Allow& a, 
     for (int i = 0; i < 3; ++i)
         for (int j = 0; j < 3; ++j)
             S[i][j] = Cw[i][j] + (k2 - a2) * sf[i] * sf[j] + (i == j ? a2 * s2 + iso : 0.0);
+    if (a.hdg_rad > 0.0)
+    {
+        // a heading nothing measured: the IMU's horizontal change can be off
+        // by up to its own size twice over, and the vertical not at all
+        const double c = headingChord(a.hdg_rad);
+        const double h2 = c * c * (sf[0] * sf[0] + sf[1] * sf[1]);
+        S[0][0] += h2;
+        S[1][1] += h2;
+    }
 }
 
 // w' S^-1 w for a symmetric S (its inverse by cofactors); -1 if S is singular

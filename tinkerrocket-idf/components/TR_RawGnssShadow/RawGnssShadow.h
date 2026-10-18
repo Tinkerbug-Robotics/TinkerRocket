@@ -298,6 +298,30 @@
 // flight only (dv_ground: on the pad too, where zero velocity holds the
 // velocity anyway); held-out Dopplers count as neither fused nor refused, so
 // the update's refusal persistence (reject_persist_rr) does not see them.
+// With dv_hdg_unset_deg, a flight whose launch had no magnetometer heading
+// (none fused within heading_mag_recent_s of leaving the ground, as act's
+// launch prior judges it; a shadow that is not the navigation filter, and a
+// flight restored in the air, never know) also allows the IMU's change
+// turned that far about the vertical (DopplerChange.h headingChord): the
+// heading is then the start's guess, any distance off. Without it, Grid B's
+// 16 no-fault flights with the pad's heading 120-180 deg off held Dopplers
+// before apogee in 4-10 of them, latched to landing in up to 3, and left vz
+// at the true apogee up to 4.6 m/s off where the filter without the check
+// had 0.3 (one flight at 180 deg: 4.1). With 180, up to 160 deg off they fly
+// as without the check (one epoch held before apogee in one flight); from
+// 170 deg one or two of the 16 still hold the coast's Dopplers: a heading
+// that far wrong pulls the filter's own tilt and accelerometer bias off in
+// the boost (no small correction turns a heading through 180 deg), so the
+// IMU's change is wrong along the thrust too. The vertical part, where a
+// loop's lag and a stale receiver show in a boost near vertical, is judged
+// as before.
+// A flight restored in the air starts the check over: no reference, no
+// window, no latch. A receiver the latch was holding out for a bias that
+// stands (it no longer changes) is then fused for the rest of the flight, as
+// without the check. Carrying the latch through the snapshot would not keep
+// it out: the restore declares the velocity restore_vel_sigma_mps unsure (20
+// m/s on the mosaic image), and the latch's level test, which takes the
+// filter's velocity covariance, would let a 12 m/s bias go at its first test.
 //
 // A receiver fused faster than 1 Hz (the mosaic-G5's 10 Hz). The safeguards
 // above were set on the LC86G's epoch a second, and some count epochs, so a
@@ -527,6 +551,9 @@ public:
         double   dv_latch_k = 0.0;               // a failed epoch holds every Doppler until the epoch's Dopplers
                                                  //   agree with the filter's velocity within this many sigmas
                                                  //   (0: off, dv_epoch_hold_s instead)
+        double   dv_hdg_unset_deg = 0.0;         // a launch with no magnetometer heading: the epoch test also
+                                                 //   allows the IMU's change turned this far about the vertical
+                                                 //   (180: any heading; 0: dv_att_allow_deg alone)
         // A receiver fused faster than 1 Hz (below; the mosaic-G5's profile
         // sets them, ReceiverProfileApply.h). 0 or false: an epoch at a time,
         // as the Beetle's LC86G flies.
@@ -755,6 +782,8 @@ public:
         uint32_t dv_latch_releases = 0;    //   and let go (the Dopplers back with the filter's velocity)
         uint32_t dv_latch_epochs = 0;      //   epochs checked while one was on
         float    dv_last_level_chi2 = 0.0f;//   the last level test's chi-square (3 dof; -1: no fit)
+        uint8_t  dv_hdg_unset = 0;         // the check takes dv_hdg_unset_deg now: no magnetometer heading (on
+                                           //   the pad, now; in flight and landed, at the launch)
         // the turning body (rot_lever_*, att_hold_*, rot_skip_*)
         float    rot_last_sigma_mps = 0.0f;   // the last epoch's rotation allowance on its Dopplers
         float    rot_max_sigma_mps = 0.0f;    //   the largest any epoch took
@@ -1027,6 +1056,8 @@ private:
     double        dv_noise_var_ = 0.0;  // dv_noise_tau_s: the Dopplers' excess variance, (m/s)^2
     double        dv_noise_te_ = 0.0;   //   the epoch it was last updated at
     bool          dv_latch_ = false;    // dv_latch_k: a failed epoch's latch, on
+    bool          dv_hdg_known_ = false;// dv_hdg_unset_deg: the heading is the magnetometer's (on the ground,
+                                        //   each step; in flight, as the launch left it)
     void          dvReset();
     double        dvLevelChi2(double row_var);
     double        att_hold_until_ = -1.0e9;   // att_hold_s: epochs up to this instant are held (filter's clock)

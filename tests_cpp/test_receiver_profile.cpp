@@ -195,7 +195,7 @@ static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 32,
               "GnssSignalProfile changed: add the field to expectSameSignal, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 520,
               "GnssReceiverProfile changed: add the field to expectSameNumbers, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1600,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1608,
               "RawGnssShadow::Config changed: pin the field in TheShadowSafeguardDefaultsAreTheBeetles, then update "
               "this size");
 
@@ -575,6 +575,7 @@ void takeFlightSafeguards(RawGnssShadow::Config& r, const RawGnssShadow::Config&
     r.dv_deweight = b.dv_deweight;
     r.dv_noise_tau_s = b.dv_noise_tau_s;
     r.dv_hold_all_frac = b.dv_hold_all_frac;
+    r.dv_hdg_unset_deg = b.dv_hdg_unset_deg;
     r.ekf.hdg_obs_mode = b.ekf.hdg_obs_mode;
     r.ekf.hdg_obs_fh_mps2 = b.ekf.hdg_obs_fh_mps2;
     r.ekf.hdg_obs_tau_s = b.ekf.hdg_obs_tau_s;
@@ -625,6 +626,9 @@ TEST(ReceiverProfile, TheMosaicFlightSafeguards)
     EXPECT_FALSE(c.dv_deweight);
     EXPECT_EQ(c.dv_noise_tau_s, 0.0);
     EXPECT_EQ(c.dv_hold_all_frac, 0.5);
+    // and after a launch with no magnetometer heading, any heading about the
+    // vertical (the start's guess can be any distance off)
+    EXPECT_EQ(c.dv_hdg_unset_deg, 180.0);
     // GNSS's heading gain by its observability: the rows' heading part
     // scaled by the 1 s mean horizontal specific force over 5 m/s^2, open past
     // 2 g within 0.2 s, no floor, everywhere (the pad included)
@@ -664,6 +668,7 @@ TEST(ReceiverProfile, TheMosaicFlightSafeguards)
     for (const RawGnssShadow::Config* d : {&m1, &base})
     {
         EXPECT_EQ(d->dv_check, RawGnssShadow::kDvOff);
+        EXPECT_EQ(d->dv_hdg_unset_deg, 0.0);
         EXPECT_EQ(d->ekf.hdg_obs_mode, gnss_raw::kHdgObsOff);
         EXPECT_EQ(d->rot_lever_axial_m, 0.0);
         EXPECT_EQ(d->rot_lever_radial_m, 0.0);
@@ -780,6 +785,7 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_EQ(c.dv_noise_tau_s, 0.0);
     EXPECT_EQ(c.dv_hold_all_frac, 0.5);
     EXPECT_EQ(c.dv_latch_k, 0.0);
+    EXPECT_EQ(c.dv_hdg_unset_deg, 0.0);
     // a receiver fused faster than 1 Hz, and a restored flight: all off
     EXPECT_EQ(c.pr_period_s, 0.0);
     EXPECT_EQ(c.rr_dyn_window_s, 0.0);

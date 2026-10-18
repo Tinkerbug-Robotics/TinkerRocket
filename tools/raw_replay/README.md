@@ -150,7 +150,8 @@ What `startRawShadow()` builds under `TR_RAW_NAV_MOSAIC` (build_units D1a; check
 - the restore sigmas (100 m, 20 m/s, 15 deg) and the snapshot's accelerometer bias, `level_on_fused_epochs`;
 - the flight safeguards, by the firmware's own call (`gnss_raw::applyMosaicFlightSafeguards`,
   `ReceiverProfileApply.h`; a `RAW_REPLAY_MOSAIC_SAFEGUARDS` build): the Doppler change check acting in flight
-  (`--dv-check 2 --dv-window-s 1 --dv-att-deg 10 --dv-epoch-k 4 --dv-latch-k 5`), GNSS's heading gain by the
+  (`--dv-check 2 --dv-window-s 1 --dv-att-deg 10 --dv-epoch-k 4 --dv-latch-k 5`, and any heading about the
+  vertical after a launch with no magnetometer heading: `--dv-hdg-unset-deg 180`), GNSS's heading gain by the
   horizontal specific force (`--hdg-obs-mode 1 --hdg-obs-fh 5 --hdg-obs-tau 1 --hdg-obs-scope 0`) and the turning
   body's Doppler allowance (`--rot-lever-axial-m 0.3 --rot-lever-radial-m 0.03 --rot-lever-min-rate 2`). It runs
   right after the profile, so each `--dv-*`, `--hdg-obs-*` and `--rot-*` flag still changes its own value for an
@@ -485,9 +486,13 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   sigmas), `--dv-floor`, `--dv-per-g`, `--dv-att-deg`, `--dv-scale`, `--dv-bias`, `--dv-lever-m` (the change's
   floor and the epoch test's allowances), `--dv-hold-s`, `--dv-epoch-hold-s`, `--dv-window-s` (the leaky sum),
   `--dv-latch-k` (a failed epoch holds every Doppler until the Dopplers' level agrees with the filter's velocity
-  within this many sigmas), `--dv-deweight`, `--dv-ground`, `--dv-noise-tau-s`, `--dv-hold-all-frac`. The events
-  JSON gets `"dv"`: the counts (checks, satellite and epoch fails, Dopplers and epochs held, latches begun and let
-  go, epochs latched) and when each epoch failed, had satellites fail or had Dopplers held. `RAW_REPLAY_DVLOG=1`
+  within this many sigmas), `--dv-deweight`, `--dv-ground`, `--dv-noise-tau-s`, `--dv-hold-all-frac`,
+  `--dv-hdg-unset-deg` (a `RAW_REPLAY_DVHDG` build: after a launch with no magnetometer heading -- the sims'
+  `--mag-flags 0` -- the epoch test also allows the IMU's change turned this far about the vertical; 180 any
+  heading). The events JSON gets `"dv"`: the counts (checks, satellite and epoch fails, Dopplers and epochs held,
+  latches begun and let go, epochs latched), when each epoch failed, had satellites fail or had Dopplers held, and
+  the heading allowance's setting and whether the flight took it, as its launch left it (`hdg_unset_deg`,
+  `hdg_unset`). `RAW_REPLAY_DVLOG=1`
   prints each check (2: the window's sums and allowances too). `sim_tables.score_run` keeps the block.
 - **`--hdg-obs-mode 0|1|2|3`** (exp/v9-observ, a `RAW_REPLAY_HDGOBS` build): GNSS's gain on the heading -- the
   attitude about the vertical and the gyro bias along it -- scaled by how well the moment observes it

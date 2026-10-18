@@ -270,6 +270,7 @@ struct Args
     double dv_sat_k = -1.0, dv_epoch_k = -1.0, dv_floor = -1.0, dv_per_g = -1.0, dv_att_deg = -1.0,
            dv_scale = -1.0, dv_bias = -1.0, dv_lever_m = -1.0, dv_hold_s = -1.0, dv_epoch_hold_s = -1.0,
            dv_window_s = -1.0, dv_noise_tau_s = -1.0, dv_hold_all_frac = -1.0, dv_latch_k = -1.0;
+    double dv_hdg_unset_deg = -1.0;  // a launch with no magnetometer heading: the heading allowance (a RAW_REPLAY_DVHDG build)
     int dv_deweight = -1, dv_ground = -1;
     // the turning body (RawGnssShadow::Config, a RAW_REPLAY_ROT build; -1: the firmware's, off): the antenna's
     // offset from the IMU bounded along the nose and across it (each Doppler's sigma takes rotLeverSigma), and
@@ -314,6 +315,7 @@ void usage()
                  "  [--dv-epoch-k X] [--dv-floor X] [--dv-per-g X] [--dv-att-deg X] [--dv-scale X] [--dv-bias X]\n"
                  "  [--dv-lever-m X] [--dv-hold-s X] [--dv-epoch-hold-s X] [--dv-window-s X] [--dv-deweight 0|1]\n"
                  "  [--dv-ground 0|1] [--dv-noise-tau-s X] [--dv-hold-all-frac X] [--dv-latch-k X]\n"
+                 "  [--dv-hdg-unset-deg X]\n"
                  "  the heading's gain by its observability (a RAW_REPLAY_HDGOBS build): [--hdg-obs-mode 0|1|2|3]\n"
                  "  [--hdg-obs-fh X] [--hdg-obs-tau X] [--hdg-obs-sigma-v X] [--hdg-obs-window X] [--hdg-obs-open-g X]\n"
                  "  [--hdg-obs-open-hold X] [--hdg-obs-floor X] [--hdg-obs-scope 0|1|2]\n"
@@ -441,6 +443,7 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--dv-noise-tau-s") a.dv_noise_tau_s = std::atof(val());
         else if (k == "--dv-hold-all-frac") a.dv_hold_all_frac = std::atof(val());
         else if (k == "--dv-latch-k") a.dv_latch_k = std::atof(val());
+        else if (k == "--dv-hdg-unset-deg") a.dv_hdg_unset_deg = std::atof(val());
         else if (k == "--hdg-obs-mode") a.hdg_obs_mode = std::atoi(val());
         else if (k == "--hdg-obs-fh") a.hdg_obs_fh = std::atof(val());
         else if (k == "--hdg-obs-tau") a.hdg_obs_tau = std::atof(val());
@@ -1731,6 +1734,14 @@ int main(int argc, char** argv)
         cfg.dv_hold_all_frac = a.dv_hold_all_frac;
     if (a.dv_latch_k >= 0.0)
         cfg.dv_latch_k = a.dv_latch_k;
+#if RAW_REPLAY_DVHDG
+    if (a.dv_hdg_unset_deg >= 0.0)
+        cfg.dv_hdg_unset_deg = a.dv_hdg_unset_deg;
+#else
+    if (a.dv_hdg_unset_deg >= 0.0)
+        std::fprintf(stderr, "WARNING: this build has no heading allowance for a launch with no magnetometer heading "
+                             "(RAW_REPLAY_DVHDG=OFF): --dv-hdg-unset-deg is ignored\n");
+#endif
 #else
     if (a.dv_check >= 0)
         std::fprintf(stderr, "WARNING: this build has no Doppler change check (RAW_REPLAY_DVCHECK=OFF): --dv-* are "
@@ -3552,7 +3563,7 @@ int main(int argc, char** argv)
                                      "\"held_epochs\": %u, \"max_chi2\": %.2f, \"max_e\": %.2f, "
                                      "\"epoch_fail_t\": %s, \"sat_fail_t\": %s, \"sat_fail_n\": %s, \"held_t\": %s, "
                                      "\"held_n\": %s, \"noise_max\": %.3f, \"all_held\": %u, \"latches\": %u, "
-                                     "\"latch_releases\": %u, \"latch_epochs\": %u}, ",
+                                     "\"latch_releases\": %u, \"latch_epochs\": %u, ",
                                  sh.cfg_.dv_check, fs.dv_checks, fs.dv_sat_fails, fs.dv_sat_win_fails,
                                  fs.dv_epoch_fails, fs.dv_epoch_win_fails, fs.dv_held_rr, fs.dv_held_epochs,
                                  static_cast<double>(fs.dv_max_chi2), static_cast<double>(fs.dv_max_e),
@@ -3560,6 +3571,14 @@ int main(int argc, char** argv)
                                  ilist(dv_sat_fail_n).c_str(), list(dv_held_t).c_str(), ilist(dv_held_n).c_str(),
                                  static_cast<double>(fs.dv_noise_max_mps), fs.dv_all_held, fs.dv_latches,
                                  fs.dv_latch_releases, fs.dv_latch_epochs);
+#if RAW_REPLAY_DVHDG
+                    // the heading allowance for a launch with no magnetometer heading: its setting, and whether
+                    // the flight took it (the launch's)
+                    std::fprintf(ej, "\"hdg_unset_deg\": %.1f, \"hdg_unset\": %u}, ", sh.cfg_.dv_hdg_unset_deg,
+                                 static_cast<unsigned>(fs.dv_hdg_unset));
+#else
+                    std::fprintf(ej, "\"hdg_unset_deg\": null, \"hdg_unset\": null}, ");
+#endif
                 }
 #endif
 #if RAW_REPLAY_ROT

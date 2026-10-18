@@ -130,7 +130,11 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssShadow::Co
 //     latch let go at 5. Grid B: a loop settling after the thrust, a stale
 //     receiver and the slow ramps no longer turn the coast's heading (worst
 //     pre-apogee excess over the unaided twin 62 -> 1.3 deg on the settling
-//     pattern), with no-fault runs unchanged run for run.
+//     pattern), with no-fault runs unchanged run for run. A launch with no
+//     magnetometer heading (the V9's until its magnetometer is calibrated in
+//     flight configuration) takes any heading about the vertical as well
+//     (dv_hdg_unset_deg 180): with a pad heading 120-180 deg off, the 10 deg
+//     allowance alone held the Dopplers out of no-fault flights.
 //   - GNSS's heading gain by how well the moment observes it (TR_RawGnssEKF.h
 //     hdg_obs_mode): the rows' gain on the attitude about the vertical and the
 //     gyro bias along it scaled by the 1 s mean horizontal specific force over
@@ -163,6 +167,7 @@ inline void applyMosaicFlightSafeguards(RawGnssShadow::Config& c)
     c.dv_deweight = false;
     c.dv_noise_tau_s = 0.0;
     c.dv_hold_all_frac = 0.5;
+    c.dv_hdg_unset_deg = 180.0;   // no magnetometer heading at launch: any heading
     // GNSS's heading gain by its observability
     c.ekf.hdg_obs_mode = kHdgObsForce;
     c.ekf.hdg_obs_fh_mps2 = 5.0;

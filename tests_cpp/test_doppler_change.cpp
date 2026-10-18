@@ -335,6 +335,61 @@ TEST(DopplerChange, WithNoAllowanceTheChiSquareIsThePlainOne)
     EXPECT_LT(dvc::epochChi2(w, Z, sf, dvc::Allow()), 0.0);
 }
 
+TEST(DopplerChange, TheHeadingAllowanceTakesAnyTurnAboutTheVertical)
+{
+    // a coast epoch's change on a tilted trajectory, the drag 0.7 m/s across the ground and 0.9 m/s up; the
+    // fit's covariance 5 cm/s each way
+    const double sf[3] = {0.6, 0.35, -0.9};
+    double Cw[3][3] = {};
+    for (int i = 0; i < 3; ++i)
+        Cw[i][i] = 0.05 * 0.05;
+    dvc::Allow a;
+    a.att_rad = 10.0 * kPi / 180.0;
+    a.scale = 0.01;
+    // the IMU's change in a frame whose heading is psi off: w = (R(psi) - I) sf, horizontal only
+    auto turned = [&](double psi_deg, double w[3]) {
+        const double c = std::cos(psi_deg * kPi / 180.0), s = std::sin(psi_deg * kPi / 180.0);
+        w[0] = c * sf[0] - s * sf[1] - sf[0];
+        w[1] = s * sf[0] + c * sf[1] - sf[1];
+        w[2] = 0.0;
+    };
+    EXPECT_DOUBLE_EQ(dvc::headingChord(kPi), 2.0);
+    EXPECT_NEAR(dvc::headingChord(kPi / 3.0), 1.0, 1e-12);
+    dvc::Allow any = a;
+    any.hdg_rad = kPi;
+    for (double psi : {30.0, 90.0, 120.0, -150.0, 180.0})
+    {
+        double w[3];
+        turned(psi, w);
+        // the attitude's small-angle allowance takes none of a heading far off: the epoch would fail
+        if (std::fabs(psi) >= 90.0)
+            EXPECT_GT(dvc::epochChi2(w, Cw, sf, a), 16.0) << psi;
+        // any heading: well inside 4 sigmas, whatever the turn
+        EXPECT_LT(dvc::epochChi2(w, Cw, sf, any), 2.0) << psi;
+    }
+    // In a boost near vertical (0.4 m/s across the ground, 3 m/s up) the vertical is judged as before: a
+    // receiver reporting a sixth less of the climb still fails. (On the tilted coast above the attitude
+    // allowance tilts the change, so with the heading free the vertical alone is judged more loosely: the part
+    // along the change no longer ties it to the horizontal.)
+    const double boost[3] = {0.35, 0.2, -3.0};
+    const double lag[3] = {0.0, 0.0, 0.5};
+    EXPECT_GT(dvc::epochChi2(lag, Cw, boost, any), 16.0);
+    double S0[3][3], S1[3][3];
+    dvc::allowCov(Cw, sf, a, S0);
+    dvc::allowCov(Cw, sf, any, S1);
+    EXPECT_EQ(S1[2][2], S0[2][2]);
+    EXPECT_EQ(S1[0][2], S0[0][2]);
+    EXPECT_NEAR(S1[0][0] - S0[0][0], 4.0 * (0.6 * 0.6 + 0.35 * 0.35), 1e-12);
+    EXPECT_NEAR(S1[1][1] - S0[1][1], 4.0 * (0.6 * 0.6 + 0.35 * 0.35), 1e-12);
+    EXPECT_EQ(S1[0][1], S0[0][1]);
+    // and 0 is no heading allowance at all, bit for bit
+    dvc::Allow zero = a;
+    zero.hdg_rad = 0.0;
+    double Sz[3][3];
+    dvc::allowCov(Cw, sf, zero, Sz);
+    EXPECT_EQ(0, std::memcmp(Sz, S0, sizeof(Sz)));
+}
+
 // ------------------------------------------------------------------ the EKF's rows
 
 TEST(DopplerChange, TheLevelTestTakesTheFiltersOwnVelocityUncertainty)
@@ -545,6 +600,8 @@ struct DvFlight
     double coh_from = -1.0;
     double coh_rate = 0.0;
     double coh_max = 0.0;
+    // the pad's heading guess this far off the truth, about the vertical (no magnetometer here: the start's)
+    double seed_hdg_deg = 0.0;
 };
 
 struct DvRun
@@ -581,7 +638,8 @@ DvRun flyDv(const DvFlight& o)
     seed.lla[0] = kLla0[0];
     seed.lla[1] = kLla0[1];
     seed.lla[2] = kLla0[2];
-    seed.quat[0] = 1.0f;
+    seed.quat[0] = static_cast<float>(std::cos(0.5 * o.seed_hdg_deg * kPi / 180.0));
+    seed.quat[3] = static_cast<float>(std::sin(0.5 * o.seed_hdg_deg * kPi / 180.0));
     seed.on_pad = 1;
     sh.onSeed(seed);
     const double t_ign = 3.0, t_burn = 4.5, t_end = 11.0, dt = 0.001;
@@ -906,4 +964,57 @@ TEST(DopplerChange, TheMosaicFlightSafeguardsHoldOutAStaleReceiverAndLetItBack)
         << "off " << off.v_err_coast_max << ", safeguards " << fl.v_err_coast_max;
     EXPECT_EQ(fl.st.dv_latches, fl.st.dv_latch_releases);
     EXPECT_EQ(fl.held_last, 0u);
+}
+
+TEST(DopplerChange, TheMosaicFlightSafeguardsTakeAnyHeadingWithNoMagnetometerHeading)
+{
+    // No magnetometer on the pad (the V9's today): the heading is the start's
+    // guess, any distance off. With only the 10 deg attitude allowance, a
+    // guess 120-180 deg off fails the boost's epochs -- the IMU's push across
+    // the ground turned the wrong way -- and the latch holds the Dopplers out.
+    // With any heading allowed about the vertical nothing is held, and the
+    // filter is the one without the check, bit for bit.
+    for (double hdg : {120.0, -150.0, 180.0})
+    {
+        SCOPED_TRACE(hdg);
+        DvFlight o;
+        o.seed_hdg_deg = hdg;
+        o.cfg = dvCfg(RawGnssShadow::kDvOff);
+        gnss_raw::applyMosaicFlightSafeguards(o.cfg);
+        RawGnssShadow::Config fl_cfg = o.cfg;
+        o.cfg.dv_check = RawGnssShadow::kDvOff;
+        const DvRun off = flyDv(o);
+        o.cfg = fl_cfg;
+        const DvRun fl = flyDv(o);
+        EXPECT_EQ(fl.st.dv_hdg_unset, 1);
+        EXPECT_GT(fl.st.dv_checks, 50u);
+        EXPECT_EQ(fl.st.dv_epoch_fails, 0u);
+        EXPECT_EQ(fl.st.dv_latches, 0u);
+        EXPECT_EQ(fl.st.dv_held_rr, 0u);
+        EXPECT_EQ(0, std::memcmp(off.nav.vel_ned, fl.nav.vel_ned, sizeof(off.nav.vel_ned)));
+        EXPECT_EQ(0, std::memcmp(off.nav.quat, fl.nav.quat, sizeof(off.nav.quat)));
+        // without it (RC1, 357e7021) the boost's epochs fail and the latch holds the Dopplers out
+        o.cfg.dv_hdg_unset_deg = 0.0;
+        const DvRun rc1 = flyDv(o);
+        EXPECT_EQ(rc1.st.dv_hdg_unset, 0);
+        EXPECT_GT(rc1.st.dv_epoch_fails, 0u);
+        EXPECT_GE(rc1.st.dv_latches, 1u);
+        EXPECT_GT(rc1.st.dv_held_rr, 0u);
+    }
+    // a stale receiver is still held out with the heading that far off: its
+    // closing tail is a change along the climb, the vertical's
+    DvFlight o;
+    o.seed_hdg_deg = 150.0;
+    o.stale = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+    o.cfg = dvCfg(RawGnssShadow::kDvOff);
+    gnss_raw::applyMosaicFlightSafeguards(o.cfg);
+    const RawGnssShadow::Config fl_cfg = o.cfg;
+    o.cfg.dv_check = RawGnssShadow::kDvOff;
+    const DvRun off = flyDv(o);
+    o.cfg = fl_cfg;
+    const DvRun fl = flyDv(o);
+    EXPECT_GT(fl.st.dv_epoch_fails, 0u);
+    EXPECT_GT(fl.st.dv_held_epochs, 0u);
+    EXPECT_LT(fl.v_err_coast_max, 0.5 * off.v_err_coast_max)
+        << "off " << off.v_err_coast_max << ", safeguards " << fl.v_err_coast_max;
 }

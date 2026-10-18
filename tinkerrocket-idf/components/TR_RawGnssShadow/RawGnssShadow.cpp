@@ -665,6 +665,15 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
         if (cfg_.primary && ground && level_gate_.gSized(acc))
             applyMag(t, acc);
     }
+    // The Doppler change check's heading allowance (dv_hdg_unset_deg): on the
+    // pad, whether the heading is the magnetometer's as the launch edge judges
+    // it (stepHeading); in flight, and once landed, as the launch left it
+    if (cfg_.dv_check != kDvOff && cfg_.dv_hdg_unset_deg > 0.0)
+    {
+        if (ground && !(s.flags & kShadowLanded))
+            dv_hdg_known_ = cfg_.primary && mag_fused_run_ > 0 && t - last_mag_fused_t_ <= cfg_.heading_mag_recent_s;
+        st_.dv_hdg_unset = dv_hdg_known_ ? 0 : 1;
+    }
     // Zero velocity once landed, and the navigation filter's on the pad while
     // still: on the rig (r4) the receiver lost the sky 87 s before launch and,
     // with nothing to hold it, the filter's horizontal velocity drifted to
@@ -1219,6 +1228,7 @@ void RawGnssShadow::dvReset()
     dv_noise_var_ = 0.0;
     dv_noise_te_ = 0.0;
     dv_latch_ = false;
+    dv_hdg_known_ = false;    // a flight restored in the air never knows
 }
 
 // dv_latch_k's level test (DopplerChange.h levelChi2): this epoch's Dopplers
@@ -1418,6 +1428,10 @@ void RawGnssShadow::jobDvCheck(double age)
         a.scale = cfg_.dv_scale_allow;
         a.bias_mps = cfg_.dv_bias_allow_mps2 * imu.dt;
         a.lever_mps = lever;
+        // no magnetometer heading at launch: the heading is the start's guess,
+        // any distance off, and the horizontal change only as sure as that
+        if (cfg_.dv_hdg_unset_deg > 0.0 && !dv_hdg_known_)
+            a.hdg_rad = cfg_.dv_hdg_unset_deg / kRad2Deg;
         const double chi2 = dvc::epochChi2(w, Cw, sf, a);
         const double ke2 = cfg_.dv_epoch_k * cfg_.dv_epoch_k;
         st_.dv_last_chi2 = static_cast<float>(chi2);
