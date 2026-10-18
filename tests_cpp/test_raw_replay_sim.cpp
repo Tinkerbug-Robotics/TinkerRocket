@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstring>
 #include <map>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -28,6 +29,8 @@
 #include "ReceiverProfileApply.h"
 #include "gnss/atmo.h"
 #include "gnss/types.h"
+// as the harness builds it (RAW_REPLAY_CAPGOV, on by default): the sim path takes the governor's cap
+#define RAW_REPLAY_CAPGOV 1
 #include "sim_epoch.h"
 
 using gnss_raw::BuiltEpoch;
@@ -377,4 +380,74 @@ TEST(RawReplaySim, UntimedAndIdleEpochsAreSeenNotBuilt)
     EXPECT_EQ(st.stats().built, 0u);
     EXPECT_EQ(c.built, 0u);
     EXPECT_GT(st.stats().tracked, 20);
+}
+
+// The cheaper build, the cap governor's cap and the Dopplers in pairs at once
+// (the bench integration, exp/v9-moredata-bench): on the same sky, the
+// stage's own offer() with the cheaper build and the sim path build at the
+// navigation state's cap -- the governor's 20 or 18 over the stage's 16, or
+// the stage's own -- mark the same floor's picks above it (floor_keep), and
+// hand each epoch over with its own pairs mark, in pairs or as it came. A
+// slot reused from an epoch with the other mark keeps none of it.
+TEST(RawReplaySim, TheCheaperBuildTakesTheGovernorsCapAndThePairsMark)
+{
+    RawGnssMeasStage real(mosaicStage(true)), sim(mosaicStage(true));
+    rr::SimLite kept;
+    gnss_raw::ShadowIono io{};
+    io.gps_day = static_cast<uint16_t>(kWeek * 7 + 3);
+    real.setIono(io);
+    sim.setIono(io);
+    rr::SimCounts c;
+    BuiltEpoch a, b;                      // one slot each, reused epoch after epoch as the handoff's are
+    int above = 0, trimmable = 0;
+    for (int k = 0; k < 30; ++k)
+    {
+        const double tow = kTow0 + 0.1 * k;
+        const int second = k / 10;
+        auto cn0 = [&](int sys, int prn) { return 35.0f + static_cast<float>((prn * 7 + sys * 5 + second * 3) % 13); };
+        auto skip = [](int, int) { return false; };
+        Pair p = epochAt(tow, cn0, skip);
+        if (k == 0)
+            fileOrbits(real, p);
+        ASSERT_GT(p.raw.epoch.n, 20);
+        p.raw.rr_paired = p.sim.rr_paired = static_cast<uint8_t>(k % 3 != 0 ? 1 : 0);
+        gnss_raw::ShadowNav nav = navHere();
+        nav.sat_cap = static_cast<uint8_t>(k < 10 ? 20 : (k < 20 ? 0 : 18));
+        ASSERT_TRUE(real.offer(p.raw, nav, a));
+        ASSERT_TRUE(rr::simOffer(sim, p.sim, nav, b, c, &kept));
+        SCOPED_TRACE(testing::Message() << "epoch " << k);
+        expectSameBuild(a, b, k);
+        const int cap = nav.sat_cap > 0 ? nav.sat_cap : 16;
+        EXPECT_EQ(real.stats().sat_cap, cap);   // the cheaper build took the governor's cap
+        EXPECT_EQ(sim.stats().sat_cap, cap);
+        EXPECT_LE(a.n, cap);
+        EXPECT_GE(a.n, cap - 2);          // less a pick or two under the mask
+        EXPECT_EQ(a.rr_paired, p.raw.rr_paired);
+        EXPECT_EQ(b.rr_paired, p.sim.rr_paired);
+        // the floor's picks, the same satellites both ways
+        EXPECT_EQ(a.floor_trim, b.floor_trim);
+        std::set<std::pair<int, int>> fa, fb;
+        for (int i = 0; i < a.n; ++i)
+            if ((a.floor_keep >> i) & 1u)
+                fa.insert({a.meas[i].sys, a.meas[i].prn});
+        for (int i = 0; i < b.n; ++i)
+            if ((b.floor_keep >> i) & 1u)
+                fb.insert({b.meas[i].sys, b.meas[i].prn});
+        EXPECT_EQ(fa, fb);
+        if (cap > 16)
+        {
+            above++;
+            trimmable += a.floor_trim;
+            EXPECT_GE(fa.size(), 15u);
+            EXPECT_LE(fa.size(), 16u);
+        }
+        else
+        {
+            EXPECT_EQ(a.floor_trim, 0);
+            EXPECT_EQ(a.floor_keep, 0u);
+        }
+    }
+    EXPECT_EQ(above, 20);
+    EXPECT_EQ(trimmable, 20);
+    EXPECT_EQ(real.stats().capped_out, sim.stats().capped_out);
 }

@@ -2626,13 +2626,19 @@ struct PipeRun
     uint32_t probe_tow_ms = 0;
     std::vector<PipeClose> closed;         // each job closed (one a step here)
     gnss_raw::CapGovernor::Stats gov;
+    uint32_t epochs_applied = 0;
+    float vel_end[3] = {};
 };
 
-PipeRun flyPipe(double prelaunch_t)
+// mod: the config's other switches (the bench integration's); paired: every epoch handed over in pairs
+PipeRun flyPipe(double prelaunch_t, const std::function<void(RawGnssShadow::Config&)>& mod = nullptr,
+                bool paired = false)
 {
     RawGnssShadow::Config cfg = govCfg(8, 12);
     cfg.boost_screen = RawGnssShadow::kScreenOn;
     cfg.boost_screen_g = 2.0;
+    if (mod)
+        mod(cfg);
     std::unique_ptr<RawGnssShadow> shp(new RawGnssShadow(cfg));
     RawGnssShadow& sh = *shp;
     double lat, lon, h;
@@ -2700,6 +2706,7 @@ PipeRun flyPipe(double prelaunch_t)
             p->e.epoch = sky.epoch(tow0 + std::round(t * 10.0) / 10.0, r0, ve);
             p->e.mcu_us = t64;
             p->e.gps_week = kGoldenWeek;
+            p->e.rr_paired = paired ? 1 : 0;
             p->build_us = t64 + 20000;
             p->hand_us = t64 + 80000;
             p->tag = t;
@@ -2734,6 +2741,9 @@ PipeRun flyPipe(double prelaunch_t)
         }
     }
     run.gov = sh.capGovernor().stats();
+    run.epochs_applied = sh.stats().epochs_applied;
+    for (int i = 0; i < 3; ++i)
+        run.vel_end[i] = sh.filter().velNed()[i];
     return run;
 }
 
@@ -2787,6 +2797,58 @@ TEST(RawGnssShadowV9, PrelaunchHoldsTheFloorSoTheLaunchsFirstEpochsAreBuiltAtIt)
             EXPECT_LE(c.meas, 8) << "tow_ms " << c.tow_ms;
     EXPECT_EQ(r.gov.trims, 0u);
     EXPECT_EQ(r.gov.boosts, 1u);              // one hold, from PRELAUNCH through the boost
+}
+
+// The same launch pipeline with the bench integration's other three
+// switches on too (exp/v9-moredata-bench): the cheaper build in the GNSS
+// task, the shared geometry with the Doppler in float, and every epoch in
+// pairs. The epoch built at the pad's cap is cut to the floor's at its job's
+// start just the same, before any unit takes the epoch's lines of sight or a
+// satellite's range acceleration (neither is taken for a satellite cut), and
+// every job closes with the satellites the governor alone gives it, no
+// screened one above the floor. (Which epochs the screen drops can differ:
+// the synthetic sky stands still through the boost, and the pairs take its
+// Dopplers 25 ms earlier.)
+TEST(RawGnssShadowV9, TheCutToTheFloorComposesWithTheCheaperBuildTheSharedGeometryAndThePairs)
+{
+    const PipeRun gov = flyPipe(-1.0);
+    const PipeRun all = flyPipe(
+        -1.0,
+        [](RawGnssShadow::Config& c) {
+            c.meas.lite = true;               // the profile's build_lite, applied
+            c.meas.atmo_period_s = 1.0;
+            c.ekf.share_los = true;           // TR_BENCH_RAW_SHARE_LOS 2
+            c.ekf.rr_float = true;
+            c.ekf.rr_pair_lag_s = 0.025;      // the profile's rr_pair_avg, applied
+        },
+        true);
+    EXPECT_EQ(all.probe_cap, 12);
+    EXPECT_EQ(all.probe_n, 12);
+    EXPECT_EQ(all.gov_at_probe_hand, 8);
+    EXPECT_EQ(all.gov.trims, gov.gov.trims);
+    EXPECT_EQ(all.gov.trimmed, gov.gov.trimmed);
+    EXPECT_EQ(all.gov.trims, 1u);
+    EXPECT_EQ(all.gov.trimmed, 4u);
+    EXPECT_EQ(all.gov.boosts, gov.gov.boosts);
+    EXPECT_EQ(all.gov.raises, gov.gov.raises);
+    ASSERT_EQ(all.closed.size(), gov.closed.size());
+    size_t n_screened = 0;
+    for (size_t i = 0; i < all.closed.size(); ++i)
+    {
+        EXPECT_EQ(all.closed[i].tow_ms, gov.closed[i].tow_ms) << i;
+        EXPECT_EQ(all.closed[i].meas, gov.closed[i].meas) << "tow_ms " << all.closed[i].tow_ms;
+        if (all.closed[i].screened)
+        {
+            n_screened++;
+            EXPECT_LE(all.closed[i].meas, 8) << "tow_ms " << all.closed[i].tow_ms;
+        }
+        if (all.closed[i].tow_ms == all.probe_tow_ms)
+            EXPECT_LE(all.closed[i].meas, 8);
+    }
+    EXPECT_GE(n_screened, 5u);
+    EXPECT_GE(all.epochs_applied + 2, gov.epochs_applied);
+    for (int i = 0; i < 3; ++i)
+        EXPECT_TRUE(std::isfinite(all.vel_end[i])) << i;
 }
 
 TEST(RawGnssShadowV9, OffTheNavigationStateCarriesNoCap)

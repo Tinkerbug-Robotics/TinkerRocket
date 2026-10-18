@@ -577,3 +577,103 @@ TEST(RawGnssShareLos, TheDopplerInFloatIsWithinATenthOfAMillimetrePerSecond)
     for (int a = 0; a < 3; ++a)
         EXPECT_NEAR(fl.velNed()[a], d.velNed()[a], 1.0e-4f);
 }
+
+// The shared geometry with the Dopplers in pairs (exp/v9-dop-avg; the bench
+// integration exp/v9-moredata-bench): an epoch in pairs takes its Dopplers
+// rr_pair_lag_s before the tag, and each satellite's own range acceleration
+// once for all its consumers (pairAccel). With share_los those consumers read
+// the epoch's lines of sight: the shared filter stays within micrometres of
+// the unshared one and uses and refuses the same. rr_float steps aside where
+// the Doppler has a lag, so on an epoch in pairs share_los 2 gives share_los
+// 1's very bits; on one handed over as it came (no lag on the mosaic) it is
+// float again, other bits.
+TEST(RawGnssShareLos, AnEpochInPairsTakesTheSharedGeometryAndTheDoublePrediction)
+{
+    const auto sky = makeSky();
+    Truth tr;
+    std::mt19937 g(21);
+    auto paired = [](RawGnssEKFParams p) {
+        p.rr_pair_lag_s = 0.025;          // the mosaic's 50 ms pairs: their middle
+        return p;
+    };
+    RawGnssEKF<float> off = settled(false, tr, g, sky);
+    off.setParams(paired(params(false)));
+    RawGnssEKF<float> on = off;
+    on.setParams(paired(params(true)));
+    DopplerRef ref_off, ref_on;
+    gnss_raw::SatJumpCheck sc_off, sc_on;
+    double worst_r = 0.0, worst_v = 0.0, worst_vt = 0.0;
+    int used_off = 0, used_on = 0, rej_off = 0, rej_on = 0, float_differs = 0, n_paired = 0, n_alone = 0;
+    for (int e = 0; e < 40; ++e)
+    {
+        for (int s = 0; s < 10; ++s)
+            tr.step(kStep);
+        // three epochs in four in pairs: their Dopplers the range rates 25 ms before the tag
+        const bool in_pairs = e % 4 != 3;
+        double v_d[3];
+        for (int k = 0; k < 3; ++k)
+            v_d[k] = tr.v[k] - (in_pairs ? 30.0 * 0.025 * tr.up[k] : 0.0);
+        const auto m = measure(sky, tr.t, tr.r, v_d, g);
+        const double age = 0.03;
+        while (off.time() < tr.t + age - 1.0e-6)
+        {
+            imuStep(off);
+            imuStep(on);
+        }
+        off.setRrPaired(in_pairs);
+        on.setRrPaired(in_pairs);
+        ASSERT_EQ(on.rrPaired(), in_pairs);
+        EXPECT_DOUBLE_EQ(on.rrLag(), in_pairs ? 0.025 : 0.0);
+        // rr_float on a copy of the shared filter: the same epoch, the same work
+        RawGnssEKF<float> fl = on;
+        fl.setParams(paired(params(true, true)));
+        DopplerRef ref_fl = ref_on;
+        gnss_raw::SatJumpCheck sc_fl = sc_on;
+        const RawGnssStats so = workEpoch(off, m.data(), age, ref_off, sc_off, 100.0 + 0.1 * e, e % 10 == 0, true);
+        const RawGnssStats sn = workEpoch(on, m.data(), age, ref_on, sc_on, 100.0 + 0.1 * e, e % 10 == 0, true);
+        const RawGnssStats sf = workEpoch(fl, m.data(), age, ref_fl, sc_fl, 100.0 + 0.1 * e, e % 10 == 0, true);
+        used_off += so.used_pr + so.used_rr;
+        used_on += sn.used_pr + sn.used_rr;
+        rej_off += so.rejected_pr + so.rejected_rr;
+        rej_on += sn.rejected_pr + sn.rejected_rr;
+        double ro[3], vo[3], rn[3], vn[3];
+        off.receiverEcef(ro, vo);
+        on.receiverEcef(rn, vn);
+        worst_r = std::fmax(worst_r, dist(ro, rn));
+        worst_v = std::fmax(worst_v, dist(vo, vn));
+        if (e >= 20)
+        {
+            double vt[3];                 // the truth's velocity at the filter's time
+            for (int k = 0; k < 3; ++k)
+                vt[k] = tr.v[k] + 30.0 * (on.time() - tr.t) * tr.up[k];
+            worst_vt = std::fmax(worst_vt, dist(vn, vt));
+        }
+        const bool same = std::memcmp(fl.velNed(), on.velNed(), 3 * sizeof(float)) == 0 &&
+                          std::memcmp(fl.lla(), on.lla(), 3 * sizeof(double)) == 0 &&
+                          std::memcmp(fl.quat(), on.quat(), 4 * sizeof(float)) == 0 &&
+                          fl.clockDrift() == on.clockDrift();
+        if (in_pairs)
+        {
+            n_paired++;
+            EXPECT_TRUE(same) << "epoch " << e;
+            EXPECT_EQ(sf.used_rr, sn.used_rr);
+            EXPECT_EQ(sf.screen_rr, sn.screen_rr);
+        }
+        else
+        {
+            n_alone++;
+            float_differs += same ? 0 : 1;
+        }
+    }
+    EXPECT_EQ(n_paired, 30);
+    EXPECT_EQ(n_alone, 10);
+    EXPECT_GT(float_differs, 0);          // rr_float is live on the epochs handed over as they came
+    EXPECT_EQ(used_on, used_off);
+    EXPECT_EQ(rej_on, rej_off);
+    EXPECT_GT(used_on, 40 * kSats);
+    // each epoch's Dopplers taken at their own instant: taken at the tag, the pairs' would put the climb's
+    // change over 25 ms (0.75 m/s) into the velocity
+    EXPECT_LT(worst_vt, 0.15);            // m/s
+    EXPECT_LT(worst_r, 1.0e-4);           // m
+    EXPECT_LT(worst_v, 1.0e-4);           // m/s
+}

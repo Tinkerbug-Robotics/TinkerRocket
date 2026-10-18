@@ -4240,6 +4240,10 @@ int main(int argc, char** argv)
 #if RAW_REPLAY_BUILD_LITE
                 std::fprintf(ej, "\"build_lite\": %d, ", rx.build_lite ? 1 : 0);
 #endif
+#if RAW_REPLAY_SHARELOS
+                // the epoch's geometry: 0 per unit, 1 shared, 2 and the Doppler's prediction in float
+                std::fprintf(ej, "\"share_los\": %d, ", rx.share_los ? (rx.rr_float ? 2 : 1) : 0);
+#endif
                 if (!in.xep.empty())
                     std::fprintf(ej, "\"sim\": {\"epochs\": %u, \"built\": %u, \"eph_standins\": %u, "
                                      "\"below_cn0\": %u, \"below_mask\": %u, \"meas_built\": %u}, ",

@@ -1809,6 +1809,7 @@ add_executable(test_raw_gnss_share_los test_raw_gnss_share_los.cpp
     ${LIB_DIR}/TR_GNSSRaw/RtcmEphemeris.cpp
     ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
     ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilderLite.cpp
     ${LIB_DIR}/TR_GNSSRaw/RawMeasCarrier.cpp
 )
 target_include_directories(test_raw_gnss_share_los PRIVATE

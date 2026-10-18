@@ -4455,6 +4455,8 @@ struct SpinOpts
     uint8_t dv_lever_mode = 0;
     double dv_lever_radial_m = 0.0;
     double sigma_rr = 0.05;     // the sky's Doppler noise
+    double pair_lag_s = 0.0;    // > 0: every epoch handed over in pairs (the Dopplers in pairs, exp/v9-dop-avg), its
+                                // Dopplers this much further back (RawGnssEKFParams::rr_pair_lag_s)
 };
 
 struct SpinRun
@@ -4494,6 +4496,7 @@ SpinRun flySpin(const SpinOpts& o, double t_end = 12.0)
     cfg.dv_check = o.dv_check;
     cfg.dv_lever_mode = o.dv_lever_mode;
     cfg.dv_lever_radial_m = o.dv_lever_radial_m;
+    cfg.ekf.rr_pair_lag_s = o.pair_lag_s;
     if (o.gal_b1i)
         cfg.ekf.cr_carrier_hz[GNSS_SYS_GAL] = 1561.098e6;
     RawGnssShadow sh(cfg);
@@ -4513,7 +4516,7 @@ SpinRun flySpin(const SpinOpts& o, double t_end = 12.0)
     for (int i = 0; i < 4; ++i)
         seed.quat[i] = q_up[i];
     sh.onSeed(seed);
-    const double t_ign = 4.0, t_det = 4.1, dt = 0.005, rr_lag = cfg.ekf.rr_lag_s;
+    const double t_ign = 4.0, t_det = 4.1, dt = 0.005, rr_lag = cfg.ekf.rr_lag_s + o.pair_lag_s;
     const double p = o.rev_s * 2.0 * kPi;
     // the roll rate at time at (rad/s); a spin-up's rate grows from ignition
     auto rollAt = [&](double at) {
@@ -4573,6 +4576,7 @@ SpinRun flySpin(const SpinOpts& o, double t_end = 12.0)
             }
             e.mcu_us = t64;
             e.gps_week = kGoldenWeek;
+            e.rr_paired = o.pair_lag_s > 0.0 ? 1 : 0;
             due.push_back(e);
             next_epoch++;
         }
@@ -4628,6 +4632,28 @@ TEST(RawGnssShadow, ThroughASpinUpTheWindupIsTakenAtTheDopplersOwnInstant)
     const SpinRun on = flySpin(o);
     const double a = 2.0 * kPi, lag = gnss_raw::RawGnssEKFParams().rr_lag_s;
     EXPECT_NEAR(lag, 0.0555, 1e-9);
+    EXPECT_NEAR(on.te_last, 11.0, 1e-3);
+    EXPECT_GE(on.st.windup_epochs, 7u);
+    EXPECT_EQ(on.st.windup_misses, 0u);
+    EXPECT_NEAR(on.st.windup_last_p_rps, a * (on.te_last - lag - 4.0), a * 0.01);
+    EXPECT_NEAR(on.drift_end, on.drift_true, 0.05);
+}
+
+// The wind-up with the Dopplers in pairs (the bench integration,
+// exp/v9-moredata-bench): an epoch handed over in pairs has its Dopplers the
+// pair's mean, at the pair's middle, rr_pair_lag_s (25 ms) further back, and
+// so has their wind-up. Through the same spin-up the correction reads the
+// gyro's roll there, at te - rr_lag_s - rr_pair_lag_s, where read at rr_lag_s
+// alone it would be 0.16 rad/s off; the epoch is built in the GNSS task, so
+// its pairs mark is set before the wind-up reads it.
+TEST(RawGnssShadow, ThroughASpinUpAnEpochInPairsHasItsWindupTakenAtThePairsMiddle)
+{
+    SpinOpts o;
+    o.spinup_rev_s2 = 1.0;
+    o.k_fix = 0.99;
+    o.pair_lag_s = 0.025;
+    const SpinRun on = flySpin(o);
+    const double a = 2.0 * kPi, lag = gnss_raw::RawGnssEKFParams().rr_lag_s + 0.025;
     EXPECT_NEAR(on.te_last, 11.0, 1e-3);
     EXPECT_GE(on.st.windup_epochs, 7u);
     EXPECT_EQ(on.st.windup_misses, 0u);

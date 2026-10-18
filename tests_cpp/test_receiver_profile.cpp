@@ -804,6 +804,83 @@ TEST(ReceiverProfile, TheMosaicFlightSafeguards)
     EXPECT_EQ(params.hdg_obs_mode, gnss_raw::kHdgObsOff);
 }
 
+// The bench integration's four switches (exp/v9-moredata-bench) in one
+// mosaic profile -- the cheaper build (build_lite), the shared geometry with
+// the Doppler in float (share_los, rr_float), the Dopplers in pairs
+// (rr_pair_avg) and the cap governor's ceiling (sat_cap_max) -- under the
+// image's flight safeguards, the high-roll port's among them. Each sets only
+// its own fields: applied over the profile with none, with those fields put
+// back, the config is the none's byte for byte, alone or all four at once;
+// and all four at once set what each sets alone. The safeguards go on top of
+// all four as of none. The slice (epoch_slice_us) is main.cpp's to take, not
+// applyReceiverProfile's: none of them moves it.
+TEST(ReceiverProfile, TheFourBenchSwitchesEachSetTheirOwnFieldsAlongsideTheSafeguards)
+{
+    static_assert(std::is_trivially_copyable<RawGnssShadow::Config>::value,
+                  "the byte comparison below copies the config whole");
+    const GnssReceiverProfile none = gnss_raw::mosaicG5Profile();
+    EXPECT_FALSE(none.build_lite);
+    EXPECT_FALSE(none.share_los);
+    EXPECT_FALSE(none.rr_float);
+    EXPECT_FALSE(none.rr_pair_avg);
+    EXPECT_EQ(none.sat_cap_max, 0);
+    RawGnssShadow::Config c0;
+    gnss_raw::applyReceiverProfile(none, c0);
+    gnss_raw::applyMosaicFlightSafeguards(c0);
+    enum
+    {
+        kLite = 1,
+        kLos = 2,
+        kPairs = 4,
+        kGov = 8
+    };
+    // each switch's fields, put back to the none's
+    auto putBack = [&](RawGnssShadow::Config& c) {
+        c.meas.lite = c0.meas.lite;
+        c.meas.atmo_period_s = c0.meas.atmo_period_s;
+        c.ekf.share_los = c0.ekf.share_los;
+        c.ekf.rr_float = c0.ekf.rr_float;
+        c.ekf.rr_pair_lag_s = c0.ekf.rr_pair_lag_s;
+        c.sat_cap_max = c0.sat_cap_max;
+    };
+    for (int on = 1; on <= 15; ++on)
+    {
+        SCOPED_TRACE(testing::Message() << "switches " << on);
+        GnssReceiverProfile p = none;
+        p.build_lite = (on & kLite) != 0;
+        p.share_los = p.rr_float = (on & kLos) != 0;
+        p.rr_pair_avg = (on & kPairs) != 0;
+        p.sat_cap_max = (on & kGov) != 0 ? 24 : 0;
+        RawGnssShadow::Config c;
+        std::memcpy(&c, &c0, sizeof(c));
+        gnss_raw::applyReceiverProfile(p, c);
+        gnss_raw::applyMosaicFlightSafeguards(c);
+        // each its own
+        EXPECT_EQ(c.meas.lite, (on & kLite) != 0);
+        EXPECT_EQ(c.meas.atmo_period_s, (on & kLite) != 0 ? 1.0 : 0.0);
+        EXPECT_EQ(c.ekf.share_los, (on & kLos) != 0);
+        EXPECT_EQ(c.ekf.rr_float, (on & kLos) != 0);
+        EXPECT_DOUBLE_EQ(c.ekf.rr_pair_lag_s, (on & kPairs) != 0 ? 0.025 : 0.0);
+        EXPECT_EQ(c.ekf.rr_lag_s, 0.0);
+        EXPECT_EQ(c.sat_cap, 16);
+        EXPECT_EQ(c.sat_cap_max, (on & kGov) != 0 ? 24 : 0);
+        // the stage the GNSS task builds with: the cheaper build and the floor
+        const gnss_raw::RawGnssMeasStage::Config st = RawGnssShadow::stageConfig(c);
+        EXPECT_EQ(st.meas.lite, (on & kLite) != 0);
+        EXPECT_EQ(st.sat_cap, 16);
+        // the safeguards as with none: the high-roll port's too
+        EXPECT_TRUE(c.ekf.att_exact);
+        EXPECT_EQ(c.dv_lever_mode, 1);
+        EXPECT_EQ(c.dv_lever_radial_m, 0.0);
+        EXPECT_EQ(c.windup_k, 0.99);
+        EXPECT_EQ(c.dv_check, RawGnssShadow::kDvAct);
+        // and nothing else
+        putBack(c);
+        EXPECT_EQ(0, std::memcmp(&c, &c0, sizeof(c)));
+        EXPECT_EQ(p.epoch_slice_us, 2500.0);
+    }
+}
+
 TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
 {
     // Every RawGnssShadow::Config default, literally: the Beetle's navigation
