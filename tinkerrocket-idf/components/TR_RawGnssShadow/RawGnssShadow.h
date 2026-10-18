@@ -401,8 +401,10 @@
 // change, up to twice its size (0.3 m on a coast weathercocking with the
 // heading 60 deg off: a chi-square of 19.9 against the 4-sigma test's 16,
 // unknown's 0.89), so there the prediction is taken back out of the fitted
-// change and the whole offset allowed, its size plus the larger sigma. The
-// hold and the skip are untouched. The offset is a prior, never the truth: a
+// change and the whole offset allowed, its size plus the larger sigma; and
+// out of the latch's level (dv_latch_k), which would otherwise hold up to
+// twice the lever's velocity where unknown's holds it once, and the latch
+// longer than unknown's. The hold and the skip are untouched. The offset is a prior, never the truth: a
 // phase centre a few cm from where the owner measured is what the sigmas are
 // for. setAntenna in flight waits for the ground.
 //
@@ -1120,7 +1122,7 @@ private:
                                         //   each step; in flight, as the launch left it)
     void          dvReset();
     void          leverRoll(double age, const double w[3], const double C[3][3], const DopplerChangeImu& imu);
-    double        dvLevelChi2(double row_var);
+    double        dvLevelChi2(double row_var, const float v_lev[3]);
     double        att_hold_until_ = -1.0e9;   // att_hold_s: epochs up to this instant are held (filter's clock)
     double        rot_skip_until_ = -1.0e9;   // rot_skip_s: epochs up to this instant fuse nothing (filter's clock)
     bool          rotOn() const

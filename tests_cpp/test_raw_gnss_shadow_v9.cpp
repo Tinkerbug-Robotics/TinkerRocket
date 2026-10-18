@@ -288,6 +288,8 @@ struct ClosedEpoch
     bool held = false;                    // GNSS held off the attitude for it (att_hold_rate_rps)
     bool skipped = false;                 // nothing of it fused while the body turned (rot_skip_rate_rps)
     uint32_t dv_epoch_fails = 0;          // the Doppler change check's failed epochs so far
+    uint32_t dv_latch_releases = 0;       //   its latches let go so far (dv_latch_k)
+    float dv_level_chi2 = 0.0f;           //   and the last level test's chi-square
 };
 
 struct TenRun
@@ -450,6 +452,8 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
             c.held = sh.stats().att_last_held;
             c.skipped = sh.stats().rot_last_skipped;
             c.dv_epoch_fails = sh.stats().dv_epoch_fails;
+            c.dv_latch_releases = sh.stats().dv_latch_releases;
+            c.dv_level_chi2 = sh.stats().dv_last_level_chi2;
             run.eps.push_back(c);
         }
         gnss_raw::ShadowNav nav;
@@ -1736,4 +1740,59 @@ TEST(RawGnssShadowV9, AKnownAntennaWithTheHeadingUnsetStillCatchesAStaleOrRampin
         EXPECT_GE(dvFailsBetween(ur, 6.5, 8.0), 5u);
         EXPECT_GT(kr.st.dv_held_epochs, 0u);
     }
+}
+
+namespace
+{
+
+// the epoch that let the change check's first latch go (none: nullptr)
+const ClosedEpoch* firstRelease(const TenRun& r)
+{
+    for (const ClosedEpoch& c : r.eps)
+        if (c.dv_latch_releases > 0)
+            return &c;
+    return nullptr;
+}
+
+}  // namespace
+
+TEST(RawGnssShadowV9, AKnownAntennaWithTheHeadingUnsetLetsTheLatchGoAtUnknownsLevel)
+{
+    // The latch's level test fits the epoch's Dopplers as they stand, each
+    // less its prediction: known, at the antenna, the lever's velocity at the
+    // filter's attitude in it. With no magnetometer heading that attitude's
+    // heading is any distance off, and a swing's predicted lever velocity
+    // turns with it: 180 deg off, the level is the swing across the nose
+    // twice over where unknown's is once. Now the prediction goes back on the
+    // fitted offset, as on the epoch test's change (knownLeverArm), and the
+    // latch lets go where unknown's does. An epoch 40 m/s off vertically
+    // latches at 7.0 s (its change in, and out at 7.1); the coast pitches at
+    // 3 rad/s from 7.15 s, 0.3 s out and back, the antenna 0.3 m up the nose
+    // (0.9 m/s), the pad's heading 180 deg off. Unknown lets go at 7.2 s, its
+    // level's chi-square 11.2 against dv_latch_k's 25; known now at the same
+    // epoch and level. Before (a0ca93cf), known's was 42.6 there and 29.9 at
+    // 7.3 s, and the latch held to 7.4.
+    TenFlight fl;
+    fl.bad_vertical_t = 7.0;
+    fl.turn_t = 7.15;
+    fl.turn_s = 0.3;
+    fl.turn_rps = 3.0;
+    fl.turn_axis = 1;
+    fl.lever_m = 0.3;
+    fl.seed_heading_err_deg = 180.0;
+    fl.t_end = 9.0;
+    const TenRun unk = flyTen(unsetCfg(0.0), fl), kn = flyTen(unsetCfg(0.3), fl);
+    EXPECT_EQ(kn.st.dv_hdg_unset, 1);
+    ASSERT_EQ(unk.st.dv_latches, 1u);
+    ASSERT_EQ(kn.st.dv_latches, 1u);
+    const ClosedEpoch* ru = firstRelease(unk);
+    const ClosedEpoch* rk = firstRelease(kn);
+    ASSERT_NE(ru, nullptr);
+    ASSERT_NE(rk, nullptr);
+    EXPECT_GT(ru->t, fl.turn_t);                          // let go in the swing
+    EXPECT_LT(ru->t, fl.turn_t + 2.0 * fl.turn_s);
+    EXPECT_GT(ru->dv_level_chi2, 4.0f);                   //   the swing in its level
+    EXPECT_NEAR(rk->t, ru->t, 1e-6);
+    EXPECT_EQ(kn.st.dv_latch_epochs, unk.st.dv_latch_epochs);
+    EXPECT_NEAR(rk->dv_level_chi2, ru->dv_level_chi2, 0.02f * ru->dv_level_chi2);
 }

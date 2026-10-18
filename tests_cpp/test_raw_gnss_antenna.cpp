@@ -613,6 +613,69 @@ TEST(RawGnssAntenna, TheChangeChecksLeverComesBackOutOfItsFit)
     }
 }
 
+TEST(RawGnssAntenna, TheLatchsLevelPutsTheLeverBackAsTheChangeDoes)
+{
+    // The change check's latch lets go on one end's Dopplers as they stand
+    // (RawGnssShadow::dvLevelChi2): each less its prediction at the filter's
+    // velocity -- known, at the antenna, the lever's velocity in it -- fitted
+    // for one velocity offset and a clock rate. Where the heading is unset the
+    // shadow puts that end's lever velocity back on the fitted offset, x +
+    // v_lev (imu.v_lev, as dopplerChange took it), the sign the change's wu
+    // takes: the unknown filter's level, as each row moves by the same
+    // velocity along its own line of sight. 0.1 s into a 5 rad/s pitch with
+    // the antenna 0.3 m up the nose: the fits differ by the lever's 1.5 m/s,
+    // and put back by under 1 mm/s; with and without a Doppler's lag.
+    for (double lag : {0.0, 0.03})
+    {
+        SCOPED_TRACE(lag);
+        Rig rig;
+        rig.w = 5.0;
+        rig.t_turn = 5.0;
+        rig.r_b[0] = 0.3;
+        RawGnssEKFParams p_off = quietParams(), p_on = leverParams(rig.r_b);
+        p_off.rr_lag_s = p_on.rr_lag_s = lag;
+        Rig r_off = rig, r_on = rig;
+        RawGnssEKF<float> off = r_off.filter(p_off), on = r_on.filter(p_on);
+        r_off.run(off, 0.1);
+        r_on.run(on, 0.1);
+        const auto m = r_on.epoch();
+        gnss_raw::DopplerRef y_off, y_on;
+        gnss_raw::dvc::Row rows_off[gnss_raw::RawEpoch::kMaxObs], rows_on[gnss_raw::RawEpoch::kMaxObs];
+        gnss_raw::DopplerChangeImu imu_off, imu_on;
+        off.dopplerChange(m.data(), static_cast<int>(m.size()), 0.0, gnss_raw::DopplerRef(), y_off, rows_off,
+                          imu_off);
+        on.dopplerChange(m.data(), static_cast<int>(m.size()), 0.0, gnss_raw::DopplerRef(), y_on, rows_on, imu_on);
+        ASSERT_EQ(y_off.n, 10);
+        ASSERT_EQ(y_on.n, 10);
+        // the level's rows, as dvLevelChi2 builds them
+        auto levelFit = [](const gnss_raw::DopplerRef& y, gnss_raw::dvc::Row* r) {
+            for (int i = 0; i < y.n; ++i)
+            {
+                for (int a = 0; a < 3; ++a)
+                    r[i].u[a] = static_cast<double>(y.u[i][a]);
+                r[i].z = y.y[i];
+                r[i].s = static_cast<double>(y.s[i]);
+                r[i].im = r[i].iref = r[i].iout = -1;
+                r[i].in = true;
+                r[i].e = 0.0;
+            }
+            return gnss_raw::dvc::fit(r, y.n, 5.0, 6, true);
+        };
+        const gnss_raw::dvc::Fit f_off = levelFit(y_off, rows_off), f_on = levelFit(y_on, rows_on);
+        ASSERT_TRUE(f_off.ok);
+        ASSERT_TRUE(f_on.ok);
+        double moved = 0.0, back = 0.0;
+        for (int i = 0; i < 3; ++i)
+        {
+            moved += (f_on.x[i] - f_off.x[i]) * (f_on.x[i] - f_off.x[i]);
+            back = std::max(back, std::fabs(f_on.x[i] + double(imu_on.v_lev[i]) - f_off.x[i]));
+        }
+        EXPECT_NEAR(std::sqrt(moved), 1.5, 0.02);    // 5 rad/s x 0.3 m
+        EXPECT_LT(back, 1e-3);
+        EXPECT_NEAR(f_on.x[3], f_off.x[3], 1e-3);    // the clock's rate untouched
+    }
+}
+
 namespace
 {
 
