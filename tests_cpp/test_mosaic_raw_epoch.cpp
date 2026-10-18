@@ -943,11 +943,16 @@ TEST(MosaicRawEpoch, TimeTagOnThePpsLineAcrossAJumpAndAWeek)
                 const int32_t r = ppsResidualUs(tag, edge, bias);
                 worst_pps_us = std::max(worst_pps_us, std::fabs(static_cast<double>(r)));
 
-                // planted slips: each must fail the check
+                // planted slips: each must fail the check. A week's slip
+                // saturates the residual at INT32_MIN, whose std::abs is
+                // undefined (at -O0 it stays negative and passes the bar), so
+                // the magnitude is taken in 64 bits, as notePpsTag takes it
                 int64_t bad = 0;
                 auto fails = [&](double gps_s) {
                     planted++;
-                    if (sync.mcuAt(gps_s, bad) && std::abs(ppsResidualUs(bad, edge, bias)) > 200) caught++;
+                    if (!sync.mcuAt(gps_s, bad)) return;
+                    const int64_t res = ppsResidualUs(bad, edge, bias);
+                    if ((res < 0 ? -res : res) > 200) caught++;
                 };
                 fails(epochGpsS(info.wnc, info.tow_ms + 1000, dtr));                    // a whole second
                 fails(epochGpsS(static_cast<uint16_t>(info.wnc + 1), info.tow_ms, dtr)); // a week

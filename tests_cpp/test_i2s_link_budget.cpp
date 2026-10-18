@@ -381,7 +381,7 @@ TEST(I2SLinkBudget, TheRawFilterIsCountedWhereItRuns) {
 TEST(I2SLinkBudget, TheMosaicRawFilterFitsBothLogSettings) {
     // The mosaic-only image with its raw-GNSS filter: the detailed GNSS log at
     // its 3840 Hz and the reduced one at the board's top rate (the V9's 7680;
-    // the V8's own top is 3840, so the Goblin's V8 flies 3840 either way),
+    // the V8's own top is 3840, so a V8 flies 3840 either way),
     // each with the filter's records and its pad context, on the link and on
     // the OC's flash. On the V9 the reduced log at 7680 is the thin one (the
     // drain model's ~94 %, as a u-blox flight's). The detailed log at a top

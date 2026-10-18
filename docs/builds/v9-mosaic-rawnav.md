@@ -107,15 +107,31 @@ into the mosaic-G5. It is a bench image (marked `-bench`, every pyro dry). See
 
 [`sdkconfig.defaults.rawnav`](../../tinkerrocket-idf/projects/flight_computer/sdkconfig.defaults.rawnav) turns the
 in-package PSRAM on for this image only: the filter does not fit in internal RAM. Only explicit PSRAM allocations
-land there; task stacks, queues and `malloc()` stay internal.
+land there: the filter and its working storage, and the driver's 64-entry navigation-block queue. Default task
+stacks, queues and `malloc()` stay internal.
 
 ## What it does not change
 
-- **Every other image builds as main builds it:** the V9 and V8 auto images (either receiver, found at boot, flying
-  GpsInsEKF with PSRAM off), the V8 u-blox image, the V10, the Beetle (M1) and every out computer. The mosaic-only
-  code is compiled only where `TR_GNSS_MOSAIC` is set.
-- **The Beetle is identical to main:** `tools/raw_replay/bitident.sh` (450 of 450 runs) and `tools/m1_identity.sh`
-  both report IDENTICAL against main.
+This is a statement about behavior, not bytes.
+
+- **Every other image behaves as main's:** the V9 and V8 auto images (either receiver, found at boot, flying
+  GpsInsEKF with PSRAM off), the V8 u-blox image, the V10, the Beetle (M1) and every out computer. What makes this
+  image what it is (the raw filter as the one navigation filter, the mosaic-only driver path, PSRAM) compiles only
+  where `TR_GNSS_MOSAIC` is set.
+- **Shared code compiles into the other images too, and stays off there:**
+  - GnssTimeSync's exact-step mode: `exact_step_s` defaults to 0, and only the mosaic-only driver sets it;
+  - the mosaic driver's deferred bring-up: `begin_wait_` defaults to true, and only the mosaic-only build calls
+    `setBeginWait`;
+  - the rig replay clock's 1PPS check (`SimReplay`), which only a mosaic-only replay feeds;
+  - on the Beetle, the raw filter's safeguard code, whose settings default off; only
+    `applyMosaicFlightSafeguards` turns them on.
+- **So the other images grow against main** (both built with the same real guidance and managed components):
+  - the V9 and V8 auto images by 1,968 B (flash code and constants, and 184 B of `.bss`);
+  - the Beetle by 23,792 B: 21,872 B of flash code, 1,132 B of IRAM code (1,280 B of internal RAM with its
+    alignment) and 208 B of `.bss`, so about 1.5 KB less internal RAM.
+- **The Beetle's filter is bit-identical to main's:** `tools/raw_replay/bitident.sh` reports 450 of 450 runs
+  IDENTICAL. `tools/m1_identity.sh` reports its `main.cpp` and sensor collectors preprocess IDENTICAL. Neither
+  covers GnssTimeSync; the host tests cover its default path.
 - **The wire:** no new message, record or BLE command number. FcStatus bit 1 and the snapshot's spare float are set
   only by this image; every other image leaves them 0.
 
@@ -137,14 +153,39 @@ land there; task stacks, queues and `malloc()` stay internal.
 ## Evidence
 
 The evidence stays outside the repository, in `gnss-attitude-study/` beside the checkout. None of it holds a
-position. The simulated flights and the real logs were run on earlier builds with the same three safeguards, before
-the time-tag fix (which changes how the receiver's epochs are tagged, not the filter).
+position. The simulated flights and the real logs were run on earlier builds (RC1 and RC2), before the time-tag fix
+(which changes how the receiver's epochs are tagged, not the filter). This configuration carries RC2's safeguards.
 
-- **Simulated flights** (`v9-mosaic-filter-plan/evidence/wave3/final/`, `evidence/grid-b/`). Sixteen simulated
-  drogue flights flown through the firmware's own code, 21,504 runs with GNSS faults, antenna offsets and
-  magnetometer errors. The adopted ascent bar held in every pattern: boost and coast attitude error p90 within the
-  larger of the unaided filter's plus 3 deg and 10 deg. Every apogee call came within 2 s of the true apogee and
-  none above 20 m/s of climb (2,304 of 2,304 at the 0.3 m antenna offset). No run stopped or went non-finite.
+- **Simulated flights, RC1** (`v9-mosaic-filter-plan/evidence/wave3/final/`, `evidence/grid-b/`). Sixteen
+  simulated drogue flights flown through the firmware's own code, 21,504 runs with GNSS faults, antenna offsets and
+  magnetometer errors, on RC1 (fc/v9raw-dopp 357e7021, since rewritten as b0092f54). The adopted ascent bar held in
+  every pattern: boost and coast attitude error p90 within the larger of the unaided filter's plus 3 deg and
+  10 deg. Every apogee call came within 2 s of the true apogee and none above 20 m/s of climb (2,304 of 2,304 at
+  the 0.3 m antenna offset). No run stopped or went non-finite.
+- **RC2's change check, with no magnetometer heading** (`evidence/wave3/rc2/`). RC2 added `dv_hdg_unset_deg`,
+  which `applyMosaicFlightSafeguards` sets to 180: after a launch with no magnetometer heading, the V9's case until
+  its magnetometer is calibrated in flight configuration, the change check allows any heading. This is the change
+  check this configuration flies.
+  - The uniform-heading no-magnetometer arm (`hdg_uniform_faults.txt`): all 24 faults at ±90, ±150 and 180 deg,
+    7,680 runs. The adopted ascent bar held in every pattern (1,920 of 1,920 boost, 1,919 of 1,920 coast). Every
+    call came within 2 s, none above 8.9 m/s of true climb.
+  - The sliced re-run (`sliced.txt`): 13 patterns, 16 flights and all 6 magnetometer arms at 0.3 m, with the
+    flight computer's epoch slicing emulated, 4,992 runs. The adopted bars held everywhere (1,248 of 1,248 boost and
+    coast), every call within 2 s and at most 4.22 m/s of true climb.
+  - The magnetometer arms are RC1's run for run (3,840 of 3,840 identical), and so are the real logs (76 of 76
+    runs CSV-identical, `real_logs.txt`).
+- **Secondary bars that still fail** (the plan's section 4, on RC1 and again on RC2):
+  - the pitch within ±2 s of apogee no worse than the unaided filter's plus 2 deg: 1,977 of 2,304. The misses are
+    in the ±40 deg and no-magnetometer arms (which pass 842 of 1,152), where GNSS corrects 30-40 deg of heading as
+    the drogue deploys; a calibrated magnetometer moves the flight into the arms that pass;
+  - no apogee call or raw vote above 2 m/s of true climb: the slow 8 and coherent ramps fail it (calls at most
+    4.22 m/s);
+  - the vertical velocity at apogee on the ramps.
+  - Unsliced, one run's descent p90 sat 10.9 deg over its twin (the 1.0 s static-port lag) and one run's
+    pre-apogee p90 5.2 deg over. Sliced as the flight computer works its epochs, they are 3.3 and 4.9 deg, and pass.
+- **Without a calibrated magnetometer** (RC2, `evidence/wave3/rc2/`): at 170-180 deg of pad heading error, 1-2 of
+  16 no-fault flights still hold the coast's Dopplers, with the vertical velocity at apogee up to 4.8 m/s. The
+  apogee calls are unaffected.
 - **Real V9 + mosaic-G5 logs** (`evidence/real-logs/`, `evidence/wave3/final/tables_real.md`). On the 2026-10-16
   spin-rig logs the heading stayed at the unaided filter's (p95 8.0 against 7.9 deg cone off, 4.2 against 4.2 deg
   cone on), with no stops.

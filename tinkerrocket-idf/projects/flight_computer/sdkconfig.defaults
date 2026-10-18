@@ -128,7 +128,7 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 #    gap counters (#910) if it is ever turned on.
 #
 #    Revisited 2026-10-17 for ONE image: the mosaic-only build
-#    (-DTR_GNSS_MOSAIC=1, the Goblin's V8 for 2026-10-24) runs the raw-GNSS
+#    (-DTR_GNSS_MOSAIC=1, the Goblin's V9 for 2026-10-24) runs the raw-GNSS
 #    navigation filter (#1600), which needs about 202 KB and does not fit in
 #    internal RAM. The owner approved PSRAM for that build only, in
 #    sdkconfig.defaults.rawnav (caps-only allocation, so nothing moves there

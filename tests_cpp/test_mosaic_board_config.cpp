@@ -3,8 +3,8 @@
 #include "config.h"   // flight_computer/main/config.h
 
 // Built once per board that takes the mosaic-only image (-DTR_GNSS_MOSAIC=1):
-// the V9 and the V8, the Goblin's board for 2026-10-24
-// (tests_cpp/v9raw/build.cmake). Both carry the same J1, and the harness lands
+// the V9, the Goblin's board for 2026-10-24, and the V8, which stays
+// supported (tests_cpp/v9raw/build.cmake). Both carry the same J1, and the harness lands
 // the receiver the same way on each, so a pin that moves on one board's
 // header silently costs that board its receiver or its 1PPS. config.h itself
 // refuses the mosaic driver on any other board.
