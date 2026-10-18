@@ -180,6 +180,26 @@ TEST(RawReplayGnssOnly, ActsLaunchEdgeOpensTheGateANoseUpPadHoldsShut)
     EXPECT_GE(sig[1] / kD2R, 0.6 - 1e-3);
 }
 
+TEST(RawReplayGnssOnly, TheDescentArmKeepsTheLevelling)
+{
+    // keep_level (--gnss-only-keep-level): the same launch edge and no ZUPT,
+    // but the tick keeps its levelling flag -- the descent under a chute as
+    // flown -- and the shadow levels on it
+    Pad p(cfgOf(RawGnssShadow::kHeadingAct, RawGnssShadow::kGateFullLaunch));
+    GnssOnlyArm arm(1.0, GnssOnlyArm::kGateLaunch, true);
+    EXPECT_TRUE(arm.keepLevel());
+    int64_t t = p.feed(arm, kT0, 0.9);
+    const uint32_t levels0 = p.sh.stats().levels;
+    p.feed(arm, t, 1.0);
+    EXPECT_TRUE(arm.on());
+    EXPECT_EQ(arm.launches(), 1);
+    EXPECT_EQ(gateOf(p.sh), 'f');
+    EXPECT_FALSE(p.sh.cfg_.pad_zupt);
+    EXPECT_TRUE(p.last_flags & gnss_raw::kShadowLevel);
+    EXPECT_GE(p.sh.stats().levels, levels0 + 95u);       // every step of the second (100 a second)
+    EXPECT_NEAR(headingSigmaDeg(p.sh), 30.0, 1.0);
+}
+
 TEST(RawReplayGnssOnly, TheGroundGateKeptOnlyWhenAsked)
 {
     // kGateGround: the first E4 run's arm -- no ZUPT, no levelling, the

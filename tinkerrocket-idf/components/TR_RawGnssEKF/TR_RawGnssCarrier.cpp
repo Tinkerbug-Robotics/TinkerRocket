@@ -1,10 +1,11 @@
 // TR_RawGnssCarrier.cpp — TR_RawGnssEKF's carrier range rate (see
 // TR_RawGnssEKF.h): the screen, the fusion with the epoch's common rate, the
-// epoch's close, and the integration's excess back-dated; and the boost
-// screen's gate (screenRangeRates). Once an epoch, so apart from the filter's
-// per-step code: on the Beetle this file stays in flash where the rest of the
-// filter runs from internal RAM (raw_gnss_iram.lf), 11 kB less of it. Its
-// per-step part -- the receiver snapshots that every correction moves
+// epoch's close, and the integration's excess back-dated; the boost screen's
+// gate (screenRangeRates); the Doppler change check's rows (dopplerChange)
+// and the heading share (hdgObsScaleNow). Once an epoch, so apart from the
+// filter's per-step code: on the Beetle this file stays in flash where the
+// rest of the filter runs from internal RAM (raw_gnss_iram.lf), 11 kB less of
+// it. Its per-step part -- the receiver snapshots that every correction moves
 // (inject), the roll rate and the integration's excess (propagate,
 // pushHistory) -- is TR_RawGnssEKF.cpp's, and the geometry both predict with
 // RawGnssEKFGeometry.h's.
@@ -40,6 +41,8 @@ using ekf_geom::lineOfSight;
 using ekf_geom::satRangeAccel;
 using ekf_geom::corrInflation;
 using ekf_geom::backDate;
+
+constexpr double kNever = -1.0e9;   // no boost yet (TR_RawGnssEKF.cpp's kNever)
 
 }  // namespace
 
@@ -836,6 +839,168 @@ bool RawGnssEKF<T>::fitVelocityClock(const double H[][4], const double* y, const
     return true;
 }
 
+// The Doppler change check's rows (TR_RawGnssEKF.h, DopplerChange.h). Each
+// end predicted as updateGnssRawPart predicts a Doppler: the receiver taken
+// back to the epoch by the history, the satellite's motion over the signal's
+// travel (lineOfSight), a late Doppler's own range acceleration backed out --
+// at ref's velocity carried by the IMU at this end, at ref's own at that end,
+// so the filter's velocity, and every correction made between the two, drop
+// out. Each end takes its own line of sight: what is left of the base
+// velocity's error is that error times the line of sight's turn between the
+// ends (1e-5-1e-4 rad over 0.1-1 s), a few m/s of it well under the noise.
+template <typename T>
+int RawGnssEKF<T>::dopplerChange(const RawMeas* m, int n, double age_s, const DopplerRef& ref, DopplerRef& out,
+                                 dvc::Row* rows, DopplerChangeImu& imu) const
+{
+    imu = DopplerChangeImu();
+    if (age_s < 0.0)
+        age_s = 0.0;
+    const double tau = p_.rr_lag_s > 0.0 ? p_.rr_lag_s : 0.0;
+    T dp_e[3], dv_e[3], dp_l[3], dv_l[3];
+    historyChange(age_s, dv_e, dp_e);
+    historyChange(age_s + tau, dv_l, dp_l);
+    double r[3], v[3], Tm[3][3], r_e[3], v_e[3];
+    receiverState(r, v, Tm);
+    backDate(r, v, Tm, dp_e, dv_e, r_e, v_e);
+    const T* dv = tau > 0.0 ? dv_l : dv_e;
+    // the filter's velocity at this end's Doppler (NED), and its time
+    double v_now[3];
+    for (int a = 0; a < 3; ++a)
+        v_now[a] = static_cast<double>(v_[a]) - static_cast<double>(dv[a]);
+    const double t_now = t_ - age_s - tau;
+    // ref's velocity carried to this end by the IMU alone
+    double v_imu[3] = {0.0, 0.0, 0.0};
+    if (ref.valid && ref.n > 0)
+    {
+        T dvi[3], dpi[3];
+        if (imuMotion(ref.t, t_now, dvi, dpi))
+        {
+            T g[3];
+            gravityNed(g);
+            imu.ok = true;
+            imu.dt = t_now - ref.t;
+            for (int a = 0; a < 3; ++a)
+            {
+                imu.dv[a] = static_cast<float>(dvi[a]);
+                imu.dv_sf[a] = static_cast<float>(static_cast<double>(dvi[a])
+                                                  - static_cast<double>(g[a]) * imu.dt);
+                v_imu[a] = static_cast<double>(ref.v_ned[a]) + static_cast<double>(dvi[a]);
+            }
+        }
+    }
+    out.valid = true;
+    out.t = t_now;
+    for (int a = 0; a < 3; ++a)
+        out.v_ned[a] = static_cast<float>(v_now[a]);
+    out.n = 0;
+    int nr = 0;
+    for (int i = 0; i < n; ++i)
+    {
+        const RawMeas& mi = m[i];
+        if (mi.sys > GNSS_SYS_BDS || mi.prn >= 64 || !mi.has_rr)
+            continue;
+        Los L;
+        lineOfSight(mi, r_e, v_e, L);
+        double u_ned[3];
+        for (int a = 0; a < 3; ++a)
+            u_ned[a] = Tm[a][0] * L.u[0] + Tm[a][1] * L.u[1] + Tm[a][2] * L.u[2];
+        // the satellite's part of the predicted rate, and the receiver's at a velocity (NED)
+        double us = 0.0;
+        for (int a = 0; a < 3; ++a)
+            us += L.u[a] * L.vs[a];
+        auto pred = [&](const double vn[3]) {
+            double ve[3];
+            for (int a = 0; a < 3; ++a)
+                ve[a] = Tm[0][a] * vn[0] + Tm[1][a] * vn[1] + Tm[2][a] * vn[2];
+            Los Lr = L;
+            Lr.rate = us - (L.u[0] * ve[0] + L.u[1] * ve[1] + L.u[2] * ve[2]);
+            return tau > 0.0 ? Lr.rate - tau * satRangeAccel(mi, Lr, ve) : Lr.rate;
+        };
+        const int iout = out.n;
+        if (out.n < RawEpoch::kMaxObs)
+        {
+            out.sys[out.n] = mi.sys;
+            out.prn[out.n] = mi.prn;
+            out.y[out.n] = mi.rr - pred(v_now);
+            out.s[out.n] = mi.sigma_rr;
+            for (int a = 0; a < 3; ++a)
+                out.u[out.n][a] = static_cast<float>(u_ned[a]);
+            out.n++;
+        }
+        if (!imu.ok)
+            continue;
+        int j = -1;
+        for (int k = 0; k < ref.n; ++k)
+            if (ref.sys[k] == mi.sys && ref.prn[k] == mi.prn)
+            {
+                j = k;
+                break;
+            }
+        if (j < 0 || nr >= RawEpoch::kMaxObs)
+            continue;
+        dvc::Row& row = rows[nr++];
+        for (int a = 0; a < 3; ++a)
+            row.u[a] = u_ned[a];
+        row.z = (mi.rr - pred(v_imu)) - ref.y[j];
+        const double si = static_cast<double>(mi.sigma_rr), sj = static_cast<double>(ref.s[j]);
+        row.s = std::sqrt(si * si + sj * sj);
+        row.im = i;
+        row.iref = j;
+        row.iout = iout < RawEpoch::kMaxObs ? iout : -1;
+        row.in = true;
+        row.e = 0.0;
+    }
+    return nr;
+}
+
+// hdg_obs_mode's s (TR_RawGnssEKF.h): how much of a GNSS row's heading
+// correction an epoch age_s old may make. Open (1) with the mode off or not
+// applied, and in the boost: the IMU past hdg_obs_open_g at any time from
+// hdg_obs_open_hold_s before the epoch's own time until now. (The window
+// starts again at any later step past it -- a drogue's snatch can be one --
+// so where the window applies in the descent, the scope says.) Once an epoch
+// (beginGnssRaw), and only with the mode on: here, so on the Beetle, which
+// never turns it on, it stays in flash (raw_gnss_iram.lf).
+template <typename T>
+T RawGnssEKF<T>::hdgObsScaleNow(double age_s) const
+{
+    if (p_.hdg_obs_mode == kHdgObsOff || !hdg_obs_on_)
+        return T(1);
+    const double since_boost = t_ - (age_s > 0.0 ? age_s : 0.0) - hdg_open_t_;
+    if (since_boost <= p_.hdg_obs_open_hold_s)
+        return T(1);
+    double s = 1.0;
+    const double fh = std::sqrt(static_cast<double>(fh_ew_[0]) * static_cast<double>(fh_ew_[0])
+                                + static_cast<double>(fh_ew_[1]) * static_cast<double>(fh_ew_[1]));
+    switch (p_.hdg_obs_mode)
+    {
+    case kHdgObsForce:
+        s = p_.hdg_obs_fh_mps2 > 0.0 ? fh / p_.hdg_obs_fh_mps2 : 1.0;
+        break;
+    case kHdgObsInfo:
+    {
+        // the velocity a 1-sigma heading error makes over tau, in the
+        // Doppler velocity's own noise: a heading-only update's gain on it
+        T sig[3];
+        attSigmaNed(sig);
+        const double x = p_.hdg_obs_sigma_v > 0.0
+                             ? fh * p_.hdg_obs_tau_s * static_cast<double>(sig[2]) / p_.hdg_obs_sigma_v
+                             : 1.0e9;
+        s = x * x / (1.0 + x * x);
+        break;
+    }
+    case kHdgObsWindow:
+        // closed for the window after a boost; open before any (the pad) and after
+        s = hdg_open_t_ > kNever && since_boost <= p_.hdg_obs_open_hold_s + p_.hdg_obs_window_s ? 0.0 : 1.0;
+        break;
+    default:
+        break;
+    }
+    if (s < p_.hdg_obs_floor)
+        s = p_.hdg_obs_floor;
+    return T(s < 1.0 ? s : 1.0);
+}
+
 // Each member here, for both scalars (TR_RawGnssEKF.cpp instantiates the rest).
 #define TR_RAW_GNSS_CARRIER_INSTANTIATE(T)                                                                        \
     template void RawGnssEKF<T>::crSnapshot(double, const T[3]);                                                 \
@@ -852,7 +1017,10 @@ bool RawGnssEKF<T>::fitVelocityClock(const double H[][4], const double* y, const
     template bool RawGnssEKF<T>::fitVelocityClock(const double[][4], const double*, const double*, const bool*, int, \
                                                   double[4]);                                                   \
     template bool RawGnssEKF<T>::verticalFit(const double[][4], const double*, const double*, bool*, int, double[4],  \
-                                             int&, int&);
+                                             int&, int&);                                                       \
+    template int RawGnssEKF<T>::dopplerChange(const RawMeas*, int, double, const DopplerRef&, DopplerRef&,         \
+                                              dvc::Row*, DopplerChangeImu&) const;                              \
+    template T RawGnssEKF<T>::hdgObsScaleNow(double) const;
 TR_RAW_GNSS_CARRIER_INSTANTIATE(float)
 TR_RAW_GNSS_CARRIER_INSTANTIATE(double)
 #undef TR_RAW_GNSS_CARRIER_INSTANTIATE

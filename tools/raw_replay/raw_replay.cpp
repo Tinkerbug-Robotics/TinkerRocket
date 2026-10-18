@@ -240,6 +240,12 @@ struct Args
     double seed_heading_deg = 0.0;   // the cold start's heading guess (config::PAD_HEADING_DEG)
     double seed_heading_error_deg = 0.0;   // ... and a sim's: its seed (META seed_quat) turned this far off about down
     std::string truth_nav;           // a sim's truth (sim_events.py truth/<flight>.nav): a second quorum on it
+    // RawGnssEKFParams::hdg_obs_* and RawGnssShadow::Config::heading_obs_scope (a RAW_REPLAY_HDGOBS build): GNSS's
+    // heading gain by how well the moment observes it (-1 / below 0: the firmware's, off)
+    int hdg_obs_mode = -1;
+    double hdg_obs_fh = -1.0, hdg_obs_tau = -1.0, hdg_obs_sigma_v = -1.0, hdg_obs_window = -1.0;
+    double hdg_obs_open_g = -1.0, hdg_obs_open_hold = -1.0, hdg_obs_floor = -1.0;
+    int hdg_obs_scope = -1;
     int reject_persist_rr = -1;      // RawGnssEKFParams::reject_persist_rr after the profile (-1: the profile's; the
                                      //   mosaic's 30 epochs, 3 s at 10 Hz): a Doppler refused this many epochs running
                                      //   is let back in
@@ -257,7 +263,22 @@ struct Args
                                      //   and no levelling (the IMU, GNSS and the barometer alone, as in flight)
     int gnss_only_gate = 1;          //   and act's launch edge on the attitude (1, launch: gnss_only_arm.h), or the
                                      //   ground's gate kept (0, ground)
+    bool gnss_only_keep_level = false; //   with the levelling kept on: the descent as flown (gnss_only_arm.h)
     std::string pvt_out;             // each receiver fix's height above the ellipsoid, for the pad height's score
+    // the Doppler change check (RawGnssShadow::Config::dv_*; a RAW_REPLAY_DVCHECK build; -1: the firmware's)
+    int dv_check = -1;               // 0 off (the firmware's), 1 observe, 2 act
+    double dv_sat_k = -1.0, dv_epoch_k = -1.0, dv_floor = -1.0, dv_per_g = -1.0, dv_att_deg = -1.0,
+           dv_scale = -1.0, dv_bias = -1.0, dv_lever_m = -1.0, dv_hold_s = -1.0, dv_epoch_hold_s = -1.0,
+           dv_window_s = -1.0, dv_noise_tau_s = -1.0, dv_hold_all_frac = -1.0, dv_latch_k = -1.0;
+    double dv_hdg_unset_deg = -1.0;  // a launch with no magnetometer heading: the heading allowance (a RAW_REPLAY_DVHDG build)
+    int dv_deweight = -1, dv_ground = -1;
+    // the turning body (RawGnssShadow::Config, a RAW_REPLAY_ROT build; -1: the firmware's, off): the antenna's
+    // offset from the IMU bounded along the nose and across it (each Doppler's sigma takes rotLeverSigma), and
+    // GNSS held off the attitude from a rate across the nose and for a while after
+    double rot_lever_axial_m = -1.0, rot_lever_radial_m = -1.0, rot_lever_min_rps = -1.0;
+    double att_hold_rate_rps = -1.0, att_hold_s = -1.0;
+    double rot_skip_rate_rps = -1.0, rot_skip_s = -1.0;   // or nothing fused from a rate across the nose
+    bool rot_after_apogee = false;   // all three only once the flight computer has called apogee
     std::set<std::string> given;     // the options on the command line
 };
 
@@ -289,7 +310,19 @@ void usage()
                  "  [--seed-gyro-dps x,y,z]\n"
                  "  [--sat-cap N] [--fuse-ms X] [--flight-state log|quorum] [--time-tag-from-boot]\n"
                  "  [--assume-finetime] [--pad-zupt 0|1] [--gnss-only-from-s X] [--gnss-only-gate launch|ground]\n"
-                 "  [--pvt-out FILE]\n");
+                 "  [--pvt-out FILE] [--gnss-only-keep-level]\n"
+                 "  the Doppler change check (a RAW_REPLAY_DVCHECK build): [--dv-check 0|1|2] [--dv-sat-k X]\n"
+                 "  [--dv-epoch-k X] [--dv-floor X] [--dv-per-g X] [--dv-att-deg X] [--dv-scale X] [--dv-bias X]\n"
+                 "  [--dv-lever-m X] [--dv-hold-s X] [--dv-epoch-hold-s X] [--dv-window-s X] [--dv-deweight 0|1]\n"
+                 "  [--dv-ground 0|1] [--dv-noise-tau-s X] [--dv-hold-all-frac X] [--dv-latch-k X]\n"
+                 "  [--dv-hdg-unset-deg X]\n"
+                 "  the heading's gain by its observability (a RAW_REPLAY_HDGOBS build): [--hdg-obs-mode 0|1|2|3]\n"
+                 "  [--hdg-obs-fh X] [--hdg-obs-tau X] [--hdg-obs-sigma-v X] [--hdg-obs-window X] [--hdg-obs-open-g X]\n"
+                 "  [--hdg-obs-open-hold X] [--hdg-obs-floor X] [--hdg-obs-scope 0|1|2]\n"
+                 "  the turning body (a RAW_REPLAY_ROT build): [--rot-lever-axial-m X] [--rot-lever-radial-m X]\n"
+                 "  [--rot-lever-min-rate X]\n"
+                 "  [--att-hold-rate X] [--att-hold-s X] [--rot-skip-rate X] [--rot-skip-s X]\n"
+                 "  [--rot-after-apogee]\n");
 }
 
 bool parseArgs(int argc, char** argv, Args& a)
@@ -392,6 +425,34 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--seed-heading-deg") a.seed_heading_deg = std::atof(val());
         else if (k == "--seed-heading-error-deg") a.seed_heading_error_deg = std::atof(val());
         else if (k == "--reject-persist-rr") a.reject_persist_rr = std::atoi(val());
+        else if (k == "--gnss-only-keep-level") a.gnss_only_keep_level = true;
+        else if (k == "--dv-check") a.dv_check = std::atoi(val());
+        else if (k == "--dv-sat-k") a.dv_sat_k = std::atof(val());
+        else if (k == "--dv-epoch-k") a.dv_epoch_k = std::atof(val());
+        else if (k == "--dv-floor") a.dv_floor = std::atof(val());
+        else if (k == "--dv-per-g") a.dv_per_g = std::atof(val());
+        else if (k == "--dv-att-deg") a.dv_att_deg = std::atof(val());
+        else if (k == "--dv-scale") a.dv_scale = std::atof(val());
+        else if (k == "--dv-bias") a.dv_bias = std::atof(val());
+        else if (k == "--dv-lever-m") a.dv_lever_m = std::atof(val());
+        else if (k == "--dv-hold-s") a.dv_hold_s = std::atof(val());
+        else if (k == "--dv-epoch-hold-s") a.dv_epoch_hold_s = std::atof(val());
+        else if (k == "--dv-window-s") a.dv_window_s = std::atof(val());
+        else if (k == "--dv-deweight") a.dv_deweight = std::atoi(val());
+        else if (k == "--dv-ground") a.dv_ground = std::atoi(val());
+        else if (k == "--dv-noise-tau-s") a.dv_noise_tau_s = std::atof(val());
+        else if (k == "--dv-hold-all-frac") a.dv_hold_all_frac = std::atof(val());
+        else if (k == "--dv-latch-k") a.dv_latch_k = std::atof(val());
+        else if (k == "--dv-hdg-unset-deg") a.dv_hdg_unset_deg = std::atof(val());
+        else if (k == "--hdg-obs-mode") a.hdg_obs_mode = std::atoi(val());
+        else if (k == "--hdg-obs-fh") a.hdg_obs_fh = std::atof(val());
+        else if (k == "--hdg-obs-tau") a.hdg_obs_tau = std::atof(val());
+        else if (k == "--hdg-obs-sigma-v") a.hdg_obs_sigma_v = std::atof(val());
+        else if (k == "--hdg-obs-window") a.hdg_obs_window = std::atof(val());
+        else if (k == "--hdg-obs-open-g") a.hdg_obs_open_g = std::atof(val());
+        else if (k == "--hdg-obs-open-hold") a.hdg_obs_open_hold = std::atof(val());
+        else if (k == "--hdg-obs-floor") a.hdg_obs_floor = std::atof(val());
+        else if (k == "--hdg-obs-scope") a.hdg_obs_scope = std::atoi(val());
         else if (k == "--truth-nav") a.truth_nav = val();
         else if (k == "--seed-gyro-dps")
         {
@@ -416,6 +477,14 @@ bool parseArgs(int argc, char** argv, Args& a)
                 return false;
         }
         else if (k == "--pvt-out") a.pvt_out = val();
+        else if (k == "--rot-lever-axial-m") a.rot_lever_axial_m = std::atof(val());
+        else if (k == "--rot-lever-radial-m") a.rot_lever_radial_m = std::atof(val());
+        else if (k == "--rot-lever-min-rate") a.rot_lever_min_rps = std::atof(val());
+        else if (k == "--att-hold-rate") a.att_hold_rate_rps = std::atof(val());
+        else if (k == "--att-hold-s") a.att_hold_s = std::atof(val());
+        else if (k == "--rot-skip-rate") a.rot_skip_rate_rps = std::atof(val());
+        else if (k == "--rot-skip-s") a.rot_skip_s = std::atof(val());
+        else if (k == "--rot-after-apogee") a.rot_after_apogee = true;
         else if (k == "--acc-sub")
         {
             if (std::sscanf(val(), "%lf,%lf,%lf", &a.acc_sub[0], &a.acc_sub[1], &a.acc_sub[2]) != 3)
@@ -1515,6 +1584,20 @@ int main(int argc, char** argv)
                              "ignored\n");
 #endif
     applyReceiverProfile(rx, cfg);
+#if RAW_REPLAY_MOSAIC_SAFEGUARDS
+    // the mosaic-only image's flight safeguards, where startRawShadow() sets them: after the profile, before any
+    // bench flag -- so --receiver mosaic flies the image's settings, and the --dv-*, --hdg-obs-* and --rot-* flags
+    // below change them for an experiment (0 turns one off: today's design before them, and its twin)
+    if (mosaic)
+        applyMosaicFlightSafeguards(cfg);
+#else
+    // a build without them (an older tree, or one of RAW_REPLAY_DVCHECK, HDGOBS and ROT off) flies none of the
+    // three: not the image
+    if (mosaic)
+        std::fprintf(stderr, "WARNING: this build does not apply the mosaic image's flight safeguards "
+                             "(RAW_REPLAY_MOSAIC_SAFEGUARDS=OFF): --receiver mosaic replays with the Doppler change "
+                             "check, the heading share and the turning body's allowance off unless set by flag\n");
+#endif
     // an experiment on the filter's own parameter: the Doppler's refusal count before it is let back in (the
     // profile sets it from reject_persist_s; a field of the fc/v9-raw-primary tree, as the mosaic path's)
 #if RAW_REPLAY_MOSAIC
@@ -1524,6 +1607,32 @@ int main(int argc, char** argv)
     if (a.reject_persist_rr > 0)
         std::fprintf(stderr, "WARNING: this build has no reject_persist_rr (RAW_REPLAY_MOSAIC=OFF): "
                              "--reject-persist-rr is ignored\n");
+#endif
+    // an experiment on the filter's heading gain (exp/v9-observ): scaled by how well the moment observes the heading
+    // (RawGnssEKFParams::hdg_obs_mode; the firmware's unless given: the mosaic's flight safeguards, else off)
+#if RAW_REPLAY_HDGOBS
+    if (a.hdg_obs_mode >= 0)
+        cfg.ekf.hdg_obs_mode = static_cast<uint8_t>(a.hdg_obs_mode);
+    if (a.hdg_obs_fh >= 0.0)
+        cfg.ekf.hdg_obs_fh_mps2 = a.hdg_obs_fh;
+    if (a.hdg_obs_tau >= 0.0)
+        cfg.ekf.hdg_obs_tau_s = a.hdg_obs_tau;
+    if (a.hdg_obs_sigma_v >= 0.0)
+        cfg.ekf.hdg_obs_sigma_v = a.hdg_obs_sigma_v;
+    if (a.hdg_obs_window >= 0.0)
+        cfg.ekf.hdg_obs_window_s = a.hdg_obs_window;
+    if (a.hdg_obs_open_g >= 0.0)
+        cfg.ekf.hdg_obs_open_g = a.hdg_obs_open_g;
+    if (a.hdg_obs_open_hold >= 0.0)
+        cfg.ekf.hdg_obs_open_hold_s = a.hdg_obs_open_hold;
+    if (a.hdg_obs_floor >= 0.0)
+        cfg.ekf.hdg_obs_floor = a.hdg_obs_floor;
+    if (a.hdg_obs_scope >= 0)
+        cfg.heading_obs_scope = static_cast<uint8_t>(a.hdg_obs_scope);
+#else
+    if (a.hdg_obs_mode >= 0 || a.hdg_obs_scope >= 0)
+        std::fprintf(stderr, "WARNING: this build has no heading observability scale (RAW_REPLAY_HDGOBS=OFF): "
+                             "--hdg-obs-* are ignored\n");
 #endif
 #else
     // the rig's r20-r26 code (aef947c5): no receiver profile, no carrier, no full gate or tilt floor
@@ -1596,6 +1705,55 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "WARNING: this build has no vertical check or boost window (RAW_REPLAY_VCHECK=OFF): "
                              "--vert-check-mps and --boost-screen-window-s are ignored\n");
 #endif
+#if RAW_REPLAY_DVCHECK
+    // the Doppler change check: each given switch over the firmware's (the mosaic's flight safeguards, else off)
+    if (a.dv_check >= 0)
+        cfg.dv_check = static_cast<uint8_t>(a.dv_check);
+    if (a.dv_sat_k >= 0.0)
+        cfg.dv_sat_k = a.dv_sat_k;
+    if (a.dv_epoch_k >= 0.0)
+        cfg.dv_epoch_k = a.dv_epoch_k;
+    if (a.dv_floor >= 0.0)
+        cfg.dv_floor_mps = a.dv_floor;
+    if (a.dv_per_g >= 0.0)
+        cfg.dv_sigma_per_g = a.dv_per_g;
+    if (a.dv_att_deg >= 0.0)
+        cfg.dv_att_allow_deg = a.dv_att_deg;
+    if (a.dv_scale >= 0.0)
+        cfg.dv_scale_allow = a.dv_scale;
+    if (a.dv_bias >= 0.0)
+        cfg.dv_bias_allow_mps2 = a.dv_bias;
+    if (a.dv_lever_m >= 0.0)
+        cfg.dv_lever_allow_m = a.dv_lever_m;
+    if (a.dv_hold_s >= 0.0)
+        cfg.dv_hold_s = a.dv_hold_s;
+    if (a.dv_epoch_hold_s >= 0.0)
+        cfg.dv_epoch_hold_s = a.dv_epoch_hold_s;
+    if (a.dv_window_s >= 0.0)
+        cfg.dv_window_s = a.dv_window_s;
+    if (a.dv_deweight >= 0)
+        cfg.dv_deweight = a.dv_deweight != 0;
+    if (a.dv_ground >= 0)
+        cfg.dv_ground = a.dv_ground != 0;
+    if (a.dv_noise_tau_s >= 0.0)
+        cfg.dv_noise_tau_s = a.dv_noise_tau_s;
+    if (a.dv_hold_all_frac >= 0.0)
+        cfg.dv_hold_all_frac = a.dv_hold_all_frac;
+    if (a.dv_latch_k >= 0.0)
+        cfg.dv_latch_k = a.dv_latch_k;
+#if RAW_REPLAY_DVHDG
+    if (a.dv_hdg_unset_deg >= 0.0)
+        cfg.dv_hdg_unset_deg = a.dv_hdg_unset_deg;
+#else
+    if (a.dv_hdg_unset_deg >= 0.0)
+        std::fprintf(stderr, "WARNING: this build has no heading allowance for a launch with no magnetometer heading "
+                             "(RAW_REPLAY_DVHDG=OFF): --dv-hdg-unset-deg is ignored\n");
+#endif
+#else
+    if (a.dv_check >= 0)
+        std::fprintf(stderr, "WARNING: this build has no Doppler change check (RAW_REPLAY_DVCHECK=OFF): --dv-* are "
+                             "ignored\n");
+#endif
 #if RAW_REPLAY_MOSAIC
     if (mosaic)
     {
@@ -1618,6 +1776,35 @@ int main(int argc, char** argv)
         }
         cfg.ekf.att_gnss_off = true;
     }
+#endif
+    // the turning body's allowances (RawGnssShadow.h): the firmware's unless given (the mosaic's flight safeguards,
+    // else off)
+#if RAW_REPLAY_ROT
+    if (a.rot_lever_axial_m >= 0.0)
+        cfg.rot_lever_axial_m = a.rot_lever_axial_m;
+    if (a.rot_lever_radial_m >= 0.0)
+        cfg.rot_lever_radial_m = a.rot_lever_radial_m;
+    if (a.rot_lever_min_rps >= 0.0)
+        cfg.rot_lever_min_rps = a.rot_lever_min_rps;
+    if (a.att_hold_rate_rps >= 0.0)
+        cfg.att_hold_rate_rps = a.att_hold_rate_rps;
+    if (a.att_hold_s >= 0.0)
+        cfg.att_hold_s = a.att_hold_s;
+    if (a.rot_skip_rate_rps >= 0.0)
+        cfg.rot_skip_rate_rps = a.rot_skip_rate_rps;
+    if (a.rot_skip_s >= 0.0)
+        cfg.rot_skip_s = a.rot_skip_s;
+    if (a.rot_after_apogee)
+        cfg.rot_after_apogee = true;
+#else
+    if (a.rot_lever_axial_m >= 0.0 || a.rot_lever_radial_m >= 0.0 || a.rot_lever_min_rps >= 0.0
+        || a.att_hold_rate_rps >= 0.0 || a.att_hold_s >= 0.0 || a.rot_skip_rate_rps >= 0.0 || a.rot_skip_s >= 0.0
+        || a.rot_after_apogee)
+        std::fprintf(stderr, "WARNING: this build has no turning-body allowances (RAW_REPLAY_ROT=OFF): "
+                             "--rot-lever-axial-m, --rot-lever-radial-m, --rot-lever-min-rate, --att-hold-rate, "
+                             "--att-hold-s, --rot-skip-rate, --rot-skip-s and --rot-after-apogee are ignored\n");
+#endif
+#if RAW_REPLAY_MOSAIC
     const bool mosaic_eph_cap = gnss_raw::EphemerisStore::kCapacity == 128;
     if (mosaic != mosaic_eph_cap)
         std::fprintf(stderr, "WARNING: this binary's ephemeris store holds %u (the %s build's); the %s build's holds "
@@ -2128,12 +2315,17 @@ int main(int argc, char** argv)
     std::vector<double> fw_dropped_tow;    // the epochs the firmware's boost screen dropped (time of week, s)
     std::vector<double> fw_dropped_t;      //   and their flight times (s)
     std::vector<double> vert_dropped_t;    // the epochs its vertical check dropped (flight time, s)
+    // the Doppler change check: the epochs it failed, the epochs with satellites failing (and how many), the
+    // epochs whose Dopplers it held (and how many), flight time
+    std::vector<double> dv_epoch_fail_t, dv_sat_fail_t, dv_held_t;
+    std::vector<int> dv_sat_fail_n, dv_held_n;
     std::vector<ScreenCmp> cmps;           // --compare-sequential
     uint8_t last_flags = 0;
     int nonfinite_rows = 0, unhealthy_rows = 0;
 #if RAW_REPLAY_MOSAIC
-    rr::GnssOnlyArm gnss_only(a.gnss_only_from_s, a.gnss_only_gate == 1 ? rr::GnssOnlyArm::kGateLaunch
-                                                                        : rr::GnssOnlyArm::kGateGround);
+    rr::GnssOnlyArm gnss_only(a.gnss_only_from_s,
+                              a.gnss_only_gate == 1 ? rr::GnssOnlyArm::kGateLaunch : rr::GnssOnlyArm::kGateGround,
+                              a.gnss_only_keep_level);
     int mag_handed = 0;                    // magnetometer samples handed to the filter, and their sizes (uT)
     std::vector<double> mag_norms;
     uint32_t dop_applied = 0;              // the epochs the filter closed: Dopplers fused, refused, largest NIS
@@ -2144,6 +2336,10 @@ int main(int argc, char** argv)
     // on the pad restarts from the seed within the step, so the running column never shows it
     uint32_t stops_seen = 0;
     std::vector<std::pair<double, int>> stop_at;
+#endif
+#if RAW_REPLAY_HDGOBS
+    // hdg_obs_mode's share of the heading each closed epoch took (flight time, s), with the mode on
+    std::vector<std::pair<double, float>> hdg_obs_at;
 #endif
 
     auto writeRow = [&](int64_t t_us) {
@@ -2799,8 +2995,9 @@ int main(int argc, char** argv)
                 const int launches0 = gnss_only.launches();
                 s.flags = gnss_only.tick(sh, ev.t_us * 1e-6 + a.t_base_s, ev.t_us * 1e-6, s.flags);
                 if (!was_on && gnss_only.on())
-                    std::fprintf(stderr, "GNSS only from T%+.3f s: no pad ZUPT, no levelling, %s\n",
+                    std::fprintf(stderr, "GNSS only from T%+.3f s: no pad ZUPT, %s, %s\n",
                                  ev.t_us * 1e-6 + a.t_base_s,
+                                 gnss_only.keepLevel() ? "the levelling kept (the descent as flown)" : "no levelling",
                                  gnss_only.gate() == rr::GnssOnlyArm::kGateLaunch
                                      ? "act's launch edge on the attitude"
                                      : "the ground's attitude gate kept (--gnss-only-gate ground)");
@@ -2858,7 +3055,13 @@ int main(int argc, char** argv)
                     next_pass_us = votes.nextPass(ev.t_us);
             }
 #endif
-            // the magnetometer the loop handed the adapter this tick
+            // the magnetometer the loop handed the adapter this tick. The descent arm (--gnss-only-keep-level)
+            // flies as in flight from its switch on, where the filter takes no magnetometer (RawGnssShadow takes it
+            // on the ground only): none handed after it
+#if RAW_REPLAY_MOSAIC
+            if (mag_new && gnss_only.on() && gnss_only.keepLevel())
+                mag_new = false;
+#endif
             if (mag_new)
             {
                 mag_new = false;
@@ -2970,7 +3173,46 @@ int main(int argc, char** argv)
             closed0 += sh.stats().vert_latched;
 #endif
 #endif
+#if RAW_REPLAY_DVCHECK
+            const uint32_t dv_checks0 = sh.stats().dv_checks;
+            const uint32_t dv_ef0 = sh.stats().dv_epoch_fails, dv_sf0 = sh.stats().dv_sat_fails;
+            const uint32_t dv_held0 = sh.stats().dv_held_rr;
+#endif
             sh.onImu(s, ev.t_us);
+#if RAW_REPLAY_DVCHECK
+            if (sh.stats().dv_checks != dv_checks0 || sh.stats().dv_held_rr != dv_held0)
+            {
+                const double te_dv = sh.job_.te + a.t_base_s;
+                if (sh.stats().dv_epoch_fails != dv_ef0)
+                    dv_epoch_fail_t.push_back(te_dv);
+                if (sh.stats().dv_sat_fails != dv_sf0)
+                {
+                    dv_sat_fail_t.push_back(te_dv);
+                    dv_sat_fail_n.push_back(static_cast<int>(sh.stats().dv_sat_fails - dv_sf0));
+                }
+                if (sh.stats().dv_held_rr != dv_held0)
+                {
+                    dv_held_t.push_back(te_dv);
+                    dv_held_n.push_back(static_cast<int>(sh.stats().dv_held_rr - dv_held0));
+                }
+                if (std::getenv("RAW_REPLAY_DVLOG") && sh.stats().dv_checks != dv_checks0)
+                    std::fprintf(stderr, "dv t=%.3f chi2=%.2f win=%.2f noise=%.3f along=%.3f epoch_fails+%u "
+                                         "sat_fails+%u held+%u latch=%u level=%.2f\n", te_dv,
+                                 static_cast<double>(sh.stats().dv_last_chi2),
+                                 static_cast<double>(sh.stats().dv_last_chi2_win),
+                                 static_cast<double>(sh.stats().dv_noise_mps),
+                                 static_cast<double>(sh.stats().dv_last_along), sh.stats().dv_epoch_fails - dv_ef0,
+                                 sh.stats().dv_sat_fails - dv_sf0, sh.stats().dv_held_rr - dv_held0,
+                                 sh.dv_latch_ ? 1u : 0u, static_cast<double>(sh.stats().dv_last_level_chi2));
+                if (std::getenv("RAW_REPLAY_DVLOG") && std::atoi(std::getenv("RAW_REPLAY_DVLOG")) > 1
+                    && sh.stats().dv_checks != dv_checks0)
+                    std::fprintf(stderr, "  win sum %+.3f %+.3f %+.3f sf %+.2f %+.2f %+.2f bias %.3f lever %.3f "
+                                         "cov %.4f %.4f %.4f\n",
+                                 sh.dv_SW_[0], sh.dv_SW_[1], sh.dv_SW_[2], sh.dv_SF_[0], sh.dv_SF_[1], sh.dv_SF_[2],
+                                 sh.dv_SB_, sh.dv_SL_, std::sqrt(sh.dv_CW_[0][0]), std::sqrt(sh.dv_CW_[1][1]),
+                                 std::sqrt(sh.dv_CW_[2][2]));
+            }
+#endif
 #if RAW_REPLAY_MOSAIC
             {
                 // the navigation state for the flight loop, as the raw task writes it each step and pass
@@ -2987,6 +3229,10 @@ int main(int argc, char** argv)
                     if (l.rejected_rr > 0)
                         dop_rejected_epochs++;
                     dop_nis.push_back(l.nis_max);
+#if RAW_REPLAY_HDGOBS
+                    if (cfg.ekf.hdg_obs_mode != 0 && hdg_obs_at.size() < 20000)
+                        hdg_obs_at.emplace_back(sh.built_.mcu_us * 1e-6 + a.t_base_s, sh.filter().hdgObsScale());
+#endif
                     if (epf)
                     {
                         // the longest any one satellite has been refused running, each kind's: the EKF's own count
@@ -3311,6 +3557,47 @@ int main(int argc, char** argv)
 #if RAW_REPLAY_LATCH
                 std::fprintf(ej, "\"vert_latched\": %u, ", fs.vert_latched);
 #endif
+#if RAW_REPLAY_DVCHECK
+                {
+                    auto ilist = [&](const std::vector<int>& v) {
+                        std::string o = "[";
+                        for (size_t i = 0; i < v.size(); ++i)
+                            o += (i ? ", " : "") + std::to_string(v[i]);
+                        return o + "]";
+                    };
+                    std::fprintf(ej, "\"dv\": {\"mode\": %d, \"checks\": %u, \"sat_fails\": %u, \"sat_win_fails\": %u, "
+                                     "\"epoch_fails\": %u, \"epoch_win_fails\": %u, \"held_rr\": %u, "
+                                     "\"held_epochs\": %u, \"max_chi2\": %.2f, \"max_e\": %.2f, "
+                                     "\"epoch_fail_t\": %s, \"sat_fail_t\": %s, \"sat_fail_n\": %s, \"held_t\": %s, "
+                                     "\"held_n\": %s, \"noise_max\": %.3f, \"all_held\": %u, \"latches\": %u, "
+                                     "\"latch_releases\": %u, \"latch_epochs\": %u, ",
+                                 sh.cfg_.dv_check, fs.dv_checks, fs.dv_sat_fails, fs.dv_sat_win_fails,
+                                 fs.dv_epoch_fails, fs.dv_epoch_win_fails, fs.dv_held_rr, fs.dv_held_epochs,
+                                 static_cast<double>(fs.dv_max_chi2), static_cast<double>(fs.dv_max_e),
+                                 list(dv_epoch_fail_t).c_str(), list(dv_sat_fail_t).c_str(),
+                                 ilist(dv_sat_fail_n).c_str(), list(dv_held_t).c_str(), ilist(dv_held_n).c_str(),
+                                 static_cast<double>(fs.dv_noise_max_mps), fs.dv_all_held, fs.dv_latches,
+                                 fs.dv_latch_releases, fs.dv_latch_epochs);
+#if RAW_REPLAY_DVHDG
+                    // the heading allowance for a launch with no magnetometer heading: its setting, and whether
+                    // the flight took it (the launch's)
+                    std::fprintf(ej, "\"hdg_unset_deg\": %.1f, \"hdg_unset\": %u}, ", sh.cfg_.dv_hdg_unset_deg,
+                                 static_cast<unsigned>(fs.dv_hdg_unset));
+#else
+                    std::fprintf(ej, "\"hdg_unset_deg\": null, \"hdg_unset\": null}, ");
+#endif
+                }
+#endif
+#if RAW_REPLAY_ROT
+                std::fprintf(ej, "\"rot\": {\"axial_m\": %.3f, \"radial_m\": %.3f, \"min_rps\": %.3f, \"hold_rps\": %.3f, \"hold_s\": %.3f, "
+                                 "\"skip_rps\": %.3f, \"skip_s\": %.3f, "
+                                 "\"after_apogee\": %d, \"max_sigma_mps\": %.3f, \"held\": %u, \"skipped\": %u}, ",
+                             sh.cfg_.rot_lever_axial_m, sh.cfg_.rot_lever_radial_m, sh.cfg_.rot_lever_min_rps,
+                             sh.cfg_.att_hold_rate_rps,
+                             sh.cfg_.att_hold_s, sh.cfg_.rot_skip_rate_rps, sh.cfg_.rot_skip_s,
+                             sh.cfg_.rot_after_apogee ? 1 : 0,
+                             static_cast<double>(fs.rot_max_sigma_mps), fs.att_held, fs.rot_skipped);
+#endif
                 std::fprintf(ej, "\"screen_compare\": [");
                 for (size_t i = 0; i < cmps.size(); ++i)
                 {
@@ -3365,6 +3652,26 @@ int main(int argc, char** argv)
                                  sh.stats().starts, sh.stats().stops, static_cast<unsigned>(sh.stats().last_stop),
                                  so.c_str());
                 }
+#if RAW_REPLAY_HDGOBS
+                if (cfg.ekf.hdg_obs_mode != 0)
+                {
+                    // the experiment's settings, and each closed epoch's share of the heading (flight time, s)
+                    std::string hs;
+                    char b[48];
+                    for (size_t i = 0; i < hdg_obs_at.size(); ++i)
+                    {
+                        std::snprintf(b, sizeof(b), "%s[%.3f, %.4f]", i ? ", " : "", hdg_obs_at[i].first,
+                                      static_cast<double>(hdg_obs_at[i].second));
+                        hs += b;
+                    }
+                    std::fprintf(ej, "\"hdg_obs\": {\"mode\": %d, \"scope\": %d, \"fh_mps2\": %.3f, \"tau_s\": %.3f, "
+                                     "\"sigma_v\": %.3f, \"window_s\": %.3f, \"open_g\": %.3f, \"open_hold_s\": %.3f, "
+                                     "\"floor\": %.3f, \"s_at\": [%s]}, ",
+                                 cfg.ekf.hdg_obs_mode, cfg.heading_obs_scope, cfg.ekf.hdg_obs_fh_mps2,
+                                 cfg.ekf.hdg_obs_tau_s, cfg.ekf.hdg_obs_sigma_v, cfg.ekf.hdg_obs_window_s,
+                                 cfg.ekf.hdg_obs_open_g, cfg.ekf.hdg_obs_open_hold_s, cfg.ekf.hdg_obs_floor, hs.c_str());
+                }
+#endif
                 if (gnss_only.asked())
                     std::fprintf(ej, "\"gnss_only\": {\"from_s\": %.3f, \"gate\": \"%s\", \"launches\": %d, "
                                      "\"prior_deg\": %.1f, \"tilt_floor_deg\": %.2f}, ",

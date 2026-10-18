@@ -148,6 +148,17 @@ What `startRawShadow()` builds under `TR_RAW_NAV_MOSAIC` (build_units D1a; check
   applied to it first, then `applyReceiverProfile`;
 - the navigation filter's settings (`primary`, 100 steps a second, 2.5 ms slices, `external_build`);
 - the restore sigmas (100 m, 20 m/s, 15 deg) and the snapshot's accelerometer bias, `level_on_fused_epochs`;
+- the flight safeguards, by the firmware's own call (`gnss_raw::applyMosaicFlightSafeguards`,
+  `ReceiverProfileApply.h`; a `RAW_REPLAY_MOSAIC_SAFEGUARDS` build): the Doppler change check acting in flight
+  (`--dv-check 2 --dv-window-s 1 --dv-att-deg 10 --dv-epoch-k 4 --dv-latch-k 5`, and any heading about the
+  vertical after a launch with no magnetometer heading: `--dv-hdg-unset-deg 180`), GNSS's heading gain by the
+  horizontal specific force (`--hdg-obs-mode 1 --hdg-obs-fh 5 --hdg-obs-tau 1 --hdg-obs-scope 0`) and the turning
+  body's Doppler allowance (`--rot-lever-axial-m 0.3 --rot-lever-radial-m 0.03 --rot-lever-min-rate 2`). It runs
+  right after the profile, so each `--dv-*`, `--hdg-obs-*` and `--rot-*` flag still changes its own value for an
+  experiment. Today's design before them (and its `--unaided` twin) is
+  `--dv-check 0 --hdg-obs-mode 0 --rot-lever-axial-m 0 --rot-lever-radial-m 0 --rot-lever-min-rate 0`. A build
+  without them (`RAW_REPLAY_MOSAIC_SAFEGUARDS` off, which any of `RAW_REPLAY_DVCHECK`, `HDGOBS` and `ROT` off turns
+  off, saying so at configure) warns on every `--receiver mosaic` run that it flies none of the three;
 - the heading at the firmware's defaults (`--fw-defaults`, which now also takes `--heading-mode` to the primary
   build's `TR_HEADING_FIT` 2 unless given): act, the whole attitude from launch (`RAW_HEADING_GATE` 1), the 10/30 deg
   prior, no hand-off, the 0.6 deg tilt floor;
@@ -312,6 +323,12 @@ receiver velocity, so their quorum has three voters unless re-extracted with `V`
   logs as recorded, and seeding from the log's quaternion (`--seed-quat-from-log`) would pass the heading check by
   construction. They become testable on a log whose magnetometer passes the filter's gates (after the stored
   calibration, G10), or on the spin rig's turns scored against the rig's own angle, not the log's GpsInsEKF.
+- **The descent as flown on a turning payload.** `--gnss-only-keep-level` (with `--gnss-only-from-s T`; from
+  exp/v9-gyrobias) keeps the levelling on and hands the filter no magnetometer from T: no pad ZUPT, act's launch edge
+  on the attitude, the IMU, GNSS, the barometer and the levelling -- what the filter has under a slowly turning
+  drogue (in flight it levels once the drag is steady and g's size, LevelGate.h, which a payload turning steadily on
+  the spin rig passes throughout; the ground's size test stands for it). With `--gnss-only-from-s` alone the
+  levelling is off too: GNSS alone on the attitude, not a configuration that flies.
 
 ### Scoring a static or spin-rig log (`score_static.py`)
 
@@ -462,6 +479,72 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   (the antenna on the IMU against 0.3 m up the nose).
 - **`--reject-persist-rr N`** (an experiment on the filter's own parameter, after the profile): the Doppler's refusal
   count before a satellite is let back in (the mosaic profile's 30 epochs, 3 s at 10 Hz).
+- **`--arm-args NAME=ARGS`** (repeatable): an arm of an experiment's own beside today's design -- the design flown
+  with ARGS (raw_replay arguments) added, or, with NAME ending `_unaided`, its `--unaided` twin; name it in
+  `--arms`. **`--rig-state FILE`**: no events file or run starts while FILE reads `active` (checked every 30 s),
+  for a machine shared with the bench rig.
+- **The Doppler change check** (`RawGnssShadow::Config::dv_*`, off by default; a `RAW_REPLAY_DVCHECK` build):
+  `--dv-check 0|1|2` (off, observe, act), `--dv-sat-k`, `--dv-epoch-k` (the satellite and the epoch tests'
+  sigmas), `--dv-floor`, `--dv-per-g`, `--dv-att-deg`, `--dv-scale`, `--dv-bias`, `--dv-lever-m` (the change's
+  floor and the epoch test's allowances), `--dv-hold-s`, `--dv-epoch-hold-s`, `--dv-window-s` (the leaky sum),
+  `--dv-latch-k` (a failed epoch holds every Doppler until the Dopplers' level agrees with the filter's velocity
+  within this many sigmas), `--dv-deweight`, `--dv-ground`, `--dv-noise-tau-s`, `--dv-hold-all-frac`,
+  `--dv-hdg-unset-deg` (a `RAW_REPLAY_DVHDG` build: after a launch with no magnetometer heading -- the sims'
+  `--mag-flags 0` -- the epoch test also allows the IMU's change turned this far about the vertical; 180 any
+  heading). The events JSON gets `"dv"`: the counts (checks, satellite and epoch fails, Dopplers and epochs held,
+  latches begun and let go, epochs latched), when each epoch failed, had satellites fail or had Dopplers held, and
+  the heading allowance's setting and whether the flight took it, as its launch left it (`hdg_unset_deg`,
+  `hdg_unset`). `RAW_REPLAY_DVLOG=1`
+  prints each check (2: the window's sums and allowances too). `sim_tables.score_run` keeps the block.
+- **`--hdg-obs-mode 0|1|2|3`** (exp/v9-observ, a `RAW_REPLAY_HDGOBS` build): GNSS's gain on the heading -- the
+  attitude about the vertical and the gyro bias along it -- scaled by how well the moment observes it
+  (`RawGnssEKFParams::hdg_obs_mode`, off by default): 1 by the filter's own horizontal specific force
+  (`--hdg-obs-fh X`, m/s^2, averaged over `--hdg-obs-tau X` s), 2 by the heading's information from it against the
+  heading's own sigma (`--hdg-obs-tau`, `--hdg-obs-sigma-v X`), 3 closed for `--hdg-obs-window X` s after the boost;
+  open whenever the IMU read past `--hdg-obs-open-g X` (2 g) within `--hdg-obs-open-hold X` (0.2 s) of the epoch,
+  at least `--hdg-obs-floor X`; `--hdg-obs-scope 0|1|2` everywhere (the pad too), in flight, or launch to the apogee
+  call. The events JSON gets `hdg_obs` (the settings and each closed epoch's share), and `sim_tables.score_run` the
+  mean and least share per phase.
+- **`sim_grid.py --pause-while FILE`**: the same as `--rig-state FILE` (exp/v9-observ's name for it).
+- **The turning body** (`RawGnssShadow::Config`, off by default; a `RAW_REPLAY_ROT` build, on unless the tree is
+  older than exp/v9-robust): the antenna's offset from the IMU is never measured before a flight, and the sim puts
+  it 0.3 m up the nose, which at the drogue's snatch (5 rad/s) moves 1.5 m/s against the IMU. `--rot-lever-axial-m A
+  --rot-lever-radial-m R` give every Doppler, in quadrature, the most such an antenna can move:
+  A x the rate across the nose + R x the whole rate, both the gyro less its bias at its largest since the epoch
+  before (`RawGnssShadow::rotLeverSigma`; `R` alone is the isotropic bound |omega| r); `--rot-lever-min-rate M` only
+  on an epoch whose rate across the nose reached M rad/s (the snatch, not the boost's weathercocking or the pitch-over
+  at apogee). `--att-hold-rate W
+  --att-hold-s S` hold GNSS off the attitude and the gyro bias (the unaided twin's mask) for every epoch whose rate
+  across the nose reached W rad/s and for S s after one; a roll alone never holds it. `--rot-skip-rate W
+  --rot-skip-s S` fuse nothing of those epochs instead (each closed as the vertical check closes one it drops): the
+  heading error the turn builds into the velocity is then still there for the first epoch after it, where a hold
+  would have let the velocity take it. `--rot-after-apogee` lets all three act only once the flight computer has
+  called apogee (the drogue's snatch and the descent; the boost, the coast and the votes fly as without them). The
+  events JSON's `rot` gives the settings, the largest allowance taken, the epochs held and the epochs skipped. The
+  mosaic image sets them in `gnss_raw::applyMosaicFlightSafeguards` (`TR_RawGnssShadow/ReceiverProfileApply.h`),
+  which `--receiver mosaic` applies too: `rot_lever_axial_m` 0.30, `rot_lever_radial_m` 0.03, `rot_lever_min_rps`
+  2.0, the hold and the skip off (every other image: all off).
+  Results (2026-10-17, gnss-attitude-study/v9-mosaic-filter-plan/evidence/wave3/robust/scorecard.md, outside the
+  repo; 15 patterns x 6 magnetometer arms x 16 flights an arm, the antenna 0.3 m up the nose and on the IMU):
+  - The allowance only on epochs that turned across the nose at 2 rad/s or more (`--rot-lever-axial-m 0.3
+    --rot-lever-radial-m 0.03 --rot-lever-min-rate 2`) takes out 76 % of the snatch's no-fault error (its first 3 s,
+    p90 median 7.8 -> 2.6 deg, worst 41.8 -> 10.4) and leaves every apogee item the design's (a windy boost that
+    reaches the rate moves vz at apogee by mm/s). On the IMU, a heading already wrong at the snatch is corrected
+    about a second later, which the descent p90 and the pitch near apogee count; under the drogue it costs
+    nothing. A 2.5 rad/s floor never acts before apogee here but misses the still-air flights' gentler snatch.
+  - Without a floor the allowance weakens the filter's vz near apogee: more early calls (102 -> 120). The hold lets
+    the velocity take the snatch's epochs and loses the heading error they carry (the descent's worst excess over
+    the twin 29 -> 92 deg). The skip keeps it, but after a long turn the velocity error it leaves can be too large
+    to read back (one coherent-fault run diverged to 48 deg where the allowance recovered to 1.4). Acting only
+    from the apogee call misses a snatch that comes before the call (a late call, an early ejection).
+  - On the four real V9 logs the floored allowances never act (byte-identical to the design).
+- **`sim_compare.py BASE NAME=EXP ...`** sets experiment grids (each a `sim_grid.py --arms design --harness-args
+  "..."` run into its own OUT) beside the base grid's design and unaided twin, flight by flight: the phase bars per
+  pattern (pooled over the informative magnetometer arms and over all of them), the worst excess, the deployment's
+  first 3 s, the pitch near apogee and the quorum (early calls and raw votes, latency, vz at apogee, guard latches).
+  Every arm is judged against today's twin.
+- **`sim_grid.py --pause-file FILE`**: before each events file and each run the workers wait, checking every 30 s,
+  while FILE says "active" (a bench rig's timing run needs the machine quiet).
 
 A run takes 0.2-0.6 s (about 70 s of flight, 16 satellites fused an epoch at 10 Hz, ~9 capped out, and the truth's
 quorum beside it); an events file 7-10 s; the whole grid (384 events files, 6912 runs in three arms) about 20
