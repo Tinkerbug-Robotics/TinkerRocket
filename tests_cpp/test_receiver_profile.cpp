@@ -186,7 +186,7 @@ static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 32,
               "GnssSignalProfile changed: add the field to expectSameSignal, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 520,
               "GnssReceiverProfile changed: add the field to expectSameNumbers, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1400,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1416,
               "RawGnssShadow::Config changed: pin the field in TheShadowSafeguardDefaultsAreTheBeetles, then update "
               "this size");
 
@@ -647,6 +647,8 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_EQ(c.rot_lever_min_rps, 0.0);
     EXPECT_EQ(c.att_hold_rate_rps, 0.0);
     EXPECT_EQ(c.att_hold_s, 0.0);
+    EXPECT_EQ(c.rot_skip_rate_rps, 0.0);
+    EXPECT_EQ(c.rot_skip_s, 0.0);
     EXPECT_FALSE(c.rot_after_apogee);
 
     // its EKF's, literally (the profile's part is the LC86G's, above)

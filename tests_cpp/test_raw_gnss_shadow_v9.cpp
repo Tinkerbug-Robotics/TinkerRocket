@@ -286,12 +286,14 @@ struct ClosedEpoch
     gnss_raw::RawGnssStats st;
     float sigma_rr_max = 0.0f, sigma_rr_min = 0.0f;
     bool held = false;                    // GNSS held off the attitude for it (att_hold_rate_rps)
+    bool skipped = false;                 // nothing of it fused while the body turned (rot_skip_rate_rps)
 };
 
 struct TenRun
 {
     std::vector<ClosedEpoch> eps;
     std::vector<uint64_t> state;          // stateHash every 0.25 s
+    std::vector<double> att_err_deg;      //   and the attitude's error then against the truth, deg
     std::vector<HeadingFitData> fits;
     double first_aided_t = -1.0;          // flight time gnss_aided first came up
     int unaided_ticks_after = 0;          //   ticks without it after that
@@ -324,6 +326,7 @@ struct TenFlight
     int    turn_axis = 1;
     double lever_m = 0.0;
     double apogee_t = -1.0;              // the flight computer calls apogee from here (kShadowApogee)
+    double seed_heading_err_deg = 0.0;   // the pad seed's heading this far off the body's (about the down axis)
 };
 
 TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
@@ -347,7 +350,8 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
     SynthSky sky(cfg.meas);
     const Mat3 Ct = leaningBody(lean_deg, 70.0);
     ShadowSeed seed = padSeed(kT0, lat, lon, h);
-    quatOf(Ct, seed.quat);
+    const double down[3] = {0.0, 0.0, 1.0};
+    quatOf(mat3Mul(rotAbout(down, fl.seed_heading_err_deg * 0.017453292519943295), Ct), seed.quat);
     sh.onSeed(seed);
     const double tow0 = kGoldenRmTowA, dt = 0.005;
     double p_ned[3] = {}, v_ned[3] = {};
@@ -417,6 +421,7 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
                 c.sigma_rr_min = i == 0 ? m[i].sigma_rr : std::min(c.sigma_rr_min, m[i].sigma_rr);
             }
             c.held = sh.stats().att_last_held;
+            c.skipped = sh.stats().rot_last_skipped;
             run.eps.push_back(c);
         }
         gnss_raw::ShadowNav nav;
@@ -426,7 +431,16 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
         else if (!nav.gnss_aided && run.first_aided_t >= 0.0)
             run.unaided_ticks_after++;
         if (step % 50 == 0)
+        {
             run.state.push_back(stateHash(sh.filter()));
+            float qt[4];
+            quatOf(Cn, qt);
+            const float* qf = sh.filter().quat();
+            double d = 0.0;
+            for (int i = 0; i < 4; ++i)
+                d += double(qf[i]) * qt[i];
+            run.att_err_deg.push_back(2.0 * std::acos(std::min(1.0, std::fabs(d))) * 57.29577951308232);
+        }
         // an epoch every epoch_ms of GPS time (a tenth of a second), built
         // where the receiver truly is
         if (step % epoch_steps == 0)
@@ -1254,4 +1268,159 @@ TEST(RawGnssShadowV9, KeepingTheRateForTheAllowancesChangesNothingUntilOneActs)
     for (size_t i = 0; i < kept.state.size(); ++i)
         EXPECT_EQ(kept.state[i], bare.state[i]) << i;
     EXPECT_EQ(kept.st.att_held, 0u);
+    // and so does a skip that never triggers
+    RawGnssShadow::Config k2 = mosaicCfg();
+    k2.rot_skip_rate_rps = 100.0;
+    k2.rot_skip_s = 1.0;
+    const TenRun kept2 = flyTen(k2, fl);
+    ASSERT_EQ(kept2.state.size(), bare.state.size());
+    for (size_t i = 0; i < kept2.state.size(); ++i)
+        EXPECT_EQ(kept2.state[i], bare.state[i]) << i;
+    EXPECT_EQ(kept2.st.rot_skipped, 0u);
+}
+
+TEST(RawGnssShadowV9, TheSkipFusesNothingOfTheEpochsThatTurnedAcrossTheNoseAndTheTailAfter)
+{
+    // Skipped from 1.5 rad/s across the nose and for 0.25 s after: a 2 rad/s
+    // pitch drops the 11 epochs that saw it and the 2 within 0.25 s after the
+    // last -- not a Doppler or a code of them fused, none held, their sigmas
+    // the bare flight's -- and every other epoch fuses as the bare flight's
+    // does. A 5 rad/s roll skips none, nor does 1.4 rad/s.
+    RawGnssShadow::Config c = mosaicCfg();
+    c.rot_skip_rate_rps = 1.5;
+    c.rot_skip_s = 0.25;
+    const TenFlight fl = turningCoast(2.0, 1, 0.0);
+    const TenRun pitch = flyTen(c, fl), bare = flyTen(mosaicCfg(), fl);
+    int skipped = 0;
+    for (const ClosedEpoch& e : pitch.eps)
+    {
+        const bool want = e.t > 7.0 - 1e-6 && e.t < 8.2 + 1e-6;
+        EXPECT_EQ(e.skipped, want) << e.t;
+        EXPECT_FALSE(e.held) << e.t;
+        const ClosedEpoch* b = epochAt(bare, e.t);
+        ASSERT_NE(b, nullptr) << e.t;
+        EXPECT_EQ(e.sigma_rr_min, b->sigma_rr_min) << e.t;
+        if (want)
+        {
+            EXPECT_EQ(e.st.used_rr + e.st.used_pr, 0) << e.t;
+            EXPECT_EQ(e.st.rejected_rr + e.st.rejected_pr, 0) << e.t;
+            skipped++;
+        }
+        else if (e.t < 7.0)
+        {
+            EXPECT_EQ(e.st.used_rr, b->st.used_rr) << e.t;
+            EXPECT_EQ(e.st.used_pr, b->st.used_pr) << e.t;
+        }
+    }
+    EXPECT_EQ(skipped, 13);
+    EXPECT_EQ(pitch.st.rot_skipped, 13u);
+    EXPECT_EQ(pitch.st.att_held, 0u);
+    EXPECT_EQ(pitch.st.rot_max_sigma_mps, 0.0f);
+    // the epochs skipped are not dropped by a check: the vertical check and
+    // the boost screen counted none of them
+    EXPECT_EQ(pitch.st.vert_dropped, bare.st.vert_dropped);
+    EXPECT_EQ(flyTen(c, turningCoast(5.0, 0, 0.0)).st.rot_skipped, 0u);
+    EXPECT_EQ(flyTen(c, turningCoast(1.4, 1, 0.0)).st.rot_skipped, 0u);
+    // only after the apogee call: called at 7.5 s, the epochs of the turn
+    // handed over before it are fused, those after it and the tail skipped
+    c.rot_after_apogee = true;
+    TenFlight late = fl;
+    late.apogee_t = 7.5;
+    const TenRun after = flyTen(c, late);
+    for (const ClosedEpoch& e : after.eps)
+    {
+        const bool want = e.t > 7.5 - 1e-6 && e.t < 8.2 + 1e-6;
+        EXPECT_EQ(e.skipped, want) << e.t;
+    }
+    EXPECT_EQ(after.st.rot_skipped, 8u);
+    // and with no call at all, none
+    EXPECT_EQ(flyTen(c, fl).st.rot_skipped, 0u);
+}
+
+namespace
+{
+
+// The flight's own: act, the whole attitude GNSS's from launch (the test's
+// mosaicCfg keeps the ground's gate). A 5 rad/s pitch out and back over
+// 0.5 s from 5.0 s, in the boost (3 g along the nose turning with it).
+RawGnssShadow::Config actCfg()
+{
+    RawGnssShadow::Config c = mosaicCfg();
+    c.heading_mode = RawGnssShadow::kHeadingAct;
+    return c;
+}
+
+TenFlight boostTurn(double lever_m, double heading_err_deg)
+{
+    TenFlight fl;
+    fl.turn_t = 5.0;
+    fl.turn_s = 0.25;
+    fl.turn_rps = 5.0;
+    fl.turn_axis = 1;
+    fl.lever_m = lever_m;
+    fl.seed_heading_err_deg = heading_err_deg;
+    fl.lean_deg = heading_err_deg != 0.0 ? 5.0 : 0.0;
+    fl.t_end = 9.0;
+    return fl;
+}
+
+// att_err_deg's sample at t (every 0.25 s from 0.25)
+double errAt(const TenRun& r, double t)
+{
+    return r.att_err_deg.at(static_cast<size_t>(std::lround(t / 0.25)) - 1);
+}
+
+}  // namespace
+
+TEST(RawGnssShadowV9, ASkippedTurnKeepsAnAntennaUpTheNoseOffTheAttitude)
+{
+    // The antenna 0.3 m up the nose swings 1.5 m/s against the IMU through
+    // the turn, and the filter takes it at the IMU. The bare filter turns its
+    // attitude by it: 0.5-0.8 deg off from 6.5 s on. Skipped from 1.5 rad/s
+    // (0.1 s after), the turn's epochs fuse nothing and the IMU's attitude
+    // stands: under 0.15 deg. Held instead, the velocity takes the swing
+    // while the attitude is held, and the epochs after it turn the attitude
+    // by what is left: 2 deg and more.
+    RawGnssShadow::Config skip = actCfg(), hold = actCfg();
+    skip.rot_skip_rate_rps = 1.5;
+    skip.rot_skip_s = 0.1;
+    hold.att_hold_rate_rps = 1.5;
+    hold.att_hold_s = 0.1;
+    const TenFlight fl = boostTurn(0.3, 0.0);
+    const TenRun bare = flyTen(actCfg(), fl), sk = flyTen(skip, fl), hd = flyTen(hold, fl);
+    EXPECT_GT(sk.st.rot_skipped, 0u);
+    for (double t = 6.5; t <= 8.5 + 1e-9; t += 0.25)
+    {
+        EXPECT_GT(errAt(bare, t), 0.4) << t;
+        EXPECT_LT(errAt(sk, t), 0.15) << t;
+        EXPECT_GT(errAt(hd, t), 2.0) << t;
+    }
+}
+
+TEST(RawGnssShadowV9, ASkippedTurnLeavesItsHeadingErrorForTheEpochsAfter)
+{
+    // The pad seed's heading 10 deg off, the antenna on the IMU. The turn is
+    // the flight's best look at the heading: the bare filter takes it there
+    // (under 1 deg by 5.75 s). Skipped, nothing of the turn is fused (still
+    // over 6.5 deg at 5.75 s), but the error the wrong heading built into the
+    // velocity through the turn is there for the first epoch after it, which
+    // reads it through the covariance the turn built: under 1 deg by 6.25 s,
+    // 0.5 from 7.25 s. Held, the velocity took those epochs, and with them
+    // the evidence: still over 5 deg to the end.
+    RawGnssShadow::Config skip = actCfg(), hold = actCfg();
+    skip.rot_skip_rate_rps = 1.5;
+    skip.rot_skip_s = 0.1;
+    hold.att_hold_rate_rps = 1.5;
+    hold.att_hold_s = 0.1;
+    const TenFlight fl = boostTurn(0.0, 10.0);
+    const TenRun bare = flyTen(actCfg(), fl), sk = flyTen(skip, fl), hd = flyTen(hold, fl);
+    EXPECT_GT(errAt(bare, 4.75), 6.5);
+    EXPECT_LT(errAt(bare, 5.75), 1.0);
+    EXPECT_GT(errAt(sk, 5.75), 6.5);
+    EXPECT_LT(errAt(sk, 6.25), 1.0);
+    for (double t = 7.25; t <= 8.75 + 1e-9; t += 0.25)
+    {
+        EXPECT_LT(errAt(sk, t), 0.5) << t;
+        EXPECT_GT(errAt(hd, t), 5.0) << t;
+    }
 }

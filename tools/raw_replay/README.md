@@ -471,11 +471,14 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   on an epoch whose rate across the nose reached M rad/s (the snatch, not the boost's weathercocking or the pitch-over
   at apogee). `--att-hold-rate W
   --att-hold-s S` hold GNSS off the attitude and the gyro bias (the unaided twin's mask) for every epoch whose rate
-  across the nose reached W rad/s and for S s after one; a roll alone never holds it. `--rot-after-apogee` lets both
-  act only once the flight computer has called apogee (the drogue's snatch and the descent; the boost, the coast and
-  the votes fly as without them). The events JSON's `rot` gives
-  the settings, the largest allowance taken and the epochs held. The firmware's switches are config.h's
-  `RAW_ROT_LEVER_*` and `RAW_ATT_HOLD_*` (mosaic only, 0 or false: off).
+  across the nose reached W rad/s and for S s after one; a roll alone never holds it. `--rot-skip-rate W
+  --rot-skip-s S` fuse nothing of those epochs instead (each closed as the vertical check closes one it drops): the
+  heading error the turn builds into the velocity is then still there for the first epoch after it, where a hold
+  would have let the velocity take it. `--rot-after-apogee` lets all three act only once the flight computer has
+  called apogee (the drogue's snatch and the descent; the boost, the coast and the votes fly as without them). The
+  events JSON's `rot` gives the settings, the largest allowance taken, the epochs held and the epochs skipped. The
+  firmware's switches are config.h's `RAW_ROT_LEVER_*`, `RAW_ATT_HOLD_*` and `RAW_ROT_SKIP_*` (mosaic only, 0 or
+  false: off).
 - **`sim_compare.py BASE NAME=EXP ...`** sets experiment grids (each a `sim_grid.py --arms design --harness-args
   "..."` run into its own OUT) beside the base grid's design and unaided twin, flight by flight: the phase bars per
   pattern (pooled over the informative magnetometer arms and over all of them), the worst excess, the deployment's

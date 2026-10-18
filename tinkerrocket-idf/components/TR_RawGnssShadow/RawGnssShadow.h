@@ -270,8 +270,8 @@
 // at omega, an antenna r away moves omega x r against the IMU: 1.5 m/s at the
 // drogue's snatch (5 rad/s) with 0.3 m on the nose, a velocity every Doppler
 // sees and the IMU's does not, which the update reads as an attitude error
-// (Grid B, 2026-10-17: up to 42 deg in the snatch's first 3 s, no fault). Two
-// allowances, each off at 0, need only a bound on r and the gyro:
+// (Grid B, 2026-10-17: up to 42 deg in the snatch's first 3 s, no fault).
+// Three allowances, each off at 0, need only a bound on r or the gyro:
 //   - each Doppler's sigma takes, in quadrature, the most omega x r can be
 //     (rotLeverSigma): rot_lever_axial_m (along the nose) times the rate
 //     across the nose, plus rot_lever_radial_m (across it) times the whole
@@ -287,11 +287,19 @@
 //     within att_hold_s after one, keeps GNSS off the attitude and the gyro
 //     bias (the unaided twin's mask, for those epochs): the snatch and a
 //     tumble. Roll alone never holds it: a spinning rocket keeps its GNSS
-//     attitude.
-// With rot_after_apogee both act only once the flight computer has called
-// apogee: the drogue's snatch and the descent. The boost and the coast --
-// where a boost that weathercocks would be held, and where the votes and the
-// raw vote guard read the filter -- fly as without them.
+//     attitude;
+//   - an epoch whose rate across the nose reached rot_skip_rate_rps, and each
+//     within rot_skip_s after one, fuses nothing: it is closed as the
+//     vertical check closes one it drops (the clock's step stands). The hold
+//     lets the velocity take those epochs, and with them the error a wrong
+//     heading built into it through the snatch's large specific force -- the
+//     heading's best evidence of the flight, then never read. Skipped, that
+//     error is still in the velocity when the first epoch after the turn
+//     comes, and the update reads it through the covariance the turn built.
+// With rot_after_apogee all three act only once the flight computer has
+// called apogee: the drogue's snatch and the descent. The boost and the
+// coast -- where a boost that weathercocks would be held, and where the votes
+// and the raw vote guard read the filter -- fly as without them.
 //
 // Stopping. A sensor sim, a hole in the IMU longer than max_gap_s, a state
 // that is not finite, or (on the pad) one pad_reset_m from the flight
@@ -456,7 +464,9 @@ public:
         double   att_hold_rate_rps = 0.0;     // an epoch whose rate across the nose reached this, rad/s, and
         double   att_hold_s = 0.0;            //   every epoch within this long after one: GNSS held off the
                                               //   attitude and the gyro bias (RawGnssEKF::setAttHold)
-        bool     rot_after_apogee = false;    // both only after the flight computer's apogee call
+        double   rot_skip_rate_rps = 0.0;     // an epoch whose rate across the nose reached this, rad/s, and
+        double   rot_skip_s = 0.0;            //   every epoch within this long after one: nothing fused (dropped)
+        bool     rot_after_apogee = false;    // all three only after the flight computer's apogee call
     };
 
     // When the boost screen runs (Config::boost_screen).
@@ -621,12 +631,14 @@ public:
         float    vert_last_dv_down = 0.0f; //   the last one's: its vertical against the filter's, m/s
         float    vert_worst_dv_down = 0.0f;//   and the largest kept (|.|), m/s
         uint32_t vert_latched = 0;         // epochs dropped after a vertical drop, not yet back (vert_release_mps)
-        // the turning body (rot_lever_*, att_hold_*)
+        // the turning body (rot_lever_*, att_hold_*, rot_skip_*)
         float    rot_last_sigma_mps = 0.0f;   // the last epoch's rotation allowance on its Dopplers
         float    rot_max_sigma_mps = 0.0f;    //   the largest any epoch took
         float    rot_last_across_rps = 0.0f;  // the last epoch's largest rate across the nose
         uint32_t att_held = 0;             // epochs whose GNSS was held off the attitude (att_hold_rate_rps)
         bool     att_last_held = false;    //   the last one's
+        uint32_t rot_skipped = 0;          // epochs that fused nothing while the body turned (rot_skip_rate_rps)
+        bool     rot_last_skipped = false; //   the last one's
     };
 
     using Clock = int64_t (*)();
@@ -775,6 +787,8 @@ private:
         bool          in_flight = false;
         double        g_peak = 0.0;       // the largest |specific force| / g - 1 since the last epoch
         double        rot_sigma = 0.0;    // the turning body's allowance on its Dopplers (rot_lever_*), m/s
+        bool          rot_skip = false;   //   or nothing of it fused (rot_skip_rate_rps)
+        bool          rot_dropped = false;//   and its clock taken, so it closes as a dropped epoch
         int64_t       pr_k = 0;           // pr_period_s: the period of GPS time it falls in
         bool          screen = false;     // a boost epoch the boost screen judges (kJobScreen)
         bool          vcheck = false;     // the vertical check judges it if it can fit it (kJobScreen)
@@ -859,9 +873,11 @@ private:
     double        fit_last_te_ = -1.0;  // heading_fit_period_s: the last epoch the fit took (< 0: none this flight)
     bool          vert_latch_ = false;  // a vertical drop, and no epoch back within vert_release_mps since
     double        att_hold_until_ = -1.0e9;   // att_hold_s: epochs up to this instant are held (filter's clock)
+    double        rot_skip_until_ = -1.0e9;   // rot_skip_s: epochs up to this instant fuse nothing (filter's clock)
     bool          rotOn() const
     {
-        return cfg_.rot_lever_axial_m > 0.0 || cfg_.rot_lever_radial_m > 0.0 || cfg_.att_hold_rate_rps > 0.0;
+        return cfg_.rot_lever_axial_m > 0.0 || cfg_.rot_lever_radial_m > 0.0 || cfg_.att_hold_rate_rps > 0.0
+               || cfg_.rot_skip_rate_rps > 0.0;
     }
     bool          launch_seen_ = false; // a launch edge since the start (a restored flight has none)
     void          setFlightGate(bool full);
