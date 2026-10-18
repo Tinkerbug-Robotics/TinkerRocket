@@ -3,28 +3,42 @@
 downloaded, and on request the same log through the offline harness.
 
     score_v9.py RUN_DIR|FC_CONSOLE [--flight sim_rp5_0829 | --csv SENSORS_CSV --scenario JSON] [--blob REPLAY.bin]
-                [--log OC_LOG [--harness RAW_REPLAY_MOSAIC]] [--json OUT.json]
+                [--log OC_LOG [--harness RAW_REPLAY_MOSAIC]] [--json OUT.json] [--score-void]
 
-From the console alone (a TR_SIM_REPLAY_BLOB build of the mosaic-only image prints [REPLAY-NAV] 10 a second in flight):
+First, whether the run counts. VOID if the replay clock was not on the receiver's clock by file second 170 (as
+run_v9.sh judges); if the transmitter underran or fell short after the clock froze, or failed or stopped short of the
+file (hackrf.txt, tx_log.py: the sky late on the replayed IMU from then on); or if the 1PPS tag check judged any
+second over 200 us from the freeze's check to the landing (the filter's own time tags off the sky and the IMU: the
+driver's clock line lagging a slip). The freeze itself is checked against the 1PPS edge by the firmware and moved
+onto it when the line lagged ("RIG REPLAY clock: the freeze checked"). A VOID run's flight is not scored (no
+attitude, velocity, voters, OC log or harness numbers) unless --score-void asks for them, for diagnosis only.
+
+From the console alone (a TR_SIM_REPLAY_BLOB build of the mosaic-only image prints [REPLAY-NAV] 50 a second from
+launch to burnout, 10 a second after, at the navigation state's own instant, and [REPLAY-VOTE] at each change of a
+voter, the call or a guard):
   - the attitude error per phase, as the plan's section 4 defines it: e = 2 acos|q_est . q_true| (deg), p90, p99 and
     max for boost (T+0 to burnout), coast (to the true apogee) and descent (to the landing); the pitch error within
     2 s of the true apogee; the nose, heading and roll parts beside it;
   - the velocity and position errors per phase (the position from the flight computer's own pad reference, so its
     "up" is relative, as the [REPLAY] line's);
-  - each apogee voter (velocity, barometer, GPS, pitch), the call and the backstop: first vote, latency against the
-    true apogee, the true vertical velocity then, and any vote while the rocket still climbs faster than 2 m/s
-    (gate G5's hard bar); the vertical velocity estimate at the true apogee;
+  - each apogee voter (velocity, barometer, GPS, pitch), the call and the backstop, from the [REPLAY-VOTE] edges (a
+    vote can last 6 ms): first vote, latency against the true apogee, the true vertical velocity then, and any vote
+    while the rocket still climbs faster than 2 m/s (gate G5's hard bar); the vertical velocity estimate at the true
+    apogee. An image from before [REPLAY-VOTE] falls back to the 10 Hz samples, and G5 is then NOT judged: a
+    console-only G5 result from samples is never a pass;
   - the receiver's epochs' age and build, the filter's step and busy share, [CPU] and [LP] where the image has them,
     the loop and IMU rates -- pad, flight and ground apart;
   - the bias-corrected PPS tag check, the 1PPS line's drift, the driver's untimed epochs and drops;
-  - what the receiver tracked through each phase (the [RIG] C/N0 line), and the replay clock (VOID if it was not on
-    the receiver's clock by file second 170, as run_v9.sh judges).
+  - what the receiver tracked through each phase (the [RIG] C/N0 line), and the ionosphere: the set the image
+    carried (the rig sky's own, -DTR_SIM_REPLAY_GPS_IONO) and the one in use at launch, flagged when they differ.
 With --log, the OC's flight log too: the on-board filter's records (0x96, 10 Hz) on the same metrics, each voter's
 flag (NonSensor), the epoch age the filter recorded, and the receiver's own PVT (its SBF) against the truth with its
-clock drift (about +0.1 ppm on the rig) and its clock bias at ignition (how far the replayed IMU sits from the
-receiver's GPS time: at most 0.5 ms). With --harness, the log through the offline harness from the on-board filter's
-own start (extract.py --sbf --rig): the harness against the on-board records, and the aided filter against its unaided
-twin (att_gnss_off) by the plan's section 4 bars.
+clock drift (about +0.1 ppm on the rig) and its clock bias at ignition. With --harness, the log through the offline
+harness from the on-board filter's own start (extract.py --sbf --rig): the harness against the on-board records, and
+the aided filter against its unaided twin (att_gnss_off) by the plan's section 4 bars a run can be judged by: the
+attitude p90 per phase, the pitch within 2 s of the true apogee, the call's latency, the vertical velocity at the true
+apogee, G5's hard bar, and no boost/coast p90 more than 5 deg (descent 10) above the twin. Both twins start from the
+aided filter's state about 0.4 s before launch (the OC log has no pad), so this is GNSS's effect in flight only.
 
 Positions are only ever printed as errors; the console, the log and every intermediate stay in the run folder.
 """
@@ -44,12 +58,25 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "raw_replay"))
 import scorelib as S  # noqa: E402
+import tx_log  # noqa: E402
 from truth import Truth as RigTruth, edge_t, flight_files  # noqa: E402
 
 PHASES = ("boost", "coast", "descent")
 # plan section 4: a run passes a phase if p90(aided) <= max(p90(unaided) + delta, floor)
 BARS = {"boost": (1.0, 2.0), "coast": (2.0, 3.0), "descent": (3.0, 5.0)}
 CLIMB_MPS = 2.0                 # G5: no vote while the true vertical velocity is above this
+PITCH_NEAR_APOGEE_DEG = 2.0     # plan section 4: the pitch within 2 s of the true apogee <= unaided + this (max)
+LATENCY_S = 0.2                 #   the call's latency <= unaided + this (a run's: the median bar's)
+VZ_APOGEE_MPS, VZ_TWIN_MPS = 1.0, 0.5   # |vz at the true apogee| <= this, and <= unaided + that
+PRE_APOGEE_TWIN_DEG, DESCENT_TWIN_DEG = 5.0, 10.0   # the grid's: no run's boost/coast p90 this far above its twin
+# What the harness's twins compare: both start from the on-board aided filter's own state at the OC log's first
+# record (extract.py --rig), about 0.4 s before launch -- the OC records from launch, with a prelaunch ring -- so
+# the unaided twin flies from the aided filter's pad attitude and biases. The comparison is GNSS's effect in flight
+# only, not on the pad alignment (an on-target unaided image, TR_BENCH_ATT_GNSS_OFF, would be a separate rig run
+# with its own tracking noise; neither exists yet).
+TWIN_SCOPE = ("both twins start from the on-board aided filter's state ~0.4 s before launch (the OC log has no pad): "
+              "this is GNSS's effect in flight only, not on the pad alignment")
+FREEZE_T = -5.0                 # the replay clock freezes here (ReplayClock::Config::arm_by_s)
 VOID_BY_FILE_S = 170.0          # run_v9.sh's: the replay clock on the receiver's by this file second
 VOTERS = ("vel", "baro", "gps", "pitch")
 LEAP_S = 18
@@ -64,6 +91,14 @@ RX_NAV = re.compile(r"\[REPLAY-NAV\] t=" + F + r"(\(pad, no clock\))? st=(\d+) e
                     r"call=(\d) backstop=(\d) burnout=(\d) gps_admitted=(\d) guard=(\d) mach=(\d)")
 RX_REPLAY = re.compile(r"\[REPLAY\] t=" + F + r"(\(pad, no clock\))? phase=(\d) clock=(\d) fixes=(\d+) \(last t=" + F
                        + r", outside=(\d+), restarts=(\d+)\) ekf=(\d)")
+RX_VOTE = re.compile(r"\[REPLAY-VOTE\] t=" + F + r"(\(pad, no clock\))? st=(\d+) votes=(\d)(\d)(\d)(\d) call=(\d) "
+                     r"backstop=(\d) burnout=(\d) gps_admitted=(\d) guard=(\d) mach=(\d) vote=(\d) unprinted=(\d+)")
+RX_CHECKED = re.compile(r"RIG REPLAY clock: the freeze checked against the 1PPS edge of the second at t ([-+]?\d+) s: "
+                        r"residual ([-+]?\d+) us, (MOVED onto the edge by|kept, the edge within) ([-+]?\d+) us; PPS "
+                        r"tag check so far (\d+) judged, (\d+) over (\d+) us")
+RX_UNCHECKED = re.compile(r"RIG REPLAY clock: the freeze NOT checked against the 1PPS .*?PPS tag check so far (\d+) "
+                          r"judged, (\d+) over (\d+) us")
+RX_IONO = re.compile(r"RIG REPLAY ionosphere: (.*)")
 RX_CLOCK = re.compile(r"RIG REPLAY clock: (.*?) \((?:the receiver's timed epoch|a fix) at t " + F + r" s\)")
 RX_STATE = re.compile(r"\[STATE\] (\S+) -> (\S+)")
 RX_BURNOUT = re.compile(r"\[GUID\] Burnout detected at T\+(\d+) ms")
@@ -129,9 +164,16 @@ class Console:
     def __init__(self, path):
         raw = open(path, "rb").read().decode("utf-8", "replace")
         self.lines = []
+        self.reboot_ms = None   # the last stamp before a second boot: the console is read to there
         last = None
+        boots = 0
         for ln in raw.splitlines():
             ln = ANSI.sub("", ln).rstrip()
+            if "ESP-ROM:" in ln:
+                boots += 1
+                if boots > 1:
+                    self.reboot_ms = last
+                    break
             m = STAMP.match(ln)
             if m:
                 last = int(m.group(1))
@@ -145,7 +187,8 @@ class Console:
         self.raw5, self.navage, self.task, self.mosaic, self.rawdrv = [], [], [], [], []
         self.ppschk, self.ppsline, self.pps, self.link, self.rig = [], [], [], [], []
         self.cpu, self.lp, self.timing, self.sensor, self.gap = [], [], [], [], []
-        self.version = self.name = None
+        self.version = self.name = self.ionosphere = self.freeze_check = None
+        self.votes_edges = []
         self.setups = 0
         self.cold_start = False
         self.apogee = None
@@ -157,6 +200,22 @@ class Console:
                 g = m.groups()
                 nav.append([ms, fl(g[0]), g[1] is None, int(g[2]), int(g[3]), int(g[4]), *vec(g[5]), *vec(g[6]),
                             *vec(g[7]), *vec(g[8]), fl(g[9]), *[int(x) for x in g[10:20]]])
+                continue
+            m = RX_VOTE.search(msg)
+            if m:
+                g = m.groups()
+                self.votes_edges.append((ms, fl(g[0]), g[1] is None, int(g[2]), [int(x) for x in g[3:14]], int(g[14])))
+                continue
+            m = RX_CHECKED.search(msg)
+            if m:
+                g = m.groups()
+                self.freeze_check = {"checked": True, "ms": ms, "t": fl(g[0]), "residual_us": int(g[1]),
+                                     "moved": g[2].startswith("MOVED"), "move_us": int(g[3]), "judged": int(g[4]),
+                                     "over": int(g[5])}
+                continue
+            m = RX_UNCHECKED.search(msg)
+            if m:
+                self.freeze_check = {"checked": False, "ms": ms, "judged": int(m.group(1)), "over": int(m.group(2))}
                 continue
             m = RX_REPLAY.search(msg)
             if m:
@@ -204,8 +263,12 @@ class Console:
                     m = rx.search(msg)
                     if m:
                         self.events.append((ms, kind, fl(m.group(1)), msg))
+                m = RX_IONO.search(msg)
+                if m and self.ionosphere is None:
+                    self.ionosphere = m.group(1).strip()
                 for key in ("[LAUNCH]", "transonic lockout", "[BARO] Judged stuck", "NO NAVIGATION FILTER",
-                            "[RAWGNSS] the receiver's week", "[PADCAL]", "NOT restarted", "restarted from"):
+                            "[RAWGNSS] the receiver's week", "[PADCAL]", "NOT restarted", "restarted from",
+                            "on a real sky"):
                     if key in msg:
                         self.events.append((ms, key.strip("[]"), None, msg))
                 m = RX_VERSION.search(msg)
@@ -363,20 +426,70 @@ def score_votes(t, flags, st, true_vu, call_t=None):
     return out
 
 
-def console_votes(con, st):
-    n = con.nav
-    if n is None:
+EDGE_FLAGS = ("vel", "baro", "gps", "pitch", "call", "backstop", "burnout", "gps_admitted", "guard", "mach", "vote")
+
+
+def score_vote_edges(edges, st, call_t=None):
+    """Each voter from the [REPLAY-VOTE] lines: the full state at each change, at the replay's time, so a vote of a
+    few milliseconds is there and its first instant is the loop's. A vote is climbing (G5's hard bar) when the true
+    vertical velocity anywhere in it, after T+0, is above CLIMB_MPS. Complete only when no change went unprinted."""
+    rows = [(t, f) for _ms, t, have, _st, f, _u in edges if have]
+    out = {"true_apogee": st.apogee, "from": "the [REPLAY-VOTE] edges",
+           "complete": all(u == 0 for *_x, u in edges), "unprinted": int(sum(u for *_x, u in edges))}
+    if not rows:
         return None
-    m = n["have_t"] > 0
-    t = n["t"][m]
-    true_vu = np.interp(t, st.t, -st.vel[:, 2])
-    flags = {"vel": n["v_vel"][m], "baro": n["v_baro"][m], "gps": n["v_gps"][m], "pitch": n["v_pitch"][m],
-             "call": n["call"][m], "backstop": n["backstop"][m], "guard": n["guard"][m], "mach": n["mach"][m],
-             "gps_admitted": n["gps_admitted"][m]}
+    t = np.array([r[0] for r in rows])
+    true_vu = -st.vel[:, 2]
+    for i, k in enumerate(EDGE_FLAGS):
+        on = np.array([r[1][i] for r in rows], bool)
+        iv = intervals(t, on)
+        climbing = []
+        for a, b in iv:
+            lo, hi = max(a, 0.0), (b if b is not None else st.t[-1])
+            if hi < lo:
+                continue
+            w = (st.t >= lo) & (st.t <= hi)
+            vmax = max(float(np.interp(lo, st.t, true_vu)), float(true_vu[w].max()) if w.any() else -1e9)
+            if vmax > CLIMB_MPS:
+                kk = np.flatnonzero(w & (true_vu > CLIMB_MPS))
+                climbing.append(lo if np.interp(lo, st.t, true_vu) > CLIMB_MPS or not kk.size else float(st.t[kk[0]]))
+        fr = first_rise(t, on)
+        out[k] = {"first": fr, "latency": None if fr is None else fr - st.apogee,
+                  "true_vu_at_first": None if fr is None else float(np.interp(fr, st.t, true_vu)),
+                  "on": iv[:6], "climbing_samples": len(climbing), "first_climbing": climbing[0] if climbing else None}
+    if call_t is not None:
+        out["call_exact"] = {"t": call_t, "latency": call_t - st.apogee,
+                             "true_vu": float(np.interp(call_t, st.t, true_vu))}
+    out["g5_judged"] = out["complete"]
+    return out
+
+
+def console_votes(con, st):
     call_t = con.t_of_ms(con.apogee[0]) if con.apogee else None
-    out = score_votes(t, flags, st, true_vu, call_t)
+    out = None
+    if con.votes_edges:
+        out = score_vote_edges(con.votes_edges, st, call_t)
+    if out is None:
+        # an image from before [REPLAY-VOTE]: the 10 Hz samples, where a vote of a few milliseconds can fall between
+        # two -- G5's hard bar and the latencies are not judged from them
+        n = con.nav
+        if n is None:
+            return None
+        m = n["have_t"] > 0
+        t = n["t"][m]
+        true_vu = np.interp(t, st.t, -st.vel[:, 2])
+        flags = {"vel": n["v_vel"][m], "baro": n["v_baro"][m], "gps": n["v_gps"][m], "pitch": n["v_pitch"][m],
+                 "call": n["call"][m], "backstop": n["backstop"][m], "guard": n["guard"][m], "mach": n["mach"][m],
+                 "gps_admitted": n["gps_admitted"][m]}
+        out = score_votes(t, flags, st, true_vu, call_t)
+        out["from"] = "the [REPLAY-NAV] samples (10 a second): G5 and the latencies not judged"
+        out["g5_judged"] = False
     if con.apogee:
         out["call_voters"] = dict(zip(("vel", "baro", "gps", "pitch", "backstop"), con.apogee[1]))
+    # G5's hard bar on the console: no call, no raw velocity and no raw pitch vote while climbing
+    if out.get("g5_judged"):
+        early = {k: out[k]["climbing_samples"] for k in ("vel", "pitch", "call") if out.get(k)}
+        out["g5_hard"] = {"early": early, "pass": not any(early.values())}
     return out
 
 
@@ -523,6 +636,107 @@ def score_clock(con, run):
     return out
 
 
+def score_sky_time(con, st, run, run_dir, clock):
+    """Whether the sky kept to the replayed IMU's time, and the filter's time tags to both, through the flight.
+      - The transmitter: an underrun or host shortfall after the clock froze (hackrf.txt on the file's timeline,
+        tx_log.py) makes the sky late on the replayed IMU for the rest of the file; a transmitter that failed or
+        stopped short of the file. VOID.
+      - The freeze: the firmware checks it against the 1PPS edge of its own second ("RIG REPLAY clock: the freeze
+        checked", ReplayClock::onTagCheck) and moves it onto the edge when the driver's clock line had not yet
+        followed a slip; so from the freeze on the replayed IMU is on the sky's time.
+      - The filter's own tags: the driver's line follows a late sky only after about a minute, and while it lags,
+        its tags -- the filter's epochs' instants -- are that far off the sky and the IMU. Any second the PPS tag
+        check judges over 200 us from the freeze's check to the landing is such a second: VOID. The counts come
+        from the freeze-check line (the driver's counts at that moment) and the first 5 s [RAWGNSS] mosaic-G5 line at
+        or after the landing; without the freeze-check line (an image from before it, or no check came), from the
+        last 5 s line at least a second before the freeze, so the seconds around it are judged too.
+    Seconds over 200 us between the clock's arming and the freeze only mark the run: the freeze's check took the
+    edge. Each mark is written beside the scores."""
+    out = {}
+    pad_s = float((run or {}).get("pad_s", 180.0))
+    armed_t = clock.get("armed_t")
+    hk = os.path.join(run_dir, "hackrf.txt")
+    if os.path.exists(hk):
+        txj = os.path.join(run_dir, "tx.json")
+        prev = json.load(open(txj)) if os.path.exists(txj) else {}
+        tx = tx_log.judge(tx_log.parse(open(hk, errors="replace").read()),
+                          None if armed_t is None else armed_t + pad_s, pad_s + FREEZE_T, pad_s + st.landed,
+                          prev.get("exit_status"), prev.get("stopped_by_script", bool((run or {}).get("void"))))
+        out["transmitter"] = {k: tx[k] for k in ("verdict", "void_why", "degraded_why", "underruns", "longest_bytes",
+                                                 "host_shortfalls", "sent_gb", "file_gb", "complete", "exit_status",
+                                                 "events")}
+    # the PPS tag check's cumulative counts (over, judged) on the replay's time
+    rows = [(con.t_of_ms(ms), int(g[11]), int(g[12])) for ms, g in con.mosaic if con.t_of_ms(ms) is not None]
+    fc = con.freeze_check
+    void, marks = [], []
+    pps = {"freeze_check": fc}
+    if fc is not None:
+        base = (con.t_of_ms(fc["ms"]), fc["over"], fc["judged"])
+        if not fc["checked"]:
+            marks.append("the freeze was NOT checked against the 1PPS edge (no check of a second from the freeze on "
+                         "by t -2 s): the replayed IMU sits wherever the line's tags put it")
+        elif fc["moved"]:
+            marks.append(f"the freeze MOVED {fc['move_us']:+d} us onto the 1PPS edge (the driver's line had not "
+                         f"followed a slip before it): the replayed IMU is on the sky's time")
+    else:
+        before = [x for x in rows if x[0] <= FREEZE_T - 1.0]
+        base = before[-1] if before else None
+        marks.append("no freeze-check line (an image from before it): the seconds from the 5 s line before the freeze "
+                     "are judged")
+    after = [x for x in rows if x[0] >= st.landed]
+    end = after[0] if after else (rows[-1] if rows else None)
+    armed = [x for x in rows if armed_t is not None and x[0] >= armed_t]
+    a = armed[0] if armed else None
+    pps.update({"at_arming": a, "at_freeze": base, "at_landing": end})
+    if base is not None and end is not None and end[0] is not None and base[0] is not None and end[0] >= base[0]:
+        pps["over_after_freeze"] = end[1] - base[1]
+        pps["judged_after_freeze"] = end[2] - base[2]
+    if a is not None and base is not None:
+        pps["over_before_freeze"] = max(0, base[1] - a[1])
+    out["pps_tag_check"] = pps
+    if con.reboot_ms is not None:
+        tr = con.t_of_ms(con.reboot_ms)
+        out["reboot_t"] = tr
+        if tr is None or tr < st.landed:
+            void.append(f"the FC booted again at t {'?' if tr is None else '%+.1f' % tr} s, before the landing: the "
+                        f"console is read to there")
+        else:
+            marks.append(f"the FC booted again at t {tr:+.1f} s, after the landing: the console is read to there")
+    if out.get("transmitter", {}).get("verdict") == "VOID":
+        void += out["transmitter"]["void_why"]
+    if out.get("transmitter", {}).get("verdict") == "DEGRADED":
+        marks += out["transmitter"]["degraded_why"]
+    if pps.get("over_after_freeze"):
+        void.append(f"the 1PPS tag check judged {pps['over_after_freeze']} second(s) over 200 us between the freeze "
+                    f"and the landing: the filter's own time tags off the sky and the replayed IMU then (the driver's "
+                    f"clock line lagging a slip)")
+    elif "over_after_freeze" not in pps:
+        marks.append("the 1PPS tag check could not be read across the flight (no 5 s [RAWGNSS] mosaic-G5 lines)")
+    elif not pps.get("judged_after_freeze"):
+        marks.append("the 1PPS tag check judged no second between the freeze and the landing")
+    if pps.get("over_before_freeze"):
+        marks.append(f"the 1PPS tag check judged {pps['over_before_freeze']} second(s) over 200 us while the clock "
+                     f"followed it (none from the freeze on)")
+    out["void"], out["void_why"], out["marks"] = bool(void), void, marks
+    return out
+
+
+def score_ionosphere(con, receiver):
+    """Which GPS ionosphere the filter built the rig's sky with: the image's boot line (the sky's own set carried,
+    -DTR_SIM_REPLAY_GPS_IONO, or none) and the set in use at launch (the [RAWGNSS] mosaic-G5 line). Only the
+    pseudoranges feel it: a few metres of the absolute position; the Doppler and the attitude do not."""
+    img = con.ionosphere
+    at = ((receiver or {}).get("at_launch") or {}).get("iono")
+    out = {"image": img, "at_launch": at, "sky_set": bool(img and img.startswith("the rig sky's own"))}
+    if not img:
+        out["flag"] = "an image from before the RIG REPLAY ionosphere line: the set in use may be another day's"
+    elif not out["sky_set"]:
+        out["flag"] = "the image carried no sky set: the filter built the rig's sky without a Klobuchar"
+    elif not at or not at.startswith("the receiver's GPSIon"):
+        out["flag"] = f"the sky's set was carried but the set in use at launch was '{at}'"
+    return out
+
+
 def score_events(con, st):
     """The flight computer's own events on the replay's time."""
     out = []
@@ -639,8 +853,25 @@ def phase_metrics(series, st):
                      "vz": pstats(ev[w, 2]), "pos_h": pstats(np.hypot(ep[w, 0], ep[w, 1])), "pos_v": pstats(ep[w, 2])}
     w = np.abs(tt - st.apogee) <= 2.0
     out["pitch_near_apogee"] = pstats(pitch[w])
+    if tt.size >= 2 and tt[0] <= st.apogee <= tt[-1]:
+        # the filter's vertical velocity at the true apogee (up-positive; the truth's is zero there)
+        out["vz_at_apogee"] = float(-np.interp(st.apogee, tt, series["vel"][m][:, 2]))
     out["unhealthy_samples"] = int((~series["ok"][(t >= 0.0) & (t <= st.landed)]).sum())
     return out
+
+
+def harness_g5(q, st):
+    """G5's hard bar on a harness arm's own quorum (its events JSON, every step): no call, no raw velocity vote and
+    no raw pitch vote while the true vertical velocity is above CLIMB_MPS, after its launch."""
+    true_vu = -st.vel[:, 2]
+    launch = q.get("launch_t") if q.get("launch_t") is not None else 0.0
+    early = {}
+    for k in ("vel", "pitch"):
+        ons = [x for x in ((q.get("votes") or {}).get(k) or {}).get("on", []) if x is not None and x >= launch]
+        early[k] = [x for x in ons if np.interp(x, st.t, true_vu) > CLIMB_MPS]
+    call = q.get("apogee_t")
+    early["call"] = [call] if call is not None and np.interp(call, st.t, true_vu) > CLIMB_MPS else []
+    return {"early": early, "pass": not any(early.values())}
 
 
 def run_harness(binary, log, blob, outdir, recs, base, st):
@@ -672,6 +903,7 @@ def run_harness(binary, log, blob, outdir, recs, base, st):
         res[arm]["quorum"] = {k: q.get(k) for k in ("launch_t", "burnout_t", "gnss_admitted_t", "guard_latch_t",
                                                     "apogee_t", "backstop_t") if k in q}
         res[arm]["quorum"]["at_call"] = q.get("at_call")
+        res[arm]["g5_hard"] = harness_g5(q, st) if q else None
         res[arm]["exit"] = p.returncode
     # the plan's bar per phase: p90(aided) <= max(p90(unaided) + delta, floor)
     res["acceptance"] = {}
@@ -683,6 +915,35 @@ def run_harness(binary, log, blob, outdir, recs, base, st):
             bar = max(u["p90"] + d, floor)
             res["acceptance"][ph] = {"aided_p90": a["p90"], "unaided_p90": u["p90"], "bar": bar,
                                      "pass": a["p90"] <= bar}
+    # the per-run bars beside them (plan section 4, as sim_tables.py words them for one run)
+    A, U = res["aided"], res["unaided"]
+    pa, pu = A.get("pitch_near_apogee"), U.get("pitch_near_apogee")
+    if pa and pu:
+        res["acceptance"]["pitch_near_apogee"] = {"aided_max": pa["max"], "unaided_max": pu["max"],
+                                                  "bar": pu["max"] + PITCH_NEAR_APOGEE_DEG,
+                                                  "pass": pa["max"] <= pu["max"] + PITCH_NEAR_APOGEE_DEG}
+    ca, cu = A["quorum"].get("apogee_t"), U["quorum"].get("apogee_t")
+    if ca is not None or cu is not None:
+        la = None if ca is None else ca - st.apogee
+        lu = None if cu is None else cu - st.apogee
+        res["acceptance"]["latency"] = {"aided_s": la, "unaided_s": lu,
+                                        "bar": None if lu is None else lu + LATENCY_S,
+                                        "pass": la is not None and (lu is None or la <= lu + LATENCY_S)}
+    va, vu = A.get("vz_at_apogee"), U.get("vz_at_apogee")
+    if va is not None and vu is not None:
+        bar = min(VZ_APOGEE_MPS, abs(vu) + VZ_TWIN_MPS)
+        res["acceptance"]["vz_at_apogee"] = {"aided_abs": abs(va), "unaided_abs": abs(vu), "bar": bar,
+                                             "pass": abs(va) <= bar}
+    # the grid's per-run limits: no pre-apogee p90 more than 5 deg above its twin, no descent p90 more than 10
+    for key, phs, lim in (("pre_apogee_twin", ("boost", "coast"), PRE_APOGEE_TWIN_DEG),
+                          ("descent_twin", ("descent",), DESCENT_TWIN_DEG)):
+        gaps = {ph: (A[ph]["att"]["p90"] - U[ph]["att"]["p90"]) for ph in phs
+                if (A.get(ph) or {}).get("att") and (U.get(ph) or {}).get("att")}
+        if gaps:
+            res["acceptance"][key] = {"gap_p90": gaps, "limit": lim, "pass": max(gaps.values()) <= lim}
+    if A.get("g5_hard") is not None:
+        res["acceptance"]["g5_hard"] = A["g5_hard"]
+    res["scope"] = TWIN_SCOPE
     # the twins alike to the last digit: no GNSS reached the attitude (no ephemeris, no time, a dead sky)
     res["twins_identical"] = all(
         (res["aided"].get(ph) or {}).get("att") == (res["unaided"].get(ph) or {}).get("att") for ph in PHASES)
@@ -704,7 +965,35 @@ def report(r):
     w(f"replay clock: {'on the receiver at t %+.2f s (file second %.1f)' % (c['armed_t'], c['armed_file_s']) if c['armed_t'] is not None else 'never'}"
       f"; fixes {c.get('fixes')} outside {c.get('outside')} restarts {c.get('restarts')}"
       f"{'  ** VOID: ' + c['void_why'] + ' **' if c['void'] else ''}")
-    w(f"cold start: {'yes' if r['console']['cold_start'] else 'NO'}, receiver set up {r['console']['setups']} times")
+    io = r.get("ionosphere") or {}
+    w(f"cold start: {'yes' if r['console']['cold_start'] else 'NO'}, receiver set up {r['console']['setups']} times; "
+      f"ionosphere: {io.get('image') or '?'}; in use at launch: {io.get('at_launch') or '?'}"
+      f"{'  ** ' + io['flag'] + ' **' if io.get('flag') else ''}")
+    sk = r.get("sky_time") or {}
+    tx = sk.get("transmitter")
+    if tx:
+        w(f"transmitter: {tx['verdict']}, {tx['underruns']} underruns (longest {tx['longest_bytes']} B), "
+          f"{tx.get('host_shortfalls')} host shortfalls, sent {tx['sent_gb']} of {tx['file_gb']} GB, exit "
+          f"{tx['exit_status']}")
+        for e in tx["events"]:
+            w(f"  {e.get('kind', 'underrun')} +{e['added']} at file second {e['file_s_from']:.1f}-"
+              f"{e['file_s_to']:.1f}, up to {e['slip_ms_max']:.2f} ms: {e['window']}")
+    p = sk.get("pps_tag_check") or {}
+    if p:
+        fc = p.get("freeze_check") or {}
+        fz = ("none (an image from before it)" if not fc else "NOT checked" if not fc.get("checked") else
+              f"second t {fc['t']:+.0f}: residual {fc['residual_us']:+d} us, "
+              f"{'MOVED %+d us onto the edge' % fc['move_us'] if fc['moved'] else 'kept'}")
+        w(f"the freeze against the 1PPS edge: {fz}")
+        w(f"1PPS tag check: over 200 us before the freeze {p.get('over_before_freeze', '-')}, from it to the landing "
+          f"{p.get('over_after_freeze', '-')} (of {p.get('judged_after_freeze', '-')} judged)")
+    for m in sk.get("marks", []):
+        w(f"  marked: {m}")
+    if not r.get("scored", True):
+        w(f"\n** VOID: the flight is not scored (attitude, velocity, the voters, the OC log, the harness): "
+          f"{c['void_why']}. --score-void scores it for diagnosis only. **")
+    elif c["void"]:
+        w("\n** A VOID run scored for diagnosis only (--score-void): no number below is a result **")
     w("\n## Events (replay time, s from ignition)")
     for e in r["events"]:
         w(f"  {e['t']:+9.3f}  {e['what']}" if e["t"] is not None else f"      ?     {e['what']}")
@@ -721,7 +1010,9 @@ def report(r):
           f"{fmt((nav.get('pad') or {}).get('att'))}, heading {fmt((nav.get('pad') or {}).get('heading'))}")
     v = r.get("votes")
     if v:
-        w(f"\n## Apogee voters (console, 10 Hz; the true apogee T+{v['true_apogee']:.2f})")
+        w(f"\n## Apogee voters ({v.get('from', 'console')}; the true apogee T+{v['true_apogee']:.2f})")
+        if v.get("from", "").startswith("the [REPLAY-VOTE]") and not v.get("complete", True):
+            w(f"  !! {v['unprinted']} changes went unprinted (more than 50 a second): G5 not judged")
         for k in VOTERS + ("call", "backstop", "guard", "mach"):
             x = v.get(k)
             if not x:
@@ -729,6 +1020,12 @@ def report(r):
             fr = "never" if x["first"] is None else f"T+{x['first']:.2f} ({x['latency']:+.2f} s, true vz {x['true_vu_at_first']:+.2f})"
             w(f"  {k:9s} first {fr}; votes while climbing > {CLIMB_MPS:g} m/s: {x['climbing_samples']}"
               f"{'' if x['first_climbing'] is None else ' (first T+%.2f)' % x['first_climbing']}")
+        if v.get("g5_hard"):
+            g = v["g5_hard"]
+            w(f"  G5 hard bar (no call, raw velocity or pitch vote while climbing > {CLIMB_MPS:g} m/s): "
+              f"{'PASS' if g['pass'] else 'FAIL'} {g['early']}")
+        elif v:
+            w("  G5 hard bar: not judged from this console")
         if v.get("call_exact"):
             ce = v["call_exact"]
             w(f"  call (exact, [PYRO]) T+{ce['t']:.3f}: {ce['latency']:+.3f} s from the true apogee, true vz "
@@ -786,13 +1083,36 @@ def report(r):
                 w(f"    {ph:8s} n {x['n']:5d}  pos h {fmt(x['pos_h'])} m  v {fmt(x['pos_v'])} m  vel {fmt(x['vel'])} m/s")
     hz = r.get("harness")
     if hz:
-        w("\n## Offline harness from the on-board start (aided = as flown; unaided = att_gnss_off)")
+        w("\n## Offline harness from the on-board start (aided = as flown; unaided = att_gnss_off; GNSS's in-flight "
+          "effect only)")
         for ph in PHASES:
             a, u = hz["aided"][ph], hz["unaided"][ph]
             acc = hz["acceptance"].get(ph)
             w(f"  {ph:8s} aided {fmt(a['att'])}  unaided {fmt(u['att'])}  -> "
               f"{'PASS' if acc and acc['pass'] else 'FAIL' if acc else '-'}"
               f"{'' if not acc else ' (bar %.2f)' % acc['bar']}")
+        acc = hz["acceptance"]
+        if "pitch_near_apogee" in acc:
+            x = acc["pitch_near_apogee"]
+            w(f"  pitch within 2 s of the true apogee (max): aided {x['aided_max']:.2f}, unaided {x['unaided_max']:.2f} "
+              f"deg -> {'PASS' if x['pass'] else 'FAIL'} (bar {x['bar']:.2f})")
+        if "latency" in acc:
+            x = acc["latency"]
+            f2 = lambda v: "none" if v is None else f"{v:+.3f}"  # noqa: E731
+            w(f"  the call's latency: aided {f2(x['aided_s'])} s, unaided {f2(x['unaided_s'])} s -> "
+              f"{'PASS' if x['pass'] else 'FAIL'}")
+        if "vz_at_apogee" in acc:
+            x = acc["vz_at_apogee"]
+            w(f"  |vz| at the true apogee: aided {x['aided_abs']:.2f}, unaided {x['unaided_abs']:.2f} m/s -> "
+              f"{'PASS' if x['pass'] else 'FAIL'} (bar {x['bar']:.2f})")
+        if "g5_hard" in acc:
+            w(f"  G5 hard bar (aided): {'PASS' if acc['g5_hard']['pass'] else 'FAIL'} {acc['g5_hard']['early']}")
+        for key, what in (("pre_apogee_twin", "boost/coast p90 above the twin"), ("descent_twin", "descent p90 above the twin")):
+            if key in acc:
+                x = acc[key]
+                gaps = ", ".join(f"{ph} {v:+.2f}" for ph, v in x["gap_p90"].items())
+                w(f"  {what} (<= {x['limit']:g} deg): {gaps} -> {'PASS' if x['pass'] else 'FAIL'}")
+        w(f"  scope: {TWIN_SCOPE}")
         if hz.get("twins_identical"):
             w("  !! aided and unaided are identical: no GNSS reached the attitude in the harness (its stderr says why)")
         for arm in ("aided", "unaided"):
@@ -814,6 +1134,8 @@ def main(argv=None):
     ap.add_argument("--log", help="the OC's flight log of this run (.bin), if downloaded")
     ap.add_argument("--harness", help="raw_replay_mosaic (tools/raw_replay's build): the log through the offline harness")
     ap.add_argument("--json", help="write the scores here (default: score_v9.json in the run folder)")
+    ap.add_argument("--score-void", action="store_true",
+                    help="score a VOID run's flight anyway, for diagnosis only (its numbers are no result)")
     args = ap.parse_args(argv)
 
     run_dir = args.run if os.path.isdir(args.run) else os.path.dirname(os.path.abspath(args.run))
@@ -835,15 +1157,23 @@ def main(argv=None):
         blob = cand if os.path.exists(cand) else None
     r = {"flight": flight, "run": run,
          "console": {"version": con.version, "flight": con.name, "cold_start": con.cold_start, "setups": con.setups,
-                     "t_offset_s": con.t_off},
+                     "t_offset_s": con.t_off, "ionosphere": con.ionosphere, "freeze_check": con.freeze_check},
          "clock": score_clock(con, run), "events": score_events(con, st)}
+    r["sky_time"] = score_sky_time(con, st, run, run_dir, r["clock"])
+    if r["sky_time"]["void"]:
+        r["clock"]["void"] = True
+        r["clock"]["void_why"] = "; ".join(x for x in [r["clock"]["void_why"]] + r["sky_time"]["void_why"] if x)
     if con.name and flight and flight.replace("sim_", "") not in con.name:
         r["warning"] = f"the image carried '{con.name}', not {flight}"
-    r["nav"] = score_nav(con, st, rt)
-    r["votes"] = console_votes(con, st)
+    # a VOID run's flight is not scored: the sky, the IMU or the filter's tags were off one another
+    r["scored"] = not r["clock"]["void"] or args.score_void
+    if r["scored"]:
+        r["nav"] = score_nav(con, st, rt)
+        r["votes"] = console_votes(con, st)
     r["timing"] = score_timing(con, st)
     r["receiver"] = score_receiver(con, st)
-    if args.log:
+    r["ionosphere"] = score_ionosphere(con, r["receiver"])
+    if args.log and r["scored"]:
         edge = edge_t(csv, scen, blob)
         r["log"], recs, base = score_log(args.log, st, rt, edge)
         if args.harness:

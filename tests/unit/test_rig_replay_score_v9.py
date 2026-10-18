@@ -71,7 +71,9 @@ def flight():
     return cols, t_apo, t_land
 
 
-def console(cols, t_apo, t_land):
+def console(cols, t_apo, t_land, early_in_samples=True, pps=((-20.0, 0, 5), (5.0, 0, 30)),
+            iono_at_launch="none (0 sets)", extra=()):
+    """The console; `pps` the 5 s lines' (t, over, judged) PPS tag check counts, `extra` lines as (t, text)."""
     t, q = cols["t_s"], np.stack([cols[k] for k in ("qw", "qx", "qy", "qz")], axis=1)
     off = np.array([math.cos(math.radians(ERR_DEG) / 2), 0.0, math.sin(math.radians(ERR_DEG) / 2), 0.0])
 
@@ -91,8 +93,10 @@ def console(cols, t_apo, t_land):
          f"I ({ms(2.1)}) FC: [GUID] Burnout detected at T+2050 ms",
          f"I ({ms(t_apo + 0.6)}) FC: [PYRO] Apogee detected at t={ms(t_apo + 0.6)} ms (vel=1 baro=0 gps=0 pitch=1 backstop=0)",
          f"I ({ms(t_land + 4)}) FC: [STATE] INFLIGHT -> LANDED"]
+    for tt, text in extra:
+        L.append(f"I ({ms(tt)}) {text}")
     # the 5 s lines, one on the pad and one in flight (the firmware's formats, made-up numbers)
-    for tt, age in ((-20.0, 57), (5.0, 81)):
+    for (tt, over, judged), age in zip(pps, (57, 81)):
         L.append(f"I ({ms(tt)}) FC: [RAWGNSS] running (starts 1, stops 0, last 0) | imu 486/s, step 552 us (max 2168) "
                  f"| epochs 747: applied 242, no time 504, idle 0, stale {0 if tt < 0 else 3} | last: 11 meas, pr 0+0 "
                  f"rej, rr 11+0 rej, age {age} ms, build 20585 us, update 6019 us (max 43711/8588) | eph 11 sats, 0 "
@@ -108,8 +112,9 @@ def console(cols, t_apo, t_land):
         L.append(f"I ({ms(tt)}) FC: [RAWGNSS] mosaic-G5: gnss_aided 1, baro_aided 1 | fused 10.0 Hz (100 ms grid), cap "
                  f"16 sats | epochs 747 seen: 504 untimed, 1395 off the grid, 0 queue drops, 0 sats capped out | "
                  f"tracked 11, 0 without an ephemeris | eph 11 sats, 11 of 128 store entries, 0 blocks refused, 0 nav "
-                 f"queue drops | imu ring drops 0, gaps bridged 0 | PPS tag max 32 us, 0 over 200 of 5 judged (20 "
-                 f"settling, 0 edges late) | iono none (0 sets) | pad datum the raw filter's, 483 fixes | GNSS log "
+                 f"queue drops | imu ring drops 0, gaps bridged 0 | PPS tag max 32 us, {over} over 200 of {judged} "
+                 f"judged (20 settling, 0 edges late) | iono {iono_at_launch} | pad datum the raw filter's, 483 fixes "
+                 f"| GNSS log "
                  f"DETAILED | in flight: restarts 0 of 3, raw votes cast, transonic lockout off | flight task stack "
                  f"free 11688 B")
         L.append(f"I ({ms(tt)}) GNSS: [RIG] tracked: GPS L1CA {5 if tt < 0 else 4} (C/N0 med 37.5 max 39.5) | GAL E1 4 "
@@ -134,7 +139,7 @@ def console(cols, t_apo, t_land):
         qe = qmul(q[k], off)
         vu = -cols["vd_mps"][k]
         h = -cols["pd_m"][k]
-        v_vel = int(t_apo + 0.3 <= tt or abs(tt - 5.0) < 0.05)   # one early vote at T+5, climbing
+        v_vel = int(t_apo + 0.3 <= tt or (early_in_samples and abs(tt - 5.0) < 0.05))   # one early vote at T+5
         v_baro = int(tt >= t_apo + 0.8)
         v_pitch = int(tt >= t_apo + 0.5)
         call = int(tt >= t_apo + 0.6)
@@ -237,6 +242,164 @@ class ScoreV9ConsoleTest(unittest.TestCase):
         con.clock = [(1000, "MISSED (the first fix came after the pad)", 3.0)]
         self.assertTrue(score_v9.score_clock(con, None)["void"])
 
+
+
+def vote_edges(t_apo):
+    """[REPLAY-VOTE] lines: a velocity vote of 6 ms at T+5.003, between two 10 Hz samples, then the votes as the
+    samples have them (the call, the pitch, the barometer after the true apogee)."""
+    def line(tt, vel, baro, pitch, call):
+        return (tt, f"FC: [REPLAY-VOTE] t={tt:+.4f} st=3 votes={vel}{baro}0{pitch} call={call} backstop=0 burnout=1 "
+                    f"gps_admitted=1 guard=0 mach=0 vote=1 unprinted=0")
+    return [line(5.003, 1, 0, 0, 0), line(5.009, 0, 0, 0, 0), line(t_apo + 0.3, 1, 0, 0, 0),
+            line(t_apo + 0.5, 1, 0, 1, 0), line(t_apo + 0.6, 1, 0, 1, 1), line(t_apo + 0.8, 1, 1, 1, 1)]
+
+
+def score_run(d, name, text, cols_files, run_extra=None, hackrf=None, argv=()):
+    run = d / name
+    run.mkdir()
+    (run / "fc_console.txt").write_text(text)
+    meta = {"flight": "sim_test", "tag": name, "gain": 7, "pad_s": 180.0, "void_by_file_s": 170.0, "void": False}
+    meta.update(run_extra or {})
+    (run / "run.json").write_text(json.dumps(meta))
+    if hackrf is not None:
+        (run / "hackrf.txt").write_text(hackrf)
+    out = d / f"{name}.json"
+    csv, scen = cols_files
+    score_v9.main([str(run), "--csv", str(csv), "--scenario", str(scen), "--json", str(out), *argv])
+    return json.loads(out.read_text())
+
+
+def hackrf_log(underrun_at_file_s=None, seconds=257):
+    """hackrf_tx_ram -B's per-second lines for a whole file at 36.96 MB/s, with one 6.86 ms underrun in the second
+    that ends at file second `underrun_at_file_s`."""
+    L = ["hackrf_tx_ram: signalsim_real_sim_test.C8, 9.5 GB; ring 2048 MiB (wired), 512 MiB read ahead in 0.30 s"]
+    under = longest = 0
+    for k in range(1, seconds + 1):
+        if underrun_at_file_s is not None and k == int(underrun_at_file_s):
+            under, longest = 1, 253312
+        L.append(f"37.0 MB / 1.000 sec = 37.0 MB/second, average power -11.2 dBfs, 19584 bytes filled in buffer, "
+                 f"{under} underruns, longest {longest} bytes, ring 63 MiB ahead, host shortfalls 0, slowest callback "
+                 f"0.40 ms")
+    L.append(f"hackrf_tx_ram: sent {seconds * 0.037:.3f} GB of {seconds * 0.037:.3f} GB, host shortfalls 0")
+    return "\n".join(L) + "\n"
+
+
+class ScoreV9RunRulesTest(unittest.TestCase):
+    """What makes a run count: the [REPLAY-VOTE] edges for G5, the freeze's check and the 1PPS tag check after it,
+    the transmitter's slips, the ionosphere."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.d = Path(cls.tmp.name)
+        cls.cols, cls.t_apo, cls.t_land = flight()
+        names = list(cls.cols)
+        csv = cls.d / "sim_test_sensors.csv.gz"
+        with gzip.open(csv, "wt") as f:
+            f.write("# made up\n" + ",".join(names) + "\n")
+            np.savetxt(f, np.stack([cls.cols[n] for n in names], axis=1), delimiter=",", fmt="%.9g")
+        scen = cls.d / "scenario.json"
+        scen.write_text(json.dumps({"origin": {"lat_deg": 0.0, "lon_deg": 0.0, "alt_m": 0.0},
+                                    "start_utc": "2026-08-29T15:19:48", "prologue_s": 180.0, "duration_s": 256.7}))
+        cls.files = (csv, scen)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def checked(self, residual, moved, judged, over):
+        what = f"MOVED onto the edge by {residual:+d}" if moved else f"kept, the edge within {residual:+d}"
+        return (-4.9, f"SIM: RIG REPLAY clock: the freeze checked against the 1PPS edge of the second at t -5 s: "
+                      f"residual {residual:+d} us, {what} us; PPS tag check so far {judged} judged, {over} over 200 us")
+
+    def test_a_six_ms_vote_between_two_samples_fails_g5_from_the_edges(self):
+        text = console(self.cols, self.t_apo, self.t_land, early_in_samples=False, extra=vote_edges(self.t_apo))
+        r = score_run(self.d, "edges", text, self.files)
+        v = r["votes"]
+        self.assertTrue(v["from"].startswith("the [REPLAY-VOTE]"))
+        self.assertTrue(v["complete"])
+        self.assertAlmostEqual(v["vel"]["first"], 5.003, delta=1e-6)
+        self.assertEqual(v["vel"]["climbing_samples"], 1)
+        self.assertFalse(v["g5_hard"]["pass"])
+        # the latencies to the loop's instant, not to a 10 Hz sample (the truth's apogee is a 10 ms sample's)
+        self.assertAlmostEqual(v["pitch"]["latency"], 0.5, delta=0.011)
+        self.assertAlmostEqual(v["baro"]["latency"] - v["pitch"]["latency"], 0.3, delta=1e-4)
+        # the samples alone never see that vote: from them G5 is not judged at all
+        r2 = score_run(self.d, "samples", console(self.cols, self.t_apo, self.t_land, early_in_samples=False),
+                       self.files)
+        self.assertEqual(r2["votes"]["vel"]["climbing_samples"], 0)
+        self.assertFalse(r2["votes"]["g5_judged"])
+        self.assertNotIn("g5_hard", r2["votes"])
+
+    def test_a_second_over_200_us_after_the_freeze_voids_the_run_and_nothing_is_scored(self):
+        text = console(self.cols, self.t_apo, self.t_land, pps=((-20.0, 0, 20), (5.0, 3, 40)),
+                       extra=[self.checked(-6856, True, 30, 0)])
+        r = score_run(self.d, "ppsvoid", text, self.files)
+        self.assertTrue(r["clock"]["void"])
+        self.assertIn("1PPS tag check judged 3 second(s) over 200 us", r["clock"]["void_why"])
+        self.assertTrue(r["sky_time"]["pps_tag_check"]["freeze_check"]["moved"])
+        self.assertFalse(r["scored"])
+        self.assertNotIn("nav", r)
+        self.assertNotIn("votes", r)
+        # --score-void: scored, for diagnosis only
+        r2 = score_run(self.d, "ppsvoid2", text, self.files, argv=["--score-void"])
+        self.assertTrue(r2["scored"] and r2["clock"]["void"])
+        self.assertIn("nav", r2)
+
+    def test_a_moved_freeze_with_a_clean_check_after_it_counts(self):
+        # the line had caught up by the freeze's next second: overs only before the freeze
+        text = console(self.cols, self.t_apo, self.t_land, pps=((-20.0, 4, 20), (5.0, 4, 40)),
+                       extra=[self.checked(-6856, True, 30, 4)])
+        r = score_run(self.d, "moved", text, self.files)
+        self.assertFalse(r["clock"]["void"])
+        self.assertEqual(r["sky_time"]["pps_tag_check"]["over_after_freeze"], 0)
+        self.assertEqual(r["sky_time"]["pps_tag_check"]["judged_after_freeze"], 10)
+        self.assertTrue(any("MOVED -6856 us" in m for m in r["sky_time"]["marks"]))
+        self.assertIn("nav", r)
+
+    def test_without_the_check_line_the_seconds_around_the_freeze_are_judged(self):
+        # an over at t -5.5 s, in the 5 s line after it: the last line a second before the freeze is the base
+        text = console(self.cols, self.t_apo, self.t_land, pps=((-20.0, 0, 20), (5.0, 1, 40)))
+        r = score_run(self.d, "nocheck", text, self.files)
+        self.assertTrue(r["clock"]["void"])
+        self.assertTrue(any("no freeze-check line" in m for m in r["sky_time"]["marks"]))
+
+    def test_a_transmitter_underrun_after_the_freeze_voids_the_run(self):
+        text = console(self.cols, self.t_apo, self.t_land)
+        r = score_run(self.d, "txvoid", text, self.files, hackrf=hackrf_log(190))
+        self.assertTrue(r["clock"]["void"])
+        self.assertEqual(r["sky_time"]["transmitter"]["verdict"], "VOID")
+        self.assertIn("after the replay clock froze", r["clock"]["void_why"])
+        self.assertFalse(r["scored"])
+        # before the clock: absorbed, the run counts
+        r2 = score_run(self.d, "txearly", text, self.files, hackrf=hackrf_log(20))
+        self.assertFalse(r2["clock"]["void"])
+        self.assertEqual(r2["sky_time"]["transmitter"]["verdict"], "clean")
+
+    def test_a_second_boot_before_the_landing_voids_the_run(self):
+        text = console(self.cols, self.t_apo, self.t_land)
+        lines = text.splitlines()
+        # the FC crashes at T+20: its console starts over from the ROM banner, ms from 0
+        cut = next(i for i, ln in enumerate(lines) if "[REPLAY-NAV] t=+20.000" in ln)
+        rebooted = lines[:cut] + ["ESP-ROM:esp32p4-eco2-20240710", "I (398) app_init: App version:      x"] + lines[cut:]
+        r = score_run(self.d, "reboot", "ESP-ROM:esp32p4-eco2-20240710\n" + "\n".join(rebooted) + "\n", self.files)
+        self.assertTrue(r["clock"]["void"])
+        self.assertIn("booted again", r["clock"]["void_why"])
+        self.assertAlmostEqual(r["sky_time"]["reboot_t"], 19.9, delta=0.2)
+
+    def test_the_ionosphere_in_use_is_flagged_when_it_is_not_the_skys(self):
+        sky = (-170.0, "SIM: RIG REPLAY ionosphere: the rig sky's own GPS Klobuchar (14 3 -1 -2 / 51 6 -2 -5, GPS "
+                       "day 17037) stands in for the GPSIon its file never broadcasts: the filter takes it as the "
+                       "receiver's")
+        r = score_run(self.d, "iono_ok", console(self.cols, self.t_apo, self.t_land,
+                                                 iono_at_launch="the receiver's GPSIon (1 sets)", extra=[sky]),
+                      self.files)
+        self.assertTrue(r["ionosphere"]["sky_set"])
+        self.assertNotIn("flag", r["ionosphere"])
+        r2 = score_run(self.d, "iono_none", console(self.cols, self.t_apo, self.t_land, extra=[sky]), self.files)
+        self.assertIn("none", r2["ionosphere"]["flag"])
+        r3 = score_run(self.d, "iono_old", console(self.cols, self.t_apo, self.t_land), self.files)
+        self.assertIn("before the RIG REPLAY ionosphere line", r3["ionosphere"]["flag"])
 
 if __name__ == "__main__":
     unittest.main()
