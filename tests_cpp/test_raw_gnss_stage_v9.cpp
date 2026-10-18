@@ -12,6 +12,7 @@
 // (fixtures/raw_meas_golden.h) check that a cap above the sky changes nothing.
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <set>
@@ -925,4 +926,115 @@ TEST(RawGnssMeasStageV9, TheStoreKeepsTheBeetlesSizeByDefault)
     static_assert(sizeof(EphemerisStore) == sizeof(Before), "the default store's size is unchanged");
     EphemerisStore store;
     EXPECT_EQ(store.size(), 0u);
+}
+
+// ------------------------------------------- the cap governor's cap (nav)
+
+TEST(RawGnssMeasStageV9, TheNavigationStatesCapIsTheOneBuiltWith)
+{
+    // The filter's cap governor (CapGovernor.h) sends its cap with the
+    // navigation state; the stage builds with it where it caps at all, with
+    // its own where the state carries none (0)
+    Sky s = sky(30);
+    ASSERT_EQ(s.e.epoch.n, 30);
+    for (int i = 0; i < s.e.epoch.n; ++i)
+        s.e.epoch.obs[i].cn0_dbhz = 30.0f + 0.5f * i;
+    RawGnssMeasStage st(capCfg(16));
+    addAll(st, s);
+    BuiltEpoch b;
+    gnss_raw::ShadowNav nav = navAt(kRxLla);
+    ASSERT_EQ(nav.sat_cap, 0);
+    ASSERT_TRUE(st.offer(s.e, nav, b));
+    EXPECT_EQ(b.n, 16);
+    EXPECT_EQ(st.satCap(), 16);
+    EXPECT_EQ(st.stats().sat_cap, 16);
+    nav.sat_cap = 24;
+    s.e.epoch.tow_s += 0.1;
+    s.e.mcu_us += 100000;
+    ASSERT_TRUE(st.offer(s.e, nav, b));
+    EXPECT_EQ(b.n, 24);
+    EXPECT_EQ(st.stats().sat_cap, 24);
+    // past the epoch's room it is the room
+    nav.sat_cap = 255;
+    s.e.epoch.tow_s += 0.1;
+    s.e.mcu_us += 100000;
+    ASSERT_TRUE(st.offer(s.e, nav, b));
+    EXPECT_EQ(b.n, 30);
+    EXPECT_EQ(st.satCap(), gnss_raw::RawEpoch::kMaxObs);
+    // and back to the stage's own when the state carries none
+    nav.sat_cap = 0;
+    s.e.epoch.tow_s += 0.1;
+    s.e.mcu_us += 100000;
+    ASSERT_TRUE(st.offer(s.e, nav, b));
+    EXPECT_EQ(b.n, 16);
+
+    // A stage with no cap (the Beetle's) never takes one: every satellite
+    RawGnssMeasStage none(capCfg(0));
+    addAll(none, s);
+    nav.sat_cap = 12;
+    ASSERT_TRUE(none.offer(s.e, nav, b));
+    EXPECT_EQ(b.n, 30);
+    EXPECT_EQ(none.satCap(), 0);
+    EXPECT_EQ(none.stats().sat_cap, 0);
+}
+
+TEST(RawGnssMeasStageV9, ARaiseAddsTheStrongestLeftOutAndACutDropsTheWeakestPicked)
+{
+    // The governor changes the count, never the set: each epoch the picks
+    // keep their 3 dB hold, so from one epoch to the next the satellites in
+    // both are the smaller cap's picks -- the Doppler change check keeps all
+    // of them -- and a raise adds the strongest satellites left out, a cut
+    // drops the weakest picked. C/N0s from 30 to 44.5 dB-Hz, a quarter of
+    // them wandering 2.5 dB from epoch to epoch (inside the hold).
+    Sky s = sky(30);
+    ASSERT_EQ(s.e.epoch.n, 30);
+    std::vector<float> base(static_cast<size_t>(s.e.epoch.n));
+    for (int i = 0; i < s.e.epoch.n; ++i)
+        base[static_cast<size_t>(i)] = 30.0f + 0.5f * static_cast<float>((i * 7) % 30);
+    RawGnssMeasStage st(capCfg(16));
+    addAll(st, s);
+    gnss_raw::ShadowNav nav = navAt(kRxLla);
+    const int caps[] = {16, 16, 17, 18, 24, 24, 22, 20, 16, 16, 24, 16, 19, 19};
+    std::set<std::pair<int, int>> prev;
+    int prev_cap = 0;
+    for (int k = 0; k < static_cast<int>(sizeof(caps) / sizeof(caps[0])); ++k)
+    {
+        for (int i = 0; i < s.e.epoch.n; ++i)
+            s.e.epoch.obs[i].cn0_dbhz = base[static_cast<size_t>(i)] + ((i % 4 == 0 && k % 2 == 1) ? 2.5f : 0.0f);
+        s.e.epoch.tow_s = kTow0 + 0.1 * k;
+        s.e.mcu_us = kT0 + 100000 * k;
+        nav.sat_cap = static_cast<uint8_t>(caps[k]);
+        BuiltEpoch b;
+        ASSERT_TRUE(st.offer(s.e, nav, b));
+        ASSERT_EQ(b.n, caps[k]) << k;
+        const std::set<std::pair<int, int>> now = sats(b);
+        if (k > 0)
+        {
+            // the smaller set is inside the larger: nothing swapped
+            const auto& small = caps[k] <= prev_cap ? now : prev;
+            const auto& large = caps[k] <= prev_cap ? prev : now;
+            for (const auto& x : small)
+                EXPECT_EQ(large.count(x), 1u) << "epoch " << k << " sys " << x.first << " prn " << x.second;
+            // what a cut dropped is the weakest of the last picks (by the
+            // score it had there: C/N0, every pick holding the same 3 dB)
+            if (caps[k] < prev_cap)
+            {
+                float kept_min = 99.0f, dropped_max = 0.0f;
+                for (int i = 0; i < s.e.epoch.n; ++i)
+                {
+                    const std::pair<int, int> id{s.e.epoch.obs[i].sys, s.e.epoch.obs[i].prn};
+                    if (prev.count(id) == 0 || s.e.epoch.obs[i].sys == GNSS_SYS_GPS)
+                        continue;             // the GPS four are picked first, whatever their C/N0
+                    const float c = s.e.epoch.obs[i].cn0_dbhz;
+                    if (now.count(id))
+                        kept_min = std::min(kept_min, c);
+                    else
+                        dropped_max = std::max(dropped_max, c);
+                }
+                EXPECT_LE(dropped_max, kept_min) << "epoch " << k;
+            }
+        }
+        prev = now;
+        prev_cap = caps[k];
+    }
 }

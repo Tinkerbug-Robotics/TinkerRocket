@@ -99,7 +99,9 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssEKFParams&
 }
 
 // The one call: the shadow's own settings, its builder's (the GNSS task's
-// stage takes them through stageConfig) and its EKF's.
+// stage takes them through stageConfig) and its EKF's. Not the slice
+// (epoch_slice_us): the navigation filter's start takes it (main.cpp), a
+// shadow works an epoch at once.
 inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssShadow::Config& c)
 {
     c.epoch_latency_s = p.epoch_latency_s;
@@ -109,6 +111,7 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssShadow::Co
     c.rr_dyn_window_s = p.rr_dyn_window_s;
     c.heading_fit_period_s = p.heading_fit_period_s;
     c.sat_cap = p.sat_cap;
+    c.sat_cap_max = p.sat_cap_max;
     c.level.min_dt_s = p.level_min_dt_s;
     applyReceiverProfile(p, c.meas);
     applyReceiverProfile(p, c.ekf);

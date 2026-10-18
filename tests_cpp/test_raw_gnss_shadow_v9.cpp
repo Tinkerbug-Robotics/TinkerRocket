@@ -17,10 +17,13 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
+#include <functional>
 #include <random>
 #include <vector>
 
 #include "LevelGate.h"
+#include "RawGnssMeasStage.h"
 #include "RawGnssShadow.h"
 #include "ReceiverProfileApply.h"
 #include "RtcmEphemeris.h"
@@ -1910,4 +1913,351 @@ TEST(RawGnssShadowV9, AKnownAntennaWithTheMagnetometersHeadingKeepsTheLatchsLeve
     EXPECT_GT(ru->dv_level_chi2, 4.0f);
     EXPECT_LT(rk->dv_level_chi2, 1.0f);
     EXPECT_LT(rk->t, ru->t - 0.15);
+}
+
+// ---- the satellite cap's governor (CapGovernor.h) in the filter's loop
+
+namespace
+{
+
+// The pad, and a launch if asked (3 g along the nose of an upright body for
+// 2 s, then a weightless coast), at 10 Hz through a GNSS task's stage as the
+// flight computer runs them (external_build): each epoch offered to the stage
+// at the filter's navigation state when it is handed over, delay_ms(t) after
+// its tag, and the built epoch handed to the filter; lose(t): an epoch never
+// handed over (the driver's queue full). The sky is the golden fixture's 15,
+// so the governor's cap is set to bind on it: 8 to 12.
+struct GovFlight
+{
+    double t_end = 24.0;
+    double launch_t = -1.0;
+    std::function<double(double)> delay_ms = [](double) { return 50.0; };
+    std::function<bool(double)> lose = [](double) { return false; };
+};
+
+struct GovRun
+{
+    std::vector<double> t;        // each epoch handed over: its tag (s of the flight)
+    std::vector<int> nav_cap;     //   the cap the navigation state carried then
+    std::vector<int> built;       //   the satellites the stage built of it
+    std::vector<uint64_t> state;  // stateHash every step
+    std::vector<uint64_t> state2; //   and of the second filter, where there is one
+    gnss_raw::CapGovernor::Stats gov;
+};
+
+RawGnssShadow::Config govCfg(int floor = 8, int ceiling = 12)
+{
+    RawGnssShadow::Config c = mosaicCfg();
+    c.external_build = true;
+    c.sat_cap = floor;
+    c.sat_cap_max = ceiling;
+    return c;
+}
+
+// Each epoch handed over goes to every shadow in shs, built once by the
+// stage at shs[0]'s navigation state (the others see the same epochs)
+GovRun flyGov(const std::vector<RawGnssShadow*>& shs, const GovFlight& fl)
+{
+    RawGnssShadow& sh = *shs[0];
+    double lat, lon, h;
+    ecef_to_geo(kGoldenRmRx, &lat, &lon, &h);
+    double r0[3];
+    geo_to_ecef(lat, lon, h, r0);
+    const double sl = std::sin(lat), cl = std::cos(lat), so = std::sin(lon), co = std::cos(lon);
+    auto nedToEcefVec = [&](const double n[3], double o[3]) {
+        const double e[3] = {n[1], n[0], -n[2]};
+        o[0] = -so * e[0] - sl * co * e[1] + cl * co * e[2];
+        o[1] = co * e[0] - sl * so * e[1] + cl * so * e[2];
+        o[2] = cl * e[1] + sl * e[2];
+    };
+    gnss_raw::RawGnssMeasStage stage(RawGnssShadow::stageConfig(sh.config()));
+    for (int i = 0; i < kGoldenRmEphN; ++i)
+        stage.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+    SynthSky sky(sh.config().meas);
+    const Mat3 Ct = leaningBody(0.0, 70.0);
+    ShadowSeed seed = padSeed(kT0, lat, lon, h);
+    quatOf(Ct, seed.quat);
+    for (RawGnssShadow* s : shs)
+        s->onSeed(seed);
+    const double tow0 = kGoldenRmTowA, dt = 0.005;
+    const double burnout_t = fl.launch_t + 2.0;
+    double p_ned[3] = {}, v_ned[3] = {};
+    struct Due
+    {
+        TimedRawEpoch e;
+        int64_t hand_us;
+        double t;
+    };
+    std::vector<Due> due;
+    GovRun run;
+    gnss_raw::BuiltEpoch built;
+    for (int step = 1; step * dt <= fl.t_end + 1e-9; ++step)
+    {
+        const double t = step * dt;
+        const bool boost = fl.launch_t >= 0.0 && t > fl.launch_t && t <= burnout_t;
+        const bool flying = fl.launch_t >= 0.0 && t > fl.launch_t;
+        double f_b[3] = {0.0, 0.0, 0.0}, a_n[3] = {0.0, 0.0, 0.0};
+        if (flying)
+        {
+            f_b[0] = boost ? 3.0 * kG : 0.0;
+            double f_n[3];
+            mat3Vec(Ct, f_b, f_n);
+            for (int i = 0; i < 3; ++i)
+                a_n[i] = f_n[i] + (i == 2 ? kG : 0.0);
+        }
+        else
+        {
+            const double up[3] = {0, 0, -kG};
+            Mat3 CtT{};
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    CtT.m[i][j] = Ct.m[j][i];
+            mat3Vec(CtT, up, f_b);
+        }
+        for (int i = 0; i < 3; ++i)
+        {
+            p_ned[i] += v_ned[i] * dt + 0.5 * a_n[i] * dt * dt;
+            v_ned[i] += a_n[i] * dt;
+        }
+        const int64_t t64 = kT0 + static_cast<int64_t>(std::llround(t * 1e6));
+        ShadowImu s{};
+        s.time_us = static_cast<uint32_t>(t64);
+        for (int i = 0; i < 3; ++i)
+            s.acc[i] = float(f_b[i]);
+        s.flags = !flying ? gnss_raw::kShadowLevel : (t >= fl.launch_t + 0.1 ? gnss_raw::kShadowInFlight : 0);
+        for (RawGnssShadow* x : shs)
+            x->onImu(s, t64);
+        run.state.push_back(stateHash(sh.filter()));
+        if (shs.size() > 1)
+            run.state2.push_back(stateHash(shs[1]->filter()));
+        if (step % 20 == 0)
+        {
+            double dr[3], r[3], ve[3];
+            nedToEcefVec(p_ned, dr);
+            nedToEcefVec(v_ned, ve);
+            for (int i = 0; i < 3; ++i)
+                r[i] = r0[i] + dr[i];
+            Due d;
+            d.e.epoch = sky.epoch(tow0 + std::round(t * 10.0) / 10.0, r, ve);
+            d.e.mcu_us = t64;
+            d.e.gps_week = kGoldenWeek;
+            d.hand_us = t64 + static_cast<int64_t>(std::llround(fl.delay_ms(t) * 1000.0));
+            d.t = t;
+            if (!fl.lose(t))
+                due.push_back(d);
+        }
+        for (size_t k = 0; k < due.size();)
+        {
+            if (t64 < due[k].hand_us)
+            {
+                ++k;
+                continue;
+            }
+            gnss_raw::ShadowNav nav;
+            sh.navState(nav);
+            if (stage.offer(due[k].e, nav, built))
+            {
+                for (RawGnssShadow* x : shs)
+                    x->onBuilt(built);
+                run.t.push_back(due[k].t);
+                run.nav_cap.push_back(nav.sat_cap);
+                run.built.push_back(built.n);
+            }
+            for (RawGnssShadow* x : shs)
+                x->onMeasStats(stage.stats());
+            due.erase(due.begin() + static_cast<long>(k));
+        }
+    }
+    run.gov = sh.capGovernor().stats();
+    return run;
+}
+
+GovRun flyGov(const RawGnssShadow::Config& cfg, const GovFlight& fl)
+{
+    RawGnssShadow sh(cfg);
+    return flyGov({&sh}, fl);
+}
+
+// The cap the navigation state carried at the last epoch handed over at or before t
+int capAt(const GovRun& r, double t)
+{
+    int c = -1;
+    for (size_t i = 0; i < r.t.size() && r.t[i] <= t + 1e-9; ++i)
+        c = r.nav_cap[i];
+    return c;
+}
+
+}  // namespace
+
+TEST(RawGnssShadowV9, TheCapRisesOnThePadHoldsTheFloorThroughTheBoostAndClimbsAfter)
+{
+    // Epochs handed over 50 ms after their tags: every one closes well under
+    // the raise age. On the pad the cap climbs from 8 to 12, a satellite every
+    // 1.2 s; from the launch to burnout + the screen's 1.5 s window + the 2 s
+    // hold it is 8; then it climbs again. The stage builds what it is told.
+    GovFlight fl;
+    fl.launch_t = 12.0;
+    fl.t_end = 24.0;
+    const GovRun r = flyGov(govCfg(), fl);
+    ASSERT_GT(r.t.size(), 200u);
+    EXPECT_EQ(capAt(r, 2.0) >= 8 && capAt(r, 2.0) <= 9, true) << capAt(r, 2.0);
+    EXPECT_EQ(capAt(r, 9.0), 12);
+    EXPECT_EQ(capAt(r, 11.9), 12);
+    for (size_t i = 0; i < r.t.size(); ++i)
+    {
+        if (r.t[i] > 12.0 + 0.01 && r.t[i] < 14.0 + 1.5 + 2.0 - 0.05)
+            EXPECT_EQ(r.nav_cap[i], 8) << "t " << r.t[i];
+        if (r.nav_cap[i] > 0)
+            EXPECT_EQ(r.built[i], std::min(r.nav_cap[i], 15)) << "t " << r.t[i];
+        EXPECT_GE(r.nav_cap[i], 8);
+        EXPECT_LE(r.nav_cap[i], 12);
+    }
+    EXPECT_GT(capAt(r, 19.0), 8);
+    EXPECT_EQ(capAt(r, 23.9), 12);
+    EXPECT_EQ(r.gov.cuts + r.gov.floors, 0u);
+    EXPECT_EQ(r.gov.boosts, 1u);
+    EXPECT_EQ(r.gov.raises, 8u);
+}
+
+TEST(RawGnssShadowV9, TheCapIsCutWhenTheEpochsComeLateAndFloorsOnOneTooOldOrLost)
+{
+    // Epochs handed over 170 ms late from 10 s (a lag that stays, past the
+    // 160 ms cut): cut two satellites at a time to the floor
+    {
+        GovFlight fl;
+        fl.t_end = 13.0;
+        fl.delay_ms = [](double t) { return t >= 10.0 ? 170.0 : 50.0; };
+        const GovRun r = flyGov(govCfg(), fl);
+        EXPECT_EQ(capAt(r, 9.9), 12);
+        EXPECT_EQ(capAt(r, 12.9), 8);
+        EXPECT_EQ(r.gov.cuts, 2u);
+        EXPECT_EQ(r.gov.floors, 0u);
+    }
+    // one handed over 205 ms late: its fusion passes the at-once point, the floor
+    {
+        GovFlight fl;
+        fl.t_end = 11.0;
+        fl.delay_ms = [](double t) { return std::fabs(t - 10.0) < 0.01 ? 205.0 : 50.0; };
+        const GovRun r = flyGov(govCfg(), fl);
+        EXPECT_EQ(capAt(r, 9.95), 12);
+        EXPECT_EQ(capAt(r, 10.95), 8);
+        EXPECT_EQ(r.gov.floors, 1u);
+        EXPECT_EQ(r.gov.late, 1u);
+    }
+    // one never handed over: lost on the way, the floor
+    {
+        GovFlight fl;
+        fl.t_end = 11.0;
+        fl.lose = [](double t) { return std::fabs(t - 10.0) < 0.01; };
+        const GovRun r = flyGov(govCfg(), fl);
+        EXPECT_EQ(capAt(r, 9.95), 12);
+        EXPECT_EQ(capAt(r, 10.95), 8);
+        EXPECT_EQ(r.gov.lost, 1u);
+        EXPECT_EQ(r.gov.floors, 1u);
+    }
+    // one handed over too late to fuse (past max_epoch_age_s): dropped stale, the floor
+    {
+        GovFlight fl;
+        fl.t_end = 11.0;
+        fl.delay_ms = [](double t) { return std::fabs(t - 10.0) < 0.01 ? 320.0 : 50.0; };
+        RawGnssShadow sh(govCfg());
+        const GovRun r = flyGov({&sh}, fl);
+        EXPECT_EQ(capAt(r, 9.95), 12);
+        EXPECT_EQ(capAt(r, 10.95), 8);
+        EXPECT_GE(sh.stats().epochs_stale, 1u);
+        EXPECT_GE(r.gov.lost, 1u);
+    }
+}
+
+TEST(RawGnssShadowV9, TheBoostScreenOnEveryEpochKeepsTheCapAtTheFloor)
+{
+    // The CPU ladder's bench forces the screen on every epoch before the
+    // apogee call (boost_screen_g 0): the governor reads each as the boost
+    // and never raises -- that bench measures the floor's cost
+    RawGnssShadow::Config c = govCfg();
+    c.boost_screen = RawGnssShadow::kScreenOn;
+    c.boost_screen_g = 0.0;
+    GovFlight fl;
+    fl.t_end = 12.0;
+    const GovRun r = flyGov(c, fl);
+    ASSERT_GT(r.t.size(), 100u);
+    for (size_t i = 0; i < r.t.size(); ++i)
+        EXPECT_EQ(r.nav_cap[i], 8) << "t " << r.t[i];
+    EXPECT_EQ(r.gov.raises, 0u);
+}
+
+TEST(RawGnssShadowV9, TheGovernorNeverTouchesTheFilter)
+{
+    // Two filters fed the same built epochs, one with the governor (whose
+    // cap the stage builds with) and one without: their states are the same
+    // at every step -- the governor only tells the stage how many to build --
+    // through the pad's climb, a late stretch, a lost epoch, the boost and
+    // the coast; so is all of their navigation state but the cap
+    GovFlight fl;
+    fl.launch_t = 12.0;
+    fl.t_end = 20.0;
+    fl.delay_ms = [](double t) { return t >= 6.0 && t < 7.0 ? 170.0 : 50.0; };
+    fl.lose = [](double t) { return std::fabs(t - 9.0) < 0.01; };
+    RawGnssShadow on(govCfg()), off(govCfg(8, 0));
+    const GovRun r = flyGov({&on, &off}, fl);
+    ASSERT_GT(r.t.size(), 150u);
+    ASSERT_EQ(r.state.size(), r.state2.size());
+    EXPECT_EQ(r.state, r.state2);
+    EXPECT_GT(r.gov.raises, 0u);
+    EXPECT_GT(r.gov.cuts + r.gov.floors, 0u);
+    EXPECT_EQ(on.stats().epochs_applied, off.stats().epochs_applied);
+    EXPECT_EQ(on.stats().epochs_stale, off.stats().epochs_stale);
+    gnss_raw::ShadowNav na, nb;
+    on.navState(na);
+    off.navState(nb);
+    EXPECT_EQ(nb.sat_cap, 0);
+    EXPECT_GE(na.sat_cap, 8);
+    EXPECT_EQ(na.time_us, nb.time_us);
+    EXPECT_EQ(std::memcmp(na.lla, nb.lla, sizeof(na.lla)), 0);
+    EXPECT_EQ(std::memcmp(na.vel_ned, nb.vel_ned, sizeof(na.vel_ned)), 0);
+    EXPECT_EQ(std::memcmp(na.quat, nb.quat, sizeof(na.quat)), 0);
+    EXPECT_EQ(std::memcmp(na.accel_bias, nb.accel_bias, sizeof(na.accel_bias)), 0);
+    EXPECT_EQ(std::memcmp(na.gyro_bias, nb.gyro_bias, sizeof(na.gyro_bias)), 0);
+    EXPECT_EQ(std::memcmp(na.var, nb.var, sizeof(na.var)), 0);
+    EXPECT_EQ(na.running, nb.running);
+    EXPECT_EQ(na.gnss_aided, nb.gnss_aided);
+    EXPECT_EQ(na.baro_aided, nb.baro_aided);
+    EXPECT_EQ(na.in_flight, nb.in_flight);
+    EXPECT_EQ(na.epochs, nb.epochs);
+}
+
+TEST(RawGnssShadowV9, OffTheNavigationStateCarriesNoCap)
+{
+    // No ceiling (every profile's), or no GNSS task to cap for, or the
+    // Beetle's: the state's cap is 0 and the stage builds with its own
+    GovFlight fl;
+    fl.t_end = 6.0;
+    for (int k = 0; k < 3; ++k)
+    {
+        RawGnssShadow::Config c = govCfg(8, 0);
+        if (k == 1)
+        {
+            c = mosaicCfg();                  // the flight image's: 16, no ceiling
+            c.external_build = true;
+        }
+        if (k == 2)
+        {
+            c = govCfg(8, 12);
+            c.external_build = false;         // the shadow builds its own: no cap to govern
+        }
+        RawGnssShadow sh(c);
+        EXPECT_FALSE(sh.capGovernor().on()) << k;
+        if (k == 2)
+            continue;
+        const GovRun r = flyGov({&sh}, fl);
+        ASSERT_GT(r.t.size(), 30u);
+        for (size_t i = 0; i < r.t.size(); ++i)
+            EXPECT_EQ(r.nav_cap[i], 0) << k;
+    }
+    RawGnssShadow::Config b = primaryCfg();
+    gnss_raw::applyReceiverProfile(gnss_raw::lc86gProfile(), b);
+    b.external_build = true;
+    EXPECT_EQ(b.sat_cap_max, 0);
+    RawGnssShadow beetle(b);
+    EXPECT_FALSE(beetle.capGovernor().on());
 }

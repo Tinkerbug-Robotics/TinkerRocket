@@ -4042,6 +4042,27 @@ static void rawShadowTask(void*)
                          (unsigned long)st.dv_latch_releases, (unsigned long)st.dv_held_rr,
                          sh.running() ? (double)sh.filter().hdgObsScale() : 1.0, (double)st.rot_max_sigma_mps,
                          (unsigned)(raw_flight_task ? uxTaskGetStackHighWaterMark(raw_flight_task) : 0));
+                if (sh.capGovernor().on())
+                {
+                    // The satellite cap's governor (CapGovernor.h; a bench's,
+                    // TR_BENCH_RAW_CAP_MAX): the cap now, its range and the
+                    // oldest epoch over the window, and what moved it since boot
+                    const gnss_raw::CapGovernor& g = sh.capGovernor();
+                    int cap_min = 0, cap_max = 0;
+                    double age_max_s = 0.0;
+                    sh.takeCapWindow(cap_min, cap_max, age_max_s);
+                    ESP_LOGI(TAG, "[RAWGNSS] satellite cap: %d now, %d-%d this window (floor %d, ceiling %d), the "
+                                  "last epoch built with %d | raised %lu, cut %lu, to the floor %lu (epochs late %lu, "
+                                  "lost %lu), boost holds %lu%s | epoch age at close: last %.0f ms, oldest this "
+                                  "window %.0f (raised at %.0f or under, cut at %.0f, floor at %.0f) | backoff %.0f s",
+                             g.cap(), cap_min, cap_max, g.config().floor, g.config().ceiling, (int)mst.sat_cap,
+                             (unsigned long)g.stats().raises, (unsigned long)g.stats().cuts,
+                             (unsigned long)g.stats().floors, (unsigned long)g.stats().late,
+                             (unsigned long)g.stats().lost, (unsigned long)g.stats().boosts,
+                             g.boostHeld(sh.filter().time()) ? " (holding now)" : "", g.stats().last_age_s * 1000.0,
+                             age_max_s * 1000.0, g.raiseAgeS() * 1000.0, g.cutAgeS() * 1000.0,
+                             g.config().hard_age_s * 1000.0, g.backoff());
+                }
             }
 #ifdef TR_BENCH_DV_CHECK
             // the Doppler change check (bench, exp/v9-dvcheck): counts since boot
@@ -4239,6 +4260,27 @@ static void startRawShadow()
     rx.sat_cap = TR_BENCH_RAW_SAT_CAP;
     ESP_LOGW(TAG, "[RAWGNSS] BENCH: at most %d satellites an epoch (TR_BENCH_RAW_SAT_CAP)", rx.sat_cap);
 #endif
+#ifdef TR_BENCH_RAW_CAP_MAX
+    // bench (exp/v9-cap-adapt): the satellite cap follows the filter's slack,
+    // from the cap above (the floor) up to this (CapGovernor.h)
+    static_assert(TR_BENCH_RAW_CAP_MAX >= 1 && TR_BENCH_RAW_CAP_MAX <= 48, "TR_BENCH_RAW_CAP_MAX is 1-48");
+    rx.sat_cap_max = TR_BENCH_RAW_CAP_MAX;
+    if (rx.sat_cap > 0 && rx.sat_cap_max > rx.sat_cap)
+        ESP_LOGW(TAG, "[RAWGNSS] BENCH: the satellite cap follows the filter's slack, %d to %d an epoch "
+                      "(TR_BENCH_RAW_CAP_MAX)",
+                 rx.sat_cap, rx.sat_cap_max);
+    else
+        ESP_LOGE(TAG, "[RAWGNSS] BENCH: TR_BENCH_RAW_CAP_MAX %d is not above the cap %d: the cap stays fixed",
+                 rx.sat_cap_max, rx.sat_cap);
+#endif
+#ifdef TR_BENCH_RAW_SLICE_US
+    // bench (exp/v9-cap-adapt): the navigation filter's slice of an epoch's
+    // work a 10 ms step, us (the profile's 2500)
+    static_assert(TR_BENCH_RAW_SLICE_US >= 500 && TR_BENCH_RAW_SLICE_US <= 9000, "TR_BENCH_RAW_SLICE_US is 500-9000");
+    rx.epoch_slice_us = (double)(TR_BENCH_RAW_SLICE_US);
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: an epoch worked %.0f us a step at most (TR_BENCH_RAW_SLICE_US)",
+             rx.epoch_slice_us);
+#endif
 #endif
 #ifdef TR_BENCH_CARRIER_MODE
     // bench: the carrier range rates off (0), observed (1) or fused (2)
@@ -4268,7 +4310,11 @@ static void startRawShadow()
     // and an epoch worked a slice a step, so the state the flight loop reads
     // keeps up while a sky is built and fused (RawGnssShadow::workJob): in one
     // pass 14 satellites held it 40 ms on the rig (r9), a sky of 30 ~90 ms
+#if TR_RAW_NAV_MOSAIC
+    cfg.epoch_slice_us = rx.epoch_slice_us;   // the receiver profile's (2500 us), or the bench's
+#else
     cfg.epoch_slice_us = 2500.0;
+#endif
 #endif
 #if TR_RAW_NAV_MOSAIC
     // The mosaic-only image's one filter (config.h): a restored flight's

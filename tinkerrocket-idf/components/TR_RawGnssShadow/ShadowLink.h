@@ -109,6 +109,8 @@ struct ShadowNav
     uint8_t  baro_aided;       // a barometer sample fused within the last 1 s
     uint8_t  in_flight;        // its last IMU tick was INFLIGHT (the GNSS task keeps its ionosphere then)
     uint32_t epochs;           // raw epochs applied since it started
+    uint8_t  sat_cap;          // the satellites the GNSS task's stage builds an epoch at most, the filter's cap
+                               // governor's (CapGovernor.h); 0: the stage's own sat_cap
 };
 
 // The GPS broadcast ionosphere the app uploaded with a pad calibration
@@ -156,6 +158,7 @@ struct ShadowMeasStats
     uint32_t build_us;         // the last epoch's build, wall time (preempted by everything above it)
     uint32_t build_us_max;
     uint32_t capped_out;       // buildable satellites the stage's sat_cap left out, summed over the epochs built
+    int16_t  sat_cap;          // the cap the last epoch was built with (0: none)
 };
 
 // Lock-free ring, one producer and one consumer on any cores.

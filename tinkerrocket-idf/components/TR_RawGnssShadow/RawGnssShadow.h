@@ -28,6 +28,16 @@
 // The ephemerides still come here, for the pad context only. Without it, as a
 // host test drives it, the shadow builds in its own job.
 //
+// The satellite cap's governor (sat_cap_max above sat_cap; off on every
+// profile, a bench's TR_BENCH_RAW_CAP_MAX). The GNSS task's stage builds at
+// most sat_cap satellites an epoch; with a ceiling the cap follows this
+// filter's slack (CapGovernor.h): each epoch's age at its close, one worked
+// at once, one lost on the way (dropped stale, or a gap in the epochs handed
+// over) and the boost (the launch edge, the boost screen's own test, an epoch
+// it judges) move it, and it goes to the stage with the navigation state
+// (ShadowNav::sat_cap), which the GNSS task reads before each build anyway.
+// The filter itself never reads it.
+//
 // The ionosphere (phase 5). A pad calibration brings the GPS broadcast
 // (Klobuchar) parameters from the app, with the date of the navigation file
 // they came from (setIono; NVS keeps them across boots). They are used while
@@ -461,6 +471,7 @@
 
 #include <RocketComputerTypes.h>
 
+#include "CapGovernor.h"
 #include "EphemerisFrames.h"
 #include "EphemerisStore.h"
 #include "FixCheck.h"
@@ -618,6 +629,11 @@ public:
         bool     level_on_fused_epochs = false;  // the levelling's steady test takes only epochs that fused something
         int      sat_cap = 0;                    // the GNSS task's stage: at most this many satellites built an
                                                  //   epoch (0: all)
+        int      sat_cap_max = 0;                //   and the most the cap governor raises that to while the filter
+                                                 //   keeps up (CapGovernor.h; at or under sat_cap: off, the cap fixed)
+        CapGovernor::Config cap_gov;             // its thresholds; its floor, ceiling, hard_age_s and gap_s are
+                                                 //   sat_cap, sat_cap_max, epoch_job_max_s and 1.5 of meas's
+                                                 //   epoch_period_s, and it runs only with external_build
         // A flight restored after a reboot (the navigation filter): its
         // start's 1-sigmas, every axis (0: the start's own -- the attitude the
         // seed's, known), and the snapshot's accelerometer bias
@@ -935,6 +951,11 @@ public:
     // A HEADING_FIT_MSG record, one per epoch the heading fit took.
     bool takeHeadingLog(HeadingFitData& out);
     const HeadingFit& headingFit() const { return fit_; }
+    // The satellite cap's governor (CapGovernor.h): the cap the GNSS task's
+    // stage builds with goes out with the navigation state (ShadowNav::sat_cap).
+    const CapGovernor& capGovernor() const { return gov_; }
+    // The console's window of it (CapGovernor::takeWindow).
+    void takeCapWindow(int& cap_min, int& cap_max, double& max_age_s) { gov_.takeWindow(cap_min, cap_max, max_age_s); }
 
     bool running() const { return running_; }
     const Stats& stats() const { return st_; }
@@ -1021,6 +1042,7 @@ private:
         bool          rot_dropped = false;//   and its clock taken, so it closes as a dropped epoch
         int64_t       pr_k = 0;           // pr_period_s: the period of GPS time it falls in
         bool          screen = false;     // a boost epoch the boost screen judges (kJobScreen)
+        bool          late = false;       // the cap governor: some of it worked at once (past epoch_job_max_s)
         bool          vcheck = false;     // the vertical check judges it if it can fit it (kJobScreen)
         int           dry_k = 0;          //   the scratch copy's next measurement (kJobScreenDry)
         double        dry_age = 0.0;      //   the epoch's age when it was copied
@@ -1213,6 +1235,12 @@ private:
     PadSurvey::Summary pcx_sum_ = {};
     uint64_t      prop_sum_ = 0;        // IMU steps since the last record
     uint32_t      prop_n_ = 0;
+    // the satellite cap's governor (sat_cap_max): its cap, and the last epoch
+    // handed over (its time of week; < 0: none since the start), for a gap
+    CapGovernor   gov_;
+    double        gov_last_tow_ = -1.0;
+    bool          gov_in_flight_ = false;   // the last step's: the launch edge
+    static CapGovernor::Config capGovConfig(const Config& c);
     Stats         st_;
 };
 

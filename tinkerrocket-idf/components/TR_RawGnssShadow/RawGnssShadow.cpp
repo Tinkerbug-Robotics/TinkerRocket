@@ -71,9 +71,24 @@ RawGnssMeasStage::Config RawGnssShadow::stageConfig(const Config& c)
 
 RawGnssShadow::RawGnssShadow() : RawGnssShadow(Config()) {}
 
+// The cap governor's settings from the shadow's: between the stage's cap and
+// sat_cap_max, its hard age the at-once point, a gap 1.5 of the builder's
+// epoch period (the fused grid's). Off without external_build: only the GNSS
+// task's stage caps an epoch.
+CapGovernor::Config RawGnssShadow::capGovConfig(const Config& c)
+{
+    CapGovernor::Config g = c.cap_gov;
+    g.floor = c.sat_cap;
+    g.ceiling = c.external_build ? c.sat_cap_max : 0;
+    g.hard_age_s = c.epoch_job_max_s;
+    if (c.meas.epoch_period_s > 0.0)
+        g.gap_s = 1.5 * c.meas.epoch_period_s;
+    return g;
+}
+
 RawGnssShadow::RawGnssShadow(const Config& cfg)
     : cfg_(cfg), ekf_(cfg.ekf), stage_(stageConfig(cfg)), survey_(cfg.survey), satcheck_(cfg.sat_check),
-      fixcheck_(cfg.fix_check), level_gate_(cfg.level), fit_(cfg.heading_fit)
+      fixcheck_(cfg.fix_check), level_gate_(cfg.level), fit_(cfg.heading_fit), gov_(capGovConfig(cfg))
 {
     // the turning body's allowances read the filter's rate; without them it
     // keeps none, and steps as the Beetle's always has
@@ -225,6 +240,8 @@ void RawGnssShadow::navState(ShadowNav& out) const
     out.baro_aided = t - last_baro_fused_t_ <= 1.0 ? 1 : 0;
     out.in_flight = (imu_flags_ & kShadowInFlight) ? 1 : 0;
     out.epochs = st_.epochs_applied;
+    if (gov_.on())
+        out.sat_cap = static_cast<uint8_t>(gov_.cap());
 }
 
 void RawGnssShadow::applyBaro(double t, uint8_t imu_flags)
@@ -492,11 +509,21 @@ void RawGnssShadow::onBuilt(const BuiltEpoch& b)
         st_.epochs_stale++;               // built for a filter that has since stopped
         return;
     }
+    if (gov_.on())
+    {
+        // the cap governor: an epoch on the grid between this one and the
+        // last never came (the handoff or the driver's queue was full, or it
+        // was not built), and one dropped below is lost too
+        if (gov_last_tow_ >= 0.0 && gps_time_diff(b.tow_s, gov_last_tow_) > gov_.config().gap_s)
+            gov_.onLoss(t_tick_);
+        gov_last_tow_ = b.tow_s;
+    }
     if (npend_built_ == 2)
     {
         dropFront();
         st_.epochs_stale++;
         pend_flags_ |= RGE_STALE;
+        gov_.onLoss(t_tick_);
     }
     pend_built_[(pb_head_ + npend_built_) & 1] = b;
     npend_built_++;
@@ -660,6 +687,18 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
     if (static_cast<double>(ekf_.gExcess()) + 1.0 > cfg_.boost_screen_g)
         boost_seen_t_ = ekf_.time();      // the boost screen's window (startJob)
     t_prev_ = t;
+    if (gov_.on())
+    {
+        // the cap governor's boost: the launch edge, and the boost screen's
+        // own test (the IMU past boost_screen_g within its window, before the
+        // apogee call) whether the screen runs or not
+        const bool in_flight = (s.flags & kShadowInFlight) != 0;
+        if ((in_flight && !gov_in_flight_)
+            || (!(s.flags & kShadowApogee) && cfg_.boost_screen_g > 0.0
+                && ekf_.time() - boost_seen_t_ <= cfg_.boost_screen_window_s))
+            gov_.onBoost(t);
+        gov_in_flight_ = in_flight;
+    }
     // Where the flight filter levels: on the ground at g's size (not on a
     // motor burning before the launch detector says so); in flight (under a
     // chute) only once steady and at g's size (LevelGate.h)
@@ -873,6 +912,9 @@ void RawGnssShadow::start(double t)
     last_baro_fused_t_ = -1.0e9;
     prop_sum_ = 0;
     prop_n_ = 0;
+    gov_.reset();
+    gov_last_tow_ = -1.0;
+    gov_in_flight_ = false;
     st_.starts++;
 }
 
@@ -939,9 +981,12 @@ void RawGnssShadow::applyDueEpochs(double t, uint8_t imu_flags)
             st_.epochs_stale++;
             pend_flags_ |= RGE_STALE;
             dropFront();
+            gov_.onLoss(t);
             continue;
         }
         startJob(te, imu_flags);
+        if (job_.screen)
+            gov_.onBoost(t);              // the cap governor: a boost epoch, the floor
     }
 }
 
@@ -1042,6 +1087,7 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
     }
     job_.fused = 0;
     job_.cr_screened = false;
+    job_.late = false;
     job_.rs = RawGnssStats();
     job_.update_us = 0;
     job_.slices = 0;
@@ -1052,6 +1098,9 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
 void RawGnssShadow::workJob(double t)
 {
     const bool sliced = cfg_.epoch_slice_us > 0.0 && clock_ != nullptr && t - job_.te <= cfg_.epoch_job_max_s;
+    // the cap governor: an epoch past epoch_job_max_s is worked at once
+    if (gov_.on() && !sliced && cfg_.epoch_slice_us > 0.0 && clock_ != nullptr)
+        job_.late = true;
     const int64_t s0 = now();
     int64_t u0 = s0;
     job_.slices++;
@@ -1850,6 +1899,7 @@ void RawGnssShadow::closeJob(double age, double t)
 {
     const int n = built_.n;
     RawGnssStats& rs = job_.rs;
+    gov_.onClose(age, job_.late, t);      // the cap governor: how far behind the filter closed it
     if (rotOn())
     {
         st_.rot_last_skipped = job_.rot_dropped;

@@ -4,8 +4,10 @@
 # (BeiDou in its own time), the satellite cap in offer() -- GPS first, C/N0
 # with a 3 dB hold, a pick the elevation mask drops picked last, every
 # satellite's lock age kept, nothing changed with the cap off or above the
-# sky -- what addEphemeris refuses, and the store's default size, the
-# Beetle's, with no TR_EPH_CAPACITY macro of its own.
+# sky -- the cap governor's cap from the navigation state (a raise adds the
+# strongest left out, a cut drops the weakest picked; none on a stage with no
+# cap), what addEphemeris refuses, and the store's default size, the Beetle's,
+# with no TR_EPH_CAPACITY macro of its own.
 add_executable(test_raw_gnss_stage_v9 test_raw_gnss_stage_v9.cpp
     ${LIB_DIR}/TR_RawGnssShadow/RawGnssMeasStage.cpp
     ${LIB_DIR}/TR_GNSSRaw/eph.c

@@ -40,6 +40,10 @@
 // satellite left out for a while comes back with its lock age, not as a
 // relock. (The carrier range rate, off where the cap is used, would start
 // over for it.) stats().capped_out counts the buildable satellites left out.
+// Where the filter's cap governor runs (CapGovernor.h), the cap is the one
+// the navigation state offer() builds at carries (ShadowNav::sat_cap): the
+// same picks with their hold, so a raise adds the strongest satellite left
+// out and a cut drops the weakest picked.
 //
 // Pure C++: tests_cpp/test_raw_gnss_shadow.cpp, tests_cpp/test_raw_gnss_stage_v9.cpp.
 #ifndef RAW_GNSS_MEAS_STAGE_H
@@ -137,6 +141,12 @@ public:
     // ... or, when the handoff to the filter's task is full (the two before
     // it not yet taken), not built: seen, and its lock ages kept.
     void skip(const TimedRawEpoch& e);
+    // The cap the next epoch is built with: nav's (the filter's cap
+    // governor's) where it gives one and the stage has a cap, else the
+    // config's. offer() takes it itself; a caller that builds its own way
+    // (the harness's sims) takes it here.
+    void useNavCap(const ShadowNav& nav);
+    int satCap() const { return cap_; }
 
     // Days from the ionosphere's file to the receiver's date (negative if the
     // file is dated later); false until both are known.
@@ -181,6 +191,7 @@ private:
     // the elevation mask, a bit a PRN by system; the time of week the first
     // of those was dropped
     TimedRawEpoch    sel_;
+    int              cap_ = 0;           // the cap in use: cfg_.sat_cap, or the governor's (useNavCap)
     uint64_t         picked_[3] = {};
     uint64_t         masked_[3] = {};
     double           masked_tow_ = 0.0;
