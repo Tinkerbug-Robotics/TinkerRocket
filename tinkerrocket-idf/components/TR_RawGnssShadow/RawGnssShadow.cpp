@@ -680,22 +680,8 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
         if (cfg_.dv_check != kDvOff && cfg_.dv_lever_mode == 1)
         {
             // the change check's lever allowance (dv_lever_mode 1): the nose's own rate in NED, R (w x x), and
-            // how fast it changes -- a roll about the nose changes neither
-            const double wx[3] = {0.0, static_cast<double>(wr[2]), -static_cast<double>(wr[1])};
-            double nd[3];
-            bodyToNed(ekf_.quat(), wx, nd);
-            if (dv_nd_have_)
-            {
-                double d2 = 0.0;
-                for (int i = 0; i < 3; ++i)
-                    d2 += (nd[i] - dv_nd_now_[i]) * (nd[i] - dv_nd_now_[i]);
-                const float ndd = static_cast<float>(std::sqrt(d2) / span);
-                if (ndd > dv_ndd_peak_)
-                    dv_ndd_peak_ = ndd;
-            }
-            for (int i = 0; i < 3; ++i)
-                dv_nd_now_[i] = static_cast<float>(nd[i]);
-            dv_nd_have_ = true;
+            // how fast it changes -- a roll about the nose changes neither (in float: a bound's input)
+            dv_nose_.step(ekf_.quat(), wr, static_cast<float>(span));
             const float wp = std::sqrt(wr[1] * wr[1] + wr[2] * wr[2]);
             if (wp > dv_wp_peak_)
                 dv_wp_peak_ = wp;
@@ -1443,10 +1429,7 @@ void RawGnssShadow::dvReset()
     dv_latch_ = false;
     dv_hdg_known_ = false;    // a flight restored in the air never knows
     lev_ref_ok_ = false;
-    for (int i = 0; i < 3; ++i)
-        dv_nd_now_[i] = dv_nd_ref_[i] = 0.0f;
-    dv_ndd_peak_ = 0.0f;
-    dv_nd_have_ = false;
+    dv_nose_ = dvc::NoseTurn<float>();
     dv_wp_peak_ = 0.0f;
     dv_wpwin_ = 0.0;
     wu_ref_ok_ = false;
@@ -1767,13 +1750,8 @@ void RawGnssShadow::jobDvCheck(double age)
         double lever = arm * (std::sqrt(dw2) + wp * wp * imu.dt);
         if (cfg_.dv_lever_mode == 1)
         {
-            double dn2 = 0.0;
-            for (int i = 0; i < 3; ++i)
-            {
-                const double d = static_cast<double>(dv_nd_now_[i]) - static_cast<double>(dv_nd_ref_[i]);
-                dn2 += d * d;
-            }
-            const double ax = arm * (std::sqrt(dn2) + 2.0 * age * static_cast<double>(dv_ndd_peak_));
+            const double ax =
+                arm * (static_cast<double>(dv_nose_.change()) + 2.0 * age * static_cast<double>(dv_nose_.ndd_peak));
             const double turn = std::fmin(2.0 * wp, wp * wp * imu.dt);
             lever = ax + cfg_.dv_lever_radial_m * (std::sqrt(dw2) + turn);
         }
@@ -1887,9 +1865,7 @@ void RawGnssShadow::jobDvCheck(double age)
     dv_w_peak_ = std::sqrt(dv_w_now_[0] * dv_w_now_[0] + dv_w_now_[1] * dv_w_now_[1] + dv_w_now_[2] * dv_w_now_[2]);
     if (cfg_.dv_lever_mode == 1)
     {
-        for (int i = 0; i < 3; ++i)
-            dv_nd_ref_[i] = dv_nd_now_[i];
-        dv_ndd_peak_ = 0.0f;
+        dv_nose_.rebase();
         dv_wp_peak_ = std::sqrt(dv_w_now_[1] * dv_w_now_[1] + dv_w_now_[2] * dv_w_now_[2]);
     }
     wu_ref_p_ = job_.wu_p;

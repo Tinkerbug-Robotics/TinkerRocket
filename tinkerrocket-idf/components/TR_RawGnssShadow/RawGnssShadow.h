@@ -1260,11 +1260,10 @@ private:
     // windup_monitor: this epoch's Dopplers at the prior (dv_next_), fitted
     void          windupMonitor();
     // dv_lever_mode 1: the nose's rate in NED (R (w x x_body), rad/s) at the
-    // last step and at the last check, its largest change a second since the
-    // check, and the largest rate across the nose since it and in the window
-    float         dv_nd_now_[3] = {}, dv_nd_ref_[3] = {};
-    float         dv_ndd_peak_ = 0.0f;
-    bool          dv_nd_have_ = false;
+    // last step and at the last check, and its largest change a second since
+    // the check (DopplerChange.h NoseTurn, in float); the largest rate across
+    // the nose since the check and in the window
+    dvc::NoseTurn<float> dv_nose_;
     float         dv_wp_peak_ = 0.0f;
     double        dv_wpwin_ = 0.0;
     bool          launch_seen_ = false; // a launch edge since the start (a restored flight has none)
