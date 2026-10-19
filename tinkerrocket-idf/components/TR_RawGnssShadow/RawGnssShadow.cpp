@@ -1877,13 +1877,14 @@ void RawGnssShadow::jobDvCheck(double age)
         }
         // the arm times the whole rate's change, and the turn the peak rate can make in a step; or (dv_lever_mode
         // 1) an antenna on the nose's axis moves only as the nose turns: its velocity change between the two
-        // checks' steps, and what the nose's turn can add between each step and its epoch's instant; one across
-        // the axis (dv_lever_radial_m) turns with the whole rate, its velocity's change at most twice its speed
+        // checks' steps, and what the nose's turn can add between each step and its Dopplers' instant (the
+        // epoch's, rrLag() before it: an epoch in pairs 25 ms further back); one across the axis
+        // (dv_lever_radial_m) turns with the whole rate, its velocity's change at most twice its speed
         double lever = arm * (std::sqrt(dw2) + wp * wp * imu.dt);
         if (cfg_.dv_lever_mode == 1)
         {
-            const double ax =
-                arm * (static_cast<double>(dv_nose_.change()) + 2.0 * age * static_cast<double>(dv_nose_.ndd_peak));
+            const double ax = arm * (static_cast<double>(dv_nose_.change())
+                                     + 2.0 * (age + ekf_.rrLag()) * static_cast<double>(dv_nose_.ndd_peak));
             const double turn = std::fmin(2.0 * wp, wp * wp * imu.dt);
             lever = ax + cfg_.dv_lever_radial_m * (std::sqrt(dw2) + turn);
         }

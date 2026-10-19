@@ -18,6 +18,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <random>
@@ -373,6 +374,10 @@ struct TenFlight
     // a calibrated magnetometer on the pad (the truth's field, 50 Hz, to ignition): the launch's heading is
     // the magnetometer's (the Doppler change check's dv_hdg_unset_deg judges it known)
     bool   mag_on_pad = false;
+    // each epoch handed over in pairs (TimedRawEpoch::rr_paired; the config's ekf.rr_pair_lag_s to match): its
+    // Dopplers the antenna's velocity this long before the epoch's tag, the pair's middle (a multiple of 5 ms; 0:
+    // none, the epoch's own instant)
+    int    pair_lag_ms = 0;
 };
 
 TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
@@ -417,6 +422,8 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
     int next_epoch = 1;                                       // tenths of a second
     uint32_t last_tow_ms = 0;
     TenRun run;
+    const size_t pair_steps = static_cast<size_t>(fl.pair_lag_ms / 5);
+    std::deque<std::array<double, 3>> ve_back;                // in pairs: the antenna's ECEF velocity, the last steps
     Mat3 C_prev = Ct;                                         // the roll's: the attitude a step before
     for (int step = 1; step * dt <= t_end + 1e-9; ++step)
     {
@@ -554,6 +561,29 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
                 d += double(qf[i]) * qt[i];
             run.att_err_deg.push_back(2.0 * std::acos(std::min(1.0, std::fabs(d))) * 57.29577951308232);
         }
+        // in pairs: the antenna's velocity each step (no faults), the epoch's Dopplers taken pair_steps back
+        if (pair_steps > 0)
+        {
+            const double r_b[3] = {fl.lever_m, fl.lever_y_m, fl.lever_z_m};
+            double w_b[3] = {ax[0] * w_turn, ax[1] * w_turn, 0.0};
+            if (fl.roll_rps != 0.0)
+            {
+                const double wt[3] = {w_b[0], w_b[1], w_b[2]};
+                for (int i = 0; i < 3; ++i)
+                    w_b[i] = Croll.m[0][i] * wt[0] + Croll.m[1][i] * wt[1] + Croll.m[2][i] * wt[2];
+                if (roll != 0.0)
+                    w_b[0] += fl.roll_rps;
+            }
+            const double wxr[3] = {w_b[1] * r_b[2] - w_b[2] * r_b[1], w_b[2] * r_b[0] - w_b[0] * r_b[2],
+                                   w_b[0] * r_b[1] - w_b[1] * r_b[0]};
+            double wxr_n[3], ve_s[3];
+            mat3Vec(Cn, wxr, wxr_n);
+            const double v_rx[3] = {v_ned[0] + wxr_n[0], v_ned[1] + wxr_n[1], v_ned[2] + wxr_n[2]};
+            nedToEcefVec(v_rx, ve_s);
+            ve_back.push_back({ve_s[0], ve_s[1], ve_s[2]});
+            if (ve_back.size() > pair_steps + 1)
+                ve_back.pop_front();
+        }
         // an epoch every epoch_ms of GPS time (a tenth of a second), built
         // where the receiver truly is
         if (step % epoch_steps == 0)
@@ -596,10 +626,15 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
                 nedToEcefVec(v_rx, ve);
                 for (int i = 0; i < 3; ++i)
                     r[i] = r0[i] + dr[i];
+                if (pair_steps > 0 && ve_back.size() == pair_steps + 1)
+                    for (int i = 0; i < 3; ++i)
+                        ve[i] = ve_back.front()[i];
                 TimedRawEpoch e;
                 e.epoch = sky.epoch(tow0 + ms / 1000.0, r, ve);
                 e.mcu_us = t64;
                 e.gps_week = kGoldenWeek;
+                if (pair_steps > 0)
+                    e.rr_paired = 1;
                 due.push_back(e);
             }
             next_epoch++;
@@ -2245,6 +2280,47 @@ TEST(RawGnssShadowV9, UnderARollTheNoseLeverIsTheCasesArmTimesThePitchOversTurn)
         }
         EXPECT_EQ(steady, 18);
         EXPECT_EQ(after, 14);
+    }
+}
+
+TEST(RawGnssShadowV9, InPairsTheNoseLeversPadReachesBackToThePairsMiddle)
+{
+    // The pitch-over above with every epoch handed over in pairs (the bench's Doppler pairs): each epoch's Dopplers
+    // are the antenna's 25 ms before its tag, and the filter takes them there (rr_pair_lag_s). The pad covers what
+    // the nose's turn adds between the check's step and the Dopplers' instant, now 55 + 25 ms back: the allowance
+    // is the arm times 2 sin(0.05) + 2 x 0.080 x 1 rad/s = 0.25996 rad/s (the epoch's own age alone, 0.055 s,
+    // would leave it at 0.20996: 19 % short). The window's is unchanged, and no epoch fails in any case.
+    const double rn = std::sqrt(kGoblinAnt[0] * kGoblinAnt[0] + kGoblinAnt[1] * kGoblinAnt[1]
+                                + kGoblinAnt[2] * kGoblinAnt[2]);
+    const double turn = 2.0 * std::sin(0.05) + 2.0 * (0.055 + 0.025);
+    struct Case
+    {
+        const double* r;
+        bool mag;
+        double arm;
+        const char* what;
+    };
+    for (const Case& c : {Case{nullptr, false, 0.3, "unknown"},
+                          Case{kGoblinAnt, true, 0.05 + 2.0 * std::sin(5.0 * kPi / 180.0) * rn,
+                               "known, the magnetometer's heading"},
+                          Case{kGoblinAnt, false, rn + 0.05, "known, the heading unset"}})
+    {
+        SCOPED_TRACE(c.what);
+        RawGnssShadow::Config cfg = leverCfg(1, c.r);
+        cfg.ekf.rr_pair_lag_s = 0.025;    // the profile's rr_pair_avg, applied
+        TenFlight fl = pitchingOver(1.0, kGoblinAnt, c.mag);
+        fl.pair_lag_ms = 25;
+        const TenRun run = flyTen(cfg, fl);
+        EXPECT_EQ(run.st.dv_epoch_fails, 0u);
+        int steady = 0;
+        for (const ClosedEpoch& e : run.eps)
+            if ((e.t > 6.55 && e.t < 7.45) || (e.t > 7.55 && e.t < 8.45))
+            {
+                EXPECT_NEAR(e.dv_lever_mps, c.arm * turn, 0.02 * c.arm * turn) << e.t;
+                EXPECT_NEAR(e.dv_lever_win_mps, 2.0 * c.arm, 0.01 * c.arm) << e.t;
+                steady++;
+            }
+        EXPECT_EQ(steady, 18);
     }
 }
 
