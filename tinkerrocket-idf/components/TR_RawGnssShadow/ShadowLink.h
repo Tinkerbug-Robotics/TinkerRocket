@@ -101,6 +101,9 @@ struct ShadowNav
     uint32_t time_us;          // the IMU tick it is at
     uint8_t  sat_cap;          // the satellites the GNSS task's stage builds an epoch at most, the filter's cap
                                // governor's (CapGovernor.h); 0: the stage's own sat_cap (in time_us's padding)
+    uint8_t  clock;            // its receiver clock taken since it (re)started: the GNSS task's cheaper build
+                               // spreads the orbit solves after a gap only then (RawGnssMeasStage; in the
+                               // padding too, so the struct and the frames holding it keep their size)
     double   lla[3];           // rad, rad, m (ellipsoidal)
     float    vel_ned[3];       // m/s
     float    quat[4];          // body FRD -> NED, scalar first (as GpsInsEKF)
@@ -113,8 +116,6 @@ struct ShadowNav
     uint8_t  baro_aided;       // a barometer sample fused within the last 1 s
     uint8_t  in_flight;        // its last IMU tick was INFLIGHT (the GNSS task keeps its ionosphere then)
     uint32_t epochs;           // raw epochs applied since it started
-    uint8_t  clock;            // its receiver clock taken since it (re)started: the GNSS task's cheaper build
-                               // spreads the orbit solves after a gap only then (RawGnssMeasStage)
 };
 
 // The GPS broadcast ionosphere the app uploaded with a pad calibration
