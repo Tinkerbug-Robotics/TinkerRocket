@@ -702,6 +702,33 @@ target_include_directories(test_bs_uplink_txwin PRIVATE
 target_link_libraries(test_bs_uplink_txwin GTest::gtest_main)
 gtest_discover_tests(test_bs_uplink_txwin)
 
+# ---------- test_bs_dup_detect ----------
+# Host-side test for the base station's duplicate rocket-ID flag (three-rocket
+# support): every rocket computer ships as rid 1, and two of them on one BS look
+# like one rocket whose name and seq jump around. bs_dup_detect.h is pure.
+add_executable(test_bs_dup_detect test_bs_dup_detect.cpp)
+target_include_directories(test_bs_dup_detect PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
+    ${LIB_DIR}/TR_RocketComputerTypes   # loraComputeObservedLoss, RocketState
+)
+target_link_libraries(test_bs_dup_detect GTest::gtest_main)
+gtest_discover_tests(test_bs_dup_detect)
+
+# ---------- test_bs_tx_slots ----------
+# Host-side test for the base-station transmit-slot controller (three-rocket
+# support): the BS times each rocket's frames and moves each onto its own third
+# of the 500 ms period with LORA_CMD_TX_SLOT_ADJUST. bs_tx_slots.h is pure; the
+# closed-loop case models the rocket follower from the contract.
+add_executable(test_bs_tx_slots test_bs_tx_slots.cpp)
+target_include_directories(test_bs_tx_slots PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
+    ${LIB_DIR}/TR_RocketComputerTypes   # LORA_TX_SLOT_COUNT, loraTimeOnAirMs
+)
+target_link_libraries(test_bs_tx_slots GTest::gtest_main)
+gtest_discover_tests(test_bs_tx_slots)
+
 # ---------- test_bs_battery_soc ----------
 # Host-side test for the base-station voltage-based SoC fallback (#501): the
 # BQ27Z746 reported 0% on a 4.17 V pack because its coulomb counter was never
