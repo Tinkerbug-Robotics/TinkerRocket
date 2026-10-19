@@ -170,10 +170,12 @@ predate it and carry none.
 
 What `startRawShadow()` builds under `TR_RAW_NAV_MOSAIC` (build_units D1a; checked against fc/v9raw-d 2502c322):
 
-- `mosaicG5Profile()` (v0), with `--fuse-ms` (`TR_BENCH_RAW_FUSE_MS`), `--sat-cap` (`TR_BENCH_RAW_SAT_CAP`) and
-  `--share-los` (`TR_BENCH_RAW_SHARE_LOS`: 1, the epoch's geometry taken once and shared by its units; 2, and the
-  Doppler's prediction in float; a `RAW_REPLAY_SHARELOS` build) applied to it first, and in a `RAW_REPLAY_CAPGOV`
-  build `--cap-max` (`TR_BENCH_RAW_CAP_MAX`: the satellite cap
+- `mosaicG5Profile()` (v0), with `--fuse-ms` (`TR_BENCH_RAW_FUSE_MS`), `--sat-cap` (`TR_BENCH_RAW_SAT_CAP`),
+  `--build-lite` (`TR_BENCH_RAW_BUILD_LITE`: the cheaper epoch build, `RawMeasBuilder.h`; a `RAW_REPLAY_BUILD_LITE`
+  build, refused but for the mosaic) and `--share-los` (`TR_BENCH_RAW_SHARE_LOS`: 1, the epoch's geometry taken once
+  and shared by its units; 2, and the Doppler's prediction in float; a `RAW_REPLAY_SHARELOS` build; the events
+  JSON's `build_lite` and `share_los` say which) applied to it first, with the Dopplers in pairs below and in a
+  `RAW_REPLAY_CAPGOV` build `--cap-max` (`TR_BENCH_RAW_CAP_MAX`: the satellite cap
   follows the filter's slack up to it, `CapGovernor.h`; its counts in the events JSON's `cap_gov`) and `--slice-us`
   (`TR_BENCH_RAW_SLICE_US`: the profile's `epoch_slice_us`), then `applyReceiverProfile`. Without a clock the
   harness works every epoch at once, so the governor sees only the handover's delay in the ages: `--fc-unit-us`

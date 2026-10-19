@@ -243,9 +243,13 @@ This is a statement about behavior, not bytes.
 - `tools/raw_replay/bitident.sh` and `tools/m1_identity.sh`: the Beetle's identity gates.
 - Bench switches (`flight_computer/CMakeLists.txt`, all marked `-bench`): `TR_BENCH_MOSAIC_CN0`,
   `TR_BENCH_MOSAIC_COLD_START` and `TR_BENCH_MOSAIC_TAG_TRACE` for the receiver; `TR_BENCH_RAW_FUSE_MS`,
-  `TR_BENCH_RAW_SAT_CAP`, `TR_BENCH_BOOST_SCREEN_G` and `TR_BENCH_DV_CHECK` for the filter's CPU and checks; and the
-  robustness hooks `TR_BENCH_RAW_START_FAIL`, `TR_BENCH_RESTORE_SIM`, `TR_BENCH_PANIC_AT_S`,
-  `TR_BENCH_PANIC_FILTER_AT_S` and `TR_BENCH_RAW_STOP_AT_S`.
+  `TR_BENCH_RAW_SAT_CAP`, `TR_BENCH_BOOST_SCREEN_G` and `TR_BENCH_DV_CHECK` for the filter's CPU and checks; the
+  four ways to use more GNSS data within the P4's budget (exp/v9-moredata-bench, each off unless set, any of them
+  together): `TR_BENCH_RAW_BUILD_LITE` (the cheaper epoch build), `TR_BENCH_RAW_SHARE_LOS` (the epoch's geometry
+  shared by its units, 2 with the Doppler's prediction in float), `TR_BENCH_RAW_DOP_AVG` (the Dopplers in pairs)
+  and `TR_BENCH_RAW_CAP_MAX` (the satellite cap's governor, with `TR_BENCH_RAW_CAP_PAD` and
+  `TR_BENCH_RAW_SLICE_US`); and the robustness hooks `TR_BENCH_RAW_START_FAIL`, `TR_BENCH_RESTORE_SIM`,
+  `TR_BENCH_PANIC_AT_S`, `TR_BENCH_PANIC_FILTER_AT_S` and `TR_BENCH_RAW_STOP_AT_S`.
 
 ## Evidence
 
