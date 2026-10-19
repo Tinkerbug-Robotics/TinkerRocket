@@ -251,6 +251,9 @@ struct GapBudget
     bool     exhausted  = false;  // the rest of this command's retries use the focused gate
 
     void reset() { *this = GapBudget{}; }
+    // The command is not ready for reasons of its own (radio busy, a scan, a
+    // retune pending): that wait is nobody's gap, so stop the clock.
+    void pause() { prev_ms = 0; }
 };
 
 enum class GateMode : uint8_t { Gap, Focused };

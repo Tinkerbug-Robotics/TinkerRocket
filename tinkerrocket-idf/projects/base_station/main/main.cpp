@@ -40,6 +40,8 @@
 #include "bs_uplink_policy.h"     // mayTransmitUplink() scan gate (#379)
 #include "bs_uplink_queue.h"      // uplink command FIFO (#502)
 #include "bs_uplink_txwin.h"      // TX-in-the-RX-gap window policy (#506)
+#include "bs_dup_detect.h"        // duplicate rocket-ID flag (three-rocket support)
+#include "bs_tx_slots.h"          // base-station-run transmit slots (three-rocket support)
 #include "bs_battery_soc.h"       // voltage-based SoC fallback (#501)
 #include "bs_pack_sense_policy.h"  // flight-pack dividers -> pack / cells (#714)
 #include "bs_download_policy.h"   // nextChunk()/mayEmitChunk() pacing (#380)
@@ -95,6 +97,11 @@ static inline void maybeMarkOtaValid()
 
 // Forward declarations
 static const char* rocketStateToString(uint8_t state);
+// Three-rocket support (defined in the "Transmit slots" section).
+static void noteDupEdge(int idx, bs_dup_detect::Edge edge);
+static void serviceTxSlotsOnFrame(int idx, uint16_t seq, bool fast, uint32_t start_ms,
+                                  uint32_t rx_key, int32_t prev_seq, uint32_t now_ms);
+static void txSlotAdjustDone(uint8_t rid);
 
 // Radio backend seam (#410/#414): direct SPI LLCC68 (V1/V2 boards) or the
 // UART radio-daughterboard modem (V3), selected by the board header. The
@@ -227,6 +234,13 @@ static uint32_t uplink_tx_count       = 0;   // TXs actually emitted (stats)
 static uint32_t uplink_tx_airtime_ms  = 0;   // cumulative uplink time-on-air (stats)
 static uint32_t uplink_defer_count    = 0;   // passes deferred to protect the downlink
 static uint32_t uplink_defer_override = 0;   // liveness backstop fired (should be ~0)
+// Three-rocket support: the multi-rocket gap gate (bs_uplink_txwin.h). The
+// budget belongs to the head command and is reset whenever a new one gets there.
+static bs_uplink_txwin::GapBudget uplink_gap_budget;
+static uint32_t uplink_gap_tx_count  = 0;   // TXs the gap gate sent (into a predicted hole)
+static uint32_t uplink_gap_fallbacks = 0;   // commands that spent their budget -> focused gate
+// Three-rocket support: the transmit-slot controller ("Transmit slots" section).
+static bs_tx_slots::Controller tx_slots;     // .enabled from NVS "txslot"/"on" (default on)
 
 // Storage mount state. Preferred backend is SD over SDMMC; if that fails at boot
 // we fall back to SPIFFS on internal flash (partitions.csv: "spiffs",
@@ -819,6 +833,16 @@ struct TrackedRocket {
     // Per-rocket CSV/freq-lock transition state (#381) — replaces the old
     // globals last_rocket_state / have_seen_first_state / inflight_entry_ms.
     bs_log_policy::RocketLogState log_state = {};
+    // Three-rocket support. dup: two rockets on this rid (Tier 1 "dup").
+    // phase: the last frame's on-air start, for the uplink gap gate. txslot:
+    // the transmit-slot controller's timing window and lock state; slot_key is
+    // the channel/modulation its window was measured on. hopping: the last
+    // frame announced a hop channel (never slot-adjusted while it does).
+    bs_dup_detect::State          dup     = {};
+    bs_uplink_txwin::RocketPhase  phase   = {};
+    bs_tx_slots::RocketSlot       txslot  = {};
+    uint32_t                      slot_key = 0;
+    bool                          hopping = false;
 };
 static TrackedRocket tracked_rockets[MAX_TRACKED_ROCKETS];
 static uint8_t active_rocket_idx = 0;  // Which rocket the BLE telemetry currently shows
@@ -894,6 +918,19 @@ static void updateFocusOnPacket(uint8_t rid, uint32_t now_ms)
     }
 }
 
+/// Hand tracker slot `i` to rocket `rid` with nothing of its previous occupant:
+/// not the forward-fill accumulator (the RX path seeds every frame from
+/// last_data, so an evicted rocket's fields would surface under the new rid),
+/// not its seq (a phantom gap, and a duplicate-rid anomaly), position, link
+/// stats, CSV transition state, duplicate flag or slot timing.
+static void claimTrackerSlot(int i, uint8_t rid)
+{
+    tracked_rockets[i]              = TrackedRocket{};
+    tracked_rockets[i].active       = true;
+    tracked_rockets[i].rocket_id    = rid;
+    tracked_rockets[i].last_seen_ms = millis();
+}
+
 /// Find or allocate a tracker slot for a given rocket_id.
 /// Returns index, or -1 if all slots full.
 static int findOrAllocRocket(uint8_t rid) {
@@ -905,10 +942,7 @@ static int findOrAllocRocket(uint8_t rid) {
             free_slot = i;
     }
     if (free_slot >= 0) {
-        tracked_rockets[free_slot].active = true;
-        tracked_rockets[free_slot].rocket_id = rid;
-        tracked_rockets[free_slot].unit_name[0] = '\0';
-        tracked_rockets[free_slot].last_seen_ms = millis();
+        claimTrackerSlot(free_slot, rid);
         return free_slot;
     }
     // All slots full — evict oldest.
@@ -922,11 +956,9 @@ static int findOrAllocRocket(uint8_t rid) {
     // bs_log_policy.h already documents for exactly this reason.
     const int oldest_idx = bs_log_policy::evictOldestIndex(
         tracked_rockets, MAX_TRACKED_ROCKETS, millis());
-    tracked_rockets[oldest_idx].active = true;
-    tracked_rockets[oldest_idx].rocket_id = rid;
-    tracked_rockets[oldest_idx].unit_name[0] = '\0';
-    tracked_rockets[oldest_idx].last_seen_ms = millis();
-    tracked_rockets[oldest_idx].log_state = {};  // evicted slot: fresh transitions
+    ESP_LOGW(TAG, "[RX] Tracker full: rocket %u evicted for rocket %u",
+             (unsigned)tracked_rockets[oldest_idx].rocket_id, (unsigned)rid);
+    claimTrackerSlot(oldest_idx, rid);
     return oldest_idx;
 }
 
@@ -2446,13 +2478,41 @@ static void printStats()
     // counters above, making a self-inflicted hole look like an RF problem. txwin
     // = retries held back to land in the gap between telemetry packets; forced =
     // the liveness backstop transmitting over the downlink anyway (want ~0).
-    ESP_LOGI(TAG, "[UPLINK] TX: %lu sent, %lu ms airtime | txwin: %lu deferred, %lu forced | rocket cadence: %u ms%s",
+    ESP_LOGI(TAG, "[UPLINK] TX: %lu sent, %lu ms airtime | txwin: %lu deferred, %lu forced | gap: %lu sent, %lu fell back | rocket cadence: %u ms%s",
              (unsigned long)uplink_tx_count,
              (unsigned long)uplink_tx_airtime_ms,
              (unsigned long)uplink_defer_count,
              (unsigned long)uplink_defer_override,
+             (unsigned long)uplink_gap_tx_count,
+             (unsigned long)uplink_gap_fallbacks,
              (unsigned)rx_cadence.periodMs(),
              rx_cadence.valid() ? "" : " (est, not yet learned)");
+
+    // Three-rocket support: per rocket, its slot (- = none), last measured
+    // error from its target (ms, + = late; ? = not measured), adjusts sent,
+    // L = locked / A = adjust in the queue, and D = duplicate rid.
+    {
+        char line[256];
+        int n = snprintf(line, sizeof(line), "[STATS] SLOTS: %s base=%c",
+                         tx_slots.enabled ? "on" : "off", tx_slots.have_base ? 'Y' : 'N');
+        for (int i = 0; i < MAX_TRACKED_ROCKETS && n > 0 && (size_t)n < sizeof(line); i++)
+        {
+            const TrackedRocket& tr = tracked_rockets[i];
+            if (!tr.active) continue;
+            const auto& ts = tr.txslot;
+            char slot_s[4], err_s[8];
+            if (ts.slot >= 0) snprintf(slot_s, sizeof(slot_s), "%d", (int)ts.slot);
+            else              snprintf(slot_s, sizeof(slot_s), "-");
+            if (ts.have_err)  snprintf(err_s, sizeof(err_s), "%+d", (int)ts.last_err_ms);
+            else              snprintf(err_s, sizeof(err_s), "?");
+            n += snprintf(line + n, sizeof(line) - (size_t)n,
+                          " | rid=%u slot=%s err=%s adj=%u%s%s%s",
+                          (unsigned)tr.rocket_id, slot_s, err_s, (unsigned)ts.adjusts_sent,
+                          ts.locked ? " L" : "", ts.awaiting_uplink ? " A" : "",
+                          tr.dup.flagged ? " D" : "");
+        }
+        ESP_LOGI(TAG, "%s", line);
+    }
 
     // Base-station battery.  The (est) marker says the SoC came from the voltage
     // curve rather than the gauge's coulomb count (#501) — without it, a plausible
@@ -2495,7 +2555,7 @@ static void sendCurrentConfig()
              ",\"pmn\":%.1f,\"pmx\":%.1f"
              ",\"sen\":%s"
              ",\"lf\":%.3f,\"lsf\":%u,\"lbw\":%.0f,\"lcr\":%u,\"lpw\":%d"
-             ",\"lhd\":%s,\"lhdw\":%u}",
+             ",\"lhd\":%s,\"lhdw\":%u,\"lts\":%s}",
              (int)cfg_servo_bias1, (int)cfg_servo_hz,
              (int)cfg_servo_min, (int)cfg_servo_max,
              (double)cfg_pid_kp, (double)cfg_pid_ki, (double)cfg_pid_kd,
@@ -2506,7 +2566,9 @@ static void sendCurrentConfig()
              lora_hop_disabled ? "true" : "false",
              // #150: airtime-derived hop dwell; 0 = hopping unavailable at
              // this preset (the app greys the picker option).
-             (unsigned)currentHopDwell());
+             (unsigned)currentHopDwell(),
+             // Three-rocket support: the base station runs transmit slots.
+             tx_slots.enabled ? "true" : "false");
     if (n < 0 || (size_t)n >= sizeof(buf)) {
         ESP_LOGW(TAG, "[CFG] Config JSON truncated! (%d bytes, buf=%u)", n, (unsigned)sizeof(buf));
     }
@@ -2560,7 +2622,7 @@ static void sendCurrentConfig()
 /// retries: number of TX attempts.  Defaults to config::UPLINK_RETRIES (8) for
 ///   reliability on important commands; heartbeat-style traffic can pass a
 ///   smaller value to keep airtime low.
-static void buildUplinkPacket(uint8_t cmd, const uint8_t* payload, size_t payload_len,
+static bool buildUplinkPacket(uint8_t cmd, const uint8_t* payload, size_t payload_len,
                               uint8_t target_rid = 0xFF,
                               uint8_t retries = config::UPLINK_RETRIES)
 {
@@ -2582,24 +2644,63 @@ static void buildUplinkPacket(uint8_t cmd, const uint8_t* payload, size_t payloa
             // so a rejected command leaves the pending ones untouched.
             ESP_LOGE(TAG, "[UPLINK] cmd=%u payload %u B exceeds max %u — REJECTED, not queued",
                      cmd, (unsigned)payload_len, (unsigned)bs_uplink_queue::kMaxPayload);
-            return;
+            return false;
 
         case bs_uplink_queue::PushResult::RejectedFull:
             // #502: the queue is the fix for silent clobbering, so a genuinely
             // full queue must be loud rather than quietly dropping the oldest.
             ESP_LOGE(TAG, "[UPLINK] queue full (%u) — cmd=%u DROPPED, not queued",
                      (unsigned)bs_uplink_queue::kDepth, cmd);
-            return;
+            return false;
 
         case bs_uplink_queue::PushResult::Queued:
             break;
     }
 
-    if (was_idle) uplink_last_tx_ms = 0;
+    if (was_idle)
+    {
+        uplink_last_tx_ms = 0;
+        uplink_gap_budget.reset();   // a new head command: a fresh gap budget
+    }
 
     ESP_LOGI(TAG, "[UPLINK] Queued cmd=%u -> rid=%u payload=%u bytes, %u retries (queue=%u)",
              cmd, target_rid, (unsigned)payload_len, (unsigned)retries,
              (unsigned)uplink_q.size());
+    return true;
+}
+
+// Retire the head command (retries spent, or dropped): the next one starts
+// with its own defer clock and gap budget, and the slot controller learns that
+// an adjust's retries are over.
+static void popUplinkHead()
+{
+    const bs_uplink_queue::Entry* tx = uplink_q.head();
+    if (tx == nullptr) return;
+    if (tx->cmd() == LORA_CMD_TX_SLOT_ADJUST) txSlotAdjustDone(tx->buf[2]);
+    uplink_q.pop();
+    uplink_defer_start_ms = 0;   // #506: don't carry this command's defer clock over
+    uplink_gap_budget.reset();
+}
+
+// Channel + modulation as one comparable key: a rocket heard under another key
+// is not on the air the radio is listening to now. kHz in the low 20 bits,
+// SF in the next 4, BW in 15.625 kHz units above that.
+static uint32_t chanKey(float freq_mhz, uint8_t sf, float bw_khz)
+{
+    const uint32_t khz = (uint32_t)lroundf(freq_mhz * 1000.0f) & 0xFFFFFu;
+    const uint32_t bwc = (uint32_t)lroundf(bw_khz / 15.625f) & 0xFFu;
+    return khz | ((uint32_t)(sf & 0x0F) << 20) | (bwc << 24);
+}
+// What the radio is tuned to right now (follows hops, scans, rendezvous).
+static uint32_t radioChanKey()
+{
+    return chanKey(lora_comms.currentFrequencyMHz(), lora_comms.currentSpreadingFactor(),
+                   lora_bw_khz);
+}
+// The operating channel this base station and its rockets are meant to be on.
+static uint32_t operatingChanKey()
+{
+    return chanKey(lora_freq_mhz, lora_sf, lora_bw_khz);
 }
 
 static void serviceUplink()
@@ -2621,8 +2722,7 @@ static void serviceUplink()
         // service() already auto-entered RX after the last TX.  Do NOT call
         // startReceive() here: it would reset rx_done_ and drop any downlink
         // packet that arrived between the TX completion and this point.
-        uplink_q.pop();  // next queued command (if any) starts on the following pass
-        uplink_defer_start_ms = 0;  // #506: don't carry this command's defer clock over
+        popUplinkHead();  // next queued command (if any) starts on the following pass
         return;
     }
 
@@ -2646,6 +2746,7 @@ static void serviceUplink()
                                              scan_passes_remaining_,
                                              lora_comms.canSend()))
     {
+        uplink_gap_budget.pause();
         return;  // radio busy, or a scan owns the channel — retry next pass
     }
 
@@ -2664,12 +2765,17 @@ static void serviceUplink()
     // actually listening on.
     if (hop_active_ && hop_needs_retune_)
     {
+        uplink_gap_budget.pause();
         return;
     }
 
     bs_uplink_txwin::Params win;
     win.period_ms     = rx_cadence.periodMs();
-    win.tx_airtime_ms = bs_uplink_txwin::timeOnAirMs(tx->len, lora_sf, lora_bw_khz, lora_cr);
+    // Three-rocket support: the base station transmits with the same 12-symbol
+    // preamble as the rockets (LORA_PREAMBLE_LEN); the historical default of 8
+    // under-counted every uplink by ~4 ms, which the gap gate cannot afford.
+    win.tx_airtime_ms = bs_uplink_txwin::timeOnAirMs(tx->len, lora_sf, lora_bw_khz, lora_cr,
+                                                     LORA_TELEM_PREAMBLE_SYMS);
     // #150: reserve = the REAL downlink airtime at the live modulation plus
     // margin.  The old flat 140 ms was sized for SF8's ~82 ms downlink and
     // under-reserved at higher SFs, sanctioning attempts that collided with
@@ -2685,12 +2791,49 @@ static void serviceUplink()
     if (uplink_defer_start_ms == 0) uplink_defer_start_ms = now;
     const uint32_t deferred_for = now - uplink_defer_start_ms;
 
-    if (!bs_uplink_txwin::mayStartTx(now, rx_anchor, deferred_for, win))
+    const bool focused_ok = bs_uplink_txwin::mayStartTx(now, rx_anchor, deferred_for, win);
+
+    // Three-rocket support: with several rockets on the air the focused
+    // rocket's quiet stretch is somebody else's frame. Predict every fresh
+    // rocket's frames and go only in a hole between them; a command that
+    // finds none within its budget finishes under the focused gate above.
+    // Not while following a hop: one rocket, one schedule, today's gate.
+    const bool gap_applicable = !hop_active_;
+    bool gap_ok = false;
+    if (gap_applicable)
+    {
+        bs_uplink_txwin::RocketPhase phases[MAX_TRACKED_ROCKETS];
+        for (int i = 0; i < MAX_TRACKED_ROCKETS; i++)
+        {
+            phases[i] = tracked_rockets[i].active ? tracked_rockets[i].phase
+                                                  : bs_uplink_txwin::RocketPhase{};
+        }
+        const uint32_t fast_air = loraTimeOnAirMs(SIZE_OF_LORA_FAST,
+                                                  lora_comms.currentSpreadingFactor(),
+                                                  lora_bw_khz, lora_cr,
+                                                  LORA_TELEM_PREAMBLE_SYMS);
+        gap_ok = bs_uplink_txwin::gapClear(now, win.tx_airtime_ms, fast_air,
+                                           phases, MAX_TRACKED_ROCKETS, radioChanKey());
+    }
+    const bool was_exhausted = uplink_gap_budget.exhausted;
+    bs_uplink_txwin::GateMode gate = bs_uplink_txwin::GateMode::Focused;
+    const bool go = bs_uplink_txwin::gateDecide(uplink_gap_budget, now, gap_applicable,
+                                                gap_ok, focused_ok, gate);
+    if (!was_exhausted && uplink_gap_budget.exhausted)
+    {
+        uplink_gap_fallbacks++;
+        ESP_LOGW(TAG, "[UPLINK] cmd=%u: no gap between the rockets' frames in its %u ms "
+                      "budget — focused-rocket gate for the rest of its retries",
+                 (unsigned)tx->cmd(), (unsigned)bs_uplink_txwin::kGapBudgetMs);
+    }
+    if (!go)
     {
         uplink_defer_count++;
-        return;  // inside the rocket's next downlink slot — wait for the gap
+        return;  // inside a rocket's next frame — wait for the gap
     }
-    if (deferred_for >= win.max_defer_ms && rx_anchor != 0)
+    if (gate == bs_uplink_txwin::GateMode::Gap) uplink_gap_tx_count++;
+    if (gate == bs_uplink_txwin::GateMode::Focused &&
+        deferred_for >= win.max_defer_ms && rx_anchor != 0)
     {
         // The liveness backstop fired: we transmitted over the downlink rather
         // than starve a blind, safety-relevant command. Should be ~0 in practice;
@@ -2732,8 +2875,7 @@ static void serviceUplink()
             ESP_LOGE(TAG, "[UPLINK] cmd=%u DROPPED after %u consecutive send() "
                           "failures (radio TX fault) — command was NEVER transmitted",
                      (unsigned)tx->cmd(), (unsigned)tx->send_failures);
-            uplink_q.pop();             // unwedge: next command gets its chance
-            uplink_defer_start_ms = 0;  // #506: don't carry this command's defer clock over
+            popUplinkHead();            // unwedge: next command gets its chance
         }
         else
         {
@@ -4099,6 +4241,224 @@ static void serviceAutoAcquire()
 }
 
 // ==========================================================================
+// SECTION: Transmit slots and duplicate rocket IDs (three-rocket support)
+// ==========================================================================
+// Up to three rockets share this base station's channel. Free-running at 2 Hz
+// their frames collide in streaks as their clocks slide past each other, so
+// the BASE STATION runs a TDMA grid: it times every rocket's frames on its own
+// clock and moves each rocket onto its own third of the 500 ms period with a
+// targeted LORA_CMD_TX_SLOT_ADJUST. bs_tx_slots.h has the rules and the
+// reasons; this section feeds it and acts on its decisions. BLE
+// BLE_BS_CMD_SET_TX_SLOTS turns it off in the field (a broadcast release puts
+// every rocket back to free-running). Every adjust, lock and unlock is a BS
+// log event "slot <what> rid= slot= err= ms" — the bench analysis reads them.
+
+// One slot event: console + the BS log (when a session is open).
+static void logSlotEvent(const char* what, const TrackedRocket& tr, int err_ms,
+                         const char* tail = "")
+{
+    char ev[BS_EVENT_TEXT_MAX + 1];
+    snprintf(ev, sizeof(ev), "slot %s rid=%u slot=%d err=%+d ms%s",
+             what, (unsigned)tr.rocket_id, (int)tr.txslot.slot, err_ms, tail);
+    ESP_LOGI(TAG, "[SLOT] %s", ev);
+    logHopEvent(ev, currentRxFreqMHz());
+}
+
+// A duplicate-rid edge from bs_dup_detect: say so on the console and in the log.
+static void noteDupEdge(int idx, bs_dup_detect::Edge edge)
+{
+    if (edge == bs_dup_detect::Edge::None || idx < 0) return;
+    const TrackedRocket& tr = tracked_rockets[idx];
+    char ev[BS_EVENT_TEXT_MAX + 1];
+    if (edge == bs_dup_detect::Edge::Set)
+    {
+        const uint8_t why = tr.dup.reasons;
+        snprintf(ev, sizeof(ev), "dup set rid=%u why=%s%s%s", (unsigned)tr.rocket_id,
+                 (why & bs_dup_detect::kReasonNames) ? "names" : "",
+                 (why == (bs_dup_detect::kReasonNames | bs_dup_detect::kReasonSeq)) ? "+" : "",
+                 (why & bs_dup_detect::kReasonSeq) ? "seq" : "");
+        ESP_LOGW(TAG, "[RX] Rocket ID %u is used by more than one rocket (%s) — give "
+                      "each rocket its own ID", (unsigned)tr.rocket_id, ev);
+    }
+    else
+    {
+        snprintf(ev, sizeof(ev), "dup clear rid=%u", (unsigned)tr.rocket_id);
+        ESP_LOGI(TAG, "[RX] Rocket ID %u: duplicate flag cleared", (unsigned)tr.rocket_id);
+    }
+    logHopEvent(ev, currentRxFreqMHz());
+}
+
+// "While any tracked rocket is INFLIGHT": its INFLIGHT safety timer is armed
+// and has not expired (bs_log_policy disarms it on leaving INFLIGHT; a rocket
+// lost mid-flight counts for LOG_INFLIGHT_SAFETY_MS, like the log does).
+static bool anyRocketInFlight(uint32_t now_ms)
+{
+    for (int i = 0; i < MAX_TRACKED_ROCKETS; i++)
+    {
+        const auto& ls = tracked_rockets[i].log_state;
+        if (tracked_rockets[i].active && ls.inflight_entry_ms != 0 &&
+            (now_ms - ls.inflight_entry_ms) < config::LOG_INFLIGHT_SAFETY_MS)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// (Re)assign slots over the tracked rockets; frozen keeps every slot held.
+static void assignTxSlots(bool frozen)
+{
+    uint8_t rids[MAX_TRACKED_ROCKETS];
+    int8_t  keep[MAX_TRACKED_ROCKETS];
+    int8_t  out[MAX_TRACKED_ROCKETS];
+    for (int i = 0; i < MAX_TRACKED_ROCKETS; i++)
+    {
+        rids[i] = tracked_rockets[i].active ? tracked_rockets[i].rocket_id : 0;
+        keep[i] = frozen ? tracked_rockets[i].txslot.slot : (int8_t)-1;
+    }
+    bs_tx_slots::assignSlots(rids, keep, MAX_TRACKED_ROCKETS, out);
+    for (int i = 0; i < MAX_TRACKED_ROCKETS; i++)
+    {
+        auto& ts = tracked_rockets[i].txslot;
+        if (!tracked_rockets[i].active || out[i] == ts.slot) continue;
+        ESP_LOGI(TAG, "[SLOT] rid=%u slot %d -> %d", (unsigned)tracked_rockets[i].rocket_id,
+                 (int)ts.slot, (int)out[i]);
+        ts.slot = out[i];   // the controller sees the new target on its next check
+    }
+}
+
+// One accepted telemetry frame from tracker slot idx (both FAST and SLOW: a
+// SLOW frame can still reveal a reboot or a channel move; only FAST ones are
+// timed). prev_seq is the tracker's seq before this frame.
+static void serviceTxSlotsOnFrame(int idx, uint16_t seq, bool fast, uint32_t start_ms,
+                                  uint32_t rx_key, int32_t prev_seq, uint32_t now_ms)
+{
+    TrackedRocket& tr = tracked_rockets[idx];
+    auto& ts = tr.txslot;
+
+    // A seq that went backwards or jumped implausibly: most likely a reboot,
+    // and a lock lives in the rocket's RAM. A window from another channel or
+    // modulation does not describe this one. Either way: free-running again.
+    const bool reboot = prev_seq >= 0 && loraComputeObservedLoss(prev_seq, seq) < 0;
+    const bool moved  = (tr.slot_key != 0 && tr.slot_key != rx_key);
+    if (reboot || moved)
+    {
+        if (ts.locked && !tr.dup.flagged)
+            logSlotEvent("unlock", tr, ts.last_err_ms, reboot ? " why=reboot" : " why=chan");
+        ts.resetTiming();
+    }
+    tr.slot_key = rx_key;
+    if (!fast) return;
+
+    ts.onFast(seq, start_ms, now_ms);
+    const bool in_flight = anyRocketInFlight(now_ms);
+    assignTxSlots(in_flight);
+
+    // Never a rocket that is hopping, a rid two rockets share, or one heard off
+    // the operating channel/modulation; never while a scan, a reconfigure or
+    // silence recovery owns the radio. And only into an idle uplink queue: the
+    // rocket keeps the send times of its last 16 frames, so ref_seq must still
+    // be among them when the adjust goes out.
+    const bool eligible = tx_slots.enabled &&
+                          !tr.hopping && !hop_active_ &&
+                          !tr.dup.flagged &&
+                          rx_key == operatingChanKey() &&
+                          recovery_state == RecoveryState::IDLE &&
+                          lora_txn_state == LoRaTxnState::IDLE &&
+                          scan_passes_remaining_ == 0 &&
+                          coord_scan_state_ == CoordScanState::IDLE;
+    if (!eligible || uplinkBusy()) return;
+
+    const bool airtime_ok = bs_tx_slots::airtimeFits(lora_comms.currentSpreadingFactor(),
+                                                     lora_bw_khz, lora_cr);
+    const bs_tx_slots::Decision d = tx_slots.evaluate(ts, true, airtime_ok, in_flight);
+
+    if (d.lock)   logSlotEvent("lock", tr, d.err_ms);
+    if (d.unlock) logSlotEvent("unlock", tr, d.err_ms, " why=drift");
+    if (!d.adjust) return;
+
+    uint8_t payload[4];
+    bs_tx_slots::packAdjust(payload, d.ref_seq, d.delta_ms);
+    if (!buildUplinkPacket(LORA_CMD_TX_SLOT_ADJUST, payload, sizeof(payload),
+                           tr.rocket_id, config::TX_SLOT_ADJUST_RETRIES))
+    {
+        return;   // logged by buildUplinkPacket; the next frame tries again
+    }
+    bs_tx_slots::Controller::onAdjustQueued(ts, now_ms);
+    char tail[40];
+    snprintf(tail, sizeof(tail), " ref=%u d=%+d%s", (unsigned)d.ref_seq, (int)d.delta_ms,
+             d.base_set ? " base" : "");
+    logSlotEvent("adjust", tr, d.err_ms, tail);
+}
+
+// popUplinkHead(): an adjust's retries are over. Broadcasts (the release) and
+// a rid evicted meanwhile have nobody to tell.
+static void txSlotAdjustDone(uint8_t rid)
+{
+    if (rid == 0xFF) return;
+    const int idx = slotOfRid(rid);
+    if (idx >= 0) bs_tx_slots::Controller::onAdjustDone(tracked_rockets[idx].txslot);
+}
+
+// Every pass: an adjust that never reached popUplinkHead (cannot happen while
+// the queue drains, but a wedged queue must not freeze a rocket's slot).
+static void serviceTxSlotTimeouts(uint32_t now_ms)
+{
+    for (int i = 0; i < MAX_TRACKED_ROCKETS; i++)
+    {
+        auto& ts = tracked_rockets[i].txslot;
+        if (tracked_rockets[i].active && bs_tx_slots::awaitingExpired(ts, now_ms))
+        {
+            ESP_LOGW(TAG, "[SLOT] rid=%u: adjust never left the uplink queue — re-checking",
+                     (unsigned)tracked_rockets[i].rocket_id);
+            bs_tx_slots::Controller::onAdjustDone(ts);
+        }
+    }
+}
+
+// BLE BLE_BS_CMD_SET_TX_SLOTS. Off: stop adjusting, forget the grid and tell
+// every rocket to go back to free-running (broadcast release). Sent on every
+// "off", not only on the change, so the operator can repeat it for a rocket
+// that missed it. On: start over from free-running timing.
+static void setTxSlotsEnabled(bool on)
+{
+    const bool was = tx_slots.enabled;
+    tx_slots.enabled = on;
+    if (on != was)
+    {
+        Preferences sp;
+        sp.begin("txslot", false);
+        sp.putUChar("on", on ? 1 : 0);
+        sp.end();
+    }
+    if (on && was) return;
+
+    for (int i = 0; i < MAX_TRACKED_ROCKETS; i++)
+    {
+        TrackedRocket& tr = tracked_rockets[i];
+        if (!tr.active) continue;
+        if (!on && tr.txslot.locked) logSlotEvent("unlock", tr, tr.txslot.last_err_ms, " why=off");
+        tr.txslot.resetTiming();
+        tr.txslot.awaiting_uplink = false;
+    }
+    tx_slots.resetBase();
+
+    if (on)
+    {
+        ESP_LOGI(TAG, "[SLOT] Transmit slots ON — the base station times and slots the rockets");
+        logHopEvent("slots on", currentRxFreqMHz());
+        return;
+    }
+    uint8_t payload[4];
+    bs_tx_slots::packAdjust(payload, 0, LORA_TX_SLOT_RELEASE);
+    const bool queued = buildUplinkPacket(LORA_CMD_TX_SLOT_ADJUST, payload, sizeof(payload),
+                                          /*target_rid=*/0xFF, config::TX_SLOT_RELEASE_RETRIES);
+    ESP_LOGI(TAG, "[SLOT] Transmit slots OFF — release broadcast %s (x%u)",
+             queued ? "queued" : "NOT queued", (unsigned)config::TX_SLOT_RELEASE_RETRIES);
+    logHopEvent("slots off release broadcast", currentRxFreqMHz());
+}
+
+// ==========================================================================
 // SECTION: Boot setup
 // ==========================================================================
 static void setup_bs()
@@ -4476,6 +4836,15 @@ static void setup_bs()
     lora_tx_power  = (int8_t)prefs.getChar("txpwr", config::LORA_TX_POWER_DBM);
     lora_hop_disabled = prefs.getUChar("hopdis", 1) != 0;  // #150: default fixed mode
     prefs.end();
+    // Three-rocket support: transmit slots, own namespace so the lora schema
+    // gate above never resets the operator's choice. Default on.
+    {
+        Preferences sp;
+        sp.begin("txslot", true);
+        tx_slots.enabled = sp.getUChar("on", 1) != 0;
+        sp.end();
+        ESP_LOGI(TAG, "[CFG] Transmit slots: %s", tx_slots.enabled ? "on" : "off");
+    }
     ESP_LOGI(TAG, "[CFG] LoRa NVS (cached): %.1f MHz SF%u BW%.0f CR%u %d dBm hop_disabled=%d",
              (double)lora_freq_mhz, (unsigned)lora_sf,
              (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power,
@@ -4794,8 +5163,24 @@ static void loop_bs()
     size_t rx_len = 0;
 
     bool rx_packet_accepted = false;
+    // Three-rocket slots + the uplink gap gate time each rocket's frames from
+    // the moment the radio finished receiving them: the DIO1 RxDone stamp on
+    // the direct radio, this pass's time where the backend has none (the UART
+    // modem) or the stamp is implausible. And which channel/modulation the
+    // radio was on for it.
+    uint32_t rx_done_ms  = 0;
+    uint32_t rx_chan_key = 0;
     if (lora_comms.readPacket(rx_buf, sizeof(rx_buf), rx_len))
     {
+        const uint32_t now_rx = millis();
+        rx_done_ms = lora_comms.lastRxDoneMs();
+        if (rx_done_ms == 0 || (int32_t)(now_rx - rx_done_ms) < 0 ||
+            (now_rx - rx_done_ms) > 1000U)
+        {
+            rx_done_ms = now_rx;
+        }
+        rx_chan_key = radioChanKey();
+
         // SNR floor (#90 follow-up).  Defends against noise-floor
         // false-positive decodes that confuse recovery + hop tracking.
         // The threshold tracks the radio's currently-configured SF
@@ -4853,8 +5238,16 @@ static void loop_bs()
                     size_t name_len = rx_len - 3;
                     if (name_len >= sizeof(tracked_rockets[slot].unit_name))
                         name_len = sizeof(tracked_rockets[slot].unit_name) - 1;
-                    memcpy(tracked_rockets[slot].unit_name, &rx_buf[3], name_len);
-                    tracked_rockets[slot].unit_name[name_len] = '\0';
+                    char name[sizeof(tracked_rockets[slot].unit_name)];
+                    memcpy(name, &rx_buf[3], name_len);
+                    name[name_len] = '\0';
+                    // Three-rocket support: two rockets on one rid take turns
+                    // renaming it. Compared against the name it held so far
+                    // (empty right after allocation/eviction = not a change).
+                    noteDupEdge(slot, bs_dup_detect::onBeacon(tracked_rockets[slot].dup,
+                                                              tracked_rockets[slot].unit_name,
+                                                              name));
+                    memcpy(tracked_rockets[slot].unit_name, name, name_len + 1);
                     tracked_rockets[slot].last_seen_ms = millis();
                     ESP_LOGI(TAG, "[RX] Beacon: rid=%u name=%s",
                              bcn_rid, tracked_rockets[slot].unit_name);
@@ -4988,10 +5381,16 @@ static void loop_bs()
                 // resets to 0).  We update last_seq unconditionally so the
                 // next RX gets a clean baseline either way.
                 int32_t observed_gap = -1;
+                int32_t prev_seq     = -1;
                 if (slot >= 0) {
-                    observed_gap = loraComputeObservedLoss(
-                        tracked_rockets[slot].last_seq, decoded.seq);
+                    prev_seq     = tracked_rockets[slot].last_seq;
+                    observed_gap = loraComputeObservedLoss(prev_seq, decoded.seq);
                     tracked_rockets[slot].last_seq = (int32_t)decoded.seq;
+                    // Three-rocket support: two seq counters interleaved on one
+                    // rid are a duplicate rocket ID.
+                    noteDupEdge(slot, bs_dup_detect::onTelemetry(tracked_rockets[slot].dup,
+                                                                 prev_seq, decoded.seq,
+                                                                 decoded.rocket_state));
                     if (observed_gap > 0) {
                         lora_total_observed_loss += (uint32_t)observed_gap;
                         if (hop_active_) {
@@ -5316,6 +5715,23 @@ static void loop_bs()
                     updateFocusOnPacket(decoded.rocket_id, millis());
                     if (decoded.rocket_id == effectiveFocusRid())
                         active_rocket_idx = (uint8_t)slot;
+
+                    // Three-rocket support: this frame's on-air start (RX done
+                    // minus its time on air at the radio's modulation) feeds
+                    // the uplink gap gate and the slot controller.
+                    TrackedRocket& tr = tracked_rockets[slot];
+                    const uint32_t toa = loraTimeOnAirMs(rx_len,
+                                                         lora_comms.currentSpreadingFactor(),
+                                                         lora_bw_khz, lora_cr,
+                                                         LORA_TELEM_PREAMBLE_SYMS);
+                    const uint32_t start_ms = rx_done_ms - toa;
+                    tr.phase.valid    = true;
+                    tr.phase.start_ms = start_ms;
+                    tr.phase.heard_ms = rx_done_ms;
+                    tr.phase.chan_key = rx_chan_key;
+                    tr.hopping = (decoded.next_channel_idx != LORA_NEXT_CH_NO_HOP);
+                    serviceTxSlotsOnFrame(slot, decoded.seq, frame_type == LORA_FRAME_FAST,
+                                          start_ms, rx_chan_key, prev_seq, millis());
                 }
 
                 // Forward telemetry to BLE app (with rocket_id for app-side demux)
@@ -5324,6 +5740,9 @@ static void loop_bs()
                                   lat_deg, lon_deg, alt_m, ble_telem);
                 if (slot >= 0 && tracked_rockets[slot].unit_name[0]) {
                     ble_telem.source_unit_name = tracked_rockets[slot].unit_name;
+                }
+                if (slot >= 0) {
+                    ble_telem.source_dup_rid = tracked_rockets[slot].dup.flagged;
                 }
                 ble_app.sendTelemetry(ble_telem);
                 rx_sent_telem_this_iter = true;   // #289
@@ -5497,6 +5916,7 @@ static void loop_bs()
                 if (tr.unit_name[0]) {
                     ble_telem.source_unit_name = tr.unit_name;
                 }
+                ble_telem.source_dup_rid = tr.dup.flagged;
                 const uint32_t age_ms = millis() - tr.last_seen_ms;
                 if (age_ms > config::BLE_TELEMETRY_STALE_MS)
                 {
@@ -6034,6 +6454,19 @@ static void loop_bs()
             }
         }
     }
+    else if (ble_cmd == BLE_BS_CMD_SET_TX_SLOTS)
+    {
+        // Three-rocket support: transmit slots on/off. Payload [on]: 1 = the
+        // base station runs slots (default), 0 = it stops and broadcasts a
+        // release. NVS; readback "lts". Not a toggle.
+        const uint8_t* payload = ble_app.getCommandPayload();
+        const size_t plen = ble_app.getCommandPayloadLength();
+        if (plen >= 1)
+        {
+            setTxSlotsEnabled(payload[0] != 0);
+            sendCurrentConfig();
+        }
+    }
     // #1422: the mirror of the rocket-side gap — a rocket command sent to a
     // base station was acknowledged and dropped in silence. One chain here, so
     // one terminal else does it; the `!= 0` is load-bearing, because unlike the
@@ -6086,6 +6519,7 @@ static void loop_bs()
 
     // Service LoRa uplink retries (TX commands, then resume RX)
     serviceUplink();
+    serviceTxSlotTimeouts(millis());
 
     // Advance the transactional reconfigure state machine (issue #71).
     // Must run after serviceUplink so we observe the uplink queue draining
