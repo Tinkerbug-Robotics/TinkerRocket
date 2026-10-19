@@ -81,6 +81,7 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
 
 # Board revision selection (#411). Exactly one flag, and it is MANDATORY:
 #
+#   idf.py -B build_v5 -DTR_BOARD_V5=1 build   # legacy V5 board (TinkerRocket Full V5, archived)
 #   idf.py -B build_v7 -DTR_BOARD_V7=1 build   # legacy V7 board
 #   idf.py -B build_v8 -DTR_BOARD_V8=1 build   # V8 bench boards
 #   idf.py -B build_v9 -DTR_BOARD_V9=1 build   # Tinker-Mantis V9 (tag rocket-computer-v9.0.0)
@@ -100,7 +101,7 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
 # The build-dir name is cosmetic — the board comes ONLY from the flag. Use a
 # separate -B dir per variant anyway, since CMake caches it.
 set(_tr_board_flags_set "")
-foreach(_tr_flag TR_BOARD_V7 TR_BOARD_V8 TR_BOARD_V9 TR_BOARD_V10 TR_BOARD_M1)
+foreach(_tr_flag TR_BOARD_V5 TR_BOARD_V7 TR_BOARD_V8 TR_BOARD_V9 TR_BOARD_V10 TR_BOARD_M1)
     if(${_tr_flag})
         list(APPEND _tr_board_flags_set ${_tr_flag})
     endif()
@@ -109,13 +110,14 @@ list(LENGTH _tr_board_flags_set _tr_board_flag_count)
 if(_tr_board_flag_count EQUAL 0)
     message(FATAL_ERROR
         "flight_computer: no board revision selected. Pass exactly one of "
-        "-DTR_BOARD_V7=1 / -DTR_BOARD_V8=1 / -DTR_BOARD_V9=1 / -DTR_BOARD_V10=1 / "
-        "-DTR_BOARD_M1=1 (V9 is the Tinker-Mantis as fabbed at tag "
+        "-DTR_BOARD_V5=1 / -DTR_BOARD_V7=1 / -DTR_BOARD_V8=1 / -DTR_BOARD_V9=1 / "
+        "-DTR_BOARD_V10=1 / -DTR_BOARD_M1=1 (V9 is the Tinker-Mantis as fabbed at tag "
         "rocket-computer-v9.0.0, V10 the Tinker-Mantis as ordered at tag "
         "tinker-mantis-v10.0.0; M1 is the Tinker-Beetle rev1, "
         "hardware/tinker-beetle, whose flight computer is an ESP32-S3 rather "
-        "than a P4). There is no default: the pyro maps all differ and a wrong "
-        "map fires the wrong channel, or none, with no runtime symptom.")
+        "than a P4; V5 is the archived TinkerRocket Full V5). There is no "
+        "default: the pyro maps all differ and a wrong map fires the wrong "
+        "channel, or none, with no runtime symptom.")
 elseif(NOT _tr_board_flag_count EQUAL 1)
     message(FATAL_ERROR
         "flight_computer: more than one board revision selected "

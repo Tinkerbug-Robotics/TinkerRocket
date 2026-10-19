@@ -116,7 +116,13 @@ jobs:
           # the V7 build fails CI". It is an 8 MB part rather than V9's 16 MB, so
           # nothing about it is covered by V8. V8 and V9 differ on ARM and swap
           # FIRE 2/3, so V8 needs its own build too. Their maps live in
-          # main/board/legacy/.
+          # main/board/legacy/. V5, the archived board V7 was respun from, has
+          # an arm per channel (ganged in firmware) and arm-up continuity, the
+          # one board where both of those paths compile in.
+          - line: legacy
+            project: flight_computer
+            board: V5
+            flags: -B build_v5 -DTR_BOARD_V5=1
           - line: legacy
             project: flight_computer
             board: V7
@@ -137,6 +143,10 @@ jobs:
             project: flight_computer
             board: V8-mosaic
             flags: -B build_v8_rawnav -DTR_BOARD_V8=1 -DTR_GNSS_MOSAIC=1
+          - line: legacy
+            project: out_computer
+            board: V5
+            flags: -B build_v5 -DTR_BOARD_V5=1
           - line: legacy
             project: out_computer
             board: V7
