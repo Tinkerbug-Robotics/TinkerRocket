@@ -372,6 +372,20 @@ struct Controller
     }
 };
 
+// Is the radio's RX-done stamp this packet's own? The DIO1 interrupt is edge-
+// triggered and the radio stays in continuous RX: if the loop stalls until a
+// SECOND packet has also arrived, DIO1 never drops, there is no new edge, and
+// that packet comes back with the first one's stamp — early by a frame gap,
+// enough to put a rocket in the wrong slot. A later packet cannot have
+// finished sooner than its own time on air after the earlier one's RX done,
+// so a stamp younger than that is this packet's. An older one is ambiguous:
+// the caller then does not time the frame at all.
+inline bool rxStampIsThisPackets(uint32_t now_ms, uint32_t stamp_ms, uint32_t toa_ms)
+{
+    const int32_t age = (int32_t)(now_ms - stamp_ms);
+    return age >= 0 && (uint32_t)age < toa_ms;
+}
+
 // An adjust the caller never reported done (lost from the queue): give up on it.
 inline bool awaitingExpired(const RocketSlot& r, uint32_t now_ms)
 {

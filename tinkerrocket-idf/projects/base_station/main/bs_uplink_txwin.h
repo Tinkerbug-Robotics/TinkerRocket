@@ -174,8 +174,9 @@ inline bool mayStartTx(uint32_t now_ms,
 //   * frame k of a rocket starts at (its last measured on-air start) + k * 500.
 //     The FIXED period, not the learned RxCadence: a rocket's frames are 500 ms
 //     apart by construction, and the learned value is the focused rocket's only.
-//   * every frame is assumed FAST (the longer one) — a SLOW frame is followed by
-//     a beacon now and then, and guessing which is which buys nothing.
+//   * every frame is assumed FAST (the longer one) — guessing FAST vs SLOW buys
+//     nothing. Name beacons are not predicted at all: one lost to an uplink
+//     now and then costs a name refresh, nothing more.
 //   * kGapMarginMs is kept clear before each predicted start for jitter, and
 //     after the end of a frame not heard yet: frames only run late against
 //     the prediction (free-running: 500 ms + loop time per period), and a TX
@@ -206,6 +207,11 @@ struct RocketPhase
     uint32_t start_ms       = 0;      // on-air start of the last frame heard
     uint32_t heard_ms       = 0;      // when that frame was received
     uint32_t chan_key       = 0;      // channel/modulation it was heard on (caller's key)
+    // Extra clear air before this rocket's predicted starts: its start was
+    // measured from a late clock (the UART modem has no RX stamp, so the
+    // loop time stands in, late by the link and the loop) and so is every
+    // prediction made from it.
+    uint8_t  lead_extra_ms  = 0;
 };
 
 // True when a TX of tx_airtime_ms starting at now overlaps no predicted frame of
@@ -234,7 +240,7 @@ inline bool clearOfRocket(uint32_t now_ms, uint32_t tx_airtime_ms,
     const uint32_t next_start = k * period_ms;   // relative to r.start_ms
     // Blocked when that frame's guarded window starts before our TX ends (or
     // has not yet ended: next_start <= e). Later frames start later still.
-    return next_start >= e + tx_airtime_ms + margin_ms;
+    return next_start >= e + tx_airtime_ms + margin_ms + r.lead_extra_ms;
 }
 
 // The gap gate over every tracked rocket. A rocket counts only when it was

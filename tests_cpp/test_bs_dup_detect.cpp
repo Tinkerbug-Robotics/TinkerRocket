@@ -250,3 +250,22 @@ TEST(BsDupDetect, ResetIsAFreshRocket) {
     EXPECT_EQ(beacon(s, fresh, "D"), Edge::None);         // first change: a rename
     EXPECT_FALSE(s.flagged);
 }
+
+TEST(BsDupDetect, RocketLostInFlightThatRebootsCanClearByBeacons) {
+    // Flag raised on the pad, the rocket flies, is lost, reboots into READY:
+    // its beacons resume and must be able to clear it — no LANDED ever comes.
+    State s;
+    char name[24] = "";
+    beacon(s, name, "A");
+    beacon(s, name, "B");
+    beacon(s, name, "A");
+    ASSERT_TRUE(s.flagged);
+    SeqFeed f;
+    for (uint16_t q = 500; q < 520; q++) f.frame(s, q, INFLIGHT);
+    EXPECT_TRUE(s.in_flight);
+    for (uint16_t q = 0; q < 20; q++) f.frame(s, q, READY);   // rebooted: one -1
+    EXPECT_FALSE(s.in_flight);
+    // The flagging beacon was the first "A"; two more make three.
+    EXPECT_EQ(beacon(s, name, "A"), Edge::None);
+    EXPECT_EQ(beacon(s, name, "A"), Edge::Cleared);
+}

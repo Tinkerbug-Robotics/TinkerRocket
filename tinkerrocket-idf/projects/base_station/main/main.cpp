@@ -99,8 +99,9 @@ static inline void maybeMarkOtaValid()
 static const char* rocketStateToString(uint8_t state);
 // Three-rocket support (defined in the "Transmit slots" section).
 static void noteDupEdge(int idx, bs_dup_detect::Edge edge);
-static void serviceTxSlotsOnFrame(int idx, uint16_t seq, bool fast, uint32_t start_ms,
-                                  uint32_t rx_key, int32_t prev_seq, uint32_t now_ms);
+static void serviceTxSlotsOnFrame(int idx, uint16_t seq, bool fast, bool timed,
+                                  uint32_t start_ms, uint32_t rx_key, int32_t prev_seq,
+                                  uint32_t now_ms);
 static void txSlotAdjustDone(uint8_t rid);
 
 // Radio backend seam (#410/#414): direct SPI LLCC68 (V1/V2 boards) or the
@@ -2973,6 +2974,14 @@ static bool startLoRaTransaction(float new_freq, float new_bw,
     txn_new_cr   = new_cr;
     txn_new_pwr  = new_pwr;
 
+    // Three-rocket support: a slot adjust still retrying at the head of the
+    // queue gives way — the relay has TXN_MAX_RELAY_MS for all its retries,
+    // and an adjust that is still needed is simply sent again later.
+    if (bs_uplink_queue::Entry* head = uplink_q.head())
+    {
+        if (head->cmd() == LORA_CMD_TX_SLOT_ADJUST) head->retries_left = 0;
+    }
+
     // Broadcast uplink to every rocket in the network on the OLD channel.
     // buildUplinkPacket queues + runs 8 retries on its own (~800 ms total).
     uint8_t loraPayload[11];
@@ -4305,16 +4314,22 @@ static bool anyRocketInFlight(uint32_t now_ms)
     return false;
 }
 
-// (Re)assign slots over the tracked rockets; frozen keeps every slot held.
-static void assignTxSlots(bool frozen)
+// (Re)assign slots over the rockets heard within TX_SLOT_STALE_MS; frozen
+// (a rocket in flight) keeps every slot held, a silent holder's included —
+// it may only be out of range for now.
+static void assignTxSlots(bool frozen, uint32_t now_ms)
 {
     uint8_t rids[MAX_TRACKED_ROCKETS];
     int8_t  keep[MAX_TRACKED_ROCKETS];
     int8_t  out[MAX_TRACKED_ROCKETS];
     for (int i = 0; i < MAX_TRACKED_ROCKETS; i++)
     {
-        rids[i] = tracked_rockets[i].active ? tracked_rockets[i].rocket_id : 0;
-        keep[i] = frozen ? tracked_rockets[i].txslot.slot : (int8_t)-1;
+        const TrackedRocket& tr = tracked_rockets[i];
+        const bool fresh = tr.active && tr.last_telem_ms != 0 &&
+                           (now_ms - tr.last_telem_ms) < config::TX_SLOT_STALE_MS;
+        const bool held  = frozen && tr.active && tr.txslot.slot >= 0;
+        rids[i] = (fresh || held) ? tr.rocket_id : 0;
+        keep[i] = frozen ? tr.txslot.slot : (int8_t)-1;
     }
     bs_tx_slots::assignSlots(rids, keep, MAX_TRACKED_ROCKETS, out);
     for (int i = 0; i < MAX_TRACKED_ROCKETS; i++)
@@ -4329,9 +4344,11 @@ static void assignTxSlots(bool frozen)
 
 // One accepted telemetry frame from tracker slot idx (both FAST and SLOW: a
 // SLOW frame can still reveal a reboot or a channel move; only FAST ones are
-// timed). prev_seq is the tracker's seq before this frame.
-static void serviceTxSlotsOnFrame(int idx, uint16_t seq, bool fast, uint32_t start_ms,
-                                  uint32_t rx_key, int32_t prev_seq, uint32_t now_ms)
+// timed, and only when timed = its RX time can be trusted). prev_seq is the
+// tracker's seq before this frame.
+static void serviceTxSlotsOnFrame(int idx, uint16_t seq, bool fast, bool timed,
+                                  uint32_t start_ms, uint32_t rx_key, int32_t prev_seq,
+                                  uint32_t now_ms)
 {
     TrackedRocket& tr = tracked_rockets[idx];
     auto& ts = tr.txslot;
@@ -4348,11 +4365,11 @@ static void serviceTxSlotsOnFrame(int idx, uint16_t seq, bool fast, uint32_t sta
         ts.resetTiming();
     }
     tr.slot_key = rx_key;
-    if (!fast) return;
+    if (!fast || !timed) return;
 
     ts.onFast(seq, start_ms, now_ms);
     const bool in_flight = anyRocketInFlight(now_ms);
-    assignTxSlots(in_flight);
+    assignTxSlots(in_flight, now_ms);
 
     // Never a rocket that is hopping, a rid two rockets share, or one heard off
     // the operating channel/modulation; never while a scan, a reconfigure or
@@ -5168,18 +5185,32 @@ static void loop_bs()
     // the direct radio, this pass's time where the backend has none (the UART
     // modem) or the stamp is implausible. And which channel/modulation the
     // radio was on for it.
-    uint32_t rx_done_ms  = 0;
-    uint32_t rx_chan_key = 0;
+    uint32_t rx_done_ms   = 0;
+    uint32_t rx_chan_key  = 0;
+    bool     rx_timed     = false;   // rx_done_ms is good enough to time the frame
+    uint8_t  rx_lead_slack = 0;      // gap-gate lead margin for a loop-time stamp
     if (lora_comms.readPacket(rx_buf, sizeof(rx_buf), rx_len))
     {
         const uint32_t now_rx = millis();
-        rx_done_ms = lora_comms.lastRxDoneMs();
-        if (rx_done_ms == 0 || (int32_t)(now_rx - rx_done_ms) < 0 ||
-            (now_rx - rx_done_ms) > 1000U)
-        {
-            rx_done_ms = now_rx;
-        }
         rx_chan_key = radioChanKey();
+        const uint32_t stamp = lora_comms.lastRxDoneMs();
+        if (stamp != 0)
+        {
+            // A stamp older than this packet's own airtime may be the previous
+            // packet's (bs_tx_slots::rxStampIsThisPackets): then the frame is
+            // simply not timed.
+            const uint32_t toa = loraTimeOnAirMs(rx_len, lora_comms.currentSpreadingFactor(),
+                                                 lora_bw_khz, lora_cr,
+                                                 LORA_TELEM_PREAMBLE_SYMS);
+            rx_done_ms = stamp;
+            rx_timed   = bs_tx_slots::rxStampIsThisPackets(now_rx, stamp, toa);
+        }
+        else
+        {
+            rx_done_ms    = now_rx;
+            rx_timed      = true;
+            rx_lead_slack = config::GAP_MARGIN_NO_RX_STAMP_MS;
+        }
 
         // SNR floor (#90 follow-up).  Defends against noise-floor
         // false-positive decodes that confuse recovery + hop tracking.
@@ -5725,13 +5756,17 @@ static void loop_bs()
                                                          lora_bw_khz, lora_cr,
                                                          LORA_TELEM_PREAMBLE_SYMS);
                     const uint32_t start_ms = rx_done_ms - toa;
-                    tr.phase.valid    = true;
-                    tr.phase.start_ms = start_ms;
-                    tr.phase.heard_ms = rx_done_ms;
-                    tr.phase.chan_key = rx_chan_key;
+                    if (rx_timed)
+                    {
+                        tr.phase.valid         = true;
+                        tr.phase.start_ms      = start_ms;
+                        tr.phase.heard_ms      = rx_done_ms;
+                        tr.phase.chan_key      = rx_chan_key;
+                        tr.phase.lead_extra_ms = rx_lead_slack;
+                    }
                     tr.hopping = (decoded.next_channel_idx != LORA_NEXT_CH_NO_HOP);
                     serviceTxSlotsOnFrame(slot, decoded.seq, frame_type == LORA_FRAME_FAST,
-                                          start_ms, rx_chan_key, prev_seq, millis());
+                                          rx_timed, start_ms, rx_chan_key, prev_seq, millis());
                 }
 
                 // Forward telemetry to BLE app (with rocket_id for app-side demux)

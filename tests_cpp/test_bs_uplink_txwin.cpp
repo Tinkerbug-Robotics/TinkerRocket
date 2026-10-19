@@ -556,3 +556,18 @@ TEST(BsUplinkGapGate, NoRocketsHeardMeansNoGate) {
     RocketPhase ph[3];
     EXPECT_TRUE(gapClear(1000, pkt(33), kFast, ph, 3, kChan));
 }
+
+TEST(BsUplinkGapGate, LoopTimeStampsGetExtraLeadMargin) {
+    // UART modem base station: no RX stamp, the loop's time stands in and is
+    // late, so every prediction is late too — keep more air clear ahead of it.
+    RocketPhase r;
+    r.valid = true;
+    r.start_ms = 40000;
+    r.heard_ms = 40102;
+    r.chan_key = kChan;
+    const uint32_t a = pkt(10);
+    EXPECT_TRUE(gapClear(40450, a, kFast, &r, 1, kChan));    // 500 - 10 - 40
+    r.lead_extra_ms = 20;
+    EXPECT_FALSE(gapClear(40450, a, kFast, &r, 1, kChan));
+    EXPECT_TRUE(gapClear(40430, a, kFast, &r, 1, kChan));
+}

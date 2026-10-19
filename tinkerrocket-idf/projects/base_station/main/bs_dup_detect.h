@@ -25,6 +25,8 @@
 // rocket stops beaconing in INFLIGHT (and while hopping), so a flag raised on
 // the pad holds through the flight; the rocket's LANDED report clears it when
 // its seq stream is clean, and the beacons resume after that anyway.
+// "In flight" is the latest frame's state, so a rocket that reboots out of
+// INFLIGHT can clear by its beacons too.
 //
 // Pure — no ESP-IDF / radio dependencies — so the host gtest drives it directly.
 // Same pattern as bs_uplink_queue.h / bs_uplink_txwin.h.
@@ -54,7 +56,7 @@ struct State
     uint8_t  agree      = 0;      // consecutive beacons with the current name
     uint8_t  votes      = 0;      // of those, heard with the seq stream clean
     bool     changed    = false;  // a name change has been seen since reset
-    bool     in_flight  = false;  // INFLIGHT seen, no LANDED since
+    bool     in_flight  = false;  // the latest frame said INFLIGHT
     uint16_t seq_hist   = 0;      // 1 bit per frame, newest in bit 0: 1 = -1 gap
     uint8_t  seq_frames = 0;      // frames in seq_hist (saturates at kSeqWindow)
 
@@ -149,15 +151,12 @@ inline Edge onTelemetry(State& s, int32_t prev_seq, uint16_t seq, uint8_t state)
         }
     }
 
-    if (state == INFLIGHT)
-    {
-        s.in_flight = true;
-    }
-    else if (state == LANDED)
-    {
-        s.in_flight = false;
-        if (s.flagged && !seqDirty(s)) edge = detail::clear(s);
-    }
+    // The hold follows the latest frame, not a latch: a rocket lost in flight
+    // that reboots into READY can clear by its beacons again. A pair of
+    // rockets (one flying, one on the pad) still cannot: their interleaved
+    // seq keeps the window dirty and the beacon votes at zero.
+    s.in_flight = (state == INFLIGHT);
+    if (state == LANDED && s.flagged && !seqDirty(s)) edge = detail::clear(s);
     return edge;
 }
 

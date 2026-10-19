@@ -491,3 +491,18 @@ TEST(BsTxSlots, ThreeRocketsConvergeOntoSeparateSlots) {
         EXPECT_TRUE(seen[0] && seen[1] && seen[2]);
     }
 }
+
+TEST(BsTxSlots, RxStampIsTrustedOnlyWithinThePacketsOwnAirtime) {
+    // FAST frame, 102 ms on air. The loop read it 3 ms after RX done: its own.
+    EXPECT_TRUE(rxStampIsThisPackets(10003, 10000, 102));
+    EXPECT_TRUE(rxStampIsThisPackets(10000, 10000, 102));
+    // The loop stalled through a second packet: DIO1 never dropped, so the
+    // packet read now carries the first one's stamp — at least its own
+    // airtime old. Ambiguous: not timed.
+    EXPECT_FALSE(rxStampIsThisPackets(10102, 10000, 102));
+    EXPECT_FALSE(rxStampIsThisPackets(10170, 10000, 102));
+    // A stamp from the future is not believed either.
+    EXPECT_FALSE(rxStampIsThisPackets(9999, 10000, 102));
+    // Across the millis() wrap.
+    EXPECT_TRUE(rxStampIsThisPackets(5, 0xFFFFFFF0u, 56));
+}
