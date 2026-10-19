@@ -42,6 +42,9 @@ private final class MapSurfaceSpy: RocketMapSurface {
         removed.append(annotation)
         annotations.removeAll { $0 === annotation }
     }
+    /// Restyle calls (a pin's focus changed) — must never be a remove/add.
+    private(set) var restyled: [MKAnnotation] = []
+    func restyleRocketPin(_ annotation: MKAnnotation) { restyled.append(annotation) }
     func addOverlay(_ overlay: MKOverlay) { overlays.append(overlay) }
     func removeOverlays(_ overlays: [MKOverlay]) {
         overlayRemovals += 1
@@ -198,5 +201,132 @@ final class MapAnnotationReconcileTests: XCTestCase {
         let coord = makeCoordinator()
         coord.syncDataOverlays(on: map, landing: padB, uncertaintyRadiusM: 0, descentTrack: [])
         XCTAssertTrue(map.overlays.isEmpty)
+    }
+}
+
+/// Three rockets, one base station: one pin per displayed rocket, under the
+/// same #836 rule — a pin is added when its rocket joins the set and removed
+/// when it leaves; every other change is made in place.
+final class MultiRocketMapPinTests: XCTestCase {
+
+    private let k1 = RocketKey(networkID: 7, rocketID: 1)
+    private let k2 = RocketKey(networkID: 7, rocketID: 2)
+    private let k3 = RocketKey(networkID: 7, rocketID: 3)
+
+    private func makeCoordinator() -> RocketMapView.Coordinator {
+        RocketMapView.Coordinator(
+            RocketMapView(tileSource: .constant(.appleStandard),
+                          region: .constant(MKCoordinateRegion()),
+                          followRocket: .constant(true))
+        )
+    }
+
+    private func pin(_ key: RocketKey, _ title: String, lat: Double,
+                     subtitle: String? = nil, focused: Bool = false) -> RocketMapPin {
+        RocketMapPin(key: key,
+                     coordinate: CLLocationCoordinate2D(latitude: lat, longitude: -118.2),
+                     title: title, subtitle: subtitle, focused: focused)
+    }
+
+    private func sync(_ coord: RocketMapView.Coordinator, _ map: MapSurfaceSpy, _ pins: [RocketMapPin]) {
+        coord.syncAnnotations(on: map, rocket: nil, rocketSubtitle: nil,
+                              landing: nil, landingSubtitle: nil, pins: pins)
+    }
+
+    func testThreeRockets_threePinsTitledByName() {
+        let map = MapSurfaceSpy()
+        let coord = makeCoordinator()
+        sync(coord, map, [pin(k1, "Booster", lat: 34.1, focused: true),
+                          pin(k2, "Pad Rocket", lat: 34.2),
+                          pin(k3, "Dart", lat: 34.3)])
+        XCTAssertEqual(map.annotations.count, 3)
+        XCTAssertEqual(Set(map.annotations.compactMap { $0.title ?? nil }),
+                       ["Booster", "Pad Rocket", "Dart"])
+    }
+
+    func testTicksAndMoves_neverRemoveOrReAdd() {
+        let map = MapSurfaceSpy()
+        let coord = makeCoordinator()
+        for tick in 0..<10 {
+            sync(coord, map, [pin(k1, "Booster", lat: 34.1 + Double(tick) * 0.001,
+                                  subtitle: "9 sats • \(tick)s ago", focused: true),
+                              pin(k2, "Pad Rocket", lat: 34.2, subtitle: "8 sats • \(tick)s ago"),
+                              pin(k3, "Dart", lat: 34.3, subtitle: "10 sats • \(tick)s ago")])
+        }
+        XCTAssertEqual(map.added.count, 3, "pins were re-added, so they had been torn down")
+        XCTAssertTrue(map.removed.isEmpty, "a tick removed a pin — that dismisses its callout")
+        let booster = map.annotations.first { $0.title ?? nil == "Booster" }
+        XCTAssertEqual(booster?.coordinate.latitude ?? 0, 34.109, accuracy: 1e-9)
+        XCTAssertEqual(booster?.subtitle ?? nil, "9 sats • 9s ago")
+    }
+
+    func testARocketLeaving_removesOnlyItsPin_andComingBackAddsItOnce() {
+        let map = MapSurfaceSpy()
+        let coord = makeCoordinator()
+        let all = [pin(k1, "Booster", lat: 34.1, focused: true),
+                   pin(k2, "Pad Rocket", lat: 34.2),
+                   pin(k3, "Dart", lat: 34.3)]
+        sync(coord, map, all)
+        sync(coord, map, [all[0], all[2]])          // Pad Rocket hidden
+        sync(coord, map, [all[0], all[2]])
+        XCTAssertEqual(map.removed.count, 1)
+        XCTAssertEqual(map.removed.first?.title ?? nil, "Pad Rocket")
+        XCTAssertEqual(map.annotations.count, 2)
+
+        sync(coord, map, all)
+        XCTAssertEqual(map.added.count, 4)
+        XCTAssertEqual(map.annotations.count, 3)
+    }
+
+    func testFocusChange_restylesInPlace() {
+        let map = MapSurfaceSpy()
+        let coord = makeCoordinator()
+        sync(coord, map, [pin(k1, "Booster", lat: 34.1, focused: true),
+                          pin(k2, "Pad Rocket", lat: 34.2)])
+        sync(coord, map, [pin(k1, "Booster", lat: 34.1),
+                          pin(k2, "Pad Rocket", lat: 34.2, focused: true)])
+        XCTAssertEqual(map.added.count, 2)
+        XCTAssertTrue(map.removed.isEmpty, "a focus switch must not cost an open callout")
+        XCTAssertEqual(Set(map.restyled.compactMap { $0.title ?? nil }), ["Booster", "Pad Rocket"])
+
+        // Unchanged focus: nothing to restyle.
+        sync(coord, map, [pin(k1, "Booster", lat: 34.1),
+                          pin(k2, "Pad Rocket", lat: 34.2, focused: true)])
+        XCTAssertEqual(map.restyled.count, 2)
+    }
+
+    func testLandingPin_isIndependentOfTheRocketSet() {
+        let map = MapSurfaceSpy()
+        let coord = makeCoordinator()
+        let landing = CLLocationCoordinate2D(latitude: 34.0, longitude: -118.0)
+        coord.syncAnnotations(on: map, rocket: nil, rocketSubtitle: nil, landing: landing,
+                              landingSubtitle: "±30 m",
+                              pins: [pin(k1, "Booster", lat: 34.1), pin(k2, "Dart", lat: 34.2)])
+        coord.syncAnnotations(on: map, rocket: nil, rocketSubtitle: nil, landing: landing,
+                              landingSubtitle: "±30 m", pins: [pin(k1, "Booster", lat: 34.1)])
+        XCTAssertEqual(map.annotations.count, 2, "Booster + predicted landing")
+        XCTAssertEqual(map.removed.first?.title ?? nil, "Dart")
+    }
+
+    /// The fix cache keys on the LIVE network id, so a fix recorded before the
+    /// identity readback sits under network 0 next to the real one. Only the
+    /// dashboard's own keys may draw.
+    func testPinsComeFromTheDashboardsKeysOnly_notStaleNetworkZeroEntries() {
+        func fix(_ rid: UInt8, _ lat: Double) -> LastValidRocketFix {
+            LastValidRocketFix(rocketID: rid, latitude: lat, longitude: -118.2,
+                               numSats: 9, fixDate: Date())
+        }
+        let subjects = [k1, k2, k3].map {
+            RocketSubject(id: .known($0), name: "Rocket \($0.rocketID)", direct: nil, relays: [])
+        }
+        let fixes: [RocketKey: LastValidRocketFix] = [
+            RocketKey(networkID: 0, rocketID: 1): fix(1, 34.0),   // pre-identity leftover
+            k1: fix(1, 34.1), k2: fix(2, 34.2), k3: fix(3, 34.3),
+            RocketKey(networkID: 7, rocketID: 9): fix(9, 35.0),   // not on the dashboard
+        ]
+        let pins = MapView.rocketPins(for: subjects, fixes: fixes, focused: k2) { _ in nil }
+        XCTAssertEqual(pins.map(\.key), [k1, k2, k3])
+        XCTAssertEqual(pins.map(\.focused), [false, true, false])
+        XCTAssertEqual(pins.first?.coordinate.latitude ?? 0, 34.1, accuracy: 1e-9)
     }
 }

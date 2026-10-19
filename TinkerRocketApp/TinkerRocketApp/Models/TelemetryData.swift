@@ -209,6 +209,11 @@ struct TelemetryData: Codable {
     // Source rocket identity (base station relay only, nil for direct BLE)
     var source_rocket_id: Int?        // rocket_id from LoRa header
     var source_unit_name: String?     // rocket unit name from LoRa beacon
+    /// Base station: two rockets appear to share this rocket ID ("dup", 1 =
+    /// suspected; omitted when clear). Any nonzero value counts — it gates
+    /// pyro commands, so an unexpected value fails toward blocking.
+    var duplicate_id: Int?
+    var duplicateIDSuspected: Bool { (duplicate_id ?? 0) != 0 }
 
     // Telemetry freshness status (#95).  Sent by the BS in periodic-push
     // payloads; absent from RX-path payloads (which are always live).  iOS
@@ -611,6 +616,7 @@ struct TelemetryData: Codable {
         case sensor_health = "h"      // #303 scorecard: 2 bits/sensor, see RocketComputerTypes.h
         case source_rocket_id = "rid"
         case source_unit_name = "run"
+        case duplicate_id = "dup"      // three rockets, one base station
         case data_status = "ds"        // #95
         case data_age_ms = "age"       // #95
         case fields_trimmed = "tr"     // #282: frame trimmed to fit MTU
@@ -715,6 +721,7 @@ struct TelemetryData: Codable {
         sensor_health = flexInt(.sensor_health) ?? 0                 // #571
         source_rocket_id = flexInt(.source_rocket_id)                // #571: rid is the demux key
         source_unit_name = try c.decodeIfPresent(String.self, forKey: .source_unit_name)
+        duplicate_id = flexInt(.duplicate_id)
         // #95: missing "ds" → .live (older firmware doesn't emit it)
         let dsRaw = flexInt(.data_status) ?? 0                       // #571
         data_status = DataStatus(rawValue: dsRaw) ?? .live

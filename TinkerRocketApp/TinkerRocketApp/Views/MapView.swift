@@ -14,6 +14,27 @@ import MapKit
 /// pins apart by type, without smuggling a flag through the subtitle.
 private final class PredictedLandingAnnotation: MKPointAnnotation {}
 
+/// One rocket's pin. `focused` (the base station's followed rocket, or the
+/// direct link) draws red and on top; the others draw orange.
+fileprivate final class RocketPinAnnotation: MKPointAnnotation {
+    var focused = false
+}
+
+/// What one rocket's pin should show. Three rockets on one base station get
+/// one each, keyed so the reconciler can tell "moved" from "new".
+struct RocketMapPin: Equatable {
+    let key: RocketKey
+    let coordinate: CLLocationCoordinate2D
+    let title: String
+    let subtitle: String?
+    let focused: Bool
+
+    static func == (a: RocketMapPin, b: RocketMapPin) -> Bool {
+        a.key == b.key && RocketMapView.sameCoordinate(a.coordinate, b.coordinate)
+            && a.title == b.title && a.subtitle == b.subtitle && a.focused == b.focused
+    }
+}
+
 /// The slice of MKMapView the pin/overlay reconciler actually uses.
 ///
 /// It exists so the reconciler can be tested without a rendering MKMapView:
@@ -27,10 +48,24 @@ protocol RocketMapSurface: AnyObject {
     func removeAnnotation(_ annotation: MKAnnotation)
     func addOverlay(_ overlay: MKOverlay)
     func removeOverlays(_ overlays: [MKOverlay])
+    /// Re-style a pin already on the map after its focus changed. Marker
+    /// views do not observe custom annotation properties, and re-adding the
+    /// pin to restyle it would dismiss its callout (#836).
+    func restyleRocketPin(_ annotation: MKAnnotation)
+}
+
+extension RocketMapSurface {
+    func restyleRocketPin(_ annotation: MKAnnotation) {}
 }
 
 extension MKMapView: RocketMapSurface {
     var drawnOverlays: [MKOverlay] { overlays }
+
+    func restyleRocketPin(_ annotation: MKAnnotation) {
+        guard let pin = annotation as? RocketPinAnnotation,
+              let marker = view(for: annotation) as? MKMarkerAnnotationView else { return }
+        RocketMapView.style(marker, for: pin)
+    }
 }
 
 struct RocketMapView: UIViewRepresentable {
@@ -40,6 +75,9 @@ struct RocketMapView: UIViewRepresentable {
     @Binding var tileSource: TileSource
     var rocketCoordinate: CLLocationCoordinate2D?
     var rocketSubtitle: String?
+    /// One pin per displayed rocket. When set it replaces the single
+    /// `rocketCoordinate` pin, which is what a caller without a fleet gets.
+    var rocketPins: [RocketMapPin]? = nil
     /// Predicted landing location (issue #156).  Nil until the predictor
     /// has a valid prediction.  Once set, it stays drawn — even after
     /// telemetry stops — so the operator has a recovery target.
@@ -96,7 +134,8 @@ struct RocketMapView: UIViewRepresentable {
                                             rocket: rocketCoordinate,
                                             rocketSubtitle: rocketSubtitle,
                                             landing: predictedLandingCoordinate,
-                                            landingSubtitle: predictedLandingSubtitle)
+                                            landingSubtitle: predictedLandingSubtitle,
+                                            pins: rocketPins)
         context.coordinator.syncDataOverlays(on: mapView,
                                              landing: predictedLandingCoordinate,
                                              uncertaintyRadiusM: predictedUncertaintyRadiusM,
@@ -134,6 +173,16 @@ struct RocketMapView: UIViewRepresentable {
         Coordinator(self)
     }
 
+    /// Focused rocket: red, filled, drawn on top. The others: orange. Every
+    /// rocket pin is `.required` so MapKit never hides one to declutter — a
+    /// missing marker reads as a missing rocket.
+    fileprivate static func style(_ view: MKMarkerAnnotationView, for pin: RocketPinAnnotation) {
+        view.markerTintColor = pin.focused ? .systemRed : .systemOrange
+        view.glyphImage = UIImage(systemName: pin.focused ? "location.fill" : "location")
+        view.displayPriority = .required
+        view.zPriority = pin.focused ? .max : .defaultUnselected
+    }
+
     class Coordinator: NSObject, MKMapViewDelegate {
         var parent: RocketMapView
         var userIsInteracting = false
@@ -142,11 +191,16 @@ struct RocketMapView: UIViewRepresentable {
 
         // Long-lived annotations, mutated in place.  Held here rather than
         // recreated in updateUIView so a callout the operator opened survives
-        // the next telemetry frame (#836 item 2).
-        let rocketAnnotation = MKPointAnnotation()
+        // the next telemetry frame (#836 item 2).  One rocket pin per key:
+        // added when its rocket joins the set, removed when it leaves, and
+        // otherwise only ever mutated.
+        fileprivate var rocketAnnotations: [RocketKey: RocketPinAnnotation] = [:]
         fileprivate let landingAnnotation = PredictedLandingAnnotation()
-        var rocketShown = false
         var landingShown = false
+
+        /// Key of the lone pin a fleet-less caller draws (`rocket:`). Rocket
+        /// ID 0 is never a real rocket, so it cannot collide with one.
+        static let singleRocketKey = RocketKey(networkID: 0, rocketID: 0)
 
         // Last drawn data-overlay inputs.
         var circleKey: CircleKey?
@@ -155,24 +209,20 @@ struct RocketMapView: UIViewRepresentable {
         /// Update the pins IN PLACE.  Callers must not remove and re-add
         /// them: removing an annotation dismisses its callout, and this runs
         /// on the parent's 1 Hz tick (#836 item 2).
+        ///
+        /// `pins`, when given, is the whole rocket set and `rocket:` is
+        /// ignored; without it `rocket:` draws one pin titled "TinkerRocket".
         func syncAnnotations(on mapView: RocketMapSurface,
                              rocket: CLLocationCoordinate2D?,
                              rocketSubtitle: String?,
                              landing: CLLocationCoordinate2D?,
-                             landingSubtitle: String?) {
-            if let coordinate = rocket {
-                let a = rocketAnnotation
-                if !RocketMapView.sameCoordinate(a.coordinate, coordinate) { a.coordinate = coordinate }
-                if a.title != "TinkerRocket" { a.title = "TinkerRocket" }
-                if a.subtitle != rocketSubtitle { a.subtitle = rocketSubtitle }
-                if !rocketShown {
-                    mapView.addAnnotation(a)
-                    rocketShown = true
-                }
-            } else if rocketShown {
-                mapView.removeAnnotation(rocketAnnotation)
-                rocketShown = false
-            }
+                             landingSubtitle: String?,
+                             pins: [RocketMapPin]? = nil) {
+            let wanted = pins ?? rocket.map {
+                [RocketMapPin(key: Self.singleRocketKey, coordinate: $0, title: "TinkerRocket",
+                              subtitle: rocketSubtitle, focused: true)]
+            } ?? []
+            syncRocketPins(on: mapView, wanted)
 
             if let landing {
                 let a = landingAnnotation
@@ -186,6 +236,35 @@ struct RocketMapView: UIViewRepresentable {
             } else if landingShown {
                 mapView.removeAnnotation(landingAnnotation)
                 landingShown = false
+            }
+        }
+
+        /// Add a pin for each rocket that joined, remove the pin of each one
+        /// that left, and move/retitle/restyle the rest in place.
+        private func syncRocketPins(on mapView: RocketMapSurface, _ wanted: [RocketMapPin]) {
+            let wantedKeys = Set(wanted.map(\.key))
+            for (key, a) in rocketAnnotations where !wantedKeys.contains(key) {
+                mapView.removeAnnotation(a)
+                rocketAnnotations[key] = nil
+            }
+            for pin in wanted {
+                if let a = rocketAnnotations[pin.key] {
+                    if !RocketMapView.sameCoordinate(a.coordinate, pin.coordinate) { a.coordinate = pin.coordinate }
+                    if a.title != pin.title { a.title = pin.title }
+                    if a.subtitle != pin.subtitle { a.subtitle = pin.subtitle }
+                    if a.focused != pin.focused {
+                        a.focused = pin.focused
+                        mapView.restyleRocketPin(a)
+                    }
+                } else {
+                    let a = RocketPinAnnotation()
+                    a.coordinate = pin.coordinate
+                    a.title = pin.title
+                    a.subtitle = pin.subtitle
+                    a.focused = pin.focused
+                    rocketAnnotations[pin.key] = a
+                    mapView.addAnnotation(a)
+                }
             }
         }
 
@@ -295,11 +374,12 @@ struct RocketMapView: UIViewRepresentable {
                 view = MKMarkerAnnotationView(
                     annotation: annotation, reuseIdentifier: identifier
                 )
-                view?.glyphImage = UIImage(systemName: "location.fill")
-                view?.markerTintColor = .systemRed
                 view?.canShowCallout = true
             } else {
                 view?.annotation = annotation
+            }
+            if let view, let pin = annotation as? RocketPinAnnotation {
+                RocketMapView.style(view, for: pin)
             }
             return view
         }
@@ -337,6 +417,8 @@ struct RocketMapView: UIViewRepresentable {
 struct MapView: View {
     @ObservedObject var device: BLEDevice
     @ObservedObject var locationManager: LocationManager
+    /// Source of the other rockets' pins. nil draws only `device`'s rocket.
+    var fleet: BLEFleet? = nil
     @EnvironmentObject var profileStore: RocketProfileStore
 
     @StateObject private var landingPredictor = LandingPredictor()
@@ -377,6 +459,7 @@ struct MapView: View {
                     tileSource: $tileSource,
                     rocketCoordinate: rocketCoordinate,
                     rocketSubtitle: markerSubtitle(now: context.date),
+                    rocketPins: rocketPins(now: context.date),
                     predictedLandingCoordinate: landingPredictor.prediction?.landing,
                     predictedLandingSubtitle: predictedSubtitle(now: context.date),
                     predictedDescentTrack: descentTrackCoords(),
@@ -576,8 +659,37 @@ struct MapView: View {
     /// the fix so a stale marker can't be mistaken for a live one.
     private func markerSubtitle(now: Date) -> String? {
         guard let fix = device.lastValidRocketFix else { return nil }
+        return fixSubtitle(fix, now: now)
+    }
+
+    private func fixSubtitle(_ fix: LastValidRocketFix, now: Date) -> String {
         let age = max(0, Int(now.timeIntervalSince(fix.fixDate)))
         return "\(fix.numSats) sats • \(formatAge(age)) ago"
+    }
+
+    /// A pin for every rocket on the dashboard that has a latched fix, titled
+    /// with its name; the one this screen's link follows is highlighted.
+    /// Read from the fleet's fix cache, filtered to the dashboard's own keys —
+    /// the cache also holds entries recorded under network 0 before an
+    /// identity readback, which must not draw a second pin.
+    private func rocketPins(now: Date) -> [RocketMapPin]? {
+        guard let fleet else { return nil }
+        let focused: RocketKey? = device.isBaseStation
+            ? device.focusRocketID.map { RocketKey(networkID: device.networkID, rocketID: $0) }
+            : (device.rocketID > 0 ? RocketKey(networkID: device.networkID, rocketID: device.rocketID) : nil)
+        return Self.rocketPins(for: fleet.dashboardRockets, fixes: fleet.lastValidRocketFixes,
+                               focused: focused) { fixSubtitle($0, now: now) }
+    }
+
+    static func rocketPins(for subjects: [RocketSubject],
+                           fixes: [RocketKey: LastValidRocketFix],
+                           focused: RocketKey?,
+                           subtitle: (LastValidRocketFix) -> String?) -> [RocketMapPin] {
+        subjects.compactMap { subject in
+            guard let key = subject.key, let fix = fixes[key] else { return nil }
+            return RocketMapPin(key: key, coordinate: fix.coordinate, title: subject.name,
+                                subtitle: subtitle(fix), focused: key == focused)
+        }
     }
 
     /// Compact age string: bare seconds under a minute, M:SS or H:MM:SS

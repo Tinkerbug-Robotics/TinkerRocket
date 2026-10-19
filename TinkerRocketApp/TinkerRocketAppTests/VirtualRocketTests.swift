@@ -35,7 +35,7 @@ final class VirtualRocketTests: XCTestCase {
             device.unitName == "Virtual Base Station"
                 && device.telemetry.state == "READY"
         }
-        XCTAssertEqual(device.remoteRockets.count, 2, "Booster + Pad Rocket in the roster")
+        XCTAssertEqual(device.remoteRockets.count, 3, "Booster, Pad Rocket and Dart in the roster")
 
         // No self-starting: still READY after several scaled flight-lengths.
         try await Task.sleep(nanoseconds: 500_000_000)

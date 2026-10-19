@@ -79,9 +79,9 @@ final class SettingsNavigationTests: XCTestCase {
         let root = await host(SettingsView(device: opened)
             .environmentObject(fleet)
             .environmentObject(store))
-        // Active Rocket, Link Mode, LoRa Frequency, LoRa TX Power, Network,
-        // then Firmware: Version, "Update firmware…", App build.
-        try await open(row: IndexPath(item: 1, section: 5), expecting: "Firmware update", in: root)
+        // Active Rocket, Link Mode, Transmit Slots, LoRa Frequency, LoRa TX
+        // Power, Network, then Firmware: Version, "Update firmware…", App build.
+        try await open(row: IndexPath(item: 1, section: 6), expecting: "Firmware update", in: root)
 
         drop(opened, from: fleet)
         await settle()
@@ -176,7 +176,7 @@ final class SettingsNavigationTests: XCTestCase {
         let root = await host(SettingsView(device: bs)
             .environmentObject(fleet)
             .environmentObject(store))
-        try await open(row: IndexPath(item: 1, section: 5), expecting: "Firmware update", in: root)
+        try await open(row: IndexPath(item: 1, section: 6), expecting: "Firmware update", in: root)
 
         let nav = try XCTUnwrap(navigation(root))
         DispatchQueue.main.async { _ = nav.popViewController(animated: true) }

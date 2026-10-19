@@ -20,6 +20,14 @@ struct ServoTestView: View {
     // calibration. Falls back to ±20° when no calibration is available.
     var finMinDeg: Double = -20
     var finMaxDeg: Double = 20
+    /// Set when the test must not run: the sliders stay disabled, nothing is
+    /// sent, and this says why.
+    var unavailableReason: String? = nil
+
+    /// A relayed rocket's fin limits live in its profile, and a profile binds
+    /// to a board only over a direct Bluetooth link.
+    static let unboundRelayReason =
+        "Connect to this rocket over Bluetooth once to bind its profile"
 
     @State private var angles: [Double] = [0, 0, 0, 0]
 
@@ -33,6 +41,12 @@ struct ServoTestView: View {
     var body: some View {
         NavigationView {
             Form {
+                if let unavailableReason {
+                    Section {
+                        Label(unavailableReason, systemImage: "link.badge.plus")
+                            .foregroundColor(.orange)
+                    }
+                }
                 Section(header: Text("Servo Angles")) {
                     ForEach(0..<4, id: \.self) { index in
                         VStack(alignment: .leading, spacing: 4) {
@@ -54,6 +68,7 @@ struct ServoTestView: View {
                             .onChange(of: angles[index]) { _ in
                                 sendAngles()
                             }
+                            .disabled(unavailableReason != nil)
                         }
                         .padding(.vertical, 4)
                     }
@@ -71,7 +86,8 @@ struct ServoTestView: View {
                         .frame(maxWidth: .infinity)
                         .foregroundColor(.white)
                     }
-                    .listRowBackground(Color.blue)
+                    .listRowBackground(unavailableReason == nil ? Color.blue : Color.gray)
+                    .disabled(unavailableReason != nil)
                 }
             }
             .navigationTitle("Servo Test")
@@ -88,13 +104,15 @@ struct ServoTestView: View {
                 sendAngles()
             }
             .onDisappear {
-                // Stop servo test — servos return to midpoints
-                device.sendServoTestStop()
+                // Stop servo test — servos return to midpoints. Nothing was
+                // started when the test was unavailable.
+                if unavailableReason == nil { device.sendServoTestStop() }
             }
         }
     }
 
     private func sendAngles() {
+        guard unavailableReason == nil else { return }
         device.sendServoTestAngles(angles)
     }
 }

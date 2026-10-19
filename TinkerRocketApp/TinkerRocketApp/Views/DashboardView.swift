@@ -293,7 +293,8 @@ struct DashboardView: View {
                                 Image(systemName: "book.fill")
                             }
 
-                            NavigationLink(destination: MapView(device: device, locationManager: locationManager)) {
+                            NavigationLink(destination: MapView(device: device, locationManager: locationManager,
+                                                                fleet: fleet)) {
                                 Image(systemName: "map.fill")
                             }
 
@@ -384,9 +385,23 @@ struct DashboardView: View {
                 case .settings(let device):
                     SettingsView(device: device)
                 case .servoTest(let device):
+                    // A base station relays the test to its focused rocket, so
+                    // the fin limits are THAT rocket's — never the active
+                    // profile, which belongs to the last direct link. No bound
+                    // profile means no known limits, so no test.
+                    let profile = device.isBaseStation
+                        ? device.focusRocketID.flatMap { rid in
+                            profileStore.profile(
+                                networkID: device.networkID, rocketID: rid,
+                                name: device.remoteRockets.first { $0.rocketID == rid }?.unitName,
+                                knownDevices: fleet.knownDevices)
+                        }
+                        : profileStore.activeProfile
                     ServoTestView(device: device,
-                                  finMinDeg: Double(profileStore.activeProfile?.finMinDeg ?? -20),
-                                  finMaxDeg: Double(profileStore.activeProfile?.finMaxDeg ?? 20))
+                                  finMinDeg: Double(profile?.finMinDeg ?? -20),
+                                  finMaxDeg: Double(profile?.finMaxDeg ?? 20),
+                                  unavailableReason: device.isBaseStation && profile == nil
+                                      ? ServoTestView.unboundRelayReason : nil)
                 case .frequencyScan(let device):
                     // #150: restored — the scan pipeline (cmd 60 → 0xAA
                     // blob → scanSamples) survived #136 intact; while
@@ -404,7 +419,7 @@ struct DashboardView: View {
         }
         .sheet(isPresented: $showProvisioning) {
             if let device = fleet.activeDevice {
-                DeviceProvisioningSheet(device: device, store: fleet.knownDevices)
+                DeviceProvisioningSheet(device: device, store: fleet.knownDevices, fleet: fleet)
             }
         }
         .sheet(isPresented: Binding(
@@ -484,28 +499,12 @@ struct ConnectedFleetView: View {
     @ObservedObject var locationManager: LocationManager
     @Binding var activeSheet: DashboardSheet?
 
-    /// Roster scoped to what this screen is about: rockets carried by the
-    /// foreground base station, plus anything directly connected (an
-    /// explicit user action always shows), plus identifying links.
-    private var scopedSubjects: [RocketSubject] {
-        let foreground = fleet.foregroundBaseStation
-        return fleet.rockets.filter { subject in
-            if subject.direct != nil { return true }
-            guard let fg = foreground else { return false }
-            return subject.relays.contains { $0.baseStation === fg }
-        }
-    }
-
-    private var displayedSubjects: [RocketSubject] {
-        scopedSubjects.filter { subject in
-            guard let key = subject.key else { return true }
-            return !fleet.hiddenRocketKeys.contains(key)
-        }
-    }
-
     var body: some View {
-        let subjects = scopedSubjects
-        let displayed = displayedSubjects
+        // Roster scoped to what this screen is about (BLEFleet.scopedRockets:
+        // the foreground base station's rockets plus direct links), and the
+        // part of it not hidden. The map draws the same set.
+        let subjects = fleet.scopedRockets
+        let displayed = fleet.dashboardRockets
         let multi = displayed.count > 1
         let foregroundBS = fleet.foregroundBaseStation
 
@@ -541,6 +540,12 @@ struct ConnectedFleetView: View {
                 }
         }
 
+        if let mismatch = FirmwareStamp.mismatchLine(
+            FirmwareMismatchRow.units(baseStation: foregroundBS, rockets: displayed,
+                                      knownDevices: fleet.knownDevices)) {
+            FirmwareMismatchRow(text: mismatch)
+        }
+
         ForEach(displayed) { subject in
             if let direct = subject.direct {
                 DirectRocketSection(subject: subject,
@@ -566,7 +571,10 @@ struct ConnectedFleetView: View {
                                        remote: relay.remote,
                                        collapsible: multi,
                                        fleet: fleet,
-                                       locationManager: locationManager)
+                                       locationManager: locationManager,
+                                       followTarget: foregroundBS.flatMap { bs in
+                                           subject.relays.contains { $0.baseStation === bs } ? bs : nil
+                                       })
             }
         }
 
@@ -625,13 +633,24 @@ private struct FocusedRelaySection: View {
     let collapsible: Bool
     @State private var collapsed = false
 
+    private var identityLine: String? {
+        guard let key = subject.key else { return nil }
+        return fleet.knownDevices.rocket(networkID: key.networkID, rocketID: key.rocketID,
+                                         name: subject.freshestRelay?.remote.unitName)
+            .flatMap { FirmwareStamp.identityLine(for: $0) }
+    }
+
     var body: some View {
         // Same solo-redundancy rule as DirectRocketSection: the BS strip
-        // right above already says which rocket its radio follows.
-        if collapsible {
+        // right above already says which rocket its radio follows — unless
+        // the header has something the strip cannot say (a shared rocket ID,
+        // or a flown rocket gone quiet).
+        if collapsible || RocketSectionHeader.needsHeaderWhenSolo(
+            subject, flown: subject.key.map { fleet.flownRockets.contains($0) } ?? false) {
             RocketSectionHeader(subject: subject,
                                 collapsible: collapsible,
-                                collapsed: $collapsed)
+                                collapsed: $collapsed,
+                                identityLine: identityLine)
         }
         if collapsed {
             CollapsedRocketSummary(telemetry: bs.telemetry)
@@ -955,11 +974,21 @@ struct ConnectedDashboardView: View {
                 // armed/fired bits exist on this path, continuity comes from
                 // the health scorecard, and a tile tap opens the stand-back
                 // LoRa test rather than the config sheet.
+                // The FOCUSED rocket's own profile — the active profile is
+                // whichever rocket was last connected over Bluetooth, which
+                // with three rockets on one base station is usually another
+                // one. Unbound (never on a direct link): channels show off.
+                let focusedProfile = device.focusRocketID.flatMap { rid in
+                    profileStore.profile(
+                        networkID: device.networkID, rocketID: rid,
+                        name: device.remoteRockets.first { $0.rocketID == rid }?.unitName,
+                        knownDevices: fleet.knownDevices)
+                }
                 PyroChannelsView(
                     device: device,
                     relayMode: true,
                     configProvider: { ch in
-                        let p = profileStore.activeProfile
+                        let p = focusedProfile
                         switch ch {
                         case 1: return (p?.pyro1Enabled ?? false, p?.pyro1TriggerMode ?? 0, p?.pyro1TriggerValue ?? 0)
                         case 2: return (p?.pyro2Enabled ?? false, p?.pyro2TriggerMode ?? 0, p?.pyro2TriggerValue ?? 0)
@@ -967,7 +996,8 @@ struct ConnectedDashboardView: View {
                         default: return (p?.pyro4Enabled ?? false, p?.pyro4TriggerMode ?? 0, p?.pyro4TriggerValue ?? 0)
                         }
                     },
-                    onTest: { pyroTestChannel = $0 })
+                    onTest: { pyroTestChannel = $0 },
+                    unknownConfigNote: focusedProfile == nil ? PyroChannelsView.unboundRelayPyroNote : nil)
                 // Stand-back pyro test over LoRa. Presented from the cards
                 // themselves — this branch is a view sequence, not a single
                 // container, so there is nothing else to hang it on.
@@ -2699,6 +2729,14 @@ struct PyroChannelsView: View {
     var configProvider: ((Int) -> (enabled: Bool, mode: UInt8, value: Float))? = nil
     /// Relay mode: open the stand-back LoRa test for this channel.
     var onTest: ((Int) -> Void)? = nil
+    /// Relay mode with no profile bound to the rocket: its trigger settings
+    /// are not known, so the tiles say so instead of "Disabled" and this line
+    /// says why. The stand-back test still works — it needs no profile.
+    var unknownConfigNote: String? = nil
+
+    static let unboundRelayPyroNote =
+        "No profile is bound to this rocket, so its trigger settings are unknown. "
+        + "Connect to it over Bluetooth once to bind its profile."
 
     @AppStorage("unitSystem") private var unitSystem: UnitSystem = .metric
     @State private var showPyroSheet = false
@@ -2728,6 +2766,11 @@ struct PyroChannelsView: View {
             // Never on a relay: those tiles are the profile by construction.
             if !relayMode, let note = pyroProvenanceNote {
                 Text(note)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            if relayMode, let unknownConfigNote {
+                Text(unknownConfigNote)
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
@@ -2836,7 +2879,9 @@ struct PyroChannelsView: View {
                             }
                         }
                     }
-                    Text(enabled ? triggerDescription(mode: mode, value: value) : "Disabled")
+                    Text(relayMode && unknownConfigNote != nil
+                         ? "Trigger unknown"
+                         : (enabled ? triggerDescription(mode: mode, value: value) : "Disabled"))
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }

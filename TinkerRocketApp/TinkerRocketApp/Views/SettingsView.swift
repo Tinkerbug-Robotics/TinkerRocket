@@ -159,6 +159,13 @@ private struct SettingsContent: View {
     @State private var loraTxTouchedAt: Date?
     private static let loraTxHydrationHoldS: TimeInterval = 3.0
 
+    // Transmit slots (BS only, three rockets on one base station) — device
+    // state on the base station, hydrated from its "lts" readback with the
+    // same tap-hold as link mode. Defaults on, like the firmware.
+    @State private var txSlotsOn = true
+    @State private var txSlotsTouchedAt: Date?
+    private static let txSlotsHydrationHoldS: TimeInterval = 3.0
+
     @FocusState private var focusedField: EditField?
     @State private var lastFocusedField: EditField?
 
@@ -402,6 +409,10 @@ private struct SettingsContent: View {
                    loraTxTouchedAt.map({ Date().timeIntervalSince($0) > Self.loraTxHydrationHoldS }) ?? true {
                     loraTxOff = txd
                 }
+                if let lts = cfg.loraTxSlots,
+                   txSlotsTouchedAt.map({ Date().timeIntervalSince($0) > Self.txSlotsHydrationHoldS }) ?? true {
+                    txSlotsOn = lts
+                }
             }
         }
     }
@@ -538,6 +549,16 @@ private struct SettingsContent: View {
             .pickerStyle(.segmented)
             .disabled(device.autoApplyRefusalReason() != nil ||
                       (hopUnavailable && !linkModeHopping))
+        }
+
+        // Three rockets, one base station: each rocket transmits in its own
+        // third of the 500 ms period. Next to link mode because it only
+        // applies in one of them.
+        if device.isBaseStation {
+            Section(header: Text("Transmit Slots"), footer: Text(txSlotsFooter)) {
+                Toggle("Transmit Slots", isOn: txSlotsBinding)
+                    .disabled(!txSlotsSupported || !device.isConnected)
+            }
         }
 
         Section(header: Text("LoRa Frequency"),
@@ -2090,6 +2111,40 @@ private struct SettingsContent: View {
         return linkModeHopping
             ? "FCC-compliant hopping across the channel set. The rocket follows automatically; switching modes takes a few seconds."
             : "Single fixed channel — the default."
+    }
+
+    /// The base station reported "lts", so its firmware takes the command.
+    /// Older firmware never gets it sent.
+    private var txSlotsSupported: Bool { device.rocketConfig?.loraTxSlots != nil }
+
+    private var txSlotsFooter: String {
+        if device.isConnected, device.rocketConfig != nil, !txSlotsSupported {
+            return "This base station\u{2019}s firmware doesn\u{2019}t support transmit slots. Update it to use this."
+        }
+        let when = "Slots only apply in fixed-frequency mode at SF8."
+        if txSlotsOn && linkModeHopping {
+            return "On, but not in effect while hopping. " + when
+        }
+        if txSlotsOn, let sf = device.rocketConfig?.loraSF, sf != 8 {
+            return "On, but not in effect at SF\(sf). " + when
+        }
+        return txSlotsOn
+            ? "ON \u{2014} the base station gives each rocket its own third of the 500 ms period (by rocket ID, IDs 1, 2 and 3 one each), so up to three rockets share the channel without colliding. " + when
+            : "OFF \u{2014} every rocket transmits on its own timing. Fine for one rocket; with several, packets collide. " + when
+    }
+
+    private var txSlotsBinding: Binding<Bool> {
+        Binding(
+            get: { txSlotsOn },
+            set: { newValue in
+                guard newValue != txSlotsOn else { return }
+                txSlotsOn = newValue
+                txSlotsTouchedAt = Date()   // hold off hydration (see onReceive)
+                if device.isConnected, txSlotsSupported {
+                    device.sendLoRaTxSlots(newValue)
+                }
+            }
+        )
     }
 
     private var linkModeBinding: Binding<Bool> {

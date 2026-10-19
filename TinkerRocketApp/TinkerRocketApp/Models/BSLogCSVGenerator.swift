@@ -328,8 +328,35 @@ nonisolated final class BSLogCSVGenerator {
     // MARK: - render
 
     /// Binary base-station log → CSV text.
-    static func writeCSV(_ bytes: [UInt8]) throws -> String {
+    ///
+    /// `rocketID` keeps only that rocket's rows (three rockets, one base
+    /// station: the base station writes ONE log and every frame carries its
+    /// rocket id). Filtering after the parse is exact, because the forward-fill
+    /// accumulator and the seq-gap counter are already kept per rocket — a
+    /// rocket's rows read the same with or without its neighbours. The
+    /// base-station events stay in every rocket's file: they are the link's
+    /// (frequency, logging), shared by every rocket on it.
+    static func writeCSV(_ bytes: [UInt8], rocketID: Int? = nil) throws -> String {
         let (rows, events) = try parse(bytes)
+        return render(rows: rocketID.map { id in rows.filter { $0.rocketId == id } } ?? rows,
+                      events: events)
+    }
+
+    /// The rocket IDs a log holds, ascending.
+    static func rocketIDs(in bytes: [UInt8]) throws -> [Int] {
+        Set(try parse(bytes).0.map(\.rocketId)).sorted()
+    }
+
+    /// The combined CSV and one per rocket ID, from a single parse.
+    static func writeCSVs(_ bytes: [UInt8]) throws -> (combined: String,
+                                                        byRocket: [(rocketID: Int, csv: String)]) {
+        let (rows, events) = try parse(bytes)
+        let ids = Set(rows.map(\.rocketId)).sorted()
+        return (render(rows: rows, events: events),
+                ids.map { id in (id, render(rows: rows.filter { $0.rocketId == id }, events: events)) })
+    }
+
+    private static func render(rows: [Row], events: [Event]) -> String {
         var out = columns.joined(separator: ",") + "\n"
 
         // Merge events in by time so one pass sees telemetry and events in
