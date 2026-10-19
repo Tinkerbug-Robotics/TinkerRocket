@@ -34,6 +34,6 @@ direct_dependencies:
 - espressif/dhara
 - espressif/spi_nand_flash_fatfs
 - idf
-manifest_hash: f64261c42547eac634a21ceaf9a8c6809f180d102872059d406cdf289483de8d
+manifest_hash: 6e2312fb8462dfed8ae1a69cf2151c7bb171df6232b0047fe849923caba68823
 target: esp32s3
 version: 3.0.0
