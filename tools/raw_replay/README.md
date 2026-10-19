@@ -170,11 +170,19 @@ predate it and carry none.
 
 What `startRawShadow()` builds under `TR_RAW_NAV_MOSAIC` (build_units D1a; checked against fc/v9raw-d 2502c322):
 
-- `mosaicG5Profile()` (v0), with `--fuse-ms` (`TR_BENCH_RAW_FUSE_MS`), `--sat-cap` (`TR_BENCH_RAW_SAT_CAP`),
-  `--build-lite` (`TR_BENCH_RAW_BUILD_LITE`: the cheaper epoch build, `RawMeasBuilder.h`; a `RAW_REPLAY_BUILD_LITE`
-  build, refused but for the mosaic) and `--share-los` (`TR_BENCH_RAW_SHARE_LOS`: 1, the epoch's geometry taken once
-  and shared by its units; 2, and the Doppler's prediction in float; a `RAW_REPLAY_SHARELOS` build; the events
-  JSON's `build_lite` and `share_los` say which) applied to it first, with the Dopplers in pairs below and in a
+- `mosaicG5Profile()` (v0) with the image's flight profile over it, by the firmware's own call
+  (`gnss_raw::applyMosaicFlightProfile`, `ReceiverProfileApply.h`; a `RAW_REPLAY_FLIGHT_PROFILE` build, on unless
+  the tree is older than fc/v9-1024-candidate or one of `RAW_REPLAY_MOSAIC_SAFEGUARDS`, `BUILD_LITE`, `SHARELOS` and
+  `DOPAVG` is off): the owner's 10/24 set, the cheaper epoch build, the epoch's geometry shared with the Doppler's
+  prediction in float, the Dopplers in pairs, at most 16 satellites with the cap fixed. A build without it keeps the
+  profile's own (each off, 16 satellites), and its configure says why. Then
+  `--fuse-ms` (`TR_BENCH_RAW_FUSE_MS`), `--sat-cap` (`TR_BENCH_RAW_SAT_CAP`), `--build-lite [0|1]`
+  (`TR_BENCH_RAW_BUILD_LITE`: the cheaper epoch build, `RawMeasBuilder.h`, on alone or with 1, off with 0; a
+  `RAW_REPLAY_BUILD_LITE` build, on refused but for the mosaic) and `--share-los` (`TR_BENCH_RAW_SHARE_LOS`: 0,
+  neither; 1, the epoch's geometry taken once and shared by its units; 2, and the Doppler's prediction in float; a
+  `RAW_REPLAY_SHARELOS` build; the events JSON's `build_lite` and `share_los` say which) applied to it, with the
+  Dopplers in pairs below (`--rr-pair-avg 0|1`), so each turns its own off for an experiment: `--build-lite 0
+  --share-los 0 --rr-pair-avg 0` is the high-roll-only twin, the image as fc/v9-highroll built it. In a
   `RAW_REPLAY_CAPGOV` build `--cap-max` (`TR_BENCH_RAW_CAP_MAX`: the satellite cap
   follows the filter's slack up to it, `CapGovernor.h`; its counts in the events JSON's `cap_gov`) and `--slice-us`
   (`TR_BENCH_RAW_SLICE_US`: the profile's `epoch_slice_us`), then `applyReceiverProfile`. Without a clock the
@@ -628,14 +636,17 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   5 cm wrong, and not given) is in gnss-attitude-study/v9-mosaic-filter-plan/evidence/antenna-offset/ (outside the
   repo).
 - **The Dopplers in pairs** (`MosaicRawEpoch.h`, "The epochs between the grid's"; a `RAW_REPLAY_DOPAVG` build, on
-  unless the tree is older than exp/v9-dop-avg): `--rr-pair-avg 1` is the bench image's `TR_BENCH_RAW_DOP_AVG=1`.
+  unless the tree is older than exp/v9-dop-avg): on with `--receiver mosaic` where the flight profile is
+  (`RAW_REPLAY_FLIGHT_PROFILE`, above), as the image flies them; `--rr-pair-avg 0` is a bench image's
+  `TR_BENCH_RAW_DOP_AVG=0`, and `--rr-pair-avg 1` turns them on in a build without the flight profile.
   The feed reads each MeasEpoch off the fused grid for its Dopplers (`noteMeasEpochDopplers`) and averages each grid
   epoch's with them by the driver's rule (`averageDopplerPairs`: the epoch 50 ms before, read whole, no clock jump
   between, valid and at the floor at both ends, the lock time not down, within `--rr-pair-max-diff`, 15 m/s). An
   epoch with at least half its Dopplers in pairs is handed over in pairs (`TimedRawEpoch::rr_paired`): their means,
   each one left alone dropped, and the filter takes its Dopplers the profile's 25 ms further back (`rr_pair_lag_s`);
   any other epoch (none before it, a clock jump, fewer pairs) as it came, at its own instant. It needs the 100 ms
-  grid over the receiver's 50 ms (`--fuse-ms 100`). A sim's
+  grid over the receiver's 50 ms (`--fuse-ms 100`): `--rr-pair-avg 1` on another grid is refused, and the flight
+  profile's pairs on another grid go off with a line on stderr, as the image's start turns them off. A sim's
   20 Hz epochs (`sim_events.py` at rate 20) are cut to the fused grid first, as the driver cuts the receiver's
   (`--sim-fuse-grid` does the cut alone: on Grid B it is byte-identical to the rate-10 events, whose draws are the
   same), and paired by the same rule (a sim has no lock time or clock jump). `--rr-pair-sigma X` scales each averaged

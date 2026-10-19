@@ -3,10 +3,11 @@
 // is exactly what the builder and the filter flew with before there were
 // profiles -- and the configs' own defaults, so a default-constructed builder
 // or filter is the LC86G's; the stubs are its numbers, marked UNMEASURED; the
-// mosaic-G5's v0, every number pinned; the carrier phase's sigma between its
-// C/N0 anchors. And the Beetle's tripwires: every config's size (a new field
-// must join the comparators), every RawGnssShadow::Config default pinned, the
-// raw epoch's and the ephemeris store's capacities.
+// mosaic-G5's v0, every number pinned, and the mosaic-only image's flight
+// profile and safeguards over it; the carrier phase's sigma between its C/N0
+// anchors. And the Beetle's tripwires: every config's size (a new field must
+// join the comparators), every RawGnssShadow::Config default pinned, the raw
+// epoch's and the ephemeris store's capacities.
 #include <gtest/gtest.h>
 
 #include <cmath>
@@ -879,6 +880,152 @@ TEST(ReceiverProfile, TheFourBenchSwitchesEachSetTheirOwnFieldsAlongsideTheSafeg
         EXPECT_EQ(0, std::memcmp(&c, &c0, sizeof(c)));
         EXPECT_EQ(p.epoch_slice_us, 2500.0);
     }
+}
+
+// The mosaic-only image's flight profile (applyMosaicFlightProfile, the
+// owner's 10/24 set): on the image's profile, the cheaper build, the shared
+// geometry with the Doppler's prediction in float (the bench's level 2), the
+// Dopplers in pairs, 16 satellites and the cap fixed -- those six fields and
+// nothing else, so the image flies the four switches' composition above
+// (build, geometry, pairs on, governor off) by construction. Each bench
+// override's 0 (main.cpp, after the flight profile) turns its own off, and
+// all three at 0 are the high-roll-only twin, the profile alone, byte for
+// byte. The profile's other users never take it: the mosaic's own profile,
+// the LC86G's (M1), the stubs' and the generic's keep every one off.
+TEST(ReceiverProfile, TheMosaicFlightProfileIsTheOwnersSetAndNothingElse)
+{
+    static_assert(std::is_trivially_copyable<GnssReceiverProfile>::value &&
+                      std::is_trivially_copyable<RawGnssShadow::Config>::value,
+                  "the byte comparisons below copy the profile and the config whole");
+    const GnssReceiverProfile base = gnss_raw::mosaicG5Profile();
+    GnssReceiverProfile fp;
+    std::memcpy(&fp, &base, sizeof(fp));
+    gnss_raw::applyMosaicFlightProfile(fp);
+    // the owner's set
+    EXPECT_TRUE(fp.build_lite);
+    EXPECT_TRUE(fp.share_los);
+    EXPECT_TRUE(fp.rr_float);
+    EXPECT_TRUE(fp.rr_pair_avg);
+    EXPECT_TRUE(gnss_raw::dopplerPairsFit(fp));          // the 100 ms grid over the receiver's 50
+    EXPECT_EQ(fp.sat_cap, 16);
+    EXPECT_EQ(fp.sat_cap_max, 0);                         // the governor off
+    // and nothing else of the profile
+    GnssReceiverProfile back;
+    std::memcpy(&back, &fp, sizeof(back));
+    back.build_lite = base.build_lite;
+    back.share_los = base.share_los;
+    back.rr_float = base.rr_float;
+    back.rr_pair_avg = base.rr_pair_avg;
+    back.sat_cap = base.sat_cap;
+    back.sat_cap_max = base.sat_cap_max;
+    EXPECT_EQ(0, std::memcmp(&back, &base, sizeof(back)));
+    expectSameNumbers(back, base);
+
+    // The image's filter, in main.cpp's order: the profile (with the flight
+    // profile), then the safeguards. The high-roll-only twin: the same
+    // without the flight profile.
+    RawGnssShadow::Config def;
+    RawGnssShadow::Config twin, img;
+    std::memcpy(&twin, &def, sizeof(twin));
+    std::memcpy(&img, &def, sizeof(img));
+    gnss_raw::applyReceiverProfile(base, twin);
+    gnss_raw::applyMosaicFlightSafeguards(twin);
+    gnss_raw::applyReceiverProfile(fp, img);
+    gnss_raw::applyMosaicFlightSafeguards(img);
+    EXPECT_TRUE(img.meas.lite);
+    EXPECT_EQ(img.meas.atmo_period_s, 1.0);               // the atmosphere once in each pr_period_s
+    EXPECT_TRUE(img.ekf.share_los);
+    EXPECT_TRUE(img.ekf.rr_float);
+    EXPECT_EQ(img.ekf.rr_lag_s, 0.0);                     // an epoch as it came: at its own instant
+    EXPECT_DOUBLE_EQ(img.ekf.rr_pair_lag_s, 0.025);       //   one in pairs: 25 ms further back
+    EXPECT_EQ(img.sat_cap, 16);
+    EXPECT_EQ(img.sat_cap_max, 0);
+    const gnss_raw::RawGnssMeasStage::Config st = RawGnssShadow::stageConfig(img);
+    EXPECT_TRUE(st.meas.lite);
+    EXPECT_EQ(st.sat_cap, 16);
+    // the high-roll port's safeguards as on the twin
+    EXPECT_TRUE(img.ekf.att_exact);
+    EXPECT_EQ(img.dv_lever_mode, 1);
+    EXPECT_EQ(img.dv_lever_radial_m, 0.0);
+    EXPECT_EQ(img.windup_k, 0.99);
+    EXPECT_EQ(img.dv_check, RawGnssShadow::kDvAct);
+    // with the flight profile's fields put back, the twin byte for byte
+    RawGnssShadow::Config put;
+    std::memcpy(&put, &img, sizeof(put));
+    put.meas.lite = twin.meas.lite;
+    put.meas.atmo_period_s = twin.meas.atmo_period_s;
+    put.ekf.share_los = twin.ekf.share_los;
+    put.ekf.rr_float = twin.ekf.rr_float;
+    put.ekf.rr_pair_lag_s = twin.ekf.rr_pair_lag_s;
+    EXPECT_EQ(0, std::memcmp(&put, &twin, sizeof(put)));
+
+    // Each bench override at 0 over the flight profile, as main.cpp applies
+    // them (TR_BENCH_RAW_BUILD_LITE, TR_BENCH_RAW_SHARE_LOS, TR_BENCH_RAW_DOP_AVG):
+    // its own off, the others on; all three off, the twin
+    enum
+    {
+        kLiteOff = 1,
+        kLosOff = 2,
+        kPairsOff = 4
+    };
+    for (int off = 1; off <= 7; ++off)
+    {
+        SCOPED_TRACE(testing::Message() << "bench off " << off);
+        GnssReceiverProfile b;
+        std::memcpy(&b, &fp, sizeof(b));
+        if (off & kLiteOff)
+            b.build_lite = false;
+        if (off & kLosOff)
+            b.share_los = b.rr_float = false;
+        if (off & kPairsOff)
+            b.rr_pair_avg = false;
+        RawGnssShadow::Config c;
+        std::memcpy(&c, &def, sizeof(c));
+        gnss_raw::applyReceiverProfile(b, c);
+        gnss_raw::applyMosaicFlightSafeguards(c);
+        EXPECT_EQ(c.meas.lite, (off & kLiteOff) == 0);
+        EXPECT_EQ(c.ekf.share_los, (off & kLosOff) == 0);
+        EXPECT_EQ(c.ekf.rr_float, (off & kLosOff) == 0);
+        EXPECT_DOUBLE_EQ(c.ekf.rr_pair_lag_s, (off & kPairsOff) == 0 ? 0.025 : 0.0);
+        EXPECT_EQ(c.sat_cap, 16);
+        EXPECT_EQ(c.sat_cap_max, 0);
+        if (off == (kLiteOff | kLosOff | kPairsOff))
+            EXPECT_EQ(0, std::memcmp(&c, &twin, sizeof(c)));
+    }
+
+    // The profile's other users keep every one off: the mosaic's own (the
+    // replay without the image's safeguards, the simulator's bindings), the
+    // LC86G's (M1: main.cpp calls the flight profile only under
+    // TR_RAW_NAV_MOSAIC), the stubs' and the generic's
+    for (const GnssReceiverProfile& p : {gnss_raw::mosaicG5Profile(), gnss_raw::lc86gProfile(),
+                                         gnss_raw::neoM8tProfile(), gnss_raw::px1105rProfile(),
+                                         gnss_raw::genericProfile()})
+    {
+        SCOPED_TRACE(p.name);
+        EXPECT_FALSE(p.build_lite);
+        EXPECT_FALSE(p.share_los);
+        EXPECT_FALSE(p.rr_float);
+        EXPECT_FALSE(p.rr_pair_avg);
+        EXPECT_EQ(p.sat_cap_max, 0);
+    }
+    // and the Beetle's filter: the LC86G's profile applied leaves every epoch
+    // setting at the configs' defaults (all satellites, its own 55.5 ms lag)
+    RawGnssShadow::Config m1;
+    std::memcpy(&m1, &def, sizeof(m1));
+    gnss_raw::applyReceiverProfile(gnss_raw::lc86gProfile(), m1);
+    EXPECT_FALSE(m1.meas.lite);
+    EXPECT_EQ(m1.meas.atmo_period_s, 0.0);
+    EXPECT_FALSE(m1.ekf.share_los);
+    EXPECT_FALSE(m1.ekf.rr_float);
+    EXPECT_EQ(m1.ekf.rr_pair_lag_s, 0.0);
+    EXPECT_EQ(m1.ekf.rr_lag_s, 0.0555);
+    EXPECT_EQ(m1.sat_cap, 0);
+    EXPECT_EQ(m1.sat_cap_max, 0);
+    EXPECT_FALSE(def.meas.lite);
+    EXPECT_FALSE(def.ekf.share_los);
+    EXPECT_FALSE(def.ekf.rr_float);
+    EXPECT_EQ(def.ekf.rr_pair_lag_s, 0.0);
+    EXPECT_EQ(def.sat_cap, 0);
 }
 
 TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)

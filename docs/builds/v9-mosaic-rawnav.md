@@ -4,8 +4,8 @@ A Tinker-Mantis V9 (or a legacy V8) flight computer with a Septentrio mosaic-G5 
 as its only navigation filter. GpsInsEKF is not built into this image. This page names the configuration, says what
 it carries and what it leaves alone, and points at the evidence behind it.
 
-This is a build configuration, not a release. The image the Goblin flies on 2026-10-24 is picked from it later in
-the week.
+This is a build configuration, not a release. The owner chose the 10/24 set on 2026-10-19: the spinning body's
+settings and the epoch work below. The image the Goblin flies on 2026-10-24 is built from it after review.
 
 ## Build it
 
@@ -52,14 +52,16 @@ on the raw filter's state, as on the Beetle. `config.h` refuses a mosaic build t
 - **The ephemerides.** GPSNav, GALNav and BDSNav, and the ionosphere from GPSIon
   ([`SbfNav.h`](../../tinkerrocket-idf/components/TR_GNSSReceiverMosaic_Serial/SbfNav.h)), into a 128-entry store.
   The receiver is asked to send its navigation blocks again on the pad, at launch and after landing.
-- **The fused grid.** 100 ms of GPS time, at most 16 satellites an epoch (the mosaic-G5's receiver profile).
+- **The fused grid.** 100 ms of GPS time, at most 16 satellites an epoch with the cap fixed (the mosaic-G5's
+  receiver profile and the image's flight profile, [below](#the-epoch-work-the-owners-1024-set)).
 - **The log.** Every SBF block is logged raw (0x95), so the offline harness can replay the flight.
 
 ### Ascent safeguards
 
 They are set in one place, `gnss_raw::applyMosaicFlightSafeguards`
 ([`ReceiverProfileApply.h`](../../tinkerrocket-idf/components/TR_RawGnssShadow/ReceiverProfileApply.h)), which the
-offline harness calls too. The boot prints them on one `[RAWGNSS] flight safeguards:` line.
+offline harness calls too. The boot prints them on one `[RAWGNSS] flight safeguards:` line, which ends with the
+epoch work's settings.
 
 - **The Doppler change check, acting in flight.** Each satellite's Doppler change is checked against the IMU's
   velocity change along its line of sight. A stale or settling receiver's Dopplers are held out of the filter.
@@ -118,6 +120,60 @@ these settings on against off): take it on the flight image's placement. With `-
 runs from internal RAM, but the exact transition's blocks (`attExactBlocks`) stay in flash with the carrier's code
 (`main/raw_gnss_iram.lf`), so that bench pays a flash fetch every 10 ms step that neither the flight image nor an
 internal-RAM placement would. The boot line `[RAWGNSS] flight safeguards:` names the three settings.
+
+### The epoch work (the owner's 10/24 set)
+
+The owner chose these for 2026-10-24 on 2026-10-19, from the bench integration (exp/v9-moredata-bench). One call
+sets them, `gnss_raw::applyMosaicFlightProfile`
+([`ReceiverProfileApply.h`](../../tinkerrocket-idf/components/TR_RawGnssShadow/ReceiverProfileApply.h)), on the
+receiver's profile right after the image picks it:
+
+- **The cheaper epoch build** (`build_lite`, `RawMeasBuilder.h`). Each satellite's elevation and atmosphere are
+  worked once a second (the pseudoranges' period), its orbit solves are spread over their 5 s, and the noise takes
+  one exp.
+- **The shared line of sight, with the Doppler's prediction in float** (`share_los`, `rr_float`: level 2 of
+  `TR_BENCH_RAW_SHARE_LOS`). The epoch's geometry is taken once and shared by the units it is worked in. Level 2 is
+  what the open-sky bench and the composition runs flew. With the pairs on, the float prediction applies only to the
+  epochs taken as they came: an epoch in pairs has a lag and takes the double prediction.
+- **The Dopplers in pairs** (`rr_pair_avg`). The driver averages each 10 Hz grid epoch's Doppler with the receiver's
+  epoch 50 ms before it ([`MosaicRawEpoch.h`](../../tinkerrocket-idf/components/TR_GNSSReceiverMosaic_Serial/MosaicRawEpoch.h)),
+  and the filter takes those means 25 ms further back (`rr_pair_lag_s`). An epoch with fewer than half its Dopplers
+  in pairs, or after a clock jump, is handed over as it came, at its own instant.
+- **At most 16 satellites an epoch, the cap fixed** (`sat_cap` 16, `sat_cap_max` 0: the cap governor off).
+
+They live on the profile, not with the safeguards (which act on the filter's configuration after the profile is
+applied), for two reasons. The driver's pairing and the filter's pair lag both come from the profile's
+`rr_pair_avg`: `main.cpp` sets the driver from it (`rawPairsStart`) before the filter takes the lag from it, and a
+driver that cannot pair turns it off first, so the two never disagree. And the bench overrides act on the profile.
+Only the mosaic-only images call it, the V9's and the V8's. The profile's other users keep its own settings (each
+off, 16 satellites): `raw_replay --receiver mosaic` built without `RAW_REPLAY_FLIGHT_PROFILE`, and the simulator's
+bindings. `raw_replay --receiver mosaic` calls it in the same place, so a replay flies the image's settings.
+
+The boot line `[RAWGNSS] flight safeguards:` ends with them: `epochs (the flight profile): the cheaper build ON, the
+geometry SHARED with the Doppler's prediction in FLOAT, Dopplers in pairs ON (pair lag 25 ms), at most 16 satellites
+(the cap fixed)`.
+
+**The high-roll-only twin.** A bench or rig image built with `-DTR_BENCH_RAW_BUILD_LITE=0 -DTR_BENCH_RAW_SHARE_LOS=0
+-DTR_BENCH_RAW_DOP_AVG=0` flies fc/v9-highroll's settings for an A/B. It is marked `-bench`, and its boot line reads
+`epochs (BENCH defines, see the BENCH lines)`. Offline, `raw_replay --build-lite 0 --share-los 0 --rr-pair-avg 0` is
+the same twin.
+
+The evidence:
+
+- **Open sky, 2026-10-19**
+  (`gnss-attitude-study/v9-mosaic-filter-plan/evidence/sat-rate/bench/results_20261019.md`), at 16 satellites with
+  the boost screen forced on every epoch, against the high-roll image:
+  - the epoch's age at close fell from 110/145 ms (median/max) to 83/101;
+  - the epoch build fell from 21.5 to 5.2 ms (median), and core 0's idle rose from 36 to 44 %;
+  - 99.8-99.9 % of the Dopplers were averaged in pairs;
+  - the flight loop held 968 passes/s with no gaps, and the filter task's free stack fell from 1,712 B to 1,612 B.
+- **Offline, on the bench integration** (2026-10-18):
+  - the real logs' static velocity noise is 27-31 % lower;
+  - on Grid B the boost p90 fell from 0.45 to 0.31 deg and the coast p90 from 0.24 to 0.14 deg, with the apogee
+    items unchanged;
+  - under the stale-satellite pattern the worst excess over the unaided twin was +1.64 deg (+1.74 without them), and
+    7 of 48 runs were more than 1 deg over their twin (4 of 48 without).
+- **Not yet run:** an RF-rig replay of this image on the V9.
 
 ### The GNSS antenna offset (BLE cmd 81)
 
@@ -208,7 +264,9 @@ This is a statement about behavior, not bytes.
     `setBeginWait`;
   - the rig replay clock's 1PPS check (`SimReplay`), which only a mosaic-only replay feeds;
   - on the Beetle, the raw filter's safeguard code, whose settings default off; only
-    `applyMosaicFlightSafeguards` turns them on.
+    `applyMosaicFlightSafeguards` turns them on;
+  - the epoch work's code (the cheaper build, the shared line of sight, the Dopplers in pairs, the cap governor):
+    every receiver profile keeps it off, and only the mosaic-only images call `applyMosaicFlightProfile`.
 - **So the other images grow against main** (both built with the same real guidance and managed components):
   - the V9 and V8 auto images by 1,968 B (flash code and constants, and 184 B of `.bss`);
   - the Beetle by 23,792 B: 21,872 B of flash code, 1,132 B of IRAM code (1,280 B of internal RAM with its
@@ -244,11 +302,11 @@ This is a statement about behavior, not bytes.
 - Bench switches (`flight_computer/CMakeLists.txt`, all marked `-bench`): `TR_BENCH_MOSAIC_CN0`,
   `TR_BENCH_MOSAIC_COLD_START` and `TR_BENCH_MOSAIC_TAG_TRACE` for the receiver; `TR_BENCH_RAW_FUSE_MS`,
   `TR_BENCH_RAW_SAT_CAP`, `TR_BENCH_BOOST_SCREEN_G` and `TR_BENCH_DV_CHECK` for the filter's CPU and checks; the
-  four ways to use more GNSS data within the P4's budget (exp/v9-moredata-bench, each off unless set, any of them
-  together): `TR_BENCH_RAW_BUILD_LITE` (the cheaper epoch build), `TR_BENCH_RAW_SHARE_LOS` (the epoch's geometry
-  shared by its units, 2 with the Doppler's prediction in float), `TR_BENCH_RAW_DOP_AVG` (the Dopplers in pairs)
-  and `TR_BENCH_RAW_CAP_MAX` (the satellite cap's governor, with `TR_BENCH_RAW_CAP_PAD` and
-  `TR_BENCH_RAW_SLICE_US`); and the robustness hooks `TR_BENCH_RAW_START_FAIL`, `TR_BENCH_RESTORE_SIM`,
+  four ways to use more GNSS data within the P4's budget (exp/v9-moredata-bench): `TR_BENCH_RAW_BUILD_LITE` (the
+  cheaper epoch build), `TR_BENCH_RAW_SHARE_LOS` (the epoch's geometry shared by its units, 2 with the Doppler's
+  prediction in float) and `TR_BENCH_RAW_DOP_AVG` (the Dopplers in pairs), which this image flies on (0 turns each
+  off: the high-roll-only twin above), and `TR_BENCH_RAW_CAP_MAX` (the satellite cap's governor, off unless set, with
+  `TR_BENCH_RAW_CAP_PAD` and `TR_BENCH_RAW_SLICE_US`); and the robustness hooks `TR_BENCH_RAW_START_FAIL`, `TR_BENCH_RESTORE_SIM`,
   `TR_BENCH_PANIC_AT_S`, `TR_BENCH_PANIC_FILTER_AT_S` and `TR_BENCH_RAW_STOP_AT_S`.
 
 ## Evidence

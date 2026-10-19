@@ -115,7 +115,9 @@ struct GnssReceiverProfile
     // The cheaper epoch build (RawMeasBuilder.h, Config::lite): each
     // satellite's elevation and atmosphere once in each pr_period_s, its orbit
     // solves spread over their 5 s, the noise on one exp. Off in every profile;
-    // a mosaic-only bench image turns it on (TR_BENCH_RAW_BUILD_LITE).
+    // the mosaic-only image turns it on (ReceiverProfileApply.h
+    // applyMosaicFlightProfile), a bench image off again
+    // (TR_BENCH_RAW_BUILD_LITE=0).
     bool   build_lite = false;
     // The receiver's epochs between the fused ones: each fused epoch's Doppler
     // averaged with the one raw_epoch_period_s before it, where the two are a
@@ -124,7 +126,9 @@ struct GnssReceiverProfile
     // raw_epoch_period_s more than rr_lag_s, on an epoch handed over in pairs;
     // one handed over as it came keeps rr_lag_s). Only where the fused grid is
     // exactly two of the receiver's epochs (dopplerPairsFit); the sigmas stay
-    // the profile's. Off: every receiver.
+    // the profile's. Off in every profile: the mosaic-only image turns it on
+    // (applyMosaicFlightProfile), a bench image off again
+    // (TR_BENCH_RAW_DOP_AVG=0).
     bool   rr_pair_avg = false;
     double rr_pair_max_diff_mps = 15.0;   // the pair at most this far apart (300 m/s^2 over 50 ms)
     double epoch_slice_us = 2500.0;       // the navigation filter works an epoch at most this long a 10 ms step
@@ -343,8 +347,9 @@ inline GnssReceiverProfile mosaicG5Profile()
     p.epoch_latency_s = 0.0;        // the 1PPS line: an edge is its GPS second
     p.raw_epoch_period_s = 0.05;    // V9 rig 10/16: every MeasEpoch 50 ms after the last
     p.fuse_epoch_period_s = 0.1;    // plan: 10 Hz, on the GPS-time grid
-    p.rr_pair_avg = false;          // the epochs between the grid's averaged in: off until benched
-                                    //   (TR_BENCH_RAW_DOP_AVG; the driver's pairs, MosaicRawEpoch.h)
+    p.rr_pair_avg = false;          // the epochs between the grid's averaged in: off here, on in the
+                                    //   mosaic-only image (applyMosaicFlightProfile; the driver's
+                                    //   pairs, MosaicRawEpoch.h; TR_BENCH_RAW_DOP_AVG=0 turns it off)
 
     // the code: sigma^2 = a^2 + b^2 * 10^(-(C/N0 - 35)/10)
     p.pr_white_a = 0.10;            // V9 rig 10/16: 0.144 m at 44 dB-Hz, above the receiver's own
@@ -419,8 +424,11 @@ inline GnssReceiverProfile mosaicG5Profile()
     p.max_epoch_age_s = 0.3;        // plan: 3 epochs at 10 Hz (MeasEpoch reaches the V9 20 ms after its
     p.epoch_job_max_s = 0.2;        //   epoch, p95 26 ms: V9 rig 10/16), 2 to work at once
     // the epoch's geometry once, shared by its units, and the Doppler's
-    // prediction in float (TR_RawGnssEKF.h share_los, rr_float): off as the
-    // image flies; the bench turns them on (TR_BENCH_RAW_SHARE_LOS)
+    // prediction in float (TR_RawGnssEKF.h share_los, rr_float): off here;
+    // the mosaic-only image flies both (applyMosaicFlightProfile, with the
+    // cheaper build and the Doppler pairs; TR_BENCH_RAW_SHARE_LOS=0 turns them
+    // off), the profile's other users (the replay without the image's
+    // safeguards, the simulator's bindings) neither
     p.share_los = false;
     p.rr_float = false;
     p.level_min_dt_s = 0.95;        // the LC86G's steady test, epochs a second apart

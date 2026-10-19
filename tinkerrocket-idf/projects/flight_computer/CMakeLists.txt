@@ -161,8 +161,12 @@ endforeach()
 # filter's slack, up to TR_BENCH_RAW_CAP_MAX from the cap above (CapGovernor.h;
 # TR_BENCH_RAW_CAP_PAD=1 lets it climb in PRELAUNCH too, which it holds at the
 # floor, to watch the climb under an open sky), and the filter's slice of an
-# epoch's work a step in us (TR_BENCH_RAW_SLICE_US: the profile's 2500). Each
-# sets the filter's start (main.cpp startRawShadow). Never set for flight.
+# epoch's work a step in us (TR_BENCH_RAW_SLICE_US: the profile's 2500). The
+# mosaic-only image flies the cheaper build, the shared geometry at 2 and the
+# Dopplers in pairs (ReceiverProfileApply.h applyMosaicFlightProfile, the
+# owner's 10/24 set): those three at 0 build the high-roll-only twin. Each
+# sets the filter's start (main.cpp startRawShadow) and marks the image
+# -bench. Never set for flight.
 #
 # These and TR_RAW_GNSS_IRAM below act only where the raw-GNSS filter
 # navigates on the mosaic-G5 (main.cpp's TR_RAW_NAV_MOSAIC): any other build

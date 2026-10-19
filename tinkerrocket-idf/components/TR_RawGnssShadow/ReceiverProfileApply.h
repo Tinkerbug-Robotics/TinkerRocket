@@ -129,6 +129,53 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssShadow::Co
     applyReceiverProfile(p, c.ekf);
 }
 
+// The mosaic-only image's flight profile (the owner's 10/24 set, 2026-10-19),
+// beside its safeguards below: what of the receiver's profile the image flies
+// other than mosaicG5Profile(), which the profile's other users keep (the
+// replay built without the image's safeguards, the simulator's bindings).
+// main.cpp's startRawShadow calls it under TR_RAW_NAV_MOSAIC right after it
+// picks the profile and before any bench override, so each override still
+// turns its own off (TR_BENCH_RAW_BUILD_LITE=0, TR_BENCH_RAW_SHARE_LOS=0,
+// TR_BENCH_RAW_DOP_AVG=0: the high-roll-only twin), and tools/raw_replay's
+// --receiver mosaic calls it in the same place (--build-lite 0,
+// --share-los 0, --rr-pair-avg 0). On the profile, not with the safeguards in
+// the shadow's config: the driver's Doppler pairs are set from the same
+// profile (main.cpp rawPairsStart) before applyReceiverProfile takes the
+// filter's pair lag from it, and a driver that cannot pair turns the
+// profile's off first, so the two never disagree; the bench overrides act on
+// the profile too, before the safeguards.
+//   - The cheaper epoch build (RawMeasBuilder.h, lite): each satellite's
+//     elevation and atmosphere once in each pr_period_s, its orbit solves
+//     spread over their 5 s, the noise on one exp.
+//   - The epoch's geometry taken once and shared by its units, with the
+//     Doppler's prediction in float (TR_RawGnssEKF.h share_los, rr_float: the
+//     bench's TR_BENCH_RAW_SHARE_LOS level 2, which the open-sky bench and the
+//     composition runs flew). With the pairs on, the float prediction acts
+//     only on the epochs handed over as they came: an epoch in pairs has a
+//     lag and takes the double one (RawGnssEKFUpdate.h).
+//   - The Dopplers in pairs (rr_pair_avg): the driver averages each 10 Hz
+//     grid epoch's Doppler with the receiver's epoch 50 ms before it
+//     (MosaicRawEpoch.h), and the filter takes those means 25 ms further back
+//     (rr_pair_lag_s, from dopplerPairsFit's grid).
+//   - At most 16 satellites an epoch, the cap fixed (sat_cap_max 0: the
+//     governor off).
+// The open-sky bench (2026-10-19, all three on at 16 satellites): the epoch's
+// age at close 83 ms median and 101 at most against the high-roll image's 110
+// and 145, the build 5.2 ms, core 0 44 % idle, 99.9 % of the Dopplers
+// averaged (gnss-attitude-study/v9-mosaic-filter-plan/evidence/sat-rate/
+// bench/results_20261019.md). The bench integration's replays (2026-10-18):
+// the real logs' static velocity noise 27-31 % lower; Grid B's boost p90
+// 0.45 -> 0.31 deg, the apogee items unchanged.
+inline void applyMosaicFlightProfile(GnssReceiverProfile& p)
+{
+    p.build_lite = true;
+    p.share_los = true;
+    p.rr_float = true;
+    p.rr_pair_avg = true;
+    p.sat_cap = 16;
+    p.sat_cap_max = 0;
+}
+
 // The mosaic-only image's flight safeguards (wave 3, 2026-10-18), in one place:
 // main.cpp's startRawShadow calls it under TR_RAW_NAV_MOSAIC after the profile
 // and before any bench override, and tools/raw_replay's --receiver mosaic calls

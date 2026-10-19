@@ -312,7 +312,8 @@ struct Args
     double windup_monitor_k = -1.0, dv_lever_radial_m = -1.0;
     double clk_drift_psd = -1.0;     // RawGnssEKFParams::clk_drift_psd after the profile (-1: the profile's; the
                                      //   mosaic's and the LC86G's 100 m^2/s^3): an experiment on the clock's walk
-    bool build_lite = false;         // TR_BENCH_RAW_BUILD_LITE: the cheaper epoch build (a RAW_REPLAY_BUILD_LITE build)
+    int build_lite = -1;             // TR_BENCH_RAW_BUILD_LITE: the cheaper epoch build on (1) or off (0) (a
+                                     //   RAW_REPLAY_BUILD_LITE build; -1: the profile's, the mosaic image's on)
     std::set<std::string> given;     // the options on the command line
 };
 
@@ -368,7 +369,7 @@ void usage()
                  "  the spinning body (a RAW_REPLAY_WINDUP build): [--windup-k K] [--windup-geom 0|1]\n"
                  "  [--windup-monitor 0|1] [--windup-monitor-k K] [--att-exact 0|1] [--dv-lever-mode 0|1]\n"
                  "  [--dv-lever-radial-m X] [--clk-drift-psd X]\n"
-                 "  the cheaper epoch build (a RAW_REPLAY_BUILD_LITE build, --receiver mosaic only): [--build-lite]\n");
+                 "  the cheaper epoch build (a RAW_REPLAY_BUILD_LITE build, --receiver mosaic only): [--build-lite [0|1]]\n");
 }
 
 bool parseArgs(int argc, char** argv, Args& a)
@@ -506,7 +507,13 @@ bool parseArgs(int argc, char** argv, Args& a)
                                            &a.seed_gyro_dps[2]) == 3;
         }
         else if (k == "--sat-cap") a.sat_cap = std::atoi(val());
-        else if (k == "--build-lite") a.build_lite = true;
+        else if (k == "--build-lite")
+        {
+            // alone, on; with 0 or 1 after it, that (--build-lite 0: the mosaic image's flight profile's off)
+            a.build_lite = 1;
+            if (i + 1 < argc && (std::strcmp(argv[i + 1], "0") == 0 || std::strcmp(argv[i + 1], "1") == 0))
+                a.build_lite = std::atoi(argv[++i]);
+        }
         else if (k == "--cap-max") a.cap_max = std::atoi(val());
         else if (k == "--slice-us") a.slice_us = std::atof(val());
         else if (k == "--fuse-ms") a.fuse_ms = std::atof(val());
@@ -1614,7 +1621,7 @@ int main(int argc, char** argv)
     }
     // the cheaper epoch build as the firmware allows it: on the mosaic-only image alone (its CMakeLists refuses
     // TR_BENCH_RAW_BUILD_LITE elsewhere), so never on the LC86G's profile
-    if (a.build_lite && !mosaic)
+    if (a.build_lite > 0 && !mosaic)
     {
         std::fprintf(stderr, "--build-lite is for the mosaic-G5 (--receiver mosaic) alone, as TR_BENCH_RAW_BUILD_LITE "
                              "is for the mosaic-only image\n");
@@ -1722,16 +1729,24 @@ int main(int argc, char** argv)
 #if !RAW_REPLAY_OLD
 #if RAW_REPLAY_MOSAIC
     GnssReceiverProfile rx = mosaic ? mosaicG5Profile() : lc86gProfile();
+#if RAW_REPLAY_FLIGHT_PROFILE
+    // the mosaic-only image's flight profile (applyMosaicFlightProfile, the owner's 10/24 set: the cheaper build, the
+    // shared geometry with the Doppler in float, the Dopplers in pairs, 16 satellites, the cap fixed), where
+    // startRawShadow() sets it: before the bench flags, so --build-lite 0 --share-los 0 --rr-pair-avg 0 is the
+    // high-roll-only twin
+    if (mosaic)
+        applyMosaicFlightProfile(rx);
+#endif
     // the mosaic build's bench macros, on the profile before it is applied (main.cpp startRawShadow)
     if (a.fuse_ms > 0.0)
         rx.fuse_epoch_period_s = a.fuse_ms * 1.0e-3;   // TR_BENCH_RAW_FUSE_MS
     if (a.sat_cap >= 0)
         rx.sat_cap = a.sat_cap;                         // TR_BENCH_RAW_SAT_CAP
 #if RAW_REPLAY_BUILD_LITE
-    if (a.build_lite)
-        rx.build_lite = true;                           // TR_BENCH_RAW_BUILD_LITE
+    if (a.build_lite >= 0)
+        rx.build_lite = a.build_lite != 0;              // TR_BENCH_RAW_BUILD_LITE
 #else
-    if (a.build_lite)
+    if (a.build_lite > 0)
     {
         std::fprintf(stderr, "this build has no cheaper epoch build (RAW_REPLAY_BUILD_LITE=OFF): --build-lite needs it\n");
         return 2;
@@ -1755,10 +1770,18 @@ int main(int argc, char** argv)
         rx.rr_pair_max_diff_mps = a.rr_pair_max_diff;
     if (rx.rr_pair_avg && !dopplerPairsFit(rx))
     {
-        std::fprintf(stderr, "--rr-pair-avg 1 needs a fused grid of two receiver epochs (the mosaic's --fuse-ms 100), "
-                             "not %.0f ms over %.0f ms epochs\n",
+        if (a.rr_pair_avg > 0)
+        {
+            std::fprintf(stderr, "--rr-pair-avg 1 needs a fused grid of two receiver epochs (the mosaic's --fuse-ms "
+                                 "100), not %.0f ms over %.0f ms epochs\n",
+                         rx.fuse_epoch_period_s * 1000.0, rx.raw_epoch_period_s * 1000.0);
+            return 2;
+        }
+        // the flight profile's on a grid they cannot pair on: off, as the image's rawPairsStart turns them off
+        std::fprintf(stderr, "the Dopplers in pairs need a fused grid of two receiver epochs, not %.0f ms over %.0f ms "
+                             "epochs: off, as on the image\n",
                      rx.fuse_epoch_period_s * 1000.0, rx.raw_epoch_period_s * 1000.0);
-        return 2;
+        rx.rr_pair_avg = false;
     }
 #endif
 #if RAW_REPLAY_CAPGOV
@@ -1801,7 +1824,8 @@ int main(int argc, char** argv)
     if (mosaic)
         std::fprintf(stderr, "WARNING: this build does not apply the mosaic image's flight safeguards "
                              "(RAW_REPLAY_MOSAIC_SAFEGUARDS=OFF): --receiver mosaic replays with the Doppler change "
-                             "check, the heading share and the turning body's allowance off unless set by flag\n");
+                             "check, the heading share and the turning body's allowance off unless set by flag, and "
+                             "with the profile's own epoch settings, not the image's flight profile\n");
 #endif
     // an experiment on the Doppler's instant: the filter's rr_lag_s in place of the profile's (offline only)
     if (a.rr_lag_ms >= 0.0)
