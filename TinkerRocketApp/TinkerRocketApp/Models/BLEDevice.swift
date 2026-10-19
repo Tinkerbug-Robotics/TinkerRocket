@@ -2091,9 +2091,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 // the summary rather than writing an empty one.
                 let head = [UInt8]((try? Data(contentsOf: binaryURL)) ?? Data())
                 if BSLogCSVGenerator.isBaseStationLog(head) {
-                    let csv = try BSLogCSVGenerator.writeCSV(head)
-                    try csv.write(to: tempCSV, atomically: true, encoding: .utf8)
-                    let cachedURL = try FileCache.shared.cacheCSV(at: tempCSV, for: filename)
+                    // The combined CSV, plus one per rocket when the log holds
+                    // several (three rockets, one base station).
+                    let cachedURL = try FileCache.shared.cacheBaseStationLogCSVs(
+                        bytes: head, binaryFilename: filename)
                     DispatchQueue.main.async { completion(cachedURL) }
                     return
                 }
@@ -2214,14 +2215,6 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                     // still handled correctly.
                     let bytes = [UInt8](try Data(contentsOf: fileURL))
                     if BSLogCSVGenerator.isBaseStationLog(bytes) {
-                        let csv = try BSLogCSVGenerator.writeCSV(bytes)
-                        let csvName = filename.hasSuffix(".bin")
-                            ? String(filename.dropLast(4)) + ".csv"
-                            : filename + ".csv"
-                        let tempCSV = FileManager.default.temporaryDirectory
-                            .appendingPathComponent(csvName)
-                        try csv.write(to: tempCSV, atomically: true, encoding: .utf8)
-
                         // ORDER MATTERS, AND NOT OBVIOUSLY. cacheBinary()
                         // deletes the cached CSV for the binary it is given
                         // (#832: the CSV is normally DERIVED from the binary
@@ -2238,8 +2231,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                         // rendering, the .bin is the evidence the post-flight
                         // tools read directly, and it rides the existing Share
                         // Flight Data sheet from there.
+                        //
+                        // The base station keeps ONE log for every rocket it
+                        // hears; a log holding several is also rendered as one
+                        // CSV per rocket ID ("Rocket N" in Saved Flights),
+                        // beside the combined one.
                         let _ = try? FileCache.shared.cacheBinary(at: fileURL, for: filename)
-                        let _ = try FileCache.shared.cacheDirectCSV(at: tempCSV, filename: csvName)
+                        try FileCache.shared.cacheBaseStationLogCSVs(bytes: bytes, binaryFilename: filename)
                     } else {
                         let _ = try FileCache.shared.cacheDirectCSV(at: fileURL, filename: filename)
                     }
