@@ -176,7 +176,11 @@ inline bool mayStartTx(uint32_t now_ms,
 //     apart by construction, and the learned value is the focused rocket's only.
 //   * every frame is assumed FAST (the longer one) — a SLOW frame is followed by
 //     a beacon now and then, and guessing which is which buys nothing.
-//   * kGapMarginMs is kept clear before each predicted start for jitter.
+//   * kGapMarginMs is kept clear before each predicted start for jitter, and
+//     after the end of a frame not heard yet: frames only run late against
+//     the prediction (free-running: 500 ms + loop time per period), and a TX
+//     at the predicted end clipped their tails — in a simulation of three
+//     free-running rockets that alone hit more frames than today's gate.
 //   * only rockets heard within kGapFreshMs on the CURRENT channel and SF count;
 //     a rocket on another channel or modulation is not on our air.
 //
@@ -215,11 +219,21 @@ inline bool clearOfRocket(uint32_t now_ms, uint32_t tx_airtime_ms,
     // clock oddity) is treated as "frame on air now" — never the permissive case.
     const uint32_t e = now_ms - r.start_ms;
     if ((int32_t)e < 0) return false;
-    // First predicted frame that has not finished by now: k * P + F > e.
-    const uint32_t k = (e >= frame_airtime_ms) ? ((e - frame_airtime_ms) / period_ms + 1u) : 0u;
+    // k = 0 is the frame we heard: on air for a FAST frame's time from its
+    // start (a SLOW frame may have a beacon behind it).
+    if (e < frame_airtime_ms) return false;
+    // k >= 1 have not been heard yet, and a frame only ever runs LATE against
+    // the prediction (a free-running rocket's period is 500 ms plus its loop
+    // time; a slotted one adds send jitter). So the margin guards both ends of
+    // a predicted frame: [kP - margin, kP + F + margin). Costs nothing in the
+    // steady state — the frame is heard as it ends and becomes k = 0 — and
+    // stops a TX clipping the tail of a frame that is a few ms late.
+    // First k >= 1 whose guarded end is after now:
+    const uint32_t tail = frame_airtime_ms + margin_ms;
+    const uint32_t k = (e >= tail) ? ((e - tail) / period_ms + 1u) : 1u;
     const uint32_t next_start = k * period_ms;   // relative to r.start_ms
-    // Blocked when that frame's guarded start comes before our TX ends. Later
-    // frames start later still, earlier ones have already ended.
+    // Blocked when that frame's guarded window starts before our TX ends (or
+    // has not yet ended: next_start <= e). Later frames start later still.
     return next_start >= e + tx_airtime_ms + margin_ms;
 }
 

@@ -404,8 +404,29 @@ TEST(BsUplinkGapGate, PredictsWithTheFixedPeriodAcrossMissedFrames) {
     EXPECT_TRUE (gapClear(21450, a, kFast, &r, 1, kChan));
     EXPECT_FALSE(gapClear(21451, a, kFast, &r, 1, kChan));
     EXPECT_FALSE(gapClear(21550, a, kFast, &r, 1, kChan));   // on air (FAST assumed)
-    EXPECT_FALSE(gapClear(21601, a, kFast, &r, 1, kChan));
-    EXPECT_TRUE (gapClear(21602, a, kFast, &r, 1, kChan));   // after it
+    // Not heard: it may be running late, so the margin also follows its end.
+    EXPECT_FALSE(gapClear(21611, a, kFast, &r, 1, kChan));
+    EXPECT_TRUE (gapClear(21612, a, kFast, &r, 1, kChan));
+}
+
+TEST(BsUplinkGapGate, ALateFrameIsNotClipped) {
+    // A free-running rocket's period is 500 ms plus its loop time, so its next
+    // frame starts a few ms after the prediction. Until it is heard, a TX must
+    // not start at the predicted end and cut off the frame's tail.
+    RocketPhase r;
+    r.valid = true;
+    r.start_ms = 30000;
+    r.heard_ms = 30102;
+    r.chan_key = kChan;
+    const uint32_t a = pkt(6);
+    const uint32_t actual_next = 30000 + 504;          // 4 ms late
+    for (uint32_t now = 30500; now < actual_next + kFast; now++) {
+        EXPECT_FALSE(gapClear(now, a, kFast, &r, 1, kChan)) << "t=" << (now - 30000);
+    }
+    // Once heard, its real end opens the hole at once — no margin left over.
+    r.start_ms = actual_next;
+    r.heard_ms = actual_next + kFast;
+    EXPECT_TRUE(gapClear(actual_next + kFast, a, kFast, &r, 1, kChan));
 }
 
 TEST(BsUplinkGapGate, BudgetChargesOnlyWhatTheFocusedGateWouldHaveSent) {
