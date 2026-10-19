@@ -83,7 +83,9 @@ BLE_TO_APP_CMDS = {70, 71, 72}
 # is always an error).  Every entry needs a trailing comment naming the
 # feature; entries that stop being divergent are flagged stale and must be
 # removed, so the list mechanically trends to empty.
-ALLOWED_DIVERGENCE: set[int] = set()
+ALLOWED_DIVERGENCE: set[int] = {
+    82,  # BS transmit slots on/off (BLE_BS_CMD_SET_TX_SLOTS), three rockets on one base station -- Android in #1650
+}
 
 # Guard-the-guard: SWIFT_RE only sees integer literals at call sites.  If a
 # refactor moved the Swift app to named constants, the extracted set would

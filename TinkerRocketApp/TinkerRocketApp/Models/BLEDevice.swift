@@ -924,6 +924,23 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
     }
 
+    /// Transmit slots (up to three rockets on one base station), BS BLE cmd 82
+    /// (BLE_BS_CMD_SET_TX_SLOTS). The BASE STATION runs them: it times each
+    /// rocket's frames and tells each one where to put its transmit grid
+    /// (uplink 82), slot (rid - 1) % 3 unless that slot is taken. 1 = run
+    /// slots (the default); 0 = stop, and release every rocket to free-running.
+    /// Desired-state, never a toggle (same reason as cmd 68). Rockets refuse a
+    /// slot while hopping, so slots only apply in fixed-frequency mode (at
+    /// SF8); the readback "lts" confirms. Not 70: that is OTA_BEGIN on BLE.
+    /// Settings sends it only to a base station that reports "lts".
+    func sendLoRaTxSlots(_ on: Bool) {
+        sendRawCommand(82, payload: Data([on ? 0x01 : 0x00]))
+        if var cfg = rocketConfig {
+            cfg.loraTxSlots = on
+            rocketConfig = cfg
+        }
+    }
+
     /// #1176 step 6 — end a flight the rocket RESTORED after an in-flight
     /// reboot, without waiting for it to time itself out.
     ///
@@ -1290,14 +1307,33 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// read from `focusedRelayAgeMs` — that property only refreshes on the
     /// 2 s RSSI tick, so at a fire instant it can be stale-true by up to a
     /// full tick. A T-0 check deserves the real clock.
+    ///
+    /// A focused rocket ID that looks like two rockets (`dup`, or the relayed
+    /// name alternating) is never ready: the uplink names a rocket ID, and
+    /// both rockets would act on it.
     var pyroCommandPathReady: Bool {
         guard isConnected else { return false }
         guard isBaseStation else { return true }
         guard let focus = focusRocketID,
               let remote = remoteRockets.first(where: { $0.rocketID == focus })
         else { return false }
-        let ageMs = UInt32(clamping: Int(Date().timeIntervalSince(remote.lastSeen) * 1000))
+        let now = Date()
+        guard !remote.duplicateIDSuspected(now: now) else { return false }
+        let ageMs = UInt32(clamping: Int(now.timeIntervalSince(remote.lastSeen) * 1000))
         return ageMs <= Self.relayStaleThresholdMs
+    }
+
+    /// True when this base station hears `rocketID` as what looks like two
+    /// rockets (see RemoteRocket.duplicateIDSuspected).
+    func isDuplicateIDSuspected(rocketID: UInt8, now: Date = Date()) -> Bool {
+        remoteRockets.first { $0.rocketID == rocketID }?.duplicateIDSuspected(now: now) ?? false
+    }
+
+    /// The pyro refusal reason the stand-back test shows: the focused rocket's
+    /// ID is shared, so a relayed pyro command would reach both rockets.
+    var focusedRocketIDShared: Bool {
+        guard isBaseStation, let focus = focusRocketID else { return false }
+        return isDuplicateIDSuspected(rocketID: focus)
     }
 
     /// What the link can actually say about a pyro channel's continuity.
@@ -1397,8 +1433,9 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         if isBaseStation {
             // Stand-back pyro test: relay over LoRa to the focused rocket.
             // Broadcast (0xFF) is deliberately never used here — a pyro
-            // command must name its rocket.
-            guard let rid = focusRocketID else { return }
+            // command must name its rocket, and a name two rockets answer
+            // to names neither.
+            guard let rid = focusRocketID, !isDuplicateIDSuspected(rocketID: rid) else { return }
             sendRelayCommand(targetRocketID: rid, innerCommand: 35,
                              innerPayload: Data([channel]))
         } else {
@@ -1424,8 +1461,9 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             // uplink cmd 36) so the operator keeps LoRa distance from a live
             // charge. Blind fire-and-retry (#285): the rocket dedups the
             // retry train; delivery is confirmed by the operator's own eyes
-            // and the post-fire continuity re-test, not by any ACK.
-            guard let rid = focusRocketID else { return }
+            // and the post-fire continuity re-test, not by any ACK. Refused
+            // outright when the rocket ID looks shared (both would fire).
+            guard let rid = focusRocketID, !isDuplicateIDSuspected(rocketID: rid) else { return }
             sendRelayCommand(targetRocketID: rid, innerCommand: 36,
                              innerPayload: Data([channel]))
         } else {
@@ -2448,6 +2486,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             cfg.loraHopDisabled = dict["lhd"] as? Bool   // #106 (nil if device doesn't report it)
             cfg.loraHopDwell = dict["lhdw"] as? Int      // #150 (0 = hopping unavailable)
             cfg.loraTxDisabled = dict["ltxd"] as? Bool   // nil if firmware predates "LoRa off"
+            cfg.loraTxSlots = dict["lts"] as? Bool       // nil if firmware predates transmit slots
             if let existing = self.rocketConfig {
                 cfg.pyro1Enabled = existing.pyro1Enabled
                 cfg.pyro1TriggerMode = existing.pyro1TriggerMode
@@ -2611,7 +2650,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             // command, so pushed values confirm through this same path.
             fleet?.knownDevices.deviceDidReportIdentity(
                 unitID: unitID, name: unitName, deviceType: deviceType,
-                networkID: networkID, rocketID: rocketID, pusher: self)
+                networkID: networkID, rocketID: rocketID,
+                firmware: dict["fw"] as? String, pusher: self)
+            // An fc_identity that beat this readback had no record to land in.
+            if fcIdentityAwaitingRegistry { recordFlightComputerIdentity() }
             return
         }
 
@@ -2633,6 +2675,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                   + "fc_board=\(fcBoardRev ?? "unprovisioned") "
                   + "oc_board=\(ocBoardRev ?? "unprovisioned") "
                   + "fc_gnss=\(fcGnss ?? "none")")
+            recordFlightComputerIdentity()
             return
         }
 
@@ -2726,7 +2769,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                           !remoteRockets.contains(where: {
                               $0.rocketID == pinned &&
                               Date().timeIntervalSince($0.lastSeen) < Self.focusPinStaleAfter
-                          }) {
+                          }),
+                          // A rocket that has flown going quiet is a rocket on
+                          // the ground out of range — the one the operator is
+                          // walking to. Keep its section (lost, last fix) up
+                          // rather than handing the screen to whoever is still
+                          // on the pad; Follow moves it on purpose.
+                          !(fleet?.flownRockets.contains(
+                              RocketKey(networkID: networkID, rocketID: pinned)) ?? false) {
                     // SELF-HEAL a dangling pin. "Sticky" must not mean
                     // "unfalsifiable": the pin is latched once above, re-seeded
                     // from the in-memory fleet cache on every reconnect
@@ -2765,9 +2815,9 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 // are only unique per network (#390 two-pair support). The BS
                 // only forwards packets matching its own network id, so its
                 // networkID is the right scope for its relayed rockets.
-                let fix = fleet?.recordRocketFix(
-                    from: newTelemetry,
-                    key: RocketKey(networkID: networkID, rocketID: rocketID))
+                let relayKey = RocketKey(networkID: networkID, rocketID: rocketID)
+                let fix = fleet?.recordRocketFix(from: newTelemetry, key: relayKey)
+                fleet?.noteFlightProgress(newTelemetry, key: relayKey)
 
                 if rocketID == focusRocketID {
                     self.updateSimBannerLatch(newTelemetry)
@@ -2800,11 +2850,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             // Skip when rocketID is unset so a BS-self packet (which falls
             // through to here without a source_rocket_id) doesn't nil out
             // a fix this device just mirrored from a relay packet.
-            if self.rocketID > 0,
-               let fix = fleet?.recordRocketFix(
-                   from: newTelemetry,
-                   key: RocketKey(networkID: networkID, rocketID: rocketID)) {
-                self.lastValidRocketFix = fix
+            if self.rocketID > 0 {
+                let key = RocketKey(networkID: networkID, rocketID: rocketID)
+                if let fix = fleet?.recordRocketFix(from: newTelemetry, key: key) {
+                    self.lastValidRocketFix = fix
+                }
+                fleet?.noteFlightProgress(newTelemetry, key: key)
             }
             self.flightAnnouncer?.processTelemetry(newTelemetry)
         } catch {
@@ -2813,6 +2864,23 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 print("Raw JSON: \(jsonString)")
             }
         }
+    }
+
+    /// Set while an fc_identity has arrived before the config_identity that
+    /// names this board's record.
+    private var fcIdentityAwaitingRegistry = false
+
+    /// Keep the registry's firmware/board copy current, so a section for this
+    /// rocket heard later through a base station can still name them.
+    private func recordFlightComputerIdentity() {
+        guard !unitID.isEmpty else {
+            fcIdentityAwaitingRegistry = true
+            return
+        }
+        fcIdentityAwaitingRegistry = false
+        fleet?.knownDevices.deviceDidReportFlightComputer(
+            unitID: unitID, fcFirmware: fcFirmwareVersion,
+            fcBoard: fcBoardRev, ocBoard: ocBoardRev)
     }
 
     private func parseFloat(_ value: Any?) -> Float? {

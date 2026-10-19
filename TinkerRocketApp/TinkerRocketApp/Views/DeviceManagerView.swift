@@ -161,6 +161,12 @@ struct DeviceManagerView: View {
                 Text(subtitle(rec))
                     .font(.caption)
                     .foregroundColor(.secondary)
+                ForEach(Self.conflictBadges(store.rocketIDConflicts(for: rec.unitID)), id: \.text) { badge in
+                    Label(badge.text, systemImage: badge.severe
+                          ? "exclamationmark.triangle.fill" : "clock.arrow.2.circlepath")
+                        .font(.caption2.weight(badge.severe ? .semibold : .regular))
+                        .foregroundColor(badge.severe ? .red : .orange)
+                }
             }
 
             Spacer()
@@ -187,6 +193,32 @@ struct DeviceManagerView: View {
             }
         }
         .padding(.vertical, 2)
+    }
+
+    struct ConflictBadge: Equatable {
+        let text: String
+        /// Same rocket ID: the base station cannot tell the two apart and pyro
+        /// commands are blocked. A shared transmit slot only means the base
+        /// station has to move one of them.
+        let severe: Bool
+    }
+
+    /// "Same ID as <name>" and "Shares a transmit slot with <name>", one each
+    /// at most, naming every rocket involved.
+    static func conflictBadges(_ c: KnownDeviceStore.RocketIDConflicts) -> [ConflictBadge] {
+        func names(_ recs: [KnownDevice]) -> String {
+            recs.map { $0.effectiveName.isEmpty ? $0.unitID : $0.effectiveName }
+                .joined(separator: ", ")
+        }
+        var out: [ConflictBadge] = []
+        if !c.sameID.isEmpty {
+            out.append(ConflictBadge(text: "Same ID as \(names(c.sameID))", severe: true))
+        }
+        if !c.sharedSlot.isEmpty {
+            out.append(ConflictBadge(text: "Shares a transmit slot with \(names(c.sharedSlot))",
+                                     severe: false))
+        }
+        return out
     }
 
     private func subtitle(_ rec: KnownDevice) -> String {
