@@ -5209,21 +5209,40 @@ static void publishPadCalStatus(uint32_t now_ms)
 // recording — the reported symptom).  Route every change through here so
 // camera_gate_on is always the truth, and so the GoPro shutter interlock has
 // something honest to test.
+//
+// TR_BENCH_CAM_ON_WITH_FC (CMake -DTR_BENCH_CAM_ON_WITH_FC=1, a bench image
+// whose version says "-bench"): the camera connector as a plain switched
+// output that follows the flight computer. The gate goes up as this image
+// boots and nothing turns it off, so whatever is on the connector is powered
+// exactly while the FC is: the app's power-on and power-off switch it. Camera
+// start/stop are ignored, so no shutter press or RunCam UART ever drives the
+// signal pins into the load.
+#if defined(TR_BENCH_CAM_ON_WITH_FC) && TR_BENCH_CAM_ON_WITH_FC
+static constexpr bool kCamOnWithFc = true;
+#else
+static constexpr bool kCamOnWithFc = false;
+#endif
+static_assert(!kCamOnWithFc || config::RUNCAM_PWR_PIN >= 0,
+              "TR_BENCH_CAM_ON_WITH_FC needs a board with a camera power gate");
+
 static void cameraGateInit()
 {
     if (config::RUNCAM_PWR_PIN < 0)
         return;
     gpio_set_direction((gpio_num_t)(config::RUNCAM_PWR_PIN), GPIO_MODE_OUTPUT);
-    gpio_set_level((gpio_num_t)(config::RUNCAM_PWR_PIN), 0);  // OFF at boot
-    camera_gate_on = false;
-    ESP_LOGI(TAG, "Camera gate pin %d configured (camera OFF)",
-             (int)config::RUNCAM_PWR_PIN);
+    gpio_set_level((gpio_num_t)(config::RUNCAM_PWR_PIN), kCamOnWithFc ? 1 : 0);  // OFF at boot (on: see above)
+    camera_gate_on = kCamOnWithFc;
+    ESP_LOGI(TAG, "Camera gate pin %d configured (camera %s)",
+             (int)config::RUNCAM_PWR_PIN,
+             kCamOnWithFc ? "ON with the FC: TR_BENCH_CAM_ON_WITH_FC" : "OFF");
 }
 
 static void cameraGateSet(bool on)
 {
     if (config::RUNCAM_PWR_PIN < 0)
         return;
+    if (kCamOnWithFc && !on)
+        return;  // held up for as long as the FC runs
     if (camera_gate_on == on)
         return;
     gpio_set_level((gpio_num_t)(config::RUNCAM_PWR_PIN), on ? 1 : 0);
@@ -5492,6 +5511,11 @@ static void runcamUartAttach()
 // ── Generic camera start/stop (dispatches based on runtime_camera_type) ──
 static void cameraStart(uint32_t now_ms)
 {
+    if (kCamOnWithFc)
+    {
+        ESP_LOGI(TAG, "Camera START ignored: the connector follows the FC (TR_BENCH_CAM_ON_WITH_FC)");
+        return;
+    }
     if (camera_recording) return;  // already recording
     if (runtime_camera_type == CAM_TYPE_GOPRO)
     {
@@ -5552,6 +5576,7 @@ static inline void serviceCameraStop(uint32_t now_ms);
 // toggle-to-power-off step runs non-blockingly via serviceCameraStop().
 static void cameraStop(uint32_t now_ms, uint32_t delay_ms = 0)
 {
+    if (kCamOnWithFc) return;  // the connector follows the FC, not the camera commands
     if (!camera_recording) return;                            // not recording
     // An immediate stop overtakes a scheduled one (the 30 s post-LANDED stop).
     // It used to be dropped as "already stopping", so an operator stop — or
@@ -6803,6 +6828,14 @@ static void setup_fc()
     {
         gpio_set_direction((gpio_num_t)config::SERVO_ACT_PIN, GPIO_MODE_OUTPUT);
         gpio_set_level((gpio_num_t)config::SERVO_ACT_PIN, 1);
+    }
+    // TR_BENCH_CAM_ON_WITH_FC: the camera connector up with the rails, a
+    // fraction of a second into boot rather than after the sensors (about 6 s
+    // with a GNSS bring-up). cameraGateInit() below keeps it up.
+    if (kCamOnWithFc)
+    {
+        gpio_set_direction((gpio_num_t)config::RUNCAM_PWR_PIN, GPIO_MODE_OUTPUT);
+        gpio_set_level((gpio_num_t)config::RUNCAM_PWR_PIN, 1);
     }
 
     // #848: the power-hold latch may have survived the reset (LP pad hold +
