@@ -4373,10 +4373,12 @@ static void serviceTxSlotsOnFrame(int idx, uint16_t seq, bool fast, bool timed,
 
     // Never a rocket that is hopping, a rid two rockets share, or one heard off
     // the operating channel/modulation; never while a scan, a reconfigure or
-    // silence recovery owns the radio. And only into an idle uplink queue: the
-    // rocket keeps the send times of its last 16 frames, so ref_seq must still
-    // be among them when the adjust goes out.
-    const bool eligible = tx_slots.enabled &&
+    // silence recovery owns the radio. Only in the fixed link mode: the rocket
+    // follower refuses an adjust (and unlocks) whenever hop mode is enabled,
+    // hopping yet or not. And only into an idle uplink queue: the rocket keeps
+    // the send times of its last 16 frames, so ref_seq must still be among
+    // them when the adjust goes out.
+    const bool eligible = tx_slots.enabled && lora_hop_disabled &&
                           !tr.hopping && !hop_active_ &&
                           !tr.dup.flagged &&
                           rx_key == operatingChanKey() &&
