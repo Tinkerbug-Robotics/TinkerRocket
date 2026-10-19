@@ -2211,6 +2211,20 @@ target_include_directories(test_lora_dio1_policy PRIVATE
 target_link_libraries(test_lora_dio1_policy GTest::gtest_main)
 gtest_discover_tests(test_lora_dio1_policy)
 
+# ---------- test_lora_slot_follow_policy (three-rocket transmit slots) ----------
+# The rocket's half of the base-station-run slots: the (seq, send time) ring
+# an uplink 82 names its frame from, the grid it then transmits on (late passes
+# step whole periods, never re-anchor; the millis wrap), a repeated adjust being
+# a no-op, the release, and beacons only after a SLOW frame while locked.
+add_executable(test_lora_slot_follow_policy test_lora_slot_follow_policy.cpp)
+target_include_directories(test_lora_slot_follow_policy PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_lora_slot_follow_policy GTest::gtest_main)
+gtest_discover_tests(test_lora_slot_follow_policy)
+
 # ---------- test_ina230_cal (#1155 item 17) ----------
 # The INA230 CAL narrowed to uint16_t before the clamp, so an out-of-range
 # value wrapped into a plausible one. TR_INA230_Cal.h is the arithmetic on its
