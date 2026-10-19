@@ -73,6 +73,22 @@ struct config : board_pins
     // enough that a transient SPI/radio hiccup never costs a command.
     static constexpr uint8_t  UPLINK_MAX_SEND_FAILURES = 20;
 
+    // --- Transmit slots (three-rocket support, bs_tx_slots.h) ---
+    // An adjust is idempotent and re-checked after four frames, so it needs
+    // fewer blind retries than an operator command; four of them go out one
+    // per slot hole (~0.7 s). The release on "slots off" is a broadcast to
+    // every rocket, sent this many times.
+    static constexpr uint8_t  TX_SLOT_ADJUST_RETRIES   = 4;
+    static constexpr uint8_t  TX_SLOT_RELEASE_RETRIES  = 3;
+    // A rocket with no telemetry for this long gives its slot up (a tracker
+    // entry is never retired, only evicted, so a rocket renumbered or switched
+    // off would hold its slot for the session). Held slots stay held in flight.
+    static constexpr uint32_t TX_SLOT_STALE_MS         = 30000;
+    // The UART radio modem has no RX-done stamp, so a frame's time is the loop's
+    // — late by the link transfer and the loop — and so is every gap-gate
+    // prediction from it. That much more clear air before its predicted starts.
+    static constexpr uint8_t  GAP_MARGIN_NO_RX_STAMP_MS = 20;
+
     // --- Uplink TX window (#506) ---
     // The radio is half-duplex, so every uplink retry is a deaf window. At
     // SF8/BW250 a downlink packet is ~82 ms on air while the gaps between retries
