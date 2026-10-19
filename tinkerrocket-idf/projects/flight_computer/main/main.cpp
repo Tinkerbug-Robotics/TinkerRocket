@@ -896,7 +896,9 @@ static bool blue_led_flash_active = false;
 static uint32_t blue_led_flash_end_ms = 0;
 
 // --- Pyro channel state ---
-// New PCB: single PYRO_ARM_PIN drives all four channels' upstream FET.
+// New PCB: single PYRO_ARM_PIN drives all four channels' upstream FET. (V5
+// has an arm per channel; its other three ride PYRO_ARM_GANG_PINS and move
+// with PYRO_ARM_PIN, so to everything below it is the same single arm.)
 // Per-channel fire is a [ArmSettle → Firing → Done] state machine —
 // ARM goes HIGH only while at least one channel sits in ArmSettle or
 // Firing (or a CONT-TEST is running), then drops LOW once everyone is
@@ -928,7 +930,7 @@ struct PyroChRuntime {
 };
 
 static PyroChRuntime pyro_ch[4] = {};
-static bool          pyro_arm_pin_state   = false;   // last value driven onto PYRO_ARM_PIN
+static bool          pyro_arm_pin_state   = false;   // last value driven onto PYRO_ARM_PIN (and its gang)
 static bool          pyro_apogee_detected = false;
 static uint32_t      pyro_apogee_time_ms  = 0;
 
@@ -1400,8 +1402,20 @@ static inline float pyroChValue(int ch_idx)
 // arming FET enabled, the channel's CONT line idles HIGH when the squib
 // loop is OPEN and gets pulled LOW when a load (closed circuit) is
 // present. Old PCB had the opposite polarity. Bench-verified on a populated
-// board (#264): raw 0 == continuity present.
-static inline bool pyroContFromRaw(int raw) { return raw == 0; }
+// board (#264): raw 0 == continuity present. The old PCB is V5, which this
+// image builds for again: there CONT is the squib driver's STATUS output,
+// HIGH with a load present (board_v5.h). The board header says which.
+static inline bool pyroContFromRaw(int raw) { return raw == config::PYRO_CONT_CLOSED_LEVEL; }
+
+// Drive every arm line to `level`: PYRO_ARM_PIN, plus the further lines a
+// board with one arm per channel drives in lockstep (V5; none elsewhere).
+static inline void pyroWriteArmPins(int level)
+{
+    gpio_set_level((gpio_num_t)config::PYRO_ARM_PIN, level);
+    for (int8_t pin : config::PYRO_ARM_GANG_PINS) {
+        if (pin >= 0) gpio_set_level((gpio_num_t)pin, level);
+    }
+}
 
 // Reset a pyro OUTPUT pad to a known LOW-driven state WITHOUT going through
 // gpio_reset_pin(), which briefly enables the internal pull-up (~50 kΩ) as
@@ -1463,6 +1477,9 @@ static void initPyroPins()
     for (gpio_num_t pin : output_pins) {
         safePyroOutputInit(pin);
     }
+    for (int8_t pin : config::PYRO_ARM_GANG_PINS) {
+        if (pin >= 0) safePyroOutputInit((gpio_num_t)pin);
+    }
     pyro_arm_pin_state = false;
 
     // CONTINUITY pins: input (external pull on PCB). gpio_reset_pin() is
@@ -1478,7 +1495,9 @@ static void initPyroPins()
         cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
         gpio_config(&cfg);
     }
-    ESP_LOGI(TAG, "[PYRO] Pins initialized (safe, 4 channels, single ARM)");
+    ESP_LOGI(TAG, "[PYRO] Pins initialized (safe, 4 channels, %s)",
+             (config::PYRO_ARM_GANG_PINS[0] >= 0) ? "4 ARM lines driven as one"
+                                                  : "single ARM");
 }
 
 // Caller MUST hold pyro_spinlock.
@@ -1488,7 +1507,7 @@ static void pyroSetArmLocked(bool want_high)
     // reboot — only disarm requests are honored.
     if (post_flight_lockout) want_high = false;
     if (pyro_arm_pin_state == want_high) return;
-    gpio_set_level((gpio_num_t)config::PYRO_ARM_PIN, want_high ? 1 : 0);
+    pyroWriteArmPins(want_high ? 1 : 0);
     pyro_arm_pin_state = want_high;
 }
 
@@ -1527,17 +1546,78 @@ static void pyroSafeAll()
     ESP_LOGI(TAG, "[PYRO] All channels safed");
 }
 
-// PRELAUNCH continuity check. Sample all four CONT pins directly and cache
-// the result. Synchronous — no ARM pulse, no settle, no state machine.
-// VPP (flight-computer power, always on) feeds the CONT sense divider, so
-// ARM is not part of the sense path. Pyros are a V8+ feature, so there is
-// no earlier board to branch for.
+// Sample the CONT pins of the channels in `mask` (bit i = channel i+1) into
+// raw[]. On every board but V5 that is a bare read: VPP feeds the sense
+// divider, so the arm is not part of the sense path.
+//
+// V5 (config::PYRO_CONT_NEEDS_ARM): CONT is each squib driver's STATUS
+// output, which floats HIGH — "load present" — while the arm leaves the
+// driver unpowered. So the arm goes up for PYRO_CONT_ARM_SETTLE_MS with no
+// channel firing, the pins are read with the arm confirmed still up, and it
+// comes down again. Synchronous, like PYRO_FIRE_TEST: ground paths only.
+// Returns false, nothing read and the arm left down, where the arm may not be
+// raised: after landing (#317 — pyroSetArmLocked refuses), during a sim (the
+// dry gate keeps the squib circuit unpowered, #1104), or while a channel is
+// mid-fire. A caller must then report continuity unknown, never a reading.
+static bool pyroReadContRaw(uint8_t mask, int raw[4])
+{
+    if (!config::PYRO_CONT_NEEDS_ARM) {
+        for (int i = 0; i < 4; ++i) {
+            if (mask & (1u << i)) raw[i] = gpio_get_level((gpio_num_t)PYRO_CONT_PINS[i]);
+        }
+        return true;
+    }
+    if (sim_flight::simulated(sim_flight_latched, sensor_collector.isSimActive())) {
+        return false;
+    }
+    auto anyChannelFiring = []() {
+        for (int i = 0; i < 4; ++i) {
+            if (pyro_ch[i].state == PyroChState::ArmSettle ||
+                pyro_ch[i].state == PyroChState::Firing) return true;
+        }
+        return false;
+    };
+    bool up = false;
+    portENTER_CRITICAL(&pyro_spinlock);
+    if (!anyChannelFiring()) {
+        for (int i = 0; i < 4; ++i) gpio_set_level((gpio_num_t)PYRO_FIRE_PINS[i], 0);
+        pyroSetArmLocked(true);
+        up = pyro_arm_pin_state;
+    }
+    portEXIT_CRITICAL(&pyro_spinlock);
+    if (!up) return false;
+
+    delay_ms(config::PYRO_CONT_ARM_SETTLE_MS);
+
+    bool read = false;
+    portENTER_CRITICAL(&pyro_spinlock);
+    if (pyro_arm_pin_state) {
+        for (int i = 0; i < 4; ++i) {
+            if (mask & (1u << i)) raw[i] = gpio_get_level((gpio_num_t)PYRO_CONT_PINS[i]);
+        }
+        read = true;
+    }
+    if (!anyChannelFiring()) pyroSetArmLocked(false);
+    portEXIT_CRITICAL(&pyro_spinlock);
+    return read;
+}
+
+// PRELAUNCH continuity check. Sample all four CONT pins and cache the result.
+// Synchronous, no state machine; a bare read except on V5 (pyroReadContRaw).
 static void pyroPrelaunchContTest(uint32_t /*now_ms*/)
 {
     int  raw[4];
     bool cont[4];
+    if (!pyroReadContRaw(0x0F, raw)) {
+        portENTER_CRITICAL(&pyro_spinlock);
+        for (int i = 0; i < 4; ++i) pyro_ch[i].cont_known = false;
+        portEXIT_CRITICAL(&pyro_spinlock);
+        ESP_LOGW(TAG, "[PYRO] Prelaunch CONT: not read — this board senses continuity "
+                      "only with the arm up, and the arm may not be raised now "
+                      "(sim, post-flight lockout, or a channel mid-fire)");
+        return;
+    }
     for (int i = 0; i < 4; ++i) {
-        raw[i]  = gpio_get_level((gpio_num_t)PYRO_CONT_PINS[i]);
         cont[i] = pyroContFromRaw(raw[i]);
     }
     portENTER_CRITICAL(&pyro_spinlock);
@@ -6756,7 +6836,7 @@ static void setup_fc()
     // FIRE 2/3 and move ARM, but keep all four CONT pins), so print the
     // numbers rather than just the revision — they can be checked against the
     // connector with a meter before anything is armed.
-    ESP_LOGW(TAG, "[BOARD] pin map: %s  (select with -DTR_BOARD_V7/V8/V9/V10/M1=1; no default)",
+    ESP_LOGW(TAG, "[BOARD] pin map: %s  (select with -DTR_BOARD_V5/V7/V8/V9/V10/M1=1; no default)",
              TR_BOARD_REV_STR);
     ESP_LOGW(TAG, "[BOARD] pyro: ARM=%d FIRE=%d/%d/%d/%d CONT=%d/%d/%d/%d",
              (int)config::PYRO_ARM_PIN,
@@ -6764,6 +6844,12 @@ static void setup_fc()
              (int)config::PYRO3_FIRE_PIN, (int)config::PYRO4_FIRE_PIN,
              (int)config::PYRO1_CONT_PIN, (int)config::PYRO2_CONT_PIN,
              (int)config::PYRO3_CONT_PIN, (int)config::PYRO4_CONT_PIN);
+    if (config::PYRO_ARM_GANG_PINS[0] >= 0) {
+        ESP_LOGW(TAG, "[BOARD] pyro: further ARM lines %d/%d/%d, driven with ARM; "
+                      "CONT reads with the arm up, HIGH = load",
+                 (int)config::PYRO_ARM_GANG_PINS[0], (int)config::PYRO_ARM_GANG_PINS[1],
+                 (int)config::PYRO_ARM_GANG_PINS[2]);
+    }
     gpio_set_direction((gpio_num_t)(config::RED_LED_PIN), GPIO_MODE_OUTPUT);
     gpio_set_level((gpio_num_t)(config::RED_LED_PIN), 1);
     gpio_set_direction((gpio_num_t)(config::BLUE_LED_PIN), GPIO_MODE_OUTPUT);
@@ -11979,7 +12065,8 @@ static void loop_fc()
             else if (out_pending_command == PYRO_CONT_TEST)
             {
                 // Direct CONT read. VPP (flight-computer power, always on)
-                // feeds the sense divider, so no ARM pulse is needed.
+                // feeds the sense divider, so no ARM pulse is needed — except
+                // on V5, where pyroReadContRaw raises the arm for the read.
                 // Rejected in flight to honor the app's "ground tests are
                 // pad-only" UX guarantee.
                 if (isCommandLockoutState(rocket_state)) {
@@ -12013,13 +12100,23 @@ static void loop_fc()
                         cont_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
                         gpio_config(&cont_cfg);
 
-                        int raw = gpio_get_level(cont_pin);
-                        portENTER_CRITICAL(&pyro_spinlock);
-                        pyro_ch[idx].cont       = pyroContFromRaw(raw);
-                        pyro_ch[idx].cont_known = true;
-                        portEXIT_CRITICAL(&pyro_spinlock);
-                        ESP_LOGI(TAG, "[PYRO CONT TEST] CH%u raw=%d cont=%d",
-                                 ch, raw, pyroContFromRaw(raw) ? 1 : 0);
+                        int raw4[4] = {};
+                        if (!pyroReadContRaw((uint8_t)(1u << idx), raw4)) {
+                            portENTER_CRITICAL(&pyro_spinlock);
+                            pyro_ch[idx].cont_known = false;
+                            portEXIT_CRITICAL(&pyro_spinlock);
+                            ESP_LOGW(TAG, "[PYRO CONT TEST] CH%u not read — this board senses "
+                                          "continuity only with the arm up, and the arm may "
+                                          "not be raised now (sim or post-flight lockout)", ch);
+                        } else {
+                            const int raw = raw4[idx];
+                            portENTER_CRITICAL(&pyro_spinlock);
+                            pyro_ch[idx].cont       = pyroContFromRaw(raw);
+                            pyro_ch[idx].cont_known = true;
+                            portEXIT_CRITICAL(&pyro_spinlock);
+                            ESP_LOGI(TAG, "[PYRO CONT TEST] CH%u raw=%d cont=%d",
+                                     ch, raw, pyroContFromRaw(raw) ? 1 : 0);
+                        }
                     }
                 }
             }
@@ -12071,6 +12168,9 @@ static void loop_fc()
 
                         esp_gpio_revoke(1ULL << arm_pin);
                         esp_gpio_revoke(1ULL << fire_pin);
+                        for (int8_t gang : config::PYRO_ARM_GANG_PINS) {
+                            if (gang >= 0) esp_gpio_revoke(1ULL << gang);
+                        }
                         // #263: bring the ARM/FIRE pads up through the canonical
                         // safe-init — NOT gpio_reset_pin(), which transiently
                         // enables the internal pull-up and twitches the DTC123J
@@ -12080,6 +12180,9 @@ static void loop_fc()
                         // INPUT_OUTPUT) is enough — the test only drives the pins.
                         safePyroOutputInit(arm_pin);
                         safePyroOutputInit(fire_pin);
+                        for (int8_t gang : config::PYRO_ARM_GANG_PINS) {
+                            if (gang >= 0) safePyroOutputInit((gpio_num_t)gang);
+                        }
 
                         // ARM → settle → FIRE pulse → disarm (synchronous; ground only)
                         portENTER_CRITICAL(&pyro_spinlock);
@@ -12104,6 +12207,9 @@ static void loop_fc()
                         // old path left the pads in INPUT_OUTPUT after the pulse).
                         safePyroOutputInit(arm_pin);
                         safePyroOutputInit(fire_pin);
+                        for (int8_t gang : config::PYRO_ARM_GANG_PINS) {
+                            if (gang >= 0) safePyroOutputInit((gpio_num_t)gang);
+                        }
 
                         ESP_LOGI(TAG, "[PYRO FIRE TEST] CH%u fired for %u ms",
                                  ch, (unsigned)config::PYRO_FIRE_DURATION_MS);
@@ -13582,7 +13688,8 @@ static void loop_fc()
                     // Camera is manually controlled via app — no auto-start on prelaunch
                     // Verify pyro continuity on the pad. (#382 comment fix:
                     // this is a synchronous single read of the VPP-fed CONT
-                    // dividers (#264) — no arm pulse, no multi-tick sequence.)
+                    // dividers (#264) — no arm pulse, no multi-tick sequence.
+                    // V5 alone pulses the arm for 10 ms: pyroReadContRaw.)
                     pyroPrelaunchContTest(now_ms);
                     ESP_LOGI(TAG, "[STATE] READY -> PRELAUNCH");
                 }

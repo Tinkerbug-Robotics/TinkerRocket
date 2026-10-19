@@ -393,7 +393,7 @@ gtest_discover_tests(test_sensor_data_converter)
 # converter at that board's MAG_ROT_Z_DEG_*, against the measured matrix.
 # One build per board because each board's config.h is its own; the driver
 # seam flags are the ones flight_computer/CMakeLists.txt sets for it.
-foreach(BOARD V8 V9 V10 M1)
+foreach(BOARD V5 V8 V9 V10 M1)
     add_executable(test_mag_frame_${BOARD} test_mag_frame_board.cpp
         ${LIB_DIR}/TR_Sensor_Data_Converter/TR_Sensor_Data_Converter.cpp
         ${LIB_DIR}/TR_Orientation/TR_Orientation.cpp
@@ -875,7 +875,7 @@ gtest_discover_tests(test_modem_rail_sequence)
 # SAM-M10Q flew at the default nav-rate ceiling. The fix routes that path
 # through UBX-CFG-RST; this pins the premise that there is no line to drive.
 # Built once per revision, exactly as the firmware selects its header.
-foreach(FCREV 7 8 9 10)
+foreach(FCREV 5 7 8 9 10)
     add_executable(test_fc_gnss_reset_map_v${FCREV} test_fc_gnss_reset_map.cpp)
     target_compile_definitions(test_fc_gnss_reset_map_v${FCREV} PRIVATE TR_BOARD_V${FCREV}=1)
     if(FCREV EQUAL 10)
@@ -1445,7 +1445,7 @@ gtest_discover_tests(test_pwr_hold_release_policy)
 # Built once per board: the wire sizes and the link rate are shared, but the
 # fastest IMU rate is not (#1485: IMU_RATE_MAX_HZ, 7680 only where the FC
 # reads the IMU from its FIFO), and that is the stream that dominates.
-foreach(BOARD V7 V8 V9 V10 M1)
+foreach(BOARD V5 V7 V8 V9 V10 M1)
     add_executable(test_i2s_link_budget_${BOARD} test_i2s_link_budget.cpp)
     target_include_directories(test_i2s_link_budget_${BOARD} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
@@ -1488,7 +1488,7 @@ gtest_discover_tests(test_i2s_link_budget_V9_MOSAIC TEST_PREFIX "V9_MOSAIC.")
 # app shows 8k while the vehicle flies the old rate. The two config.h files
 # cannot share a translation unit (both declare `struct config`), so each is
 # compiled into its own small library and the test compares the answers.
-foreach(BOARD V7 V8 V9 V10 M1)
+foreach(BOARD V5 V7 V8 V9 V10 M1)
     add_library(imu_cap_fc_${BOARD} STATIC imu_rate_cap_fc.cpp)
     target_include_directories(imu_cap_fc_${BOARD} PRIVATE
         ${SHIM_DIR}

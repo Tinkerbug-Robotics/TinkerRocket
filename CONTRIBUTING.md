@@ -156,7 +156,9 @@ computer is an ESP32-S3 rather than a P4 — its overlay changes the chip target
 a build dir of its own (`-B build_m1`) and rewrites `dependencies.lock` to
 `target: esp32s3`; revert that file after a local M1 build. `TR_BOARD_V8=1` and
 `TR_BOARD_V7=1` are legacy boards (the V8 bench boards, whose PCB was never committed, and
-the V7); their maps live in `main/board/legacy/`.
+the V7); their maps live in `main/board/legacy/`. So does `TR_BOARD_V5=1`, the archived
+board V7 was respun from: four arm lines the firmware drives as one, and continuity that
+reads only with the arm up.
 
 The flag is mandatory here — and only here — because the failure mode is pyrotechnic and
 silent. V8 and V9 disagree on the ARM pin (5 vs 16) and swap the FIRE pins of channels 2
