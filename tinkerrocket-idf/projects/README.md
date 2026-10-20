@@ -54,6 +54,7 @@ with the app's file picker or over USB.
 |---|---|---|
 | Rocket computer V8 | `flight_computer`, `out_computer` — `main/board/legacy/board_v8.h` | `-B build_v8 -DTR_BOARD_V8=1` |
 | Rocket computer V7 | `flight_computer`, `out_computer` — `main/board/legacy/board_v7.h` | `-B build_v7 -DTR_BOARD_V7=1` |
+| Rocket computer V5 (archived "TinkerRocket Full V5") | `flight_computer`, `out_computer` — `main/board/legacy/board_v5.h`; bring-up in [docs/plans/v5-board-bring-up.md](../../docs/plans/v5-board-bring-up.md) | `-B build_v5 -DTR_BOARD_V5=1` |
 | Base station V1/V2 | `base_station` — `main/board/legacy/board_v{1,2}.h` | `-DTR_BS_BOARD=1`, or no flag for V2 |
 | Single-MCU mini (never fabbed) | [`legacy/rocket_computer_mini`](legacy/rocket_computer_mini/) | `idf.py build` |
 

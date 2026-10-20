@@ -110,6 +110,13 @@ endif()
 # Bench: the pad's heading turned this many degrees (added to the magnetic
 # declination), so the heading fit has a known error to find -- a rig replay
 # with and without it should differ by it in the fit's turn. Never set for flight.
+# The camera connector as a switched output: powered whenever the flight
+# computer runs, camera commands ignored (main.cpp, kCamOnWithFc). A bench
+# image, marked "-bench" like every TR_BENCH_* build.
+if(TR_BENCH_CAM_ON_WITH_FC)
+    add_compile_definitions(TR_BENCH_CAM_ON_WITH_FC=1)
+    message(WARNING "TR_BENCH_CAM_ON_WITH_FC=1 -- the camera connector is powered whenever the flight computer runs; camera start/stop ignored (bench)")
+endif()
 if(DEFINED TR_BENCH_HEADING_ERROR_DEG)
     add_compile_definitions(TR_BENCH_HEADING_ERROR_DEG=${TR_BENCH_HEADING_ERROR_DEG})
     message(STATUS "TR_BENCH_HEADING_ERROR_DEG=${TR_BENCH_HEADING_ERROR_DEG} -- the pad heading turned on purpose (bench)")
@@ -318,6 +325,8 @@ elseif(TR_BOARD_V8)
     set(TR_BOARD_SUFFIX "-v8")
 elseif(TR_BOARD_V7)
     set(TR_BOARD_SUFFIX "-v7")
+elseif(TR_BOARD_V5)
+    set(TR_BOARD_SUFFIX "-v5")
 else()
     set(TR_BOARD_SUFFIX "")
 endif()

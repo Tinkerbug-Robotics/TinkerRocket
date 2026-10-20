@@ -44,11 +44,11 @@ TABLE_RE = re.compile(r'^CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="([^"]+)"\s*$', 
 # (label, project, [sdkconfig files applied in order])
 # Mirrors each project's CMakeLists overlay selection; keep in step with it.
 BUILDS = [
-    ("flight_computer V7/V8", "flight_computer", ["sdkconfig.defaults"]),
+    ("flight_computer V5/V7/V8", "flight_computer", ["sdkconfig.defaults"]),
     ("flight_computer V9", "flight_computer", ["sdkconfig.defaults", "sdkconfig.defaults.v9"]),
     ("flight_computer V10", "flight_computer", ["sdkconfig.defaults", "sdkconfig.defaults.v9"]),
     ("flight_computer M1", "flight_computer", ["sdkconfig.defaults", "sdkconfig.defaults.m1"]),
-    ("out_computer V8", "out_computer", ["sdkconfig.defaults"]),
+    ("out_computer V5/V7/V8", "out_computer", ["sdkconfig.defaults"]),
     ("out_computer V9", "out_computer", ["sdkconfig.defaults", "sdkconfig.defaults.v9"]),
     ("out_computer V10", "out_computer", ["sdkconfig.defaults", "sdkconfig.defaults.v9"]),
     ("out_computer M1", "out_computer", ["sdkconfig.defaults", "sdkconfig.defaults.v9"]),
@@ -68,6 +68,9 @@ BOARD_PAIRS = [
     ("tinker-beetle", "flight_computer M1", "out_computer M1"),
     ("tinker-mantis V9", "flight_computer V9", "out_computer V9"),
     ("tinker-mantis V10", "flight_computer V10", "out_computer V10"),
+    # V5 fits two W25Q64JV (U17 for the flight computer, U13 for the out
+    # computer): 8 MB each, from the archived netlist.
+    ("TinkerRocket Full V5", "flight_computer V5/V7/V8", "out_computer V5/V7/V8"),
 ]
 
 # The sizes esptool/IDF can declare. The policy picks the smallest that fits.

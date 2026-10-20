@@ -137,7 +137,7 @@ TEST(BoardIdentity, ACorruptNvsValueCannotBecomeAnUnboundedString) {
 TEST(BoardIdentity, RevCodeRoundTripsEveryShippedBoard) {
     char out[24];
     struct { const char* rev; uint8_t want; } cases[] = {
-        {"V7", 0x17}, {"V8", 0x18}, {"V9", 0x19}, {"V10", 0x1A},
+        {"V5", 0x15}, {"V7", 0x17}, {"V8", 0x18}, {"V9", 0x19}, {"V10", 0x1A},
         {"M1", 0x21}, {"B1", 0x31},
     };
     for (const auto& c : cases) {

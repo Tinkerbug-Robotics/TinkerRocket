@@ -22,6 +22,9 @@
 // TR_BOARD_V10=1 selects board_v10.h (#1593): every V9 pin plus four new ones,
 // the first of which is the supervised arm's consent output. A V9 image on a
 // V10 never raises it, so that board cannot fire a channel.
+#ifndef TR_BOARD_V5
+#define TR_BOARD_V5 0
+#endif
 #ifndef TR_BOARD_V7
 #define TR_BOARD_V7 0
 #endif
@@ -45,8 +48,8 @@
 // No default (#834 sweep). main/CMakeLists.txt raises the same error with a
 // friendlier message; this is the backstop for anything that includes config.h
 // without going through it.
-#if (TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9 + TR_BOARD_V10 + TR_BOARD_M1) != 1
-#error "Set exactly one board revision: -DTR_BOARD_V7=1, -DTR_BOARD_V8=1, -DTR_BOARD_V9=1, -DTR_BOARD_V10=1 or -DTR_BOARD_M1=1. There is no default — V7's PWR_PIN (GPIO6) is ESP_SCL on every later board, V9 and V10 need the sdkconfig overlay that enables the PSRAM log ring, V10's arm needs this processor's consent (GPIO14), and M1 (rocket-computer-mini) drives its radio over SPI where V8/V9/V10 drive a UART daughterboard."
+#if (TR_BOARD_V5 + TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9 + TR_BOARD_V10 + TR_BOARD_M1) != 1
+#error "Set exactly one board revision: -DTR_BOARD_V5=1, -DTR_BOARD_V7=1, -DTR_BOARD_V8=1, -DTR_BOARD_V9=1, -DTR_BOARD_V10=1 or -DTR_BOARD_M1=1. There is no default — V7's PWR_PIN (GPIO6) is ESP_SCL on every later board, V9 and V10 need the sdkconfig overlay that enables the PSRAM log ring, V10's arm needs this processor's consent (GPIO14), and M1 (rocket-computer-mini) drives its radio over SPI where V8/V9/V10 drive a UART daughterboard."
 #endif
 // TR_BOARD_REV_STR names the board in log lines. It sits next to the header it
 // describes, as in the flight computer's config.h, so the two cannot disagree.
@@ -67,6 +70,9 @@
 #elif TR_BOARD_V7
 #include "board/legacy/board_v7.h"
 #define TR_BOARD_REV_STR "V7"
+#elif TR_BOARD_V5
+#include "board/legacy/board_v5.h"
+#define TR_BOARD_REV_STR "V5"
 #else
 #error "This board flag selects no board header: add it to the chain in config.h."
 #endif

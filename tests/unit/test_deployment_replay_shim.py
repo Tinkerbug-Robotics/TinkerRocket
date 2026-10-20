@@ -33,6 +33,7 @@ import replay_deployment_detector as rdd  # noqa: E402
 # config.h refuses the build (flight_computer/CMakeLists.txt sets both under
 # TR_BOARD_M1); V10 needs its magnetometer seam the same way (#1593).
 BOARDS = {
+    "v5": ("-DTR_BOARD_V5=1",),
     "v7": ("-DTR_BOARD_V7=1",),
     "v8": ("-DTR_BOARD_V8=1",),
     "v9": ("-DTR_BOARD_V9=1",),

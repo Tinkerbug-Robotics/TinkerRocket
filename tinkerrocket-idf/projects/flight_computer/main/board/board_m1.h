@@ -180,6 +180,12 @@ struct board_pins
     static constexpr int PYRO3_CONT_PIN = 12;  // PYRO3_CONT (CONFIRMED)
     static constexpr int PYRO4_FIRE_PIN = 33;  // PYRO4_FIRE (pad 38)
     static constexpr int PYRO4_CONT_PIN = 42;  // PYRO4_CONT (CONFIRMED; MTMS)
+    // One arm for all four channels: no further arm lines (V5's per-channel
+    // arms ride PYRO_ARM_GANG_PINS). Continuity reads with the arm down, and
+    // LOW means a load is present (#264).
+    static constexpr int8_t PYRO_ARM_GANG_PINS[3] = {-1, -1, -1};
+    static constexpr int  PYRO_CONT_CLOSED_LEVEL = 0;
+    static constexpr bool PYRO_CONT_NEEDS_ARM    = false;
 
     // --- No servos on this board ---
     static constexpr int SERVO_PIN_1 = -1;

@@ -9,6 +9,8 @@
 //   IIS2MDC, V8/V9 (U23/U3, F.Cu, rotation 0): [[0,-1,0],[-1,0,0],[0,0,1]]
 //     — the #204 bench (board +X north reads chip -Y, east reads chip -X)
 //     plus Z out of the top; det -1, ST's left-handed axes (#1589).
+//     V5 (U23, F.Cu, rotation 0, with its ISM6HG256 at 45 as on V9): the
+//     same matrix, inferred from the placement; no V5 has been benched.
 //   QMC5883P, Beetle/M1 (U3, F.Cu, rotation 90): [[0,-1,0],[-1,0,0],[0,0,-1]]
 //     — a 2026-10-05 bench log: gyro-vs-field kinematics and the dip at
 //     rest; det +1 with Z into the board as configured (#1590).
@@ -84,7 +86,7 @@ constexpr double kQmc5883pV10[3][3]  = {{-1, 0, 0}, {0, 1, 0}, {0, 0, -1}};
 
 }  // namespace
 
-#if TR_BOARD_V8 || TR_BOARD_V9
+#if TR_BOARD_V5 || TR_BOARD_V8 || TR_BOARD_V9
 TEST(MagFrameBoard, TheIIS2MDCMapsAsMeasured) {
     const float rot = config::magRotZDeg(false);
     EXPECT_FLOAT_EQ(rot, config::MAG_ROT_Z_DEG_IIS2MDC);

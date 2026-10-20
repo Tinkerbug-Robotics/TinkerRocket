@@ -12,6 +12,7 @@
 // correctly, and the wrong channel fires or no channel fires at all), so the
 // flight computer refuses to build rather than guess:
 //
+//   V5 legacy board:  idf.py -B build_v5 -DTR_BOARD_V5=1 build
 //   V7 legacy board:  idf.py -B build_v7 -DTR_BOARD_V7=1 build
 //   V8 bench boards:  idf.py -B build_v8 -DTR_BOARD_V8=1 build
 //   V9 (Tinker-Mantis as fabbed):  idf.py -B build_v9 -DTR_BOARD_V9=1 build
@@ -27,6 +28,9 @@
 // main/CMakeLists.txt enforces the same rule at configure time with a clearer
 // message; this check is the backstop for anything that includes config.h
 // without going through it.
+#ifndef TR_BOARD_V5
+#define TR_BOARD_V5 0
+#endif
 #ifndef TR_BOARD_V7
 #define TR_BOARD_V7 0
 #endif
@@ -42,8 +46,8 @@
 #ifndef TR_BOARD_M1
 #define TR_BOARD_M1 0
 #endif
-#if (TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9 + TR_BOARD_V10 + TR_BOARD_M1) != 1
-#error "Set exactly one board revision: -DTR_BOARD_V7=1, -DTR_BOARD_V8=1, -DTR_BOARD_V9=1, -DTR_BOARD_V10=1 or -DTR_BOARD_M1=1. There is no default — the V8 and V9 pyro maps differ (ARM 5 vs 16, FIRE 2/3 swapped), V10 moved ARM again (33, and it needs the out computer's consent), and M1 (rocket-computer-mini) is an ESP32-S3 whose pyro map shares no pin with any of them. A wrong map fires the wrong channel, or none, silently."
+#if (TR_BOARD_V5 + TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9 + TR_BOARD_V10 + TR_BOARD_M1) != 1
+#error "Set exactly one board revision: -DTR_BOARD_V5=1, -DTR_BOARD_V7=1, -DTR_BOARD_V8=1, -DTR_BOARD_V9=1, -DTR_BOARD_V10=1 or -DTR_BOARD_M1=1. There is no default — the V8 and V9 pyro maps differ (ARM 5 vs 16, FIRE 2/3 swapped), V10 moved ARM again (33, and it needs the out computer's consent), and M1 (rocket-computer-mini) is an ESP32-S3 whose pyro map shares no pin with any of them. V5 has an arm per channel and V7's FIRE/CONT pins swapped. A wrong map fires the wrong channel, or none, silently."
 #endif
 #if TR_BOARD_M1
 #include "board/board_m1.h"
@@ -57,6 +61,9 @@
 #elif TR_BOARD_V8
 #include "board/legacy/board_v8.h"
 #define TR_BOARD_REV_STR "V8"
+#elif TR_BOARD_V5
+#include "board/legacy/board_v5.h"
+#define TR_BOARD_REV_STR "V5"
 #else
 #include "board/legacy/board_v7.h"
 #define TR_BOARD_REV_STR "V7"
@@ -139,6 +146,56 @@ static_assert(board_pins::USE_IIS2MDC &&
 #error "board_m1.h: U5 is a Quectel LC86G — an M1 build needs TR_GNSS_DRIVER_LC86=1 (flight_computer/CMakeLists.txt sets it under TR_BOARD_M1; #1032)"
 #endif
 #endif
+
+#if TR_BOARD_V5
+// ======================================================================
+// V5 invariants, asserted rather than trusted
+// ======================================================================
+// V5 is V7's layout with an arm per channel and FIRE/CONT swapped on channels
+// 1-3. A V7 value here builds clean and fires nothing; see board_v5.h.
+static_assert(board_pins::PYRO_ARM_PIN   == 14 &&
+              board_pins::PYRO_ARM_GANG_PINS[0] == 22 &&
+              board_pins::PYRO_ARM_GANG_PINS[1] == 37 &&
+              board_pins::PYRO_ARM_GANG_PINS[2] == 49 &&
+              board_pins::PYRO1_FIRE_PIN == 15 && board_pins::PYRO1_CONT_PIN == 16 &&
+              board_pins::PYRO2_FIRE_PIN == 18 && board_pins::PYRO2_CONT_PIN == 19 &&
+              board_pins::PYRO3_FIRE_PIN == 38 && board_pins::PYRO3_CONT_PIN == 34 &&
+              board_pins::PYRO4_FIRE_PIN == 50 && board_pins::PYRO4_CONT_PIN == 51,
+              "board_v5.h pyro map changed — re-derive it from a netlist export of "
+              "the archived TinkerRocket Full V5 before editing this assert away");
+// The sense line is each driver's STATUS output: unarmed it floats to its
+// pull-up, which reads as a connected charge on every channel. Reading it
+// without the arm up, or with the V7+ polarity, reports continuity that is
+// not there — the fail-deadly direction.
+static_assert(board_pins::PYRO_CONT_NEEDS_ARM && board_pins::PYRO_CONT_CLOSED_LEVEL == 1,
+              "board_v5.h: continuity is the VN5E160 STATUS line — it reads only with the "
+              "arm up, and HIGH means a load is present");
+// The camera power gate and the line the FC transmits on are the reverse of
+// V7's (30/32). Swapped, the GoPro shutter press switches the camera off.
+static_assert(board_pins::RUNCAM_PWR_PIN == 30 && board_pins::RUNCAM_TX_PIN == 32 &&
+              board_pins::CAM_SHUTTER_PIN == board_pins::RUNCAM_TX_PIN,
+              "board_v5.h: CAM_ACT is GPIO30 and Camera_TX (J6.4) is GPIO32 on V5");
+#endif
+
+// Every board: a further arm line is a pyro output of its own and must not
+// share a pad with a FIRE or CONT line, or with the primary arm.
+namespace board_pyro_check {
+constexpr bool gangPinFree(int p)
+{
+    return p < 0 ||
+           (p != board_pins::PYRO_ARM_PIN &&
+            p != board_pins::PYRO1_FIRE_PIN && p != board_pins::PYRO1_CONT_PIN &&
+            p != board_pins::PYRO2_FIRE_PIN && p != board_pins::PYRO2_CONT_PIN &&
+            p != board_pins::PYRO3_FIRE_PIN && p != board_pins::PYRO3_CONT_PIN &&
+            p != board_pins::PYRO4_FIRE_PIN && p != board_pins::PYRO4_CONT_PIN);
+}
+}  // namespace board_pyro_check
+static_assert(board_pyro_check::gangPinFree(board_pins::PYRO_ARM_GANG_PINS[0]) &&
+              board_pyro_check::gangPinFree(board_pins::PYRO_ARM_GANG_PINS[1]) &&
+              board_pyro_check::gangPinFree(board_pins::PYRO_ARM_GANG_PINS[2]),
+              "a PYRO_ARM_GANG_PINS entry shares a pad with another pyro line");
+static_assert(board_pins::PYRO_CONT_CLOSED_LEVEL == 0 || board_pins::PYRO_CONT_CLOSED_LEVEL == 1,
+              "PYRO_CONT_CLOSED_LEVEL is a GPIO level: 0 or 1");
 
 #if TR_BOARD_V10
 // ======================================================================
@@ -622,7 +679,11 @@ struct config : board_pins
     // ### Pyro timing (pins in board header) ###
     // One shared arming FET feeds all four squib drivers. ARM is raised only
     // during a FIRE pulse — never latched in flight, and NOT raised to read
-    // continuity.
+    // continuity. The exception is V5 (board_pins::PYRO_CONT_NEEDS_ARM), whose
+    // continuity is the squib driver's own STATUS output and means nothing
+    // with the driver unpowered: there the pad reads raise the arm (all four
+    // lines, ganged) for PYRO_CONT_ARM_SETTLE_MS with every FIRE held LOW.
+    // The #837 note below is about every other board.
     //
     // #837 item 7: this used to say ARM was also raised "for the PRELAUNCH
     // continuity check", and that PYRO_ARM_SETTLE_MS gated the CONT read.
@@ -651,6 +712,11 @@ struct config : board_pins
     // Time between raising ARM and pulsing FIRE, giving the upstream arming
     // FET its turn-on settle margin. Consumed ONLY by the fire paths.
     static constexpr uint32_t PYRO_ARM_SETTLE_MS       = 10;
+    // V5 only (PYRO_CONT_NEEDS_ARM): how long the arm is up before a pad
+    // continuity read, so the VN5E160's supply and its off-state open-load
+    // diagnostic settle. 10 ms is what the V5-era firmware used (0908dc8c).
+    // Consumed only by the continuity reads, never by a fire path.
+    static constexpr uint32_t PYRO_CONT_ARM_SETTLE_MS  = 10;
 
     // ### Servo Controls (pins in board header) ###
     static constexpr int SERVO_BIAS_1 = 0;
