@@ -647,6 +647,130 @@ TEST(RawGnssEKF, PredictsADopplerThatLagsItsTag)
     EXPECT_GT(worst_g, 0.3);                  // ignored: the Doppler drags the velocity back 20 * 0.0555 m/s
 }
 
+TEST(RawGnssEKF, AnEpochInPairsTakesItsDopplersAtThePairsLag)
+{
+    // The Dopplers in pairs (rr_pair_lag_s, setRrPaired): an epoch in pairs is
+    // taken rr_pair_lag_s further back, bit for bit as a filter whose every
+    // epoch lags that much (its one consumer here, the update, takes the
+    // satellite's range acceleration first, as that filter does); one as it
+    // came at rr_lag_s, bit for bit as a filter with no pair lag. With no pair
+    // lag in the params an epoch cannot be in pairs.
+    const double a_ned[3] = {0.0, 0.0, -20.0};
+    const double lag = 0.025;
+    RawGnssEKFParams all_lag = quietParams(), none = quietParams(), pairs = quietParams();
+    all_lag.rr_lag_s = lag;
+    none.rr_lag_s = 0.0;
+    pairs.rr_lag_s = 0.0;
+    pairs.rr_pair_lag_s = lag;
+    {
+        RawGnssEKF<double> f(none);
+        f.setRrPaired(true);
+        EXPECT_FALSE(f.rrPaired());
+        EXPECT_EQ(f.rrLag(), 0.0);
+        EXPECT_EQ(f.rrPairLag(), 0.0);
+        RawGnssEKF<double> g(pairs);
+        EXPECT_FALSE(g.rrPaired());
+        EXPECT_EQ(g.rrLag(), 0.0);
+        g.setRrPaired(true);
+        EXPECT_TRUE(g.rrPaired());
+        EXPECT_EQ(g.rrLag(), lag);
+        EXPECT_EQ(g.rrPairLag(), lag);
+    }
+    for (bool in_pairs : {true, false})
+    {
+        SCOPED_TRACE(in_pairs ? "in pairs" : "as it came");
+        RawGnssEKF<double> truth(all_lag), ref(in_pairs ? all_lag : none), f(pairs);
+        const double v0[3] = {0.0, 0.0, 0.0};
+        initLevel(truth, kLla0, v0);
+        initLevel(ref, kLla0, v0);
+        initLevel(f, kLla0, v0);
+        const auto sky = makeSky(kLla0);
+        Clock clk;
+        const double still[3] = {0.0, 0.0, 0.0};
+        double worst = 0.0;
+        for (int e = 0; e < 8; ++e)
+        {
+            const double* acc = e == 0 ? still : a_ned;
+            imuSecond(truth, acc);
+            imuSecond(ref, acc);
+            imuSecond(f, acc);
+            clk.tick(1.0);
+            double r[3], v[3], a[3];
+            truth.receiverEcef(r, v);
+            nedToEcef(truth.lla()[0], truth.lla()[1], acc, a);
+            const auto m = measure(sky, r, v, clk, a, in_pairs ? lag : 0.0);
+            f.setRrPaired(in_pairs);
+            ref.updateGnssRaw(m.data(), static_cast<int>(m.size()));
+            f.updateGnssRaw(m.data(), static_cast<int>(m.size()));
+            for (int i = 0; i < 3; ++i)
+            {
+                EXPECT_EQ(f.velNed()[i], ref.velNed()[i]);
+                EXPECT_EQ(f.lla()[i], ref.lla()[i]);
+            }
+            if (in_pairs && e >= 2)
+                worst = std::fmax(worst, std::fabs(f.velNed()[2] - truth.velNed()[2]));
+        }
+        if (in_pairs)
+            EXPECT_LT(worst, 0.05);
+    }
+}
+
+TEST(RawGnssEKF, AnEpochInPairsTakesEachSatellitesRangeAccelerationOnce)
+{
+    // The boost screen first, then the update: on an epoch in pairs the update
+    // reuses each satellite's range acceleration as the screen took it, at the
+    // state before any of the epoch's updates moved it -- against a filter that
+    // takes it again at each, a difference of the term's change with the
+    // receiver's velocity (~4e-4 m/s^2 for each m/s) over 25 ms: nothing
+    // against the Doppler's noise
+    const double a_ned[3] = {0.0, 0.0, -20.0};
+    const double lag = 0.025;
+    RawGnssEKFParams all_lag = quietParams(), pairs = quietParams();
+    all_lag.rr_lag_s = lag;
+    pairs.rr_lag_s = 0.0;
+    pairs.rr_pair_lag_s = lag;
+    RawGnssEKF<double> truth(all_lag), ref(all_lag), f(pairs);
+    const double v0[3] = {0.0, 0.0, 0.0};
+    const double v_err[3] = {1.0, -1.0, 2.0};   // velocity errors the epoch's updates correct
+    initLevel(truth, kLla0, v0);
+    initLevel(ref, kLla0, v_err);
+    initLevel(f, kLla0, v_err);
+    const auto sky = makeSky(kLla0);
+    Clock clk;
+    const double still[3] = {0.0, 0.0, 0.0};
+    double worst = 0.0, moved = 0.0;
+    for (int e = 0; e < 6; ++e)
+    {
+        const double* acc = e == 0 ? still : a_ned;
+        imuSecond(truth, acc);
+        imuSecond(ref, acc);
+        imuSecond(f, acc);
+        clk.tick(1.0);
+        double r[3], v[3], a[3];
+        truth.receiverEcef(r, v);
+        nedToEcef(truth.lla()[0], truth.lla()[1], acc, a);
+        const auto m = measure(sky, r, v, clk, a, lag);
+        const int n = static_cast<int>(m.size());
+        f.setRrPaired(true);
+        RawGnssStats sr, sf;
+        ASSERT_TRUE(ref.beginGnssRaw(m.data(), n, 0.0, sr));
+        ASSERT_TRUE(f.beginGnssRaw(m.data(), n, 0.0, sf));
+        ref.screenRangeRates(m.data(), n, 0.0, sr);
+        f.screenRangeRates(m.data(), n, 0.0, sf);
+        EXPECT_EQ(sf.screen_refused, sr.screen_refused);
+        const float v_before = f.velNed()[2];
+        ref.updateGnssRawPart(m.data(), 0, n, 0.0, sr);
+        f.updateGnssRawPart(m.data(), 0, n, 0.0, sf);
+        moved = std::fmax(moved, std::fabs(double(f.velNed()[2]) - double(v_before)));
+        for (int i = 0; i < 3; ++i)
+            worst = std::fmax(worst, std::fabs(double(f.velNed()[i]) - double(ref.velNed()[i])));
+    }
+    EXPECT_GT(moved, 0.5);       // the updates moved the velocity the screen saw
+    EXPECT_LT(worst, 1.0e-4);    // and the term taken once is the same to a tenth of a millimetre a second
+                                 //   (1.3e-5 here, with the velocity 1-2 m/s off at the screen)
+    EXPECT_GT(worst, 0.0);       // (not the same bits: the reuse is there)
+}
+
 // ---- the barometer and zero velocity (#1600: the shadow's aiding without satellites)
 
 TEST(RawGnssEKF, AHeightHoldsTheVerticalAnIMUWouldLose)

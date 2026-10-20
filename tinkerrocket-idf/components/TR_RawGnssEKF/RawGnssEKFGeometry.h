@@ -20,19 +20,21 @@ namespace gnss_raw
 {
 namespace ekf_geom
 {
+
+// The predicted range (without the receiver clock), range rate (without its
+// drift) and line of sight: the satellite at transmit time, turned by the
+// Earth's rotation over the travel time (tc_ekf.py _los). Outside the unnamed
+// namespace, as its one definition: RawGnssEKF::pairAccel takes it.
+struct Los
+{
+    double rho, rate, u[3], vs[3];
+};
+
 namespace
 {
 
 constexpr double kC      = 299792458.0;
 constexpr double kOmegaE = 7.2921151467e-5;     // rad/s, the Sagnac turn
-
-// The predicted range (without the receiver clock), range rate (without its
-// drift) and line of sight: the satellite at transmit time, turned by the
-// Earth's rotation over the travel time (tc_ekf.py _los).
-struct Los
-{
-    double rho, rate, u[3], vs[3];
-};
 
 void lineOfSight(const double rs[3], const double vs[3], const double r[3], const double v[3], Los& L)
 {

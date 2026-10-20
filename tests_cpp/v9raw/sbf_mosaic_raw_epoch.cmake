@@ -16,6 +16,7 @@ add_executable(test_mosaic_raw_epoch test_mosaic_raw_epoch.cpp
     ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
     ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
     ${LIB_DIR}/TR_GNSSRaw/RawMeasCarrier.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilderLite.cpp
 )
 target_include_directories(test_mosaic_raw_epoch PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}

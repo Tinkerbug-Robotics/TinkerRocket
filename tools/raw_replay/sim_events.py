@@ -31,6 +31,14 @@ the filter. The antenna is --lever-arm m along the nose from the IMU (0.3 by def
 told the offset: raw_replay --antenna-m), or --lever-arm-b x,y,z m anywhere in the body (FRD; it wins over
 --lever-arm).
 
+A spinning body (the windup study; every option off by default, and the files then as before but for META's floats,
+which numpy 2 wrote as np.float64(x)): --roll lays a roll profile over the flight (sim_roll.py: const:F, spinup:F,
+rev:F[,T[,D]], F rev/s), the truth's attitude turned about its nose and the IMU with it, the gyro's chip clipped at
+--gyro-clip-dps an axis (the ISM6's rail, 4587, at 45 deg to the nose), its scale off by --gyro-scale-ppm on the added
+rate; --roll-axis-tilt-deg D rolls it about an axis D deg off the nose toward body +y instead (a spin axis off the
+board's x: the nose cones about it); --windup-k K puts the carrier wind-up of an antenna on the nose on every Doppler
+(Wu's rate form, K cycles a turn, each system's wavelength: L1/E1 on GPS and Galileo, B1I on BeiDou).
+
 Patterns (G4/G5):
   none;
   cutA (A = 0.5, 1.5, 3: every epoch from T+A to T+8 cut, 43 % of the Dopplers of the fused epoch before it off by
@@ -83,6 +91,9 @@ import numpy as np
 from tinkerrocket_gnss.raw_gnss_model import MU as MU_EARTH, RawGNSSModel
 from tinkerrocket_gnss.tc_ekf import C_LIGHT, OMGE, ecef2lla, lla2ecef, quat2dcm
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import sim_roll  # noqa: E402
+
 G0 = 9.807
 T_OFS = 40.0                 # MCU s = flight s + T_OFS (META t_base_s = -T_OFS)
 GPS_WEEK = 2441              # 2026-10-24, the flight's Saturday
@@ -133,7 +144,10 @@ class MosaicRx(RawGNSSModel):
         self.rr_dyn_true = rr_dyn_true
         self.gm = {}                                  # prn -> (wander m, time s)
 
-    def measure_full(self, t, pos_ned, vel_ned, acc_ned, specific_force_g, g_peak, body_x_ned):
+    def measure_full(self, t, pos_ned, vel_ned, acc_ned, specific_force_g, g_peak, body_x_ned, windup=None):
+        """windup: None, or (k, C_n2b, w_body): every range rate takes the carrier wind-up an antenna on the body's
+        +x carries at body rate w_body (rad/s, FRD), C_n2b the NED -> body matrix (sim_roll.windup_rate, each shell's
+        wavelength)."""
         dt = 0.0 if self.t_last is None else t - self.t_last
         self.t_last, self.acc_last = t, np.asarray(acc_ned, float)
         drift = self._clock(dt, specific_force_g - 1.0)
@@ -198,6 +212,10 @@ class MosaicRx(RawGNSSModel):
             self.gm[prn] = (w, t)
             pr = rho + self.clk_bias + w + self.rng.normal(0.0, s_pr)
             rr = float(u @ (vs_r - v)) + drift + self.rng.normal(0.0, s_rr)
+            if windup is not None:
+                k_w, C_w, w_w = windup
+                e_b = C_w @ (T_local @ u)
+                rr += float(sim_roll.windup_rate(sim_roll.SHELL_LAMBDA[min(int(prn) // 100, 2)], k_w, w_w, e_b))
             out.append(dict(prn=prn, sat_pos=rs, sat_vel=vs, pr=pr, rr=rr, cn0=cn0, s_pr=s_pr, s_rr=s_rr,
                             s_corr=s_corr, rr_sig_add=0.0, k=len(info["rho"])))
             info["rho"].append(rho)
@@ -367,28 +385,88 @@ def pattern_params(pattern, t_burn, t_apo):
 
 # ------------------------------------------------------------------ the events file
 
+def roll_overlay(f, ph, roll, gyro_clip_dps=None, gyro_scale_ppm=0.0, tilt_deg=0.0):
+    """The flight's body turned about its nose by the profile roll (sim_roll.parse_profile), and its IMU with it (the
+    sensor's own errors kept in the sensor's frame; the gyro's chip clipped at gyro_clip_dps an axis, None: no clip;
+    gyro_scale_ppm on the added rate); with tilt_deg, about an axis that far off the nose toward body +y
+    (sim_roll.roll_axis: the nose cones about it). In place: f's q, acc, gyr; returns the rolled body's rate (rad/s,
+    FRD, each row's forward interval), C_n2b, and the overlay's facts for META."""
+    t, q, v = f["t"], f["q"], f["v"]
+    w0, C0 = body_rates(q, t)
+    facts = dict(peak_rps=0.0, clipped_s=0.0)
+    if roll is None:
+        return w0, C0, facts
+    rate = sim_roll.profile_rate(t, roll, ph)
+    phi = sim_roll.integrate(t, rate)
+    phi_mid = np.concatenate([0.5 * (phi[1:] + phi[:-1]), phi[-1:]])
+    phi_dot = np.concatenate([np.diff(phi) / np.diff(t), rate[-1:]])
+    # the truth: q' = q (x) qx(phi); its rate over each row's interval Rx(phi_mid)^T w + phi_dot x (qa, Ra and a about
+    # a tilted axis)
+    ax = sim_roll.roll_axis(tilt_deg)       # None: the nose itself
+    q1 = sim_roll.roll_quat(q, phi, ax)
+    Rm = sim_roll.rot(phi_mid, ax)
+    w1 = sim_roll.turn(Rm, w0)
+    if ax is None:
+        w1[:, 0] += phi_dot
+    else:
+        w1 += phi_dot[:, None] * ax
+    C1 = np.einsum("nji,njk->nik", sim_roll.rot(phi, ax), C0)     # Ra(phi)^T C (NED -> rolled body)
+    # the IMU: the truth's part turned, the sensor's errors kept. The flight filter takes each IMU row (every second
+    # one of the 1 kHz table: EKF_DECIMATION 2) as the mean over the 2 ms before it, so the added roll is that mean
+    # and the turn the angle at its middle: taken as the flight's own rows are (the 1 ms after), a spin-up would
+    # leave every filter 1.5 ms of roll behind -- 5.4 deg at 10 rev/s, the same in every arm
+    a_ned = np.gradient(v, t, axis=0)
+    f_true = np.einsum("nij,nj->ni", C0, a_ned - np.array([0.0, 0.0, G0]))
+    phi_b = phi.copy()                      # the angle at the middle of the 2 ms before each row
+    phi_b[2:] = phi[1:-1]
+    rate_b = rate.copy()                    # the added rate's mean over them
+    rate_b[2:] = (phi[2:] - phi[:-2]) / (t[2:] - t[:-2])
+    Rb = sim_roll.rot(phi_b, ax)
+    f["acc"] = f["acc"] + sim_roll.turn(Rb, f_true) - f_true
+    added = np.zeros_like(w0)
+    if ax is None:
+        added[:, 0] = rate_b * (1.0 + 1e-6 * gyro_scale_ppm)
+    else:
+        added = (rate_b * (1.0 + 1e-6 * gyro_scale_ppm))[:, None] * ax
+    gyr = f["gyr"] + sim_roll.turn(Rb, w0) - w0 + added
+    if gyro_clip_dps is not None:
+        gyr, clipped = sim_roll.chip_clip(gyr, math.radians(gyro_clip_dps))
+        facts["clipped_s"] = float(np.sum(np.diff(t)[clipped[:-1]]))
+    f["gyr"] = gyr
+    f["q"] = q1
+    facts["peak_rps"] = float(np.max(np.abs(rate)) / sim_roll.TWO_PI)
+    return w1, C1, facts
+
+
+def antenna_truth(p, v, C_n2b, w_body, r_b):
+    """The antenna's position and velocity (NED, m and m/s) at r_b in the body (FRD, m), each row's: p + R r_b and
+    v + R (w x r_b), R the body -> NED matrix (C_n2b transposed) and w the body's rate (rad/s, FRD) -- as rolled by
+    roll_overlay, so a roll turns an antenna off the nose's axis about it."""
+    R_b2n = np.transpose(C_n2b, (0, 2, 1))
+    return p + np.einsum("nij,j->ni", R_b2n, r_b), v + np.einsum("nij,nj->ni", R_b2n, np.cross(w_body, r_b))
+
+
 def build(flight_path, pattern, out_dir, phases_all, lever_arm=0.3, shells=3, rate_hz=10.0, pvt_hz=20.0,
-          lever_b=None):
+          lever_b=None, roll=None, windup_k=0.0, gyro_clip_dps=None, gyro_scale_ppm=0.0, roll_axis_tilt_deg=0.0):
     name = os.path.splitext(os.path.basename(flight_path))[0]
     ph = phases_all[name]
     rng_land = np.random.default_rng(stable_seed(name, "landing"))
     f = load_flight(flight_path, ph)
     append_landing(f, rng_land)
     cfg = f["cfg"]
+    roll_spec = sim_roll.parse_profile(roll)
+    w_body, C_n2b, roll_facts = roll_overlay(f, ph, roll_spec, gyro_clip_dps, gyro_scale_ppm, roll_axis_tilt_deg)
     t, p, v, q = f["t"], f["p"], f["v"], f["q"]
     acc, gyr = f["acc"], f["gyr"]
-    w_body, C_n2b = body_rates(q, t)
     a_ned = np.gradient(v, t, axis=0)
     sf_g = np.linalg.norm(acc, axis=1) / G0
     t_burn, t_apo = ph["burnout_s"], ph["apogee_s"]
     ref = (cfg["ref_lat_deg"], cfg["ref_lon_deg"], cfg["ref_alt_m"])
 
-    # the antenna: lever_arm m along the nose from the IMU, or lever_b anywhere in the body (truth only: the filter
-    # keeps r = 0 unless the replay gives it one)
+    # the antenna: lever_arm m along the nose from the IMU, or lever_b anywhere in the body (FRD; truth only: the
+    # filter keeps r = 0 unless the replay gives it one)
     r_b = np.array([lever_arm, 0.0, 0.0]) if lever_b is None else np.asarray(lever_b, float)
-    R_b2n = np.transpose(C_n2b, (0, 2, 1))
-    p_ant = p + np.einsum("nij,j->ni", R_b2n, r_b)
-    v_ant = v + np.einsum("nij,nj->ni", R_b2n, np.cross(w_body, r_b))
+    p_ant, v_ant = antenna_truth(p, v, C_n2b, w_body, r_b)
     a_ant = np.gradient(v_ant, t, axis=0)
     nose = C_n2b[:, 0, :]                              # body x in NED
 
@@ -434,7 +512,8 @@ def build(flight_path, pattern, out_dir, phases_all, lever_arm=0.3, shells=3, ra
             for st in rx.state.values():
                 st.update(locked=False, clear_since=None)
             lol_done, lol_t = True, te
-        meas, info = rx.measure_full(te, p_ant[i], v_ant[i], a_ant[i], sf_g[i], g_pk, nose[i])
+        meas, info = rx.measure_full(te, p_ant[i], v_ant[i], a_ant[i], sf_g[i], g_pk, nose[i],
+                                     windup=(windup_k, C_n2b[i], w_body[i]) if windup_k > 0.0 else None)
         g_pk = sf_g[i]
         counts["sim_rx_epochs"] += 1
         counts["sim_epochs"] += on_grid
@@ -564,12 +643,13 @@ def build(flight_path, pattern, out_dir, phases_all, lever_arm=0.3, shells=3, ra
         "META state_machine none",
         f"META ground_pressure_pa {P0:.3f}",
         f"META pad_lla {ref[0]!r} {ref[1]!r} {ref[2]!r}",
-        f"META seed_lla {math.degrees(first_fix[0])!r} {math.degrees(first_fix[1])!r} {first_fix[2]:.3f}",
-        f"META seed_quat {q0[0]!r} {q0[1]!r} {q0[2]!r} {q0[3]!r}",
+        f"META seed_lla {float(math.degrees(first_fix[0]))!r} {float(math.degrees(first_fix[1]))!r} "
+        f"{float(first_fix[2]):.3f}",
+        f"META seed_quat {float(q0[0])!r} {float(q0[1])!r} {float(q0[2])!r} {float(q0[3])!r}",
         "META seed_quat_truth 1",
         f"META decimal_year {DECIMAL_YEAR}",
-        f"META declination_rad {decl!r}",
-        f"META field_ned_ut {field[0]!r} {field[1]!r} {field[2]!r}",
+        f"META declination_rad {float(decl)!r}",
+        f"META field_ned_ut {float(field[0])!r} {float(field[1])!r} {float(field[2])!r}",
         f"META flight {name}",
         f"META pattern {pattern}",
         f"META lever_arm_m {float(r_b[0])!r}",
@@ -581,10 +661,21 @@ def build(flight_path, pattern, out_dir, phases_all, lever_arm=0.3, shells=3, ra
     ]
     for k in ("thrust_start_s", "burnout_s", "thrust_end_s", "apogee_s", "vz_below_2mps_s", "deploy_s",
               "landing_s"):
-        lines.append(f"META truth_{k} {ph[k]!r}")
-    lines.append(f"META truth_touchdown_s {touch!r}")
+        lines.append(f"META truth_{k} {float(ph[k])!r}")
+    lines.append(f"META truth_touchdown_s {float(touch)!r}")
     if lever_b is not None:
         lines.append("META lever_arm_b_m " + " ".join(repr(float(x)) for x in r_b))
+    if roll_spec is not None:
+        lines.append(f"META sim_roll_profile {roll}")
+        lines.append(f"META sim_roll_peak_rev_s {roll_facts['peak_rps']:.4f}")
+        lines.append(f"META sim_gyro_clip_dps {gyro_clip_dps if gyro_clip_dps is not None else 'none'}")
+        lines.append(f"META sim_gyro_clipped_s {roll_facts['clipped_s']:.4f}")
+        if gyro_scale_ppm:
+            lines.append(f"META sim_gyro_scale_ppm {gyro_scale_ppm}")
+        if roll_axis_tilt_deg:
+            lines.append(f"META sim_roll_axis_tilt_deg {roll_axis_tilt_deg}")
+    if windup_k > 0.0:
+        lines.append(f"META sim_windup_k {windup_k}")
     if lol_t is not None:
         lines.append(f"META sim_lol_t {lol_t!r}")
     if baro_tau is not None:
@@ -635,6 +726,15 @@ def main():
     ap.add_argument("--truth-phases", help="truth_phases.json (default: beside the flight)")
     ap.add_argument("--lever-arm", type=float, default=0.3, help="the antenna along the nose from the IMU, m")
     ap.add_argument("--lever-arm-b", help="x,y,z: the antenna anywhere in the body (FRD, m; wins over --lever-arm)")
+    ap.add_argument("--roll", help="a roll profile over the flight (sim_roll.parse_profile: const:F, spinup:F, "
+                                   "rev:F[,T[,D]], F in rev/s)")
+    ap.add_argument("--windup-k", type=float, default=0.0, help="the carrier wind-up on every Doppler, cycles a turn "
+                                                                "about the nose (0: none)")
+    ap.add_argument("--gyro-clip-dps", type=float, help="the gyro's chip clipped at this an axis (the ISM6's rail: "
+                                                        "4587)")
+    ap.add_argument("--gyro-scale-ppm", type=float, default=0.0, help="the gyro's scale error on the added roll")
+    ap.add_argument("--roll-axis-tilt-deg", type=float, default=0.0, help="the roll's axis this far off the nose, "
+                                                                          "toward body +y (deg; 0: the nose)")
     ap.add_argument("--shells", type=int, default=3)
     ap.add_argument("--rate", type=float, default=10.0, help="the fused epochs a second (the filter's)")
     ap.add_argument("--pvt-rate", type=float, default=20.0, help="the receiver's epochs and fixes a second")
@@ -642,7 +742,8 @@ def main():
     tp = a.truth_phases or os.path.join(os.path.dirname(os.path.abspath(a.flight)), "truth_phases.json")
     phases = json.load(open(tp))["flights"]
     lever_b = [float(x) for x in a.lever_arm_b.split(",")] if a.lever_arm_b else None
-    out, counts = build(a.flight, a.pattern, a.out_dir, phases, a.lever_arm, a.shells, a.rate, a.pvt_rate, lever_b)
+    out, counts = build(a.flight, a.pattern, a.out_dir, phases, a.lever_arm, a.shells, a.rate, a.pvt_rate, lever_b,
+                        a.roll, a.windup_k, a.gyro_clip_dps, a.gyro_scale_ppm, a.roll_axis_tilt_deg)
     print(out, json.dumps(counts))
 
 

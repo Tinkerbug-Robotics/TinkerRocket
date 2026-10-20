@@ -111,6 +111,7 @@ add_executable(test_raw_replay_gnss_only test_raw_replay_gnss_only.cpp
     ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
     ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
     ${LIB_DIR}/TR_GNSSRaw/RawMeasCarrier.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilderLite.cpp
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Lc86Parser.cpp
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
 )

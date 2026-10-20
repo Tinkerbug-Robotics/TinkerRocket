@@ -55,6 +55,12 @@ struct TimedRawEpoch
     int64_t  mcu_us = 0;      // the epoch's GPS instant on the MCU clock (esp_timer, us); 0 = not known yet
     int64_t  arrival_us = 0;  // when its last frame arrived (MCU, us)
     uint16_t gps_week = 0;    // its full GPS week; 0 = not known yet
+    // Its Dopplers are pairs' means (the mosaic-G5's Dopplers in pairs,
+    // MosaicRawEpoch.h): the range rate half the receiver's period before the
+    // epoch, which the filter takes rr_pair_lag_s further back. 0 everywhere
+    // else: each Doppler at the epoch's own instant. In the padding after
+    // gps_week, so the struct's size is unchanged.
+    uint8_t  rr_paired = 0;
     // The receiver's clock bias (ms, receiver minus GPS) its tag took off the
     // time of week: epoch.tow_s - tag_dtr_ms / 1000 is the GPS instant mcu_us
     // places. The mosaic-G5's (its time of week is the receiver's own); 0

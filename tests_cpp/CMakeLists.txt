@@ -1711,6 +1711,7 @@ add_executable(test_raw_gnss_meas test_raw_gnss_meas.cpp
     ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
     ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
     ${LIB_DIR}/TR_GNSSRaw/RawMeasCarrier.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilderLite.cpp
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Lc86Parser.cpp
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
 )
@@ -1745,6 +1746,27 @@ target_include_directories(test_raw_gnss_ekf PRIVATE
 target_link_libraries(test_raw_gnss_ekf GTest::gtest_main)
 gtest_discover_tests(test_raw_gnss_ekf)
 
+# ---------- test_raw_gnss_windup ----------
+# The carrier wind-up (TR_RawGnssEKF/RawGnssWindup.h) and the covariance's
+# exact attitude transition (RawGnssEKFParams::att_exact), the windup study
+# (2026-10-18): the model's sign against the spin rig, Wu's rate form, the
+# two-band and one-band roll rates, the gyro's history, the monitor; a fast
+# roll the first-order transition stretches into the tilt's variance and the
+# exact one only turns. The shadow's correction end to end is
+# test_raw_gnss_shadow's.
+add_executable(test_raw_gnss_windup test_raw_gnss_windup.cpp
+    ${LIB_DIR}/TR_GNSSRaw/atmo.c
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssCarrier.cpp
+)
+target_include_directories(test_raw_gnss_windup PRIVATE
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+    ${LIB_DIR}/TR_RawGnssEKF
+)
+target_link_libraries(test_raw_gnss_windup GTest::gtest_main)
+gtest_discover_tests(test_raw_gnss_windup)
+
 # ---------- test_raw_gnss_carrier ----------
 # TR_RawGnssEKF's carrier range rate (#1600): a synthetic sky with exact
 # carrier phases beside its pseudoranges and Dopplers, a receiver clock with
@@ -1764,6 +1786,42 @@ target_include_directories(test_raw_gnss_carrier PRIVATE
 )
 target_link_libraries(test_raw_gnss_carrier GTest::gtest_main)
 gtest_discover_tests(test_raw_gnss_carrier)
+
+# ---------- test_raw_gnss_share_los ----------
+# TR_RawGnssEKF's shared epoch geometry (RawGnssEKFParams share_los, rr_float):
+# off by default and in every profile; the units before any update give the
+# same bits shared or not; an epoch worked in slices stays within micrometres
+# of the unshared filter and uses the same measurements; the ranges follow the
+# receiver and are taken again past the limit, for another epoch or another
+# measurement; the frame kept; the boost screen's copy; the Doppler in float.
+add_executable(test_raw_gnss_share_los test_raw_gnss_share_los.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/RawGnssShadow.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/RawGnssMeasStage.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/PadSurvey.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/SatJumpCheck.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/FixCheck.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/EphemerisFrames.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/HeadingFit.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssCarrier.cpp
+    ${LIB_DIR}/TR_GNSSRaw/eph.c
+    ${LIB_DIR}/TR_GNSSRaw/atmo.c
+    ${LIB_DIR}/TR_GNSSRaw/RtcmEphemeris.cpp
+    ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilderLite.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasCarrier.cpp
+)
+target_include_directories(test_raw_gnss_share_los PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RawGnssShadow
+    ${LIB_DIR}/TR_RawGnssEKF
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_raw_gnss_share_los GTest::gtest_main)
+gtest_discover_tests(test_raw_gnss_share_los)
 
 # ---------- test_raw_gnss_shadow ----------
 # The raw-GNSS shadow filter's flight-computer side (#1600 phase 4): the
@@ -1788,6 +1846,7 @@ add_executable(test_raw_gnss_shadow test_raw_gnss_shadow.cpp
     ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
     ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
     ${LIB_DIR}/TR_GNSSRaw/RawMeasCarrier.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilderLite.cpp
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Lc86Parser.cpp
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
 )
@@ -1826,6 +1885,7 @@ add_executable(test_receiver_profile test_receiver_profile.cpp
     ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
     ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
     ${LIB_DIR}/TR_GNSSRaw/RawMeasCarrier.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilderLite.cpp
 )
 target_include_directories(test_receiver_profile PRIVATE
     ${SHIM_DIR}

@@ -22,6 +22,7 @@ are made against, and truth/<flight>.nav, which the truth's quorum reads) are in
         python3 tools/raw_replay/sim_grid.py OUT --flights <grid>/flights [--patterns none,cut05,...] \\
         [--mags 0,+10,...] [--arms design,unaided,noguard] [--jobs 8] \\
         [--binary tools/raw_replay/build/raw_replay_mosaic] [--lever-arm 0.3 | --lever-arm-b x,y,z] \\
+        [--roll const:5 --windup-k 0.99 --gyro-clip-dps 4587 --roll-axis-tilt-deg 1 --events-dir DIR] \\
         [--harness-args "..."] \\
         [--pause-file FILE]
     python3 tools/raw_replay/sim_tables.py OUT
@@ -67,14 +68,39 @@ def rig_wait():
         time.sleep(30.0)
 
 
-def events_match(path, lever_arm, lever_b):
+def spin_key(spin):
+    """The spinning body an events file is made with, as one comparable tuple: the roll profile (None: none), and with
+    one its gyro rail (None: none), scale (ppm) and axis tilt (deg); the wind-up's k. spin: build's keywords (roll,
+    windup_k, gyro_clip_dps, gyro_scale_ppm, roll_axis_tilt_deg), any left out at their defaults; None: none at all."""
+    spin = spin or {}
+    roll = spin.get("roll")
+    roll = None if not roll or roll == "none" else str(roll)
+    clip = spin.get("gyro_clip_dps")
+    rolled = (round(float(clip), 6) if clip is not None else None, round(float(spin.get("gyro_scale_ppm") or 0.0), 6),
+              round(float(spin.get("roll_axis_tilt_deg") or 0.0), 6)) if roll else None
+    return roll, rolled, round(float(spin.get("windup_k") or 0.0), 6)
+
+
+def meta_spin(meta):
+    """spin_key of what an events file's META says it was made with (sim_events.build's sim_roll_* and sim_windup_k)."""
+    clip = meta.get("sim_gyro_clip_dps", "none")
+    return spin_key(dict(roll=meta.get("sim_roll_profile"), windup_k=meta.get("sim_windup_k"),
+                         gyro_clip_dps=None if clip == "none" else clip, gyro_scale_ppm=meta.get("sim_gyro_scale_ppm"),
+                         roll_axis_tilt_deg=meta.get("sim_roll_axis_tilt_deg")))
+
+
+def events_match(path, lever_arm, lever_b, spin=None):
     """Whether the events file at path was made with this truth's antenna (its META lever_arm_m and lever_arm_b_m,
-    as sim_events.build writes them): a file made for another --lever-arm or --lever-arm-b, or one that does not say,
-    is not reused (its runs would be scored against the wrong antenna)."""
+    as sim_events.build writes them) and this spinning body (its META sim_roll_*, sim_windup_k: spin_key; spin None,
+    none): a file made for another --lever-arm, --lever-arm-b or roll, or one that does not say its antenna, is not
+    reused (its runs would be scored against the wrong truth). A file is named by flight and pattern alone, so a
+    grid's roll profiles need their own --events-dir; this keeps one from taking another's."""
     meta = read_meta(path)
     try:
         arm = float(meta["lever_arm_m"])
         arm_b = [float(x) for x in meta["lever_arm_b_m"].split()] if "lever_arm_b_m" in meta else None
+        if meta_spin(meta) != spin_key(spin):
+            return False
     except (KeyError, ValueError):
         return False
     same = lambda x, y: abs(x - float(y)) <= 1e-9   # noqa: E731
@@ -84,18 +110,22 @@ def events_match(path, lever_arm, lever_b):
 
 
 def make_events(job):
-    flight, pattern, out_dir, phases_path, lever_arm, force, rig, lever_b = job
+    """One events file (job: flight, pattern, out_dir, phases_path, lever_arm, force, rig, lever_b and, optionally,
+    the spinning body's build keywords), made unless one that matches is there already."""
+    flight, pattern, out_dir, phases_path, lever_arm, force, rig, lever_b = job[:8]
+    spin = job[8] if len(job) > 8 else None
     global RIG_STATE
     RIG_STATE = rig
     name = os.path.splitext(os.path.basename(flight))[0]
     path = os.path.join(out_dir, f"{name}__{pattern}.events")
-    if os.path.exists(path) and not force and events_match(path, lever_arm, lever_b):
+    if os.path.exists(path) and not force and events_match(path, lever_arm, lever_b, spin):
         return path, None, 0.0
     import sim_events
     rig_wait()
     t0 = time.time()
     phases = json.load(open(phases_path))["flights"]
-    path, counts = sim_events.build(flight, pattern, out_dir, phases, lever_arm=lever_arm, lever_b=lever_b)
+    path, counts = sim_events.build(flight, pattern, out_dir, phases, lever_arm=lever_arm, lever_b=lever_b,
+                                    **(spin or {}))
     return path, counts, time.time() - t0
 
 
@@ -187,6 +217,12 @@ def main():
     ap.add_argument("--lever-arm", type=float, default=0.3)
     ap.add_argument("--lever-arm-b", help="x,y,z: the truth's antenna anywhere in the body (FRD, m; wins over "
                                           "--lever-arm)")
+    ap.add_argument("--roll", help="a roll laid over every flight (sim_events.py --roll: const:F, spinup:F, "
+                                   "rev:F[,T[,D]], F in rev/s); give each profile its own --events-dir")
+    ap.add_argument("--windup-k", type=float, default=0.0, help="the carrier wind-up on every Doppler (sim_events.py)")
+    ap.add_argument("--gyro-clip-dps", type=float, help="the gyro's chip clipped at this an axis (sim_events.py)")
+    ap.add_argument("--gyro-scale-ppm", type=float, default=0.0, help="the gyro's scale error on the added roll")
+    ap.add_argument("--roll-axis-tilt-deg", type=float, default=0.0, help="the roll's axis this far off the nose")
     ap.add_argument("--keep-csv", default="none", help="patterns whose CSVs are kept (comma-separated; 'all')")
     ap.add_argument("--events-dir", help="where the events files go (default OUT/events; ~6 MB each, made again "
                                          "in minutes: a scratch directory will do)")
@@ -217,7 +253,12 @@ def main():
         name, _, rest = spec.partition("=")
         arm_args[name] = rest.split()
     lever_b = [float(x) for x in a.lever_arm_b.split(",")] if a.lever_arm_b else None
-    jobs = [(f, p, ev_dir, phases, a.lever_arm, a.force_events, a.rig_state, lever_b) for f in flights for p in pats]
+    spin = None
+    if a.roll or a.windup_k:
+        spin = dict(roll=a.roll, windup_k=a.windup_k, gyro_clip_dps=a.gyro_clip_dps, gyro_scale_ppm=a.gyro_scale_ppm,
+                    roll_axis_tilt_deg=a.roll_axis_tilt_deg)
+    jobs = [(f, p, ev_dir, phases, a.lever_arm, a.force_events, a.rig_state, lever_b, spin) for f in flights
+            for p in pats]
     events = []
     with cf.ProcessPoolExecutor(a.jobs) as ex:
         for path, counts, dt in ex.map(make_events, jobs):

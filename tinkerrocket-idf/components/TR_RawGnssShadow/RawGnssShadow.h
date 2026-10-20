@@ -28,6 +28,30 @@
 // The ephemerides still come here, for the pad context only. Without it, as a
 // host test drives it, the shadow builds in its own job.
 //
+// The satellite cap's governor (sat_cap_max above sat_cap; off on every
+// profile, a bench's TR_BENCH_RAW_CAP_MAX). The GNSS task's stage builds at
+// most sat_cap satellites an epoch; with a ceiling the cap follows this
+// filter's slack (CapGovernor.h): each epoch's age at its close, one worked
+// at once, one lost on the way (dropped stale, or a gap in the epochs handed
+// over) and the boost (the launch edge, the boost screen's own test, an epoch
+// it judges) move it, and it goes to the stage with the navigation state
+// (ShadowNav::sat_cap), which the GNSS task reads before each build anyway.
+// The filter itself never reads it. An epoch is built some 20-80 ms before
+// its job starts, so one built on the pad at the governor's cap could start
+// after the ignition: its build already spent, and the boost screen judging
+// every satellite of it twice. So the pad holds the floor from PRELAUNCH
+// (kShadowPrelaunch on the mosaic image's ticks), and where a boost comes
+// without it (a launch from READY, a bench's) a job that starts while the
+// boost holds the cap (the screen judges it, or the launch edge or the IMU's
+// own test came within the hold) keeps only the measurements a build at the
+// floor would have made (trimToFloor): the cap's first sat_cap picks
+// (BuiltEpoch::floor_keep). The others are left out before any unit runs, as
+// the cap leaves a satellite out: nothing of them reaches the change check,
+// the satellite check, the pad survey, the rejection counts or the
+// pseudorange's last update. Their builds stand in the GNSS task (its lock
+// ages see the whole sky anyway), and the stage's 3 dB hold goes to all it
+// built, for the epoch after only.
+//
 // The ionosphere (phase 5). A pad calibration brings the GPS broadcast
 // (Klobuchar) parameters from the app, with the date of the navigation file
 // they came from (setIono; NVS keeps them across boots). They are used while
@@ -436,6 +460,28 @@
 // / g' C^-1 g (C the fit's covariance of w), its 1-sigma 1 / sqrt(g' C^-1 g);
 // the sums since the start give the run's. Counted and logged, nothing fused.
 //
+// The spinning body (all off by default; the windup study, 2026-10-18). An
+// antenna turning about its boresight winds its carrier: -k lambda p / 2pi on
+// every Doppler at a roll rate p (RawGnssWindup.h), 0.19 m/s per rev/s on
+// L1/E1 and 1.7 mm/s per rev/s more on BeiDou B1I. The clock drift's walk
+// (the mosaic's 100 m^2/s^3) takes the common part; nothing takes the
+// difference between wavelengths, or the part a rate across the boresight
+// gives each satellite. With windup_k, each epoch just built has it taken
+// off every Doppler (and carrier rate) before anything judges it -- the
+// change check, the satellite checks, the heading fit, the vertical check,
+// the boost screen, the update: the gyro's rate (less its bias) about the
+// nose at the Doppler's own instant (the epoch's less rr_lag_s, read from the
+// last 0.64 s of steps; an epoch older than that is left as it came and
+// counted), times each system's wavelength (the EKF's cr_carrier_hz). With
+// windup_geom, Wu's in full from each satellite's line of sight in the body
+// (the filter's attitude). No antenna offset is needed: only the boresight's
+// direction, the nose. With windup_monitor (observe), each epoch's Dopplers at
+// the prior are fitted for the roll rate their wind-up differs by between
+// wavelengths (RawGnssWindup.h's interband fit) and set against the gyro's.
+// With dv_lever_mode 1, the change check's lever allowance takes the nose's
+// own turn (a roll does not move an antenna on the nose's axis) and a radial
+// bound (none by default), not the whole rate.
+//
 // Stopping. A sensor sim, a hole in the IMU longer than max_gap_s, a state
 // that is not finite, or (on the pad) one pad_reset_m from the flight
 // filter's stops it; it starts again from the next pad seed.
@@ -461,6 +507,7 @@
 
 #include <RocketComputerTypes.h>
 
+#include "CapGovernor.h"
 #include "EphemerisFrames.h"
 #include "EphemerisStore.h"
 #include "FixCheck.h"
@@ -472,6 +519,7 @@
 #include "RawMeasBuilder.h"
 #include "SatJumpCheck.h"
 #include "ShadowLink.h"
+#include "RawGnssWindup.h"
 #include "TR_RawGnssEKF.h"
 
 namespace gnss_raw
@@ -616,6 +664,12 @@ public:
                                                  //   this long, not only since the epoch before
         double   heading_fit_period_s = 0.0;     // the heading fit takes an epoch at most this often
         bool     level_on_fused_epochs = false;  // the levelling's steady test takes only epochs that fused something
+        int16_t  sat_cap_max = 0;                // the most the cap governor raises sat_cap (below) to while the
+                                                 //   filter keeps up (CapGovernor.h; at or under sat_cap: off, the cap
+                                                 //   fixed). Its floor, ceiling, hard age and gap are sat_cap, this,
+                                                 //   epoch_job_max_s and 1.5 of meas's epoch_period_s, the rest
+                                                 //   CapGovernor::Config's; it runs only with external_build. (Here,
+                                                 //   in the bool's padding, the Config keeps its size.)
         int      sat_cap = 0;                    // the GNSS task's stage: at most this many satellites built an
                                                  //   epoch (0: all)
         // A flight restored after a reboot (the navigation filter): its
@@ -643,6 +697,33 @@ public:
         double   antenna_sigma_radial_m = 0.02;  //   and across it
         double   antenna_min_rps = 0.0;          // on the Dopplers from this rate across the nose, rad/s (0: any)
         uint8_t  antenna_att_mode = 1;           // the EKF's lever_att_mode when known (LeverAttMode: observe)
+        // The carrier wind-up (above: the spinning body; RawGnssWindup.h). 0
+        // or false: off, the Beetle's filter and the V9 mosaic image as flown.
+        double   windup_k = 0.0;              // cycles a turn about the boresight (the nose) each Doppler and
+                                              //   carrier rate carries, taken off from the gyro (0: off; the
+                                              //   Goblin's helix 0.99, spin rig 10/16)
+        bool     windup_geom = false;         //   and the part the rate across the boresight gives each
+                                              //   satellite (Wu's in full, from its line of sight)
+        bool     windup_monitor = false;      // observe: the roll rate the Dopplers' wind-up implies against
+                                              //   the gyro (RawGnssWindup.h's interband fit, each epoch)
+        double   windup_monitor_k = 0.99;     //   its k
+        double   windup_monitor_tau_s = 1.0;  //   its leaky mean's time constant
+        // The Doppler change check's lever-arm allowance: the arm
+        // (dv_lever_allow_m, or with the offset known DopplerChange.h
+        // knownLeverArm's) times 0, the body's whole rate (|dw| + |w|^2 dt);
+        // 1, the nose's own turn, for an antenna along the nose -- the change
+        // of the nose's own rate in NED, which a roll about it leaves alone --
+        // plus one dv_lever_radial_m across it with the whole rate (its turn
+        // capped at twice its speed). At 1 rev/s of roll, 0 allows 1.4 m/s an
+        // epoch and a slow coherent ramp goes through (the windup study: 0 of
+        // 192 caught from 1 rev/s on). The radial bound costs the same way:
+        // 1 cm lost them from 5 rev/s, 3 cm from 3. None (0, the default)
+        // caught every one from 0 to 20 rev/s on the axis; with the antenna
+        // truly 1 cm off the roll axis it held about every coast Doppler at 5,
+        // 7.5 and 15 rev/s (and 176 to 192 of them in 8 runs of 48 at 9.5):
+        // the bars still passed, but the coast is then the unaided filter's.
+        uint8_t  dv_lever_mode = 0;
+        double   dv_lever_radial_m = 0.0;
     };
 
     // The Doppler change check (Config::dv_check).
@@ -863,6 +944,26 @@ public:
         float    lever_roll_last_sigma_deg = 0.0f; //   its 1-sigma, deg (0: none)
         double   lever_roll_info = 0.0;    // summed since the start: g' C^-1 g, 1/rad^2
         double   lever_roll_hy = 0.0;      //   and g' C^-1 w, 1/rad: their ratio the roll the whole run points to
+        // the carrier wind-up (windup_k)
+        uint32_t windup_epochs = 0;        // epochs whose Dopplers (and carrier rates) were corrected
+        uint32_t windup_misses = 0;        //   whose Doppler instant the gyro's history no longer held: left as is
+        uint32_t windup_cr_misses = 0;     //   carrier rates whose interval it did not hold: dropped
+        float    windup_last_p_rps = 0.0f; // the last epoch's: the gyro's roll rate at its Doppler instant, rad/s
+        float    windup_last_l1_mps = 0.0f;//   the correction an L1/E1 Doppler took, m/s
+        float    windup_max_l1_mps = 0.0f; // the largest of those
+        // the wind-up monitor (windup_monitor)
+        uint32_t wumon_epochs = 0;         // epochs it fitted (two wavelengths, six Dopplers or more)
+        float    wumon_last_p_rps = 0.0f;  //   the last: the roll rate its Dopplers' wind-up implies, rad/s
+        float    wumon_last_sig_rps = 0.0f;//     its 1-sigma
+        float    wumon_last_gyro_rps = 0.0f;//    the gyro's then
+        float    wumon_dp_rps = 0.0f;      // implied less the gyro's, leaky mean (windup_monitor_tau_s), rad/s
+        float    wumon_dp_sig_rps = 0.0f;  //   its 1-sigma
+        float    wumon_max_z = 0.0f;       // the largest |that| / its 1-sigma, once 10 epochs are in
+        // the change check's clock and lever, the last epoch checked
+        float    dv_last_c_mps = 0.0f;     // its fitted change of the clock rate, m/s
+        float    dv_last_wu_dc_mps = 0.0f; //   the L1 wind-up's change the gyro gives over the same interval
+        float    dv_last_lever_mps = 0.0f; //   the lever allowance the epoch test took
+        float    dv_last_lever_win_mps = 0.0f; // and the window's (dv_window_s), as capped
     };
 
     using Clock = int64_t (*)();
@@ -935,6 +1036,11 @@ public:
     // A HEADING_FIT_MSG record, one per epoch the heading fit took.
     bool takeHeadingLog(HeadingFitData& out);
     const HeadingFit& headingFit() const { return fit_; }
+    // The satellite cap's governor (CapGovernor.h): the cap the GNSS task's
+    // stage builds with goes out with the navigation state (ShadowNav::sat_cap).
+    const CapGovernor& capGovernor() const { return gov_; }
+    // The console's window of it (CapGovernor::takeWindow).
+    void takeCapWindow(int& cap_min, int& cap_max, double& max_age_s) { gov_.takeWindow(cap_min, cap_max, max_age_s); }
 
     bool running() const { return running_; }
     const Stats& stats() const { return st_; }
@@ -1021,6 +1127,7 @@ private:
         bool          rot_dropped = false;//   and its clock taken, so it closes as a dropped epoch
         int64_t       pr_k = 0;           // pr_period_s: the period of GPS time it falls in
         bool          screen = false;     // a boost epoch the boost screen judges (kJobScreen)
+        bool          late = false;       // the cap governor: some of it worked at once (past epoch_job_max_s)
         bool          vcheck = false;     // the vertical check judges it if it can fit it (kJobScreen)
         int           dry_k = 0;          //   the scratch copy's next measurement (kJobScreenDry)
         double        dry_age = 0.0;      //   the epoch's age when it was copied
@@ -1035,6 +1142,9 @@ private:
         double        hdg_var = 0.0;
         double        hdg_t = 0.0;
         int           hdg_sats = 0;
+        // the carrier wind-up: the gyro's roll rate at the Doppler's instant (rad/s), and whether it had one
+        double        wu_p = 0.0;
+        bool          wu_ok = false;
     };
     Job           job_;
     BuiltEpoch    built_;               // its measurements: built in the job, or handed over
@@ -1174,6 +1284,28 @@ private:
     bool          ant_known_ = false;
     double        ant_b_m_[3] = {};
     void          applyAntenna();
+    // the carrier wind-up (windup_k, windup_monitor): the gyro's steps (less
+    // its bias, rad/s) to read a Doppler's own instant from, 0.64 s of them at
+    // 100 steps a second -- an epoch is dropped 0.3 s old on the mosaic
+    static constexpr int kWindupRing = 64;
+    windup::RateRing<kWindupRing> wu_ring_;
+    windup::Monitor wu_mon_;
+    double        wu_ref_p_ = 0.0;      // the roll rate at the change check's reference epoch (rad/s)
+    bool          wu_ref_ok_ = false;
+    bool          windupRingOn() const { return cfg_.windup_k > 0.0 || cfg_.windup_monitor; }
+    bool          dvJobOn() const { return cfg_.dv_check != kDvOff || cfg_.windup_monitor; }
+    // the epoch just built (built_), age s old: its Dopplers less the
+    // wind-up (windup_k), and the gyro's rate at its Doppler instant (job_.wu_p)
+    void          applyWindup(double age);
+    // windup_monitor: this epoch's Dopplers at the prior (dv_next_), fitted
+    void          windupMonitor();
+    // dv_lever_mode 1: the nose's rate in NED (R (w x x_body), rad/s) at the
+    // last step and at the last check, and its largest change a second since
+    // the check (DopplerChange.h NoseTurn, in float); the largest rate across
+    // the nose since the check and in the window
+    dvc::NoseTurn<float> dv_nose_;
+    float         dv_wp_peak_ = 0.0f;
+    double        dv_wpwin_ = 0.0;
     bool          launch_seen_ = false; // a launch edge since the start (a restored flight has none)
     void          setFlightGate(bool full);
     void          setGroundGate();
@@ -1213,6 +1345,21 @@ private:
     PadSurvey::Summary pcx_sum_ = {};
     uint64_t      prop_sum_ = 0;        // IMU steps since the last record
     uint32_t      prop_n_ = 0;
+    // the satellite cap's governor (sat_cap_max): its cap, and the last epoch
+    // handed over (its time of week; < 0: none since the start), for a gap.
+    // Its calls are out of line (cold): with it off, the filter's own frames
+    // stay as they were
+    CapGovernor   gov_;
+    double        gov_last_tow_ = -1.0;
+    bool          gov_in_flight_ = false;   // the last step's: the launch edge
+    static CapGovernor::Config capGovConfig(const Config& c);
+    bool pushBuilt(const BuiltEpoch& b);
+    void govBuilt(const BuiltEpoch& b);
+    void govImu(uint8_t imu_flags, double t);
+    void govLoss(double t);
+    void govJobStart(double t);
+    void govClose(double age, double t);
+    void trimToFloor();
     Stats         st_;
 };
 

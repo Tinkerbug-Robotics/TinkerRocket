@@ -45,7 +45,8 @@
 // 0.1-0.25 s late): age_s says how long ago it was, and the receiver is
 // taken back by the IMU's own velocity increments since (a ring of them,
 // ~0.5 s). The Doppler is the range rate rr_lag_s before the epoch's tag
-// (55.5 ms on the LC86G), predicted the same way.
+// (55.5 ms on the LC86G), predicted the same way; an epoch whose Dopplers are
+// pairs' means (setRrPaired) has them rr_pair_lag_s further back.
 //
 // The carrier range rate (RawMeas has_cr: a satellite's carrier phase range
 // over the interval since its epoch before, RawMeasBuilder), after the
@@ -177,6 +178,11 @@ struct RawGnssEKFParams
     // The Doppler is the range rate this long before the epoch's tag (LC86G
     // MSM7, fitted against the rig's truth in boost and coast, 2026-10-12)
     double rr_lag_s       = 0.0555;
+    // An epoch whose Dopplers are pairs' means (the mosaic-G5's Dopplers in
+    // pairs: setRrPaired) has them this much further back again: the pair's
+    // middle, half the receiver's period (the receiver profile's
+    // rr_pair_avg). 0: no epoch is (every receiver but that one).
+    double rr_pair_lag_s  = 0.0;
     bool   att_gate_cos4  = true;      // false: GNSS corrections reach the attitude in full
     // GNSS corrections to the attitude about the vertical only (wins over
     // att_gate_cos4): the heading, and the gyro biases only along the
@@ -264,6 +270,36 @@ struct RawGnssEKFParams
     bool    lever_on           = false;
     double  lever_b_m[3]       = {0.0, 0.0, 0.0};   // body FRD, the IMU to the antenna's phase centre, m
     uint8_t lever_att_mode     = 0;                 // LeverAttMode
+    // The epoch's geometry once (off by default: today's filter). Every unit
+    // of an epoch -- the Doppler change check, the satellite check, the
+    // clock, the boost screen, each satellite's update and the close --
+    // predicts each satellite's line of sight in double: its range, unit
+    // vector and Sagnac-turned velocity, six times a satellite an epoch, and
+    // each satellite's update takes the receiver's frame again (receiverState:
+    // four double sines and cosines) and each row inject's earth radii. With
+    // share_los the lines of sight are taken once, at the epoch's first unit
+    // that asks (at the receiver it back-dates to), and every later unit's
+    // receiver r takes them to second order in its distance d from that one
+    // (rho - u.d, and u less d's part across u over rho): the same bits where
+    // the receiver is the same (the units of a slice before any update),
+    // within (d / rho)^2 of the line of sight elsewhere (2.5e-15 for a
+    // metre's correction) and 6.5e-6 of d in the range (the Sagnac turn's own
+    // change), and taken again past kLosRetakeM. The frame is kept while the
+    // position stands and carried by the update's own corrections within a
+    // slice (first order: 1.6e-7 m and rad per metre^2, at most kFrameCarryM),
+    // inject's radii while the latitude moves under kRadiiKeepRad. For the
+    // mosaic-only image's CPU (the bench's TR_BENCH_RAW_SHARE_LOS).
+    bool    share_los          = false;
+    // The Doppler rows' prediction in float (off by default; with share_los,
+    // and only where the Doppler has no lag, rr_lag_s 0: the mosaic-G5's).
+    // A range rate is the satellite's part along the line of sight, u.vs (up
+    // to 3.9 km/s: kept in double), less the receiver's, u.v (the rocket's
+    // few hundred m/s): that one in the NED frame the velocity already has,
+    // float, within 2e-5 m/s of the double prediction -- no ECEF velocity
+    // turned from it in double for each satellite. The update, the boost
+    // screen and the Doppler change check alike, so the screen still gates
+    // what the update would fuse.
+    bool    rr_float           = false;
     // Initial sigmas, in the state's units (the attitude's: a half-angle).
     // p0_att: the tilt's, about north and east; p0_hdg: the heading's, about
     // the vertical of init's attitude (#1626 N10). p0_hdg was pi ("any
@@ -285,6 +321,16 @@ struct RawGnssEKFParams
     // The velocity-increment history keeps an entry per this much time, s
     // (128 entries: 0.5 s at 4 ms; at a 200 Hz IMU, every sample)
     double hist_spacing_s = 0.004;
+    // The covariance's attitude transition over a step: first order, I - [w x]
+    // dt (false, the flight filter's and the Beetle's), or exact, the
+    // rotation exp(-[w x] dt) and the gyro bias's integral through it (true).
+    // First order is no rotation: it stretches the attitude's variance across
+    // the rate by 1 + (|w| dt)^2 a step, exp(|w|^2 dt) a second -- x1.5 a
+    // second at 1 rev/s of roll in 10 ms steps, x19,000 at 5 rev/s -- so a
+    // fast roll pins the tilt's 1-sigma at its cap and the next GNSS rows
+    // turn the tilt on noise (windup study, 2026-10-18). Exact, a roll only
+    // turns that variance about the nose.
+    bool   att_exact = false;
     // The carrier range rate (ReceiverProfile.h's cr_*)
     uint8_t cr_mode             = kCarrierObserve;   // CarrierMode
     double  cr_sigma_per_rev_s  = 0.023;             // m/s more (in quadrature) per rev/s of roll
@@ -372,7 +418,7 @@ struct CarrierInfo
 struct DopplerRef
 {
     bool    valid = false;
-    double  t = 0.0;                         // the Dopplers' instant (the epoch's less rr_lag_s), filter time
+    double  t = 0.0;                         // the Dopplers' instant (the epoch's less its lag, rrLag), filter time
     float   v_ned[3] = {};                   // the filter's velocity then, as it stood when taken: the base
                                              //   both ends predict from (it cancels)
     int     n = 0;
@@ -394,6 +440,11 @@ struct DopplerChangeImu
     float  v_lev[3] = {};  // lever_on: the antenna's velocity against the IMU at this end's Dopplers, NED, as
                            //   every prediction here took it (0 with the lever off; set with or without a ref)
 };
+
+namespace ekf_geom
+{
+struct Los;   // a satellite's predicted range, rate and line of sight (RawGnssEKFGeometry.h)
+}
 
 template <typename T>
 class RawGnssEKF
@@ -495,6 +546,29 @@ public:
     // takes it along; init lets it go.
     void setAttHold(bool on) { att_hold_ = on; }
     bool attHold() const { return att_hold_; }
+    // The epoch about to be worked has its Dopplers in pairs (rr_pair_lag_s;
+    // RawGnssShadow sets it at each epoch's start where the params have a
+    // pair lag, from the epoch's BuiltEpoch::rr_paired): its Dopplers are
+    // taken rr_pair_lag_s further back by every consumer -- the update, the
+    // boost screen and vertical check, the change check -- and each
+    // satellite's own range acceleration is taken once for them all
+    // (pairAccel). An epoch not in pairs takes rr_lag_s alone, as every epoch
+    // did before; with no pair lag in the params none is. A copy of the
+    // filter takes it along.
+    void setRrPaired(bool on)
+    {
+        rr_paired_ = on && p_.rr_pair_lag_s > 0.0;
+        acc_memo_.have = 0;
+    }
+    bool rrPaired() const { return rr_paired_; }
+    // The epoch's Dopplers' lag (s, at least 0): rr_lag_s, plus rr_pair_lag_s
+    // on an epoch in pairs. rrPairLag() is the second part alone (0 off one).
+    double rrLag() const
+    {
+        const double tau = rr_paired_ ? p_.rr_lag_s + p_.rr_pair_lag_s : p_.rr_lag_s;
+        return tau > 0.0 ? tau : 0.0;
+    }
+    double rrPairLag() const { return rr_paired_ ? p_.rr_pair_lag_s : 0.0; }
     // A flight restored after a reboot: the position's, velocity's and
     // attitude's 1-sigmas set to these on every axis (the attitude's a
     // rotation, rad), their cross-covariances dropped. A block whose sigma is
@@ -544,8 +618,18 @@ public:
     // step every satellite agrees on; false with no clock yet), then
     // updateGnssRawPart the satellites [i0, i1), each part at the age the
     // epoch has when it is fused. updateGnssRaw is the two at one age.
-    bool beginGnssRaw(const RawMeas* m, int n, double age_s, RawGnssStats& st);
-    void updateGnssRawPart(const RawMeas* m, int i0, int i1, double age_s, RawGnssStats& st);
+    // (Each is its share_los form or today's, RawGnssEKFUpdate.h.)
+    bool beginGnssRaw(const RawMeas* m, int n, double age_s, RawGnssStats& st)
+    {
+        return p_.share_los ? beginGnssRawAs<true>(m, n, age_s, st) : beginGnssRawAs<false>(m, n, age_s, st);
+    }
+    void updateGnssRawPart(const RawMeas* m, int i0, int i1, double age_s, RawGnssStats& st)
+    {
+        if (p_.share_los)
+            updateGnssRawPartAs<true>(m, i0, i1, age_s, st);
+        else
+            updateGnssRawPartAs<false>(m, i0, i1, age_s, st);
+    }
     // The epoch's Doppler range rates (has_rr) gated at the state as it
     // stands, after beginGnssRaw and before any update: each with the
     // innovation, variance and chi-square updateGnssRawPart would give it as
@@ -625,6 +709,11 @@ public:
     // epoch that age is applied (#1508's satellite check: before an update,
     // the IMU's propagation from the last one).
     void receiverEcefAt(double age_s, double r[3], double v[3]) const;
+    // share_los: each pseudorange's satellite's range from r (ECEF, m), as
+    // sagnacRange gives it, from the epoch's lines of sight (the epoch age_s
+    // ago; 0 for a measurement with no pseudorange): the satellite check's.
+    // Null with share_los off.
+    const double* sharedRanges(const RawMeas* m, int n, double age_s, const double r[3]) const;
     // What the IMU alone did between filter times t1 <= t2 (s), NED: its
     // velocity change (specific force and gravity, no filter corrections) and
     // the displacement that change adds, the integral of v(t) - v(t1). From a
@@ -681,6 +770,10 @@ private:
     // f_b: the specific force less the accelerometer bias, body (the tilt's
     // Jacobian is its, not the kinematic acceleration's: #1626 E1)
     void   propagateCovariance(const T Tb2n[3][3], const T f_b[3], const T w_b[3], T g_d, T dt);
+    // att_exact's blocks of Phi over a step at the rate w_b (rad/s, body):
+    // Ra = exp(-[w x] dt), the attitude's own, and Ga = -1/2 int_0^dt
+    // exp(-[w x] s) ds, its gyro bias's (TR_RawGnssCarrier.cpp)
+    void   attExactBlocks(const T w_b[3], T dt, T Ra[3][3], T Ga[3][3]) const;
     void   stabilize();
     void   symmetrize();
     T      hph(const int* hidx, const T* hval, int hn) const;
@@ -744,6 +837,12 @@ private:
     // The carrier's: the history's excess (ex) over the last tau.
     void   historyExcess(double tau, double ex[3]) const;
     void   receiverState(double r[3], double v[3], double Tm[3][3]) const;
+    // An epoch in pairs (setRrPaired): m's own range acceleration
+    // (satRangeAccel at L and the receiver's velocity v, ECEF), m being the
+    // epoch's measurement i -- taken once a satellite an epoch (acc_memo_).
+    // In TR_RawGnssCarrier.cpp (flash on the Beetle, which never pairs: its
+    // per-step code keeps only the call).
+    double pairAccel(int i, const RawMeas& m, const ekf_geom::Los& L, const double v[3]) const;
 
     RawGnssEKFParams p_;
     // process noise, from p_
@@ -821,6 +920,81 @@ private:
     // displacement is the position's less this one's change.
     double      cr_ex_[3] = {};
     CrFit       cr_fit_;
+
+    // share_los (RawGnssEKFParams): the epoch's geometry, kept between its
+    // units (TR_RawGnssCarrier.cpp). losOf: satellite i's range (returned),
+    // line of sight (ECEF, receiver to satellite) and Sagnac-turned velocity at
+    // the receiver r (ECEF) of the epoch at filter time te -- from the epoch's
+    // lines of sight (taken here, at r, by the epoch's first unit with its n
+    // measurements; n 0: a unit that only reads them), or lineOfSight's own
+    // where they cannot serve. frameOf: receiverState's, from the frame kept
+    // while the position stands (v may be null: not wanted). injectLla:
+    // inject's position part, with the radii kept and the frame carried.
+    // rrFloat: rr_float's Doppler prediction from the satellite's part us
+    // (u.vs, ECEF), the line of sight and the receiver's velocity (NED).
+    // beginGnssRawAs, updateGnssRawPartAs: beginGnssRaw's and
+    // updateGnssRawPart's bodies (RawGnssEKFUpdate.h), kShare true with
+    // share_los (TR_RawGnssCarrier.cpp's: in flash on the Beetle, which never
+    // turns it on), false today's (TR_RawGnssEKF.cpp's).
+    static constexpr double kLosRetakeM = 10.0;       // a receiver this far from where they were taken: again
+    static constexpr double kFrameCarryM = 1.0;       // the frame carried this far at most, then taken again
+    static constexpr double kRadiiKeepRad = 1.0e-6;   // inject's radii kept while the latitude moves this little
+    static constexpr double kLosSameEpochS = 1.0e-3;  // an epoch's units agree on its filter time to this
+    double losOf(const RawMeas* m, int n, int i, double te, const double r[3], double u[3], double vs[3]) const;
+    void   losFill(const RawMeas* m, int n, double te, const double r[3]) const;
+    void   frameOf(double r[3], double v[3], double Tm[3][3]) const;
+    void   injectLla(const T dx[N]);
+    static double rrFloat(double us, const T u_ned[3], const T v_ned[3]);
+    template <bool kShare>
+    bool   beginGnssRawAs(const RawMeas* m, int n, double age_s, RawGnssStats& st);
+    template <bool kShare>
+    void   updateGnssRawPartAs(const RawMeas* m, int i0, int i1, double age_s, RawGnssStats& st);
+    // A member, not the stack's (the filter's task has ~1.7 KB free on the
+    // bench): 3.8 kB, in the filter's own storage, which the boost screen's
+    // copy takes along. (Scratch: written before it is read, so not zeroed.)
+    // Its constructor, the initializers below, is TR_RawGnssCarrier.cpp's: not
+    // inlined into the filter's, in internal RAM on the Beetle.
+    struct LosShare
+    {
+        LosShare();
+        bool    valid = false;                // lines of sight taken (and te, n, r0 theirs)
+        double  te = 0.0;                     // the epoch's filter time
+        int     n = 0;                        // its measurements
+        double  r0[3];                        // the receiver they were taken at, ECEF
+        uint8_t sys[RawEpoch::kMaxObs];       // each measurement's satellite, and
+        uint8_t prn[RawEpoch::kMaxObs];
+        bool    ok[RawEpoch::kMaxObs];        //   whether it was taken (GPS, Galileo, BeiDou)
+        double  sx[RawEpoch::kMaxObs];        //   its position's x (the measurement it was taken for)
+        double  rho[RawEpoch::kMaxObs];
+        double  u[RawEpoch::kMaxObs][3];
+        double  vs[RawEpoch::kMaxObs][3];
+        double  rng[RawEpoch::kMaxObs];       // sharedRanges' answer
+        // receiverState's at lla bit for bit (carried: moved by corrections since, carried_m of them)
+        bool    frame_ok = false;
+        double  f_lla[3], f_r[3], f_Tm[3][3];
+        double  carried_m = 0.0;
+        // inject's radii at latitude rad_lat, and its sine and cosine
+        bool    rad_ok = false;
+        double  rad_lat = 0.0, rad_rew = 0.0, rad_rns = 0.0, rad_s = 0.0, rad_c = 1.0;
+    };
+    mutable LosShare los_;
+
+    // The Dopplers in pairs (setRrPaired), after share_los's los_ and last,
+    // so no member before them moves: this epoch's, and each satellite's own range acceleration as the first
+    // of its Doppler's consumers took it (pairAccel), by its index in the
+    // epoch's measurements (bit i of have: m[i], checked by its satellite;
+    // the rest not zeroed, read only under their bit), emptied by setRrPaired
+    // at each epoch's start
+    bool rr_paired_ = false;
+    struct AccMemo
+    {
+        uint64_t have = 0;
+        uint8_t  sys[RawEpoch::kMaxObs];
+        uint8_t  prn[RawEpoch::kMaxObs];
+        double   a[RawEpoch::kMaxObs];
+    };
+    static_assert(RawEpoch::kMaxObs <= 64, "AccMemo::have is 64 bits");
+    mutable AccMemo acc_memo_;
 };
 
 extern template class RawGnssEKF<float>;

@@ -17,10 +17,15 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
+#include <deque>
+#include <functional>
+#include <memory>
 #include <random>
 #include <vector>
 
 #include "LevelGate.h"
+#include "RawGnssMeasStage.h"
 #include "RawGnssShadow.h"
 #include "ReceiverProfileApply.h"
 #include "RtcmEphemeris.h"
@@ -113,6 +118,17 @@ Mat3 rotAbout(const double axis[3], double a)
             r.m[i][j] = (i == j ? 1.0 : 0.0) + std::sin(a) * K[i][j] + (1.0 - std::cos(a)) * kk;
         }
     return r;
+}
+
+// R's rotation vector (R = exp([v x]), |v| below pi)
+void rotVec(const Mat3& R, double v[3])
+{
+    const double c = std::max(-1.0, std::min(1.0, 0.5 * (R.m[0][0] + R.m[1][1] + R.m[2][2] - 1.0)));
+    const double th = std::acos(c);
+    const double f = th > 1e-9 ? 0.5 * th / std::sin(th) : 0.5;
+    v[0] = f * (R.m[2][1] - R.m[1][2]);
+    v[1] = f * (R.m[0][2] - R.m[2][0]);
+    v[2] = f * (R.m[1][0] - R.m[0][1]);
 }
 
 // A nose-up body leaning lean_deg toward azimuth toward_deg: body -> NED
@@ -290,6 +306,9 @@ struct ClosedEpoch
     uint32_t dv_epoch_fails = 0;          // the Doppler change check's failed epochs so far
     uint32_t dv_latch_releases = 0;       //   its latches let go so far (dv_latch_k)
     float dv_level_chi2 = 0.0f;           //   and the last level test's chi-square
+    float dv_lever_mps = 0.0f;            //   the lever allowance its last epoch test took
+    float dv_lever_win_mps = 0.0f;        //     and its window's
+    uint32_t dv_epoch_win_fails = 0;      //   its failed epochs on the window's sum alone so far
 };
 
 struct TenRun
@@ -330,6 +349,7 @@ struct TenFlight
     int    turn_axis = 1;
     double lever_m = 0.0;
     double lever_y_m = 0.0;              // and this far along body y (across the nose)
+    double lever_z_m = 0.0;              //   and body z
     double apogee_t = -1.0;              // the flight computer calls apogee from here (kShadowApogee)
     double seed_heading_err_deg = 0.0;   // the pad seed's heading this far off the body's (about the down axis)
     // the whole receiver stale (test_doppler_change.cpp's pattern, sim_events.py's): its Dopplers at the pad's
@@ -346,9 +366,18 @@ struct TenFlight
     double wc_s = 1.0;
     double wc_rps = 0.0;
     double wc_hz = 2.0;
+    // a roll about the nose at roll_rps (rad/s) from roll_t, on top of the turn and the weathercock (theirs then
+    // about their axis as it stood before the roll, fixed in NED: the nose turns as it would without the roll), the
+    // gyro each step's whole turn (0: none)
+    double roll_t = -1.0;
+    double roll_rps = 0.0;
     // a calibrated magnetometer on the pad (the truth's field, 50 Hz, to ignition): the launch's heading is
     // the magnetometer's (the Doppler change check's dv_hdg_unset_deg judges it known)
     bool   mag_on_pad = false;
+    // each epoch handed over in pairs (TimedRawEpoch::rr_paired; the config's ekf.rr_pair_lag_s to match): its
+    // Dopplers the antenna's velocity this long before the epoch's tag, the pair's middle (a multiple of 5 ms; 0:
+    // none, the epoch's own instant)
+    int    pair_lag_ms = 0;
 };
 
 TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
@@ -393,6 +422,9 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
     int next_epoch = 1;                                       // tenths of a second
     uint32_t last_tow_ms = 0;
     TenRun run;
+    const size_t pair_steps = static_cast<size_t>(fl.pair_lag_ms / 5);
+    std::deque<std::array<double, 3>> ve_back;                // in pairs: the antenna's ECEF velocity, the last steps
+    Mat3 C_prev = Ct;                                         // the roll's: the attitude a step before
     for (int step = 1; step * dt <= t_end + 1e-9; ++step)
     {
         const double t = step * dt;
@@ -416,7 +448,11 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
             w_turn += (wcAng(t) - wcAng(t - dt)) / dt;
         }
         const double ax[3] = {fl.turn_axis == 0 ? 1.0 : 0.0, fl.turn_axis == 1 ? 1.0 : 0.0, 0.0};
-        const Mat3 Cn = mat3Mul(Ct, rotAbout(ax, ang));      // body -> NED, turned
+        const Mat3 Cturn = mat3Mul(Ct, rotAbout(ax, ang));   // body -> NED, turned
+        const double nose[3] = {1.0, 0.0, 0.0};
+        const double roll = fl.roll_rps != 0.0 && t > fl.roll_t + 1e-9 ? fl.roll_rps * (t - fl.roll_t) : 0.0;
+        const Mat3 Croll = rotAbout(nose, roll);
+        const Mat3 Cn = fl.roll_rps != 0.0 ? mat3Mul(Cturn, Croll) : Cturn;   //   and rolled
         double f_b[3] = {0.0, 0.0, 0.0}, a_n[3] = {0.0, 0.0, 0.0};
         if (t > kIgn)
         {
@@ -446,7 +482,23 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
         s.time_us = static_cast<uint32_t>(t64);
         for (int i = 0; i < 3; ++i)
             s.acc[i] = float(f_b[i]);
-        s.gyro[fl.turn_axis] = float(w_turn);
+        if (fl.roll_rps != 0.0)
+        {
+            // the step's whole turn (the roll and the turn do not commute): C_prev' Cn's rotation vector over dt
+            Mat3 CpT{};
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    CpT.m[i][j] = C_prev.m[j][i];
+            double rv[3];
+            rotVec(mat3Mul(CpT, Cn), rv);
+            for (int i = 0; i < 3; ++i)
+                s.gyro[i] = float(rv[i] / dt);
+            C_prev = Cn;
+        }
+        else
+        {
+            s.gyro[fl.turn_axis] = float(w_turn);
+        }
         s.flags = t < kIgn ? gnss_raw::kShadowLevel : (t >= kIgn + 0.1 ? gnss_raw::kShadowInFlight : 0);
         if (fl.apogee_t >= 0.0 && t >= fl.apogee_t)
             s.flags |= gnss_raw::kShadowApogee;
@@ -487,6 +539,9 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
             c.dv_epoch_fails = sh.stats().dv_epoch_fails;
             c.dv_latch_releases = sh.stats().dv_latch_releases;
             c.dv_level_chi2 = sh.stats().dv_last_level_chi2;
+            c.dv_lever_mps = sh.stats().dv_last_lever_mps;
+            c.dv_lever_win_mps = sh.stats().dv_last_lever_win_mps;
+            c.dv_epoch_win_fails = sh.stats().dv_epoch_win_fails;
             run.eps.push_back(c);
         }
         gnss_raw::ShadowNav nav;
@@ -506,6 +561,29 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
                 d += double(qf[i]) * qt[i];
             run.att_err_deg.push_back(2.0 * std::acos(std::min(1.0, std::fabs(d))) * 57.29577951308232);
         }
+        // in pairs: the antenna's velocity each step (no faults), the epoch's Dopplers taken pair_steps back
+        if (pair_steps > 0)
+        {
+            const double r_b[3] = {fl.lever_m, fl.lever_y_m, fl.lever_z_m};
+            double w_b[3] = {ax[0] * w_turn, ax[1] * w_turn, 0.0};
+            if (fl.roll_rps != 0.0)
+            {
+                const double wt[3] = {w_b[0], w_b[1], w_b[2]};
+                for (int i = 0; i < 3; ++i)
+                    w_b[i] = Croll.m[0][i] * wt[0] + Croll.m[1][i] * wt[1] + Croll.m[2][i] * wt[2];
+                if (roll != 0.0)
+                    w_b[0] += fl.roll_rps;
+            }
+            const double wxr[3] = {w_b[1] * r_b[2] - w_b[2] * r_b[1], w_b[2] * r_b[0] - w_b[0] * r_b[2],
+                                   w_b[0] * r_b[1] - w_b[1] * r_b[0]};
+            double wxr_n[3], ve_s[3];
+            mat3Vec(Cn, wxr, wxr_n);
+            const double v_rx[3] = {v_ned[0] + wxr_n[0], v_ned[1] + wxr_n[1], v_ned[2] + wxr_n[2]};
+            nedToEcefVec(v_rx, ve_s);
+            ve_back.push_back({ve_s[0], ve_s[1], ve_s[2]});
+            if (ve_back.size() > pair_steps + 1)
+                ve_back.pop_front();
+        }
         // an epoch every epoch_ms of GPS time (a tenth of a second), built
         // where the receiver truly is
         if (step % epoch_steps == 0)
@@ -514,8 +592,17 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
             if (!fl.lose_whole_seconds || ms % 1000 != 0)
             {
                 // the antenna: lever_m up the nose, moving omega x r with the turn
-                const double r_b[3] = {fl.lever_m, fl.lever_y_m, 0.0};
-                const double w_b[3] = {ax[0] * w_turn, ax[1] * w_turn, 0.0};
+                const double r_b[3] = {fl.lever_m, fl.lever_y_m, fl.lever_z_m};
+                double w_b[3] = {ax[0] * w_turn, ax[1] * w_turn, 0.0};
+                if (fl.roll_rps != 0.0)
+                {
+                    // rolled: the turn's rate in the rolled body, and the roll
+                    const double wt[3] = {w_b[0], w_b[1], w_b[2]};
+                    for (int i = 0; i < 3; ++i)
+                        w_b[i] = Croll.m[0][i] * wt[0] + Croll.m[1][i] * wt[1] + Croll.m[2][i] * wt[2];
+                    if (roll != 0.0)
+                        w_b[0] += fl.roll_rps;
+                }
                 const double wxr[3] = {w_b[1] * r_b[2] - w_b[2] * r_b[1], w_b[2] * r_b[0] - w_b[0] * r_b[2],
                                        w_b[0] * r_b[1] - w_b[1] * r_b[0]};
                 double r_n[3], wxr_n[3], p_ant[3];
@@ -539,10 +626,15 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
                 nedToEcefVec(v_rx, ve);
                 for (int i = 0; i < 3; ++i)
                     r[i] = r0[i] + dr[i];
+                if (pair_steps > 0 && ve_back.size() == pair_steps + 1)
+                    for (int i = 0; i < 3; ++i)
+                        ve[i] = ve_back.front()[i];
                 TimedRawEpoch e;
                 e.epoch = sky.epoch(tow0 + ms / 1000.0, r, ve);
                 e.mcu_us = t64;
                 e.gps_week = kGoldenWeek;
+                if (pair_steps > 0)
+                    e.rr_paired = 1;
                 due.push_back(e);
             }
             next_epoch++;
@@ -1036,6 +1128,84 @@ EmptySky flyEmptySky(bool level_on_fused, double t_end = 15.0)
 }
 
 }  // namespace
+
+TEST(RawGnssShadowV9, EachEpochIsTakenInPairsOrAsItCameByItsMark)
+{
+    // The mosaic's Dopplers in pairs: each epoch's job takes the epoch's mark
+    // (TimedRawEpoch / BuiltEpoch rr_paired) to the filter, so an epoch in
+    // pairs has its Dopplers 25 ms further back and the next, as it came, at
+    // its own instant -- built here or by the GNSS task. With the pairs off
+    // (no pair lag: every profile as it is) a mark changes nothing.
+    const uint8_t marks[] = {1, 1, 0, 1, 0, 0, 1, 0};
+    for (bool pairs_on : {true, false})
+        for (bool external : {false, true})
+        {
+            SCOPED_TRACE(testing::Message() << (pairs_on ? "pairs on" : "pairs off")
+                                            << (external ? ", built by the GNSS task" : ", built here"));
+            gnss_raw::GnssReceiverProfile p = gnss_raw::mosaicG5Profile();
+            p.rr_pair_avg = pairs_on;
+            RawGnssShadow::Config cfg = primaryCfg();
+            gnss_raw::applyReceiverProfile(p, cfg);
+            cfg.external_build = external;
+            EXPECT_EQ(cfg.ekf.rr_lag_s, 0.0);
+            EXPECT_EQ(cfg.ekf.rr_pair_lag_s, pairs_on ? 0.025 : 0.0);
+            RawGnssShadow sh(cfg);
+            sh.onSeed(padSeed(kT0, kPadLat, kPadLon, 1400.0));
+            const double dt = 0.005;
+            std::vector<TimedRawEpoch> due;
+            int next_epoch = 1, checked = 0, pending = -1;
+            for (int step = 1; step <= 600; ++step)
+            {
+                const int64_t t64 = kT0 + static_cast<int64_t>(std::llround(step * dt * 1e6));
+                ShadowImu s{};
+                s.time_us = static_cast<uint32_t>(t64);
+                s.acc[2] = static_cast<float>(-kG);
+                sh.onImu(s, t64);
+                if (pending >= 0)
+                {
+                    // the epoch handed over before this step: its job ran in it
+                    const bool want = pairs_on && pending == 1;
+                    EXPECT_EQ(sh.filter().rrPaired(), want) << "epoch " << checked;
+                    EXPECT_EQ(sh.filter().rrLag(), want ? 0.025 : 0.0);
+                    checked++;
+                    pending = -1;
+                }
+                if (step % 20 == 0)
+                {
+                    TimedRawEpoch e;
+                    e.epoch.tow_s = kGoldenRmTowA + next_epoch / 10.0;   // empty: the mark alone matters here
+                    e.mcu_us = t64;
+                    e.gps_week = kGoldenWeek;
+                    e.rr_paired = marks[next_epoch % 8];
+                    due.push_back(e);
+                    next_epoch++;
+                }
+                while (!due.empty() && t64 - due.front().mcu_us >= 50000)
+                {
+                    const TimedRawEpoch& e = due.front();
+                    if (sh.running())
+                    {
+                        if (external)
+                        {
+                            gnss_raw::BuiltEpoch b;
+                            b.mcu_us = e.mcu_us;
+                            b.tow_s = e.epoch.tow_s;
+                            b.gps_week = e.gps_week;
+                            b.rr_paired = e.rr_paired;
+                            sh.onBuilt(b);
+                        }
+                        else
+                        {
+                            sh.onEpoch(e);
+                        }
+                        pending = e.rr_paired;
+                    }
+                    due.erase(due.begin());
+                }
+            }
+            EXPECT_GT(checked, 20);
+        }
+}
 
 TEST(RawGnssShadowV9, EmptyEpochsNoLongerKeepTheLevellingFromItsOutage)
 {
@@ -1545,13 +1715,14 @@ TEST(RawGnssShadowV9, AKnownAntennaTakesTheTurnsSwingOutOfTheAttitude)
     // The turning boost (boostTurn: 5 rad/s about body y for 0.25 s and back)
     // with the antenna 0.3 m up the nose. Unknown, the image's allowance
     // takes the swing's Dopplers at 1.65 m/s and what is left still turns the
-    // attitude: over 0.5 deg from 6 s on. Known, the swing is predicted and,
-    // with the launch's heading the magnetometer's, the Dopplers allow only
-    // what the offset could be off by (0.05 m along the nose and 0.02 across:
-    // 0.35 m/s); with no magnetometer, also what any heading does to the
-    // predicted swing (leverUnsetM: twice the 0.3 m, 3.35 m/s). Either: under
-    // 0.25 deg. The offset wrong by 5 cm either way is still better than
-    // leaving it out.
+    // attitude: over 0.45 deg from 6 s on (about 0.50 to 0.66 with the
+    // spinning body's settings, over 0.5 before them). Known, the swing is
+    // predicted and, with the launch's heading the magnetometer's, the
+    // Dopplers allow only what the offset could be off by (0.05 m along the
+    // nose and 0.02 across: 0.35 m/s); with no magnetometer, also what any
+    // heading does to the predicted swing (leverUnsetM: twice the 0.3 m,
+    // 3.35 m/s). Either: under 0.25 deg. The offset wrong by 5 cm either way
+    // is still better than leaving it out.
     const TenFlight fl = boostTurn(0.3, 0.0);
     TenFlight fm = fl;
     fm.mag_on_pad = true;
@@ -1564,7 +1735,7 @@ TEST(RawGnssShadowV9, AKnownAntennaTakesTheTurnsSwingOutOfTheAttitude)
     EXPECT_NEAR(kn.st.rot_max_sigma_mps, 3.35f, 0.02f);
     for (double t = 6.0; t <= 8.5 + 1e-9; t += 0.25)
     {
-        EXPECT_GT(errAt(unk, t), 0.5) << t;
+        EXPECT_GT(errAt(unk, t), 0.45) << t;
         EXPECT_LT(errAt(kn, t), 0.25) << t;
         EXPECT_LT(errAt(km, t), 0.25) << t;
         EXPECT_LT(errAt(lo, t), errAt(unk, t)) << t;
@@ -1910,4 +2081,889 @@ TEST(RawGnssShadowV9, AKnownAntennaWithTheMagnetometersHeadingKeepsTheLatchsLeve
     EXPECT_GT(ru->dv_level_chi2, 4.0f);
     EXPECT_LT(rk->dv_level_chi2, 1.0f);
     EXPECT_LT(rk->t, ru->t - 0.15);
+}
+
+// ---- the change check's lever allowance on the nose's own turn (dv_lever_mode 1; the high-roll port)
+
+namespace
+{
+
+// The Goblin's antenna from its IMU (the V9 holder as measured; body FRD, m): 47 mm up the nose and 12.6 mm across it
+constexpr double kGoblinAnt[3] = {0.04696, -0.01138, 0.00548};
+
+// A flight rolling about the nose at rev_s from half a second into the boost to the end (the rate a step, then
+// steady), the truth's antenna at r (body FRD, m), the pad's magnetometer calibrated or not
+TenFlight rolling(double rev_s, const double r[3], bool mag)
+{
+    TenFlight fl;
+    fl.turn_t = kIgn + 0.5;
+    fl.turn_s = 100.0;                   // never back
+    fl.turn_rps = rev_s * 2.0 * kPi;
+    fl.turn_axis = 0;
+    fl.lever_m = r[0];
+    fl.lever_y_m = r[1];
+    fl.lever_z_m = r[2];
+    fl.mag_on_pad = mag;
+    return fl;
+}
+
+// The image's safeguards with the exact attitude transition (a roll's tilt variance turned, not stretched), the
+// change check's lever mode, settled tracking (unsetCfg's), and the offset known at r (nullptr: unknown). The
+// wind-up stays off: the synthetic sky's Dopplers carry none.
+RawGnssShadow::Config leverCfg(uint8_t mode, const double* r)
+{
+    RawGnssShadow::Config c = safeguardsCfg();
+    c.meas.rr_relock_sigma = 0.0;
+    c.ekf.att_exact = true;
+    c.windup_k = 0.0;
+    c.dv_lever_mode = mode;
+    c.dv_lever_radial_m = 0.0;
+    if (r != nullptr)
+    {
+        gnss_raw::AntennaOffset a;
+        a.known = true;
+        for (int i = 0; i < 3; ++i)
+            a.b_m[i] = r[i];
+        gnss_raw::applyAntennaOffset(a, c);
+    }
+    return c;
+}
+
+// every Doppler ramping 2 m/s a second down from 6.6 s, held at 4 m/s (sim_events.py's slow12)
+TenFlight ramped(TenFlight fl)
+{
+    fl.coh_from = 6.6;
+    fl.coh_rate = 2.0;
+    fl.coh_max = 4.0;
+    return fl;
+}
+
+}  // namespace
+
+TEST(RawGnssShadowV9, TheNoseLeverTakesNothingFromARollAboutTheNose)
+{
+    // The Goblin's antenna known, the coast rolling at a steady 5 rev/s about a nose that points straight up: the
+    // nose does not turn, so on its own turn (mode 1) the epoch's lever allowance is the arm times nothing (under
+    // 0.01 m/s), where on the whole rate (mode 0) it is the arm times |w|^2 dt: 5.8 m/s with the magnetometer's
+    // heading (0.05 + chord(10 deg) x 0.0486 m) and 9.7 with the heading unset (0.0486 + 0.05 m). With the heading
+    // the magnetometer's, the roll's lever velocity is predicted and no epoch fails on the nose's turn either.
+    for (bool mag : {true, false})
+    {
+        SCOPED_TRACE(mag ? "the magnetometer's heading" : "the heading unset");
+        const TenRun nose = flyTen(leverCfg(1, kGoblinAnt), rolling(5.0, kGoblinAnt, mag));
+        const TenRun whole = flyTen(leverCfg(0, kGoblinAnt), rolling(5.0, kGoblinAnt, mag));
+        EXPECT_EQ(nose.st.dv_hdg_unset, mag ? 0 : 1);
+        EXPECT_GT(nose.st.dv_checks, 50u);
+        EXPECT_LT(nose.st.dv_last_lever_mps, 0.01f);
+        EXPECT_NEAR(whole.st.dv_last_lever_mps, mag ? 5.77f : 9.73f, 0.1f);
+        if (mag)
+        {
+            EXPECT_EQ(nose.st.dv_epoch_fails, 0u);
+            EXPECT_EQ(nose.st.dv_held_epochs, 0u);
+        }
+    }
+}
+
+TEST(RawGnssShadowV9, TheNoseLeverCatchesASlowRampThatTheWholeRateMisses)
+{
+    // Every Doppler ramping 2 m/s a second (slow12) through a coast rolling at 1 rev/s, the Goblin's antenna in the
+    // truth: on the whole rate (mode 0) the lever allowance takes the roll (0.39 m/s an epoch with the offset known
+    // and the heading unset, 1.2 unknown) and no epoch fails; on the nose's own turn (mode 1) the ramp fails epoch
+    // after epoch (20 or so from 6.6 to 9 s) and its Dopplers are held -- the offset unknown, or known with the
+    // heading unset or the magnetometer's. Without the ramp none fails either way: 12.6 mm across the nose at
+    // 1 rev/s changes an epoch's Dopplers by 0.05 m/s. At 5 rev/s with the magnetometer's heading (the one case
+    // whose own roll passes there: below), the same.
+    struct Case
+    {
+        const double* r;
+        bool mag;
+        const char* what;
+    };
+    for (const Case& c : {Case{nullptr, false, "unknown"}, Case{kGoblinAnt, false, "known, the heading unset"},
+                          Case{kGoblinAnt, true, "known, the magnetometer's heading"}})
+    {
+        SCOPED_TRACE(c.what);
+        const TenFlight fl = rolling(1.0, kGoblinAnt, c.mag);
+        const TenRun nose = flyTen(leverCfg(1, c.r), ramped(fl)), whole = flyTen(leverCfg(0, c.r), ramped(fl));
+        EXPECT_GE(dvFailsBetween(nose, 6.6, 9.0), 10u);
+        EXPECT_GT(nose.st.dv_held_epochs, 10u);
+        EXPECT_EQ(whole.st.dv_epoch_fails, 0u);
+        EXPECT_EQ(flyTen(leverCfg(1, c.r), fl).st.dv_epoch_fails, 0u);
+        EXPECT_EQ(flyTen(leverCfg(0, c.r), fl).st.dv_epoch_fails, 0u);
+    }
+    const TenFlight fast = rolling(5.0, kGoblinAnt, true);
+    EXPECT_GE(dvFailsBetween(flyTen(leverCfg(1, kGoblinAnt), ramped(fast)), 6.6, 9.0), 10u);
+    EXPECT_EQ(flyTen(leverCfg(0, kGoblinAnt), ramped(fast)).st.dv_epoch_fails, 0u);
+}
+
+TEST(RawGnssShadowV9, AnAntennaOffTheRollAxisUnpredictedHoldsTheDopplersAtFiveRevS)
+{
+    // With no radial bound (dv_lever_radial_m 0) the nose's own turn allows nothing for an antenna across the roll
+    // axis that the filter does not predict: the offset unknown, or known with the heading unset (the prediction
+    // taken back out of the change). At 5 rev/s the Goblin's 12.6 mm turns an epoch's Dopplers by 0.79 m/s, and the
+    // coast's epochs fail and hold their Dopplers -- towards the unaided filter, the documented price. On the axis
+    // nothing fails.
+    const TenRun unk = flyTen(leverCfg(1, nullptr), rolling(5.0, kGoblinAnt, false));
+    const TenRun unset = flyTen(leverCfg(1, kGoblinAnt), rolling(5.0, kGoblinAnt, false));
+    EXPECT_GE(unk.st.dv_epoch_fails, 20u);
+    EXPECT_GT(unk.st.dv_held_epochs, 20u);
+    EXPECT_GE(unset.st.dv_epoch_fails, 20u);
+    EXPECT_GT(unset.st.dv_held_epochs, 20u);
+    const double axis[3] = {kGoblinAnt[0], 0.0, 0.0};
+    EXPECT_EQ(flyTen(leverCfg(1, nullptr), rolling(5.0, axis, false)).st.dv_epoch_fails, 0u);
+}
+
+namespace
+{
+
+// rolling() at rev_s with a pitch-over too: from 6.5 s the nose turns at 1 rad/s about body y as it stood before
+// the roll (fixed in NED) for 1 s, then back as fast for as long
+TenFlight pitchingOver(double rev_s, const double r[3], bool mag)
+{
+    TenFlight fl = rolling(rev_s, r, mag);
+    fl.roll_t = fl.turn_t;
+    fl.roll_rps = fl.turn_rps;
+    fl.turn_axis = 1;
+    fl.turn_t = 6.5;
+    fl.turn_s = 1.0;
+    fl.turn_rps = 1.0;
+    return fl;
+}
+
+}  // namespace
+
+TEST(RawGnssShadowV9, UnderARollTheNoseLeverIsTheCasesArmTimesThePitchOversTurn)
+{
+    // A pitch-over at a steady 1 rad/s under a 1 rev/s roll (pitchingOver), the Goblin's antenna in the truth, on the
+    // nose's own turn (mode 1). Between two checks 0.1 s apart the nose's rate n' turns by 2 sin(0.05) =
+    // 0.09996 rad/s; each epoch is checked 55 ms after its tag (handed over at 50 ms, the next step), so the pad adds
+    // 2 x 0.055 s x 1 rad/s^2: the epoch's allowance is the arm times 0.20996 rad/s, the arm the offset's case's
+    // (knownLeverArm) -- unknown, dv_lever_allow_m 0.3 m; known with the magnetometer's heading, 0.05 m + chord(10
+    // deg) x 0.0486 m = 0.0585 m; known with the heading unset, 0.0486 + 0.05 = 0.0986 m. Taken in the body, or
+    // turned the wrong way, n' would turn with the roll as well. The window's allowance is capped at the arm times
+    // the rate across the nose now and its largest: 2 x arm x 1 rad/s. Once the turn is over, nothing is left
+    // (under 0.01 m/s): each check starts the nose's change and its |n''| over. No epoch fails in any case.
+    // Within 5 %: |n''| is the peak of the nose's turn tracked in float over a check's steps, and the libm under it
+    // moves that peak -- this Mac's to within 2 %, CI's Linux runner's up to 3.1 % on two of the 18 epochs. A wrong
+    // arm, a body-frame or conjugate n', a pad on half the age or on the age without the pair lag all miss by 19 %
+    // or more.
+    const double rn = std::sqrt(kGoblinAnt[0] * kGoblinAnt[0] + kGoblinAnt[1] * kGoblinAnt[1]
+                                + kGoblinAnt[2] * kGoblinAnt[2]);
+    const double turn = 2.0 * std::sin(0.05) + 2.0 * 0.055;
+    struct Case
+    {
+        const double* r;
+        bool mag;
+        double arm;
+        const char* what;
+    };
+    for (const Case& c : {Case{nullptr, false, 0.3, "unknown"},
+                          Case{kGoblinAnt, true, 0.05 + 2.0 * std::sin(5.0 * kPi / 180.0) * rn,
+                               "known, the magnetometer's heading"},
+                          Case{kGoblinAnt, false, rn + 0.05, "known, the heading unset"}})
+    {
+        SCOPED_TRACE(c.what);
+        const TenRun run = flyTen(leverCfg(1, c.r), pitchingOver(1.0, kGoblinAnt, c.mag));
+        EXPECT_EQ(run.st.dv_hdg_unset, c.r != nullptr && c.mag ? 0 : 1);
+        EXPECT_EQ(run.st.dv_epoch_fails, 0u);
+        int steady = 0, after = 0;
+        for (const ClosedEpoch& e : run.eps)
+        {
+            // the turn steady across the whole interval: out 6.6-7.4 s, back 7.6-8.4 s
+            if ((e.t > 6.55 && e.t < 7.45) || (e.t > 7.55 && e.t < 8.45))
+            {
+                EXPECT_NEAR(e.dv_lever_mps, c.arm * turn, 0.05 * c.arm * turn) << e.t;
+                EXPECT_NEAR(e.dv_lever_win_mps, 2.0 * c.arm, 0.01 * c.arm) << e.t;
+                steady++;
+            }
+            else if (e.t > 8.55)
+            {
+                EXPECT_LT(e.dv_lever_mps, 0.01f) << e.t;
+                after++;
+            }
+        }
+        EXPECT_EQ(steady, 18);
+        EXPECT_EQ(after, 14);
+    }
+}
+
+TEST(RawGnssShadowV9, InPairsTheNoseLeversPadReachesBackToThePairsMiddle)
+{
+    // The pitch-over above with every epoch handed over in pairs (the bench's Doppler pairs): each epoch's Dopplers
+    // are the antenna's 25 ms before its tag, and the filter takes them there (rr_pair_lag_s). The pad covers what
+    // the nose's turn adds between the check's step and the Dopplers' instant, now 55 + 25 ms back: the allowance
+    // is the arm times 2 sin(0.05) + 2 x 0.080 x 1 rad/s = 0.25996 rad/s (the epoch's own age alone, 0.055 s,
+    // would leave it at 0.20996: 19 % short). The window's is unchanged, and no epoch fails in any case. Within 5 %,
+    // as the test above says why.
+    const double rn = std::sqrt(kGoblinAnt[0] * kGoblinAnt[0] + kGoblinAnt[1] * kGoblinAnt[1]
+                                + kGoblinAnt[2] * kGoblinAnt[2]);
+    const double turn = 2.0 * std::sin(0.05) + 2.0 * (0.055 + 0.025);
+    struct Case
+    {
+        const double* r;
+        bool mag;
+        double arm;
+        const char* what;
+    };
+    for (const Case& c : {Case{nullptr, false, 0.3, "unknown"},
+                          Case{kGoblinAnt, true, 0.05 + 2.0 * std::sin(5.0 * kPi / 180.0) * rn,
+                               "known, the magnetometer's heading"},
+                          Case{kGoblinAnt, false, rn + 0.05, "known, the heading unset"}})
+    {
+        SCOPED_TRACE(c.what);
+        RawGnssShadow::Config cfg = leverCfg(1, c.r);
+        cfg.ekf.rr_pair_lag_s = 0.025;    // the profile's rr_pair_avg, applied
+        TenFlight fl = pitchingOver(1.0, kGoblinAnt, c.mag);
+        fl.pair_lag_ms = 25;
+        const TenRun run = flyTen(cfg, fl);
+        EXPECT_EQ(run.st.dv_epoch_fails, 0u);
+        int steady = 0;
+        for (const ClosedEpoch& e : run.eps)
+            if ((e.t > 6.55 && e.t < 7.45) || (e.t > 7.55 && e.t < 8.45))
+            {
+                EXPECT_NEAR(e.dv_lever_mps, c.arm * turn, 0.05 * c.arm * turn) << e.t;
+                EXPECT_NEAR(e.dv_lever_win_mps, 2.0 * c.arm, 0.01 * c.arm) << e.t;
+                steady++;
+            }
+        EXPECT_EQ(steady, 18);
+    }
+}
+
+TEST(RawGnssShadowV9, TheNoseLeversWindowIsCappedAtTheArmTimesTheRateAcrossTheNose)
+{
+    // A coast rolling at 1 rev/s and weathercocking (0.3 rad/s at 2 Hz from 6 s, about body y as it stood before the
+    // roll), the offset unknown, the Goblin's antenna in the truth, on the nose's own turn. The nose's rate changes
+    // fast: each epoch's lever allowance is 0.13-0.23 m/s, which summed over the 1 s window would allow about
+    // 1.8 m/s. But the antenna's velocity change over the window telescopes, so the window's allowance is capped at
+    // the arm times the rate across the nose now and its largest: 0.3 m x 0.6 rad/s = 0.18 m/s (on the whole rate,
+    // mode 0, 3.8 m/s with the roll in it). So slow12 through it fails on the window's sum alone, from about 7.2 s,
+    // where the epoch's own test passes it and the whole rate fails nothing; without the ramp nothing fails either
+    // way.
+    TenFlight fl = pitchingOver(1.0, kGoblinAnt, false);
+    fl.turn_t = -1.0;                    // no pitch-over
+    fl.wc_t = 6.0;
+    fl.wc_s = 4.0;
+    fl.wc_rps = 0.3;
+    const TenRun quiet = flyTen(leverCfg(1, nullptr), fl), whole = flyTen(leverCfg(0, nullptr), fl);
+    EXPECT_EQ(quiet.st.dv_epoch_fails, 0u);
+    EXPECT_EQ(whole.st.dv_epoch_fails, 0u);
+    double sum = 0.0;
+    int n = 0;
+    for (const ClosedEpoch& e : quiet.eps)
+        if (e.t > 6.45)
+        {
+            EXPECT_LE(e.dv_lever_win_mps, 0.3 * 0.6 + 1e-3) << e.t;
+            sum += e.dv_lever_mps;
+            n++;
+        }
+    ASSERT_EQ(n, 35);
+    EXPECT_GT(sum / n, 0.15);
+    for (const ClosedEpoch& e : whole.eps)
+        if (e.t > 6.45)
+            EXPECT_GT(e.dv_lever_win_mps, 3.5f) << e.t;
+    const TenRun nose = flyTen(leverCfg(1, nullptr), ramped(fl));
+    EXPECT_GE(nose.st.dv_epoch_win_fails, 10u);
+    EXPECT_EQ(nose.st.dv_epoch_fails, nose.st.dv_epoch_win_fails);
+    EXPECT_GT(nose.st.dv_held_epochs, 10u);
+    EXPECT_EQ(flyTen(leverCfg(0, nullptr), ramped(fl)).st.dv_epoch_fails, 0u);
+}
+
+// ---- the satellite cap's governor (CapGovernor.h) in the filter's loop
+
+namespace
+{
+
+// The pad, and a launch if asked (3 g along the nose of an upright body for
+// 2 s, then a weightless coast), at 10 Hz through a GNSS task's stage as the
+// flight computer runs them (external_build): each epoch offered to the stage
+// at the filter's navigation state when it is handed over, delay_ms(t) after
+// its tag, and the built epoch handed to the filter; lose(t): an epoch never
+// handed over (the driver's queue full). The sky is the golden fixture's 15,
+// so the governor's cap is set to bind on it: 8 to 12.
+struct GovFlight
+{
+    double t_end = 24.0;
+    double launch_t = -1.0;
+    std::function<double(double)> delay_ms = [](double) { return 50.0; };
+    std::function<bool(double)> lose = [](double) { return false; };
+};
+
+struct GovRun
+{
+    std::vector<double> t;        // each epoch handed over: its tag (s of the flight)
+    std::vector<int> nav_cap;     //   the cap the navigation state carried then
+    std::vector<int> built;       //   the satellites the stage built of it
+    std::vector<uint64_t> state;  // stateHash every step
+    std::vector<uint64_t> state2; //   and of the second filter, where there is one
+    gnss_raw::CapGovernor::Stats gov;
+};
+
+RawGnssShadow::Config govCfg(int floor = 8, int ceiling = 12)
+{
+    RawGnssShadow::Config c = mosaicCfg();
+    c.external_build = true;
+    c.sat_cap = floor;
+    c.sat_cap_max = ceiling;
+    return c;
+}
+
+// Each epoch handed over goes to every shadow in shs, built once by the
+// stage at shs[0]'s navigation state (the others see the same epochs)
+GovRun flyGov(const std::vector<RawGnssShadow*>& shs, const GovFlight& fl)
+{
+    RawGnssShadow& sh = *shs[0];
+    double lat, lon, h;
+    ecef_to_geo(kGoldenRmRx, &lat, &lon, &h);
+    double r0[3];
+    geo_to_ecef(lat, lon, h, r0);
+    const double sl = std::sin(lat), cl = std::cos(lat), so = std::sin(lon), co = std::cos(lon);
+    auto nedToEcefVec = [&](const double n[3], double o[3]) {
+        const double e[3] = {n[1], n[0], -n[2]};
+        o[0] = -so * e[0] - sl * co * e[1] + cl * co * e[2];
+        o[1] = co * e[0] - sl * so * e[1] + cl * so * e[2];
+        o[2] = cl * e[1] + sl * e[2];
+    };
+    gnss_raw::RawGnssMeasStage stage(RawGnssShadow::stageConfig(sh.config()));
+    for (int i = 0; i < kGoldenRmEphN; ++i)
+        stage.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+    SynthSky sky(sh.config().meas);
+    const Mat3 Ct = leaningBody(0.0, 70.0);
+    ShadowSeed seed = padSeed(kT0, lat, lon, h);
+    quatOf(Ct, seed.quat);
+    for (RawGnssShadow* s : shs)
+        s->onSeed(seed);
+    const double tow0 = kGoldenRmTowA, dt = 0.005;
+    const double burnout_t = fl.launch_t + 2.0;
+    double p_ned[3] = {}, v_ned[3] = {};
+    struct Due
+    {
+        TimedRawEpoch e;
+        int64_t hand_us;
+        double t;
+    };
+    std::vector<Due> due;
+    GovRun run;
+    gnss_raw::BuiltEpoch built;
+    for (int step = 1; step * dt <= fl.t_end + 1e-9; ++step)
+    {
+        const double t = step * dt;
+        const bool boost = fl.launch_t >= 0.0 && t > fl.launch_t && t <= burnout_t;
+        const bool flying = fl.launch_t >= 0.0 && t > fl.launch_t;
+        double f_b[3] = {0.0, 0.0, 0.0}, a_n[3] = {0.0, 0.0, 0.0};
+        if (flying)
+        {
+            f_b[0] = boost ? 3.0 * kG : 0.0;
+            double f_n[3];
+            mat3Vec(Ct, f_b, f_n);
+            for (int i = 0; i < 3; ++i)
+                a_n[i] = f_n[i] + (i == 2 ? kG : 0.0);
+        }
+        else
+        {
+            const double up[3] = {0, 0, -kG};
+            Mat3 CtT{};
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    CtT.m[i][j] = Ct.m[j][i];
+            mat3Vec(CtT, up, f_b);
+        }
+        for (int i = 0; i < 3; ++i)
+        {
+            p_ned[i] += v_ned[i] * dt + 0.5 * a_n[i] * dt * dt;
+            v_ned[i] += a_n[i] * dt;
+        }
+        const int64_t t64 = kT0 + static_cast<int64_t>(std::llround(t * 1e6));
+        ShadowImu s{};
+        s.time_us = static_cast<uint32_t>(t64);
+        for (int i = 0; i < 3; ++i)
+            s.acc[i] = float(f_b[i]);
+        s.flags = !flying ? gnss_raw::kShadowLevel : (t >= fl.launch_t + 0.1 ? gnss_raw::kShadowInFlight : 0);
+        for (RawGnssShadow* x : shs)
+            x->onImu(s, t64);
+        run.state.push_back(stateHash(sh.filter()));
+        if (shs.size() > 1)
+            run.state2.push_back(stateHash(shs[1]->filter()));
+        if (step % 20 == 0)
+        {
+            double dr[3], r[3], ve[3];
+            nedToEcefVec(p_ned, dr);
+            nedToEcefVec(v_ned, ve);
+            for (int i = 0; i < 3; ++i)
+                r[i] = r0[i] + dr[i];
+            Due d;
+            d.e.epoch = sky.epoch(tow0 + std::round(t * 10.0) / 10.0, r, ve);
+            d.e.mcu_us = t64;
+            d.e.gps_week = kGoldenWeek;
+            d.hand_us = t64 + static_cast<int64_t>(std::llround(fl.delay_ms(t) * 1000.0));
+            d.t = t;
+            if (!fl.lose(t))
+                due.push_back(d);
+        }
+        for (size_t k = 0; k < due.size();)
+        {
+            if (t64 < due[k].hand_us)
+            {
+                ++k;
+                continue;
+            }
+            gnss_raw::ShadowNav nav;
+            sh.navState(nav);
+            if (stage.offer(due[k].e, nav, built))
+            {
+                for (RawGnssShadow* x : shs)
+                    x->onBuilt(built);
+                run.t.push_back(due[k].t);
+                run.nav_cap.push_back(nav.sat_cap);
+                run.built.push_back(built.n);
+            }
+            for (RawGnssShadow* x : shs)
+                x->onMeasStats(stage.stats());
+            due.erase(due.begin() + static_cast<long>(k));
+        }
+    }
+    run.gov = sh.capGovernor().stats();
+    return run;
+}
+
+GovRun flyGov(const RawGnssShadow::Config& cfg, const GovFlight& fl)
+{
+    RawGnssShadow sh(cfg);
+    return flyGov({&sh}, fl);
+}
+
+// The cap the navigation state carried at the last epoch handed over at or before t
+int capAt(const GovRun& r, double t)
+{
+    int c = -1;
+    for (size_t i = 0; i < r.t.size() && r.t[i] <= t + 1e-9; ++i)
+        c = r.nav_cap[i];
+    return c;
+}
+
+}  // namespace
+
+TEST(RawGnssShadowV9, TheCapRisesOnThePadHoldsTheFloorThroughTheBoostAndClimbsAfter)
+{
+    // Epochs handed over 50 ms after their tags: every one closes well under
+    // the raise age. On the pad the cap climbs from 8 to 12, a satellite every
+    // 1.2 s; from the launch to burnout + the screen's 1.5 s window + the 2 s
+    // hold it is 8; then it climbs again. The stage builds what it is told.
+    GovFlight fl;
+    fl.launch_t = 12.0;
+    fl.t_end = 24.0;
+    const GovRun r = flyGov(govCfg(), fl);
+    ASSERT_GT(r.t.size(), 200u);
+    EXPECT_EQ(capAt(r, 2.0) >= 8 && capAt(r, 2.0) <= 9, true) << capAt(r, 2.0);
+    EXPECT_EQ(capAt(r, 9.0), 12);
+    EXPECT_EQ(capAt(r, 11.9), 12);
+    for (size_t i = 0; i < r.t.size(); ++i)
+    {
+        if (r.t[i] > 12.0 + 0.01 && r.t[i] < 14.0 + 1.5 + 2.0 - 0.05)
+            EXPECT_EQ(r.nav_cap[i], 8) << "t " << r.t[i];
+        if (r.nav_cap[i] > 0)
+            EXPECT_EQ(r.built[i], std::min(r.nav_cap[i], 15)) << "t " << r.t[i];
+        EXPECT_GE(r.nav_cap[i], 8);
+        EXPECT_LE(r.nav_cap[i], 12);
+    }
+    EXPECT_GT(capAt(r, 19.0), 8);
+    EXPECT_EQ(capAt(r, 23.9), 12);
+    EXPECT_EQ(r.gov.cuts + r.gov.floors, 0u);
+    EXPECT_EQ(r.gov.boosts, 1u);
+    EXPECT_EQ(r.gov.raises, 8u);
+}
+
+TEST(RawGnssShadowV9, TheCapIsCutWhenTheEpochsComeLateAndFloorsOnOneTooOldOrLost)
+{
+    // Epochs handed over 170 ms late from 10 s (a lag that stays, past the
+    // 160 ms cut): cut two satellites at a time to the floor
+    {
+        GovFlight fl;
+        fl.t_end = 13.0;
+        fl.delay_ms = [](double t) { return t >= 10.0 ? 170.0 : 50.0; };
+        const GovRun r = flyGov(govCfg(), fl);
+        EXPECT_EQ(capAt(r, 9.9), 12);
+        EXPECT_EQ(capAt(r, 12.9), 8);
+        EXPECT_EQ(r.gov.cuts, 2u);
+        EXPECT_EQ(r.gov.floors, 0u);
+    }
+    // one handed over 205 ms late: its fusion passes the at-once point, the floor
+    {
+        GovFlight fl;
+        fl.t_end = 11.0;
+        fl.delay_ms = [](double t) { return std::fabs(t - 10.0) < 0.01 ? 205.0 : 50.0; };
+        const GovRun r = flyGov(govCfg(), fl);
+        EXPECT_EQ(capAt(r, 9.95), 12);
+        EXPECT_EQ(capAt(r, 10.95), 8);
+        EXPECT_EQ(r.gov.floors, 1u);
+        EXPECT_EQ(r.gov.late, 1u);
+    }
+    // one never handed over: lost on the way, the floor
+    {
+        GovFlight fl;
+        fl.t_end = 11.0;
+        fl.lose = [](double t) { return std::fabs(t - 10.0) < 0.01; };
+        const GovRun r = flyGov(govCfg(), fl);
+        EXPECT_EQ(capAt(r, 9.95), 12);
+        EXPECT_EQ(capAt(r, 10.95), 8);
+        EXPECT_EQ(r.gov.lost, 1u);
+        EXPECT_EQ(r.gov.floors, 1u);
+    }
+    // one handed over too late to fuse (past max_epoch_age_s): dropped stale, the floor
+    {
+        GovFlight fl;
+        fl.t_end = 11.0;
+        fl.delay_ms = [](double t) { return std::fabs(t - 10.0) < 0.01 ? 320.0 : 50.0; };
+        RawGnssShadow sh(govCfg());
+        const GovRun r = flyGov({&sh}, fl);
+        EXPECT_EQ(capAt(r, 9.95), 12);
+        EXPECT_EQ(capAt(r, 10.95), 8);
+        EXPECT_GE(sh.stats().epochs_stale, 1u);
+        EXPECT_GE(r.gov.lost, 1u);
+    }
+}
+
+TEST(RawGnssShadowV9, TheBoostScreenOnEveryEpochKeepsTheCapAtTheFloor)
+{
+    // The CPU ladder's bench forces the screen on every epoch before the
+    // apogee call (boost_screen_g 0): the governor reads each as the boost
+    // and never raises -- that bench measures the floor's cost
+    RawGnssShadow::Config c = govCfg();
+    c.boost_screen = RawGnssShadow::kScreenOn;
+    c.boost_screen_g = 0.0;
+    GovFlight fl;
+    fl.t_end = 12.0;
+    const GovRun r = flyGov(c, fl);
+    ASSERT_GT(r.t.size(), 100u);
+    for (size_t i = 0; i < r.t.size(); ++i)
+        EXPECT_EQ(r.nav_cap[i], 8) << "t " << r.t[i];
+    EXPECT_EQ(r.gov.raises, 0u);
+}
+
+TEST(RawGnssShadowV9, TheGovernorNeverTouchesTheFilter)
+{
+    // Two filters fed the same built epochs, one with the governor (whose
+    // cap the stage builds with) and one without: their states are the same
+    // at every step -- the governor only tells the stage how many to build --
+    // through the pad's climb, a late stretch, a lost epoch, the boost and
+    // the coast; so is all of their navigation state but the cap. (Its one
+    // other act, cutting an epoch built above the floor whose job starts in
+    // the boost to the floor's, has nothing to cut here: each epoch is built
+    // as it is handed over. The test after this one has the pipeline.)
+    GovFlight fl;
+    fl.launch_t = 12.0;
+    fl.t_end = 20.0;
+    fl.delay_ms = [](double t) { return t >= 6.0 && t < 7.0 ? 170.0 : 50.0; };
+    fl.lose = [](double t) { return std::fabs(t - 9.0) < 0.01; };
+    RawGnssShadow on(govCfg()), off(govCfg(8, 0));
+    const GovRun r = flyGov({&on, &off}, fl);
+    ASSERT_GT(r.t.size(), 150u);
+    ASSERT_EQ(r.state.size(), r.state2.size());
+    EXPECT_EQ(r.state, r.state2);
+    EXPECT_GT(r.gov.raises, 0u);
+    EXPECT_GT(r.gov.cuts + r.gov.floors, 0u);
+    EXPECT_EQ(r.gov.trims, 0u);
+    EXPECT_EQ(on.stats().epochs_applied, off.stats().epochs_applied);
+    EXPECT_EQ(on.stats().epochs_stale, off.stats().epochs_stale);
+    gnss_raw::ShadowNav na, nb;
+    on.navState(na);
+    off.navState(nb);
+    EXPECT_EQ(nb.sat_cap, 0);
+    EXPECT_GE(na.sat_cap, 8);
+    EXPECT_EQ(na.time_us, nb.time_us);
+    EXPECT_EQ(std::memcmp(na.lla, nb.lla, sizeof(na.lla)), 0);
+    EXPECT_EQ(std::memcmp(na.vel_ned, nb.vel_ned, sizeof(na.vel_ned)), 0);
+    EXPECT_EQ(std::memcmp(na.quat, nb.quat, sizeof(na.quat)), 0);
+    EXPECT_EQ(std::memcmp(na.accel_bias, nb.accel_bias, sizeof(na.accel_bias)), 0);
+    EXPECT_EQ(std::memcmp(na.gyro_bias, nb.gyro_bias, sizeof(na.gyro_bias)), 0);
+    EXPECT_EQ(std::memcmp(na.var, nb.var, sizeof(na.var)), 0);
+    EXPECT_EQ(na.running, nb.running);
+    EXPECT_EQ(na.gnss_aided, nb.gnss_aided);
+    EXPECT_EQ(na.baro_aided, nb.baro_aided);
+    EXPECT_EQ(na.in_flight, nb.in_flight);
+    EXPECT_EQ(na.epochs, nb.epochs);
+}
+
+namespace
+{
+
+// The launch pipeline (the review of 4aa08dd7): the GNSS task builds an
+// epoch some 20 ms after its tag at the navigation state's cap, and the
+// filter starts its job after the build and the epoch before it close (here
+// 80 ms after the tag). An ignition at 10.05 s falls between the build and
+// the job of the epoch tagged 10.0. prelaunch_t: the ticks carry
+// kShadowPrelaunch on the pad from then (< 0: never, a launch from READY).
+struct PipeClose
+{
+    uint32_t tow_ms;
+    int meas;
+    bool screened;
+};
+
+struct PipeRun
+{
+    int probe_cap = -1, probe_n = -1;      // the epoch tagged 10.0: the cap it was built with, its satellites
+    int cap_at_4_9 = -1;                   // the navigation state's cap at 4.9 s
+    int gov_at_probe_hand = -1;            // the governor's cap when the probe was handed over
+    uint32_t probe_tow_ms = 0;
+    std::vector<PipeClose> closed;         // each job closed (one a step here)
+    gnss_raw::CapGovernor::Stats gov;
+    uint32_t epochs_applied = 0;
+    float vel_end[3] = {};
+};
+
+// mod: the config's other switches (the bench integration's); paired: every epoch handed over in pairs
+PipeRun flyPipe(double prelaunch_t, const std::function<void(RawGnssShadow::Config&)>& mod = nullptr,
+                bool paired = false)
+{
+    RawGnssShadow::Config cfg = govCfg(8, 12);
+    cfg.boost_screen = RawGnssShadow::kScreenOn;
+    cfg.boost_screen_g = 2.0;
+    if (mod)
+        mod(cfg);
+    std::unique_ptr<RawGnssShadow> shp(new RawGnssShadow(cfg));
+    RawGnssShadow& sh = *shp;
+    double lat, lon, h;
+    ecef_to_geo(kGoldenRmRx, &lat, &lon, &h);
+    double r0[3];
+    geo_to_ecef(lat, lon, h, r0);
+    gnss_raw::RawGnssMeasStage stage(RawGnssShadow::stageConfig(sh.config()));
+    for (int i = 0; i < kGoldenRmEphN; ++i)
+        stage.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+    SynthSky sky(sh.config().meas);
+    const Mat3 Ct = leaningBody(0.0, 70.0);
+    ShadowSeed seed = padSeed(kT0, lat, lon, h);
+    quatOf(Ct, seed.quat);
+    sh.onSeed(seed);
+    const double tow0 = kGoldenRmTowA, dt = 0.005;
+    const double launch_t = 10.05;
+    struct Pend
+    {
+        TimedRawEpoch e;
+        int64_t build_us = 0, hand_us = 0;
+        double tag = 0.0;
+        bool built = false;
+        int nav_cap = 0;
+        gnss_raw::BuiltEpoch b;
+    };
+    std::vector<std::unique_ptr<Pend>> q;
+    PipeRun run;
+    run.probe_tow_ms = static_cast<uint32_t>(std::llround(std::fmod(tow0 + 10.0, 604800.0) * 1000.0));
+    uint32_t last_tow_ms = 0, screened = 0;
+    for (int step = 1; step * dt <= 12.0 + 1e-9; ++step)
+    {
+        const double t = step * dt;
+        const bool flying = t > launch_t;
+        double f_b[3] = {0.0, 0.0, 0.0};
+        if (flying)
+            f_b[0] = 3.0 * kG;
+        else
+        {
+            const double up[3] = {0, 0, -kG};
+            Mat3 CtT{};
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    CtT.m[i][j] = Ct.m[j][i];
+            mat3Vec(CtT, up, f_b);
+        }
+        const int64_t t64 = kT0 + static_cast<int64_t>(std::llround(t * 1e6));
+        ShadowImu s{};
+        s.time_us = static_cast<uint32_t>(t64);
+        for (int i = 0; i < 3; ++i)
+            s.acc[i] = float(f_b[i]);
+        s.flags = !flying ? gnss_raw::kShadowLevel : (t >= launch_t + 0.1 ? gnss_raw::kShadowInFlight : 0);
+        if (prelaunch_t >= 0.0 && t >= prelaunch_t && !(s.flags & gnss_raw::kShadowInFlight))
+            s.flags |= gnss_raw::kShadowPrelaunch;
+        sh.onImu(s, t64);
+        if (sh.stats().last_tow_ms != last_tow_ms)
+        {
+            last_tow_ms = sh.stats().last_tow_ms;
+            run.closed.push_back({last_tow_ms, sh.stats().last_meas, sh.stats().boost_screened != screened});
+            screened = sh.stats().boost_screened;
+        }
+        if (step % 20 == 0)
+        {
+            const double ve[3] = {0, 0, 0};
+            std::unique_ptr<Pend> p(new Pend());
+            p->e.epoch = sky.epoch(tow0 + std::round(t * 10.0) / 10.0, r0, ve);
+            p->e.mcu_us = t64;
+            p->e.gps_week = kGoldenWeek;
+            p->e.rr_paired = paired ? 1 : 0;
+            p->build_us = t64 + 20000;
+            p->hand_us = t64 + 80000;
+            p->tag = t;
+            q.push_back(std::move(p));
+        }
+        for (size_t k = 0; k < q.size();)
+        {
+            Pend& p = *q[k];
+            if (!p.built && t64 >= p.build_us)
+            {
+                gnss_raw::ShadowNav nav;
+                sh.navState(nav);
+                p.built = stage.offer(p.e, nav, p.b);
+                p.nav_cap = nav.sat_cap;
+                sh.onMeasStats(stage.stats());
+                if (std::fabs(p.tag - 4.9) < 1e-6)
+                    run.cap_at_4_9 = nav.sat_cap;
+            }
+            if (p.built && t64 >= p.hand_us)
+            {
+                if (std::fabs(p.tag - 10.0) < 1e-6)
+                {
+                    run.probe_cap = p.nav_cap;
+                    run.probe_n = p.b.n;
+                    run.gov_at_probe_hand = sh.capGovernor().cap();
+                }
+                sh.onBuilt(p.b);
+                q.erase(q.begin() + static_cast<long>(k));
+                continue;
+            }
+            ++k;
+        }
+    }
+    run.gov = sh.capGovernor().stats();
+    run.epochs_applied = sh.stats().epochs_applied;
+    for (int i = 0; i < 3; ++i)
+        run.vel_end[i] = sh.filter().velNed()[i];
+    return run;
+}
+
+}  // namespace
+
+// A launch from READY (no PRELAUNCH: #382's gates unmet): the epoch tagged
+// 10.0 is built at the pad's cap (12) and its job starts after the IMU passed
+// boost_screen_g; the boost screen judges it -- the scratch copy and every
+// satellite twice, at the cap the boost is held at the floor to keep off. The
+// job keeps only the floor's (8) satellites, and no screened job has more.
+TEST(RawGnssShadowV9, AnEpochBuiltAtThePadsCapWhoseJobStartsInTheBoostIsWorkedAsTheFloors)
+{
+    const PipeRun r = flyPipe(-1.0);
+    EXPECT_EQ(r.probe_cap, 12);               // built at the pad's cap
+    EXPECT_EQ(r.probe_n, 12);
+    EXPECT_EQ(r.gov_at_probe_hand, 8);        // the IMU's boost sign floored the governor already
+    bool found = false;
+    size_t n_screened = 0;
+    for (const PipeClose& c : r.closed)
+    {
+        if (c.tow_ms == r.probe_tow_ms)
+        {
+            found = true;
+            EXPECT_TRUE(c.screened);
+            EXPECT_LE(c.meas, 8);             // the screened job: the floor's satellites
+            EXPECT_GE(c.meas, 4);
+        }
+        if (c.screened)
+        {
+            n_screened++;
+            EXPECT_LE(c.meas, 8) << "tow_ms " << c.tow_ms;   // no screened job above the floor
+        }
+    }
+    EXPECT_TRUE(found);
+    EXPECT_GE(n_screened, 5u);
+    EXPECT_EQ(r.gov.trims, 1u);
+    EXPECT_EQ(r.gov.trimmed, 4u);
+}
+
+// The same launch from PRELAUNCH (from 5 s): the cap climbed in READY, and
+// the pad holds the floor from PRELAUNCH, so the epochs built for the
+// launch's first jobs are the floor's -- nothing to cut
+TEST(RawGnssShadowV9, PrelaunchHoldsTheFloorSoTheLaunchsFirstEpochsAreBuiltAtIt)
+{
+    const PipeRun r = flyPipe(5.0);
+    EXPECT_GT(r.cap_at_4_9, 8);               // READY: climbing
+    EXPECT_EQ(r.probe_cap, 8);                // PRELAUNCH: the floor
+    EXPECT_EQ(r.probe_n, 8);
+    for (const PipeClose& c : r.closed)
+        if (c.screened)
+            EXPECT_LE(c.meas, 8) << "tow_ms " << c.tow_ms;
+    EXPECT_EQ(r.gov.trims, 0u);
+    EXPECT_EQ(r.gov.boosts, 1u);              // one hold, from PRELAUNCH through the boost
+}
+
+// The same launch pipeline with the bench integration's other three
+// switches on too (exp/v9-moredata-bench): the cheaper build in the GNSS
+// task, the shared geometry with the Doppler in float, and every epoch in
+// pairs. The epoch built at the pad's cap is cut to the floor's at its job's
+// start just the same, before any unit takes the epoch's lines of sight or a
+// satellite's range acceleration (neither is taken for a satellite cut), and
+// every job closes with the satellites the governor alone gives it, no
+// screened one above the floor. (Which epochs the screen drops can differ:
+// the synthetic sky stands still through the boost, and the pairs take its
+// Dopplers 25 ms earlier.)
+TEST(RawGnssShadowV9, TheCutToTheFloorComposesWithTheCheaperBuildTheSharedGeometryAndThePairs)
+{
+    const PipeRun gov = flyPipe(-1.0);
+    const PipeRun all = flyPipe(
+        -1.0,
+        [](RawGnssShadow::Config& c) {
+            c.meas.lite = true;               // the profile's build_lite, applied
+            c.meas.atmo_period_s = 1.0;
+            c.ekf.share_los = true;           // TR_BENCH_RAW_SHARE_LOS 2
+            c.ekf.rr_float = true;
+            c.ekf.rr_pair_lag_s = 0.025;      // the profile's rr_pair_avg, applied
+        },
+        true);
+    EXPECT_EQ(all.probe_cap, 12);
+    EXPECT_EQ(all.probe_n, 12);
+    EXPECT_EQ(all.gov_at_probe_hand, 8);
+    EXPECT_EQ(all.gov.trims, gov.gov.trims);
+    EXPECT_EQ(all.gov.trimmed, gov.gov.trimmed);
+    EXPECT_EQ(all.gov.trims, 1u);
+    EXPECT_EQ(all.gov.trimmed, 4u);
+    EXPECT_EQ(all.gov.boosts, gov.gov.boosts);
+    EXPECT_EQ(all.gov.raises, gov.gov.raises);
+    ASSERT_EQ(all.closed.size(), gov.closed.size());
+    size_t n_screened = 0;
+    for (size_t i = 0; i < all.closed.size(); ++i)
+    {
+        EXPECT_EQ(all.closed[i].tow_ms, gov.closed[i].tow_ms) << i;
+        EXPECT_EQ(all.closed[i].meas, gov.closed[i].meas) << "tow_ms " << all.closed[i].tow_ms;
+        if (all.closed[i].screened)
+        {
+            n_screened++;
+            EXPECT_LE(all.closed[i].meas, 8) << "tow_ms " << all.closed[i].tow_ms;
+        }
+        if (all.closed[i].tow_ms == all.probe_tow_ms)
+            EXPECT_LE(all.closed[i].meas, 8);
+    }
+    EXPECT_GE(n_screened, 5u);
+    EXPECT_GE(all.epochs_applied + 2, gov.epochs_applied);
+    for (int i = 0; i < 3; ++i)
+        EXPECT_TRUE(std::isfinite(all.vel_end[i])) << i;
+}
+
+TEST(RawGnssShadowV9, OffTheNavigationStateCarriesNoCap)
+{
+    // No ceiling (every profile's), or no GNSS task to cap for, or the
+    // Beetle's: the state's cap is 0 and the stage builds with its own
+    GovFlight fl;
+    fl.t_end = 6.0;
+    for (int k = 0; k < 3; ++k)
+    {
+        RawGnssShadow::Config c = govCfg(8, 0);
+        if (k == 1)
+        {
+            c = mosaicCfg();                  // the flight image's: 16, no ceiling
+            c.external_build = true;
+        }
+        if (k == 2)
+        {
+            c = govCfg(8, 12);
+            c.external_build = false;         // the shadow builds its own: no cap to govern
+        }
+        RawGnssShadow sh(c);
+        EXPECT_FALSE(sh.capGovernor().on()) << k;
+        if (k == 2)
+            continue;
+        const GovRun r = flyGov({&sh}, fl);
+        ASSERT_GT(r.t.size(), 30u);
+        for (size_t i = 0; i < r.t.size(); ++i)
+            EXPECT_EQ(r.nav_cap[i], 0) << k;
+    }
+    RawGnssShadow::Config b = primaryCfg();
+    gnss_raw::applyReceiverProfile(gnss_raw::lc86gProfile(), b);
+    b.external_build = true;
+    EXPECT_EQ(b.sat_cap_max, 0);
+    RawGnssShadow beetle(b);
+    EXPECT_FALSE(beetle.capGovernor().on());
 }

@@ -3321,6 +3321,9 @@ static TaskHandle_t raw_meas_task = nullptr;
 // The mosaic-only image: the raw-GNSS filter is its one navigation filter, so
 // whether it started is the boot's to say aloud (setup_fc), not only its log.
 static bool raw_nav_started = false;
+// The Dopplers in pairs set on the driver (startRawShadow, rawPairsStart):
+// the console asks for their counts only then
+static bool raw_pairs_on = false;
 // The ionosphere the GNSS task builds with, chosen by one rule from both of
 // its sources (raw_iono_rule.h): the set a pad calibration brought (NVS, core
 // 1's raw_shadow_link.iono) and the receiver's own GPSIon. The filter's task
@@ -3412,6 +3415,11 @@ static inline void rawShadowPushImu(const EkfIMUData& imu, bool level, bool in_f
     s.flags = (uint8_t)((level ? gnss_raw::kShadowLevel : 0) | (in_flight ? gnss_raw::kShadowInFlight : 0)
                         | (sim ? gnss_raw::kShadowSim : 0) | (landed ? gnss_raw::kShadowLanded : 0)
                         | (apogee ? gnss_raw::kShadowApogee : 0));
+#if TR_RAW_NAV_MOSAIC && !(defined(TR_BENCH_RAW_CAP_PAD) && TR_BENCH_RAW_CAP_PAD)
+    // the satellite cap's governor holds the floor from PRELAUNCH (CapGovernor.h):
+    // the epochs built for the launch's first jobs are the floor's
+    if (rocket_state == PRELAUNCH) s.flags |= gnss_raw::kShadowPrelaunch;
+#endif
     raw_shadow_link.imu.push(s);   // a full ring drops the tick and counts it
 #if TR_RAW_GNSS_PRIMARY
     // and the navigation state the loop reads, brought forward through it
@@ -3662,6 +3670,61 @@ static void rawBenchFilterHooks(gnss_raw::RawGnssShadow& sh)
         sh.reset();
     }
 #endif
+}
+#endif
+
+#if TR_RAW_NAV_MOSAIC
+// The Dopplers in pairs (the profile's rr_pair_avg, set): the driver set to
+// average them (MosaicRawEpoch.h). False where it cannot -- the profile's
+// grid not two of the receiver's epochs, or the driver without its raw
+// outputs or the memory -- and the pairs stay off. A frame of its own, while
+// startRawShadow calls it with them on.
+static __attribute__((noinline)) bool rawPairsStart(const gnss_raw::GnssReceiverProfile& rx)
+{
+    if (!gnss_raw::dopplerPairsFit(rx))
+    {
+        ESP_LOGW(TAG, "[RAWGNSS] Dopplers in pairs need a fused grid of two receiver epochs (%.0f ms, %.0f ms "
+                      "epochs): off", rx.fuse_epoch_period_s * 1000.0, rx.raw_epoch_period_s * 1000.0);
+        return false;
+    }
+    mosaic::MosaicDopplerPairConfig pc;
+    pc.dt_ms = (uint32_t)llround(rx.raw_epoch_period_s * 1000.0);
+    for (int k = 0; k < GNSS_SYS_COUNT; ++k)
+        pc.cn0_min[k] = rx.sig[k].cn0_min_rr;
+    pc.max_diff_mps = rx.rr_pair_max_diff_mps;
+    if (!sensor_collector.setGNSSRawDopplerPairing(pc))
+    {
+        ESP_LOGW(TAG, "[RAWGNSS] Dopplers in pairs: the driver could not (no raw outputs or memory): off");
+        return false;
+    }
+    return true;
+}
+
+// The Dopplers in pairs (the profile's rr_pair_avg; never called with them
+// off) on the [RAWGNSS] console: the epochs in pairs and as they came, each
+// Doppler averaged, left at its epoch's instant or dropped, and what the GNSS
+// poll task spent on them (counts and times since they were turned on). A
+// frame of its own, while the console calls it, not the filter task's every
+// pass.
+static __attribute__((noinline)) void rawPairsConsole()
+{
+    TR_GNSSReceiverMosaicSerial::RawPairStats ps;
+    if (!sensor_collector_hw.getGNSSRawPairStats(ps)) return;
+    const mosaic::MosaicDopplerPairStats& pp = ps.pair;
+    const uint32_t as_came = pp.epochs_no_prev + pp.epochs_jump + pp.epochs_few;
+    ESP_LOGI(TAG, "[RAWGNSS] Doppler pairs: %lu of %lu averaged (largest difference %.2f m/s) | epochs: %lu in pairs, "
+                  "%lu as they came (%lu with none before, %lu at a clock jump, %lu with few pairs; %lu Dopplers at "
+                  "their own instant) | dropped from epochs in pairs: %lu no mate, %lu C/N0, %lu relock, %lu too far "
+                  "apart | poll task: off-grid read %.0f us mean, %lu max (%lu); grid adapt %.0f us mean, %lu max; "
+                  "averaging %lu us max; stack free %lu B",
+             (unsigned long)pp.pairs, (unsigned long)pp.dopplers, (double)pp.diff_max_mps,
+             (unsigned long)(pp.epochs - as_came), (unsigned long)as_came, (unsigned long)pp.epochs_no_prev,
+             (unsigned long)pp.epochs_jump, (unsigned long)pp.epochs_few, (unsigned long)pp.alone_epoch,
+             (unsigned long)pp.alone_mate, (unsigned long)pp.alone_cn0, (unsigned long)pp.alone_lock,
+             (unsigned long)pp.alone_diff, ps.reads ? (double)ps.read_us_sum / (double)ps.reads : 0.0,
+             (unsigned long)ps.read_us_max, (unsigned long)ps.reads,
+             ps.adapts ? (double)ps.adapt_us_sum / (double)ps.adapts : 0.0, (unsigned long)ps.adapt_us_max,
+             (unsigned long)ps.avg_us_max, (unsigned long)sensor_collector_hw.gnssPollStackFree());
 }
 #endif
 
@@ -4122,6 +4185,31 @@ static void rawShadowTask(void*)
                          (unsigned long)st.dv_latch_releases, (unsigned long)st.dv_held_rr,
                          sh.running() ? (double)sh.filter().hdgObsScale() : 1.0, (double)st.rot_max_sigma_mps,
                          (unsigned)(raw_flight_task ? uxTaskGetStackHighWaterMark(raw_flight_task) : 0));
+                if (raw_pairs_on) rawPairsConsole();
+                if (sh.capGovernor().on())
+                {
+                    // The satellite cap's governor (CapGovernor.h; a bench's,
+                    // TR_BENCH_RAW_CAP_MAX): the cap now, its range and the
+                    // oldest epoch over the window, and what moved it since boot
+                    const gnss_raw::CapGovernor& g = sh.capGovernor();
+                    int cap_min = 0, cap_max = 0;
+                    double age_max_s = 0.0;
+                    sh.takeCapWindow(cap_min, cap_max, age_max_s);
+                    ESP_LOGI(TAG, "[RAWGNSS] satellite cap: %d now, %d-%d this window (floor %d, ceiling %d), the "
+                                  "last epoch built with %d | raised %lu, cut %lu, to the floor %lu (epochs late %lu, "
+                                  "lost %lu), floor holds (PRELAUNCH, the boost) %lu%s, epochs cut to the floor in "
+                                  "them %lu (%lu measurements) | epoch age at close: last %.0f ms, oldest this "
+                                  "window %.0f (raised at %.0f or under, cut at %.0f, floor at %.0f) | backoff %.0f s",
+                             g.cap(), cap_min, cap_max, g.config().floor, g.config().ceiling, (int)mst.sat_cap,
+                             (unsigned long)g.stats().raises, (unsigned long)g.stats().cuts,
+                             (unsigned long)g.stats().floors, (unsigned long)g.stats().late,
+                             (unsigned long)g.stats().lost, (unsigned long)g.stats().boosts,
+                             g.boostHeld(sh.filter().time()) ? " (holding now)" : "",
+                             (unsigned long)g.stats().trims, (unsigned long)g.stats().trimmed,
+                             g.stats().last_age_s * 1000.0,
+                             age_max_s * 1000.0, g.raiseAgeS() * 1000.0, g.cutAgeS() * 1000.0,
+                             g.config().hard_age_s * 1000.0, g.backoff());
+                }
             }
 #ifdef TR_BENCH_DV_CHECK
             // the Doppler change check (bench, exp/v9-dvcheck): counts since boot
@@ -4304,6 +4392,13 @@ static void startRawShadow()
     gnss_raw::GnssReceiverProfile rx = gnss_raw::genericProfile();   // UNMEASURED placeholders
 #endif
 #if TR_RAW_NAV_MOSAIC
+    // The image's flight profile (ReceiverProfileApply.h, the owner's 10/24
+    // set): the cheaper epoch build, the epoch's geometry shared with the
+    // Doppler's prediction in float, the Dopplers in pairs, at most 16
+    // satellites with the cap fixed. Before the bench overrides below, so
+    // TR_BENCH_RAW_BUILD_LITE=0, TR_BENCH_RAW_SHARE_LOS=0 and
+    // TR_BENCH_RAW_DOP_AVG=0 build the high-roll-only twin
+    gnss_raw::applyMosaicFlightProfile(rx);
 #ifdef TR_BENCH_RAW_FUSE_MS
     // bench (the CPU ladder, P1): the fused grid, ms of GPS time. The
     // profile's pseudorange period (1 s) must stay a whole number of them,
@@ -4319,6 +4414,66 @@ static void startRawShadow()
     rx.sat_cap = TR_BENCH_RAW_SAT_CAP;
     ESP_LOGW(TAG, "[RAWGNSS] BENCH: at most %d satellites an epoch (TR_BENCH_RAW_SAT_CAP)", rx.sat_cap);
 #endif
+#ifdef TR_BENCH_RAW_BUILD_LITE
+    // bench: the cheaper epoch build (RawMeasBuilder.h, lite) on (1, the
+    // flight profile's) or off (0)
+    static_assert(TR_BENCH_RAW_BUILD_LITE == 0 || TR_BENCH_RAW_BUILD_LITE == 1, "TR_BENCH_RAW_BUILD_LITE is 0 or 1");
+    rx.build_lite = (TR_BENCH_RAW_BUILD_LITE) != 0;
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: the cheaper epoch build %s (TR_BENCH_RAW_BUILD_LITE)", rx.build_lite ? "ON" : "off");
+#endif
+#ifdef TR_BENCH_RAW_SHARE_LOS
+    // bench: an epoch's geometry taken once and shared by its units (1), and
+    // with it the Doppler's prediction in float (2, the flight profile's), or
+    // neither (0) (TR_RawGnssEKF.h share_los, rr_float)
+    static_assert(TR_BENCH_RAW_SHARE_LOS >= 0 && TR_BENCH_RAW_SHARE_LOS <= 2, "TR_BENCH_RAW_SHARE_LOS is 0, 1 or 2");
+    rx.share_los = (TR_BENCH_RAW_SHARE_LOS) >= 1;
+    rx.rr_float = (TR_BENCH_RAW_SHARE_LOS) >= 2;
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: the epoch's geometry %s, the Doppler's prediction in %s (TR_BENCH_RAW_SHARE_LOS)",
+             rx.share_los ? "SHARED by its units" : "per unit", rx.rr_float ? "FLOAT" : "double");
+#endif
+#ifdef TR_BENCH_RAW_DOP_AVG
+    // bench: each grid epoch's Doppler averaged with the receiver's epoch
+    // 50 ms before it (the driver's pairs, MosaicRawEpoch.h), the filter
+    // taking the mean 25 ms before the epoch: on (1, the flight profile's) or
+    // off (0)
+    static_assert(TR_BENCH_RAW_DOP_AVG == 0 || TR_BENCH_RAW_DOP_AVG == 1, "TR_BENCH_RAW_DOP_AVG is 0 or 1");
+    rx.rr_pair_avg = (TR_BENCH_RAW_DOP_AVG) != 0;
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: Dopplers in pairs %s (TR_BENCH_RAW_DOP_AVG)", rx.rr_pair_avg ? "ON" : "off");
+#endif
+#ifdef TR_BENCH_RAW_CAP_MAX
+    // bench (exp/v9-cap-adapt): the satellite cap follows the filter's slack,
+    // from the cap above (the floor) up to this (CapGovernor.h)
+    static_assert(TR_BENCH_RAW_CAP_MAX >= 1 && TR_BENCH_RAW_CAP_MAX <= 48, "TR_BENCH_RAW_CAP_MAX is 1-48");
+    rx.sat_cap_max = TR_BENCH_RAW_CAP_MAX;
+#if defined(TR_BENCH_RAW_CAP_PAD) && TR_BENCH_RAW_CAP_PAD
+    [[maybe_unused]] const char* cap_pad = "climbing in PRELAUNCH too (TR_BENCH_RAW_CAP_PAD)";
+#else
+    [[maybe_unused]] const char* cap_pad = "at the floor from PRELAUNCH";
+#endif
+    if (rx.sat_cap > 0 && rx.sat_cap_max > rx.sat_cap)
+        ESP_LOGW(TAG, "[RAWGNSS] BENCH: the satellite cap follows the filter's slack, %d to %d an epoch "
+                      "(TR_BENCH_RAW_CAP_MAX), %s",
+                 rx.sat_cap, rx.sat_cap_max, cap_pad);
+    else
+        ESP_LOGE(TAG, "[RAWGNSS] BENCH: TR_BENCH_RAW_CAP_MAX %d is not above the cap %d: the cap stays fixed",
+                 rx.sat_cap_max, rx.sat_cap);
+#endif
+#ifdef TR_BENCH_RAW_SLICE_US
+    // bench (exp/v9-cap-adapt): the navigation filter's slice of an epoch's
+    // work a 10 ms step, us (the profile's 2500)
+    static_assert(TR_BENCH_RAW_SLICE_US >= 500 && TR_BENCH_RAW_SLICE_US <= 9000, "TR_BENCH_RAW_SLICE_US is 500-9000");
+    rx.epoch_slice_us = (double)(TR_BENCH_RAW_SLICE_US);
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: an epoch worked %.0f us a step at most (TR_BENCH_RAW_SLICE_US)",
+             rx.epoch_slice_us);
+#endif
+    // The Dopplers in pairs (the profile's rr_pair_avg, the flight profile's
+    // on): the driver is set to average them from this same profile before
+    // the filter is told where their means fall (rr_pair_lag_s,
+    // applyReceiverProfile, below), so a filter told so never runs on a
+    // driver that could not
+    const bool raw_pairs_asked = rx.rr_pair_avg;
+    if (rx.rr_pair_avg) rx.rr_pair_avg = rawPairsStart(rx);
+    raw_pairs_on = rx.rr_pair_avg;
 #endif
 #ifdef TR_BENCH_CARRIER_MODE
     // bench: the carrier range rates off (0), observed (1) or fused (2)
@@ -4348,7 +4503,11 @@ static void startRawShadow()
     // and an epoch worked a slice a step, so the state the flight loop reads
     // keeps up while a sky is built and fused (RawGnssShadow::workJob): in one
     // pass 14 satellites held it 40 ms on the rig (r9), a sky of 30 ~90 ms
+#if TR_RAW_NAV_MOSAIC
+    cfg.epoch_slice_us = rx.epoch_slice_us;   // the receiver profile's (2500 us), or the bench's
+#else
     cfg.epoch_slice_us = 2500.0;
+#endif
 #endif
 #if TR_RAW_NAV_MOSAIC
     // The mosaic-only image's one filter (config.h): a restored flight's
@@ -4364,15 +4523,43 @@ static void startRawShadow()
     cfg.heading_gate = config::RAW_HEADING_GATE;
     // The flight safeguards (ReceiverProfileApply.h, one place for the image
     // and tools/raw_replay's --receiver mosaic): the Doppler change check,
-    // GNSS's heading gain by how well the moment observes it, and the turning
-    // body's Doppler allowance. Each fails toward unaided, and none needs the
-    // antenna's offset. The bench overrides below come after.
+    // GNSS's heading gain by how well the moment observes it, the turning
+    // body's Doppler allowance, and the spinning body's (the exact attitude
+    // transition, the change check's lever on the nose's own turn, the
+    // carrier wind-up taken off each Doppler). None needs the antenna's
+    // offset. The bench overrides below come after. The line ends with the
+    // flight profile's epoch settings as the filter took them above, and says
+    // when a bench define set any of them (its BENCH line says how).
     gnss_raw::applyMosaicFlightSafeguards(cfg);
+#if defined(TR_BENCH_RAW_BUILD_LITE) || defined(TR_BENCH_RAW_SHARE_LOS) || defined(TR_BENCH_RAW_DOP_AVG) || \
+    defined(TR_BENCH_RAW_SAT_CAP) || defined(TR_BENCH_RAW_CAP_MAX)
+    const char* epochs_by = "BENCH defines, see the BENCH lines";
+#else
+    const char* epochs_by = "the flight profile";
+#endif
+    // The cap as the GNSS task's stage will build to: none (0: every
+    // satellite), fixed, or governed between it and sat_cap_max -- governed
+    // only where CapGovernor::on() says so (a cap, and a ceiling above it;
+    // the stage builds every epoch here, external_build below)
+    gnss_raw::CapGovernor::Config cap_gov;
+    cap_gov.floor = cfg.sat_cap;
+    cap_gov.ceiling = cfg.sat_cap_max;
+    char cap_txt[96];
+    if (cfg.sat_cap <= 0)
+        snprintf(cap_txt, sizeof(cap_txt), "every satellite (no cap)");
+    else if (gnss_raw::CapGovernor(cap_gov).on())
+        snprintf(cap_txt, sizeof(cap_txt),
+                 "at most %d satellites, up to %d while the filter keeps up (the cap governed)", cfg.sat_cap,
+                 (int)cfg.sat_cap_max);
+    else
+        snprintf(cap_txt, sizeof(cap_txt), "at most %d satellites (the cap fixed)", cfg.sat_cap);
     ESP_LOGI(TAG, "[RAWGNSS] flight safeguards: Doppler change check %s (window %.1f s, attitude allowance %.0f deg, "
                   "%.0f deg about the vertical after a launch with no magnetometer heading, epoch %.0f and latch "
                   "%.0f sigmas, %s) | heading share %s (full at %.1f m/s^2 over %.1f s, open past %.1f g within "
                   "%.1f s, %s) | turning body: Dopplers allow %.2f m along the nose and %.2f m across from %.1f "
-                  "rad/s%s",
+                  "rad/s%s | spinning body: attitude transition %s, the change check's lever on %s (radial %.3f m), "
+                  "wind-up %.2f cycles a turn taken off | epochs (%s): the cheaper build %s, the geometry %s with the "
+                  "Doppler's prediction in %s, Dopplers in pairs %s (pair lag %.0f ms), %s",
              cfg.dv_check == gnss_raw::RawGnssShadow::kDvAct
                  ? "ACTING"
                  : (cfg.dv_check == gnss_raw::RawGnssShadow::kDvObserve ? "observing" : "off"),
@@ -4384,7 +4571,13 @@ static void startRawShadow()
              cfg.ekf.hdg_obs_fh_mps2, cfg.ekf.hdg_obs_tau_s, cfg.ekf.hdg_obs_open_g, cfg.ekf.hdg_obs_open_hold_s,
              cfg.heading_obs_scope == gnss_raw::RawGnssShadow::kObsEverywhere ? "everywhere" : "in flight",
              cfg.rot_lever_axial_m, cfg.rot_lever_radial_m, cfg.rot_lever_min_rps,
-             cfg.rot_lever_axial_m > 0.0 || cfg.rot_lever_radial_m > 0.0 ? "" : " (off)");
+             cfg.rot_lever_axial_m > 0.0 || cfg.rot_lever_radial_m > 0.0 ? "" : " (off)",
+             cfg.ekf.att_exact ? "EXACT" : "first order",
+             cfg.dv_lever_mode == 1 ? "the nose's own turn" : "the whole rate", cfg.dv_lever_radial_m, cfg.windup_k,
+             epochs_by, cfg.meas.lite ? "ON" : "off", cfg.ekf.share_los ? "SHARED" : "per unit",
+             cfg.ekf.rr_float ? "FLOAT" : "double",
+             cfg.ekf.rr_pair_lag_s > 0.0 ? "ON" : (raw_pairs_asked ? "OFF (could not start: see above)" : "off"),
+             cfg.ekf.rr_pair_lag_s * 1000.0, cap_txt);
     // The GNSS antenna's offset where the owner measured it (BLE cmd 81), in
     // the filter's frame by the mounting as it stands (rawAntennaPublish
     // brings a later change): every Doppler and pseudorange predicted at the

@@ -62,6 +62,9 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawMeasBuilder::C
     c.epoch_period_s = fusedEpochPeriod(p);
     c.cr_max_interval_s = p.cr_max_interval_s;
     c.cr_sigma_floor_mps = p.cr_sigma_floor_mps;
+    // the cheaper build: the atmosphere once in each period the code is fused in
+    c.lite = p.build_lite;
+    c.atmo_period_s = p.build_lite ? p.pr_period_s : 0.0;
 }
 
 inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssEKFParams& e)
@@ -77,6 +80,13 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssEKFParams&
     e.p0_clk_drift = p.p0_clk_drift;
     e.p0_isb = p.p0_isb;
     e.rr_lag_s = p.rr_lag_s;
+    e.share_los = p.share_los;
+    e.rr_float = p.rr_float;
+    // the Dopplers in pairs: the mean of two raw_epoch_period_s apart is the
+    // range rate halfway between them, before the fused epoch's tag -- on the
+    // epochs handed over in pairs (TimedRawEpoch::rr_paired); the rest keep
+    // rr_lag_s
+    e.rr_pair_lag_s = p.rr_pair_avg && dopplerPairsFit(p) ? 0.5 * p.raw_epoch_period_s : 0.0;
     e.cr_mode = p.cr_mode;
     e.cr_sigma_per_rev_s = p.cr_sigma_per_rev_s;
     e.cr_common_sigma_mps = p.cr_common_sigma_mps;
@@ -99,7 +109,9 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssEKFParams&
 }
 
 // The one call: the shadow's own settings, its builder's (the GNSS task's
-// stage takes them through stageConfig) and its EKF's.
+// stage takes them through stageConfig) and its EKF's. Not the slice
+// (epoch_slice_us): the navigation filter's start takes it (main.cpp), a
+// shadow works an epoch at once.
 inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssShadow::Config& c)
 {
     c.epoch_latency_s = p.epoch_latency_s;
@@ -109,9 +121,68 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssShadow::Co
     c.rr_dyn_window_s = p.rr_dyn_window_s;
     c.heading_fit_period_s = p.heading_fit_period_s;
     c.sat_cap = p.sat_cap;
+    c.sat_cap_max = static_cast<int16_t>(p.sat_cap_max);
     c.level.min_dt_s = p.level_min_dt_s;
+    c.windup_k = p.windup_k;
+    c.windup_monitor = p.windup_monitor;
     applyReceiverProfile(p, c.meas);
     applyReceiverProfile(p, c.ekf);
+}
+
+// The mosaic-only image's flight profile (the owner's 10/24 set, 2026-10-19),
+// beside its safeguards below: what of the receiver's profile the image flies
+// other than mosaicG5Profile(), which the profile's other users keep (the
+// replay built without the image's safeguards, the simulator's bindings).
+// main.cpp's startRawShadow calls it under TR_RAW_NAV_MOSAIC right after it
+// picks the profile and before any bench override, so each override still
+// turns its own off (TR_BENCH_RAW_BUILD_LITE=0, TR_BENCH_RAW_SHARE_LOS=0,
+// TR_BENCH_RAW_DOP_AVG=0: the high-roll-only twin), and tools/raw_replay's
+// --receiver mosaic calls it in the same place (--build-lite 0,
+// --share-los 0, --rr-pair-avg 0). On the profile, not with the safeguards in
+// the shadow's config: the driver's Doppler pairs are set from the same
+// profile (main.cpp rawPairsStart) before applyReceiverProfile takes the
+// filter's pair lag from it, and a driver that cannot pair turns the
+// profile's off first, so the two never disagree; the bench overrides act on
+// the profile too, before the safeguards.
+//   - The cheaper epoch build (RawMeasBuilder.h, lite): each satellite's
+//     elevation and atmosphere once in each pr_period_s, its orbit solves
+//     spread over their 5 s, the noise on one exp.
+//   - The epoch's geometry taken once and shared by its units, with the
+//     Doppler's prediction in float (TR_RawGnssEKF.h share_los, rr_float: the
+//     bench's TR_BENCH_RAW_SHARE_LOS level 2, which the open-sky bench and the
+//     composition runs flew). With the pairs on, the float prediction acts
+//     only on the epochs handed over as they came: an epoch in pairs has a
+//     lag and takes the double one (RawGnssEKFUpdate.h).
+//   - The Dopplers in pairs (rr_pair_avg): the driver averages each 10 Hz
+//     grid epoch's Doppler with the receiver's epoch 50 ms before it
+//     (MosaicRawEpoch.h), and the filter takes those means 25 ms further back
+//     (rr_pair_lag_s, from dopplerPairsFit's grid).
+//   - At most 16 satellites an epoch, the cap fixed (sat_cap_max 0: the
+//     governor off).
+// The open-sky bench (2026-10-19, all three on at 16 satellites): the epoch's
+// age at close 83 ms median and 101 at most against the high-roll image's 110
+// and 145, the build 5.2 ms, core 0 44 % idle, 99.9 % of the Dopplers
+// averaged (gnss-attitude-study/v9-mosaic-filter-plan/evidence/sat-rate/
+// bench/results_20261019.md). This set against the high-roll-only twin
+// offline (evidence/candidate-1024/report.md, every change from the pairs):
+// the real V9 logs' static velocity noise 25.8-28.8 % lower in the
+// GNSS-only arm and 28.3-29.2 % in the pad arm; Grid B with the magnetometer
+// exact, the boost p90's median 0.43 -> 0.31 deg and the coast's 0.29 ->
+// 0.27; every adopted bar met in every arm and roll rate. Its costs, inside
+// the bars: a fault starting between a pair's halves (the worst boost over
+// unaided +1.76 -> +2.04 deg, 5 -> 9 of 512 runs over 1 deg), a roll of
+// 1.5-5 rev/s with the antenna offset not given, and 10 rev/s or more with
+// it given. On the RF rig (evidence/candidate-1024/rig.md) every clean run
+// met the bars, and the same logs through both filters came out equal on
+// three of four, this set better on the fourth.
+inline void applyMosaicFlightProfile(GnssReceiverProfile& p)
+{
+    p.build_lite = true;
+    p.share_los = true;
+    p.rr_float = true;
+    p.rr_pair_avg = true;
+    p.sat_cap = 16;
+    p.sat_cap_max = 0;
 }
 
 // The mosaic-only image's flight safeguards (wave 3, 2026-10-18), in one place:
@@ -119,10 +190,10 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssShadow::Co
 // and before any bench override, and tools/raw_replay's --receiver mosaic calls
 // it too, so a replay flies the image's settings by construction. The LC86G
 // and generic paths never call it: every field below defaults off, the
-// Beetle's filter. Each one fails toward unaided -- the check holds Dopplers
-// out, the share lowers GNSS's heading gain, the allowance widens the
-// Dopplers' sigma -- and none needs the antenna's offset, which is never
-// measured before a flight (a bound only).
+// Beetle's filter. Each of the first three fails toward unaided -- the check
+// holds Dopplers out, the share lowers GNSS's heading gain, the allowance
+// widens the Dopplers' sigma -- and none needs the antenna's offset, which is
+// never measured before a flight (a bound only).
 //   - The Doppler change check (RawGnssShadow.h), acting in flight only: each
 //     Doppler's change between epochs against the IMU's velocity change along
 //     its line of sight, summed over a leaky 1 s window, the epoch's change
@@ -147,6 +218,30 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssShadow::Co
 //     2 rad/s (the drogue's snatch, not a boost's weathercocking), at any time
 //     (motor ejection can snatch before the apogee call). The hold and the
 //     skip stay off.
+//   - The spinning body (the high-roll port, fc/v9-highroll; the windup
+//     study, 2026-10-18), none needing the offset either:
+//     - the covariance's exact attitude transition (TR_RawGnssEKF.h
+//       att_exact): first order stretched the tilt's variance by
+//       1 + (|w| dt)^2 a step under a roll, x1.5 a second at 1 rev/s and to
+//       its cap within a second at 5, and Doppler noise then turned the
+//       attitude;
+//     - the change check's lever allowance on the nose's own turn
+//       (dv_lever_mode 1), no radial bound: the arm (dv_lever_allow_m, or
+//       with the offset known knownLeverArm's) times the nose's turn, not
+//       the whole rate, which with the roll in it allowed 1.1 m/s over the
+//       window at 0.3 rev/s and 1.9 at 0.5 (the Goblin's past flights held
+//       0.32-0.85 rev/s): by the model no slow ramp was caught there. It
+//       fails toward unaided too: an antenna off the roll axis that nothing
+//       predicts holds the coast's Dopplers at a fast roll;
+//     - the carrier wind-up taken off each Doppler from the gyro's roll
+//       (windup_k 0.99: the Goblin's helix on the 10/16 spin rig). The clock
+//       drift takes the common part either way (no ascent median moved more
+//       than 0.03 deg); taken off, the drift the flight logs stays the
+//       receiver's own. k belongs to the antenna: it lives here, with the
+//       flight images' settings (the V9's and the V8's alike: the V8 is
+//       taken to fly the Goblin's helix too, boresight along the nose), not
+//       in the mosaic's profile, which the replay and the simulator take
+//       too.
 inline void applyMosaicFlightSafeguards(RawGnssShadow::Config& c)
 {
     // the Doppler change check
@@ -194,6 +289,14 @@ inline void applyMosaicFlightSafeguards(RawGnssShadow::Config& c)
     c.antenna_sigma_radial_m = 0.02;
     c.antenna_min_rps = 0.0;
     c.antenna_att_mode = kLeverAttObserve;
+    // the spinning body: the exact attitude transition, the change check's
+    // lever on the nose's own turn with no radial bound, and the Goblin's
+    // helix's carrier wind-up taken off each Doppler (the monitor and Wu's
+    // whole rate stay off)
+    c.ekf.att_exact = true;
+    c.dv_lever_mode = 1;
+    c.dv_lever_radial_m = 0.0;
+    c.windup_k = 0.99;
 }
 
 // The antenna's offset from the IMU, where the rocket's owner measured it: an

@@ -3,10 +3,11 @@
 // is exactly what the builder and the filter flew with before there were
 // profiles -- and the configs' own defaults, so a default-constructed builder
 // or filter is the LC86G's; the stubs are its numbers, marked UNMEASURED; the
-// mosaic-G5's v0, every number pinned; the carrier phase's sigma between its
-// C/N0 anchors. And the Beetle's tripwires: every config's size (a new field
-// must join the comparators), every RawGnssShadow::Config default pinned, the
-// raw epoch's and the ephemeris store's capacities.
+// mosaic-G5's v0, every number pinned, and the mosaic-only image's flight
+// profile and safeguards over it; the carrier phase's sigma between its C/N0
+// anchors. And the Beetle's tripwires: every config's size (a new field must
+// join the comparators), every RawGnssShadow::Config default pinned, the raw
+// epoch's and the ephemeris store's capacities.
 #include <gtest/gtest.h>
 
 #include <cmath>
@@ -73,6 +74,9 @@ void expectSameBuilder(const RawMeasBuilder::Config& a, const RawMeasBuilder::Co
     EXPECT_EQ(a.epoch_period_s, b.epoch_period_s);
     EXPECT_EQ(a.cr_max_interval_s, b.cr_max_interval_s);
     EXPECT_EQ(a.cr_sigma_floor_mps, b.cr_sigma_floor_mps);
+    EXPECT_EQ(a.lite, b.lite);
+    EXPECT_EQ(a.atmo_period_s, b.atmo_period_s);
+    EXPECT_EQ(a.lite_solves, b.lite_solves);
 }
 
 void expectSameEkf(const RawGnssEKFParams& a, const RawGnssEKFParams& b)
@@ -101,6 +105,7 @@ void expectSameEkf(const RawGnssEKFParams& a, const RawGnssEKFParams& b)
     EXPECT_EQ(a.drift_step_mps, b.drift_step_mps);
     EXPECT_EQ(a.drift_step_spread_mps, b.drift_step_spread_mps);
     EXPECT_EQ(a.rr_lag_s, b.rr_lag_s);
+    EXPECT_EQ(a.rr_pair_lag_s, b.rr_pair_lag_s);
     EXPECT_EQ(a.att_gate_cos4, b.att_gate_cos4);
     EXPECT_EQ(a.att_gate_vertical, b.att_gate_vertical);
     EXPECT_EQ(a.att_gnss_off, b.att_gnss_off);
@@ -123,6 +128,7 @@ void expectSameEkf(const RawGnssEKFParams& a, const RawGnssEKFParams& b)
     EXPECT_EQ(a.p0_isb, b.p0_isb);
     EXPECT_EQ(a.gravity_wgs84, b.gravity_wgs84);
     EXPECT_EQ(a.hist_spacing_s, b.hist_spacing_s);
+    EXPECT_EQ(a.att_exact, b.att_exact);
     EXPECT_EQ(a.cr_mode, b.cr_mode);
     EXPECT_EQ(a.cr_sigma_per_rev_s, b.cr_sigma_per_rev_s);
     EXPECT_EQ(a.cr_common_sigma_mps, b.cr_common_sigma_mps);
@@ -133,6 +139,8 @@ void expectSameEkf(const RawGnssEKFParams& a, const RawGnssEKFParams& b)
     for (int k = 0; k < 3; ++k)
         EXPECT_EQ(a.lever_b_m[k], b.lever_b_m[k]) << k;
     EXPECT_EQ(a.lever_att_mode, b.lever_att_mode);
+    EXPECT_EQ(a.share_los, b.share_los);
+    EXPECT_EQ(a.rr_float, b.rr_float);
     for (int k = 0; k < gnss_raw::kProfileSys; ++k)
     {
         EXPECT_EQ(a.cr_carrier_hz[k], b.cr_carrier_hz[k]) << "sys " << k;
@@ -151,7 +159,10 @@ void expectSameShadowSettings(const RawGnssShadow::Config& a, const RawGnssShado
     EXPECT_EQ(a.rr_dyn_window_s, b.rr_dyn_window_s);
     EXPECT_EQ(a.heading_fit_period_s, b.heading_fit_period_s);
     EXPECT_EQ(a.sat_cap, b.sat_cap);
+    EXPECT_EQ(a.sat_cap_max, b.sat_cap_max);
     EXPECT_EQ(a.level.min_dt_s, b.level.min_dt_s);
+    EXPECT_EQ(a.windup_k, b.windup_k);
+    EXPECT_EQ(a.windup_monitor, b.windup_monitor);
 }
 
 // Every field of a profile but its name, type and measured mark.
@@ -169,6 +180,8 @@ void expectSameNumbers(const GnssReceiverProfile& a, const GnssReceiverProfile& 
     expectSameEkf(ea, eb);
     EXPECT_EQ(a.epoch_latency_s, b.epoch_latency_s);
     EXPECT_EQ(a.raw_epoch_period_s, b.raw_epoch_period_s);
+    EXPECT_EQ(a.share_los, b.share_los);
+    EXPECT_EQ(a.rr_float, b.rr_float);
     EXPECT_EQ(a.cr_mode, b.cr_mode);
     EXPECT_EQ(a.cr_half_cycle, b.cr_half_cycle);
     EXPECT_EQ(a.fuse_epoch_period_s, b.fuse_epoch_period_s);
@@ -180,6 +193,13 @@ void expectSameNumbers(const GnssReceiverProfile& a, const GnssReceiverProfile& 
     EXPECT_EQ(a.rr_dyn_window_s, b.rr_dyn_window_s);
     EXPECT_EQ(a.max_epoch_age_s, b.max_epoch_age_s);
     EXPECT_EQ(a.epoch_job_max_s, b.epoch_job_max_s);
+    EXPECT_EQ(a.windup_k, b.windup_k);
+    EXPECT_EQ(a.windup_monitor, b.windup_monitor);
+    EXPECT_EQ(a.build_lite, b.build_lite);
+    EXPECT_EQ(a.rr_pair_avg, b.rr_pair_avg);
+    EXPECT_EQ(a.rr_pair_max_diff_mps, b.rr_pair_max_diff_mps);
+    EXPECT_EQ(a.epoch_slice_us, b.epoch_slice_us);
+    EXPECT_EQ(a.sat_cap_max, b.sat_cap_max);
     RawGnssShadow::Config sa, sb;
     gnss_raw::applyReceiverProfile(a, sa);
     gnss_raw::applyReceiverProfile(b, sb);
@@ -191,15 +211,15 @@ void expectSameNumbers(const GnssReceiverProfile& a, const GnssReceiverProfile& 
 // TheShadowSafeguardDefaultsAreTheBeetles) before its size goes in here: the
 // Beetle's filter is its defaults, and the M1 build applies the LC86G's
 // profile over them. The sizes are a 64-bit host's (macOS and Linux alike).
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssEKFParams) == 464,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssEKFParams) == 472,
               "RawGnssEKFParams changed: add the field to expectSameEkf, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawMeasBuilder::Config) == 312,
+static_assert(sizeof(void*) != 8 || sizeof(RawMeasBuilder::Config) == 336,
               "RawMeasBuilder::Config changed: add the field to expectSameBuilder, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 32,
               "GnssSignalProfile changed: add the field to expectSameSignal, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 520,
+static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 568,
               "GnssReceiverProfile changed: add the field to expectSameNumbers, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1680,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1760,
               "RawGnssShadow::Config changed: pin the field in TheShadowSafeguardDefaultsAreTheBeetles, then update "
               "this size");
 
@@ -222,6 +242,7 @@ TEST(ReceiverProfile, TheLc86gProfileIsWhatTheFilterFlewWith)
     EXPECT_EQ(b.rr_dyn_sigma, 0.5);
     EXPECT_EQ(b.rr_relock_sigma, 3.0);
     EXPECT_EQ(b.sat_refresh_s, 5.0);
+    EXPECT_FALSE(b.lite);                 // the full build, as the Beetle flies it
     // the noise model's fit, the builder's constants
     EXPECT_EQ(b.pr_white_a, 0.026);
     EXPECT_EQ(b.pr_white_b, 0.157);
@@ -247,6 +268,7 @@ TEST(ReceiverProfile, TheLc86gProfileIsWhatTheFilterFlewWith)
     RawGnssEKFParams e;
     gnss_raw::applyReceiverProfile(gnss_raw::lc86gProfile(), e);
     EXPECT_EQ(e.rr_lag_s, 0.0555);
+    EXPECT_EQ(e.rr_pair_lag_s, 0.0);
     EXPECT_EQ(e.clk_bias_psd, 0.009);
     EXPECT_EQ(e.clk_drift_psd, 100.0);
     EXPECT_EQ(e.isb_psd, 1.0e-4);
@@ -400,6 +422,8 @@ TEST(ReceiverProfile, TheLc86gFusesEveryEpochOnItsOwnCounts)
     EXPECT_EQ(p.rr_dyn_window_s, 0.0);
     EXPECT_EQ(p.max_epoch_age_s, 0.6);
     EXPECT_EQ(p.epoch_job_max_s, 0.3);
+    EXPECT_EQ(p.sat_cap_max, 0);                          // no cap governor
+    EXPECT_EQ(p.epoch_slice_us, 2500.0);                  // main.cpp's slice on the M1 (it keeps its own)
     RawMeasBuilder::Config b;
     gnss_raw::applyReceiverProfile(p, b);
     EXPECT_EQ(b.epoch_period_s, 1.0);                     // its raw epochs' period
@@ -490,17 +514,33 @@ TEST(ReceiverProfile, TheMosaicG5V0Profile)
     EXPECT_EQ(p.cr_half_cycle, lc.cr_half_cycle);
     // the limits
     EXPECT_EQ(p.sat_cap, 16);
+    EXPECT_EQ(p.sat_cap_max, 0);                          // the cap fixed: the governor is a bench's
+    EXPECT_EQ(p.epoch_slice_us, 2500.0);                  // the slice main.cpp set before the profile had it
     EXPECT_EQ(p.reject_persist_s, 3.0);
     EXPECT_EQ(p.max_epoch_age_s, 0.3);
     EXPECT_EQ(p.epoch_job_max_s, 0.2);
     EXPECT_EQ(p.level_min_dt_s, 0.95);
     EXPECT_EQ(p.heading_fit_period_s, 1.0);
+    // the cheaper epoch build: off (a bench image's TR_BENCH_RAW_BUILD_LITE)
+    EXPECT_FALSE(p.build_lite);
 
-    // applied: the builder's epochs the fused grid's apart, no carrier
+    // applied: the builder's epochs the fused grid's apart, no carrier, the
+    // full build
     RawMeasBuilder::Config b;
     gnss_raw::applyReceiverProfile(p, b);
     EXPECT_EQ(b.epoch_period_s, 0.1);
     EXPECT_FALSE(b.carrier);
+    EXPECT_FALSE(b.lite);
+    EXPECT_EQ(b.atmo_period_s, 0.0);
+    // ... and with build_lite, the atmosphere once in each period the code is
+    // fused in
+    GnssReceiverProfile pl = p;
+    pl.build_lite = true;
+    RawMeasBuilder::Config bl;
+    gnss_raw::applyReceiverProfile(pl, bl);
+    EXPECT_TRUE(bl.lite);
+    EXPECT_EQ(bl.atmo_period_s, 1.0);
+    EXPECT_EQ(bl.lite_solves, 4);         // after a gap, four orbit solves an epoch (RawMeasBuilder.h)
     EXPECT_EQ(b.relock_gap_s, 0.5);
     EXPECT_EQ(b.rr_tau_s, 0.0);
     // the EKF's: the Beetle's 3 s of refusals, the Doppler's 30 epochs at 10
@@ -512,9 +552,16 @@ TEST(ReceiverProfile, TheMosaicG5V0Profile)
     EXPECT_EQ(e.rr_lag_s, 0.0);
     EXPECT_EQ(e.cr_mode, gnss_raw::kCarrierOff);
     EXPECT_FALSE(e.att_gnss_off);                         // the harness's switch, never a profile's
+    EXPECT_FALSE(e.att_exact);                            // the flight image's (applyMosaicFlightSafeguards)
     // the shadow's
     RawGnssShadow::Config s;
     gnss_raw::applyReceiverProfile(p, s);
+    // the carrier wind-up: off in the profile, which every build with the mosaic driver takes (k is the antenna's:
+    // the mosaic-only flight image sets 0.99 with its safeguards)
+    EXPECT_EQ(p.windup_k, 0.0);
+    EXPECT_FALSE(p.windup_monitor);
+    EXPECT_EQ(s.windup_k, 0.0);
+    EXPECT_FALSE(s.windup_monitor);
     EXPECT_EQ(s.epoch_latency_s, 0.0);
     EXPECT_EQ(s.max_epoch_age_s, 0.3);
     EXPECT_EQ(s.epoch_job_max_s, 0.2);
@@ -522,6 +569,8 @@ TEST(ReceiverProfile, TheMosaicG5V0Profile)
     EXPECT_EQ(s.rr_dyn_window_s, 1.0);
     EXPECT_EQ(s.heading_fit_period_s, 1.0);
     EXPECT_EQ(s.sat_cap, 16);
+    EXPECT_EQ(s.sat_cap_max, 0);
+    EXPECT_EQ(s.epoch_slice_us, 0.0);                     // the slice is main.cpp's to take, not the apply's
     EXPECT_EQ(s.level.min_dt_s, 0.95);
     EXPECT_EQ(s.meas.epoch_period_s, 0.1);
     EXPECT_EQ(s.ekf.reject_persist_rr, 30);
@@ -529,6 +578,51 @@ TEST(ReceiverProfile, TheMosaicG5V0Profile)
     EXPECT_FALSE(s.level_on_fused_epochs);
     EXPECT_EQ(s.restore_pos_sigma_m, 0.0);
     EXPECT_FALSE(s.restore_seed_bias);
+}
+
+TEST(ReceiverProfile, TheDopplersInPairsMoveTheLagOnlyWhereSet)
+{
+    // off in every profile; the Doppler's lag is the profile's own
+    const GnssReceiverProfile m = gnss_raw::mosaicG5Profile();
+    EXPECT_FALSE(m.rr_pair_avg);
+    EXPECT_EQ(m.rr_pair_max_diff_mps, 15.0);
+    EXPECT_FALSE(gnss_raw::lc86gProfile().rr_pair_avg);
+    EXPECT_FALSE(gnss_raw::genericProfile().rr_pair_avg);
+    gnss_raw::RawGnssEKFParams e;
+    applyReceiverProfile(m, e);
+    EXPECT_EQ(e.rr_lag_s, 0.0);
+    EXPECT_EQ(e.rr_pair_lag_s, 0.0);
+    // the mosaic's grid is two of its epochs: on, an epoch in pairs at the pairs' middle, 25 ms before the
+    // epoch; one as it came keeps the profile's own lag
+    EXPECT_TRUE(gnss_raw::dopplerPairsFit(m));
+    GnssReceiverProfile on = m;
+    on.rr_pair_avg = true;
+    applyReceiverProfile(on, e);
+    EXPECT_EQ(e.rr_lag_s, 0.0);
+    EXPECT_DOUBLE_EQ(e.rr_pair_lag_s, 0.025);
+    // on top of a receiver's own lag
+    on.rr_lag_s = 0.004;
+    applyReceiverProfile(on, e);
+    EXPECT_EQ(e.rr_lag_s, 0.004);
+    EXPECT_DOUBLE_EQ(e.rr_pair_lag_s, 0.025);
+    // every epoch fused (20 Hz), or a 5 Hz grid: no epoch between to pair with, no pair lag
+    for (double fuse : {0.05, 0.2, 0.0})
+    {
+        GnssReceiverProfile g = m;
+        g.rr_pair_avg = true;
+        g.fuse_epoch_period_s = fuse;
+        EXPECT_FALSE(gnss_raw::dopplerPairsFit(g)) << fuse;
+        applyReceiverProfile(g, e);
+        EXPECT_EQ(e.rr_lag_s, 0.0) << fuse;
+        EXPECT_EQ(e.rr_pair_lag_s, 0.0) << fuse;
+    }
+    // the LC86G (one epoch a second, every one fused) never pairs
+    GnssReceiverProfile lc = gnss_raw::lc86gProfile();
+    lc.rr_pair_avg = true;
+    EXPECT_FALSE(gnss_raw::dopplerPairsFit(lc));
+    applyReceiverProfile(lc, e);
+    EXPECT_EQ(e.rr_lag_s, 0.0555);
+    EXPECT_EQ(e.rr_pair_lag_s, 0.0);
 }
 
 TEST(ReceiverProfile, ARefusalsLetInIsKeptInTime)
@@ -599,12 +693,16 @@ void takeFlightSafeguards(RawGnssShadow::Config& r, const RawGnssShadow::Config&
     r.antenna_sigma_radial_m = b.antenna_sigma_radial_m;
     r.antenna_min_rps = b.antenna_min_rps;
     r.antenna_att_mode = b.antenna_att_mode;
+    r.ekf.att_exact = b.ekf.att_exact;
+    r.dv_lever_mode = b.dv_lever_mode;
+    r.dv_lever_radial_m = b.dv_lever_radial_m;
+    r.windup_k = b.windup_k;
 }
 
 TEST(ReceiverProfile, TheMosaicFlightSafeguards)
 {
     // gnss_raw::applyMosaicFlightSafeguards: every value the mosaic-only image
-    // flies its three safeguards at, from one place (main.cpp's startRawShadow
+    // flies its safeguards at, from one place (main.cpp's startRawShadow
     // under TR_RAW_NAV_MOSAIC, and tools/raw_replay's --receiver mosaic)
     static_assert(std::is_trivially_copyable<RawGnssShadow::Config>::value,
                   "the byte comparison below copies the config whole");
@@ -665,6 +763,15 @@ TEST(ReceiverProfile, TheMosaicFlightSafeguards)
     EXPECT_EQ(c.antenna_min_rps, 0.0);
     EXPECT_EQ(c.antenna_att_mode, gnss_raw::kLeverAttObserve);
     EXPECT_FALSE(c.ekf.lever_on);                  // unknown until applyAntennaOffset
+    // the spinning body (the high-roll port): the exact attitude transition, the change check's lever on the nose's
+    // own turn with no radial bound, the Goblin's helix's wind-up (0.99) taken off each Doppler; Wu's whole rate and
+    // the monitor off
+    EXPECT_TRUE(c.ekf.att_exact);
+    EXPECT_EQ(c.dv_lever_mode, 1);
+    EXPECT_EQ(c.dv_lever_radial_m, 0.0);
+    EXPECT_EQ(c.windup_k, 0.99);
+    EXPECT_FALSE(c.windup_geom);
+    EXPECT_FALSE(c.windup_monitor);
     // and nothing else: the profile's settings, the builder's, the EKF's, the
     // vertical check (20 m/s), the boost screen and the heading gate as they
     // were, byte for byte once the safeguards' own fields are put back
@@ -674,9 +781,9 @@ TEST(ReceiverProfile, TheMosaicFlightSafeguards)
     EXPECT_EQ(0, std::memcmp(&back, &base, sizeof(back)));
     EXPECT_EQ(c.vert_check_mps, 20.0);
     EXPECT_EQ(c.heading_gate, RawGnssShadow::kGateFullLaunch);
-    expectSameShadowSettings(c, base);
+    expectSameShadowSettings(back, base);          // the profile's own (its wind-up k is the safeguards' here)
 
-    // The Beetle's: its defaults and the LC86G's profile keep all three off
+    // The Beetle's: its defaults and the LC86G's profile keep them all off
     // (main.cpp never calls the function on M1)
     RawGnssShadow::Config m1;
     gnss_raw::applyReceiverProfile(gnss_raw::lc86gProfile(), m1);
@@ -690,9 +797,235 @@ TEST(ReceiverProfile, TheMosaicFlightSafeguards)
         EXPECT_EQ(d->rot_lever_min_rps, 0.0);
         EXPECT_EQ(d->att_hold_rate_rps, 0.0);
         EXPECT_EQ(d->rot_skip_rate_rps, 0.0);
+        EXPECT_FALSE(d->ekf.att_exact);
+        EXPECT_EQ(d->dv_lever_mode, 0);
+        EXPECT_EQ(d->windup_k, 0.0);
     }
     const RawGnssEKFParams params;
     EXPECT_EQ(params.hdg_obs_mode, gnss_raw::kHdgObsOff);
+}
+
+// The bench integration's four switches (exp/v9-moredata-bench) in one
+// mosaic profile -- the cheaper build (build_lite), the shared geometry with
+// the Doppler in float (share_los, rr_float), the Dopplers in pairs
+// (rr_pair_avg) and the cap governor's ceiling (sat_cap_max) -- under the
+// image's flight safeguards, the high-roll port's among them. Each sets only
+// its own fields: applied over the profile with none, with those fields put
+// back, the config is the none's byte for byte, alone or all four at once;
+// and all four at once set what each sets alone. The safeguards go on top of
+// all four as of none. The slice (epoch_slice_us) is main.cpp's to take, not
+// applyReceiverProfile's: none of them moves it.
+TEST(ReceiverProfile, TheFourBenchSwitchesEachSetTheirOwnFieldsAlongsideTheSafeguards)
+{
+    static_assert(std::is_trivially_copyable<RawGnssShadow::Config>::value,
+                  "the byte comparison below copies the config whole");
+    const GnssReceiverProfile none = gnss_raw::mosaicG5Profile();
+    EXPECT_FALSE(none.build_lite);
+    EXPECT_FALSE(none.share_los);
+    EXPECT_FALSE(none.rr_float);
+    EXPECT_FALSE(none.rr_pair_avg);
+    EXPECT_EQ(none.sat_cap_max, 0);
+    RawGnssShadow::Config c0;
+    gnss_raw::applyReceiverProfile(none, c0);
+    gnss_raw::applyMosaicFlightSafeguards(c0);
+    enum
+    {
+        kLite = 1,
+        kLos = 2,
+        kPairs = 4,
+        kGov = 8
+    };
+    // each switch's fields, put back to the none's
+    auto putBack = [&](RawGnssShadow::Config& c) {
+        c.meas.lite = c0.meas.lite;
+        c.meas.atmo_period_s = c0.meas.atmo_period_s;
+        c.ekf.share_los = c0.ekf.share_los;
+        c.ekf.rr_float = c0.ekf.rr_float;
+        c.ekf.rr_pair_lag_s = c0.ekf.rr_pair_lag_s;
+        c.sat_cap_max = c0.sat_cap_max;
+    };
+    for (int on = 1; on <= 15; ++on)
+    {
+        SCOPED_TRACE(testing::Message() << "switches " << on);
+        GnssReceiverProfile p = none;
+        p.build_lite = (on & kLite) != 0;
+        p.share_los = p.rr_float = (on & kLos) != 0;
+        p.rr_pair_avg = (on & kPairs) != 0;
+        p.sat_cap_max = (on & kGov) != 0 ? 24 : 0;
+        RawGnssShadow::Config c;
+        std::memcpy(&c, &c0, sizeof(c));
+        gnss_raw::applyReceiverProfile(p, c);
+        gnss_raw::applyMosaicFlightSafeguards(c);
+        // each its own
+        EXPECT_EQ(c.meas.lite, (on & kLite) != 0);
+        EXPECT_EQ(c.meas.atmo_period_s, (on & kLite) != 0 ? 1.0 : 0.0);
+        EXPECT_EQ(c.ekf.share_los, (on & kLos) != 0);
+        EXPECT_EQ(c.ekf.rr_float, (on & kLos) != 0);
+        EXPECT_DOUBLE_EQ(c.ekf.rr_pair_lag_s, (on & kPairs) != 0 ? 0.025 : 0.0);
+        EXPECT_EQ(c.ekf.rr_lag_s, 0.0);
+        EXPECT_EQ(c.sat_cap, 16);
+        EXPECT_EQ(c.sat_cap_max, (on & kGov) != 0 ? 24 : 0);
+        // the stage the GNSS task builds with: the cheaper build and the floor
+        const gnss_raw::RawGnssMeasStage::Config st = RawGnssShadow::stageConfig(c);
+        EXPECT_EQ(st.meas.lite, (on & kLite) != 0);
+        EXPECT_EQ(st.sat_cap, 16);
+        // the safeguards as with none: the high-roll port's too
+        EXPECT_TRUE(c.ekf.att_exact);
+        EXPECT_EQ(c.dv_lever_mode, 1);
+        EXPECT_EQ(c.dv_lever_radial_m, 0.0);
+        EXPECT_EQ(c.windup_k, 0.99);
+        EXPECT_EQ(c.dv_check, RawGnssShadow::kDvAct);
+        // and nothing else
+        putBack(c);
+        EXPECT_EQ(0, std::memcmp(&c, &c0, sizeof(c)));
+        EXPECT_EQ(p.epoch_slice_us, 2500.0);
+    }
+}
+
+// The mosaic-only image's flight profile (applyMosaicFlightProfile, the
+// owner's 10/24 set): on the image's profile, the cheaper build, the shared
+// geometry with the Doppler's prediction in float (the bench's level 2), the
+// Dopplers in pairs, 16 satellites and the cap fixed -- those six fields and
+// nothing else, so the image flies the four switches' composition above
+// (build, geometry, pairs on, governor off) by construction. Each bench
+// override's 0 (main.cpp, after the flight profile) turns its own off, and
+// all three at 0 are the high-roll-only twin, the profile alone, byte for
+// byte. The profile's other users never take it: the mosaic's own profile,
+// the LC86G's (M1), the stubs' and the generic's keep every one off.
+TEST(ReceiverProfile, TheMosaicFlightProfileIsTheOwnersSetAndNothingElse)
+{
+    static_assert(std::is_trivially_copyable<GnssReceiverProfile>::value &&
+                      std::is_trivially_copyable<RawGnssShadow::Config>::value,
+                  "the byte comparisons below copy the profile and the config whole");
+    const GnssReceiverProfile base = gnss_raw::mosaicG5Profile();
+    GnssReceiverProfile fp;
+    std::memcpy(&fp, &base, sizeof(fp));
+    gnss_raw::applyMosaicFlightProfile(fp);
+    // the owner's set
+    EXPECT_TRUE(fp.build_lite);
+    EXPECT_TRUE(fp.share_los);
+    EXPECT_TRUE(fp.rr_float);
+    EXPECT_TRUE(fp.rr_pair_avg);
+    EXPECT_TRUE(gnss_raw::dopplerPairsFit(fp));          // the 100 ms grid over the receiver's 50
+    EXPECT_EQ(fp.sat_cap, 16);
+    EXPECT_EQ(fp.sat_cap_max, 0);                         // the governor off
+    // and nothing else of the profile
+    GnssReceiverProfile back;
+    std::memcpy(&back, &fp, sizeof(back));
+    back.build_lite = base.build_lite;
+    back.share_los = base.share_los;
+    back.rr_float = base.rr_float;
+    back.rr_pair_avg = base.rr_pair_avg;
+    back.sat_cap = base.sat_cap;
+    back.sat_cap_max = base.sat_cap_max;
+    EXPECT_EQ(0, std::memcmp(&back, &base, sizeof(back)));
+    expectSameNumbers(back, base);
+
+    // The image's filter, in main.cpp's order: the profile (with the flight
+    // profile), then the safeguards. The high-roll-only twin: the same
+    // without the flight profile.
+    RawGnssShadow::Config def;
+    RawGnssShadow::Config twin, img;
+    std::memcpy(&twin, &def, sizeof(twin));
+    std::memcpy(&img, &def, sizeof(img));
+    gnss_raw::applyReceiverProfile(base, twin);
+    gnss_raw::applyMosaicFlightSafeguards(twin);
+    gnss_raw::applyReceiverProfile(fp, img);
+    gnss_raw::applyMosaicFlightSafeguards(img);
+    EXPECT_TRUE(img.meas.lite);
+    EXPECT_EQ(img.meas.atmo_period_s, 1.0);               // the atmosphere once in each pr_period_s
+    EXPECT_TRUE(img.ekf.share_los);
+    EXPECT_TRUE(img.ekf.rr_float);
+    EXPECT_EQ(img.ekf.rr_lag_s, 0.0);                     // an epoch as it came: at its own instant
+    EXPECT_DOUBLE_EQ(img.ekf.rr_pair_lag_s, 0.025);       //   one in pairs: 25 ms further back
+    EXPECT_EQ(img.sat_cap, 16);
+    EXPECT_EQ(img.sat_cap_max, 0);
+    const gnss_raw::RawGnssMeasStage::Config st = RawGnssShadow::stageConfig(img);
+    EXPECT_TRUE(st.meas.lite);
+    EXPECT_EQ(st.sat_cap, 16);
+    // the high-roll port's safeguards as on the twin
+    EXPECT_TRUE(img.ekf.att_exact);
+    EXPECT_EQ(img.dv_lever_mode, 1);
+    EXPECT_EQ(img.dv_lever_radial_m, 0.0);
+    EXPECT_EQ(img.windup_k, 0.99);
+    EXPECT_EQ(img.dv_check, RawGnssShadow::kDvAct);
+    // with the flight profile's fields put back, the twin byte for byte
+    RawGnssShadow::Config put;
+    std::memcpy(&put, &img, sizeof(put));
+    put.meas.lite = twin.meas.lite;
+    put.meas.atmo_period_s = twin.meas.atmo_period_s;
+    put.ekf.share_los = twin.ekf.share_los;
+    put.ekf.rr_float = twin.ekf.rr_float;
+    put.ekf.rr_pair_lag_s = twin.ekf.rr_pair_lag_s;
+    EXPECT_EQ(0, std::memcmp(&put, &twin, sizeof(put)));
+
+    // Each bench override at 0 over the flight profile, as main.cpp applies
+    // them (TR_BENCH_RAW_BUILD_LITE, TR_BENCH_RAW_SHARE_LOS, TR_BENCH_RAW_DOP_AVG):
+    // its own off, the others on; all three off, the twin
+    enum
+    {
+        kLiteOff = 1,
+        kLosOff = 2,
+        kPairsOff = 4
+    };
+    for (int off = 1; off <= 7; ++off)
+    {
+        SCOPED_TRACE(testing::Message() << "bench off " << off);
+        GnssReceiverProfile b;
+        std::memcpy(&b, &fp, sizeof(b));
+        if (off & kLiteOff)
+            b.build_lite = false;
+        if (off & kLosOff)
+            b.share_los = b.rr_float = false;
+        if (off & kPairsOff)
+            b.rr_pair_avg = false;
+        RawGnssShadow::Config c;
+        std::memcpy(&c, &def, sizeof(c));
+        gnss_raw::applyReceiverProfile(b, c);
+        gnss_raw::applyMosaicFlightSafeguards(c);
+        EXPECT_EQ(c.meas.lite, (off & kLiteOff) == 0);
+        EXPECT_EQ(c.ekf.share_los, (off & kLosOff) == 0);
+        EXPECT_EQ(c.ekf.rr_float, (off & kLosOff) == 0);
+        EXPECT_DOUBLE_EQ(c.ekf.rr_pair_lag_s, (off & kPairsOff) == 0 ? 0.025 : 0.0);
+        EXPECT_EQ(c.sat_cap, 16);
+        EXPECT_EQ(c.sat_cap_max, 0);
+        if (off == (kLiteOff | kLosOff | kPairsOff))
+            EXPECT_EQ(0, std::memcmp(&c, &twin, sizeof(c)));
+    }
+
+    // The profile's other users keep every one off: the mosaic's own (the
+    // replay without the image's safeguards, the simulator's bindings), the
+    // LC86G's (M1: main.cpp calls the flight profile only under
+    // TR_RAW_NAV_MOSAIC), the stubs' and the generic's
+    for (const GnssReceiverProfile& p : {gnss_raw::mosaicG5Profile(), gnss_raw::lc86gProfile(),
+                                         gnss_raw::neoM8tProfile(), gnss_raw::px1105rProfile(),
+                                         gnss_raw::genericProfile()})
+    {
+        SCOPED_TRACE(p.name);
+        EXPECT_FALSE(p.build_lite);
+        EXPECT_FALSE(p.share_los);
+        EXPECT_FALSE(p.rr_float);
+        EXPECT_FALSE(p.rr_pair_avg);
+        EXPECT_EQ(p.sat_cap_max, 0);
+    }
+    // and the Beetle's filter: the LC86G's profile applied leaves every epoch
+    // setting at the configs' defaults (all satellites, its own 55.5 ms lag)
+    RawGnssShadow::Config m1;
+    std::memcpy(&m1, &def, sizeof(m1));
+    gnss_raw::applyReceiverProfile(gnss_raw::lc86gProfile(), m1);
+    EXPECT_FALSE(m1.meas.lite);
+    EXPECT_EQ(m1.meas.atmo_period_s, 0.0);
+    EXPECT_FALSE(m1.ekf.share_los);
+    EXPECT_FALSE(m1.ekf.rr_float);
+    EXPECT_EQ(m1.ekf.rr_pair_lag_s, 0.0);
+    EXPECT_EQ(m1.ekf.rr_lag_s, 0.0555);
+    EXPECT_EQ(m1.sat_cap, 0);
+    EXPECT_EQ(m1.sat_cap_max, 0);
+    EXPECT_FALSE(def.meas.lite);
+    EXPECT_FALSE(def.ekf.share_los);
+    EXPECT_FALSE(def.ekf.rr_float);
+    EXPECT_EQ(def.ekf.rr_pair_lag_s, 0.0);
+    EXPECT_EQ(def.sat_cap, 0);
 }
 
 TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
@@ -807,6 +1140,23 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_EQ(c.heading_fit_period_s, 0.0);
     EXPECT_FALSE(c.level_on_fused_epochs);
     EXPECT_EQ(c.sat_cap, 0);
+    EXPECT_EQ(c.sat_cap_max, 0);                          // the cap governor: off
+    const gnss_raw::CapGovernor::Config g;                // its thresholds, its own (the shadow sets the rest)
+    EXPECT_EQ(g.floor, 0);
+    EXPECT_EQ(g.ceiling, 0);
+    EXPECT_EQ(g.hard_age_s, 0.2);
+    EXPECT_EQ(g.cut_frac, 0.8);
+    EXPECT_EQ(g.cut_count, 2);
+    EXPECT_EQ(g.cut_window, 4);
+    EXPECT_EQ(g.cut_step, 2);
+    EXPECT_EQ(g.raise_frac, 0.6);
+    EXPECT_EQ(g.raise_epochs, 10);
+    EXPECT_EQ(g.settle_epochs, 2);
+    EXPECT_EQ(g.backoff_s, 10.0);
+    EXPECT_EQ(g.backoff_max_s, 80.0);
+    EXPECT_EQ(g.boost_hold_s, 2.0);
+    EXPECT_EQ(g.gap_s, 0.15);
+    EXPECT_FALSE(RawGnssShadow(c).capGovernor().on());
     EXPECT_EQ(c.restore_pos_sigma_m, 0.0);
     EXPECT_EQ(c.restore_vel_sigma_mps, 0.0);
     EXPECT_EQ(c.restore_att_sigma_deg, 0.0);
@@ -825,6 +1175,15 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_EQ(c.antenna_sigma_radial_m, 0.02);
     EXPECT_EQ(c.antenna_min_rps, 0.0);
     EXPECT_EQ(c.antenna_att_mode, gnss_raw::kLeverAttObserve);
+    // the spinning body (the windup study): the wind-up off, its monitor off, the change check's lever on the
+    // whole rate
+    EXPECT_EQ(c.windup_k, 0.0);
+    EXPECT_FALSE(c.windup_geom);
+    EXPECT_FALSE(c.windup_monitor);
+    EXPECT_EQ(c.windup_monitor_k, 0.99);
+    EXPECT_EQ(c.windup_monitor_tau_s, 1.0);
+    EXPECT_EQ(c.dv_lever_mode, 0);
+    EXPECT_EQ(c.dv_lever_radial_m, 0.0);
 
     // its EKF's, literally (the profile's part is the LC86G's, above)
     const RawGnssEKFParams& e = c.ekf;
@@ -869,6 +1228,7 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     for (int k = 0; k < 3; ++k)
         EXPECT_EQ(e.lever_b_m[k], 0.0) << k;
     EXPECT_EQ(e.lever_att_mode, gnss_raw::kLeverAttOff);
+    EXPECT_FALSE(e.att_exact);
     RawGnssEKFParams lc;
     gnss_raw::applyReceiverProfile(gnss_raw::lc86gProfile(), lc);
     expectSameEkf(e, lc);

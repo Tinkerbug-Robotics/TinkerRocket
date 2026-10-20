@@ -310,6 +310,13 @@ public:
     bool getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const;
     void setGNSSRawEpochPeriodMs(uint32_t period_ms);
     bool getGNSSRawStats(TR_GNSSReceiverMosaicSerial::RawStats& out) const;
+    // The Dopplers in pairs (the driver's setRawDopplerPairing: the receiver
+    // profile's rr_pair_avg, off unless set), their counts (rawPairStats:
+    // false with them off), and the GNSS poll task's stack left at its lowest
+    // (bytes; 0 before the task exists), for the bench's console with them on.
+    bool setGNSSRawDopplerPairing(const mosaic::MosaicDopplerPairConfig& c);
+    bool getGNSSRawPairStats(TR_GNSSReceiverMosaicSerial::RawPairStats& out) const;
+    uint32_t gnssPollStackFree() const;
 #endif
     // The GPS-to-MCU clock line each time it moves (GNSS_CLOCK_MSG): the
     // LC86G's from its sentences' arrival, the mosaic-G5's from its 1PPS;

@@ -12,6 +12,7 @@
 // (fixtures/raw_meas_golden.h) check that a cap above the sky changes nothing.
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <set>
@@ -471,6 +472,33 @@ TEST(RawGnssMeasStageV9, TheCapPicksOnlySatellitesTheBuilderWouldBuild)
     EXPECT_EQ(st.stats().capped_out, 3u);                    // the candidates: 30 less 15; twelve taken
 }
 
+TEST(RawGnssMeasStageV9, AnEpochsDopplersInPairsMarkReachesTheBuiltEpoch)
+{
+    // The mosaic's Dopplers in pairs (TimedRawEpoch::rr_paired): the built
+    // epoch carries the mark to the filter, through the cap's picks or not,
+    // and an epoch as it came after one in pairs is unmarked again
+    for (int cap : {0, 12})
+    {
+        SCOPED_TRACE(testing::Message() << "cap " << cap);
+        Sky s = sky(30);
+        RawGnssMeasStage st(capCfg(cap));
+        addAll(st, s);
+        BuiltEpoch b;
+        s.e.rr_paired = 1;
+        ASSERT_TRUE(st.offer(s.e, navAt(kRxLla), b));
+        EXPECT_EQ(b.rr_paired, 1);
+        EXPECT_GT(b.n, 0);
+        s.e.rr_paired = 0;
+        s.e.epoch.tow_s += 0.1;
+        s.e.mcu_us += 100000;
+        ASSERT_TRUE(st.offer(s.e, navAt(kRxLla), b));
+        EXPECT_EQ(b.rr_paired, 0);
+    }
+    // and the mark sits in padding: neither struct grew
+    static_assert(sizeof(void*) != 8 || sizeof(gnss_raw::TimedRawEpoch) == 1960,
+                  "TimedRawEpoch grew: rr_paired was to fit its padding");
+}
+
 TEST(RawGnssMeasStageV9, ASatelliteBuiltLastEpochKeepsItsPlaceWithinThreeDb)
 {
     Sky s = sky(30);
@@ -925,4 +953,197 @@ TEST(RawGnssMeasStageV9, TheStoreKeepsTheBeetlesSizeByDefault)
     static_assert(sizeof(EphemerisStore) == sizeof(Before), "the default store's size is unchanged");
     EphemerisStore store;
     EXPECT_EQ(store.size(), 0u);
+}
+
+// ------------------------------------------- the cap governor's cap (nav)
+
+TEST(RawGnssMeasStageV9, TheNavigationStatesCapIsTheOneBuiltWith)
+{
+    // The filter's cap governor (CapGovernor.h) sends its cap with the
+    // navigation state; the stage builds with it where it caps at all, with
+    // its own where the state carries none (0)
+    Sky s = sky(30);
+    ASSERT_EQ(s.e.epoch.n, 30);
+    for (int i = 0; i < s.e.epoch.n; ++i)
+        s.e.epoch.obs[i].cn0_dbhz = 30.0f + 0.5f * i;
+    RawGnssMeasStage st(capCfg(16));
+    addAll(st, s);
+    BuiltEpoch b;
+    gnss_raw::ShadowNav nav = navAt(kRxLla);
+    ASSERT_EQ(nav.sat_cap, 0);
+    ASSERT_TRUE(st.offer(s.e, nav, b));
+    EXPECT_EQ(b.n, 16);
+    EXPECT_EQ(st.satCap(), 16);
+    EXPECT_EQ(st.stats().sat_cap, 16);
+    nav.sat_cap = 24;
+    s.e.epoch.tow_s += 0.1;
+    s.e.mcu_us += 100000;
+    ASSERT_TRUE(st.offer(s.e, nav, b));
+    EXPECT_EQ(b.n, 24);
+    EXPECT_EQ(st.stats().sat_cap, 24);
+    // past the epoch's room it is the room
+    nav.sat_cap = 255;
+    s.e.epoch.tow_s += 0.1;
+    s.e.mcu_us += 100000;
+    ASSERT_TRUE(st.offer(s.e, nav, b));
+    EXPECT_EQ(b.n, 30);
+    EXPECT_EQ(st.satCap(), gnss_raw::RawEpoch::kMaxObs);
+    // and back to the stage's own when the state carries none
+    nav.sat_cap = 0;
+    s.e.epoch.tow_s += 0.1;
+    s.e.mcu_us += 100000;
+    ASSERT_TRUE(st.offer(s.e, nav, b));
+    EXPECT_EQ(b.n, 16);
+
+    // A stage with no cap (the Beetle's) never takes one: every satellite
+    RawGnssMeasStage none(capCfg(0));
+    addAll(none, s);
+    nav.sat_cap = 12;
+    ASSERT_TRUE(none.offer(s.e, nav, b));
+    EXPECT_EQ(b.n, 30);
+    EXPECT_EQ(none.satCap(), 0);
+    EXPECT_EQ(none.stats().sat_cap, 0);
+}
+
+TEST(RawGnssMeasStageV9, ARaiseAddsTheStrongestLeftOutAndACutDropsTheWeakestPicked)
+{
+    // The governor changes the count, never the set: each epoch the picks
+    // keep their 3 dB hold, so from one epoch to the next the satellites in
+    // both are the smaller cap's picks -- the Doppler change check keeps all
+    // of them -- and a raise adds the strongest satellites left out, a cut
+    // drops the weakest picked. C/N0s from 30 to 44.5 dB-Hz, a quarter of
+    // them wandering 2.5 dB from epoch to epoch (inside the hold).
+    Sky s = sky(30);
+    ASSERT_EQ(s.e.epoch.n, 30);
+    std::vector<float> base(static_cast<size_t>(s.e.epoch.n));
+    for (int i = 0; i < s.e.epoch.n; ++i)
+        base[static_cast<size_t>(i)] = 30.0f + 0.5f * static_cast<float>((i * 7) % 30);
+    RawGnssMeasStage st(capCfg(16));
+    addAll(st, s);
+    gnss_raw::ShadowNav nav = navAt(kRxLla);
+    const int caps[] = {16, 16, 17, 18, 24, 24, 22, 20, 16, 16, 24, 16, 19, 19};
+    std::set<std::pair<int, int>> prev;
+    int prev_cap = 0;
+    for (int k = 0; k < static_cast<int>(sizeof(caps) / sizeof(caps[0])); ++k)
+    {
+        for (int i = 0; i < s.e.epoch.n; ++i)
+            s.e.epoch.obs[i].cn0_dbhz = base[static_cast<size_t>(i)] + ((i % 4 == 0 && k % 2 == 1) ? 2.5f : 0.0f);
+        s.e.epoch.tow_s = kTow0 + 0.1 * k;
+        s.e.mcu_us = kT0 + 100000 * k;
+        nav.sat_cap = static_cast<uint8_t>(caps[k]);
+        BuiltEpoch b;
+        ASSERT_TRUE(st.offer(s.e, nav, b));
+        ASSERT_EQ(b.n, caps[k]) << k;
+        const std::set<std::pair<int, int>> now = sats(b);
+        if (k > 0)
+        {
+            // the smaller set is inside the larger: nothing swapped
+            const auto& small = caps[k] <= prev_cap ? now : prev;
+            const auto& large = caps[k] <= prev_cap ? prev : now;
+            for (const auto& x : small)
+                EXPECT_EQ(large.count(x), 1u) << "epoch " << k << " sys " << x.first << " prn " << x.second;
+            // what a cut dropped is the weakest of the last picks (by the
+            // score it had there: C/N0, every pick holding the same 3 dB)
+            if (caps[k] < prev_cap)
+            {
+                float kept_min = 99.0f, dropped_max = 0.0f;
+                for (int i = 0; i < s.e.epoch.n; ++i)
+                {
+                    const std::pair<int, int> id{s.e.epoch.obs[i].sys, s.e.epoch.obs[i].prn};
+                    if (prev.count(id) == 0 || s.e.epoch.obs[i].sys == GNSS_SYS_GPS)
+                        continue;             // the GPS four are picked first, whatever their C/N0
+                    const float c = s.e.epoch.obs[i].cn0_dbhz;
+                    if (now.count(id))
+                        kept_min = std::min(kept_min, c);
+                    else
+                        dropped_max = std::max(dropped_max, c);
+                }
+                EXPECT_LE(dropped_max, kept_min) << "epoch " << k;
+            }
+        }
+        prev = now;
+        prev_cap = caps[k];
+    }
+}
+
+TEST(RawGnssMeasStageV9, AnEpochBuiltAboveTheFloorSaysWhatABuildAtTheFloorWouldHaveMade)
+{
+    // The filter cuts an epoch built at the governor's cap to the floor's
+    // when its job starts in the boost (RawGnssShadow::trimToFloor), by
+    // floor_keep: the cap's first sat_cap picks. Two stages see the same
+    // epochs, built at the floor (16); on the last, one is told 24. What it
+    // marks is the other's build, measurement for measurement -- the four GPS
+    // first however weak, the 3 dB hold of the epochs before, the order.
+    Sky s = sky(30);
+    ASSERT_EQ(s.e.epoch.n, 30);
+    RawGnssMeasStage at_floor(capCfg(16)), above(capCfg(16));
+    addAll(at_floor, s);
+    addAll(above, s);
+    gnss_raw::ShadowNav nav = navAt(kRxLla);
+    BuiltEpoch bf, ba;
+    for (int k = 0; k < 6; ++k)
+    {
+        for (int i = 0; i < s.e.epoch.n; ++i)
+        {
+            // the GPS ones weakest; the others 30-44.5 dB-Hz, a third of them
+            // wandering 2 dB (inside the hold) from epoch to epoch
+            const bool gps = s.e.epoch.obs[i].sys == GNSS_SYS_GPS;
+            s.e.epoch.obs[i].cn0_dbhz = gps ? 28.0f + 0.25f * static_cast<float>(i % 8)
+                                            : 30.0f + 0.5f * static_cast<float>((i * 7) % 30)
+                                                  + ((i % 3 == 0 && k % 2 == 1) ? 2.0f : 0.0f);
+        }
+        s.e.epoch.tow_s = kTow0 + 0.1 * k;
+        s.e.mcu_us = kT0 + 100000 * k;
+        const bool last = k == 5;
+        nav.sat_cap = 0;
+        ASSERT_TRUE(at_floor.offer(s.e, nav, bf));
+        nav.sat_cap = last ? 24 : 0;
+        ASSERT_TRUE(above.offer(s.e, nav, ba));
+        if (!last)
+        {
+            ASSERT_EQ(ba.n, 16);
+            EXPECT_EQ(ba.floor_trim, 0);  // built at the floor: nothing to cut
+            continue;
+        }
+        ASSERT_EQ(bf.n, 16);
+        ASSERT_EQ(ba.n, 24);
+        ASSERT_EQ(ba.floor_trim, 1);
+        int k_f = 0;
+        for (int i = 0; i < ba.n; ++i)
+        {
+            if (((ba.floor_keep >> i) & 1u) == 0)
+                continue;
+            ASSERT_LT(k_f, bf.n);
+            EXPECT_EQ(ba.meas[i].sys, bf.meas[k_f].sys) << i;
+            EXPECT_EQ(ba.meas[i].prn, bf.meas[k_f].prn) << i;
+            EXPECT_EQ(ba.meas[i].pr, bf.meas[k_f].pr) << i;
+            EXPECT_EQ(ba.meas[i].rr, bf.meas[k_f].rr) << i;
+            EXPECT_EQ(ba.meas[i].sigma_pr, bf.meas[k_f].sigma_pr) << i;
+            EXPECT_EQ(ba.meas[i].sigma_rr, bf.meas[k_f].sigma_rr) << i;
+            EXPECT_EQ(ba.lock_age_s[i], bf.lock_age_s[k_f]) << i;
+            k_f++;
+        }
+        EXPECT_EQ(k_f, bf.n);
+        int gps = 0;
+        for (int i = 0; i < bf.n; ++i)
+            gps += bf.meas[i].sys == GNSS_SYS_GPS ? 1 : 0;
+        EXPECT_EQ(gps, 4);                // the weak GPS four are in it
+    }
+    // the buffer's next epoch built at the floor says nothing is to cut
+    nav.sat_cap = 0;
+    s.e.epoch.tow_s += 0.1;
+    s.e.mcu_us += 100000;
+    ASSERT_TRUE(above.offer(s.e, nav, ba));
+    EXPECT_EQ(ba.n, 16);
+    EXPECT_EQ(ba.floor_trim, 0);
+    EXPECT_EQ(ba.floor_keep, 0u);
+
+    // A sky no larger than the floor built at a cap above it: nothing to cut
+    Sky few = sky(12);
+    RawGnssMeasStage small(capCfg(16));
+    addAll(small, few);
+    nav.sat_cap = 24;
+    ASSERT_TRUE(small.offer(few.e, nav, ba));
+    EXPECT_EQ(ba.n, few.e.epoch.n);
+    EXPECT_EQ(ba.floor_trim, 0);
 }

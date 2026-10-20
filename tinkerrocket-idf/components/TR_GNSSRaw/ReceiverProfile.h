@@ -100,6 +100,10 @@ struct GnssReceiverProfile
     double pr_period_s = 0.0;             // the pseudoranges fused once in each this long of GPS time (the
                                           //   Dopplers every epoch)
     int    sat_cap = 0;                   // at most this many satellites built an epoch (0: all)
+    int    sat_cap_max = 0;               //   and the cap governor raises that to at most this while the filter
+                                          //   keeps up (CapGovernor.h); at or under sat_cap: off, the cap fixed
+    bool   share_los = false;             // an epoch's geometry taken once and shared by its units, and
+    bool   rr_float = false;              //   with it the Doppler's prediction in float (RawGnssEKFParams)
     double reject_persist_s = 0.0;        // a satellite refused this long running is let back in: the EKF's
                                           //   reject_persist and reject_persist_rr in fused epochs (0: theirs)
     double level_min_dt_s = 0.0;          // the levelling's steady test takes epochs this far apart (LevelGate)
@@ -108,6 +112,28 @@ struct GnssReceiverProfile
                                           //   epoch before)
     double max_epoch_age_s = 0.6;         // an epoch later than this is dropped (RawGnssShadow)
     double epoch_job_max_s = 0.3;         //   and one this old is worked at once, not a slice a step
+    // The cheaper epoch build (RawMeasBuilder.h, Config::lite): each
+    // satellite's elevation and atmosphere once in each pr_period_s, its orbit
+    // solves spread over their 5 s, the noise on one exp. Off in every profile;
+    // the mosaic-only image turns it on (ReceiverProfileApply.h
+    // applyMosaicFlightProfile), a bench image off again
+    // (TR_BENCH_RAW_BUILD_LITE=0).
+    bool   build_lite = false;
+    // The receiver's epochs between the fused ones: each fused epoch's Doppler
+    // averaged with the one raw_epoch_period_s before it, where the two are a
+    // pair (the mosaic's MosaicRawEpoch.h says when), and the filter taking the
+    // pairs' means at their middle (the filter's rr_pair_lag_s: half
+    // raw_epoch_period_s more than rr_lag_s, on an epoch handed over in pairs;
+    // one handed over as it came keeps rr_lag_s). Only where the fused grid is
+    // exactly two of the receiver's epochs (dopplerPairsFit); the sigmas stay
+    // the profile's. Off in every profile: the mosaic-only image turns it on
+    // (applyMosaicFlightProfile), a bench image off again
+    // (TR_BENCH_RAW_DOP_AVG=0).
+    bool   rr_pair_avg = false;
+    double rr_pair_max_diff_mps = 15.0;   // the pair at most this far apart (300 m/s^2 over 50 ms)
+    double epoch_slice_us = 2500.0;       // the navigation filter works an epoch at most this long a 10 ms step
+                                          //   (RawGnssShadow's epoch_slice_us; main.cpp's primary filter takes it,
+                                          //   not applyReceiverProfile: a shadow works an epoch at once)
 
     // its measurements' noise (RawMeasBuilder): sigma^2 = a^2 + b^2 * 10^(-(C/N0 - 35)/10)
     double pr_white_a = 0.0, pr_white_b = 0.0;   // the pseudorange's white part, m
@@ -142,7 +168,22 @@ struct GnssReceiverProfile
     double   cr_screen_k = 0.0;           // the screen: a rate off the epoch's median by more than this
     double   cr_screen_floor_mps = 0.0;   //   many sigmas, and this much, is suspect
     uint8_t  cr_half_cycle = kHalfCycleReject;   // HalfCycleAction
+
+    // the carrier wind-up (RawGnssShadow's windup_*; TR_RawGnssEKF/RawGnssWindup.h): cycles a turn about
+    // the antenna's boresight (the nose) its Dopplers carry, taken off from the gyro (0: off), and the
+    // observe-only monitor of the roll rate they imply against the gyro's
+    double   windup_k = 0.0;
+    bool     windup_monitor = false;
 };
+
+// Whether a profile's Dopplers can go in pairs: its fused grid exactly two of
+// the receiver's epochs (the mosaic's 100 ms over its 50), so each fused
+// epoch has one of the receiver's between it and the last.
+inline bool dopplerPairsFit(const GnssReceiverProfile& p)
+{
+    return p.raw_epoch_period_s > 0.0 &&
+           std::fabs(p.fuse_epoch_period_s - 2.0 * p.raw_epoch_period_s) < 1.0e-3 * p.raw_epoch_period_s;
+}
 
 // The carrier phase's 1-sigma (m) at cn0 (dB-Hz): interpolated in dB --
 // log-linear between the 35 and 45 dB-Hz anchors, as a thermal-noise sigma
@@ -194,12 +235,15 @@ inline GnssReceiverProfile lc86gProfile()
     p.fuse_epoch_period_s = 0.0;
     p.pr_period_s = 0.0;
     p.sat_cap = 0;
+    p.sat_cap_max = 0;
     p.reject_persist_s = 0.0;       // the EKF's 3 epochs: 3 s
     p.level_min_dt_s = 0.0;
     p.heading_fit_period_s = 0.0;
     p.rr_dyn_window_s = 0.0;        // the peak since the epoch before: a second
     p.max_epoch_age_s = 0.6;
     p.epoch_job_max_s = 0.3;
+    p.epoch_slice_us = 2500.0;      // existing default (main.cpp's, rig r9: 14 satellites in one pass held the
+                                    //   state 40 ms)
 
     // noise: the PX1105R's C/N0 fit (20 min static, 2026-09-26), the LC86G's
     // scale on it (COCOM rig, 2026-10-12) -- all existing default
@@ -303,6 +347,9 @@ inline GnssReceiverProfile mosaicG5Profile()
     p.epoch_latency_s = 0.0;        // the 1PPS line: an edge is its GPS second
     p.raw_epoch_period_s = 0.05;    // V9 rig 10/16: every MeasEpoch 50 ms after the last
     p.fuse_epoch_period_s = 0.1;    // plan: 10 Hz, on the GPS-time grid
+    p.rr_pair_avg = false;          // the epochs between the grid's averaged in: off here, on in the
+                                    //   mosaic-only image (applyMosaicFlightProfile; the driver's
+                                    //   pairs, MosaicRawEpoch.h; TR_BENCH_RAW_DOP_AVG=0 turns it off)
 
     // the code: sigma^2 = a^2 + b^2 * 10^(-(C/N0 - 35)/10)
     p.pr_white_a = 0.10;            // V9 rig 10/16: 0.144 m at 44 dB-Hz, above the receiver's own
@@ -351,11 +398,39 @@ inline GnssReceiverProfile mosaicG5Profile()
     // the SBF is logged (0x95) for offline work (plan)
     p.cr_mode = kCarrierOff;
 
+    // the carrier wind-up: measured on the Goblin's helix at +0.991 / +0.994
+    // cycles per clockwise turn from above, nose up, every band within 0.5 %
+    // (V9 rig 10/16): k = 0.99 turns the correction on. Off in this profile:
+    // k belongs to the antenna, not the receiver, so the mosaic-only images
+    // (the V9's and the V8's, the only firmware that takes this profile) set
+    // it with their other flight settings (ReceiverProfileApply.h
+    // applyMosaicFlightSafeguards, 0.99) until a per-rocket antenna setting
+    // exists; the profile's other users, raw_replay without the image's
+    // safeguards and the simulator's bindings, keep 0. With the drift's walk
+    // at 100 the clock takes the common part (the windup study, 2026-10-18,
+    // Grid B with a roll laid over it: the coast's drift moved by the L1
+    // wind-up within 0.01 m/s from 1 to 15 rev/s, and with the exact attitude
+    // transition, taking it off moved no ascent median by more than
+    // 0.03 deg); it is the prerequisite for a tighter clock.
+    p.windup_k = 0.0;
+    p.windup_monitor = false;
+
     // the safeguards that count epochs, in the LC86G's time
     p.sat_cap = 16;                 // plan: the CPU ladder's first rung (the L1 sky peaks at 28)
+    p.sat_cap_max = 0;              // existing default: the cap fixed (CapGovernor, a bench's to try)
+    p.epoch_slice_us = 2500.0;      // existing default: 25 ms of an epoch's work in each 100 ms (open-sky
+                                    //   bench 2026-10-18: 16 satellites closed at 109 ms median, 149 at most)
     p.reject_persist_s = 3.0;       // the LC86G's 3 epochs: the Doppler 30 at 10 Hz, the pseudorange 3
     p.max_epoch_age_s = 0.3;        // plan: 3 epochs at 10 Hz (MeasEpoch reaches the V9 20 ms after its
     p.epoch_job_max_s = 0.2;        //   epoch, p95 26 ms: V9 rig 10/16), 2 to work at once
+    // the epoch's geometry once, shared by its units, and the Doppler's
+    // prediction in float (TR_RawGnssEKF.h share_los, rr_float): off here;
+    // the mosaic-only image flies both (applyMosaicFlightProfile, with the
+    // cheaper build and the Doppler pairs; TR_BENCH_RAW_SHARE_LOS=0 turns them
+    // off), the profile's other users (the replay without the image's
+    // safeguards, the simulator's bindings) neither
+    p.share_los = false;
+    p.rr_float = false;
     p.level_min_dt_s = 0.95;        // the LC86G's steady test, epochs a second apart
     p.heading_fit_period_s = 1.0;   // the LC86G's: the fit's 64 epochs a minute (it only logs in act)
     return p;

@@ -25,9 +25,13 @@ endif()
 # before the mosaic-G5's decoders, the stage's addEphemeris and the unaided switch (fc/v9-raw-primary), RAW_REPLAY_ROT=OFF
 # before the turning body's allowances (exp/v9-robust), RAW_REPLAY_DVHDG=OFF before the change check's heading
 # allowance for a launch with no magnetometer heading (fc/v9raw-dopp after 357e7021), RAW_REPLAY_ANTENNA=OFF before
-# the antenna's offset where it is known (fc/v9-antenna-offset). DYNMEM and
-# FITGATE are experiments the firmware does not carry: build them against a copy with experiments/*.patch applied
-# (README.md).
+# the antenna's offset where it is known (fc/v9-antenna-offset), RAW_REPLAY_BUILD_LITE=OFF before the cheaper epoch
+# build (exp/v9-cpu-build; off by itself where the tree has no RawMeasBuilderLite.cpp), RAW_REPLAY_SHARELOS=OFF
+# before the shared epoch geometry (exp/v9-cpu-los), RAW_REPLAY_DOPAVG=OFF before the Dopplers in pairs
+# (exp/v9-dop-avg), RAW_REPLAY_CAPGOV=OFF before the satellite cap's governor and the profile's slice
+# (exp/v9-cap-adapt), RAW_REPLAY_FLIGHT_PROFILE=OFF before the mosaic image's flight profile (fc/v9-1024-candidate; off
+# by itself where the tree has no applyMosaicFlightProfile). DYNMEM and FITGATE are experiments the firmware does not
+# carry: build them against a copy with experiments/*.patch applied (README.md).
 set(SRC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." CACHE PATH "the tree whose firmware sources are compiled")
 option(RAW_REPLAY_OLD "the firmware tree has no receiver profile or carrier (aef947c5)" OFF)
 option(RAW_REPLAY_VCHECK "the firmware tree has the vertical check and the boost window (fc/gnss-heading-fuse 7966f2cb)" ON)
@@ -40,6 +44,10 @@ option(RAW_REPLAY_HDGOBS "the firmware tree has the heading gain by its observab
 option(RAW_REPLAY_ROT "the firmware tree has the turning body's allowances (rot_lever_*, att_hold_*: exp/v9-robust)" ON)
 option(RAW_REPLAY_DVHDG "the firmware tree has the change check's heading allowance for a launch with no magnetometer heading (dv_hdg_unset_deg)" ON)
 option(RAW_REPLAY_ANTENNA "the firmware tree has the antenna's offset where it is known (lever_on, applyAntennaOffset: fc/v9-antenna-offset)" ON)
+option(RAW_REPLAY_BUILD_LITE "the firmware tree has the cheaper epoch build (RawMeasBuilder::Config::lite, build_lite: exp/v9-cpu-build)" ON)
+option(RAW_REPLAY_SHARELOS "the firmware tree has the shared epoch geometry (share_los, rr_float: exp/v9-cpu-los)" ON)
+option(RAW_REPLAY_DOPAVG "the firmware tree has the Dopplers in pairs (rr_pair_avg, averageDopplerPairs: exp/v9-dop-avg)" ON)
+option(RAW_REPLAY_CAPGOV "the firmware tree has the satellite cap's governor and the profile's slice (sat_cap_max, epoch_slice_us: exp/v9-cap-adapt)" ON)
 if(RAW_REPLAY_OLD AND RAW_REPLAY_MOSAIC)
     message(STATUS "raw_replay: RAW_REPLAY_OLD turns RAW_REPLAY_MOSAIC off")
     set(RAW_REPLAY_MOSAIC OFF)
@@ -60,6 +68,12 @@ endif()
 if(NOT RAW_REPLAY_ROT AND RAW_REPLAY_ANTENNA)
     set(RAW_REPLAY_ANTENNA OFF)
 endif()
+if(NOT RAW_REPLAY_MOSAIC AND RAW_REPLAY_DOPAVG)
+    set(RAW_REPLAY_DOPAVG OFF)
+endif()
+if(NOT RAW_REPLAY_MOSAIC AND RAW_REPLAY_CAPGOV)
+    set(RAW_REPLAY_CAPGOV OFF)
+endif()
 # the mosaic-only image's flight safeguards in one call (gnss_raw::applyMosaicFlightSafeguards, ReceiverProfileApply.h):
 # a tree with all three of the features it sets
 option(RAW_REPLAY_MOSAIC_SAFEGUARDS "the firmware tree sets the mosaic's flight safeguards in one call (applyMosaicFlightSafeguards)" ON)
@@ -68,7 +82,38 @@ if(RAW_REPLAY_MOSAIC_SAFEGUARDS AND NOT (RAW_REPLAY_MOSAIC AND RAW_REPLAY_DVCHEC
                    "off): --receiver mosaic will not apply the image's flight safeguards")
     set(RAW_REPLAY_MOSAIC_SAFEGUARDS OFF)
 endif()
+# the spinning body (the windup study, fc/v9-windup): the carrier wind-up's correction and monitor, the exact attitude
+# transition and the change check's lever mode (RawGnssShadow::Config::windup_*, dv_lever_mode;
+# RawGnssEKFParams::att_exact)
+option(RAW_REPLAY_WINDUP "the firmware tree has the carrier wind-up's switches (windup_k, att_exact, dv_lever_mode)" ON)
+if(RAW_REPLAY_WINDUP AND NOT (RAW_REPLAY_MOSAIC AND RAW_REPLAY_DVCHECK AND RAW_REPLAY_ROT))
+    set(RAW_REPLAY_WINDUP OFF)
+endif()
 set(LIB_DIR "${SRC_ROOT}/tinkerrocket-idf/components")
+if(RAW_REPLAY_BUILD_LITE AND NOT EXISTS "${LIB_DIR}/TR_GNSSRaw/RawMeasBuilderLite.cpp")
+    message(STATUS "raw_replay: ${SRC_ROOT} has no cheaper epoch build (RawMeasBuilderLite.cpp): RAW_REPLAY_BUILD_LITE off")
+    set(RAW_REPLAY_BUILD_LITE OFF)
+endif()
+# the mosaic-only image's flight profile in one call (gnss_raw::applyMosaicFlightProfile, ReceiverProfileApply.h: the
+# owner's 10/24 set, the cheaper build, the shared geometry with the Doppler in float, the Dopplers in pairs, 16
+# satellites with the cap fixed), applied by --receiver mosaic: a tree that has it (off by itself where its
+# ReceiverProfileApply.h has no such call), with the image's safeguards and the three switches it turns on, so
+# --build-lite 0, --share-los 0 and --rr-pair-avg 0 each turn their own off
+option(RAW_REPLAY_FLIGHT_PROFILE "the firmware tree sets the mosaic image's flight profile in one call (applyMosaicFlightProfile)" ON)
+if(RAW_REPLAY_FLIGHT_PROFILE)
+    set(_tr_fp "")
+    if(EXISTS "${LIB_DIR}/TR_RawGnssShadow/ReceiverProfileApply.h")
+        file(STRINGS "${LIB_DIR}/TR_RawGnssShadow/ReceiverProfileApply.h" _tr_fp REGEX "void applyMosaicFlightProfile\\(")
+    endif()
+    if(NOT _tr_fp)
+        message(STATUS "raw_replay: ${SRC_ROOT} has no applyMosaicFlightProfile: RAW_REPLAY_FLIGHT_PROFILE off")
+        set(RAW_REPLAY_FLIGHT_PROFILE OFF)
+    elseif(NOT (RAW_REPLAY_MOSAIC_SAFEGUARDS AND RAW_REPLAY_BUILD_LITE AND RAW_REPLAY_SHARELOS AND RAW_REPLAY_DOPAVG))
+        message(STATUS "raw_replay: RAW_REPLAY_FLIGHT_PROFILE off (one of RAW_REPLAY_MOSAIC_SAFEGUARDS, BUILD_LITE, "
+                       "SHARELOS and DOPAVG is off): --receiver mosaic keeps the profile's epoch settings")
+        set(RAW_REPLAY_FLIGHT_PROFILE OFF)
+    endif()
+endif()
 set(FC_MAIN "${SRC_ROOT}/tinkerrocket-idf/projects/flight_computer/main")
 set(SHIM_DIR "${SRC_ROOT}/tests_cpp/host_shim")
 # A later tree whose filter needs a source file or include directory this list does not name: its paths, relative
@@ -82,6 +127,12 @@ list(TRANSFORM RAW_REPLAY_EXTRA_INC PREPEND "${SRC_ROOT}/")
 set(CARRIER_SRC ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssCarrier.cpp ${LIB_DIR}/TR_GNSSRaw/RawMeasCarrier.cpp)
 if(RAW_REPLAY_OLD)
     set(CARRIER_SRC "")
+endif()
+# the cheaper epoch build, linked wherever the tree has it (its builder calls it); --build-lite only with
+# RAW_REPLAY_BUILD_LITE
+set(LITE_SRC "")
+if(EXISTS "${LIB_DIR}/TR_GNSSRaw/RawMeasBuilderLite.cpp")
+    set(LITE_SRC ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilderLite.cpp)
 endif()
 # The mosaic-G5's path: its SBF decoders (the driver's and the GNSS task's), the RINEX reader, and what the flight
 # loop's apogee quorum runs on (TR_KinematicChecks, the start's attitude and the magnetic model)
@@ -106,7 +157,7 @@ if(RAW_REPLAY_MOSAIC)
 endif()
 
 function(raw_replay_target name)
-    add_executable(${name} raw_replay.cpp ${CARRIER_SRC} ${MOSAIC_SRC} ${RAW_REPLAY_EXTRA_SRC}
+    add_executable(${name} raw_replay.cpp ${CARRIER_SRC} ${LITE_SRC} ${MOSAIC_SRC} ${RAW_REPLAY_EXTRA_SRC}
         ${LIB_DIR}/TR_RawGnssShadow/RawGnssShadow.cpp
         ${LIB_DIR}/TR_RawGnssShadow/RawGnssMeasStage.cpp
         ${LIB_DIR}/TR_RawGnssShadow/PadSurvey.cpp
@@ -143,10 +194,16 @@ function(raw_replay_target name)
         RAW_REPLAY_MOSAIC=$<BOOL:${RAW_REPLAY_MOSAIC}>
         RAW_REPLAY_DVCHECK=$<BOOL:${RAW_REPLAY_DVCHECK}>
         RAW_REPLAY_HDGOBS=$<BOOL:${RAW_REPLAY_HDGOBS}>
+        RAW_REPLAY_SHARELOS=$<BOOL:${RAW_REPLAY_SHARELOS}>
         RAW_REPLAY_ROT=$<BOOL:${RAW_REPLAY_ROT}>
         RAW_REPLAY_DVHDG=$<BOOL:${RAW_REPLAY_DVHDG}>
         RAW_REPLAY_ANTENNA=$<BOOL:${RAW_REPLAY_ANTENNA}>
-        RAW_REPLAY_MOSAIC_SAFEGUARDS=$<BOOL:${RAW_REPLAY_MOSAIC_SAFEGUARDS}>)
+        RAW_REPLAY_BUILD_LITE=$<BOOL:${RAW_REPLAY_BUILD_LITE}>
+        RAW_REPLAY_DOPAVG=$<BOOL:${RAW_REPLAY_DOPAVG}>
+        RAW_REPLAY_CAPGOV=$<BOOL:${RAW_REPLAY_CAPGOV}>
+        RAW_REPLAY_MOSAIC_SAFEGUARDS=$<BOOL:${RAW_REPLAY_MOSAIC_SAFEGUARDS}>
+        RAW_REPLAY_FLIGHT_PROFILE=$<BOOL:${RAW_REPLAY_FLIGHT_PROFILE}>
+        RAW_REPLAY_WINDUP=$<BOOL:${RAW_REPLAY_WINDUP}>)
 endfunction()
 
 raw_replay_target(raw_replay)

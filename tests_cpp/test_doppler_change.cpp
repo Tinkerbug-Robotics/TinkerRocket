@@ -1018,3 +1018,165 @@ TEST(DopplerChange, TheMosaicFlightSafeguardsTakeAnyHeadingWithNoMagnetometerHea
     EXPECT_LT(fl.v_err_coast_max, 0.5 * off.v_err_coast_max)
         << "off " << off.v_err_coast_max << ", safeguards " << fl.v_err_coast_max;
 }
+
+namespace
+{
+
+// q (scalar first, body -> NED) turned by the body rate w (rad/s) over dt
+void turnQuat(double q[4], const double w[3], double dt)
+{
+    const double wn = std::sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
+    if (!(wn > 0.0))
+        return;
+    const double s = std::sin(0.5 * wn * dt) / wn;
+    const double d[4] = {std::cos(0.5 * wn * dt), s * w[0], s * w[1], s * w[2]};
+    const double r[4] = {q[0] * d[0] - q[1] * d[1] - q[2] * d[2] - q[3] * d[3],
+                         q[0] * d[1] + q[1] * d[0] + q[2] * d[3] - q[3] * d[2],
+                         q[0] * d[2] - q[1] * d[3] + q[2] * d[0] + q[3] * d[1],
+                         q[0] * d[3] + q[1] * d[2] - q[2] * d[1] + q[3] * d[0]};
+    for (int i = 0; i < 4; ++i)
+        q[i] = r[i];
+}
+
+}  // namespace
+
+TEST(DopplerChange, TheNosesTurnInFloatIsTheDoublesWithinTenPpm)
+{
+    // dv_lever_mode 1 tracks the nose's own turn in float (NoseTurn<float>, as the shadow flies it). Against the
+    // same in double, from the same float attitude and rate, 100 steps a second for 3 s: a coast weathercocking
+    // (a 2 Hz sine of 0.6 rad/s about body y) under a roll of 0, 1, 5 and 15 rev/s. Each 0.1 s check's allowance,
+    // the arm (0.3 m) times |dn'| + 2 age |n''|max (age 60 ms), within 1e-5 of the double's. A pure roll has none
+    // in either.
+    for (double rev : {0.0, 1.0, 5.0, 15.0})
+    {
+        SCOPED_TRACE(rev);
+        for (bool weathercock : {true, false})
+        {
+            dvc::NoseTurn<float> nf;
+            dvc::NoseTurn<double> nd;
+            double q[4] = {0.69, 0.08, -0.71, 0.12};      // the nose a few degrees off vertical
+            const double qn = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+            for (double& c : q)
+                c /= qn;
+            double worst = 0.0, smallest = 1e9;
+            int checks = 0;
+            for (int k = 1; k <= 300; ++k)
+            {
+                const double t = 0.01 * k;
+                const double w[3] = {rev * 2.0 * kPi, weathercock ? 0.6 * std::sin(2.0 * kPi * 2.0 * t) : 0.0, 0.0};
+                turnQuat(q, w, 0.01);
+                const float qf[4] = {float(q[0]), float(q[1]), float(q[2]), float(q[3])};
+                const float wf[3] = {float(w[0]), float(w[1]), float(w[2])};
+                nf.step(qf, wf, 0.01f);
+                nd.step(qf, wf, 0.01);
+                if (k % 10 != 0)
+                    continue;
+                const double af = 0.3 * (double(nf.change()) + 2.0 * 0.06 * double(nf.ndd_peak));
+                const double ad = 0.3 * (nd.change() + 2.0 * 0.06 * nd.ndd_peak);
+                if (!weathercock)
+                {
+                    EXPECT_EQ(af, 0.0) << t;
+                    EXPECT_EQ(ad, 0.0) << t;
+                }
+                else if (k > 10)                          // the first check's interval starts before the first step
+                {
+                    worst = std::max(worst, std::fabs(af - ad) / ad);
+                    smallest = std::min(smallest, ad);
+                    checks++;
+                }
+                nf.rebase();
+                nd.rebase();
+            }
+            if (weathercock)
+            {
+                EXPECT_EQ(checks, 29);
+                EXPECT_GT(smallest, 0.01);                 // every check's allowance is a real one
+                EXPECT_LT(worst, 1e-5);
+            }
+        }
+    }
+}
+
+TEST(DopplerChange, ThePitchOverUnderARollIsTheNosesOwnTurnInNed)
+{
+    // The nose pitching over at a steady 0.5 rad/s about an axis fixed in NED, the body rolling about the nose at 0
+    // and 5 rev/s (the gyro's rate: the pitch-over's turned into the body, plus the roll). n' = C (w x x) turns with
+    // the nose at 0.5 rad/s, roll or none: over each 0.1 s check it changes by 2 x 0.5 sin(0.025) = 0.025 rad/s, and
+    // |n''| is 0.5^2 = 0.25 rad/s^2 a step. Taken in the body (w x x not turned) or turned the wrong way (NED ->
+    // body), n' would turn with the roll as well: about 1.0 rad/s over a check at 5 rev/s, half a turn. So the
+    // allowance, the arm (0.3 m) times |dn'| + 2 age |n''|max (age 60 ms), is 0.0165 m/s at either roll.
+    const double W = 0.5, dt = 0.01, T = 0.1;
+    auto qmul = [](const double a[4], const double b[4], double r[4]) {
+        r[0] = a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3];
+        r[1] = a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2];
+        r[2] = a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1];
+        r[3] = a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0];
+    };
+    // v turned by q (scalar first): q v q*, or with conj q* v q
+    auto turn = [&](const double q[4], const double v[3], bool conj, double o[3]) {
+        const double qq[4] = {q[0], conj ? -q[1] : q[1], conj ? -q[2] : q[2], conj ? -q[3] : q[3]};
+        const double qc[4] = {qq[0], -qq[1], -qq[2], -qq[3]};
+        const double vq[4] = {0.0, v[0], v[1], v[2]};
+        double a[4], b[4];
+        qmul(qq, vq, a);
+        qmul(a, qc, b);
+        for (int i = 0; i < 3; ++i)
+            o[i] = b[i + 1];
+    };
+    double q0[4] = {0.69, 0.08, -0.71, 0.12};             // the nose a few degrees off vertical
+    const double qn = std::sqrt(q0[0] * q0[0] + q0[1] * q0[1] + q0[2] * q0[2] + q0[3] * q0[3]);
+    for (double& c : q0)
+        c /= qn;
+    const double x[3] = {1.0, 0.0, 0.0};
+    double n0[3];
+    turn(q0, x, false, n0);
+    // the pitch-over's axis: across the nose, fixed in NED
+    double ax[3] = {n0[1] * x[2] - n0[2] * x[1], n0[2] * x[0] - n0[0] * x[2], n0[0] * x[1] - n0[1] * x[0]};
+    const double an = std::sqrt(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]);
+    for (double& c : ax)
+        c /= an;
+    const double want_dn = 2.0 * W * std::sin(0.5 * W * T);           // 0.0249974
+    const double want_ndd = 2.0 * W * std::sin(0.5 * W * dt) / dt;    // 0.2499997
+    double allow[2] = {};
+    int r = 0;
+    for (double rev : {0.0, 5.0})
+    {
+        SCOPED_TRACE(rev);
+        const double p = rev * 2.0 * kPi;
+        dvc::NoseTurn<float> nf;
+        int checks = 0;
+        for (int k = 1; k <= 200; ++k)
+        {
+            // q(t) = (the pitch-over by W t about ax, in NED) q0 (the roll by p t about the nose, in the body)
+            const double t = dt * k;
+            const double qw[4] = {std::cos(0.5 * W * t), ax[0] * std::sin(0.5 * W * t), ax[1] * std::sin(0.5 * W * t),
+                                  ax[2] * std::sin(0.5 * W * t)};
+            const double qr[4] = {std::cos(0.5 * p * t), std::sin(0.5 * p * t), 0.0, 0.0};
+            double a[4], q[4];
+            qmul(qw, q0, a);
+            qmul(a, qr, q);
+            // the body's rate: W ax turned into the body, and the roll
+            const double wn[3] = {W * ax[0], W * ax[1], W * ax[2]};
+            double wb[3];
+            turn(q, wn, true, wb);
+            wb[0] += p;
+            const float qf[4] = {float(q[0]), float(q[1]), float(q[2]), float(q[3])};
+            const float wf[3] = {float(wb[0]), float(wb[1]), float(wb[2])};
+            nf.step(qf, wf, float(dt));
+            if (k % 10 != 0)
+                continue;
+            if (k > 10)                                   // the first check's interval starts before the first step
+            {
+                EXPECT_NEAR(nf.change(), want_dn, 2e-4) << t;
+                EXPECT_NEAR(nf.ndd_peak, want_ndd, 2e-3) << t;
+                allow[r] = 0.3 * (double(nf.change()) + 2.0 * 0.06 * double(nf.ndd_peak));
+                checks++;
+            }
+            nf.rebase();
+        }
+        EXPECT_EQ(checks, 19);
+        r++;
+    }
+    EXPECT_NEAR(allow[0], 0.3 * (want_dn + 0.12 * want_ndd), 1e-4);
+    EXPECT_NEAR(allow[1], allow[0], 1e-4);
+}

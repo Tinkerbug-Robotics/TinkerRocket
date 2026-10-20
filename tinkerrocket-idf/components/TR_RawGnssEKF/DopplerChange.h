@@ -262,6 +262,63 @@ inline double knownLeverArm(const double w[3], const double dv_lev[3], double r_
     return hdg_known ? doubt_m + headingChord(att_rad) * r_m : r_m + doubt_m;
 }
 
+// The nose's own turn (RawGnssShadow's dv_lever_mode 1): an antenna on the
+// nose's axis moves only as the nose turns, at the arm times n' = C (w x x),
+// the nose's rate in NED (C body -> NED, w the body's rate less the gyro's
+// bias), which a roll about the nose leaves alone. Taken each filter step;
+// the change check reads its change since the last check and the largest
+// |n''| between, and starts the next interval there. T is float as flown:
+// it feeds a bound, a float's precision is ample, and the ESP32-P4 has no
+// double FPU (double: the tests' reference).
+template <typename T>
+struct NoseTurn
+{
+    T    now[3] = {T(0), T(0), T(0)};   // n' at the last step, rad/s
+    T    ref[3] = {T(0), T(0), T(0)};   //   and at the last check
+    T    ndd_peak = T(0);               // the largest |n''| since the check, rad/s^2
+    bool have = false;                  // a step taken (n'' takes two)
+
+    // a step of span_s ending with the attitude q (scalar first, body -> NED) and the rate w (rad/s, body)
+    void step(const float q[4], const float w[3], T span_s)
+    {
+        // w x x = (0, w_z, -w_y), turned into NED: q v q*
+        const T qw = q[0], qx = q[1], qy = q[2], qz = q[3];
+        const T v[3] = {T(0), T(w[2]), -T(w[1])};
+        const T t[3] = {T(2) * (qy * v[2] - qz * v[1]), T(2) * (qz * v[0] - qx * v[2]), T(2) * (qx * v[1] - qy * v[0])};
+        const T nd[3] = {v[0] + qw * t[0] + (qy * t[2] - qz * t[1]), v[1] + qw * t[1] + (qz * t[0] - qx * t[2]),
+                         v[2] + qw * t[2] + (qx * t[1] - qy * t[0])};
+        if (have)
+        {
+            T d2 = T(0);
+            for (int i = 0; i < 3; ++i)
+                d2 += (nd[i] - now[i]) * (nd[i] - now[i]);
+            const T ndd = std::sqrt(d2) / span_s;
+            if (ndd > ndd_peak)
+                ndd_peak = ndd;
+        }
+        for (int i = 0; i < 3; ++i)
+            now[i] = nd[i];
+        have = true;
+    }
+
+    // |n'| now less at the last check
+    T change() const
+    {
+        T d2 = T(0);
+        for (int i = 0; i < 3; ++i)
+            d2 += (now[i] - ref[i]) * (now[i] - ref[i]);
+        return std::sqrt(d2);
+    }
+
+    // a check taken: the next interval starts here
+    void rebase()
+    {
+        for (int i = 0; i < 3; ++i)
+            ref[i] = now[i];
+        ndd_peak = T(0);
+    }
+};
+
 // The epoch test's covariance: Cw (the fit's, w's 3x3) plus the allowances
 // about sf (the IMU's specific-force velocity change, NED, m/s):
 //   att^2 (|sf|^2 I - sf sf') + scale^2 sf sf' + (bias^2 + lever^2) I

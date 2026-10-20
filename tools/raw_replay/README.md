@@ -77,6 +77,23 @@ Experiments that change no firmware (each one a switch the harness throws on the
 | `--corrupt-rr-mps lo,hi`, `--corrupt-pr-m lo,hi` | the corruption's sizes instead (each drawn uniform in [lo, hi] with a random sign): under the gate, say, `0.05,0.12` and `5,10` on the mosaic |
 | `--corrupt-pr-epoch` | the first epoch at or after X on a whole GPS second instead (on a 10 Hz receiver its pseudoranges are fused there, `pr_period_s` 1 s) |
 
+The spinning body (fc/v9-windup; a `RAW_REPLAY_WINDUP` build, on by default): each switch the firmware's unless
+given -- off, but for what `--receiver mosaic`'s flight safeguards set since fc/v9-highroll (`--att-exact 1
+--dv-lever-mode 1 --dv-lever-radial-m 0 --windup-k 0.99`; the image as built before them: `--att-exact 0
+--dv-lever-mode 0 --windup-k 0`):
+
+| option | what it does |
+|---|---|
+| `--windup-k K` | each Doppler (and carrier rate) less the carrier wind-up an antenna on the nose carries, K cycles a turn, from the gyro's roll at the Doppler's own instant (`RawGnssShadow::Config::windup_k`; the Goblin's helix: 0.99) |
+| `--windup-geom 1` | Wu's whole rate from each satellite's line of sight, not the roll alone |
+| `--windup-monitor 1` | observe: the roll rate the Dopplers' wind-up implies between wavelengths, against the gyro's |
+| `--att-exact 1` | the covariance's attitude transition exact, exp(-[w x] dt) (`RawGnssEKFParams::att_exact`) |
+| `--dv-lever-mode 1`, `--dv-lever-radial-m X` | the change check's lever allowance on the nose's own turn and a radial bound, not the whole rate (the arm: `dv_lever_allow_m`, or with the offset known `knownLeverArm`'s) |
+| `--clk-drift-psd X` | the clock drift's walk (m^2/s^3) in place of the profile's 100: a tighter clock, which the wind-up correction is a prerequisite for |
+
+The epochs file then also carries each epoch's clock drift, screen and check numbers and the spinning body's
+(`clk_d_mps` .. `att_sig_d_deg`), and the events JSON a `windup` block.
+
 A sidecar `<csv>.events.json` records the guards' counts, the apogee votes the run's own estimate gives, and when the
 gate switched. A mosaic or cold-start replay also writes `<csv>.epochs.csv`: one row per epoch the filter closed,
 whatever `--every` (its time, the codes and Dopplers used and refused, the largest NIS, the longest any one satellite
@@ -153,21 +170,42 @@ predate it and carry none.
 
 What `startRawShadow()` builds under `TR_RAW_NAV_MOSAIC` (build_units D1a; checked against fc/v9raw-d 2502c322):
 
-- `mosaicG5Profile()` (v0), with `--fuse-ms` (`TR_BENCH_RAW_FUSE_MS`) and `--sat-cap` (`TR_BENCH_RAW_SAT_CAP`)
-  applied to it first, then `applyReceiverProfile`;
-- the navigation filter's settings (`primary`, 100 steps a second, 2.5 ms slices, `external_build`);
+- `mosaicG5Profile()` (v0) with the image's flight profile over it, by the firmware's own call
+  (`gnss_raw::applyMosaicFlightProfile`, `ReceiverProfileApply.h`; a `RAW_REPLAY_FLIGHT_PROFILE` build, on unless
+  the tree is older than fc/v9-1024-candidate or one of `RAW_REPLAY_MOSAIC_SAFEGUARDS`, `BUILD_LITE`, `SHARELOS` and
+  `DOPAVG` is off): the owner's 10/24 set, the cheaper epoch build, the epoch's geometry shared with the Doppler's
+  prediction in float, the Dopplers in pairs, at most 16 satellites with the cap fixed. A build without it keeps the
+  profile's own (each off, 16 satellites), and its configure says why. Then
+  `--fuse-ms` (`TR_BENCH_RAW_FUSE_MS`), `--sat-cap` (`TR_BENCH_RAW_SAT_CAP`), `--build-lite [0|1]`
+  (`TR_BENCH_RAW_BUILD_LITE`: the cheaper epoch build, `RawMeasBuilder.h`, on alone or with 1, off with 0; a
+  `RAW_REPLAY_BUILD_LITE` build, on refused but for the mosaic) and `--share-los` (`TR_BENCH_RAW_SHARE_LOS`: 0,
+  neither; 1, the epoch's geometry taken once and shared by its units; 2, and the Doppler's prediction in float; a
+  `RAW_REPLAY_SHARELOS` build; the events JSON's `build_lite` and `share_los` say which) applied to it, with the
+  Dopplers in pairs below (`--rr-pair-avg 0|1`), so each turns its own off for an experiment: `--build-lite 0
+  --share-los 0 --rr-pair-avg 0` is the high-roll-only twin, the image as fc/v9-highroll built it. In a
+  `RAW_REPLAY_CAPGOV` build `--cap-max` (`TR_BENCH_RAW_CAP_MAX`: the satellite cap
+  follows the filter's slack up to it, `CapGovernor.h`; its counts in the events JSON's `cap_gov`) and `--slice-us`
+  (`TR_BENCH_RAW_SLICE_US`: the profile's `epoch_slice_us`), then `applyReceiverProfile`. Without a clock the
+  harness works every epoch at once, so the governor sees only the handover's delay in the ages: `--fc-unit-us`
+  slices them; neither prices a satellite's build, so where the cap settles on the flight computer is the bench's
+  (or a CPU model's) to say, not the harness's. The logs' ticks carry no PRELAUNCH (`kShadowPrelaunch`, which holds
+  the cap at the floor on the flight computer's pad), so a replay climbs on the pad as in READY, and an epoch built
+  above the floor whose job starts in the boost is cut to the floor's (`trims`, `trimmed` in `cap_gov`);
+- the navigation filter's settings (`primary`, 100 steps a second, the profile's 2.5 ms slices, `external_build`);
 - the restore sigmas (100 m, 20 m/s, 15 deg) and the snapshot's accelerometer bias, `level_on_fused_epochs`;
 - the flight safeguards, by the firmware's own call (`gnss_raw::applyMosaicFlightSafeguards`,
   `ReceiverProfileApply.h`; a `RAW_REPLAY_MOSAIC_SAFEGUARDS` build): the Doppler change check acting in flight
   (`--dv-check 2 --dv-window-s 1 --dv-att-deg 10 --dv-epoch-k 4 --dv-latch-k 5`, and any heading about the
   vertical after a launch with no magnetometer heading: `--dv-hdg-unset-deg 180`), GNSS's heading gain by the
-  horizontal specific force (`--hdg-obs-mode 1 --hdg-obs-fh 5 --hdg-obs-tau 1 --hdg-obs-scope 0`) and the turning
-  body's Doppler allowance (`--rot-lever-axial-m 0.3 --rot-lever-radial-m 0.03 --rot-lever-min-rate 2`). It runs
-  right after the profile, so each `--dv-*`, `--hdg-obs-*` and `--rot-*` flag still changes its own value for an
-  experiment. Today's design before them (and its `--unaided` twin) is
-  `--dv-check 0 --hdg-obs-mode 0 --rot-lever-axial-m 0 --rot-lever-radial-m 0 --rot-lever-min-rate 0`. A build
-  without them (`RAW_REPLAY_MOSAIC_SAFEGUARDS` off, which any of `RAW_REPLAY_DVCHECK`, `HDGOBS` and `ROT` off turns
-  off, saying so at configure) warns on every `--receiver mosaic` run that it flies none of the three;
+  horizontal specific force (`--hdg-obs-mode 1 --hdg-obs-fh 5 --hdg-obs-tau 1 --hdg-obs-scope 0`), the turning
+  body's Doppler allowance (`--rot-lever-axial-m 0.3 --rot-lever-radial-m 0.03 --rot-lever-min-rate 2`) and the
+  spinning body's settings (fc/v9-highroll: `--att-exact 1 --dv-lever-mode 1 --dv-lever-radial-m 0 --windup-k 0.99`).
+  It runs right after the profile, so each `--dv-*`, `--hdg-obs-*`, `--rot-*`, `--att-exact` and `--windup-*` flag
+  still changes its own value for an experiment. Today's design before them (and its `--unaided` twin) is
+  `--dv-check 0 --hdg-obs-mode 0 --rot-lever-axial-m 0 --rot-lever-radial-m 0 --rot-lever-min-rate 0`; the image as
+  built before the spinning body's, `--att-exact 0 --dv-lever-mode 0 --windup-k 0`. A build without them
+  (`RAW_REPLAY_MOSAIC_SAFEGUARDS` off, which any of `RAW_REPLAY_DVCHECK`, `HDGOBS` and `ROT` off turns off, saying
+  so at configure) warns on every `--receiver mosaic` run that it flies none of them;
 - the heading at the firmware's defaults (`--fw-defaults`, which now also takes `--heading-mode` to the primary
   build's `TR_HEADING_FIT` 2 unless given): act, the whole attitude from launch (`RAW_HEADING_GATE` 1), the 10/30 deg
   prior, no hand-off, the 0.6 deg tilt floor;
@@ -453,7 +491,9 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   nose (46 dB-Hz broadside, 6 dB on the axis), and noise at the mosaic profile v0's fits for each satellite's C/N0
   (the Doppler's without the profile's 1.5 margin; 0.05 m/s per g of stress against the profile's 0.5). The
   antenna sits `--lever-arm` m (0.3) along the nose from the IMU (`--lever-arm-b x,y,z`: anywhere in the body);
-  the filter keeps r = 0 unless given it (`--antenna-m`). The fix is a
+  the filter keeps r = 0 unless given it (`--antenna-m`). `--roll` lays a roll over the flight (sim_roll.py's
+  profiles, with `--windup-k`, `--gyro-clip-dps` and `--gyro-scale-ppm`), and `--roll-axis-tilt-deg D` rolls it
+  about an axis D deg off the nose toward body +y (a spin axis off the board's x: the nose cones about it). The fix is a
   least-squares solution from the same measurements -- its error added to the truth's velocity of 4-6 ms before
   the epoch (the PVT's lag) -- so a receiver fault reaches the GPS voter as it reaches the filter. After touchdown
   it adds a 0.05 s impact and 5 s at rest (the flights end falling at 15 m/s). Once a flight it also writes the
@@ -494,8 +534,10 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   has). Every run gets `--truth-nav`. Each run is scored as it finishes (`sim_tables.score_run`) into
   `OUT/scores/`. `--harness-args "..."` adds raw_replay arguments to every run (an experiment: use a new OUT).
   An events file already in `--events-dir` is reused only when its truth's antenna (`META lever_arm_m`,
-  `lever_arm_b_m`) is the one asked for (`--lever-arm`, `--lever-arm-b`); otherwise, or with `--force-events`, it
-  is made again.
+  `lever_arm_b_m`) and spinning body (`sim_roll_*`, `sim_windup_k`) are the ones asked for (`--lever-arm`,
+  `--lever-arm-b`; `--roll`, `--windup-k`, `--gyro-clip-dps`, `--gyro-scale-ppm`, `--roll-axis-tilt-deg`, as
+  `sim_events.py` takes them); otherwise, or with `--force-events`, it is made again. A file is named by flight and
+  pattern alone, so give each roll profile its own `--events-dir` (its truth turns with it).
 - **`sim_tables.py OUT [--against OTHER_OUT]`** writes `OUT/tables.md` and `OUT/verdict.json`: first what the runs
   assume (the guard's wiring, the 20 Hz fixes, the P1/G6 placeholders -- the 30 ms hand-over, the 500 Hz EKF
   tick, the 1 kHz loop, no epoch slicing without `--fc-unit-us` -- the port lags as a sensitivity sweep, and the
@@ -593,6 +635,27 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   up the nose. The evaluation (Grid B with the antenna 0.10 m and 0.3 m up the nose, the offset given right, 3 or
   5 cm wrong, and not given) is in gnss-attitude-study/v9-mosaic-filter-plan/evidence/antenna-offset/ (outside the
   repo).
+- **The Dopplers in pairs** (`MosaicRawEpoch.h`, "The epochs between the grid's"; a `RAW_REPLAY_DOPAVG` build, on
+  unless the tree is older than exp/v9-dop-avg): on with `--receiver mosaic` where the flight profile is
+  (`RAW_REPLAY_FLIGHT_PROFILE`, above), as the image flies them; `--rr-pair-avg 0` is a bench image's
+  `TR_BENCH_RAW_DOP_AVG=0`, and `--rr-pair-avg 1` turns them on in a build without the flight profile.
+  The feed reads each MeasEpoch off the fused grid for its Dopplers (`noteMeasEpochDopplers`) and averages each grid
+  epoch's with them by the driver's rule (`averageDopplerPairs`: the epoch 50 ms before, read whole, no clock jump
+  between, valid and at the floor at both ends, the lock time not down, within `--rr-pair-max-diff`, 15 m/s). An
+  epoch with at least half its Dopplers in pairs is handed over in pairs (`TimedRawEpoch::rr_paired`): their means,
+  each one left alone dropped, and the filter takes its Dopplers the profile's 25 ms further back (`rr_pair_lag_s`);
+  any other epoch (none before it, a clock jump, fewer pairs) as it came, at its own instant. It needs the 100 ms
+  grid over the receiver's 50 ms (`--fuse-ms 100`): `--rr-pair-avg 1` on another grid is refused, and the flight
+  profile's pairs on another grid go off with a line on stderr, as the image's start turns them off. A sim's
+  20 Hz epochs (`sim_events.py` at rate 20) are cut to the fused grid first, as the driver cuts the receiver's
+  (`--sim-fuse-grid` does the cut alone: on Grid B it is byte-identical to the rate-10 events, whose draws are the
+  same), and paired by the same rule (a sim has no lock time or clock jump). `--rr-pair-sigma X` scales each averaged
+  Doppler's sigma, offline only (no firmware path). The events JSON gains a `pairs` block: the counts (the epochs as
+  they came and why, the Dopplers dropped and why), the two lags, and each grid epoch with a Doppler not averaged
+  (flight time, usable, averaged). Two offline diagnostics: `--rr-lag-ms X` sets the filter's `rr_lag_s` after the
+  profile (every epoch's own lag; an epoch in pairs adds `rr_pair_lag_s` to it), and `--sim-pair-exact` (a sim with
+  `--truth-nav`) puts the truth's second-order term
+  back into each averaged Doppler, so the pair is the range rate at its middle exactly.
 - **`sim_compare.py BASE NAME=EXP ...`** sets experiment grids (each a `sim_grid.py --arms design --harness-args
   "..."` run into its own OUT) beside the base grid's design and unaided twin, flight by flight: the phase bars per
   pattern (pooled over the informative magnetometer arms and over all of them), the worst excess, the deployment's
@@ -660,6 +723,8 @@ keep their scratch directory (printed; `BITIDENT_TMP` and `M1_IDENTITY_TMP` name
 - A tree the frozen harness cannot compile (a field it names renamed or gone) fails with status 2: a change to look
   at, not a pass. A tree whose filter needs a source file or include directory the frozen CMakeLists does not list:
   `BITIDENT_EXTRA_SRC` and `BITIDENT_EXTRA_INC` (';'-separated, relative to the tree, each used where it exists).
+  Those the script knows of are in its `DEFAULT_EXTRA_SRC`, used where a tree has them, so the command above needs
+  no variable: today the builder's cheaper build, `TR_GNSSRaw/RawMeasBuilderLite.cpp`.
 - If a rebase rewrites the frozen commit, the script finds the newest commit carrying its subject; otherwise set
   `BITIDENT_HARNESS`.
 

@@ -52,14 +52,18 @@ public:
 
     // Before the update: the epoch's measurements as built, its time of week,
     // and the receiver there as the filter's prior has it (ECEF). Sets
-    // flagged[i] for each measurement that jumped; returns how many.
-    int check(const RawMeas* m, int n, double tow_s, const double r_prior[3], bool* flagged);
+    // flagged[i] for each measurement that jumped; returns how many. range:
+    // each measurement's range from that receiver where the filter has it
+    // already (RawGnssEKF::sharedRanges), else null: sagnacRange's here.
+    int check(const RawMeas* m, int n, double tow_s, const double r_prior[3], bool* flagged,
+              const double* range = nullptr);
 
     // After the update: the receiver at that epoch as the filter now has it
     // (ECEF), which the next epoch's changes are taken from. The pseudoranges
     // kept are the ones check() saw, as built: corrections applied in between
     // (the pad survey's) would otherwise read as a jump when they start.
-    void commit(const RawMeas* m, int n, double tow_s, const double r_post[3]);
+    // range: as check()'s, from this receiver.
+    void commit(const RawMeas* m, int n, double tow_s, const double r_post[3], const double* range = nullptr);
 
     const Summary& summary() const { return sum_; }
 
