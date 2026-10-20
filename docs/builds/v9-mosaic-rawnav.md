@@ -115,8 +115,12 @@ The windup study's grid (48,000 runs with a roll laid over Grid B, the antenna o
 bar from 0 to 15 rev/s with the exact transition and the nose lever on, where the image as built failed the coast
 from 1.5 rev/s and let the slow ramps through from 1 rev/s
 (`gnss-attitude-study/v9-mosaic-filter-plan/evidence/windup/`). The grid at the Goblin's own antenna offset, with
-it known and unknown, has not been run yet. Nor has the V9's step time (the filter's `prop_us` and `step_us_max`,
-these settings on against off): take it on the flight image's placement. With `-DTR_RAW_GNSS_IRAM=1` the filter
+it known and unknown, ran with the 10/24 set and its high-roll-only twin
+(`gnss-attitude-study/v9-mosaic-filter-plan/evidence/candidate-1024/report.md`): both pass every adopted bar at every
+roll rate. The V9's step time was taken on the open-sky bench on 10/19
+(`gnss-attitude-study/v9-mosaic-filter-plan/evidence/sat-rate/bench/results_20261019.md`): a median of 700 us (max
+4,087) with these settings, against 838 us (max 5,149) for the image before them, both with the boost screen on every
+epoch. With `-DTR_RAW_GNSS_IRAM=1` the filter
 runs from internal RAM, but the exact transition's blocks (`attExactBlocks`) stay in flash with the carrier's code
 (`main/raw_gnss_iram.lf`), so that bench pays a flash fetch every 10 ms step that neither the flight image nor an
 internal-RAM placement would. The boot line `[RAWGNSS] flight safeguards:` names the three settings.
@@ -170,8 +174,9 @@ The evidence:
   - 99.8-99.9 % of the Dopplers were averaged in pairs;
   - the flight loop held 968 passes/s with no gaps, and the filter task's free stack fell from 1,712 B to 1,612 B.
 - **Offline, against the high-roll-only twin**
-  (`gnss-attitude-study/v9-mosaic-filter-plan/evidence/candidate-1024/report.md`, 25,216 runs of this set at
-  dbb42ab9). All of the change comes from the Dopplers in pairs:
+  (`gnss-attitude-study/v9-mosaic-filter-plan/evidence/candidate-1024/report.md`: 8,064 runs of this set at
+  dbb42ab9, with as many of the twin and of the unaided filter, 25,216 in all). All of the change comes from the
+  Dopplers in pairs:
   - on the four real V9 logs the static velocity noise is 25.8-28.8 % lower in the GNSS-only arm and 28.3-29.2 %
     lower in the pad arm;
   - on Grid B with the magnetometer exact, the boost p90's median fell from 0.43 to 0.31 deg and the coast's from
