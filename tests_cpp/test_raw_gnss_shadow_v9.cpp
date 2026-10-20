@@ -2243,6 +2243,10 @@ TEST(RawGnssShadowV9, UnderARollTheNoseLeverIsTheCasesArmTimesThePitchOversTurn)
     // turned the wrong way, n' would turn with the roll as well. The window's allowance is capped at the arm times
     // the rate across the nose now and its largest: 2 x arm x 1 rad/s. Once the turn is over, nothing is left
     // (under 0.01 m/s): each check starts the nose's change and its |n''| over. No epoch fails in any case.
+    // Within 5 %: |n''| is the peak of the nose's turn tracked in float over a check's steps, and the libm under it
+    // moves that peak -- this Mac's to within 2 %, CI's Linux runner's up to 3.1 % on two of the 18 epochs. A wrong
+    // arm, a body-frame or conjugate n', a pad on half the age or on the age without the pair lag all miss by 19 %
+    // or more.
     const double rn = std::sqrt(kGoblinAnt[0] * kGoblinAnt[0] + kGoblinAnt[1] * kGoblinAnt[1]
                                 + kGoblinAnt[2] * kGoblinAnt[2]);
     const double turn = 2.0 * std::sin(0.05) + 2.0 * 0.055;
@@ -2268,7 +2272,7 @@ TEST(RawGnssShadowV9, UnderARollTheNoseLeverIsTheCasesArmTimesThePitchOversTurn)
             // the turn steady across the whole interval: out 6.6-7.4 s, back 7.6-8.4 s
             if ((e.t > 6.55 && e.t < 7.45) || (e.t > 7.55 && e.t < 8.45))
             {
-                EXPECT_NEAR(e.dv_lever_mps, c.arm * turn, 0.02 * c.arm * turn) << e.t;
+                EXPECT_NEAR(e.dv_lever_mps, c.arm * turn, 0.05 * c.arm * turn) << e.t;
                 EXPECT_NEAR(e.dv_lever_win_mps, 2.0 * c.arm, 0.01 * c.arm) << e.t;
                 steady++;
             }
@@ -2289,7 +2293,8 @@ TEST(RawGnssShadowV9, InPairsTheNoseLeversPadReachesBackToThePairsMiddle)
     // are the antenna's 25 ms before its tag, and the filter takes them there (rr_pair_lag_s). The pad covers what
     // the nose's turn adds between the check's step and the Dopplers' instant, now 55 + 25 ms back: the allowance
     // is the arm times 2 sin(0.05) + 2 x 0.080 x 1 rad/s = 0.25996 rad/s (the epoch's own age alone, 0.055 s,
-    // would leave it at 0.20996: 19 % short). The window's is unchanged, and no epoch fails in any case.
+    // would leave it at 0.20996: 19 % short). The window's is unchanged, and no epoch fails in any case. Within 5 %,
+    // as the test above says why.
     const double rn = std::sqrt(kGoblinAnt[0] * kGoblinAnt[0] + kGoblinAnt[1] * kGoblinAnt[1]
                                 + kGoblinAnt[2] * kGoblinAnt[2]);
     const double turn = 2.0 * std::sin(0.05) + 2.0 * (0.055 + 0.025);
@@ -2316,7 +2321,7 @@ TEST(RawGnssShadowV9, InPairsTheNoseLeversPadReachesBackToThePairsMiddle)
         for (const ClosedEpoch& e : run.eps)
             if ((e.t > 6.55 && e.t < 7.45) || (e.t > 7.55 && e.t < 8.45))
             {
-                EXPECT_NEAR(e.dv_lever_mps, c.arm * turn, 0.02 * c.arm * turn) << e.t;
+                EXPECT_NEAR(e.dv_lever_mps, c.arm * turn, 0.05 * c.arm * turn) << e.t;
                 EXPECT_NEAR(e.dv_lever_win_mps, 2.0 * c.arm, 0.01 * c.arm) << e.t;
                 steady++;
             }
