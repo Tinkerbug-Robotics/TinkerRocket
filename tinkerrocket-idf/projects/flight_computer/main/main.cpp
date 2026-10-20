@@ -4537,14 +4537,29 @@ static void startRawShadow()
 #else
     const char* epochs_by = "the flight profile";
 #endif
+    // The cap as the GNSS task's stage will build to: none (0: every
+    // satellite), fixed, or governed between it and sat_cap_max -- governed
+    // only where CapGovernor::on() says so (a cap, and a ceiling above it;
+    // the stage builds every epoch here, external_build below)
+    gnss_raw::CapGovernor::Config cap_gov;
+    cap_gov.floor = cfg.sat_cap;
+    cap_gov.ceiling = cfg.sat_cap_max;
+    char cap_txt[96];
+    if (cfg.sat_cap <= 0)
+        snprintf(cap_txt, sizeof(cap_txt), "every satellite (no cap)");
+    else if (gnss_raw::CapGovernor(cap_gov).on())
+        snprintf(cap_txt, sizeof(cap_txt),
+                 "at most %d satellites, up to %d while the filter keeps up (the cap governed)", cfg.sat_cap,
+                 (int)cfg.sat_cap_max);
+    else
+        snprintf(cap_txt, sizeof(cap_txt), "at most %d satellites (the cap fixed)", cfg.sat_cap);
     ESP_LOGI(TAG, "[RAWGNSS] flight safeguards: Doppler change check %s (window %.1f s, attitude allowance %.0f deg, "
                   "%.0f deg about the vertical after a launch with no magnetometer heading, epoch %.0f and latch "
                   "%.0f sigmas, %s) | heading share %s (full at %.1f m/s^2 over %.1f s, open past %.1f g within "
                   "%.1f s, %s) | turning body: Dopplers allow %.2f m along the nose and %.2f m across from %.1f "
                   "rad/s%s | spinning body: attitude transition %s, the change check's lever on %s (radial %.3f m), "
                   "wind-up %.2f cycles a turn taken off | epochs (%s): the cheaper build %s, the geometry %s with the "
-                  "Doppler's prediction in %s, Dopplers in pairs %s (pair lag %.0f ms), at most %d satellites (the "
-                  "cap %s)",
+                  "Doppler's prediction in %s, Dopplers in pairs %s (pair lag %.0f ms), %s",
              cfg.dv_check == gnss_raw::RawGnssShadow::kDvAct
                  ? "ACTING"
                  : (cfg.dv_check == gnss_raw::RawGnssShadow::kDvObserve ? "observing" : "off"),
@@ -4562,8 +4577,7 @@ static void startRawShadow()
              epochs_by, cfg.meas.lite ? "ON" : "off", cfg.ekf.share_los ? "SHARED" : "per unit",
              cfg.ekf.rr_float ? "FLOAT" : "double",
              cfg.ekf.rr_pair_lag_s > 0.0 ? "ON" : (raw_pairs_asked ? "OFF (could not start: see above)" : "off"),
-             cfg.ekf.rr_pair_lag_s * 1000.0, cfg.sat_cap,
-             cfg.sat_cap_max > cfg.sat_cap ? "governed" : "fixed");
+             cfg.ekf.rr_pair_lag_s * 1000.0, cap_txt);
     // The GNSS antenna's offset where the owner measured it (BLE cmd 81), in
     // the filter's frame by the mounting as it stands (rawAntennaPublish
     // brings a later change): every Doppler and pseudorange predicted at the
