@@ -163,9 +163,18 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssShadow::Co
 // age at close 83 ms median and 101 at most against the high-roll image's 110
 // and 145, the build 5.2 ms, core 0 44 % idle, 99.9 % of the Dopplers
 // averaged (gnss-attitude-study/v9-mosaic-filter-plan/evidence/sat-rate/
-// bench/results_20261019.md). The bench integration's replays (2026-10-18):
-// the real logs' static velocity noise 27-31 % lower; Grid B's boost p90
-// 0.45 -> 0.31 deg, the apogee items unchanged.
+// bench/results_20261019.md). This set against the high-roll-only twin
+// offline (evidence/candidate-1024/report.md, every change from the pairs):
+// the real V9 logs' static velocity noise 25.8-28.8 % lower in the
+// GNSS-only arm and 28.3-29.2 % in the pad arm; Grid B with the magnetometer
+// exact, the boost p90's median 0.43 -> 0.31 deg and the coast's 0.29 ->
+// 0.27; every adopted bar met in every arm and roll rate. Its costs, inside
+// the bars: a fault starting between a pair's halves (the worst boost over
+// unaided +1.76 -> +2.04 deg, 5 -> 9 of 512 runs over 1 deg), a roll of
+// 1.5-5 rev/s with the antenna offset not given, and 10 rev/s or more with
+// it given. On the RF rig (evidence/candidate-1024/rig.md) every clean run
+// met the bars, and the same logs through both filters came out equal on
+// three of four, this set better on the fourth.
 inline void applyMosaicFlightProfile(GnssReceiverProfile& p)
 {
     p.build_lite = true;

@@ -151,7 +151,9 @@ bindings. `raw_replay --receiver mosaic` calls it in the same place, so a replay
 
 The boot line `[RAWGNSS] flight safeguards:` ends with them: `epochs (the flight profile): the cheaper build ON, the
 geometry SHARED with the Doppler's prediction in FLOAT, Dopplers in pairs ON (pair lag 25 ms), at most 16 satellites
-(the cap fixed)`.
+(the cap fixed)`. A bench image with no cap (`TR_BENCH_RAW_SAT_CAP=0`) ends `every satellite (no cap)` instead, and
+one whose cap governor runs (`TR_BENCH_RAW_CAP_MAX=24`, say) `at most 16 satellites, up to 24 while the filter keeps
+up (the cap governed)`.
 
 **The high-roll-only twin.** A bench or rig image built with `-DTR_BENCH_RAW_BUILD_LITE=0 -DTR_BENCH_RAW_SHARE_LOS=0
 -DTR_BENCH_RAW_DOP_AVG=0` flies fc/v9-highroll's settings for an A/B. It is marked `-bench`, and its boot line reads
@@ -167,13 +169,24 @@ The evidence:
   - the epoch build fell from 21.5 to 5.2 ms (median), and core 0's idle rose from 36 to 44 %;
   - 99.8-99.9 % of the Dopplers were averaged in pairs;
   - the flight loop held 968 passes/s with no gaps, and the filter task's free stack fell from 1,712 B to 1,612 B.
-- **Offline, on the bench integration** (2026-10-18):
-  - the real logs' static velocity noise is 27-31 % lower;
-  - on Grid B the boost p90 fell from 0.45 to 0.31 deg and the coast p90 from 0.24 to 0.14 deg, with the apogee
-    items unchanged;
-  - under the stale-satellite pattern the worst excess over the unaided twin was +1.64 deg (+1.74 without them), and
-    7 of 48 runs were more than 1 deg over their twin (4 of 48 without).
-- **Not yet run:** an RF-rig replay of this image on the V9.
+- **Offline, against the high-roll-only twin**
+  (`gnss-attitude-study/v9-mosaic-filter-plan/evidence/candidate-1024/report.md`, 25,216 runs of this set at
+  dbb42ab9). All of the change comes from the Dopplers in pairs:
+  - on the four real V9 logs the static velocity noise is 25.8-28.8 % lower in the GNSS-only arm and 28.3-29.2 %
+    lower in the pad arm;
+  - on Grid B with the magnetometer exact, the boost p90's median fell from 0.43 to 0.31 deg and the coast's from
+    0.29 to 0.27 deg;
+  - every adopted bar passes in every magnetometer arm, fault pattern and roll rate up to 20 rev/s, with the
+    antenna offset given or not.
+- **Where it is worse than the twin, all inside the bars** (same report):
+  - a receiver fault that starts between the two halves of a pair: the change check trips one epoch later, the
+    worst boost over unaided goes from +1.76 to +2.04 deg, and the runs more than 1 deg over from 5 to 9 of 512;
+  - a roll of 1.5-5 rev/s with the antenna offset not given;
+  - a roll of 10 rev/s or more with the offset given: a pair averages the antenna's circling velocity, which the
+    filter predicts whole.
+- **The RF rig, 2026-10-19** (`evidence/candidate-1024/rig.md`): every clean run passes the adopted bars. The same
+  recorded logs through both filters came out equal on three of four and better with this set on the fourth, so
+  the boost differences between the on-board runs are run to run, not the filter's.
 
 ### The GNSS antenna offset (BLE cmd 81)
 
