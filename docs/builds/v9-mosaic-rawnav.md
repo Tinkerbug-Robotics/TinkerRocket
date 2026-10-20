@@ -293,6 +293,24 @@ This is a statement about behavior, not bytes.
     and no internal RAM; the Beetle 8,220 B of flash code, 96 B of flash data and 372 B of IRAM code, no `.bss`; the
     V9 auto image nothing. The shadow object grows by about 1.8 KB on every board that builds it (the gyro's history
     for the wind-up, dormant on the Beetle), in PSRAM where the filter is.
+  - The epoch work (the four switches and the flight profile) adds the rest. Measured on this branch's tip after
+    its merge with main at 0cd24237: `riscv32-esp-elf-size -A` (`xtensa-esp32s3-elf-size -A` for the Beetle) on
+    each ELF, every image built from a git archive with the same real guidance. Each cell is the whole branch
+    against main, with the epoch work's own share in brackets (the tip against fc/v9-highroll ae9096d5 merged onto
+    the same main). Bytes:
+
+    | Image | Flash code | Flash data | IRAM code | Static DRAM | `.bin` |
+    |---|---|---|---|---|---|
+    | V9 mosaic (this image) | +40,414 (+31,076) | +2,240 (+1,936) | 0 | 0 | +42,656 (+33,024) |
+    | V8 mosaic | +40,412 (+31,074) | +2,240 (+1,936) | 0 | 0 | +42,640 (+33,008) |
+    | V9 auto | 0 | 0 | 0 | 0 | 0 |
+    | Beetle (M1) flight computer | +32,068 (+23,360) | +288 (+192) | +640 (+268) | 0 | +33,008 (+23,824) |
+
+    The switches' code is dormant on every board but the mosaic-only image: the V9 auto image links none of it, and
+    the Beetle links it with the shared filter, but no profile there turns it on (`bitident.sh` IDENTICAL, below).
+    The Beetle's IRAM code comes out of the S3's internal RAM, which its IRAM and DRAM share. Flash data is
+    `.flash.rodata` with the app descriptor, the init array and `.flash.tdata`; static DRAM is `.dram0.data`,
+    `.dram0.bss`, `.dram1.bss` and `.noinit`.
 - **The Beetle's filter is bit-identical to main's:** `tools/raw_replay/bitident.sh` reports 450 of 450 runs
   IDENTICAL. `tools/m1_identity.sh` reports its `main.cpp` and sensor collectors preprocess IDENTICAL. Neither
   covers GnssTimeSync; the host tests cover its default path.
