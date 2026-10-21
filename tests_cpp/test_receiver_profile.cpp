@@ -369,7 +369,6 @@ TEST(ReceiverProfile, TheStubsAreTheLc86gsNumbersMarkedUnmeasured)
         gnss_raw::GnssReceiverType type;
         const char* name;
     } stubs[] = {{gnss_raw::neoM8tProfile(), gnss_raw::kRxNeoM8t, "NEO-M8T"},
-                 {gnss_raw::px1105rProfile(), gnss_raw::kRxPx1105r, "PX1105R"},
                  {gnss_raw::genericProfile(), gnss_raw::kRxGeneric, "generic"}};
     for (const auto& s : stubs)
     {
@@ -382,6 +381,40 @@ TEST(ReceiverProfile, TheStubsAreTheLc86gsNumbersMarkedUnmeasured)
     }
     EXPECT_EQ(gnss_raw::profileFor(gnss_raw::kRxLc86g).type, gnss_raw::kRxLc86g);
     EXPECT_TRUE(gnss_raw::profileFor(gnss_raw::kRxLc86g).measured);
+}
+
+// The PX1105R's v0: the mosaic-G5's design with its own receiver's numbers.
+TEST(ReceiverProfile, ThePx1105rIsTheMosaicsDesignWithItsOwnReceiver)
+{
+    const GnssReceiverProfile p = gnss_raw::px1105rProfile();
+    const GnssReceiverProfile m = gnss_raw::mosaicG5Profile();
+    EXPECT_EQ(p.type, gnss_raw::kRxPx1105r);
+    EXPECT_STREQ(p.name, "PX1105R");
+    EXPECT_FALSE(p.measured);
+    EXPECT_EQ(gnss_raw::profileFor(gnss_raw::kRxPx1105r).type, gnss_raw::kRxPx1105r);
+    // the same epochs, grid and fusion as the mosaic's
+    EXPECT_EQ(p.raw_epoch_period_s, m.raw_epoch_period_s);
+    EXPECT_EQ(p.fuse_epoch_period_s, m.fuse_epoch_period_s);
+    EXPECT_EQ(p.pr_period_s, m.pr_period_s);
+    EXPECT_EQ(p.sat_cap, m.sat_cap);
+    EXPECT_EQ(p.relock_gap_s, m.relock_gap_s);
+    EXPECT_EQ(p.cr_mode, gnss_raw::kCarrierOff);
+    EXPECT_TRUE(gnss_raw::dopplerPairsFit(p));
+    for (int k = 0; k < gnss_raw::kProfileSys; ++k)
+    {
+        EXPECT_EQ(p.sig[k].carrier_hz, m.sig[k].carrier_hz) << k;
+        EXPECT_EQ(p.sig[k].cn0_min_pr, m.sig[k].cn0_min_pr) << k;
+        EXPECT_EQ(p.sig[k].cn0_min_rr, m.sig[k].cn0_min_rr) << k;
+    }
+    // and its own receiver: the Doppler a carrier change over the epoch before,
+    // in whole hertz; the code its own fit, unscaled; no 1PPS (no latency known)
+    EXPECT_DOUBLE_EQ(p.rr_lag_s, 0.025);
+    EXPECT_DOUBLE_EQ(p.doppler_step_hz, 1.0);
+    EXPECT_DOUBLE_EQ(p.pr_corr_scale, 1.0);
+    EXPECT_DOUBLE_EQ(p.pr_white_a, 0.026);
+    EXPECT_DOUBLE_EQ(p.pr_white_b, 0.157);
+    EXPECT_DOUBLE_EQ(p.epoch_latency_s, 0.0);
+    EXPECT_DOUBLE_EQ(p.windup_k, 0.0);   // the antenna's: the image's safeguards set it
 }
 
 TEST(ReceiverProfile, ThePhaseSigmaIsLogLinearInCn0)

@@ -63,6 +63,8 @@
 #include <TR_GNSSReceiverMosaic_Serial.h>
 #elif defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
 #include <TR_GNSSReceiverSdr_Serial.h>
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+#include <TR_GNSSReceiverPX1105R_Serial.h>
 #elif defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
 #include "gnss_auto_driver.h"
 #else
@@ -286,6 +288,9 @@ public:
     // the receiver sends one. Call before begin(); skipGNSSThisBoot() still
     // leaves the receiver out.
     void deferGNSSBringUpThisBoot() { gnss_defer_ = true; }
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+    // The PX1105R image's, the same (TR_GNSSReceiverPX1105RSerial::setBeginWait).
+    void deferGNSSBringUpThisBoot() { gnss_defer_ = true; }
 #endif
     // Which receiver the FC talks to (GNSS_TYPE_*): the build's own, or on the
     // V9 image the one begin() found; GNSS_TYPE_NONE when none came up, so
@@ -334,6 +339,19 @@ public:
     bool setGNSSRawMultiband(const mosaic::MosaicMultibandConfig& c, float windup_k);
     void noteGNSSRollRate(float p_rps);
     bool getGNSSRawMbStats(TR_GNSSReceiverMosaicSerial::RawMbStats& out) const;
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+    // The PX1105R image's, the same as the mosaic's (its driver's
+    // broadcastIono, setRawEpochPeriodMs, rawStats, setRawDopplerPairing --
+    // the mosaic's pair rule -- and rawPairStats), and its ephemerides, which
+    // the driver decodes from the subframes itself (with the receiver's week):
+    // for RawGnssMeasStage::addEphemeris. getGNSSEphemeris gives nothing here.
+    bool getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const;
+    void setGNSSRawEpochPeriodMs(uint32_t period_ms);
+    bool getGNSSRawStats(TR_GNSSReceiverPX1105RSerial::RawStats& out) const;
+    bool setGNSSRawDopplerPairing(const mosaic::MosaicDopplerPairConfig& c);
+    bool getGNSSRawPairStats(TR_GNSSReceiverPX1105RSerial::RawPairStats& out) const;
+    uint32_t gnssPollStackFree() const;
+    bool getGNSSEphemerisDecoded(gps_eph_t& out);
 #endif
 #if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
     // The SDR raw-nav image's raw outputs beside those (its driver's
@@ -518,6 +536,8 @@ private:
 #if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
     // deferGNSSBringUpThisBoot(): the poll task brings the receiver up
     bool gnss_defer_ = false;
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+    bool gnss_defer_ = false;
 #endif
     // Set by begin() once the barometer has both answered and been configured.
     bool bmp585_online_ = false;
@@ -540,6 +560,8 @@ private:
     TR_GNSSReceiverMosaicSerial gnss_receiver;
 #elif defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
     TR_GNSSReceiverSdrSerial gnss_receiver;
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+    TR_GNSSReceiverPX1105RSerial gnss_receiver;
 #elif defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
     TR_GNSSAuto gnss_receiver;
 #else

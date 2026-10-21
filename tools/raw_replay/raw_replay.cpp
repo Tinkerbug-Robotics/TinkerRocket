@@ -112,6 +112,15 @@
 #include "sim_epoch.h"
 #include "truth_nav.h"
 #endif
+// the SkyTraq PX1105R (--receiver px1105r): the mosaic image's design fed the PX1105R's binary stream through its
+// driver's code (skytraq_feed.h), where the tree has it (CMakeLists.txt RAW_REPLAY_PX1105R)
+#ifndef RAW_REPLAY_PX1105R
+#define RAW_REPLAY_PX1105R 0
+#endif
+#if RAW_REPLAY_MOSAIC && RAW_REPLAY_PX1105R
+#include "SkyTraqBinary.h"
+#include "skytraq_feed.h"
+#endif
 
 using namespace gnss_raw;
 
@@ -250,6 +259,9 @@ struct Args
     bool sdr_raw_steps = false;      // an experiment: the board's clock steps left in its ranges (SdrRawEpoch.h)
     std::string sdr_gps_iono;        // --gps-iono a0,..,b3: a GPS Klobuchar set as the board's, for a log made before
                                      // the board sent its own (4001 sub-type 4); "-" takes none, even the board's
+    double px_latency_ms = -1.0;     // --px-latency-ms: the PX1105R's time sync latency (-1: the profile's epoch_latency_s)
+    std::string px_tag = "sync";     // --px-tag sync|line: its epochs placed by its driver's time sync on the frames'
+                                     //   arrivals (the firmware's), or on the events file's K line (an ideal tag)
     bool cold_start = false;         // no S/PNAV/PCOV/A: the filter starts on the pad from the receiver's fix
     bool unaided = false;            // RawGnssEKFParams::att_gnss_off: the twin the acceptance compares against
     std::vector<std::string> rinex;  // RINEX 3 navigation files: the day's broadcast ephemerides
@@ -397,10 +409,12 @@ void usage()
                  "  [--max-epoch-age-s X] [--vert-check-mps X] [--boost-screen-window-s X] [--rr-dyn-tau-s X]\n"
                  "  [--rr-dyn-sigma X] [--vert-release-mps X] [--rr-fit-gate X] [--fw-defaults] [--digest FILE]\n"
                  "  [--truth-t0-tow X]\n"
-                 "  the mosaic-G5 (a RAW_REPLAY_MOSAIC build): [--receiver lc86g|mosaic|sdr] [--cold-start] [--unaided]\n"
+                 "  the mosaic-G5 (a RAW_REPLAY_MOSAIC build): [--receiver lc86g|mosaic|sdr|px1105r] [--cold-start] [--unaided]\n"
                  "  the gnss-sdr-dev board (--receiver sdr): [--sdr-latency-ms X] [--sdr-keep-marked] [--sdr-raw-steps]\n"
                  "  [--gps-iono a0,a1,a2,a3,b0,b1,b2,b3|-]\n"
                  "  [--dv-imu-free-off 0|1]\n"
+                 "  (px1105r: the PX1105R image -- the mosaic's design on the PX1105R's profile, flight profile and\n"
+                 "  safeguards, fed whole SkyTraq frames as R lines (skytraq_feed.h); a RAW_REPLAY_PX1105R build)\n"
                  "  [--rinex FILE]... [--quorum] [--vote-guard 0|1] [--loop-hz X] [--seed-heading-deg X]\n"
                  "  [--seed-heading-error-deg X] [--reject-persist-rr N] [--truth-nav FILE]\n"
                  "  [--seed-gyro-dps x,y,z]\n"
@@ -542,6 +556,8 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--fw-defaults") a.fw_defaults = true;
         else if (k == "--truth-t0-tow") a.truth_t0_tow = std::atof(val());
         else if (k == "--receiver" || k == "--profile") a.receiver = val();
+        else if (k == "--px-latency-ms") a.px_latency_ms = std::atof(val());
+        else if (k == "--px-tag") a.px_tag = val();
         else if (k == "--cold-start") a.cold_start = true;
         else if (k == "--sdr-latency-ms") a.sdr_latency_ms = std::atof(val());
         else if (k == "--sdr-keep-marked") a.sdr_keep_marked = true;
@@ -1750,16 +1766,26 @@ int main(int argc, char** argv)
         usage();
         return 2;
     }
-    const bool mosaic = a.receiver == "mosaic";
+    // the PX1105R image flies the mosaic-only image's design (TR_RAW_NAV_P4) on its own receiver's profile, flight
+    // profile and safeguards: everything the mosaic's replay does, but its profile and its stream (skytraq_feed.h)
+    const bool px = a.receiver == "px1105r";
+    const bool mosaic = a.receiver == "mosaic" || px;
     // the gnss-sdr-dev board (--receiver sdr): as the mosaic, the raw filter is the one navigation filter, started
     // on the pad (nav); its own profile, and its RTCM3 through SdrRawEpoch.h, not SBF
     const bool sdr = a.receiver == "sdr";
     const bool nav = mosaic || sdr;
     if (a.receiver != "lc86g" && !nav)
     {
-        std::fprintf(stderr, "--receiver is lc86g, mosaic or sdr, not %s\n", a.receiver.c_str());
+        std::fprintf(stderr, "--receiver is lc86g, mosaic, sdr or px1105r, not %s\n", a.receiver.c_str());
         return 2;
     }
+#if !(RAW_REPLAY_MOSAIC && RAW_REPLAY_PX1105R)
+    if (px)
+    {
+        std::fprintf(stderr, "this build has no PX1105R path (RAW_REPLAY_PX1105R=OFF): --receiver px1105r needs it\n");
+        return 2;
+    }
+#endif
 #if !RAW_REPLAY_SDR
     if (sdr)
     {
@@ -1938,7 +1964,11 @@ int main(int argc, char** argv)
     RawGnssShadow::Config cfg;
 #if !RAW_REPLAY_OLD
 #if RAW_REPLAY_MOSAIC
+#if RAW_REPLAY_PX1105R
+    GnssReceiverProfile rx = px ? px1105rProfile() : sdr ? sdrDevProfile() : mosaic ? mosaicG5Profile() : lc86gProfile();
+#else
     GnssReceiverProfile rx = sdr ? sdrDevProfile() : mosaic ? mosaicG5Profile() : lc86gProfile();
+#endif
 #if RAW_REPLAY_FLIGHT_PROFILE
     // the mosaic-only image's flight profile (applyMosaicFlightProfile, the owner's 10/24 set: the cheaper build, the
     // shared geometry with the Doppler in float, the Dopplers in pairs, 16 satellites, the cap fixed), where
@@ -1948,6 +1978,11 @@ int main(int argc, char** argv)
 #if RAW_REPLAY_SDR
     if (sdr)
         applySdrFlightProfile(rx);
+    else
+#endif
+#if RAW_REPLAY_PX1105R
+    if (px)
+        applyPx1105rFlightProfile(rx);   // the PX1105R image's (main.cpp startRawShadow, TR_GNSS_DRIVER_PX1105R)
     else
 #endif
     if (mosaic)
@@ -2053,6 +2088,11 @@ int main(int argc, char** argv)
             if (a.vert_imu_free_release_s >= 0.0)
                 cfg.vert_imu_free_release_s = a.vert_imu_free_release_s;
         }
+        else
+#endif
+#if RAW_REPLAY_PX1105R
+        if (px)
+            applyPx1105rFlightSafeguards(cfg);   // the mosaic's set with the PX1105R's antenna (windup_k 1)
         else
 #endif
             applyMosaicFlightSafeguards(cfg);
@@ -2846,6 +2886,54 @@ int main(int argc, char** argv)
                          static_cast<double>(o.mon_r), static_cast<double>(o.x_mps[i]));
         }
     };
+#endif
+#if RAW_REPLAY_PX1105R
+    // the PX1105R's stream (skytraq_feed.h): its driver's chain on the same grid and pairs, its time sync at the
+    // profile's latency (TR_GNSSReceiverPX1105RSerial::setEpochLatencyS, from startRawShadow)
+    rr::SkyTraqFeed::Config pcfg;
+    pcfg.fuse_period_ms = fcfg.fuse_period_ms;
+    pcfg.epoch_latency_s = a.px_latency_ms >= 0.0 ? a.px_latency_ms * 1.0e-3 : rx.epoch_latency_s;
+    pcfg.pair = fcfg.pair;
+    pcfg.pair_cfg = fcfg.pair_cfg;
+    std::unique_ptr<rr::SkyTraqFeed> pxfeedp(new rr::SkyTraqFeed(pcfg));
+    rr::SkyTraqFeed& pxfeed = *pxfeedp;
+    std::unique_ptr<skytraq::FrameParser> stqp(new skytraq::FrameParser());
+    struct BodySink : skytraq::FrameSink
+    {
+        std::vector<std::vector<uint8_t>> bodies;
+        void onFrame(const uint8_t* b, size_t len, size_t) override { bodies.emplace_back(b, b + len); }
+    } stq_sink;
+    int px_untimed = 0, px_fixes = 0;
+    if (px && a.px_tag != "sync" && a.px_tag != "line")
+    {
+        std::fprintf(stderr, "--px-tag is sync or line, not %s\n", a.px_tag.c_str());
+        return 2;
+    }
+    // META app_iono (px_events.py --iono): the app's set (a pad calibration or NVS), through the GNSS task's one rule
+    // as rawIonoOffer(io, false) takes it -- the rig's sky never broadcasts its own, the V9 rig image injects it
+    if (px && in.meta.count("app_iono"))
+    {
+        int v[9];
+        if (std::sscanf(in.meta["app_iono"].c_str(), "%d %d %d %d %d %d %d %d %d", &v[0], &v[1], &v[2], &v[3], &v[4],
+                        &v[5], &v[6], &v[7], &v[8]) == 9)
+        {
+            ShadowIono io{};
+            for (int i = 0; i < 8; ++i)
+                io.raw[i] = static_cast<int8_t>(v[i]);
+            io.gps_day = static_cast<uint16_t>(v[8]);
+            if (pxfeed.offerAppIono(io))
+            {
+                stage.setIono(io);
+                sh.setIono(io);
+                std::fprintf(stderr, "the app's ionosphere (META app_iono, GPS day %d) taken\n", v[8]);
+            }
+        }
+        else
+        {
+            std::fprintf(stderr, "cannot read META app_iono: %s\n", in.meta["app_iono"].c_str());
+            return 1;
+        }
+    }
 #endif
     std::unique_ptr<mosaic::SbfParser> sbfp(new mosaic::SbfParser());
     struct BlockSink : mosaic::SbfSink
@@ -3764,7 +3852,7 @@ int main(int argc, char** argv)
         line = lineOfK(k);
 #if RAW_REPLAY_MOSAIC
         tag_gate.pair_us = k.t_us;
-        if (mosaic)
+        if (mosaic && !px)
         {
             if ((k.flags & 2) != 0)
             {
@@ -4045,7 +4133,7 @@ int main(int argc, char** argv)
             break;
         case 'K':
 #if RAW_REPLAY_MOSAIC
-            if (mosaic)
+            if (mosaic && !px)
             {
                 // held for the block that paired its edge (mosaic_feed.h); one still held never saw it: now
                 for (const Event& k : k_pending)
@@ -4133,6 +4221,105 @@ int main(int argc, char** argv)
                     else
                         sdr_untimed++;
                     handOver(te, ev.t_us, false);
+                }
+                break;
+            }
+#endif
+#if RAW_REPLAY_MOSAIC && RAW_REPLAY_PX1105R
+            if (px && ev.bytes.size() >= 2 && ev.bytes[0] == 0xA0 && ev.bytes[1] == 0xA1)
+            {
+                // the PX1105R's SkyTraq frames: its driver's parser, then each body as the driver and the GNSS task
+                // take it (skytraq_feed.h)
+                stq_sink.bodies.clear();
+                stqp->feed(ev.bytes.data(), ev.bytes.size(), stq_sink);
+                for (const std::vector<uint8_t>& body : stq_sink.bodies)
+                {
+                    TimedRawEpoch& te = *scratch;
+                    const rr::SkyTraqFeed::Kind kind = pxfeed.onBody(body.data(), body.size(), ev.t_us, te);
+                    // the ephemerides it completed, into the stage's store as they come (main.cpp's PX1105R path)
+                    for (const gps_eph_t& e : pxfeed.ephs())
+                    {
+                        if (ev.flags == 1)
+                        {
+                            nav_pre.push_back({e, rinex::availGpsS(e)});
+                            eph_pre++;
+                        }
+                        else if (stage.addEphemeris(e))
+                        {
+                            eph_nav++;
+                        }
+                        eph_flight++;
+                    }
+                    switch (kind)
+                    {
+                    case rr::SkyTraqFeed::Kind::EPOCH:
+                    {
+                        if (a.px_tag == "line")
+                        {
+                            // an ideal tag: the epoch's GPS instant on the events file's clock line
+                            int64_t mcu = 0;
+                            const bool on = pxfeed.biased() && line.mcuAt(pxfeed.gpsS(), mcu);
+                            te.mcu_us = on ? mcu : 0;
+                            te.tag_dtr_ms = on ? static_cast<float>(pxfeed.dtrMs()) : 0.0f;
+                        }
+                        if (te.mcu_us != 0)
+                            te.mcu_us += static_cast<int64_t>(a.epoch_shift_ms * 1000.0);
+                        else
+                            px_untimed++;
+#if RAW_REPLAY_DOPAVG
+                        if (fcfg.pair)
+                            notePaired(te.epoch, pxfeed.lastPaired(), ev.t_us * 1.0e-6 + a.t_base_s,
+                                       usableRates(te.epoch));
+#endif
+                        handOver(te, ev.t_us, false);
+                        break;
+                    }
+                    case rr::SkyTraqFeed::Kind::ION:
+                        // the GNSS task's one rule chose it: its stage builds with it, the filter's task takes it
+                        stage.setIono(pxfeed.iono());
+                        sh.setIono(pxfeed.iono());
+                        break;
+                    case rr::SkyTraqFeed::Kind::FIX:
+                    {
+                        // the fix the flight loop gets (publishFix: every 0xDF), its height above the ellipsoid
+                        const GNSSData& g = pxfeed.gnss();
+                        px_fixes++;
+                        rr::FixIn f;
+                        f.t_us = ev.t_us;
+                        f.fix_mode = g.fix_mode;
+                        f.num_sats = g.num_sats;
+                        f.alt_m = g.alt_mm * 1e-3;
+                        f.vel_n = g.vel_n_mmps * 1e-3;
+                        f.vel_e = g.vel_e_mmps * 1e-3;
+                        f.vel_u = g.vel_u_mmps * 1e-3;
+                        if (use_votes)
+                            votes.onFix(f);
+                        if (tvotesp)
+                            tvotesp->onFix(f);
+                        if (pvtf && g.fix_mode >= 2)
+                            std::fprintf(pvtf, "%.6f,%.6f,%.4f,%.4f,%u,%.2f\n", ev.t_us * 1e-6,
+                                         ev.t_us * 1e-6 + a.t_base_s, g.alt_mm * 1e-3, 0.0,
+                                         static_cast<unsigned>(g.fix_mode), -1.0);
+                        if (cold && !cold_pos_known && g.fix_mode >= 3)
+                        {
+                            // the cold start's position: the receiver's first 3-D fix, its height above the
+                            // ellipsoid (the PX1105R's binary output has no geoid)
+                            const skytraq::RcvState& s = pxfeed.fix();
+                            double la = 0.0, lo = 0.0, h = 0.0;
+                            rr::SkyTraqFeed::ecefToLla(s.ecef_m, la, lo, h);
+                            cold_pos_known = true;
+                            cold_lla[0] = la;
+                            cold_lla[1] = lo;
+                            cold_lla[2] = h;
+                            cold_sep = 0.0f;
+                            cold_wnc = s.week;
+                            cold_tow_ms = static_cast<uint32_t>(std::llround(s.tow_s * 1000.0));
+                        }
+                        break;
+                    }
+                    default:
+                        break;
+                    }
                 }
                 break;
             }
@@ -5152,7 +5339,12 @@ int main(int argc, char** argv)
                     // the Dopplers in pairs: the driver's counts (the sim's where it has epochs), the filter's lag for
                     // an epoch as it came and the more for one in pairs, and each grid epoch with a Doppler not averaged
                     // (flight time, usable, averaged: as it came, or in pairs with the rest dropped)
+#if RAW_REPLAY_PX1105R
+                    const mosaic::MosaicDopplerPairStats& ps =
+                        in.xep.empty() ? (px ? pxfeed.pairStats() : feed.pairStats()) : sim_pair_st;
+#else
                     const mosaic::MosaicDopplerPairStats& ps = in.xep.empty() ? feed.pairStats() : sim_pair_st;
+#endif
                     std::string al;
                     char b[64];
                     for (size_t i = 0; i < pair_alone_at.size(); ++i)
@@ -5473,6 +5665,37 @@ int main(int argc, char** argv)
     if (cold && !seed_ready)
         std::fprintf(stderr, "WARNING: the cold start never had a position (no PVTGeodetic with a solution, no META "
                              "seed_lla): the filter never started\n");
+#if RAW_REPLAY_PX1105R
+    if (px)
+    {
+        const rr::SkyTraqFeed::Counts& pc = pxfeed.counts();
+        const ShadowMeasStats& ms = stage.stats();
+        const skytraq::NavCounters& nc = pxfeed.nav().counters();
+        const mosaic::MosaicDopplerPairStats& ps = pxfeed.pairStats();
+        std::fprintf(stderr,
+                     "  px1105r: frames %u (bad checksums %u, lengths %u); 0xE5 %u (bad %u; fused grid %u, off it %u, "
+                     "empty %u; cells kept %u of %u listed); timed %u, untimed %u (no 0xDF bias %u, no line %u); "
+                     "0xDF %u (fixes %u), clock jumps %u, restarts %u, slips %u, line restarts %u, line drift %.3f "
+                     "ppm, envelope rms %.2f ms, late90 %.2f ms; nav frames GPS %u GAL %u BDS %u -> ephemerides %u "
+                     "(issues GPS %u GAL %u BDS %u; held for the week %u), refused %u, iono pages %u applied %u; "
+                     "ephemerides filed %d, RINEX %d; eph_sats %d, tracked %d without one %d, capped out %u; fixes "
+                     "handed %d\n",
+                     pc.frames, stqp->badChecksums(), stqp->badLengths(), pc.e5, pc.e5_bad, pc.epochs, pc.decimated,
+                     pc.empty, pc.cells_kept, pc.cells_listed, pc.timed, pc.untimed_nobias + pc.untimed_noline,
+                     pc.untimed_nobias, pc.untimed_noline, pc.df, pc.df_fix, pxfeed.clock().jumps,
+                     pxfeed.clock().restarts, pxfeed.lock().slips, pxfeed.timeSync().restarts(),
+                     pxfeed.timeSync().driftPpm(), pxfeed.timeSync().envelopeRmsMs(),
+                     pxfeed.timeSync().lateness90Ms(), nc.frames[0], nc.frames[1], nc.frames[2], pc.eph,
+                     nc.issues[0], nc.issues[1], nc.issues[2], pc.eph_pending, pc.nav_refused, pc.ion_pages,
+                     pc.ion_applied, eph_nav, eph_rinex, ms.eph_sats, ms.tracked, ms.tracked_no_eph, ms.capped_out,
+                     px_fixes);
+        std::fprintf(stderr, "  px1105r Doppler pairs: grid epochs %u (no prev %u, jump %u, few %u), dopplers %u: "
+                             "averaged %u, alone %u, dropped mate %u cn0 %u lock %u diff %u; untimed handed %d\n",
+                     ps.epochs, ps.epochs_no_prev, ps.epochs_jump, ps.epochs_few, ps.dopplers, ps.pairs,
+                     ps.alone_epoch, ps.alone_mate, ps.alone_cn0, ps.alone_lock, ps.alone_diff, px_untimed);
+    }
+    else
+#endif
     if (mosaic)
     {
         const rr::MosaicFeed::Counts& fc = feed.counts();
@@ -5589,7 +5812,7 @@ int main(int argc, char** argv)
                                  "yet confirmed)\n",
                          untimed_not_fine, first_rt < 0 ? "never in the log" : "in the log", untimed_pps_stale,
                          untimed_no_line, untimed_no_bias, untimed_edge_off, untimed_off_chain, untimed_held);
-        if (mosaic)
+        if (mosaic && !px)
         {
             const mosaic::MosaicTimeTag::Stats& ts = feed.timeTag().stats();
             using Brk = mosaic::MosaicTimeTag::Break;
@@ -5613,7 +5836,7 @@ int main(int argc, char** argv)
             else if (k_lost < 0)
                 std::fprintf(stderr, "  clock lines carry no seq (an older events file): lost records not counted\n");
         }
-        if (!sdr && first_rt < 0 && epochs_decoded > 0)   // the mosaic's tag gate; the board's epochs are placed apart
+        if (!sdr && !px && first_rt < 0 && epochs_decoded > 0)   // the mosaic's tag gate; the board's and the PX1105R's epochs are placed apart
             std::fprintf(stderr, "WARNING: no ReceiverTime in the log: the driver times nothing without FINETIME%s\n",
                          a.assume_finetime ? " (--assume-finetime: timed all the same)" : " (--assume-finetime to time them)");
         if (eph_pre > 0)

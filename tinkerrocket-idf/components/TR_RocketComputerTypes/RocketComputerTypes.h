@@ -962,6 +962,16 @@ static constexpr uint8_t GNSS_TYPE_LC86G  = 3;   // Quectel LC86G (the Beetle): 
 // TinkerRocket's message 4001, ephemerides), logged and not yet navigated on
 // (gnssTypeGivesFix).
 static constexpr uint8_t GNSS_TYPE_SDR    = 4;
+static constexpr uint8_t GNSS_TYPE_PX1105R = 5;  // SkyTraq PX1105R on the V9's or V10's J1 (its own image): SkyTraq binary
+// The PX1105R's name, and its IMU limit below, are compiled into the PX1105R
+// image alone (TR_GNSS_DRIVER_PX1105R): every other image, the OC's included,
+// keeps exactly the code it had, so an OC names that FC's receiver "none"
+// until it learns the name too.
+#if defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+static constexpr uint8_t GNSS_TYPE_LAST_NAMED = GNSS_TYPE_PX1105R;
+#else
+static constexpr uint8_t GNSS_TYPE_LAST_NAMED = GNSS_TYPE_SDR;
+#endif
 
 // The name each type goes by on the wire and on screen ("" for NONE).
 constexpr const char* gnssTypeName(uint8_t type)
@@ -970,6 +980,9 @@ constexpr const char* gnssTypeName(uint8_t type)
          : type == GNSS_TYPE_MOSAIC ? "mosaic-G5"
          : type == GNSS_TYPE_LC86G  ? "LC86G"
          : type == GNSS_TYPE_SDR    ? "gnss-sdr-dev"
+#if defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+         : type == GNSS_TYPE_PX1105R ? "PX1105R"
+#endif
          : "";
 }
 
@@ -986,7 +999,7 @@ constexpr bool gnssTypeGivesFix(uint8_t type)
 constexpr uint8_t gnssTypeFromName(const char* name)
 {
     if (name == nullptr || name[0] == '\0') return GNSS_TYPE_NONE;
-    for (uint8_t t = GNSS_TYPE_UBLOX; t <= GNSS_TYPE_SDR; t++)
+    for (uint8_t t = GNSS_TYPE_UBLOX; t <= GNSS_TYPE_LAST_NAMED; t++)
     {
         const char* a = gnssTypeName(t);
         size_t i = 0;
@@ -3861,11 +3874,19 @@ constexpr bool antennaOffsetValid(const AntennaOffsetConfigData& a)
 // sky, ~71 kB/s with the framing budgeted at 32) is the same size of stream,
 // and the GNSS log setting does not thin it, so it holds the IMU at 3840 Hz
 // whatever the setting.
+// The PX1105R image logs every 0xE5 and 0xDF at 20 Hz (~30 kB/s on the open
+// sky, 2026-09-26: 1.4 kB a 0xE5), half the mosaic's SBF, but 7680 Hz would
+// still put the log at ~97 % of the drain: it stops at 3840 Hz too, whatever
+// the log setting (the REDUCED log thins SBF alone, gnss_log_policy.h).
 static constexpr uint16_t IMU_RATE_MAX_HZ_MOSAIC = 3840;
 static constexpr uint16_t IMU_RATE_MAX_HZ_SDR    = 3840;
 constexpr uint16_t imuRateMaxForGnss(uint16_t board_max_hz, uint8_t gnss_type,
                                      uint8_t gnss_log = GNSS_LOG_DETAILED)
 {
+#if defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+    if (gnss_type == GNSS_TYPE_PX1105R && board_max_hz > IMU_RATE_MAX_HZ_MOSAIC)
+        return IMU_RATE_MAX_HZ_MOSAIC;
+#endif
     return (gnss_type == GNSS_TYPE_MOSAIC && gnss_log != GNSS_LOG_REDUCED &&
             board_max_hz > IMU_RATE_MAX_HZ_MOSAIC)
                ? IMU_RATE_MAX_HZ_MOSAIC

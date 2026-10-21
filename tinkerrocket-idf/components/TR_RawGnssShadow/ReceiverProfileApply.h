@@ -414,6 +414,28 @@ inline void applySdrFlightSafeguards(RawGnssShadow::Config& c)
     c.vert_imu_free_release_s = 1.0;
 }
 
+// The PX1105R image's flight profile: the mosaic-only image's exactly (the
+// cheaper build, the shared geometry, the Doppler's float prediction, its
+// pairs, 16 satellites, the cap fixed). Its receiver has the mosaic's 50 ms
+// epochs on the 100 ms grid, so the pairs fit (dopplerPairsFit).
+inline void applyPx1105rFlightProfile(GnssReceiverProfile& p)
+{
+    applyMosaicFlightProfile(p);
+}
+
+// The PX1105R image's flight safeguards: the mosaic-only image's (none needs
+// the receiver: they are the airframe's and the filter's), with this carrier's
+// antenna's wind-up. Its Taoglas GVLB208.A is a right-hand circularly
+// polarised patch, one cycle a turn about its boresight: k = 1, UNMEASURED,
+// and right only with the patch facing up the nose (the carrier standing on
+// J1 as the SAM-M10Q carrier does). The clock drift takes the common part
+// either way (the windup study: no ascent median moved more than 0.03 deg).
+inline void applyPx1105rFlightSafeguards(RawGnssShadow::Config& c)
+{
+    applyMosaicFlightSafeguards(c);
+    c.windup_k = 1.0;
+}
+
 // The antenna's offset from the IMU, where the rocket's owner measured it: an
 // optional per-rocket setting (the apps' Antenna offset, BLE cmd 81), unknown
 // unless set.

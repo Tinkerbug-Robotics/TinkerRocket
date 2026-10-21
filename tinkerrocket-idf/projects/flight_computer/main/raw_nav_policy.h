@@ -4,10 +4,11 @@
 // filter that stopped in flight starts again, and when a restored flight's
 // start waits for the barometer (pure, header-only, host-tested)
 //
-// Mosaic-only build (TR_RAW_NAV_MOSAIC: the V8 or V9 with a mosaic-G5, where
-// the raw-GNSS filter is the only navigation filter and GpsInsEKF is not built
-// in). main.cpp keeps the state and the clocks; these decide. The Beetle's
-// image does not include this file.
+// The P4 raw-GNSS images (TR_RAW_NAV_P4: the V8 or V9 with a mosaic-G5, the
+// V10 with the gnss-sdr-dev board, or the V9 or V10 with a PX1105R, where the raw-GNSS filter is the only navigation
+// filter and GpsInsEKF is not built in); the navigation-block resends are the
+// mosaic-only image's alone (TR_RAW_NAV_MOSAIC). main.cpp keeps the state and
+// the clocks; these decide. The Beetle's image does not include this file.
 //
 // Tested in tests_cpp/test_raw_nav_policy.cpp.
 #ifndef RAW_NAV_POLICY_H

@@ -62,7 +62,8 @@ public:
     // only files them; and that receiver sends each one once (when it
     // changes, or on a resend at link setup and launch), where the LC86G
     // repeats them every second, so one dropped in a sim on the pad would be
-    // missing until its next upload, hours on.
+    // missing until its next upload, hours on. (The PX1105R image's decoded
+    // ephemerides likewise: getGNSSEphemerisDecoded below.)
     bool enableGNSSRawOutputs() { return real_.enableGNSSRawOutputs(); }
     bool getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out);
     bool getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len);
@@ -108,6 +109,21 @@ public:
     }
     // the replayed IMU's roll, as the real one's: the receiver is real in a sim
     void noteGNSSRollRate(float p_rps) { real_.noteGNSSRollRate(p_rps); }
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+    // The PX1105R image's, by the mosaic's rules (no rig replay on this
+    // image): its GPS ionosphere a real sky's while idle, none while a sim
+    // runs (the last one decoded, not consumed); the fused grid and the
+    // Dopplers in pairs straight to the receiver; and the ephemerides its
+    // driver decoded from the subframes, passed on while a sim runs too, as
+    // the mosaic's navigation blocks are: they say where the satellites are,
+    // not what the IMU did, and the stage only files them.
+    bool getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const;
+    void setGNSSRawEpochPeriodMs(uint32_t period_ms) { real_.setGNSSRawEpochPeriodMs(period_ms); }
+    bool setGNSSRawDopplerPairing(const mosaic::MosaicDopplerPairConfig& c)
+    {
+        return real_.setGNSSRawDopplerPairing(c);
+    }
+    bool getGNSSEphemerisDecoded(gps_eph_t& out) { return real_.getGNSSEphemerisDecoded(out); }
 #endif
 #if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
     // The SDR raw-nav image's fused grid and Doppler means go straight to the

@@ -776,6 +776,12 @@ bool SensorCollectorSim::getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) 
     if (phase_ == SIM_IDLE || replay_on_) return real_.getGNSSBroadcastIono(raw, gps_day);
     return false;   // the real sky's: not while a sim runs (kept, not consumed) — see the header
 }
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+bool SensorCollectorSim::getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const
+{
+    if (phase_ == SIM_IDLE || replay_on_) return real_.getGNSSBroadcastIono(raw, gps_day);
+    return false;   // the real sky's: not while a sim runs (kept, not consumed) — see the header
+}
 #endif
 
 // ============================================================================
