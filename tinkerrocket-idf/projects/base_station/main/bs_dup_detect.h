@@ -72,6 +72,23 @@ inline uint8_t seqAnomalyCount(const State& s)
 
 inline bool seqDirty(const State& s) { return seqAnomalyCount(s) >= kSeqAnomalies; }
 
+// Whether this rid looks like ONE rocket yet: the transmit-slot controller
+// must not adjust a rid before then. An adjust names a rid, every rocket on
+// that rid follows it, and two rockets that share one land on the same grid
+// point and wipe out each other's frames for good (bench 2026-10-21: the
+// Beetle and the V5 were both rid 1 when "rocket 1" was slotted). The
+// duplicate flag needs a few beacons to rise, so wait for kSettleVotes clean,
+// agreeing beacons first (~4-6 s on the pad). A rocket in flight sends no
+// beacons; it may be adjusted on the strength of its clean seq stream.
+inline constexpr uint8_t kSettleVotes = 2;
+
+inline bool identitySettled(const State& s)
+{
+    if (s.flagged) return false;
+    if (s.in_flight) return !seqDirty(s);
+    return s.votes >= kSettleVotes;
+}
+
 namespace detail {
 
 inline Edge set(State& s, uint8_t reason)

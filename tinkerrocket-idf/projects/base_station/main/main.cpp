@@ -42,6 +42,7 @@
 #include "bs_uplink_txwin.h"      // TX-in-the-RX-gap window policy (#506)
 #include "bs_dup_detect.h"        // duplicate rocket-ID flag (three-rocket support)
 #include "bs_tx_slots.h"          // base-station-run transmit slots (three-rocket support)
+#include "bs_collision_watch.h"   // release rockets heard colliding (three-rocket support)
 #include "bs_battery_soc.h"       // voltage-based SoC fallback (#501)
 #include "bs_pack_sense_policy.h"  // flight-pack dividers -> pack / cells (#714)
 #include "bs_download_policy.h"   // nextChunk()/mayEmitChunk() pacing (#380)
@@ -4273,11 +4274,34 @@ static void logSlotEvent(const char* what, const TrackedRocket& tr, int err_ms,
     logHopEvent(ev, currentRxFreqMHz());
 }
 
+// Queue a release (LORA_TX_SLOT_RELEASE) to one rid or to every rocket (0xFF):
+// each rocket that hears it drops its lock and moves to a random phase.
+static bool queueSlotRelease(uint8_t target_rid)
+{
+    uint8_t payload[4];
+    bs_tx_slots::packAdjust(payload, 0, LORA_TX_SLOT_RELEASE);
+    return buildUplinkPacket(LORA_CMD_TX_SLOT_ADJUST, payload, sizeof(payload),
+                             target_rid, config::TX_SLOT_RELEASE_RETRIES);
+}
+
 // A duplicate-rid edge from bs_dup_detect: say so on the console and in the log.
+// A rid found shared after the controller already timed it has had its adjusts
+// followed by every rocket on it — onto one grid point — so release it: each of
+// them draws its own phase and they stop wiping out each other's frames.
 static void noteDupEdge(int idx, bs_dup_detect::Edge edge)
 {
     if (edge == bs_dup_detect::Edge::None || idx < 0) return;
-    const TrackedRocket& tr = tracked_rockets[idx];
+    TrackedRocket& tr = tracked_rockets[idx];
+    if (edge == bs_dup_detect::Edge::Set &&
+        (tr.txslot.locked || tr.txslot.adjusts_sent > 0))
+    {
+        logSlotEvent("unlock", tr, tr.txslot.last_err_ms, " why=dup");
+        tr.txslot.resetTiming();
+        tr.txslot.awaiting_uplink = false;
+        const bool queued = queueSlotRelease(tr.rocket_id);
+        ESP_LOGW(TAG, "[SLOT] rid=%u is shared: release %s", (unsigned)tr.rocket_id,
+                 queued ? "queued" : "NOT queued");
+    }
     char ev[BS_EVENT_TEXT_MAX + 1];
     if (edge == bs_dup_detect::Edge::Set)
     {
@@ -4380,7 +4404,7 @@ static void serviceTxSlotsOnFrame(int idx, uint16_t seq, bool fast, bool timed,
     // them when the adjust goes out.
     const bool eligible = tx_slots.enabled && lora_hop_disabled &&
                           !tr.hopping && !hop_active_ &&
-                          !tr.dup.flagged &&
+                          bs_dup_detect::identitySettled(tr.dup) &&
                           rx_key == operatingChanKey() &&
                           recovery_state == RecoveryState::IDLE &&
                           lora_txn_state == LoRaTxnState::IDLE &&
@@ -4435,6 +4459,39 @@ static void serviceTxSlotTimeouts(uint32_t now_ms)
     }
 }
 
+// Every pass: rockets heard colliding (a steady stream of CRC failures, see
+// bs_collision_watch.h) get a broadcast release so they come apart, and the
+// controller starts over from free-running timing.
+static bs_collision_watch::Watch collision_watch;
+
+static void serviceCollisionWatch(uint32_t now_ms)
+{
+    TR_LoRa_Comms::Stats ls = {};
+    lora_comms.getStats(ls);
+    const bool armed = tx_slots.enabled && lora_hop_disabled && !hop_active_;
+    if (!collision_watch.onTick(now_ms, ls.rx_crc_fail, armed, anyRocketInFlight(now_ms)))
+    {
+        return;
+    }
+    for (int i = 0; i < MAX_TRACKED_ROCKETS; i++)
+    {
+        TrackedRocket& tr = tracked_rockets[i];
+        if (!tr.active) continue;
+        if (tr.txslot.locked) logSlotEvent("unlock", tr, tr.txslot.last_err_ms, " why=crc");
+        tr.txslot.resetTiming();
+        tr.txslot.awaiting_uplink = false;
+    }
+    tx_slots.resetBase();
+    const bool queued = queueSlotRelease(/*target_rid=*/0xFF);
+    char ev[BS_EVENT_TEXT_MAX + 1];
+    snprintf(ev, sizeof(ev), "slot release why=crc fails=%lu in %lu s",
+             (unsigned long)collision_watch.last_window_fails,
+             (unsigned long)(bs_collision_watch::kWindowMs / 1000U));
+    ESP_LOGW(TAG, "[SLOT] %s — rockets colliding, release broadcast %s", ev,
+             queued ? "queued" : "NOT queued");
+    logHopEvent(ev, currentRxFreqMHz());
+}
+
 // BLE BLE_BS_CMD_SET_TX_SLOTS. Off: stop adjusting, forget the grid and tell
 // every rocket to go back to free-running (broadcast release). Sent on every
 // "off", not only on the change, so the operator can repeat it for a rocket
@@ -4468,10 +4525,7 @@ static void setTxSlotsEnabled(bool on)
         logHopEvent("slots on", currentRxFreqMHz());
         return;
     }
-    uint8_t payload[4];
-    bs_tx_slots::packAdjust(payload, 0, LORA_TX_SLOT_RELEASE);
-    const bool queued = buildUplinkPacket(LORA_CMD_TX_SLOT_ADJUST, payload, sizeof(payload),
-                                          /*target_rid=*/0xFF, config::TX_SLOT_RELEASE_RETRIES);
+    const bool queued = queueSlotRelease(/*target_rid=*/0xFF);
     ESP_LOGI(TAG, "[SLOT] Transmit slots OFF — release broadcast %s (x%u)",
              queued ? "queued" : "NOT queued", (unsigned)config::TX_SLOT_RELEASE_RETRIES);
     logHopEvent("slots off release broadcast", currentRxFreqMHz());
@@ -6557,6 +6611,7 @@ static void loop_bs()
     // Service LoRa uplink retries (TX commands, then resume RX)
     serviceUplink();
     serviceTxSlotTimeouts(millis());
+    serviceCollisionWatch(millis());
 
     // Advance the transactional reconfigure state machine (issue #71).
     // Must run after serviceUplink so we observe the uplink queue draining

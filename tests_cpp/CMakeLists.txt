@@ -715,6 +715,18 @@ target_include_directories(test_bs_dup_detect PRIVATE
 target_link_libraries(test_bs_dup_detect GTest::gtest_main)
 gtest_discover_tests(test_bs_dup_detect)
 
+# ---------- test_bs_collision_watch ----------
+# Host-side test for the base station's collision watchdog (three-rocket
+# support): a steady stream of CRC failures (two rockets on one grid point)
+# becomes a broadcast transmit-slot release. bs_collision_watch.h is pure.
+add_executable(test_bs_collision_watch test_bs_collision_watch.cpp)
+target_include_directories(test_bs_collision_watch PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
+)
+target_link_libraries(test_bs_collision_watch GTest::gtest_main)
+gtest_discover_tests(test_bs_collision_watch)
+
 # ---------- test_bs_tx_slots ----------
 # Host-side test for the base-station transmit-slot controller (three-rocket
 # support): the BS times each rocket's frames and moves each onto its own third

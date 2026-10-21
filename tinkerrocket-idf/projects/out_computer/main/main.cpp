@@ -68,6 +68,7 @@ static inline std::string itos(int v)
 #include "supply_status_policy.h" // #1593: the V10's PG_RAIL / VBUCK_OK edges
 #include <esp_attr.h>             // RTC_NOINIT_ATTR
 #include <esp_system.h>           // esp_reset_reason
+#include <esp_random.h>           // esp_random: transmit-slot phase on a release
 #include <esp_adc/adc_oneshot.h>  // #850: camera/servo IMON reads
 #include <esp_adc/adc_cali.h>
 #include <esp_adc/adc_cali_scheme.h>
@@ -1844,6 +1845,17 @@ static lora_slot_follow::State lora_slot;
 static uint32_t loraTxPeriodMs()
 {
     return (config::LORA_TX_RATE_HZ > 0) ? (1000U / config::LORA_TX_RATE_HZ) : 40U;
+}
+
+// Free-running from a random point of the period (lastTxForRandomPhase): a
+// rocket that was transmitting on top of another comes apart from it.
+static void loraRandomizeTxPhase(const char* why)
+{
+    const uint32_t now_ms = millis();
+    last_lora_tx_ms = lora_slot_follow::lastTxForRandomPhase(now_ms, loraTxPeriodMs(),
+                                                             esp_random());
+    ESP_LOGI("LORA", "[SLOT] %s -- next frame in %ld ms (random phase)", why,
+             (long)(int32_t)(last_lora_tx_ms + loraTxPeriodMs() - now_ms));
 }
 
 // Back to free-running, with a log line when there was a lock to drop.
@@ -7633,9 +7645,13 @@ static void applyTxSlotAdjust(const uint8_t* payload, uint8_t target_rid)
     case lora_slot_follow::AdjustResult::Released:
         ESP_LOGI("LORA", "[SLOT] release (rid %u) -> unlocked, free-running, a frame every %u ms",
                  (unsigned)target_rid, (unsigned)loraTxPeriodMs());
+        // A release is also how the base station breaks up rockets it hears
+        // colliding, so every one draws a new phase, locked or not.
+        loraRandomizeTxPhase("release");
         break;
     case lora_slot_follow::AdjustResult::AlreadyFree:
         ESP_LOGI("LORA", "[SLOT] release (rid %u): already free-running", (unsigned)target_rid);
+        loraRandomizeTxPhase("release");
         break;
     case lora_slot_follow::AdjustResult::RefNotFound:
         ESP_LOGW("LORA", "[SLOT] adjust ignored: ref_seq=%u not among the last %u frames "
@@ -13868,6 +13884,7 @@ static void loop_oc()
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= 1)
             {
+                const bool changed = (payload[0] != network_id);
                 network_id = payload[0];
                 Preferences prefs;
                 prefs.begin("identity", false);
@@ -13875,6 +13892,14 @@ static void loop_oc()
                 prefs.end();
                 sendCurrentConfig();
                 ESP_LOGI("BLE", "Network ID set: %u", (unsigned)network_id);
+                // Transmit slots: the grid was laid out for the old identity,
+                // and a rocket renamed off a shared ID may sit on another's
+                // grid point — drop it and move to a random phase.
+                if (changed)
+                {
+                    loraSlotUnlock("network ID changed");
+                    loraRandomizeTxPhase("network ID changed");
+                }
             }
         }
         else if (ble_cmd == 42)
@@ -13884,6 +13909,7 @@ static void loop_oc()
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= 1 && payload[0] > 0 && payload[0] < 255)
             {
+                const bool changed = (payload[0] != rocket_id);
                 rocket_id = payload[0];
                 Preferences prefs;
                 prefs.begin("identity", false);
@@ -13891,6 +13917,14 @@ static void loop_oc()
                 prefs.end();
                 sendCurrentConfig();
                 ESP_LOGI("BLE", "Rocket ID set: %u", (unsigned)rocket_id);
+                // Transmit slots: a rocket that shared an ID with another may
+                // have followed that ID's adjusts onto the other's grid point
+                // (bench 2026-10-21) — drop the lock and move to a random phase.
+                if (changed)
+                {
+                    loraSlotUnlock("rocket ID changed");
+                    loraRandomizeTxPhase("rocket ID changed");
+                }
             }
         }
         // ---- Magnetometer hard-iron calibration (issue #96) ----

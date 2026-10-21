@@ -219,6 +219,23 @@ inline bool unlock(State& s)
     return was;
 }
 
+// Free-running again at a random point of the coming period: the value to put
+// in last_lora_tx_ms so the next frame goes rnd % period_ms from now.
+//
+// Why: two rockets that transmit at the same instant never decode each other
+// and the base station cannot decode either, so it can never move them apart.
+// Locked rockets hold their grid exactly, and free-running ones drift apart
+// only by loop jitter (minutes). Bench 2026-10-21: the Beetle and the V5 were
+// both rid 1 when the base station slotted "rocket 1", both followed its
+// adjust onto one grid point, and every frame of both failed CRC at the base
+// station after one was renumbered. Each rocket draws its own phase, so a pair
+// separates on a release, a rocket/network ID change or a lock drop.
+inline uint32_t lastTxForRandomPhase(uint32_t now_ms, uint32_t period_ms, uint32_t rnd)
+{
+    if (period_ms == 0) return now_ms;
+    return now_ms + (rnd % period_ms) - period_ms;   // txDue: now' - last >= period
+}
+
 // ---- the name beacon -------------------------------------------------------
 
 // Free-running: no say (the 2 s timer and the state gates are main.cpp's).

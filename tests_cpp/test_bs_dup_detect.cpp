@@ -269,3 +269,65 @@ TEST(BsDupDetect, RocketLostInFlightThatRebootsCanClearByBeacons) {
     EXPECT_EQ(beacon(s, name, "A"), Edge::None);
     EXPECT_EQ(beacon(s, name, "A"), Edge::Cleared);
 }
+
+// ---- identitySettled: the slot controller's gate (bench 2026-10-21) ---------
+// The Beetle and the V5 were both rid 1 when the base station first heard
+// them; it slotted "rocket 1" within a few frames, both followed the adjust
+// onto one grid point, and they wiped out each other's frames from then on.
+// An adjust must wait until the rid looks like one rocket.
+
+TEST(BsDupDetectSettled, OneRocketSettlesAfterTwoAgreeingBeacons) {
+    State s;
+    char name[24] = "";
+    SeqFeed f;
+    EXPECT_FALSE(identitySettled(s));          // nothing heard
+    f.frame(s, 10);
+    beacon(s, name, "Beetle");                 // first name: one vote
+    EXPECT_FALSE(identitySettled(s));
+    f.frame(s, 11);
+    beacon(s, name, "Beetle");
+    EXPECT_TRUE(identitySettled(s));
+}
+
+TEST(BsDupDetectSettled, TwoRocketsOnOneRidNeverSettle) {
+    State s;
+    char name[24] = "";
+    const char* names[] = {"Beetle", "TR-R-e150"};
+    for (int i = 0; i < 12; i++)
+    {
+        beacon(s, name, names[i % 2]);
+        EXPECT_FALSE(identitySettled(s)) << i;
+    }
+    EXPECT_TRUE(s.flagged);
+}
+
+TEST(BsDupDetectSettled, TwoRocketsWithOneNameNeverSettleOnTheirSeqs) {
+    // Same name too (both renamed alike): only the interleaved seq gives
+    // them away, and dirty seq withholds every beacon's vote.
+    State s;
+    char name[24] = "";
+    int32_t last = -1;
+    for (int i = 0; i < 16; i++)
+    {
+        const uint16_t seq = (i % 2) ? (uint16_t)(4000 + i) : (uint16_t)(20 + i);
+        onTelemetry(s, last, seq, READY);
+        last = seq;
+        if (i % 3 == 0) beacon(s, name, "Rocket");
+    }
+    EXPECT_FALSE(identitySettled(s));
+}
+
+TEST(BsDupDetectSettled, AFlaggedRidIsNeverSettled) {
+    State s;
+    s.flagged = true;
+    s.votes = 9;
+    EXPECT_FALSE(identitySettled(s));
+}
+
+TEST(BsDupDetectSettled, InFlightNeedsOnlyACleanSeqStream) {
+    // A rocket rebooted in flight sends no beacons; its clean seq is enough.
+    State s;
+    SeqFeed f;
+    for (uint16_t q = 100; q < 104; q++) f.frame(s, q, INFLIGHT);
+    EXPECT_TRUE(identitySettled(s));
+}

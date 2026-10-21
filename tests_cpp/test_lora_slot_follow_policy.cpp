@@ -463,3 +463,44 @@ TEST(LoRaSlotFollowRun, FramesLandOnTheGridAfterTheLock)
         EXPECT_GE(released_sends[i] - released_sends[i - 1], P);
     }
 }
+
+// ---- random phase on a release or an ID change (bench 2026-10-21) ---------
+
+TEST(LoRaSlotFollowRandomPhase, NextFrameLandsAtTheDrawnPointOfThePeriod)
+{
+    const uint32_t P = 500;
+    for (uint32_t rnd : {0u, 1u, 166u, 499u, 500u, 12345u, 0xFFFFFFFFu})
+    {
+        const uint32_t now  = 100000;
+        const uint32_t last = lastTxForRandomPhase(now, P, rnd);
+        const uint32_t wait = rnd % P;
+        State s;   // free-running
+        if (wait > 0) EXPECT_FALSE(txDue(s, now + wait - 1, last, P)) << rnd;
+        EXPECT_TRUE(txDue(s, now + wait, last, P)) << rnd;
+    }
+}
+
+TEST(LoRaSlotFollowRandomPhase, WorksAcrossTheMillisWrap)
+{
+    const uint32_t P = 500;
+    const uint32_t now = 0xFFFFFF00u;
+    const uint32_t last = lastTxForRandomPhase(now, P, 300);
+    State s;
+    EXPECT_FALSE(txDue(s, now + 299, last, P));
+    EXPECT_TRUE(txDue(s, now + 300, last, P));     // past the wrap
+}
+
+TEST(LoRaSlotFollowRandomPhase, TwoRocketsOnOneGridPointComeApart)
+{
+    // Two rockets locked onto one grid point (they shared a rid when the
+    // base station slotted it). After a release each draws its own phase.
+    const uint32_t P = 500, now = 50000;
+    const uint32_t a = lastTxForRandomPhase(now, P, 37);
+    const uint32_t b = lastTxForRandomPhase(now, P, 291);
+    EXPECT_EQ((uint32_t)(b - a), 254u);   // 254 ms apart: FAST frames (102 ms) clear
+}
+
+TEST(LoRaSlotFollowRandomPhase, ZeroPeriodIsHarmless)
+{
+    EXPECT_EQ(lastTxForRandomPhase(1234, 0, 99), 1234u);
+}
