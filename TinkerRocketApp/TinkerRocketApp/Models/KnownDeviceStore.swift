@@ -52,6 +52,18 @@ struct KnownDevice: Identifiable, Codable, Equatable {
     var provisioned: Bool = false   // user finished (or skipped) first-connect setup
     var lastSeen: Date?
 
+    // Firmware and boards as last reported over Bluetooth, so a rocket heard
+    // only through a base station can still say what it runs. `ocFirmware`
+    // is the MCU that answers BLE (config_identity "fw"): the out computer on
+    // a rocket, the base station itself on a base station. The other three
+    // come from the out computer's fc_identity relay. nil = never reported.
+    var ocFirmware: String?
+    var fcFirmware: String?
+    var ocBoard: String?
+    var fcBoard: String?
+    /// When the four fields above were last written (a Bluetooth link).
+    var firmwareSeen: Date?
+
     // Edits queued while the device was offline; cleared when pushed.
     var pendingName: String?
     var pendingNetworkID: UInt8?
@@ -83,6 +95,11 @@ struct KnownDevice: Identifiable, Codable, Equatable {
         rocketID = try c.decodeIfPresent(UInt8.self, forKey: .rocketID) ?? 0
         provisioned = try c.decodeIfPresent(Bool.self, forKey: .provisioned) ?? false
         lastSeen = try c.decodeIfPresent(Date.self, forKey: .lastSeen)
+        ocFirmware = try c.decodeIfPresent(String.self, forKey: .ocFirmware)
+        fcFirmware = try c.decodeIfPresent(String.self, forKey: .fcFirmware)
+        ocBoard = try c.decodeIfPresent(String.self, forKey: .ocBoard)
+        fcBoard = try c.decodeIfPresent(String.self, forKey: .fcBoard)
+        firmwareSeen = try c.decodeIfPresent(Date.self, forKey: .firmwareSeen)
         pendingName = try c.decodeIfPresent(String.self, forKey: .pendingName)
         pendingNetworkID = try c.decodeIfPresent(UInt8.self, forKey: .pendingNetworkID)
         pendingRocketID = try c.decodeIfPresent(UInt8.self, forKey: .pendingRocketID)
@@ -135,6 +152,79 @@ final class KnownDeviceStore: ObservableObject {
         return matches[0].deviceType
     }
 
+    // MARK: - Rocket IDs (three rockets, one base station)
+
+    /// Rocket IDs the OTHER known rockets on `networkID` hold — target values,
+    /// so an ID queued for a rocket that is offline counts as taken. Base
+    /// stations carry no rocket ID; a record of unknown type (pre-"dt"
+    /// firmware) counts when it has one.
+    func rocketIDsInUse(networkID: UInt8, excluding unitID: String) -> Set<UInt8> {
+        Set(devices.lazy
+            .filter { $0.unitID != unitID && $0.deviceType != .baseStation }
+            .filter { $0.effectiveNetworkID == networkID && $0.effectiveRocketID > 0 }
+            .map(\.effectiveRocketID))
+    }
+
+    /// Lowest rocket ID from 1 that neither another known rocket on the
+    /// network nor `alsoInUse` (the rockets the fleet can hear right now)
+    /// holds.
+    func nextFreeRocketID(networkID: UInt8, excluding unitID: String,
+                          alsoInUse: Set<UInt8> = []) -> UInt8 {
+        Self.lowestFreeRocketID(avoiding: rocketIDsInUse(networkID: networkID, excluding: unitID)
+                                    .union(alsoInUse))
+    }
+
+    static func lowestFreeRocketID(avoiding taken: Set<UInt8>) -> UInt8 {
+        (UInt8(1)...UInt8(254)).first { !taken.contains($0) } ?? 1
+    }
+
+    /// What the provisioning sheet pre-fills: the rocket's own ID when it is
+    /// valid and nobody else holds it, else the lowest free one. Keeping a
+    /// taken ID is how two rockets end up interleaving under one ID on the
+    /// base station (the `dup` warning).
+    static func provisioningRocketID(reported: UInt8, taken: Set<UInt8>) -> UInt8 {
+        if (1...254).contains(reported), !taken.contains(reported) { return reported }
+        return lowestFreeRocketID(avoiding: taken)
+    }
+
+    /// Other known rockets on the same network with the same rocket ID as
+    /// `unitID`: the base station cannot tell them apart, and its transmit
+    /// slots and the LoRa pyro test refuse that ID. Target values, like the
+    /// list. (Two different IDs that ask for the same transmit slot are not a
+    /// conflict: the base station gives the second one a free slot.)
+    struct RocketIDConflicts: Equatable {
+        var sameID: [KnownDevice] = []
+    }
+
+    func rocketIDConflicts(for unitID: String) -> RocketIDConflicts {
+        guard let rec = device(for: unitID), rec.deviceType != .baseStation,
+              rec.effectiveRocketID > 0
+        else { return RocketIDConflicts() }
+        var out = RocketIDConflicts()
+        for other in devices where other.unitID != unitID && other.deviceType != .baseStation
+            && other.effectiveNetworkID == rec.effectiveNetworkID
+            && other.effectiveRocketID == rec.effectiveRocketID {
+            out.sameID.append(other)
+        }
+        return out
+    }
+
+    /// The registry record for a rocket heard as `rocketID` on `networkID`,
+    /// by its last REPORTED identity (a queued change has not happened yet).
+    /// Two records claiming the pair is the duplicate-ID case: `name` (the
+    /// relayed unit name) picks between them, and with no name to go on the
+    /// answer is nil rather than a guess.
+    func rocket(networkID: UInt8, rocketID: UInt8, name: String? = nil) -> KnownDevice? {
+        guard rocketID > 0 else { return nil }
+        let matches = devices.filter {
+            $0.deviceType != .baseStation && $0.networkID == networkID && $0.rocketID == rocketID
+        }
+        if matches.count <= 1 { return matches.first }
+        guard let name, !name.isEmpty else { return nil }
+        let named = matches.filter { $0.name == name }
+        return named.count == 1 ? named[0] : nil
+    }
+
     // MARK: - Readback intake
 
     /// Fold a config_identity readback into the registry, then push any
@@ -148,6 +238,7 @@ final class KnownDeviceStore: ObservableObject {
                                  deviceType: BLEDeviceType,
                                  networkID: UInt8,
                                  rocketID: UInt8,
+                                 firmware: String? = nil,
                                  pusher: DeviceIdentityPusher?) {
         guard !unitID.isEmpty else { return }
         withRecord(unitID) { rec in
@@ -158,6 +249,11 @@ final class KnownDeviceStore: ObservableObject {
             rec.networkID = networkID
             rec.rocketID = rocketID
             rec.lastSeen = Date()
+            // Absent "fw" (pre-#8 firmware) keeps what an earlier link said.
+            if let firmware, !firmware.isEmpty {
+                rec.ocFirmware = firmware
+                rec.firmwareSeen = rec.lastSeen
+            }
 
             applyPending(&rec, readback: name,
                          current: \.name, pending: \.pendingName,
@@ -185,6 +281,24 @@ final class KnownDeviceStore: ObservableObject {
         guard queued != readback else { return }
         rec[keyPath: current] = queued
         push?(queued)
+    }
+
+    /// Fold an fc_identity readback (the out computer's relay of the flight
+    /// computer's version, plus both boards' provisioned revisions) into the
+    /// record. Boards are written as reported, nil included ("unprovisioned"
+    /// is a real answer); a firmware version the OC could not read
+    /// ("unknown", or empty) keeps the last good one.
+    func deviceDidReportFlightComputer(unitID: String,
+                                       fcFirmware: String,
+                                       fcBoard: String?,
+                                       ocBoard: String?) {
+        guard !unitID.isEmpty else { return }
+        withRecord(unitID) { rec in
+            if !fcFirmware.isEmpty, fcFirmware != "unknown" { rec.fcFirmware = fcFirmware }
+            rec.fcBoard = fcBoard
+            rec.ocBoard = ocBoard
+            rec.firmwareSeen = Date()
+        }
     }
 
     /// Called by the provisioning sheet on Save/Skip so the device stops

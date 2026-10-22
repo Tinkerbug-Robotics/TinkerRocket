@@ -196,6 +196,10 @@ public:
         // Source rocket identity (base station only — for multi-rocket demux)
         uint8_t source_rocket_id;       // 0 = not set (direct connection)
         const char* source_unit_name;   // nullptr = not set
+        // Base station only: more than one rocket transmits as this rid (names
+        // alternating, or two seq streams interleaved) — "dup":1 right after
+        // "rid", omitted when false. Zero-initialised (`= {}`) everywhere else.
+        bool source_dup_rid;
 
         // Telemetry freshness status (#95).  LIVE = packet just decoded
         // (default).  STALE = BS re-pushing cached data older than

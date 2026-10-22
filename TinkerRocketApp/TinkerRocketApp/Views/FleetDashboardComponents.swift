@@ -222,11 +222,39 @@ struct BaseStationStripView: View {
 
 /// Header above each displayed rocket's cards: name, transport ("Direct
 /// BLE" / "via <BS> · age"), freshness, and a collapse chevron when the
-/// dashboard is showing more than one rocket.
+/// dashboard is showing more than one rocket. A relayed rocket also gets its
+/// board and firmware as last seen over Bluetooth, a Follow button when the
+/// base station is following another rocket, and a red line while its
+/// rocket ID looks shared by two rockets.
 struct RocketSectionHeader: View {
     let subject: RocketSubject
     let collapsible: Bool
     @Binding var collapsed: Bool
+    /// Board + firmware line (FirmwareStamp.identityLine), relayed rockets.
+    var identityLine: String? = nil
+    /// Point the base station's radio at this rocket. nil hides the button
+    /// (direct link, or already the followed rocket).
+    var onFollow: (() -> Void)? = nil
+
+    /// The warning for a rocket ID that looks like two rockets — the base
+    /// station's "dup", or the relayed name alternating — or nil.
+    static func duplicateIDWarning(for subject: RocketSubject, now: Date = Date()) -> String? {
+        guard let key = subject.key,
+              subject.relays.contains(where: { $0.remote.duplicateIDSuspected(now: now) })
+        else { return nil }
+        return "Two rockets may be using rocket ID \(key.rocketID) — pyro commands are blocked. "
+            + "Give one a different ID in My Devices."
+    }
+
+    /// Whether a section that hides its header when it is the only one on
+    /// screen must show it anyway: the duplicate-ID warning has nowhere else
+    /// to go, and a rocket that flew and went quiet should say "lost".
+    static func needsHeaderWhenSolo(_ subject: RocketSubject, flown: Bool,
+                                    now: Date = Date()) -> Bool {
+        if duplicateIDWarning(for: subject, now: now) != nil { return true }
+        if flown, case .lost = subject.freshness(now: now) { return true }
+        return false
+    }
 
     private func sourceLine(now: Date) -> String {
         if subject.direct?.isConnected == true {
@@ -266,8 +294,29 @@ struct RocketSectionHeader: View {
                     Text(sourceLine(now: context.date))
                         .font(.caption2)
                         .foregroundColor(.secondary)
+                    if let identityLine {
+                        Text(identityLine)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    if let warning = Self.duplicateIDWarning(for: subject, now: context.date) {
+                        Label(warning, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundColor(.red)
+                    }
                 }
                 Spacer()
+                if let onFollow {
+                    // The chip's long-press "Focus base station here" does the
+                    // same; this is the discoverable one.
+                    Button(action: onFollow) {
+                        Label("Follow", systemImage: "scope")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityHint("Points the base station's radio at this rocket")
+                }
                 if collapsible {
                     Image(systemName: collapsed ? "chevron.down" : "chevron.up")
                         .font(.caption)
@@ -307,7 +356,23 @@ struct RelayRocketSectionView: View {
     var fleet: BLEFleet? = nil
     /// Phone location, also for the arrow. Optional so previews stay cheap.
     var locationManager: LocationManager? = nil
+    /// The base station whose radio focus Follow moves: the foreground one
+    /// when it carries this rocket (that is the focus the dashboard renders),
+    /// nil to hide Follow.
+    var followTarget: BLEDevice? = nil
     @State private var collapsed = false
+
+    private var follow: (() -> Void)? {
+        guard let bs = followTarget, let fleet, bs.focusRocketID != remote.rocketID else { return nil }
+        let rid = remote.rocketID
+        return { fleet.setFocus(baseStation: bs, rocketID: rid) }
+    }
+
+    private var identityLine: String? {
+        fleet?.knownDevices.rocket(networkID: via.networkID, rocketID: remote.rocketID,
+                                   name: remote.unitName)
+            .flatMap { FirmwareStamp.identityLine(for: $0) }
+    }
 
     /// Latched fix for THIS rocket, keyed by (network, rocket) — rocket ids
     /// are only unique per network (#390).
@@ -327,7 +392,9 @@ struct RelayRocketSectionView: View {
         VStack(spacing: 12) {
             RocketSectionHeader(subject: subject,
                                 collapsible: collapsible,
-                                collapsed: $collapsed)
+                                collapsed: $collapsed,
+                                identityLine: identityLine,
+                                onFollow: follow)
             // 1 Hz clock.  remote.lastSeen is @Published, so a NEW frame
             // re-renders this section — but the case that matters here is
             // frames STOPPING, and then nothing publishes and the staleness
@@ -427,6 +494,64 @@ struct RelayRocketSectionView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.systemGray6))
         .cornerRadius(10)
+    }
+}
+
+// MARK: - Firmware mismatch (three rockets, one base station)
+
+/// One orange line under the base-station strip when the units on screen are
+/// not all on the same firmware commit. Only the sha is compared (see
+/// FirmwareStamp.gitSha): a dirty tree, a board suffix or a bench build of
+/// the same commit is not a mismatch.
+struct FirmwareMismatchRow: View {
+    let text: String
+
+    /// The units to compare: the base station first (it leads the line),
+    /// then each rocket on the dashboard. A direct link reports its own
+    /// versions; a relayed rocket's come from the registry (its last Bluetooth
+    /// link). A rocket whose two computers share a commit is one entry.
+    static func units(baseStation: BLEDevice?, rockets: [RocketSubject],
+                      knownDevices: KnownDeviceStore) -> [FirmwareStamp.Unit] {
+        var units: [FirmwareStamp.Unit] = []
+        if let bs = baseStation {
+            units.append(.init(label: bs.displayName, version: bs.firmwareVersion))
+        }
+        for subject in rockets {
+            let oc: String?, fc: String?
+            if let d = subject.direct, d.isConnected {
+                oc = d.firmwareVersion
+                fc = d.fcFirmwareVersion
+            } else if let key = subject.key,
+                      let rec = knownDevices.rocket(networkID: key.networkID, rocketID: key.rocketID,
+                                                    name: subject.freshestRelay?.remote.unitName) {
+                oc = rec.ocFirmware
+                fc = rec.fcFirmware
+            } else {
+                continue
+            }
+            switch (FirmwareStamp.gitSha(of: oc), FirmwareStamp.gitSha(of: fc)) {
+            case let (o?, f?) where o != f:
+                units.append(.init(label: "\(subject.name) OC", version: oc))
+                units.append(.init(label: "\(subject.name) FC", version: fc))
+            case (.some, _):
+                units.append(.init(label: subject.name, version: oc))
+            default:
+                units.append(.init(label: subject.name, version: fc))
+            }
+        }
+        return units
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle")
+            Text(text)
+            Spacer(minLength: 0)
+        }
+        .font(.caption)
+        .foregroundColor(.orange)
+        .padding(.horizontal, 4)
+        .accessibilityElement(children: .combine)
     }
 }
 

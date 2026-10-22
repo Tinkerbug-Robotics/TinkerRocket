@@ -68,6 +68,7 @@ static inline std::string itos(int v)
 #include "supply_status_policy.h" // #1593: the V10's PG_RAIL / VBUCK_OK edges
 #include <esp_attr.h>             // RTC_NOINIT_ATTR
 #include <esp_system.h>           // esp_reset_reason
+#include <esp_random.h>           // esp_random: transmit-slot phase on a release
 #include <esp_adc/adc_oneshot.h>  // #850: camera/servo IMON reads
 #include <esp_adc/adc_cali.h>
 #include <esp_adc/adc_cali_scheme.h>
@@ -83,6 +84,7 @@ static inline std::string itos(int v)
 #include "pyro_fault_trip_policy.h"   // #1553: drop that consent on a shorted e-match mid-pulse
 #include "snapshot_answer_policy.h"   // when the OC may answer the FC's snapshot ask with "no flight"
 #include "snapshot_replay_filter.h"   // #383/#846: which of the FC's snapshots the OC keeps
+#include "lora_slot_follow_policy.h"  // three rockets: the base station's transmit grid (uplink 82)
 #if !TR_BOARD_M1
 #include "antenna_readback_policy.h"  // whose GNSS antenna offset the config readback serves
 #endif
@@ -1831,6 +1833,40 @@ static uint32_t lora_uplink_logged = 0;
 // was invisible precisely because this drop path said nothing.
 static uint32_t lora_uplink_nid_drops = 0;
 static uint32_t last_lora_tx_ms = 0;
+
+// Transmit slots (three rockets on one base station).  The base station times
+// this rocket's frames and sends uplink 82 with where its 2 Hz grid should be;
+// lora_slot remembers when the last frames went (by seq) and, once locked,
+// serviceLoRa transmits on that grid instead of free-running.  RAM only: a
+// reboot, a release, a retune, hop mode or a mute returns to free-running.
+// Reported as "tsl" in the config readback.  See lora_slot_follow_policy.h.
+static lora_slot_follow::State lora_slot;
+
+static uint32_t loraTxPeriodMs()
+{
+    return (config::LORA_TX_RATE_HZ > 0) ? (1000U / config::LORA_TX_RATE_HZ) : 40U;
+}
+
+// Free-running from a random point of the period (lastTxForRandomPhase): a
+// rocket that was transmitting on top of another comes apart from it.
+static void loraRandomizeTxPhase(const char* why)
+{
+    const uint32_t now_ms = millis();
+    last_lora_tx_ms = lora_slot_follow::lastTxForRandomPhase(now_ms, loraTxPeriodMs(),
+                                                             esp_random());
+    ESP_LOGI("LORA", "[SLOT] %s -- next frame in %ld ms (random phase)", why,
+             (long)(int32_t)(last_lora_tx_ms + loraTxPeriodMs() - now_ms));
+}
+
+// Back to free-running, with a log line when there was a lock to drop.
+static void loraSlotUnlock(const char* why)
+{
+    if (lora_slot_follow::unlock(lora_slot))
+    {
+        ESP_LOGI("LORA", "[SLOT] unlocked (%s) -- free-running, a frame every %u ms",
+                 why, (unsigned)loraTxPeriodMs());
+    }
+}
 
 // Free-running per-TX sequence counter (#105).  Stamped into LoRaData.seq
 // on every actual transmit so the BS can compute observed-loss rates and
@@ -6736,10 +6772,11 @@ static void serviceLoRa()
     }
 
     const uint32_t now_ms = millis();
-    const uint32_t period_ms = (config::LORA_TX_RATE_HZ > 0)
-        ? (1000U / config::LORA_TX_RATE_HZ)
-        : 40U;
-    if ((now_ms - last_lora_tx_ms) < period_ms)
+    const uint32_t period_ms = loraTxPeriodMs();
+    // Free-running: a period since the last attempt, exactly as before slots.
+    // Locked to the base station's grid: its next grid point has come (a late
+    // pass sends at once and stays on the grid).
+    if (!lora_slot_follow::txDue(lora_slot, now_ms, last_lora_tx_ms, period_ms))
     {
         return;
     }
@@ -6760,10 +6797,19 @@ static void serviceLoRa()
         return;
     }
     last_lora_tx_ms = now_ms;
+    // A failed attempt uses up its grid point, as it uses up the period today.
+    lora_slot_follow::advanceGrid(lora_slot, now_ms, period_ms);
     lora_in_rx_mode = false;  // Exiting RX for TX
     if (lora_comms.send(payload, payload_len))
     {
         lora_tx_ok++;
+
+        // Transmit slots: remember when this seq went, so an uplink 82 that
+        // names it can place the grid.  The seq that went on the wire (before
+        // the ++ below), and only a frame the radio took: a failed send keeps
+        // its seq for the retry.
+        lora_slot_follow::onFrameSent(lora_slot, lora_tx_seq, now_ms,
+                                      frame_type == LORA_FRAME_SLOW);
 
         // Persist the exact bytes that just went on the air as a LORA_MSG
         // (0xF1) record.  #850: that is now 55 B (FAST) or 22 B (SLOW), so
@@ -6877,6 +6923,8 @@ static void sendLoRaBeacon()
 
     const uint32_t now_ms = millis();
     if ((now_ms - last_beacon_ms) < 2000) return;
+    // Transmit slots: a locked rocket's beacon waits for a SLOW frame (below).
+    if (lora_slot.locked && !lora_slot.beacon_owed) return;
     if (!lora_comms.canSend()) return;
 
     // Beacon format: [0xBE][network_id][rocket_id][unit_name...]
@@ -6903,9 +6951,21 @@ static void sendLoRaBeacon()
         beacon[beacon_len++] = 0;
     }
 
+    // Transmit slots: while locked, only right after a SLOW frame and only if
+    // the beacon ends inside this rocket's slot.  A FAST frame (102 ms at
+    // SF8/BW250) plus a beacon overflows the 166 ms slot into the next
+    // rocket's; a SLOW frame (56 ms) plus a beacon fits.  Free-running: no say.
+    const uint32_t beacon_toa_ms = loraTimeOnAirMs(beacon_len, lora_sf, lora_bw_khz,
+                                                   lora_cr, config::LORA_PREAMBLE_LEN);
+    if (!lora_slot_follow::beaconAllowed(lora_slot, now_ms, beacon_toa_ms, loraTxPeriodMs()))
+    {
+        return;
+    }
+
     last_beacon_ms = now_ms;
     lora_in_rx_mode = false;
     lora_comms.send(beacon, beacon_len);
+    lora_slot_follow::onBeaconSent(lora_slot);
 }
 
 // ==========================================================================
@@ -7317,6 +7377,9 @@ static void sendCurrentConfig()
     // "LoRa off" mute.  Both apps decode it lenient-optional, so absence
     // means "firmware predates the feature", not "transmitting".
     j += ",\"ltxd\":"; j += lora_tx_disabled ? "true" : "false";
+    // Transmit slots: locked to the base station's grid (RAM only, so false
+    // after any reboot).  For bench checks; the apps do not read it yet.
+    j += ",\"tsl\":"; j += lora_slot.locked ? "true" : "false";
     // #150: airtime-derived hop dwell for the current preset; 0 tells the
     // app hopping is unavailable at this modulation (option greys out).
     j += ",\"lhdw\":"; j += itos(currentHopDwell());
@@ -7508,6 +7571,7 @@ static bool applyLoRaTxMute(bool want_disabled, const char* src)
     prefs.begin("lora", false);
     prefs.putUChar("txdis", lora_tx_disabled ? 1 : 0);
     prefs.end();
+    if (lora_tx_disabled) loraSlotUnlock("LoRa muted");
 
     // Re-evaluate the hop schedule against the new mute: muting takes the
     // ON→OFF branch (radio back to lora_freq_mhz, rendezvous visit unwound),
@@ -7532,7 +7596,74 @@ static bool applyLoRaTxMute(bool want_disabled, const char* src)
 // SECTION: LoRa uplink command handling
 // ==========================================================================
 
-static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t payload_len)
+// Uplink 82: the base station's transmit grid for this rocket (see
+// lora_slot_follow_policy.h and LORA_CMD_TX_SLOT_ADJUST).  Payload
+// [ref_seq u16 LE][delta_ms i16 LE]; delta LORA_TX_SLOT_RELEASE releases.
+static void applyTxSlotAdjust(const uint8_t* payload, uint8_t target_rid)
+{
+    uint16_t ref_seq = 0;
+    int16_t  delta_ms = 0;
+    lora_slot_follow::decodeAdjust(payload, ref_seq, delta_ms);
+    const bool release = (delta_ms == LORA_TX_SLOT_RELEASE);
+
+    if (!lora_slot_follow::adjustAddressedToUs(target_rid, rocket_id, delta_ms))
+    {
+        // Only reachable as a broadcast (the RX filter drops other rids): a
+        // grid names one rocket's frame, so it is never for everyone.
+        ESP_LOGW("LORA", "[SLOT] broadcast adjust ignored (ref_seq=%u delta=%d): "
+                         "only a release may be broadcast",
+                 (unsigned)ref_seq, (int)delta_ms);
+        return;
+    }
+    // Slots are for the fixed channel with the transmitter on; those events
+    // also unlock, so a lock here would only be undone by the next one.
+    if (!release && lora_tx_disabled)
+    {
+        ESP_LOGW("LORA", "[SLOT] adjust ignored (ref_seq=%u delta=%d): LoRa transmit muted",
+                 (unsigned)ref_seq, (int)delta_ms);
+        return;
+    }
+    if (!release && !lora_hop_disabled)
+    {
+        ESP_LOGW("LORA", "[SLOT] adjust ignored (ref_seq=%u delta=%d): hop mode enabled",
+                 (unsigned)ref_seq, (int)delta_ms);
+        return;
+    }
+
+    const uint32_t now_ms = millis();
+    const lora_slot_follow::AdjustOutcome o = lora_slot_follow::applyAdjust(
+        lora_slot, ref_seq, delta_ms, now_ms, last_lora_tx_ms, loraTxPeriodMs());
+    switch (o.result)
+    {
+    case lora_slot_follow::AdjustResult::Locked:
+        ESP_LOGI("LORA", "[SLOT] adjust ref_seq=%u delta=%d ms -> phase shift %+ld ms, "
+                         "next frame in %ld ms (%s)",
+                 (unsigned)ref_seq, (int)delta_ms, (long)o.shift_ms,
+                 (long)(int32_t)(o.next_due_ms - now_ms),
+                 o.was_locked ? "still locked" : "LOCKED to the base station's grid");
+        break;
+    case lora_slot_follow::AdjustResult::Released:
+        ESP_LOGI("LORA", "[SLOT] release (rid %u) -> unlocked, free-running, a frame every %u ms",
+                 (unsigned)target_rid, (unsigned)loraTxPeriodMs());
+        // A release is also how the base station breaks up rockets it hears
+        // colliding, so every one draws a new phase, locked or not.
+        loraRandomizeTxPhase("release");
+        break;
+    case lora_slot_follow::AdjustResult::AlreadyFree:
+        ESP_LOGI("LORA", "[SLOT] release (rid %u): already free-running", (unsigned)target_rid);
+        loraRandomizeTxPhase("release");
+        break;
+    case lora_slot_follow::AdjustResult::RefNotFound:
+        ESP_LOGW("LORA", "[SLOT] adjust ignored: ref_seq=%u not among the last %u frames "
+                         "(now at seq %u) -- the base station re-sends",
+                 (unsigned)ref_seq, (unsigned)lora_slot_follow::kRingSize,
+                 (unsigned)lora_tx_seq);
+        break;
+    }
+}
+
+static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t payload_len,
+                                 uint8_t target_rid)
 {
     ESP_LOGI("LORA", "UPLINK RX cmd=%u payload_len=%u", cmd, (unsigned)payload_len);
 
@@ -7822,6 +7953,10 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
                           (double)lora_freq_mhz, (unsigned)lora_sf,
                           (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power);
 
+            // A new modulation changes every frame's airtime: the slots the
+            // base station laid out no longer hold until it re-measures.
+            loraSlotUnlock("LoRa retune, cmd 10");
+
             // #569: reconfigure() leaves the radio in STANDBY (it clears
             // rx_mode_ internally and does not re-enter RX). Every other
             // reconfigure site (cmd 16, rendezvous, hop visit) follows with
@@ -7899,6 +8034,8 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
                 hop_enable_apply_at_ms = millis() + HOP_ENABLE_DEFER_MS;
                 ESP_LOGI("LORA", "UPLINK Hop disable: ENABLED — activating in %u ms (after BS retry train)",
                          (unsigned)HOP_ENABLE_DEFER_MS);
+                // Transmit slots are a fixed-channel arrangement.
+                loraSlotUnlock("hop mode enabled");
             }
             else
             {
@@ -7921,6 +8058,11 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         // symmetric so the app's toggle behaves the same whether it is talking
         // to the rocket directly or relaying through the BS.
         (void)applyLoRaTxMute(payload[0] != 0, "UPLINK");
+    }
+    else if (cmd == LORA_CMD_TX_SLOT_ADJUST && payload_len >= 4)
+    {
+        // Transmit slots: where the base station wants this rocket's grid.
+        applyTxSlotAdjust(payload, target_rid);
     }
     else if (cmd == 12 && payload_len >= sizeof(ServoConfigData))
     {
@@ -8247,7 +8389,7 @@ static void serviceLoRaUplink()
                 if (rx_len >= (size_t)(6 + payload_len))
                 {
                     logUplinkRx(ls, cmd, LORA_UL_ACCEPTED);
-                    processUplinkCommand(cmd, &rx_buf[6], payload_len);
+                    processUplinkCommand(cmd, &rx_buf[6], payload_len, pkt_rid);
                     lora_uplink_rx_count++;
                     last_uplink_rx_ms = millis();
                     if (hop_active_) hop_session_uplink_count++;
@@ -13742,6 +13884,7 @@ static void loop_oc()
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= 1)
             {
+                const bool changed = (payload[0] != network_id);
                 network_id = payload[0];
                 Preferences prefs;
                 prefs.begin("identity", false);
@@ -13749,6 +13892,14 @@ static void loop_oc()
                 prefs.end();
                 sendCurrentConfig();
                 ESP_LOGI("BLE", "Network ID set: %u", (unsigned)network_id);
+                // Transmit slots: the grid was laid out for the old identity,
+                // and a rocket renamed off a shared ID may sit on another's
+                // grid point — drop it and move to a random phase.
+                if (changed)
+                {
+                    loraSlotUnlock("network ID changed");
+                    loraRandomizeTxPhase("network ID changed");
+                }
             }
         }
         else if (ble_cmd == 42)
@@ -13758,6 +13909,7 @@ static void loop_oc()
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= 1 && payload[0] > 0 && payload[0] < 255)
             {
+                const bool changed = (payload[0] != rocket_id);
                 rocket_id = payload[0];
                 Preferences prefs;
                 prefs.begin("identity", false);
@@ -13765,6 +13917,14 @@ static void loop_oc()
                 prefs.end();
                 sendCurrentConfig();
                 ESP_LOGI("BLE", "Rocket ID set: %u", (unsigned)rocket_id);
+                // Transmit slots: a rocket that shared an ID with another may
+                // have followed that ID's adjusts onto the other's grid point
+                // (bench 2026-10-21) — drop the lock and move to a random phase.
+                if (changed)
+                {
+                    loraSlotUnlock("rocket ID changed");
+                    loraRandomizeTxPhase("rocket ID changed");
+                }
             }
         }
         // ---- Magnetometer hard-iron calibration (issue #96) ----

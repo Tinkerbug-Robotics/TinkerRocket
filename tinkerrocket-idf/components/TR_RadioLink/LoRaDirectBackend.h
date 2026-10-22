@@ -45,6 +45,7 @@ public:
     void serviceTxWatchdog() override { lora_.serviceTxWatchdog(); }
 
     void getStats(TR_LoRa_Comms::Stats& out) const override { lora_.getStats(out); }
+    uint32_t lastRxDoneMs() const override { return lora_.lastRxDoneMs(); }
 
     bool startScan(float start_mhz, float stop_mhz, uint16_t step_khz,
                    uint16_t dwell_ms) override

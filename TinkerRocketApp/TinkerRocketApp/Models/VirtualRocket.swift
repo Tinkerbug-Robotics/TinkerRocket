@@ -9,8 +9,10 @@ import Foundation
 /// virtual base station relays a "Booster" that idles in READY like a real
 /// rocket and flies ONE canned 42 s flight per SIM_START — the standard
 /// Simulation sheet is the start control, exactly the ritual a real rocket
-/// uses — honoring SIM_STOP mid-flight.  A second relayed rocket sits on the
-/// pad so the roster and focus-switching are demonstrable.
+/// uses — honoring SIM_STOP mid-flight.  Two more relayed rockets sit on the
+/// pad (rocket IDs 2 and 3, one per transmit slot) so the three-rocket
+/// dashboard — roster, focus switching, one map pin per rocket — is
+/// demonstrable. Android's demo still relays two (#1650).
 ///
 /// Nothing is recorded, and Files stays real-hardware-only on iOS (Android's
 /// demo serves a canned log through its transport fake; iOS has no transport
@@ -22,6 +24,12 @@ final class VirtualRocketDriver {
     private var task: Task<Void, Never>?
     private var startRequested = false
     private var stopRequested = false
+    /// The virtual base station's transmit-slot setting, echoed in its
+    /// config readback like a real one.
+    private var txSlots = true
+
+    /// Stands in for the CBPeripheral identifier the fleet keys a link on.
+    static let peripheralID = UUID(uuidString: "5649525A-0000-4000-8000-000000000001")!
 
     /// Test hook: scales every sleep so the whole flight runs in tens of
     /// milliseconds under XCTest (same pattern as OTASession.timeScale).
@@ -40,7 +48,27 @@ final class VirtualRocketDriver {
             }
             if effective == 6 { self.startRequested = true }   // SIM_START
             if effective == 7 { self.stopRequested = true }    // SIM_STOP
+            // Transmit slots, sent to the base station itself: keep it and
+            // answer with a config readback, as the firmware does.
+            if cmd == 82, payload.count == 1 {
+                self.txSlots = payload[payload.startIndex] != 0
+                self.feed(self.configJSON)
+            }
         }
+    }
+
+    /// The `config` frame a real base station sends, with the same values as
+    /// Android's DEFAULT_CONFIG_JSON (plus "lts", which Android's demo does
+    /// not have yet).
+    private var configJSON: String {
+        """
+        {"type":"config","sb1":0,"shz":333,"smn":1000,"smx":2000,\
+        "kp":0.08,"ki":0.005,"kd":0.003,"pmn":-10.0,"pmx":10.0,\
+        "sen":true,"gs":true,"ac":false,"rdly":0,"rmspd":0.0,"rcap":60.0,"kpang":2.0,\
+        "iwind":40.0,"ge":false,"camt":2,"irate":1920,"lf":915.0,"lsf":8,\
+        "lbw":250.0,"lcr":5,"lpw":17,"lhd":false,"lhdw":400,"ltxd":false,\
+        "lts":\(txSlots)}
+        """
     }
 
     func start() {
@@ -52,13 +80,7 @@ final class VirtualRocketDriver {
         // the firmware's order (config first), with the same values as Android's
         // DEFAULT_CONFIG_JSON so the two demos are interchangeable for
         // side-by-side comparison. No config_pyro — a base station has none.
-        feed("""
-            {"type":"config","sb1":0,"shz":333,"smn":1000,"smx":2000,\
-            "kp":0.08,"ki":0.005,"kd":0.003,"pmn":-10.0,"pmx":10.0,\
-            "sen":true,"gs":true,"ac":false,"rdly":0,"rmspd":0.0,"rcap":60.0,"kpang":2.0,\
-            "iwind":40.0,"ge":false,"camt":2,"irate":1920,"lf":915.0,"lsf":8,\
-            "lbw":250.0,"lcr":5,"lpw":17,"lhd":false,"lhdw":400,"ltxd":false}
-            """)
+        feed(configJSON)
         // Identity through the same demux a real readback uses.
         feed("""
             {"type":"config_identity","uid":"virtual1","un":"Virtual Base Station",\
@@ -85,6 +107,20 @@ final class VirtualRocketDriver {
 
     // OK (01) at baro/imu/ekf/mag/gnss/batt/storage shifts; pyro NA (hidden).
     static let health = 0x100555
+
+    /// The two rockets that stay on the pad, each with a fix so the map shows
+    /// a pin per rocket: rocket 2 about 50 m north-east of the Booster,
+    /// rocket 3 about 80 m south-west.
+    static let padRocketJSON = """
+        {"rid":2,"run":"Pad Rocket","st":"READY","fs":16,"ps":2,\
+        "h":\(health),"nsat":8,"vol":8.31,"palt":0.4,\
+        "lat":34.657500,"lon":-118.201100}
+        """
+    static let thirdRocketJSON = """
+        {"rid":3,"run":"Dart","st":"READY","fs":16,"ps":2,\
+        "h":\(health),"nsat":10,"vol":7.95,"palt":0.3,\
+        "lat":34.656700,"lon":-118.202200}
+        """
 
     /// Frames per flight (42 s at 5 Hz: 12 s countdown, 10 s up, 16 s down).
     static let flightTicks = 210
@@ -171,10 +207,8 @@ final class VirtualRocketDriver {
                     "h":\(Self.health),"nsat":9,"vol":8.20,"soc":87.0,"palt":0.2,\
                     "lat":34.6572,"lon":-118.2015}
                     """)
-                feed("""
-                    {"rid":2,"run":"Pad Rocket","st":"READY","fs":16,"ps":2,\
-                    "h":\(Self.health),"nsat":8,"vol":8.31,"palt":0.4}
-                    """)
+                feed(Self.padRocketJSON)
+                feed(Self.thirdRocketJSON)
                 await sleep(1.0)
             }
             if Task.isCancelled { return }
@@ -186,10 +220,8 @@ final class VirtualRocketDriver {
                 if stopRequested { break }
                 feed(Self.flightFrameJSON(tick: tick))
                 if tick % 5 == 0 {
-                    feed("""
-                        {"rid":2,"run":"Pad Rocket","st":"READY","fs":16,"ps":2,\
-                        "h":\(Self.health),"nsat":8,"vol":8.31,"palt":0.4}
-                        """)
+                    feed(Self.padRocketJSON)
+                    feed(Self.thirdRocketJSON)
                 }
                 await sleep(Self.flightTickSeconds)
             }

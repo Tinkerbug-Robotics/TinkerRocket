@@ -284,6 +284,10 @@ struct RocketConfig {
     /// firmware predates the setting, which is NOT the same as "transmitting":
     /// only `false` positively means the radio is on the air.
     var loraTxDisabled: Bool? = nil
+    /// Transmit slots, base station only ("lts"): true = the base station
+    /// places each rocket's frames in its own slot. nil = the firmware
+    /// predates the setting, and must not be sent the command.
+    var loraTxSlots: Bool? = nil
     var pyro1Enabled: Bool = false
     var pyro1TriggerMode: UInt8 = 0
     var pyro1TriggerValue: Float = 1.0

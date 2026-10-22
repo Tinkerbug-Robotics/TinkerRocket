@@ -2097,6 +2097,12 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     // droppable. (Direct FC/OC connections have no rid — omitted as before.)
     if (data.source_rocket_id > 0) {
         addInt("rid", data.source_rocket_id);
+        // Three-rocket support: the base station saw two rockets on this rid.
+        // Tier 1 beside the key it qualifies (~8 B, only when set): the frame
+        // it rides may be a blend of two rockets, and the app must say so.
+        if (data.source_dup_rid) {
+            addInt("dup", 1);
+        }
     }
 
     // State

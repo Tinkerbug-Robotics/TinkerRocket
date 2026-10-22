@@ -702,6 +702,45 @@ target_include_directories(test_bs_uplink_txwin PRIVATE
 target_link_libraries(test_bs_uplink_txwin GTest::gtest_main)
 gtest_discover_tests(test_bs_uplink_txwin)
 
+# ---------- test_bs_dup_detect ----------
+# Host-side test for the base station's duplicate rocket-ID flag (three-rocket
+# support): every rocket computer ships as rid 1, and two of them on one BS look
+# like one rocket whose name and seq jump around. bs_dup_detect.h is pure.
+add_executable(test_bs_dup_detect test_bs_dup_detect.cpp)
+target_include_directories(test_bs_dup_detect PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
+    ${LIB_DIR}/TR_RocketComputerTypes   # loraComputeObservedLoss, RocketState
+)
+target_link_libraries(test_bs_dup_detect GTest::gtest_main)
+gtest_discover_tests(test_bs_dup_detect)
+
+# ---------- test_bs_collision_watch ----------
+# Host-side test for the base station's collision watchdog (three-rocket
+# support): a steady stream of CRC failures (two rockets on one grid point)
+# becomes a broadcast transmit-slot release. bs_collision_watch.h is pure.
+add_executable(test_bs_collision_watch test_bs_collision_watch.cpp)
+target_include_directories(test_bs_collision_watch PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
+)
+target_link_libraries(test_bs_collision_watch GTest::gtest_main)
+gtest_discover_tests(test_bs_collision_watch)
+
+# ---------- test_bs_tx_slots ----------
+# Host-side test for the base-station transmit-slot controller (three-rocket
+# support): the BS times each rocket's frames and moves each onto its own third
+# of the 500 ms period with LORA_CMD_TX_SLOT_ADJUST. bs_tx_slots.h is pure; the
+# closed-loop case models the rocket follower from the contract.
+add_executable(test_bs_tx_slots test_bs_tx_slots.cpp)
+target_include_directories(test_bs_tx_slots PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
+    ${LIB_DIR}/TR_RocketComputerTypes   # LORA_TX_SLOT_COUNT, loraTimeOnAirMs
+)
+target_link_libraries(test_bs_tx_slots GTest::gtest_main)
+gtest_discover_tests(test_bs_tx_slots)
+
 # ---------- test_bs_battery_soc ----------
 # Host-side test for the base-station voltage-based SoC fallback (#501): the
 # BQ27Z746 reported 0% on a 4.17 V pack because its coulomb counter was never
@@ -2270,6 +2309,20 @@ target_include_directories(test_lora_dio1_policy PRIVATE
 )
 target_link_libraries(test_lora_dio1_policy GTest::gtest_main)
 gtest_discover_tests(test_lora_dio1_policy)
+
+# ---------- test_lora_slot_follow_policy (three-rocket transmit slots) ----------
+# The rocket's half of the base-station-run slots: the (seq, send time) ring
+# an uplink 82 names its frame from, the grid it then transmits on (late passes
+# step whole periods, never re-anchor; the millis wrap), a repeated adjust being
+# a no-op, the release, and beacons only after a SLOW frame while locked.
+add_executable(test_lora_slot_follow_policy test_lora_slot_follow_policy.cpp)
+target_include_directories(test_lora_slot_follow_policy PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_lora_slot_follow_policy GTest::gtest_main)
+gtest_discover_tests(test_lora_slot_follow_policy)
 
 # ---------- test_ina230_cal (#1155 item 17) ----------
 # The INA230 CAL narrowed to uint16_t before the clamp, so an out-of-range

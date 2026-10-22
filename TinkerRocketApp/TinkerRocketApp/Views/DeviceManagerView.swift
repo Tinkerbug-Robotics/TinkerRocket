@@ -161,6 +161,12 @@ struct DeviceManagerView: View {
                 Text(subtitle(rec))
                     .font(.caption)
                     .foregroundColor(.secondary)
+                ForEach(Self.conflictBadges(store.rocketIDConflicts(for: rec.unitID)), id: \.text) { badge in
+                    Label(badge.text, systemImage: badge.severe
+                          ? "exclamationmark.triangle.fill" : "clock.arrow.2.circlepath")
+                        .font(.caption2.weight(badge.severe ? .semibold : .regular))
+                        .foregroundColor(badge.severe ? .red : .orange)
+                }
             }
 
             Spacer()
@@ -187,6 +193,26 @@ struct DeviceManagerView: View {
             }
         }
         .padding(.vertical, 2)
+    }
+
+    struct ConflictBadge: Equatable {
+        let text: String
+        /// Same rocket ID: the base station cannot tell the two apart and pyro
+        /// commands are blocked.
+        let severe: Bool
+    }
+
+    /// "Same ID as <name>", naming every rocket involved.
+    static func conflictBadges(_ c: KnownDeviceStore.RocketIDConflicts) -> [ConflictBadge] {
+        func names(_ recs: [KnownDevice]) -> String {
+            recs.map { $0.effectiveName.isEmpty ? $0.unitID : $0.effectiveName }
+                .joined(separator: ", ")
+        }
+        var out: [ConflictBadge] = []
+        if !c.sameID.isEmpty {
+            out.append(ConflictBadge(text: "Same ID as \(names(c.sameID))", severe: true))
+        }
+        return out
     }
 
     private func subtitle(_ rec: KnownDevice) -> String {

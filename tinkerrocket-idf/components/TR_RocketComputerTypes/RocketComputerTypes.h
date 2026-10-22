@@ -351,6 +351,24 @@ static constexpr size_t  LORA_UPLINK_MAX_PACKET   = 40;
 // whether the rocket is trackable.  See loraTxMuteChangeAllowed() for the
 // in-flight refusal rule.
 static constexpr uint8_t LORA_CMD_SET_TX_DISABLED  = 68;  // uplink + rocket BLE cmd: 1 byte payload, 1 = "LoRa off" (mute every transmit, keep listening), 0 = transmitting (default)
+// Transmit slots (up to three rockets on one base station).  The BASE STATION
+// runs them: it times each rocket's frames on its own clock and tells each
+// rocket where to put its transmit grid, so slot k (0..2) starts k * 500/3 ms
+// after slot 0.  Rockets never need to hear each other.  A rocket that never
+// gets an adjust keeps today's free-running timing; a lock lives in RAM only
+// (a reboot or a release returns the rocket to free-running).
+//
+// Uplink, base station -> one rocket (targeted rid): payload
+//   [ref_seq u16 LE][delta_ms i16 LE] = 4 B.
+// "Put your grid at (the time you started transmitting frame ref_seq) +
+// delta_ms, then every 500 ms."  The base station measured that frame's
+// on-air start itself, so each rocket's own send latency (direct radio vs the
+// UART daughterboard) cancels.  Re-sending the same adjust gives the same grid,
+// so blind retries are safe.  delta_ms == LORA_TX_SLOT_RELEASE releases the
+// rocket to free-running (may be broadcast, rid 0xFF).
+static constexpr uint8_t LORA_CMD_TX_SLOT_ADJUST   = 82;  // uplink: [ref_seq u16][delta_ms i16]; delta INT16_MIN = release
+static constexpr int16_t LORA_TX_SLOT_RELEASE      = INT16_MIN;
+static constexpr uint8_t LORA_TX_SLOT_COUNT        = 3;   // slot = (rid - 1) % 3 unless that slot is taken
 
 // ── App ↔ Base Station BLE command IDs (#287) ─────────────────────────────
 // The command byte the iOS app sends to the *base station* on the BLE command
@@ -396,6 +414,12 @@ static constexpr uint8_t BLE_BS_CMD_SET_BS_LOGGING    = 46;
 static constexpr uint8_t BLE_BS_CMD_SET_PHONE_FIX     = 47;
 static constexpr uint8_t BLE_BS_CMD_RELAY_TO_ROCKET   = 50;
 static constexpr uint8_t BLE_BS_CMD_FREQ_SCAN         = 60;
+// Transmit slots on/off (see LORA_CMD_TX_SLOT_ADJUST).  Payload [on]: 1 = the
+// base station runs slots (default), 0 = it stops adjusting and broadcasts a
+// release so every rocket goes back to free-running.  NVS; reported as "lts"
+// in the config readback.  Not a toggle.  82 because 70-72 are the BLE OTA
+// commands handled inside TR_BLE_To_APP.cpp and 81 is taken on a branch.
+static constexpr uint8_t BLE_BS_CMD_SET_TX_SLOTS      = 82;
 
 // Minimum SNR (dB) for an RX packet to be considered trustworthy at the
 // given spreading factor.  Bench-confirmed in #90 follow-up: a CRC-
