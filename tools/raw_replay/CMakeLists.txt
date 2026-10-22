@@ -30,8 +30,9 @@ endif()
 # before the shared epoch geometry (exp/v9-cpu-los), RAW_REPLAY_DOPAVG=OFF before the Dopplers in pairs
 # (exp/v9-dop-avg), RAW_REPLAY_CAPGOV=OFF before the satellite cap's governor and the profile's slice
 # (exp/v9-cap-adapt), RAW_REPLAY_FLIGHT_PROFILE=OFF before the mosaic image's flight profile (fc/v9-1024-candidate; off
-# by itself where the tree has no applyMosaicFlightProfile). DYNMEM and FITGATE are experiments the firmware does not
-# carry: build them against a copy with experiments/*.patch applied (README.md).
+# by itself where the tree has no applyMosaicFlightProfile), RAW_REPLAY_MULTIBAND=OFF before the multi-band combiner
+# (exp/v9-multiband-eval; off by itself where the tree has no MosaicMultiband.h). DYNMEM and FITGATE are experiments the
+# firmware does not carry: build them against a copy with experiments/*.patch applied (README.md).
 set(SRC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." CACHE PATH "the tree whose firmware sources are compiled")
 option(RAW_REPLAY_OLD "the firmware tree has no receiver profile or carrier (aef947c5)" OFF)
 option(RAW_REPLAY_VCHECK "the firmware tree has the vertical check and the boost window (fc/gnss-heading-fuse 7966f2cb)" ON)
@@ -74,6 +75,12 @@ endif()
 if(NOT RAW_REPLAY_MOSAIC AND RAW_REPLAY_CAPGOV)
     set(RAW_REPLAY_CAPGOV OFF)
 endif()
+# the multi-band combiner (MosaicMultiband.h: each satellite's other bands in its row's Doppler; offline only, --rr-
+# multiband): a tree with the header, the mosaic path and the Dopplers in pairs (it combines both ends of a pair)
+option(RAW_REPLAY_MULTIBAND "the firmware tree has the multi-band combiner (MosaicMultiband.h, exp/v9-multiband-eval)" ON)
+if(RAW_REPLAY_MULTIBAND AND NOT (RAW_REPLAY_MOSAIC AND RAW_REPLAY_DOPAVG))
+    set(RAW_REPLAY_MULTIBAND OFF)
+endif()
 # the mosaic-only image's flight safeguards in one call (gnss_raw::applyMosaicFlightSafeguards, ReceiverProfileApply.h):
 # a tree with all three of the features it sets
 option(RAW_REPLAY_MOSAIC_SAFEGUARDS "the firmware tree sets the mosaic's flight safeguards in one call (applyMosaicFlightSafeguards)" ON)
@@ -90,6 +97,10 @@ if(RAW_REPLAY_WINDUP AND NOT (RAW_REPLAY_MOSAIC AND RAW_REPLAY_DVCHECK AND RAW_R
     set(RAW_REPLAY_WINDUP OFF)
 endif()
 set(LIB_DIR "${SRC_ROOT}/tinkerrocket-idf/components")
+if(RAW_REPLAY_MULTIBAND AND NOT EXISTS "${LIB_DIR}/TR_GNSSReceiverMosaic_Serial/MosaicMultiband.h")
+    message(STATUS "raw_replay: ${SRC_ROOT} has no multi-band combiner (MosaicMultiband.h): RAW_REPLAY_MULTIBAND off")
+    set(RAW_REPLAY_MULTIBAND OFF)
+endif()
 if(RAW_REPLAY_BUILD_LITE AND NOT EXISTS "${LIB_DIR}/TR_GNSSRaw/RawMeasBuilderLite.cpp")
     message(STATUS "raw_replay: ${SRC_ROOT} has no cheaper epoch build (RawMeasBuilderLite.cpp): RAW_REPLAY_BUILD_LITE off")
     set(RAW_REPLAY_BUILD_LITE OFF)
@@ -203,7 +214,8 @@ function(raw_replay_target name)
         RAW_REPLAY_CAPGOV=$<BOOL:${RAW_REPLAY_CAPGOV}>
         RAW_REPLAY_MOSAIC_SAFEGUARDS=$<BOOL:${RAW_REPLAY_MOSAIC_SAFEGUARDS}>
         RAW_REPLAY_FLIGHT_PROFILE=$<BOOL:${RAW_REPLAY_FLIGHT_PROFILE}>
-        RAW_REPLAY_WINDUP=$<BOOL:${RAW_REPLAY_WINDUP}>)
+        RAW_REPLAY_WINDUP=$<BOOL:${RAW_REPLAY_WINDUP}>
+        RAW_REPLAY_MULTIBAND=$<BOOL:${RAW_REPLAY_MULTIBAND}>)
 endfunction()
 
 raw_replay_target(raw_replay)

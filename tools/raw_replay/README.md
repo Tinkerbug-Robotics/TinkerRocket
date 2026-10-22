@@ -656,6 +656,44 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   profile (every epoch's own lag; an epoch in pairs adds `rr_pair_lag_s` to it), and `--sim-pair-exact` (a sim with
   `--truth-nav`) puts the truth's second-order term
   back into each averaged Doppler, so the pair is the range rate at its middle exactly.
+- **Each satellite's bands in one Doppler** (`--rr-multiband 1`; a `RAW_REPLAY_MULTIBAND` build, on unless the tree
+  has no `TR_GNSSReceiverMosaic_Serial/MosaicMultiband.h`; offline only, no firmware includes the header). The filter
+  fuses one Doppler row a satellite from its L1-band signal (GPS L1 C/A, Galileo E1, BeiDou B1I); the mosaic also
+  tracks GPS L2C and L5, Galileo E6, E5a and E5b, BeiDou B1C, B2a and B3I, and a Detailed log's MeasEpoch (the R
+  lines, byte for byte) carries them all. With `--rr-multiband 1` the feed builds each epoch with
+  `rawEpochFromMeasEpochMb` and each epoch between with `noteMeasEpochDopplersMb`: the same cells as the image, every
+  anchor field the same but the range rate, which becomes the inverse-variance mean of the anchor and its other
+  bands (each from its own C/N0), and has_rate, cleared where two agreeing bands vote the anchor out. The pairs then
+  average the combined rates unchanged. The rules (the header's top comment has them in full): a band joins from its
+  anchor's channel with a lock of at least 1 s and its C/N0 at least its floor + 2 dB (stays to the floor); each is
+  first referred to its anchor's wavelength with the epoch's own wind-up estimate (the median of
+  (r_b - r_a) / (lambda_b - lambda_a) over the epoch: no gyro), so the row carries exactly its anchor's wind-up and
+  the filter's correction stays right; a band more than max(5 sigma, 0.10 m/s + 3 ms x the anchor's acceleration)
+  off its anchor leaves; an epoch with fewer than 3 wind-up values, or more than half its bands off, goes anchor-only.
+  Options:
+
+  | Option | What | Default |
+  |---|---|---|
+  | `--rr-multiband 0\|1` | the combination | 0 (the image's L1 rows, digest-identical) |
+  | `--rr-mb-bands LIST\|none` | SBF signal numbers that may join | 3,4,19,20,21,13,14,30 |
+  | `--rr-mb-model measured\|equalhz\|FILE` | each band's Doppler noise, one 20 Hz epoch: sigma^2 = scale^2 (a^2 + b^2 10^(-(C/N0-35)/10)); FILE lines `sig a b [scale [cn0_min [lag_ms]]]` | measured (the noise measurement's fit, a 0, floors 25 dB-Hz, lags 0) |
+  | `--rr-mb-sigma 0\|1` | 1: each combined row's white Doppler term at the effective C/N0 that gives its combined noise on the builder's own model (what a uint8 in RawObs's padding would carry) | 0: the anchor's sigma kept, as the pairs keep theirs |
+  | `--rr-mb-windup ref\|lam\|none` | ref: refer each band to its anchor's wavelength; lam: leave the row at its weighted wavelength and correct the rest from the gyro (the filter's wind-up ring, `windup_k`) before the filter takes it; none: neither (the error left in) | ref |
+  | `--rr-mb-min-lock-s`, `--rr-mb-hyst-db`, `--rr-mb-screen-k`, `--rr-mb-screen-floor`, `--rr-mb-anchor-vote 0\|1`, `--rr-mb-max-bands N`, `--rr-mb-w-min N` | the join rule, the screen, the anchor's vote, bands a row takes, wind-up values an epoch needs | 1 s, 2 dB, 5, 0.10 m/s, 1, 3, 3 |
+  | `--rr-mb-trace FILE` | a CSV row per satellite and epoch looked at (grid `g` or between `o`): its anchor's C/N0, what the row became, the epoch's wind-up estimate, each band's signal, C/N0, weight, referred difference and whether it joined. No positions | off |
+
+  Refused on a sim's epochs (X lines carry one signal a satellite) and with `--receiver lc86g`. The events JSON gains
+  a `multiband` block and stderr a `multiband:` line: the combinations and why any went anchor-only, the rows
+  combined and the mean sigma ratio, each band's candidates and joins, the screen's and the vote's counts,
+  composition changes, the wind-up estimate's rms, and what `--rr-mb-sigma 1` and `--rr-mb-windup lam` changed. A log
+  whose MeasEpochs carry no other band (the Reduced GNSS log keeps one a second: no 10 Hz path at all) joins none, and
+  the harness says so. `extract.py --sbf` writes `META sbf_signals` (each SBF signal number's count over the
+  MeasEpochs, the main antenna), which the harness keeps and does not read, so a file with it replays exactly as one
+  without. With `--rr-multiband 0`, and with `--rr-multiband 1 --rr-mb-bands none`, every digest is the image's.
+  Where a firmware version would differ: the header's capture rides in the adapter's own pass over the block (one
+  read), but the effective C/N0 (`--rr-mb-sigma 1`) needs a uint8 in RawObs's padding and the builder's white term
+  at it (both builds), and `--rr-mb-windup lam` a uint16 effective wavelength in RawObs's padding copied into
+  RawMeas's (offset 4) for applyWindup and the wind-up monitor.
 - **`sim_compare.py BASE NAME=EXP ...`** sets experiment grids (each a `sim_grid.py --arms design --harness-args
   "..."` run into its own OUT) beside the base grid's design and unaided twin, flight by flight: the phase bars per
   pattern (pooled over the informative magnetometer arms and over all of them), the worst excess, the deployment's

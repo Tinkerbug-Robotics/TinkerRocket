@@ -11,7 +11,12 @@
 //     Dopplers in pairs (Config::pair, the profile's rr_pair_avg), each one off
 //     the grid read for its Dopplers (noteMeasEpochDopplers) and each grid
 //     epoch's averaged with them (averageDopplerPairs) and marked in pairs or
-//     not (TimedRawEpoch::rr_paired), as the driver does. Its GPS
+//     not (TimedRawEpoch::rr_paired), as the driver does. Offline only
+//     (Config::mb.on, raw_replay --rr-multiband 1): each satellite's other
+//     bands combined into its cells' Dopplers at both ends of a pair
+//     (MosaicMultiband.h rawEpochFromMeasEpochMb, noteMeasEpochDopplersMb),
+//     each row's sigma ratio and wind-up wavelength kept for the harness
+//     (mbRowRatio, mbRowLam); off, exactly the image's cells. Its GPS
 //     time is its receiver time less the receiver's clock bias: the last
 //     PVTGeodetic that anchors the jump count (pvtAnchorsJumps), carried by
 //     its drift and the jumps since (dtrMs), while it is no more than two
@@ -58,6 +63,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 
 #include <RocketComputerTypes.h>
 
@@ -73,6 +79,17 @@
 // A tree with the Dopplers in pairs (MosaicRawEpoch.h averageDopplerPairs); raw_replay's RAW_REPLAY_DOPAVG says
 #ifndef RAW_REPLAY_DOPAVG
 #define RAW_REPLAY_DOPAVG 1
+#endif
+// A tree with the multi-band combiner (MosaicMultiband.h, harness only); raw_replay's RAW_REPLAY_MULTIBAND says
+#ifndef RAW_REPLAY_MULTIBAND
+#if RAW_REPLAY_DOPAVG && __has_include("MosaicMultiband.h")
+#define RAW_REPLAY_MULTIBAND 1
+#else
+#define RAW_REPLAY_MULTIBAND 0
+#endif
+#endif
+#if RAW_REPLAY_MULTIBAND
+#include "MosaicMultiband.h"
 #endif
 
 #if __has_include("raw_iono_rule.h")
@@ -189,6 +206,10 @@ public:
 #if RAW_REPLAY_DOPAVG
         bool     pair = false;           // the Dopplers in pairs (the driver's setRawDopplerPairing)
         mosaic::MosaicDopplerPairConfig pair_cfg;
+#endif
+#if RAW_REPLAY_MULTIBAND
+        // each satellite's other bands combined into its row's Doppler (MosaicMultiband.h; off: as the image)
+        mosaic::MosaicMultibandConfig mb;
 #endif
     };
 
@@ -356,6 +377,24 @@ public:
     const mosaic::MosaicDopplerPairStats& pairStats() const { return pair_st_; }
     uint64_t lastPaired() const { return pair_mask_; }
 #endif
+#if RAW_REPLAY_MULTIBAND
+    // the multi-band combination (cfg.mb.on): its counts; the last combination's side outputs (mbLast: a grid
+    // epoch's when mbLastGrid, else an epoch between's) and whether one ran since mbTake() last cleared it; and the
+    // last EPOCH's rows as handed over, each its sigma ratio and wind-up wavelength with its pair's other end in
+    // (mosaic::mbPairedRow)
+    const mosaic::MosaicMultibandStats& mbStats() const { return mb_st_; }
+    const mosaic::MosaicMbOut& mbLast() const { return mb_grid_last_ ? mb_out_ : mb_out_prev_; }
+    bool mbLastGrid() const { return mb_grid_last_; }
+    bool mbTake()
+    {
+        const bool f = mb_fresh_;
+        mb_fresh_ = false;
+        return f;
+    }
+    const mosaic::MosaicMbOut& mbGrid() const { return mb_out_; }
+    double mbRowRatio(int i) const { return i >= 0 && i < gnss_raw::RawEpoch::kMaxObs ? mb_ratio_[i] : 1.0; }
+    double mbRowLam(int i) const { return i >= 0 && i < gnss_raw::RawEpoch::kMaxObs ? mb_lam_[i] : 0.0; }
+#endif
 
 private:
     Kind onMeasEpoch(const uint8_t* b, size_t len, int64_t t_arr_us, gnss_raw::TimedRawEpoch& te)
@@ -369,8 +408,28 @@ private:
         if (header_ok && mosaic::onFuseGrid(tow, cfg_.fuse_period_ms))
         {
             te = gnss_raw::TimedRawEpoch();
+#if RAW_REPLAY_MULTIBAND
+            // with the bands combined (MosaicMultiband.h), else exactly the image's cells
+            bool built;
+            if (cfg_.mb.on)
+            {
+                built = mosaic::rawEpochFromMeasEpochMb(b, len, te.epoch, js_, info_, cfg_.mb, *mb_scr_, mb_st_,
+                                                        mb_out_, t_arr_us);
+                mb_fresh_ = info_.status == mosaic::SbfStatus::OK;
+                mb_grid_last_ = true;
+            }
+            else
+            {
+                built = mosaic::rawEpochFromMeasEpoch(b, len, te.epoch, js_, info_, t_arr_us);
+            }
+#else
             const bool built = mosaic::rawEpochFromMeasEpoch(b, len, te.epoch, js_, info_, t_arr_us);
+#endif
 #if RAW_REPLAY_DOPAVG
+#if RAW_REPLAY_MULTIBAND
+            // the epoch between's side outputs, before the pairing spends it
+            const bool mb_prev_valid = cfg_.mb.on && pair_prev_.valid;
+#endif
             if (cfg_.pair)
             {
                 // as the driver's rawMeasEpoch: with the epoch before, then that one is spent; the epoch
@@ -382,6 +441,13 @@ private:
                                        ? 1 : 0;
                 pair_prev_.valid = false;
             }
+#if RAW_REPLAY_MULTIBAND
+            if (cfg_.mb.on && built)
+                mbRows(te.epoch, mb_prev_valid);
+#endif
+#elif RAW_REPLAY_MULTIBAND
+            if (cfg_.mb.on && built)
+                mbRows(te.epoch, false);
 #endif
             if (built)
             {
@@ -402,7 +468,21 @@ private:
         }
         else
         {
-#if RAW_REPLAY_DOPAVG
+#if RAW_REPLAY_MULTIBAND
+            bool noted;
+            if (cfg_.pair && cfg_.mb.on)
+            {
+                noted = mosaic::noteMeasEpochDopplersMb(b, len, js_, info_, pair_prev_, cfg_.mb, *mb_scr_, mb_st_,
+                                                        mb_out_prev_, t_arr_us);
+                mb_fresh_ = noted;
+                mb_grid_last_ = false;
+            }
+            else
+            {
+                noted = cfg_.pair ? mosaic::noteMeasEpochDopplers(b, len, js_, info_, pair_prev_, t_arr_us)
+                                  : mosaic::noteMeasEpochClock(b, len, js_, info_, t_arr_us);
+            }
+#elif RAW_REPLAY_DOPAVG
             const bool noted = cfg_.pair ? mosaic::noteMeasEpochDopplers(b, len, js_, info_, pair_prev_, t_arr_us)
                                          : mosaic::noteMeasEpochClock(b, len, js_, info_, t_arr_us);
 #else
@@ -422,6 +502,27 @@ private:
         n_.resolved = js_.resolved;
         return k;
     }
+
+#if RAW_REPLAY_MULTIBAND
+    // each row of the grid epoch as handed over: its sigma ratio and wind-up wavelength, with the epoch between's
+    // end where the row was averaged with it (pair_mask_)
+    void mbRows(const gnss_raw::RawEpoch& e, bool prev_valid)
+    {
+        for (int i = 0; i < e.n && i < gnss_raw::RawEpoch::kMaxObs; ++i)
+        {
+            int j = -1;
+#if RAW_REPLAY_DOPAVG
+            if (prev_valid && ((pair_mask_ >> i) & 1u))
+                for (int k = 0; k < mb_out_prev_.n && j < 0; ++k)
+                    if (mb_out_prev_.sys[k] == e.obs[i].sys && mb_out_prev_.prn[k] == e.obs[i].prn)
+                        j = k;
+#else
+            (void)prev_valid;
+#endif
+            mosaic::mbPairedRow(mb_out_, i, mb_out_prev_, j, mb_ratio_[i], mb_lam_[i]);
+        }
+    }
+#endif
 
     static mosaic::MosaicTimeTag::Config tagConfig(const Config& c)
     {
@@ -490,6 +591,15 @@ private:
     mosaic::MosaicDopplerSet pair_prev_;
     mosaic::MosaicDopplerPairStats pair_st_;
     uint64_t pair_mask_ = 0;
+#endif
+#if RAW_REPLAY_MULTIBAND
+    // the multi-band combination: its scratch (on the heap), counts and the two ends' side outputs
+    std::unique_ptr<mosaic::MosaicMbScratch> mb_scr_{new mosaic::MosaicMbScratch()};
+    mosaic::MosaicMultibandStats mb_st_;
+    mosaic::MosaicMbOut mb_out_, mb_out_prev_;
+    bool mb_fresh_ = false, mb_grid_last_ = false;
+    double mb_ratio_[gnss_raw::RawEpoch::kMaxObs] = {};
+    double mb_lam_[gnss_raw::RawEpoch::kMaxObs] = {};
 #endif
 };
 
