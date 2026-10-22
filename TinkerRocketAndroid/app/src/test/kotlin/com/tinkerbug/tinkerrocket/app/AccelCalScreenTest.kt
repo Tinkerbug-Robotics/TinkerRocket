@@ -47,8 +47,9 @@ import org.junit.runner.RunWith
 /**
  * The six-face accelerometer calibration screen (#1629), composed over a real
  * session on a link that answers commands 76/77/78 the way the flight computer
- * does: the opening read, six faces in any order, the solve, Save with its
- * read-back, a refusal, and Clear behind its confirmation.  A flight computer
+ * does: the opening read, six faces in any order, the solve and the save
+ * that follows the sixth by itself, Save Again, a refusal, and Clear behind
+ * its confirmation.  A flight computer
  * that sends the high-g answers 80 too, with 114-byte frames: the High-g
  * section, its save after the offset, the stored rows, and the clear that
  * takes both.
@@ -215,11 +216,12 @@ class AccelCalScreenTest {
     }
 
     @Test
-    fun sixFacesInAnyOrder_solveSaveAndReadBack_thenStartOver() {
+    fun sixFacesInAnyOrder_solveAndSaveByThemselves_thenStartOver() {
         val fc = Fc()
-        // A board with 30 / -46 / 12 mg of offset, set square on each face.
+        // A board with 30 / -46 / 12 mg of offset, set square on each face,
+        // then +Z UP measured again.
         val off = listOf(30.0, -46.0, 12.0).map { it / 1e3 * AccelSixFace.G0 }
-        for (face in listOf(Face.Z_UP, Face.X_DOWN, Face.Y_UP, Face.Z_DOWN, Face.X_UP, Face.Y_DOWN)) {
+        for (face in listOf(Face.Z_UP, Face.X_DOWN, Face.Y_UP, Face.Z_DOWN, Face.X_UP, Face.Y_DOWN, Face.Z_UP)) {
             fc.faces += (0..2).map { (off[it] + if (it == face.axis) face.sign * AccelSixFace.G0 else 0.0).toFloat() }
         }
         val session = connect(fc)
@@ -242,7 +244,17 @@ class AccelCalScreenTest {
         repeat(5) { tap("Measure This Face") }
         compose.onNodeWithText("Measure a Face Again").assertExists()
         compose.onNodeWithText("Offset").assertExists()
-        for (v in listOf("+30.00 mg", "-46.00 mg", "+12.00 mg")) compose.onNodeWithText(v).assertExists()
+        // The sixth face saved the offset by itself and read it back: each
+        // axis shows twice, the solve's row and the stored one.
+        compose.onNodeWithText("Saved and read back").assertExists()
+        for (v in listOf("+30.00 mg", "-46.00 mg", "+12.00 mg")) compose.onAllNodesWithText(v).assertCountEquals(2)
+        // The read, six windows, the save, and its read-back — in that order,
+        // with no tap on Save.
+        assertEquals(listOf(77, 78, 78, 78, 78, 78, 78, 76, 77), fc.accelCommands)
+        assertEquals(
+            listOf(30, -46, 12),
+            fc.stored!!.map { (AccelSixFace.mg(it.toDouble()) * 100).roundToInt() / 100 },
+        )
         compose.onNodeWithText(
             "All six faces are solved together, so a face a few degrees off square does not bias the offset.",
         ).assertExists()
@@ -254,22 +266,36 @@ class AccelCalScreenTest {
                 "computer to calibrate the high-g; the low-g offset saves as before.",
         ).assertExists()
 
-        tap("Save to the Flight Computer")
+        // Save Again sends it once more; so does a face measured again.
+        tap("Save Again")
         compose.onNodeWithText("Saved and read back").assertExists()
-        // The read-back is now the stored offset, beside the solve's own row.
-        compose.onAllNodesWithText("+30.00 mg").assertCountEquals(2)
-        // The read, six windows, the save, and its read-back — in that order.
-        assertEquals(listOf(77, 78, 78, 78, 78, 78, 78, 76, 77), fc.accelCommands)
-        assertEquals(
-            listOf(30, -46, 12),
-            fc.stored!!.map { (AccelSixFace.mg(it.toDouble()) * 100).roundToInt() / 100 },
-        )
+        tap("Measure a Face Again")
+        compose.onNodeWithText("+Z UP, 3.1° off vertical — replaced the earlier one").assertExists()
+        compose.onNodeWithText("Saved and read back").assertExists()
+        assertEquals(listOf(77, 78, 78, 78, 78, 78, 78, 76, 77, 76, 77, 78, 76, 77), fc.accelCommands)
 
         tap("Start Over")
         compose.onNodeWithText("Offset").assertDoesNotExist()
         compose.onNodeWithText("Saved and read back").assertDoesNotExist()
         compose.onNodeWithText("Start Over").assertDoesNotExist()
         compose.onNodeWithText("Measure This Face").assertIsEnabled()
+    }
+
+    @Test
+    fun anOffsetPastTheLimit_isNotSentAfterTheSixthFace() {
+        val fc = Fc()
+        // 1.2 m/s² on Y: each face 7° off vertical, and past the 1.0 the flight computer takes.
+        val off = listOf(0.0, 1.2, 0.0)
+        for (face in Face.entries) {
+            fc.faces += (0..2).map { (off[it] + if (it == face.axis) face.sign * AccelSixFace.G0 else 0.0).toFloat() }
+        }
+        val session = connect(fc)
+        powered(fc)
+        open(session)
+        repeat(6) { tap("Measure This Face") }
+        compose.onNode(hasText("Offset past 1.0 m/s² on Y", substring = true)).assertExists()
+        compose.onNodeWithText("Save to the Flight Computer").assertIsNotEnabled()
+        assertEquals("no save after the sixth face", listOf(77, 78, 78, 78, 78, 78, 78), fc.accelCommands)
     }
 
     @Test
@@ -459,7 +485,7 @@ class AccelCalScreenTest {
     }
 
     @Test
-    fun withTheHighG_theSectionShowsItsFit_andSaveSendsItAfterTheOffset() {
+    fun withTheHighG_theSectionShowsItsFit_andTheSaveSendsItAfterTheOffset() {
         val fc = Fc().apply {
             sendsHighG = true
             hgBias = listOf(0.9f, -1.4f, 0.6f)
@@ -496,7 +522,7 @@ class AccelCalScreenTest {
                 "the high-g's offset again on the day.",
         ).assertExists()
 
-        tap("Save to the Flight Computer")
+        // The sixth face saved both, with no tap on Save.
         compose.onNodeWithText("Saved and read back").assertExists()
         compose.onNodeWithText("High-g alignment saved and read back").assertExists()
         // The read, six windows, the offset and its read-back, then the high-g and its own.
