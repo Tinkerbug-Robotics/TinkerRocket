@@ -537,7 +537,8 @@ final class HighGCalTests: XCTestCase {
         XCTAssertTrue(flow.captures.isComplete)
         guard case .solved(let h)? = flow.captures.highG else { return XCTFail("no high-g fit") }
         // the sixth face's frame sent the save by itself
-        XCTAssertEqual(writes.prefix(7).map { $0[0] }, [78, 78, 78, 78, 78, 78, 76])
+        let firstSeven: [UInt8] = writes.prefix(7).map { $0[0] }
+        XCTAssertEqual(firstSeven, [78, 78, 78, 78, 78, 78, 76])
         writes.removeFirst(6)
         let o = try XCTUnwrap(flow.writing?.sent)
         device.handleFileOpsFrame(stored(o, matrix: nil).wireFrame)    // the apply's answer

@@ -579,7 +579,10 @@ final class AccelSixFaceTests: XCTestCase {
         }
         XCTAssertTrue(flow.captures.isComplete)
         let fitted = Data([0x44, 0xa1, 0x96, 0x3e, 0x57, 0xf7, 0xe6, 0xbe, 0x17, 0x02, 0xf1, 0x3d])
-        XCTAssertEqual(writes, Array(repeating: Data([78]), count: 6) + [Data([76]) + fitted],
+        // Typed parts: CI's Xcode times out type-checking them as one expression.
+        let windows: [Data] = Array(repeating: Data([78]), count: 6)
+        let save: Data = Data([76]) + fitted
+        XCTAssertEqual(writes, windows + [save],
                        "after the sixth face, the fit's offset by itself: three little-endian float32")
         let sent = try XCTUnwrap(flow.writing?.sent)
         device.handleFileOpsFrame(AccelCalStatus.stored(sent).wireFrame)   // the apply's answer
