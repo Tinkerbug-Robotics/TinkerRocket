@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -223,6 +224,33 @@ private object MagCalConst {
     const val VERIFY_RANGE_UT = 25.0f
     const val VERIFY_MIN_COVERAGE_BINS = 8
     const val VERIFY_MIN_SAMPLES = 100
+}
+
+/**
+ * The verify screen's Save button (iOS MagCalVerifySave): "Save", in the
+ * next-step blue, once the rotation has its points (coverage and samples
+ * met); "Save anyway", in orange, before.  It sends VERIFY_DONE when every
+ * row is green and FORCE_APPLY otherwise: the FC re-checks the gates on
+ * VERIFY_DONE and would send a red |B| row back to REVIEW.
+ */
+internal data class MagCalVerifySave(
+    /** Coverage and samples are met. */
+    val enoughPoints: Boolean,
+    /** Every row is green, the |B| rows too. */
+    val allGood: Boolean,
+) {
+    val label: String get() = if (enoughPoints) "Save" else "Save anyway"
+
+    /** The line under the button. */
+    val footer: String
+        get() = when {
+            allGood -> "All checks green — tap Save to commit the cal to flight-computer memory."
+            enoughPoints ->
+                "Enough points, but a |B| row is not green. Red means the field left Earth's band or " +
+                    "swung widely: something magnetic nearby, or a fit to redo. Save keeps this cal " +
+                    "anyway; Retry verification starts the readings over."
+            else -> "Keep rotating until coverage and samples are green. Save anyway saves now, without the checks."
+        }
 }
 
 // ── Sections ────────────────────────────────────────────────────────────
@@ -453,15 +481,17 @@ private fun VerifyingSection(
             )
         }
     }
-    Button(onClick = { onAcceptSave(allGood) }, modifier = Modifier.fillMaxWidth()) {
-        Text(if (allGood) "Accept and Save" else "Save anyway")
-    }
+    val save = MagCalVerifySave(enoughPoints = coverageMet && samplesMet, allGood = allGood)
+    Button(
+        onClick = { onAcceptSave(allGood) },
+        modifier = Modifier.fillMaxWidth(),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (save.enoughPoints) tr.nextStep else tr.statusWarn,
+            contentColor = Color.White,
+        ),
+    ) { Text(save.label) }
     Text(
-        if (allGood) {
-            "All checks green — Accept and Save commits the cal to flight-computer memory."
-        } else {
-            "Keep rotating until every row is green. The gates are advisory — Save anyway skips them."
-        },
+        save.footer,
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
