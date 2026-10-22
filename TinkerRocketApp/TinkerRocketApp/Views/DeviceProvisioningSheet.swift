@@ -138,9 +138,8 @@ struct DeviceProvisioningSheet: View {
     }
 
     private var rocketIDFooter: String {
-        let slot = KnownDeviceStore.transmitSlot(rocketID: UInt8(clamping: rocketIDInput)) ?? 0
-        return "Unique ID within your network (1-254). Each rocket needs a different ID. "
-            + "With transmit slots on, IDs 1, 2 and 3 each get their own slot; this one asks for slot \(slot + 1) of 3."
+        "Unique ID within your network (1-254). Each rocket needs a different ID. "
+            + "With transmit slots on, the base station gives each rocket its own slot."
     }
 
     private func saveAndDismiss() {

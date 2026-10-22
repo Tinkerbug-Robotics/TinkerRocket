@@ -3,7 +3,7 @@
 //  TinkerRocketAppTests
 //
 //  Three rockets, one base station — the registry side: next free rocket ID,
-//  the "Same ID" / "Shares a transmit slot" badges, the board and firmware a
+//  the "Same ID" badge, the board and firmware a
 //  record keeps for a rocket later heard only over LoRa, and the profile a
 //  relayed rocket's pyro cards and servo limits read.
 //
@@ -99,30 +99,23 @@ final class MultiRocketRegistryTests: XCTestCase {
 
     // MARK: - Badges
 
-    func testTransmitSlot_isRidMinusOneModThree() {
-        XCTAssertNil(KnownDeviceStore.transmitSlot(rocketID: 0))
-        XCTAssertEqual([1, 2, 3, 4, 5, 6].map { KnownDeviceStore.transmitSlot(rocketID: $0) },
-                       [0, 1, 2, 0, 1, 2])
-    }
-
-    func testConflicts_sameIDAndSharedSlot() {
+    func testConflicts_sameIDOnly() {
         let store = makeStore()
         addRocket(store, "aaa", name: "Booster", rid: 1)
         addRocket(store, "bbb", name: "Twin", rid: 1)
-        addRocket(store, "ccc", name: "Fourth", rid: 4)     // slot 0, like rid 1
-        addRocket(store, "ddd", name: "Dart", rid: 2)       // slot 1
+        addRocket(store, "ccc", name: "Fourth", rid: 4)     // asks for rid 1's slot: not a conflict
+        addRocket(store, "ddd", name: "Dart", rid: 2)
         addRocket(store, "eee", name: "Far", nid: 9, rid: 1) // other network
 
         let c = store.rocketIDConflicts(for: "aaa")
         XCTAssertEqual(c.sameID.map(\.unitID), ["bbb"])
-        XCTAssertEqual(c.sharedSlot.map(\.unitID), ["ccc"])
+        XCTAssertTrue(store.rocketIDConflicts(for: "ccc").sameID.isEmpty,
+                      "the base station gives a rocket whose slot is taken a free one")
         XCTAssertTrue(store.rocketIDConflicts(for: "ddd").sameID.isEmpty)
-        XCTAssertTrue(store.rocketIDConflicts(for: "ddd").sharedSlot.isEmpty)
 
         let badges = DeviceManagerView.conflictBadges(c)
-        XCTAssertEqual(badges.map(\.text),
-                       ["Same ID as Twin", "Shares a transmit slot with Fourth"])
-        XCTAssertEqual(badges.map(\.severe), [true, false])
+        XCTAssertEqual(badges.map(\.text), ["Same ID as Twin"])
+        XCTAssertEqual(badges.map(\.severe), [true])
     }
 
     func testConflicts_threeRocketsOnOneToThree_haveNone() {

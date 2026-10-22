@@ -187,36 +187,24 @@ final class KnownDeviceStore: ObservableObject {
         return lowestFreeRocketID(avoiding: taken)
     }
 
-    /// The transmit slot a rocket ID asks for when slots are on: (rid - 1) % 3,
-    /// one third of the 500 ms period each (RocketComputerTypes.h,
-    /// LORA_TX_SLOT_COUNT). The base station moves a rocket whose slot is
-    /// taken, so a shared slot costs a reshuffle, not a collision — but only
-    /// IDs 1, 2 and 3 are certain to land where they ask. nil for ID 0.
-    static func transmitSlot(rocketID: UInt8) -> Int? {
-        rocketID > 0 ? (Int(rocketID) - 1) % 3 : nil
-    }
-
-    /// Other known rockets on the same network that collide with `unitID`:
-    /// the same rocket ID (the base station cannot tell them apart), or a
-    /// different ID that asks for the same transmit slot (the base station has
-    /// to move one of them). Target values, like the list.
+    /// Other known rockets on the same network with the same rocket ID as
+    /// `unitID`: the base station cannot tell them apart, and its transmit
+    /// slots and the LoRa pyro test refuse that ID. Target values, like the
+    /// list. (Two different IDs that ask for the same transmit slot are not a
+    /// conflict: the base station gives the second one a free slot.)
     struct RocketIDConflicts: Equatable {
         var sameID: [KnownDevice] = []
-        var sharedSlot: [KnownDevice] = []
     }
 
     func rocketIDConflicts(for unitID: String) -> RocketIDConflicts {
         guard let rec = device(for: unitID), rec.deviceType != .baseStation,
-              let slot = Self.transmitSlot(rocketID: rec.effectiveRocketID)
+              rec.effectiveRocketID > 0
         else { return RocketIDConflicts() }
         var out = RocketIDConflicts()
         for other in devices where other.unitID != unitID && other.deviceType != .baseStation
-            && other.effectiveNetworkID == rec.effectiveNetworkID && other.effectiveRocketID > 0 {
-            if other.effectiveRocketID == rec.effectiveRocketID {
-                out.sameID.append(other)
-            } else if Self.transmitSlot(rocketID: other.effectiveRocketID) == slot {
-                out.sharedSlot.append(other)
-            }
+            && other.effectiveNetworkID == rec.effectiveNetworkID
+            && other.effectiveRocketID == rec.effectiveRocketID {
+            out.sameID.append(other)
         }
         return out
     }

@@ -198,13 +198,11 @@ struct DeviceManagerView: View {
     struct ConflictBadge: Equatable {
         let text: String
         /// Same rocket ID: the base station cannot tell the two apart and pyro
-        /// commands are blocked. A shared transmit slot only means the base
-        /// station has to move one of them.
+        /// commands are blocked.
         let severe: Bool
     }
 
-    /// "Same ID as <name>" and "Shares a transmit slot with <name>", one each
-    /// at most, naming every rocket involved.
+    /// "Same ID as <name>", naming every rocket involved.
     static func conflictBadges(_ c: KnownDeviceStore.RocketIDConflicts) -> [ConflictBadge] {
         func names(_ recs: [KnownDevice]) -> String {
             recs.map { $0.effectiveName.isEmpty ? $0.unitID : $0.effectiveName }
@@ -213,10 +211,6 @@ struct DeviceManagerView: View {
         var out: [ConflictBadge] = []
         if !c.sameID.isEmpty {
             out.append(ConflictBadge(text: "Same ID as \(names(c.sameID))", severe: true))
-        }
-        if !c.sharedSlot.isEmpty {
-            out.append(ConflictBadge(text: "Shares a transmit slot with \(names(c.sharedSlot))",
-                                     severe: false))
         }
         return out
     }
