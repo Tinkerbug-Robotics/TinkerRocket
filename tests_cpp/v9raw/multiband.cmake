@@ -7,9 +7,11 @@
 # the weighted one) with the weighted, smoothed estimate or the gyro's, the
 # screen and the anchor's vote, the join rule (lock, hysteresis, channel, the
 # half-cycle flag gating nothing), composition changes, faults on the anchor
-# alone and the drift guard, the pairs on combined ends, and the effective
-# C/N0. With TR_SBF_PRIVATE_CAPTURE set, real captures for the identities
-# (statistics only).
+# alone and the drift guard, the review's three defects (the estimate's capture
+# by one satellite, the guard's hold, a fault common to the anchors or to one
+# system's), the pairs on combined ends, and the effective C/N0. With
+# TR_SBF_PRIVATE_CAPTURE set, real captures for the identities (statistics
+# only).
 add_executable(test_mosaic_multiband test_mosaic_multiband.cpp
     ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial/SbfNav.cpp
     ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial/SbfMeas.cpp

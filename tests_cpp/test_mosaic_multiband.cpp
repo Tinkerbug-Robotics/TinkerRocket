@@ -10,18 +10,27 @@
 //     signal's offset (GPS L1P and L2P carry no +10);
 //   - the wind-up: referred to the anchor's wavelength (the row carries its
 //     anchor's), or left at the weighted wavelength the side outputs give;
-//     too few values and the epoch goes anchor-only; the estimate a
-//     weighted median then a clipped weighted mean, smoothed in time (one
-//     bad epoch held out, a confirmed step taken), the defaults on a sky of
-//     eight satellites, and the gyro's standing in where asked or where the
-//     estimate is short;
+//     too few values and the epoch goes anchor-only; the estimate one value
+//     a satellite (its bands regressed on their wavelengths), the weights
+//     capped, a capped median then a clipped capped mean, smoothed in time
+//     with each satellite gated (one bad epoch or one satellite held out, a
+//     step taken only on the satellites' or the gyro's agreement), the
+//     defaults on a sky of eight satellites, and the gyro's standing in
+//     where asked or where the estimate is short;
 //   - composition changes: a band joining or leaving steps the row by its
 //     weight times its bias against the others, by noise alone without one;
 //   - faults on the anchor alone: a step over the screen voted out (or the
 //     row left its anchor's whole), one under it reaching the row at the
 //     anchor's share until the drift guard drops it, a ramp dropped by the
 //     guard before the screen would vote it out, the guard letting go and
-//     starting over, and never tripping on noise;
+//     starting over, and neither it nor the new rules tripping on noise;
+//   - the review's three defects of a08bdcde, each a test that failed there:
+//     one strong satellite's anchor fault capturing the estimate, the
+//     estimate checked against the gyro's, the guard's hold through a
+//     screened-out last band, through anchor-only epochs and under
+//     acceleration, a fault common to every anchor going anchor-only, and
+//     one common to a system's anchors never thinned to its single-band
+//     satellites;
 //   - the screen: a slipped band out, an anchor voted out by two agreeing
 //     bands, a majority off and the epoch anchor-only;
 //   - the join rule: the lock (none, 0 s, 1 s), the floor's hysteresis, the
@@ -138,9 +147,11 @@ MosaicMultibandConfig measured()
     MosaicMultibandConfig c;
     mosaicMbMeasured(c);
     c.on = true;
-    // the three-satellite sky below gives seven wind-up values with a 1-sigma about 0.4-0.7 Hz: under the
-    // defaults' floors (six values, 0.5 Hz), which the tests of the estimate itself take as they are
+    // the three-satellite sky below gives seven wind-up values from three satellites with a 1-sigma about 0.4-0.7
+    // Hz, and two once the screen's tests put one off: under the defaults' floors (six values, three satellites,
+    // 0.75 Hz), which the tests of the estimate itself take as they are
     c.w_min_values = 3;
+    c.w_min_sats = 2;
     c.w_max_sigma_hz = 10.0f;
     return c;
 }
@@ -489,9 +500,10 @@ TEST(MosaicMultiband, FewerThanThreeWindUpValuesLeaveTheEpochAnchorOnly)
                                                       {{4, rrOf(-100.0, W, 4)}, {3, rrOf(-100.0, W, 3)}})});
     ASSERT_TRUE(rawEpochFromMeasEpoch(blk.data(), blk.size(), ref, js, info));
     EXPECT_EQ(ep.obs[0].rate_mps, ref.obs[0].rate_mps);
-    // w_min_values 2 lets it through
+    // w_min_values 2 and w_min_sats 1 let it through
     Mb m2;
     m2.cfg.w_min_values = 2;
+    m2.cfg.w_min_sats = 1;
     RawEpoch ep2;
     ASSERT_TRUE(m2.grid(blk, ep2));
     EXPECT_EQ(m2.out.row[0], MosaicMbRow::COMBINED);
@@ -770,6 +782,7 @@ TEST(MosaicMultiband, AnExtraBandsCn0IsItsOwnSignalsGpsL1pAndL2pWithoutTheTen)
         k.cfg.band[1] = MosaicMbBand{true, 0.0f, 0.104f, 1.0f, 25.0f, 0.0f};
         k.cfg.band[2] = MosaicMbBand{true, 0.0f, 0.129f, 1.0f, 25.0f, 0.0f};
         k.cfg.w_min_values = 1;
+        k.cfg.w_min_sats = 1;
         const MosaicMultibandConfig& mc = k.cfg;
         RawEpoch ep;
         ASSERT_TRUE(k.grid(epoch(kTow0, {sat(5, 5, {0, rrOf(R, W, 0)},
@@ -813,39 +826,118 @@ TEST(MosaicMultiband, AnExtraBandsCn0IsItsOwnSignalsGpsL1pAndL2pWithoutTheTen)
 
 // ── The wind-up estimate ───────────────────────────────────────────────
 
-TEST(MosaicMultiband, TheWindUpEstimateIsAWeightedMedianThenAClippedWeightedMean)
+TEST(MosaicMultiband, TheWindUpEstimateIsOneValueASatelliteCappedThenMedianAndClip)
 {
+    MosaicMbWork wk;
+    {
+        // capped weights: none more than the share of their sum (water-filling); too few for the share: all equal
+        const float I[] = {10.0f, 1.0f, 1.0f, 1.0f};
+        float u[4] = {};
+        mbCapWeights(I, u, 4, 0.35f, wk.idx);
+        const float tau = 0.35f * 3.0f / 0.65f;
+        EXPECT_NEAR(u[0], tau, 1e-5);
+        EXPECT_FLOAT_EQ(u[1], 1.0f);
+        EXPECT_NEAR(u[0] / (u[0] + 3.0f), 0.35f, 1e-5);
+        const float J[] = {9.0f, 8.0f, 1.0f, 1.0f, 1.0f, 1.0f};   // two capped
+        float v[6] = {};
+        mbCapWeights(J, v, 6, 0.35f, wk.idx);
+        const float tau2 = 0.35f * 4.0f / (1.0f - 0.7f);
+        EXPECT_NEAR(v[0], tau2, 1e-4);
+        EXPECT_NEAR(v[1], tau2, 1e-4);
+        EXPECT_FLOAT_EQ(v[2], 1.0f);
+        const float K[] = {5.0f, 1.0f};
+        float w[2] = {};
+        mbCapWeights(K, w, 2, 0.35f, wk.idx);
+        EXPECT_FLOAT_EQ(w[0], w[1]);
+        const float L[] = {1.0f, 1.1f, 1.05f};   // none over the share: their own
+        float x[3] = {};
+        mbCapWeights(L, x, 3, 0.35f, wk.idx);
+        EXPECT_FLOAT_EQ(x[1], 1.1f);
+    }
     float hz = 0.0f, sig = 0.0f;
-    int kept = 0;
+    int ks = 0, kv = 0;
+    auto sat_ = [](float v, float s, int nval = 2) {
+        MosaicMbWSat x;
+        x.v = v;
+        x.sig = s;
+        x.w = 1.0f / (s * s);
+        x.nval = static_cast<uint8_t>(nval);
+        return x;
+    };
     {
-        // the weighted median: the value where the running weight passes half
-        MosaicMbWVal v[] = {{1.0f, 1.0f}, {2.0f, 1.0f}, {3.0f, 10.0f}};
-        ASSERT_TRUE(mbWindupEstimate(v, 3, 1, 100.0f, 0.5f, hz, sig, kept));   // clip 0.5 sigma: the median alone
-        EXPECT_FLOAT_EQ(hz, 3.0f);
-        EXPECT_EQ(kept, 1);
-        EXPECT_FLOAT_EQ(sig, 1.0f / std::sqrt(10.0f));
+        // one strong satellite 5 Hz off (0.96 of the weight uncapped): capped to 0.35 it is not the median, and the
+        // clip leaves it out; uncapped it was the median and the estimate
+        MosaicMbWSat s[] = {sat_(5.0f, 0.1f), sat_(0.1f, 1.0f), sat_(-0.1f, 1.0f), sat_(0.0f, 1.0f), sat_(0.05f, 1.0f)};
+        ASSERT_TRUE(mbWindupEstimate(s, 5, 3, 6, 100.0f, 3.0f, 0.35f, wk, hz, sig, ks, kv));
+        EXPECT_EQ(ks, 4);
+        EXPECT_EQ(kv, 8);
+        EXPECT_NEAR(hz, 0.0125f, 1e-6);
+        EXPECT_NEAR(sig, 0.5f, 1e-6);   // sqrt(sum u^2 sigma^2) / sum u, equal weights
+        MosaicMbWSat t[] = {sat_(5.0f, 0.1f), sat_(0.1f, 1.0f), sat_(-0.1f, 1.0f), sat_(0.0f, 1.0f), sat_(0.05f, 1.0f)};
+        ASSERT_FALSE(mbWindupEstimate(t, 5, 3, 6, 100.0f, 3.0f, 1.0f, wk, hz, sig, ks, kv));   // no cap
+        EXPECT_EQ(ks, 1);
+        EXPECT_FLOAT_EQ(hz, 5.0f);
     }
     {
-        // a value far off its own sigma is clipped; one far off but with a sigma to match is kept, at its weight
-        MosaicMbWVal v[] = {{0.1f, 4.0f}, {-0.1f, 4.0f}, {0.0f, 4.0f}, {0.05f, 4.0f}, {5.0f, 4.0f}, {6.0f, 0.01f}};
-        ASSERT_TRUE(mbWindupEstimate(v, 6, 5, 100.0f, 3.0f, hz, sig, kept));
-        EXPECT_EQ(kept, 5);   // 5 Hz at 0.5 Hz is 10 sigmas off: out; 6 Hz at 10 Hz: in
-        const float want = (4.0f * (0.1f - 0.1f + 0.0f + 0.05f) + 0.01f * 6.0f) / 16.01f;
-        EXPECT_NEAR(hz, want, 1e-6);
-        EXPECT_NEAR(sig, 1.0f / std::sqrt(16.01f), 1e-6);
-    }
-    {
-        // the floors: values kept, and the 1-sigma (hz and sig are set either way)
-        MosaicMbWVal v[] = {{1.0f, 1.0f}, {1.2f, 1.0f}, {0.8f, 1.0f}};
-        EXPECT_FALSE(mbWindupEstimate(v, 3, 4, 100.0f, 3.0f, hz, sig, kept));
-        EXPECT_EQ(kept, 3);
+        // the floors: satellites, values and the 1-sigma (hz, sig set either way); a capped weight's honest sigma
+        MosaicMbWSat s[] = {sat_(1.0f, 1.0f, 1), sat_(1.2f, 1.0f, 1), sat_(0.8f, 1.0f, 1)};
+        EXPECT_FALSE(mbWindupEstimate(s, 3, 4, 1, 100.0f, 3.0f, 0.35f, wk, hz, sig, ks, kv));
+        EXPECT_EQ(ks, 3);
         EXPECT_NEAR(hz, 1.0f, 1e-6);
-        MosaicMbWVal u[] = {{1.0f, 1.0f}, {1.2f, 1.0f}, {0.8f, 1.0f}};
-        EXPECT_FALSE(mbWindupEstimate(u, 3, 3, 0.5f, 3.0f, hz, sig, kept));   // 1/sqrt(3) = 0.58 Hz
-        MosaicMbWVal w[] = {{1.0f, 1.0f}, {1.2f, 1.0f}, {0.8f, 1.0f}};
-        EXPECT_TRUE(mbWindupEstimate(w, 3, 3, 0.6f, 3.0f, hz, sig, kept));
-        EXPECT_FALSE(mbWindupEstimate(w, 0, 0, 100.0f, 3.0f, hz, sig, kept));
-        EXPECT_EQ(kept, 0);
+        EXPECT_FALSE(mbWindupEstimate(s, 3, 3, 4, 100.0f, 3.0f, 0.35f, wk, hz, sig, ks, kv));   // 3 values
+        EXPECT_TRUE(mbWindupEstimate(s, 3, 3, 3, 0.6f, 3.0f, 0.35f, wk, hz, sig, ks, kv));
+        EXPECT_NEAR(sig, 1.0f / std::sqrt(3.0f), 1e-6);
+        EXPECT_FALSE(mbWindupEstimate(s, 3, 3, 3, 0.5f, 3.0f, 0.35f, wk, hz, sig, ks, kv));
+        EXPECT_FALSE(mbWindupEstimate(s, 0, 0, 0, 100.0f, 3.0f, 0.35f, wk, hz, sig, ks, kv));
+        EXPECT_EQ(ks, 0);
+        MosaicMbWSat t[] = {sat_(1.0f, 0.1f), sat_(1.0f, 1.0f), sat_(1.0f, 1.0f), sat_(1.0f, 1.0f)};
+        ASSERT_TRUE(mbWindupEstimate(t, 4, 3, 1, 100.0f, 3.0f, 0.35f, wk, hz, sig, ks, kv));
+        const float tau = 0.35f * 3.0f / 0.65f;   // the strong one capped: its sigma counts at its capped weight
+        EXPECT_NEAR(sig, std::sqrt(tau * tau * 0.01f + 3.0f) / (tau + 3.0f), 1e-6);
+    }
+    {
+        // one value a satellite: its anchor's and bands' range rates regressed on their wavelengths, the anchor's
+        // error counted once. Galileo 11 alone with E5a, E5b, E6, its anchor off F: the slope by hand (normal
+        // equations of r = R + W lambda), and with one band: (r_b - r_a) / (lambda_b - lambda_a)
+        Mb m;
+        mosaicMbMeasured(m.cfg);
+        m.cfg.on = true;
+        m.cfg.w_min_sats = 1;
+        m.cfg.w_min_values = 1;
+        m.cfg.w_max_sigma_hz = 100.0f;
+        const double W = 0.7, F = 0.05, R = 300.0;
+        RawEpoch ep;
+        ASSERT_TRUE(m.grid(epoch(kTow0, {sat(70 + 11, 11, {17, rrOf(R, W, 17) + F},
+                                             {{20, rrOf(R, W, 20), 132}, {21, rrOf(R, W, 21), 136},
+                                              {19, rrOf(R, W, 19), 124}})}),
+                           ep));
+        ASSERT_EQ(m.scr->nws, 1);
+        double S0 = 0, Sx = 0, Sy = 0, Sxx = 0, Sxy = 0;
+        for (const auto& b : {std::tuple<uint8_t, double, double>{17, 45.0, F}, {20, 43.0, 0.0}, {21, 44.0, 0.0},
+                              {19, 41.0, 0.0}})
+        {
+            const double w = 1.0 / std::pow(mbSigma(m.cfg.band[std::get<0>(b)], std::get<1>(b)), 2);
+            const double x = lam(std::get<0>(b)), y = rrOf(R, W, std::get<0>(b)) + std::get<2>(b);
+            S0 += w;
+            Sx += w * x;
+            Sy += w * y;
+            Sxx += w * x * x;
+            Sxy += w * x * y;
+        }
+        const double I = Sxx - Sx * Sx / S0;
+        EXPECT_NEAR(m.scr->wsat[0].v, (Sxy - Sx * Sy / S0) / I, 2e-3);
+        EXPECT_NEAR(m.scr->wsat[0].sig, 1.0 / std::sqrt(I), 1e-4);
+        EXPECT_EQ(m.scr->wsat[0].nval, 3);
+        Mb o;
+        o.cfg = m.cfg;
+        ASSERT_TRUE(o.grid(epoch(kTow0, {sat(5, 5, {0, rrOf(R, W, 0) + F}, {{4, rrOf(R, W, 4), 132}})}), ep));
+        ASSERT_EQ(o.scr->nws, 1);
+        const double dl = lam(4) - lam(0);
+        EXPECT_NEAR(o.scr->wsat[0].v, (-F) / dl + W, 2e-3);
+        EXPECT_NEAR(o.scr->wsat[0].sig,
+                    std::sqrt(std::pow(mbSigma(o.cfg.band[0], 45.0), 2) + std::pow(mbSigma(o.cfg.band[4], 43.0), 2)) /
+                        std::fabs(dl),
+                    1e-4);
     }
 }
 
@@ -970,50 +1062,109 @@ TEST(MosaicMultiband, TheDefaultsReferABigSkyWithTheWeightedEstimate)
     EXPECT_EQ(m.st.guard_trips, 0u);           // noise alone never trips the drift guard
 }
 
-TEST(MosaicMultiband, TheSmoothedEstimateHoldsOneBadEpochAndTakesAConfirmedStep)
+TEST(MosaicMultiband, TheSmoothedEstimateGatesEachSatelliteAndStepsOnlyWithAgreement)
 {
     MosaicMultibandConfig c = defaults();
     MosaicMbScratch scr;
     MosaicMultibandStats st;
     MosaicMbOut out;
-    const MosaicMbWindupIn none;
-    // each epoch: n values at v Hz, weight 1 (1 Hz each): 1/sqrt(n) Hz its own 1-sigma
-    auto epochAt = [&](int k, float v, int n = 9) {
-        for (int i = 0; i < n; ++i)
-            scr.w_vals[i] = {v + 0.01f * (i - n / 2), 1.0f};
-        return mbWindupPick(n, kTow0 + 50LL * k, c, none, scr, st, out);
+    MosaicMbWindupIn gyro;
+    // eight satellites, each at its own value v[s] Hz with a 1 Hz sigma (two values each): an epoch k
+    MosaicMbWSat ws[8];
+    auto epochAt = [&](int k, std::function<float(int)> v, int n = 8) {
+        for (int s = 0; s < n; ++s)
+        {
+            ws[s] = MosaicMbWSat{};
+            ws[s].v = v(s) + 0.02f * (s - 4);
+            ws[s].sig = 1.0f;
+            ws[s].w = 1.0f;
+            ws[s].nval = 2;
+            ws[s].cell = static_cast<int16_t>(s);
+            ws[s].prn = static_cast<uint8_t>(s + 1);
+        }
+        return mbWindupPick(ws, n, 2 * n, kTow0 + 50LL * k, c, gyro, scr, st, out);
     };
-    // a steady 1 Hz: the smoothed 1-sigma falls under the epoch's own 0.33 (to sqrt(q dt R) or so: 0.23)
-    for (int k = 0; k < 40; ++k)
-        ASSERT_TRUE(epochAt(k, 1.0f));
-    EXPECT_NEAR(out.w_hat, 1.0f, 1e-3);
-    EXPECT_LT(out.w_sig, 0.25f);
-    // one epoch at 4 Hz: held back, the referral keeps the smoothed 1 Hz; the next back at 1 Hz drops it
-    ASSERT_TRUE(epochAt(40, 4.0f));
-    EXPECT_NEAR(out.w_hat, 1.0f, 1e-3);
-    EXPECT_NEAR(out.w_est, 4.0f, 1e-3);   // the epoch's own, told
-    ASSERT_TRUE(epochAt(41, 1.0f));
-    EXPECT_NEAR(out.w_hat, 1.0f, 1e-3);
-    // a step to 5 Hz that holds: the second epoch confirms it and the filter starts over there (a smaller one, under
-    // the step's sigmas by then, the filter takes at its gain)
-    ASSERT_TRUE(epochAt(42, 5.0f));
-    EXPECT_NEAR(out.w_hat, 1.0f, 1e-3);
-    ASSERT_TRUE(epochAt(43, 5.0f));
-    EXPECT_NEAR(out.w_hat, 5.0f, 1e-3);
-    // an epoch with too few values coasts on the smoothed estimate
-    ASSERT_TRUE(epochAt(44, 5.0f, 3));
-    EXPECT_NEAR(out.w_hat, 5.0f, 1e-3);
-    // past the gap without an estimate: started over, at the next epoch's own (0.33 Hz: under the 0.75 cap)
-    EXPECT_FALSE(epochAt(60, 3.0f, 3));
-    ASSERT_TRUE(epochAt(61, -2.0f));
-    EXPECT_NEAR(out.w_hat, -2.0f, 1e-3);
-    EXPECT_NEAR(out.w_sig, 1.0f / 3.0f, 1e-3);
-    // a restart with too little weight is not used until the filter has gathered enough (0.33 Hz, then 0.26, 0.24)
-    c.w_max_sigma_hz = 0.25f;
-    EXPECT_FALSE(epochAt(100, 0.5f));
+    auto all = [](float x) { return [x](int) { return x; }; };
+    int k = 0;
+    // a steady 1 Hz: the smoothed 1-sigma under the epoch's own (0.35)
+    for (; k < 40; ++k)
+        ASSERT_TRUE(epochAt(k, all(1.0f)));
+    EXPECT_NEAR(out.w_hat, 1.0f, 1e-2);
+    EXPECT_LT(out.w_sig, 0.3f);
+    // one satellite 6 Hz off and staying there: gated out every epoch, the estimate unmoved
+    for (int j = 0; j < 20; ++j, ++k)
+    {
+        ASSERT_TRUE(epochAt(k, [](int s) { return s == 0 ? 7.0f : 1.0f; }));
+        EXPECT_NEAR(out.w_hat, 1.0f, 2e-2);
+        EXPECT_EQ(out.w_gated, 1);
+    }
+    // one bad epoch (every satellite at 4 Hz): held back, then dropped
+    ASSERT_TRUE(epochAt(k++, all(4.0f)));
+    EXPECT_NEAR(out.w_hat, 1.0f, 2e-2);
+    EXPECT_NEAR(out.w_est, 4.0f, 2e-2);   // the epoch's own, told
+    ASSERT_TRUE(epochAt(k++, all(1.0f)));
+    EXPECT_NEAR(out.w_hat, 1.0f, 2e-2);
+    // a step every satellite makes and holds: the second epoch confirms it, the filter starts over there
+    const uint32_t steps0 = st.w_steps;
+    ASSERT_TRUE(epochAt(k++, all(5.0f)));
+    EXPECT_NEAR(out.w_hat, 1.0f, 2e-2);
+    ASSERT_TRUE(epochAt(k++, all(5.0f)));
+    EXPECT_NEAR(out.w_hat, 5.0f, 2e-2);
+    EXPECT_EQ(st.w_steps, steps0 + 1);
+    // three of eight jump to -3 Hz and stay: never a step (the epoch's own estimate clips them; each is gated
+    // against the prediction), the estimate unmoved
+    for (int j = 0; j < 20; ++j, ++k)
+    {
+        ASSERT_TRUE(epochAt(k, [](int s) { return s < 3 ? -3.0f : 5.0f; }));
+        EXPECT_NEAR(out.w_hat, 5.0f, 5e-2);
+        EXPECT_EQ(out.w_gated, 3);
+    }
+    EXPECT_EQ(st.w_steps, steps0 + 1);
+    // the same three at 2 Hz, and the others' noise: within their sigmas, so they pull the estimate as noise would
+    // and the epoch's own moves past the gate now and then; never a step (those that stayed outweigh those that moved)
+    for (int j = 0; j < 20; ++j, ++k)
+        ASSERT_TRUE(epochAt(k, [&](int s) { return s < 3 ? 2.0f : 5.0f + 0.3f * ((j * 7 + s * 3) % 5 - 2); }));
+    EXPECT_EQ(st.w_steps, steps0 + 1);
+    // too few within the gate (one): the filter coasts; past the gap, started over at the epoch's own
+    const float before = out.w_hat;
+    ASSERT_TRUE(epochAt(k++, [](int s) { return s == 0 ? 5.0f : -2.0f; }, 1));
+    EXPECT_FLOAT_EQ(out.w_hat, before);
+    k += 10;
+    ASSERT_TRUE(epochAt(k++, all(-2.0f)));
+    EXPECT_NEAR(out.w_hat, -2.0f, 5e-2);
+    // with the gyro's at hand it says whether the roll rate moved: a step it does not make is refused (the
+    // estimate coasts, then the check against it sends the epochs anchor-only); one it makes is taken
+    gyro = {true, -2.0f};
+    for (int j = 0; j < 5; ++j)
+        ASSERT_TRUE(epochAt(k++, all(-2.0f)));
+    const uint32_t refused0 = st.w_steps_refused;
+    ASSERT_TRUE(epochAt(k++, all(3.0f)));
+    ASSERT_TRUE(epochAt(k++, all(3.0f)));
+    EXPECT_NEAR(out.w_hat, -2.0f, 2e-2);
+    EXPECT_EQ(st.w_steps_refused, refused0 + 2);
+    bool alone = false;
+    for (int j = 0; j < 20 && !alone; ++j)
+        alone = !epochAt(k++, all(3.0f));
+    EXPECT_TRUE(alone);
+    EXPECT_GE(out.x_state, 4);
+    gyro = {true, 3.0f};
+    bool back = false;
+    for (int j = 0; j < 20 && !back; ++j)
+        back = epochAt(k++, all(3.0f));
+    EXPECT_TRUE(back);
+    EXPECT_NEAR(out.w_hat, 3.0f, 5e-2);
+    gyro = {true, 8.0f};
+    ASSERT_TRUE(epochAt(k++, all(8.0f)));
+    ASSERT_TRUE(epochAt(k++, all(8.0f)));
+    EXPECT_NEAR(out.w_hat, 8.0f, 5e-2);
+    // a restart with too little weight is not used until the filter has gathered enough
+    gyro = MosaicMbWindupIn{};
+    c.w_max_sigma_hz = 0.3f;
+    k += 20;
+    EXPECT_FALSE(epochAt(k++, all(0.5f)));   // 0.35 Hz its own
     bool used = false;
-    for (int k = 101; k < 110 && !used; ++k)
-        used = epochAt(k, 0.5f);
+    for (int j = 0; j < 10 && !used; ++j)
+        used = epochAt(k++, all(0.5f));
     EXPECT_TRUE(used);
 }
 
@@ -1362,7 +1513,9 @@ TEST(MosaicMultiband, TheDriftGuardLetsGoWhenTheAnchorComesBackAndStartsOverAfte
     EXPECT_EQ(e.out.w_n, 3 * 2 + 3 * 3 + 2 * 2 - 3);   // GPS two values, Galileo three, BeiDou two (B1C's lambda is
                                                         // B1I's), less the held satellite's three
     EXPECT_NEAR(e.out.w_hat, 0.99f * 0.25f, 2e-3);
-    // a held satellite with nothing to compare for more than guard_gap_s starts over: its Doppler back, alone
+    // a held satellite not tracked for more than guard_gap_s (here no epoch at all: a new track) starts over: its
+    // Doppler back, alone. Held with nothing to compare while it is tracked, it stays held
+    // (TheDriftGuardHoldsThroughAnchorOnlyEpochs)
     Mb h;
     h.cfg = defaults();
     h.cfg.screen_k = 50.0f;
@@ -1377,12 +1530,14 @@ TEST(MosaicMultiband, TheDriftGuardLetsGoWhenTheAnchorComesBackAndStartsOverAfte
     EXPECT_TRUE(ep.obs[satIndex(ep, 3)].has_rate);
 }
 
-TEST(MosaicMultiband, NoiseAloneNeverTripsTheDriftGuard)
+TEST(MosaicMultiband, NoiseAloneNeverTripsTheDriftGuardOrTheNewRules)
 {
-    // 20 minutes of 20 Hz epochs, every band at its model sigma, the estimate referring: no trip, its largest mean
-    // within a few of its sigmas
+    // 20 minutes of 20 Hz epochs, every band at its model sigma, the estimate referring with the gyro's (exact) given
+    // as the driver would give it: no guard trip (its largest mean within a few of its sigmas), no step, no epoch
+    // anchor-only by the check against the gyro's or by the common offset, no system rule
     Mb m;
     m.cfg = defaults();
+    m.wext = {true, 0.2f};
     SkyNoise nz(3);
     for (int k = 0; k < 24000; ++k)
     {
@@ -1395,6 +1550,443 @@ TEST(MosaicMultiband, NoiseAloneNeverTripsTheDriftGuard)
     EXPECT_EQ(m.st.guard_rows, 0u);
     EXPECT_LT(m.st.guard_max_z, 5.0f);
     EXPECT_GT(m.st.guard_looks, 100000u);
+    EXPECT_EQ(m.st.epochs_w_est, 24000u);
+    EXPECT_EQ(m.st.w_steps, 0u);
+    EXPECT_EQ(m.st.x_trips, 0u);
+    EXPECT_EQ(m.st.epochs_xcheck, 0u);
+    EXPECT_LT(m.st.x_max_r, 0.6f);
+    EXPECT_EQ(m.st.common_trips, 0u);
+    EXPECT_EQ(m.st.epochs_common, 0u);
+    EXPECT_EQ(m.st.sys_rows, 0u);
+    EXPECT_EQ(m.st.sys_instant, 0u);
+    EXPECT_LT(m.st.mon_max_r, 0.5f);
+    std::printf("  noise, 24000 epochs: largest guard |mean| %.1f sigma, the check %.2f of its threshold, the common "
+                "offset %.2f of its threshold\n",
+                static_cast<double>(m.st.guard_max_z), static_cast<double>(m.st.x_max_r),
+                static_cast<double>(m.st.mon_max_r));
+}
+
+// ── The review's three defects (each test failed on a08bdcde) ──────────
+// The review's synthetic cases (gnss-attitude-study/v9-mosaic-filter-plan/evidence/multiband/scripts/prep/adv/
+// break_guard.cpp), as tests: one satellite capturing the wind-up estimate, the drift guard letting a held satellite
+// go, and a fault common to every anchor (or to one system's) that the combination turned into satellite-specific
+// errors. Written against the API a08bdcde had, so each one compiles there and fails.
+
+namespace {
+
+// bigSky()'s satellites, changeable (a satellite cut to fewer bands)
+std::vector<SatSpec> skyOf() { return bigSky(); }
+
+bool isAnchorSig(uint8_t sig) { return sig == 0 || sig == 17 || sig == 28; }
+
+// ss's satellites at R_s + dR_s + W lambda + err(s, sig), raw C/N0 cn0(s, sig) (-1: 140 an anchor, 132 a band)
+std::vector<MeasT1> buildSkyOf(const std::vector<SatSpec>& ss, double W, const ErrFn& err, const Cn0Fn& cn0 = nullptr,
+                               const std::vector<double>* dR = nullptr)
+{
+    std::vector<MeasT1> v;
+    for (int s = 0; s < static_cast<int>(ss.size()); ++s)
+    {
+        const double R = ss[s].R + (dR != nullptr ? (*dR)[s] : 0.0);
+        auto rr = [&](uint8_t sig) { return rrOf(R, W, sig, err ? err(s, sig) : 0.0); };
+        auto c = [&](uint8_t sig, int dflt) {
+            const int q = cn0 ? cn0(s, sig) : -1;
+            return static_cast<uint8_t>(q >= 0 ? q : dflt);
+        };
+        std::vector<Band> t2;
+        for (uint8_t sig : ss[s].others)
+            t2.push_back({sig, rr(sig), c(sig, 132)});
+        v.push_back(sat(ss[s].svid, ss[s].ch, {ss[s].master, rr(ss[s].master), c(ss[s].master, 140)}, t2));
+    }
+    return v;
+}
+
+int cellOfSat(const RawEpoch& ep, const SatSpec& x)
+{
+    uint8_t prn = 0;
+    const SbfSys sys = sbfSvid(x.svid, prn);
+    const int gs = sys == SbfSys::GPS ? GNSS_SYS_GPS : sys == SbfSys::GAL ? GNSS_SYS_GAL : GNSS_SYS_BDS;
+    return cellIndex(ep, gs, prn);
+}
+
+// A band's noise at its model sigma for a raw C/N0
+double noiseAt(Gauss& g, const MosaicMultibandConfig& c, uint8_t sig, int raw)
+{
+    return c.band[sig].b > 0.0f ? g() * mbSigma(c.band[sig], raw * 0.25 + 10.0) : 0.0;
+}
+
+}  // namespace
+
+TEST(MosaicMultiband, OneStrongSatellitesAnchorFaultDoesNotCaptureTheWindUpEstimate)
+{
+    // The review's capture (break_guard.cpp E): Galileo satellite 3 strong (E1 at raw qa, its E5a, E5b and E6 8 under),
+    // the other seven at 30 / 28 dB-Hz, so it held 0.5-0.9 of a08bdcde's estimate's weight; its E1 alone +F from 2 s;
+    // every band's own noise; the estimate referring, no gyro. There W_hat moved 1.4-5 Hz with the fault, the faulted
+    // row kept 0.6-1.0 of it and the guard dropped up to 63 % of the healthy rows. Scored over 4-8 s: W_hat within 1 Hz
+    // of the truth on average, the faulted satellite carrying under a tenth of its fault on average (a dropped
+    // Doppler carries none), no healthy row dropped
+    const double W = 0.99 * 0.25;
+    for (double F : {0.2, 0.3, 0.6})
+        for (int qa : {120, 148})
+            for (uint64_t seed : {21u, 22u})
+            {
+                SCOPED_TRACE(testing::Message() << "F " << F << " m/s, anchor " << qa * 0.25 + 10 << " dB-Hz, seed "
+                                                << seed);
+                Mb m;
+                m.cfg = defaults();
+                Gauss g(seed);
+                const std::vector<SatSpec> ss = skyOf();
+                double werr = 0.0, carried = 0.0;
+                int nw = 0, n_faulted = 0, healthy_dropped = 0, healthy = 0;
+                for (int k = 0; k < 160; ++k)
+                {
+                    const double t = 0.05 * k;
+                    auto raw = [&](int s, uint8_t sig) {
+                        return s == 3 ? (isAnchorSig(sig) ? qa : qa - 8) : (isAnchorSig(sig) ? 80 : 72);
+                    };
+                    auto err = [&](int s, uint8_t sig) {
+                        return noiseAt(g, m.cfg, sig, raw(s, sig)) + (s == 3 && sig == 17 && t >= 2.0 ? F : 0.0);
+                    };
+                    RawEpoch ep;
+                    ASSERT_TRUE(m.grid(epoch(kTow0 + 50 * k, buildSkyOf(ss, W, err, raw)), ep));
+                    if (t < 4.0)
+                        continue;
+                    if (m.out.w_src != 0)
+                    {
+                        werr += std::fabs(m.out.w_hat - W);
+                        nw++;
+                    }
+                    for (int s = 0; s < 8; ++s)
+                    {
+                        const int i = cellOfSat(ep, ss[s]);
+                        if (s == 3)
+                        {
+                            n_faulted++;
+                            if (ep.obs[i].has_rate)
+                                carried += ep.obs[i].rate_mps - (ss[s].R + W * lam(17));
+                        }
+                        else
+                        {
+                            healthy++;
+                            healthy_dropped += ep.obs[i].has_rate ? 0 : 1;
+                        }
+                    }
+                }
+                ASSERT_GT(nw, 0);
+                EXPECT_LT(werr / nw, 1.0) << "mean |W_hat - W|, Hz";
+                EXPECT_LT(std::fabs(carried / n_faulted), 0.1 * F) << "the fault the faulted row carries, mean";
+                EXPECT_EQ(healthy_dropped, 0) << "of " << healthy << " healthy rows";
+            }
+}
+
+TEST(MosaicMultiband, TheEstimateAgainstTheGyrosWindUpSendsAPersistentDisagreementAnchorOnly)
+{
+    // The estimate refers; the gyro's wind-up is given each epoch as the driver would give it. Where the two disagree
+    // for more than a moment (here the gyro's 3 Hz off from 2 s to 4 s: either one could be the wrong one), the epoch
+    // goes anchor-only, the image's rows; once they agree again it refers again (here by 6.5 s: the check lets go
+    // after 0.5 s of agreement, and the anchors' common offset, which the gyro's error looked like at its 3 Hz times
+    // the bands' wavelengths, once its satellites' means are back). a08bdcde never compared them
+    const double W = 0.99 * 0.25;
+    Mb m;
+    m.cfg = defaults();
+    SkyNoise nz(5);
+    int alone_mid = 0, n_mid = 0, combined_after = 0, n_after = 0, combined_before = 0, n_before = 0;
+    for (int k = 0; k < 180; ++k)
+    {
+        const double t = 0.05 * k;
+        m.wext = {true, static_cast<float>(W + (t >= 2.0 && t < 4.0 ? 3.0 : 0.0))};
+        nz.draw(m.cfg);
+        RawEpoch ep;
+        ASSERT_TRUE(m.grid(epoch(kTow0 + 50 * k, buildSky(W, [&](int s, uint8_t sig) { return nz.n[s][sig]; })), ep));
+        const int i = satIndex(ep, 3);
+        if (t >= 1.0 && t < 2.0)
+        {
+            n_before++;
+            combined_before += m.out.row[i] == MosaicMbRow::COMBINED;
+        }
+        if (t >= 2.5 && t < 4.0)
+        {
+            n_mid++;
+            alone_mid += m.out.epoch != 0 && m.out.row[i] == MosaicMbRow::EPOCH;
+        }
+        if (t >= 6.5)
+        {
+            n_after++;
+            combined_after += m.out.row[i] == MosaicMbRow::COMBINED;
+        }
+    }
+    EXPECT_EQ(combined_before, n_before);
+    EXPECT_EQ(alone_mid, n_mid);
+    EXPECT_EQ(combined_after, n_after);
+}
+
+TEST(MosaicMultiband, TheDriftGuardKeepsAHeldSatelliteOutWhenItsOnlyBandIsScreenedOut)
+{
+    // The review's case A: GPS 5's L1 C/A with L5 alone beside it, a ramp on L1 C/A, every band's own noise. The guard
+    // drops its Doppler early in the ramp; a08bdcde then let it go once the fault grew past L5's screen (the guard not
+    // looked at, its hold expired after guard_gap_s) and the row went back ALONE with the whole fault. Once dropped,
+    // the Doppler must stay out while the ramp goes on: with the gyro's wind-up or the estimate, 0.1 and 0.03 m/s a second
+    struct Case
+    {
+        bool gyro;
+        double rate, secs;
+    } cases[] = {{true, 0.1, 15.0}, {false, 0.1, 15.0}, {true, 0.03, 30.0}};
+    for (const Case& c : cases)
+    {
+        SCOPED_TRACE(testing::Message() << (c.gyro ? "the gyro's W" : "the estimate") << ", ramp " << c.rate);
+        std::vector<SatSpec> ss = skyOf();
+        ss[0].others = {4};
+        Mb m;
+        m.cfg = defaults();
+        const double W = 0.99 * 0.25;
+        if (c.gyro)
+        {
+            m.cfg.w_src = MosaicMbWSrc::GYRO;
+            m.wext = {true, static_cast<float>(W)};
+        }
+        Gauss g(5);
+        int first = -1, back = 0;
+        double worst = 0.0;
+        const int n = static_cast<int>(c.secs * 20);
+        for (int k = 0; k < n; ++k)
+        {
+            const double f = c.rate * k * 0.05;
+            auto err = [&](int s, uint8_t sig) {
+                return noiseAt(g, m.cfg, sig, isAnchorSig(sig) ? 140 : 132) + (s == 0 && sig == 0 ? f : 0.0);
+            };
+            RawEpoch ep;
+            ASSERT_TRUE(m.grid(epoch(kTow0 + 50 * k, buildSkyOf(ss, W, err)), ep));
+            const int i = cellOfSat(ep, ss[0]);
+            if (first < 0 && m.out.row[i] == MosaicMbRow::DRIFT)
+                first = k;
+            if (first >= 0 && ep.obs[i].has_rate)
+            {
+                back++;
+                worst = std::max(worst, std::fabs(ep.obs[i].rate_mps - (ss[0].R + W * lam(0))));
+            }
+        }
+        ASSERT_GE(first, 0) << "never dropped";
+        EXPECT_LT(c.rate * first * 0.05, 0.2) << "dropped at";
+        EXPECT_EQ(back, 0) << "epochs its Doppler came back after the drop; the largest error carried " << worst;
+    }
+}
+
+TEST(MosaicMultiband, AnAnchorThatOutgrowsItsOnlyBandAtOnceIsHeldToo)
+{
+    // The evaluation's one-band GPS satellite with a 1 m/s step on its L1 C/A (the cone-off rig: 1.3 m/s of velocity
+    // error on a08bdcde, 1.7 on the image): its only band leaves at the screen in the first epoch, so the guard,
+    // fed only by combinations, never saw it and the anchor stayed in alone with the whole step. An epoch that
+    // screens out every band feeds the guard too, as a vote does: held within a few epochs and for good while the
+    // step lasts; a single such epoch (a glitch) holds nothing
+    for (int len : {1, 200})
+    {
+        SCOPED_TRACE(testing::Message() << "a step of " << len << " epochs");
+        std::vector<SatSpec> ss = skyOf();
+        ss[0].others = {4};
+        Mb m;
+        m.cfg = defaults();
+        const double W = 0.99 * 0.25;
+        m.wext = {true, static_cast<float>(W)};
+        Gauss g(31);
+        int first = -1, alone = 0, back = 0;
+        for (int k = 0; k < 40 + 200; ++k)
+        {
+            const bool on = k >= 40 && k < 40 + len;
+            auto err = [&](int s, uint8_t sig) {
+                return noiseAt(g, m.cfg, sig, isAnchorSig(sig) ? 140 : 132) + (s == 0 && sig == 0 && on ? 1.0 : 0.0);
+            };
+            RawEpoch ep;
+            ASSERT_TRUE(m.grid(epoch(kTow0 + 50 * k, buildSkyOf(ss, W, err)), ep));
+            const int i = cellOfSat(ep, ss[0]);
+            if (k < 40)
+                continue;
+            if (first < 0 && m.out.row[i] == MosaicMbRow::DRIFT)
+                first = k - 40;
+            if (on && ep.obs[i].has_rate)
+                alone++;
+            if (!on && ep.obs[i].has_rate)
+                back++;
+        }
+        if (len == 1)
+        {
+            EXPECT_EQ(first, -1);
+            EXPECT_EQ(back, 199);   // the glitch's one epoch alone, as the image's row; nothing held after it
+        }
+        else
+        {
+            ASSERT_GE(first, 0);
+            EXPECT_LE(first, 8);
+            EXPECT_LE(alone, 8) << "epochs the row went in with the step";
+        }
+    }
+}
+
+TEST(MosaicMultiband, TheDriftGuardHoldsThroughAnchorOnlyEpochs)
+{
+    // The review's case C: Galileo 11's E1 0.2 m/s off (under the screen) from the start, held by the guard; from 3 s
+    // every other satellite's bands are gone for 0.8 s (an obstruction: too few wind-up values, every epoch
+    // anchor-only), then back. a08bdcde let the hold expire after guard_gap_s: the anchor went in with its 0.2 m/s
+    // and, once the bands came back, combined again for a few epochs. The hold must last through the gap and after
+    const double W = 0.99 * 0.25;
+    Mb m;
+    m.cfg = defaults();
+    Gauss g(13);
+    int first = -1, back = 0, alone_epochs = 0;
+    for (int k = 0; k < 200; ++k)
+    {
+        const double t = 0.05 * k;
+        std::vector<SatSpec> cur = skyOf();
+        if (t >= 3.0 && t < 3.8)
+            for (size_t s = 0; s < cur.size(); ++s)
+                if (s != 3)
+                    cur[s].others.clear();
+        auto err = [&](int s, uint8_t sig) {
+            return noiseAt(g, m.cfg, sig, isAnchorSig(sig) ? 140 : 132) + (s == 3 && sig == 17 ? 0.2 : 0.0);
+        };
+        RawEpoch ep;
+        ASSERT_TRUE(m.grid(epoch(kTow0 + 50 * k, buildSkyOf(cur, W, err)), ep));
+        const int i = cellOfSat(ep, cur[3]);
+        alone_epochs += m.out.epoch != 0;
+        if (first < 0 && m.out.row[i] == MosaicMbRow::DRIFT)
+            first = k;
+        if (first >= 0 && ep.obs[i].has_rate)
+            back++;
+    }
+    ASSERT_GE(first, 0);
+    EXPECT_LT(first, 20);
+    EXPECT_GE(alone_epochs, 8);   // the gap's epochs went anchor-only, once the smoother's 0.25 s coast ran out
+    EXPECT_EQ(back, 0) << "epochs its Doppler came back after the drop";
+}
+
+TEST(MosaicMultiband, TheDriftGuardAllowsForAcceleration)
+{
+    // The review's case B (boost): every extra band 1.0 ms behind its anchor (inside max_lag_ms), so under a
+    // line-of-sight acceleration a it reads a x 1 ms less; each satellite sees a share (0.4-0.95) of 150 m/s^2 for
+    // 2 s, then -12 (coast); the gyro's wind-up (0). The screen allows max_lag 3 ms x |a_hat| and flags nothing;
+    // a08bdcde's guard had no such allowance and dropped 15-20 of the 80 rows every 0.5 s from 1.5 s into the boost to
+    // 2 s into coast. With the screen's allowance it drops none
+    const std::vector<SatSpec> ss = skyOf();
+    Mb m;
+    m.cfg = defaults();
+    m.cfg.w_src = MosaicMbWSrc::GYRO;
+    m.wext = {true, 0.0f};
+    const double share[8] = {0.95, 0.80, 0.55, 0.90, 0.70, 0.40, 0.85, 0.60};
+    Gauss g(9);
+    std::vector<double> dR(ss.size(), 0.0);
+    const int pad = 200;   // 10 s on the pad first
+    int drift = 0, rows = 0;
+    for (int k = 0; k < pad + 160; ++k)
+    {
+        const double t = (k - pad) * 0.05;
+        const double a = t < 0.0 ? 0.0 : (t < 2.0 ? 150.0 : -12.0);
+        for (size_t s = 0; s < ss.size(); ++s)
+            dR[s] += a * share[s] * 0.05;
+        auto err = [&](int s, uint8_t sig) {
+            return noiseAt(g, m.cfg, sig, isAnchorSig(sig) ? 140 : 132) -
+                   (isAnchorSig(sig) ? 0.0 : a * share[s] * 1.0e-3);
+        };
+        RawEpoch ep;
+        ASSERT_TRUE(m.grid(epoch(kTow0 + 50 * k, buildSkyOf(ss, 0.0, err, nullptr, &dR)), ep));
+        if (k < pad)
+            continue;
+        for (size_t s = 0; s < ss.size(); ++s)
+        {
+            rows++;
+            drift += m.out.row[cellOfSat(ep, ss[s])] == MosaicMbRow::DRIFT;
+        }
+    }
+    EXPECT_EQ(drift, 0) << "rows the guard dropped of " << rows;
+}
+
+TEST(MosaicMultiband, AFaultCommonToEveryAnchorGoesAnchorOnlyAsTheImagesRowsWould)
+{
+    // The review's third defect: every satellite's anchor +0.3 m/s from 2 s (a fault common to the L1 band). The
+    // image's rows carry it whole on every satellite and the receiver clock's drift takes it: error 0. On a08bdcde
+    // the estimate read it as wind-up and handed a different share back to each row; with the gyro's wind-up the
+    // drift guard dropped nearly every satellite's Doppler. Over 3-8 s each epoch must go anchor-only (the image's
+    // rows: every Doppler kept, each its anchor's own), with the estimate referring (the gyro's given as the driver
+    // would give it) and with the gyro's referring
+    const double W = 0.99 * 0.25;
+    for (int src = 0; src < 2; ++src)
+    {
+        SCOPED_TRACE(src == 0 ? "the estimate, the gyro's given" : "the gyro's");
+        Mb m;
+        m.cfg = defaults();
+        if (src == 1)
+            m.cfg.w_src = MosaicMbWSrc::GYRO;
+        m.wext = {true, static_cast<float>(W)};
+        SkyNoise nz(17);
+        int alone = 0, n = 0, dropped = 0, not_own = 0;
+        for (int k = 0; k < 160; ++k)
+        {
+            const double t = 0.05 * k;
+            nz.draw(m.cfg);
+            const std::vector<uint8_t> blk = epoch(kTow0 + 50 * k, buildSky(W, [&](int s, uint8_t sig) {
+                return nz.n[s][sig] + (isAnchorSig(sig) && t >= 2.0 ? 0.3 : 0.0);
+            }));
+            RawEpoch ep, ref;
+            ASSERT_TRUE(m.grid(blk, ep));
+            MosaicJumpState js;
+            MosaicEpochInfo info;
+            ASSERT_TRUE(rawEpochFromMeasEpoch(blk.data(), blk.size(), ref, js, info));
+            if (t < 3.0)
+                continue;
+            n++;
+            alone += m.out.epoch != 0;
+            for (int i = 0; i < ep.n; ++i)
+            {
+                dropped += ep.obs[i].has_rate ? 0 : 1;
+                not_own += ep.obs[i].has_rate && ep.obs[i].rate_mps != ref.obs[i].rate_mps;
+            }
+        }
+        EXPECT_EQ(alone, n) << "epochs anchor-only";
+        EXPECT_EQ(dropped, 0) << "Dopplers dropped";
+        EXPECT_EQ(not_own, 0) << "rows not their anchor's own";
+    }
+}
+
+TEST(MosaicMultiband, AFaultCommonToOneSystemsAnchorsIsNotThinnedToItsSingleBandSatellites)
+{
+    // The evaluation's GPS-wide 1 m/s step: every GPS satellite's L1 C/A +1 m/s; GPS 5 has L5 alone beside it. On
+    // a08bdcde the vote dropped GPS 6 and 7 (two agreeing bands each) and GPS 5's L5 left at the screen, so GPS 5 went
+    // in alone with the whole step: one faulted row in place of three, under the filter's epoch test (on the rigs the
+    // velocity ran to 1 m/s against the image's 29-241 mm/s). The system's rows must be treated together -- every GPS
+    // row with its anchor's Doppler, or none with a Doppler -- and the other systems' rows left combined
+    const double W = 0.99 * 0.25;
+    for (int src = 0; src < 2; ++src)
+    {
+        SCOPED_TRACE(src == 0 ? "the estimate" : "the gyro's");
+        std::vector<SatSpec> ss = skyOf();
+        ss[0].others = {4};
+        Mb m;
+        m.cfg = defaults();
+        if (src == 1)
+            m.cfg.w_src = MosaicMbWSrc::GYRO;
+        m.wext = {true, static_cast<float>(W)};
+        Gauss g(23);
+        int split = 0, n = 0, others_not_combined = 0, with_gps = 0;
+        for (int k = 0; k < 120; ++k)
+        {
+            const double t = 0.05 * k;
+            auto err = [&](int s, uint8_t sig) {
+                return noiseAt(g, m.cfg, sig, isAnchorSig(sig) ? 140 : 132) + (s < 3 && sig == 0 && t >= 2.0 ? 1.0 : 0.0);
+            };
+            RawEpoch ep;
+            ASSERT_TRUE(m.grid(epoch(kTow0 + 50 * k, buildSkyOf(ss, W, err)), ep));
+            if (t < 2.0)
+                continue;
+            n++;
+            int with = 0;
+            for (int s = 0; s < 3; ++s)
+                with += ep.obs[cellOfSat(ep, ss[s])].has_rate ? 1 : 0;
+            split += with != 0 && with != 3;
+            with_gps += with;
+            for (int s = 3; s < 8; ++s)
+                others_not_combined += m.out.row[cellOfSat(ep, ss[s])] != MosaicMbRow::COMBINED;
+        }
+        EXPECT_EQ(split, 0) << "epochs with the GPS rows split, of " << n;
+        EXPECT_EQ(others_not_combined, 0);
+        EXPECT_EQ(with_gps, 0);   // the system's rule, sys_action DROP: none of them with a Doppler
+    }
 }
 
 // ── The effective C/N0 ─────────────────────────────────────────────────

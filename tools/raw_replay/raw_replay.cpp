@@ -283,8 +283,14 @@ struct Args
                                      //   epoch's own estimate), gyro (with the gyro's roll rate), auto (the
                                      //   estimate where it has enough, else the gyro's), lam (the row's weighted
                                      //   wavelength corrected from the gyro), none
-    double rr_mb_gyro_age_ms = -1.0; //   gyro, auto: the IMU's last sample at most this old (20 ms)
+    double rr_mb_gyro_age_ms = -1.0; //   the gyro's wind-up: the IMU's last sample at most this old (20 ms)
     double rr_mb_gyro_rail_dps = -1.0;   //   and under this (4000 dps, the ISM6HG256's range)
+    int rr_mb_gyro = -1;             //   0: the gyro's wind-up not given (ref then has no check against it)
+    int rr_mb_check = -1;            //   0: the estimate not checked against the gyro's (MosaicMultiband.h w_check)
+    int rr_mb_common = -1;           //   0: no common-offset rule (the monitor and the system rule)
+    std::string rr_mb_sys_action;    //   drop (default) or anchor: a system's rows when its anchors are off together
+    double rr_mb_w_share = -1.0;     //   the cap on a satellite's share of the estimate's weight
+    int rr_mb_w_min_sats = -1;
     double rr_mb_w_sigma = -1.0, rr_mb_w_clip_k = -1.0, rr_mb_w_smooth_q = -1.0;   // the estimate's settings
     int rr_mb_guard = -1;            //   the drift guard (MosaicMultiband.h; 0 off)
     double rr_mb_guard_tau_s = -1.0, rr_mb_guard_k = -1.0, rr_mb_guard_floor = -1.0;
@@ -377,7 +383,9 @@ void usage()
                  "  [--rr-mb-screen-floor X] [--rr-mb-hyst-db X] [--rr-mb-anchor-vote 0|1] [--rr-mb-max-bands N]\n"
                  "  [--rr-mb-w-min N] [--rr-mb-trace FILE] [--rr-mb-w-sigma X] [--rr-mb-w-clip-k X]\n"
                  "  [--rr-mb-w-smooth-q X] [--rr-mb-gyro-age-ms X] [--rr-mb-gyro-rail-dps X] [--rr-mb-guard 0|1]\n"
-                 "  [--rr-mb-guard-tau-s X] [--rr-mb-guard-k X] [--rr-mb-guard-floor X]\n"
+                 "  [--rr-mb-guard-tau-s X] [--rr-mb-guard-k X] [--rr-mb-guard-floor X] [--rr-mb-gyro 0|1]\n"
+                 "  [--rr-mb-check 0|1] [--rr-mb-common 0|1] [--rr-mb-sys-action drop|anchor] [--rr-mb-w-share X]\n"
+                 "  [--rr-mb-w-min-sats N]\n"
                  "  [--assume-finetime] [--pad-zupt 0|1] [--gnss-only-from-s X] [--gnss-only-gate launch|ground]\n"
                  "  [--pvt-out FILE] [--gnss-only-keep-level]\n"
                  "  the epoch's geometry (a RAW_REPLAY_SHARELOS build): [--share-los 0|1|2]\n"
@@ -571,6 +579,12 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--rr-mb-w-min") a.rr_mb_w_min = std::atoi(val());
         else if (k == "--rr-mb-trace") a.rr_mb_trace = val();
         else if (k == "--rr-mb-gyro-age-ms") a.rr_mb_gyro_age_ms = std::atof(val());
+        else if (k == "--rr-mb-gyro") a.rr_mb_gyro = std::atoi(val());
+        else if (k == "--rr-mb-check") a.rr_mb_check = std::atoi(val());
+        else if (k == "--rr-mb-common") a.rr_mb_common = std::atoi(val());
+        else if (k == "--rr-mb-sys-action") a.rr_mb_sys_action = val();
+        else if (k == "--rr-mb-w-share") a.rr_mb_w_share = std::atof(val());
+        else if (k == "--rr-mb-w-min-sats") a.rr_mb_w_min_sats = std::atoi(val());
         else if (k == "--rr-mb-gyro-rail-dps") a.rr_mb_gyro_rail_dps = std::atof(val());
         else if (k == "--rr-mb-w-sigma") a.rr_mb_w_sigma = std::atof(val());
         else if (k == "--rr-mb-w-clip-k") a.rr_mb_w_clip_k = std::atof(val());
@@ -1713,7 +1727,9 @@ int main(int argc, char** argv)
                          a.rr_mb_max_bands >= 0 || a.rr_mb_w_min >= 0 || !a.rr_mb_trace.empty() ||
                          a.rr_mb_gyro_age_ms >= 0.0 || a.rr_mb_gyro_rail_dps >= 0.0 || a.rr_mb_w_sigma >= 0.0 ||
                          a.rr_mb_w_clip_k >= 0.0 || a.rr_mb_w_smooth_q >= 0.0 || a.rr_mb_guard >= 0 ||
-                         a.rr_mb_guard_tau_s >= 0.0 || a.rr_mb_guard_k >= 0.0 || a.rr_mb_guard_floor >= 0.0;
+                         a.rr_mb_guard_tau_s >= 0.0 || a.rr_mb_guard_k >= 0.0 || a.rr_mb_guard_floor >= 0.0 ||
+                         a.rr_mb_gyro >= 0 || a.rr_mb_check >= 0 || a.rr_mb_common >= 0 ||
+                         !a.rr_mb_sys_action.empty() || a.rr_mb_w_share >= 0.0 || a.rr_mb_w_min_sats >= 0;
 #if !RAW_REPLAY_MULTIBAND
     if (a.rr_multiband > 0 || mb_opts)
     {
@@ -1737,6 +1753,17 @@ int main(int argc, char** argv)
         a.rr_mb_windup != "lam" && a.rr_mb_windup != "none")
     {
         std::fprintf(stderr, "--rr-mb-windup is ref, gyro, auto, lam or none, not %s\n", a.rr_mb_windup.c_str());
+        return 2;
+    }
+    if (!a.rr_mb_sys_action.empty() && a.rr_mb_sys_action != "anchor" && a.rr_mb_sys_action != "drop")
+    {
+        std::fprintf(stderr, "--rr-mb-sys-action is anchor or drop, not %s\n", a.rr_mb_sys_action.c_str());
+        return 2;
+    }
+    if (a.rr_mb_gyro == 0 && (a.rr_mb_windup == "gyro" || a.rr_mb_windup == "auto"))
+    {
+        std::fprintf(stderr, "--rr-mb-gyro 0 with --rr-mb-windup %s: that source is the gyro's\n",
+                     a.rr_mb_windup.c_str());
         return 2;
     }
 #endif
@@ -2287,10 +2314,11 @@ int main(int argc, char** argv)
     const bool mb_on = a.rr_multiband > 0;
     const RawMeasBuilder::Config mb_bcfg = RawGnssShadow::stageConfig(cfg).meas;
     const bool mb_lam = mb_on && a.rr_mb_windup == "lam";
-    // --rr-mb-windup gyro, auto: the gyro's wind-up for each MeasEpoch, as a driver would take it -- the IMU path's
-    // last roll rate (its x, rad/s, as the filter gets it) when the block is decoded, no older than
-    // --rr-mb-gyro-age-ms and under the gyro's rail, W = -k p / 2pi (the profile's windup_k; 0.99 where it is off)
-    const bool mb_gyro = mb_on && (a.rr_mb_windup == "gyro" || a.rr_mb_windup == "auto");
+    // the gyro's wind-up for each MeasEpoch, as a driver would take it -- the IMU path's last roll rate (its x, rad/s,
+    // as the filter gets it) when the block is decoded, no older than --rr-mb-gyro-age-ms and under the gyro's rail,
+    // W = -k p / 2pi (the profile's windup_k; 0.99 where it is off): the referral's with --rr-mb-windup gyro and
+    // auto, and with ref the estimate's check (and the common offset's reference); --rr-mb-gyro 0 gives none
+    const bool mb_gyro = mb_on && a.rr_mb_gyro != 0;
     const int64_t mb_gyro_age_us = static_cast<int64_t>((a.rr_mb_gyro_age_ms >= 0.0 ? a.rr_mb_gyro_age_ms : 20.0) * 1000.0);
     const double mb_gyro_rail = (a.rr_mb_gyro_rail_dps >= 0.0 ? a.rr_mb_gyro_rail_dps : 4000.0) * kD2R;
     const double mb_gyro_k = cfg.windup_k > 0.0 ? cfg.windup_k : 0.99;
@@ -2387,6 +2415,17 @@ int main(int argc, char** argv)
             m.w_smooth_q = static_cast<float>(a.rr_mb_w_smooth_q);
         if (a.rr_mb_guard >= 0)
             m.guard = a.rr_mb_guard != 0;
+        if (a.rr_mb_check >= 0)
+            m.w_check = a.rr_mb_check != 0;
+        if (a.rr_mb_common >= 0)
+            m.common = a.rr_mb_common != 0;
+        if (!a.rr_mb_sys_action.empty())
+            m.sys_action = a.rr_mb_sys_action == "anchor" ? mosaic::MosaicMbSysAct::ANCHOR
+                                                          : mosaic::MosaicMbSysAct::DROP;
+        if (a.rr_mb_w_share >= 0.0)
+            m.w_max_share = static_cast<float>(a.rr_mb_w_share);
+        if (a.rr_mb_w_min_sats >= 0)
+            m.w_min_sats = a.rr_mb_w_min_sats;
         if (a.rr_mb_guard_tau_s >= 0.0)
             m.guard_tau_s = static_cast<float>(a.rr_mb_guard_tau_s);
         if (a.rr_mb_guard_k >= 0.0)
@@ -2413,19 +2452,24 @@ int main(int argc, char** argv)
                 jl += (jl.empty() ? "" : ",") + std::to_string(sg);
         std::fprintf(stderr, "multi-band: on (offline only), bands %s, model %s, wind-up %s, sigma %s; lock >= %.1f s, "
                              "floor + %.1f dB to join, screen %.1f sigma / %.2f m/s, anchor vote %s, at most %d "
-                             "bands; the estimate: values >= %d, 1-sigma <= %.2f Hz, clip %.1f sigma, smoothing %s; "
-                             "drift guard %s (%.1f s, %.1f sigma / %.3f m/s)\n",
+                             "bands; the estimate: values >= %d from satellites >= %d, a satellite's share <= %.2f, "
+                             "1-sigma <= %.2f Hz, clip %.1f sigma, smoothing %s; "
+                             "drift guard %s (%.1f s, %.1f sigma / %.3f m/s); the check against the gyro's %s; the "
+                             "common offset %s (systems: %s)\n",
                      jl.empty() ? "none" : jl.c_str(), a.rr_mb_model.empty() ? "measured" : a.rr_mb_model.c_str(),
                      a.rr_mb_windup.empty() ? "ref" : a.rr_mb_windup.c_str(),
                      m.express_sigma ? "expressed (effective C/N0)" : "the anchor's", m.min_lock_s, m.cn0_hyst_db,
                      m.screen_k, m.screen_floor_mps, m.anchor_vote ? "on" : "off", m.max_bands, m.w_min_values,
-                     m.w_max_sigma_hz, m.w_clip_k,
+                     m.w_min_sats, m.w_max_share, m.w_max_sigma_hz, m.w_clip_k,
                      m.w_smooth_q > 0.0f ? (std::to_string(m.w_smooth_q) + " Hz^2/s").c_str() : "off",
-                     m.guard ? "on" : "off", m.guard_tau_s, m.guard_k, m.guard_floor_mps);
+                     m.guard ? "on" : "off", m.guard_tau_s, m.guard_k,
+                     m.guard_floor_mps, m.w_check && mb_gyro ? "on" : "off", m.common ? "on" : "off",
+                     m.sys_action == mosaic::MosaicMbSysAct::DROP ? "Dopplers dropped" : "anchor-only");
         if (mb_gyro)
             std::fprintf(stderr, "multi-band: the gyro's wind-up (%s): the IMU's last x, at most %.0f ms old, under "
                                  "%.0f dps, k %.3f\n",
-                         a.rr_mb_windup.c_str(), mb_gyro_age_us * 1.0e-3, mb_gyro_rail / kD2R, mb_gyro_k);
+                         a.rr_mb_windup.empty() ? "ref: the check" : a.rr_mb_windup.c_str(), mb_gyro_age_us * 1.0e-3,
+                         mb_gyro_rail / kD2R, mb_gyro_k);
         if (mb_lam && !(cfg.windup_k > 0.0))
             std::fprintf(stderr, "WARNING: --rr-mb-windup lam with windup_k 0: no wind-up is corrected, the rows' "
                                  "weighted wavelength included\n");
@@ -2547,13 +2591,14 @@ int main(int argc, char** argv)
             return 1;
         }
         std::fprintf(mb_trace, "tow_ms,end,sys,prn,cn0,row,epoch,w_hat_hz,w_n,bands,d_mps,sigma_a,sigma_c,lam_wu_m,"
-                               "cand,w_src,w_sig_hz,w_est_hz,w_est_sig_hz,w_kept,w_gyro_hz,g_m_mps,g_sig_mps\n");
+                               "cand,w_src,w_sig_hz,w_est_hz,w_est_sig_hz,w_kept,w_gyro_hz,g_m_mps,g_sig_mps,w_sats,"
+                               "w_gated,x_state,x_d_hz,x_thr_hz,sys_flags,mon_r,x_mps\n");
     }
     auto mbTrace = [&]() {
         if (mb_trace == nullptr || !feed.mbTake())
             return;
         const mosaic::MosaicMbOut& o = feed.mbLast();
-        static const char* const kRow[] = {"none", "no_rate", "alone", "epoch", "voted", "combined", "drift"};
+        static const char* const kRow[] = {"none", "no_rate", "alone", "epoch", "voted", "combined", "drift", "system"};
         for (int i = 0; i < o.n; ++i)
         {
             if (o.row[i] == mosaic::MosaicMbRow::NO_RATE || o.row[i] == mosaic::MosaicMbRow::NONE)
@@ -2572,7 +2617,7 @@ int main(int argc, char** argv)
             if (o.w_ext_ok)
                 std::snprintf(gy, sizeof(gy), "%.4f", static_cast<double>(o.w_ext));
             std::fprintf(mb_trace, "%lld,%c,%u,%u,%.2f,%s,%u,%.4f,%d,%u,%.5f,%.5f,%.5f,%.6f,%s,%u,%.4f,%.4f,%.4f,%d,%s,"
-                                   "%.5f,%.5f\n",
+                                   "%.5f,%.5f,%d,%d,%u,%.4f,%.4f,%u,%.3f,%.5f\n",
                          static_cast<long long>(o.rx_ms % 604800000LL), feed.mbLastGrid() ? 'g' : 'o',
                          static_cast<unsigned>(o.sys[i]), static_cast<unsigned>(o.prn[i]),
                          static_cast<double>(o.cn0[i]), kRow[static_cast<int>(o.row[i])],
@@ -2581,7 +2626,10 @@ int main(int argc, char** argv)
                          static_cast<double>(o.sigma_a[i]), static_cast<double>(o.sigma_c[i]), o.lam_wu[i],
                          cd.c_str(), static_cast<unsigned>(o.w_src), static_cast<double>(o.w_sig),
                          static_cast<double>(o.w_est), static_cast<double>(o.w_est_sig), o.w_kept, gy,
-                         static_cast<double>(o.g_m[i]), static_cast<double>(o.g_sig[i]));
+                         static_cast<double>(o.g_m[i]), static_cast<double>(o.g_sig[i]), o.w_sats, o.w_gated,
+                         static_cast<unsigned>(o.x_state), static_cast<double>(o.x_d),
+                         static_cast<double>(o.x_thr), static_cast<unsigned>(o.sys_flags),
+                         static_cast<double>(o.mon_r), static_cast<double>(o.x_mps[i]));
         }
     };
 #endif
@@ -4837,7 +4885,12 @@ int main(int argc, char** argv)
                                      "\"gyro_given\": %u, \"gyro_stale\": %u, \"est_vs_gyro\": {\"n\": %u, "
                                      "\"mean_hz\": %s, \"rms_hz\": %s, \"slope\": %s}, \"guard\": {\"on\": %d, "
                                      "\"trips\": %u, \"rows\": %u, \"looks\": %u, \"max_z\": %.3f, "
-                                     "\"max_abs_mps\": %.4f}}, ",
+                                     "\"max_abs_mps\": %.4f, \"held_nocmp\": %u}, \"estimate\": {\"gated\": %u, "
+                                     "\"steps\": %u, \"steps_refused\": %u, \"vote_out\": %u}, "
+                                     "\"check\": {\"on\": %d, \"epochs\": %u, \"trips\": %u, "
+                                     "\"max_r\": %.3f}, \"common\": {\"on\": %d, \"action\": \"%s\", "
+                                     "\"epochs\": %u, \"trips\": %u, \"sys_trips\": [%u, %u, %u], "
+                                     "\"sys_rows\": %u, \"sys_instant\": %u, \"max_r\": %.3f}}, ",
                                  a.rr_mb_windup.empty() ? "ref" : a.rr_mb_windup.c_str(), a.rr_mb_sigma, mst.epochs,
                                  mst.epochs_few_w, mst.epochs_screen, mst.sats, mst.sats_combined, mst.screened,
                                  mst.voted, mst.comp_changes, mst.full,
@@ -4851,7 +4904,14 @@ int main(int argc, char** argv)
                                  num(mst.wx_n ? std::sqrt(mst.wx_sum2 / mst.wx_n) : NAN).c_str(),
                                  num(mst.wx_xx > 0.0 ? mst.wx_xy / mst.wx_xx : NAN).c_str(), fcfg.mb.guard ? 1 : 0,
                                  mst.guard_trips, mst.guard_rows, mst.guard_looks,
-                                 static_cast<double>(mst.guard_max_z), static_cast<double>(mst.guard_max_abs));
+                                 static_cast<double>(mst.guard_max_z), static_cast<double>(mst.guard_max_abs),
+                                 mst.guard_held_nocmp, mst.w_gated, mst.w_steps, mst.w_steps_refused, mst.w_vote_out,
+                                 fcfg.mb.w_check && mb_gyro ? 1 : 0,
+                                 mst.epochs_xcheck, mst.x_trips, static_cast<double>(mst.x_max_r),
+                                 fcfg.mb.common ? 1 : 0,
+                                 fcfg.mb.sys_action == mosaic::MosaicMbSysAct::DROP ? "drop" : "anchor",
+                                 mst.epochs_common, mst.common_trips, mst.sys_trips[0], mst.sys_trips[1],
+                                 mst.sys_trips[2], mst.sys_rows, mst.sys_instant, static_cast<double>(mst.mon_max_r));
                 }
 #endif
                 {
@@ -5122,6 +5182,15 @@ int main(int argc, char** argv)
                      mst.wx_n ? mst.wx_sum / mst.wx_n : 0.0, mst.wx_n ? std::sqrt(mst.wx_sum2 / mst.wx_n) : 0.0,
                      mst.wx_xx > 0.0 ? mst.wx_xy / mst.wx_xx : 0.0, mst.guard_trips, mst.guard_rows,
                      mst.guard_looks, static_cast<double>(mst.guard_max_z), static_cast<double>(mst.guard_max_abs));
+        std::fprintf(stderr,
+                     "  multiband rules: the estimate gated %u satellite-epochs, %u steps (%u refused), voted out of "
+                     "it %u; the check against the gyro's: %u epochs anchor-only "
+                     "(%u trips, largest %.2f of its threshold); the common offset: %u epochs anchor-only (%u trips), "
+                     "systems %u/%u/%u trips (GPS/GAL/BDS), %u rows, %u system-epochs off at once, largest %.2f of "
+                     "its threshold; the guard held %u rows with nothing to compare\n",
+                     mst.w_gated, mst.w_steps, mst.w_steps_refused, mst.w_vote_out, mst.epochs_xcheck, mst.x_trips, static_cast<double>(mst.x_max_r), mst.epochs_common,
+                     mst.common_trips, mst.sys_trips[0], mst.sys_trips[1], mst.sys_trips[2], mst.sys_rows,
+                     mst.sys_instant, static_cast<double>(mst.mon_max_r), mst.guard_held_nocmp);
         if (joins == 0)
             std::fprintf(stderr, "WARNING: --rr-multiband 1 joined no band: a log with MeasEpoch's L1 signals alone "
                                  "(the Reduced GNSS log keeps one a second: no 10 Hz path at all), or none in the join "
