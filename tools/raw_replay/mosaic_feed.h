@@ -16,7 +16,9 @@
 //     bands combined into its cells' Dopplers at both ends of a pair
 //     (MosaicMultiband.h rawEpochFromMeasEpochMb, noteMeasEpochDopplersMb),
 //     each row's sigma ratio and wind-up wavelength kept for the harness
-//     (mbRowRatio, mbRowLam); off, exactly the image's cells. Its GPS
+//     (mbRowRatio, mbRowLam), the gyro's wind-up given by the harness where
+//     the referral may take it (setMbWindup); off, exactly the image's
+//     cells. Its GPS
 //     time is its receiver time less the receiver's clock bias: the last
 //     PVTGeodetic that anchors the jump count (pvtAnchorsJumps), carried by
 //     its drift and the jumps since (dtrMs), while it is no more than two
@@ -392,6 +394,9 @@ public:
         return f;
     }
     const mosaic::MosaicMbOut& mbGrid() const { return mb_out_; }
+    // the gyro's wind-up for the next MeasEpoch (cfg.mb.w_src GYRO, AUTO), as the driver would read the IMU path's
+    // last roll rate when it decodes one; it stands until set again
+    void setMbWindup(const mosaic::MosaicMbWindupIn& w) { mb_wext_ = w; }
     double mbRowRatio(int i) const { return i >= 0 && i < gnss_raw::RawEpoch::kMaxObs ? mb_ratio_[i] : 1.0; }
     double mbRowLam(int i) const { return i >= 0 && i < gnss_raw::RawEpoch::kMaxObs ? mb_lam_[i] : 0.0; }
 #endif
@@ -414,7 +419,7 @@ private:
             if (cfg_.mb.on)
             {
                 built = mosaic::rawEpochFromMeasEpochMb(b, len, te.epoch, js_, info_, cfg_.mb, *mb_scr_, mb_st_,
-                                                        mb_out_, t_arr_us);
+                                                        mb_out_, t_arr_us, mb_wext_);
                 mb_fresh_ = info_.status == mosaic::SbfStatus::OK;
                 mb_grid_last_ = true;
             }
@@ -473,7 +478,7 @@ private:
             if (cfg_.pair && cfg_.mb.on)
             {
                 noted = mosaic::noteMeasEpochDopplersMb(b, len, js_, info_, pair_prev_, cfg_.mb, *mb_scr_, mb_st_,
-                                                        mb_out_prev_, t_arr_us);
+                                                        mb_out_prev_, t_arr_us, mb_wext_);
                 mb_fresh_ = noted;
                 mb_grid_last_ = false;
             }
@@ -598,6 +603,7 @@ private:
     mosaic::MosaicMultibandStats mb_st_;
     mosaic::MosaicMbOut mb_out_, mb_out_prev_;
     bool mb_fresh_ = false, mb_grid_last_ = false;
+    mosaic::MosaicMbWindupIn mb_wext_;
     double mb_ratio_[gnss_raw::RawEpoch::kMaxObs] = {};
     double mb_lam_[gnss_raw::RawEpoch::kMaxObs] = {};
 #endif

@@ -2,12 +2,14 @@
 # The multi-band combiner (TR_GNSSReceiverMosaic_Serial/MosaicMultiband.h, the
 # harness's --rr-multiband; no firmware includes it): off and with nothing to
 # join it is the image's adapter bit for bit, on every anchor field but the
-# range rate is; the scaling, the inverse-variance weights, the wind-up
-# referred to the anchor's wavelength (or told as the weighted one), the
+# range rate is; the scaling, the inverse-variance weights (each band's own
+# C/N0 offset), the wind-up referred to the anchor's wavelength (or told as
+# the weighted one) with the weighted, smoothed estimate or the gyro's, the
 # screen and the anchor's vote, the join rule (lock, hysteresis, channel, the
-# half-cycle flag gating nothing), the pairs on combined ends, and the
-# effective C/N0. With TR_SBF_PRIVATE_CAPTURE set, real captures for the
-# identities (statistics only).
+# half-cycle flag gating nothing), composition changes, faults on the anchor
+# alone and the drift guard, the pairs on combined ends, and the effective
+# C/N0. With TR_SBF_PRIVATE_CAPTURE set, real captures for the identities
+# (statistics only).
 add_executable(test_mosaic_multiband test_mosaic_multiband.cpp
     ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial/SbfNav.cpp
     ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial/SbfMeas.cpp

@@ -565,7 +565,10 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   within this many sigmas), `--dv-deweight`, `--dv-ground`, `--dv-noise-tau-s`, `--dv-hold-all-frac`,
   `--dv-hdg-unset-deg` (a `RAW_REPLAY_DVHDG` build: after a launch with no magnetometer heading -- the sims'
   `--mag-flags 0` -- the epoch test also allows the IMU's change turned this far about the vertical; 180 any
-  heading). The events JSON gets `"dv"`: the counts (checks, satellite and epoch fails, Dopplers and epochs held,
+  heading). `--dv-trace FILE` (offline only, a mosaic build): a CSV row per satellite of each check -- its time, the
+  epoch's time of week, the satellite, its residual off the epoch's fit in its own sigmas and in m/s, that sigma,
+  whether the fit took it, whether it failed the satellite test, and its window's leaky sum; no positions (the
+  multi-band composition study joins it with `--rr-mb-trace`). The events JSON gets `"dv"`: the counts (checks, satellite and epoch fails, Dopplers and epochs held,
   latches begun and let go, epochs latched), when each epoch failed, had satellites fail or had Dopplers held, and
   the heading allowance's setting and whether the flight took it, as its launch left it (`hdg_unset_deg`,
   `hdg_unset`). `RAW_REPLAY_DVLOG=1`
@@ -666,10 +669,17 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   bands (each from its own C/N0), and has_rate, cleared where two agreeing bands vote the anchor out. The pairs then
   average the combined rates unchanged. The rules (the header's top comment has them in full): a band joins from its
   anchor's channel with a lock of at least 1 s and its C/N0 at least its floor + 2 dB (stays to the floor); each is
-  first referred to its anchor's wavelength with the epoch's own wind-up estimate (the median of
-  (r_b - r_a) / (lambda_b - lambda_a) over the epoch: no gyro), so the row carries exactly its anchor's wind-up and
-  the filter's correction stays right; a band more than max(5 sigma, 0.10 m/s + 3 ms x the anchor's acceleration)
-  off its anchor leaves; an epoch with fewer than 3 wind-up values, or more than half its bands off, goes anchor-only.
+  first referred to its anchor's wavelength with the epoch's wind-up, so the row carries exactly its anchor's wind-up
+  and the filter's correction stays right. That wind-up is by default the combiner's own estimate (no gyro): each
+  (r_b - r_a) / (lambda_b - lambda_a) weighted by its inverse variance in Hz, the weighted median's neighbours within 3
+  of their own sigmas averaged, at least 6 of them, smoothed in time as a random walk of 1 Hz^2/s (a step confirmed by
+  the next epoch starts it over) and used with a 1-sigma of 0.75 Hz at most; `--rr-mb-windup gyro` takes the gyro's
+  roll rate instead (the IMU's last x when the MeasEpoch is decoded, as a driver would read it), and `auto` the
+  estimate where it has enough, else the gyro's. A band more than max(5 sigma, 0.10 m/s + 3 ms x the anchor's
+  acceleration) off its anchor leaves; an epoch with no wind-up to refer by, or more than half its bands off, goes
+  anchor-only. The drift guard averages each combined row's anchor less its other bands (a leaky mean over 3 s) and
+  drops the satellite's Doppler once that is more than 8 of its sigmas and 0.06 m/s off, until it is back within half
+  of that: a fault on the anchor alone, under the screen, otherwise reaches the row at the anchor's share of it.
   Options:
 
   | Option | What | Default |
@@ -678,14 +688,19 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   | `--rr-mb-bands LIST\|none` | SBF signal numbers that may join | 3,4,19,20,21,13,14,30 |
   | `--rr-mb-model measured\|equalhz\|FILE` | each band's Doppler noise, one 20 Hz epoch: sigma^2 = scale^2 (a^2 + b^2 10^(-(C/N0-35)/10)); FILE lines `sig a b [scale [cn0_min [lag_ms]]]` | measured (the noise measurement's fit, a 0, floors 25 dB-Hz, lags 0) |
   | `--rr-mb-sigma 0\|1` | 1: each combined row's white Doppler term at the effective C/N0 that gives its combined noise on the builder's own model (what a uint8 in RawObs's padding would carry) | 0: the anchor's sigma kept, as the pairs keep theirs |
-  | `--rr-mb-windup ref\|lam\|none` | ref: refer each band to its anchor's wavelength; lam: leave the row at its weighted wavelength and correct the rest from the gyro (the filter's wind-up ring, `windup_k`) before the filter takes it; none: neither (the error left in) | ref |
-  | `--rr-mb-min-lock-s`, `--rr-mb-hyst-db`, `--rr-mb-screen-k`, `--rr-mb-screen-floor`, `--rr-mb-anchor-vote 0\|1`, `--rr-mb-max-bands N`, `--rr-mb-w-min N` | the join rule, the screen, the anchor's vote, bands a row takes, wind-up values an epoch needs | 1 s, 2 dB, 5, 0.10 m/s, 1, 3, 3 |
-  | `--rr-mb-trace FILE` | a CSV row per satellite and epoch looked at (grid `g` or between `o`): its anchor's C/N0, what the row became, the epoch's wind-up estimate, each band's signal, C/N0, weight, referred difference and whether it joined. No positions | off |
+  | `--rr-mb-windup ref\|gyro\|auto\|lam\|none` | ref: refer each band to its anchor's wavelength with the estimate; gyro: with the gyro's roll rate (W = -k p / 2pi, the profile's `windup_k`); auto: the estimate where it has enough, else the gyro's; lam: leave the row at its weighted wavelength and correct the rest from the gyro (the filter's wind-up ring, `windup_k`) before the filter takes it; none: neither (the error left in) | ref |
+  | `--rr-mb-gyro-age-ms X`, `--rr-mb-gyro-rail-dps X` | gyro, auto: the IMU's last sample no older than X when the MeasEpoch is decoded, and under the gyro's rail | 20 ms, 4000 dps |
+  | `--rr-mb-w-min N`, `--rr-mb-w-sigma X`, `--rr-mb-w-clip-k X`, `--rr-mb-w-smooth-q X` | the estimate: values it needs, its largest 1-sigma (Hz), the clip about the weighted median (its own sigmas), the smoothing's random walk (Hz^2/s; 0 each epoch's own) | 6, 0.75, 3, 1 |
+  | `--rr-mb-guard 0\|1`, `--rr-mb-guard-tau-s X`, `--rr-mb-guard-k X`, `--rr-mb-guard-floor X` | the drift guard, its leaky mean's time constant, its threshold in that mean's sigmas and at least m/s | 1, 3 s, 8, 0.06 |
+  | `--rr-mb-min-lock-s`, `--rr-mb-hyst-db`, `--rr-mb-screen-k`, `--rr-mb-screen-floor`, `--rr-mb-anchor-vote 0\|1`, `--rr-mb-max-bands N` | the join rule, the screen, the anchor's vote, bands a row takes | 1 s, 2 dB, 5, 0.10 m/s, 1, 3 |
+  | `--rr-mb-trace FILE` | a CSV row per satellite and epoch looked at (grid `g` or between `o`): its anchor's C/N0, what the row became, the epoch's wind-up and where it came from, the estimate and its 1-sigma, the gyro's, each band's signal, C/N0, weight, referred difference and whether it joined, and the drift guard's mean and its sigma. No positions | off |
 
   Refused on a sim's epochs (X lines carry one signal a satellite) and with `--receiver lc86g`. The events JSON gains
   a `multiband` block and stderr a `multiband:` line: the combinations and why any went anchor-only, the rows
   combined and the mean sigma ratio, each band's candidates and joins, the screen's and the vote's counts,
-  composition changes, the wind-up estimate's rms, and what `--rr-mb-sigma 1` and `--rr-mb-windup lam` changed. A log
+  composition changes, the wind-up's rms, the epochs referred by the estimate and by the gyro, the estimate less the
+  gyro's (mean, rms, and the slope of the one on the other: 1.06 and 0.97 on the 10/16 rig logs), the drift guard's
+  trips and dropped rows, and what `--rr-mb-sigma 1` and `--rr-mb-windup lam` changed. A log
   whose MeasEpochs carry no other band (the Reduced GNSS log keeps one a second: no 10 Hz path at all) joins none, and
   the harness says so. `extract.py --sbf` writes `META sbf_signals` (each SBF signal number's count over the
   MeasEpochs, the main antenna), which the harness keeps and does not read, so a file with it replays exactly as one

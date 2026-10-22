@@ -24,10 +24,21 @@
 //     satellite for a pure roll. A combined row would carry it at its
 //     weighted wavelength, which the filter's correction (at its system's
 //     wavelength) would not take off; here each band is referred to its
-//     anchor's wavelength first (MosaicMbWindup::REF), with the epoch's own
-//     wind-up estimate W_hat (no gyro): the median over the epoch's
-//     (satellite, band) pairs of (r_b - r_a) / (lambda_b - lambda_a), in which
-//     the geometry, both clocks and the troposphere cancel.
+//     anchor's wavelength first (MosaicMbWindup::REF), with the epoch's
+//     wind-up W_hat. By default that is the epoch's own estimate (no gyro):
+//     each (satellite, band) pair gives (r_b - r_a) / (lambda_b - lambda_a),
+//     in which the geometry, both clocks and the troposphere cancel, weighted
+//     by (lambda_b - lambda_a)^2 / (sigma_a^2 + sigma_b^2) from both bands'
+//     C/N0; the estimate is the weighted mean of the values within w_clip_k
+//     of their own sigmas of the weighted median (mbWindupEstimate). It
+//     needs at least w_min_values of them and a 1-sigma of at most
+//     w_max_sigma_hz: an unweighted median of as few as 3 strayed past 2 Hz
+//     in a quarter of the 10/17 weak sky's epochs, and the referral moved the
+//     rows by about 0.1 m/s there. With w_smooth_q it is smoothed in time (a
+//     scalar Kalman filter on a random walk, restarted after a gap or a step).
+//     The caller can give the gyro's instead (w_src GYRO: W = -k p / 2pi
+//     from the roll rate p, MosaicMbWindupIn), or as the fallback where the
+//     estimate has too little (AUTO).
 //
 // The rules (each counted in MosaicMultibandStats):
 //   - a row is combined only where its anchor's own Doppler is usable (valid,
@@ -40,11 +51,13 @@
 //     at least its floor + cn0_hyst_db to join and its floor to stay, and a
 //     Doppler lag within max_lag_ms of the anchor's. The extra bands' lock
 //     times are their own (lockCapMs does not hold them: the Doppler does not
-//     step at a clock jump). The half-cycle flag is the carrier's, not the
-//     Doppler's: it gates nothing (a half-cycle slip shows as a Doppler spike,
-//     which the screen catches);
-//   - fewer than w_min_values wind-up values (pairs |lambda_b - lambda_a| >=
-//     w_min_dlam_m): the epoch goes anchor-only;
+//     step at a clock jump). Each band's C/N0 carries its own signal's offset
+//     (SbfMeasSignal::cn0Dbhz: none for GPS L1P and L2P). The half-cycle flag
+//     is the carrier's, not the Doppler's: it gates nothing (a half-cycle
+//     slip shows as a Doppler spike, which the screen catches);
+//   - no wind-up for the referral (the estimate with too few values or too
+//     little weight, no gyro's where it may stand in): the epoch goes
+//     anchor-only;
 //   - the inter-band screen, per satellite, needs neither gyro nor geometry:
 //     d_b = r_b - r_a - W_hat (lambda_b - lambda_a) against
 //     max(screen_k * sqrt(sigma_a^2 + sigma_b^2), screen_floor_mps +
@@ -57,7 +70,18 @@
 //     band's own C/N0, r' each band's range rate referred to the anchor's
 //     wavelength. Its sigma sigma_c = (sum w)^(-1/2) is reported, not used:
 //     the row keeps its anchor's sigma unless the caller expresses it
-//     (express_sigma: an effective C/N0 on the profile's L1 model, mbEffCn0Q).
+//     (express_sigma: an effective C/N0 on the profile's L1 model, mbEffCn0Q);
+//   - the drift guard (guard): a fault on the anchor alone reaches the
+//     combined row diluted by the anchor's weight (about 0.4-0.6), and one
+//     under the screen's threshold passes. Each combined row's anchor less
+//     the others' combination is averaged per satellite (a leaky mean,
+//     guard_tau_s); once that mean is more than guard_k of its own sigmas
+//     and guard_floor_mps off, the satellite's Doppler is dropped (its code
+//     kept, as the vote does) until the mean comes back within guard_release
+//     of that threshold. An anchor and one other band can't say which of the
+//     two drifted, and the row's Doppler must contain its anchor's (the
+//     pairs judge it by the anchor's lock), so the row loses its Doppler
+//     rather than keep the others'.
 //
 // With the Dopplers in pairs, both ends of a pair go through the same
 // combination (the grid epoch's rawEpochFromMeasEpochMb, the epoch between's
@@ -176,6 +200,24 @@ struct MosaicMbBand
 //   NONE  no referral and nothing told (the error left in: the arm that shows it).
 enum class MosaicMbWindup : uint8_t { REF, LAM, NONE };
 
+// Where the referral's W_hat comes from:
+//   EST   the epoch's own estimate (mbWindupEstimate, smoothed with w_smooth_q);
+//   GYRO  the caller's, from the gyro (MosaicMbWindupIn);
+//   AUTO  the estimate where it has enough values and weight, else the gyro's.
+// None (the estimate short, no gyro's that may stand in): the epoch goes anchor-only.
+enum class MosaicMbWSrc : uint8_t { EST, GYRO, AUTO };
+
+// The wind-up the caller gives an epoch from the gyro (w_src GYRO, AUTO): W = -k p / 2pi, Hz (m/s per m of
+// wavelength: RawGnssWindup.h rollRate(1, k, p)), p the roll rate about the nose (rad/s) as the IMU path last
+// published it, k the antenna's cycles a turn (the profile's windup_k, 0.99 on the Goblin's helix). ok false:
+// none (no sample within its age bound, or the gyro at its rail). Roll alone: the rate across the nose adds a
+// part each satellite has its own (Wu's), which a single W cannot carry.
+struct MosaicMbWindupIn
+{
+    bool  ok = false;
+    float hz = 0.0f;
+};
+
 struct MosaicMultibandConfig
 {
     bool  on = false;
@@ -186,14 +228,41 @@ struct MosaicMultibandConfig
     float screen_k = 5.0f;            // the screen's sigmas
     float screen_floor_mps = 0.10f;   //   at least this
     float screen_lag_s = 0.003f;      //   plus this times |a_hat| (lag differences between bands under thrust)
-    float w_min_dlam_m = 0.02f;       // a wind-up value from a band this far from its anchor's wavelength
-    int   w_min_values = 3;           //   and at least this many, else the epoch goes anchor-only
+    // the wind-up estimate (mbWindupEstimate): values from bands this far from their anchor's wavelength, the
+    // weighted median's neighbours within w_clip_k of their own sigmas averaged, at least w_min_values of them;
+    // smoothed in time as a random walk of w_smooth_q Hz^2/s (0: each epoch's own), restarted after w_smooth_gap_s
+    // without an estimate or at a step past w_smooth_step_k sigmas that the next epoch confirms; used with a 1-sigma
+    // of at most w_max_sigma_hz. Sized on the 10/17 weak sky, the 10/15 indoor mast and its turning runs
+    // (gnss-attitude-study/v9-mosaic-filter-plan/evidence/multiband/scripts/prep/wu_tail.cpp): each epoch's own
+    // weighted estimate has a 1-sigma of 1.2 Hz on the weak sky, the smoothed one 0.5 Hz, and its error past 2 Hz
+    // went from a quarter of the epochs (the first, unweighted median) to none
+    float w_min_dlam_m = 0.02f;
+    int   w_min_values = 6;
+    float w_max_sigma_hz = 0.75f;
+    float w_clip_k = 3.0f;
+    float w_smooth_q = 1.0f;
+    float w_smooth_gap_s = 0.25f;
+    float w_smooth_step_k = 4.0f;
+    MosaicMbWSrc w_src = MosaicMbWSrc::EST;
     bool  anchor_vote = true;         // an anchor off against two agreeing bands: its Doppler dropped
     int   max_bands = kMbMaxCombine;  // extra bands a combination takes at most (the highest C/N0 first)
     float max_lag_ms = 1.0f;
     MosaicMbWindup windup = MosaicMbWindup::REF;
     bool  express_sigma = false;      // work out each combined row's effective C/N0 (MosaicMbOut::rr_cn0_q)
     float rr_a = 0.01f, rr_b = 0.075f;   // the profile's L1 white Doppler model it is expressed on
+    // the drift guard: each satellite's anchor less its other bands' combination (referred), a leaky mean over
+    // guard_tau_s (a running mean while it fills); past max(guard_k of its sigma, guard_floor_mps) the Doppler is
+    // dropped until the mean is back within guard_release of that; its state starts over after guard_gap_s without
+    // a combination. Sized on the four real V9 logs' quiet data (prep/wu_tail.cpp --guard, prep/mb_arms.py): inside
+    // their scored windows the mean reached at most 5.3 of its sigmas (the cone-on rig, a GPS satellite at 29
+    // dB-Hz) and 0.7-4.0 on the others, so 8; the floor keeps a mean of a few mm/s on strong signals from tripping.
+    // Past the windows, at the rig's stop (the whole rig jolted, every band off by up to 1 m/s), it trips
+    bool  guard = true;
+    float guard_tau_s = 3.0f;
+    float guard_k = 8.0f;
+    float guard_floor_mps = 0.06f;
+    float guard_release = 0.5f;
+    float guard_gap_s = 0.5f;
 };
 
 // The measured noise (gnss-attitude-study/v9-mosaic-filter-plan/evidence/
@@ -284,9 +353,8 @@ struct MosaicMbCap
 {
     uint8_t  sig = 0;
     uint8_t  ch = 0;           // its receiver channel (its Type1's)
-    uint8_t  cn0_raw = 255;
-    uint8_t  pad = 0;
     uint16_t lock_s = 65535;   // as the reader gives it: 65535 none (a Type2's 255 too)
+    float    cn0 = 0.0f;       // dB-Hz, with its own signal's offset (SbfMeasSignal::cn0Dbhz: none for GPS L1P, L2P)
     float    dr = 0.0f;        // its range rate less its satellite's base_mps, m/s
 };
 
@@ -322,6 +390,26 @@ struct MosaicMbPrev
     double   rate_mps = 0.0;
 };
 
+// A wind-up value, Hz ((r_b - r_a) / (lambda_b - lambda_a)), and its weight, 1/Hz^2
+// ((lambda_b - lambda_a)^2 / (sigma_a^2 + sigma_b^2)).
+struct MosaicMbWVal
+{
+    float v = 0.0f;
+    float w = 0.0f;
+};
+
+// The drift guard's state for one satellite: the leaky mean m of its anchor less its other bands' combination
+// (m/s), the leaky mean v of that difference's variance, F the mean's share of it (m's variance v F: 1/n while
+// it fills, then the leak's alpha / (2 - alpha)), and whether its Doppler is dropped.
+struct MosaicMbGuard
+{
+    uint8_t  sys = 0, prn = 0;
+    bool     flagged = false;
+    uint32_t n = 0;
+    int64_t  last_ms = 0;   // its last combination
+    double   m = 0.0, v = 0.0, F = 1.0;
+};
+
 struct MosaicMbScratch
 {
     int          n = 0;
@@ -329,11 +417,25 @@ struct MosaicMbScratch
     uint8_t      anchor_ch[kMbObs] = {};        // each cell's anchor's receiver channel
     uint8_t      ncand[kMbObs] = {};
     MosaicMbCand cand[kMbObs][kMbMaxCombine];
-    float        w_vals[kMbObs * kMbMaxCombine] = {};
+    MosaicMbWVal w_vals[kMbObs * kMbMaxCombine];
+    // each cell's, while its epoch is combined (here, not on the stack)
+    double       anchor_rate[kMbObs] = {};
+    double       sigma_a[kMbObs] = {};
+    bool         usable[kMbObs] = {};
     bool         prev_valid = false;
     int64_t      prev_rx_ms = 0;
     int          prev_n = 0;
     MosaicMbPrev prev[kMbObs];
+    // the wind-up estimate smoothed in time (w_smooth_q): its value (Hz), variance, the instant it stands at and
+    // the last estimate it took; an estimate a step off it, waiting for the next to confirm it
+    bool         ws_ok = false;
+    double       ws_hz = 0.0, ws_P = 0.0;
+    int64_t      ws_ms = 0, ws_meas_ms = 0;
+    bool         ws_step = false;
+    float        ws_step_hz = 0.0f, ws_step_sig = 0.0f;
+    // the drift guard, by satellite
+    int          guard_n = 0;
+    MosaicMbGuard guard[kMbObs];
 };
 
 // What each cell's row became.
@@ -342,9 +444,10 @@ enum class MosaicMbRow : uint8_t
     NONE,      // not looked at (no cell)
     NO_RATE,   // its anchor's Doppler not usable (none, or under its floor): left as it came
     ALONE,     // usable, no band joined: its anchor's alone
-    EPOCH,     // the epoch went anchor-only (few wind-up values, or the screen's majority)
+    EPOCH,     // the epoch went anchor-only (no wind-up for the referral, or the screen's majority)
     VOTED,     // its anchor voted out by two agreeing bands: its Doppler dropped
     COMBINED,  // one or more bands joined
+    DRIFT,     // its anchor drifted off its other bands (the drift guard): its Doppler dropped
 };
 
 struct MosaicMbBandOut
@@ -361,9 +464,18 @@ struct MosaicMbOut
 {
     int64_t     rx_ms = 0;
     int         n = 0;
-    uint8_t     epoch = 0;     // 0 combined; 1 anchor-only (few wind-up values); 2 anchor-only (the screen's majority)
+    uint8_t     epoch = 0;     // 0 combined; 1 anchor-only (no wind-up for the referral); 2 anchor-only (the screen's
+                               //   majority)
     int         w_n = 0;       // wind-up values
-    float       w_hat = 0.0f;  // the epoch's wind-up estimate, Hz (m/s per m of wavelength)
+    float       w_hat = 0.0f;  // the epoch's wind-up the referral took, Hz (m/s per m of wavelength)
+    float       w_sig = 0.0f;  //   its 1-sigma, Hz (0 the gyro's)
+    uint8_t     w_src = 0;     //   from: 0 none (anchor-only), 1 the estimate, 2 the gyro
+    bool        w_est_ok = false;   // the epoch's own estimate (before any smoothing) had enough values and weight
+    int         w_kept = 0;         //   its values kept by the clip
+    float       w_est = 0.0f;       //   its value, Hz (with too few values, what they gave)
+    float       w_est_sig = 0.0f;   //   and 1-sigma
+    bool        w_ext_ok = false;   // the caller's from the gyro
+    float       w_ext = 0.0f;       //   Hz
     uint8_t     sys[kMbObs] = {}, prn[kMbObs] = {};
     float       cn0[kMbObs] = {};          // the anchor's C/N0, dB-Hz
     MosaicMbRow row[kMbObs] = {};
@@ -376,13 +488,29 @@ struct MosaicMbOut
     uint8_t     rr_cn0_q[kMbObs] = {};     // with express_sigma: the effective C/N0 (mbEffCn0Q), 0 its own
     uint8_t     ncand[kMbObs] = {};
     MosaicMbBandOut det[kMbObs][kMbMaxCombine];
+    // the drift guard, the rows it saw this epoch: the leaky mean of the anchor less its other bands (m/s) and
+    // that mean's 1-sigma (0: not looked at)
+    float       g_m[kMbObs] = {};
+    float       g_sig[kMbObs] = {};
 };
 
 struct MosaicMultibandStats
 {
     uint32_t epochs = 0;            // combinations run (grid and off-grid epochs)
-    uint32_t epochs_few_w = 0;      //   anchor-only: fewer than w_min_values wind-up values
+    uint32_t epochs_few_w = 0;      //   anchor-only: no wind-up for the referral (the estimate short, no gyro's)
     uint32_t epochs_screen = 0;     //   anchor-only: more than half the epoch's bands flagged
+    uint32_t epochs_w_est = 0;      //   referred with the estimate
+    uint32_t epochs_w_gyro = 0;     //     with the gyro's
+    // the estimate against the gyro's, the epochs with both (the estimate as the referral would take it, smoothed):
+    // the difference's sum and sum of squares, Hz, and the regression through 0 of the one on the other
+    uint32_t wx_n = 0;
+    double   wx_sum = 0.0, wx_sum2 = 0.0, wx_xy = 0.0, wx_xx = 0.0;
+    // the drift guard
+    uint32_t guard_trips = 0;       // satellites flagged (each time one is)
+    uint32_t guard_rows = 0;        // rows whose Doppler it dropped
+    uint32_t guard_looks = 0;       // rows it averaged
+    float    guard_max_z = 0.0f;    // the largest |mean| / its sigma seen
+    float    guard_max_abs = 0.0f;  // the largest |mean| (m/s) of 20 combinations' worth or more (F <= 0.05)
     uint32_t sats = 0;              // usable anchors looked at
     uint32_t sats_combined = 0;     //   with a band joined
     uint32_t cand[kMbSigs] = {};    // bands that passed the join rule, by signal
@@ -410,14 +538,56 @@ inline float mbMedian(float* v, int n)
     return 0.5f * (lo + hi);
 }
 
-// The epoch's wind-up estimate, Hz: the median of n values (>= min_values),
-// else false.
-inline bool windupRefHz(float* vals, int n, int min_values, float& w)
+// The epoch's wind-up estimate, Hz, from n values (each (r_b - r_a) /
+// (lambda_b - lambda_a), weighted (lambda_b - lambda_a)^2 / (sigma_a^2 +
+// sigma_b^2)): the weighted median, then the weighted mean of the values
+// within clip_k of their own sigmas (w^-1/2) of it; its 1-sigma (the kept
+// weights' sum)^(-1/2). Two values of one satellite share its anchor's noise,
+// so that 1-sigma is somewhat low; the floors here were sized with it as it
+// is. kept: the values the mean took. True with at least min_values kept
+// and a 1-sigma of at most max_sigma_hz (hz, sig and kept are set either
+// way, 0 with no value). Reorders v. Float throughout: the P4's FPU.
+inline bool mbWindupEstimate(MosaicMbWVal* v, int n, int min_values, float max_sigma_hz, float clip_k, float& hz,
+                             float& sig, int& kept)
 {
-    if (n < min_values || n <= 0)
+    hz = 0.0f;
+    sig = 0.0f;
+    kept = 0;
+    if (n <= 0)
         return false;
-    w = mbMedian(vals, n);
-    return true;
+    std::sort(v, v + n, [](const MosaicMbWVal& x, const MosaicMbWVal& y) { return x.v < y.v; });
+    float wt = 0.0f;
+    for (int i = 0; i < n; ++i)
+        wt += v[i].w;
+    if (!(wt > 0.0f))
+        return false;
+    // the weighted median: where the running weight reaches half (between two values at exactly half, their mean)
+    float run = 0.0f, med = v[n - 1].v;
+    for (int i = 0; i < n; ++i)
+    {
+        run += v[i].w;
+        if (run >= 0.5f * wt)
+        {
+            med = (run == 0.5f * wt && i + 1 < n) ? 0.5f * (v[i].v + v[i + 1].v) : v[i].v;
+            break;
+        }
+    }
+    float sw = 0.0f, swv = 0.0f;
+    for (int i = 0; i < n; ++i)
+    {
+        const float d = v[i].v - med;
+        if (d * d * v[i].w <= clip_k * clip_k)
+        {
+            sw += v[i].w;
+            swv += v[i].w * v[i].v;
+            kept++;
+        }
+    }
+    if (!(sw > 0.0f))
+        return false;
+    hz = swv / sw;
+    sig = 1.0f / std::sqrt(sw);
+    return kept >= min_values && sig <= max_sigma_hz;
 }
 
 inline void mbBegin(MosaicMbScratch& scr) { scr.n = 0; }
@@ -481,19 +651,232 @@ inline void mbCapture(const SbfMeasSignal& s, const MosaicMultibandConfig& c, Mo
     MosaicMbCap& k = m.c[m.n++];
     k.sig = s.sig;
     k.ch = s.rx_channel;
-    k.cn0_raw = s.cn0_raw;
+    k.cn0 = static_cast<float>(s.cn0Dbhz());
     k.lock_s = s.lock_s;
     k.dr = static_cast<float>(r - m.base_mps);
 }
 
+// The drift guard's entry for a satellite: its own, or (make) a new one -- the
+// one combined longest ago taken over when every entry is in use; nullptr
+// with none and make false.
+inline MosaicMbGuard* mbGuardOf(MosaicMbScratch& scr, uint8_t sys, uint8_t prn, bool make)
+{
+    for (int j = 0; j < scr.guard_n; ++j)
+        if (scr.guard[j].sys == sys && scr.guard[j].prn == prn)
+            return &scr.guard[j];
+    if (!make)
+        return nullptr;
+    int at = scr.guard_n;
+    if (at >= kMbObs)
+    {
+        at = 0;
+        for (int j = 1; j < kMbObs; ++j)
+            if (scr.guard[j].last_ms < scr.guard[at].last_ms)
+                at = j;
+    }
+    else
+    {
+        scr.guard_n++;
+    }
+    MosaicMbGuard& g = scr.guard[at];
+    g = MosaicMbGuard{};
+    g.sys = sys;
+    g.prn = prn;
+    return &g;
+}
+
+// Whether the guard holds a satellite's Doppler out now: flagged at its last
+// combination, no more than guard_gap_s ago (a satellite with nothing to
+// compare for longer starts over, its flag gone).
+inline bool mbGuardHolds(MosaicMbGuard* g, int64_t rx_ms, const MosaicMultibandConfig& c)
+{
+    if (g == nullptr || g->n == 0)
+        return false;
+    if (rx_ms < g->last_ms || rx_ms - g->last_ms > static_cast<int64_t>(c.guard_gap_s * 1000.0f))
+    {
+        const uint8_t sys = g->sys, prn = g->prn;
+        *g = MosaicMbGuard{};
+        g->sys = sys;
+        g->prn = prn;
+        return false;
+    }
+    return g->flagged;
+}
+
+// The guard's update with a combination's x, its anchor less the others'
+// combination (m/s), of variance vx: the leaky mean (a running mean while it
+// fills: the leak's alpha 1 - exp(-dt / guard_tau_s), at least 1/n), its
+// sigma, and the flag -- set past max(guard_k sigma, guard_floor_mps), let go
+// within guard_release of that. m and sig: the mean and its sigma, for out.
+inline void mbGuardUpdate(MosaicMbGuard& g, int64_t rx_ms, double x, double vx, const MosaicMultibandConfig& c,
+                          MosaicMultibandStats& st, float& m, float& sig)
+{
+    if (g.n > 0 && (rx_ms <= g.last_ms || rx_ms - g.last_ms > static_cast<int64_t>(c.guard_gap_s * 1000.0f)))
+    {
+        const uint8_t sys = g.sys, prn = g.prn;
+        g = MosaicMbGuard{};
+        g.sys = sys;
+        g.prn = prn;
+    }
+    const double leak = g.n == 0 ? 1.0
+                                 : 1.0 - std::exp(-static_cast<double>(rx_ms - g.last_ms) * 1.0e-3 / c.guard_tau_s);
+    const double fill = 1.0 / static_cast<double>(g.n + 1);
+    const double a = fill > leak ? fill : leak;
+    g.m += a * (x - g.m);
+    g.v += a * (vx - g.v);
+    g.F = (1.0 - a) * (1.0 - a) * g.F + a * a;
+    g.n++;
+    g.last_ms = rx_ms;
+    const double sm = std::sqrt(g.v * g.F);
+    const double am = std::fabs(g.m);
+    const double thr = std::max(static_cast<double>(c.guard_k) * sm, static_cast<double>(c.guard_floor_mps));
+    st.guard_looks++;
+    if (sm > 0.0 && am / sm > st.guard_max_z)
+        st.guard_max_z = static_cast<float>(am / sm);
+    if (g.F <= 0.05 && am > st.guard_max_abs)
+        st.guard_max_abs = static_cast<float>(am);
+    if (!g.flagged && am > thr)
+    {
+        g.flagged = true;
+        st.guard_trips++;
+    }
+    else if (g.flagged && am < c.guard_release * thr)
+    {
+        g.flagged = false;
+    }
+    m = static_cast<float>(g.m);
+    sig = static_cast<float>(sm);
+}
+
+// The epoch's W_hat for the referral from its nw values (scr.w_vals) and the
+// caller's (w_src): the estimate (each epoch's own, or smoothed in time with
+// w_smooth_q), else (AUTO, GYRO) the gyro's. True with one, out's w_* fields
+// saying which; false: the epoch goes anchor-only.
+inline bool mbWindupPick(int nw, int64_t rx_ms, const MosaicMultibandConfig& c, const MosaicMbWindupIn& wext,
+                         MosaicMbScratch& scr, MosaicMultibandStats& st, MosaicMbOut& out)
+{
+    float est = 0.0f, sig = 0.0f;
+    int kept = 0;
+    const bool est_ok = mbWindupEstimate(scr.w_vals, nw, c.w_min_values, c.w_max_sigma_hz, c.w_clip_k, est, sig, kept);
+    out.w_n = nw;
+    out.w_kept = kept;
+    out.w_est = est;
+    out.w_est_sig = sig;
+    out.w_est_ok = est_ok;
+    out.w_ext_ok = wext.ok;
+    out.w_ext = wext.ok ? wext.hz : 0.0f;
+    out.w_src = 0;
+    out.w_hat = 0.0f;
+    out.w_sig = 0.0f;
+    // the estimate as the referral takes it: each epoch's own, or smoothed (a scalar Kalman filter on a random walk
+    // of w_smooth_q Hz^2/s, which takes every epoch with w_min_values values at its own weight and coasts through
+    // one without). An estimate more than w_smooth_step_k sigmas off is held back an epoch: the next one, off the
+    // same way and within that of it, starts the filter over there (a step in the roll rate); else it is dropped (a
+    // single bad epoch)
+    bool use_ok = est_ok;
+    double use = est, use_sig = sig;
+    if (c.w_smooth_q > 0.0f)
+    {
+        const bool meas = kept >= c.w_min_values;
+        const bool live = scr.ws_ok && rx_ms > scr.ws_ms &&
+                          rx_ms - scr.ws_meas_ms <= static_cast<int64_t>(c.w_smooth_gap_s * 1000.0f);
+        if (live)
+        {
+            scr.ws_P += static_cast<double>(c.w_smooth_q) * static_cast<double>(rx_ms - scr.ws_ms) * 1.0e-3;
+            scr.ws_ms = rx_ms;
+            if (meas)
+            {
+                const double k2 = static_cast<double>(c.w_smooth_step_k) * c.w_smooth_step_k;
+                const double R = static_cast<double>(sig) * sig;
+                const double nu = static_cast<double>(est) - scr.ws_hz;
+                const double S = scr.ws_P + R;
+                if (nu * nu > k2 * S)
+                {
+                    const double dp = static_cast<double>(est) - scr.ws_step_hz;
+                    if (scr.ws_step && dp * dp <= k2 * (R + static_cast<double>(scr.ws_step_sig) * scr.ws_step_sig))
+                    {
+                        scr.ws_hz = est;   // the step confirmed: started over at this epoch's
+                        scr.ws_P = R;
+                        scr.ws_step = false;
+                        scr.ws_meas_ms = rx_ms;
+                    }
+                    else
+                    {
+                        scr.ws_step = true;   // held back for the next to confirm
+                        scr.ws_step_hz = est;
+                        scr.ws_step_sig = sig;
+                    }
+                }
+                else
+                {
+                    const double K = scr.ws_P / S;
+                    scr.ws_hz += K * nu;
+                    scr.ws_P *= 1.0 - K;
+                    scr.ws_step = false;
+                    scr.ws_meas_ms = rx_ms;
+                }
+            }
+        }
+        else if (meas)
+        {
+            scr.ws_ok = true;
+            scr.ws_hz = est;
+            scr.ws_P = static_cast<double>(sig) * sig;
+            scr.ws_ms = scr.ws_meas_ms = rx_ms;
+            scr.ws_step = false;
+        }
+        else
+        {
+            scr.ws_ok = false;
+        }
+        use = scr.ws_hz;
+        use_sig = std::sqrt(scr.ws_P);
+        use_ok = scr.ws_ok && use_sig <= c.w_max_sigma_hz;
+    }
+    if (use_ok && wext.ok)
+    {
+        // the estimate as the referral would take it, against the gyro's
+        const double d = use - static_cast<double>(wext.hz);
+        st.wx_n++;
+        st.wx_sum += d;
+        st.wx_sum2 += d * d;
+        st.wx_xy += use * wext.hz;
+        st.wx_xx += static_cast<double>(wext.hz) * wext.hz;
+    }
+    if (c.w_src != MosaicMbWSrc::GYRO && use_ok)
+    {
+        out.w_src = 1;
+        out.w_hat = static_cast<float>(use);
+        out.w_sig = static_cast<float>(use_sig);
+        st.epochs_w_est++;
+    }
+    else if (c.w_src != MosaicMbWSrc::EST && wext.ok)
+    {
+        out.w_src = 2;
+        out.w_hat = wext.hz;
+        st.epochs_w_gyro++;
+    }
+    else
+    {
+        return false;
+    }
+    st.w_last = out.w_hat;
+    st.w_sum2 += static_cast<double>(out.w_hat) * out.w_hat;
+    st.w_epochs++;
+    if (std::fabs(out.w_hat) > st.w_max_abs)
+        st.w_max_abs = std::fabs(out.w_hat);
+    return true;
+}
+
 // The combination over an epoch's cells (RawObs or MosaicDopplerCell: sys,
 // prn, has_rate, cn0_dbhz, rate_mps), their anchors' channels in
-// scr.anchor_ch, the extra bands in scr.sat: each usable row's rate_mps
-// combined (or its has_rate cleared where its anchor is voted out), by the
-// rules at the top of this file. out says what each row became.
+// scr.anchor_ch, the extra bands in scr.sat, the gyro's wind-up in wext: each
+// usable row's rate_mps combined (or its has_rate cleared where its anchor is
+// voted out or the drift guard holds it), by the rules at the top of this
+// file. out says what each row became.
 template <class Cell>
-inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandConfig& c, MosaicMbScratch& scr,
-                      MosaicMultibandStats& st, MosaicMbOut& out)
+inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandConfig& c, const MosaicMbWindupIn& wext,
+                      MosaicMbScratch& scr, MosaicMultibandStats& st, MosaicMbOut& out)
 {
     out.rx_ms = rx_ms;
     out.n = n;
@@ -511,9 +894,9 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
                 return &scr.prev[j];
         return nullptr;
     };
-    double anchor_rate[kMbObs];
-    double sigma_a[kMbObs];
-    bool usable[kMbObs];
+    double* const anchor_rate = scr.anchor_rate;
+    double* const sigma_a = scr.sigma_a;
+    bool* const usable = scr.usable;
     int nw = 0;
     for (int i = 0; i < n; ++i)
     {
@@ -527,6 +910,8 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
         out.d_mps[i] = 0.0f;
         out.rr_cn0_q[i] = 0;
         out.ncand[i] = 0;
+        out.g_m[i] = 0.0f;
+        out.g_sig[i] = 0.0f;
         scr.ncand[i] = 0;
         anchor_rate[i] = e.rate_mps;
         const uint8_t asig = mbAnchorSig(e.sys);
@@ -561,7 +946,7 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
                 continue;
             if (b.lock_s == 65535 || static_cast<float>(b.lock_s) < c.min_lock_s)
                 continue;
-            const float cn0 = static_cast<float>(b.cn0_raw * 0.25 + 10.0);
+            const float cn0 = b.cn0;
             const bool in_before = (was >> b.sig) & 1u;
             if (cn0 < mb.cn0_min + (in_before ? 0.0f : c.cn0_hyst_db))
                 continue;
@@ -590,34 +975,38 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
                     scr.cand[i][lo] = cd;
             }
         }
+        // its wind-up values, each weighted by its inverse variance in Hz -- not from a satellite the drift guard
+        // holds (its anchor's drift is in every one of them)
+        if (c.guard && mbGuardHolds(mbGuardOf(scr, e.sys, e.prn, false), rx_ms, c))
+            continue;
         for (int q = 0; q < scr.ncand[i]; ++q)
         {
-            const double dl = scr.cand[i][q].lam - lam_a;
+            const MosaicMbCand& cd = scr.cand[i][q];
+            const double dl = cd.lam - lam_a;
             if (std::fabs(dl) >= c.w_min_dlam_m && nw < kMbObs * kMbMaxCombine)
-                scr.w_vals[nw++] = static_cast<float>(scr.cand[i][q].d / dl);
+            {
+                scr.w_vals[nw].v = static_cast<float>(cd.d / dl);
+                scr.w_vals[nw].w = static_cast<float>(dl * dl / (sa * sa + cd.sigma * cd.sigma));
+                nw++;
+            }
         }
     }
 
     // the epoch's wind-up, then the screen
-    out.w_n = nw;
     float w_hat = 0.0f;
     int total = 0, flagged = 0;
     bool epoch_alone = false;
-    if (!windupRefHz(scr.w_vals, nw, c.w_min_values, w_hat))
+    if (!mbWindupPick(nw, rx_ms, c, wext, scr, st, out))
     {
-        // fewer values than w_min_values: anchor-only (an epoch with no band at all counts here too)
+        // no wind-up to refer by (the estimate short, no gyro's to stand in; an epoch with no band at all counts
+        // here too): anchor-only
         epoch_alone = true;
         out.epoch = 1;
         st.epochs_few_w++;
     }
     else
     {
-        out.w_hat = w_hat;
-        st.w_last = w_hat;
-        st.w_sum2 += static_cast<double>(w_hat) * w_hat;
-        st.w_epochs++;
-        if (std::fabs(w_hat) > st.w_max_abs)
-            st.w_max_abs = std::fabs(w_hat);
+        w_hat = out.w_hat;
         for (int i = 0; i < n; ++i)
         {
             if (!usable[i] || scr.ncand[i] == 0)
@@ -660,11 +1049,22 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
             bo.w = 0.0f;
             bo.dp = static_cast<float>(epoch_alone && out.epoch == 1 ? cd.d : cd.dp);
         }
-        if (!usable[i] || nc == 0)
+        if (!usable[i])
             continue;
-        if (epoch_alone)
+        // the drift guard's hold: the satellite's Doppler out, whatever this epoch has to compare it with
+        MosaicMbGuard* const g = c.guard ? mbGuardOf(scr, e.sys, e.prn, false) : nullptr;
+        auto drift = [&]() {
+            e.has_rate = false;
+            e.rate_mps = anchor_rate[i];
+            out.row[i] = MosaicMbRow::DRIFT;
+            st.guard_rows++;
+        };
+        if (nc == 0 || epoch_alone)
         {
-            out.row[i] = MosaicMbRow::EPOCH;
+            if (nc > 0)
+                out.row[i] = MosaicMbRow::EPOCH;
+            if (mbGuardHolds(g, rx_ms, c))
+                drift();
             continue;
         }
         const MosaicMbPrev* p = prevOf(e.sys, e.prn);
@@ -699,6 +1099,7 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
         double wsum = 1.0 / (sa * sa);
         double num = 0.0;
         double lnum = lam_a * wsum;
+        double wo = 0.0, onum = 0.0;   // the others alone: their weights and their referred differences, summed
         uint64_t mask = 0;
         int nb = 0;
         for (int q = 0; q < nc; ++q)
@@ -710,16 +1111,36 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
             wsum += w;
             num += w * (c.windup == MosaicMbWindup::REF ? cd.dp : cd.d);
             lnum += w * cd.lam;
+            wo += w;
+            onum += w * cd.dp;
             mask |= uint64_t{1} << cd.sig;
             nb++;
-            st.joins[cd.sig]++;
-            out.det[i][q].joined = 1;
         }
         if (nb == 0)
-            continue;   // every band screened out: the anchor's alone (ALONE)
+        {
+            // every band screened out: the anchor's alone (ALONE)
+            if (mbGuardHolds(g, rx_ms, c))
+                drift();
+            continue;
+        }
+        if (c.guard)
+        {
+            // the anchor less the others' combination, referred: its leaky mean against its own noise
+            MosaicMbGuard* const gg = g != nullptr ? g : mbGuardOf(scr, e.sys, e.prn, true);
+            mbGuardUpdate(*gg, rx_ms, -onum / wo, sa * sa + 1.0 / wo, c, st, out.g_m[i], out.g_sig[i]);
+            if (gg->flagged)
+            {
+                drift();
+                continue;
+            }
+        }
         for (int q = 0; q < nc; ++q)
-            if (out.det[i][q].joined)
+            if (!scr.cand[i][q].flagged)
+            {
+                st.joins[scr.cand[i][q].sig]++;
+                out.det[i][q].joined = 1;
                 out.det[i][q].w = static_cast<float>(1.0 / (scr.cand[i][q].sigma * scr.cand[i][q].sigma) / wsum);
+            }
         const double dr = num / wsum;
         e.rate_mps = anchor_rate[i] + dr;
         out.row[i] = MosaicMbRow::COMBINED;
@@ -739,7 +1160,7 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
     // composition changes, and this epoch's state for the next
     for (int i = 0; i < n; ++i)
     {
-        if (!usable[i] || out.row[i] == MosaicMbRow::VOTED)
+        if (!usable[i] || out.row[i] == MosaicMbRow::VOTED || out.row[i] == MosaicMbRow::DRIFT)
             continue;
         const MosaicMbPrev* p = prevOf(cells[i].sys, cells[i].prn);
         if (p != nullptr && p->has_rate && p->joined != out.mask[i])
@@ -751,7 +1172,7 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
         MosaicMbPrev& p = scr.prev[scr.prev_n++];
         p.sys = cells[i].sys;
         p.prn = cells[i].prn;
-        p.has_rate = usable[i] && out.row[i] != MosaicMbRow::VOTED;
+        p.has_rate = usable[i] && out.row[i] != MosaicMbRow::VOTED && out.row[i] != MosaicMbRow::DRIFT;
         p.joined = out.mask[i];
         p.rate_mps = anchor_rate[i];
     }
@@ -762,11 +1183,12 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
 // rawEpochFromMeasEpoch (MosaicRawEpoch.h), with each satellite's other bands
 // combined into its cells' range rates (cfg.on; off: exactly it). Its
 // arguments, then the configuration, the scratch, the stats and the side
-// outputs.
+// outputs; last, the gyro's wind-up for the epoch (w_src GYRO, AUTO).
 inline bool rawEpochFromMeasEpochMb(const uint8_t* b, size_t len, gnss_raw::RawEpoch& out, MosaicJumpState& js,
                                     MosaicEpochInfo& info, const MosaicMultibandConfig& cfg, MosaicMbScratch& scr,
                                     MosaicMultibandStats& st, MosaicMbOut& mbo,
-                                    int64_t arrival_us = kMosaicNoArrival)
+                                    int64_t arrival_us = kMosaicNoArrival,
+                                    const MosaicMbWindupIn& wext = MosaicMbWindupIn{})
 {
     if (!cfg.on)
         return rawEpochFromMeasEpoch(b, len, out, js, info, arrival_us);
@@ -846,7 +1268,7 @@ inline bool rawEpochFromMeasEpochMb(const uint8_t* b, size_t len, gnss_raw::RawE
         o.phase_m = o.has_phase ? s.phaseRangeM(lambda) : 0.0;
         scr.anchor_ch[at] = s.rx_channel;   // its bands come from this channel
     }
-    mbCombine(out.obs, out.n, static_cast<int64_t>(h.wnc) * 604800000LL + h.tow_ms, cfg, scr, st, mbo);
+    mbCombine(out.obs, out.n, static_cast<int64_t>(h.wnc) * 604800000LL + h.tow_ms, cfg, wext, scr, st, mbo);
     return out.n > 0;
 }
 
@@ -855,7 +1277,8 @@ inline bool rawEpochFromMeasEpochMb(const uint8_t* b, size_t len, gnss_raw::RawE
 inline bool noteMeasEpochDopplersMb(const uint8_t* b, size_t len, MosaicJumpState& js, MosaicEpochInfo& info,
                                     MosaicDopplerSet& set, const MosaicMultibandConfig& cfg, MosaicMbScratch& scr,
                                     MosaicMultibandStats& st, MosaicMbOut& mbo,
-                                    int64_t arrival_us = kMosaicNoArrival)
+                                    int64_t arrival_us = kMosaicNoArrival,
+                                    const MosaicMbWindupIn& wext = MosaicMbWindupIn{})
 {
     if (!cfg.on)
         return noteMeasEpochDopplers(b, len, js, info, set, arrival_us);
@@ -918,7 +1341,7 @@ inline bool noteMeasEpochDopplersMb(const uint8_t* b, size_t len, MosaicJumpStat
         c.lock_ms = s.lockValid() ? (lock_ms < info.lock_cap_ms ? lock_ms : info.lock_cap_ms) : 0U;
         scr.anchor_ch[at] = s.rx_channel;
     }
-    mbCombine(set.c, set.n, set.rx_ms, cfg, scr, st, mbo);
+    mbCombine(set.c, set.n, set.rx_ms, cfg, wext, scr, st, mbo);
     set.valid = true;
     return true;
 }
