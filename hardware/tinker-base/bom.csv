@@ -13,7 +13,7 @@
 12;"CR1";"TVS-SP05_LTF";1;"SP0503BAHTG";"SP0503BAHTG";"Littelfuse";"Fit"
 13;"D6";"LED_D3.0mm";1;"Green";"XL-302SYGD";"Xinglight";"Fit"
 14;"D9";"LED_D3.0mm";1;"Blue";"XL-304UBC";"Xinglight";"Fit"
-15;"J2";"USB_C_HRO_TYPE-C-31-M-12";1;"TYPE-C-31-M-12";"TYPE-C-31-M-12";"Korean Hroparts";"Fit"
+15;"J2";"GCT_USB4110GFA";1;"USB4110GFA";"USB4110-GF-A";"GCT";"Fit"
 16;"J8";"RFSOLUTIONS_CON-SMA-EDGE-S";1;"CON-SMA-EDGE-S";"CON-SMA-EDGE-S";"generic";"Fit"
 17;"L2";"L_0402_1005Metric";1;"24 nH";"LQW15AN24NH00D";"Murata";"Fit"
 18;"L3";"L_0402_1005Metric";1;"2 nH";"LQG15HS2N0S02D";"Murata";"Fit"
