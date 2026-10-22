@@ -141,8 +141,14 @@ TEST(TrOta, ShaMismatchAbortsBeforeSetBoot)
     EXPECT_EQ(1, be.abort_calls);
 }
 
-// Host-shim test hook (tests_cpp/host_shim/psa_crypto_impl.c). C linkage.
+}  // namespace
+
+// Host-shim test hook (tests_cpp/host_shim/psa_crypto_impl.c). C linkage, and
+// at file scope: inside the unnamed namespace GCC 15 gives it internal linkage
+// (a different variable from the shim's), so the test stops linking there.
 extern "C" int psa_shim_fail_update_after;
+
+namespace {
 
 // #1427 / #1142 item 1, one level down. A psa_hash_update() failure PART WAY
 // through the image used to be discarded: the digest then covered only the

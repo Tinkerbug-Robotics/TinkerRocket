@@ -565,7 +565,10 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   within this many sigmas), `--dv-deweight`, `--dv-ground`, `--dv-noise-tau-s`, `--dv-hold-all-frac`,
   `--dv-hdg-unset-deg` (a `RAW_REPLAY_DVHDG` build: after a launch with no magnetometer heading -- the sims'
   `--mag-flags 0` -- the epoch test also allows the IMU's change turned this far about the vertical; 180 any
-  heading). The events JSON gets `"dv"`: the counts (checks, satellite and epoch fails, Dopplers and epochs held,
+  heading). `--dv-trace FILE` (offline only, a mosaic build): a CSV row per satellite of each check -- its time, the
+  epoch's time of week, the satellite, its residual off the epoch's fit in its own sigmas and in m/s, that sigma,
+  whether the fit took it, whether it failed the satellite test, and its window's leaky sum; no positions (the
+  multi-band composition study joins it with `--rr-mb-trace`). The events JSON gets `"dv"`: the counts (checks, satellite and epoch fails, Dopplers and epochs held,
   latches begun and let go, epochs latched), when each epoch failed, had satellites fail or had Dopplers held, and
   the heading allowance's setting and whether the flight took it, as its launch left it (`hdg_unset_deg`,
   `hdg_unset`). `RAW_REPLAY_DVLOG=1`
@@ -656,6 +659,70 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   profile (every epoch's own lag; an epoch in pairs adds `rr_pair_lag_s` to it), and `--sim-pair-exact` (a sim with
   `--truth-nav`) puts the truth's second-order term
   back into each averaged Doppler, so the pair is the range rate at its middle exactly.
+- **Each satellite's bands in one Doppler** (`--rr-multiband 1`; a `RAW_REPLAY_MULTIBAND` build, on unless the tree
+  has no `TR_GNSSReceiverMosaic_Serial/MosaicMultiband.h`; offline only, no firmware includes the header). The filter
+  fuses one Doppler row a satellite from its L1-band signal (GPS L1 C/A, Galileo E1, BeiDou B1I); the mosaic also
+  tracks GPS L2C and L5, Galileo E6, E5a and E5b, BeiDou B1C, B2a and B3I, and a Detailed log's MeasEpoch (the R
+  lines, byte for byte) carries them all. With `--rr-multiband 1` the feed builds each epoch with
+  `rawEpochFromMeasEpochMb` and each epoch between with `noteMeasEpochDopplersMb`: the same cells as the image, every
+  anchor field the same but the range rate, which becomes the inverse-variance mean of the anchor and its other
+  bands (each from its own C/N0), and has_rate, cleared where two agreeing bands vote the anchor out. The pairs then
+  average the combined rates unchanged. The rules (the header's top comment has them in full): a band joins from its
+  anchor's channel with a lock of at least 1 s and its C/N0 at least its floor + 2 dB (stays to the floor); each is
+  first referred to its anchor's wavelength with the epoch's wind-up, so the row carries exactly its anchor's wind-up
+  and the filter's correction stays right. That wind-up is by default the combiner's own estimate: one value a
+  satellite (its anchor's and bands' range rates regressed on their wavelengths, so the anchor's error, in every
+  difference, counts once), no satellite more than 0.35 of the weight, the capped weighted median's neighbours within
+  3 of their own sigmas averaged, at least 3 satellites and 6 values, smoothed in time as a random walk of 1 Hz^2/s
+  with each satellite gated against the prediction (4 sigmas) and a step taken only where the gyro's agrees, or
+  without one where the satellites that moved outweigh those that stayed, and the next epoch confirms it; used with a
+  1-sigma of 0.75 Hz at most. `--rr-mb-windup gyro` takes the gyro's roll rate instead (the IMU's last x when the
+  MeasEpoch is decoded, as a driver would read it), and `auto` the estimate where it has enough, else the gyro's.
+  The gyro's is given to every multi-band arm (`--rr-mb-gyro 0` withholds it): with `ref` it checks the estimate
+  (apart by more than max(5 of their sigmas, 1 Hz) for 4 epochs running, every epoch anchor-only until 10 agree). A
+  band more than max(5 sigma, 0.10 m/s + 3 ms x the anchor's acceleration) off its anchor leaves; an epoch with no
+  wind-up to refer by, or more than half its bands off, goes anchor-only. The drift guard averages each combined row's
+  anchor less its other bands, at the gyro's wind-up where given (a leaky mean over 3 s; voted epochs count too) and
+  drops the satellite's Doppler once that is more than 8 of its sigmas and 0.06 m/s + 3 ms x its acceleration off,
+  until it is back within half of that; the hold lasts while the satellite is tracked, through epochs with nothing to
+  compare. The anchors' common offset: each satellite's anchor less its bands at the gyro's wind-up (a leaky mean over
+  1 s), each system's and every satellite's capped median of those against max(8 sigmas, 0.05 m/s) with a 1 s hold:
+  every satellite's tripped (and no system against it) sends the epoch anchor-only, the image's rows; one system's
+  tripped, or more than half its satellites off every band at once, drops its rows' Dopplers together, as the vote
+  drops one satellite's (`--rr-mb-sys-action anchor`: anchor-only together, the image's rows, which on the real logs'
+  system-wide faults left the image's 0.3-1.7 m/s). Options:
+
+  | Option | What | Default |
+  |---|---|---|
+  | `--rr-multiband 0\|1` | the combination | 0 (the image's L1 rows, digest-identical) |
+  | `--rr-mb-bands LIST\|none` | SBF signal numbers that may join | 3,4,19,20,21,13,14,30 |
+  | `--rr-mb-model measured\|equalhz\|FILE` | each band's Doppler noise, one 20 Hz epoch: sigma^2 = scale^2 (a^2 + b^2 10^(-(C/N0-35)/10)); FILE lines `sig a b [scale [cn0_min [lag_ms]]]` | measured (the noise measurement's fit, a 0, floors 25 dB-Hz, lags 0) |
+  | `--rr-mb-sigma 0\|1` | 1: each combined row's white Doppler term at the effective C/N0 that gives its combined noise on the builder's own model (what a uint8 in RawObs's padding would carry) | 0: the anchor's sigma kept, as the pairs keep theirs |
+  | `--rr-mb-windup ref\|gyro\|auto\|lam\|none` | ref: refer each band to its anchor's wavelength with the estimate; gyro: with the gyro's roll rate (W = -k p / 2pi, the profile's `windup_k`); auto: the estimate where it has enough, else the gyro's; lam: leave the row at its weighted wavelength and correct the rest from the gyro (the filter's wind-up ring, `windup_k`) before the filter takes it; none: neither (the error left in) | ref |
+  | `--rr-mb-gyro 0\|1`, `--rr-mb-gyro-age-ms X`, `--rr-mb-gyro-rail-dps X` | the gyro's wind-up given to the combiner: the IMU's last sample no older than X when the MeasEpoch is decoded, and under the gyro's rail | 1, 20 ms, 4000 dps |
+  | `--rr-mb-w-min N`, `--rr-mb-w-min-sats N`, `--rr-mb-w-share X`, `--rr-mb-w-sigma X`, `--rr-mb-w-clip-k X`, `--rr-mb-w-smooth-q X` | the estimate: values and satellites it needs, the cap on one satellite's share of the weight, its largest 1-sigma (Hz), the clip about the capped weighted median (its own sigmas), the smoothing's random walk (Hz^2/s; 0 each epoch's own) | 6, 3, 0.35, 0.75, 3, 1 |
+  | `--rr-mb-check 0\|1` | the estimate checked against the gyro's (where given) | 1 |
+  | `--rr-mb-common 0\|1`, `--rr-mb-sys-action drop\|anchor` | the anchors' common offset (the epoch's and each system's), and what a system's rows become when its anchors are off together | 1, drop |
+  | `--rr-mb-guard 0\|1`, `--rr-mb-guard-tau-s X`, `--rr-mb-guard-k X`, `--rr-mb-guard-floor X` | the drift guard, its leaky mean's time constant, its threshold in that mean's sigmas and at least m/s | 1, 3 s, 8, 0.06 |
+  | `--rr-mb-min-lock-s`, `--rr-mb-hyst-db`, `--rr-mb-screen-k`, `--rr-mb-screen-floor`, `--rr-mb-anchor-vote 0\|1`, `--rr-mb-max-bands N` | the join rule, the screen, the anchor's vote, bands a row takes | 1 s, 2 dB, 5, 0.10 m/s, 1, 3 |
+  | `--rr-mb-trace FILE` | a CSV row per satellite and epoch looked at (grid `g` or between `o`): its anchor's C/N0, what the row became (`system`: a system's rule), the epoch's code (0 combined; anchor-only 1 no wind-up, 2 the screen's majority, 3 the estimate and the gyro's apart, 4 an offset common to every anchor), the epoch's wind-up and where it came from, the estimate and its 1-sigma, the gyro's, each band's signal, C/N0, weight, referred difference and whether it joined, the drift guard's mean and its sigma, the satellites with values and those the smoother gated out, the check's state, difference and threshold, the common offset's flags and largest ratio to its threshold, and the satellite's own common-offset mean. No positions | off |
+
+  Refused on a sim's epochs (X lines carry one signal a satellite) and with `--receiver lc86g`. The events JSON gains
+  a `multiband` block and stderr a `multiband:` line: the combinations and why any went anchor-only, the rows
+  combined and the mean sigma ratio, each band's candidates and joins, the screen's and the vote's counts,
+  composition changes, the wind-up's rms, the epochs referred by the estimate and by the gyro, the estimate less the
+  gyro's (mean, rms, and the slope of the one on the other: 1.00 and 0.83 on the 10/16 rig logs, whose rig turns at
+  about 0.02 rev/s, so each is good to about 0.1; each epoch's own estimate gave 1.06 and 0.97), the drift guard's
+  trips and dropped rows, the estimate's gating and steps, the check's and the common offset's epochs, trips and
+  largest ratios (a `multiband rules:` line), and what `--rr-mb-sigma 1` and `--rr-mb-windup lam` changed. A log
+  whose MeasEpochs carry no other band (the Reduced GNSS log keeps one a second: no 10 Hz path at all) joins none, and
+  the harness says so. `extract.py --sbf` writes `META sbf_signals` (each SBF signal number's count over the
+  MeasEpochs, the main antenna), which the harness keeps and does not read, so a file with it replays exactly as one
+  without. With `--rr-multiband 0`, and with `--rr-multiband 1 --rr-mb-bands none`, every digest is the image's.
+  Where a firmware version would differ: the header's capture rides in the adapter's own pass over the block (one
+  read), but the effective C/N0 (`--rr-mb-sigma 1`) needs a uint8 in RawObs's padding and the builder's white term
+  at it (both builds), and `--rr-mb-windup lam` a uint16 effective wavelength in RawObs's padding copied into
+  RawMeas's (offset 4) for applyWindup and the wind-up monitor.
 - **`sim_compare.py BASE NAME=EXP ...`** sets experiment grids (each a `sim_grid.py --arms design --harness-args
   "..."` run into its own OUT) beside the base grid's design and unaided twin, flight by flight: the phase bars per
   pattern (pooled over the informative magnetometer arms and over all of them), the worst excess, the deployment's

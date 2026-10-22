@@ -20,7 +20,10 @@ What the flight computer's raw task was handed, rebuilt from the log:
 
 With --sbf (a V8/V9 log with the mosaic-G5, whose raw filter left no records of its own yet): no S, A or P
 lines -- raw_replay starts the filter on the pad itself (--cold-start) -- and R carries the receiver's SBF blocks
-as they arrived (0x95), its own fix (PVTGeodetic) among them (so no V lines). Every navigation block in the log
+as they arrived (0x95), its own fix (PVTGeodetic) among them (so no V lines). The blocks go over byte for byte: a
+Detailed GNSS log's MeasEpoch carries every band the receiver tracks, which raw_replay --rr-multiband combines; META
+sbf_signals counts them by SBF signal number (a line raw_replay does not read, so a file with it replays exactly as
+one without). Every navigation block in the log
 (GPSNav, GALNav, BDSNav, GPSIon) is put at the start as well, marked "preload", unless --nav-as-logged: the logs
 begin long after the receiver did, and it sends a satellite's ephemeris only when it changes. raw_replay files a
 preloaded issue only once a receiver could have had it (the RINEX rule: a GPS set 2 h before its toe, a Galileo batch
@@ -415,6 +418,42 @@ def start_lines(recs, args, t_ref, pcx, gp):
     return lines
 
 SBF_NAV_BLOCKS = (5891, 4002, 4081, 5893)   # GPSNav, GALNav, BDSNav, GPSIon
+SBF_MEAS_EPOCH = 4027
+
+
+def sbf_signal_counts(blocks):
+    """Each SBF signal number's count over the MeasEpochs among blocks (the main antenna; the reference guide's
+    4.2.1 layout, as SbfMeas.cpp reads it: Type1 sub-blocks with their Type2s, the signal from SigIdxLo or, at 31,
+    ObsInfo's bits 3-7 plus 32), and the MeasEpochs. What the R lines carry for raw_replay --rr-multiband: a Detailed
+    log's MeasEpoch holds every band the receiver tracks; a Reduced log's, once a second, cannot feed the 10 Hz grid."""
+    counts = {}
+    n_meas = 0
+    for b in blocks:
+        if len(b) < 20 or b[0] != 0x24 or b[1] != 0x40 or (int.from_bytes(b[4:6], "little") & 0x1FFF) != SBF_MEAS_EPOCH:
+            continue
+        length = min(int.from_bytes(b[6:8], "little"), len(b))
+        n1, sb1, sb2 = b[14], b[15], b[16]
+        n_meas += 1
+        at = 20
+        for _ in range(n1):
+            if sb1 < 20 or at + sb1 > length:
+                break
+            typ, obs, n2 = b[at + 1], b[at + 18], b[at + 19]
+            lo = typ & 0x1F
+            sig = (obs >> 3) + 32 if lo == 31 else lo
+            if typ >> 5 == 0:
+                counts[sig] = counts.get(sig, 0) + 1
+            at += sb1
+            for _ in range(n2):
+                if sb2 < 12 or at + sb2 > length:
+                    break
+                t2, o2 = b[at], b[at + 5]
+                lo2 = t2 & 0x1F
+                sig2 = (o2 >> 3) + 32 if lo2 == 31 else lo2
+                if t2 >> 5 == 0:
+                    counts[sig2] = counts.get(sig2, 0) + 1
+                at += sb2
+    return n_meas, counts
 DEFAULT_BLOB = os.path.join(HERE, "..", "replay", "sim_replay.bin")
 
 
@@ -524,6 +563,10 @@ def extract_sbf(args):
     if not sbf:
         raise SystemExit("no SBF blocks in this log (an LC86G log: extract.py without --sbf)")
     lines.append(f"META sbf_blocks {len(sbf)} dropped {dropped} bad {raw['bad']}")
+    # what the MeasEpochs carry, signal by signal (raw_replay keeps a META key it does not read and replays as before)
+    n_meas, sig_counts = sbf_signal_counts([b for _t, b in sbf])
+    lines.append("META sbf_signals " + (" ".join(f"{k}:{v}" for k, v in sorted(sig_counts.items())) or "none")
+                 + f" meas_epochs {n_meas}")
     t0 = min(e[0] for e in events) if events else int(unwrap([sbf[0][0]], t_ref)[0])
     n_nav = 0
     if not args.nav_as_logged:
@@ -552,7 +595,8 @@ def extract_sbf(args):
     top = ", ".join(f"{k} {v}" for k, v in sorted(names.items(), key=lambda kv: -kv[1])[:6])
     print(f"{os.path.basename(args.log)}: {n_ticks} IMU ticks at {ekf_rate:.1f}/s, {len(sbf)} SBF blocks "
           f"({dropped} frames dropped, {raw['bad']} bad; {top}), {n_nav} nav blocks preloaded, inflight "
-          f"{t_inflight}, apogee flag {t_apogee}, landed {t_landed}")
+          f"{t_inflight}, apogee flag {t_apogee}, landed {t_landed}; MeasEpoch signals (main antenna) "
+          + (", ".join(f"{k} {v}" for k, v in sorted(sig_counts.items())) or "none"))
 
 
 if __name__ == "__main__":
