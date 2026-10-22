@@ -720,7 +720,9 @@ nonisolated enum AccelSixFace {
 
 /// The six-face screen's requests and answers, one at a time: a read (77), a
 /// face (78), a save or a clear (76, then 77 to read it back; and with the
-/// high-g, 80 and 77 again after it). Pure: the view
+/// high-g, 80 and 77 again after it). The save goes out by itself when a face
+/// completes the six, and again when a face is measured again after that; the
+/// Save button sends it once more. Pure: the view
 /// sends the `Command` each step returns, arms a timer for `timeout` with the
 /// `generation` it had, and hands back every 0xD1 frame (`take`) and every
 /// timer that fires (`timedOut`).
@@ -970,8 +972,9 @@ nonisolated struct AccelCalFlow: Equatable {
                 return nil
             }
             wait = .none
-            finish(result)
-            return nil
+            // A face that completes the six (or replaces one of them): save at
+            // once. save() sends nothing short of six or past the limit.
+            return finish(result) ? save() : nil
         case .applying(let w):
             begin(.readingBack(w, applyAnswer: frame))
             return .read
@@ -1035,17 +1038,22 @@ nonisolated struct AccelCalFlow: Equatable {
         generation += 1
     }
 
-    private mutating func finish(_ result: AccelSixFace.FaceMeasurement.Result) {
+    /// Report the face; true when it was captured.
+    private mutating func finish(_ result: AccelSixFace.FaceMeasurement.Result) -> Bool {
         switch result {
         case .refused:
             lastFace = FaceReport(verdict: .refused, frame: nil, replaced: false)
+            return false
         case .finished(let frame):
             let verdict = AccelSixFace.verdict(for: frame)
             var replaced = false
+            var captured = false
             if case .accepted(let face, let tilt) = verdict {
                 replaced = captures.record(face, AccelSixFace.Capture(frame, tiltDeg: tilt))
+                captured = true
             }
             lastFace = FaceReport(verdict: verdict, frame: frame, replaced: replaced)
+            return captured
         }
     }
 }
@@ -1087,6 +1095,16 @@ nonisolated extension AccelCalFlow.FaceReport {
         let numbers = String(format: "(%+.3f, %+.3f, %+.3f) m/s², SD max %.1f mg",
                              m[0], m[1], m[2], sdMaxMg)
         return "\(numbers), \(f.faceN) samples"
+    }
+}
+
+nonisolated extension AccelCalFlow {
+
+    /// The Save button's label: Save Again once a save has gone out, by
+    /// itself after the sixth face or from the button.
+    var saveLabel: String {
+        if case .save? = lastWrite?.write { return "Save Again" }
+        return "Save to the Flight Computer"
     }
 }
 

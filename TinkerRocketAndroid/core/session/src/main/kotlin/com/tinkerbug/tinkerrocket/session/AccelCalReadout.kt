@@ -63,7 +63,8 @@ public object AccelCalReadout {
         "Board axes: +X points forward (to the nose when the board is mounted nose-forward), " +
             "+Y to the left, +Z up out of the component side. Set the board, or the whole " +
             "rocket, on each face and hold it still for 3 s. Any order: the app tells the face " +
-            "from the reading."
+            "from the reading. After the sixth face, the app saves the calibration to the flight " +
+            "computer by itself."
     public const val FACES_NO_PICK: String =
         "You don't pick the face: set the board on a side, and the app sees which one it is."
     public const val NOW: String = "Now"
@@ -84,6 +85,7 @@ public object AccelCalReadout {
     public const val SOLVED_TOGETHER: String =
         "All six faces are solved together, so a face a few degrees off square does not bias the offset."
     public const val SAVE: String = "Save to the Flight Computer"
+    public const val SAVE_AGAIN: String = "Save Again"
     public const val SAVING: String = "Saving…"
     public const val RESULT_FOOTER: String = "The scale is shown for information; only the offset is saved."
 
@@ -252,6 +254,12 @@ public object AccelCalReadout {
     }
 
     private const val REDO: String = "Redo the faces: was one of them not still, or the wrong way up?"
+
+    /**
+     * The Save button's label: Save Again once a save has gone out, by itself
+     * after the sixth face or from the button.
+     */
+    public fun saveLabel(last: WriteReport?): String = if (last != null && !last.isClear) SAVE_AGAIN else SAVE
 
     /** A save's or a clear's outcome. */
     public fun write(r: WriteReport): Line = when {

@@ -69,7 +69,8 @@ import kotlinx.coroutines.launch
  *
  * tools/accel_cal_six_face.py's flow: read the stored offset (77), measure
  * the faces in any order (78: a 3 s window each, the face told from the
- * reading), solve, save (76) and read it back (77).  The rules and the
+ * reading), solve, save (76) and read it back (77); the save goes out by
+ * itself after the sixth face, and Save Again resends it.  The rules and the
  * numbers are [AccelSixFace]'s; the round trips are [DeviceSession]'s
  * readAccelCal / measureAccelFace / applyAccelCal.  This screen is the
  * checklist, the buttons and the report.
@@ -153,37 +154,7 @@ fun AccelCalScreen(
         opened = true
     }
 
-    fun measure() {
-        if (op != null) return
-        op = AccelCalOp.MEASURING
-        windowOpen = false
-        placementFace = null
-        lastWrite = null   // the faces are changing under it
-        lastHighGWrite = null
-        scope.launch {
-            try {
-                val m = session.measureAccelFace(onWindowOpen = { windowOpen = true })
-                lastFace = if (m is AccelSixFace.Measurement.Finished) {
-                    val v = AccelSixFace.judge(m.window, faces.keys)
-                    if (v is AccelSixFace.Verdict.Accepted) faces = faces + (v.face to m.window)
-                    AccelFaceReport(AccelCalReadout.verdict(v), AccelCalReadout.detail(m.window))
-                } else {
-                    AccelCalReadout.notMeasured(m)?.let { AccelFaceReport(it, detail = null) }
-                }
-            } finally {
-                op = null
-                windowOpen = false
-            }
-        }
-    }
-
-    val solution = remember(faces) {
-        if (faces.size == Face.entries.size) {
-            AccelSixFace.solve(faces.mapValues { (_, w) -> w.faceMean.map { it.toDouble() } })
-        } else {
-            null
-        }
-    }
+    val solution = remember(faces) { solveFaces(faces) }
 
     // The high-g's alignment to the low-g, once all six are in.
     val highGFit = remember(faces, solution) { solution?.let { AccelSixFace.solveHighG(faces, it) } }
@@ -222,6 +193,47 @@ fun AccelCalScreen(
             } finally {
                 op = null
             }
+        }
+    }
+
+    /**
+     * Save the offset the six faces solve to, and the high-g's alignment when
+     * it passed: by itself after the sixth face, or from Save Again.  Nothing
+     * short of six or past the flight computer's limit.
+     */
+    fun save() {
+        val s = solveFaces(faces)?.takeIf { it.saveAllowed } ?: return
+        val highG = AccelSixFace.highGAfterSave(AccelSixFace.solveHighG(faces, s))
+        write(clear = false, sent = s.wireOffset, highG = highG)
+    }
+
+    fun measure() {
+        if (op != null) return
+        op = AccelCalOp.MEASURING
+        windowOpen = false
+        placementFace = null
+        lastWrite = null   // the faces are changing under it
+        lastHighGWrite = null
+        scope.launch {
+            var captured = false
+            try {
+                val m = session.measureAccelFace(onWindowOpen = { windowOpen = true })
+                lastFace = if (m is AccelSixFace.Measurement.Finished) {
+                    val v = AccelSixFace.judge(m.window, faces.keys)
+                    if (v is AccelSixFace.Verdict.Accepted) {
+                        faces = faces + (v.face to m.window)
+                        captured = true
+                    }
+                    AccelFaceReport(AccelCalReadout.verdict(v), AccelCalReadout.detail(m.window))
+                } else {
+                    AccelCalReadout.notMeasured(m)?.let { AccelFaceReport(it, detail = null) }
+                }
+            } finally {
+                op = null
+                windowOpen = false
+            }
+            // A face that completes the six (or replaces one of them): save at once.
+            if (captured) save()
         }
     }
 
@@ -397,13 +409,12 @@ fun AccelCalScreen(
                 if (op == AccelCalOp.SAVING) {
                     Busy(AccelCalReadout.SAVING)
                 } else {
+                    // The sixth face sends the save by itself; this sends it again.
                     Button(
-                        onClick = {
-                            write(clear = false, sent = s.wireOffset, highG = AccelSixFace.highGAfterSave(highGFit))
-                        },
+                        onClick = ::save,
                         enabled = canRun && op == null && s.saveAllowed,
                         modifier = Modifier.fillMaxWidth(),
-                    ) { Text(AccelCalReadout.SAVE) }
+                    ) { Text(AccelCalReadout.saveLabel(lastWrite)) }
                 }
                 lastWrite?.takeIf { !it.isClear }?.let { w ->
                     WriteReportRows(w, canReadBack = canRun && op == null) { readItBack(w) }
@@ -511,6 +522,14 @@ private enum class AccelCalOp { READING, MEASURING, SAVING, SAVING_HIGH_G, CLEAR
 
 /** The gate's telemetry inputs: power, state, and whether a boot step is still reported. */
 private data class AccelCalGate(val pwrPinOn: Boolean, val state: String, val booting: Boolean)
+
+/** The solve, once all six faces are in. */
+private fun solveFaces(faces: Map<Face, AccelCalStatus>): AccelSixFace.Solution? =
+    if (faces.size == Face.entries.size) {
+        AccelSixFace.solve(faces.mapValues { (_, w) -> w.faceMean.map { it.toDouble() } })
+    } else {
+        null
+    }
 
 /** The last face measurement: its result line, and the window's numbers when there was one. */
 private data class AccelFaceReport(val line: AccelCalReadout.Line, val detail: String?)
