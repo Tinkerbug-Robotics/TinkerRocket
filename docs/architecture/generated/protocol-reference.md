@@ -324,7 +324,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 
 ### app to Base Station
 
-21 commands.
+22 commands.
 
 | Cmd | Constant | Description |
 |-----|----------|-------------|
@@ -349,6 +349,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 47 | `BLE_BS_CMD_SET_PHONE_FIX` | Where the base station actually is. Logged, never acted on -- nothing in the BS behaviour depends on this, it… |
 | 50 | `BLE_BS_CMD_RELAY_TO_ROCKET` | Relay command to a specific rocket via LoRa uplink Payload: [target_rid:1][inner_cmd:1][inner_payload:0..33… |
 | 60 | `BLE_BS_CMD_FREQ_SCAN` | Frequency scan (base-station radio, pre-launch collision avoidance). Payload: [start_mhz f32][stop_mhz… |
+| 82 | `BLE_BS_CMD_SET_TX_SLOTS` | Three-rocket support: transmit slots on/off. Payload [on]: 1 = the base station runs slots (default), 0 = it… |
 
 ## Telemetry flags
 
@@ -411,6 +412,7 @@ Two bits per sensor at the shifts below, each holding a `SensorHealthState`
 | `LORA_CMD_HOP_PAUSE` | `0x10` (16) | uplink cmd: park on lora_freq_mhz for N ms (#90) |
 | `LORA_CMD_SET_HOP_DISABLED` | `0x11` (17) | uplink cmd: 1 byte payload, 0=hopping enabled (default), 1=disabled (fixed-frequency mode for diagnostics,… |
 | `LORA_CMD_SET_TX_DISABLED` | `0x44` (68) | uplink + rocket BLE cmd: 1 byte payload, 1 = "LoRa off" (mute every transmit, keep listening), 0 =… |
+| `LORA_CMD_TX_SLOT_ADJUST` | `0x52` (82) | uplink: [ref_seq u16][delta_ms i16]; delta INT16_MIN = release |
 | `LORA_FRAME_FAST` | `0x00` (0) |  |
 | `LORA_FRAME_SLOW` | `0x01` (1) |  |
 | `LORA_HOP_DWELL_MAX` | `0x04` (4) | #133 slow-hop robustness cap |
@@ -427,6 +429,7 @@ Two bits per sensor at the shifts below, each holding a `SensorHealthState`
 | `LORA_SLOT_CYCLE` | `0x06` (6) |  |
 | `LORA_SLOW_SLOT` | `0x05` (5) | 0-based index within the cycle |
 | `LORA_STATE_SHIFT` | `0x04` (4) | bits 4-6: rocket state |
+| `LORA_TX_SLOT_COUNT` | `0x03` (3) | slot = (rid - 1) % 3 unless that slot is taken |
 | `LORA_UL_ACCEPTED` | `0x01` (1) | passed every filter, command dispatched |
 | `LORA_UL_MALFORMED` | `0x10` (16) | bad sync byte or short frame |
 | `LORA_UL_NID_DROP` | `0x04` (4) | wrong network_id |
