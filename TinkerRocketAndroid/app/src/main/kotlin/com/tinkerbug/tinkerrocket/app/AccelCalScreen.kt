@@ -43,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -356,7 +357,13 @@ fun AccelCalScreen(
                     Busy(AccelCalReadout.STARTING)
                 }
             } else {
-                Button(onClick = ::measure, enabled = canRun && op == null, modifier = Modifier.fillMaxWidth()) {
+                // Dark blue: the button to press at each face, set apart from Save.
+                Button(
+                    onClick = ::measure,
+                    enabled = canRun && op == null,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = tr.nextStep, contentColor = Color.White),
+                ) {
                     Text(AccelCalReadout.measureLabel(live.onFace, allCaptured = faces.size == Face.entries.size))
                 }
                 lastFace?.let { r ->

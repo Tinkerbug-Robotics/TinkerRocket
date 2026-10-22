@@ -286,10 +286,15 @@ struct AccelCalibrationView: View {
         } else {
             // Named for the live face as a hint; enabled whatever the hint
             // says, since the measurement judges the face itself.
+            // Dark blue and filled: the button to press at each face.
             Button(action: { run(flow.measure()) }) {
                 Label(AccelSixFace.measureLabel(live: live, allCaptured: flow.captures.isComplete),
                       systemImage: "scope")
+                    .frame(maxWidth: .infinity)
             }
+            .buttonStyle(.borderedProminent)
+            .tint(TRColor.nextStep)
+            .controlSize(.large)
             .disabled(!canRun || flow.isBusy)
         }
     }
