@@ -699,7 +699,8 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   a `multiband` block and stderr a `multiband:` line: the combinations and why any went anchor-only, the rows
   combined and the mean sigma ratio, each band's candidates and joins, the screen's and the vote's counts,
   composition changes, the wind-up's rms, the epochs referred by the estimate and by the gyro, the estimate less the
-  gyro's (mean, rms, and the slope of the one on the other: 1.06 and 0.97 on the 10/16 rig logs), the drift guard's
+  gyro's (mean, rms, and the slope of the one on the other: 1.00 and 0.83 on the 10/16 rig logs, whose rig turns at
+  about 0.02 rev/s, so each is good to about 0.1; each epoch's own estimate gave 1.06 and 0.97), the drift guard's
   trips and dropped rows, and what `--rr-mb-sigma 1` and `--rr-mb-windup lam` changed. A log
   whose MeasEpochs carry no other band (the Reduced GNSS log keeps one a second: no 10 Hz path at all) joins none, and
   the harness says so. `extract.py --sbf` writes `META sbf_signals` (each SBF signal number's count over the
