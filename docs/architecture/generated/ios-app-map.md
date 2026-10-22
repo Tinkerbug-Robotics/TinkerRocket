@@ -3,16 +3,16 @@
 
 # iOS App -- module map
 
-`TinkerRocketApp/TinkerRocketApp` is 39,736 lines across 99 Swift files, grouped by directory.
+`TinkerRocketApp/TinkerRocketApp` is 39,742 lines across 99 Swift files, grouped by directory.
 "Declares" lists the top-level types in each file. Files of 400+ lines also
 list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 
 
-## `(root)/` — 2 files, 123 lines
+## `(root)/` — 2 files, 124 lines
 
 | File | Lines | Declares |
 |------|-------|----------|
-| [DesignTokens.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/DesignTokens.swift) | 85 | `TRColor`, `TRShape`, `TRSpacing` |
+| [DesignTokens.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/DesignTokens.swift) | 86 | `TRColor`, `TRShape`, `TRSpacing` |
 | [TinkerRocketAppApp.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/TinkerRocketAppApp.swift) | 38 | `TinkerRocketAppApp` |
 
 
@@ -110,7 +110,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [FrequencyScanSample.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FrequencyScanSample.swift) | 15 | `FrequencyScanSample` |
 
 
-## `Views/` — 32 files, 17,344 lines
+## `Views/` — 32 files, 17,349 lines
 
 | File | Lines | Declares |
 |------|-------|----------|
@@ -136,7 +136,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Action / status · Published releases (#773 step 4c) · File picker |
 | [FlightChartView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FlightChartView.swift) | 514 | `FlightChartView` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Zoom & Pan State · Zoom Helpers · Body · Chart View · Zoom Indicator · Gestures · Data Loading · Chart Series Update · Progressive LOD Re-decimation · Binary Search Helpers |
-| [AccelCalibrationView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/AccelCalibrationView.swift) | 471 | `AccelCalibrationView` |
+| [AccelCalibrationView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/AccelCalibrationView.swift) | 476 | `AccelCalibrationView` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Sections · The high-g · Commands |
 | [DeviceManagerView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/DeviceManagerView.swift) | 447 | `DeviceManagerView`, `KnownDeviceDetailView` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Network · Devices · Detail / editor |
@@ -161,4 +161,4 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [ColumnPickerView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/ColumnPickerView.swift) | 72 | `ColumnPickerView` |
 
 
-Total: 99 files, 39,736 lines.
+Total: 99 files, 39,742 lines.
