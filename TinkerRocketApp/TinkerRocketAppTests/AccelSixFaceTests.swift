@@ -307,19 +307,24 @@ final class AccelSixFaceTests: XCTestCase {
     // MARK: - The flow
 
     /// Measure one face through the flow, frames as the flight computer sends
-    /// them (an older answer first, which must not count).
+    /// them (an older answer first, which must not count). Returns what the
+    /// flow sends next: the save, when the face completes the six.
+    @discardableResult
     private func measure(_ flow: inout AccelCalFlow, _ mean: [Double],
-                         state: AccelCalStatus.FaceState = .done) {
+                         state: AccelCalStatus.FaceState = .done) -> AccelCalFlow.Command? {
         XCTAssertEqual(flow.measure(), .measureFace)
         XCTAssertEqual(flow.timeout, 10)
         XCTAssertNil(flow.take(.face(.done, mean: [0.1, 0.2, 9.8])))
         XCTAssertTrue(flow.isMeasuring, "a stale DONE before MEASURING is not this face's")
         XCTAssertNil(flow.take(.face(.measuring, mean: [0, 0, 0], n: 0)))
         XCTAssertTrue(flow.windowOpen)
-        XCTAssertNil(flow.take(.face(state, mean: mean)))
-        XCTAssertFalse(flow.isBusy)
+        let next = flow.take(.face(state, mean: mean))
+        XCTAssertEqual(flow.isBusy, next != nil, "busy only with the save out")
+        return next
     }
 
+    /// The six faces, measured in turn: the flow is then saving, unless the
+    /// offset is past the limit.
     private func sixFaces(offset: [Double] = [0.02, -0.03, 0.01]) -> AccelCalFlow {
         var flow = AccelCalFlow()
         for f in Face.allCases.reversed() {   // any order
@@ -347,7 +352,7 @@ final class AccelSixFaceTests: XCTestCase {
 
     func testOneRequestAtATime() {
         var flow = sixFaces()
-        XCTAssertEqual(flow.read(), .read)
+        XCTAssertTrue(flow.isBusy, "the sixth face's save is out")
         XCTAssertNil(flow.measure())
         XCTAssertNil(flow.save())
         XCTAssertNil(flow.clear())
@@ -421,13 +426,18 @@ final class AccelSixFaceTests: XCTestCase {
         XCTAssertFalse(flow.isBusy)
     }
 
-    func testSaveThenReadBack() throws {
-        var flow = sixFaces()
-        let solution = try XCTUnwrap(flow.captures.solution)
-        let sent = solution.payload
+    func testTheSixthFaceSavesThenReadsBack() throws {
+        var flow = AccelCalFlow()
+        let faces = Array(Face.allCases.reversed())
+        for f in faces.dropLast() {
+            XCTAssertNil(measure(&flow, reading(f, tiltDeg: 2, offset: [0.02, -0.03, 0.01])), "nothing before six")
+        }
+        XCTAssertEqual(flow.saveLabel, "Save to the Flight Computer")
+        let next = measure(&flow, reading(faces[5], tiltDeg: 2, offset: [0.02, -0.03, 0.01]))
+        let sent = try XCTUnwrap(flow.captures.solution).payload
         for i in 0..<3 { XCTAssertEqual(Double(sent[i]), [0.02, -0.03, 0.01][i], accuracy: 1e-6) }
 
-        XCTAssertEqual(flow.save(), .apply(sent))
+        XCTAssertEqual(next, .apply(sent), "the sixth face sends the save by itself")
         XCTAssertEqual(flow.writing, .save(sent))
         XCTAssertEqual(flow.timeout, 8)
         // The apply's own answer, then 77 for the read-back.
@@ -438,12 +448,33 @@ final class AccelSixFaceTests: XCTestCase {
         XCTAssertTrue(w.confirmed)
         XCTAssertEqual(w.text, "Saved and read back")
         XCTAssertFalse(flow.isBusy)
+
+        // The button then sends it again.
+        XCTAssertEqual(flow.saveLabel, "Save Again")
+        XCTAssertEqual(flow.save(), .apply(sent))
+    }
+
+    func testAFaceMeasuredAgainAfterTheSixSavesAgain() throws {
+        var flow = sixFaces()
+        let sent = try XCTUnwrap(flow.writing?.sent)
+        _ = flow.take(.stored(sent))
+        _ = flow.take(.stored(sent))
+        XCTAssertEqual(flow.saveLabel, "Save Again")
+
+        // A rejected face changes nothing: no save, and the report is cleared.
+        XCTAssertNil(measure(&flow, reading(face("+Z UP"), tiltDeg: 14, offset: [0.02, -0.03, 0.01])))
+        XCTAssertNil(flow.lastWrite)
+        XCTAssertEqual(flow.saveLabel, "Save to the Flight Computer")
+
+        // An accepted one replaces its face, and the new solve goes out.
+        let next = measure(&flow, reading(face("+Z UP"), tiltDeg: 1, offset: [0.02, -0.03, 0.01]))
+        XCTAssertEqual(flow.lastFace?.replaced, true)
+        XCTAssertEqual(next, .apply(try XCTUnwrap(flow.captures.solution).payload))
     }
 
     func testAReadBackThatDoesNotMatch() throws {
         var flow = sixFaces()
         let sent = try XCTUnwrap(flow.captures.solution).payload
-        _ = flow.save()
         _ = flow.take(.stored(sent))
         _ = flow.take(.stored([sent[0] + 1e-4, sent[1], sent[2]]))
         XCTAssertEqual(flow.lastWrite?.confirmed, false)
@@ -459,7 +490,6 @@ final class AccelSixFaceTests: XCTestCase {
     func testWithNoReadBackTheApplysOwnAnswerStands() throws {
         var flow = sixFaces()
         let sent = try XCTUnwrap(flow.captures.solution).payload
-        _ = flow.save()
         XCTAssertEqual(flow.take(.stored(sent)), .read)
         XCTAssertNil(flow.timedOut(flow.generation))
         XCTAssertEqual(flow.lastWrite?.readBack, .stored(sent))
@@ -469,7 +499,6 @@ final class AccelSixFaceTests: XCTestCase {
     func testNoAnswerAtAllThenReadItBack() throws {
         var flow = sixFaces()
         let sent = try XCTUnwrap(flow.captures.solution).payload
-        _ = flow.save()
         XCTAssertEqual(flow.timedOut(flow.generation), .read)
         XCTAssertNil(flow.timedOut(flow.generation))
         XCTAssertNil(flow.lastWrite?.readBack)
@@ -484,6 +513,7 @@ final class AccelSixFaceTests: XCTestCase {
     func testAnOffsetPast1IsNotSent() throws {
         var flow = sixFaces(offset: [0, 1.2, 0])
         XCTAssertFalse(try XCTUnwrap(flow.captures.solution).canSave)
+        XCTAssertFalse(flow.isBusy, "the sixth face sent nothing")
         XCTAssertNil(flow.save())
         XCTAssertFalse(flow.isBusy)
     }
@@ -504,12 +534,18 @@ final class AccelSixFaceTests: XCTestCase {
         XCTAssertEqual(flow.lastWrite?.text, "The flight computer still has an offset stored")
     }
 
-    func testStartOver() {
+    func testStartOver() throws {
         var flow = sixFaces()
         XCTAssertTrue(flow.captures.isComplete)
         flow.startOver()
+        XCTAssertTrue(flow.captures.isComplete, "not while the save is out")
+        let sent = try XCTUnwrap(flow.writing?.sent)
+        _ = flow.take(.stored(sent))
+        _ = flow.take(.stored(sent))
+        flow.startOver()
         XCTAssertTrue(flow.captures.faces.isEmpty)
         XCTAssertNil(flow.lastFace)
+        XCTAssertNil(flow.lastWrite)
     }
 
     // MARK: - The flow on the device's wire
@@ -541,13 +577,10 @@ final class AccelSixFaceTests: XCTestCase {
             device.handleFileOpsFrame(AccelCalStatus(flags: 0, faceState: 2, offset: [0, 0, 0], faceMean: mean,
                                                      faceSD: [0.01, 0.01, 0.01], faceN: 2880).wireFrame)
         }
-        XCTAssertEqual(writes, Array(repeating: Data([78]), count: 6))
         XCTAssertTrue(flow.captures.isComplete)
-
-        writes = []
-        run(flow.save())
         let fitted = Data([0x44, 0xa1, 0x96, 0x3e, 0x57, 0xf7, 0xe6, 0xbe, 0x17, 0x02, 0xf1, 0x3d])
-        XCTAssertEqual(writes, [Data([76]) + fitted], "the fit's offset, three little-endian float32")
+        XCTAssertEqual(writes, Array(repeating: Data([78]), count: 6) + [Data([76]) + fitted],
+                       "after the sixth face, the fit's offset by itself: three little-endian float32")
         let sent = try XCTUnwrap(flow.writing?.sent)
         device.handleFileOpsFrame(AccelCalStatus.stored(sent).wireFrame)   // the apply's answer
         XCTAssertEqual(writes.last, Data([77]))

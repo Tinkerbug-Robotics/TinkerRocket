@@ -120,16 +120,17 @@ phone app must be disconnected.
 1. Power the flight computer and let it warm up for ~5 minutes: the high-g's
    offset moves ~2 mg/°C.
 2. Measure the six faces in one go, hands off during each 3 s window. Any
-   order works.
+   order works. After the sixth, the screen saves by itself: it sends the
+   offset (76), reads it back, then the alignment (80), and reads that back
+   too. Both lines should be green. Save Again sends it once more, and a face
+   measured again saves the new solve.
 3. Read the High-g Accelerometer section:
    - each axis's scale and offset with ±1 sigma;
    - the cross-axis term;
    - the fit to the low-g, which should be well under 1 mg;
    - the agreement line;
    - "Passed: saved with the offset" or "Not saved: <why>".
-4. Save. The screen sends the offset (76), reads it back, then the alignment
-   (80), and reads that back too. Both lines should be green.
-5. Before a flight, run the pad calibration as usual. It keeps the alignment
+4. Before a flight, run the pad calibration as usual. It keeps the alignment
    and measures the high-g's offset for the day; the stored section then shows
    its source as "measured by the pad calibration".
 
@@ -220,7 +221,7 @@ it is seen. Never open a console with DTR=RTS=0, which resets an S3.
      low-g was 11, -39 and -68 mg on top of its stored bias on 10-17);
    - "agrees".
 
-   Save, and both read-backs green.
+   The save follows the sixth face by itself, and both read-backs are green.
 5. **Power-cycle the FC** (cmd 8 off for 15 s, then on). The boot log shows
    `NVS high-g alignment: diag …` and the screen "High-g alignment in use".
 6. **`--check` on new attitudes:** 45° tilts and an upside-down. Each should

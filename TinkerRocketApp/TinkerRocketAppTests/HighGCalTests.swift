@@ -261,6 +261,7 @@ final class HighGCalTests: XCTestCase {
 
     // MARK: - The flow
 
+    /// The six faces through the flow: the sixth sends the save.
     private func capturesFlow(withHighG: Bool = true, quad: [Double] = [0, 0, 0]) -> AccelCalFlow {
         var flow = AccelCalFlow()
         for (face, c) in board(tilts: [:], quad: quad, withHighG: withHighG) {
@@ -293,7 +294,7 @@ final class HighGCalTests: XCTestCase {
         var flow = capturesFlow()
         guard case .solved(let h)? = flow.captures.highG else { return XCTFail("no high-g fit") }
         let o = try XCTUnwrap(flow.captures.solution).payload
-        XCTAssertEqual(flow.save(), .apply(o))
+        XCTAssertEqual(flow.writing, .save(o), "the sixth face sent it")
         XCTAssertEqual(flow.take(stored(o, matrix: nil)), .read)
         // the low-g's read-back, then the high-g's write
         let w = AccelCalFlow.HighGWrite.save(matrix: h.payloadMatrix, bias: h.payloadBias)
@@ -322,7 +323,7 @@ final class HighGCalTests: XCTestCase {
         var flow = capturesFlow(withHighG: false)
         XCTAssertEqual(flow.captures.highG, .noReading)
         let o = try XCTUnwrap(flow.captures.solution).payload
-        XCTAssertEqual(flow.save(), .apply(o))
+        XCTAssertEqual(flow.writing, .save(o), "the sixth face sent it")
         XCTAssertEqual(flow.take(.stored(o)), .read)
         XCTAssertNil(flow.take(.stored(o)))
         XCTAssertNil(flow.lastHighGWrite)
@@ -330,7 +331,6 @@ final class HighGCalTests: XCTestCase {
 
         // a new flight computer behind an old out computer: 80 gets no answer
         var flow2 = capturesFlow()
-        _ = flow2.save()
         _ = flow2.take(.stored(o))
         guard case .applyHighG? = flow2.take(.stored(o)) else { return XCTFail("the high-g goes out") }
         XCTAssertEqual(flow2.timedOut(flow2.generation), .read)
@@ -345,7 +345,7 @@ final class HighGCalTests: XCTestCase {
         guard case .solved(let h)? = flow.captures.highG else { return XCTFail("no high-g fit") }
         XCTAssertFalse(h.canSave)
         let o = try XCTUnwrap(flow.captures.solution).payload
-        XCTAssertEqual(flow.save(), .apply(o))
+        XCTAssertEqual(flow.writing, .save(o), "the sixth face sent the offset")
         _ = flow.take(stored(o, matrix: nil))
         XCTAssertNil(flow.take(stored(o, matrix: nil)))
         XCTAssertNil(flow.lastHighGWrite)
@@ -372,7 +372,6 @@ final class HighGCalTests: XCTestCase {
         var flow = capturesFlow()
         guard case .solved(let h)? = flow.captures.highG else { return XCTFail("no high-g fit") }
         let o = try XCTUnwrap(flow.captures.solution).payload
-        _ = flow.save()
         _ = flow.take(stored(o, matrix: nil))
         _ = flow.take(stored(o, matrix: nil))
         XCTAssertEqual(flow.timedOut(flow.generation), .read)
@@ -403,10 +402,11 @@ final class HighGCalTests: XCTestCase {
 
     // MARK: - The screen, rendered (only with TR_SCREENSHOT_DIR set)
 
-    /// The six-face screen with six captured faces, hosted and drawn to a PNG
-    /// in $TR_SCREENSHOT_DIR (xcodebuild: TEST_RUNNER_TR_SCREENSHOT_DIR=...).
+    /// The six-face screen with six captured faces and the save they sent,
+    /// hosted and drawn to a PNG in $TR_SCREENSHOT_DIR (xcodebuild:
+    /// TEST_RUNNER_TR_SCREENSHOT_DIR=...).
     @MainActor
-    private func renderScreen(_ name: String, faces: [Face: AccelSixFace.Capture], save: Bool,
+    private func renderScreen(_ name: String, faces: [Face: AccelSixFace.Capture],
                               stored: AccelCalStatus) async throws {
         guard let dir = ProcessInfo.processInfo.environment["TR_SCREENSHOT_DIR"] else {
             throw XCTSkip("set TR_SCREENSHOT_DIR to render the screen")
@@ -423,8 +423,8 @@ final class HighGCalTests: XCTestCase {
                                          faceSD: c.sd.map(Float.init), faceN: UInt16(c.samples), highG: hg))
         }
         var shown = stored
-        if save, let o = flow.captures.solution?.payload {
-            _ = flow.save()
+        // The sixth face sent the save: answer it, and the high-g's after it.
+        if let o = flow.writing?.sent {
             let lowStored = AccelCalStatus(flags: 3, faceState: 0, offset: o, faceMean: [0, 0, 0], faceSD: [0, 0, 0],
                                        faceN: 0, highG: stored.highG)
             _ = flow.take(lowStored)
@@ -489,7 +489,7 @@ final class HighGCalTests: XCTestCase {
 
     @MainActor
     func testRenderTheScreenPassedAndSaved() async throws {
-        try await renderScreen("ios_highg_passed_saved", faces: board(tilts: userTilts, noiseSeed: 11), save: true,
+        try await renderScreen("ios_highg_passed_saved", faces: board(tilts: userTilts, noiseSeed: 11),
                                stored: stored(nil, matrix: nil, bias: [-0.65, -0.57, 0.91], source: 1))
     }
 
@@ -497,13 +497,13 @@ final class HighGCalTests: XCTestCase {
     func testRenderTheScreenDisagreeing() async throws {
         try await renderScreen("ios_highg_disagree", faces: board(tilts: userTilts, noiseSeed: 12,
                                                                   quad: [0, 0, 3.5 * mg / (g * g)]),
-                               save: false, stored: stored(nil, matrix: nil, bias: [-0.65, -0.57, 0.91], source: 1))
+                               stored: stored(nil, matrix: nil, bias: [-0.65, -0.57, 0.91], source: 1))
     }
 
     @MainActor
     func testRenderTheScreenOlderFirmware() async throws {
         try await renderScreen("ios_highg_older_firmware", faces: board(tilts: userTilts, noiseSeed: 13, withHighG: false),
-                               save: false, stored: .stored([0.0412, -0.0273, 0.0156]))
+                               stored: .stored([0.0412, -0.0273, 0.0156]))
     }
 
     // MARK: - On the device's wire
@@ -536,8 +536,9 @@ final class HighGCalTests: XCTestCase {
         }
         XCTAssertTrue(flow.captures.isComplete)
         guard case .solved(let h)? = flow.captures.highG else { return XCTFail("no high-g fit") }
-        writes = []
-        run(flow.save())
+        // the sixth face's frame sent the save by itself
+        XCTAssertEqual(writes.prefix(7).map { $0[0] }, [78, 78, 78, 78, 78, 78, 76])
+        writes.removeFirst(6)
         let o = try XCTUnwrap(flow.writing?.sent)
         device.handleFileOpsFrame(stored(o, matrix: nil).wireFrame)    // the apply's answer
         device.handleFileOpsFrame(stored(o, matrix: nil).wireFrame)    // its read-back -> 80

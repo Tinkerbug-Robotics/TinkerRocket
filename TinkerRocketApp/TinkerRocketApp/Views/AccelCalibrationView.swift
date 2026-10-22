@@ -12,6 +12,7 @@
 //  The flow is tools/accel_cal_six_face.py's, kept in AccelCalFlow: read the
 //  stored offset (77), measure the faces in any order (78: a 3 s window each,
 //  the face told from the reading), solve, save (76) and read it back (77).
+//  The save goes out by itself after the sixth face; Save Again resends it.
 //  This view sends what the flow asks for, arms its timeouts and hands it the
 //  0xD1 frames. The offset is a board property that only this screen writes:
 //  it is in no rocket profile and no connect-time sync.
@@ -201,7 +202,7 @@ struct AccelCalibrationView: View {
         let live = device.accelLiveFace
         return Section("Six Faces") {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Board axes: +X points forward (to the nose when the board is mounted nose-forward), +Y to the left, +Z up out of the component side. Set the board, or the whole rocket, on each face and hold it still for 3 s. Any order: the app tells the face from the reading.")
+                Text("Board axes: +X points forward (to the nose when the board is mounted nose-forward), +Y to the left, +Z up out of the component side. Set the board, or the whole rocket, on each face and hold it still for 3 s. Any order: the app tells the face from the reading. After the sixth face, the app saves the calibration to the flight computer by itself.")
                 Text("You don't pick the face: set the board on a side, and the app sees which one it is.")
             }
             .font(.caption).foregroundColor(.secondary)
@@ -334,8 +335,9 @@ struct AccelCalibrationView: View {
                     Text("Saving…")
                 }
             } else {
+                // The sixth face sends the save by itself; this sends it again.
                 Button(action: { run(flow.save()) }) {
-                    Label("Save to the Flight Computer", systemImage: "square.and.arrow.down")
+                    Label(flow.saveLabel, systemImage: "square.and.arrow.down")
                 }
                 .disabled(!canRun || flow.isBusy || !s.canSave)
             }
