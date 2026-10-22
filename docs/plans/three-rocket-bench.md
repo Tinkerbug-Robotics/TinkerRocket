@@ -71,3 +71,28 @@ OC share a port name.
 - All three powered, slots on, ≥ 1 hour. Pass: no rocket loses its slot, loss stays
   near zero, adjusts are rare (drift corrections only). If it fails, the flight build
   ships with slots switched off at the base station.
+
+## Results — 2026-10-21 (V5 + Beetle + V2 base station; the V9 was not available)
+
+**First run: the rockets locked onto one slot.** Both rockets were rocket ID 1
+when the base station first heard them. It slotted "rocket 1", both followed
+that adjust onto the same grid point, and once one was renumbered every frame
+of both failed CRC at the base station (one failure per 500 ms; only the V5's
+beacons decoded). It looked like "LoRa drops when Bluetooth drops", because the
+direct links had been hiding it. With the Beetle powered off the V5 decoded at
+2.4 Hz at once. Fixed in 76947edb: a rocket moves to a random phase on a
+release or a rocket/network ID change; the base station adjusts a rocket only
+once its ID has settled (two clean, agreeing beacons), releases a rocket ID it
+finds shared, and broadcasts a release on a steady stream of CRC failures.
+
+**After the fix (all boards on 76947edb):**
+- Two rockets slotted within ~7 s of being heard (V5 as rocket 5 in slot 0, its
+  natural slot taken; Beetle as rocket 2 in slot 1), 4.6–4.8 packets/s, 0 CRC.
+- Both rockets' Bluetooth dropped (RSSI −101..−107 dBm): LoRa stayed at full
+  rate and the app's base-station view showed both rockets live.
+- A base-station reboot mid-session re-slotted both rockets in ~30 s.
+- **Soak, 57 min:** median 4.6 packets/s (never under 4.0 in a 5 s window),
+  15,817 of ~15,960 expected packets, 10 CRC failures, no releases or duplicate
+  flags. 13 drift corrections: Beetle every ~5 min (~36 ppm against the base
+  station), V5 twice (~6 ppm); locked in 99 % of status lines. Passes the
+  go/no-go for flying with slots on.
