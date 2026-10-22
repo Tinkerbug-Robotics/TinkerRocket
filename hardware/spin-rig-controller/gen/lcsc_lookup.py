@@ -39,11 +39,16 @@ def main():
             print('ERR', mpn, e)
             continue
         exact = [it for it in items if norm(it.get('componentModelEn', '')).startswith(norm(mpn))]
-        exact.sort(key=lambda it: (it.get('componentLibraryType') == 'base', it.get('stockCount') or 0), reverse=True)
+        # JLC's Economic assembly can't take a part of product type 2 ("Standard Only"), so prefer any other;
+        # then basic parts, then stock (C101: ROQANG's RVT1H101M0810 is type 2, Honor Elec's is not)
+        exact.sort(key=lambda it: (it.get('componentProductType') != 2, it.get('componentLibraryType') == 'base',
+                                   it.get('stockCount') or 0), reverse=True)
         if exact:
             it = exact[0]
             have[mpn] = it['componentCode']
             flag = '' if (it.get('stockCount') or 0) >= 5 * qty else '  LOW STOCK'
+            if it.get('componentProductType') == 2:
+                flag += '  STANDARD PCBA ONLY'
             print('%-26s %-10s %-26s stock=%-7s %s%s' % (mpn, it['componentCode'], it['componentModelEn'],
                                                         it.get('stockCount'), it.get('componentLibraryType'), flag))
         else:

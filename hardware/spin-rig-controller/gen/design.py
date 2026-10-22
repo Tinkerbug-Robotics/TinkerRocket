@@ -3,6 +3,10 @@
 The schematic generator (make_sch.py) draws this; nothing else defines connectivity.
 Conventions taken from the rocket boards: 2-pin power connectors are pin 1 GND, pin 2 positive
 (Tinker-Mantis J8, Tinker-Beetle J3); passives are Yageo RC0402 / Samsung CL05 as on the Beetle.
+The connectors that face the CL57T take its own pluggable 3.5 mm plugs and follow its own pin order, so every
+lead to the driver is wired position for position.
+
+HAND lists the through-hole parts, soldered by hand: they stay out of the JLC BOM and CPL.
 """
 import re
 
@@ -98,7 +102,7 @@ def LED(sheet, ref, color, anode, cathode, block, desc=''):
 
 
 def TP(sheet, ref, net, block):
-    return P(sheet, ref, 'Connector:TestPoint', net, 'TestPoint:TestPoint_Pad_D1.5mm', {1: net}, block=block)
+    return P(sheet, ref, 'Connector:TestPoint', net, 'TestPoint:TestPoint_Pad_D1.0mm', {1: net}, block=block)
 
 
 GND = 'GND'
@@ -108,8 +112,9 @@ V33 = '+3V3'
 # ================================================================ POWER
 s = 'power'
 b = 'Pack input and driver feed'
-P(s, 'J101', 'Connector_Generic:Conn_01x02', 'PACK IN', 'Connector_JST:JST_VH_B2P-VH_1x02_P3.96mm_Vertical',
-  {1: GND, 2: 'VPACK'}, 'B2P-VH(LF)(SN)', 'JST', desc='6S pack, after the anti-spark switch and the 10 A fuse',
+P(s, 'J101', 'Connector_Generic:Conn_01x02', 'PACK IN', 'Connector_AMASS:AMASS_XT60PW-M_1x02_P7.20mm_Horizontal',
+  {1: GND, 2: 'VPACK'}, 'XT60PW-M', 'Amass',
+  desc='XT60, right angle: the 6S pack, after the anti-spark switch and the 10 A fuse (pin 1 is the footprint\'s "-")',
   block=b)
 P(s, 'Q101', 'Transistor_FET:Q_PMOS_GDS', 'NCE60P50K', 'Package_TO_SOT_SMD:TO-252-2',
   {1: 'PFET_G', 2: 'VPACK', 3: 'VMAIN'}, 'NCE60P50K', 'Wuxi NCE',
@@ -120,14 +125,16 @@ P(s, 'D101', 'Device:D_Zener', 'BZT52C12', 'Diode_SMD:D_SOD-123', {1: 'VMAIN', 2
 P(s, 'D102', 'Device:D_Zener', 'SMCJ30A', 'Diode_SMD:D_SMC', {1: 'VMAIN', 2: GND}, 'SMCJ30A', 'Littelfuse',
   desc='TVS, 30 V standoff', block=b)
 P(s, 'C101', 'Device:C_Polarized', '100 uF 50 V', 'Capacitor_SMD:CP_Elec_8x10.5', {1: 'VMAIN', 2: GND},
-  'RVT1H101M0810', 'Lelon', desc='Bulk: damps the pack lead on plug-in', block=b)
+  'RVT1H101M0810', 'Honor Elec', desc='Bulk: damps the pack lead on plug-in', block=b)
 C(s, 'C102', '4.7uF/50V', 'VMAIN', GND, b)
 C(s, 'C103', '4.7uF/50V', 'VMAIN', GND, b)
 P(s, 'R102', 'Device:R_Shunt', '2 mΩ', 'Footprints:R_0805_Kelvin',
   {1: 'VMAIN', 2: 'SHUNT_P', 3: 'SHUNT_N', 4: 'VDRV'}, 'PA0805FRF870R002L', 'Yageo',
   desc='Driver current shunt, Kelvin sensed (the Beetle\'s R72)', block=b)
-P(s, 'J103', 'Connector_Generic:Conn_01x02', 'DRIVER', 'Connector_JST:JST_VH_B2P-VH_1x02_P3.96mm_Vertical',
-  {1: GND, 2: 'VDRV'}, 'B2P-VH(LF)(SN)', 'JST', desc='To the CL57T V+ / GND', block=b)
+P(s, 'J103', 'Connector_Generic:Conn_01x02', 'DRIVER PWR',
+  'Connector_Phoenix_MC:PhoenixContact_MC_1,5_2-G-3.5_1x02_P3.50mm_Horizontal',
+  {1: 'VDRV', 2: GND}, '1844210', 'Phoenix Contact',
+  desc='To the CL57T\'s P4 in its order (+Vdc, GND); 3.5 mm pluggable, 8 A', block=b)
 b = 'Driver current and voltage monitor'
 P(s, 'U101', 'Sensor_Energy:INA238', 'INA238AIDGSR', 'Package_SO:MSOP-10_3x3mm_P0.5mm',
   {1: GND, 2: GND, 3: 'INA_ALERT', 4: 'I2C_SDA', 5: 'I2C_SCL', 6: V33, 7: GND, 8: 'SHUNT_N', 9: 'SHUNT_N',
@@ -199,8 +206,8 @@ LED(s, 'D106', 'red', 'LED5_A', GND, b, desc='5V')
 b = '5 V outputs, 3.3 V, and the ADC dividers'
 P(s, 'F102', 'Device:Polyfuse', '1.5 A', 'Fuse:Fuse_1206_3216Metric', {1: V5, 2: '+5V_AUX'}, 'SMD1206P150TF',
   'PTTC', block=b)
-P(s, 'J104', 'Connector_Generic:Conn_01x02', '5V AUX', 'Connector_JST:JST_PH_B2B-PH-SM4-TB_1x02-1MP_P2.00mm_Vertical',
-  {1: GND, 2: '+5V_AUX'}, 'B2B-PH-SM4-TB(LF)(SN)', 'JST', desc='For the V0 SDR board or the Beetle', block=b)
+P(s, 'J104', 'Connector_Generic:Conn_01x02', '5V AUX', 'Connector_JST:JST_PH_B2B-PH-K_1x02_P2.00mm_Vertical',
+  {1: GND, 2: '+5V_AUX'}, 'B2B-PH-K-S(LF)(SN)', 'JST', desc='For the V0 SDR board or the Beetle', block=b)
 P(s, 'F103', 'Device:Fuse', '4 A', 'Fuse:Fuse_1206_3216Metric', {1: V5, 2: '+5V_PI'}, '0466004.NRHF',
   'Littelfuse', desc='Pi feed', block=b)
 P(s, 'D107', 'Device:D_Schottky', 'B5819WS', 'Diode_SMD:D_SOD-323', {1: 'V3V3_IN', 2: V5}, 'B5819WS', 'Diodes Inc',
@@ -225,14 +232,14 @@ b = 'ESP32-S3'
 # pins chosen by side, facing what they talk to; neighbors of the 3.3 V pins left free for their vias (U201 unrotated: 1-14 left, 15-28 bottom, 29-42 right, 43-56 top)
 ESP = {1: None, 2: V33, 3: V33, 4: 'CHIP_PU', 5: 'BOOT0',
        # left, toward the power column
-       6: 'ALM', 7: 'PEND', 8: 'INA_ALERT', 9: 'I2C_SDA', 10: 'I2C_SCL', 11: 'BRAKE_SENSE', 12: 'DIR',
+       6: 'ALM', 7: 'DRV_BRK', 8: 'INA_ALERT', 9: 'I2C_SDA', 10: 'I2C_SCL', 11: 'BRAKE_SENSE', 12: 'DIR',
        13: None, 14: 'VBUS_SENSE',
        # bottom, toward USB, the lights and the Pi
        15: 'V5_SENSE', 16: 'LED_FAULT', 17: 'LED_STAT', 18: 'PI_TX', 19: None, 20: V33, 21: None, 22: 'PI_RX',
        23: None, 24: None, 25: 'USB_DN_MCU', 26: 'USB_DP_MCU', 27: 'DRV_OE_N', 28: None,
        # right, toward the encoder, index and GNSS connectors (30-35 are the in-package flash)
        29: 'VDD_SPI', 30: None, 31: None, 32: None, 33: None, 34: None, 35: None, 36: 'EVT_IDX_OE_N', 37: 'EVT_MCU',
-       38: 'PPS', 39: 'INDEX', 40: 'ENC_Z', 41: 'ENC_B', 42: 'ENC_A',
+       38: 'PPS', 39: 'INDEX', 40: None, 41: 'ENC_B', 42: 'ENC_A',
        # top, toward the driver buffer and the EventA buffer
        # 45 and 47 stay free so pin 46 (3.3 V) has room for its via
        43: 'EVT_MCU_OE_N', 44: 'STEP', 45: None, 46: V33, 47: None, 48: 'ENA', 49: 'DBG_TX', 50: 'DBG_RX',
@@ -276,9 +283,14 @@ R(s, 'R207', '22', 'USB_DN', 'USB_DN_MCU', b)
 C(s, 'C212', '1uF', 'VUSB', GND, b)
 
 b = 'Pi link, expansion, lights, test points'
-P(s, 'J202', 'Connector_Generic:Conn_01x05', 'PI', 'Connector_PinHeader_2.54mm:PinHeader_1x05_P2.54mm_Vertical',
-  {1: '+5V_PI', 2: '+5V_PI', 3: GND, 4: 'PI_RX_H', 5: 'PI_TX_H'}, 'PZ254V-11-05P', 'XFCN',
-  desc='As the SKR Pico\'s P5: to Pi pins 2, 4, 6, 8, 10', block=b)
+# The board stacks on the Pi 4B like a HAT (the Pi's port end sticks out past the bottom edge): 5 V in on pins 2
+# and 4, its UART0 on 8 (TXD) and 10 (RXD), and every ground pin. The 3.3 V pins and the GPIOs stay unconnected.
+PI_HDR = {n: None for n in range(1, 41)}
+PI_HDR.update({2: '+5V_PI', 4: '+5V_PI', 8: 'PI_RX_H', 10: 'PI_TX_H'})
+PI_HDR.update({n: GND for n in (6, 9, 14, 20, 25, 30, 34, 39)})
+P(s, 'J202', 'Connector_Generic:Conn_02x20_Odd_Even', 'PI 4B', 'Connector_PinSocket_2.54mm:PinSocket_2x20_P2.54mm_Vertical',
+  PI_HDR, 'HC-PM254-8.5H-2x20PZ', 'Hong Cheng',
+  desc='2x20 socket, 8.5 mm, on the underside: stacks on the Pi 4B\'s header (11 mm M2.5 standoffs)', block=b)
 R(s, 'R211', '100', 'PI_RX_H', 'PI_RX', b)
 R(s, 'R212', '100', 'PI_TX', 'PI_TX_H', b)
 P(s, 'J203', 'Connector_Generic:Conn_01x04', 'QWIIC', 'Connector_JST:JST_SH_BM04B-SRSS-TB_1x04-1MP_P1.00mm_Vertical',
@@ -297,10 +309,8 @@ TP(s, 'TP203', V33, b)
 TP(s, 'TP204', V5, b)
 TP(s, 'TP205', GND, b)
 TP(s, 'TP206', GND, b)
-for i, r in enumerate(('H1', 'H2', 'H3', 'H4')):
-    P(s, r, 'Mechanical:MountingHole', 'M3', 'MountingHole:MountingHole_3.2mm_M3', {}, block='Mechanical')
-for r in ('FID1', 'FID2', 'FID3'):
-    P(s, r, 'Mechanical:Fiducial', 'Fiducial', 'Fiducial:Fiducial_1mm_Mask2mm', {}, block='Mechanical')
+for r in ('H3', 'H5', 'H6', 'H7'):          # the Pi 4B's 58 x 49 mm pattern: the board mounts on the Pi
+    P(s, r, 'Mechanical:MountingHole', 'M2.5', 'MountingHole:MountingHole_2.7mm_M2.5', {}, block='Mechanical')
 
 # ================================================================ IO
 s = 'io'
@@ -318,34 +328,42 @@ R(s, 'R305', '10k', 'ENA', GND, b, dnp=True)
 R(s, 'R306', '33', 'PUL_O', 'PUL_P', b)
 R(s, 'R307', '33', 'DIR_O', 'DIR_P', b)
 R(s, 'R308', '33', 'ENA_O', 'ENA_P', b)
-P(s, 'J301', 'Connector_Generic:Conn_01x10', 'CL57T CONTROL',
-  'Connector_JST:JST_PH_B10B-PH-SM4-TB_1x10-1MP_P2.00mm_Vertical',
-  {1: 'PUL_P', 2: GND, 3: 'DIR_P', 4: GND, 5: 'ENA_P', 6: GND, 7: 'ALM_P', 8: GND, 9: 'PEND_P', 10: GND},
-  'B10B-PH-SM4-TB(LF)(SN)', 'JST', desc='PUL+ PUL- DIR+ DIR- ENA+ ENA- ALM+ ALM- PEND+ PEND-', block=b)
+P(s, 'J301', 'Connector_Generic:Conn_01x09', 'CL57T CONTROL',
+  'Connector_Phoenix_MC:PhoenixContact_MC_1,5_9-G-3.5_1x09_P3.50mm_Horizontal',
+  {1: 'PUL_P', 2: GND, 3: 'DIR_P', 4: GND, 5: 'ENA_P', 6: GND, 7: 'ALM_P', 8: 'BRK_P', 9: GND}, '1844281',
+  'Phoenix Contact', desc='The CL57T\'s P1 in its order: PUL+ PUL- DIR+ DIR- ENA+ ENA- ALM BRK COM-', block=b)
+# ALM and BRK are open-collector optocoupler outputs to the driver's COM-, which is this board's ground
 R(s, 'R309', '4.7k', 'ALM_P', V33, b)
 R(s, 'R310', '1k', 'ALM_P', 'ALM', b)
 C(s, 'C302', '1nF', 'ALM', GND, b)
-R(s, 'R311', '4.7k', 'PEND_P', V33, b)
-R(s, 'R312', '1k', 'PEND_P', 'PEND', b)
-C(s, 'C303', '1nF', 'PEND', GND, b)
+R(s, 'R311', '4.7k', 'BRK_P', V33, b)
+R(s, 'R312', '1k', 'BRK_P', 'DRV_BRK', b, desc='BRK: the driver is holding the motor (the CL57T has no in-position output)')
+C(s, 'C303', '1nF', 'DRV_BRK', GND, b)
 
-b = 'Encoder tap (in parallel with the driver\'s encoder input)'
+b = 'Encoder pass-through and tap (the receiver listens in parallel with the driver)'
 P(s, 'U302', 'Interface:AM26LV32xD', 'AM26LV32EIDR', 'Package_SO:SOIC-16_3.9x9.9mm_P1.27mm',
-  {2: 'ENC_A_P', 1: 'ENC_A_N', 3: 'ENC_A', 6: 'ENC_B_P', 7: 'ENC_B_N', 5: 'ENC_B', 10: 'ENC_Z_P', 9: 'ENC_Z_N',
-   11: 'ENC_Z', 14: None, 15: None, 13: None, 4: V33, 12: GND, 8: GND, 16: V33}, 'AM26LV32EIDR', 'TI',
-  desc='Fail-safe on open inputs, no termination of its own', block=b)
+  {2: 'ENC_A_P', 1: 'ENC_A_N', 3: 'ENC_A', 6: 'ENC_B_P', 7: 'ENC_B_N', 5: 'ENC_B', 10: None, 9: None,
+   11: None, 14: None, 15: None, 13: None, 4: V33, 12: GND, 8: GND, 16: V33}, 'AM26LV32EIDR', 'TI',
+  desc='Fail-safe on open inputs, no termination of its own; the motor\'s encoder has no index', block=b)
 C(s, 'C304', '100nF', V33, GND, b)
 R(s, 'R313', '120', 'ENC_A_P', 'ENC_A_N', b, dnp=True)
 R(s, 'R314', '120', 'ENC_B_P', 'ENC_B_N', b, dnp=True)
-R(s, 'R315', '120', 'ENC_Z_P', 'ENC_Z_N', b, dnp=True)
-P(s, 'J302', 'Connector_Generic:Conn_01x08', 'ENCODER', 'Connector_JST:JST_PH_B8B-PH-SM4-TB_1x08-1MP_P2.00mm_Vertical',
-  {1: 'ENC_A_P', 2: 'ENC_A_N', 3: 'ENC_B_P', 4: 'ENC_B_N', 5: 'ENC_Z_P', 6: 'ENC_Z_N', 7: 'ENC_GND', 8: None},
-  'B8B-PH-SM4-TB(LF)(SN)', 'JST', desc='EA+ EA- EB+ EB- EZ+ EZ- EGND', block=b)
+# J302 takes the kit's encoder extension lead; J305 carries the same six wires on to the driver's P2. J302 is
+# numbered from the bottom so that, read from the top, both say EB+ EB- EA+ EA- VCC EGND, as the driver does,
+# and the six traces between them nest around the corner without crossing.
+P(s, 'J302', 'Connector_Generic:Conn_01x06', 'ENCODER IN',
+  'Connector_Phoenix_MC:PhoenixContact_MC_1,5_6-G-3.5_1x06_P3.50mm_Horizontal',
+  {6: 'ENC_B_P', 5: 'ENC_B_N', 4: 'ENC_A_P', 3: 'ENC_A_N', 2: 'ENC_VCC', 1: 'ENC_GND'}, '1844252',
+  'Phoenix Contact', desc='From the motor\'s encoder extension lead (top to bottom: EB+ EB- EA+ EA- VCC EGND)', block=b)
+P(s, 'J305', 'Connector_Generic:Conn_01x06', 'ENCODER OUT',
+  'Connector_Phoenix_MC:PhoenixContact_MC_1,5_6-G-3.5_1x06_P3.50mm_Horizontal',
+  {1: 'ENC_B_P', 2: 'ENC_B_N', 3: 'ENC_A_P', 4: 'ENC_A_N', 5: 'ENC_VCC', 6: 'ENC_GND'}, '1844252',
+  'Phoenix Contact', desc='To the CL57T\'s P2 in its order: EB+ EB- EA+ EA- VCC (the driver\'s 5 V) EGND', block=b)
 R(s, 'R316', '0', 'ENC_GND', GND, b, desc='Open it if the encoder ground is not the pack ground')
 
 b = 'Index sensor (slotted optical or Hall)'
-P(s, 'J303', 'Connector_Generic:Conn_01x04', 'INDEX', 'Connector_JST:JST_PH_B4B-PH-SM4-TB_1x04-1MP_P2.00mm_Vertical',
-  {1: GND, 2: 'IDX_SIG', 3: 'IDX_LED', 4: V5}, 'B4B-PH-SM4-TB(LF)(SN)', 'JST',
+P(s, 'J303', 'Connector_Generic:Conn_01x04', 'INDEX', 'Connector_JST:JST_PH_B4B-PH-K_1x04_P2.00mm_Vertical',
+  {1: GND, 2: 'IDX_SIG', 3: 'IDX_LED', 4: V5}, 'B4B-PH-K-S(LF)(SN)', 'JST',
   desc='GND, signal (open collector), LED anode (through 330 Ω), 5 V', block=b)
 R(s, 'R317', '330', V5, 'IDX_LED', b)
 R(s, 'R318', '4.7k', 'IDX_SIG', V33, b)
@@ -366,8 +384,8 @@ R(s, 'R321', '100', 'EVT_MCU_Y', 'EVENTA_OUT', b)
 R(s, 'R322', '10k', 'EVT_IDX_OE_N', V33, b)
 R(s, 'R323', '10k', 'EVT_MCU_OE_N', V33, b)
 C(s, 'C307', '100nF', V33, GND, b)
-P(s, 'J304', 'Connector_Generic:Conn_01x03', 'GNSS', 'Connector_JST:JST_PH_B3B-PH-SM4-TB_1x03-1MP_P2.00mm_Vertical',
-  {1: 'PPS_IN', 2: GND, 3: 'EVENTA_OUT'}, 'B3B-PH-SM4-TB(LF)(SN)', 'JST',
+P(s, 'J304', 'Connector_Generic:Conn_01x03', 'GNSS', 'Connector_JST:JST_PH_B3B-PH-K_1x03_P2.00mm_Vertical',
+  {1: 'PPS_IN', 2: GND, 3: 'EVENTA_OUT'}, 'B3B-PH-K-S(LF)(SN)', 'JST',
   desc='mosaic-go pins 8, 9, 10 (the 1 kΩ resistors stay at the receiver end)', block=b)
 R(s, 'R324', '100', 'PPS_IN', 'PPS', b)
 R(s, 'R325', '100k', 'PPS_IN', GND, b)
@@ -380,6 +398,8 @@ TP(s, 'TP305', 'INDEX', b)
 TP(s, 'TP306', GND, b)
 
 POWER_NETS = {GND, V5, V33}
+# through-hole: soldered by hand, not by JLC
+HAND = ('J101', 'J102', 'J103', 'J104', 'J202', 'J301', 'J302', 'J303', 'J304', 'J305')
 PWR_FLAG_NETS = {'power': [GND, 'VPACK', 'VMAIN', 'VMAIN_F', V5, 'V3V3_IN'], 'mcu': ['VUSB', 'VDD_SPI'], 'io': []}
 
 
