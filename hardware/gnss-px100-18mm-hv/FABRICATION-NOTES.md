@@ -43,7 +43,7 @@ THE SAW FILTERS SET THE CEILING: B4327 (FL6) PEAK 250 C +0/-5;
 B8389 (FL4, FL5) 30-70 s ABOVE 220 C. THE PX100 ALLOWS 260 C PEAK,
 60-150 s ABOVE 217 C. RUN PEAK 240-245 C, 60-70 s ABOVE 220 C.
 FL6 IS MSL 2a; FL4/FL5 ARE MSL 3 AND ESD SENSITIVE (250 V HBM).
-Y1 (EPSON TG2520SMN): FOLLOW EPSON'S REFLOW AND STORAGE LIMITS.
+Y1 (EPSON TCXO): FOLLOW EPSON'S REFLOW AND STORAGE LIMITS.
 
 ASSEMBLY - PLACEMENT
 - U1 (PX100, QFN-40): PIN 1 AT THE SILK DOT.
@@ -54,6 +54,13 @@ ASSEMBLY - PLACEMENT
 - Y1 (EPSON TG2520SMN): PIN 1 AT THE SILK DOT (BOTTOM LEFT). ITS LONG
   SIDE RUNS ALONG THE BOARD'S X AXIS ON PURPOSE (ACCELERATION
   SENSITIVITY); DO NOT ROTATE IT 90 DEGREES.
+  V1 STAND-IN: EPSON TG2016SMN 26 MHz MCGNNM (2.0 x 1.6 mm), CENTERED
+  ON THE SAME LANDS, PIN 1 AT THE DOT, LONG SIDE ALONG X. ITS
+  TERMINALS SIT ON THE PADS' INNER CORNERS (ABOUT 88 % ON THE PAD);
+  USE LESS PASTE THAN THE STENCIL PRINTS.
+  EPSON TG-5006CG-12H: ITS PIN 1 (N.C.) MUST NOT BE CONNECTED, AND
+  PAD 1 IS GROUND ON THIS BOARD. FIT IT ONLY WITH PAD 1 INSULATED
+  (NO PASTE, UV SOLDER MASK OVER THE PAD).
 - U2 IS ADP7142ARDZ-3.3 ONLY; THE ADJUSTABLE ADP7142ARDZ REGULATES AT
   1.2 V ON THIS BOARD.
 - SH1 (SHIELD FRAME), SH2 (SHIELD COVER) AND J1 (EDGE SMA) ARE NOT
@@ -68,11 +75,30 @@ ASSEMBLY - HAND WORK
   SOLDER THE CENTRE PIN AND ALL FOUR GROUND LEGS, TOP AND BOTTOM.
 ```
 
-Parts LCSC does not stock (2026-10-22), to consign or source globally: U1 PX100-5C-01A (SkyTraq), U3/U4 BGA855N6
-(0 at LCSC, as for the PX1105R carrier), SH1/SH2 Laird BMI-S-202-F/-C (DigiKey, 0 in stock 2026-10-22).
+## Sourcing for the two V1 builds
 
-Rechecked on JLC's parts API 2026-10-23: U2 ADP7142ARDZ-3.3 (C3752812) and U3/U4 BGA855N6 (C2151387) at 0; Y1
-(Epson TG2520SMN 26 MHz, ±0.5 ppm, MCGNNM) not listed. The in-stock Epson X1G0042110001 is not that part. Two have
-in-stock equivalents from the same series: C20/C21/C26 GRM1555C1H330JA01D (0 in stock) by GRM1555C1H330GA01D
-(C162097, 2 % instead of 5 %); FL1 DLW21SN670HQ2L (3 in stock) by DLW21SN670SQ2L (C113043, same 67 Ω, 250 mΩ and
-400 mA instead of 310 mΩ and 320 mA).
+Checked 2026-10-23. LCSC stocks every part except those in the table, and four BOM lines go to in-stock equivalents
+there: C20/C21/C26 GRM1555C1H330JA01D (none in stock) to GRM1555C1H330GA01D (C162097, 2 % instead of 5 %); FL1
+DLW21SN670HQ2L (too few) to DLW21SN670SQ2L (C113043, the same 67 Ω, rated 400 mA and 250 mΩ instead of 320 mA and
+310 mΩ); the 25 V 1 µF CL05A105KA5NQNC on C40, C44, C47, C49, C50, C53, C55 and C56 (backordered) to the 16 V
+CL05A105KO5NNNC already on C27/C28 (C29266; every one of those capacitors sits on 3.3 V or less); the 10 kΩ
+0402WGF1002TCE on R12, R14 and R15 (backordered) to the RC0402FR-0710KL already on R1/R3 (C60490).
+
+| Ref | Part | Source |
+|---|---|---|
+| U1 | SkyTraq PX100-5C-01A | SkyTraq; LCSC does not list it |
+| U2 | Analog Devices ADP7142ARDZ-3.3 | DigiKey 505-ADP7142ARDZ-3.3-ND (352 in stock) |
+| U3, U4 | Infineon BGA855N6E6327XTSA1 | DigiKey BGA855N6E6327XTSA1CT-ND (28,517 in stock) |
+| J1 | RF Solutions CON-SMA-EDGE-S | DigiKey CON-SMA-EDGE-S-ND (13,162 in stock) |
+| SH1 | Laird BMI-S-202-F frame | DigiKey 903-1051-1-ND (59,465 in stock) |
+| SH2 | Laird BMI-S-202-C cover | DigiKey 903-1014-ND (44,644 in stock) |
+| Y1 | Epson TG2520SMN 26.000000MHz MCGNNM | Not at LCSC; fit the TG2016SMN below |
+
+Y1 has two in-stock stand-ins at LCSC, both Epson and both ±0.5 ppm:
+
+- **TG2016SMN 26 MHz MCGNNM** (X1G0054410304, LCSC C7527385): the TG2520SMN's own family and data sheet, so the same
+  2.66–3.465 V supply, −40…85 °C range and acceleration data, and pin 1 may be open or grounded. It is 2.0 × 1.6 mm;
+  centered on the 2.5 × 2.0 lands, about 88 % of each terminal sits on its pad, at the pad's inner corner. Fit this one.
+- **TG-5006CG-12H** (X1G0042110003, LCSC C1998253): the TG2520SMN's size, pinout and lands, 3.0 V ±5 %, −30…85 °C,
+  no published acceleration data. Its data sheet says pin 1 (N.C.) must not be connected to anything, and this board
+  grounds pad 1, so it goes on only with pad 1 insulated.
