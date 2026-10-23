@@ -9,8 +9,9 @@ Solutions CON-SMA-EDGE-S, as on the Beetle) for a passive antenna or the HackRF 
 (JLC04161H-3313). It is a bench and rig board, not the flight carrier.
 
 **State:** V1 released on 2026-10-23 (tag `gnss-px100-18mm-hv-v1.0.0`) and ordered as bare boards from JLC; not yet
-fabricated. ERC is clean apart from inherited off-grid warnings; DRC with schematic parity finds no errors and
-nothing unconnected. Every via is filled and capped, the owner's choice of 2026-10-23, because U1's exposed pad
+fabricated. V2 is in work: the title blocks and the silkscreen read V2, and nothing else has changed from V1 yet.
+ERC is clean apart from inherited off-grid warnings; DRC with schematic parity finds no errors and nothing
+unconnected. Every via is filled and capped, the owner's choice of 2026-10-23, because U1's exposed pad
 needs vias in it (*Layout*, item 3).
 
 ## Sheets

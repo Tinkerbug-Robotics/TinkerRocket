@@ -7,7 +7,7 @@
 	(title_block
 		(title "RF chain and PX100 receiver")
 		(date "2026-10-22")
-		(rev "V1")
+		(rev "V2")
 		(company "TinkerRocket")
 	)
 	(lib_symbols

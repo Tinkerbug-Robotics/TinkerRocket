@@ -1,7 +1,8 @@
 # gnss-px100-18mm-hv — fabrication and assembly notes
 
-**V1, released 2026-10-23** (tag `gnss-px100-18mm-hv-v1.0.0`) and ordered as bare boards from JLC. Every via is
-filled and capped (note 3; README *Layout* item 3). Stencil thickness,
+**V1, released 2026-10-23** (tag `gnss-px100-18mm-hv-v1.0.0`) and ordered as bare boards from JLC. V2 is in work
+and these notes still apply to it unchanged. Every via is filled and capped (note 3; README *Layout* item 3).
+Stencil thickness,
 the area-ratio floor and the paste-coverage convention are repo-wide in
 [`hardware/SOLDER-PASTE-CONVENTION.md`](../SOLDER-PASTE-CONVENTION.md).
 
