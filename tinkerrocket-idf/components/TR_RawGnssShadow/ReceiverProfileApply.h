@@ -430,10 +430,17 @@ inline void applyPx1105rFlightProfile(GnssReceiverProfile& p)
 // and right only with the patch facing up the nose (the carrier standing on
 // J1 as the SAM-M10Q carrier does). The clock drift takes the common part
 // either way (the windup study: no ascent median moved more than 0.03 deg).
+// On the pad the pseudoranges set the position: the cold start's seed is the
+// receiver's first 3-D fix, 5-35 m off on the RF rig's flights and up to 169 m
+// and 325 m, so it starts 100 m unsure (p0_pos; 10 m took over two minutes to
+// give way, 15 m still off at launch), and the barometer, which would hold it,
+// only learns its offset to it there (baro_pad_fuse).
 inline void applyPx1105rFlightSafeguards(RawGnssShadow::Config& c)
 {
     applyMosaicFlightSafeguards(c);
     c.windup_k = 1.0;
+    c.baro_pad_fuse = false;
+    c.ekf.p0_pos = 100.0;
 }
 
 // The antenna's offset from the IMU, where the rocket's owner measured it: an

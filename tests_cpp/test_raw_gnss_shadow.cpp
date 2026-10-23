@@ -1792,6 +1792,44 @@ TEST(RawGnssShadow, AShortPadStillGivesTheFlightItsBarometer)
     EXPECT_LT(std::fabs(sh.filter().lla()[2] - h_pad), 3.0);
 }
 
+TEST(RawGnssShadow, WithPadFuseOffTheBarometerOnlyLearnsItsOffsetOnThePad)
+{
+    // baro_pad_fuse off (the PX1105R image): on the pad the barometer's
+    // offset is learned but nothing fused, so the seed's height keeps its
+    // uncertainty for the pseudoranges to set; launch freezes the offset and
+    // in flight it is fused as before. On, a hundred samples of an offset
+    // learned from the filter's own height make that height look known.
+    for (bool fuse : {true, false})
+    {
+        SCOPED_TRACE(fuse ? "fused on the pad" : "not fused on the pad");
+        RawGnssShadow::Config c = primaryCfg();
+        c.baro_pad_fuse = fuse;
+        RawGnssShadow sh(c);
+        sh.onSeed(padSeed(kT0));
+        int64_t t = feedFlight(sh, kT0, 20.0, 0.0f, gnss_raw::kShadowLevel, true, 3.0f);
+        gnss_raw::ShadowNav nav;
+        sh.navState(nav);
+        const double sig_d = std::sqrt(static_cast<double>(nav.var[2]));
+        if (fuse)
+        {
+            EXPECT_GE(sh.stats().baro_fused, 50u);
+            EXPECT_EQ(sh.stats().baro_pad_skipped, 0u);
+            EXPECT_LT(sig_d, 1.0);
+        }
+        else
+        {
+            EXPECT_EQ(sh.stats().baro_fused, 0u);
+            EXPECT_GE(sh.stats().baro_pad_skipped, 50u);
+            EXPECT_GT(sig_d, 3.0);
+        }
+        EXPECT_NEAR(sh.stats().baro_offset_m, sh.filter().lla()[2] - 3.0, 0.5);   // learned either way
+        const uint32_t fused = sh.stats().baro_fused;
+        feedFlight(sh, t, 5.0, 0.0f, gnss_raw::kShadowInFlight, true, 3.0f);
+        EXPECT_EQ(sh.stats().baro_offset_frozen, 1);
+        EXPECT_GE(sh.stats().baro_fused - fused, 40u);
+    }
+}
+
 TEST(RawGnssShadow, InFlightTheBarometerIsHeldOutAtSpeed)
 {
     // #1579's static-port error is a bias, low at speed: on the rig replay

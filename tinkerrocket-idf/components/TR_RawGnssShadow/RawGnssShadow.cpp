@@ -293,6 +293,21 @@ void RawGnssShadow::applyBaro(double t, uint8_t imu_flags)
         return;                           // on the pad: not learned long enough yet
     st_.baro_offset_m = baro_offset_;
     st_.baro_offset_frozen = baro_frozen_ ? 1 : 0;
+    // On the pad with baro_pad_fuse off, the barometer only learns its offset
+    // (above): the pseudoranges set the height. Its offset is the filter's own
+    // height, so fused it says nothing absolute, yet each sample counts as an
+    // independent 2 m: a hundred of them (two seconds, before the first
+    // pseudorange) took the height's 1-sigma from 10 m to 0.3 m, and the seed's
+    // height -- the receiver's first 3-D fix, 5-35 m off on the RF rig's
+    // Traveler and Hotshot flights and once 325 m, where the receiver itself
+    // came within 0.5-5 m ten seconds later -- held to launch against two
+    // minutes of pseudoranges (2026-10-23). The pad's zero-velocity updates
+    // hold the vertical still; in flight it is fused as before.
+    if (!in_flight && !cfg_.baro_pad_fuse)
+    {
+        st_.baro_pad_skipped++;
+        return;
+    }
 
     // Its variance: the barometer's own, and the static port's error at the
     // dynamic pressure the filter's speed and height give (#1579)

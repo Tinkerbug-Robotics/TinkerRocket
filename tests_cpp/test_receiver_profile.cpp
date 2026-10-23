@@ -415,6 +415,17 @@ TEST(ReceiverProfile, ThePx1105rIsTheMosaicsDesignWithItsOwnReceiver)
     EXPECT_DOUBLE_EQ(p.pr_white_b, 0.157);
     EXPECT_DOUBLE_EQ(p.epoch_latency_s, 0.0);
     EXPECT_DOUBLE_EQ(p.windup_k, 0.0);   // the antenna's: the image's safeguards set it
+    // the image's safeguards: the mosaic's, its antenna's wind-up, and on the
+    // pad the pseudoranges setting the position (the seed 100 m unsure, the
+    // barometer not fused there)
+    RawGnssShadow::Config px, mo;
+    gnss_raw::applyPx1105rFlightSafeguards(px);
+    gnss_raw::applyMosaicFlightSafeguards(mo);
+    EXPECT_EQ(px.windup_k, 1.0);
+    EXPECT_FALSE(px.baro_pad_fuse);
+    EXPECT_TRUE(mo.baro_pad_fuse);
+    EXPECT_EQ(px.ekf.p0_pos, 100.0);
+    EXPECT_EQ(mo.ekf.p0_pos, 10.0);
 }
 
 TEST(ReceiverProfile, ThePhaseSigmaIsLogLinearInCn0)
@@ -1267,6 +1278,7 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_EQ(c.baro_port_k, 0.0075);
     EXPECT_EQ(c.baro_offset_tau_s, 30.0);
     EXPECT_EQ(c.baro_offset_min_s, 10.0);
+    EXPECT_EQ(c.baro_pad_fuse, true);
     EXPECT_EQ(c.baro_hold_port_m, 2.0);
     EXPECT_EQ(c.baro_hold_max_s, 30.0);
     EXPECT_FALSE(c.descent_imu_free);                    // fc/raw-descent-mode: off until a build turns it on
