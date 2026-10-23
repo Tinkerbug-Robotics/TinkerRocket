@@ -33,6 +33,7 @@ tinker-base-v<semver>                        never fabricated, no tag yet
 lora-daughterboard-v<semver>                 v3.0.0 fabricated; V4 laid out, not yet tagged
 gnss-sam10m8-18mm-hv-v3.0.0
 gnss-px1105r-18mm-hv-v1.0.0                  the PX1105R version of the SAM-M10Q carrier; V1 (4-layer, 1.2 mm) released 2026-10-12, not yet fabricated
+gnss-px100-18mm-hv-v1.0.0                    the PX100 version of the carrier; V1 (4-layer, 1.6 mm, SMA-fed prototype) released and ordered as bare boards 2026-10-23, not yet fabricated; V2 in work
 base-station-v5.0.0                          hardware/legacy/
 gnss-px1105r-18mm-highpower-ext-ant-v2.0.0   hardware/legacy/; the Space Bug; V3 laid out, not yet tagged
 servo-adapter-v1.0.0                         hardware/legacy/
