@@ -269,8 +269,9 @@ TEST(Px1105rRawEpoch, TheEpochsGpsInstantFromTheStateBefore)
     stepped.clk_bias_m = own.clk_bias_m + own.clk_drift_mps * 0.05 - 299792.458;
     EXPECT_TRUE(px1105r::noteRcvState(stepped, clk));
     EXPECT_EQ(clk.jumps, 1u);
-    // the fix lost: its bias carried by the drift for kBiasCarryMs (a
-    // reacquiring receiver's first 0xE5 come before its fix), then nothing
+    // the fix lost: its bias carried by the drift while the 0xDF keep coming
+    // (a reacquiring receiver's first 0xE5 come before its fix); an epoch
+    // more than kStateGapMs past the last 0xDF gets nothing
     RcvState nofix = stepped;
     nofix.nav_state = kNavNoFix;
     nofix.clk_bias_m = 0.0;   // not GPS-referenced: never taken
@@ -281,13 +282,80 @@ TEST(Px1105rRawEpoch, TheEpochsGpsInstantFromTheStateBefore)
     EXPECT_FALSE(clk.fix);
     ASSERT_TRUE(px1105r::biasAt(clk, fix_rx + 2000, dtr));
     EXPECT_NEAR(dtr, fix_bias + clk.drift_ms_per_s * 2.0, 1e-12);
-    EXPECT_FALSE(px1105r::biasAt(clk, fix_rx + px1105r::kBiasCarryMs + 50, dtr));
+    EXPECT_FALSE(px1105r::biasAt(clk, clk.rx_ms + px1105r::kStateGapMs + 50, dtr));
     // a fix back after more than kFixGapMs: a cut (the jump test cannot tell)
     RcvState back = stepped;
     back.tow_s += 2.5;
     back.clk_bias_m = stepped.clk_bias_m + stepped.clk_drift_mps * 2.5;
     EXPECT_TRUE(px1105r::noteRcvState(back, clk));
     EXPECT_EQ(clk.restarts, 1u);
+}
+
+TEST(Px1105rRawEpoch, TheBiasIsCarriedThroughAFixBlock)
+{
+    // a receiver past its speed limit: no fix for 276 s, its 0xDF still
+    // coming at 20 Hz with their bias and drift held (Traveler IV on the rig,
+    // 2026-10-23); the last fix's bias carried by its drift the whole way
+    RcvState fix;
+    ASSERT_TRUE(decodeRcvState(kDf, sizeof kDf, fix));
+    px1105r::Px1105rClock clk;
+    EXPECT_FALSE(px1105r::noteRcvState(fix, clk));
+    const int64_t fix_rx = clk.fix_rx_ms;
+    const double fix_bias = clk.bias_ms;
+    RcvState nofix = fix;
+    nofix.nav_state = kNavNoFix;
+    for (int i = 1; i <= 5520; ++i)   // 276 s
+    {
+        nofix.tow_s = fix.tow_s + 0.05 * i;
+        EXPECT_FALSE(px1105r::noteRcvState(nofix, clk));
+    }
+    double dtr = 0.0;
+    ASSERT_TRUE(px1105r::biasAt(clk, clk.rx_ms + 50, dtr));
+    EXPECT_NEAR(dtr, fix_bias + clk.drift_ms_per_s * (clk.rx_ms + 50 - fix_rx) * 1e-3, 1e-9);
+    EXPECT_EQ(clk.breaks, 0u);
+    // but not past kBiasCarryMaxMs, the 0xDF still coming (one a second here)
+    for (int s = 277; s * 1000 <= px1105r::kBiasCarryMaxMs + 1000; ++s)
+    {
+        nofix.tow_s = fix.tow_s + s;
+        px1105r::noteRcvState(nofix, clk);
+    }
+    EXPECT_TRUE(clk.carry);
+    EXPECT_FALSE(px1105r::biasAt(clk, clk.rx_ms + 50, dtr));
+}
+
+TEST(Px1105rRawEpoch, ABreakInTheStateStreamEndsTheCarry)
+{
+    // a receiver restarting without a fix (one Traveler flight on the rig:
+    // 15.5 s without an 0xDF, then its time going back): nothing carried from
+    // there until its next fix, however steadily the 0xDF come again
+    RcvState fix;
+    ASSERT_TRUE(decodeRcvState(kDf, sizeof kDf, fix));
+    for (double step : {2.5, -0.05})   // a gap, then time going back
+    {
+        px1105r::Px1105rClock clk;
+        EXPECT_FALSE(px1105r::noteRcvState(fix, clk));
+        RcvState nofix = fix;
+        nofix.nav_state = kNavNoFix;
+        nofix.tow_s += 0.05;
+        px1105r::noteRcvState(nofix, clk);
+        nofix.tow_s += step;
+        px1105r::noteRcvState(nofix, clk);
+        EXPECT_FALSE(clk.carry);
+        EXPECT_EQ(clk.breaks, 1u);
+        for (int i = 0; i < 20; ++i)
+        {
+            nofix.tow_s += 0.05;
+            px1105r::noteRcvState(nofix, clk);
+        }
+        double dtr = 0.0;
+        EXPECT_FALSE(px1105r::biasAt(clk, clk.rx_ms + 50, dtr));
+        // its next fix carries again
+        RcvState back = fix;
+        back.tow_s = nofix.tow_s + 0.05;
+        back.clk_bias_m = fix.clk_bias_m + fix.clk_drift_mps * (back.tow_s - fix.tow_s);
+        px1105r::noteRcvState(back, clk);
+        EXPECT_TRUE(px1105r::biasAt(clk, clk.rx_ms + 50, dtr));
+    }
 }
 
 TEST(Px1105rRawEpoch, TheStateBeforeAnyTimeIsNotNoted)

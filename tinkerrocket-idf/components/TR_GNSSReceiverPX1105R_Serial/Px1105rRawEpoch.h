@@ -34,7 +34,8 @@
 // epoch_latency_s). The epoch's GPS instant is its time of week less the
 // receiver's clock bias, from the 0xDF that follows each 0xE5: the last one,
 // carried 50 ms by its drift (-0.6 us a second), as the mosaic carries its
-// PVT's (MosaicRawEpoch.h dtrMs). The PX1105R free-runs its clock; a whole
+// PVT's (MosaicRawEpoch.h dtrMs), and on through the 0xDF without a fix that
+// follow it (Px1105rClock, biasAt). The PX1105R free-runs its clock; a whole
 // millisecond step in the bias between two 0xDF is a clock jump.
 #ifndef PX1105R_RAW_EPOCH_H
 #define PX1105R_RAW_EPOCH_H
@@ -89,13 +90,23 @@ struct Px1105rLockState
 
 // The receiver's clock, from its 0xDF: the bias to take off a time of week,
 // carried to a later epoch by the drift, and its jumps. Only an 0xDF with a
-// fix states a bias referenced to GPS time; the last one is carried across
-// the 0xDF without a fix that follow it (a receiver reacquiring sends 0xE5
-// with a few satellites 0.4-1.1 s before its own fix comes back: the RF rig's
-// flights, 2026-10-21), for kBiasCarryMs at most -- a jump while it has no fix
-// shows only at its next fix.
-static constexpr int64_t kBiasCarryMs = 3000;
-static constexpr int64_t kFixGapMs = 2000;   // fixes further apart than this: the jump test cannot tell, a cut
+// fix states a bias referenced to GPS time; the last one is carried by its
+// drift across the 0xDF without a fix that follow it, for as long as they
+// keep coming: each within kStateGapMs of the one before on the receiver's
+// clock, time going forward, and one within kStateGapMs before the epoch.
+// That spans a receiver reacquiring (its first 0xE5 come 0.4-1.1 s before its
+// own fix: the RF rig's flights, 2026-10-21) and its speed limit's fix block,
+// through which it keeps sending raw measurements (Traveler IV on the rig,
+// 2026-10-23: no fix T+6.2..T+282 at 20 Hz of 0xDF, their bias and drift held
+// at the last fix's; carried 276 s, the bias came within 0.6-7.2 us of the
+// returning fix's on nine flights, under a centimetre of either end's motion).
+// A break in the stream (a gap, or time going back: a receiver restarting,
+// 15.5 s of silence on one of them) ends the carry until the next fix, and
+// kBiasCarryMaxMs bounds it. A jump while there is no fix shows only at the
+// next fix (none was seen: the bias holds still without one).
+static constexpr int64_t kBiasCarryMaxMs = 600000;   // ~16 us at the rig's worst drift error, 26 ns a second
+static constexpr int64_t kStateGapMs = 2000;         // 0xDF further apart than this: the clock line broken
+static constexpr int64_t kFixGapMs = 2000;           // fixes further apart than this: the jump test cannot tell, a cut
 
 struct Px1105rClock
 {
@@ -106,8 +117,10 @@ struct Px1105rClock
     double   bias_ms = 0.0;          //   its bias, receiver minus GPS, ms (0xDF clock bias / c)
     double   drift_ms_per_s = 0.0;   //   its rate, ms a second (0xDF clock drift / c)
     int64_t  fix_rx_ms = 0;          //   its epoch on the receiver's clock
+    bool     carry = false;          //   the 0xDF unbroken since it: its bias may be carried
     uint32_t jumps = 0;              // whole-millisecond steps of the bias between fixes
     uint32_t restarts = 0;           // fixes further than kFixGapMs apart, or time going back (a reset or an outage)
+    uint32_t breaks = 0;             // breaks in the 0xDF without a fix that ended a carry
 };
 
 inline int64_t rxMs(uint16_t week, uint32_t tow_ms)
@@ -130,11 +143,19 @@ inline bool noteRcvState(const skytraq::RcvState& s, Px1105rClock& clk)
     const double bias_ms = fix ? s.clk_bias_m / kC * 1.0e3 : clk.bias_ms;
     const double drift = static_cast<double>(s.clk_drift_mps) / kC * 1.0e3;
     const int64_t rx = static_cast<int64_t>(std::llround((s.week * 604800.0 + s.tow_s) * 1.0e3 + bias_ms));
+    const bool gap = clk.have && (rx - clk.rx_ms <= 0 || rx - clk.rx_ms > kStateGapMs);
     clk.have = true;
     clk.fix = fix;
     clk.rx_ms = rx;
     if (!fix)
+    {
+        if (gap && clk.carry)
+        {
+            clk.carry = false;
+            clk.breaks++;
+        }
         return false;
+    }
     bool cut = false;
     if (clk.have_fix)
     {
@@ -158,18 +179,20 @@ inline bool noteRcvState(const skytraq::RcvState& s, Px1105rClock& clk)
     clk.bias_ms = bias_ms;
     clk.drift_ms_per_s = drift;
     clk.fix_rx_ms = rx;
+    clk.carry = true;
     return cut;
 }
 
 // The bias (ms) at an epoch rx_ms on the receiver's clock: the last fix's,
 // carried by its drift; false without a fix within max_age_ms before it
-// (before a fix the receiver's time of week is not GPS time).
-inline bool biasAt(const Px1105rClock& clk, int64_t rx_ms, double& dtr_ms, int64_t max_age_ms = kBiasCarryMs)
+// (before a fix the receiver's time of week is not GPS time), after a break
+// in the 0xDF since it, or with no 0xDF within kStateGapMs before the epoch.
+inline bool biasAt(const Px1105rClock& clk, int64_t rx_ms, double& dtr_ms, int64_t max_age_ms = kBiasCarryMaxMs)
 {
-    if (!clk.have_fix)
+    if (!clk.have_fix || !clk.carry)
         return false;
     const int64_t age = rx_ms - clk.fix_rx_ms;
-    if (age < 0 || age > max_age_ms)
+    if (age < 0 || age > max_age_ms || rx_ms - clk.rx_ms > kStateGapMs)
         return false;
     dtr_ms = clk.bias_ms + clk.drift_ms_per_s * (age * 1.0e-3);
     return true;
