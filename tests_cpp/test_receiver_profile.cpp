@@ -90,6 +90,7 @@ void expectSameEkf(const RawGnssEKFParams& a, const RawGnssEKFParams& b)
     EXPECT_EQ(a.w_markov_sigma, b.w_markov_sigma);
     EXPECT_EQ(a.w_markov_tau, b.w_markov_tau);
     EXPECT_EQ(a.accel_var, b.accel_var);
+    EXPECT_EQ(a.a_noise_per_g, b.a_noise_per_g);
     EXPECT_EQ(a.level_heading_free, b.level_heading_free);
     EXPECT_EQ(a.mag_sigma_ut, b.mag_sigma_ut);
     EXPECT_EQ(a.mag_tilt_sigma_mps2, b.mag_tilt_sigma_mps2);
@@ -108,6 +109,10 @@ void expectSameEkf(const RawGnssEKFParams& a, const RawGnssEKFParams& b)
     EXPECT_EQ(a.drift_step_spread_mps, b.drift_step_spread_mps);
     EXPECT_EQ(a.rr_lag_s, b.rr_lag_s);
     EXPECT_EQ(a.rr_pair_lag_s, b.rr_pair_lag_s);
+    EXPECT_EQ(a.rr_dyn_lag_s, b.rr_dyn_lag_s);
+    EXPECT_EQ(a.rr_dyn_lag_g0, b.rr_dyn_lag_g0);
+    EXPECT_EQ(a.rr_dyn_lag_g1, b.rr_dyn_lag_g1);
+    EXPECT_EQ(a.f_lp_tau_s, b.f_lp_tau_s);
     EXPECT_EQ(a.att_gate_cos4, b.att_gate_cos4);
     EXPECT_EQ(a.att_gate_vertical, b.att_gate_vertical);
     EXPECT_EQ(a.att_gnss_off, b.att_gnss_off);
@@ -426,6 +431,16 @@ TEST(ReceiverProfile, ThePx1105rIsTheMosaicsDesignWithItsOwnReceiver)
     EXPECT_TRUE(mo.baro_pad_fuse);
     EXPECT_EQ(px.ekf.p0_pos, 100.0);
     EXPECT_EQ(mo.ekf.p0_pos, 10.0);
+    // and in a boost: its Dopplers' lag under thrust, more trust in them taken
+    // at it, and the accelerometer's noise grown past 1 g; the mosaic's none
+    EXPECT_EQ(px.ekf.rr_dyn_lag_s, 0.060);
+    EXPECT_EQ(px.ekf.rr_dyn_lag_g0, 11.5);
+    EXPECT_EQ(px.ekf.rr_dyn_lag_g1, 12.5);
+    EXPECT_EQ(px.meas.rr_dyn_sigma, 0.25);
+    EXPECT_EQ(px.ekf.a_noise_per_g, 0.005);
+    EXPECT_EQ(mo.ekf.rr_dyn_lag_s, 0.0);
+    EXPECT_EQ(mo.meas.rr_dyn_sigma, 0.5);
+    EXPECT_EQ(mo.ekf.a_noise_per_g, 0.0);
 }
 
 TEST(ReceiverProfile, ThePhaseSigmaIsLogLinearInCn0)

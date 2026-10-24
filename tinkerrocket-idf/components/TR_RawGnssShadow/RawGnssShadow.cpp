@@ -1225,6 +1225,12 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
     // called without a pair lag: every other receiver's epochs as before
     if (ekf_.params().rr_pair_lag_s > 0.0)
         ekf_.setRrPaired(built_.rr_paired != 0);
+    // and under thrust further back again (the params' rr_dyn_lag_s): by the
+    // IMU's specific force now, every consumer after this taking it
+    // (RawGnssEKF::setRrDynLag). Never called without it: every other
+    // receiver's epochs as before
+    if (ekf_.params().rr_dyn_lag_s > 0.0)
+        ekf_.setRrDynLag(ekf_.dynLagFor(static_cast<double>(ekf_.specificForceLpG())));
     // the carrier wind-up on an epoch the GNSS task built, here, after the
     // pairs' mark just above: it takes each Doppler at its own instant
     // (applyWindup; one built here takes it once built, jobUnit)
@@ -1616,7 +1622,7 @@ void RawGnssShadow::dvReset()
 void RawGnssShadow::leverRoll(double age, const double w[3], const double C[3][3], const DopplerChangeImu& imu)
 {
     float p2[3], v2[3], n2[3];
-    ekf_.leverAt(age + (cfg_.ekf.rr_lag_s + ekf_.rrPairLag()), p2, v2, n2);
+    ekf_.leverAt(age + ekf_.rrLag(), p2, v2, n2);
     double a1[3], a2[3], nm[3];
     for (int i = 0; i < 3; ++i)
     {
@@ -2048,7 +2054,7 @@ void RawGnssShadow::jobDvCheck(double age)
     if (lev_ref_ok_)
     {
         float lp[3], lv[3];
-        ekf_.leverAt(age + (cfg_.ekf.rr_lag_s + ekf_.rrPairLag()), lp, lv, lev_ref_n_);
+        ekf_.leverAt(age + ekf_.rrLag(), lp, lv, lev_ref_n_);
         for (int i = 0; i < 3; ++i)
             lev_ref_v_[i] = imu.v_lev[i];
     }
@@ -2556,7 +2562,7 @@ bool RawGnssShadow::jobHeading(double age)
         st_.heading_vel_fails++;
         return false;
     }
-    const double td = job_.te - (cfg_.ekf.rr_lag_s + ekf_.rrPairLag());   // the Dopplers' instant
+    const double td = job_.te - ekf_.rrLag();   // the Dopplers' instant
     if (!fit_.gnss(td, v_ned, var_h))
         return false;                     // too slow sideways yet, or past the fit's history
     fit_last_te_ = job_.te;
