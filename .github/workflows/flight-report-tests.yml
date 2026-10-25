@@ -34,7 +34,7 @@ jobs:
         run: python -m pytest tests/test_flight_report.py -v --tb=short
 
   # The Explore panel decides what to draw in JavaScript, so that logic is tested
-  # in JavaScript. Node's own runner, no package.json and no dependencies — the
+  # in JavaScript; so does the web tool's flight log (Data_Analysis/webtool/flightlog.js). Node's own runner, no package.json and no dependencies — the
   # module under test is plain ESM that the report inlines verbatim.
   explore-js:
     runs-on: ubuntu-latest
@@ -47,4 +47,4 @@ jobs:
           node-version: '22'
 
       - name: Run Explore panel tests
-        run: node --test tests/js/explore.test.mjs
+        run: node --test tests/js/explore.test.mjs tests/js/flightlog.test.mjs

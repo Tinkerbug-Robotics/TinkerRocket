@@ -1747,3 +1747,80 @@ def test_globe_reads_the_logged_origin_before_rebuilding_it() -> None:
     # A pre-#834 snapshot with no convergence flag still yields the origin.
     assert globe._logged_reference({"Snapshot": [{"ref_lat": 40.1, "ref_lon": -105.2, "ref_alt_m": 1500.0}]})[0] == (40.1, -105.2, 1500.0, None)
 
+
+
+def test_log_facts_read_the_flight_log_columns_from_the_log() -> None:
+    """The web tool's flight log fills these from the log, not from the flyer.
+
+    The sample flight predates the board-revision byte (settings frame v3), so
+    the board stays None — "not recorded", which is the truth — while the
+    firmware, the GNSS liftoff time and the pad still come through. The pad is
+    CENJARS, and the numbers are the summary card's own.
+    """
+    import json
+
+    from flight_report.flight import Flight
+    from flight_report.log_entry import log_facts
+
+    if not SAMPLE_BIN.exists():
+        pytest.skip(f"Sample flight missing: {SAMPLE_BIN}")
+    facts = log_facts(Flight.from_bin(SAMPLE_BIN))
+    json.dumps(facts)  # handed to JavaScript as JSON, so it must be plain JSON
+
+    assert facts["file"] == SAMPLE_BIN.name
+    assert facts["date_source"] == "gnss"
+    # Liftoff by the receiver's clock, which is not the file name's 17:45:32:
+    # the entry's date is when the rocket flew, from the clock that knows.
+    assert facts["date_utc"] == "2026-07-05T17:44:15Z"
+    assert abs(facts["pad"]["lat"] - 40.16307) < 1e-4
+    assert abs(facts["pad"]["lon"] - -74.08066) < 1e-4
+    assert facts["firmware"] == "0c8c132" and facts["firmware_dirty"] is False
+    assert facts["settings_version"] == 3
+    assert facts["board"] is None and facts["board_asserted"] is None
+    assert facts["apogee_m"] == pytest.approx(357.1, abs=0.5)
+    assert facts["max_speed_mps"] == pytest.approx(97.9, abs=0.5)
+    assert facts["flight_time_s"] == pytest.approx(75.2, abs=0.2)
+
+
+def test_explore_survives_fields_that_are_not_one_number() -> None:
+    """Every log from the 10/24 firmware took the time panel down.
+
+    Newer streams carry named states as text (Snapshot.gnss_admission,
+    PadCalStatus.cal_state) and whole tables per row (GNSS_SAT.sats is a list
+    of satellites, PadContext a calibration matrix, GNSS_RTCM raw bytes). The
+    section put every value through float(), and the first list ended it with
+    "float() argument must be a string or a real number, not 'list'". The
+    golden and sample flights predate those streams, so nothing caught it.
+    """
+    from types import SimpleNamespace
+
+    from flight_report.modules.explore import analyze_time
+
+    def rows(n, **fields):
+        return [{"time_us": 1000 * i, **{k: v(i) for k, v in fields.items()}} for i in range(n)]
+
+    flight = SimpleNamespace(t0_us=0, stats={}, records={
+        "Snapshot": rows(4, gnss_admission=lambda i: "held_out" if i < 2 else "admitted_baro_agreed",
+                         flight_elapsed_ms=lambda i: 100 * i),
+        "GNSS_SAT": rows(3, sats=lambda i: [{"sv_id": 1, "cno_dbhz": 30 + i}], num=lambda i: 9),
+        "PadContext": rows(2, kind=lambda i: ("cal", "acc")[i], matrix=lambda i: (1.0, 0.0, 0.0)),
+        "GNSS_RTCM": rows(2, data=lambda i: b"\xd3\x00"),
+    })
+    result = analyze_time(flight)
+    assert result.error is None, result.error
+    channels = result.datasets[0]["channels"]
+
+    # Named states plot as steps, with their names beside them.
+    adm = channels["Snapshot.gnss_admission"]
+    assert adm["kind"] == "enum" and adm["runs"] == [[0, 0], [2, 1]]
+    assert adm["caution"].endswith("Plotted as numbers: 0 = held_out, 1 = admitted_baro_agreed.")
+    assert channels["PadContext.kind"]["runs"] == [[0, 0], [1, 1]]
+    # Plain numbers are untouched beside them.
+    assert channels["Snapshot.flight_elapsed_ms"]["y"] == [0, 100, 200, 300]
+    assert channels["GNSS_SAT.num"]["const"] == 9
+
+    # Tables are left out of the picker, and the section names them.
+    for key in ("GNSS_SAT.sats", "PadContext.matrix", "GNSS_RTCM.data"):
+        assert key not in channels
+        assert key in result.metrics["Not plottable"]
+    assert "skipped" not in result.datasets[0], "bookkeeping must not ship in the payload"
