@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
@@ -19,7 +18,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BatteryAlert
 import androidx.compose.material.icons.filled.ExpandLess
@@ -62,7 +60,9 @@ import com.tinkerbug.tinkerrocket.protocol.TrimAdvisory
 import com.tinkerbug.tinkerrocket.protocol.showRocketBatteryRow
 import com.tinkerbug.tinkerrocket.protocol.TelemetryData
 import com.tinkerbug.tinkerrocket.protocol.ReadinessHold
+import com.tinkerbug.tinkerrocket.session.DashboardSection
 import com.tinkerbug.tinkerrocket.session.FleetDevice
+import com.tinkerbug.tinkerrocket.session.FleetManager
 import com.tinkerbug.tinkerrocket.session.DeviceSession
 import com.tinkerbug.tinkerrocket.session.UnitFormatter
 import java.util.Locale
@@ -77,6 +77,8 @@ import com.tinkerbug.tinkerrocket.protocol.PyroCardPolicy
  */
 @Composable
 fun DashboardScreen(
+    fleet: FleetManager<DeviceSession>,
+    /** The active device: tools open on it (a section's tool makes its device active first). */
     device: FleetDevice<DeviceSession>,
     onDisconnect: () -> Unit,
     demo: Boolean = false,
@@ -86,10 +88,11 @@ fun DashboardScreen(
     container: AppContainer? = null,
     tool: String? = null,
     onTool: (String?) -> Unit = {},
+    /** Open [tool] on another device's section: MainActivity makes it active first. */
+    onToolFor: (tool: String, deviceId: String) -> Unit = { t, _ -> onTool(t) },
     onOpenSettings: () -> Unit = {},
 ) {
     val session = device.session
-    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
 
     // Tools sub-routes (iOS: sheets from the dashboard).  The route state is
     // owned by MainActivity, not here, so the top bar drawn above this screen
@@ -143,20 +146,56 @@ fun DashboardScreen(
             phoneLocation.resetFixThrottle()
             onDispose { phoneLocation.stop() }
         }
-        // The phone IS the base station's position — the BS has no GNSS —
-        // so push it down and let the BS write it into its CSV.  Without
-        // this the range between the two ends is displayed once and then
-        // discarded, and a range test cannot be reconstructed from its own
-        // logs (the 2026-08-08 Kaua'i test only survived because the site
-        // was remembered).  Throttled inside reportFix; the BS ignores the
-        // write unless a logging session is open.
-        if (session.isBaseStation) {
-            val phoneFixForPush by phoneLocation.location.collectAsState()
-            LaunchedEffect(phoneFixForPush) {
-                if (phoneFixForPush != null) phoneLocation.reportFix(session)
-            }
-        }
+        // The fix push to the base station lives with the fleet content now,
+        // which knows the foreground one (#1650, FleetDashboardContent).
     }
+
+    // #1650: the rocket-centric dashboard — pair switcher, units bar, the
+    // base-station strip, then one section per displayed rocket.  A direct
+    // rocket and the rocket the base station follows each get the full
+    // device dashboard below; other relayed rockets get their card stack.
+    FleetDashboardContent(
+        fleet = fleet,
+        activeDevice = device,
+        phoneLocation = phoneLocation,
+        deviceContent = { d, section ->
+            DeviceDashboardContent(
+                device = d,
+                section = section,
+                demo = demo,
+                syncer = syncer,
+                phoneLocation = phoneLocation,
+                profileStore = profileStore,
+                container = container,
+                onTool = { t -> if (t == null) onTool(null) else onToolFor(t, d.deviceId) },
+                onOpenSettings = onOpenSettings,
+            )
+        },
+    )
+}
+
+/**
+ * One device's full dashboard: a direct rocket, or a base station showing the
+ * rocket its radio follows.  Until #1650 this was the whole screen; it is now
+ * one section of it, so it neither scrolls nor pads itself.
+ *
+ * [section] routes the Controls card's commands to the section's own rocket;
+ * null for a base station still searching, which has no rocket to command.
+ */
+@Composable
+private fun DeviceDashboardContent(
+    device: FleetDevice<DeviceSession>,
+    section: DashboardSection?,
+    demo: Boolean,
+    syncer: com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer?,
+    phoneLocation: PhoneLocationManager?,
+    profileStore: com.tinkerbug.tinkerrocket.session.RocketProfileStore?,
+    container: AppContainer?,
+    onTool: (String?) -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    val session = device.session
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val telemetry by session.telemetry.collectAsState()
     val connected by session.isConnected.collectAsState()
     val identity by session.identity.collectAsState()
@@ -170,7 +209,6 @@ fun DashboardScreen(
     val telemetryAgeMs by session.telemetryAgeMs.collectAsState()
     val rssi by session.connectedRssi.collectAsState()
     val poweringOn by session.poweringOn.collectAsState()
-    val remoteRockets by session.remoteRockets.collectAsState()
     val focusRocketId by session.focusRocketId.collectAsState()
     val imuOrientName by session.imuOrientationName.collectAsState()
     val imuOrientMode by session.imuOrientationMode.collectAsState()
@@ -186,11 +224,13 @@ fun DashboardScreen(
     val simBannerVisible = simLaunched || telemetry.simActive
 
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        // Header
-        Row(
+        // Header — direct links only since #1650: a base station's name and
+        // ids moved to the strip above the sections (iOS BaseStationStripView),
+        // and this is the iOS ActiveRocketHeader's slot.
+        if (!session.isBaseStation) Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
@@ -488,102 +528,21 @@ fun DashboardScreen(
         }
         }
 
-        // iOS section order (screenshots 2026-07-31): the summary sits right
-        // after the banners on BS links but after Signal/Battery/IMU on
-        // direct links — matched exactly, per link type.
-        // #1047: a base station with no rocket caught still pushes a frame so
-        // its own battery/logging/RSSI stay live, and the rocket half of it is
-        // a zero-init struct — but nsat/palt/soc/vol are emitted
-        // unconditionally, so the zeros arrive as readings. iOS has gated
-        // these since the layout was written; Android had ported only
-        // showStateBanner. Hidden, not zeroed: an absent card reads as "no
-        // data yet", a 0.00 V row reads as a flat battery.
-        val showValues = showValueViews(dataStatus)
-        if (session.isBaseStation && showValues) FlightSummaryCard(telemetry)
-
-        SignalCard(telemetry, rssi, session.isBaseStation)
-        // #1047: the base station's OWN battery is a true live reading and must
-        // keep rendering — it is what says the BS is up. Only the rocket row is
-        // fabricated, so the row goes, not the card.
-        BatteryCard(
-            telemetry,
-            session.isBaseStation,
-            showRocketRow = showRocketBatteryRow(dataStatus, session.isBaseStation),
+        // The card stack every rocket section shares (#1650).
+        val lastFix by session.lastValidRocketFix.collectAsState()
+        RocketTelemetryCards(
+            telemetry = telemetry,
+            isBaseStation = session.isBaseStation,
+            dataStatus = dataStatus,
+            bleRssi = rssi,
+            directOrientationName = imuOrientName,
+            directOrientationMode = imuOrientMode,
+            directGnssReceiver = identity.fcGnss,
+            phoneLocation = phoneLocation,
+            // #1042: never point the arrow at a rocket other than the
+            // focused one — the fix carries its rocketId for this.
+            rocketFix = lastFix?.takeIf { it.rocketId == focusRocketId },
         )
-        // #850: rail currents belong with the live telemetry, not only on the
-        // pre-power-on screen — a stalling servo is watched WHILE it runs.
-        if (telemetry.camCurrent != null || telemetry.servoCurrent != null) {
-            RailPowerCard(telemetry)
-        }
-        // Orientation source is picked strictly by link type (iOS
-        // RocketTelemetryCards): BS = relayed flags2 "imo", direct = the
-        // imu_orient config readback.  No cross-fallback on either platform.
-        if (showValues) ImuCard(
-            telemetry, session.isBaseStation,
-            orientationName = if (session.isBaseStation) telemetry.relayedOrientationName else imuOrientName,
-            orientationMode = if (session.isBaseStation) telemetry.relayedOrientationMode else imuOrientMode,
-        )
-
-        if (!session.isBaseStation && showValues) FlightSummaryCard(telemetry)
-
-        // The receiver the FC found rides the direct link's fc_identity; a BS
-        // link does not relay it (iOS GPSView's receiver).
-        if (showValues) GpsRow(telemetry, receiver = if (session.isBaseStation) null else identity.fcGnss)
-
-        // Direction/distance to rocket (BS links only — the recovery walk).
-        // Reads the LATCHED lastValidRocketFix, never per-frame lat/lon:
-        // relay frames frequently arrive with lat/lon = nil (#140).
-        if (phoneLocation != null && session.isBaseStation) {
-            val lastFix by session.lastValidRocketFix.collectAsState()
-            DirectionToRocketCard(
-                phoneLocation = phoneLocation,
-                // #1042: never point the arrow at a rocket other than the
-                // focused one — the fix carries its rocketId for this.
-                fix = lastFix?.takeIf { it.rocketId == focusRocketId },
-                rocketAltM = (telemetry.gnssAlt ?: telemetry.pressureAlt)?.toDouble(),
-            )
-        }
-
-        // Relayed rockets (#390): base-station links list every rocket the
-        // BS hears; the focused one mirrors into this dashboard.  Tap to
-        // switch focus (cmd 45 → the BS radio follows).
-        if (remoteRockets.isNotEmpty()) {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Rockets via base station", style = MaterialTheme.typography.titleMedium)
-                    Row(
-                        Modifier.horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        remoteRockets.forEach { remote ->
-                            val focused = remote.rocketId == focusRocketId
-                            Column(
-                                Modifier
-                                    .background(
-                                        if (focused) tr.accent else tr.cardSecondary,
-                                        RoundedCornerShape(8.dp),
-                                    )
-                                    .clickable { session.setFocusRocket(remote.rocketId) }
-                                    .padding(horizontal = 14.dp, vertical = 8.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                            ) {
-                                Text(
-                                    remote.unitName.ifEmpty { "Rocket ${remote.rocketId}" },
-                                    color = if (focused) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    style = MaterialTheme.typography.labelLarge,
-                                )
-                                Text(
-                                    if (focused) "focused" else remote.telemetry.state,
-                                    color = if (focused) Color.White
-                                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    style = MaterialTheme.typography.labelSmall,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
 
         // #1061: SIM MODE banner with its own Stop. Android launched
         // simulations and then showed nothing at all: it decoded the sim bit
@@ -646,68 +605,7 @@ fun DashboardScreen(
             }
         }
 
-        // Status card (iOS StatusFlagsView port): camera + logging badges,
-        // active file, BS silence-close countdown.  Before the flag chips —
-        // the iOS order (StatusFlagsView, then FlightEventFlagsView).
-        StatusCard(telemetry, session.isBaseStation)
-
-        // Flight event flags.  No LOG chip — the Status card above owns
-        // logging (re-converged with iOS 2026-07-30).
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            FlagChip("LAUNCH", telemetry.launchFlag)
-            FlagChip("BURNOUT", telemetry.burnoutFlag)
-            FlagChip("APOGEE", telemetry.pastApogee)
-            FlagChip("LANDED", telemetry.landedFlag)
-        }
-
-        // Sensor health scorecard (#303) — shown once the frame carries it.
-        if (telemetry.hasSensorHealth) {
-            // #1039: dim the whole card while the verdict is held, so a stale
-            // scorecard does not sit at full strength beside live ones. iOS
-            // applies the same opacity to HealthCardView.
-            val healthHeld = dataStatus == TelemetryData.DataStatus.STALE
-            Card(
-                Modifier
-                    .fillMaxWidth()
-                    .alpha(if (healthHeld) ReadinessHold.HELD_OPACITY else 1f)
-            ) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Sensor health", style = MaterialTheme.typography.titleMedium)
-                    // Go/no-go banner (iOS HealthCardView port) — the rollup
-                    // was in TelemetryData all along; only the verdict UI was
-                    // missing here.  The banner carries the words; the dots
-                    // below stay the glanceable per-sensor detail.
-                    // #1039: hand the banner the staleness age so it stops
-                    // asserting a verdict once the stream is no longer live.
-                    // Non-null ONLY when stale — that presence is the hold
-                    // condition, matching iOS's isHeld(staleAgeSec:).
-                    ReadinessBanner(
-                        telemetry.flightReadiness,
-                        if (dataStatus == TelemetryData.DataStatus.STALE)
-                            dataAgeMs / 1000.0 else null,
-                    )
-                    // #1070: WRAP, never scroll. Six core sensors + Storage +
-                    // one per configured pyro channel is nine dots on a
-                    // two-pyro flight, and the trailing ones sat off the right
-                    // edge of a phone inside a scroll row that gave no hint it
-                    // could scroll — while this row is what answers "why does
-                    // the banner say Do not fly". iOS wrapped at six on the
-                    // bench 2026-08-22 (HealthDotRow); same balanced split
-                    // here, so nine dots read 5+4 rather than 6+3.
-                    val healthRows = telemetry.sensorHealthRows
-                    val lineCount = ((healthRows.size + HEALTH_DOTS_PER_LINE - 1) /
-                        HEALTH_DOTS_PER_LINE).coerceAtLeast(1)
-                    val perLine = ((healthRows.size + lineCount - 1) / lineCount).coerceAtLeast(1)
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        healthRows.chunked(perLine).forEach { line ->
-                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                line.forEach { row -> HealthDot(row.name, row.state) }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        RocketStatusCards(telemetry, session.isBaseStation, dataStatus, dataAgeMs)
 
         // Pyro tiles: iOS PyroChannelsView twin (2x2 grid).  Badge ladder per
         // tile:
@@ -830,18 +728,21 @@ fun DashboardScreen(
                     // the readout is the entire point of this card at the pad.
                     // Matches iOS `relayMode || armed || contTestChannel`.
                     revealed = PyroCardPolicy.revealed(relay, armed, contTestChannel, ch),
-                    testing = !relay && (contPendingUntil[ch] ?: 0L) > nowMs,
+                    testing = (contPendingUntil[ch] ?: 0L) > nowMs,
                     // Rail gate matches the iOS tile: the OC refuses cmd 35
                     // rail-off (queued ARM pulse would deliver at power-on);
                     // this compact tile hides the button until power-on and
                     // the Settings twin carries the explanatory caption.
-                    // No test button on a relay. The stand-back LoRa test
-                    // (uplink cmds 35/36) is iOS-only — the parity ledger
-                    // records it as pending Android's own pyro-safety pass —
-                    // so offering a button that sends a direct-link cmd 35 into
-                    // a base station would do nothing and read as a fault.
+                    // #1650: on a relay the stand-back LoRa test (cmd 50 →
+                    // inner 35, to the focused rocket), offered only while a
+                    // test would actually go out: a focused rocket heard live
+                    // within 3 s whose ID is not shared (iOS
+                    // pyroCommandPathReady). Read on every frame and on the
+                    // 2 s age tick, so it drops when the rocket goes quiet.
                     showTestButton = PyroCardPolicy.showTestButton(
-                        relay, armed, fired, inflight, telemetry.pwrPinOn),
+                        relay, armed, fired, inflight, telemetry.pwrPinOn,
+                        relayPathReady = relay && session.pyroCommandPathReady(),
+                    ),
                     onTestContinuity = {
                         session.sendPyroContTest(ch)
                         contTestChannel = ch
@@ -886,7 +787,7 @@ fun DashboardScreen(
         // ITS telemetry (#390: the legacy broadcast toggle keyed off
         // whichever rocket was heard last).  Direct links send the bare
         // toggle, exactly like iOS.
-        ControlsCard(session, telemetry)
+        ControlsCard(session, telemetry, section)
 
         // radio (cmd 60, BS links only); servo test + sim talk to a rocket.
         Card(Modifier.fillMaxWidth()) {
@@ -971,6 +872,165 @@ fun DashboardScreen(
         // advisory is a follow-up (see #1096).
         LinkDiagnosticsCard(telemetry)
 
+    }
+}
+
+/**
+ * The card stack every rocket section shows, followed or not (iOS
+ * RocketTelemetryCards, #1650): flight summary, signal, battery, rail power,
+ * IMU, GNSS and, on a relay, the walk-to-rocket arrow.
+ *
+ * [directOrientationName], [directOrientationMode] and [directGnssReceiver]
+ * are a direct link's config readbacks; a relay reads its own off the frame.
+ * [rocketFix] is the latched fix for THIS rocket (relay links only).
+ */
+@Composable
+internal fun RocketTelemetryCards(
+    telemetry: TelemetryData,
+    isBaseStation: Boolean,
+    dataStatus: TelemetryData.DataStatus,
+    bleRssi: Int?,
+    directOrientationName: String = "",
+    directOrientationMode: IMUOrientationMode = IMUOrientationMode.UNKNOWN,
+    directGnssReceiver: String? = null,
+    phoneLocation: PhoneLocationManager? = null,
+    rocketFix: com.tinkerbug.tinkerrocket.session.LastValidRocketFix? = null,
+) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // iOS section order (screenshots 2026-07-31): the summary sits right
+        // after the banners on BS links but after Signal/Battery/IMU on
+        // direct links — matched exactly, per link type.
+        // #1047: a base station with no rocket caught still pushes a frame so
+        // its own battery/logging/RSSI stay live, and the rocket half of it is
+        // a zero-init struct — but nsat/palt/soc/vol are emitted
+        // unconditionally, so the zeros arrive as readings. iOS has gated
+        // these since the layout was written; Android had ported only
+        // showStateBanner. Hidden, not zeroed: an absent card reads as "no
+        // data yet", a 0.00 V row reads as a flat battery.
+        val showValues = showValueViews(dataStatus)
+        if (isBaseStation && showValues) FlightSummaryCard(telemetry)
+
+        SignalCard(
+            telemetry, bleRssi, isBaseStation,
+            trackingHealthy = dataStatus == TelemetryData.DataStatus.LIVE,
+        )
+        // #1047: the base station's OWN battery is a true live reading and must
+        // keep rendering — it is what says the BS is up. Only the rocket row is
+        // fabricated, so the row goes, not the card.
+        BatteryCard(
+            telemetry,
+            isBaseStation,
+            showRocketRow = showRocketBatteryRow(dataStatus, isBaseStation),
+        )
+        // #850: rail currents belong with the live telemetry, not only on the
+        // pre-power-on screen — a stalling servo is watched WHILE it runs.
+        if (telemetry.camCurrent != null || telemetry.servoCurrent != null) {
+            RailPowerCard(telemetry)
+        }
+        // Orientation source is picked strictly by link type (iOS
+        // RocketTelemetryCards): BS = relayed flags2 "imo", direct = the
+        // imu_orient config readback.  No cross-fallback on either platform.
+        if (showValues) ImuCard(
+            telemetry, isBaseStation,
+            orientationName = if (isBaseStation) telemetry.relayedOrientationName else directOrientationName,
+            orientationMode = if (isBaseStation) telemetry.relayedOrientationMode else directOrientationMode,
+        )
+
+        if (!isBaseStation && showValues) FlightSummaryCard(telemetry)
+
+        // The receiver the FC found rides the direct link's fc_identity; a BS
+        // link does not relay it (iOS GPSView's receiver).
+        if (showValues) GpsRow(telemetry, receiver = if (isBaseStation) null else directGnssReceiver)
+
+        // Direction/distance to rocket (BS links only — the recovery walk).
+        // Reads the LATCHED lastValidRocketFix, never per-frame lat/lon:
+        // relay frames frequently arrive with lat/lon = nil (#140).
+        if (phoneLocation != null && isBaseStation) {
+            DirectionToRocketCard(
+                phoneLocation = phoneLocation,
+                fix = rocketFix,
+                rocketAltM = (telemetry.gnssAlt ?: telemetry.pressureAlt)?.toDouble(),
+            )
+        }
+    }
+}
+
+/**
+ * Status flags, flight events and the sensor-health scorecard: the second
+ * half of the shared card stack (iOS StatusFlagsView, FlightEventFlagsView,
+ * HealthCardView), split off so the sim and ground-test banners keep their
+ * place between the two halves on a device's own dashboard.
+ */
+@Composable
+internal fun RocketStatusCards(
+    telemetry: TelemetryData,
+    isBaseStation: Boolean,
+    dataStatus: TelemetryData.DataStatus,
+    dataAgeMs: Long,
+) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // Status card (iOS StatusFlagsView port): camera + logging badges,
+        // active file, BS silence-close countdown.  Before the flag chips —
+        // the iOS order (StatusFlagsView, then FlightEventFlagsView).
+        StatusCard(telemetry, isBaseStation)
+
+        // Flight event flags.  No LOG chip — the Status card above owns
+        // logging (re-converged with iOS 2026-07-30).
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FlagChip("LAUNCH", telemetry.launchFlag)
+            FlagChip("BURNOUT", telemetry.burnoutFlag)
+            FlagChip("APOGEE", telemetry.pastApogee)
+            FlagChip("LANDED", telemetry.landedFlag)
+        }
+
+        // Sensor health scorecard (#303) — shown once the frame carries it.
+        if (telemetry.hasSensorHealth) {
+            // #1039: dim the whole card while the verdict is held, so a stale
+            // scorecard does not sit at full strength beside live ones. iOS
+            // applies the same opacity to HealthCardView.
+            val healthHeld = dataStatus == TelemetryData.DataStatus.STALE
+            Card(
+                Modifier
+                    .fillMaxWidth()
+                    .alpha(if (healthHeld) ReadinessHold.HELD_OPACITY else 1f)
+            ) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Sensor health", style = MaterialTheme.typography.titleMedium)
+                    // Go/no-go banner (iOS HealthCardView port) — the rollup
+                    // was in TelemetryData all along; only the verdict UI was
+                    // missing here.  The banner carries the words; the dots
+                    // below stay the glanceable per-sensor detail.
+                    // #1039: hand the banner the staleness age so it stops
+                    // asserting a verdict once the stream is no longer live.
+                    // Non-null ONLY when stale — that presence is the hold
+                    // condition, matching iOS's isHeld(staleAgeSec:).
+                    ReadinessBanner(
+                        telemetry.flightReadiness,
+                        if (dataStatus == TelemetryData.DataStatus.STALE)
+                            dataAgeMs / 1000.0 else null,
+                    )
+                    // #1070: WRAP, never scroll. Six core sensors + Storage +
+                    // one per configured pyro channel is nine dots on a
+                    // two-pyro flight, and the trailing ones sat off the right
+                    // edge of a phone inside a scroll row that gave no hint it
+                    // could scroll — while this row is what answers "why does
+                    // the banner say Do not fly". iOS wrapped at six on the
+                    // bench 2026-08-22 (HealthDotRow); same balanced split
+                    // here, so nine dots read 5+4 rather than 6+3.
+                    val healthRows = telemetry.sensorHealthRows
+                    val lineCount = ((healthRows.size + HEALTH_DOTS_PER_LINE - 1) /
+                        HEALTH_DOTS_PER_LINE).coerceAtLeast(1)
+                    val perLine = ((healthRows.size + lineCount - 1) / lineCount).coerceAtLeast(1)
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        healthRows.chunked(perLine).forEach { line ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                line.forEach { row -> HealthDot(row.name, row.state) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1444,8 +1504,30 @@ private fun ReadinessBanner(
  * uplinks — it's the BS's own CSV (#390 decoupling).
  */
 @Composable
-private fun ControlsCard(session: DeviceSession, telemetry: TelemetryData) {
+internal fun ControlsCard(
+    session: DeviceSession,
+    telemetry: TelemetryData,
+    /** #1650: the section this card sits in; its rocket is the target. */
+    section: DashboardSection?,
+    /** The base station's own SD log toggle; off in a relayed rocket's section. */
+    showBaseStationLog: Boolean = session.isBaseStation,
+) {
     val focus by session.focusRocketId.collectAsState()
+    // #1650: the section's own rocket — bare on a direct link, the cmd-50
+    // envelope to ITS rocket id on a relay.  Without a section (a base
+    // station still searching) the focus decides, as it always did, and
+    // with no focus there is no rocket to command.
+    val f = focus
+    val send: ((ByteArray) -> Unit)? = section?.let { s -> { inner: ByteArray -> s.send(inner) } }
+        ?: when {
+            !session.isBaseStation -> { inner: ByteArray -> session.sendCommandFrame(inner) }
+            f != null -> { inner: ByteArray ->
+                session.sendCommandFrame(
+                    com.tinkerbug.tinkerrocket.protocol.Commands.relayToRocket(f, inner),
+                )
+            }
+            else -> null
+        }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Controls", style = MaterialTheme.typography.titleMedium)
@@ -1453,62 +1535,36 @@ private fun ControlsCard(session: DeviceSession, telemetry: TelemetryData) {
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                // Explicit desired state on every link, computed from this
+                // rocket's own telemetry: a bare toggle inverts whenever the
+                // app and the OC disagree about the current state (a "start"
+                // tap stopping the camera — bench 2026-08-16).
                 val cam = telemetry.cameraRecording
                 Button(
                     onClick = {
-                        val f = focus
-                        if (session.isBaseStation && f != null) {
-                            session.sendCommandFrame(
-                                com.tinkerbug.tinkerrocket.protocol.Commands.relayToRocket(
-                                    f,
-                                    com.tinkerbug.tinkerrocket.protocol.Commands
-                                        .cameraToggleWithState(!cam),
-                                ),
-                            )
-                        } else {
-                            // Explicit desired state on the direct link too:
-                            // a bare toggle inverts whenever the app and the
-                            // OC disagree about the current state (a "start"
-                            // tap stopping the camera — bench 2026-08-16).
-                            session.sendCommandFrame(
-                                com.tinkerbug.tinkerrocket.protocol.Commands
-                                    .cameraToggleWithState(!cam),
-                            )
-                        }
+                        send?.invoke(
+                            com.tinkerbug.tinkerrocket.protocol.Commands.cameraToggleWithState(!cam),
+                        )
                     },
-                    enabled = !session.isBaseStation || focus != null,
+                    enabled = send != null,
                     modifier = Modifier.weight(1f),
                 ) { Text(if (cam) "Stop camera" else "Start camera") }
 
                 val log = telemetry.rocketLoggingActive
                 Button(
                     onClick = {
-                        val f = focus
-                        if (session.isBaseStation && f != null) {
-                            session.sendCommandFrame(
-                                com.tinkerbug.tinkerrocket.protocol.Commands.relayToRocket(
-                                    f,
-                                    com.tinkerbug.tinkerrocket.protocol.Commands
-                                        .toggleLoggingWithState(!log),
-                                ),
-                            )
-                        } else {
-                            // Explicit desired state — same reason as the
-                            // camera button above.
-                            session.sendCommandFrame(
-                                com.tinkerbug.tinkerrocket.protocol.Commands
-                                    .toggleLoggingWithState(!log),
-                            )
-                        }
+                        send?.invoke(
+                            com.tinkerbug.tinkerrocket.protocol.Commands.toggleLoggingWithState(!log),
+                        )
                     },
-                    enabled = !session.isBaseStation || focus != null,
+                    enabled = send != null,
                     modifier = Modifier.weight(1f),
                     colors = androidx.compose.material3.ButtonDefaults.buttonColors(
                         containerColor = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors.logging,
                     ),
                 ) { Text(if (log) "Stop logging" else "Start logging") }
             }
-            if (session.isBaseStation) {
+            if (showBaseStationLog) {
                 val bsLog = telemetry.bsLoggingActive
                 Button(
                     onClick = {
@@ -1777,8 +1833,11 @@ private fun GnssAbsentBanner() {
  * state the rest of the dashboard is gated on stays where the operator
  * expects it.
  */
+/** iOS `RocketStateView.displayLabel` (#382): READY renders as PRELAUNCH. */
+internal fun stateDisplayLabel(state: String): String = if (state == "READY") "PRELAUNCH" else state
+
 @Composable
-private fun RocketStateBanner(telemetry: TelemetryData) {
+internal fun RocketStateBanner(telemetry: TelemetryData, modifier: Modifier = Modifier) {
     val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val state = telemetry.state
     val color = when (state) {
@@ -1792,9 +1851,9 @@ private fun RocketStateBanner(telemetry: TelemetryData) {
     // that used to sit under the label was removed 2026-07-31 on both
     // platforms ("EKF Ready" beside an amber EKF health dot read as a
     // contradiction — the sensor dots own live quality).
-    val label = if (state == "READY") "PRELAUNCH" else state
+    val label = stateDisplayLabel(state)
     Column(
-        Modifier
+        modifier
             .fillMaxWidth()
             .background(color.copy(alpha = 0.1f), RoundedCornerShape(10.dp))
             .padding(16.dp),
@@ -1949,7 +2008,13 @@ private fun FlightSummaryCard(telemetry: TelemetryData) {
  * so the green/yellow/orange/red grading iOS shows was missing entirely.
  */
 @Composable
-private fun SignalCard(telemetry: TelemetryData, bleRssi: Int?, isBaseStation: Boolean) {
+private fun SignalCard(
+    telemetry: TelemetryData,
+    bleRssi: Int?,
+    isBaseStation: Boolean,
+    /** The base station is hearing its rocket live (iOS `trackingHealthy`). */
+    trackingHealthy: Boolean,
+) {
     val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     Card(Modifier.fillMaxWidth()) {
         Column(
@@ -2011,16 +2076,17 @@ private fun SignalCard(telemetry: TelemetryData, bleRssi: Int?, isBaseStation: B
             // blackout these counters exist to end.
             if (isBaseStation) {
                 // Another BS/rocket pair on its own network id at the same
-                // site is normal traffic, so this stays informational.  iOS
-                // escalates it to a warning when the BS is hearing NO rocket;
-                // there is no tracking-health signal on this screen to gate
-                // that on, so it is left neutral rather than guessed at.
-                telemetry.netidDrops?.takeIf { it > 0 }?.let { drops ->
+                // site is normal traffic while the base station is tracking
+                // its rocket, so that reads as information.  Drops while it
+                // hears NO rocket are the fault the counter exists for — a
+                // device on the wrong network ID — and escalate to a warning
+                // (#1650, iOS SignalStrengthView).
+                netidDropsLine(telemetry.netidDrops, trackingHealthy)?.let { (text, warn) ->
                     Text(
-                        "Hearing $drops packets from other networks " +
-                            "(another pair nearby is normal)",
+                        text,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (warn) tr.statusWarn
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 // No benign reading for this one: these are OUR rocket's
@@ -2039,6 +2105,20 @@ private fun SignalCard(telemetry: TelemetryData, bleRssi: Int?, isBaseStation: B
                 }
             }
         }
+    }
+}
+
+/**
+ * The base station's network-ID drop line and whether it is a warning, or
+ * null when nothing was dropped (#1650; iOS SignalStrengthView's nidd label).
+ */
+internal fun netidDropsLine(drops: Int?, trackingHealthy: Boolean): Pair<String, Boolean>? {
+    val n = drops?.takeIf { it > 0 } ?: return null
+    return if (trackingHealthy) {
+        "Hearing $n packets from other networks (another pair nearby is normal)" to false
+    } else {
+        "NetID mismatch: $n packets dropped — a device is on the wrong network ID " +
+            "(see Settings ▸ Network)" to true
     }
 }
 

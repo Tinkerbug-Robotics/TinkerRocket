@@ -130,6 +130,18 @@ class TelemetryDataTest {
         assertNull(TelemetryData.decode("[1,2,3]"))   // non-object top level
     }
 
+    // ── Two rockets under one ID (#1650) ──────────────────────────────────
+
+    @Test
+    fun `dup decodes tolerantly and absent means clear`() {
+        assertTrue(decodeOk("""{"rid":2,"dup":1}""").duplicateIdSuspected)
+        assertFalse(decodeOk("""{"rid":2}""").duplicateIdSuspected)
+        // Tolerant like every integer key (#571).
+        assertEquals(1, decodeOk("""{"rid":2,"dup":"1"}""").duplicateId)
+        // Any nonzero value counts: it gates pyro, so the unexpected blocks.
+        assertTrue(decodeOk("""{"rid":2,"dup":3}""").duplicateIdSuspected)
+    }
+
     // ── Hop-state keys (#150) ─────────────────────────────────────────────
 
     @Test
