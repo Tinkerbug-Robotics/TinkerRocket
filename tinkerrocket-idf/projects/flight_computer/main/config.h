@@ -377,6 +377,22 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 #error "TR_RAW_DESCENT_IMU_FREE needs the raw-GNSS navigation filter (TR_RAW_GNSS_PRIMARY=1)"
 #endif
 
+// Each satellite's other bands with its L1 band's Doppler (the mosaic driver's
+// setRawMultiband, MosaicMultiband.h): the mosaic-G5 tracks GPS L2C and L5,
+// Galileo E6, E5a and E5b, BeiDou B1C, B2a and B3I beside the L1 band the
+// filter fuses, and each satellite's anchor is checked against them -- voted
+// out by two that agree, dropped by the drift guard, or averaged with them.
+// On in the mosaic image since 2026-10-25; -DTR_RAW_MULTIBAND=0 flies the L1
+// band's Dopplers alone. Replayed on the 2026-10-24 Goblin flight (five
+// satellites' L1 C/A or B1I Dopplers 3-19 m/s off through the boost): the
+// boost's attitude error 2.0 -> 0.8 deg.
+#ifndef TR_RAW_MULTIBAND
+#define TR_RAW_MULTIBAND TR_RAW_NAV_MOSAIC
+#endif
+#if TR_RAW_MULTIBAND && !TR_RAW_NAV_MOSAIC
+#error "TR_RAW_MULTIBAND needs the mosaic image's raw-GNSS filter (TR_RAW_NAV_MOSAIC=1)"
+#endif
+
 struct config : board_pins
 {
 

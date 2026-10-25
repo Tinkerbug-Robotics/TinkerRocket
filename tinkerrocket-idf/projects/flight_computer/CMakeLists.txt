@@ -107,11 +107,28 @@ if(DEFINED TR_RAW_DESCENT_IMU_FREE)
     add_compile_definitions(TR_RAW_DESCENT_IMU_FREE=${TR_RAW_DESCENT_IMU_FREE})
     message(STATUS "TR_RAW_DESCENT_IMU_FREE=${TR_RAW_DESCENT_IMU_FREE} -- the descent without the IMU set by hand")
 endif()
+# Each satellite's other bands with its L1 band's Doppler (main/config.h; on in
+# the mosaic image): -DTR_RAW_MULTIBAND=0 flies the L1 band's Dopplers alone.
+if(DEFINED TR_RAW_MULTIBAND)
+    add_compile_definitions(TR_RAW_MULTIBAND=${TR_RAW_MULTIBAND})
+    message(STATUS "TR_RAW_MULTIBAND=${TR_RAW_MULTIBAND} -- the bands combined set by hand")
+endif()
 # Bench: what the heading fit costs core 0, timed once when the raw-GNSS task
 # starts (TR_RawGnssShadow/HeadingFitBench.h). Never set for flight.
 if(TR_HEADING_FIT_BENCH)
     add_compile_definitions(TR_HEADING_FIT_BENCH=1)
     message(STATUS "TR_HEADING_FIT_BENCH=1 -- the heading fit's bench ENABLED (bench)")
+endif()
+# Bench: what each satellite's bands combined cost this CPU (main.cpp mbBenchTask,
+# TR_GNSSReceiverMosaic_Serial/MosaicMultibandBench.h), timed 8 s after boot on
+# recorded mosaic-G5 MeasEpochs from FILE -- a scratch header (blocks, lengths,
+# roll rates) that holds a sky and so a place: never commit it. Any board.
+if(TR_BENCH_MB_BLOCKS)
+    if(NOT EXISTS "${TR_BENCH_MB_BLOCKS}")
+        message(FATAL_ERROR "TR_BENCH_MB_BLOCKS: no file ${TR_BENCH_MB_BLOCKS}")
+    endif()
+    add_compile_definitions(TR_BENCH_MB_BLOCKS="${TR_BENCH_MB_BLOCKS}")
+    message(STATUS "TR_BENCH_MB_BLOCKS=${TR_BENCH_MB_BLOCKS} -- the bands' combination's bench ENABLED (bench)")
 endif()
 # Bench: the pad's heading turned this many degrees (added to the magnetic
 # declination), so the heading fit has a known error to find -- a rig replay
@@ -353,7 +370,7 @@ foreach(_v ${_tr_cache_vars})
 endforeach()
 # A rig replay image (TR_SIM_REPLAY_BLOB) plays a canned flight from boot as a
 # sim, every pyro dry: the last image to take for the flight one.
-if(DEFINED TR_RAW_GNSS_IRAM OR TR_LOOP_PROFILE OR TR_HEADING_FIT_BENCH OR TR_I2S_TX_MONITOR OR TR_TEST_SETUP_FAIL
+if(DEFINED TR_RAW_GNSS_IRAM OR TR_LOOP_PROFILE OR TR_HEADING_FIT_BENCH OR TR_BENCH_MB_BLOCKS OR TR_I2S_TX_MONITOR OR TR_TEST_SETUP_FAIL
    OR TR_GNSS_BENCH_COLD_START OR TR_GNSS_COCOM_DIAG OR TR_GNSS_RATE_HZ OR TR_SIM_REPLAY_BLOB)
     set(TR_BENCH_SUFFIX "-bench")
 endif()

@@ -102,6 +102,12 @@ public:
     {
         return real_.setGNSSRawDopplerPairing(c);
     }
+    bool setGNSSRawMultiband(const mosaic::MosaicMultibandConfig& c, float windup_k)
+    {
+        return real_.setGNSSRawMultiband(c, windup_k);
+    }
+    // the replayed IMU's roll, as the real one's: the receiver is real in a sim
+    void noteGNSSRollRate(float p_rps) { real_.noteGNSSRollRate(p_rps); }
 #endif
 
     // Debug passthrough

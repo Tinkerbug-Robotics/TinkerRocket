@@ -49,6 +49,7 @@
 #include "SbfParser.h"
 #if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
 #include <RawMeas.h>           // TR_GNSSRaw: gnss_raw::TimedRawEpoch
+#include "MosaicMultiband.h"
 #include "MosaicRawEpoch.h"
 #include "MosaicTimeTag.h"
 #include "SbfNav.h"
@@ -171,6 +172,24 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         // its state (~1.3 kB, internal RAM), and then nothing changes. Never
         // called, every epoch is handed over exactly as before.
         bool setRawDopplerPairing(const mosaic::MosaicDopplerPairConfig& c);
+        // Each satellite's other bands in its row's Doppler (MosaicMultiband.h;
+        // config.h TR_RAW_MULTIBAND, on in the mosaic image): every MeasEpoch's
+        // anchor (GPS L1 C/A, Galileo E1, BeiDou B1I) checked against the same
+        // satellite's other bands -- voted out by two that agree, dropped by the
+        // drift guard, or averaged with them -- before the epoch is paired or
+        // handed over. windup_k is the antenna's carrier wind-up, cycles a turn
+        // (the profile's; 0.99 on the Goblin's helix), for the gyro's check on
+        // the combiner's own wind-up (noteRollRate). Call once, after
+        // enableRawOutputs() and setRawDopplerPairing(), from any task; false
+        // without the memory for its state (~32 kB, internal RAM, else PSRAM),
+        // and then nothing changes. Never called, every epoch is the L1 band's.
+        bool setRawMultiband(const mosaic::MosaicMultibandConfig& c, float windup_k);
+        // The IMU path's roll rate about the nose (rad/s, body x), each
+        // flight-filter tick, from one task: the combiner's check on its own
+        // wind-up estimate, taken when no older than kMbGyroMaxAgeUs. Never
+        // called, the combiner runs on its estimate alone.
+        void noteRollRate(float p_rps);
+        static constexpr int64_t kMbGyroMaxAgeUs = 20000;
         bool takeRawEpoch(gnss_raw::TimedRawEpoch& out);
         bool takeEphemeris(uint8_t* out, size_t cap, size_t& len);
         bool broadcastIono(int8_t raw[8], uint16_t& gps_day) const;
@@ -237,6 +256,21 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
             uint32_t avg_us_max = 0;
         };
         bool rawPairStats(RawPairStats& out) const;
+        // The bands combined (setRawMultiband), once on: the combiner's counts
+        // (MosaicMultibandStats: combined, anchor-only and why, votes, the drift
+        // guard), the gyro's wind-up given or not, and what the poll task spent
+        // on each combination (the grid epoch's and the epoch between's), us.
+        // False, out zeroed, with it off. A counter may be one behind another.
+        struct RawMbStats
+        {
+            mosaic::MosaicMultibandStats mb;
+            uint32_t runs = 0;
+            uint32_t us_max = 0;
+            uint64_t us_sum = 0;
+            uint32_t gyro_given = 0;
+            uint32_t gyro_stale = 0;
+        };
+        bool rawMbStats(RawMbStats& out) const;
         static constexpr int32_t kPpsTagBarUs = 200;   // a right tag leaves ~0.03 ms rms
         // An edge this far off the line, or a whole second's tag this far
         // off its edge, holds the tag back (MosaicTimeTag.h), and the line
@@ -404,8 +438,29 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
                 RawPairStats st;
             };
             std::atomic<Pairing*> pairing{nullptr};
+            // the bands combined: made by setRawMultiband, null (off) until
+            // then; the poll task alone writes what it points to
+            struct Multiband
+            {
+                mosaic::MosaicMultibandConfig cfg;
+                float windup_k = 0.99f;
+                mosaic::MosaicMbScratch scr;
+                mosaic::MosaicMbOut out;        // the grid epoch's side outputs
+                mosaic::MosaicMbOut out_prev;   //   and the epoch between's
+                RawMbStats st;
+            };
+            std::atomic<Multiband*> multiband{nullptr};
+            // the IMU path's last roll rate (noteRollRate), a seqlock: one
+            // writer, the poll task reads
+            std::atomic<uint32_t> roll_seq{0};
+            float   roll_p = 0.0f;
+            int64_t roll_us = 0;
         };
         RawState*         raw_ = nullptr;
+        // the gyro's wind-up for the MeasEpoch being decoded, and a
+        // combination's time, counted (setRawMultiband)
+        static mosaic::MosaicMbWindupIn mbGyroWindup(RawState& r, RawState::Multiband& m);
+        static void mbTimed(RawMbStats& st, int64_t t0_us);
         mutable portMUX_TYPE raw_mux_ = portMUX_INITIALIZER_UNLOCKED;
 #endif
 

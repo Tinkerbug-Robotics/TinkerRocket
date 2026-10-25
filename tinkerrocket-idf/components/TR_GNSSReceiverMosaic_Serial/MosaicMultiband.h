@@ -1,4 +1,4 @@
-// MosaicMultiband.h — one Doppler per satellite from every band the mosaic-G5 tracks (the multi-band evaluation: the harness alone, no firmware includes it)
+// MosaicMultiband.h — one Doppler per satellite from every band the mosaic-G5 tracks (the mosaic image's driver, config.h TR_RAW_MULTIBAND, and tools/raw_replay's --rr-multiband)
 //
 // The flight's raw-GNSS filter fuses one Doppler row per satellite, from its
 // L1-band signal (GPS L1 C/A, Galileo E1, BeiDou B1I: mosaicL1Pick). The
@@ -257,6 +257,19 @@ struct MosaicMbWindupIn
     float hz = 0.0f;
 };
 
+// The gyro's wind-up as a driver reads it decoding a MeasEpoch: the IMU path's last roll rate p (rad/s, about the
+// nose), have false before the first, age_us since it was published; none (ok false) older than max_age_us or at
+// the gyro's rail. W = -k p / 2pi (RawGnssWindup.h rollRate(1, k, p)). The mosaic image's driver and
+// tools/raw_replay both take it from here.
+inline MosaicMbWindupIn mbWindupFromGyro(bool have, double p_rps, int64_t age_us, double k,
+                                         int64_t max_age_us = 20000, double rail_rps = 4000.0 * 3.14159265358979323846 / 180.0)
+{
+    MosaicMbWindupIn w;
+    w.ok = have && age_us >= 0 && age_us <= max_age_us && std::fabs(p_rps) < rail_rps;
+    w.hz = w.ok ? static_cast<float>(-k * p_rps / (2.0 * 3.14159265358979323846)) : 0.0f;
+    return w;
+}
+
 struct MosaicMultibandConfig
 {
     bool  on = false;
@@ -390,10 +403,50 @@ inline void mosaicMbEqualHz(MosaicMultibandConfig& c)
             c.band[i].b = static_cast<float>(0.104 * kMbLambda.v[i] / l1);
 }
 
+// What the mosaic image flies (config.h TR_RAW_MULTIBAND) and tools/raw_replay's --receiver mosaic replays: the
+// measured model, on, each anchor's floor the receiver profile's Doppler floor (cn0_min_rr by gnss_sys_t) and the
+// builder's white Doppler model (rr_a, rr_b: only an effective C/N0 would use it). The rest is the defaults above:
+// the wind-up referred with the combiner's own estimate, checked against the gyro's where the driver gives it, the
+// anchor's sigma kept. Each band's lag stays 0: on the 2026-10-24 Goblin boost (7.5 g) the bands lagged their
+// anchors by 0.3-1.7 ms (GPS L2C/L5, Galileo E5b/E6, BeiDou B2a) and 4.8-14 ms (Galileo E5a, BeiDou B1C/B3I);
+// the screen's allowance (screen_lag_s) takes those, and gating the lagging bands out gave back half of what the
+// combination gained on that flight's boost.
+inline void mosaicMbFlight(MosaicMultibandConfig& c, const float cn0_min_rr[GNSS_SYS_COUNT], double rr_a, double rr_b)
+{
+    mosaicMbMeasured(c);
+    c.on = true;
+    for (int k = 0; k < GNSS_SYS_COUNT; ++k)
+        c.anchor_cn0_min[k] = cn0_min_rr[k];
+    c.rr_a = static_cast<float>(rr_a);
+    c.rr_b = static_cast<float>(rr_b);
+}
+
+// 10^(-(cn0 - 35)/10), the C/N0's share of a band's noise. SBF gives C/N0 in quarter dB, so each quarter's value
+// in 0-100 dB-Hz is worked out once, by the same std::pow, so to the bit what it would be: the P4 and the S3 do
+// double in software, and mbSigma ran ~75 times an epoch (MosaicMultibandBench.h, on the P4). Anything else is
+// worked each time. One caller at a time (the mosaic driver's poll task; a harness's one thread).
+inline double mbCn0Term(double cn0)
+{
+    static double tab[401];
+    static bool have[401];
+    const double k = cn0 * 4.0;
+    if (k >= 0.0 && k <= 400.0 && k == std::floor(k))
+    {
+        const int i = static_cast<int>(k);
+        if (!have[i])
+        {
+            tab[i] = std::pow(10.0, -(cn0 - 35.0) / 10.0);
+            have[i] = true;
+        }
+        return tab[i];
+    }
+    return std::pow(10.0, -(cn0 - 35.0) / 10.0);
+}
+
 // A band's Doppler sigma at C/N0 cn0 (dB-Hz), m/s; 0 with no model.
 inline double mbSigma(const MosaicMbBand& m, double cn0)
 {
-    const double q = std::pow(10.0, -(cn0 - 35.0) / 10.0);
+    const double q = mbCn0Term(cn0);
     const double a = m.a, b = m.b;
     return static_cast<double>(m.scale) * std::sqrt(a * a + b * b * q);
 }
@@ -948,13 +1001,38 @@ inline MosaicMbGuard* mbGuardTouch(MosaicMbScratch& scr, uint8_t sys, uint8_t pr
 // A leaky mean (the guard's and the monitor's): x of variance vx and the acceleration a_abs folded in, the leak's
 // alpha 1 - exp(-dt / tau) with dt at most max_dt_s (time with nothing to compare neither adds to the mean nor
 // washes it out), at least 1/n while it fills.
+// exp(-dt / tau_s) for mbLeak, the last few (dt, tau) pairs kept: an epoch's steps repeat (50 ms, the cap), and
+// exp is in software on the P4 and the S3 (~40 an epoch); to the bit what it would be. One caller at a time.
+inline double mbLeakExp(double dt, float tau_s)
+{
+    struct Memo
+    {
+        double dt = 0.0;
+        float  tau = 0.0f;
+        double v = 0.0;
+        bool   ok = false;
+    };
+    static Memo memo[4];
+    static int next = 0;
+    for (const Memo& e : memo)
+        if (e.ok && e.dt == dt && e.tau == tau_s)
+            return e.v;
+    const double v = std::exp(-dt / tau_s);
+    memo[next].dt = dt;
+    memo[next].tau = tau_s;
+    memo[next].v = v;
+    memo[next].ok = true;
+    next = (next + 1) & 3;
+    return v;
+}
+
 inline void mbLeak(uint32_t& n, int64_t& last_ms, double& m, double& v, double& F, double& a_abs, int64_t rx_ms,
                    double x, double vx, double a, float tau_s, float max_dt_s)
 {
     double dt = static_cast<double>(rx_ms - last_ms) * 1.0e-3;
     if (dt > max_dt_s)
         dt = max_dt_s;
-    const double leak = n == 0 ? 1.0 : 1.0 - std::exp(-dt / tau_s);
+    const double leak = n == 0 ? 1.0 : 1.0 - mbLeakExp(dt, tau_s);
     const double fill = 1.0 / static_cast<double>(n + 1);
     const double al = fill > leak ? fill : leak;
     m += al * (x - m);

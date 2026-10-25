@@ -922,6 +922,98 @@ bool TR_GNSSReceiverMosaicSerial::setRawDopplerPairing(const mosaic::MosaicDoppl
     return true;
 }
 
+bool TR_GNSSReceiverMosaicSerial::setRawMultiband(const mosaic::MosaicMultibandConfig& c, float windup_k)
+{
+    if (raw_ == nullptr || !c.on) return false;
+    if (raw_->multiband.load(std::memory_order_acquire) != nullptr) return true;
+    // Internal RAM where it fits, as the pairs' state (the poll task reads it
+    // at 20 Hz), else PSRAM. Filled before it is published, so the poll task
+    // never sees it half made
+    bool internal = true;
+    void* mem = heap_caps_malloc(sizeof(RawState::Multiband), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (mem == nullptr)
+    {
+        internal = false;
+        mem = heap_caps_malloc(sizeof(RawState::Multiband), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    if (mem == nullptr)
+    {
+        ESP_LOGE(TAG, "mosaic raw: no memory for the bands' combination (%u B): every row the L1 band's",
+                 static_cast<unsigned>(sizeof(RawState::Multiband)));
+        return false;
+    }
+    RawState::Multiband* m = new (mem) RawState::Multiband();
+    m->cfg = c;
+    m->windup_k = windup_k > 0.0f ? windup_k : 0.99f;
+    int joins = 0;
+    for (int i = 0; i < mosaic::kMbSigs; ++i)
+        if (c.band[i].join) joins++;
+    raw_->multiband.store(m, std::memory_order_release);
+    ESP_LOGI(TAG, "mosaic raw: each satellite's other bands with its L1 band's Doppler -- %d bands may join, the "
+                  "screen %.0f sigma (at least %.2f m/s), the drift guard %s, the gyro's wind-up check %s (k %.3f), "
+                  "%u B of state in %s",
+             joins, static_cast<double>(c.screen_k), static_cast<double>(c.screen_floor_mps), c.guard ? "on" : "off",
+             c.w_check ? "on" : "off", static_cast<double>(m->windup_k),
+             static_cast<unsigned>(sizeof(RawState::Multiband)), internal ? "internal RAM" : "PSRAM");
+    return true;
+}
+
+void TR_GNSSReceiverMosaicSerial::noteRollRate(float p_rps)
+{
+    if (raw_ == nullptr) return;
+    RawState& r = *raw_;
+    // a seqlock, as ShadowLink's: odd while the pair is written
+    const uint32_t s = r.roll_seq.load(std::memory_order_relaxed);
+    r.roll_seq.store(s + 1, std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_release);
+    r.roll_p = p_rps;
+    r.roll_us = nowUs();
+    std::atomic_thread_fence(std::memory_order_release);
+    r.roll_seq.store(s + 2, std::memory_order_relaxed);
+}
+
+bool TR_GNSSReceiverMosaicSerial::rawMbStats(RawMbStats& out) const
+{
+    const RawState::Multiband* m = raw_ != nullptr ? raw_->multiband.load(std::memory_order_acquire) : nullptr;
+    out = m != nullptr ? m->st : RawMbStats{};
+    return m != nullptr;
+}
+
+// The gyro's wind-up for the MeasEpoch being decoded (MosaicMultiband.h
+// mbWindupFromGyro): the IMU path's last roll rate, when fresh and under the
+// rail; none before the first, or if every try met a write under way.
+mosaic::MosaicMbWindupIn TR_GNSSReceiverMosaicSerial::mbGyroWindup(RawState& r, RawState::Multiband& m)
+{
+    bool have = false;
+    float p = 0.0f;
+    int64_t t = 0;
+    for (int tries = 0; tries < 4 && !have; ++tries)
+    {
+        const uint32_t s1 = r.roll_seq.load(std::memory_order_acquire);
+        if (s1 == 0) break;      // never written
+        if (s1 & 1u) continue;   // a write under way
+        p = r.roll_p;
+        t = r.roll_us;
+        std::atomic_thread_fence(std::memory_order_acquire);
+        have = r.roll_seq.load(std::memory_order_relaxed) == s1;
+    }
+    const mosaic::MosaicMbWindupIn w =
+        mosaic::mbWindupFromGyro(have, p, have ? nowUs() - t : -1, m.windup_k, kMbGyroMaxAgeUs);
+    if (w.ok)
+        m.st.gyro_given++;
+    else
+        m.st.gyro_stale++;
+    return w;
+}
+
+void TR_GNSSReceiverMosaicSerial::mbTimed(RawMbStats& st, int64_t t0_us)
+{
+    const uint32_t us = static_cast<uint32_t>(nowUs() - t0_us);
+    st.runs++;
+    st.us_sum += us;
+    if (us > st.us_max) st.us_max = us;
+}
+
 bool TR_GNSSReceiverMosaicSerial::takeRawEpoch(gnss_raw::TimedRawEpoch& out)
 {
     if (raw_ == nullptr) return false;
@@ -979,6 +1071,9 @@ void TR_GNSSReceiverMosaicSerial::rawMeasEpoch(const uint8_t* block, size_t len,
     RawState& r = *raw_;
     mosaic::MosaicEpochInfo info;
     RawState::Pairing* const pairing = r.pairing.load(std::memory_order_acquire);
+    // the bands combined (setRawMultiband): the grid epoch's, and with the
+    // pairs the epoch between's, both ends of a pair alike (MosaicMultiband.h)
+    RawState::Multiband* const mb = r.multiband.load(std::memory_order_acquire);
     if (!mosaic::onFuseGrid(tow_ms, r.period_ms.load(std::memory_order_relaxed)))
     {
         // Off the grid: its header's clock jumps only, so the bias carried to
@@ -991,7 +1086,17 @@ void TR_GNSSReceiverMosaicSerial::rawMeasEpoch(const uint8_t* block, size_t len,
         else
         {
             const int64_t t0 = nowUs();
-            (void)mosaic::noteMeasEpochDopplers(block, len, r.jump, info, pairing->prev, end_us);
+            if (mb != nullptr)
+            {
+                const mosaic::MosaicMbWindupIn w = mbGyroWindup(r, *mb);
+                (void)mosaic::noteMeasEpochDopplersMb(block, len, r.jump, info, pairing->prev, mb->cfg, mb->scr,
+                                                      mb->st.mb, mb->out_prev, end_us, w);
+                mbTimed(mb->st, t0);
+            }
+            else
+            {
+                (void)mosaic::noteMeasEpochDopplers(block, len, r.jump, info, pairing->prev, end_us);
+            }
             const uint32_t us = static_cast<uint32_t>(nowUs() - t0);
             RawPairStats& ps = pairing->st;
             ps.reads++;
@@ -1007,8 +1112,19 @@ void TR_GNSSReceiverMosaicSerial::rawMeasEpoch(const uint8_t* block, size_t len,
     }
     gnss_raw::TimedRawEpoch& e = r.scratch;
     // the arrival places a jump the count shows only mod 256 (MosaicJumpState)
-    const int64_t t_adapt = pairing != nullptr ? nowUs() : 0;
-    const bool cells = mosaic::rawEpochFromMeasEpoch(block, len, e.epoch, r.jump, info, end_us);
+    const int64_t t_adapt = (pairing != nullptr || mb != nullptr) ? nowUs() : 0;
+    bool cells;
+    if (mb != nullptr)
+    {
+        const mosaic::MosaicMbWindupIn w = mbGyroWindup(r, *mb);
+        cells = mosaic::rawEpochFromMeasEpochMb(block, len, e.epoch, r.jump, info, mb->cfg, mb->scr, mb->st.mb,
+                                                mb->out, end_us, w);
+        mbTimed(mb->st, t_adapt);
+    }
+    else
+    {
+        cells = mosaic::rawEpochFromMeasEpoch(block, len, e.epoch, r.jump, info, end_us);
+    }
     r.st.clock_jumps = r.jump.jumps;
     r.st.clock_restarts = r.jump.rebases;
     r.st.clock_resets = r.jump.resets;
