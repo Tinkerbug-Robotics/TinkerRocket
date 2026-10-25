@@ -331,6 +331,25 @@ struct RawGnssEKFParams
     // turn the tilt on noise (windup study, 2026-10-18). Exact, a roll only
     // turns that variance about the nose.
     bool   att_exact = false;
+    // The IMU-free mode (setImuFree; RawGnssShadow's descent_imu_free): the
+    // velocity a random walk, imu_free_acc_psd its acceleration's white noise
+    // (m^2/s^3), not the accelerometer's integral; and the velocity's 1-sigma
+    // at least imu_free_vel_sigma (m/s) as the mode starts, so a velocity the
+    // IMU got wrong (an ejection's shock, a tilt it lost) is taken from the
+    // barometer and the next epoch rather than held. 16 m^2/s^3 lets a chute's
+    // swing (+-3 m/s at ~1 Hz on the 2026-10-24 Beetle flights) through in an
+    // epoch (replayed: 1 refused 7 % of the Dopplers on 02, 4 and 16 within a
+    // metre of each other, 16 the better); the vertical has the barometer's
+    // 50 Hz besides. The position's
+    // 1-sigma at least imu_free_pos_sigma (m) too, on the north and east: a
+    // coast with no GNSS (the vertical check's latch through Rolly Polly V's
+    // spin, 2026-10-24) left the filter 450 m off while its covariance said
+    // 32 m, and the pseudoranges then came back only at the gate's inflated
+    // variance (80 m off 15 s later; 100 m: 36 m off over the next 35 s, against
+    // 43). 0: the position as it was.
+    double imu_free_acc_psd   = 16.0;
+    double imu_free_vel_sigma = 5.0;
+    double imu_free_pos_sigma = 100.0;
     // The carrier range rate (ReceiverProfile.h's cr_*)
     uint8_t cr_mode             = kCarrierObserve;   // CarrierMode
     double  cr_sigma_per_rev_s  = 0.023;             // m/s more (in quadrature) per rev/s of roll
@@ -546,6 +565,25 @@ public:
     // takes it along; init lets it go.
     void setAttHold(bool on) { att_hold_ = on; }
     bool attHold() const { return att_hold_; }
+    // The IMU-free mode, for a descent (RawGnssShadow's descent_imu_free):
+    // position, velocity and the clock from the pseudoranges, Dopplers and
+    // barometer alone. The velocity is held between updates (its noise
+    // imu_free_acc_psd) instead of integrating the specific force; the gyro
+    // still turns the attitude, which nothing corrects any more and nothing
+    // navigates by. On: the covariance between the navigation states
+    // (position, velocity, clock, system offsets) and the inertial ones
+    // (attitude, both biases) is cleared, and the propagation keeps it clear
+    // (no tilt or accelerometer-bias term on the velocity), so no update
+    // moves one through the other; every GNSS row's gain on the inertial
+    // states is masked besides (a lever's rows have attitude terms); the
+    // velocity's 1-sigma is raised to imu_free_vel_sigma. A shock or a lost
+    // tilt then costs the velocity nothing, and a chute's swing and spin
+    // cannot lock the Dopplers out (the Beetle's 2026-10-24 descents: 301 and
+    // 663 m off, the IMU-coupled filter re-converging on a wrong tilt). Off:
+    // as before, the couplings growing back through the propagation. A copy
+    // of the filter takes it along; init turns it off.
+    void setImuFree(bool on);
+    bool imuFree() const { return imu_free_; }
     // The epoch about to be worked has its Dopplers in pairs (rr_pair_lag_s;
     // RawGnssShadow sets it at each epoch's start where the params have a
     // pair lag, from the epoch's BuiltEpoch::rr_paired): its Dopplers are
@@ -861,6 +899,8 @@ private:
     bool   clk_ready_ = false;
     bool   fuse_pr_ = true;      // setFusePr
     bool   att_hold_ = false;    // setAttHold
+    bool   imu_free_ = false;    // setImuFree
+    T      q_cv_ = 0;            // imu_free_acc_psd
     bool   track_rate_ = false;  // setTrackRate
     T      a_ned_[3] = {};
     T      g_excess_ = 0;

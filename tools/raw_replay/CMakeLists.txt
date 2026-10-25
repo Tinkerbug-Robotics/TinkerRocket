@@ -96,6 +96,11 @@ option(RAW_REPLAY_WINDUP "the firmware tree has the carrier wind-up's switches (
 if(RAW_REPLAY_WINDUP AND NOT (RAW_REPLAY_MOSAIC AND RAW_REPLAY_DVCHECK AND RAW_REPLAY_ROT))
     set(RAW_REPLAY_WINDUP OFF)
 endif()
+# the IMU-free descent (fc/raw-descent-mode): RawGnssShadow::Config::descent_imu_free, RawGnssEKFParams::imu_free_*
+option(RAW_REPLAY_DESCENT "the firmware tree has the IMU-free descent (descent_imu_free, imu_free_acc_psd, imu_free_vel_sigma)" ON)
+if(RAW_REPLAY_DESCENT AND NOT RAW_REPLAY_WINDUP)
+    set(RAW_REPLAY_DESCENT OFF)
+endif()
 set(LIB_DIR "${SRC_ROOT}/tinkerrocket-idf/components")
 if(RAW_REPLAY_MULTIBAND AND NOT EXISTS "${LIB_DIR}/TR_GNSSReceiverMosaic_Serial/MosaicMultiband.h")
     message(STATUS "raw_replay: ${SRC_ROOT} has no multi-band combiner (MosaicMultiband.h): RAW_REPLAY_MULTIBAND off")
@@ -215,6 +220,7 @@ function(raw_replay_target name)
         RAW_REPLAY_MOSAIC_SAFEGUARDS=$<BOOL:${RAW_REPLAY_MOSAIC_SAFEGUARDS}>
         RAW_REPLAY_FLIGHT_PROFILE=$<BOOL:${RAW_REPLAY_FLIGHT_PROFILE}>
         RAW_REPLAY_WINDUP=$<BOOL:${RAW_REPLAY_WINDUP}>
+        RAW_REPLAY_DESCENT=$<BOOL:${RAW_REPLAY_DESCENT}>
         RAW_REPLAY_MULTIBAND=$<BOOL:${RAW_REPLAY_MULTIBAND}>)
 endfunction()
 
