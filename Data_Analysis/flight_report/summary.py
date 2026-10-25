@@ -27,8 +27,8 @@ from plot_flight_data_mini import get_array, gnss_to_enu, pressure_to_altitude  
 
 from markupsafe import Markup
 
-from .events import burnout_gap, ejection_channel, launch_gap, measured, span as _span
-from .imu import accel_magnitude
+from .events import burnout_gap, ejection_channel, launch_gap, measured, phase_at, span as _span
+from .imu import THRUST_HOLD_S, accel_body, sustained_peak
 from .units import q
 
 G = 9.80665
@@ -79,6 +79,73 @@ def _baro_agl(records) -> Optional[np.ndarray]:
         return None
     p_ground = float(np.mean(p[: min(200, p.size)]))
     return np.array([pressure_to_altitude(float(v), p_ground) for v in p])
+
+
+def _burn_window(flight, events) -> tuple[Optional[tuple[float, float]], str]:
+    """The part of the record that is the motor burning, and how to say so.
+
+    The bounds are the measured burn, not the flags, so the window opens when
+    the motor lit rather than 0.2 s later when the flight computer agreed.
+
+    When the motor lit inside a hole in the log, the window is the burn from
+    the end of the hole on: still thrust, and still clear of the ejection and
+    the landing. The hint says so, because the motor may have pushed harder
+    before the log came back — 2026-07-05 195028 resumes at 5.2 g and falls
+    from there.
+
+    When the motor burned out inside one, the window is the burn up to the
+    start of the hole, hinted the same way: the log does not hold the rest of
+    the burn. 2026-03-14 224121 breaks off 0.69 s in, still at 8 g. A burn
+    with a hole at each end keeps the part between them; one whose both ends
+    fell in the same hole has no thrust in the record, and no window.
+    """
+    gap = launch_gap(flight)
+    burnout_hole = burnout_gap(flight)
+    if events["launch"] is not None and events["burnout"] is not None:
+        return (events["launch"], events["burnout"]), "under thrust"
+    if gap is not None and events["burnout"] is not None:
+        return (gap[1], events["burnout"]), "under thrust, after the gap"
+    if events["launch"] is not None and burnout_hole is not None:
+        return (events["launch"], burnout_hole[0]), "under thrust, before the gap"
+    if gap is not None and burnout_hole is not None:
+        return (gap[1], burnout_hole[0]), "under thrust, between the gaps"
+    if events["launch"] is not None and events["apogee"] is not None:
+        # Coasting the specific force along the rocket is drag, negative, so
+        # the held peak is still the motor's.
+        return (events["launch"], events["apogee"]), "launch to apogee (no burnout detected)"
+    # With no burn to bound it, any peak would be a guess at which knock was
+    # the motor. The peak-shock cell still reports the largest one.
+    return None, ""
+
+
+def peak_shock(flight) -> Optional[dict[str, Any]]:
+    """The hardest knock in the flight: {"g", "t", "phase", "hint"}, or None.
+
+    The magnitude, from the part the flight loop would read at each sample,
+    held on two samples in a row: a real shock rings for several, and a single
+    corrupt sample cannot set it. The Piercer Mini's liftoff transient reads
+    283 G on one sample and 229 G held, and that is what this reports.
+    """
+    recs = flight.records
+    imu = recs.get("ISM6HG256") or []
+    if not imu or flight.t0_us is None:
+        return None
+    a, railed, _which = accel_body(recs)
+    if a is None or a.shape[1] < 2:
+        return None
+    t = (get_array(imu, "time_us") - flight.t0_us) / 1e6
+    mag = np.sqrt((a ** 2).sum(axis=0)) / G
+    held = np.minimum(mag[:-1], mag[1:])
+    j = int(np.argmax(held))
+    at = float(t[j])
+    if railed[j] or railed[j + 1]:
+        part = ("high-G accelerometer" if "high_acc_x" in imu[0]
+                else "low-G accelerometer at its rail, so it reads low")
+    else:
+        part = "low-G accelerometer"
+    phase = phase_at(flight, at)
+    when = f"{phase}, {at:.1f} s" if phase else f"at {at:.1f} s"
+    return {"g": float(held[j]), "t": at, "phase": phase, "hint": f"{when} · {part}"}
 
 
 def compute_summary(flight) -> list[dict[str, Any]]:
@@ -132,52 +199,33 @@ def compute_summary(flight) -> list[dict[str, Any]]:
     if speed is not None:
         cells.append(_cell("Max speed", speed, "m/s", 1, hint))
 
-    # --- Peak acceleration (boost only) --------------------------------------
-    # Measured over launch->burnout on purpose. Touchdown and the ejection
-    # charge both slam the accelerometer far harder than the motor does — on the
-    # sample flight the whole-flight peak is 77 G, and the ejection charge alone
-    # is 38 G, against 9.5 G under thrust — so a whole-flight max would headline
-    # a bang as though it were the rocket's acceleration.
+    # --- Acceleration -------------------------------------------------------
+    # Two cells, because a flyer asks two different questions. What did the
+    # motor do: the highest acceleration along the rocket that it held for at
+    # least THRUST_HOLD_S under thrust. What was the hardest knock the airframe
+    # took, and when: the peak shock, anywhere in the flight.
     #
-    # The bounds are the measured burn, not the flags, so the window no longer
-    # opens 0.2 s after the motor lit.
-    #
-    # When the motor lit inside a hole in the log, the window is the burn from
-    # the end of the hole on: still thrust, and still clear of the ejection and
-    # the landing. The hint says so, because the motor may have pushed harder
-    # before the log came back — 2026-07-05 195028 resumes at 5.2 g and falls
-    # from there.
-    #
-    # When the motor burned out inside one, the window is the burn up to the
-    # start of the hole, hinted the same way: the log does not hold the rest of
-    # the burn. 2026-03-14 224121 breaks off 0.69 s in, still at 8 g. A burn
-    # with a hole at each end keeps the part between them; one whose both ends
-    # fell in the same hole has no thrust in the record, and no cell.
+    # They used to be one cell, the largest single sample in the burn, and it
+    # answered neither. A liftoff transient rings for a couple of milliseconds
+    # well past anything the motor does: on the 10/24 Piercer Mini that cell
+    # read 283 G for a motor that held 10.5 G, and on 15 of the 26 archived
+    # flights with a measured burn it overstated the motor by more than 2 G.
     imu = recs.get("ISM6HG256") or []
     if imu:
-        gap = launch_gap(flight)
-        burnout_hole = burnout_gap(flight)
-        if events["launch"] is not None and events["burnout"] is not None:
-            window, hint_window = (events["launch"], events["burnout"]), "under thrust"
-        elif gap is not None and events["burnout"] is not None:
-            window, hint_window = (gap[1], events["burnout"]), "under thrust, after the gap"
-        elif events["launch"] is not None and burnout_hole is not None:
-            window, hint_window = (events["launch"], burnout_hole[0]), "under thrust, before the gap"
-        elif gap is not None and burnout_hole is not None:
-            window, hint_window = (gap[1], burnout_hole[0]), "under thrust, between the gaps"
-        elif events["launch"] is not None and events["apogee"] is not None:
-            window, hint_window = (events["launch"], events["apogee"]), "launch to apogee (no burnout detected)"
-        else:
-            window, hint_window = None, "whole flight — includes ejection and landing impacts"
-
         t = (get_array(imu, "time_us") - t0) / 1e6
-        mask = None if window is None else (t >= window[0]) & (t <= window[1])
-        # Low-G part unless it rails in this window; see units of imu.py.
-        mag, which = accel_magnitude(recs, mask)
-        if mag is not None and mag.size:
-            peak_g = float(np.max(mag)) / G
-            cells.append(_cell("Max acceleration", peak_g, "G", 1,
-                               f"{hint_window} · {which}"))
+        window, hint_window = _burn_window(flight, events)
+        if window is not None:
+            mask = (t >= window[0]) & (t <= window[1])
+            a, _railed, which = accel_body(recs, mask)
+            held = sustained_peak(t[mask], a[0]) if a is not None and a.shape[1] else None
+            if held is not None:
+                how = f"along the rocket, held {THRUST_HOLD_S * 1e3:.0f} ms or more"
+                if hint_window != "under thrust":
+                    how = f"{hint_window} · {how}"
+                cells.append(_cell("Max thrust acceleration", held[0] / G, "G", 1, f"{how} · {which}"))
+        shock = peak_shock(flight)
+        if shock is not None:
+            cells.append(_cell("Peak shock", shock["g"], "G", 0 if shock["g"] >= 20 else 1, shock["hint"]))
 
     # --- Timing --------------------------------------------------------------
     # Chronological: the burn, then the coast, then the top, then the whole

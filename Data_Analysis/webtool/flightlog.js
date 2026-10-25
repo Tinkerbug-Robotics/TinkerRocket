@@ -110,6 +110,7 @@ export function newEntry(facts, details, now = new Date(), timeZone = undefined)
       apogee_m: num(f.apogee_m),
       max_speed_mps: num(f.max_speed_mps),
       max_accel_g: num(f.max_accel_g),
+      peak_shock_g: num(f.peak_shock_g),
       flight_time_s: num(f.flight_time_s),
       landing_distance_m: num(f.landing_distance_m),
     },
