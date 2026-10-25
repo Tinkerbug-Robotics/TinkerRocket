@@ -1297,6 +1297,19 @@ target_include_directories(test_flight_token_policy PRIVATE
 target_link_libraries(test_flight_token_policy GTest::gtest_main)
 gtest_discover_tests(test_flight_token_policy)
 
+# ---------- test_token_page_policy (#1659) ----------
+# The launch-edge flight-token write must be a plain NVS append, never the
+# write that pays for a sector erase in the boost: W1 checks the active page
+# on the pad and turns it when W2 would not fit. Cross-checked against IDF's
+# own page-request rule for every page fill. Pure header in the OC project.
+add_executable(test_token_page_policy test_token_page_policy.cpp)
+target_include_directories(test_token_page_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_token_page_policy GTest::gtest_main)
+gtest_discover_tests(test_token_page_policy)
+
 # ---------- test_inflight_refusal_policy (#1162) ----------
 # The INFLIGHT hold behind the OC's cmd-8 power-off and self-OTA veto: a live
 # FC saying INFLIGHT always refuses, a silent one refuses until the FC's own
