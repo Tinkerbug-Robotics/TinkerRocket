@@ -158,6 +158,13 @@ heavily tested pieces in the app.
   and main out of the descent-rate curve alone, because that is the only recovery signal
   carried on *both* the direct BLE link and the base-station relay. The flight computer
   knows far more (it sees the ejection shock) but has no spare wire bit to tell anyone.
+- **`TouchdownPredictor`** is what makes the landing call when the link dies first, which
+  is what usually happens at touchdown: the antenna reaches the ground before the landed
+  frame gets through. It predicts touchdown from the last live descent frames (height over
+  recent rate, plus a main leg when the profile's pyro channels fire a main on descent),
+  and the announcer says "Predicted landing" once that time has passed and the link has
+  been quiet for 1.5 s. Scored against the flight logs by
+  `Data_Analysis/touchdown_call_eval.py`.
 - **`LandingPredictor`** classifies flight phase and runs a forward drift simulation from
   the current state. The point is the failure case: if LoRa drops mid-flight, the last
   published prediction stays pinned on the map so the recovery walk still has a target.

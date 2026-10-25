@@ -25,6 +25,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 import java.util.concurrent.Executors
@@ -137,6 +138,15 @@ class AppContainer(app: Application) {
                 profileStore.activeProfile?.let {
                     com.tinkerbug.tinkerrocket.session.RecoveryProfile.from(it)
                 }
+            },
+            // The predicted landing call fires with no frame arriving, so it
+            // needs a timer: on the fleet scope, the announcer's own thread.
+            schedule = { atMs, action ->
+                val job = fleetScope.launch {
+                    delay((atMs - System.currentTimeMillis()).coerceAtLeast(0))
+                    action()
+                }
+                ({ job.cancel() })
             },
         )
     }
