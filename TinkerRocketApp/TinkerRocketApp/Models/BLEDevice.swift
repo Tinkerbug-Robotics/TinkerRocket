@@ -2094,6 +2094,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     func generateAndCacheCSV(
         from binaryURL: URL,
         filename: String,
+        source: FlightSource? = nil,
         completion: @escaping (URL?) -> Void
     ) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -2132,13 +2133,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 }
 
                 let generator = CSVGenerator()
-                let summary = try generator.generateCSV(
+                var summary = try generator.generateCSV(
                     from: binaryURL,
                     to: tempCSV,
                     progressCallback: { [weak self] progress in
                         DispatchQueue.main.async { self?.csvGenerationProgress = progress }
                     }
                 )
+                summary.source = source   // #1658
                 let summaryTempName: String
                 if filename.hasSuffix(".bin") {
                     summaryTempName = String(filename.dropLast(4)) + ".json"
@@ -2225,7 +2227,30 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         return downloadStates[filename] ?? .notDownloaded
     }
 
-    func downloadAndCacheFlight(_ filename: String, completion: @escaping (Bool) -> Void) {
+    /// #1658: who a flight is being downloaded from, snapshotted when the
+    /// download starts (on the main actor, where the identity lives; the
+    /// conversion runs on a background queue). `rocketProfile` is the name of
+    /// the profile bound to this unit, which the caller looks up.
+    func downloadSource(rocketProfile: String?) -> FlightSource {
+        let known = !unitID.isEmpty
+        func text(_ s: String) -> String? { s.isEmpty ? nil : s }
+        return FlightSource(
+            unit_id: text(unitID),
+            unit_name: text(unitName),
+            rocket_profile: rocketProfile,
+            rocket_id: known ? Int(rocketID) : nil,
+            fc_board: fcBoardRev,
+            oc_board: ocBoardRev,
+            fc_fw: text(fcFirmwareVersion),
+            oc_fw: text(firmwareVersion),
+            fc_gnss: fcGnss,
+            downloaded_at: ISO8601DateFormatter().string(from: Date())
+        )
+    }
+
+    func downloadAndCacheFlight(_ filename: String, rocketProfile: String? = nil,
+                                completion: @escaping (Bool) -> Void) {
+        let source = isBaseStation ? nil : downloadSource(rocketProfile: rocketProfile)
         DispatchQueue.main.async { self.downloadStates[filename] = .downloading }
         if isBaseStation {
             downloadFile(filename) { [weak self] fileURL in
@@ -2300,7 +2325,8 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 return
             }
             DispatchQueue.main.async { self.downloadStates[filename] = .generatingCSV; self.csvGenerationProgress = 0.0 }
-            self.generateAndCacheCSV(from: cachedBinaryURL, filename: filename) { [weak self] csvURL in
+            self.generateAndCacheCSV(from: cachedBinaryURL, filename: filename,
+                                     source: source) { [weak self] csvURL in
                 DispatchQueue.main.async {
                     if csvURL != nil {
                         self?.downloadStates[filename] = .completed; completion(true)

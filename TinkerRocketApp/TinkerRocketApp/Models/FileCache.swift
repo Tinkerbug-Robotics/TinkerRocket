@@ -17,6 +17,14 @@ private struct FlightSummaryHeadline: Decodable {
     let apogee_time_s: Double?
 }
 
+/// #1658: where the flight came from, decoded on its own like the headline,
+/// so neither block can blank the other or the row.
+private struct FlightSummaryIdentity: Decodable {
+    struct SettingsBoard: Decodable { let board: String? }
+    let source: FlightSource?
+    let settings: SettingsBoard?
+}
+
 // MARK: - CachedFlight Model
 
 enum CachedFlightType {
@@ -40,8 +48,20 @@ struct CachedFlight: Identifiable {
     /// a log that carries more than one rocket at download). nil for the
     /// combined log and for everything else.
     var bsLogRocketID: UInt8? = nil
+    /// #1658: the rocket and computer it was downloaded from (summary
+    /// `source`); nil for flights downloaded before the app recorded it.
+    var source: FlightSource? = nil
+    /// #1658: the FC's board from the log (summary `settings.board`). nil when
+    /// the summary predates the field; FlightDetailView then reads the log.
+    var fcBoard: String? = nil
 
     var id: String { name }
+
+    /// The name the list shows beside the date: the rocket profile, else the
+    /// computer's unit name.
+    var rocketLabel: String? {
+        source?.rocket_profile ?? source?.unit_name
+    }
 
     // Reusable formatters — DateFormatter is expensive to allocate
     private static let utcDateFormatter: DateFormatter = {
@@ -131,6 +151,18 @@ struct CachedFlight: Identifiable {
 nonisolated class FileCache {
 
     static let shared = FileCache()
+
+    /// #1658: the FC's board for a flight whose summary predates
+    /// `settings.board`, read from the first flight-settings frame in its log.
+    /// nil when the log predates the field (v9, #413) or cannot be read. It
+    /// reads the whole .bin, so call it off the main thread.
+    static func boardFromLog(_ binaryURL: URL) -> String? {
+        guard let frame = try? MessageParser().firstFrame(
+                  ofType: MessageType.flightSettings.rawValue, in: binaryURL),
+              let settings = try? FlightSettingsData(from: frame.payload)
+        else { return nil }
+        return settings.boardRevName
+    }
 
     private let documentsURL: URL
     private let csvCacheURL: URL  // Documents/CSVCache/
@@ -662,6 +694,9 @@ nonisolated class FileCache {
                 burnoutT = head.burnout_time_s
                 apogeeT = head.apogee_time_s
             }
+            let identity = summaryURL
+                .flatMap { try? Data(contentsOf: $0) }
+                .flatMap { try? JSONDecoder().decode(FlightSummaryIdentity.self, from: $0) }
 
             results.append(CachedFlight(
                 name: filename,
@@ -675,7 +710,9 @@ nonisolated class FileCache {
                 maxSpeedMps: maxSpd,
                 burnoutTimeS: burnoutT,
                 apogeeTimeS: apogeeT,
-                bsLogRocketID: split?.rocketID
+                bsLogRocketID: split?.rocketID,
+                source: identity?.source,
+                fcBoard: identity?.settings?.board
             ))
         }
 

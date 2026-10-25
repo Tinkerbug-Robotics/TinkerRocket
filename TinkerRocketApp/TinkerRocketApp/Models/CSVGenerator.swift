@@ -722,6 +722,36 @@ nonisolated struct FlightSummary: Codable, Sendable {
     /// the log at launch (#165). nil for flights logged before the firmware
     /// emitted the settings frame.
     let settings: FlightSettings?
+    /// #1658: the rocket and computer this flight was downloaded from, as the
+    /// app knew them at download time. nil when the summary is generated
+    /// without a connected device, and for flights downloaded before this
+    /// existed; the converter itself never fills it.
+    var source: FlightSource? = nil
+}
+
+/// #1658: where a flight came from. Filled from the live identity of the
+/// computer the app was downloading from (config_identity, fc_identity) and
+/// the rocket profile bound to it. Every field is optional and omitted when
+/// unknown, so "not reported" never reads as a value. Android writes the same
+/// keys (FlightSource in FlightSummary.kt).
+nonisolated struct FlightSource: Codable, Sendable, Equatable {
+    /// Last 4 bytes of the out computer's MAC, hex ("a1cae150").
+    var unit_id: String?
+    /// The out computer's unit name ("TR-R-e150" until renamed).
+    var unit_name: String?
+    /// The phone's rocket profile bound to that unit at download.
+    var rocket_profile: String?
+    var rocket_id: Int?
+    /// Provisioned board revisions (#773), e.g. "V9" or "M1 (asserted)".
+    var fc_board: String?
+    var oc_board: String?
+    /// Firmware stamps, "<sha>[-dirty]+<build>".
+    var fc_fw: String?
+    var oc_fw: String?
+    /// The GNSS receiver the flight computer found ("u-blox", "mosaic-G5").
+    var fc_gnss: String?
+    /// When this phone downloaded the flight, ISO 8601 UTC.
+    var downloaded_at: String?
 }
 
 // MARK: - Flight Settings (#165)
@@ -755,10 +785,14 @@ nonisolated struct FlightSettings: Codable, Sendable {
     let camera: CameraSettings
     let pyro: PyroSettings
     let imu: IMUSettings
+    /// #1658: the FC's board revision from the log (v9+, #413), e.g. "V9" or
+    /// "M1 (asserted)". nil for logs that predate the field.
+    let board: String?
 
     init(from raw: FlightSettingsData) {
         fw_git_sha = raw.fw_git_sha
         fw_dirty = raw.fwDirty
+        board = raw.boardRevName
         roll_control = RollControlSettings(from: raw)
         servo = ServoSettings(from: raw)
         camera = CameraSettings(type: CameraSettings.label(raw.camera_type))

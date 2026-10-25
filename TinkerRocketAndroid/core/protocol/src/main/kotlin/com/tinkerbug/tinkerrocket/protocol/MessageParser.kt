@@ -42,6 +42,25 @@ public object MessageParser {
 
     public fun parse(bytes: ByteArray): List<MessageFrame> {
         val frames = mutableListOf<MessageFrame>()
+        scan(bytes) { frames.add(it); true }
+        return frames
+    }
+
+    /**
+     * #1658: the first valid frame of [type], without decoding the rest of the
+     * log. The flight-settings frame sits near the start (the FC sends it every
+     * 5 s on the pad), so this reads the board of an old flight cheaply.
+     */
+    public fun firstFrame(bytes: ByteArray, type: Int): MessageFrame? {
+        var found: MessageFrame? = null
+        scan(bytes) { frame ->
+            if (frame.type == type) { found = frame; false } else true
+        }
+        return found
+    }
+
+    /** Walk the valid frames in [bytes] in order; [body] returns false to stop. */
+    private inline fun scan(bytes: ByteArray, body: (MessageFrame) -> Boolean) {
         var index = 0
 
         while (index < bytes.size) {
@@ -75,9 +94,8 @@ public object MessageParser {
                     ((payload[3].toLong() and 0xFF) shl 24)
             } else 0L
 
-            frames.add(MessageFrame(type, payload, timestamp))
+            if (!body(MessageFrame(type, payload, timestamp))) return
         }
-        return frames
     }
 
     private fun findPreamble(bytes: ByteArray, startingAt: Int): Int? {

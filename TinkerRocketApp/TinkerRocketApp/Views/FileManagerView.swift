@@ -11,6 +11,8 @@ import UniformTypeIdentifiers
 
 struct FileManagerView: View {
     @ObservedObject var device: BLEDevice
+    /// #1658: the downloaded flight records the rocket profile bound to this unit.
+    @EnvironmentObject private var profileStore: RocketProfileStore
     @State private var fileToDelete: FileInfo?
     @State private var showDeleteConfirm = false
 
@@ -231,7 +233,9 @@ struct FileManagerView: View {
                                     onDownload: {
                                         print("Download button tapped for: \(file.name)")
 
-                                        device.downloadAndCacheFlight(file.name) { success in
+                                        let profile = profileStore.profile(boundToUnitID: device.unitID)
+                                        device.downloadAndCacheFlight(file.name,
+                                                                      rocketProfile: profile?.name) { success in
                                             if success {
                                                 print("[DOWNLOAD] Success: \(file.name)")
                                             } else {

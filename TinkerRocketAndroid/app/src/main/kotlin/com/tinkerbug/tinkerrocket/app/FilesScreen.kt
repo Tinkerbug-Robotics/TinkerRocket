@@ -62,6 +62,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import com.tinkerbug.tinkerrocket.protocol.FilePageNavigator
+import com.tinkerbug.tinkerrocket.protocol.FlightSource
+import com.tinkerbug.tinkerrocket.session.RocketProfileStore
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 /**
  * Phase 4 slice — the post-flight loop: paged device file list (5/page,
@@ -71,7 +75,12 @@ import com.tinkerbug.tinkerrocket.protocol.FilePageNavigator
  * cacheDir), and share via FileProvider.
  */
 @Composable
-fun FilesScreen(device: FleetDevice<DeviceSession>, fleetScope: CoroutineScope) {
+fun FilesScreen(
+    device: FleetDevice<DeviceSession>,
+    fleetScope: CoroutineScope,
+    /** #1658: the downloaded flight records the rocket profile bound to this unit. */
+    profileStore: RocketProfileStore? = null,
+) {
     // Post-flight chart route: set = show the chart for that cached CSV.
     var chartCsv by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableStateOf<java.io.File?>(null)
@@ -317,7 +326,7 @@ fun FilesScreen(device: FleetDevice<DeviceSession>, fleetScope: CoroutineScope) 
                     onDownload = {
                         status = null
                         fleetScope.launch {
-                            status = downloadAndConvert(context, session, file)
+                            status = downloadAndConvert(context, session, file, profileStore)
                             csvEpoch++      // a CSV may now exist for this row
                         }
                     },
@@ -576,13 +585,38 @@ private fun csvFileFor(context: Context, name: String) = FlightCache.csvFileFor(
 private fun summaryFileFor(context: Context, name: String) =
     FlightCache.summaryFileFor(context, name)
 
+/**
+ * #1658: who a flight came from, from the live identity of the unit it is
+ * being downloaded from and the profile bound to it (looked up by unit ID, as
+ * iOS does). Every field is optional and left out when unknown.
+ */
+private fun downloadSource(session: DeviceSession, profileStore: RocketProfileStore?): FlightSource {
+    val id = session.identity.value
+    fun text(s: String): String? = s.ifEmpty { null }
+    return FlightSource(
+        unitId = text(id.unitId),
+        unitName = text(id.unitName),
+        rocketProfile = profileStore?.profileBoundTo(id.unitId)?.name,
+        rocketId = if (id.unitId.isNotEmpty()) id.rocketId else null,
+        fcBoard = id.fcBoardRev,
+        ocBoard = id.ocBoardRev,
+        fcFw = text(id.fcFirmwareVersion),
+        ocFw = text(id.firmwareVersion),
+        fcGnss = id.fcGnss,
+        downloadedAt = Instant.now().truncatedTo(ChronoUnit.SECONDS).toString(),
+    )
+}
+
 /** Runs on the fleet dispatcher (downloadFile contract); CSV work hops to Default. */
 private suspend fun downloadAndConvert(
     context: Context,
     session: DeviceSession,
     file: FileInfo,
+    profileStore: RocketProfileStore? = null,
 ): String = when (val result = session.downloadFile(file.name)) {
     is DownloadResult.Success -> withContext(Dispatchers.Default) {
+        // #1658: snapshotted before the conversion, while still connected.
+        val source = downloadSource(session, profileStore)
         binFileFor(context, file.name).writeBytes(result.bytes)
         // Kept although short of the listing: the board ended the transfer
         // itself (older out-computer firmware left out stored bytes outside
@@ -617,7 +651,7 @@ private suspend fun downloadAndConvert(
             } else {
                 val (csv, summary) = CsvGenerator().writeCsv(result.bytes)
                 csvFileFor(context, file.name).writeText(csv)
-                summaryFileFor(context, file.name).writeText(summary.toJson())
+                summaryFileFor(context, file.name).writeText(summary.copy(source = source).toJson())
                 "Saved ${file.name} (${result.bytes.size / 1000} kB) + CSV$shortNote"
             }
         } catch (e: Exception) {

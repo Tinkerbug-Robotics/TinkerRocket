@@ -5,7 +5,11 @@ import android.content.Intent
 import androidx.core.content.FileProvider
 import java.io.File
 import com.tinkerbug.tinkerrocket.protocol.FlightFiles
+import com.tinkerbug.tinkerrocket.protocol.FlightSettingsData
+import com.tinkerbug.tinkerrocket.protocol.FlightSource
 import com.tinkerbug.tinkerrocket.protocol.FlightSummary
+import com.tinkerbug.tinkerrocket.protocol.MessageParser
+import com.tinkerbug.tinkerrocket.protocol.MsgType
 
 /**
  * On-phone flight storage — the iOS FileCache mirror.
@@ -39,6 +43,18 @@ internal object FlightCache {
         File(csvDir(context), name.removeSuffix(".bin") + ".json")
 
     /**
+     * #1658: the FC's board for a flight whose summary predates
+     * `settings.board`, read from the first flight-settings frame in its log.
+     * null when the log predates the field (v9, #413) or cannot be read. It
+     * reads the whole .bin, so call it off the main thread.
+     */
+    fun boardFromLog(bin: File): String? = runCatching {
+        MessageParser.firstFrame(bin.readBytes(), MsgType.FLIGHT_SETTINGS)
+            ?.let { FlightSettingsData.decode(it.payload) }
+            ?.boardRevName
+    }.getOrNull()
+
+    /**
      * One downloaded flight as it exists on the phone.
      *
      * A flight can be half-present: the download writes the `.bin` first and
@@ -54,6 +70,16 @@ internal object FlightCache {
         val lastModified: Long,
         /** #1091 item 4: the headline numbers from the `.json` sidecar, when present. */
         val summary: FlightSummary? = null,
+        /**
+         * #1658: the rocket and computer it was downloaded from (summary
+         * `source`); null for flights downloaded before the app recorded it.
+         */
+        val source: FlightSource? = null,
+        /**
+         * #1658: the FC's board from the log (summary `settings.board`). null
+         * when the summary predates the field; the row then reads the log.
+         */
+        val fcBoard: String? = null,
     ) {
         val displayName: String get() = name.removeSuffix(".bin")
         val hasCsv: Boolean get() = csv != null
@@ -81,6 +107,10 @@ internal object FlightCache {
         return names.map { name ->
             val bin = bins.firstOrNull { it.name == name }
             val csv = csvs.firstOrNull { it.name == name.removeSuffix(".bin") + ".csv" }
+            // #1658: one read, three independent decodes (#1077): a block that
+            // fails to parse never blanks another.
+            val summaryText = summaryFileFor(context, name).takeIf { it.exists() }
+                ?.let { runCatching { it.readText() }.getOrNull() }
             SavedFlight(
                 name = name,
                 bin = bin,
@@ -89,8 +119,9 @@ internal object FlightCache {
                 // what a "how big was this flight" glance means.
                 sizeBytes = bin?.length() ?: csv?.length() ?: 0L,
                 lastModified = maxOf(bin?.lastModified() ?: 0L, csv?.lastModified() ?: 0L),
-                summary = summaryFileFor(context, name).takeIf { it.exists() }
-                    ?.let { runCatching { FlightSummary.fromJson(it.readText()) }.getOrNull() },
+                summary = summaryText?.let(FlightSummary::fromJson),
+                source = summaryText?.let(FlightSummary::sourceFromJson),
+                fcBoard = summaryText?.let(FlightSummary::boardFromJson),
             )
         }.sortedByDescending { it.lastModified }
     }

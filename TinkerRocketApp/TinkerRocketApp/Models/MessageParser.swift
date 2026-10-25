@@ -33,6 +33,26 @@ nonisolated class MessageParser {
         // zero-based (matches the hardened scan/cal decoders).
         let bytes = [UInt8](try Data(contentsOf: url))
         var frames: [MessageFrame] = []
+        scanFrames(bytes) { frames.append($0); return true }
+        return frames
+    }
+
+    /// #1658: the first valid frame of `type`, without decoding the rest of
+    /// the log. The flight-settings frame sits near the start (the FC sends it
+    /// every 5 s on the pad), so this reads the board of an old flight cheaply.
+    func firstFrame(ofType type: UInt8, in url: URL) throws -> MessageFrame? {
+        let bytes = [UInt8](try Data(contentsOf: url))
+        var found: MessageFrame?
+        scanFrames(bytes) { frame in
+            guard frame.type == type else { return true }
+            found = frame
+            return false
+        }
+        return found
+    }
+
+    /// Walk the valid frames in `bytes` in order; `body` returns false to stop.
+    private func scanFrames(_ bytes: [UInt8], _ body: (MessageFrame) -> Bool) {
         var index = 0
 
         while index < bytes.count {
@@ -93,12 +113,10 @@ nonisolated class MessageParser {
                 timestamp = 0
             }
 
-            // 8. Create and store frame
+            // 8. Hand the frame on
             let frame = MessageFrame(type: type, payload: payload, timestamp: timestamp)
-            frames.append(frame)
+            if !body(frame) { return }
         }
-
-        return frames
     }
 
     /// Find the next preamble [0xAA 0x55 0xAA 0x55] starting at the given index

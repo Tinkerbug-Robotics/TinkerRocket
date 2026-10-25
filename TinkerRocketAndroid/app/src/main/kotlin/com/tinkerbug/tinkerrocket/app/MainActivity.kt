@@ -294,6 +294,7 @@ class MainActivity : ComponentActivity() {
                                     1 -> FilesScreen(
                                         device = activeDevice,
                                         fleetScope = container.fleetScope,
+                                        profileStore = container.profileStore,
                                     )
                                     2 -> MapTab(
                                         container = container,

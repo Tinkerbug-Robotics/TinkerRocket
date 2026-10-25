@@ -77,6 +77,13 @@ public data class FlightSummary(
      * emitted the settings frame.
      */
     val settings: FlightSettings?,
+    /**
+     * #1658: the rocket and computer this flight was downloaded from, as the
+     * app knew them at download time. null when the summary is generated
+     * without a connected device, and for flights downloaded before this
+     * existed; the converter itself never fills it.
+     */
+    val source: FlightSource? = null,
 ) {
     public fun toJsonObject(): JsonObject = jsonObj(
         "max_altitude_m" to maxAltitudeM?.let(::JsonPrimitive),
@@ -84,6 +91,7 @@ public data class FlightSummary(
         "burnout_time_s" to burnoutTimeS?.let(::JsonPrimitive),
         "apogee_time_s" to apogeeTimeS?.let(::JsonPrimitive),
         "settings" to settings?.toJsonObject(),
+        "source" to source?.toJsonObject(),
     )
 
     /** Pretty-printed sidecar JSON — same keys/values as iOS `writeSummary`. */
@@ -115,6 +123,92 @@ public data class FlightSummary(
         } catch (_: Exception) {
             null
         }
+
+        /**
+         * #1658: the sidecar's `source` block, read on its own like the
+         * headline numbers so neither can blank the other. null when absent
+         * or unreadable.
+         */
+        public fun sourceFromJson(text: String): FlightSource? = try {
+            ((Json.parseToJsonElement(text) as? JsonObject)?.get("source") as? JsonObject)
+                ?.let(FlightSource::fromJsonObject)
+        } catch (_: Exception) {
+            null
+        }
+
+        /**
+         * #1658: `settings.board`, the FC's board revision from the log. null
+         * for a summary written before it existed; the caller can then read
+         * the log itself.
+         */
+        public fun boardFromJson(text: String): String? = try {
+            (((Json.parseToJsonElement(text) as? JsonObject)?.get("settings") as? JsonObject)
+                ?.get("board") as? JsonPrimitive)?.takeIf { it.isString }?.content
+        } catch (_: Exception) {
+            null
+        }
+    }
+}
+
+/**
+ * #1658: where a flight came from. Filled from the live identity of the
+ * computer the app was downloading from (config_identity, fc_identity) and the
+ * rocket profile bound to it. Every field is optional and omitted when
+ * unknown, so "not reported" never reads as a value. Keys match iOS
+ * `FlightSource` in CSVGenerator.swift.
+ */
+public data class FlightSource(
+    /** Last 4 bytes of the out computer's MAC, hex ("a1cae150"). */
+    val unitId: String? = null,
+    /** The out computer's unit name ("TR-R-e150" until renamed). */
+    val unitName: String? = null,
+    /** The phone's rocket profile bound to that unit at download. */
+    val rocketProfile: String? = null,
+    val rocketId: Int? = null,
+    /** Provisioned board revisions (#773), e.g. "V9" or "M1 (asserted)". */
+    val fcBoard: String? = null,
+    val ocBoard: String? = null,
+    /** Firmware stamps, "<sha>[-dirty]+<build>". */
+    val fcFw: String? = null,
+    val ocFw: String? = null,
+    /** The GNSS receiver the flight computer found ("u-blox", "mosaic-G5"). */
+    val fcGnss: String? = null,
+    /** When this phone downloaded the flight, ISO 8601 UTC. */
+    val downloadedAt: String? = null,
+) {
+    /** The name a list shows beside the date: the rocket profile, else the unit name. */
+    val rocketLabel: String? get() = rocketProfile ?: unitName
+
+    public fun toJsonObject(): JsonObject = jsonObj(
+        "unit_id" to unitId?.let(::JsonPrimitive),
+        "unit_name" to unitName?.let(::JsonPrimitive),
+        "rocket_profile" to rocketProfile?.let(::JsonPrimitive),
+        "rocket_id" to rocketId?.let(::JsonPrimitive),
+        "fc_board" to fcBoard?.let(::JsonPrimitive),
+        "oc_board" to ocBoard?.let(::JsonPrimitive),
+        "fc_fw" to fcFw?.let(::JsonPrimitive),
+        "oc_fw" to ocFw?.let(::JsonPrimitive),
+        "fc_gnss" to fcGnss?.let(::JsonPrimitive),
+        "downloaded_at" to downloadedAt?.let(::JsonPrimitive),
+    )
+
+    public companion object {
+        public fun fromJsonObject(obj: JsonObject): FlightSource {
+            fun s(key: String): String? =
+                (obj[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            return FlightSource(
+                unitId = s("unit_id"),
+                unitName = s("unit_name"),
+                rocketProfile = s("rocket_profile"),
+                rocketId = (obj["rocket_id"] as? JsonPrimitive)?.content?.toIntOrNull(),
+                fcBoard = s("fc_board"),
+                ocBoard = s("oc_board"),
+                fcFw = s("fc_fw"),
+                ocFw = s("oc_fw"),
+                fcGnss = s("fc_gnss"),
+                downloadedAt = s("downloaded_at"),
+            )
+        }
     }
 }
 
@@ -133,8 +227,14 @@ public data class FlightSettings(
     val camera: CameraSettings,
     val pyro: PyroSettings,
     val imu: ImuSettings,
+    /**
+     * #1658: the FC's board revision from the log (v9+, #413), e.g. "V9" or
+     * "M1 (asserted)". null for logs that predate the field.
+     */
+    val board: String? = null,
 ) {
     public fun toJsonObject(): JsonObject = jsonObj(
+        "board" to board?.let(::JsonPrimitive),
         "fw_git_sha" to JsonPrimitive(fwGitSha),
         "fw_dirty" to JsonPrimitive(fwDirty),
         "roll_control" to rollControl.toJsonObject(),
@@ -160,6 +260,7 @@ public data class FlightSettings(
                 dynamicRate = raw.imuRateDynamic,
                 mounting = MountingSettings.from(raw),
             ),
+            board = raw.boardRevName,
         )
     }
 }

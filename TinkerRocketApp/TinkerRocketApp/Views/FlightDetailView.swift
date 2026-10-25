@@ -13,6 +13,9 @@ struct FlightDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showDeleteConfirm = false
     @AppStorage("unitSystem") private var unitSystem: UnitSystem = .metric
+    /// #1658: the FC board read from the log, for a summary that predates
+    /// `settings.board`. nil until read, or when the log predates it too.
+    @State private var logBoard: String?
 
     var body: some View {
         List {
@@ -43,6 +46,36 @@ struct FlightDetailView: View {
                         Spacer()
                         Text(formatDate(date))
                             .foregroundColor(.secondary)
+                    }
+                }
+            }
+
+            // #1658: which rocket and computer this flight came from, so a
+            // flight can still be matched to its computer after launch day.
+            if flight.type == .rocket {
+                Section {
+                    SourceRow(label: "Rocket", value: flight.source?.rocket_profile ?? "Unknown")
+                    SourceRow(label: "Computer", value: flight.source?.unit_name ?? "Unknown",
+                              detail: flight.source?.unit_id.map { "Unit \($0)" })
+                    SourceRow(label: "Board", value: board ?? "Unknown")
+                    if let fw = flight.source?.fc_fw {
+                        SourceRow(label: "FC firmware", value: fw, monospaced: true)
+                    }
+                    if let fw = flight.source?.oc_fw {
+                        SourceRow(label: "OC firmware", value: fw, monospaced: true)
+                    }
+                    if let gnss = flight.source?.fc_gnss {
+                        SourceRow(label: "GNSS", value: gnss)
+                    }
+                    if let date = flight.source?.downloaded_at
+                        .flatMap({ ISO8601DateFormatter().date(from: $0) }) {
+                        SourceRow(label: "Downloaded", value: formatDate(date))
+                    }
+                } header: {
+                    Text("Source")
+                } footer: {
+                    if flight.source == nil {
+                        Text("Downloaded before the app recorded which computer a flight came from.")
                     }
                 }
             }
@@ -111,6 +144,14 @@ struct FlightDetailView: View {
         }
         .listStyle(InsetGroupedListStyle())
         .navigationTitle(flight.displayTitle)
+        .task {
+            // A summary written before #1658 has no board; the log has it.
+            guard flight.type == .rocket, flight.fcBoard == nil,
+                  let bin = flight.binaryURL else { return }
+            logBoard = await Task.detached(priority: .utility) {
+                FileCache.boardFromLog(bin)
+            }.value
+        }
         .alert("Delete Flight Log?", isPresented: $showDeleteConfirm) {
             Button("Delete", role: .destructive) {
                 onDelete?()
@@ -120,6 +161,12 @@ struct FlightDetailView: View {
         } message: {
             Text("Are you sure you want to delete \"\(flight.displayTitle)\"? This cannot be undone.")
         }
+    }
+
+    /// The computer's board: as provisioned (the OC's, then the FC's, at
+    /// download), else what the log recorded.
+    private var board: String? {
+        flight.source?.oc_board ?? flight.source?.fc_board ?? flight.fcBoard ?? logBoard
     }
 
     // MARK: - Formatting Helpers
@@ -169,6 +216,35 @@ struct FlightDetailView: View {
 
     private func formatDate(_ date: Date) -> String {
         Self.dateFormatter.string(from: date)
+    }
+}
+
+// MARK: - Source Row
+
+/// #1658: one line of the Source section, with an optional caption under the value.
+private struct SourceRow: View {
+    let label: String
+    let value: String
+    var detail: String? = nil
+    var monospaced = false
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label)
+            Spacer()
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(value)
+                    .font(monospaced ? .system(.caption, design: .monospaced) : .body)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                if let detail {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
     }
 }
 
