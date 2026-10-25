@@ -129,6 +129,9 @@ void expectSameEkf(const RawGnssEKFParams& a, const RawGnssEKFParams& b)
     EXPECT_EQ(a.gravity_wgs84, b.gravity_wgs84);
     EXPECT_EQ(a.hist_spacing_s, b.hist_spacing_s);
     EXPECT_EQ(a.att_exact, b.att_exact);
+    EXPECT_EQ(a.imu_free_acc_psd, b.imu_free_acc_psd);
+    EXPECT_EQ(a.imu_free_vel_sigma, b.imu_free_vel_sigma);
+    EXPECT_EQ(a.imu_free_pos_sigma, b.imu_free_pos_sigma);
     EXPECT_EQ(a.cr_mode, b.cr_mode);
     EXPECT_EQ(a.cr_sigma_per_rev_s, b.cr_sigma_per_rev_s);
     EXPECT_EQ(a.cr_common_sigma_mps, b.cr_common_sigma_mps);
@@ -161,6 +164,7 @@ void expectSameShadowSettings(const RawGnssShadow::Config& a, const RawGnssShado
     EXPECT_EQ(a.sat_cap, b.sat_cap);
     EXPECT_EQ(a.sat_cap_max, b.sat_cap_max);
     EXPECT_EQ(a.level.min_dt_s, b.level.min_dt_s);
+    EXPECT_EQ(a.descent_imu_free, b.descent_imu_free);
     EXPECT_EQ(a.windup_k, b.windup_k);
     EXPECT_EQ(a.windup_monitor, b.windup_monitor);
 }
@@ -211,7 +215,7 @@ void expectSameNumbers(const GnssReceiverProfile& a, const GnssReceiverProfile& 
 // TheShadowSafeguardDefaultsAreTheBeetles) before its size goes in here: the
 // Beetle's filter is its defaults, and the M1 build applies the LC86G's
 // profile over them. The sizes are a 64-bit host's (macOS and Linux alike).
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssEKFParams) == 472,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssEKFParams) == 504,
               "RawGnssEKFParams changed: add the field to expectSameEkf, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(RawMeasBuilder::Config) == 336,
               "RawMeasBuilder::Config changed: add the field to expectSameBuilder, then update this size");
@@ -219,7 +223,7 @@ static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 32,
               "GnssSignalProfile changed: add the field to expectSameSignal, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 568,
               "GnssReceiverProfile changed: add the field to expectSameNumbers, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1760,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1800,
               "RawGnssShadow::Config changed: pin the field in TheShadowSafeguardDefaultsAreTheBeetles, then update "
               "this size");
 
@@ -1080,6 +1084,10 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_EQ(c.baro_offset_min_s, 10.0);
     EXPECT_EQ(c.baro_hold_port_m, 2.0);
     EXPECT_EQ(c.baro_hold_max_s, 30.0);
+    EXPECT_FALSE(c.descent_imu_free);                    // fc/raw-descent-mode: off until a build turns it on
+    EXPECT_EQ(c.ekf.imu_free_acc_psd, 16.0);
+    EXPECT_EQ(c.ekf.imu_free_vel_sigma, 5.0);
+    EXPECT_EQ(c.ekf.imu_free_pos_sigma, 100.0);
     EXPECT_EQ(c.zupt_sigma_mps, 0.5);
     EXPECT_EQ(c.zupt_period_s, 0.1);
     EXPECT_TRUE(c.pad_zupt);

@@ -106,6 +106,36 @@ void RawGnssEKF<T>::setParams(const RawGnssEKFParams& p)
     q_clkb_ = T(p.clk_bias_psd);
     q_clkd_ = T(p.clk_drift_psd);
     q_isb_  = T(p.isb_psd);
+    q_cv_   = T(p.imu_free_acc_psd);
+}
+
+template <typename T>
+void RawGnssEKF<T>::setImuFree(bool on)
+{
+    if (on == imu_free_)
+        return;
+    imu_free_ = on;
+    if (!on)
+        return;
+    // the navigation states (position, velocity, clock, system offsets) apart
+    // from the inertial ones (attitude, accelerometer bias, gyro bias)
+    for (int i = 0; i < N; ++i)
+    {
+        const bool nav_i = i < kAtt || i >= kClkBias;
+        for (int j = kAtt; j < kClkBias; ++j)
+            if (nav_i)
+                P_[i][j] = P_[j][i] = T(0);
+    }
+    const T floor = T(p_.imu_free_vel_sigma * p_.imu_free_vel_sigma);
+    for (int a = 0; a < 3; ++a)
+        if (P_[kVel + a][kVel + a] < floor)
+            P_[kVel + a][kVel + a] = floor;
+    const T pfloor = T(p_.imu_free_pos_sigma * p_.imu_free_pos_sigma);
+    for (int a = 0; a < 2; ++a)
+        if (P_[kPos + a][kPos + a] < pfloor)
+            P_[kPos + a][kPos + a] = pfloor;
+    // what the gate refused under the IMU's state is judged afresh
+    std::memset(rejects_, 0, sizeof(rejects_));
 }
 
 template <typename T>
@@ -127,6 +157,7 @@ void RawGnssEKF<T>::init(const double lla[3], const T v_ned[3], const T q[4], do
     g_excess_ = g_peak_ = T(0);
     rate_peak_ = rate_across_peak_ = T(0);
     att_hold_ = false;
+    imu_free_ = false;
     t_ = t0;
     // hdg_obs_mode: no push and no boost yet (applied or not stays the shadow's)
     fh_ew_[0] = fh_ew_[1] = T(0);
@@ -452,9 +483,9 @@ void RawGnssEKF<T>::propagate(const T acc[3], const T gyro[3], T dt)
         normalize4(q_);
     }
 
-    // velocity, then position from it
+    // velocity, then position from it (the IMU-free mode: the velocity held)
     for (int i = 0; i < 3; ++i)
-        a_ned_[i] = Tb2n[i][0] * a_b[0] + Tb2n[i][1] * a_b[1] + Tb2n[i][2] * a_b[2];
+        a_ned_[i] = imu_free_ ? T(0) : Tb2n[i][0] * a_b[0] + Tb2n[i][1] * a_b[1] + Tb2n[i][2] * a_b[2];
     for (int i = 0; i < 3; ++i)
         v_[i] += a_ned_[i] * dt;
     {
@@ -546,6 +577,13 @@ void RawGnssEKF<T>::propagateCovariance(const T Tb2n[3][3], const T f_b[3], cons
             for (int j = 0; j < 3; ++j)
                 Fww[i][j] = -sw[i][j];
     }
+    // the IMU-free mode: nothing of the attitude or the accelerometer bias
+    // reaches the velocity, which walks on its own noise instead
+    if (imu_free_)
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j)
+                Fva[i][j] = Fvb[i][j] = T(0);
+    const T q_vel = imu_free_ ? q_cv_ : q_acc_;
     const T f52 = T(2) * g_d / T(kRe);
     const T half = T(0.5);
     // att_exact: the attitude's own block of Phi, Ra = exp(-[w x] dt), and its
@@ -656,11 +694,11 @@ void RawGnssEKF<T>::propagateCovariance(const T Tb2n[3][3], const T f_b[3], cons
     const T h2 = half * dt * dt;
     for (int i = 0; i < 3; ++i)
     {
-        P_[3 + i][3 + i] += dt * q_acc_;
+        P_[3 + i][3 + i] += dt * q_vel;
         P_[6 + i][6 + i] += dt * q_att_;
         P_[9 + i][9 + i] += dt * q_ab_ + h2 * T(2) * f_ab_ * q_ab_;
         P_[12 + i][12 + i] += dt * q_wb_ + h2 * T(2) * f_wb_ * q_wb_;
-        const T pv = h2 * q_acc_;                       // position-velocity
+        const T pv = h2 * q_vel;                        // position-velocity
         P_[i][3 + i] += pv;
         P_[3 + i][i] += pv;
         const T aw = h2 * (-half) * q_wb_;              // attitude-gyro bias

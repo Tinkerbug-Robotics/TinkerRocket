@@ -94,6 +94,20 @@ given -- off, but for what `--receiver mosaic`'s flight safeguards set since fc/
 The epochs file then also carries each epoch's clock drift, screen and check numbers and the spinning body's
 (`clk_d_mps` .. `att_sig_d_deg`), and the events JSON a `windup` block.
 
+The IMU-free descent (fc/raw-descent-mode; a `RAW_REPLAY_DESCENT` build, on by default): `--descent-imu-free 1`
+(`RawGnssShadow::Config::descent_imu_free`, the image's `TR_RAW_DESCENT_IMU_FREE`) has the filter take position and
+velocity from GNSS and the barometer alone from the apogee call on, the velocity a random walk instead of the
+accelerometer's integral (`RawGnssEKF::setImuFree`); `--imu-free-acc-psd X` (m^2/s^3), `--imu-free-vel-sigma X` and
+`--imu-free-pos-sigma X` (m/s, m: the floors as it starts) are its settings (`RawGnssEKFParams::imu_free_*`). The
+CSV's last column, `imu_free`, says when it was on.
+
+A real flight's log (no replay file behind it) takes `extract.py --blob none`: T+0 is the logged accelerometer's own
+ignition edge. The flight loop's IMU windows are a grid the log does not keep, and the filter took every second one
+(`EKF_DECIMATION`): through a shock or a fast turn which half it took moves the attitude, so one replay of a flight
+can come out unlike the flight. `extract.py --imu-phase-us X` moves the grid; an ensemble over it (0 to one EKF period)
+says how often a design fails rather than whether one run did. On the 2026-10-24 Beetle flights, as flown, the
+Rolly Polly V failed in 3 of 8 phases and the RIM66 in none of 16, though it failed in flight.
+
 A sidecar `<csv>.events.json` records the guards' counts, the apogee votes the run's own estimate gives, and when the
 gate switched. A mosaic or cold-start replay also writes `<csv>.epochs.csv`: one row per epoch the filter closed,
 whatever `--every` (its time, the codes and Dopplers used and refused, the largest NIS, the longest any one satellite
@@ -109,7 +123,8 @@ The CSV has one row per filter step (100 Hz): MCU and flight time (s from the ig
 FRD to NED), latitude, longitude, height and NED from the pad, velocity, attitude and heading 1-sigma, position and
 velocity 1-sigma, the IMU biases, the receiver clock, health (running, finite, GNSS-aided, barometer-aided), the
 last epoch's satellites used and rejected and its age, the ephemerides held, the carrier rates built, screened in and
-fused, levelling, zero-velocity updates, barometer samples fused and held, magnetometer updates, and the heading fit.
+fused, levelling, zero-velocity updates, barometer samples fused and held, magnetometer updates, the heading fit, and
+(a `RAW_REPLAY_DESCENT` build) whether the IMU-free descent was on.
 
 `scorelib.py` scores a harness CSV or the log's own on-board records (0x96) against the rig flight's truth with the
 same metrics and phases; `onboard_vs_harness.py` puts the two side by side; `run_matrix.py` and `tables.py` run and

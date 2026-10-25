@@ -70,9 +70,11 @@ def unwrap(t, ref=None):
     return ref + d
 
 
-def imu_ticks(recs, config, ekf_rate, t_ref):
+def imu_ticks(recs, config, ekf_rate, t_ref, imu_phase_us=0.0):
     """The flight loop's EKF ticks: 1 kHz logic windows (at the loop's achieved pace), every second one handed to
-    the filter, its integer mean (imu_drain::roundedMean) converted as SensorConverter does."""
+    the filter, its integer mean (imu_drain::roundedMean) converted as SensorConverter does. imu_phase_us moves the
+    windows' grid: the loop's own grid is not in the log, and which half of the samples the filter got is the
+    grid's (a shock's attitude through it; --imu-phase-us)."""
     imu = recs["ISM6HG256"]
     t = unwrap([r["time_us"] for r in imu], t_ref)
     lo = np.array([[r["low_acc_x"], r["low_acc_y"], r["low_acc_z"]] for r in imu])
@@ -95,7 +97,7 @@ def imu_ticks(recs, config, ekf_rate, t_ref):
 
     # logic windows on a regular grid at twice the EKF rate (EKF_DECIMATION = 2); the EKF takes every second one
     period_us = 1e6 / (2.0 * ekf_rate)
-    w = np.floor((t - t[0]) / period_us).astype(np.int64)
+    w = np.floor((t - t[0] + imu_phase_us) / period_us).astype(np.int64)
     take = (w % 2) == 1
     idx = np.flatnonzero(take)
     if idx.size == 0:
@@ -149,8 +151,12 @@ def main():
     ap.add_argument("log")
     ap.add_argument("out")
     ap.add_argument("--ekf-rate", type=float, help="the flight loop's EKF ticks a second (default: the log's)")
+    ap.add_argument("--imu-phase-us", type=float, default=0.0,
+                    help="the flight loop's IMU window grid moved by this much (us): which half of the samples the "
+                         "filter took depends on it, and the log does not say (an ensemble over it)")
     ap.add_argument("--blob", help="the replay file the image carried: its ignition edge puts the log on the "
-                                   "flight's time (default tools/replay/sim_replay.bin; with --sbf, only with --rig)")
+                                   "flight's time (default tools/replay/sim_replay.bin; with --sbf, only with --rig); "
+                                   "none: a real flight, T+0 at the logged accelerometer's own ignition edge")
     ap.add_argument("--borrow", help="for a log without a pad context (an OC image that dropped 0x9B-0x9F): "
                                      "another run's event file (the same replay, the same bench heading error) to "
                                      "take the pad's covariance, ephemerides, ionosphere and IMU biases from")
@@ -198,8 +204,11 @@ def main():
     os.environ.setdefault("COCOM_SDR", os.path.join(WT, "gnss", "cocom-rig", "sdr"))
     sys.path.insert(0, os.path.join(WT, "tools", "rig_replay"))
     import truth as TR  # noqa: E402
-    with open(args.blob, "rb") as f:
-        edge = TR.blob_edge_t(f.read())
+    if args.blob == "none":
+        edge = 0.0   # a real flight: T+0 at the logged accelerometer's own ignition edge
+    else:
+        with open(args.blob, "rb") as f:
+            edge = TR.blob_edge_t(f.read())
     base_s = TR.log_time_base(recs, edge)   # flight s = log's (u32) MCU s + base
     # the unwrapped stamps here are the u32 ones while the log does not wrap
     lines.append(f"META t_base_s {float(base_s)!r}")
@@ -235,7 +244,7 @@ def main():
 
     events = []
     # ---- IMU ticks with the loop's flags
-    ticks = imu_ticks(recs, config, ekf_rate, t_ref)
+    ticks = imu_ticks(recs, config, ekf_rate, t_ref, args.imu_phase_us)
     ki = np.searchsorted(nt, [tk[0] for tk in ticks], side="right") - 1
     for tk, k in zip(ticks, ki):
         k = max(int(k), 0)
@@ -466,7 +475,7 @@ def common_events(recs, config, ekf_rate, t_ref, inflight_of):
     landed = np.array([bool(r.get("alt_landed", False)) for r in ns]) | (state == LANDED)
     nt = unwrap([r["time_us"] for r in ns], t_ref)
     events = []
-    ticks = imu_ticks(recs, config, ekf_rate, t_ref)
+    ticks = imu_ticks(recs, config, ekf_rate, t_ref, args.imu_phase_us)
     ki = np.searchsorted(nt, [tk[0] for tk in ticks], side="right") - 1
     for tk, k in zip(ticks, ki):
         k = max(int(k), 0)
