@@ -1,4 +1,4 @@
-// MosaicMultiband.h — one Doppler per satellite from every band the mosaic-G5 tracks (the multi-band evaluation: the harness alone, no firmware includes it)
+// MosaicMultiband.h — one Doppler per satellite from every band the mosaic-G5 tracks (the mosaic image's driver, config.h TR_RAW_MULTIBAND, and tools/raw_replay's --rr-multiband)
 //
 // The flight's raw-GNSS filter fuses one Doppler row per satellite, from its
 // L1-band signal (GPS L1 C/A, Galileo E1, BeiDou B1I: mosaicL1Pick). The
@@ -149,6 +149,17 @@
 namespace mosaic
 {
 
+// The combiner's working arithmetic: float in the images, whose CPUs (the P4, the S3) have a single-precision FPU
+// and do double in software -- a double multiply-add took 1.9 us on the P4, the whole combination ~6 ms an epoch
+// (MosaicMultibandBench.h). Absolute range rates (up to ~1 km/s, kept to 0.1 mm/s) stay double: the anchors' own,
+// a satellite's captured base and the epoch before's. Everything taken from their differences -- the bands' and
+// anchors' sigmas and weights, the wind-up, the screen, the guard's and the monitor's means, each row's change --
+// is in this. -DMOSAIC_MB_REAL=double builds the reference the float one was checked against.
+#ifndef MOSAIC_MB_REAL
+#define MOSAIC_MB_REAL float
+#endif
+using mbr = MOSAIC_MB_REAL;
+
 static constexpr int kMbSigs = 40;                              // SBF signal numbers 0-39 (4.1.10)
 static constexpr int kMbMaxBands = 6;                           // extra bands one satellite's capture holds
 static constexpr int kMbMaxCombine = 3;                         // extra bands one combination takes at most
@@ -256,6 +267,19 @@ struct MosaicMbWindupIn
     bool  ok = false;
     float hz = 0.0f;
 };
+
+// The gyro's wind-up as a driver reads it decoding a MeasEpoch: the IMU path's last roll rate p (rad/s, about the
+// nose), have false before the first, age_us since it was published; none (ok false) older than max_age_us or at
+// the gyro's rail. W = -k p / 2pi (RawGnssWindup.h rollRate(1, k, p)). The mosaic image's driver and
+// tools/raw_replay both take it from here.
+inline MosaicMbWindupIn mbWindupFromGyro(bool have, double p_rps, int64_t age_us, double k,
+                                         int64_t max_age_us = 20000, double rail_rps = 4000.0 * 3.14159265358979323846 / 180.0)
+{
+    MosaicMbWindupIn w;
+    w.ok = have && age_us >= 0 && age_us <= max_age_us && std::fabs(p_rps) < rail_rps;
+    w.hz = w.ok ? static_cast<float>(-k * p_rps / (2.0 * 3.14159265358979323846)) : 0.0f;
+    return w;
+}
 
 struct MosaicMultibandConfig
 {
@@ -390,12 +414,52 @@ inline void mosaicMbEqualHz(MosaicMultibandConfig& c)
             c.band[i].b = static_cast<float>(0.104 * kMbLambda.v[i] / l1);
 }
 
-// A band's Doppler sigma at C/N0 cn0 (dB-Hz), m/s; 0 with no model.
-inline double mbSigma(const MosaicMbBand& m, double cn0)
+// What the mosaic image flies (config.h TR_RAW_MULTIBAND) and tools/raw_replay's --receiver mosaic replays: the
+// measured model, on, each anchor's floor the receiver profile's Doppler floor (cn0_min_rr by gnss_sys_t) and the
+// builder's white Doppler model (rr_a, rr_b: only an effective C/N0 would use it). The rest is the defaults above:
+// the wind-up referred with the combiner's own estimate, checked against the gyro's where the driver gives it, the
+// anchor's sigma kept. Each band's lag stays 0: on the 2026-10-24 Goblin boost (7.5 g) the bands lagged their
+// anchors by 0.3-1.7 ms (GPS L2C/L5, Galileo E5b/E6, BeiDou B2a) and 4.8-14 ms (Galileo E5a, BeiDou B1C/B3I);
+// the screen's allowance (screen_lag_s) takes those, and gating the lagging bands out gave back half of what the
+// combination gained on that flight's boost.
+inline void mosaicMbFlight(MosaicMultibandConfig& c, const float cn0_min_rr[GNSS_SYS_COUNT], double rr_a, double rr_b)
 {
-    const double q = std::pow(10.0, -(cn0 - 35.0) / 10.0);
-    const double a = m.a, b = m.b;
-    return static_cast<double>(m.scale) * std::sqrt(a * a + b * b * q);
+    mosaicMbMeasured(c);
+    c.on = true;
+    for (int k = 0; k < GNSS_SYS_COUNT; ++k)
+        c.anchor_cn0_min[k] = cn0_min_rr[k];
+    c.rr_a = static_cast<float>(rr_a);
+    c.rr_b = static_cast<float>(rr_b);
+}
+
+// 10^(-(cn0 - 35)/10), the C/N0's share of a band's noise. SBF gives C/N0 in quarter dB, so each quarter's value
+// in 0-100 dB-Hz is worked out once (in double, then rounded to mbr): mbSigma ran ~75 times an epoch
+// (MosaicMultibandBench.h, on the P4). Anything else is worked each time, in mbr. One caller at a time (the mosaic
+// driver's poll task; a harness's one thread).
+inline mbr mbCn0Term(mbr cn0)
+{
+    static mbr tab[401];
+    static bool have[401];
+    const mbr k = cn0 * mbr(4);
+    if (k >= 0 && k <= 400 && k == std::floor(k))
+    {
+        const int i = static_cast<int>(k);
+        if (!have[i])
+        {
+            tab[i] = static_cast<mbr>(std::pow(10.0, -(static_cast<double>(cn0) - 35.0) / 10.0));
+            have[i] = true;
+        }
+        return tab[i];
+    }
+    return std::pow(mbr(10), -(cn0 - mbr(35)) / mbr(10));
+}
+
+// A band's Doppler sigma at C/N0 cn0 (dB-Hz), m/s; 0 with no model.
+inline mbr mbSigma(const MosaicMbBand& m, mbr cn0)
+{
+    const mbr q = mbCn0Term(cn0);
+    const mbr a = m.a, b = m.b;
+    return static_cast<mbr>(m.scale) * std::sqrt(a * a + b * b * q);
 }
 
 // The effective C/N0 that gives a row's white Doppler term, on the profile's
@@ -452,10 +516,10 @@ struct MosaicMbCand
     uint8_t sig = 0;
     uint8_t flagged = 0;
     float   cn0 = 0.0f;
-    double  lam = 0.0;
-    double  d = 0.0;       // r_b - r_a, m/s
-    double  dp = 0.0;      // and less W_hat (lambda_b - lambda_a)
-    double  sigma = 0.0;   // its model sigma, m/s
+    mbr     lam = 0;
+    mbr     d = 0;       // r_b - r_a, m/s
+    mbr     dp = 0;      // and less W_hat (lambda_b - lambda_a)
+    mbr     sigma = 0;   // its model sigma, m/s
 };
 
 // The epoch before's, by satellite: what joined it (a bit a signal number)
@@ -507,10 +571,10 @@ struct MosaicMbGuard
     uint32_t n = 0;
     int64_t  last_ms = 0;   // its last comparison
     int64_t  seen_ms = 0;   // the last epoch its anchor's Doppler was usable
-    double   m = 0.0, v = 0.0, F = 1.0, a_abs = 0.0;
+    mbr      m = 0, v = 0, F = 1, a_abs = 0;
     uint32_t xn = 0;
     int64_t  x_last_ms = 0;
-    double   xm = 0.0, xv = 0.0, xF = 1.0, xa = 0.0;
+    mbr      xm = 0, xv = 0, xF = 1, xa = 0;
 };
 
 // The anchors' common offset for one scope (one system's satellites, or every satellite): the capped weighted median
@@ -532,15 +596,15 @@ struct MosaicMbScratch
     MosaicMbCand cand[kMbObs][kMbMaxCombine];
     // each cell's, while its epoch is combined (here, not on the stack)
     double       anchor_rate[kMbObs] = {};
-    double       sigma_a[kMbObs] = {};
-    double       a_hat[kMbObs] = {};
+    mbr          sigma_a[kMbObs] = {};
+    mbr          a_hat[kMbObs] = {};
     bool         usable[kMbObs] = {};
     bool         held[kMbObs] = {};      // the drift guard holds it
     int8_t       off[kMbObs] = {};       // the screen: every band flagged, all one way (+1 the anchor above them all)
     bool         has_x[kMbObs] = {};     // the monitor's: its leaky mean of its anchor less its other bands at
-    double       x[kMbObs] = {};         //   W_ref, that mean's variance, and its leaky mean of |a_hat|
-    double       xv[kMbObs] = {};
-    double       xa[kMbObs] = {};
+    mbr          x[kMbObs] = {};         //   W_ref, that mean's variance, and its leaky mean of |a_hat|
+    mbr          xv[kMbObs] = {};
+    mbr          xa[kMbObs] = {};
     int          nws = 0;
     MosaicMbWSat wsat[kMbObs];
     MosaicMbWork work;
@@ -551,7 +615,7 @@ struct MosaicMbScratch
     // the wind-up estimate smoothed in time (w_smooth_q): its value (Hz), variance, the instant it stands at and
     // the last estimate it took; a step the satellites (or the gyro) agree on, waiting for the next to confirm it
     bool         ws_ok = false;
-    double       ws_hz = 0.0, ws_P = 0.0;
+    mbr          ws_hz = 0, ws_P = 0;
     int64_t      ws_ms = 0, ws_meas_ms = 0;
     bool         ws_step = false;
     float        ws_step_hz = 0.0f, ws_step_sig = 0.0f;
@@ -948,19 +1012,44 @@ inline MosaicMbGuard* mbGuardTouch(MosaicMbScratch& scr, uint8_t sys, uint8_t pr
 // A leaky mean (the guard's and the monitor's): x of variance vx and the acceleration a_abs folded in, the leak's
 // alpha 1 - exp(-dt / tau) with dt at most max_dt_s (time with nothing to compare neither adds to the mean nor
 // washes it out), at least 1/n while it fills.
-inline void mbLeak(uint32_t& n, int64_t& last_ms, double& m, double& v, double& F, double& a_abs, int64_t rx_ms,
-                   double x, double vx, double a, float tau_s, float max_dt_s)
+// exp(-dt / tau_s) for mbLeak, the last few (dt, tau) pairs kept: an epoch's steps repeat (50 ms, the cap), ~40 an
+// epoch; to the bit what it would be. One caller at a time.
+inline mbr mbLeakExp(mbr dt, float tau_s)
 {
-    double dt = static_cast<double>(rx_ms - last_ms) * 1.0e-3;
+    struct Memo
+    {
+        mbr   dt = 0;
+        float tau = 0.0f;
+        mbr   v = 0;
+        bool  ok = false;
+    };
+    static Memo memo[4];
+    static int next = 0;
+    for (const Memo& e : memo)
+        if (e.ok && e.dt == dt && e.tau == tau_s)
+            return e.v;
+    const mbr v = std::exp(-dt / tau_s);
+    memo[next].dt = dt;
+    memo[next].tau = tau_s;
+    memo[next].v = v;
+    memo[next].ok = true;
+    next = (next + 1) & 3;
+    return v;
+}
+
+inline void mbLeak(uint32_t& n, int64_t& last_ms, mbr& m, mbr& v, mbr& F, mbr& a_abs, int64_t rx_ms,
+                   mbr x, mbr vx, mbr a, float tau_s, float max_dt_s)
+{
+    mbr dt = static_cast<mbr>(rx_ms - last_ms) * mbr(1.0e-3);
     if (dt > max_dt_s)
         dt = max_dt_s;
-    const double leak = n == 0 ? 1.0 : 1.0 - std::exp(-dt / tau_s);
-    const double fill = 1.0 / static_cast<double>(n + 1);
-    const double al = fill > leak ? fill : leak;
+    const mbr leak = n == 0 ? mbr(1) : mbr(1) - mbLeakExp(dt, tau_s);
+    const mbr fill = mbr(1) / static_cast<mbr>(n + 1);
+    const mbr al = fill > leak ? fill : leak;
     m += al * (x - m);
     v += al * (vx - v);
     a_abs += al * (std::fabs(a) - a_abs);
-    F = (1.0 - al) * (1.0 - al) * F + al * al;
+    F = (mbr(1) - al) * (mbr(1) - al) * F + al * al;
     n++;
     last_ms = rx_ms;
 }
@@ -969,20 +1058,20 @@ inline void mbLeak(uint32_t& n, int64_t& last_ms, double& m, double& v, double& 
 // anchor's a_hat: the leaky mean, its sigma, and the flag -- set past max(guard_k sigma, guard_floor_mps +
 // screen_lag_s |a|), |a| the leaky mean of |a_hat| (the screen's allowance for lag differences between the bands
 // under acceleration), let go within guard_release of that. m and sig: the mean and its sigma, for out.
-inline void mbGuardUpdate(MosaicMbGuard& g, int64_t rx_ms, double x, double vx, double a_hat,
+inline void mbGuardUpdate(MosaicMbGuard& g, int64_t rx_ms, mbr x, mbr vx, mbr a_hat,
                           const MosaicMultibandConfig& c, MosaicMultibandStats& st, float& m, float& sig)
 {
     if (g.n > 0 && rx_ms <= g.last_ms)
         return;   // this instant already counted
     mbLeak(g.n, g.last_ms, g.m, g.v, g.F, g.a_abs, rx_ms, x, vx, a_hat, c.guard_tau_s, c.guard_max_dt_s);
-    const double sm = std::sqrt(g.v * g.F);
-    const double am = std::fabs(g.m);
-    const double thr = std::max(static_cast<double>(c.guard_k) * sm,
-                                static_cast<double>(c.guard_floor_mps) + static_cast<double>(c.screen_lag_s) * g.a_abs);
+    const mbr sm = std::sqrt(g.v * g.F);
+    const mbr am = std::fabs(g.m);
+    const mbr thr = std::max(static_cast<mbr>(c.guard_k) * sm,
+                                static_cast<mbr>(c.guard_floor_mps) + static_cast<mbr>(c.screen_lag_s) * g.a_abs);
     st.guard_looks++;
-    if (sm > 0.0 && am / sm > st.guard_max_z)
+    if (sm > 0 && am / sm > st.guard_max_z)
         st.guard_max_z = static_cast<float>(am / sm);
-    if (g.F <= 0.05 && am > st.guard_max_abs)
+    if (g.F <= mbr(0.05) && am > st.guard_max_abs)
         st.guard_max_abs = static_cast<float>(am);
     if (!g.flagged && am > thr)
     {
@@ -1001,21 +1090,21 @@ inline void mbGuardUpdate(MosaicMbGuard& g, int64_t rx_ms, double x, double vx, 
 // (more than max(screen_k of the pair's sigma, thr_lag) off), written to cand with write; the flagged count, with
 // vote (two flagged bands within that of each other: its anchor out, with anchor_vote) and off (every band flagged
 // and all one way: +1 the anchor above them all, -1 below, else 0).
-inline int mbScreen(MosaicMbCand* cand, int nc, double sa, double lam_a, double W, double thr_lag,
+inline int mbScreen(MosaicMbCand* cand, int nc, mbr sa, mbr lam_a, mbr W, mbr thr_lag,
                     const MosaicMultibandConfig& c, bool write, bool& vote, int& off)
 {
     int nf = 0, above = 0, below = 0;
-    double dp[kMbMaxCombine] = {};
+    mbr dp[kMbMaxCombine] = {};
     uint8_t fl[kMbMaxCombine] = {};
     for (int q = 0; q < nc; ++q)
     {
         const MosaicMbCand& cd = cand[q];
         dp[q] = cd.d - W * (cd.lam - lam_a);
-        const double thr = std::max(c.screen_k * std::sqrt(sa * sa + cd.sigma * cd.sigma), thr_lag);
+        const mbr thr = std::max(c.screen_k * std::sqrt(sa * sa + cd.sigma * cd.sigma), thr_lag);
         fl[q] = std::fabs(dp[q]) > thr ? 1 : 0;
         nf += fl[q];
         if (fl[q])
-            (dp[q] < 0.0 ? above : below)++;
+            (dp[q] < 0 ? above : below)++;
         if (write)
         {
             cand[q].dp = dp[q];
@@ -1029,7 +1118,7 @@ inline int mbScreen(MosaicMbCand* cand, int nc, double sa, double lam_a, double 
             {
                 if (!fl[q] || !fl[r])
                     continue;
-                const double thr = std::max(c.screen_k * std::sqrt(cand[q].sigma * cand[q].sigma +
+                const mbr thr = std::max(c.screen_k * std::sqrt(cand[q].sigma * cand[q].sigma +
                                                                     cand[r].sigma * cand[r].sigma),
                                             thr_lag);
                 vote = std::fabs(dp[q] - dp[r]) <= thr;
@@ -1088,25 +1177,25 @@ inline bool mbWindupPick(MosaicMbWSat* ws, int nws, int nvals, int64_t rx_ms, co
     out.x_d = 0.0f;
     out.x_thr = 0.0f;
     bool use_ok = est_ok;
-    double use = est, use_sig = sig;
+    mbr use = est, use_sig = sig;
     if (c.w_smooth_q > 0.0f)
     {
         const bool live = scr.ws_ok && rx_ms > scr.ws_ms &&
                           rx_ms - scr.ws_meas_ms <= static_cast<int64_t>(c.w_smooth_gap_s * 1000.0f);
         if (live)
         {
-            double P = scr.ws_P + static_cast<double>(c.w_smooth_q) * static_cast<double>(rx_ms - scr.ws_ms) * 1.0e-3;
+            mbr P = scr.ws_P + static_cast<mbr>(c.w_smooth_q) * static_cast<mbr>(rx_ms - scr.ws_ms) * mbr(1.0e-3);
             scr.ws_ms = rx_ms;
-            const double k2 = static_cast<double>(c.w_gate_k) * c.w_gate_k;
+            const mbr k2 = static_cast<mbr>(c.w_gate_k) * c.w_gate_k;
             for (int i = 0; i < nws; ++i)
             {
-                const double nu = static_cast<double>(ws[i].v) - scr.ws_hz;
-                ws[i].gated = nu * nu > k2 * (P + static_cast<double>(ws[i].sig) * ws[i].sig) ? 1 : 0;
+                const mbr nu = static_cast<mbr>(ws[i].v) - scr.ws_hz;
+                ws[i].gated = nu * nu > k2 * (P + static_cast<mbr>(ws[i].sig) * ws[i].sig) ? 1 : 0;
                 out.w_gated += ws[i].gated;
             }
             st.w_gated += static_cast<uint32_t>(out.w_gated);
-            const double R = static_cast<double>(sig) * sig;
-            const double nu_e = static_cast<double>(est) - scr.ws_hz;
+            const mbr R = static_cast<mbr>(sig) * sig;
+            const mbr nu_e = static_cast<mbr>(est) - scr.ws_hz;
             bool step = false;
             if (est_enough && nu_e * nu_e > k2 * (P + R))
             {
@@ -1115,22 +1204,22 @@ inline bool mbWindupPick(MosaicMbWSat* ws, int nws, int nvals, int64_t rx_ms, co
                 // gate from that) outweigh those that stayed (the other way round), two at least
                 if (wext.ok)
                 {
-                    const double dg = static_cast<double>(est) - wext.hz;
-                    step = dg * dg <= k2 * (R + static_cast<double>(sg) * sg);
+                    const mbr dg = static_cast<mbr>(est) - wext.hz;
+                    step = dg * dg <= k2 * (R + static_cast<mbr>(sg) * sg);
                 }
                 else
                 {
                     for (int i = 0; i < nws; ++i)
                         scr.work.I[i] = ws[i].w;
                     mbCapWeights(scr.work.I, scr.work.u, nws, c.w_max_share, scr.work.idx);
-                    const double h2 = 0.25 * k2;
-                    double moved = 0.0, stayed = 0.0;
+                    const mbr h2 = mbr(0.25) * k2;
+                    mbr moved = 0, stayed = 0;
                     int nmoved = 0;
                     for (int i = 0; i < nws; ++i)
                     {
-                        const double de = static_cast<double>(ws[i].v) - est;
-                        const double nu = static_cast<double>(ws[i].v) - scr.ws_hz;
-                        const double s2 = static_cast<double>(ws[i].sig) * ws[i].sig;
+                        const mbr de = static_cast<mbr>(ws[i].v) - est;
+                        const mbr nu = static_cast<mbr>(ws[i].v) - scr.ws_hz;
+                        const mbr s2 = static_cast<mbr>(ws[i].sig) * ws[i].sig;
                         if (de * de < nu * nu && nu * nu > h2 * (P + s2))
                         {
                             moved += scr.work.u[i];
@@ -1148,8 +1237,8 @@ inline bool mbWindupPick(MosaicMbWSat* ws, int nws, int nvals, int64_t rx_ms, co
             }
             if (step)
             {
-                const double dp = static_cast<double>(est) - scr.ws_step_hz;
-                if (scr.ws_step && dp * dp <= k2 * (R + static_cast<double>(scr.ws_step_sig) * scr.ws_step_sig))
+                const mbr dp = static_cast<mbr>(est) - scr.ws_step_hz;
+                if (scr.ws_step && dp * dp <= k2 * (R + static_cast<mbr>(scr.ws_step_sig) * scr.ws_step_sig))
                 {
                     scr.ws_hz = est;   // the step confirmed: started over at this epoch's
                     P = R;
@@ -1177,20 +1266,20 @@ inline bool mbWindupPick(MosaicMbWSat* ws, int nws, int nvals, int64_t rx_ms, co
                 if (m >= 2)
                 {
                     mbCapWeights(scr.work.I, scr.work.u, m, c.w_max_share, scr.work.idx);
-                    double sw = 0.0, swv = 0.0, sv2 = 0.0;
+                    mbr sw = 0, swv = 0, sv2 = 0;
                     for (int k = 0; k < m; ++k)
                     {
                         const MosaicMbWSat& x = ws[scr.work.sel[k]];
                         sw += scr.work.u[k];
-                        swv += scr.work.u[k] * static_cast<double>(x.v);
-                        sv2 += static_cast<double>(scr.work.u[k]) * scr.work.u[k] * x.sig * x.sig;
+                        swv += scr.work.u[k] * static_cast<mbr>(x.v);
+                        sv2 += static_cast<mbr>(scr.work.u[k]) * scr.work.u[k] * x.sig * x.sig;
                     }
-                    if (sw > 0.0)
+                    if (sw > 0)
                     {
-                        const double z = swv / sw, Rm = sv2 / (sw * sw);
-                        const double K = P / (P + Rm);
+                        const mbr z = swv / sw, Rm = sv2 / (sw * sw);
+                        const mbr K = P / (P + Rm);
                         scr.ws_hz += K * (z - scr.ws_hz);
-                        P *= 1.0 - K;
+                        P *= mbr(1) - K;
                         scr.ws_step = false;
                         scr.ws_meas_ms = rx_ms;
                     }
@@ -1202,7 +1291,7 @@ inline bool mbWindupPick(MosaicMbWSat* ws, int nws, int nvals, int64_t rx_ms, co
         {
             scr.ws_ok = true;
             scr.ws_hz = est;
-            scr.ws_P = static_cast<double>(sig) * sig;
+            scr.ws_P = static_cast<mbr>(sig) * sig;
             scr.ws_ms = scr.ws_meas_ms = rx_ms;
             scr.ws_step = false;
         }
@@ -1217,17 +1306,17 @@ inline bool mbWindupPick(MosaicMbWSat* ws, int nws, int nvals, int64_t rx_ms, co
     if (use_ok && wext.ok)
     {
         // the estimate as the referral would take it, against the gyro's
-        const double d = use - static_cast<double>(wext.hz);
+        const mbr d = use - static_cast<mbr>(wext.hz);
         st.wx_n++;
-        st.wx_sum += d;
-        st.wx_sum2 += d * d;
-        st.wx_xy += use * wext.hz;
-        st.wx_xx += static_cast<double>(wext.hz) * wext.hz;
+        st.wx_sum += static_cast<double>(d);
+        st.wx_sum2 += static_cast<double>(d) * static_cast<double>(d);
+        st.wx_xy += static_cast<double>(use) * static_cast<double>(wext.hz);
+        st.wx_xx += static_cast<double>(wext.hz) * static_cast<double>(wext.hz);
         if (c.w_check)
         {
-            const double thr = std::max(static_cast<double>(c.x_k) * std::sqrt(use_sig * use_sig +
-                                                                               static_cast<double>(sg) * sg),
-                                        static_cast<double>(c.x_floor_hz));
+            const mbr thr = std::max(static_cast<mbr>(c.x_k) * std::sqrt(use_sig * use_sig +
+                                                                               static_cast<mbr>(sg) * sg),
+                                        static_cast<mbr>(c.x_floor_hz));
             const bool apart = std::fabs(d) > thr;
             out.x_state = apart ? 2 : 1;
             out.x_d = static_cast<float>(d);
@@ -1276,7 +1365,7 @@ inline bool mbWindupPick(MosaicMbWSat* ws, int nws, int nvals, int64_t rx_ms, co
         return false;
     }
     st.w_last = out.w_hat;
-    st.w_sum2 += static_cast<double>(out.w_hat) * out.w_hat;
+    st.w_sum2 += static_cast<double>(out.w_hat) * static_cast<double>(out.w_hat);
     st.w_epochs++;
     if (std::fabs(out.w_hat) > st.w_max_abs)
         st.w_max_abs = std::fabs(out.w_hat);
@@ -1304,7 +1393,7 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
     out.mon_r = 0.0f;
     st.epochs++;
     const bool prev_ok = scr.prev_valid && rx_ms > scr.prev_rx_ms && rx_ms - scr.prev_rx_ms <= kMbPrevMaxMs;
-    const double prev_dt = prev_ok ? static_cast<double>(rx_ms - scr.prev_rx_ms) * 1.0e-3 : 0.0;
+    const mbr prev_dt = prev_ok ? static_cast<mbr>(rx_ms - scr.prev_rx_ms) * mbr(1.0e-3) : mbr(0);
     auto prevOf = [&](uint8_t sys, uint8_t prn) -> const MosaicMbPrev* {
         if (!prev_ok)
             return nullptr;
@@ -1314,7 +1403,7 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
         return nullptr;
     };
     double* const anchor_rate = scr.anchor_rate;
-    double* const sigma_a = scr.sigma_a;
+    mbr* const sigma_a = scr.sigma_a;
     bool* const usable = scr.usable;
     MosaicMbWSat* const ws = scr.wsat;
     int nws = 0, nvals = 0;
@@ -1337,17 +1426,17 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
         scr.held[i] = false;
         scr.off[i] = 0;
         scr.has_x[i] = false;
-        scr.a_hat[i] = 0.0;
+        scr.a_hat[i] = 0;
         anchor_rate[i] = e.rate_mps;
         const uint8_t asig = mbAnchorSig(e.sys);
-        const double lam_a = kMbLambda.v[asig];
-        out.lam_wu[i] = lam_a;
-        const double sa = e.cn0_dbhz > 0.0f ? mbSigma(c.band[asig], e.cn0_dbhz) : 0.0;
+        const mbr lam_a = static_cast<mbr>(kMbLambda.v[asig]);
+        out.lam_wu[i] = kMbLambda.v[asig];
+        const mbr sa = e.cn0_dbhz > 0.0f ? mbSigma(c.band[asig], e.cn0_dbhz) : mbr(0);
         sigma_a[i] = sa;
         out.sigma_a[i] = static_cast<float>(sa);
         out.sigma_c[i] = static_cast<float>(sa);
         const float floor_a = e.sys < GNSS_SYS_COUNT ? c.anchor_cn0_min[e.sys] : 0.0f;
-        usable[i] = e.has_rate && !(e.cn0_dbhz < floor_a) && sa > 0.0;
+        usable[i] = e.has_rate && !(e.cn0_dbhz < floor_a) && sa > 0;
         if (!usable[i])
             continue;
         st.sats++;
@@ -1359,7 +1448,7 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
             scr.held[i] = g != nullptr && g->flagged;
         }
         const MosaicMbPrev* p = prevOf(e.sys, e.prn);
-        scr.a_hat[i] = p != nullptr && p->has_rate ? (anchor_rate[i] - p->rate_mps) / prev_dt : 0.0;
+        scr.a_hat[i] = p != nullptr && p->has_rate ? static_cast<mbr>(anchor_rate[i] - p->rate_mps) / prev_dt : mbr(0);
         const MosaicMbSat* m = nullptr;
         for (int j = 0; j < scr.n && m == nullptr; ++j)
             if (scr.sat[j].sys == e.sys && scr.sat[j].prn == e.prn)
@@ -1388,8 +1477,8 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
             MosaicMbCand cd;
             cd.sig = b.sig;
             cd.cn0 = cn0;
-            cd.lam = kMbLambda.v[b.sig];
-            cd.d = (m->base_mps - e.rate_mps) + static_cast<double>(b.dr);
+            cd.lam = static_cast<mbr>(kMbLambda.v[b.sig]);
+            cd.d = static_cast<mbr>((m->base_mps - e.rate_mps) + static_cast<double>(b.dr));
             cd.sigma = mbSigma(mb, cn0);
             uint8_t& nc = scr.ncand[i];
             if (nc < cap)
@@ -1412,12 +1501,12 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
         // satellite the drift guard holds (its anchor's drift is in every difference)
         if (scr.held[i] || scr.ncand[i] == 0)
             continue;
-        double s0 = 1.0 / (sa * sa), sx = 0.0, sy = 0.0, sxx = 0.0, sxy = 0.0;
+        mbr s0 = mbr(1) / (sa * sa), sx = 0, sy = 0, sxx = 0, sxy = 0;
         int nval = 0;
         for (int q = 0; q < scr.ncand[i]; ++q)
         {
             const MosaicMbCand& cd = scr.cand[i][q];
-            const double dl = cd.lam - lam_a, w = 1.0 / (cd.sigma * cd.sigma);
+            const mbr dl = cd.lam - lam_a, w = mbr(1) / (cd.sigma * cd.sigma);
             s0 += w;
             sx += w * dl;
             sy += w * cd.d;
@@ -1425,12 +1514,12 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
             sxy += w * dl * cd.d;
             nval += std::fabs(dl) >= c.w_min_dlam_m ? 1 : 0;
         }
-        const double I = sxx - sx * sx / s0;
-        if (nval == 0 || !(I > 0.0) || nws >= kMbObs)
+        const mbr I = sxx - sx * sx / s0;
+        if (nval == 0 || !(I > 0) || nws >= kMbObs)
             continue;
         MosaicMbWSat& v = ws[nws++];
         v.v = static_cast<float>((sxy - sx * sy / s0) / I);
-        v.sig = static_cast<float>(1.0 / std::sqrt(I));
+        v.sig = static_cast<float>(mbr(1) / std::sqrt(I));
         v.w = static_cast<float>(I);
         v.u = 0.0f;
         v.cell = static_cast<int16_t>(i);
@@ -1447,13 +1536,13 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
     if (c.anchor_vote && c.w_smooth_q > 0.0f && nws > 0 && scr.ws_ok && rx_ms > scr.ws_ms &&
         rx_ms - scr.ws_meas_ms <= static_cast<int64_t>(c.w_smooth_gap_s * 1000.0f))
     {
-        double wall = 0.0, wout = 0.0;
+        mbr wall = 0, wout = 0;
         uint8_t outv[kMbObs] = {};
         for (int k = 0; k < nws; ++k)
         {
             const int i = ws[k].cell;
-            const double lam_a = kMbLambda.v[mbAnchorSig(cells[i].sys)];
-            const double thr_lag = c.screen_floor_mps + c.screen_lag_s * std::fabs(scr.a_hat[i]);
+            const mbr lam_a = static_cast<mbr>(kMbLambda.v[mbAnchorSig(cells[i].sys)]);
+            const mbr thr_lag = c.screen_floor_mps + c.screen_lag_s * std::fabs(scr.a_hat[i]);
             bool vote = false;
             int off = 0;
             mbScreen(scr.cand[i], scr.ncand[i], sigma_a[i], lam_a, scr.ws_hz, thr_lag, c, false, vote, off);
@@ -1461,7 +1550,7 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
             wall += ws[k].w;
             wout += vote ? ws[k].w : 0.0f;
         }
-        if (wout > 0.0 && 2.0 * wout <= wall)
+        if (wout > 0 && mbr(2) * wout <= wall)
         {
             int m = 0;
             for (int k = 0; k < nws; ++k)
@@ -1507,8 +1596,8 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
         {
             if (!usable[i] || scr.ncand[i] == 0)
                 continue;
-            const double lam_a = kMbLambda.v[mbAnchorSig(cells[i].sys)];
-            const double thr_lag = c.screen_floor_mps + c.screen_lag_s * std::fabs(scr.a_hat[i]);
+            const mbr lam_a = static_cast<mbr>(kMbLambda.v[mbAnchorSig(cells[i].sys)]);
+            const mbr thr_lag = c.screen_floor_mps + c.screen_lag_s * std::fabs(scr.a_hat[i]);
             bool vote = false;
             int off = 0;
             flagged += mbScreen(scr.cand[i], scr.ncand[i], sigma_a[i], lam_a, w_hat, thr_lag, c, true, vote, off);
@@ -1533,25 +1622,25 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
     if (c.common)
     {
         const bool have_ref = wext.ok || have_w;
-        const double w_ref = wext.ok ? static_cast<double>(wext.hz) : static_cast<double>(w_hat);
+        const mbr w_ref = wext.ok ? static_cast<mbr>(wext.hz) : static_cast<mbr>(w_hat);
         if (have_ref)
             for (int i = 0; i < n; ++i)
             {
                 if (!usable[i] || scr.ncand[i] == 0)
                     continue;
-                const double lam_a = kMbLambda.v[mbAnchorSig(cells[i].sys)];
-                double wo = 0.0, on = 0.0;
+                const mbr lam_a = static_cast<mbr>(kMbLambda.v[mbAnchorSig(cells[i].sys)]);
+                mbr wo = 0, on = 0;
                 for (int q = 0; q < scr.ncand[i]; ++q)
                 {
                     const MosaicMbCand& cd = scr.cand[i][q];
-                    const double w = 1.0 / (cd.sigma * cd.sigma);
+                    const mbr w = mbr(1) / (cd.sigma * cd.sigma);
                     wo += w;
                     on += w * (cd.d - w_ref * (cd.lam - lam_a));
                 }
                 MosaicMbGuard* const g = mbGuardOf(scr, cells[i].sys, cells[i].prn, true, rx_ms);
                 if (g->xn == 0 || rx_ms > g->x_last_ms)
                     mbLeak(g->xn, g->x_last_ms, g->xm, g->xv, g->xF, g->xa, rx_ms, -on / wo,
-                           sigma_a[i] * sigma_a[i] + 1.0 / wo, scr.a_hat[i], c.common_tau_s, c.guard_max_dt_s);
+                           sigma_a[i] * sigma_a[i] + mbr(1) / wo, scr.a_hat[i], c.common_tau_s, c.guard_max_dt_s);
                 scr.has_x[i] = true;
                 scr.x[i] = g->xm;
                 scr.xv[i] = g->xv * g->xF;
@@ -1562,12 +1651,12 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
         for (int g = 0; g <= GNSS_SYS_COUNT; ++g)
         {
             int m = 0;
-            double aa = 0.0;
+            mbr aa = 0;
             for (int i = 0; i < n; ++i)
-                if (scr.has_x[i] && scr.xv[i] > 0.0 && (g == GNSS_SYS_COUNT || cells[i].sys == g))
+                if (scr.has_x[i] && scr.xv[i] > 0 && (g == GNSS_SYS_COUNT || cells[i].sys == g))
                 {
                     scr.work.sel[m] = i;
-                    scr.work.I[m++] = static_cast<float>(1.0 / scr.xv[i]);
+                    scr.work.I[m++] = static_cast<float>(mbr(1) / scr.xv[i]);
                     aa += scr.xa[i];
                 }
             if (m < c.common_min_sats)
@@ -1588,38 +1677,39 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
                 scr.work.sel[j] = si;
                 scr.work.u[j] = ui;
             }
-            double wt = 0.0, sv = 0.0;
+            mbr wt = 0, sv = 0;
             for (int k = 0; k < m; ++k)
             {
                 wt += scr.work.u[k];
-                sv += static_cast<double>(scr.work.u[k]) * scr.work.u[k] * scr.xv[scr.work.sel[k]];
+                sv += static_cast<mbr>(scr.work.u[k]) * scr.work.u[k] * scr.xv[scr.work.sel[k]];
             }
-            double run = 0.0, med = scr.x[scr.work.sel[m - 1]];
+            mbr run = 0, med = scr.x[scr.work.sel[m - 1]];
             for (int k = 0; k < m; ++k)
             {
                 run += scr.work.u[k];
-                if (run >= 0.5 * wt)
+                if (run >= mbr(0.5) * wt)
                 {
-                    med = (run == 0.5 * wt && k + 1 < m) ? 0.5 * (scr.x[scr.work.sel[k]] + scr.x[scr.work.sel[k + 1]])
-                                                          : scr.x[scr.work.sel[k]];
+                    med = (run == mbr(0.5) * wt && k + 1 < m)
+                              ? mbr(0.5) * (scr.x[scr.work.sel[k]] + scr.x[scr.work.sel[k + 1]])
+                              : scr.x[scr.work.sel[k]];
                     break;
                 }
             }
             // a median's variance: (pi / 2) that of the mean with the same weights
-            const double sm = std::sqrt(1.5708 * sv) / wt;
-            const double thr = std::max(static_cast<double>(c.common_k) * sm,
-                                        static_cast<double>(c.common_floor_mps) +
-                                            static_cast<double>(c.screen_lag_s) * aa / m);
+            const mbr sm = std::sqrt(mbr(1.5708) * sv) / wt;
+            const mbr thr = std::max(static_cast<mbr>(c.common_k) * sm,
+                                        static_cast<mbr>(c.common_floor_mps) +
+                                            static_cast<mbr>(c.screen_lag_s) * aa / m);
             MosaicMbMon& mg = scr.mon[g];
             mg.m = static_cast<float>(med);
             mg.thr = static_cast<float>(thr);
             mg.seen_ms = rx_ms;
             looked[g] = true;
-            const double r = std::fabs(med) / thr;
+            const mbr r = std::fabs(med) / thr;
             out.mon_r = std::max(out.mon_r, static_cast<float>(r));
             if (r > st.mon_max_r)
                 st.mon_max_r = static_cast<float>(r);
-            if (!mg.flagged && r > 1.0)
+            if (!mg.flagged && r > 1)
             {
                 mg.flagged = true;
                 mg.since_ms = rx_ms;
@@ -1677,7 +1767,7 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
             out.sys_flags |= 0x10;
             bool against = false;
             for (int g = 0; g < GNSS_SYS_COUNT; ++g)
-                if (looked[g] && !(scr.mon[g].m * ma.m > 0.0 &&
+                if (looked[g] && !(scr.mon[g].m * ma.m > 0.0f &&
                                    std::fabs(scr.mon[g].m) >= c.common_release * scr.mon[g].thr))
                     against = true;
             epoch_common = !against;
@@ -1754,7 +1844,7 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
                 drift(false);   // its hold stands: nothing here to judge it by
             continue;
         }
-        const double thr_lag = c.screen_floor_mps + c.screen_lag_s * std::fabs(scr.a_hat[i]);
+        const mbr thr_lag = c.screen_floor_mps + c.screen_lag_s * std::fabs(scr.a_hat[i]);
         int nf = 0;
         bool vote = false;
         for (int q = 0; q < nc; ++q)
@@ -1767,11 +1857,11 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
                     const MosaicMbCand& y = scr.cand[i][r];
                     if (!x.flagged || !y.flagged)
                         continue;
-                    const double thr = std::max(c.screen_k * std::sqrt(x.sigma * x.sigma + y.sigma * y.sigma),
+                    const mbr thr = std::max(c.screen_k * std::sqrt(x.sigma * x.sigma + y.sigma * y.sigma),
                                                 thr_lag);
                     vote = std::fabs(x.dp - y.dp) <= thr;
                 }
-        const double dw = wext.ok ? static_cast<double>(wext.hz) - w_hat : 0.0;
+        const mbr dw = wext.ok ? static_cast<mbr>(wext.hz) - w_hat : mbr(0);
         // the guard fed with the anchor less all its bands, flagged or not, where the screen put every band out: the
         // vote is its disagreement too, and so is a last band screened out -- so an epoch the vote misses (one band
         // under the screen) finds the satellite held, not combined, and an anchor that outgrows its only band's
@@ -1781,18 +1871,18 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
             MosaicMbGuard* const gv = c.guard ? mbGuardOf(scr, e.sys, e.prn, false) : nullptr;
             if (gv == nullptr || gv->n < c.guard_vote_min_n)
                 return gv != nullptr && gv->flagged;
-            const double lam_a = kMbLambda.v[mbAnchorSig(e.sys)];
-            double wa = 0.0, an = 0.0, adl = 0.0;
+            const mbr lam_a = static_cast<mbr>(kMbLambda.v[mbAnchorSig(e.sys)]);
+            mbr wa = 0, an = 0, adl = 0;
             for (int q = 0; q < nc; ++q)
             {
                 const MosaicMbCand& cd = scr.cand[i][q];
-                const double w = 1.0 / (cd.sigma * cd.sigma);
+                const mbr w = mbr(1) / (cd.sigma * cd.sigma);
                 wa += w;
                 an += w * cd.dp;
                 adl += w * (cd.lam - lam_a);
             }
             float gm = 0.0f, gs = 0.0f;
-            mbGuardUpdate(*gv, rx_ms, -an / wa + dw * adl / wa, sigma_a[i] * sigma_a[i] + 1.0 / wa, scr.a_hat[i], c,
+            mbGuardUpdate(*gv, rx_ms, -an / wa + dw * adl / wa, sigma_a[i] * sigma_a[i] + mbr(1) / wa, scr.a_hat[i], c,
                           st, gm, gs);
             out.g_m[i] = gm;
             out.g_sig[i] = gs;
@@ -1807,13 +1897,13 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
             continue;
         }
         st.screened += static_cast<uint32_t>(nf);
-        const double lam_a = kMbLambda.v[mbAnchorSig(e.sys)];
-        const double sa = sigma_a[i];
-        double wsum = 1.0 / (sa * sa);
-        double num = 0.0;
-        double lnum = lam_a * wsum;
-        double wo = 0.0, onum = 0.0;   // the others alone: their weights and their referred differences, summed
-        double odl = 0.0;              //   and their wavelengths less the anchor's
+        const mbr lam_a = static_cast<mbr>(kMbLambda.v[mbAnchorSig(e.sys)]);
+        const mbr sa = sigma_a[i];
+        mbr wsum = mbr(1) / (sa * sa);
+        mbr num = 0;
+        mbr lnum = lam_a * wsum;
+        mbr wo = 0, onum = 0;   // the others alone: their weights and their referred differences, summed
+        mbr odl = 0;            //   and their wavelengths less the anchor's
         uint64_t mask = 0;
         int nb = 0;
         for (int q = 0; q < nc; ++q)
@@ -1821,7 +1911,7 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
             const MosaicMbCand& cd = scr.cand[i][q];
             if (cd.flagged)
                 continue;
-            const double w = 1.0 / (cd.sigma * cd.sigma);
+            const mbr w = mbr(1) / (cd.sigma * cd.sigma);
             wsum += w;
             num += w * (c.windup == MosaicMbWindup::REF ? cd.dp : cd.d);
             lnum += w * cd.lam;
@@ -1845,7 +1935,7 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
             // carries any satellite's own pull on it, the faulted one's too), else W_hat: its leaky mean against its
             // own noise
             MosaicMbGuard* const gg = mbGuardOf(scr, e.sys, e.prn, true, rx_ms);
-            mbGuardUpdate(*gg, rx_ms, -onum / wo + dw * odl / wo, sa * sa + 1.0 / wo, scr.a_hat[i], c, st, out.g_m[i],
+            mbGuardUpdate(*gg, rx_ms, -onum / wo + dw * odl / wo, sa * sa + mbr(1) / wo, scr.a_hat[i], c, st, out.g_m[i],
                           out.g_sig[i]);
             if (gg->flagged)
             {
@@ -1858,22 +1948,23 @@ inline void mbCombine(Cell* cells, int n, int64_t rx_ms, const MosaicMultibandCo
             {
                 st.joins[scr.cand[i][q].sig]++;
                 out.det[i][q].joined = 1;
-                out.det[i][q].w = static_cast<float>(1.0 / (scr.cand[i][q].sigma * scr.cand[i][q].sigma) / wsum);
+                out.det[i][q].w = static_cast<float>(mbr(1) / (scr.cand[i][q].sigma * scr.cand[i][q].sigma) / wsum);
             }
-        const double dr = num / wsum;
-        e.rate_mps = anchor_rate[i] + dr;
+        const mbr dr = num / wsum;
+        e.rate_mps = anchor_rate[i] + static_cast<double>(dr);
         out.row[i] = MosaicMbRow::COMBINED;
         out.bands[i] = static_cast<uint8_t>(nb);
         out.mask[i] = mask;
         out.d_mps[i] = static_cast<float>(dr);
-        const double sc = 1.0 / std::sqrt(wsum);
+        const mbr sc = mbr(1) / std::sqrt(wsum);
         out.sigma_c[i] = static_cast<float>(sc);
-        out.lam_wu[i] = c.windup == MosaicMbWindup::REF ? lam_a : lnum / wsum;
+        out.lam_wu[i] = c.windup == MosaicMbWindup::REF ? kMbLambda.v[mbAnchorSig(e.sys)] : static_cast<double>(lnum / wsum);
         st.sats_combined++;
-        st.ratio_sum += sc / sa;
+        st.ratio_sum += static_cast<double>(sc / sa);
         st.ratio_n++;
         if (c.express_sigma)
-            out.rr_cn0_q[i] = mbEffCn0Q(e.cn0_dbhz, sc / sa, c.rr_a, c.rr_b);
+            out.rr_cn0_q[i] = mbEffCn0Q(static_cast<double>(e.cn0_dbhz), static_cast<double>(sc / sa),
+                                        static_cast<double>(c.rr_a), static_cast<double>(c.rr_b));
     }
 
     // composition changes, and this epoch's state for the next
@@ -2076,12 +2167,12 @@ inline bool noteMeasEpochDopplersMb(const uint8_t* b, size_t len, MosaicJumpStat
 // (sa_i^2 + sa_j^2)), and its wind-up sits at the mean of the two wavelengths.
 inline void mbPairedRow(const MosaicMbOut& g, int i, const MosaicMbOut& o, int j, double& ratio, double& lam_wu)
 {
-    const double sa_i = g.sigma_a[i], sc_i = g.sigma_c[i];
+    const double sa_i = static_cast<double>(g.sigma_a[i]), sc_i = static_cast<double>(g.sigma_c[i]);
     ratio = sa_i > 0.0 ? sc_i / sa_i : 1.0;
     lam_wu = g.lam_wu[i];
     if (j < 0)
         return;
-    const double sa_j = o.sigma_a[j], sc_j = o.sigma_c[j];
+    const double sa_j = static_cast<double>(o.sigma_a[j]), sc_j = static_cast<double>(o.sigma_c[j]);
     const double den = sa_i * sa_i + sa_j * sa_j;
     if (den > 0.0)
         ratio = std::sqrt((sc_i * sc_i + sc_j * sc_j) / den);

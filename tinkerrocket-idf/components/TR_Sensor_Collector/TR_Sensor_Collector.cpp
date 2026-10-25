@@ -1617,6 +1617,21 @@ bool SensorCollector::getGNSSRawPairStats(TR_GNSSReceiverMosaicSerial::RawPairSt
     return gnss_receiver.rawPairStats(out);
 }
 
+bool SensorCollector::setGNSSRawMultiband(const mosaic::MosaicMultibandConfig& c, float windup_k)
+{
+    return gnss_receiver.setRawMultiband(c, windup_k);
+}
+
+void SensorCollector::noteGNSSRollRate(float p_rps)
+{
+    gnss_receiver.noteRollRate(p_rps);
+}
+
+bool SensorCollector::getGNSSRawMbStats(TR_GNSSReceiverMosaicSerial::RawMbStats& out) const
+{
+    return gnss_receiver.rawMbStats(out);
+}
+
 uint32_t SensorCollector::gnssPollStackFree() const
 {
     return pollGNSSTaskHandle != nullptr ? static_cast<uint32_t>(uxTaskGetStackHighWaterMark(pollGNSSTaskHandle)) : 0U;

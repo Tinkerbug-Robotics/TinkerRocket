@@ -80,6 +80,10 @@
 #if TR_HEADING_FIT_BENCH
 #include <HeadingFitBench.h>      // the heading fit's bench (TR_HEADING_FIT_BENCH)
 #endif
+#ifdef TR_BENCH_MB_BLOCKS
+#include <MosaicMultibandBench.h> // the bands' combination's bench (TR_BENCH_MB_BLOCKS)
+#include TR_BENCH_MB_BLOCKS       // its recorded MeasEpochs: a scratch file the bench build names, never the repo's
+#endif
 #if TR_RAW_NAV_MOSAIC
 #include <SbfNav.h>               // the mosaic-G5's navigation blocks as gps_eph_t (TR_GNSSReceiverMosaic_Serial)
 #include <esp_memory_utils.h>     // esp_ptr_external_ram: where the filter's blocks went
@@ -3324,6 +3328,8 @@ static bool raw_nav_started = false;
 // The Dopplers in pairs set on the driver (startRawShadow, rawPairsStart):
 // the console asks for their counts only then
 static bool raw_pairs_on = false;
+// The bands combined on the driver (startRawShadow, rawMbStart): likewise
+static bool raw_mb_on = false;
 // The ionosphere the GNSS task builds with, chosen by one rule from both of
 // its sources (raw_iono_rule.h): the set a pad calibration brought (NVS, core
 // 1's raw_shadow_link.iono) and the receiver's own GPSIon. The filter's task
@@ -3421,6 +3427,11 @@ static inline void rawShadowPushImu(const EkfIMUData& imu, bool level, bool in_f
     if (rocket_state == PRELAUNCH) s.flags |= gnss_raw::kShadowPrelaunch;
 #endif
     raw_shadow_link.imu.push(s);   // a full ring drops the tick and counts it
+#if TR_RAW_NAV_MOSAIC && TR_RAW_MULTIBAND
+    // the roll rate about the nose, for the bands' combination's check on its
+    // own wind-up (the driver's noteRollRate; ignored until it is set up)
+    sensor_collector.noteGNSSRollRate(s.gyro[0]);
+#endif
 #if TR_RAW_GNSS_PRIMARY
     // and the navigation state the loop reads, brought forward through it
     // from the raw filter's last (#1626 K2, raw_nav_adapter.h)
@@ -3706,6 +3717,51 @@ static __attribute__((noinline)) bool rawPairsStart(const gnss_raw::GnssReceiver
 // poll task spent on them (counts and times since they were turned on). A
 // frame of its own, while the console calls it, not the filter task's every
 // pass.
+#if TR_RAW_MULTIBAND
+// Each satellite's other bands with its L1 band's Doppler (config.h
+// TR_RAW_MULTIBAND; MosaicMultiband.h mosaicMbFlight, which tools/raw_replay's
+// --receiver mosaic replays): the driver set to combine them, each anchor's
+// floor the profile's Doppler floor and the antenna's wind-up the flight
+// safeguards' (cfg.windup_k). False where the driver cannot (no raw outputs or
+// memory), and every row stays the L1 band's. Its config static, off the
+// task's stack.
+static __attribute__((noinline)) bool rawMbStart(const gnss_raw::GnssReceiverProfile& rx, double windup_k)
+{
+    static mosaic::MosaicMultibandConfig mb;
+    float floors[GNSS_SYS_COUNT];
+    for (int k = 0; k < GNSS_SYS_COUNT; ++k)
+        floors[k] = rx.sig[k].cn0_min_rr;
+    mosaic::mosaicMbFlight(mb, floors, rx.rr_white_a, rx.rr_white_b);
+    if (!sensor_collector.setGNSSRawMultiband(mb, (float)(windup_k > 0.0 ? windup_k : 0.99)))
+    {
+        ESP_LOGW(TAG, "[RAWGNSS] bands combined: the driver could not (no raw outputs or memory): the L1 band's "
+                      "Dopplers alone");
+        return false;
+    }
+    return true;
+}
+
+// The bands combined (TR_RAW_MULTIBAND) on the [RAWGNSS] console: combinations
+// run and what each became, the anchors voted out and the drift guard's drops,
+// the gyro's wind-up given, and what the GNSS poll task spent. A frame of its
+// own, as rawPairsConsole.
+static __attribute__((noinline)) void rawMbConsole()
+{
+    TR_GNSSReceiverMosaicSerial::RawMbStats ms;
+    if (!sensor_collector_hw.getGNSSRawMbStats(ms)) return;
+    const mosaic::MosaicMultibandStats& m = ms.mb;
+    ESP_LOGI(TAG, "[RAWGNSS] bands combined: %lu epochs (anchor-only: %lu few wind-up values, %lu the screen's "
+                  "majority, %lu the gyro's check, %lu a common offset) | anchors %lu combined of %lu | voted "
+                  "out %lu, the drift guard's drops %lu (%lu trips) | gyro's wind-up %lu given, %lu stale | poll task "
+                  "%.0f us mean, %lu max (%lu)",
+             (unsigned long)m.epochs, (unsigned long)m.epochs_few_w, (unsigned long)m.epochs_screen,
+             (unsigned long)m.epochs_xcheck, (unsigned long)m.epochs_common, (unsigned long)m.sats_combined,
+             (unsigned long)m.sats, (unsigned long)m.voted, (unsigned long)m.guard_rows,
+             (unsigned long)m.guard_trips, (unsigned long)ms.gyro_given, (unsigned long)ms.gyro_stale,
+             ms.runs ? (double)ms.us_sum / (double)ms.runs : 0.0, (unsigned long)ms.us_max, (unsigned long)ms.runs);
+}
+#endif
+
 static __attribute__((noinline)) void rawPairsConsole()
 {
     TR_GNSSReceiverMosaicSerial::RawPairStats ps;
@@ -4186,6 +4242,9 @@ static void rawShadowTask(void*)
                          sh.running() ? (double)sh.filter().hdgObsScale() : 1.0, (double)st.rot_max_sigma_mps,
                          (unsigned)(raw_flight_task ? uxTaskGetStackHighWaterMark(raw_flight_task) : 0));
                 if (raw_pairs_on) rawPairsConsole();
+#if TR_RAW_MULTIBAND
+                if (raw_mb_on) rawMbConsole();
+#endif
                 if (sh.capGovernor().on())
                 {
                     // The satellite cap's governor (CapGovernor.h; a bench's,
@@ -4605,6 +4664,18 @@ static void startRawShadow()
         else
             ESP_LOGI(TAG, "[RAWGNSS] antenna offset: unknown (the turning body's bounds above)");
     }
+#if TR_RAW_MULTIBAND
+    // Each satellite's other bands with its L1 band's Doppler (config.h
+    // TR_RAW_MULTIBAND): on the 2026-10-24 Goblin flight five satellites' L1
+    // C/A or B1I Dopplers were 3-19 m/s off their other bands through the
+    // boost, and the boost's de-weighting let them in; checked against the
+    // other bands, the replayed boost attitude 2.0 -> 0.8 deg
+    raw_mb_on = rawMbStart(rx, cfg.windup_k);
+    ESP_LOGI(TAG, "[RAWGNSS] bands combined: %s (TR_RAW_MULTIBAND)",
+             raw_mb_on ? "each satellite's other bands with its L1 band's Doppler" : "OFF (could not start: see above)");
+#else
+    ESP_LOGI(TAG, "[RAWGNSS] bands combined: off, the L1 band's Dopplers alone (TR_RAW_MULTIBAND=0)");
+#endif
 #ifdef TR_BENCH_BOOST_SCREEN_G
     // bench (the CPU ladder, P1): the boost screen's threshold, g -- 0 screens
     // every epoch before the apogee call, its worst cost
@@ -15508,9 +15579,67 @@ static void fcRescueTask(void*)
 // ==========================================================================
 // SECTION: FreeRTOS entry point
 // ==========================================================================
+#ifdef TR_BENCH_MB_BLOCKS
+// Bench (-DTR_BENCH_MB_BLOCKS=FILE): what each satellite's bands combined
+// (MosaicMultiband.h) cost this CPU against the L1 adapter, on recorded
+// mosaic-G5 MeasEpochs fed as the mosaic driver feeds them, timed once 8 s
+// after boot on core 0 at the GNSS poll task's priority. The state works in
+// internal RAM where the driver's would (else PSRAM, said so); the times are
+// kept in PSRAM. Any board: the combiner is pure, so a board with no mosaic
+// times it all the same.
+static void mbBenchTask(void*)
+{
+    vTaskDelay(pdMS_TO_TICKS(8000));
+    const unsigned int_free = (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const unsigned int_big = (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    bool internal = true;
+    void* sm = heap_caps_malloc(sizeof(mosaic::mbbench::Storage), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (sm == nullptr)
+    {
+        internal = false;
+        sm = heap_caps_malloc(sizeof(mosaic::mbbench::Storage), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    void* am = heap_caps_malloc(sizeof(mosaic::mbbench::Arms), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (am == nullptr) am = heap_caps_malloc(sizeof(mosaic::mbbench::Arms), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (sm == nullptr || am == nullptr)
+    {
+        ESP_LOGE(TAG, "[MBBENCH] no memory for its state (%u + %u B): not run", (unsigned)sizeof(mosaic::mbbench::Storage),
+                 (unsigned)sizeof(mosaic::mbbench::Arms));
+        heap_caps_free(sm);
+        heap_caps_free(am);
+        vTaskDelete(nullptr);
+        return;
+    }
+    ESP_LOGI(TAG, "[MBBENCH] %s at %d MHz, core %d: internal RAM %u B free (largest block %u) before; the state "
+                  "%u B in %s, after it %u B free",
+             CONFIG_IDF_TARGET, (int)CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ, (int)xPortGetCoreID(), int_free, int_big,
+             (unsigned)sizeof(mosaic::mbbench::Storage), internal ? "internal RAM" : "PSRAM",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    auto* st = new (sm) mosaic::mbbench::Storage();
+    auto* arms = new (am) mosaic::mbbench::Arms();
+    const auto clk = []() -> int64_t { return esp_timer_get_time(); };
+    const auto pr = [](const char* line) { ESP_LOGI(TAG, "[MBBENCH] %s", line); vTaskDelay(1); };
+    const auto yld = []() { vTaskDelay(1); };
+    mosaic::mbbench::primitives(clk, pr);
+    mosaic::mbbench::run("10/24 Goblin, T-1 to T+9", mbdata::goblin_blocks, mbdata::goblin_lens, mbdata::goblin_roll,
+                         mbdata::goblin_n, 0.99, *st, *arms, clk, pr, yld);
+    mosaic::mbbench::run("10/16 spin rig, cone off", mbdata::rig_blocks, mbdata::rig_lens, mbdata::rig_roll,
+                         mbdata::rig_n, 0.99, *st, *arms, clk, pr, yld);
+    ESP_LOGI(TAG, "[MBBENCH] done: this task's stack %u B of %u used at most", (unsigned)(12 * 1024 -
+             uxTaskGetStackHighWaterMark(nullptr)), (unsigned)(12 * 1024));
+    st->~Storage();
+    heap_caps_free(sm);
+    heap_caps_free(am);
+    vTaskDelete(nullptr);
+}
+#endif
+
 extern "C" void app_main(void)
 {
     setup_fc();
+#ifdef TR_BENCH_MB_BLOCKS
+    xTaskCreatePinnedToCore(mbBenchTask, "mb_bench", 12 * 1024, nullptr, 3, nullptr, 0);
+#endif
     if (fc_rescue_mode)
     {
         // setup_fc() stopped after the links (fc_rescue_policy.h): no flight

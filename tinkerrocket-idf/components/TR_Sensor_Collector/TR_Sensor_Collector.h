@@ -317,6 +317,13 @@ public:
     bool setGNSSRawDopplerPairing(const mosaic::MosaicDopplerPairConfig& c);
     bool getGNSSRawPairStats(TR_GNSSReceiverMosaicSerial::RawPairStats& out) const;
     uint32_t gnssPollStackFree() const;
+    // Each satellite's other bands with its L1 band's Doppler (the driver's
+    // setRawMultiband, config.h TR_RAW_MULTIBAND), the IMU path's roll rate
+    // for its wind-up check (rad/s, every flight-filter tick), and its counts
+    // (false with it off).
+    bool setGNSSRawMultiband(const mosaic::MosaicMultibandConfig& c, float windup_k);
+    void noteGNSSRollRate(float p_rps);
+    bool getGNSSRawMbStats(TR_GNSSReceiverMosaicSerial::RawMbStats& out) const;
 #endif
     // The GPS-to-MCU clock line each time it moves (GNSS_CLOCK_MSG): the
     // LC86G's from its sentences' arrival, the mosaic-G5's from its 1PPS;

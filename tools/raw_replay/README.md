@@ -226,6 +226,7 @@ What `startRawShadow()` builds under `TR_RAW_NAV_MOSAIC` (build_units D1a; check
 - the heading at the firmware's defaults (`--fw-defaults`, which now also takes `--heading-mode` to the primary
   build's `TR_HEADING_FIT` 2 unless given): act, the whole attitude from launch (`RAW_HEADING_GATE` 1), the 10/30 deg
   prior, no hand-off, the 0.6 deg tilt floor;
+- each satellite's other bands with its L1 band's Doppler (the image's `TR_RAW_MULTIBAND`; `--rr-multiband 0` off: below);
 - each epoch handed to the GNSS task's stage 30 ms after its block arrived (`--epoch-delay-ms`; there is no on-board
   age to match yet, and the P4's build time is not measured).
 
@@ -676,8 +677,15 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   profile (every epoch's own lag; an epoch in pairs adds `rr_pair_lag_s` to it), and `--sim-pair-exact` (a sim with
   `--truth-nav`) puts the truth's second-order term
   back into each averaged Doppler, so the pair is the range rate at its middle exactly.
-- **Each satellite's bands in one Doppler** (`--rr-multiband 1`; a `RAW_REPLAY_MULTIBAND` build, on unless the tree
-  has no `TR_GNSSReceiverMosaic_Serial/MosaicMultiband.h`; offline only, no firmware includes the header). The filter
+- **Each satellite's bands in one Doppler** (on with `--receiver mosaic`, as the mosaic image flies it since
+  2026-10-25: config.h `TR_RAW_MULTIBAND`, the driver's `setRawMultiband`; `--rr-multiband 0` replays the L1 band's
+  alone, as the 10/24 image flew; a `RAW_REPLAY_MULTIBAND` build, on unless the tree has no
+  `TR_GNSSReceiverMosaic_Serial/MosaicMultiband.h`). The harness and the image take their settings from the same
+  `mosaicMbFlight` (the measured model, the profile's Doppler floors on the anchors) and the gyro's wind-up from the
+  same `mbWindupFromGyro`, and the `--rr-mb-*` options below change them for an experiment. Each band's lag stays 0:
+  on the 10/24 Goblin boost (7.5 g) the bands lagged their anchors by 0.3-1.7 ms (GPS L2C/L5, Galileo E5b/E6, BeiDou
+  B2a) and 4.8-14 ms (Galileo E5a, BeiDou B1C/B3I); the screen's allowance takes those, and gating the lagging bands
+  out (`--rr-mb-model` with their lags) gave back half of what the combination gained on that boost. The filter
   fuses one Doppler row a satellite from its L1-band signal (GPS L1 C/A, Galileo E1, BeiDou B1I); the mosaic also
   tracks GPS L2C and L5, Galileo E6, E5a and E5b, BeiDou B1C, B2a and B3I, and a Detailed log's MeasEpoch (the R
   lines, byte for byte) carries them all. With `--rr-multiband 1` the feed builds each epoch with
@@ -711,7 +719,7 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
 
   | Option | What | Default |
   |---|---|---|
-  | `--rr-multiband 0\|1` | the combination | 0 (the image's L1 rows, digest-identical) |
+  | `--rr-multiband 0\|1` | the combination | 1 with `--receiver mosaic` (the image's), else 0; 0 is the 10/24 image's L1 rows, digest-identical |
   | `--rr-mb-bands LIST\|none` | SBF signal numbers that may join | 3,4,19,20,21,13,14,30 |
   | `--rr-mb-model measured\|equalhz\|FILE` | each band's Doppler noise, one 20 Hz epoch: sigma^2 = scale^2 (a^2 + b^2 10^(-(C/N0-35)/10)); FILE lines `sig a b [scale [cn0_min [lag_ms]]]` | measured (the noise measurement's fit, a 0, floors 25 dB-Hz, lags 0) |
   | `--rr-mb-sigma 0\|1` | 1: each combined row's white Doppler term at the effective C/N0 that gives its combined noise on the builder's own model (what a uint8 in RawObs's padding would carry) | 0: the anchor's sigma kept, as the pairs keep theirs |
@@ -735,7 +743,7 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   whose MeasEpochs carry no other band (the Reduced GNSS log keeps one a second: no 10 Hz path at all) joins none, and
   the harness says so. `extract.py --sbf` writes `META sbf_signals` (each SBF signal number's count over the
   MeasEpochs, the main antenna), which the harness keeps and does not read, so a file with it replays exactly as one
-  without. With `--rr-multiband 0`, and with `--rr-multiband 1 --rr-mb-bands none`, every digest is the image's.
+  without. With `--rr-multiband 0`, and with `--rr-multiband 1 --rr-mb-bands none`, every digest is the L1-only image's (10/24).
   Where a firmware version would differ: the header's capture rides in the adapter's own pass over the block (one
   read), but the effective C/N0 (`--rr-mb-sigma 1`) needs a uint8 in RawObs's padding and the builder's white term
   at it (both builds), and `--rr-mb-windup lam` a uint16 effective wavelength in RawObs's padding copied into

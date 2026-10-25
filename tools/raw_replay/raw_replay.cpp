@@ -1749,9 +1749,11 @@ int main(int argc, char** argv)
         return 2;
     }
 #else
-    if (mb_opts && a.rr_multiband <= 0)
+    // the mosaic image combines the bands (config.h TR_RAW_MULTIBAND), so --receiver mosaic does unless told not to
+    if (mb_opts && (a.rr_multiband == 0 || (a.rr_multiband < 0 && !mosaic)))
     {
-        std::fprintf(stderr, "the --rr-mb-* options act only with --rr-multiband 1\n");
+        std::fprintf(stderr, "the --rr-mb-* options act only with the bands combined (--receiver mosaic, or "
+                             "--rr-multiband 1)\n");
         return 2;
     }
     if (a.rr_multiband > 0 && !mosaic)
@@ -1790,6 +1792,11 @@ int main(int argc, char** argv)
                              "signal a satellite\n");
         return 2;
     }
+    // the image's: the mosaic image combines each satellite's bands (config.h TR_RAW_MULTIBAND, since 2026-10-25);
+    // --rr-multiband 0 replays the L1 band's alone, as the 10/24 image flew. A sim's epochs carry one signal a
+    // satellite, so there it stays off (the image would combine nothing either)
+    if (a.rr_multiband < 0 && mosaic && in.xep.empty())
+        a.rr_multiband = 1;
 #endif
     // the antenna's offset the flight's filter flew with (extract.py: the log's PCX_ANT record, body FRD, m), where
     // --antenna-m gives none: a replay of a flight predicts at the antenna as its filter did
@@ -2358,9 +2365,17 @@ int main(int argc, char** argv)
     {
         mosaic::MosaicMultibandConfig& m = fcfg.mb;
         if (a.rr_mb_model == "equalhz")
+        {
             mosaic::mosaicMbEqualHz(m);
+        }
         else
-            mosaic::mosaicMbMeasured(m);
+        {
+            // the image's (main.cpp rawMbStart), the options below on top of it
+            float floors[GNSS_SYS_COUNT];
+            for (int k = 0; k < GNSS_SYS_COUNT; ++k)
+                floors[k] = rx.sig[k].cn0_min_rr;
+            mosaic::mosaicMbFlight(m, floors, mb_bcfg.rr_white_a, mb_bcfg.rr_white_b);
+        }
         if (!a.rr_mb_model.empty() && a.rr_mb_model != "measured" && a.rr_mb_model != "equalhz")
         {
             // a file: "sig a b [scale [cn0_min [lag_ms]]]" a line, '#' to the end of a line a comment
@@ -3905,10 +3920,9 @@ int main(int argc, char** argv)
                     {
                         // the gyro's wind-up as the driver would read it decoding this block: the IMU path's last
                         // roll rate, if fresh and under the rail
-                        mosaic::MosaicMbWindupIn w;
-                        w.ok = mb_gyro_have && ev.t_us - mb_gyro_t_us <= mb_gyro_age_us &&
-                               std::fabs(mb_gyro_p) < mb_gyro_rail;
-                        w.hz = w.ok ? static_cast<float>(windup::rollRate(1.0, mb_gyro_k, mb_gyro_p)) : 0.0f;
+                        const mosaic::MosaicMbWindupIn w =
+                            mosaic::mbWindupFromGyro(mb_gyro_have, mb_gyro_p, ev.t_us - mb_gyro_t_us, mb_gyro_k,
+                                                     mb_gyro_age_us, mb_gyro_rail);
                         if (w.ok)
                             mb_gyro_given++;
                         else

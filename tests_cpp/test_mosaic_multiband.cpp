@@ -1,5 +1,5 @@
 // Host tests for the multi-band combiner (TR_GNSSReceiverMosaic_Serial/
-// MosaicMultiband.h; the harness's --rr-multiband, no firmware includes it):
+// MosaicMultiband.h: the mosaic image's driver, config.h TR_RAW_MULTIBAND, and the harness's --rr-multiband):
 //   - off, the cells and the Doppler sets are rawEpochFromMeasEpoch's and
 //     noteMeasEpochDopplers' to the bit; on with nothing to join, too; on
 //     with bands, every anchor field but the range rate is theirs;
@@ -38,7 +38,8 @@
 //     two channels), at most max_bands, and composition changes counted;
 //   - the pairs: both ends combined, the pair averaged on the combined rates
 //     and a voted-out end dropping its pair; the paired row's sigma ratio;
-//   - the effective C/N0 round trip and its clamps.
+//   - the effective C/N0 round trip and its clamps;
+//   - what the image flies (mosaicMbFlight) and the gyro's wind-up as the driver reads it (mbWindupFromGyro).
 // Synthetic blocks (sbf_meas_build.h); behind TR_SBF_PRIVATE_CAPTURE, real
 // captures for the identities (statistics only, never a position).
 #include <gtest/gtest.h>
@@ -47,6 +48,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <tuple>
 #include <vector>
@@ -430,7 +432,8 @@ TEST(MosaicMultiband, WithoutReferralTheRowCarriesItsWeightedWavelength)
             ws += 1.0 / (s * s);
             wl += lam(x.sig) / (s * s);
         }
-        EXPECT_NEAR(m.out.lam_wu[i], wl / ws, 1e-12);
+        // to the combiner's working precision (mbr: float in the images)
+        EXPECT_NEAR(m.out.lam_wu[i], wl / ws, 16.0 * std::numeric_limits<mbr>::epsilon() * wl / ws);
         EXPECT_GT(m.out.lam_wu[i], lam(17) + 0.02);
         EXPECT_NEAR(ep.obs[i].rate_mps, -350.0 + 812.5 + W * wl / ws, 2e-4);
     }
@@ -2037,6 +2040,61 @@ TEST(MosaicMultiband, TheWavelengthTableIsTheAdaptersDouble)
 }
 
 // ── Real captures (private; TR_SBF_PRIVATE_CAPTURE) ─────────────────────
+
+// What the mosaic image flies (main.cpp rawMbStart) and --receiver mosaic replays: the measured model, on, the
+// profile's Doppler floors on the anchors, the builder's white model, the rest the defaults.
+TEST(MosaicMultiband, TheFlightConfigIsTheMeasuredModelOnWithTheProfilesFloors)
+{
+    MosaicMultibandConfig c;
+    const float floors[GNSS_SYS_COUNT] = {25.0f, 27.0f, 29.0f, 31.0f};
+    mosaicMbFlight(c, floors, 0.01, 0.075);
+    MosaicMultibandConfig m;
+    mosaicMbMeasured(m);
+    EXPECT_TRUE(c.on);
+    for (int k = 0; k < GNSS_SYS_COUNT; ++k)
+        EXPECT_FLOAT_EQ(c.anchor_cn0_min[k], floors[k]);
+    EXPECT_FLOAT_EQ(c.rr_a, 0.01f);
+    EXPECT_FLOAT_EQ(c.rr_b, 0.075f);
+    int joins = 0;
+    for (int i = 0; i < kMbSigs; ++i)
+    {
+        EXPECT_EQ(c.band[i].join, m.band[i].join) << "signal " << i;
+        EXPECT_FLOAT_EQ(c.band[i].b, m.band[i].b) << "signal " << i;
+        EXPECT_FLOAT_EQ(c.band[i].lag_ms, 0.0f) << "signal " << i;
+        joins += c.band[i].join ? 1 : 0;
+    }
+    EXPECT_EQ(joins, 8);   // GPS L2C, L5; Galileo E6, E5a, E5b; BeiDou B1C, B2a, B3I
+    EXPECT_FALSE(c.band[SBF_SIG_GPS_L1CA].join);
+    EXPECT_FALSE(c.band[SBF_SIG_GAL_E1].join);
+    EXPECT_FALSE(c.band[SBF_SIG_BDS_B1I].join);
+    EXPECT_EQ(c.windup, MosaicMbWindup::REF);
+    EXPECT_EQ(c.w_src, MosaicMbWSrc::EST);
+    EXPECT_TRUE(c.w_check);
+    EXPECT_TRUE(c.guard);
+    EXPECT_TRUE(c.common);
+    EXPECT_TRUE(c.anchor_vote);
+    EXPECT_FALSE(c.express_sigma);
+}
+
+// The gyro's wind-up as the driver reads it: W = -k p / 2pi from a fresh sample under the rail, none otherwise.
+TEST(MosaicMultiband, TheGyrosWindupIsFreshAndUnderTheRailOrNone)
+{
+    const double two_pi = 2.0 * 3.14159265358979323846;
+    MosaicMbWindupIn w = mbWindupFromGyro(true, two_pi, 5000, 0.99);
+    EXPECT_TRUE(w.ok);
+    EXPECT_NEAR(w.hz, -0.99, 1e-6);                       // one turn a second, 0.99 cycles a turn
+    w = mbWindupFromGyro(true, -0.5 * two_pi, 0, 0.99);
+    EXPECT_TRUE(w.ok);
+    EXPECT_NEAR(w.hz, 0.495, 1e-6);
+    EXPECT_TRUE(mbWindupFromGyro(true, 1.0, 20000, 0.99).ok);    // at the age bound
+    EXPECT_FALSE(mbWindupFromGyro(true, 1.0, 20001, 0.99).ok);   // past it
+    EXPECT_FALSE(mbWindupFromGyro(true, 1.0, -1, 0.99).ok);      // no age
+    EXPECT_FALSE(mbWindupFromGyro(false, 1.0, 0, 0.99).ok);      // no sample yet
+    const double rail = 4000.0 * 3.14159265358979323846 / 180.0;
+    EXPECT_FALSE(mbWindupFromGyro(true, rail, 0, 0.99).ok);      // at the gyro's rail
+    EXPECT_TRUE(mbWindupFromGyro(true, 0.99 * rail, 0, 0.99).ok);
+    EXPECT_FLOAT_EQ(mbWindupFromGyro(true, rail, 0, 0.99).hz, 0.0f);
+}
 
 TEST(MosaicMultibandPrivateCapture, AnchorsAreTheAdaptersAndTheBandsCombine)
 {
