@@ -452,7 +452,41 @@ nonisolated class FileCache {
         }
         let attrs = try? FileManager.default.attributesOfItem(atPath: binaryURL.path)
         let cachedSize = (attrs?[.size] as? UInt64) ?? 0
-        return cachedSize == UInt64(expectedSize)
+        return Self.cachedSizeSatisfiesListing(cachedSize: cachedSize, listedSize: expectedSize,
+                                               shortRecord: shortDownloadRecord(for: filename))
+    }
+
+    // MARK: - Board-confirmed short downloads
+
+    private static let shortDownloadsKey = "FileCache.shortDownloads"
+
+    /// A download the board itself ended (EOF, its byte count matching what
+    /// arrived) short of the size it listed — out-computer firmware before the
+    /// byte-exact stream left out stored bytes that were not part of a whole
+    /// log frame. BLEDevice keeps such a file; this remembers the two sizes so
+    /// the row reads as downloaded for THAT listing, instead of offering the
+    /// same short download forever. A different listing (a new flight reusing
+    /// the name) does not match the record.
+    func recordShortDownload(_ filename: String, listedSize: UInt32, receivedSize: UInt32) {
+        var all = UserDefaults.standard.dictionary(forKey: Self.shortDownloadsKey) as? [String: [Int]] ?? [:]
+        all[filename] = [Int(listedSize), Int(receivedSize)]
+        UserDefaults.standard.set(all, forKey: Self.shortDownloadsKey)
+    }
+
+    func shortDownloadRecord(for filename: String) -> (listed: UInt32, received: UInt32)? {
+        guard let all = UserDefaults.standard.dictionary(forKey: Self.shortDownloadsKey) as? [String: [Int]],
+              let r = all[filename], r.count == 2, r[0] >= 0, r[1] >= 0 else { return nil }
+        return (UInt32(r[0]), UInt32(r[1]))
+    }
+
+    /// The cached binary counts as this listing's file when it is the listed
+    /// size, or when the board confirmed a short download of exactly this
+    /// listing and the cached file is what it sent.
+    static func cachedSizeSatisfiesListing(cachedSize: UInt64, listedSize: UInt32,
+                                           shortRecord: (listed: UInt32, received: UInt32)?) -> Bool {
+        if cachedSize == UInt64(listedSize) { return true }
+        guard let r = shortRecord else { return false }
+        return r.listed == listedSize && UInt64(r.received) == cachedSize
     }
 
     /// Clear all cached CSV files
