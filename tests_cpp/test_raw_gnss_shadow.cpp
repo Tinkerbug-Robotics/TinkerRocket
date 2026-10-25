@@ -4713,3 +4713,57 @@ TEST(RawGnssShadow, TheChangeChecksLeverAllowanceTakesTheNosesTurnNotTheRoll)
     EXPECT_LT(radial.lever_last, 1.4f);
     EXPECT_GT(radial.lever_last, 1.0f);
 }
+
+// ------------------------------------- the descent without the IMU (Config::descent_imu_free)
+
+TEST(RawGnssShadow, TheDescentGoesImuFreeAtTheApogeeCallInFlightAndKeepsTheBarometer)
+{
+    // Under the chute the IMU reads 15 m/s^2 up too strong for 5 s (a tilt the
+    // filter lost, as on the 2026-10-24 Goblin) while the barometer holds 0 m.
+    // As before, the filter believes the IMU, its vertical speed passes the
+    // port hold's 21 m/s and the barometer is held out: the vertical runs away.
+    // In the IMU-free descent the velocity is the barometer's and GNSS's alone.
+    for (int on = 0; on < 2; ++on)
+    {
+        RawGnssShadow::Config cfg = primaryCfg();
+        cfg.descent_imu_free = on != 0;
+        RawGnssShadow sh(cfg);
+        sh.onSeed(padSeed(kT0));
+        int64_t t = feedFlight(sh, kT0, 12.0, 0.0f, gnss_raw::kShadowLevel, true);   // the pad: the offset learned
+        ASSERT_TRUE(sh.running());
+        // an apogee call on the ground is no descent
+        t = feedFlight(sh, t, 0.5, 0.0f, gnss_raw::kShadowLevel | gnss_raw::kShadowApogee, true);
+        EXPECT_FALSE(sh.filter().imuFree());
+        // nor is the flight before it
+        t = feedFlight(sh, t, 3.0, 0.0f, gnss_raw::kShadowInFlight, true);
+        EXPECT_FALSE(sh.filter().imuFree());
+        EXPECT_EQ(sh.stats().imu_free, 0);
+        t = feedFlight(sh, t, 0.1, 0.0f, gnss_raw::kShadowInFlight | gnss_raw::kShadowApogee, true);
+        EXPECT_EQ(sh.filter().imuFree(), on != 0);
+        EXPECT_EQ(sh.stats().imu_free, on);
+        if (on)
+            EXPECT_NEAR(sh.stats().imu_free_t, static_cast<double>(t - kT0) * 1e-6 + static_cast<double>(kT0) * 1e-6,
+                        0.11);
+        const double h0 = sh.filter().lla()[2];
+        const uint32_t held = sh.stats().baro_held;
+        t = feedFlight(sh, t, 5.0, 15.0f, gnss_raw::kShadowInFlight | gnss_raw::kShadowApogee, true);
+        ASSERT_TRUE(sh.running());
+        const float vd = sh.filter().velNed()[2];
+        std::printf("IMU-free %d: vd %+.1f m/s, height %+.1f m, barometer held %u\n", on, vd,
+                    sh.filter().lla()[2] - h0, sh.stats().baro_held - held);
+        if (on)
+        {
+            EXPECT_LT(std::fabs(vd), 1.0f);
+            EXPECT_LT(std::fabs(sh.filter().lla()[2] - h0), 3.0);
+            EXPECT_EQ(sh.stats().baro_held, held);
+        }
+        else
+        {
+            EXPECT_LT(vd, -20.0f);
+            EXPECT_GT(sh.stats().baro_held, held);
+        }
+        // landed, it stays IMU-free (the zero-velocity updates hold it) until the next start
+        t = feedFlight(sh, t, 1.0, 0.0f, gnss_raw::kShadowLanded | gnss_raw::kShadowLevel | gnss_raw::kShadowApogee, true);
+        EXPECT_EQ(sh.filter().imuFree(), on != 0);
+    }
+}

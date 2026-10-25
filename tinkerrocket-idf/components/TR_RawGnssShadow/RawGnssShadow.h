@@ -557,6 +557,17 @@ public:
         double   baro_offset_min_s = 10.0;    // and is used once it has had this long
         double   baro_hold_port_m = 2.0;      // in flight: held out while that error at the vertical speed is above this
         double   baro_hold_max_s  = 30.0;     //   but no longer than this after launch
+        // The descent without the IMU (off by default): from the apogee call
+        // (kShadowApogee in flight) to the next start, the filter's IMU-free
+        // mode (RawGnssEKF::setImuFree; its noise and velocity floor are the
+        // ekf's imu_free_*), and the barometer never held out by the port's
+        // error at speed (that error stays in its variance). Nothing on a
+        // descent navigates by the attitude, and the IMU-coupled filter lost
+        // it there on three of the 2026-10-24 flights: a shock or a fast roll
+        // the covariance could not follow, then a tilt the Dopplers could not
+        // pull back (the Beetle, 301 and 663 m off), or a vertical the held-out
+        // barometer and the vertical check's latch let run (the Goblin, -740 m).
+        bool     descent_imu_free = false;
         double   zupt_sigma_mps  = 0.5;       // landed: zero velocity, 1 sigma (#1418)
         double   zupt_period_s   = 0.1;       //   this often
         bool     pad_zupt        = true;      // the navigation filter, on the pad while still: zero velocity too
@@ -837,6 +848,8 @@ public:
         uint32_t baro = 0;                 // samples seen
         uint32_t baro_fused = 0;           //   fused (an offset learned)
         uint32_t baro_held = 0;            //   held out in flight at speed (the port's error)
+        uint8_t  imu_free = 0;             // the descent's IMU-free mode on (descent_imu_free)
+        double   imu_free_t = 0.0;         //   since this (the filter's clock, s)
         double   baro_offset_m = 0.0;      // the filter's height less the barometer's, on the pad
         uint8_t  baro_offset_frozen = 0;   //   frozen at launch
         uint32_t zupts = 0;                // landed zero-velocity updates

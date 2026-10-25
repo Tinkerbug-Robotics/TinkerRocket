@@ -340,6 +340,10 @@ struct Args
     double windup_k = -1.0;
     int windup_geom = -1, windup_monitor = -1, att_exact = -1, dv_lever_mode = -1;
     double windup_monitor_k = -1.0, dv_lever_radial_m = -1.0;
+    // the IMU-free descent (a RAW_REPLAY_DESCENT build; -1: the firmware's, off): RawGnssShadow::Config::
+    // descent_imu_free, and the filter's walk and velocity floor in it (RawGnssEKFParams::imu_free_*)
+    int descent_imu_free = -1;
+    double imu_free_acc_psd = -1.0, imu_free_vel_sigma = -1.0, imu_free_pos_sigma = -1.0;
     double clk_drift_psd = -1.0;     // RawGnssEKFParams::clk_drift_psd after the profile (-1: the profile's; the
                                      //   mosaic's and the LC86G's 100 m^2/s^3): an experiment on the clock's walk
     int build_lite = -1;             // TR_BENCH_RAW_BUILD_LITE: the cheaper epoch build on (1) or off (0) (a
@@ -409,6 +413,8 @@ void usage()
                  "  the spinning body (a RAW_REPLAY_WINDUP build): [--windup-k K] [--windup-geom 0|1]\n"
                  "  [--windup-monitor 0|1] [--windup-monitor-k K] [--att-exact 0|1] [--dv-lever-mode 0|1]\n"
                  "  [--dv-lever-radial-m X] [--clk-drift-psd X]\n"
+                 "  the IMU-free descent (a RAW_REPLAY_DESCENT build): [--descent-imu-free 0|1] [--imu-free-acc-psd X]\n"
+                 "  [--imu-free-vel-sigma X] [--imu-free-pos-sigma X]\n"
                  "  the cheaper epoch build (a RAW_REPLAY_BUILD_LITE build, --receiver mosaic only): [--build-lite [0|1]]\n");
 }
 
@@ -642,6 +648,10 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--dv-lever-mode") a.dv_lever_mode = std::atoi(val());
         else if (k == "--dv-lever-radial-m") a.dv_lever_radial_m = std::atof(val());
         else if (k == "--clk-drift-psd") a.clk_drift_psd = std::atof(val());
+        else if (k == "--descent-imu-free") a.descent_imu_free = std::atoi(val());
+        else if (k == "--imu-free-acc-psd") a.imu_free_acc_psd = std::atof(val());
+        else if (k == "--imu-free-vel-sigma") a.imu_free_vel_sigma = std::atof(val());
+        else if (k == "--imu-free-pos-sigma") a.imu_free_pos_sigma = std::atof(val());
         else if (k == "--acc-sub")
         {
             if (std::sscanf(val(), "%lf,%lf,%lf", &a.acc_sub[0], &a.acc_sub[1], &a.acc_sub[2]) != 3)
@@ -2228,6 +2238,24 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "WARNING: this build has no spinning-body switches (RAW_REPLAY_WINDUP=OFF): --windup-*, "
                              "--att-exact and --dv-lever-* are ignored\n");
 #endif
+#if RAW_REPLAY_DESCENT
+    // the images' (config.h TR_RAW_DESCENT_IMU_FREE: on wherever the raw filter navigates) with --fw-defaults,
+    // the mosaic's among them; the given switch either way
+    if (a.descent_imu_free >= 0)
+        cfg.descent_imu_free = a.descent_imu_free != 0;
+    else if (a.fw_defaults)
+        cfg.descent_imu_free = true;
+    if (a.imu_free_acc_psd > 0.0)
+        cfg.ekf.imu_free_acc_psd = a.imu_free_acc_psd;
+    if (a.imu_free_vel_sigma >= 0.0)
+        cfg.ekf.imu_free_vel_sigma = a.imu_free_vel_sigma;
+    if (a.imu_free_pos_sigma >= 0.0)
+        cfg.ekf.imu_free_pos_sigma = a.imu_free_pos_sigma;
+#else
+    if (a.descent_imu_free >= 0 || a.imu_free_acc_psd > 0.0 || a.imu_free_vel_sigma >= 0.0 || a.imu_free_pos_sigma >= 0.0)
+        std::fprintf(stderr, "WARNING: this build has no IMU-free descent (RAW_REPLAY_DESCENT=OFF): "
+                             "--descent-imu-free and --imu-free-* are ignored\n");
+#endif
 #if RAW_REPLAY_MOSAIC
     const bool mosaic_eph_cap = gnss_raw::EphemerisStore::kCapacity == 128;
     if (mosaic != mosaic_eph_cap)
@@ -2946,7 +2974,13 @@ int main(int argc, char** argv)
                  "ab_x,ab_y,ab_z,wb_x_dps,wb_y_dps,wb_z_dps,clk_b_m,clk_d_mps,healthy,finite,gnss_aided,baro_aided,"
                  "epochs,used_pr,used_rr,rej_pr,rej_rr,last_meas,age_ms,eph_sats,tracked,cr_built,cr_in,cr_used,"
                  "cr_half,cr_other,levelled,zupts,baro_fused,baro_held,mag_fused,hdg_fit_psi_deg,hdg_fit_sig_deg,"
-                 "hdg_handoffs,stale\n");
+                 "hdg_handoffs,stale%s\n",
+#if RAW_REPLAY_DESCENT
+                 ",imu_free"   // the IMU-free descent on (RawGnssShadow::Stats::imu_free)
+#else
+                 ""
+#endif
+    );
 #if RAW_REPLAY_MOSAIC
     // the epochs file (RUN.csv.epochs.csv, a mosaic or cold-start replay): one row per epoch the filter closed,
     // whatever --every -- its measurements fused and refused, the longest any one satellite has been refused running
@@ -3227,7 +3261,11 @@ int main(int argc, char** argv)
                      "%.6f,%.6f,%d,%d,%.7f,%.7f,%.7f,%.7f,%.9f,%.9f,%.4f,%.4f,%.4f,%.4f,%.5f,%.5f,%.5f,"
                      "%.5f,%.5f,%.5f,%.4f,%.4f,%.4f,%.5f,%.5f,%.5f,"
                      "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.3f,%.5f,%d,%d,%d,%d,"
-                     "%u,%d,%d,%d,%d,%d,%.1f,%d,%d,%u,%u,%u,%u,%u,%d,%u,%u,%u,%u,%.3f,%.3f,%u,%u\n",
+                     "%u,%d,%d,%d,%d,%d,%.1f,%d,%d,%u,%u,%u,%u,%u,%d,%u,%u,%u,%u,%.3f,%.3f,%u,%u"
+#if RAW_REPLAY_DESCENT
+                     ",%u"
+#endif
+                     "\n",
                      t_us * 1e-6, t_us * 1e-6 + a.t_base_s, sh.running() ? 1 : 0,
                      (last_flags & kShadowInFlight) ? 1 : 0, q[0], q[1], q[2], q[3], lla[0] * kR2D, lla[1] * kR2D,
                      lla[2], n_m, e_m, d_m, v[0], v[1], v[2], att[0] * kR2D, att[1] * kR2D, att[2] * kR2D,
@@ -3238,7 +3276,11 @@ int main(int argc, char** argv)
                      sh.ephemerisSatellites(), st.tracked, CR(st.cr_built), CR(st.cr_in), CR(st.cr_used),
                      CR(st.cr_half), CR(st.cr_other), sh.levelled_ ? 1 : 0, st.zupts + st.pad_zupts, st.baro_fused, st.baro_held,
                      st.mag_fused, st.heading_last.psi * kR2D, st.heading_last.sigma * kR2D, st.heading_handoffs,
-                     st.epochs_stale);
+                     st.epochs_stale
+#if RAW_REPLAY_DESCENT
+                     , static_cast<unsigned>(st.imu_free)
+#endif
+                     );
         rows++;
     };
 

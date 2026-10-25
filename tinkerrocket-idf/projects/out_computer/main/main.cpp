@@ -102,7 +102,7 @@ static inline std::string itos(int v)
 #include <TR_Orientation.h>
 #include <TR_Coordinates.h>
 #include <TR_BLE_To_APP.h>
-#include <BleDownloadChunk.h>   // #1160: how a log frame goes into a download chunk
+#include <BleDownloadChunk.h>   // #1160 + nextSegment: what the download sends next, in what chunks
 #include <RocketComputerTypes.h>
 #include <RollProfileGate.h>    // #1115: shared roll-profile acceptance gate (host-tested)
 #include <ServoConfigGate.h>    // #1141 item 3: shared servo-config acceptance gate (host-tested)
@@ -12779,16 +12779,14 @@ static void loop_oc()
             else
             {
 
-            // Frame-aligned BLE transfer: pack complete binary frames into each
-            // BLE notification so that a dropped notification only loses whole
-            // frames — no frame boundaries are corrupted.
+            // The stream is the stored file, byte for byte: the listing (cmd 2)
+            // reports its stored size and both apps reject a download that
+            // falls short of it. Whole log frames are still packed into one
+            // notification where they fit; bytes outside a frame (and a partial
+            // frame at the end) go out as they are — tr_ble::nextSegment.
             //
             // Frame format: [AA][55][AA][55][type(1)][len(1)][payload(len)][CRC(2)]
-            // Max frame = 4+1+1+255+2 = 263 bytes, always fits in one notification.
-            //
-            // The iOS app just appends each notification's data.  A dropped
-            // notification means a few missing frames rather than a corrupted
-            // region of zero-filled gaps with broken CRCs.
+            // Max frame = 4+1+1+255+2 = 263 bytes, the most the carry-over holds.
 
             const size_t MAX_FRAME_SIZE = 263;
             const size_t FLASH_READ_SIZE = 4096;
@@ -12801,6 +12799,8 @@ static void loop_oc()
             size_t ble_used = 0;          // Bytes accumulated in ble_buf
             uint32_t bytes_sent = 0;      // Total BLE bytes sent
             uint32_t frames_sent = 0;
+            uint32_t loose_bytes = 0;     // sent outside a whole frame
+            uint32_t loose_runs = 0;
             uint32_t start_ms = millis();
             bool eof = false;
 
@@ -12863,27 +12863,37 @@ static void loop_oc()
                 size_t buf_len = carryover + flash_bytes_read;
                 size_t pos = 0;
 
-                // Scan for complete frames
-                while (pos + 8 <= buf_len)  // Min frame: SOF(4)+type(1)+len(1)+CRC(2)
+                // Every stored byte goes out: a whole frame, or the bytes up to
+                // the next frame start, or (at end of file) whatever is left.
+                // This loop used to step over any byte that did not start a
+                // frame and drop a partial frame left at the end, so the stream
+                // came up short of the listed size and the apps refused the
+                // file (a V5 flight: 6,901,811 listed, 6,901,781 streamed).
+                for (;;)
                 {
-                    // Look for SOF: AA 55 AA 55
-                    if (read_buf[pos]   != 0xAA || read_buf[pos+1] != 0x55 ||
-                        read_buf[pos+2] != 0xAA || read_buf[pos+3] != 0x55)
+                    const tr_ble::Segment seg =
+                        tr_ble::nextSegment(read_buf + pos, buf_len - pos, eof);
+                    if (seg.len == 0)
                     {
-                        pos++;
-                        continue;
+                        break;  // the rest waits for the next read (carry-over)
+                    }
+                    const size_t frame_size = seg.len;
+                    if (!seg.frame)
+                    {
+                        // Not a log frame. Name where it sits in the file (the
+                        // first few), so a short download can be traced to it.
+                        if (loose_runs < 8)
+                        {
+                            ESP_LOGW("BLE", "%u bytes outside a frame at file offset %lu%s",
+                                     (unsigned)frame_size,
+                                     (unsigned long)(file_offset - (buf_len - pos)),
+                                     eof && pos + frame_size == buf_len ? " (end of file)" : "");
+                        }
+                        loose_runs++;
+                        loose_bytes += frame_size;
                     }
 
-                    // Read payload length from frame header
-                    uint8_t payload_len = read_buf[pos + 5];
-                    size_t frame_size = 4 + 1 + 1 + payload_len + 2;
-
-                    if (pos + frame_size > buf_len)
-                    {
-                        break;  // Incomplete frame — will carry over to next read
-                    }
-
-                    // Complete frame found. #1160: decide how it goes out. The
+                    // #1160: decide how the segment goes out. The
                     // old rule flushed only while the stage was non-empty, so a
                     // frame larger than chunk_data_size arriving at an EMPTY
                     // stage was appended and sent whole — an over-MTU
@@ -12914,7 +12924,7 @@ static void loop_oc()
 
                     if (plan.direct_pieces == 0)
                     {
-                        // Append frame to BLE buffer
+                        // Append the segment to the BLE buffer
                         memcpy(ble_buf + ble_used, read_buf + pos, frame_size);
                         ble_used += frame_size;
                     }
@@ -12932,7 +12942,7 @@ static void loop_oc()
                             ble_us += (uint32_t)(micros() - t_ble);
                             if (!sent)
                             {
-                                ESP_LOGE("BLE", "BLE send failed mid-transfer (piece %u/%u of a %u B frame), aborting download",
+                                ESP_LOGE("BLE", "BLE send failed mid-transfer (piece %u/%u of a %u B segment), aborting download",
                                          (unsigned)(i + 1), (unsigned)plan.direct_pieces, (unsigned)frame_size);
                                 send_failed = true;
                                 break;
@@ -12942,13 +12952,13 @@ static void loop_oc()
                         }
                         if (send_failed) break;
                     }
-                    frames_sent++;
+                    if (seg.frame) frames_sent++;
                     pos += frame_size;
                 }
 
                 if (send_failed) break;   // #524: abort the transfer, don't limp on
 
-                // Move unparsed bytes to start of buffer for next iteration
+                // Move the bytes still waiting to the start of the buffer
                 carryover = buf_len - pos;
                 if (carryover > 0 && pos > 0)
                 {
@@ -12987,9 +12997,11 @@ static void loop_oc()
 
             uint32_t elapsed_ms = millis() - start_ms;
             float kbps = (elapsed_ms > 0) ? (bytes_sent / 1024.0f) / (elapsed_ms / 1000.0f) : 0;
-            ESP_LOGI("BLE", "Download complete: %lu frames, %lu bytes in %.1fs (%.1f KB/s)",
+            ESP_LOGI("BLE", "Download complete: %lu frames, %lu bytes in %.1fs (%.1f KB/s); "
+                            "%lu bytes outside a frame in %lu runs",
                           (unsigned long)frames_sent, (unsigned long)bytes_sent,
-                          elapsed_ms / 1000.0f, kbps);
+                          elapsed_ms / 1000.0f, kbps,
+                          (unsigned long)loose_bytes, (unsigned long)loose_runs);
 
             // #524 diagnostic — where did the time go, and why can't we put more
             // packets in each connection event?

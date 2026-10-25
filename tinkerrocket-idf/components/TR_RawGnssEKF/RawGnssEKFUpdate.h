@@ -168,8 +168,11 @@ void RawGnssEKF<T>::updateGnssRawPartAs(const RawMeas* m, int i0, int i1, double
     // height, zero velocity, the magnetometer -- keep theirs). The
     // accelerometer bias keeps its gain (RawGnssEKFParams::att_gnss_off says
     // what that leaves). The hold (setAttHold) is the same mask for a while.
+    // The IMU-free mode (setImuFree) masks the accelerometer bias as well:
+    // none of the inertial states is GNSS's to move then.
     const uint32_t kmask =
-        p_.att_gnss_off || att_hold_ ? ~((0x7u << kAtt) | (0x7u << kGyroBias)) : 0xFFFFFFFFu;
+        imu_free_ ? ~((0x7u << kAtt) | (0x7u << kAccBias) | (0x7u << kGyroBias))
+        : p_.att_gnss_off || att_hold_ ? ~((0x7u << kAtt) | (0x7u << kGyroBias)) : 0xFFFFFFFFu;
     // hdg_obs_mode: the rows' heading part -- the attitude about the vertical,
     // the gyro bias along it -- scaled by the epoch's s (beginGnssRaw); none
     // to scale with att_gnss_off, and none with s 1 (the mode off: today's)

@@ -1909,3 +1909,137 @@ TEST(RawGnssEKF, TheScreenGatesEachDopplerAsItsUpdateWouldFirstAndChangesNothing
     EXPECT_EQ(sp.screen_rr, 1);
     EXPECT_EQ(sp.screen_refused, 0);
 }
+
+// ---------------------------------------------- the IMU-free mode (setImuFree)
+
+TEST(RawGnssEKF, EnteringTheImuFreeModeSeparatesTheNavigationStatesAndFloorsTheirSigmas)
+{
+    Clock clk;
+    RawGnssEKF<double> f = converged<double>(20, clk);
+    using F = RawGnssEKF<double>;
+    ASSERT_LT(f.sigma(F::kVel), 0.5);
+    ASSERT_LT(f.sigma(F::kPos), 2.0);
+    const double sigma_d = f.sigma(F::kPos + 2);
+    f.setImuFree(true);
+    EXPECT_TRUE(f.imuFree());
+    for (int i = 0; i < F::N; ++i)
+    {
+        const bool nav_i = i < F::kAtt || i >= F::kClkBias;
+        for (int j = F::kAtt; j < F::kClkBias; ++j)
+            if (nav_i)
+            {
+                EXPECT_EQ(f.P(i, j), 0.0) << i << ", " << j;
+                EXPECT_EQ(f.P(j, i), 0.0) << j << ", " << i;
+            }
+    }
+    for (int a = 0; a < 3; ++a)
+        EXPECT_NEAR(f.sigma(F::kVel + a), f.params().imu_free_vel_sigma, 1e-9);
+    EXPECT_NEAR(f.sigma(F::kPos), f.params().imu_free_pos_sigma, 1e-9);
+    EXPECT_NEAR(f.sigma(F::kPos + 1), f.params().imu_free_pos_sigma, 1e-9);
+    EXPECT_EQ(f.sigma(F::kPos + 2), sigma_d);                // the vertical: the barometer's
+    expectCovarianceHealthy(f);
+    // once on, on: a second call floors nothing again
+    for (int e = 0; e < 3; ++e)
+    {
+        imuSecond(f);
+        clk.tick(1.0);
+        double r[3];
+        geo_to_ecef(kLla0[0], kLla0[1], kLla0[2], r);
+        const double v[3] = {0.0, 0.0, 0.0};
+        const auto m = measure(makeSky(kLla0), r, v, clk);
+        f.updateGnssRaw(m.data(), static_cast<int>(m.size()));
+    }
+    const double sv = f.sigma(F::kVel);
+    ASSERT_LT(sv, 1.0);
+    f.setImuFree(true);
+    EXPECT_EQ(f.sigma(F::kVel), sv);
+    // init turns it off
+    const double v0[3] = {0.0, 0.0, 0.0};
+    initLevel(f, kLla0, v0);
+    EXPECT_FALSE(f.imuFree());
+}
+
+TEST(RawGnssEKF, TheImuFreeModeHoldsTheVelocityWhateverTheAccelerometerSays)
+{
+    // A shock or a tilt the filter lost: 30 m/s^2 across and 2 g along, which
+    // the IMU-coupled filter integrates and the IMU-free one does not
+    Clock clk;
+    const RawGnssEKF<double> f0 = converged<double>(10, clk);
+    const double a_ned[3] = {30.0, -20.0, -19.6};
+    RawGnssEKF<double> coupled = f0, free = f0;
+    free.setImuFree(true);
+    const double h0 = free.lla()[2];
+    imuSecond(coupled, a_ned);
+    imuSecond(free, a_ned);
+    EXPECT_GT(std::fabs(coupled.velNed()[0]), 25.0);
+    for (int i = 0; i < 3; ++i)
+        EXPECT_EQ(free.velNed()[i], f0.velNed()[i]) << i;
+    // the position carries the held velocity, and the attitude still turns on the gyro
+    EXPECT_NEAR(free.lla()[2], h0 - f0.velNed()[2] * 1.0, 1e-6);
+    const double gyro[3] = {0.0, 0.0, 0.5};                  // 0.5 rad/s about down for 1 s
+    const double acc[3] = {0.0, 0.0, -kG};
+    const double yaw0 = 2.0 * std::atan2(free.quat()[3], free.quat()[0]);
+    for (int i = 0; i < 200; ++i)
+        free.propagate(acc, gyro, kDt);
+    EXPECT_NEAR(2.0 * std::atan2(free.quat()[3], free.quat()[0]) - yaw0, 0.5, 1e-3);
+    expectCovarianceHealthy(free);
+}
+
+TEST(RawGnssEKF, TheImuFreeModeKeepsGnssOffTheAttitudeAndTheBiasesAndFollowsTheDopplers)
+{
+    // In the mode the receiver moves 6 m/s north, then turns to 6 m/s east,
+    // while the IMU feels nothing at all: the Dopplers and pseudoranges alone
+    // carry the position and velocity, and nothing of theirs reaches the
+    // attitude, the accelerometer bias or the gyro bias
+    Clock clk;
+    RawGnssEKF<double> f = converged<double>(15, clk);
+    f.setImuFree(true);
+    // its twin has the same IMU and no GNSS: the attitude turns on the gyro
+    // less its bias in both, and GNSS may change nothing of it
+    RawGnssEKF<double> twin = f;
+    double ab0[3], wb0[3];
+    for (int i = 0; i < 3; ++i)
+    {
+        ab0[i] = f.accelBias()[i];
+        wb0[i] = f.gyroBias()[i];
+    }
+    const auto sky = makeSky(kLla0);
+    double ned[3] = {0.0, 0.0, 0.0};
+    for (int e = 0; e < 20; ++e)
+    {
+        const double v_ned[3] = {e < 10 ? 6.0 : 0.0, e < 10 ? 0.0 : 6.0, 0.0};
+        imuSecond(f);
+        imuSecond(twin);
+        clk.tick(1.0);
+        for (int k = 0; k < 3; ++k)
+            ned[k] += v_ned[k];
+        double lla[3] = {kLla0[0] + ned[0] / 6.3567e6, kLla0[1] + ned[1] / (6.3787e6 * std::cos(kLla0[0])), kLla0[2]};
+        double r[3], v[3];
+        geo_to_ecef(lla[0], lla[1], lla[2], r);
+        nedToEcef(lla[0], lla[1], v_ned, v);
+        const auto m = measure(sky, r, v, clk);
+        const RawGnssStats st = f.updateGnssRaw(m.data(), static_cast<int>(m.size()));
+        EXPECT_EQ(st.rejected_rr, 0) << e;
+        if (e == 9 || e == 19)
+        {
+            // the epoch after each leg's start: on the leg's velocity
+            for (int k = 0; k < 2; ++k)
+                EXPECT_NEAR(f.velNed()[k], v_ned[k], 0.3) << e << " " << k;
+            double rf[3];
+            ecefOf(f, rf);
+            EXPECT_LT(dist(rf, r), 5.0) << e;
+        }
+    }
+    for (int i = 0; i < 4; ++i)
+        EXPECT_EQ(f.quat()[i], twin.quat()[i]) << i;
+    for (int i = 0; i < 3; ++i)
+    {
+        EXPECT_EQ(f.accelBias()[i], ab0[i]) << i;
+        EXPECT_EQ(f.gyroBias()[i], wb0[i]) << i;
+    }
+    using F = RawGnssEKF<double>;
+    for (int i = 0; i < F::kAtt; ++i)
+        for (int j = F::kAtt; j < F::kClkBias; ++j)
+            EXPECT_EQ(f.P(i, j), 0.0) << i << ", " << j;
+    expectCovarianceHealthy(f);
+}

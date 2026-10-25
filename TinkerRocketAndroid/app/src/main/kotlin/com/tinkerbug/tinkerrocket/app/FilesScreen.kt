@@ -584,6 +584,19 @@ private suspend fun downloadAndConvert(
 ): String = when (val result = session.downloadFile(file.name)) {
     is DownloadResult.Success -> withContext(Dispatchers.Default) {
         binFileFor(context, file.name).writeBytes(result.bytes)
+        // Kept although short of the listing: the board ended the transfer
+        // itself (older out-computer firmware left out stored bytes outside
+        // whole log frames). Remember it, and say so in the status line.
+        val shortNote = if (result.isShortOfListing) {
+            FlightCache.recordShortDownload(
+                context, file.name, result.listedSize.toLong(), result.bytes.size.toLong(),
+            )
+            " — the board sent ${result.bytes.size} of the ${result.listedSize} bytes it listed " +
+                "(${result.listedSize - result.bytes.size} short) and ended the transfer itself; kept. " +
+                "Updating the rocket's firmware makes it send the whole file."
+        } else {
+            ""
+        }
         try {
             // #850: a base-station log is a different binary format (TRBSLOG
             // magic) and has no flight summary — it is a packet record, not a
@@ -592,7 +605,7 @@ private suspend fun downloadAndConvert(
             if (BsLogCsvGenerator.isBaseStationLog(result.bytes)) {
                 val csv = BsLogCsvGenerator().writeCsv(result.bytes)
                 csvFileFor(context, file.name).writeText(csv)
-                "Saved ${file.name} (${result.bytes.size / 1000} kB) + CSV"
+                "Saved ${file.name} (${result.bytes.size / 1000} kB) + CSV$shortNote"
             } else if (file.name.startsWith("lora_") && file.name.endsWith(".csv")) {
                 // #1062: a base-station log written before a53d337 (2026-08-25)
                 // is ASCII CSV with no TRBSLOG magic. iOS copies it straight into
@@ -600,16 +613,16 @@ private suspend fun downloadAndConvert(
                 // parser ran, found no frames, and the row reported "CSV failed"
                 // with no Share or Chart while the bytes sat in BinaryCache.
                 csvFileFor(context, file.name).writeBytes(result.bytes)
-                "Saved ${file.name} (${result.bytes.size / 1000} kB) — legacy CSV, cached as-is"
+                "Saved ${file.name} (${result.bytes.size / 1000} kB) — legacy CSV, cached as-is$shortNote"
             } else {
                 val (csv, summary) = CsvGenerator().writeCsv(result.bytes)
                 csvFileFor(context, file.name).writeText(csv)
                 summaryFileFor(context, file.name).writeText(summary.toJson())
-                "Saved ${file.name} (${result.bytes.size / 1000} kB) + CSV"
+                "Saved ${file.name} (${result.bytes.size / 1000} kB) + CSV$shortNote"
             }
         } catch (e: Exception) {
             // Keep the .bin either way — the data survives a converter bug.
-            "Saved .bin; CSV failed: ${e.message}"
+            "Saved .bin; CSV failed: ${e.message}$shortNote"
         }
     }
     else -> "Download failed: $result"

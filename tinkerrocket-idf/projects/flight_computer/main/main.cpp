@@ -4508,6 +4508,12 @@ static void startRawShadow()
 #else
     cfg.epoch_slice_us = 2500.0;
 #endif
+    // and from the apogee call, position and velocity from GNSS and the
+    // barometer alone (RawGnssShadow.h descent_imu_free; config.h: on unless
+    // a build says TR_RAW_DESCENT_IMU_FREE=0)
+    cfg.descent_imu_free = TR_RAW_DESCENT_IMU_FREE != 0;
+    ESP_LOGI(TAG, "[RAWGNSS] descent: %s (TR_RAW_DESCENT_IMU_FREE)",
+             cfg.descent_imu_free ? "GNSS and the barometer alone from the apogee call" : "IMU-coupled, as before");
 #endif
 #if TR_RAW_NAV_MOSAIC
     // The mosaic-only image's one filter (config.h): a restored flight's

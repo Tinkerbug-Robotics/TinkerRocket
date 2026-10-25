@@ -132,6 +132,64 @@ class DownloadEngineTest {
         assertContentEquals(bytes, success.bytes)
     }
 
+    // ── Short of the listing, ended by the device ────────────────────────
+
+    /**
+     * Out-computer firmware before the byte-exact stream listed a file's
+     * stored size but left out stored bytes outside whole log frames, then
+     * ended the transfer with a correct EOF (the V5 nose cone, 2026-10-24:
+     * 6,901,811 listed, 6,901,781 sent). The device sent exactly what arrived,
+     * so the file is kept — and the result says it is short.
+     */
+    @Test
+    fun eofConfirmedShortOfListing_isKeptAndSaysSo() = runTest {
+        val sent = payload(270)
+        val h = startedSession {
+            deviceFiles += FakeFirmware.FakeFile("flight_1.bin", sent, reportedSize = 300)
+            downloadScript = FakeFirmware.DownloadScript(chunkSize = 100)
+        }
+        loadFileList(h)
+
+        val result = async { h.session.downloadFile("flight_1.bin") }
+        runCurrent()
+        val success = assertIs<DownloadResult.Success>(result.await())
+        assertContentEquals(sent, success.bytes)
+        assertEquals(300, success.listedSize)
+        assertTrue(success.isShortOfListing)
+        assertFalse(h.session.downloadState.value.active)
+    }
+
+    /** The same shortfall with no EOF (the transfer just went quiet) still fails. */
+    @Test
+    fun stallShortOfListing_isStillIncomplete() = runTest {
+        val h = startedSession {
+            deviceFiles += FakeFirmware.FakeFile("flight_1.bin", payload(270), reportedSize = 300)
+            downloadScript = FakeFirmware.DownloadScript(chunkSize = 100, legacyNoEof = true)
+        }
+        loadFileList(h)
+
+        val result = async { h.session.downloadFile("flight_1.bin") }
+        runCurrent()
+        advanceTimeBy(3000)
+        runCurrent()
+        assertEquals(DownloadResult.Incomplete, result.await())
+    }
+
+    @Test
+    fun fullDownload_isNotShortOfListing() = runTest {
+        val bytes = payload(300)
+        val h = startedSession {
+            deviceFiles += FakeFirmware.FakeFile("flight_1.bin", bytes)
+            downloadScript = FakeFirmware.DownloadScript(chunkSize = 100)
+        }
+        loadFileList(h)
+
+        val result = async { h.session.downloadFile("flight_1.bin") }
+        runCurrent()
+        val success = assertIs<DownloadResult.Success>(result.await())
+        assertFalse(success.isShortOfListing)
+    }
+
     // ── EOF / ABORT flags ────────────────────────────────────────────────
 
     @Test

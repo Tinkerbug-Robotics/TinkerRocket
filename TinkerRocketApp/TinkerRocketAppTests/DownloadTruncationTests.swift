@@ -24,6 +24,14 @@ final class DownloadTruncationTests: XCTestCase {
 
     /// Drive a download through the real notification entry point.
     private func run(_ frames: [Data], expectedSize: UInt32) -> URL? {
+        runDevice(frames, expectedSize: expectedSize).url
+    }
+
+    /// The same, handing back the device too, with its main-queue updates
+    /// (downloadWarning) applied. `stall` ends the transfer the way the 3 s
+    /// stall timer does instead of waiting for an EOF.
+    private func runDevice(_ frames: [Data], expectedSize: UInt32,
+                           stall: Bool = false) -> (url: URL?, device: BLEDevice) {
         let d = BLEDevice(peripheral: nil, name: "TR-R-Test")
         d.isConnected = true
         d.files = [FileInfo(name: "flight.bin", size: expectedSize)]
@@ -34,8 +42,15 @@ final class DownloadTruncationTests: XCTestCase {
             result = url; called = true
         }
         for f in frames { d.handleFileChunkForTesting(f) }
+        if stall { d.completeDownloadFromStallForTesting() }
         XCTAssertTrue(called, "the completion handler must always be invoked")
-        return result
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        return (result, d)
+    }
+
+    override func tearDown() {
+        UserDefaults.standard.removeObject(forKey: "FileCache.shortDownloads")
+        super.tearDown()
     }
 
     /// Real hardware ends a transfer with DATA and the EOF flag in the SAME
@@ -52,13 +67,61 @@ final class DownloadTruncationTests: XCTestCase {
         XCTAssertNotNil(url, "an EOF frame carrying data must not be rejected")
     }
 
-    /// The same shape, but genuinely short against the listing.
-    func testDataBearingEofShortAgainstListingFails() {
-        let url = run([
+    /// The same shape, short against the listing, with the device's own EOF
+    /// confirming it sent exactly what arrived. Out-computer firmware before
+    /// the byte-exact stream did this whenever a file held bytes outside a
+    /// whole log frame (the V5 nose cone, 2026-10-24: 6,901,811 listed,
+    /// 6,901,781 sent), and rejecting it threw the whole flight away. Kept,
+    /// with the shortfall said out loud.
+    func testDataBearingEofShortAgainstListingIsKeptWithAWarning() {
+        let r = runDevice([
             chunk(offset: 0, payload: Array(repeating: 0xAA, count: 100)),
             chunk(offset: 100, payload: Array(repeating: 0xBB, count: 32), eof: true),
         ], expectedSize: 500)
-        XCTAssertNil(url, "132 bytes against a 500-byte listing must fail")
+        XCTAssertNotNil(r.url, "the device ended the transfer itself: keep its 132 bytes")
+        if let url = r.url { XCTAssertEqual((try? Data(contentsOf: url))?.count, 132) }
+        let warning = r.device.downloadWarning ?? ""
+        XCTAssertTrue(warning.contains("132") && warning.contains("500"),
+                      "the shortfall must be reported, not hidden: \(warning)")
+        let rec = FileCache.shared.shortDownloadRecord(for: "flight.bin")
+        XCTAssertEqual(rec?.listed, 500)
+        XCTAssertEqual(rec?.received, 132)
+    }
+
+    /// No EOF: the stall timer ended it. We cannot know what the device meant
+    /// to send, so short against the listing still fails.
+    func testStallShortAgainstListingStillFails() {
+        let r = runDevice([
+            chunk(offset: 0, payload: Array(repeating: 0xAA, count: 100)),
+        ], expectedSize: 500, stall: true)
+        XCTAssertNil(r.url, "a transfer that just went quiet is not complete")
+        XCTAssertNil(r.device.downloadWarning)
+        XCTAssertNil(FileCache.shared.shortDownloadRecord(for: "flight.bin"))
+    }
+
+    /// A download that matches its listing leaves no warning behind.
+    func testFullDownloadHasNoWarning() {
+        let r = runDevice([
+            chunk(offset: 0, payload: Array(repeating: 0xAA, count: 100)),
+            chunk(offset: 100, payload: [], eof: true),
+        ], expectedSize: 100)
+        XCTAssertNotNil(r.url)
+        XCTAssertNil(r.device.downloadWarning)
+    }
+
+    /// The row's "downloaded" test: the listed size, or exactly the short
+    /// download the board confirmed for this same listing — never a file of
+    /// any other size, and never a record left by a different listing (a new
+    /// flight reusing the name).
+    func testCachedSizeRuleHonoursOnlyAMatchingShortRecord() {
+        XCTAssertTrue(FileCache.cachedSizeSatisfiesListing(cachedSize: 500, listedSize: 500, shortRecord: nil))
+        XCTAssertFalse(FileCache.cachedSizeSatisfiesListing(cachedSize: 132, listedSize: 500, shortRecord: nil))
+        XCTAssertTrue(FileCache.cachedSizeSatisfiesListing(cachedSize: 132, listedSize: 500,
+                                                           shortRecord: (listed: 500, received: 132)))
+        XCTAssertFalse(FileCache.cachedSizeSatisfiesListing(cachedSize: 131, listedSize: 500,
+                                                            shortRecord: (listed: 500, received: 132)))
+        XCTAssertFalse(FileCache.cachedSizeSatisfiesListing(cachedSize: 132, listedSize: 600,
+                                                            shortRecord: (listed: 500, received: 132)))
     }
 
     /// A clean transfer still succeeds — the regression guard for the fix.
@@ -82,14 +145,16 @@ final class DownloadTruncationTests: XCTestCase {
         XCTAssertNil(url, "a gap in the offsets must fail the download, not splice it")
     }
 
-    /// EOF carries the device's own bytes_sent — a mismatch means missing data
-    /// even when every chunk that DID arrive was contiguous.
-    func testEofByteCountMismatchFails() {
+    /// EOF carries the device's own bytes_sent. When it equals what arrived
+    /// and every chunk was contiguous, a shortfall against the listing is the
+    /// device's own (see testDataBearingEofShortAgainstListingIsKeptWithAWarning):
+    /// kept. A mismatch between EOF and arrivals still fails, below.
+    func testEofConfirmedShortfallIsKept() {
         let url = run([
             chunk(offset: 0, payload: Array(repeating: 0xAA, count: 100)),
             chunk(offset: 100, payload: [], eof: true),   // device claims 100...
         ], expectedSize: 300)                              // ...listing says 300
-        XCTAssertNil(url, "short against the listing must fail on the EOF path too")
+        XCTAssertNotNil(url, "the device's EOF agrees with what arrived: keep it")
     }
 
     func testEofClaimingMoreThanArrivedFails() {

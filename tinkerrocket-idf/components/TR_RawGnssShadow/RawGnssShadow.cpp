@@ -309,9 +309,11 @@ void RawGnssShadow::applyBaro(double t, uint8_t imu_flags)
     // without the barometer, r1). Judged on the vertical speed -- drifting
     // with the wind under a chute moves no air past the port -- and for no
     // longer than baro_hold_max_s after launch, so a wrong speed cannot keep
-    // the barometer out for good.
+    // the barometer out for good. Never in the IMU-free descent: the
+    // barometer is the vertical's one reference then, and its speed the
+    // barometer's own and GNSS's.
     const double vd = static_cast<double>(v[2]);
-    if (in_flight && cfg_.baro_port_k * 0.5 * rho * vd * vd > cfg_.baro_hold_port_m
+    if (in_flight && !ekf_.imuFree() && cfg_.baro_port_k * 0.5 * rho * vd * vd > cfg_.baro_hold_port_m
         && t - baro_launch_t_ < cfg_.baro_hold_max_s)
     {
         st_.baro_held++;
@@ -715,6 +717,13 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
     if (static_cast<double>(ekf_.gExcess()) + 1.0 > cfg_.boost_screen_g)
         boost_seen_t_ = ekf_.time();      // the boost screen's window (startJob)
     t_prev_ = t;
+    // The descent without the IMU (descent_imu_free): from the apogee call on
+    if (cfg_.descent_imu_free && !ekf_.imuFree() && (s.flags & kShadowInFlight) && (s.flags & kShadowApogee))
+    {
+        ekf_.setImuFree(true);
+        st_.imu_free = 1;
+        st_.imu_free_t = ekf_.time();
+    }
     if (windupRingOn() || (cfg_.dv_check != kDvOff && cfg_.dv_lever_mode == 1))
     {
         // the body's rate over the step (the gyro less its bias): the carrier wind-up's history
@@ -2499,7 +2508,8 @@ void RawGnssShadow::jobHeadingFit()
     d.vel_us = sat16(static_cast<double>(st_.heading_vel_us));
     d.solve_us = sat16(static_cast<double>(st_.heading_solve_us));
     d.seed_ms = sat16((fit_launch_t_ - fit_.t0()) * 1000.0);
-    if (act && !handed_ && res.ok && res.sigma > 0.0 && res.sigma * kRad2Deg <= cfg_.heading_handoff_deg && !rival &&
+    // (not in the IMU-free descent: its velocity is GNSS's, and the attitude navigates nothing)
+    if (act && !handed_ && !ekf_.imuFree() && res.ok && res.sigma > 0.0 && res.sigma * kRad2Deg <= cfg_.heading_handoff_deg && !rival &&
         res.n >= cfg_.heading_handoff_min_epochs &&
         (res.sigma * kRad2Deg <= cfg_.heading_handoff_sure_deg || headingsApart(res, filt)))
     {
