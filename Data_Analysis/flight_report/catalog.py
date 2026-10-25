@@ -352,6 +352,70 @@ _P(
         "may have been inherited from an earlier flight — take a delta across the log before blaming "
         "this one.",
 )
+# v2 (#1659): the receive side of the flight computer's I2S link, ahead of the log ring. None on
+# a log from older firmware, which never measured them.
+_P(
+    "LogBufferStats.rx_peak", "Link receive backlog peak",
+    unit="bytes",
+    note=
+        "Highest fill of the 64 KB I2S receive ring since the previous record: bytes the link had "
+        "delivered that the parser had not yet read. At 88200 it fills 352.8 B per millisecond the "
+        "parser is held off.",
+    caution=
+        "A peak, reset by each record, not a level. A few kilobytes is ordinary scheduling. Near "
+        "65535 the ring was full and rx_overflow_bytes says what it cost.",
+)
+_P(
+    "LogBufferStats.rx_overflow_bytes", "Link receive overflow",
+    unit="bytes", kind=KIND_COUNTER,
+    note=
+        "Bytes the I2S receive interrupt dropped because the receive ring was full, cumulative since "
+        "the OutComputer booted. They never reached the parser, so the log has a hole there and "
+        "nothing else in it marks one.",
+    caution=
+        "Cumulative since boot, so take a delta across the flight. Only a rise while the flight "
+        "computer was streaming means lost data.",
+)
+_P(
+    "LogBufferStats.rx_bad_crc", "Link frames with a bad CRC",
+    kind=KIND_COUNTER,
+    note=
+        "Frames from the flight computer's link that failed their CRC and were dropped, cumulative "
+        "since boot.",
+    caution=
+        "Counts frames the link corrupted, not the log's own bad frames (the parser statistics hold "
+        "those). Cumulative since boot: take a delta.",
+)
+_P(
+    "LogBufferStats.rx_resync_bytes", "Link resync bytes",
+    unit="bytes", kind=KIND_COUNTER,
+    note=
+        "Bytes the parser skipped while hunting for the next frame start, cumulative since boot.",
+    caution=
+        "Rises in the ordinary course: idle fill between frames is skipped this way. Read a jump "
+        "against rx_bad_crc and rx_overflow_bytes, not on its own.",
+)
+_P(
+    "LogBufferStats.parser_max_us", "Longest parse pass",
+    unit="µs",
+    note=
+        "Longest single pass of the link parser since the previous record, in microseconds.",
+    caution=
+        "A pass that the CPU was taken from mid-way counts that time too, so a long pass is a symptom "
+        "and rx_peak is the measure of what it cost.",
+)
+_P(
+    "LogBufferStats.flash_stall_max_us", "Longest flash stall",
+    unit="µs",
+    note=
+        "Longest stretch the link's receive interrupt ran with the flash cache off, since the previous "
+        "record: an operation on the OutComputer's own flash (in practice an erase; programs and "
+        "reads are far shorter), which stops every task on both cores. Measured to within one DMA "
+        "buffer, about 2.9 ms. 0 means none was seen.",
+    caution=
+        "Seen only while the flight computer is clocking the link, and a flash operation shorter than "
+        "one buffer can be missed. A stall that spans two records reads in full in the second.",
+)
 
 # I2C magnetometer (msg 0xD1 — IIS2MDC on the big board V8+, QMC5883P on the
 # rocket-computer-mini), read by a time-gated I2C poll at a nominal 100 Hz — so

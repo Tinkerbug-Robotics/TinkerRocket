@@ -52,6 +52,7 @@ CONVERSIONS = {
     "Pa": None,
     "bytes": None,
     "ms": None,
+    "µs": None,   # #1659: LogBufferStats parse and flash-stall times
     "deg/s": None,
     "µT": None,
     # Affine, not a factor: °F needs an offset and this table multiplies. Left

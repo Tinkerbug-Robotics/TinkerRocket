@@ -2676,9 +2676,12 @@ static void printStats()
 
         uint8_t lbs_frame[MAX_FRAME];
         size_t  lbs_frame_len = 0;
+        // #1659: the v1 prefix only. The v2 tail is the I2S link's receive
+        // health, and this single-MCU board has no link, so zeros there would
+        // read as "measured, clean".
         if (TR_I2C_Interface::packMessage(LOG_BUFFER_STATS_MSG,
                                            (const uint8_t*)&lbs,
-                                           sizeof(lbs),
+                                           SIZE_OF_LOG_BUFFER_STATS_V1,
                                            lbs_frame, sizeof(lbs_frame),
                                            lbs_frame_len))
         {
