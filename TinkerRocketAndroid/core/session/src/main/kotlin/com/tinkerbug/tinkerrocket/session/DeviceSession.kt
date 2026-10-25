@@ -1018,10 +1018,15 @@ public class DeviceSession(
      *    offset is CHECKED (#854, following iOS #832): on a data chunk it is
      *    the position that data belongs at, so a gap fails the download
      *    instead of splicing; on the EOF chunk it carries the device's own
-     *    bytes_sent, which is checked against what arrived.  The shortfall
-     *    check against the listing size now guards BOTH the EOF and stall
-     *    paths — it used to guard only the stall path, so the common path
-     *    returned Success with whatever had turned up;
+     *    bytes_sent, which is checked against what arrived;
+     *  - short against the listing size: on the stall path that is
+     *    [DownloadResult.Incomplete]; on the EOF path (every chunk contiguous,
+     *    the EOF's byte count equal to what arrived) the device sent exactly
+     *    these bytes and called the file complete, so it is a
+     *    [DownloadResult.Success] whose [DownloadResult.Success.listedSize]
+     *    says how many the listing promised — out-computer firmware before
+     *    the byte-exact stream left out stored bytes outside whole log frames
+     *    (iOS completeDownload, same rule);
      *  - `flags & 0x01` = EOF, `flags & 0x02` = ABORT.  EOF|ABORT (#526)
      *    fails the download outright — the bytes are a truncated fragment;
      *  - every non-EOF chunk re-arms a 3 s stall timer.  On stall: shortfall
@@ -1134,14 +1139,26 @@ public class DeviceSession(
 
     private fun completeDownload(d: ActiveDownload, fromStallTimer: Boolean) {
         cancelStallTimer()
-        // #854/#832: this was gated on fromStallTimer, so the EOF path — the
-        // common one — returned Success with whatever had arrived. The
-        // listing's size is just as authoritative on either path.
-        if (d.expectedSize > 0 && d.buffer.size() < d.expectedSize) {
+        // #854/#832: short against the listing. Who ended the transfer
+        // decides it. The stall timer: the device went quiet and we cannot
+        // know what it meant to send — Incomplete. The device's own EOF:
+        // onFileChunk only gets here when every chunk was contiguous and the
+        // EOF's byte count equals what arrived, so the device sent exactly
+        // these bytes and called the file complete. Out-computer firmware
+        // before the byte-exact stream (tr_ble::nextSegment) left out stored
+        // bytes outside whole log frames — the V5 nose cone's 2026-10-24
+        // flight listed 6,901,811 B and sent 6,901,781 — and failing here threw
+        // the whole flight away over 30 bytes. Keep it; Success carries the
+        // listed size so the caller can say so.
+        if (d.expectedSize > 0 && d.buffer.size() < d.expectedSize && fromStallTimer) {
             finishDownload(d, DownloadResult.Incomplete, finalProgress = null)
             return
         }
-        finishDownload(d, DownloadResult.Success(d.buffer.toByteArray()), finalProgress = 1.0)
+        finishDownload(
+            d,
+            DownloadResult.Success(d.buffer.toByteArray(), listedSize = d.expectedSize),
+            finalProgress = 1.0,
+        )
     }
 
     private fun finishDownload(d: ActiveDownload, result: DownloadResult, finalProgress: Double?) {
@@ -1968,20 +1985,34 @@ public data class DownloadProgress(
  * to a nil URL; the reasons are preserved here.
  */
 public sealed interface DownloadResult {
-    /** Assembled file bytes (EOF, or a stall with no known shortfall). */
-    public class Success(public val bytes: ByteArray) : DownloadResult {
+    /**
+     * Assembled file bytes (EOF, or a stall with no known shortfall).
+     * [listedSize] is the size the file list promised (0 = unknown). When the
+     * bytes come up short of it, the device ended the transfer itself (EOF,
+     * its byte count matching what arrived): the missing bytes are ones it did
+     * not send, not ones lost on the link — see [isShortOfListing].
+     */
+    public class Success(
+        public val bytes: ByteArray,
+        public val listedSize: Int = 0,
+    ) : DownloadResult {
+        /** Kept although short of the listing: the caller must say so. */
+        public val isShortOfListing: Boolean get() = listedSize > 0 && bytes.size < listedSize
+
         override fun equals(other: Any?): Boolean =
-            other is Success && bytes.contentEquals(other.bytes)
+            other is Success && bytes.contentEquals(other.bytes) && listedSize == other.listedSize
 
-        override fun hashCode(): Int = bytes.contentHashCode()
+        override fun hashCode(): Int = 31 * bytes.contentHashCode() + listedSize
 
-        override fun toString(): String = "Success(${bytes.size} bytes)"
+        override fun toString(): String =
+            if (isShortOfListing) "Success(${bytes.size} of $listedSize listed bytes)"
+            else "Success(${bytes.size} bytes)"
     }
 
     /** #526 EOF|ABORT — the device could not finish; nothing is kept. */
     public data object Aborted : DownloadResult
 
-    /** 3 s stall with fewer bytes than the file list promised. */
+    /** 3 s stall with fewer bytes than the file list promised, or a gap. */
     public data object Incomplete : DownloadResult
 
     /** The link dropped mid-transfer. */

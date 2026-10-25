@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.content.FileProvider
 import java.io.File
+import com.tinkerbug.tinkerrocket.protocol.FlightFiles
 import com.tinkerbug.tinkerrocket.protocol.FlightSummary
 
 /**
@@ -155,6 +156,29 @@ internal object FlightCache {
         if (!csvFileFor(context, name).exists()) return false
         if (expectedSize <= 0L) return true
         val raw = binFileFor(context, name)
-        return raw.exists() && raw.length() == expectedSize
+        return raw.exists() &&
+            FlightFiles.cachedSizeSatisfiesListing(raw.length(), expectedSize, shortDownload(context, name))
+    }
+
+    private const val SHORT_DOWNLOADS = "flight_cache_short_downloads"
+
+    /**
+     * A download the board ended itself short of its listing, kept (see
+     * DownloadResult.Success.isShortOfListing): remember both sizes so the row
+     * reads as downloaded for THAT listing instead of offering the same short
+     * download forever. iOS: FileCache.recordShortDownload.
+     */
+    fun recordShortDownload(context: Context, name: String, listedSize: Long, receivedSize: Long) {
+        context.getSharedPreferences(SHORT_DOWNLOADS, Context.MODE_PRIVATE).edit()
+            .putString(name, "$listedSize:$receivedSize").apply()
+    }
+
+    fun shortDownload(context: Context, name: String): FlightFiles.ShortDownload? {
+        val v = context.getSharedPreferences(SHORT_DOWNLOADS, Context.MODE_PRIVATE)
+            .getString(name, null) ?: return null
+        val parts = v.split(':')
+        val listed = parts.getOrNull(0)?.toLongOrNull() ?: return null
+        val received = parts.getOrNull(1)?.toLongOrNull() ?: return null
+        return FlightFiles.ShortDownload(listed, received)
     }
 }

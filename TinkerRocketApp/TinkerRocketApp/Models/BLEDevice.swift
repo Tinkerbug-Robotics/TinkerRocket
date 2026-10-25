@@ -76,6 +76,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// on 2026-08-25, when an app build without base-station log support was
     /// handed a lora_*.bin. Android already reported this; iOS did not.
     @Published var csvGenerationError: String?
+    /// A download kept although it came up short of the listed size: the
+    /// board ended it itself (EOF, its byte count matching what arrived), so
+    /// the missing bytes are ones it did not send, not ones lost on the link.
+    /// Out-computer firmware before the byte-exact stream did this whenever a
+    /// file held bytes outside a whole log frame. nil when the last download
+    /// matched its listing.
+    @Published var downloadWarning: String?
     @Published var downloadStates: [String: DownloadState] = [:]
     @Published var simLaunched = false
     @Published var groundTestActive = false
@@ -1868,6 +1875,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         downloadCompletionHandler = completion
         isDownloading = true
         downloadProgress = 0.0
+        downloadWarning = nil
         if let fileInfo = files.first(where: { $0.name == filename }), fileInfo.size > 0 {
             downloadExpectedSize = Int(fileInfo.size)
         } else {
@@ -1892,9 +1900,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         isDownloading = true
         downloadProgress = 0.0
         downloadExpectedSize = Int(files.first(where: { $0.name == filename })?.size ?? 0)
+        downloadWarning = nil
     }
 
     func handleFileChunkForTesting(_ data: Data) { handleFileChunk(data) }
+    /// The 3 s stall timer firing, without waiting for it.
+    func completeDownloadFromStallForTesting() { completeDownload(fromStallTimer: true) }
 #endif
 
     // MARK: - File chunk handling (private)
@@ -2025,10 +2036,31 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             downloadCompletionHandler?(nil)
             return
         }
-        // #832: this shortfall check used to be gated on `fromStallTimer`, so
-        // the EOF path — the common one — wrote whatever it had and reported
-        // success. The listing's size is just as authoritative on either path.
-        if downloadExpectedSize > 0 && downloadedData.count < downloadExpectedSize {
+        // #832: short against the listing. Who ended the transfer decides it.
+        //  - The stall timer: the device went quiet and we cannot know what it
+        //    meant to send. Rejected, as before.
+        //  - The device's own EOF: handleFileChunk only calls this when every
+        //    chunk was contiguous and the EOF frame's byte count equals what
+        //    arrived (a dropped data chunk fails on its gap, a dropped final
+        //    chunk on the redundant EOF's count). So the device sent exactly
+        //    these bytes and called the file complete. Out-computer firmware
+        //    before the byte-exact stream (tr_ble::nextSegment) left out stored
+        //    bytes that were not part of a whole log frame — the V5 nose cone's
+        //    2026-10-24 flight listed 6,901,811 B and sent 6,901,781 — and
+        //    rejecting here threw the whole flight away over 30 bytes. Keep it,
+        //    say so, and record the shortfall so the row reads as downloaded
+        //    for this listing.
+        if downloadExpectedSize > 0 && downloadedData.count < downloadExpectedSize && !fromStallTimer {
+            let received = downloadedData.count
+            let listed = downloadExpectedSize
+            print("[DOWNLOAD] \(filename): EOF-confirmed \(received) B, listed \(listed) B — kept, \(listed - received) B short")
+            FileCache.shared.recordShortDownload(filename, listedSize: UInt32(listed),
+                                                 receivedSize: UInt32(received))
+            let note = "\(filename): the board ended the transfer after \(received) of the \(listed) bytes it "
+                + "listed (\(listed - received) short) and the file was kept. The missing bytes are ones the "
+                + "board's firmware did not send, not ones lost on the link."
+            DispatchQueue.main.async { [weak self] in self?.downloadWarning = note }
+        } else if downloadExpectedSize > 0 && downloadedData.count < downloadExpectedSize {
             let handler = downloadCompletionHandler
             downloadingFilename = nil
             downloadedData = Data()
