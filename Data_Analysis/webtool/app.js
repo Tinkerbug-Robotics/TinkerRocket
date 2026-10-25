@@ -410,14 +410,15 @@ updateControls();
 
 // ---------- views ----------
 
-const VIEWS = ["analyze", "flights", "flight", "pilots", "pilot"];
+const VIEWS = ["analyze", "flights", "flight", "pilots", "pilot", "help"];
 
 /* #/                        analyze a flight
    #/flights                 my saved flights
    #/flights/<id>            one saved flight
    #/pilots                  public logs
    #/pilots/<login>          one flyer's log
-   #/pilots/<login>/<id>     one public flight — the link a flyer shares */
+   #/pilots/<login>/<id>     one public flight — the link a flyer shares
+   #/help, #/help/<section>  help, scrolled to a section */
 function route() {
   const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean).map((p) => {
     try { return decodeURIComponent(p); } catch (err) { return ""; }
@@ -425,12 +426,18 @@ function route() {
   let view = "analyze";
   if (parts[0] === "flights") view = parts[1] ? "flight" : "flights";
   else if (parts[0] === "pilots") view = parts[2] ? "flight" : parts[1] ? "pilot" : "pilots";
+  else if (parts[0] === "help") view = "help";
   for (const v of VIEWS) el(`view-${v}`).hidden = v !== view;
   const tab = view === "analyze" ? "analyze" : parts[0];
   for (const a of document.querySelectorAll("#nav a")) a.classList.toggle("current", a.dataset.view === tab);
   if (view === "analyze") startEngine();
   el("engine-badge").hidden = view !== "analyze";
-  if (view !== "analyze") {
+  if (view === "help") {
+    // In-page anchors cannot be plain #ids here, because the hash is the route.
+    const section = parts[1] && document.getElementById(`help-${parts[1]}`);
+    if (section) section.scrollIntoView();
+    else window.scrollTo(0, 0);
+  } else if (view !== "analyze") {
     logui.render(view, parts);
     window.scrollTo(0, 0);
   }

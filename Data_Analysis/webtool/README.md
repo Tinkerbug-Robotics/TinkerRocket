@@ -134,6 +134,16 @@ flights/<id>/data/<file>        the flight's files, if the flyer shares them
   public index are coerced to plain strings and numbers, and ids and file names
   are checked against strict patterns before they reach a URL.
 
+**Set-up** asks for the flyer's GitHub login first, because the Pages
+settings and token links are built from it; until it is typed they are
+disabled rather than pointing at a GitHub 404. Once it is typed, each step
+checks GitHub and shows whether the repository exists (an unauthenticated
+read, sixty an hour) and whether Pages is serving it. The repository is made
+with a README so `main` exists when the flyer reaches the Pages step.
+`#/help` (the **Help** tab) covers analysis, the log, set-up, taking a log
+down, and the failures a flyer is likely to hit. `#/help/<section>` scrolls to
+one part of it; the setup panel and the log form link there.
+
 `dev/mock_github.py` stands in for the API, raw and Pages hosts so all of this
 can be driven locally (instructions in its docstring). It seeds a flyer whose
 report tries to read the framing page's storage, and it should say "blocked".

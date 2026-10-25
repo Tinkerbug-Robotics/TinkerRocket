@@ -33,12 +33,13 @@ export function endpoints() {
 
 // ---------- setup links ----------
 
-export function newRepoUrl() {
+export function newRepoUrl(owner) {
   const p = new URLSearchParams({
     name: REPO_NAME,
     description: "My TinkerRocket flight log",
     visibility: "public",
   });
+  if (owner) p.set("owner", owner);
   return `https://github.com/new?${p}`;
 }
 
@@ -133,14 +134,36 @@ export function pagesSettingsUrl(owner) {
   return `https://github.com/${encodeURIComponent(owner)}/${REPO_NAME}/settings/pages`;
 }
 
-/* Whether Pages is serving the log yet. Pages answers cross-origin reads, so
-   this is a plain fetch of the index. */
+/* Whether Pages is serving the repository yet. Pages answers cross-origin
+   reads, so this is a plain fetch — of the index once a flight is published,
+   or of the site root before then. A repository made with a README and Pages
+   switched on serves that README as its root page until the first publish
+   adds .nojekyll; after it, the root has no page and the index is there. */
 export async function pagesLive(owner) {
+  const ok = (path) => fetch(pagesUrl(owner, path), { cache: "no-store" })
+    .then((r) => (r.ok ? true : Promise.reject(new Error(String(r.status)))));
   try {
-    const resp = await fetch(pagesUrl(owner, INDEX_PATH), { cache: "no-store" });
-    return resp.ok;
+    return await Promise.any([ok(INDEX_PATH), ok("")]);
   } catch (err) {
     return false;
+  }
+}
+
+/* Whether a public repository by the log's name exists for this login,
+   asked without a token (GitHub allows sixty such reads an hour). "missing"
+   also covers a private one, which reads as absent to everyone but its
+   owner — and which no one else could read the log from either. */
+export async function repoState(owner) {
+  try {
+    const resp = await fetch(`${endpoints().api}/repos/${encodeURIComponent(owner)}/${REPO_NAME}`, {
+      headers: { Accept: "application/vnd.github+json" },
+    });
+    if (resp.status === 404) return "missing";
+    if (!resp.ok) return "unknown";
+    const repo = await resp.json();
+    return repo.private ? "missing" : "ok";
+  } catch (err) {
+    return "unknown";
   }
 }
 

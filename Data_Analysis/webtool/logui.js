@@ -539,56 +539,7 @@ async function renderPublicPanel(entries) {
   const panel = el("public-panel");
   const conn = gh.savedConnection();
   if (!conn) {
-    const user = h("input", { type: "text", placeholder: "GitHub username", "aria-label": "GitHub username" });
-    const token = h("input", { type: "password", placeholder: "github_pat_…", "aria-label": "GitHub token", autocomplete: "off" });
-    const status = h("span", { class: "status" });
-    const tokenLink = external(gh.newTokenUrl(), "Make a token");
-    const pagesLink = external(gh.pagesSettingsUrl("YOUR-NAME"), "Open the Pages settings");
-    user.addEventListener("input", () => {
-      const login = cleanLogin(user.value);
-      tokenLink.href = gh.newTokenUrl(login);
-      pagesLink.href = gh.pagesSettingsUrl(login || "YOUR-NAME");
-    });
-    const connect = h("button", {
-      type: "button",
-      onclick: async () => {
-        const login = cleanLogin(user.value);
-        if (!login) { status.className = "status err"; status.textContent = "Enter your GitHub username."; return; }
-        if (!token.value.trim()) { status.className = "status err"; status.textContent = "Paste the token from step 2."; return; }
-        connect.disabled = true;
-        status.className = "status";
-        status.textContent = "Checking with GitHub…";
-        try {
-          const who = await new gh.Publisher(login, token.value.trim()).check();
-          gh.saveConnection(who.login, token.value.trim());
-          renderFlights();
-        } catch (err) {
-          status.className = "status err";
-          status.textContent = String(err.message || err);
-        } finally {
-          connect.disabled = false;
-        }
-      },
-    }, "Connect");
-    panel.replaceChildren(
-      h("div", { class: "panel-head" }, h("h2", null, "Public flight log")),
-      h("p", null, "Publish your flights so anyone can browse them under Public logs, at a link you can share. ",
-        "The log lives in a public GitHub repository that you own; delete the repository to take it down."),
-      h("ol", { class: "setup" },
-        h("li", null, "Create a public repository named ", h("code", null, REPO_NAME), ". ",
-          external(gh.newRepoUrl(), "Create it on GitHub")),
-        h("li", null, tokenLink, " that can write to it. Under ", h("i", null, "Repository access"),
-          " choose ", h("i", null, "Only select repositories"), " and pick ", h("code", null, REPO_NAME),
-          ". The link already sets ", h("i", null, "Contents: Read and write"), "; leave the rest as it is."),
-        h("li", null, "Turn on GitHub Pages for the repository: ", h("i", null, "Deploy from a branch"),
-          ", ", h("code", null, "main"), ", ", h("code", null, "/ (root)"), ". ", pagesLink,
-          ". This is what shows your reports to other people."),
-        h("li", null, "Connect:",
-          h("div", { class: "setup-token" }, user, token, connect),
-          h("div", { class: "hint" }, "The token is kept in this browser only and is sent only to api.github.com."),
-          status),
-      ),
-    );
+    renderSetup(panel);
     return;
   }
 
@@ -635,11 +586,129 @@ async function renderPublicPanel(entries) {
   );
   gh.pagesLive(conn.owner).then((live) => {
     pages.replaceChildren(live
-      ? "GitHub Pages is serving it."
-      : h("span", null, "GitHub Pages is not serving it yet, so others can see the log but not open reports. ",
-        external(gh.pagesSettingsUrl(conn.owner), "Turn on Pages"),
-        " (it can also take a minute after the first publish)."));
+      ? "GitHub Pages is serving your reports."
+      : h("span", null, "GitHub Pages is not serving it yet, so others can see your log but cannot open reports. ",
+        external(gh.pagesSettingsUrl(conn.owner), "Open the Pages settings"), " and set ",
+        h("i", null, "Source: Deploy from a branch"), ", ", h("i", null, "Branch: main"), ", ",
+        h("i", null, "/ (root)"), ", then Save. It goes live about a minute later. ",
+        h("a", { href: "#/help/publish" },"Help")));
   });
+}
+
+/* A link that does nothing until it has somewhere real to go. The Pages
+   settings and the token form both need the flyer's login in them; a link
+   built before it is typed goes to a GitHub 404. */
+function stepLink(text) {
+  const a = h("a", { target: "_blank", rel: "noopener", class: "step-link", "aria-disabled": "true" }, text);
+  return {
+    node: a,
+    set(href) {
+      if (href) { a.href = href; a.removeAttribute("aria-disabled"); }
+      else { a.removeAttribute("href"); a.setAttribute("aria-disabled", "true"); }
+    },
+  };
+}
+
+function stepState(node, state, text) {
+  node.className = `step-state ${state}`;
+  node.textContent = text;
+}
+
+/* Setting up a public log: the login first, because every link after it is
+   the flyer's own; then what each step is for, so a flyer who has never made
+   a token knows what they are handing over and why. */
+function renderSetup(panel) {
+  const user = h("input", {
+    type: "text", placeholder: "GitHub username", "aria-label": "GitHub username",
+    autocomplete: "username", spellcheck: "false",
+  });
+  const token = h("input", { type: "password", placeholder: "github_pat_…", "aria-label": "GitHub token", autocomplete: "off" });
+  const status = h("span", { class: "status" });
+  const repoLink = stepLink("Open GitHub's form");
+  const pagesLink = stepLink("Open its Pages settings");
+  const tokenLink = stepLink("Open the token form");
+  const userState = h("span", { class: "step-state" });
+  const repoState = h("span", { class: "step-state" });
+  const pagesState = h("span", { class: "step-state" });
+  repoLink.set(gh.newRepoUrl());
+
+  let check = 0;
+  const refresh = async () => {
+    const login = cleanLogin(user.value);
+    repoLink.set(gh.newRepoUrl(login));
+    pagesLink.set(login && gh.pagesSettingsUrl(login));
+    tokenLink.set(login && gh.newTokenUrl(login));
+    for (const n of [userState, repoState, pagesState]) stepState(n, "", "");
+    if (!user.value.trim()) return;
+    if (!login) { stepState(userState, "bad", "That is not a GitHub username."); return; }
+    const mine = ++check;
+    stepState(repoState, "wait", "Checking…");
+    const [repo, live] = await Promise.all([gh.repoState(login), gh.pagesLive(login)]);
+    if (mine !== check) return;
+    stepState(repoState, repo === "ok" ? "ok" : repo === "missing" ? "todo" : "",
+      repo === "ok" ? `✓ ${login}/${REPO_NAME} is there` : repo === "missing" ? "Not created yet (or not public)" : "");
+    stepState(pagesState, live ? "ok" : "todo", live ? "✓ Pages is on" : "Not on yet");
+  };
+  let timer = null;
+  user.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(refresh, 500); });
+
+  const connect = h("button", {
+    type: "button",
+    onclick: async () => {
+      const login = cleanLogin(user.value);
+      if (!login) { status.className = "status err"; status.textContent = "Enter your GitHub username in step 1."; return; }
+      if (!token.value.trim()) { status.className = "status err"; status.textContent = "Paste the token from step 4."; return; }
+      connect.disabled = true;
+      status.className = "status";
+      status.textContent = "Checking with GitHub…";
+      try {
+        const who = await new gh.Publisher(login, token.value.trim()).check();
+        gh.saveConnection(who.login, token.value.trim());
+        renderFlights();
+      } catch (err) {
+        status.className = "status err";
+        status.textContent = String(err.message || err);
+      } finally {
+        connect.disabled = false;
+      }
+    },
+  }, "Connect");
+
+  panel.replaceChildren(
+    h("div", { class: "panel-head" },
+      h("h2", null, "Public flight log"),
+      h("a", { href: "#/help/publish" }, "Step-by-step help")),
+    h("p", null, "Publishing puts your flights where anyone can browse them, under Public logs and at a link you can share. ",
+      "There is no TinkerRocket server or account: your log is kept on GitHub, in a repository that belongs to you. ",
+      "Setting it up takes three things on GitHub, once:"),
+    h("ul", { class: "explain" },
+      h("li", null, h("b", null, "A repository"), " named ", h("code", null, REPO_NAME),
+        ". It is where your log, reports and flight files are stored. It is yours; delete it and everything is gone."),
+      h("li", null, h("b", null, "GitHub Pages"), ", GitHub's free web hosting for that repository. ",
+        "It shows your reports to other people from your own address (", h("i", null, "you"), ".github.io), kept apart from this page."),
+      h("li", null, h("b", null, "A token"), ", a key that lets this page write to that one repository and nothing else on your account. ",
+        "It stays in this browser and is only ever sent to GitHub.")),
+    h("p", { class: "hint" }, "Nothing is public until you press Publish on a flight. A published flight shows its report ",
+      "(including the GPS track and launch site), the details you entered, and the flight's files if you choose to include them."),
+    h("ol", { class: "setup" },
+      h("li", null, h("b", null, "Your GitHub username. "), "No account? ", external("https://github.com/signup", "Sign up"),
+        " — it is free.",
+        h("div", { class: "setup-token" }, user), userState),
+      h("li", null, h("b", null, "Create the repository. "), repoLink.node,
+        ": keep it ", h("i", null, "Public"), ", turn on ", h("i", null, "Add README"),
+        " (Pages needs something to serve), and press ", h("i", null, "Create repository"), ". ", repoState),
+      h("li", null, h("b", null, "Turn on GitHub Pages. "), pagesLink.node, ": under ",
+        h("i", null, "Build and deployment"), " set Source to ", h("i", null, "Deploy from a branch"), ", Branch to ",
+        h("i", null, "main"), " and ", h("i", null, "/ (root)"), ", and Save. ", pagesState),
+      h("li", null, h("b", null, "Make a token. "), tokenLink.node, ": the form is filled in for you — under ",
+        h("i", null, "Repository access"), " choose ", h("i", null, "Only select repositories"), " and pick ",
+        h("code", null, REPO_NAME), ", then ", h("i", null, "Generate token"),
+        " and copy it (GitHub shows it only once). It lasts a year."),
+      h("li", null, h("b", null, "Connect. "), "Paste the token here.",
+        h("div", { class: "setup-token" }, token, connect),
+        status),
+    ),
+  );
 }
 
 // ---------- one saved flight ----------
