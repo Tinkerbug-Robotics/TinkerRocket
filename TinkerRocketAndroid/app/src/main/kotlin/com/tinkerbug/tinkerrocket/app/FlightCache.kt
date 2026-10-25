@@ -42,6 +42,56 @@ internal object FlightCache {
     fun summaryFileFor(context: Context, name: String): File =
         File(csvDir(context), name.removeSuffix(".bin") + ".json")
 
+    private fun isUnitId(id: String): Boolean =
+        id.length in 1..16 && id.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }
+
+    /**
+     * The name a board's flight is cached under on this phone. Boards name logs
+     * on their own — `flight_<n>.bin` when no phone has synced the time — so
+     * two boards can both write `flight_3.bin`, and caching by that name alone
+     * let the second download replace the first board's flight. The unit ID
+     * keeps them apart: "flight_3.bin" from a1cae150 is cached as
+     * "flight_3__a1cae150.bin", and its CSV and summary follow. Only rocket
+     * flights (`flight_*`); base-station logs keep their names. An empty or
+     * malformed unit ID keeps the board's name, as before. Same as iOS
+     * `FileCache.cacheName(for:unitID:)`.
+     */
+    fun cacheName(boardName: String, unitId: String): String {
+        if (!boardName.startsWith("flight_") || !isUnitId(unitId)) return boardName
+        val dot = boardName.lastIndexOf('.')
+        val stem = if (dot > 0) boardName.substring(0, dot) else boardName
+        val ext = if (dot > 0) boardName.substring(dot) else ""
+        if (stem.endsWith("__$unitId")) return boardName
+        return "${stem}__$unitId$ext"
+    }
+
+    /** The unit ID a cache name carries ("flight_3__a1cae150.bin" -> "a1cae150"), or null. */
+    fun unitIdInCacheName(name: String): String? {
+        val stem = name.substringBeforeLast('.')
+        val i = stem.lastIndexOf("__")
+        if (i < 0) return null
+        return stem.substring(i + 2).takeIf(::isUnitId)
+    }
+
+    /**
+     * The name this unit's copy of a board file is cached under: the
+     * unit-qualified name, or the board's own name for a copy downloaded before
+     * unit IDs were added that is not known to be another unit's (its summary's
+     * `source.unit_id`). An old copy with no `source` keeps reading as
+     * downloaded, as it did before. Same as iOS `BLEDevice.cachedName(for:)`.
+     */
+    fun cachedName(context: Context, boardName: String, unitId: String): String {
+        val qualified = cacheName(boardName, unitId)
+        if (qualified == boardName) return qualified
+        if (binFileFor(context, qualified).exists() || csvFileFor(context, qualified).exists()) return qualified
+        val legacy = binFileFor(context, boardName).exists() || csvFileFor(context, boardName).exists()
+        if (!legacy) return qualified
+        val owner = summaryFileFor(context, boardName).takeIf { it.exists() }
+            ?.let { runCatching { FlightSummary.sourceFromJson(it.readText()) }.getOrNull() }
+            ?.unitId
+        return if (owner == null || owner == unitId) boardName else qualified
+    }
+
     /**
      * #1658: the FC's board for a flight whose summary predates
      * `settings.board`, read from the first flight-settings frame in its log.
@@ -81,7 +131,12 @@ internal object FlightCache {
          */
         val fcBoard: String? = null,
     ) {
-        val displayName: String get() = name.removeSuffix(".bin")
+        /** A unit-qualified cache name reads "flight_3 · a1cae150". */
+        val displayName: String get() {
+            val stem = name.removeSuffix(".bin")
+            val unit = unitIdInCacheName(name) ?: return stem
+            return stem.dropLast(unit.length + 2) + " · " + unit
+        }
         val hasCsv: Boolean get() = csv != null
         /** #1067: a bin-only flight (converter failed) is still exportable. */
         val hasAnyFile: Boolean get() = bin != null || csv != null

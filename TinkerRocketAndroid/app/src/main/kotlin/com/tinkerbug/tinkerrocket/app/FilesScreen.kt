@@ -95,6 +95,7 @@ fun FilesScreen(
     val hasMore by session.hasMoreFiles.collectAsState()
     val downloadState by session.downloadState.collectAsState()
     val context = LocalContext.current
+    val unitId = session.identity.collectAsState().value.unitId
 
     var status by remember { mutableStateOf<String?>(null) }
 
@@ -330,10 +331,14 @@ fun FilesScreen(
                             csvEpoch++      // a CSV may now exist for this row
                         }
                     },
-                    onShare = { shareFlightFiles(context, file) },
-                    onChart = { chartCsv = csvFileFor(context, file.name) },
-                    hasCsv = remember(file.name, csvEpoch) {
-                        FlightCache.isCachedComplete(context, file.name, file.size)   // #854: size-aware, not existence-only
+                    // This unit's copy of the board's file (unit-qualified cache name).
+                    onShare = { shareFlightFiles(context, FlightCache.cachedName(context, file.name, unitId)) },
+                    onChart = { chartCsv = csvFileFor(context, FlightCache.cachedName(context, file.name, unitId)) },
+                    hasCsv = remember(file.name, csvEpoch, unitId) {
+                        // #854: size-aware, not existence-only
+                        FlightCache.isCachedComplete(
+                            context, FlightCache.cachedName(context, file.name, unitId), file.size,
+                        )
                     },
                     selecting = selecting,
                     selected = file.name in selection,
@@ -617,13 +622,16 @@ private suspend fun downloadAndConvert(
     is DownloadResult.Success -> withContext(Dispatchers.Default) {
         // #1658: snapshotted before the conversion, while still connected.
         val source = downloadSource(session, profileStore)
-        binFileFor(context, file.name).writeBytes(result.bytes)
+        // Cached under the unit-qualified name, so another board's file of the
+        // same name can never replace this one (FlightCache.cacheName).
+        val name = FlightCache.cacheName(file.name, session.identity.value.unitId)
+        binFileFor(context, name).writeBytes(result.bytes)
         // Kept although short of the listing: the board ended the transfer
         // itself (older out-computer firmware left out stored bytes outside
         // whole log frames). Remember it, and say so in the status line.
         val shortNote = if (result.isShortOfListing) {
             FlightCache.recordShortDownload(
-                context, file.name, result.listedSize.toLong(), result.bytes.size.toLong(),
+                context, name, result.listedSize.toLong(), result.bytes.size.toLong(),
             )
             " — the board sent ${result.bytes.size} of the ${result.listedSize} bytes it listed " +
                 "(${result.listedSize - result.bytes.size} short) and ended the transfer itself; kept. " +
@@ -638,7 +646,7 @@ private suspend fun downloadAndConvert(
             // renamed file still converts correctly.
             if (BsLogCsvGenerator.isBaseStationLog(result.bytes)) {
                 val csv = BsLogCsvGenerator().writeCsv(result.bytes)
-                csvFileFor(context, file.name).writeText(csv)
+                csvFileFor(context, name).writeText(csv)
                 "Saved ${file.name} (${result.bytes.size / 1000} kB) + CSV$shortNote"
             } else if (file.name.startsWith("lora_") && file.name.endsWith(".csv")) {
                 // #1062: a base-station log written before a53d337 (2026-08-25)
@@ -646,14 +654,14 @@ private suspend fun downloadAndConvert(
                 // the CSV cache; this branch was never ported, so the rocket
                 // parser ran, found no frames, and the row reported "CSV failed"
                 // with no Share or Chart while the bytes sat in BinaryCache.
-                csvFileFor(context, file.name).writeBytes(result.bytes)
+                csvFileFor(context, name).writeBytes(result.bytes)
                 "Saved ${file.name} (${result.bytes.size / 1000} kB) — legacy CSV, cached as-is$shortNote"
             } else {
                 val (csv, summary) = CsvGenerator().writeCsv(result.bytes)
-                csvFileFor(context, file.name).writeText(csv)
+                csvFileFor(context, name).writeText(csv)
                 // #1658: the log's own record of its computer wins; the live
                 // identity adds the profile, the FC and when.
-                summaryFileFor(context, file.name)
+                summaryFileFor(context, name)
                     .writeText(summary.copy(source = FlightSource.merged(summary.source, source)).toJson())
                 "Saved ${file.name} (${result.bytes.size / 1000} kB) + CSV$shortNote"
             }
@@ -666,13 +674,13 @@ private suspend fun downloadAndConvert(
 }
 
 // #1067: the .bin is what the post-flight tools read; share all three.
-private fun shareFlightFiles(context: Context, file: FileInfo) =
+private fun shareFlightFiles(context: Context, cachedName: String) =
     FlightCache.shareFlight(
         context,
         listOf(
-            binFileFor(context, file.name),
-            csvFileFor(context, file.name),
-            FlightCache.summaryFileFor(context, file.name),
+            binFileFor(context, cachedName),
+            csvFileFor(context, cachedName),
+            FlightCache.summaryFileFor(context, cachedName),
         ),
     )
 
