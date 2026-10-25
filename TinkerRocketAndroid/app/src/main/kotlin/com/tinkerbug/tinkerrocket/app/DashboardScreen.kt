@@ -134,6 +134,11 @@ fun DashboardScreen(
             return
         }
     }
+    // #1650: the test fire for one pyro channel, on this device's link.
+    pyroTestChannel(tool)?.let { ch ->
+        PyroTestFireScreen(session, ch, onClose = { onTool(null) })
+        return
+    }
 
     // Phone GPS/compass run only while the dashboard is visible (the iOS
     // onAppear/onDisappear discipline — continuous updates leak battery).
@@ -748,6 +753,10 @@ private fun DeviceDashboardContent(
                         contTestChannel = ch
                     },
                     modifier = modifier,
+                    // On a relay the tile opens the stand-back test fire, as on
+                    // iOS; the screen does the guarding. A direct link's test
+                    // fire is under Settings, off the dashboard.
+                    onTap = if (relay) ({ onTool(pyroTestTool(ch)) }) else null,
                 )
             }
 
@@ -1326,15 +1335,16 @@ private fun PyroTile(
     showTestButton: Boolean,
     onTestContinuity: () -> Unit,
     modifier: Modifier = Modifier,
+    /** #1650: a relay tile's tap opens the stand-back test fire (iOS relayMode onTest). */
+    onTap: (() -> Unit)? = null,
 ) {
     val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val bold = androidx.compose.ui.text.font.FontWeight.Bold
     Column(
         modifier
-            .background(
-                com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors.cardSecondary,
-                RoundedCornerShape(8.dp),
-            )
+            .clip(RoundedCornerShape(8.dp))
+            .background(com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors.cardSecondary)
+            .clickable(enabled = onTap != null) { onTap?.invoke() }
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {

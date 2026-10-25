@@ -264,6 +264,14 @@ public class DeviceSession(
     private val _contTestPendingUntil = MutableStateFlow<Map<Int, Long>>(emptyMap())
     public val contTestPendingUntil: StateFlow<Map<Int, Long>> = _contTestPendingUntil.asStateFlow()
 
+    /**
+     * The last rail-off pyro refusal (0xCE) the out computer sent, stamped on
+     * arrival so two refusals of one channel are still two events (iOS
+     * `pyroTestRefusal`). The test-fire screen aborts on a cmd-36 one.
+     */
+    private val _pyroTestRefusal = MutableStateFlow<PyroTestRefusal?>(null)
+    public val pyroTestRefusal: StateFlow<PyroTestRefusal?> = _pyroTestRefusal.asStateFlow()
+
     // ── Files / downloads ────────────────────────────────────────────────
 
     private val _files = MutableStateFlow<List<FileInfo>>(emptyList())
@@ -923,11 +931,12 @@ public class DeviceSession(
             is FileOpsMessage.PyroRefusal -> {
                 // Rail-off refusal: no reading is coming back, so close the
                 // TESTING window instead of letting the spinner run out its
-                // 2.5 s implying a round trip happened.  (No test-fire UI on
-                // Android yet — cmd-36 refusals have nothing to clear.)
+                // 2.5 s implying a round trip happened.  A cmd-36 refusal is
+                // for the test-fire screen, which aborts on it.
                 if (msg.cmd == 35) {
                     _contTestPendingUntil.value = _contTestPendingUntil.value - msg.channel
                 }
+                _pyroTestRefusal.value = PyroTestRefusal(msg.cmd, msg.channel, msg.reason, clock())
             }
             is FileOpsMessage.Ota -> _otaStatus.value = msg.status
             is FileOpsMessage.FileList -> {
@@ -1531,6 +1540,56 @@ public class DeviceSession(
     }
 
     /**
+     * Test fire — cmd 36 `[channel]` (iOS `sendPyroFire`). On a base-station
+     * link this is the stand-back fire: the cmd-50 envelope to the FOCUSED
+     * rocket, never broadcast, and nothing at all when that rocket ID looks
+     * shared, since both rockets would fire. The LoRa uplink is blind (#285):
+     * delivery is confirmed by the operator's eyes and the post-fire
+     * continuity re-test, not by an ACK. [PyroTestFire] is the only caller,
+     * and it checks [pyroCommandPathReady] first.
+     */
+    public fun sendPyroFire(channel: Int) {
+        sessionScope.launch {
+            val frame = if (isBaseStation) {
+                val rid = _focusRocketId.value ?: return@launch
+                if (isDuplicateIdSuspected(rid)) return@launch
+                Commands.relayToRocket(rid, Commands.pyroFire(channel))
+            } else {
+                Commands.pyroFire(channel)
+            }
+            writeCommand(frame)
+        }
+    }
+
+    /**
+     * Rocket logging around a test fire (iOS `setRocketLoggingForTest`):
+     * the desired-state cmd 23, relayed to the focused rocket on a
+     * base-station link. Never the bare toggle, which flips whatever the
+     * rocket is doing, so a stop could start a fresh log (#1089).
+     */
+    public fun setRocketLoggingForTest(on: Boolean) {
+        sessionScope.launch {
+            val inner = Commands.toggleLoggingWithState(on)
+            if (isBaseStation) {
+                val rid = _focusRocketId.value ?: return@launch
+                writeCommand(Commands.relayToRocket(rid, inner))
+            } else {
+                writeCommand(inner)
+            }
+        }
+    }
+
+    /**
+     * The followed rocket's ID looks shared by two rockets (iOS
+     * `focusedRocketIDShared`): the test-fire screen's FIRE stays disabled.
+     */
+    public fun focusedRocketIdShared(nowMs: Long = clock()): Boolean {
+        if (!isBaseStation) return false
+        val focus = _focusRocketId.value ?: return false
+        return isDuplicateIdSuspected(focus, nowMs)
+    }
+
+    /**
      * True while this base station hears [rocketId] as what looks like two
      * rockets (iOS `isDuplicateIDSuspected(rocketID:)`).
      */
@@ -2011,6 +2070,18 @@ public data class DeviceIdentity(
     val ocBoardRev: String? = null,
     /** The GNSS receiver the FC found ("u-blox", "mosaic-G5"); null for none, or not said. */
     val fcGnss: String? = null,
+)
+
+/**
+ * A rail-off pyro refusal (0xCE, iOS `PyroTestRefusal`): [cmd] 35 continuity
+ * or 36 fire, [channel] 1..4, [reason] 1 = FC rail off; [atMs] is the
+ * session-clock arrival time.
+ */
+public data class PyroTestRefusal(
+    val cmd: Int,
+    val channel: Int,
+    val reason: Int,
+    val atMs: Long,
 )
 
 /** One rocket seen via this base-station link's LoRa relay (iOS RemoteRocket). */

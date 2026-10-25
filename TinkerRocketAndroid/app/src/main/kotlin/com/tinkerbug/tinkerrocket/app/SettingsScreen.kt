@@ -106,6 +106,9 @@ fun SettingsScreen(
     // #1629: opens the dashboard's six-face accelerometer calibration, the
     // way onOpenFirmware opens its Firmware tool; null leaves the entry out.
     onOpenAccelCal: (() -> Unit)? = null,
+    // #1650: opens the dashboard's test-fire screen for a pyro channel; null
+    // leaves the Test Pyro Channel button out.
+    onOpenPyroTest: ((Int) -> Unit)? = null,
 ) {
     val profiles by store.profiles.collectAsState()
     val activeId by store.activeId.collectAsState()
@@ -981,6 +984,7 @@ fun SettingsScreen(
         //    mirror, so the dashboard tiles update without a readback. ─────
         PyroChannelSection(
             1, active.pyro1Enabled, active.pyro1TriggerMode, active.pyro1TriggerValue, session,
+            onTestFire = onOpenPyroTest,
             onEnabled = { v ->
                 edit(ConfigGroup.PYRO) { it.copy(pyro1Enabled = v) }
             },
@@ -993,6 +997,7 @@ fun SettingsScreen(
         )
         PyroChannelSection(
             2, active.pyro2Enabled, active.pyro2TriggerMode, active.pyro2TriggerValue, session,
+            onTestFire = onOpenPyroTest,
             onEnabled = { v ->
                 edit(ConfigGroup.PYRO) { it.copy(pyro2Enabled = v) }
             },
@@ -1005,6 +1010,7 @@ fun SettingsScreen(
         )
         PyroChannelSection(
             3, active.pyro3Enabled, active.pyro3TriggerMode, active.pyro3TriggerValue, session,
+            onTestFire = onOpenPyroTest,
             onEnabled = { v ->
                 edit(ConfigGroup.PYRO) { it.copy(pyro3Enabled = v) }
             },
@@ -1017,6 +1023,7 @@ fun SettingsScreen(
         )
         PyroChannelSection(
             4, active.pyro4Enabled, active.pyro4TriggerMode, active.pyro4TriggerValue, session,
+            onTestFire = onOpenPyroTest,
             onEnabled = { v ->
                 edit(ConfigGroup.PYRO) { it.copy(pyro4Enabled = v) }
             },
@@ -1646,6 +1653,7 @@ private fun PyroChannelSection(
     mode: Int,
     value: Float,
     session: DeviceSession?,
+    onTestFire: ((Int) -> Unit)?,
     onEnabled: (Boolean) -> Unit,
     onMode: (Int) -> Unit,
     onValue: (Float) -> Unit,
@@ -1690,19 +1698,19 @@ private fun PyroChannelSection(
                 else "Fires when the rocket descends through this altitude (AGL).",
             )
         }
-        session?.let { PyroTestControls(it, channel) }
+        session?.let { PyroTestControls(it, channel, onTestFire) }
     }
 }
 
 /**
  * iOS PyroChannelTestControls twin — a CHILD composable so telemetry-rate
  * recomposition stays contained (the #361 keyboard fix; the Settings screen
- * itself reads no telemetry).  Direct connected rocket links only.  The
- * "Test Pyro Channel" test-fire button is NOT ported — the Ground Test
- * screen is its own safety-sensitive pass (ledger).
+ * itself reads no telemetry).  Direct connected rocket links only.  Test
+ * Pyro Channel opens the full-screen test fire (#1650, [onTestFire]); a
+ * base station's test fire opens from the dashboard's relay pyro tiles.
  */
 @Composable
-private fun PyroTestControls(session: DeviceSession, channel: Int) {
+private fun PyroTestControls(session: DeviceSession, channel: Int, onTestFire: ((Int) -> Unit)?) {
     val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     if (session.isBaseStation) return
     val connected by session.isConnected.collectAsState()
@@ -1798,6 +1806,13 @@ private fun PyroTestControls(session: DeviceSession, channel: Int) {
                 contTestActive = true
             },
         ) { Text("Test Continuity") }
+        // Same rail gate: the OC refuses cmd 36 with the rail off, since a
+        // queued fire would go off at the next power-on.
+        if (onTestFire != null) {
+            TextButton(enabled = railOn, onClick = { onTestFire(channel) }) {
+                Text("Test Pyro Channel", color = if (railOn) tr.statusWarn else Color.Unspecified)
+            }
+        }
         if (!railOn) {
             Text(
                 "Power on the rocket to test.",
