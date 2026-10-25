@@ -33,20 +33,42 @@ struct RecoveryProfile {
     let mainMps: Double
     /// AGL altitude the main is configured to fire at, metres.
     let mainDeployAglM: Double
+    /// Where the flight computer's own main channel fires, metres AGL: the
+    /// highest enabled pyro channel set to "altitude on descent".  Nil when no
+    /// channel fires on altitude (motor ejection, or one charge at apogee).
+    /// Unlike `mainDeployAglM`, which always holds a value, this says whether
+    /// there is a main to come at all (`TouchdownPredictor`).
+    let pyroMainAglM: Double?
 
     /// The profile stores recovery figures in feet and fps; this is SI.
     private static let metresPerFoot = 0.3048
+    /// `RocketProfile.pyroNTriggerMode` value for "altitude on descent"
+    /// (the value is then metres AGL).
+    static let altitudeOnDescentMode: UInt8 = 1
 
-    init(drogueMps: Double, mainMps: Double, mainDeployAglM: Double) {
+    init(drogueMps: Double, mainMps: Double, mainDeployAglM: Double,
+         pyroMainAglM: Double? = nil) {
         self.drogueMps = drogueMps
         self.mainMps = mainMps
         self.mainDeployAglM = mainDeployAglM
+        self.pyroMainAglM = pyroMainAglM
     }
 
     init(_ p: RocketProfile) {
+        let channels: [(enabled: Bool, mode: UInt8, value: Float)] = [
+            (p.pyro1Enabled, p.pyro1TriggerMode, p.pyro1TriggerValue),
+            (p.pyro2Enabled, p.pyro2TriggerMode, p.pyro2TriggerValue),
+            (p.pyro3Enabled, p.pyro3TriggerMode, p.pyro3TriggerValue),
+            (p.pyro4Enabled, p.pyro4TriggerMode, p.pyro4TriggerValue),
+        ]
+        let mainAlt = channels
+            .filter { $0.enabled && $0.mode == Self.altitudeOnDescentMode && $0.value > 0 }
+            .map { Double($0.value) }
+            .max()
         self.init(drogueMps: p.drogueRateFps * Self.metresPerFoot,
                   mainMps: p.mainRateFps * Self.metresPerFoot,
-                  mainDeployAglM: p.mainDeployAltAglFt * Self.metresPerFoot)
+                  mainDeployAglM: p.mainDeployAltAglFt * Self.metresPerFoot,
+                  pyroMainAglM: mainAlt)
     }
 }
 
