@@ -1096,6 +1096,25 @@ def test_apogee_turnover_stays_zoomed_in(report_html: Path) -> None:
     assert r_hi > hi, "recovery chart ends before the turnover chart does"
 
 
+def test_baro_reject_note_names_the_spike_check() -> None:
+    """The apogee chart's rejection note says which check dropped the samples.
+
+    It once blamed the vehicle's speed ("too fast for pressure to be reliable"),
+    which is the transonic lockout's job. The 65 mm roll-control flight of
+    2026-10-24 peaked at 72 m/s and still lost 30 to 50% of its coast samples
+    to the spike check's rate, which a 0.6 m step tripped at the 2 ms spacing;
+    the check now also needs a 5 m step, and the note says so.
+    """
+    from flight_report.modules.apogee import _reject_note
+
+    t_raw = [i * 0.002 for i in range(1000)]           # 2 s at 500 Hz
+    note = _reject_note([0.1, 0.5, 0.9, 1.3], t_raw, 0.0, 1.0)
+    assert "spike check dropped 4 of 501 (1%) barometer samples" in note, note
+    assert "more than 5 m from the last sample it kept and faster than 300 m/s" in note, note
+    assert "too fast" not in note
+    assert "not the navigation filter's barometer gate" in note
+
+
 def test_charts_keep_every_sample(report_html: Path) -> None:
     """No decimation in the file: the chart must carry the full logged series.
 

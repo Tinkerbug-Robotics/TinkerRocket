@@ -311,6 +311,37 @@ TEST_F(KinematicChecksTest, Launch_DeadIMU_PressureStep_NoLaunch) {
     EXPECT_FALSE(kc.launch_flag);
 }
 
+// The rate gate's step floor: a vented bay's static port passes the airflow's
+// pressure noise, 1-1.7 m rms per sample at 70-100 m/s (BARC 2026-10-24), and
+// at the BMP585's 2 ms spacing the 300 m/s rate alone trips on 0.6 m.  ±2 m
+// noise about a level altitude must be kept: the rate alone dropped every
+// sample on the far side of the first one it accepted, so the filter sat on
+// +2 m instead of averaging.
+TEST_F(KinematicChecksTest, BaroGate_StaticPortNoiseInsideTheStepFloor_IsKept) {
+    for (int i = 0; i < 2000; i++) {
+        setMockMillis(i * 2);
+        callStationary(100.0f + ((i & 1) ? -2.0f : 2.0f));
+    }
+    EXPECT_NEAR(kc.alt_est, 100.0f, 0.5f);
+}
+
+// ...while a spike past the floor, faster than the rate, is still dropped:
+// a single 6 m sample in 2 ms does not reach the filter.
+TEST_F(KinematicChecksTest, BaroGate_SpikePastTheStepFloor_IsDropped) {
+    for (int i = 0; i < 1000; i++) {
+        setMockMillis(i * 2);
+        callStationary(100.0f);
+    }
+    const float before = kc.alt_est;
+    setMockMillis(2000);
+    callStationary(106.0f);
+    EXPECT_NEAR(kc.alt_est, before, 0.05f);
+    // A real 4 m step inside the floor is taken at once.
+    setMockMillis(2002);
+    callStationary(104.0f);
+    EXPECT_GT(kc.alt_est, before + 0.05f);
+}
+
 // The gate: a working IMU that shows no boost vetoes the barometer.  Same
 // 20 m/s climb, IMU fresh at 1 g — the car-window case — must NOT launch.
 TEST_F(KinematicChecksTest, Launch_HealthyIMU_ClimbAlone_NoLaunch) {
@@ -919,13 +950,20 @@ TEST_F(KinematicChecksTest, Landing_RollRate15dps_StillPasses) {
     EXPECT_TRUE(kc.alt_landed_flag);
 }
 
-TEST_F(KinematicChecksTest, Landing_RollRate25dps_DoesNotTrigger) {
-    // 25 dps exceeds the 20 dps threshold -- still rejected by slow path.
+TEST_F(KinematicChecksTest, Landing_RollRate25dps_GyroNotQuiet) {
+    // 25 dps exceeds the 20 dps threshold: gyro_quiet stays down.  This test
+    // once asserted no landing, which held only because no apogee was ever
+    // declared -- the baro rate gate dropped its 1 m per 2 ms climb until the
+    // 5 m step floor.  The vote is N-1 of N (#113): with baro_stable and
+    // accel_1g passing, a 25 dps roll alone does not hold off the landing.
     for (int i = 0; i < 80; i++) {
         setMockMillis(i * 2);
         callFlight(float(i), 25.0f, 10.0f);
     }
     ASSERT_TRUE(kc.launch_flag);
+
+    // Landing voting is gated on apogee_flag (#166).
+    kc.apogee_flag = true;
 
     for (int second = 0; second < 7; second++) {
         uint32_t base = 1000 + second * 1000;
@@ -934,7 +972,7 @@ TEST_F(KinematicChecksTest, Landing_RollRate25dps_DoesNotTrigger) {
             callFlight(5.0f, 9.81f, 0.0f, 25.0f);
         }
     }
-    EXPECT_FALSE(kc.alt_landed_flag);
+    EXPECT_FALSE(kc.gyro_quiet_flag);
 }
 
 // The fast-path tests below set apogee by hand.  Since #1103 the impact gate

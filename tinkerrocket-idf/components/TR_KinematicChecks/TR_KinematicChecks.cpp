@@ -36,6 +36,16 @@ constexpr float    G_MS2                  = 9.80665f;
 // dropout still pass.  Ejection spikes are O(10-100 km/s), max plausible
 // rocket dynamic is ~200 m/s, so 300 m/s gives wide headroom both ways.
 constexpr float    MAX_BARO_RATE_MS         = 300.0f;
+// ...and only a step of more than this from the last accepted sample is a
+// spike.  At the BMP585's ~2 ms spacing the rate alone trips on a 0.6 m step,
+// and a vented bay's static port passes the airflow's pressure noise: ~0.3 %
+// of the dynamic pressure, 10-20 Pa rms (0.9-1.7 m) per sample at 70-100 m/s.
+// On BARC 2026-10-24 the rate alone dropped 30-50 % of the 65 mm roll-control
+// flight's coast samples and up to 78 % of Rolly Polly V's main bay's, all of
+// it real, zero-mean pressure.  5 m is the EKF barometer gate's deadband
+// (config::BARO_SPIKE_THRESH_M); the 65 mm flight's largest noise step was
+// 3.6 m, and ejection charges step tens to hundreds of metres.
+constexpr float    MIN_BARO_SPIKE_STEP_M    = 5.0f;
 // After this many consecutive rejects the gate accepts the next sample
 // unconditionally and reseeds, preventing a permanently wedged sensor
 // from blinding the detector for the rest of the flight.
@@ -433,16 +443,20 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
     // Reject obvious spikes (ejection charges, sensor glitches) before they
     // poison the KF or trip the landing fast path.  The rate test self-scales
     // with dt so a single missed sample doesn't make the next legitimate
-    // reading look like a spike.  After MAX_CONSEC_BARO_REJECTS in a row the
-    // next sample is accepted unconditionally so a wedged sensor reseeds.
+    // reading look like a spike, and a step inside MIN_BARO_SPIKE_STEP_M is
+    // never one (static-port noise at speed).  After MAX_CONSEC_BARO_REJECTS
+    // in a row the next sample is accepted unconditionally so a wedged sensor
+    // reseeds.
     if (new_baro)
     {
         if (baro_gate_init_)
         {
             uint32_t dms = millis() - last_baro_gate_ms_;
             float dt = (dms < 1u) ? 0.001f : (dms * 0.001f);
-            float rate = fabs(pressure_altitude - palt_accepted_) / dt;
-            if (rate > MAX_BARO_RATE_MS &&
+            float step = fabs(pressure_altitude - palt_accepted_);
+            float rate = step / dt;
+            if (step > MIN_BARO_SPIKE_STEP_M &&
+                rate > MAX_BARO_RATE_MS &&
                 consec_baro_rejects_ < MAX_CONSEC_BARO_REJECTS)
             {
                 consec_baro_rejects_++;
