@@ -336,6 +336,8 @@ class MainActivity : ComponentActivity() {
                                         // #1629: and at the dashboard's six-face
                                         // accelerometer calibration, the same way.
                                         onOpenAccelCal = { tab = 0; openTool("accelcal") },
+                                        // #1650: a direct link's Test Pyro Channel.
+                                        onOpenPyroTest = { ch -> tab = 0; openTool(pyroTestTool(ch)) },
                                     )
                                 }
                             }
