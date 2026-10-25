@@ -99,7 +99,9 @@ The IMU-free descent (fc/raw-descent-mode; a `RAW_REPLAY_DESCENT` build, on by d
 velocity from GNSS and the barometer alone from the apogee call on, the velocity a random walk instead of the
 accelerometer's integral (`RawGnssEKF::setImuFree`); `--imu-free-acc-psd X` (m^2/s^3), `--imu-free-vel-sigma X` and
 `--imu-free-pos-sigma X` (m/s, m: the floors as it starts) are its settings (`RawGnssEKFParams::imu_free_*`). The
-CSV's last column, `imu_free`, says when it was on.
+images fly it wherever the raw filter navigates (config.h's `TR_RAW_DESCENT_IMU_FREE`, on since 2026-10-25), so
+`--fw-defaults` (and the mosaic, which takes it) turns it on too; `--descent-imu-free 0` replays the IMU-coupled
+descent the 2026-10-24 flights flew. The CSV's last column, `imu_free`, says when it was on.
 
 A real flight's log (no replay file behind it) takes `extract.py --blob none`: T+0 is the logged accelerometer's own
 ignition edge. The flight loop's IMU windows are a grid the log does not keep, and the filter took every second one

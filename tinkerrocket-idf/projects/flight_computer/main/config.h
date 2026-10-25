@@ -365,12 +365,13 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 
 // The descent without the IMU (TR_RawGnssShadow's descent_imu_free): from the
 // apogee call the navigation filter takes its position and velocity from
-// GNSS and the barometer alone, the IMU no longer driving the velocity. Off
-// by default; -DTR_RAW_DESCENT_IMU_FREE=1 builds it in. Replayed on the
-// 2026-10-24 flights: the Beetle's 301 m under the chute to 12 m, the
-// Goblin's 7.8 km and -746 m at landing to under 20 m and 5 m.
+// GNSS and the barometer alone, the IMU no longer driving the velocity. On
+// wherever the raw filter navigates (the Beetle, the V9's mosaic image), since
+// 2026-10-25; -DTR_RAW_DESCENT_IMU_FREE=0 flies the IMU-coupled descent
+// instead. Replayed on the 2026-10-24 flights: the Beetle's 301 m under the
+// chute to 12 m, the Goblin's 7.9 km and -753 m at landing to 21 m and 7 m.
 #ifndef TR_RAW_DESCENT_IMU_FREE
-#define TR_RAW_DESCENT_IMU_FREE 0
+#define TR_RAW_DESCENT_IMU_FREE TR_RAW_GNSS_PRIMARY
 #endif
 #if TR_RAW_DESCENT_IMU_FREE && !TR_RAW_GNSS_PRIMARY
 #error "TR_RAW_DESCENT_IMU_FREE needs the raw-GNSS navigation filter (TR_RAW_GNSS_PRIMARY=1)"

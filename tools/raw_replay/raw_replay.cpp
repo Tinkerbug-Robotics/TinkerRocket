@@ -2239,8 +2239,12 @@ int main(int argc, char** argv)
                              "--att-exact and --dv-lever-* are ignored\n");
 #endif
 #if RAW_REPLAY_DESCENT
+    // the images' (config.h TR_RAW_DESCENT_IMU_FREE: on wherever the raw filter navigates) with --fw-defaults,
+    // the mosaic's among them; the given switch either way
     if (a.descent_imu_free >= 0)
         cfg.descent_imu_free = a.descent_imu_free != 0;
+    else if (a.fw_defaults)
+        cfg.descent_imu_free = true;
     if (a.imu_free_acc_psd > 0.0)
         cfg.ekf.imu_free_acc_psd = a.imu_free_acc_psd;
     if (a.imu_free_vel_sigma >= 0.0)

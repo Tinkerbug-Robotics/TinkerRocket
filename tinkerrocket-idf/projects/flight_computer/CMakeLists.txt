@@ -101,9 +101,8 @@ if(DEFINED TR_HEADING_FIT)
     add_compile_definitions(TR_HEADING_FIT=${TR_HEADING_FIT})
     message(STATUS "TR_HEADING_FIT=${TR_HEADING_FIT} -- the heading from thrust set by hand")
 endif()
-# The descent without the IMU (main/config.h): -DTR_RAW_DESCENT_IMU_FREE=1 has
-# the navigation filter take position and velocity from GNSS and the barometer
-# alone from the apogee call.
+# The descent without the IMU (main/config.h; on wherever the raw filter
+# navigates): -DTR_RAW_DESCENT_IMU_FREE=0 flies the IMU-coupled descent instead.
 if(DEFINED TR_RAW_DESCENT_IMU_FREE)
     add_compile_definitions(TR_RAW_DESCENT_IMU_FREE=${TR_RAW_DESCENT_IMU_FREE})
     message(STATUS "TR_RAW_DESCENT_IMU_FREE=${TR_RAW_DESCENT_IMU_FREE} -- the descent without the IMU set by hand")
