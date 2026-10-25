@@ -94,6 +94,17 @@ public class RocketProfileStore(
      * — so which profile a board came back on was decided alphabetically
      * rather than by anything the user did. Bench-caught on #915.
      */
+    /**
+     * #1658: the profile bound to a board ([RocketProfile.lastUsedUnitID]), or
+     * null. Two claimants (a store written before #915) resolve to the most
+     * recently updated, the rule ActiveRocketSyncer heals by. Same as iOS
+     * `RocketProfileStore.profile(boundToUnitID:)`.
+     */
+    public fun profileBoundTo(unitId: String): RocketProfile? {
+        if (unitId.isEmpty()) return null
+        return profiles.value.filter { it.lastUsedUnitID == unitId }.maxByOrNull { it.updatedAtMs }
+    }
+
     public fun bind(id: UUID, unitId: String) {
         if (unitId.isEmpty()) return
         profiles.value

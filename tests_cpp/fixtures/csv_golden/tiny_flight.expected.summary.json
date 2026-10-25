@@ -4,6 +4,7 @@
   "max_altitude_m" : 511.9459916882055,
   "max_speed_mps" : 160.01562423713506,
   "settings" : {
+    "board" : "V9",
     "camera" : {
       "type" : "runcam"
     },
