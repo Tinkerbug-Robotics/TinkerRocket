@@ -774,6 +774,20 @@ public class FleetManager<S : Any>(
         return baseStations().firstOrNull()
     }
 
+    /**
+     * The link that speaks: the foreground base station, and only ever a base
+     * station (iOS `BLEFleet.voiceDevice`). Its stream is pinned to its
+     * focused rocket, so callouts never interleave two rockets.
+     *
+     * A connected direct rocket used to win (full frame rate), with the base
+     * station as the fallback. But a direct link always leaves range at
+     * launch, so with the rocket paired on the pad voice sat on a link that
+     * was already gone until the drop was noticed, then moved to the base
+     * station mid-boost, and back whenever the rocket briefly reconnected.
+     * With no base station connected there are no callouts.
+     */
+    public fun voiceDevice(): FleetDevice<S>? = foregroundBaseStation()
+
     /** #390: explicit pair pick (null = auto / first connected BS). */
     public fun setForegroundBS(deviceId: String?) {
         _foregroundBSID.value = deviceId

@@ -149,7 +149,8 @@ public class DeviceSession(
      * frames, and burnout detection counts *consecutive unchanged* max-speed
      * frames — conflation would eat exactly the frames it counts. Relay path
      * feeds only the FOCUSED rocket (#390 — two interleaved flights' callouts
-     * are noise). The app attaches/detaches this on the fleet dispatcher.
+     * are noise). The app attaches/detaches this on the fleet dispatcher, on
+     * the foreground base station only ([FleetManager.voiceDevice]).
      */
     public var telemetryAnnouncer: TelemetryAnnouncer? = null
 
@@ -836,9 +837,12 @@ public class DeviceSession(
             onRocketFix?.invoke(data, RocketKey(id.networkId ?: 0, ownRid))
                 ?.let { _lastValidRocketFix.value = it }
         }
-        // Direct-rocket and BS-self frames both dispatch to voice from here
-        // (iOS parseTelemetryData's fall-through path).
-        telemetryAnnouncer?.processTelemetry(data)
+        // BS-self frames dispatch to voice from here (iOS parseTelemetryData's
+        // fall-through path). Direct-rocket frames never do: voice is
+        // base-station only, because a direct link leaves range at launch.
+        // The fleet never routes the announcer to a rocket link; this guard
+        // keeps one that holds it anyway from speaking.
+        if (isBaseStation) telemetryAnnouncer?.processTelemetry(data)
         recomputeEffective()
     }
 

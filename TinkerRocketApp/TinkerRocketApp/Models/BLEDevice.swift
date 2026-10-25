@@ -44,11 +44,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     // MARK: - Published per-device state
 
-    /// `didSet`: the fleet re-routes voice on this edge.  It is the one that
-    /// matters most — a direct rocket link dropping at launch is what hands
-    /// the callouts over to the base station, and it happens on every flight.
-    /// Synchronous on purpose; the fleet's `$devices` subscription lands a
-    /// runloop turn later.
+    /// `didSet`: the fleet re-routes voice and profile sync on this edge —
+    /// voice when a base station drops or comes back, profile sync when a
+    /// direct rocket does.  Synchronous on purpose; the fleet's `$devices`
+    /// subscription lands a runloop turn later.
     @Published var isConnected = false {
         didSet { if isConnected != oldValue { fleet?.routeDeviceBindings() } }
     }
@@ -170,8 +169,8 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// `didSet`: a device joins the roster as `.unknown` and only resolves its
     /// role when the config_identity readback lands ~1 s later (#375) — long
     /// after the fleet's roster subscription has run.  Without this edge a
-    /// rocket that reconnects mid-flight would never take voice back off the
-    /// base station.
+    /// renamed base station would never get voice, and a renamed rocket would
+    /// never get profile sync.
     @Published var deviceType: BLEDeviceType = .unknown {
         didSet { if deviceType != oldValue { fleet?.routeDeviceBindings() } }
     }
@@ -350,8 +349,9 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// removes us), and a strong link would form a retain cycle.
     weak var fleet: BLEFleet?
 
-    // Flight voice announcer (set by DashboardView).  Typed as a protocol so
-    // dispatch tests can inject a spy without touching AVAudioSession.
+    // Flight voice announcer, set by `BLEFleet.routeAnnouncer` on the
+    // foreground base station only.  Typed as a protocol so dispatch tests
+    // can inject a spy without touching AVAudioSession.
     var flightAnnouncer: (any TelemetryAnnouncer)?
 
     // MARK: - Internal state
@@ -2928,7 +2928,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 }
                 fleet?.noteFlightProgress(newTelemetry, key: key)
             }
-            self.flightAnnouncer?.processTelemetry(newTelemetry)
+            // Voice is base-station only: a direct rocket link leaves range at
+            // launch.  The fleet never routes the announcer to a rocket link;
+            // this guard keeps one that holds it anyway from speaking.
+            if isBaseStation {
+                self.flightAnnouncer?.processTelemetry(newTelemetry)
+            }
         } catch {
             print("Failed to parse telemetry: \(error)")
             if let jsonString = String(data: data, encoding: .utf8) {
