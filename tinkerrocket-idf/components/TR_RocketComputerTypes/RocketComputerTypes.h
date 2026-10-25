@@ -3240,6 +3240,11 @@ static constexpr uint8_t ACC_FACE_PENDING      = 0x84;  // OC→FC: average the 
 static constexpr uint8_t HG_CAL_APPLY_PENDING  = 0x85;  // OC→FC: payload follows as HG_CAL_APPLY_MSG
 static constexpr uint8_t HG_CAL_APPLY_MSG      = 0x86;  // 49-byte HighGCalApplyData payload
 
+// #1658: the out computer names itself in the log. The 0x90 block that the
+// other OC→self records use is full, and 0xAC/0xAD are retired codes, so this
+// takes the next free one here. See OcIdentityData.
+static constexpr uint8_t OC_IDENTITY_MSG       = 0x87;  // OC→self: 68-byte OcIdentityData, ~1 Hz while logging, straight to the log
+
 // FC→OC over I2S, emitted once at the PRELAUNCH→INFLIGHT transition. A
 // snapshot of the active roll-control / IMU settings so the per-flight .bin
 // (and the .json the app derives from it) records what actually flew (#165).
@@ -4422,6 +4427,41 @@ static_assert(sizeof(LogBufferStatsData) == 52,
 static constexpr size_t SIZE_OF_LOG_BUFFER_STATS_V1 = 28;
 static_assert(offsetof(LogBufferStatsData, rx_peak) == SIZE_OF_LOG_BUFFER_STATS_V1,
               "v1 LogBufferStatsData must remain a byte-exact prefix of v2");
+
+// --- Out computer identity (#1658, OC self-emitted ~1 Hz while logging) -----
+// Which computer wrote this log, written into the log itself, so a .bin read
+// straight off the board, converted again, or pulled by the host tools still
+// names its computer. Until this the unit ID and name reached only the BLE
+// readback and the LoRa beacon, and a phone recorded them only if it was the
+// one that downloaded the flight (the summary's `source` block).
+//
+// Sent every stats interval rather than once at file open: before launch the
+// log ring is drop-oldest and keeps only about a second, so a one-shot frame
+// written at open is gone after a long pad wait. The FC's FLIGHT_SETTINGS
+// repeats for the same reason. The FC's own identity is already in the log
+// (FLIGHT_SETTINGS' fw_git_sha and board_rev_code).
+//
+// Strings are fixed fields, NUL-padded, and not NUL-terminated when full.
+typedef struct __attribute__((packed))
+{
+    uint32_t time_us;          // esp_timer at emit: the OC's clock, like LogBufferStats
+    uint8_t  version;          // OC_IDENTITY_VERSION
+    uint8_t  network_id;
+    uint8_t  rocket_id;
+    uint8_t  board_rev_code;   // board_identity::encodeRevCode, as in FlightSettingsData:
+                               //   the provisioned board, else the image's own claim
+                               //   with bit 7 set; 0 = unknown
+    char     unit_id[8];       // last 4 bytes of the MAC as hex, "a1b2c3d4"
+    char     unit_name[20];    // the BLE rename cap (cmd 40); default "TR-R-xxxx"
+    char     fw_version[32];   // esp_app_desc_t::version, "<sha>[-dirty]-<board>+<build>"
+} OcIdentityData;
+static_assert(sizeof(OcIdentityData) == 68, "OcIdentityData must be 68 bytes");
+static_assert(offsetof(OcIdentityData, board_rev_code) == 7 &&
+              offsetof(OcIdentityData, unit_id) == 8 &&
+              offsetof(OcIdentityData, unit_name) == 16 &&
+              offsetof(OcIdentityData, fw_version) == 36,
+              "OcIdentityData member order is wire ABI (the apps and Python decode it)");
+static constexpr uint8_t OC_IDENTITY_VERSION = 1;
 
 // --- Guidance Telemetry Data (sent at ~10 Hz during guided coast) ---
 // Logged to the flight log as GUIDANCE_TELEM_MSG (0xCA). NOTE: the field

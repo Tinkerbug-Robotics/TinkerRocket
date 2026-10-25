@@ -651,7 +651,10 @@ private suspend fun downloadAndConvert(
             } else {
                 val (csv, summary) = CsvGenerator().writeCsv(result.bytes)
                 csvFileFor(context, file.name).writeText(csv)
-                summaryFileFor(context, file.name).writeText(summary.copy(source = source).toJson())
+                // #1658: the log's own record of its computer wins; the live
+                // identity adds the profile, the FC and when.
+                summaryFileFor(context, file.name)
+                    .writeText(summary.copy(source = FlightSource.merged(summary.source, source)).toJson())
                 "Saved ${file.name} (${result.bytes.size / 1000} kB) + CSV$shortNote"
             }
         } catch (e: Exception) {

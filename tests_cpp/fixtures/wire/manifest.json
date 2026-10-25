@@ -23,6 +23,10 @@
  "size": 10,
  "notes": "IIS2MDCData, msg 0xD1"},
  {
+ "file": "logframes/ocidentity_68.bin",
+ "size": 68,
+ "notes": "OcIdentityData v1, msg 0x87 (#1658): OC-self, ~1 Hz while logging; unit_name fills all 20 bytes with no NUL"},
+ {
  "file": "logframes/power_14.bin",
  "size": 14,
  "notes": "POWERData v2 (+cam_ma +servo_ma), msg 0xA6"},
@@ -284,7 +288,7 @@
  "notes": "OTA_BEGIN; cmds 70-72 dispatch inside TR_BLE_To_APP.cpp, not main.cpp"},
  {
  "file": "csv/tiny_flight.bin",
- "size": 29665,
+ "size": 29741,
  "notes": "synthetic mini-device flight for the bin→CSV golden; app-generated CSV/summary goldens live in tests_cpp/fixtures/csv_golden/ (outside wire/ — they are app output, not emitter output)"}
  ]
 }

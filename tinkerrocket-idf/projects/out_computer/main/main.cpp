@@ -9388,6 +9388,38 @@ static void printStats()
         }
     }
 
+    // #1658: and which computer this is, so a log names the computer that
+    // wrote it even when no phone downloaded it. Every interval rather than
+    // once at file open: the pre-launch ring keeps only about a second, so a
+    // one-shot frame would be gone after a pad wait. 76 B/s; dropped, like the
+    // record above, when no session is open.
+    {
+        OcIdentityData oid = {};   // zeroed: the string fields come out NUL-padded
+        oid.time_us = (uint32_t)esp_timer_get_time();
+        oid.version = OC_IDENTITY_VERSION;
+        oid.network_id = network_id;
+        oid.rocket_id = rocket_id;
+        // As the FC fills FlightSettingsData::board_rev_code: the provisioned
+        // board, else what this image was built for, marked as only a claim.
+        oid.board_rev_code = oc_board_rev[0]
+            ? board_identity::encodeRevCode(oc_board_rev, false)
+            : board_identity::encodeRevCode(TR_BOARD_REV_STR, true);
+        memcpy(oid.unit_id, unit_id_hex, strnlen(unit_id_hex, sizeof(oid.unit_id)));
+        memcpy(oid.unit_name, unit_name, strnlen(unit_name, sizeof(oid.unit_name)));
+        if (const esp_app_desc_t* d = esp_app_get_description())
+            memcpy(oid.fw_version, d->version, strnlen(d->version, sizeof(oid.fw_version)));
+
+        uint8_t oid_frame[MAX_FRAME];
+        size_t  oid_frame_len = 0;
+        if (TR_I2C_Interface::packMessage(OC_IDENTITY_MSG,
+                                           (const uint8_t*)&oid, sizeof(oid),
+                                           oid_frame, sizeof(oid_frame),
+                                           oid_frame_len))
+        {
+            (void)logger.enqueueFrame(oid_frame, oid_frame_len);
+        }
+    }
+
     if (config::VERBOSE_DEBUG)
     {
     // Denominator is s.ring_size (the runtime ring capacity) — used to show

@@ -52,6 +52,12 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(sizeof(LoRaSlowData),   22u);  // #850: 1-of-6 slots
     EXPECT_EQ(sizeof(LoRaUplinkData), 13u);  // uplink RSSI/SNR log record (0xF9)
     EXPECT_EQ(sizeof(PyroFaultTripData), 13u);  // #1553 fault-current trip log record (0x94)
+    // #1658: the computer that wrote the log (0x87); the apps and Python read
+    // the strings by these offsets
+    EXPECT_EQ(sizeof(OcIdentityData), 68u);
+    EXPECT_EQ(offsetof(OcIdentityData, unit_id), 8u);
+    EXPECT_EQ(offsetof(OcIdentityData, unit_name), 16u);
+    EXPECT_EQ(offsetof(OcIdentityData, fw_version), 36u);
     EXPECT_EQ(sizeof(GnssRtcmHeader), 5u);      // raw RTCM3 frame record header (0x95)
     // #1600: the raw-GNSS shadow filter's 10 Hz record (0x96); time_us first,
     // as every FC stream, and the fields the ground decoder reads by offset
@@ -1874,6 +1880,7 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(SENSOR_CAL_APPLY_PENDING), MT(SENSOR_CAL_APPLY_MSG),
         MT(SENSOR_CAL_READ),          MT(SENSOR_CAL_STATUS_MSG),
         MT(FLIGHT_SETTINGS_MSG),      MT(LOG_BUFFER_STATS_MSG),
+        MT(OC_IDENTITY_MSG),          // #1658: OC→self, the computer that wrote the log
         // OTA relay control block (#8 Phase 4): OC->FC control over I2C
         // (0xE3-0xE6), FC->OC status over I2S (OTA_STATUS_MSG=0xE7).  The
         // sensor-cal block was deliberately moved to 0xE8+ to keep 0xE3-0xE7
@@ -2007,7 +2014,9 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     //       HG_CAL_APPLY_MSG (0x85/0x86, BLE cmd 80).
     // 120 = 118 + the GNSS antenna offset pair ANTENNA_CONFIG_PENDING /
     //       ANTENNA_CONFIG_MSG (0x8C/0x8D, BLE cmd 81), below the GNSS log's.
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 120u)
+    // 121 = 120 + OC_IDENTITY_MSG (0x87, #1658), the OC's own record of which
+    //       computer wrote the log, after the high-g pair.
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 121u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }

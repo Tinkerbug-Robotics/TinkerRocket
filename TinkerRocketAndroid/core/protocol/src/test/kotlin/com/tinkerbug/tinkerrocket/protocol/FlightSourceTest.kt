@@ -78,7 +78,15 @@ class FlightSourceTest {
     fun `the generator writes the log's board into settings`() {
         val (_, summary) = CsvGenerator().writeCsv(WireFixtures.bytes("csv/tiny_flight.bin"))
         assertEquals("V9", summary.settings?.board)
-        assertNull(summary.source, "the converter never fills source")
+        // #1658 step 3: the out computer's part comes from its record in the
+        // log; only the app knows the profile and when it was downloaded.
+        assertEquals(
+            FlightSource(
+                unitId = "9e8a1b2c", unitName = "Twenty-char unitname", rocketId = 2,
+                ocBoard = "M1", ocFw = "41b2ab92-m1+20261022-1126",
+            ),
+            summary.source,
+        )
     }
 
     @Test

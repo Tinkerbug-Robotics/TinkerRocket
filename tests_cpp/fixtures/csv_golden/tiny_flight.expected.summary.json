@@ -94,5 +94,12 @@
       "max_pulse_us" : 2000,
       "min_pulse_us" : 1000
     }
+  },
+  "source" : {
+    "oc_board" : "M1",
+    "oc_fw" : "41b2ab92-m1+20261022-1126",
+    "rocket_id" : 2,
+    "unit_id" : "9e8a1b2c",
+    "unit_name" : "Twenty-char unitname"
   }
 }

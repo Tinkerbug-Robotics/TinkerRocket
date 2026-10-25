@@ -126,4 +126,5 @@ public object MsgType {
     public const val CAMERA_STOP: Int = 0xAB
     public const val IIS2MDC: Int = 0xD1
     public const val FLIGHT_SETTINGS: Int = 0xE1  // 188/200/208/210/219 B by version
+    public const val OC_IDENTITY: Int = 0x87  // 68 B OcIdentityData: the out computer that wrote the log (#1658)
 }

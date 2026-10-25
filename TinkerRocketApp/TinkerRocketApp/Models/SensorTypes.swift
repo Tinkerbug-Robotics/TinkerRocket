@@ -26,6 +26,7 @@ enum MessageType: UInt8 {
     case flightSettings = 0xE1  // FlightSettingsData (188B v1 / 200B v2 / 208B v3 / 210B v5 / 219B v6 / 220B v7 / 222B v8 / 223B v9) — runtime settings snapshot at launch (#165)
     case iis2mdc = 0xD1    // IIS2MDC magnetometer (new Mini PCB rev, 10B)
     case lora = 0xF1
+    case ocIdentity = 0x87 // OcIdentityData (68B) — the out computer that wrote the log (#1658)
 }
 
 // MARK: - Rocket State
@@ -441,7 +442,15 @@ nonisolated struct FlightSettingsData {
     /// reports the wrong revision confidently and forever. Read it as "the
     /// image believed this", not as "the board is this".
     var boardRevName: String? {
-        guard let code = board_rev_code else { return nil }
+        board_rev_code.map(BoardRev.name)
+    }
+}
+
+/// `board_identity::revCodeToString` for the log's board byte: "V9", "M1
+/// (asserted)", or "unknown". Shared by FlightSettingsData (the FC's board)
+/// and OcIdentityData (the OC's, #1658).
+nonisolated enum BoardRev {
+    static func name(_ code: UInt8) -> String {
         let letter: String
         switch code & 0x70 {
         case 0x10: letter = "V"
@@ -453,6 +462,46 @@ nonisolated struct FlightSettingsData {
         if number == 0 { return "unknown" }
         return letter + String(number) + ((code & 0x80) != 0 ? " (asserted)" : "")
     }
+}
+
+// MARK: - Out Computer Identity (#1658, 68 bytes)
+
+/// OcIdentityData: the out computer that wrote this log, recorded by the OC
+/// itself ~1 Hz while logging, so a log names its computer even when no phone
+/// downloaded it. Strings are fixed fields, NUL-padded, and not NUL-terminated
+/// when full (a 20-character unit name fills its field).
+nonisolated struct OcIdentityData {
+    static let size = 68
+
+    let time_us: UInt32         // the OC's clock
+    let version: UInt8
+    let network_id: UInt8
+    let rocket_id: UInt8
+    let board_rev_code: UInt8   // as FlightSettingsData.board_rev_code
+    let unit_id: String         // "a1b2c3d4"
+    let unit_name: String
+    let fw_version: String
+
+    init(from data: Data) throws {
+        guard data.count == Self.size else {
+            throw ParseError.invalidSize(expected: Self.size, got: data.count)
+        }
+        let bytes = [UInt8](data)
+        func text(_ at: Int, _ len: Int) -> String {
+            String(decoding: bytes[at..<(at + len)].prefix(while: { $0 != 0 }), as: UTF8.self)
+        }
+        var offset = 0
+        time_us = data.readUInt32LE(at: &offset)
+        version = data.readUInt8(at: &offset)
+        network_id = data.readUInt8(at: &offset)
+        rocket_id = data.readUInt8(at: &offset)
+        board_rev_code = data.readUInt8(at: &offset)
+        unit_id = text(8, 8)
+        unit_name = text(16, 20)
+        fw_version = text(36, 32)
+    }
+
+    var boardRevName: String { BoardRev.name(board_rev_code) }
 }
 
 // MARK: - Raw Packed Data Structures

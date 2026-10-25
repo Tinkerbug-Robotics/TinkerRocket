@@ -42,7 +42,7 @@ final class FlightSourceTests: XCTestCase {
         var summary = FlightSummary(max_altitude_m: 912, max_speed_mps: 173,
                                     burnout_time_s: 1.3, apogee_time_s: 8.9, settings: nil)
         XCTAssertFalse(try encode(summary).contains("source"),
-                       "a summary generated without a device has no source")
+                       "a summary with no source writes no key")
         summary.source = FlightSource(unit_id: "a1cae150", rocket_profile: "Piercer Mini",
                                       fc_fw: "41b2ab92", downloaded_at: "2026-10-24T18:03:00Z")
         let json = try encode(summary)

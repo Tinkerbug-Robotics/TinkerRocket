@@ -360,6 +360,14 @@ public class CsvGenerator {
             ?.let { FlightSettingsData.decode(it.payload) }
             ?.let { FlightSettings.from(it) }
 
+        // #1658: the out computer's own record of which computer wrote the
+        // log, when its firmware wrote one. Repeated ~1 Hz; like iOS, the LAST
+        // frame is decoded. The app adds what only it knows at download.
+        val logSource: FlightSource? = frames
+            .lastOrNull { it.type == MsgType.OC_IDENTITY }
+            ?.let { OcIdentityData.decode(it.payload) }
+            ?.let(FlightSource::fromLog)
+
         // #1099: a non-finite value cannot be JSON-encoded; sanitise where the
         // numbers are made, as iOS's CSVGenerator does, so the two stay twins.
         return FlightSummary(
@@ -368,6 +376,7 @@ public class CsvGenerator {
             burnoutTimeS = burnoutTime.finiteOrNull(),
             apogeeTimeS = apogeeTime.finiteOrNull(),
             settings = flightSettings,
+            source = logSource,
         )
     }
 
