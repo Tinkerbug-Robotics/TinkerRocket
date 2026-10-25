@@ -300,14 +300,10 @@ class AppContainer(app: Application) {
         val session = f.activeDeviceId.value?.let { devices[it] }?.session
         if (session != null) syncer.attach(session, profileStore) else syncer.detach()
 
-        // Voice follows the first connected direct rocket when one exists
-        // (full frame rate), else the foreground base station — whose stream
-        // is pinned to its focused rocket, so callouts never interleave two
-        // rockets (#375, #390).
-        val direct = devices.values.firstOrNull {
-            it.session.isConnected.value && it.deviceType == BleDeviceType.ROCKET
-        }
-        val voice = direct ?: f.foregroundBaseStation()
+        // Voice follows the foreground base station only, never a direct
+        // rocket link: that link leaves range at launch (see
+        // FleetManager.voiceDevice).
+        val voice = f.voiceDevice()
         for (d in devices.values) {
             if (d !== voice) d.session.telemetryAnnouncer = null
         }

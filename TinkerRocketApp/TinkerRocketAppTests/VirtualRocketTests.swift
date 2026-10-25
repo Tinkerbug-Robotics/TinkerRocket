@@ -93,7 +93,9 @@ final class VirtualRocketTests: XCTestCase {
         // `device.parseTelemetryData` (VirtualRocket.swift:65), which is also
         // where the #968 past-apogee latch is applied.  Decoding straight to
         // TelemetryData here would skip that and test a path nothing uses.
-        let device = BLEDevice(peripheral: nil, name: "TR-R-Virtual")
+        // A base station, as `VirtualRocketDriver`'s device is: voice is
+        // base-station only, so a rocket link would never speak.
+        let device = BLEDevice(peripheral: nil, name: "TR-B-Virtual")
         device.flightAnnouncer = announcer
 
         let idleReady = Data(#"{"rid":1,"run":"Booster","st":"READY","fs":16,"palt":0.2}"#.utf8)

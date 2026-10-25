@@ -81,17 +81,19 @@ final class FlightAnnouncerDispatchTests: XCTestCase {
                        ["PRELAUNCH", "INFLIGHT", "LANDED"])
     }
 
-    /// Direct-rocket path must keep working — guards against a fix that
-    /// breaks the case the bug report compared against.
-    func testDirectRocketTelemetry_TriggersAnnouncer() {
+    /// Voice is base-station only.  The fleet never routes the announcer to a
+    /// direct rocket link, and if one holds it anyway its frames still must
+    /// not be spoken: that link leaves range at launch.
+    func testDirectRocketTelemetry_NeverReachesTheAnnouncer() {
         let rocket = makeRocket()
         let spy = SpyAnnouncer()
         rocket.flightAnnouncer = spy
 
         rocket.parseTelemetryData(directJSON())
 
-        XCTAssertEqual(spy.received.count, 1)
-        XCTAssertNil(spy.received.first?.source_rocket_id)
+        XCTAssertTrue(spy.received.isEmpty)
+        XCTAssertEqual(rocket.telemetry.state, "INFLIGHT",
+                       "The dashboard still shows the direct link's telemetry")
     }
 
     /// A BS receiving a frame with no `rid` (e.g. its own heartbeat) must

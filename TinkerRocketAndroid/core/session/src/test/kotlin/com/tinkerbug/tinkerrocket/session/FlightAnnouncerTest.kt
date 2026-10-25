@@ -188,9 +188,11 @@ class FlightAnnouncerTest {
         assertEquals(listOf("PRELAUNCH", "INFLIGHT", "LANDED"), spy.received.map { it.state })
     }
 
-    /** Direct-rocket path keeps working (the case #138 compared against). */
+    /** Voice is base-station only. The fleet never routes the announcer to a
+     *  direct rocket link, and if one holds it anyway its frames still must
+     *  not be spoken: that link leaves range at launch. */
     @Test
-    fun directRocketTelemetry_triggersAnnouncer() = runTest {
+    fun directRocketTelemetry_neverReachesAnnouncer() = runTest {
         val r = rocket()
         val spy = SpyAnnouncer()
         r.device.session.telemetryAnnouncer = spy
@@ -198,8 +200,9 @@ class FlightAnnouncerTest {
         r.fw.emitTelemetryJson("""{"st":"INFLIGHT","palt":120.5,"mspd":85.0}""")
         runCurrent()
 
-        assertEquals(1, spy.received.size)
-        assertNull(spy.received.first().sourceRocketId)
+        assertTrue(spy.received.isEmpty())
+        assertEquals("INFLIGHT", r.device.session.telemetry.value.state,
+            "the dashboard still shows the direct link's telemetry")
     }
 
     /** A BS frame with no rid (its own heartbeat) routes via the non-relay
@@ -236,11 +239,11 @@ class FlightAnnouncerTest {
     /** Disconnect resets the announcer (iOS onDisconnect parity). */
     @Test
     fun disconnect_resetsAnnouncer() = runTest {
-        val r = rocket()
+        val bs = baseStation()
         val spy = SpyAnnouncer()
-        r.device.session.telemetryAnnouncer = spy
+        bs.device.session.telemetryAnnouncer = spy
 
-        r.fw.fireDisconnect()
+        bs.fw.fireDisconnect()
         runCurrent()
 
         assertEquals(1, spy.resetCount)

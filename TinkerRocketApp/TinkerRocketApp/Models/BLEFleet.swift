@@ -375,15 +375,24 @@ class BLEFleet: NSObject, ObservableObject {
     }
 
     /// The connected direct rocket link, if there is one.  Profiles only push
-    /// over a direct link, and it is also the preferred voice source.
+    /// over a direct link.
     var directRocket: BLEDevice? {
         devices.first { $0.isConnected && $0.deviceType == .rocket }
     }
 
-    /// The link that speaks: the direct rocket when one exists (full frame
-    /// rate), else the foreground base station — whose stream is pinned to its
-    /// focused rocket, so callouts never interleave two rockets.
-    var voiceDevice: BLEDevice? { directRocket ?? foregroundBaseStation }
+    /// The link that speaks: the foreground base station, and only ever a
+    /// base station.  Its stream is pinned to its focused rocket, so callouts
+    /// never interleave two rockets.
+    ///
+    /// A direct rocket link used to win here (full frame rate), with the base
+    /// station as the fallback.  But a direct link always leaves range at
+    /// launch, so on every flight with the rocket paired on the pad voice sat
+    /// on a link that was already gone until the drop was noticed, then moved
+    /// to the base station mid-boost — and moved back whenever the rocket
+    /// briefly reconnected.  Whether the callouts followed the rocket or the
+    /// base station depended on whether the rocket happened to be paired.
+    /// With no base station connected there are no callouts.
+    var voiceDevice: BLEDevice? { foregroundBaseStation }
 
     /// Re-run every binding the fleet owns.  Idempotent and cheap — safe to
     /// call from any state change, and called from several deliberately
@@ -417,8 +426,8 @@ class BLEFleet: NSObject, ObservableObject {
     ///
     /// The per-device transitions (`isConnected`, `deviceType` resolving after
     /// the identity readback) come in synchronously through `BLEDevice`'s own
-    /// `didSet`s instead, so the disconnect edge — the one that has to move
-    /// voice to the base station mid-flight — is handled without any delay.
+    /// `didSet`s instead, so a base station's disconnect or reconnect edge
+    /// moves voice without any delay.
     private func startBindingRouting() {
         Publishers.Merge(
             $devices.map { _ in () },
