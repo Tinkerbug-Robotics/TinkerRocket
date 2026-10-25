@@ -181,7 +181,7 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         // (the profile's; 0.99 on the Goblin's helix), for the gyro's check on
         // the combiner's own wind-up (noteRollRate). Call once, after
         // enableRawOutputs() and setRawDopplerPairing(), from any task; false
-        // without the memory for its state (~32 kB, internal RAM, else PSRAM),
+        // without the memory for its state (~27 kB, internal RAM, else PSRAM),
         // and then nothing changes. Never called, every epoch is the L1 band's.
         bool setRawMultiband(const mosaic::MosaicMultibandConfig& c, float windup_k);
         // The IMU path's roll rate about the nose (rad/s, body x), each

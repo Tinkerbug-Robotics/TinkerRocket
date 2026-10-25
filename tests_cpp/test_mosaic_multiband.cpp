@@ -48,6 +48,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <tuple>
 #include <vector>
@@ -431,7 +432,8 @@ TEST(MosaicMultiband, WithoutReferralTheRowCarriesItsWeightedWavelength)
             ws += 1.0 / (s * s);
             wl += lam(x.sig) / (s * s);
         }
-        EXPECT_NEAR(m.out.lam_wu[i], wl / ws, 1e-12);
+        // to the combiner's working precision (mbr: float in the images)
+        EXPECT_NEAR(m.out.lam_wu[i], wl / ws, 16.0 * std::numeric_limits<mbr>::epsilon() * wl / ws);
         EXPECT_GT(m.out.lam_wu[i], lam(17) + 0.02);
         EXPECT_NEAR(ep.obs[i].rate_mps, -350.0 + 812.5 + W * wl / ws, 2e-4);
     }
