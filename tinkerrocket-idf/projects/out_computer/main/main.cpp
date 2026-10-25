@@ -65,6 +65,7 @@ static inline std::string itos(int v)
 #include "rail_restore_policy.h"
 #include "blind_window_policy.h"   // #1271: what a phone-IO blind window actually cost  // #825: boot rail re-assert decision
 #include "flight_token_policy.h"  // #1176: tier-2 rail decision from a durable token
+#include "token_page_policy.h"   // #1659: room for W2 on the token's active NVS page
 #include "holdup_policy.h"        // #1166: the verdict on the hold-up supercap
 #include "supply_status_policy.h" // #1593: the V10's PG_RAIL / VBUCK_OK edges
 #include <esp_attr.h>             // RTC_NOINIT_ATTR
@@ -1001,7 +1002,7 @@ struct __attribute__((packed)) FlightToken {
     uint32_t magic;
     uint8_t  state;        // FlightTokenPolicy::kTok*
     uint8_t  attempts;     // auto-restore attempts consumed
-    uint16_t rsv;
+    uint16_t rsv;          // read by nothing; #1659's pad-time page turn flips it
     uint8_t  have_frame;   // 1 = snap[] holds a launch-edge capture
     uint8_t  pad[3];
     uint8_t  snap[kSnapFrameLen];
@@ -1097,6 +1098,107 @@ static bool tokenSetState(uint8_t state, bool keep_frame, const uint8_t* frame)
     return tokenWrite(t);
 }
 
+// #1659: free entries on the token partition's ACTIVE NVS page, read from the
+// flash (token_page_policy.h has the format and why nvs_get_stats will not
+// do). False unless exactly one page is ACTIVE, which is how NVS leaves the
+// partition between writes; the caller then leaves the page as it is.
+static bool tokenActivePageFree(uint32_t& free_entries)
+{
+    using namespace TokenPagePolicy;
+    const esp_partition_t* part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS, kTokNvsPart);
+    if (part == nullptr) return false;
+
+    int active = -1;
+    for (uint32_t pg = 0; pg < part->size / kPageSize; ++pg)
+    {
+        uint32_t state = 0;
+        if (esp_partition_read(part, pg * kPageSize, &state, sizeof(state)) != ESP_OK)
+            return false;
+        if (state == kPageStateActive)
+        {
+            if (active >= 0) return false;
+            active = (int)pg;
+        }
+    }
+    if (active < 0) return false;
+
+    const uint32_t base = (uint32_t)active * kPageSize;
+    uint8_t table[kEntryTableBytes];
+    if (esp_partition_read(part, base + kEntryTableOffset, table, sizeof(table)) != ESP_OK)
+        return false;
+    uint32_t next = firstEmptyEntry(table);
+    // Page::load's own step: an entry the table calls EMPTY whose first word
+    // is written was cut short by a power loss, and NVS skips past it.
+    while (next < kEntryCount)
+    {
+        uint32_t word = 0;
+        if (esp_partition_read(part, base + kEntryDataOffset + next * kEntrySize,
+                               &word, sizeof(word)) != ESP_OK)
+            return false;
+        if (word != 0xFFFFFFFFu) { ++next; continue; }
+        break;
+    }
+    free_entries = kEntryCount - next;
+    return true;
+}
+
+// #1659: make room for W2 on the pad. Called after W1 on loop_oc, which also
+// stages W2, so no other token write can interleave with it. When W2 and one
+// spare write would not both fit on the active page, rewrite the token until
+// NVS has moved to a fresh page: two rewrites at most, and an erase there
+// costs nothing in the air.
+static void tokenTurnPageForFlight()
+{
+    using namespace TokenPagePolicy;
+    constexpr uint32_t kEntriesPerWrite = blobEntries(sizeof(FlightToken));
+    static_assert(kEntriesPerWrite == 10, "the 248-byte token is 10 NVS entries");
+    uint32_t free_before = 0;
+    if (!tokenActivePageFree(free_before))
+    {
+        ESP_LOGW("PWR", "#1659: cannot read the flight-token NVS page — "
+                        "the launch-edge token write may erase a sector");
+        return;
+    }
+    uint32_t free_now = free_before;
+    uint32_t rewrites = 0;
+    const int64_t t0 = esp_timer_get_time();
+    while (!writesFitOnActivePage(free_now, kEntriesPerWrite, kWritesToCover))
+    {
+        FlightToken t = {};
+        if (rewrites == kMaxTurnWrites || !tokenRead(t))
+        {
+            ESP_LOGE("PWR", "#1659: flight-token page turn stopped after %u "
+                            "rewrites (%u free entries) — the launch-edge write "
+                            "may erase a sector",
+                     (unsigned)rewrites, (unsigned)free_now);
+            return;
+        }
+        // NVS skips a write whose bytes match what it holds, so flip the
+        // reserved word. Nothing reads it: the token is unchanged.
+        t.rsv = (uint16_t)(t.rsv ^ 1u);
+        if (!tokenWrite(t) || !tokenActivePageFree(free_now))
+        {
+            ESP_LOGE("PWR", "#1659: flight-token page turn FAILED on rewrite %u",
+                     (unsigned)(rewrites + 1));
+            return;
+        }
+        ++rewrites;
+    }
+    if (rewrites > 0)
+    {
+        ESP_LOGW("PWR", "#1659: flight-token NVS page turned on the pad — %u "
+                        "rewrite(s) in %lld us, %u -> %u free entries",
+                 (unsigned)rewrites, (long long)(esp_timer_get_time() - t0),
+                 (unsigned)free_before, (unsigned)free_now);
+    }
+    else
+    {
+        ESP_LOGI("PWR", "#1659: flight-token NVS page has %u free entries, "
+                        "room for the launch-edge write", (unsigned)free_now);
+    }
+}
+
 // RAM staging for the launch-edge write. The blob write itself runs on the
 // Core-0 flush task (see flightlogFlushTaskHook) rather than in the loop or the
 // I2S parser, so the one in-flight flash write never lands in a latency-
@@ -1123,10 +1225,13 @@ static void tokenServiceInflightWrite()
     t.state    = FlightTokenPolicy::kTokInflight;
     t.attempts = 0;                     // a new flight gets a full budget
     if (have) { memcpy(t.snap, frame, kSnapFrameLen); t.have_frame = 1; }
+    const int64_t t0 = esp_timer_get_time();
     if (tokenWrite(t))
     {
-        ESP_LOGW("PWR", "#1176: flight token set INFLIGHT (carried frame %s)",
-                 have ? "yes" : "no");
+        // #1659: the time says whether it was an append (~1-2 ms) or paid for
+        // a sector erase (~60 ms), which the pad-time page turn exists to stop.
+        ESP_LOGW("PWR", "#1176: flight token set INFLIGHT (carried frame %s, %lld us)",
+                 have ? "yes" : "no", (long long)(esp_timer_get_time() - t0));
     }
     else
     {
@@ -11975,11 +12080,15 @@ static void loop_oc()
             {
                 // W1 — ARMED, on reaching PRELAUNCH. A pad state; it never
                 // auto-restores, it only marks that a session was set up.
+                // #1659: then make room for W2 on the active NVS page, so the
+                // launch-edge write never pays for a sector erase in the boost.
                 if (latest_rocket_state == PRELAUNCH &&
                     prev_rs_lockout != PRELAUNCH && token_nvs_ok)
                 {
                     if (!tokenSetState(FlightTokenPolicy::kTokArmed, false, nullptr))
                         ESP_LOGE("PWR", "#1176: ARMED token write FAILED");
+                    else
+                        tokenTurnPageForFlight();
                 }
                 // W2 — INFLIGHT, on the PRELAUNCH -> INFLIGHT edge.
                 //
