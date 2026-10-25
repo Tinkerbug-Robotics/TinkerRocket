@@ -183,6 +183,18 @@ class KnownDeviceStoreTest {
         assertEquals("Atlas", store.device("a1b2c3d4")?.name)
     }
 
+    /** #1650: the range onboarding and the registry share, ends included. */
+    @Test
+    fun `rocket ids are 1 to 254`() {
+        assertEquals(1..254, VALID_ROCKET_IDS)
+        val store = makeStore()
+        report(store)
+        val spy = PusherSpy()
+        store.setRocketId(254, unitID = "a1b2c3d4", pusher = spy)
+        store.setRocketId(1, unitID = "a1b2c3d4", pusher = spy)
+        assertEquals(listOf(254, 1), spy.rids)
+    }
+
     @Test
     fun `name clamped to 20 bytes`() {
         val store = makeStore()

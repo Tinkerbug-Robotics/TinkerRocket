@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import com.tinkerbug.tinkerrocket.session.DeviceIdentityPusher
 import com.tinkerbug.tinkerrocket.session.KnownDeviceStore
 import com.tinkerbug.tinkerrocket.session.NetworkIdentity
+import com.tinkerbug.tinkerrocket.session.VALID_ROCKET_IDS
 
 /**
  * #1057: first-launch onboarding — the operator picks a network name before
@@ -146,7 +147,10 @@ fun DeviceProvisioningDialog(
                         onValueChange = { rocketIdInput = it.filter { c -> c.isDigit() }.take(3) },
                         singleLine = true,
                         label = { Text("Rocket ID") },
-                        isError = rocketId == null || rocketId !in 1..255,
+                        // #1650: cmd 42 refuses 0 and 255 without a word,
+                        // so 255 here was stored and never taken.
+                        isError = rocketId == null || rocketId !in VALID_ROCKET_IDS,
+                        supportingText = { Text("1–254, unique within your network") },
                     )
                 }
                 if (appNetworkId > 0) {
@@ -160,7 +164,7 @@ fun DeviceProvisioningDialog(
         },
         confirmButton = {
             TextButton(
-                enabled = nameInput.isNotBlank() && (isBaseStation || rocketId in 1..255),
+                enabled = nameInput.isNotBlank() && (isBaseStation || rocketId in VALID_ROCKET_IDS),
                 onClick = {
                     store.setName(nameInput.trim(), unitId, pusher)
                     // #150: only a real ID is pushed — 0 is the app's "unset"

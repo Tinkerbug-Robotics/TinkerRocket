@@ -144,6 +144,13 @@ public data class KnownDevice(
     }
 }
 
+/**
+ * Rocket IDs a rocket will actually take: BLE cmd 42 silently refuses 0 (the
+ * "unset" sentinel) and 255 (the uplink broadcast address), so an ID outside
+ * this range is stored by the app and never reaches the rocket (#1650).
+ */
+public val VALID_ROCKET_IDS: IntRange = 1..254
+
 public class KnownDeviceStore(
     private val storage: KnownDeviceStorage,
     private val nowEpochMillis: () -> Long = System::currentTimeMillis,
@@ -306,7 +313,7 @@ public class KnownDeviceStore(
     }
 
     public fun setRocketId(rid: Int, unitID: String, pusher: DeviceIdentityPusher?) {
-        if (rid !in 1..254 || unitID.isEmpty()) return   // firmware rejects 0/255
+        if (rid !in VALID_ROCKET_IDS || unitID.isEmpty()) return   // firmware rejects 0/255
         applyEdit(
             rid, unitID,
             getCurrent = { it.rocketID },

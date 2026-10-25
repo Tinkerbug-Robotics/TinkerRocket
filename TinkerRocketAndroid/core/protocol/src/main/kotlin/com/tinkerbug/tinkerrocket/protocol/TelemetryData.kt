@@ -304,6 +304,13 @@ public data class TelemetryData(
     // Source rocket identity (base station relay only, null for direct BLE)
     val sourceRocketId: Int? = null,          // "rid"
     val sourceUnitName: String? = null,       // "run"
+    /**
+     * Base station: two rockets appear to share this rocket ID ("dup", 1 =
+     * suspected; omitted when clear). Any nonzero value counts — it gates
+     * pyro commands, so an unexpected value fails toward blocking. iOS
+     * `duplicate_id` (#1650).
+     */
+    val duplicateId: Int? = null,             // "dup"
 
     // Telemetry freshness (#95): missing "ds" → LIVE (older firmware).
     val dataStatus: DataStatus = DataStatus.LIVE,
@@ -558,6 +565,9 @@ public data class TelemetryData(
     }
 
     public val hasSensorHealth: Boolean get() = sensorHealth != 0
+
+    /** The base station flags this rocket ID as two rockets ([duplicateId]). */
+    public val duplicateIdSuspected: Boolean get() = (duplicateId ?: 0) != 0
 
     /** One row of the pre-launch health card (iOS SensorHealthRow; id = name). */
     public data class SensorHealthRow(val name: String, val state: SensorHealth)
@@ -903,6 +913,7 @@ public data class TelemetryData(
             sensorHealth = flexInt(json, "h") ?: 0,                     // #571
             sourceRocketId = flexInt(json, "rid"),           // #571: rid is the demux key
             sourceUnitName = strictString(json, "run"),
+            duplicateId = flexInt(json, "dup"),                         // #1650
             // #95: missing "ds" → LIVE (older firmware doesn't emit it);
             // unknown raw values also read as LIVE.
             dataStatus = DataStatus.fromRaw(flexInt(json, "ds") ?: 0),  // #571

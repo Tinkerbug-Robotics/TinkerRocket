@@ -758,7 +758,9 @@ public class DeviceSession(
             val heardNow = data.dataStatus == TelemetryData.DataStatus.LIVE
             val existing = remoteMap[rid]
             remoteMap[rid] = if (existing != null) {
-                existing.copy(
+                // #1650: the relayed name feeds the two-rockets-under-one-ID
+                // check before the copy (iOS RemoteRocket.updateTelemetry).
+                existing.noteRelayedName(data.sourceUnitName, now).copy(
                     telemetry = data,
                     // iOS RemoteRocket.updateTelemetry guards !name.isEmpty —
                     // an empty relayed name never clobbers a learned one.
@@ -1480,19 +1482,61 @@ public class DeviceSession(
     public fun requestConfig(): Unit = sendBareCommand(BleCommandId.REQUEST_CONFIG)
 
     /**
-     * Manual pyro continuity test — cmd 35, `[channel 1..4]` (direct rocket
-     * links only; the pyro card never renders on BS links).  Opens the
+     * Manual pyro continuity test — cmd 35, `[channel 1..4]`.  Opens the
      * per-channel TESTING window; the result arrives implicitly in later
-     * telemetry frames' "ps" bits — no dedicated reply, timeout, or failure
-     * state on the wire.
+     * telemetry frames' "ps" bits (or, over LoRa, the scorecard's measured
+     * bits) — no dedicated reply, timeout, or failure state on the wire.
+     *
+     * #1650: on a base-station link this is the stand-back test (iOS
+     * `sendPyroContTest`): relayed in the cmd-50 envelope to the FOCUSED
+     * rocket. Never broadcast — a pyro command must name its rocket — and
+     * refused, with no TESTING window, when that rocket ID looks like two
+     * rockets: both would act on it.
      */
     public fun sendPyroContTest(channel: Int) {
         sessionScope.launch {
+            val frame = if (isBaseStation) {
+                val rid = _focusRocketId.value ?: return@launch
+                if (isDuplicateIdSuspected(rid)) return@launch
+                Commands.relayToRocket(rid, Commands.pyroContTest(channel))
+            } else {
+                Commands.pyroContTest(channel)
+            }
+            val window = if (isBaseStation) CONT_TEST_PENDING_WINDOW_RELAY_MS
+            else CONT_TEST_PENDING_WINDOW_MS
             _contTestPendingUntil.value = _contTestPendingUntil.value +
-                (channel to clock() + CONT_TEST_PENDING_WINDOW_MS)
-            writeCommand(Commands.pyroContTest(channel))
+                (channel to clock() + window)
+            writeCommand(frame)
         }
     }
+
+    /**
+     * True when a pyro command sent right now will actually go out (iOS
+     * `pyroCommandPathReady`). Direct link: connected. Base-station link:
+     * connected AND a focused rocket heard live within
+     * [RELAY_STALE_THRESHOLD_MS] — a base station that has not heard the
+     * rocket would queue a blind uplink into silence (no ACK, #285) — AND that
+     * rocket ID not shared by two rockets.
+     *
+     * Computed from the relayed rocket's own last-heard clock at call time,
+     * not from [focusedRelayAgeMs], which only refreshes on the 2 s tick.
+     */
+    public fun pyroCommandPathReady(nowMs: Long = clock()): Boolean {
+        if (!_isConnected.value) return false
+        if (!isBaseStation) return true
+        val focus = _focusRocketId.value ?: return false
+        val remote = _remoteRockets.value.firstOrNull { it.rocketId == focus } ?: return false
+        if (remote.duplicateIdSuspected(nowMs)) return false
+        return nowMs - remote.lastSeenMs <= RELAY_STALE_THRESHOLD_MS
+    }
+
+    /**
+     * True while this base station hears [rocketId] as what looks like two
+     * rockets (iOS `isDuplicateIDSuspected(rocketID:)`).
+     */
+    public fun isDuplicateIdSuspected(rocketId: Int, nowMs: Long = clock()): Boolean =
+        _remoteRockets.value.firstOrNull { it.rocketId == rocketId }
+            ?.duplicateIdSuspected(nowMs) ?: false
 
     /** True while [channel]'s TESTING window is open. */
     public fun contTestPending(channel: Int): Boolean =
@@ -1908,6 +1952,11 @@ public class DeviceSession(
          *  round-trip allowance before displays trust "ps" bits again. */
         public const val CONT_TEST_PENDING_WINDOW_MS: Long = 2_500
 
+        /** iOS `BLEDevice.contTestPendingWindowRelay` — the same allowance
+         *  over LoRa, where the test rides the uplink and the reading the
+         *  next downlink frames (#1650). */
+        public const val CONT_TEST_PENDING_WINDOW_RELAY_MS: Long = 8_000
+
         /** iOS asyncAfter(0.5) between the cmd-2 write and the explicit read. */
         public const val FILE_LIST_READ_DELAY_MS: Long = 500
 
@@ -1971,7 +2020,55 @@ public data class RelayedRocket(
     val telemetry: TelemetryData,
     /** Session-clock millis of the last relayed frame. */
     val lastSeenMs: Long,
-)
+    /** The last non-empty relayed name ("run"); seeded from [unitName]. */
+    val lastHeardName: String? = unitName.ifEmpty { null },
+    /** Session-clock millis of the name changes inside the alternation window. */
+    val nameChangeTimesMs: List<Long> = emptyList(),
+    /** When two name changes inside the window were last seen; null = never. */
+    val nameAlternationSeenAtMs: Long? = null,
+) {
+    /**
+     * #1650: true while this rocket ID looks like two rockets (iOS
+     * `RemoteRocket.duplicateIDSuspected`). Two rockets set to the same ID
+     * reach the base station as ONE rocket whose relayed name flips between
+     * theirs, frame by frame. The base station says so itself with "dup" when
+     * its firmware knows how; the name alternation is the app's own view of
+     * the same symptom, so an older base station still gets the warning and
+     * the pyro block.
+     */
+    public fun duplicateIdSuspected(nowMs: Long): Boolean {
+        if (telemetry.duplicateIdSuspected) return true
+        val seen = nameAlternationSeenAtMs ?: return false
+        return nowMs - seen <= NAME_ALTERNATION_HOLD_MS
+    }
+
+    /**
+     * Fold one relayed name into the alternation check. A rename is one
+     * change, so it takes two inside the window; a frame without a name
+     * (trimmed, or before the beacon) says nothing either way.
+     */
+    public fun noteRelayedName(name: String?, nowMs: Long): RelayedRocket {
+        if (name.isNullOrEmpty()) return this
+        val last = lastHeardName
+        if (last == null || last == name) return copy(lastHeardName = name)
+        val changes = (nameChangeTimesMs + nowMs)
+            .filter { nowMs - it <= NAME_ALTERNATION_WINDOW_MS }
+        return copy(
+            lastHeardName = name,
+            nameChangeTimesMs = changes,
+            nameAlternationSeenAtMs = if (changes.size >= 2) nowMs else nameAlternationSeenAtMs,
+        )
+    }
+
+    public companion object {
+        /** iOS `RemoteRocket.nameAlternationWindow`. */
+        public const val NAME_ALTERNATION_WINDOW_MS: Long = 10_000
+
+        /** iOS `nameAlternationHold`: long enough that a rocket briefly out
+         *  of range does not clear the flag between alternations. */
+        public const val NAME_ALTERNATION_HOLD_MS: Long = 30_000
+    }
+}
 
 /** Download progress mirror (iOS isDownloading/downloadingFilename/downloadProgress). */
 public data class DownloadProgress(

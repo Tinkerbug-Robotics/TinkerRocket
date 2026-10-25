@@ -73,15 +73,22 @@ class PyroCardPolicyTest {
     }
 
     /**
-     * No test button on a relay: the stand-back LoRa test (cmds 35/36) is
-     * iOS-only, so the button would send a direct-link cmd 35 into a base
-     * station — nothing happens, and the silence reads as a fault.
+     * #1650: on a relay the button is the stand-back LoRa test, and the only
+     * gate is the relay path: a fresh focused rocket whose ID is not shared.
+     * The rail, armed and fired bits never cross LoRa, so they cannot gate it
+     * (a zeroed rail bit must not hide the test).
      */
     @Test
-    fun noTestButtonOnARelay() {
+    fun relayTestButtonFollowsThePathOnly() {
         assertFalse(PyroCardPolicy.showTestButton(
             isBaseStation = true, armed = false, fired = false,
             inflight = false, powerPinOn = true))
+        assertFalse(PyroCardPolicy.showTestButton(
+            isBaseStation = true, armed = false, fired = false,
+            inflight = false, powerPinOn = true, relayPathReady = false))
+        assertTrue(PyroCardPolicy.showTestButton(
+            isBaseStation = true, armed = false, fired = false,
+            inflight = false, powerPinOn = false, relayPathReady = true))
     }
 
     /** The direct-link gate is unchanged, including the rail check. */

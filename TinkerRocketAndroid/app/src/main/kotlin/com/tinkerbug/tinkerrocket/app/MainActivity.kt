@@ -246,11 +246,24 @@ class MainActivity : ComponentActivity() {
                             // transport and the FC stays in servo-test or
                             // mag-cal with nothing on screen to say so.
                             var tool by remember { mutableStateOf<String?>(null) }
+                            // #1650: the device a tool was opened for. A rocket
+                            // section's tool makes its device active first, and
+                            // that hop must not close the tool it opened.
+                            var toolDeviceId by remember { mutableStateOf<String?>(null) }
                             // An active-device hop swaps the session underneath a
                             // tool screen without disposing it (FleetManager falls
                             // through to a surviving key rather than null), which
                             // would leave the screen driving a different rocket.
-                            LaunchedEffect(activeDevice.deviceId) { tool = null }
+                            LaunchedEffect(activeDevice.deviceId) {
+                                if (activeDevice.deviceId != toolDeviceId) tool = null
+                            }
+                            fun openTool(name: String?, deviceId: String = activeDevice.deviceId) {
+                                if (name != null && deviceId != activeDevice.deviceId) {
+                                    fleet.setActiveDevice(deviceId)
+                                }
+                                toolDeviceId = deviceId
+                                tool = name
+                            }
                             androidx.compose.foundation.layout.Column {
                                 // iOS toolbar arrangement (design pass):
                                 // chevron + units | book · map · voice · gear.
@@ -273,6 +286,7 @@ class MainActivity : ComponentActivity() {
                                 )
                                 when (tab) {
                                     0 -> DashboardScreen(
+                                        fleet = fleet,
                                         device = activeDevice,
                                         demo = demoFleet != null,
                                         syncer = container.syncer,
@@ -280,7 +294,8 @@ class MainActivity : ComponentActivity() {
                                         profileStore = container.profileStore,
                                         container = container,
                                         tool = tool,
-                                        onTool = { tool = it },
+                                        onTool = { openTool(it) },
+                                        onToolFor = { t, id -> openTool(t, id) },
                                         // Dashboard advisories that point at a
                                         // setting (iOS opens the settings
                                         // sheet); same tab-change discipline as
@@ -317,10 +332,10 @@ class MainActivity : ComponentActivity() {
                                         // dashboard's Firmware tool: an update may
                                         // be the only way forward for an FC that
                                         // cannot finish booting.
-                                        onOpenFirmware = { tab = 0; tool = "ota" },
+                                        onOpenFirmware = { tab = 0; openTool("ota") },
                                         // #1629: and at the dashboard's six-face
                                         // accelerometer calibration, the same way.
-                                        onOpenAccelCal = { tab = 0; tool = "accelcal" },
+                                        onOpenAccelCal = { tab = 0; openTool("accelcal") },
                                     )
                                 }
                             }
