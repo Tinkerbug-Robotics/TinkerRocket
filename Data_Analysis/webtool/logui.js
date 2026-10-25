@@ -731,7 +731,8 @@ function metaList(e, { pilot } = {}) {
     ["Firmware", c.firmware ? `${c.firmware}${c.firmware_dirty ? " (built with uncommitted changes)" : ""}` : null],
     ["Apogee", fmtValue(r.apogee_m, "m", imp)],
     ["Max speed", fmtValue(r.max_speed_mps, "m/s", imp)],
-    ["Max acceleration", r.max_accel_g != null ? `${r.max_accel_g.toFixed(1)} G` : null],
+    ["Max thrust acceleration", r.max_accel_g != null ? `${r.max_accel_g.toFixed(1)} G` : null],
+    ["Peak shock", r.peak_shock_g != null ? `${r.peak_shock_g.toFixed(0)} G` : null],
     ["Flight time", r.flight_time_s != null ? `${r.flight_time_s.toFixed(1)} s` : null],
     ["Landed", fmtValue(r.landing_distance_m, "m", imp) ? `${fmtValue(r.landing_distance_m, "m", imp)} from the pad` : null],
     ["Outcome", outcomeChip(e.outcome) || null],
@@ -925,7 +926,7 @@ function sane(e) {
       data: Array.isArray(files.data) ? files.data.filter(name) : [],
     },
     location: { name: str(loc.name), lat: lat != null && lon != null ? lat : null, lon: lat != null && lon != null ? lon : null },
-    results: Object.fromEntries(["apogee_m", "max_speed_mps", "max_accel_g", "flight_time_s", "landing_distance_m"]
+    results: Object.fromEntries(["apogee_m", "max_speed_mps", "max_accel_g", "peak_shock_g", "flight_time_s", "landing_distance_m"]
       .map((k) => [k, num(r[k])])),
     computer: { board: str(c.board), board_asserted: c.board_asserted === true,
       firmware: str(c.firmware), firmware_dirty: c.firmware_dirty === true },

@@ -538,6 +538,55 @@ def measured(flight) -> dict[str, Optional[float]]:
     return out
 
 
+# How near an event a moment has to be to be called "at" it, in seconds
+# (before, after). Liftoff and burnout are instants; an ejection's shock
+# continues through the deployment that follows. The FC's landed flag usually
+# sits on the touchdown impact itself (within 0.1 s on 16 archived flights),
+# but not always: 2026-05-17 V2 flagged landed at 7.6 s and took its hardest
+# knock 9.5 s later. So the touchdown window is generous, and a knock far from
+# every event is called "on descent" or "after landing", never guessed at.
+_AT_LIFTOFF = (0.05, 0.10)
+_AT_BURNOUT = (0.05, 0.05)
+_AT_EJECTION = (0.10, 1.0)
+_AT_TOUCHDOWN = (3.0, 2.0)
+
+
+def phase_at(flight, t: float) -> Optional[str]:
+    """What the rocket was doing at `t` seconds, in words a flyer uses.
+
+    "on the pad", "at liftoff", "under thrust", "at burnout", "in coast",
+    "at ejection", "on descent", "at touchdown" or "after landing" — or None
+    when the log measured too few events to say. For naming where the
+    flight's hardest knock came from: on the archived flights it is the
+    touchdown or the ejection far more often than the motor.
+    """
+    ev = measured(flight)
+    launch, burnout, eject, landed = ev["launch"], ev["burnout"], ev["ejection"], ev["landed"]
+
+    def near(event, span):
+        return event is not None and event - span[0] <= t <= event + span[1]
+
+    if launch is not None and t < launch - _AT_LIFTOFF[0]:
+        return "on the pad"
+    if near(launch, _AT_LIFTOFF):
+        return "at liftoff"
+    if burnout is not None and launch is not None and t < burnout - _AT_BURNOUT[0]:
+        return "under thrust"
+    if near(burnout, _AT_BURNOUT):
+        return "at burnout"
+    if near(eject, _AT_EJECTION):
+        return "at ejection"
+    if near(landed, _AT_TOUCHDOWN):
+        return "at touchdown"
+    if landed is not None and t > landed:
+        return "after landing"
+    if eject is not None and t > eject:
+        return "on descent"
+    if burnout is not None and t > burnout:
+        return "in coast"
+    return None
+
+
 def launch_gap(flight) -> Optional[tuple[float, float]]:
     """The hole in the log that first motion fell in, or None if there was none.
 

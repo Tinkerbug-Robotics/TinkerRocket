@@ -63,8 +63,8 @@ keeping were folded into this one and the split was removed, because the two
 drifted — the same word meant different instants in each.
 
 It is the headline read. Summary card (apogee,
-  max speed, peak boost acceleration, time to apogee, flight time, landing
-  distance and bearing), a 3D flight path on satellite imagery, then interactive
+  max speed, max thrust acceleration, peak shock, time to apogee, flight time,
+  landing distance and bearing), a 3D flight path on satellite imagery, then interactive
   charts running position -> velocity -> acceleration, roll control, apogee
   detection, stability, per-sensor sample rates and log health. No static
   figures, no raw JSON dump, no parser stats.
@@ -150,6 +150,26 @@ report tries to read the framing page's storage, and it should say "blocked".
 
 `Flight.metadata` is still not read by any module; the log keeps the flyer's
 answers in the entry instead.
+
+### Acceleration on the card
+
+Two cells, because they answer two questions.
+
+- **Max thrust acceleration** is what the motor did: the highest acceleration
+  along the rocket (body X, thrust minus drag over mass) that was *held for
+  10 ms or more* under thrust. It is the peak of a 20 ms running median, so a
+  spike shorter than 10 ms cannot move it however tall it is. Each sample comes
+  from the part the flight loop reads: low-G, or high-G where the low-G one
+  railed. It used to be the burn's largest single sample, taken from the
+  high-G part for the whole burn if one sample railed. On the 10/24 Piercer
+  Mini that read 283 G, from a 2 ms ring at liftoff, for a motor that held
+  10.5 G. On 15 of the 26 archived flights with a measured burn it overstated
+  the motor by more than 2 G. The motor section's peak and thrust-to-weight
+  use the same measure.
+- **Peak shock** is the hardest knock anywhere in the flight, and when: "at
+  touchdown, 75.5 s", "at ejection", "at liftoff", named from the measured
+  events. It must hold for two samples in a row, so a single corrupt sample
+  cannot set it.
 
 ### Deployment & Recovery
 

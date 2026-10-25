@@ -31,7 +31,8 @@ PAD_WINDOW_S = 30.0
 _CARD_VALUES = {
     "Apogee": "apogee_m",
     "Max speed": "max_speed_mps",
-    "Max acceleration": "max_accel_g",
+    "Max thrust acceleration": "max_accel_g",
+    "Peak shock": "peak_shock_g",
     "Flight time": "flight_time_s",
     "Landing distance": "landing_distance_m",
 }
