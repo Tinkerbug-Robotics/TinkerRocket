@@ -1,6 +1,10 @@
-/* Main-thread UI logic for the post-flight analysis web tool. */
+/* Main-thread UI logic for the post-flight analysis web tool.
 
-"use strict";
+   A module: the flight log (logui.js and the modules under it) is imported
+   here, and the analysis hands each finished report to it. */
+
+import { showLocalReport } from "./reports.js";
+import * as logui from "./logui.js";
 
 const el = (id) => document.getElementById(id);
 
@@ -30,8 +34,14 @@ let runStartMs = 0;
 let runTimer = null;
 let reportBlobUrl = null;
 let currentBinStem = "flight";
+let currentBinName = null;
+let lastFacts = null;
+let keptFiles = [];
+let keptRocketName = "";
 
-const worker = new Worker("worker.js");
+// Started on the first visit to the analyze view rather than on page load: a
+// link to someone's public log should not download a Python runtime.
+let worker = null;
 
 // ---------- startup progress ----------
 
@@ -84,6 +94,8 @@ function beginRun(label) {
   running = true;
   errorBox.hidden = true;
   resultPanel.hidden = true;
+  logui.hideEntry();
+  lastFacts = null;
   runPanel.hidden = false;
   moduleList.innerHTML = "";
   runStatus.textContent = `Analyzing ${label}…`;
@@ -137,7 +149,15 @@ function showError(message) {
 
 // ---------- worker messages ----------
 
-worker.onmessage = (ev) => {
+function startEngine() {
+  if (worker) return;
+  el("engine-badge").hidden = false;
+  worker = new Worker("worker.js");
+  worker.onmessage = onWorkerMessage;
+  worker.onerror = onWorkerError;
+}
+
+function onWorkerMessage(ev) {
   const msg = ev.data;
   switch (msg.type) {
     case "status":
@@ -153,6 +173,9 @@ worker.onmessage = (ev) => {
       endRun();
       runStatus.textContent = `Report ready in ${((performance.now() - runStartMs) / 1000).toFixed(1)}s`;
       showReport(msg.html);
+      const facts = { ...(lastFacts || {}) };
+      facts.file = facts.file || currentBinName;
+      logui.offerEntry({ html: msg.html, facts, files: keptFiles, rocketName: keptRocketName });
       break;
     }
     case "error":
@@ -165,9 +188,9 @@ worker.onmessage = (ev) => {
       showError(msg.message);
       break;
   }
-};
+}
 
-worker.onerror = (ev) => {
+function onWorkerError(ev) {
   const text = `Worker error: ${ev.message || "unknown"} (${ev.filename}:${ev.lineno})`;
   if (!engineReady) {
     setEngineFailed(text);
@@ -176,7 +199,7 @@ worker.onerror = (ev) => {
   endRun();
   runStatus.textContent = "Failed";
   showError(text);
-};
+}
 
 function handleProgress(msg) {
   switch (msg.kind) {
@@ -194,6 +217,9 @@ function handleProgress(msg) {
     case "module_done":
       finishModuleRow(JSON.parse(msg.detail));
       break;
+    case "facts":
+      lastFacts = JSON.parse(msg.detail);
+      break;
     case "render_start":
       runStatus.textContent = "Rendering report (encoding figures and charts)…";
       break;
@@ -202,72 +228,17 @@ function handleProgress(msg) {
 
 // ---------- report display ----------
 
-// Registered once, best-effort. Everything still works without it except the 3D
-// globe — see sw.js for why a blob: URL cannot render one.
-let swReady = null;
-if ("serviceWorker" in navigator) {
-  swReady = navigator.serviceWorker
-    .register("sw.js")
-    .then(() => navigator.serviceWorker.ready)
-    .catch(() => null);
-}
-
-// Whether the worker is actually in front of our requests. Deliberately checked
-// when a report is ready rather than at registration: on a first visit the
-// worker installs, activates and calls clients.claim() over several ticks, and
-// sampling `controller` before that lands reads false for a worker that is about
-// to control the page — which then serves the report from a blob and loses the
-// globe for no reason.
-async function swControlling() {
-  if (!swReady || !(await swReady)) return false;
-  if (navigator.serviceWorker.controller) return true;
-  await new Promise((resolve) => {
-    const done = setTimeout(resolve, 3000);
-    navigator.serviceWorker.addEventListener(
-      "controllerchange",
-      () => { clearTimeout(done); resolve(); },
-      { once: true }
-    );
-  });
-  return !!navigator.serviceWorker.controller;
-}
-
-// A real same-origin URL for the generated report, or null if the worker is not
-// available (private windows and older browsers both land here). CesiumJS builds
-// a viewer on a blob: document, fetches its imagery, and then renders a black
-// canvas forever; served from a normal path the identical bytes render.
-async function reportUrl(html) {
-  try {
-    if (!(await swControlling())) return null;
-    const url = new URL(`report/${Date.now()}/${currentBinStem}.html`, location.href).toString();
-    const cache = await caches.open("tinkerrocket-reports");
-    await cache.put(
-      url,
-      new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } })
-    );
-    return url;
-  } catch (err) {
-    return null;
-  }
-}
-
 async function showReport(html) {
   resultPanel.hidden = false;
-
-  // The download always comes from a blob: the file is being handed to the user,
-  // not rendered, so its origin is irrelevant and a blob needs no cache entry.
-  // Old URLs are intentionally never revoked mid-session: an "Open full page" tab
-  // may still resolve one on reload. All report URLs die with this page.
-  reportBlobUrl = URL.createObjectURL(new Blob([html], { type: "text/html" }));
-  downloadBtn.href = reportBlobUrl;
-  downloadBtn.download = `${currentBinStem}.html`;
+  reportBlobUrl = true;
   resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
-
-  const served = await reportUrl(html);
-  reportFrame.src = served || reportBlobUrl;
-  openBtn.href = served || reportBlobUrl;
+  // Old URLs are intentionally never revoked mid-session: an "Open in tab" tab
+  // may still resolve one on reload. All report URLs die with this page.
+  const served = await showLocalReport(html, currentBinStem, {
+    frame: reportFrame, open: openBtn, download: downloadBtn,
+  });
   // Say so rather than letting the reader wonder why one section is black.
-  globeNote.hidden = !!served;
+  globeNote.hidden = served;
 }
 
 // ---------- file intake ----------
@@ -323,6 +294,12 @@ function runFiles(fileEntries, rocketName) {
     return;
   }
   const binEntry = bins[0];
+  currentBinName = binEntry.name;
+  keptRocketName = rocketName;
+  // The buffers are transferred to the worker and gone from here after the
+  // postMessage, so the log keeps its own copies: the dropped File where there
+  // is one (a reference, not a copy), a Blob of the bytes otherwise.
+  keptFiles = fileEntries.map((f) => ({ name: f.name, blob: f.blob || new Blob([f.buffer]) }));
   // One report level, so nothing to choose. Same filename the CLI writes, so a
   // downloaded report sits alongside one generated locally without colliding.
   const level = "flight";
@@ -355,7 +332,7 @@ function intakeFileList(fileList) {
     let entries;
     try {
       entries = await Promise.all(
-        Array.from(fileList).map(async (f) => ({ name: f.name, buffer: await f.arrayBuffer() }))
+        Array.from(fileList).map(async (f) => ({ name: f.name, buffer: await f.arrayBuffer(), blob: f }))
       );
     } catch (err) {
       showError(
@@ -430,3 +407,35 @@ sampleBtn.addEventListener("click", () => {
 });
 
 updateControls();
+
+// ---------- views ----------
+
+const VIEWS = ["analyze", "flights", "flight", "pilots", "pilot"];
+
+/* #/                        analyze a flight
+   #/flights                 my saved flights
+   #/flights/<id>            one saved flight
+   #/pilots                  public logs
+   #/pilots/<login>          one flyer's log
+   #/pilots/<login>/<id>     one public flight — the link a flyer shares */
+function route() {
+  const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean).map((p) => {
+    try { return decodeURIComponent(p); } catch (err) { return ""; }
+  });
+  let view = "analyze";
+  if (parts[0] === "flights") view = parts[1] ? "flight" : "flights";
+  else if (parts[0] === "pilots") view = parts[2] ? "flight" : parts[1] ? "pilot" : "pilots";
+  for (const v of VIEWS) el(`view-${v}`).hidden = v !== view;
+  const tab = view === "analyze" ? "analyze" : parts[0];
+  for (const a of document.querySelectorAll("#nav a")) a.classList.toggle("current", a.dataset.view === tab);
+  if (view === "analyze") startEngine();
+  el("engine-badge").hidden = view !== "analyze";
+  if (view !== "analyze") {
+    logui.render(view, parts);
+    window.scrollTo(0, 0);
+  }
+}
+
+logui.onCountChange((n) => { el("nav-count").textContent = n ? `(${n})` : ""; });
+window.addEventListener("hashchange", route);
+route();

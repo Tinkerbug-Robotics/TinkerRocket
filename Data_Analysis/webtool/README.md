@@ -8,7 +8,9 @@ no server-side processing, flight data never leaves their machine.
 ## How it works
 
 - `index.html` / `app.js` — drop zone, live per-module progress list, report
-  viewer (iframe), download button.
+  viewer (iframe), download button, and the hash router for the views below.
+- `flightlog.js`, `store.js`, `github.js`, `logui.js`, `reports.js` — the
+  flight log (see [Flight log](#flight-log)). ES modules, no build step.
 - `worker.js` — a Web Worker that loads Pyodide v0.29.1 from the jsDelivr CDN,
   loads numpy/pandas/matplotlib/jinja2, unpacks `payload/flight_report_src.zip`
   into the virtual filesystem, and runs the same code path as
@@ -67,18 +69,77 @@ It is the headline read. Summary card (apogee,
   detection, stability, per-sensor sample rates and log health. No static
   figures, no raw JSON dump, no parser stats.
 
-### Flight metadata
+### Flight log
 
-`Flight.metadata` holds facts the log cannot know, keyed by name. Nothing reads
-it today. It was fed by two entry-screen fields — liftoff mass and motor
-designation — which existed only to unlock the Motor Performance section; both
-the fields and the section were removed, because two inputs between dropping a
-log and reading a report is two too many. Recorded as a potential enhancement in
-[#750](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/750), which is
-also where the reasoning behind the removed figures lives.
+A report needs nothing typed. Once it is ready the page offers **Add to your
+flight log**, a short form under the progress list. It is optional, and the
+report is already showing beneath it. The columns follow the hand-kept
+spreadsheet it replaces: Date, Rocket, Motor, Club/Location, Computer, Max Alt,
+Max Speed, Outcome, Notes. **Export CSV** writes them in that order.
 
-The attribute and the worker's pass-through are kept deliberately: they are the
-whole cost of bringing that section back.
+- **Read from the log.** `flight_report/log_entry.py` runs in the worker after
+  the analysis modules: the liftoff time from the GNSS clock (the file name if
+  there is none), the pad position (median of the fixes in the 30 s before
+  first motion), the board revision and firmware commit from the settings
+  frame, and the summary card's apogee, speed, acceleration, flight time and
+  landing distance. Logs older than settings frame v9 carry no board byte, so
+  the board shows as "not recorded" rather than a guess.
+- **Typed by the flyer.** Motor (suggested from motors already in the log, and
+  parsed loosely for its impulse class and delay), location, outcome
+  (success / partial / failure) and notes.
+- **Location is suggested, never forced.** If an earlier flight in the log was
+  within 2 km, its name comes first. The flyer's "BARC" beats any map's
+  "Hopewell Township, NJ". Otherwise the pad is reverse-geocoded through
+  OpenStreetMap's Nominatim. Typing replaces either. A saved flight that already
+  has a name is not geocoded again.
+
+**My flights** keeps saved flights in IndexedDB in this browser, each with its
+report and, by default, the flight's own files (the `.bin`, its `.json` and any
+base-station log; the flight's `.csv` is derived from the `.bin` and left out).
+Clearing the site's data deletes them, which is why publishing and CSV export
+exist.
+
+#### Public logs
+
+There is no server, so a public log lives in the flyer's own **public GitHub
+repository named `tinkerrocket-flight-log`**:
+
+```
+flightlog.json                  every entry; the one source of truth
+README.md                       the same log as a table, regenerated each publish
+flights/<id>/report.html
+flights/<id>/data/<file>        the flight's files, if the flyer shares them
+```
+
+- **Reading needs no sign-in.** Public logs lists every repository with that
+  name through GitHub's repository search (ten searches a minute without a
+  token), and reads each index from `raw.githubusercontent.com`. Any flight has
+  a shareable link, `#/pilots/<login>/<id>`, and opening one does not start the
+  Python engine.
+- **Writing uses a fine-grained token** that the flyer creates for that one
+  repository with Contents: Read and write. GitHub pre-fills the form from the
+  link on the page. It is kept in this browser's localStorage and sent only to
+  `api.github.com`. Each publish is one commit through the Git Data API (blobs,
+  tree, commit, then a ref update that is not forced). If another browser
+  published in between, the update fails, and the client rereads the index and
+  tries again rather than dropping that flight. An edit to the notes re-sends
+  the index and README, not the 9 MB report.
+- **Public reports render from the flyer's own GitHub Pages origin**
+  (`<login>.github.io/tinkerrocket-flight-log/…`), which the flyer switches on
+  once. The local report frame is same-origin with this page, and a report is
+  someone else's HTML with scripts, so rendered there it could read this page's
+  saved flights and the viewer's token. `github.io` is on the public suffix
+  list, so a flyer's Pages site is a different site from ours. The Pages URL
+  is computed from the login and never read from the index. Entries from a
+  public index are coerced to plain strings and numbers, and ids and file names
+  are checked against strict patterns before they reach a URL.
+
+`dev/mock_github.py` stands in for the API, raw and Pages hosts so all of this
+can be driven locally (instructions in its docstring). It seeds a flyer whose
+report tries to read the framing page's storage, and it should say "blocked".
+
+`Flight.metadata` is still not read by any module; the log keeps the flyer's
+answers in the entry instead.
 
 ### Deployment & Recovery
 

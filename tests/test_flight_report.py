@@ -1747,3 +1747,36 @@ def test_globe_reads_the_logged_origin_before_rebuilding_it() -> None:
     # A pre-#834 snapshot with no convergence flag still yields the origin.
     assert globe._logged_reference({"Snapshot": [{"ref_lat": 40.1, "ref_lon": -105.2, "ref_alt_m": 1500.0}]})[0] == (40.1, -105.2, 1500.0, None)
 
+
+
+def test_log_facts_read_the_flight_log_columns_from_the_log() -> None:
+    """The web tool's flight log fills these from the log, not from the flyer.
+
+    The sample flight predates the board-revision byte (settings frame v3), so
+    the board stays None — "not recorded", which is the truth — while the
+    firmware, the GNSS liftoff time and the pad still come through. The pad is
+    CENJARS, and the numbers are the summary card's own.
+    """
+    import json
+
+    from flight_report.flight import Flight
+    from flight_report.log_entry import log_facts
+
+    if not SAMPLE_BIN.exists():
+        pytest.skip(f"Sample flight missing: {SAMPLE_BIN}")
+    facts = log_facts(Flight.from_bin(SAMPLE_BIN))
+    json.dumps(facts)  # handed to JavaScript as JSON, so it must be plain JSON
+
+    assert facts["file"] == SAMPLE_BIN.name
+    assert facts["date_source"] == "gnss"
+    # Liftoff by the receiver's clock, which is not the file name's 17:45:32:
+    # the entry's date is when the rocket flew, from the clock that knows.
+    assert facts["date_utc"] == "2026-07-05T17:44:15Z"
+    assert abs(facts["pad"]["lat"] - 40.16307) < 1e-4
+    assert abs(facts["pad"]["lon"] - -74.08066) < 1e-4
+    assert facts["firmware"] == "0c8c132" and facts["firmware_dirty"] is False
+    assert facts["settings_version"] == 3
+    assert facts["board"] is None and facts["board_asserted"] is None
+    assert facts["apogee_m"] == pytest.approx(357.1, abs=0.5)
+    assert facts["max_speed_mps"] == pytest.approx(97.9, abs=0.5)
+    assert facts["flight_time_s"] == pytest.approx(75.2, abs=0.2)

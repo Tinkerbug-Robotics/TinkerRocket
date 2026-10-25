@@ -20,6 +20,8 @@
     font-size: 16px;
   }
   * { box-sizing: border-box; }
+  /* Every hidden element really hides, including ones a rule gives display:flex. */
+  [hidden] { display: none !important; }
   body {
     margin: 0;
     background: var(--bg);
@@ -71,7 +73,7 @@
 
   .controls { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-top: 1rem; }
   .controls label { color: var(--muted); font-size: .9rem; }
-  input[type="text"], select {
+  input[type="text"], input[type="password"], select {
     background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
     border-radius: 8px; padding: .45rem .7rem; font-size: .95rem;
   }
@@ -121,22 +123,136 @@
   #staged strong { font-weight: 600; }
   .linky { background: none; border: 0; color: var(--accent); cursor: pointer;
            font: inherit; padding: 0; text-decoration: underline; }
+
+  /* ---- views ---- */
+  nav { display: flex; gap: .25rem; flex-wrap: wrap; margin: 0 0 1.25rem;
+        border-bottom: 1px solid var(--line); }
+  nav a { color: var(--muted); text-decoration: none; padding: .5rem .85rem;
+          border-bottom: 2px solid transparent; margin-bottom: -1px; font-weight: 500; }
+  nav a:hover { color: var(--text); }
+  nav a.current { color: var(--text); border-bottom-color: var(--accent); }
+  nav .count { font-size: .75rem; color: var(--muted); margin-left: .2rem; }
+  a { color: var(--accent); }
+  .hint { color: var(--muted); font-size: .85rem; }
+  .muted { color: var(--muted); }
+  .row { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
+  .spacer { flex: 1; }
+  .panel-head { display: flex; gap: .75rem; align-items: baseline; flex-wrap: wrap; margin-bottom: .75rem; }
+  .panel-head h2 { margin: 0; flex: 1; }
+
+  /* ---- the log-entry form ---- */
+  .form-grid { display: grid; grid-template-columns: 7.5rem 1fr; gap: .6rem .9rem; align-items: start; }
+  .form-grid > label { color: var(--muted); font-size: .9rem; padding-top: .45rem; }
+  .form-grid input[type="text"], .form-grid textarea { width: 100%; }
+  textarea {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: .45rem .7rem; font: inherit; font-size: .95rem;
+    min-height: 4.5rem; resize: vertical;
+  }
+  input[type="text"]:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .chips { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .4rem; }
+  .chip { background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+          border-radius: 999px; padding: .15rem .65rem; font-size: .82rem; cursor: pointer; font-weight: 500; }
+  .chip .muted { margin-left: .3rem; }
+  .chip.on { border-color: var(--accent); }
+  .facts { display: flex; flex-wrap: wrap; gap: .35rem 1.25rem; padding-top: .4rem; font-size: .92rem; }
+  .facts span b { font-weight: 600; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg label { padding: .35rem .8rem; cursor: pointer; color: var(--muted); font-size: .9rem; border-left: 1px solid var(--line); }
+  .seg label:first-child { border-left: 0; }
+  .seg input { display: none; }
+  .seg label:has(input:checked) { background: var(--panel-2); color: var(--text); }
+  .seg label.success:has(input:checked) { color: var(--ok); }
+  .seg label.partial:has(input:checked) { color: var(--warn); }
+  .seg label.failure:has(input:checked) { color: var(--err); }
+  .checks { display: flex; flex-direction: column; gap: .3rem; font-size: .9rem; }
+  .checks label { display: flex; gap: .45rem; align-items: baseline; }
+  .form-actions { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; margin-top: 1rem; }
+  .status { font-size: .9rem; color: var(--muted); }
+  .status.ok { color: var(--ok); }
+  .status.err { color: var(--err); }
+
+  /* ---- log tables ---- */
+  .table-wrap { overflow-x: auto; margin: 0 -.25rem; }
+  table.log { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  table.log th { text-align: left; color: var(--muted); font-weight: 500; font-size: .8rem;
+                 padding: .4rem .5rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  table.log td { padding: .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.log td.place { min-width: 8rem; }
+  table.log td.num, table.log th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  table.log tbody tr { cursor: pointer; }
+  table.log tbody tr:hover td { background: var(--panel-2); }
+  table.log .rocket { font-weight: 600; }
+  table.log .note { color: var(--muted); font-size: .8rem; max-width: 22rem;
+                    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  table.log .nowrap { white-space: nowrap; }
+  .outcome { font-size: .8rem; font-weight: 600; }
+  .outcome.success { color: var(--ok); }
+  .outcome.partial { color: var(--warn); }
+  .outcome.failure { color: var(--err); }
+  .pub { font-size: .8rem; color: var(--muted); white-space: nowrap; }
+  .pub.on { color: var(--ok); }
+  .empty { color: var(--muted); padding: 1rem 0; }
+  .units { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; font-size: .8rem; }
+  .units button { background: none; color: var(--muted); border: 0; border-radius: 0; padding: .25rem .6rem; font-weight: 500; }
+  .units button.on { background: var(--panel-2); color: var(--text); }
+
+  /* ---- public log set-up ---- */
+  ol.setup { margin: .5rem 0 0; padding-left: 1.25rem; }
+  ol.setup li { margin: .45rem 0; }
+  .setup-token { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .5rem; }
+  .setup-token input { flex: 1; min-width: 12rem; }
+
+  /* ---- one flight ---- */
+  .back { display: inline-block; margin-bottom: .75rem; text-decoration: none; }
+  .panel h2.flight-title, .flight-title { margin: 0; font-size: 1.35rem; }
+  .flight-sub { color: var(--muted); margin: .15rem 0 1rem; }
+  dl.meta { display: grid; grid-template-columns: max-content 1fr; gap: .35rem 1.25rem; margin: 0; font-size: .92rem; }
+  dl.meta dt { color: var(--muted); }
+  dl.meta dd { margin: 0; white-space: pre-wrap; }
+  .actions { display: flex; gap: .6rem; flex-wrap: wrap; margin-top: 1rem; }
+  .report-frame { width: 100%; height: 80vh; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+
+  /* ---- flyers ---- */
+  .pilots { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: .75rem; }
+  .pilot { display: flex; gap: .75rem; align-items: center; background: var(--panel-2);
+           border: 1px solid var(--line); border-radius: 10px; padding: .7rem .85rem;
+           color: var(--text); text-decoration: none; }
+  .pilot:hover { border-color: var(--accent); }
+  .pilot img, .avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--line); flex: none; }
+  .pilot .who { font-weight: 600; }
+  .pilot .what { color: var(--muted); font-size: .8rem; }
+  .pilot-head { display: flex; gap: .9rem; align-items: center; margin-bottom: 1rem; }
+  .pilot-head .avatar { width: 56px; height: 56px; }
+  @media (max-width: 700px) {
+    .form-grid { grid-template-columns: 1fr; gap: .25rem; }
+    .form-grid > label { padding-top: .5rem; }
+  }
 </style>
 </head>
 <body>
 <main>
   <header>
     <h1>🚀 TinkerRocket Post-Flight Analysis</h1>
-    <span id="engine-badge" class="badge">starting engine…</span>
+    <span id="engine-badge" class="badge" hidden>starting engine…</span>
   </header>
+  <nav id="nav">
+    <a href="#/" data-view="analyze">Analyze a flight</a>
+    <a href="#/flights" data-view="flights">My flights <span class="count" id="nav-count"></span></a>
+    <a href="#/pilots" data-view="pilots">Public logs</a>
+  </nav>
+
+  <div class="view" id="view-analyze">
   <!-- Precise wording matters: the analysis really is local, but the report's
        recovery map fetches basemap tiles for the launch area, which tells the
        tile server roughly where you flew. Claiming nothing leaves the machine
        would be false. -->
   <p class="tagline">
-    Your flight log is analyzed entirely in your browser and is never uploaded.
-    The recovery map loads map imagery from OpenStreetMap, which reveals the
-    launch area to that service; everything else works offline.
+    Your flight log is analyzed entirely in your browser and is never uploaded
+    unless you publish it. The recovery map loads map imagery from
+    OpenStreetMap, and naming the launch site asks OpenStreetMap for the
+    nearest town, which reveals the launch area to that service; everything
+    else works offline.
   </p>
 
   <section class="panel" id="startup-panel">
@@ -176,6 +292,17 @@
     <ul id="module-list"></ul>
   </section>
 
+  <!-- Offered after the report, never before it: the report needs nothing
+       typed, and #750 removed the last fields that stood in its way. Everything
+       the log can say about itself is already filled in. -->
+  <section class="panel" id="log-panel" hidden>
+    <div class="panel-head">
+      <h2>Add to your flight log</h2>
+      <span class="hint">Optional. Saved in this browser; publish it if you want others to see it.</span>
+    </div>
+    <form id="log-form" autocomplete="off"></form>
+  </section>
+
   <section class="panel" id="result-panel" hidden>
     <div id="result-head">
       <h2>Report</h2>
@@ -197,11 +324,46 @@
     <iframe id="report-frame" sandbox="allow-scripts allow-same-origin"></iframe>
   </section>
 
+  </div>
+
+  <div class="view" id="view-flights" hidden>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>My flights</h2>
+        <span class="units" data-units></span>
+        <button type="button" class="secondary" id="export-csv">Export CSV</button>
+      </div>
+      <p class="hint" id="flights-where">Kept in this browser. Clearing the site's data deletes them, so publish or export the ones you want to keep.</p>
+      <div id="flights-list"></div>
+    </section>
+    <section class="panel" id="public-panel"></section>
+  </div>
+
+  <div class="view" id="view-flight" hidden></div>
+
+  <div class="view" id="view-pilots" hidden>
+    <section class="panel">
+      <div class="panel-head"><h2>Public flight logs</h2></div>
+      <p class="hint">Flyers who publish their TinkerRocket log. Each log lives in its owner's GitHub repository named <code>tinkerrocket-flight-log</code>.</p>
+      <form class="row" id="pilot-lookup">
+        <input type="text" id="pilot-name" placeholder="GitHub username" aria-label="GitHub username">
+        <button type="submit" class="secondary">Open log</button>
+      </form>
+      <div id="pilots-list" style="margin-top:1rem"></div>
+    </section>
+    <section class="panel" id="recent-panel" hidden>
+      <div class="panel-head"><h2>Latest public flights</h2><span class="units" data-units></span></div>
+      <div id="recent-list"></div>
+    </section>
+  </div>
+
+  <div class="view" id="view-pilot" hidden></div>
+
   <footer>
     Runs the repository's <code>flight_report</code> Python package unmodified via
     <a href="https://pyodide.org" style="color:var(--accent)">Pyodide</a> (Python compiled to WebAssembly).
   </footer>
 </main>
-<script src="app.js"></script>
+<script type="module" src="app.js"></script>
 </body>
 </html>
