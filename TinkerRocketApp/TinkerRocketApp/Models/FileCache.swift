@@ -104,10 +104,12 @@ struct CachedFlight: Identifiable {
             return Self.localDisplayFormatter.string(from: date)
         }
         // Fallback: strip .csv extension for cleaner display
-        if name.hasSuffix(".csv") {
-            return String(name.dropLast(4))
+        var stem = name.hasSuffix(".csv") ? String(name.dropLast(4)) : name
+        // A unit-qualified cache name reads "flight_3 · a1cae150".
+        if let unit = FileCache.unitID(inCacheName: name) {
+            stem = String(stem.dropLast(unit.count + 2)) + " · " + unit
         }
-        return name
+        return stem
     }
 
     /// Parse UTC timestamp from filename
@@ -151,6 +153,63 @@ struct CachedFlight: Identifiable {
 nonisolated class FileCache {
 
     static let shared = FileCache()
+
+    /// The name a board's flight is cached under on this phone. Boards name
+    /// logs on their own — `flight_<n>.bin` when no phone has synced the
+    /// time — so two boards can both write `flight_3.bin`, and caching by
+    /// that name alone let the second download replace the first board's
+    /// flight. The unit ID keeps them apart: "flight_3.bin" from a1cae150 is
+    /// cached as "flight_3__a1cae150.bin", and its CSV and summary follow.
+    /// Only rocket flights (`flight_*`); base-station logs keep their names.
+    /// An empty or malformed unit ID (identity not yet received) keeps the
+    /// board's name, as before.
+    static func cacheName(for boardFilename: String, unitID: String) -> String {
+        guard boardFilename.hasPrefix("flight_"),
+              (1...16).contains(unitID.count),
+              unitID.allSatisfy(\.isHexDigit) else { return boardFilename }
+        let stem = (boardFilename as NSString).deletingPathExtension
+        let ext = (boardFilename as NSString).pathExtension
+        if stem.hasSuffix("__" + unitID) { return boardFilename }
+        return stem + "__" + unitID + (ext.isEmpty ? "" : "." + ext)
+    }
+
+    /// The unit ID a cache name carries ("flight_3__a1cae150.csv" ->
+    /// "a1cae150"), or nil for a name cached before unit IDs were added.
+    static func unitID(inCacheName name: String) -> String? {
+        let stem = (name as NSString).deletingPathExtension
+        guard let r = stem.range(of: "__", options: .backwards) else { return nil }
+        let id = stem[r.upperBound...]
+        return (1...16).contains(id.count) && id.allSatisfy(\.isHexDigit) ? String(id) : nil
+    }
+
+    /// The name this unit's copy of a board file is cached under: the
+    /// unit-qualified name, or the board's own name for a copy downloaded
+    /// before unit IDs were added that is not known to be another unit's.
+    /// Lookups use this; a download always writes the qualified name.
+    func cachedName(for boardFilename: String, unitID: String) -> String {
+        let qualified = Self.cacheName(for: boardFilename, unitID: unitID)
+        guard qualified != boardFilename,
+              getCachedBinary(for: qualified) == nil,
+              getCachedCSV(for: qualified) == nil,
+              legacyCopy(of: boardFilename, couldBeFrom: unitID)
+        else { return qualified }
+        return boardFilename
+    }
+
+    /// Whether a flight cached under the board's own name (downloaded before
+    /// unit IDs were added to cache names) may be this unit's. Yes unless its
+    /// summary says it came from another unit: an old copy with no `source`
+    /// keeps reading as downloaded, as it did before.
+    func legacyCopy(of boardFilename: String, couldBeFrom unitID: String) -> Bool {
+        guard getCachedBinary(for: boardFilename) != nil || getCachedCSV(for: boardFilename) != nil
+        else { return false }
+        guard let url = getCachedSummary(for: boardFilename),
+              let data = try? Data(contentsOf: url),
+              let id = try? JSONDecoder().decode(FlightSummaryIdentity.self, from: data),
+              let owner = id.source?.unit_id
+        else { return true }
+        return owner == unitID
+    }
 
     /// #1658: the FC's board for a flight whose summary predates
     /// `settings.board`, read from the first flight-settings frame in its log.

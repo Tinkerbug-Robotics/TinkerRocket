@@ -115,3 +115,15 @@ def test_no_source_no_group(tmp_path):
                  "Source") is None
     assert group(settings.analyze_system(flight_with(tmp_path, {"source": "Beetle"})),
                  "Source") is None
+
+
+def test_a_phone_cached_name_keeps_its_date(tmp_path):
+    # The apps cache flights as "<board name>__<unit id>"; a file shared from
+    # the phone carries it, and the report still reads the date (and pairs the
+    # sidecar by the same stem).
+    bin_path = tmp_path / "flight_20261024_161431__a1cae150.bin"
+    shutil.copy(BIN, bin_path)
+    bin_path.with_suffix(".json").write_text(json.dumps({"source": SOURCE}))
+    flight = Flight.from_bin(bin_path)
+    assert flight.date is not None and flight.date.strftime("%Y%m%d_%H%M%S") == "20261024_161431"
+    assert group(settings.analyze_system(flight), "Source") is not None

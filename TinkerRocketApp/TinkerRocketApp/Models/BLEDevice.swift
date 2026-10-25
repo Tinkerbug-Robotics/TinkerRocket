@@ -2054,7 +2054,8 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             let received = downloadedData.count
             let listed = downloadExpectedSize
             print("[DOWNLOAD] \(filename): EOF-confirmed \(received) B, listed \(listed) B — kept, \(listed - received) B short")
-            FileCache.shared.recordShortDownload(filename, listedSize: UInt32(listed),
+            FileCache.shared.recordShortDownload(FileCache.cacheName(for: filename, unitID: unitID),
+                                                 listedSize: UInt32(listed),
                                                  receivedSize: UInt32(received))
             let note = "\(filename): the board ended the transfer after \(received) of the \(listed) bytes it "
                 + "listed (\(listed - received) short) and the file was kept. The missing bytes are ones the "
@@ -2217,12 +2218,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             // file and disabling the download button (downloadButtonDisabled
             // returns true for .completed), so the operator could not re-pull
             // the log in that session.
-            if FileCache.shared.isFlightCached(filename, expectedSize: deviceFile.size) {
+            let name = cachedName(for: filename)
+            if FileCache.shared.isFlightCached(name, expectedSize: deviceFile.size) {
                 return .completed
             }
             // Cached but the wrong size: treat as not downloaded so it can be
             // retried, rather than trusting a stale .completed.
-            if FileCache.shared.isFlightCached(filename) {
+            if FileCache.shared.isFlightCached(name) {
                 return .notDownloaded
             }
         }
@@ -2314,6 +2316,9 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             }
             return
         }
+        // Cached under the unit-qualified name, so another board's file of the
+        // same name can never replace this one. Rows stay keyed by the board's.
+        let cacheName = FileCache.cacheName(for: filename, unitID: unitID)
         downloadFile(filename) { [weak self] binaryURL in
             guard let self = self, let binaryURL = binaryURL else {
                 DispatchQueue.main.async { self?.downloadStates[filename] = .failed; completion(false) }
@@ -2321,13 +2326,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             }
             let cachedBinaryURL: URL
             do {
-                cachedBinaryURL = try FileCache.shared.cacheBinary(at: binaryURL, for: filename)
+                cachedBinaryURL = try FileCache.shared.cacheBinary(at: binaryURL, for: cacheName)
             } catch {
                 DispatchQueue.main.async { self.downloadStates[filename] = .failed; completion(false) }
                 return
             }
             DispatchQueue.main.async { self.downloadStates[filename] = .generatingCSV; self.csvGenerationProgress = 0.0 }
-            self.generateAndCacheCSV(from: cachedBinaryURL, filename: filename,
+            self.generateAndCacheCSV(from: cachedBinaryURL, filename: cacheName,
                                      source: source) { [weak self] csvURL in
                 DispatchQueue.main.async {
                     if csvURL != nil {
@@ -2345,11 +2350,18 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             guard let csvURL = FileCache.shared.getCachedDirectCSV(filename) else { return nil }
             return [csvURL]
         }
-        guard let binaryURL = FileCache.shared.getCachedBinary(for: filename),
-              let csvURL = FileCache.shared.getCachedCSV(for: filename) else { return nil }
+        let name = cachedName(for: filename)
+        guard let binaryURL = FileCache.shared.getCachedBinary(for: name),
+              let csvURL = FileCache.shared.getCachedCSV(for: name) else { return nil }
         var files = [binaryURL, csvURL]
-        if let summaryURL = FileCache.shared.getCachedSummary(for: filename) { files.append(summaryURL) }
+        if let summaryURL = FileCache.shared.getCachedSummary(for: name) { files.append(summaryURL) }
         return files
+    }
+
+    /// The name this unit's copy of a board file is cached under
+    /// (FileCache.cachedName(for:unitID:)).
+    func cachedName(for boardFilename: String) -> String {
+        FileCache.shared.cachedName(for: boardFilename, unitID: unitID)
     }
 
     func rebuildDownloadStates(for filenames: [String]) {
@@ -2365,7 +2377,8 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                     }
                 } else {
                     if let deviceFile = self.files.first(where: { $0.name == filename }),
-                       FileCache.shared.isFlightCached(filename, expectedSize: deviceFile.size) {
+                       FileCache.shared.isFlightCached(self.cachedName(for: filename),
+                                                       expectedSize: deviceFile.size) {
                         self.downloadStates[filename] = .completed
                     }
                 }

@@ -22,7 +22,10 @@ if str(_PARENT) not in sys.path:
 from plot_flight_data_mini import parse_binary_file  # noqa: E402
 
 
-_FLIGHT_STEM_RE = re.compile(r"^flight_(?:(\d{8})_(\d{6})|recovered_(\d+))$")
+# The phone apps cache a flight under the board's name plus its unit ID
+# ("flight_20261024_161431__a1cae150.bin") so two boards' same-named logs stay
+# apart; a file shared from a phone carries it.
+_FLIGHT_STEM_RE = re.compile(r"^flight_(?:(\d{8})_(\d{6})|recovered_(\d+))(?:__[0-9a-fA-F]{1,16})?$")
 
 
 # Streams timestamped against something other than the flight clock. They are
