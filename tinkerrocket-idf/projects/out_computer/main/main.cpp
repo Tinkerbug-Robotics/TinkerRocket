@@ -24,6 +24,7 @@
 #include "soc/rtc_cntl_reg.h"  // Brownout detector control
 #include "soc/rtc.h"            // #541: rtc_clk_* for the 32k-crystal second chance
 #include "esp_private/esp_clk.h"  // #541: esp_clk_slowclk_cal_set after a late 32k start
+#include "esp_private/cache_utils.h"  // #1659: spi_flash_cache_enabled() in the I2S RX ISR
 #include <esp_timer.h>          // #541: boot USB-enumeration light-sleep grace timer
 #include <hal/gpio_ll.h>        // #1553: the INA_ALERT ISR drops OC_ARM_EN from IRAM
 #include <soc/gpio_struct.h>
@@ -3192,6 +3193,25 @@ static volatile uint32_t rx_ring_overflow_drops = 0; // ring full in ISR callbac
 // with the parser_iter_max_us measurement so we can tell whether bytes
 // were lost at the DMA→rx_ring stage or whether the parser fell behind.
 static volatile uint32_t rx_ring_peak_fill = 0;
+
+// #1659: flash stalls as the I2S RX ISR sees them. The ISR is IRAM-safe
+// (CONFIG_I2S_ISR_IRAM_SAFE), so it keeps running while a flash operation has
+// the cache off, and spi_flash_cache_enabled() then reads false. Erases are
+// the long ones; programs and NVS reads turn it off for far less than a buffer.
+// A stretch runs from the last callback that found the cache ON to the latest
+// one that found it off, which is right to within one DMA buffer (~2.9 ms)
+// either way; a flash op shorter than a buffer can go unseen. The max is reset
+// by each LogBufferStats record, but a stretch still open keeps growing from
+// its own start, so a stall that straddles two records reads in full in the
+// second.
+static bool     rx_cb_cache_off       = false;  // ISR only: the last callback found it off
+static int64_t  rx_cb_prev_us         = 0;      // ISR only
+static int64_t  rx_flash_off_since_us = 0;      // ISR only
+static volatile uint32_t rx_flash_stall_max_us = 0;
+// A previous callback older than this means the link was down (an OTA flip,
+// a channel rebuild), not that a stall began then. Above one DMA buffer at
+// either FC clock (2.9 ms at 88200, 5.8 at 44100).
+static constexpr int64_t kRxCbStaleUs = 20000;
 static uint64_t parser_resync_drops = 0;
 static uint64_t parser_len_drops = 0;
 
@@ -6343,6 +6363,23 @@ static IRAM_ATTR bool i2sRecvCallback(const uint8_t* buf, size_t len, void* user
     // contention #1116/i2s-flip exists to avoid.
     dma_cb_raw_count = dma_cb_raw_count + 1;
 
+    // #1659: ahead of the pause gate too. A flash stall is a fact about the
+    // link whether or not the frames go on. Both calls are in IRAM.
+    const int64_t now_us = esp_timer_get_time();
+    if (!spi_flash_cache_enabled())
+    {
+        if (!rx_cb_cache_off)
+            rx_flash_off_since_us = (now_us - rx_cb_prev_us <= kRxCbStaleUs) ? rx_cb_prev_us : now_us;
+        rx_cb_cache_off = true;
+        const uint32_t span = (uint32_t)(now_us - rx_flash_off_since_us);
+        if (span > rx_flash_stall_max_us) rx_flash_stall_max_us = span;
+    }
+    else
+    {
+        rx_cb_cache_off = false;
+    }
+    rx_cb_prev_us = now_us;
+
     if (i2s_ingest_paused) return false;
 
     dma_cb_count = dma_cb_count + 1;  // volatile: '++' deprecated in C++20 (-Wvolatile)
@@ -9189,10 +9226,33 @@ static void printStats()
     prev_msg_count_unknown = msg_count_unknown;
     prev_msg_count_logonly = msg_count_logonly;   // #569
 
+    // I2S RX-side stall instrumentation (#104 follow-up).  Snapshot the
+    // counters first, then reset them so the next window measures peaks
+    // since this print only.  Together they catch the FC→OC→bin loss path:
+    //   rx_ovf      - bytes silently lost at DMA→rx_ring boundary
+    //                 (the silent killer; nothing else flags this)
+    //   rx_peak     - high-water of rx_ring fill since last print
+    //                 (high but not overflowing = parser barely keeping up)
+    //   parser_max  - longest single parseRxStream() call since last print
+    //                 (catches parser stalls that the LFS/NAND timers miss)
+    //   flash_stall - longest flash-cache-off stretch the RX ISR saw (#1659)
+    // Taken before the LogBufferStats record below, which logs the same
+    // window (#1659): until then they reached only the console.
+    static uint32_t s_prev_rx_ovf = 0;
+    const uint32_t  cur_rx_ovf  = rx_ring_overflow_drops;
+    const uint32_t  d_rx_ovf    = cur_rx_ovf - s_prev_rx_ovf;
+    s_prev_rx_ovf = cur_rx_ovf;
+    const uint32_t  cur_rx_peak = rx_ring_peak_fill;
+    rx_ring_peak_fill = 0;
+    const uint32_t  cur_parser  = parser_iter_max_us;
+    parser_iter_max_us = 0;
+    const uint32_t  cur_flash_stall = rx_flash_stall_max_us;
+    rx_flash_stall_max_us = 0;
+
     // Persist a LogBufferStats snapshot once per stats interval (~1 Hz) into
     // the flight log so post-flight tooling can read the per-flight peak
-    // without needing VERBOSE_DEBUG serial captures.  Cheap (28 B payload +
-    // 8 B frame overhead = 36 B/s) and enqueueFrame() internally drops the
+    // without needing VERBOSE_DEBUG serial captures.  Cheap (52 B payload +
+    // 8 B frame overhead = 60 B/s) and enqueueFrame() internally drops the
     // frame when no session/file is open, so off-session traffic is zero.
     {
         LogBufferStatsData lbs = {};
@@ -9203,6 +9263,13 @@ static void printStats()
         lbs.ring_overruns = s.ring_overruns;
         lbs.ring_drop_oldest_bytes = s.ring_drop_oldest_bytes;
         lbs.ring_bad_sof_clears = s.ring_bad_sof_clears;
+        // #1659: the link's receive side, the same window as LOG TIMING.
+        lbs.rx_peak = cur_rx_peak;
+        lbs.rx_overflow_bytes = cur_rx_ovf;
+        lbs.rx_bad_crc = frames_bad_crc;
+        lbs.rx_resync_bytes = (uint32_t)parser_resync_drops;
+        lbs.parser_max_us = cur_parser;
+        lbs.flash_stall_max_us = cur_flash_stall;
 
         uint8_t lbs_frame[MAX_FRAME];
         size_t  lbs_frame_len = 0;
@@ -9382,25 +9449,6 @@ static void printStats()
     }
     } // End VERBOSE_DEBUG
 
-    // I2S RX-side stall instrumentation (#104 follow-up).  Snapshot the
-    // counters first, then reset them so the next window measures peaks
-    // since this print only.  Three signals together catch the
-    // FC→OC→bin loss path:
-    //   rx_ovf      - bytes silently lost at DMA→rx_ring boundary
-    //                 (the silent killer; nothing else flags this)
-    //   rx_peak     - high-water of rx_ring fill since last print
-    //                 (high but not overflowing = parser barely keeping up)
-    //   parser_max  - longest single parseRxStream() call since last print
-    //                 (catches parser stalls that the LFS/NAND timers miss)
-    static uint32_t s_prev_rx_ovf = 0;
-    const uint32_t  cur_rx_ovf  = rx_ring_overflow_drops;
-    const uint32_t  d_rx_ovf    = cur_rx_ovf - s_prev_rx_ovf;
-    s_prev_rx_ovf = cur_rx_ovf;
-    const uint32_t  cur_rx_peak = rx_ring_peak_fill;
-    rx_ring_peak_fill = 0;
-    const uint32_t  cur_parser  = parser_iter_max_us;
-    parser_iter_max_us = 0;
-
     // Always-on LFS/NAND stall instrumentation — prints the peak duration of
     // each potentially-slow LittleFS/NAND op observed since the last stats
     // window.  Complements the per-op ESP_LOGW("STALL: …") that fires live
@@ -9409,7 +9457,7 @@ static void printStats()
              "write=%lu sync=%lu erase=%lu open=%lu close=%lu "
              "activate=%lu clr_ring=%lu iter=%lu us  syncs=%lu erases=%lu ring_peak=%lu "
              "bad_blocks=%lu skips=%lu  "
-             "rx_ovf=%lu rx_peak=%lu parser_max=%lu spiw=%lu spih=%lu us  "
+             "rx_ovf=%lu rx_peak=%lu parser_max=%lu flash_stall=%lu spiw=%lu spih=%lu us  "
              "dpg=%lu dby=%lu pop=%lu wsum=%lu m388=%lu/%lu us",
              (unsigned long)s.write_max_us,
              (unsigned long)s.sync_max_us,
@@ -9427,6 +9475,7 @@ static void printStats()
              (unsigned long)d_rx_ovf,
              (unsigned long)cur_rx_peak,
              (unsigned long)cur_parser,
+             (unsigned long)cur_flash_stall,     // #1659
              (unsigned long)s.spi_wait_max_us,   // #398: parser starvation source
              (unsigned long)s.spi_hold_max_us,   // #398
              (unsigned long)s.drain_pages,       // #510: window SUMS — a burst of

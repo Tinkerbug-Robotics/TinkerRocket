@@ -259,7 +259,7 @@ MSG_EXPECTED_LEN = {
     MSG_POWER:            (10, 14),  # #850: v2 appends cam_ma + servo_ma
     MSG_START_LOGGING:     None,  # variable / no payload
     MSG_END_FLIGHT:        None,
-    MSG_LOG_BUFFER_STATS:  28,    # LogBufferStatsData
+    MSG_LOG_BUFFER_STATS:  (28, 52),  # LogBufferStatsData v1 / v2 (#1659: +I2S link receive health)
     MSG_LORA_UPLINK:       13,   # sizeof(LoRaUplinkData)
     MSG_PYRO_FAULT_TRIP:   13,   # sizeof(PyroFaultTripData)
     MSG_LORA:              (22, 55),  # #850: SLOW / FAST frames; sweep on struct-size changes (#227)
@@ -564,6 +564,13 @@ FMT_STATUS_QUERY = '<B H H hh B hhh'
 FMT_STATUS_QUERY_B2R = '<BB hhhh'  # b2r_code, b2r_mode, quat×10000 (payload[16:26])
 # LogBufferStatsData: 28 bytes (time_us + 6× uint32 ring counters)
 FMT_LOG_BUFFER_STATS = '<I IIIIII'
+# v2, 52 bytes (#1659): + rx_peak, rx_overflow_bytes, rx_bad_crc,
+# rx_resync_bytes, parser_max_us, flash_stall_max_us — the FC->OC link's
+# receive side and the longest flash stall the RX ISR rode through.
+FMT_LOG_BUFFER_STATS_V2 = '<I IIIIII IIIIII'
+LOG_BUFFER_STATS_V2_FIELDS = ("rx_peak", "rx_overflow_bytes", "rx_bad_crc",
+                              "rx_resync_bytes", "parser_max_us",
+                              "flash_stall_max_us")
 
 # RawGnssEkfData (RAW_GNSS_EKF_MSG 0x96), 90 bytes packed (#1600 phase 4): the
 # raw-GNSS shadow filter -- a tightly coupled GNSS/INS filter run beside the
@@ -1965,9 +1972,13 @@ def parse_binary_file(filepath):
 
             elif msg_type == MSG_LOG_BUFFER_STATS:
                 # OC self-emitted ring snapshot, ~1 Hz while logging.
-                # See LogBufferStatsData in RocketComputerTypes.h.
-                fields = struct.unpack(FMT_LOG_BUFFER_STATS, payload)
-                records["LogBufferStats"].append({
+                # See LogBufferStatsData in RocketComputerTypes.h. #1659:
+                # dispatch on length; a v1 (28 B) record reports the link
+                # fields as None, NOT 0 -- that firmware never measured them.
+                v2 = (len(payload) == 52)
+                fields = struct.unpack(
+                    FMT_LOG_BUFFER_STATS_V2 if v2 else FMT_LOG_BUFFER_STATS, payload)
+                rec = {
                     "time_us":                fields[0],
                     "ring_size":              fields[1],
                     "ring_fill":              fields[2],
@@ -1975,7 +1986,10 @@ def parse_binary_file(filepath):
                     "ring_overruns":          fields[4],
                     "ring_drop_oldest_bytes": fields[5],
                     "ring_bad_sof_clears":    fields[6],
-                })
+                }
+                for i, name in enumerate(LOG_BUFFER_STATS_V2_FIELDS):
+                    rec[name] = fields[7 + i] if v2 else None
+                records["LogBufferStats"].append(rec)
 
             elif msg_type == MSG_PYRO_FAULT_TRIP:
                 # OC self-emitted fault-current trip (#1553). OC clock, so it

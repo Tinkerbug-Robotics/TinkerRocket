@@ -3250,8 +3250,9 @@ static constexpr uint8_t FLIGHT_SETTINGS_MSG = 0xE1;
 // metrics so post-flight analysis can judge how much MRAM the flight
 // actually used and whether a smaller / cheaper chip would have fit
 // (the MR25H10 is 128 KB; payload here lets us compare against the real
-// high-water mark per flight).  See LogBufferStatsData.
-static constexpr uint8_t LOG_BUFFER_STATS_MSG = 0xE2;  // OC→self: 28-byte LogBufferStatsData, ~1 Hz, straight to the log
+// high-water mark per flight).  v2 (#1659) adds the I2S link's receive
+// health and the longest flash stall.  See LogBufferStatsData.
+static constexpr uint8_t LOG_BUFFER_STATS_MSG = 0xE2;  // OC→self: 52-byte LogBufferStatsData (28 before #1659), ~1 Hz, straight to the log
 
 // FC→OC over I2C during setup_fc only: 4-byte FcBootStatusData.  Sent before
 // the I2S telemetry stream exists, which is the whole point — see
@@ -4393,9 +4394,34 @@ typedef struct __attribute__((packed))
     uint32_t ring_overruns;            // count of overrun events since boot
     uint32_t ring_drop_oldest_bytes;   // cumulative bytes dropped from tail since boot
     uint32_t ring_bad_sof_clears;      // ring-clear events from corrupt-tail recovery
+
+    // v2 (#1659): the receive side of the FC->OC I2S link, so a hole in the
+    // log can be pinned on a flash stall, the parser or the link from the log
+    // alone. The 2026-10-24 RIM66 gap could only be attributed by inference.
+    uint32_t rx_peak;                  // I2S rx_ring high-water since the previous
+                                       //   record, bytes: 352.8 B per ms the
+                                       //   parser was held off at 88200
+    uint32_t rx_overflow_bytes;        // bytes the RX ISR dropped on a full
+                                       //   rx_ring, since boot
+    uint32_t rx_bad_crc;               // link frames that failed their CRC, since boot
+    uint32_t rx_resync_bytes;          // bytes skipped hunting for a frame start,
+                                       //   since boot
+    uint32_t parser_max_us;            // longest single parse pass since the
+                                       //   previous record
+    uint32_t flash_stall_max_us;       // longest stretch the RX ISR ran with the
+                                       //   flash cache off (a flash op; long ones
+                                       //   are erases)
+                                       //   since the previous record, to within one
+                                       //   DMA buffer (~2.9 ms); 0 = none seen
 } LogBufferStatsData;
-static_assert(sizeof(LogBufferStatsData) == 28,
-              "LogBufferStatsData must be 28 bytes");
+static_assert(sizeof(LogBufferStatsData) == 52,
+              "LogBufferStatsData must be 52 bytes (v2, #1659: +link receive health)");
+
+// Payload length of the pre-#1659 frame. Kept so decoders can accept both,
+// and sent by the legacy single-MCU mini, which has no I2S link to report.
+static constexpr size_t SIZE_OF_LOG_BUFFER_STATS_V1 = 28;
+static_assert(offsetof(LogBufferStatsData, rx_peak) == SIZE_OF_LOG_BUFFER_STATS_V1,
+              "v1 LogBufferStatsData must remain a byte-exact prefix of v2");
 
 // --- Guidance Telemetry Data (sent at ~10 Hz during guided coast) ---
 // Logged to the flight log as GUIDANCE_TELEM_MSG (0xCA). NOTE: the field

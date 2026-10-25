@@ -95,7 +95,7 @@ this list is CI-enforced for uniqueness.
 | `0xEA` | `SENSOR_CAL_READ` | OC → FC | OC→FC: publish current NVS sensor cal |
 | `0xE0` | `SENSOR_CAL_STATUS_MSG` | FC → OC | FC→OC: SensorCalStatusData |
 | `0xE1` | `FLIGHT_SETTINGS_MSG` | FC → OC |  |
-| `0xE2` | `LOG_BUFFER_STATS_MSG` | OC → log | OC→self: 28-byte LogBufferStatsData, ~1 Hz, straight to the log |
+| `0xE2` | `LOG_BUFFER_STATS_MSG` | OC → log | OC→self: 52-byte LogBufferStatsData (28 before #1659), ~1 Hz, straight to the log |
 | `0xE3` | `OTA_BEGIN_PENDING` | OC → FC | OC→FC: OTA_BEGIN_MSG payload follows |
 | `0xE4` | `OTA_BEGIN_MSG` | FC → OC | [size:4 LE][sha256:32] = 36 bytes |
 | `0xE5` | `OTA_FINISH_CMD` | OC → FC | OC→FC: finalize + verify + reboot |
@@ -173,6 +173,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `GnssClockData` | 68 |
 | `LoRaFastData` | 55 |
 | `LoRaFastData` | 55 |
+| `LogBufferStatsData` | 52 |
 | `NonSensorData` | 52 |
 | `NonSensorData` | 52 |
 | `HighGCalApplyData` | 49 |
@@ -189,7 +190,6 @@ that changes size fails the build rather than corrupting a log silently.
 | `MagCalStatusData` | 36 |
 | `PadContextAnt` | 33 |
 | `HeadingFitData` | 32 |
-| `LogBufferStatsData` | 28 |
 | `BaseStationStorageStatsData` | 26 |
 | `GnssCheckData` | 24 |
 | `PyroConfigData` | 24 |
