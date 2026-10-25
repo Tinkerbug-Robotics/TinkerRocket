@@ -29,6 +29,7 @@ are all here and reachable — see the note at the top of `charts.py`.
 
 from __future__ import annotations
 
+import numbers
 from typing import Any, Optional
 
 from ..catalog import KIND_BOOL, KIND_COUNTER, KIND_ENUM, build
@@ -115,6 +116,56 @@ def _values(rows: list[dict], field: str, kind: str, decimals: int = _V_DP) -> l
     return out
 
 
+def _shape(rows: list[dict], field: str) -> str:
+    """What a channel's values are: "number", "text" or "other".
+
+    Not every field a parser writes is a reading. Newer streams carry named
+    states as text (Snapshot.gnss_admission's "held_out", PadCalStatus's
+    "idle"), and some carry a whole table per row: GNSS_SAT.sats is a list of
+    satellites, PadContext a calibration matrix, GNSS_RTCM raw bytes. The
+    catalog lists them all, and the section used to put each through float(),
+    which took the whole section down on every log that had one.
+    """
+    shape = "number"
+    for r in rows:
+        v = r.get(field)
+        if v is None:
+            continue
+        if isinstance(v, str):
+            shape = "text"
+        elif not isinstance(v, numbers.Number):
+            return "other"
+    return shape
+
+
+def _codes(rows: list[dict], field: str) -> tuple[list, list[str]]:
+    """A text channel as integer codes, numbered in the order the states first
+    appear, and the names those codes stand for.
+
+    First appearance rather than alphabetical, so a state machine's step plot
+    climbs as the flight goes on (held_out, then admitted_baro_agreed) instead
+    of jumping around in an order nobody chose.
+    """
+    levels: list[str] = []
+    index: dict[str, int] = {}
+    out: list = []
+    for r in rows:
+        v = r.get(field)
+        if v is None:
+            out.append(None)
+            continue
+        s = str(v)
+        if s not in index:
+            index[s] = len(levels)
+            levels.append(s)
+        out.append(index[s])
+    return out, levels
+
+
+def _legend(levels: list[str]) -> str:
+    return "Plotted as numbers: " + ", ".join(f"{i} = {name}" for i, name in enumerate(levels)) + "."
+
+
 def _runs(vals: list) -> list[list]:
     """[[index, value], ...] at each change, including index 0."""
     out = [[0, vals[0]]]
@@ -141,9 +192,23 @@ def _dataset(flight: Flight) -> Optional[dict[str, Any]]:
         }
 
     channels: dict[str, Any] = {}
+    skipped: list[str] = []
     for c in cat.channels:
-        vals = _values(recs[c.stream], c.field, c.meta.kind,
-                       _V_DP_BY_KEY.get(c.key, _V_DP))
+        rows = recs[c.stream]
+        shape = _shape(rows, c.field)
+        if shape == "other":
+            skipped.append(c.key)
+            continue
+        kind = c.meta.kind
+        caution = _public(c.meta.caution)
+        if shape == "text":
+            # Named states, whatever the catalog guessed for an undocumented
+            # field: step-drawn, with the names beside the plot.
+            vals, levels = _codes(rows, c.field)
+            kind = KIND_ENUM
+            caution = " ".join(x for x in (caution, _legend(levels)) if x)
+        else:
+            vals = _values(rows, c.field, kind, _V_DP_BY_KEY.get(c.key, _V_DP))
         entry: dict[str, Any] = {
             "stream": c.stream,
             "label": c.meta.label,
@@ -154,15 +219,15 @@ def _dataset(flight: Flight) -> Optional[dict[str, Any]]:
             # and says quoting a sink rate in mph "reads as an error to anyone
             # in the hobby". Omitted when it adds nothing, to save the bytes.
             "conv": c.meta.conv if c.meta.conv and c.meta.conv != c.meta.unit else "",
-            "kind": c.meta.kind,
+            "kind": kind,
             # Carried so the picker can warn in place rather than making the
             # reader go and find the inventory section.
-            "caution": _public(c.meta.caution),
+            "caution": caution,
             "shown": list(c.meta.shown_in),
         }
         if len(set(vals)) == 1:
             entry["const"] = vals[0]
-        elif c.meta.kind in (KIND_BOOL, KIND_ENUM):
+        elif kind in (KIND_BOOL, KIND_ENUM):
             entry["runs"] = _runs(vals)
         else:
             entry["y"] = vals
@@ -174,6 +239,10 @@ def _dataset(flight: Flight) -> Optional[dict[str, Any]]:
         "channels": channels,
         # Step-drawn kinds, so the panel does not have to re-derive the rule.
         "stepKinds": [KIND_BOOL, KIND_ENUM],
+        # Fields that hold a table per row rather than one value. Said in the
+        # section rather than dropped silently; the time panel pops it off
+        # before the payload ships.
+        "skipped": skipped,
     }
 
 
@@ -191,9 +260,15 @@ def analyze_time(flight: Flight) -> AnalysisResult:
         return result
 
     n_const = sum(1 for c in data["channels"].values() if "const" in c)
+    skipped = data.pop("skipped")
     result.metrics["Channels available"] = f"{len(data['channels']):,}"
     result.metrics["Held one value all flight"] = f"{n_const:,}"
     result.metrics["Streams"] = ", ".join(data["streams"])
+    if skipped:
+        result.metrics["Not plottable"] = (
+            f"{len(skipped)} field{'s' if len(skipped) != 1 else ''} hold a list or raw bytes "
+            f"in each row, not one value: {', '.join(skipped)}"
+        )
 
     data["panel"] = "time"
     data["default"] = _first_present(data["channels"], _DEFAULT_CHANNELS)
