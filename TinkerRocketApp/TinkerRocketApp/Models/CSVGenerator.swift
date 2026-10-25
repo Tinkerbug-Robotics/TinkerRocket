@@ -389,12 +389,21 @@ nonisolated class CSVGenerator {
         // surface as a thrown encode that discarded the CSV. Sanitise where
         // the numbers are made, not where they are written; Android's
         // CsvGenerator does the same so the two stay twins.
+        // #1658: the out computer's own record of which computer wrote the
+        // log, when its firmware wrote one. Repeated ~1 Hz; the last one is
+        // kept. The app adds what only it knows at download (FlightSource.merged).
+        let logSource: FlightSource? = frames
+            .last(where: { $0.type == MessageType.ocIdentity.rawValue })
+            .flatMap { try? OcIdentityData(from: $0.payload) }
+            .map(FlightSource.init(log:))
+
         return FlightSummary(
             max_altitude_m: finiteOrNil(maxPressureAlt),
             max_speed_mps: finiteOrNil(maxSpeed),
             burnout_time_s: finiteOrNil(burnoutTime),
             apogee_time_s: finiteOrNil(apogeeTime),
-            settings: flightSettings
+            settings: flightSettings,
+            source: logSource
         )
     }
 
@@ -722,10 +731,10 @@ nonisolated struct FlightSummary: Codable, Sendable {
     /// the log at launch (#165). nil for flights logged before the firmware
     /// emitted the settings frame.
     let settings: FlightSettings?
-    /// #1658: the rocket and computer this flight was downloaded from, as the
-    /// app knew them at download time. nil when the summary is generated
-    /// without a connected device, and for flights downloaded before this
-    /// existed; the converter itself never fills it.
+    /// #1658: the rocket and computer this flight came from. The converter
+    /// fills the out computer's part from the log's own record (firmware
+    /// that writes one); the app adds the rest at download. nil when neither
+    /// knows, and for flights downloaded before this existed.
     var source: FlightSource? = nil
 }
 
@@ -752,6 +761,38 @@ nonisolated struct FlightSource: Codable, Sendable, Equatable {
     var fc_gnss: String?
     /// When this phone downloaded the flight, ISO 8601 UTC.
     var downloaded_at: String?
+}
+
+extension FlightSource {
+    /// The out computer's part, from its record in the log (#1658 step 3).
+    init(log id: OcIdentityData) {
+        func text(_ s: String) -> String? { s.isEmpty ? nil : s }
+        self.init(unit_id: text(id.unit_id), unit_name: text(id.unit_name),
+                  rocket_id: Int(id.rocket_id),
+                  oc_board: id.board_rev_code == 0 ? nil : id.boardRevName,
+                  oc_fw: text(id.fw_version))
+    }
+
+    /// The log's record wins for what it knows: the computer that wrote the
+    /// log, its name and IDs as they were at the flight, its board and
+    /// firmware. The live identity at download fills the rest (the bound
+    /// profile, the flight computer, when) and anything the log lacks.
+    static func merged(log: FlightSource?, live: FlightSource?) -> FlightSource? {
+        guard let log else { return live }
+        guard let live else { return log }
+        return FlightSource(
+            unit_id: log.unit_id ?? live.unit_id,
+            unit_name: log.unit_name ?? live.unit_name,
+            rocket_profile: live.rocket_profile ?? log.rocket_profile,
+            rocket_id: log.rocket_id ?? live.rocket_id,
+            fc_board: live.fc_board ?? log.fc_board,
+            oc_board: log.oc_board ?? live.oc_board,
+            fc_fw: live.fc_fw ?? log.fc_fw,
+            oc_fw: log.oc_fw ?? live.oc_fw,
+            fc_gnss: live.fc_gnss ?? log.fc_gnss,
+            downloaded_at: live.downloaded_at ?? log.downloaded_at
+        )
+    }
 }
 
 // MARK: - Flight Settings (#165)

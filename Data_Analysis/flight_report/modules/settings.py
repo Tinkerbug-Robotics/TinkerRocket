@@ -18,8 +18,9 @@ launch (see flight_settings.py), plus the status-query block for the sensor
 mounting rotations. The sidecar .json used to be merged in as well; it is the
 app's rendering of that same frame, so it added nothing the log did not already
 say, and a log without the frame has no sidecar settings either. The one thing
-the sidecar does add is its `source` block (#1658): which rocket profile and
-computer the app downloaded the flight from, which the log cannot say.
+the sidecar does add is its `source` block (#1658): the rocket profile and
+flight computer the app saw at download. The out computer's identity comes
+from the log itself (OC_IDENTITY_MSG) when the firmware wrote it.
 """
 
 from __future__ import annotations
@@ -202,35 +203,56 @@ def _board_rev_text(fs) -> Optional[str]:
         return None      # pre-v9 log: the field was never recorded
     if name == "unknown":
         return "not recorded by this firmware"
+    return _board_text(fs["board_rev_code"])
+
+
+def _board_text(code: Optional[int]) -> Optional[str]:
+    """A board_identity byte as text, saying when it is only the image's claim."""
+    name = fsd.board_rev_name(code) if code is not None else None
+    if name is None or name == "unknown":
+        return None
     if name.endswith(" (asserted)"):
         return name[: -len(" (asserted)")] + " — asserted by the image, not provisioned"
     return name
 
 
 def _source_rows(flight: Flight) -> Rows:
-    """#1658: which rocket and computer the app downloaded this flight from,
-    from the sidecar's `source` block. Empty for a flight downloaded before the
-    app recorded it, or one with no sidecar."""
+    """#1658: which rocket and computer this flight came from.
+
+    The out computer's own record in the log (OC_IDENTITY_MSG) wins for what
+    it knows: unit, name, IDs, its board and firmware. The sidecar's `source`
+    block, written by the app at download, adds what the log cannot know (the
+    phone's rocket profile, the FC as the app saw it, when it was downloaded)
+    and covers a log from firmware that did not write the record. Empty when
+    neither exists.
+    """
+    log = flight.config.get("oc_identity") or {}
     src = flight.sidecar.get("source")
-    if not isinstance(src, dict):
+    src = src if isinstance(src, dict) else {}
+    if not log and not src:
         return []
-    computer = src.get("unit_name")
-    if src.get("unit_id"):
-        computer = f"{computer or 'unnamed'} (unit {src['unit_id']})"
-    fc_board, oc_board = src.get("fc_board"), src.get("oc_board")
-    if fc_board and oc_board and fc_board != oc_board:
-        boards = f"FC {fc_board}, OC {oc_board}"   # #773: two MCUs that disagree
-    else:
-        boards = fc_board or oc_board
+
+    def pick(log_key: str, src_key: str) -> Any:
+        return log.get(log_key) or src.get(src_key)
+
+    name, unit = pick("unit_name", "unit_name"), pick("unit_id", "unit_id")
+    computer = f"{name or 'unnamed'} (unit {unit})" if unit else name
+    rocket_id = log["rocket_id"] if log else src.get("rocket_id")
+    oc_board = _board_text(log.get("board_rev_code")) if log else src.get("oc_board")
+    recorded = {(True, True): "the log, and the app at download",
+                (True, False): "the log", (False, True): "the app at download"}
     return [
         ("Rocket profile", src.get("rocket_profile")),
         ("Computer", computer),
-        ("Rocket ID", src.get("rocket_id")),
-        ("Board (as provisioned)", boards),
+        ("Rocket ID", rocket_id),
+        ("Network ID", log.get("network_id")),
+        ("Out computer board", oc_board),
+        ("Flight computer board (as provisioned)", src.get("fc_board")),
+        ("Out computer firmware", pick("fw_version", "oc_fw")),
         ("Flight computer firmware", src.get("fc_fw")),
-        ("Out computer firmware", src.get("oc_fw")),
         ("GNSS receiver", src.get("fc_gnss")),
         ("Downloaded", src.get("downloaded_at")),
+        ("Recorded by", recorded[(bool(log), bool(src))]),
     ]
 
 
@@ -323,7 +345,7 @@ def analyze_system(flight: Flight) -> AnalysisResult:
             ("Board", _board_rev_text(fs)),
             ("Snapshot taken", f"{(fs['time_us'] - t0) / 1e6:.3f} s into the log" if t0 is not None else None),
         ])
-        _group(g, "Downloaded from", _source_rows(flight))   # #1658: beside the Board
+        _group(g, "Source", _source_rows(flight))   # #1658: beside the Board
         rate = fs["ism6_update_rate_hz"]
         rate_text = None
         if rate is not None:
@@ -347,7 +369,7 @@ def analyze_system(flight: Flight) -> AnalysisResult:
              else "Step to the next waypoint (pre-v4 firmware)"),
         ])
     else:
-        _group(g, "Downloaded from", _source_rows(flight))
+        _group(g, "Source", _source_rows(flight))
     _group(g, "Sensor mounting", _sensor_mounting_rows(flight, fs))
     if fs is not None and fs["gnss_otp_state"] is not None:
         name = fsd.gnss_otp_name(fs["gnss_otp_state"]) or "?"

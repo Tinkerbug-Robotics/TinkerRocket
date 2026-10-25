@@ -282,6 +282,22 @@ FlightSettingsData canonicalFlightSettings() {
     return s;
 }
 
+// #1658: the out computer's identity record. The unit name fills its 20 bytes
+// with no NUL and the firmware stamp is shorter than its 32, so a decoder has
+// to handle both ends: a full field and a NUL-padded one.
+OcIdentityData canonicalOcIdentity() {
+    OcIdentityData o{};
+    o.time_us = 1100000u;   // 1.1 s: inside the tiny flight's span, on the OC clock
+    o.version = OC_IDENTITY_VERSION;
+    o.network_id = 7;
+    o.rocket_id = 2;
+    o.board_rev_code = board_identity::encodeRevCode("M1", false);   // provisioned
+    std::memcpy(o.unit_id, "9e8a1b2c", sizeof(o.unit_id));
+    std::memcpy(o.unit_name, "Twenty-char unitname", sizeof(o.unit_name));
+    std::strncpy(o.fw_version, "41b2ab92-m1+20261022-1126", sizeof(o.fw_version));
+    return o;
+}
+
 MagCalStatusData canonicalMagCal() {
     MagCalStatusData m{};
     m.time_us = 777777u;
@@ -502,6 +518,22 @@ void buildLogframes(Builder& b) {
     // are 10 B forever — so both lengths stay pinned here.
     const auto pwr = canonicalPower();
     const auto pwrFull = bytesOf(pwr);
+    // #1658: the computer that wrote the log. Strings as text, the board code
+    // as its byte ("M1", provisioned).
+    {
+        const auto oid = canonicalOcIdentity();
+        auto field = [](const char* f, size_t n) { return std::string(f, strnlen(f, n)); };
+        b.add("logframes", "ocidentity_68.bin", bytesOf(oid),
+              Json().u("time_us", oid.time_us).u("version", oid.version)
+                  .u("network_id", oid.network_id).u("rocket_id", oid.rocket_id)
+                  .u("board_rev_code", oid.board_rev_code)
+                  .str("unit_id", field(oid.unit_id, sizeof(oid.unit_id)))
+                  .str("unit_name", field(oid.unit_name, sizeof(oid.unit_name)))
+                  .str("fw_version", field(oid.fw_version, sizeof(oid.fw_version)))
+                  .done(),
+              "OcIdentityData v1, msg 0x87 (#1658): OC-self, ~1 Hz while logging; "
+              "unit_name fills all 20 bytes with no NUL");
+    }
     b.add("logframes", "power_14.bin", pwrFull,
           Json().u("time_us", pwr.time_us).u("voltage_raw", pwr.voltage_raw)
               .i("current_raw", pwr.current_raw).i("soc_raw", pwr.soc_raw)
@@ -1130,8 +1162,9 @@ void buildCsvFlight(Builder& b) {
     csvQuery.mag_type = MAG_TYPE_IIS2MDC;
     append(stream, frame(OUT_STATUS_QUERY, bytesOf(csvQuery)));   // t=1.0 s (rotation config)
     append(stream, frame(FLIGHT_SETTINGS_MSG, bytesOf(canonicalFlightSettings())));
+    append(stream, frame(OC_IDENTITY_MSG, bytesOf(canonicalOcIdentity())));   // #1658
 
-    int frames = 2;
+    int frames = 3;
     for (int i = 0; i <= 188; ++i) {
         const uint32_t t_ms = 1200 + 100u * i;
         const uint32_t t_us = t_ms * 1000u;

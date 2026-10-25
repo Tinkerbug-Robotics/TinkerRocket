@@ -2140,7 +2140,9 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                         DispatchQueue.main.async { self?.csvGenerationProgress = progress }
                     }
                 )
-                summary.source = source   // #1658
+                // #1658: the log's own record of its computer wins; the live
+                // identity adds the profile, the FC and when.
+                summary.source = FlightSource.merged(log: summary.source, live: source)
                 let summaryTempName: String
                 if filename.hasSuffix(".bin") {
                     summaryTempName = String(filename.dropLast(4)) + ".json"

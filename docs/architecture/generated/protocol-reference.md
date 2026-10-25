@@ -22,7 +22,7 @@ Start-of-frame bytes from [`TR_I2C_Interface.h`](https://github.com/Tinkerbug-Ro
 
 ## FC ↔ OC message types
 
-118 codes. The dispatch on both ends is a flat first-match chain, so
+119 codes. The dispatch on both ends is a flat first-match chain, so
 two handlers sharing a value means the second is silently dead — which is why
 this list is CI-enforced for uniqueness.
 
@@ -96,6 +96,7 @@ this list is CI-enforced for uniqueness.
 | `0xE0` | `SENSOR_CAL_STATUS_MSG` | FC → OC | FC→OC: SensorCalStatusData |
 | `0xE1` | `FLIGHT_SETTINGS_MSG` | FC → OC |  |
 | `0xE2` | `LOG_BUFFER_STATS_MSG` | OC → log | OC→self: 52-byte LogBufferStatsData (28 before #1659), ~1 Hz, straight to the log |
+| `0x87` | `OC_IDENTITY_MSG` | OC → log | OC→self: 68-byte OcIdentityData, ~1 Hz while logging, straight to the log |
 | `0xE3` | `OTA_BEGIN_PENDING` | OC → FC | OC→FC: OTA_BEGIN_MSG payload follows |
 | `0xE4` | `OTA_BEGIN_MSG` | FC → OC | [size:4 LE][sha256:32] = 36 bytes |
 | `0xE5` | `OTA_FINISH_CMD` | OC → FC | OC→FC: finalize + verify + reboot |
@@ -147,7 +148,7 @@ this list is CI-enforced for uniqueness.
 | `0x8C` | `ANTENNA_CONFIG_PENDING` | OC → FC | OC→FC: payload follows as ANTENNA_CONFIG_MSG |
 | `0x8D` | `ANTENNA_CONFIG_MSG` | OC → FC | OC→FC: 7-byte AntennaOffsetConfigData |
 
-> 54 of these 118 codes carry no comment in the header,
+> 54 of these 119 codes carry no comment in the header,
 > so the Notes column is blank for them. Direction is inferred from the
 > `_PENDING` / `_CMD` / `_MSG` suffix in that case, which is a convention,
 > not a guarantee. A trailing `// OC→FC: what it does` on the constant
@@ -171,6 +172,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `RollProfileData` | 76 |
 | `AccelCalHighGStatus` | 74 |
 | `GnssClockData` | 68 |
+| `OcIdentityData` | 68 |
 | `LoRaFastData` | 55 |
 | `LoRaFastData` | 55 |
 | `LogBufferStatsData` | 52 |

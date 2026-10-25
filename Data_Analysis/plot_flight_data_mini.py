@@ -183,6 +183,7 @@ MSG_LOG_BUFFER_STATS  = 0xE2  # OC self-emitted ring-buffer snapshot (~1 Hz)
 MSG_LORA              = 0xF1
 MSG_LORA_UPLINK       = 0xF9  # OC-self-emitted uplink RSSI/SNR record
 MSG_PYRO_FAULT_TRIP   = 0x94  # OC-self-emitted pyro fault-current trip, two per trip (#1553)
+MSG_OC_IDENTITY       = 0x87  # OC-self-emitted identity of the computer that wrote the log (#1658)
 MSG_GUIDANCE_TELEM    = 0xCA  # GuidanceTelemData, ~10 Hz during guided coast
 MSG_FLIGHT_SETTINGS   = 0xE1  # FlightSettingsData, once at PRELAUNCH->INFLIGHT
 
@@ -231,6 +232,7 @@ MSG_NAMES = {
     MSG_LORA:             "LoRa",
     MSG_LORA_UPLINK:      "LoRaUplink",
     MSG_PYRO_FAULT_TRIP:  "PyroFaultTrip",
+    MSG_OC_IDENTITY:      "OcIdentity",
     MSG_GUIDANCE_TELEM:   "Guidance",
 }
 
@@ -262,6 +264,7 @@ MSG_EXPECTED_LEN = {
     MSG_LOG_BUFFER_STATS:  (28, 52),  # LogBufferStatsData v1 / v2 (#1659: +I2S link receive health)
     MSG_LORA_UPLINK:       13,   # sizeof(LoRaUplinkData)
     MSG_PYRO_FAULT_TRIP:   13,   # sizeof(PyroFaultTripData)
+    MSG_OC_IDENTITY:       68,   # sizeof(OcIdentityData)
     MSG_LORA:              (22, 55),  # #850: SLOW / FAST frames; sweep on struct-size changes (#227)
     MSG_GUIDANCE_TELEM:    (15, 19),  # legacy (mislabeled) / current (+fin cmds)
 }
@@ -1061,6 +1064,40 @@ def decode_gnss_check(payload):
 # arm consent, phase 2 when it releases, carrying the peak over the whole hold.
 FMT_PYRO_FAULT_TRIP = '<IhHHBBB'
 SIZE_OF_PYRO_FAULT_TRIP = struct.calcsize(FMT_PYRO_FAULT_TRIP)  # 13
+
+# OcIdentityData (#1658), 68 bytes: which out computer wrote the log, written
+# by the OC itself ~1 Hz while logging. Strings are fixed fields, NUL-padded,
+# and not NUL-terminated when full. board_rev_code is board_identity's byte,
+# as in FlightSettingsData (flight_report.flight_settings.board_rev_name).
+FMT_OC_IDENTITY = '<I BBBB 8s 20s 32s'
+SIZE_OF_OC_IDENTITY = struct.calcsize(FMT_OC_IDENTITY)  # 68
+
+
+def _fixed_str(raw):
+    return raw.split(b"\0", 1)[0].decode("utf-8", errors="replace")
+
+
+def decode_oc_identity(payload):
+    """OcIdentityData payload -> dict, or None if the size is wrong.
+
+    Kept out of `records` like the pyro trips: it is on the OC clock and says
+    the same thing every second, so it lands in config["oc_identity"] (the
+    last one in the log).
+    """
+    if len(payload) != SIZE_OF_OC_IDENTITY:
+        return None
+    (time_us, version, network_id, rocket_id, board_rev_code,
+     unit_id, unit_name, fw_version) = struct.unpack(FMT_OC_IDENTITY, payload)
+    return {
+        "time_us":        time_us,
+        "version":        version,
+        "network_id":     network_id,
+        "rocket_id":      rocket_id,
+        "board_rev_code": board_rev_code,
+        "unit_id":        _fixed_str(unit_id),
+        "unit_name":      _fixed_str(unit_name),
+        "fw_version":     _fixed_str(fw_version),
+    }
 # INA230 shunt LSB 2.5 uV across R72 (2 mOhm) = 1.25 mA/count = 800 counts/A.
 PYRO_FAULT_COUNTS_PER_A = 800.0
 # The shunt register saturates at INT16_MAX: the real current was at least this.
@@ -1405,6 +1442,9 @@ def parse_binary_file(filepath):
         "flight_settings_frames": [],
         # #1553: decoded PYRO_FAULT_TRIP_MSG records, in log order (OC clock).
         "pyro_fault_trips": [],
+        # #1658: the out computer that wrote the log (the last OC_IDENTITY_MSG),
+        # or None for a log written before the firmware recorded it.
+        "oc_identity": None,
     }
 
     stats = {
@@ -1997,6 +2037,13 @@ def parse_binary_file(filepath):
                 rec = decode_pyro_fault_trip(payload)
                 if rec is not None:
                     config["pyro_fault_trips"].append(rec)
+
+            elif msg_type == MSG_OC_IDENTITY:
+                # #1658: the computer that wrote this log; OC clock, repeated
+                # ~1 Hz, so the last one is kept.
+                rec = decode_oc_identity(payload)
+                if rec is not None:
+                    config["oc_identity"] = rec
 
             elif msg_type == MSG_GUIDANCE_TELEM and msg_len in (15, 19):
                 # PN guidance telemetry, ~10 Hz during guided coast.

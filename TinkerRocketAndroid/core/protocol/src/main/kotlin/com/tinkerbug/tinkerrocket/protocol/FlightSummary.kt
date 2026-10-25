@@ -78,10 +78,10 @@ public data class FlightSummary(
      */
     val settings: FlightSettings?,
     /**
-     * #1658: the rocket and computer this flight was downloaded from, as the
-     * app knew them at download time. null when the summary is generated
-     * without a connected device, and for flights downloaded before this
-     * existed; the converter itself never fills it.
+     * #1658: the rocket and computer this flight came from. The converter
+     * fills the out computer's part from the log's own record (firmware that
+     * writes one); the app adds the rest at download. null when neither
+     * knows, and for flights downloaded before this existed.
      */
     val source: FlightSource? = null,
 ) {
@@ -193,6 +193,39 @@ public data class FlightSource(
     )
 
     public companion object {
+        /** The out computer's part, from its record in the log (#1658 step 3). */
+        public fun fromLog(id: OcIdentityData): FlightSource = FlightSource(
+            unitId = id.unitId.ifEmpty { null },
+            unitName = id.unitName.ifEmpty { null },
+            rocketId = id.rocketId,
+            ocBoard = if (id.boardRevCode == 0) null else id.boardRevName,
+            ocFw = id.fwVersion.ifEmpty { null },
+        )
+
+        /**
+         * The log's record wins for what it knows: the computer that wrote the
+         * log, its name and IDs as they were at the flight, its board and
+         * firmware. The live identity at download fills the rest (the bound
+         * profile, the flight computer, when) and anything the log lacks.
+         * Same as iOS `FlightSource.merged`.
+         */
+        public fun merged(log: FlightSource?, live: FlightSource?): FlightSource? {
+            if (log == null) return live
+            if (live == null) return log
+            return FlightSource(
+                unitId = log.unitId ?: live.unitId,
+                unitName = log.unitName ?: live.unitName,
+                rocketProfile = live.rocketProfile ?: log.rocketProfile,
+                rocketId = log.rocketId ?: live.rocketId,
+                fcBoard = live.fcBoard ?: log.fcBoard,
+                ocBoard = log.ocBoard ?: live.ocBoard,
+                fcFw = live.fcFw ?: log.fcFw,
+                ocFw = log.ocFw ?: live.ocFw,
+                fcGnss = live.fcGnss ?: log.fcGnss,
+                downloadedAt = live.downloadedAt ?: log.downloadedAt,
+            )
+        }
+
         public fun fromJsonObject(obj: JsonObject): FlightSource {
             fun s(key: String): String? =
                 (obj[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
