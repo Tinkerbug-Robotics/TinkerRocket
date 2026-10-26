@@ -526,7 +526,10 @@ class AccelCalScreenTest {
         compose.onNodeWithText("Saved and read back").assertExists()
         compose.onNodeWithText("High-g alignment saved and read back").assertExists()
         // The read, six windows, the offset and its read-back, then the high-g and its own.
-        assertEquals(listOf(77, 78, 78, 78, 78, 78, 78, 76, 77, 80, 77), fc.accelCommands)
+        // The first two 77s are the session's calibration reads (#1629): on
+        // the rocket readback above, and again when the rail came up with the
+        // magnetometer and gyro still unanswered. The screen's own run follows.
+        assertEquals(listOf(77, 77) + listOf(77, 78, 78, 78, 78, 78, 78, 76, 77, 80, 77), fc.accelCommands)
         val m = requireNotNull(fc.hgMatrix) { "no high-g alignment stored" }
         assertEquals(1 / 0.9921, m[0].toDouble(), 2e-4)   // the low-g's scale over the high-g's
         assertEquals(2, fc.hgSource)

@@ -121,6 +121,14 @@ public data class KnownDevice(
     val pendingName: String? = null,
     val pendingNetworkID: Int? = null,
     val pendingRocketID: Int? = null,
+
+    /**
+     * #1629: what this board's flight computer holds for calibration, as last
+     * read over Bluetooth; null = never read.  JSON key `calibration`, an
+     * object of optional `mag`, `accel`, `gyro`, `highGAligned` (Bool) and
+     * `readAt` (reference-date seconds), like iOS `BoardCalibration`.
+     */
+    val calibration: BoardCalibration? = null,
 ) {
     public val id: String get() = unitID
 
@@ -170,6 +178,16 @@ public class KnownDeviceStore(
         _devices.value.firstOrNull { it.unitID == unitID }
 
     /**
+     * The registry record for a rocket heard as [rocketID] on [networkID], by
+     * its last REPORTED identity (iOS `rocket(networkID:rocketID:name:)`).
+     * Two records claiming the pair is the shared-ID case: [name] (the
+     * relayed unit name) picks between them, and with no name to go on the
+     * answer is null rather than a guess.
+     */
+    public fun rocket(networkID: Int, rocketID: Int, name: String? = null): KnownDevice? =
+        rocketIn(_devices.value, networkID, rocketID, name)
+
+    /**
      * Gates the first-connect provisioning sheet.  Empty unitID reads as
      * provisioned so the sheet never pops before the identity readback.
      */
@@ -195,6 +213,17 @@ public class KnownDeviceStore(
     }
 
     // MARK: - Readback intake
+
+    /**
+     * #1629: fold one calibration answer from the board into its record.
+     * Each reply answers some of the fields, so only those change.
+     */
+    public fun deviceDidReportCalibration(unitID: String, reading: BoardCalibration) {
+        if (unitID.isEmpty()) return
+        withRecord(unitID) { rec ->
+            rec.copy(calibration = (rec.calibration ?: BoardCalibration()).merged(reading))
+        }
+    }
 
     /**
      * Fold a config_identity readback into the registry, then push any
@@ -421,7 +450,26 @@ public class KnownDeviceStore(
         pendingName = optString(obj, "pendingName"),
         pendingNetworkID = optU8(obj, "pendingNetworkID"),
         pendingRocketID = optU8(obj, "pendingRocketID"),
+        calibration = decodeCalibration(obj["calibration"]),
     )
+
+    /** Tolerant: a calibration this app cannot read is dropped, never the record. */
+    private fun decodeCalibration(el: kotlinx.serialization.json.JsonElement?): BoardCalibration? {
+        val obj = el as? JsonObject ?: return null
+        return try {
+            BoardCalibration(
+                mag = optBool(obj, "mag"),
+                accel = optBool(obj, "accel"),
+                gyro = optBool(obj, "gyro"),
+                highGAligned = optBool(obj, "highGAligned"),
+                readAtMs = optDouble(obj, "readAt")?.let {
+                    ((it + KnownDevice.REFERENCE_DATE_EPOCH_SECONDS) * 1000.0).toLong()
+                },
+            )
+        } catch (_: MalformedRecord) {
+            null
+        }
+    }
 
     private fun prim(obj: JsonObject, key: String): JsonPrimitive? {
         val el = obj[key] ?: return null
@@ -483,11 +531,43 @@ public class KnownDeviceStore(
                         d.pendingName?.let { put("pendingName", it) }
                         d.pendingNetworkID?.let { put("pendingNetworkID", it) }
                         d.pendingRocketID?.let { put("pendingRocketID", it) }
+                        d.calibration?.let { c ->
+                            put(
+                                "calibration",
+                                buildJsonObject {
+                                    c.mag?.let { put("mag", it) }
+                                    c.accel?.let { put("accel", it) }
+                                    c.gyro?.let { put("gyro", it) }
+                                    c.highGAligned?.let { put("highGAligned", it) }
+                                    c.readAtMs?.let {
+                                        put("readAt", it / 1000.0 - KnownDevice.REFERENCE_DATE_EPOCH_SECONDS)
+                                    }
+                                },
+                            )
+                        }
                     },
                 )
             }
         }
         storage.saveDevicesJson(arr.toString())
+    }
+
+    public companion object {
+        /** [rocket] over a list a screen has already collected. */
+        public fun rocketIn(
+            devices: List<KnownDevice>,
+            networkID: Int,
+            rocketID: Int,
+            name: String? = null,
+        ): KnownDevice? {
+            if (rocketID <= 0) return null
+            val matches = devices.filter {
+                it.deviceType != BleDeviceType.BASE_STATION && it.networkID == networkID && it.rocketID == rocketID
+            }
+            if (matches.size <= 1) return matches.firstOrNull()
+            if (name.isNullOrEmpty()) return null
+            return matches.filter { it.name == name }.singleOrNull()
+        }
     }
 
     private fun tolerantDeviceType(obj: JsonObject): BleDeviceType {

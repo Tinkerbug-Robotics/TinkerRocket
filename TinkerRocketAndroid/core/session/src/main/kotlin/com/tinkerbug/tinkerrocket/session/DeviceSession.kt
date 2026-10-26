@@ -19,6 +19,7 @@ import com.tinkerbug.tinkerrocket.protocol.GuidanceTargetEcho
 import com.tinkerbug.tinkerrocket.protocol.IMUOrientationMode
 import com.tinkerbug.tinkerrocket.protocol.ImuOrientMsg
 import com.tinkerbug.tinkerrocket.protocol.MagCalStatus
+import com.tinkerbug.tinkerrocket.protocol.MagCalSubType
 import com.tinkerbug.tinkerrocket.protocol.OtaStatusUpdate
 import com.tinkerbug.tinkerrocket.protocol.PadCalStatus
 import com.tinkerbug.tinkerrocket.protocol.PyroChannelConfig
@@ -337,6 +338,27 @@ public class DeviceSession(
     public val accelCalStatus: StateFlow<AccelCalStatus?> = _accelCalStatus.asStateFlow()
 
     /**
+     * #1629: what THIS board holds for calibration, read from the board on
+     * connect ([requestCalibrationStatus]) and kept current by the status
+     * frames the flight computer republishes after every calibration it
+     * stores.  Fields stay null until the board answers.  Folded into the
+     * registry ([KnownDeviceStore.deviceDidReportCalibration]) so My Devices
+     * and a relayed rocket's section can say it too.
+     */
+    private val _calibration = MutableStateFlow(BoardCalibration())
+    public val calibration: StateFlow<BoardCalibration> = _calibration.asStateFlow()
+
+    /**
+     * Until when an IDLE mag-cal frame answers OUR read.  The calibrator also
+     * sends IDLE when a calibration session ends, which says nothing about
+     * what is stored, so an IDLE counts as "no magnetometer calibration" only
+     * inside this window.  Session dispatcher only.
+     */
+    private var magCalReadUntilMs = 0L
+    private var calibrationRequested = false
+    private var lastRailOn = false
+
+    /**
      * Every 0xD1 frame as it arrives.  Two refusals are byte-identical and a
      * read-back can equal the save's own answer, so a StateFlow would swallow
      * exactly the frames the round trips below wait for ([sensorCalFrames]
@@ -633,6 +655,10 @@ public class DeviceSession(
         // next connection may be another board, or this one reflashed.  So
         // does the mounting code the live face hint turns lx/ly/lz with.
         _accelCalStatus.value = null
+        _calibration.value = BoardCalibration()
+        magCalReadUntilMs = 0L
+        calibrationRequested = false
+        lastRailOn = false
         _imuOrientationCode.value = null
         // #435: per-connection live state — a stale echo could "confirm" a
         // send made over a new connection to a rebooted FC.
@@ -838,6 +864,14 @@ public class DeviceSession(
         // #159: the rocket finished flushing and powered on — drop the busy
         // state (guarded inside clearPoweringOn via StateFlow dedup).
         if (data.pwrPinOn && _poweringOn.value) clearPoweringOnNow()
+        // #1629: the flight computer answers the calibration reads; with its
+        // rail off at connect they may never have reached it.  Ask again when
+        // it comes up, if anything is still unanswered.
+        if (data.pwrPinOn && !lastRailOn && calibrationRequested) {
+            val c = _calibration.value
+            if (c.mag == null || c.accel == null || c.gyro == null) requestCalibrationStatus()
+        }
+        lastRailOn = data.pwrPinOn
         // #140 direct path: record + mirror using this device's own identity.
         // Skip when rocketId is unset so a BS-self packet (no source rocket
         // id, falls through to here) can't blank a relay-mirrored fix.
@@ -871,6 +905,12 @@ public class DeviceSession(
         )
         _identity.value = next
         recomputeEffective()
+        // #1629: a rocket's calibration is read once its role is known — a
+        // base station has no sensors to calibrate and no handler for these.
+        if (!calibrationRequested && next.deviceType == BleDeviceType.ROCKET) {
+            calibrationRequested = true
+            requestCalibrationStatus()
+        }
         // #1041: hand the readback to the fleet, which updates ITS record (the
         // one voice routing and the foreground-BS pick read — frozen at the
         // connect-time guess before this) and folds into the registry. Only a
@@ -920,15 +960,20 @@ public class DeviceSession(
             is FileOpsMessage.MagCal -> {
                 _magCalStatus.value = msg.status
                 _magCalFrames.tryEmit(msg.status)
+                noteMagCalStatus(msg.status)
             }
             is FileOpsMessage.SensorCal -> {
                 _sensorCalStatus.value = msg.status
                 _sensorCalFrames.tryEmit(msg.status)
+                foldCalibration(BoardCalibration(gyro = msg.status.valid))
             }
             is FileOpsMessage.PadCal -> _padCalStatus.value = msg.status
             is FileOpsMessage.AccelCal -> {
                 _accelCalStatus.value = msg.status
                 _accelCalFrames.tryEmit(msg.status)
+                foldCalibration(
+                    BoardCalibration(accel = msg.status.stored, highGAligned = msg.status.highG?.stored),
+                )
             }
             is FileOpsMessage.RocketStorage -> _rocketStorage.value = msg.stats
             is FileOpsMessage.BsStorage -> _bsStorage.value = msg.stats
@@ -1495,6 +1540,46 @@ public class DeviceSession(
     public fun requestConfig(): Unit = sendBareCommand(BleCommandId.REQUEST_CONFIG)
 
     /**
+     * #1629: ask the flight computer what it holds — the magnetometer (61),
+     * the gyro and high-g bias (63) and the six-face offset and high-g
+     * alignment (77).  All three only read storage and republish it.  Sent on
+     * connect, again when the rail comes up with answers missing, and by the
+     * calibration screens when they close.  Rocket links only.
+     */
+    public fun requestCalibrationStatus() {
+        sessionScope.launch {
+            if (isBaseStation) return@launch
+            magCalReadUntilMs = clock() + CAL_READ_WINDOW_MS
+            writeCommand(Commands.bare(BleCommandId.MAG_CAL_READ_OC))
+            writeCommand(Commands.bare(BleCommandId.SENSOR_CAL_READ_OC))
+            writeCommand(Commands.bare(BleCommandId.ACC_CAL_READ))
+        }
+    }
+
+    /**
+     * APPLIED always means a calibration is stored (a read's answer, or a
+     * calibration just accepted).  IDLE means none only as the answer to a
+     * read; anything else (a session sampling, in review, aborted) says
+     * nothing about storage.
+     */
+    private fun noteMagCalStatus(status: MagCalStatus) {
+        when (status.subType) {
+            MagCalSubType.APPLIED -> foldCalibration(BoardCalibration(mag = true))
+            MagCalSubType.IDLE -> if (clock() <= magCalReadUntilMs) {
+                magCalReadUntilMs = 0L
+                foldCalibration(BoardCalibration(mag = false))
+            }
+            else -> Unit
+        }
+    }
+
+    private fun foldCalibration(reading: BoardCalibration) {
+        val stamped = reading.copy(readAtMs = clock())
+        _calibration.value = _calibration.value.merged(stamped)
+        knownDevices?.deviceDidReportCalibration(_identity.value.unitId, stamped)
+    }
+
+    /**
      * Manual pyro continuity test — cmd 35, `[channel 1..4]`.  Opens the
      * per-channel TESTING window; the result arrives implicitly in later
      * telemetry frames' "ps" bits (or, over LoRa, the scorecard's measured
@@ -2014,6 +2099,13 @@ public class DeviceSession(
         /** iOS `BLEDevice.contTestPendingWindow` — the continuity-test
          *  round-trip allowance before displays trust "ps" bits again. */
         public const val CONT_TEST_PENDING_WINDOW_MS: Long = 2_500
+
+        /**
+         * #1629: how long an IDLE mag-cal frame counts as the answer to a read.
+         * The out computer serves queued commands about once a second, behind
+         * whatever the connect-time profile sync queued first.
+         */
+        public const val CAL_READ_WINDOW_MS: Long = 30_000
 
         /** iOS `BLEDevice.contTestPendingWindowRelay` — the same allowance
          *  over LoRa, where the test rides the uplink and the reading the
