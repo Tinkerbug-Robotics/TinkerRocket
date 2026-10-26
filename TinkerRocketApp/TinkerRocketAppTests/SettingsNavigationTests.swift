@@ -197,8 +197,9 @@ final class SettingsNavigationTests: XCTestCase {
         let root = await host(SettingsView(device: rocket)
             .environmentObject(fleet)
             .environmentObject(store))
-        // Calibration: Magnetometer Calibration, its note, Pad Calibration.
-        try await open(row: IndexPath(item: 2, section: 2), expecting: "Pad Calibration", in: root)
+        // Calibration: the board's four status rows and their note (#1629),
+        // Magnetometer Calibration, its note, Pad Calibration.
+        try await open(row: IndexPath(item: 7, section: 2), expecting: "Pad Calibration", in: root)
     }
 
     /// The six-face accelerometer calibration (#1629) sits under the pad
@@ -214,9 +215,10 @@ final class SettingsNavigationTests: XCTestCase {
         let root = await host(SettingsView(device: rocket)
             .environmentObject(fleet)
             .environmentObject(store))
-        // Calibration: Magnetometer Calibration, its note, Pad Calibration,
-        // its note, then Accelerometer Calibration (Six Faces).
-        try await open(row: IndexPath(item: 4, section: 2), expecting: "Accelerometer Calibration", in: root)
+        // Calibration: the board's four status rows and their note (#1629),
+        // Magnetometer Calibration, its note, Pad Calibration, its note, then
+        // Accelerometer Calibration (Six Faces).
+        try await open(row: IndexPath(item: 9, section: 2), expecting: "Accelerometer Calibration", in: root)
     }
 
     // MARK: - Hosting

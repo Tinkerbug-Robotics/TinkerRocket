@@ -69,6 +69,10 @@ struct KnownDevice: Identifiable, Codable, Equatable {
     var pendingNetworkID: UInt8?
     var pendingRocketID: UInt8?
 
+    /// #1629: what this board's flight computer holds for calibration, as last
+    /// read over Bluetooth; nil = never read.
+    var calibration: BoardCalibration?
+
     var id: String { unitID }
 
     var hasPendingChanges: Bool {
@@ -103,6 +107,8 @@ struct KnownDevice: Identifiable, Codable, Equatable {
         pendingName = try c.decodeIfPresent(String.self, forKey: .pendingName)
         pendingNetworkID = try c.decodeIfPresent(UInt8.self, forKey: .pendingNetworkID)
         pendingRocketID = try c.decodeIfPresent(UInt8.self, forKey: .pendingRocketID)
+        // A calibration this build cannot read is dropped, never the record.
+        calibration = (try? c.decodeIfPresent(BoardCalibration.self, forKey: .calibration)) ?? nil
     }
 }
 
@@ -281,6 +287,15 @@ final class KnownDeviceStore: ObservableObject {
         guard queued != readback else { return }
         rec[keyPath: current] = queued
         push?(queued)
+    }
+
+    /// #1629: fold one calibration answer from the board into its record.
+    /// Each reply answers some of the fields, so only those change.
+    func deviceDidReportCalibration(unitID: String, reading: BoardCalibration) {
+        guard !unitID.isEmpty else { return }
+        withRecord(unitID) { rec in
+            rec.calibration = (rec.calibration ?? BoardCalibration()).merged(reading)
+        }
     }
 
     /// Fold an fc_identity readback (the out computer's relay of the flight
