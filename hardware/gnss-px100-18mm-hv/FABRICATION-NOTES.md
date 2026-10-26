@@ -2,6 +2,10 @@
 
 **V1, released 2026-10-23** (tag `gnss-px100-18mm-hv-v1.0.0`) and ordered as bare boards from JLC. V2 is in work
 and these notes still apply to it unchanged. Every via is filled and capped (note 3; README *Layout* item 3).
+
+**Parts change of 2026-10-26, for the V1 builds and V2:** L13 is not fitted, and C37 is 1.3 pF instead of 4 pF.
+L13 and L15 would ground the PX100's L5 input (pin 37) for DC; README *Front end* explains why. The tag's BOM still
+lists L13 fitted and C37 at 4 pF, so build from the schematic in work, not from the tag.
 Stencil thickness,
 the area-ratio floor and the paste-coverage convention are repo-wide in
 [`hardware/SOLDER-PASTE-CONVENTION.md`](../SOLDER-PASTE-CONVENTION.md).
@@ -63,6 +67,8 @@ ASSEMBLY - PLACEMENT
   (NO PASTE, UV SOLDER MASK OVER THE PAD).
 - U2 IS ADP7142ARDZ-3.3 ONLY; THE ADJUSTABLE ADP7142ARDZ REGULATES AT
   1.2 V ON THIS BOARD.
+- L13: DO NOT FIT (LEAVE THE PADS BARE). C37: 1.3 pF (MURATA
+  GJM1555C1H1R3BB01D), NOT 4 pF. A FITTED L13 GROUNDS U1 PIN 37.
 - SH1 (SHIELD FRAME), SH2 (SHIELD COVER) AND J1 (EDGE SMA) ARE NOT
   FITTED BY THE ASSEMBLER.
 
@@ -83,6 +89,11 @@ DLW21SN670HQ2L (too few) to DLW21SN670SQ2L (C113043, the same 67 Ω, rated 400 m
 310 mΩ); the 25 V 1 µF CL05A105KA5NQNC on C40, C44, C47, C49, C50, C53, C55 and C56 (backordered) to the 16 V
 CL05A105KO5NNNC already on C27/C28 (C29266; every one of those capacitors sits on 3.3 V or less); the 10 kΩ
 0402WGF1002TCE on R12, R14 and R15 (backordered) to the RC0402FR-0710KL already on R1/R3 (C60490).
+
+Changed 2026-10-26: C37 is now Murata GJM1555C1H1R3BB01D, 1.3 pF ±0.1 pF (LCSC C161309, 17,589 in stock), replacing
+GJM1555C1H4R0BB01D (C161323). L13 is not fitted; its part, LQW15AN6N8G8ZD (C2043812), is shared with L10 and L11,
+so that line needs two per board instead of three. If the LCSC order isn't placed yet, swap the C37 line and cut the
+6.8 nH line; if the parts have already arrived, the spare inductor stays in the bag.
 
 | Ref | Part | Source |
 |---|---|---|

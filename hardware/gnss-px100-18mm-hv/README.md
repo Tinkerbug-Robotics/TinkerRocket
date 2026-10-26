@@ -9,7 +9,8 @@ Solutions CON-SMA-EDGE-S, as on the Beetle) for a passive antenna or the HackRF 
 (JLC04161H-3313). It is a bench and rig board, not the flight carrier.
 
 **State:** V1 released on 2026-10-23 (tag `gnss-px100-18mm-hv-v1.0.0`) and ordered as bare boards from JLC; not yet
-fabricated. V2 is in work: the title blocks and the silkscreen read V2, and nothing else has changed from V1 yet.
+fabricated. V2 is in work: the title blocks and the silkscreen read V2. The only other change is the L5 input fix of
+2026-10-26 (L13 not fitted, C37 1.3 pF; see *Front end*). It changes parts, not copper, so it applies to the V1 builds too.
 ERC is clean apart from inherited off-grid warnings; DRC with schematic parity finds no errors and nothing
 unconnected. Every via is filled and capped, the owner's choice of 2026-10-23, because U1's exposed pad
 needs vias in it (*Layout*, item 3).
@@ -27,7 +28,8 @@ needs vias in it (*Layout*, item 3).
 SMA J1 -> C20 -> B8389 -> BGA855N6 -> B8389 -> BGA855N6 -> C26                                 [stage 1]
       -> C33 2.7 pF -> split: L10/L11 6.8 nH, C34/C35 1.5 pF, R10 100 ohm                       [stage 2]
          L1 arm: FL6 B39162B4327P810 -> C36 3 pF / L14 8.2 nH -> PX100 pin 40 (LNA_IN1)
-         L5 arm: FL7 SAFFB1G17AA0F0A (L12 10 nH, L13 6.8 nH shunts) -> C37 4 pF / L15 12 nH -> pin 37 (LNA_IN2)
+         L5 arm: FL7 SAFFB1G17AA0F0A (L12 10 nH input shunt) -> C37 1.3 pF / L15 12 nH -> pin 37 (LNA_IN2)
+                 (L13, FL7's 6.8 nH output shunt, is not fitted)
 ```
 
 **Why this shape.** The PX100 has two RF inputs with internal LNAs, and SkyTraq's reference (PX100 DS p13) feeds them from
@@ -37,11 +39,30 @@ drawn for a passive patch, so the carrier's two-stage chain stays in front as th
 reference network follows it unchanged. Feed J1 from a passive antenna or the rig: there is no antenna bias, and an
 active antenna's 25-30 dB on top of the two LNAs would drive the PX100 far harder than intended.
 
-**Evidence the reference network works.** The TinkerNav PX100 V1 copies it (with MP05419 for the L1 SAW and the TA2471A
-on a 1.4 × 1.1 mm footprint). Outdoors on an active antenna, 2026-10-22, it tracked BeiDou B1I at 36–38 dB-Hz and B2a at
-31–33 dB-Hz. It never acquired GPS, Galileo or QZSS, but those sit 14 MHz from B1I in the same filter path, so that is not
-a front-end symptom. The TinkerNav PX100 V2 (SAW, then a reactive split straight into two per-band LNAs) tracked nothing;
-that topology is not used here.
+**No DC path at the PX100's RF inputs (2026-10-26).** Both SkyTraq references (5C and 5S data sheets) feed each LNA
+input the same way: a shunt capacitor at the band SAW, then a series inductor to the pin. That leaves the pin with no DC
+path to ground, since a SAW port is open at DC. As drawn on 2026-10-22, the L5 arm broke that: FL7's 6.8 nH output shunt
+(L13) and the 12 nH series inductor (L15) grounded pin 37 for DC. The data sheet doesn't say whether the PX100 biases its
+LNA inputs through the pins. If it does, that ground kills the L5 LNA. The TinkerNav PX100 V2 grounds both inputs the
+same way, with 5.1 nH shunts right at the pins, and it never tracked anything. So L13 is not fitted, and C37 changes
+from 4 pF to 1.3 pF:
+- At 1176.45 MHz the reference 4 pF in parallel with 6.8 nH is +9.7 mS, which is a 1.31 pF capacitor, so the SAW and the
+  L-match see the same admittance.
+- Across 1164–1189 MHz the two differ by about 0.4 mS, about 2 % of 1/50 Ω and less than C37's own ±0.1 pF tolerance
+  (±0.74 mS).
+- C37 is Murata GJM1555C1H1R3BB01D (LCSC C161309), the same ±0.1 pF family as C33–C36.
+
+Pin 40 has no such path as long as FL6 (B4327) is open from its output to ground. A loose B4327 should read open from
+pad 4 to its ground pads (2, 3, 5); if it reads a short, pin 40 is grounded too, and no parts-only change fixes it.
+
+**No working PX100 to copy.** Neither TinkerNav PX100 has ever worked. Both boot and talk on the UART, but neither picks
+up much signal (the owner, 2026-10-26; possibly their assembly). Nothing on this board's PX100 side is proven in
+hardware, and SkyTraq's reference is the only design it treats as known-good.
+- The V1 copies the reference network, with an MP05419 for the L1 SAW and a TA2471A on a 1.4 × 1.1 mm footprint.
+  Outdoors on an active antenna on 2026-10-22 it held three BeiDou satellites (B1I 35–38 dB-Hz, B2a 31–33 dB-Hz). It
+  never got GPS, Galileo or QZSS, and it never got a fix.
+- The V2 (SAW, a reactive split, a per-band LNA, then a B8389 with 5.1 nH shunts on each PX100 input) tracked nothing.
+  That topology is not used here.
 
 **Budget (estimates, typical datasheet values, PX100 input noise figure assumed 3 dB):**
 
@@ -64,7 +85,7 @@ drives it a little harder. One LNA stage instead of two would give about 3.7 dB 
 | Ref | Part | Why |
 |---|---|---|
 | FL6 | Qualcomm B39162B4327P810 (C2650956) | L1 band: GPS/Galileo L1 1.0 dB, BeiDou B1I 1.4 dB, GLONASS; 50 Ω, no matching; same 1.4 × 1.1 mm package and land as the B8389. SkyTraq's TA1573A is not sold by LCSC |
-| FL7 | Murata SAFFB1G17AA0F0A (C910638) | L5 band 1164–1189 MHz, 1.1 dB; needs the 10 nH / 7 nH shunts of its measurement circuit (L12, L13). SkyTraq's TA2471A is out of stock |
+| FL7 | Murata SAFFB1G17AA0F0A (C910638) | L5 band 1164–1189 MHz, 1.1 dB; its measurement circuit has a 10 nH input shunt (L12) and a 7 nH output shunt. The output shunt (L13, 6.8 nH) is not fitted, because it would ground pin 37 through L15; C37 at 1.3 pF stands in for it (*Front end*). SkyTraq's TA2471A is out of stock |
 | Y1 | Seiko Epson TG2520SMN 26.000000MHz MCGNNM (DigiKey, about $0.45–0.89) | 26 MHz, ±0.5 ppm over −40…85 °C, 2.8–3.3 V (runs from the PX100's 3.0 V TCXO LDO), 1.5 mA, 2.5 × 2.0 mm. Chosen for acceleration: Epson's 26 MHz data gives about 0.4 ppb/g on the package's long side (X) and under 0.05 on Y and Z (2 ppb/g guaranteed), the part our GNSS report modelled (section 3.2.3). Keep its long side along board x, across the thrust; the footprint's fab arrow marks it. C48 is the DC-cut its output needs. Replaced the Abracon ATX-11 (no acceleration spec) on 2026-10-22. LCSC has none for V1's builds; FABRICATION-NOTES.md names the stand-in, the TG2016SMN |
 | Y2 | Seiko SC-32S 12.5 pF (C97606) | RTC crystal, no load capacitors (as the reference and the TinkerNav) |
 | D7 | onsemi NSR0320MW2T1G (C48192) | the reference's DCDC_OUT Schottky clamp, in SOD-323 |
@@ -155,6 +176,9 @@ acceleration sensitivity on the thrust axis rather than size.
 1. Rails: +3V3, +1V8, then the PX100's own LDO outputs: VDD_RF and VDD11 at 1.1 V, VDD_TCXO at 3.0 V, V_CORE about 1.3 V.
 2. Y1 at 26 MHz on a scope (clipped sine at C48), and Y1 placed with its long side along board x.
 3. UART at 115200 on J3.1/J3.2; PPS on J3.5 once it has a fix.
-4. Sky through a passive antenna on J1, or the HackRF rig straight into J1 (C20 blocks DC). To split the chain from the
+4. With no RF connected, meter DC from pin 37 and pin 40 to ground, at the U1 end of L15 and L14. A steady voltage
+   there means the PX100 biases its LNA inputs through the pins, which confirms that L13 must stay off. Write the
+   readings down here.
+5. Sky through a passive antenna on J1, or the HackRF rig straight into J1 (C20 blocks DC). To split the chain from the
    receiver, take the cover off and inject the rig at the split input instead (C26 lifted). The rig needs
    `RING_MIB=1024` on the Pi.
