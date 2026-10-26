@@ -586,12 +586,12 @@ async function renderPublicPanel(entries) {
   );
   gh.pagesLive(conn.owner).then((live) => {
     pages.replaceChildren(live
-      ? "GitHub Pages is serving your reports."
-      : h("span", null, "GitHub Pages is not serving it yet, so others can see your log but cannot open reports. ",
-        external(gh.pagesSettingsUrl(conn.owner), "Open the Pages settings"), " and set ",
+      ? "GitHub Pages is on, so your reports show with the 3D flight path and have their own links."
+      : h("span", null, "Your reports show here for everyone. Optional: turn on GitHub Pages to add the 3D flight path and a direct link to each report — ",
+        external(gh.pagesSettingsUrl(conn.owner), "open the Pages settings"), " and set ",
         h("i", null, "Source: Deploy from a branch"), ", ", h("i", null, "Branch: main"), ", ",
-        h("i", null, "/ (root)"), ", then Save. It goes live about a minute later. ",
-        h("a", { href: "#/help/publish" },"Help")));
+        h("i", null, "/ (root)"), ", then Save. ",
+        h("a", { href: "#/help/publish" }, "Help")));
   });
 }
 
@@ -647,7 +647,7 @@ function renderSetup(panel) {
     if (mine !== check) return;
     stepState(repoState, repo === "ok" ? "ok" : repo === "missing" ? "todo" : "",
       repo === "ok" ? `✓ ${login}/${REPO_NAME} is there` : repo === "missing" ? "Not created yet (or not public)" : "");
-    stepState(pagesState, live ? "ok" : "todo", live ? "✓ Pages is on" : "Not on yet");
+    stepState(pagesState, live ? "ok" : "", live ? "✓ Pages is on" : "Not on");
   };
   let timer = null;
   user.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(refresh, 500); });
@@ -680,12 +680,13 @@ function renderSetup(panel) {
       h("a", { href: "#/help/publish" }, "Step-by-step help")),
     h("p", null, "Publishing puts your flights where anyone can browse them, under Public logs and at a link you can share. ",
       "There is no TinkerRocket server or account: your log is kept on GitHub, in a repository that belongs to you. ",
-      "Setting it up takes three things on GitHub, once:"),
+      "Setting it up takes two things on GitHub, once, and a third if you want it:"),
     h("ul", { class: "explain" },
       h("li", null, h("b", null, "A repository"), " named ", h("code", null, REPO_NAME),
         ". It is where your log, reports and flight files are stored. It is yours; delete it and everything is gone."),
-      h("li", null, h("b", null, "GitHub Pages"), ", GitHub's free web hosting for that repository. ",
-        "It shows your reports to other people from your own address (", h("i", null, "you"), ".github.io), kept apart from this page."),
+      h("li", null, h("b", null, "GitHub Pages"), " (optional), GitHub's free web hosting for that repository. ",
+        "Your reports show without it; with it, they also get the 3D flight path and their own address (",
+        h("i", null, "you"), ".github.io)."),
       h("li", null, h("b", null, "A token"), ", a key that lets this page write to that one repository and nothing else on your account. ",
         "It stays in this browser and is only ever sent to GitHub.")),
     h("p", { class: "hint" }, "Nothing is public until you press Publish on a flight. A published flight shows its report ",
@@ -697,7 +698,7 @@ function renderSetup(panel) {
       h("li", null, h("b", null, "Create the repository. "), repoLink.node,
         ": keep it ", h("i", null, "Public"), ", turn on ", h("i", null, "Add README"),
         " (Pages needs something to serve), and press ", h("i", null, "Create repository"), ". ", repoState),
-      h("li", null, h("b", null, "Turn on GitHub Pages. "), pagesLink.node, ": under ",
+      h("li", null, h("b", null, "Turn on GitHub Pages (optional). "), pagesLink.node, ": under ",
         h("i", null, "Build and deployment"), " set Source to ", h("i", null, "Deploy from a branch"), ", Branch to ",
         h("i", null, "main"), " and ", h("i", null, "/ (root)"), ", and Save. ", pagesState),
       h("li", null, h("b", null, "Make a token. "), tokenLink.node, ": the form is filled in for you — under ",
@@ -912,7 +913,7 @@ function sane(e) {
   const obj = (o) => (o && typeof o === "object" ? o : {});
   const str = (v) => (typeof v === "string" ? v.slice(0, 4000) : "");
   const num = (v) => (typeof v === "number" && isFinite(v) ? v : null);
-  const name = (v) => typeof v === "string" && /^[\w.\-]{1,120}$/.test(v) && !/^\.+$/.test(v);
+  const name = (v) => typeof v === "string" && /^[\w.\- ]{1,120}$/.test(v) && !/^[. ]/.test(v);
   const files = obj(e.files), loc = obj(e.location), r = obj(e.results), c = obj(e.computer), d = obj(e.date);
   const lat = num(loc.lat), lon = num(loc.lon);
   return {
@@ -1060,6 +1061,7 @@ async function renderPublicFlight(login, id) {
     }
   };
   const reportBox = h("section", { class: "panel" });
+  const openSlot = h("span", { class: "open-slot" });
   view.replaceChildren(
     back,
     h("section", { class: "panel" },
@@ -1069,7 +1071,7 @@ async function renderPublicFlight(login, id) {
       h("p", { class: "flight-sub" }, subtitle(e)),
       metaList(e, { pilot: h("a", { href: `#/pilots/${encodeURIComponent(login)}` }, login) }),
       h("div", { class: "actions" },
-        page ? external(page, "Open report in tab") : null,
+        openSlot,
         reportPath ? h("button", { type: "button", class: "secondary", onclick: downloadRaw(reportPath, `${e.id}_report.html`) }, "Download report") : null,
         e.files.data.map((name) => h("button", {
           type: "button", class: "secondary", onclick: downloadRaw(`${flightDir(e.id)}/data/${name}`, name),
@@ -1093,22 +1095,84 @@ async function renderPublicFlight(login, id) {
     reportBox.replaceChildren(h("p", { class: "empty" }, "This flight was published without a report."));
     return;
   }
-  // Rendered only from the flyer's own Pages origin; see pagesUrl().
   reportBox.replaceChildren(h("p", { class: "hint" }, "Loading the report…"));
   let live = false;
   try {
     live = (await fetch(page, { method: "HEAD", cache: "no-store" })).ok;
   } catch (err) { /* offline, or Pages off */ }
-  if (!live) {
-    reportBox.replaceChildren(h("p", null,
-      `${login}'s GitHub Pages is not serving this report (yet). Pages publishes a minute or so after each change, `,
-      "and has to be switched on once for the repository. The report can still be downloaded above."));
+
+  if (live) {
+    // From the flyer's own Pages origin (see pagesUrl): walled off from this
+    // page, with a real address, so everything in it works, the globe too.
+    openSlot.replaceChildren(external(page, "Open report in tab"));
+    openSlot.firstChild.classList.add("button", "secondary");
+    reportBox.replaceChildren(h("iframe", {
+      class: "report-frame", src: page,
+      sandbox: "allow-scripts allow-same-origin allow-popups allow-downloads",
+    }));
     return;
   }
-  reportBox.replaceChildren(h("iframe", {
-    class: "report-frame", src: page,
-    sandbox: "allow-scripts allow-same-origin allow-popups allow-downloads",
-  }));
+
+  // No Pages: the report straight from the repository, in a frame with no
+  // origin of its own.
+  let html;
+  try {
+    html = await lockedReportHtml(login, reportPath);
+  } catch (err) {
+    reportBox.replaceChildren(h("p", { class: "status err" }, String(err.message || err)));
+    return;
+  }
+  // The sandbox goes on before the document does: an iframe takes its flags
+  // when it navigates, and srcdoc navigates it.
+  const frame = h("iframe", { class: "report-frame", sandbox: LOCKED_SANDBOX, allowfullscreen: true });
+  frame.srcdoc = html;
+  openSlot.replaceChildren(h("button", {
+    type: "button", class: "secondary",
+    onclick: () => (frame.requestFullscreen ? frame.requestFullscreen() : null),
+  }, "Full screen"));
+  const conn = gh.savedConnection();
+  const own = conn && conn.owner.toLowerCase() === login.toLowerCase();
+  reportBox.replaceChildren(...[
+    own ? h("p", { class: "hint" }, "The 3D flight path shows once you turn on GitHub Pages for your log: ",
+      external(gh.pagesSettingsUrl(login), "Pages settings"), ".") : null,
+    frame,
+  ].filter(Boolean));
+}
+
+/* A public report, shown without the flyer's Pages site.
+
+   Someone else's HTML, with scripts. Put in as srcdoc, in a frame sandboxed
+   with scripts allowed and no same-origin, so it runs at an opaque origin: it
+   cannot read this page's storage (saved flights, the viewer's token), reach
+   its DOM, or navigate it. Not a blob: URL, which Chrome will not navigate a
+   sandboxed frame to, and which in a tab of its own would be same-origin with
+   this page. That is also why "open in tab" is not offered here, and full
+   screen is.
+
+   What an opaque origin costs the report: its own localStorage (the unit and
+   draw-mode choices are guarded and just are not remembered) and the 3D
+   globe, which needs a real address (see sw.js) and otherwise sits black on
+   "Loading imagery…". So the copy gets a few lines put in front of it, all
+   running inside the same sandbox and adding no reach: a stylesheet that
+   folds the globe away and says why in its place (in CSS, so the globe's own
+   script cannot write over it), and a click handler for the table of
+   contents, whose links go dead in such a frame. */
+const LOCKED_SANDBOX = "allow-scripts allow-popups allow-downloads";
+const LOCKED_SHIM =
+  "<style>.globe,.globe-legend{display:none!important}.globe-status{font-size:0!important}" +
+  ".globe-status::after{font-size:13px;color:#667;content:\"The 3D view shows when this log's owner turns on " +
+  "GitHub Pages. The track is also on the map under Deployment & Recovery.\"}</style>" +
+  "<script>document.addEventListener(\"click\",function(e){var a=e.target.closest&&e.target.closest('a[href^=\"#\"]');" +
+  "if(!a)return;var t=document.getElementById(decodeURIComponent(a.hash.slice(1)));if(t){e.preventDefault();t.scrollIntoView();}});</script>";
+
+async function lockedReportHtml(login, path) {
+  const blob = await gh.readPublicBlob(login, path);
+  let html = await blob.text();
+  const head = /<head[^>]*>/i.exec(html);
+  html = head
+    ? html.slice(0, head.index + head[0].length) + LOCKED_SHIM + html.slice(head.index + head[0].length)
+    : LOCKED_SHIM + html;
+  return html;
 }
 
 // ---------- routing ----------

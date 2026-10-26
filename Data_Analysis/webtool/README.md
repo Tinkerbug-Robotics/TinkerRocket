@@ -124,15 +124,31 @@ flights/<id>/data/<file>        the flight's files, if the flyer shares them
   published in between, the update fails, and the client rereads the index and
   tries again rather than dropping that flight. An edit to the notes re-sends
   the index and README, not the 9 MB report.
-- **Public reports render from the flyer's own GitHub Pages origin**
-  (`<login>.github.io/tinkerrocket-flight-log/…`), which the flyer switches on
-  once. The local report frame is same-origin with this page, and a report is
-  someone else's HTML with scripts, so rendered there it could read this page's
-  saved flights and the viewer's token. `github.io` is on the public suffix
-  list, so a flyer's Pages site is a different site from ours. The Pages URL
-  is computed from the login and never read from the index. Entries from a
-  public index are coerced to plain strings and numbers, and ids and file names
-  are checked against strict patterns before they reach a URL.
+- **A public report never renders same-origin with this page.** The local
+  report frame is same-origin with the tool, and a public report is someone
+  else's HTML with scripts: rendered there, it could read this page's saved
+  flights and the viewer's token. So:
+  - When the flyer has **GitHub Pages** on, the report renders from their
+    own Pages site (`<login>.github.io/tinkerrocket-flight-log/…`).
+    `github.io` is on the public suffix list, so that is a different site
+    from ours, and the report has a real address. Everything works there,
+    including the 3D globe, and "Open report in tab" goes to it. The Pages URL
+    is computed from the login, never read from the index.
+  - Without Pages, the report comes from `raw.githubusercontent.com` as the `srcdoc` of a
+    frame sandboxed with `allow-scripts allow-popups allow-downloads` and no
+    `allow-same-origin`. It runs at an opaque origin, so it cannot reach this
+    page. It loses only its own remembered settings and the 3D globe, which an
+    injected stylesheet folds away with a line saying why.
+    "Open in tab" is not offered for it, because a tab of its own would be
+    same-origin with the tool; "Full screen" is offered instead. A small
+    click handler injected into the copy restores the table-of-contents links
+    that such a frame otherwise kills. It runs inside the same sandbox, so it
+    adds no reach.
+  Pages used to be required, and a flyer who had not switched it on
+  published reports nobody could open. It is now optional.
+- Entries from a public index are coerced to plain strings and numbers, and
+  ids and file names are checked against strict patterns before they reach a
+  URL.
 
 **Set-up** asks for the flyer's GitHub login first, because the Pages
 settings and token links are built from it; until it is typed they are
