@@ -153,9 +153,12 @@ if(DEFINED TR_BENCH_HEADING_ERROR_DEG)
     message(STATUS "TR_BENCH_HEADING_ERROR_DEG=${TR_BENCH_HEADING_ERROR_DEG} -- the pad heading turned on purpose (bench)")
 endif()
 # Bench (local, rig comparison): act's heading prior -- with the
-# magnetometer's heading (TR_BENCH_HEADING_PAD_SIGMA_DEG) and without it
-# (TR_BENCH_HEADING_PAD_SIGMA_FALLBACK_DEG) -- and hand-off threshold.
-foreach(_v TR_BENCH_HEADING_PAD_SIGMA_DEG TR_BENCH_HEADING_PAD_SIGMA_FALLBACK_DEG TR_BENCH_HEADING_HANDOFF_DEG)
+# magnetometer's heading (TR_BENCH_HEADING_PAD_SIGMA_DEG), with a stale one
+# (TR_BENCH_HEADING_PAD_SIGMA_FALLBACK_DEG) and with none at all
+# (TR_BENCH_HEADING_PAD_SIGMA_UNSET_DEG) -- and the hand-off thresholds (with
+# none: TR_BENCH_HEADING_HANDOFF_UNSET_DEG).
+foreach(_v TR_BENCH_HEADING_PAD_SIGMA_DEG TR_BENCH_HEADING_PAD_SIGMA_FALLBACK_DEG TR_BENCH_HEADING_PAD_SIGMA_UNSET_DEG
+           TR_BENCH_HEADING_HANDOFF_DEG TR_BENCH_HEADING_HANDOFF_UNSET_DEG)
     if(DEFINED ${_v})
         add_compile_definitions(${_v}=${${_v}})
         message(STATUS "${_v}=${${_v}} (bench)")

@@ -3953,14 +3953,18 @@ static void rawShadowTask(void*)
         }
         // #1590: a launch whose pad fused no magnetometer heading -- none
         // calibrated, or none at all -- said at once. The heading is the
-        // start's guess; act claims its launch prior about it.
+        // start's guess; act lets it go to its unset prior (any heading) and
+        // arms the heading fit's hand-off until the apogee call.
         if (sh.stats().heading_unset_launches != unset_launches)
         {
             unset_launches = sh.stats().heading_unset_launches;
             if (sh.config().heading_mode == gnss_raw::RawGnssShadow::kHeadingAct)
-                ESP_LOGE(TAG, "[RAWGNSS] *** LAUNCH WITH NO MAGNETOMETER HEADING: act claims a %.0f deg heading "
-                              "1-sigma about the start's guess (its own was %.0f deg) -- OVERCONFIDENT ***",
-                         sh.config().heading_pad_sigma_fallback_deg, (double)sh.stats().heading_launch_sigma_deg);
+                ESP_LOGE(TAG, "[RAWGNSS] *** LAUNCH WITH NO MAGNETOMETER HEADING: the heading is the start's guess "
+                              "(its own 1-sigma %.0f deg); act lets it go to %.0f deg and %s ***",
+                         (double)sh.stats().heading_launch_sigma_deg, sh.config().heading_pad_sigma_unset_deg,
+                         sh.config().heading_handoff_unset_deg < 0.0
+                             ? "hands no heading over"
+                             : "hands the heading fit's over until the apogee call");
             else
                 ESP_LOGW(TAG, "[RAWGNSS] launch with no magnetometer heading: the heading is the start's guess, "
                               "1-sigma %.0f deg", (double)sh.stats().heading_launch_sigma_deg);
@@ -4773,11 +4777,24 @@ static void startRawShadow()
                   "(TR_BENCH_HEADING_PAD_SIGMA_FALLBACK_DEG)",
              cfg.heading_pad_sigma_fallback_deg);
 #endif
+#ifdef TR_BENCH_HEADING_PAD_SIGMA_UNSET_DEG
+    // bench: and where the pad fused no magnetometer heading at all
+    cfg.heading_pad_sigma_unset_deg = TR_BENCH_HEADING_PAD_SIGMA_UNSET_DEG;
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: act's heading 1-sigma from launch %.1f deg with no magnetometer heading at all "
+                  "(TR_BENCH_HEADING_PAD_SIGMA_UNSET_DEG)",
+             cfg.heading_pad_sigma_unset_deg);
+#endif
 #ifdef TR_BENCH_HEADING_HANDOFF_DEG
     cfg.heading_handoff_deg = TR_BENCH_HEADING_HANDOFF_DEG;       // bench: below 0, never handed over
     ESP_LOGW(TAG, "[RAWGNSS] BENCH: act hands the fit's heading over at a 1-sigma of %.1f deg%s "
                   "(TR_BENCH_HEADING_HANDOFF_DEG)",
              cfg.heading_handoff_deg, cfg.heading_handoff_deg < 0.0 ? " -- never" : "");
+#endif
+#ifdef TR_BENCH_HEADING_HANDOFF_UNSET_DEG
+    cfg.heading_handoff_unset_deg = TR_BENCH_HEADING_HANDOFF_UNSET_DEG;   // bench: and with no magnetometer heading
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: with no magnetometer heading act hands the fit's heading over at a 1-sigma of "
+                  "%.1f deg%s (TR_BENCH_HEADING_HANDOFF_UNSET_DEG)",
+             cfg.heading_handoff_unset_deg, cfg.heading_handoff_unset_deg < 0.0 ? " -- never" : "");
 #endif
 #ifdef TR_BENCH_HEADING_GATE_FULL
     // bench: act's attitude gate in flight -- 0 the heading's (C), 1 the whole
@@ -4811,14 +4828,16 @@ static void startRawShadow()
     else
         snprintf(screen_txt, sizeof(screen_txt), "on boost epochs (past %.1f g within %.1f s) before the call",
                  cfg.boost_screen_g, cfg.boost_screen_window_s);
-    ESP_LOGI(TAG, "[RAWGNSS] heading %s: %s; launch prior %.0f deg with the magnetometer's heading, %.0f without; "
-                  "tilt floor %.2f deg; the fit's hand-off %s; the vertical check %s; the boost screen %s",
+    ESP_LOGI(TAG, "[RAWGNSS] heading %s: %s; launch prior %.0f deg with the magnetometer's heading, %.0f with a stale "
+                  "one, %.0f with none; tilt floor %.2f deg; the fit's hand-off %s, %s with no magnetometer heading "
+                  "(until the apogee call); the vertical check %s; the boost screen %s",
              cfg.heading_mode == gnss_raw::RawGnssShadow::kHeadingAct       ? "ACT"
              : cfg.heading_mode == gnss_raw::RawGnssShadow::kHeadingObserve ? "observe"
                                                                             : "off",
              gnss_raw::RawGnssShadow::headingGateName(cfg.heading_gate), cfg.heading_pad_sigma_deg,
-             cfg.heading_pad_sigma_fallback_deg, cfg.heading_launch_tilt_sigma_deg,
-             cfg.heading_handoff_deg < 0.0 ? "never" : "at the fit's 1-sigma", vcheck_txt, screen_txt);
+             cfg.heading_pad_sigma_fallback_deg, cfg.heading_pad_sigma_unset_deg, cfg.heading_launch_tilt_sigma_deg,
+             cfg.heading_handoff_deg < 0.0 ? "never" : "at the fit's 1-sigma",
+             cfg.heading_handoff_unset_deg < 0.0 ? "never" : "at the fit's 1-sigma", vcheck_txt, screen_txt);
     raw_shadow = new (mem) gnss_raw::RawGnssShadow(cfg);
     raw_meas = new (stage_mem) gnss_raw::RawGnssMeasStage(gnss_raw::RawGnssShadow::stageConfig(cfg));
     raw_meas_epoch = new (epoch_mem) gnss_raw::TimedRawEpoch();

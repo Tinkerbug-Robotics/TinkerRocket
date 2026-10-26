@@ -210,6 +210,8 @@ struct Args
     double boost_screen_g = -1.0;    //   boost_screen_g (2 g)
     double pad_sigma_fallback_deg = -1.0;   // heading_pad_sigma_fallback_deg (30): act's prior without the
                                             //   magnetometer's heading (--pad-sigma-deg: with it)
+    double pad_sigma_unset_deg = -1.0;      // heading_pad_sigma_unset_deg (180): and with none fused at all
+    double handoff_unset_deg = -1.0;        // heading_handoff_unset_deg (10): the hand-off with none (where given)
     double mag_recent_s = -1.0;      // heading_mag_recent_s (5 s)
     int level_heading_free = -1;     // RawGnssEKFParams::level_heading_free (1)
     int mag_flags = 2;               // each magnetometer sample's ShadowMag flags: 2 the rig's field (a sim's, the
@@ -369,6 +371,7 @@ void usage()
                  "  [--guard-tight-g X --guard-gate-chi2 X] [--cut-from-s X --cut-to-s Y] [--corrupt-at-s X --corrupt-seed N]\n"
                  "  [--corrupt-rr-mps lo,hi] [--corrupt-pr-m lo,hi] [--corrupt-pr-epoch]\n"
                  "  [--boost-screen 0|1|2] [--boost-screen-g X] [--pad-sigma-fallback-deg X] [--mag-recent-s X]\n"
+                 "  [--pad-sigma-unset-deg X] [--handoff-unset-deg X]\n"
                  "  [--level-heading-free 0|1] [--mag-flags N] [--compare-sequential] [--no-apogee-flag]\n"
                  "  [--max-epoch-age-s X] [--vert-check-mps X] [--boost-screen-window-s X] [--rr-dyn-tau-s X]\n"
                  "  [--rr-dyn-sigma X] [--vert-release-mps X] [--rr-fit-gate X] [--fw-defaults] [--digest FILE]\n"
@@ -493,6 +496,8 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--boost-screen") a.boost_screen = std::atoi(val());
         else if (k == "--boost-screen-g") a.boost_screen_g = std::atof(val());
         else if (k == "--pad-sigma-fallback-deg") a.pad_sigma_fallback_deg = std::atof(val());
+        else if (k == "--pad-sigma-unset-deg") a.pad_sigma_unset_deg = std::atof(val());
+        else if (k == "--handoff-unset-deg") a.handoff_unset_deg = std::atof(val());
         else if (k == "--mag-recent-s") a.mag_recent_s = std::atof(val());
         else if (k == "--level-heading-free") a.level_heading_free = std::atoi(val());
         else if (k == "--mag-flags") a.mag_flags = std::atoi(val());
@@ -2043,6 +2048,10 @@ int main(int argc, char** argv)
         cfg.boost_screen_g = a.boost_screen_g;   // 0: every epoch before the call
     if (a.pad_sigma_fallback_deg > 0.0)
         cfg.heading_pad_sigma_fallback_deg = a.pad_sigma_fallback_deg;
+    if (a.pad_sigma_unset_deg > 0.0)
+        cfg.heading_pad_sigma_unset_deg = a.pad_sigma_unset_deg;
+    if (a.given.count("--handoff-unset-deg"))
+        cfg.heading_handoff_unset_deg = a.handoff_unset_deg;   // below 0: never
     if (a.mag_recent_s >= 0.0)
         cfg.heading_mag_recent_s = a.mag_recent_s;
     if (a.level_heading_free >= 0)

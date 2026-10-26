@@ -13,6 +13,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <functional>
 #include <random>
 #include <thread>
 #include <vector>
@@ -1490,11 +1491,11 @@ TEST(RawGnssShadow, ALaunchWithNoMagnetometerHeadingIsCountedWithItsOwnSigma)
     // magnetometer uncalibrated, so refused) launches on the start's guess,
     // 44.7 deg off on this rail, at p0_hdg's 57 deg 1-sigma and growing. Each
     // launch keeps its own 1-sigma, and one with no magnetometer heading is
-    // counted. Act still claims its fallback prior (30) about the guess --
-    // tighter than the filter's own, which is what the flight computer says
-    // loudly; observe keeps the filter's own. A calibrated pad's launch is
-    // not counted, and act loosens its sub-degree heading to the
-    // magnetometer's prior (10).
+    // counted. Act lets the heading go to its unset prior (180: any heading,
+    // wider than the filter's own) and arms the fit's hand-off -- what the
+    // flight computer says loudly; observe keeps the filter's own. A
+    // calibrated pad's launch is not counted, and act loosens its sub-degree
+    // heading to the magnetometer's prior (10).
     for (uint8_t mode : {uint8_t(RawGnssShadow::kHeadingObserve), uint8_t(RawGnssShadow::kHeadingAct)})
         for (bool cal : {false, true})
         {
@@ -1525,7 +1526,7 @@ TEST(RawGnssShadow, ALaunchWithNoMagnetometerHeadingIsCountedWithItsOwnSigma)
                 EXPECT_NEAR(err, -44.7, 1.0) << int(mode);   // north, the guess
             }
             if (mode == RawGnssShadow::kHeadingAct)
-                EXPECT_NEAR(headingSigmaDeg(sh), cal ? 10.0 : 30.0, 0.5) << what;   // act's prior
+                EXPECT_NEAR(headingSigmaDeg(sh), cal ? 10.0 : 180.0, 0.5) << what;   // act's prior
             else
                 EXPECT_NEAR(headingSigmaDeg(sh), own, 1.0) << what;
         }
@@ -1576,12 +1577,15 @@ TEST(RawGnssShadow, ActsLaunchPriorIsTheMagnetometersOnlyWhenItsHeadingIsRecent)
 {
     // heading_pad_sigma_deg (10) where the pad's heading is the
     // magnetometer's -- a sample through the calibration, size and dip gates
-    // fused within heading_mag_recent_s (5 s) of the launch edge -- else
-    // heading_pad_sigma_fallback_deg (30).
+    // fused within heading_mag_recent_s (5 s) of the launch edge --
+    // heading_pad_sigma_unset_deg (180: any heading) where the pad fused none
+    // at all (the heading is the start's guess, #1590), else
+    // heading_pad_sigma_fallback_deg (30: a magnetometer heading gone stale).
     constexpr uint8_t kCal = gnss_raw::kShadowMagCalibrated;
     const RawGnssShadow::Config d;
     EXPECT_DOUBLE_EQ(d.heading_pad_sigma_deg, 10.0);
     EXPECT_DOUBLE_EQ(d.heading_pad_sigma_fallback_deg, 30.0);
+    EXPECT_DOUBLE_EQ(d.heading_pad_sigma_unset_deg, 180.0);
     EXPECT_DOUBLE_EQ(d.heading_mag_recent_s, 5.0);
     {
         SCOPED_TRACE("calibrated to the launch");
@@ -1597,7 +1601,8 @@ TEST(RawGnssShadow, ActsLaunchPriorIsTheMagnetometersOnlyWhenItsHeadingIsRecent)
     {
         SCOPED_TRACE("uncalibrated: none fused");
         RawGnssShadow sh(actCfg());
-        EXPECT_NEAR(launchPrior(sh, {{10.0, 0, 0.0}}), 30.0, 0.5);
+        EXPECT_NEAR(launchPrior(sh, {{10.0, 0, 0.0}}), 180.0, 0.5);
+        EXPECT_FLOAT_EQ(sh.stats().heading_launch_prior_deg, 180.0f);
         EXPECT_EQ(sh.stats().heading_mag_launches, 0u);
         EXPECT_EQ(sh.stats().heading_launch_mag, 0);
         EXPECT_LT(sh.stats().heading_launch_mag_age_s, 0.0f);
@@ -1619,15 +1624,16 @@ TEST(RawGnssShadow, ActsLaunchPriorIsTheMagnetometersOnlyWhenItsHeadingIsRecent)
         EXPECT_NEAR(sh.stats().heading_launch_mag_age_s, 4.0f, 0.1f);
     }
     {
-        SCOPED_TRACE("the dip gate refusing every sample");
+        SCOPED_TRACE("the dip gate refusing every sample: none fused");
         RawGnssShadow sh(actCfg());
-        EXPECT_NEAR(launchPrior(sh, {{10.0, kCal, 10.0}}), 30.0, 0.5);
+        EXPECT_NEAR(launchPrior(sh, {{10.0, kCal, 10.0}}), 180.0, 0.5);
+        EXPECT_EQ(sh.stats().heading_unset_launches, 1u);
         EXPECT_EQ(sh.stats().mag_fused, 0u);
         EXPECT_GE(sh.stats().mag_dip, 495u);
         EXPECT_EQ(sh.stats().heading_launch_mag, 0);
     }
     {
-        SCOPED_TRACE("the dip gate refusing for the last 6 s");
+        SCOPED_TRACE("the dip gate refusing for the last 6 s: stale");
         RawGnssShadow sh(actCfg());
         EXPECT_NEAR(launchPrior(sh, {{10.0, kCal, 0.0}, {6.0, kCal, 10.0}}), 30.0, 0.5);
         EXPECT_GE(sh.stats().mag_dip, 295u);
@@ -1646,9 +1652,11 @@ TEST(RawGnssShadow, ActsLaunchPriorIsTheMagnetometersOnlyWhenItsHeadingIsRecent)
         RawGnssShadow::Config c = actCfg();
         c.heading_pad_sigma_deg = 7.0;
         c.heading_pad_sigma_fallback_deg = 45.0;
-        RawGnssShadow a(c), b(c);
+        c.heading_pad_sigma_unset_deg = 90.0;
+        RawGnssShadow a(c), b(c), e(c);
         EXPECT_NEAR(launchPrior(a, {{10.0, kCal, 0.0}}), 7.0, 0.5);
-        EXPECT_NEAR(launchPrior(b, {{10.0, 0, 0.0}}), 45.0, 0.5);
+        EXPECT_NEAR(launchPrior(b, {{10.0, kCal, 0.0}, {6.0, 0, 0.0}}), 45.0, 0.5);
+        EXPECT_NEAR(launchPrior(e, {{10.0, 0, 0.0}}), 90.0, 0.5);
     }
 }
 
@@ -3014,10 +3022,16 @@ double tiltErrDeg(const float a[4], const float b[4])
 // _sure_deg, when not negative (else the defaults). tilt_floor_deg:
 // heading_launch_tilt_sigma_deg; gate: heading_gate (no apogee call here).
 // handoff_deg: heading_handoff_deg -- 10 deg, the hand-off these flights test
-// (the config's default is never).
+// (the config's default is never). No magnetometer here, so each launch is
+// one with no magnetometer heading: these flights were written before such a
+// launch had its own prior and hand-off (2026-10-26), so they fly the
+// fallback prior and handoff_deg there too, unless tweak (applied last) says
+// otherwise. apogee_at_s: the flight computer's apogee call that long after
+// ignition (below 0: none).
 BoostRun flyBoost(uint8_t mode, double seed_err_deg, double bias_y = 0.0, double bias_z = 0.0, bool external = false,
                   double apart = -1.0, int min_epochs = -1, double sure_deg = -1.0, double tilt_floor_deg = 0.0,
-                  uint8_t gate = RawGnssShadow::kGateHeading, double handoff_deg = 10.0)
+                  uint8_t gate = RawGnssShadow::kGateHeading, double handoff_deg = 10.0,
+                  const std::function<void(RawGnssShadow::Config&)>& tweak = {}, double apogee_at_s = -1.0)
 {
     double lat, lon, h;
     ecef_to_geo(kGoldenRmRx, &lat, &lon, &h);
@@ -3042,8 +3056,12 @@ BoostRun flyBoost(uint8_t mode, double seed_err_deg, double bias_y = 0.0, double
     cfg.heading_launch_tilt_sigma_deg = tilt_floor_deg;
     cfg.heading_gate = gate;
     cfg.heading_handoff_deg = handoff_deg;
+    cfg.heading_pad_sigma_unset_deg = cfg.heading_pad_sigma_fallback_deg;
+    cfg.heading_handoff_unset_deg = handoff_deg;
     cfg.meas.troposphere = false;
     cfg.external_build = external;
+    if (tweak)
+        tweak(cfg);
     RawGnssShadow sh(cfg);
     gnss_raw::RawGnssMeasStage stage(RawGnssShadow::stageConfig(cfg));
     gnss_raw::BuiltEpoch built;
@@ -3109,6 +3127,8 @@ BoostRun flyBoost(uint8_t mode, double seed_err_deg, double bias_y = 0.0, double
         s.acc[1] = float(f_b[1] + bias_y);
         s.acc[2] = float(f_b[2] + bias_z);
         s.flags = t < t_ign ? gnss_raw::kShadowLevel : (t >= t_det ? gnss_raw::kShadowInFlight : 0);
+        if (apogee_at_s >= 0.0 && t >= t_ign + apogee_at_s && (s.flags & gnss_raw::kShadowInFlight))
+            s.flags |= gnss_raw::kShadowApogee;
         const int64_t t64 = kT0 + static_cast<int64_t>(std::llround(t * 1e6));
         sh.onImu(s, t64);
         if (!(s.flags & gnss_raw::kShadowInFlight))
@@ -3279,6 +3299,76 @@ TEST(RawGnssShadow, TheHeadingFitLeavesAFilterThatIsNotLost)
     EXPECT_LT(attErrDeg(later.q_end, later.q_true), 3.0);
 }
 
+namespace
+{
+// The firmware's own settings for a launch with no magnetometer heading
+// (flyBoost pins the older ones): its prior and its hand-off
+void unsetDefaults(RawGnssShadow::Config& c)
+{
+    const RawGnssShadow::Config d;
+    c.heading_pad_sigma_unset_deg = d.heading_pad_sigma_unset_deg;
+    c.heading_handoff_unset_deg = d.heading_handoff_unset_deg;
+}
+}  // namespace
+
+TEST(RawGnssShadow, ALaunchWithNoMagnetometerHeadingLetsTheHeadingGoAndHandsTheFitsOver)
+{
+    // No magnetometer: the heading at launch is the start's guess, any
+    // heading. Act lets it go to heading_pad_sigma_unset_deg (180) and arms
+    // the fit's hand-off at heading_handoff_unset_deg (10), the config's own
+    // hand-off (heading_handoff_deg) never. From a guess 150 or 180 deg off the
+    // filter's own small-step update stalls -- the horizontal velocity
+    // predicted near backwards turns the heading hardly at all (here 66-67 and
+    // 176 deg off at T+10; the 2026-10-24 Goblin replayed from -150 and 180
+    // stalled 63 and 17 deg off) -- and the hand-off ends each at the truth's.
+    for (double err : {150.0, 180.0, -150.0})
+    {
+        SCOPED_TRACE(err);
+        const BoostRun run = flyBoost(RawGnssShadow::kHeadingAct, err, 0.0, 0.0, false, -1.0, -1, -1.0, 0.0,
+                                      RawGnssShadow::kGateHeading, -1.0, unsetDefaults);
+        EXPECT_EQ(run.st.heading_unset_launches, 1u);
+        EXPECT_FLOAT_EQ(run.st.heading_launch_prior_deg, 180.0f);
+        EXPECT_NEAR(run.att_sigma_launch[2] * 180.0 / kPi, 180.0, 0.5);
+        EXPECT_EQ(run.st.heading_handoffs, 1u);
+        ASSERT_GE(run.handed_at, 0);
+        EXPECT_LE(run.recs[run.handed_at].sigma_cdeg, 1000);
+        EXPECT_LT(attErrDeg(run.q_end, run.q_true), 1.0);
+
+        // the same flight with the unset hand-off off: GNSS alone
+        const BoostRun alone = flyBoost(RawGnssShadow::kHeadingAct, err, 0.0, 0.0, false, -1.0, -1, -1.0, 0.0,
+                                        RawGnssShadow::kGateHeading, -1.0, [](RawGnssShadow::Config& c) {
+                                            unsetDefaults(c);
+                                            c.heading_handoff_unset_deg = -1.0;
+                                        });
+        EXPECT_EQ(alone.st.heading_handoffs, 0u);
+        EXPECT_GT(std::fabs(gnss_raw::headingBetween(alone.q_end, alone.q_true)) * 180.0 / kPi, 45.0);
+    }
+}
+
+TEST(RawGnssShadow, TheApogeeCallEndsTheHeadingFitsHandOff)
+{
+    // The hand-off is the ascent's: under a chute the fit is no heading to
+    // hand over (on the 2026-10-24 RIM66 replays it claimed 8-10 deg for
+    // headings 40-118 deg off), so the flight computer's apogee call ends it
+    // for the flight, whichever threshold armed it. Called at T+0.5, before
+    // the fit is sure, it hands nothing over: the filter keeps its own.
+    for (double err : {40.0, 150.0})
+    {
+        SCOPED_TRACE(err);
+        const BoostRun run = flyBoost(RawGnssShadow::kHeadingAct, err, 0.0, 0.0, false, -1.0, -1, -1.0, 0.0,
+                                      RawGnssShadow::kGateHeading, -1.0, unsetDefaults, 0.5);
+        EXPECT_EQ(run.st.heading_handoffs, 0u);
+        EXPECT_EQ(run.handed_at, -1);
+        ASSERT_GE(run.recs.size(), 5u);
+        EXPECT_TRUE(run.recs.back().flags & HFT_SOLVED);   // the fit still solves and logs
+        EXPECT_GT(std::fabs(gnss_raw::headingBetween(run.q_end, run.q_true)) * 180.0 / kPi, 4.0);
+    }
+    // and the older flights' hand-off at handoff_deg alike
+    const BoostRun old = flyBoost(RawGnssShadow::kHeadingAct, 40.0, 0.0, 0.0, false, -1.0, -1, -1.0, 0.0,
+                                  RawGnssShadow::kGateHeading, 10.0, {}, 0.5);
+    EXPECT_EQ(old.st.heading_handoffs, 0u);
+}
+
 TEST(RawGnssShadow, TheHeadingFitIsOffByDefault)
 {
     const BoostRun run = flyBoost(RawGnssShadow::kHeadingOff, 40.0);
@@ -3356,7 +3446,7 @@ TEST(RawGnssShadow, FromTheApogeeCallTheGateOpensInFullAndStaysOpen)
     EXPECT_EQ(gateOf(sh), 'g');
     t = feedFlight(sh, t, 0.5, 20.0f, kFlight, false);           // the boost
     EXPECT_EQ(gateOf(sh), 'h');
-    EXPECT_NEAR(headingSigmaDeg(sh), 30.0, 0.5);                  // act's prior, at launch
+    EXPECT_NEAR(headingSigmaDeg(sh), 180.0, 0.5);                 // act's prior at launch (no magnetometer here)
     t = feedFlight(sh, t, 2.0, 0.0f, kFlight, false);             // the coast
     EXPECT_EQ(gateOf(sh), 'h');
     EXPECT_EQ(sh.stats().heading_gate_apogee, 0u);
@@ -3906,6 +3996,8 @@ ScreenRun flyScreen(const ScreenFlight& o)
     cfg.heading_mode = o.mode;
     cfg.heading_gate = RawGnssShadow::kGateHeading;
     cfg.heading_handoff_deg = -1.0;
+    cfg.heading_pad_sigma_unset_deg = cfg.heading_pad_sigma_fallback_deg;   // no magnetometer: as these flights were
+    cfg.heading_handoff_unset_deg = -1.0;                                     //   written (2026-10-26)
     cfg.heading_launch_tilt_sigma_deg = 0.0;   // no tilt floor, as these flights were written
     cfg.boost_screen = o.screen;
     cfg.boost_screen_g = o.screen_g;

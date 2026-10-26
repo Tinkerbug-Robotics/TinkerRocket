@@ -95,7 +95,12 @@ public:
         sh.setFlightGate(c.heading_gate == gnss_raw::RawGnssShadow::kGateFullLaunch);
         const bool mag_heading = c.primary && sh.mag_fused_run_ > 0 &&
                                  t_s - sh.last_mag_fused_t_ <= c.heading_mag_recent_s;
-        const double prior = mag_heading ? c.heading_pad_sigma_deg : c.heading_pad_sigma_fallback_deg;
+        // none fused at all: any heading, and the fit's hand-off armed until the apogee call
+        sh.hdg_unset_ = c.primary && sh.mag_fused_run_ == 0;
+        sh.hdg_apogee_ = false;
+        const double prior = mag_heading     ? c.heading_pad_sigma_deg
+                             : sh.hdg_unset_ ? c.heading_pad_sigma_unset_deg
+                                             : c.heading_pad_sigma_fallback_deg;
         sh.ekf_.setHeadingSigma(static_cast<float>(prior / kR2D));
         if (c.heading_launch_tilt_sigma_deg > 0.0)
             sh.ekf_.setTiltSigmaFloor(static_cast<float>(c.heading_launch_tilt_sigma_deg / kR2D));

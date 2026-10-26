@@ -898,6 +898,8 @@ void RawGnssShadow::start(double t)
     fit_ground_ = !restored_;
     fit_flight_ = false;
     handed_ = false;
+    hdg_unset_ = false;
+    hdg_apogee_ = false;
     launch_seen_ = false;
     // Act's attitude gate: on the pad the ground's (whatever a run that
     // stopped in flight left); a restored flight, with no launch edge to set
@@ -2353,7 +2355,9 @@ void RawGnssShadow::stepHeading(double t, const float acc[3], const float gyro[3
         float sig[3];
         ekf_.attSigmaNed(sig);
         st_.heading_launch_sigma_deg = static_cast<float>(static_cast<double>(sig[2]) * kRad2Deg);
-        if (cfg_.primary && mag_fused_run_ == 0)
+        hdg_unset_ = cfg_.primary && mag_fused_run_ == 0;
+        hdg_apogee_ = false;
+        if (hdg_unset_)
             st_.heading_unset_launches++;
         // the pad's heading is the magnetometer's: a sample through its gates
         // fused within heading_mag_recent_s of this edge (RawGnssShadow.h)
@@ -2364,9 +2368,13 @@ void RawGnssShadow::stepHeading(double t, const float acc[3], const float gyro[3
         {
             // from here GNSS turns the heading, and only the heading -- or,
             // with the full gate from launch, the whole attitude (from the
-            // apogee call: below) -- from the launch prior
+            // apogee call: below) -- from the launch prior: the
+            // magnetometer's, any heading where the pad fused none, else the
+            // fallback (a magnetometer heading gone stale)
             setFlightGate(cfg_.heading_gate == kGateFullLaunch);
-            const double prior = mag_heading ? cfg_.heading_pad_sigma_deg : cfg_.heading_pad_sigma_fallback_deg;
+            const double prior = mag_heading ? cfg_.heading_pad_sigma_deg
+                                 : hdg_unset_ ? cfg_.heading_pad_sigma_unset_deg
+                                              : cfg_.heading_pad_sigma_fallback_deg;
             ekf_.setHeadingSigma(static_cast<float>(prior / kRad2Deg));
             st_.heading_act_launches++;
             if (mag_heading)
@@ -2384,6 +2392,9 @@ void RawGnssShadow::stepHeading(double t, const float acc[3], const float gyro[3
         if (cfg_.heading_mode == kHeadingAct)
             setGroundGate();
     }
+    // the apogee call ends the fit's hand-off for the flight (RawGnssShadow.h)
+    if (!ground && (imu_flags & kShadowApogee))
+        hdg_apogee_ = true;
     // Act, kGateFullApogee: the flight computer's apogee call opens the whole
     // attitude to GNSS, latched to the ground. Through the ascent the gate is
     // the heading's, so a wrong heading cannot reach the tilt (on the rig the
@@ -2508,8 +2519,11 @@ void RawGnssShadow::jobHeadingFit()
     d.vel_us = sat16(static_cast<double>(st_.heading_vel_us));
     d.solve_us = sat16(static_cast<double>(st_.heading_solve_us));
     d.seed_ms = sat16((fit_launch_t_ - fit_.t0()) * 1000.0);
-    // (not in the IMU-free descent: its velocity is GNSS's, and the attitude navigates nothing)
-    if (act && !handed_ && !ekf_.imuFree() && res.ok && res.sigma > 0.0 && res.sigma * kRad2Deg <= cfg_.heading_handoff_deg && !rival &&
+    // (not in the IMU-free descent: its velocity is GNSS's, and the attitude navigates nothing; nor after the apogee
+    // call at all: under a chute the fit is no heading to hand over. A launch with no magnetometer heading arms it.)
+    const double handoff_deg = hdg_unset_ ? cfg_.heading_handoff_unset_deg : cfg_.heading_handoff_deg;
+    if (act && !handed_ && !hdg_apogee_ && !ekf_.imuFree() && res.ok && res.sigma > 0.0 &&
+        res.sigma * kRad2Deg <= handoff_deg && !rival &&
         res.n >= cfg_.heading_handoff_min_epochs &&
         (res.sigma * kRad2Deg <= cfg_.heading_handoff_sure_deg || headingsApart(res, filt)))
     {

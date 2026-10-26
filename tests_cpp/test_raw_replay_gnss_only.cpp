@@ -172,8 +172,9 @@ TEST(RawReplayGnssOnly, ActsLaunchEdgeOpensTheGateANoseUpPadHoldsShut)
     EXPECT_FLOAT_EQ(p.sh.ekf_.attGate(), 1.0f);
     EXPECT_FALSE(p.sh.cfg_.pad_zupt);
     EXPECT_FALSE(p.last_flags & gnss_raw::kShadowLevel);
-    EXPECT_DOUBLE_EQ(arm.priorDeg(), 30.0);
-    EXPECT_NEAR(headingSigmaDeg(p.sh), 30.0, 1.0);
+    EXPECT_DOUBLE_EQ(arm.priorDeg(), 180.0);   // no magnetometer on this pad: any heading (the unset prior)
+    EXPECT_NEAR(headingSigmaDeg(p.sh), 180.0, 1.0);
+    EXPECT_TRUE(p.sh.hdg_unset_);              // and the fit's hand-off armed
     float sig[3];
     p.sh.filter().attSigmaNed(sig);
     EXPECT_GE(sig[0] / kD2R, 0.6 - 1e-3);
@@ -197,7 +198,7 @@ TEST(RawReplayGnssOnly, TheDescentArmKeepsTheLevelling)
     EXPECT_FALSE(p.sh.cfg_.pad_zupt);
     EXPECT_TRUE(p.last_flags & gnss_raw::kShadowLevel);
     EXPECT_GE(p.sh.stats().levels, levels0 + 95u);       // every step of the second (100 a second)
-    EXPECT_NEAR(headingSigmaDeg(p.sh), 30.0, 1.0);
+    EXPECT_NEAR(headingSigmaDeg(p.sh), 180.0, 1.0);      // no magnetometer: the unset prior
 }
 
 TEST(RawReplayGnssOnly, TheGroundGateKeptOnlyWhenAsked)
@@ -214,7 +215,7 @@ TEST(RawReplayGnssOnly, TheGroundGateKeptOnlyWhenAsked)
     EXPECT_EQ(gateOf(p.sh), 'g');
     EXPECT_FALSE(p.sh.cfg_.pad_zupt);
     EXPECT_FALSE(p.last_flags & gnss_raw::kShadowLevel);
-    EXPECT_GT(headingSigmaDeg(p.sh), sig_before - 1.0);   // not the 30 deg prior
+    EXPECT_GT(headingSigmaDeg(p.sh), sig_before - 1.0);   // not act's prior
     EXPECT_GT(headingSigmaDeg(p.sh), 45.0);
 }
 

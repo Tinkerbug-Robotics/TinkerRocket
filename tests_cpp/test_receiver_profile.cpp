@@ -223,7 +223,7 @@ static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 32,
               "GnssSignalProfile changed: add the field to expectSameSignal, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 568,
               "GnssReceiverProfile changed: add the field to expectSameNumbers, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1800,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1816,
               "RawGnssShadow::Config changed: pin the field in TheShadowSafeguardDefaultsAreTheBeetles, then update "
               "this size");
 
@@ -1107,12 +1107,14 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_EQ(c.heading_seed_max_s, 3.0);
     EXPECT_EQ(c.heading_fit_max_s, 60.0);
     EXPECT_EQ(c.heading_handoff_deg, -1.0);
+    EXPECT_EQ(c.heading_handoff_unset_deg, 10.0);
     EXPECT_EQ(c.heading_handoff_rival, 25.0);
     EXPECT_EQ(c.heading_handoff_min_epochs, 0);
     EXPECT_EQ(c.heading_handoff_apart, 2.0);
     EXPECT_EQ(c.heading_handoff_sure_deg, 3.0);
     EXPECT_EQ(c.heading_pad_sigma_deg, 10.0);
     EXPECT_EQ(c.heading_pad_sigma_fallback_deg, 30.0);
+    EXPECT_EQ(c.heading_pad_sigma_unset_deg, 180.0);
     EXPECT_EQ(c.heading_mag_recent_s, 5.0);
     EXPECT_EQ(c.heading_launch_tilt_sigma_deg, 0.6);
     EXPECT_EQ(c.heading_gate, RawGnssShadow::kGateFullLaunch);
