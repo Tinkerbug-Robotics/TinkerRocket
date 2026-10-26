@@ -11297,7 +11297,7 @@
 				)
 			)
 		)
-		(property "Value" "1 nF"
+		(property "Value" "0R"
 			(at 0 1.16 90)
 			(layer "F.Fab")
 			(hide yes)
@@ -11331,7 +11331,7 @@
 				)
 			)
 		)
-		(property "MPN" "GRM1555C1H102JA01D"
+		(property "MPN" "0402WGF0000TCE"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -11344,7 +11344,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Murata"
+		(property "Mfr" "UNI-ROYAL"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -11370,7 +11370,7 @@
 				)
 			)
 		)
-		(property "Dist_PN" "C76947"
+		(property "Dist_PN" "C17168"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -11383,7 +11383,7 @@
 				)
 			)
 		)
-		(property ki_fp_filters "C_*")
+		(property ki_fp_filters "R_*")
 		(path "/05d0539d-6bd7-4655-a502-9cf5886634a5/94d7937e-2e50-4f41-8a19-210e6d713ee6")
 		(sheetname "/RF chain and PX100/")
 		(sheetfile "receiver.kicad_sch")

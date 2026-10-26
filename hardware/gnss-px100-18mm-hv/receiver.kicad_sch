@@ -4044,6 +4044,147 @@
 			)
 			(embedded_fonts no)
 		)
+		(symbol "Device:R_Small"
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 0.254)
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "R"
+				(at 0 0 90)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.016 1.016)
+					)
+				)
+			)
+			(property "Value" "R_Small"
+				(at 1.778 0 90)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "Resistor, small symbol"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "R resistor"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_fp_filters" "R_*"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "R_Small_0_1"
+				(rectangle
+					(start -0.762 1.778)
+					(end 0.762 -1.778)
+					(stroke
+						(width 0.2032)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "R_Small_1_1"
+				(pin passive line
+					(at 0 2.54 270)
+					(length 0.762)
+					(name ""
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 0 -2.54 90)
+					(length 0.762)
+					(name ""
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
 		(symbol "Device:R_US"
 			(pin_numbers
 				(hide yes)
@@ -4841,7 +4982,7 @@
 		)
 		(uuid "c5fc45c7-6e2a-4b25-8c52-6e6aa8fb6c82")
 	)
-	(text "Y1: Epson TG2520SMN 26 MHz, +/-0.5 ppm, fed by the\nPX100's own TCXO LDO (pin 3). Its long side is the\ng-sensitive X axis (0.4 ppb/g typ): keep it along board x,\nacross the thrust. C48 is the DC-cut its output needs.\nY2: 32.768 kHz, no load capacitors."
+	(text "Y1: Epson TG2520SMN 26 MHz, +/-0.5 ppm, fed by the\nPX100's own TCXO LDO (pin 3). Its long side is the\ng-sensitive X axis (0.4 ppb/g typ): keep it along board x,\nacross the thrust. C48 is a 0 ohm link: the TCXO drives TCXO_I\ndirectly, as in SkyTraq's reference (refit 1 nF if the clock fails).\nY2: 32.768 kHz, no load capacitors."
 		(exclude_from_sim no)
 		(at 110.49 205.74 0)
 		(effects
@@ -12701,7 +12842,7 @@
 		)
 	)
 	(symbol
-		(lib_id "Device:C_Small")
+		(lib_id "Device:R_Small")
 		(at 142.24 157.48 90)
 		(unit 1)
 		(body_style 1)
@@ -12721,7 +12862,7 @@
 				)
 			)
 		)
-		(property "Value" "1 nF"
+		(property "Value" "0R"
 			(at 142.24 154.94 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -12764,7 +12905,7 @@
 				)
 			)
 		)
-		(property "MPN" "GRM1555C1H102JA01D"
+		(property "MPN" "0402WGF0000TCE"
 			(at 142.24 157.48 0)
 			(hide yes)
 			(show_name no)
@@ -12775,7 +12916,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Murata"
+		(property "Mfr" "UNI-ROYAL"
 			(at 142.24 157.48 0)
 			(hide yes)
 			(show_name no)
@@ -12797,7 +12938,7 @@
 				)
 			)
 		)
-		(property "Dist_PN" "C76947"
+		(property "Dist_PN" "C17168"
 			(at 142.24 157.48 0)
 			(hide yes)
 			(show_name no)

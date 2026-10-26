@@ -9,8 +9,11 @@ Solutions CON-SMA-EDGE-S, as on the Beetle) for a passive antenna or the HackRF 
 (JLC04161H-3313). It is a bench and rig board, not the flight carrier.
 
 **State:** V1 released on 2026-10-23 (tag `gnss-px100-18mm-hv-v1.0.0`) and ordered as bare boards from JLC; not yet
-fabricated. V2 is in work: the title blocks and the silkscreen read V2. The only other change is the L5 input fix of
-2026-10-26 (L13 not fitted, C37 1.3 pF; see *Front end*). It changes parts, not copper, so it applies to the V1 builds too.
+fabricated. V2 is in work: the title blocks and the silkscreen read V2. The only other changes are two parts changes
+of 2026-10-26, so they apply to the V1 builds too:
+- the L5 input fix: L13 not fitted, C37 1.3 pF (see *Front end*);
+- C48 as a 0 Ω link, so the TCXO drives TCXO_I directly (see Y1 under *Part choices*).
+
 ERC is clean apart from inherited off-grid warnings; DRC with schematic parity finds no errors and nothing
 unconnected. Every via is filled and capped, the owner's choice of 2026-10-23, because U1's exposed pad
 needs vias in it (*Layout*, item 3).
@@ -86,7 +89,7 @@ drives it a little harder. One LNA stage instead of two would give about 3.7 dB 
 |---|---|---|
 | FL6 | Qualcomm B39162B4327P810 (C2650956) | L1 band: GPS/Galileo L1 1.0 dB, BeiDou B1I 1.4 dB, GLONASS; 50 Ω, no matching; same 1.4 × 1.1 mm package and land as the B8389. SkyTraq's TA1573A is not sold by LCSC |
 | FL7 | Murata SAFFB1G17AA0F0A (C910638) | L5 band 1164–1189 MHz, 1.1 dB; its measurement circuit has a 10 nH input shunt (L12) and a 7 nH output shunt. The output shunt (L13, 6.8 nH) is not fitted, because it would ground pin 37 through L15; C37 at 1.3 pF stands in for it (*Front end*). SkyTraq's TA2471A is out of stock |
-| Y1 | Seiko Epson TG2520SMN 26.000000MHz MCGNNM (DigiKey, about $0.45–0.89) | 26 MHz, ±0.5 ppm over −40…85 °C, 2.8–3.3 V (runs from the PX100's 3.0 V TCXO LDO), 1.5 mA, 2.5 × 2.0 mm. Chosen for acceleration: Epson's 26 MHz data gives about 0.4 ppb/g on the package's long side (X) and under 0.05 on Y and Z (2 ppb/g guaranteed), the part our GNSS report modelled (section 3.2.3). Keep its long side along board x, across the thrust; the footprint's fab arrow marks it. C48 is the DC-cut its output needs. Replaced the Abracon ATX-11 (no acceleration spec) on 2026-10-22. LCSC has none for V1's builds; FABRICATION-NOTES.md names the stand-in, the TG2016SMN |
+| Y1 | Seiko Epson TG2520SMN 26.000000MHz MCGNNM (DigiKey, about $0.45–0.89) | 26 MHz, ±0.5 ppm over −40…85 °C, 2.8–3.3 V (runs from the PX100's 3.0 V TCXO LDO), 1.5 mA, 2.5 × 2.0 mm. Chosen for acceleration: Epson's 26 MHz data gives about 0.4 ppb/g on the package's long side (X) and under 0.05 on Y and Z (2 ppb/g guaranteed), the part our GNSS report modelled (section 3.2.3). Keep its long side along board x, across the thrust; the footprint's fab arrow marks it. C48 is a 0 Ω link (2026-10-26; it was a 1 nF DC cut), so the TCXO drives TCXO_I directly. SkyTraq's reference wires it that way, and so do the TinkerNav PX100s, which boot (their ECS TCXO has the same clipped-sine output). Epson specifies its output through a 10 nF DC cut, so a 1 nF in C48's place is the fallback if the clock fails. Replaced the Abracon ATX-11 (no acceleration spec) on 2026-10-22. LCSC has none for V1's builds; FABRICATION-NOTES.md names the stand-in, the TG2016SMN |
 | Y2 | Seiko SC-32S 12.5 pF (C97606) | RTC crystal, no load capacitors (as the reference and the TinkerNav) |
 | D7 | onsemi NSR0320MW2T1G (C48192) | the reference's DCDC_OUT Schottky clamp, in SOD-323 |
 | L16 | Murata LQM18PN2R2MFRL (C337910) | the reference's 2.2 µH core inductor |
@@ -174,7 +177,9 @@ acceleration sensitivity on the thrust axis rather than size.
 ## Bring-up
 
 1. Rails: +3V3, +1V8, then the PX100's own LDO outputs: VDD_RF and VDD11 at 1.1 V, VDD_TCXO at 3.0 V, V_CORE about 1.3 V.
-2. Y1 at 26 MHz on a scope (clipped sine at C48), and Y1 placed with its long side along board x.
+2. Y1 at 26 MHz on a scope (clipped sine at C48, now a 0 Ω link), and Y1 placed with its long side along board x. If
+   the PX100 stays silent on the UART, or pin 4 shows no clean 26 MHz, refit C48 as a 1 nF (GRM1555C1H102JA01D,
+   the part on C22–C25).
 3. UART at 115200 on J3.1/J3.2; PPS on J3.5 once it has a fix.
 4. With no RF connected, meter DC from pin 37 and pin 40 to ground, at the U1 end of L15 and L14. A steady voltage
    there means the PX100 biases its LNA inputs through the pins, which confirms that L13 must stay off. Write the

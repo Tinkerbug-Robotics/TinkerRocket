@@ -3,9 +3,14 @@
 **V1, released 2026-10-23** (tag `gnss-px100-18mm-hv-v1.0.0`) and ordered as bare boards from JLC. V2 is in work
 and these notes still apply to it unchanged. Every via is filled and capped (note 3; README *Layout* item 3).
 
-**Parts change of 2026-10-26, for the V1 builds and V2:** L13 is not fitted, and C37 is 1.3 pF instead of 4 pF.
-L13 and L15 would ground the PX100's L5 input (pin 37) for DC; README *Front end* explains why. The tag's BOM still
-lists L13 fitted and C37 at 4 pF, so build from the schematic in work, not from the tag.
+**Parts changes of 2026-10-26, for the V1 builds and V2:**
+- L13 is not fitted, and C37 is 1.3 pF instead of 4 pF. L13 and L15 would ground the PX100's L5 input (pin 37) for
+  DC; README *Front end* explains why.
+- C48 is a 0 Ω jumper instead of a 1 nF capacitor, so the TCXO drives TCXO_I directly, as in SkyTraq's reference
+  (README, Y1 row).
+
+The tag's BOM still lists L13 fitted, C37 at 4 pF and C48 at 1 nF, so build from the schematic in work, not from the
+tag.
 Stencil thickness,
 the area-ratio floor and the paste-coverage convention are repo-wide in
 [`hardware/SOLDER-PASTE-CONVENTION.md`](../SOLDER-PASTE-CONVENTION.md).
@@ -69,6 +74,8 @@ ASSEMBLY - PLACEMENT
   1.2 V ON THIS BOARD.
 - L13: DO NOT FIT (LEAVE THE PADS BARE). C37: 1.3 pF (MURATA
   GJM1555C1H1R3BB01D), NOT 4 pF. A FITTED L13 GROUNDS U1 PIN 37.
+- C48 IS A 0 OHM JUMPER (0402WGF0000TCE) ON 0402 CAPACITOR PADS, NOT
+  A CAPACITOR.
 - SH1 (SHIELD FRAME), SH2 (SHIELD COVER) AND J1 (EDGE SMA) ARE NOT
   FITTED BY THE ASSEMBLER.
 
@@ -94,6 +101,10 @@ Changed 2026-10-26: C37 is now Murata GJM1555C1H1R3BB01D, 1.3 pF ±0.1 pF (LCSC 
 GJM1555C1H4R0BB01D (C161323). L13 is not fitted; its part, LQW15AN6N8G8ZD (C2043812), is shared with L10 and L11,
 so that line needs two per board instead of three. If the LCSC order isn't placed yet, swap the C37 line and cut the
 6.8 nH line; if the parts have already arrived, the spare inductor stays in the bag.
+
+Also changed 2026-10-26: C48 is the UNI-ROYAL 0402WGF0000TCE 0 Ω jumper (LCSC C17168, a JLC basic part). It replaces
+GRM1555C1H102JA01D (C76947), which C22–C25 still use, so that 1 nF line drops from five per board to four. Keep a
+spare or two: a 1 nF back in C48's place is the bring-up fallback.
 
 | Ref | Part | Source |
 |---|---|---|
