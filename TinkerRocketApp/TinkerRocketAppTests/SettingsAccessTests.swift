@@ -144,6 +144,16 @@ final class SettingsAccessTests: XCTestCase {
         XCTAssertTrue(FlightComputerNotRunningSection.explanation(rescue).contains("Update the flight computer"))
     }
 
+    func testNoticeForNoFlightLoopPointsAtUSB() {
+        // The app's update cannot reach it (the flight loop serves the update
+        // relay), so the notice must not send the operator there.
+        let noLoop = TelemetryData.FcBootProgress(step: 65, elapsedMs: 24800, degradedBits: 0)
+        XCTAssertEqual(FlightComputerNotRunningSection.title(noLoop), "Flight computer not running")
+        let s = FlightComputerNotRunningSection.explanation(noLoop)
+        XCTAssertTrue(s.contains("over USB"), s)
+        XCTAssertTrue(s.contains("can't reach it"), s)
+    }
+
     func testNoticeForAStartingFlightComputerPointsAtTheUpdate() {
         let starting = TelemetryData.FcBootProgress(step: 2, elapsedMs: 199, degradedBits: 0)
         XCTAssertEqual(FlightComputerNotRunningSection.title(starting), "Flight computer starting")

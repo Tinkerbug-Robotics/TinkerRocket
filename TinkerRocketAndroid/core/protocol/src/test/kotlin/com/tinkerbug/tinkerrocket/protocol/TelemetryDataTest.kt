@@ -584,16 +584,18 @@ class TelemetryDataTest {
             FcBootStep.SERVOS to "Starting servos",
             FcBootStep.COMPLETE to "Flight computer ready",
             FcBootStep.RESCUE to "Rescue mode — ready for a firmware update",
+            FcBootStep.NO_FLIGHT_LOOP to "Flight computer not running — no flight loop",
         )
         for ((step, label) in expected) {
             assertEquals(label, step.label)
             assertEquals(label, decodeOk("""{"bs":${step.raw}}""").fcBootStatusLine())
         }
         assertEquals(expected.size, FcBootStep.entries.size)
-        // FCB_STEP_COUNT counts the progress steps; RESCUE is a state outside
-        // that range (FCB_RESCUE = 64 in RocketComputerTypes.h).
-        assertEquals(expected.size - 1, FcBootStep.STEP_COUNT, "FCB_STEP_COUNT")
+        // FCB_STEP_COUNT counts the progress steps; RESCUE and NO_FLIGHT_LOOP
+        // are states outside that range (64 and 65 in RocketComputerTypes.h).
+        assertEquals(expected.size - 2, FcBootStep.STEP_COUNT, "FCB_STEP_COUNT")
         assertEquals(64, FcBootStep.RESCUE.raw, "FCB_RESCUE")
+        assertEquals(65, FcBootStep.NO_FLIGHT_LOOP.raw, "FCB_NO_FLIGHT_LOOP")
     }
 
     @Test
@@ -606,6 +608,20 @@ class TelemetryDataTest {
         assertFalse(t.fcBootStalled(3600))
         assertEquals("Rescue mode — ready for a firmware update", t.fcBootStatusLine(3600))
         assertFalse(decodeOk("""{"st":"INITIALIZATION","bs":2,"bt":199}""").fcRescue)
+    }
+
+    @Test
+    fun `no flight loop is named and never stalls`() {
+        // Setup finished but the flight task was never created. It used to stay
+        // at COMPLETE and read "Flight computer ready"; nothing will change
+        // until another image is flashed, so it never reads as "no progress".
+        val t = decodeOk("""{"st":"INITIALIZATION","bs":65,"bt":24800}""")
+        assertEquals(FcBootStep.NO_FLIGHT_LOOP, t.fcBootStep)
+        assertTrue(t.fcNoFlightLoop)
+        assertFalse(t.fcRescue)
+        assertFalse(t.fcBootStalled(3600))
+        assertEquals("Flight computer not running — no flight loop", t.fcBootStatusLine(3600))
+        assertFalse(decodeOk("""{"st":"INITIALIZATION","bs":5,"bt":199}""").fcNoFlightLoop)
     }
 
     @Test

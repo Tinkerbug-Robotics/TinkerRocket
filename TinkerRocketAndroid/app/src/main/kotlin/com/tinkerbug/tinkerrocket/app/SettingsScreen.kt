@@ -152,10 +152,12 @@ fun SettingsScreen(
     // step (or a degraded bit) does.
     val bootNotice by remember(session) {
         session?.telemetry
-            ?.map { FcBootNotice(it.fcBootStepRaw, it.fcRescue, it.fcBootStatusLine()) }
+            ?.map {
+                FcBootNotice(it.fcBootStepRaw, it.fcRescue, it.fcNoFlightLoop, it.fcBootStatusLine())
+            }
             ?.distinctUntilChanged()
-            ?: kotlinx.coroutines.flow.flowOf(FcBootNotice(null, false, null))
-    }.collectAsState(initial = FcBootNotice(null, false, null))
+            ?: kotlinx.coroutines.flow.flowOf(FcBootNotice(null, false, false, null))
+    }.collectAsState(initial = FcBootNotice(null, false, false, null))
 
     // "LoRa off" is DEVICE state (rocket NVS), not a profile field, so it is
     // read from the config readback and written straight to the session.
@@ -459,12 +461,16 @@ fun SettingsScreen(
                         "firmware below are on the out computer and work now.",
                 )
             } else {
+                val halted = bootNotice.rescue || bootNotice.noFlightLoop
                 GateNotice(
-                    FlightComputerNotice.title(bootNotice.stepRaw != null, bootNotice.rescue),
-                    FlightComputerNotice.explanation(bootNotice.stepRaw != null, bootNotice.rescue),
-                    // The step it is on; the rescue title already says it all.
-                    detail = bootNotice.line.takeIf { bootNotice.stepRaw != null && !bootNotice.rescue },
-                    warn = bootNotice.rescue,
+                    FlightComputerNotice.title(
+                        bootNotice.stepRaw != null, bootNotice.rescue, bootNotice.noFlightLoop),
+                    FlightComputerNotice.explanation(
+                        bootNotice.stepRaw != null, bootNotice.rescue, bootNotice.noFlightLoop),
+                    // The step it is on; the rescue and no-flight-loop titles
+                    // already say it all.
+                    detail = bootNotice.line.takeIf { bootNotice.stepRaw != null && !halted },
+                    warn = halted,
                 )
             }
             RadioSection(session, connected, haveConfig, loraTxDisabled, inflight)
@@ -1265,10 +1271,16 @@ private fun RadioSection(
 }
 
 /** What the not-running notice shows; distinct-until-changed in SettingsScreen. */
-private data class FcBootNotice(val stepRaw: Int?, val rescue: Boolean, val line: String?)
+private data class FcBootNotice(
+    val stepRaw: Int?,
+    val rescue: Boolean,
+    val noFlightLoop: Boolean,
+    val line: String?,
+)
 
 /** Full-width notice shown in place of the flight computer's sections when it
- *  can't accept settings (rail off, still starting, stuck, rescue mode).
+ *  can't accept settings (rail off, still starting, stuck, rescue mode, no
+ *  flight loop).
  *  [detail] is the boot step it is on, amber when [warn]. */
 @Composable
 private fun GateNotice(title: String, body: String, detail: String? = null, warn: Boolean = false) {

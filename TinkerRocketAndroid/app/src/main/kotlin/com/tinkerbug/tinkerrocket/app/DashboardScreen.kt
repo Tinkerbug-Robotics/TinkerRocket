@@ -1881,10 +1881,11 @@ internal fun RocketStateBanner(telemetry: TelemetryData, modifier: Modifier = Mo
         telemetry.fcBootStatusLine(dwellS)?.let { line ->
             // A degraded step FINISHED and boot carried on, so nothing else
             // will ever mention it; amber is the caution rung.  Rescue mode
-            // never "stalls" (it stays put by design) but is no healthier than
-            // a stalled boot.  Everything else is secondary text — the state
-            // label owns the color.
-            val warn = telemetry.fcRescue || telemetry.fcBootStalled(dwellS) ||
+            // and "no flight loop" never "stall" (they stay put by design) but
+            // are no healthier than a stalled boot.  Everything else is
+            // secondary text — the state label owns the color.
+            val warn = telemetry.fcRescue || telemetry.fcNoFlightLoop ||
+                telemetry.fcBootStalled(dwellS) ||
                 telemetry.fcBootDegradedSubsystems.isNotEmpty()
             Text(
                 line,

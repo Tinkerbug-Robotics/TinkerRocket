@@ -81,6 +81,14 @@ if(TR_TEST_SETUP_FAIL)
     add_compile_definitions(TR_TEST_SETUP_FAIL=${TR_TEST_SETUP_FAIL})
     message(WARNING "TR_TEST_SETUP_FAIL=${TR_TEST_SETUP_FAIL} -- setup_fc() fails ON PURPOSE (bench rescue-mode test image)")
 endif()
+# Bench test of FCB_NO_FLIGHT_LOOP: 1 = app_main holds internal RAM until no
+# block can take the flight task's 16 KB stack, so the flight task is never
+# created and the FC reports "no flight loop" (main.cpp app_main). Never set
+# for flight.
+if(TR_TEST_NO_FLIGHT_LOOP)
+    add_compile_definitions(TR_TEST_NO_FLIGHT_LOOP=${TR_TEST_NO_FLIGHT_LOOP})
+    message(WARNING "TR_TEST_NO_FLIGHT_LOOP=${TR_TEST_NO_FLIGHT_LOOP} -- the flight task is starved ON PURPOSE (bench no-flight-loop test image)")
+endif()
 # #1600 phase 4: the raw-GNSS shadow filter runs wherever the LC86G driver does
 # (main/config.h). -DTR_RAW_GNSS_SHADOW=0 builds an LC86G image without it, for
 # a bench A/B of what it costs on core 0.
@@ -371,7 +379,7 @@ endforeach()
 # A rig replay image (TR_SIM_REPLAY_BLOB) plays a canned flight from boot as a
 # sim, every pyro dry: the last image to take for the flight one.
 if(DEFINED TR_RAW_GNSS_IRAM OR TR_LOOP_PROFILE OR TR_HEADING_FIT_BENCH OR TR_BENCH_MB_BLOCKS OR TR_I2S_TX_MONITOR OR TR_TEST_SETUP_FAIL
-   OR TR_GNSS_BENCH_COLD_START OR TR_GNSS_COCOM_DIAG OR TR_GNSS_RATE_HZ OR TR_SIM_REPLAY_BLOB)
+   OR TR_TEST_NO_FLIGHT_LOOP OR TR_GNSS_BENCH_COLD_START OR TR_GNSS_COCOM_DIAG OR TR_GNSS_RATE_HZ OR TR_SIM_REPLAY_BLOB)
     set(TR_BENCH_SUFFIX "-bench")
 endif()
 if(TR_BENCH_SUFFIX)
