@@ -75,7 +75,8 @@ replaces it). A bench image once created its benchmark task first and the flight
 never started (Beetle, 2026-10-26). `tinkerrocket-idf/tools/check_flight_task_first.py`
 now fails the Docs workflow on that order. If the flight task still cannot be created,
 `app_main` reports boot step `FCB_NO_FLIGHT_LOOP` (65) every 500 ms, and the apps say the
-flight computer is not running instead of "Flight computer ready".
+flight computer is not running instead of "Flight computer ready". A bench image built with
+`-DTR_TEST_NO_FLIGHT_LOOP=1` starves the flight task on purpose to show it.
 
 The IMU task reads the chip's FIFO where the board header turns that on
 (`ISM6_FIFO_CAPTURE`: the mini and V9/V10; #1485), a burst at a time on the FIFO-threshold

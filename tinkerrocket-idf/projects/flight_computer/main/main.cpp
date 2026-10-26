@@ -15646,6 +15646,18 @@ extern "C" void app_main(void)
                                 nullptr, 1);
         return;
     }
+#if defined(TR_TEST_NO_FLIGHT_LOOP) && TR_TEST_NO_FLIGHT_LOOP
+    // Bench (-DTR_TEST_NO_FLIGHT_LOOP=1): hold internal RAM ON PURPOSE until no
+    // block can take the flight task's stack, the shape a bench image once had
+    // by accident, so FCB_NO_FLIGHT_LOOP can be seen reaching the apps. Each
+    // block keeps about 11 KB, so the tasks already running still have room.
+    for (size_t big; (big = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)) >= 12 * 1024;)
+    {
+        if (heap_caps_malloc(big - 11 * 1024, MALLOC_CAP_INTERNAL) == nullptr) break;
+    }
+    ESP_LOGW(TAG, "[BOOT] TR_TEST_NO_FLIGHT_LOOP build: internal RAM held ON PURPOSE, largest block now %u B",
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+#endif
     TaskHandle_t flight_task = nullptr;
     if (xTaskCreatePinnedToCore(
         [](void *) {
