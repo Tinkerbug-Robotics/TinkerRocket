@@ -439,7 +439,7 @@
       <ol>
         <li><b>Type your GitHub username.</b> Every link after this one is made for your account. (No account? <a href="https://github.com/signup" target="_blank" rel="noopener">Sign up</a>; it is free.)</li>
         <li><b>Create the repository.</b> The link opens GitHub's form with the name <code>tinkerrocket-flight-log</code> filled in. Keep it <i>Public</i>, turn on <i>Add README</i>, and press <i>Create repository</i>.</li>
-        <li><b>Turn on GitHub Pages.</b> This is what lets other people open your reports. In the repository's <i>Settings → Pages</i>, under <i>Build and deployment</i>, set Source to <i>Deploy from a branch</i>, Branch to <i>main</i> and <i>/ (root)</i>, and press <i>Save</i>. If <i>main</i> is not offered, the repository has no README yet: publish one flight first, then come back.</li>
+        <li><b>Turn on GitHub Pages (optional).</b> Your reports show to everyone without it. With it, they also get the 3D flight path and their own web address. In the repository's <i>Settings → Pages</i>, under <i>Build and deployment</i>, set Source to <i>Deploy from a branch</i>, Branch to <i>main</i> and <i>/ (root)</i>, and press <i>Save</i>. If <i>main</i> is not offered, the repository has no README yet: publish one flight first, then come back.</li>
         <li><b>Make a token.</b> A token is a key that lets this page write to your log. The link opens GitHub's form already filled in. Under <i>Repository access</i>, choose <i>Only select repositories</i> and pick <code>tinkerrocket-flight-log</code>. Press <i>Generate token</i> and copy it; GitHub shows it only once. The token can write to that one repository and nothing else on your account.</li>
         <li><b>Connect.</b> Paste the token and press <i>Connect</i>. The token is kept in this browser and only ever sent to GitHub.</li>
       </ol>
@@ -458,7 +458,7 @@
       <h2>Browse and share</h2>
       <ul>
         <li><a href="#/pilots">Public logs</a> lists every flyer who has published, and the latest flights across all of them. A new log can take a few minutes to show up there. To open one straight away, type the flyer's GitHub username.</li>
-        <li>On a flyer's log, click a flight for its details and full report. <b>Copy link</b> gives an address that opens that flight for anyone.</li>
+        <li>On a flyer's log, click a flight for its details and full report. <b>Copy link</b> gives an address that opens that flight for anyone. <b>Full screen</b> (or <b>Open report in tab</b>, when the flyer has GitHub Pages on) gives the report the whole screen.</li>
         <li>On your own published flights, <b>Copy public link</b> does the same.</li>
       </ul>
     </section>
@@ -470,8 +470,8 @@
         <dd>Check that you are signed in to GitHub as the username you typed. The Pages settings only exist after the repository is created, and only its owner can see them.</dd>
         <dt>"Main" is not offered in the Pages settings</dt>
         <dd>The repository is empty. Publish one flight (that creates <i>main</i>), or add a README on GitHub, then set Pages again.</dd>
-        <dt>A published report says GitHub Pages is not serving it</dt>
-        <dd>Pages is off (see step 3 above), or it is still updating. It takes about a minute after each publish.</dd>
+        <dt>A published report has no 3D flight path, or no "Open report in tab"</dt>
+        <dd>The log's owner has not turned on GitHub Pages (step 3 above), or it is still updating, which takes about a minute after each publish. The rest of the report shows either way.</dd>
         <dt>"GitHub did not accept that token"</dt>
         <dd>It was not copied whole, or it has expired (tokens last up to a year). Make a new one from the same link and connect again.</dd>
         <dt>"GitHub refused the write"</dt>
