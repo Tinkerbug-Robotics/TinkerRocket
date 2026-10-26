@@ -314,6 +314,14 @@ transfers, and it disables the BLE library's own auto-negotiation so the two can
 race. The idle link is worth roughly 1 mA against 7 mA for the fast link, so the policy
 is most of the standby power story.
 
+**An FC-only reboot on the ground reads as a fresh boot.** The OC keeps the last
+`NonSensorData` state through an FC reset, because the snapshot it hands the booting FC,
+the in-flight refusals, LoRa and the landed lockout all need the rocket's phase. The
+direct BLE link no longer shows that state while the FC reports boot steps: a ground
+state is published as `INITIALIZATION` and the data status as `SYNCING`, which is what
+the first boot after power-on shows. `INFLIGHT` and `LANDED` are kept, and LoRa still
+carries the stored state (`fc_reboot_display_policy.h`).
+
 ---
 
 ## Gotchas
