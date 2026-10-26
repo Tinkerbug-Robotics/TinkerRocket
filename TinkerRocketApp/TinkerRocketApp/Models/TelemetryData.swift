@@ -450,6 +450,13 @@ struct TelemetryData: Codable {
         /// (flight_computer fc_rescue_policy.h).  Outside the progress range on
         /// the wire, hence the explicit value.
         case rescue = 64
+        /// FCB_NO_FLIGHT_LOOP: setup finished, but the flight task could not be
+        /// created (too little internal RAM for its stack), so no flight loop
+        /// runs: no data, no commands, no flight.  It used to stop at COMPLETE
+        /// and read "Flight computer ready" while the dashboard sat on
+        /// "Syncing…" (Beetle bench image, 2026-10-26).  Only another image
+        /// fixes it, flashed over USB: the app's update needs the flight loop.
+        case noFlightLoop = 65
         var label: String {
             switch self {
             case .links:    return "Linking to flight computer"
@@ -459,6 +466,7 @@ struct TelemetryData: Codable {
             case .servos:   return "Starting servos"
             case .complete: return "Flight computer ready"
             case .rescue:   return "Rescue mode — ready for a firmware update"
+            case .noFlightLoop: return "Flight computer not running — no flight loop"
             }
         }
     }
@@ -475,6 +483,10 @@ struct TelemetryData: Codable {
         /// The FC is in rescue mode: it will not finish booting on its own, and
         /// a flight computer firmware update is the thing it is waiting for.
         var isRescue: Bool { knownStep == .rescue }
+
+        /// The FC finished starting but runs no flight loop, and nothing the
+        /// app can send will change that.
+        var isNoFlightLoop: Bool { knownStep == .noFlightLoop }
 
         // FCB_DEG_* (RocketComputerTypes.h).  A set bit means the step finished
         // DEGRADED and boot CONTINUED — nothing stopped, which is exactly why
@@ -520,10 +532,12 @@ struct TelemetryData: Codable {
         /// every frame, so a wedged boot and a just-started one carry the same
         /// "bt" — only the dwell separates them.  FCB_COMPLETE is exempt: the
         /// FC has finished and the app is just waiting for the first real
-        /// NonSensorData to arrive.  So is rescue mode, which stays put by
-        /// design: "no progress" would only tell the operator to keep waiting.
+        /// NonSensorData to arrive.  So are rescue mode and "no flight loop",
+        /// which stay put by design: "no progress" would only tell the operator
+        /// to keep waiting.
         func isStalled(dwell: TimeInterval) -> Bool {
-            knownStep != .complete && !isRescue && dwell >= Self.stallAfter(knownStep)
+            knownStep != .complete && !isRescue && !isNoFlightLoop
+                && dwell >= Self.stallAfter(knownStep)
         }
 
         /// The secondary line.  `dwell` defaults to 0 = "just seen", so a caller

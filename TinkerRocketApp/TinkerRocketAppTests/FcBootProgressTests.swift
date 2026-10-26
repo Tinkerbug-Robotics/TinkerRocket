@@ -97,6 +97,28 @@ final class FcBootProgressTests: XCTestCase {
         XCTAssertFalse(TelemetryData.FcBootProgress(step: 2, elapsedMs: 0, degradedBits: 0).isRescue)
     }
 
+    func testNoFlightLoopIsNamed() throws {
+        // FCB_NO_FLIGHT_LOOP (65): setup finished but the flight task was never
+        // created. It used to stay at COMPLETE and read "Flight computer ready".
+        let t = try decode(#"{"st":"INITIALIZATION","bs":65,"bt":24800}"#)
+        let boot = try XCTUnwrap(t.fcBootProgress)
+        XCTAssertEqual(boot.knownStep, .noFlightLoop)
+        XCTAssertTrue(boot.isNoFlightLoop)
+        XCTAssertFalse(boot.isRescue)
+        XCTAssertEqual(boot.line(), "Flight computer not running — no flight loop")
+        XCTAssertEqual(TelemetryData.FcBootStep.noFlightLoop.rawValue, 65,
+                       "FCB_NO_FLIGHT_LOOP in RocketComputerTypes.h")
+    }
+
+    func testNoFlightLoopNeverStalls() {
+        // Nothing will change until another image is flashed, so "no progress"
+        // would only say "keep waiting".
+        let boot = TelemetryData.FcBootProgress(step: 65, elapsedMs: 24800, degradedBits: 0)
+        XCTAssertFalse(boot.isStalled(dwell: 3600))
+        XCTAssertEqual(boot.line(dwell: 3600), "Flight computer not running — no flight loop")
+        XCTAssertFalse(TelemetryData.FcBootProgress(step: 5, elapsedMs: 0, degradedBits: 0).isNoFlightLoop)
+    }
+
     func testUnknownStepRendersGenerically() throws {
         // FcBootStep is append-only: a newer FC will report steps this build has
         // never heard of, and the line must still say something useful.
