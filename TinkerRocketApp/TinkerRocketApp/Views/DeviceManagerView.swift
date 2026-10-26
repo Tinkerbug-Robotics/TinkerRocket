@@ -161,6 +161,14 @@ struct DeviceManagerView: View {
                 Text(subtitle(rec))
                     .font(.caption)
                     .foregroundColor(.secondary)
+                // #1629: what this board's flight computer holds, as last read.
+                if rec.deviceType == .rocket {
+                    let cal = rec.calibration ?? BoardCalibration()
+                    Text(cal.summary)
+                        .font(.caption)
+                        .foregroundColor(!cal.missing.isEmpty ? .orange
+                                         : cal.fullyCalibrated ? .green : .secondary)
+                }
                 ForEach(Self.conflictBadges(store.rocketIDConflicts(for: rec.unitID)), id: \.text) { badge in
                     Label(badge.text, systemImage: badge.severe
                           ? "exclamationmark.triangle.fill" : "clock.arrow.2.circlepath")
@@ -252,6 +260,14 @@ struct KnownDeviceDetailView: View {
     @State private var renameText = ""
     @State private var showForgetConfirm = false
 
+    private func calibrationRow(_ label: String, _ text: String) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(text).foregroundColor(.secondary)
+        }
+    }
+
     /// Live BLE handle when this device is currently connected — nil means
     /// edits queue for the next connect.
     private var live: BLEDevice? { fleet.connectedDevice(unitID: unitID) }
@@ -320,6 +336,28 @@ struct KnownDeviceDetailView: View {
                     Text(rec.unitID)
                         .font(.system(.body, design: .monospaced))
                         .foregroundColor(.secondary)
+                }
+                if rec.deviceType == .rocket {
+                    // #1629: the board's calibration, one row per sensor, and
+                    // when it was read. A board never read says so rather
+                    // than "not calibrated".
+                    let cal = rec.calibration ?? BoardCalibration()
+                    calibrationRow("Magnetometer", BoardCalibration.rowText(cal.mag))
+                    calibrationRow("Accelerometer", BoardCalibration.rowText(cal.accel))
+                    calibrationRow("Gyro", BoardCalibration.rowText(cal.gyro))
+                    calibrationRow("High-g alignment", BoardCalibration.highGRowText(cal.highGAligned))
+                    if let read = cal.readAt {
+                        HStack {
+                            Text("Calibration read")
+                            Spacer()
+                            if connected {
+                                Text("Now").foregroundColor(.secondary)
+                            } else {
+                                Text(read, style: .relative).foregroundColor(.secondary)
+                                Text("ago").foregroundColor(.secondary)
+                            }
+                        }
+                    }
                 }
                 if let seen = rec.lastSeen {
                     HStack {

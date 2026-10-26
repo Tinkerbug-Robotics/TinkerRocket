@@ -1099,9 +1099,10 @@ class ActiveRocketSyncerTest {
         val adv = assertIs<ActiveRocketSyncer.CalAdvisory.BoardMismatch>(r.syncer.magCalAdvisory.value)
         assertEquals("OTHERBOARD", adv.savedOn)
         assertEquals("boardA", adv.current)
-        // Mismatch → no cmd 55 apply, and no cmd 61 read either.
+        // Mismatch → no cmd 55 apply, and no cmd 61 read of the syncer's own:
+        // the one 61 is the session's connect-time calibration read (#1629).
         assertTrue(55 !in r.sentCommandIds())
-        assertTrue(61 !in r.sentCommandIds())
+        assertEquals(1, r.sentCommandIds().count { it == 61 })
     }
 
     @Test

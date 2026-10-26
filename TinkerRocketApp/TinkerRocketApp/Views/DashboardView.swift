@@ -655,6 +655,9 @@ private struct FocusedRelaySection: View {
         if collapsed {
             CollapsedRocketSummary(telemetry: bs.telemetry)
         } else {
+            // #1629: the followed rocket's board is known only from its last
+            // Bluetooth link; the base station's own reads say nothing of it.
+            RegistryCalibrationLine(subject: subject, knownDevices: fleet.knownDevices)
             ConnectedDashboardView(device: bs,
                                    fleet: fleet,
                                    locationManager: locationManager,
@@ -903,6 +906,27 @@ struct ConnectedDashboardView: View {
                     .foregroundColor(.orange)
                     .frame(maxWidth: .infinity)
                     .opacity(staleOpacity)
+                }
+
+                // #1629: what this board's flight computer lacks for
+                // calibration, as the board said it — never the profile, and
+                // never a calibration not read yet. Same quiet line and rule
+                // as the advisories above: no recolour, no arm block. It
+                // opens Settings, which lists each sensor.
+                if !device.isBaseStation,
+                   let calLine = device.calibration.notCalibratedLine {
+                    Button { activeSheet = .settings(device) } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle")
+                            Text(calLine)
+                            Image(systemName: "chevron.right")
+                                .font(.caption2)
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.orange)
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
 

@@ -443,8 +443,10 @@ private struct SettingsContent: View {
                 summaryRow("IMU mounting", p.imuOrientSetting == 0xFF
                     ? "Auto" : "Nose \(FlightSettingsData.b2rName(code: p.imuOrientSetting))")
                 summaryRow("Gain scheduling", p.gainScheduleEnabled ? "On" : "Off")
-                summaryRow("Mag cal", p.magCal == nil ? "Not saved" : "Saved")
-                summaryRow("Sensor cal", p.sensorCal == nil ? "Not saved" : "Saved")
+                // The profile's saved copies; what the board holds is under
+                // Calibration (#1629).
+                summaryRow("Mag cal in profile", p.magCal == nil ? "Not saved" : "Saved")
+                summaryRow("Sensor cal in profile", p.sensorCal == nil ? "Not saved" : "Saved")
             }
         }
 
@@ -872,9 +874,16 @@ private struct SettingsContent: View {
         }
 
         Section("Calibration") {
+            // #1629: what THIS flight computer holds, read from the board
+            // (never the profile).
+            BoardCalibrationRows(device: device)
+
             // Magnetometer: navigates to MagCalView for the full tumble flow.
+            // Each calibration screen reads the board again on the way out,
+            // so the rows above say what was just stored.
             NavigationLink {
                 MagCalView(device: device)
+                    .onDisappear { device.requestCalibrationStatus() }
             } label: {
                 Label("Magnetometer Calibration", systemImage: "location.north.line")
             }
@@ -888,6 +897,7 @@ private struct SettingsContent: View {
             // without a rocket too, to show the ionosphere the phone holds.
             NavigationLink {
                 PadCalibrationView(device: device)
+                    .onDisappear { device.requestCalibrationStatus() }
             } label: {
                 HStack {
                     Label("Pad Calibration", systemImage: "gyroscope")
@@ -906,6 +916,7 @@ private struct SettingsContent: View {
             // the magnetometer's: it needs the rocket connected and powered.
             NavigationLink {
                 AccelCalibrationView(device: device)
+                    .onDisappear { device.requestCalibrationStatus() }
             } label: {
                 Label("Accelerometer Calibration (Six Faces)", systemImage: "cube")
             }
@@ -2191,6 +2202,43 @@ private struct SettingsContent: View {
 }
 
 // MARK: - Pyro live controls
+
+/// #1629: what this flight computer holds for calibration, one row per sensor,
+/// as the board said it (never the profile). A child view, like
+/// PyroChannelTestControls below, so live device changes stay out of
+/// SettingsView's own sections. Android twin: SettingsScreen's
+/// BoardCalibrationRows.
+private struct BoardCalibrationRows: View {
+    @ObservedObject var device: BLEDevice
+
+    private func color(_ value: Bool?) -> Color {
+        switch value {
+        case true?:  return .green
+        case false?: return .orange
+        case nil:    return .secondary
+        }
+    }
+
+    private func row(_ label: String, _ value: Bool?, _ text: String) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(text).foregroundColor(color(value))
+        }
+    }
+
+    var body: some View {
+        let cal = device.calibration
+        row("Magnetometer", cal.mag, BoardCalibration.rowText(cal.mag))
+        row("Accelerometer (six faces)", cal.accel, BoardCalibration.rowText(cal.accel))
+        row("Gyro (pad calibration)", cal.gyro, BoardCalibration.rowText(cal.gyro))
+        // A refinement, not a need: never orange.
+        row("High-g alignment", cal.highGAligned == true ? true : nil,
+            BoardCalibration.highGRowText(cal.highGAligned))
+        Text("Read from this flight computer. Each board keeps its own calibration; a rocket profile does not carry it to another board.")
+            .font(.caption).foregroundColor(.secondary)
+    }
+}
 
 /// Continuity readout + Test Continuity / Test Pyro Channel for one channel,
 /// factored out of SettingsView's pyro Section so the section that holds the

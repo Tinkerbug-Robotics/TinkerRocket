@@ -122,6 +122,25 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// profile and no connect-time sync.
     @Published private(set) var accelCalStatus: AccelCalStatus?
 
+    /// #1629: what THIS board holds for calibration, read from the board on
+    /// connect (`requestCalibrationStatus`) and kept current by the status
+    /// frames the flight computer republishes after every calibration it
+    /// stores. Fields stay nil until the board answers. Folded into the
+    /// registry so My Devices and a relayed rocket's section can say it too.
+    /// Android twin: DeviceSession.calibration.
+    @Published private(set) var calibration = BoardCalibration()
+    /// Until when an IDLE mag-cal frame answers OUR read. The calibrator also
+    /// sends IDLE when a calibration session ends, which says nothing about
+    /// what is stored, so an IDLE counts as "no magnetometer calibration" only
+    /// inside this window.
+    private var magCalReadUntil: Date?
+    private var calibrationRequested = false
+    private var lastRailOn = false
+    /// How long an IDLE mag-cal frame counts as the answer to a read: the out
+    /// computer serves queued commands about once a second, behind whatever
+    /// the connect-time profile sync queued first.
+    static let calReadWindow: TimeInterval = 30
+
     /// Every 0xD1 frame, in order. The six-face screen sequences them (a
     /// MEASURING frame, then the window's result), which `accelCalStatus`
     /// cannot carry: two equal frames publish no change, and SwiftUI may
@@ -445,6 +464,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         padCalStatus = nil
         padCalGeneration += 1
         accelCalStatus = nil
+        calibration = BoardCalibration()
+        magCalReadUntil = nil
+        calibrationRequested = false
+        lastRailOn = false
         imuOrientationCode = nil
         pyroTestRefusal = nil
         // #435: the guidance-target echo is per-connection live state; the
@@ -1616,6 +1639,44 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// Ask the FC for its stored offset and last face window: one 0xD1 frame.
     func sendAccelCalRead() { sendRawCommand(77) }
 
+    /// #1629: ask the flight computer what it holds — the magnetometer (61),
+    /// the gyro and high-g bias (63) and the six-face offset and high-g
+    /// alignment (77). All three only read storage and republish it. Sent on
+    /// connect, again when the rail comes up with answers missing, and by the
+    /// calibration screens when they close. Rocket links only.
+    func requestCalibrationStatus() {
+        guard !isBaseStation else { return }
+        magCalReadUntil = nowProvider().addingTimeInterval(Self.calReadWindow)
+        sendMagCalRead()
+        sendSensorCalRead()
+        sendAccelCalRead()
+    }
+
+    /// APPLIED always means a calibration is stored (a read's answer, or a
+    /// calibration just accepted). IDLE means none only as the answer to a
+    /// read; anything else (sampling, review, aborted) says nothing about
+    /// storage.
+    private func noteMagCalStatus(_ status: MagCalStatus) {
+        switch status.subType {
+        case .applied:
+            foldCalibration(BoardCalibration(mag: true))
+        case .idle:
+            if let until = magCalReadUntil, nowProvider() <= until {
+                magCalReadUntil = nil
+                foldCalibration(BoardCalibration(mag: false))
+            }
+        default:
+            break
+        }
+    }
+
+    private func foldCalibration(_ reading: BoardCalibration) {
+        var stamped = reading
+        stamped.readAt = nowProvider()
+        calibration = calibration.merged(stamped)
+        fleet?.knownDevices.deviceDidReportCalibration(unitID: unitID, reading: stamped)
+    }
+
     /// Average the low-g accelerometer over one 3 s face window: a 0xD1
     /// MEASURING frame at once, then DONE or FAILED. A refusal (in flight,
     /// after a flight, in a sim, during a magnetometer calibration) is a
@@ -2725,6 +2786,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 firmware: dict["fw"] as? String, pusher: self)
             // An fc_identity that beat this readback had no record to land in.
             if fcIdentityAwaitingRegistry { recordFlightComputerIdentity() }
+            // #1629: a rocket's calibration is read once its role is known —
+            // a base station has no sensors to calibrate and no handler.
+            if !calibrationRequested && deviceType == .rocket {
+                calibrationRequested = true
+                requestCalibrationStatus()
+            }
             return
         }
 
@@ -2916,6 +2983,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             if newTelemetry.pwr_pin_on && self.poweringOn {
                 self.clearPoweringOn()
             }
+            // #1629: the flight computer answers the calibration reads; with
+            // its rail off at connect they may never have reached it. Ask
+            // again when it comes up, if anything is still unanswered.
+            if newTelemetry.pwr_pin_on && !self.lastRailOn && self.calibrationRequested {
+                let c = self.calibration
+                if c.mag == nil || c.accel == nil || c.gyro == nil { self.requestCalibrationStatus() }
+            }
+            self.lastRailOn = newTelemetry.pwr_pin_on
             // Direct rocket connection — use this device's own rocketID
             // (relayed-telemetry path above uses source_rocket_id instead).
             // Skip when rocketID is unset so a BS-self packet (which falls
@@ -2990,6 +3065,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             return
         }
         magCalStatus = status
+        noteMagCalStatus(status)
     }
 
     private func parseSensorCalStatus(_ data: Data) {
@@ -3004,6 +3080,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             return
         }
         sensorCalStatus = status
+        foldCalibration(BoardCalibration(gyro: status.valid))
     }
 
     /// 0xD0 — pad calibration status (#1600 phase 5): [0xD0][40-byte
@@ -3031,6 +3108,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
         accelCalStatus = status
         accelCalFrames.send(status)
+        foldCalibration(BoardCalibration(accel: status.isStored, highGAligned: status.highG?.isStored))
     }
 
     /// 0xCE — rail-off pyro-test refusal (OC sendPyroTestRefusal).

@@ -33,6 +33,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.tinkerbug.tinkerrocket.session.BleDeviceType
+import com.tinkerbug.tinkerrocket.session.BoardCalibration
 import com.tinkerbug.tinkerrocket.session.DeviceSession
 import com.tinkerbug.tinkerrocket.session.FleetManager
 import com.tinkerbug.tinkerrocket.session.KnownDevice
@@ -219,6 +220,19 @@ private fun DeviceRow(rec: KnownDevice, connected: Boolean, mismatch: Boolean, o
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            // #1629: what this board's flight computer holds, as last read.
+            if (rec.deviceType == BleDeviceType.ROCKET) {
+                val cal = rec.calibration ?: BoardCalibration()
+                Text(
+                    cal.summary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = when {
+                        cal.missing.isNotEmpty() -> tr.statusWarn
+                        cal.fullyCalibrated -> tr.statusOk
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
         }
         Column(horizontalAlignment = Alignment.End) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -235,6 +249,32 @@ private fun DeviceRow(rec: KnownDevice, connected: Boolean, mismatch: Boolean, o
                 Text("queued", style = MaterialTheme.typography.labelSmall, color = tr.statusPending)
             }
         }
+    }
+}
+
+/**
+ * #1629: the board's calibration, one row per sensor, and when it was read.
+ * A board never read says so rather than "not calibrated".
+ */
+@Composable
+private fun CalibrationDetailRows(cal: BoardCalibration?, connected: Boolean) {
+    val c = cal ?: BoardCalibration()
+    @Composable
+    fun row(label: String, text: String) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label)
+            Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+    row("Magnetometer", BoardCalibration.rowText(c.mag))
+    row("Accelerometer", BoardCalibration.rowText(c.accel))
+    row("Gyro", BoardCalibration.rowText(c.gyro))
+    row("High-g alignment", BoardCalibration.highGRowText(c.highGAligned))
+    c.readAtMs?.let { at ->
+        row(
+            "Calibration read",
+            if (connected) "Now" else DateUtils.getRelativeTimeSpanString(at).toString(),
+        )
     }
 }
 
@@ -449,6 +489,7 @@ private fun KnownDeviceDetail(
                     Text("Hardware ID")
                     Text(rec.unitID, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+                if (rec.deviceType == BleDeviceType.ROCKET) CalibrationDetailRows(rec.calibration, connected)
                 rec.lastSeenEpochMillis?.let { seen ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Last seen")

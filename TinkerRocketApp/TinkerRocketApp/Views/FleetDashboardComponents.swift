@@ -416,6 +416,9 @@ struct RelayRocketSectionView: View {
             } else {
                 RocketStateView(state: remote.telemetry.state)
                     .opacity(freshness.cardOpacity)
+                if let fleet {
+                    RegistryCalibrationLine(subject: subject, knownDevices: fleet.knownDevices)
+                }
 
                 // Advisory line under the state banner, same shape and rule
                 // as the preflight and "LoRa off" lines: it never recolors
@@ -494,6 +497,40 @@ struct RelayRocketSectionView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.systemGray6))
         .cornerRadius(10)
+    }
+}
+
+// MARK: - A relayed rocket's calibration (#1629)
+
+/// A relayed rocket's calibration can only be what its board said over
+/// Bluetooth last time (the LoRa link carries none of it), so the line says
+/// so. Nothing when that board was never read or lacks nothing. Android twin:
+/// FleetDashboardScreen's RegistryCalibrationLine.
+struct RegistryCalibrationLine: View {
+    let subject: RocketSubject
+    @ObservedObject var knownDevices: KnownDeviceStore
+
+    /// The line's text, or nil when it stays silent.
+    static func text(for subject: RocketSubject, in store: KnownDeviceStore) -> String? {
+        guard let key = subject.key,
+              let line = store.rocket(networkID: key.networkID, rocketID: key.rocketID,
+                                      name: subject.freshestRelay?.remote.unitName)?
+                .calibration?.notCalibratedLine
+        else { return nil }
+        return line + " (as of its last Bluetooth link)"
+    }
+
+    var body: some View {
+        if let line = Self.text(for: subject, in: knownDevices) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle")
+                Text(line)
+                Spacer(minLength: 0)
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundColor(.orange)
+            .padding(.horizontal, 4)
+        }
     }
 }
 

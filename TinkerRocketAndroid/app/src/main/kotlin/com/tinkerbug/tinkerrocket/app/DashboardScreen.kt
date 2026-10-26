@@ -97,6 +97,13 @@ fun DashboardScreen(
     // Tools sub-routes (iOS: sheets from the dashboard).  The route state is
     // owned by MainActivity, not here, so the top bar drawn above this screen
     // can tell that a tool is open -- see ConnectedTopBar's chevron.
+    // #1629: leaving a calibration screen, however it closes, reads the
+    // board again, so its calibration status says what was just stored.
+    if (tool == "magcal" || tool == "sensorcal" || tool == "accelcal") {
+        androidx.compose.runtime.DisposableEffect(tool) {
+            onDispose { session.requestCalibrationStatus() }
+        }
+    }
     when (tool) {
         "servo" -> { ServoTestScreen(session, profileStore, onBack = { onTool(null) }); return }
         "sim" -> { SimulationScreen(session, onBack = { onTool(null) }); return }
@@ -489,6 +496,33 @@ private fun DeviceDashboardContent(
                 )
                 Text(
                     "  $modemText",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = tr.statusWarn,
+                )
+            }
+        }
+
+        // #1629: what this board's flight computer lacks for calibration, as
+        // the board said it — never the profile, and never a calibration not
+        // read yet.  Same quiet line and rule as the advisories above: no
+        // recolour, no arm block.  It opens Settings, which lists each sensor.
+        val calibration by session.calibration.collectAsState()
+        val calLine = calibration.notCalibratedLine
+        if (!session.isBaseStation && calLine != null) {
+            Row(
+                Modifier.fillMaxWidth().clickable(onClick = onOpenSettings)
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Filled.Warning,
+                    contentDescription = null,
+                    tint = tr.statusWarn,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    "  $calLine",
                     style = MaterialTheme.typography.labelMedium,
                     color = tr.statusWarn,
                 )

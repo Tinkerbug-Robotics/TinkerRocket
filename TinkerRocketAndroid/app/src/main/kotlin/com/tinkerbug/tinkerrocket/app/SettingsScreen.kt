@@ -60,6 +60,7 @@ import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer
 import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.CalAdvisory
 import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.ConfigGroup
 import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState
+import com.tinkerbug.tinkerrocket.session.BoardCalibration
 import com.tinkerbug.tinkerrocket.session.DeviceSession
 import com.tinkerbug.tinkerrocket.session.ProfileRollWaypoint
 import com.tinkerbug.tinkerrocket.session.RocketProfile
@@ -417,8 +418,10 @@ fun SettingsScreen(
                     SummaryRow("IMU mounting", if (active.imuOrientSetting == 0xFF) "Auto"
                                                else "Code ${active.imuOrientSetting}")
                     SummaryRow("Gain scheduling", if (active.gainScheduleEnabled) "On" else "Off")
-                    SummaryRow("Mag cal", if (active.magCal == null) "Not saved" else "Saved")
-                    SummaryRow("Sensor cal", if (active.sensorCal == null) "Not saved" else "Saved")
+                    // The profile's saved copies; what the board holds is
+                    // under Calibration (#1629).
+                    SummaryRow("Mag cal in profile", if (active.magCal == null) "Not saved" else "Saved")
+                    SummaryRow("Sensor cal in profile", if (active.sensorCal == null) "Not saved" else "Saved")
                 }
             }
 
@@ -502,17 +505,19 @@ fun SettingsScreen(
         }
 
         // ── Calibration (#1629) ──────────────────────────────────────────
-        // The six-face accelerometer calibration, worded and gated as in iOS
-        // SettingsView's Calibration section (the rocket itself, connected
-        // and powered). The screen itself is a dashboard tool beside the mag
-        // and pad calibrations; this opens it. The offset is the board's own
-        // (stored on the flight computer), so it is no profile field and
-        // nothing pushes it on connect.
-        if (onOpenAccelCal != null && session != null && !session.isBaseStation) {
-            val canCalibrate = com.tinkerbug.tinkerrocket.session.AccelSixFace.canCalibrate(
-                connected, session.isBaseStation, powerOn,
-            )
-            Section("Calibration") {
+        // What THIS flight computer holds, read from the board (never the
+        // profile), then the six-face accelerometer calibration, worded and
+        // gated as in iOS SettingsView's Calibration section (the rocket
+        // itself, connected and powered). The screen itself is a dashboard
+        // tool beside the mag and pad calibrations; this opens it. The offset
+        // is the board's own (stored on the flight computer), so it is no
+        // profile field and nothing pushes it on connect.
+        if (session != null && !session.isBaseStation) Section("Calibration") {
+            BoardCalibrationRows(session)
+            if (onOpenAccelCal != null) {
+                val canCalibrate = com.tinkerbug.tinkerrocket.session.AccelSixFace.canCalibrate(
+                    connected, session.isBaseStation, powerOn,
+                )
                 OutlinedButton(onClick = onOpenAccelCal, enabled = canCalibrate) {
                     Text(com.tinkerbug.tinkerrocket.session.AccelCalReadout.ENTRY)
                 }
@@ -1316,6 +1321,45 @@ private fun GateNotice(title: String, body: String, detail: String? = null, warn
 }
 
 /** #1038: read-only label/value row for the base-station Summary section. */
+/**
+ * #1629: what this flight computer holds for calibration, one row per sensor,
+ * as the board said it (never the profile).  A child composable so the
+ * Settings screen itself still reads no live state (#361).
+ */
+@Composable
+private fun BoardCalibrationRows(session: DeviceSession) {
+    val cal by session.calibration.collectAsState()
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
+    @Composable
+    fun row(label: String, value: Boolean?, text: String) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                text,
+                style = MaterialTheme.typography.bodyMedium,
+                color = when (value) {
+                    true -> tr.statusOk
+                    false -> tr.statusWarn
+                    null -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+        }
+    }
+    row("Magnetometer", cal.mag, BoardCalibration.rowText(cal.mag))
+    row("Accelerometer (six faces)", cal.accel, BoardCalibration.rowText(cal.accel))
+    row("Gyro (pad calibration)", cal.gyro, BoardCalibration.rowText(cal.gyro))
+    // A refinement, not a need: never orange.
+    row(
+        "High-g alignment",
+        cal.highGAligned?.takeIf { it },
+        BoardCalibration.highGRowText(cal.highGAligned),
+    )
+    Caption(
+        "Read from this flight computer. Each board keeps its own calibration; a rocket " +
+            "profile does not carry it to another board.",
+    )
+}
+
 @Composable
 private fun SummaryRow(label: String, value: String) {
     Row(

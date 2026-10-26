@@ -132,6 +132,7 @@ internal fun FleetDashboardContent(
                         // Solo, the units-bar chip already names the rocket.
                         showHeaderWhenSolo = { false },
                         deviceContent = deviceContent,
+                        knownDevices = fleet.knownDevices,
                     )
                     is DashboardSection.FocusedRelay -> DeviceSection(
                         section = section,
@@ -143,6 +144,7 @@ internal fun FleetDashboardContent(
                             FleetDashboard.needsHeaderWhenSolo(section.subject, now)
                         },
                         deviceContent = deviceContent,
+                        knownDevices = fleet.knownDevices,
                     )
                     is DashboardSection.Relay -> RelayRocketSection(
                         section = section,
@@ -408,6 +410,7 @@ private fun DeviceSection(
     collapsible: Boolean,
     showHeaderWhenSolo: (nowMs: Long) -> Boolean,
     deviceContent: @Composable (FleetDevice<DeviceSession>, DashboardSection?) -> Unit,
+    knownDevices: com.tinkerbug.tinkerrocket.session.KnownDeviceStore,
 ) {
     var collapsed by remember { mutableStateOf(false) }
     // A section left collapsed when the others go away must not stay shut
@@ -423,6 +426,9 @@ private fun DeviceSection(
             onToggle = { collapsed = !collapsed },
         )
     }
+    // A direct link reads its board live (the device content's own line);
+    // the followed relay's board is only known from its last Bluetooth link.
+    if (section is DashboardSection.FocusedRelay && !isCollapsed) RegistryCalibrationLine(section.subject, knownDevices)
     if (isCollapsed) {
         val telemetry by device.session.telemetry.collectAsState()
         CollapsedRocketSummary(telemetry)
@@ -500,6 +506,35 @@ private fun RocketSectionHeader(
     }
 }
 
+/**
+ * #1629: a relayed rocket's calibration can only be what its board said over
+ * Bluetooth last time (the LoRa link carries none of it), so the line says so.
+ * Nothing when that board was never read or lacks nothing.
+ */
+@Composable
+private fun RegistryCalibrationLine(
+    subject: RocketSubject,
+    knownDevices: com.tinkerbug.tinkerrocket.session.KnownDeviceStore,
+) {
+    val records by knownDevices.devices.collectAsState()
+    val key = subject.key ?: return
+    val name = subject.freshestRelay?.remote?.unitName
+    val line = com.tinkerbug.tinkerrocket.session.KnownDeviceStore
+        .rocketIn(records, key.networkId, key.rocketId, name)?.calibration?.notCalibratedLine ?: return
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Filled.Warning, null, tint = TrTheme.colors.statusWarn, modifier = Modifier.size(14.dp))
+        Text(
+            "$line (as of its last Bluetooth link)",
+            style = MaterialTheme.typography.labelMedium,
+            color = TrTheme.colors.statusWarn,
+        )
+    }
+}
+
 /** One line while a section is collapsed: state · altitude · rate · battery. */
 @Composable
 private fun CollapsedRocketSummary(telemetry: TelemetryData, modifier: Modifier = Modifier) {
@@ -563,6 +598,7 @@ private fun RelayRocketSection(
     }
 
     RocketStateBanner(telemetry, Modifier.alpha(opacity))
+    RegistryCalibrationLine(subject, fleet.knownDevices)
     FleetDashboard.staleAdvisory(freshness, now)?.let { line ->
         Text(
             line,
