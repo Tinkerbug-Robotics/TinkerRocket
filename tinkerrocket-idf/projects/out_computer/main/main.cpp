@@ -82,6 +82,7 @@ static inline std::string itos(int v)
 #include "logger_retry_policy.h"      // #1228: retrying a flight logger that failed to come up
 #include "storage_health_policy.h"    // #281/#278, #1235 items 3/4: the storage go/no-go verdict
 #include "landed_lockout_policy.h"    // #317, #1235 item 5: no new log session after LANDED
+#include "fc_reboot_display_policy.h" // an FC-only reboot on the ground reads as a fresh boot
 #include "arm_consent_policy.h"       // #1168: when the OC gives its half of the Beetle's pyro arm
 #include "pyro_fault_trip_policy.h"   // #1553: drop that consent on a shorted e-match mid-pulse
 #include "snapshot_answer_policy.h"   // when the OC may answer the FC's snapshot ask with "no flight"
@@ -9702,7 +9703,12 @@ static void printStats()
                                                      : (uint8_t)(ha + 0.5f);
         }
     }
-    ble_telem.state = rocketStateToString(latest_rocket_state);
+    // While the FC reboots on the ground, the apps see a fresh boot, not the
+    // previous session's state (fc_reboot_display_policy.h).
+    const bool fc_ground_reboot =
+        FcRebootDisplay::groundReboot(latest_rocket_state, ble_telem.boot_valid);
+    ble_telem.state = rocketStateToString(
+        FcRebootDisplay::publishedState(latest_rocket_state, ble_telem.boot_valid));
     ble_telem.camera_recording = camera_recording_requested;
     ble_telem.logging_active = s.logging_active;
     ble_telem.active_file = logger.currentFilename();
@@ -9776,10 +9782,12 @@ static void printStats()
     // on an FC that has genuinely stopped.  SYNCING rather than STALE before
     // the first frame ever arrives: "no rocket data yet" is a different thing
     // from "rocket data has gone stale", and it is what the app already shows
-    // during the FC's ~25 s boot.
+    // during the FC's ~25 s boot. An FC that reboots on the ground while the OC
+    // stays up is the same case: its earlier frames are the previous session's,
+    // and the link is fine.
     {
         const uint32_t now_ms = millis();
-        if (!latest_non_sensor_valid)
+        if (!latest_non_sensor_valid || fc_ground_reboot)
         {
             ble_telem.data_status = TR_BLE_To_APP::TelemetryData::DataStatus::SYNCING;
             ble_telem.data_age_ms = 0;
