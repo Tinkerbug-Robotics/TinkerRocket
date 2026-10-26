@@ -69,6 +69,15 @@ system — and is subscribed to the task watchdog. Its 16 KB stack is not arbitr
 EKF's `timeUpdate()` and `measUpdate()` allocate roughly 7.5 KB of temporary 15×15
 matrices on the stack per call.
 
+That stack is one block of internal RAM, and `setup_fc()` leaves little of it, so
+`app_main` creates the flight task before any other task of its own (the rescue task
+replaces it). A bench image once created its benchmark task first and the flight task
+never started (Beetle, 2026-10-26). `tinkerrocket-idf/tools/check_flight_task_first.py`
+now fails the Docs workflow on that order. If the flight task still cannot be created,
+`app_main` reports boot step `FCB_NO_FLIGHT_LOOP` (65) every 500 ms, and the apps say the
+flight computer is not running instead of "Flight computer ready". A bench image built with
+`-DTR_TEST_NO_FLIGHT_LOOP=1` starves the flight task on purpose to show it.
+
 The IMU task reads the chip's FIFO where the board header turns that on
 (`ISM6_FIFO_CAPTURE`: the mini and V9/V10; #1485), a burst at a time on the FIFO-threshold
 interrupt, and times each sample from the burst's sample count (`imu_sample_clock.h`);

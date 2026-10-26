@@ -30,7 +30,8 @@ enum SettingsAccess: Equatable {
     /// The flight computer's rail is off.
     case rocketOff
     /// The rail is on, but the flight computer is not running its flight
-    /// software: still starting, stuck partway, silent, or in rescue mode.
+    /// software: still starting, stuck partway, silent, in rescue mode, or
+    /// with no flight loop.
     case flightComputerNotRunning
 
     /// - Parameters:
@@ -38,7 +39,7 @@ enum SettingsAccess: Equatable {
     ///     defaults, and a defaulted pwr_pin_on reads exactly like a rocket that
     ///     is off.
     ///   - bootStepReported: "bs" is present, which the OC forwards only while
-    ///     the FC is in setup_fc() (or rescue mode).
+    ///     the FC is in setup_fc() (or rescue mode, or has no flight loop).
     static func evaluate(isConnected: Bool,
                          isBaseStation: Bool,
                          hasReceivedTelemetry: Bool,

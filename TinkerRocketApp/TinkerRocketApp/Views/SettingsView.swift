@@ -2326,7 +2326,7 @@ private struct PyroChannelTestControls: View {
 
 /// Stands in for the flight computer's settings while its rail is on but it is
 /// not running its flight software: still starting, stuck partway through, not
-/// reporting at all, or in rescue mode.  A child view for the same reason as
+/// reporting at all, in rescue mode, or with no flight loop.  A child view for the same reason as
 /// PyroChannelTestControls: the boot line comes from live telemetry, and that
 /// churn belongs out of SettingsView's body (#361).
 ///
@@ -2341,14 +2341,16 @@ struct FlightComputerNotRunningSection: View {
     var body: some View {
         let boot = device.telemetry.fcBootProgress
         let rescue = boot?.isRescue == true
+        let noFlightLoop = boot?.isNoFlightLoop == true
         Section {
             VStack(spacing: 12) {
-                Image(systemName: rescue ? "lifepreserver" : "hourglass")
+                Image(systemName: noFlightLoop ? "exclamationmark.triangle"
+                                  : rescue ? "lifepreserver" : "hourglass")
                     .font(.system(size: 40))
-                    .foregroundColor(rescue ? .orange : .secondary)
+                    .foregroundColor(rescue || noFlightLoop ? .orange : .secondary)
                 Text(Self.title(boot)).font(.title3.bold())
                     .multilineTextAlignment(.center)
-                if let boot, !rescue {
+                if let boot, !rescue, !noFlightLoop {
                     // The step it is on (and anything that finished degraded).
                     // The dashboard carries the stall timing; this just names it.
                     Text(boot.line())
@@ -2367,12 +2369,16 @@ struct FlightComputerNotRunningSection: View {
 
     static func title(_ boot: TelemetryData.FcBootProgress?) -> String {
         guard let boot else { return "Waiting for flight computer" }
+        if boot.isNoFlightLoop { return "Flight computer not running" }
         return boot.isRescue ? "Flight computer in rescue mode" : "Flight computer starting"
     }
 
     static func explanation(_ boot: TelemetryData.FcBootProgress?) -> String {
         guard let boot else {
             return "The flight computer hasn't reported in yet. Its settings unlock once it is running. The radio, network ID and firmware below are on the out computer and work now."
+        }
+        if boot.isNoFlightLoop {
+            return "It finished starting, but its flight loop did not start: this firmware image leaves it too little memory. It sends no data and answers no settings, a power cycle boots the same way, and a flight computer update from the app can't reach it. Flash a different image to the flight computer over USB. The radio and network ID below are on the out computer and work now."
         }
         if boot.isRescue {
             return "Its last boots did not finish, so it started only what a firmware update needs. Update the flight computer from Firmware below, or power-cycle the rocket to try a normal boot. Its settings come back once it boots normally."

@@ -2390,6 +2390,19 @@ target_include_directories(test_landed_lockout_policy PRIVATE
 target_link_libraries(test_landed_lockout_policy GTest::gtest_main)
 gtest_discover_tests(test_landed_lockout_policy)
 
+# ---------- test_fc_reboot_display_policy ----------
+# What the direct BLE link shows while the FC reboots and the OC stays up: a
+# ground state reads as a fresh boot, a flight phase is kept. Another FC-only
+# reset a bench cannot stage on cue.
+add_executable(test_fc_reboot_display_policy test_fc_reboot_display_policy.cpp)
+target_include_directories(test_fc_reboot_display_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_fc_reboot_display_policy GTest::gtest_main)
+gtest_discover_tests(test_fc_reboot_display_policy)
+
 # ---------- v9raw/*.cmake ----------
 # The raw-GNSS filter on the mosaic-G5 V8/V9 (fc/v9-raw-primary): each piece
 # registers its own tests in tests_cpp/v9raw/<piece>.cmake, so pieces built at

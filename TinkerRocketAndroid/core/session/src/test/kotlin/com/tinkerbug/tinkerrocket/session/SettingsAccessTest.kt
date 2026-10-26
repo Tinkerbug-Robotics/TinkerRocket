@@ -82,6 +82,7 @@ class SettingsAccessTest {
         assertEquals("Waiting for flight computer", FlightComputerNotice.title(false, false))
         assertEquals("Flight computer starting", FlightComputerNotice.title(true, false))
         assertEquals("Flight computer in rescue mode", FlightComputerNotice.title(true, true))
+        assertEquals("Flight computer not running", FlightComputerNotice.title(true, false, true))
     }
 
     @Test
@@ -91,6 +92,11 @@ class SettingsAccessTest {
         assertTrue(rescue.contains("power-cycle"), rescue)
         val starting = FlightComputerNotice.explanation(true, false)
         assertTrue(starting.contains("whether the flight computer answered"), starting)
+        // The app's update cannot reach a flight computer with no flight loop
+        // (the loop serves the update relay), so it must not point there.
+        val noLoop = FlightComputerNotice.explanation(true, false, true)
+        assertTrue(noLoop.contains("over USB"), noLoop)
+        assertTrue(noLoop.contains("can't reach it"), noLoop)
         for (s in listOf(starting, FlightComputerNotice.explanation(false, false))) {
             assertTrue(s.contains("radio, network ID and firmware below"), s)
         }

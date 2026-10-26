@@ -136,6 +136,10 @@ TEST(RocketComputerTypes, FcBootStepContract) {
     // apps key their rescue wording on this exact value.
     EXPECT_EQ(FCB_RESCUE,     64u);
     EXPECT_GT(FCB_RESCUE, FCB_STEP_COUNT);
+    // So is "no flight loop" (the flight task was never created), and the
+    // apps key their "not running" wording on it the same way.
+    EXPECT_EQ(FCB_NO_FLIGHT_LOOP, 65u);
+    EXPECT_GT(FCB_NO_FLIGHT_LOOP, FCB_STEP_COUNT);
     // Degraded bits are independent — a boot can finish with several set.
     EXPECT_EQ(FCB_DEG_SENSORS, 0x01u);
     EXPECT_EQ(FCB_DEG_GNSS,    0x02u);
