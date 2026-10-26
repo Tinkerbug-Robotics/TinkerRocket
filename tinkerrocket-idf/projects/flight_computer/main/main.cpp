@@ -15637,9 +15637,6 @@ static void mbBenchTask(void*)
 extern "C" void app_main(void)
 {
     setup_fc();
-#ifdef TR_BENCH_MB_BLOCKS
-    xTaskCreatePinnedToCore(mbBenchTask, "mb_bench", 12 * 1024, nullptr, 3, nullptr, 0);
-#endif
     if (fc_rescue_mode)
     {
         // setup_fc() stopped after the links (fc_rescue_policy.h): no flight
@@ -15665,7 +15662,24 @@ extern "C" void app_main(void)
                       "internal RAM %u B free, largest block %u B",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+        // ...and the console was the only place that said it: setup_fc had
+        // already reported FCB_COMPLETE, so the OC and the apps showed "Flight
+        // computer ready" over a dashboard stuck on "Syncing…". Say it on the
+        // link instead, and repeat it from this task, which needs no new
+        // memory: the boot reporter exits after COMPLETE (if it is still on its
+        // last tick it repeats the same bytes), and nothing else will run here.
+        fcBootStatus(FCB_NO_FLIGHT_LOOP);
+        for (;;)
+        {
+            vTaskDelay(pdMS_TO_TICKS(500));
+            fcBootEmitOnce();
+        }
     }
+#ifdef TR_BENCH_MB_BLOCKS
+    // After the flight task, never before it: its 12 KB stack once took the
+    // block the flight task needed (Beetle bench image, 2026-10-26).
+    xTaskCreatePinnedToCore(mbBenchTask, "mb_bench", 12 * 1024, nullptr, 3, nullptr, 0);
+#endif
 #if TR_RAW_NAV_MOSAIC
     // its stack headroom on the raw filter's 5-s console line (the restore,
     // the restart and the hold run in it)

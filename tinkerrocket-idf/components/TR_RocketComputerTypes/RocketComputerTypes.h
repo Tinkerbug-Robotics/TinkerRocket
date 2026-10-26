@@ -1928,6 +1928,15 @@ enum FcBootStep : uint8_t
     // repeats it every 500 ms and never sends NonSensorData in this mode, so
     // the OC keeps forwarding it as "bs" for as long as the mode lasts.
     FCB_RESCUE     = 64,
+    // Not a progress step either: setup_fc finished, but the flight task could
+    // not be created (its 16 KB stack needs one block of internal RAM), so NO
+    // flight loop runs: no NonSensorData, no command service, no flight. Left
+    // at FCB_COMPLETE, the OC and the apps said "Flight computer ready" while
+    // the dashboard sat on "Syncing…" for good (Beetle bench image, 2026-10-26).
+    // app_main repeats it every 500 ms instead, so the OC keeps forwarding it as
+    // "bs". Only another image fixes it: a power cycle boots the same way, and
+    // an app update cannot reach an FC whose loop serves the OTA relay.
+    FCB_NO_FLIGHT_LOOP = 65,
 };
 
 // Degraded bits.  Set means "this step finished, but not fully" — boot did NOT
