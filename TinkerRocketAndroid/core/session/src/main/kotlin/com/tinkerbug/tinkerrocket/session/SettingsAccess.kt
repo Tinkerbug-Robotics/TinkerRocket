@@ -26,7 +26,8 @@ public enum class SettingsAccess {
 
     /**
      * The rail is on, but the flight computer is not running its flight
-     * software: still starting, stuck partway, silent, or in rescue mode.
+     * software: still starting, stuck partway, silent, in rescue mode, or with
+     * no flight loop.
      */
     FLIGHT_COMPUTER_NOT_RUNNING;
 
@@ -48,7 +49,7 @@ public enum class SettingsAccess {
  * @param hasReceivedTelemetry #377: before the first frame, telemetry is all
  *   defaults, and a defaulted pwrPinOn reads exactly like a rocket that is off.
  * @param bootStepReported "bs" is present, which the OC forwards only while the
- *   FC is in setup_fc() (or rescue mode).
+ *   FC is in setup_fc() (or rescue mode, or has no flight loop).
  */
 public fun settingsAccess(
     isConnected: Boolean,
@@ -81,18 +82,28 @@ public fun settingsAccess(
  * opening the airframe.
  */
 public object FlightComputerNotice {
-    /** [bootStepReported]: "bs" is present.  [rescue]: it is FCB_RESCUE. */
-    public fun title(bootStepReported: Boolean, rescue: Boolean): String = when {
+    /**
+     * [bootStepReported]: "bs" is present.  [rescue]: it is FCB_RESCUE.
+     * [noFlightLoop]: it is FCB_NO_FLIGHT_LOOP.
+     */
+    public fun title(bootStepReported: Boolean, rescue: Boolean, noFlightLoop: Boolean = false): String = when {
         !bootStepReported -> "Waiting for flight computer"
+        noFlightLoop -> "Flight computer not running"
         rescue -> "Flight computer in rescue mode"
         else -> "Flight computer starting"
     }
 
-    public fun explanation(bootStepReported: Boolean, rescue: Boolean): String = when {
+    public fun explanation(bootStepReported: Boolean, rescue: Boolean, noFlightLoop: Boolean = false): String = when {
         !bootStepReported ->
             "The flight computer hasn't reported in yet. Its settings unlock once it is " +
                 "running. The radio, network ID and firmware below are on the out computer " +
                 "and work now."
+        noFlightLoop ->
+            "It finished starting, but its flight loop did not start: this firmware image " +
+                "leaves it too little memory. It sends no data and answers no settings, a " +
+                "power cycle boots the same way, and a flight computer update from the app " +
+                "can't reach it. Flash a different image to the flight computer over USB. The " +
+                "radio and network ID below are on the out computer and work now."
         rescue ->
             "Its last boots did not finish, so it started only what a firmware update " +
                 "needs. Update the flight computer from Firmware below, or power-cycle the " +
