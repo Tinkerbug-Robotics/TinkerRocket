@@ -7,8 +7,9 @@ common to the filter and the receiver's own fix); then each is replayed in every
 and its unaided twin:
   - "0", "+10", "-10", "+40", "-40": the magnetometer fused on the pad with that heading error
     (--mag-error-deg; the seed's heading turned with it, as a long pad wait leaves it), the 10 deg launch prior;
-  - "none30": no magnetometer (--mag-flags 0: every sample refused, so the 30 deg prior), the seed's heading a
-    guess 30 deg off (+30 on seeds 1 and 3, -30 on 2 and 4).
+  - "none30": no magnetometer (--mag-flags 0: every sample refused), the seed's heading a guess 30 deg off (+30 on
+    seeds 1 and 3, -30 on 2 and 4); the firmware's prior for a launch with no magnetometer heading (180 deg, the
+    fit's hand-off armed until the apogee call, since 2026-10-26; the 30 deg fallback before).
 The flight design is the mosaic build's defaults (--receiver mosaic: profile v0, the 16-satellite cap, act with
 the whole attitude from launch, the quorum with the raw vote guard as flight_votes.h wires it -- D1b's wiring,
 assumed: no firmware tree has it yet); the twin adds --unaided; "noguard" is the flight design with the guard

@@ -39,7 +39,9 @@ build_raw_replay/raw_replay --in run.events --out run.csv --t-base-s <the events
 |---|---|---|
 | `--heading-mode 0/1/2` | `TR_HEADING_FIT` | off, observe, act |
 | `--pad-sigma-deg X` | `TR_BENCH_HEADING_PAD_SIGMA_DEG` | act's heading 1-sigma from launch (default 30) |
-| `--handoff-deg X` | `TR_BENCH_HEADING_HANDOFF_DEG` | the fit's hand-off threshold; -1 = never (default 10) |
+| `--handoff-deg X` | `TR_BENCH_HEADING_HANDOFF_DEG` | the fit's hand-off threshold; -1 = never (default 10). None after the apogee call |
+| `--pad-sigma-unset-deg X` | `TR_BENCH_HEADING_PAD_SIGMA_UNSET_DEG` | act's heading 1-sigma from a launch with no magnetometer heading at all (default 180) |
+| `--handoff-unset-deg X` | `TR_BENCH_HEADING_HANDOFF_UNSET_DEG` | the hand-off threshold on such a launch; -1 = never (default 10) |
 | `--gate-full 0/1` | `TR_BENCH_HEADING_GATE_FULL` | act's GNSS reaches all three axes from launch |
 | `--tilt-sigma-deg X` | `TR_BENCH_LAUNCH_TILT_SIGMA_DEG` | act's launch tilt-sigma floor (0 = off) |
 | `--carrier 0/1/2` | `TR_BENCH_CARRIER_MODE` | carrier range rates off, observe, fuse (default: the LC86G profile's, observe) |
@@ -546,7 +548,8 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
 - **`sim_grid.py OUT --flights GRID/flights --events-dir SCRATCH`** makes the events files (16 flights x 24
   patterns) and replays each in six magnetometer arms -- 0, +10, -10, +40, -40 deg (`--mag-error-deg`, the seed's
   heading turned with it: a long pad wait) on the 10 deg prior, and none (`--mag-flags 0`, the seed's heading
-  guess 30 deg off, alternating in sign by seed) on the 30 deg prior -- as three arms: the flight design
+  guess 30 deg off, alternating in sign by seed) on the unset prior (180 deg with the fit's hand-off since
+  2026-10-26; 30 before) -- as three arms: the flight design
   (`--receiver mosaic`, the raw vote guard applied as `flight_votes.h` wires it: D1b's wiring, assumed, since no
   firmware tree has it yet), its `--unaided` twin, and `noguard` (`--vote-guard 0`: the quorum RC0's main.cpp
   has). Every run gets `--truth-nav`. Each run is scored as it finishes (`sim_tables.score_run`) into
@@ -1007,6 +1010,9 @@ on a scratch copy of the filter; half or more refused drops it) and the launch p
 when a magnetometer heading passed its gates within 5 s of the launch edge, else 30). Their run-time switches:
 `--level-heading-free 0|1`, `--boost-screen 0|1|2` (off, in act, always), `--boost-screen-g X`,
 `--pad-sigma-deg X` (the prior with the magnetometer's heading), `--pad-sigma-fallback-deg X`, `--mag-recent-s X`.
+Since 2026-10-26 a launch whose pad fused no magnetometer heading at all (`--mag-flags 0`) takes its own prior,
+`--pad-sigma-unset-deg` (180: any heading), and arms the fit's hand-off at `--handoff-unset-deg` (10) until the apogee
+call; the fallback (30) is left to a magnetometer heading gone stale.
 H is the firmware's own: `--gate-full 2`, the gate opening on the flight computer's apogee call, which every tick from
 the log's apogee flag now carries (`kShadowApogee`; `--no-apogee-flag` leaves it off) -- so `--gate-full-from-apogee`
 and `--guard-majority-half` drop out of the configurations. Each magnetometer sample is flagged `--mag-flags 2`

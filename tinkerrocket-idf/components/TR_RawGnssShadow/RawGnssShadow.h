@@ -143,7 +143,12 @@
 // (its Doppler velocity, then the fit) are each one slice at most. The
 // hand-off is off by default (heading_handoff_deg below 0): it overwrites
 // the filter's heading rather than fusing a measurement (r18 above), and the
-// filter's own GNSS updates turn the heading anyway.
+// filter's own GNSS updates turn the heading anyway -- except on a launch
+// with no magnetometer heading (below), where heading_handoff_unset_deg (10)
+// arms it. Either way the hand-off is the ascent's: none after the flight
+// computer's apogee call (kShadowApogee). Under a chute the fit is no heading
+// to hand over: on the 2026-10-24 RIM66 replays it claimed 8-10 deg for
+// headings 40-118 deg off.
 //
 // Act's launch prior: the heading's 1-sigma from the launch edge on. The
 // magnetometer's heading, calibrated, is good to about 4-5 deg on the Beetle
@@ -167,11 +172,22 @@
 // A launch with no magnetometer heading (#1590). Where the pad fused none --
 // no magnetometer, or none calibrated -- the heading at launch is the start's
 // guess (main.cpp's PAD_HEADING_DEG about the vertical), its 1-sigma p0_hdg's
-// 57 deg grown to ~76 over a long pad by the vertical gyro bias's. Act's
-// fallback prior is then claimed about a heading nothing measured. Each
-// launch's own heading 1-sigma (before act's) is kept in the stats, and a
-// launch with no magnetometer heading counted (heading_unset_launches), for
-// the flight computer to say loudly.
+// 57 deg grown to ~76 over a long pad by the vertical gyro bias's: the rail's
+// azimuth, any heading. Act's prior there is heading_pad_sigma_unset_deg
+// (180: any heading), not the fallback claimed about a heading nothing
+// measured, and the fit's hand-off is armed at heading_handoff_unset_deg
+// (10) until the apogee call. The filter's own update turns a heading by
+// small steps, so one near 180 deg off (the horizontal velocity predicted
+// backwards) stalls: on the 2026-10-24 Goblin replayed with no magnetometer
+// from pad headings -150..+180 deg, GNSS alone found 9 of 12 within 10 deg by
+// the antenna's cut-out and stalled 15-65 deg off from the rest; with the
+// hand-off (T+1.2-2.2) all 12 ended within 3 deg. A magnetometer heading
+// that went stale before launch (fused, then not within
+// heading_mag_recent_s) keeps the fallback and no hand-off: the heading is
+// still the magnetometer's, carried by the gyro. Each launch's own heading
+// 1-sigma (before act's) is kept in the stats, and a launch with no
+// magnetometer heading counted (heading_unset_launches), for the flight
+// computer to say loudly.
 //
 // The boost screen (boost_screen, boost_screen_g). A receiver losing lock in
 // the boost can hand over an epoch whose Dopplers are tens of m/s off: on the
@@ -605,7 +621,9 @@ public:
         double   heading_seed_max_s = 3.0;    // a seed this long before launch is too old (not still at ignition)
         double   heading_fit_max_s  = 60.0;   // epochs taken this long after launch
         double   heading_handoff_deg = -1.0;  // act: the fit's 1-sigma at or under this hands its heading over
-                                              //   (below 0, the default: never)
+                                              //   (below 0, the default: never), until the apogee call
+        double   heading_handoff_unset_deg = 10.0;  // act: ... and this on a launch with no magnetometer heading
+                                                    //   (below 0: never)
         double   heading_handoff_rival = 25.0;   // act: ... unless another heading's valley rises less than this
                                                  //   above the fit's (as its sigma's: 25 is five sigmas')
         int      heading_handoff_min_epochs = 0; // act: ... once the fit holds this many epochs
@@ -615,7 +633,8 @@ public:
         double   heading_handoff_sure_deg = 3.0; //   unless the fit's 1-sigma is at or under this
         double   heading_pad_sigma_deg = 10.0;   // act: the heading's 1-sigma from launch on, where the pad's is
                                                  //   the magnetometer's (above)
-        double   heading_pad_sigma_fallback_deg = 30.0;   // act: and where it is not
+        double   heading_pad_sigma_fallback_deg = 30.0;   // act: and where it is not (stale: fused, not lately)
+        double   heading_pad_sigma_unset_deg = 180.0;     // act: and where the pad fused none at all (above)
         double   heading_mag_recent_s = 5.0;     // act: the magnetometer's when it fused within this of the launch edge
         double   heading_launch_tilt_sigma_deg = 0.6;   // act: and the tilt's at least this from launch
                                                         //   (the pad's is the accelerometer bias's too,
@@ -1208,6 +1227,8 @@ private:
     bool          fit_flight_ = false;  // launched with a fresh seed: epochs are taken
     double        fit_launch_t_ = 0.0;
     bool          handed_ = false;      // the heading handed over this flight
+    bool          hdg_unset_ = false;   // this flight launched with no magnetometer heading (the unset hand-off)
+    bool          hdg_apogee_ = false;  // the apogee call seen this flight: the hand-off over
     bool          gate_full_ = false;   // act: the whole attitude's gate is open this flight
     bool          obs_apogee_ = false;  // heading_obs_scope kObsAscent: the apogee call seen this flight
     double        boost_seen_t_ = -1.0e9;   // the filter's time the IMU last read past boost_screen_g

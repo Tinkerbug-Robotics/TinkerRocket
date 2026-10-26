@@ -1599,11 +1599,16 @@ namespace
 
 // The flight's own: act, the whole attitude GNSS's from launch (the test's
 // mosaicCfg keeps the ground's gate). A 5 rad/s pitch out and back over
-// 0.5 s from 5.0 s, in the boost (3 g along the nose turning with it).
+// 0.5 s from 5.0 s, in the boost (3 g along the nose turning with it). These
+// flights launch with no magnetometer heading unless mag_on_pad, and were
+// written before such a launch had its own prior and hand-off (2026-10-26):
+// they keep the fallback prior and the config's own hand-off.
 RawGnssShadow::Config actCfg()
 {
     RawGnssShadow::Config c = mosaicCfg();
     c.heading_mode = RawGnssShadow::kHeadingAct;
+    c.heading_pad_sigma_unset_deg = c.heading_pad_sigma_fallback_deg;
+    c.heading_handoff_unset_deg = c.heading_handoff_deg;
     return c;
 }
 
