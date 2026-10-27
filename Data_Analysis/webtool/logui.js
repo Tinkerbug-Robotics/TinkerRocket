@@ -11,7 +11,7 @@ import {
   flightDir, flightPaths, fmtValue, localStamp, locationSuggestions, motorSuggestions, newEntry,
   parseMotor, placeName, publicEntry, readme, removeFromIndex, sortEntries, toCSV, upsertIndex,
 } from "./flightlog.js";
-import { showLocalReport } from "./reports.js";
+import { publicReportUrl, showLocalReport } from "./reports.js";
 
 // Where a published README sends people. Fixed rather than taken from
 // location, so a log published while testing on localhost still points at the
@@ -586,8 +586,8 @@ async function renderPublicPanel(entries) {
   );
   gh.pagesLive(conn.owner).then((live) => {
     pages.replaceChildren(live
-      ? "GitHub Pages is on, so your reports show with the 3D flight path and have their own links."
-      : h("span", null, "Your reports show here for everyone. Optional: turn on GitHub Pages to add the 3D flight path and a direct link to each report — ",
+      ? "GitHub Pages is on, so your reports also have their own address on github.io."
+      : h("span", null, "Your reports show here for everyone, 3D flight path included. Optional: turn on GitHub Pages to give each one its own address on github.io as well — ",
         external(gh.pagesSettingsUrl(conn.owner), "open the Pages settings"), " and set ",
         h("i", null, "Source: Deploy from a branch"), ", ", h("i", null, "Branch: main"), ", ",
         h("i", null, "/ (root)"), ", then Save. ",
@@ -685,7 +685,7 @@ function renderSetup(panel) {
       h("li", null, h("b", null, "A repository"), " named ", h("code", null, REPO_NAME),
         ". It is where your log, reports and flight files are stored. It is yours; delete it and everything is gone."),
       h("li", null, h("b", null, "GitHub Pages"), " (optional), GitHub's free web hosting for that repository. ",
-        "Your reports show without it; with it, they also get the 3D flight path and their own address (",
+        "Your reports show without it, 3D flight path included; with it, each also gets its own address (",
         h("i", null, "you"), ".github.io)."),
       h("li", null, h("b", null, "A token"), ", a key that lets this page write to that one repository and nothing else on your account. ",
         "It stays in this browser and is only ever sent to GitHub.")),
@@ -1113,8 +1113,27 @@ async function renderPublicFlight(login, id) {
     return;
   }
 
-  // No Pages: the report straight from the repository, in a frame with no
-  // origin of its own.
+  // No Pages: this tool's service worker serves it at a real address with no
+  // origin of its own, which keeps it walled off and lets the globe run, in
+  // the frame or in a tab (see the end of sw.js).
+  const dev = gh.endpoints().raw;
+  const served = await publicReportUrl(login, reportPath,
+    dev !== "https://raw.githubusercontent.com" ? dev : null);
+  if (served) {
+    openSlot.replaceChildren(external(served, "Open report in tab"));
+    openSlot.firstChild.classList.add("button", "secondary");
+    reportBox.replaceChildren(h("iframe", {
+      class: "report-frame", src: served,
+      // The response's own sandbox takes away same-origin; this one adds that
+      // the frame may not navigate the tool or submit forms.
+      sandbox: "allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-downloads",
+    }));
+    return;
+  }
+
+  // No worker either (a private window, or an old worker still answering):
+  // the report straight from the repository as srcdoc, in a frame with no
+  // origin of its own. No globe, and no tab, but just as walled off.
   let html;
   try {
     html = await lockedReportHtml(login, reportPath);
@@ -1133,8 +1152,10 @@ async function renderPublicFlight(login, id) {
   const conn = gh.savedConnection();
   const own = conn && conn.owner.toLowerCase() === login.toLowerCase();
   reportBox.replaceChildren(...[
-    own ? h("p", { class: "hint" }, "The 3D flight path shows once you turn on GitHub Pages for your log: ",
-      external(gh.pagesSettingsUrl(login), "Pages settings"), ".") : null,
+    h("p", { class: "hint" }, "This browser is not running the tool's service worker (a private window does not), ",
+      "so the 3D flight path and Open report in tab are not available here.",
+      own ? [" Turning on GitHub Pages for your log brings them back everywhere: ",
+        external(gh.pagesSettingsUrl(login), "Pages settings"), "."] : null),
     frame,
   ].filter(Boolean));
 }
@@ -1161,7 +1182,7 @@ const LOCKED_SANDBOX = "allow-scripts allow-popups allow-downloads";
 const LOCKED_SHIM =
   "<style>.globe,.globe-legend{display:none!important}.globe-status{font-size:0!important}" +
   ".globe-status::after{font-size:13px;color:#667;content:\"The 3D view shows when this log's owner turns on " +
-  "GitHub Pages. The track is also on the map under Deployment & Recovery.\"}</style>" +
+  "GitHub Pages, or in a normal (not private) window. The track is also on the map under Deployment & Recovery.\"}</style>" +
   "<script>document.addEventListener(\"click\",function(e){var a=e.target.closest&&e.target.closest('a[href^=\"#\"]');" +
   "if(!a)return;var t=document.getElementById(decodeURIComponent(a.hash.slice(1)));if(t){e.preventDefault();t.scrollIntoView();}});</script>";
 

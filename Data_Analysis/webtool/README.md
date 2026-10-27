@@ -127,25 +127,34 @@ flights/<id>/data/<file>        the flight's files, if the flyer shares them
 - **A public report never renders same-origin with this page.** The local
   report frame is same-origin with the tool, and a public report is someone
   else's HTML with scripts: rendered there, it could read this page's saved
-  flights and the viewer's token. So:
-  - When the flyer has **GitHub Pages** on, the report renders from their
-    own Pages site (`<login>.github.io/tinkerrocket-flight-log/…`).
-    `github.io` is on the public suffix list, so that is a different site
-    from ours, and the report has a real address. Everything works there,
-    including the 3D globe, and "Open report in tab" goes to it. The Pages URL
-    is computed from the login, never read from the index.
-  - Without Pages, the report comes from `raw.githubusercontent.com` as the `srcdoc` of a
-    frame sandboxed with `allow-scripts allow-popups allow-downloads` and no
-    `allow-same-origin`. It runs at an opaque origin, so it cannot reach this
-    page. It loses only its own remembered settings and the 3D globe, which an
-    injected stylesheet folds away with a line saying why.
-    "Open in tab" is not offered for it, because a tab of its own would be
-    same-origin with the tool; "Full screen" is offered instead. A small
-    click handler injected into the copy restores the table-of-contents links
-    that such a frame otherwise kills. It runs inside the same sandbox, so it
-    adds no reach.
-  Pages used to be required, and a flyer who had not switched it on
-  published reports nobody could open. It is now optional.
+  flights and the viewer's token. There are three ways to show one, tried in
+  this order:
+  1. **The flyer's GitHub Pages site**, when they have Pages on
+     (`<login>.github.io/tinkerrocket-flight-log/…`). `github.io` is on the
+     public suffix list, so that is a different site from ours. The Pages URL
+     is computed from the login, never read from the index.
+  2. **The tool's service worker** (the end of `sw.js`). It serves the report
+     at `public-report/<login>/flights/<id>/<file>.html`, fetched from
+     `raw.githubusercontent.com`, and every response carries
+     `Content-Security-Policy: sandbox allow-scripts allow-popups
+     allow-popups-to-escape-sandbox allow-downloads`, with no
+     `allow-same-origin`. So the report has a real address, which the 3D globe
+     and the table of contents need, and an opaque origin (`self.origin` is
+     `"null"`; storage, IndexedDB and cookies throw). The header holds in a tab
+     of its own as well as in the frame, so "Open report in tab" goes there.
+     Without the worker the same URL is GitHub's 404, so a report can never
+     arrive there unsandboxed. The page pings `public-report/ping` first: an
+     older worker, or none (private windows), means the next option.
+  3. **A `srcdoc` frame** sandboxed `allow-scripts allow-popups
+     allow-downloads`, from `raw.githubusercontent.com`. It is just as walled
+     off, but has no real address. The globe cannot run, and an injected
+     stylesheet folds it away with a line saying why. A tab of its own would
+     be same-origin with the tool, so "Full screen" is offered instead. A
+     small click handler restores the table-of-contents links, which such a
+     frame kills. It runs inside the same sandbox, so it adds no reach.
+  Pages used to be required, and a flyer who had not switched it on published
+  reports nobody could open. It is now optional, and adds only an address of
+  the flyer's own.
 - Entries from a public index are coerced to plain strings and numbers, and
   ids and file names are checked against strict patterns before they reach a
   URL.

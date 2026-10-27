@@ -74,3 +74,50 @@ export async function showLocalReport(body, stem, { frame, open, download }) {
   if (open) open.href = served || blobUrl;
   return !!served;
 }
+
+/* Where this tool's service worker serves another flyer's report, sandboxed
+   to an opaque origin by its response header (see the end of sw.js), or null
+   when no worker that knows the route is in front of the page: a private
+   window, or the first moments after an update while the old worker still
+   answers. The caller then falls back to a srcdoc frame, which has no globe
+   and no tab of its own but is just as safe. `raw` points the worker at a
+   local stand-in for raw.githubusercontent.com, and only works on localhost. */
+export async function publicReportUrl(login, path, raw) {
+  if (!(await publicRouteReady())) return null;
+  const url = new URL(
+    `public-report/${encodeURIComponent(login)}/${path.split("/").map(encodeURIComponent).join("/")}`,
+    location.href);
+  if (raw) url.searchParams.set("raw", raw);
+  return url.toString();
+}
+
+async function pingPublicRoute() {
+  try {
+    const ping = await fetch("public-report/ping", { cache: "no-store" });
+    return ping.status === 204 && !!ping.headers.get("X-TinkerRocket-Public-Report");
+  } catch (err) {
+    return false;
+  }
+}
+
+/* Whether the worker in front of the page serves public reports. The first
+   visit after a deploy can still be answered by the previous worker, which
+   does not, so that case asks for the new one and waits briefly for it. */
+async function publicRouteReady() {
+  if (!(await swControlling())) return false;
+  if (await pingPublicRoute()) return true;
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (!reg) return false;
+    const changed = new Promise((resolve) => {
+      const done = setTimeout(resolve, 4000);
+      navigator.serviceWorker.addEventListener("controllerchange",
+        () => { clearTimeout(done); resolve(); }, { once: true });
+    });
+    await reg.update();
+    await changed;
+  } catch (err) {
+    return false;
+  }
+  return pingPublicRoute();
+}
