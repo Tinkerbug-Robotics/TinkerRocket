@@ -7,7 +7,8 @@ they get global labels here too.
 
 Parts follow the boards they come from:
 - the PX100, its RF chain, the ADP7142, LEDs and most passives: gnss-px100-18mm-hv (V1 parts already on hand);
-- ESP32-S3FN8 with its crystal circuit, USB-C, ESD and the AP2112K: spin-rig-controller (the Beetle's circuits);
+- the ESP32-S3's crystal circuit, USB-C, ESD and the AP2112K: spin-rig-controller (the Beetle's circuits); the
+  ESP32-S3FH4R2 itself is the Beetle JLC build's part (4 MB flash and 2 MB quad PSRAM in the package);
 - the FSUSB63 USB mux and its slide switch: Tinker-Beetle's U1/S1;
 - CP2102N: Silicon Labs' self-powered 3.3 V connection (CP2102N data sheet rev 1.1, figures 2.3 and 2.6).
 """
@@ -15,7 +16,7 @@ import re
 
 SHEETS = [
     ('power', 'USB-C, USB switch and power', 'USB-C, the ESP32 / PX100 USB switch, 3.3 V for the ESP32 side and for the PX100'),
-    ('esp32', 'ESP32-S3', 'ESP32-S3FN8 with every PX100 pin on its own GPIO, buttons, status light, spare-pin header'),
+    ('esp32', 'ESP32-S3', 'ESP32-S3FH4R2 with every PX100 pin on its own GPIO, buttons, status light, spare-pin header'),
     ('pxio', 'PX100 USB bridge and I/O', 'CP2102N USB-UART bridge, PX100 reset/boot control, 1 k links to the ESP32, probe header'),
 ]
 STATIC_SHEETS = [('receiver', 'RF chain and PX100', 'Active L1/L5 antenna input, bias tee, SkyTraq L1/L5 split, PX100 and its core')]
@@ -165,7 +166,7 @@ for r in ('H1', 'H2', 'H3', 'H4'):
 
 # ================================================================ ESP32-S3
 s = 'esp32'
-b = 'ESP32-S3FN8 (the spin-rig controller\'s circuit; no antenna: the radio stays off)'
+b = 'ESP32-S3FH4R2 (the spin-rig controller\'s circuit; no antenna: the radio stays off)'
 # ADC1 (GPIO1-10) takes the nine PX100 GPIOs, ADC2 (GPIO11-16) the four reserved pins and the two bias monitors, so
 # every PX100 line can also be read as a voltage. None of them is a strapping pin. RSTN and BOOT_SEL sit on GPIO38/39,
 # outside GPIO1-14, which can glitch low while the S3 powers up. GPIO3 (JTAG strap) stays free.
@@ -174,13 +175,14 @@ ESP = {1: None, 2: V33M, 3: V33M, 4: 'CHIP_PU', 5: 'BOOT0',
        12: 'PX_GPIO11_MCU', 13: 'PX_GPIO13_MCU', 14: 'PX_GPIO14_MCU', 15: 'PX_GPIO15_MCU',
        16: 'PX_NC8_MCU', 17: 'PX_NC14_MCU', 18: 'PX_NC29_MCU', 19: 'PX_NC36_MCU', 20: V33M,
        21: 'ANT_BIAS_MON', 22: 'VANT_MON', 23: 'GNSS_RX_MCU', 24: 'GNSS_TX_MCU',
-       25: 'USB_DN_MCU', 26: 'USB_DP_MCU', 27: 'PPS_MCU', 28: None,
+       25: 'USB_DN_MCU', 26: 'USB_DP_MCU', 27: 'PPS_MCU', 28: None,                    # 28: in-package PSRAM CS
        29: 'VDD_SPI', 30: None, 31: None, 32: None, 33: None, 34: None, 35: None,      # in-package flash
        36: 'IO48', 37: 'IO47', 38: 'IO33', 39: 'IO34', 40: 'IO35', 41: 'IO36', 42: 'USB_SEL_MCU',
        43: 'PX100_RSTN_MCU', 44: 'PX100_BOOT_SEL_MCU', 45: 'GNSS_EN', 46: V33M, 47: 'LED_STAT', 48: None,
        49: 'DBG_TX', 50: 'DBG_RX', 51: None, 52: 'GPIO46', 53: 'XTAL_N', 54: 'XTAL_P', 55: V33M, 56: V33M, 57: GND}
-P(s, 'U201', 'MCU_Espressif:ESP32-S3', 'ESP32-S3FN8', 'Footprints:IC_ESP32-S3', ESP, 'ESP32-S3FN8', 'Espressif',
-  desc='8 MB flash in the package; the rocket boards\' footprint', block=b)
+P(s, 'U201', 'MCU_Espressif:ESP32-S3', 'ESP32-S3FH4R2', 'Footprints:IC_ESP32-S3', ESP, 'ESP32-S3FH4R2', 'Espressif',
+  desc='4 MB flash and 2 MB quad PSRAM in the package (flash on GPIO27-32, PSRAM on SPICS1/GPIO26); the rocket '
+       'boards\' footprint', block=b)
 P(s, 'Y201', 'Device:Crystal_GND24', '40 MHz', 'Footprints:XTAL_ECS-400-10-37B2-CKY-TR',
   {1: 'XTAL_N', 2: GND, 3: 'XTAL_P_L', 4: GND}, 'ECS-400-10-37B2-CKY-TR', 'ECS', block=b)
 P(s, 'L201', 'Device:L', '24 nH', 'Inductor_SMD:L_0402_1005Metric', {1: 'XTAL_P_L', 2: 'XTAL_P'}, 'LQW15AN24NH00D',

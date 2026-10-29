@@ -120,7 +120,7 @@
 			)
 		)
 	)
-	(text "ESP32-S3FN8 with every PX100 pin on its own GPIO, buttons, status light, spare-pin header"
+	(text "ESP32-S3FH4R2 with every PX100 pin on its own GPIO, buttons, status light, spare-pin header"
 		(exclude_from_sim no)
 		(at 131.4 104.14 0)
 		(effects
@@ -282,7 +282,7 @@
 		)
 		(uuid "9ae05629-8d7c-5746-910f-10b39ffca5c2")
 	)
-	(text "Reused: gnss-px100-18mm-hv RF chain, PX100 core and LDO; spin-rig ESP32-S3FN8 and USB-C; the Beetle's FSUSB63 mux."
+	(text "Reused: gnss-px100-18mm-hv RF chain, PX100 core and LDO; spin-rig ESP32-S3 circuit (an FH4R2, as on the Beetle JLC build) and USB-C; the Beetle's FSUSB63 mux."
 		(exclude_from_sim no)
 		(at 25.4 38.9 0)
 		(effects

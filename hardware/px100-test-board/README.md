@@ -24,7 +24,7 @@ A bench board for bringing up the SkyTraq PX100 and finding out what its undocum
 | root (`px100-test-board.kicad_sch`) | the four sheets |
 | `receiver.kicad_sch` ("RF chain and PX100") | J1, the bias tee, SkyTraq's L1/L5 split with the carrier's SAWs and matches, the PX100 with its TCXO, RTC crystal, core parts and decoupling, reset/boot/UART pull-ups, the PPS LED, the Laird shield |
 | `power.kicad_sch` ("USB-C, USB switch and power") | USB-C with ESD, the FSUSB63 mux and its slide switch, both 3.3 V regulators, power LEDs, test points, holes |
-| `esp32.kicad_sch` ("ESP32-S3") | ESP32-S3FN8 with crystal, decoupling, BOOT/RESET, status LED, spare-pin header |
+| `esp32.kicad_sch` ("ESP32-S3") | ESP32-S3FH4R2 with crystal, decoupling, BOOT/RESET, status LED, spare-pin header |
 | `pxio.kicad_sch` ("PX100 USB bridge and I/O") | CP2102N, the DTR/RTS reset and boot transistors, PX100 RESET and BOOT buttons, the 1 kΩ links, the PX100 probe header, the antenna-bias monitors |
 
 The receiver sheet is drawn by hand. It started as px100-module's receiver sheet; `gen/edit_receiver.py` made the
@@ -162,6 +162,9 @@ USB is the only input.
 - **Heat:** the ADP7142 dissipates about 0.3 W from 5 V, much less than on the carrier from VSYS.
 - **USB input capacitance:** VBUS carries 6.8 µF, under USB's 10 µF limit.
 - **The ESP32 has no antenna** (LNA_IN open). Leave Wi-Fi and BLE off.
+- **The ESP32-S3FH4R2** has 4 MB of flash and 2 MB of quad PSRAM in the package, as on the Beetle JLC build: firmware needs
+  `CONFIG_ESPTOOLPY_FLASHSIZE_4MB` and a partition table that fits 4 MB; the PSRAM is quad (`CONFIG_SPIRAM_MODE_QUAD`).
+  The flash (GPIO27–32) and the PSRAM's chip select (SPICS1, GPIO26) stay unconnected; quad PSRAM leaves GPIO33–37 free.
 
 ## Parts
 
@@ -176,7 +179,8 @@ USB is the only input.
 
 Y1 pin 1 is open, so the TG2016SMN stand-in fits (px100-module's change).
 
-**From the spin-rig controller and the Beetle (JLC stock):** ESP32-S3FN8 (C2913196), ECS-400-10-37B2 40 MHz
+**From the spin-rig controller and the Beetle (JLC stock):** ESP32-S3FH4R2 (C3013940, the Beetle JLC build's part;
+2,862 in stock on 2026-10-29), ECS-400-10-37B2 40 MHz
 (C5357833), USB4110-GF-A (C5143397), SP0503BAHTG (C3040626), AP2112K-3.3TRG1, FSUSB63UMX (C895430, 175 in stock),
 JS202011JCQN (C221665), TS-1187A buttons.
 

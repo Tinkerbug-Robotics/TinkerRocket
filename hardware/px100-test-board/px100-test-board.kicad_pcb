@@ -3447,7 +3447,7 @@
 				)
 			)
 		)
-		(property "Value" "ESP32-S3FN8"
+		(property "Value" "ESP32-S3FH4R2"
 			(at 2.885 5.635 0)
 			(layer "F.Fab")
 			(hide yes)
@@ -3471,7 +3471,7 @@
 				)
 			)
 		)
-		(property "Description" "8 MB flash in the package; the rocket boards' footprint"
+		(property "Description" "4 MB flash and 2 MB quad PSRAM in the package (flash on GPIO27-32, PSRAM on SPICS1/GPIO26); the rocket boards' footprint"
 			(at 0 0 0)
 			(layer "F.Fab")
 			(hide yes)
@@ -3483,7 +3483,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C2913196"
+		(property "LCSC" "C3013940"
 			(at 0 0 0)
 			(layer "F.Fab")
 			(hide yes)
@@ -3495,7 +3495,7 @@
 				)
 			)
 		)
-		(property "MPN" "ESP32-S3FN8"
+		(property "MPN" "ESP32-S3FH4R2"
 			(at 0 0 0)
 			(layer "F.Fab")
 			(hide yes)

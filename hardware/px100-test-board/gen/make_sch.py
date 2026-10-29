@@ -403,7 +403,7 @@ def write_root():
         'PX100 test board ${REVISION}: a PX100 with an active-antenna L1/L5 front end, every PX100 pin on an ESP32-S3 GPIO,',
         'and one USB-C port that S101 switches between the ESP32 and a CP2102N bridge to the PX100\'s UART.',
         'Powered from USB: an AP2112K for the ESP32 side, the carrier\'s ADP7142 for the PX100 (the ESP32 can switch it off).',
-        'Reused: gnss-px100-18mm-hv RF chain, PX100 core and LDO; spin-rig ESP32-S3FN8 and USB-C; the Beetle\'s FSUSB63 mux.',
+        'Reused: gnss-px100-18mm-hv RF chain, PX100 core and LDO; spin-rig ESP32-S3 circuit (an FH4R2, as on the Beetle JLC build) and USB-C; the Beetle\'s FSUSB63 mux.',
         'receiver.kicad_sch is drawn by hand; the other three sheets come from gen/design.py (gen/make_sch.py).',
     ]
     for i, n in enumerate(notes):
