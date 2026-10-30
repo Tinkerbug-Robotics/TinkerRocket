@@ -3825,7 +3825,7 @@
 			)
 			(embedded_fonts no)
 		)
-		(symbol "Custom:USB4110GFA"
+		(symbol "Custom:TYPE-C-16P-LTH6.8"
 			(pin_names
 				(offset 1.016)
 			)
@@ -3845,7 +3845,7 @@
 					(justify left bottom)
 				)
 			)
-			(property "Value" "USB4110GFA"
+			(property "Value" "TYPE-C 16P LTH6.8"
 				(at -12.7 -30.48 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -3856,19 +3856,7 @@
 					(justify left bottom)
 				)
 			)
-			(property "Footprint" "Footprints:GCT_USB4110GFA"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify bottom)
-				)
-			)
-			(property "Datasheet" ""
+			(property "Footprint" "Footprints:SHOUHAN_TYPE-C-16P-LTH6.8"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -3879,7 +3867,7 @@
 					)
 				)
 			)
-			(property "Description" ""
+			(property "Datasheet" "https://www.lcsc.com/datasheet/C5187468.pdf"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -3890,7 +3878,7 @@
 					)
 				)
 			)
-			(property "MF" "GCT"
+			(property "Description" "USB Type-C receptacle, USB 2.0, 16 contacts, vertical, 6.8 mm tall; SMT signal pads, four through-hole shell legs, two locating posts; 3 A, 20 V"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -3899,10 +3887,9 @@
 					(font
 						(size 1.27 1.27)
 					)
-					(justify bottom)
 				)
 			)
-			(property "Description_1" "USB-C (USB TYPE-C) USB 2.0 Receptacle Connector 24 (16+8 Dummy) Position Surface Mount, Right Angle; Through Hole"
+			(property "MPN" "TYPE-C 16P LTH6.8"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -3911,10 +3898,9 @@
 					(font
 						(size 1.27 1.27)
 					)
-					(justify bottom)
 				)
 			)
-			(property "Package" "None"
+			(property "Mfr" "SHOU HAN"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -3923,10 +3909,9 @@
 					(font
 						(size 1.27 1.27)
 					)
-					(justify bottom)
 				)
 			)
-			(property "Price" "None"
+			(property "LCSC_Part_Number" "C5187468"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -3935,10 +3920,9 @@
 					(font
 						(size 1.27 1.27)
 					)
-					(justify bottom)
 				)
 			)
-			(property "MP" "USB4110GFA"
+			(property "Package" "Vertical USB-C 8.94 x 3.16 mm, 6.8 mm tall"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -3947,10 +3931,9 @@
 					(font
 						(size 1.27 1.27)
 					)
-					(justify bottom)
 				)
 			)
-			(property "Availability" "In Stock"
+			(property "ki_keywords" "USB C Type-C receptacle vertical USB2.0 16P"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -3959,10 +3942,20 @@
 					(font
 						(size 1.27 1.27)
 					)
-					(justify bottom)
 				)
 			)
-			(symbol "USB4110GFA_0_0"
+			(property "ki_fp_filters" "SHOUHAN_TYPE-C-16P-LTH6.8*"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "TYPE-C-16P-LTH6.8_0_0"
 				(rectangle
 					(start -12.7 -27.94)
 					(end 12.7 10.16)
@@ -3984,7 +3977,7 @@
 							)
 						)
 					)
-					(number "A1/B12"
+					(number "A1"
 						(effects
 							(font
 								(size 1.016 1.016)
@@ -4002,7 +3995,7 @@
 							)
 						)
 					)
-					(number "A4/B9"
+					(number "A4"
 						(effects
 							(font
 								(size 1.016 1.016)
@@ -4082,17 +4075,55 @@
 						)
 					)
 				)
-				(pin power_in line
-					(at 17.78 -15.24 180)
+				(pin passive line
+					(at 17.78 5.08 180)
 					(length 5.08)
-					(name "GND__1"
+					(hide yes)
+					(name "VBUS"
 						(effects
 							(font
 								(size 1.016 1.016)
 							)
 						)
 					)
-					(number "B1/A12"
+					(number "A9"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 17.78 -15.24 180)
+					(length 5.08)
+					(hide yes)
+					(name "GND"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "A12"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin power_in line
+					(at 17.78 -15.24 180)
+					(length 5.08)
+					(name "GND"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "B1"
 						(effects
 							(font
 								(size 1.016 1.016)
@@ -4103,14 +4134,14 @@
 				(pin power_in line
 					(at 17.78 5.08 180)
 					(length 5.08)
-					(name "VBUS__1"
+					(name "VBUS"
 						(effects
 							(font
 								(size 1.016 1.016)
 							)
 						)
 					)
-					(number "B4/A9"
+					(number "B4"
 						(effects
 							(font
 								(size 1.016 1.016)
@@ -4190,10 +4221,48 @@
 						)
 					)
 				)
-				(pin power_in line
+				(pin passive line
+					(at 17.78 7.62 180)
+					(length 5.08)
+					(hide yes)
+					(name "VBUS"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "B9"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 17.78 -12.7 180)
+					(length 5.08)
+					(hide yes)
+					(name "GND"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "B12"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin passive line
 					(at 17.78 -17.78 180)
 					(length 5.08)
-					(name "GND__2"
+					(name "SHIELD"
 						(effects
 							(font
 								(size 1.016 1.016)
@@ -4208,10 +4277,10 @@
 						)
 					)
 				)
-				(pin power_in line
+				(pin passive line
 					(at 17.78 -20.32 180)
 					(length 5.08)
-					(name "GND__3"
+					(name "SHIELD"
 						(effects
 							(font
 								(size 1.016 1.016)
@@ -4226,10 +4295,10 @@
 						)
 					)
 				)
-				(pin power_in line
+				(pin passive line
 					(at 17.78 -22.86 180)
 					(length 5.08)
-					(name "GND__4"
+					(name "SHIELD"
 						(effects
 							(font
 								(size 1.016 1.016)
@@ -4244,10 +4313,10 @@
 						)
 					)
 				)
-				(pin power_in line
+				(pin passive line
 					(at 17.78 -25.4 180)
 					(length 5.08)
-					(name "GND__5"
+					(name "SHIELD"
 						(effects
 							(font
 								(size 1.016 1.016)
@@ -5115,6 +5184,172 @@
 						)
 					)
 					(number "3"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
+		(symbol "Device:D_Schottky"
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 1.016)
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "D"
+				(at 0 2.54 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "D_Schottky"
+				(at 0 -2.54 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "Schottky diode"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "diode Schottky"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_fp_filters" "TO-???* *_Diode_* *SingleDiode* D_*"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "D_Schottky_0_1"
+				(polyline
+					(pts
+						(xy -1.905 0.635) (xy -1.905 1.27) (xy -1.27 1.27) (xy -1.27 -1.27) (xy -0.635 -1.27) (xy -0.635 -0.635)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 1.27 1.27) (xy 1.27 -1.27) (xy -1.27 0) (xy 1.27 1.27)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 1.27 0) (xy -1.27 0)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "D_Schottky_1_1"
+				(pin passive line
+					(at -3.81 0 0)
+					(length 2.54)
+					(name "K"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 3.81 0 180)
+					(length 2.54)
+					(name "A"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -6855,7 +7090,7 @@
 		)
 		(uuid "b7909371-4aeb-5b7d-a0cf-f23fc57066c0")
 	)
-	(text "Battery over voltage\n9.54 V (OV2)"
+	(text "OV2 tied to GND (V2): battery over-voltage\nis the eFuse OVLO, U19 10.59 V"
 		(exclude_from_sim no)
 		(at 90.5 46.355 0)
 		(effects
@@ -7062,6 +7297,12 @@
 		(uuid "1fdbe45e-b3ec-4ce6-ab97-75511547d36d")
 	)
 	(junction
+		(at 129.54 61.595)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "26b61888-b6b8-4f4f-b828-2802dca581f9")
+	)
+	(junction
 		(at 129.54 53.34)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -7242,12 +7483,6 @@
 		(uuid "baed29e1-387e-49d2-9586-2891fc6b0268")
 	)
 	(junction
-		(at 111.76 53.975)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "c7fcedf5-03f7-4f4d-8076-260da2421a2d")
-	)
-	(junction
 		(at 61.595 59.055)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -7258,6 +7493,12 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "c9cd7fc3-d4d8-40cd-993e-7b81cd98d891")
+	)
+	(junction
+		(at 182.88 132.08)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "ca9a6c27-c520-4c65-8c42-1634ef462541")
 	)
 	(junction
 		(at 145.415 151.765)
@@ -7533,6 +7774,16 @@
 	)
 	(wire
 		(pts
+			(xy 182.88 132.08) (xy 182.88 137.16)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "25be8c6b-1c3f-407b-8990-cb755a3ee6f6")
+	)
+	(wire
+		(pts
 			(xy 220.98 37.465) (xy 216.535 37.465)
 		)
 		(stroke
@@ -7680,16 +7931,6 @@
 			(type default)
 		)
 		(uuid "3b054636-9e14-41cc-a8b4-6acbe79939b5")
-	)
-	(wire
-		(pts
-			(xy 111.76 53.34) (xy 111.76 53.975)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "3b796e45-9d1b-4fe2-a263-fc12fe55675d")
 	)
 	(wire
 		(pts
@@ -7843,16 +8084,6 @@
 	)
 	(wire
 		(pts
-			(xy 114.935 66.675) (xy 114.935 53.975)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "53409fc2-ebc8-4e27-9281-1ce1854d7be2")
-	)
-	(wire
-		(pts
 			(xy 51.435 96.52) (xy 58.42 96.52)
 		)
 		(stroke
@@ -7903,23 +8134,13 @@
 	)
 	(wire
 		(pts
-			(xy 132.08 54.61) (xy 132.08 66.675)
+			(xy 132.08 54.61) (xy 132.08 61.595)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
 		(uuid "5b5fac7f-375a-4f53-8013-0e87d5f253b3")
-	)
-	(wire
-		(pts
-			(xy 111.76 45.72) (xy 118.11 45.72)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "5bb6467b-a655-4913-a7eb-611ffb401324")
 	)
 	(wire
 		(pts
@@ -8393,6 +8614,16 @@
 	)
 	(wire
 		(pts
+			(xy 132.08 61.595) (xy 129.54 61.595)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "969764dc-cbff-453a-98c4-6b580a34210b")
+	)
+	(wire
+		(pts
 			(xy 180.975 33.02) (xy 189.865 33.02)
 		)
 		(stroke
@@ -8473,16 +8704,6 @@
 	)
 	(wire
 		(pts
-			(xy 132.08 66.675) (xy 114.935 66.675)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "a7d72ba8-b6fe-43d5-8b36-71642b7e1aeb")
-	)
-	(wire
-		(pts
 			(xy 137.795 54.61) (xy 132.08 54.61)
 		)
 		(stroke
@@ -8500,16 +8721,6 @@
 			(type default)
 		)
 		(uuid "a9ab357e-7575-48d3-b04d-b959b321095f")
-	)
-	(wire
-		(pts
-			(xy 114.935 53.975) (xy 111.76 53.975)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "aa49fc19-ab84-4d3d-ad88-2886d777e318")
 	)
 	(wire
 		(pts
@@ -9958,7 +10169,7 @@
 		)
 	)
 	(symbol
-		(lib_id "Custom:USB4110GFA")
+		(lib_id "Custom:TYPE-C-16P-LTH6.8")
 		(at 43.815 43.815 0)
 		(unit 1)
 		(body_style 1)
@@ -9979,7 +10190,7 @@
 				)
 			)
 		)
-		(property "Value" "USB4110GFA"
+		(property "Value" "TYPE-C 16P LTH6.8"
 			(at 43.815 31.115 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9989,7 +10200,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Footprints:GCT_USB4110GFA"
+		(property "Footprint" "Footprints:SHOUHAN_TYPE-C-16P-LTH6.8"
 			(at 43.815 43.815 0)
 			(hide yes)
 			(show_name no)
@@ -10001,7 +10212,7 @@
 				(justify bottom)
 			)
 		)
-		(property "Datasheet" ""
+		(property "Datasheet" "https://www.lcsc.com/datasheet/C5187468.pdf"
 			(at 43.815 43.815 0)
 			(hide yes)
 			(show_name no)
@@ -10012,7 +10223,7 @@
 				)
 			)
 		)
-		(property "Description" ""
+		(property "Description" "USB Type-C receptacle, USB 2.0, 16 contacts, vertical, 6.8 mm tall; SMT signal pads, four through-hole shell legs, two locating posts; 3 A, 20 V"
 			(at 43.815 43.815 0)
 			(hide yes)
 			(show_name no)
@@ -10021,18 +10232,6 @@
 				(font
 					(size 1.27 1.27)
 				)
-			)
-		)
-		(property "MF" "GCT"
-			(at 43.815 43.815 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify bottom)
 			)
 		)
 		(property "Description_1" "USB-C (USB TYPE-C) USB 2.0 Receptacle Connector 24 (16+8 Dummy) Position Surface Mount, Right Angle; Through Hole"
@@ -10047,7 +10246,7 @@
 				(justify bottom)
 			)
 		)
-		(property "Package" "None"
+		(property "Package" "Vertical USB-C 8.94 x 3.16 mm, 6.8 mm tall"
 			(at 43.815 43.815 0)
 			(hide yes)
 			(show_name no)
@@ -10059,43 +10258,7 @@
 				(justify bottom)
 			)
 		)
-		(property "Price" "None"
-			(at 43.815 43.815 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify bottom)
-			)
-		)
-		(property "MP" "USB4110GFA"
-			(at 43.815 43.815 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify bottom)
-			)
-		)
-		(property "Availability" "In Stock"
-			(at 43.815 43.815 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify bottom)
-			)
-		)
-		(property "MPN" "USB4110-GF-A"
+		(property "MPN" "TYPE-C 16P LTH6.8"
 			(at 43.815 43.815 0)
 			(hide yes)
 			(show_name no)
@@ -10106,7 +10269,7 @@
 				)
 			)
 		)
-		(property "Mfr" "GCT"
+		(property "Mfr" "SHOU HAN"
 			(at 43.815 43.815 0)
 			(hide yes)
 			(show_name no)
@@ -10117,53 +10280,76 @@
 				)
 			)
 		)
-		(pin "A6"
-			(uuid "38e0ebb4-64cc-4148-96fa-163a9d8db4e1")
+		(property "LCSC_Part_Number" "C5187468"
+			(at 43.815 43.815 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
 		)
-		(pin "B5"
-			(uuid "d78f6b57-de9c-46c6-9c73-5e51d7fb459e")
+		(pin "A4"
+			(uuid "9d3d1123-01d9-484b-823b-bf75c39b37d8")
 		)
-		(pin "A8"
-			(uuid "3234a790-d075-4361-ba7c-396694736c49")
+		(pin "B9"
+			(uuid "c558271d-3d9e-4907-8501-f0ee2b664d8b")
+		)
+		(pin "B4"
+			(uuid "98258264-930b-420a-bbf5-1837135cfcaa")
+		)
+		(pin "A9"
+			(uuid "80c6875e-7c63-49b9-864e-f09305b3008c")
 		)
 		(pin "A5"
-			(uuid "bd16bd84-6c2c-47f2-9aff-72d778c56d18")
+			(uuid "b07d16da-a7af-41a3-a729-4d2b0bb45860")
 		)
-		(pin "B6"
-			(uuid "61ec3fed-68a9-4d55-b164-ff042460e4c1")
-		)
-		(pin "B7"
-			(uuid "fe450e82-5cfa-40e0-a655-a891bcab0a65")
-		)
-		(pin "B8"
-			(uuid "5826f899-5ceb-462c-a016-e81d15d8afa2")
-		)
-		(pin "A1/B12"
-			(uuid "c2209ee8-8f90-4388-9496-d1418d7b588c")
-		)
-		(pin "B1/A12"
-			(uuid "40bd6cb6-f135-4d99-a6f3-d9facb467679")
+		(pin "A6"
+			(uuid "fa709057-f4ae-43a7-8b28-f27f2e686325")
 		)
 		(pin "A7"
-			(uuid "3821f7b0-4bff-45c8-a9b0-e32a2013fefd")
+			(uuid "69edfe81-9e9a-44be-b2c8-4eadd0eb824a")
+		)
+		(pin "A8"
+			(uuid "821a2a2c-a5cb-4277-82ab-878324163678")
+		)
+		(pin "B5"
+			(uuid "109f0f27-6a0d-4cec-8252-a5ea7a1de63b")
+		)
+		(pin "B6"
+			(uuid "8e7a0700-56a3-430d-8aca-fac5d88c6339")
+		)
+		(pin "B7"
+			(uuid "7c263774-fd0c-407b-9471-99204ef33847")
+		)
+		(pin "B8"
+			(uuid "be7263c9-1d22-421f-a20b-3747577d3166")
+		)
+		(pin "A1"
+			(uuid "5a04b7da-1274-45e6-8d6c-7a30337cb29a")
+		)
+		(pin "B12"
+			(uuid "b86948cb-c809-4b3b-bde8-7a85bbf32690")
+		)
+		(pin "B1"
+			(uuid "a19d3144-ac9f-4311-ad87-b5a1e53a9e40")
+		)
+		(pin "A12"
+			(uuid "1004fa67-30a2-479f-bae8-bdec08c0c9ea")
 		)
 		(pin "S1"
-			(uuid "d61f72a9-78b6-4f59-bd43-06c421b86518")
+			(uuid "ac3923db-32b1-4ee5-9cdb-f253383d6614")
 		)
 		(pin "S2"
-			(uuid "82f1afec-e046-4e77-9ec9-f12e456e1adb")
+			(uuid "d2cd70c6-5fd6-4f53-920c-7b4004d81abd")
 		)
 		(pin "S3"
-			(uuid "9cdf0fa3-968b-4c4a-8043-8983af837ab3")
+			(uuid "c515872c-4f4a-4205-b578-f032bb6c3045")
 		)
 		(pin "S4"
-			(uuid "3fb571e8-a777-4da4-8e54-2234d941b808")
-		)
-		(pin "A4/B9"
-			(uuid "575703a1-d0f3-4044-b8b1-fb2688a14cd4")
-		)
-		(pin "B4/A9"
-			(uuid "4d49da0b-3801-4462-90f9-1b86e7017f6b")
+			(uuid "b5bef348-f047-4911-8f02-89b5514e99e1")
 		)
 		(instances
 			(project "tinker-beetle"
@@ -10897,107 +11083,6 @@
 		)
 	)
 	(symbol
-		(lib_id "Device:R_US")
-		(at 111.76 57.785 180)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "0c436b56-2e41-49b5-98ec-377862647c5f")
-		(property "Reference" "R57"
-			(at 107.315 57.785 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "1.5 k"
-			(at 109.22 57.785 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 110.744 57.531 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 111.76 57.785 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Resistor, US symbol"
-			(at 111.76 57.785 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "RC0402FR-071K5L"
-			(at 111.76 57.785 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Yageo"
-			(at 111.76 57.785 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "012e4082-fb7f-4f31-a9e4-0461ef5302ab")
-		)
-		(pin "2"
-			(uuid "29016513-cf45-477c-9cdc-4d2fa9ff59ee")
-		)
-		(instances
-			(project "tinker-beetle"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
-					(reference "R57")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
 		(lib_id "power:GND")
 		(at 260.35 64.135 0)
 		(unit 1)
@@ -11451,107 +11536,6 @@
 			(project "tinker-beetle"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
 					(reference "C41")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:R_US")
-		(at 111.76 49.53 180)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "15e12f43-d311-4808-9eba-00bb8b76f3a0")
-		(property "Reference" "R56"
-			(at 107.315 49.53 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "12 k"
-			(at 109.22 49.53 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 110.744 49.276 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 111.76 49.53 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Resistor, US symbol"
-			(at 111.76 49.53 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "RC0402FR-0712KL"
-			(at 111.76 49.53 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Yageo"
-			(at 111.76 49.53 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "62d1f6bc-1339-473a-950e-b009462cf9dd")
-		)
-		(pin "2"
-			(uuid "a28b9e63-a252-4516-a81a-ecd4b108188d")
-		)
-		(instances
-			(project "tinker-beetle"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
-					(reference "R56")
 					(unit 1)
 				)
 			)
@@ -13842,84 +13826,6 @@
 			(project "tinker-beetle"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
 					(reference "R65")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:GND")
-		(at 111.76 61.595 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "5b026b80-3fe7-4c87-8de9-b8cb9aaf331c")
-		(property "Reference" "#PWR0108"
-			(at 111.76 67.945 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 113.665 65.405 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" ""
-			(at 111.76 61.595 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 111.76 61.595 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 111.76 61.595 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "08ee6001-552b-4f98-b44e-d9ff97509d58")
-		)
-		(instances
-			(project "tinker-beetle"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
-					(reference "#PWR0108")
 					(unit 1)
 				)
 			)
@@ -17722,7 +17628,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "390 pF"
+		(property "Value" "10 nF"
 			(at 55.245 125.095 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -17766,7 +17672,7 @@
 				)
 			)
 		)
-		(property "MPN" "GRM1555C1H391JA01D"
+		(property "MPN" "CL05B103KB5NNNC"
 			(at 55.245 122.555 0)
 			(hide yes)
 			(show_name no)
@@ -20613,6 +20519,110 @@
 		)
 	)
 	(symbol
+		(lib_id "Device:D_Schottky")
+		(at 186.69 132.08 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "dbdd4105-1e0c-4264-8de7-a7d9a6dea406")
+		(property "Reference" "D12"
+			(at 186.69 127.635 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Value" "BAT54XV2T1G"
+			(at 186.69 129.54 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" "Footprints:SOD-523_0P9X1P3_ONS"
+			(at 186.69 132.08 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 186.69 132.08 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "FC enable OR: FC_EN_OC (OC start) onto POWER_SWITCH"
+			(at 186.69 132.08 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "BAT54XV2T1G"
+			(at 186.69 132.08 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "onsemi"
+			(at 186.69 132.08 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "90910a31-2239-4ff8-83ca-cbc050575458")
+		)
+		(pin "2"
+			(uuid "36e21ab7-5a27-49f1-8f7f-9f9eff8c1c16")
+		)
+		(instances
+			(project "tinker-beetle"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
+					(reference "D12")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "Device:R_US")
 		(at 213.995 78.105 0)
 		(unit 1)
@@ -21070,7 +21080,7 @@
 				)
 			)
 		)
-		(property "Value" "15.4 k"
+		(property "Value" "100 k"
 			(at 127 49.53 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -21113,7 +21123,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0715K4L"
+		(property "MPN" "RC0402FR-07100KL"
 			(at 129.54 49.53 0)
 			(hide yes)
 			(show_name no)
@@ -21513,8 +21523,8 @@
 		)
 	)
 	(symbol
-		(lib_id "Device:D_Dual_CommonCathode_AAK")
-		(at 182.88 132.08 0)
+		(lib_id "Device:D_Schottky")
+		(at 179.07 132.08 180)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -21522,29 +21532,32 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
+		(fields_autoplaced yes)
 		(uuid "e4fad4bc-abf8-412e-a54c-4f91f9553179")
 		(property "Reference" "D9"
-			(at 182.88 129.54 0)
+			(at 179.07 127.635 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
+				(justify right)
 			)
 		)
-		(property "Value" "BAV170M"
-			(at 182.88 127.635 0)
+		(property "Value" "BAT54XV2T1G"
+			(at 179.07 129.54 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
+				(justify right)
 			)
 		)
-		(property "Footprint" "Package_TO_SOT_SMD:SOT-883"
-			(at 182.88 132.08 0)
+		(property "Footprint" "Footprints:SOD-523_0P9X1P3_ONS"
+			(at 179.07 132.08 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -21555,7 +21568,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 182.88 132.08 0)
+			(at 179.07 132.08 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -21565,8 +21578,8 @@
 				)
 			)
 		)
-		(property "Description" "P4 rail OR-gate: S3 authorises, P4 holds"
-			(at 182.88 132.08 0)
+		(property "Description" "FC enable OR: FC_EN_HOLD (FC self-hold) onto POWER_SWITCH"
+			(at 179.07 132.08 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -21576,8 +21589,8 @@
 				)
 			)
 		)
-		(property "MPN" "BAV170M,315"
-			(at 272.415 94.615 0)
+		(property "MPN" "BAT54XV2T1G"
+			(at 179.07 132.08 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -21587,8 +21600,8 @@
 				)
 			)
 		)
-		(property "Mfr" "Nexperia"
-			(at 272.415 94.615 0)
+		(property "Mfr" "onsemi"
+			(at 179.07 132.08 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -21599,13 +21612,10 @@
 			)
 		)
 		(pin "1"
-			(uuid "d7507937-fc76-459b-a6cd-f3892178c0cd")
+			(uuid "a746276c-ed33-4ec9-99f0-91da384f734a")
 		)
 		(pin "2"
-			(uuid "e337f4d1-b730-44f6-a9de-d1e4f67b8209")
-		)
-		(pin "3"
-			(uuid "02150712-7087-4db1-af89-2303c1fbce8c")
+			(uuid "d08bd2b0-a814-4336-9537-a7b773405117")
 		)
 		(instances
 			(project "tinker-beetle"
@@ -21741,7 +21751,7 @@
 				)
 			)
 		)
-		(property "Value" "5.11 k"
+		(property "Value" "33.2 k"
 			(at 127 57.785 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -21784,7 +21794,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-075K11L"
+		(property "MPN" "RC0402FR-0733K2L"
 			(at 129.54 57.785 0)
 			(hide yes)
 			(show_name no)
