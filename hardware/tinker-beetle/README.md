@@ -48,28 +48,65 @@ after the arm and hold-up reworks, the 2026-09-03 pin swap and the V1 fab gate.*
 |---|---|---|
 | Sheet | [`esp32s3_mcu.kicad_sch`](esp32s3_mcu.kicad_sch) | [`fc_esp32s3.kicad_sch`](fc_esp32s3.kicad_sch) |
 | Rail | `+3V3` — always on | `V_MCU_SWTCH` — **starts off** |
-| Radio | 2.4 GHz chip antenna `U14`, 900 MHz LoRa `U16` | none |
-| Memory | NAND `U11` + boot flash `U13` | boot flash `U33` only |
+| Radio | 2.4 GHz chip antenna `U14` (Molex 47948-0001), 900 MHz LoRa `U16` | none |
+| Memory | NAND `U11`; 4 MB flash + 2 MB PSRAM in the MCU package | 4 MB flash + 2 MB PSRAM in the MCU package |
 | Sensors | pack monitor only, on `SEN_SC*` (`+3V3`) | IMU, baro, GNSS **and magnetometer** |
 | Pyro | arm consent (`OC_ARM_EN`) | all four channels and the arm request (`FC_ARM`) |
 | USB | `OC_D±` | `FC_D±` |
 
 The flight computer is a copy of the out-computer sheet with the chip antenna,
-its matching network and the NAND removed; everything else — the MCU, its own
-boot flash, both crystals, the boot button, the strapping network and the full
-decoupling set — is duplicated. Its parts occupy a deliberate `C110`/`R110`
+its matching network and the NAND removed; everything else — the MCU, the 40 MHz
+crystal, the boot button, the strapping network and the
+full decoupling set — is duplicated. Its parts occupy a deliberate `C110`/`R110`
 block so the sheet is identifiable at a glance in the BOM.
+
+**V2 moves both boot flashes into the processor package.** `U15` and `U32` are
+ESP32-S3FH4R2: V1's die, QFN-56 and pinout, with 4 MB of quad flash and the same
+2 MB of quad PSRAM inside. The W25Q128JVYIQ boot flashes (`U13`, `U33`) and their
+100 nF caps (`C26`, `C115`) are gone. Pads 30–35 (SPIHD, SPIWP, SPICS0, SPICLK,
+SPIQ, SPID) now run to the in-package flash and carry no-connect flags; pad 28
+(SPICS1, GPIO26) is still the PSRAM select. VDD_SPI stays at 3.3 V (GPIO45 low at
+reset) on `C27`/`C116`. The PSRAM is why the cheaper ESP32-S3FN8 (8 MB flash, no
+PSRAM) was not used: the flight computer's raw-GNSS filter keeps about 219 KB in
+it with about 38 KB of internal RAM left, and the out computer's log ring is
+512 KB there. Firmware: the M1 partition tables end at 6.1–6.3 MB, so a V2 build
+needs a 4 MB table (two OTA slots of about 1.9 MB; the images are 0.78 and
+0.85 MB) and a 4 MB flash declaration, written once over USB.
+
+**V2 drops the flight computer's 32.768 kHz crystal** (`Y3` and its load caps
+`C110`/`C111`). The flight-computer firmware never selects it: neither
+`sdkconfig.defaults` nor the `m1` overlay sets `CONFIG_RTC_CLK_SRC_EXT_CRYS`, so
+the RTC runs on the internal RC, which is fine for a processor that never light
+sleeps. `XTAL_32K_P`/`XTAL_32K_N` (GPIO15/16) are bare pads now. If FC light sleep
+is ever wanted, the crystal comes back first. The out computer keeps its crystal
+(`Y1`), which clocks its RTC and the BLE low-power clock.
+
+**V2 goes back to the Molex 47948-0001 BLE antenna** (`U14`, `0479480001`),
+the part the V9 rocket computer used, in place of V1's Abracon AANI-CH-0070. It
+is an on-ground antenna (Molex: "Ground Clearance: None needed"), so the AANI's
+all-layer keep-out is gone and the ground pours run under it. It sits on the
+right edge where the AANI was, its body 0.45 mm from the edge, with fixing pad 3
+and feed pad 4 on the edge side and the feed toward the radio, as on the V9.
+Fixing pads 1-3 are left unconnected. The match is Molex's L network on the
+existing pi footprints: `L1` 4.3 nH (`LQW15AN4N3C00D`, the V9's part) to ground,
+`R148` 0 Ω in the series position that was `C7` (5.1 pF), and `C12` still DNP as
+the antenna-side tuning slot. Molex's reference is a 100 x 40 mm two-layer
+board with the antenna at a corner, so check the match with a VNA on the first
+article.
 
 ### The flight computer starts off, and holds itself on
 
-This is `rocket-computer`'s arrangement, reproduced part for part:
+This is `rocket-computer`'s arrangement, reproduced part for part, except that
+V2 builds the OR from two `BAT54XV2T1G` Schottkys (`D12`, `D9`) instead of the
+dual `BAV170M`. The BAV170M is out of stock at LCSC and discontinued at DigiKey,
+and the BAT54XV2T1G is already on the board as the pyro continuity clamp:
 
 ```
-FC_EN_OC   (OC GPIO7) ──>|─┐
+FC_EN_OC   (OC GPIO7) ──>|─┐  D12
                           ├── POWER_SWITCH ──> U30 EN/UVLO ──> V_MCU_SWTCH
-FC_EN_HOLD (FC GPIO17) ─>|─┘        │  │
-                        D9          │  └── C105 10 uF   (rides out a drop-out)
-                     BAV170M        └───── R84 100 k    (holds the rail off)
+FC_EN_HOLD (FC GPIO17) ─>|─┘  D9      │  │
+                   BAT54XV2T1G x2     │  └── C105 10 uF   (rides out a drop-out)
+                                      └───── R84 100 k    (holds the rail off)
 ```
 
 At power-on `R84` holds `U30` off, so `V_MCU_SWTCH` — and with it the flight
@@ -102,14 +139,18 @@ otherwise. The S3 has `SOC_RTCIO_PIN_COUNT = 22`, covering **GPIO0–GPIO21**, a
 > returns `ESP_OK`, the latch still looks asserted, and it evaporates on the
 > first panic reset. That reintroduces #825 with no error to notice it by.
 
-The decay window is unchanged from `rocket-computer`: `R84` 100 k and `C105`
-10 µF give roughly **0.9 s**, not the 1.4 s this section used to state. With
-`tau` = 100 k x 10 µF = 1.0 s, a node starting at 3.3 V less a `BAV170M` drop
-(~0.4 V at the 28 µA `R84` pulls) and `U30`'s `V_ENF` of 1.13 V, the window is
-`1.0 s x ln(2.9 / 1.13)` = 0.94 s. The old figure reproduces only as
+The decay window: `R84` 100 k and `C105` 10 µF give roughly **1.0 s**, not the
+1.4 s this section used to state. With `tau` = 100 k x 10 µF = 1.0 s, a node
+starting at 3.3 V less a `BAT54XV2T1G` drop (~0.19 V at the 28 µA `R84` pulls;
+0.22 V typ at 0.1 mA) and `U30`'s `V_ENF` of 1.13 V, the window is
+`1.0 s x ln(3.1 / 1.13)` = 1.0 s. With V1's `BAV170M` (~0.4 V drop) it was
+`ln(2.9 / 1.13)` = 0.94 s. The old figure reproduces only as
 `ln(3.3 / 0.8)` — dropping the diode drop *and* using a 0.8 V threshold. `C105`
-is an 0402 6.3 V X5R biased at ~2.9 V, where a ~50% DC-bias loss is typical, so
-the window in practice is nearer **0.45 s**.
+is an 0402 6.3 V X5R biased at ~3 V, where a ~50% DC-bias loss is typical, so
+the window in practice is nearer **0.5 s**. The Schottkys' reverse leakage
+(0.3 µA typ, 2 µA max at 25 V, more when hot) drains the node alongside `R84`'s
+28 µA. That shortens the window a little when hot, and only this ground-side
+window, which is not load-bearing in flight (below).
 
 Note the decay is on the *enable* node, not on `V_MCU_SWTCH` — `U30` is a load
 switch, so its output stays at full rail until the enable crosses the threshold
@@ -275,6 +316,13 @@ which is where the `ESP_SCL`/`ESP_SDA` link pair lives now — with `R117`/`R118
 bus on `+3V3`, the same shape as `rocket-computer`'s `PWR_SCL`/`PWR_SDA`. No
 passive pull-up crosses the rail boundary any more; every remaining crossing is
 an actively driven signal.
+
+**V2:** `U3` is an MMC5983MA (the QMC5883P went out of stock) and sits on the
+flight computer's sensor SPI bus (`SENS_SCLK`/`SENS_SDI`/`SENS_SDO`) with the
+IMU and baro, on its own chip select `MAG_CS` (GPIO1). `R118` is now its 10 k
+chip-select pull-up on `V_MCU_SWTCH`, like `R4`/`R5`; `R117` is gone and GPIO2 is
+free. The firmware's `TR_MMC5983MA` driver is SPI already; the M1 board target
+still expects the QMC5883P on I2C and has not been changed.
 
 The part exposes no DRDY on this land — every pad but SCL/SDA/VDD/GND and the `C1`
 reservoir pin is NC — so the magnetometer is poll-only. That is the part, not an omission.

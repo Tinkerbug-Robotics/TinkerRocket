@@ -4,7 +4,7 @@
 
 This file exists because **none of it can travel in the design files.** Via protection, surface finish and the deliberate plane void were each verified absent from the gerbers, the `.gbrjob`, the Excellon drill file, IPC-2581 *and* ODB++. Written text is the only channel to the fab.
 
-**Status 2026-09-28: V4, not yet built.** V4 moves the boot flash `U22` to the 16 MB quad-SPI NOR in a 24-ball WLCSP that the Tinker-Beetle and Tinker-Mantis carry. It sits on B.Cu where the SOIC-8 was, with its 100 nF (`C18`) beside it. `R79` (GPIO0 pull-up) and `R80` (radio receive-enable pull-down) are new. All of it is placed and routed, and no V4 board has been built yet. The via counts and the stencil note in the block below describe V4.
+**Status 2026-10-29: V4, not yet built.** V4 has no external boot flash: `U28` is an ESP32-S3FH4R2, with 4 MB of flash and 2 MB of PSRAM in the package, so the WLCSP NOR `U22` and its 100 nF `C18` are gone. The radio firmware already fits 4 MB with PSRAM off. `R79` (GPIO0 pull-up) and `R80` (radio receive-enable pull-down) are new. No V4 board has been built yet. The block below still describes `U22`: its stencil apertures, the 0.08 mm foil they forced and the via counts. Revise it once the layout has lost `U22`, before V4 is ordered.
 
 ---
 
