@@ -18,7 +18,8 @@ import kilib  # noqa: E402
 
 PCB = os.path.join(kilib.PROJ, 'spin-rig-controller.kicad_pcb')
 DRC = os.path.join(HERE, 'out', 'drc.json')
-OX, OY, W, H = 100.0, 100.0, 110.0, 80.0
+import make_pcb  # noqa: E402
+OX, OY, W, H = make_pcb.OX, make_pcb.OY, make_pcb.W, make_pcb.H
 mm = pcbnew.FromMM
 G = 0.2                      # grid, mm
 CLR = 0.2                    # margin over the 0.15 rule (cells are checked, the segments between them sampled)
