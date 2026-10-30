@@ -6125,7 +6125,7 @@
 				)
 			)
 		)
-		(property "Value" "TYPE-C-31-M-12"
+		(property "Value" "USB4110GFA"
 			(at 44.45 41.91 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6135,7 +6135,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Footprints:USB_C_HRO_TYPE-C-31-M-12"
+		(property "Footprint" "Footprints:GCT_USB4110GFA"
 			(at 44.45 54.61 0)
 			(hide yes)
 			(show_name no)
@@ -6169,7 +6169,7 @@
 				)
 			)
 		)
-		(property "MF" "Korean Hroparts"
+		(property "MF" "GCT"
 			(at 44.45 54.61 0)
 			(hide yes)
 			(show_name no)
@@ -6181,7 +6181,7 @@
 				(justify bottom)
 			)
 		)
-		(property "Description_1" "USB-C (USB TYPE-C) USB 2.0 Receptacle Connector, 16 Position, top-mount SMT signals + through-hole shell legs"
+		(property "Description_1" "USB-C (USB TYPE-C) USB 2.0 Receptacle Connector 24 (16+8 Dummy) Position Surface Mount, Right Angle; Through Hole"
 			(at 44.45 54.61 0)
 			(hide yes)
 			(show_name no)
@@ -6217,7 +6217,7 @@
 				(justify bottom)
 			)
 		)
-		(property "MP" "TYPE-C-31-M-12"
+		(property "MP" "USB4110GFA"
 			(at 44.45 54.61 0)
 			(hide yes)
 			(show_name no)
@@ -6241,7 +6241,7 @@
 				(justify bottom)
 			)
 		)
-		(property "MPN" "TYPE-C-31-M-12"
+		(property "MPN" "USB4110-GF-A"
 			(at 44.45 54.61 0)
 			(hide yes)
 			(show_name no)
@@ -6252,7 +6252,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Korean Hroparts"
+		(property "Mfr" "GCT"
 			(at 44.45 54.61 0)
 			(hide yes)
 			(show_name no)
