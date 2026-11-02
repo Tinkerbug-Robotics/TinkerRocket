@@ -51,6 +51,7 @@ const char* proofName(Proof p)
         case Proof::REPLY:     return "a command reply";
         case Proof::UBX_FRAME: return "a UBX frame";
         case Proof::NMEA:      return "NMEA";
+        case Proof::RTCM_TR:   return "an RTCM 4001 frame";
         default:               return "nothing";
     }
 }
@@ -84,11 +85,23 @@ Plan planFor(uint8_t hint, uint32_t ublox_last_baud, bool receiver_kept_power)
     auto addUblox = [&]() {
         for (size_t i = 0; i < nub; i++) p.probes[p.n++] = Probe{ub[i], GNSS_TYPE_UBLOX, ubloxListenMs(ub[i])};
     };
+    auto addSdr = [&]() { p.probes[p.n++] = Probe{kSdrBaud, GNSS_TYPE_SDR, kSdrListenMs}; };
 
-    if (hint == GNSS_TYPE_MOSAIC)
+    if (hint == GNSS_TYPE_SDR)
+    {
+        addSdr();
+        addUblox();
+        addMosaic();
+        p.budget_ms = kBudgetSdrMs;
+        // Silent is what the board is after every cold power-up (it sends from
+        // its first fix): its driver listens for it, and the hint stays.
+        p.fallback = GNSS_TYPE_SDR;
+    }
+    else if (hint == GNSS_TYPE_MOSAIC)
     {
         addMosaic();
         addUblox();
+        addSdr();
         p.budget_ms = kBudgetMosaicMs;
         // A board that had a mosaic-G5 and now answers nothing flies
         // GNSS-absent after the mosaic driver's own 30 s, as the mosaic image
@@ -99,7 +112,10 @@ Plan planFor(uint8_t hint, uint32_t ublox_last_baud, bool receiver_kept_power)
     }
     else
     {
+        // The board's listening probe before the mosaic's 2 Mbaud CR, so a
+        // board that is streaming is found without being sent anything.
         addUblox();
+        addSdr();
         addMosaic();
         p.budget_ms = (hint == GNSS_TYPE_UBLOX) ? kBudgetUbloxMs : kBudgetNoneMs;
         p.fallback = GNSS_TYPE_UBLOX;
@@ -110,9 +126,10 @@ Plan planFor(uint8_t hint, uint32_t ublox_last_baud, bool receiver_kept_power)
 Plan secondLookPlan()
 {
     Plan p;
+    p.probes[p.n++] = Probe{kSdrBaud, GNSS_TYPE_SDR, kSdrListenMs};
     p.probes[p.n++] = Probe{kMosaicTargetBaud, GNSS_TYPE_MOSAIC, kMosaicTargetListenMs};
     p.probes[p.n++] = Probe{kMosaicFactoryBaud, GNSS_TYPE_MOSAIC, kMosaicFactoryListenMs};
-    p.budget_ms = 500;   // twice round
+    p.budget_ms = 1000;   // twice round
     p.fallback = GNSS_TYPE_NONE;
     return p;
 }
@@ -246,6 +263,7 @@ void Detector::enterProbe(size_t i, uint32_t now_ms)
     nmea_ = false;
     ubx_.reset();
     parser_.reset();
+    rtcm_.reset();
     const Probe& p = plan_.probes[i];
     if (p.baud != baud_)
     {
@@ -254,8 +272,9 @@ void Detector::enterProbe(size_t i, uint32_t now_ms)
     }
     if (p.asks == GNSS_TYPE_MOSAIC)
         push(Action::SEND, 0, kCr, sizeof(kCr));
-    else
+    else if (p.asks == GNSS_TYPE_UBLOX)
         push(Action::SEND, 0, kUbxMonVerPoll, sizeof(kUbxMonVerPoll));
+    // GNSS_TYPE_SDR: nothing; it listens
     probes_run_++;
 }
 
@@ -263,6 +282,13 @@ void Detector::feed(const uint8_t* data, size_t n, uint32_t now_ms)
 {
     if (done_ || data == nullptr || n == 0) return;
     now_ms_ = now_ms;
+    // The gnss-sdr-dev board's frames, at its baud: whichever probe is
+    // listening there (its own, or the mosaic's 2 Mbaud one).
+    if (baud_ == kSdrBaud)
+    {
+        rtcm_.feed(data, n, *this);   // onFrame below may finish()
+        if (done_) return;
+    }
     // u-blox proof counts only at a baud a u-blox can be at, which 2 Mbaud is
     // not (they stop at 921600): a set-up mosaic's SBF is binary and can hold
     // anything, so the one place it streams is kept out of the UBX scan.
@@ -363,20 +389,32 @@ void Detector::onPrompt(const char* port, size_t index)
     if (!done_) finish(GNSS_TYPE_MOSAIC, Proof::PROMPT, now_ms_);
 }
 
+// ── What the gnss-sdr-dev board sends ───────────────────────────────────
+
+void Detector::onFrame(const uint8_t* frame, size_t len, size_t after)
+{
+    (void)after;
+    // Its MSM7 and ephemerides are standard RTCM3 that another receiver could
+    // send; TinkerRocket's own message is the board's alone.
+    if (!done_ && sdr_rtcm::messageNumber(frame, len) == sdr_rtcm::kTrMessage)
+        finish(GNSS_TYPE_SDR, Proof::RTCM_TR, now_ms_);
+}
+
 // ── BringUp ─────────────────────────────────────────────────────────────
 
 void BringUp::start(uint8_t hint, uint32_t ublox_last_baud, bool receiver_kept_power,
                     bool ublox_wires_swapped)
 {
-    // Only the two receivers J1 takes are hints; anything else (a blank or
+    // Only the receivers J1 takes are hints; anything else (a blank or
     // corrupt record) is nothing known.
-    hint_in_ = (hint == GNSS_TYPE_UBLOX || hint == GNSS_TYPE_MOSAIC) ? hint : GNSS_TYPE_NONE;
+    hint_in_ = (hint == GNSS_TYPE_UBLOX || hint == GNSS_TYPE_MOSAIC || hint == GNSS_TYPE_SDR) ? hint
+                                                                                             : GNSS_TYPE_NONE;
     hint_ = hint_in_;
     proven_ = GNSS_TYPE_NONE;
     active_ = GNSS_TYPE_NONE;
     second_look_ = false;
     plan_ = planFor(hint_in_, ublox_last_baud, receiver_kept_power);
-    if (ublox_wires_swapped && hint_in_ != GNSS_TYPE_MOSAIC)
+    if (ublox_wires_swapped && hint_in_ != GNSS_TYPE_MOSAIC && hint_in_ != GNSS_TYPE_SDR)
     {
         plan_.n = 0;   // nothing to probe: detected(NONE) runs the u-blox driver
         plan_.budget_ms = 0;
@@ -390,7 +428,7 @@ void BringUp::detected(uint8_t found)
     if (step_ == Step::DETECT)
     {
         proven_ = found;
-        if (found == GNSS_TYPE_UBLOX || found == GNSS_TYPE_MOSAIC) hint_ = found;
+        if (found == GNSS_TYPE_UBLOX || found == GNSS_TYPE_MOSAIC || found == GNSS_TYPE_SDR) hint_ = found;
         const uint8_t driver = (found != GNSS_TYPE_NONE) ? found : plan_.fallback;
         if (driver == GNSS_TYPE_UBLOX)
         {
@@ -399,6 +437,10 @@ void BringUp::detected(uint8_t found)
         else if (driver == GNSS_TYPE_MOSAIC)
         {
             step_ = Step::BEGIN_MOSAIC;
+        }
+        else if (driver == GNSS_TYPE_SDR)
+        {
+            step_ = Step::BEGIN_SDR;
         }
         else
         {
@@ -416,6 +458,11 @@ void BringUp::detected(uint8_t found)
         {
             hint_ = GNSS_TYPE_MOSAIC;
             step_ = Step::BEGIN_MOSAIC;
+        }
+        else if (found == GNSS_TYPE_SDR)
+        {
+            hint_ = GNSS_TYPE_SDR;
+            step_ = Step::BEGIN_SDR;
         }
         else
         {
@@ -456,6 +503,13 @@ void BringUp::driverResult(bool ok)
     if (step_ == Step::BEGIN_MOSAIC)
     {
         active_ = ok ? GNSS_TYPE_MOSAIC : GNSS_TYPE_NONE;
+        step_ = Step::DONE;
+        return;
+    }
+    if (step_ == Step::BEGIN_SDR)
+    {
+        // Its driver only fails when the UART will not come up.
+        active_ = ok ? GNSS_TYPE_SDR : GNSS_TYPE_NONE;
         step_ = Step::DONE;
     }
 }

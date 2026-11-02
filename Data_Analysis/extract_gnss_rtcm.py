@@ -24,6 +24,12 @@ its CRC, is left out and counted. On the V9 the same record carries the
 mosaic-G5's SBF blocks instead: those are not RTCM3, so they are left out and
 counted on a line of their own, not as bad CRCs (extract_gnss_sbf.py writes
 them). Field references are RTCM 10403.3 (DFnnn).
+
+On a V9 or V10 with TinkerRocket's gnss-sdr-dev board the record carries that
+board's RTCM3 (MSM7 at up to 100 Hz, TinkerRocket's message 4001, its
+ephemerides), and the same .rtcm3 comes out. The summary then also gives the
+MSM7 epochs' step and any missing between them, and the 4001 sub-types:
+1 after each epoch, 2 after each fix (RTKLIB passes 4001 over).
 """
 
 from __future__ import annotations
@@ -186,6 +192,46 @@ def decode_eph(frame: bytes):
             "sqrt_a": field(*sqa) * 2.0 ** -19 if sqa else None}
 
 
+TR_MESSAGE = 4001                             # TinkerRocket's own (the gnss-sdr-dev board's)
+WEEK_MS = 604800000
+
+
+def msm_gps_tow(frame: bytes):
+    """An MSM frame's epoch as GPS time of week, ms (BeiDou's 14 s added back); None for GLONASS or another message."""
+    mt = message_type(frame)
+    if mt not in MSM7_TYPES or MSM7_TYPES[mt][0] == 6:
+        return None
+    epoch = (int.from_bytes(frame[3:11], "big") >> (64 - 24 - 30)) & ((1 << 30) - 1)
+    return (epoch + 14000) % WEEK_MS if mt == 1127 else epoch
+
+
+def epoch_summary(frames):
+    """The MSM7 epochs in log order: how many, their usual step, and the ones missing between them.
+
+    An epoch is a run of MSM7 frames with the same GPS time of week (the
+    multiple-message bit ties them). Also TinkerRocket's 4001 by sub-type.
+    """
+    tows = []
+    tr = Counter()
+    fixes_valid = 0
+    for _, f in frames:
+        tow = msm_gps_tow(f)
+        if tow is not None and (not tows or tows[-1] != tow):
+            tows.append(tow)
+        if message_type(f) == TR_MESSAGE and len(f) > 6:
+            sub = f[4] & 0x0F
+            tr[sub] += 1
+            if sub == 2 and len(f) >= 3 + 11 + 3:
+                fixes_valid += (f[3 + 10] >> 5) & 1      # bit 82 of the payload
+    steps = [(b - a) % WEEK_MS for a, b in zip(tows, tows[1:])]
+    forward = [d for d in steps if 0 < d < WEEK_MS // 2]
+    step = Counter(forward).most_common(1)[0][0] if forward else None
+    missing = sum(-(-d // step) - 1 for d in forward if d > step) if step else 0
+    return {"epochs": len(tows), "step_ms": step, "missing": missing,
+            "backward": len(steps) - len(forward), "tr_epochs": tr[1], "tr_fixes": tr[2],
+            "tr_fixes_valid": fixes_valid}
+
+
 def extract(bin_path: Path):
     """([(time_us, frame)], stats) for every good frame in a log, in log order."""
     records, _stats, _config = pfd.parse_binary_file(str(bin_path))
@@ -219,6 +265,14 @@ def main(argv=None) -> int:
     if frames:
         span = (frames[-1][0] - frames[0][0]) / 1e6
         print(f"  FC time span {span:.1f} s")
+    es = epoch_summary(frames)
+    if es["epochs"]:
+        rate = f" ({1000.0 / es['step_ms']:.1f} Hz)" if es["step_ms"] else ""
+        print(f"  MSM7 epochs: {es['epochs']} at a {es['step_ms']} ms step{rate}, "
+              f"{es['missing']} missing, {es['backward']} out of order")
+    if es["tr_epochs"] or es["tr_fixes"]:
+        print(f"  TinkerRocket 4001 (gnss-sdr-dev): {es['tr_epochs']} epochs, "
+              f"{es['tr_fixes']} fixes ({es['tr_fixes_valid']} valid)")
     seen = {}
     for t, f in frames:
         e = decode_eph(f)

@@ -46,8 +46,9 @@
 // at project level (same pattern as TR_GUIDANCE_AVAILABLE); default is
 // u-blox, unchanged.
 //
-// TR_GNSS_DRIVER_AUTO=1 puts TR_GNSSAuto in the slot instead: the V9 image,
-// whose J1 takes either the u-blox carrier or the mosaic-G5 harness. It finds
+// TR_GNSS_DRIVER_AUTO=1 puts TR_GNSSAuto in the slot instead: the V9 and V10
+// images, whose J1 takes the u-blox carrier, the mosaic-G5 harness or the
+// gnss-sdr-dev board (which this logs and does not navigate on). It finds
 // the receiver at begin() (gnss_auto_driver.h), so which one it is, and what
 // follows from it, are known only after begin(): read them through
 // gnssType(), never from a compile-time constant.
@@ -245,9 +246,11 @@ public:
     bool getGNSSSatData(GNSSSatData &data_out);
     // Raw frames from the GNSS receiver (GNSS_RTCM_MSG), oldest first: ~5 a
     // second of RTCM3 from the LC86G's MSM7, ~60 SBF blocks a second from the
-    // mosaic-G5, never anything from the u-blox.  Drains a ring the GNSS poll
-    // task fills, so call it until it returns false.  `cap` must be
-    // GNSS_RTCM_MAX_FRAME (LC86G) or GNSS_SBF_MAX_FRAME (mosaic-G5).
+    // mosaic-G5, ~400 RTCM3 frames a second from the gnss-sdr-dev board,
+    // never anything from the u-blox.  Drains a ring the GNSS poll task
+    // fills, so call it until it returns false.  `cap` must be
+    // GNSS_RTCM_MAX_FRAME (LC86G) or GNSS_SBF_MAX_FRAME (mosaic-G5; the V9
+    // and V10 images).
     bool getGNSSRtcmFrame(uint8_t* out, size_t cap, size_t& len, uint32_t& time_us);
     // mosaic-G5 only (no-ops elsewhere): the pin its 1PPS reaches and its
     // navigation rate, set before begin() (on the V9 image the pin is touched
