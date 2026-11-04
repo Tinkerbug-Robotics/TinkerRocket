@@ -719,9 +719,15 @@ final class ActiveRocketSyncer: ObservableObject {
             changed.append(groupRollControl)
         }
 
-        // Enable flag only — the PN parameters behind it aren't reported.
-        if p.guidanceEnabled != cfg.guidanceEnabled {
-            p.guidanceEnabled = cfg.guidanceEnabled
+        // Only the flight computer's own on/off (config_guid "gen"), by the
+        // camera's #1472 rule.  The config frame's "ge" is the out computer's
+        // copy — its NVS until the FC's frames flow — and adopting it let a
+        // connect with the rail off write a stale "on" into the profile that
+        // nothing ever corrected (GTV Blue, 2026-11-01).  With no FC value the
+        // profile is left alone and GuidanceStateCheck says "unverified"; the
+        // extras re-adopt picks the FC's up when config_guid lands.
+        if let fcOn = cfg.guidanceEnabledOnFlightComputer, p.guidanceEnabled != fcOn {
+            p.guidanceEnabled = fcOn
             changed.append(groupGuidanceEnable)
         }
 

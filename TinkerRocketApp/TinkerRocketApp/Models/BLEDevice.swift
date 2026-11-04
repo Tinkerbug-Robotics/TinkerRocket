@@ -1151,7 +1151,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         assert(payload.count == 45, "GuidanceConfigData must be 45 bytes, built \(payload.count)")
         #endif
         sendRawCommand(65, payload: payload)   // GuidanceConfigData = 45 bytes
-        if var cfg = rocketConfig { cfg.guidanceEnabled = enabled; rocketConfig = cfg }
+        // Nothing is written into rocketConfig here: the flight computer's
+        // report says what it applied ("gen" in config_guid), and a send that
+        // never arrived must not read as applied.  An optimistic write here
+        // hid exactly that.
     }
 
     /// Fin layout (FinConfigData = 18 bytes, cmd 66). Derives each servo's fin
@@ -2738,7 +2741,8 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                     minSpeed: ms, coastDelayMs: UInt16(clamping: cd),
                     targetMode: UInt8(clamping: tm),
                     targetE: te, targetN: tn, targetAltM: ta,
-                    kpPos: kp, kdVel: kd, guidanceLaw: UInt8(clamping: law))
+                    kpPos: kp, kdVel: kd, guidanceLaw: UInt8(clamping: law),
+                    enabled: dict["gen"] as? Bool)
                 self.rocketConfig = cfg
             }
             return
