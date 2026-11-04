@@ -4489,7 +4489,13 @@ typedef struct __attribute__((packed))
     int16_t  closing_vel_cmps;   // closing velocity to target (m/s x100)
     int16_t  pitch_fin_cmd_cdeg; // commanded pitch fin deflection, pre-mix (deg x100)
     int16_t  yaw_fin_cmd_cdeg;   // commanded yaw fin deflection, pre-mix (deg x100)
-    uint8_t  guid_flags;         // bit 0: guidance_active, bit 1: burnout_detected
+    uint8_t  guid_flags;         // bit 0: guidance_active, bit 1: burnout_detected,
+                                 // bits 2-7: why it is not steering (tilt latch, speed
+                                 // floor, EKF, no origin, no heading, fins held) --
+                                 // GF_* in flight_computer/main/guidance_gate_policy.h.
+                                 // Frames with bit 0 clear are the ~10 Hz status stream
+                                 // sent while guidance is enabled in flight but not
+                                 // steering; their command fields are 0.
 } GuidanceTelemData;
 static_assert(sizeof(GuidanceTelemData) == 19, "GuidanceTelemData must be 19 bytes");
 

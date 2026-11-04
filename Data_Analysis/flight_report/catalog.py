@@ -792,10 +792,12 @@ _P(
     shown_in=()
 )
 
-# Flight-computer proportional-navigation telemetry (GUIDANCE_TELEM_MSG 0xCA), emitted only
+# Flight-computer proportional-navigation telemetry (GUIDANCE_TELEM_MSG 0xCA), emitted
 # while guidance is engaged and at the NonSensor update rate — read the rate from the log,
 # since the parser comments saying ~10 Hz are stale — on the same monotonic FC clock as
-# NonSensor, so rows align 1:1 with no interpolation.
+# NonSensor, so rows align 1:1 with no interpolation.  While guidance is enabled in flight
+# but not steering the same frame comes at ~10 Hz with Guidance.active false, its command
+# fields 0 and its flags saying why.
 _P(
     "Guidance.accel_cmd_n", "PN accel command (North)",
     unit="m/s²",
