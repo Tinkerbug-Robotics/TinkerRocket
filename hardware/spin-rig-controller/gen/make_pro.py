@@ -19,7 +19,7 @@ def main():
     d['text_variables'] = {'REVISION': 'V1'}
     d['boards'] = []
     r = d['board']['design_settings']['rules']
-    r.update({'min_clearance': 0.127, 'min_track_width': 0.127, 'min_via_diameter': 0.45, 'min_via_annular_width': 0.1,
+    r.update({'min_clearance': 0.127, 'min_track_width': 0.127, 'min_via_diameter': 0.45, 'min_via_annular_width': 0.075,
               'min_through_hole_diameter': 0.2, 'min_copper_edge_clearance': 0.3, 'min_hole_clearance': 0.2,
               'min_hole_to_hole': 0.25, 'min_text_height': 0.8, 'min_text_thickness': 0.12})
     base = dict(d['net_settings']['classes'][0])
