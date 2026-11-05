@@ -1,0 +1,3 @@
+# Generator scratch: intermediate boards, DSN/SES, router logs, DRC JSON
+gen/out/
+gen/__pycache__/
