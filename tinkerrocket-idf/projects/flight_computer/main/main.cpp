@@ -7872,17 +7872,19 @@ static void setup_fc()
     // out: whatever crashed, this boot gets the FC to its loop, GNSS-absent,
     // where it can take an update. A power-on or a software restart (an OTA)
     // brings the receiver back. In flight that means a crash costs GNSS for
-    // the rest of the flight, never the flight computer. The V9 image does it
-    // where its last boot found the mosaic, and only there: a u-blox board
-    // keeps its receiver through a crash, as it always has. Decided before
-    // the raw outputs below, so a crash boot asks nothing more of the driver.
+    // the rest of the flight, never the flight computer. The V9 and V10
+    // images do it where their last boot found the mosaic or the gnss-sdr-dev
+    // board (whose driver is as new), and only there: a u-blox board keeps
+    // its receiver through a crash, as it always has. Decided before the raw
+    // outputs below, so a crash boot asks nothing more of the driver.
     {
         const esp_reset_reason_t rr = esp_reset_reason();
+        const uint8_t last = sensor_collector_hw.gnssLastBootType();
         if ((rr == ESP_RST_PANIC || rr == ESP_RST_INT_WDT || rr == ESP_RST_TASK_WDT || rr == ESP_RST_WDT) &&
-            sensor_collector_hw.gnssLastBootType() == GNSS_TYPE_MOSAIC)
+            (last == GNSS_TYPE_MOSAIC || last == GNSS_TYPE_SDR))
         {
-            ESP_LOGE(TAG, "[GNSS] the last reset was a crash (%s): the mosaic-G5 stays out of this boot",
-                     resetReasonStr(rr));
+            ESP_LOGE(TAG, "[GNSS] the last reset was a crash (%s): the %s stays out of this boot",
+                     resetReasonStr(rr), gnssTypeName(last));
             sensor_collector_hw.skipGNSSThisBoot();
         }
     }
@@ -7974,10 +7976,20 @@ static void setup_fc()
     // in but the module failed bring-up (dead/deaf UART).  The FC then flies a
     // baro+IMU-only degraded path instead of hanging on the pad.  begin() blocks
     // until the ~35 s bring-up deadline in that case, so millis() is already
-    // well past zero here.
-    gnss_absent_mode     = config::USE_GNSS && !sensor_collector_hw.isGnssOnline();
+    // well past zero here.  A receiver whose stream is only logged (the
+    // gnss-sdr-dev board on a V9 or V10, gnssTypeGivesFix) is online and
+    // gives no fix, so the FC flies the same path beside it.
+    const bool gnss_log_only = sensor_collector_hw.isGnssOnline() &&
+                               !gnssTypeGivesFix(sensor_collector_hw.gnssType());
+    gnss_absent_mode     = config::USE_GNSS && (!sensor_collector_hw.isGnssOnline() || gnss_log_only);
     gnss_absent_dwell_ms = millis() + GNSS_ABSENT_INIT_DWELL_MS;
-    if (gnss_absent_mode)
+    if (gnss_log_only)
+    {
+        ESP_LOGW(TAG, "[GNSS] the %s's stream is logged, not navigated on — GNSS-absent "
+                      "degraded mode: baro+IMU EKF init, guidance forced off",
+                 gnssTypeName(sensor_collector_hw.gnssType()));
+    }
+    else if (gnss_absent_mode)
     {
         ESP_LOGW(TAG, "[GNSS] Module absent (bring-up failed) — GNSS-absent "
                       "degraded mode: baro+IMU EKF init, guidance forced off");
@@ -7987,7 +7999,8 @@ static void setup_fc()
     // fix later.
     fcBootStatus(FCB_GNSS, gnss_absent_mode ? FCB_DEG_GNSS : 0);
     // The receiver now known, the IMU limit that goes with it: a mosaic-G5
-    // with the DETAILED GNSS log leaves the IMU at most 3840 Hz. A setting
+    // with the DETAILED GNSS log, or the gnss-sdr-dev board, leaves the IMU at
+    // most 3840 Hz. A setting
     // above it flies as the fastest that fits (8k Dynamic as 4k Dynamic,
     // 7680 Hz as 3840 Hz) without touching NVS, so the board gets the user's
     // setting back with a u-blox, or with the REDUCED GNSS log.

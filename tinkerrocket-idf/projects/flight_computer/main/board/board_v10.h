@@ -91,10 +91,11 @@ struct board_pins
     //
     // J1 pin 5 (net GNSS_RXD2, GPIO2) is carrier-dependent: a PPS output on the
     // SAM-M10Q carrier, a receiver UART input on the px1105r. board_v9.h has
-    // the full story (#837 item 4). GPIO2 stays unused until firmware can tell
-    // which carrier is fitted.
+    // the full story (#837 item 4). As on the V9, only the auto image's mosaic
+    // driver reads it, once the mosaic is found; nothing drives it.
     static constexpr uint8_t GNSS_RX = 3;   // FC receives; module TXD drives this
     static constexpr uint8_t GNSS_TX = 4;   // FC drives;   module RXD listens here
+    static constexpr int8_t  GNSS_J1_PIN5 = 2;   // net GNSS_RXD2: carrier-dependent, see above
     static constexpr int8_t GNSS_RESET_N = -1;
     static constexpr int8_t GNSS_SAFEBOOT_N = -1;
 

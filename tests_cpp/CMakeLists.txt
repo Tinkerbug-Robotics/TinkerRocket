@@ -1523,10 +1523,12 @@ foreach(BOARD V5 V7 V8 V9 V10 M1)
         target_compile_definitions(test_i2s_link_budget_${BOARD} PRIVATE
             TR_MAG_DRIVER_QMC5883P=1 TR_GNSS_DRIVER_LC86=1)
     elseif(BOARD STREQUAL "V10")
-        target_compile_definitions(test_i2s_link_budget_${BOARD} PRIVATE TR_MAG_DRIVER_QMC5883P=1)
+        # The V10 image finds its receiver at boot as the V9's does.
+        target_compile_definitions(test_i2s_link_budget_${BOARD} PRIVATE TR_MAG_DRIVER_QMC5883P=1
+            TR_GNSS_DRIVER_AUTO=1)
     elseif(BOARD STREQUAL "V9")
-        # The V9 image finds its receiver at boot, so it flies either: the
-        # budget is checked for both (TR_GNSS_DRIVER_AUTO, CMakeLists.txt).
+        # The V9 image finds its receiver at boot, so it flies any of them:
+        # the budget is checked for each (TR_GNSS_DRIVER_AUTO, CMakeLists.txt).
         target_compile_definitions(test_i2s_link_budget_${BOARD} PRIVATE TR_GNSS_DRIVER_AUTO=1)
     endif()
     target_link_libraries(test_i2s_link_budget_${BOARD} GTest::gtest_main)
@@ -1717,16 +1719,38 @@ gtest_discover_tests(test_mosaic_link)
 add_executable(test_gnss_detect test_gnss_detect.cpp
     ${LIB_DIR}/TR_Sensor_Collector/gnss_detect.cpp
     ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial/SbfParser.cpp
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrRtcm.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
 )
 target_include_directories(test_gnss_detect PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${SHIM_DIR}
     ${LIB_DIR}/TR_Sensor_Collector
     ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
     ${LIB_DIR}/TR_RocketComputerTypes
 )
 target_link_libraries(test_gnss_detect GTest::gtest_main)
 gtest_discover_tests(test_gnss_detect)
+
+# ---------- test_sdr_rtcm ----------
+# The gnss-sdr-dev board's RTCM3 stream on the V9 and V10 flight computer
+# (TR_GNSSReceiverSdr_Serial/SdrRtcm.cpp): its frames pulled out of the byte
+# stream in any slicing, a lost or corrupted byte costing only its own frame,
+# and the fields of TinkerRocket's message 4001 the FC reads, on the board's
+# own recorded stream (fixtures/sdr_rtcm_stream.h).
+add_executable(test_sdr_rtcm test_sdr_rtcm.cpp
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrRtcm.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
+)
+target_include_directories(test_sdr_rtcm PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+)
+target_link_libraries(test_sdr_rtcm GTest::gtest_main)
+gtest_discover_tests(test_sdr_rtcm)
 
 # ---------- test_gnss_log_policy ----------
 # The GNSS log setting (BLE cmd 79): the IMU limit each value gives

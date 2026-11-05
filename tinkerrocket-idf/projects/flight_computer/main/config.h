@@ -276,19 +276,21 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 #endif
 #endif
 
-// The V9 image (CMakeLists.txt, TR_GNSS_AUTO, on unless -DTR_GNSS_AUTO=0):
-// whichever receiver is on J1, the u-blox carrier or the mosaic-G5 harness,
-// found at boot (TR_Sensor_Collector/gnss_auto_driver.h). J1 pin 5 is the
-// mosaic's 1PPS on its harness, and the driver touches it only once the
-// mosaic is found: on the PX1105R carrier it is a receiver input.
+// The V9 and V10 images (CMakeLists.txt, TR_GNSS_AUTO, on unless
+// -DTR_GNSS_AUTO=0): whichever receiver is on J1, the u-blox carrier, the
+// mosaic-G5 harness or the gnss-sdr-dev board, found at boot
+// (TR_Sensor_Collector/gnss_auto_driver.h). J1 pin 5 is the mosaic's 1PPS on
+// its harness, and the driver touches it only once the mosaic is found: on
+// the PX1105R carrier it is a receiver input. The V10's J1 is the V9's
+// (board_v10.h).
 #if defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
 // The V8 too, on request (-DTR_BOARD_V8=1 -DTR_GNSS_AUTO=1): its J1 is the
 // V9's, the same connector with the SAM-M10Q carrier's UART on GPIO3/GPIO4
 // and pin 5 on GPIO2 (board_v8.h). So one V8 image flies either receiver, the
 // Goblin's mosaic-G5 with its 1PPS on pin 5 or a SAM-M10Q, with no reflash
 // between the rockets.
-#if !TR_BOARD_V9 && !TR_BOARD_V8
-#error "TR_GNSS_DRIVER_AUTO is the V9's (and a V8 bench build's): its J1 is where the two receivers land"
+#if !TR_BOARD_V9 && !TR_BOARD_V10 && !TR_BOARD_V8
+#error "TR_GNSS_DRIVER_AUTO is the V9's and V10's (and a V8 bench build's): their J1 is where the receivers land"
 #endif
 #if (defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86) || (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC)
 #error "One GNSS driver per build: TR_GNSS_DRIVER_AUTO is set with TR_GNSS_DRIVER_LC86 or TR_GNSS_DRIVER_MOSAIC"
@@ -447,7 +449,7 @@ struct config : board_pins
     // permission file allows 20 Hz). The mosaic build's own is GNSS_UPDATE_RATE.
     static constexpr uint8_t GNSS_MOSAIC_UPDATE_RATE = 20;
 #if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || \
-    (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO && (TR_BOARD_V9 || TR_BOARD_V8))
+    (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO && (TR_BOARD_V9 || TR_BOARD_V10 || TR_BOARD_V8))
     // Where the mosaic's 1PPS lands: J1 pin 5 through the harness's 1 kOhm.
     // On the auto image the mosaic's driver reads it only once the mosaic is
     // found; a u-blox carrier's TIMEPULSE on the same pin is never read.
@@ -488,7 +490,9 @@ struct config : board_pins
     // (imuRateMaxForGnss) unless the GNSS log setting (cmd 79) is REDUCED,
     // which keeps ~9 kB/s of it and lets the IMU fly 7680 Hz: the test
     // budgets the V9 image for both receivers and both settings, on the link
-    // and on the OC's flash.
+    // and on the OC's flash. The gnss-sdr-dev board's RTCM3 on a V9 or V10 is
+    // as big and logged whole, so it holds the IMU at 3840 Hz whatever the
+    // setting; the test budgets it too.
     static constexpr uint16_t ISM6HG256_UPDATE_RATE = 1920;
 
     // #1485: the highest IMU logging rate this board can fly, fixed or as a
