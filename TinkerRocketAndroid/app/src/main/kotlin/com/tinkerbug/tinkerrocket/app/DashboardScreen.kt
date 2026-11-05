@@ -369,6 +369,17 @@ private fun DeviceDashboardContent(
             }
         }
 
+        // GTV Blue, 2026-11-01: the app showed station-keeping on and the
+        // flight computer flew with it off.  This is the flight computer's own
+        // word against the active profile (GuidanceStateCheck).
+        if (profileStore != null) {
+            val profileList by profileStore.profiles.collectAsState()
+            val activeId by profileStore.activeId.collectAsState()
+            GuidanceStateLine(
+                rememberGuidanceStateCheck(session, profileList.firstOrNull { it.id == activeId }),
+            )
+        }
+
         // "LoRa off": one quiet line, same shape and placement as the
         // preflight advisory and under the same rule — advisory only, it never
         // recolors the state banner.  Worth a line at all because a muted

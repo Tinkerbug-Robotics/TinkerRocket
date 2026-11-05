@@ -530,6 +530,19 @@ struct config : board_pins
     static_assert(GUIDANCE_TELEM_RATE_HZ >= 1 &&
                   GUIDANCE_TELEM_RATE_HZ <= NON_SENSOR_UPDATE_RATE,
                   "GUIDANCE_TELEM_RATE_HZ must be in [1, NON_SENSOR_UPDATE_RATE]");
+    // The same frame while guidance is ENABLED in flight but not steering,
+    // its guid_flags saying why (guidance_gate_policy.h).  Until this the
+    // stream ran only while steering, so a flight where guidance never engaged
+    // logged nothing of it: GTV White (2026-11-01) flew with guidance enabled,
+    // the tilt latch tripped on the first control tick, and the log could only
+    // show that by replaying the gate offline.  Exclusive with the 250 Hz
+    // stream (one or the other, never both), so the link budget above is
+    // unchanged.
+    static constexpr uint16_t GUIDANCE_STATUS_RATE_HZ = 10;
+    static_assert(NON_SENSOR_UPDATE_RATE % GUIDANCE_STATUS_RATE_HZ == 0,
+                  "GUIDANCE_STATUS_RATE_HZ must divide NON_SENSOR_UPDATE_RATE");
+    static_assert(GUIDANCE_STATUS_RATE_HZ <= GUIDANCE_TELEM_RATE_HZ,
+                  "the status stream must not cost more link than the steering stream");
     // The pad context (PAD_CONTEXT_MSG), written once from 6 s after launch:
     // one record each this often. At most about 70 (the raw-GNSS filter's
     // state, its covariance and pad survey in parts, then each ephemeris it

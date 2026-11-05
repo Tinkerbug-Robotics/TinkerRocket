@@ -169,6 +169,13 @@ nonisolated struct RocketGuidanceExtras: Equatable {
     var kpPos: Float
     var kdVel: Float
     var guidanceLaw: UInt8
+    /// The flight computer's own guidance on/off (`"gen"`), sent only while
+    /// its rail is up.  nil = not vouched for by the flight computer: rail
+    /// off, or an out computer that predates the key.  Unlike `RocketConfig.
+    /// guidanceEnabled` (the `config` frame's `"ge"`, the out computer's own
+    /// copy) this is what the rocket will fly — GTV Blue, 2026-11-01, flew
+    /// with guidance off while the app showed it on.
+    var enabled: Bool? = nil
 }
 
 /// Source of a `config_pyro` readback (#1231).  Raw values are the wire
@@ -244,6 +251,9 @@ struct RocketConfig {
     /// Until then the three fields above hold the APP's defaults, not the
     /// rocket's values — #915 adoption must not mistake them for a report.
     var rollGainsReported: Bool = false
+    /// The `config` frame's `"ge"`: the out computer's copy — its NVS from the
+    /// last cmd 32 until the flight computer's frames flow.  Not the flight
+    /// computer's word; see `guidanceEnabledOnFlightComputer`.
     var guidanceEnabled: Bool = false
     var cameraType: UInt8 = 2
     /// Where `cameraType` came from (#1472).  nil = this rocket reports no
@@ -328,6 +338,11 @@ struct RocketConfig {
     /// True when `cameraType` is the mode the flight computer will drive
     /// (#1472) — the only camera type the profile may adopt.
     var cameraIsFlightComputerSourced: Bool { cameraSource == .flightComputer }
+
+    /// Guidance on/off as the flight computer holds it — the only value the
+    /// profile may adopt or a screen may present as the rocket's.  nil = not
+    /// vouched for (see `RocketGuidanceExtras.enabled`).
+    var guidanceEnabledOnFlightComputer: Bool? { guidanceExtras?.enabled }
 
     /// True while any of the three #915 config-report groups is still
     /// missing.  The connect-time re-adopt waits on exactly this, NOT on

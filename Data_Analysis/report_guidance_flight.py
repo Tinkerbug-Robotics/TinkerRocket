@@ -28,6 +28,10 @@ def _arr(records, key):
 def load_flight(bin_path):
     recs, stats, _ = P.parse_binary_file(bin_path)
     ns = recs["NonSensor"]
+    # Steering frames vs the ~10 Hz status frames sent while guidance is
+    # enabled in flight but not steering (their flags say why).
+    recs["GuidanceStatus"] = [r for r in recs["Guidance"] if not r["active"]]
+    recs["Guidance"] = [r for r in recs["Guidance"] if r["active"]]
     g = recs["Guidance"]
     if not ns:
         raise SystemExit("No NonSensor frames — cannot establish launch time.")
@@ -62,8 +66,19 @@ def summarize(recs, stats, t_launch, meta):
               f"max speed {meta.get('max_speed_mps',0):.1f} m/s | "
               f"burnout T+{meta.get('burnout_time_s',0):.2f} s")
 
+    st = recs.get("GuidanceStatus") or []
+    if st:
+        ts = _arr(st, "time_us") / 1e6 - t_launch
+        print(f"\nGuidance enabled, NOT steering: {len(st)} status frames, "
+              f"T+{ts.min():.2f} .. T+{ts.max():.2f} s")
+        for reason in P.GUID_FLAG_REASONS:
+            on = np.array([r[reason] for r in st])
+            if on.any():
+                print(f"  {reason:13s} T+{ts[on].min():6.2f} .. T+{ts[on].max():6.2f} s "
+                      f"({100.0 * on.mean():.0f}% of status frames)")
     if not g:
-        print("\nNO guidance frames in this log.")
+        print("\nNO steering guidance frames in this log"
+              + (" (guidance was enabled; see the reasons above)." if st else "."))
         return
     tg = _arr(g, "time_us") / 1e6 - t_launch
     dt = np.diff(tg)

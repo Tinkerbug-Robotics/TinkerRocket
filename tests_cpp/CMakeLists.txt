@@ -1015,6 +1015,19 @@ target_include_directories(test_baro_gate_policy PRIVATE
 target_link_libraries(test_baro_gate_policy GTest::gtest_main)
 gtest_discover_tests(test_baro_gate_policy)
 
+# ---------- test_guidance_gate_policy ----------
+# Coast guidance's gate, launch origin and heading trust (GTV Blue/White,
+# 2026-11-01): the origin was the power-up datum 43 m from the rail, Blue's
+# heading was ~90 deg off on an amber magnetometer, and nothing logged why
+# White's guidance never steered.  guidance_gate_policy.h is pure.
+add_executable(test_guidance_gate_policy test_guidance_gate_policy.cpp)
+target_include_directories(test_guidance_gate_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/flight_computer/main
+)
+target_link_libraries(test_guidance_gate_policy GTest::gtest_main)
+gtest_discover_tests(test_guidance_gate_policy)
+
 # ---------- test_blind_window_policy ----------
 # #1271/#917: a launch during a BLE-download pause. The OC's launch edge is
 # DELAYED by the pause rather than missed, so a short window leaves a log that
