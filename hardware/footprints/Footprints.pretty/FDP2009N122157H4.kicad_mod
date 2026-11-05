@@ -214,4 +214,15 @@
 		(uuid "ae10138f-459e-4b7c-97f4-ecc5e5ae8211")
 	)
 	(embedded_fonts no)
+	(model "${KIPRJMOD}/../3dmodels/FDP2009N122157H4.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
 )
