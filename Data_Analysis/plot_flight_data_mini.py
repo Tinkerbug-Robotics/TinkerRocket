@@ -1177,6 +1177,18 @@ FMT_GUIDANCE_19 = '<I hhhhhhh B'
 FMT_GUIDANCE_15 = '<I hhhhh B'  # legacy: time, accel_n, accel_e, lateral, los, closing, flags
 GUID_FLAG_ACTIVE  = (1 << 0)
 GUID_FLAG_BURNOUT = (1 << 1)
+# Why guidance is not steering (GF_* in flight_computer/main/guidance_gate_policy.h).
+# Frames with ACTIVE clear are the ~10 Hz status stream sent while guidance is
+# enabled in flight but not steering; their command fields are 0.  Older logs
+# never set these bits and never sent status frames.
+GUID_FLAG_REASONS = {
+    "tilt_latched": (1 << 2),   # tilt-limit latch tripped (for the flight)
+    "too_slow":     (1 << 3),   # speed at or below the guidance floor
+    "ekf_not_ok":   (1 << 4),   # filter never initialised, or not healthy
+    "no_origin":    (1 << 5),   # no datum, or no launch origin (e.g. after a reboot)
+    "no_heading":   (1 << 6),   # magnetometer not healthy at launch (for the flight)
+    "fins_held":    (1 << 7),   # roll delay, speed gate, reboot settle or stale IMU
+}
 
 SYNC = b'\xAA\x55\xAA\x55'
 
@@ -2069,6 +2081,7 @@ def parse_binary_file(filepath):
                     "yaw_fin_cmd":    yaw_fin_cmd,        # deg (None on legacy)
                     "active":         bool(gflags & GUID_FLAG_ACTIVE),
                     "burnout":        bool(gflags & GUID_FLAG_BURNOUT),
+                    **{k: bool(gflags & b) for k, b in GUID_FLAG_REASONS.items()},
                 })
 
         except struct.error:
@@ -2855,7 +2868,9 @@ def plot_guidance(records, t0_global):
     of roll_cmd — plus the roll command from NonSensor for context.
     Bottom: guidance internals (LOS angle, lateral offset, closing velocity).
     """
-    g = records["Guidance"]
+    # Steering frames only: the status frames sent while guidance is enabled
+    # but not steering carry no commands.
+    g = [r for r in records["Guidance"] if r["active"]]
     if not g:
         return None
 

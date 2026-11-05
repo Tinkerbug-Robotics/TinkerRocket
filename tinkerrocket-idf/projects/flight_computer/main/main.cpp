@@ -59,6 +59,7 @@
 #include "fc_ota_session_policy.h" // #1116: the FC's own exit from an OTA image session nobody ends
 #include "fc_rescue_policy.h"     // rescue mode: an FC that cannot finish booting still takes an update
 #include "roll_control_mode_policy.h" // #1137 item 6: which roll law runs this tick
+#include "guidance_gate_policy.h"   // GTV 2026-11-01: guidance origin, heading trust, why it is not steering
 #include "test_mode_gate_policy.h"   // #1137 item 5: the #363 failsafe and the test-command gates
 #include "oc_cmd_dedup.h"        // #1112: dispatch only on the poll pass; bounded config retry
 #include "servo_pin_policy.h"    // servoPinsValid(): an M1 int -1 pin is unmapped, not GPIO 0xFFFFFFFF
@@ -864,6 +865,18 @@ static bool guidance_active = false;
 // phase limit (config::GUIDANCE_TILT_LIMIT_*); guidance then stays roll-only
 // for the rest of the flight. Reset at re-arm alongside guidance.reset().
 static bool guidance_tilt_inhibited = false;
+// Guidance's own origin: the launch point, in the datum's local ENU (m), set
+// in enterInflight().  imu_pos is relative to the datum -- the first two
+// minutes of fixes after power-up, wherever that was -- so guidance flies
+// (imu_pos - origin).  Not in the reboot snapshot (FlightSnapshotData is at
+// the frame ceiling), so a reboot in flight leaves it invalid and guidance
+// does not steer again that flight.  guidance_gate_policy.h has why.
+static GuidanceGatePolicy::Origin guidance_origin = { 0.0f, 0.0f, false };
+// Heading trust for guidance, decided once at launch from the magnetometer's
+// health; false after a reboot in flight, like the origin.
+static bool guidance_heading_trusted = false;
+// This tick's guid_flags reasons (GF_*), for the status frames.
+static uint8_t guidance_inhibit_flags = 0;
 static bool ground_test_active = false;
 // Last roll fin command (deg) produced by the ground-test / guidance paths
 // that bypass servo_control's internal PID. Used to populate
@@ -8452,6 +8465,11 @@ static void setup_fc()
             // Restore control state
             ekf_initialized  = snap.ekf_initialized;
             guidance_enabled = snap.guidance_enabled;
+            // The launch origin and heading trust are not in the snapshot
+            // (it is at the frame ceiling), so guidance_origin and
+            // guidance_heading_trusted keep their boot values -- invalid,
+            // untrusted -- and a guided flight that reboots finishes
+            // roll-only, its status frames saying GF_NO_ORIGIN.
             servo_enabled    = snap.servo_enabled;
             landed_actions_done = false;
             end_flight_sent = false;
@@ -8768,6 +8786,9 @@ static void resetFlightStateForSim(const char* edge)
     deployment_time_ms  = 0;
     applyImuRateForFlightPhase();
     guidance_active = false;
+    guidance_origin = { 0.0f, 0.0f, false };   // the next launch sets its own
+    guidance_heading_trusted = false;
+    guidance_inhibit_flags = 0;
     roll_speed_gate_open = false;      // re-arm the control-authority speed gate
     roll_speed_gate_warned = false;
     reboot_recovery = false;
@@ -8909,22 +8930,49 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
         ESP_LOGI(TAG, "[EKF] Ref pos frozen (launch): n=%lu",
                       (unsigned long)ref_pos_count);
     }
-    // #435: re-convert the Drift-Cast geodetic aim point against the just-
-    // frozen reference — the receipt-time conversion used the then-current
-    // running pad average, which keeps drifting (normally centimetres) until
-    // the freeze.  Runs BEFORE the first sendFlightSettings emit below
-    // (launch+0/100/200 ms) so the logged FlightSettings carries the FLOWN
-    // E/N.  If have_ref_pos is false here (READY degraded launch), the
+    // Guidance's origin is where the rocket left from, not the datum: the
+    // datum is wherever the board spent its first two minutes of fixes (both
+    // GTVs on 2026-11-01: the prep table, 43 m north of the rail).  The
+    // filter's position now is the rail to within the launch-detect lag.
+    double launch_lla[3] = { ref_lat_rad, ref_lon_rad, ref_alt_m };
+    if (ekf_initialized) ekf.getPosEst(launch_lla);
+    guidance_origin = GuidanceGatePolicy::launchOrigin(
+        launch_lla[0], launch_lla[1], ref_lat_rad, ref_lon_rad, ref_alt_m,
+        have_ref_pos, ekf_initialized);
+    // Heading trust is decided here, once, from the pad's last verdict on the
+    // magnetometer -- what the pre-launch card showed.  GTV Blue launched
+    // with it amber (86 uT against the model's 52) and flew its coast ~90 deg
+    // off in heading.
+    guidance_heading_trusted = GuidanceGatePolicy::launchHeadingTrusted(
+        shGet(non_sensor_data.sensor_health, SH_MAG_SHIFT), SH_OK);
+    if (guidance_enabled) {
+        ESP_LOGI(TAG, "[GUID] origin = launch point E=%.1f N=%.1f m from the datum%s; "
+                      "heading %s",
+                 (double)guidance_origin.e_m, (double)guidance_origin.n_m,
+                 guidance_origin.valid ? "" : " (NONE: guidance will not steer)",
+                 guidance_heading_trusted ? "trusted"
+                                          : "NOT trusted (magnetometer not OK): guidance will not steer");
+    }
+    // #435: re-convert the Drift-Cast geodetic aim point against the launch
+    // point — the receipt-time conversion used the then-current running pad
+    // average, which is wherever the board was powered up.  Measured from
+    // the launch point, the aim point and its REJECT radius mean what the
+    // operator meant: from the rail.  Runs BEFORE the first sendFlightSettings
+    // emit below (launch+0/100/200 ms) so the logged FlightSettings carries the
+    // FLOWN E/N.  If have_ref_pos is false here (READY degraded launch), the
     // receipt-time conversion could never have happened (NOREF gate) and
     // resetFlightStateForSim() clears the point whenever it discards the
     // reference — so guid_point_valid is false and the guard is consistent.
     if (guid_point_valid && have_ref_pos) {
         // Keep-vs-wipe policy is the pure host-tested guidanceLaunchReconvert()
         // (GuidancePointGate.h) — same conversion + REJECT-never-clamp radius
-        // rule as the receipt gate.
+        // rule as the receipt gate.  With no launch origin it falls back to
+        // the datum, and guidance will not steer anyway (GF_NO_ORIGIN).
+        const double base_lat = guidance_origin.valid ? launch_lla[0] : ref_lat_rad;
+        const double base_lon = guidance_origin.valid ? launch_lla[1] : ref_lon_rad;
         const GuidanceLaunchTarget lt = guidanceLaunchReconvert(
             guid_point_lat_deg, guid_point_lon_deg,
-            ref_lat_rad, ref_lon_rad, ref_alt_m,
+            base_lat, base_lon, ref_alt_m,
             config::GUIDANCE_MAX_AIM_RADIUS_M);
         if (lt.point_kept) {
             ESP_LOGI(TAG, "[GUID PT] launch re-convert: E=%.2f N=%.2f (was %.2f,%.2f)",
@@ -8933,9 +8981,9 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
             pn_target_e = lt.e_m;
             pn_target_n = lt.n_m;
         } else {
-            // Should be unreachable (accepted at receipt, pad average moves
-            // centimetres) — but a boundary point + drift could cross the
-            // gate.  Fail SAFE to overhead rather than fly an out-of-policy
+            // Reachable when the board was powered away from the rail: the
+            // point was accepted against the datum, and the launch point can
+            // sit tens of metres from it.  Fail SAFE to overhead rather than fly an out-of-policy
             // point; drop guid_point_valid so the settings snapshot records
             // what actually flies, and refresh the echo so the app's Unit
             // target row stops asserting a point that no longer flies (the
@@ -8993,6 +9041,7 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     applyImuRateForFlightPhase();
     guidance_active = false;
     guidance_tilt_inhibited = false;   // clear tilt-limit latch
+    guidance_inhibit_flags = 0;
     roll_speed_gate_open = false;      // re-arm the control-authority speed gate
     roll_speed_gate_warned = false;
     // Reset pyro channels on launch. ARM stays LOW until a
@@ -14219,6 +14268,7 @@ static void loop_fc()
                         // (guidance only sets it after roll_delay elapses), but a
                         // stowed vehicle must never report guidance active.
                         guidance_active = false;
+                        guidance_inhibit_flags = GuidanceGatePolicy::GF_HELD;
                     }
                     else if (ism6_fresh)   // #259: stale IMU -> neutral-hold branch below
                     {
@@ -14287,17 +14337,38 @@ static void loop_fc()
                             }
                         }
 
+                        // Every reason not to steer, as guid_flags bits
+                        // (guidance_gate_policy.h): #557 no GNSS-anchored
+                        // frame or no launch origin, #265 a diverged EKF, the
+                        // tilt latch, the speed floor, and a heading not
+                        // trusted at launch.
+                        GuidanceGatePolicy::Inputs gate_in;
+                        gate_in.ekf_initialized = ekf_initialized;
+                        gate_in.ekf_healthy     = ekf_ctrl_healthy;
+                        gate_in.have_ref_pos    = have_ref_pos;
+                        gate_in.origin_valid    = guidance_origin.valid;
+                        gate_in.heading_trusted = guidance_heading_trusted;
+                        gate_in.tilt_latched    = guidance_tilt_inhibited;
+                        gate_in.speed_mps       = speed;
+                        gate_in.min_speed_mps   = pn_min_speed;
+                        guidance_inhibit_flags  = GuidanceGatePolicy::inhibitFlags(gate_in);
+
                         const bool coast_guidance_active =
                             guidance_enabled &&
-                            ekf_initialized &&
-                            have_ref_pos &&       // #557: no GNSS-anchored position frame → no steering
-                            ekf_ctrl_healthy &&   // #265: don't fly guidance on a diverged EKF
-                            !guidance_tilt_inhibited &&  // tilt-limit safety latch
-                            (speed > pn_min_speed) &&
+                            guidance_inhibit_flags == 0 &&
                             !guidance.isCpaReached();
 
                         if (coast_guidance_active)
                         {
+                            // Launch-point-relative position: the station-keep
+                            // PD regulates this to the aim point.  Up stays
+                            // datum-relative (the pad-ground altitude PN's
+                            // target_alt is measured from).
+                            const float guid_pos[3] = {
+                                imu_pos[0] - guidance_origin.e_m,
+                                imu_pos[1] - guidance_origin.n_m,
+                                imu_pos[2] };
+
                             // Get NED velocity for guidance (convert ENU back to NED)
                             float vel_ned_guid[3];
                             vel_ned_guid[0] = imu_vel[1];   // ENU North → NED North
@@ -14317,7 +14388,7 @@ static void loop_fc()
                             prev_guidance_us = now_us_guid;
 
                             // Run PN guidance → ENU acceleration commands
-                            guidance.update(imu_pos, vel_ned_guid, guid_dt);
+                            guidance.update(guid_pos, vel_ned_guid, guid_dt);
 
                             // Get ENU accel commands
                             float a_cmd_e = guidance.getAccelEastCmd();
@@ -14456,6 +14527,7 @@ static void loop_fc()
                         // accel commands while the fins were actually stowed.
                         // Telemetry/log fidelity only; mirrors the roll-only path.
                         guidance_active = false;
+                        guidance_inhibit_flags = GuidanceGatePolicy::GF_HELD;
                     }
                 }
                 // #1137 item 8.  ism6_fresh is the live-IMU test; roll_rate_dps
@@ -15161,6 +15233,35 @@ static void loop_fc()
                     gtd.pitch_fin_cmd_cdeg = (int16_t)lroundf(pn_last_pitch_fin_deg * 100.0f);
                     gtd.yaw_fin_cmd_cdeg   = (int16_t)lroundf(pn_last_yaw_fin_deg * 100.0f);
                     gtd.guid_flags = (guidance_active ? 1u : 0u) | (burnout_detected ? 2u : 0u);
+                    uint8_t gtd_buf[sizeof(GuidanceTelemData)];
+                    memcpy(gtd_buf, &gtd, sizeof(GuidanceTelemData));
+                    (void)enqueueI2STx(GUIDANCE_TELEM_MSG, gtd_buf, sizeof(GuidanceTelemData));
+                }
+            }
+            // Enabled in flight but not steering: the same frame at
+            // config::GUIDANCE_STATUS_RATE_HZ, its guid_flags saying why
+            // (guidance_gate_policy.h).  No commands are computed, so those
+            // fields are 0; the offset is from the launch origin, so a
+            // tracking problem shows before guidance ever engages.
+            else if (guidance_enabled && servo_enabled && rocket_state == INFLIGHT)
+            {
+                static uint32_t guid_status_counter = 0;
+                if (++guid_status_counter >=
+                    (config::NON_SENSOR_UPDATE_RATE / config::GUIDANCE_STATUS_RATE_HZ))
+                {
+                    guid_status_counter = 0;
+                    GuidanceTelemData gtd = {};
+                    gtd.time_us = logic_now_us;
+                    if (guidance_origin.valid) {
+                        // Clamped: this stream runs through the descent, where
+                        // drift passes the int16's 327 m.
+                        const float off_cm = 100.0f * hypotf(imu_pos[0] - guidance_origin.e_m,
+                                                             imu_pos[1] - guidance_origin.n_m);
+                        gtd.lateral_offset_cm = (int16_t)lroundf(fminf(off_cm, 32767.0f));
+                    }
+                    gtd.closing_vel_cmps = (int16_t)lroundf(imu_vel[2] * 100.0f);  // station-keep's v_cl: climb rate
+                    gtd.guid_flags = (uint8_t)((burnout_detected ? GuidanceGatePolicy::GF_BURNOUT : 0u) |
+                                               (guidance_inhibit_flags & GuidanceGatePolicy::GF_REASONS));
                     uint8_t gtd_buf[sizeof(GuidanceTelemData)];
                     memcpy(gtd_buf, &gtd, sizeof(GuidanceTelemData));
                     (void)enqueueI2STx(GUIDANCE_TELEM_MSG, gtd_buf, sizeof(GuidanceTelemData));
