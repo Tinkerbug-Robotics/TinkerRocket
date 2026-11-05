@@ -300,6 +300,8 @@ struct PreflightAutoContext {
     var telemetry: TelemetryData = TelemetryData()
     var syncState: ActiveRocketSyncer.SyncState = .idle
     var profile: RocketProfile? = nil
+    /// The flight computer's guidance on/off against the profile's.
+    var guidance: GuidanceStateCheck = .notApplicable
 }
 
 struct PreflightProgress: Equatable {
@@ -360,6 +362,14 @@ enum PreflightChecklist {
 
         case .settingsSynced:
             if ctx.isRelay { return .notApplicable("Needs a direct connection") }
+            // Read and adopted is not enough when the rocket will fly
+            // something else: a guidance send can be lost after the adopt,
+            // and the profile then shows a guidance the flight computer does
+            // not hold (GTV Blue, 2026-11-01).  Unverified does not block —
+            // older out computers never say — the header carries that line.
+            if ctx.guidance.isMismatch, let line = ctx.guidance.message {
+                return .pending(line)
+            }
             switch ctx.syncState {
             // #915: adopted means the app read the rocket's own settings and
             // brought the profile into line — app and vehicle agree, which is

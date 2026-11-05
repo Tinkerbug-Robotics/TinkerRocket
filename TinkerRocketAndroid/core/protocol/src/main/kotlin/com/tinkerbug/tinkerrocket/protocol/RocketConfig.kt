@@ -52,6 +52,15 @@ public data class RocketGuidanceExtras(
     val kpPos: Float,
     val kdVel: Float,
     val guidanceLaw: Int,
+    /**
+     * The flight computer's own guidance on/off (`"gen"`), sent only while its
+     * rail is up.  null = not vouched for by the flight computer: rail off, or
+     * an out computer that predates the key.  Unlike [RocketConfig.guidanceEnabled]
+     * (the `config` frame's `"ge"`, the out computer's own copy) this is what
+     * the rocket will fly — GTV Blue, 2026-11-01, flew with guidance off while
+     * the app showed it on.
+     */
+    val enabled: Boolean? = null,
 )
 
 /** One reported roll-profile waypoint (#915). */
@@ -148,6 +157,11 @@ public data class RocketConfig(
      * must not mistake them for a report.  Not a wire field.
      */
     val rollGainsReported: Boolean = false,
+    /**
+     * The `config` frame's `"ge"`: the out computer's copy — its NVS from the
+     * last cmd 32 until the flight computer's frames flow.  Not the flight
+     * computer's word; see [guidanceEnabledOnFlightComputer].
+     */
     val guidanceEnabled: Boolean = false,       // "ge"
     val cameraType: Int = 2,                    // u8, "camt"
     /**
@@ -244,6 +258,14 @@ public data class RocketConfig(
      */
     public val cameraIsFlightComputerSourced: Boolean
         get() = cameraSource == CameraTypeSource.FLIGHT_COMPUTER
+
+    /**
+     * Guidance on/off as the flight computer holds it — the only value the
+     * profile may adopt or a screen may present as the rocket's.  null = not
+     * vouched for (see [RocketGuidanceExtras.enabled]).
+     */
+    public val guidanceEnabledOnFlightComputer: Boolean?
+        get() = guidanceExtras?.enabled
 
     /**
      * True while any of the three #915 config-report groups is still missing.
@@ -650,6 +672,7 @@ public object ConfigGuidMessage {
             targetMode = tm.coerceIn(0, 0xFF).toInt(),
             targetE = te, targetN = tn, targetAltM = ta,
             kpPos = kp, kdVel = kd, guidanceLaw = law.coerceIn(0, 0xFF).toInt(),
+            enabled = JsonBridging.nsBool(json, "gen"),
         )
     }
 }

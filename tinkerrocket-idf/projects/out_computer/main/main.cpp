@@ -7331,6 +7331,15 @@ static void sendConfigExtras()
     g += ",\"gkp\":"; g += fmtf(r.guidance.kp_pos_per_s2, 2);
     g += ",\"gkd\":"; g += fmtf(r.guidance.kd_vel_per_s, 2);
     g += ",\"glw\":"; g += itos(r.guidance.guidance_law);
+    // The flight computer's own guidance on/off, while it is up: what it will
+    // fly.  The "config" frame's "ge" is this OC's copy -- its NVS from the
+    // last cmd 32 until the FC's frames flow -- and the app used to show the
+    // profile over both.  GTV Blue (2026-11-01) flew with guidance off while
+    // the app said on.  Absent with the rail off and from older OCs, which
+    // the apps show as "unverified" (the camera's #1472 rule).
+    if (pwr_pin_on) {
+        g += ",\"gen\":"; g += r.guidance.enable ? "true" : "false";
+    }
     g += "}";
     enqueueConfigReadback(g);
     ESP_LOGI("CFG", "Queued config_guid readback (%u bytes)", (unsigned)g.length());

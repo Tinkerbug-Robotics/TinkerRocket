@@ -1235,7 +1235,9 @@ private struct DriftCastSendButton: View {
                 .font(.caption)
             }
 
-            if device.rocketConfig?.guidanceEnabled == false {
+            // The flight computer's own word ("gen"), not the out computer's
+            // copy: a lost guidance send must not read as "on" here.
+            if device.rocketConfig?.guidanceEnabledOnFlightComputer == false {
                 Label("Rocket guidance is OFF — enable it or the aim point won't fly.",
                       systemImage: "exclamationmark.triangle")
                     .font(.caption)

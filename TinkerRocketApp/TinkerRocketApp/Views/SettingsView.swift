@@ -1351,6 +1351,11 @@ private struct SettingsContent: View {
                 ? "PN guidance steers pitch/yaw toward the target. Roll is rate-nulled \u{2014} the profile is ignored."
                 : "The roll controller holds the airframe (null roll, or track a roll-angle profile). No guidance.")
                 .font(.caption).foregroundColor(.secondary)
+            // The picker is the profile; this is what the flight computer holds.
+            GuidanceStateLine(check: GuidanceStateCheck.evaluate(
+                profile: profile, config: device.rocketConfig,
+                isConnected: device.isConnected,
+                isBaseStation: device.isBaseStation))
         }
     }
 

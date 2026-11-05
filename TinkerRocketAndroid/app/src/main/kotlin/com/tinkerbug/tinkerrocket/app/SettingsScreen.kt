@@ -726,6 +726,10 @@ fun SettingsScreen(
                             "law runs."
                     },
                 )
+                // The picker is the profile; this is what the flight computer holds.
+                if (session != null) {
+                    GuidanceStateLine(rememberGuidanceStateCheck(session, active))
+                }
                 ToggleRow(
                     "Angle control",
                     active.useAngleControl,
