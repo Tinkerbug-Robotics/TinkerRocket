@@ -54,13 +54,13 @@
 	(duplicate_pad_numbers_are_jumpers no)
 	(fp_line
 		(start 2.3 -3.7)
-		(end -3.42 -3.7)
+		(end -1.55 -3.7)
 		(stroke
 			(width 0.12)
 			(type default)
 		)
 		(layer "F.SilkS")
-		(uuid "e64c5b04-985c-42fb-867a-8369dbc2d572")
+		(uuid "c8a55272-cf6e-4160-a4d5-a1614fcc2d2f")
 	)
 	(fp_line
 		(start 2.3 -3.7)
@@ -70,17 +70,17 @@
 			(type default)
 		)
 		(layer "F.SilkS")
-		(uuid "acd1ed9a-3204-447f-a316-2618ce9f2f0e")
+		(uuid "96471a48-3c29-45d2-a409-ebb9d2a0cece")
 	)
 	(fp_line
 		(start 2.3 3.69)
-		(end -3.4 3.69)
+		(end -1.55 3.69)
 		(stroke
 			(width 0.12)
 			(type default)
 		)
 		(layer "F.SilkS")
-		(uuid "0ad8c27f-144d-4c52-874c-f43acf785f6f")
+		(uuid "cedadec2-86ba-4647-9feb-10a725df25ec")
 	)
 	(fp_line
 		(start -11.52 -3.7)
@@ -318,6 +318,7 @@
 		(size 3.5 1.5)
 		(layers "F.Cu" "F.Mask" "F.Paste")
 		(solder_mask_margin 0.05)
+		(clearance 0.35)
 		(uuid "02023735-2f82-4347-bcb9-f7b1dabb78d2")
 	)
 	(pad "G1" smd rect
@@ -351,7 +352,7 @@
 	(embedded_fonts no)
 	(model "${KIPRJMOD}/../3dmodels/CON-SMA-EDGE-S.step"
 		(offset
-			(xyz 0 0 0)
+			(xyz 0.155 0 0)
 		)
 		(scale
 			(xyz 1 1 1)
