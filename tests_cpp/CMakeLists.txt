@@ -1266,6 +1266,18 @@ target_include_directories(test_boot_cue_policy PRIVATE
 target_link_libraries(test_boot_cue_policy GTest::gtest_main)
 gtest_discover_tests(test_boot_cue_policy)
 
+# ---------- test_runcam_probe_policy (CENJARS 2026-11-01) ----------
+# The RunCam readiness probe without waiting on the camera: the CRC, the reply
+# parser fed in pieces, the per-pass decision and a silent camera's cadence.
+# Pure header in the FC project.
+add_executable(test_runcam_probe_policy test_runcam_probe_policy.cpp)
+target_include_directories(test_runcam_probe_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/flight_computer/main
+)
+target_link_libraries(test_runcam_probe_policy GTest::gtest_main)
+gtest_discover_tests(test_runcam_probe_policy)
+
 # ---------- test_rail_restore_policy (#825) ----------
 # OC boot rail re-assert decision: fault reset restores, the deliberate
 # power-off reboot stands down. Pure header in the OC project.
