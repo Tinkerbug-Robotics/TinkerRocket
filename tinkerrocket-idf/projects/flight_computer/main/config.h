@@ -692,7 +692,7 @@ struct config : board_pins
     static constexpr uint32_t RUNCAM_BOOT_MIN_MS      = 2000;  // earliest probe
     static constexpr uint32_t RUNCAM_BOOT_MAX_MS      = 8000;  // give up, record blind
     static constexpr uint32_t RUNCAM_PROBE_INTERVAL_MS = 250;  // poll cadence
-    static constexpr uint32_t RUNCAM_PROBE_READ_MS    = 60;    // per-probe RX wait
+    static constexpr uint32_t RUNCAM_PROBE_READ_MS    = 60;    // per-probe reply window (read without blocking)
     // #1153 item 1: the RunCam needs its own finalize window, like the GoPro's.
     // The stop used to cut the rail 500 ms after a power-button TOGGLE — a
     // command the start path had already abandoned as blip-only (#234) — so a

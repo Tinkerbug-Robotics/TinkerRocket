@@ -53,6 +53,7 @@
 #include <esp_attr.h>            // RTC_NOINIT_ATTR for the #848 power-hold latch flag
 #include "pwr_hold_policy.h"     // #848: boot reconciliation decision table
 #include "boot_cue_policy.h"     // #1188: boot LED cue decision table
+#include "runcam_probe_policy.h" // CENJARS 11-01: the RunCam readiness probe never waits on the loop
 #include "pwr_hold_release_policy.h" // #1137 item 9: the LANDED hold-release test
 #include "sim_flight_policy.h"   // #1104: sim edge rule + latched dry-fire predicate (TR_Sensor_Collector_Sim)
 #include "oc_cmd_session_gate.h" // #1105: no replay of one-shot commands across an FC boot
@@ -638,7 +639,8 @@ static uint32_t camera_stop_due_ms = 0;
 // park+power-cycle retry (RUNCAM_POWER_RETRIES / RUNCAM_RETRY_OFF_MS)
 // before the final blind fallback.
 //   Idle → WaitingForBoot → Probing → ResendRecord → Idle,
-//   with Probing → RetryOff → WaitingForBoot on a silent window.
+//   with Probing → RetryOff → WaitingForBoot on a silent window whose camera
+//   rail is dark or unmonitored (a running one records blind instead).
 //
 // The GoPro start is a much simpler machine on the same timer — there is no
 // protocol to probe, so it is just: gate on → let the camera's ground bond to
@@ -995,6 +997,22 @@ static bool     reboot_recovery_telem = false; // true for rest of flight (telem
 // restored flight in progress. Decision table: boot_cue_policy.h.
 static bool     oc_self_powered = false;
 static BootCuePolicy::Cue boot_cue_active = BootCuePolicy::Cue::None;
+// CENJARS 11-01: the OC's camera-rail verdict (OUT_STATUS_CAM_*_BIT) from the
+// last status poll, and when it landed. serviceCameraStart() judges a RunCam
+// that never answers by it: running -> record blind, dark -> power-cycle
+// (runcam_probe_policy.h, silentAction).
+static bool     oc_cam_monitored = false;
+static bool     oc_cam_drawing   = false;
+static bool     oc_cam_seen      = false;
+static uint32_t oc_cam_ms        = 0;
+
+static inline void noteOcCamBits(uint8_t status, uint32_t now_ms)
+{
+    oc_cam_monitored = (status & OUT_STATUS_CAM_MONITORED_BIT) != 0;
+    oc_cam_drawing   = oc_cam_monitored && (status & OUT_STATUS_CAM_DRAWING_BIT) != 0;
+    oc_cam_seen      = true;
+    oc_cam_ms        = now_ms;
+}
 static uint32_t servo_settle_end_ms = 0;      // hold servos neutral until this time
 static uint32_t last_snapshot_ms = 0;         // rate-limit NVS writes to 10 Hz
 // Resend the flight settings snapshot (#165) on the first few INFLIGHT ticks
@@ -5671,7 +5689,7 @@ static void initRunCam()
 // nothing should reach for a command whose effect depends on what state the
 // camera was already in.  Kept compiled (and referenced by the CRC note below)
 // rather than deleted, because RUNCAM_PWR_CMD is the worked example that
-// documents runCamCrc8's expected output.
+// documents RunCamProbePolicy::crc8's expected output.
 [[maybe_unused]] static void sendRunCamToggle()
 {
     if (!config::USE_RUNCAM || !runcam_uart_ready)
@@ -5690,55 +5708,61 @@ static void initRunCam()
 // tells us whether this camera supports explicit start/stop recording or
 // only the power-button toggle (informs the #146 fix).
 
-// RunCam Device Protocol CRC8: poly 0xD5, init 0x00, no reflection.
-// (runCamCrc8({0xCC,0x01,0x01}) == 0xE7, matching RUNCAM_PWR_CMD.)
-static uint8_t runCamCrc8(const uint8_t *data, size_t len)
-{
-    uint8_t crc = 0;
-    for (size_t i = 0; i < len; ++i)
-    {
-        crc ^= data[i];
-        for (int bit = 0; bit < 8; ++bit)
-            crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0xD5)
-                               : (uint8_t)(crc << 1);
-    }
-    return crc;
-}
-
 // GET_DEVICE_INFO request frame: header, command 0x00, CRC8.
 static const uint8_t RUNCAM_DEVICE_INFO_CMD[] = {0xCC, 0x00, 0x60};
 
-// One GET_DEVICE_INFO exchange.  Returns true on a header- and CRC-valid
-// 5-byte reply, caching the feature bitfield in runcam_features.  Quiet on
-// failure (the start poll calls this repeatedly); the caller logs the final
-// timeout.  Also the RX-wire bench-test path for #146.
-static bool runCamProbeOnce()
-{
-    if (!config::USE_RUNCAM || !runcam_uart_ready)
-        return false;
+// The GET_DEVICE_INFO probe, split so the loop never waits on the camera
+// (runcam_probe_policy.h): runCamProbeSend() writes the request,
+// runCamProbePoll() reads what has arrived with a zero timeout.  The request in
+// flight, when it went out, and its reply so far:
+static bool     runcam_probe_out     = false;
+static uint32_t runcam_probe_sent_ms = 0;
+static RunCamProbePolicy::ReplyParser runcam_probe_reply;
 
-    // Drop stale boot-chatter so the reply parses cleanly.
+// Drops stale boot chatter, then sends one GET_DEVICE_INFO.  Never blocks: the
+// flush reads with a zero timeout, and 3 bytes always fit the 256-byte TX
+// buffer.  With no UART nothing is sent and the window simply runs out empty.
+// Also the RX-wire bench-test path for #146.
+static void runCamProbeSend(uint32_t now_ms)
+{
+    runcam_probe_reply.reset();
+    runcam_probe_out = true;
+    runcam_probe_sent_ms = now_ms;
+    if (!config::USE_RUNCAM || !runcam_uart_ready)
+        return;
+
     uint8_t scratch[32];
     while (uart_read_bytes(RUNCAM_UART_PORT, scratch, sizeof(scratch), 0) > 0) {}
 
     uart_write_bytes(RUNCAM_UART_PORT, RUNCAM_DEVICE_INFO_CMD,
                      sizeof(RUNCAM_DEVICE_INFO_CMD));
+}
 
-    uint8_t resp[5] = {0};
-    int n = uart_read_bytes(RUNCAM_UART_PORT, resp, sizeof(resp),
-                            pdMS_TO_TICKS(config::RUNCAM_PROBE_READ_MS));
-    if (n < (int)sizeof(resp) || resp[0] != 0xCC)
-        return false;
-    if (runCamCrc8(resp, 4) != resp[4])
-        return false;
+// Feeds whatever reply bytes have arrived to the parser, with a zero timeout,
+// and returns its state.  On the pass that makes it Valid, caches the feature
+// bitfield in runcam_features.  Quiet otherwise (the start poll calls this on
+// every pass of every window); the caller logs the final timeout.
+static RunCamProbePolicy::ReplyParser::State runCamProbePoll()
+{
+    using State = RunCamProbePolicy::ReplyParser::State;
+    if (!config::USE_RUNCAM || !runcam_uart_ready)
+        return runcam_probe_reply.state();
 
-    // resp[2..3] is the 16-bit feature bitfield, little-endian (bench reply
-    // cc 01 77 00 → 0x0077).
-    runcam_features = (uint16_t)resp[2] | ((uint16_t)resp[3] << 8);
-    ESP_LOGI(TAG, "RunCam ALIVE — protocol v%u, features 0x%04X",
-             resp[1], runcam_features);
-    ESP_LOG_BUFFER_HEX(TAG, resp, n);
-    return true;
+    uint8_t chunk[16];
+    while (runcam_probe_reply.state() == State::Pending)
+    {
+        const int n = uart_read_bytes(RUNCAM_UART_PORT, chunk, sizeof(chunk), 0);
+        if (n <= 0) break;
+        if (runcam_probe_reply.feed(chunk, (size_t)n) == State::Valid)
+        {
+            runcam_features = runcam_probe_reply.features();
+            ESP_LOGI(TAG, "RunCam ALIVE — protocol v%u, features 0x%04X",
+                     runcam_probe_reply.protocolVersion(), runcam_features);
+            ESP_LOG_BUFFER_HEX(TAG, runcam_probe_reply.bytes(),
+                               RunCamProbePolicy::kReplyLen);
+        }
+    }
+    return runcam_probe_reply.state();
 }
 
 // START_RECORDING (CAMERA_CONTROL 0x03).  The unit advertises this (feature
@@ -5750,7 +5774,7 @@ static void sendRunCamStartRecording()
     if (!config::USE_RUNCAM || !runcam_uart_ready)
         return;
     uint8_t rec[4] = {0xCC, 0x01, 0x03, 0x00};
-    rec[3] = runCamCrc8(rec, 3);
+    rec[3] = RunCamProbePolicy::crc8(rec, 3);
     uart_write_bytes(RUNCAM_UART_PORT, rec, sizeof(rec));
 }
 
@@ -5772,7 +5796,7 @@ static void sendRunCamStopRecording()
     if (!config::USE_RUNCAM || !runcam_uart_ready)
         return;
     uint8_t rec[4] = {0xCC, 0x01, 0x04, 0x00};
-    rec[3] = runCamCrc8(rec, 3);
+    rec[3] = RunCamProbePolicy::crc8(rec, 3);
     uart_write_bytes(RUNCAM_UART_PORT, rec, sizeof(rec));
 }
 
@@ -6109,7 +6133,8 @@ static inline bool cameraStopInProgress()
 // it never answers by BOOT_MAX_MS we record blind — the camera supports
 // START_RECORDING, so that beats the record-less power toggle the old code
 // fell back to.  START_RECORDING is fire-and-forget (no ACK), so we resend it
-// a few times.  Each probe's RX read is bounded by RUNCAM_PROBE_READ_MS.
+// a few times.  A probe never waits: its reply is read pass by pass, with a
+// zero timeout, for up to RUNCAM_PROBE_READ_MS (runcam_probe_policy.h).
 static inline void serviceCameraStart(uint32_t now_ms)
 {
     if (camera_start_phase == CameraStartPhase::Idle) return;
@@ -6189,41 +6214,81 @@ static inline void serviceCameraStart(uint32_t now_ms)
     {
         ESP_LOGI(TAG, "RunCam boot grace elapsed — polling for UART readiness");
         camera_start_phase = CameraStartPhase::Probing;
+        runcam_probe_out = false;  // a stop or abort can leave one behind
         // fall through and probe immediately (due is already <= now)
     }
 
     if (camera_start_phase == CameraStartPhase::Probing)
     {
-        // #568: each probe blocks up to RUNCAM_PROBE_READ_MS (60 ms) on the
-        // camera UART — fine on the pad, but if the operator starts the
-        // camera and launches inside the probe window (~8 s), those stalls
-        // would land in early boost. The flight loop must never wait on a
-        // camera in flight: on launch detect, skip the blocking probe and
-        // start recording blind immediately (fire-and-forget START_RECORDING
-        // — blind beats both a stalled boost loop and a camera that never
-        // records).
+        // #568: on launch detect, stop probing and start recording blind
+        // immediately (fire-and-forget START_RECORDING — blind beats a camera
+        // that never records).  A probe still out is dropped; its reply would
+        // change nothing but the log line.
         const bool in_flight = (rocket_state == INFLIGHT);
-        const bool alive = in_flight ? false : runCamProbeOnce();
-        const bool deadline = (int32_t)(now_ms - camera_probe_deadline_ms) >= 0;
-        if (!alive && !deadline && !in_flight)
+        bool alive = false;
+        if (in_flight)
         {
-            camera_start_due_ms = now_ms + config::RUNCAM_PROBE_INTERVAL_MS;
-            return;  // keep polling
+            runcam_probe_out = false;
         }
-        // Whole window silent on the pad: park + power-cycle and retry
-        // before the blind fallback (battery cold-start phantom feed — see
-        // config.h).  Gate off AND pins parked, so nothing feeds the camera
-        // and its own load drains it during the off-time.
-        if (!alive && !in_flight && camera_power_retries_left > 0)
+        else
+        {
+            // The probe used to block up to RUNCAM_PROBE_READ_MS (60 ms) per
+            // try: a silent camera stopped the loop 60 ms in every 250 on the
+            // pad (CENJARS 11-01, GTV Blue), and a probe already waiting when
+            // the motor lit held launch detection with it.  Now the request
+            // goes out on one pass and each later pass reads what has arrived
+            // (runcam_probe_policy.h).
+            using RunCamProbePolicy::Step;
+            const auto reply = runcam_probe_out
+                ? runCamProbePoll()
+                : RunCamProbePolicy::ReplyParser::State::Pending;
+            const Step step = RunCamProbePolicy::step(
+                runcam_probe_out, reply, runcam_probe_sent_ms, now_ms,
+                camera_probe_deadline_ms, config::RUNCAM_PROBE_READ_MS);
+            if (step == Step::Send)
+            {
+                runCamProbeSend(now_ms);
+                camera_start_due_ms = now_ms;  // read from the next pass on
+                return;
+            }
+            if (step == Step::Wait)
+            {
+                camera_start_due_ms = now_ms;
+                return;
+            }
+            runcam_probe_out = false;
+            if (step == Step::NextProbe)
+            {
+                camera_start_due_ms = runcam_probe_sent_ms + config::RUNCAM_PROBE_INTERVAL_MS;
+                return;  // keep polling
+            }
+            alive = (step == Step::Alive);  // else Silent
+        }
+        // Whole window silent on the pad: a DARK camera is parked +
+        // power-cycled and retried before the blind fallback (battery
+        // cold-start phantom feed — see config.h).  Gate off AND pins parked,
+        // so nothing feeds the camera and its own load drains it during the
+        // off-time.  A camera whose rail the OC sees drawing running current
+        // booted and is only not answering: it keeps its power and records
+        // blind, since a cut would end the recording it may already be making
+        // (CENJARS 11-01, runcam_probe_policy.h silentAction).
+        const bool cam_fresh = RunCamProbePolicy::camVerdictFresh(oc_cam_seen, oc_cam_ms, now_ms);
+        const bool cam_running = cam_fresh && oc_cam_monitored && oc_cam_drawing;
+        if (!alive && !in_flight &&
+            RunCamProbePolicy::silentAction(camera_power_retries_left, cam_fresh,
+                                            oc_cam_monitored, oc_cam_drawing)
+                == RunCamProbePolicy::SilentAction::PowerCycle)
         {
             camera_power_retries_left--;
             runcamUartPark();
             cameraGateSet(false);
             camera_start_phase = CameraStartPhase::RetryOff;
             camera_start_due_ms = now_ms + config::RUNCAM_RETRY_OFF_MS;
-            ESP_LOGW(TAG, "RunCam: no UART reply %lu ms after power-on — "
+            ESP_LOGW(TAG, "RunCam: no UART reply %lu ms after power-on, rail %s — "
                           "parked+power-cycling (%u retr%s left)",
                      (unsigned long)(now_ms - camera_start_power_ms),
+                     (cam_fresh && oc_cam_monitored) ? "dark (OC monitor)"
+                                                     : "not monitored",
                      (unsigned)camera_power_retries_left,
                      camera_power_retries_left == 1 ? "y" : "ies");
             return;
@@ -6236,6 +6301,13 @@ static inline void serviceCameraStart(uint32_t now_ms)
         else if (in_flight)
             ESP_LOGW(TAG, "RunCam: launch during boot probe — starting blind NOW "
                           "(no blocking UART reads in boost)");
+        else if (cam_running)
+            ESP_LOGW(TAG, "RunCam: no GET_DEVICE_INFO reply in %lu ms, but its rail "
+                          "draws running current (OC monitor) — recording blind, "
+                          "camera stays powered (check RX wire to FC pin %d and the "
+                          "camera's UART-control menu)",
+                     (unsigned long)(now_ms - camera_start_power_ms),
+                     (int)config::RUNCAM_RX_PIN);
         else
             ESP_LOGW(TAG, "RunCam: no GET_DEVICE_INFO reply in %lu ms — recording "
                           "blind (check RX wire to FC pin %d and the camera's "
@@ -8145,6 +8217,7 @@ static void setup_fc()
                 // #1188: the OC's second status bit — this session began with
                 // the OC raising our rail from a flight token.
                 if (resp_payload[0] & OUT_STATUS_TOKEN_POWERED_BIT) noteOcSelfPowered();
+                noteOcCamBits(resp_payload[0], millis());
                 if (resp_payload_len >= 2)
                 {
                     out_pending_epoch =
@@ -10884,6 +10957,7 @@ static void loop_fc()
                         // #1188: latched here too, so a boot whose initial
                         // query the OC missed still gets its cue.
                         if (resp_payload[0] & OUT_STATUS_TOKEN_POWERED_BIT) noteOcSelfPowered();
+                        noteOcCamBits(resp_payload[0], now_ms);   // CENJARS 11-01
                         // Reflect the OC's reported pending command every poll,
                         // INCLUDING 0 (idle).  The OC repeats each command for
                         // CMD_REPEAT_LIMIT polls then reports 0; holding the value

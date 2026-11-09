@@ -1066,6 +1066,18 @@ static_assert(sizeof(OutStatusQueryData) == 42,
 // "ready" on any firmware pairing, and an old FC simply never sees the cue.
 static constexpr uint8_t OUT_STATUS_READY_BIT         = 0x01;
 static constexpr uint8_t OUT_STATUS_TOKEN_POWERED_BIT = 0x02;
+// Bits 2-3 (CENJARS 2026-11-01): what the OC's camera-rail current monitor
+// (#850) says, so the FC can tell a RunCam that is running from one that is
+// dark without waiting on its UART. Neither GTV RunCam ever answered the
+// readiness probe; both were running and recording, and the FC power-cycled
+// each twice on the pad because silence was all it could see.
+//   CAM_MONITORED — this OC reads the camera rail and the reading is current
+//                   (V9/V10). Without it, CAM_DRAWING means nothing.
+//   CAM_DRAWING   — the camera rail has drawn running current for the last
+//                   half second (out_computer/main/cam_draw_policy.h).
+// Never without READY, and DRAWING never without MONITORED.
+static constexpr uint8_t OUT_STATUS_CAM_MONITORED_BIT = 0x04;
+static constexpr uint8_t OUT_STATUS_CAM_DRAWING_BIT   = 0x08;
 
 // Payload width of OUT_STATUS_RESPONSE: [status byte][pending cmd][serve epoch].
 //
@@ -1087,11 +1099,15 @@ static constexpr size_t OUT_STATUS_PAYLOAD_BYTES = 3;
 // link. The config frame the OC appends starts at this offset too, so a stale
 // literal here silently misaligns that read as well.
 static constexpr size_t OUT_STATUS_FRAME_BYTES = 4 + 1 + 1 + OUT_STATUS_PAYLOAD_BYTES + 2;
-static inline uint8_t outStatusByte(bool ready, bool token_powered)
+static inline uint8_t outStatusByte(bool ready, bool token_powered,
+                                    bool cam_monitored = false,
+                                    bool cam_drawing = false)
 {
     if (!ready) return 0;
     return (uint8_t)(OUT_STATUS_READY_BIT |
-                     (token_powered ? OUT_STATUS_TOKEN_POWERED_BIT : 0));
+                     (token_powered ? OUT_STATUS_TOKEN_POWERED_BIT : 0) |
+                     (cam_monitored ? OUT_STATUS_CAM_MONITORED_BIT : 0) |
+                     ((cam_monitored && cam_drawing) ? OUT_STATUS_CAM_DRAWING_BIT : 0));
 }
 
 // ### Data Structures ###
