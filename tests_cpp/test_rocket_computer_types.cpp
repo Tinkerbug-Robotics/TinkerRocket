@@ -1506,6 +1506,30 @@ TEST(RocketComputerTypes, OutStatusByte_TokenPoweredNeverWithoutReady) {
     EXPECT_EQ(outStatusByte(true, false) & OUT_STATUS_TOKEN_POWERED_BIT, 0);
 }
 
+// CENJARS 2026-11-01: bits 2-3 carry the OC's camera-rail verdict. Same rule as
+// #1188's bit (never without ready), plus DRAWING never without MONITORED: an
+// FC must not read "running" from an OC that cannot see the rail.
+TEST(RocketComputerTypes, OutStatusByte_CameraBits) {
+    EXPECT_EQ(OUT_STATUS_CAM_MONITORED_BIT, 0x04u);
+    EXPECT_EQ(OUT_STATUS_CAM_DRAWING_BIT,   0x08u);
+    // The two-argument form is unchanged: byte-identical to every older OC.
+    EXPECT_EQ(outStatusByte(true, false), 0x01u);
+    EXPECT_EQ(outStatusByte(true, true),  0x03u);
+    EXPECT_EQ(outStatusByte(true, false, true,  false), 0x05u);   // monitored, dark
+    EXPECT_EQ(outStatusByte(true, false, true,  true),  0x0Du);   // monitored, running
+    EXPECT_EQ(outStatusByte(true, true,  true,  true),  0x0Fu);
+    EXPECT_EQ(outStatusByte(true, false, false, true),  0x01u);   // drawing without a monitor drops
+    for (bool tok : {false, true})
+        for (bool mon : {false, true})
+            for (bool draw : {false, true}) {
+                EXPECT_EQ(outStatusByte(false, tok, mon, draw), 0u);        // never without ready
+                EXPECT_NE(outStatusByte(true,  tok, mon, draw), 0u);        // `!= 0` is still "ready"
+                const uint8_t b = outStatusByte(true, tok, mon, draw);
+                EXPECT_EQ((b & OUT_STATUS_CAM_DRAWING_BIT) != 0, mon && draw);
+                EXPECT_EQ((b & OUT_STATUS_TOKEN_POWERED_BIT) != 0, tok);    // independent of the camera
+            }
+}
+
 TEST(RocketComputerTypes, OutStatusQuery_MagType_V6) {
     EXPECT_EQ(sizeof(OutStatusQueryData), 42u);  // v6: +mag_type (v5 was 41: #435)
     // The zeroed default must decode as the big board's chip — every pre-v6

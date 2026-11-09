@@ -217,3 +217,89 @@ TEST(RunCamProbePolicy, ReplyEndsProbingOnThePassItCompletes)
     EXPECT_EQ(run.end, Step::Alive);
     EXPECT_EQ(run.end_ms, 2754u);
 }
+
+// ── A silent boot window: power-cycle or record blind (CENJARS 2026-11-01) ──
+
+using RunCamProbePolicy::SilentAction;
+using RunCamProbePolicy::camVerdictFresh;
+using RunCamProbePolicy::kCamVerdictMaxAgeMs;
+using RunCamProbePolicy::silentAction;
+
+TEST(RunCamProbePolicy, VerdictFreshness)
+{
+    EXPECT_FALSE(camVerdictFresh(false, 1000, 1000));   // never polled
+    EXPECT_TRUE(camVerdictFresh(true, 1000, 1000));
+    EXPECT_TRUE(camVerdictFresh(true, 1000, 1000 + kCamVerdictMaxAgeMs));
+    EXPECT_FALSE(camVerdictFresh(true, 1000, 1001 + kCamVerdictMaxAgeMs));
+    EXPECT_TRUE(camVerdictFresh(true, 0xFFFFFF00u, 0x00000100u));   // across the wrap
+}
+
+TEST(RunCamProbePolicy, SilentActionTable)
+{
+    for (uint8_t left : {1, 2})
+    {
+        // A running camera keeps its power.
+        EXPECT_EQ(silentAction(left, true, true, true), SilentAction::RecordBlind);
+        // Dark, unmonitored, or a stale verdict: the ladder as it always was.
+        EXPECT_EQ(silentAction(left, true,  true,  false), SilentAction::PowerCycle);
+        EXPECT_EQ(silentAction(left, true,  false, false), SilentAction::PowerCycle);
+        EXPECT_EQ(silentAction(left, true,  false, true),  SilentAction::PowerCycle);
+        EXPECT_EQ(silentAction(left, false, true,  true),  SilentAction::PowerCycle);
+    }
+    // Out of retries: record blind whatever the rail says.
+    for (bool fresh : {false, true})
+        for (bool mon : {false, true})
+            for (bool draw : {false, true})
+                EXPECT_EQ(silentAction(0, fresh, mon, draw), SilentAction::RecordBlind);
+}
+
+namespace {
+
+// The ladder over successive silent windows, from RUNCAM_POWER_RETRIES (2):
+// the actions taken until the start ends in a blind record.
+std::vector<SilentAction> ladder(const std::vector<bool>& drawing_each_window,
+                                 bool monitored = true, bool fresh = true)
+{
+    std::vector<SilentAction> out;
+    uint8_t left = 2;
+    for (bool drawing : drawing_each_window)
+    {
+        const SilentAction a = silentAction(left, fresh, monitored, drawing);
+        out.push_back(a);
+        if (a == SilentAction::RecordBlind) break;
+        --left;
+    }
+    return out;
+}
+
+}  // namespace
+
+TEST(RunCamProbePolicy, CenjarsCamerasWouldHaveKeptTheirPower)
+{
+    // Both GTV RunCams ran from power-up and never answered: each window ended
+    // silent with the rail drawing 0.14-0.26 A. As flown (no monitor in the
+    // decision) the FC cut them twice; with it, the first window records blind.
+    EXPECT_EQ(ladder({true, true, true}, /*monitored=*/false),
+              (std::vector<SilentAction>{SilentAction::PowerCycle, SilentAction::PowerCycle,
+                                         SilentAction::RecordBlind}));
+    EXPECT_EQ(ladder({true, true, true}),
+              (std::vector<SilentAction>{SilentAction::RecordBlind}));
+}
+
+TEST(RunCamProbePolicy, DarkCameraStillGetsTheV8Remedy)
+{
+    // Never boots: both retries, then blind.
+    EXPECT_EQ(ladder({false, false, false}),
+              (std::vector<SilentAction>{SilentAction::PowerCycle, SilentAction::PowerCycle,
+                                         SilentAction::RecordBlind}));
+    // Boots after one power-cycle but still does not answer: no second cut.
+    EXPECT_EQ(ladder({false, true, true}),
+              (std::vector<SilentAction>{SilentAction::PowerCycle, SilentAction::RecordBlind}));
+}
+
+TEST(RunCamProbePolicy, StaleVerdictFallsBackToTheLadder)
+{
+    EXPECT_EQ(ladder({true, true, true}, true, /*fresh=*/false),
+              (std::vector<SilentAction>{SilentAction::PowerCycle, SilentAction::PowerCycle,
+                                         SilentAction::RecordBlind}));
+}

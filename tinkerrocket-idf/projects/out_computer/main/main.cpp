@@ -68,6 +68,8 @@ static inline std::string itos(int v)
 #include "token_page_policy.h"   // #1659: room for W2 on the token's active NVS page
 #include "holdup_policy.h"        // #1166: the verdict on the hold-up supercap
 #include "supply_status_policy.h" // #1593: the V10's PG_RAIL / VBUCK_OK edges
+#include "cam_draw_policy.h"      // CENJARS 11-01: is the camera running, from its rail current
+#include <atomic>
 #include <esp_attr.h>             // RTC_NOINIT_ATTR
 #include <esp_system.h>           // esp_reset_reason
 #include <esp_random.h>           // esp_random: transmit-slot phase on a release
@@ -2317,6 +2319,25 @@ static void initRailCurrentAdc()
 // How often commitPowerSample re-reads the rail currents (#1485: 10 Hz).
 static constexpr uint32_t RAIL_AMPS_PERIOD_MS = 100;
 
+// CENJARS 11-01: the camera rail's running/dark verdict (cam_draw_policy.h),
+// for the FC's RunCam start. Written by the power sampler at each 10 Hz rail
+// read and read by the status serve, so it crosses tasks as one atomic byte
+// plus the read's time: a verdict older than CAM_DRAW_FRESH_MS (a stalled
+// sampler, an INA fault) is reported as not monitored rather than as stale.
+static CamDrawPolicy::Debounce cam_draw;
+static std::atomic<uint8_t>  cam_draw_bits{0};   // OUT_STATUS_CAM_* bits
+static std::atomic<uint32_t> cam_draw_ms{0};     // millis() of the read behind them
+static constexpr uint32_t CAM_DRAW_FRESH_MS = 1000;
+
+static uint8_t camDrawStatusBits(uint32_t now_ms)
+{
+    const uint8_t bits = cam_draw_bits.load(std::memory_order_acquire);
+    if (bits == 0) return 0;
+    if ((uint32_t)(now_ms - cam_draw_ms.load(std::memory_order_relaxed)) > CAM_DRAW_FRESH_MS)
+        return 0;
+    return bits;
+}
+
 static float readRailAmps(int gpio, float r_ohm)
 {
     if (!rail_adc_ready || gpio < 0 || r_ohm <= 0.0f) return NAN;
@@ -2640,6 +2661,12 @@ static bool commitPowerSample(float bus_v, float current_a)
         rail_amps_ms   = rail_now_ms;
         cam_a   = readRailAmps(config::CAM_IMON_GPIO, config::CAM_IMON_R_OHM);
         servo_a = readRailAmps(config::SERVO_IMON_GPIO, config::SERVO_IMON_R_OHM);
+        cam_draw.update(cam_a);
+        cam_draw_ms.store(rail_now_ms, std::memory_order_relaxed);
+        cam_draw_bits.store(
+            (uint8_t)((cam_draw.monitored() ? OUT_STATUS_CAM_MONITORED_BIT : 0) |
+                      (cam_draw.drawing()   ? OUT_STATUS_CAM_DRAWING_BIT   : 0)),
+            std::memory_order_release);
     }
     psi.cam_current   = cam_a;
     psi.servo_current = servo_a;
@@ -3976,8 +4003,14 @@ static void queueOutStatusResponse(bool ready)
     // #1137 item 4: byte 2 is the serving-window epoch (0 while idle).  An FC
     // that predates it reads payload_len >= 2 and simply never sees the byte,
     // so this is additive on the wire.
-    uint8_t payload[OUT_STATUS_PAYLOAD_BYTES] = { outStatusByte(ready, boot_token_powered), cmd,
-                           (cmd != 0U) ? cmd_serve_epoch : (uint8_t)0 };
+    // CENJARS 11-01: bits 2-3 carry the camera rail's running/dark verdict for
+    // the FC's RunCam start; an older FC reads `!= 0` and never sees them.
+    const uint8_t cam_bits = camDrawStatusBits(millis());
+    uint8_t payload[OUT_STATUS_PAYLOAD_BYTES] = {
+        outStatusByte(ready, boot_token_powered,
+                      (cam_bits & OUT_STATUS_CAM_MONITORED_BIT) != 0,
+                      (cam_bits & OUT_STATUS_CAM_DRAWING_BIT) != 0),
+        cmd, (cmd != 0U) ? cmd_serve_epoch : (uint8_t)0 };
     size_t frame_len = 0;
     if (!TR_I2C_Interface::packMessage(OUT_STATUS_RESPONSE,
                                        payload,
