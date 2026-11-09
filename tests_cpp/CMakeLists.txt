@@ -1364,6 +1364,18 @@ target_include_directories(test_arm_consent_policy PRIVATE
 target_link_libraries(test_arm_consent_policy GTest::gtest_main)
 gtest_discover_tests(test_arm_consent_policy)
 
+# ---------- test_cam_draw_policy (CENJARS 2026-11-01) ----------
+# The out computer's camera-rail verdict for the FC's RunCam start: running vs
+# dark from the #850 current monitor, debounced, with an unreadable monitor
+# reported as unknown. Pure header in the OC project.
+add_executable(test_cam_draw_policy test_cam_draw_policy.cpp)
+target_include_directories(test_cam_draw_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_cam_draw_policy GTest::gtest_main)
+gtest_discover_tests(test_cam_draw_policy)
+
 # ---------- test_supply_status_policy (#1593) ----------
 # The Tinker-Mantis V10's PG_RAIL and VBUCK_OK, as the out computer reports
 # them: the boot level counts nothing, each change is one fall or rise, and a

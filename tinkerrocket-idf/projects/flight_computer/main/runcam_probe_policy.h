@@ -115,4 +115,47 @@ inline Step step(bool probe_out, ReplyParser::State reply, uint32_t sent_ms,
     return ((int32_t)(now_ms - deadline_ms) >= 0) ? Step::Silent : Step::NextProbe;
 }
 
+// ── A silent boot window: power-cycle, or record blind? ──
+//
+// The power-cycle retry exists for a camera that comes up DARK (the V8 battery
+// cold start: phantom-fed through the UART pins, no LED, never boots). A
+// camera can also be running and simply not answer: both GTV RunCams at
+// CENJARS 2026-11-01 recorded on their own from power-up and never replied
+// once. Silence alone cannot tell the two apart, so the FC power-cycled both
+// twice on the pad, ending a recording each time, and White's last power-on
+// landed about 1 s before liftoff.
+//
+// The OC's camera-rail monitor can tell them apart (out_computer/main/
+// cam_draw_policy.h, OUT_STATUS_CAM_*_BIT). A rail drawing running current is
+// a camera that booted, so it is left powered and START_RECORDING goes out
+// blind: harmless to one already recording, and the start for one that is not.
+// Only a dark rail is power-cycled. Without a fresh verdict (no monitor on this
+// board, an older OC, failing polls) the ladder is exactly what it was.
+
+// How old the OC's verdict may be and still count. The FC polls the OC about
+// every 250 ms, so this is six polls in a row lost.
+constexpr uint32_t kCamVerdictMaxAgeMs = 1500;
+
+inline bool camVerdictFresh(bool seen, uint32_t verdict_ms, uint32_t now_ms)
+{
+    return seen && (uint32_t)(now_ms - verdict_ms) <= kCamVerdictMaxAgeMs;
+}
+
+enum class SilentAction : uint8_t {
+    PowerCycle,   // park the pins, gate off, then boot it again
+    RecordBlind,  // START_RECORDING with no reply, and leave the camera powered
+};
+
+// retries_left — power-cycle attempts left in this start
+// fresh        — camVerdictFresh() of the OC's last verdict
+// monitored    — OUT_STATUS_CAM_MONITORED_BIT
+// drawing      — OUT_STATUS_CAM_DRAWING_BIT
+inline SilentAction silentAction(uint8_t retries_left, bool fresh,
+                                 bool monitored, bool drawing)
+{
+    if (retries_left == 0) return SilentAction::RecordBlind;
+    if (fresh && monitored && drawing) return SilentAction::RecordBlind;
+    return SilentAction::PowerCycle;
+}
+
 }  // namespace RunCamProbePolicy

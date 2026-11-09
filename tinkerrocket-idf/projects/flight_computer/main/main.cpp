@@ -639,7 +639,8 @@ static uint32_t camera_stop_due_ms = 0;
 // park+power-cycle retry (RUNCAM_POWER_RETRIES / RUNCAM_RETRY_OFF_MS)
 // before the final blind fallback.
 //   Idle → WaitingForBoot → Probing → ResendRecord → Idle,
-//   with Probing → RetryOff → WaitingForBoot on a silent window.
+//   with Probing → RetryOff → WaitingForBoot on a silent window whose camera
+//   rail is dark or unmonitored (a running one records blind instead).
 //
 // The GoPro start is a much simpler machine on the same timer — there is no
 // protocol to probe, so it is just: gate on → let the camera's ground bond to
@@ -996,6 +997,22 @@ static bool     reboot_recovery_telem = false; // true for rest of flight (telem
 // restored flight in progress. Decision table: boot_cue_policy.h.
 static bool     oc_self_powered = false;
 static BootCuePolicy::Cue boot_cue_active = BootCuePolicy::Cue::None;
+// CENJARS 11-01: the OC's camera-rail verdict (OUT_STATUS_CAM_*_BIT) from the
+// last status poll, and when it landed. serviceCameraStart() judges a RunCam
+// that never answers by it: running -> record blind, dark -> power-cycle
+// (runcam_probe_policy.h, silentAction).
+static bool     oc_cam_monitored = false;
+static bool     oc_cam_drawing   = false;
+static bool     oc_cam_seen      = false;
+static uint32_t oc_cam_ms        = 0;
+
+static inline void noteOcCamBits(uint8_t status, uint32_t now_ms)
+{
+    oc_cam_monitored = (status & OUT_STATUS_CAM_MONITORED_BIT) != 0;
+    oc_cam_drawing   = oc_cam_monitored && (status & OUT_STATUS_CAM_DRAWING_BIT) != 0;
+    oc_cam_seen      = true;
+    oc_cam_ms        = now_ms;
+}
 static uint32_t servo_settle_end_ms = 0;      // hold servos neutral until this time
 static uint32_t last_snapshot_ms = 0;         // rate-limit NVS writes to 10 Hz
 // Resend the flight settings snapshot (#165) on the first few INFLIGHT ticks
@@ -6247,20 +6264,31 @@ static inline void serviceCameraStart(uint32_t now_ms)
             }
             alive = (step == Step::Alive);  // else Silent
         }
-        // Whole window silent on the pad: park + power-cycle and retry
-        // before the blind fallback (battery cold-start phantom feed — see
-        // config.h).  Gate off AND pins parked, so nothing feeds the camera
-        // and its own load drains it during the off-time.
-        if (!alive && !in_flight && camera_power_retries_left > 0)
+        // Whole window silent on the pad: a DARK camera is parked +
+        // power-cycled and retried before the blind fallback (battery
+        // cold-start phantom feed — see config.h).  Gate off AND pins parked,
+        // so nothing feeds the camera and its own load drains it during the
+        // off-time.  A camera whose rail the OC sees drawing running current
+        // booted and is only not answering: it keeps its power and records
+        // blind, since a cut would end the recording it may already be making
+        // (CENJARS 11-01, runcam_probe_policy.h silentAction).
+        const bool cam_fresh = RunCamProbePolicy::camVerdictFresh(oc_cam_seen, oc_cam_ms, now_ms);
+        const bool cam_running = cam_fresh && oc_cam_monitored && oc_cam_drawing;
+        if (!alive && !in_flight &&
+            RunCamProbePolicy::silentAction(camera_power_retries_left, cam_fresh,
+                                            oc_cam_monitored, oc_cam_drawing)
+                == RunCamProbePolicy::SilentAction::PowerCycle)
         {
             camera_power_retries_left--;
             runcamUartPark();
             cameraGateSet(false);
             camera_start_phase = CameraStartPhase::RetryOff;
             camera_start_due_ms = now_ms + config::RUNCAM_RETRY_OFF_MS;
-            ESP_LOGW(TAG, "RunCam: no UART reply %lu ms after power-on — "
+            ESP_LOGW(TAG, "RunCam: no UART reply %lu ms after power-on, rail %s — "
                           "parked+power-cycling (%u retr%s left)",
                      (unsigned long)(now_ms - camera_start_power_ms),
+                     (cam_fresh && oc_cam_monitored) ? "dark (OC monitor)"
+                                                     : "not monitored",
                      (unsigned)camera_power_retries_left,
                      camera_power_retries_left == 1 ? "y" : "ies");
             return;
@@ -6273,6 +6301,13 @@ static inline void serviceCameraStart(uint32_t now_ms)
         else if (in_flight)
             ESP_LOGW(TAG, "RunCam: launch during boot probe — starting blind NOW "
                           "(no blocking UART reads in boost)");
+        else if (cam_running)
+            ESP_LOGW(TAG, "RunCam: no GET_DEVICE_INFO reply in %lu ms, but its rail "
+                          "draws running current (OC monitor) — recording blind, "
+                          "camera stays powered (check RX wire to FC pin %d and the "
+                          "camera's UART-control menu)",
+                     (unsigned long)(now_ms - camera_start_power_ms),
+                     (int)config::RUNCAM_RX_PIN);
         else
             ESP_LOGW(TAG, "RunCam: no GET_DEVICE_INFO reply in %lu ms — recording "
                           "blind (check RX wire to FC pin %d and the camera's "
@@ -8169,6 +8204,7 @@ static void setup_fc()
                 // #1188: the OC's second status bit — this session began with
                 // the OC raising our rail from a flight token.
                 if (resp_payload[0] & OUT_STATUS_TOKEN_POWERED_BIT) noteOcSelfPowered();
+                noteOcCamBits(resp_payload[0], millis());
                 if (resp_payload_len >= 2)
                 {
                     out_pending_epoch =
@@ -10908,6 +10944,7 @@ static void loop_fc()
                         // #1188: latched here too, so a boot whose initial
                         // query the OC missed still gets its cue.
                         if (resp_payload[0] & OUT_STATUS_TOKEN_POWERED_BIT) noteOcSelfPowered();
+                        noteOcCamBits(resp_payload[0], now_ms);   // CENJARS 11-01
                         // Reflect the OC's reported pending command every poll,
                         // INCLUDING 0 (idle).  The OC repeats each command for
                         // CMD_REPEAT_LIMIT polls then reports 0; holding the value
