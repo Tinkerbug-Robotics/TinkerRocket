@@ -67,6 +67,22 @@ bool decodeTrFix(const uint8_t* frame, size_t len, TrFix& out)
     return true;
 }
 
+bool decodeTrStatus(const uint8_t* frame, size_t len, TrStatus& out)
+{
+    // number 12, sub-type 4, the commit 32, dirty 1, uptime 20, tracking 6,
+    // locked 6, time 1, fix 1 (83 bits)
+    const uint8_t* m = trPayload(frame, len, kTrStatus, 83);
+    if (m == nullptr) return false;
+    out.fw         = bits(m, 16, 32);
+    out.fw_dirty   = bits(m, 48, 1) != 0;
+    out.uptime_s   = bits(m, 49, 20);
+    out.ntrack     = static_cast<uint8_t>(bits(m, 69, 6));
+    out.nlock      = static_cast<uint8_t>(bits(m, 75, 6));
+    out.time_valid = bits(m, 81, 1) != 0;
+    out.fix_valid  = bits(m, 82, 1) != 0;
+    return true;
+}
+
 // ── Rtcm3Framer ─────────────────────────────────────────────────────────
 
 void Rtcm3Framer::feed(const uint8_t* data, size_t n, Sink& sink)

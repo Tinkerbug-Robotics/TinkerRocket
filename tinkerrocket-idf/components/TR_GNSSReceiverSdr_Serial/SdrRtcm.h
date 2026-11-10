@@ -34,6 +34,7 @@ static constexpr uint32_t kBaud        = 2000000;   // the board's `rx out uart 
 static constexpr uint16_t kTrMessage   = 4001;      // TinkerRocket's message
 static constexpr uint8_t  kTrEpoch     = 1;         // its sub-types
 static constexpr uint8_t  kTrFix       = 2;
+static constexpr uint8_t  kTrStatus    = 3;         // before the board has GPS time: once a second
 static constexpr size_t   kMaxFrame    = 3 + 1023 + 3;   // preamble and length, the payload, the CRC
 
 // The message number of a whole frame (the 12 bits after its 3-byte header);
@@ -66,6 +67,20 @@ struct TrFix
     uint8_t  nsat = 0;
 };
 bool decodeTrFix(const uint8_t* frame, size_t len, TrFix& out);
+
+// And of a sub-type 3: the board's state while it has no GPS time yet (its
+// first fix), when it sends nothing else, so a listener knows it is there.
+struct TrStatus
+{
+    uint32_t fw = 0;          // its firmware's commit (8 hex digits)
+    bool     fw_dirty = false;
+    uint32_t uptime_s = 0;
+    uint8_t  ntrack = 0;      // channels tracking, and with their PLL locked
+    uint8_t  nlock = 0;
+    bool     time_valid = false;
+    bool     fix_valid = false;
+};
+bool decodeTrStatus(const uint8_t* frame, size_t len, TrStatus& out);
 
 class Rtcm3Framer
 {

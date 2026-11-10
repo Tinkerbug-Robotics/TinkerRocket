@@ -112,6 +112,8 @@ class TR_GNSSReceiverSdrSerial : private sdr_rtcm::Rtcm3Framer::Sink
         uint8_t     last_nobs_ = 0;
         uint8_t     last_fix_nsat_ = 0;
         bool        last_fix_valid_ = false;
+        uint32_t    n_status_ = 0;               // sub-type 3: the board up, no GPS time yet
+        sdr_rtcm::TrStatus last_status_;
         int64_t     status_us_ = 0;
         uint32_t    status_frames_ = 0, status_epochs_ = 0;
 };

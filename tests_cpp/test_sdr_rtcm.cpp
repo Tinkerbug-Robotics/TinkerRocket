@@ -238,6 +238,36 @@ TEST(SdrRtcmMessages, NumbersAndSubTypes)
     EXPECT_EQ(messageNumber(tiny, sizeof(tiny)), 0);
 }
 
+// The status the board sends once a second before its first fix (sub-type 3), as its own encoder made it
+// (receiver/core/nav/rtcm_msm.c rtcm_tr_status_encode in the gnss repo): a60b606a-dirty, up 73 s, 13 channels
+// tracking, 11 locked, no time.
+TEST(SdrRtcmMessages, TheBoardsStatusBeforeItsFirstFix)
+{
+    const std::vector<uint8_t> f = {0xD3, 0x00, 0x0B, 0xFA, 0x13, 0xA6, 0x0B, 0x60, 0x6A, 0x80, 0x02, 0x49,
+                                    0xA5, 0x80, 0x85, 0xF8, 0x88};
+    EXPECT_EQ(rtcm3::crc24q(f.data(), f.size() - 3), (uint32_t(0x85) << 16) | (uint32_t(0xF8) << 8) | 0x88);
+    EXPECT_EQ(messageNumber(f.data(), f.size()), kTrMessage);
+    EXPECT_EQ(trSubType(f.data(), f.size()), kTrStatus);
+    TrStatus st;
+    ASSERT_TRUE(decodeTrStatus(f.data(), f.size(), st));
+    EXPECT_EQ(st.fw, 0xa60b606au);
+    EXPECT_TRUE(st.fw_dirty);
+    EXPECT_EQ(st.uptime_s, 73u);
+    EXPECT_EQ(st.ntrack, 13);
+    EXPECT_EQ(st.nlock, 11);
+    EXPECT_FALSE(st.time_valid);
+    EXPECT_FALSE(st.fix_valid);
+    TrEpoch e;
+    TrFix x;
+    EXPECT_FALSE(decodeTrEpoch(f.data(), f.size(), e));
+    EXPECT_FALSE(decodeTrFix(f.data(), f.size(), x));
+    // and the framer passes it through whole
+    Rtcm3Framer fr;
+    const Collect c = feedIn(fr, f, 5);
+    ASSERT_EQ(c.frames.size(), 1u);
+    EXPECT_EQ(c.frames[0].bytes, f);
+}
+
 TEST(SdrRtcmMessages, TheEpochsAre10msApartIn100HzMode)
 {
     // As the board's own decoder (receiver/host/rtcmdump) reads them.

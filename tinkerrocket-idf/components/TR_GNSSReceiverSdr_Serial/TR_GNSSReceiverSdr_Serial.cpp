@@ -200,6 +200,10 @@ void TR_GNSSReceiverSdrSerial::onFrame(const uint8_t* frame, size_t len, size_t 
                 last_fix_valid_ = f.valid;
                 last_fix_nsat_ = f.nsat;
             }
+            else if (sdr_rtcm::decodeTrStatus(frame, len, last_status_))
+            {
+                n_status_++;
+            }
             break;
         }
         default:
@@ -265,10 +269,21 @@ void TR_GNSSReceiverSdrSerial::logStatus()
     status_frames_ = frames;
     status_epochs_ = n_epochs_;
 
+    if (n_epochs_ == 0 && n_status_ > 0)
+    {
+        const sdr_rtcm::TrStatus& st = last_status_;
+        ESP_LOGI(TAG, "gnss-sdr-dev: up, no GPS time yet (firmware %08lx%s, up %lu s, %u channels tracking, %u locked; "
+                      "%lu status frames)",
+                 static_cast<unsigned long>(st.fw), st.fw_dirty ? "-dirty" : "", static_cast<unsigned long>(st.uptime_s),
+                 static_cast<unsigned>(st.ntrack), static_cast<unsigned>(st.nlock),
+                 static_cast<unsigned long>(n_status_));
+        return;
+    }
     if (frames == 0)
     {
-        ESP_LOGI(TAG, "gnss-sdr-dev: nothing heard yet (it sends from its first fix; %lu bytes in no frame, "
-                      "UART overflows %lu)",
+        ESP_LOGI(TAG, "gnss-sdr-dev: nothing heard yet (a board with the status message sends one a second from its "
+                      "receiver's start, older firmware only from its first fix; %lu bytes in no frame, UART "
+                      "overflows %lu)",
                  static_cast<unsigned long>(framer_.skipped()), static_cast<unsigned long>(fifo_overflows_));
         return;
     }
