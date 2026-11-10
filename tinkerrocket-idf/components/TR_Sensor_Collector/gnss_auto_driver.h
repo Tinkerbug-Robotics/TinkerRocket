@@ -69,7 +69,14 @@ public:
     // with the u-blox. pollRawFrame gives the gnss-sdr-dev board's RTCM3
     // frames too.
     bool pollRawFrame(uint8_t* out, size_t cap, size_t& len, uint32_t& time_us);
+    // The receiver's clock line: the mosaic's from its 1PPS, the
+    // gnss-sdr-dev board's on a bench image (TR_BENCH_SDR_AID) from its
+    // epochs.
     bool takeClockLine(GnssClockData& out);
+    // TinkerRocket's 4002 to the gnss-sdr-dev board (its driver's
+    // sendAidFrame: never blocks); false with any other receiver, so a
+    // u-blox or a mosaic on J1 never gets one.
+    bool sendAidFrame(const uint8_t* frame, size_t len);
     bool geoidSeparationM(float& sep_m) const;
     void requestNavResend();
 #if defined(TR_GNSS_COCOM_DIAG) && TR_GNSS_COCOM_DIAG

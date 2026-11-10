@@ -86,6 +86,10 @@
 #include <MosaicMultibandBench.h> // the bands' combination's bench (TR_BENCH_MB_BLOCKS)
 #include TR_BENCH_MB_BLOCKS       // its recorded MeasEpochs: a scratch file the bench build names, never the repo's
 #endif
+#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
+#include <SdrAid.h>               // the 4002 frames to the gnss-sdr-dev board and the P1 script (TR_BENCH_SDR_AID)
+#include <GnssClockRecord.h>      // gnssClockGpsAt: GPS time off the board's clock line
+#endif
 #if TR_RAW_NAV_MOSAIC
 #include <SbfNav.h>               // the mosaic-G5's navigation blocks as gps_eph_t (TR_GNSSReceiverMosaic_Serial)
 #include <esp_memory_utils.h>     // esp_ptr_external_ram: where the filter's blocks went
@@ -9488,6 +9492,71 @@ static void rawBenchPanicOnce(uint32_t now_ms)
 }
 #endif
 
+#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
+#if !(defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO)
+#error "TR_BENCH_SDR_AID talks to the gnss-sdr-dev board, which only the auto images drive (TR_GNSS_DRIVER_AUTO: the V9's and V10's, and a V8's built with -DTR_GNSS_AUTO=1)"
+#endif
+// Bench (P1 of docs/plans/sdr-v10-aided-receiver-plan.md; CMake
+// -DTR_BENCH_SDR_AID=1, an image whose version says "-bench", never flown):
+// the P1 script's TinkerRocket 4002 frames to the gnss-sdr-dev board on J1,
+// one a pass at most, paced by sdr_aid::AidSchedule (the attitude at 100 Hz,
+// the state at 20 Hz, the phase on each change and then at 10 Hz for a second
+// and 1 Hz, the geometry at 1 Hz). Each is stamped in GPS time off the board's
+// own clock line and logged beside the board's frames (GNSS_RTCM_MSG). Nothing
+// goes out unless the receiver on J1 is the board and its line is valid and
+// fresh: from about 10 s after the board's first fix until 2.5 s after its
+// epochs stop. The doubles are worked only when a frame is due, about one pass
+// in eight. Never blocks: the driver checks the UART's TX ring for room first,
+// and a frame that found none goes on the next pass (the driver counts it).
+static void sdrAidBenchStep(const GnssClockData& line)
+{
+    static sdr_aid::AidSchedule sched;
+    static uint8_t seq[sdr_aid::kGeometry + 1] = {};
+    if (sensor_collector_hw.gnssType() != GNSS_TYPE_SDR || (line.flags & GCL_VALID) == 0)
+        return;
+    const int64_t now_us = esp_timer_get_time();
+    if ((uint32_t)now_us - line.time_us >= 2500000u)
+        return;   // the board's epochs stopped moving the line
+    if (!sched.anyDue(now_us))
+        return;
+
+    double gps_s = 0.0;
+    if (!lc86::gnssClockGpsAt(line, now_us, gps_s))
+        return;
+    sdr_aid::Header h = sdr_aid::scriptStamp(gps_s);   // src script, test, tq 5, the script's whole ms
+    const uint32_t key = sdr_aid::scriptPhaseKey(h.tow_ms);
+    const uint8_t sub = sched.due(now_us, key);        // a change goes with the first frame due after it
+    h.seq = seq[sub];
+
+    uint8_t frame[sdr_aid::kMaxFrame];
+    size_t len = 0;
+    switch (sub)
+    {
+        case sdr_aid::kAttitude: len = sdr_aid::encode(sdr_aid::scriptAttitude(h), frame, sizeof(frame)); break;
+        case sdr_aid::kNavState: len = sdr_aid::encode(sdr_aid::scriptNav(h), frame, sizeof(frame)); break;
+        case sdr_aid::kPhase:    len = sdr_aid::encode(sdr_aid::scriptPhase(h), frame, sizeof(frame)); break;
+        case sdr_aid::kGeometry: len = sdr_aid::encode(sdr_aid::scriptGeometry(h), frame, sizeof(frame)); break;
+        default:                 break;
+    }
+    // Through the hardware collector, as the clock line comes: a sensor sim
+    // does not stop it.
+    if (len == 0 || !sensor_collector_hw.sendGNSSAidFrame(frame, len))
+        return;
+    seq[sub]++;
+    sched.sent(sub, now_us, key);
+
+    // The log's copy, a whole frame in one record, after this pass's drain of
+    // the board's frames: never between two parts of one of theirs. 4002 is
+    // the flight computer's message and 4001 the board's, so the number gives
+    // the direction.
+    uint8_t rec[sizeof(GnssRtcmHeader) + sdr_aid::kMaxFrame];
+    const GnssRtcmHeader hdr = {(uint32_t)now_us, 0x01};
+    memcpy(rec, &hdr, sizeof(hdr));
+    memcpy(rec + sizeof(hdr), frame, len);
+    (void)enqueueI2STx(GNSS_RTCM_MSG, rec, sizeof(hdr) + len);
+}
+#endif
+
 // ==========================================================================
 // SECTION: Main loop
 // ==========================================================================
@@ -9801,13 +9870,24 @@ static void loop_fc()
     // once a second with a fix, so a replay places every raw epoch and fix on
     // the IMU's clock as this flight did. From the hardware collector: it is
     // the real receiver's clock whatever a sensor sim feeds the filter.
-    // Log-only; no-op on u-blox boards.
+    // Log-only; no-op on u-blox boards. A bench image with the gnss-sdr-dev
+    // board keeps the board's line for its 4002 stamps (TR_BENCH_SDR_AID).
     {
         GnssClockData clk;
+#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
+        static GnssClockData sdr_line = {};
+#endif
         while (sensor_collector_hw.getGNSSClockLine(clk))
         {
             (void)enqueueI2STx(GNSS_CLOCK_MSG, reinterpret_cast<const uint8_t*>(&clk), sizeof(clk));
+#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
+            if (sensor_collector_hw.gnssType() == GNSS_TYPE_SDR)
+                sdr_line = clk;
+#endif
         }
+#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
+        sdrAidBenchStep(sdr_line);
+#endif
     }
     TR_LP_LAP(SENSORS);
 

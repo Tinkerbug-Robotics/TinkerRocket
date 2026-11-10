@@ -3,8 +3,8 @@
 // The board (gnss repo, firmware/gnss-sdr-dev) is TinkerRocket's own GNSS
 // receiver. On a V9 or V10's J1 it sends the flight computer RTCM 3 at
 // 2 Mbaud (SdrRtcm.h has what): about 400 frames and 40-55 kB a second at its
-// measurement mode's 100 Hz. It takes no commands, so this driver only
-// listens:
+// measurement mode's 100 Hz. It takes no commands. This driver listens, and
+// sends only what a bench image asks it to:
 //   - every frame whose CRC-24Q checks, verbatim, into a ring the flight
 //     loop logs as GNSS_RTCM_MSG (0x95), the record that carries the
 //     LC86G's RTCM3 and the mosaic-G5's SBF (Data_Analysis/
@@ -13,13 +13,21 @@
 //     measurements or fixes yet, so the FC flies GNSS-absent with it
 //     (gnssTypeGivesFix) and logs its stream beside the IMU;
 //   - its counts on the console every 30 s (frames, epochs and their gaps,
-//     fixes, CRC fails, drops).
-// begin() needs nothing from the board: the board sends nothing before its
-// first fix, so after a cold power-up it starts its stream long after the FC
-// has booted, and the ring fills from then on. Called by TR_GNSSAuto once the
-// probes found the board, or remembered it from last boot.
-// The framing is SdrRtcm (pure, host-tested); this class owns only the UART
-// and the hand-off between tasks.
+//     fixes, CRC fails, drops);
+//   - sendAidFrame, the flight task's way to send the board TinkerRocket's
+//     message 4002 (SdrAid.h) without ever blocking. Only a bench image
+//     (TR_BENCH_SDR_AID) calls it, with the P1 script's frames; for that
+//     image the driver also fits the MCU clock to GPS time from the board's
+//     epochs (GnssTimeSync, each epoch at its latch), hands the line to the
+//     flight loop (takeClockLine, logged as GNSS_CLOCK_MSG), and prints a
+//     second console line: what went out, and what the board says it took
+//     (the aiding block of its epochs).
+// begin() needs nothing from the board: before its first fix the board sends
+// only its status, so after a cold power-up its stream starts long after the
+// FC has booted, and the ring fills from then on. Called by TR_GNSSAuto once
+// the probes found the board, or remembered it from last boot.
+// The framing is SdrRtcm and the 4002 frames SdrAid (both pure, host-tested);
+// this class owns only the UART and the hand-off between tasks.
 #ifndef TRGNSSRECEIVERSDR_H
 #define TRGNSSRECEIVERSDR_H
 
@@ -31,7 +39,11 @@
 #include <freertos/ringbuf.h>
 
 #include <RocketComputerTypes.h>
+#include "SdrAid.h"
 #include "SdrRtcm.h"
+#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
+#include <GnssTimeSync.h>      // TR_GNSSReceiverLC86_Serial: the clock line, shared
+#endif
 
 class TR_GNSSReceiverSdrSerial : private sdr_rtcm::Rtcm3Framer::Sink
 {
@@ -67,12 +79,29 @@ class TR_GNSSReceiverSdrSerial : private sdr_rtcm::Rtcm3Framer::Sink
         // Whether a 4001 frame has come yet this boot (the board is streaming).
         bool heardBoard() const { return tr_frames_.load(std::memory_order_relaxed) > 0; }
 
+        /// One whole 4002 frame (SdrAid.h) to the board, from the flight
+        /// task: the UART's one writer once the board is found. False at
+        /// once, and counted, with no driver, no room for it in the TX ring
+        /// or a frame of the wrong size. Never blocks: the ring's room is
+        /// checked before the write, and nothing waits for the line.
+        bool sendAidFrame(const uint8_t* frame, size_t len);
+
+        /// The clock line each time it moves (about once a second while the
+        /// board's epochs come), oldest first, for GNSS_CLOCK_MSG and the
+        /// bench's 4002 stamps. Safe from another task than the poll. Bench
+        /// images only (TR_BENCH_SDR_AID): false on any other.
+        bool takeClockLine(GnssClockData& out);
+
     private:
         void onFrame(const uint8_t* frame, size_t len, size_t after) override;
         void noteEpoch(const sdr_rtcm::TrEpoch& e);
         void pump(size_t max_bytes);
         void drainUartEvents();
         void logStatus();
+#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
+        void noteLink(const uint8_t* frame, size_t len, const sdr_rtcm::TrEpoch& e, int64_t end_us);
+        void logLink();
+#endif
 
         uart_port_t _uartPort;
         uint8_t     rx_pin_ = 0;
@@ -116,6 +145,38 @@ class TR_GNSSReceiverSdrSerial : private sdr_rtcm::Rtcm3Framer::Sink
         sdr_rtcm::TrStatus last_status_;
         int64_t     status_us_ = 0;
         uint32_t    status_frames_ = 0, status_epochs_ = 0;
+
+        // The 4002 frames sendAidFrame sent, by sub-type (the low four bits of
+        // the frame's fifth byte), and those it did not: written by the flight
+        // task, read by the console's.
+        std::atomic<uint32_t> aid_sent_[16] = {};
+        std::atomic<uint32_t> aid_tx_full_{0};
+        std::atomic<uint32_t> aid_no_uart_{0};
+        std::atomic<uint32_t> aid_bad_{0};       // a frame of the wrong size, or a write cut short
+
+#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
+        // The MCU clock against GPS time from the board's epochs (this task
+        // alone touches time_sync_), to the flight loop through a queue.
+        lc86::GnssTimeSync time_sync_;
+        static constexpr int kClockQDepth = 4;
+        StaticQueue_t     clock_q_struct_ = {};
+        alignas(8) uint8_t clock_q_mem_[kClockQDepth * sizeof(GnssClockData)] = {};
+        QueueHandle_t     clock_q_ = nullptr;
+        uint32_t          clock_seq_seen_ = 0;
+        uint32_t          clock_dropped_ = 0;
+        uint32_t          late_left_out_ = 0;    // epochs the board marked late, not on the line
+
+        // What the board says it does with them (the aiding block), and the
+        // 4002 frames it took, from its 8-bit count against what went out.
+        sdr_aid::EpochAid last_aid_;
+        uint32_t          n_aid_ = 0;            // epochs that carried the block
+        sdr_aid::EchoCount echo_;
+        // The counts at the console's last link line.
+        uint32_t          line_sent_[sdr_aid::kGeometry + 1] = {};
+        uint32_t          line_took_ = 0;
+        uint32_t          line_of_ = 0;
+        uint32_t          line_aside_ = 0;
+#endif
 };
 
 #endif

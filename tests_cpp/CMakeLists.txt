@@ -2157,6 +2157,31 @@ target_include_directories(test_gnss_time_sync PRIVATE
 target_link_libraries(test_gnss_time_sync GTest::gtest_main)
 gtest_discover_tests(test_gnss_time_sync)
 
+# ---------- test_sdr_aid ----------
+# TinkerRocket's message 4002, the flight computer to the gnss-sdr-dev board
+# (TR_GNSSReceiverSdr_Serial/SdrAid.cpp): the golden frames the board's own
+# tests pin too, the stamp, the P1 bench script and the schedule that paces
+# it, the aiding block the board appends to its 4001 epoch and the frames it
+# says it took, and the bench's stamps from the board's epochs through
+# GnssTimeSync. SdrAid.cpp is built as the firmware builds it, with no fused
+# multiply-add, so its bytes are the reference codec's on any host.
+add_executable(test_sdr_aid test_sdr_aid.cpp
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrAid.cpp
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrRtcm.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/GnssTimeSync.cpp
+)
+set_source_files_properties(${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrAid.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
+target_include_directories(test_sdr_aid PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_sdr_aid GTest::gtest_main)
+gtest_discover_tests(test_sdr_aid)
+
 # ---------- wire fixture corpus (docs/plans/android-port.md §2.1) ----------
 # Golden-vector generation from the REAL packed structs: wire_fixture_gen
 # writes tests_cpp/fixtures/wire/ (committed), test_wire_fixture_freshness

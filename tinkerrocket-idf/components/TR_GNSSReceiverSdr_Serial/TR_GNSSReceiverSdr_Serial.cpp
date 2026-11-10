@@ -2,12 +2,16 @@
 #include "TR_GNSSReceiverSdr_Serial.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 
 #include <driver/gpio.h>
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <freertos/task.h>
+#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
+#include <GnssClockRecord.h>   // TR_GNSSReceiverLC86_Serial: GNSS_CLOCK_MSG's record
+#endif
 
 static const char* TAG = "GNSS";
 
@@ -16,7 +20,12 @@ static const char* TAG = "GNSS";
 // driver (sdkconfig.defaults.mosaic, checked by gnss_auto_driver.cpp): at
 // 2 Mbaud the 128-byte FIFO lasts 0.64 ms, less than a flash write.
 static constexpr size_t kUartRxBuf = 16384;
-static constexpr size_t kUartTxBuf = 256;   // nothing is ever sent
+// What goes out: a bench image's 4002 frames, one of 52 B at most a
+// millisecond (SdrAid.h AidSchedule), so the ring is all but empty at every
+// write. sendAidFrame checks its room first; kTxItemSlack is a margin over
+// what the driver says is free (it already takes off its own item header).
+static constexpr size_t kUartTxBuf = 256;
+static constexpr size_t kTxItemSlack = 32;
 // Interrupt at half the FIFO: 320 us of margin before a late one loses bytes.
 static constexpr int kRxFullThreshold = 64;
 
@@ -62,6 +71,12 @@ bool TR_GNSSReceiverSdrSerial::begin(uint8_t update_rate_hz,
             ring_ = xRingbufferCreateStatic(kRingBytes, RINGBUF_TYPE_NOSPLIT, ring_mem_, &ring_struct_);
         }
     }
+#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
+    if (clock_q_ == nullptr)
+    {
+        clock_q_ = xQueueCreateStatic(kClockQDepth, sizeof(GnssClockData), clock_q_mem_, &clock_q_struct_);
+    }
+#endif
 
     if (!uart_is_driver_installed(_uartPort))
     {
@@ -192,6 +207,9 @@ void TR_GNSSReceiverSdrSerial::onFrame(const uint8_t* frame, size_t len, size_t 
             if (sdr_rtcm::decodeTrEpoch(frame, len, e))
             {
                 noteEpoch(e);
+#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
+                noteLink(frame, len, e, end_us);
+#endif
             }
             else if (sdr_rtcm::decodeTrFix(frame, len, f))
             {
@@ -237,6 +255,89 @@ void TR_GNSSReceiverSdrSerial::noteEpoch(const sdr_rtcm::TrEpoch& e)
     last_tow_ms_ = e.tow_ms;
 }
 
+#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
+void TR_GNSSReceiverSdrSerial::noteLink(const uint8_t* frame, size_t len, const sdr_rtcm::TrEpoch& e, int64_t end_us)
+{
+    sdr_aid::EpochAid aid;
+    if (!sdr_aid::decodeEpochAid(frame, len, aid)) return;
+
+    // The clock line: each epoch at its latch against when its 4001 ended
+    // here, but those the board marks late (sdr_aid::latchGps). The board's
+    // delay from the latch to that frame stays in (latency_s 0).
+    double latch_gps = 0.0;
+    if (sdr_aid::latchGps(e, aid, latch_gps))
+    {
+        time_sync_.addSample(latch_gps, end_us);
+    }
+    else
+    {
+        late_left_out_++;
+    }
+    // The line each time it moves, from this task, to the flight loop
+    if (clock_q_ != nullptr && time_sync_.lineSeq() != clock_seq_seen_)
+    {
+        clock_seq_seen_ = time_sync_.lineSeq();
+        lc86::GnssTimeSync::Snapshot snap;
+        time_sync_.snapshot(snap);
+        GnssClockData rec;
+        lc86::gnssClockRecord(snap, static_cast<uint32_t>(end_us), rec);
+        if (xQueueSend(clock_q_, &rec, 0) != pdTRUE) clock_dropped_++;
+    }
+
+    // What the board says it took, against what went out
+    if (!aid.present) return;
+    uint32_t sent = 0;
+    for (uint8_t sub = sdr_aid::kAttitude; sub <= sdr_aid::kGeometry; sub++)
+        sent += aid_sent_[sub].load(std::memory_order_relaxed);
+    echo_.add(aid.fc_frames, sent, end_us);
+    last_aid_ = aid;
+    n_aid_++;
+}
+#endif
+
+// ── To the board ────────────────────────────────────────────────────────
+
+bool TR_GNSSReceiverSdrSerial::sendAidFrame(const uint8_t* frame, size_t len)
+{
+    // uart_write_bytes waits on portMAX_DELAY for the TX ring and spins while
+    // it is full (IDF uart.c uart_tx_all), so its room is checked first, by
+    // its one writer (the poll task only reads, under the driver's other
+    // lock). Never uart_wait_tx_done.
+    if (frame == nullptr || len < 6 || len > sdr_aid::kMaxFrame)
+    {
+        aid_bad_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    if (!uart_is_driver_installed(_uartPort))
+    {
+        aid_no_uart_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    size_t room = 0;
+    if (uart_get_tx_buffer_free_size(_uartPort, &room) != ESP_OK || room < len + kTxItemSlack)
+    {
+        aid_tx_full_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    if (uart_write_bytes(_uartPort, frame, len) != static_cast<int>(len))
+    {
+        aid_bad_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    aid_sent_[frame[4] & 0x0F].fetch_add(1, std::memory_order_relaxed);   // the sub-type
+    return true;
+}
+
+bool TR_GNSSReceiverSdrSerial::takeClockLine(GnssClockData& out)
+{
+#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
+    return clock_q_ != nullptr && xQueueReceive(clock_q_, &out, 0) == pdTRUE;
+#else
+    (void)out;
+    return false;
+#endif
+}
+
 bool TR_GNSSReceiverSdrSerial::pollRawFrame(uint8_t* out, size_t cap, size_t& len, uint32_t& time_us)
 {
     if (ring_ == nullptr) return false;
@@ -277,26 +378,104 @@ void TR_GNSSReceiverSdrSerial::logStatus()
                  static_cast<unsigned long>(st.fw), st.fw_dirty ? "-dirty" : "", static_cast<unsigned long>(st.uptime_s),
                  static_cast<unsigned>(st.ntrack), static_cast<unsigned>(st.nlock),
                  static_cast<unsigned long>(n_status_));
-        return;
     }
-    if (frames == 0)
+    else if (frames == 0)
     {
         ESP_LOGI(TAG, "gnss-sdr-dev: nothing heard yet (a board with the status message sends one a second from its "
                       "receiver's start, older firmware only from its first fix; %lu bytes in no frame, UART "
                       "overflows %lu)",
                  static_cast<unsigned long>(framer_.skipped()), static_cast<unsigned long>(fifo_overflows_));
-        return;
     }
-    ESP_LOGI(TAG, "gnss-sdr-dev: %.1f frames/s, %.1f epochs/s (%u observables, epoch gaps %lu, back-steps %lu); "
-                  "%lu fixes (%lu valid, last %s %u sats); %lu MSM7, %lu ephemerides, %lu other; "
-                  "CRC fails %lu, bytes in no frame %lu, UART overflows %lu, log ring drops %lu; "
-                  "poll task stack %lu B free",
-             fps, eps, static_cast<unsigned>(last_nobs_), static_cast<unsigned long>(epoch_gaps_),
-             static_cast<unsigned long>(epoch_backsteps_), static_cast<unsigned long>(n_fixes_),
-             static_cast<unsigned long>(n_fix_valid_), last_fix_valid_ ? "valid" : "none,",
-             static_cast<unsigned>(last_fix_nsat_), static_cast<unsigned long>(n_msm_),
-             static_cast<unsigned long>(n_eph_), static_cast<unsigned long>(n_other_),
-             static_cast<unsigned long>(framer_.crcFails()), static_cast<unsigned long>(framer_.skipped()),
-             static_cast<unsigned long>(fifo_overflows_), static_cast<unsigned long>(ring_dropped_),
-             static_cast<unsigned long>(uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t)));
+    else
+    {
+        ESP_LOGI(TAG, "gnss-sdr-dev: %.1f frames/s, %.1f epochs/s (%u observables, epoch gaps %lu, back-steps %lu); "
+                      "%lu fixes (%lu valid, last %s %u sats); %lu MSM7, %lu ephemerides, %lu other; "
+                      "CRC fails %lu, bytes in no frame %lu, UART overflows %lu, log ring drops %lu; "
+                      "poll task stack %lu B free",
+                 fps, eps, static_cast<unsigned>(last_nobs_), static_cast<unsigned long>(epoch_gaps_),
+                 static_cast<unsigned long>(epoch_backsteps_), static_cast<unsigned long>(n_fixes_),
+                 static_cast<unsigned long>(n_fix_valid_), last_fix_valid_ ? "valid" : "none,",
+                 static_cast<unsigned>(last_fix_nsat_), static_cast<unsigned long>(n_msm_),
+                 static_cast<unsigned long>(n_eph_), static_cast<unsigned long>(n_other_),
+                 static_cast<unsigned long>(framer_.crcFails()), static_cast<unsigned long>(framer_.skipped()),
+                 static_cast<unsigned long>(fifo_overflows_), static_cast<unsigned long>(ring_dropped_),
+                 static_cast<unsigned long>(uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t)));
+    }
+#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
+    logLink();
+#endif
 }
+
+#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
+void TR_GNSSReceiverSdrSerial::logLink()
+{
+    // The bench's second line, after the first, every 30 s. It starts
+    // "gnss-sdr-dev:" too, so the rig kit's grep for that shows both. The
+    // counts are this line's 30 s. What the board took comes from the 8-bit
+    // count in its epochs (sdr_aid::EchoCount), of what went out between
+    // them: it lags what was sent by an epoch or so.
+    uint32_t sent[sdr_aid::kGeometry + 1] = {};
+    for (uint8_t sub = sdr_aid::kAttitude; sub <= sdr_aid::kGeometry; sub++)
+    {
+        const uint32_t n = aid_sent_[sub].load(std::memory_order_relaxed);
+        sent[sub] = n - line_sent_[sub];
+        line_sent_[sub] = n;
+    }
+    const uint32_t took = echo_.took() - line_took_;
+    const uint32_t of = echo_.of() - line_of_;
+    const uint32_t aside = echo_.setAside() - line_aside_;
+    line_took_ = echo_.took();
+    line_of_ = echo_.of();
+    line_aside_ = echo_.setAside();
+
+    char line_s[160];
+    if (time_sync_.valid())
+    {
+        snprintf(line_s, sizeof(line_s), "valid (%.1f ppm, rms %.2f ms, 90 %% %.1f ms late, %lu restarts, "
+                                         "%lu records lost, %lu late epochs left out)",
+                 time_sync_.driftPpm(), time_sync_.envelopeRmsMs(), time_sync_.lateness90Ms(),
+                 static_cast<unsigned long>(time_sync_.restarts()), static_cast<unsigned long>(clock_dropped_),
+                 static_cast<unsigned long>(late_left_out_));
+    }
+    else
+    {
+        snprintf(line_s, sizeof(line_s), "not valid yet (%lu samples, %lu records lost, %lu late epochs left out)",
+                 static_cast<unsigned long>(time_sync_.samples()), static_cast<unsigned long>(clock_dropped_),
+                 static_cast<unsigned long>(late_left_out_));
+    }
+
+    char board_s[224];
+    if (n_epochs_ == 0)
+    {
+        snprintf(board_s, sizeof(board_s), "no epochs from the board yet");
+    }
+    else if (n_aid_ == 0)
+    {
+        snprintf(board_s, sizeof(board_s), "the board's epochs carry no aiding block (firmware from before 4002)");
+    }
+    else
+    {
+        static const char* const kPhases[8] = {"none", "pad", "boost", "coast", "descent", "landed", "6", "7"};
+        static const char* const kBy[4] = {"the GPS channels", "the flight computer", "a caller", "the board's IMU"};
+        const sdr_aid::EpochAid& a = last_aid_;
+        char aside_s[64] = "";
+        if (aside > 0)
+        {
+            snprintf(aside_s, sizeof(aside_s), " (%lu more sent where its count could not be followed)",
+                     static_cast<unsigned long>(aside));
+        }
+        snprintf(board_s, sizeof(board_s), "the board took %lu of %lu%s, holds the phase %s, its loops %s by %s, "
+                                           "attitude %s, state %s",
+                 static_cast<unsigned long>(took), static_cast<unsigned long>(of), aside_s, kPhases[a.phase & 7],
+                 a.boost ? "boost" : "quiet", kBy[a.by & 3], a.att ? "yes" : "no", a.nav ? "yes" : "no");
+    }
+
+    ESP_LOGI(TAG, "gnss-sdr-dev: link out (bench script): sent %lu attitude, %lu state, %lu phase, %lu geometry "
+                  "(TX full %lu, no UART %lu, bad writes %lu); time line %s; %s",
+             static_cast<unsigned long>(sent[sdr_aid::kAttitude]), static_cast<unsigned long>(sent[sdr_aid::kNavState]),
+             static_cast<unsigned long>(sent[sdr_aid::kPhase]), static_cast<unsigned long>(sent[sdr_aid::kGeometry]),
+             static_cast<unsigned long>(aid_tx_full_.load(std::memory_order_relaxed)),
+             static_cast<unsigned long>(aid_no_uart_.load(std::memory_order_relaxed)),
+             static_cast<unsigned long>(aid_bad_.load(std::memory_order_relaxed)), line_s, board_s);
+}
+#endif

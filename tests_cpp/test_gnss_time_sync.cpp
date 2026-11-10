@@ -269,6 +269,38 @@ TEST(GnssTimeSync, TheLoggedLinePlacesEpochsExactlyAsMcuAt)
     }
 }
 
+TEST(GnssTimeSync, GnssClockGpsAtIsTheLinesGpsAt)
+{
+    // What the flight loop has is the record, not the driver's GnssTimeSync
+    // (the bench's 4002 stamps, main.cpp): GPS time read off each record the
+    // line gives as it moves, over ten minutes, is the line's own gpsAt, and
+    // nothing is read off one before the line is valid.
+    Receiver rx;
+    GnssTimeSync ts = calibrated(rx);
+    int compared = 0;
+    for (int sec = 0; sec < 600; ++sec)
+    {
+        rx.feed(ts, rx.gps0 + sec, 1.0);
+        GnssTimeSync::Snapshot s;
+        ts.snapshot(s);
+        GnssClockData c;
+        lc86::gnssClockRecord(s, 0u, c);
+        for (double ahead : {-0.75, 0.05, 0.5, 2.5})
+        {
+            const int64_t mcu = static_cast<int64_t>(std::llround(rx.mcuUs(rx.gps0 + sec + ahead)));
+            double want = 0.0, got = 0.0;
+            const bool valid = ts.gpsAt(mcu, want);
+            ASSERT_EQ(lc86::gnssClockGpsAt(c, mcu, got), valid) << "second " << sec;
+            if (!valid)
+                continue;
+            EXPECT_NEAR(got, want, 1e-6) << "second " << sec << ", " << ahead << " s on";
+            compared++;
+        }
+    }
+    EXPECT_TRUE(ts.valid());
+    EXPECT_GT(compared, 4 * 580);
+}
+
 TEST(GnssTimeSync, TheLineSeqCountsEachSecondFiledAndEachRestart)
 {
     Receiver rx;

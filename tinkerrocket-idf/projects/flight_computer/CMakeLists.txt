@@ -138,6 +138,16 @@ if(TR_BENCH_MB_BLOCKS)
     add_compile_definitions(TR_BENCH_MB_BLOCKS="${TR_BENCH_MB_BLOCKS}")
     message(STATUS "TR_BENCH_MB_BLOCKS=${TR_BENCH_MB_BLOCKS} -- the bands' combination's bench ENABLED (bench)")
 endif()
+# Bench (P1 of docs/plans/sdr-v10-aided-receiver-plan.md): with the
+# gnss-sdr-dev board on J1 the FC sends it TinkerRocket 4002 frames of scripted
+# values (TR_GNSSReceiverSdr_Serial/SdrAid.h), stamped in GPS time from the
+# board's own epochs, and logs each beside the board's frames (0x95). The auto
+# images only (the V9's and V10's, and a V8's with -DTR_GNSS_AUTO=1; main.cpp
+# refuses any other). Never set for flight.
+if(TR_BENCH_SDR_AID)
+    add_compile_definitions(TR_BENCH_SDR_AID=1)
+    message(WARNING "TR_BENCH_SDR_AID=1 -- scripted 4002 frames to the gnss-sdr-dev board (bench)")
+endif()
 # Bench: the pad's heading turned this many degrees (added to the magnetic
 # declination), so the heading fit has a known error to find -- a rig replay
 # with and without it should differ by it in the fit's turn. Never set for flight.

@@ -1656,9 +1656,20 @@ bool SensorCollector::getGNSSClockLine(GnssClockData& out)
     return gnss_receiver.takeClockLine(out);   // the driver's queue: no semaphore
 #elif (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO)
     if (!use_gnss || !gnss_online_) return false;
-    return gnss_receiver.takeClockLine(out);   // its PPS line (GCL_PPS)
+    return gnss_receiver.takeClockLine(out);   // the mosaic's PPS line (GCL_PPS), or a bench gnss-sdr-dev board's
 #else
     (void)out;
+    return false;
+#endif
+}
+
+bool SensorCollector::sendGNSSAidFrame(const uint8_t* frame, size_t len)
+{
+#if defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.sendAidFrame(frame, len);   // the gnss-sdr-dev board's driver, or false
+#else
+    (void)frame; (void)len;
     return false;
 #endif
 }
