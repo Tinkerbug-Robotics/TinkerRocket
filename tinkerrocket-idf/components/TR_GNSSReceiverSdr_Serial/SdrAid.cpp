@@ -510,12 +510,12 @@ void EchoCount::add(uint8_t fc_frames, uint32_t sent, int64_t at_us)
 namespace
 {
 
-constexpr int64_t kAttitudeUs = 10000;
-constexpr int64_t kNavStateUs = 50000;
+constexpr int64_t kAttitudeUs = 100000;
+constexpr int64_t kNavStateUs = 200000;
 constexpr int64_t kPhaseFastUs = 100000;     // after a change ...
-constexpr int64_t kPhaseFastForUs = 1000000; // ... for this long
+constexpr int64_t kPhaseFastForUs = 300000;  // ... for this long: three repeats
 constexpr int64_t kPhaseUs = 1000000;
-constexpr int64_t kGeometryUs = 1000000;
+constexpr int64_t kGeometryUs = 10000000;
 constexpr int64_t kNavStateOffsetUs = 5000;  // each one's offset from the attitude's passes
 constexpr int64_t kPhaseOffsetUs = 3000;
 constexpr int64_t kGeometryOffsetUs = 7000;

@@ -9499,33 +9499,39 @@ static void rawBenchPanicOnce(uint32_t now_ms)
 // Bench (P1 of docs/plans/sdr-v10-aided-receiver-plan.md; CMake
 // -DTR_BENCH_SDR_AID=1, an image whose version says "-bench", never flown):
 // the P1 script's TinkerRocket 4002 frames to the gnss-sdr-dev board on J1,
-// one a pass at most, paced by sdr_aid::AidSchedule (the attitude at 100 Hz,
-// the state at 20 Hz, the phase on each change and then at 10 Hz for a second
-// and 1 Hz, the geometry at 1 Hz). Each is stamped in GPS time off the board's
-// own clock line and logged beside the board's frames (GNSS_RTCM_MSG). Nothing
-// goes out unless the receiver on J1 is the board and its line is valid and
-// fresh: from about 10 s after the board's first fix until 2.5 s after its
-// epochs stop. The doubles are worked only when a frame is due, about one pass
-// in eight. Never blocks: the driver checks the UART's TX ring for room first,
-// and a frame that found none goes on the next pass (the driver counts it).
+// one a pass at most, paced by sdr_aid::AidSchedule (the attitude at 10 Hz,
+// the state at 5 Hz, the phase on each change, three times 100 ms apart after
+// it and then at 1 Hz, the geometry at the start and every 10 s). Each is
+// stamped in GPS time off the board's own clock line and logged beside the
+// board's frames (GNSS_RTCM_MSG). Nothing goes out unless the receiver on J1
+// is the board and its line is valid and fresh: from about 10 s after the
+// board's first fix until 2.5 s after its epochs stop. The stamp, which gives
+// the script's phase key, is worked out only when a frame is due or 10 ms
+// after the last look (about one pass in ten), so a phase change goes within
+// about 10 ms of its instant (AidSchedule::anyDue); a frame's values only
+// when it goes. Never blocks: the driver checks the UART's TX ring for room
+// first, and a frame that found none goes on the next pass (the driver counts
+// it).
 static void sdrAidBenchStep(const GnssClockData& line)
 {
     static sdr_aid::AidSchedule sched;
     static uint8_t seq[sdr_aid::kGeometry + 1] = {};
+    static int64_t look_us = 0;   // the next look at the script's key with no frame due
     if (sensor_collector_hw.gnssType() != GNSS_TYPE_SDR || (line.flags & GCL_VALID) == 0)
         return;
     const int64_t now_us = esp_timer_get_time();
     if ((uint32_t)now_us - line.time_us >= 2500000u)
         return;   // the board's epochs stopped moving the line
-    if (!sched.anyDue(now_us))
-        return;
+    if (!sched.anyDue(now_us) && now_us < look_us)
+        return;   // no frame due, and the key looked at under 10 ms ago
+    look_us = now_us + sdr_aid::AidSchedule::kKeyLookUs;
 
     double gps_s = 0.0;
     if (!lc86::gnssClockGpsAt(line, now_us, gps_s))
         return;
     sdr_aid::Header h = sdr_aid::scriptStamp(gps_s);   // src script, test, tq 5, the script's whole ms
     const uint32_t key = sdr_aid::scriptPhaseKey(h.tow_ms);
-    const uint8_t sub = sched.due(now_us, key);        // a change goes with the first frame due after it
+    const uint8_t sub = sched.due(now_us, key);        // a changed key first; 0: a look that found none
     h.seq = seq[sub];
 
     uint8_t frame[sdr_aid::kMaxFrame];
@@ -9540,8 +9546,13 @@ static void sdrAidBenchStep(const GnssClockData& line)
     }
     // Through the hardware collector, as the clock line comes: a sensor sim
     // does not stop it.
-    if (len == 0 || !sensor_collector_hw.sendGNSSAidFrame(frame, len))
+    if (len == 0)
         return;
+    if (!sensor_collector_hw.sendGNSSAidFrame(frame, len))
+    {
+        look_us = now_us;   // the next pass looks again: a change found on a look goes then too
+        return;
+    }
     seq[sub]++;
     sched.sent(sub, now_us, key);
 

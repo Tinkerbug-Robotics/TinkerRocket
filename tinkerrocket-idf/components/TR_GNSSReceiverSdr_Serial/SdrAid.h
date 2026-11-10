@@ -5,12 +5,12 @@
 // frames of TinkerRocket's message 4002 (in the range RTCM keeps for
 // manufacturers, not registered, as the board's own 4001 is), one sub-type
 // each:
-//   - 1, the attitude: body to ECEF and the body's rates, 100 a second;
-//   - 2, the navigation state: ECEF position and velocity, 20 a second;
+//   - 1, the attitude: body to ECEF and the body's rates, 10 a second;
+//   - 2, the navigation state: ECEF position and velocity, 5 a second;
 //   - 3, the flight phase and the tracking loops it asks for, on each change,
-//     then every 100 ms for a second, then every second;
+//     then three times 100 ms apart, then every second;
 //   - 4, the geometry: the antenna's lever arm and the board's mounting,
-//     every second.
+//     at the start, then every 10 s.
 // Each is stamped with the GPS instant its values hold, carries its own
 // sequence number, and says where its values come from (src, test): the P1
 // bench script or the vehicle's filter. Layouts: P1 of
@@ -74,8 +74,11 @@ enum : uint8_t
 };
 // The flight phase (sub-type 3).
 enum : uint8_t { kPhUnknown = 0, kPhPad = 1, kPhBoost = 2, kPhCoast = 3, kPhDescent = 4, kPhLanded = 5 };
-// The loops the flight computer asks the board for: none (the board's own
-// decision), its quiet profile, its boost profile.
+// The loops the flight computer asks the board for: none (the board's quiet
+// loops under its `rx aid fc`, the boot's; its GPS channels' own decision
+// only under `rx aid gps`), its quiet profile, its boost profile. The board
+// refuses a boost after this side has reported a descent or a landing, until
+// it reports the pad; a coast leaves one open (a second stage).
 enum : uint8_t { kLoopsNone = 0, kLoopsQuiet = 1, kLoopsBoost = 2 };
 
 // An unknown 1-sigma.
@@ -195,8 +198,9 @@ struct EpochAid
     uint8_t check = 0;        // the aiding check: 0 not run, 1 passing, 2 refused
     bool    boost = false;    // the boost profile is the loops' target
     bool    wide = false;     // the loops in force still more than 10 % wider than the quiet profile
-    uint8_t by = 0;           // who set the target: 0 the GPS channels, 1 the flight computer's phase,
-                              // 2 a caller (`rx aid off`), 3 the board's IMU
+    uint8_t by = 0;           // who set the target: 0 the GPS channels, 1 the flight computer (its
+                              // request, or the quiet loops it leaves without one), 2 a caller
+                              // (`rx aid off`), 3 the board's IMU
     bool    planned = false;  // an aided start from the flight computer's state
     uint8_t phase = 0;        // the flight computer's phase the board holds (kPh*), 0 none
     bool    att = false;      // a flight computer attitude is in the receiver
@@ -256,26 +260,29 @@ private:
 // ── When each frame goes ────────────────────────────────────────────────
 // The sender's pacing, one frame at most per call and none within kSpacingUs
 // of the last, so the board's 128-byte FIFO never holds more than one frame:
-// in order, a changed phase key (at once), the attitude every 10 ms, the
-// navigation state every 50 ms (5 ms after the attitude), the phase repeated
-// every 100 ms for a second after a change and every second after that (3 ms
-// after the change's pass, most often an attitude's: a change goes with the
-// first frame due after it), and the geometry every second (7 ms after the
-// attitude). Each next due time steps by its period, so the mean rates are
-// exact; one more than a period behind restarts from now, so a stall brings
-// no burst after it.
+// in order, a changed phase key (at once), the attitude every 100 ms, the
+// navigation state every 200 ms (5 ms after the attitude), the phase repeated
+// three times 100 ms apart after a change and every second after that (3 ms
+// after the change's pass), and the geometry at the start and every 10 s
+// (7 ms after the attitude): about 16 frames a second. Each next due time
+// steps by its period, so the mean rates are exact; one more than a period
+// behind restarts from now, so a stall brings no burst after it.
 class AidSchedule
 {
 public:
     static constexpr int64_t kSpacingUs = 1000;
+    static constexpr int64_t kKeyLookUs = 10000;   // see anyDue
 
     // The sub-type to send now (0: none), given the phase key as the caller
     // has it now: a key that is not the last one sent goes first.
     uint8_t due(int64_t now_us, uint32_t phase_key);
     // Whether anything is due now, before the caller knows the key (the
-    // bench's script has its key only from the frame's stamp, worked out
-    // only when a frame is due): then due() with the key at the stamp, which
-    // gives a sub-type whenever this said yes.
+    // bench's script has its key only from a stamp, worked out when a frame
+    // is due): then due() with the key at the stamp, which gives a sub-type
+    // whenever this said yes. It never sees a changed key, so such a caller
+    // also looks at its key kKeyLookUs after its last look (due() then gives
+    // the change, or 0): a change goes within about that of its instant, not
+    // with the next frame due, which can be 100 ms away.
     bool anyDue(int64_t now_us);
     // A frame of `sub` went out at now_us; a phase frame carries phase_key.
     void sent(uint8_t sub, int64_t now_us, uint32_t phase_key);

@@ -3095,7 +3095,7 @@ static constexpr uint8_t ISM6_BATCH_MAX      = 10;
 // epoch (sub-type 1) and each fix (sub-type 2), and its ephemerides
 // (1019/1046/1042), about 400 frames and 40-55 kB a second. A bench image
 // (TR_BENCH_SDR_AID) also logs here every frame it sent the board:
-// TinkerRocket's message 4002 (TR_GNSSReceiverSdr_Serial/SdrAid.h), about 120
+// TinkerRocket's message 4002 (TR_GNSSReceiverSdr_Serial/SdrAid.h), about 16
 // a second, each whole in one record, time_us when it went out. Only the
 // flight computer sends 4002 and only the board 4001, so the number gives the
 // direction.

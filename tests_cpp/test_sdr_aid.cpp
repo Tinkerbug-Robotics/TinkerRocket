@@ -1090,13 +1090,15 @@ TEST(SdrAid, TheBenchStampsComeFromTheBoardsLatches)
 
 namespace {
 
-// One pass of the bench step (main.cpp sdrAidBenchStep): anything due, then
-// the phase key at the frame's stamp (keyAt, worked out only then), then the
-// sub-type with it, sent. 0: nothing went.
+// One pass of the bench step (main.cpp sdrAidBenchStep): anything due, or
+// kKeyLookUs after the last look, then the phase key at the pass's stamp
+// (keyAt, worked out only then), then the sub-type with it, sent. 0: nothing
+// went.
 template <typename KeyAt>
-uint8_t benchPass(AidSchedule& s, int64_t now, KeyAt keyAt, uint32_t& key)
+uint8_t benchPass(AidSchedule& s, int64_t& look, int64_t now, KeyAt keyAt, uint32_t& key)
 {
-    if (!s.anyDue(now)) return 0;
+    if (!s.anyDue(now) && now < look) return 0;
+    look = now + AidSchedule::kKeyLookUs;
     key = keyAt(now);
     const uint8_t sub = s.due(now, key);
     if (sub != 0) s.sent(sub, now, key);
@@ -1113,10 +1115,11 @@ struct Sent
 // Passes 1 ms apart from `from` to `to`, each on time, one phase key.
 void passes(AidSchedule& s, int64_t from, int64_t to, std::vector<Sent>& out)
 {
+    int64_t look = 0;
     for (int64_t now = from; now < to; now += 1000)
     {
         uint32_t k = 0;
-        const uint8_t sub = benchPass(s, now, [](int64_t) { return 9u; }, k);
+        const uint8_t sub = benchPass(s, look, now, [](int64_t) { return 9u; }, k);
         if (sub != 0) out.push_back({now, sub, k});
     }
 }
@@ -1126,10 +1129,11 @@ void passes(AidSchedule& s, int64_t from, int64_t to, std::vector<Sent>& out)
 TEST(AidSchedule, RatesSpacingAndChanges)
 {
     // The bench step's loop: 10 s of passes 1 ms apart, each up to 0.5 ms
-    // late, one stall of 5 ms; the phase key from the script at each frame's
-    // stamp, the hotshot scene's launch at 1.1637 s and its burnout at
-    // 5.2537 s (off the attitude's 10 ms grid).
+    // late, one stall of 5 ms; the phase key from the script at the stamp of
+    // each pass that looks, the hotshot scene's launch at 1.1637 s and its
+    // burnout at 5.2537 s (off the attitude's 100 ms grid).
     AidSchedule s;
+    int64_t look = 0;
     std::mt19937 rng{1600};
     std::uniform_int_distribution<int64_t> late(0, 500);
     const int64_t t0 = 5000000;
@@ -1147,7 +1151,7 @@ TEST(AidSchedule, RatesSpacingAndChanges)
         if (i > 4000 && i < 4005) continue;   // the stall
         const int64_t now = t0 + 1000LL * i + late(rng);
         uint32_t k = 0;
-        const uint8_t sub = benchPass(s, now, keyAt, k);
+        const uint8_t sub = benchPass(s, look, now, keyAt, k);
         if (sub == 0) continue;
         if (any)
         {
@@ -1171,11 +1175,11 @@ TEST(AidSchedule, RatesSpacingAndChanges)
         any = true;
     }
 
-    // Each change, then its ten repeats 100 ms apart from 3 ms after it (off
-    // the attitude's pass the change took), then one a second until the next
+    // Each change, then its three repeats 100 ms apart from 3 ms after it
+    // (off the pass the change took), then one a second until the next
     // change: each at or after its time and within a few passes of it (a
     // frame due with it goes first, and a pass on time after one 0.5 ms late
-    // is inside the 1 ms spacing: 4.2 ms at most over 120 000 runs of this
+    // is inside the 1 ms spacing: 3.5 ms at most over 120 000 runs of this
     // loop's jitter and alignments).
     int changes = 0;
     for (size_t i = 0; i < phase.size();)
@@ -1185,33 +1189,33 @@ TEST(AidSchedule, RatesSpacingAndChanges)
         size_t j = i + 1;
         for (int n = 1; j < phase.size() && phase[j].key == phase[i].key; j++, n++)
         {
-            const int64_t due = c + 3000 + (n <= 10 ? 100000LL * n : 1000000LL * (n - 9));
+            const int64_t due = c + 3000 + (n <= 3 ? 100000LL * n : 300000LL + 1000000LL * (n - 3));
             EXPECT_GE(phase[j].t - due, 0) << "repeat " << n << " of the change at " << c - t0;
             EXPECT_LT(phase[j].t - due, 6000) << "repeat " << n << " of the change at " << c - t0;
         }
         i = j;
     }
     EXPECT_EQ(changes, 3);   // the first key, the launch, the burnout
-    EXPECT_NEAR(count[kAttitude], 1000, 1);
-    EXPECT_NEAR(count[kNavState], 200, 1);
-    EXPECT_NEAR(count[kGeometry], 10, 1);
-    EXPECT_NEAR(count[kPhase], 10 + 10 * changes, 2);
-    // Within the attitude's 10 ms, and the pass that finds it due (1 ms, up
-    // to 0.5 ms late)
-    EXPECT_LE(worst_delay_us, 10000.0 + 1500.0);
+    EXPECT_NEAR(count[kAttitude], 100, 1);
+    EXPECT_NEAR(count[kNavState], 50, 1);
+    EXPECT_EQ(count[kGeometry], 1);   // at the start; the next 10 s after it, past the last pass
+    EXPECT_NEAR(count[kPhase], 10 + 3 * changes, 2);
+    // Within a look's 10 ms, and the pass that looks (1 ms, up to 0.5 ms
+    // late)
+    EXPECT_LE(worst_delay_us, AidSchedule::kKeyLookUs + 1500.0);
     EXPECT_GT(worst_delay_us, 0.0);
 }
 
 TEST(AidSchedule, EachKeepsToItsOwnPass)
 {
-    // Passes 1 ms apart and on time, one phase key: after the first two (the
-    // key, then the attitude it held up), each frame goes on the pass it
-    // falls due, at its offset from the attitude's: the state 5 ms, the
-    // phase's repeats 3 ms (from the key's pass), the geometry 7 ms.
+    // Passes 1 ms apart and on time for 30 s, one phase key: after the first
+    // two (the key, then the attitude it held up), each frame goes on the
+    // pass it falls due, at its offset from the attitude's: the state 5 ms,
+    // the phase's repeats 3 ms (from the key's pass), the geometry 7 ms.
     AidSchedule s;
     std::vector<Sent> out;
     const int64_t t0 = 1000000;
-    passes(s, t0, t0 + 3000000, out);
+    passes(s, t0, t0 + 30000000, out);
     ASSERT_GE(out.size(), 2u);
     EXPECT_EQ(out[0].sub, kPhase);
     EXPECT_EQ(out[0].t, t0);
@@ -1224,54 +1228,55 @@ TEST(AidSchedule, EachKeepsToItsOwnPass)
         count[out[i].sub]++;
         if (i >= 2)
         {
-            EXPECT_EQ((out[i].t - t0) % 10000, offset[out[i].sub]) << i << ": sub-type " << int(out[i].sub);
+            EXPECT_EQ((out[i].t - t0) % 100000, offset[out[i].sub]) << i << ": sub-type " << int(out[i].sub);
         }
     }
     EXPECT_EQ(count[kAttitude], 300);
-    EXPECT_EQ(count[kNavState], 60);
-    EXPECT_EQ(count[kPhase], 1 + 10 + 1);   // the key, its ten repeats, the first a second later
+    EXPECT_EQ(count[kNavState], 150);
+    EXPECT_EQ(count[kPhase], 1 + 3 + 29);   // the key, its three repeats, then one a second
     EXPECT_EQ(count[kGeometry], 3);
 }
 
 TEST(AidSchedule, AfterAStallEachGoesOnceInItsOrder)
 {
-    // A second on time, then no pass for 15 ms over the attitude's, the
-    // phase's, the state's and the geometry's times (1.000, 1.003, 1.005 and
-    // 1.007 s on): they go one a pass in the order of priority, and the
+    // Ten seconds on time, then no pass for 315 ms over the attitude's, the
+    // state's, the geometry's and the phase's times (10.000, 10.005, 10.007
+    // and 10.303 s on): they go one a pass in the order of priority, and the
     // attitude, more than its period late, restarts from its pass: the next
-    // 10 ms after it, not on the next pass.
+    // 100 ms after it, not on the next pass.
     AidSchedule s;
     std::vector<Sent> out;
     const int64_t t0 = 1000000;
-    passes(s, t0, t0 + 1000000, out);
+    passes(s, t0, t0 + 10000000, out);
     out.clear();
-    passes(s, t0 + 1015000, t0 + 1050000, out);
+    passes(s, t0 + 10315000, t0 + 10700000, out);
     ASSERT_GE(out.size(), 4u);
     const uint8_t order[4] = {kAttitude, kNavState, kPhase, kGeometry};
     for (int i = 0; i < 4; i++)
     {
         EXPECT_EQ(out[i].sub, order[i]) << i;
-        EXPECT_EQ(out[i].t - t0, 1015000 + 1000 * i) << i;
+        EXPECT_EQ(out[i].t - t0, 10315000 + 1000 * i) << i;
     }
     std::vector<int64_t> attitude;
     for (const Sent& f : out)
         if (f.sub == kAttitude) attitude.push_back(f.t - t0);
-    EXPECT_EQ(attitude, (std::vector<int64_t>{1015000, 1025000, 1035000, 1045000}));
+    EXPECT_EQ(attitude, (std::vector<int64_t>{10315000, 10415000, 10515000, 10615000}));
 }
 
 TEST(AidSchedule, ALongStallBringsNoBurst)
 {
-    // 200 ms with no pass: each sub-type due goes once when the passes come
-    // back, then each keeps its rate from there.
+    // Ten seconds on time, then 2 s with no pass over a time of each
+    // sub-type: each goes once when the passes come back, then each keeps
+    // its rate from there.
     AidSchedule s;
     std::vector<Sent> out;
-    passes(s, 1000000, 3000000, out);
+    passes(s, 1000000, 11000000, out);
     out.clear();
-    passes(s, 3200000, 3300000, out);
+    passes(s, 13000000, 14000000, out);
     int count[5] = {};
     for (const Sent& f : out) count[f.sub]++;
-    EXPECT_EQ(count[kAttitude], 10);   // 100 ms at 100 Hz, the first at once
-    EXPECT_LE(count[kNavState], 3);
+    EXPECT_EQ(count[kAttitude], 10);   // 1 s at 10 Hz, the first at once
+    EXPECT_LE(count[kNavState], 6);
     EXPECT_LE(count[kPhase], 1);
     EXPECT_LE(count[kGeometry], 1);
 }
