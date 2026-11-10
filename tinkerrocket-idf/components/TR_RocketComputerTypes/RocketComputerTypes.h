@@ -945,18 +945,23 @@ static constexpr int8_t magTypeChipSign(uint8_t mag_type, int axis)
 }
 
 // Which GNSS receiver the flight computer talks to.  The build chooses it on
-// most boards (the u-blox on V7-V10, the LC86G on the Beetle); the V9 image
-// finds it at boot, because its J1 takes either the stock u-blox SAM-M10Q
-// carrier or a Septentrio mosaic-G5 harness (TR_Sensor_Collector's
-// TR_GNSS_DRIVER_AUTO, gnss_detect.h).  The FC names it in its FC_IDENTITY
-// push (BoardIdentity.h encodePayload) and the OC relays the name to the apps
-// as fc_identity's "fc_gnss", so the pad shows which receiver the FC found.
+// most boards (the u-blox on V7-V8, the LC86G on the Beetle); the V9 and V10
+// images find it at boot, because their J1 takes the stock u-blox SAM-M10Q
+// carrier, a Septentrio mosaic-G5 harness or TinkerRocket's own gnss-sdr-dev
+// receiver board (TR_Sensor_Collector's TR_GNSS_DRIVER_AUTO, gnss_detect.h).
+// The FC names it in its FC_IDENTITY push (BoardIdentity.h encodePayload) and
+// the OC relays the name to the apps as fc_identity's "fc_gnss", so the pad
+// shows which receiver the FC found.
 // NONE: no receiver came up (the FC flies GNSS-absent, #557), the FC is in
 // rescue mode, or the FC predates this.
 static constexpr uint8_t GNSS_TYPE_NONE   = 0;
 static constexpr uint8_t GNSS_TYPE_UBLOX  = 1;   // u-blox SAM-M10Q: UBX
 static constexpr uint8_t GNSS_TYPE_MOSAIC = 2;   // Septentrio mosaic-G5: SBF
 static constexpr uint8_t GNSS_TYPE_LC86G  = 3;   // Quectel LC86G (the Beetle): NMEA and RTCM3
+// TinkerRocket's gnss-sdr-dev board: RTCM3 only (MSM7 at up to 100 Hz,
+// TinkerRocket's message 4001, ephemerides), logged and not yet navigated on
+// (gnssTypeGivesFix).
+static constexpr uint8_t GNSS_TYPE_SDR    = 4;
 
 // The name each type goes by on the wire and on screen ("" for NONE).
 constexpr const char* gnssTypeName(uint8_t type)
@@ -964,7 +969,16 @@ constexpr const char* gnssTypeName(uint8_t type)
     return type == GNSS_TYPE_UBLOX  ? "u-blox"
          : type == GNSS_TYPE_MOSAIC ? "mosaic-G5"
          : type == GNSS_TYPE_LC86G  ? "LC86G"
+         : type == GNSS_TYPE_SDR    ? "gnss-sdr-dev"
          : "";
+}
+
+// Whether the FC's navigation filter takes this receiver's fixes. The
+// gnss-sdr-dev board's stream is logged only, so with it the FC flies
+// GNSS-absent (#557) as with no receiver at all.
+constexpr bool gnssTypeGivesFix(uint8_t type)
+{
+    return type == GNSS_TYPE_UBLOX || type == GNSS_TYPE_MOSAIC || type == GNSS_TYPE_LC86G;
 }
 
 // gnssTypeName() read back: NONE for an empty name or one this firmware does
@@ -972,7 +986,7 @@ constexpr const char* gnssTypeName(uint8_t type)
 constexpr uint8_t gnssTypeFromName(const char* name)
 {
     if (name == nullptr || name[0] == '\0') return GNSS_TYPE_NONE;
-    for (uint8_t t = GNSS_TYPE_UBLOX; t <= GNSS_TYPE_LC86G; t++)
+    for (uint8_t t = GNSS_TYPE_UBLOX; t <= GNSS_TYPE_SDR; t++)
     {
         const char* a = gnssTypeName(t);
         size_t i = 0;
@@ -3069,7 +3083,13 @@ static constexpr uint8_t ISM6_BATCH_MAX      = 10;
 // data.  The blocks joined in order ARE a standard .sbf file
 // (Data_Analysis/extract_gnss_sbf.py).  A block takes up to 15 parts
 // (GNSS_SBF_MAX_FRAME); MeasEpoch and MeasExtra take 7-9.
-static constexpr uint8_t GNSS_RTCM_MSG       = 0x95;  // FC→OC over I2S: GnssRtcmHeader + the GNSS receiver's own frame (RTCM3 or SBF)
+//
+// On the V9 and V10 with TinkerRocket's gnss-sdr-dev board on J1 it is that
+// board's RTCM3, every frame as on the mini: MSM7 1077/1097/1127 each epoch
+// (100 Hz in its measurement mode), TinkerRocket's message 4001 after each
+// epoch (sub-type 1) and each fix (sub-type 2), and its ephemerides
+// (1019/1046/1042), about 400 frames and 40-55 kB a second.
+static constexpr uint8_t GNSS_RTCM_MSG      = 0x95;  // FC→OC over I2S: GnssRtcmHeader + the GNSS receiver's own frame (RTCM3 or SBF)
                                                       // (or one part of it), straight to the log.  VARIABLE length.
 
 // FC→OC over I2S: the raw-GNSS shadow filter's state (#1600), 10 Hz while it
@@ -3689,8 +3709,9 @@ constexpr uint16_t imuRateResolve(uint16_t setting_hz, bool deployed)
 //     (gnss_log_policy.h). The IMU flies the board's own limit, 8k included.
 // The receiver streams the full set either way, to the FC, which parses all
 // of it, and to its own microSD card; only the FC's log is cut. No other
-// receiver has a stream this touches (the u-blox sends no raw data, and the
-// LC86G's RTCM3 is ~0.6 kB/s), so for them the setting changes nothing.
+// receiver has a stream this touches (the u-blox sends no raw data, the
+// LC86G's RTCM3 is ~0.6 kB/s, and the gnss-sdr-dev board's RTCM3 is logged
+// whole), so for them the setting changes nothing.
 // Kept like the IMU rate: the OC stores it and relays it, the FC stores it
 // and applies it (never INFLIGHT), and both start a fresh board on DETAILED.
 static constexpr uint8_t GNSS_LOG_DETAILED = 0;
@@ -3768,13 +3789,20 @@ constexpr bool antennaOffsetValid(const AntennaOffsetConfigData& a)
 // ("irate") and this limit ("irmax"), so the apps' menus offer only what
 // flies. A gnss_log that is no setting reads as DETAILED: the limit that is
 // safe for every log.
+// The gnss-sdr-dev board's RTCM3 (MSM7 at 100 Hz: ~40 kB/s on a 26-satellite
+// sky, ~71 kB/s with the framing budgeted at 32) is the same size of stream,
+// and the GNSS log setting does not thin it, so it holds the IMU at 3840 Hz
+// whatever the setting.
 static constexpr uint16_t IMU_RATE_MAX_HZ_MOSAIC = 3840;
+static constexpr uint16_t IMU_RATE_MAX_HZ_SDR    = 3840;
 constexpr uint16_t imuRateMaxForGnss(uint16_t board_max_hz, uint8_t gnss_type,
                                      uint8_t gnss_log = GNSS_LOG_DETAILED)
 {
     return (gnss_type == GNSS_TYPE_MOSAIC && gnss_log != GNSS_LOG_REDUCED &&
             board_max_hz > IMU_RATE_MAX_HZ_MOSAIC)
                ? IMU_RATE_MAX_HZ_MOSAIC
+           : (gnss_type == GNSS_TYPE_SDR && board_max_hz > IMU_RATE_MAX_HZ_SDR)
+               ? IMU_RATE_MAX_HZ_SDR
                : board_max_hz;
 }
 

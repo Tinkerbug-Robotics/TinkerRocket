@@ -1,15 +1,18 @@
-// Host tests for finding which GNSS receiver is on the V9's J1
-// (TR_Sensor_Collector/gnss_detect.cpp): the u-blox SAM-M10Q carrier or a
-// Septentrio mosaic-G5, each in the states a boot finds it in, against a
-// serial line simulated bit by bit. A receiver heard at the wrong baud then
-// gives the host what a real UART gives it: the receiver's bytes cut up by
-// start bits found at the wrong times.
+// Host tests for finding which GNSS receiver is on the J1 of a V9 or V10
+// (TR_Sensor_Collector/gnss_detect.cpp): the u-blox SAM-M10Q carrier, a
+// Septentrio mosaic-G5 or TinkerRocket's gnss-sdr-dev board, each in the
+// states a boot finds it in, against a serial line simulated bit by bit. A
+// receiver heard at the wrong baud then gives the host what a real UART
+// gives it: the receiver's bytes cut up by start bits found at the wrong
+// times.
 //
 // The mosaic's stream is recorded (fixtures/gnss_detect_sbf.h, from the
-// 2026-10-15 spin-rig capture). There is no recording of the u-blox on this
-// bench, so its streams are built here to its protocol: NMEA once a second
-// from the factory, NAV-PVT and NAV-SAT at 18 Hz once a flight computer has
-// set it up, and a MON-VER reply to the probe's poll.
+// 2026-10-15 spin-rig capture), and so is the gnss-sdr-dev board's
+// (fixtures/sdr_rtcm_stream.h, its own recording of 2026-11-02). There is no
+// recording of the u-blox on this bench, so its streams are built here to its
+// protocol: NMEA once a second from the factory, NAV-PVT and NAV-SAT at 18 Hz
+// once a flight computer has set it up, and a MON-VER reply to the probe's
+// poll.
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -25,6 +28,7 @@
 #include "RocketComputerTypes.h"
 #include "gnss_detect.h"
 #include "fixtures/gnss_detect_sbf.h"
+#include "fixtures/sdr_rtcm_stream.h"
 
 using namespace gnss_detect;
 
@@ -370,6 +374,40 @@ private:
     uint32_t    next_second_ms_ = 0;
 };
 
+// The gnss-sdr-dev board: silent until its first fix, then its recorded
+// stream at 100 Hz (each epoch's four frames every 10 ms, a fix and its
+// ephemerides every 100 ms). It takes no commands; what it hears is counted.
+struct FakeSdr : Receiver
+{
+    uint32_t streams_from_ms = 0;   // its first fix
+    size_t   heard = 0;             // bytes the host sent it, read at its 2 Mbaud
+
+    void tick(uint32_t now_ms, const Line& from_host, Line& to_host) override
+    {
+        const double t = secs(now_ms);
+        if (!up_)
+        {
+            up_ = true;
+            rx_.listen(sdr_rtcm::kBaud, t);
+        }
+        std::vector<uint8_t> got;
+        rx_.pump(from_host, t, got);
+        heard += got.size();
+        if (now_ms < streams_from_ms || now_ms < next_ms_) return;
+        const size_t epoch_bytes = (sizeof(kSdrStream) - kSdrStreamEpochsOffset) / kSdrStreamEpochs;
+        if (k_ == 0) to_host.send(kSdrStream, kSdrStreamEpochsOffset, sdr_rtcm::kBaud, t);
+        to_host.send(kSdrStream + kSdrStreamEpochsOffset + k_ * epoch_bytes, epoch_bytes, sdr_rtcm::kBaud, t);
+        k_ = (k_ + 1) % kSdrStreamEpochs;
+        next_ms_ = now_ms + 10;
+    }
+
+private:
+    bool     up_ = false;
+    UartRx   rx_;
+    size_t   k_ = 0;
+    uint32_t next_ms_ = 0;
+};
+
 // ── Running a detection ─────────────────────────────────────────────────
 
 struct Result
@@ -603,6 +641,7 @@ TEST(GnssDetect, MosaicBootingPastTheBudgetIsLeftToTheSecondLook)
     FakeMosaic later;
     const Result r2 = detect(&later, secondLookPlan(), 10000);
     EXPECT_EQ(r2.found, GNSS_TYPE_MOSAIC);
+    EXPECT_EQ(r2.proof, Proof::SBF_BLOCK);   // its blocks, heard by the board's probe at 2 Mbaud
     EXPECT_EQ(r2.probes, 1u);
 }
 
@@ -617,8 +656,14 @@ TEST(GnssDetect, SilenceRunsOutTheBudget)
     const Result ublox = detect(nullptr, planFor(GNSS_TYPE_UBLOX, 38400, false));
     EXPECT_TRUE(ublox.done);
     EXPECT_EQ(ublox.found, GNSS_TYPE_NONE);
-    EXPECT_EQ(ublox.probes, 5u);   // once round: 38400, 9600, 460800, 2M, 115200
-    EXPECT_LT(ublox.ms, 1500u);
+    EXPECT_EQ(ublox.probes, 6u);   // once round: 38400, 9600, 460800, the board's 2M, the mosaic's 2M, 115200
+    EXPECT_LT(ublox.ms, 1700u);
+
+    const Result sdr = detect(nullptr, planFor(GNSS_TYPE_SDR, 0, false));
+    EXPECT_TRUE(sdr.done);
+    EXPECT_EQ(sdr.found, GNSS_TYPE_NONE);
+    EXPECT_GE(sdr.ms, kBudgetSdrMs);
+    EXPECT_LT(sdr.ms, kBudgetSdrMs + 1700);
 
     const Result mosaic = detect(nullptr, planFor(GNSS_TYPE_MOSAIC, 0, false), 4000, 40000);
     EXPECT_TRUE(mosaic.done);
@@ -634,7 +679,7 @@ TEST(GnssDetect, NeitherProbeGivesTheOtherReceiverACommand)
     FakeMosaic m;
     Plan p = planFor(GNSS_TYPE_UBLOX, 0, true);
     for (size_t i = 0; i < p.n; i++)
-        if (p.probes[i].asks == GNSS_TYPE_MOSAIC) p.probes[i].baud = 921600;   // never its baud
+        if (p.probes[i].asks != GNSS_TYPE_UBLOX) p.probes[i].baud = 921600;   // never its baud
     p.budget_ms = 30000;
     const Result r = detect(&m, p, 4000, 40000);
     EXPECT_EQ(r.found, GNSS_TYPE_NONE);
@@ -847,7 +892,7 @@ TEST(GnssBringUp, AMosaicMissedWhileBootingIsFoundAfterTheUbloxDriver)
     b.driverResult(false);   // the u-blox driver's 60 s
     EXPECT_EQ(b.step(), Step::SECOND_LOOK);
     EXPECT_EQ(b.plan().fallback, GNSS_TYPE_NONE);
-    for (size_t i = 0; i < b.plan().n; i++) EXPECT_EQ(b.plan().probes[i].asks, GNSS_TYPE_MOSAIC);
+    for (size_t i = 0; i < b.plan().n; i++) EXPECT_NE(b.plan().probes[i].asks, GNSS_TYPE_UBLOX);
     b.detected(GNSS_TYPE_MOSAIC);
     EXPECT_EQ(b.step(), Step::BEGIN_MOSAIC);
     EXPECT_EQ(b.mosaicTimeoutMs(), BringUp::kMosaicLateTimeoutMs);
@@ -961,23 +1006,303 @@ TEST(GnssBringUp, EveryPathFinishesWellInsideTheSetupWatchdog)
                 b.driverResult(false);
             }
         }
+        if (b.step() == Step::BEGIN_SDR) b.driverResult(true);   // it opens the UART and returns
         EXPECT_EQ(b.step(), Step::DONE);
         return ms;
     };
     EXPECT_LT(worst(GNSS_TYPE_MOSAIC), 35000u);
     EXPECT_LT(worst(GNSS_TYPE_UBLOX), 90000u);
     EXPECT_LT(worst(GNSS_TYPE_NONE), 95000u);
+    EXPECT_LT(worst(GNSS_TYPE_SDR), 5000u);   // then its driver, which only listens
+}
+
+// ── The gnss-sdr-dev board ──────────────────────────────────────────────
+
+TEST(GnssDetectSdr, StreamingBoardIsFoundByListeningAlone)
+{
+    // Remembered from last boot: its probe first, and it is sent nothing.
+    FakeSdr b;
+    const Result r = detect(&b, planFor(GNSS_TYPE_SDR, 0, false));
+    EXPECT_EQ(r.found, GNSS_TYPE_SDR);
+    EXPECT_EQ(r.proof, Proof::RTCM_TR);
+    EXPECT_EQ(r.baud, kSdrBaud);
+    EXPECT_EQ(r.probes, 1u);
+    EXPECT_LT(r.ms, 30u);   // a 4001 every 10 ms
+    EXPECT_EQ(b.heard, 0u);
+}
+
+TEST(GnssDetectSdr, StreamingBoardIsFoundWithNothingKnown)
+{
+    // The u-blox's probes first (their polls reach the board as noise at
+    // 2 Mbaud, which it ignores), then the board's, before the mosaic's CR.
+    FakeSdr b;
+    const Result r = detect(&b, planFor(GNSS_TYPE_NONE, 0, false));
+    EXPECT_EQ(r.found, GNSS_TYPE_SDR);
+    EXPECT_EQ(r.proof, Proof::RTCM_TR);
+    EXPECT_EQ(r.probes, 4u);   // 38400, 9600, 460800, the board's
+    // On a board that had a u-blox, the same.
+    FakeSdr c;
+    const Result r2 = detect(&c, planFor(GNSS_TYPE_UBLOX, 460800, true));
+    EXPECT_EQ(r2.found, GNSS_TYPE_SDR);
+}
+
+TEST(GnssDetectSdr, TheMosaicsProbeAtItsBaudHearsTheBoardToo)
+{
+    // A board that had a mosaic: the mosaic's 2 Mbaud probe comes first, and
+    // the board's 4001 proves the board there.
+    FakeSdr b;
+    const Result r = detect(&b, planFor(GNSS_TYPE_MOSAIC, 0, false));
+    EXPECT_EQ(r.found, GNSS_TYPE_SDR);
+    EXPECT_EQ(r.proof, Proof::RTCM_TR);
+    EXPECT_EQ(r.probes, 1u);
+}
+
+TEST(GnssDetectSdr, ABoardBeforeItsFirstFixIsSilent)
+{
+    // A cold power-up: the board looks for its first fix for a minute or so
+    // and sends nothing meanwhile. The probes hear nothing...
+    FakeSdr b;
+    b.streams_from_ms = 70000;
+    const Result r = detect(&b, planFor(GNSS_TYPE_SDR, 0, false));
+    EXPECT_TRUE(r.done);
+    EXPECT_EQ(r.found, GNSS_TYPE_NONE);
+    EXPECT_EQ(r.heard, 0u);
+    EXPECT_LT(r.ms, kBudgetSdrMs + 1700);
+    // ...and with no hint the u-blox driver searches; the second look, a
+    // minute on, finds the board once it streams.
+    FakeSdr later;
+    const Result r2 = detect(&later, secondLookPlan(), 10000);
+    EXPECT_EQ(r2.found, GNSS_TYPE_SDR);
+    EXPECT_EQ(r2.probes, 1u);
+}
+
+TEST(GnssDetectSdr, TheBoardHeardAtOtherBaudsIsNoOtherReceiver)
+{
+    // Its RTCM read at every u-blox baud and at the mosaic's factory baud is
+    // noise: no UBX frame, no NMEA, no prompt or reply, and no 4001 either.
+    for (uint32_t baud : {9600u, 38400u, 57600u, 115200u, 230400u, 460800u})
+    {
+        for (uint8_t asks : {GNSS_TYPE_UBLOX, GNSS_TYPE_MOSAIC})
+        {
+            FakeSdr b;
+            Plan p;
+            p.probes[p.n++] = Probe{baud, asks, 400};
+            p.budget_ms = 10000;
+            const Result r = detect(&b, p, 2000, 12000);
+            EXPECT_EQ(r.found, GNSS_TYPE_NONE) << baud << " asking " << int(asks);
+            EXPECT_GT(r.heard, 100u) << baud;   // noise, not silence
+        }
+    }
+}
+
+TEST(GnssDetectSdr, OtherReceiversAtTheBoardsBaudAreNeverTheBoard)
+{
+    // A set-up mosaic streams SBF at the same 2 Mbaud: the board's probe
+    // finds the mosaic by its blocks, never the board.
+    FakeMosaic m;
+    Plan p;
+    p.probes[p.n++] = Probe{kSdrBaud, GNSS_TYPE_SDR, kSdrListenMs};
+    p.budget_ms = 10000;
+    const Result rm = detect(&m, p, 2000, 12000);
+    EXPECT_EQ(rm.found, GNSS_TYPE_MOSAIC);
+    EXPECT_EQ(rm.proof, Proof::SBF_BLOCK);
+    EXPECT_EQ(m.prompts, 0);   // and asked nothing
+    EXPECT_TRUE(m.commands.empty());
+    // A u-blox at any of its bauds, set up or not, heard at 2 Mbaud.
+    for (uint32_t ublox_baud : {9600u, 38400u, 460800u})
+    {
+        for (bool set_up : {false, true})
+        {
+            FakeUblox u;
+            u.baud = ublox_baud;
+            u.set_up = set_up;
+            const Result ru = detect(&u, p, 2000, 12000);
+            EXPECT_EQ(ru.found, GNSS_TYPE_NONE) << ublox_baud;
+            EXPECT_EQ(u.polls + u.other_ubx + u.nmea_in, 0);
+        }
+    }
+}
+
+TEST(GnssDetectSdr, ItsProbeSendsNothing)
+{
+    // The probe's actions: the baud, and no bytes, for as long as it listens.
+    Plan p;
+    p.probes[p.n++] = Probe{kSdrBaud, GNSS_TYPE_SDR, kSdrListenMs};
+    p.budget_ms = 5000;
+    Detector d;
+    d.start(p, 0);
+    const Action first = d.poll(0);
+    EXPECT_EQ(first.kind, Action::SET_BAUD);
+    EXPECT_EQ(first.baud, kSdrBaud);
+    for (uint32_t t = 0; t < 6000 && !d.done(); t++)
+    {
+        for (Action a = d.poll(t); a.kind != Action::NONE; a = d.poll(t)) EXPECT_NE(a.kind, Action::SEND) << t;
+    }
+    EXPECT_TRUE(d.done());
+    EXPECT_EQ(d.found(), GNSS_TYPE_NONE);
+}
+
+TEST(GnssDetectSdr, StandardRtcmIsNotTheBoard)
+{
+    // MSM7 and ephemerides another receiver could send (an LC86G's): only
+    // TinkerRocket's 4001 proves the board.
+    Plan p;
+    p.probes[p.n++] = Probe{kSdrBaud, GNSS_TYPE_SDR, kSdrListenMs};
+    Detector d;
+    d.start(p, 0);
+    (void)d.poll(0);
+    d.feed(kSdrStream + 53, kSdrStreamEpochsOffset - 53, 1);   // the ephemerides
+    d.feed(kSdrStream + kSdrStreamEpochsOffset, 101 + 115 + 130, 2);   // one epoch's MSM7, no 4001
+    EXPECT_FALSE(d.done());
+    d.feed(kSdrStream, 53, 3);   // the fix: a 4001
+    EXPECT_TRUE(d.done());
+    EXPECT_EQ(d.found(), GNSS_TYPE_SDR);
+}
+
+TEST(GnssDetectPlan, TheBoardIsInEveryPlanOnce)
+{
+    const Plan sdr = planFor(GNSS_TYPE_SDR, 9600, true);
+    EXPECT_EQ(sdr.probes[0].asks, GNSS_TYPE_SDR);
+    EXPECT_EQ(sdr.probes[0].baud, kSdrBaud);
+    EXPECT_EQ(sdr.probes[0].listen_ms, kSdrListenMs);
+    EXPECT_EQ(sdr.fallback, GNSS_TYPE_SDR);
+    EXPECT_EQ(sdr.budget_ms, kBudgetSdrMs);
+    for (const Plan& p : {sdr, planFor(GNSS_TYPE_NONE, 0, false), planFor(GNSS_TYPE_UBLOX, 115200, true),
+                          planFor(GNSS_TYPE_MOSAIC, 0, false), secondLookPlan()})
+    {
+        ASSERT_LE(p.n, Plan::kMaxProbes);
+        int n = 0;
+        size_t at = 0;
+        for (size_t i = 0; i < p.n; i++)
+        {
+            if (p.probes[i].asks == GNSS_TYPE_SDR)
+            {
+                n++;
+                at = i;
+            }
+        }
+        EXPECT_EQ(n, 1);
+        // Before the mosaic's CR at the same baud, unless the mosaic leads.
+        if (p.probes[0].asks != GNSS_TYPE_MOSAIC)
+        {
+            for (size_t i = 0; i < p.n; i++)
+                if (p.probes[i].asks == GNSS_TYPE_MOSAIC && p.probes[i].baud == kMosaicTargetBaud) EXPECT_LT(at, i);
+        }
+    }
+    // The other receivers are still asked at every baud with the board's hint.
+    for (uint32_t b : {kMosaicTargetBaud, kMosaicFactoryBaud, kUbloxRunBaud, 38400u, 9600u})
+    {
+        int n = 0;
+        for (size_t i = 0; i < sdr.n; i++) n += sdr.probes[i].asks != GNSS_TYPE_SDR && sdr.probes[i].baud == b;
+        EXPECT_EQ(n, 1) << b;
+    }
+}
+
+TEST(GnssBringUp, AProvenBoardGetsItsDriverAndIsRemembered)
+{
+    BringUp b;
+    b.start(GNSS_TYPE_UBLOX, 460800, true);
+    b.detected(GNSS_TYPE_SDR);
+    EXPECT_EQ(b.step(), Step::BEGIN_SDR);
+    b.driverResult(true);
+    EXPECT_EQ(b.step(), Step::DONE);
+    EXPECT_EQ(b.active(), GNSS_TYPE_SDR);
+    EXPECT_TRUE(b.hintChanged());
+    EXPECT_EQ(b.hint(), GNSS_TYPE_SDR);
+    EXPECT_FALSE(gnssTypeGivesFix(b.active()));   // the FC flies GNSS-absent beside it
+}
+
+TEST(GnssBringUp, ARememberedBoardThatIsSilentIsListenedFor)
+{
+    // Every cold power-up: the board has no fix yet. Its driver listens, and
+    // the board stays remembered.
+    BringUp b;
+    b.start(GNSS_TYPE_SDR, 0, false);
+    b.detected(GNSS_TYPE_NONE);
+    EXPECT_EQ(b.step(), Step::BEGIN_SDR);
+    b.driverResult(true);
+    EXPECT_EQ(b.active(), GNSS_TYPE_SDR);
+    EXPECT_FALSE(b.hintChanged());
+    EXPECT_FALSE(b.secondLookRan());
+    // A UART that will not come up: nothing.
+    BringUp c;
+    c.start(GNSS_TYPE_SDR, 0, false);
+    c.detected(GNSS_TYPE_NONE);
+    c.driverResult(false);
+    EXPECT_EQ(c.step(), Step::DONE);
+    EXPECT_EQ(c.active(), GNSS_TYPE_NONE);
+}
+
+TEST(GnssBringUp, AnotherReceiverProvenReplacesTheBoard)
+{
+    for (uint8_t other : {GNSS_TYPE_UBLOX, GNSS_TYPE_MOSAIC})
+    {
+        BringUp b;
+        b.start(GNSS_TYPE_SDR, 0, false);
+        b.detected(other);
+        EXPECT_EQ(b.step(), other == GNSS_TYPE_UBLOX ? Step::BEGIN_UBLOX : Step::BEGIN_MOSAIC);
+        b.driverResult(true);
+        EXPECT_EQ(b.active(), other);
+        EXPECT_EQ(b.hint(), other);
+    }
+}
+
+TEST(GnssBringUp, ABoardFoundByTheSecondLook)
+{
+    BringUp b;
+    b.start(GNSS_TYPE_NONE, 0, false);
+    b.detected(GNSS_TYPE_NONE);
+    b.driverResult(false);   // the u-blox driver's 60 s
+    ASSERT_EQ(b.step(), Step::SECOND_LOOK);
+    b.detected(GNSS_TYPE_SDR);
+    EXPECT_EQ(b.step(), Step::BEGIN_SDR);
+    b.driverResult(true);
+    EXPECT_EQ(b.active(), GNSS_TYPE_SDR);
+    EXPECT_EQ(b.hint(), GNSS_TYPE_SDR);
+}
+
+TEST(GnssBringUp, TheBoardsHintOutranksASwappedUbloxRecord)
+{
+    // The u-blox driver's swapped-wires search drives J1 pin 2, the board's
+    // output: a board remembered since runs its plan, as a mosaic board does.
+    BringUp b;
+    b.start(GNSS_TYPE_SDR, 9600, false, true);
+    EXPECT_GT(b.plan().n, 0u);
+    EXPECT_EQ(b.plan().probes[0].asks, GNSS_TYPE_SDR);
+    b.detected(GNSS_TYPE_NONE);
+    EXPECT_EQ(b.step(), Step::BEGIN_SDR);
+}
+
+TEST(GnssType, TheBoardCapsTheImuAt3840WhateverTheLog)
+{
+    EXPECT_EQ(imuRateMaxForGnss(7680, GNSS_TYPE_SDR), 3840);
+    EXPECT_EQ(imuRateMaxForGnss(7680, GNSS_TYPE_SDR, GNSS_LOG_DETAILED), 3840);
+    EXPECT_EQ(imuRateMaxForGnss(7680, GNSS_TYPE_SDR, GNSS_LOG_REDUCED), 3840);
+    EXPECT_EQ(imuRateMaxForGnss(3840, GNSS_TYPE_SDR), 3840);
+    EXPECT_EQ(imuRateMaxForGnss(1920, GNSS_TYPE_SDR), 1920);
+    EXPECT_TRUE(imuRateValid(IMU_RATE_MAX_HZ_SDR));
+}
+
+TEST(GnssType, OnlyTheBoardGivesNoFix)
+{
+    EXPECT_TRUE(gnssTypeGivesFix(GNSS_TYPE_UBLOX));
+    EXPECT_TRUE(gnssTypeGivesFix(GNSS_TYPE_MOSAIC));
+    EXPECT_TRUE(gnssTypeGivesFix(GNSS_TYPE_LC86G));
+    EXPECT_FALSE(gnssTypeGivesFix(GNSS_TYPE_SDR));
+    EXPECT_FALSE(gnssTypeGivesFix(GNSS_TYPE_NONE));
 }
 
 // ── Naming the receiver, and what it does to the IMU rate ───────────────
 
 TEST(GnssType, NamesRoundTrip)
 {
-    for (uint8_t t : {GNSS_TYPE_UBLOX, GNSS_TYPE_MOSAIC, GNSS_TYPE_LC86G})
+    for (uint8_t t : {GNSS_TYPE_UBLOX, GNSS_TYPE_MOSAIC, GNSS_TYPE_LC86G, GNSS_TYPE_SDR})
     {
         EXPECT_STRNE(gnssTypeName(t), "");
         EXPECT_EQ(gnssTypeFromName(gnssTypeName(t)), t);
     }
+    EXPECT_STREQ(gnssTypeName(GNSS_TYPE_SDR), "gnss-sdr-dev");
+    EXPECT_STREQ(gnssTypeName(GNSS_TYPE_SDR + 1), "");   // past the last type
     EXPECT_STREQ(gnssTypeName(GNSS_TYPE_NONE), "");
     EXPECT_EQ(gnssTypeFromName(""), GNSS_TYPE_NONE);
     EXPECT_EQ(gnssTypeFromName(nullptr), GNSS_TYPE_NONE);

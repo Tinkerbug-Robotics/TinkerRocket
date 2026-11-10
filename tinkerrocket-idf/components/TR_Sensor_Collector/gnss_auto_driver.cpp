@@ -13,9 +13,9 @@
 #include <freertos/task.h>
 #include <TR_NVS.h>
 
-// The mosaic streams ~66 kB/s at 2 Mbaud, which fills the UART's 128-byte RX
-// FIFO in 0.64 ms: less than a flash write keeps an interrupt that needs the
-// cache waiting. sdkconfig.defaults.mosaic puts the UART interrupt in IRAM;
+// The mosaic streams ~66 kB/s at 2 Mbaud (the gnss-sdr-dev board up to
+// ~55 kB/s), which fills the UART's 128-byte RX FIFO in 0.64 ms: less than a
+// flash write keeps an interrupt that needs the cache waiting. sdkconfig.defaults.mosaic puts the UART interrupt in IRAM;
 // a build dir made before this image had the overlay keeps its old sdkconfig.
 #if !CONFIG_UART_ISR_IN_IRAM
 #error "TR_GNSS_DRIVER_AUTO needs CONFIG_UART_ISR_IN_IRAM (sdkconfig.defaults.mosaic): use a fresh build dir, or delete its sdkconfig"
@@ -28,6 +28,10 @@ namespace
 
 constexpr size_t kRxBuf = 8192;   // ~120 ms of a set-up mosaic; the loop below reads every few ms
 constexpr size_t kTxBuf = 256;
+
+// The gnss-sdr-dev board's driver is read as often as the mosaic's: 1.4 kB a
+// read at its 55 kB/s, its 16 kB UART ring 0.3 s of the stream.
+constexpr uint8_t kSdrPollRateHz = 20;
 
 constexpr const char* kHintNamespace = "gnssauto";
 constexpr const char* kHintKey = "rx";
@@ -43,7 +47,7 @@ const char* nameOr(uint8_t type, const char* none)
 }  // namespace
 
 TR_GNSSAuto::TR_GNSSAuto(uart_port_t uart_port)
-    : port_(uart_port), ublox_(uart_port), mosaic_(uart_port)
+    : port_(uart_port), ublox_(uart_port), mosaic_(uart_port), sdr_(uart_port)
 {
 }
 
@@ -134,9 +138,9 @@ bool TR_GNSSAuto::uartOpen(uint32_t baud)
 
 void TR_GNSSAuto::uartClose()
 {
-    // Each driver installs the UART its own way (the mosaic's with an event
-    // queue and a 16 kB ring), and the mosaic's only re-rates one it finds
-    // installed, so none is left for it.
+    // Each driver installs the UART its own way (the mosaic's and the
+    // gnss-sdr-dev board's with an event queue and a 16 kB ring), and they
+    // only re-rate one they find installed, so none is left for them.
     if (uart_is_driver_installed(port_)) uart_driver_delete(port_);
 }
 
@@ -232,7 +236,7 @@ bool TR_GNSSAuto::begin(uint8_t update_rate_hz,
                 }
                 else if (second)
                 {
-                    ESP_LOGW(TAG, "GNSS auto: no mosaic-G5 either (%lu ms)",
+                    ESP_LOGW(TAG, "GNSS auto: no mosaic-G5 or gnss-sdr-dev board either (%lu ms)",
                              static_cast<unsigned long>(detector_.elapsedMs()));
                 }
                 else if (up.plan().n > 0)
@@ -242,6 +246,9 @@ bool TR_GNSSAuto::begin(uint8_t update_rate_hz,
                              static_cast<unsigned long>(detector_.probesRun()),
                              up.plan().fallback == GNSS_TYPE_UBLOX
                                  ? "; the u-blox driver searches as it always has"
+                             : up.plan().fallback == GNSS_TYPE_SDR
+                                 ? "; the gnss-sdr-dev board that streamed last boot sends from its first fix: "
+                                   "listening for it"
                                  : "");
                 }
                 up.detected(detector_.found());
@@ -275,13 +282,24 @@ bool TR_GNSSAuto::begin(uint8_t update_rate_hz,
                 storeHint(up.hint());
                 break;
             }
+            case gnss_detect::BringUp::Step::BEGIN_SDR:
+            {
+                const bool ok = sdr_.begin(kSdrPollRateHz, GNSS_RX, GNSS_TX, reset_n_pin, safeboot_n_pin);
+                up.driverResult(ok);
+                storeHint(up.hint());
+                break;
+            }
             default:
                 break;
         }
     }
 
     type_ = up.active();
-    if (type_ != GNSS_TYPE_NONE)
+    if (type_ == GNSS_TYPE_SDR)
+    {
+        ESP_LOGI(TAG, "GNSS auto: logging the gnss-sdr-dev board's RTCM3; the FC navigates without GNSS");
+    }
+    else if (type_ != GNSS_TYPE_NONE)
     {
         ESP_LOGI(TAG, "GNSS auto: flying the %s", gnssTypeName(type_));
     }
@@ -293,18 +311,23 @@ bool TR_GNSSAuto::begin(uint8_t update_rate_hz,
 uint8_t TR_GNSSAuto::updateRateHz() const
 {
     if (type_ == GNSS_TYPE_MOSAIC) return mosaic_rate_hz_ > 20 ? 20 : mosaic_rate_hz_;
+    if (type_ == GNSS_TYPE_SDR) return kSdrPollRateHz;
     return ublox_rate_hz_;
 }
 
 uint8_t TR_GNSSAuto::otpState() const
 {
-    return (type_ == GNSS_TYPE_MOSAIC) ? mosaic_.otpState() : ublox_.otpState();
+    if (type_ == GNSS_TYPE_MOSAIC) return mosaic_.otpState();
+    if (type_ == GNSS_TYPE_SDR) return sdr_.otpState();
+    return ublox_.otpState();
 }
 
 void TR_GNSSAuto::getGNSSData(GNSSData& data)
 {
     if (type_ == GNSS_TYPE_MOSAIC)
         mosaic_.getGNSSData(data);
+    else if (type_ == GNSS_TYPE_SDR)
+        sdr_.getGNSSData(data);
     else if (type_ == GNSS_TYPE_UBLOX)
         ublox_.getGNSSData(data);
     else
@@ -315,6 +338,7 @@ bool TR_GNSSAuto::pollNewPVT(GNSSData& data)
 {
     if (type_ == GNSS_TYPE_MOSAIC) return mosaic_.pollNewPVT(data);
     if (type_ == GNSS_TYPE_UBLOX) return ublox_.pollNewPVT(data);
+    if (type_ == GNSS_TYPE_SDR) return sdr_.pollNewPVT(data);   // reads the UART; never a PVT
     return false;
 }
 
@@ -325,6 +349,7 @@ bool TR_GNSSAuto::pollNewSat(GNSSSatData& out)
 
 bool TR_GNSSAuto::pollRawFrame(uint8_t* out, size_t cap, size_t& len, uint32_t& time_us)
 {
+    if (type_ == GNSS_TYPE_SDR) return sdr_.pollRawFrame(out, cap, len, time_us);
     return type_ == GNSS_TYPE_MOSAIC && mosaic_.pollRawFrame(out, cap, len, time_us);
 }
 

@@ -1,16 +1,16 @@
 #pragma once
 
-// One V9 image, either GNSS receiver on J1 (TR_GNSS_DRIVER_AUTO). The V9's J1
-// takes the stock u-blox SAM-M10Q carrier or a Septentrio mosaic-G5 harness,
-// and until this the receiver was the build's choice: an image built for the
-// other one searched for 30-60 s and flew GNSS-absent. TR_GNSSAuto holds both
-// drivers. begin() finds out which receiver is there (gnss_detect.h), then
-// runs that one's begin() exactly as its own image ran it, and every later
-// call goes to that driver. It has the call surface both drivers share plus
-// the mosaic's extras (each false or a no-op while the u-blox is in use), so
-// it slots into SensorCollector's GNSS seam the way either driver does, and
-// the way TR_MagAuto does into the magnetometer's. type() says which
-// receiver begin() found.
+// One V9 or V10 image, any GNSS receiver on J1 (TR_GNSS_DRIVER_AUTO). Their
+// J1 takes the stock u-blox SAM-M10Q carrier, a Septentrio mosaic-G5 harness
+// or TinkerRocket's gnss-sdr-dev board, and until this the receiver was the
+// build's choice: an image built for another one searched for 30-60 s and
+// flew GNSS-absent. TR_GNSSAuto holds the three drivers. begin() finds out
+// which receiver is there (gnss_detect.h), then runs that one's begin()
+// exactly as its own image ran it, and every later call goes to that driver.
+// It has the call surface the drivers share plus the mosaic's extras (each
+// false or a no-op while another is in use), so it slots into
+// SensorCollector's GNSS seam the way any driver does, and the way TR_MagAuto
+// does into the magnetometer's. type() says which receiver begin() found.
 //
 // The receiver found is kept in NVS ("gnssauto"/"rx") and probed first next
 // boot, so a boot with the same receiver costs one probe (0.1-0.4 s). It is
@@ -24,6 +24,7 @@
 
 #include <RocketComputerTypes.h>
 #include <TR_GNSSReceiverMosaic_Serial.h>
+#include <TR_GNSSReceiverSdr_Serial.h>
 #include <TR_GNSSReceiverUBlox_Serial.h>
 
 #include "gnss_detect.h"
@@ -54,15 +55,19 @@ public:
                int8_t safeboot_n_pin = -1);
 
     uint8_t type() const { return type_; }   // GNSS_TYPE_NONE until begin() brought one up
-    uint8_t updateRateHz() const;            // the navigation rate the receiver in use runs at
-    // The u-blox's high-performance-clock OTP state; NOT_M10 with the mosaic.
+    // The navigation rate the receiver in use runs at: the GNSS poll task's
+    // is twice it (the gnss-sdr-dev board's driver is read every 25 ms, as
+    // the mosaic's).
+    uint8_t updateRateHz() const;
+    // The u-blox's high-performance-clock OTP state; NOT_M10 with the others.
     uint8_t otpState() const;
 
     void getGNSSData(GNSSData& data);
     bool pollNewPVT(GNSSData& data);
-    bool pollNewSat(GNSSSatData& out);   // the u-blox's NAV-SAT; false with the mosaic, as its own driver
+    bool pollNewSat(GNSSSatData& out);   // the u-blox's NAV-SAT; false with the others, as their own drivers
     // The mosaic's extras (TR_GNSSReceiverMosaic_Serial.h); false or a no-op
-    // with the u-blox.
+    // with the u-blox. pollRawFrame gives the gnss-sdr-dev board's RTCM3
+    // frames too.
     bool pollRawFrame(uint8_t* out, size_t cap, size_t& len, uint32_t& time_us);
     bool takeClockLine(GnssClockData& out);
     bool geoidSeparationM(float& sep_m) const;
@@ -91,5 +96,6 @@ private:
 
     TR_GNSSReceiverUBloxSerial  ublox_;
     TR_GNSSReceiverMosaicSerial mosaic_;
+    TR_GNSSReceiverSdrSerial    sdr_;
     gnss_detect::Detector       detector_;
 };
