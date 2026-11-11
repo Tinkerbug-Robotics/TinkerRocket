@@ -175,7 +175,7 @@ TEST(SimReplay, RefusesWhatIsNotOne)
     bad[0] = 'X';
     EXPECT_FALSE(r.load(bad.data(), bad.size()));
     bad = b;
-    put<uint16_t>(bad, 4, 2);   // another version
+    put<uint16_t>(bad, 4, 3);   // another version
     EXPECT_FALSE(r.load(bad.data(), bad.size()));
     bad = b;
     put<float>(bad, 72, 0.0f);   // no accelerometer scale
@@ -195,6 +195,32 @@ TEST(SimReplay, RefusesWhatIsNotOne)
     });
     EXPECT_FALSE(r.load(unlanded.data(), unlanded.size()));
     EXPECT_TRUE(r.load(b.data(), b.size())) << r.why();
+}
+
+TEST(SimReplay, VersionTwoCarriesTheLogOfThePressure)
+{
+    // the hotshot's 88 kPa pad to 1.7 kPa at 26 km in one int16: a count is
+    // 1.2e-4 of the pressure (about a metre) wherever the flight is
+    Spec s;
+    s.p_ref = 88000.0f;
+    s.p_lsb = 1.2e-4f;
+    std::vector<uint8_t> b = makeBlob(s, [](uint32_t i, double, Raw& r) {
+        r.p = static_cast<int16_t>(-80 * static_cast<int>(i));   // down to -31920 counts: ln(p/p_ref) -3.83
+    });
+    put<uint16_t>(b, 4, 2);
+    SimReplay r;
+    ASSERT_TRUE(r.load(b.data(), b.size())) << r.why();
+    EXPECT_EQ(r.header().version, 2);
+    Sample x;
+    r.at(s.t0, x);
+    EXPECT_NEAR(x.p_pa, 88000.0, 0.01);
+    r.at(s.t0 + 399.0 / s.rate, x);
+    const double p_end = 88000.0 * std::exp(-80.0 * 399.0 * 1.2e-4);
+    EXPECT_NEAR(x.p_pa, p_end, p_end * 1e-5);
+    // one count is the same fraction of the pressure at the top as at the pad
+    r.at(s.t0 + 398.0 / s.rate, x);
+    const double p_prev = x.p_pa;
+    EXPECT_NEAR(p_prev / p_end, std::exp(80.0 * 1.2e-4), 1e-5);
 }
 
 TEST(SimReplay, InterpolatesBetweenSamples)

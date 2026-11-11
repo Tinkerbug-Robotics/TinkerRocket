@@ -18,7 +18,11 @@ landing comes from a still barometer with the board's signals already gone. Only
 are made up; the board has nothing to track there anyway.
 
     tools/rig_replay/signalsim_sensors.py CONFIG.json OUT [--heading-deg 0] [--tail-s 15]
-    tools/sim_replay_blob.py OUT_sensors.csv.gz OUT_scenario.json OUT.bin --no-port-error --from -30
+    tools/sim_replay_blob.py OUT_sensors.csv.gz OUT_scenario.json OUT.bin --no-port-error --from -30 --log-pressure
+
+--log-pressure for a high flight: the hotshot's 88 kPa pad to 1.7 kPa at 26 km in the linear format is 2.75 Pa a
+count, about 5 m of the flight computer's height up there, and every count it steps is a spike its barometer check
+rejects (rig run sim_r1: no apogee). In ln(p) a count is about a metre at any height.
 
 The replay carries 500 Hz at 24 bytes a sample in the image: a V10's 3 MB app slot holds about 180 s of it beside
 the flight image.

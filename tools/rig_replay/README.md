@@ -272,11 +272,13 @@ like the Beetle's, with these differences:
   ```
   tools/rig_replay/signalsim_sensors.py sdr_hotshot_b1c_p120.json /abs/path/hotshot_p120
   python3 tools/sim_replay_blob.py /abs/path/hotshot_p120_sensors.csv.gz /abs/path/hotshot_p120_scenario.json \
-      /abs/path/hotshot_p120_replay.bin --no-port-error --from -30
+      /abs/path/hotshot_p120_replay.bin --no-port-error --from -30 --log-pressure
   idf.py -B build_v10_replay -DTR_BOARD_V10=1 -DTR_SIM_REPLAY_BLOB=/abs/path/hotshot_p120_replay.bin build
   ```
   The hotshot from T-30 s to T+135 s is 1.98 MB; the image (2.74 MB) fits the 3 MB app slot. Longer flights need a
-  later `--from` or a shorter tail.
+  later `--from` or a shorter tail. `--log-pressure` (format version 2) carries the pressure as ln(p): in the linear
+  format the hotshot's 88 kPa to 1.7 kPa is 2.75 Pa a count, about 5 m of height at 26 km, and each count the
+  barometer steps there is a spike the flight computer rejects, so it never votes apogee (rig run sim_r1).
 - **The replay's clock comes from the board's clock line.** The board's driver hands no timed fix. The flight loop
   drains the GPS-to-MCU line the board's RTCM epochs build (valid about 10 s after the board's first fix), and each
   record puts the drain's instant in GPS time for the clock (`SensorCollectorSim::replayNoteTime`). The board must
