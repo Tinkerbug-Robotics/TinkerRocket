@@ -418,6 +418,15 @@ void SensorCollectorSim::replayNoteFix(const gnss_raw::TimedFix& f)
         ESP_LOGW("SIM", "RIG REPLAY clock: %s (a fix at t %+.2f s)", clockName(after), t);
 }
 
+void SensorCollectorSim::replayNoteTime(double gps_s, int64_t mcu_us)
+{
+    if (!replay_on_) return;
+    gnss_raw::TimedFix f;
+    f.gps_s = gps_s;
+    f.mcu_us = mcu_us;
+    replayNoteFix(f);
+}
+
 #if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
 void SensorCollectorSim::replayNoteEpoch(const gnss_raw::TimedRawEpoch& e)
 {
