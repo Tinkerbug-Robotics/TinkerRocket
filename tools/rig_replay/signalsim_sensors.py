@@ -6,11 +6,18 @@ from a trajectoryList of Const and VerticalAcc segments, with no sim_flight_3d.p
 them. This writes the two files tools/sim_replay_blob.py takes, from the scene's own config:
 
   OUT_sensors.csv.gz  1 kHz, body FRD, NED at the pad: the specific force (the trajectory's acceleration, Coriolis
-                      and normal gravity at the height), the earth's rate, the attitude (nose up all the way, the belly
-                      toward --heading-deg, no roll), the barometer (the 1976 standard atmosphere at the height, the
+                      and normal gravity at the height), the earth's rate and the turn's, the attitude (nose up, the
+                      belly toward --heading-deg, no roll, pitched over through apogee: below), the barometer (the 1976
+                      standard atmosphere at the height, the
                       pad's height taken as above sea level, no port error), the high-g channel in use over 15 g, and
                       the phase (pad, boost to the first deceleration, coast to apogee, drogue after it);
   OUT_scenario.json   the file's start (UTC), the ignition's offset into it, its length and the pad.
+
+The pitch-over: the scenes' own motion is vertical, and nose up all the way would never let the flight computer
+see apogee once its barometer is out of range (it is a voter only from 25 to 125 kPa, under about 10 km): its vote
+then needs the pitch below horizontal as well as the velocity (rig run sim_r2: none). So the nose turns over
+through apogee, a smooth half turn about the body's y axis over --turn-s (default 4) centred on it, toward the belly,
+and falls nose down: the attitude only; the trajectory (and the RF scene) are untouched.
 
 A scene that ends in the air (the hotshot is falling at 145 m/s, 20 km up, when it ends at T+120) gets --tail-s of
 landed samples at the last height after it: the rocket stopped where the signals stopped, so the flight computer's
@@ -132,7 +139,38 @@ def nose_up(heading_deg):
     return c, q / np.linalg.norm(q)
 
 
-def build(cfg, heading_deg=0.0, rate_hz=1000, tail_s=15.0, t_from=-30.0):
+def pitch_over(t, t_mid, turn_s):
+    """The nose's turn from up (0) to down (pi) about body y, a half cosine over turn_s centred on t_mid, and its
+    rate, at times t."""
+    u = np.clip((t - (t_mid - turn_s / 2)) / turn_s, 0.0, 1.0)
+    th = 0.5 * math.pi * (1.0 - np.cos(math.pi * u))
+    rate = np.where((u > 0) & (u < 1), 0.5 * math.pi * math.pi / turn_s * np.sin(math.pi * u), 0.0)
+    return th, rate
+
+
+def quats(c):
+    """Scalar-first quaternions of rotation matrices c (N x 3 x 3), each by its largest component."""
+    tr = np.trace(c, axis1=1, axis2=2)
+    q = np.empty((len(c), 4))
+    for i, m in enumerate(c):
+        k = int(np.argmax([tr[i], m[0, 0], m[1, 1], m[2, 2]]))
+        if k == 0:
+            s = 2.0 * math.sqrt(1.0 + tr[i])
+            q[i] = [s / 4, (m[2, 1] - m[1, 2]) / s, (m[0, 2] - m[2, 0]) / s, (m[1, 0] - m[0, 1]) / s]
+        elif k == 1:
+            s = 2.0 * math.sqrt(1.0 + m[0, 0] - m[1, 1] - m[2, 2])
+            q[i] = [(m[2, 1] - m[1, 2]) / s, s / 4, (m[0, 1] + m[1, 0]) / s, (m[0, 2] + m[2, 0]) / s]
+        elif k == 2:
+            s = 2.0 * math.sqrt(1.0 - m[0, 0] + m[1, 1] - m[2, 2])
+            q[i] = [(m[0, 2] - m[2, 0]) / s, (m[0, 1] + m[1, 0]) / s, s / 4, (m[1, 2] + m[2, 1]) / s]
+        else:
+            s = 2.0 * math.sqrt(1.0 - m[0, 0] - m[1, 1] + m[2, 2])
+            q[i] = [(m[1, 0] - m[0, 1]) / s, (m[0, 2] + m[2, 0]) / s, (m[1, 2] + m[2, 1]) / s, s / 4]
+    q *= np.where(q[:, :1] < 0, -1.0, 1.0)
+    return q / np.linalg.norm(q, axis=1)[:, None]
+
+
+def build(cfg, heading_deg=0.0, rate_hz=1000, tail_s=15.0, t_from=-30.0, turn_s=4.0):
     """The sensors' columns (t_s from ignition) and the scenario for sim_replay_blob.py."""
     tr = Trajectory(cfg)
     ign, burn, apo = tr.phases()
@@ -145,13 +183,21 @@ def build(cfg, heading_deg=0.0, rate_hz=1000, tail_s=15.0, t_from=-30.0):
     v = np.where(in_scene, v, 0.0)
     a = np.where(in_scene, a, 0.0)
     lat = math.radians(tr.pad[0])
-    c_b2n, q = nose_up(heading_deg)
+    c0, _ = nose_up(heading_deg)
+    # the attitude: C_b2n = C0 R_y(-theta), the nose swung toward the belly by theta (body rate -theta' about y)
+    th, th_rate = (pitch_over(t, apo - ign, turn_s) if apo is not None else (np.zeros_like(t), np.zeros_like(t)))
+    ct, st = np.cos(th), np.sin(th)
+    ry = np.zeros((len(t), 3, 3))
+    ry[:, 0, 0], ry[:, 0, 2], ry[:, 1, 1], ry[:, 2, 0], ry[:, 2, 2] = ct, -st, 1.0, st, ct
+    c_b2n = np.einsum("ij,njk->nik", c0, ry)
+    q = quats(c_b2n)
     w_n = OMEGA_E * np.array([math.cos(lat), 0.0, -math.sin(lat)])
     v_n = np.stack([np.zeros_like(v), np.zeros_like(v), -v], axis=1)
     g = np.array([gravity(lat, x) for x in h])
     f_n = np.stack([np.zeros_like(a), np.zeros_like(a), -a - g], axis=1) + 2.0 * np.cross(w_n, v_n)
-    f_b = f_n @ c_b2n            # C_n2b f = (f^T C_b2n)^T
-    w_b = np.tile(c_b2n.T @ w_n, (len(t), 1))
+    f_b = np.einsum("nji,nj->ni", c_b2n, f_n)          # C_n2b f
+    w_b = np.einsum("nji,j->ni", c_b2n, w_n)
+    w_b[:, 1] -= th_rate
     p = np.array([pressure_pa(x) for x in h])
     phase = np.full(len(t), PHASE_PAD)
     phase[t >= 0.0] = PHASE_BOOST
@@ -164,8 +210,7 @@ def build(cfg, heading_deg=0.0, rate_hz=1000, tail_s=15.0, t_from=-30.0):
         "t_s": t,
         "fx_mps2": f_b[:, 0], "fy_mps2": f_b[:, 1], "fz_mps2": f_b[:, 2],
         "wx_rps": w_b[:, 0], "wy_rps": w_b[:, 1], "wz_rps": w_b[:, 2],
-        "qw": np.full(len(t), q[0]), "qx": np.full(len(t), q[1]),
-        "qy": np.full(len(t), q[2]), "qz": np.full(len(t), q[3]),
+        "qw": q[:, 0], "qx": q[:, 1], "qy": q[:, 2], "qz": q[:, 3],
         "phase": phase.astype(float),
         "acc_hg": (np.linalg.norm(f_b, axis=1) > HIGH_G).astype(float),
         "baro_p_pa": p, "baro_alt_m": h - tr.pad[2], "baro_alt_port_m": h - tr.pad[2],
@@ -194,8 +239,10 @@ def main(argv=None):
     ap.add_argument("--heading-deg", type=float, default=0.0, help="the belly's (body z) azimuth from north")
     ap.add_argument("--tail-s", type=float, default=15.0, help="s of landed samples after the scene's end")
     ap.add_argument("--from", dest="t_from", type=float, default=-30.0, help="the first sample, s from ignition")
+    ap.add_argument("--turn-s", type=float, default=4.0, help="the pitch-over's length, s, centred on apogee")
     a = ap.parse_args(argv)
-    cols, scen = build(json.loads(Path(a.config).read_text()), a.heading_deg, tail_s=a.tail_s, t_from=a.t_from)
+    cols, scen = build(json.loads(Path(a.config).read_text()), a.heading_deg, tail_s=a.tail_s, t_from=a.t_from,
+                       turn_s=a.turn_s)
     names = list(cols)
     data = np.stack([cols[n] for n in names], axis=1)
     with gzip.open(f"{a.out}_sensors.csv.gz", "wt") as f:

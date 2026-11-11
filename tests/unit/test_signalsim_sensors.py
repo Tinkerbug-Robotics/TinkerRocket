@@ -70,9 +70,32 @@ class SignalSimSensors(unittest.TestCase):
         h_end = float(ss.Trajectory(scene()).at([50.0])[0][0])    # the file's last instant
         k_tail = self.at(23.0)
         self.assertAlmostEqual(self.cols["baro_p_pa"][k_tail], ss.pressure_pa(h_end), places=6)
-        self.assertAlmostEqual(self.cols["fx_mps2"][k_tail], ss.gravity(0.0, 1200.0 + self.cols["baro_alt_m"][k_tail]),
+        # nose down after the pitch-over: the specific force (g, up) along the tail
+        self.assertAlmostEqual(-self.cols["fx_mps2"][k_tail], ss.gravity(0.0, 1200.0 + self.cols["baro_alt_m"][k_tail]),
                                places=6)
         self.assertEqual(self.cols["acc_hg"][k_tail], 0.0)
+
+    def nose_down(self, k):
+        """The nose's down component (NED) at sample k: -1 up, +1 down."""
+        w, x, y, z = (self.cols[c][k] for c in ("qw", "qx", "qy", "qz"))
+        return 2 * (x * z - w * y)                         # R(q)[2, 0]
+
+    def test_the_nose_pitches_over_through_apogee(self):
+        self.assertAlmostEqual(self.nose_down(self.at(7.9)), -1.0, places=9)     # 2 s before the turn's middle
+        self.assertAlmostEqual(self.nose_down(self.at(10.0)), 0.0, places=6)     # horizontal at apogee
+        self.assertAlmostEqual(self.nose_down(self.at(12.1)), 1.0, places=9)
+        # the gyro carries the half turn: about body y, -pi in all
+        self.assertAlmostEqual(np.sum(self.cols["wy_rps"]) / 1000.0, -math.pi, places=3)
+
+    def test_the_gyro_turns_the_attitude(self):
+        # q(t + dt) = q(t) (x) the gyro's rotation over dt, through the turn
+        k = self.at(9.5)
+        q0 = np.array([self.cols[c][k] for c in ("qw", "qx", "qy", "qz")])
+        q1 = np.array([self.cols[c][k + 1] for c in ("qw", "qx", "qy", "qz")])
+        w = np.array([self.cols[c][k] for c in ("wx_rps", "wy_rps", "wz_rps")]) * 1e-3 / 2
+        dq = np.array([1.0, *w])
+        pred = np.array([q0[0] * dq[0] - q0[1:] @ dq[1:], *(q0[0] * dq[1:] + dq[0] * q0[1:] + np.cross(q0[1:], dq[1:]))])
+        np.testing.assert_allclose(pred / np.linalg.norm(pred), q1, atol=2e-6)
 
     def test_the_blob_carries_it_at_the_scenes_gps_time(self):
         blob, s = srb.build(self.cols, self.scen, t_from=-20.0, port_error=False, land_loop_s=5.0)
