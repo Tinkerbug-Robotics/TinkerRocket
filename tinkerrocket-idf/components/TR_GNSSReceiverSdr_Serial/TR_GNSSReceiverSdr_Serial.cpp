@@ -9,9 +9,7 @@
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <freertos/task.h>
-#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
 #include <GnssClockRecord.h>   // TR_GNSSReceiverLC86_Serial: GNSS_CLOCK_MSG's record
-#endif
 
 static const char* TAG = "GNSS";
 
@@ -20,10 +18,11 @@ static const char* TAG = "GNSS";
 // driver (sdkconfig.defaults.mosaic, checked by gnss_auto_driver.cpp): at
 // 2 Mbaud the 128-byte FIFO lasts 0.64 ms, less than a flash write.
 static constexpr size_t kUartRxBuf = 16384;
-// What goes out: a bench image's 4002 frames, one of 52 B at most a
-// millisecond (SdrAid.h AidSchedule), so the ring is all but empty at every
-// write. sendAidFrame checks its room first; kTxItemSlack is a margin over
-// what the driver says is free (it already takes off its own item header).
+// What goes out: 4002 frames, one of 52 B at most a millisecond (SdrAid.h
+// AidSchedule; a flight image's phase, 22 B, about once a second), so the
+// ring is all but empty at every write. sendAidFrame checks its room first;
+// kTxItemSlack is a margin over what the driver says is free (it already
+// takes off its own item header).
 static constexpr size_t kUartTxBuf = 256;
 static constexpr size_t kTxItemSlack = 32;
 // Interrupt at half the FIFO: 320 us of margin before a late one loses bytes.
@@ -71,12 +70,10 @@ bool TR_GNSSReceiverSdrSerial::begin(uint8_t update_rate_hz,
             ring_ = xRingbufferCreateStatic(kRingBytes, RINGBUF_TYPE_NOSPLIT, ring_mem_, &ring_struct_);
         }
     }
-#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
     if (clock_q_ == nullptr)
     {
         clock_q_ = xQueueCreateStatic(kClockQDepth, sizeof(GnssClockData), clock_q_mem_, &clock_q_struct_);
     }
-#endif
 
     if (!uart_is_driver_installed(_uartPort))
     {
@@ -207,9 +204,7 @@ void TR_GNSSReceiverSdrSerial::onFrame(const uint8_t* frame, size_t len, size_t 
             if (sdr_rtcm::decodeTrEpoch(frame, len, e))
             {
                 noteEpoch(e);
-#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
                 noteLink(frame, len, e, end_us);
-#endif
             }
             else if (sdr_rtcm::decodeTrFix(frame, len, f))
             {
@@ -255,15 +250,16 @@ void TR_GNSSReceiverSdrSerial::noteEpoch(const sdr_rtcm::TrEpoch& e)
     last_tow_ms_ = e.tow_ms;
 }
 
-#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
 void TR_GNSSReceiverSdrSerial::noteLink(const uint8_t* frame, size_t len, const sdr_rtcm::TrEpoch& e, int64_t end_us)
 {
     sdr_aid::EpochAid aid;
     if (!sdr_aid::decodeEpochAid(frame, len, aid)) return;
 
-    // The clock line: each epoch at its latch against when its 4001 ended
-    // here, but those the board marks late (sdr_aid::latchGps). The board's
-    // delay from the latch to that frame stays in (latency_s 0).
+    // The clock line, on every image (a flight image stamps its phase frames
+    // off it, a bench image its script's): each epoch at its latch against
+    // when its 4001 ended here, but those the board marks late
+    // (sdr_aid::latchGps). The board's delay from the latch to that frame
+    // stays in (latency_s 0).
     double latch_gps = 0.0;
     if (sdr_aid::latchGps(e, aid, latch_gps))
     {
@@ -284,7 +280,9 @@ void TR_GNSSReceiverSdrSerial::noteLink(const uint8_t* frame, size_t len, const 
         if (xQueueSend(clock_q_, &rec, 0) != pdTRUE) clock_dropped_++;
     }
 
-    // What the board says it took, against what went out
+#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
+    // What the board says it took, against what went out (the bench's link
+    // line)
     if (!aid.present) return;
     uint32_t sent = 0;
     for (uint8_t sub = sdr_aid::kAttitude; sub <= sdr_aid::kGeometry; sub++)
@@ -292,8 +290,8 @@ void TR_GNSSReceiverSdrSerial::noteLink(const uint8_t* frame, size_t len, const 
     echo_.add(aid.fc_frames, sent, end_us);
     last_aid_ = aid;
     n_aid_++;
-}
 #endif
+}
 
 // ── To the board ────────────────────────────────────────────────────────
 
@@ -330,12 +328,7 @@ bool TR_GNSSReceiverSdrSerial::sendAidFrame(const uint8_t* frame, size_t len)
 
 bool TR_GNSSReceiverSdrSerial::takeClockLine(GnssClockData& out)
 {
-#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
     return clock_q_ != nullptr && xQueueReceive(clock_q_, &out, 0) == pdTRUE;
-#else
-    (void)out;
-    return false;
-#endif
 }
 
 bool TR_GNSSReceiverSdrSerial::pollRawFrame(uint8_t* out, size_t cap, size_t& len, uint32_t& time_us)

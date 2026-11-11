@@ -3,8 +3,8 @@
 // The board (gnss repo, firmware/gnss-sdr-dev) is TinkerRocket's own GNSS
 // receiver. On a V9 or V10's J1 it sends the flight computer RTCM 3 at
 // 2 Mbaud (SdrRtcm.h has what): about 400 frames and 40-55 kB a second at its
-// measurement mode's 100 Hz. It takes no commands. This driver listens, and
-// sends only what a bench image asks it to:
+// measurement mode's 100 Hz. It takes no commands, only TinkerRocket's 4002
+// frames. This driver listens, and sends what the flight task hands it:
 //   - every frame whose CRC-24Q checks, verbatim, into a ring the flight
 //     loop logs as GNSS_RTCM_MSG (0x95), the record that carries the
 //     LC86G's RTCM3 and the mosaic-G5's SBF (Data_Analysis/
@@ -14,14 +14,18 @@
 //     (gnssTypeGivesFix) and logs its stream beside the IMU;
 //   - its counts on the console every 30 s (frames, epochs and their gaps,
 //     fixes, CRC fails, drops);
+//   - the MCU clock against GPS time, fitted to the board's epochs
+//     (GnssTimeSync, each epoch at its latch, those the board marks late
+//     left out), handed to the flight loop each time it moves
+//     (takeClockLine, logged as GNSS_CLOCK_MSG): what every 4002 frame is
+//     stamped by;
 //   - sendAidFrame, the flight task's way to send the board TinkerRocket's
-//     message 4002 (SdrAid.h) without ever blocking. Only a bench image
-//     (TR_BENCH_SDR_AID) calls it, with the P1 script's frames; for that
-//     image the driver also fits the MCU clock to GPS time from the board's
-//     epochs (GnssTimeSync, each epoch at its latch), hands the line to the
-//     flight loop (takeClockLine, logged as GNSS_CLOCK_MSG), and prints a
-//     second console line: what went out, and what the board says it took
-//     (the aiding block of its epochs).
+//     message 4002 (SdrAid.h) without ever blocking. A flight image sends
+//     the real flight phase with it (sub-type 3: projects/flight_computer/
+//     main/sdr_phase_policy.h), which picks the board's boost loops; a
+//     bench image (TR_BENCH_SDR_AID) sends the P1 script's frames instead,
+//     and prints a second console line: what went out, and what the board
+//     says it took (the aiding block of its epochs).
 // begin() needs nothing from the board: before its first fix the board sends
 // only its status, so after a cold power-up its stream starts long after the
 // FC has booted, and the ring fills from then on. Called by TR_GNSSAuto once
@@ -41,9 +45,7 @@
 #include <RocketComputerTypes.h>
 #include "SdrAid.h"
 #include "SdrRtcm.h"
-#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
 #include <GnssTimeSync.h>      // TR_GNSSReceiverLC86_Serial: the clock line, shared
-#endif
 
 class TR_GNSSReceiverSdrSerial : private sdr_rtcm::Rtcm3Framer::Sink
 {
@@ -88,8 +90,8 @@ class TR_GNSSReceiverSdrSerial : private sdr_rtcm::Rtcm3Framer::Sink
 
         /// The clock line each time it moves (about once a second while the
         /// board's epochs come), oldest first, for GNSS_CLOCK_MSG and the
-        /// bench's 4002 stamps. Safe from another task than the poll. Bench
-        /// images only (TR_BENCH_SDR_AID): false on any other.
+        /// 4002 stamps (the flight image's phase, the bench's script). Safe
+        /// from another task than the poll.
         bool takeClockLine(GnssClockData& out);
 
     private:
@@ -98,8 +100,8 @@ class TR_GNSSReceiverSdrSerial : private sdr_rtcm::Rtcm3Framer::Sink
         void pump(size_t max_bytes);
         void drainUartEvents();
         void logStatus();
-#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
         void noteLink(const uint8_t* frame, size_t len, const sdr_rtcm::TrEpoch& e, int64_t end_us);
+#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
         void logLink();
 #endif
 
@@ -154,9 +156,10 @@ class TR_GNSSReceiverSdrSerial : private sdr_rtcm::Rtcm3Framer::Sink
         std::atomic<uint32_t> aid_no_uart_{0};
         std::atomic<uint32_t> aid_bad_{0};       // a frame of the wrong size, or a write cut short
 
-#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
         // The MCU clock against GPS time from the board's epochs (this task
-        // alone touches time_sync_), to the flight loop through a queue.
+        // alone touches time_sync_), to the flight loop through a queue. On
+        // every image with this driver (about 3.6 kB, most of it the line's
+        // history), so a flight image can stamp its phase frames.
         lc86::GnssTimeSync time_sync_;
         static constexpr int kClockQDepth = 4;
         StaticQueue_t     clock_q_struct_ = {};
@@ -166,6 +169,7 @@ class TR_GNSSReceiverSdrSerial : private sdr_rtcm::Rtcm3Framer::Sink
         uint32_t          clock_dropped_ = 0;
         uint32_t          late_left_out_ = 0;    // epochs the board marked late, not on the line
 
+#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
         // What the board says it does with them (the aiding block), and the
         // 4002 frames it took, from its 8-bit count against what went out.
         sdr_aid::EpochAid last_aid_;

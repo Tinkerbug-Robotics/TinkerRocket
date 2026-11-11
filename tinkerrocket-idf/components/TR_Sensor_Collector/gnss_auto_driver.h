@@ -70,8 +70,8 @@ public:
     // frames too.
     bool pollRawFrame(uint8_t* out, size_t cap, size_t& len, uint32_t& time_us);
     // The receiver's clock line: the mosaic's from its 1PPS, the
-    // gnss-sdr-dev board's on a bench image (TR_BENCH_SDR_AID) from its
-    // epochs.
+    // gnss-sdr-dev board's from its epochs (every auto image: the flight
+    // image stamps its phase frames by it, a bench image its script's).
     bool takeClockLine(GnssClockData& out);
     // TinkerRocket's 4002 to the gnss-sdr-dev board (its driver's
     // sendAidFrame: never blocks); false with any other receiver, so a

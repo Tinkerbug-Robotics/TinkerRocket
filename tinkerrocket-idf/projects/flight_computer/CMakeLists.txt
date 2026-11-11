@@ -141,9 +141,11 @@ endif()
 # Bench (P1 of docs/plans/sdr-v10-aided-receiver-plan.md): with the
 # gnss-sdr-dev board on J1 the FC sends it TinkerRocket 4002 frames of scripted
 # values (TR_GNSSReceiverSdr_Serial/SdrAid.h), stamped in GPS time from the
-# board's own epochs, and logs each beside the board's frames (0x95). The auto
-# images only (the V9's and V10's, and a V8's with -DTR_GNSS_AUTO=1; main.cpp
-# refuses any other). Never set for flight.
+# board's own epochs, and logs each beside the board's frames (0x95). They
+# replace the flight image's own 4002, the real flight phase that picks the
+# board's tracking loops (main.cpp sdrPhaseStep): an image sends one or the
+# other. The auto images only (the V9's and V10's, and a V8's with
+# -DTR_GNSS_AUTO=1; main.cpp refuses any other). Never set for flight.
 if(TR_BENCH_SDR_AID)
     add_compile_definitions(TR_BENCH_SDR_AID=1)
     message(WARNING "TR_BENCH_SDR_AID=1 -- scripted 4002 frames to the gnss-sdr-dev board (bench)")

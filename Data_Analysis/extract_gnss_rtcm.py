@@ -29,11 +29,13 @@ On a V9 or V10 with TinkerRocket's gnss-sdr-dev board the record carries that
 board's RTCM3 (MSM7 at up to 100 Hz, TinkerRocket's message 4001, its
 ephemerides), and the same .rtcm3 comes out. The summary then also gives the
 MSM7 epochs' step and any missing between them, and the 4001 sub-types:
-1 after each epoch, 2 after each fix (RTKLIB passes 4001 over). A bench flight
-computer (TR_BENCH_SDR_AID) logs beside them each frame it sent the board,
-TinkerRocket's message 4002: the summary counts those by sub-type (1 attitude,
-2 navigation state, 3 phase, 4 geometry). They stay in the .rtcm3, which the
-board's rtcmdump reads; RTKLIB passes 4002 over too.
+1 after each epoch, 2 after each fix (RTKLIB passes 4001 over). The flight
+computer logs beside them each frame it sent the board, TinkerRocket's message
+4002: a flight image its flight phase (sub-type 3 alone, about one a second and
+three more after each change), a bench one (TR_BENCH_SDR_AID) its P1 script.
+The summary counts those by sub-type (1 attitude, 2 navigation state, 3 phase,
+4 geometry). They stay in the .rtcm3, which the board's rtcmdump reads; RTKLIB
+passes 4002 over too.
 """
 
 from __future__ import annotations

@@ -86,9 +86,10 @@
 #include <MosaicMultibandBench.h> // the bands' combination's bench (TR_BENCH_MB_BLOCKS)
 #include TR_BENCH_MB_BLOCKS       // its recorded MeasEpochs: a scratch file the bench build names, never the repo's
 #endif
-#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
-#include <SdrAid.h>               // the 4002 frames to the gnss-sdr-dev board and the P1 script (TR_BENCH_SDR_AID)
+#if defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+#include <SdrAid.h>               // the 4002 frames to the gnss-sdr-dev board: the flight's phase, a bench's P1 script
 #include <GnssClockRecord.h>      // gnssClockGpsAt: GPS time off the board's clock line
+#include "sdr_phase_policy.h"     // the flight phase the board's tracking loops follow (host-tested)
 #endif
 #if TR_RAW_NAV_MOSAIC
 #include <SbfNav.h>               // the mosaic-G5's navigation blocks as gps_eph_t (TR_GNSSReceiverMosaic_Serial)
@@ -9496,6 +9497,28 @@ static void rawBenchPanicOnce(uint32_t now_ms)
 #if !(defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO)
 #error "TR_BENCH_SDR_AID talks to the gnss-sdr-dev board, which only the auto images drive (TR_GNSS_DRIVER_AUTO: the V9's and V10's, and a V8's built with -DTR_GNSS_AUTO=1)"
 #endif
+#endif
+
+#if defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+// The log's copy of a 4002 frame sent to the gnss-sdr-dev board, a whole
+// frame in one GNSS_RTCM_MSG record beside the board's own frames, time_us
+// when it went out. Called after this pass's drain of the board's frames:
+// never between two parts of one of theirs. 4002 is the flight computer's
+// message and 4001 the board's, so the number gives the direction. The
+// flight image's phase frames and a bench image's script frames alike.
+static void sdrAidLogSent(const uint8_t* frame, size_t len, int64_t now_us)
+{
+    if (len > sdr_aid::kMaxFrame)
+        return;
+    uint8_t rec[sizeof(GnssRtcmHeader) + sdr_aid::kMaxFrame];
+    const GnssRtcmHeader hdr = {(uint32_t)now_us, 0x01};
+    memcpy(rec, &hdr, sizeof(hdr));
+    memcpy(rec + sizeof(hdr), frame, len);
+    (void)enqueueI2STx(GNSS_RTCM_MSG, rec, sizeof(hdr) + len);
+}
+#endif
+
+#if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
 // Bench (P1 of docs/plans/sdr-v10-aided-receiver-plan.md; CMake
 // -DTR_BENCH_SDR_AID=1, an image whose version says "-bench", never flown):
 // the P1 script's TinkerRocket 4002 frames to the gnss-sdr-dev board on J1,
@@ -9555,16 +9578,74 @@ static void sdrAidBenchStep(const GnssClockData& line)
     }
     seq[sub]++;
     sched.sent(sub, now_us, key);
+    sdrAidLogSent(frame, len, now_us);
+}
+#elif defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+// The flight image's 4002 to the gnss-sdr-dev board on J1: the real flight
+// phase alone (sub-type 3), which picks the board's tracking loops. The board
+// boots with `rx aid fc` and `rx fc phase on`: only this request gives it its
+// boost loops (the owner's choice, after the board's own GPS channels took
+// boosts on a static pad), and without one it runs its quiet loops, which
+// lost Galileo and BeiDou in a boost on the rig. So it hears pad on the
+// ground, boost from the ignition (the IMU's own cue, before the launch flag
+// latches: sdr_ignition_cue) to the burnout latch, coast (the quiet loops) to
+// apogee, then descent and landed (sdr_phase_policy.h has the map and why
+// each field is what it is). The attitude, the state and the geometry are
+// not sent: the board does nothing with them before P2/P3, and it takes a
+// phase on its own.
+//
+// Each change goes on the pass that sees it, then three times 100 ms apart,
+// then once a second, each holding 2.5 s on the board. Stamped in GPS time
+// off the board's clock line at the pass the flags were read, src "its own
+// sensors", a test frame only while a sim or a rig replay flies (the pyro
+// dry-fire's latch), so the board takes the real ones with its boot
+// defaults. Logged beside the board's frames (GNSS_RTCM_MSG). Nothing goes
+// out unless the receiver on J1 is the board (a u-blox or a mosaic-G5 there
+// never gets a byte: the driver refuses too) and its line has been valid,
+// from about 10 s after the board's first fix; the last valid line serves for
+// up to 600 s after it last moved (sdr_phase::kLineHoldUs: the board's epochs
+// can stop in a boost). Never blocks and never allocates: the driver checks
+// the UART's TX ring for room first, and a frame that found none goes on the
+// next pass, stamped again. Through the hardware collector, as the clock
+// line comes: a sensor sim does not stop it (it flies test frames).
+//
+// A reboot mid-flight: after a crash restart (a panic or a watchdog) this
+// boot leaves the board out altogether (the crash-boot GNSS rule in setup),
+// so the phase stops, the board's last request lapses 2.5 s after the last
+// frame, and it runs its quiet loops for the rest of that flight. After a
+// power-on, a brownout or a software restart the phase comes back once the
+// board's line is valid again (about 10 s of its epochs).
+//
+// The sender and the cue live at file scope: the clock-line drain hands the
+// sender each record (sdr_phase_sender.noteLine, which keeps only a valid
+// line), the flight-logic tick steps the cue beside the launch detector
+// (sdr_ignition_cue.step), and this reads both once a pass. Constant-
+// initialized (both are literal types), so nothing runs before the loop.
+static sdr_phase::Sender      sdr_phase_sender;
+static sdr_phase::IgnitionCue sdr_ignition_cue;
 
-    // The log's copy, a whole frame in one record, after this pass's drain of
-    // the board's frames: never between two parts of one of theirs. 4002 is
-    // the flight computer's message and 4001 the board's, so the number gives
-    // the direction.
-    uint8_t rec[sizeof(GnssRtcmHeader) + sdr_aid::kMaxFrame];
-    const GnssRtcmHeader hdr = {(uint32_t)now_us, 0x01};
-    memcpy(rec, &hdr, sizeof(hdr));
-    memcpy(rec + sizeof(hdr), frame, len);
-    (void)enqueueI2STx(GNSS_RTCM_MSG, rec, sizeof(hdr) + len);
+static void sdrPhaseStep()
+{
+    if (sensor_collector_hw.gnssType() != GNSS_TYPE_SDR)
+        return;
+    const int64_t now_us = esp_timer_get_time();
+    sdr_phase::Flight f;
+    f.state = rocket_state;
+    f.burnout = burnout_detected;
+    f.apogee = pyro_apogee_detected;
+    f.canopy = deployment_detected || ekf.underCanopy();
+    f.sim = sim_flight::simulated(sim_flight_latched, sensor_collector.isSimActive());
+    f.now_ms = (uint32_t)(now_us / 1000);   // time_ms()'s clock, as the latches' times
+    f.ignition = sdr_ignition_cue.on(f.now_ms);
+    f.launch_ms = launch_time_millis;
+    f.burnout_ms = burnout_time_ms;
+    f.apogee_ms = pyro_apogee_time_ms;
+    uint8_t frame[sdr_aid::kPhaseFrame];
+    const size_t len = sdr_phase_sender.frame(now_us, f, frame, sizeof(frame));
+    if (len == 0 || !sensor_collector_hw.sendGNSSAidFrame(frame, len))
+        return;   // nothing due, or no room: the next pass gives it again
+    sdr_phase_sender.sent(now_us);
+    sdrAidLogSent(frame, len, now_us);
 }
 #endif
 
@@ -9881,8 +9962,14 @@ static void loop_fc()
     // once a second with a fix, so a replay places every raw epoch and fix on
     // the IMU's clock as this flight did. From the hardware collector: it is
     // the real receiver's clock whatever a sensor sim feeds the filter.
-    // Log-only; no-op on u-blox boards. A bench image with the gnss-sdr-dev
-    // board keeps the board's line for its 4002 stamps (TR_BENCH_SDR_AID).
+    // Log-only; no-op on u-blox boards. With the gnss-sdr-dev board the line
+    // also stamps the 4002 frames sent to it: the flight image's phase
+    // (sdrPhaseStep) or a bench image's script (TR_BENCH_SDR_AID), exactly
+    // one of the two. The flight image's sender keeps the last VALID line,
+    // and when it came (sdr_phase::Sender::noteLine, host-tested), so a
+    // restart of the line (five epochs off it) does not stop the phase for
+    // the 10 s it takes to be valid again, mid-flight; the bench takes each
+    // record, as its P1 runs did.
     {
         GnssClockData clk;
 #if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
@@ -9894,10 +9981,15 @@ static void loop_fc()
 #if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
             if (sensor_collector_hw.gnssType() == GNSS_TYPE_SDR)
                 sdr_line = clk;
+#elif defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+            if (sensor_collector_hw.gnssType() == GNSS_TYPE_SDR)
+                sdr_phase_sender.noteLine(clk, esp_timer_get_time());
 #endif
         }
 #if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
         sdrAidBenchStep(sdr_line);
+#elif defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+        sdrPhaseStep();
 #endif
     }
     TR_LP_LAP(SENSORS);
@@ -13717,6 +13809,14 @@ static void loop_fc()
                                        ism6_fresh_kc,    // #1108 imu_healthy
                                        // GnssAscentGate: no apogee vote until admitted
                                        GnssAscentGate::gnssVotes(gnss_admit_state));
+#endif
+#if defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO && !(defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID)
+            // The gnss-sdr-dev board's ignition cue (sdr_phase_policy.h
+            // IgnitionCue), on the launch detector's own argument: the
+            // specific force's magnitude, 0 from a stale IMU. Read only by
+            // sdrPhaseStep, which sends the board a boost from it before the
+            // launch flag latches (its loops alone: nothing here reads it).
+            sdr_ignition_cue.step(now_ms, ism6_fresh_kc ? accel_norm : 0.0f);
 #endif
             TR_LP_LAP(KINEMATICS);
 

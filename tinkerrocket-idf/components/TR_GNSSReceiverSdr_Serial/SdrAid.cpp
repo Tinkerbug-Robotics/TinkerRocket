@@ -341,12 +341,23 @@ Header stampAt(int week, double tow_s)
     return h;
 }
 
+Header gpsStamp(double gps_s)
+{
+    const int week = static_cast<int>(std::floor(gps_s / 604800.0));
+    return stampAt(week, gps_s - static_cast<double>(week) * 604800.0);
+}
+
+uint32_t phaseKey(const PhaseMsg& p)
+{
+    return static_cast<uint32_t>(p.phase & 7U) | static_cast<uint32_t>(p.loops & 3U) << 3 |
+           static_cast<uint32_t>(p.canopy ? 1 : 0) << 5 | static_cast<uint32_t>(p.h.test ? 1 : 0) << 6;
+}
+
 // ── The script ──────────────────────────────────────────────────────────
 
 Header scriptStamp(double gps_s)
 {
-    const int week = static_cast<int>(std::floor(gps_s / 604800.0));
-    Header h = stampAt(week, gps_s - static_cast<double>(week) * 604800.0);
+    Header h = gpsStamp(gps_s);
     h.sub_ns = 0;
     h.src = kSrcScript;
     h.test = true;
@@ -534,9 +545,11 @@ uint8_t AidSchedule::due(int64_t now_us, uint32_t phase_key)
         next_us_[kGeometry] = now_us + kGeometryOffsetUs;
     }
     if (any_sent_ && now_us - last_us_ < kSpacingUs) return 0;
-    if (!have_key_ || phase_key != key_) return kPhase;
+    // Only the sub-types this schedule gives (all four on the bench, the
+    // phase alone in a flight image).
+    if ((subs_ >> kPhase & 1U) != 0 && (!have_key_ || phase_key != key_)) return kPhase;
     for (uint8_t sub : {kAttitude, kNavState, kPhase, kGeometry})
-        if (now_us >= next_us_[sub]) return sub;
+        if ((subs_ >> sub & 1U) != 0 && now_us >= next_us_[sub]) return sub;
     return 0;
 }
 

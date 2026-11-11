@@ -92,8 +92,9 @@ double gnssSdrInflow()
 // budgeted at 4 a second: one and a change's three repeats), the geometry at
 // the start and every 10 s (34 B, 0.1 a second), each with the record header
 // and I2S framing; and the board's clock line (GNSS_CLOCK_MSG) once a second.
-// Counted beside the board's own stream, not in it: its bracket below stays
-// the board's.
+// Today's flight image sends the phase alone (main.cpp sdrPhaseStep) and logs
+// the line, both inside this; the bench image all four. Counted beside the
+// board's own stream, not in it: its bracket below stays the board's.
 double gnssSdrAidInflow()
 {
     const double record = (double)(sizeof(GnssRtcmHeader) + kFrameOverhead);

@@ -2163,7 +2163,9 @@ gtest_discover_tests(test_gnss_time_sync)
 # tests pin too, the stamp, the P1 bench script and the schedule that paces
 # it, the aiding block the board appends to its 4001 epoch and the frames it
 # says it took, and the bench's stamps from the board's epochs through
-# GnssTimeSync. SdrAid.cpp is built as the firmware builds it, with no fused
+# GnssTimeSync, and the flight image's phase (flight_computer/main/
+# sdr_phase_policy.h, pure): its map, the IMU's ignition cue, its keeping of
+# the board's line and its gating on it, and its pacing. SdrAid.cpp is built as the firmware builds it, with no fused
 # multiply-add, so its bytes are the reference codec's on any host.
 add_executable(test_sdr_aid test_sdr_aid.cpp
     ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrAid.cpp
@@ -2178,6 +2180,7 @@ target_include_directories(test_sdr_aid PRIVATE
     ${LIB_DIR}/TR_GNSSReceiverSdr_Serial
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
     ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/../projects/flight_computer/main
 )
 target_link_libraries(test_sdr_aid GTest::gtest_main)
 gtest_discover_tests(test_sdr_aid)

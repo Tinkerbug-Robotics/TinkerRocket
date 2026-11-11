@@ -1,8 +1,11 @@
 // Host tests for TinkerRocket's message 4002, the flight computer to the
 // gnss-sdr-dev board (TR_GNSSReceiverSdr_Serial/SdrAid.cpp): the golden
 // frames both repos pin, the stamp, the P1 bench script and the schedule that
-// paces it, and the aiding block the board appends to its 4001 epoch, with
-// the frames it says it took. The golden bytes come from the P1 spec's
+// paces it, the aiding block the board appends to its 4001 epoch, with the
+// frames it says it took, and the flight image's phase (flight_computer/main/
+// sdr_phase_policy.h): its map from the state machine's flags and the IMU's
+// ignition cue, its keeping of the board's clock line and its gating on it,
+// and its pacing. The golden bytes come from the P1 spec's
 // reference codec (v10link_codec.py); the board's
 // receiver/tests/test_rtcm_fc.cpp pins the same ones.
 #include <gtest/gtest.h>
@@ -20,6 +23,7 @@
 #include "SdrAid.h"
 #include "SdrRtcm.h"
 #include "fixtures/sdr_rtcm_stream.h"
+#include "sdr_phase_policy.h"   // projects/flight_computer/main: the flight image's phase
 
 using namespace sdr_aid;
 
@@ -1379,4 +1383,796 @@ TEST(EchoCount, SetsAsideWhereTheBoardsCountCannotBeFollowed)
     block(183 + 239 + 240, 518 + 239 + 240, 1500000);
     EXPECT_EQ(e.took(), 169u + 239u);
     EXPECT_EQ(e.setAside(), 314u + 240u);
+}
+
+// ── The flight image's phase (projects/flight_computer/main/
+//    sdr_phase_policy.h, main.cpp sdrPhaseStep) ──────────────────────────
+
+namespace {
+
+using sdr_phase::Flight;
+
+// The flags at one pass, with a launch 10 s before it, the burnout 3.9 s
+// after the launch and the apogee 8 s after it.
+Flight flagsOf(RocketState s, bool burnout, bool apogee, bool canopy, bool sim, bool ignition = false)
+{
+    Flight f;
+    f.state = s;
+    f.burnout = burnout;
+    f.apogee = apogee;
+    f.canopy = canopy;
+    f.sim = sim;
+    f.ignition = ignition;
+    f.now_ms = 1000000;
+    f.launch_ms = 990000;
+    f.burnout_ms = 993900;
+    f.apogee_ms = 998000;
+    return f;
+}
+
+// What the board does with a phase it reads under its boot defaults
+// (`rx fc test off`): takes it unless it is a test value or the script's
+// (receiver/v10-link rx_in.c taken()).
+bool boardTakes(const Header& h) { return !(h.test || h.src == kSrcScript); }
+
+// n bits at bit pos of a frame's message (after its 3-byte head).
+uint32_t bitsOf(const Bytes& f, size_t pos, int n)
+{
+    uint32_t v = 0;
+    for (int i = 0; i < n; i++, pos++) v = (v << 1) | ((f[3 + pos / 8] >> (7 - pos % 8)) & 1U);
+    return v;
+}
+
+// A valid line as the driver logs one: GPS time = gps0_s + its formula
+// (GnssClockRecord.h) with the crystal 17 ppm fast.
+GnssClockData validLine()
+{
+    GnssClockData c{};
+    c.flags = GCL_VALID | GCL_STARTED;
+    c.gps0_s = 2432u * 604800u + 203000u;
+    c.mcu0_us = 4123456;
+    c.a_s = 0.0021;
+    c.t_ref_s = 31.0;
+    c.drift = 17.4e-6;
+    c.latency_s = 0.0;
+    return c;
+}
+
+// The bench keeps its schedule in a function-local static on the flight
+// loop, the flight image its sender and its ignition cue at file scope
+// (main.cpp): constant-initialized, so no guard is taken on the first pass or
+// checked on each one after, and nothing runs before the loop. These fail to
+// compile otherwise.
+[[maybe_unused]] constexpr AidSchedule kBenchSchedule{};
+[[maybe_unused]] constexpr sdr_phase::Sender kFlightSender{};
+[[maybe_unused]] constexpr sdr_phase::IgnitionCue kFlightCue{};
+
+// A frame's stamp as continuous GPS seconds.
+double stampGps(const Header& h)
+{
+    return h.week * 604800.0 + h.tow_ms * 1e-3 + h.sub_ns * 1e-9;
+}
+
+}  // namespace
+
+TEST(SdrPhase, EveryStateAndFlag)
+{
+    // The P1 spec's map (2.5), first match wins: landed whatever the flags;
+    // in flight, the apogee before the burnout before the boost; the pad in
+    // every ground state, but a boost in those a launch leaves while the
+    // IMU's ignition cue holds (not MAG_CALIBRATION's, which no launch
+    // leaves; the cue changes nothing in flight or landed). The canopy only
+    // in a descent; since_ms from the launch, burnout and apogee latches;
+    // 65535 on the pad, in the cue's boost and after landing. Every frame
+    // real (src 1) but in a sim, held 2.5 s, tq 5.
+    const RocketState states[] = {INITIALIZATION, READY, PRELAUNCH, INFLIGHT, LANDED, MAG_CALIBRATION};
+    for (RocketState s : states)
+    {
+        for (int m = 0; m < 32; m++)
+        {
+            const bool burnout = m & 1, apogee = m & 2, canopy = m & 4, sim = m & 8, ignition = m & 16;
+            const PhaseMsg p = sdr_phase::phaseOf(flagsOf(s, burnout, apogee, canopy, sim, ignition));
+            SCOPED_TRACE(testing::Message() << "state " << int(s) << " flags " << m);
+            uint8_t ph = kPhPad, loops = kLoopsNone;
+            uint32_t since = 65535;
+            bool can = false;
+            if (s == LANDED)
+            {
+                ph = kPhLanded;
+            }
+            else if (s == INFLIGHT && apogee)
+            {
+                ph = kPhDescent;
+                can = canopy;
+                since = 2000;
+            }
+            else if (s == INFLIGHT && burnout)
+            {
+                ph = kPhCoast;
+                loops = kLoopsQuiet;
+                since = 6100;
+            }
+            else if (s == INFLIGHT)
+            {
+                ph = kPhBoost;
+                loops = kLoopsBoost;
+                since = 10000;
+            }
+            else if (ignition && s != MAG_CALIBRATION)
+            {
+                ph = kPhBoost;
+                loops = kLoopsBoost;
+            }
+            EXPECT_EQ(p.phase, ph);
+            EXPECT_NE(p.phase, kPhUnknown);
+            EXPECT_EQ(p.loops, loops);
+            EXPECT_EQ(p.canopy, can);
+            EXPECT_EQ(p.since_ms, since);
+            EXPECT_EQ(p.hold_ms, 2500u);
+            EXPECT_EQ(p.hold_ms, kPhaseHoldMs);
+            EXPECT_EQ(p.h.src, kSrcOwn);
+            EXPECT_EQ(p.h.test, sim);
+            EXPECT_EQ(p.h.tq, 5);
+            EXPECT_EQ(p.h.tq, kLineTq);
+            EXPECT_EQ(boardTakes(p.h), !sim);
+        }
+    }
+}
+
+TEST(SdrPhase, SinceSaturatesAndNeverWraps)
+{
+    Flight f = flagsOf(INFLIGHT, false, false, false, false);
+    struct Row { uint32_t now, from, since; };
+    const Row rows[] = {
+        {1000000, 1000000, 0},          {1000001, 1000000, 1},          {1065534, 1000000, 65534},
+        {1065535, 1000000, 65535},      {1070000, 1000000, 65535},      {999999, 1000000, 0},   // a start not yet passed
+        {0x00000100u, 0xFFFFFF00u, 512},                                                     // across ms's wrap
+        {600000000, 1000, 65535},
+    };
+    for (const Row& r : rows)
+    {
+        f.now_ms = r.now;
+        f.launch_ms = r.from;
+        EXPECT_EQ(sdr_phase::phaseOf(f).since_ms, r.since) << r.now << " " << r.from;
+        EXPECT_EQ(sdr_phase::sinceMs(r.now, r.from), r.since);
+    }
+    // The coast and the descent count from their own latches
+    f = flagsOf(INFLIGHT, true, false, false, false);
+    f.now_ms = f.burnout_ms + 123;
+    EXPECT_EQ(sdr_phase::phaseOf(f).since_ms, 123u);
+    f = flagsOf(INFLIGHT, true, true, true, false);
+    f.now_ms = f.apogee_ms + 70000;
+    EXPECT_EQ(sdr_phase::phaseOf(f).since_ms, 65535u);
+}
+
+TEST(SdrPhase, AFrameTheBoardTakes)
+{
+    // Each phase stamped and encoded: a 22-byte 4002 sub-type 3 that decodes
+    // to what was sent, its hold the code 125 (2500 ms in 20 ms steps), its
+    // stamp the GPS instant to the nearest ms with the rest in ns.
+    const double gps = 2432 * 604800.0 + 204017.2496123;
+    const Flight cases[] = {
+        flagsOf(READY, false, false, false, false),   flagsOf(INFLIGHT, false, false, false, false),
+        flagsOf(INFLIGHT, true, false, false, false), flagsOf(INFLIGHT, true, true, true, false),
+        flagsOf(LANDED, true, true, true, false),     flagsOf(INFLIGHT, false, false, false, true),
+    };
+    uint8_t seq = 254;
+    for (const Flight& f : cases)
+    {
+        const PhaseMsg p = sdr_phase::stamped(sdr_phase::phaseOf(f), gps, seq);
+        const Bytes b = enc(p);
+        ASSERT_EQ(b.size(), kPhaseFrame);
+        ASSERT_EQ(b.size(), 22u);
+        EXPECT_EQ(fcSubType(b.data(), b.size()), kPhase);
+        EXPECT_EQ(bitsOf(b, 118, 8), 125u);   // the hold's code
+        PhaseMsg d;
+        ASSERT_TRUE(decode(b.data(), b.size(), d));
+        EXPECT_EQ(d.h.week, 2432);
+        EXPECT_EQ(d.h.tow_ms, 204017250u);
+        EXPECT_EQ(d.h.sub_ns, p.h.sub_ns);
+        EXPECT_NEAR(d.h.sub_ns, -387700, 250);   // kept, not zeroed as a script frame's (a double at 1.5e9 s
+                                                 // holds the ns to a quarter of a microsecond)
+        EXPECT_EQ(d.h.seq, seq);
+        EXPECT_EQ(d.h.src, kSrcOwn);
+        EXPECT_EQ(d.h.test, f.sim);
+        EXPECT_EQ(d.h.tq, kLineTq);
+        EXPECT_EQ(d.phase, p.phase);
+        EXPECT_EQ(d.loops, p.loops);
+        EXPECT_EQ(d.canopy, p.canopy);
+        EXPECT_EQ(d.since_ms, p.since_ms);
+        EXPECT_EQ(d.hold_ms, 2500u);
+        EXPECT_EQ(boardTakes(d.h), !f.sim);
+        EXPECT_EQ(enc(d), b);
+        seq++;   // 254, 255, 0, ...
+    }
+}
+
+TEST(SdrPhase, TheKeyIsWhatTheBoardActsOn)
+{
+    // A change of the phase, the loops, the canopy or the test flag is one;
+    // the time in the phase, the stamp, seq, src, tq and the hold are not.
+    const PhaseMsg base = sdr_phase::phaseOf(flagsOf(INFLIGHT, true, true, false, false));
+    const uint32_t k0 = phaseKey(base);
+    EXPECT_EQ(k0, uint32_t{kPhDescent} | uint32_t{kLoopsNone} << 3);
+    PhaseMsg p = base;
+    p.phase = kPhLanded;
+    EXPECT_NE(phaseKey(p), k0);
+    p = base;
+    p.loops = kLoopsQuiet;
+    EXPECT_NE(phaseKey(p), k0);
+    p = base;
+    p.canopy = true;
+    EXPECT_NE(phaseKey(p), k0);
+    p = base;
+    p.h.test = true;
+    EXPECT_NE(phaseKey(p), k0);
+    p = base;
+    p.since_ms = 12345;
+    p.h = stampAt(2433, 17.0);
+    p.h.test = base.h.test;   // (a Header's default is a test)
+    p.h.seq = 77;
+    p.h.src = kSrcFusedBoard;
+    p.h.tq = 2;
+    p.hold_ms = 5000;
+    EXPECT_EQ(phaseKey(p), k0);
+    // Every message the map gives has its own key
+    // (the cue's boost is the launch's: one key, so INFLIGHT takes it over
+    // with no frame of its own)
+    EXPECT_EQ(phaseKey(sdr_phase::phaseOf(flagsOf(PRELAUNCH, false, false, false, false, true))),
+              phaseKey(sdr_phase::phaseOf(flagsOf(INFLIGHT, false, false, false, false, true))));
+    std::vector<uint32_t> keys;
+    for (RocketState s : {READY, INFLIGHT, LANDED})
+        for (int m = 0; m < 32; m++)
+        {
+            const PhaseMsg q = sdr_phase::phaseOf(flagsOf(s, m & 1, m & 2, m & 4, m & 8, m & 16));
+            const uint32_t k = phaseKey(q);
+            keys.push_back(k);
+            EXPECT_EQ(k, uint32_t{q.phase} | uint32_t{q.loops} << 3 | uint32_t{q.canopy} << 5 |
+                             uint32_t{q.h.test} << 6);
+        }
+    std::sort(keys.begin(), keys.end());
+    keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+    EXPECT_EQ(keys.size(), 2u * (1 + 1 + 1 + 2 + 1));   // pad, boost, coast, descent (canopy or not), landed; x sim
+}
+
+TEST(SdrAid, AGpsStampIsStampAtWithTheWeekSplitOff)
+{
+    // The same arithmetic as the script's stamp, the ns kept
+    std::mt19937_64 rng{4002};
+    std::uniform_real_distribution<double> u(0.0, 604800.0);
+    for (int i = 0; i < 2000; i++)
+    {
+        const double gps = 2432 * 604800.0 + u(rng);
+        const int week = static_cast<int>(std::floor(gps / 604800.0));
+        const Header a = gpsStamp(gps);
+        const Header b = stampAt(week, gps - week * 604800.0);
+        ASSERT_EQ(a.week, b.week);
+        ASSERT_EQ(a.tow_ms, b.tow_ms);
+        ASSERT_EQ(a.sub_ns, b.sub_ns);
+        const Header s = scriptStamp(gps);
+        ASSERT_EQ(s.week, a.week);
+        ASSERT_EQ(s.tow_ms, a.tow_ms);
+        ASSERT_EQ(s.sub_ns, 0);
+    }
+    // The week's last half ms rounds to the next week's 0 (a double at 1.5e9 s
+    // holds the ns to a quarter of a microsecond)
+    const Header r = gpsStamp(2433 * 604800.0 - 0.0004);
+    EXPECT_EQ(r.week, 2433);
+    EXPECT_EQ(r.tow_ms, 0u);
+    EXPECT_NEAR(r.sub_ns, -400000, 250);
+    const Header w = gpsStamp(2432 * 604800.0 + 204000.1234567);
+    EXPECT_EQ(w.week, 2432);
+    EXPECT_EQ(w.tow_ms, 204000123u);
+    EXPECT_NEAR(w.sub_ns, 456700, 250);
+}
+
+TEST(AidSchedule, ThePhaseAloneAtItsOwnTimes)
+{
+    // The flight image's schedule (the phase alone), 120 s of passes 1 ms
+    // apart: never another sub-type; each change on the pass it appears,
+    // then 103, 203 and 303 ms after it, then every second; and after a
+    // stall of 2.5 s one frame when the passes come back, then a second
+    // after that: no burst.
+    AidSchedule s(1u << kPhase);
+    const int64_t t0 = 3000000;
+    // The key from each time on (ms after t0): the pad, a launch, its
+    // burnout, the apogee, the canopy 1 ms after the apogee's second repeat,
+    // the landing
+    const std::vector<std::pair<int64_t, uint32_t>> keys = {
+        {0, 1}, {60000, 2 | 2 << 3}, {63900, 3 | 1 << 3}, {80000, 4}, {80204, 4 | 1 << 5}, {110000, 5}};
+    auto keyAt = [&](int64_t ms) {
+        uint32_t k = 0;
+        for (const auto& [from, key] : keys)
+            if (ms >= from) k = key;
+        return k;
+    };
+    const int64_t stall_from = 112500, stall_to = 115000;   // ms after t0: no passes
+    std::vector<int64_t> sent;
+    int64_t last = -1;
+    for (int64_t ms = 0; ms < 120000; ms++)
+    {
+        if (ms >= stall_from && ms < stall_to) continue;
+        const int64_t now = t0 + ms * 1000;
+        const uint32_t key = keyAt(ms);
+        const uint8_t sub = s.due(now, key);
+        if (sub == 0) continue;
+        ASSERT_EQ(sub, kPhase) << ms;
+        if (last >= 0)
+        {
+            EXPECT_GE(now - last, AidSchedule::kSpacingUs);
+        }
+        s.sent(sub, now, key);
+        EXPECT_EQ(s.due(now, key), 0) << "two in one pass at " << ms;
+        sent.push_back(ms);
+        last = now;
+    }
+    std::vector<int64_t> want;
+    for (size_t i = 0; i < keys.size(); i++)
+    {
+        const int64_t c = keys[i].first;
+        const int64_t end = i + 1 < keys.size() ? keys[i + 1].first : 120000;
+        std::vector<int64_t> seg = {c};
+        for (int64_t t : {c + 103, c + 203, c + 303})
+            if (t < end) seg.push_back(t);
+        for (int64_t t = c + 1303; t < end; t += 1000) seg.push_back(t);
+        for (int64_t t : seg)
+        {
+            if (t >= stall_from && t < stall_to) continue;
+            if (t >= stall_to) break;
+            want.push_back(t);
+        }
+    }
+    // After the stall: once at its end, then every second from there
+    for (int64_t t = stall_to; t < 120000; t += 1000) want.push_back(t);
+    EXPECT_EQ(sent, want);
+}
+
+TEST(AidSchedule, APhaseChangeWaitsOnlyForTheSpacing)
+{
+    // Passes closer than 1 ms: a change half a ms after a frame goes on the
+    // first pass a ms after it
+    AidSchedule s(1u << kPhase);
+    EXPECT_EQ(s.due(0, 1), kPhase);   // the first call sends
+    s.sent(kPhase, 0, 1);
+    EXPECT_EQ(s.due(500, 2), 0);
+    EXPECT_EQ(s.due(999, 2), 0);
+    EXPECT_EQ(s.due(1000, 2), kPhase);
+    s.sent(kPhase, 1000, 2);
+    EXPECT_FALSE(s.anyDue(1001));
+    EXPECT_FALSE(s.anyDue(103999));
+    EXPECT_TRUE(s.anyDue(104000));   // its first repeat, 103 ms after
+}
+
+TEST(SdrPhase, NothingWithoutAValidLineMovedInTheLast600s)
+{
+    sdr_phase::Sender tx;
+    const Flight f = flagsOf(READY, false, false, false, false);
+    uint8_t b[kMaxFrame];
+    const GnssClockData line = validLine();
+    const int64_t t = 700000000;   // us
+    // No valid line (before the board's first 10 s): nothing, and nothing
+    // used up
+    GnssClockData none = line;
+    none.flags = GCL_STARTED;
+    for (int64_t now = t - 5000000; now < t; now += 1000)
+    {
+        tx.noteLine(none, now - 1000);
+        ASSERT_EQ(tx.frame(now, f, b, sizeof(b)), 0u);
+    }
+    EXPECT_EQ(tx.seq(), 0);
+    // A valid line that last moved 600 s ago or more: nothing
+    tx.noteLine(line, t - sdr_phase::kLineHoldUs);
+    EXPECT_EQ(tx.frame(t, f, b, sizeof(b)), 0u);
+    tx.noteLine(line, t - sdr_phase::kLineHoldUs - 1);
+    EXPECT_EQ(tx.frame(t, f, b, sizeof(b)), 0u);
+    // A buffer too short for a frame gets nothing
+    tx.noteLine(line, t);
+    EXPECT_EQ(tx.frame(t, f, b, kPhaseFrame - 1), 0u);
+    EXPECT_EQ(tx.seq(), 0);
+    // Then 2 s with a line moved within the 600 s (the first frame at once
+    // and its repeats), 3 s past them (the board's epochs stopped long
+    // ago: nothing), 2 s within them again (the second missed goes at once,
+    // then one a second from there)
+    std::vector<int64_t> sent;
+    for (int64_t now = t; now < t + 7000000; now += 1000)
+    {
+        const bool stale = now >= t + 2000000 && now < t + 5000000;
+        tx.noteLine(line, stale ? now - sdr_phase::kLineHoldUs : now - sdr_phase::kLineHoldUs + 1);
+        if (tx.frame(now, f, b, sizeof(b)) == 0) continue;
+        tx.sent(now);
+        sent.push_back((now - t) / 1000);
+    }
+    EXPECT_EQ(sent, (std::vector<int64_t>{0, 103, 203, 303, 1303, 5000, 6000}));
+    EXPECT_EQ(tx.seq(), 7);
+}
+
+TEST(SdrPhase, AWholeFlight)
+{
+    // The flight image's sender pass by pass, 1 ms apart, on a valid line
+    // noted once a second (as the driver hands it on): 300 s on the pad
+    // (READY), a launch, the
+    // burnout at T+3.9 s, the apogee at T+20 s, the deployment at T+21 s,
+    // landed at T+90 s, 10 s more. The TX ring is full on the burnout's
+    // first try.
+    const GnssClockData line = validLine();
+    const int64_t t0 = 50000000;   // us: the first pass
+    const int64_t T = t0 + 300000000;
+    const int64_t burnout = T + 3900000, apogee = T + 20000000, deploy = T + 21000000, landed = T + 90000000;
+    const int64_t end = landed + 10000000;
+    sdr_phase::Sender tx;
+    struct Frame { int64_t now; PhaseMsg p; };
+    std::vector<Frame> out;
+    bool refused = false;
+    for (int64_t now = t0; now < end; now += 1000)
+    {
+        Flight f;
+        f.state = now >= landed ? LANDED : (now >= T ? INFLIGHT : READY);
+        f.burnout = now >= burnout;
+        f.apogee = now >= apogee;
+        f.canopy = now >= deploy;
+        f.now_ms = static_cast<uint32_t>(now / 1000);
+        f.launch_ms = static_cast<uint32_t>(T / 1000);
+        f.burnout_ms = static_cast<uint32_t>(burnout / 1000);
+        f.apogee_ms = static_cast<uint32_t>(apogee / 1000);
+        if ((now - t0) % 1000000 == 0) tx.noteLine(line, now);
+        uint8_t b[kPhaseFrame];
+        const size_t len = tx.frame(now, f, b, sizeof(b));
+        if (len == 0) continue;
+        ASSERT_EQ(len, kPhaseFrame);
+        if (now == burnout && !refused)
+        {
+            refused = true;   // no room: given again on the next pass
+            continue;
+        }
+        PhaseMsg d;
+        ASSERT_TRUE(decode(b, len, d));
+        out.push_back({now, d});
+        tx.sent(now);
+    }
+    ASSERT_TRUE(refused);
+    ASSERT_GT(out.size(), 256u);   // seq goes round
+
+    // The first frame on the first pass; the boost on the pass INFLIGHT
+    // appears; the burnout's a pass late (its first try found no room)
+    auto firstOf = [&](uint8_t ph) {
+        for (const Frame& fr : out)
+            if (fr.p.phase == ph) return fr.now;
+        return int64_t{-1};
+    };
+    EXPECT_EQ(out.front().now, t0);
+    EXPECT_EQ(firstOf(kPhBoost), T);
+    EXPECT_EQ(firstOf(kPhCoast), burnout + 1000);
+    EXPECT_EQ(firstOf(kPhDescent), apogee);
+    EXPECT_EQ(firstOf(kPhLanded), landed);
+
+    double last_gps = 0.0;
+    int64_t seg_start = -1;
+    uint32_t seg_key = 0xFFFFFFFF;
+    int changes = 0;
+    for (size_t i = 0; i < out.size(); i++)
+    {
+        const Frame& fr = out[i];
+        const PhaseMsg& p = fr.p;
+        SCOPED_TRACE(testing::Message() << "frame " << i << " at " << (fr.now - T) / 1000 << " ms from the launch");
+        // seq one up each frame, round its 8 bits
+        EXPECT_EQ(p.h.seq, static_cast<uint8_t>(i));
+        // The vehicle's own values, taken by the board as they are
+        EXPECT_EQ(p.h.src, kSrcOwn);
+        EXPECT_FALSE(p.h.test);
+        EXPECT_EQ(p.h.tq, kLineTq);
+        EXPECT_EQ(p.hold_ms, 2500u);
+        EXPECT_TRUE(boardTakes(p.h));
+        // What the flags said at its pass
+        uint8_t ph = kPhPad, loops = kLoopsNone;
+        bool canopy = false;
+        uint32_t since = 65535;
+        if (fr.now >= landed) ph = kPhLanded;
+        else if (fr.now >= apogee) { ph = kPhDescent; canopy = fr.now >= deploy; since = static_cast<uint32_t>(std::min<int64_t>((fr.now - apogee) / 1000, 65535)); }
+        else if (fr.now >= burnout) { ph = kPhCoast; loops = kLoopsQuiet; since = static_cast<uint32_t>((fr.now - burnout) / 1000); }
+        else if (fr.now >= T) { ph = kPhBoost; loops = kLoopsBoost; since = static_cast<uint32_t>((fr.now - T) / 1000); }
+        EXPECT_EQ(p.phase, ph);
+        EXPECT_EQ(p.loops, loops);
+        EXPECT_EQ(p.canopy, canopy);
+        EXPECT_EQ(p.since_ms, since);
+        // Its stamp is the line's GPS time at its pass, to the ns field's
+        // rounding, and the stamps only go forward
+        double want = 0.0;
+        ASSERT_TRUE(lc86::gnssClockGpsAt(line, fr.now, want));
+        EXPECT_NEAR(stampGps(p.h), want, 1e-6);
+        EXPECT_GT(stampGps(p.h), last_gps);
+        last_gps = stampGps(p.h);
+        // Each change, then 103, 203 and 303 ms after it, then every second
+        const uint32_t key = phaseKey(p);
+        if (key != seg_key)
+        {
+            seg_key = key;
+            seg_start = fr.now;
+            changes++;
+            continue;
+        }
+        const int64_t dt = (fr.now - seg_start) / 1000;
+        const int64_t prev = (out[i - 1].now - seg_start) / 1000;
+        const int64_t next_want = prev == 0 ? 103 : (prev < 303 ? prev + 100 : prev + 1000);
+        EXPECT_EQ(dt, next_want);
+    }
+    EXPECT_EQ(changes, 6);   // pad, boost, coast, descent, descent under the canopy, landed
+
+    // Four frames in the boost's 3.9 s and the coast's first second: the
+    // change and its three repeats, then one a second
+    int boost = 0;
+    for (const Frame& fr : out) boost += fr.p.phase == kPhBoost;
+    EXPECT_EQ(boost, 4 + 3);   // T, +103, +203, +303, +1303, +2303, +3303
+}
+
+TEST(SdrPhase, ASimFliesTestFrames)
+{
+    // A sim's flight (or a rig replay's) is sent as test frames, which the
+    // board takes only under `rx fc test on`; its start and its end are
+    // changes, sent at once.
+    const GnssClockData line = validLine();
+    sdr_phase::Sender tx;
+    uint8_t b[kPhaseFrame];
+    Flight f = flagsOf(READY, false, false, false, false);
+    const int64_t t = 90000000;
+    tx.noteLine(line, t);
+    ASSERT_GT(tx.frame(t, f, b, sizeof(b)), 0u);
+    tx.sent(t);
+    f.sim = true;   // the sim starts on the pad
+    ASSERT_GT(tx.frame(t + 1000, f, b, sizeof(b)), 0u);
+    PhaseMsg d;
+    ASSERT_TRUE(decode(b, kPhaseFrame, d));
+    EXPECT_EQ(d.phase, kPhPad);
+    EXPECT_TRUE(d.h.test);
+    EXPECT_FALSE(boardTakes(d.h));
+    tx.sent(t + 1000);
+    f.state = INFLIGHT;   // its launch
+    ASSERT_GT(tx.frame(t + 2000, f, b, sizeof(b)), 0u);
+    ASSERT_TRUE(decode(b, kPhaseFrame, d));
+    EXPECT_EQ(d.phase, kPhBoost);
+    EXPECT_EQ(d.loops, kLoopsBoost);
+    EXPECT_TRUE(d.h.test);
+    EXPECT_FALSE(boardTakes(d.h));
+}
+
+TEST(SdrPhase, ARestartOfTheLineDoesNotStopThePhase)
+{
+    // The drain hands the sender every record the driver gives (main.cpp):
+    // a valid line, then a restart of it in the boost (five epochs off it:
+    // records that are not valid for the 10 s the new history takes), then
+    // the new valid line. The phase goes on at its pace through the restart,
+    // stamped off the old line, and off the new one from the first frame
+    // after it came; the stamps stay tq 5 (the line is never 100 s old).
+    const GnssClockData a = validLine();
+    GnssClockData b = validLine();
+    b.a_s = -0.0137;   // 15.8 ms from a's at any instant: told apart
+    b.seq = a.seq + 6;
+    GnssClockData restart = b;
+    restart.flags = GCL_STARTED;
+    const int64_t t0 = 30000000;
+    const int64_t T = t0 + 5000000;   // the launch
+    const int64_t burnout = T + 15500000;
+    const int64_t restart_from = T + 1000000, valid_from = T + 12000000;
+    sdr_phase::Sender tx;
+    struct Frame { int64_t now; PhaseMsg p; };
+    std::vector<Frame> out;
+    for (int64_t now = t0; now < T + 20000000; now += 1000)
+    {
+        if ((now - t0) % 1000000 == 0)
+            tx.noteLine(now < restart_from ? a : (now < valid_from ? restart : b), now);
+        Flight f;
+        f.state = now >= T ? INFLIGHT : READY;
+        f.burnout = now >= burnout;
+        f.now_ms = static_cast<uint32_t>(now / 1000);
+        f.launch_ms = static_cast<uint32_t>(T / 1000);
+        f.burnout_ms = static_cast<uint32_t>(burnout / 1000);
+        uint8_t buf[kPhaseFrame];
+        const size_t len = tx.frame(now, f, buf, sizeof(buf));
+        if (len == 0) continue;
+        PhaseMsg d;
+        ASSERT_TRUE(decode(buf, len, d));
+        out.push_back({now, d});
+        tx.sent(now);
+    }
+    std::vector<int64_t> boost;
+    for (const Frame& fr : out)
+    {
+        SCOPED_TRACE(testing::Message() << "at " << (fr.now - T) / 1000 << " ms from the launch");
+        double want = 0.0;
+        ASSERT_TRUE(lc86::gnssClockGpsAt(fr.now < valid_from ? a : b, fr.now, want));
+        EXPECT_NEAR(stampGps(fr.p.h), want, 1e-6);
+        EXPECT_EQ(fr.p.h.tq, kLineTq);
+        if (fr.p.phase == kPhBoost) boost.push_back((fr.now - T) / 1000);
+    }
+    // The boost's change and repeats, then every second to the burnout,
+    // none missed in the restart (1 to 12 s)
+    std::vector<int64_t> want = {0, 103, 203, 303};
+    for (int64_t ms = 1303; ms < 15500; ms += 1000) want.push_back(ms);
+    EXPECT_EQ(boost, want);
+    double d_ab = 0.0, d_bb = 0.0;
+    ASSERT_TRUE(lc86::gnssClockGpsAt(a, valid_from, d_ab));
+    ASSERT_TRUE(lc86::gnssClockGpsAt(b, valid_from, d_bb));
+    EXPECT_GT(std::fabs(d_ab - d_bb), 0.010);
+}
+
+TEST(SdrPhase, AHeldLinesStampsSayItIsOld)
+{
+    // One valid line, never again (the board's epochs stopped): tq 5 while
+    // it moved within 100 s, 6 after, nothing from 600 s
+    const GnssClockData line = validLine();
+    const Flight f = flagsOf(READY, false, false, false, false);
+    sdr_phase::Sender tx;
+    const int64_t t = 10000000;
+    tx.noteLine(line, t);
+    int fresh = 0, held = 0;
+    int64_t last = -1;
+    for (int64_t now = t; now < t + sdr_phase::kLineHoldUs + 3000000; now += 1000)
+    {
+        uint8_t b[kPhaseFrame];
+        const size_t len = tx.frame(now, f, b, sizeof(b));
+        if (len == 0) continue;
+        PhaseMsg d;
+        ASSERT_TRUE(decode(b, len, d));
+        const int64_t age = now - t;
+        EXPECT_EQ(d.h.tq, age <= sdr_phase::kLineTqFreshUs ? kLineTq : sdr_phase::kHeldLineTq) << age;
+        (age <= sdr_phase::kLineTqFreshUs ? fresh : held)++;
+        last = age;
+        tx.sent(now);
+    }
+    EXPECT_EQ(fresh, 4 + 99);    // 0, 103, 203, 303 ms, then 1.303 ... 99.303 s
+    EXPECT_EQ(held, 500);        // 100.303 ... 599.303 s
+    EXPECT_LT(last, sdr_phase::kLineHoldUs);
+    EXPECT_EQ(sdr_phase::kHeldLineTq, 6);
+    EXPECT_EQ(sdr_phase::kLineTqFreshUs, 100000000);
+}
+
+TEST(IgnitionCue, FifteenTicksOverTwoGThenHeldASecond)
+{
+    using sdr_phase::IgnitionCue;
+    EXPECT_EQ(IgnitionCue::kMs2, 20.0f);   // the launch detector's first bar (TR_KinematicChecks)
+    EXPECT_EQ(IgnitionCue::kCount, 15);
+    EXPECT_EQ(IgnitionCue::kHoldMs, 1000u);
+    IgnitionCue c;
+    uint32_t ms = 5000;
+    auto run = [&](int n, float acc) {
+        for (int i = 0; i < n; i++, ms++) c.step(ms, acc);
+    };
+    // At rest on the pad, 1 g, for a minute: never
+    for (int i = 0; i < 60000; i++, ms++)
+    {
+        c.step(ms, 9.81f);
+        ASSERT_FALSE(c.on(ms));
+    }
+    // 14 ticks over the bar, then one at it (not over): a bump, never
+    run(14, 25.0f);
+    EXPECT_FALSE(c.on(ms - 1));
+    run(1, 20.0f);
+    EXPECT_FALSE(c.on(ms - 1));
+    // A stale IMU (the caller's 0) and a NaN break a run as a low tick does
+    run(14, 25.0f);
+    run(1, 0.0f);
+    run(14, 25.0f);
+    run(1, std::numeric_limits<float>::quiet_NaN());
+    run(14, 25.0f);
+    EXPECT_FALSE(c.on(ms - 1));
+    // The 15th in a row: on at that tick
+    run(1, 25.0f);
+    EXPECT_TRUE(c.on(ms - 1));
+    // Through a boost's dips under the bar (each resets the run): on
+    for (int k = 0; k < 20; k++)
+    {
+        run(5, 15.0f);
+        for (int i = 0; i < 30; i++, ms++)
+        {
+            c.step(ms, 45.0f);
+            ASSERT_TRUE(c.on(ms));
+        }
+    }
+    // The run's end: held for 1 s from its last tick, then off
+    const uint32_t last = ms - 1;
+    for (; ms < last + IgnitionCue::kHoldMs; ms++)
+    {
+        c.step(ms, 9.81f);
+        ASSERT_TRUE(c.on(ms)) << ms - last;
+    }
+    c.step(ms, 9.81f);
+    EXPECT_FALSE(c.on(ms));
+    ms++;
+    // Not stepped (MAG_CALIBRATION skips the flight-logic's checks): it
+    // lapses all the same
+    run(15, 25.0f);
+    EXPECT_TRUE(c.on(ms - 1));
+    EXPECT_TRUE(c.on(ms - 1 + IgnitionCue::kHoldMs - 1));
+    EXPECT_FALSE(c.on(ms - 1 + IgnitionCue::kHoldMs));
+    // Across 32-bit ms's wrap (49.7 days up)
+    IgnitionCue w;
+    uint32_t m = 0xFFFFFFF8u;
+    for (int i = 0; i < 15; i++, m++) w.step(m, 25.0f);
+    EXPECT_TRUE(w.on(m - 1));
+    EXPECT_TRUE(w.on(m - 1 + 999));
+    EXPECT_FALSE(w.on(m - 1 + 1000));
+    // A cue that lapsed while stepped stays off, even at its last tick's ms
+    // (where 32-bit ms come round to after 49.7 days)
+    const uint32_t last_w = m - 1;
+    for (int i = 0; i < 2000; i++, m++) w.step(m, 9.81f);
+    EXPECT_FALSE(w.on(m - 1));
+    EXPECT_FALSE(w.on(last_w));
+}
+
+TEST(SdrPhase, TheCueGivesTheBoostBeforeTheLaunchFlag)
+{
+    // Pass by pass, 1 ms apart, as main.cpp runs them: the phase sent off the
+    // cue as the last flight-logic tick left it, then this tick's step. On
+    // READY: a 20 ms bump at 3 g at P (a false cue), then the ignition at T,
+    // 5 g with a dip to 1.5 g at T+40..45 ms, the launch flag at T+265 ms
+    // (the barometer-confirmed path's slowest), the burnout latch at
+    // T+2.051 s (0.5 g of drag from T+2 s).
+    const GnssClockData line = validLine();
+    const int64_t t0 = 60000000;
+    const int64_t P = t0 + 5000000, T = t0 + 20000000;
+    const int64_t launch = T + 265000, burnout = T + 2051000, end = T + 4000000;
+    sdr_phase::Sender tx;
+    sdr_phase::IgnitionCue cue;
+    struct Frame { int64_t now; PhaseMsg p; };
+    std::vector<Frame> out;
+    for (int64_t now = t0; now < end; now += 1000)
+    {
+        if ((now - t0) % 1000000 == 0) tx.noteLine(line, now);
+        const uint32_t now_ms = static_cast<uint32_t>(now / 1000);
+        Flight f;
+        f.state = now >= launch ? INFLIGHT : READY;
+        f.burnout = now >= burnout;
+        f.now_ms = now_ms;
+        f.ignition = cue.on(now_ms);
+        f.launch_ms = static_cast<uint32_t>(launch / 1000);
+        f.burnout_ms = static_cast<uint32_t>(burnout / 1000);
+        uint8_t b[kPhaseFrame];
+        const size_t len = tx.frame(now, f, b, sizeof(b));
+        if (len > 0)
+        {
+            PhaseMsg d;
+            ASSERT_TRUE(decode(b, len, d));
+            out.push_back({now, d});
+            tx.sent(now);
+        }
+        float acc = 9.81f;
+        if (now >= P && now < P + 20000) acc = 29.4f;
+        if (now >= T && now < T + 2000000) acc = (now >= T + 40000 && now < T + 46000) ? 14.7f : 49.0f;
+        if (now >= T + 2000000) acc = 4.9f;
+        cue.step(now_ms, acc);
+    }
+    auto ms = [](int64_t a, int64_t b) { return (a - b) / 1000; };
+    // The false cue: boost 15 ms after the bump began, its repeats, the pad
+    // again at once 1 s after the bump's last tick (P+19 ms)
+    std::vector<std::pair<int64_t, uint8_t>> bump;
+    for (const Frame& fr : out)
+        if (fr.now >= P && fr.now < P + 1400000) bump.push_back({ms(fr.now, P), fr.p.phase});
+    EXPECT_EQ(bump, (std::vector<std::pair<int64_t, uint8_t>>{
+                        {15, kPhBoost}, {118, kPhBoost}, {218, kPhBoost}, {318, kPhBoost},
+                        {1019, kPhPad}, {1122, kPhPad}, {1222, kPhPad}, {1322, kPhPad}}));
+    // The flight: boost 15 ms after the ignition, 250 ms before the launch
+    // flag; the launch flag sends nothing of its own (the same key), its
+    // repeats and seconds go on from the cue's change, and since_ms counts
+    // from the launch once it latched (65535 before: no latch yet)
+    struct Want { int64_t ms; uint8_t phase; uint32_t since; };
+    const std::vector<Want> want = {{15, kPhBoost, 65535},  {118, kPhBoost, 65535}, {218, kPhBoost, 65535},
+                                    {318, kPhBoost, 53},    {1318, kPhBoost, 1053}, {2051, kPhCoast, 0},
+                                    {2154, kPhCoast, 103},  {2254, kPhCoast, 203},  {2354, kPhCoast, 303},
+                                    {3354, kPhCoast, 1303}};
+    std::vector<Frame> flight;
+    for (const Frame& fr : out)
+        if (fr.now >= T) flight.push_back(fr);
+    ASSERT_EQ(flight.size(), want.size());
+    for (size_t i = 0; i < want.size(); i++)
+    {
+        SCOPED_TRACE(testing::Message() << "frame " << i);
+        EXPECT_EQ(ms(flight[i].now, T), want[i].ms);
+        EXPECT_EQ(flight[i].p.phase, want[i].phase);
+        EXPECT_EQ(flight[i].p.loops, want[i].phase == kPhBoost ? kLoopsBoost : kLoopsQuiet);
+        EXPECT_EQ(flight[i].p.since_ms, want[i].since);
+        EXPECT_TRUE(boardTakes(flight[i].p.h));
+    }
+    // The last pad frame before it was a pad (the cue's boost is a change)
+    const auto before = std::find_if(out.rbegin(), out.rend(), [&](const Frame& fr) { return fr.now < T; });
+    ASSERT_NE(before, out.rend());
+    EXPECT_EQ(before->p.phase, kPhPad);
 }

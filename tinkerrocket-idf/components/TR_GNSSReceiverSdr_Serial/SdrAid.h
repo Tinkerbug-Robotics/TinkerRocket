@@ -166,6 +166,28 @@ bool decode(const uint8_t* frame, size_t len, Geometry& out);
 // rest in ns, a stamp that rounds to the week's end the next week's 0 (the
 // board's rounding of its own fixes). seq, src, test and tq as Header's.
 Header stampAt(int week, double tow_s);
+// The same from continuous GPS seconds (week * 604800 + time of week, what a
+// clock line gives: lc86::gnssClockGpsAt), the week split off first.
+Header gpsStamp(double gps_s);
+
+// ── The flight's own values ─────────────────────────────────────────────
+// A flight image sends the board its real flight phase (sub-type 3 alone:
+// projects/flight_computer/main/sdr_phase_policy.h), from the state
+// machine's flags and, before the launch flag, the IMU's own ignition cue,
+// src kSrcOwn and not a test outside a sim, so the board takes it with its
+// boot defaults.
+// A real phase's hold, the script's (the P1 spec's section 2.5): repeated
+// every second, a request survives one lost frame, and one from a flight
+// computer gone silent lapses within 2.5 s.
+static constexpr uint32_t kPhaseHoldMs = 2500;
+// A stamp off the board's own latch line (its epochs fitted as
+// TR_GNSSReceiverSdr_Serial does, the board's output delay left in:
+// latency_s 0): 2-6 ms early, 0.5 ms rms on the rig, so under 16.4 ms.
+static constexpr uint8_t  kLineTq = 5;
+// What a change of a phase message is to its sender: phase | loops << 3 |
+// canopy << 5 | test << 6. A sim's start or end goes at once too; since_ms
+// and the stamp change every frame and are not one.
+uint32_t phaseKey(const PhaseMsg& p);
 
 // ── The P1 bench script (TR_BENCH_SDR_AID) ──────────────────────────────
 // Scripted values for a header's tow_ms, the same on the board, which checks
@@ -267,11 +289,20 @@ private:
 // (7 ms after the attitude): about 16 frames a second. Each next due time
 // steps by its period, so the mean rates are exact; one more than a period
 // behind restarts from now, so a stall brings no burst after it.
+// A schedule built with fewer sub-types (subs, a mask of 1 << sub-type) gives
+// only those, each at its own times as above: the flight image's sender
+// takes the phase alone (sdr_phase_policy.h), the bench's all four.
 class AidSchedule
 {
 public:
     static constexpr int64_t kSpacingUs = 1000;
     static constexpr int64_t kKeyLookUs = 10000;   // see anyDue
+    static constexpr uint8_t kAllSubs = 1u << kAttitude | 1u << kNavState | 1u << kPhase | 1u << kGeometry;
+
+    // constexpr: a function-local static schedule (the senders' in main.cpp)
+    // is then initialized at compile time, with no guard to take on the
+    // flight loop's first pass and none to check on each one after.
+    explicit constexpr AidSchedule(uint8_t subs = kAllSubs) : subs_(subs) {}
 
     // The sub-type to send now (0: none), given the phase key as the caller
     // has it now: a key that is not the last one sent goes first.
@@ -288,6 +319,7 @@ public:
     void sent(uint8_t sub, int64_t now_us, uint32_t phase_key);
 
 private:
+    uint8_t  subs_;            // the sub-types it gives, 1 << each
     int64_t  next_us_[kGeometry + 1] = {};
     int64_t  last_us_ = 0;
     int64_t  repeat_us_ = 0;   // where the last change's repeats step from: its pass plus the phase's offset
