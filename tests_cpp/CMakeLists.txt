@@ -2130,6 +2130,22 @@ target_compile_definitions(test_sim_replay PRIVATE
 target_link_libraries(test_sim_replay GTest::gtest_main)
 gtest_discover_tests(test_sim_replay)
 
+# ---------- test_sim_replay_sdr ----------
+# The rig replay's clock from the gnss-sdr-dev board's clock line (#1600 on the
+# V10's auto image): the records the flight loop drains, each its own instant
+# in GPS time, follow the pad and freeze the clock as the LC86G's fixes do.
+add_executable(test_sim_replay_sdr test_sim_replay_sdr.cpp
+    ${LIB_DIR}/TR_Sensor_Collector_Sim/SimReplay.cpp
+)
+target_include_directories(test_sim_replay_sdr PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_Sensor_Collector_Sim
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_sim_replay_sdr GTest::gtest_main)
+gtest_discover_tests(test_sim_replay_sdr)
+
 # ---------- test_level_gate ----------
 # When the raw-GNSS shadow may level on its accelerometer in flight (#1600):
 # once its velocity has held steady from epoch to epoch and the specific force

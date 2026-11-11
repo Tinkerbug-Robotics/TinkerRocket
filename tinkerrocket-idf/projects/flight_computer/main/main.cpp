@@ -9978,6 +9978,16 @@ static void loop_fc()
         while (sensor_collector_hw.getGNSSClockLine(clk))
         {
             (void)enqueueI2STx(GNSS_CLOCK_MSG, reinterpret_cast<const uint8_t*>(&clk), sizeof(clk));
+            // #1600 the rig replay with the gnss-sdr-dev board, whose driver
+            // hands no timed fix: its line puts this instant in GPS time,
+            // which sets the replay's clock (only in a replay build).
+            if (sensor_collector.isReplay() && sensor_collector_hw.gnssType() == GNSS_TYPE_SDR)
+            {
+                const int64_t now_us = esp_timer_get_time();
+                double gps_s = 0.0;
+                if (lc86::gnssClockGpsAt(clk, now_us, gps_s))
+                    sensor_collector.replayNoteTime(gps_s, now_us);
+            }
 #if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
             if (sensor_collector_hw.gnssType() == GNSS_TYPE_SDR)
                 sdr_line = clk;

@@ -294,10 +294,12 @@ endif()
 #
 # The rig replay (#1600: -DTR_SIM_REPLAY_BLOB=FILE, TR_Sensor_Collector_Sim/
 # CMakeLists.txt) plays a flight's sensors against the receiver's GPS time,
-# which only two receivers give it: the M1's LC86G (its timed fixes) and the
+# which only three receivers give it: the M1's LC86G (its timed fixes), the
 # mosaic-only image's mosaic-G5 (the raw-GNSS filter's timed epochs, which its
-# GNSS task drains). Any other build would play the pad for ever, so it is
-# refused. On the mosaic-only image a replay build
+# GNSS task drains) and, on the V9's or V10's auto image, the gnss-sdr-dev
+# board (the GPS-to-MCU line its RTCM epochs build, which the flight loop
+# drains: the P1 rig's boost through the V10). Any other build would play the
+# pad for ever, so it is refused. On the mosaic-only image a replay build
 #   - cold-starts the receiver at each boot, as TR_BENCH_MOSAIC_COLD_START
 #     does (the LC86G's replay build does its own,
 #     TR_GNSSReceiverLC86_Serial/CMakeLists.txt): the rig's sky is another
@@ -319,8 +321,11 @@ endif()
 if(TR_SIM_REPLAY_BLOB)
     if(TR_GNSS_MOSAIC AND NOT _tr_mosaic_rawnav)
         message(FATAL_ERROR "TR_SIM_REPLAY_BLOB on the mosaic-only image takes its clock from the raw-GNSS filter's timed epochs: build it with the filter (no -DTR_RAW_GNSS_SHADOW=0)")
-    elseif(NOT TR_GNSS_MOSAIC AND NOT TR_BOARD_M1)
-        message(FATAL_ERROR "TR_SIM_REPLAY_BLOB needs a receiver whose time sets the replay's clock: the M1's LC86G (-DTR_BOARD_M1=1) or the mosaic-only image (-DTR_GNSS_MOSAIC=1 on a V8 or V9)")
+    elseif(NOT TR_GNSS_MOSAIC AND NOT TR_BOARD_M1 AND NOT ((TR_BOARD_V9 OR TR_BOARD_V10) AND (NOT DEFINED TR_GNSS_AUTO OR TR_GNSS_AUTO)))
+        message(FATAL_ERROR "TR_SIM_REPLAY_BLOB needs a receiver whose time sets the replay's clock: the M1's LC86G (-DTR_BOARD_M1=1), the mosaic-only image (-DTR_GNSS_MOSAIC=1 on a V8 or V9) or the gnss-sdr-dev board on the V9's or V10's auto image")
+    endif()
+    if(NOT TR_GNSS_MOSAIC AND NOT TR_BOARD_M1)
+        message(STATUS "flight_computer: RIG REPLAY of the V9/V10 auto image: the gnss-sdr-dev board's clock line sets the replay's clock (with any other receiver on J1 the replay stays on the pad)")
     endif()
     if(TR_GNSS_MOSAIC)
         set(TR_BENCH_MOSAIC_COLD_START ON)

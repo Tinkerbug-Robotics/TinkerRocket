@@ -210,6 +210,11 @@ public:
     // False in a build without a flight, or if the carried one does not load.
     bool startReplay();
     bool isReplay() const { return replay_on_; }
+    // A GPS instant on the MCU clock (esp_timer, us) from a receiver whose
+    // driver hands no timed fix: the gnss-sdr-dev board's GPS-to-MCU line,
+    // which the flight loop drains (GnssClockData). It sets the replay's
+    // clock as an LC86G fix does. Nothing outside a replay.
+    void replayNoteTime(double gps_s, int64_t mcu_us);
 
     // For the console.
     struct ReplayStatus

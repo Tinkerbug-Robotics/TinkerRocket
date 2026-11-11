@@ -256,3 +256,31 @@ cmake --build build_rig_rp5_0829 -j 4
   come from the console.
 - **The skies are not the Goblin's motor.** These are the three flights with full truth: rp5_0829, eagleclaw_0517,
   and gtv67_0509 (the windy one).
+
+## The V10 with the gnss-sdr-dev board
+
+The P1 rig's boost through the V10 (the aided-receiver plan): the V10's flight image sends the board its flight
+phase, and the board's tracking loops follow it. On the rig the V10 sits still, so only a replay of the scene's own
+flight gives it a boost at the scene's ignition. The V9's or V10's auto image (`-DTR_BOARD_V10=1`) carries a replay
+like the Beetle's, with these differences:
+
+- **The scene has no sensors CSV.** The board's rig scenes are a SignalSim trajectoryList (a Const pad, then
+  VerticalAcc segments), not a `sim_flight_3d.py` run. `signalsim_sensors.py` makes the sensors and the scenario
+  from the scene's own config: nose up all the way, the 1976 standard atmosphere, the phases from the trajectory's
+  knots. A scene that ends in the air (the hotshot: falling at 145 m/s, 20 km up, at T+120) gets a landed tail at
+  its last height.
+  ```
+  tools/rig_replay/signalsim_sensors.py sdr_hotshot_b1c_p120.json /abs/path/hotshot_p120
+  python3 tools/sim_replay_blob.py /abs/path/hotshot_p120_sensors.csv.gz /abs/path/hotshot_p120_scenario.json \
+      /abs/path/hotshot_p120_replay.bin --no-port-error --from -30
+  idf.py -B build_v10_replay -DTR_BOARD_V10=1 -DTR_SIM_REPLAY_BLOB=/abs/path/hotshot_p120_replay.bin build
+  ```
+  The hotshot from T-30 s to T+135 s is 1.98 MB; the image (2.74 MB) fits the 3 MB app slot. Longer flights need a
+  later `--from` or a shorter tail.
+- **The replay's clock comes from the board's clock line.** The board's driver hands no timed fix. The flight loop
+  drains the GPS-to-MCU line the board's RTCM epochs build (valid about 10 s after the board's first fix), and each
+  record puts the drain's instant in GPS time for the clock (`SensorCollectorSim::replayNoteTime`). The board must
+  have its line by T-5 s: the hotshot's first fix comes about 48 s into the scene, its line at about T-62 s.
+- **The board takes the V10's frames as test values.** A replay flies as a sim, so its phase frames carry the test
+  flag: the board takes them only with `rx fc test on` (the rig kit's `run_start.sh --fc-phase`).
+- **One run per boot,** as on the Beetle: reset the V10 before each run, or its replay stays landed.
