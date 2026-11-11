@@ -329,9 +329,17 @@ public:
     bool getGNSSRawMbStats(TR_GNSSReceiverMosaicSerial::RawMbStats& out) const;
 #endif
     // The GPS-to-MCU clock line each time it moves (GNSS_CLOCK_MSG): the
-    // LC86G's from its sentences' arrival, the mosaic-G5's from its 1PPS;
-    // false on the u-blox.
+    // LC86G's from its sentences' arrival, the mosaic-G5's from its 1PPS, the
+    // gnss-sdr-dev board's from its epochs (the auto images; its 4002 frames
+    // are stamped by it); false on the u-blox.
     bool getGNSSClockLine(GnssClockData& out);
+    // One TinkerRocket 4002 frame (TR_GNSSReceiverSdr_Serial/SdrAid.h) to the
+    // gnss-sdr-dev board, from the flight task, its UART's one writer; never
+    // blocks. The flight image's phase (main.cpp sdrPhaseStep) and a bench
+    // image's script go this way. False with no such board on J1 (the auto
+    // image found another receiver, or none) and on every image without
+    // TR_GNSS_DRIVER_AUTO.
+    bool sendGNSSAidFrame(const uint8_t* frame, size_t len);
     // The geoid's height above the WGS84 ellipsoid at the last fix, m
     // (GNSSData's alt is above the geoid). LC86G and mosaic-G5; false
     // elsewhere or before a fix.

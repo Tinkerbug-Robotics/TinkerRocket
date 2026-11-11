@@ -355,7 +355,13 @@ bool TR_GNSSAuto::pollRawFrame(uint8_t* out, size_t cap, size_t& len, uint32_t& 
 
 bool TR_GNSSAuto::takeClockLine(GnssClockData& out)
 {
+    if (type_ == GNSS_TYPE_SDR) return sdr_.takeClockLine(out);
     return type_ == GNSS_TYPE_MOSAIC && mosaic_.takeClockLine(out);
+}
+
+bool TR_GNSSAuto::sendAidFrame(const uint8_t* frame, size_t len)
+{
+    return type_ == GNSS_TYPE_SDR && sdr_.sendAidFrame(frame, len);
 }
 
 bool TR_GNSSAuto::geoidSeparationM(float& sep_m) const

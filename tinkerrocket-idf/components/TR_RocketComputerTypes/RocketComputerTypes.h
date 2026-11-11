@@ -1709,6 +1709,12 @@ static_assert(sizeof(RawGnssAttData) == 46,
 //   t = gps_s - gps0_s
 //   mcu_us = mcu0_us + llround((t + a_s + drift * (t - t_ref_s) - latency_s) * 1e6)
 // Valid (GCL_VALID) once it holds 10 s of history; mcuAt answers nothing before.
+// A V9 or V10 (the auto images) with TinkerRocket's gnss-sdr-dev board on J1
+// logs the board's line, fitted the same way to its 4001 epochs, each at its
+// latch (the MSMs' tag less the board's sub-ms shift), against when the frame
+// arrived, all but those the board marks late (its aiding block); time_us is
+// that frame's backdated end. The 4002 frames sent to the board are stamped
+// off it: the flight image's phase, a bench image's script.
 typedef struct __attribute__((packed))
 {
     uint32_t time_us;      // FC micros the line took effect: the backdated end of the $PQTMPVT that moved it
@@ -3088,7 +3094,14 @@ static constexpr uint8_t ISM6_BATCH_MAX      = 10;
 // board's RTCM3, every frame as on the mini: MSM7 1077/1097/1127 each epoch
 // (100 Hz in its measurement mode), TinkerRocket's message 4001 after each
 // epoch (sub-type 1) and each fix (sub-type 2), and its ephemerides
-// (1019/1046/1042), about 400 frames and 40-55 kB a second.
+// (1019/1046/1042), about 400 frames and 40-55 kB a second. The flight
+// computer also logs here every frame it sent the board, TinkerRocket's
+// message 4002 (TR_GNSSReceiverSdr_Serial/SdrAid.h), each whole in one
+// record, time_us when it went out: a flight image's flight phase (sub-type
+// 3 alone, about one a second and three more after each change), a bench
+// image's (TR_BENCH_SDR_AID) P1 script, every sub-type, about 16 a second.
+// Only the flight computer sends 4002 and only the board 4001, so the number
+// gives the direction.
 static constexpr uint8_t GNSS_RTCM_MSG      = 0x95;  // FC→OC over I2S: GnssRtcmHeader + the GNSS receiver's own frame (RTCM3 or SBF)
                                                       // (or one part of it), straight to the log.  VARIABLE length.
 
@@ -3116,7 +3129,8 @@ static constexpr uint8_t IMU_TEMP_MSG        = 0x9C;  // FC→OC over I2S: Ism6T
                                                       // second; straight to the log.
 static constexpr uint8_t GNSS_CLOCK_MSG      = 0x9D;  // FC→OC over I2S: GnssClockData, the MCU clock against GPS time
                                                       // each time its line moves (~1 Hz); straight to the log.  LC86G
-                                                      // boards, and the V9 with a mosaic-G5 (from its 1PPS: GCL_PPS).
+                                                      // boards, and the V9 with a mosaic-G5 (from its 1PPS: GCL_PPS),
+                                                      // and the V9 or V10 with the gnss-sdr-dev board (its epochs).
 static constexpr uint8_t PAD_CONTEXT_MSG     = 0x9E;  // FC→OC over I2S: PadContextHeader + its kind's body, what a
                                                       // replay needs from the pad, once after launch; straight to the
                                                       // log.  VARIABLE length.

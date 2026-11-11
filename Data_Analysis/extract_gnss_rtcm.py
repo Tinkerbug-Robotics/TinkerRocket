@@ -29,7 +29,13 @@ On a V9 or V10 with TinkerRocket's gnss-sdr-dev board the record carries that
 board's RTCM3 (MSM7 at up to 100 Hz, TinkerRocket's message 4001, its
 ephemerides), and the same .rtcm3 comes out. The summary then also gives the
 MSM7 epochs' step and any missing between them, and the 4001 sub-types:
-1 after each epoch, 2 after each fix (RTKLIB passes 4001 over).
+1 after each epoch, 2 after each fix (RTKLIB passes 4001 over). The flight
+computer logs beside them each frame it sent the board, TinkerRocket's message
+4002: a flight image its flight phase (sub-type 3 alone, about one a second and
+three more after each change), a bench one (TR_BENCH_SDR_AID) its P1 script.
+The summary counts those by sub-type (1 attitude, 2 navigation state, 3 phase,
+4 geometry). They stay in the .rtcm3, which the board's rtcmdump reads; RTKLIB
+passes 4002 over too.
 """
 
 from __future__ import annotations
@@ -193,6 +199,8 @@ def decode_eph(frame: bytes):
 
 
 TR_MESSAGE = 4001                             # TinkerRocket's own (the gnss-sdr-dev board's)
+FC_MESSAGE = 4002                             # TinkerRocket's from the flight computer to the board
+FC_SUBTYPES = {1: "attitude", 2: "state", 3: "phase", 4: "geometry"}
 WEEK_MS = 604800000
 
 
@@ -209,10 +217,12 @@ def epoch_summary(frames):
     """The MSM7 epochs in log order: how many, their usual step, and the ones missing between them.
 
     An epoch is a run of MSM7 frames with the same GPS time of week (the
-    multiple-message bit ties them). Also TinkerRocket's 4001 by sub-type.
+    multiple-message bit ties them). Also TinkerRocket's 4001 by sub-type, and
+    the 4002 frames this flight computer sent the board, by sub-type.
     """
     tows = []
     tr = Counter()
+    fc = Counter()
     fixes_valid = 0
     for _, f in frames:
         tow = msm_gps_tow(f)
@@ -223,13 +233,15 @@ def epoch_summary(frames):
             tr[sub] += 1
             if sub == 2 and len(f) >= 3 + 11 + 3:
                 fixes_valid += (f[3 + 10] >> 5) & 1      # bit 82 of the payload
+        elif message_type(f) == FC_MESSAGE and len(f) > 6:
+            fc[f[4] & 0x0F] += 1
     steps = [(b - a) % WEEK_MS for a, b in zip(tows, tows[1:])]
     forward = [d for d in steps if 0 < d < WEEK_MS // 2]
     step = Counter(forward).most_common(1)[0][0] if forward else None
     missing = sum(-(-d // step) - 1 for d in forward if d > step) if step else 0
     return {"epochs": len(tows), "step_ms": step, "missing": missing,
             "backward": len(steps) - len(forward), "tr_epochs": tr[1], "tr_fixes": tr[2],
-            "tr_fixes_valid": fixes_valid}
+            "tr_fixes_valid": fixes_valid, "fc_sent": dict(fc)}
 
 
 def extract(bin_path: Path):
@@ -273,6 +285,9 @@ def main(argv=None) -> int:
     if es["tr_epochs"] or es["tr_fixes"]:
         print(f"  TinkerRocket 4001 (gnss-sdr-dev): {es['tr_epochs']} epochs, "
               f"{es['tr_fixes']} fixes ({es['tr_fixes_valid']} valid)")
+    if es["fc_sent"]:
+        sent = ", ".join(f"{n} {FC_SUBTYPES.get(sub, f'sub-type {sub}')}" for sub, n in sorted(es["fc_sent"].items()))
+        print(f"  TinkerRocket 4002 (this flight computer to the gnss-sdr-dev board): {sent}")
     seen = {}
     for t, f in frames:
         e = decode_eph(f)

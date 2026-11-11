@@ -84,6 +84,24 @@ double gnssSdrInflow()
     return epoch_hz * epoch + fix_hz * fix + eph;
 }
 
+// With the gnss-sdr-dev board the flight computer also sends it TinkerRocket's
+// message 4002 (TR_GNSSReceiverSdr_Serial/SdrAid.h: the bench script in P1,
+// the flight's own state from P3) and logs every frame it sent in the same
+// record: the attitude at 10 Hz (36 B), the navigation state at 5 Hz (52 B),
+// the phase at 1 Hz and three times 100 ms apart after a change (22 B,
+// budgeted at 4 a second: one and a change's three repeats), the geometry at
+// the start and every 10 s (34 B, 0.1 a second), each with the record header
+// and I2S framing; and the board's clock line (GNSS_CLOCK_MSG) once a second.
+// Today's flight image sends the phase alone (main.cpp sdrPhaseStep) and logs
+// the line, both inside this; the bench image all four. Counted beside the
+// board's own stream, not in it: its bracket below stays the board's.
+double gnssSdrAidInflow()
+{
+    const double record = (double)(sizeof(GnssRtcmHeader) + kFrameOverhead);
+    return 10.0 * (36.0 + record) + 5.0 * (52.0 + record) + 4.0 * (22.0 + record) + 0.1 * (34.0 + record)
+         + framed(sizeof(GnssClockData), 1.0);
+}
+
 double gnssSbfBlock(double bytes)
 {
     const double parts = std::ceil(bytes / (double)GNSS_RTCM_MAX_CHUNK);
@@ -242,6 +260,7 @@ double guidedCoastInflow(const Flight& f)
          + framed(sizeof(FcStatusData),    (double)config::FC_STATUS_RATE_HZ)
          + framed(sizeof(Ism6TempData),    1.0)   // the IMU's die temperature
          + gnssRtcmInflow(f)
+         + (f.gnss == GNSS_TYPE_SDR ? gnssSdrAidInflow() : 0.0)
          + rawGnssShadowInflow()
          + 220.0;   // POWERData, ~15 Hz
 }
@@ -388,10 +407,11 @@ TEST(OcFlashBudget, TheDetailedLogAtTheBoardsTopRateWouldOutrunIt) {
 
 TEST(I2SLinkBudget, TheSdrBoardFliesUnderItsImuLimit) {
     // The gnss-sdr-dev board's 100 Hz RTCM3 (~71 kB/s with the framing,
-    // budgeted at 32 observables) beside the IMU at 3840 Hz, whatever the
-    // GNSS log setting: the link well under the line, the OC's flash under
-    // 95 % of its drain. Measured on the V10 with 18 observables: 42.5 kB/s
-    // of frames (2026-11-02).
+    // budgeted at 32 observables) and the flight computer's 4002 frames to it
+    // (~1.0 kB/s) beside the IMU at 3840 Hz, whatever the GNSS log setting:
+    // the link well under the line, the OC's flash under 95 % of its drain.
+    // Measured on the V10 with 18 observables: 42.5 kB/s of frames
+    // (2026-11-02).
     for (const Flight& f : flights())
     {
         if (f.gnss != GNSS_TYPE_SDR) continue;
@@ -403,6 +423,25 @@ TEST(I2SLinkBudget, TheSdrBoardFliesUnderItsImuLimit) {
         const double flash = logInflow(f) / kOcFlashDrainBytesPerSec;
         EXPECT_LT(flash, 0.95) << f.receiver << " at " << f.imu_hz << " Hz IMU logs " << logInflow(f)
                                << " B/s, " << (flash * 100.0) << "% of the OC's flash drain";
+        std::printf("[ link budget ] %s at %.0f Hz with the 4002 frames to the board: link %.1f %%, "
+                    "OC flash %.1f %% (%.0f B/s)\n",
+                    f.receiver, f.imu_hz, link * 100.0, flash * 100.0, logInflow(f));
+    }
+}
+
+TEST(I2SLinkBudget, TheFramesToTheSdrBoardAreCountedForItAlone) {
+    // The 4002 frames and the board's clock line: ~1.0 kB/s on the link,
+    // counted only where the board flies. The frames alone are under the
+    // plan's 10 kB/s for the board's UART.
+    EXPECT_NEAR(gnssSdrAidInflow(), 1035.7, 1.0);
+    EXPECT_LT(10.0 * 36.0 + 5.0 * 52.0 + 4.0 * 22.0 + 0.1 * 34.0, 10000.0);
+    for (const Flight& f : flights())
+    {
+        Flight none = f;
+        none.gnss = GNSS_TYPE_NONE;
+        const double with = guidedCoastInflow(f) - gnssRtcmInflow(f);
+        const double without = guidedCoastInflow(none) - gnssRtcmInflow(none);
+        EXPECT_NEAR(with - without, f.gnss == GNSS_TYPE_SDR ? gnssSdrAidInflow() : 0.0, 1e-6) << f.receiver;
     }
 }
 
