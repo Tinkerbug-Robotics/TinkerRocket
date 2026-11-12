@@ -170,16 +170,18 @@ if(RAW_REPLAY_MOSAIC)
         ${LIB_DIR}/TR_GpsInsEKF
         ${LIB_DIR}/TR_GeoMag
         ${LIB_DIR}/TR_Orientation)
-    # the gnss-sdr-dev board's path (--receiver sdr): its RTCM3 epochs (SdrRawEpoch.h) and the time sync that places
-    # them from their arrivals (GnssTimeSync), where the tree has them
-    if(EXISTS "${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrRawEpoch.h")
+    # the gnss-sdr-dev board's path (--receiver sdr): its RTCM3 epochs (SdrRawEpoch.h), placed by the time sync its
+    # records' latches build (GnssTimeSync, SdrAid's latchGps) the way the V10 image's driver does (SdrRawFeed.h),
+    # where the tree has them
+    if(EXISTS "${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrRawFeed.h")
         list(APPEND MOSAIC_SRC ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrRtcm.cpp
+                               ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrAid.cpp
                                ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/GnssTimeSync.cpp)
         list(APPEND MOSAIC_INC ${LIB_DIR}/TR_GNSSReceiverSdr_Serial)
         set(RAW_REPLAY_SDR ON)
     else()
         set(RAW_REPLAY_SDR OFF)
-        message(STATUS "raw_replay: ${SRC_ROOT} has no gnss-sdr-dev path (SdrRawEpoch.h): --receiver sdr off")
+        message(STATUS "raw_replay: ${SRC_ROOT} has no gnss-sdr-dev path (SdrRawFeed.h): --receiver sdr off")
     endif()
 else()
     set(RAW_REPLAY_SDR OFF)

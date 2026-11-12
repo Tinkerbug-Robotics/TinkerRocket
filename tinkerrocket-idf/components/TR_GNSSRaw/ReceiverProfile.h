@@ -473,7 +473,13 @@ inline GnssReceiverProfile sdrDevProfile()
     p.epoch_latency_s = 0.0;        // the time sync's line (uncalibrated: no 1PPS on the V1 board)
     p.raw_epoch_period_s = 0.01;    // the board's measurement mode, 100 Hz
     p.fuse_epoch_period_s = 0.1;    // the mosaic's: 10 Hz
+    // the epochs between the fused ones averaged in (SdrRawEpoch.h's Doppler
+    // means, the mosaic's pairs widened to the fused period): off here, on in
+    // the V10's gnss-sdr-dev image (ReceiverProfileApply.h
+    // applySdrFlightProfile); two consecutive Dopplers at most 5 m/s apart
+    // (500 m/s^2 over the board's 10 ms: a slip or a false lock beyond it)
     p.rr_pair_avg = false;
+    p.rr_pair_max_diff_mps = 5.0;
     p.relock_gap_s = 0.5;           // the mosaic's: 5 fused epochs
 
     // the Doppler at the fused 10 Hz (bench 11/02: second differences of each

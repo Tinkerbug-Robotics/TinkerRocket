@@ -107,6 +107,7 @@
 #if RAW_REPLAY_SDR
 #include "GnssTimeSync.h"
 #include "SdrRawEpoch.h"
+#include "SdrRawFeed.h"
 #endif
 #include "sim_epoch.h"
 #include "truth_nav.h"
@@ -1921,8 +1922,14 @@ int main(int argc, char** argv)
     // the mosaic-only image's flight profile (applyMosaicFlightProfile, the owner's 10/24 set: the cheaper build, the
     // shared geometry with the Doppler in float, the Dopplers in pairs, 16 satellites, the cap fixed), where
     // startRawShadow() sets it: before the bench flags, so --build-lite 0 --share-los 0 --rr-pair-avg 0 is the
-    // high-roll-only twin. The gnss-sdr-dev board's raw filter would fly on the same image style: the same set
-    if (nav)
+    // high-roll-only twin. The gnss-sdr-dev board's: the V10 image's (applySdrFlightProfile, the same set with the
+    // Doppler means in place of the pairs; --rr-pair-avg 0 turns them off)
+#if RAW_REPLAY_SDR
+    if (sdr)
+        applySdrFlightProfile(rx);
+    else
+#endif
+    if (mosaic)
         applyMosaicFlightProfile(rx);
 #endif
     // the mosaic build's bench macros, on the profile before it is applied (main.cpp startRawShadow)
@@ -1956,7 +1963,7 @@ int main(int argc, char** argv)
         rx.rr_pair_avg = a.rr_pair_avg != 0;            // TR_BENCH_RAW_DOP_AVG
     if (a.rr_pair_max_diff >= 0.0)
         rx.rr_pair_max_diff_mps = a.rr_pair_max_diff;
-    if (rx.rr_pair_avg && !dopplerPairsFit(rx))
+    if (rx.rr_pair_avg && !dopplerPairsFit(rx) && !sdr)   // the board's means take any whole number of its epochs
     {
         if (a.rr_pair_avg > 0)
         {
@@ -2000,6 +2007,11 @@ int main(int argc, char** argv)
                              "ignored\n");
 #endif
     applyReceiverProfile(rx, cfg);
+#if RAW_REPLAY_SDR
+    // where the board's Doppler means fall (the window's middle), as the V10 image sets it after the profile
+    if (sdr)
+        applySdrDopplerMeans(rx, cfg);
+#endif
 #if RAW_REPLAY_MOSAIC_SAFEGUARDS
     // the mosaic-only image's flight safeguards, where startRawShadow() sets them: after the profile, before any
     // bench flag -- so --receiver mosaic flies the image's settings, and the --dv-*, --hdg-obs-* and --rot-* flags
@@ -2344,12 +2356,22 @@ int main(int argc, char** argv)
     // ---- the gnss-sdr-dev board's stream (--receiver sdr): each epoch made whole by its 4001 and put on the board's
     // unstepped clock (SdrRawEpoch.h), those on the profile's fused grid handed over; each placed on the MCU clock by
     // the line every 4001's arrival gives (GnssTimeSync, the LC86G driver's time sync: no 1PPS on the V1 board)
+    // The same lines as the V10 image's driver (TR_GNSSReceiverSdrSerial, SdrRawFeed.h): the clock line's sample
+    // from each 4001's latch (late epochs left out), the epochs on the grid with the Doppler means the profile asks
+    // for (main.cpp startRawShadow's config), each placed by the line after its own record's sample
     sdr_rtcm::SdrEpochAssembler::Config sdr_acfg;
     sdr_acfg.fuse_period_ms = static_cast<uint32_t>(std::llround(fusedEpochPeriod(rx) * 1000.0));
     sdr_acfg.drop_fix_marked = !a.sdr_keep_marked;
     sdr_acfg.drop_new_marked = !a.sdr_keep_marked;
     sdr_acfg.restore_steps = !a.sdr_raw_steps;
-    sdr_rtcm::SdrEpochAssembler sdr_asm(sdr_acfg);
+    sdr_acfg.mean.n = static_cast<uint32_t>(sdrDopplerMeanEpochs(rx));
+    sdr_acfg.mean.period_ms = static_cast<uint32_t>(std::llround(rx.raw_epoch_period_s * 1000.0));
+    sdr_acfg.mean.max_step_mps = rx.rr_pair_max_diff_mps;
+    for (int k = 0; k < GNSS_SYS_COUNT; ++k)
+        sdr_acfg.mean.cn0_min[k] = rx.sig[k].cn0_min_rr;
+    std::unique_ptr<sdr_rtcm::SdrEpochAssembler> sdr_asmp(new sdr_rtcm::SdrEpochAssembler(sdr_acfg));
+    sdr_rtcm::SdrEpochAssembler& sdr_asm = *sdr_asmp;
+    int sdr_late = 0;
     lc86::GnssTimeSync::Config sdr_tcfg;
     sdr_tcfg.latency_s = a.sdr_latency_ms * 1.0e-3;
     std::unique_ptr<lc86::GnssTimeSync> sdr_linep(new lc86::GnssTimeSync(sdr_tcfg));
@@ -3991,8 +4013,13 @@ int main(int argc, char** argv)
                     sdr_rtcm::TrFix fx;
                     if (sdr_rtcm::decodeTrEpoch(f, n, rec))
                     {
-                        // every record, on the grid or not: the time sync's sample (its GPS time, its arrival)
-                        sdr_line.addSample(rec.week * 604800.0 + rec.tow_ms * 1.0e-3, ev.t_us);
+                        // every record, on the grid or not: the time sync's sample, as the driver takes it (its
+                        // latch's GPS time against its arrival; an epoch the board marks late left out)
+                        double latch_s = 0.0;
+                        if (sdr_rtcm::lineSampleOf(f, n, rec, latch_s))
+                            sdr_line.addSample(latch_s, ev.t_us);
+                        else
+                            sdr_late++;
                     }
                     else if (sdr_rtcm::decodeTrFix(f, n, fx))
                     {
@@ -4011,16 +4038,12 @@ int main(int argc, char** argv)
                 }
                 if (sdr_asm.onFrame(f, n, ev.t_us, *sdr_ep))
                 {
+                    // placed as the driver places it (SdrRawFeed.h timedEpochOf): the tag on the line, the board's
+                    // unstepped clock's lead on GPS for the replay clock, the Doppler means' mark
                     TimedRawEpoch& te = *scratch;
                     te = TimedRawEpoch();
-                    te.epoch = sdr_ep->epoch;
-                    te.arrival_us = sdr_ep->arrival_us;
-                    te.gps_week = sdr_ep->week;
-                    // its time of week is the board's unstepped clock: that clock less GPS, for the replay clock
-                    te.tag_dtr_ms = static_cast<float>(sdr_ep->step_m / sdr_rtcm::kC * 1.0e3);
-                    int64_t mcu = 0;
-                    if (sdr_line.valid() && sdr_line.mcuAt(sdr_ep->gps_s, mcu))
-                        te.mcu_us = mcu + static_cast<int64_t>(a.epoch_shift_ms * 1000.0);
+                    if (sdr_rtcm::timedEpochOf(*sdr_ep, sdr_line, te))
+                        te.mcu_us += static_cast<int64_t>(a.epoch_shift_ms * 1000.0);
                     else
                         sdr_untimed++;
                     handOver(te, ev.t_us, false);
@@ -5326,6 +5349,14 @@ int main(int argc, char** argv)
     if (sdr)
     {
         const sdr_rtcm::SdrEpochAssembler::Counts& c = sdr_asm.counts();
+        const sdr_rtcm::SdrDopplerMeanStats& dm = sdr_asm.meanStats();
+        std::fprintf(stderr,
+                     "  gnss-sdr-dev Doppler means of %u epochs (lag %.0f ms): %u of %u Dopplers averaged; grid epochs "
+                     "%u, as they came %u (short window) + %u (few); dropped %u missing, %u relock, %u step; largest "
+                     "step %.2f m/s, spread %.2f m/s; %d records the board marked late (not on the line)\n",
+                     sdr_acfg.mean.n, cfg.ekf.rr_pair_lag_s * 1000.0, dm.means, dm.dopplers, dm.epochs,
+                     dm.epochs_short, dm.epochs_few, dm.alone_missing, dm.alone_lock, dm.alone_step,
+                     static_cast<double>(dm.step_max_mps), static_cast<double>(dm.spread_max_mps), sdr_late);
         std::fprintf(stderr,
                      "  gnss-sdr-dev: MSM7 %u; epochs %u (off the fused grid %u), without their record %u, records "
                      "alone %u, short %u; cells %u kept, %u another signal, %u past the cap; marked out: %u "

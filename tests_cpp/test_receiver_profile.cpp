@@ -486,6 +486,47 @@ TEST(ReceiverProfile, TheSdrDevV0Profile)
     EXPECT_EQ(p.cr_mode, gnss_raw::kCarrierOff);
 }
 
+TEST(ReceiverProfile, TheSdrImagesFlightProfileAndItsDopplerMeans)
+{
+    // the V10's gnss-sdr-dev image (ReceiverProfileApply.h): the mosaic's
+    // 10/24 set with the Doppler means; their window the fused period over
+    // the board's, their lag its middle
+    GnssReceiverProfile p = gnss_raw::sdrDevProfile();
+    EXPECT_FALSE(p.rr_pair_avg);
+    EXPECT_EQ(p.rr_pair_max_diff_mps, 5.0);     // 500 m/s^2 over the board's 10 ms
+    EXPECT_EQ(gnss_raw::sdrDopplerMeanEpochs(p), 0);   // off in the profile
+    EXPECT_EQ(gnss_raw::sdrDopplerMeanLag(p), 0.0);
+    gnss_raw::applySdrFlightProfile(p);
+    GnssReceiverProfile m = gnss_raw::mosaicG5Profile();
+    gnss_raw::applyMosaicFlightProfile(m);
+    EXPECT_EQ(p.build_lite, m.build_lite);
+    EXPECT_EQ(p.share_los, m.share_los);
+    EXPECT_EQ(p.rr_float, m.rr_float);
+    EXPECT_EQ(p.rr_pair_avg, m.rr_pair_avg);
+    EXPECT_EQ(p.sat_cap, 16);
+    EXPECT_EQ(p.sat_cap_max, 0);
+    EXPECT_EQ(gnss_raw::sdrDopplerMeanEpochs(p), 10);
+    EXPECT_NEAR(gnss_raw::sdrDopplerMeanLag(p), 0.045, 1e-12);
+    // the fused rate raised to 20 Hz: five epochs, 20 ms back; to 100 Hz: none
+    p.fuse_epoch_period_s = 0.05;
+    EXPECT_EQ(gnss_raw::sdrDopplerMeanEpochs(p), 5);
+    EXPECT_NEAR(gnss_raw::sdrDopplerMeanLag(p), 0.02, 1e-12);
+    p.fuse_epoch_period_s = 0.01;
+    EXPECT_EQ(gnss_raw::sdrDopplerMeanEpochs(p), 0);
+    // into the filter's config, after applyReceiverProfile (whose pair lag is
+    // the mosaic's two-epoch one: 0 here, the grid not two of the board's)
+    p.fuse_epoch_period_s = 0.1;
+    RawGnssShadow::Config c;
+    gnss_raw::applyReceiverProfile(p, c);
+    EXPECT_EQ(c.ekf.rr_pair_lag_s, 0.0);
+    gnss_raw::applySdrDopplerMeans(p, c);
+    EXPECT_NEAR(c.ekf.rr_pair_lag_s, 0.045, 1e-12);
+    // and the mosaic's pair lag is untouched by any of it
+    RawGnssShadow::Config mc;
+    gnss_raw::applyReceiverProfile(m, mc);
+    EXPECT_EQ(mc.ekf.rr_pair_lag_s, 0.025);
+}
+
 TEST(ReceiverProfile, TheMosaicG5V0Profile)
 {
     // every number of v0 (ReceiverProfile.h: each one's run beside it)

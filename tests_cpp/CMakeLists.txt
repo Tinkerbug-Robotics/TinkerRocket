@@ -1795,6 +1795,31 @@ target_include_directories(test_sdr_raw_epoch PRIVATE
 target_link_libraries(test_sdr_raw_epoch GTest::gtest_main)
 gtest_discover_tests(test_sdr_raw_epoch)
 
+# ---------- test_sdr_raw_feed ----------
+# The gnss-sdr-dev board's stream as the V10's SDR raw-nav image hands it to
+# the raw-GNSS filter, on its driver's path (SdrRawEpoch.h's Doppler means,
+# SdrRawFeed.h's clock-line sample, placement and the fix as GNSSData): the
+# means' rules, the recorded epochs averaged, a 20 s stream re-timed from them
+# placed by the line its records build, a late record left off the line.
+add_executable(test_sdr_raw_feed test_sdr_raw_feed.cpp
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrRtcm.cpp
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrAid.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/GnssTimeSync.cpp
+)
+set_source_files_properties(${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrAid.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
+target_include_directories(test_sdr_raw_feed PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_sdr_raw_feed GTest::gtest_main)
+gtest_discover_tests(test_sdr_raw_feed)
+
 # ---------- test_gnss_log_policy ----------
 # The GNSS log setting (BLE cmd 79): the IMU limit each value gives
 # (RocketComputerTypes.h imuRateMaxForGnss) and the REDUCED log's SBF cut
