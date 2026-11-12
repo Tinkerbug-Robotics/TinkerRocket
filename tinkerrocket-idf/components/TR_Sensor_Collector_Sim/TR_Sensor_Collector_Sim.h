@@ -22,7 +22,7 @@
 #include "SimSensorModel.h"
 #include "sim_landed_hold.h"
 #include <freertos/FreeRTOS.h>
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
 #include <atomic>
 #endif
 
@@ -108,6 +108,16 @@ public:
     }
     // the replayed IMU's roll, as the real one's: the receiver is real in a sim
     void noteGNSSRollRate(float p_rps) { real_.noteGNSSRollRate(p_rps); }
+#endif
+#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+    // The SDR raw-nav image's fused grid and Doppler means go straight to the
+    // board's driver; its sky's day as the mosaic's (none of its own: the
+    // board's stream carries no ionosphere).
+    uint16_t replaySkyGpsDay() const { return replay_sky_day_.load(std::memory_order_acquire); }
+    void setGNSSRawEpochConfig(uint32_t period_ms, const sdr_rtcm::SdrDopplerMeanConfig& mean)
+    {
+        real_.setGNSSRawEpochConfig(period_ms, mean);
+    }
 #endif
 
     // Debug passthrough
@@ -227,7 +237,7 @@ public:
         float    last_fix_t_s = 0.0f; // the latest of the rig's fixes, s from ignition
     };
     void replayStatus(ReplayStatus& out) const;
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
     // The replay's time (s from ignition) at a recent 32-bit MCU stamp
     // (micros(): a sample's, a navigation state's); false before the clock.
     bool replayTAt(uint32_t time_us, double& t_s) const;
@@ -401,7 +411,7 @@ private:
     float replay_last_t_ = 0.0f;             // the latest IMU sample's (replayStatus)
     bool  replay_last_have_t_ = false;
     uint8_t replay_last_phase_ = 0;
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
     float replay_hg_bias_[3] = {};           // setReplayHighGBias
     std::atomic<uint16_t> replay_sky_day_{0};   // replaySkyGpsDay
     uint32_t replay_pps_seen_ = 0;           // the driver's 1PPS checks handed to the clock (replayNoteEpoch)
@@ -412,7 +422,7 @@ private:
     // The field the magnetometer reads in that attitude, rocket frame, uT.
     void replayField(const sim_replay::Sample& s, float b[3]) const;
     void replayNoteFix(const gnss_raw::TimedFix& f);
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
     void replayNoteEpoch(const gnss_raw::TimedRawEpoch& e);
 #endif
 };

@@ -9,9 +9,17 @@
 //     loop logs as GNSS_RTCM_MSG (0x95), the record that carries the
 //     LC86G's RTCM3 and the mosaic-G5's SBF (Data_Analysis/
 //     extract_gnss_rtcm.py turns a log into a .rtcm3 file);
-//   - no GNSSData: the navigation filter does not take the board's
-//     measurements or fixes yet, so the FC flies GNSS-absent with it
+//   - on the auto image no GNSSData: its navigation filter does not take the
+//     board's measurements or fixes, so the FC flies GNSS-absent with it
 //     (gnssTypeGivesFix) and logs its stream beside the IMU;
+//   - on the SDR raw-nav image (TR_GNSS_DRIVER_SDR: the V10's image whose one
+//     navigation filter is the raw-GNSS filter on this board) its fix as
+//     GNSSData (pollNewPVT, SdrRawFeed.h gnssDataFromTrFix: the filter's start
+//     position and the GPS apogee voter's), and with enableRawOutputs() its
+//     raw outputs: each epoch on the fused grid as a TimedRawEpoch placed by
+//     the clock line below (SdrRawEpoch.h, SdrRawFeed.h), each ephemeris
+//     (1019/1046/1042) as its RTCM3 payload. Compiled into that image alone:
+//     the auto image, which carries this driver too, keeps it as it was;
 //   - its counts on the console every 30 s (frames, epochs and their gaps,
 //     fixes, CRC fails, drops);
 //   - the MCU clock against GPS time, fitted to the board's epochs
@@ -48,6 +56,10 @@
 #include "SdrAid.h"
 #include "SdrRtcm.h"
 #include <GnssTimeSync.h>      // TR_GNSSReceiverLC86_Serial: the clock line, shared
+#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+#include <RawMeas.h>           // TR_GNSSRaw: gnss_raw::TimedRawEpoch
+#include "SdrRawEpoch.h"
+#endif
 
 class TR_GNSSReceiverSdrSerial : private sdr_rtcm::Rtcm3Framer::Sink
 {
@@ -66,6 +78,80 @@ class TR_GNSSReceiverSdrSerial : private sdr_rtcm::Rtcm3Framer::Sink
                    int8_t reset_n_pin = -1,
                    int8_t safeboot_n_pin = -1);
 
+#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+        // The board's last fix (see the top of this file), from the poll task.
+        void getGNSSData(GNSSData &data) { data = fix_data_; }
+
+        /// Non-blocking: frame what the UART holds (bounded) into the log
+        /// ring and the raw outputs. True when a new usable fix came: `data`
+        /// then holds it. The GNSS poll task's only call into the UART.
+        bool pollNewPVT(GNSSData &data);
+        // The calls the collector's other drivers take: no satellite
+        // reports, no 1PPS, nothing to resend (the board repeats each
+        // ephemeris every 30 s), no geoid (heights above the ellipsoid).
+        bool pollNewSat(GNSSSatData&) { return false; }
+        void setPpsPin(int8_t) {}
+        void requestNavResend() {}
+        bool geoidSeparationM(float& sep_m) const
+        {
+            sep_m = 0.0f;
+            return false;
+        }
+
+        // ── Raw outputs for the raw-GNSS navigation filter ──
+        // Off until enableRawOutputs(), called before begin(): it makes the
+        // queues and the assembler's state (false without the memory, and
+        // then nothing is kept). Every take is safe from another task than
+        // the poll; a full queue drops the newest and counts it, once
+        // something has started taking from it.
+        //
+        // takeRawEpoch: each of the board's epochs on the fused grid
+        // (setRawEpochConfig; every epoch until it is set), made whole by its
+        // 4001 and put on its unstepped clock (SdrRawEpoch.h), its Dopplers
+        // the means since the last grid epoch where the config asks, its GPS
+        // instant on the MCU clock by the line the epochs build (SdrRawFeed.h
+        // timedEpochOf; 0, untimed, until the line is valid).
+        //
+        // takeEphemeris: each 1019, 1046 or 1042 as its RTCM3 payload (the
+        // bytes between the length and the CRC), for RtcmEphemeris's
+        // decodeEphemeris, as the LC86G driver hands them. One longer than
+        // `cap` is dropped and counted.
+        bool enableRawOutputs();
+        // The fused grid (GPS-time ms; the profile's) and the Dopplers' means
+        // (SdrDopplerMeanConfig: n 0 off). From any task, once: the poll task
+        // takes it at its next frame and starts the grid and the window over.
+        void setRawEpochConfig(uint32_t fuse_period_ms, const sdr_rtcm::SdrDopplerMeanConfig& mean);
+        bool takeRawEpoch(gnss_raw::TimedRawEpoch& out);
+        bool takeEphemeris(uint8_t* out, size_t cap, size_t& len);
+
+        // The raw outputs' counts since boot (the 30 s status line, the
+        // [RAWGNSS] console line). Read from any task: a counter may be one
+        // behind another.
+        struct RawStats
+        {
+            bool     enabled = false;
+            bool     in_psram = false;        // the assembler's state: internal RAM, or PSRAM where it did not fit
+            bool     eph_in_psram = false;    // the ephemeris queue's
+            uint16_t eph_depth = 0;
+            uint32_t period_ms = 0;           // the fused grid (0: every epoch)
+            uint32_t mean_n = 0;              // epochs a Doppler mean takes (0: off)
+            uint32_t published = 0;           // epochs handed over (timed or not)
+            uint32_t untimed = 0;             //   with mcu_us 0 (the line not valid)
+            uint32_t with_means = 0;          //   with their Dopplers the windows' means
+            uint32_t dropped = 0;             // the epoch queue was full
+            uint32_t eph_queued = 0, eph_dropped = 0, eph_too_long = 0, eph_short_buffer = 0;
+            uint32_t fixes = 0;               // usable fixes handed over as GNSSData
+            sdr_rtcm::SdrEpochAssembler::Counts asm_counts;
+            sdr_rtcm::SdrDopplerMeanStats mean;
+            // what the poll task spends on them, us: each MSM7's decode, each
+            // record's (the epoch made whole, averaged, placed and queued)
+            uint32_t msm_n = 0, msm_us_max = 0;
+            uint64_t msm_us_sum = 0;
+            uint32_t rec_n = 0, rec_us_max = 0;
+            uint64_t rec_us_sum = 0;
+        };
+        void rawStats(RawStats& out) const;
+#else
         // Never a fix (see the top of this file).
         void getGNSSData(GNSSData &data) { data = GNSSData{}; }
 
@@ -73,6 +159,7 @@ class TR_GNSSReceiverSdrSerial : private sdr_rtcm::Rtcm3Framer::Sink
         /// ring. Always false: no PVT. The GNSS poll task's only call into
         /// the UART.
         bool pollNewPVT(GNSSData &data);
+#endif
 
         /// The oldest frame not yet taken, from its 0xD3 through its CRC, and
         /// the MCU time its last byte arrived. Safe from another task than the
@@ -105,6 +192,11 @@ class TR_GNSSReceiverSdrSerial : private sdr_rtcm::Rtcm3Framer::Sink
         void noteLink(const uint8_t* frame, size_t len, const sdr_rtcm::TrEpoch& e, int64_t end_us);
 #if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
         void logLink();
+#endif
+#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+        void rawFrame(const uint8_t* frame, size_t len, uint16_t number, int64_t end_us);
+        void noteFix(const sdr_rtcm::TrFix& f, int64_t end_us);
+        void logRaw();
 #endif
 
         uart_port_t _uartPort;
@@ -171,6 +263,43 @@ class TR_GNSSReceiverSdrSerial : private sdr_rtcm::Rtcm3Framer::Sink
         uint32_t          clock_dropped_ = 0;
         uint32_t          late_left_out_ = 0;    // epochs the board marked late, not on the line
 
+#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+        // The fix (this task alone writes and reads these)
+        GNSSData          fix_data_ = {};
+        bool              new_fix_ = false;
+        // The raw outputs: everything they keep is in one block allocated by
+        // enableRawOutputs(), so a boot that never asks for them (a crash
+        // boot leaves the board out) carries only this pointer.
+        static constexpr size_t kEphMaxPayload = 72;   // 1042, the largest, is 64 (the LC86G driver's)
+        struct EphItem
+        {
+            uint8_t len;
+            uint8_t bytes[kEphMaxPayload];
+        };
+        struct RawConfig
+        {
+            uint32_t period_ms = 0;
+            sdr_rtcm::SdrDopplerMeanConfig mean;
+        };
+        struct RawState
+        {
+            QueueHandle_t epoch_q = nullptr;     // TimedRawEpoch, internal RAM
+            QueueHandle_t eph_q = nullptr;       // EphItem, PSRAM where there is some
+            bool          eph_caps = false;      //   made by xQueueCreateWithCaps (deleted with its own call)
+            std::atomic<bool> taking_epochs{false};
+            std::atomic<bool> taking_eph{false};
+            // setRawEpochConfig's, taken by the poll task at its next frame
+            RawConfig     pending;
+            std::atomic<bool> pending_set{false};
+            sdr_rtcm::SdrEpochAssembler assembler;   // two epochs and one MSM7's cells, ~7 kB
+            sdr_rtcm::SdrEpoch epoch;            // the one handed over
+            gnss_raw::TimedRawEpoch timed;       //   as queued
+            EphItem       eph_item = {};
+            RawStats      st;
+        };
+        RawState*         raw_ = nullptr;
+        int64_t           raw_log_us_ = 0;
+#endif
 #if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
         // What the board says it does with them (the aiding block), and the
         // 4002 frames it took, from its 8-bit count against what went out.

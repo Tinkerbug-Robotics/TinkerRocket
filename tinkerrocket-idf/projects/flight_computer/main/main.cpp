@@ -86,7 +86,7 @@
 #include <MosaicMultibandBench.h> // the bands' combination's bench (TR_BENCH_MB_BLOCKS)
 #include TR_BENCH_MB_BLOCKS       // its recorded MeasEpochs: a scratch file the bench build names, never the repo's
 #endif
-#if defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+#if (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
 #include <SdrAid.h>               // the 4002 frames to the gnss-sdr-dev board: the flight's phase, a bench's P1 script
 #include <GnssClockRecord.h>      // gnssClockGpsAt: GPS time off the board's clock line
 #include "sdr_phase_policy.h"     // the flight phase the board's tracking loops follow (host-tested)
@@ -94,9 +94,11 @@
 #endif
 #if TR_RAW_NAV_MOSAIC
 #include <SbfNav.h>               // the mosaic-G5's navigation blocks as gps_eph_t (TR_GNSSReceiverMosaic_Serial)
-#include <esp_memory_utils.h>     // esp_ptr_external_ram: where the filter's blocks went
 #include "raw_iono_rule.h"        // which broadcast ionosphere it builds with (host-tested)
 #include "raw_nav_drain.h"        // when it files the receiver's navigation blocks (host-tested)
+#endif
+#if TR_RAW_NAV_P4
+#include <esp_memory_utils.h>     // esp_ptr_external_ram: where the filter's blocks went
 #include "raw_nav_policy.h"       // crash loop, transonic lockout, nav resends, restarts, restore wait (host-tested)
 #include "raw_vote_guard.h"       // the filter's apogee votes against the barometer's climb (host-tested)
 #endif
@@ -569,8 +571,9 @@ static MainDeployGate::Source main_deploy_last_src = MainDeployGate::Source::Non
 // in scope; the EKF block reads it on the next pass, which can only delay an
 // admission by one tick, never advance it.
 static GnssAscentGate::State gnss_admit_state;
-#if TR_RAW_NAV_MOSAIC
-// The raw vote guard (raw_vote_guard.h): on the mosaic-only image the raw
+#if TR_RAW_NAV_P4
+// The raw vote guard (raw_vote_guard.h): on the mosaic-only image (and the
+// V10's gnss-sdr-dev image) the raw
 // filter is the one navigation filter, so after burnout its vertical velocity
 // is held against the barometer's climb rate, and a filter reading 10 m/s
 // below it for a second casts no velocity or pitch apogee vote for the rest
@@ -813,7 +816,7 @@ static bool antenna_cfg_from_nvs = false;
 static AntennaOffsetConfigData antenna_held = {};
 static bool antenna_held_set = false;
 #endif
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
 static void rawAntennaPublish();
 static bool rawAntennaFlown(const gnss_raw::AntennaOffset& ant, gnss_raw::AntennaOffset& on);
 #endif
@@ -1119,7 +1122,7 @@ static void buildFlightSnapshot(FlightSnapshotData& snap, uint32_t now_ms, uint8
     snap.max_alt_m     = max_alt_m;
     snap.max_speed_mps = max_speed_mps;
     snap.reserved_v5   = 0.0f;
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
     // The receiver's geoid separation the raw filter's heights are turned by:
     // a reboot in flight leaves the mosaic out (a crash) or cold, with none to
     // give, and the restore turns the snapshot's ellipsoidal height with this
@@ -2604,7 +2607,7 @@ static void applyBoardToRocketRotation(const float R[9], uint8_t code,
         out_status_query_data.b2r_q[i] =
             (int16_t)lroundf(b2r_active_quat[i] * ORIENT_QUAT_WIRE_SCALE);
     }
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
     // the antenna's offset is the board's: the filter's frame turned with it
     rawAntennaPublish();
 #endif
@@ -3006,8 +3009,8 @@ static void sendPadContextCal()
     const float body_m[3] = {(float)ant.b_m[0], (float)ant.b_m[1], (float)ant.b_m[2]};
     memcpy(rn.a.board_mm, board_mm, sizeof(board_mm));   // packed: through a copy
     memcpy(rn.a.body_m, body_m, sizeof(body_m));
-#if TR_RAW_NAV_MOSAIC
-    // the one image whose filter takes it: the offset that filter has on, and
+#if TR_RAW_NAV_P4
+    // the images whose filter takes it: the offset that filter has on, and
     // used only if that is this one (a setting sent just before launch may
     // still wait for the ground in it, the filter on an earlier one)
     gnss_raw::AntennaOffset on;
@@ -3185,7 +3188,7 @@ static void applyAntennaConfig(const AntennaOffsetConfigData& a)
                  (int)a.z_mm);
     else
         ESP_LOGI(TAG, "[CFG] GNSS antenna offset: unknown (persisted)");
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
     rawAntennaPublish();
 #endif
     config_report_dirty = true; log_next_report_send = true;   // #915: the app hears what the FC now holds
@@ -3358,10 +3361,12 @@ static gnss_raw::RawGnssMeasStage* raw_meas = nullptr;
 static gnss_raw::TimedRawEpoch* raw_meas_epoch = nullptr;   // the GNSS task's copy of each epoch (~2 kB), PSRAM
 static gnss_raw::SpscSlots<gnss_raw::BuiltEpoch, 2> raw_built;
 static TaskHandle_t raw_meas_task = nullptr;
-#if TR_RAW_NAV_MOSAIC
-// The mosaic-only image: the raw-GNSS filter is its one navigation filter, so
+#if TR_RAW_NAV_P4
+// The mosaic-only image (and the V10's gnss-sdr-dev image): the raw-GNSS
+// filter is its one navigation filter, so
 // whether it started is the boot's to say aloud (setup_fc), not only its log.
 static bool raw_nav_started = false;
+#if TR_RAW_NAV_MOSAIC
 // The Dopplers in pairs set on the driver (startRawShadow, rawPairsStart):
 // the console asks for their counts only then
 static bool raw_pairs_on = false;
@@ -3374,6 +3379,7 @@ static bool raw_mb_on = false;
 // in use.
 static RawIonoRule::State raw_iono;
 static gnss_raw::SeqLock<gnss_raw::ShadowIono> raw_iono_chosen;
+#endif
 // The antenna's offset in the filter's frame (antenna_cfg turned by the
 // mounting): written on the flight loop's core when the setting or the
 // mounting changes, taken by the filter's task (RawGnssShadow::setAntenna,
@@ -3418,12 +3424,14 @@ static bool rawAntennaFlown(const gnss_raw::AntennaOffset& ant, gnss_raw::Antenn
             return false;
     return true;
 }
+#if TR_RAW_NAV_MOSAIC
 // The GNSS task's navigation blocks (raw_nav_drain.h): held until an epoch
 // names the receiver's week, and how many SbfNav would not decode.
 static RawNavDrain::State raw_nav_drain;
 // READY or PRELAUNCH, set by the loop each pass: where the GNSS task may ask
 // the receiver for its navigation blocks again (raw_nav_policy.h)
 static volatile bool raw_nav_on_pad = false;
+#endif
 // In flight: the restarts of a filter that stopped (at most
 // RawNavPolicy::kMaxRestarts a flight), and a reboot's restore waiting for
 // the barometer to give its start height
@@ -3458,7 +3466,7 @@ static inline void rawShadowPushImu(const EkfIMUData& imu, bool level, bool in_f
     s.flags = (uint8_t)((level ? gnss_raw::kShadowLevel : 0) | (in_flight ? gnss_raw::kShadowInFlight : 0)
                         | (sim ? gnss_raw::kShadowSim : 0) | (landed ? gnss_raw::kShadowLanded : 0)
                         | (apogee ? gnss_raw::kShadowApogee : 0));
-#if TR_RAW_NAV_MOSAIC && !(defined(TR_BENCH_RAW_CAP_PAD) && TR_BENCH_RAW_CAP_PAD)
+#if TR_RAW_NAV_P4 && !(defined(TR_BENCH_RAW_CAP_PAD) && TR_BENCH_RAW_CAP_PAD)
     // the satellite cap's governor holds the floor from PRELAUNCH (CapGovernor.h):
     // the epochs built for the launch's first jobs are the floor's
     if (rocket_state == PRELAUNCH) s.flags |= gnss_raw::kShadowPrelaunch;
@@ -3590,6 +3598,14 @@ static void rawGnssMeasTask(void*)
             gnss_raw::ShadowIono rx;
             if (sensor_collector.getGNSSBroadcastIono(rx.raw, rx.gps_day)) rawIonoOffer(rx, true, st);
         }
+#elif TR_RAW_NAV_SDR
+        // The gnss-sdr-dev board's stream carries no ionosphere (RTCM has no
+        // message for it), and this image flies none: not the app's or NVS's
+        // either, as the filter was validated offline (docs/plans/
+        // sdr-raw-filter-plan.md: 1.5-2 m of height bias accepted)
+        (void)io;
+        (void)seq;
+        (void)iono_seq;
 #else
         if (raw_shadow_link.iono.read(io, seq) && seq != iono_seq)
         {
@@ -3668,7 +3684,7 @@ static void rawGnssMeasTask(void*)
     }
 }
 
-#if TR_RAW_NAV_MOSAIC && (defined(TR_BENCH_PANIC_FILTER_AT_S) || defined(TR_BENCH_RAW_STOP_AT_S))
+#if TR_RAW_NAV_P4 && (defined(TR_BENCH_PANIC_FILTER_AT_S) || defined(TR_BENCH_RAW_STOP_AT_S))
 // Bench (P3, G8; refused on any image but the mosaic-only one, never flown):
 // N s after the filter is first seen running in flight -- a launch, a sim's,
 // or a restored flight's -- the filter's task aborts, on every boot
@@ -3876,7 +3892,7 @@ static void rawShadowTask(void*)
     uint32_t vert_dropped = 0;     // epochs the vertical check dropped, said so
     uint32_t vert_latched = 0;     //   and after a drop, not yet back within vert_release_mps, said so
     uint32_t act_launches = 0;     // act's launch priors, said so
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
     uint32_t ant_seq = 0;          // the antenna offset last taken (raw_antenna)
     gnss_raw::AntennaOffset ant_on;   // the offset the filter has on, last written (raw_antenna_applied)
     bool ant_on_sent = false;
@@ -3894,6 +3910,11 @@ static void rawShadowTask(void*)
             sh.onSeed(s);
         }
         gnss_raw::ShadowIono io;
+#if TR_RAW_NAV_SDR
+        // none on the gnss-sdr-dev image (its GNSS task's note says why)
+        (void)io;
+        (void)iono_seq;
+#else
 #if TR_RAW_NAV_MOSAIC
         // the set the GNSS task chose from both sources (rawIonoOffer)
         if (raw_iono_chosen.read(io, seq) && seq != iono_seq)
@@ -3904,7 +3925,8 @@ static void rawShadowTask(void*)
             iono_seq = seq;
             sh.setIono(io);
         }
-#if TR_RAW_NAV_MOSAIC
+#endif
+#if TR_RAW_NAV_P4
         // the owner's antenna offset, or the mounting it is turned by, changed:
         // taken now on the ground, else at the first ground tick
         {
@@ -3975,10 +3997,10 @@ static void rawShadowTask(void*)
                 else rec_drops++;
             }
         }
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
         rawAntennaAppliedPublish(sh, ant_on, ant_on_sent);   // one waiting for the ground, taken by a step
 #endif
-#if TR_RAW_NAV_MOSAIC && (defined(TR_BENCH_PANIC_FILTER_AT_S) || defined(TR_BENCH_RAW_STOP_AT_S))
+#if TR_RAW_NAV_P4 && (defined(TR_BENCH_PANIC_FILTER_AT_S) || defined(TR_BENCH_RAW_STOP_AT_S))
         rawBenchFilterHooks(sh);
 #endif
         {
@@ -4233,6 +4255,7 @@ static void rawShadowTask(void*)
                          (unsigned)(raw_meas_task ? uxTaskGetStackHighWaterMark(raw_meas_task) : 0),
                          (unsigned long)raw_shadow_link.eph.dropped());
             }
+#if TR_RAW_NAV_P4
 #if TR_RAW_NAV_MOSAIC
             {
                 // The mosaic-G5 (P1, G6, G7): what the one filter is fed and how
@@ -4311,6 +4334,52 @@ static void rawShadowTask(void*)
                              g.config().hard_age_s * 1000.0, g.backoff());
                 }
             }
+#else
+            {
+                // The gnss-sdr-dev board (the V10's SDR raw-nav image): what the
+                // one filter is fed -- the fused grid and the satellite cap,
+                // the board's epochs made whole and handed over, untimed or
+                // dropped, the Dopplers' means, the ephemerides -- where the
+                // pad's datum comes from, and the flight safeguards' work, as
+                // the mosaic's line. Counts since boot; a value may be one pass
+                // old.
+                const gnss_raw::ShadowMeasStats& mst = sh.measStats();
+                TR_GNSSReceiverSdrSerial::RawStats rs;
+                (void)sensor_collector_hw.getGNSSRawStats(rs);
+                gnss_raw::ShadowNav nv = {};
+                sh.navState(nv);
+                ESP_LOGI(TAG, "[RAWGNSS] gnss-sdr-dev: gnss_aided %u, baro_aided %u | fused %.1f Hz (%lu ms grid), cap %d "
+                              "sats, Doppler means of %lu epochs (%lu of %lu Dopplers, %lu epochs as they came) | "
+                              "epochs %lu seen: %lu untimed, %lu handed over by the board's driver (%lu queue drops), "
+                              "%lu sats capped out | tracked %d, %d without an ephemeris | eph %d sats, %u of %u store "
+                              "entries, %lu queued, %lu queue drops | imu ring drops %lu, gaps bridged %lu | iono none "
+                              "(the stream carries none) | pad datum %s, %lu fixes (%lu from the board) | GNSS log %s | "
+                              "in flight: restarts %u of %u, raw votes %s, transonic lockout %s | dv check: %lu epochs "
+                              "checked%s, %lu failed, latches %lu let go %lu, %lu Dopplers held | heading share %.2f | "
+                              "rotation allowance max %.2f m/s | flight task stack free %u B, GNSS poll task %u B",
+                         (unsigned)(sh.running() ? nv.gnss_aided : 0), (unsigned)(sh.running() ? nv.baro_aided : 0),
+                         rs.period_ms ? 1000.0 / (double)rs.period_ms : 0.0, (unsigned long)rs.period_ms,
+                         sh.config().sat_cap, (unsigned long)rs.mean_n, (unsigned long)rs.mean.means,
+                         (unsigned long)rs.mean.dopplers, (unsigned long)(rs.mean.epochs_short + rs.mean.epochs_few),
+                         (unsigned long)mst.epochs, (unsigned long)mst.untimed, (unsigned long)rs.published,
+                         (unsigned long)rs.dropped, (unsigned long)mst.capped_out, mst.tracked, mst.tracked_no_eph,
+                         mst.eph_sats, (unsigned)(raw_meas ? raw_meas->ephemerides().size() : 0),
+                         (unsigned)gnss_raw::EphemerisStore::kCapacity, (unsigned long)rs.eph_queued,
+                         (unsigned long)rs.eph_dropped, (unsigned long)raw_shadow_link.imu.dropped(),
+                         (unsigned long)st.gaps_bridged, ref_from_nav ? "the raw filter's" : "the board's",
+                         (unsigned long)ref_pos_count, (unsigned long)rs.fixes,
+                         gnss_log_setting == GNSS_LOG_REDUCED ? "REDUCED" : "DETAILED",
+                         (unsigned)raw_nav_restarts, (unsigned)RawNavPolicy::kMaxRestarts,
+                         raw_guard.latched ? (config::RAW_VOTE_GUARD_ACTS ? "WITHHELD" : "cast (guard latched, log only)") : "cast",
+                         mach_locked_out ? "ON" : "off", (unsigned long)st.dv_checks,
+                         st.dv_hdg_unset ? " (no magnetometer heading: any heading)" : "",
+                         (unsigned long)st.dv_epoch_fails, (unsigned long)st.dv_latches,
+                         (unsigned long)st.dv_latch_releases, (unsigned long)st.dv_held_rr,
+                         sh.running() ? (double)sh.filter().hdgObsScale() : 1.0, (double)st.rot_max_sigma_mps,
+                         (unsigned)(raw_flight_task ? uxTaskGetStackHighWaterMark(raw_flight_task) : 0),
+                         (unsigned)sensor_collector_hw.gnssPollStackFree());
+            }
+#endif
 #ifdef TR_BENCH_DV_CHECK
             // the Doppler change check (bench, exp/v9-dvcheck): counts since boot
             ESP_LOGI(TAG, "[RAWGNSS] dv check: %lu epochs checked | satellites failed %lu (%lu on the window) | "
@@ -4426,7 +4495,7 @@ static void rawShadowTask(void*)
     }
 }
 
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
 // The mosaic-only image's start, when it gives up part way: whatever it was
 // given back (nothing is left half made, nothing leaks), so the boot can say
 // there is no navigation filter with the memory it had.
@@ -4442,7 +4511,7 @@ static void rawNavGiveBack(void* mem, void* stage_mem, void* built_mem, void* ep
 // setup_fc, after the sensors: the filter object and its task.
 static void startRawShadow()
 {
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
 #if defined(TR_BENCH_RAW_START_FAIL) && TR_BENCH_RAW_START_FAIL
     // Bench (P3, G8; never flown): the start fails before it allocates
     // anything, as a failure would, so the boot's NO NAVIGATION FILTER line
@@ -4488,9 +4557,12 @@ static void startRawShadow()
     gnss_raw::GnssReceiverProfile rx = gnss_raw::lc86gProfile();     // U5: a Quectel LC86G
 #elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
     gnss_raw::GnssReceiverProfile rx = gnss_raw::mosaicG5Profile();  // the mosaic-G5 on J1 (v0: unmeasured in flight)
+#elif defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+    gnss_raw::GnssReceiverProfile rx = gnss_raw::sdrDevProfile();    // the gnss-sdr-dev board on J1 (v0: the bench's)
 #else
     gnss_raw::GnssReceiverProfile rx = gnss_raw::genericProfile();   // UNMEASURED placeholders
 #endif
+#if TR_RAW_NAV_P4
 #if TR_RAW_NAV_MOSAIC
     // The image's flight profile (ReceiverProfileApply.h, the owner's 10/24
     // set): the cheaper epoch build, the epoch's geometry shared with the
@@ -4499,6 +4571,14 @@ static void startRawShadow()
     // TR_BENCH_RAW_BUILD_LITE=0, TR_BENCH_RAW_SHARE_LOS=0 and
     // TR_BENCH_RAW_DOP_AVG=0 build the high-roll-only twin
     gnss_raw::applyMosaicFlightProfile(rx);
+#else
+    // The gnss-sdr-dev image's (ReceiverProfileApply.h): the mosaic's set,
+    // with each fused epoch's Dopplers the means of the board's epochs since
+    // the last in place of the mosaic's pairs. TR_BENCH_RAW_DOP_AVG=0 turns
+    // the means off (each fused epoch's own Dopplers), the other bench
+    // overrides below as on the mosaic's
+    gnss_raw::applySdrFlightProfile(rx);
+#endif
 #ifdef TR_BENCH_RAW_FUSE_MS
     // bench (the CPU ladder, P1): the fused grid, ms of GPS time. The
     // profile's pseudorange period (1 s) must stay a whole number of them,
@@ -4566,6 +4646,7 @@ static void startRawShadow()
     ESP_LOGW(TAG, "[RAWGNSS] BENCH: an epoch worked %.0f us a step at most (TR_BENCH_RAW_SLICE_US)",
              rx.epoch_slice_us);
 #endif
+#if TR_RAW_NAV_MOSAIC
     // The Dopplers in pairs (the profile's rr_pair_avg, the flight profile's
     // on): the driver is set to average them from this same profile before
     // the filter is told where their means fall (rr_pair_lag_s,
@@ -4574,6 +4655,26 @@ static void startRawShadow()
     const bool raw_pairs_asked = rx.rr_pair_avg;
     if (rx.rr_pair_avg) rx.rr_pair_avg = rawPairsStart(rx);
     raw_pairs_on = rx.rr_pair_avg;
+#else
+    // The board's epochs on the fused grid (the profile's 100 ms of GPS time,
+    // or the bench's) and each one's Dopplers the means of the board's epochs
+    // since the last (the profile's rr_pair_avg, the flight profile's on;
+    // SdrRawEpoch.h), set on the driver from this same profile before the
+    // filter is told where the means fall (applySdrDopplerMeans, below); the
+    // poll task takes both at its next frame
+    const bool raw_pairs_asked = rx.rr_pair_avg;
+    sdr_rtcm::SdrDopplerMeanConfig raw_means;
+    raw_means.n = (uint32_t)gnss_raw::sdrDopplerMeanEpochs(rx);
+    raw_means.period_ms = (uint32_t)llround(rx.raw_epoch_period_s * 1000.0);
+    raw_means.max_step_mps = rx.rr_pair_max_diff_mps;
+    for (int k = 0; k < GNSS_SYS_COUNT; ++k)
+        raw_means.cn0_min[k] = rx.sig[k].cn0_min_rr;
+    sensor_collector.setGNSSRawEpochConfig((uint32_t)llround(rx.fuse_epoch_period_s * 1000.0), raw_means);
+    ESP_LOGI(TAG, "[RAWGNSS] gnss-sdr-dev: epochs fused every %.0f ms of its %.0f ms ones; Dopplers %s",
+             rx.fuse_epoch_period_s * 1000.0, rx.raw_epoch_period_s * 1000.0,
+             raw_means.n >= 2 ? "the means of the board's epochs since the last fused one (SdrRawEpoch.h)"
+                              : "each fused epoch's own (the means off)");
+#endif
 #endif
 #ifdef TR_BENCH_CARRIER_MODE
     // bench: the carrier range rates off (0), observed (1) or fused (2)
@@ -4592,6 +4693,11 @@ static void startRawShadow()
              rx.cr_half_cycle == gnss_raw::kHalfCycleRepair ? "REPAIRED" : "rejected");
 #endif
     gnss_raw::applyReceiverProfile(rx, cfg);
+#if TR_RAW_NAV_SDR
+    // where the board's Doppler means fall: the window's middle, before the
+    // fused epoch's tag (rr_pair_lag_s on the epochs handed over with them)
+    gnss_raw::applySdrDopplerMeans(rx, cfg);
+#endif
     ESP_LOGI(TAG, "[RAWGNSS] receiver profile %s%s: carrier range rates %s, a half-cycle step %s",
              rx.name, rx.measured ? "" : " (UNMEASURED: placeholders)", gnss_raw::carrierModeName(rx.cr_mode),
              rx.cr_half_cycle == gnss_raw::kHalfCycleRepair ? "repaired" : "rejected");
@@ -4603,7 +4709,7 @@ static void startRawShadow()
     // and an epoch worked a slice a step, so the state the flight loop reads
     // keeps up while a sky is built and fused (RawGnssShadow::workJob): in one
     // pass 14 satellites held it 40 ms on the rig (r9), a sky of 30 ~90 ms
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
     cfg.epoch_slice_us = rx.epoch_slice_us;   // the receiver profile's (2500 us), or the bench's
 #else
     cfg.epoch_slice_us = 2500.0;
@@ -4615,7 +4721,7 @@ static void startRawShadow()
     ESP_LOGI(TAG, "[RAWGNSS] descent: %s (TR_RAW_DESCENT_IMU_FREE)",
              cfg.descent_imu_free ? "GNSS and the barometer alone from the apogee call" : "IMU-coupled, as before");
 #endif
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
     // The mosaic-only image's one filter (config.h): a restored flight's
     // start unsure for a reboot as long as the receiver's bring-up, with the
     // snapshot's accelerometer bias; the levelling's steady test only on
@@ -4637,6 +4743,13 @@ static void startRawShadow()
     // flight profile's epoch settings as the filter took them above, and says
     // when a bench define set any of them (its BENCH line says how).
     gnss_raw::applyMosaicFlightSafeguards(cfg);
+#if TR_RAW_NAV_SDR
+    // The gnss-sdr-dev image flies the same safeguards, but the carrier
+    // wind-up's k is the Goblin helix's (0.99), measured on the spin rig: the
+    // board's antenna's is not measured, so none is taken off (as offline,
+    // tools/raw_replay --receiver sdr). The clock drift takes the common part.
+    cfg.windup_k = 0.0;
+#endif
 #if defined(TR_BENCH_RAW_BUILD_LITE) || defined(TR_BENCH_RAW_SHARE_LOS) || defined(TR_BENCH_RAW_DOP_AVG) || \
     defined(TR_BENCH_RAW_SAT_CAP) || defined(TR_BENCH_RAW_CAP_MAX)
     const char* epochs_by = "BENCH defines, see the BENCH lines";
@@ -4705,7 +4818,9 @@ static void startRawShadow()
         else
             ESP_LOGI(TAG, "[RAWGNSS] antenna offset: unknown (the turning body's bounds above)");
     }
-#if TR_RAW_MULTIBAND
+#if TR_RAW_NAV_SDR
+    // one band a system on the board (L1, E1-C, B1C): nothing to combine
+#elif TR_RAW_MULTIBAND
     // Each satellite's other bands with its L1 band's Doppler (config.h
     // TR_RAW_MULTIBAND): on the 2026-10-24 Goblin flight five satellites' L1
     // C/A or B1I Dopplers were 3-19 m/s off their other bands through the
@@ -4769,12 +4884,12 @@ static void startRawShadow()
         ESP_LOGE(TAG, "[RAWGNSS] no memory for the GNSS task's stage (%u B) and epochs (%u B + %u B): not started",
                  (unsigned)sizeof(gnss_raw::RawGnssMeasStage), (unsigned)(2 * sizeof(gnss_raw::BuiltEpoch)),
                  (unsigned)sizeof(gnss_raw::TimedRawEpoch));
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
         rawNavGiveBack(mem, stage_mem, built_mem, epoch_mem);
 #endif
         return;
     }
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
     {
         // The internal RAM left after the filter's blocks (PSRAM where it was
         // found; internal where not): its two tasks' stacks and the flight
@@ -4891,7 +5006,7 @@ static void startRawShadow()
                                 config::SENSOR_CORE) != pdPASS)
     {
         ESP_LOGE(TAG, "[RAWGNSS] task not created: shadow filter off");
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
         raw_built.attach(nullptr);
         raw_meas_epoch->~TimedRawEpoch();
         raw_meas->~RawGnssMeasStage();
@@ -4903,9 +5018,10 @@ static void startRawShadow()
 #endif
         return;
     }
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
     // 6 KB: SBF decoding and a 128-entry store's eviction (512 B of it) on
-    // top of the Beetle's 2 KB peak
+    // top of the Beetle's 2 KB peak (the gnss-sdr-dev image's RTCM3
+    // ephemerides into the same store: the same)
     if (xTaskCreatePinnedToCore(rawGnssMeasTask, "GNSS meas", config::RAW_MEAS_STACK_B, nullptr, 0, &raw_meas_task,
                                 config::SENSOR_CORE) != pdPASS)
 #else
@@ -4925,7 +5041,7 @@ static void startRawShadow()
 #if TR_RAW_GNSS_PRIMARY
     ekf.attach(&raw_shadow_link);
 #endif
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
     // A stop in flight keeps the last good state (a free INS, not healthy)
     // for the loop to restart from, not the pad's (raw_nav_adapter.h)
     ekf.setHoldLastGood(true);
@@ -6708,7 +6824,7 @@ static OcSnapshotAnswer fcAskOcForFlightSnapshot()
                             definitive = true;
                             break;
                         case flight_snapshot_answer::Verdict::SimFlight:
-#if TR_RAW_NAV_MOSAIC && defined(TR_BENCH_RESTORE_SIM) && TR_BENCH_RESTORE_SIM
+#if TR_RAW_NAV_P4 && defined(TR_BENCH_RESTORE_SIM) && TR_BENCH_RESTORE_SIM
                             // Bench (P3, G8; refused on any image but the
                             // mosaic-only one, never flown): a sim flight
                             // stands in for a real one through a power cut
@@ -6889,7 +7005,7 @@ static void fcReconcilePowerHoldAtBoot()
 // panic, watchdog and software resets a crash loop or the setup watchdog
 // produces. A power-on leaves it random, which atBoot() never trusts.
 RTC_NOINIT_ATTR static FcRescuePolicy::Record fc_rescue_rtc;
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
 // The mosaic-only image's crash-loop count for its one filter
 // (raw_nav_policy.h CrashRecord): crash resets in a row, kept the same way.
 RTC_NOINIT_ATTR static RawNavPolicy::CrashRecord raw_crash_rtc;
@@ -7002,7 +7118,7 @@ static inline void fcMaybeMarkBootProven()
     if (!FcRescuePolicy::provenAfter((uint32_t)((now - first_us) / 1000LL))) return;
     done = true;
     fc_rescue_rtc = FcRescuePolicy::onProven(fc_rescue_rtc);
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
     raw_crash_rtc = RawNavPolicy::crashOnProven(raw_crash_rtc);   // and the filter's crash-loop count
 #endif
     ESP_LOGI(TAG, "[RESCUE] flight loop ran %u s: boot proven, rescue counts cleared",
@@ -7174,7 +7290,7 @@ static void setup_fc()
     // arm the watchdog that turns a stalled setup into a counted restart. Here,
     // right after the pins are safe, so the watchdog covers everything after.
     fcRescueAtBoot();
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
     // and the one filter's crash-loop count (raw_nav_policy.h): this boot's
     // reset, counted before anything can fail
     raw_crash_rtc = RawNavPolicy::crashAtBoot(
@@ -7719,7 +7835,7 @@ static void setup_fc()
                  (int)antenna_cfg.y_mm, (int)antenna_cfg.z_mm);
     else
         ESP_LOGI(TAG, "GNSS antenna offset: unknown%s", antenna_cfg_from_nvs ? "" : " (no record)");
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
     rawAntennaPublish();   // the filter's task takes the stored one, not one the mounting sent before this read
 #endif
 #endif
@@ -7943,7 +8059,8 @@ static void setup_fc()
     if (TR_TEST_SETUP_FAIL == 2) abort();
     for (;;) delay_ms(1000);
 #endif
-#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO)
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) || \
+    (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
     // The mosaic-G5 driver is new, and on a mounted rocket the only way to
     // replace firmware is over the air, which needs a finished boot. So a boot
     // that follows a crash restart (a panic or a watchdog) leaves the receiver
@@ -7969,7 +8086,7 @@ static void setup_fc()
 #endif
 #if TR_RAW_GNSS_SHADOW
     // #1600: the GNSS driver's raw outputs exist before its poll task does
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
     // -- for a receiver this boot looks for: a crash boot left the mosaic out
     // above, and its navigation filter flies GNSS-absent. Outputs that could
     // not be made leave it GNSS-absent as surely, which the boot says below.
@@ -7994,7 +8111,7 @@ static void setup_fc()
     sensor_collector_hw.setGNSSMosaicRate(config::GNSS_MOSAIC_UPDATE_RATE);
     sensor_collector.begin(config::SENSOR_CORE);
 #if TR_RAW_GNSS_SHADOW
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
     // The crash-loop rule (raw_nav_policy.h): the boot after two crash
     // resets in a row, with no minute of loop since, does not start the
     // filter, whatever crashed -- the filter is the newest code on this image,
@@ -8006,7 +8123,7 @@ static void setup_fc()
     startRawShadow();
 #endif
 #endif
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
     // The raw-GNSS filter is this image's only navigation filter: GpsInsEKF is
     // not built in. If it did not start, nothing navigates -- the voters have
     // the barometer and the receiver's PVT, the main-deploy backstop the
@@ -8057,8 +8174,15 @@ static void setup_fc()
     // well past zero here.  A receiver whose stream is only logged (the
     // gnss-sdr-dev board on a V9 or V10, gnssTypeGivesFix) is online and
     // gives no fix, so the FC flies the same path beside it.
+#if TR_RAW_NAV_SDR
+    // The V10's gnss-sdr-dev image navigates on the board: its measurements
+    // through the raw-GNSS filter and its fixes as GNSSData (the start's
+    // position, the GPS voter's), as the mosaic-only image does on the mosaic
+    const bool gnss_log_only = false;
+#else
     const bool gnss_log_only = sensor_collector_hw.isGnssOnline() &&
                                !gnssTypeGivesFix(sensor_collector_hw.gnssType());
+#endif
     gnss_absent_mode     = config::USE_GNSS && (!sensor_collector_hw.isGnssOnline() || gnss_log_only);
     gnss_absent_dwell_ms = millis() + GNSS_ABSENT_INIT_DWELL_MS;
     if (gnss_log_only)
@@ -8439,7 +8563,7 @@ static void setup_fc()
 
             // Restore flight state
             rocket_state = INFLIGHT;
-#if TR_RAW_NAV_MOSAIC && defined(TR_BENCH_RESTORE_SIM) && TR_BENCH_RESTORE_SIM
+#if TR_RAW_NAV_P4 && defined(TR_BENCH_RESTORE_SIM) && TR_BENCH_RESTORE_SIM
             if (snap.sim_flight)
             {
                 // Bench: the restored sim flight stays a sim's -- the dry-fire
@@ -8607,7 +8731,7 @@ static void setup_fc()
                 // v5: euler is not on the wire any more. setState() derives it
                 // from the restored quaternion, so leaving it zero here is
                 // correct rather than lossy.
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
                 // The raw filter's: the geoid separation its heights were
                 // turned by before the reboot (a crash boot leaves the
                 // receiver out, a cold one has none for a while), and its
@@ -8851,7 +8975,7 @@ static void resetFlightStateForSim(const char* edge)
     ref_from_nav = false;
     ekf_gnss_feed.reset();
     GnssAscentGate::reset(gnss_admit_state);   // back on the pad: GNSS flows, pad offset relearned
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
     RawVoteGuard::reset(raw_guard);            // the raw filter votes again in the next flight
     raw_nav_restarts = 0;
     raw_restore_at_speed = false;              // a restore's lockout was that flight's
@@ -8977,7 +9101,7 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     // qualifies after burnout.  The GNSS-minus-baro pad offset it will be
     // judged against is frozen now.
     GnssAscentGate::onLaunch(gnss_admit_state, now_ms);
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
     // A new flight: the raw filter votes until this flight's barometer says
     // otherwise, and may restart in it kMaxRestarts times
     RawVoteGuard::reset(raw_guard);
@@ -9411,7 +9535,7 @@ static void fcOtaHandleAbort()
     sendOtaRelayStatusRobust(OTA_RELAY_ABORTED, 0, 0);
 }
 
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
 // A reboot's restore (raw_nav_policy.h RestoreHold): the raw filter's seed
 // waits, at most 3 s from the restore, for a barometer that vouches for
 // itself (fresh and in range, as the kinematics block's baro_healthy, and not
@@ -9460,7 +9584,7 @@ static bool rawRestoreSeedReady(uint32_t now_ms, float pressure_altitude_m)
 }
 #endif
 
-#if TR_RAW_NAV_MOSAIC && defined(TR_BENCH_PANIC_AT_S)
+#if TR_RAW_NAV_P4 && defined(TR_BENCH_PANIC_AT_S)
 // Bench (P3, G8; refused on any image but the mosaic-only one, never flown):
 // one panic, TR_BENCH_PANIC_AT_S s after the loop starts, once a power-on.
 // The crash boot after it leaves the mosaic out and flies the filter
@@ -9500,7 +9624,7 @@ static void rawBenchPanicOnce(uint32_t now_ms)
 #endif
 #endif
 
-#if defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+#if (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
 // The log's copy of a 4002 frame sent to the gnss-sdr-dev board, a whole
 // frame in one GNSS_RTCM_MSG record beside the board's own frames, time_us
 // when it went out. Called after this pass's drain of the board's frames:
@@ -9581,8 +9705,10 @@ static void sdrAidBenchStep(const GnssClockData& line)
     sched.sent(sub, now_us, key);
     sdrAidLogSent(frame, len, now_us);
 }
-#elif defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
-// The flight image's 4002 to the gnss-sdr-dev board on J1. First the real
+#elif (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
+// The flight image's 4002 to the gnss-sdr-dev board on J1 (the auto image's,
+// and the V10's gnss-sdr-dev image's: the same senders, its filter the raw
+// one's state through RawNavAdapter). First the real
 // flight phase (sub-type 3), which picks the board's tracking loops. The board
 // boots with `rx aid fc` and `rx fc phase on`: only this request gives it its
 // boost loops (the owner's choice, after the board's own GPS channels took
@@ -9766,7 +9892,7 @@ static void loop_fc()
 
     fcMaybeMarkOtaValid();   // Layer 4: confirm a freshly OTA'd image after a stable run
     fcMaybeMarkBootProven(); // rescue mode: a minute of this loop clears the boot counts
-#if TR_RAW_NAV_MOSAIC && defined(TR_BENCH_PANIC_AT_S)
+#if TR_RAW_NAV_P4 && defined(TR_BENCH_PANIC_AT_S)
     rawBenchPanicOnce(time_ms());   // bench: the once-only crash
 #endif
 
@@ -10032,7 +10158,7 @@ static void loop_fc()
         for (int i = 0; i < 8 && sensor_collector.getGNSSRtcmFrame(rtcm_frame, sizeof(rtcm_frame),
                                                                    frame_len, frame_us); i++)
         {
-#if defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO && !(defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID)
+#if ((defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)) && !(defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID)
             sdrAidNoteBoardFrame(rtcm_frame, frame_len);   // the gnss-sdr-dev board's fix: the attitude's place
 #endif
             if (!gnss_log::keep(sbf_log_cut, rtcm_frame, frame_len, gnss_log_setting == GNSS_LOG_REDUCED))
@@ -10088,14 +10214,14 @@ static void loop_fc()
 #if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
             if (sensor_collector_hw.gnssType() == GNSS_TYPE_SDR)
                 sdr_line = clk;
-#elif defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+#elif (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
             if (sensor_collector_hw.gnssType() == GNSS_TYPE_SDR)
                 sdr_phase_sender.noteLine(clk, esp_timer_get_time());
 #endif
         }
 #if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
         sdrAidBenchStep(sdr_line);
-#elif defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+#elif (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
         sdrPhaseStep();
         sdrAidStep();
 #endif
@@ -10580,7 +10706,7 @@ static void loop_fc()
                     ref_from_nav = true;
                     ref_lat_sum = ref_lon_sum = ref_alt_sum = 0.0;
                     ref_pos_count = 0;
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
                     // once, for the pad checks (G7, G10): from here the datum
                     // is the raw filter's own, and its fix count starts over
                     ESP_LOGI(TAG, "[RAWGNSS] pad datum: the raw filter's own from here (gnss_aided); its average "
@@ -10638,7 +10764,7 @@ static void loop_fc()
                 ekf.refresh(time_us());
             }
 #endif
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
             // The one filter stopped in flight: the adapter holds its last good
             // state, carried forward and not healthy (setHoldLastGood). Start
             // it again from there through the restore path, at most
@@ -10897,7 +11023,7 @@ static void loop_fc()
                 ekf.setMagCalibration(magHardIronApplied(), sensor_collector.isSimActive());
 #endif
                 ekf.update(use_ahrs_acc, ekf_imu, ekf_gnss, ekf_mag);
-#if defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO && !(defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID)
+#if ((defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)) && !(defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID)
                 // The gnss-sdr-dev board's attitude and rests: this update's
                 // input and state (sdrAidStep sends them)
                 sdrAidNoteUpdate(ekf_imu);
@@ -10923,7 +11049,7 @@ static void loop_fc()
                                      !sensor_collector.isReplay(),
                                  kinematics.alt_landed_flag || rocket_state == LANDED,
                                  pyro_apogee_detected);
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
                 // The navigation filter flies a GNSS-absent flight too, on
                 // the IMU and the barometer; a reboot's restore once the
                 // barometer gives its start height (rawRestoreSeedReady)
@@ -11008,7 +11134,7 @@ static void loop_fc()
                         const float spd = sqrtf(vel_ned_baro[0] * vel_ned_baro[0] +
                                                 vel_ned_baro[1] * vel_ned_baro[1] +
                                                 vel_ned_baro[2] * vel_ned_baro[2]);
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
                         // The speed is the raw filter's, which fuses the GPS
                         // voter's receiver: a filter that has not run has none
                         // (a restore over the lockout's speed is locked from
@@ -13686,7 +13812,7 @@ static void loop_fc()
                 ga.baro_locked    = mach_locked_out;
                 ga.baro_agl_m     = pressure_altitude_m;
                 ga.baro_rate_mps  = kinematics.d_alt_est_;
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
                 // The navigation filter fuses this same receiver's
                 // measurements, so agreeing with it is no check on the
                 // receiver: the GPS vote is admitted against the barometer only
@@ -13740,7 +13866,7 @@ static void loop_fc()
                 }
             }
 
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
             // The raw vote guard (raw_vote_guard.h): after burnout and before
             // apogee, a filter whose vertical velocity reads 10 m/s below the
             // barometer's climb rate for a second -- with a barometer that can
@@ -13923,7 +14049,7 @@ static void loop_fc()
                                        // GnssAscentGate: no apogee vote until admitted
                                        GnssAscentGate::gnssVotes(gnss_admit_state));
 #endif
-#if defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO && !(defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID)
+#if ((defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)) && !(defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID)
             // The gnss-sdr-dev board's ignition cue (sdr_phase_policy.h
             // IgnitionCue), on the launch detector's own argument: the
             // specific force's magnitude, 0 from a stale IMU. Read only by
@@ -15592,7 +15718,7 @@ static void loop_fc()
                 fc_status.time_us = logic_now_us;
                 fc_status.flags   =
                     (uint8_t)(camera_engaged ? FCS_CAMERA_ENGAGED : 0u);
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
                 // the raw vote guard latched (it withholds the filter's apogee votes only
                 // where config::RAW_VOTE_GUARD_ACTS; otherwise it is the would-have)
                 if (raw_guard.latched) fc_status.flags |= FCS_RAW_VOTES_WITHHELD;
@@ -16203,7 +16329,7 @@ extern "C" void app_main(void)
     // block the flight task needed (Beetle bench image, 2026-10-26).
     xTaskCreatePinnedToCore(mbBenchTask, "mb_bench", 12 * 1024, nullptr, 3, nullptr, 0);
 #endif
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
     // its stack headroom on the raw filter's 5-s console line (the restore,
     // the restart and the hold run in it)
     raw_flight_task = flight_task;

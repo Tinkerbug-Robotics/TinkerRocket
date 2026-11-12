@@ -297,18 +297,39 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 #endif
 #endif
 
+// The V10 flying TinkerRocket's gnss-sdr-dev board on J1 with the raw-GNSS
+// filter as its one navigation filter (-DTR_GNSS_SDR=1, CMakeLists.txt): the
+// board's driver alone (TR_Sensor_Collector's TR_GNSS_DRIVER_SDR), no probe
+// for another receiver, as the mosaic-only image is the mosaic's. The board's
+// 100 Hz MSM7 and its 4001 records are the filter's measurements, its
+// 1019/1046/1042 the ephemerides, its fix (4001 sub-type 2) the start's
+// position and the GPS voter's fix. J1 pin 5 is not read (the V1 board has no
+// 1PPS there). The V10 alone: the board flies the V10 (2026-11-14).
+#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+#if !TR_BOARD_V10
+#error "TR_GNSS_DRIVER_SDR is a V10 build (-DTR_BOARD_V10=1 -DTR_GNSS_SDR=1)"
+#endif
+#if (defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86) || (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || \
+    (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO)
+#error "One GNSS driver per build: TR_GNSS_DRIVER_SDR is set with TR_GNSS_DRIVER_LC86, TR_GNSS_DRIVER_MOSAIC or TR_GNSS_DRIVER_AUTO"
+#endif
+#endif
+
 // #1600 phase 4: the raw-GNSS shadow filter (TR_RawGnssShadow, main.cpp's
 // "raw-GNSS shadow filter" section).  It needs a receiver's raw measurements,
 // so it runs wherever a driver hands them over and nowhere else: the LC86G's
-// MSM7 (the Beetle) and the mosaic-G5's MeasEpoch (the mosaic-only image on
-// the V8 or V9). -DTR_RAW_GNSS_SHADOW=0 builds either image without it
+// MSM7 (the Beetle), the mosaic-G5's MeasEpoch (the mosaic-only image on the
+// V8 or V9) and the gnss-sdr-dev board's MSM7 (the V10's SDR raw-nav image,
+// which is not built without it). -DTR_RAW_GNSS_SHADOW=0 builds either of the
+// first two without it
 // (flight_computer/CMakeLists.txt passes it on): an LC86G image for a bench
 // A/B of what it costs, a mosaic image that flies GpsInsEKF alone, with PSRAM
 // off. The auto image (TR_GNSS_DRIVER_AUTO) never has it: it finds its
 // receiver at boot, and choosing its one filter then waits for after 10/24.
 // (No TR_GNSS_HAS_RAW macro: the Beetle's image must see no new one.)
 #ifndef TR_RAW_GNSS_SHADOW
-#if (defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86) || (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC)
+#if (defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86) || (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || \
+    (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
 #define TR_RAW_GNSS_SHADOW 1
 #else
 #define TR_RAW_GNSS_SHADOW 0
@@ -317,8 +338,14 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 #if TR_RAW_GNSS_SHADOW && defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
 #error "TR_RAW_GNSS_SHADOW is not for the auto image: it finds its receiver at boot and flies GpsInsEKF (the mosaic-only image, -DTR_GNSS_MOSAIC=1, flies the raw-GNSS filter)"
 #endif
-#if TR_RAW_GNSS_SHADOW && !((defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86) || (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC))
-#error "TR_RAW_GNSS_SHADOW needs raw measurements: the LC86G's MSM7 (TR_GNSS_DRIVER_LC86=1) or the mosaic-G5's MeasEpoch (TR_GNSS_DRIVER_MOSAIC=1)"
+#if TR_RAW_GNSS_SHADOW && !((defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86) || (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || \
+                             (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR))
+#error "TR_RAW_GNSS_SHADOW needs raw measurements: the LC86G's MSM7 (TR_GNSS_DRIVER_LC86=1), the mosaic-G5's MeasEpoch (TR_GNSS_DRIVER_MOSAIC=1) or the gnss-sdr-dev board's MSM7 (TR_GNSS_DRIVER_SDR=1)"
+#endif
+// The SDR raw-nav image is that filter or nothing: its driver hands the FC no
+// fix GpsInsEKF could fly on the way the auto image's does not either.
+#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR && !TR_RAW_GNSS_SHADOW
+#error "TR_GNSS_DRIVER_SDR is the raw-GNSS filter's image: build the V10's auto image (no -DTR_GNSS_SDR) to fly GpsInsEKF beside the board"
 #endif
 
 // #1600: where the raw-GNSS filter runs it is the navigation filter: the
@@ -338,6 +365,9 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 #if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC && TR_RAW_GNSS_SHADOW && !TR_RAW_GNSS_PRIMARY
 #error "the mosaic-G5 image flies one navigation filter: the raw-GNSS filter, or GpsInsEKF alone with -DTR_RAW_GNSS_SHADOW=0"
 #endif
+#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR && !TR_RAW_GNSS_PRIMARY
+#error "the SDR raw-nav image flies one navigation filter: the raw-GNSS filter (TR_RAW_GNSS_PRIMARY=1)"
+#endif
 // The mosaic-only image's own paths for its one filter (main.cpp: the
 // profile, the restore's sigmas, the start's checks, the navigation blocks
 // and the ionosphere). Defined there and only there, so `#if
@@ -345,6 +375,21 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 // neither the macro nor any of those lines.
 #if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC && TR_RAW_GNSS_PRIMARY
 #define TR_RAW_NAV_MOSAIC 1
+#endif
+// The SDR raw-nav image's own paths, the same way (main.cpp: the board's
+// profile and its Doppler means, the epochs' grid, no ionosphere, its console
+// line); TR_RAW_NAV_SDR reads 0 everywhere else.
+#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR && TR_RAW_GNSS_PRIMARY
+#define TR_RAW_NAV_SDR 1
+#endif
+// What the two P4 images whose one navigation filter is the raw-GNSS filter
+// share -- the mosaic-only image and the SDR raw-nav image: the restore's
+// sigmas, the start's checks and memory floor, the crash-loop rule, the
+// transonic lockout, the raw vote guard, the hold and restart of a filter
+// that stops in flight, the antenna's offset, the rig replay's console. The
+// Beetle's (the M1's LC86G) is the third raw-filter image and has none of it.
+#if (defined(TR_RAW_NAV_MOSAIC) && TR_RAW_NAV_MOSAIC) || (defined(TR_RAW_NAV_SDR) && TR_RAW_NAV_SDR)
+#define TR_RAW_NAV_P4 1
 #endif
 
 // The heading from thrust (TR_RawGnssShadow/HeadingFit.h): in flight the raw
@@ -440,6 +485,11 @@ struct config : board_pins
     // Not an over-request: the mosaic-G5 makes what its streams ask for, and
     // its permission file allows 20 Hz, position and measurements alike. The
     // poll task runs at twice this (every 25 ms).
+    static constexpr uint16_t GNSS_UPDATE_RATE = 20;
+#elif defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+    // Not the board's rate (100 epochs a second, 10 fixes): its driver is
+    // read every 25 ms, as on the auto image (gnss_auto_driver.cpp
+    // kSdrPollRateHz), 1.4 kB a read of its 16 kB UART ring.
     static constexpr uint16_t GNSS_UPDATE_RATE = 20;
 #else
     // The u-blox's; on the V9 image, the rate when it finds the u-blox.
@@ -892,9 +942,12 @@ struct config : board_pins
     static constexpr float    EKF_ATT_VAR_OK        = 0.1f;   // rad²,  worst attitude axis (~18° 1σ)
     static constexpr float    EKF_VEL_VAR_OK        = 4.0f;   // (m/s)², worst velocity axis (~2 m/s 1σ)
 
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_P4
     // The mosaic-only image's one navigation filter, the raw-GNSS filter
-    // (main.cpp startRawShadow; the plan's section 2, 2026-10-17).
+    // (main.cpp startRawShadow; the plan's section 2, 2026-10-17), and the
+    // SDR raw-nav image's, the same settings (a reboot's restore, the start's
+    // floor, the GNSS task's stack: it decodes RTCM3 ephemerides into the
+    // same 128-entry store; the vote guard logs only).
     //   RESTORE_*: a flight restored after a reboot starts this unsure on
     //     every axis. The boot asks the OC for a flight before the mosaic's
     //     bring-up and does not wait on the receiver when there is one (its

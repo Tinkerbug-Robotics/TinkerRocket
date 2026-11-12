@@ -222,9 +222,14 @@ endforeach()
 # -bench. Never set for flight.
 #
 # These and TR_RAW_GNSS_IRAM below act only where the raw-GNSS filter
-# navigates on the mosaic-G5 (main.cpp's TR_RAW_NAV_MOSAIC): any other build
-# refuses them rather than build an image that silently ignores them.
+# navigates on a P4 (main.cpp's TR_RAW_NAV_P4): the mosaic-G5 image, and the
+# V10's gnss-sdr-dev image (-DTR_GNSS_SDR=1, below), where TR_BENCH_RAW_DOP_AVG
+# turns the board's Doppler means on or off and the fused grid is any whole
+# number of its 10 ms epochs. Any other build refuses them rather than build
+# an image that silently ignores them.
 if(TR_GNSS_MOSAIC AND (NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW))
+    set(_tr_mosaic_rawnav ON)
+elseif(TR_GNSS_SDR)
     set(_tr_mosaic_rawnav ON)
 else()
     set(_tr_mosaic_rawnav OFF)
@@ -235,7 +240,7 @@ foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G TR_
         TR_BENCH_RAW_SHARE_LOS TR_BENCH_RAW_DOP_AVG TR_RAW_GNSS_IRAM TR_BENCH_RAW_CAP_MAX TR_BENCH_RAW_CAP_PAD
         TR_BENCH_RAW_SLICE_US ${_tr_mosaic_rawnav_hooks})
     if(DEFINED ${_v} AND NOT _tr_mosaic_rawnav)
-        message(FATAL_ERROR "${_v} is for the mosaic-only image's raw-GNSS filter (-DTR_GNSS_MOSAIC=1 on a V8 or V9): this build would ignore it. A build dir keeps every -D value: use a fresh one.")
+        message(FATAL_ERROR "${_v} is for the raw-GNSS navigation filter of the mosaic-only image (-DTR_GNSS_MOSAIC=1 on a V8 or V9) or the V10's gnss-sdr-dev image (-DTR_GNSS_SDR=1): this build would ignore it. A build dir keeps every -D value: use a fresh one.")
     endif()
 endforeach()
 foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G TR_BENCH_DV_CHECK TR_BENCH_RAW_BUILD_LITE
@@ -321,11 +326,22 @@ endif()
 if(TR_SIM_REPLAY_BLOB)
     if(TR_GNSS_MOSAIC AND NOT _tr_mosaic_rawnav)
         message(FATAL_ERROR "TR_SIM_REPLAY_BLOB on the mosaic-only image takes its clock from the raw-GNSS filter's timed epochs: build it with the filter (no -DTR_RAW_GNSS_SHADOW=0)")
-    elseif(NOT TR_GNSS_MOSAIC AND NOT TR_BOARD_M1 AND NOT ((TR_BOARD_V9 OR TR_BOARD_V10) AND (NOT DEFINED TR_GNSS_AUTO OR TR_GNSS_AUTO)))
-        message(FATAL_ERROR "TR_SIM_REPLAY_BLOB needs a receiver whose time sets the replay's clock: the M1's LC86G (-DTR_BOARD_M1=1), the mosaic-only image (-DTR_GNSS_MOSAIC=1 on a V8 or V9) or the gnss-sdr-dev board on the V9's or V10's auto image")
+    elseif(NOT TR_GNSS_MOSAIC AND NOT TR_GNSS_SDR AND NOT TR_BOARD_M1 AND NOT ((TR_BOARD_V9 OR TR_BOARD_V10) AND (NOT DEFINED TR_GNSS_AUTO OR TR_GNSS_AUTO)))
+        message(FATAL_ERROR "TR_SIM_REPLAY_BLOB needs a receiver whose time sets the replay's clock: the M1's LC86G (-DTR_BOARD_M1=1), the mosaic-only image (-DTR_GNSS_MOSAIC=1 on a V8 or V9), the V10's gnss-sdr-dev image (-DTR_GNSS_SDR=1) or the gnss-sdr-dev board on the V9's or V10's auto image")
     endif()
-    if(NOT TR_GNSS_MOSAIC AND NOT TR_BOARD_M1)
+    if(NOT TR_GNSS_MOSAIC AND NOT TR_GNSS_SDR AND NOT TR_BOARD_M1)
         message(STATUS "flight_computer: RIG REPLAY of the V9/V10 auto image: the gnss-sdr-dev board's clock line sets the replay's clock (with any other receiver on J1 the replay stays on the pad)")
+    endif()
+    if(TR_GNSS_SDR)
+        # The V10's gnss-sdr-dev image: its raw-GNSS filter's timed epochs set
+        # the replay's clock, as the mosaic's do, and main.cpp's rig replay
+        # paths (the navigation console the scorer reads, the replayed high-g
+        # counts with the converter's bias) are the mosaic image's. The board
+        # is cold-started by the rig's own kit (rfrig-kit run_start.sh), not
+        # the flight computer; its stream carries no ionosphere, so there is
+        # no sky's set to carry either.
+        add_compile_definitions(TR_RAW_NAV_RIG_REPLAY=1)
+        message(STATUS "flight_computer: RIG REPLAY of the V10's gnss-sdr-dev image (TR_RAW_NAV_RIG_REPLAY=1): the raw-GNSS filter's timed epochs set the replay's clock")
     endif()
     if(TR_GNSS_MOSAIC)
         set(TR_BENCH_MOSAIC_COLD_START ON)
@@ -337,6 +353,7 @@ if(TR_SIM_REPLAY_BLOB)
     endif()
 endif()
 if(TR_SIM_REPLAY_GPS_IONO AND NOT (TR_SIM_REPLAY_BLOB AND TR_GNSS_MOSAIC))
+    # (never on the gnss-sdr-dev image: it flies no ionosphere)
     message(FATAL_ERROR "TR_SIM_REPLAY_GPS_IONO is the rig sky's ionosphere for a rig replay (-DTR_SIM_REPLAY_BLOB) of the mosaic-only image (-DTR_GNSS_MOSAIC=1)")
 endif()
 foreach(_v TR_BENCH_MOSAIC_CN0 TR_BENCH_MOSAIC_COLD_START TR_BENCH_MOSAIC_TAG_TRACE)
@@ -533,6 +550,36 @@ if(TR_GNSS_MOSAIC)
         message(STATUS "flight_computer: GNSS driver Septentrio mosaic-G5 (TR_GNSS_DRIVER_MOSAIC=1), overlay sdkconfig.defaults.mosaic (TR_RAW_GNSS_SHADOW=0: no raw-GNSS filter, PSRAM off)")
     endif()
 endif()
+# The V10 flying TinkerRocket's gnss-sdr-dev board with the raw-GNSS filter as
+# its one navigation filter (`idf.py -B build_v10_sdr -DTR_BOARD_V10=1
+# -DTR_GNSS_SDR=1 build`; docs/plans/sdr-raw-filter-plan.md): the board's
+# driver alone in the GNSS slot, no probing (TR_GNSS_DRIVER_SDR, as
+# TR_GNSS_DRIVER_MOSAIC is the mosaic's), the filter on its 100 Hz MSM7, its
+# ephemerides and its fix, GpsInsEKF not built in. Like the mosaic-only image
+# it takes the mosaic's overlay (the UART interrupt in IRAM, 2 Mbaud) and the
+# PSRAM overlay with 128 ephemerides; it is that filter or nothing
+# (config.h refuses -DTR_RAW_GNSS_SHADOW=0 or -DTR_RAW_GNSS_PRIMARY=0 with it).
+# The auto image (-DTR_BOARD_V10=1 alone) stays the image that finds any
+# receiver and flies GpsInsEKF beside the board.
+if(TR_GNSS_SDR)
+    if(NOT TR_BOARD_V10)
+        message(FATAL_ERROR "TR_GNSS_SDR is for the V10 (-DTR_BOARD_V10=1): the board flies on its J1")
+    endif()
+    if(TR_GNSS_AUTO OR TR_GNSS_MOSAIC)
+        message(FATAL_ERROR "TR_GNSS_SDR and TR_GNSS_AUTO or TR_GNSS_MOSAIC are both on: the gnss-sdr-dev image, the auto image or the mosaic-only image, one of them")
+    endif()
+    if((DEFINED TR_RAW_GNSS_SHADOW AND NOT TR_RAW_GNSS_SHADOW) OR (DEFINED TR_RAW_GNSS_PRIMARY AND NOT TR_RAW_GNSS_PRIMARY))
+        message(FATAL_ERROR "TR_GNSS_SDR is the raw-GNSS filter's image: it flies that filter alone (no -DTR_RAW_GNSS_SHADOW=0 or -DTR_RAW_GNSS_PRIMARY=0); the auto image flies GpsInsEKF beside the board")
+    endif()
+    add_compile_definitions(TR_GNSS_DRIVER_SDR=1)
+    list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.mosaic" "sdkconfig.defaults.rawnav")
+    # The board sends every GPS, Galileo and BeiDou ephemeris it holds, again
+    # every 30 s: the store holds 128, as the mosaic-only image's (main.cpp
+    # checks at boot that every component laid the pool out alike).
+    add_compile_definitions(TR_EPH_CAPACITY=128)
+    message(STATUS "flight_computer: GNSS driver gnss-sdr-dev alone (TR_GNSS_DRIVER_SDR=1), overlays sdkconfig.defaults.mosaic + sdkconfig.defaults.rawnav (PSRAM on)")
+    message(STATUS "flight_computer: raw-GNSS NAVIGATION filter on the gnss-sdr-dev board; GpsInsEKF not instantiated (ephemeris store 128)")
+endif()
 # The V9 and V10 images find their GNSS receiver at boot: the stock u-blox
 # SAM-M10Q carrier, the mosaic-G5 harness or TinkerRocket's gnss-sdr-dev
 # board, all on J1 (TR_Sensor_Collector's TR_GNSS_DRIVER_AUTO,
@@ -546,7 +593,7 @@ endif()
 # GPIO3/GPIO4, the mosaic's 1PPS on pin 5 = GPIO2), so one V8 image flies
 # either receiver. The V8's default build stays u-blox-only. Neither auto
 # image takes sdkconfig.defaults.rawnav: they fly GpsInsEKF, PSRAM off.
-if(NOT DEFINED TR_GNSS_AUTO AND (TR_BOARD_V9 OR TR_BOARD_V10) AND NOT TR_GNSS_MOSAIC)
+if(NOT DEFINED TR_GNSS_AUTO AND (TR_BOARD_V9 OR TR_BOARD_V10) AND NOT TR_GNSS_MOSAIC AND NOT TR_GNSS_SDR)
     set(TR_GNSS_AUTO ON)
 endif()
 if(TR_GNSS_AUTO)
@@ -562,7 +609,7 @@ if(TR_GNSS_AUTO)
     endif()
     list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.mosaic")
     message(STATUS "flight_computer: GNSS driver auto (u-blox, mosaic-G5 or gnss-sdr-dev, found at boot: TR_GNSS_DRIVER_AUTO=1), overlay sdkconfig.defaults.mosaic")
-elseif((TR_BOARD_V9 OR TR_BOARD_V10) AND NOT TR_GNSS_MOSAIC)
+elseif((TR_BOARD_V9 OR TR_BOARD_V10) AND NOT TR_GNSS_MOSAIC AND NOT TR_GNSS_SDR)
     message(STATUS "flight_computer: GNSS driver u-blox only (-DTR_GNSS_AUTO=0)")
 endif()
 set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")

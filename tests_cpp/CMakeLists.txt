@@ -1820,6 +1820,58 @@ target_include_directories(test_sdr_raw_feed PRIVATE
 target_link_libraries(test_sdr_raw_feed GTest::gtest_main)
 gtest_discover_tests(test_sdr_raw_feed)
 
+# ---------- test_sdr_board_config ----------
+# The V10's SDR raw-nav image's switches (config.h with TR_BOARD_V10 and
+# TR_GNSS_DRIVER_SDR, as its CMake sets them) and the receiver profile it flies
+# (ReceiverProfileApply.h applySdrFlightProfile, the Doppler means' lag).
+add_executable(test_sdr_board_config test_sdr_board_config.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/RawGnssShadow.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/RawGnssMeasStage.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/PadSurvey.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/SatJumpCheck.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/FixCheck.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/EphemerisFrames.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/HeadingFit.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssCarrier.cpp
+    ${LIB_DIR}/TR_GNSSRaw/eph.c
+    ${LIB_DIR}/TR_GNSSRaw/atmo.c
+    ${LIB_DIR}/TR_GNSSRaw/RtcmEphemeris.cpp
+    ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasCarrier.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilderLite.cpp
+)
+target_include_directories(test_sdr_board_config PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/../projects/flight_computer/main
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/TR_RawGnssShadow
+    ${LIB_DIR}/TR_RawGnssEKF
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+)
+target_compile_definitions(test_sdr_board_config PRIVATE TR_BOARD_V10=1 TR_MAG_DRIVER_QMC5883P=1
+    TR_GNSS_DRIVER_SDR=1 TR_EPH_CAPACITY=128)
+target_link_libraries(test_sdr_board_config GTest::gtest_main)
+gtest_discover_tests(test_sdr_board_config TEST_PREFIX "V10_SDR.")
+
+# The same image's link budget: the board's stream, its fixes as GNSSData and
+# the raw-GNSS filter's records (test_i2s_link_budget.cpp under
+# TR_GNSS_DRIVER_SDR).
+add_executable(test_i2s_link_budget_V10_SDR test_i2s_link_budget.cpp)
+target_include_directories(test_i2s_link_budget_V10_SDR PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+target_compile_definitions(test_i2s_link_budget_V10_SDR PRIVATE TR_BOARD_V10=1 TR_MAG_DRIVER_QMC5883P=1
+    TR_GNSS_DRIVER_SDR=1)
+target_link_libraries(test_i2s_link_budget_V10_SDR GTest::gtest_main)
+gtest_discover_tests(test_i2s_link_budget_V10_SDR TEST_PREFIX "V10_SDR.")
+
 # ---------- test_gnss_log_policy ----------
 # The GNSS log setting (BLE cmd 79): the IMU limit each value gives
 # (RocketComputerTypes.h imuRateMaxForGnss) and the REDUCED log's SBF cut

@@ -52,10 +52,17 @@
 // the receiver at begin() (gnss_auto_driver.h), so which one it is, and what
 // follows from it, are known only after begin(): read them through
 // gnssType(), never from a compile-time constant.
+//
+// TR_GNSS_DRIVER_SDR=1 puts TinkerRocket's gnss-sdr-dev board's driver in the
+// slot alone: the V10's SDR raw-nav image, whose one navigation filter is the
+// raw-GNSS filter on that board's measurements (no probing: the board is the
+// build's choice, as the mosaic is the mosaic image's).
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
 #include <TR_GNSSReceiverLC86_Serial.h>
 #elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
 #include <TR_GNSSReceiverMosaic_Serial.h>
+#elif defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+#include <TR_GNSSReceiverSdr_Serial.h>
 #elif defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
 #include "gnss_auto_driver.h"
 #else
@@ -328,6 +335,15 @@ public:
     void noteGNSSRollRate(float p_rps);
     bool getGNSSRawMbStats(TR_GNSSReceiverMosaicSerial::RawMbStats& out) const;
 #endif
+#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+    // The SDR raw-nav image's raw outputs beside those (its driver's
+    // setRawEpochConfig and rawStats): the fused grid its epochs are handed
+    // over on (GPS-time ms, the receiver profile's) with the Dopplers' means
+    // between them, and its counts.
+    void setGNSSRawEpochConfig(uint32_t period_ms, const sdr_rtcm::SdrDopplerMeanConfig& mean);
+    bool getGNSSRawStats(TR_GNSSReceiverSdrSerial::RawStats& out) const;
+    uint32_t gnssPollStackFree() const;
+#endif
     // The GPS-to-MCU clock line each time it moves (GNSS_CLOCK_MSG): the
     // LC86G's from its sentences' arrival, the mosaic-G5's from its 1PPS, the
     // gnss-sdr-dev board's from its epochs (the auto images; its 4002 frames
@@ -515,6 +531,8 @@ private:
     TR_GNSSReceiverLC86Serial gnss_receiver;
 #elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
     TR_GNSSReceiverMosaicSerial gnss_receiver;
+#elif defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+    TR_GNSSReceiverSdrSerial gnss_receiver;
 #elif defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
     TR_GNSSAuto gnss_receiver;
 #else
