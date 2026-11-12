@@ -138,6 +138,52 @@ def fn_body(src, head):
     return src[i:src.index("\n}\n", i)]
 
 
+def test_a_silent_or_late_board_still_starts_the_filter():
+    # sdr_nav_start_policy.h (host-tested in tests_cpp/test_sdr_nav_start_policy.cpp) wired into the loop: the
+    # degraded start without a usable fix 2 min after boot on the pad or at once when armed, the restart on a late
+    # usable fix on the pad unarmed, the board's epochs held out while the degraded start stands
+    src = read(MAIN_CPP)
+    assert '#if TR_RAW_NAV_SDR\n#include "sdr_nav_start_policy.h"' in src
+    i = src.index("const bool normal_init = have_ref_pos && gnss_gate3_init;")
+    init = src[i:src.index("#endif", i)]
+    assert "#if TR_RAW_NAV_SDR" in init
+    assert ("sdr_nav_start::degradedStartDue(normal_init, initGyroN >= 8,\n"
+            "                                                    (int32_t)(millis() - gnss_absent_dwell_ms) >= 0, millis(),\n"
+            "                                                    rocket_state);") in init
+    # the restart comes before MAG_CALIBRATION's check and the init chain, and hands the next pass the normal start
+    r = src.index("sdr_nav_start::restartOnFix(true, have_ref_pos && gnss_gate3_init, rocket_state)")
+    restart = src[r:src.index("#endif", r)]
+    assert "ekf_initialized = false;" in restart and "gnss_absent_flight = false;" in restart
+    assert "raw_sdr_gnss_held = gnss_absent_flight;" in restart
+    assert r < src.index("if (rocket_state == MAG_CALIBRATION)", r) < i
+    assert src.index("if (ekf_initialized && gnss_absent_flight &&") < r
+    # held out of the filter in the GNSS task while it stands
+    task = fn_body(src, "static void rawGnssMeasTask(void*)")
+    h = task.index("#if TR_RAW_NAV_SDR\n            if (raw_sdr_gnss_held)")
+    held = task[h:task.index("#endif", h)]
+    assert "raw_sdr_gnss_held_n++;" in held and "continue;" in held
+    assert task.index("while (sensor_collector.getGNSSRawEpoch(epoch))") < h
+    # armed or flying, the board's fixes set no pad datum (nor its average) under a degraded start
+    assert "const bool sdr_degraded_armed = gnss_absent_flight && rocket_state != READY;" in src
+    assert "const bool ref_take = (!ref_from_nav || ref_nav_now) && !sdr_degraded_armed;" in src
+    assert "#if TR_RAW_NAV_SDR\n                if (gnss_gate3_init && !sdr_degraded_armed &&" in src
+
+
+def test_the_boot_says_when_the_board_is_silent():
+    src = read(MAIN_CPP)
+    assert "#if TR_RAW_NAV_SDR\n    sdr_sensors_started_ms = millis();" in src
+    i = src.index("sdr_nav_start::boardSilent(sensor_collector_hw.gnssBoardHeard(),")
+    blk = src[src.rindex("#if TR_RAW_NAV_SDR", 0, i):src.index("#endif", i)]
+    # a bounded wait for a frame (never on a restored flight), then FCB_DEG_GNSS when none came
+    assert "while (rocket_state != INFLIGHT && !sensor_collector_hw.gnssBoardHeard() &&" in blk
+    assert "millis() - sdr_sensors_started_ms < sdr_nav_start::kHeardMs)" in blk
+    assert "fcBootStatus(FCB_COMPLETE, silent ? FCB_DEG_GNSS : 0);" in blk
+    assert "#else\n    fcBootStatus(FCB_COMPLETE);\n#endif" in src
+    col = read(os.path.join(ROOT, "tinkerrocket-idf", "components", "TR_Sensor_Collector", "TR_Sensor_Collector.cpp"))
+    body = fn_body(col, "bool SensorCollector::gnssBoardHeard() const")
+    assert "use_gnss && gnss_online_ && gnss_receiver.heardBoard()" in body
+
+
 def test_no_attitude_to_the_board_while_the_filter_is_not_running():
     # RawNavAdapter hands on the start's attitude, frozen, before the filter runs or while a stop is held over:
     # the image sends no attitude and no rests then (the sender's "no attitude" follows, sdr_aid_policy.h)

@@ -97,6 +97,9 @@
 #include "raw_iono_rule.h"        // which broadcast ionosphere it builds with (host-tested)
 #include "raw_nav_drain.h"        // when it files the receiver's navigation blocks (host-tested)
 #endif
+#if TR_RAW_NAV_SDR
+#include "sdr_nav_start_policy.h" // the start without the board, and a late board's take-over (host-tested)
+#endif
 #if TR_RAW_NAV_P4
 #include <esp_memory_utils.h>     // esp_ptr_external_ram: where the filter's blocks went
 #include "raw_nav_policy.h"       // crash loop, transonic lockout, nav resends, restarts, restore wait (host-tested)
@@ -3432,6 +3435,16 @@ static RawNavDrain::State raw_nav_drain;
 // the receiver for its navigation blocks again (raw_nav_policy.h)
 static volatile bool raw_nav_on_pad = false;
 #endif
+#if TR_RAW_NAV_SDR
+// The gnss-sdr-dev image's degraded start (sdr_nav_start_policy.h), set by
+// the loop each pass: while it stands the GNSS task hands the filter none of
+// the board's epochs (the filter's 0 N 0 E is no place to build them at), and
+// counts them
+static volatile bool raw_sdr_gnss_held = false;
+static uint32_t raw_sdr_gnss_held_n = 0;
+// when the sensors started (setup_fc), for the boot's verdict on the board
+static uint32_t sdr_sensors_started_ms = 0;
+#endif
 // In flight: the restarts of a filter that stopped (at most
 // RawNavPolicy::kMaxRestarts a flight), and a reboot's restore waiting for
 // the barometer to give its start height
@@ -3642,6 +3655,13 @@ static void rawGnssMeasTask(void*)
         while (sensor_collector.getGNSSRawEpoch(epoch))
         {
             seen = true;
+#if TR_RAW_NAV_SDR
+            if (raw_sdr_gnss_held)
+            {
+                raw_sdr_gnss_held_n++;   // the degraded start stands: none to the filter
+                continue;
+            }
+#endif
 #if TR_RAW_NAV_MOSAIC
             if (RawNavDrain::noteWeek(raw_nav_drain, epoch.gps_week))
             {
@@ -4356,7 +4376,8 @@ static void rawShadowTask(void*)
                               "(the stream carries none) | pad datum %s, %lu fixes (%lu from the board) | GNSS log %s | "
                               "in flight: restarts %u of %u, raw votes %s, transonic lockout %s | dv check: %lu epochs "
                               "checked%s, %lu failed, latches %lu let go %lu, %lu Dopplers held | heading share %.2f | "
-                              "rotation allowance max %.2f m/s | flight task stack free %u B, GNSS poll task %u B",
+                              "rotation allowance max %.2f m/s | flight task stack free %u B, GNSS poll task %u B | held out "
+                              "of a degraded start %lu epochs%s",
                          (unsigned)(sh.running() ? nv.gnss_aided : 0), (unsigned)(sh.running() ? nv.baro_aided : 0),
                          rs.period_ms ? 1000.0 / (double)rs.period_ms : 0.0, (unsigned long)rs.period_ms,
                          sh.config().sat_cap, (unsigned long)rs.mean_n, (unsigned long)rs.mean.means,
@@ -4377,7 +4398,8 @@ static void rawShadowTask(void*)
                          (unsigned long)st.dv_latch_releases, (unsigned long)st.dv_held_rr,
                          sh.running() ? (double)sh.filter().hdgObsScale() : 1.0, (double)st.rot_max_sigma_mps,
                          (unsigned)(raw_flight_task ? uxTaskGetStackHighWaterMark(raw_flight_task) : 0),
-                         (unsigned)sensor_collector_hw.gnssPollStackFree());
+                         (unsigned)sensor_collector_hw.gnssPollStackFree(), (unsigned long)raw_sdr_gnss_held_n,
+                         raw_sdr_gnss_held ? " (NOW: the filter started without the board)" : "");
             }
 #endif
 #ifdef TR_BENCH_DV_CHECK
@@ -8112,6 +8134,9 @@ static void setup_fc()
     sensor_collector_hw.setGNSSPpsPin(config::GNSS_PPS_PIN);
     sensor_collector_hw.setGNSSMosaicRate(config::GNSS_MOSAIC_UPDATE_RATE);
     sensor_collector.begin(config::SENSOR_CORE);
+#if TR_RAW_NAV_SDR
+    sdr_sensors_started_ms = millis();
+#endif
 #if TR_RAW_GNSS_SHADOW
 #if TR_RAW_NAV_P4
     // The crash-loop rule (raw_nav_policy.h): the boot after two crash
@@ -8907,7 +8932,27 @@ static void setup_fc()
     // degraded bits accumulated above ride this final frame so a boot that
     // finished imperfectly still says so.
     fcSetupWatchdogStop();   // setup finished: not a stall
+#if TR_RAW_NAV_SDR
+    // The gnss-sdr-dev image's verdict on the board (sdr_nav_start_policy.h):
+    // its driver listens whether or not one is there, so the boot waits a
+    // moment for a frame of the board's 4001 (its status, once a second from
+    // its receiver's start) -- never on a restored flight -- and says
+    // FCB_DEG_GNSS when there is none
+    {
+        while (rocket_state != INFLIGHT && !sensor_collector_hw.gnssBoardHeard() &&
+               millis() - sdr_sensors_started_ms < sdr_nav_start::kHeardMs)
+            delay_ms(50);
+        const bool silent = sdr_nav_start::boardSilent(sensor_collector_hw.gnssBoardHeard(),
+                                                       millis() - sdr_sensors_started_ms);
+        if (silent)
+            ESP_LOGE(TAG, "[GNSS] *** NOTHING HEARD FROM THE GNSS-SDR-DEV BOARD on J1 (%lu ms): the navigation "
+                          "filter starts without it unless it comes (2 min on the pad, at once when armed) ***",
+                     (unsigned long)(millis() - sdr_sensors_started_ms));
+        fcBootStatus(FCB_COMPLETE, silent ? FCB_DEG_GNSS : 0);
+    }
+#else
     fcBootStatus(FCB_COMPLETE);
+#endif
 }
 
 // Defined with the INFLIGHT-entry section below; resetFlightStateForSim()
@@ -10738,7 +10783,17 @@ static void loop_fc()
                              (unsigned)config::MAIN_DEPLOY_REF_MIN_FIXES);
 #endif
                 }
+#if TR_RAW_NAV_SDR
+                // the gnss-sdr-dev image's degraded start, armed or flying: its
+                // datum stays the pad-relative 0 N 0 E it started from, and
+                // the pad average takes none of the board's fixes either
+                // (sdr_nav_start_policy.h); on the pad the fix that restarts
+                // it below is taken
+                const bool sdr_degraded_armed = gnss_absent_flight && rocket_state != READY;
+                const bool ref_take = (!ref_from_nav || ref_nav_now) && !sdr_degraded_armed;
+#else
                 const bool ref_take = !ref_from_nav || ref_nav_now;
+#endif
 #else
                 const bool ref_take = true;
 #endif
@@ -10770,7 +10825,11 @@ static void loop_fc()
                 // #1600 phase 5: the pad average (see "Pad calibration"), the
                 // same fixes until launch, never a sim's -- but the rig
                 // replay's fixes are the receiver's own.
+#if TR_RAW_NAV_SDR
+                if (gnss_gate3_init && !sdr_degraded_armed &&
+#else
                 if (gnss_gate3_init &&
+#endif
                     (sensor_collector.isReplay() ||
                      (!sensor_collector.isSimActive() && !sim_flight_latched))) {
                     padAverageAdd(ekf_gnss.lat_rad, ekf_gnss.lon_rad, ekf_gnss.alt_m, now_ms);
@@ -10842,6 +10901,22 @@ static void loop_fc()
             // which clears ekf_initialized. The two conditions are now
             // separate: MAG_CALIBRATION inhibits the estimator ENTIRELY, as the
             // architecture doc says it does.
+#if TR_RAW_NAV_SDR
+            // The gnss-sdr-dev image (sdr_nav_start_policy.h): a degraded
+            // start gives way to the board's first usable fix while the rocket
+            // is on the pad, unarmed -- the normal start below, a new start
+            // generation for the raw filter. Once armed or flying it stands.
+            if (ekf_initialized && gnss_absent_flight &&
+                sdr_nav_start::restartOnFix(true, have_ref_pos && gnss_gate3_init, rocket_state))
+            {
+                ekf_initialized = false;
+                gnss_absent_flight = false;
+                ESP_LOGW(TAG, "[RAWGNSS] the gnss-sdr-dev board's first usable fix (%u satellites): the navigation "
+                              "filter starts over on it (%lu of its epochs were held out of the degraded start)",
+                         (unsigned)gnss_latest_si.num_sats, (unsigned long)raw_sdr_gnss_held_n);
+            }
+            raw_sdr_gnss_held = gnss_absent_flight;
+#endif
             if (rocket_state == MAG_CALIBRATION)
             {
                 // Neither init nor update. A tumble violates the "stationary at
@@ -10862,10 +10937,21 @@ static void loop_fc()
                 // path if a real/sim fix ever arrives), and on a short settle so an
                 // injected sim fix wins first.
                 const bool normal_init = have_ref_pos && gnss_gate3_init;
+#if TR_RAW_NAV_SDR
+                // The gnss-sdr-dev image never knows the board absent at boot
+                // (its driver listens whether or not one is there): the
+                // degraded start once no usable fix has come 2 min after boot
+                // on the pad, or at once when armed (sdr_nav_start_policy.h)
+                const bool degraded_init =
+                    sdr_nav_start::degradedStartDue(normal_init, initGyroN >= 8,
+                                                    (int32_t)(millis() - gnss_absent_dwell_ms) >= 0, millis(),
+                                                    rocket_state);
+#else
                 const bool degraded_init =
                     !normal_init && gnss_absent_mode && !gnss_started &&
                     (initGyroN >= 8) &&
                     ((int32_t)(millis() - gnss_absent_dwell_ms) >= 0);
+#endif
                 if (normal_init || degraded_init) {
                     EkfGNSSDataLLA init_gnss = ekf_gnss;
                     if (degraded_init) {
@@ -11006,6 +11092,15 @@ static void loop_fc()
                         ESP_LOGW(TAG, "[EKF] GNSS-absent degraded init: baro+IMU "
                                       "only, position pad-relative, guidance off "
                                       "(roll control unaffected)");
+#if TR_RAW_NAV_SDR
+                        raw_sdr_gnss_held = true;
+                        ESP_LOGW(TAG, "[RAWGNSS] no usable fix from the gnss-sdr-dev board (%s, %lu s after boot): the "
+                                      "navigation filter starts on the IMU and the barometer; %s",
+                                 sensor_collector_hw.gnssBoardHeard() ? "it streams" : "NOTHING HEARD from it",
+                                 (unsigned long)(millis() / 1000u),
+                                 rocket_state == READY ? "a fix while on the pad unarmed starts it over on the board"
+                                                       : "armed: the board's GNSS stays out for the flight");
+#endif
                     }
                 }
                 TR_LP_LAP(EKF_INIT);

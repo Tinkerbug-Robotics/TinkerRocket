@@ -1665,6 +1665,11 @@ bool SensorCollector::getGNSSRawStats(TR_GNSSReceiverSdrSerial::RawStats& out) c
     return out.enabled;
 }
 
+bool SensorCollector::gnssBoardHeard() const
+{
+    return use_gnss && gnss_online_ && gnss_receiver.heardBoard();
+}
+
 uint32_t SensorCollector::gnssPollStackFree() const
 {
     return pollGNSSTaskHandle != nullptr ? static_cast<uint32_t>(uxTaskGetStackHighWaterMark(pollGNSSTaskHandle)) : 0U;

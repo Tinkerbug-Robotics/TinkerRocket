@@ -343,6 +343,9 @@ public:
     void setGNSSRawEpochConfig(uint32_t period_ms, const sdr_rtcm::SdrDopplerMeanConfig& mean);
     bool getGNSSRawStats(TR_GNSSReceiverSdrSerial::RawStats& out) const;
     uint32_t gnssPollStackFree() const;
+    // Whether any frame of the board's 4001 (its status, an epoch or a fix)
+    // has come this boot: its driver listens whether or not a board is there.
+    bool gnssBoardHeard() const;
 #endif
     // The GPS-to-MCU clock line each time it moves (GNSS_CLOCK_MSG): the
     // LC86G's from its sentences' arrival, the mosaic-G5's from its 1PPS, the

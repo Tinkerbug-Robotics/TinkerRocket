@@ -1820,6 +1820,18 @@ target_include_directories(test_sdr_raw_feed PRIVATE
 target_link_libraries(test_sdr_raw_feed GTest::gtest_main)
 gtest_discover_tests(test_sdr_raw_feed)
 
+# ---------- test_sdr_nav_start_policy ----------
+# The V10's gnss-sdr-dev image's start without the board and a late board's
+# take-over (flight_computer/main/sdr_nav_start_policy.h, pure).
+add_executable(test_sdr_nav_start_policy test_sdr_nav_start_policy.cpp)
+target_include_directories(test_sdr_nav_start_policy PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+target_link_libraries(test_sdr_nav_start_policy GTest::gtest_main)
+gtest_discover_tests(test_sdr_nav_start_policy)
+
 # ---------- test_sdr_board_config ----------
 # The V10's SDR raw-nav image's switches (config.h with TR_BOARD_V10 and
 # TR_GNSS_DRIVER_SDR, as its CMake sets them) and the receiver profile it flies
