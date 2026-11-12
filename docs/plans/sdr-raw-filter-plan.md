@@ -55,3 +55,27 @@ The plot: `bench-backups/v10-sdr-logs/` (`sdr_raw_filter_bench.png`).
    - the bench gates the mosaic image passed before its flight: pad, CPU, the OC log at 3840 Hz, a rig replay.
 5. **Board side, alongside:** IMU aiding on the board (the bring-up session's plan) keeps the measurements coming
    through boost, which is where the flight computer gains most from them.
+
+## Built: the V10's gnss-sdr-dev image (2026-11-12, branch `fc/sdr-raw-v10`)
+
+Item 4's first half, for the 2026-11-14 flight (the rocket has backup charges). Not flashed, not on hardware yet.
+
+- **Build:** `idf.py -B build_v10_sdr -DTR_BOARD_V10=1 -DTR_GNSS_SDR=1 build`; the rig replay adds
+  `-DTR_SIM_REPLAY_BLOB=<blob>` (its clock from the filter's timed epochs, as the mosaic's). The board's driver alone
+  (`TR_GNSS_DRIVER_SDR`), PSRAM, 128 ephemerides; one navigation filter (RawNavAdapter, no GpsInsEKF). The auto image
+  is unchanged.
+- **What it flies:** `sdrDevProfile()` + `applySdrFlightProfile()` (the mosaic's 10/24 set: 10 Hz, 16 satellites,
+  the cheaper build, shared geometry) with each fused epoch's Dopplers the means of the board's ten 100 Hz epochs since
+  the last (`SdrRawEpoch.h`), taken at the window's middle (45 ms); the mosaic's flight safeguards with no wind-up
+  taken off; no ionosphere; the board's ephemerides into the stage as the Beetle's RTCM ones; the board's fix as
+  GNSSData (the start's position, the GPS voter; heights above the ellipsoid); the attitude, rests and phase still
+  sent to the board.
+- **Offline, the RF rig's runs of 2026-11-09 through the image's lines** (`raw_replay --receiver sdr`, medians,
+  aided / GNSS cut at T+0): hotshot coast velocity 0.07-0.10 vs 3.4-3.8 m/s, descent 0.03-0.04 vs 6.5 m/s; traveler
+  coast 0.06 vs 11.4 m/s. Against the same lines without the means (`--rr-pair-avg 0`, = the offline result): coast
+  velocity 0.08-0.12 -> 0.06-0.10, descent 0.05-0.06 -> 0.03-0.04, boost within +-0.04 m/s; the V10 bench log's static
+  velocity 0.021 -> 0.012 m/s rms. GNSS lost over the boost (0-4 s) or to T+20 s: coast velocity 0.05-0.09 m/s after
+  it returns.
+- **Next:** the bench gates the mosaic image passed (pad, CPU on the P4 -- the driver prints its cost per MSM7 and per
+  record every 30 s --, the OC log at 3840 Hz, a rig replay), then the ionosphere and the output delay (items 2-3).
+
