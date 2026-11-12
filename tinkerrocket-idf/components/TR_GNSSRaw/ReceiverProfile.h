@@ -78,6 +78,8 @@ struct GnssSignalProfile
     float  phase_sigma45_m = 0.0f;        //   and at 45 dB-Hz (phaseSigmaM)
     bool   half_cycle_unflagged = true;   // a half-cycle step can come with its flag (DF420) clear: a data
                                           // channel's Costas loop, not a pilot's PLL
+    bool   pr_fused = true;               // its pseudorange fused; false: still read for the transmit time
+                                          // its Doppler is built at, never fused (RawMeas::has_pr false)
 };
 
 struct GnssReceiverProfile
@@ -465,6 +467,14 @@ inline GnssReceiverProfile sdrDevProfile()
         p.sig[k].cn0_min_pr = 25.0f;   // the mosaic's floors (its v0): the rig's runs sat at 34-39 dB-Hz,
         p.sig[k].cn0_min_rr = 25.0f;   //   the bench's 20-52
     }
+    // No BeiDou pseudorange fused: the board sends its B1C ephemerides
+    // (B-CNAV1) as RTCM 1042, which has no field for the semi-major axis's
+    // rate (Adot) or the mean motion's (delta-n dot), so the orbit the filter
+    // builds misses Adot x (t - toe) -- up to ~18 m in range (review,
+    // 2026-11-12). Their Dopplers stay: the rate is off by about Adot, a
+    // fraction of a mm/s. The pseudorange is still read, for the transmit
+    // time each Doppler is built at (RawMeasBuilder).
+    p.sig[GNSS_SYS_BDS].pr_fused = false;
 
     // timing: each observable carried to the whole millisecond along its own
     // Doppler (the board), so the Doppler is the tag's; 100 epochs a second,

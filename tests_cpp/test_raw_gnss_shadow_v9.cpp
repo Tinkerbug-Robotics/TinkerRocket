@@ -3039,3 +3039,61 @@ TEST(RawGnssShadowV9, OutsideTheImuFreeDescentStandingDownChangesNothing)
     EXPECT_EQ(x.st.imu_free, 0);
 }
 
+
+// ---- the gnss-sdr-dev board's BeiDou: its Dopplers, not its pseudoranges
+
+TEST(RawGnssShadowV9, TheSdrProfileBuildsEachBeidouSatelliteForItsDopplerAlone)
+{
+    // RTCM 1042 carries no Adot for the board's B1C orbits (sdrDevProfile's
+    // pr_fused false for BeiDou): each BeiDou satellite is still built -- its
+    // pseudorange read for the transmit time its Doppler is built at -- with
+    // no pseudorange to fuse; GPS and Galileo keep theirs. The same in the
+    // cheaper build, and the mosaic's profile builds BeiDou's pseudorange.
+    for (int lite = 0; lite < 2; ++lite)
+    {
+        SCOPED_TRACE(lite ? "the cheaper build" : "the full build");
+        gnss_raw::GnssReceiverProfile p = gnss_raw::sdrDevProfile();
+        p.build_lite = lite != 0;
+        p.pr_period_s = 1.0;
+        gnss_raw::RawMeasBuilder::Config c;
+        gnss_raw::applyReceiverProfile(p, c);
+        c.troposphere = false;
+        gnss_raw::RawMeasBuilder::Config cm;
+        gnss_raw::applyReceiverProfile(gnss_raw::mosaicG5Profile(), cm);
+        cm.troposphere = false;
+        cm.lite = c.lite;
+        cm.atmo_period_s = c.atmo_period_s;
+        SynthSky sky(c);
+        const double v[3] = {0.0, 0.0, 0.0};
+        gnss_raw::RawMeasBuilder b(c), bm(cm);
+        int n_bds = 0, n_bds_pr = 0, n_bds_rr = 0, n_other_pr = 0, n_mosaic_bds_pr = 0;
+        for (int k = 0; k < 20; ++k)
+        {
+            const gnss_raw::RawEpoch ep = sky.epoch(kGoldenRmTowA + 0.1 * k, kGoldenRmRx, v);
+            gnss_raw::RawMeas m[gnss_raw::RawEpoch::kMaxObs];
+            const int n = b.build(ep, sky.store, kGoldenRmRx, 0.0, m, gnss_raw::RawEpoch::kMaxObs);
+            for (int i = 0; i < n; ++i)
+            {
+                if (m[i].sys == GNSS_SYS_BDS)
+                {
+                    n_bds++;
+                    n_bds_pr += m[i].has_pr ? 1 : 0;
+                    n_bds_rr += m[i].has_rr ? 1 : 0;
+                }
+                else
+                {
+                    n_other_pr += m[i].has_pr ? 1 : 0;
+                }
+            }
+            const int nm = bm.build(ep, sky.store, kGoldenRmRx, 0.0, m, gnss_raw::RawEpoch::kMaxObs);
+            for (int i = 0; i < nm; ++i)
+                if (m[i].sys == GNSS_SYS_BDS && m[i].has_pr)
+                    n_mosaic_bds_pr++;
+        }
+        EXPECT_GT(n_bds, 0);
+        EXPECT_EQ(n_bds_pr, 0);
+        EXPECT_EQ(n_bds_rr, n_bds);
+        EXPECT_GT(n_other_pr, 0);
+        EXPECT_GT(n_mosaic_bds_pr, 0);
+    }
+}

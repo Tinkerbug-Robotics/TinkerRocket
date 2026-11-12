@@ -41,6 +41,7 @@ void expectSameSignal(const GnssSignalProfile& a, const GnssSignalProfile& b)
     EXPECT_EQ(a.phase_sigma35_m, b.phase_sigma35_m);
     EXPECT_EQ(a.phase_sigma45_m, b.phase_sigma45_m);
     EXPECT_EQ(a.half_cycle_unflagged, b.half_cycle_unflagged);
+    EXPECT_EQ(a.pr_fused, b.pr_fused);
 }
 
 void expectSameBuilder(const RawMeasBuilder::Config& a, const RawMeasBuilder::Config& b)
@@ -455,7 +456,8 @@ TEST(ReceiverProfile, TheSdrDevV0Profile)
     EXPECT_FALSE(p.measured);
     EXPECT_EQ(gnss_raw::profileFor(gnss_raw::kRxSdrDev).type, gnss_raw::kRxSdrDev);
     // BeiDou's B1C pilot on L1's carrier, every system on L1; the pilots flag
-    // their half cycles; the mosaic's 25 dB-Hz floors (review, 2026-11-12)
+    // their half cycles; the mosaic's 25 dB-Hz floors (review, 2026-11-12);
+    // BeiDou's pseudoranges not fused (RTCM 1042 has no Adot for B1C's orbit)
     for (int k = 0; k < gnss_raw::kProfileSys; ++k)
     {
         SCOPED_TRACE(testing::Message() << "sys " << k);
@@ -464,6 +466,8 @@ TEST(ReceiverProfile, TheSdrDevV0Profile)
         EXPECT_EQ(p.sig[k].cn0_min_rr, 25.0f);
         EXPECT_EQ(p.sig[k].cn0_min_pr, m.sig[k].cn0_min_pr);
         EXPECT_EQ(p.sig[k].cn0_min_rr, m.sig[k].cn0_min_rr);
+        EXPECT_EQ(p.sig[k].pr_fused, k != GNSS_SYS_BDS);
+        EXPECT_TRUE(m.sig[k].pr_fused);   // the mosaic's (and every other profile's) fused
     }
     EXPECT_FALSE(p.sig[GNSS_SYS_GAL].half_cycle_unflagged);
     EXPECT_FALSE(p.sig[GNSS_SYS_BDS].half_cycle_unflagged);

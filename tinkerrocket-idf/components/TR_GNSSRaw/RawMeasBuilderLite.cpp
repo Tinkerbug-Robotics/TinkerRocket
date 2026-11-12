@@ -493,7 +493,7 @@ int RawMeasBuilder::nextLite(const RawEpoch& ep, const EphemerisStore& eph, cons
             m.sat_vel[k] = c.vel[k] + c.acc[k] * dt;
             m.sat_acc[k] = c.acc[k];
         }
-        m.has_pr = true;
+        m.has_pr = sig.pr_fused;   // false: read for the transmit time alone (GnssSignalProfile::pr_fused)
         m.pr = o.pr_m + corr;
         m.has_rr = o.has_rate && !(o.cn0_dbhz < sig.cn0_min_rr);
         m.rr = m.has_rr ? o.rate_mps + GNSS_C * c.clk_rate : 0.0;
