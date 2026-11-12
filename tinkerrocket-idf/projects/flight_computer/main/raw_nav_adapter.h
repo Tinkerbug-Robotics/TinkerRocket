@@ -46,8 +46,9 @@
 // forward never carries more than that on the IMU alone.
 //
 // The mosaic-only image (TR_RAW_NAV_MOSAIC: the raw filter is the Goblin's
-// one navigation filter, with no GpsInsEKF to fall back on) adds, under its
-// own guards so the Beetle's adapter is unchanged: the geoid separation for
+// one navigation filter, with no GpsInsEKF to fall back on), and the V10's
+// gnss-sdr-dev image the same way (TR_RAW_NAV_SDR), add, under their own
+// guards so the Beetle's adapter is unchanged: the geoid separation for
 // the snapshot, whether the filter has run (the transonic lockout), a
 // restore's start height rebased to the barometer and its accelerometer bias,
 // and a stop in flight held over as the last good state, carried forward,
@@ -78,7 +79,7 @@ public:
     // now_us is the loop's clock (micros()), for its freshness.
     void refresh(uint32_t now_us)
     {
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_MOSAIC || TR_RAW_NAV_SDR
         if (hold_last_good_)
         {
             refreshHolding(now_us);   // a stop in flight keeps the last good state
@@ -98,7 +99,7 @@ public:
             if (n.running)
                 restore_pending_ = false;   // it runs: from the pad or the restore
             forwardFromPublished();
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_MOSAIC || TR_RAW_NAV_SDR
             if (n.running)
             {
                 has_run_ = true;
@@ -163,7 +164,7 @@ public:
     // The raw filter runs, has said so lately, and what it said is recent.
     bool running() const
     {
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_MOSAIC || TR_RAW_NAV_SDR
         if (held_)
             return false;   // the last good state, held over a stop: not the filter's
 #endif
@@ -199,7 +200,7 @@ public:
         start_q_[0] = 1.0f;
         start_q_[1] = start_q_[2] = start_q_[3] = 0.0f;
         restore_pending_ = false;
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_MOSAIC || TR_RAW_NAV_SDR
         has_start_ab_ = false;
         if (held_)
         {
@@ -287,7 +288,7 @@ public:
         }
         for (int i = 0; i < 4; ++i)
             start_q_[i] = s.quat[i];
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_MOSAIC || TR_RAW_NAV_SDR
         // and its accelerometer bias, for the restore's seed (startSeed)
         for (int i = 0; i < 3; ++i)
             start_ab_[i] = s.accel_bias[i];
@@ -317,7 +318,7 @@ public:
         s.have_dip = mag_ref_valid_ ? 1 : 0;
         s.restore = restore_pending_ ? 1 : 0;
         s.start_gen = start_gen_;
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_MOSAIC || TR_RAW_NAV_SDR
         // a restored flight's accelerometer bias: the snapshot's, or the last
         // good state's (restartFromLastGood) -- RawGnssShadow::Config::
         // restore_seed_bias takes it in place of zero
@@ -328,7 +329,7 @@ public:
     }
     bool restorePending() const { return restore_pending_; }
 
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_MOSAIC || TR_RAW_NAV_SDR
     // ------------------------------- the mosaic-only image's one filter (D2)
 
     // The receiver's geoid separation the heights are turned by. The snapshot
@@ -498,7 +499,7 @@ public:
         for (int i = 0; i < 15; ++i)
             s.P[i][i] = nav_.var[i];
         s.t_prev_us = fwd_ok_ ? fwd_t_us_ : nav_.time_us;
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_MOSAIC || TR_RAW_NAV_SDR
         // Before the raw filter runs (a restore's wait for the barometer, a
         // boot with no filter) its position, velocity and attitude above are
         // where it will start; so are its biases, not the zeros a filter that
@@ -516,7 +517,7 @@ public:
 #endif
     }
 
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_MOSAIC || TR_RAW_NAV_SDR
     // The instant (micros()) the state the loop reads is at: the latest IMU
     // tick it was carried forward to, or the filter's own as published; false
     // before the filter runs. The loop's own clock has moved on since -- by a
@@ -564,7 +565,7 @@ public:
     uint32_t ticks() const { return ticks_; }
 
 private:
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_MOSAIC || TR_RAW_NAV_SDR
     // refresh() with the hold on: one read of the link, as refresh() makes,
     // with a stop published after a running state in flight taken (its
     // sequence moves on) but not read in -- the state the loop reads stays
@@ -779,7 +780,7 @@ private:
     uint8_t  mag_flags_ = 0;         // gnss_raw::kShadowMag*: none until main.cpp says
     uint32_t mag_time_us_ = 0;
     uint32_t ticks_ = 0;
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_MOSAIC || TR_RAW_NAV_SDR
     // the mosaic-only image's one filter
     bool     has_run_ = false;        // a running state seen this boot
     bool     hold_last_good_ = false;

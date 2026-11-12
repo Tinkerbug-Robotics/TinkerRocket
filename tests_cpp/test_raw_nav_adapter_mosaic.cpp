@@ -565,3 +565,32 @@ TEST(RawNavAdapterMosaic, ASnapshotDuringTheRestoresWaitKeepsTheRestoredBiases)
     EXPECT_FLOAT_EQ(out.accel_bias[0], 0.11f);
     EXPECT_FLOAT_EQ(out.gyro_bias[1], 0.0f);
 }
+
+TEST(RawNavAdapterMosaic, ItSaysRunningOnlyWhileTheFilterPublishesFreshStates)
+{
+    // running(): what the gnss-sdr-dev image (the same code under
+    // TR_RAW_NAV_SDR) asks before it hands the board an attitude or a rest
+    // (main.cpp sdrAidNoteUpdate) -- never the start's frozen attitude
+    ShadowLink link;
+    RawNavAdapter ekf;
+    ekf.attach(&link);
+    ekf.setHoldLastGood(true);
+    ekf.refresh(1000000);
+    EXPECT_FALSE(ekf.running());   // nothing published: not started
+    link.nav.write(flying(1000000, 500.0, false));
+    ekf.refresh(1000000);
+    EXPECT_TRUE(ekf.running());
+    ekf.refresh(1000000 + RawNavAdapter::kMaxStaleUs + 2500);
+    EXPECT_FALSE(ekf.running());   // no state since: stale
+
+    ShadowLink link2;
+    RawNavAdapter held;
+    held.attach(&link2);
+    held.setHoldLastGood(true);
+    runThenStop(link2, held);
+    ASSERT_TRUE(held.stoppedInFlight());
+    EXPECT_FALSE(held.running());   // the last good state held over a stop is not the filter's
+    link2.nav.write(flying(1200000, 510.0));
+    held.refresh(1200000);
+    EXPECT_TRUE(held.running());    // it runs again
+}

@@ -151,6 +151,12 @@ std::vector<Flight> flights()
     return {{"LC86G", GNSS_TYPE_LC86G, board, (double)config::GNSS_UPDATE_RATE, GNSS_LOG_DETAILED}};
 #elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
     return mosaicFlights((double)config::GNSS_UPDATE_RATE);
+#elif defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+    // The V10's gnss-sdr-dev image: the board alone, its fixes as GNSSData at
+    // its 10 Hz beside its stream, and the raw-GNSS filter's records
+    std::vector<Flight> v = sdrFlights();
+    for (Flight& f : v) f.gnss_hz = 10.0;
+    return v;
 #elif defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
     std::vector<Flight> v = {{"u-blox", GNSS_TYPE_UBLOX, board, (double)config::GNSS_UPDATE_RATE, GNSS_LOG_DETAILED}};
     for (const Flight& f : mosaicFlights((double)config::GNSS_MOSAIC_UPDATE_RATE)) v.push_back(f);
@@ -217,11 +223,13 @@ double rawGnssShadowInflow()
 // raw-GNSS filter (the flight loop's one PCX_CAL record is noise). On the
 // mosaic-only image the filter's ephemerides are not in it (the receiver's
 // own navigation blocks are in the log's SBF), so its largest record is the
-// state's, the covariance's or the pad survey's.
+// state's, the covariance's or the pad survey's. The gnss-sdr-dev image's
+// filter takes the board's RTCM3 ephemerides as the LC86G's, so its pad
+// context carries them as the Beetle's does.
 double padContextBurst()
 {
 #if TR_RAW_GNSS_SHADOW
-#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+#if (defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
     const size_t largest = sizeof(PadContextHeader)
                          + std::max({sizeof(PadContextNav), padContextCovWireSize(PCX_COV_PER_PART),
                                      padContextSurveyWireSize(PCX_SURVEY_PER_PART), PCX_EPH_MAX_FRAME});
@@ -510,6 +518,25 @@ TEST(I2SLinkBudget, TheMosaicRawFilterFitsBothLogSettings) {
                     "OC flash %.1f %% (%.0f B/s)\n",
                     top.receiver, top.imu_hz, (guidedCoastInflow(top) + padContextBurst()) / kLinkBytesPerSec * 100.0,
                     logInflow(top) / kOcFlashDrainBytesPerSec * 100.0, logInflow(top));
+    }
+}
+#endif
+
+#if TR_RAW_GNSS_SHADOW && defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+TEST(I2SLinkBudget, TheSdrRawFilterFitsBothLogSettings) {
+    // The V10's gnss-sdr-dev image: the board's 100 Hz stream (neither log
+    // setting cuts it), its 4002 frames, its fixes as GNSSData at 10 Hz and
+    // the raw-GNSS filter's records and pad context, at the IMU limit the
+    // board sets (imuRateMaxForGnss), on the link and on the OC's flash.
+    for (const Flight& f : flights())
+    {
+        const double link = (guidedCoastInflow(f) + padContextBurst()) / kLinkBytesPerSec;
+        const double flash = logInflow(f) / kOcFlashDrainBytesPerSec;
+        std::printf("[ link budget ] %s at %.0f Hz with the raw-GNSS filter: link %.1f %% (with the pad context), "
+                    "OC flash %.1f %% (%.0f B/s)\n",
+                    f.receiver, f.imu_hz, link * 100.0, flash * 100.0, logInflow(f));
+        EXPECT_LT(link, 0.95) << f.receiver;
+        EXPECT_LT(flash, 0.95) << f.receiver;
     }
 }
 #endif

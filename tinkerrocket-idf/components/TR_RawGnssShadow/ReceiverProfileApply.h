@@ -185,6 +185,52 @@ inline void applyMosaicFlightProfile(GnssReceiverProfile& p)
     p.sat_cap_max = 0;
 }
 
+// The V10's gnss-sdr-dev image's flight profile (main.cpp startRawShadow
+// under TR_RAW_NAV_SDR, before any bench override, and tools/raw_replay's
+// --receiver sdr in the same place): the mosaic image's 10/24 set -- the
+// cheaper epoch build, the epoch's geometry shared with the Doppler's
+// prediction in float, at most 16 satellites with the cap fixed -- and the
+// epochs between the fused ones averaged in (rr_pair_avg): on the board each
+// fused epoch's Doppler is the mean of its satellite's Dopplers over the
+// board's epochs since the last fused one (SdrRawEpoch.h, ten at 10 Hz), the
+// mosaic's pairs widened to the fused period. The 16 satellites at 10 Hz are
+// what the RF rig's runs were scored on offline (2026-11-09).
+inline void applySdrFlightProfile(GnssReceiverProfile& p)
+{
+    p.build_lite = true;
+    p.share_los = true;
+    p.rr_float = true;
+    p.rr_pair_avg = true;
+    p.sat_cap = 16;
+    p.sat_cap_max = 0;
+}
+
+// The gnss-sdr-dev board's Doppler means (SdrRawEpoch.h, the profile's
+// rr_pair_avg): how many of the board's epochs each fused epoch's mean takes
+// (the fused period over the board's, 0 with them off or a period that is not
+// at least two of the board's), and where their mean falls: the window's
+// middle, (n - 1) / 2 of the board's periods before the fused epoch's tag
+// (45 ms at ten 10 ms epochs) -- the filter's rr_pair_lag_s on an epoch
+// handed over with them (TimedRawEpoch::rr_paired); one handed over as it came
+// keeps rr_lag_s. applyReceiverProfile's pair lag is the mosaic's (two
+// epochs); this one replaces it on the gnss-sdr-dev image, after it.
+inline int sdrDopplerMeanEpochs(const GnssReceiverProfile& p)
+{
+    if (!p.rr_pair_avg || !(p.raw_epoch_period_s > 0.0))
+        return 0;
+    const long n = std::lround(fusedEpochPeriod(p) / p.raw_epoch_period_s);
+    return n >= 2 ? static_cast<int>(n) : 0;
+}
+inline double sdrDopplerMeanLag(const GnssReceiverProfile& p)
+{
+    const int n = sdrDopplerMeanEpochs(p);
+    return n >= 2 ? 0.5 * static_cast<double>(n - 1) * p.raw_epoch_period_s : 0.0;
+}
+inline void applySdrDopplerMeans(const GnssReceiverProfile& p, RawGnssShadow::Config& c)
+{
+    c.ekf.rr_pair_lag_s = sdrDopplerMeanLag(p);
+}
+
 // The mosaic-only image's flight safeguards (wave 3, 2026-10-18), in one place:
 // main.cpp's startRawShadow calls it under TR_RAW_NAV_MOSAIC after the profile
 // and before any bench override, and tools/raw_replay's --receiver mosaic calls
@@ -297,6 +343,28 @@ inline void applyMosaicFlightSafeguards(RawGnssShadow::Config& c)
     c.dv_lever_mode = 1;
     c.dv_lever_radial_m = 0.0;
     c.windup_k = 0.99;
+}
+
+// The V10's gnss-sdr-dev image's flight safeguards (main.cpp's startRawShadow
+// under TR_RAW_NAV_SDR, tools/raw_replay's --receiver sdr): the mosaic image's
+// above, with two of its own.
+//   - No carrier wind-up taken off (windup_k 0): 0.99 is the Goblin helix's,
+//     measured on the spin rig; the board's antenna's is not measured. The
+//     clock drift takes the common part.
+//   - The Doppler change check stands down in the IMU-free descent
+//     (dv_imu_free_off): there the filter's velocity is a random walk and its
+//     history holds no acceleration, so the check measured every Doppler
+//     against no change at all. On the V10's RF-rig run of 2026-11-12 (hil1,
+//     the hotshot scene's ballistic fall from 26 km) it held every Doppler
+//     from the apogee call on, the latch never let go, and the vertical
+//     velocity rode the 1 Hz pseudoranges 20-25 m/s off for 30 s. GNSS
+//     reaches no attitude or bias in the mode, which is what the check is
+//     there to protect; a bad Doppler meets the update's own gate.
+inline void applySdrFlightSafeguards(RawGnssShadow::Config& c)
+{
+    applyMosaicFlightSafeguards(c);
+    c.windup_k = 0.0;
+    c.dv_imu_free_off = true;
 }
 
 // The antenna's offset from the IMU, where the rocket's owner measured it: an

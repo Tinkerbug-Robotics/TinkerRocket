@@ -104,6 +104,11 @@
 #include "gnss_only_arm.h"
 #include "mosaic_feed.h"
 #include "rinex_nav.h"
+#if RAW_REPLAY_SDR
+#include "GnssTimeSync.h"
+#include "SdrRawEpoch.h"
+#include "SdrRawFeed.h"
+#endif
 #include "sim_epoch.h"
 #include "truth_nav.h"
 #endif
@@ -220,6 +225,9 @@ struct Args
     // check (the epoch worked, then its refusals counted) on every boost epoch, each from the same state
     bool compare_sequential = false;
     bool apogee_flag = true;         // kShadowApogee on every tick from the log's apogee flag (--no-apogee-flag: never)
+    int dv_imu_free_off = -1;        // --dv-imu-free-off 0|1: the change check in the IMU-free descent (sdr: the image's 1)
+    double apogee_call_s = -1e9;     // --apogee-call-s: the flight computer's apogee call at this flight time (s), as a
+                                     //   rig run's console gave it, where the harness's own quorum cannot call one
     double vert_check_mps = -1.0;    // RawGnssShadow::Config::vert_check_mps (20 m/s; 0 off) -- a RAW_REPLAY_VCHECK build
     double boost_screen_window_s = -1.0;   // boost_screen_window_s (1.5 s) -- a RAW_REPLAY_VCHECK build
     double rr_dyn_sigma = -1.0;      // the receiver profile's rr_dyn_sigma (the Doppler's allowance per g)
@@ -234,6 +242,11 @@ struct Args
     bool fw_defaults = false;        // the heading's settings at the firmware's defaults unless given (bitident.sh)
     // the V8/V9 with the mosaic-G5 (RAW_REPLAY_MOSAIC builds)
     std::string receiver = "lc86g";  // --receiver (--profile): the receiver profile and the build it flies with
+    // the gnss-sdr-dev board (--receiver sdr, a RAW_REPLAY_SDR build): its epochs placed by their arrivals with this
+    // output delay taken off (GnssTimeSync's latency_s: uncalibrated, 0), and its marks obeyed unless kept
+    double sdr_latency_ms = 0.0;
+    bool sdr_keep_marked = false;
+    bool sdr_raw_steps = false;      // an experiment: the board's clock steps left in its ranges (SdrRawEpoch.h)
     bool cold_start = false;         // no S/PNAV/PCOV/A: the filter starts on the pad from the receiver's fix
     bool unaided = false;            // RawGnssEKFParams::att_gnss_off: the twin the acceptance compares against
     std::vector<std::string> rinex;  // RINEX 3 navigation files: the day's broadcast ephemerides
@@ -372,11 +385,13 @@ void usage()
                  "  [--corrupt-rr-mps lo,hi] [--corrupt-pr-m lo,hi] [--corrupt-pr-epoch]\n"
                  "  [--boost-screen 0|1|2] [--boost-screen-g X] [--pad-sigma-fallback-deg X] [--mag-recent-s X]\n"
                  "  [--pad-sigma-unset-deg X] [--handoff-unset-deg X]\n"
-                 "  [--level-heading-free 0|1] [--mag-flags N] [--compare-sequential] [--no-apogee-flag]\n"
+                 "  [--level-heading-free 0|1] [--mag-flags N] [--compare-sequential] [--no-apogee-flag] [--apogee-call-s T]\n"
                  "  [--max-epoch-age-s X] [--vert-check-mps X] [--boost-screen-window-s X] [--rr-dyn-tau-s X]\n"
                  "  [--rr-dyn-sigma X] [--vert-release-mps X] [--rr-fit-gate X] [--fw-defaults] [--digest FILE]\n"
                  "  [--truth-t0-tow X]\n"
-                 "  the mosaic-G5 (a RAW_REPLAY_MOSAIC build): [--receiver lc86g|mosaic] [--cold-start] [--unaided]\n"
+                 "  the mosaic-G5 (a RAW_REPLAY_MOSAIC build): [--receiver lc86g|mosaic|sdr] [--cold-start] [--unaided]\n"
+                 "  the gnss-sdr-dev board (--receiver sdr): [--sdr-latency-ms X] [--sdr-keep-marked] [--sdr-raw-steps]\n"
+                 "  [--dv-imu-free-off 0|1]\n"
                  "  [--rinex FILE]... [--quorum] [--vote-guard 0|1] [--loop-hz X] [--seed-heading-deg X]\n"
                  "  [--seed-heading-error-deg X] [--reject-persist-rr N] [--truth-nav FILE]\n"
                  "  [--seed-gyro-dps x,y,z]\n"
@@ -503,6 +518,8 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--mag-flags") a.mag_flags = std::atoi(val());
         else if (k == "--compare-sequential") a.compare_sequential = true;
         else if (k == "--no-apogee-flag") a.apogee_flag = false;
+        else if (k == "--apogee-call-s") a.apogee_call_s = std::atof(val());
+        else if (k == "--dv-imu-free-off") a.dv_imu_free_off = std::atoi(val());
         else if (k == "--max-epoch-age-s") a.max_epoch_age_s = std::atof(val());
         else if (k == "--vert-check-mps") a.vert_check_mps = std::atof(val());
         else if (k == "--boost-screen-window-s") a.boost_screen_window_s = std::atof(val());
@@ -515,6 +532,9 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--truth-t0-tow") a.truth_t0_tow = std::atof(val());
         else if (k == "--receiver" || k == "--profile") a.receiver = val();
         else if (k == "--cold-start") a.cold_start = true;
+        else if (k == "--sdr-latency-ms") a.sdr_latency_ms = std::atof(val());
+        else if (k == "--sdr-keep-marked") a.sdr_keep_marked = true;
+        else if (k == "--sdr-raw-steps") a.sdr_raw_steps = true;
         else if (k == "--unaided") a.unaided = true;
         else if (k == "--rinex") a.rinex.push_back(val());
         else if (k == "--quorum") a.quorum = true;
@@ -901,6 +921,24 @@ void quatMul(const double a[4], const double b[4], double o[4])
     o[1] = a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2];
     o[2] = a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1];
     o[3] = a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0];
+}
+
+// WGS-84 ECEF (m) to latitude, longitude (rad) and height above the ellipsoid (m): the gnss-sdr-dev board's fix.
+inline void ecefToLla(const double p[3], double lla[3])
+{
+    const double a = 6378137.0, f = 1.0 / 298.257223563, e2 = f * (2.0 - f);
+    const double r = std::hypot(p[0], p[1]);
+    double lat = std::atan2(p[2], r * (1.0 - e2)), h = 0.0;
+    for (int i = 0; i < 8; ++i)
+    {
+        const double sl = std::sin(lat);
+        const double n = a / std::sqrt(1.0 - e2 * sl * sl);
+        h = r / std::cos(lat) - n;
+        lat = std::atan2(p[2], r * (1.0 - e2 * n / (n + h)));
+    }
+    lla[0] = lat;
+    lla[1] = std::atan2(p[1], p[0]);
+    lla[2] = h;
 }
 
 // The GPS -> MCU line the driver's time sync held (GnssTimeSync::mcuAt).
@@ -1698,11 +1736,23 @@ int main(int argc, char** argv)
         return 2;
     }
     const bool mosaic = a.receiver == "mosaic";
-    if (a.receiver != "lc86g" && !mosaic)
+    // the gnss-sdr-dev board (--receiver sdr): as the mosaic, the raw filter is the one navigation filter, started
+    // on the pad (nav); its own profile, and its RTCM3 through SdrRawEpoch.h, not SBF
+    const bool sdr = a.receiver == "sdr";
+    const bool nav = mosaic || sdr;
+    if (a.receiver != "lc86g" && !nav)
     {
-        std::fprintf(stderr, "--receiver is lc86g or mosaic, not %s\n", a.receiver.c_str());
+        std::fprintf(stderr, "--receiver is lc86g, mosaic or sdr, not %s\n", a.receiver.c_str());
         return 2;
     }
+#if !RAW_REPLAY_SDR
+    if (sdr)
+    {
+        std::fprintf(stderr, "this build has no gnss-sdr-dev path (RAW_REPLAY_SDR=OFF: no SdrRawEpoch.h in the tree, "
+                             "or no mosaic path): --receiver sdr needs it\n");
+        return 2;
+    }
+#endif
     // the cheaper epoch build as the firmware allows it: on the mosaic-only image alone (its CMakeLists refuses
     // TR_BENCH_RAW_BUILD_LITE elsewhere), so never on the LC86G's profile
     if (a.build_lite > 0 && !mosaic)
@@ -1785,7 +1835,7 @@ int main(int argc, char** argv)
     }
 #endif
     Input in;
-    if (!readInput(a.in, in) || (!a.cold_start && !mosaic && in.s.size() < 20))
+    if (!readInput(a.in, in) || (!a.cold_start && !nav && in.s.size() < 20))
     {
         std::fprintf(stderr, "cannot read %s (or no start state)\n", a.in.c_str());
         return 1;
@@ -1855,8 +1905,8 @@ int main(int argc, char** argv)
     // The mosaic-only build flies the heading at the firmware's defaults (TR_HEADING_FIT 2 with the navigation
     // filter, the gate RAW_HEADING_GATE, the Config's prior, hand-off and tilt floor), and the GNSS task hands its
     // epochs over when built (no on-board age to match yet): ~30 ms after they arrive (E0's estimate, until the
-    // bench measures the P4's build)
-    if (mosaic)
+    // bench measures the P4's build). The gnss-sdr-dev board's the same: the filter it would fly is that one
+    if (nav)
     {
         a.fw_defaults = true;
         if (!a.given.count("--epoch-delay-ms"))
@@ -1873,12 +1923,18 @@ int main(int argc, char** argv)
     RawGnssShadow::Config cfg;
 #if !RAW_REPLAY_OLD
 #if RAW_REPLAY_MOSAIC
-    GnssReceiverProfile rx = mosaic ? mosaicG5Profile() : lc86gProfile();
+    GnssReceiverProfile rx = sdr ? sdrDevProfile() : mosaic ? mosaicG5Profile() : lc86gProfile();
 #if RAW_REPLAY_FLIGHT_PROFILE
     // the mosaic-only image's flight profile (applyMosaicFlightProfile, the owner's 10/24 set: the cheaper build, the
     // shared geometry with the Doppler in float, the Dopplers in pairs, 16 satellites, the cap fixed), where
     // startRawShadow() sets it: before the bench flags, so --build-lite 0 --share-los 0 --rr-pair-avg 0 is the
-    // high-roll-only twin
+    // high-roll-only twin. The gnss-sdr-dev board's: the V10 image's (applySdrFlightProfile, the same set with the
+    // Doppler means in place of the pairs; --rr-pair-avg 0 turns them off)
+#if RAW_REPLAY_SDR
+    if (sdr)
+        applySdrFlightProfile(rx);
+    else
+#endif
     if (mosaic)
         applyMosaicFlightProfile(rx);
 #endif
@@ -1913,7 +1969,7 @@ int main(int argc, char** argv)
         rx.rr_pair_avg = a.rr_pair_avg != 0;            // TR_BENCH_RAW_DOP_AVG
     if (a.rr_pair_max_diff >= 0.0)
         rx.rr_pair_max_diff_mps = a.rr_pair_max_diff;
-    if (rx.rr_pair_avg && !dopplerPairsFit(rx))
+    if (rx.rr_pair_avg && !dopplerPairsFit(rx) && !sdr)   // the board's means take any whole number of its epochs
     {
         if (a.rr_pair_avg > 0)
         {
@@ -1957,12 +2013,31 @@ int main(int argc, char** argv)
                              "ignored\n");
 #endif
     applyReceiverProfile(rx, cfg);
+#if RAW_REPLAY_SDR
+    // where the board's Doppler means fall (the window's middle), as the V10 image sets it after the profile
+    if (sdr)
+        applySdrDopplerMeans(rx, cfg);
+#endif
 #if RAW_REPLAY_MOSAIC_SAFEGUARDS
     // the mosaic-only image's flight safeguards, where startRawShadow() sets them: after the profile, before any
     // bench flag -- so --receiver mosaic flies the image's settings, and the --dv-*, --hdg-obs-* and --rot-* flags
     // below change them for an experiment (0 turns one off: today's design before them, and its twin)
-    if (mosaic)
-        applyMosaicFlightSafeguards(cfg);
+    if (nav)
+    {
+#if RAW_REPLAY_SDR
+        // the gnss-sdr-dev image's: the same, with no wind-up taken off (the Goblin helix's k is not the board's
+        // antenna's) and the change check standing down in the IMU-free descent (applySdrFlightSafeguards;
+        // --dv-imu-free-off 0 keeps it there, as before)
+        if (sdr)
+        {
+            applySdrFlightSafeguards(cfg);
+            if (a.dv_imu_free_off >= 0)
+                cfg.dv_imu_free_off = a.dv_imu_free_off != 0;
+        }
+        else
+#endif
+            applyMosaicFlightSafeguards(cfg);
+    }
 #else
     // a build without them (an older tree, or one of RAW_REPLAY_DVCHECK, HDGOBS and ROT off) flies none of the
     // three: not the image
@@ -2022,7 +2097,7 @@ int main(int argc, char** argv)
 #if RAW_REPLAY_CAPGOV
     // the mosaic-only image takes the profile's (main.cpp startRawShadow); the M1 keeps its own 2500, which is
     // every profile's
-    cfg.epoch_slice_us = mosaic ? rx.epoch_slice_us : 2500.0;
+    cfg.epoch_slice_us = nav ? rx.epoch_slice_us : 2500.0;
 #else
     cfg.epoch_slice_us = 2500.0;
 #endif
@@ -2154,7 +2229,7 @@ int main(int argc, char** argv)
     }
 #endif
 #if RAW_REPLAY_MOSAIC
-    if (mosaic)
+    if (nav)
     {
         // startRawShadow() under TR_RAW_NAV_MOSAIC (build_units D1a): a restored flight starts 100 m / 20 m/s /
         // 15 deg unsure with the snapshot's accelerometer bias, and the levelling counts only fused epochs
@@ -2274,7 +2349,7 @@ int main(int argc, char** argv)
 #endif
 #if RAW_REPLAY_MOSAIC
     const bool mosaic_eph_cap = gnss_raw::EphemerisStore::kCapacity == 128;
-    if (mosaic != mosaic_eph_cap)
+    if (nav != mosaic_eph_cap)
         std::fprintf(stderr, "WARNING: this binary's ephemeris store holds %u (the %s build's); the %s build's holds "
                              "%u: use %s\n",
                      static_cast<unsigned>(gnss_raw::EphemerisStore::kCapacity), mosaic_eph_cap ? "mosaic" : "Beetle",
@@ -2291,6 +2366,34 @@ int main(int argc, char** argv)
         sh.setClock(&fakeClock);
     }
     lc86::Lc86Parser parser;
+
+#if RAW_REPLAY_SDR
+    // ---- the gnss-sdr-dev board's stream (--receiver sdr): each epoch made whole by its 4001 and put on the board's
+    // unstepped clock (SdrRawEpoch.h), those on the profile's fused grid handed over; each placed on the MCU clock by
+    // the line every 4001's arrival gives (GnssTimeSync, the LC86G driver's time sync: no 1PPS on the V1 board)
+    // The same lines as the V10 image's driver (TR_GNSSReceiverSdrSerial, SdrRawFeed.h): the clock line's sample
+    // from each 4001's latch (late epochs left out), the epochs on the grid with the Doppler means the profile asks
+    // for (main.cpp startRawShadow's config), each placed by the line after its own record's sample
+    sdr_rtcm::SdrEpochAssembler::Config sdr_acfg;
+    sdr_acfg.fuse_period_ms = static_cast<uint32_t>(std::llround(fusedEpochPeriod(rx) * 1000.0));
+    sdr_acfg.drop_fix_marked = !a.sdr_keep_marked;
+    sdr_acfg.drop_new_marked = !a.sdr_keep_marked;
+    sdr_acfg.restore_steps = !a.sdr_raw_steps;
+    sdr_acfg.mean.n = static_cast<uint32_t>(sdrDopplerMeanEpochs(rx));
+    sdr_acfg.mean.period_ms = static_cast<uint32_t>(std::llround(rx.raw_epoch_period_s * 1000.0));
+    sdr_acfg.mean.max_step_mps = rx.rr_pair_max_diff_mps;
+    for (int k = 0; k < GNSS_SYS_COUNT; ++k)
+        sdr_acfg.mean.cn0_min[k] = rx.sig[k].cn0_min_rr;
+    std::unique_ptr<sdr_rtcm::SdrEpochAssembler> sdr_asmp(new sdr_rtcm::SdrEpochAssembler(sdr_acfg));
+    sdr_rtcm::SdrEpochAssembler& sdr_asm = *sdr_asmp;
+    int sdr_late = 0;
+    lc86::GnssTimeSync::Config sdr_tcfg;
+    sdr_tcfg.latency_s = a.sdr_latency_ms * 1.0e-3;
+    std::unique_ptr<lc86::GnssTimeSync> sdr_linep(new lc86::GnssTimeSync(sdr_tcfg));
+    lc86::GnssTimeSync& sdr_line = *sdr_linep;
+    std::unique_ptr<sdr_rtcm::SdrEpoch> sdr_ep(new sdr_rtcm::SdrEpoch());
+    int sdr_untimed = 0, sdr_fixes = 0, sdr_eph = 0, sdr_eph_pre = 0;
+#endif
 
 #if RAW_REPLAY_MOSAIC
     // ---- the mosaic-G5's stream: the driver's and the GNSS task's work on each SBF block (mosaic_feed.h), the
@@ -3900,6 +4003,69 @@ int main(int argc, char** argv)
             break;
         case 'R':
         {
+#if RAW_REPLAY_SDR
+            if (sdr)
+            {
+                // the gnss-sdr-dev board's frames, one an R line (extract.py --sdr)
+                const uint8_t* f = ev.bytes.data();
+                const size_t n = ev.bytes.size();
+                const uint16_t mt = sdr_rtcm::messageNumber(f, n);
+                if (mt == 1019 || mt == 1042 || mt == 1046)
+                {
+                    // its ephemerides to the stage as the LC86G's RTCM ones go, preloaded ones too (the board repeats
+                    // each every 30 s; a log begins long after it decoded them)
+                    if (n - 6 <= 72)
+                    {
+                        stage.onEphemeris(f + 3, n - 6);
+                        sh.onEphemeris(f + 3, n - 6);
+                    }
+                    (ev.flags == 1 ? sdr_eph_pre : sdr_eph)++;
+                    break;
+                }
+                if (mt == sdr_rtcm::kTrMessage)
+                {
+                    sdr_rtcm::TrEpoch rec;
+                    sdr_rtcm::TrFix fx;
+                    if (sdr_rtcm::decodeTrEpoch(f, n, rec))
+                    {
+                        // every record, on the grid or not: the time sync's sample, as the driver takes it (its
+                        // latch's GPS time against its arrival; an epoch the board marks late left out)
+                        double latch_s = 0.0;
+                        if (sdr_rtcm::lineSampleOf(f, n, rec, latch_s))
+                            sdr_line.addSample(latch_s, ev.t_us);
+                        else
+                            sdr_late++;
+                    }
+                    else if (sdr_rtcm::decodeTrFix(f, n, fx))
+                    {
+                        // the board's own fix: the cold start's position (ellipsoidal height, no geoid)
+                        sdr_fixes++;
+                        if (cold && !cold_pos_known && fx.valid)
+                        {
+                            ecefToLla(fx.pos, cold_lla);
+                            cold_pos_known = true;
+                            cold_sep = 0.0f;
+                            cold_wnc = fx.week;
+                            cold_tow_ms = fx.tow_ms;
+                        }
+                        break;
+                    }
+                }
+                if (sdr_asm.onFrame(f, n, ev.t_us, *sdr_ep))
+                {
+                    // placed as the driver places it (SdrRawFeed.h timedEpochOf): the tag on the line, the board's
+                    // unstepped clock's lead on GPS for the replay clock, the Doppler means' mark
+                    TimedRawEpoch& te = *scratch;
+                    te = TimedRawEpoch();
+                    if (sdr_rtcm::timedEpochOf(*sdr_ep, sdr_line, te))
+                        te.mcu_us += static_cast<int64_t>(a.epoch_shift_ms * 1000.0);
+                    else
+                        sdr_untimed++;
+                    handOver(te, ev.t_us, false);
+                }
+                break;
+            }
+#endif
 #if RAW_REPLAY_MOSAIC
             if (ev.bytes.size() >= 2 && ev.bytes[0] == '$' && ev.bytes[1] == '@')
             {
@@ -4131,6 +4297,13 @@ int main(int argc, char** argv)
                 if (!a.apogee_flag)
                     s.flags = static_cast<uint8_t>(s.flags & ~kShadowApogee);
             }
+#endif
+#if !RAW_REPLAY_OLD
+            // --apogee-call-s: the flight computer's call (pyro_apogee_detected) at that flight time, latched -- a rig
+            // run's own, where the quorum here has no voter that can call (no receiver fix, the barometer above its
+            // range); it starts the IMU-free descent as on the flight computer
+            if (a.apogee_call_s > -1e8 && static_cast<double>(ev.t_us) * 1e-6 + a.t_base_s >= a.apogee_call_s)
+                s.flags |= kShadowApogee;
 #endif
 #if RAW_REPLAY_MOSAIC
             // --gnss-only-from-s: from then on the ground the filter has the IMU, GNSS and the barometer, as in
@@ -5194,6 +5367,30 @@ int main(int argc, char** argv)
                  st.last_stop,
                  st.heading_handoffs, CR(st.cr_built), CR(st.cr_in), CR(st.cr_used), nonfinite_rows,
                  unhealthy_rows);
+#if RAW_REPLAY_SDR
+    if (sdr)
+    {
+        const sdr_rtcm::SdrEpochAssembler::Counts& c = sdr_asm.counts();
+        const sdr_rtcm::SdrDopplerMeanStats& dm = sdr_asm.meanStats();
+        std::fprintf(stderr,
+                     "  gnss-sdr-dev Doppler means of %u epochs (lag %.0f ms): %u of %u Dopplers averaged; grid epochs "
+                     "%u, as they came %u (short window) + %u (few); dropped %u missing, %u relock, %u step; largest "
+                     "step %.2f m/s, spread %.2f m/s; %d records the board marked late (not on the line)\n",
+                     sdr_acfg.mean.n, cfg.ekf.rr_pair_lag_s * 1000.0, dm.means, dm.dopplers, dm.epochs,
+                     dm.epochs_short, dm.epochs_few, dm.alone_missing, dm.alone_lock, dm.alone_step,
+                     static_cast<double>(dm.step_max_mps), static_cast<double>(dm.spread_max_mps), sdr_late);
+        std::fprintf(stderr,
+                     "  gnss-sdr-dev: MSM7 %u; epochs %u (off the fused grid %u), without their record %u, records "
+                     "alone %u, short %u; cells %u kept, %u another signal, %u past the cap; marked out: %u "
+                     "pseudoranges, %u Dopplers; untimed %d; fixes %d; ephemerides %d logged + %d preloaded; time "
+                     "sync: %s, drift %.2f ppm, 90%% of stamps within %.2f ms of the envelope, its rms %.3f ms, %u "
+                     "samples, %u restarts\n",
+                     c.msm, c.epochs, c.off_grid, c.no_record, c.lone_record, c.short_epochs, c.cells, c.other_signal,
+                     c.full, c.marked_pr, c.marked_rate, sdr_untimed, sdr_fixes, sdr_eph, sdr_eph_pre,
+                     sdr_line.valid() ? "valid" : "NOT valid", sdr_line.driftPpm(), sdr_line.lateness90Ms(),
+                     sdr_line.envelopeRmsMs(), sdr_line.samples(), sdr_line.restarts());
+    }
+#endif
 #if RAW_REPLAY_MOSAIC
     if (cold && !seed_ready)
         std::fprintf(stderr, "WARNING: the cold start never had a position (no PVTGeodetic with a solution, no META "
@@ -5338,7 +5535,7 @@ int main(int argc, char** argv)
             else if (k_lost < 0)
                 std::fprintf(stderr, "  clock lines carry no seq (an older events file): lost records not counted\n");
         }
-        if (first_rt < 0 && epochs_decoded > 0)
+        if (!sdr && first_rt < 0 && epochs_decoded > 0)   // the mosaic's tag gate; the board's epochs are placed apart
             std::fprintf(stderr, "WARNING: no ReceiverTime in the log: the driver times nothing without FINETIME%s\n",
                          a.assume_finetime ? " (--assume-finetime: timed all the same)" : " (--assume-finetime to time them)");
         if (eph_pre > 0)

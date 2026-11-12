@@ -261,6 +261,21 @@ size_t encode(const Geometry& a, uint8_t* out, size_t cap)
     return close(out, kGeometryBytes);
 }
 
+size_t encode(const Rest& a, uint8_t* out, size_t cap)
+{
+    if (out == nullptr || cap < kRestFrame) return 0;
+    std::memset(out, 0, kRestFrame);
+    uint8_t* m = out + 3;
+    putHeader(m, kRest, a.h);
+    const bool v = a.valid && noNaN(a.f, 3);
+    put(m, 96, 1, v ? 1 : 0);
+    put(m, 97, 1, a.frame & 1U);                                                               // 2 bits reserved
+    put(m, 100, 12, usat(a.dur_ms, 12));
+    for (int k = 0; k < 3; k++) putS(m, 112 + 20 * k, 20, v ? clampI(a.f[k] * 10000.0, 20) : 0);   // 1e-4 m/s^2
+    put(m, 172, 8, sigCode(a.sd_f * 1000.0, 8));   // 1e-3 m/s^2, valid or not; 4 bits reserved
+    return close(out, kRestBytes);
+}
+
 uint8_t fcSubType(const uint8_t* frame, size_t len)
 {
     return sdr_rtcm::messageNumber(frame, len) == kFcMessage ? static_cast<uint8_t>(frame[4] & 0x0F) : 0;
@@ -322,6 +337,19 @@ bool decode(const uint8_t* frame, size_t len, Geometry& out)
     out.ant_axis = static_cast<uint8_t>(get(m, 102, 3));
     for (int k = 0; k < 3; k++) out.lever_m[k] = static_cast<double>(getS(m, 112 + 16 * k, 16)) / 1000.0;
     for (int k = 0; k < 4; k++) out.rot[k] = static_cast<double>(getS(m, 160 + 16 * k, 16)) / 16384.0;
+    return true;
+}
+
+bool decode(const uint8_t* frame, size_t len, Rest& out)
+{
+    const uint8_t* m = fcPayload(frame, len, kRest, kRestBytes);
+    if (m == nullptr) return false;
+    out.h = getHeader(m);
+    out.valid = get(m, 96, 1) != 0;
+    out.frame = static_cast<uint8_t>(get(m, 97, 1));
+    out.dur_ms = static_cast<uint16_t>(get(m, 100, 12));
+    for (int k = 0; k < 3; k++) out.f[k] = static_cast<double>(getS(m, 112 + 20 * k, 20)) * 1e-4;
+    out.sd_f = sigValue(get(m, 172, 8), 8, 1e-3);
     return true;
 }
 

@@ -12,7 +12,7 @@
 #include "TR_Sensor_Collector_Sim.h"
 #include "SimPadAlign.h"
 #include "SimSensorModel.h"
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
 #include "SimHighGBias.h"
 #endif
 #include <TR_GeoMag.h>
@@ -327,7 +327,7 @@ bool SensorCollectorSim::startReplay()
     for (int i = 0; i < 9; ++i) pad_align_[i] = (i % 4 == 0) ? 1.0f : 0.0f;
     replay_last_have_t_ = false;
     replay_on_ = true;
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
     replay_sky_day_.store(static_cast<uint16_t>(std::floor(h.ignition_gps_s / 86400.0)), std::memory_order_release);
 #endif
     phase_ = SIM_PRELAUNCH;   // active: what the dry-fire gate and the log key on
@@ -493,7 +493,35 @@ void SensorCollectorSim::replayNoteEpoch(const gnss_raw::TimedRawEpoch& e)
              (unsigned long)pps.checks, (unsigned long)pps.over, (long)TR_GNSSReceiverMosaicSerial::kPpsTagBarUs,
              (unsigned long)pps.held);
 }
+#endif
 
+#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+void SensorCollectorSim::replayNoteEpoch(const gnss_raw::TimedRawEpoch& e)
+{
+    // The gnss-sdr-dev board's timed epochs set the replay's clock as the
+    // mosaic-G5's do: the GPS instant the line placed (the tag: its time of
+    // week is the board's unstepped clock's, tow_s less tag_dtr_ms), on the
+    // line the filter builds the same epochs with (SdrRawFeed.h). The V1 board
+    // has no 1PPS, so there is no freeze check: the freeze stands as the line
+    // placed it (ReplayClock's kUnchecked by check_by_s, said once).
+    portENTER_CRITICAL(&replay_mux_);
+    const uint8_t before = replay_clock_.state();
+    const uint8_t check_before = replay_clock_.check();
+    replay_clock_.onEpoch(e.gps_week, e.epoch.tow_s, e.mcu_us, (double)e.tag_dtr_ms * 1.0e-3);
+    const uint8_t after = replay_clock_.state();
+    const uint8_t check_after = replay_clock_.check();
+    const double t = replay_clock_.lastFixT();
+    portEXIT_CRITICAL(&replay_mux_);
+    if (after != before)
+        // worded as the mosaic's, which tools/rig_replay/score_v9.py reads (RX_CLOCK)
+        ESP_LOGW("SIM", "RIG REPLAY clock: %s (the receiver's timed epoch at t %+.2f s)", clockName(after), t);
+    if (check_after != check_before && check_after == sim_replay::ReplayClock::kUnchecked)
+        ESP_LOGW("SIM", "RIG REPLAY clock: the freeze stands as the board's clock line placed it (no 1PPS on the "
+                        "board to check it against)");
+}
+#endif
+
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
 bool SensorCollectorSim::replayTAt(uint32_t time_us, double& t_s) const
 {
     // the stamp's instant on the 64-bit clock it was cut from, as replaySampleAt
@@ -697,10 +725,11 @@ bool SensorCollectorSim::getGNSSRtcmFrame(uint8_t* out, size_t cap, size_t& len,
 bool SensorCollectorSim::getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out)
 {
     const bool have = real_.getGNSSRawEpoch(out);
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
     // The mosaic-G5 hands no timed fix (getGNSSFix is the LC86G's): its timed
     // epochs set the replay's clock, on the GPS-to-MCU mapping the filter
-    // builds the same epochs with (#1600 rig replay on the V9)
+    // builds the same epochs with (#1600 rig replay on the V9); the
+    // gnss-sdr-dev board's on the SDR raw-nav image the same way
     if (have && replay_on_) replayNoteEpoch(out);
 #endif
     if (phase_ == SIM_IDLE || replay_on_) return have;
@@ -718,8 +747,9 @@ bool SensorCollectorSim::getGNSSFix(gnss_raw::TimedFix& out)
 bool SensorCollectorSim::getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len)
 {
     const bool have = real_.getGNSSEphemeris(out, cap, len);
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
-    // The mosaic-G5's are passed on while a sim runs too -- see the header
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
+    // The mosaic-G5's are passed on while a sim runs too -- see the header;
+    // the gnss-sdr-dev board's too, on the one-filter image that flies both
     return have;
 #else
     if (phase_ == SIM_IDLE || replay_on_) return have;
@@ -1030,7 +1060,7 @@ void SensorCollectorSim::packISM6(uint32_t time_us, float ax, float ay, float az
         lroundf(sensor_ay / ACC_HIGH_MS2_PER_LSB), -32768, 32767);
     out.acc_high_raw.z = (int16_t)constrain(
         lroundf(sensor_az / ACC_HIGH_MS2_PER_LSB), -32768, 32767);
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
     if (replay_on_)
     {
         // The rig replay: these counts carry the high-g bias the converter

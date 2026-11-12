@@ -44,27 +44,52 @@ uint16_t messageNumber(const uint8_t* frame, size_t len);
 // 4001's sub-type (the 4 bits after the number); 0 for any other message.
 uint8_t trSubType(const uint8_t* frame, size_t len);
 
-// What the flight computer reads of a 4001 sub-type 1 (its layout:
-// receiver/core/nav/rtcm_msm.c rtcm_tr_epoch_encode in the gnss repo). The
-// fields come first; what follows the 48-bit sample (since 2026-11-02 the
-// counts of ranges left out and of marked satellites, and each mark) is not
-// read here, and a frame with or without it decodes the same.
+// A 4001 sub-type 1 (its layout: receiver/core/nav/rtcm_msm.c
+// rtcm_tr_epoch_encode in the gnss repo). Its fields to the 48-bit sample
+// came first; the tail after it (since 2026-11-02: the ranges the board's
+// checks left out, and the satellites it marked) is read where the frame has
+// it, and a frame without it decodes with none.
+static constexpr int     kMaxMarks = 32;   // RTCM_TR_MAX_MARK
+static constexpr uint8_t kMarkFix  = 1;    // the last fix's residual test left this pseudorange out
+static constexpr uint8_t kMarkNew  = 2;    // its channel started under the board's settling time ago
+struct TrMark
+{
+    uint8_t sys = 0;       // gnss_sys_t: 0 GPS, 1 Galileo, 2 BeiDou
+    uint8_t prn = 0;
+    uint8_t flags = 0;     // kMark*
+};
 struct TrEpoch
 {
-    uint16_t week = 0;     // GPS week
-    uint32_t tow_ms = 0;   // the epoch's MSMs' time tag, GPS time of week
-    uint8_t  mode = 0;     // 0: the fix's epochs; 1: the measurement mode's
-    uint8_t  nobs = 0;     // observables in its MSMs
+    uint16_t week = 0;          // GPS week
+    uint32_t tow_ms = 0;        // the epoch's MSMs' time tag, GPS time of week
+    int32_t  shift_ns = 0;      // the tag minus the receiver's time at its latch
+    uint16_t clk_steps = 0;     // the receiver clock's steps since the board started (wrapping)
+    double   clk_step_m = 0.0;  // their sum, m (to the mm): every pseudorange and phase carries it
+    uint8_t  mode = 0;          // 0: the fix's epochs; 1: the measurement mode's
+    uint8_t  nobs = 0;          // observables in its MSMs
+    uint64_t sample = 0;        // the latch's correlator sample count (48 bits)
+    bool     has_tail = false;  // the frame carries the counts below
+    uint8_t  ndrop = 0;         // ranges the board's checks left out of the MSMs
+    uint8_t  nmark = 0;         // marks that follow (at most kMaxMarks)
+    TrMark   mark[kMaxMarks];
 };
 bool decodeTrEpoch(const uint8_t* frame, size_t len, TrEpoch& out);
 
-// And of a sub-type 2.
+// And of a sub-type 2. The position is the flight image's place for the
+// attitude it sends the board (sdr_aid_policy.h): the board's own fix, so its
+// NED is the board's.
 struct TrFix
 {
     uint16_t week = 0;
     uint32_t tow_ms = 0;
+    int32_t  sub_ns = 0;        // the fix's time is tow_ms plus this
     bool     valid = false;
+    bool     vel_valid = false;
     uint8_t  nsat = 0;
+    double   pos[3] = {};       // the board's antenna, ECEF, m (to 0.1 mm)
+    double   vel[3] = {};       // ECEF, m/s (to 0.1 mm/s)
+    double   clk_bias_m = 0.0, clk_drift_mps = 0.0;
+    double   pdop = 0.0, resid_rms_m = 0.0;
 };
 bool decodeTrFix(const uint8_t* frame, size_t len, TrFix& out);
 

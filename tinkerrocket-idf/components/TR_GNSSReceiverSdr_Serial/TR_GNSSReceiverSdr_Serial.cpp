@@ -10,6 +10,21 @@
 #include <esp_timer.h>
 #include <freertos/task.h>
 #include <GnssClockRecord.h>   // TR_GNSSReceiverLC86_Serial: GNSS_CLOCK_MSG's record
+#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+#include <new>
+#include <sdkconfig.h>
+#include <esp_heap_caps.h>
+#include <freertos/idf_additions.h>   // xQueueCreateWithCaps
+#include "SdrRawFeed.h"
+// The board streams up to ~55 kB/s at 2 Mbaud, which fills the UART's
+// 128-byte RX FIFO in 0.64 ms: less than a flash write keeps an interrupt
+// that needs the cache waiting. sdkconfig.defaults.mosaic puts the UART
+// interrupt in IRAM (as the auto image, gnss_auto_driver.cpp); a build dir
+// made before this image had the overlay keeps its old sdkconfig.
+#if !CONFIG_UART_ISR_IN_IRAM
+#error "TR_GNSS_DRIVER_SDR needs CONFIG_UART_ISR_IN_IRAM (sdkconfig.defaults.mosaic): use a fresh build dir, or delete its sdkconfig"
+#endif
+#endif
 
 static const char* TAG = "GNSS";
 
@@ -39,6 +54,17 @@ static constexpr double kByteUs = 1.0e7 / static_cast<double>(sdr_rtcm::kBaud);
 static constexpr uint32_t kWeekMs = 604800000U;
 
 static inline int64_t nowUs() { return esp_timer_get_time(); }
+
+#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+// The raw outputs (enableRawOutputs). Three epochs (~2 kB each, internal
+// RAM): the GNSS task takes them every 5 ms, and two more ride out a pass it
+// spends on something else. 40 ephemerides in PSRAM: the board sends each one
+// it holds again every 30 s, about 30 at once; 16 where there is no PSRAM
+// (what one burst drops, the next 30 s brings).
+static constexpr UBaseType_t kRawEpochQDepth  = 3;
+static constexpr UBaseType_t kEphQDepthPsram  = 40;
+static constexpr UBaseType_t kEphQDepthInternal = 16;
+#endif
 
 TR_GNSSReceiverSdrSerial::TR_GNSSReceiverSdrSerial(uart_port_t uart_port)
     : _uartPort(uart_port)
@@ -112,8 +138,15 @@ bool TR_GNSSReceiverSdrSerial::begin(uint8_t update_rate_hz,
     uart_flush_input(_uartPort);
     framer_.reset();
     status_us_ = nowUs();
+#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+    ESP_LOGI(TAG, "gnss-sdr-dev: listening for its RTCM3 at %lu baud (RX=%u); logged, and %s",
+             static_cast<unsigned long>(sdr_rtcm::kBaud), rx_pin_,
+             raw_ != nullptr ? "navigated on by the raw-GNSS filter (its epochs, ephemerides and fixes)"
+                             : "its fixes only (no raw outputs this boot)");
+#else
     ESP_LOGI(TAG, "gnss-sdr-dev: listening for its RTCM3 at %lu baud (RX=%u); logged, not navigated on",
              static_cast<unsigned long>(sdr_rtcm::kBaud), rx_pin_);
+#endif
     return true;
 }
 
@@ -155,11 +188,21 @@ void TR_GNSSReceiverSdrSerial::pump(size_t max_bytes)
 
 bool TR_GNSSReceiverSdrSerial::pollNewPVT(GNSSData& data)
 {
+#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+    pump(kMaxBytesPerPoll);
+    drainUartEvents();
+    logStatus();
+    if (!new_fix_) return false;   // `data` untouched (the u-blox driver's contract)
+    new_fix_ = false;
+    data = fix_data_;
+    return true;
+#else
     (void)data;
     pump(kMaxBytesPerPoll);
     drainUartEvents();
     logStatus();
     return false;
+#endif
 }
 
 // ── Frames ──────────────────────────────────────────────────────────────
@@ -212,6 +255,9 @@ void TR_GNSSReceiverSdrSerial::onFrame(const uint8_t* frame, size_t len, size_t 
                 n_fix_valid_ += f.valid ? 1 : 0;
                 last_fix_valid_ = f.valid;
                 last_fix_nsat_ = f.nsat;
+#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+                noteFix(f, end_us);
+#endif
             }
             else if (sdr_rtcm::decodeTrStatus(frame, len, last_status_))
             {
@@ -223,6 +269,12 @@ void TR_GNSSReceiverSdrSerial::onFrame(const uint8_t* frame, size_t len, size_t 
             n_other_++;
             break;
     }
+#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+    // The raw outputs, after the clock line took this record's sample
+    // (noteLink): the epoch it makes whole is placed on the line as it now
+    // stands (SdrRawFeed.h has the order)
+    if (raw_ != nullptr) rawFrame(frame, len, number, end_us);
+#endif
 }
 
 void TR_GNSSReceiverSdrSerial::noteEpoch(const sdr_rtcm::TrEpoch& e)
@@ -292,6 +344,218 @@ void TR_GNSSReceiverSdrSerial::noteLink(const uint8_t* frame, size_t len, const 
     n_aid_++;
 #endif
 }
+
+// ── Raw outputs for the raw-GNSS navigation filter ──────────────────────
+// The SDR raw-nav image's alone (TR_GNSS_DRIVER_SDR; the header says why).
+#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+
+bool TR_GNSSReceiverSdrSerial::enableRawOutputs()
+{
+    if (raw_ != nullptr) return true;
+    // Internal RAM: the poll task works every MSM7 through it, 300 a second.
+    // PSRAM where internal RAM has not the room (the cache keeps it close).
+    bool psram = false;
+    void* mem = heap_caps_malloc(sizeof(RawState), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (mem == nullptr)
+    {
+        psram = true;
+        mem = heap_caps_malloc(sizeof(RawState), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    if (mem == nullptr)
+    {
+        ESP_LOGE(TAG, "gnss-sdr-dev raw: no memory for the raw outputs (%u B)", static_cast<unsigned>(sizeof(RawState)));
+        return false;
+    }
+    RawState* r = new (mem) RawState();
+    r->epoch_q = xQueueCreate(kRawEpochQDepth, sizeof(gnss_raw::TimedRawEpoch));
+    r->eph_q = xQueueCreateWithCaps(kEphQDepthPsram, sizeof(EphItem), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (r->eph_q != nullptr)
+    {
+        r->eph_caps = true;
+        r->st.eph_in_psram = true;
+        r->st.eph_depth = static_cast<uint16_t>(kEphQDepthPsram);
+    }
+    else
+    {
+        r->eph_q = xQueueCreate(kEphQDepthInternal, sizeof(EphItem));
+        r->st.eph_depth = static_cast<uint16_t>(kEphQDepthInternal);
+    }
+    if (r->epoch_q == nullptr || r->eph_q == nullptr)
+    {
+        // nothing half made: give back what was got
+        ESP_LOGE(TAG, "gnss-sdr-dev raw: no memory for the epoch queue (%u B) or the ephemeris queue",
+                 static_cast<unsigned>(kRawEpochQDepth * sizeof(gnss_raw::TimedRawEpoch)));
+        if (r->epoch_q != nullptr) vQueueDelete(r->epoch_q);
+        if (r->eph_q != nullptr)
+        {
+            if (r->eph_caps) vQueueDeleteWithCaps(r->eph_q);
+            else vQueueDelete(r->eph_q);
+        }
+        r->~RawState();
+        heap_caps_free(mem);
+        return false;
+    }
+    r->st.enabled = true;
+    r->st.in_psram = psram;
+    raw_ = r;   // before begin(): the poll task does not exist yet
+    ESP_LOGI(TAG, "gnss-sdr-dev raw: outputs on -- %u epochs (%u B, internal), %u ephemerides in %s, %u B of state "
+                  "in %s",
+             static_cast<unsigned>(kRawEpochQDepth),
+             static_cast<unsigned>(kRawEpochQDepth * sizeof(gnss_raw::TimedRawEpoch)),
+             static_cast<unsigned>(r->st.eph_depth), r->st.eph_in_psram ? "PSRAM" : "internal RAM",
+             static_cast<unsigned>(sizeof(RawState)), psram ? "PSRAM" : "internal RAM");
+    return true;
+}
+
+void TR_GNSSReceiverSdrSerial::setRawEpochConfig(uint32_t fuse_period_ms, const sdr_rtcm::SdrDopplerMeanConfig& mean)
+{
+    if (raw_ == nullptr || raw_->pending_set.load(std::memory_order_acquire)) return;
+    raw_->pending.period_ms = fuse_period_ms;
+    raw_->pending.mean = mean;
+    raw_->pending_set.store(true, std::memory_order_release);   // the poll task takes it at its next frame
+}
+
+bool TR_GNSSReceiverSdrSerial::takeRawEpoch(gnss_raw::TimedRawEpoch& out)
+{
+    if (raw_ == nullptr) return false;
+    raw_->taking_epochs.store(true, std::memory_order_relaxed);
+    return xQueueReceive(raw_->epoch_q, &out, 0) == pdTRUE;
+}
+
+bool TR_GNSSReceiverSdrSerial::takeEphemeris(uint8_t* out, size_t cap, size_t& len)
+{
+    if (raw_ == nullptr) return false;
+    raw_->taking_eph.store(true, std::memory_order_relaxed);
+    EphItem it;
+    while (xQueueReceive(raw_->eph_q, &it, 0) == pdTRUE)
+    {
+        if (it.len > cap)
+        {
+            raw_->st.eph_short_buffer++;   // this task's own counter
+            continue;
+        }
+        std::memcpy(out, it.bytes, it.len);
+        len = it.len;
+        return true;
+    }
+    return false;
+}
+
+void TR_GNSSReceiverSdrSerial::rawStats(RawStats& out) const
+{
+    out = (raw_ != nullptr) ? raw_->st : RawStats{};
+}
+
+void TR_GNSSReceiverSdrSerial::noteFix(const sdr_rtcm::TrFix& f, int64_t end_us)
+{
+    // The board's fix as GNSSData (SdrRawFeed.h): handed over by pollNewPVT
+    // when it is one the flight computer can use
+    GNSSData d;
+    if (!sdr_rtcm::gnssDataFromTrFix(f, static_cast<uint32_t>(end_us), d)) return;
+    fix_data_ = d;
+    new_fix_ = true;
+    if (raw_ != nullptr) raw_->st.fixes++;
+}
+
+void TR_GNSSReceiverSdrSerial::rawFrame(const uint8_t* frame, size_t len, uint16_t number, int64_t end_us)
+{
+    RawState& r = *raw_;
+    if (r.pending_set.load(std::memory_order_acquire))
+    {
+        // setRawEpochConfig's: the grid and the Doppler window start over
+        sdr_rtcm::SdrEpochAssembler::Config c = r.assembler.config();
+        c.fuse_period_ms = r.pending.period_ms;
+        c.mean = r.pending.mean;
+        r.assembler.setConfig(c);
+        r.st.period_ms = c.fuse_period_ms;
+        r.st.mean_n = r.assembler.config().mean.n >= 2 ? r.assembler.config().mean.n : 0;
+        r.pending_set.store(false, std::memory_order_release);
+    }
+    if (number == 1019 || number == 1042 || number == 1046)
+    {
+        // its payload, as the LC86G driver queues its ephemerides
+        const size_t n = len >= 6 ? len - 6 : 0;
+        if (n == 0 || n > kEphMaxPayload)
+        {
+            r.st.eph_too_long++;
+            return;
+        }
+        r.eph_item.len = static_cast<uint8_t>(n);
+        std::memcpy(r.eph_item.bytes, frame + 3, n);
+        if (xQueueSend(r.eph_q, &r.eph_item, 0) == pdTRUE)
+            r.st.eph_queued++;
+        else if (r.taking_eph.load(std::memory_order_relaxed))
+            r.st.eph_dropped++;   // until its next repeat, 30 s on
+        return;
+    }
+    const bool msm = number == 1077 || number == 1097 || number == 1117 || number == 1127;
+    if (!msm && number != sdr_rtcm::kTrMessage) return;
+    const int64_t t0 = nowUs();
+    const bool handed = r.assembler.onFrame(frame, len, end_us, r.epoch);
+    if (handed)
+    {
+        (void)sdr_rtcm::timedEpochOf(r.epoch, time_sync_, r.timed);
+        if (xQueueSend(r.epoch_q, &r.timed, 0) == pdTRUE)
+        {
+            r.st.published++;
+            if (r.timed.mcu_us == 0) r.st.untimed++;
+            if (r.timed.rr_paired) r.st.with_means++;
+        }
+        else if (r.taking_epochs.load(std::memory_order_relaxed))
+        {
+            r.st.dropped++;   // full: the GNSS task is not taking them (yet, at boot: not counted)
+        }
+    }
+    const uint32_t us = static_cast<uint32_t>(nowUs() - t0);
+    if (msm)
+    {
+        r.st.msm_n++;
+        r.st.msm_us_sum += us;
+        if (us > r.st.msm_us_max) r.st.msm_us_max = us;
+    }
+    else if (sdr_rtcm::trSubType(frame, len) == sdr_rtcm::kTrEpoch)
+    {
+        r.st.rec_n++;
+        r.st.rec_us_sum += us;
+        if (us > r.st.rec_us_max) r.st.rec_us_max = us;
+    }
+    r.st.asm_counts = r.assembler.counts();
+    r.st.mean = r.assembler.meanStats();
+}
+
+void TR_GNSSReceiverSdrSerial::logRaw()
+{
+    if (raw_ == nullptr) return;
+    // A second line after the status line, every 30 s: what the raw-GNSS
+    // filter was handed and what it cost this task
+    const RawStats& st = raw_->st;
+    const sdr_rtcm::SdrEpochAssembler::Counts& c = st.asm_counts;
+    const sdr_rtcm::SdrDopplerMeanStats& m = st.mean;
+    ESP_LOGI(TAG, "gnss-sdr-dev raw: grid %lu ms, Doppler means of %lu | epochs %lu whole (%lu off the grid, %lu "
+                  "without their record, %lu records alone), %lu handed over (%lu untimed, %lu with means, %lu "
+                  "queue drops) | means: %lu of %lu Dopplers, epochs as they came %lu short / %lu few, dropped %lu "
+                  "missing %lu relock %lu step (largest step %.2f, spread %.2f m/s) | marked out %lu pr %lu Doppler | "
+                  "eph %lu queued, %lu drops | fixes %lu | poll task: MSM7 %.0f us mean, %lu max; record %.0f us "
+                  "mean, %lu max",
+             static_cast<unsigned long>(st.period_ms), static_cast<unsigned long>(st.mean_n),
+             static_cast<unsigned long>(c.epochs), static_cast<unsigned long>(c.off_grid),
+             static_cast<unsigned long>(c.no_record), static_cast<unsigned long>(c.lone_record),
+             static_cast<unsigned long>(st.published), static_cast<unsigned long>(st.untimed),
+             static_cast<unsigned long>(st.with_means), static_cast<unsigned long>(st.dropped),
+             static_cast<unsigned long>(m.means), static_cast<unsigned long>(m.dopplers),
+             static_cast<unsigned long>(m.epochs_short), static_cast<unsigned long>(m.epochs_few),
+             static_cast<unsigned long>(m.alone_missing), static_cast<unsigned long>(m.alone_lock),
+             static_cast<unsigned long>(m.alone_step), static_cast<double>(m.step_max_mps),
+             static_cast<double>(m.spread_max_mps), static_cast<unsigned long>(c.marked_pr),
+             static_cast<unsigned long>(c.marked_rate), static_cast<unsigned long>(st.eph_queued),
+             static_cast<unsigned long>(st.eph_dropped), static_cast<unsigned long>(st.fixes),
+             st.msm_n ? static_cast<double>(st.msm_us_sum) / static_cast<double>(st.msm_n) : 0.0,
+             static_cast<unsigned long>(st.msm_us_max),
+             st.rec_n ? static_cast<double>(st.rec_us_sum) / static_cast<double>(st.rec_n) : 0.0,
+             static_cast<unsigned long>(st.rec_us_max));
+}
+
+#endif  // TR_GNSS_DRIVER_SDR
 
 // ── To the board ────────────────────────────────────────────────────────
 
@@ -396,6 +660,9 @@ void TR_GNSSReceiverSdrSerial::logStatus()
     }
 #if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
     logLink();
+#endif
+#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+    logRaw();
 #endif
 }
 

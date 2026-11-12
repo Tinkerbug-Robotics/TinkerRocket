@@ -1776,6 +1776,114 @@ target_include_directories(test_sdr_rtcm PRIVATE
 target_link_libraries(test_sdr_rtcm GTest::gtest_main)
 gtest_discover_tests(test_sdr_rtcm)
 
+# ---------- test_sdr_raw_epoch ----------
+# The gnss-sdr-dev board's epochs as the raw-GNSS filter takes them
+# (TR_GNSSReceiverSdr_Serial/SdrRawEpoch.h): made whole by their 4001, the
+# board's clock steps put back into every range, its marks obeyed, the fused
+# grid, a lost or lone record; on the board's recorded stream.
+add_executable(test_sdr_raw_epoch test_sdr_raw_epoch.cpp
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrRtcm.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
+)
+target_include_directories(test_sdr_raw_epoch PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+)
+target_link_libraries(test_sdr_raw_epoch GTest::gtest_main)
+gtest_discover_tests(test_sdr_raw_epoch)
+
+# ---------- test_sdr_raw_feed ----------
+# The gnss-sdr-dev board's stream as the V10's SDR raw-nav image hands it to
+# the raw-GNSS filter, on its driver's path (SdrRawEpoch.h's Doppler means,
+# SdrRawFeed.h's clock-line sample, placement and the fix as GNSSData): the
+# means' rules, the recorded epochs averaged, a 20 s stream re-timed from them
+# placed by the line its records build, a late record left off the line.
+add_executable(test_sdr_raw_feed test_sdr_raw_feed.cpp
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrRtcm.cpp
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrAid.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/GnssTimeSync.cpp
+)
+set_source_files_properties(${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrAid.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
+target_include_directories(test_sdr_raw_feed PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_sdr_raw_feed GTest::gtest_main)
+gtest_discover_tests(test_sdr_raw_feed)
+
+# ---------- test_sdr_nav_start_policy ----------
+# The V10's gnss-sdr-dev image's start without the board and a late board's
+# take-over (flight_computer/main/sdr_nav_start_policy.h, pure).
+add_executable(test_sdr_nav_start_policy test_sdr_nav_start_policy.cpp)
+target_include_directories(test_sdr_nav_start_policy PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+target_link_libraries(test_sdr_nav_start_policy GTest::gtest_main)
+gtest_discover_tests(test_sdr_nav_start_policy)
+
+# ---------- test_sdr_board_config ----------
+# The V10's SDR raw-nav image's switches (config.h with TR_BOARD_V10 and
+# TR_GNSS_DRIVER_SDR, as its CMake sets them) and the receiver profile it flies
+# (ReceiverProfileApply.h applySdrFlightProfile, the Doppler means' lag).
+add_executable(test_sdr_board_config test_sdr_board_config.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/RawGnssShadow.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/RawGnssMeasStage.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/PadSurvey.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/SatJumpCheck.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/FixCheck.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/EphemerisFrames.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/HeadingFit.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssCarrier.cpp
+    ${LIB_DIR}/TR_GNSSRaw/eph.c
+    ${LIB_DIR}/TR_GNSSRaw/atmo.c
+    ${LIB_DIR}/TR_GNSSRaw/RtcmEphemeris.cpp
+    ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasCarrier.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilderLite.cpp
+)
+target_include_directories(test_sdr_board_config PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/../projects/flight_computer/main
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/TR_RawGnssShadow
+    ${LIB_DIR}/TR_RawGnssEKF
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+)
+target_compile_definitions(test_sdr_board_config PRIVATE TR_BOARD_V10=1 TR_MAG_DRIVER_QMC5883P=1
+    TR_GNSS_DRIVER_SDR=1 TR_EPH_CAPACITY=128)
+target_link_libraries(test_sdr_board_config GTest::gtest_main)
+gtest_discover_tests(test_sdr_board_config TEST_PREFIX "V10_SDR.")
+
+# The same image's link budget: the board's stream, its fixes as GNSSData and
+# the raw-GNSS filter's records (test_i2s_link_budget.cpp under
+# TR_GNSS_DRIVER_SDR).
+add_executable(test_i2s_link_budget_V10_SDR test_i2s_link_budget.cpp)
+target_include_directories(test_i2s_link_budget_V10_SDR PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+target_compile_definitions(test_i2s_link_budget_V10_SDR PRIVATE TR_BOARD_V10=1 TR_MAG_DRIVER_QMC5883P=1
+    TR_GNSS_DRIVER_SDR=1)
+target_link_libraries(test_i2s_link_budget_V10_SDR GTest::gtest_main)
+gtest_discover_tests(test_i2s_link_budget_V10_SDR TEST_PREFIX "V10_SDR.")
+
 # ---------- test_gnss_log_policy ----------
 # The GNSS log setting (BLE cmd 79): the IMU limit each value gives
 # (RocketComputerTypes.h imuRateMaxForGnss) and the REDUCED log's SBF cut
@@ -2181,8 +2289,10 @@ gtest_discover_tests(test_gnss_time_sync)
 # says it took, and the bench's stamps from the board's epochs through
 # GnssTimeSync, and the flight image's phase (flight_computer/main/
 # sdr_phase_policy.h, pure): its map, the IMU's ignition cue, its keeping of
-# the board's line and its gating on it, and its pacing. SdrAid.cpp is built as the firmware builds it, with no fused
-# multiply-add, so its bytes are the reference codec's on any host.
+# the board's line and its gating on it, and its pacing; and the attitude and
+# the rests it sends beside the phase (sdr_aid_policy.h, pure). SdrAid.cpp is
+# built as the firmware builds it, with no fused multiply-add, so its bytes
+# are the reference codec's on any host.
 add_executable(test_sdr_aid test_sdr_aid.cpp
     ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrAid.cpp
     ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrRtcm.cpp

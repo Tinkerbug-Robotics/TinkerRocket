@@ -1718,6 +1718,27 @@ void RawGnssShadow::jobDvCheck(double age)
         windupMonitor();
         return;
     }
+    if (cfg_.dv_imu_free_off && ekf_.imuFree())
+    {
+        // The IMU-free descent (descent_imu_free, dv_imu_free_off): the
+        // filter's velocity is a random walk there and its history records no
+        // acceleration (RawGnssEKF::propagate), so the IMU's change this check
+        // holds each Doppler's against is zero -- a free fall's 9.8 m/s^2
+        // reads as a failure on every epoch, the latch never lets go, and only
+        // the 1 Hz pseudoranges are left to carry the velocity (the V10's RF
+        // rig run of 2026-11-12, hil1: 20-25 m/s off from the apogee call).
+        // Nor is there anything for it to protect: GNSS reaches no attitude or
+        // bias in the mode. So it neither runs nor acts: whatever it held is
+        // let go, and its reference dropped (a restarted filter starts anew).
+        if (dv_ref_.valid || dv_latch_ || n_dv_hold_ > 0 || dv_epoch_until_ > -1.0e9)
+            dvReset();
+        if (cfg_.windup_monitor)
+        {
+            (void)ekf_.dopplerChange(built_.meas, built_.n, age, dv_ref_, dv_next_, dv_rows_, imu);
+            windupMonitor();
+        }
+        return;
+    }
     const int nr = ekf_.dopplerChange(built_.meas, built_.n, age, dv_ref_, dv_next_, dv_rows_, imu);
     if (cfg_.windup_monitor)
         windupMonitor();

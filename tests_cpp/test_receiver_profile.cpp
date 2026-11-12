@@ -41,6 +41,7 @@ void expectSameSignal(const GnssSignalProfile& a, const GnssSignalProfile& b)
     EXPECT_EQ(a.phase_sigma35_m, b.phase_sigma35_m);
     EXPECT_EQ(a.phase_sigma45_m, b.phase_sigma45_m);
     EXPECT_EQ(a.half_cycle_unflagged, b.half_cycle_unflagged);
+    EXPECT_EQ(a.pr_fused, b.pr_fused);
 }
 
 void expectSameBuilder(const RawMeasBuilder::Config& a, const RawMeasBuilder::Config& b)
@@ -444,6 +445,119 @@ TEST(ReceiverProfile, TheLc86gFusesEveryEpochOnItsOwnCounts)
     EXPECT_EQ(s.level.min_dt_s, 0.0);
 }
 
+TEST(ReceiverProfile, TheSdrDevV0Profile)
+{
+    // the gnss-sdr-dev board (ReceiverProfile.h sdrDevProfile): the mosaic's
+    // shape, its own signals, rate and Doppler
+    const GnssReceiverProfile p = gnss_raw::sdrDevProfile();
+    const GnssReceiverProfile m = gnss_raw::mosaicG5Profile();
+    EXPECT_STREQ(p.name, "gnss-sdr-dev");
+    EXPECT_EQ(p.type, gnss_raw::kRxSdrDev);
+    EXPECT_FALSE(p.measured);
+    EXPECT_EQ(gnss_raw::profileFor(gnss_raw::kRxSdrDev).type, gnss_raw::kRxSdrDev);
+    // BeiDou's B1C pilot on L1's carrier, every system on L1; the pilots flag
+    // their half cycles; the mosaic's 25 dB-Hz floors (review, 2026-11-12);
+    // BeiDou's pseudoranges not fused (RTCM 1042 has no Adot for B1C's orbit)
+    for (int k = 0; k < gnss_raw::kProfileSys; ++k)
+    {
+        SCOPED_TRACE(testing::Message() << "sys " << k);
+        EXPECT_EQ(p.sig[k].carrier_hz, GNSS_FREQ_L1_HZ);
+        EXPECT_EQ(p.sig[k].cn0_min_pr, 25.0f);
+        EXPECT_EQ(p.sig[k].cn0_min_rr, 25.0f);
+        EXPECT_EQ(p.sig[k].cn0_min_pr, m.sig[k].cn0_min_pr);
+        EXPECT_EQ(p.sig[k].cn0_min_rr, m.sig[k].cn0_min_rr);
+        EXPECT_EQ(p.sig[k].pr_fused, k != GNSS_SYS_BDS);
+        EXPECT_TRUE(m.sig[k].pr_fused);   // the mosaic's (and every other profile's) fused
+    }
+    EXPECT_FALSE(p.sig[GNSS_SYS_GAL].half_cycle_unflagged);
+    EXPECT_FALSE(p.sig[GNSS_SYS_BDS].half_cycle_unflagged);
+    // 100 Hz epochs fused at 10 Hz, the Doppler the tag's, no pairs (the grid
+    // is ten epochs, not two)
+    EXPECT_EQ(p.raw_epoch_period_s, 0.01);
+    EXPECT_EQ(p.fuse_epoch_period_s, 0.1);
+    EXPECT_EQ(p.rr_lag_s, 0.0);
+    EXPECT_FALSE(gnss_raw::dopplerPairsFit(p));
+    // its Doppler from the bench, quieter than the mosaic's v0; the mosaic's
+    // flight margin, code model, clock and safeguards' counts
+    EXPECT_EQ(p.rr_white_a, 0.03);
+    EXPECT_EQ(p.rr_white_b, 0.03);
+    EXPECT_LT(p.rr_white_a * p.rr_white_a + p.rr_white_b * p.rr_white_b,
+              m.rr_white_a * m.rr_white_a + m.rr_white_b * m.rr_white_b);
+    EXPECT_EQ(p.rr_scale, m.rr_scale);
+    EXPECT_EQ(p.pr_white_a, m.pr_white_a);
+    EXPECT_EQ(p.pr_period_s, m.pr_period_s);
+    EXPECT_EQ(p.clk_drift_psd, m.clk_drift_psd);
+    EXPECT_EQ(p.clock_step_m, m.clock_step_m);   // its steps go back in before the filter (SdrRawEpoch.h)
+    EXPECT_EQ(p.sat_cap, m.sat_cap);
+    EXPECT_EQ(p.cr_mode, gnss_raw::kCarrierOff);
+}
+
+TEST(ReceiverProfile, TheSdrImagesFlightProfileAndItsDopplerMeans)
+{
+    // the V10's gnss-sdr-dev image (ReceiverProfileApply.h): the mosaic's
+    // 10/24 set with the Doppler means; their window the fused period over
+    // the board's, their lag its middle
+    GnssReceiverProfile p = gnss_raw::sdrDevProfile();
+    EXPECT_FALSE(p.rr_pair_avg);
+    EXPECT_EQ(p.rr_pair_max_diff_mps, 5.0);     // 500 m/s^2 over the board's 10 ms
+    EXPECT_EQ(gnss_raw::sdrDopplerMeanEpochs(p), 0);   // off in the profile
+    EXPECT_EQ(gnss_raw::sdrDopplerMeanLag(p), 0.0);
+    gnss_raw::applySdrFlightProfile(p);
+    GnssReceiverProfile m = gnss_raw::mosaicG5Profile();
+    gnss_raw::applyMosaicFlightProfile(m);
+    EXPECT_EQ(p.build_lite, m.build_lite);
+    EXPECT_EQ(p.share_los, m.share_los);
+    EXPECT_EQ(p.rr_float, m.rr_float);
+    EXPECT_EQ(p.rr_pair_avg, m.rr_pair_avg);
+    EXPECT_EQ(p.sat_cap, 16);
+    EXPECT_EQ(p.sat_cap_max, 0);
+    EXPECT_EQ(gnss_raw::sdrDopplerMeanEpochs(p), 10);
+    EXPECT_NEAR(gnss_raw::sdrDopplerMeanLag(p), 0.045, 1e-12);
+    // the fused rate raised to 20 Hz: five epochs, 20 ms back; to 100 Hz: none
+    p.fuse_epoch_period_s = 0.05;
+    EXPECT_EQ(gnss_raw::sdrDopplerMeanEpochs(p), 5);
+    EXPECT_NEAR(gnss_raw::sdrDopplerMeanLag(p), 0.02, 1e-12);
+    p.fuse_epoch_period_s = 0.01;
+    EXPECT_EQ(gnss_raw::sdrDopplerMeanEpochs(p), 0);
+    // into the filter's config, after applyReceiverProfile (whose pair lag is
+    // the mosaic's two-epoch one: 0 here, the grid not two of the board's)
+    p.fuse_epoch_period_s = 0.1;
+    RawGnssShadow::Config c;
+    gnss_raw::applyReceiverProfile(p, c);
+    EXPECT_EQ(c.ekf.rr_pair_lag_s, 0.0);
+    gnss_raw::applySdrDopplerMeans(p, c);
+    EXPECT_NEAR(c.ekf.rr_pair_lag_s, 0.045, 1e-12);
+    // and the mosaic's pair lag is untouched by any of it
+    RawGnssShadow::Config mc;
+    gnss_raw::applyReceiverProfile(m, mc);
+    EXPECT_EQ(mc.ekf.rr_pair_lag_s, 0.025);
+}
+
+TEST(ReceiverProfile, TheSdrImagesSafeguardsAreTheMosaicsLessTheWindupAndTheChangeCheckInTheImuFreeDescent)
+{
+    // applySdrFlightSafeguards: the mosaic image's set, with no carrier
+    // wind-up taken off and the change check standing down in the IMU-free
+    // descent (the RF rig's hil1, 2026-11-12); the mosaic's own unchanged
+    RawGnssShadow::Config s, m, d;
+    gnss_raw::applySdrFlightSafeguards(s);
+    gnss_raw::applyMosaicFlightSafeguards(m);
+    EXPECT_FALSE(d.dv_imu_free_off);       // off unless an image sets it
+    EXPECT_FALSE(m.dv_imu_free_off);       // the mosaic image: as before
+    EXPECT_TRUE(s.dv_imu_free_off);
+    EXPECT_EQ(m.windup_k, 0.99);
+    EXPECT_EQ(s.windup_k, 0.0);
+    // everything else the mosaic's
+    s.dv_imu_free_off = m.dv_imu_free_off;
+    s.windup_k = m.windup_k;
+    EXPECT_EQ(s.dv_check, m.dv_check);
+    EXPECT_EQ(s.dv_latch_k, m.dv_latch_k);
+    EXPECT_EQ(s.dv_window_s, m.dv_window_s);
+    EXPECT_EQ(s.ekf.hdg_obs_mode, m.ekf.hdg_obs_mode);
+    EXPECT_EQ(s.rot_lever_axial_m, m.rot_lever_axial_m);
+    EXPECT_EQ(s.ekf.att_exact, m.ekf.att_exact);
+    EXPECT_EQ(s.dv_lever_mode, m.dv_lever_mode);
+}
+
 TEST(ReceiverProfile, TheMosaicG5V0Profile)
 {
     // every number of v0 (ReceiverProfile.h: each one's run beside it)
@@ -725,6 +839,7 @@ TEST(ReceiverProfile, TheMosaicFlightSafeguards)
     EXPECT_EQ(c.dv_epoch_k, 4.0);
     EXPECT_EQ(c.dv_latch_k, 5.0);
     EXPECT_FALSE(c.dv_ground);
+    EXPECT_FALSE(c.dv_imu_free_off);   // the gnss-sdr-dev image's own (applySdrFlightSafeguards)
     EXPECT_EQ(c.dv_sat_k, 5.0);
     EXPECT_EQ(c.dv_floor_mps, 0.03);
     EXPECT_EQ(c.dv_sigma_per_g, 0.1);
@@ -1140,6 +1255,7 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_EQ(c.dv_window_s, 0.0);
     EXPECT_FALSE(c.dv_deweight);
     EXPECT_FALSE(c.dv_ground);
+    EXPECT_FALSE(c.dv_imu_free_off);
     EXPECT_EQ(c.dv_noise_tau_s, 0.0);
     EXPECT_EQ(c.dv_hold_all_frac, 0.5);
     EXPECT_EQ(c.dv_latch_k, 0.0);

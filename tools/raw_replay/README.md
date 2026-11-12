@@ -780,6 +780,78 @@ Doppler's refusal count (`r2/exp_reject_persist_rr{3,10,255}`, `--harness-args "
 stale-satellite and coherent patterns at magnetometer 0): 255 (never let back) flies as the profile's 30; 3 and 10
 make settle40's worst coast excess over the twin 41-43 deg against 28.5.
 
+## The V9/V10 with the gnss-sdr-dev board (`--receiver sdr`)
+
+TinkerRocket's own receiver board on J1 sends RTCM3 only: MSM7 1077/1097/1127 at 100 Hz, its 4001 records (sub-type
+1 after each epoch, 2 after each fix) and its ephemerides 1019/1046/1042. The V9/V10 image logs every frame in 0x95
+and flies GNSS-absent beside it (PR #1688). `--receiver sdr` replays that stream through the raw-GNSS filter as the
+one navigation filter would fly it, for the offline half of fusing it.
+
+```
+python3 tools/raw_replay/extract.py --sdr OC_LOG run.events
+build/raw_replay_mosaic --in run.events --out run.csv --receiver sdr [--gnss-only-from-s X] [--cut-from-s X --cut-to-s Y]
+```
+
+`extract.py --sdr` writes no S, A, P, F, V or K lines (a cold start on the pad from the board's own fix), each frame
+as an R line at its arrival, and every ephemeris the log carries once more at the start, marked preload (the board
+repeats each every 30 s; a log's first seconds would have none). Use `raw_replay_mosaic` (128 ephemerides, as the
+mosaic-only image).
+
+What `--receiver sdr` sets: `sdrDevProfile()` (ReceiverProfile.h: the mosaic's shape, BeiDou's B1C pilot on L1's
+carrier, 100 Hz epochs fused at 10 Hz, the Doppler from the bench), then everything `--receiver mosaic` sets for the
+image (its flight profile, its flight safeguards, the firmware's heading defaults, the 30 ms hand-over, the restore
+sigmas) except the carrier wind-up's k, which is the Goblin helix's: 0 here. Each frame goes through
+`SdrRawEpoch.h` (the firmware's own, as the driver would run it): an epoch is made whole by its 4001, the board's
+clock steps go back into every pseudorange, phase and the time of week (its 4001's step sum), its marks are obeyed
+(a range the board's fix left out loses its code and phase, a channel not settled loses its Doppler too;
+`--sdr-keep-marked` keeps them), and the first epoch of each 100 ms period is handed over (the board's epochs sit at
+a millisecond phase of their own). Since 2026-11-12 the replay runs the V10 image's own lines (`SdrRawFeed.h`, the
+driver's): each 4001's latch (its tag less its sub-ms shift; a record the board marks late left out) goes on the
+clock line (`GnssTimeSync`: the V1 board has no 1PPS), and each epoch handed over is placed on it at its tag,
+`--sdr-latency-ms` taken off as the board's output delay (uncalibrated: 0); until the line is valid (10 s of history)
+the epochs are untimed. Each fused epoch's Dopplers are the means of the board's ten epochs since the last
+(`SdrRawEpoch.h` SdrDopplerMean, the image's `applySdrFlightProfile`), taken 45 ms back; `--rr-pair-avg 0` flies
+each epoch's own. The board's first valid fix seeds the cold start (ellipsoidal height, no geoid).
+`--sdr-raw-steps` leaves the clock steps in, as an experiment.
+
+The V10 bench log of 2026-11-02 (`flight_20261102_213043.bin`, 52 s, the board on its bench antenna, static): 525
+epochs handed over, 107 untimed while the line filled, 418 applied; every one of 672 pseudoranges and 6,688 Dopplers
+fused, none refused, the largest NIS 5.4 (`--sdr-raw-steps`: 348 of the 672 refused, NIS to 41, across the 8 clock
+steps in the window); the time sync 17.4 ppm, its envelope 0.54 ms rms, 90 % of stamps within 21 ms of it. The
+filter's position sat 1.5-2 m from the mean of the board's own fixes: RTCM carries no ionosphere, so it flew with
+none. A static minute cannot score the Doppler weights (the clock drift's walk, the mosaic's 100 m^2/s^3, dominates
+every innovation's spread: NIS median 0.16) nor dynamics. Through the image's lines (2026-11-12) the same 418 epochs
+apply, none refused, NIS 5.4; with the Doppler means 11,486 of 11,542 Dopplers averaged and the filter's static
+velocity 0.012 m/s rms against 0.021 without them.
+
+### An RF-rig run (`sdr_rig_events.py`, `score_sdr_rig.py`)
+
+On the RF replay rig the board tracks a SignalSim flight (the gnss repo's `cocom-rig/sdr/signalsim` B1C files) while
+the flight computer sits still, so the board's stream is real and the flight's IMU is not. `sdr_rig_events.py` makes
+the IMU, barometer and magnetometer from the same SignalSim config's trajectory (its own segments, so the file's
+exact motion: vertical, the body nose up, no roll) and puts the board's frames on that clock by GPS time, each at the
+flight computer's next 25 ms poll after its epoch, its delay and its bytes' UART time; the truth goes beside the
+events file (`.truth.nav`):
+
+```
+python3 tools/raw_replay/sdr_rig_events.py CONFIG.json STREAM run.events     # STREAM: rec-get's .rtcm3 or a V10 log
+build/raw_replay_mosaic --in run.events --out run.csv --receiver sdr
+build/raw_replay_mosaic --in run.events --out cut.csv --receiver sdr --cut-from-s 0 --cut-to-s 99999
+python3 tools/raw_replay/score_sdr_rig.py run.events aided=run.csv gnss-lost=cut.csv
+```
+
+The cold start waits for the board's own fix, as on the flight computer (`--seed-truth`: from the truth instead).
+`--clean` drops the IMU's noise and biases; `none` as STREAM makes the IMU alone. The made IMU senses what a real one
+would: the earth's rate, the Coriolis force of the climb (2 Omega x v) and normal gravity with its height term, none
+of which the filter models (its gravity is 9.807 unless `gravity_wgs84`). On the files' equatorial pad, with no
+GNSS, that alone leaves a 27 km hotshot ~3.9 m/s east and a few m/s vertical by apogee (`--clean --seed-truth`,
+2026-11-09: boost 0.5 m/s, attitude exact).
+
+Checked 2026-11-09 on the V10 bench log above, re-timed onto a still IMU at the open-sky antenna's surveyed position
+(a config of one Const segment there, `--start-gpst`, `--pad`, `--field-ned-ut` from TR_GeoMag): the same 418 epochs
+applied as through `extract.py --sdr`, none refused, 2.2 m horizontal from the survey (median; 2.1 m from the log's
+own arrivals), velocity within 0.07 m/s.
+
 ## The Beetle's bit-identity check (`bitident.sh`, `../m1_identity.sh`)
 
 Code the Beetle (M1, LC86G) shares with the mosaic-G5 work must leave the Beetle's filter bit-identical. Two scripts
