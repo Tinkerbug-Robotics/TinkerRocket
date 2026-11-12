@@ -9810,6 +9810,16 @@ static void sdrAidNoteUpdate(const EkfIMUData& imu)
 {
     if (sensor_collector_hw.gnssType() != GNSS_TYPE_SDR)
         return;
+#if TR_RAW_NAV_SDR
+    // The gnss-sdr-dev image: no attitude and no rests while the raw filter
+    // is not running (not started yet, a failed start, the crash-loop rule,
+    // a stop held over in flight). RawNavAdapter would hand the start's pad
+    // attitude on, frozen, which would point the board's IMU aiding the wrong
+    // way; the sender sends "no attitude" 100 ms after its last state
+    // (sdr_aid_policy.h)
+    if (!ekf.running())
+        return;
+#endif
     const int64_t t_us = sdr_aid_fc::widenUs(imu.time_us, esp_timer_get_time());
     const double f[3] = {imu.acc_x, imu.acc_y, imu.acc_z};
     const double g[3] = {imu.gyro_x, imu.gyro_y, imu.gyro_z};

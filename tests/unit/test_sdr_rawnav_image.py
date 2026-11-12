@@ -131,3 +131,19 @@ def test_raw_replay_flies_the_images_code():
     assert "sdr_acfg.mean.n = static_cast<uint32_t>(sdrDopplerMeanEpochs(rx));" in src
     cm = read(RR_CMAKE)
     assert "TR_GNSSReceiverSdr_Serial/SdrAid.cpp" in cm
+
+
+def fn_body(src, head):
+    i = src.index(head)
+    return src[i:src.index("\n}\n", i)]
+
+
+def test_no_attitude_to_the_board_while_the_filter_is_not_running():
+    # RawNavAdapter hands on the start's attitude, frozen, before the filter runs or while a stop is held over:
+    # the image sends no attitude and no rests then (the sender's "no attitude" follows, sdr_aid_policy.h)
+    body = fn_body(read(MAIN_CPP), "static void sdrAidNoteUpdate(const EkfIMUData& imu)")
+    i = body.index("#if TR_RAW_NAV_SDR")
+    guard = body[i:body.index("#endif", i)]
+    assert "if (!ekf.running())\n        return;" in guard
+    # before anything is noted for the sender
+    assert i < body.index("sdr_aid_fc::widenUs(")
