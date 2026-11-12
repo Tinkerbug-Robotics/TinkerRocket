@@ -2181,8 +2181,10 @@ gtest_discover_tests(test_gnss_time_sync)
 # says it took, and the bench's stamps from the board's epochs through
 # GnssTimeSync, and the flight image's phase (flight_computer/main/
 # sdr_phase_policy.h, pure): its map, the IMU's ignition cue, its keeping of
-# the board's line and its gating on it, and its pacing. SdrAid.cpp is built as the firmware builds it, with no fused
-# multiply-add, so its bytes are the reference codec's on any host.
+# the board's line and its gating on it, and its pacing; and the attitude and
+# the rests it sends beside the phase (sdr_aid_policy.h, pure). SdrAid.cpp is
+# built as the firmware builds it, with no fused multiply-add, so its bytes
+# are the reference codec's on any host.
 add_executable(test_sdr_aid test_sdr_aid.cpp
     ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrAid.cpp
     ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrRtcm.cpp

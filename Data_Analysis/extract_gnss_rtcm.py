@@ -31,10 +31,11 @@ ephemerides), and the same .rtcm3 comes out. The summary then also gives the
 MSM7 epochs' step and any missing between them, and the 4001 sub-types:
 1 after each epoch, 2 after each fix (RTKLIB passes 4001 over). The flight
 computer logs beside them each frame it sent the board, TinkerRocket's message
-4002: a flight image its flight phase (sub-type 3 alone, about one a second and
-three more after each change), a bench one (TR_BENCH_SDR_AID) its P1 script.
-The summary counts those by sub-type (1 attitude, 2 navigation state, 3 phase,
-4 geometry). They stay in the .rtcm3, which the board's rtcmdump reads; RTKLIB
+4002: a flight image its flight phase (sub-type 3, about one a second and
+three more after each change), its attitude (sub-type 1, ten a second) and its
+rests (sub-type 5, still seconds, one every 5 s), a bench one
+(TR_BENCH_SDR_AID) its P1 script. The summary counts those by sub-type (1
+attitude, 2 navigation state, 3 phase, 4 geometry, 5 rest). They stay in the .rtcm3, which the board's rtcmdump reads; RTKLIB
 passes 4002 over too.
 """
 
@@ -200,7 +201,7 @@ def decode_eph(frame: bytes):
 
 TR_MESSAGE = 4001                             # TinkerRocket's own (the gnss-sdr-dev board's)
 FC_MESSAGE = 4002                             # TinkerRocket's from the flight computer to the board
-FC_SUBTYPES = {1: "attitude", 2: "state", 3: "phase", 4: "geometry"}
+FC_SUBTYPES = {1: "attitude", 2: "state", 3: "phase", 4: "geometry", 5: "rest"}
 WEEK_MS = 604800000
 
 

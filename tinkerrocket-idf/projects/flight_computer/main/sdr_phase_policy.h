@@ -268,23 +268,42 @@ public:
         line_at_us_ = now_us;
     }
 
+    // The line this sender holds, for the other 4002 frames a flight image
+    // sends (sdr_aid_policy.h: the attitude and the rests), so every frame is
+    // stamped off one line by one rule.
+    // Whether it serves at now_us: a valid line noted within kLineHoldUs.
+    bool lineUsable(int64_t now_us) const
+    {
+        return (line_.flags & GCL_VALID) != 0 && now_us - line_at_us_ < kLineHoldUs;
+    }
+    // The GPS time (continuous seconds) of the MCU instant t_us (esp_timer,
+    // us) on it, looked at now_us: false when it does not serve.
+    bool gpsAt(int64_t now_us, int64_t t_us, double& gps_s) const
+    {
+        return lineUsable(now_us) && lc86::gnssClockGpsAt(line_, t_us, gps_s);
+    }
+    // A stamp's tq off it at now_us: sdr_aid::kLineTq while it moved within
+    // kLineTqFreshUs, kHeldLineTq after.
+    uint8_t lineTq(int64_t now_us) const
+    {
+        return now_us - line_at_us_ > kLineTqFreshUs ? kHeldLineTq : sdr_aid::kLineTq;
+    }
+
     // The phase frame to send now into out (cap at least
     // sdr_aid::kPhaseFrame): its length, 0 for none. Nothing without a valid
     // line noted within kLineHoldUs.
     size_t frame(int64_t now_us, const Flight& f, uint8_t* out, size_t cap)
     {
-        const int64_t age_us = now_us - line_at_us_;
-        if ((line_.flags & GCL_VALID) == 0 || age_us >= kLineHoldUs)
+        if (!lineUsable(now_us))
             return 0;
         sdr_aid::PhaseMsg p = phaseOf(f);
         const uint32_t key = sdr_aid::phaseKey(p);
         if (sched_.due(now_us, key) != sdr_aid::kPhase)
             return 0;
         double gps_s = 0.0;
-        if (!lc86::gnssClockGpsAt(line_, now_us, gps_s))
+        if (!gpsAt(now_us, now_us, gps_s))
             return 0;
-        if (age_us > kLineTqFreshUs)
-            p.h.tq = kHeldLineTq;
+        p.h.tq = lineTq(now_us);
         key_ = key;
         return sdr_aid::encode(stamped(p, gps_s, seq_), out, cap);
     }

@@ -5,6 +5,7 @@
 // flight computer reads. On a recorded stream (fixtures/sdr_rtcm_stream.h).
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -340,6 +341,13 @@ TEST(SdrRtcmMessages, TheFix)
     EXPECT_EQ(f.tow_ms, 156619277u);
     EXPECT_TRUE(f.valid);
     EXPECT_EQ(f.nsat, 18);
+    // Its ECEF position, in the field's 0.1 mm steps (the board's
+    // rtcm_tr_fix_encode: three signed 38-bit fields from bit 90): the bench
+    // antenna at 39.97 N 74.94 W, 6369.3 km from the Earth's centre
+    EXPECT_EQ(std::llround(f.pos[0] * 1e4), 12721035908LL);
+    EXPECT_EQ(std::llround(f.pos[1] * 1e4), -47265285163LL);
+    EXPECT_EQ(std::llround(f.pos[2] * 1e4), 40755638196LL);
+    EXPECT_NEAR(std::sqrt(f.pos[0] * f.pos[0] + f.pos[1] * f.pos[1] + f.pos[2] * f.pos[2]), 6369343.750, 0.001);
     TrEpoch not_an_epoch;
     EXPECT_FALSE(decodeTrEpoch(frames[0].data(), frames[0].size(), not_an_epoch));
     // Cut short, it is refused rather than read past its end.

@@ -21,6 +21,14 @@ uint32_t bits(const uint8_t* p, size_t pos, int len)
     return v;
 }
 
+// A signed field of `len` bits (at most 64), two's complement.
+int64_t bitsS(const uint8_t* p, size_t pos, int len)
+{
+    uint64_t v = 0;
+    for (int i = 0; i < len; i++, pos++) v = (v << 1) | ((p[pos / 8] >> (7 - pos % 8)) & 1U);
+    return (v >> (len - 1)) & 1U ? static_cast<int64_t>(v) - (int64_t{1} << len) : static_cast<int64_t>(v);
+}
+
 // The payload of a 4001 frame of sub-type `sub` long enough for `need_bits`.
 const uint8_t* trPayload(const uint8_t* frame, size_t len, uint8_t sub, size_t need_bits)
 {
@@ -57,13 +65,16 @@ bool decodeTrEpoch(const uint8_t* frame, size_t len, TrEpoch& out)
 bool decodeTrFix(const uint8_t* frame, size_t len, TrFix& out)
 {
     // number 12, sub-type 4, week 16, tow 30, sub-ms 20, valid 1, velocity
-    // valid 1, satellites 6, then the fix itself (374 bits in all)
+    // valid 1, satellites 6, then the fix itself (374 bits in all): its ECEF
+    // position first, three signed 38-bit fields of 0.1 mm (the board's
+    // rtcm_tr_fix_encode)
     const uint8_t* m = trPayload(frame, len, kTrFix, 374);
     if (m == nullptr) return false;
     out.week   = static_cast<uint16_t>(bits(m, 16, 16));
     out.tow_ms = bits(m, 32, 30);
     out.valid  = bits(m, 82, 1) != 0;
     out.nsat   = static_cast<uint8_t>(bits(m, 84, 6));
+    for (int k = 0; k < 3; k++) out.pos[k] = static_cast<double>(bitsS(m, 90 + 38 * k, 38)) * 1e-4;
     return true;
 }
 

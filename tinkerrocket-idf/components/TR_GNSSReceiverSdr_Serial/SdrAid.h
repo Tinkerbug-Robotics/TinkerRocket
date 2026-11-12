@@ -10,7 +10,11 @@
 //   - 3, the flight phase and the tracking loops it asks for, on each change,
 //     then three times 100 ms apart, then every second;
 //   - 4, the geometry: the antenna's lever arm and the board's mounting,
-//     at the start, then every 10 s.
+//     at the start, then every 10 s;
+//   - 5, at rest: the flight computer's mean specific force over a still
+//     window (its own test), at the start and every 5 s while it stays
+//     still, which the board pairs with its own IMU's mean over the same
+//     window to find how it is mounted in the vehicle's body.
 // Each is stamped with the GPS instant its values hold, carries its own
 // sequence number, and says where its values come from (src, test): the P1
 // bench script or the vehicle's filter. Layouts: P1 of
@@ -25,8 +29,9 @@
 //   - a 1-sigma rounds up to its LSB (forgiving a thousandth of one, never 0)
 //     and is all ones when unknown (NaN, negative) or past the field;
 //   - a field whose valid bit is 0 goes out as 0, and a NaN anywhere in a
-//     group (a quaternion, the rates, a position, a velocity, the lever arm)
-//     sends that group as not valid; an infinity saturates;
+//     group (a quaternion, the rates, a position, a velocity, the lever arm,
+//     a rest's specific force) sends that group as not valid; an infinity
+//     saturates;
 //   - a quaternion goes out with its scalar part >= 0, not normalized;
 //   - doubles, no fused multiply-add: SdrAid.cpp is built with
 //     -ffp-contract=off (CMakeLists.txt), as the board's codec is.
@@ -54,14 +59,17 @@ static constexpr uint8_t  kAttitude      = 1;      // its sub-types
 static constexpr uint8_t  kNavState      = 2;
 static constexpr uint8_t  kPhase         = 3;
 static constexpr uint8_t  kGeometry      = 4;
+static constexpr uint8_t  kRest          = 5;
 static constexpr size_t   kAttitudeBytes = 30;     // each sub-type's message (its frame: 6 more)
 static constexpr size_t   kNavStateBytes = 46;
 static constexpr size_t   kPhaseBytes    = 16;
 static constexpr size_t   kGeometryBytes = 28;
+static constexpr size_t   kRestBytes     = 23;
 static constexpr size_t   kAttitudeFrame = 3 + kAttitudeBytes + 3;
 static constexpr size_t   kNavStateFrame = 3 + kNavStateBytes + 3;
 static constexpr size_t   kPhaseFrame    = 3 + kPhaseBytes + 3;
 static constexpr size_t   kGeometryFrame = 3 + kGeometryBytes + 3;
+static constexpr size_t   kRestFrame     = 3 + kRestBytes + 3;
 static constexpr size_t   kMaxFrame      = 3 + 64 + 3;   // no 4002 message is longer than 64 bytes
 
 // Where the values come from (the header's src).
@@ -143,12 +151,26 @@ struct Geometry
     double  rot[4] = {1.0, 0.0, 0.0, 0.0};   // board to body, Hamilton, scalar first: v_body = r v_board r*
 };
 
-// Each writes its whole frame to out (36, 52, 22 or 34 bytes) and returns
-// that length; 0 when cap is shorter.
+// At rest: the flight computer still over a whole window by its own test
+// (valid), its mean specific force in body (FRD) axes over it, and how much
+// that force moved about its mean. The stamp is the window's middle.
+struct Rest
+{
+    Header   h;
+    bool     valid = false;      // still over the whole window (sent 0 also with a NaN in f)
+    uint16_t dur_ms = 0;         // the window's length, ms (4095 or more: that long)
+    double   f[3] = {};          // the mean specific force, body FRD, m/s^2 (1e-4 m/s^2 on the wire)
+    double   sd_f = kUnknown;    // its samples' rms about the mean per axis, a 1-sigma, m/s^2 (1e-3 on
+                                 // the wire, sent whether or not valid)
+};
+
+// Each writes its whole frame to out (36, 52, 22, 34 or 29 bytes) and
+// returns that length; 0 when cap is shorter.
 size_t encode(const Attitude& a, uint8_t* out, size_t cap);
 size_t encode(const NavState& a, uint8_t* out, size_t cap);
 size_t encode(const PhaseMsg& a, uint8_t* out, size_t cap);
 size_t encode(const Geometry& a, uint8_t* out, size_t cap);
+size_t encode(const Rest& a, uint8_t* out, size_t cap);
 
 // 4002's sub-type of a whole frame (the 4 bits after the number); 0 for any
 // other message.
@@ -161,6 +183,7 @@ bool decode(const uint8_t* frame, size_t len, Attitude& out);
 bool decode(const uint8_t* frame, size_t len, NavState& out);
 bool decode(const uint8_t* frame, size_t len, PhaseMsg& out);
 bool decode(const uint8_t* frame, size_t len, Geometry& out);
+bool decode(const uint8_t* frame, size_t len, Rest& out);
 
 // The header of a GPS instant: its time of week to the nearest ms and the
 // rest in ns, a stamp that rounds to the week's end the next week's 0 (the
@@ -171,11 +194,13 @@ Header stampAt(int week, double tow_s);
 Header gpsStamp(double gps_s);
 
 // ── The flight's own values ─────────────────────────────────────────────
-// A flight image sends the board its real flight phase (sub-type 3 alone:
+// A flight image sends the board its real flight phase (sub-type 3:
 // projects/flight_computer/main/sdr_phase_policy.h), from the state
-// machine's flags and, before the launch flag, the IMU's own ignition cue,
-// src kSrcOwn and not a test outside a sim, so the board takes it with its
-// boot defaults.
+// machine's flags and, before the launch flag, the IMU's own ignition cue;
+// its filter's attitude (sub-type 1, 10 a second) and its rests (sub-type 5)
+// beside it (sdr_aid_policy.h); all src kSrcOwn and not a test outside a
+// sim, so the board takes them with its boot defaults. Not the navigation
+// state nor the geometry.
 // A real phase's hold, the script's (the P1 spec's section 2.5): repeated
 // every second, a request survives one lost frame, and one from a flight
 // computer gone silent lapses within 2.5 s.
@@ -290,8 +315,11 @@ private:
 // steps by its period, so the mean rates are exact; one more than a period
 // behind restarts from now, so a stall brings no burst after it.
 // A schedule built with fewer sub-types (subs, a mask of 1 << sub-type) gives
-// only those, each at its own times as above: the flight image's sender
-// takes the phase alone (sdr_phase_policy.h), the bench's all four.
+// only those, each at its own times as above: the flight image's phase
+// sender takes the phase alone (sdr_phase_policy.h), its attitude sender the
+// attitude alone (sdr_aid_policy.h), the bench's all four. The rest
+// (sub-type 5) has no period: its sender sends one when a still window
+// closes, so no schedule gives it.
 class AidSchedule
 {
 public:

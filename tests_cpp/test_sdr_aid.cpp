@@ -5,7 +5,9 @@
 // frames it says it took, and the flight image's phase (flight_computer/main/
 // sdr_phase_policy.h): its map from the state machine's flags and the IMU's
 // ignition cue, its keeping of the board's clock line and its gating on it,
-// and its pacing. The golden bytes come from the P1 spec's
+// and its pacing; and its attitude and rests beside the phase (flight_
+// computer/main/sdr_aid_policy.h): body to ECEF at the board's own fix, the
+// still windows and their schedule. The golden bytes come from the P1 spec's
 // reference codec (v10link_codec.py); the board's
 // receiver/tests/test_rtcm_fc.cpp pins the same ones.
 #include <gtest/gtest.h>
@@ -24,6 +26,7 @@
 #include "SdrRtcm.h"
 #include "fixtures/sdr_rtcm_stream.h"
 #include "sdr_phase_policy.h"   // projects/flight_computer/main: the flight image's phase
+#include "sdr_aid_policy.h"     // and its attitude and rests
 
 using namespace sdr_aid;
 
@@ -126,6 +129,29 @@ const Bytes kG4 = {
     0xD3, 0x00, 0x1C, 0xFA, 0x24, 0x09, 0x80, 0x30, 0xA3, 0x30, 0xB0, 0x00,
     0x00, 0x02, 0xD0, 0x46, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2D,
     0x41, 0x00, 0x00, 0x00, 0x00, 0x2D, 0x41, 0xED, 0x66, 0xD1};
+// R1: at rest, ordinary: a still second, nearly 1 g along +z (FRD: down)
+const Bytes kRest1 = {
+    0xD3, 0x00, 0x17, 0xFA, 0x25, 0x09, 0x80, 0x30, 0xA3, 0x2C, 0x00, 0x00,
+    0x00, 0x00, 0x55, 0x83, 0xE8, 0x00, 0x07, 0xBF, 0xEE, 0x29, 0xE8, 0x1F,
+    0x70, 0x50, 0x4F, 0xEB, 0x54};
+// R2: field ends: the week's last ms, sub_ns at its bottom, seq 255; a
+// window past 4.095 s, forces past +-52.4287 m/s^2 and a half LSB (away from
+// zero), the sigma unknown
+const Bytes kRest2 = {
+    0xD3, 0x00, 0x17, 0xFA, 0x25, 0xFF, 0xFF, 0x90, 0x32, 0x0F, 0xFE, 0x00,
+    0x00, 0x7F, 0xFF, 0x8F, 0xFF, 0x7F, 0xFF, 0xF8, 0x00, 0x01, 0xFF, 0xFF,
+    0xFF, 0xF0, 0x88, 0xAC, 0xE6};
+// R3: not still (valid 0): the force sent 0 whatever it holds, the sigma as
+// it is (under its LSB: 1)
+const Bytes kRest3 = {
+    0xD3, 0x00, 0x17, 0xFA, 0x25, 0x09, 0x80, 0x30, 0xA3, 0x33, 0xD0, 0x00,
+    0x00, 0x00, 0x95, 0x03, 0xE8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x10, 0x01, 0x2D, 0x81};
+// R4: a NaN in the force: valid sent 0 (the force 0), the sigma kept
+const Bytes kRest4 = {
+    0xD3, 0x00, 0x17, 0xFA, 0x25, 0x09, 0x80, 0x30, 0xA3, 0x7A, 0x20, 0x00,
+    0x00, 0x00, 0xD5, 0x03, 0xE8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x30, 0xB1, 0x13, 0x76};
 
 // The script's frames (S + sub-type + _ + tow_ms): week 2432, sub_ns 0, src
 // 0, test, tq 5, seq as each test says.
@@ -263,6 +289,17 @@ PhaseMsg phase(const Header& h, uint8_t ph, uint8_t loops, bool canopy, uint32_t
     return p;
 }
 
+Rest rest(const Header& h, bool valid, uint16_t dur_ms, std::array<double, 3> f, double sd_f)
+{
+    Rest r;
+    r.h = h;
+    r.valid = valid;
+    r.dur_ms = dur_ms;
+    std::copy(f.begin(), f.end(), r.f);
+    r.sd_f = sd_f;
+    return r;
+}
+
 Geometry geom(const Header& h, bool lv, bool rv, uint8_t type, uint8_t axis, std::array<double, 3> lever,
               std::array<double, 4> rot)
 {
@@ -308,6 +345,11 @@ const Geometry kInG3 = geom(hdr(2432, 204000000, 0, 2, kSrcOwn, false, 0), false
                             {1.0, 0.0, 0.0, 0.0});
 const Geometry kInG4 = geom(hdr(2432, 204000300, 0, 11, kSrcOwn, false, 0), true, true, 1, 5, {kNaN, 0.0, 0.0},
                             {kR2, 0.0, 0.0, kR2});
+const Rest kInRest1 = rest(hdr(2432, 204000000, 0, 1, kSrcOwn, false, 5), true, 1000, {0.0123, -0.4567, -9.7801}, 0.0042);
+const Rest kInRest2 = rest(hdr(65535, 604799999, -524287, 255, kSrcFusedOther, true, 7), true, 5000,
+                        {60.0, -60.0, -0.00005}, kNaN);
+const Rest kInRest3 = rest(hdr(2432, 204000500, 0, 2, kSrcOwn, false, 5), false, 1000, {1.0, 2.0, 3.0}, 0.0004);
+const Rest kInRest4 = rest(hdr(2432, 204005000, 0, 3, kSrcOwn, false, 5), true, 1000, {0.0, kNaN, -9.8}, 0.003);
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -421,6 +463,22 @@ void checkGeom(const char* name, const Bytes& want, const Geometry& in, bool lv,
     EXPECT_EQ(enc(d), want);
 }
 
+void checkRest(const char* name, const Bytes& want, const Rest& in, bool valid, uint32_t dur_ms,
+               std::array<int64_t, 3> f, int64_t sd)
+{
+    SCOPED_TRACE(name);
+    EXPECT_EQ(enc(in), want);
+    Rest d;
+    ASSERT_TRUE(decode(want.data(), want.size(), d));
+    expectHeader(d.h, in.h);
+    EXPECT_EQ(d.valid, valid);
+    EXPECT_EQ(d.dur_ms, dur_ms);
+    for (int k = 0; k < 3; k++) EXPECT_EQ(lsb(d.f[k], 10000.0), f[k]) << "f" << k;
+    EXPECT_EQ(code(d.sd_f, 1000.0, 255), sd);
+    EXPECT_EQ(std::isnan(d.sd_f), sd == 255);   // all ones reads unknown, not 0.255 m/s^2
+    EXPECT_EQ(enc(d), want);
+}
+
 // Every golden 4002 frame, its sub-type with it.
 std::vector<std::pair<uint8_t, Bytes>> allFc()
 {
@@ -430,7 +488,8 @@ std::vector<std::pair<uint8_t, Bytes>> allFc()
             {kAttitude, kS1_204000000}, {kAttitude, kS1_204005000}, {kAttitude, kS1_204017250},
             {kNavState, kS2_204000000}, {kNavState, kS2_204002500}, {kNavState, kS2_204055000},
             {kPhase, kS3_204000000}, {kPhase, kS3_204000160}, {kPhase, kS3_204010000},
-            {kPhase, kS3_204080100}, {kPhase, kS3_204500000}, {kGeometry, kS4_204000000}};
+            {kPhase, kS3_204080100}, {kPhase, kS3_204500000}, {kGeometry, kS4_204000000},
+            {kRest, kRest1}, {kRest, kRest2}, {kRest, kRest3}, {kRest, kRest4}};
 }
 
 // What a sub-type's decoder reads of a frame, encoded again (nothing if it
@@ -449,19 +508,23 @@ Bytes rereadAs(uint8_t sub, const Bytes& f)
         case kAttitude: return reread<Attitude>(f);
         case kNavState: return reread<NavState>(f);
         case kPhase: return reread<PhaseMsg>(f);
+        case kRest: return reread<Rest>(f);
         default: return reread<Geometry>(f);
     }
 }
 
-// Whether each of the four decoders takes a frame.
-std::array<bool, 4> takenBy(const Bytes& f)
+// Whether each of the five decoders takes a frame.
+using Taken = std::array<bool, 5>;
+constexpr Taken kNone = {false, false, false, false, false};
+Taken takenBy(const Bytes& f)
 {
     Attitude a;
     NavState n;
     PhaseMsg p;
     Geometry g;
+    Rest r;
     return {decode(f.data(), f.size(), a), decode(f.data(), f.size(), n), decode(f.data(), f.size(), p),
-            decode(f.data(), f.size(), g)};
+            decode(f.data(), f.size(), g), decode(f.data(), f.size(), r)};
 }
 
 }  // namespace
@@ -476,10 +539,13 @@ TEST(SdrAid, TheGoldenFrames)
     checkPhase("P1", kP1, kInP1, 1040, 125);
     checkPhase("P3", kP3, kInP3, 5900, 0);
     checkGeom("G1", kG1, kInG1, true, true, {12, -34, 156}, {11585, 0, 0, 11585});
-    // Nothing known: the fields go out as 0 whatever the struct held
+    checkRest("R1", kRest1, kInRest1, true, 1000, {123, -4567, -97801}, 5);
+    // Nothing known: the fields go out as 0 whatever the struct held (a
+    // rest's sigma goes as it is)
     checkAtt("A3", kA3, kInA3, false, false, {0, 0, 0, 0}, {0, 0, 0}, 0, 0);
     checkNav("N3", kN3, kInN3, true, false, {-30927639484, -55794938587, 0}, {0, 0, 0}, {300, 500, 0, 0});
     checkGeom("G3", kG3, kInG3, false, false, {0, 0, 0}, {0, 0, 0, 0});
+    checkRest("R3", kRest3, kInRest3, false, 1000, {0, 0, 0}, 1);
 }
 
 TEST(SdrAid, TheFieldEnds)
@@ -492,6 +558,7 @@ TEST(SdrAid, TheFieldEnds)
              {65535, 1, 65535, 65535});
     checkPhase("P2", kP2, kInP2, 65535, 255);
     checkGeom("G2", kG2, kInG2, true, true, {32767, -32767, -1}, {8192, -8192, 8192, -8192});
+    checkRest("R2", kRest2, kInRest2, true, 4095, {524287, -524287, -1}, 255);
 
     // A sigma within a thousandth of an LSB over it is that LSB (0.07 m is
     // 7.000000000000001 cm in doubles: 7, not 8), one further over is the
@@ -527,6 +594,7 @@ TEST(SdrAid, ANaNSendsItsGroupAsNotValid)
     checkAtt("A4", kA4, kInA4, false, true, {0, 0, 0, 0}, {131071, -131071, 512}, 0, 0);
     checkNav("N4", kN4, kInN4, true, false, {12882451234, -47207365678, 40796129012}, {0, 0, 0}, {250, 400, 0, 0});
     checkGeom("G4", kG4, kInG4, false, true, {0, 0, 0}, {11585, 0, 0, 11585});
+    checkRest("R4", kRest4, kInRest4, false, 1000, {0, 0, 0}, 3);
     // A NaN in the rates and in the position the same way, the quaternion and
     // the velocity kept (the reference codec's bytes for A1 and N1 so)
     Attitude a = kInA1;
@@ -572,11 +640,15 @@ TEST(SdrAid, AShortBufferGetsNothing)
     EXPECT_EQ(encode(kInN1, b, kNavStateFrame - 1), 0u);
     EXPECT_EQ(encode(kInP1, b, kPhaseFrame - 1), 0u);
     EXPECT_EQ(encode(kInG1, b, kGeometryFrame - 1), 0u);
+    EXPECT_EQ(encode(kInRest1, b, kRestFrame - 1), 0u);
     EXPECT_EQ(encode(kInA1, nullptr, sizeof(b)), 0u);
     EXPECT_EQ(encode(kInA1, b, kAttitudeFrame), kAttitudeFrame);
     EXPECT_EQ(encode(kInN1, b, kNavStateFrame), kNavStateFrame);
     EXPECT_EQ(encode(kInP1, b, kPhaseFrame), kPhaseFrame);
     EXPECT_EQ(encode(kInG1, b, kGeometryFrame), kGeometryFrame);
+    EXPECT_EQ(encode(kInRest1, b, kRestFrame), kRestFrame);
+    EXPECT_EQ(kRestFrame, 29u);
+    EXPECT_LE(kRestFrame, kMaxFrame);
 }
 
 TEST(SdrAid, ShortFramesRefusedLongerOnesReadTheSame)
@@ -586,12 +658,12 @@ TEST(SdrAid, ShortFramesRefusedLongerOnesReadTheSame)
         // One byte short, re-framed: refused by every decoder
         Bytes p = payloadOf(f);
         p.pop_back();
-        EXPECT_EQ(takenBy(frameOf(p)), (std::array<bool, 4>{false, false, false, false}));
+        EXPECT_EQ(takenBy(frameOf(p)), kNone);
         // Four bytes more (a later revision's), re-framed: read as before
         p = payloadOf(f);
         p.insert(p.end(), {0xA5, 0x5A, 0xFF, 0x00});
         const Bytes longer = frameOf(p);
-        std::array<bool, 4> want = {false, false, false, false};
+        Taken want = kNone;
         want[sub - 1] = true;
         EXPECT_EQ(takenBy(longer), want);
         EXPECT_EQ(rereadAs(sub, longer), f);
@@ -602,7 +674,7 @@ TEST(SdrAid, EachDecoderTakesOnlyItsOwn)
 {
     for (const auto& [sub, f] : allFc())
     {
-        std::array<bool, 4> want = {false, false, false, false};
+        Taken want = kNone;
         want[sub - 1] = true;
         EXPECT_EQ(takenBy(f), want);
         EXPECT_EQ(fcSubType(f.data(), f.size()), sub);
@@ -612,21 +684,32 @@ TEST(SdrAid, EachDecoderTakesOnlyItsOwn)
         EpochAid aid;
         EXPECT_FALSE(sdr_rtcm::decodeTrEpoch(f.data(), f.size(), e));
         EXPECT_FALSE(decodeEpochAid(f.data(), f.size(), aid));
-        // The same bytes as a reserved sub-type (0, 5-15): nobody's
-        for (uint8_t other : {0, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15})
+        // The same bytes as a reserved sub-type (0, 6-15): nobody's
+        for (uint8_t other : {0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15})
         {
             Bytes p = payloadOf(f);
             p[1] = static_cast<uint8_t>((p[1] & 0xF0) | other);
             const Bytes g = frameOf(p);
             EXPECT_EQ(fcSubType(g.data(), g.size()), other);
-            EXPECT_EQ(takenBy(g), (std::array<bool, 4>{false, false, false, false})) << int(sub) << " as " << int(other);
+            EXPECT_EQ(takenBy(g), kNone) << int(sub) << " as " << int(other);
+        }
+        // As a rest: the rest's decoder alone, and only one at least a
+        // rest's 23 bytes long (not a phase's 16)
+        if (sub != kRest)
+        {
+            Bytes p = payloadOf(f);
+            p[1] = static_cast<uint8_t>((p[1] & 0xF0) | kRest);
+            const Bytes g = frameOf(p);
+            Taken as_rest = kNone;
+            as_rest[kRest - 1] = p.size() >= kRestBytes;
+            EXPECT_EQ(takenBy(g), as_rest) << int(sub) << " as a rest";
         }
     }
     // The board's 4001 epochs are no 4002
     for (const Bytes* e : {&kE0, &kE1, &kE2, &kE3})
     {
         EXPECT_EQ(fcSubType(e->data(), e->size()), 0);
-        EXPECT_EQ(takenBy(*e), (std::array<bool, 4>{false, false, false, false}));
+        EXPECT_EQ(takenBy(*e), kNone);
     }
     EXPECT_EQ(fcSubType(nullptr, 0), 0);
 }
@@ -2175,4 +2258,643 @@ TEST(SdrPhase, TheCueGivesTheBoostBeforeTheLaunchFlag)
     const auto before = std::find_if(out.rbegin(), out.rend(), [&](const Frame& fr) { return fr.now < T; });
     ASSERT_NE(before, out.rend());
     EXPECT_EQ(before->p.phase, kPhPad);
+}
+
+// ── The flight image's attitude and rests (projects/flight_computer/main/
+//    sdr_aid_policy.h, main.cpp sdrAidNoteUpdate and sdrAidStep) ─────────
+
+namespace {
+
+using sdr_aid_fc::FilterState;
+using sdr_aid_fc::RestDetector;
+using sdr_aid_fc::RestWindow;
+using sdr_aid_fc::kDegToRad;
+using Vec3 = std::array<double, 3>;
+using Quat = std::array<double, 4>;
+
+// The aiding sender and the rest detector live at file scope in main.cpp,
+// constant-initialized like the phase sender (these fail to compile
+// otherwise).
+[[maybe_unused]] constexpr sdr_aid_fc::Sender kFlightAidSender{};
+[[maybe_unused]] constexpr RestDetector kFlightRest{};
+
+// v turned by q (Hamilton, scalar first: q v q*), q normalized first.
+Vec3 turn(const double q[4], const Vec3& v)
+{
+    const double w = q[0], x = q[1], y = q[2], z = q[3];
+    const double k = 2.0 / (w * w + x * x + y * y + z * z);
+    return {(1 - k * (y * y + z * z)) * v[0] + k * (x * y - w * z) * v[1] + k * (x * z + w * y) * v[2],
+            k * (x * y + w * z) * v[0] + (1 - k * (x * x + z * z)) * v[1] + k * (y * z - w * x) * v[2],
+            k * (x * z - w * y) * v[0] + k * (y * z + w * x) * v[1] + (1 - k * (x * x + y * y)) * v[2]};
+}
+
+void expectNear(const Vec3& got, const Vec3& want, double tol, const char* what)
+{
+    for (int k = 0; k < 3; k++) EXPECT_NEAR(got[k], want[k], tol) << what << " [" << k << "]";
+}
+
+// The local axes in ECEF at a geodetic lat, lon.
+Vec3 northAt(double lat, double lon)
+{
+    return {-std::sin(lat) * std::cos(lon), -std::sin(lat) * std::sin(lon), std::cos(lat)};
+}
+Vec3 eastAt(double, double lon) { return {-std::sin(lon), std::cos(lon), 0.0}; }
+Vec3 downAt(double lat, double lon)
+{
+    return {-std::cos(lat) * std::cos(lon), -std::cos(lat) * std::sin(lon), -std::sin(lat)};
+}
+
+// WGS-84 geodetic to ECEF.
+Vec3 ecefOf(double lat, double lon, double h)
+{
+    const double a = 6378137.0, f = 1.0 / 298.257223563, e2 = f * (2.0 - f);
+    const double n = a / std::sqrt(1.0 - e2 * std::sin(lat) * std::sin(lat));
+    return {(n + h) * std::cos(lat) * std::cos(lon), (n + h) * std::cos(lat) * std::sin(lon),
+            (n * (1.0 - e2) + h) * std::sin(lat)};
+}
+
+// Body to NED: level facing north, nose up (pitch +90 deg about the body's
+// right axis), level facing east (yaw +90 deg about down).
+const Quat kLevelNorth = {1.0, 0.0, 0.0, 0.0};
+const Quat kNoseUp = {kR2, 0.0, kR2, 0.0};
+const Quat kLevelEast = {kR2, 0.0, 0.0, kR2};
+
+FilterState stateAt(int64_t t_us, const Quat& q, const Vec3& w, bool fix_place = false, double lat = 0.0,
+                    double lon = 0.0)
+{
+    FilterState s;
+    s.t_us = t_us;
+    std::copy(q.begin(), q.end(), s.q_nb);
+    std::copy(w.begin(), w.end(), s.w);
+    s.fix_place = fix_place;
+    s.lat = lat;
+    s.lon = lon;
+    return s;
+}
+
+// The header a stamp at MCU instant t_us takes off a line.
+Header stampOn(const GnssClockData& line, int64_t t_us)
+{
+    double gps_s = 0.0;
+    EXPECT_TRUE(lc86::gnssClockGpsAt(line, t_us, gps_s));
+    return gpsStamp(gps_s);
+}
+
+void expectStamp(const Header& got, const Header& want)
+{
+    EXPECT_EQ(got.week, want.week);
+    EXPECT_EQ(got.tow_ms, want.tow_ms);
+    EXPECT_EQ(got.sub_ns, want.sub_ns);
+}
+
+// Samples to the detector every 2 ms (the filter's 500 Hz) over [t0, t1):
+// one force and gyro, x alternately +-alt_x about it; the ends of the
+// windows it said to send.
+std::vector<int64_t> feedSpan(RestDetector& d, int64_t t0, int64_t t1, const Vec3& f, const Vec3& g,
+                              double alt_x = 0.0)
+{
+    std::vector<int64_t> out;
+    int k = 0;
+    for (int64_t t = t0; t < t1; t += 2000, k++)
+    {
+        Vec3 fk = f;
+        fk[0] += (k % 2 == 0) ? alt_x : -alt_x;
+        if (d.feed(t, fk.data(), g.data())) out.push_back(d.window().t1_us);
+    }
+    return out;
+}
+
+const Vec3 kStillF = {0.0123, -0.4567, -9.7801};   // 9.7908 m/s^2: within 0.5 of 1 g
+const Vec3 kBiasG = {0.4, -0.2, 0.1};              // a raw gyro's bias, deg/s
+
+}  // namespace
+
+TEST(SdrAidFc, NedToEcefTakesNorthEastAndDownToTheirEcefAxes)
+{
+    for (const auto& [lat_d, lon_d] : {std::pair<double, double>{0.0, 0.0}, {40.5, -112.1}, {-33.9, 151.2},
+                                       {89.0, 10.0}, {-60.0, -179.9}})
+    {
+        SCOPED_TRACE(testing::Message() << lat_d << ", " << lon_d);
+        const double lat = lat_d * kDegToRad, lon = lon_d * kDegToRad;
+        double q[4];
+        sdr_aid_fc::nedToEcef(lat, lon, q);
+        EXPECT_NEAR(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3], 1.0, 1e-15);
+        expectNear(turn(q, {1, 0, 0}), northAt(lat, lon), 1e-12, "north");
+        expectNear(turn(q, {0, 1, 0}), eastAt(lat, lon), 1e-12, "east");
+        expectNear(turn(q, {0, 0, 1}), downAt(lat, lon), 1e-12, "down");
+    }
+}
+
+TEST(SdrAidFc, ANoseUpBodyPointsUpAndALevelOneNorth)
+{
+    const double lat = 40.5 * kDegToRad, lon = -112.1 * kDegToRad;
+    const Vec3 up = {-downAt(lat, lon)[0], -downAt(lat, lon)[1], -downAt(lat, lon)[2]};
+    double q[4];
+    // Level, facing north: forward along north, right along east, down down
+    sdr_aid_fc::bodyToEcef(kLevelNorth.data(), lat, lon, q);
+    expectNear(turn(q, {1, 0, 0}), northAt(lat, lon), 1e-12, "level: forward");
+    expectNear(turn(q, {0, 1, 0}), eastAt(lat, lon), 1e-12, "level: right");
+    expectNear(turn(q, {0, 0, 1}), downAt(lat, lon), 1e-12, "level: down");
+    // Nose up on the pad: forward along the local up, its belly (down)
+    // facing north, right still east
+    sdr_aid_fc::bodyToEcef(kNoseUp.data(), lat, lon, q);
+    expectNear(turn(q, {1, 0, 0}), up, 1e-12, "nose up: forward");
+    expectNear(turn(q, {0, 0, 1}), northAt(lat, lon), 1e-12, "nose up: down");
+    expectNear(turn(q, {0, 1, 0}), eastAt(lat, lon), 1e-12, "nose up: right");
+    // Level, facing east
+    sdr_aid_fc::bodyToEcef(kLevelEast.data(), lat, lon, q);
+    expectNear(turn(q, {1, 0, 0}), eastAt(lat, lon), 1e-12, "east: forward");
+
+    // Through the sender and the wire: the board's decoded quaternion (2^-14
+    // steps) puts the nose along the local up
+    sdr_aid_fc::Sender tx;
+    const Vec3 pad = ecefOf(lat, lon, 1400.0);
+    ASSERT_TRUE(tx.noteBoardFix(pad.data()));
+    tx.noteFilter(stateAt(1000000, kNoseUp, {0.0, 0.0, 0.0}));
+    int64_t stamp_us = 0;
+    Attitude a = tx.attitude(1000500, false, kLineTq, stamp_us);
+    ASSERT_TRUE(a.att_valid);
+    uint8_t b[kMaxFrame];
+    const size_t len = encode(a, b, sizeof(b));
+    Attitude d;
+    ASSERT_TRUE(decode(b, len, d));
+    ASSERT_TRUE(d.att_valid);
+    EXPECT_EQ(d.frame, 0);
+    expectNear(turn(d.q, {1, 0, 0}), up, 2e-4, "nose up off the wire");
+}
+
+TEST(SdrAidFc, TheBoardsOwnFixMakesItsRoundTripExact)
+{
+    // The board takes body to NED back as C_ne(its fix) C_eb: with the place
+    // its own fix, that is the filter's q_nb whatever the place
+    const double lat = -33.9 * kDegToRad, lon = 151.2 * kDegToRad;
+    const Vec3 fix = ecefOf(lat, lon, 35.0);
+    sdr_aid_fc::Sender tx;
+    ASSERT_TRUE(tx.noteBoardFix(fix.data()));
+    const Quat q_nb = {0.5, -0.5, 0.5, 0.5};
+    tx.noteFilter(stateAt(5000000, q_nb, {0.0, 0.0, 0.0}));
+    int64_t stamp_us = 0;
+    const Attitude a = tx.attitude(5000000, false, kLineTq, stamp_us);
+    ASSERT_TRUE(a.att_valid);
+    double q_en[4];
+    sdr_aid_fc::nedToEcef(lat, lon, q_en);
+    const double q_ne[4] = {q_en[0], -q_en[1], -q_en[2], -q_en[3]};
+    double back[4];
+    sdr_aid_fc::quatMul(q_ne, a.q, back);
+    for (int k = 0; k < 4; k++) EXPECT_NEAR(back[k], q_nb[k], 1e-9) << k;   // Bowring's latitude, 1e-12 rad here
+}
+
+TEST(SdrAidFc, LatLonOfAnEcefPosition)
+{
+    for (const double lat_d : {0.0, 39.97, -45.0, 89.9, -89.9})
+        for (const double lon_d : {0.0, -74.94, 179.99, -119.0})
+            for (const double h : {-100.0, 0.0, 1500.0, 12000.0})
+            {
+                const double lat = lat_d * kDegToRad, lon = lon_d * kDegToRad;
+                const Vec3 p = ecefOf(lat, lon, h);
+                double got_lat = 0.0, got_lon = 0.0;
+                ASSERT_TRUE(sdr_aid_fc::latLonOf(p.data(), got_lat, got_lon));
+                EXPECT_NEAR(got_lat, lat, 1e-9) << lat_d << " " << lon_d << " " << h;
+                EXPECT_NEAR(std::remainder(got_lon - lon, 2 * M_PI), 0.0, 1e-9) << lat_d << " " << lon_d << " " << h;
+            }
+    // The board's fix in the recorded stream (test_sdr_rtcm.cpp TheFix):
+    // the bench antenna
+    const double fix[3] = {1272103.5908, -4726528.5163, 4075563.8196};
+    double lat = 0.0, lon = 0.0;
+    ASSERT_TRUE(sdr_aid_fc::latLonOf(fix, lat, lon));
+    EXPECT_NEAR(lat / kDegToRad, 39.971621, 1e-6);
+    EXPECT_NEAR(lon / kDegToRad, -74.936297, 1e-6);
+    // Nothing off the Earth: no position, not a number, too deep or too high
+    const double zero[3] = {0.0, 0.0, 0.0};
+    const double nan3[3] = {kNaN, 0.0, 6.4e6};
+    const Vec3 deep = ecefOf(0.0, 0.0, -400000.0);
+    const Vec3 high = ecefOf(0.0, 0.0, 450000.0);
+    EXPECT_FALSE(sdr_aid_fc::latLonOf(zero, lat, lon));
+    EXPECT_FALSE(sdr_aid_fc::latLonOf(nan3, lat, lon));
+    EXPECT_FALSE(sdr_aid_fc::latLonOf(deep.data(), lat, lon));
+    EXPECT_FALSE(sdr_aid_fc::latLonOf(high.data(), lat, lon));
+}
+
+TEST(SdrAidFc, AThirtyTwoBitTimeWidenedNearNow)
+{
+    const int64_t wrap = int64_t{1} << 32;
+    EXPECT_EQ(sdr_aid_fc::widenUs(7000, 10000), 7000);
+    EXPECT_EQ(sdr_aid_fc::widenUs(static_cast<uint32_t>(wrap + 5000 - 3000), wrap + 5000), wrap + 2000);
+    // Across the 32-bit wrap: just before it, read just after it
+    EXPECT_EQ(sdr_aid_fc::widenUs(0xFFFFFF38u, wrap + 100), wrap - 200);
+    // A little after now (the IMU's stamp ahead of the pass): still that
+    EXPECT_EQ(sdr_aid_fc::widenUs(static_cast<uint32_t>(3 * wrap + 10), 3 * wrap - 5), 3 * wrap + 10);
+}
+
+TEST(RestDetector, BackToBackWindowsOfASecond)
+{
+    RestDetector d;
+    const int64_t t0 = 10000000;
+    const std::vector<int64_t> sent = feedSpan(d, t0, t0 + 3500000, kStillF, kBiasG);
+    EXPECT_EQ(d.windows(), 3u);
+    EXPECT_EQ(sent, (std::vector<int64_t>{t0 + 1000000}));   // the first; the next 5 s on
+    // The last: from the end of the one before to its last sample, 500
+    // samples, the mean as fed, no spread, the gyro's bias
+    const RestWindow& w = d.window();
+    EXPECT_EQ(w.t0_us, t0 + 2000000);
+    EXPECT_EQ(w.t1_us, t0 + 3000000);
+    EXPECT_EQ(w.n, 500u);
+    for (int k = 0; k < 3; k++) EXPECT_NEAR(w.f[k], kStillF[k], 1e-12) << k;
+    EXPECT_NEAR(w.sd_f, 0.0, 1e-9);
+    EXPECT_NEAR(w.gyro_max_dps, std::sqrt(0.16 + 0.04 + 0.01), 1e-12);
+    EXPECT_TRUE(w.still);
+    EXPECT_EQ(d.run(), 3u);
+    // As the board reads it: 1000 ms, stamped at its middle (sdr_aid_fc::Sender)
+    const Rest r = sdr_aid_fc::restOf(w);
+    EXPECT_TRUE(r.valid);
+    EXPECT_EQ(r.dur_ms, 1000);
+    EXPECT_EQ(r.f[2], w.f[2]);
+    EXPECT_EQ(r.sd_f, w.sd_f);
+    // The spread: x +-a about its mean on alternate samples is a / sqrt(3) a
+    // axis
+    RestDetector e;
+    feedSpan(e, t0, t0 + 1000001, kStillF, kBiasG, 0.03);
+    ASSERT_EQ(e.windows(), 1u);
+    EXPECT_NEAR(e.window().sd_f, 0.03 / std::sqrt(3.0), 1e-9);
+    EXPECT_NEAR(e.window().f[0], kStillF[0], 1e-12);
+}
+
+TEST(RestDetector, TheStillnessTest)
+{
+    // 1 g within 0.5 m/s^2, a spread under 0.05 m/s^2 a axis, every |gyro|
+    // under 3 deg/s; each window alone
+    struct Row { Vec3 f; Vec3 g; double alt_x; bool still; const char* what; };
+    const double g0 = RestDetector::kG;
+    const Row rows[] = {
+        {{0.0, 0.0, -(g0 + 0.49)}, kBiasG, 0.0, true, "1 g + 0.49"},
+        {{0.0, 0.0, -(g0 + 0.51)}, kBiasG, 0.0, false, "1 g + 0.51"},
+        {{0.0, 0.0, -(g0 - 0.49)}, kBiasG, 0.0, true, "1 g - 0.49"},
+        {{0.0, 0.0, -(g0 - 0.51)}, kBiasG, 0.0, false, "1 g - 0.51"},
+        {{g0, 0.0, 0.0}, kBiasG, 0.0, true, "nose up (1 g along +x)"},
+        {kStillF, kBiasG, 0.08, true, "a spread of 0.046"},
+        {kStillF, kBiasG, 0.09, false, "a spread of 0.052"},
+        {kStillF, {2.99, 0.0, 0.0}, 0.0, true, "2.99 deg/s"},
+        {kStillF, {0.0, 0.0, -3.01}, 0.0, false, "3.01 deg/s"},
+        {kStillF, {1.8, 1.8, 1.8}, 0.0, false, "3.12 deg/s, under 3 on each axis"},
+        {{kNaN, 0.0, -g0}, kBiasG, 0.0, false, "a NaN force"},
+        {kStillF, {kNaN, 0.0, 0.0}, 0.0, false, "a NaN rate"},
+    };
+    for (const Row& r : rows)
+    {
+        SCOPED_TRACE(r.what);
+        RestDetector d;
+        const std::vector<int64_t> sent = feedSpan(d, 0, 1000001, r.f, r.g, r.alt_x);
+        ASSERT_EQ(d.windows(), 1u);
+        EXPECT_EQ(d.window().still, r.still);
+        EXPECT_EQ(sent.size(), r.still ? 1u : 0u);   // nothing goes for a window not still
+        EXPECT_EQ(d.run(), r.still ? 1u : 0u);
+    }
+}
+
+TEST(RestDetector, TheFirstThenEveryFifthThenANewPoseAtOnce)
+{
+    RestDetector d;
+    const int64_t s = 1000000;
+    // 30 s still: windows 1, 6, 11, 16, 21, 26
+    std::vector<int64_t> sent = feedSpan(d, 0, 30 * s + 1, kStillF, kBiasG);
+    EXPECT_EQ(sent, (std::vector<int64_t>{1 * s, 6 * s, 11 * s, 16 * s, 21 * s, 26 * s}));
+    // 1.5 s of a move (20 deg/s): two windows not still, nothing
+    sent = feedSpan(d, 30 * s + 2000, 31500000, kStillF, {20.0, 0.0, 0.0});
+    EXPECT_TRUE(sent.empty());
+    EXPECT_EQ(d.run(), 0u);
+    // Still again, nose up now: the first whole still window goes at once
+    // (32-33 s), then every fifth again
+    sent = feedSpan(d, 31500000, 45 * s + 1, {9.80, 0.01, -0.02}, kBiasG);
+    EXPECT_EQ(sent, (std::vector<int64_t>{33 * s, 38 * s, 43 * s}));
+    EXPECT_NEAR(d.window().f[0], 9.80, 1e-12);
+    // Never still: nothing at all
+    RestDetector m;
+    EXPECT_TRUE(feedSpan(m, 0, 10 * s + 1, kStillF, {0.0, 5.0, 0.0}).empty());
+    EXPECT_EQ(m.windows(), 10u);
+}
+
+TEST(RestDetector, AGapInTheSamplesBreaksTheRun)
+{
+    // A stopped filter (MAG_CALIBRATION, a reinit) could hide a move: a gap
+    // over 100 ms throws the open window away and ends the run, so the first
+    // whole window after it goes at once, from the first sample after it
+    RestDetector d;
+    const int64_t s = 1000000;
+    std::vector<int64_t> sent = feedSpan(d, 0, 3500001, kStillF, kBiasG);
+    EXPECT_EQ(sent, (std::vector<int64_t>{1 * s}));
+    sent = feedSpan(d, 3700000, 10 * s, kStillF, kBiasG);   // 3.5 to 3.7 s: no samples
+    EXPECT_EQ(sent, (std::vector<int64_t>{4700000, 9700000}));
+    EXPECT_EQ(d.windows(), 3u + 6u);
+    // A gap of 100 ms or less is no break: the window spans it
+    RestDetector e;
+    feedSpan(e, 0, 400001, kStillF, kBiasG);
+    feedSpan(e, 500000, 1100001, kStillF, kBiasG);
+    ASSERT_EQ(e.windows(), 1u);
+    EXPECT_EQ(e.window().t0_us, 0);
+    EXPECT_EQ(e.window().t1_us, 1000000);
+    EXPECT_EQ(e.window().n, 200u + 251u);   // 2-400 ms, then 500-1000 ms
+    // A sample not after the last is passed over
+    RestDetector f;
+    const double fz[3] = {0.0, 0.0, -9.8}, gz[3] = {0.0, 0.0, 0.0};
+    EXPECT_FALSE(f.feed(1000, fz, gz));
+    EXPECT_FALSE(f.feed(1000, fz, gz));
+    EXPECT_FALSE(f.feed(900, fz, gz));
+    EXPECT_EQ(f.windows(), 0u);
+}
+
+TEST(SdrAidFc, TheAttitudeTenTimesASecondOnceTheLineIsValid)
+{
+    const GnssClockData line = validLine();
+    sdr_phase::Sender ph;
+    sdr_aid_fc::Sender tx;
+    const double lat = 40.5 * kDegToRad, lon = -112.1 * kDegToRad;
+    const Vec3 up = {-downAt(lat, lon)[0], -downAt(lat, lon)[1], -downAt(lat, lon)[2]};
+    const Vec3 pad = ecefOf(lat, lon, 1400.0);
+    ASSERT_TRUE(tx.noteBoardFix(pad.data()));
+    const Vec3 w = {0.01, -0.02, 0.5};
+    const int64_t t0 = 20000000;
+    struct Got { int64_t now; Attitude a; };
+    std::vector<Got> got;
+    for (int64_t now = t0; now < t0 + 3000000; now += 1000)
+    {
+        // The line valid from 1 s in, noted once a second; the filter every
+        // 2 ms, its IMU sample 0.7 ms before the pass
+        if (now >= t0 + 1000000 && (now - t0) % 1000000 == 0) ph.noteLine(line, now);
+        if ((now - t0) % 2000 == 0) tx.noteFilter(stateAt(now - 700, kNoseUp, w));
+        uint8_t b[kMaxFrame];
+        const size_t len = tx.frame(now, ph, false, b, sizeof(b));
+        if (len == 0) continue;
+        ASSERT_EQ(len, kAttitudeFrame);
+        Attitude a;
+        ASSERT_TRUE(decode(b, len, a));
+        got.push_back({now, a});
+        tx.sent(now);
+    }
+    ASSERT_EQ(got.size(), 20u);
+    for (size_t i = 0; i < got.size(); i++)
+    {
+        SCOPED_TRACE(testing::Message() << "frame " << i);
+        const Attitude& a = got[i].a;
+        EXPECT_EQ(got[i].now, t0 + 1000000 + static_cast<int64_t>(i) * 100000);
+        expectStamp(a.h, stampOn(line, got[i].now - 700));   // the filter state's instant
+        EXPECT_EQ(a.h.seq, i);
+        EXPECT_EQ(a.h.src, kSrcOwn);
+        EXPECT_FALSE(a.h.test);
+        EXPECT_EQ(a.h.tq, kLineTq);
+        EXPECT_TRUE(boardTakes(a.h));
+        EXPECT_TRUE(a.att_valid);
+        EXPECT_TRUE(a.rate_valid);
+        EXPECT_EQ(a.frame, 0);
+        EXPECT_TRUE(std::isnan(a.sig_tilt_deg));
+        EXPECT_TRUE(std::isnan(a.sig_hdg_deg));
+        expectNear(turn(a.q, {1, 0, 0}), up, 2e-4, "the nose");
+        for (int k = 0; k < 3; k++) EXPECT_EQ(lsb(a.w[k], 1024.0), lsb(w[k], 1024.0)) << k;
+    }
+    EXPECT_EQ(tx.attSeq(), 20);
+}
+
+TEST(SdrAidFc, NotValidWithoutAFreshFilterOrAPlace)
+{
+    sdr_aid_fc::Sender tx;
+    int64_t stamp_us = 0;
+    const int64_t t = 50000000;
+    // No filter state yet (before its start): neither valid, stamped at the
+    // pass
+    Attitude a = tx.attitude(t, false, kLineTq, stamp_us);
+    EXPECT_FALSE(a.att_valid);
+    EXPECT_FALSE(a.rate_valid);
+    EXPECT_EQ(stamp_us, t);
+    // A state, no place (the GNSS-absent start's 0 N 0 E is none, and no fix
+    // from the board yet): its rate alone
+    tx.noteFilter(stateAt(t - 1000, kLevelNorth, {0.1, 0.2, 0.3}, false, 0.0, 0.0));
+    a = tx.attitude(t, false, kLineTq, stamp_us);
+    EXPECT_FALSE(a.att_valid);
+    EXPECT_TRUE(a.rate_valid);
+    EXPECT_EQ(stamp_us, t - 1000);
+    // A filter on a fix of its own: its place
+    const double lat = 33.7 * kDegToRad, lon = -118.4 * kDegToRad;
+    tx.noteFilter(stateAt(t - 1000, kLevelNorth, {0.1, 0.2, 0.3}, true, lat, lon));
+    a = tx.attitude(t, false, kLineTq, stamp_us);
+    ASSERT_TRUE(a.att_valid);
+    expectNear(turn(a.q, {1, 0, 0}), northAt(lat, lon), 1e-12, "the filter's place");
+    // The board's fix, once there is one, before the filter's
+    const double blat = 39.97 * kDegToRad, blon = -74.94 * kDegToRad;
+    double got_lat = 0.0, got_lon = 0.0;
+    EXPECT_FALSE(tx.boardPlace(got_lat, got_lon));
+    ASSERT_TRUE(tx.noteBoardFix(ecefOf(blat, blon, -11.5).data()));
+    EXPECT_TRUE(tx.haveBoardPlace());
+    ASSERT_TRUE(tx.boardPlace(got_lat, got_lon));
+    EXPECT_NEAR(got_lat, blat, 1e-9);
+    EXPECT_NEAR(got_lon, blon, 1e-9);
+    a = tx.attitude(t, false, kLineTq, stamp_us);
+    ASSERT_TRUE(a.att_valid);
+    expectNear(turn(a.q, {1, 0, 0}), northAt(blat, blon), 1e-9, "the board's place");
+    // ... and a position off the Earth changes nothing
+    const double zero[3] = {0.0, 0.0, 0.0};
+    EXPECT_FALSE(tx.noteBoardFix(zero));
+    a = tx.attitude(t, false, kLineTq, stamp_us);
+    expectNear(turn(a.q, {1, 0, 0}), northAt(blat, blon), 1e-9, "still the board's place");
+    // A NaN: its group alone not valid
+    tx.noteFilter(stateAt(t - 1000, kLevelNorth, {kNaN, 0.2, 0.3}));
+    a = tx.attitude(t, false, kLineTq, stamp_us);
+    EXPECT_TRUE(a.att_valid);
+    EXPECT_FALSE(a.rate_valid);
+    tx.noteFilter(stateAt(t - 1000, {kNaN, 0.0, 0.0, 1.0}, {0.1, 0.2, 0.3}));
+    a = tx.attitude(t, false, kLineTq, stamp_us);
+    EXPECT_FALSE(a.att_valid);
+    EXPECT_TRUE(a.rate_valid);
+    // The filter stopped (no update for over 100 ms): not valid, stamped at
+    // the pass, so the board drops what it holds at once
+    tx.noteFilter(stateAt(t, kLevelNorth, {0.1, 0.2, 0.3}));
+    a = tx.attitude(t + sdr_aid_fc::Sender::kAttFreshUs, false, kLineTq, stamp_us);
+    EXPECT_TRUE(a.att_valid);
+    EXPECT_EQ(stamp_us, t);
+    a = tx.attitude(t + sdr_aid_fc::Sender::kAttFreshUs + 1, false, kLineTq, stamp_us);
+    EXPECT_FALSE(a.att_valid);
+    EXPECT_FALSE(a.rate_valid);
+    EXPECT_EQ(stamp_us, t + sdr_aid_fc::Sender::kAttFreshUs + 1);
+}
+
+TEST(SdrAidFc, ARestGoesAfterTheAttitudeStampedAtItsWindowsMiddle)
+{
+    const GnssClockData line = validLine();
+    sdr_phase::Sender ph;
+    sdr_aid_fc::Sender tx;
+    const int64_t T = 80000000;
+    ph.noteLine(line, T);
+    tx.noteFilter(stateAt(T, kNoseUp, {0.0, 0.0, 0.0}));
+    RestWindow w;
+    w.t0_us = T - 1000000;
+    w.t1_us = T;
+    w.n = 500;
+    std::copy(kStillF.begin(), kStillF.end(), w.f);
+    w.sd_f = 0.0042;
+    w.still = true;
+    tx.noteRest(w);
+    EXPECT_TRUE(tx.restPending());
+    uint8_t b[kMaxFrame];
+    // The attitude due on the same pass goes first
+    size_t len = tx.frame(T + 500, ph, false, b, sizeof(b));
+    ASSERT_EQ(len, kAttitudeFrame);
+    tx.sent(T + 500);
+    // The rest on the next: R1's values, stamped at the window's middle
+    len = tx.frame(T + 1500, ph, false, b, sizeof(b));
+    ASSERT_EQ(len, kRestFrame);
+    Rest r;
+    ASSERT_TRUE(decode(b, len, r));
+    expectStamp(r.h, stampOn(line, T - 500000));
+    EXPECT_EQ(r.h.seq, 0);
+    EXPECT_EQ(r.h.src, kSrcOwn);
+    EXPECT_FALSE(r.h.test);
+    EXPECT_EQ(r.h.tq, kLineTq);
+    EXPECT_TRUE(boardTakes(r.h));
+    EXPECT_TRUE(r.valid);
+    EXPECT_EQ(r.dur_ms, 1000);
+    EXPECT_EQ(lsb(r.f[0], 10000.0), 123);
+    EXPECT_EQ(lsb(r.f[1], 10000.0), -4567);
+    EXPECT_EQ(lsb(r.f[2], 10000.0), -97801);
+    EXPECT_EQ(code(r.sd_f, 1000.0, 255), 5);
+    // No room in the UART (sent() not called): the same frame on the next
+    // pass, then gone once it went
+    const Bytes first(b, b + len);
+    len = tx.frame(T + 2500, ph, false, b, sizeof(b));
+    EXPECT_EQ(Bytes(b, b + len), first);
+    tx.sent(T + 2500);
+    EXPECT_FALSE(tx.restPending());
+    EXPECT_EQ(tx.restSeq(), 1);
+    EXPECT_EQ(tx.frame(T + 3500, ph, false, b, sizeof(b)), 0u);
+    // A sim's or a rig replay's: a test frame, which the board takes only
+    // under its `rx fc test on`
+    w.t0_us += 5000000;
+    w.t1_us += 5000000;
+    tx.noteRest(w);
+    len = tx.frame(T + 5000500, ph, true, b, sizeof(b));   // the attitude, due again: the filter long stopped
+    ASSERT_EQ(len, kAttitudeFrame);
+    Attitude a;
+    ASSERT_TRUE(decode(b, len, a));
+    EXPECT_TRUE(a.h.test);
+    EXPECT_FALSE(a.att_valid);
+    expectStamp(a.h, stampOn(line, T + 5000500));
+    tx.sent(T + 5000500);
+    len = tx.frame(T + 5001500, ph, true, b, sizeof(b));
+    ASSERT_EQ(len, kRestFrame);
+    ASSERT_TRUE(decode(b, len, r));
+    EXPECT_TRUE(r.h.test);
+    EXPECT_EQ(r.h.seq, 1);
+    EXPECT_FALSE(boardTakes(r.h));
+    tx.sent(T + 5001500);
+}
+
+TEST(SdrAidFc, ARestWithNoLineWaitsUpToThreeSeconds)
+{
+    const GnssClockData line = validLine();
+    sdr_phase::Sender ph;   // no line yet
+    sdr_aid_fc::Sender tx;
+    RestWindow w;
+    w.t0_us = 9000000;
+    w.t1_us = 10000000;
+    w.f[2] = -9.81;
+    w.still = true;
+    tx.noteRest(w);
+    uint8_t b[kMaxFrame];
+    for (int64_t now = 10000000; now <= 13000000; now += 1000)
+        ASSERT_EQ(tx.frame(now, ph, false, b, sizeof(b)), 0u);
+    EXPECT_TRUE(tx.restPending());   // 3 s after its window: still kept
+    // The line comes 1 ms too late: dropped, nothing sent but the attitude
+    ph.noteLine(line, 13001000);
+    size_t len = tx.frame(13001000, ph, false, b, sizeof(b));
+    EXPECT_FALSE(tx.restPending());
+    EXPECT_EQ(tx.restsDropped(), 1u);
+    ASSERT_EQ(len, kAttitudeFrame);
+    tx.sent(13001000);
+    EXPECT_EQ(tx.frame(13002000, ph, false, b, sizeof(b)), 0u);
+    // One whose line comes within the 3 s goes then
+    w.t0_us = 20000000;
+    w.t1_us = 21000000;
+    tx.noteRest(w);
+    ph = sdr_phase::Sender{};
+    for (int64_t now = 21000000; now < 23000000; now += 1000)
+        ASSERT_EQ(tx.frame(now, ph, false, b, sizeof(b)), 0u);
+    ph.noteLine(line, 23000000);
+    len = tx.frame(23000000, ph, false, b, sizeof(b));   // the attitude first
+    ASSERT_EQ(len, kAttitudeFrame);
+    tx.sent(23000000);
+    len = tx.frame(23001000, ph, false, b, sizeof(b));
+    ASSERT_EQ(len, kRestFrame);
+    Rest r;
+    ASSERT_TRUE(decode(b, len, r));
+    expectStamp(r.h, stampOn(line, 20500000));
+    tx.sent(23001000);
+    EXPECT_EQ(tx.restsDropped(), 1u);
+}
+
+TEST(SdrAidFc, APadAMoveAndANewPose)
+{
+    // main.cpp's order pass by pass, 1 ms apart: each filter update (every
+    // 2 ms) feeds the detector and the sender, then the pass sends what is
+    // due. 20 s still nose up, a 1.5 s move, still again to 30 s. The board's
+    // line valid from 5 s, noted once a second; its fix from 2 s.
+    const GnssClockData line = validLine();
+    sdr_phase::Sender ph;
+    sdr_aid_fc::Sender tx;
+    RestDetector det;
+    const double lat = 40.5 * kDegToRad, lon = -112.1 * kDegToRad;
+    const Vec3 pad = ecefOf(lat, lon, 1400.0);
+    const int64_t t0 = 100000000, s = 1000000;
+    const Vec3 nose_up_f = {9.79, 0.012, -0.034};
+    std::vector<int64_t> att_at;
+    struct GotRest { int64_t now; Rest r; };
+    std::vector<GotRest> rests;
+    for (int64_t now = t0; now < t0 + 30 * s; now += 1000)
+    {
+        const int64_t rel = now - t0;
+        if (rel >= 5 * s && rel % s == 0) ph.noteLine(line, now);
+        if (rel == 2 * s) ASSERT_TRUE(tx.noteBoardFix(pad.data()));
+        if (rel % 2000 == 0)
+        {
+            const bool moving = rel >= 20 * s && rel < 21500000;
+            const Vec3 g = moving ? Vec3{0.0, 25.0, 0.0} : kBiasG;
+            if (det.feed(now, nose_up_f.data(), g.data())) tx.noteRest(det.window());
+            tx.noteFilter(stateAt(now, kNoseUp, {g[0] * kDegToRad, g[1] * kDegToRad, g[2] * kDegToRad}));
+        }
+        uint8_t b[kMaxFrame];
+        const size_t len = tx.frame(now, ph, false, b, sizeof(b));
+        if (len == 0) continue;
+        if (fcSubType(b, len) == kAttitude)
+        {
+            att_at.push_back(rel);
+        }
+        else
+        {
+            ASSERT_EQ(fcSubType(b, len), kRest);
+            Rest r;
+            ASSERT_TRUE(decode(b, len, r));
+            rests.push_back({rel, r});
+        }
+        tx.sent(now);
+    }
+    // The attitude every 100 ms from the line's first pass
+    ASSERT_EQ(att_at.size(), 250u);
+    for (size_t i = 0; i < att_at.size(); i++) EXPECT_EQ(att_at[i], 5 * s + static_cast<int64_t>(i) * 100000) << i;
+    // The rests: the first window's (0-1 s) found no line within 3 s and was
+    // dropped; the sixth's (5-6 s) goes as it closes, the attitude ahead of it
+    // on that pass, then every 5 s; after the move the first whole still
+    // window (22-23 s) and the one five on
+    const std::vector<int64_t> want_mid = {5500000, 10500000, 15500000, 22500000, 27500000};
+    ASSERT_EQ(rests.size(), want_mid.size());
+    for (size_t i = 0; i < rests.size(); i++)
+    {
+        SCOPED_TRACE(testing::Message() << "rest " << i);
+        const Rest& r = rests[i].r;
+        expectStamp(r.h, stampOn(line, t0 + want_mid[i]));
+        // Each window closes on a whole second, with an attitude due: the
+        // rest on the pass after
+        EXPECT_EQ(rests[i].now, want_mid[i] + 500000 + 1000);
+        EXPECT_EQ(r.h.seq, i);
+        EXPECT_TRUE(r.valid);
+        EXPECT_EQ(r.dur_ms, 1000);
+        for (int k = 0; k < 3; k++) EXPECT_EQ(lsb(r.f[k], 10000.0), lsb(nose_up_f[k], 10000.0)) << k;
+        EXPECT_EQ(code(r.sd_f, 1000.0, 255), 1);   // no spread: the least code
+    }
+    EXPECT_EQ(tx.restsDropped(), 1u);
 }

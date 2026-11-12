@@ -58,13 +58,16 @@ struct TrEpoch
 };
 bool decodeTrEpoch(const uint8_t* frame, size_t len, TrEpoch& out);
 
-// And of a sub-type 2.
+// And of a sub-type 2. The position is the flight image's place for the
+// attitude it sends the board (sdr_aid_policy.h): the board's own fix, so its
+// NED is the board's.
 struct TrFix
 {
     uint16_t week = 0;
     uint32_t tow_ms = 0;
     bool     valid = false;
     uint8_t  nsat = 0;
+    double   pos[3] = {};   // the board's antenna, ECEF, m (0.1 mm on the wire)
 };
 bool decodeTrFix(const uint8_t* frame, size_t len, TrFix& out);
 

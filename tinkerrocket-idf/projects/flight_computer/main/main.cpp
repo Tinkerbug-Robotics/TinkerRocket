@@ -90,6 +90,7 @@
 #include <SdrAid.h>               // the 4002 frames to the gnss-sdr-dev board: the flight's phase, a bench's P1 script
 #include <GnssClockRecord.h>      // gnssClockGpsAt: GPS time off the board's clock line
 #include "sdr_phase_policy.h"     // the flight phase the board's tracking loops follow (host-tested)
+#include "sdr_aid_policy.h"       // the attitude and the rests the board is sent beside it (host-tested)
 #endif
 #if TR_RAW_NAV_MOSAIC
 #include <SbfNav.h>               // the mosaic-G5's navigation blocks as gps_eph_t (TR_GNSSReceiverMosaic_Serial)
@@ -9581,8 +9582,8 @@ static void sdrAidBenchStep(const GnssClockData& line)
     sdrAidLogSent(frame, len, now_us);
 }
 #elif defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
-// The flight image's 4002 to the gnss-sdr-dev board on J1: the real flight
-// phase alone (sub-type 3), which picks the board's tracking loops. The board
+// The flight image's 4002 to the gnss-sdr-dev board on J1. First the real
+// flight phase (sub-type 3), which picks the board's tracking loops. The board
 // boots with `rx aid fc` and `rx fc phase on`: only this request gives it its
 // boost loops (the owner's choice, after the board's own GPS channels took
 // boosts on a static pad), and without one it runs its quiet loops, which
@@ -9590,9 +9591,23 @@ static void sdrAidBenchStep(const GnssClockData& line)
 // ground, boost from the ignition (the IMU's own cue, before the launch flag
 // latches: sdr_ignition_cue) to the burnout latch, coast (the quiet loops) to
 // apogee, then descent and landed (sdr_phase_policy.h has the map and why
-// each field is what it is). The attitude, the state and the geometry are
-// not sent: the board does nothing with them before P2/P3, and it takes a
-// phase on its own.
+// each field is what it is).
+//
+// Beside it (sdrAidStep, sdr_aid_policy.h has the why of each field): the
+// filter's attitude (sub-type 1) ten times a second, body to ECEF at the
+// board's own last valid fix (with the board on J1 the filter flies
+// GNSS-absent from a pad-relative 0 N 0 E, no place to turn an attitude into
+// ECEF at), and the rests (sub-type 5): the mean specific force over a still
+// second by this side's own test, at the start and every 5 s while it stays
+// still, which the board pairs with its own IMU to find how it is mounted in
+// this body. Not the navigation state (sub-type 2), nor the geometry
+// (sub-type 4): no configuration of the board's mounting in the vehicle or
+// of its antenna's lever arm exists yet, which the geometry would carry. The
+// filter's inputs and state go to both right after each of its updates
+// (sdrAidNoteUpdate), the board's fixes as the flight loop drains its stream
+// (sdrAidNoteBoardFrame). One 4002 frame on the line at a time: none within
+// sdr_aid::AidSchedule::kSpacingUs of the last of either sender, so the
+// board's 128-byte FIFO never holds two.
 //
 // Each change goes on the pass that sees it, then three times 100 ms apart,
 // then once a second, each holding 2.5 s on the board. Stamped in GPS time
@@ -9616,19 +9631,25 @@ static void sdrAidBenchStep(const GnssClockData& line)
 // power-on, a brownout or a software restart the phase comes back once the
 // board's line is valid again (about 10 s of its epochs).
 //
-// The sender and the cue live at file scope: the clock-line drain hands the
-// sender each record (sdr_phase_sender.noteLine, which keeps only a valid
-// line), the flight-logic tick steps the cue beside the launch detector
-// (sdr_ignition_cue.step), and this reads both once a pass. Constant-
-// initialized (both are literal types), so nothing runs before the loop.
+// The senders, the cue and the rest detector live at file scope: the
+// clock-line drain hands the phase sender each record (sdr_phase_sender.
+// noteLine, which keeps only a valid line, the one every frame is stamped
+// off), the flight-logic tick steps the cue beside the launch detector
+// (sdr_ignition_cue.step), and these read them once a pass. Constant-
+// initialized (all literal types), so nothing runs before the loop.
 static sdr_phase::Sender      sdr_phase_sender;
 static sdr_phase::IgnitionCue sdr_ignition_cue;
+static sdr_aid_fc::Sender     sdr_aid_sender;
+static sdr_aid_fc::RestDetector sdr_rest;
+static int64_t                sdr_tx_last_us = INT64_MIN / 2;   // the last 4002 frame of either sender
 
 static void sdrPhaseStep()
 {
     if (sensor_collector_hw.gnssType() != GNSS_TYPE_SDR)
         return;
     const int64_t now_us = esp_timer_get_time();
+    if (now_us - sdr_tx_last_us < sdr_aid::AidSchedule::kSpacingUs)
+        return;   // the attitude's or a rest's frame went under 1 ms ago
     sdr_phase::Flight f;
     f.state = rocket_state;
     f.burnout = burnout_detected;
@@ -9645,6 +9666,77 @@ static void sdrPhaseStep()
     if (len == 0 || !sensor_collector_hw.sendGNSSAidFrame(frame, len))
         return;   // nothing due, or no room: the next pass gives it again
     sdr_phase_sender.sent(now_us);
+    sdr_tx_last_us = now_us;
+    sdrAidLogSent(frame, len, now_us);
+}
+
+// Right after each filter update (loop_fc, after ekf.update): its IMU input
+// to the rest detector (a still window's rest to the sender), and its state
+// to the attitude's sender. imu is the update's input: specific force (m/s^2)
+// and raw gyro (deg/s) in body FRD axes, its time_us the IMU sample's.
+static void sdrAidNoteUpdate(const EkfIMUData& imu)
+{
+    if (sensor_collector_hw.gnssType() != GNSS_TYPE_SDR)
+        return;
+    const int64_t t_us = sdr_aid_fc::widenUs(imu.time_us, esp_timer_get_time());
+    const double f[3] = {imu.acc_x, imu.acc_y, imu.acc_z};
+    const double g[3] = {imu.gyro_x, imu.gyro_y, imu.gyro_z};
+    if (sdr_rest.feed(t_us, f, g))
+        sdr_aid_sender.noteRest(sdr_rest.window());
+    float q[4];
+    float bias_rps[3];
+    double lla[3];
+    ekf.getQuaternion(q);          // body to NED, scalar first
+    ekf.getRotRateBias(bias_rps);  // rad/s, both filters
+    ekf.getPosEst(lla);            // lat, lon rad
+    sdr_aid_fc::FilterState s;
+    s.t_us = t_us;
+    for (int k = 0; k < 4; k++)
+        s.q_nb[k] = (double)q[k];
+    sdr_aid_fc::rateOf(g, bias_rps, s.w);
+    s.fix_place = !gnss_absent_flight;   // a GNSS-absent start's position is a pad-relative 0 N 0 E
+    s.lat = lla[0];
+    s.lon = lla[1];
+    sdr_aid_sender.noteFilter(s);
+}
+
+// A frame of the board's as the flight loop drains its stream: a valid fix
+// (4001 sub-type 2) is the attitude's place. Followed on the ground, held
+// through a flight (a few km of it turn the attitude under 0.05 deg, and the
+// board's fixes in a boost can be off) unless there is none yet.
+static void sdrAidNoteBoardFrame(const uint8_t* frame, size_t len)
+{
+    sdr_rtcm::TrFix fix;
+    if (sensor_collector_hw.gnssType() != GNSS_TYPE_SDR || !sdr_rtcm::decodeTrFix(frame, len, fix) || !fix.valid)
+        return;
+    const bool first = !sdr_aid_sender.haveBoardPlace();
+    if (rocket_state == INFLIGHT && !first)
+        return;
+    double lat = 0.0, lon = 0.0;
+    if (sdr_aid_sender.noteBoardFix(fix.pos) && first && sdr_aid_sender.boardPlace(lat, lon))
+        ESP_LOGI(TAG, "[SDR] the attitude sent to the gnss-sdr-dev board is placed at its own fix: "
+                      "%.5f, %.5f deg (%u satellites)",
+                 lat / sdr_aid_fc::kDegToRad, lon / sdr_aid_fc::kDegToRad, (unsigned)fix.nsat);
+}
+
+// The attitude when due (every 100 ms) or a rest waiting to go, one frame a
+// pass at most, after the phase's (sdrPhaseStep has the rules they share).
+// Through the hardware collector, as the phase: a sensor sim's or a rig
+// replay's go as test frames.
+static void sdrAidStep()
+{
+    if (sensor_collector_hw.gnssType() != GNSS_TYPE_SDR)
+        return;
+    const int64_t now_us = esp_timer_get_time();
+    if (now_us - sdr_tx_last_us < sdr_aid::AidSchedule::kSpacingUs)
+        return;   // the phase's frame went under 1 ms ago (this pass, mostly)
+    const bool sim = sim_flight::simulated(sim_flight_latched, sensor_collector.isSimActive());
+    uint8_t frame[sdr_aid::kMaxFrame];
+    const size_t len = sdr_aid_sender.frame(now_us, sdr_phase_sender, sim, frame, sizeof(frame));
+    if (len == 0 || !sensor_collector_hw.sendGNSSAidFrame(frame, len))
+        return;   // nothing due, or no room: the next pass gives it again
+    sdr_aid_sender.sent(now_us);
+    sdr_tx_last_us = now_us;
     sdrAidLogSent(frame, len, now_us);
 }
 #endif
@@ -9940,6 +10032,9 @@ static void loop_fc()
         for (int i = 0; i < 8 && sensor_collector.getGNSSRtcmFrame(rtcm_frame, sizeof(rtcm_frame),
                                                                    frame_len, frame_us); i++)
         {
+#if defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO && !(defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID)
+            sdrAidNoteBoardFrame(rtcm_frame, frame_len);   // the gnss-sdr-dev board's fix: the attitude's place
+#endif
             if (!gnss_log::keep(sbf_log_cut, rtcm_frame, frame_len, gnss_log_setting == GNSS_LOG_REDUCED))
             {
                 continue;
@@ -10002,6 +10097,7 @@ static void loop_fc()
         sdrAidBenchStep(sdr_line);
 #elif defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
         sdrPhaseStep();
+        sdrAidStep();
 #endif
     }
     TR_LP_LAP(SENSORS);
@@ -10801,6 +10897,11 @@ static void loop_fc()
                 ekf.setMagCalibration(magHardIronApplied(), sensor_collector.isSimActive());
 #endif
                 ekf.update(use_ahrs_acc, ekf_imu, ekf_gnss, ekf_mag);
+#if defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO && !(defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID)
+                // The gnss-sdr-dev board's attitude and rests: this update's
+                // input and state (sdrAidStep sends them)
+                sdrAidNoteUpdate(ekf_imu);
+#endif
 #if TR_RAW_GNSS_SHADOW
                 // #1600: the raw-GNSS shadow filter gets this very input, and
                 // once a second the flight filter's state (see its section).

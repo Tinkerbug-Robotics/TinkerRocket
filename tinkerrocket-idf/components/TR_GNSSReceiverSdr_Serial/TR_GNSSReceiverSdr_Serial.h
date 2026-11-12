@@ -22,7 +22,9 @@
 //   - sendAidFrame, the flight task's way to send the board TinkerRocket's
 //     message 4002 (SdrAid.h) without ever blocking. A flight image sends
 //     the real flight phase with it (sub-type 3: projects/flight_computer/
-//     main/sdr_phase_policy.h), which picks the board's boost loops; a
+//     main/sdr_phase_policy.h), which picks the board's boost loops, and
+//     its filter's attitude and its rests (sub-types 1 and 5:
+//     sdr_aid_policy.h, placed at the board's own fix, sub-type 2); a
 //     bench image (TR_BENCH_SDR_AID) sends the P1 script's frames instead,
 //     and prints a second console line: what went out, and what the board
 //     says it took (the aiding block of its epochs).
