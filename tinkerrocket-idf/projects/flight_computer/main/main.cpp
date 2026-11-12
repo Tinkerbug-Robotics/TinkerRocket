@@ -9594,13 +9594,13 @@ static void sdrAidBenchStep(const GnssClockData& line)
 // each field is what it is).
 //
 // Beside it (sdrAidStep, sdr_aid_policy.h has the why of each field): the
-// filter's attitude (sub-type 1) ten times a second, body to ECEF at the
+// filter's attitude (sub-type 1) ten times a second, this IMU to ECEF at the
 // board's own last valid fix (with the board on J1 the filter flies
 // GNSS-absent from a pad-relative 0 N 0 E, no place to turn an attitude into
 // ECEF at), and the rests (sub-type 5): the mean specific force over a still
 // second by this side's own test, at the start and every 5 s while it stays
-// still, which the board pairs with its own IMU to find how it is mounted in
-// this body. Not the navigation state (sub-type 2), nor the geometry
+// still, which the board pairs with its own IMU to find how it is mounted on
+// this flight computer. Both in this IMU's axes (frame 1), not the body's. Not the navigation state (sub-type 2), nor the geometry
 // (sub-type 4): no configuration of the board's mounting in the vehicle or
 // of its antenna's lever arm exists yet, which the geometry would carry. The
 // filter's inputs and state go to both right after each of its updates
@@ -9673,7 +9673,11 @@ static void sdrPhaseStep()
 // Right after each filter update (loop_fc, after ekf.update): its IMU input
 // to the rest detector (a still window's rest to the sender), and its state
 // to the attitude's sender. imu is the update's input: specific force (m/s^2)
-// and raw gyro (deg/s) in body FRD axes, its time_us the IMU sample's.
+// and raw gyro (deg/s) in body FRD axes, its time_us the IMU sample's. The
+// rests go in this IMU's own axes (sdr_aid_policy.h has why): each sample is
+// turned back through the mounting in use now (b2r_active_R, v_body = b2r
+// v_imu), so a mounting re-read mid-window cannot mix two frames' samples,
+// and the attitude's sender gets the mounting with the filter's state.
 static void sdrAidNoteUpdate(const EkfIMUData& imu)
 {
     if (sensor_collector_hw.gnssType() != GNSS_TYPE_SDR)
@@ -9681,7 +9685,13 @@ static void sdrAidNoteUpdate(const EkfIMUData& imu)
     const int64_t t_us = sdr_aid_fc::widenUs(imu.time_us, esp_timer_get_time());
     const double f[3] = {imu.acc_x, imu.acc_y, imu.acc_z};
     const double g[3] = {imu.gyro_x, imu.gyro_y, imu.gyro_z};
-    if (sdr_rest.feed(t_us, f, g))
+    double b2r[9];
+    for (int k = 0; k < 9; k++)
+        b2r[k] = (double)b2r_active_R[k];
+    double f_imu[3], g_imu[3];
+    sdr_aid_fc::imuOf(b2r, f, f_imu);
+    sdr_aid_fc::imuOf(b2r, g, g_imu);
+    if (sdr_rest.feed(t_us, f_imu, g_imu))
         sdr_aid_sender.noteRest(sdr_rest.window());
     float q[4];
     float bias_rps[3];
@@ -9697,6 +9707,8 @@ static void sdrAidNoteUpdate(const EkfIMUData& imu)
     s.fix_place = !gnss_absent_flight;   // a GNSS-absent start's position is a pad-relative 0 N 0 E
     s.lat = lla[0];
     s.lon = lla[1];
+    for (int k = 0; k < 9; k++)
+        s.b2r[k] = b2r[k];
     sdr_aid_sender.noteFilter(s);
 }
 

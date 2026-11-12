@@ -5,7 +5,8 @@
 // frames of TinkerRocket's message 4002 (in the range RTCM keeps for
 // manufacturers, not registered, as the board's own 4001 is), one sub-type
 // each:
-//   - 1, the attitude: body to ECEF and the body's rates, 10 a second;
+//   - 1, the attitude: body (or the flight computer's IMU) to ECEF and its
+//     rates, 10 a second;
 //   - 2, the navigation state: ECEF position and velocity, 5 a second;
 //   - 3, the flight phase and the tracking loops it asks for, on each change,
 //     then three times 100 ms apart, then every second;
@@ -14,7 +15,8 @@
 //   - 5, at rest: the flight computer's mean specific force over a still
 //     window (its own test), at the start and every 5 s while it stays
 //     still, which the board pairs with its own IMU's mean over the same
-//     window to find how it is mounted in the vehicle's body.
+//     window to find how it is mounted on the flight computer (in its IMU's
+//     axes since 2026-11-12: kFrameImu).
 // Each is stamped with the GPS instant its values hold, carries its own
 // sequence number, and says where its values come from (src, test): the P1
 // bench script or the vehicle's filter. Layouts: P1 of
@@ -82,6 +84,13 @@ enum : uint8_t
 };
 // The flight phase (sub-type 3).
 enum : uint8_t { kPhUnknown = 0, kPhPad = 1, kPhBoost = 2, kPhCoast = 3, kPhDescent = 4, kPhLanded = 5 };
+// The axes a vector or an attitude is in (an attitude's frame field, a
+// rest's frame bit): the flight computer's body (forward-right-down, its
+// mounting taken out), or its IMU's own axes (its board frame after the
+// chip's Z rotation, before the mounting). The board's mounting found from
+// the IMU's axes is fixed by the hardware (the board sits on J1), whatever
+// way the flight computer is mounted in the rocket or re-reads it on the pad.
+enum : uint8_t { kFrameBody = 0, kFrameImu = 1 };
 // The loops the flight computer asks the board for: none (the board's quiet
 // loops under its `rx aid fc`, the boot's; its GPS channels' own decision
 // only under `rx aid gps`), its quiet profile, its boost profile. The board
@@ -110,9 +119,9 @@ struct Attitude
     Header  h;
     bool    att_valid = false;
     bool    rate_valid = false;
-    uint8_t frame = 0;                     // 0: body to ECEF (1-3 reserved: the board refuses them)
-    double  q[4] = {1.0, 0.0, 0.0, 0.0};   // body (FRD) to ECEF, Hamilton, scalar first: v_ECEF = q v_body q*
-    double  w[3] = {};                     // the body's rate in body axes, the gyro less its bias, rad/s
+    uint8_t frame = kFrameBody;            // kFrame*: what q turns into ECEF and the rates' axes (2, 3 reserved)
+    double  q[4] = {1.0, 0.0, 0.0, 0.0};   // that frame to ECEF, Hamilton, scalar first: v_ECEF = q v q*
+    double  w[3] = {};                     // the rate in that frame's axes, the gyro less its bias, rad/s
     double  sig_tilt_deg = kUnknown;       // 1-sigmas (0.1 deg and 0.5 deg on the wire)
     double  sig_hdg_deg = kUnknown;
 };
@@ -152,14 +161,16 @@ struct Geometry
 };
 
 // At rest: the flight computer still over a whole window by its own test
-// (valid), its mean specific force in body (FRD) axes over it, and how much
-// that force moved about its mean. The stamp is the window's middle.
+// (valid), its mean specific force over it in the body's or its IMU's axes
+// (frame), and how much that force moved about its mean. The stamp is the
+// window's middle.
 struct Rest
 {
     Header   h;
     bool     valid = false;      // still over the whole window (sent 0 also with a NaN in f)
+    uint8_t  frame = kFrameBody; // kFrame*: f's axes (bit 97)
     uint16_t dur_ms = 0;         // the window's length, ms (4095 or more: that long)
-    double   f[3] = {};          // the mean specific force, body FRD, m/s^2 (1e-4 m/s^2 on the wire)
+    double   f[3] = {};          // the mean specific force, m/s^2 (1e-4 m/s^2 on the wire)
     double   sd_f = kUnknown;    // its samples' rms about the mean per axis, a 1-sigma, m/s^2 (1e-3 on
                                  // the wire, sent whether or not valid)
 };
@@ -198,9 +209,9 @@ Header gpsStamp(double gps_s);
 // projects/flight_computer/main/sdr_phase_policy.h), from the state
 // machine's flags and, before the launch flag, the IMU's own ignition cue;
 // its filter's attitude (sub-type 1, 10 a second) and its rests (sub-type 5)
-// beside it (sdr_aid_policy.h); all src kSrcOwn and not a test outside a
-// sim, so the board takes them with its boot defaults. Not the navigation
-// state nor the geometry.
+// beside it (sdr_aid_policy.h), both in its IMU's axes (kFrameImu); all src
+// kSrcOwn and not a test outside a sim, so the board takes them with its
+// boot defaults. Not the navigation state nor the geometry.
 // A real phase's hold, the script's (the P1 spec's section 2.5): repeated
 // every second, a request survives one lost frame, and one from a flight
 // computer gone silent lapses within 2.5 s.
