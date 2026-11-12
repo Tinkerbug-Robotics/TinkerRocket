@@ -462,8 +462,8 @@ inline GnssReceiverProfile sdrDevProfile()
     p.sig[GNSS_SYS_BDS].half_cycle_unflagged = false;
     for (int k = 0; k < kProfileSys; ++k)
     {
-        p.sig[k].cn0_min_pr = 0.0f;   // no floor until the bench says where one belongs (the board's own
-        p.sig[k].cn0_min_rr = 0.0f;   //   fix takes every channel it tracks)
+        p.sig[k].cn0_min_pr = 25.0f;   // the mosaic's floors (its v0): the rig's runs sat at 34-39 dB-Hz,
+        p.sig[k].cn0_min_rr = 25.0f;   //   the bench's 20-52
     }
 
     // timing: each observable carried to the whole millisecond along its own

@@ -455,13 +455,15 @@ TEST(ReceiverProfile, TheSdrDevV0Profile)
     EXPECT_FALSE(p.measured);
     EXPECT_EQ(gnss_raw::profileFor(gnss_raw::kRxSdrDev).type, gnss_raw::kRxSdrDev);
     // BeiDou's B1C pilot on L1's carrier, every system on L1; the pilots flag
-    // their half cycles; no C/N0 floor yet
+    // their half cycles; the mosaic's 25 dB-Hz floors (review, 2026-11-12)
     for (int k = 0; k < gnss_raw::kProfileSys; ++k)
     {
         SCOPED_TRACE(testing::Message() << "sys " << k);
         EXPECT_EQ(p.sig[k].carrier_hz, GNSS_FREQ_L1_HZ);
-        EXPECT_EQ(p.sig[k].cn0_min_pr, 0.0f);
-        EXPECT_EQ(p.sig[k].cn0_min_rr, 0.0f);
+        EXPECT_EQ(p.sig[k].cn0_min_pr, 25.0f);
+        EXPECT_EQ(p.sig[k].cn0_min_rr, 25.0f);
+        EXPECT_EQ(p.sig[k].cn0_min_pr, m.sig[k].cn0_min_pr);
+        EXPECT_EQ(p.sig[k].cn0_min_rr, m.sig[k].cn0_min_rr);
     }
     EXPECT_FALSE(p.sig[GNSS_SYS_GAL].half_cycle_unflagged);
     EXPECT_FALSE(p.sig[GNSS_SYS_BDS].half_cycle_unflagged);
@@ -833,6 +835,7 @@ TEST(ReceiverProfile, TheMosaicFlightSafeguards)
     EXPECT_EQ(c.dv_epoch_k, 4.0);
     EXPECT_EQ(c.dv_latch_k, 5.0);
     EXPECT_FALSE(c.dv_ground);
+    EXPECT_FALSE(c.dv_imu_free_off);   // the gnss-sdr-dev image's own (applySdrFlightSafeguards)
     EXPECT_EQ(c.dv_sat_k, 5.0);
     EXPECT_EQ(c.dv_floor_mps, 0.03);
     EXPECT_EQ(c.dv_sigma_per_g, 0.1);
@@ -1248,6 +1251,7 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_EQ(c.dv_window_s, 0.0);
     EXPECT_FALSE(c.dv_deweight);
     EXPECT_FALSE(c.dv_ground);
+    EXPECT_FALSE(c.dv_imu_free_off);
     EXPECT_EQ(c.dv_noise_tau_s, 0.0);
     EXPECT_EQ(c.dv_hold_all_frac, 0.5);
     EXPECT_EQ(c.dv_latch_k, 0.0);
