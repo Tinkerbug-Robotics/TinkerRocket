@@ -2311,6 +2311,30 @@ target_include_directories(test_sdr_aid PRIVATE
 target_link_libraries(test_sdr_aid GTest::gtest_main)
 gtest_discover_tests(test_sdr_aid)
 
+# ---------- test_sdr_align ----------
+# The gnss-sdr-dev board IMU's mounting between the apps and the board: its
+# 4001 sub-type 5 report (SdrRtcm.cpp decodeTrAlign) and the 4002 sub-type 6
+# command (SdrAid.cpp), against the alignment protocol's golden frames, and
+# the relay between them (flight_computer/main/sdr_align_policy.h, pure): the
+# command until the board echoes it, its own board id, the status the apps
+# get in this IMU's frame.
+add_executable(test_sdr_align test_sdr_align.cpp
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrAid.cpp
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrRtcm.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/GnssTimeSync.cpp
+)
+target_include_directories(test_sdr_align PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+target_link_libraries(test_sdr_align GTest::gtest_main)
+gtest_discover_tests(test_sdr_align)
+
 # ---------- wire fixture corpus (docs/plans/android-port.md §2.1) ----------
 # Golden-vector generation from the REAL packed structs: wire_fixture_gen
 # writes tests_cpp/fixtures/wire/ (committed), test_wire_fixture_freshness

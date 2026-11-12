@@ -16,7 +16,9 @@
 //     window (its own test), at the start and every 5 s while it stays
 //     still, which the board pairs with its own IMU's mean over the same
 //     window to find how it is mounted on the flight computer (in its IMU's
-//     axes since 2026-11-12: kFrameImu).
+//     axes since 2026-11-12: kFrameImu);
+//   - 6, a command about that mounting (save, clear, restart, report), the
+//     apps' through the out computer, again until the board echoes it.
 // Each is stamped with the GPS instant its values hold, carries its own
 // sequence number, and says where its values come from (src, test): the P1
 // bench script or the vehicle's filter. Layouts: P1 of
@@ -62,16 +64,19 @@ static constexpr uint8_t  kNavState      = 2;
 static constexpr uint8_t  kPhase         = 3;
 static constexpr uint8_t  kGeometry      = 4;
 static constexpr uint8_t  kRest          = 5;
+static constexpr uint8_t  kCommand       = 6;
 static constexpr size_t   kAttitudeBytes = 30;     // each sub-type's message (its frame: 6 more)
 static constexpr size_t   kNavStateBytes = 46;
 static constexpr size_t   kPhaseBytes    = 16;
 static constexpr size_t   kGeometryBytes = 28;
 static constexpr size_t   kRestBytes     = 23;
+static constexpr size_t   kCommandBytes  = 14;
 static constexpr size_t   kAttitudeFrame = 3 + kAttitudeBytes + 3;
 static constexpr size_t   kNavStateFrame = 3 + kNavStateBytes + 3;
 static constexpr size_t   kPhaseFrame    = 3 + kPhaseBytes + 3;
 static constexpr size_t   kGeometryFrame = 3 + kGeometryBytes + 3;
 static constexpr size_t   kRestFrame     = 3 + kRestBytes + 3;
+static constexpr size_t   kCommandFrame  = 3 + kCommandBytes + 3;
 static constexpr size_t   kMaxFrame      = 3 + 64 + 3;   // no 4002 message is longer than 64 bytes
 
 // Where the values come from (the header's src).
@@ -175,13 +180,33 @@ struct Rest
                                  // the wire, sent whether or not valid)
 };
 
-// Each writes its whole frame to out (36, 52, 22, 34 or 29 bytes) and
+// A command to the board about its IMU's mounting and calibration (the
+// apps', through the out computer: BLE 83), acted on whatever its stamp (one
+// sent with no clock line goes as week 0, tow 0, tq 0). op: kOp* below; 0 and
+// 5-15 reserved, which the board counts and never acts on. id: the apps'
+// (1-255); the board acts once per id, echoes the last in its 4001 sub-type
+// 4, and only acknowledges a repeat. The board refuses all but kOpReport
+// from a script or test frame and while the phase it holds is a boost, a
+// coast or a descent.
+static constexpr uint8_t kOpSave    = 1;   // the mounting and calibration in use, to its NVS
+static constexpr uint8_t kOpClear   = 2;   // forget the one in use and the saved one
+static constexpr uint8_t kOpRestart = 3;   // forget the one in use, keep the saved one: a new procedure
+static constexpr uint8_t kOpReport  = 4;   // its 4001 sub-type 5 now
+struct Command
+{
+    Header  h;
+    uint8_t op = 0;
+    uint8_t id = 0;
+};
+
+// Each writes its whole frame to out (36, 52, 22, 34, 29 or 20 bytes) and
 // returns that length; 0 when cap is shorter.
 size_t encode(const Attitude& a, uint8_t* out, size_t cap);
 size_t encode(const NavState& a, uint8_t* out, size_t cap);
 size_t encode(const PhaseMsg& a, uint8_t* out, size_t cap);
 size_t encode(const Geometry& a, uint8_t* out, size_t cap);
 size_t encode(const Rest& a, uint8_t* out, size_t cap);
+size_t encode(const Command& a, uint8_t* out, size_t cap);
 
 // 4002's sub-type of a whole frame (the 4 bits after the number); 0 for any
 // other message.
@@ -195,6 +220,7 @@ bool decode(const uint8_t* frame, size_t len, NavState& out);
 bool decode(const uint8_t* frame, size_t len, PhaseMsg& out);
 bool decode(const uint8_t* frame, size_t len, Geometry& out);
 bool decode(const uint8_t* frame, size_t len, Rest& out);
+bool decode(const uint8_t* frame, size_t len, Command& out);
 
 // The header of a GPS instant: its time of week to the nearest ms and the
 // rest in ns, a stamp that rounds to the week's end the next week's 0 (the

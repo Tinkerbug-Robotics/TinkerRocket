@@ -141,6 +141,53 @@ bool decodeTrIono(const uint8_t* frame, size_t len, TrIono& out)
     return out.src != 0;
 }
 
+bool decodeTrAlign(const uint8_t* frame, size_t len, TrAlign& out)
+{
+    // number 12, sub-type 4, seq 8, gen 8, imu 2, time 1, have 2, from 2,
+    // saved 2, autosave 1, frame 1, poses 4, calibrated axes 3, the last
+    // rest 3, rests 8, paired 8, the command's id 8, op 3, result 3, spread
+    // 8, residual 8, fit 8 (107 bits), the mounting 4 x 16, scales 3 x 16,
+    // biases 3 x 16, moved 8 (275), then each pose: its direction 3 x 8 and
+    // its pairs 8
+    const uint8_t* m = trPayload(frame, len, kTrAlign, 275);
+    if (m == nullptr) return false;
+    const uint8_t n_pose = static_cast<uint8_t>(bits(m, 43, 4));
+    if (n_pose > TrAlign::kPoses || (len - 6) * 8 < 275 + 32 * static_cast<size_t>(n_pose)) return false;
+    TrAlign a;
+    a.seq       = static_cast<uint8_t>(bits(m, 16, 8));
+    a.gen       = static_cast<uint8_t>(bits(m, 24, 8));
+    a.imu       = static_cast<uint8_t>(bits(m, 32, 2));
+    a.time      = bits(m, 34, 1) != 0;
+    a.have      = static_cast<uint8_t>(bits(m, 35, 2));
+    a.from      = static_cast<uint8_t>(bits(m, 37, 2));
+    a.saved     = static_cast<uint8_t>(bits(m, 39, 2));
+    a.autosave  = bits(m, 41, 1) != 0;
+    a.frame     = static_cast<uint8_t>(bits(m, 42, 1));
+    a.n_pose    = n_pose;
+    a.cal_axes  = static_cast<uint8_t>(bits(m, 47, 3));
+    a.last_rest = static_cast<uint8_t>(bits(m, 50, 3));
+    a.n_rest    = static_cast<uint8_t>(bits(m, 53, 8));
+    a.n_pair    = static_cast<uint8_t>(bits(m, 61, 8));
+    a.cmd_id    = static_cast<uint8_t>(bits(m, 69, 8));
+    a.cmd_op    = static_cast<uint8_t>(bits(m, 77, 3));
+    a.cmd_res   = static_cast<uint8_t>(bits(m, 80, 3));
+    a.spread_deg = static_cast<double>(bits(m, 83, 8));
+    a.resid_deg  = static_cast<double>(bits(m, 91, 8)) * 0.02;
+    a.cal_rms    = static_cast<double>(bits(m, 99, 8)) * 1e-3;
+    for (int k = 0; k < 4; k++) a.q[k] = static_cast<double>(sbits(m, 107 + 16 * k, 16)) / 16384.0;
+    for (int k = 0; k < 3; k++) a.scale[k] = 1.0 + static_cast<double>(sbits(m, 171 + 16 * k, 16)) * 1e-5;
+    for (int k = 0; k < 3; k++) a.bias[k] = static_cast<double>(sbits(m, 219 + 16 * k, 16)) * 1e-4;
+    a.moved_deg = static_cast<double>(bits(m, 267, 8)) * 0.02;
+    for (int i = 0; i < n_pose; i++)
+    {
+        const size_t at = 275 + 32 * static_cast<size_t>(i);
+        for (int k = 0; k < 3; k++) a.pose[i].dir[k] = static_cast<double>(sbits(m, at + 8 * k, 8)) / 127.0;
+        a.pose[i].pairs = static_cast<uint8_t>(bits(m, at + 24, 8));
+    }
+    out = a;
+    return true;
+}
+
 // ── Rtcm3Framer ─────────────────────────────────────────────────────────
 
 void Rtcm3Framer::feed(const uint8_t* data, size_t n, Sink& sink)
