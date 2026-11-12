@@ -4370,8 +4370,8 @@ static void rawShadowTask(void*)
                               "sats, Doppler means of %lu epochs (%lu of %lu Dopplers, %lu epochs as they came) | "
                               "epochs %lu seen: %lu untimed, %lu handed over by the board's driver (%lu queue drops), "
                               "%lu sats capped out | tracked %d, %d without an ephemeris | eph %d sats, %u of %u store "
-                              "entries, %lu queued, %lu queue drops | imu ring drops %lu, gaps bridged %lu | iono none "
-                              "(the stream carries none) | pad datum %s, %lu fixes (%lu from the board) | GNSS log %s | "
+                              "entries, %lu queued, %lu queue drops | imu ring drops %lu, gaps bridged %lu | iono %s (%u sets) "
+                              "| pad datum %s, %lu fixes (%lu from the board) | GNSS log %s | "
                               "in flight: restarts %u of %u, raw votes %s, transonic lockout %s | dv check: %lu epochs "
                               "checked%s, %lu failed, latches %lu let go %lu, %lu Dopplers held | heading share %.2f | "
                               "rotation allowance max %.2f m/s | flight task stack free %u B, GNSS poll task %u B | held out "
@@ -4385,7 +4385,9 @@ static void rawShadowTask(void*)
                          mst.eph_sats, (unsigned)(raw_meas ? raw_meas->ephemerides().size() : 0),
                          (unsigned)gnss_raw::EphemerisStore::kCapacity, (unsigned long)rs.eph_queued,
                          (unsigned long)rs.eph_dropped, (unsigned long)raw_shadow_link.imu.dropped(),
-                         (unsigned long)st.gaps_bridged, ref_from_nav ? "the raw filter's" : "the board's",
+                         (unsigned long)st.gaps_bridged,
+                         !raw_iono.have ? "none" : (raw_iono.from_rx ? "the board's" : "the app's"),
+                         (unsigned)raw_iono.sets, ref_from_nav ? "the raw filter's" : "the board's",
                          (unsigned long)ref_pos_count, (unsigned long)rs.fixes,
                          gnss_log_setting == GNSS_LOG_REDUCED ? "REDUCED" : "DETAILED",
                          (unsigned)raw_nav_restarts, (unsigned)RawNavPolicy::kMaxRestarts,
