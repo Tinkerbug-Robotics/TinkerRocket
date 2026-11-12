@@ -39797,7 +39797,7 @@
 			(size 0.5 0.25)
 			(layers "F.Cu" "F.Mask" "F.Paste")
 			(roundrect_rratio 0.25)
-			(net "V_BUCK")
+			(net "Net-(D10-K)")
 			(pinfunction "MODE_2")
 			(pintype "input")
 			(uuid "ab14df8b-1962-4a85-86c9-3eaaba3bd9da")
@@ -39807,7 +39807,7 @@
 			(size 0.5 0.25)
 			(layers "F.Cu" "F.Mask" "F.Paste")
 			(roundrect_rratio 0.25)
-			(net "V_BUCK")
+			(net "Net-(D10-K)")
 			(pinfunction "EN_3")
 			(pintype "input")
 			(uuid "09df875d-f2d2-47c6-98f8-1197352eb2f8")
@@ -52149,7 +52149,7 @@
 			(size 0.54 0.64)
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(roundrect_rratio 0.25)
-			(net "V_BUCK")
+			(net "+3V3")
 			(pintype "passive")
 			(uuid "8899d583-9c22-4d16-8916-d9fe3a87e501")
 		)
@@ -72749,6 +72749,267 @@
 		)
 		(embedded_fonts no)
 		(model "${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0402_1005Metric.step"
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz 0 0 0)
+			)
+		)
+	)
+	(footprint "Package_TO_SOT_SMD:SOT-883"
+		(layer "F.Cu")
+		(uuid "e684d32a-1c4a-45cc-bf89-175991188a15")
+		(at 99.735 116.295 -90)
+		(descr "SOT-883, https://assets.nexperia.com/documents/outline-drawing/SOT883.pdf")
+		(tags "SOT-883")
+		(property "Reference" "D10"
+			(at 0 -1.905 90)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "8de02fac-c20b-4e87-a056-8a8a550526fa")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Value" "BAV170M"
+			(at 0 1.905 90)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "54419c1a-0215-4edf-83f1-1f0b98d57e17")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 270)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "232263b7-2085-44c1-bfe7-b5a2bb8d198d")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Description" "U47 EN/MODE OR-gate: V_BUCK enables it, +3V3 keeps it enabled through the hold-up"
+			(at 0 0 270)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "2af006bc-405e-40ef-8e33-cbc385e6ddda")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "MPN" "BAV170M,315"
+			(at 0 0 90)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "23133fd2-bb5f-4940-b7eb-1249d1162f03")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Mfr" "Nexperia"
+			(at 0 0 90)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "0e60d601-b3db-47a7-829a-a56c1ba5d61b")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(path "/4387b4db-c729-4e1d-84b2-dffd80f2e21f/238a5d11-46f4-42a8-8f5b-3ee8d1cdb351")
+		(sheetname "/Power/")
+		(sheetfile "power.kicad_sch")
+		(attr smd)
+		(duplicate_pad_numbers_are_jumpers no)
+		(fp_line
+			(start -0.81 0.61)
+			(end -0.81 -0.61)
+			(stroke
+				(width 0.12)
+				(type solid)
+			)
+			(layer "F.SilkS")
+			(uuid "344678af-5af8-4750-a749-839ac385e1e4")
+		)
+		(fp_line
+			(start 0.35 0.61)
+			(end -0.81 0.61)
+			(stroke
+				(width 0.12)
+				(type solid)
+			)
+			(layer "F.SilkS")
+			(uuid "e3051118-7409-4005-bdea-f238055d4c98")
+		)
+		(fp_line
+			(start -0.81 -0.61)
+			(end 0.35 -0.61)
+			(stroke
+				(width 0.12)
+				(type solid)
+			)
+			(layer "F.SilkS")
+			(uuid "9cc4b896-d770-475d-8d07-9079abffe612")
+		)
+		(fp_line
+			(start -0.7 0.5)
+			(end -0.7 -0.5)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "5ca9de01-32a3-4773-9eb7-835de6135fa7")
+		)
+		(fp_line
+			(start 0.7 0.5)
+			(end -0.7 0.5)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "22f0a824-ab1c-4c75-aea8-9abb41077f2e")
+		)
+		(fp_line
+			(start -0.7 -0.5)
+			(end 0.7 -0.5)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "b8770577-07c8-42e6-babc-1d52aed91549")
+		)
+		(fp_line
+			(start 0.7 -0.5)
+			(end 0.7 0.5)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "885d144d-dd84-4b8f-8a2f-91a67e1d496c")
+		)
+		(fp_line
+			(start -0.51 0.31)
+			(end -0.51 -0.11)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "baf741cd-1f63-4b5b-b420-0038cf6ea91a")
+		)
+		(fp_line
+			(start 0.51 0.31)
+			(end -0.51 0.31)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "a5558343-cf4a-4b7b-acc0-3f229cad345d")
+		)
+		(fp_line
+			(start -0.31 -0.31)
+			(end -0.51 -0.11)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "a311b2b5-2e2c-4f44-914b-53d404f94ca4")
+		)
+		(fp_line
+			(start -0.31 -0.31)
+			(end 0.51 -0.31)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "1cec9364-f3b8-451c-9c6b-c8da97492e76")
+		)
+		(fp_line
+			(start 0.51 -0.31)
+			(end 0.51 0.31)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "2efef9b2-bd65-4d97-afbf-e3738064209c")
+		)
+		(fp_text user "${REFERENCE}"
+			(at 0 0 90)
+			(layer "F.Fab")
+			(uuid "6790cf0d-94d7-4d31-9b6d-b011bede3317")
+			(effects
+				(font
+					(size 0.2 0.2)
+					(thickness 0.03)
+				)
+			)
+		)
+		(pad "1" smd roundrect
+			(at -0.35 -0.225 270)
+			(size 0.4 0.25)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(roundrect_rratio 0.2)
+			(net "V_BUCK")
+			(pinfunction "A_1")
+			(pintype "passive")
+			(uuid "8581bf1c-1e98-49d5-a370-f346e5630a0b")
+		)
+		(pad "2" smd roundrect
+			(at -0.35 0.225 270)
+			(size 0.4 0.25)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(roundrect_rratio 0.2)
+			(net "+3V3")
+			(pinfunction "A_2")
+			(pintype "passive")
+			(uuid "c045f5fc-fa79-46e6-83aa-3d4b932d4a3b")
+		)
+		(pad "3" smd roundrect
+			(at 0.35 0 270)
+			(size 0.4 0.7)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(roundrect_rratio 0.125)
+			(net "Net-(D10-K)")
+			(pinfunction "K_3")
+			(pintype "passive")
+			(uuid "906fb324-1754-4e2b-a8ca-12f784bd7fd4")
+		)
+		(embedded_fonts no)
+		(model "${KIPRJMOD}/../3dmodels/SOT-883.step"
 			(offset
 				(xyz 0 0 0)
 			)
