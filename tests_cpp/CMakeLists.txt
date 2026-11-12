@@ -1376,6 +1376,20 @@ target_include_directories(test_cam_draw_policy PRIVATE
 target_link_libraries(test_cam_draw_policy GTest::gtest_main)
 gtest_discover_tests(test_cam_draw_policy)
 
+# ---------- test_scap_sense_policy (#1409) ----------
+# The V10's hold-up cap sense on the flight computer (P4 GPIO17): eight
+# calibrated pad samples, averaged, times the R125/R126 divider, as the
+# FcStatusData.scap_mv field. Built against the V10's own config.h.
+add_executable(test_scap_sense_policy test_scap_sense_policy.cpp)
+target_include_directories(test_scap_sense_policy PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+target_compile_definitions(test_scap_sense_policy PRIVATE TR_BOARD_V10=1 TR_MAG_DRIVER_QMC5883P=1)
+target_link_libraries(test_scap_sense_policy GTest::gtest_main)
+gtest_discover_tests(test_scap_sense_policy)
+
 # ---------- test_supply_status_policy (#1593) ----------
 # The Tinker-Mantis V10's PG_RAIL and VBUCK_OK, as the out computer reports
 # them: the boot level counts nothing, each change is one fall or rise, and a

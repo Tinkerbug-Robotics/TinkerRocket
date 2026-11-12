@@ -196,6 +196,15 @@ static_assert(board_pyro_check::gangPinFree(board_pins::PYRO_ARM_GANG_PINS[0]) &
               "a PYRO_ARM_GANG_PINS entry shares a pad with another pyro line");
 static_assert(board_pins::PYRO_CONT_CLOSED_LEVEL == 0 || board_pins::PYRO_CONT_CLOSED_LEVEL == 1,
               "PYRO_CONT_CLOSED_LEVEL is a GPIO level: 0 or 1");
+// #1409: wherever this processor has the hold-up sense it is an ESP32-P4 ADC1
+// pad (GPIO16-23, ADC1_CH0-7; soc/esp32p4 adc_channel.h). ADC2 shares its
+// pads with the sensor SPI bus and the servo block, and a wrong pad reads a
+// floating input as a verdict. The mini (an S3) has no sense here.
+static_assert(board_pins::SCAP_ADC_PIN < 0 ||
+              (!TR_BOARD_M1 && board_pins::SCAP_ADC_PIN >= 16 && board_pins::SCAP_ADC_PIN <= 23),
+              "SCAP_ADC_PIN must be an ESP32-P4 ADC1 pad (GPIO16-23) or -1 (#1409)");
+static_assert(board_pins::SCAP_ADC_PIN < 0 || board_pins::SCAP_DIVIDER_RATIO >= 1.0f,
+              "SCAP_DIVIDER_RATIO is V_SCAP over the pad voltage: at least 1 (#1409)");
 
 #if TR_BOARD_V10
 // ======================================================================
@@ -250,6 +259,13 @@ static_assert(board_v10_check::notScapSense(board_pins::PYRO_ARM_PIN) &&
 static_assert(board_pins::PWR_HOLD_PIN >= 0 && board_pins::PWR_HOLD_PIN <= 15,
               "board_v10.h: PWR_HOLD_PIN must be an LP IO pad (GPIO0-15) or the in-flight "
               "rail latch does not survive a reset — see #848/#825");
+// #1409: V_SCAP_ADC is read here (FcStatusData.scap_mv carries it to the out
+// computer, whose "hu" verdict is the only thing on the board that reports a
+// hold-up that silently is not there). -1 would compile the read out and the
+// app would show no supercap at all.
+static_assert(board_pins::SCAP_ADC_PIN == 17 && board_pins::SCAP_DIVIDER_RATIO == 2.0f,
+              "board_v10.h: V_SCAP_ADC is P4 GPIO17 behind R125/R126 (100 k / 100 k) — "
+              "re-derive it from the netlist before changing it (#1409)");
 // U3 is a QST QMC5883P, poll-only. Driving it as an IIS2MDC (the default seam)
 // finds no chip at 0x1E and the board flies with no magnetometer.
 static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
@@ -560,6 +576,11 @@ struct config : board_pins
     // 500 B/s and the guided-coast I2S budget had 390 B/s of headroom.
     static constexpr uint32_t FC_STATUS_RATE_HZ  = 5;
     static constexpr uint32_t FC_STATUS_PERIOD_US = 1000000UL / FC_STATUS_RATE_HZ;
+    // #1409: how often the V10's hold-up cap sense (SCAP_ADC_PIN) is read. Each
+    // FC_STATUS_MSG carries the latest reading; the out computer judges it once
+    // a second, as the mini's does its own (#1166). The cap moves ~50 mV/s at
+    // most while charging (100 mA into 2 F), so a second is plenty.
+    static constexpr uint32_t SCAP_SAMPLE_PERIOD_MS = 1000;
     // Guidance telemetry (GUIDANCE_TELEM_MSG) log rate while guidance is active.
     // Emitted from inside the NonSensor TX block, so it must divide
     // NON_SENSOR_UPDATE_RATE; 250 = every second NonSensor frame.

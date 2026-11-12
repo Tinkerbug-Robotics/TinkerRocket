@@ -228,6 +228,11 @@ struct board_pins
     static constexpr int RED_LED_PIN = 43;    // IND_1 (pad 49, U0TXD) -> D10 red
     static constexpr int BLUE_LED_PIN = 45;    // IND_2 -> D11 blue (VDD_SPI strap)
 
+    // The mini's hold-up sense (V_SCAP_ADC) is the OUT computer's own ADC input
+    // (#1166), not this processor's.
+    static constexpr int   SCAP_ADC_PIN       = -1;
+    static constexpr float SCAP_DIVIDER_RATIO = 1.0f;   // unused with no pin
+
     // --- I2C master to the OutComputer ---
     static constexpr int ESP_SDA_PIN = 36;     // ESP_SDA (OC GPIO5)
     static constexpr int ESP_SCL_PIN = 37;     // ESP_SCL (OC GPIO6)
