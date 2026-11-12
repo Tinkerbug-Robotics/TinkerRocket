@@ -513,7 +513,8 @@ void SensorCollectorSim::replayNoteEpoch(const gnss_raw::TimedRawEpoch& e)
     const double t = replay_clock_.lastFixT();
     portEXIT_CRITICAL(&replay_mux_);
     if (after != before)
-        ESP_LOGW("SIM", "RIG REPLAY clock: %s (the board's timed epoch at t %+.2f s)", clockName(after), t);
+        // worded as the mosaic's, which tools/rig_replay/score_v9.py reads (RX_CLOCK)
+        ESP_LOGW("SIM", "RIG REPLAY clock: %s (the receiver's timed epoch at t %+.2f s)", clockName(after), t);
     if (check_after != check_before && check_after == sim_replay::ReplayClock::kUnchecked)
         ESP_LOGW("SIM", "RIG REPLAY clock: the freeze stands as the board's clock line placed it (no 1PPS on the "
                         "board to check it against)");
