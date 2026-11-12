@@ -61,11 +61,16 @@
 // When: the attitude every 100 ms (sdr_aid::AidSchedule with the attitude
 // alone: each due time steps by the period, one more than a period late
 // restarts from now); a rest as soon as its window closes, after any
-// attitude due on that pass. Nothing goes until the board's clock line is
-// valid, the phase sender's held line (sdr_phase::Sender::lineUsable: the
+// attitude due on that pass. The attitude goes only on the board's clock
+// line, the phase sender's held line (sdr_phase::Sender::lineUsable: the
 // last valid one, for up to 600 s after it last moved), and each stamp's tq
-// is that line's (5, 6 once it has not moved for 100 s). A rest that found no
-// valid line or no room in the UART is given again on the next pass; one
+// is that line's (5, 6 once it has not moved for 100 s). A rest goes stamped
+// off that line when it serves, and with none (indoors, before the board's
+// first fix) at once with no stamp: tq 0, week 0, tow 0, which the board
+// places at the frame's arrival less half its length (it calibrates its IMU
+// on the bench with no sky). Such a rest goes within kRestNoLineUs of its
+// window's end or not at all, since its arrival is its time. A rest that
+// found no room in the UART is given again on the next pass; a stamped one
 // more than kRestDropUs past its window's end is dropped. src kSrcOwn (the
 // filter runs on the vehicle's own IMU, barometer and magnetometer), test
 // while a sim or a rig replay flies, as the phase.
@@ -354,6 +359,7 @@ class Sender
 public:
     static constexpr int64_t kAttFreshUs = 100000;    // a filter state older than this at a pass: stopped
     static constexpr int64_t kRestDropUs = 3000000;   // a rest unsent this long after its window's end: dropped
+    static constexpr int64_t kRestNoLineUs = 100000;  // one with no line to stamp it, this long: dropped
 
     // A valid fix of the board's (its antenna, ECEF, m): the place from now
     // on. False (and nothing kept) for a position off the Earth.
@@ -435,13 +441,27 @@ public:
     size_t frame(int64_t now_us, const sdr_phase::Sender& line, bool test, uint8_t* out, size_t cap)
     {
         last_sub_ = 0;
-        if (rest_pending_ && now_us - rest_.t1_us > kRestDropUs)
+        const bool lined = line.lineUsable(now_us);
+        if (rest_pending_ && now_us - rest_.t1_us > (lined ? kRestDropUs : kRestNoLineUs))
         {
             rest_pending_ = false;
             rests_dropped_++;
         }
-        if (!line.lineUsable(now_us))
-            return 0;
+        if (!lined)
+        {
+            if (!rest_pending_)
+                return 0;
+            // No line: the rest at once, unstamped (tq 0), placed by the board
+            // at its arrival
+            sdr_aid::Rest r = restOf(rest_);
+            r.frame = sdr_aid::kFrameImu;
+            r.h.src = sdr_aid::kSrcOwn;
+            r.h.test = test;
+            r.h.tq = 0;
+            r.h.seq = rest_seq_;
+            last_sub_ = sdr_aid::kRest;
+            return sdr_aid::encode(r, out, cap);
+        }
         const uint8_t tq = line.lineTq(now_us);
         double gps_s = 0.0;
         if (sched_.due(now_us, 0) == sdr_aid::kAttitude)

@@ -9789,7 +9789,8 @@ static void sdrAidBenchStep(const GnssClockData& line)
 // dry-fire's latch), so the board takes the real ones with its boot
 // defaults. Logged beside the board's frames (GNSS_RTCM_MSG). Nothing goes
 // out unless the receiver on J1 is the board (a u-blox or a mosaic-G5 there
-// never gets a byte: the driver refuses too) and its line has been valid,
+// never gets a byte: the driver refuses too), and nothing but the rests
+// (unstamped: sdr_aid_policy.h) until its line has been valid,
 // from about 10 s after the board's first fix; the last valid line serves for
 // up to 600 s after it last moved (sdr_phase::kLineHoldUs: the board's epochs
 // can stop in a boost). Never blocks and never allocates: the driver checks
