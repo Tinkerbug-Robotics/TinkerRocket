@@ -8534,16 +8534,6 @@
 	)
 	(wire
 		(pts
-			(xy 233.045 36.195) (xy 233.045 37.465)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "8be26f87-412a-40e2-b2c3-a9b197e1418c")
-	)
-	(wire
-		(pts
 			(xy 51.435 152.4) (xy 64.77 152.4)
 		)
 		(stroke
@@ -8664,7 +8654,7 @@
 	)
 	(wire
 		(pts
-			(xy 243.205 36.195) (xy 233.045 36.195)
+			(xy 243.205 36.195) (xy 238.125 36.195)
 		)
 		(stroke
 			(width 0)
@@ -23138,5 +23128,331 @@
 				)
 			)
 		)
+	)
+	(symbol
+		(lib_id "Device:D_Schottky")
+		(at 233.045 32.385 90)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "b6152a9f-e519-48bd-88c0-019f839010b5")
+		(property "Reference" "D13"
+			(at 234.95 31.75 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "BAT54XV2T1G"
+			(at 234.95 33.655 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Footprints:SOD-523_0P9X1P3_ONS"
+			(at 233.045 32.385 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 233.045 32.385 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "U47 EN/MODE OR-gate, V_BUCK side: enables U47 at power-up"
+			(at 233.045 32.385 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "BAT54XV2T1G"
+			(at 233.045 32.385 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "onsemi"
+			(at 233.045 32.385 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "fca72bed-8db4-405c-89ed-18af4932c795")
+		)
+		(pin "2"
+			(uuid "e4ac866c-27cd-4fe4-9ba0-a034d1a09578")
+		)
+		(instances
+			(project "tinker-beetle"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
+					(reference "D13")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:D_Schottky")
+		(at 238.125 32.385 90)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "f4213632-84e9-4355-907c-2ac82e504595")
+		(property "Reference" "D14"
+			(at 240.03 31.75 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "BAT54XV2T1G"
+			(at 240.03 33.655 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Footprints:SOD-523_0P9X1P3_ONS"
+			(at 238.125 32.385 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 238.125 32.385 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "U47 EN/MODE OR-gate, +3V3 side: keeps U47 enabled through the hold-up"
+			(at 238.125 32.385 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "BAT54XV2T1G"
+			(at 238.125 32.385 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "onsemi"
+			(at 238.125 32.385 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "3a5fcf88-dd77-4281-8f8b-e3d17687769b")
+		)
+		(pin "2"
+			(uuid "825a1b2f-b421-469f-8be4-0f1b4bbd206b")
+		)
+		(instances
+			(project "tinker-beetle"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
+					(reference "D14")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:+3V3")
+		(at 238.125 28.575 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "8a35a098-3d3a-4e3f-ac76-5e2eb9b41bf2")
+		(property "Reference" "#PWR9117"
+			(at 238.125 32.385 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "+3V3"
+			(at 238.125 24.13 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 238.125 28.575 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 238.125 28.575 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"+3V3\""
+			(at 238.125 28.575 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "303f2178-b809-491b-b6a3-0d22ba7267a6")
+		)
+		(instances
+			(project "tinker-beetle"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
+					(reference "#PWR9117")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(global_label "V_BUCK"
+		(shape input)
+		(at 233.045 28.575 90)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "bf32c7c3-c556-43a2-839f-ba23053d6c73")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 233.045 18.395 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
+	(junction
+		(at 238.125 36.195)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "ddb31144-3502-4c58-95cf-778a2c1e6331")
+	)
+	(wire
+		(pts
+			(xy 238.125 36.195) (xy 233.045 36.195)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "1a0f5bef-0646-4d45-9c9a-ab0862e5eee1")
 	)
 )
