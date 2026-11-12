@@ -527,6 +527,31 @@ TEST(ReceiverProfile, TheSdrImagesFlightProfileAndItsDopplerMeans)
     EXPECT_EQ(mc.ekf.rr_pair_lag_s, 0.025);
 }
 
+TEST(ReceiverProfile, TheSdrImagesSafeguardsAreTheMosaicsLessTheWindupAndTheChangeCheckInTheImuFreeDescent)
+{
+    // applySdrFlightSafeguards: the mosaic image's set, with no carrier
+    // wind-up taken off and the change check standing down in the IMU-free
+    // descent (the RF rig's hil1, 2026-11-12); the mosaic's own unchanged
+    RawGnssShadow::Config s, m, d;
+    gnss_raw::applySdrFlightSafeguards(s);
+    gnss_raw::applyMosaicFlightSafeguards(m);
+    EXPECT_FALSE(d.dv_imu_free_off);       // off unless an image sets it
+    EXPECT_FALSE(m.dv_imu_free_off);       // the mosaic image: as before
+    EXPECT_TRUE(s.dv_imu_free_off);
+    EXPECT_EQ(m.windup_k, 0.99);
+    EXPECT_EQ(s.windup_k, 0.0);
+    // everything else the mosaic's
+    s.dv_imu_free_off = m.dv_imu_free_off;
+    s.windup_k = m.windup_k;
+    EXPECT_EQ(s.dv_check, m.dv_check);
+    EXPECT_EQ(s.dv_latch_k, m.dv_latch_k);
+    EXPECT_EQ(s.dv_window_s, m.dv_window_s);
+    EXPECT_EQ(s.ekf.hdg_obs_mode, m.ekf.hdg_obs_mode);
+    EXPECT_EQ(s.rot_lever_axial_m, m.rot_lever_axial_m);
+    EXPECT_EQ(s.ekf.att_exact, m.ekf.att_exact);
+    EXPECT_EQ(s.dv_lever_mode, m.dv_lever_mode);
+}
+
 TEST(ReceiverProfile, TheMosaicG5V0Profile)
 {
     // every number of v0 (ReceiverProfile.h: each one's run beside it)

@@ -345,6 +345,28 @@ inline void applyMosaicFlightSafeguards(RawGnssShadow::Config& c)
     c.windup_k = 0.99;
 }
 
+// The V10's gnss-sdr-dev image's flight safeguards (main.cpp's startRawShadow
+// under TR_RAW_NAV_SDR, tools/raw_replay's --receiver sdr): the mosaic image's
+// above, with two of its own.
+//   - No carrier wind-up taken off (windup_k 0): 0.99 is the Goblin helix's,
+//     measured on the spin rig; the board's antenna's is not measured. The
+//     clock drift takes the common part.
+//   - The Doppler change check stands down in the IMU-free descent
+//     (dv_imu_free_off): there the filter's velocity is a random walk and its
+//     history holds no acceleration, so the check measured every Doppler
+//     against no change at all. On the V10's RF-rig run of 2026-11-12 (hil1,
+//     the hotshot scene's ballistic fall from 26 km) it held every Doppler
+//     from the apogee call on, the latch never let go, and the vertical
+//     velocity rode the 1 Hz pseudoranges 20-25 m/s off for 30 s. GNSS
+//     reaches no attitude or bias in the mode, which is what the check is
+//     there to protect; a bad Doppler meets the update's own gate.
+inline void applySdrFlightSafeguards(RawGnssShadow::Config& c)
+{
+    applyMosaicFlightSafeguards(c);
+    c.windup_k = 0.0;
+    c.dv_imu_free_off = true;
+}
+
 // The antenna's offset from the IMU, where the rocket's owner measured it: an
 // optional per-rocket setting (the apps' Antenna offset, BLE cmd 81), unknown
 // unless set.

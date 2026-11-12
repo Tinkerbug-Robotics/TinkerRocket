@@ -102,9 +102,16 @@ def test_start_raw_shadow_flies_the_boards_profile_and_its_doppler_means():
     apply_profile = body.index("gnss_raw::applyReceiverProfile(rx, cfg);")
     means = body.index("gnss_raw::applySdrDopplerMeans(rx, cfg);")
     assert cfg < apply_profile < means
-    # the safeguards are the mosaic's, the wind-up not taken off (the board's antenna is not measured)
-    safe = body.index("gnss_raw::applyMosaicFlightSafeguards(cfg);")
-    assert body.index("cfg.windup_k = 0.0;", safe) > safe
+    # the safeguards are the image's own (the mosaic's, no wind-up taken off, the change check standing down in
+    # the IMU-free descent: ReceiverProfileApply.h), under TR_RAW_NAV_SDR, the mosaic's call kept for the mosaic
+    i = body.index("#if TR_RAW_NAV_SDR\n    // The gnss-sdr-dev image's (ReceiverProfileApply.h")
+    block = body[i:body.index("#endif", i)]
+    assert "gnss_raw::applySdrFlightSafeguards(cfg);" in block
+    assert "#else\n    gnss_raw::applyMosaicFlightSafeguards(cfg);\n" in block
+    apply = read(os.path.join(ROOT, "tinkerrocket-idf", "components", "TR_RawGnssShadow", "ReceiverProfileApply.h"))
+    fn = apply[apply.index("inline void applySdrFlightSafeguards"):]
+    fn = fn[:fn.index("\n}\n")]
+    assert "applyMosaicFlightSafeguards(c);" in fn and "c.windup_k = 0.0;" in fn and "c.dv_imu_free_off = true;" in fn
 
 
 def test_no_ionosphere_on_the_image():

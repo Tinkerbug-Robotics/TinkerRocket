@@ -676,6 +676,10 @@ public:
         double   dv_window_s = 0.0;              // also judged summed over this long, leaky (0: epoch by epoch only)
         bool     dv_deweight = false;            // grow a failed Doppler's sigma by its excess, not hold it out
         bool     dv_ground = false;              // act on the ground too (else in flight only)
+        bool     dv_imu_free_off = false;        // neither run nor act in the IMU-free descent (descent_imu_free):
+                                                 //   its history holds no acceleration, so a free fall's g reads
+                                                 //   as a failure on every epoch, and GNSS reaches no attitude or
+                                                 //   bias there for the check to protect (false: as before)
         double   dv_noise_tau_s = 0.0;           // the Dopplers' measured excess noise on their variance, let fall
                                                  //   with this time constant (0: not measured)
         double   dv_hold_all_frac = 0.5;         // more than this share of an epoch's Dopplers held: all of them

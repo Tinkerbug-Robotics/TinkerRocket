@@ -4742,13 +4742,15 @@ static void startRawShadow()
     // offset. The bench overrides below come after. The line ends with the
     // flight profile's epoch settings as the filter took them above, and says
     // when a bench define set any of them (its BENCH line says how).
-    gnss_raw::applyMosaicFlightSafeguards(cfg);
 #if TR_RAW_NAV_SDR
-    // The gnss-sdr-dev image flies the same safeguards, but the carrier
-    // wind-up's k is the Goblin helix's (0.99), measured on the spin rig: the
-    // board's antenna's is not measured, so none is taken off (as offline,
-    // tools/raw_replay --receiver sdr). The clock drift takes the common part.
-    cfg.windup_k = 0.0;
+    // The gnss-sdr-dev image's (ReceiverProfileApply.h, as tools/raw_replay's
+    // --receiver sdr): the same, with no carrier wind-up taken off (the
+    // Goblin helix's k is not the board's antenna's) and the Doppler change
+    // check standing down in the IMU-free descent (it has no IMU change to
+    // hold the Dopplers against there: the RF rig's hil1, 2026-11-12)
+    gnss_raw::applySdrFlightSafeguards(cfg);
+#else
+    gnss_raw::applyMosaicFlightSafeguards(cfg);
 #endif
 #if defined(TR_BENCH_RAW_BUILD_LITE) || defined(TR_BENCH_RAW_SHARE_LOS) || defined(TR_BENCH_RAW_DOP_AVG) || \
     defined(TR_BENCH_RAW_SAT_CAP) || defined(TR_BENCH_RAW_CAP_MAX)

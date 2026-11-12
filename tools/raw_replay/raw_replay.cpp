@@ -225,6 +225,9 @@ struct Args
     // check (the epoch worked, then its refusals counted) on every boost epoch, each from the same state
     bool compare_sequential = false;
     bool apogee_flag = true;         // kShadowApogee on every tick from the log's apogee flag (--no-apogee-flag: never)
+    int dv_imu_free_off = -1;        // --dv-imu-free-off 0|1: the change check in the IMU-free descent (sdr: the image's 1)
+    double apogee_call_s = -1e9;     // --apogee-call-s: the flight computer's apogee call at this flight time (s), as a
+                                     //   rig run's console gave it, where the harness's own quorum cannot call one
     double vert_check_mps = -1.0;    // RawGnssShadow::Config::vert_check_mps (20 m/s; 0 off) -- a RAW_REPLAY_VCHECK build
     double boost_screen_window_s = -1.0;   // boost_screen_window_s (1.5 s) -- a RAW_REPLAY_VCHECK build
     double rr_dyn_sigma = -1.0;      // the receiver profile's rr_dyn_sigma (the Doppler's allowance per g)
@@ -382,12 +385,13 @@ void usage()
                  "  [--corrupt-rr-mps lo,hi] [--corrupt-pr-m lo,hi] [--corrupt-pr-epoch]\n"
                  "  [--boost-screen 0|1|2] [--boost-screen-g X] [--pad-sigma-fallback-deg X] [--mag-recent-s X]\n"
                  "  [--pad-sigma-unset-deg X] [--handoff-unset-deg X]\n"
-                 "  [--level-heading-free 0|1] [--mag-flags N] [--compare-sequential] [--no-apogee-flag]\n"
+                 "  [--level-heading-free 0|1] [--mag-flags N] [--compare-sequential] [--no-apogee-flag] [--apogee-call-s T]\n"
                  "  [--max-epoch-age-s X] [--vert-check-mps X] [--boost-screen-window-s X] [--rr-dyn-tau-s X]\n"
                  "  [--rr-dyn-sigma X] [--vert-release-mps X] [--rr-fit-gate X] [--fw-defaults] [--digest FILE]\n"
                  "  [--truth-t0-tow X]\n"
                  "  the mosaic-G5 (a RAW_REPLAY_MOSAIC build): [--receiver lc86g|mosaic|sdr] [--cold-start] [--unaided]\n"
                  "  the gnss-sdr-dev board (--receiver sdr): [--sdr-latency-ms X] [--sdr-keep-marked] [--sdr-raw-steps]\n"
+                 "  [--dv-imu-free-off 0|1]\n"
                  "  [--rinex FILE]... [--quorum] [--vote-guard 0|1] [--loop-hz X] [--seed-heading-deg X]\n"
                  "  [--seed-heading-error-deg X] [--reject-persist-rr N] [--truth-nav FILE]\n"
                  "  [--seed-gyro-dps x,y,z]\n"
@@ -514,6 +518,8 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--mag-flags") a.mag_flags = std::atoi(val());
         else if (k == "--compare-sequential") a.compare_sequential = true;
         else if (k == "--no-apogee-flag") a.apogee_flag = false;
+        else if (k == "--apogee-call-s") a.apogee_call_s = std::atof(val());
+        else if (k == "--dv-imu-free-off") a.dv_imu_free_off = std::atoi(val());
         else if (k == "--max-epoch-age-s") a.max_epoch_age_s = std::atof(val());
         else if (k == "--vert-check-mps") a.vert_check_mps = std::atof(val());
         else if (k == "--boost-screen-window-s") a.boost_screen_window_s = std::atof(val());
@@ -2018,10 +2024,19 @@ int main(int argc, char** argv)
     // below change them for an experiment (0 turns one off: today's design before them, and its twin)
     if (nav)
     {
-        applyMosaicFlightSafeguards(cfg);
-        // the carrier wind-up's k is the Goblin helix's (0.99): the gnss-sdr-dev board's antenna is not measured
+#if RAW_REPLAY_SDR
+        // the gnss-sdr-dev image's: the same, with no wind-up taken off (the Goblin helix's k is not the board's
+        // antenna's) and the change check standing down in the IMU-free descent (applySdrFlightSafeguards;
+        // --dv-imu-free-off 0 keeps it there, as before)
         if (sdr)
-            cfg.windup_k = 0.0;
+        {
+            applySdrFlightSafeguards(cfg);
+            if (a.dv_imu_free_off >= 0)
+                cfg.dv_imu_free_off = a.dv_imu_free_off != 0;
+        }
+        else
+#endif
+            applyMosaicFlightSafeguards(cfg);
     }
 #else
     // a build without them (an older tree, or one of RAW_REPLAY_DVCHECK, HDGOBS and ROT off) flies none of the
@@ -4282,6 +4297,13 @@ int main(int argc, char** argv)
                 if (!a.apogee_flag)
                     s.flags = static_cast<uint8_t>(s.flags & ~kShadowApogee);
             }
+#endif
+#if !RAW_REPLAY_OLD
+            // --apogee-call-s: the flight computer's call (pyro_apogee_detected) at that flight time, latched -- a rig
+            // run's own, where the quorum here has no voter that can call (no receiver fix, the barometer above its
+            // range); it starts the IMU-free descent as on the flight computer
+            if (a.apogee_call_s > -1e8 && static_cast<double>(ev.t_us) * 1e-6 + a.t_base_s >= a.apogee_call_s)
+                s.flags |= kShadowApogee;
 #endif
 #if RAW_REPLAY_MOSAIC
             // --gnss-only-from-s: from then on the ground the filter has the IMU, GNSS and the barometer, as in

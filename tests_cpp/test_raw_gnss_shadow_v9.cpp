@@ -317,6 +317,8 @@ struct TenRun
     std::vector<uint64_t> state;          // stateHash every 0.25 s
     std::vector<double> att_err_deg;      //   and the attitude's error then against the truth, deg
     double vel_err_max_mps = 0.0;         // the velocity's largest error against the truth's from ignition, m/s
+    double vel_err_descent_max_mps = 0.0; //   and from half a second after the apogee call (TenFlight::apogee_t)
+    uint32_t dv_checks_at_apogee = 0;     // the change check's epochs checked by the apogee call
     std::vector<HeadingFitData> fits;
     double first_aided_t = -1.0;          // flight time gnss_aided first came up
     int unaided_ticks_after = 0;          //   ticks without it after that
@@ -519,6 +521,10 @@ TenRun flyTen(const RawGnssShadow::Config& cfg, const TenFlight& fl)
             for (int i = 0; i < 3; ++i)
                 e2 += (double(vf[i]) - v_ned[i]) * (double(vf[i]) - v_ned[i]);
             run.vel_err_max_mps = std::max(run.vel_err_max_mps, std::sqrt(e2));
+            if (fl.apogee_t >= 0.0 && t >= fl.apogee_t + 0.5)
+                run.vel_err_descent_max_mps = std::max(run.vel_err_descent_max_mps, std::sqrt(e2));
+            if (fl.apogee_t >= 0.0 && t < fl.apogee_t)
+                run.dv_checks_at_apogee = sh.stats().dv_checks;
         }
         // each epoch as it closes
         if (sh.stats().last_tow_ms != last_tow_ms)
@@ -2972,3 +2978,64 @@ TEST(RawGnssShadowV9, OffTheNavigationStateCarriesNoCap)
     RawGnssShadow beetle(b);
     EXPECT_FALSE(beetle.capGovernor().on());
 }
+
+// ---- the IMU-free descent with the Doppler change check (the V10's gnss-sdr-dev image, hil1)
+
+TEST(RawGnssShadowV9, InTheImuFreeFallTheChangeCheckStandsDownSoTheDopplersHoldTheVelocity)
+{
+    // The V10's RF-rig run of 2026-11-12 (hil1): a ballistic fall from the
+    // apogee call. The IMU-free descent holds the filter's velocity as a
+    // random walk and records no acceleration in its history, so the change
+    // check measured each Doppler's 0.98 m/s a tenth of a second of free fall
+    // against no change: every epoch failed, the latch never let go, and only
+    // the 1 Hz code carried the velocity (20-25 m/s off). Here the coast after
+    // burnout is the same weightless fall: apogee about 10.0 s, the call at
+    // 10.0 s, falling to 16 s.
+    RawGnssShadow::Config base = safeguardsCfg();
+    base.descent_imu_free = true;
+    TenFlight fl;
+    fl.t_end = 16.0;
+    fl.apogee_t = 10.0;
+    RawGnssShadow::Config before = base;
+    before.dv_imu_free_off = false;
+    RawGnssShadow::Config after = base;
+    after.dv_imu_free_off = true;
+    const TenRun b = flyTen(before, fl);
+    const TenRun a = flyTen(after, fl);
+    std::printf("IMU-free fall: the check acting %.2f m/s largest velocity error (%u epochs failed), standing down "
+                "%.2f m/s (%u)\n",
+                b.vel_err_descent_max_mps, b.st.dv_epoch_fails, a.vel_err_descent_max_mps, a.st.dv_epoch_fails);
+    EXPECT_EQ(b.st.imu_free, 1);
+    EXPECT_EQ(a.st.imu_free, 1);
+    // as before: the check holds the fall's Dopplers out
+    EXPECT_GT(b.vel_err_descent_max_mps, 4.0);
+    EXPECT_GT(b.st.dv_epoch_fails, 10u);
+    // standing down: the Dopplers carry the velocity, the random walk a tenth or two of a second's fall behind
+    EXPECT_LT(a.vel_err_descent_max_mps, 3.0);
+    // and the check is not run in the mode (its count stops at the call, give or take the epoch in flight then)
+    EXPECT_LE(a.st.dv_checks, a.dv_checks_at_apogee + 2u);
+    // the ascent is the same either way: nothing changes before the call
+    EXPECT_EQ(a.dv_checks_at_apogee, b.dv_checks_at_apogee);
+    EXPECT_GT(a.dv_checks_at_apogee, 10u);
+}
+
+TEST(RawGnssShadowV9, OutsideTheImuFreeDescentStandingDownChangesNothing)
+{
+    // dv_imu_free_off acts only in the IMU-free descent: with the descent
+    // IMU-coupled the same fall is the same, bit for bit
+    RawGnssShadow::Config base = safeguardsCfg();
+    base.descent_imu_free = false;
+    TenFlight fl;
+    fl.t_end = 14.0;
+    fl.apogee_t = 10.0;
+    RawGnssShadow::Config on = base;
+    on.dv_imu_free_off = true;
+    const TenRun x = flyTen(base, fl);
+    const TenRun y = flyTen(on, fl);
+    ASSERT_EQ(x.state.size(), y.state.size());
+    for (size_t i = 0; i < x.state.size(); ++i)
+        EXPECT_EQ(x.state[i], y.state[i]) << "at " << i * 0.25 << " s";
+    EXPECT_EQ(x.st.dv_checks, y.st.dv_checks);
+    EXPECT_EQ(x.st.imu_free, 0);
+}
+
