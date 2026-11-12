@@ -1,6 +1,8 @@
 #pragma once
 
 #include <stdint.h>
+#include <math.h>                  // NAN
+#include <RocketComputerTypes.h>   // FcScapReport (#1409)
 
 // #1166: is the hold-up supercap actually there?
 //
@@ -23,6 +25,11 @@
 // from boot on a cold start and from the LAST CHARGED reading otherwise, so
 // a cap that a hold-up event just drained gets its recharge time before
 // anyone is told about it.
+//
+// #1409: on the Tinker-Mantis V10/V11 the sense line lands on the flight
+// computer instead, which reads it once a second and sends it in every
+// FC_STATUS_MSG (FcStatusData.scap_mv); remoteReading() below turns its last
+// report into the reading this verdict runs on.
 //
 // Pure: no IDF, no clock — the caller feeds uptime — so tests_cpp drives it.
 namespace holdup_policy
@@ -138,7 +145,42 @@ namespace holdup_policy
             state = ((uint32_t)(now_ms - since) >= advisory_ms) ? NOT_CHARGING : CHARGING;
             return state;
         }
+
+        // #1409: nothing to judge this second, and nothing wrong — the sense
+        // is on the flight computer and it is off or silent. The verdict goes
+        // back to NONE (the "hu" key absent), and the next reading is not a
+        // step from the last one: the cap may have moved a long way since.
+        // The charge history stays, so the grace window still runs from boot
+        // or from the last charged reading, as if the cap had been watched.
+        void quiet()
+        {
+            state    = NONE;
+            has_last = false;
+        }
     };
+
+    // #1409: one second of the out computer's service on a board whose sense
+    // line is the flight computer's (V10/V11). `report` and `scap_mv` are the
+    // last FC_STATUS_MSG's (fcStatusScapReport), `rx_ms` when it arrived, and
+    // `now_ms` must be read after `rx_ms` (the age is unsigned).
+    // Not live = quiet(): the FC has not reported, has gone silent for
+    // `stale_ms` (its rail is off, it is rebooting), runs an image too old to
+    // send the field, or has no sense line. Live with NaN = the FC has the
+    // sense but its ADC did not answer: NO_READING, as the mini's own does.
+    struct RemoteReading
+    {
+        bool  live;
+        float volts;   // NaN = no reading
+    };
+
+    inline RemoteReading remoteReading(uint8_t report, uint16_t scap_mv,
+                                       uint32_t now_ms, uint32_t rx_ms, uint32_t stale_ms)
+    {
+        if ((uint32_t)(now_ms - rx_ms) > stale_ms) return {false, NAN};
+        if (report == FC_SCAP_VOLTS)      return {true, (float)scap_mv * 0.001f};
+        if (report == FC_SCAP_NO_READING) return {true, NAN};
+        return {false, NAN};   // FC_SCAP_ABSENT
+    }
 
     // Console trace cadence for the first-article cold-start log #1166 asks
     // for: a line whenever V_SCAP has moved `delta_v` since the last line, or

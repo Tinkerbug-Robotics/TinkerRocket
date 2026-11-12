@@ -51,6 +51,7 @@ idf_component_register(
         esp_app_format
         driver
         esp_timer
+        esp_adc          # #1409: the V10's hold-up cap sense (adc_oneshot + adc_cali)
         nvs_flash
 )
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error -Wno-format)

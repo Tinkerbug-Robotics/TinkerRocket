@@ -65,6 +65,11 @@
 #include "oc_cmd_dedup.h"        // #1112: dispatch only on the poll pass; bounded config retry
 #include "servo_pin_policy.h"    // servoPinsValid(): an M1 int -1 pin is unmapped, not GPIO 0xFFFFFFFF
 #include "loop_profile.h"        // bench only: -DTR_LOOP_PROFILE=1 section profiler (TR_LP_LAP)
+#include "scap_sense_policy.h"   // #1409: the V10's V_SCAP reading as FcStatusData.scap_mv
+#include <atomic>
+#include <esp_adc/adc_oneshot.h>  // #1409: the V10's hold-up cap sense (V_SCAP_ADC)
+#include <esp_adc/adc_cali.h>
+#include <esp_adc/adc_cali_scheme.h>
 #include <driver/uart.h>
 #include <esp_private/esp_gpio_reserve.h>
 #include <esp_private/gpio.h>      // gpio_func_sel
@@ -6627,6 +6632,126 @@ static inline void fcMaybeMarkOtaValid()
 }
 
 // ==========================================================================
+// SECTION: Hold-up supercap sense (#1409, V10/V11)
+// ==========================================================================
+// V_SCAP_ADC: R125/R126 (100 k / 100 k) halve V_SCAP onto SCAP_ADC_PIN (P4
+// GPIO17 = ADC1_CH1), C143 100 nF at the pad. On the mini the same divider is
+// the out computer's and it judges the cap itself (#1166); on the V10 and V11
+// it lands here, so this reads it once a second and every FC_STATUS_MSG
+// carries the latest reading (FcStatusData.scap_mv) to the out computer,
+// which runs the same verdict and sends "scap" and "hu" to the app.
+//
+// The reads run in their own low-priority task on the sensor core, never in
+// the flight task: adc_oneshot_read() holds a critical section for each
+// conversion. The flight task only loads the latest field from an atomic when
+// it builds the frame. setup_fc brings the ADC up and takes the first reading;
+// app_main starts the task AFTER the flight task, like every task it makes,
+// so its stack can never take the internal-RAM block the flight task needs
+// (tinkerrocket-idf/tools/check_flight_task_first.py).
+//
+// ADC_ATTEN_DB_12 covers the pad to the 3.3 V rail, so no reading can clip
+// (the cap terminates at 2.5 V = 1.25 V here, and the P4's narrower ranges
+// are not characterised for this design); the curve-fitting calibration is
+// per attenuation and, on the P4, per channel. Without eFuse calibration it
+// reports no reading rather than an uncalibrated guess, as the mini's out
+// computer does. Boards without the line (SCAP_ADC_PIN < 0) never start any
+// of it and send FcStatusData without FCS_SCAP_SENSE.
+static std::atomic<uint32_t>     scap_field{FCS_SCAP_NO_READING};  // FcStatusData.scap_mv
+static bool                      scap_sense_ready = false;   // the ADC is up: app_main starts the task
+static adc_oneshot_unit_handle_t scap_adc_unit = nullptr;
+static adc_cali_handle_t         scap_adc_cali = nullptr;
+static adc_channel_t             scap_adc_chan = ADC_CHANNEL_0;
+static constexpr adc_atten_t     kScapAtten    = ADC_ATTEN_DB_12;
+
+static bool initScapAdc()
+{
+    adc_unit_t unit = ADC_UNIT_1;
+    if (adc_oneshot_io_to_channel(config::SCAP_ADC_PIN, &unit, &scap_adc_chan) != ESP_OK ||
+        unit != ADC_UNIT_1)
+    {
+        ESP_LOGE(TAG, "[HOLDUP] GPIO%d is not an ADC1 pad — no V_SCAP (#1409)", config::SCAP_ADC_PIN);
+        return false;
+    }
+    adc_oneshot_unit_init_cfg_t unit_cfg = {};
+    unit_cfg.unit_id  = ADC_UNIT_1;
+    unit_cfg.ulp_mode = ADC_ULP_MODE_DISABLE;
+    if (adc_oneshot_new_unit(&unit_cfg, &scap_adc_unit) != ESP_OK)
+    {
+        ESP_LOGE(TAG, "[HOLDUP] ADC1 unit init failed — no V_SCAP (#1409)");
+        return false;
+    }
+    adc_oneshot_chan_cfg_t chan_cfg = {};
+    chan_cfg.atten    = kScapAtten;
+    chan_cfg.bitwidth = ADC_BITWIDTH_DEFAULT;
+    if (adc_oneshot_config_channel(scap_adc_unit, scap_adc_chan, &chan_cfg) != ESP_OK)
+    {
+        ESP_LOGE(TAG, "[HOLDUP] V_SCAP channel config failed (#1409)");
+        return false;
+    }
+    adc_cali_curve_fitting_config_t cali_cfg = {};
+    cali_cfg.unit_id  = ADC_UNIT_1;
+    cali_cfg.chan     = scap_adc_chan;
+    cali_cfg.atten    = kScapAtten;
+    cali_cfg.bitwidth = ADC_BITWIDTH_DEFAULT;
+    if (adc_cali_create_scheme_curve_fitting(&cali_cfg, &scap_adc_cali) != ESP_OK)
+    {
+        ESP_LOGE(TAG, "[HOLDUP] ADC calibration unavailable (no eFuse cal data?) — sending "
+                      "no V_SCAP rather than an uncalibrated guess (#1409)");
+        return false;
+    }
+    return true;
+}
+
+// One read: eight calibrated samples of the pad, averaged, as the field. The
+// 50 k source is buffered by C143, so the averaging is only for the ADC's own
+// noise.
+static uint16_t readScapField()
+{
+    constexpr int kSamples = 8;
+    int32_t mv_sum = 0;
+    int taken = 0;
+    for (int i = 0; i < kSamples; ++i)
+    {
+        int raw = 0, mv = 0;
+        if (adc_oneshot_read(scap_adc_unit, scap_adc_chan, &raw) != ESP_OK) continue;
+        if (adc_cali_raw_to_voltage(scap_adc_cali, raw, &mv) != ESP_OK) continue;
+        mv_sum += mv;
+        ++taken;
+    }
+    return scap_sense::fieldFromPinSamples(mv_sum, taken, config::SCAP_DIVIDER_RATIO);
+}
+
+static void scapSenseTask(void*)
+{
+    for (;;)
+    {
+        vTaskDelay(pdMS_TO_TICKS(config::SCAP_SAMPLE_PERIOD_MS));
+        scap_field.store(readScapField(), std::memory_order_relaxed);
+    }
+}
+
+// From setup_fc. The first read is made here, so the first FC_STATUS_MSG
+// already carries a voltage; a failed bring-up leaves the field at
+// FCS_SCAP_NO_READING with FCS_SCAP_SENSE still set, which the out computer
+// reports as NO READING — a dead sense must not read as "no sense here".
+static void startScapSense()
+{
+    if (config::SCAP_ADC_PIN < 0) return;
+    if (!initScapAdc()) return;
+    scap_sense_ready = true;
+    const uint16_t first = readScapField();
+    scap_field.store(first, std::memory_order_relaxed);
+    if (first == FCS_SCAP_NO_READING)
+        ESP_LOGW(TAG, "[HOLDUP] V_SCAP sense on GPIO%d (ADC1_CH%d): first read failed (#1409)",
+                 config::SCAP_ADC_PIN, (int)scap_adc_chan);
+    else
+        ESP_LOGI(TAG, "[HOLDUP] V_SCAP sense on GPIO%d (ADC1_CH%d, x%.1f divider): %.2f V at boot, "
+                      "read every %lu ms for the out computer (#1409)",
+                 config::SCAP_ADC_PIN, (int)scap_adc_chan, (double)config::SCAP_DIVIDER_RATIO,
+                 (double)first * 0.001, (unsigned long)config::SCAP_SAMPLE_PERIOD_MS);
+}
+
+// ==========================================================================
 // SECTION: Boot setup
 // ==========================================================================
 
@@ -7561,6 +7686,10 @@ static void setup_fc()
                       "leaves it out)");
     }
 #endif
+
+    // #1409: the V10's hold-up cap sense, read from here on for FC_STATUS_MSG
+    // (no-op on boards without it). Under a millisecond; its task does the rest.
+    startScapSense();
 
     // Load persistent rocket settings from NVS (factory default from config.h)
     fcBootStatus(FCB_NVS);
@@ -15842,6 +15971,14 @@ static void loop_fc()
                 // where config::RAW_VOTE_GUARD_ACTS; otherwise it is the would-have)
                 if (raw_guard.latched) fc_status.flags |= FCS_RAW_VOTES_WITHHELD;
 #endif
+                // #1409: the hold-up cap, where this board's sense line is
+                // ours (V10/V11): the latest once-a-second reading.
+                fc_status.scap_mv = FCS_SCAP_NO_READING;
+                if (config::SCAP_ADC_PIN >= 0)
+                {
+                    fc_status.flags  |= FCS_SCAP_SENSE;
+                    fc_status.scap_mv = (uint16_t)scap_field.load(std::memory_order_relaxed);
+                }
                 uint8_t fc_status_buf[sizeof(FcStatusData)];
                 memcpy(fc_status_buf, &fc_status, sizeof(fc_status_buf));
                 (void)enqueueI2STx(FC_STATUS_MSG,
@@ -16442,6 +16579,19 @@ extern "C" void app_main(void)
             vTaskDelay(pdMS_TO_TICKS(500));
             fcBootEmitOnce();
         }
+    }
+    // #1409: the V10's hold-up cap sense, once a second (setup_fc took the
+    // first reading). After the flight task, like every task here. Low
+    // priority on the sensor core, beside the GNSS poll: a few hundred us a
+    // second, preempted by the IMU poll and the I2S sender. No logging in it,
+    // so 2.5 KB is plenty.
+    if (scap_sense_ready &&
+        xTaskCreatePinnedToCore(scapSenseTask, "V_SCAP", 2560, nullptr, 1, nullptr,
+                                config::SENSOR_CORE) != pdPASS)
+    {
+        // A frozen boot reading would pass for a live one: say no reading.
+        scap_field.store(FCS_SCAP_NO_READING, std::memory_order_relaxed);
+        ESP_LOGE(TAG, "[HOLDUP] V_SCAP task not created — sending no V_SCAP (#1409)");
     }
 #ifdef TR_BENCH_MB_BLOCKS
     // After the flight task, never before it: its 12 KB stack once took the

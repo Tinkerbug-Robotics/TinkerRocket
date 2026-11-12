@@ -1357,6 +1357,13 @@ static bool fc_camera_engaged_prev = false;
 // When the last FC_STATUS_MSG arrived (millis), so a flag from an FC that has
 // since gone silent is not trusted (fcCameraEngagedNow).
 static uint32_t fc_status_last_ms = 0;
+// #1409: the V10/V11's hold-up cap as the flight computer reads it, from the
+// last FC_STATUS_MSG: FcScapReport << 16 | scap_mv, and when it arrived.
+// Written by processFrame (the I2S parse task or loop_oc), read by
+// serviceHoldup (loop_oc), hence atomics; a reading and a time from two
+// different frames are 200 ms apart and harmless.
+static std::atomic<uint32_t> fc_scap_report{0};
+static std::atomic<uint32_t> fc_scap_rx_ms{0};
 static bool peripherals_initialized = false; // Deferred init for peripherals behind PWR_PIN
 // #1228: the flight-logger half of initPeripherals() has a life of its own.
 // peripherals_initialized says the radio and the FC link are up; oc_logger_ok
@@ -2379,6 +2386,12 @@ static float readRailAmps(int gpio, float r_ohm)
 //  trace the first-article cold-start log asks for, and nowhere else — no
 //  arm block.  Boards without the sense line (SCAP_ADC_PIN < 0) skip all of
 //  it and their telemetry never carries the keys.
+//
+//  #1409: the Tinker-Mantis V10/V11 (SCAP_FROM_FC) has the same divider on the
+//  FLIGHT computer's GPIO17. The FC reads it and sends it in every
+//  FC_STATUS_MSG; serviceHoldup takes that reading in place of an ADC read
+//  here, and the verdict, the keys and the trace are the mini's. While the FC
+//  is off or silent the verdict is withheld (key absent), not judged stale.
 // ---------------------------------------------------------------------------
 static adc_cali_handle_t      scap_adc_cali  = nullptr;
 static bool                   scap_adc_ready = false;
@@ -2404,6 +2417,16 @@ static inline adc_channel_t adc1ChannelForGpio(int gpio)
 
 static void initHoldupAdc()
 {
+    if (config::SCAP_FROM_FC)
+    {
+        // #1409: the V10/V11's sense line is the flight computer's GPIO17; its
+        // reading arrives in FC_STATUS_MSG and serviceHoldup judges it here.
+        ESP_LOGI("OC", "[HOLDUP] V_SCAP from the flight computer (FC_STATUS_MSG): charged at %.2f V, "
+                       "advisory after %lu s under it; no verdict while the FC is off (#1166, #1409)",
+                 (double)config::HOLDUP_CHARGED_V,
+                 (unsigned long)(config::HOLDUP_LOW_ADVISORY_MS / 1000u));
+        return;
+    }
     if (config::SCAP_ADC_PIN < 0) return;   // no sense line on this board
 
     if (rail_adc_unit == nullptr)
@@ -2485,7 +2508,7 @@ static float readHoldupVolts()
 // verdict.  NOT CHARGING and NO READING are warnings; everything else is info.
 static void serviceHoldup(uint32_t now_ms)
 {
-    if (!scap_adc_ready) return;
+    if (!scap_adc_ready && !config::SCAP_FROM_FC) return;
     static bool     ever_read      = false;
     static uint32_t last_read_ms   = 0;
     static bool     ever_traced    = false;
@@ -2496,7 +2519,39 @@ static void serviceHoldup(uint32_t now_ms)
     ever_read    = true;
     last_read_ms = now_ms;
 
-    holdup_scap_v = readHoldupVolts();
+    if (config::SCAP_FROM_FC)
+    {
+        // #1409: the flight computer's last report, if it is current. The
+        // clock is read AFTER the arrival time: the frame lands on another
+        // task, and an arrival stamped after this call's now_ms would wrap the
+        // unsigned age and read as 49 days stale.
+        const uint32_t rx_ms  = fc_scap_rx_ms.load(std::memory_order_acquire);
+        const uint32_t rep    = fc_scap_report.load(std::memory_order_relaxed);
+        const uint32_t age_at = millis();
+        const holdup_policy::RemoteReading r =
+            holdup_policy::remoteReading((uint8_t)(rep >> 16), (uint16_t)(rep & 0xFFFFu),
+                                         age_at, rx_ms, config::FC_FRAME_STALE_MS);
+        if (!r.live)
+        {
+            // FC off, rebooting, too old to send it: nothing to judge and
+            // nothing wrong. Say so once when a verdict goes away.
+            if (last_state != holdup_policy::NONE)
+            {
+                ESP_LOGI("OC", "[HOLDUP] +%lu s no V_SCAP from the flight computer (off or silent) "
+                               "— verdict withheld until it reports (#1409)",
+                         (unsigned long)(now_ms / 1000u));
+            }
+            holdup_scap_v = NAN;
+            holdup_tracker.quiet();
+            last_state = holdup_policy::NONE;
+            return;
+        }
+        holdup_scap_v = r.volts;
+    }
+    else
+    {
+        holdup_scap_v = readHoldupVolts();
+    }
     const uint8_t st = holdup_tracker.update(holdup_scap_v, now_ms,
                                              config::HOLDUP_CHARGED_V,
                                              config::HOLDUP_LOW_ADVISORY_MS);
@@ -5814,10 +5869,12 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         //     no edge to fall from);
         //   - the guard means an ordinary operator stop, where we have already
         //     cleared the request, produces no log and no work.
-        if (payload_len >= sizeof(FcStatusData))
+        // v1 (5 bytes, an FC image from before #1409) or v2: the flags are
+        // in both, so the length gate is v1's, not sizeof.
+        if (payload_len >= FC_STATUS_V1_SIZE)
         {
             FcStatusData fcs{};
-            memcpy(&fcs, payload, sizeof(FcStatusData));
+            memcpy(&fcs, payload, FC_STATUS_V1_SIZE);
             const bool fc_cam = (fcs.flags & FCS_CAMERA_ENGAGED) != 0;
             if (fc_camera_engaged_prev && !fc_cam && camera_recording_requested)
             {
@@ -5828,6 +5885,16 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             }
             fc_camera_engaged_prev = fc_cam;
             fc_status_last_ms = millis();
+
+            // #1409: the hold-up cap, where the sense line is the FC's. A v1
+            // frame (an FC image from before #1409) has none: ABSENT.
+            if (config::SCAP_FROM_FC)
+            {
+                uint16_t mv = 0;
+                const uint8_t rep = fcStatusScapReport(payload, payload_len, &mv);
+                fc_scap_report.store(((uint32_t)rep << 16) | mv, std::memory_order_relaxed);
+                fc_scap_rx_ms.store(fc_status_last_ms, std::memory_order_release);
+            }
         }
     }
     else if (type == FC_BOOT_STATUS_MSG)

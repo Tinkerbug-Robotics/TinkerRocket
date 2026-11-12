@@ -173,6 +173,10 @@ MSG_ISM6HG256         = 0xA2
 MSG_BMP585            = 0xA3
 MSG_MMC5983MA         = 0xA4
 MSG_FC_STATUS         = 0x92  # FcStatusData: the FC's own camera truth, 5 Hz (#1154 item 4)
+# FcStatusData v2 (#1409): scap_mv carries V_SCAP when FCS_SCAP_SENSE is set
+# (the V10/V11 flight computer reads the hold-up cap); 0xFFFF = no reading.
+FCS_SCAP_SENSE        = 0x04
+FCS_SCAP_NO_READING   = 0xFFFF
 MSG_NON_SENSOR        = 0xA5
 MSG_POWER             = 0xA6
 MSG_START_LOGGING     = 0xA7
@@ -256,7 +260,7 @@ MSG_EXPECTED_LEN = {
     MSG_MMC5983MA:         16,
     MSG_IIS2MDC:           10,   # IIS2MDCData (new PCB rev)
     MSG_SNAPSHOT:          224,  # FlightSnapshotData (v2-v5 are all 224 B; version gates meaning, not size)
-    MSG_FC_STATUS:         5,    # FcStatusData: u32 time_us + u8 flags (#1154 item 4)
+    MSG_FC_STATUS:        (5, 7),  # FcStatusData v1: u32 time_us + u8 flags (#1154 item 4) / v2: + u16 scap_mv (#1409)
     MSG_NON_SENSOR:        None,  # 42 (legacy) or 43 (with pyro_status byte)
     MSG_POWER:            (10, 14),  # #850: v2 appends cam_ma + servo_ma
     MSG_START_LOGGING:     None,  # variable / no payload
@@ -1864,13 +1868,23 @@ def parse_binary_file(filepath):
                         "servo_a":  (fields[5] / 1000.0) if v2 else None,
                     })
 
-            elif msg_type == MSG_FC_STATUS and msg_len == 5:
+            elif msg_type == MSG_FC_STATUS and msg_len in (5, 7):
                 # #1154 item 4: the FC's ACTUAL camera state, as distinct from
                 # the out computer's camera_recording_requested, which is only
                 # what it last asked for. The two disagreeing is the whole
                 # reason this message exists — the FC can stop the camera on
                 # its own and, before this, said so to nobody.
-                t_us, fcs_flags = struct.unpack('<I B', payload)
+                t_us, fcs_flags = struct.unpack_from('<I B', payload, 0)
+                scap_v = None
+                if msg_len == 7:
+                    # #1409 (v2): the hold-up supercap voltage where the sense
+                    # line is the flight computer's (Tinker-Mantis V10/V11),
+                    # read once a second and repeated in every frame. Only
+                    # with FCS_SCAP_SENSE (0x04), and 0xFFFF = its ADC did not
+                    # answer. None on v1 frames and on every other board.
+                    (scap_mv,) = struct.unpack_from('<H', payload, 5)
+                    if (fcs_flags & FCS_SCAP_SENSE) and scap_mv != FCS_SCAP_NO_READING:
+                        scap_v = scap_mv / 1000.0
                 records["FcStatus"].append({
                     "time_us": t_us,
                     # "Engaged" is wider than "recording": true from the moment
@@ -1883,6 +1897,7 @@ def parse_binary_file(filepath):
                     # velocity and pitch apogee votes are withheld until the
                     # next launch. Always False on every other image.
                     "fc_raw_votes_withheld": bool(fcs_flags & 0x02),
+                    "scap_v": scap_v,
                 })
             elif msg_type == MSG_SNAPSHOT and msg_len == SNAPSHOT_LEN:
                 # #752: the FC's crash-recovery snapshot, 10 Hz through INFLIGHT.

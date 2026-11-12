@@ -1404,6 +1404,8 @@ CATALOG_EMPTY_ON_EVERY_FIXTURE = {
     "FcStatus.fc_camera_engaged",
     # The mosaic-only image's raw vote guard bit rides the same frame.
     "FcStatus.fc_raw_votes_withheld",
+    # #1409: the V10's hold-up cap voltage, FcStatusData v2 — the same frame.
+    "FcStatus.scap_v",
 }
 
 
