@@ -17,8 +17,9 @@
 //      stands after its own record's sample (timedEpochOf): its GPS instant
 //      is the tag, where every observable was carried to.
 // The board's fix (4001 sub-type 2) becomes the flight computer's GNSSData
-// (gnssDataFromTrFix): the raw filter's start position and the GPS apogee
-// voter's, the pad average's and the telemetry's fix. Its height is above
+// (gnssDataFromTrFix) when it passes a quality screen (sdrFixUsable): the raw
+// filter's start position and the GPS apogee voter's, the pad average's and
+// the telemetry's fix. Its height is above
 // the WGS84 ellipsoid -- the board gives no geoid -- and the driver says so
 // (geoidSeparationM: 0), so every height the flight computer turns between
 // the two is the ellipsoid's.
@@ -124,6 +125,23 @@ inline void gpsToUtcFields(uint16_t week, uint32_t tow_ms, int leap_s, GNSSData&
 
 static constexpr int kSdrLeapSeconds = 18;   // GPS - UTC since 2017-01-01 (the board sends none)
 
+// What makes the board's fix one the flight computer may start from or vote
+// with: enough satellites, a geometry and residuals like its own runs'. On the
+// RF rig's runs of 2026-11-09/12 its valid fixes had 7-29 satellites, a PDOP
+// of 0.9-2.0 and residuals' rms 0.2-6.9 m, with single fixes at 12.9, 17.0 and
+// 24.1 m: the screen drops those, so an outlier just after a cold start sets
+// neither the filter's start nor the pad's datum.
+static constexpr uint8_t kSdrFixMinSats = 6;
+static constexpr double  kSdrFixMaxPdop = 4.0;
+static constexpr double  kSdrFixMaxResidRmsM = 10.0;
+
+// The board's fix passes the screen above.
+inline bool sdrFixUsable(const TrFix& f)
+{
+    return f.valid && f.vel_valid && f.nsat >= kSdrFixMinSats && f.pdop > 0.0 && f.pdop <= kSdrFixMaxPdop &&
+           f.resid_rms_m >= 0.0 && f.resid_rms_m <= kSdrFixMaxResidRmsM;
+}
+
 inline int32_t sdrRoundI32(double v)
 {
     if (!(v > -2147483648.0)) return INT32_MIN;
@@ -134,9 +152,11 @@ inline int32_t sdrRoundI32(double v)
 // The board's fix as the flight computer's GNSSData, stamped time_us (its
 // record's arrival). True only for a fix the flight computer can use as one:
 // valid, with its velocity (GNSSData has no flag for a fix without one, and
-// a zero there would read as a stop at apogee to the GPS voter). The time
-// fields are filled either way; out is zeroed first. Height above the
-// ellipsoid (see the top); no accuracy given (h_acc_m, v_acc_m 255).
+// a zero there would read as a stop at apogee to the GPS voter), through the
+// screen above (sdrFixUsable). The time fields are filled either way; out is
+// zeroed first. Height above the ellipsoid (see the top); the accuracy, h_acc_m
+// and v_acc_m, is the PDOP times the residuals' rms (at least 1 m; 255 for a
+// fix that is none).
 inline bool gnssDataFromTrFix(const TrFix& f, uint32_t time_us, GNSSData& out)
 {
     std::memset(&out, 0, sizeof(out));
@@ -149,8 +169,11 @@ inline bool gnssDataFromTrFix(const TrFix& f, uint32_t time_us, GNSSData& out)
     const long pd = std::lround(pdop * 10.0);
     out.pdop_x10 = static_cast<uint8_t>(pd < 0 ? 0 : (pd > 255 ? 255 : pd));
     const double r = std::sqrt(f.pos[0] * f.pos[0] + f.pos[1] * f.pos[1] + f.pos[2] * f.pos[2]);
-    if (!f.valid || !f.vel_valid || !(r > 6.0e6) || !(r < 6.6e6))
+    if (!sdrFixUsable(f) || !(r > 6.0e6) || !(r < 6.6e6))
         return false;   // fix_mode 0: the time alone
+    const long acc = std::lround(std::ceil(pdop * f.resid_rms_m));
+    out.h_acc_m = static_cast<uint8_t>(acc < 1 ? 1 : (acc > 254 ? 254 : acc));
+    out.v_acc_m = out.h_acc_m;
     double lla[3], ned[3];
     ecefToLla(f.pos, lla);
     ecefToNed(lla[0], lla[1], f.vel, ned);

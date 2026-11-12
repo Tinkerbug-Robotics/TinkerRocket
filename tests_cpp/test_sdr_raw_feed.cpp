@@ -453,7 +453,8 @@ TEST(SdrRawFeed, TheBoardsFixIsTheFlightComputersGnssData)
     EXPECT_EQ(d.fix_mode, 3);
     EXPECT_EQ(d.num_sats, 18);
     EXPECT_EQ(d.pdop_x10, 13);
-    EXPECT_EQ(d.h_acc_m, 255);   // not given
+    EXPECT_EQ(d.h_acc_m, 8);     // PDOP 1.3 x the residuals' 6.14 m rms, up
+    EXPECT_EQ(d.v_acc_m, 8);
     // the bench antenna, 39.97 N 74.94 W, its height above the ellipsoid
     EXPECT_NEAR(d.lat_e7 * 1e-7, 39.9716209, 1e-7);
     EXPECT_NEAR(d.lon_e7 * 1e-7, -74.9362967, 1e-7);
@@ -483,6 +484,47 @@ TEST(SdrRawFeed, TheBoardsFixIsTheFlightComputersGnssData)
     TrFix zero = f;
     zero.pos[0] = zero.pos[1] = zero.pos[2] = 0.0;
     EXPECT_FALSE(gnssDataFromTrFix(zero, 1u, d));
+    EXPECT_EQ(d.h_acc_m, 255);
+}
+
+TEST(SdrRawFeed, TheBoardsFixIsScreenedBeforeItCanStartOrVote)
+{
+    // sdrFixUsable: at least 6 satellites, a PDOP of 4 at most, the
+    // residuals' rms 10 m at most (the RF rig's valid fixes: 7-29, 0.9-2.0,
+    // 0.2-6.9 m, with single outliers at 12.9-24.1 m) -- an outlier just after
+    // a cold start sets neither the start nor the pad's datum
+    const auto fs = frames();
+    TrFix f;
+    ASSERT_TRUE(decodeTrFix(fs[0].data(), fs[0].size(), f));
+    ASSERT_TRUE(sdrFixUsable(f));
+    GNSSData d;
+    auto usable = [&](TrFix x) {
+        const bool g = gnssDataFromTrFix(x, 1u, d);
+        EXPECT_EQ(g, sdrFixUsable(x));
+        return g;
+    };
+    TrFix x = f;
+    x.nsat = 6;
+    EXPECT_TRUE(usable(x));
+    x.nsat = 5;
+    EXPECT_FALSE(usable(x));
+    EXPECT_EQ(d.fix_mode, 0);
+    x = f;
+    x.pdop = 4.0;
+    EXPECT_TRUE(usable(x));
+    x.pdop = 4.1;
+    EXPECT_FALSE(usable(x));
+    x.pdop = 0.0;                // none given
+    EXPECT_FALSE(usable(x));
+    x = f;
+    x.resid_rms_m = 10.0;
+    EXPECT_TRUE(usable(x));
+    EXPECT_EQ(d.h_acc_m, 13);    // 1.3 x 10
+    x.resid_rms_m = 12.9;        // the rig's outliers
+    EXPECT_FALSE(usable(x));
+    x.resid_rms_m = 0.2;         // the best: at least 1 m
+    EXPECT_TRUE(usable(x));
+    EXPECT_EQ(d.h_acc_m, 1);
 }
 
 TEST(SdrRawFeed, UtcAcrossAMonthAndAYear)
