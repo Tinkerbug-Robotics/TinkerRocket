@@ -11,7 +11,9 @@
 //     epoch's time of week, the clock's steps, the observables' count, the
 //     correlator's sample count, then the ranges its checks left out and the
 //     satellites it marked: up to 78 bytes), sub-type 2 after each fix (ECEF
-//     position and velocity, clock bias and drift, PDOP, residual rms);
+//     position and velocity, clock bias and drift, PDOP, residual rms),
+//     sub-type 4 the GPS broadcast ionosphere it has (RTCM has no message for
+//     it), when it changes and again every 30 s;
 //   - its ephemerides, 1019, 1046 and 1042, each new one and again every 30 s.
 // It sends nothing before its first fix (no time, no epochs).
 //
@@ -35,6 +37,7 @@ static constexpr uint16_t kTrMessage   = 4001;      // TinkerRocket's message
 static constexpr uint8_t  kTrEpoch     = 1;         // its sub-types
 static constexpr uint8_t  kTrFix       = 2;
 static constexpr uint8_t  kTrStatus    = 3;         // before the board has GPS time: once a second
+static constexpr uint8_t  kTrIono      = 4;         // the GPS broadcast ionosphere it has
 static constexpr size_t   kMaxFrame    = 3 + 1023 + 3;   // preamble and length, the payload, the CRC
 
 // The message number of a whole frame (the 12 bits after its 3-byte header);
@@ -106,6 +109,23 @@ struct TrStatus
     bool     fix_valid = false;
 };
 bool decodeTrStatus(const uint8_t* frame, size_t len, TrStatus& out);
+
+// And of a sub-type 4: the GPS broadcast (Klobuchar) ionosphere the board
+// has, as GPS broadcasts it (alpha0..3, beta0..3: RawMeasBuilder::
+// ionoFromBroadcast's bytes), where it came from and when the board took it.
+// After a fix when it changes, and every 30 s for a late listener.
+static constexpr uint8_t kIonoLnav = 1;   // decoded from GPS LNAV (subframe 4 page 18)
+static constexpr uint8_t kIonoLoad = 2;   // a navigation file's header (`rx eph load`)
+struct TrIono
+{
+    uint16_t week = 0;        // the GPS week and second of week the board took it
+    uint32_t tow_s = 0;
+    uint8_t  src = 0;         // kIonoLnav, kIonoLoad
+    int8_t   raw[8] = {};
+    // The GPS day it was taken: days since 1980-01-06 (ShadowIono::gps_day)
+    uint16_t gpsDay() const { return static_cast<uint16_t>(week * 7u + tow_s / 86400u); }
+};
+bool decodeTrIono(const uint8_t* frame, size_t len, TrIono& out);
 
 class Rtcm3Framer
 {

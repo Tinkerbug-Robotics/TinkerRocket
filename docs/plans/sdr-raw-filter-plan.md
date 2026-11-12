@@ -35,9 +35,18 @@ The plot: `bench-backups/v10-sdr-logs/` (`sdr_raw_filter_bench.png`).
    open-sky Pi it sits on now; both belong to another session), the V10 logging, then `raw_replay --receiver sdr`
    against the scenario's truth: boost, coast, attitude, unaided twin. The bar: not meaningfully worse than unaided
    with GNSS lost in boost.
-2. **The ionosphere.** RTCM has no message for it. The board decodes GPS's Klobuchar set: a 4001 sub-type for it
-   (gnss repo, `rtcm_msm.c`), filed through the GNSS task's ionosphere rule as the mosaic's GPSIon is
-   (`raw_iono_rule.h`). The app's upload path is the fallback.
+2. **The ionosphere.** BUILT 2026-11-12. RTCM has no message for it, so the board sends its GPS Klobuchar set as
+   4001 sub-type 4 (gnss repo `rtcm_msm.c` RTCM_TR_IONO; 21-byte frame: the week and second it took the set, its
+   source -- decoded from LNAV page 18, or the header of the navigation file loaded with `rx eph load` -- and the
+   eight broadcast bytes), after a fix when it changes and every 30 s. The V10 (`SdrRtcm` decodeTrIono, the driver's
+   broadcastIono) files it through the GNSS task's ionosphere rule as the mosaic's GPSIon (`raw_iono_rule.h`: the
+   receiver's set and the app's NVS set; the rig replay's rule on a replay build). Golden frames I1/I2 pinned in both
+   repos. On the rig it changes nothing: the scenes' sky is night-time (local ~00:40), where Klobuchar is its 5 ns
+   floor, which the builder already takes out without a set (raw_replay `--gps-iono` with the scene's set: identical
+   scores). The boost's 5 m vertical error is not the ionosphere: a 0.3-0.6 m/s vertical velocity error builds
+   through the 35 g burn (with a clean IMU, a truth seed, any output delay 0-15 ms, the Doppler means on or off) and
+   the coast takes it out by T+12 s. The 2.4 m pad offset is the board's own fix, whose PVT applies no ionosphere
+   without a set (with the loaded file's set it does). On a daytime sky the set is worth metres.
 3. **The output delay.** Measure it once: the V2 board's 1PPS on J401 pin 5 does it for good; on the V1, a GPIO
    pulse at the latch against the 4001's arrival on a scope, or the delay that best lines up the Dopplers with the
    IMU on the spin rig.

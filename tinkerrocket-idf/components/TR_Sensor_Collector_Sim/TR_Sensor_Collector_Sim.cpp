@@ -340,7 +340,7 @@ bool SensorCollectorSim::startReplay()
              h.ignition_gps_s - week * 604800.0, h.scen_start_s, h.scen_end_s, h.lat_deg, h.lon_deg,
              h.alt_m, (double)replay_b_ned_[0], (double)replay_b_ned_[1], (double)replay_b_ned_[2],
              (double)h.decimal_year);
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
 #if defined(TR_SIM_REPLAY_GPS_IONO)
     {
         static constexpr int8_t kSky[8] = {TR_SIM_REPLAY_GPS_IONO};
@@ -351,7 +351,8 @@ bool SensorCollectorSim::startReplay()
     }
 #else
     ESP_LOGW("SIM", "RIG REPLAY ionosphere: none carried (no -DTR_SIM_REPLAY_GPS_IONO): the filter takes only a set "
-             "dated within a day of the sky's (GPS day %u) -- on these files, none", (unsigned)replaySkyGpsDay());
+             "dated within a day of the sky's (GPS day %u) -- the mosaic's files carry none; the gnss-sdr-dev board "
+             "sends the set of the scenario's navigation file once it is loaded", (unsigned)replaySkyGpsDay());
 #endif
 #endif
     return true;
@@ -757,7 +758,7 @@ bool SensorCollectorSim::getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len)
 #endif
 }
 
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
 bool SensorCollectorSim::getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const
 {
 #if defined(TR_SIM_REPLAY_GPS_IONO)

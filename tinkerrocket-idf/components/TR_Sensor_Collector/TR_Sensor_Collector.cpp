@@ -1665,6 +1665,12 @@ bool SensorCollector::getGNSSRawStats(TR_GNSSReceiverSdrSerial::RawStats& out) c
     return out.enabled;
 }
 
+bool SensorCollector::getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const
+{
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.broadcastIono(raw, gps_day);
+}
+
 bool SensorCollector::gnssBoardHeard() const
 {
     return use_gnss && gnss_online_ && gnss_receiver.heardBoard();
