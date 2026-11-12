@@ -242,7 +242,7 @@ struct EpochAid
     bool    present = false;  // the block is there (its version not 0); the fields below are 0 otherwise
     uint8_t ver = 0;
     uint8_t src = 0;          // what the loops are aided by: 0 nothing, 1 the GPS-derived rate, 2 the board's IMU
-    uint8_t check = 0;        // the aiding check: 0 not run, 1 passing, 2 refused
+    uint8_t check = 0;        // the aiding check (the board IMU's pad check): 0 not run, 1 passing, 2 refused
     bool    boost = false;    // the boost profile is the loops' target
     bool    wide = false;     // the loops in force still more than 10 % wider than the quiet profile
     uint8_t by = 0;           // who set the target: 0 the GPS channels, 1 the flight computer (its

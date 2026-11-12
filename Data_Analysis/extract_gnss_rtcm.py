@@ -37,6 +37,23 @@ rests (sub-type 5, still seconds, one every 5 s), a bench one
 (TR_BENCH_SDR_AID) its P1 script. The summary counts those by sub-type (1
 attitude, 2 navigation state, 3 phase, 4 geometry, 5 rest). They stay in the .rtcm3, which the board's rtcmdump reads; RTKLIB
 passes 4002 over too.
+
+The board's own IMU into its tracking loops (the aided-receiver plan's P2)
+comes first in the summary when the epochs carry the aiding block's version 2
+(the board's receiver/README.md, "The IMU's watch"): how long the IMU aided
+the loops, and every time the board dropped it (when, in which of the flight
+computer's phases, why, and how long until it aided again), or "never
+dropped"; the pad check (the IMU's output at rest, where the truth is 0); and
+the loops' own share, what the IMU missed as the GPS channels' loops saw it,
+by phase. The board drops the IMU only when its data stop or cannot be read,
+never because the GPS channels disagree with it, so a drop is always worth a
+look:
+
+    ./extract_gnss_rtcm.py flight.bin --aid-csv --aid-plot
+        -> also flight.aid.csv, one row per epoch: the block's fields and the
+           loops' own share north, east and down (m/s^2); and flight.aid.png,
+           the share and what aided the loops against the log's time, the
+           drops marked
 """
 
 from __future__ import annotations
@@ -214,6 +231,180 @@ def msm_gps_tow(frame: bytes):
     return (epoch + 14000) % WEEK_MS if mt == 1127 else epoch
 
 
+TR_WHY = {0: "aiding", 1: "let go (turned off)", 2: "stale (none given for 30 ms)", 3: "a gap in its samples",
+          4: "its attitude lapsed (no flight computer attitude)", 5: "not a number",
+          6: "its sensor at the end of its range", 7: "the pad check failed"}
+TR_PHASE = {0: "no phase", 1: "pad", 2: "boost", 3: "coast", 4: "descent", 5: "landed"}
+TR_CHECK = {0: "not run", 1: "passing", 2: "FAILED (the IMU refused)"}
+TR_SRC = {0: "nothing", 1: "the GPS channels", 2: "the IMU"}
+
+
+def decode_epoch_aid(frame: bytes):
+    """A 4001 epoch's (sub-type 1) aiding block as a dict, or None: another message, or an epoch without one.
+
+    The block sits after as many 10-bit marks as the 6-bit count at payload bit
+    208 says, at a = 214 + 10 * nmark: version, what aids the loops, the
+    check, ..., 8 bits of the flight computer's frames (32 bits); version 2
+    puts why the IMU does not aid in version 1's reserved bits and appends 56:
+    its drops (mod 256), the last one's reason, the loops' own share's channels
+    and north, east, down (10 bits signed, 0.2 m/s^2), the pad check's window
+    (8 bits, 0.02 m/s^2). A frame cut short of the 56 keeps the first 32.
+    """
+    if message_type(frame) != TR_MESSAGE or len(frame) < 6:
+        return None
+    pay = frame[3:-3]
+    nb = 8 * len(pay)
+    v = int.from_bytes(pay, "big")
+
+    def get(pos, n, signed=False):
+        x = (v >> (nb - pos - n)) & ((1 << n) - 1)
+        return x - (1 << n) if signed and x >> (n - 1) else x
+
+    if nb < 214 or get(12, 4) != 1:
+        return None
+    at = 214 + 10 * get(208, 6)
+    if nb < at + 32 or get(at, 4) == 0:
+        return None
+    d = {"week": get(16, 16), "tow_ms": get(32, 30), "ver": get(at, 4), "src": get(at + 4, 2),
+         "check": get(at + 6, 2), "boost": get(at + 8, 1), "wide": get(at + 9, 1), "by": get(at + 10, 2),
+         "planned": get(at + 12, 1), "phase": get(at + 13, 3), "att": get(at + 16, 1), "nav": get(at + 17, 1),
+         "late": get(at + 18, 1), "fc_frames": get(at + 24, 8),
+         "why": 0, "drops": 0, "last": 0, "lo_n": 0, "lo": None, "pad": None}
+    if d["ver"] >= 2:
+        d["why"] = get(at + 19, 4)
+    if d["ver"] >= 2 and nb >= at + 88:
+        d["drops"], d["last"], d["lo_n"] = get(at + 32, 8), get(at + 40, 4), get(at + 44, 4)
+        if d["lo_n"]:
+            d["lo"] = tuple(0.2 * get(at + 48 + 10 * j, 10, signed=True) for j in range(3))
+        d["pad"] = 0.02 * get(at + 78, 8)
+    return d
+
+
+def imu_watch(frames):
+    """The board IMU's watch over a log's epochs: [(time_us, block)] with version 2's, the drops (each: time_us, GPS
+    time of week ms, phase, reason, seconds until the IMU aided again or None), the pad check's turns, the loops' own
+    share by phase (epochs, mean and largest |share|, m/s^2), the epochs with the IMU aiding, and the last block.
+    Durations are the epochs' own GPS time (the log's stamps are when each frame arrived)."""
+    rows = [(t, d) for t, f in frames if (d := decode_epoch_aid(f)) is not None and d["ver"] >= 2]
+    drops, pad, share = [], [], {}
+    prev = None
+    imu = 0
+    for t, d in rows:
+        aiding = d["src"] == 2
+        imu += aiding
+        if prev is not None:
+            n = (d["drops"] - prev["drops"]) % 256
+            for _ in range(n):
+                drops.append({"time_us": t, "tow_ms": d["tow_ms"], "phase": d["phase"], "why": d["last"],
+                              "back_s": None})
+            if d["check"] != prev["check"]:
+                pad.append({"time_us": t, "tow_ms": d["tow_ms"], "phase": d["phase"], "check": d["check"],
+                            "pad": d["pad"]})
+        if aiding and drops and drops[-1]["back_s"] is None:
+            for e in drops:
+                if e["back_s"] is None:
+                    e["back_s"] = ((d["tow_ms"] - e["tow_ms"]) % WEEK_MS) / 1e3
+        if aiding and d["lo"] is not None:
+            a = sum(x * x for x in d["lo"]) ** 0.5
+            ph = share.setdefault(d["phase"], {"n": 0, "sum": 0.0, "max": 0.0, "t_max": t})
+            ph["n"] += 1
+            ph["sum"] += a
+            if a > ph["max"]:
+                ph["max"], ph["t_max"] = a, t
+        prev = d
+    return {"rows": rows, "drops": drops, "pad": pad, "share": share, "imu": imu,
+            "last": rows[-1][1] if rows else None}
+
+
+def print_imu_watch(w, t0_us: int) -> None:
+    """The watch's lines for the summary: a flight whose IMU was dropped says so on the first."""
+    rows = w["rows"]
+    if not rows:
+        return
+    span = ((rows[-1][1]["tow_ms"] - rows[0][1]["tow_ms"]) % WEEK_MS) / 1e3
+    step = span / (len(rows) - 1) if len(rows) > 1 else 0.0
+    span += step
+    if w["drops"]:
+        n = len(w["drops"])
+        print(f"  IMU AIDING: DROPPED {n} TIME{'S' if n > 1 else ''} (the board's IMU into its loops)")
+    else:
+        print("  IMU aiding: never dropped (the board's IMU into its loops)")
+    last = w["last"]
+    pad = f"{last['pad']:.2f} m/s^2" if last["pad"] is not None else "none"
+    print(f"    aided {w['imu'] * step:.1f} s of {span:.1f} s of epochs ({w['imu']} of {len(rows)}); the pad check "
+          f"{TR_CHECK.get(last['check'], last['check'])} (its last still window {pad}); now "
+          f"{TR_WHY.get(last['why'], last['why'])}")
+    for k, e in enumerate(w["drops"], 1):
+        back = f"back {e['back_s']:.2f} s later" if e["back_s"] is not None else "never back"
+        print(f"    drop {k}: {(e['time_us'] - t0_us) / 1e6:.3f} s into the log (GPS {e['tow_ms'] / 1e3:.3f} s of "
+              f"week), {TR_PHASE.get(e['phase'], e['phase'])}: {TR_WHY.get(e['why'], e['why'])}; {back}")
+    for e in w["pad"]:
+        win = f"{e['pad']:.2f} m/s^2" if e["pad"] is not None else "-"
+        print(f"    the pad check {TR_CHECK.get(e['check'], e['check'])} at {(e['time_us'] - t0_us) / 1e6:.3f} s "
+              f"({TR_PHASE.get(e['phase'], e['phase'])}; the window {win})")
+    if w["share"]:
+        parts = [f"{TR_PHASE.get(ph, ph)} {v['sum'] / v['n']:.2f} mean, {v['max']:.2f} most (at "
+                 f"{(v['t_max'] - t0_us) / 1e6:.2f} s)" for ph, v in sorted(w["share"].items())]
+        print("    the loops' own share while the IMU aided (m/s^2): " + "; ".join(parts))
+
+
+def write_aid_csv(path: Path, w) -> int:
+    with path.open("w", newline="") as fh:
+        c = csv.writer(fh)
+        c.writerow(["time_us", "gps_tow_ms", "ver", "src", "check", "why", "drops", "last", "phase", "boost",
+                    "wide", "att", "nav", "late", "fc_frames", "lo_n", "lo_n_ms2", "lo_e_ms2", "lo_d_ms2",
+                    "pad_ms2"])
+        for t, d in w["rows"]:
+            lo = ["", "", ""] if d["lo"] is None else [f"{x:.1f}" for x in d["lo"]]
+            c.writerow([t, d["tow_ms"], d["ver"], d["src"], d["check"], d["why"], d["drops"], d["last"],
+                        d["phase"], d["boost"], d["wide"], d["att"], d["nav"], d["late"], d["fc_frames"],
+                        d["lo_n"], *lo, "" if d["pad"] is None else f"{d['pad']:.2f}"])
+    return len(w["rows"])
+
+
+def plot_aid(path: Path, w, t0_us: int, title: str) -> None:
+    """The loops' own share north, east and down, and what aided the loops, against the epochs' GPS time from the
+    first (linear axes); each drop a dashed line, the flight computer's boost shaded."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    rows = w["rows"]
+    tow0 = rows[0][1]["tow_ms"]
+    t = [((d["tow_ms"] - tow0) % WEEK_MS) / 1e3 for _, d in rows]
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6.5), sharex=True, gridspec_kw={"height_ratios": [3, 1]})
+    for j, (name, col) in enumerate((("north", "C0"), ("east", "C1"), ("down", "C2"))):
+        ax1.plot(t, [float("nan") if d["lo"] is None else d["lo"][j] for _, d in rows], color=col, lw=1.0,
+                 label=name)
+    ax1.set_ylabel("the loops' own share (m/s$^2$)")
+    ax1.set_title(f"{title}: what the board's IMU missed, as the GPS channels' loops saw it")
+    ax1.grid(True, alpha=0.3)
+    ax1.legend(loc="upper right")
+    ax2.step(t, [d["src"] for _, d in rows], where="post", color="0.25", lw=1.0)
+    ax2.set_yticks([0, 1, 2], [TR_SRC[0], TR_SRC[1], TR_SRC[2]])
+    ax2.set_ylabel("aided by")
+    ax2.set_xlabel(f"GPS time from the first epoch (s; {tow0 / 1e3:.3f} s of week)")
+    ax2.grid(True, alpha=0.3)
+    for ax in (ax1, ax2):
+        on = None
+        for x, (_, d) in zip(t, rows):
+            if d["phase"] == 2 and on is None:
+                on = x
+            elif d["phase"] != 2 and on is not None:
+                ax.axvspan(on, x, color="0.85", lw=0)
+                on = None
+        if on is not None:
+            ax.axvspan(on, t[-1], color="0.85", lw=0)
+        for e in w["drops"]:
+            ax.axvline(((e["tow_ms"] - tow0) % WEEK_MS) / 1e3, color="C3", ls="--", lw=1.0)
+    note = "grey: the flight computer's boost"
+    if w["drops"]:
+        note += f"; {len(w['drops'])} drop(s): dashed"
+    ax1.text(0.01, 0.95, note, transform=ax1.transAxes, color="C3" if w["drops"] else "0.3", va="top")
+    fig.tight_layout()
+    fig.savefig(path, dpi=120)
+    plt.close(fig)
+
+
 def epoch_summary(frames):
     """The MSM7 epochs in log order: how many, their usual step, and the ones missing between them.
 
@@ -262,6 +453,10 @@ def main(argv=None) -> int:
     ap.add_argument("log", type=Path, help="mini .bin flight log")
     ap.add_argument("-o", "--out", type=Path, help="output .rtcm3 (default: beside the log)")
     ap.add_argument("--csv", action="store_true", help="also write the decoded MSM7 as .msm7.csv")
+    ap.add_argument("--aid-csv", action="store_true",
+                    help="also write the gnss-sdr-dev board's aiding block, one row an epoch, as .aid.csv")
+    ap.add_argument("--aid-plot", action="store_true",
+                    help="also plot the board IMU's watch (the loops' own share, what aided them) as .aid.png")
     args = ap.parse_args(argv)
 
     frames, st = extract(args.log)
@@ -274,6 +469,9 @@ def main(argv=None) -> int:
     if st["sbf_blocks"]:
         print(f"  {st['sbf_blocks']} SBF blocks (mosaic-G5), not RTCM3: see extract_gnss_sbf.py")
     print(f"  wrote {out} ({out.stat().st_size} bytes)")
+    watch = imu_watch(frames)
+    t0 = frames[0][0] if frames else 0
+    print_imu_watch(watch, t0)
     print("  message types: " + (", ".join(f"{t} x{n}" for t, n in sorted(types.items())) or "none"))
     if frames:
         span = (frames[-1][0] - frames[0][0]) / 1e6
@@ -326,6 +524,15 @@ def main(argv=None) -> int:
                                 c["cn0_dbhz"], c["lock_ms"], c["half_cycle"], c["ext_info"]])
                     n += 1
         print(f"  wrote {path} ({n} satellite-signal rows)")
+    if args.aid_csv and watch["rows"]:
+        path = out.with_suffix(".aid.csv")
+        print(f"  wrote {path} ({write_aid_csv(path, watch)} epochs)")
+    if args.aid_plot and watch["rows"]:
+        path = out.with_suffix(".aid.png")
+        plot_aid(path, watch, t0, args.log.name)
+        print(f"  wrote {path}")
+    if (args.aid_csv or args.aid_plot) and not watch["rows"]:
+        print("  no aiding block of version 2 in the log: no .aid.csv or .aid.png")
     return 0
 
 
