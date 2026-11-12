@@ -122,6 +122,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// profile and no connect-time sync.
     @Published private(set) var accelCalStatus: AccelCalStatus?
 
+    /// Latest report of the gnss-sdr-dev board's IMU mounting, as the flight
+    /// computer relays it: file_ops behind 0xD2, once a second on the ground
+    /// with the board on J1 and at each change. nil until the first frame
+    /// (none comes from a rocket without the board). Reset on disconnect.
+    @Published private(set) var sdrAlignStatus: SdrAlignStatus?
+
     /// #1629: what THIS board holds for calibration, read from the board on
     /// connect (`requestCalibrationStatus`) and kept current by the status
     /// frames the flight computer republishes after every calibration it
@@ -146,6 +152,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// cannot carry: two equal frames publish no change, and SwiftUI may
     /// coalesce changes that come close together.
     let accelCalFrames = PassthroughSubject<AccelCalStatus, Never>()
+
+    /// Every 0xD2 frame, in order: the six-face screen matches its command's
+    /// answer in them (BoardAlignFlow.take).
+    let sdrAlignFrames = PassthroughSubject<SdrAlignStatus, Never>()
 
     /// Every GNSS antenna offset this link sends (cmd 81), as sent. Whoever
     /// sent it (Send All, the push on a profile switch, the settings screen),
@@ -464,6 +474,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         padCalStatus = nil
         padCalGeneration += 1
         accelCalStatus = nil
+        sdrAlignStatus = nil
         calibration = BoardCalibration()
         magCalReadUntil = nil
         calibrationRequested = false
@@ -1686,6 +1697,15 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// FAILED frame with no samples and no MEASURING before it.
     func sendAccelFaceMeasure() { sendRawCommand(78) }
 
+    /// The gnss-sdr-dev board's IMU mounting: command 83 with SdrAlignCmdData
+    /// ([op, id]: save, clear, restart or report). The flight computer sends it
+    /// to the board until the board echoes it, and answers with 0xD2 frames
+    /// that carry the id; it refuses in flight, after a flight, during a
+    /// magnetometer calibration and with no board on J1.
+    func sendSdrAlignCommand(op: UInt8, id: UInt8) {
+        sendRawCommand(83, payload: SdrAlignCommand.payload(op: op, id: id))
+    }
+
     /// The high-g's six-face alignment to the low-g: HighGCalApplyData, 49
     /// bytes (op, M row-major, b). Answered with a 0xD1 frame that carries the
     /// high-g as stored; an older flight or out computer does not answer.
@@ -2544,6 +2564,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         case 0xCE: parsePyroTestRefusal(data)  // rail-off pyro refusal
         case 0xD0: parsePadCalStatus(data)     // pad calibration, #1600 phase 5
         case 0xD1: parseAccelCalStatus(data)   // accelerometer six-face calibration, #1629
+        case 0xD2: parseSdrAlignStatus(data)   // the gnss-sdr-dev board's IMU mounting
         case 0x7B:                              // '{' → JSON object
             if let s = OTAStatusUpdate.parse(data) {
                 otaStatus = s
@@ -3113,6 +3134,20 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         accelCalStatus = status
         accelCalFrames.send(status)
         foldCalibration(BoardCalibration(accel: status.isStored, highGAligned: status.highG?.isStored))
+    }
+
+    /// 0xD2 — the gnss-sdr-dev board's IMU mounting, as the flight computer
+    /// relays it: [0xD2][107-byte SdrAlignStatusData]. A short frame is
+    /// dropped whole.
+    private func parseSdrAlignStatus(_ data: Data) {
+        let bytes = [UInt8](data)
+        guard bytes.count >= 1 + SdrAlignStatus.payloadLength, bytes[0] == 0xD2,
+              let status = SdrAlignStatus.decode(Array(bytes[1...])) else {
+            print("[SDRALIGN] malformed status (\(bytes.count) bytes)")
+            return
+        }
+        sdrAlignStatus = status
+        sdrAlignFrames.send(status)
     }
 
     /// 0xCE — rail-off pyro-test refusal (OC sendPyroTestRefusal).

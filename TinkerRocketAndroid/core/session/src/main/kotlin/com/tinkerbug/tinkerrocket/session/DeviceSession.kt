@@ -25,6 +25,7 @@ import com.tinkerbug.tinkerrocket.protocol.PadCalStatus
 import com.tinkerbug.tinkerrocket.protocol.PyroChannelConfig
 import com.tinkerbug.tinkerrocket.protocol.RocketConfig
 import com.tinkerbug.tinkerrocket.protocol.RocketStorageStats
+import com.tinkerbug.tinkerrocket.protocol.SdrAlignStatus
 import com.tinkerbug.tinkerrocket.protocol.SensorCalStatus
 import com.tinkerbug.tinkerrocket.protocol.TelemetryCharMessage
 import com.tinkerbug.tinkerrocket.protocol.TelemetryData
@@ -368,6 +369,19 @@ public class DeviceSession(
     public val accelCalFrames: SharedFlow<AccelCalStatus> = _accelCalFrames.asSharedFlow()
 
     /**
+     * The gnss-sdr-dev board's IMU mounting, as the flight computer relays
+     * the board's report (0xD2): once a second on the ground with the board
+     * on J1 and at each change.  Null until the first frame — none comes from
+     * a rocket without the board.  iOS BLEDevice.sdrAlignStatus.
+     */
+    private val _sdrAlignStatus = MutableStateFlow<SdrAlignStatus?>(null)
+    public val sdrAlignStatus: StateFlow<SdrAlignStatus?> = _sdrAlignStatus.asStateFlow()
+
+    /** Every 0xD2 frame, in order: the six-face screen matches its command's answer in them ([BoardAlign.Flow.take]). */
+    private val _sdrAlignFrames = MutableSharedFlow<SdrAlignStatus>(extraBufferCapacity = 16)
+    public val sdrAlignFrames: SharedFlow<SdrAlignStatus> = _sdrAlignFrames.asSharedFlow()
+
+    /**
      * #1629: which face the board is on now, from the newest telemetry frame
      * — iOS BLEDevice.accelLiveFace.  Its lx/ly/lz turned back through the
      * mounting they are in: the frame's own "imo" (the base station's relay
@@ -655,6 +669,7 @@ public class DeviceSession(
         // next connection may be another board, or this one reflashed.  So
         // does the mounting code the live face hint turns lx/ly/lz with.
         _accelCalStatus.value = null
+        _sdrAlignStatus.value = null
         _calibration.value = BoardCalibration()
         magCalReadUntilMs = 0L
         calibrationRequested = false
@@ -974,6 +989,10 @@ public class DeviceSession(
                 foldCalibration(
                     BoardCalibration(accel = msg.status.stored, highGAligned = msg.status.highG?.stored),
                 )
+            }
+            is FileOpsMessage.SdrAlign -> {
+                _sdrAlignStatus.value = msg.status
+                _sdrAlignFrames.tryEmit(msg.status)
             }
             is FileOpsMessage.RocketStorage -> _rocketStorage.value = msg.stats
             is FileOpsMessage.BsStorage -> _bsStorage.value = msg.stats
@@ -2038,6 +2057,13 @@ public class DeviceSession(
         val w = highG ?: return AccelSixFace.Written(offset, null)
         return AccelSixFace.Written(offset, AccelSixFace.HighGWriteReport(w, applyHighGCal(w).final))
     }
+
+    /**
+     * Command 83: a save, a clear, a restart or a report of the gnss-sdr-dev
+     * board's IMU mounting, with the app's id for it. The answers come as
+     * [sdrAlignFrames], the id echoed ([BoardAlign.Flow]).
+     */
+    public fun sendSdrAlign(op: Int, id: Int): Unit = sendCommandFrame(Commands.sdrAlign(op, id))
 
     private suspend fun awaitAccelCalFrame(frame: ByteArray, timeoutMs: Long): AccelCalStatus? {
         if (!_isConnected.value) return null

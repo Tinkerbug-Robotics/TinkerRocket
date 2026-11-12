@@ -553,6 +553,14 @@ public object Commands {
         }
     }
 
+    /**
+     * cmd 83 — SdrAlignCmdData, 2 B: `[op u8][id u8]`, a command about the
+     * gnss-sdr-dev board's IMU mounting ([SdrAlignCommand]) and the app's id
+     * for it, which the 0xD2 answers carry.
+     */
+    public fun sdrAlign(op: Int, id: Int): ByteArray =
+        frame(BleCommandId.SDR_ALIGN) { u8(op); u8(id) }
+
     // ------------------------------------------------------------------ scan
 
     /** cmd 60 (BS only) — frequency scan, 12 B:

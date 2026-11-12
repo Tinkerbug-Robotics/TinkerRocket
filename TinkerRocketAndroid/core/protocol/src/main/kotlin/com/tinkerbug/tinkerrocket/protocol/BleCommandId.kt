@@ -200,4 +200,14 @@ public object BleCommandId {
      * predates it ignores it.
      */
     public const val ANTENNA_OFFSET: Int = 81
+
+    /**
+     * The gnss-sdr-dev board's IMU mounting: SdrAlignCmdData 2 B, `[op u8]
+     * [id u8]` ([SdrAlignCommand]: 1 save, 2 clear, 3 restart, 4 report; the
+     * app's id). The flight computer sends it to the board until the board
+     * echoes it and answers with 0xD2 frames ([SdrAlignStatus]) carrying the
+     * id; it refuses in flight, after a flight, during a magnetometer
+     * calibration and with no board on J1.
+     */
+    public const val SDR_ALIGN: Int = 83
 }
