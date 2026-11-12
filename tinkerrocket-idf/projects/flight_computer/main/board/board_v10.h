@@ -26,7 +26,7 @@
 //     16      PYRO_ARM           unconnected
 //     33      EXP_12             FC_ARM        <- the arm moved
 //     46      IIS2MDCTR_INT      EXP_12
-//     17      PIEZZO             V_SCAP_ADC    (left undriven, #1409)
+//     17      PIEZZO             V_SCAP_ADC    (ADC input only, #1409)
 //     47/48   IIS2MDC SDA/SCL    MAG_SDA/SCL   (U3 is a QMC5883P now)
 //     28/29,34,37,38             same nets, J3 order reversed (servo block)
 //
@@ -220,9 +220,19 @@ struct board_pins
     //
     // No piezo. GPIO17 is V_SCAP_ADC: R125/R126 (100 k / 100 k) halve the
     // hold-up capacitor voltage onto it, with C143 (100 nF) at the pin.
-    // Nothing reads it yet (#1409) and nothing may drive it.
+    // Nothing may drive it; it is read as an ADC input (below).
     static constexpr uint8_t RED_LED_PIN = 27;    // IND_1
     static constexpr uint8_t BLUE_LED_PIN = 26;   // IND_2
+
+    // ### Hold-up supercap sense (net V_SCAP_ADC, #1409) ###
+    // U17 pad 18 = GPIO17 = ADC1_CH1 (soc/esp32p4 adc_channel.h). R125 from
+    // V_SCAP over R126 to GND, both 100 k, so the pad sees V_SCAP / 2: the
+    // TPS61094 (U47) terminates C130 at 2.5 V, 1.25 V here. Same net, pad and
+    // divider on the V11 (hardware/tinker-mantis on main, netlist 2026-11-12).
+    // Read once a second and sent to the out computer in FcStatusData.scap_mv,
+    // where the #1166 verdict runs (the mini reads its cap on the OC instead).
+    static constexpr int   SCAP_ADC_PIN       = 17;     // V_SCAP_ADC
+    static constexpr float SCAP_DIVIDER_RATIO = 2.0f;   // R125 / R126, 100 k / 100 k
 
     // ### I2C command/config channel to the OutComputer ###
     static constexpr uint8_t ESP_SDA_PIN = 23;  // ESP_SDA (OC GPIO5), R58 5.11 k

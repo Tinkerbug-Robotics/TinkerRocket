@@ -229,12 +229,12 @@ that changes size fails the build rather than corrupting a log silently.
 | `RollWaypoint` | 9 |
 | `ServoTestAnglesData` | 8 |
 | `AntennaOffsetConfigData` | 7 |
+| `FcStatusData` | 7 |
 | `LoRaFrameHeader` | 7 |
 | `PadContextHeader` | 7 |
 | `GNSSSatBlock` | 6 |
 | `Ism6TempData` | 6 |
 | `Vec3i16` | 6 |
-| `FcStatusData` | 5 |
 | `GnssRtcmHeader` | 5 |
 | `FcBootStatusData` | 4 |
 | `ServoReplayData` | 4 |

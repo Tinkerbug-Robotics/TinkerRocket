@@ -1604,14 +1604,29 @@ static_assert(sizeof(FcBootStatusData) == 4,
 // option.
 //
 // `flags` is a byte rather than a bool so the next FC-truth signal is free.
+//
+// v2 (#1409) appends `scap_mv`: the hold-up supercap voltage on the boards
+// whose sense line lands on the FLIGHT computer (the Tinker-Mantis V10 and
+// V11: V_SCAP_ADC is P4 GPIO17). On the mini the out computer reads the cap
+// itself (#1166); here the out computer runs the same verdict on this field.
+// Read once a second by the FC and repeated in every frame until the next
+// read; 2 bytes at 5 Hz, inside the I2S budget (test_i2s_link_budget). A v1
+// frame (5 bytes, an FC image from before #1409) is still a valid frame:
+// the out computer takes the flags and has no V_SCAP from it, and the
+// decoders accept both lengths (FC_STATUS_V1_SIZE).
 typedef struct __attribute__((packed))
 {
     uint32_t time_us;   // FC clock at send — same micros() origin as every
                         // other FC stream, so this overlays the sensor traces
     uint8_t  flags;     // FCS_* bits below
+    uint16_t scap_mv;   // v2: V_SCAP in mV (after the divider), meaningful only
+                        // with FCS_SCAP_SENSE; FCS_SCAP_NO_READING = none
 } FcStatusData;
-static_assert(sizeof(FcStatusData) == 5,
-              "FcStatusData must be 5 bytes");
+static_assert(sizeof(FcStatusData) == 7,
+              "FcStatusData must be 7 bytes");
+static constexpr size_t FC_STATUS_V1_SIZE = 5;   // time_us + flags, before #1409
+static_assert(FC_STATUS_V1_SIZE == offsetof(FcStatusData, scap_mv),
+              "FcStatusData v2 only appends: v1 is its first FC_STATUS_V1_SIZE bytes");
 
 // "Engaged", deliberately wider than "recording": the rail is up and the start
 // sequence is running from the moment of the request, but camera_recording only
@@ -1630,6 +1645,45 @@ static constexpr uint8_t FCS_CAMERA_ENGAGED = (1u << 0);
 // are withheld until the next launch (or sim edge). Never set on any other
 // image. A flight log reads the latch time from the first frame with it set.
 static constexpr uint8_t FCS_RAW_VOTES_WITHHELD = (1u << 1);
+
+// #1409: this flight computer has the hold-up cap's sense line (V10/V11), so
+// scap_mv is its reading of V_SCAP, or FCS_SCAP_NO_READING when its ADC did
+// not answer (no calibration, a failed read). Clear on every other board,
+// whose scap_mv is FCS_SCAP_NO_READING and means nothing.
+static constexpr uint8_t  FCS_SCAP_SENSE      = (1u << 2);
+static constexpr uint16_t FCS_SCAP_NO_READING = 0xFFFFu;
+
+// The FC side: the scap_mv field for a V_SCAP reading in volts. NaN (no
+// reading) becomes the sentinel, a reading at or below zero is 0 mV, and the
+// top is clamped under the sentinel, so a reading never passes for "no
+// reading".
+static inline uint16_t fcStatusScapMv(float scap_v)
+{
+    if (!(scap_v == scap_v)) return FCS_SCAP_NO_READING;   // NaN
+    if (scap_v <= 0.0f) return 0;
+    const float mv = scap_v * 1000.0f + 0.5f;
+    if (mv >= (float)(FCS_SCAP_NO_READING - 1u)) return (uint16_t)(FCS_SCAP_NO_READING - 1u);
+    return (uint16_t)mv;
+}
+
+// The out computer's side: what an FC_STATUS_MSG payload says about V_SCAP.
+enum FcScapReport : uint8_t
+{
+    FC_SCAP_ABSENT     = 0,   // nothing: a v1 frame, or an FC with no sense line
+    FC_SCAP_VOLTS      = 1,   // *mv_out holds V_SCAP in mV
+    FC_SCAP_NO_READING = 2,   // the FC has the sense line and its ADC did not answer
+};
+static inline uint8_t fcStatusScapReport(const uint8_t* payload, size_t len, uint16_t* mv_out)
+{
+    if (payload == nullptr || len < sizeof(FcStatusData)) return FC_SCAP_ABSENT;
+    const uint8_t flags = payload[offsetof(FcStatusData, flags)];
+    if ((flags & FCS_SCAP_SENSE) == 0) return FC_SCAP_ABSENT;
+    const size_t o = offsetof(FcStatusData, scap_mv);   // little-endian, as packed
+    const uint16_t mv = (uint16_t)(payload[o] | ((uint16_t)payload[o + 1] << 8));
+    if (mv == FCS_SCAP_NO_READING) return FC_SCAP_NO_READING;
+    if (mv_out != nullptr) *mv_out = mv;
+    return FC_SCAP_VOLTS;
+}
 
 // ── RawGnssEkfData (RAW_GNSS_EKF_MSG 0x96, 10 Hz) ───────────────────────────
 // #1600 phase 4.  The raw-GNSS shadow filter (TR_RawGnssEKF, run by

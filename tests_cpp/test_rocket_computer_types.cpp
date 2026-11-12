@@ -8,6 +8,7 @@
 #include <set>
 #include <string>
 #include <utility>
+#include <vector>
 #include "RocketComputerTypes.h"
 #include "GuidancePointGate.h"
 #include "RollProfileGate.h"
@@ -44,9 +45,13 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(sizeof(NonSensorData),  52u);  // #1190: +uint16 shock_gate_trips (2 B) after #529's ekf_ticks
     // #1154 item 4: the FC's own camera truth, 5 Hz on FC_STATUS_MSG.
     // Deliberately NOT a byte in NonSensorData — see FcStatusData.
-    EXPECT_EQ(sizeof(FcStatusData),    5u);
+    // #1409: v2 appends the V10's hold-up cap voltage; v1 (5 B) stays the
+    // length decoders and the out computer must still accept.
+    EXPECT_EQ(sizeof(FcStatusData),    7u);
+    EXPECT_EQ(FC_STATUS_V1_SIZE,       5u);
     EXPECT_EQ(offsetof(FcStatusData, time_us), 0u);
     EXPECT_EQ(offsetof(FcStatusData, flags),   4u);
+    EXPECT_EQ(offsetof(FcStatusData, scap_mv), 5u);
     EXPECT_EQ(sizeof(LoRaFrameHeader), 7u);   // #850: shared prefix, both frames
     EXPECT_EQ(sizeof(LoRaFastData),   55u);  // #850: 5-of-6 slots
     EXPECT_EQ(sizeof(LoRaSlowData),   22u);  // #850: 1-of-6 slots
@@ -124,6 +129,81 @@ TEST(RocketComputerTypes, KnownSizes) {
 // FC boot progress: the app renders a step name and a stall from these, so the
 // enum ordering and the degraded bits are wire contract, not implementation
 // detail.  Append-only — the apps map an unknown step to a generic message.
+// #1409: FcStatusData.scap_mv, the V10/V11's hold-up cap voltage from the
+// flight computer to the out computer.
+TEST(FcStatusScap1409, FlagBitsDoNotOverlap) {
+    EXPECT_EQ(FCS_CAMERA_ENGAGED & FCS_RAW_VOTES_WITHHELD, 0);
+    EXPECT_EQ(FCS_SCAP_SENSE & (FCS_CAMERA_ENGAGED | FCS_RAW_VOTES_WITHHELD), 0);
+    EXPECT_EQ(FCS_SCAP_SENSE, 0x04);
+    EXPECT_EQ(FCS_SCAP_NO_READING, 0xFFFFu);
+}
+
+TEST(FcStatusScap1409, VoltsToFieldRoundsAndNeverReachesTheSentinel) {
+    EXPECT_EQ(fcStatusScapMv(2.5f),    2500u);
+    EXPECT_EQ(fcStatusScapMv(2.2004f), 2200u);
+    EXPECT_EQ(fcStatusScapMv(2.2006f), 2201u);   // rounded, not truncated
+    EXPECT_EQ(fcStatusScapMv(0.0f),    0u);      // an empty cap is a reading
+    EXPECT_EQ(fcStatusScapMv(-0.01f),  0u);
+    EXPECT_EQ(fcStatusScapMv(NAN),     FCS_SCAP_NO_READING);
+    EXPECT_EQ(fcStatusScapMv(70.0f),   FCS_SCAP_NO_READING - 1u);   // clamped under it
+    EXPECT_EQ(fcStatusScapMv(65.535f), FCS_SCAP_NO_READING - 1u);
+}
+
+namespace {
+std::vector<uint8_t> fcStatusBytes(uint8_t flags, uint16_t scap_mv)
+{
+    FcStatusData d{};
+    d.time_us = 123456u;
+    d.flags   = flags;
+    d.scap_mv = scap_mv;
+    std::vector<uint8_t> b(sizeof d);
+    memcpy(b.data(), &d, sizeof d);
+    return b;
+}
+}  // namespace
+
+TEST(FcStatusScap1409, ReportReadsTheV10Reading) {
+    const auto b = fcStatusBytes(FCS_SCAP_SENSE | FCS_CAMERA_ENGAGED, 2487);
+    uint16_t mv = 0;
+    EXPECT_EQ(fcStatusScapReport(b.data(), b.size(), &mv), FC_SCAP_VOLTS);
+    EXPECT_EQ(mv, 2487u);
+    // An empty cap reads 0 mV, a voltage, not "no reading".
+    const auto z = fcStatusBytes(FCS_SCAP_SENSE, 0);
+    mv = 99;
+    EXPECT_EQ(fcStatusScapReport(z.data(), z.size(), &mv), FC_SCAP_VOLTS);
+    EXPECT_EQ(mv, 0u);
+}
+
+TEST(FcStatusScap1409, ASenseWithNoReadingIsNotAVoltage) {
+    const auto b = fcStatusBytes(FCS_SCAP_SENSE, FCS_SCAP_NO_READING);
+    uint16_t mv = 1234;
+    EXPECT_EQ(fcStatusScapReport(b.data(), b.size(), &mv), FC_SCAP_NO_READING);
+    EXPECT_EQ(mv, 1234u);   // untouched
+}
+
+TEST(FcStatusScap1409, NoSenseOrAV1FrameSaysNothing) {
+    // Every board but the V10/V11: the flag is clear, whatever the field holds.
+    const auto v9 = fcStatusBytes(FCS_CAMERA_ENGAGED, FCS_SCAP_NO_READING);
+    EXPECT_EQ(fcStatusScapReport(v9.data(), v9.size(), nullptr), FC_SCAP_ABSENT);
+    const auto stray = fcStatusBytes(0, 2500);
+    EXPECT_EQ(fcStatusScapReport(stray.data(), stray.size(), nullptr), FC_SCAP_ABSENT);
+    // A v1 frame (an FC image older than #1409) is five bytes: no voltage,
+    // whatever its flags say.
+    const auto v1 = fcStatusBytes(FCS_SCAP_SENSE, 2500);
+    EXPECT_EQ(fcStatusScapReport(v1.data(), FC_STATUS_V1_SIZE, nullptr), FC_SCAP_ABSENT);
+    EXPECT_EQ(fcStatusScapReport(nullptr, sizeof(FcStatusData), nullptr), FC_SCAP_ABSENT);
+}
+
+TEST(FcStatusScap1409, FieldRoundTripsThroughTheReport) {
+    for (float v : {0.05f, 1.0f, 2.2f, 2.5f, 2.7f})
+    {
+        const auto b = fcStatusBytes(FCS_SCAP_SENSE, fcStatusScapMv(v));
+        uint16_t mv = 0;
+        ASSERT_EQ(fcStatusScapReport(b.data(), b.size(), &mv), FC_SCAP_VOLTS) << v;
+        EXPECT_NEAR(mv * 0.001f, v, 0.0005f) << v;
+    }
+}
+
 TEST(RocketComputerTypes, FcBootStepContract) {
     EXPECT_EQ(FCB_LINKS,      0u);
     EXPECT_EQ(FCB_NVS,        1u);

@@ -183,6 +183,10 @@ struct board_pins
     static constexpr uint8_t RED_LED_PIN = 27;    // IND_1
     static constexpr uint8_t BLUE_LED_PIN = 26;   // IND_2
 
+    // No hold-up supercap sense on this board (#1409).
+    static constexpr int   SCAP_ADC_PIN       = -1;
+    static constexpr float SCAP_DIVIDER_RATIO = 1.0f;   // unused with no pin
+
     // ### I2C command/config channel to the OutComputer ###
     static constexpr uint8_t ESP_SDA_PIN = 23;  // ESP_SDA (OC pin 5)
     static constexpr uint8_t ESP_SCL_PIN = 22;  // ESP_SCL (OC pin 6)

@@ -1310,6 +1310,21 @@ _P(
         "proof anything was filmed. Absent on logs predating the message.",
 )
 _P(
+    "FcStatus.scap_v", "Hold-up cap voltage (FC)",
+    unit="V",
+    note=
+        "V_SCAP, the hold-up supercap (C130) as the flight computer reads it through the "
+        "R125/R126 2:1 divider on P4 GPIO17: Tinker-Mantis V10/V11 only (#1409). Read once a "
+        "second and repeated in every 5 Hz FC_STATUS_MSG, so it moves in 1 s steps. The out "
+        "computer judges the same value for the app's 'hu' advisory (charged at 2.2 V of the "
+        "2.5 V termination).",
+    caution=
+        "None on every other board (the mini's cap is read by its out computer and is not in "
+        "this record), on logs from before FcStatusData v2, and on a V10 whose ADC did not "
+        "answer (no eFuse calibration, a failed read). The cap only discharges when the pack "
+        "is gone, so a falling trace is a hold-up event; ~1 s resolution cannot time a short one.",
+)
+_P(
     "NonSensor.shock_gate_trips", "EKF shock-gate trips",
     kind=KIND_COUNTER,
     note=
