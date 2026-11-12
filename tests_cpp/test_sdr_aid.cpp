@@ -153,6 +153,19 @@ const Bytes kRest4 = {
     0x00, 0x00, 0xD5, 0x03, 0xE8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x30, 0xB1, 0x13, 0x76};
 
+// A5 and R5: A1's and R1's inputs in the flight computer's IMU axes (frame
+// 1: its board frame, before the mounting), as the flight image sends both
+// since 2026-11-12 (the reference codec's imu_frame_goldens.py; the board's
+// test_rtcm_fc.cpp pins the same bytes)
+const Bytes kA5 = {
+    0xD3, 0x00, 0x1E, 0xFA, 0x21, 0x09, 0x80, 0x30, 0xA3, 0x2D, 0xED, 0xBE,
+    0x15, 0x41, 0xE3, 0xD3, 0x33, 0x3E, 0x8F, 0x61, 0xEB, 0x80, 0x00, 0x00,
+    0x08, 0x03, 0xFB, 0x00, 0x03, 0x00, 0x03, 0x43, 0xC0, 0x3B, 0x87, 0x49};
+const Bytes kRest5 = {
+    0xD3, 0x00, 0x17, 0xFA, 0x25, 0x09, 0x80, 0x30, 0xA3, 0x2C, 0x00, 0x00,
+    0x00, 0x00, 0x55, 0xC3, 0xE8, 0x00, 0x07, 0xBF, 0xEE, 0x29, 0xE8, 0x1F,
+    0x70, 0x50, 0xF4, 0xC4, 0x3E};
+
 // The script's frames (S + sub-type + _ + tow_ms): week 2432, sub_ns 0, src
 // 0, test, tq 5, seq as each test says.
 const Bytes kS1_204000000 = {
@@ -499,7 +512,8 @@ std::vector<std::pair<uint8_t, Bytes>> allFc()
             {kNavState, kS2_204000000}, {kNavState, kS2_204002500}, {kNavState, kS2_204055000},
             {kPhase, kS3_204000000}, {kPhase, kS3_204000160}, {kPhase, kS3_204010000},
             {kPhase, kS3_204080100}, {kPhase, kS3_204500000}, {kGeometry, kS4_204000000},
-            {kRest, kRest1}, {kRest, kRest2}, {kRest, kRest3}, {kRest, kRest4}};
+            {kRest, kRest1}, {kRest, kRest2}, {kRest, kRest3}, {kRest, kRest4},
+            {kAttitude, kA5}, {kRest, kRest5}};
 }
 
 // What a sub-type's decoder reads of a frame, encoded again (nothing if it
@@ -556,6 +570,35 @@ TEST(SdrAid, TheGoldenFrames)
     checkNav("N3", kN3, kInN3, true, false, {-30927639484, -55794938587, 0}, {0, 0, 0}, {300, 500, 0, 0});
     checkGeom("G3", kG3, kInG3, false, false, {0, 0, 0}, {0, 0, 0, 0});
     checkRest("R3", kRest3, kInRest3, false, 1000, {0, 0, 0}, 1);
+}
+
+TEST(SdrAid, TheImuFrameGoldens)
+{
+    // The same values in the flight computer's IMU axes: the frame field (bits
+    // 98-99 of the attitude, bit 97 of the rest) and nothing else differs
+    Attitude a = kInA1;
+    a.frame = kFrameImu;
+    EXPECT_EQ(enc(a), kA5);
+    Rest r = kInRest1;
+    r.frame = kFrameImu;
+    EXPECT_EQ(enc(r), kRest5);
+    Attitude da;
+    ASSERT_TRUE(decode(kA5.data(), kA5.size(), da));
+    EXPECT_EQ(da.frame, kFrameImu);
+    EXPECT_EQ(enc(da), kA5);
+    Rest dr;
+    ASSERT_TRUE(decode(kRest5.data(), kRest5.size(), dr));
+    EXPECT_EQ(dr.frame, kFrameImu);
+    EXPECT_TRUE(dr.valid);
+    EXPECT_EQ(dr.dur_ms, 1000);
+    EXPECT_EQ(enc(dr), kRest5);
+    // and the body's goldens read frame 0
+    ASSERT_TRUE(decode(kRest1.data(), kRest1.size(), dr));
+    EXPECT_EQ(dr.frame, kFrameBody);
+    for (size_t i = 0; i < kA5.size() - 3; i++)
+        if (i != 15) EXPECT_EQ(kA5[i], kA1[i]) << i;   // byte 15 holds bits 96-103 of the message
+    for (size_t i = 0; i < kRest5.size() - 3; i++)
+        if (i != 15) EXPECT_EQ(kRest5[i], kRest1[i]) << i;
 }
 
 TEST(SdrAid, TheFieldEnds)
@@ -2446,8 +2489,73 @@ TEST(SdrAidFc, ANoseUpBodyPointsUpAndALevelOneNorth)
     Attitude d;
     ASSERT_TRUE(decode(b, len, d));
     ASSERT_TRUE(d.att_valid);
-    EXPECT_EQ(d.frame, 0);
+    EXPECT_EQ(d.frame, kFrameImu);   // the IMU's axes: the body's, with no mounting
     expectNear(turn(d.q, {1, 0, 0}), up, 2e-4, "nose up off the wire");
+}
+
+TEST(SdrAidFc, TheAttitudeAndItsRateInThisImusAxes)
+{
+    // This IMU mounted with its +z toward the nose: body x = imu z, body y =
+    // imu y, body z = -imu x (v_body = b2r v_imu). Nose up on the pad, the
+    // IMU's z points up and its x north (the body's down, negated: the belly
+    // faces north), and a body rate (0.1, 0.2, 0.3) is (-0.3, 0.2, 0.1) in
+    // the IMU's axes
+    const double lat = 40.5 * kDegToRad, lon = -112.1 * kDegToRad;
+    const Vec3 up = {-downAt(lat, lon)[0], -downAt(lat, lon)[1], -downAt(lat, lon)[2]};
+    sdr_aid_fc::Sender tx;
+    const Vec3 pad = ecefOf(lat, lon, 1400.0);
+    ASSERT_TRUE(tx.noteBoardFix(pad.data()));
+    FilterState s = stateAt(1000000, kNoseUp, {0.1, 0.2, 0.3});
+    const double b2r[9] = {0, 0, 1, 0, 1, 0, -1, 0, 0};
+    std::copy(b2r, b2r + 9, s.b2r);
+    tx.noteFilter(s);
+    int64_t stamp_us = 0;
+    const Attitude a = tx.attitude(1000500, false, kLineTq, stamp_us);
+    ASSERT_TRUE(a.att_valid);
+    ASSERT_TRUE(a.rate_valid);
+    EXPECT_EQ(a.frame, kFrameImu);
+    expectNear(turn(a.q, {0, 0, 1}), up, 1e-12, "the IMU's z");
+    const Vec3 north = northAt(lat, lon);
+    expectNear(turn(a.q, {1, 0, 0}), {-north[0], -north[1], -north[2]}, 1e-12, "the IMU's x");
+    expectNear(turn(a.q, {0, 1, 0}), eastAt(lat, lon), 1e-12, "the IMU's y");
+    EXPECT_NEAR(a.w[0], -0.3, 1e-15);
+    EXPECT_NEAR(a.w[1], 0.2, 1e-15);
+    EXPECT_NEAR(a.w[2], 0.1, 1e-15);
+    EXPECT_GE(a.q[0], 0.0);
+}
+
+TEST(SdrAidFc, AMatrixsQuaternionFromEachOfShepperdsBranches)
+{
+    // A turn about each axis past 90 deg and the identity: each of the four
+    // branches, back to the same matrix, scalar part >= 0
+    const double c = std::cos(2.5), s = std::sin(2.5);
+    const double mats[][9] = {
+        {1, 0, 0, 0, 1, 0, 0, 0, 1},
+        {1, 0, 0, 0, c, -s, 0, s, c},
+        {c, 0, s, 0, 1, 0, -s, 0, c},
+        {c, -s, 0, s, c, 0, 0, 0, 1},
+        {0, 0, 1, 0, 1, 0, -1, 0, 0},
+    };
+    for (const auto& R : mats)
+    {
+        double q[4];
+        sdr_aid_fc::quatOfDcm(R, q);
+        EXPECT_GE(q[0], 0.0);
+        EXPECT_NEAR(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3], 1.0, 1e-12);
+        for (int j = 0; j < 3; j++)
+        {
+            Vec3 e = {0, 0, 0};
+            e[j] = 1.0;
+            const Vec3 col = turn(q, e);
+            for (int i = 0; i < 3; i++) EXPECT_NEAR(col[i], R[3 * i + j], 1e-12) << i << j;
+        }
+        // and imuOf undoes R
+        const double v[3] = {0.3, -1.2, 9.7};
+        double body[3], back[3];
+        for (int i = 0; i < 3; i++) body[i] = R[3 * i] * v[0] + R[3 * i + 1] * v[1] + R[3 * i + 2] * v[2];
+        sdr_aid_fc::imuOf(R, body, back);
+        for (int i = 0; i < 3; i++) EXPECT_NEAR(back[i], v[i], 1e-12);
+    }
 }
 
 TEST(SdrAidFc, TheBoardsOwnFixMakesItsRoundTripExact)
@@ -2671,7 +2779,7 @@ TEST(SdrAidFc, TheAttitudeTenTimesASecondOnceTheLineIsValid)
         EXPECT_TRUE(boardTakes(a.h));
         EXPECT_TRUE(a.att_valid);
         EXPECT_TRUE(a.rate_valid);
-        EXPECT_EQ(a.frame, 0);
+        EXPECT_EQ(a.frame, kFrameImu);   // this IMU's axes (the body's: no mounting here)
         EXPECT_TRUE(std::isnan(a.sig_tilt_deg));
         EXPECT_TRUE(std::isnan(a.sig_hdg_deg));
         expectNear(turn(a.q, {1, 0, 0}), up, 2e-4, "the nose");
@@ -2776,11 +2884,19 @@ TEST(SdrAidFc, ARestGoesAfterTheAttitudeStampedAtItsWindowsMiddle)
     EXPECT_EQ(r.h.tq, kLineTq);
     EXPECT_TRUE(boardTakes(r.h));
     EXPECT_TRUE(r.valid);
+    EXPECT_EQ(r.frame, kFrameImu);   // the detector was fed this IMU's axes
     EXPECT_EQ(r.dur_ms, 1000);
     EXPECT_EQ(lsb(r.f[0], 10000.0), 123);
     EXPECT_EQ(lsb(r.f[1], 10000.0), -4567);
     EXPECT_EQ(lsb(r.f[2], 10000.0), -97801);
     EXPECT_EQ(code(r.sd_f, 1000.0, 255), 5);
+    {
+        // R1's values in this IMU's axes: R5, byte for byte, but for the stamp
+        Rest want = kInRest1;
+        want.frame = kFrameImu;
+        want.h = r.h;
+        EXPECT_EQ(Bytes(b, b + len), enc(want));
+    }
     // No room in the UART (sent() not called): the same frame on the next
     // pass, then gone once it went
     const Bytes first(b, b + len);

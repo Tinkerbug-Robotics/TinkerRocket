@@ -14,10 +14,10 @@
 // (sub-type 2) nor the geometry (sub-type 4): no configuration of where the
 // board sits in the vehicle or of its antenna's lever arm exists yet.
 //
-// Why the rests: the board finds how it is mounted in the vehicle's body by
-// pairing each one (this side's mean specific force over a still window,
-// body FRD axes) with its own IMU's mean over the same window, which it
-// places by the window's stamp (its middle) and length (dur_ms). The test of
+// Why the rests: the board finds how it is mounted on this flight computer
+// by pairing each one (this side's mean specific force over a still window)
+// with its own IMU's mean over the same window, which it places by the
+// window's stamp (its middle) and length (dur_ms). The test of
 // stillness is this side's own (RestDetector below), so the board needs no
 // test of its own: a window is still when the specific force's mean is 1 g
 // within 0.5 m/s^2, its samples' spread about that mean under 0.05 m/s^2 a
@@ -29,10 +29,22 @@
 // gap in the samples (a filter stopped: MAG_CALIBRATION, a reinit) counts as
 // one, since it could hide a move.
 //
-// The attitude: body (FRD) to ECEF, q_en (x) q_nb, the filter's body-to-NED
-// quaternion turned into ECEF at a place; the body's rate in body axes, the
-// gyro less the filter's bias, rad/s; no 1-sigmas (the filters give tilt and
-// heading ones only through their body-axis covariance: unknown here). The
+// Both in this IMU's axes (sdr_aid::kFrameImu: the board frame the six-face
+// calibration measures, after the chip's Z rotation, before the mounting
+// b2r), not the body's. The board sits on J1, so its mounting found against
+// these axes is fixed by the hardware: the body moves with b2r (an auto
+// mounting re-read on the pad after 2 s still, a profile's new mounting),
+// and during a six-face turn an auto mounting would follow the board, every
+// rest reading nose up in the body. The caller turns each sample into these
+// axes (imuOf) before the rest detector sees it; the detector's test is the
+// same in any axes.
+//
+// The attitude: this IMU to ECEF, q_en (x) q_nb (x) q_bi, the filter's
+// body-to-NED quaternion turned into ECEF at a place and through the
+// mounting (q_bi: b2r's, this IMU to the body); the rate in this IMU's axes,
+// b2r^T times the body's (the gyro less the filter's bias), rad/s; no
+// 1-sigmas (the filters give tilt and heading ones only through their
+// body-axis covariance: unknown here). The
 // place is the board's own last valid fix (its 4001 sub-type 2), and only
 // failing one a fix the filter navigates on: the board turns the attitude
 // back into its own NED with its own fix (rx_fc.c: C_bn = C_ne C_eb), so the
@@ -102,6 +114,54 @@ inline void bodyToEcef(const double q_nb[4], double lat, double lon, double q_eb
     quatMul(q_en, q_nb, q_eb);
 }
 
+// The quaternion (scalar first, q0 >= 0) of a rotation matrix, row-major,
+// v_out = R v_in (Shepperd: from its largest diagonal term). Of the mounting
+// b2r (v_body = b2r v_imu): q_bi, this IMU to the body.
+inline void quatOfDcm(const double R[9], double q[4])
+{
+    const double tr = R[0] + R[4] + R[8];
+    if (tr >= R[0] && tr >= R[4] && tr >= R[8])
+    {
+        const double s = 2.0 * std::sqrt(1.0 + tr);
+        q[0] = 0.25 * s;
+        q[1] = (R[7] - R[5]) / s;
+        q[2] = (R[2] - R[6]) / s;
+        q[3] = (R[3] - R[1]) / s;
+    }
+    else if (R[0] >= R[4] && R[0] >= R[8])
+    {
+        const double s = 2.0 * std::sqrt(1.0 + R[0] - R[4] - R[8]);
+        q[0] = (R[7] - R[5]) / s;
+        q[1] = 0.25 * s;
+        q[2] = (R[1] + R[3]) / s;
+        q[3] = (R[2] + R[6]) / s;
+    }
+    else if (R[4] >= R[8])
+    {
+        const double s = 2.0 * std::sqrt(1.0 + R[4] - R[0] - R[8]);
+        q[0] = (R[2] - R[6]) / s;
+        q[1] = (R[1] + R[3]) / s;
+        q[2] = 0.25 * s;
+        q[3] = (R[5] + R[7]) / s;
+    }
+    else
+    {
+        const double s = 2.0 * std::sqrt(1.0 + R[8] - R[0] - R[4]);
+        q[0] = (R[3] - R[1]) / s;
+        q[1] = (R[2] + R[6]) / s;
+        q[2] = (R[5] + R[7]) / s;
+        q[3] = 0.25 * s;
+    }
+    if (q[0] < 0.0)
+        for (int k = 0; k < 4; k++) q[k] = -q[k];
+}
+
+// A body vector in this IMU's axes: b2r^T v (b2r row-major, v_body = b2r v_imu).
+inline void imuOf(const double b2r[9], const double v_body[3], double v_imu[3])
+{
+    for (int k = 0; k < 3; k++) v_imu[k] = b2r[k] * v_body[0] + b2r[3 + k] * v_body[1] + b2r[6 + k] * v_body[2];
+}
+
 // The geodetic (WGS-84) latitude and longitude of an ECEF position, rad
 // (Bowring's formula: well under 1e-9 rad within 10 km of the ellipsoid).
 // False for a position that is not within 400 km of the Earth's surface, or
@@ -143,7 +203,7 @@ struct RestWindow
     int64_t  t0_us = 0;            // esp_timer, us
     int64_t  t1_us = 0;
     uint32_t n = 0;                // samples in it
-    double   f[3] = {};            // the mean specific force, body FRD, m/s^2
+    double   f[3] = {};            // the mean specific force, the axes fed (this IMU's), m/s^2
     double   sd_f = 0.0;           // rms of |f - mean| over its samples / sqrt(3): a 1-sigma a axis, m/s^2
     double   gyro_max_dps = 0.0;   // the largest |gyro| in it, deg/s (NaN if any was)
     bool     still = false;
@@ -167,8 +227,9 @@ public:
         return std::fabs(m - kG) < kGTol && w.sd_f < kSdMax && w.gyro_max_dps < kGyroMaxDps;
     }
 
-    // One filter IMU sample at t_us (esp_timer): the specific force in body
-    // FRD axes (m/s^2) and the raw gyro in the same axes (deg/s). True when
+    // One filter IMU sample at t_us (esp_timer): the specific force (m/s^2)
+    // and the raw gyro (deg/s) in one set of axes (the flight image's: this
+    // IMU's, imuOf). True when
     // it closed a window that is to be sent (window()); a sample not after
     // the last one is passed over.
     bool feed(int64_t t_us, const double f[3], const double gyro_dps[3])
@@ -274,6 +335,7 @@ struct FilterState
     int64_t t_us = 0;                       // the update's IMU sample (esp_timer, us)
     double  q_nb[4] = {1.0, 0.0, 0.0, 0.0};  // body (FRD) to NED, scalar first (getQuaternion)
     double  w[3] = {};                      // the body's rate, body axes, the gyro less the filter's bias, rad/s
+    double  b2r[9] = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};   // the mounting, row-major: v_body = b2r v_imu
     bool    fix_place = false;              // lat, lon from a fix the filter navigates on (not a GNSS-absent
                                             // start's pad-relative origin)
     double  lat = 0.0;                      // rad (getPosEst)
@@ -338,13 +400,13 @@ public:
         a.h.src = sdr_aid::kSrcOwn;
         a.h.test = test;
         a.h.tq = tq;
-        a.frame = 0;
+        a.frame = sdr_aid::kFrameImu;
         stamp_us = now_us;
         if (!have_filt_ || now_us - filt_.t_us > kAttFreshUs)
             return a;   // not valid, nor its rate
         stamp_us = filt_.t_us;
         a.rate_valid = std::isfinite(filt_.w[0]) && std::isfinite(filt_.w[1]) && std::isfinite(filt_.w[2]);
-        for (int k = 0; k < 3; k++) a.w[k] = filt_.w[k];
+        imuOf(filt_.b2r, filt_.w, a.w);
         double lat = 0.0, lon = 0.0;
         if (have_board_)
         {
@@ -360,7 +422,10 @@ public:
         {
             return a;   // no place: no attitude in ECEF
         }
-        bodyToEcef(filt_.q_nb, lat, lon, a.q);
+        double q_eb[4], q_bi[4];
+        bodyToEcef(filt_.q_nb, lat, lon, q_eb);
+        quatOfDcm(filt_.b2r, q_bi);
+        quatMul(q_eb, q_bi, a.q);
         a.att_valid = std::isfinite(a.q[0]) && std::isfinite(a.q[1]) && std::isfinite(a.q[2]) && std::isfinite(a.q[3]);
         return a;
     }
@@ -392,6 +457,7 @@ public:
         if (rest_pending_)
         {
             sdr_aid::Rest r = restOf(rest_);
+            r.frame = sdr_aid::kFrameImu;   // the caller fed the detector this IMU's axes
             r.h.src = sdr_aid::kSrcOwn;
             r.h.test = test;
             r.h.tq = tq;

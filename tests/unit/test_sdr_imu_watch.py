@@ -100,7 +100,7 @@ def test_the_v2_block_decodes():
 
 def test_a_version_1_block_has_no_watch():
     d = ext.decode_epoch_aid(epoch(1000, 2, 0, 1, 0, 0, 0, ver=1))
-    assert d["ver"] == 1 and d["why"] == 0 and d["drops"] == 0 and d["lo"] is None and d["pad"] is None
+    assert d["ver"] == 1 and d["why"] == 0 and d["drops"] is None and d["lo"] is None and d["pad"] is None
     assert ext.imu_watch([(0, epoch(1000, 2, 0, 1, 0, 0, 0, ver=1))])["rows"] == []
 
 
@@ -126,3 +126,40 @@ def test_a_flight_never_dropped_says_so(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "IMU aiding: never dropped (the board's IMU into its loops)" in out
     assert "DROPPED" not in out
+
+
+def test_drops_before_the_log_and_a_restart_are_counted(capsys):
+    # the log starts with the board's count at 2 (two drops before it); one drop more; then the receiver started again
+    # (count 0), and one drop after
+    f = [epoch(204_000_000 + 10 * k, 2, 1, 1, 0, 2, 4) for k in range(10)]
+    f += [epoch(204_000_100 + 10 * k, 0 if k < 2 else 2, 1, 1, 2 if k < 2 else 0, 3, 2) for k in range(10)]
+    f += [epoch(204_000_200 + 10 * k, 2, 1, 1, 0, 0, 0) for k in range(10)]
+    f += [epoch(204_000_300 + 10 * k, 2, 1, 1, 0, 1, 5) for k in range(10)]
+    w = ext.imu_watch([(1000 * k, x) for k, x in enumerate(f)])
+    assert w["before"] == 2 and len(w["drops"]) == 2 and len(w["restarts"]) == 1
+    ext.print_imu_watch(w, 0)
+    out = capsys.readouterr().out
+    assert "IMU AIDING: DROPPED 4 TIMES, 2 of them before the log" in out
+    assert "started again" in out and "back from 3 to 0" in out
+
+
+def test_never_aided_and_refused_say_so(capsys):
+    off = [epoch(204_000_000 + 10 * k, 0, 0, 1, 0, 0, 0) for k in range(5)]
+    ext.print_imu_watch(ext.imu_watch([(k, x) for k, x in enumerate(off)]), 0)
+    out = capsys.readouterr().out
+    assert "never aided" in out and "never dropped" not in out and "at the end not aiding" in out
+    ref = [epoch(204_000_000 + 10 * k, 0, 2, 1, 7, 0, 0) for k in range(5)]
+    ext.print_imu_watch(ext.imu_watch([(k, x) for k, x in enumerate(ref)]), 0)
+    out = capsys.readouterr().out
+    assert "REFUSED BY THE PAD CHECK" in out and "the pad check failed" in out
+
+
+def test_a_block_cut_short_counts_nothing():
+    full = epoch(204_000_000, 2, 1, 1, 0, 5, 3)
+    cut = bytearray(full[:-3][: 3 + (214 + 32 + 7) // 8])     # the first 32 bits of the block only
+    cut[1], cut[2] = 0, len(cut) - 3
+    c = ext.crc24q(bytes(cut))
+    cut = bytes(cut) + bytes([c >> 16, (c >> 8) & 0xFF, c & 0xFF])
+    assert ext.decode_epoch_aid(cut)["drops"] is None
+    w = ext.imu_watch([(0, full), (1, cut), (2, full)])
+    assert w["before"] == 5 and w["drops"] == [] and w["restarts"] == []

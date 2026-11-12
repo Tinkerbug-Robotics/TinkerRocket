@@ -269,7 +269,7 @@ def decode_epoch_aid(frame: bytes):
          "check": get(at + 6, 2), "boost": get(at + 8, 1), "wide": get(at + 9, 1), "by": get(at + 10, 2),
          "planned": get(at + 12, 1), "phase": get(at + 13, 3), "att": get(at + 16, 1), "nav": get(at + 17, 1),
          "late": get(at + 18, 1), "fc_frames": get(at + 24, 8),
-         "why": 0, "drops": 0, "last": 0, "lo_n": 0, "lo": None, "pad": None}
+         "why": 0, "drops": None, "last": 0, "lo_n": 0, "lo": None, "pad": None}
     if d["ver"] >= 2:
         d["why"] = get(at + 19, 4)
     if d["ver"] >= 2 and nb >= at + 88:
@@ -284,19 +284,35 @@ def imu_watch(frames):
     """The board IMU's watch over a log's epochs: [(time_us, block)] with version 2's, the drops (each: time_us, GPS
     time of week ms, phase, reason, seconds until the IMU aided again or None), the pad check's turns, the loops' own
     share by phase (epochs, mean and largest |share|, m/s^2), the epochs with the IMU aiding, and the last block.
-    Durations are the epochs' own GPS time (the log's stamps are when each frame arrived)."""
+    Durations are the epochs' own GPS time (the log's stamps are when each frame arrived).
+
+    The block's drop count runs from the board's receiver start, mod 256: the first epoch's count is the drops before
+    the log ("before"), a count that goes back is the receiver started again (a restart: "restarts", the count taken
+    from there), and an epoch whose block was cut short of it counts nothing."""
     rows = [(t, d) for t, f in frames if (d := decode_epoch_aid(f)) is not None and d["ver"] >= 2]
-    drops, pad, share = [], [], {}
+    drops, pad, share, restarts = [], [], {}, []
     prev = None
     imu = 0
+    before = None
+    last_drops = None
     for t, d in rows:
         aiding = d["src"] == 2
         imu += aiding
+        if d["drops"] is not None:
+            if last_drops is None:
+                before = d["drops"]
+            elif d["drops"] < last_drops and last_drops - d["drops"] < 128:
+                # the count went back: the receiver started again (its count from 0, these since)
+                restarts.append({"time_us": t, "tow_ms": d["tow_ms"], "lost": last_drops, "now": d["drops"]})
+                for _ in range(d["drops"]):
+                    drops.append({"time_us": t, "tow_ms": d["tow_ms"], "phase": d["phase"], "why": d["last"],
+                                  "back_s": None})
+            else:
+                for _ in range((d["drops"] - last_drops) % 256):
+                    drops.append({"time_us": t, "tow_ms": d["tow_ms"], "phase": d["phase"], "why": d["last"],
+                                  "back_s": None})
+            last_drops = d["drops"]
         if prev is not None:
-            n = (d["drops"] - prev["drops"]) % 256
-            for _ in range(n):
-                drops.append({"time_us": t, "tow_ms": d["tow_ms"], "phase": d["phase"], "why": d["last"],
-                              "back_s": None})
             if d["check"] != prev["check"]:
                 pad.append({"time_us": t, "tow_ms": d["tow_ms"], "phase": d["phase"], "check": d["check"],
                             "pad": d["pad"]})
@@ -312,8 +328,8 @@ def imu_watch(frames):
             if a > ph["max"]:
                 ph["max"], ph["t_max"] = a, t
         prev = d
-    return {"rows": rows, "drops": drops, "pad": pad, "share": share, "imu": imu,
-            "last": rows[-1][1] if rows else None}
+    return {"rows": rows, "drops": drops, "pad": pad, "share": share, "imu": imu, "before": before or 0,
+            "restarts": restarts, "last": rows[-1][1] if rows else None}
 
 
 def print_imu_watch(w, t0_us: int) -> None:
@@ -324,16 +340,25 @@ def print_imu_watch(w, t0_us: int) -> None:
     span = ((rows[-1][1]["tow_ms"] - rows[0][1]["tow_ms"]) % WEEK_MS) / 1e3
     step = span / (len(rows) - 1) if len(rows) > 1 else 0.0
     span += step
-    if w["drops"]:
-        n = len(w["drops"])
-        print(f"  IMU AIDING: DROPPED {n} TIME{'S' if n > 1 else ''} (the board's IMU into its loops)")
+    n = w["before"] + len(w["drops"])
+    refused = any(d["check"] == 2 for _, d in rows)
+    if n:
+        before = f", {w['before']} of them before the log" if w["before"] else ""
+        print(f"  IMU AIDING: DROPPED {n} TIME{'S' if n > 1 else ''}{before} (the board's IMU into its loops)")
+    elif w["imu"] == 0 and refused:
+        print("  IMU AIDING: REFUSED BY THE PAD CHECK, never aided (the board's IMU into its loops)")
+    elif w["imu"] == 0:
+        print("  IMU aiding: never aided (the board's IMU into its loops: off, or never given)")
     else:
         print("  IMU aiding: never dropped (the board's IMU into its loops)")
     last = w["last"]
     pad = f"{last['pad']:.2f} m/s^2" if last["pad"] is not None else "none"
+    now = "aiding" if last["src"] == 2 else ("not aiding" if last["why"] == 0 else TR_WHY.get(last["why"], last["why"]))
     print(f"    aided {w['imu'] * step:.1f} s of {span:.1f} s of epochs ({w['imu']} of {len(rows)}); the pad check "
-          f"{TR_CHECK.get(last['check'], last['check'])} (its last still window {pad}); now "
-          f"{TR_WHY.get(last['why'], last['why'])}")
+          f"{TR_CHECK.get(last['check'], last['check'])} (its last still window {pad}); at the end {now}")
+    for e in w["restarts"]:
+        print(f"    the board's receiver started again at {(e['time_us'] - t0_us) / 1e6:.3f} s into the log (its drop "
+              f"count back from {e['lost']} to {e['now']}): drops counted from there")
     for k, e in enumerate(w["drops"], 1):
         back = f"back {e['back_s']:.2f} s later" if e["back_s"] is not None else "never back"
         print(f"    drop {k}: {(e['time_us'] - t0_us) / 1e6:.3f} s into the log (GPS {e['tow_ms'] / 1e3:.3f} s of "
