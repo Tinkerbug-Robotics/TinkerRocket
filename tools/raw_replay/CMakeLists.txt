@@ -170,6 +170,19 @@ if(RAW_REPLAY_MOSAIC)
         ${LIB_DIR}/TR_GpsInsEKF
         ${LIB_DIR}/TR_GeoMag
         ${LIB_DIR}/TR_Orientation)
+    # the gnss-sdr-dev board's path (--receiver sdr): its RTCM3 epochs (SdrRawEpoch.h) and the time sync that places
+    # them from their arrivals (GnssTimeSync), where the tree has them
+    if(EXISTS "${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrRawEpoch.h")
+        list(APPEND MOSAIC_SRC ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrRtcm.cpp
+                               ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/GnssTimeSync.cpp)
+        list(APPEND MOSAIC_INC ${LIB_DIR}/TR_GNSSReceiverSdr_Serial)
+        set(RAW_REPLAY_SDR ON)
+    else()
+        set(RAW_REPLAY_SDR OFF)
+        message(STATUS "raw_replay: ${SRC_ROOT} has no gnss-sdr-dev path (SdrRawEpoch.h): --receiver sdr off")
+    endif()
+else()
+    set(RAW_REPLAY_SDR OFF)
 endif()
 
 function(raw_replay_target name)
@@ -221,7 +234,8 @@ function(raw_replay_target name)
         RAW_REPLAY_FLIGHT_PROFILE=$<BOOL:${RAW_REPLAY_FLIGHT_PROFILE}>
         RAW_REPLAY_WINDUP=$<BOOL:${RAW_REPLAY_WINDUP}>
         RAW_REPLAY_DESCENT=$<BOOL:${RAW_REPLAY_DESCENT}>
-        RAW_REPLAY_MULTIBAND=$<BOOL:${RAW_REPLAY_MULTIBAND}>)
+        RAW_REPLAY_MULTIBAND=$<BOOL:${RAW_REPLAY_MULTIBAND}>
+        RAW_REPLAY_SDR=$<BOOL:${RAW_REPLAY_SDR}>)
 endfunction()
 
 raw_replay_target(raw_replay)

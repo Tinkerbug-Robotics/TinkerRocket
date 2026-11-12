@@ -1776,6 +1776,25 @@ target_include_directories(test_sdr_rtcm PRIVATE
 target_link_libraries(test_sdr_rtcm GTest::gtest_main)
 gtest_discover_tests(test_sdr_rtcm)
 
+# ---------- test_sdr_raw_epoch ----------
+# The gnss-sdr-dev board's epochs as the raw-GNSS filter takes them
+# (TR_GNSSReceiverSdr_Serial/SdrRawEpoch.h): made whole by their 4001, the
+# board's clock steps put back into every range, its marks obeyed, the fused
+# grid, a lost or lone record; on the board's recorded stream.
+add_executable(test_sdr_raw_epoch test_sdr_raw_epoch.cpp
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrRtcm.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
+)
+target_include_directories(test_sdr_raw_epoch PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+)
+target_link_libraries(test_sdr_raw_epoch GTest::gtest_main)
+gtest_discover_tests(test_sdr_raw_epoch)
+
 # ---------- test_gnss_log_policy ----------
 # The GNSS log setting (BLE cmd 79): the IMU limit each value gives
 # (RocketComputerTypes.h imuRateMaxForGnss) and the REDUCED log's SBF cut

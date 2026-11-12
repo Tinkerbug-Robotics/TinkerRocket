@@ -444,6 +444,48 @@ TEST(ReceiverProfile, TheLc86gFusesEveryEpochOnItsOwnCounts)
     EXPECT_EQ(s.level.min_dt_s, 0.0);
 }
 
+TEST(ReceiverProfile, TheSdrDevV0Profile)
+{
+    // the gnss-sdr-dev board (ReceiverProfile.h sdrDevProfile): the mosaic's
+    // shape, its own signals, rate and Doppler
+    const GnssReceiverProfile p = gnss_raw::sdrDevProfile();
+    const GnssReceiverProfile m = gnss_raw::mosaicG5Profile();
+    EXPECT_STREQ(p.name, "gnss-sdr-dev");
+    EXPECT_EQ(p.type, gnss_raw::kRxSdrDev);
+    EXPECT_FALSE(p.measured);
+    EXPECT_EQ(gnss_raw::profileFor(gnss_raw::kRxSdrDev).type, gnss_raw::kRxSdrDev);
+    // BeiDou's B1C pilot on L1's carrier, every system on L1; the pilots flag
+    // their half cycles; no C/N0 floor yet
+    for (int k = 0; k < gnss_raw::kProfileSys; ++k)
+    {
+        SCOPED_TRACE(testing::Message() << "sys " << k);
+        EXPECT_EQ(p.sig[k].carrier_hz, GNSS_FREQ_L1_HZ);
+        EXPECT_EQ(p.sig[k].cn0_min_pr, 0.0f);
+        EXPECT_EQ(p.sig[k].cn0_min_rr, 0.0f);
+    }
+    EXPECT_FALSE(p.sig[GNSS_SYS_GAL].half_cycle_unflagged);
+    EXPECT_FALSE(p.sig[GNSS_SYS_BDS].half_cycle_unflagged);
+    // 100 Hz epochs fused at 10 Hz, the Doppler the tag's, no pairs (the grid
+    // is ten epochs, not two)
+    EXPECT_EQ(p.raw_epoch_period_s, 0.01);
+    EXPECT_EQ(p.fuse_epoch_period_s, 0.1);
+    EXPECT_EQ(p.rr_lag_s, 0.0);
+    EXPECT_FALSE(gnss_raw::dopplerPairsFit(p));
+    // its Doppler from the bench, quieter than the mosaic's v0; the mosaic's
+    // flight margin, code model, clock and safeguards' counts
+    EXPECT_EQ(p.rr_white_a, 0.03);
+    EXPECT_EQ(p.rr_white_b, 0.03);
+    EXPECT_LT(p.rr_white_a * p.rr_white_a + p.rr_white_b * p.rr_white_b,
+              m.rr_white_a * m.rr_white_a + m.rr_white_b * m.rr_white_b);
+    EXPECT_EQ(p.rr_scale, m.rr_scale);
+    EXPECT_EQ(p.pr_white_a, m.pr_white_a);
+    EXPECT_EQ(p.pr_period_s, m.pr_period_s);
+    EXPECT_EQ(p.clk_drift_psd, m.clk_drift_psd);
+    EXPECT_EQ(p.clock_step_m, m.clock_step_m);   // its steps go back in before the filter (SdrRawEpoch.h)
+    EXPECT_EQ(p.sat_cap, m.sat_cap);
+    EXPECT_EQ(p.cr_mode, gnss_raw::kCarrierOff);
+}
+
 TEST(ReceiverProfile, TheMosaicG5V0Profile)
 {
     // every number of v0 (ReceiverProfile.h: each one's run beside it)

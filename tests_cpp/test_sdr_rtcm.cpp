@@ -282,6 +282,11 @@ TEST(SdrRtcmMessages, TheEpochsAre10msApartIn100HzMode)
         EXPECT_EQ(e.tow_ms, tow);
         EXPECT_EQ(e.mode, 1);
         EXPECT_EQ(e.nobs, 18);
+        EXPECT_EQ(e.clk_steps, 18);
+        EXPECT_NEAR(e.clk_step_m, 2591783.819, 1e-6);   // to the millimetre
+        EXPECT_EQ(e.shift_ns == 0, false);
+        EXPECT_EQ(e.sample % 67500, 0u);                // 10 ms of the 6.75 MS/s correlator clock a step
+        EXPECT_FALSE(e.has_tail);                       // recorded before the board's newer tail
         tow += 10;
         TrFix not_a_fix;
         EXPECT_FALSE(decodeTrFix(frames[i].data(), frames[i].size(), not_a_fix));
@@ -348,6 +353,15 @@ TEST(SdrRtcmMessages, TheFix)
     EXPECT_EQ(std::llround(f.pos[1] * 1e4), -47265285163LL);
     EXPECT_EQ(std::llround(f.pos[2] * 1e4), 40755638196LL);
     EXPECT_NEAR(std::sqrt(f.pos[0] * f.pos[0] + f.pos[1] * f.pos[1] + f.pos[2] * f.pos[2]), 6369343.750, 0.001);
+    // and the rest of the fix: velocity, the clock, PDOP and the residuals
+    EXPECT_TRUE(f.vel_valid);
+    EXPECT_NEAR(f.vel[0], -0.0040, 1e-9);
+    EXPECT_NEAR(f.vel[1], 0.0043, 1e-9);
+    EXPECT_NEAR(f.vel[2], 0.0028, 1e-9);
+    EXPECT_NEAR(f.clk_bias_m, -92.819, 1e-9);
+    EXPECT_NEAR(f.clk_drift_mps, -47.1977, 1e-9);
+    EXPECT_NEAR(f.pdop, 1.3, 1e-9);
+    EXPECT_NEAR(f.resid_rms_m, 6.14, 1e-9);
     TrEpoch not_an_epoch;
     EXPECT_FALSE(decodeTrEpoch(frames[0].data(), frames[0].size(), not_an_epoch));
     // Cut short, it is refused rather than read past its end.
