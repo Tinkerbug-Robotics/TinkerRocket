@@ -343,6 +343,10 @@ public:
     void setGNSSRawEpochConfig(uint32_t period_ms, const sdr_rtcm::SdrDopplerMeanConfig& mean);
     bool getGNSSRawStats(TR_GNSSReceiverSdrSerial::RawStats& out) const;
     uint32_t gnssPollStackFree() const;
+    // The last GPS ionosphere the board sent (its 4001 sub-type 4: the 8
+    // broadcast bytes and the GPS day it took them; false before one, not
+    // consumed), as the mosaic's getGNSSBroadcastIono.
+    bool getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const;
     // Whether any frame of the board's 4001 (its status, an epoch or a fix)
     // has come this boot: its driver listens whether or not a board is there.
     bool gnssBoardHeard() const;

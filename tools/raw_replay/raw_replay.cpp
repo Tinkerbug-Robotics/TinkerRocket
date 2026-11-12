@@ -247,6 +247,8 @@ struct Args
     double sdr_latency_ms = 0.0;
     bool sdr_keep_marked = false;
     bool sdr_raw_steps = false;      // an experiment: the board's clock steps left in its ranges (SdrRawEpoch.h)
+    std::string sdr_gps_iono;        // --gps-iono a0,..,b3: a GPS Klobuchar set as the board's, for a log made before
+                                     // the board sent its own (4001 sub-type 4); "-" takes none, even the board's
     bool cold_start = false;         // no S/PNAV/PCOV/A: the filter starts on the pad from the receiver's fix
     bool unaided = false;            // RawGnssEKFParams::att_gnss_off: the twin the acceptance compares against
     std::vector<std::string> rinex;  // RINEX 3 navigation files: the day's broadcast ephemerides
@@ -391,6 +393,7 @@ void usage()
                  "  [--truth-t0-tow X]\n"
                  "  the mosaic-G5 (a RAW_REPLAY_MOSAIC build): [--receiver lc86g|mosaic|sdr] [--cold-start] [--unaided]\n"
                  "  the gnss-sdr-dev board (--receiver sdr): [--sdr-latency-ms X] [--sdr-keep-marked] [--sdr-raw-steps]\n"
+                 "  [--gps-iono a0,a1,a2,a3,b0,b1,b2,b3|-]\n"
                  "  [--dv-imu-free-off 0|1]\n"
                  "  [--rinex FILE]... [--quorum] [--vote-guard 0|1] [--loop-hz X] [--seed-heading-deg X]\n"
                  "  [--seed-heading-error-deg X] [--reject-persist-rr N] [--truth-nav FILE]\n"
@@ -535,6 +538,7 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--sdr-latency-ms") a.sdr_latency_ms = std::atof(val());
         else if (k == "--sdr-keep-marked") a.sdr_keep_marked = true;
         else if (k == "--sdr-raw-steps") a.sdr_raw_steps = true;
+        else if (k == "--gps-iono") a.sdr_gps_iono = val();
         else if (k == "--unaided") a.unaided = true;
         else if (k == "--rinex") a.rinex.push_back(val());
         else if (k == "--quorum") a.quorum = true;
@@ -2393,6 +2397,42 @@ int main(int argc, char** argv)
     lc86::GnssTimeSync& sdr_line = *sdr_linep;
     std::unique_ptr<sdr_rtcm::SdrEpoch> sdr_ep(new sdr_rtcm::SdrEpoch());
     int sdr_untimed = 0, sdr_fixes = 0, sdr_eph = 0, sdr_eph_pre = 0;
+    // The ionosphere, as the image's GNSS task takes it (raw_iono_rule.h): the board's 4001 sub-type 4 as the
+    // receiver's set; --gps-iono's set the same way at the first record (dated its day), for a log from before the
+    // board sent one; "-" none at all
+    rr::IonoRule sdr_iono_rule;
+    int sdr_iono_frames = 0, sdr_iono_sets = 0;
+    bool sdr_iono_off = a.sdr_gps_iono == "-", sdr_iono_arg_due = false;
+    int8_t sdr_iono_arg[8] = {};
+    if (sdr && !a.sdr_gps_iono.empty() && !sdr_iono_off)
+    {
+        int v[8];
+        if (std::sscanf(a.sdr_gps_iono.c_str(), "%d,%d,%d,%d,%d,%d,%d,%d", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5],
+                        &v[6], &v[7]) != 8)
+        {
+            std::fprintf(stderr, "--gps-iono takes the eight broadcast integers a0,a1,a2,a3,b0,b1,b2,b3 (or -)\n");
+            return 2;
+        }
+        for (int k = 0; k < 8; ++k)
+        {
+            if (v[k] < -128 || v[k] > 127)
+            {
+                std::fprintf(stderr, "--gps-iono: %d is not a broadcast byte\n", v[k]);
+                return 2;
+            }
+            sdr_iono_arg[k] = static_cast<int8_t>(v[k]);
+        }
+        sdr_iono_arg_due = true;
+    }
+    auto sdrIono = [&](const int8_t raw[8], uint16_t gps_day) {
+        ShadowIono io{};
+        std::memcpy(io.raw, raw, sizeof(io.raw));
+        io.gps_day = gps_day;
+        if (sdr_iono_off || !sdr_iono_rule.offer(io, true)) return;
+        stage.setIono(io);
+        sh.setIono(io);
+        sdr_iono_sets++;
+    };
 #endif
 
 #if RAW_REPLAY_MOSAIC
@@ -4026,8 +4066,20 @@ int main(int argc, char** argv)
                 {
                     sdr_rtcm::TrEpoch rec;
                     sdr_rtcm::TrFix fx;
+                    sdr_rtcm::TrIono tio;
+                    if (sdr_rtcm::decodeTrIono(f, n, tio))
+                    {
+                        sdr_iono_frames++;
+                        sdrIono(tio.raw, tio.gpsDay());
+                        break;
+                    }
                     if (sdr_rtcm::decodeTrEpoch(f, n, rec))
                     {
+                        if (sdr_iono_arg_due && rec.week != 0)
+                        {
+                            sdr_iono_arg_due = false;
+                            sdrIono(sdr_iono_arg, static_cast<uint16_t>(rec.week * 7u + rec.tow_ms / 86400000u));
+                        }
                         // every record, on the grid or not: the time sync's sample, as the driver takes it (its
                         // latch's GPS time against its arrival; an epoch the board marks late left out)
                         double latch_s = 0.0;
@@ -5389,6 +5441,9 @@ int main(int argc, char** argv)
                      c.full, c.marked_pr, c.marked_rate, sdr_untimed, sdr_fixes, sdr_eph, sdr_eph_pre,
                      sdr_line.valid() ? "valid" : "NOT valid", sdr_line.driftPpm(), sdr_line.lateness90Ms(),
                      sdr_line.envelopeRmsMs(), sdr_line.samples(), sdr_line.restarts());
+        std::fprintf(stderr, "  gnss-sdr-dev ionosphere: %d of the board's sets (4001 sub-type 4)%s, %d applied%s\n",
+                     sdr_iono_frames, a.sdr_gps_iono.empty() || sdr_iono_off ? "" : " + --gps-iono's", sdr_iono_sets,
+                     sdr_iono_off ? " (--gps-iono -: none taken)" : (sdr_iono_sets ? "" : ": the filter flew with NONE"));
     }
 #endif
 #if RAW_REPLAY_MOSAIC

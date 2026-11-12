@@ -128,6 +128,19 @@ bool decodeTrStatus(const uint8_t* frame, size_t len, TrStatus& out)
     return true;
 }
 
+bool decodeTrIono(const uint8_t* frame, size_t len, TrIono& out)
+{
+    // number 12, sub-type 4, week 16, second of week 20, source 2, then
+    // alpha0..3 and beta0..3 8 each, two's complement (118 bits; 2 reserved)
+    const uint8_t* m = trPayload(frame, len, kTrIono, 118);
+    if (m == nullptr) return false;
+    out.week  = static_cast<uint16_t>(bits(m, 16, 16));
+    out.tow_s = bits(m, 32, 20);
+    out.src   = static_cast<uint8_t>(bits(m, 52, 2));
+    for (int k = 0; k < 8; k++) out.raw[k] = static_cast<int8_t>(sbits(m, 54 + 8 * k, 8));
+    return out.src != 0;
+}
+
 // ── Rtcm3Framer ─────────────────────────────────────────────────────────
 
 void Rtcm3Framer::feed(const uint8_t* data, size_t n, Sink& sink)

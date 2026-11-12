@@ -111,8 +111,9 @@ public:
 #endif
 #if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
     // The SDR raw-nav image's fused grid and Doppler means go straight to the
-    // board's driver; its sky's day as the mosaic's (none of its own: the
-    // board's stream carries no ionosphere).
+    // board's driver; its ionosphere (the board's 4001 sub-type 4) and its
+    // sky's day as the mosaic's, by the same rule (getGNSSBroadcastIono).
+    bool getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const;
     uint16_t replaySkyGpsDay() const { return replay_sky_day_.load(std::memory_order_acquire); }
     void setGNSSRawEpochConfig(uint32_t period_ms, const sdr_rtcm::SdrDopplerMeanConfig& mean)
     {

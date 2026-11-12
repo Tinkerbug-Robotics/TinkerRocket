@@ -98,6 +98,9 @@
 #include "raw_nav_drain.h"        // when it files the receiver's navigation blocks (host-tested)
 #endif
 #if TR_RAW_NAV_SDR
+#include "raw_iono_rule.h"        // the mosaic's rule, for the board's ionosphere and the app's
+#endif
+#if TR_RAW_NAV_SDR
 #include "sdr_nav_start_policy.h" // the start without the board, and a late board's take-over (host-tested)
 #endif
 #if TR_RAW_NAV_P4
@@ -3383,6 +3386,13 @@ static bool raw_mb_on = false;
 static RawIonoRule::State raw_iono;
 static gnss_raw::SeqLock<gnss_raw::ShadowIono> raw_iono_chosen;
 #endif
+#if TR_RAW_NAV_SDR
+// The gnss-sdr-dev image's, by the same rule: the app's set (NVS) and the
+// board's own (its 4001 sub-type 4: decoded from GPS LNAV, or the header of
+// the navigation file loaded into it), as the mosaic's GPSIon.
+static RawIonoRule::State raw_iono;
+static gnss_raw::SeqLock<gnss_raw::ShadowIono> raw_iono_chosen;
+#endif
 // The antenna's offset in the filter's frame (antenna_cfg turned by the
 // mounting): written on the flight loop's core when the setting or the
 // mounting changes, taken by the filter's task (RawGnssShadow::setAntenna,
@@ -3556,9 +3566,9 @@ static const char* ionoName(uint8_t src)
     }
 }
 
-#if TR_RAW_NAV_MOSAIC
-// The GNSS task's ionosphere on the mosaic-only image: one rule for both
-// sources (raw_iono_rule.h), applied only when it changes.
+#if TR_RAW_NAV_MOSAIC || TR_RAW_NAV_SDR
+// The GNSS task's ionosphere on the mosaic-only and gnss-sdr-dev images: one
+// rule for both sources (raw_iono_rule.h), applied only when it changes.
 static void rawIonoOffer(const gnss_raw::ShadowIono& io, bool from_rx, gnss_raw::RawGnssMeasStage& st)
 {
 #if TR_RAW_NAV_RIG_REPLAY
@@ -3601,24 +3611,18 @@ static void rawGnssMeasTask(void*)
     {
         gnss_raw::ShadowIono io;
         uint32_t seq = 0;
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_MOSAIC || TR_RAW_NAV_SDR
         if (raw_shadow_link.iono.read(io, seq) && seq != iono_seq)
         {
             iono_seq = seq;
             rawIonoOffer(io, false, st);   // the app's, from a pad calibration or NVS
         }
         {
+            // the receiver's: the mosaic's GPSIon, the gnss-sdr-dev board's
+            // 4001 sub-type 4 (RTCM has no message for it)
             gnss_raw::ShadowIono rx;
             if (sensor_collector.getGNSSBroadcastIono(rx.raw, rx.gps_day)) rawIonoOffer(rx, true, st);
         }
-#elif TR_RAW_NAV_SDR
-        // The gnss-sdr-dev board's stream carries no ionosphere (RTCM has no
-        // message for it), and this image flies none: not the app's or NVS's
-        // either, as the filter was validated offline (docs/plans/
-        // sdr-raw-filter-plan.md: 1.5-2 m of height bias accepted)
-        (void)io;
-        (void)seq;
-        (void)iono_seq;
 #else
         if (raw_shadow_link.iono.read(io, seq) && seq != iono_seq)
         {
@@ -3930,12 +3934,7 @@ static void rawShadowTask(void*)
             sh.onSeed(s);
         }
         gnss_raw::ShadowIono io;
-#if TR_RAW_NAV_SDR
-        // none on the gnss-sdr-dev image (its GNSS task's note says why)
-        (void)io;
-        (void)iono_seq;
-#else
-#if TR_RAW_NAV_MOSAIC
+#if TR_RAW_NAV_MOSAIC || TR_RAW_NAV_SDR
         // the set the GNSS task chose from both sources (rawIonoOffer)
         if (raw_iono_chosen.read(io, seq) && seq != iono_seq)
 #else
@@ -3945,7 +3944,6 @@ static void rawShadowTask(void*)
             iono_seq = seq;
             sh.setIono(io);
         }
-#endif
 #if TR_RAW_NAV_P4
         // the owner's antenna offset, or the mounting it is turned by, changed:
         // taken now on the ground, else at the first ground tick
@@ -4372,8 +4370,8 @@ static void rawShadowTask(void*)
                               "sats, Doppler means of %lu epochs (%lu of %lu Dopplers, %lu epochs as they came) | "
                               "epochs %lu seen: %lu untimed, %lu handed over by the board's driver (%lu queue drops), "
                               "%lu sats capped out | tracked %d, %d without an ephemeris | eph %d sats, %u of %u store "
-                              "entries, %lu queued, %lu queue drops | imu ring drops %lu, gaps bridged %lu | iono none "
-                              "(the stream carries none) | pad datum %s, %lu fixes (%lu from the board) | GNSS log %s | "
+                              "entries, %lu queued, %lu queue drops | imu ring drops %lu, gaps bridged %lu | iono %s (%u sets) "
+                              "| pad datum %s, %lu fixes (%lu from the board) | GNSS log %s | "
                               "in flight: restarts %u of %u, raw votes %s, transonic lockout %s | dv check: %lu epochs "
                               "checked%s, %lu failed, latches %lu let go %lu, %lu Dopplers held | heading share %.2f | "
                               "rotation allowance max %.2f m/s | flight task stack free %u B, GNSS poll task %u B | held out "
@@ -4387,7 +4385,9 @@ static void rawShadowTask(void*)
                          mst.eph_sats, (unsigned)(raw_meas ? raw_meas->ephemerides().size() : 0),
                          (unsigned)gnss_raw::EphemerisStore::kCapacity, (unsigned long)rs.eph_queued,
                          (unsigned long)rs.eph_dropped, (unsigned long)raw_shadow_link.imu.dropped(),
-                         (unsigned long)st.gaps_bridged, ref_from_nav ? "the raw filter's" : "the board's",
+                         (unsigned long)st.gaps_bridged,
+                         !raw_iono.have ? "none" : (raw_iono.from_rx ? "the board's" : "the app's"),
+                         (unsigned)raw_iono.sets, ref_from_nav ? "the raw filter's" : "the board's",
                          (unsigned long)ref_pos_count, (unsigned long)rs.fixes,
                          gnss_log_setting == GNSS_LOG_REDUCED ? "REDUCED" : "DETAILED",
                          (unsigned)raw_nav_restarts, (unsigned)RawNavPolicy::kMaxRestarts,

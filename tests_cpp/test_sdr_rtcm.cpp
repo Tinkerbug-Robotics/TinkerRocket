@@ -269,6 +269,52 @@ TEST(SdrRtcmMessages, TheBoardsStatusBeforeItsFirstFix)
     EXPECT_EQ(c.frames[0].bytes, f);
 }
 
+// The GPS broadcast ionosphere the board has (sub-type 4), byte for byte as
+// the board's encoder writes it (receiver/tests/test_rtcm_msm.cpp pins the
+// same two frames). I1: the rig scenario's set (BRDC_2026230_MN.rnx's GPSA/
+// GPSB as broadcast integers) from a loaded file, taken at its sky's time;
+// I2: the extremes of a byte, decoded from LNAV.
+TEST(SdrRtcmMessages, TheBoardsIonosphere)
+{
+    const std::vector<uint8_t> i1 = {0xD3, 0x00, 0x0F, 0xFA, 0x14, 0x09, 0x80, 0x31, 0xC5, 0x68, 0x2C,
+                                     0x0F, 0xFF, 0xF8, 0xC4, 0x23, 0xFF, 0xE8, 0xE2, 0xCC, 0x6A};
+    const std::vector<uint8_t> i2 = {0xD3, 0x00, 0x0F, 0xFA, 0x14, 0x09, 0x89, 0x54, 0x60, 0x06, 0x01,
+                                     0xFC, 0x00, 0x07, 0xFD, 0x03, 0x00, 0x14, 0x41, 0x88, 0x7E};
+    EXPECT_EQ(rtcm3::crc24q(i1.data(), i1.size() - 3), (uint32_t(0xE2) << 16) | (uint32_t(0xCC) << 8) | 0x6A);
+    EXPECT_EQ(trSubType(i1.data(), i1.size()), kTrIono);
+    TrIono io;
+    ASSERT_TRUE(decodeTrIono(i1.data(), i1.size(), io));
+    EXPECT_EQ(io.week, 2432);
+    EXPECT_EQ(io.tow_s, 203862u);
+    EXPECT_EQ(io.src, kIonoLoad);
+    const int8_t want1[8] = {11, 3, -1, -2, 49, 8, -1, -6};
+    for (int k = 0; k < 8; k++) EXPECT_EQ(io.raw[k], want1[k]) << k;
+    EXPECT_EQ(io.gpsDay(), 17026);   // 2026-08-18, the scenario's day
+    ASSERT_TRUE(decodeTrIono(i2.data(), i2.size(), io));
+    EXPECT_EQ(io.week, 2441);
+    EXPECT_EQ(io.tow_s, 345600u);
+    EXPECT_EQ(io.src, kIonoLnav);
+    const int8_t want2[8] = {-128, 127, 0, 1, -1, 64, -64, 5};
+    for (int k = 0; k < 8; k++) EXPECT_EQ(io.raw[k], want2[k]) << k;
+    EXPECT_EQ(io.gpsDay(), 2441 * 7 + 4);
+    // no other sub-type reads as one, and it reads as no other
+    TrStatus st;
+    TrFix x;
+    TrEpoch e;
+    EXPECT_FALSE(decodeTrStatus(i1.data(), i1.size(), st));
+    EXPECT_FALSE(decodeTrFix(i1.data(), i1.size(), x));
+    EXPECT_FALSE(decodeTrEpoch(i1.data(), i1.size(), e));
+    const auto frames = cut(stream());
+    for (const auto& f : frames) EXPECT_FALSE(decodeTrIono(f.data(), f.size(), io));
+    // one cut short is not read
+    EXPECT_FALSE(decodeTrIono(i1.data(), 3 + 14 + 3, io));
+    // and the framer passes it through whole
+    Rtcm3Framer fr;
+    const Collect c = feedIn(fr, i1, 3);
+    ASSERT_EQ(c.frames.size(), 1u);
+    EXPECT_EQ(c.frames[0].bytes, i1);
+}
+
 TEST(SdrRtcmMessages, TheEpochsAre10msApartIn100HzMode)
 {
     // As the board's own decoder (receiver/host/rtcmdump) reads them.

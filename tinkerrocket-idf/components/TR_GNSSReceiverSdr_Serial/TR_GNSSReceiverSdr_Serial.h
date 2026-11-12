@@ -123,6 +123,12 @@ class TR_GNSSReceiverSdrSerial : private sdr_rtcm::Rtcm3Framer::Sink
         void setRawEpochConfig(uint32_t fuse_period_ms, const sdr_rtcm::SdrDopplerMeanConfig& mean);
         bool takeRawEpoch(gnss_raw::TimedRawEpoch& out);
         bool takeEphemeris(uint8_t* out, size_t cap, size_t& len);
+        // The last GPS broadcast ionosphere the board sent (its 4001 sub-type
+        // 4): the eight Klobuchar bytes as GPS broadcasts them and the GPS day
+        // the board took them (TrIono::gpsDay), for the GNSS task's one
+        // ionosphere rule (raw_iono_rule.h) as the mosaic's GPSIon. From any
+        // task; not consumed. False before one has come.
+        bool broadcastIono(int8_t raw[8], uint16_t& gps_day, uint8_t* src = nullptr) const;
 
         // The raw outputs' counts since boot (the 30 s status line, the
         // [RAWGNSS] console line). Read from any task: a counter may be one
@@ -299,6 +305,11 @@ class TR_GNSSReceiverSdrSerial : private sdr_rtcm::Rtcm3Framer::Sink
         };
         RawState*         raw_ = nullptr;
         int64_t           raw_log_us_ = 0;
+        // The last sub-type 4 (written by the poll task, read by the GNSS task)
+        mutable portMUX_TYPE iono_mux_ = portMUX_INITIALIZER_UNLOCKED;
+        sdr_rtcm::TrIono  iono_;
+        bool              iono_have_ = false;
+        uint32_t          n_iono_ = 0;
 #endif
 #if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
         // What the board says it does with them (the aiding block), and the

@@ -23,7 +23,7 @@ if(TR_SIM_REPLAY_BLOB)
     target_add_binary_data(${COMPONENT_LIB} "${TR_SIM_REPLAY_BLOB}" BINARY RENAME_TO sim_replay_bin)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE TR_SIM_REPLAY=1)
     message(STATUS "TR_Sensor_Collector_Sim: RIG REPLAY build, carrying ${TR_SIM_REPLAY_BLOB}")
-    # The rig sky's own GPS Klobuchar on the mosaic-only image
+    # The rig sky's own GPS Klobuchar on the mosaic-only image and the V10's gnss-sdr-dev image
     # (-DTR_SIM_REPLAY_GPS_IONO=a0,a1,a2,a3,b0,b1,b2,b3: the eight broadcast
     # integers of its SignalSim scenario's RINEX header,
     # tools/rig_replay/rinex_gps_iono.py), handed to the filter as the

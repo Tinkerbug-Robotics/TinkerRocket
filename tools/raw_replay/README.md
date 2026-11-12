@@ -812,7 +812,9 @@ clock line (`GnssTimeSync`: the V1 board has no 1PPS), and each epoch handed ove
 the epochs are untimed. Each fused epoch's Dopplers are the means of the board's ten epochs since the last
 (`SdrRawEpoch.h` SdrDopplerMean, the image's `applySdrFlightProfile`), taken 45 ms back; `--rr-pair-avg 0` flies
 each epoch's own. The board's first valid fix seeds the cold start (ellipsoidal height, no geoid).
-`--sdr-raw-steps` leaves the clock steps in, as an experiment.
+`--sdr-raw-steps` leaves the clock steps in, as an experiment. The board's GPS ionosphere (4001 sub-type 4, since
+2026-11-12) goes through the image's ionosphere rule as the receiver's set; `--gps-iono a0,..,b3` offers a set the
+same way at the first record, for a log from before the board sent one (`-`: none, even the board's).
 
 The V10 bench log of 2026-11-02 (`flight_20261102_213043.bin`, 52 s, the board on its bench antenna, static): 525
 epochs handed over, 107 untimed while the line filled, 418 applied; every one of 672 pseudoranges and 6,688 Dopplers

@@ -114,12 +114,26 @@ def test_start_raw_shadow_flies_the_boards_profile_and_its_doppler_means():
     assert "applyMosaicFlightSafeguards(c);" in fn and "c.windup_k = 0.0;" in fn and "c.dv_imu_free_off = true;" in fn
 
 
-def test_no_ionosphere_on_the_image():
+def test_the_boards_ionosphere_goes_through_the_mosaics_rule():
+    # The board's 4001 sub-type 4 (its GPS Klobuchar set) and the app's NVS set go through raw_iono_rule.h as the
+    # mosaic's GPSIon and the app's do, and the filter's task takes the set the rule chose
     src = read(MAIN_CPP)
+    assert "#if TR_RAW_NAV_SDR\n#include \"raw_iono_rule.h\"" in src
+    assert "#if TR_RAW_NAV_MOSAIC || TR_RAW_NAV_SDR\n// The GNSS task's ionosphere" in src
     task = src[src.index("static void rawGnssMeasTask(void*)"):]
     task = task[:task.index("\n}\n")]
-    sdr = task[task.index("#elif TR_RAW_NAV_SDR"):task.index("#else", task.index("#elif TR_RAW_NAV_SDR"))]
-    assert "setIono" not in sdr and "rawIonoOffer" not in sdr
+    i = task.index("#if TR_RAW_NAV_MOSAIC || TR_RAW_NAV_SDR\n        if (raw_shadow_link.iono.read(io, seq)")
+    block = task[i:task.index("#else", i)]
+    assert "rawIonoOffer(io, false, st);" in block
+    assert "if (sensor_collector.getGNSSBroadcastIono(rx.raw, rx.gps_day)) rawIonoOffer(rx, true, st);" in block
+    assert "#elif TR_RAW_NAV_SDR" not in task[:task.index("gnss_raw::ShadowRelock rl;")]
+    assert ("#if TR_RAW_NAV_MOSAIC || TR_RAW_NAV_SDR\n        // the set the GNSS task chose from both sources "
+            "(rawIonoOffer)\n        if (raw_iono_chosen.read(io, seq) && seq != iono_seq)") in src
+    drv = read(os.path.join(ROOT, "tinkerrocket-idf", "components", "TR_GNSSReceiverSdr_Serial",
+                            "TR_GNSSReceiverSdr_Serial.cpp"))
+    assert "sdr_rtcm::decodeTrIono(frame, len, io)" in drv
+    sc = read(os.path.join(ROOT, "tinkerrocket-idf", "components", "TR_Sensor_Collector", "TR_Sensor_Collector.cpp"))
+    assert "return gnss_receiver.broadcastIono(raw, gps_day);" in sc
 
 
 def test_raw_replay_flies_the_images_code():

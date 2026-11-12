@@ -263,6 +263,20 @@ void TR_GNSSReceiverSdrSerial::onFrame(const uint8_t* frame, size_t len, size_t 
             {
                 n_status_++;
             }
+#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+            else
+            {
+                sdr_rtcm::TrIono io;
+                if (sdr_rtcm::decodeTrIono(frame, len, io))
+                {
+                    portENTER_CRITICAL(&iono_mux_);
+                    iono_ = io;
+                    iono_have_ = true;
+                    n_iono_++;
+                    portEXIT_CRITICAL(&iono_mux_);
+                }
+            }
+#endif
             break;
         }
         default:
@@ -422,6 +436,20 @@ bool TR_GNSSReceiverSdrSerial::takeRawEpoch(gnss_raw::TimedRawEpoch& out)
     return xQueueReceive(raw_->epoch_q, &out, 0) == pdTRUE;
 }
 
+bool TR_GNSSReceiverSdrSerial::broadcastIono(int8_t raw[8], uint16_t& gps_day, uint8_t* src) const
+{
+    portENTER_CRITICAL(&iono_mux_);
+    const bool have = iono_have_;
+    if (have)
+    {
+        std::memcpy(raw, iono_.raw, sizeof(iono_.raw));
+        gps_day = iono_.gpsDay();
+        if (src != nullptr) *src = iono_.src;
+    }
+    portEXIT_CRITICAL(&iono_mux_);
+    return have;
+}
+
 bool TR_GNSSReceiverSdrSerial::takeEphemeris(uint8_t* out, size_t cap, size_t& len)
 {
     if (raw_ == nullptr) return false;
@@ -531,11 +559,18 @@ void TR_GNSSReceiverSdrSerial::logRaw()
     const RawStats& st = raw_->st;
     const sdr_rtcm::SdrEpochAssembler::Counts& c = st.asm_counts;
     const sdr_rtcm::SdrDopplerMeanStats& m = st.mean;
+    sdr_rtcm::TrIono io;
+    portENTER_CRITICAL(&iono_mux_);
+    const bool have_io = iono_have_;
+    const uint32_t n_io = n_iono_;
+    io = iono_;
+    portEXIT_CRITICAL(&iono_mux_);
     ESP_LOGI(TAG, "gnss-sdr-dev raw: grid %lu ms, Doppler means of %lu | epochs %lu whole (%lu off the grid, %lu "
                   "without their record, %lu records alone), %lu handed over (%lu untimed, %lu with means, %lu "
                   "queue drops) | means: %lu of %lu Dopplers, epochs as they came %lu short / %lu few, dropped %lu "
                   "missing %lu relock %lu step (largest step %.2f, spread %.2f m/s) | marked out %lu pr %lu Doppler | "
-                  "eph %lu queued, %lu drops | fixes %lu | poll task: MSM7 %.0f us mean, %lu max; record %.0f us "
+                  "eph %lu queued, %lu drops | fixes %lu | iono %s (%d %d %d %d / %d %d %d %d, GPS day %u; %lu frames) | "
+                  "poll task: MSM7 %.0f us mean, %lu max; record %.0f us "
                   "mean, %lu max",
              static_cast<unsigned long>(st.period_ms), static_cast<unsigned long>(st.mean_n),
              static_cast<unsigned long>(c.epochs), static_cast<unsigned long>(c.off_grid),
@@ -549,6 +584,9 @@ void TR_GNSSReceiverSdrSerial::logRaw()
              static_cast<double>(m.spread_max_mps), static_cast<unsigned long>(c.marked_pr),
              static_cast<unsigned long>(c.marked_rate), static_cast<unsigned long>(st.eph_queued),
              static_cast<unsigned long>(st.eph_dropped), static_cast<unsigned long>(st.fixes),
+             !have_io ? "NONE" : (io.src == sdr_rtcm::kIonoLnav ? "decoded" : "the loaded file's"), io.raw[0],
+             io.raw[1], io.raw[2], io.raw[3], io.raw[4], io.raw[5], io.raw[6], io.raw[7],
+             static_cast<unsigned>(have_io ? io.gpsDay() : 0), static_cast<unsigned long>(n_io),
              st.msm_n ? static_cast<double>(st.msm_us_sum) / static_cast<double>(st.msm_n) : 0.0,
              static_cast<unsigned long>(st.msm_us_max),
              st.rec_n ? static_cast<double>(st.rec_us_sum) / static_cast<double>(st.rec_n) : 0.0,

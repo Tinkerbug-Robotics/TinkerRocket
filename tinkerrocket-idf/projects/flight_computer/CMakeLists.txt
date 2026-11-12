@@ -338,8 +338,10 @@ if(TR_SIM_REPLAY_BLOB)
         # paths (the navigation console the scorer reads, the replayed high-g
         # counts with the converter's bias) are the mosaic image's. The board
         # is cold-started by the rig's own kit (rfrig-kit run_start.sh), not
-        # the flight computer; its stream carries no ionosphere, so there is
-        # no sky's set to carry either.
+        # the flight computer. The board sends the GPS ionosphere it has (its
+        # 4001 sub-type 4: decoded, or from the scenario's navigation file
+        # loaded with `rx eph load`); a build may carry the sky's set instead
+        # (-DTR_SIM_REPLAY_GPS_IONO, as the mosaic's), which then wins.
         add_compile_definitions(TR_RAW_NAV_RIG_REPLAY=1)
         message(STATUS "flight_computer: RIG REPLAY of the V10's gnss-sdr-dev image (TR_RAW_NAV_RIG_REPLAY=1): the raw-GNSS filter's timed epochs set the replay's clock")
     endif()
@@ -352,9 +354,8 @@ if(TR_SIM_REPLAY_BLOB)
         endif()
     endif()
 endif()
-if(TR_SIM_REPLAY_GPS_IONO AND NOT (TR_SIM_REPLAY_BLOB AND TR_GNSS_MOSAIC))
-    # (never on the gnss-sdr-dev image: it flies no ionosphere)
-    message(FATAL_ERROR "TR_SIM_REPLAY_GPS_IONO is the rig sky's ionosphere for a rig replay (-DTR_SIM_REPLAY_BLOB) of the mosaic-only image (-DTR_GNSS_MOSAIC=1)")
+if(TR_SIM_REPLAY_GPS_IONO AND NOT (TR_SIM_REPLAY_BLOB AND (TR_GNSS_MOSAIC OR TR_GNSS_SDR)))
+    message(FATAL_ERROR "TR_SIM_REPLAY_GPS_IONO is the rig sky's ionosphere for a rig replay (-DTR_SIM_REPLAY_BLOB) of the mosaic-only image (-DTR_GNSS_MOSAIC=1) or the V10's gnss-sdr-dev image (-DTR_GNSS_SDR=1)")
 endif()
 foreach(_v TR_BENCH_MOSAIC_CN0 TR_BENCH_MOSAIC_COLD_START TR_BENCH_MOSAIC_TAG_TRACE)
     if(${_v} AND NOT TR_GNSS_MOSAIC)
