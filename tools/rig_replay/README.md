@@ -17,6 +17,7 @@ For how it works, see "The rig replay" in [docs/plans/1600-realtime-raw-gnss.md]
 | `baro_port_check.py` | The barometer's error through the flight beside the filter's static-port model |
 | `score_heading.py` | The heading from thrust (0x9F): each fit on the flight's time, its 1-sigma, the hand-off and its cost; with `--ref`, two runs' turns side by side |
 | `truth.py` | Loads a flight's truth and scenario for the scorers |
+| `score_hil.py` | Scores a V10 HIL run with the gnss-sdr-dev board (below): the navigation solution's position and velocity error by phase, the apogee, the filter's use of GNSS, the board's own fixes, and a side by side against a GNSS-absent run |
 | `run_v9.sh` | One run on the V9 with the mosaic-G5 (below): the MAC check, the rig marked busy, the FC reset and its console, the sky conducted, the run voided if the replay clock is late |
 | `score_v9.py` | Scores a V9 run: its console alone, plus the OC's log if downloaded, plus that log through the offline harness on request |
 
@@ -286,3 +287,46 @@ like the Beetle's, with these differences:
 - **The board takes the V10's frames as test values.** A replay flies as a sim, so its phase frames carry the test
   flag: the board takes them only with `rx fc test on` (the rig kit's `run_start.sh --fc-phase`).
 - **One run per boot,** as on the Beetle: reset the V10 before each run, or its replay stays landed.
+
+### Scoring a run: `score_hil.py`
+
+The truth is the scene's own config (the trajectoryList: vertical, from its pad), on flight time from the scene's
+ignition. The script scores every navigation source the run left and writes `NAME.md` (the tables), `NAME.json`
+(every number) and two plots (linear axes: the whole flight, and each phase on its own scale):
+
+```
+python3 tools/rig_replay/score_hil.py sdr_hotshot_b1c_p120.json \
+    --log V10_LOG.bin --console RUN/RUN_v10reset.log --console RUN/fc_console.log --rtcm RUN/rec_s005.rtcm3 \
+    --label "raw filter" \
+    --ref-console SIM_R3/sim_r3_v10reset.log --ref-console SIM_R3/fc_console.log --ref-rtcm SIM_R3/rec_s005.rtcm3 \
+    --ref-label "GNSS-absent (sim_r3)" --out-dir OUT --name RUN
+```
+
+- **Inputs.** `--log` is the V10's flight log (the OC's `.bin`); `--console` the V10's console, the reset log first
+  (it holds the `RIG REPLAY:` boot line), then the run's; `--rtcm` the board's recording (default: the log's 0x95
+  records). Any of them may be missing; the report says what that leaves unscored. `--ref-*` is a second run, scored
+  the same way and set beside the first.
+- **The sources.** `log-nav` (NonSensor: what the flight logic used, ENU from the filter's pad reference),
+  `log-raw` (the raw-GNSS filter's 0x96, ellipsoidal, from the scene's pad), `console-nav` (`[REPLAY-NAV]`),
+  `console` (`[REPLAY]`, once a second) and `board-fix` (the board's 4001 fixes). Each phase's headline takes the
+  first of log-nav, console-nav, console that covers half of the phase. The OC log starts at launch, so the pad
+  comes from the console.
+- **Phases.** The pad (60 s before ignition, `--pad-s`), boost to burnout, coast to apogee, descent to the scene's
+  end (the hotshot ends falling at T+119.9 s; the replay's landed tail after it has no truth).
+- **Time.** The console's replay lines carry the replay's own flight time, and its other lines go on it by their
+  stamps. The log goes on it by the ignition edge in its accelerometer (the replay file's: `--blob`, else the one
+  `sim_replay_blob.py` makes from the config, the same to the microsecond for the hotshot). Two checks are printed
+  under "Time": the apogee call by the log's map less the console's (6 ms on a Beetle rig log), and each raw epoch's
+  record time against its own GPS time ("map check": 0 to one record interval when they agree). Without IMU records
+  the log falls back to its launch flag, about 0.2 s late, and says so.
+- **The filter's use of GNSS** comes from the 0x96 records: each carries the last epoch applied and its pseudoranges
+  and range rates fused and refused, so an epoch is counted once by its time of week. An epoch applied between two
+  records (10 Hz) is not seen. No record carries the NIS: the report says "not logged" unless a record field or a
+  `[RAWGNSS]` console line names one.
+- **The apogee.** The call from the log's apogee flag (else the console's `[PYRO]` line) against the true apogee's
+  time, with the true height and climb then; the solution's highest point and its height at the true apogee, in
+  its own frame.
+- **No verdict.** The side by side marks each p90 better or worse than the reference; what counts as meaningfully
+  worse is the owner's call.
+- `--truth-csv` and `--scenario` take a `sim_flight_3d.py` flight instead of a config (the Beetle and V9 rig runs),
+  with the drogue to the landing as the descent.
