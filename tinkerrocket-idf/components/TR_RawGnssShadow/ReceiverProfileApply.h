@@ -204,6 +204,22 @@ inline void applyMosaicFlightProfile(GnssReceiverProfile& p)
 // (2026-11-12, bench-backups v10-sdr-logs/rate-study) taking it off cut that
 // to 0.25 m/s (p90). The mosaic's image has not flown it: the Goblin's climb
 // is a fifth as fast, and its image is verified as it is.
+//
+// And the board's output delay (epoch_latency_s). The V10 places each epoch
+// on its clock by the line its 4001 records' arrivals give (SdrRawFeed.h), so
+// each sits late by the transport -- the board's latch to that record's last
+// byte -- and by the lag of the board's own Dopplers. Calibrated on the RF rig
+// (2026-11-13, bench-backups v10-sdr-logs rfrig-20261110/p2/hil RESULTS_hil.md):
+//   - the transport about 2.5 ms: the V10's frames, stamped off that line,
+//     reach the board 2.6-3.2 ms late at the least, the trip back included,
+//     and an epoch's ~500 bytes take 2.2-2.7 ms at 2 Mbaud;
+//   - the whole about 5 ms: offline on ten of the rig's flights with that
+//     transport, the early coast's vertical velocity was best there (p90
+//     0.150 to 0.061 m/s; the boost's 0.039 to 0.018).
+// A rig replay's clock carries the transport too (main.cpp takes it off
+// there: kSdrTransportS).
+constexpr double kSdrEpochLatencyS = 0.005;
+constexpr double kSdrTransportS = 0.0025;
 inline void applySdrFlightProfile(GnssReceiverProfile& p)
 {
     p.build_lite = true;
@@ -213,6 +229,7 @@ inline void applySdrFlightProfile(GnssReceiverProfile& p)
     p.sat_cap = 16;
     p.sat_cap_max = 0;
     p.rr_tropo_rate = true;
+    p.epoch_latency_s = kSdrEpochLatencyS;
 }
 
 // The gnss-sdr-dev board's Doppler means (SdrRawEpoch.h, the profile's
