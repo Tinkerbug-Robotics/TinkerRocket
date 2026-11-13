@@ -4908,3 +4908,228 @@ TEST(RawGnssShadow, TheImuFreeDescentNeedsGnssOrTheBarometerToHoldItsVelocity)
         ASSERT_TRUE(sh.running());
     }
 }
+
+// ------------------------------------- a chute's opening in the IMU-free descent (the vertical check's latch)
+
+namespace
+{
+
+struct OpeningRun
+{
+    RawGnssShadow::Stats st;
+    double err_max_event = 0.0; // the largest velocity error from the event's start (the opening, the stale epochs) on
+    double catch_s = -1.0;      // after the opening ends: the velocity within 2 m/s from here on (-1: never)
+    double err_max_late = 0.0;  // the largest velocity error from 3 s after the opening began to the end
+    double err_end = 0.0;       //   and at the end
+};
+
+struct OpeningCase
+{
+    double v0 = 25.0;           // m/s down before the opening
+    double t_open = 1.0;        // s it takes to 7 m/s down (and 3 m/s north)
+    bool baro = true;           // a barometer at the true height, ten a second (the pad's at 0)
+    double t_dep = 40.0;        // s of the run the opening starts at (34 s after launch: past baro_hold_max_s)
+    double t_end = 52.0;
+    // a stale receiver: from stale_from_s for stale_s, every epoch built as if
+    // the rocket fell stale_dv_down m/s faster than it does (coherent, as a
+    // receiver that lost its loops hands them over)
+    double stale_from_s = -1.0;
+    double stale_s = 0.0;
+    double stale_dv_down = 0.0;
+};
+
+// The pad to 6 s, then a fall at g to v0 down, held there; at t_dep the
+// opening; steady to t_end. The apogee call at 6.1 s (the descent IMU-free
+// from there). Ten epochs a second from the synthetic sky, as the V10's.
+OpeningRun flyOpening(const OpeningCase& o, RawGnssShadow::Config cfg)
+{
+    double lat, lon, h;
+    ecef_to_geo(kGoldenRmRx, &lat, &lon, &h);
+    double r0[3];
+    geo_to_ecef(lat, lon, h, r0);
+    const double sl = std::sin(lat), cl = std::cos(lat), so = std::sin(lon), co = std::cos(lon);
+    auto nedToEcefVec = [&](const double n[3], double out[3]) {
+        const double e[3] = {n[1], n[0], -n[2]};
+        out[0] = -so * e[0] - sl * co * e[1] + cl * co * e[2];
+        out[1] = co * e[0] - sl * so * e[1] + cl * so * e[2];
+        out[2] = cl * e[1] + sl * e[2];
+    };
+    cfg.descent_imu_free = true;
+    cfg.meas.troposphere = false;
+    RawGnssShadow sh(cfg);
+    for (int i = 0; i < kGoldenRmEphN; ++i)
+        sh.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+    SynthSky sky(cfg.meas);
+    sh.onSeed(padSeed(kT0, lat, lon, h));
+    const double tow0 = goldenEpochs()[0].epoch.tow_s;
+    const double t_fall = 6.0, t_call = 6.1, dt = 0.002;
+    double p_ned[3] = {}, v_ned[3] = {};
+    std::vector<TimedRawEpoch> due;
+    int next_epoch = 10;   // tenths of a second
+    OpeningRun run;
+    for (double t = dt; t <= o.t_end + 1e-9; t += dt)
+    {
+        double a_n[3] = {0.0, 0.0, 0.0};
+        if (t > t_fall && t <= o.t_dep && v_ned[2] < o.v0)
+            a_n[2] = std::min(kG, (o.v0 - v_ned[2]) / dt);
+        else if (t > o.t_dep && t <= o.t_dep + o.t_open)
+        {
+            a_n[2] = (7.0 - o.v0) / o.t_open;
+            a_n[0] = 3.0 / o.t_open;
+        }
+        for (int i = 0; i < 3; ++i)
+        {
+            p_ned[i] += v_ned[i] * dt + 0.5 * a_n[i] * dt * dt;
+            v_ned[i] += a_n[i] * dt;
+        }
+        const int64_t t64 = kT0 + static_cast<int64_t>(std::llround(t * 1e6));
+        ShadowImu s{};
+        s.time_us = static_cast<uint32_t>(t64);
+        s.acc[0] = static_cast<float>(a_n[0]);   // body = NED (level): f = a - g
+        s.acc[1] = static_cast<float>(a_n[1]);
+        s.acc[2] = static_cast<float>(a_n[2] - kG);
+        s.flags = t < t_fall ? gnss_raw::kShadowLevel
+                             : (t >= t_call ? gnss_raw::kShadowInFlight | gnss_raw::kShadowApogee
+                                            : gnss_raw::kShadowInFlight);
+        const long step = std::lround(t / dt);
+        if (o.baro && step % 50 == 0)
+            sh.onBaro(gnss_raw::ShadowBaro{static_cast<uint32_t>(t64), static_cast<float>(-p_ned[2])});
+        sh.onImu(s, t64);
+        if (t + 1e-9 >= next_epoch * 0.1)
+        {
+            double dr[3], r[3], v_e[3];
+            nedToEcefVec(p_ned, dr);
+            double v_built[3] = {v_ned[0], v_ned[1], v_ned[2]};
+            if (o.stale_from_s >= 0.0 && t >= o.stale_from_s && t < o.stale_from_s + o.stale_s)
+                v_built[2] += o.stale_dv_down;
+            nedToEcefVec(v_built, v_e);
+            for (int i = 0; i < 3; ++i)
+                r[i] = r0[i] + dr[i];
+            TimedRawEpoch e;
+            e.epoch = sky.epoch(tow0 + next_epoch * 0.1, r, v_e);
+            e.mcu_us = t64;
+            e.gps_week = kGoldenWeek;
+            due.push_back(e);
+            next_epoch++;
+        }
+        while (!due.empty() && t64 - due.front().mcu_us >= 200000)
+        {
+            sh.onEpoch(due.front());
+            due.erase(due.begin());
+        }
+        if (sh.running() && t > (o.stale_from_s >= 0.0 ? o.stale_from_s : o.t_dep))
+        {
+            const float* v = sh.filter().velNed();
+            const double err = std::sqrt((v[0] - v_ned[0]) * (v[0] - v_ned[0]) + (v[1] - v_ned[1]) * (v[1] - v_ned[1]) +
+                                         (v[2] - v_ned[2]) * (v[2] - v_ned[2]));
+            if (err >= 2.0)
+                run.catch_s = -1.0;
+            else if (run.catch_s < 0.0)
+                run.catch_s = t - (o.t_dep + o.t_open);
+            if (t > o.t_dep + 3.0 && err > run.err_max_late)
+                run.err_max_late = err;
+            if (err > run.err_max_event)
+                run.err_max_event = err;
+            run.err_end = err;
+        }
+    }
+    run.st = sh.stats();
+    return run;
+}
+
+}  // namespace
+
+TEST(RawGnssShadow, AChutesOpeningInTheImuFreeDescent)
+{
+    // A main's opening, v0 to 7 m/s down and 3 m/s north, 34 s after launch
+    // (the barometer's port hold over), from about 2 g to 10 g, with the
+    // barometer at the true height and without one, up to about 12 g. Before
+    // vert_imu_free_release_s (0): with the barometer the latch lets go by
+    // itself; without one, from 6.8 g on, GNSS stays out and the error stays
+    // (40-92 m/s). With it (1 s, the gnss-sdr-dev image's): without the
+    // barometer GNSS is back within about a second of the opening's end, and
+    // nothing changes where the latch never held or the barometer judged.
+    RawGnssShadow::Config before = primaryCfg();
+    RawGnssShadow::Config after = primaryCfg();
+    after.vert_imu_free_release_s = 1.0;
+    for (const bool baro : {true, false})
+        for (const auto& c : {std::make_pair(25.0, 1.0), std::make_pair(40.0, 0.8), std::make_pair(50.0, 0.8),
+                              std::make_pair(60.0, 0.8), std::make_pair(80.0, 0.75), std::make_pair(100.0, 0.8)})
+        {
+            OpeningCase o;
+            o.v0 = c.first;
+            o.t_open = c.second;
+            o.baro = baro;
+            const OpeningRun b = flyOpening(o, before);
+            const OpeningRun a = flyOpening(o, after);
+            const double g = (c.first - 7.0) / c.second / kG;
+            std::printf("opening %.0f->7 m/s in %.2f s (%.1f g), baro %d: before caught %.2f s after (end %.2f m/s, "
+                        "latched %u, IMU-free exits %u); after %.2f s (end %.2f, latched %u, released %u, exits %u)\n",
+                        c.first, c.second, g, baro ? 1 : 0, b.catch_s, b.err_end, b.st.vert_latched,
+                        b.st.imu_free_exits, a.catch_s, a.err_end, a.st.vert_latched, a.st.vert_imu_free_releases,
+                        a.st.imu_free_exits);
+            ASSERT_GE(a.catch_s, 0.0);
+            if (!baro || g < 10.0)
+                EXPECT_LE(a.catch_s, 2.5);   // with the barometer at 11.9 g it brings it back in 3.4 s, as before
+            EXPECT_LT(a.err_end, 0.5);
+            EXPECT_EQ(a.st.imu_free_exits, 0u);
+            if (baro || b.st.vert_dropped == 0)
+            {
+                // the barometer judges, or the latch never held: as before
+                EXPECT_EQ(a.st.vert_imu_free_releases, 0u);
+                EXPECT_EQ(a.catch_s, b.catch_s);
+                EXPECT_EQ(a.st.epochs_applied, b.st.epochs_applied);
+            }
+            else
+            {
+                EXPECT_LT(b.catch_s, 0.0);            // before: never back
+                EXPECT_GT(b.err_end, 30.0);
+                EXPECT_EQ(a.st.vert_imu_free_releases, 1u);
+            }
+        }
+}
+
+TEST(RawGnssShadow, AStaleReceiverInTheImuFreeDescentIsStillKeptOut)
+{
+    // A receiver that hands over Dopplers 30 m/s off for 0.3 s (three epochs,
+    // coherent, as one that lost its loops): dropped and latched as before,
+    // with and without the barometer, the latch released by the first good
+    // fit, the velocity never moved. For 3 s with the barometer fused: the
+    // barometer holds the filter and the latch stays, as before. For 3 s with
+    // no barometer the mode has nothing else to go by and takes GNSS after
+    // the release's second (vert_imu_free_release_s): the trade it makes.
+    RawGnssShadow::Config before = primaryCfg();
+    RawGnssShadow::Config after = primaryCfg();
+    after.vert_imu_free_release_s = 1.0;
+    for (const bool baro : {true, false})
+        for (const double secs : {0.3, 3.0})
+        {
+            OpeningCase o;
+            o.baro = baro;
+            o.t_dep = 1.0e9;            // no opening: a steady 25 m/s down
+            o.stale_from_s = 40.0;
+            o.stale_s = secs;
+            o.stale_dv_down = 30.0;
+            const OpeningRun b = flyOpening(o, before);
+            const OpeningRun a = flyOpening(o, after);
+            std::printf("stale %.1f s, baro %d: before the velocity at most %.2f m/s off (dropped %u, latched %u); after "
+                        "%.2f (dropped %u, latched %u, released %u)\n",
+                        secs, baro ? 1 : 0, b.err_max_event, b.st.vert_dropped, b.st.vert_latched, a.err_max_event,
+                        a.st.vert_dropped, a.st.vert_latched, a.st.vert_imu_free_releases);
+            EXPECT_GE(a.st.vert_dropped, 1u);
+            EXPECT_LT(b.err_max_event, 1.0);           // before: kept out, the velocity held
+            if (baro || secs < 1.0)
+            {
+                EXPECT_EQ(a.st.vert_imu_free_releases, 0u);
+                EXPECT_EQ(a.err_max_event, b.err_max_event);
+                EXPECT_EQ(a.st.epochs_applied, b.st.epochs_applied);
+            }
+            else
+            {
+                // no barometer and 3 s of it: taken after the release's second, and left again when it ends
+                EXPECT_GE(a.st.vert_imu_free_releases, 1u);
+                EXPECT_LT(a.err_end, 0.5);
+            }
+        }
+}
+

@@ -674,6 +674,7 @@ void RawGnssEKF<T>::screenRangeRates(const RawMeas* m, int n, double age_s, RawG
 {
     st.screen_rr = st.screen_refused = 0;
     st.screen_fit_n = 0;
+    vfit_valid_ = false;
     st.screen_dv_down_mps = 0.0f;
     st.screen_fit_out = 0;
     // the rows in the filter's own scratch, not on the task's stack (1.8 KB free on the rig)
@@ -795,6 +796,9 @@ void RawGnssEKF<T>::screenRangeRates(const RawMeas* m, int n, double age_s, RawG
     st.screen_fit_n = nin;
     st.screen_fit_out = nout;
     st.screen_dv_down_mps = static_cast<float>(x[2]);
+    for (int i = 0; i < 4; ++i)
+        vfit_x_[i] = x[i];
+    vfit_valid_ = true;
 }
 
 // The vertical check's fit (screenRangeRates): rows H (velocity NED, clock

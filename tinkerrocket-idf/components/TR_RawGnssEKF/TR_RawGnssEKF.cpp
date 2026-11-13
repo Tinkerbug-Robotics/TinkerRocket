@@ -139,6 +139,27 @@ void RawGnssEKF<T>::setImuFree(bool on)
 }
 
 template <typename T>
+void RawGnssEKF<T>::reanchorVelocity(const double dv_ned[3], double dclk_mps, T vel_sigma, T pos_sigma)
+{
+    for (int a = 0; a < 3; ++a)
+        v_[a] += T(dv_ned[a]);
+    clk_d_ += T(dclk_mps);
+    for (int a = 0; a < 3; ++a)
+    {
+        const int i = kVel + a;
+        for (int j = 0; j < N; ++j)
+            if (j != i)
+                P_[i][j] = P_[j][i] = T(0);
+        P_[i][i] = vel_sigma * vel_sigma;
+    }
+    const T pfloor = pos_sigma * pos_sigma;
+    for (int a = 0; a < 3; ++a)
+        if (P_[kPos + a][kPos + a] < pfloor)
+            P_[kPos + a][kPos + a] = pfloor;
+    std::memset(rejects_, 0, sizeof(rejects_));
+}
+
+template <typename T>
 void RawGnssEKF<T>::init(const double lla[3], const T v_ned[3], const T q[4], double t0)
 {
     for (int i = 0; i < 3; ++i)

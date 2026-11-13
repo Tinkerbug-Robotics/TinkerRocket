@@ -227,7 +227,7 @@ static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 32,
               "GnssSignalProfile changed: add the field to expectSameSignal, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 576,
               "GnssReceiverProfile changed: add the field to expectSameNumbers, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1824,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1832,
               "RawGnssShadow::Config changed: pin the field in TheShadowSafeguardDefaultsAreTheBeetles, then update "
               "this size");
 
@@ -577,10 +577,15 @@ TEST(ReceiverProfile, TheSdrImagesSafeguardsAreTheMosaicsLessTheWindupAndTheChan
     EXPECT_FALSE(d.ekf.gravity_wgs84);
     EXPECT_FALSE(m.ekf.gravity_wgs84);
     EXPECT_TRUE(s.ekf.gravity_wgs84);
+    // and the vertical check's latch let go in the IMU-free descent (1 s), which they do not fly either
+    EXPECT_EQ(d.vert_imu_free_release_s, 0.0);
+    EXPECT_EQ(m.vert_imu_free_release_s, 0.0);
+    EXPECT_EQ(s.vert_imu_free_release_s, 1.0);
     // everything else the mosaic's
     s.dv_imu_free_off = m.dv_imu_free_off;
     s.windup_k = m.windup_k;
     s.ekf.gravity_wgs84 = m.ekf.gravity_wgs84;
+    s.vert_imu_free_release_s = m.vert_imu_free_release_s;
     EXPECT_EQ(s.dv_check, m.dv_check);
     EXPECT_EQ(s.dv_latch_k, m.dv_latch_k);
     EXPECT_EQ(s.dv_window_s, m.dv_window_s);
@@ -1273,6 +1278,7 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_EQ(c.boost_screen_window_s, 1.5);
     EXPECT_EQ(c.vert_check_mps, 20.0);
     EXPECT_EQ(c.vert_release_mps, 5.0);
+    EXPECT_EQ(c.vert_imu_free_release_s, 0.0);   // the gnss-sdr-dev image's own (applySdrFlightSafeguards)
     // the Doppler change check: off (exp/v9-dvcheck); its settings act only when it is on
     EXPECT_EQ(c.dv_check, RawGnssShadow::kDvOff);
     EXPECT_EQ(c.dv_sat_k, 5.0);
