@@ -35,7 +35,7 @@ auto image's path exactly.
 
 ## The layers
 
-1. gnss_detect: the PX1105R probe (done, 2a47bbb2).
+1. gnss_detect: the PX1105R probe (done).
 2. TR_GNSSAuto holds the PX1105R driver and passes on every raw output of the active driver;
    SensorCollector and SensorCollectorSim offer the union of the three raw surfaces under
    `TR_GNSS_AUTO_RAW` (an `#if TR_GNSS_AUTO_RAW` block ahead of each `#if MOSAIC/#elif ...` chain,
@@ -47,6 +47,10 @@ auto image's path exactly.
    (declarations compile everywhere; statements run only for their receiver; exclusive
    `#if/#elif/#else` chains become `if/else` there).
 5. Checks (below), then stage the image. No flashing.
+
+Layers 1-4 are in (2026-11-13). The gates are `RAW_NAV_WHEN(cond)` / `RAW_NAV_AND(cond)` in
+raw_nav_auto.h: `if (cond)` / `(cond) &&` in the one image, nothing in every other; the boot's
+choice is `rawNavChoice` (host-tested, test_raw_nav_choice).
 
 ## Must keep, from the gnss-sdr-dev image (its owner's list, 2026-11-13)
 

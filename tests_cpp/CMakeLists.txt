@@ -1848,6 +1848,19 @@ target_include_directories(test_sdr_nav_start_policy PRIVATE
 target_link_libraries(test_sdr_nav_start_policy GTest::gtest_main)
 gtest_discover_tests(test_sdr_nav_start_policy)
 
+# ---------- test_raw_nav_choice ----------
+# Which navigation filter the one V9/V10 image (TR_GNSS_AUTO_RAW) flies at
+# boot (flight_computer/main/raw_nav_auto.h rawNavChoice, pure), and that its
+# gates are nothing in every other image.
+add_executable(test_raw_nav_choice test_raw_nav_choice.cpp)
+target_include_directories(test_raw_nav_choice PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+target_link_libraries(test_raw_nav_choice GTest::gtest_main)
+gtest_discover_tests(test_raw_nav_choice)
+
 # ---------- test_sdr_board_config ----------
 # The V10's SDR raw-nav image's switches (config.h with TR_BOARD_V10 and
 # TR_GNSS_DRIVER_SDR, as its CMake sets them) and the receiver profile it flies

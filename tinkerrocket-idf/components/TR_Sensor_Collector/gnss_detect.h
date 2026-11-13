@@ -22,9 +22,13 @@
 //              NMEA sentence whose checksum checks. NMEA counts only at the
 //              end of a probe that brought no mosaic proof: a mosaic can be
 //              told to send NMEA, but never UBX.
-//   gnss-sdr-dev 2 Mbaud, RTCM3 only, from its first fix on (SdrRtcm.h);
-//              before that, and with its output off, nothing at all. It
-//              takes no commands, so its probe sends nothing and listens.
+//   gnss-sdr-dev 2 Mbaud, RTCM3 only (SdrRtcm.h): its 4001 status at 10 Hz
+//              from its receiver's start (its firmware since TinkerRocket-
+//              GNSS #24; older firmware sent nothing before its first fix),
+//              its measurements and fixes from its first fix on; with its
+//              UART output off, nothing at all. Its probe sends nothing and
+//              listens (its 4002 reader frames by CRC, so the other probes'
+//              bytes should be dropped there: not yet checked on the board).
 //              Proof: a frame whose CRC-24Q checks carrying TinkerRocket's
 //              message 4001, heard by any probe at 2 Mbaud.
 //   PX1105R    (the image that flies the raw filter on every receiver that
