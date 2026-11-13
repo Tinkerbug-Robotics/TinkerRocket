@@ -134,6 +134,12 @@ struct GnssReceiverProfile
     // (TR_BENCH_RAW_DOP_AVG=0).
     bool   rr_pair_avg = false;
     double rr_pair_max_diff_mps = 15.0;   // the pair at most this far apart (300 m/s^2 over 50 ms)
+    // The troposphere's rate off each Doppler as the receiver climbs
+    // (RawMeasBuilder::Config::tropo_rate): the delay thins upward, and a
+    // climb puts that rate in every measured range rate. Off in every profile:
+    // the V10's gnss-sdr-dev image turns it on (applySdrFlightProfile), a bench
+    // image off again (TR_BENCH_RAW_TROPO_RATE=0).
+    bool   rr_tropo_rate = false;
     double epoch_slice_us = 2500.0;       // the navigation filter works an epoch at most this long a 10 ms step
                                           //   (RawGnssShadow's epoch_slice_us; main.cpp's primary filter takes it,
                                           //   not applyReceiverProfile: a shadow works an epoch at once)

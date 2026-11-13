@@ -108,6 +108,7 @@ void RawMeasBuilder::beginWith(const RawEpoch& ep, const double* r_approx, const
     }
     el_mask_ = cfg_.el_mask_deg * kPi / 180.0;
     g_over_ = g_peak > 0.0 ? g_peak : 0.0;
+    trop_rate_z_ = tropoRateZenith();
     next_obs_ = 0;
     cr_n_[cr_side_ ^ 1] = 0;
     cr_done_ = false;
@@ -461,6 +462,7 @@ int RawMeasBuilder::nextLite(const RawEpoch& ep, const EphemerisStore& eph, cons
 
         double corr = GNSS_C * dts;   // the clock with relativity, less the group delay
         double iono = 0.0, trop = 0.0;
+        double trop_rate = 0.0;       // the troposphere's rate along the line of sight (tropo_rate)
         if (have_pos_)
         {
             // the satellite's elevation and ionosphere as worked out in this
@@ -482,6 +484,9 @@ int RawMeasBuilder::nextLite(const RawEpoch& ep, const EphemerisStore& eph, cons
                 cz += static_cast<double>(a.cz_rate) * (ep.tow_s - a.t_atmo);
             trop = lite_trop_ok_ && cz > 0.0 ? lite_dry_z_ / cz + lite_wet_z_ / cz : 0.0;
             corr -= iono + trop;
+            // the troposphere's rate, mapped as the delay is (the zenith's at the epoch's receiver)
+            if (trop_rate_z_ != 0.0 && cz > 0.0)
+                trop_rate = trop_rate_z_ / cz;
         }
 
         RawMeas& m = out[n++];
@@ -496,7 +501,7 @@ int RawMeasBuilder::nextLite(const RawEpoch& ep, const EphemerisStore& eph, cons
         m.has_pr = sig.pr_fused;   // false: read for the transmit time alone (GnssSignalProfile::pr_fused)
         m.pr = o.pr_m + corr;
         m.has_rr = o.has_rate && !(o.cn0_dbhz < sig.cn0_min_rr);
-        m.rr = m.has_rr ? o.rate_mps + GNSS_C * c.clk_rate : 0.0;
+        m.rr = m.has_rr ? o.rate_mps + GNSS_C * c.clk_rate - trop_rate : 0.0;
         // the noise: its C/N0 part as the satellite's last epoch had it where
         // its C/N0 is the same (three times in four at 10 Hz)
         LiteSat& a = lite_[slot];

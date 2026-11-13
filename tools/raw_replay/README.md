@@ -815,6 +815,14 @@ each epoch's own. The board's first valid fix seeds the cold start (ellipsoidal 
 `--sdr-raw-steps` leaves the clock steps in, as an experiment. The board's GPS ionosphere (4001 sub-type 4, since
 2026-11-12) goes through the image's ionosphere rule as the receiver's set; `--gps-iono a0,..,b3` offers a set the
 same way at the first record, for a log from before the board sent one (`-`: none, even the board's).
+Since fc/sdr-tropo-rate the image's profile takes the troposphere's rate off each Doppler (`rr_tropo_rate`,
+RawMeasBuilder.h: the filter's climb through the zenith delay's height gradient, over the elevation's sine);
+`--tropo-rate 0` replays the image before it, `--tropo-rate 1` turns it on for `--receiver mosaic` too. On the RF
+rig's scenes it shows an artifact above 10 km: SignalSim's troposphere ends there (its TropoDelay returns 0 above
+10 km) and the firmware's does not, so from the 10 km crossing on (the hotshot's T+14) the filter carries about
+-0.1 m/s of vertical velocity (NED down, against the truth) and ~3 m of height by apogee that a real sky would not
+give it. A rig score's height gets worse for a second reason: without the rate, the troposphere's +0.8 m/s happened
+to drag back the ~-6 m the pad datum (the board's fix, no ionosphere) and the boost leave; with it, those stay.
 
 The V10 bench log of 2026-11-02 (`flight_20261102_213043.bin`, 52 s, the board on its bench antenna, static): 525
 epochs handed over, 107 untimed while the line filled, 418 applied; every one of 672 pseudoranges and 6,688 Dopplers

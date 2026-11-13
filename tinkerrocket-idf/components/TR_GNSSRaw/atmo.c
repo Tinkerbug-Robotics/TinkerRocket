@@ -108,3 +108,13 @@ double tropo_saastamoinen(double lat, double h, double el)
     double wet = 0.002277 * (1255.0 / tw + 0.05) * e / cos(z);
     return dry + wet;
 }
+
+double tropo_zenith_gradient(double lat, double h)
+{
+    /* The model's own delay at the zenith 10 m above and below: smooth over it but for the stratosphere's
+     * switch at 11 km (a change of slope, no step), its hold at 0 m (sea level's delay below it: no
+     * gradient there) and its end at 40 km (3 mm), each a band of 20 m a climb passes in a fraction of a
+     * second. */
+    const double d = 10.0;
+    return (tropo_saastamoinen(lat, h + d, PI / 2.0) - tropo_saastamoinen(lat, h - d, PI / 2.0)) / (2.0 * d);
+}

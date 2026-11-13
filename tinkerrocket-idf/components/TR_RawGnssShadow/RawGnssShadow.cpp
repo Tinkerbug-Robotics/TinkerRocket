@@ -1183,6 +1183,7 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
         npending_--;
         double r[3], v[3];
         ekf_.receiverEcef(r, v);
+        stage_.setClimbRate(-static_cast<double>(ekf_.velNed()[2]));   // the troposphere's rate (tropo_rate)
         stage_.begin(job_.e, r, job_.in_flight, built_);
         job_.phase = kJobBuild;
         job_.build_us = 0;

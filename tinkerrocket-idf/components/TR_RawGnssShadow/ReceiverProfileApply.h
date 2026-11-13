@@ -65,6 +65,8 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawMeasBuilder::C
     // the cheaper build: the atmosphere once in each period the code is fused in
     c.lite = p.build_lite;
     c.atmo_period_s = p.build_lite ? p.pr_period_s : 0.0;
+    // the troposphere's rate off each Doppler
+    c.tropo_rate = p.rr_tropo_rate;
 }
 
 inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssEKFParams& e)
@@ -194,7 +196,14 @@ inline void applyMosaicFlightProfile(GnssReceiverProfile& p)
 // fused epoch's Doppler is the mean of its satellite's Dopplers over the
 // board's epochs since the last fused one (SdrRawEpoch.h, ten at 10 Hz), the
 // mosaic's pairs widened to the fused period. The 16 satellites at 10 Hz are
-// what the RF rig's runs were scored on offline (2026-11-09).
+// what the RF rig's runs were scored on offline (2026-11-09). And the
+// troposphere's rate off each Doppler (rr_tropo_rate, RawMeasBuilder.h): on
+// the RF rig's hotshot the board's Dopplers alone read the climb 0.5-1.5 m/s
+// slow from late boost until the scene's troposphere ended at 10 km, which
+// the filter followed as +0.7-0.8 m/s of vertical velocity to T+12; offline
+// (2026-11-12, bench-backups v10-sdr-logs/rate-study) taking it off cut that
+// to 0.25 m/s (p90). The mosaic's image has not flown it: the Goblin's climb
+// is a fifth as fast, and its image is verified as it is.
 inline void applySdrFlightProfile(GnssReceiverProfile& p)
 {
     p.build_lite = true;
@@ -203,6 +212,7 @@ inline void applySdrFlightProfile(GnssReceiverProfile& p)
     p.rr_pair_avg = true;
     p.sat_cap = 16;
     p.sat_cap_max = 0;
+    p.rr_tropo_rate = true;
 }
 
 // The gnss-sdr-dev board's Doppler means (SdrRawEpoch.h, the profile's
