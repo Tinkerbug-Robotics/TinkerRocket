@@ -2065,6 +2065,11 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(GNSS_LOG_CONFIG_PENDING),  MT(GNSS_LOG_CONFIG_MSG),
         // GNSS antenna offset (BLE cmd 81): the pair below the GNSS log's.
         MT(ANTENNA_CONFIG_PENDING),   MT(ANTENNA_CONFIG_MSG),
+        // the gnss-sdr-dev board's IMU on its flight board (BLE cmd 83): the
+        // FC's relay of the board's report and the command pair, after
+        // OC_IDENTITY_MSG.
+        MT(SDR_ALIGN_STATUS_MSG),
+        MT(SDR_ALIGN_CMD_PENDING),    MT(SDR_ALIGN_CMD_MSG),
     };
 #undef MT
 
@@ -2124,7 +2129,9 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     //       ANTENNA_CONFIG_MSG (0x8C/0x8D, BLE cmd 81), below the GNSS log's.
     // 121 = 120 + OC_IDENTITY_MSG (0x87, #1658), the OC's own record of which
     //       computer wrote the log, after the high-g pair.
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 121u)
+    // 124 = 121 + the gnss-sdr-dev board's IMU: SDR_ALIGN_STATUS_MSG /
+    //       SDR_ALIGN_CMD_PENDING / SDR_ALIGN_CMD_MSG (0x88-0x8A, BLE cmd 83).
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 124u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }
@@ -2941,6 +2948,30 @@ TEST(RocketComputerTypes, AccelCalStructsKeepTheirWireSizes) {
     EXPECT_EQ(offsetof(AccelCalStatusData, face_n), 38u);
     EXPECT_NE(PCX_ACC, PCX_CAL);
     EXPECT_NE(PCX_ACC, PCX_EPH);
+}
+
+// The gnss-sdr-dev board's IMU on its flight board: the FC's relay of the
+// board's report (0xD2 on file-ops) and the command payload (BLE 83) -- both
+// apps unpack and pack these byte for byte.
+TEST(RocketComputerTypes, SdrAlignStructsKeepTheirWireSizes) {
+    EXPECT_EQ(sizeof(SdrAlignCmdData), 2u);
+    EXPECT_EQ(offsetof(SdrAlignCmdData, id), 1u);
+    EXPECT_EQ(sizeof(SdrAlignStatusData), 111u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, flags), 1u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, cal_axes), 7u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, cmd_id), 12u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, fc_cmd_state), 15u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, rests_sent), 18u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, rest_age_ds), 19u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, board_age_ds), 21u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, spread_deg), 23u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, q), 35u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, scale), 51u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, bias_mps2), 63u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, pose_dir), 75u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, pose_pairs), 99u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, moved_deg), 107u);
+    EXPECT_LE(sizeof(SdrAlignStatusData), MAX_PAYLOAD);
 }
 
 // The high-g's six-face alignment: its apply payload (BLE 80), the high-g

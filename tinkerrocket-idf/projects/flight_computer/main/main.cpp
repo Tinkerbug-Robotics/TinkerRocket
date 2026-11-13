@@ -96,6 +96,7 @@
 #include <GnssClockRecord.h>      // gnssClockGpsAt: GPS time off the board's clock line
 #include "sdr_phase_policy.h"     // the flight phase the board's tracking loops follow (host-tested)
 #include "sdr_aid_policy.h"       // the attitude and the rests the board is sent beside it (host-tested)
+#include "sdr_align_policy.h"     // the board IMU's mounting: its report to the apps, their commands to it (host-tested)
 #endif
 #if TR_RAW_NAV_MOSAIC
 #include <SbfNav.h>               // the mosaic-G5's navigation blocks as gps_eph_t (TR_GNSSReceiverMosaic_Serial)
@@ -9940,7 +9941,8 @@ static void sdrAidBenchStep(const GnssClockData& line)
 // dry-fire's latch), so the board takes the real ones with its boot
 // defaults. Logged beside the board's frames (GNSS_RTCM_MSG). Nothing goes
 // out unless the receiver on J1 is the board (a u-blox or a mosaic-G5 there
-// never gets a byte: the driver refuses too) and its line has been valid,
+// never gets a byte: the driver refuses too), and nothing but the rests
+// (unstamped: sdr_aid_policy.h) until its line has been valid,
 // from about 10 s after the board's first fix; the last valid line serves for
 // up to 600 s after it last moved (sdr_phase::kLineHoldUs: the board's epochs
 // can stop in a boost). Never blocks and never allocates: the driver checks
@@ -9965,7 +9967,8 @@ static sdr_phase::Sender      sdr_phase_sender;
 static sdr_phase::IgnitionCue sdr_ignition_cue;
 static sdr_aid_fc::Sender     sdr_aid_sender;
 static sdr_aid_fc::RestDetector sdr_rest;
-static int64_t                sdr_tx_last_us = INT64_MIN / 2;   // the last 4002 frame of either sender
+static sdr_align::Relay       sdr_align_relay;                  // the board IMU's mounting (sdrAlignStep)
+static int64_t                sdr_tx_last_us = INT64_MIN / 2;   // the last 4002 frame of any sender
 
 static void sdrPhaseStep()
 {
@@ -10049,11 +10052,20 @@ static void sdrAidNoteUpdate(const EkfIMUData& imu)
 // A frame of the board's as the flight loop drains its stream: a valid fix
 // (4001 sub-type 2) is the attitude's place. Followed on the ground, held
 // through a flight (a few km of it turn the attitude under 0.05 deg, and the
-// board's fixes in a boost can be off) unless there is none yet.
+// board's fixes in a boost can be off) unless there is none yet. Its IMU's
+// mounting (sub-type 5) goes to the relay (sdrAlignStep).
 static void sdrAidNoteBoardFrame(const uint8_t* frame, size_t len)
 {
+    if (sensor_collector_hw.gnssType() != GNSS_TYPE_SDR)
+        return;
+    sdr_rtcm::TrAlign align;
+    if (sdr_rtcm::decodeTrAlign(frame, len, align))
+    {
+        sdr_align_relay.noteReport(align, esp_timer_get_time());
+        return;
+    }
     sdr_rtcm::TrFix fix;
-    if (sensor_collector_hw.gnssType() != GNSS_TYPE_SDR || !sdr_rtcm::decodeTrFix(frame, len, fix) || !fix.valid)
+    if (!sdr_rtcm::decodeTrFix(frame, len, fix) || !fix.valid)
         return;
     const bool first = !sdr_aid_sender.haveBoardPlace();
     if (rocket_state == INFLIGHT && !first)
@@ -10083,7 +10095,43 @@ static void sdrAidStep()
         return;   // nothing due, or no room: the next pass gives it again
     sdr_aid_sender.sent(now_us);
     sdr_tx_last_us = now_us;
+    if (sdr_aid::fcSubType(frame, len) == sdr_aid::kRest)
+        sdr_align_relay.noteRestSent(now_us);
     sdrAidLogSent(frame, len, now_us);
+}
+
+// The board IMU's mounting (sdr_align_policy.h): the apps' command to the
+// board while it goes (one 4002 frame on the line at a time, after the
+// others' on a pass), and the relay's status to the out computer, once a
+// second on the ground and at once on a change. Not in flight: the board's
+// report is logged among its frames all the same.
+static void sdrAlignPublish(int64_t now_us)
+{
+    const bool board = sensor_collector_hw.gnssType() == GNSS_TYPE_SDR;
+    const SdrAlignStatusData st = sdr_align_relay.status(now_us, b2r_active_R, board,
+                                                         sdr_phase_sender.lineUsable(now_us), sdr_rest.run() > 0);
+    if (enqueueI2STx(SDR_ALIGN_STATUS_MSG, reinterpret_cast<const uint8_t*>(&st), sizeof(st)))
+        sdr_align_relay.published(now_us);
+}
+
+static void sdrAlignStep()
+{
+    if (sensor_collector_hw.gnssType() != GNSS_TYPE_SDR)
+        return;
+    const int64_t now_us = esp_timer_get_time();
+    if (now_us - sdr_tx_last_us >= sdr_aid::AidSchedule::kSpacingUs)
+    {
+        uint8_t frame[sdr_aid::kCommandFrame];
+        const size_t len = sdr_align_relay.frame(now_us, sdr_phase_sender, frame, sizeof(frame));
+        if (len != 0 && sensor_collector_hw.sendGNSSAidFrame(frame, len))
+        {
+            sdr_align_relay.sent(now_us);
+            sdr_tx_last_us = now_us;
+            sdrAidLogSent(frame, len, now_us);
+        }
+    }
+    if (rocket_state != INFLIGHT && sdr_align_relay.publishDue(now_us))
+        sdrAlignPublish(now_us);
 }
 #endif
 
@@ -10444,6 +10492,7 @@ static void loop_fc()
 #elif (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
         sdrPhaseStep();
         sdrAidStep();
+        sdrAlignStep();
 #endif
     }
     TR_LP_LAP(SENSORS);
@@ -12846,6 +12895,52 @@ static void loop_fc()
                     {
                         cfgRetryOnNextPoll("HGCAL APPLY");   // #1112
                     }
+                }
+            }
+            // The gnss-sdr-dev board IMU's mounting (BLE 83): the apps' save,
+            // clear, restart or report, to the board as 4002 sub-type 6 until
+            // it echoes it (sdrAlignStep). Refused in flight, after a flight,
+            // during a magnetometer calibration, and with no board on J1:
+            // the status says so at once.
+            else if (out_pending_command == SDR_ALIGN_CMD_PENDING)
+            {
+                delay_ms(1);
+                uint8_t cfg_payload[sizeof(SdrAlignCmdData)];
+                size_t  cfg_len = 0;
+                if (readConfigFrame(SDR_ALIGN_CMD_MSG, sizeof(SdrAlignCmdData),
+                                    cfg_payload, sizeof(cfg_payload), cfg_len)
+                    && cfg_len >= sizeof(SdrAlignCmdData))
+                {
+                    SdrAlignCmdData cmd;
+                    memcpy(&cmd, cfg_payload, sizeof(cmd));
+#if defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO && !(defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID)
+                    const bool board = sensor_collector_hw.gnssType() == GNSS_TYPE_SDR;
+                    const bool allowed = board && !(isCommandLockoutState(rocket_state) || post_flight_lockout);
+                    const int64_t now_us = esp_timer_get_time();
+                    sdr_align_relay.command(cmd.op, cmd.id, allowed, now_us);
+                    ESP_LOGI(TAG, "[SDRALIGN] op %u (app id %u) %s", (unsigned)cmd.op, (unsigned)cmd.id,
+                             sdr_align_relay.state() == SDRA_CMD_SENDING ? "to the board" :
+                             (board ? "refused: in flight, after a flight or in a magnetometer calibration"
+                                    : "refused: no gnss-sdr-dev board on J1"));
+                    sdrAlignPublish(now_us);
+#else
+                    // No gnss-sdr-dev board in this image: refused, so the
+                    // apps say so rather than waiting out their timeout.
+                    SdrAlignStatusData st;
+                    memset(&st, 0, sizeof(st));
+                    st.ver = SDR_ALIGN_STATUS_VER;
+                    st.q[0] = 1.0f;
+                    st.scale[0] = st.scale[1] = st.scale[2] = 1.0f;
+                    st.fc_cmd_state = SDRA_CMD_REFUSED;
+                    st.fc_cmd_op = cmd.op;
+                    st.fc_cmd_id = cmd.id;
+                    st.rest_age_ds = st.board_age_ds = 65535;
+                    (void)enqueueI2STx(SDR_ALIGN_STATUS_MSG, reinterpret_cast<const uint8_t*>(&st), sizeof(st));
+#endif
+                }
+                else
+                {
+                    cfgRetryOnNextPoll("SDRALIGN CMD");   // #1112
                 }
             }
             else if (out_pending_command == OTA_BEGIN_PENDING)

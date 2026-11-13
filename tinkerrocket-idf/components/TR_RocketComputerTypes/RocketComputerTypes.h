@@ -2187,6 +2187,95 @@ typedef struct __attribute__((packed))
 } AccelCalStatusFrame;
 static_assert(sizeof(AccelCalStatusFrame) == 114, "AccelCalStatusFrame must be 114 bytes");
 
+// ── The gnss-sdr-dev board's IMU on its flight board ──
+// The board on J1 has its own IMU (U10), and finds how it is mounted, and
+// calibrates its accelerometer, against this flight computer: each rest the
+// flight computer sends it (its mean specific force over a still second,
+// TinkerRocket's 4002 sub-type 5) paired with its own mean over the same
+// window is one direction seen in both frames. Two poses apart give the whole
+// rotation, six faces every axis's scale and bias (the gnss repo's
+// gnss/imu_align.h). The board keeps the result in its own NVS and reports it
+// in its 4001 sub-type 5 (sdr_align_policy.h); the flight computer relays it
+// here, its poses turned into its own IMU's frame -- the six-face board frame
+// above, so the apps match them to the same faces -- and sends the board the
+// apps' commands (4002 sub-type 6), again until the board echoes their id.
+static constexpr uint8_t SDR_ALIGN_STATUS_VER  = 1;
+static constexpr uint8_t SDR_ALIGN_POSES       = 8;      // the board keeps this many at most
+// SdrAlignCmdData.op (BLE 83), as the board's 4002 sub-type 6.
+static constexpr uint8_t SDR_ALIGN_OP_SAVE     = 1;      // the mounting and calibration in use, to the board's NVS
+static constexpr uint8_t SDR_ALIGN_OP_CLEAR    = 2;      // forget the one in use and the saved one
+static constexpr uint8_t SDR_ALIGN_OP_RESTART  = 3;      // forget the one in use, keep the saved one: a new procedure
+static constexpr uint8_t SDR_ALIGN_OP_REPORT   = 4;      // the board's report now (no change)
+// SdrAlignStatusData.flags
+static constexpr uint8_t SDRA_BOARD    = 1u << 0;  // the receiver on J1 is the gnss-sdr-dev board
+static constexpr uint8_t SDRA_REPORT   = 1u << 1;  // its report is held: one under 3 s old
+static constexpr uint8_t SDRA_TIME     = 1u << 2;  // the board can place a rest (GPS time, or a tq-0 rest's arrival)
+static constexpr uint8_t SDRA_LINE     = 1u << 3;  // this side's clock line is valid: its rests go stamped (else tq 0)
+static constexpr uint8_t SDRA_AUTOSAVE = 1u << 4;  // the board saves by its own rule this boot (any command turns it off)
+static constexpr uint8_t SDRA_BODY     = 1u << 5;  // the board solved against the body: turned here with the mounting
+static constexpr uint8_t SDRA_STILL    = 1u << 6;  // this side's last 1 s window was still
+// SdrAlignStatusData.have / from / saved / last_rest / cmd_res, as the board's
+static constexpr uint8_t SDRA_HAVE_NONE = 0, SDRA_HAVE_TILT = 1, SDRA_HAVE_WHOLE = 2;
+static constexpr uint8_t SDRA_FROM_NONE = 0, SDRA_FROM_RESTS = 1, SDRA_FROM_SAVED = 2, SDRA_FROM_SAVED_RESTS = 3;
+static constexpr uint8_t SDRA_SAVED_NONE = 0, SDRA_SAVED_SAME = 1, SDRA_SAVED_DIFFERS = 2;
+static constexpr uint8_t SDRA_REST_NONE = 0, SDRA_REST_PAIRED = 1, SDRA_REST_MOVING = 2, SDRA_REST_SHORT = 3,
+                         SDRA_REST_LATE = 4, SDRA_REST_NOT_1G = 5, SDRA_REST_NO_TIME = 6, SDRA_REST_IMU_OFF = 7;
+static constexpr uint8_t SDRA_RES_NONE = 0, SDRA_RES_DONE = 1, SDRA_RES_NOTHING = 2,
+                         SDRA_RES_REFUSED = 3,   // a flight phase, a test frame, or the board's IMU off
+                         SDRA_RES_NVS = 4, SDRA_RES_UNKNOWN = 5;
+// SdrAlignStatusData.fc_cmd_state: this side's command to the board
+static constexpr uint8_t SDRA_CMD_IDLE     = 0;   // none since boot
+static constexpr uint8_t SDRA_CMD_SENDING  = 1;   // going out every 200 ms until echoed
+static constexpr uint8_t SDRA_CMD_ECHOED   = 2;   // the board echoed its id: cmd_res says what it did
+static constexpr uint8_t SDRA_CMD_NO_ANSWER = 3;  // no echo within 3 s
+static constexpr uint8_t SDRA_CMD_REFUSED  = 4;   // not sent: in flight, after a flight, or no board on J1
+
+// SDR_ALIGN_CMD_MSG payload (BLE 83): the op and the app's id for it, which
+// the board echoes (1-255; the app's next request takes the next one).
+typedef struct __attribute__((packed))
+{
+    uint8_t op;   // SDR_ALIGN_OP_*
+    uint8_t id;
+} SdrAlignCmdData;
+static_assert(sizeof(SdrAlignCmdData) == 2, "SdrAlignCmdData must be 2 bytes");
+
+// SDR_ALIGN_STATUS_MSG (FC->OC over I2S), forwarded to the app on file-ops
+// behind 0xD2: the board's report and this side's part in it.
+typedef struct __attribute__((packed))
+{
+    uint8_t  ver;                // SDR_ALIGN_STATUS_VER
+    uint8_t  flags;              // SDRA_*
+    uint8_t  imu;                // the board's IMU watch: 0 off (no pairing), 1 watching, 2 aiding
+    uint8_t  have;               // SDRA_HAVE_*
+    uint8_t  from;               // SDRA_FROM_*: what the one in use comes from
+    uint8_t  saved;              // SDRA_SAVED_*
+    uint8_t  n_pose;             // poses held, 0..SDR_ALIGN_POSES
+    uint8_t  cal_axes;           // bit j: the board's accelerometer axis j calibrated
+    uint8_t  last_rest;          // SDRA_REST_*: what the board did with the last rest
+    uint8_t  gen;                // the board's solution's generation (+1 on each change, mod 256)
+    uint8_t  n_rest;             // rests the board received, mod 256
+    uint8_t  n_pair;             //   and paired, mod 256
+    uint8_t  cmd_id;             // the board's echo: the last command it acted on
+    uint8_t  cmd_op;             //   its op
+    uint8_t  cmd_res;            //   SDRA_RES_*
+    uint8_t  fc_cmd_state;       // SDRA_CMD_*: this side's last command
+    uint8_t  fc_cmd_op;
+    uint8_t  fc_cmd_id;
+    uint8_t  rests_sent;         // this side's rests sent, mod 256
+    uint16_t rest_age_ds;        // since this side's last rest, 0.1 s (65535: none, or that long)
+    uint16_t board_age_ds;       // since the board's last report, 0.1 s (65535: none, or that long)
+    float    spread_deg;         // whole: the poses apart, the most short of opposite
+    float    resid_deg;          // the poses off the solution, the largest
+    float    cal_rms_mps2;       // the calibration fit's rms
+    float    q[4];               // the mounting: U10 to this IMU's (board) frame, Hamilton, scalar first, q0 >= 0
+    float    scale[3];           // the board's accelerometer, its axes: f_read = s f_true + b (1 and 0 uncalibrated)
+    float    bias_mps2[3];
+    int8_t   pose_dir[SDR_ALIGN_POSES][3];  // each pose's specific force's direction, this IMU's frame, 1/127
+    uint8_t  pose_pairs[SDR_ALIGN_POSES];   //   and its pairs (255: that or more); n_pose of each are used
+    float    moved_deg;          // from SDRA_FROM_SAVED_RESTS only: the rail pose off the saved rotation (5.1: that or more)
+} SdrAlignStatusData;
+static_assert(sizeof(SdrAlignStatusData) == 111, "SdrAlignStatusData must be 111 bytes");
+
 // ── Pad calibration (#1600 phase 5) ──────────────────────────────────────────
 // OC→FC, after PAD_CAL_PENDING: the GPS broadcast (Klobuchar) ionosphere the
 // app read from the day's navigation file.  The LC86G does not pass these on
@@ -3357,6 +3446,13 @@ static constexpr uint8_t HG_CAL_APPLY_MSG      = 0x86;  // 49-byte HighGCalApply
 // other OC→self records use is full, and 0xAC/0xAD are retired codes, so this
 // takes the next free one here. See OcIdentityData.
 static constexpr uint8_t OC_IDENTITY_MSG       = 0x87;  // OC→self: 68-byte OcIdentityData, ~1 Hz while logging, straight to the log
+
+// The gnss-sdr-dev board's IMU mounting and calibration on its flight board
+// (SdrAlignStatusData, SdrAlignCmdData; BLE 83): the board's own report,
+// relayed, and the app's commands to it, through the flight computer.
+static constexpr uint8_t SDR_ALIGN_STATUS_MSG  = 0x88;  // FC→OC over I2S: 111-byte SdrAlignStatusData, 1 Hz on the ground with the board on J1
+static constexpr uint8_t SDR_ALIGN_CMD_PENDING = 0x89;  // OC→FC: payload follows as SDR_ALIGN_CMD_MSG
+static constexpr uint8_t SDR_ALIGN_CMD_MSG     = 0x8A;  // OC→FC: 2-byte SdrAlignCmdData payload
 
 // FC→OC over I2S, emitted once at the PRELAUNCH→INFLIGHT transition. A
 // snapshot of the active roll-control / IMU settings so the per-flight .bin

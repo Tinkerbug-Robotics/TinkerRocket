@@ -83,6 +83,7 @@ class CommandsGoldenTest {
         "cmd79_gnsslog_1.bin",
         "cmd80_hgcal_49.bin",
         "cmd81_antenna_7.bin",
+        "cmd83_sdralign_2.bin",
     )
 
     @Test
@@ -395,6 +396,14 @@ class CommandsGoldenTest {
     fun `cmd79 gnss log`() {
         val s = side("cmd79_gnsslog_1.bin")
         assertMatchesFixture("cmd79_gnsslog_1.bin", Commands.gnssLog(s.i("setting")))
+    }
+
+    @Test
+    fun `cmd83 the gnss-sdr-dev board's IMU mounting`() {
+        val s = side("cmd83_sdralign_2.bin")
+        assertEquals(83, s.i("cmd"))
+        assertMatchesFixture("cmd83_sdralign_2.bin", Commands.sdrAlign(s.i("op"), s.i("id")))
+        assertEquals("53" + "03" + "ff", Commands.sdrAlign(SdrAlignCommand.OP_RESTART, 255).toHex())
     }
 
     @Test
