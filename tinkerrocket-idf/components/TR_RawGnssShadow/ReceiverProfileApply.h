@@ -453,6 +453,13 @@ inline void applyPx1105rFlightProfile(GnssReceiverProfile& p)
 // delay (epoch_latency_s 0, as the profile has it) the Traveler's boost goes
 // 6.0 -> 14.7 m and its coast above 515 m/s 13.5 -> 22.2 m, so the receiver's
 // real delay wants measuring before this flies.
+// And the gnss-sdr-dev image's three descent and coast safeguards
+// (applySdrFlightSafeguards, where each is measured), none of them the
+// receiver's: the Doppler change check stands down in the IMU-free descent
+// (dv_imu_free_off), the vertical check's latch lets go there after 1 s
+// (vert_imu_free_release_s), and gravity is WGS84's with height
+// (gravity_wgs84). Owner's call 2026-11-13; not replayed on a PX1105R flight
+// (its rig captures are on the RF rig's Pi).
 inline void applyPx1105rFlightSafeguards(RawGnssShadow::Config& c)
 {
     applyMosaicFlightSafeguards(c);
@@ -464,6 +471,9 @@ inline void applyPx1105rFlightSafeguards(RawGnssShadow::Config& c)
     c.ekf.rr_dyn_lag_g1 = 12.5;
     c.meas.rr_dyn_sigma = 0.25;
     c.ekf.a_noise_per_g = 0.005;
+    c.dv_imu_free_off = true;
+    c.vert_imu_free_release_s = 1.0;
+    c.ekf.gravity_wgs84 = true;
 }
 
 // The antenna's offset from the IMU, where the rocket's owner measured it: an

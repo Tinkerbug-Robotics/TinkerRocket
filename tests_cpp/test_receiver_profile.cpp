@@ -441,6 +441,19 @@ TEST(ReceiverProfile, ThePx1105rIsTheMosaicsDesignWithItsOwnReceiver)
     EXPECT_EQ(mo.ekf.rr_dyn_lag_s, 0.0);
     EXPECT_EQ(mo.meas.rr_dyn_sigma, 0.5);
     EXPECT_EQ(mo.ekf.a_noise_per_g, 0.0);
+    // and the gnss-sdr-dev image's descent and coast safeguards, the same
+    // values; the mosaic's none of them
+    RawGnssShadow::Config sd;
+    gnss_raw::applySdrFlightSafeguards(sd);
+    EXPECT_TRUE(px.dv_imu_free_off);
+    EXPECT_EQ(px.vert_imu_free_release_s, 1.0);
+    EXPECT_TRUE(px.ekf.gravity_wgs84);
+    EXPECT_EQ(px.dv_imu_free_off, sd.dv_imu_free_off);
+    EXPECT_EQ(px.vert_imu_free_release_s, sd.vert_imu_free_release_s);
+    EXPECT_EQ(px.ekf.gravity_wgs84, sd.ekf.gravity_wgs84);
+    EXPECT_FALSE(mo.dv_imu_free_off);
+    EXPECT_EQ(mo.vert_imu_free_release_s, 0.0);
+    EXPECT_FALSE(mo.ekf.gravity_wgs84);
 }
 
 TEST(ReceiverProfile, ThePhaseSigmaIsLogLinearInCn0)

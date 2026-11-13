@@ -234,8 +234,8 @@ struct Args
     // check (the epoch worked, then its refusals counted) on every boost epoch, each from the same state
     bool compare_sequential = false;
     bool apogee_flag = true;         // kShadowApogee on every tick from the log's apogee flag (--no-apogee-flag: never)
-    int dv_imu_free_off = -1;        // --dv-imu-free-off 0|1: the change check in the IMU-free descent (sdr: the image's 1)
-    double vert_imu_free_release_s = -1.0;   // --vert-imu-free-release-s X: the latch in the IMU-free descent (sdr: 1; 0 off)
+    int dv_imu_free_off = -1;        // --dv-imu-free-off 0|1: the change check in the IMU-free descent (sdr, px1105r: the image's 1)
+    double vert_imu_free_release_s = -1.0;   // --vert-imu-free-release-s X: the latch in the IMU-free descent (sdr, px1105r: 1; 0 off)
     double apogee_call_s = -1e9;     // --apogee-call-s: the flight computer's apogee call at this flight time (s), as a
                                      //   rig run's console gave it, where the harness's own quorum cannot call one
     double vert_check_mps = -1.0;    // RawGnssShadow::Config::vert_check_mps (20 m/s; 0 off) -- a RAW_REPLAY_VCHECK build
@@ -2092,7 +2092,16 @@ int main(int argc, char** argv)
 #endif
 #if RAW_REPLAY_PX1105R
         if (px)
-            applyPx1105rFlightSafeguards(cfg);   // the mosaic's set with the PX1105R's antenna (windup_k 1)
+        {
+            // the mosaic's set with the PX1105R's antenna (windup_k 1), its boost and pad settings, and the
+            // gnss-sdr-dev image's descent safeguards (--dv-imu-free-off 0, --vert-imu-free-release-s 0 and
+            // --gravity-wgs84 0 fly it without them, as before 2026-11-13)
+            applyPx1105rFlightSafeguards(cfg);
+            if (a.dv_imu_free_off >= 0)
+                cfg.dv_imu_free_off = a.dv_imu_free_off != 0;
+            if (a.vert_imu_free_release_s >= 0.0)
+                cfg.vert_imu_free_release_s = a.vert_imu_free_release_s;
+        }
         else
 #endif
             applyMosaicFlightSafeguards(cfg);
