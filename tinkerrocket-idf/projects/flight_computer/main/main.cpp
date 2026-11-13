@@ -4606,6 +4606,19 @@ static void startRawShadow()
     // the means off (each fused epoch's own Dopplers), the other bench
     // overrides below as on the mosaic's
     gnss_raw::applySdrFlightProfile(rx);
+#if TR_RAW_NAV_RIG_REPLAY
+    // The rig replay: its clock is set from the board's epochs as the line
+    // placed them (TR_Sensor_Collector_Sim replayNoteEpoch), so the replayed
+    // IMU is late by the transport as well, and only the Dopplers' lag is
+    // left to take off (ReceiverProfileApply.h)
+    rx.epoch_latency_s -= gnss_raw::kSdrTransportS;
+    ESP_LOGI(TAG, "[RAWGNSS] gnss-sdr-dev: epochs placed %.1f ms earlier than the line (the board's output delay, less "
+                  "the transport the rig replay's clock carries)",
+             rx.epoch_latency_s * 1000.0);
+#else
+    ESP_LOGI(TAG, "[RAWGNSS] gnss-sdr-dev: epochs placed %.1f ms earlier than the line (the board's output delay)",
+             rx.epoch_latency_s * 1000.0);
+#endif
 #endif
 #ifdef TR_BENCH_RAW_FUSE_MS
     // bench (the CPU ladder, P1): the fused grid, ms of GPS time. The

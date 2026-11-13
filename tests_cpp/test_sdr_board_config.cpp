@@ -68,4 +68,5 @@ TEST(SdrBoardConfig, TheProfileItFlies)
     EXPECT_EQ(rx.rr_pair_max_diff_mps, 5.0);
     EXPECT_EQ(gnss_raw::sdrDopplerMeanEpochs(rx), 10);
     EXPECT_NEAR(gnss_raw::sdrDopplerMeanLag(rx), 0.045, 1e-12);
+    EXPECT_EQ(rx.epoch_latency_s, 0.005);   // the board's output delay (ReceiverProfileApply.h)
 }

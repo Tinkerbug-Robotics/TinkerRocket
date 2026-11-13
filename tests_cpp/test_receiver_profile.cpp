@@ -518,6 +518,17 @@ TEST(ReceiverProfile, TheSdrImagesFlightProfileAndItsDopplerMeans)
     EXPECT_FALSE(gnss_raw::sdrDevProfile().rr_tropo_rate);
     EXPECT_TRUE(p.rr_tropo_rate);
     EXPECT_FALSE(m.rr_tropo_rate);
+    // and the board's output delay (the rig's calibration, 2026-11-13): the
+    // transport and the Dopplers' lag, which the mosaic's 1PPS has neither of
+    EXPECT_EQ(gnss_raw::sdrDevProfile().epoch_latency_s, 0.0);
+    EXPECT_EQ(p.epoch_latency_s, 0.005);
+    EXPECT_DOUBLE_EQ(gnss_raw::kSdrEpochLatencyS - gnss_raw::kSdrTransportS, 0.0025);
+    EXPECT_EQ(m.epoch_latency_s, 0.0);
+    {
+        RawGnssShadow::Config sc;
+        gnss_raw::applyReceiverProfile(p, sc);
+        EXPECT_EQ(sc.epoch_latency_s, 0.005);
+    }
     {
         RawMeasBuilder::Config bc;
         EXPECT_FALSE(bc.tropo_rate);                      // the Beetle's default
