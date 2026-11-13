@@ -1759,6 +1759,7 @@ add_executable(test_gnss_detect test_gnss_detect.cpp
     ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial/SbfParser.cpp
     ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrRtcm.cpp
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
+    ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial/SkyTraqBinary.cpp
 )
 target_include_directories(test_gnss_detect PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -1766,6 +1767,7 @@ target_include_directories(test_gnss_detect PRIVATE
     ${LIB_DIR}/TR_Sensor_Collector
     ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial
     ${LIB_DIR}/TR_GNSSReceiverSdr_Serial
+    ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
     ${LIB_DIR}/TR_RocketComputerTypes
 )

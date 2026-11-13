@@ -26,6 +26,7 @@
 
 #include "BoardIdentity.h"
 #include "RocketComputerTypes.h"
+#include "SkyTraqBinary.h"
 #include "gnss_detect.h"
 #include "fixtures/gnss_detect_sbf.h"
 #include "fixtures/sdr_rtcm_stream.h"
@@ -1394,4 +1395,334 @@ TEST(GnssIdentity, AFieldThatIsNotANameIsEmpty)
     const size_t n = board_identity::encodePayload("abcdef", "V9", tiny, sizeof(tiny), "mosaic-G5");
     board_identity::decodeGnss(tiny, n, gnss, sizeof(gnss));
     EXPECT_STREQ(gnss, "");
+}
+
+// ── The PX1105R (TR_GNSS_AUTO_RAW) ──────────────────────────────────────
+
+namespace {
+
+std::vector<uint8_t> skytraqFrame(const std::vector<uint8_t>& body)
+{
+    std::vector<uint8_t> f(body.size() + 7);
+    f.resize(skytraq::buildFrame(body.data(), body.size(), f.data(), f.size()));
+    return f;
+}
+
+// The PX1105R: from power-up NMEA at 115200 once a second (a talker's
+// sentences, as a u-blox's); set up by its driver (SRAM only, so until it
+// loses power) the binary set at 921600, twenty frames a second. It answers
+// SkyTraq's version query with an ACK and its version, at whichever baud it
+// is at, and counts any other command it would act on.
+struct FakePx1105r : Receiver, skytraq::FrameSink
+{
+    uint32_t baud = kPx1105rFactoryBaud;
+    uint32_t boots_at_ms = 0;
+    int      queries = 0;   // version queries answered
+    int      other = 0;     // other SkyTraq commands
+
+    void onFrame(const uint8_t* body, size_t len, size_t index) override
+    {
+        (void)index;
+        if (len == 2 && body[0] == 0x02) { queries++; answer_ = true; }
+        else other++;
+    }
+
+    void tick(uint32_t now_ms, const Line& from_host, Line& to_host) override
+    {
+        if (now_ms < boots_at_ms) return;
+        const double t = secs(now_ms);
+        if (!up_)
+        {
+            up_ = true;
+            rx_.listen(baud, t);
+            next_ms_ = now_ms + 200;
+        }
+        std::vector<uint8_t> heard;
+        rx_.pump(from_host, t, heard);
+        if (!heard.empty()) parser_.feed(heard.data(), heard.size(), *this);
+        if (answer_)
+        {
+            answer_ = false;
+            to_host.send(skytraqFrame({0x83, 0x02}), baud, t + 0.02);
+            to_host.send(skytraqFrame({0x80, 0x01, 0, 1, 2, 3, 0, 1, 4, 9, 0, 0x14, 0x0A, 0x15}), baud, t + 0.03);
+        }
+        if (now_ms >= next_ms_)
+        {
+            if (baud == kPx1105rRunBaud)
+            {
+                std::vector<uint8_t> state(81, 0);
+                state[0] = 0xDF;
+                to_host.send(skytraqFrame(state), baud, t);
+                next_ms_ += 50;
+            }
+            else
+            {
+                to_host.send(ubloxNmeaSecond(), baud, t);
+                next_ms_ += 1000;
+            }
+        }
+    }
+
+private:
+    bool                 up_ = false;
+    bool                 answer_ = false;
+    UartRx               rx_;
+    skytraq::FrameParser parser_;
+    uint32_t             next_ms_ = 0;
+};
+
+const uint8_t kHints[] = {GNSS_TYPE_NONE, GNSS_TYPE_UBLOX, GNSS_TYPE_MOSAIC, GNSS_TYPE_SDR, GNSS_TYPE_PX1105R};
+
+}  // namespace
+
+TEST(GnssDetectPx1105r, FactoryReceiverAt115200WithNothingKnown)
+{
+    FakePx1105r px;
+    const Result r = detect(&px, planFor(GNSS_TYPE_NONE, 0, false, true));
+    ASSERT_TRUE(r.done);
+    EXPECT_EQ(r.found, GNSS_TYPE_PX1105R);
+    EXPECT_EQ(r.proof, Proof::SKYTRAQ_FRAME);
+    EXPECT_EQ(r.baud, kPx1105rFactoryBaud);
+    EXPECT_GE(px.queries, 1);
+    EXPECT_EQ(px.other, 0);
+}
+
+TEST(GnssDetectPx1105r, SetUpReceiverAt921600AfterAnFcReset)
+{
+    FakePx1105r px;
+    px.baud = kPx1105rRunBaud;
+    const Result r = detect(&px, planFor(GNSS_TYPE_PX1105R, 0, true, true));
+    EXPECT_EQ(r.found, GNSS_TYPE_PX1105R);
+    EXPECT_EQ(r.baud, kPx1105rRunBaud);
+    EXPECT_EQ(r.probes, 1u);   // its hint puts its run baud first
+    EXPECT_LT(r.ms, 300u);
+}
+
+TEST(GnssDetectPx1105r, ItsHintPutsItsProbesFirstAndItsDriverLast)
+{
+    const Plan p = planFor(GNSS_TYPE_PX1105R, 0, false, true);
+    ASSERT_GE(p.n, 2u);
+    EXPECT_EQ(p.probes[0].asks, GNSS_TYPE_PX1105R);
+    EXPECT_EQ(p.probes[0].baud, kPx1105rRunBaud);
+    EXPECT_EQ(p.probes[1].asks, GNSS_TYPE_PX1105R);
+    EXPECT_EQ(p.probes[1].baud, kPx1105rFactoryBaud);
+    EXPECT_EQ(p.fallback, GNSS_TYPE_PX1105R);
+    EXPECT_EQ(p.budget_ms, kBudgetPx1105rMs);
+    EXPECT_TRUE(p.px1105r);
+
+    FakePx1105r px;   // a factory one, booting with the flight computer
+    px.boots_at_ms = 4500;
+    const Result r = detect(&px, p);
+    EXPECT_EQ(r.found, GNSS_TYPE_PX1105R);
+}
+
+TEST(GnssDetectPx1105r, ItsNmeaIsNeverAUblox)
+{
+    // Its factory NMEA at 115200, a u-blox baud, under every hint, and with
+    // the u-blox driver's record at 115200 too, which puts a u-blox probe
+    // there ahead of it: only a UBX frame proves the u-blox at 115200.
+    for (uint8_t hint : kHints)
+    {
+        for (uint32_t last : {0u, 115200u})
+        {
+            for (bool warm : {false, true})
+            {
+                FakePx1105r px;
+                const Result r = detect(&px, planFor(hint, last, warm, true));
+                EXPECT_EQ(r.found, GNSS_TYPE_PX1105R) << "hint " << int(hint) << " last " << last << " warm " << warm;
+            }
+        }
+    }
+}
+
+TEST(GnssDetectPx1105r, EveryPlanLooksAtBothItsBaudsBeforeAnyOther115200Probe)
+{
+    for (uint8_t hint : kHints)
+    {
+        for (uint32_t last : {0u, 9600u, 115200u})
+        {
+            for (bool warm : {false, true})
+            {
+                for (const Plan& p : {planFor(hint, last, warm, true), secondLookPlan(true)})
+                {
+                    EXPECT_TRUE(p.px1105r);
+                    EXPECT_LE(p.n, Plan::kMaxProbes);
+                    int run = 0, factory = 0;
+                    size_t first_px_factory = p.n, first_other_115200 = p.n;
+                    for (size_t i = 0; i < p.n; i++)
+                    {
+                        const Probe& q = p.probes[i];
+                        if (q.asks == GNSS_TYPE_PX1105R)
+                        {
+                            run += q.baud == kPx1105rRunBaud;
+                            factory += q.baud == kPx1105rFactoryBaud;
+                            if (q.baud == kPx1105rFactoryBaud && first_px_factory == p.n) first_px_factory = i;
+                        }
+                        else if (q.baud == 115200u && first_other_115200 == p.n)
+                        {
+                            first_other_115200 = i;
+                        }
+                    }
+                    EXPECT_EQ(run, 1);
+                    EXPECT_EQ(factory, 1);
+                    if (first_other_115200 < p.n && hint != GNSS_TYPE_UBLOX)
+                        EXPECT_LT(first_px_factory, first_other_115200) << int(hint);
+                }
+            }
+        }
+    }
+}
+
+TEST(GnssDetectPx1105r, WithoutItEveryPlanIsTheAutoImagesOwn)
+{
+    for (uint8_t hint : kHints)
+    {
+        for (bool warm : {false, true})
+        {
+            for (const Plan& p : {planFor(hint, 9600, warm), secondLookPlan()})
+            {
+                EXPECT_FALSE(p.px1105r);
+                EXPECT_LE(p.n, 8u);   // the auto image's own most
+                for (size_t i = 0; i < p.n; i++) EXPECT_NE(p.probes[i].asks, GNSS_TYPE_PX1105R);
+            }
+        }
+    }
+    // and its hint is no receiver there: the plan for nothing known
+    const Plan none = planFor(GNSS_TYPE_NONE, 9600, false);
+    const Plan px = planFor(GNSS_TYPE_PX1105R, 9600, false);
+    ASSERT_EQ(px.n, none.n);
+    for (size_t i = 0; i < px.n; i++)
+    {
+        EXPECT_EQ(px.probes[i].baud, none.probes[i].baud);
+        EXPECT_EQ(px.probes[i].asks, none.probes[i].asks);
+    }
+}
+
+TEST(GnssDetectPx1105r, TheOtherReceiversAreStillFoundWithItInThePlan)
+{
+    for (uint8_t hint : {GNSS_TYPE_NONE, GNSS_TYPE_PX1105R})
+    {
+        FakeUblox factory_ublox;   // 38400, NMEA
+        EXPECT_EQ(detect(&factory_ublox, planFor(hint, 0, false, true)).found, GNSS_TYPE_UBLOX) << int(hint);
+        EXPECT_EQ(factory_ublox.other_ubx, 0);
+        EXPECT_EQ(factory_ublox.nmea_in, 0);
+
+        FakeMosaic set_up;
+        EXPECT_EQ(detect(&set_up, planFor(hint, 0, false, true)).found, GNSS_TYPE_MOSAIC) << int(hint);
+
+        FakeMosaic factory_mosaic;   // silent at 115200 until spoken to: the PX1105R's query reaches it first
+        factory_mosaic.baud = kMosaicFactoryBaud;
+        factory_mosaic.set_up = false;
+        EXPECT_EQ(detect(&factory_mosaic, planFor(hint, 0, false, true)).found, GNSS_TYPE_MOSAIC) << int(hint);
+
+        FakeSdr board;
+        EXPECT_EQ(detect(&board, planFor(hint, 0, false, true)).found, GNSS_TYPE_SDR) << int(hint);
+    }
+    // With its hint the board's listening probe still comes first: it hears
+    // nothing at all, the PX1105R's probes included.
+    FakeSdr board;
+    EXPECT_EQ(detect(&board, planFor(GNSS_TYPE_SDR, 0, false, true)).found, GNSS_TYPE_SDR);
+    EXPECT_EQ(board.heard, 0u);
+}
+
+TEST(GnssDetectPx1105r, AUbloxAt115200IsProvenByItsReplyAlone)
+{
+    // Its driver's record at 115200: there NMEA proves nothing in this plan,
+    // but its MON-VER reply does; and the PX1105R's query is nothing it acts on.
+    FakeUblox ublox;
+    ublox.baud = 115200;
+    const Result r = detect(&ublox, planFor(GNSS_TYPE_UBLOX, 115200, false, true));
+    EXPECT_EQ(r.found, GNSS_TYPE_UBLOX);
+    EXPECT_EQ(r.proof, Proof::UBX_FRAME);
+    EXPECT_EQ(ublox.other_ubx, 0);
+    EXPECT_EQ(ublox.nmea_in, 0);
+}
+
+TEST(GnssDetectPx1105r, NoOtherReceiverHeardAtItsBaudsIsAPx1105r)
+{
+    // A set-up mosaic, a u-blox at each of its bauds and the board, heard
+    // through both PX1105R probes alone: never its frame.
+    Plan p;
+    p.probes[p.n++] = Probe{kPx1105rRunBaud, GNSS_TYPE_PX1105R, 1000};
+    p.probes[p.n++] = Probe{kPx1105rFactoryBaud, GNSS_TYPE_PX1105R, 1000};
+    p.fallback = GNSS_TYPE_NONE;
+    p.px1105r = true;
+    FakeMosaic mosaic;
+    EXPECT_NE(detect(&mosaic, p).found, GNSS_TYPE_PX1105R);
+    for (uint32_t b : {9600u, 38400u, 460800u})
+    {
+        for (bool set_up : {false, true})
+        {
+            FakeUblox ublox;
+            ublox.baud = b;
+            ublox.set_up = set_up;
+            EXPECT_NE(detect(&ublox, p).found, GNSS_TYPE_PX1105R) << b;
+        }
+    }
+    FakeSdr board;
+    EXPECT_NE(detect(&board, p).found, GNSS_TYPE_PX1105R);
+}
+
+TEST(GnssBringUpPx1105r, AProvenPx1105rGetsItsDriverAndIsRemembered)
+{
+    BringUp b;
+    b.start(GNSS_TYPE_UBLOX, 0, false, false, true);
+    b.detected(GNSS_TYPE_PX1105R);
+    EXPECT_EQ(b.step(), Step::BEGIN_PX1105R);
+    b.driverResult(true);
+    EXPECT_EQ(b.step(), Step::DONE);
+    EXPECT_EQ(b.active(), GNSS_TYPE_PX1105R);
+    EXPECT_TRUE(b.hintChanged());
+    EXPECT_EQ(b.hint(), GNSS_TYPE_PX1105R);
+}
+
+TEST(GnssBringUpPx1105r, ARememberedPx1105rThatIsSilentGetsItsDriver)
+{
+    BringUp b;
+    b.start(GNSS_TYPE_PX1105R, 0, false, false, true);
+    b.detected(GNSS_TYPE_NONE);
+    EXPECT_EQ(b.step(), Step::BEGIN_PX1105R);   // its driver goes on looking
+    b.driverResult(true);
+    EXPECT_EQ(b.active(), GNSS_TYPE_PX1105R);
+    EXPECT_FALSE(b.hintChanged());
+}
+
+TEST(GnssBringUpPx1105r, APx1105rFoundByTheSecondLook)
+{
+    BringUp b;
+    b.start(GNSS_TYPE_UBLOX, 9600, false, false, true);
+    b.detected(GNSS_TYPE_NONE);
+    b.driverResult(false);   // the u-blox driver's 60 s
+    ASSERT_EQ(b.step(), Step::SECOND_LOOK);
+    EXPECT_TRUE(b.plan().px1105r);
+    b.detected(GNSS_TYPE_PX1105R);
+    EXPECT_EQ(b.step(), Step::BEGIN_PX1105R);
+    b.driverResult(true);
+    EXPECT_EQ(b.hint(), GNSS_TYPE_PX1105R);
+}
+
+TEST(GnssBringUpPx1105r, WithoutTheFlagItsHintReadsAsNothingKnown)
+{
+    BringUp b;
+    b.start(GNSS_TYPE_PX1105R, 0, false);
+    EXPECT_EQ(b.hint(), GNSS_TYPE_NONE);
+    EXPECT_EQ(b.plan().budget_ms, kBudgetNoneMs);
+    EXPECT_FALSE(b.plan().px1105r);
+}
+
+TEST(GnssBringUpPx1105r, ItsPathsFinishWellInsideTheSetupWatchdog)
+{
+    // Its hint and silence: the budget, the round it ends inside, then its
+    // driver (setBeginWait off on the image: begin() returns at once).
+    BringUp b;
+    b.start(GNSS_TYPE_PX1105R, 0, false, false, true);
+    uint32_t round = 0;
+    for (size_t i = 0; i < b.plan().n; i++) round += b.plan().probes[i].listen_ms;
+    EXPECT_LT(b.plan().budget_ms + round, 6000u);
+    // nothing known: the u-blox path as before, the round two probes longer
+    BringUp n;
+    n.start(GNSS_TYPE_NONE, 0, false, false, true);
+    uint32_t r2 = 0;
+    for (size_t i = 0; i < n.plan().n; i++) r2 += n.plan().probes[i].listen_ms;
+    EXPECT_LT(n.plan().budget_ms + r2 + 63000u + 2000u + BringUp::kMosaicLateTimeoutMs, 95000u);
 }

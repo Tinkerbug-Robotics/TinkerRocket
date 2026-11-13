@@ -27,6 +27,8 @@ inline int hexValue(char c)
 // UBX-MON-VER, polled: class 0x0A, id 0x04, no payload, its checksum.
 const uint8_t kUbxMonVerPoll[8] = {0xB5, 0x62, 0x0A, 0x04, 0x00, 0x00, 0x0E, 0x34};
 const uint8_t kCr[1] = {'\r'};
+// 0x02 with software type 1 (system code); the checksum is the XOR of the two.
+const uint8_t kSkyTraqVersionQuery[9] = {0xA0, 0xA1, 0x00, 0x02, 0x02, 0x01, 0x03, 0x0D, 0x0A};
 
 bool isUbloxBaud(uint32_t baud)
 {
@@ -52,11 +54,49 @@ const char* proofName(Proof p)
         case Proof::UBX_FRAME: return "a UBX frame";
         case Proof::NMEA:      return "NMEA";
         case Proof::RTCM_TR:   return "an RTCM 4001 frame";
+        case Proof::SKYTRAQ_FRAME: return "a SkyTraq frame";
         default:               return "nothing";
     }
 }
 
-Plan planFor(uint8_t hint, uint32_t ublox_last_baud, bool receiver_kept_power)
+// The PX1105R's two probes into a plan: first of all with it the hint (then
+// its own budget, and its driver when nothing answers, which goes on looking
+// at both bauds), else just before the first other probe at 115200, where its
+// NMEA would otherwise read as a u-blox's (or at the end with none there).
+static void addPx1105r(Plan& p, bool first)
+{
+    const Probe px[2] = {Probe{kPx1105rRunBaud, GNSS_TYPE_PX1105R, kPx1105rRunListenMs},
+                         Probe{kPx1105rFactoryBaud, GNSS_TYPE_PX1105R, kPx1105rFactoryListenMs}};
+    size_t at = p.n;
+    if (first)
+    {
+        at = 0;
+    }
+    else
+    {
+        for (size_t i = 0; i < p.n; i++)
+        {
+            if (p.probes[i].baud == kPx1105rFactoryBaud)
+            {
+                at = i;
+                break;
+            }
+        }
+    }
+    size_t room = Plan::kMaxProbes - p.n;
+    const size_t add = room < 2 ? room : 2;
+    for (size_t i = p.n; i-- > at;) p.probes[i + add] = p.probes[i];
+    for (size_t k = 0; k < add; k++) p.probes[at + k] = px[k];
+    p.n += add;
+    p.px1105r = true;
+    if (first)
+    {
+        p.budget_ms = kBudgetPx1105rMs;
+        p.fallback = GNSS_TYPE_PX1105R;
+    }
+}
+
+Plan planFor(uint8_t hint, uint32_t ublox_last_baud, bool receiver_kept_power, bool px1105r)
 {
     // The u-blox, where it most likely is first: still at the run baud when
     // it kept its power, else where its driver found it last, then the two
@@ -120,10 +160,11 @@ Plan planFor(uint8_t hint, uint32_t ublox_last_baud, bool receiver_kept_power)
         p.budget_ms = (hint == GNSS_TYPE_UBLOX) ? kBudgetUbloxMs : kBudgetNoneMs;
         p.fallback = GNSS_TYPE_UBLOX;
     }
+    if (px1105r) addPx1105r(p, hint == GNSS_TYPE_PX1105R);
     return p;
 }
 
-Plan secondLookPlan()
+Plan secondLookPlan(bool px1105r)
 {
     Plan p;
     p.probes[p.n++] = Probe{kSdrBaud, GNSS_TYPE_SDR, kSdrListenMs};
@@ -131,6 +172,7 @@ Plan secondLookPlan()
     p.probes[p.n++] = Probe{kMosaicFactoryBaud, GNSS_TYPE_MOSAIC, kMosaicFactoryListenMs};
     p.budget_ms = 1000;   // twice round
     p.fallback = GNSS_TYPE_NONE;
+    if (px1105r) addPx1105r(p, false);
     return p;
 }
 
@@ -248,6 +290,7 @@ void Detector::start(const Plan& plan, uint32_t now_ms)
     probes_run_ = 0;
     q_head_ = 0;
     q_n_ = 0;
+    skytraq_sink_.d = this;
     if (plan_.n == 0)
     {
         finish(GNSS_TYPE_NONE, Proof::NONE, now_ms);
@@ -264,6 +307,7 @@ void Detector::enterProbe(size_t i, uint32_t now_ms)
     ubx_.reset();
     parser_.reset();
     rtcm_.reset();
+    skytraq_.reset();
     const Probe& p = plan_.probes[i];
     if (p.baud != baud_)
     {
@@ -274,6 +318,8 @@ void Detector::enterProbe(size_t i, uint32_t now_ms)
         push(Action::SEND, 0, kCr, sizeof(kCr));
     else if (p.asks == GNSS_TYPE_UBLOX)
         push(Action::SEND, 0, kUbxMonVerPoll, sizeof(kUbxMonVerPoll));
+    else if (p.asks == GNSS_TYPE_PX1105R)
+        push(Action::SEND, 0, kSkyTraqVersionQuery, sizeof(kSkyTraqVersionQuery));
     // GNSS_TYPE_SDR: nothing; it listens
     probes_run_++;
 }
@@ -304,6 +350,9 @@ void Detector::feed(const uint8_t* data, size_t n, uint32_t now_ms)
         }
     }
     parser_.feed(data, n, *this);   // the sink below may finish()
+    // The PX1105R's frames, at its two bauds, when it is looked for.
+    if (!done_ && plan_.px1105r && (baud_ == kPx1105rRunBaud || baud_ == kPx1105rFactoryBaud))
+        skytraq_.feed(data, n, skytraq_sink_);   // onSkyTraqFrame below may finish()
 }
 
 Action Detector::poll(uint32_t now_ms)
@@ -379,7 +428,10 @@ void Detector::onLine(const char* line, size_t index)
         finish(GNSS_TYPE_MOSAIC, Proof::REPLY, now_ms_);
         return;
     }
-    if (isUbloxBaud(baud_) && isNmeaSentence(line)) nmea_ = true;
+    // NMEA at 115200 is the PX1105R's as likely as a u-blox's when the plan
+    // looks for it: there only a UBX frame proves the u-blox.
+    if (isUbloxBaud(baud_) && !(plan_.px1105r && baud_ == kPx1105rFactoryBaud) && isNmeaSentence(line))
+        nmea_ = true;
 }
 
 void Detector::onPrompt(const char* port, size_t index)
@@ -400,21 +452,43 @@ void Detector::onFrame(const uint8_t* frame, size_t len, size_t after)
         finish(GNSS_TYPE_SDR, Proof::RTCM_TR, now_ms_);
 }
 
+// ── What the PX1105R sends ──────────────────────────────────────────────
+
+void Detector::SkyTraqSink::onFrame(const uint8_t* body, size_t len, size_t index)
+{
+    (void)body;
+    (void)len;
+    (void)index;
+    if (d != nullptr) d->onSkyTraqFrame();
+}
+
+void Detector::onSkyTraqFrame()
+{
+    // Any frame: its length, XOR and 0D 0A checked, nothing else on J1 sends
+    // one (the query's ACK and reply, or the set-up binary stream).
+    if (!done_) finish(GNSS_TYPE_PX1105R, Proof::SKYTRAQ_FRAME, now_ms_);
+}
+
 // ── BringUp ─────────────────────────────────────────────────────────────
 
 void BringUp::start(uint8_t hint, uint32_t ublox_last_baud, bool receiver_kept_power,
-                    bool ublox_wires_swapped)
+                    bool ublox_wires_swapped, bool px1105r)
 {
     // Only the receivers J1 takes are hints; anything else (a blank or
-    // corrupt record) is nothing known.
-    hint_in_ = (hint == GNSS_TYPE_UBLOX || hint == GNSS_TYPE_MOSAIC || hint == GNSS_TYPE_SDR) ? hint
-                                                                                             : GNSS_TYPE_NONE;
+    // corrupt record) is nothing known. The PX1105R only where it is looked
+    // for.
+    px1105r_ = px1105r;
+    hint_in_ = (hint == GNSS_TYPE_UBLOX || hint == GNSS_TYPE_MOSAIC || hint == GNSS_TYPE_SDR ||
+                (px1105r && hint == GNSS_TYPE_PX1105R))
+                   ? hint
+                   : GNSS_TYPE_NONE;
     hint_ = hint_in_;
     proven_ = GNSS_TYPE_NONE;
     active_ = GNSS_TYPE_NONE;
     second_look_ = false;
-    plan_ = planFor(hint_in_, ublox_last_baud, receiver_kept_power);
-    if (ublox_wires_swapped && hint_in_ != GNSS_TYPE_MOSAIC && hint_in_ != GNSS_TYPE_SDR)
+    plan_ = planFor(hint_in_, ublox_last_baud, receiver_kept_power, px1105r);
+    if (ublox_wires_swapped && hint_in_ != GNSS_TYPE_MOSAIC && hint_in_ != GNSS_TYPE_SDR &&
+        hint_in_ != GNSS_TYPE_PX1105R)
     {
         plan_.n = 0;   // nothing to probe: detected(NONE) runs the u-blox driver
         plan_.budget_ms = 0;
@@ -428,7 +502,9 @@ void BringUp::detected(uint8_t found)
     if (step_ == Step::DETECT)
     {
         proven_ = found;
-        if (found == GNSS_TYPE_UBLOX || found == GNSS_TYPE_MOSAIC || found == GNSS_TYPE_SDR) hint_ = found;
+        if (found == GNSS_TYPE_UBLOX || found == GNSS_TYPE_MOSAIC || found == GNSS_TYPE_SDR ||
+            found == GNSS_TYPE_PX1105R)
+            hint_ = found;
         const uint8_t driver = (found != GNSS_TYPE_NONE) ? found : plan_.fallback;
         if (driver == GNSS_TYPE_UBLOX)
         {
@@ -441,6 +517,10 @@ void BringUp::detected(uint8_t found)
         else if (driver == GNSS_TYPE_SDR)
         {
             step_ = Step::BEGIN_SDR;
+        }
+        else if (driver == GNSS_TYPE_PX1105R)
+        {
+            step_ = Step::BEGIN_PX1105R;
         }
         else
         {
@@ -463,6 +543,11 @@ void BringUp::detected(uint8_t found)
         {
             hint_ = GNSS_TYPE_SDR;
             step_ = Step::BEGIN_SDR;
+        }
+        else if (found == GNSS_TYPE_PX1105R)
+        {
+            hint_ = GNSS_TYPE_PX1105R;
+            step_ = Step::BEGIN_PX1105R;
         }
         else
         {
@@ -489,7 +574,7 @@ void BringUp::driverResult(bool ok)
             // It ran because nothing answered the probes. A mosaic-G5 still
             // booting then has had a minute since.
             second_look_ = true;
-            plan_ = secondLookPlan();
+            plan_ = secondLookPlan(px1105r_);
             step_ = Step::SECOND_LOOK;
         }
         else
@@ -510,6 +595,12 @@ void BringUp::driverResult(bool ok)
     {
         // Its driver only fails when the UART will not come up.
         active_ = ok ? GNSS_TYPE_SDR : GNSS_TYPE_NONE;
+        step_ = Step::DONE;
+        return;
+    }
+    if (step_ == Step::BEGIN_PX1105R)
+    {
+        active_ = ok ? GNSS_TYPE_PX1105R : GNSS_TYPE_NONE;
         step_ = Step::DONE;
     }
 }
