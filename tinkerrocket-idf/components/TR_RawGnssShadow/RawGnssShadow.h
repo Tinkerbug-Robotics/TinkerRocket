@@ -674,6 +674,26 @@ public:
                                                  //   the filter's is dropped (0: off)
         double   vert_release_mps = 5.0;         //   and, after one, every epoch after it until one's fitted
                                                  //   vertical is back within this (0: no latch)
+        // The latch in the IMU-free descent (descent_imu_free): there the
+        // filter's vertical is GNSS's and the barometer's, not the IMU's, so
+        // a chute's opening faster than it can follow (60 to 7 m/s in 0.8 s:
+        // the Dopplers refused, the fit 20 m/s off) is dropped and latched
+        // like a stale receiver, and with no barometer to pull it back (above
+        // 10 km, inside the port hold, a lost one) nothing brings the fit
+        // within vert_release_mps: GNSS stays out, the mode leaves after
+        // imu_free_gnss_s, and the IMU-coupled filter keeps the error (the
+        // host test AChutesOpeningInTheImuFreeDescent: 40 m/s at 6.8 g, 69 at
+        // 9.9 g). So in the IMU-free mode, once the latch has held this long
+        // (s) and its last kVertSteadyFits fits agree within vert_release_mps
+        // -- a steady velocity, not a receiver on its way back -- the filter
+        // takes GNSS's: its velocity and clock rate are set to that epoch's
+        // fit (TR_RawGnssEKF::reanchorVelocity) and the epoch is fused, not
+        // judged by the check. Only with no
+        // barometer fused for that long: where there is one it judges, as
+        // before (it brought 6.8 g back in 1.0 s and 9.9 g in 1.75 s). A
+        // single bad epoch, or a stale receiver shorter than that, is still
+        // dropped. 0: never (as before).
+        double   vert_imu_free_release_s = 0.0;
         // the Doppler change check (above; DvCheck, off by default)
         uint8_t  dv_check = 0;
         double   dv_sat_k = 5.0;                 // a satellite this many 1-sigmas off the epoch's fit fails
@@ -955,6 +975,7 @@ public:
         float    vert_last_dv_down = 0.0f; //   the last one's: its vertical against the filter's, m/s
         float    vert_worst_dv_down = 0.0f;//   and the largest kept (|.|), m/s
         uint32_t vert_latched = 0;         // epochs dropped after a vertical drop, not yet back (vert_release_mps)
+        uint32_t vert_imu_free_releases = 0;   // latches the IMU-free mode let go (vert_imu_free_release_s)
         // the Doppler change check
         uint32_t dv_checks = 0;            // epochs checked: a reference, the IMU's history across, five changes
         uint32_t dv_sat_fails = 0;         //   satellites that failed (epoch by epoch, or summed)
@@ -1140,6 +1161,7 @@ private:
     void jobDvCheck(double age);
     void jobScreen(double age);
     void jobScreenDry();
+    bool imuFreeLatchRelease(const gnss_raw::RawGnssStats& rs);
     void screenVerdict(bool drop, bool dry);
     void closeJob(double age, double t);
     void relock(int sys, int prn, double tow);
@@ -1268,6 +1290,10 @@ private:
     int64_t       pr_period_k_ = -1;    // pr_period_s: the period the code was last fused in (< 0: none since the start)
     double        fit_last_te_ = -1.0;  // heading_fit_period_s: the last epoch the fit took (< 0: none this flight)
     bool          vert_latch_ = false;  // a vertical drop, and no epoch back within vert_release_mps since
+    double        vert_latch_t_ = 0.0;  //   the filter's time it was set
+    int           vert_steady_n_ = 0;   //   latched fits in a row within vert_release_mps of the one before
+    float         vert_last_dv_ = 0.0f; //   the last latched fit's vertical
+    static constexpr int kVertSteadyFits = 3;
     // the Doppler change check (dv_check)
     DopplerRef    dv_ref_;              // the last epoch's Dopplers, the next change's start
     DopplerRef    dv_next_;             //   this epoch's, taken by the check

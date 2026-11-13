@@ -923,6 +923,7 @@ void RawGnssShadow::start(double t)
     obs_apogee_ = false;
     boost_seen_t_ = -1.0e9;
     vert_latch_ = false;
+    vert_steady_n_ = 0;
     dvReset();
     wu_ring_.reset();
     wu_mon_.reset();
@@ -2161,11 +2162,12 @@ void RawGnssShadow::jobScreen(double age)
     ekf_.screenRangeRates(built_.meas, built_.n, age, rs);
     // after a vertical drop, an epoch is dropped too unless its fit is back
     // within vert_release_mps: too thin to fit, it is not
+    bool reanchored = false;
     if (vert_latch_)
     {
         const bool back = rs.screen_fit_n >= 4
                           && std::fabs(static_cast<double>(rs.screen_dv_down_mps)) <= cfg_.vert_release_mps;
-        if (!back)
+        if (!back && !(reanchored = imuFreeLatchRelease(rs)))
         {
             st_.vert_latched++;
             rs.screen_dropped = true;
@@ -2174,7 +2176,7 @@ void RawGnssShadow::jobScreen(double age)
         }
         vert_latch_ = false;
     }
-    if (job_.vcheck && rs.screen_fit_n >= 4)
+    if (job_.vcheck && rs.screen_fit_n >= 4 && !reanchored)
     {
         const float dv = rs.screen_dv_down_mps;
         const bool drop = std::fabs(static_cast<double>(dv)) > cfg_.vert_check_mps;
@@ -2184,6 +2186,8 @@ void RawGnssShadow::jobScreen(double age)
         {
             st_.vert_dropped++;
             vert_latch_ = cfg_.vert_release_mps > 0.0;
+            vert_latch_t_ = ekf_.time();
+            vert_steady_n_ = 0;
         }
         else if (std::fabs(dv) > std::fabs(st_.vert_worst_dv_down))
             st_.vert_worst_dv_down = dv;
@@ -2215,6 +2219,41 @@ void RawGnssShadow::jobScreen(double age)
     job_.dry_age = age;
     job_.dry_rs = RawGnssStats();
     job_.phase = kJobScreenDry;
+}
+
+// The latch in the IMU-free descent (vert_imu_free_release_s, RawGnssShadow.h):
+// a latched epoch's fit, judged for letting the latch go. True when no
+// barometer was fused for vert_imu_free_release_s, the latch has held that
+// long, and its last kVertSteadyFits fits agree within vert_release_mps: the
+// filter's velocity and clock rate are then set to the fit's
+// (RawGnssEKF::reanchorVelocity: the velocity's 1-sigma vert_release_mps, the
+// position's opened by the drift the latch let build) and the epoch fused.
+bool RawGnssShadow::imuFreeLatchRelease(const gnss_raw::RawGnssStats& rs)
+{
+    // where the barometer is fused it judges: it brings a right fit back within
+    // vert_release_mps, and keeps the filter on a wrong one's side
+    const bool baro_live = ekf_.time() - last_baro_fused_t_ <= cfg_.vert_imu_free_release_s;
+    if (!(cfg_.vert_imu_free_release_s > 0.0) || !ekf_.imuFree() || rs.screen_fit_n < 4 || baro_live)
+    {
+        vert_steady_n_ = 0;
+        return false;
+    }
+    const float dv = rs.screen_dv_down_mps;
+    const bool steady = vert_steady_n_ > 0
+                        && std::fabs(static_cast<double>(dv - vert_last_dv_)) <= cfg_.vert_release_mps;
+    vert_steady_n_ = steady ? vert_steady_n_ + 1 : 1;
+    vert_last_dv_ = dv;
+    double x[4];
+    if (vert_steady_n_ < kVertSteadyFits || ekf_.time() - vert_latch_t_ < cfg_.vert_imu_free_release_s
+        || !ekf_.lastVelocityFit(x))
+        return false;
+    // the drift the latch let build: the fit's speed off the filter's over the latch, and 20 m besides
+    const double off = std::sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2]);
+    ekf_.reanchorVelocity(x, x[3], static_cast<float>(cfg_.vert_release_mps),
+                          static_cast<float>(off * (ekf_.time() - vert_latch_t_) + 20.0));
+    st_.vert_imu_free_releases++;
+    vert_steady_n_ = 0;
+    return true;
 }
 
 // The epoch's next measurement on the scratch copy, as the update fuses it --
