@@ -297,11 +297,14 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 // on the V9's J1), with the mosaic image's raw-GNSS navigation filter. The
 // driver is the build's choice, as the mosaic's. On this carrier J1 pin 5 is
 // the receiver's RXD2, an INPUT (board_v9.h): no 1PPS reaches the FC, and
-// the pin is never configured (GNSS_PPS_PIN -1 below). Refused anywhere
-// else: only the V9's J1 has been checked for this carrier.
+// the pin is never configured (GNSS_PPS_PIN -1 below). The V10's J1 is the
+// V9's net for net (rocket-computer-v9.0.0 and tinker-mantis-v10.0.0
+// netlists: pin 1 GNSS_RX = P4 GPIO4, pin 2 GNSS_TX = GPIO3, pin 3 the U27
+// GPS_ACT switch through FL1, pin 4 GND, pin 5 GNSS_RXD2 = GPIO2), so it
+// takes the carrier too. Refused anywhere else.
 #if defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
-#if !TR_BOARD_V9
-#error "TR_GNSS_DRIVER_PX1105R is a V9 build (-DTR_BOARD_V9=1 with -DTR_GNSS_PX1105R=1): only the V9's J1 has been checked for the PX1105R carrier"
+#if !TR_BOARD_V9 && !TR_BOARD_V10
+#error "TR_GNSS_DRIVER_PX1105R is a V9 or V10 build (-DTR_BOARD_V9=1 or -DTR_BOARD_V10=1 with -DTR_GNSS_PX1105R=1): only their J1 has been checked for the PX1105R carrier"
 #endif
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
 #error "One GNSS driver per build: TR_GNSS_DRIVER_PX1105R and TR_GNSS_DRIVER_LC86 are both set"

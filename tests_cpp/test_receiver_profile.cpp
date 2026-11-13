@@ -224,7 +224,7 @@ void expectSameNumbers(const GnssReceiverProfile& a, const GnssReceiverProfile& 
 // TheShadowSafeguardDefaultsAreTheBeetles) before its size goes in here: the
 // Beetle's filter is its defaults, and the M1 build applies the LC86G's
 // profile over them. The sizes are a 64-bit host's (macOS and Linux alike).
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssEKFParams) == 504,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssEKFParams) == 544,
               "RawGnssEKFParams changed: add the field to expectSameEkf, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(RawMeasBuilder::Config) == 336,
               "RawMeasBuilder::Config changed: add the field to expectSameBuilder, then update this size");
@@ -232,7 +232,7 @@ static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 32,
               "GnssSignalProfile changed: add the field to expectSameSignal, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 576,
               "GnssReceiverProfile changed: add the field to expectSameNumbers, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1832,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1880,
               "RawGnssShadow::Config changed: pin the field in TheShadowSafeguardDefaultsAreTheBeetles, then update "
               "this size");
 

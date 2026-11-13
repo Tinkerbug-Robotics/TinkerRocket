@@ -250,7 +250,7 @@ foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G TR_
         TR_BENCH_RAW_SHARE_LOS TR_BENCH_RAW_DOP_AVG TR_RAW_GNSS_IRAM TR_BENCH_RAW_CAP_MAX TR_BENCH_RAW_CAP_PAD
         TR_BENCH_RAW_SLICE_US TR_BENCH_RAW_TROPO_RATE ${_tr_mosaic_rawnav_hooks})
     if(DEFINED ${_v} AND NOT _tr_p4_rawnav)
-        message(FATAL_ERROR "${_v} is for the raw-GNSS navigation filter of the mosaic-only image (-DTR_GNSS_MOSAIC=1 on a V8 or V9), the V10's gnss-sdr-dev image (-DTR_GNSS_SDR=1) or the PX1105R image (-DTR_GNSS_PX1105R=1 on a V9): this build would ignore it. A build dir keeps every -D value: use a fresh one.")
+        message(FATAL_ERROR "${_v} is for the raw-GNSS navigation filter of the mosaic-only image (-DTR_GNSS_MOSAIC=1 on a V8 or V9), the V10's gnss-sdr-dev image (-DTR_GNSS_SDR=1) or the PX1105R image (-DTR_GNSS_PX1105R=1 on a V9 or V10): this build would ignore it. A build dir keeps every -D value: use a fresh one.")
     endif()
 endforeach()
 foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G TR_BENCH_DV_CHECK TR_BENCH_RAW_BUILD_LITE
@@ -336,7 +336,7 @@ endif()
 # it the filter builds the rig's sky with no Klobuchar.
 if(TR_SIM_REPLAY_BLOB)
     if(TR_GNSS_PX1105R)
-        message(FATAL_ERROR "TR_SIM_REPLAY_BLOB is not for the PX1105R image (-DTR_GNSS_PX1105R=1): the rig replay is the M1's (-DTR_BOARD_M1=1) or the mosaic-only image's (-DTR_GNSS_MOSAIC=1)")
+        message(FATAL_ERROR "TR_SIM_REPLAY_BLOB is not for the PX1105R image (-DTR_GNSS_PX1105R=1): the rig replay is the M1's (-DTR_BOARD_M1=1), the mosaic-only image's (-DTR_GNSS_MOSAIC=1) or the gnss-sdr-dev board's")
     elseif(TR_GNSS_MOSAIC AND NOT _tr_mosaic_rawnav)
         message(FATAL_ERROR "TR_SIM_REPLAY_BLOB on the mosaic-only image takes its clock from the raw-GNSS filter's timed epochs: build it with the filter (no -DTR_RAW_GNSS_SHADOW=0)")
     elseif(NOT TR_GNSS_MOSAIC AND NOT TR_GNSS_SDR AND NOT TR_BOARD_M1 AND NOT ((TR_BOARD_V9 OR TR_BOARD_V10) AND (NOT DEFINED TR_GNSS_AUTO OR TR_GNSS_AUTO)))
@@ -596,7 +596,8 @@ if(TR_GNSS_SDR)
 endif()
 # A V9 flying a SkyTraq PX1105R carrier on J1 in place of the mosaic-G5
 # (`idf.py -B build_v9_px1105r -DTR_BOARD_V9=1 -DTR_GNSS_PX1105R=1 build`;
-# hardware/gnss-px1105r-18mm-hv, its J3 on the V9's J1), with the mosaic
+# hardware/gnss-px1105r-18mm-hv, its J3 on the V9's J1), or a V10 with the
+# same carrier (-DTR_BOARD_V10=1; its J1 is the V9's net for net), with the mosaic
 # image's raw-GNSS navigation filter (main.cpp's TR_RAW_NAV_P4). The same seam
 # as TR_GNSS_MOSAIC: the driver is the build's choice
 # (TR_Sensor_Collector's TR_GNSS_DRIVER_PX1105R), and config.h refuses it on
@@ -610,8 +611,8 @@ endif()
 # sdkconfig). -DTR_RAW_GNSS_SHADOW=0 builds it without the filter (GpsInsEKF
 # alone, PSRAM off).
 if(TR_GNSS_PX1105R)
-    if(NOT TR_BOARD_V9)
-        message(FATAL_ERROR "TR_GNSS_PX1105R is for the V9 (-DTR_BOARD_V9=1): only its J1 has been checked for the PX1105R carrier")
+    if(NOT TR_BOARD_V9 AND NOT TR_BOARD_V10)
+        message(FATAL_ERROR "TR_GNSS_PX1105R is for the V9 or V10 (-DTR_BOARD_V9=1 or -DTR_BOARD_V10=1): only their J1 has been checked for the PX1105R carrier")
     endif()
     if(TR_GNSS_MOSAIC)
         message(FATAL_ERROR "TR_GNSS_PX1105R and TR_GNSS_MOSAIC are both on: one GNSS receiver per image")
