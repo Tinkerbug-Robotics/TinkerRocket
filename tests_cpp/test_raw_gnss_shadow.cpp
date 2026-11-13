@@ -4859,3 +4859,52 @@ TEST(RawGnssShadow, TheDescentGoesImuFreeAtTheApogeeCallInFlightAndKeepsTheBarom
         EXPECT_EQ(sh.filter().imuFree(), on != 0);
     }
 }
+
+TEST(RawGnssShadow, TheImuFreeDescentNeedsGnssOrTheBarometerToHoldItsVelocity)
+{
+    // The mode holds its velocity on GNSS and the barometer alone. With
+    // neither -- no GNSS, and above the barometer's floor or under the
+    // transonic lockout no barometer (the V10's rig run rs2) -- it would hold
+    // whatever velocity it had while the rocket fell: the IMU-coupled filter
+    // navigates instead (imu_free_gnss_s, 2 s), and the mode comes when one of
+    // them does and goes again when both are gone. 0 keeps the old rule: from
+    // the apogee call on whatever.
+    for (double window : {2.0, 0.0})
+    {
+        SCOPED_TRACE(testing::Message() << "imu_free_gnss_s " << window);
+        RawGnssShadow::Config cfg = primaryCfg();
+        cfg.descent_imu_free = true;
+        cfg.imu_free_gnss_s = window;
+        RawGnssShadow sh(cfg);
+        sh.onSeed(padSeed(kT0));
+        int64_t t = feedFlight(sh, kT0, 12.0, 0.0f, gnss_raw::kShadowLevel, true);   // the pad: the offset learned
+        ASSERT_TRUE(sh.running());
+        ASSERT_GT(sh.stats().baro_fused, 0u);
+        // 3 s of flight with no barometer (and no GNSS), then the apogee call
+        t = feedFlight(sh, t, 3.0, 0.0f, gnss_raw::kShadowInFlight, false);
+        const uint8_t desc = gnss_raw::kShadowInFlight | gnss_raw::kShadowApogee;
+        t = feedFlight(sh, t, 0.5, 0.0f, desc, false);
+        EXPECT_EQ(sh.filter().imuFree(), window <= 0.0);
+        if (window <= 0.0)
+            continue;
+        EXPECT_EQ(sh.stats().imu_free, 0);
+        // the barometer back: into the mode
+        t = feedFlight(sh, t, 1.0, 0.0f, desc, true);
+        EXPECT_TRUE(sh.filter().imuFree());
+        EXPECT_EQ(sh.stats().imu_free, 1);
+        EXPECT_EQ(sh.stats().imu_free_exits, 0u);
+        // a second without it: still in (the window is 2 s)
+        t = feedFlight(sh, t, 1.0, 0.0f, desc, false);
+        EXPECT_TRUE(sh.filter().imuFree());
+        // past the window: out, the IMU-coupled filter's
+        t = feedFlight(sh, t, 1.5, 0.0f, desc, false);
+        EXPECT_FALSE(sh.filter().imuFree());
+        EXPECT_EQ(sh.stats().imu_free, 0);
+        EXPECT_EQ(sh.stats().imu_free_exits, 1u);
+        // and in again with the barometer
+        t = feedFlight(sh, t, 0.5, 0.0f, desc, true);
+        EXPECT_TRUE(sh.filter().imuFree());
+        EXPECT_EQ(sh.stats().imu_free_exits, 1u);
+        ASSERT_TRUE(sh.running());
+    }
+}

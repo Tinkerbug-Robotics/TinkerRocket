@@ -857,6 +857,12 @@ of which the filter models (its gravity is 9.807 unless `gravity_wgs84`). On the
 GNSS, that alone leaves a 27 km hotshot ~3.9 m/s east and a few m/s vertical by apogee (`--clean --seed-truth`,
 2026-11-09: boost 0.5 m/s, attitude exact).
 
+`--imu-free-gnss-s X` sets the IMU-free descent's window (RawGnssShadow imu_free_gnss_s: the mode only while raw
+measurements or a barometer sample were fused within X s; 0 the old rule, from the apogee call on whatever), and
+`--gravity-wgs84 0|1` the raw filter's gravity (RawGnssEKFParams::gravity_wgs84). The image's IMU-free descent needs
+`--descent-imu-free 1` (or `--fw-defaults`) and, on an RF-rig events file, the V10's apogee call (`--apogee-call-s`,
+the rig run's console): without them the replay flies the IMU-coupled descent the image does not.
+
 `--imu-tick-mean` gives each IMU tick the mean specific force over the tick before it, as the filter integrates a
 sample. Without it each tick carries its instant's, so each of a thrust curve's 0.1 s steps reaches the filter one
 tick (2 ms) early: the hotshot's boost then gathers -a x 2 ms of vertical velocity (-0.68 m/s at burnout, GNSS or

@@ -167,6 +167,7 @@ void expectSameShadowSettings(const RawGnssShadow::Config& a, const RawGnssShado
     EXPECT_EQ(a.sat_cap_max, b.sat_cap_max);
     EXPECT_EQ(a.level.min_dt_s, b.level.min_dt_s);
     EXPECT_EQ(a.descent_imu_free, b.descent_imu_free);
+    EXPECT_EQ(a.imu_free_gnss_s, b.imu_free_gnss_s);
     EXPECT_EQ(a.windup_k, b.windup_k);
     EXPECT_EQ(a.windup_monitor, b.windup_monitor);
 }
@@ -226,7 +227,7 @@ static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 32,
               "GnssSignalProfile changed: add the field to expectSameSignal, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 576,
               "GnssReceiverProfile changed: add the field to expectSameNumbers, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1816,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1824,
               "RawGnssShadow::Config changed: pin the field in TheShadowSafeguardDefaultsAreTheBeetles, then update "
               "this size");
 
@@ -1215,6 +1216,7 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_EQ(c.baro_hold_port_m, 2.0);
     EXPECT_EQ(c.baro_hold_max_s, 30.0);
     EXPECT_FALSE(c.descent_imu_free);                    // fc/raw-descent-mode: off until a build turns it on
+    EXPECT_EQ(c.imu_free_gnss_s, 2.0);                   // and only while GNSS or the barometer holds it
     EXPECT_EQ(c.ekf.imu_free_acc_psd, 16.0);
     EXPECT_EQ(c.ekf.imu_free_vel_sigma, 5.0);
     EXPECT_EQ(c.ekf.imu_free_pos_sigma, 100.0);
