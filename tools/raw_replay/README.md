@@ -857,6 +857,11 @@ of which the filter models (its gravity is 9.807 unless `gravity_wgs84`). On the
 GNSS, that alone leaves a 27 km hotshot ~3.9 m/s east and a few m/s vertical by apogee (`--clean --seed-truth`,
 2026-11-09: boost 0.5 m/s, attitude exact).
 
+`--imu-tick-mean` gives each IMU tick the mean specific force over the tick before it, as the filter integrates a
+sample. Without it each tick carries its instant's, so each of a thrust curve's 0.1 s steps reaches the filter one
+tick (2 ms) early: the hotshot's boost then gathers -a x 2 ms of vertical velocity (-0.68 m/s at burnout, GNSS or
+not), the boost error left open on 2026-11-12. With it the GNSS-absent filter holds the boost within 0.01 m/s.
+
 Checked 2026-11-09 on the V10 bench log above, re-timed onto a still IMU at the open-sky antenna's surveyed position
 (a config of one Const segment there, `--start-gpst`, `--pad`, `--field-ned-ut` from TR_GeoMag): the same 418 epochs
 applied as through `extract.py --sdr`, none refused, 2.2 m horizontal from the survey (median; 2.1 m from the log's
