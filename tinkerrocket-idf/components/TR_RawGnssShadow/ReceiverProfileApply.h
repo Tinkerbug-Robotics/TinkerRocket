@@ -370,11 +370,22 @@ inline void applyMosaicFlightSafeguards(RawGnssShadow::Config& c)
 //     velocity rode the 1 Hz pseudoranges 20-25 m/s off for 30 s. GNSS
 //     reaches no attitude or bias in the mode, which is what the check is
 //     there to protect; a bad Doppler meets the update's own gate.
+//   - WGS84 normal gravity with height (RawGnssEKFParams::gravity_wgs84), in
+//     place of the flight filter's constant 9.807: gravity is 0.06 m/s^2
+//     weaker at 20 km and 0.08 at 26 km, and with GNSS lost the coast
+//     integrates the difference. On the V10's rig run rs2 (2026-11-13, the
+//     GNSS board rebooted 1 s into the boost and never re-acquired) that was
+//     the coast's 3.6 m/s and 87 m of vertical error (p90); offline, the
+//     same with it 0.02 m/s and 5 m, the GNSS-absent filter's. GpsInsEKF
+//     has flown it since #1530. With GNSS it changes nothing measurable. The
+//     mosaic's image and the Beetle's do not take it: their climbs are a
+//     kilometre, where the height term is 0.003 m/s^2.
 inline void applySdrFlightSafeguards(RawGnssShadow::Config& c)
 {
     applyMosaicFlightSafeguards(c);
     c.windup_k = 0.0;
     c.dv_imu_free_off = true;
+    c.ekf.gravity_wgs84 = true;
 }
 
 // The antenna's offset from the IMU, where the rocket's owner measured it: an

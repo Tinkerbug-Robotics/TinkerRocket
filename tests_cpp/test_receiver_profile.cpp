@@ -549,7 +549,7 @@ TEST(ReceiverProfile, TheSdrImagesFlightProfileAndItsDopplerMeans)
     EXPECT_EQ(mc.ekf.rr_pair_lag_s, 0.025);
 }
 
-TEST(ReceiverProfile, TheSdrImagesSafeguardsAreTheMosaicsLessTheWindupAndTheChangeCheckInTheImuFreeDescent)
+TEST(ReceiverProfile, TheSdrImagesSafeguardsAreTheMosaicsLessTheWindupAndTheChangeCheckInTheImuFreeDescentWithGravity)
 {
     // applySdrFlightSafeguards: the mosaic image's set, with no carrier
     // wind-up taken off and the change check standing down in the IMU-free
@@ -562,9 +562,14 @@ TEST(ReceiverProfile, TheSdrImagesSafeguardsAreTheMosaicsLessTheWindupAndTheChan
     EXPECT_TRUE(s.dv_imu_free_off);
     EXPECT_EQ(m.windup_k, 0.99);
     EXPECT_EQ(s.windup_k, 0.0);
+    // and WGS84 normal gravity, which the mosaic's and the Beetle's do not fly
+    EXPECT_FALSE(d.ekf.gravity_wgs84);
+    EXPECT_FALSE(m.ekf.gravity_wgs84);
+    EXPECT_TRUE(s.ekf.gravity_wgs84);
     // everything else the mosaic's
     s.dv_imu_free_off = m.dv_imu_free_off;
     s.windup_k = m.windup_k;
+    s.ekf.gravity_wgs84 = m.ekf.gravity_wgs84;
     EXPECT_EQ(s.dv_check, m.dv_check);
     EXPECT_EQ(s.dv_latch_k, m.dv_latch_k);
     EXPECT_EQ(s.dv_window_s, m.dv_window_s);

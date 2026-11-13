@@ -887,6 +887,9 @@ private:
     T      q_acc_, q_att_, q_ab_, q_wb_, f_ab_, f_wb_, q_clkb_, q_clkd_, q_isb_;
 
     double lla_[3] = {0.0, 0.0, 0.0};
+    // gravity_wgs84: normal gravity's latitude part (Somigliana, the height
+    // term's coefficient, the north component's) at grav_lat_ (gravityNed)
+    mutable double grav_lat_ = 1.0e9, grav_g0_ = 0.0, grav_c1_ = 0.0, grav_n_ = 0.0;
     T      v_[3] = {};
     T      q_[4] = {1, 0, 0, 0};
     T      ab_[3] = {};
