@@ -157,12 +157,13 @@ endif()
 # here too. M1's own overlay turns its PSRAM on, and the target check above
 # guards its build dir.
 if(NOT TR_BOARD_M1)
-    if((TR_GNSS_MOSAIC AND (NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW)) OR TR_GNSS_SDR)
+    if((TR_GNSS_MOSAIC AND (NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW)) OR TR_GNSS_SDR OR TR_GNSS_AUTO_RAW)
         if(NOT CONFIG_SPIRAM)
             message(FATAL_ERROR
-                "flight_computer: the mosaic-only image and the V10's gnss-sdr-dev image run the raw-GNSS "
-                "filter from PSRAM (sdkconfig.defaults.rawnav), but ${CMAKE_BINARY_DIR}/sdkconfig has "
-                "CONFIG_SPIRAM off. Use a fresh build dir, or delete that sdkconfig.")
+                "flight_computer: the mosaic-only image, the V10's gnss-sdr-dev image and the image that flies "
+                "the raw-GNSS filter on every receiver (TR_GNSS_AUTO_RAW) run that filter from PSRAM "
+                "(sdkconfig.defaults.rawnav), but ${CMAKE_BINARY_DIR}/sdkconfig has CONFIG_SPIRAM off. Use a "
+                "fresh build dir, or delete that sdkconfig.")
         endif()
     elseif(TR_GNSS_PX1105R AND (NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW))
         if(NOT CONFIG_SPIRAM)

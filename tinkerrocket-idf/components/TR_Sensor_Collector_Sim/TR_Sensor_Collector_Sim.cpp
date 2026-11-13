@@ -748,7 +748,8 @@ bool SensorCollectorSim::getGNSSFix(gnss_raw::TimedFix& out)
 bool SensorCollectorSim::getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len)
 {
     const bool have = real_.getGNSSEphemeris(out, cap, len);
-#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR) \
+    || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
     // The mosaic-G5's are passed on while a sim runs too -- see the header;
     // the gnss-sdr-dev board's too, on the one-filter image that flies both
     return have;
@@ -776,7 +777,7 @@ bool SensorCollectorSim::getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) 
     if (phase_ == SIM_IDLE || replay_on_) return real_.getGNSSBroadcastIono(raw, gps_day);
     return false;   // the real sky's: not while a sim runs (kept, not consumed) — see the header
 }
-#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+#elif (defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
 bool SensorCollectorSim::getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const
 {
     if (phase_ == SIM_IDLE || replay_on_) return real_.getGNSSBroadcastIono(raw, gps_day);

@@ -964,10 +964,11 @@ static constexpr uint8_t GNSS_TYPE_LC86G  = 3;   // Quectel LC86G (the Beetle): 
 static constexpr uint8_t GNSS_TYPE_SDR    = 4;
 static constexpr uint8_t GNSS_TYPE_PX1105R = 5;  // SkyTraq PX1105R on the V9's or V10's J1 (its own image): SkyTraq binary
 // The PX1105R's name, and its IMU limit below, are compiled into the PX1105R
-// image alone (TR_GNSS_DRIVER_PX1105R): every other image, the OC's included,
+// image and the one that flies the raw-GNSS filter on every receiver
+// (TR_GNSS_AUTO_RAW) alone: every other image, the OC's included,
 // keeps exactly the code it had, so an OC names that FC's receiver "none"
 // until it learns the name too.
-#if defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+#if (defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
 static constexpr uint8_t GNSS_TYPE_LAST_NAMED = GNSS_TYPE_PX1105R;
 #else
 static constexpr uint8_t GNSS_TYPE_LAST_NAMED = GNSS_TYPE_SDR;
@@ -980,7 +981,7 @@ constexpr const char* gnssTypeName(uint8_t type)
          : type == GNSS_TYPE_MOSAIC ? "mosaic-G5"
          : type == GNSS_TYPE_LC86G  ? "LC86G"
          : type == GNSS_TYPE_SDR    ? "gnss-sdr-dev"
-#if defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+#if (defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
          : type == GNSS_TYPE_PX1105R ? "PX1105R"
 #endif
          : "";
@@ -3883,7 +3884,7 @@ static constexpr uint16_t IMU_RATE_MAX_HZ_SDR    = 3840;
 constexpr uint16_t imuRateMaxForGnss(uint16_t board_max_hz, uint8_t gnss_type,
                                      uint8_t gnss_log = GNSS_LOG_DETAILED)
 {
-#if defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+#if (defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
     if (gnss_type == GNSS_TYPE_PX1105R && board_max_hz > IMU_RATE_MAX_HZ_MOSAIC)
         return IMU_RATE_MAX_HZ_MOSAIC;
 #endif

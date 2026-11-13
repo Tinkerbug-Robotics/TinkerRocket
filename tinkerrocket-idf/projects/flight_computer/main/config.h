@@ -370,19 +370,30 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 // The PX1105R image (TR_GNSS_DRIVER_PX1105R) has it as the mosaic's does,
 // from the receiver's 0xE5 raw measurements.
 // (No TR_GNSS_HAS_RAW macro: the Beetle's image must see no new one.)
+// The image that flies the raw-GNSS filter on every J1 receiver giving
+// measurements (TR_GNSS_AUTO_RAW: the auto image's driver, which finds the
+// receiver at boot, with the three raw receivers' raw outputs) has it too:
+// compiled in, and run when the receiver found is one of them.
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+#if !(defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) || !(TR_BOARD_V9 || TR_BOARD_V10)
+#error "TR_GNSS_AUTO_RAW is the V9's or V10's auto image with the raw-GNSS filter (-DTR_GNSS_AUTO_RAW=1, CMakeLists.txt)"
+#endif
+#endif
 #ifndef TR_RAW_GNSS_SHADOW
 #if (defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86) || (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || \
-    (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR) || (defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R)
+    (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR) || (defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R) || \
+    (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
 #define TR_RAW_GNSS_SHADOW 1
 #else
 #define TR_RAW_GNSS_SHADOW 0
 #endif
 #endif
-#if TR_RAW_GNSS_SHADOW && defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+#if TR_RAW_GNSS_SHADOW && defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO && !(defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
 #error "TR_RAW_GNSS_SHADOW is not for the auto image: it finds its receiver at boot and flies GpsInsEKF (the mosaic-only image, -DTR_GNSS_MOSAIC=1, flies the raw-GNSS filter)"
 #endif
 #if TR_RAW_GNSS_SHADOW && !((defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86) || (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || \
-                             (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR) || (defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R))
+                             (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR) || (defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R) || \
+                             (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW))
 #error "TR_RAW_GNSS_SHADOW needs raw measurements: the LC86G's MSM7 (TR_GNSS_DRIVER_LC86=1), the mosaic-G5's MeasEpoch (TR_GNSS_DRIVER_MOSAIC=1), the gnss-sdr-dev board's MSM7 (TR_GNSS_DRIVER_SDR=1) or the PX1105R's 0xE5 (TR_GNSS_DRIVER_PX1105R=1)"
 #endif
 // The SDR raw-nav image is that filter or nothing: its driver hands the FC no
@@ -422,6 +433,20 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 // neither the macro nor any of those lines.
 #if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC && TR_RAW_GNSS_PRIMARY
 #define TR_RAW_NAV_MOSAIC 1
+#endif
+// The image that flies the raw-GNSS filter on every receiver giving
+// measurements: all three raw receivers' paths below compiled in (each
+// TR_RAW_NAV_* 1), and TR_RAW_NAV_AUTO, which says main.cpp runs each only
+// when its receiver is the one found at boot (raw_nav_auto.h), and the
+// GpsInsEKF path when it is the u-blox or none at all.
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+#if !TR_RAW_GNSS_PRIMARY
+#error "TR_GNSS_AUTO_RAW flies the raw-GNSS filter as the navigation filter on the raw receivers (TR_RAW_GNSS_PRIMARY=1)"
+#endif
+#define TR_RAW_NAV_AUTO 1
+#define TR_RAW_NAV_MOSAIC 1
+#define TR_RAW_NAV_SDR 1
+#define TR_RAW_NAV_PX1105R 1
 #endif
 // The SDR raw-nav image's own paths, the same way (main.cpp: the board's
 // profile and its Doppler means, the epochs' grid, no ionosphere, its console

@@ -12,6 +12,15 @@
 // SensorCollector's GNSS seam the way any driver does, and the way TR_MagAuto
 // does into the magnetometer's. type() says which receiver begin() found.
 //
+// The image that flies the raw-GNSS filter on every receiver that gives
+// measurements (TR_GNSS_AUTO_RAW) holds the PX1105R's driver too, looks for
+// it (gnss_detect's px1105r), and passes on each raw receiver's raw outputs
+// (epochs, ephemerides, fixes, ionosphere, statistics, settings) to the one
+// in use: false, nothing or a no-op with any other, so each reaches the
+// raw-GNSS filter exactly as its own image's driver hands it over. A
+// restored flight (setBeginWait(false)) skips the probes and starts the
+// hinted raw receiver's driver at once, which brings it up when it answers.
+//
 // The receiver found is kept in NVS ("gnssauto"/"rx") and probed first next
 // boot, so a boot with the same receiver costs one probe (0.1-0.4 s). It is
 // written before that receiver's driver starts, so a crash inside the
@@ -26,6 +35,9 @@
 #include <TR_GNSSReceiverMosaic_Serial.h>
 #include <TR_GNSSReceiverSdr_Serial.h>
 #include <TR_GNSSReceiverUBlox_Serial.h>
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+#include <TR_GNSSReceiverPX1105R_Serial.h>
+#endif
 
 #include "gnss_detect.h"
 
@@ -79,6 +91,32 @@ public:
     bool sendAidFrame(const uint8_t* frame, size_t len);
     bool geoidSeparationM(float& sep_m) const;
     void requestNavResend();
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    // A restored flight: no probes, the hinted raw receiver's driver at once
+    // (its own setBeginWait(false)). Before begin().
+    void setBeginWait(bool wait) { begin_wait_ = wait; }
+    // Whether the receiver in use gives raw measurements (mosaic-G5, PX1105R,
+    // gnss-sdr-dev board): the raw-GNSS filter's receiver.
+    bool rawReceiver() const;
+    bool enableRawOutputs();
+    bool takeRawEpoch(gnss_raw::TimedRawEpoch& out);
+    bool takeEphemeris(uint8_t* out, size_t cap, size_t& len);   // the mosaic's SBF blocks, the board's RTCM3
+    bool takeEphemeris(gps_eph_t& out);                          // the PX1105R's, decoded from its subframes
+    bool takeFix(gnss_raw::TimedFix& out);                       // the PX1105R's 0xDF
+    bool broadcastIono(int8_t raw[8], uint16_t& gps_day) const;
+    void setRawEpochPeriodMs(uint32_t period_ms);                // the mosaic's and the PX1105R's grid
+    void setRawEpochConfig(uint32_t period_ms, const sdr_rtcm::SdrDopplerMeanConfig& mean);   // the board's
+    bool setRawDopplerPairing(const mosaic::MosaicDopplerPairConfig& c);
+    void rawStats(TR_GNSSReceiverMosaicSerial::RawStats& out) const;
+    void rawStats(TR_GNSSReceiverSdrSerial::RawStats& out) const;
+    void rawStats(TR_GNSSReceiverPX1105RSerial::RawStats& out) const;
+    bool rawPairStats(TR_GNSSReceiverMosaicSerial::RawPairStats& out) const;
+    bool rawPairStats(TR_GNSSReceiverPX1105RSerial::RawPairStats& out) const;
+    bool setRawMultiband(const mosaic::MosaicMultibandConfig& c, float windup_k);
+    void noteRollRate(float p_rps);
+    bool rawMbStats(TR_GNSSReceiverMosaicSerial::RawMbStats& out) const;
+    bool heardBoard() const;
+#endif
 #if defined(TR_GNSS_COCOM_DIAG) && TR_GNSS_COCOM_DIAG
     void logSatDiag();   // the u-blox's; nothing with the mosaic
 #endif
@@ -104,5 +142,10 @@ private:
     TR_GNSSReceiverUBloxSerial  ublox_;
     TR_GNSSReceiverMosaicSerial mosaic_;
     TR_GNSSReceiverSdrSerial    sdr_;
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    TR_GNSSReceiverPX1105RSerial px_;
+    bool                         begin_wait_ = true;
+    bool beginHintedRaw(uint8_t hint, uint8_t rx, uint8_t tx, int8_t reset_n_pin, int8_t safeboot_n_pin);
+#endif
     gnss_detect::Detector       detector_;
 };

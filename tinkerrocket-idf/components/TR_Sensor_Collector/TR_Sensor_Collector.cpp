@@ -747,7 +747,7 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     ESP_LOGI(SC_TAG, "Initializing GNSS (RX=%d TX=%d)...", GNSS_RX, GNSS_TX);
     if (use_gnss)
     {
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
         // a reboot in flight: look for it, but leave the rest to the poll task
         gnss_receiver.setBeginWait(!gnss_defer_);
 #elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
@@ -777,7 +777,7 @@ void SensorCollector::begin(uint8_t imu_execution_core)
             // found: 18 Hz for the u-blox, 20 for the mosaic-G5.
             GNSS_UPDATE_RATE = gnss_receiver.updateRateHz();
 #endif
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
             if (gnss_defer_)
                 ESP_LOGW(SC_TAG, "GNSS bring-up left to the poll task: the receiver comes up when it answers");
             else
@@ -1585,6 +1585,9 @@ bool SensorCollector::enableGNSSRawOutputs()
 #elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
     // The PX1105R image's: its 0xE5, the ephemerides from its subframes, its fixes
     return gnss_receiver.enableRawOutputs();
+#elif defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    // All three raw receivers' before begin(): whichever it finds hands its over
+    return gnss_receiver.enableRawOutputs();
 #else
     return false;
 #endif
@@ -1600,7 +1603,7 @@ bool SensorCollector::getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out)
     // The same: the driver's queue, the epochs on the fused grid
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.takeRawEpoch(out);
-#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+#elif (defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.takeRawEpoch(out);
 #else
@@ -1619,8 +1622,9 @@ bool SensorCollector::getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len)
     // counted by the driver (cap is mosaic::kSbfNavMaxLen)
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.takeEphemeris(out, cap, len);
-#elif defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
-    // The board's 1019/1046/1042 as RTCM3 payloads, as the LC86G's
+#elif (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
+    // The board's 1019/1046/1042 as RTCM3 payloads, as the LC86G's (the
+    // mosaic's blocks too on TR_GNSS_AUTO_RAW)
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.takeEphemeris(out, cap, len);
 #else
@@ -1628,6 +1632,93 @@ bool SensorCollector::getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len)
     return false;
 #endif
 }
+
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+bool SensorCollector::getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const
+{
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.broadcastIono(raw, gps_day);
+}
+
+void SensorCollector::setGNSSRawEpochPeriodMs(uint32_t period_ms)
+{
+    gnss_receiver.setRawEpochPeriodMs(period_ms);
+}
+
+bool SensorCollector::getGNSSRawStats(TR_GNSSReceiverMosaicSerial::RawStats& out) const
+{
+    gnss_receiver.rawStats(out);
+    return out.enabled;
+}
+
+bool SensorCollector::getGNSSRawStats(TR_GNSSReceiverSdrSerial::RawStats& out) const
+{
+    gnss_receiver.rawStats(out);
+    return out.enabled;
+}
+
+bool SensorCollector::getGNSSRawStats(TR_GNSSReceiverPX1105RSerial::RawStats& out) const
+{
+    gnss_receiver.rawStats(out);
+    return out.enabled;
+}
+
+bool SensorCollector::setGNSSRawDopplerPairing(const mosaic::MosaicDopplerPairConfig& c)
+{
+    return gnss_receiver.setRawDopplerPairing(c);
+}
+
+bool SensorCollector::getGNSSRawPairStats(TR_GNSSReceiverMosaicSerial::RawPairStats& out) const
+{
+    return gnss_receiver.rawPairStats(out);
+}
+
+bool SensorCollector::getGNSSRawPairStats(TR_GNSSReceiverPX1105RSerial::RawPairStats& out) const
+{
+    return gnss_receiver.rawPairStats(out);
+}
+
+uint32_t SensorCollector::gnssPollStackFree() const
+{
+    return pollGNSSTaskHandle != nullptr ? static_cast<uint32_t>(uxTaskGetStackHighWaterMark(pollGNSSTaskHandle)) : 0U;
+}
+
+bool SensorCollector::setGNSSRawMultiband(const mosaic::MosaicMultibandConfig& c, float windup_k)
+{
+    return gnss_receiver.setRawMultiband(c, windup_k);
+}
+
+void SensorCollector::noteGNSSRollRate(float p_rps)
+{
+    gnss_receiver.noteRollRate(p_rps);
+}
+
+bool SensorCollector::getGNSSRawMbStats(TR_GNSSReceiverMosaicSerial::RawMbStats& out) const
+{
+    return gnss_receiver.rawMbStats(out);
+}
+
+bool SensorCollector::getGNSSEphemerisDecoded(gps_eph_t& out)
+{
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.takeEphemeris(out);
+}
+
+void SensorCollector::setGNSSRawEpochConfig(uint32_t period_ms, const sdr_rtcm::SdrDopplerMeanConfig& mean)
+{
+    gnss_receiver.setRawEpochConfig(period_ms, mean);
+}
+
+bool SensorCollector::gnssBoardHeard() const
+{
+    return use_gnss && gnss_online_ && gnss_receiver.heardBoard();
+}
+
+bool SensorCollector::gnssRawReceiver() const
+{
+    return gnss_begun_ && use_gnss && gnss_online_ && gnss_receiver.rawReceiver();
+}
+#endif
 
 #if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
 bool SensorCollector::getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const
@@ -1753,7 +1844,7 @@ bool SensorCollector::getGNSSFix(gnss_raw::TimedFix& out)
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.takeFix(out);
-#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+#elif (defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
     // its 0xDF fixes, timed on the arrival line
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.takeFix(out);
