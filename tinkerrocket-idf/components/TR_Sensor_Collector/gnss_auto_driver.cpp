@@ -533,6 +533,22 @@ void TR_GNSSAuto::rawStats(TR_GNSSReceiverPX1105RSerial::RawStats& out) const { 
 
 bool TR_GNSSAuto::rawPairStats(TR_GNSSReceiverMosaicSerial::RawPairStats& out) const
 {
+    if (type_ == GNSS_TYPE_PX1105R)
+    {
+        // The PX1105R pairs by the mosaic's rule and counts the same things:
+        // its counts in the mosaic's shape, which main.cpp's console reads
+        TR_GNSSReceiverPX1105RSerial::RawPairStats px;
+        if (!px_.rawPairStats(px)) return false;
+        out.pair = px.pair;
+        out.reads = px.reads;
+        out.read_us_max = px.read_us_max;
+        out.read_us_sum = px.read_us_sum;
+        out.adapts = px.adapts;
+        out.adapt_us_max = px.adapt_us_max;
+        out.adapt_us_sum = px.adapt_us_sum;
+        out.avg_us_max = px.avg_us_max;
+        return true;
+    }
     return mosaic_.rawPairStats(out);
 }
 
