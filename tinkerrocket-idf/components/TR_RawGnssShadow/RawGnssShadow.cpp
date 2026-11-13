@@ -717,12 +717,25 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
     if (static_cast<double>(ekf_.gExcess()) + 1.0 > cfg_.boost_screen_g)
         boost_seen_t_ = ekf_.time();      // the boost screen's window (startJob)
     t_prev_ = t;
-    // The descent without the IMU (descent_imu_free): from the apogee call on
-    if (cfg_.descent_imu_free && !ekf_.imuFree() && (s.flags & kShadowInFlight) && (s.flags & kShadowApogee))
+    // The descent without the IMU (descent_imu_free): from the apogee call on,
+    // while GNSS or the barometer holds its velocity (imu_free_gnss_s); with
+    // neither the IMU-coupled filter, and the mode again when one returns
+    if (cfg_.descent_imu_free && (s.flags & kShadowInFlight) && (s.flags & kShadowApogee))
     {
-        ekf_.setImuFree(true);
-        st_.imu_free = 1;
-        st_.imu_free_t = ekf_.time();
+        const bool live = cfg_.imu_free_gnss_s <= 0.0 || t - last_meas_t_ <= cfg_.imu_free_gnss_s
+                          || t - last_baro_fused_t_ <= cfg_.imu_free_gnss_s;
+        if (!ekf_.imuFree() && live)
+        {
+            ekf_.setImuFree(true);
+            st_.imu_free = 1;
+            st_.imu_free_t = ekf_.time();
+        }
+        else if (ekf_.imuFree() && !live)
+        {
+            ekf_.setImuFree(false);
+            st_.imu_free = 0;
+            st_.imu_free_exits++;
+        }
     }
     if (windupRingOn() || (cfg_.dv_check != kDvOff && cfg_.dv_lever_mode == 1))
     {
@@ -972,6 +985,7 @@ void RawGnssShadow::start(double t)
     mag_fused_run_ = 0;
     last_mag_fused_t_ = -1.0e9;
     last_aided_t_ = -1.0e9;
+    last_meas_t_ = -1.0e9;
     last_baro_fused_t_ = -1.0e9;
     prop_sum_ = 0;
     prop_n_ = 0;
@@ -1183,6 +1197,7 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
         npending_--;
         double r[3], v[3];
         ekf_.receiverEcef(r, v);
+        stage_.setClimbRate(-static_cast<double>(ekf_.velNed()[2]));   // the troposphere's rate (tropo_rate)
         stage_.begin(job_.e, r, job_.in_flight, built_);
         job_.phase = kJobBuild;
         job_.build_us = 0;
@@ -2318,6 +2333,8 @@ void RawGnssShadow::closeJob(double age, double t)
         own_fix_ = true;
         last_aided_t_ = t;
     }
+    if (rs.used_pr + rs.used_rr > 0)
+        last_meas_t_ = t;                 // GNSS live (the IMU-free descent's imu_free_gnss_s)
     // pr_period_s: its pseudoranges went through the update (fused or
     // refused), the period's code -- an epoch whose clock could not be taken
     // fused none, and one dropped never comes here

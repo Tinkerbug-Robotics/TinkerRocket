@@ -815,6 +815,14 @@ each epoch's own. The board's first valid fix seeds the cold start (ellipsoidal 
 `--sdr-raw-steps` leaves the clock steps in, as an experiment. The board's GPS ionosphere (4001 sub-type 4, since
 2026-11-12) goes through the image's ionosphere rule as the receiver's set; `--gps-iono a0,..,b3` offers a set the
 same way at the first record, for a log from before the board sent one (`-`: none, even the board's).
+Since fc/sdr-tropo-rate the image's profile takes the troposphere's rate off each Doppler (`rr_tropo_rate`,
+RawMeasBuilder.h: the filter's climb through the zenith delay's height gradient, over the elevation's sine);
+`--tropo-rate 0` replays the image before it, `--tropo-rate 1` turns it on for `--receiver mosaic` too. On the RF
+rig's scenes it shows an artifact above 10 km: SignalSim's troposphere ends there (its TropoDelay returns 0 above
+10 km) and the firmware's does not, so from the 10 km crossing on (the hotshot's T+14) the filter carries about
+-0.1 m/s of vertical velocity (NED down, against the truth) and ~3 m of height by apogee that a real sky would not
+give it. A rig score's height gets worse for a second reason: without the rate, the troposphere's +0.8 m/s happened
+to drag back the ~-6 m the pad datum (the board's fix, no ionosphere) and the boost leave; with it, those stay.
 
 The V10 bench log of 2026-11-02 (`flight_20261102_213043.bin`, 52 s, the board on its bench antenna, static): 525
 epochs handed over, 107 untimed while the line filled, 418 applied; every one of 672 pseudoranges and 6,688 Dopplers
@@ -848,6 +856,17 @@ would: the earth's rate, the Coriolis force of the climb (2 Omega x v) and norma
 of which the filter models (its gravity is 9.807 unless `gravity_wgs84`). On the files' equatorial pad, with no
 GNSS, that alone leaves a 27 km hotshot ~3.9 m/s east and a few m/s vertical by apogee (`--clean --seed-truth`,
 2026-11-09: boost 0.5 m/s, attitude exact).
+
+`--imu-free-gnss-s X` sets the IMU-free descent's window (RawGnssShadow imu_free_gnss_s: the mode only while raw
+measurements or a barometer sample were fused within X s; 0 the old rule, from the apogee call on whatever), and
+`--gravity-wgs84 0|1` the raw filter's gravity (RawGnssEKFParams::gravity_wgs84). The image's IMU-free descent needs
+`--descent-imu-free 1` (or `--fw-defaults`) and, on an RF-rig events file, the V10's apogee call (`--apogee-call-s`,
+the rig run's console): without them the replay flies the IMU-coupled descent the image does not.
+
+`--imu-tick-mean` gives each IMU tick the mean specific force over the tick before it, as the filter integrates a
+sample. Without it each tick carries its instant's, so each of a thrust curve's 0.1 s steps reaches the filter one
+tick (2 ms) early: the hotshot's boost then gathers -a x 2 ms of vertical velocity (-0.68 m/s at burnout, GNSS or
+not), the boost error left open on 2026-11-12. With it the GNSS-absent filter holds the boost within 0.01 m/s.
 
 Checked 2026-11-09 on the V10 bench log above, re-timed onto a still IMU at the open-sky antenna's surveyed position
 (a config of one Const segment there, `--start-gpst`, `--pad`, `--field-ned-ut` from TR_GeoMag): the same 418 epochs

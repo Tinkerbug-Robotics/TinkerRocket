@@ -151,6 +151,7 @@ void RawMeasBuilder::begin(const RawEpoch& ep, const double* r_approx, double g_
     }
     el_mask_ = cfg_.el_mask_deg * kPi / 180.0;
     g_over_ = g_peak > 0.0 ? g_peak : 0.0;
+    trop_rate_z_ = tropoRateZenith();
     next_obs_ = 0;
     // this epoch's carrier ends, from none: the last epoch's are kept until
     // it is done (an epoch begun and not finished leaves them as they were)
@@ -159,6 +160,16 @@ void RawMeasBuilder::begin(const RawEpoch& ep, const double* r_approx, double g_
     cr_model_ = have_pos_ ? static_cast<uint8_t>(1u | (static_cast<unsigned>(iono_gen_) << 1)) : 0;
     if (cfg_.lite)
         beginLite(ep, false);             // the cheaper build's epoch (RawMeasBuilderLite.cpp): its solves at once
+}
+
+// The troposphere's rate at the zenith over the epoch's receiver as it
+// climbs (Config::tropo_rate): the model's height gradient there times the
+// caller's climb rate. 0 with it off, without the troposphere or a position.
+double RawMeasBuilder::tropoRateZenith() const
+{
+    if (!cfg_.tropo_rate || !cfg_.troposphere || !have_pos_ || climb_mps_ == 0.0)
+        return 0.0;
+    return tropo_zenith_gradient(lat_, hgt_) * climb_mps_;
 }
 
 int RawMeasBuilder::next(const RawEpoch& ep, const EphemerisStore& eph, RawMeas* out, int n, int cap, int max_obs)
@@ -192,6 +203,7 @@ int RawMeasBuilder::next(const RawEpoch& ep, const EphemerisStore& eph, RawMeas*
 
         double corr = GNSS_C * dts;   // the clock with relativity, less the group delay
         double iono = 0.0, trop = 0.0;
+        double trop_rate = 0.0;       // the troposphere's rate along the line of sight (tropo_rate)
         if (have_pos_)
         {
             const double d[3] = {rs[0] - r_approx_[0], rs[1] - r_approx_[1], rs[2] - r_approx_[2]};
@@ -203,6 +215,8 @@ int RawMeasBuilder::next(const RawEpoch& ep, const EphemerisStore& eph, RawMeas*
             iono = iono_klobuchar(&iono_, lat_, lon_, az, el, ep.tow_s) * fr * fr;
             trop = cfg_.troposphere ? tropo_saastamoinen(lat_, hgt_, el) : 0.0;
             corr -= iono + trop;
+            if (trop_rate_z_ != 0.0 && el > 0.0)
+                trop_rate = trop_rate_z_ / std::sin(el);
         }
 
         RawMeas& m = out[n++];
@@ -217,7 +231,7 @@ int RawMeasBuilder::next(const RawEpoch& ep, const EphemerisStore& eph, RawMeas*
         m.has_pr = sig.pr_fused;   // false: read for the transmit time alone (GnssSignalProfile::pr_fused)
         m.pr = o.pr_m + corr;
         m.has_rr = o.has_rate && !(o.cn0_dbhz < sig.cn0_min_rr);
-        m.rr = m.has_rr ? o.rate_mps + GNSS_C * c.clk_rate : 0.0;
+        m.rr = m.has_rr ? o.rate_mps + GNSS_C * c.clk_rate - trop_rate : 0.0;
 
         const double cn0 = static_cast<double>(o.cn0_dbhz);
         const double lam = GNSS_C / sig.carrier_hz;

@@ -38,6 +38,14 @@ double iono_klobuchar(const gps_iono_t *io, double lat, double lon, double az, d
  */
 double tropo_saastamoinen(double lat, double h, double el);
 
+/*
+ * The zenith delay's height gradient (m of delay per m of height, negative: the delay thins upward) at
+ * geodetic latitude lat (rad) and ellipsoidal height h (m), tropo_saastamoinen's at the zenith over
+ * +-10 m. A receiver climbing at v_up m/s sees each satellite's delay change at this times v_up over the
+ * sine of its elevation (the model's mapping): a rate in every measured range rate.
+ */
+double tropo_zenith_gradient(double lat, double h);
+
 #ifdef __cplusplus
 }
 #endif

@@ -4648,6 +4648,15 @@ static void startRawShadow()
     rx.rr_pair_avg = (TR_BENCH_RAW_DOP_AVG) != 0;
     ESP_LOGW(TAG, "[RAWGNSS] BENCH: Dopplers in pairs %s (TR_BENCH_RAW_DOP_AVG)", rx.rr_pair_avg ? "ON" : "off");
 #endif
+#ifdef TR_BENCH_RAW_TROPO_RATE
+    // bench: the troposphere's rate off each Doppler as the receiver climbs
+    // (RawMeasBuilder.h tropo_rate): on (1, the gnss-sdr-dev flight
+    // profile's) or off (0, the image before it)
+    static_assert(TR_BENCH_RAW_TROPO_RATE == 0 || TR_BENCH_RAW_TROPO_RATE == 1, "TR_BENCH_RAW_TROPO_RATE is 0 or 1");
+    rx.rr_tropo_rate = (TR_BENCH_RAW_TROPO_RATE) != 0;
+    ESP_LOGW(TAG, "[RAWGNSS] BENCH: the troposphere's rate off the Doppler %s (TR_BENCH_RAW_TROPO_RATE)",
+             rx.rr_tropo_rate ? "ON" : "off");
+#endif
 #ifdef TR_BENCH_RAW_CAP_MAX
     // bench (exp/v9-cap-adapt): the satellite cap follows the filter's slack,
     // from the cap above (the floor) up to this (CapGovernor.h)

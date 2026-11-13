@@ -214,7 +214,9 @@ endforeach()
 # filter's slack, up to TR_BENCH_RAW_CAP_MAX from the cap above (CapGovernor.h;
 # TR_BENCH_RAW_CAP_PAD=1 lets it climb in PRELAUNCH too, which it holds at the
 # floor, to watch the climb under an open sky), and the filter's slice of an
-# epoch's work a step in us (TR_BENCH_RAW_SLICE_US: the profile's 2500). The
+# epoch's work a step in us (TR_BENCH_RAW_SLICE_US: the profile's 2500), and
+# the troposphere's rate off each Doppler (TR_BENCH_RAW_TROPO_RATE: 1 on, the
+# gnss-sdr-dev image's flight profile, 0 off). The
 # mosaic-only image flies the cheaper build, the shared geometry at 2 and the
 # Dopplers in pairs (ReceiverProfileApply.h applyMosaicFlightProfile, the
 # owner's 10/24 set): those three at 0 build the high-roll-only twin. Each
@@ -238,13 +240,14 @@ set(_tr_mosaic_rawnav_hooks TR_BENCH_RAW_START_FAIL TR_BENCH_RESTORE_SIM TR_BENC
     TR_BENCH_PANIC_FILTER_AT_S TR_BENCH_RAW_STOP_AT_S)
 foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G TR_BENCH_DV_CHECK TR_BENCH_RAW_BUILD_LITE
         TR_BENCH_RAW_SHARE_LOS TR_BENCH_RAW_DOP_AVG TR_RAW_GNSS_IRAM TR_BENCH_RAW_CAP_MAX TR_BENCH_RAW_CAP_PAD
-        TR_BENCH_RAW_SLICE_US ${_tr_mosaic_rawnav_hooks})
+        TR_BENCH_RAW_SLICE_US TR_BENCH_RAW_TROPO_RATE ${_tr_mosaic_rawnav_hooks})
     if(DEFINED ${_v} AND NOT _tr_mosaic_rawnav)
         message(FATAL_ERROR "${_v} is for the raw-GNSS navigation filter of the mosaic-only image (-DTR_GNSS_MOSAIC=1 on a V8 or V9) or the V10's gnss-sdr-dev image (-DTR_GNSS_SDR=1): this build would ignore it. A build dir keeps every -D value: use a fresh one.")
     endif()
 endforeach()
 foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G TR_BENCH_DV_CHECK TR_BENCH_RAW_BUILD_LITE
-        TR_BENCH_RAW_SHARE_LOS TR_BENCH_RAW_DOP_AVG TR_BENCH_RAW_CAP_MAX TR_BENCH_RAW_CAP_PAD TR_BENCH_RAW_SLICE_US)
+        TR_BENCH_RAW_SHARE_LOS TR_BENCH_RAW_DOP_AVG TR_BENCH_RAW_CAP_MAX TR_BENCH_RAW_CAP_PAD TR_BENCH_RAW_SLICE_US
+        TR_BENCH_RAW_TROPO_RATE)
     if(DEFINED ${_v})
         add_compile_definitions(${_v}=${${_v}})
         message(STATUS "${_v}=${${_v}} (bench)")
