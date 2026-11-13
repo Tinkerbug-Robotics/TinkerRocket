@@ -299,6 +299,11 @@ def build(a):
     # I, B: the EKF ticks and the barometer on alternate rows of twice the EKF rate
     rows = np.arange(0.0, t_end, 0.5 / a.ekf_rate)
     h, v, acc = tr.at(rows)
+    if a.imu_tick_mean:
+        # each tick's specific force the mean over the tick before it (the velocity's change over it), as the filter
+        # integrates a sample; the instant's (the default) puts each of the thrust's steps one tick early
+        _h0, v0, _a0 = tr.at(rows - 1.0 / a.ekf_rate)
+        acc = (v - v0) * a.ekf_rate
     b_acc = np.zeros(3) if a.clean else rng.normal(0.0, a.acc_bias, 3)
     b_gyr = np.zeros(3) if a.clean else rng.normal(0.0, a.gyro_bias, 3)
     tu = mcu_us(rows)
@@ -386,6 +391,8 @@ def main():
     ap.add_argument("--baud", type=float, default=2.0e6)
     ap.add_argument("--heading-deg", type=float, default=0.0, help="the belly's (body z) azimuth from north")
     ap.add_argument("--clean", action="store_true", help="no IMU, barometer or magnetometer noise or bias")
+    ap.add_argument("--imu-tick-mean", action="store_true",
+                    help="each IMU tick's specific force the mean over the tick before it, not the instant's")
     ap.add_argument("--acc-noise", type=float, default=0.03, help="m/s^2 an EKF tick")
     ap.add_argument("--gyro-noise", type=float, default=0.0015, help="rad/s an EKF tick")
     ap.add_argument("--acc-bias", type=float, default=0.03, help="m/s^2, 1-sigma, drawn once an axis")

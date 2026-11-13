@@ -2043,3 +2043,62 @@ TEST(RawGnssEKF, TheImuFreeModeKeepsGnssOffTheAttitudeAndTheBiasesAndFollowsTheD
             EXPECT_EQ(f.P(i, j), 0.0) << i << ", " << j;
     expectCovarianceHealthy(f);
 }
+
+// ---- WGS84 normal gravity (RawGnssEKFParams::gravity_wgs84; the gnss-sdr-dev image's) ----
+
+namespace
+{
+
+// Somigliana with the second-order height term, worked out in full (the
+// filter caches its latitude part)
+double normalGravityDown(double lat, double h)
+{
+    const double s2 = std::sin(lat) * std::sin(lat);
+    const double g0 = 9.7803253359 * (1.0 + 0.00193185265241 * s2) / std::sqrt(1.0 - 0.0066943799901 * s2);
+    const double f = 1.0 / 298.257223563, m = 0.00344978650684, a = 6378137.0;
+    return g0 * (1.0 - 2.0 / a * (1.0 + f + m - 2.0 * f * s2) * h + 3.0 / (a * a) * h * h);
+}
+
+// A free fall of dt from rest at lla: the velocity gained down over dt, a
+// filter with the given gravity (float, as the flight computer's)
+double freeFallG(RawGnssEKF<float>& f, const double lla[3], double dt = 0.01)
+{
+    const double v0[3] = {0.0, 0.0, 0.0};
+    initLevel(f, lla, v0);
+    const float acc[3] = {0.0f, 0.0f, 0.0f};   // nothing felt: in free fall
+    const float gyro[3] = {0.0f, 0.0f, 0.0f};
+    f.propagate(acc, gyro, static_cast<float>(dt));
+    return static_cast<double>(f.velNed()[2]) / dt;
+}
+
+}  // namespace
+
+TEST(RawGnssEKF, NormalGravityIsSomiglianasWithItsHeightAndTheConstantOtherwise)
+{
+    // gravity_wgs84: Somigliana and the height term, from the pad to 80 km and
+    // across latitudes, its latitude part cached while the latitude stays
+    // within 1e-4 rad (the error then 5e-6 m/s^2 at most) and worked out
+    // again past it; off, the flight filter's constant 9.807
+    RawGnssEKFParams p = quietParams();
+    p.gravity_wgs84 = true;
+    RawGnssEKF<float> f(p);
+    for (double lat_deg : {0.0, 33.0, 60.0})
+        for (double h : {0.0, 1400.0, 10000.0, 26000.0, 80000.0})
+        {
+            SCOPED_TRACE(testing::Message() << "lat " << lat_deg << " h " << h);
+            const double lla[3] = {lat_deg * kPi / 180.0, 0.3, h};
+            EXPECT_NEAR(freeFallG(f, lla), normalGravityDown(lla[0], h), 2e-4);
+        }
+    // weaker by 0.08 m/s^2 at 26 km than on the ground
+    const double ground[3] = {0.6, 0.3, 0.0}, high[3] = {0.6, 0.3, 26000.0};
+    EXPECT_NEAR(freeFallG(f, ground) - freeFallG(f, high), 0.080, 0.002);
+    // the cache: a latitude moved under its step keeps it, past it takes the new one
+    RawGnssEKF<float> c(p);
+    const double a[3] = {0.0, 0.3, 0.0}, near[3] = {0.5e-4, 0.3, 0.0}, far[3] = {1.0, 0.3, 0.0};
+    freeFallG(c, a);
+    EXPECT_NEAR(freeFallG(c, near), normalGravityDown(near[0], 0.0), 1e-5);
+    EXPECT_NEAR(freeFallG(c, far), normalGravityDown(far[0], 0.0), 2e-4);
+    // off: the constant
+    RawGnssEKF<float> k(quietParams());
+    EXPECT_NEAR(freeFallG(k, high), 9.807, 2e-4);
+}

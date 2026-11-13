@@ -421,15 +421,22 @@ void RawGnssEKF<T>::gravityNed(T g[3]) const
         return;
     }
     // Somigliana on the ellipsoid, the second-order height term, and the
-    // small north component above it (tc_ekf.py gravity_wgs84)
+    // small north component above it (tc_ekf.py gravity_wgs84). Its latitude
+    // part is worked out again only once the latitude has moved 1e-4 rad
+    // (600 m; Somigliana's slope is ~0.05 m/s^2 a radian, so 5e-6 m/s^2):
+    // three sines and a root are soft double on the P4, every IMU step
     const double lat = lla_[0], h = lla_[2];
-    const double s2 = std::sin(lat) * std::sin(lat);
-    const double g0 = kGammaE * (1.0 + kSomK * s2) / std::sqrt(1.0 - kE2 * s2);
-    const double gd = g0 * (1.0 - 2.0 / kRe * (1.0 + kFlat + kGravM - 2.0 * kFlat * s2) * h
-                            + 3.0 / (kRe * kRe) * h * h);
-    g[0] = T(-8.08e-9 * h * std::sin(2.0 * lat));
+    if (!(std::fabs(lat - grav_lat_) <= 1.0e-4))
+    {
+        const double s2 = std::sin(lat) * std::sin(lat);
+        grav_g0_ = kGammaE * (1.0 + kSomK * s2) / std::sqrt(1.0 - kE2 * s2);
+        grav_c1_ = 2.0 / kRe * (1.0 + kFlat + kGravM - 2.0 * kFlat * s2);
+        grav_n_ = -8.08e-9 * std::sin(2.0 * lat);
+        grav_lat_ = lat;
+    }
+    g[0] = T(grav_n_ * h);
     g[1] = T(0);
-    g[2] = T(gd);
+    g[2] = T(grav_g0_ * (1.0 - grav_c1_ * h + 3.0 / (kRe * kRe) * h * h));
 }
 
 template <typename T>

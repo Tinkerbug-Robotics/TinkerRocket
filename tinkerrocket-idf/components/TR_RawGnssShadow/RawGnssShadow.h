@@ -584,6 +584,21 @@ public:
         // pull back (the Beetle, 301 and 663 m off), or a vertical the held-out
         // barometer and the vertical check's latch let run (the Goblin, -740 m).
         bool     descent_imu_free = false;
+        // and only while something holds its velocity: raw measurements or
+        // a barometer sample fused within this long (0: from the apogee call
+        // on whatever, as before). With neither -- no GNSS, and above the
+        // barometer's 25 kPa floor or under the transonic lockout no
+        // barometer -- the mode holds its velocity on nothing: on the V10's
+        // rig run of 2026-11-13 (rs2, the GNSS board rebooted 1 s into the
+        // boost and never re-acquired) it held -5 m/s at 26 km while the
+        // scene fell, the descent 4.9 km off. Then the IMU-coupled filter
+        // navigates, as through the coast, and the mode comes back with GNSS
+        // or the barometer. With the barometer alone it stays: a descent
+        // the antenna path drops in and out of (the Goblin's, 2026-10-24) is
+        // what the mode is for. 2 s: 20 epochs at 10 Hz, past the single
+        // epochs a burnout jolt or the boost screen drops, and the window
+        // gnss_aided already means.
+        double   imu_free_gnss_s = 2.0;
         double   zupt_sigma_mps  = 0.5;       // landed: zero velocity, 1 sigma (#1418)
         double   zupt_period_s   = 0.1;       //   this often
         bool     pad_zupt        = true;      // the navigation filter, on the pad while still: zero velocity too
@@ -872,7 +887,8 @@ public:
         uint32_t baro_fused = 0;           //   fused (an offset learned)
         uint32_t baro_held = 0;            //   held out in flight at speed (the port's error)
         uint8_t  imu_free = 0;             // the descent's IMU-free mode on (descent_imu_free)
-        double   imu_free_t = 0.0;         //   since this (the filter's clock, s)
+        uint16_t imu_free_exits = 0;       //   left for GNSS and the barometer gone stale in it (imu_free_gnss_s)
+        double   imu_free_t = 0.0;         //   since this (the filter's clock, s): its last entry
         double   baro_offset_m = 0.0;      // the filter's height less the barometer's, on the pad
         uint8_t  baro_offset_frozen = 0;   //   frozen at launch
         uint32_t zupts = 0;                // landed zero-velocity updates
@@ -1222,6 +1238,7 @@ private:
     bool          restored_ = false;    // started in flight from a restored flight
     uint8_t       start_gen_ = 0;       // the seed's start_gen it started from
     double        last_aided_t_ = -1.0e9;   // raw measurements last applied
+    double        last_meas_t_ = -1.0e9;    // any raw measurement (a code or a Doppler) last applied
     double        last_baro_fused_t_ = -1.0e9;
     void          applyMag(double t, const float acc[3]);
     void          applyBaro(double t, uint8_t imu_flags);

@@ -212,6 +212,8 @@ bool RawGnssMeasStage::offer(const TimedRawEpoch& e, const ShadowNav& nav, Built
     }
     double r[3];
     geo_to_ecef(nav.lla[0], nav.lla[1], nav.lla[2], r);
+    // the filter's vertical velocity, for the troposphere's rate (the builder's tropo_rate)
+    builder_.setClimbRate(-static_cast<double>(nav.vel_ned[2]));
     if (cfg_.meas.lite)
     {
         offerLite(e, nav, r, out);

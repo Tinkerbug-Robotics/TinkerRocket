@@ -65,6 +65,8 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawMeasBuilder::C
     // the cheaper build: the atmosphere once in each period the code is fused in
     c.lite = p.build_lite;
     c.atmo_period_s = p.build_lite ? p.pr_period_s : 0.0;
+    // the troposphere's rate off each Doppler
+    c.tropo_rate = p.rr_tropo_rate;
 }
 
 inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssEKFParams& e)
@@ -194,7 +196,14 @@ inline void applyMosaicFlightProfile(GnssReceiverProfile& p)
 // fused epoch's Doppler is the mean of its satellite's Dopplers over the
 // board's epochs since the last fused one (SdrRawEpoch.h, ten at 10 Hz), the
 // mosaic's pairs widened to the fused period. The 16 satellites at 10 Hz are
-// what the RF rig's runs were scored on offline (2026-11-09).
+// what the RF rig's runs were scored on offline (2026-11-09). And the
+// troposphere's rate off each Doppler (rr_tropo_rate, RawMeasBuilder.h): on
+// the RF rig's hotshot the board's Dopplers alone read the climb 0.5-1.5 m/s
+// slow from late boost until the scene's troposphere ended at 10 km, which
+// the filter followed as +0.7-0.8 m/s of vertical velocity to T+12; offline
+// (2026-11-12, bench-backups v10-sdr-logs/rate-study) taking it off cut that
+// to 0.25 m/s (p90). The mosaic's image has not flown it: the Goblin's climb
+// is a fifth as fast, and its image is verified as it is.
 inline void applySdrFlightProfile(GnssReceiverProfile& p)
 {
     p.build_lite = true;
@@ -203,6 +212,7 @@ inline void applySdrFlightProfile(GnssReceiverProfile& p)
     p.rr_pair_avg = true;
     p.sat_cap = 16;
     p.sat_cap_max = 0;
+    p.rr_tropo_rate = true;
 }
 
 // The gnss-sdr-dev board's Doppler means (SdrRawEpoch.h, the profile's
@@ -360,11 +370,22 @@ inline void applyMosaicFlightSafeguards(RawGnssShadow::Config& c)
 //     velocity rode the 1 Hz pseudoranges 20-25 m/s off for 30 s. GNSS
 //     reaches no attitude or bias in the mode, which is what the check is
 //     there to protect; a bad Doppler meets the update's own gate.
+//   - WGS84 normal gravity with height (RawGnssEKFParams::gravity_wgs84), in
+//     place of the flight filter's constant 9.807: gravity is 0.06 m/s^2
+//     weaker at 20 km and 0.08 at 26 km, and with GNSS lost the coast
+//     integrates the difference. On the V10's rig run rs2 (2026-11-13, the
+//     GNSS board rebooted 1 s into the boost and never re-acquired) that was
+//     the coast's 3.6 m/s and 87 m of vertical error (p90); offline, the
+//     same with it 0.02 m/s and 5 m, the GNSS-absent filter's. GpsInsEKF
+//     has flown it since #1530. With GNSS it changes nothing measurable. The
+//     mosaic's image and the Beetle's do not take it: their climbs are a
+//     kilometre, where the height term is 0.003 m/s^2.
 inline void applySdrFlightSafeguards(RawGnssShadow::Config& c)
 {
     applyMosaicFlightSafeguards(c);
     c.windup_k = 0.0;
     c.dv_imu_free_off = true;
+    c.ekf.gravity_wgs84 = true;
 }
 
 // The antenna's offset from the IMU, where the rocket's owner measured it: an

@@ -280,6 +280,11 @@ struct Args
     // epoch's averaged with the receiver's epoch before it, as the driver does (MosaicRawEpoch.h), the filter taking
     // the mean half an epoch earlier; -1: the profile's (off)
     int rr_pair_avg = -1;
+    int gravity_wgs84 = -1;          // RawGnssEKFParams::gravity_wgs84: WGS84 normal gravity with height (-1: the image's)
+    double imu_free_gnss_s = -1.0;   // RawGnssShadow::Config::imu_free_gnss_s: the IMU-free descent only while GNSS or
+                                     //   the barometer is live (0: from the apogee call on whatever; -1: the config's 2 s)
+    int tropo_rate = -1;             // TR_BENCH_RAW_TROPO_RATE: the troposphere's rate off each Doppler (the profile's
+                                     //   rr_tropo_rate; -1: the profile's, on for --receiver sdr)
     double rr_pair_max_diff = -1.0;  //   the pair at most this far apart, m/s (-1: the profile's 15)
     double rr_pair_sigma = -1.0;     //   offline only: each averaged Doppler's sigma scaled by this (no firmware path)
     bool sim_fuse_grid = false;      // a sim's epochs (X) cut to the fused grid as the driver cuts the receiver's
@@ -400,6 +405,7 @@ void usage()
                  "  [--seed-gyro-dps x,y,z]\n"
                  "  [--sat-cap N] [--fuse-ms X] [--flight-state log|quorum] [--time-tag-from-boot]\n"
                  "  [--rr-pair-avg 0|1] [--rr-pair-max-diff X] [--rr-pair-sigma X] [--sim-fuse-grid] [--rr-lag-ms X]\n"
+                 "  [--tropo-rate 0|1]\n"
                  "  [--sim-pair-exact]\n"
                  "  each satellite's bands in one Doppler (a RAW_REPLAY_MULTIBAND build, offline only):\n"
                  "  [--rr-multiband 0|1] [--rr-mb-bands LIST|none] [--rr-mb-model measured|equalhz|FILE]\n"
@@ -595,6 +601,9 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--fuse-ms") a.fuse_ms = std::atof(val());
         else if (k == "--share-los") a.share_los = std::atoi(val());
         else if (k == "--rr-pair-avg") a.rr_pair_avg = std::atoi(val());
+        else if (k == "--tropo-rate") a.tropo_rate = std::atoi(val());
+        else if (k == "--gravity-wgs84") a.gravity_wgs84 = std::atoi(val());
+        else if (k == "--imu-free-gnss-s") a.imu_free_gnss_s = std::atof(val());
         else if (k == "--rr-pair-max-diff") a.rr_pair_max_diff = std::atof(val());
         else if (k == "--rr-pair-sigma") a.rr_pair_sigma = std::atof(val());
         else if (k == "--sim-fuse-grid") a.sim_fuse_grid = true;
@@ -1773,10 +1782,10 @@ int main(int argc, char** argv)
 #if !RAW_REPLAY_MOSAIC
     if (mosaic || a.cold_start || a.unaided || !a.rinex.empty() || a.quorum || a.sat_cap >= 0 || a.fuse_ms > 0.0 ||
         a.share_los >= 0 || a.flight_state == "quorum" || a.time_tag_from_boot || a.assume_finetime ||
-        a.seed_heading_error_deg != 0.0 || !a.truth_nav.empty())
+        a.seed_heading_error_deg != 0.0 || !a.truth_nav.empty() || a.tropo_rate >= 0)
     {
         std::fprintf(stderr, "this build has no mosaic-G5 path (RAW_REPLAY_MOSAIC=OFF): --receiver mosaic, "
-                             "--cold-start, --unaided, --rinex, --quorum, --sat-cap, --fuse-ms, --share-los, "
+                             "--cold-start, --unaided, --rinex, --quorum, --sat-cap, --fuse-ms, --share-los, --tropo-rate, "
                              "--flight-state quorum, --time-tag-from-boot, --assume-finetime, "
                              "--seed-heading-error-deg and --truth-nav need it\n");
         return 2;
@@ -1947,6 +1956,8 @@ int main(int argc, char** argv)
         rx.fuse_epoch_period_s = a.fuse_ms * 1.0e-3;   // TR_BENCH_RAW_FUSE_MS
     if (a.sat_cap >= 0)
         rx.sat_cap = a.sat_cap;                         // TR_BENCH_RAW_SAT_CAP
+    if (a.tropo_rate >= 0)
+        rx.rr_tropo_rate = a.tropo_rate != 0;           // TR_BENCH_RAW_TROPO_RATE
 #if RAW_REPLAY_BUILD_LITE
     if (a.build_lite >= 0)
         rx.build_lite = a.build_lite != 0;              // TR_BENCH_RAW_BUILD_LITE
@@ -2336,6 +2347,10 @@ int main(int argc, char** argv)
 #if RAW_REPLAY_DESCENT
     // the images' (config.h TR_RAW_DESCENT_IMU_FREE: on wherever the raw filter navigates) with --fw-defaults,
     // the mosaic's among them; the given switch either way
+    if (a.gravity_wgs84 >= 0)
+        cfg.ekf.gravity_wgs84 = a.gravity_wgs84 != 0;
+    if (a.imu_free_gnss_s >= 0.0)
+        cfg.imu_free_gnss_s = a.imu_free_gnss_s;
     if (a.descent_imu_free >= 0)
         cfg.descent_imu_free = a.descent_imu_free != 0;
     else if (a.fw_defaults)

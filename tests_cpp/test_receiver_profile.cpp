@@ -48,6 +48,7 @@ void expectSameBuilder(const RawMeasBuilder::Config& a, const RawMeasBuilder::Co
 {
     EXPECT_EQ(a.el_mask_deg, b.el_mask_deg);
     EXPECT_EQ(a.troposphere, b.troposphere);
+    EXPECT_EQ(a.tropo_rate, b.tropo_rate);
     for (int k = 0; k < gnss_raw::kProfileSys; ++k)
     {
         SCOPED_TRACE(testing::Message() << "sys " << k);
@@ -166,6 +167,7 @@ void expectSameShadowSettings(const RawGnssShadow::Config& a, const RawGnssShado
     EXPECT_EQ(a.sat_cap_max, b.sat_cap_max);
     EXPECT_EQ(a.level.min_dt_s, b.level.min_dt_s);
     EXPECT_EQ(a.descent_imu_free, b.descent_imu_free);
+    EXPECT_EQ(a.imu_free_gnss_s, b.imu_free_gnss_s);
     EXPECT_EQ(a.windup_k, b.windup_k);
     EXPECT_EQ(a.windup_monitor, b.windup_monitor);
 }
@@ -203,6 +205,7 @@ void expectSameNumbers(const GnssReceiverProfile& a, const GnssReceiverProfile& 
     EXPECT_EQ(a.build_lite, b.build_lite);
     EXPECT_EQ(a.rr_pair_avg, b.rr_pair_avg);
     EXPECT_EQ(a.rr_pair_max_diff_mps, b.rr_pair_max_diff_mps);
+    EXPECT_EQ(a.rr_tropo_rate, b.rr_tropo_rate);
     EXPECT_EQ(a.epoch_slice_us, b.epoch_slice_us);
     EXPECT_EQ(a.sat_cap_max, b.sat_cap_max);
     RawGnssShadow::Config sa, sb;
@@ -222,9 +225,9 @@ static_assert(sizeof(void*) != 8 || sizeof(RawMeasBuilder::Config) == 336,
               "RawMeasBuilder::Config changed: add the field to expectSameBuilder, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 32,
               "GnssSignalProfile changed: add the field to expectSameSignal, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 568,
+static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 576,
               "GnssReceiverProfile changed: add the field to expectSameNumbers, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1816,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1824,
               "RawGnssShadow::Config changed: pin the field in TheShadowSafeguardDefaultsAreTheBeetles, then update "
               "this size");
 
@@ -511,6 +514,19 @@ TEST(ReceiverProfile, TheSdrImagesFlightProfileAndItsDopplerMeans)
     EXPECT_EQ(p.rr_pair_avg, m.rr_pair_avg);
     EXPECT_EQ(p.sat_cap, 16);
     EXPECT_EQ(p.sat_cap_max, 0);
+    // and the troposphere's rate off each Doppler, which the mosaic's image does not fly
+    EXPECT_FALSE(gnss_raw::sdrDevProfile().rr_tropo_rate);
+    EXPECT_TRUE(p.rr_tropo_rate);
+    EXPECT_FALSE(m.rr_tropo_rate);
+    {
+        RawMeasBuilder::Config bc;
+        EXPECT_FALSE(bc.tropo_rate);                      // the Beetle's default
+        gnss_raw::applyReceiverProfile(p, bc);
+        EXPECT_TRUE(bc.tropo_rate);
+        RawMeasBuilder::Config mbc;
+        gnss_raw::applyReceiverProfile(m, mbc);
+        EXPECT_FALSE(mbc.tropo_rate);
+    }
     EXPECT_EQ(gnss_raw::sdrDopplerMeanEpochs(p), 10);
     EXPECT_NEAR(gnss_raw::sdrDopplerMeanLag(p), 0.045, 1e-12);
     // the fused rate raised to 20 Hz: five epochs, 20 ms back; to 100 Hz: none
@@ -533,7 +549,7 @@ TEST(ReceiverProfile, TheSdrImagesFlightProfileAndItsDopplerMeans)
     EXPECT_EQ(mc.ekf.rr_pair_lag_s, 0.025);
 }
 
-TEST(ReceiverProfile, TheSdrImagesSafeguardsAreTheMosaicsLessTheWindupAndTheChangeCheckInTheImuFreeDescent)
+TEST(ReceiverProfile, TheSdrImagesSafeguardsAreTheMosaicsLessTheWindupAndTheChangeCheckInTheImuFreeDescentWithGravity)
 {
     // applySdrFlightSafeguards: the mosaic image's set, with no carrier
     // wind-up taken off and the change check standing down in the IMU-free
@@ -546,9 +562,14 @@ TEST(ReceiverProfile, TheSdrImagesSafeguardsAreTheMosaicsLessTheWindupAndTheChan
     EXPECT_TRUE(s.dv_imu_free_off);
     EXPECT_EQ(m.windup_k, 0.99);
     EXPECT_EQ(s.windup_k, 0.0);
+    // and WGS84 normal gravity, which the mosaic's and the Beetle's do not fly
+    EXPECT_FALSE(d.ekf.gravity_wgs84);
+    EXPECT_FALSE(m.ekf.gravity_wgs84);
+    EXPECT_TRUE(s.ekf.gravity_wgs84);
     // everything else the mosaic's
     s.dv_imu_free_off = m.dv_imu_free_off;
     s.windup_k = m.windup_k;
+    s.ekf.gravity_wgs84 = m.ekf.gravity_wgs84;
     EXPECT_EQ(s.dv_check, m.dv_check);
     EXPECT_EQ(s.dv_latch_k, m.dv_latch_k);
     EXPECT_EQ(s.dv_window_s, m.dv_window_s);
@@ -1200,6 +1221,7 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_EQ(c.baro_hold_port_m, 2.0);
     EXPECT_EQ(c.baro_hold_max_s, 30.0);
     EXPECT_FALSE(c.descent_imu_free);                    // fc/raw-descent-mode: off until a build turns it on
+    EXPECT_EQ(c.imu_free_gnss_s, 2.0);                   // and only while GNSS or the barometer holds it
     EXPECT_EQ(c.ekf.imu_free_acc_psd, 16.0);
     EXPECT_EQ(c.ekf.imu_free_vel_sigma, 5.0);
     EXPECT_EQ(c.ekf.imu_free_pos_sigma, 100.0);
