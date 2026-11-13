@@ -1,5 +1,6 @@
 """Review package for JLCPCB: gerbers + drill (zipped), BOM and CPL in JLC's column names, the schematic PDF,
-and top/bottom renders, in ../gerbers/ (ignored by git). At order time, plot the gerbers with the repo's
+and top/bottom renders, in ../gerbers/ (ignored by git). The through-hole parts (design.HAND) are soldered by
+hand: they stay out of the BOM and CPL and go to a list of their own, -hand.csv. At order time, plot the gerbers with the repo's
 tools/plot_gerbers.sh instead (it refuses a dirty tree and stamps the commit and tag); the BOM and CPL here
 still apply.
 
@@ -11,6 +12,7 @@ import shutil
 import subprocess
 import zipfile
 
+import design
 import kilib
 
 K = '/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli'
@@ -21,6 +23,7 @@ PCB = os.path.join(PROJ, NAME + '.kicad_pcb')
 SCH = os.path.join(PROJ, NAME + '.kicad_sch')
 LAYERS = 'F.Cu,In1.Cu,In2.Cu,B.Cu,F.Mask,B.Mask,F.Paste,F.Silkscreen,B.Silkscreen,Edge.Cuts'
 SKIP = ('H', 'FID', 'TP')
+HAND = set(design.HAND)
 
 
 def run(*args):
@@ -57,7 +60,7 @@ def main():
         w = csv.writer(f)
         w.writerow(['Designator', 'Mid X', 'Mid Y', 'Layer', 'Rotation'])
         for r in rows:
-            if r['Ref'].startswith(SKIP):
+            if r['Ref'].startswith(SKIP) or r['Ref'] in HAND:
                 continue
             w.writerow([r['Ref'], r['PosX'] + 'mm', r['PosY'] + 'mm', 'Top' if r['Side'] == 'top' else 'Bottom',
                         r['Rot']])
@@ -67,7 +70,7 @@ def main():
     net = os.path.join(FAB, 'bom.net')
     run('sch', 'export', 'netlist', '--format', 'kicadsexpr', '-o', net, SCH)
     root = kilib.parse(open(net).read())[0]
-    groups = {}
+    groups, hand = {}, {}
     for c in kilib.find(kilib.get(root, 'components'), 'comp'):
         ref = str(kilib.get(c, 'ref')[1])
         props = {str(kilib.get(p, 'name')[1]) for p in kilib.find(c, 'property')}
@@ -78,8 +81,15 @@ def main():
         for f in kilib.find(fl, 'field') if fl else []:
             fields[str(kilib.get(f, 'name')[1])] = str(f[-1]) if isinstance(f[-1], str) else ''
         fp = str(kilib.get(c, 'footprint')[1]).split(':')[1]
-        key = (fields.get('LCSC', ''), str(kilib.get(c, 'value')[1]), fp)
-        groups.setdefault(key, {'refs': [], 'mpn': fields.get('MPN', ''), 'mfr': fields.get('Mfr', '')})['refs'].append(ref)
+        # one line per part number: JLC's BOM import wants each LCSC code once (BOOT and RESET share a switch)
+        val = str(kilib.get(c, 'value')[1])
+        key = (fields.get('LCSC', '') or fields.get('MPN', '') or val, fp)
+        g = (hand if ref in HAND else groups).setdefault(
+            key, {'refs': [], 'vals': [], 'lcsc': fields.get('LCSC', ''), 'mpn': fields.get('MPN', ''),
+                  'mfr': fields.get('Mfr', '')})
+        g['refs'].append(ref)
+        if val not in g['vals']:
+            g['vals'].append(val)
     os.remove(net)
 
     def sortkey(r):
@@ -90,10 +100,19 @@ def main():
     with open(os.path.join(FAB, NAME + '-bom.csv'), 'w', newline='') as f:
         w = csv.writer(f)
         w.writerow(['Comment', 'Designator', 'Footprint', 'LCSC Part #', 'Manufacturer', 'MPN', 'Quantity'])
-        for (lcsc, val, fp), d in sorted(groups.items(), key=lambda kv: sortkey(sorted(kv[1]['refs'], key=sortkey)[0])):
+        for (_, fp), d in sorted(groups.items(), key=lambda kv: sortkey(sorted(kv[1]['refs'], key=sortkey)[0])):
             refs = sorted(d['refs'], key=sortkey)
-            w.writerow([val, ','.join(refs), fp, lcsc, d['mfr'], d['mpn'], len(refs)])
+            # plain ASCII: JLC's BOM import can reject a file with an ohm or micro sign in it
+            comment = ' / '.join(d['vals']).replace('Ω', 'ohm').replace('µ', 'u')
+            w.writerow([comment, ','.join(refs), fp, d['lcsc'], d['mfr'], d['mpn'], len(refs)])
     print(len(groups), 'BOM lines,', sum(len(d['refs']) for d in groups.values()), 'parts')
+    with open(os.path.join(FAB, NAME + '-hand.csv'), 'w', newline='') as f:
+        w = csv.writer(f)
+        w.writerow(['Designator', 'Part', 'Manufacturer', 'MPN', 'LCSC Part #', 'Footprint', 'Quantity'])
+        for (_, fp), d in sorted(hand.items(), key=lambda kv: sortkey(sorted(kv[1]['refs'], key=sortkey)[0])):
+            refs = sorted(d['refs'], key=sortkey)
+            w.writerow([','.join(refs), ' / '.join(d['vals']), d['mfr'], d['mpn'], d['lcsc'], fp, len(refs)])
+    print(len(hand), 'hand-soldered lines,', sum(len(d['refs']) for d in hand.values()), 'parts')
 
     run('sch', 'export', 'pdf', '-o', os.path.join(FAB, NAME + '-schematic.pdf'), SCH)
     for side in ('top', 'bottom'):

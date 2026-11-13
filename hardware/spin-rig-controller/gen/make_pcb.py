@@ -24,9 +24,8 @@ DSN = os.path.join(PROJ, 'gen', 'out', NAME + '.dsn')
 SES = os.path.join(PROJ, 'gen', 'out', NAME + '.ses')
 KFP = '/Applications/KiCad/KiCad.app/Contents/SharedSupport/footprints'
 
-W, H = 110.0, 80.0
+W, H = 67.0, 90.0
 OX, OY = 100.0, 100.0          # board origin in KiCad coordinates (mm)
-HOLES = [(3.5, 3.5), (W - 3.5, 3.5), (3.5, H - 3.5), (W - 3.5, H - 3.5)]
 
 
 def mm(v):
@@ -38,48 +37,77 @@ def pt(x, y):
 
 
 # ref: (x, y, rotation degrees CCW, side)   board coordinates, y down
+#
+# The board sits on the Pi 4B like a HAT, 67 x 90 mm. The Pi is turned so its USB/Ethernet end is past the bottom
+# edge (the HAT's 65 mm line is y = 90); its GPIO edge runs down x = 56 and its SD-card end is at y = 25, so a 25 mm
+# strip overhangs at the top and an 11 mm strip at the right (wide enough for a row of pin names between the Pi
+# socket's pads and the right-edge headers'). Its holes land at x 3.5/52.5, y 28.5/86.5, and pin 1
+# of its header at (56 - 4.77, 25 + 8.37). Side-entry connectors use the top, left and right edges, never the
+# bottom one, where the Pi's USB and Ethernet stand.
+U201_XY = (35.0, 59.0)
+U104_XY = (20.0, 79.0)
+
+
+def _near_u201(dx, dy):
+    return (U201_XY[0] + dx, U201_XY[1] + dy)
+
+
+def _near_u104(dx, dy):
+    return (U104_XY[0] + dx, U104_XY[1] + dy)
+
+
 FIXED = {
-    # power column: pack -> Q101 (tab up, leads down) -> VMAIN; shunt R102 -> VDRV -> J103
-    'J101': (6.0, 15.5, 90, 'F'), 'Q101': (17.0, 12.5, 90, 'F'), 'C101': (30.0, 12.0, 0, 'F'),
-    'C102': (40.5, 9.5, 0, 'F'), 'C103': (40.5, 13.5, 0, 'F'), 'D102': (27.0, 21.0, 0, 'F'),
-    'R102': (21.0, 27.0, 180, 'F'), 'U101': (14.0, 22.0, 0, 'F'), 'J103': (6.0, 33.0, 90, 'F'),
+    # pack in (top-left) -> Q101 (tab toward the XT60) -> VMAIN bulk and TVS; shunt R102 -> VDRV -> J103 (left)
+    'J101': (5.2, 16.65, 0, 'F'), 'Q101': (24.0, 14.5, 180, 'F'), 'C101': (35.8, 5.6, 0, 'F'),
+    'C102': (33.3, 15.0, 90, 'F'), 'C103': (36.8, 15.0, 90, 'F'), 'D102': (36.0, 21.8, 0, 'F'),
+    'U101': (15.0, 24.5, 0, 'F'), 'R102': (22.0, 29.5, 180, 'F'), 'J103': (8.3, 34.85, 270, 'F'),
+    'J203': (16.0, 38.5, 0, 'F'),     # Qwiic beside the INA238, the other I2C part
     # brake: resistor connector, freewheel diode and switch in a tight loop, with its own bus capacitor
-    'J102': (6.0, 47.0, 90, 'F'), 'Q102': (22.5, 46.0, 180, 'F'), 'D103': (14.8, 44.6, 270, 'F'),
-    'C123': (21.0, 41.0, 0, 'F'),
-    'U102': (33.0, 36.0, 0, 'F'), 'U103': (33.0, 43.0, 0, 'F'),
-    # 5 V buck, laid out per the TPS54560B guide: input caps by VIN, the catch diode's anode against their
-    # ground, its cathode and the inductor on a short switch node at pin 8
-    'F101': (9.0, 53.5, 270, 'F'), 'U104': (20.0, 62.0, 0, 'F'),
-    'C108': (14.6, 61.4, 90, 'F'), 'C109': (11.0, 61.4, 90, 'F'), 'C110': (7.4, 61.4, 90, 'F'),
-    'D105': (17.0, 55.6, 180, 'F'), 'L101': (31.0, 56.0, 0, 'F'),
-    'C115': (42.0, 53.2, 0, 'F'), 'C116': (42.0, 56.8, 0, 'F'), 'C117': (42.0, 60.4, 0, 'F'),
-    'F103': (101.0, 60.0, 90, 'F'), 'F102': (88.0, 68.5, 0, 'F'),
-    # connectors on the top and right edges
-    'J301': (59.75, 6.3, 0, 'F'), 'J302': (84.75, 6.3, 0, 'F'),
-    'J304': (104.5, 16.0, 90, 'F'), 'J303': (104.5, 31.0, 90, 'F'),
-    'J202': (106.0, 57.5, 0, 'F'), 'J203': (105.0, 45.0, 90, 'F'),
-    'J104': (90.0, 74.5, 180, 'F'), 'J201': (70.0, 74.1, 0, 'F'),
-    'SW201': (50.5, 76.0, 0, 'F'), 'SW202': (59.0, 76.0, 0, 'F'),
+    'J102': (4.55, 51.46, 90, 'F'), 'D103': (13.35, 49.06, 270, 'F'), 'Q102': (21.05, 50.46, 180, 'F'),
+    'C123': (19.55, 45.46, 0, 'F'), 'U102': (31.5, 36.0, 0, 'F'), 'U103': (31.5, 42.0, 0, 'F'),
+    'F101': (13.5, 56.6, 0, 'F'),
+    # 5 V buck along the bottom, laid out per the TPS54560B guide: input caps by VIN, the catch diode's anode
+    # against their ground, its cathode and the inductor on a short switch node at pin 8
+    'U104': U104_XY + (0, 'F'),
+    # its small parts at the offsets the pre-routed BOOT/EN/RT nets below were laid against
+    'C112': _near_u104(-6.0, 3.0) + (0, 'F'), 'R113': _near_u104(-3.5, 4.75) + (90, 'F'),
+    'R114': _near_u104(-1.0, 6.0) + (0, 'F'), 'R115': _near_u104(-5.25, 5.5) + (90, 'F'),
+    'R124': _near_u104(-8.25, 3.5) + (90, 'F'), 'C111': _near_u104(-1.25, 4.25) + (0, 'F'),
+    'C108': (14.6, 78.4, 90, 'F'), 'C109': (11.0, 78.4, 90, 'F'), 'C110': (7.4, 78.4, 90, 'F'),
+    'D105': (17.0, 72.6, 180, 'F'), 'L101': (31.0, 73.0, 0, 'F'),
+    'C115': (42.0, 70.2, 0, 'F'), 'C116': (42.0, 73.8, 0, 'F'), 'C117': (42.0, 77.4, 0, 'F'),
+    'F103': (46.5, 66.0, 90, 'F'), 'F102': (38.5, 82.5, 0, 'F'), 'J104': (35.5, 86.4, 0, 'F'),
+    # driver connectors: control down the right edge, encoder-out along the top, encoder-in down the right (the
+    # pass-through nests round the top-right corner); 3.5 mm headers with their faces 0.3 mm inside the edge
+    # (J305 stops 1.3 mm short of the right edge and J302 starts 1 mm below it, so J305's pin names fit; the
+    # right-edge courtyards touch, to fit in 90 mm)
+    'J305': (62.6, 8.3, 180, 'F'), 'J302': (58.7, 32.15, 90, 'F'), 'J301': (58.7, 66.25, 90, 'F'),
+    'J304': (63.3, 75.85, 90, 'F'), 'J303': (63.3, 86.84, 90, 'F'),
+    # the Pi: its socket on the underside (the HAT template's footprint and side, turned with the Pi) and holes
+    'J202': (51.23, 33.37, 180, 'B'), 'H7': (3.5, 28.5, 0, 'F'), 'H5': (52.5, 28.5, 0, 'F'),
+    'H3': (3.5, 86.5, 0, 'F'), 'H6': (52.5, 86.5, 0, 'F'),
+    # USB-C on the left edge beside the ESP32; the buttons between it and the brake
+    'J201': (6.5, 62.5, 270, 'F'), 'SW201': (15.2, 64.5, 0, 'F'), 'SW202': (23.0, 64.5, 0, 'F'),
     # logic
-    'U201': (72.0, 44.0, 0, 'F'), 'U301': (60.0, 18.0, 0, 'F'), 'U302': (85.0, 18.0, 90, 'F'),
-    'Y201': (68.2, 35.8, 90, 'F'), 'L201': (68.0, 38.4, 0, 'F'), 'C202': (70.3, 36.0, 90, 'F'),
-    'C201': (66.0, 34.4, 180, 'F'),
-    'U303': (97.0, 31.0, 90, 'F'), 'U304': (96.0, 20.0, 90, 'F'),
-    'H1': HOLES[0] + (0, 'F'), 'H2': HOLES[1] + (0, 'F'), 'H3': HOLES[2] + (0, 'F'), 'H4': HOLES[3] + (0, 'F'),
-    'FID1': (10.0, 3.0, 0, 'F'), 'FID2': (100.0, 66.0, 0, 'F'), 'FID3': (3.0, 58.0, 0, 'F'),
+    'U201': U201_XY + (0, 'F'), 'Y201': _near_u201(-3.8, -8.2) + (90, 'F'), 'L201': _near_u201(-4.0, -5.6) + (0, 'F'),
+    'C202': _near_u201(-1.7, -8.0) + (90, 'F'), 'C201': _near_u201(-6.0, -9.6) + (180, 'F'),
+    'U301': (44.5, 46.0, 90, 'F'), 'U302': (48.0, 17.0, 90, 'F'),
+    'U304': (45.0, 55.0, 90, 'F'), 'U303': (45.0, 60.0, 90, 'F'),
+    # two test pads in the top edge's free gap (the logic's surroundings are full)
+    'TP205': (20.0, 3.5, 0, 'F'), 'TP305': (24.0, 3.5, 0, 'F'),
 }
 
 # small parts that sit by a particular pad (otherwise: the nearest pad they share a signal net with)
 ANCHOR = {
     'C104': ('U101', '6'), 'R103': ('U101', '3'), 'C106': ('U102', '6'), 'C107': ('U103', '1'),
-    'C111': ('U104', '2'), 'C112': ('U104', '1'), 'C301': ('U301', '20'), 'C304': ('U302', '16'),
+    'C301': ('U301', '20'), 'C304': ('U302', '16'),
     'C306': ('U303', '5'), 'C307': ('U304', '8'),
     'C204': ('U201', '2'), 'C205': ('U201', '3'), 'C206': ('U201', '20'), 'C208': ('U201', '46'),
     'C209': ('U201', '55'), 'C210': ('U201', '56'), 'C211': ('U201', '29'), 'C207': ('U201', '29'),
     'U105': ('U201', '20'), 'D107': ('U105', '1'), 'D108': ('J201', 'A4/B9'), 'C118': ('U105', '1'),
     'C119': ('U105', '5'), 'C120': ('U105', '5'), 'C212': ('J201', 'B4/A9'), 'CR201': ('J201', 'A6'),
     'R204': ('J201', 'A5'), 'R205': ('J201', 'B5'), 'R206': ('J201', 'A6'), 'R207': ('J201', 'A7'),
-    'R211': ('J202', '4'), 'R212': ('J202', '5'),
+    'R211': ('J202', '8'), 'R212': ('J202', '10'),
     'R213': ('J203', '3'), 'R214': ('J203', '4'),
     'R119': ('C117', '1'), 'D106': ('C117', '1'),
     'R120': ('U101', '8'), 'R121': ('U101', '8'), 'C121': ('U101', '8'),
@@ -91,22 +119,27 @@ ANCHOR = {
     'R208': ('SW202', '1'), 'D201': ('SW202', '1'), 'R209': ('SW202', '1'), 'D202': ('SW202', '1'),
     'R210': ('SW202', '1'), 'D203': ('SW202', '1'),
     'TP201': ('U201', '49'), 'TP202': ('U201', '50'), 'TP203': ('U105', '5'), 'TP204': ('C116', '1'),
-    'TP205': ('U201', '57'), 'TP206': ('U104', '9'), 'TP306': ('J301', '2'), 'TP301': ('J301', '1'), 'TP302': ('J304', '1'),
-    'TP303': ('U302', '3'), 'TP304': ('J304', '3'), 'TP305': ('U303', '4'),
+    'TP206': ('U104', '9'), 'TP306': ('U301', '10'), 'TP301': ('J301', '1'), 'TP302': ('J304', '1'),
+    'TP303': ('U302', '3'), 'TP304': ('J304', '3'), 
     'R317': ('J303', '3'), 'R318': ('J303', '2'), 'R319': ('U303', '2'), 'C305': ('U303', '2'),
     'R324': ('J304', '1'), 'R325': ('J304', '1'), 'R320': ('U304', '6'), 'R321': ('U304', '3'),
     'R322': ('U304', '1'), 'R323': ('U304', '7'),
+    # ALM and BRK: the pull-ups, series resistors and filter caps sit at the ESP32's end of the run
+    'R309': ('U201', '6'), 'R310': ('U201', '6'), 'C302': ('U201', '6'),
+    'R311': ('U201', '7'), 'R312': ('U201', '7'), 'C303': ('U201', '7'),
 }
 
 MOTOR_POURS = {}
 POUR_NETS = ('VPACK', 'VMAIN', 'VDRV', 'BRAKE_SW', 'BUCK_SW', 'VMAIN_F', '+5V', '+5V_PI', '+5V_AUX')
 
-# In2 planes (board coordinates). 5 V: the bottom band plus branches up to the clamp, the driver buffer and the
-# index connector. 3.3 V: an island under the ESP32. Everything else on In2 is free for signals.
-IN2_5V = [(0.3, 50.0), (47.0, 50.0), (47.0, 56.0), (W - 0.3, 56.0), (W - 0.3, H - 0.3), (0.3, H - 0.3)]  # band
-IN2_3V3 = (58.0, 27.0, 92.0, 55.0)                                          # poured after routing
-# 5 V feeders: pre-routed In2 tracks from the band up to a via by each 5 V cluster outside it
-FEED_5V = [(36.5, 39.5), (64.5, 12.8), (100.5, 27.0)]
+# In2: a 5 V plane under the buck along the bottom; the rest of In2 carries signals. The keep-out (no In2 tracks)
+# starts 1.5 mm inside the plane, so the feeders end in copper without entering it.
+IN2_5V = [(0.3, 68.0), (48.6, 68.0), (48.6, H - 0.3), (0.3, H - 0.3)]
+KEEPOUT_5V = [(0.3, 69.5), (47.1, 69.5), (47.1, H - 0.3), (0.3, H - 0.3)]
+# 5 V feeders: (via x, y, end x, end y), pre-routed In2 tracks from a via by a 5 V load down into the plane
+FEED_5V = []          # the router reaches the few 5 V loads outside the plane
+# the Pi feed's waypoints from F103 to the socket's pin 2 (then pin 4): up the column's left side, over its top end
+PI_FEED = [(49.0, 62.1), (49.0, 31.2), (53.77, 31.2)]
 
 
 def load_netlist():
@@ -176,6 +209,7 @@ def build():
     board = pcbnew.LoadBoard(PCB)
     board.SetCopperLayerCount(4)
     board.SetLayerType(pcbnew.In1_Cu, pcbnew.LT_POWER)   # the router treats it as the GND plane, no wiring
+    board.GetTitleBlock().SetRevision('V1')     # the silkscreen's ${REVISION}; tools/plot_gerbers.sh reads it here
 
     netinfo = {}
     for nm in nets:
@@ -300,14 +334,14 @@ def build():
     ys = [p2[1], p3[1], u10[1], u7[1], gv[1]]
     occ.append(('sense', (min(xs) - 0.4, min(ys) - 0.5, max(xs) + 0.5, max(ys) + 0.6)))
     occ.append(('stubs', (min(p1[0], p4[0]) - 2.6, p1[1] - 0.9, max(p1[0], p4[0]) + 2.6, p1[1] + 0.9)))
-    j = pad_pos('J103', '2')
+    j = pad_pos('J103', '1')       # VDRV
     vd0 = (p4[0] - 2.0 * out, p4[1])
     track('VDRV', [vd0, (j[0] + 1.6, vd0[1]), (j[0], vd0[1] + 1.6), j], 1.5)
     occ.append(('vdrv', (j[0] - 1.5, vd0[1] - 1.0, vd0[0] + 0.5, j[1] + 1.0)))
 
     # USB-C: the two D+ pads and the two D- pads interleave at 0.5 mm. D- joins on F.Cu in a loop behind
     # the row; D+ drops through two 0.45/0.25 mm vias and joins on B.Cu. The router takes it from there.
-    def via(net, xy, d=0.45, drill=0.25):
+    def via(net, xy, d=0.45, drill=0.3):     # 0.45 / 0.30: JLC's standard multilayer via, no small-hole fee
         v = pcbnew.PCB_VIA(board)
         v.SetPosition(pt(*xy))
         v.SetWidth(mm(d))
@@ -317,20 +351,27 @@ def build():
         board.Add(v)
 
     a6, b6, a7, b7 = (pad_pos('J201', n) for n in ('A6', 'B6', 'A7', 'B7'))
-    edge = a6[1] - 0.575                      # inner edge of the pad row
-    yv = edge - 0.9                           # D+ vias
-    yl = yv - 0.95                            # D- loop
-    track('USB_DN', [a7, (a7[0], yl), (b7[0], yl), b7], 0.2)
-    track('USB_DP', [a6, (a6[0], yv)], 0.2)
-    track('USB_DP', [b6, (b6[0], yv)], 0.2)
-    via('USB_DP', (a6[0], yv))
-    via('USB_DP', (b6[0], yv))
-    track('USB_DP', [(a6[0], yv), (b6[0], yv)], 0.2, 'B.Cu')
-    occ.append(('usb', (b7[0] - 0.5, yl - 0.4, b6[0] + 0.5, edge)))
+    # worked in the connector's frame: n points from the pad row into the board, whichever edge J201 is on
+    th = math.radians(fps['J201'].GetOrientationDegrees())
+    n_ = (-math.sin(th), -math.cos(th))         # (0, -1) turned with the footprint
+
+    def inward(p, d):
+        return (p[0] + n_[0] * d, p[1] + n_[1] * d)
+    a6v, b6v = inward(a6, 0.575 + 0.9), inward(b6, 0.575 + 0.9)       # D+ vias, 0.9 mm in from the row
+    a7l, b7l = inward(a7, 0.575 + 0.9 + 0.95), inward(b7, 0.575 + 0.9 + 0.95)   # D- loop behind them
+    track('USB_DN', [a7, a7l, b7l, b7], 0.2)
+    track('USB_DP', [a6, a6v], 0.2)
+    track('USB_DP', [b6, b6v], 0.2)
+    via('USB_DP', a6v)
+    via('USB_DP', b6v)
+    track('USB_DP', [a6v, b6v], 0.2, 'B.Cu')
+    ux_ = [q[0] for q in (a6, b6, a7, b7, a7l, b7l)]
+    uy_ = [q[1] for q in (a6, b6, a7, b7, a7l, b7l)]
+    occ.append(('usb', (min(ux_) - 0.5, min(uy_) - 0.5, max(ux_) + 0.5, max(uy_) + 0.5)))
     via('GND', gv, 0.6, 0.3)
-    for fx, fy in FEED_5V:
+    for fx, fy, ex, ey in FEED_5V:
         via('+5V', (fx, fy), 0.6, 0.3)
-        track('+5V', [(fx, fy), (fx, (50.8 if fx < 47.0 else 56.8))], 0.5, 'In2.Cu')
+        track('+5V', [(fx, fy), (ex, ey)], 0.5, 'In2.Cu')
         occ.append(('feed', (fx - 0.8, fy - 0.8, fx + 0.8, fy + 0.8)))
 
     # VMAIN trunk on F.Cu: from the shunt's force stub down past J103 to the brake (J102, D103, C123)
@@ -338,12 +379,12 @@ def build():
     jb = pad_pos('J102', '2')
     dk = pad_pos('D103', '1')
     cb = pad_pos('C123', '1')
-    ty = 38.2
-    track('VMAIN', [s_end, (25.3, s_end[1]), (25.3, ty), (jb[0], ty), jb], 1.5)
+    tx, ty = s_end[0] + 1.39, jb[1] - 4.84    # down 1.4 mm right of the stub, across 4.8 mm above J102's VMAIN pin
+    track('VMAIN', [s_end, (tx, s_end[1]), (tx, ty), (jb[0], ty), jb], 1.5)
     track('VMAIN', [(dk[0], ty), dk], 1.5)
     track('VMAIN', [(cb[0], ty), cb], 1.0)
-    occ.append(('trunk', (24.4, s_end[1] - 0.9, 26.2, ty + 0.9)))
-    occ.append(('trunk', (jb[0] - 0.9, ty - 0.9, 26.2, ty + 0.9)))
+    occ.append(('trunk', (tx - 0.9, s_end[1] - 0.9, tx + 0.9, ty + 0.9)))
+    occ.append(('trunk', (jb[0] - 0.9, ty - 0.9, tx + 0.9, ty + 0.9)))
 
     # buck switch node: pin 8 straight up, then to the diode's cathode and the inductor
     sw = pad_pos('U104', '8')
@@ -375,13 +416,14 @@ def build():
         via('+5V', (f2[0] + dx, f2[1] + dy), 0.6, 0.3)
         track('+5V', [f2, (f2[0] + dx, f2[1] + dy)], 0.8)
     occ.append(('f102', (f2[0] - 2.0, f2[1] - 1.7, f2[0], f2[1] + 1.7)))
-    # Pi feed: F103 to J202 pins 1 and 2, 1.5 mm
+    # Pi feed: F103 to the Pi socket's pins 2 and 4 (its 5 V), 2 mm on F.Cu, by the PI_FEED waypoints
     f3b = pad_pos('F103', '2')
-    j1 = pad_pos('J202', '1')
+    j4 = pad_pos('J202', '4')
     j2 = pad_pos('J202', '2')
-    track('+5V_PI', [f3b, (j1[0] - 2.0, f3b[1]), (j1[0] - 2.0, j1[1]), j1], 1.5)
-    track('+5V_PI', [j1, j2], 1.5)
-    occ.append(('pi', (f3b[0] - 0.8, j1[1] - 0.8, j1[0], f3b[1] + 0.8)))
+    feed = [f3b] + PI_FEED + [j2, j4]
+    track('+5V_PI', feed, 2.0)
+    for a, c in zip(feed, feed[1:]):
+        occ.append(('pi', (min(a[0], c[0]) - 1.3, min(a[1], c[1]) - 1.3, max(a[0], c[0]) + 1.3, max(a[1], c[1]) + 1.3)))
 
     # ESP32-S3: four ground vias in the corners of the ring between its center pad and its pins
     u = fps['U201'].GetPosition()
@@ -398,10 +440,12 @@ def build():
     y3p = pad_pos('Y201', '3')
     l2a = pad_pos('L201', '2')
     l1a = pad_pos('L201', '1')
-    track('XTAL_N', [p53, (p53[0], 37.4), (y1p[0], 37.4), y1p], 0.2)
+    ux0, uy0 = pcbnew.ToMM(fps['U201'].GetPosition().x) - OX, pcbnew.ToMM(fps['U201'].GetPosition().y) - OY
+    xn_y = uy0 - 6.6                          # XTAL_N's run, 6.6 mm above the ESP32's centre
+    track('XTAL_N', [p53, (p53[0], xn_y), (y1p[0], xn_y), y1p], 0.2)
     track('XTAL_P', [p54, (p54[0], l2a[1]), l2a], 0.2)
     track('XTAL_P_L', [l1a, (l1a[0] - 0.7, l1a[1]), (l1a[0] - 0.7, y3p[1]), y3p], 0.2)
-    occ.append(('xtal', (l1a[0] - 1.1, 34.0, p53[0] + 0.5, 39.9)))
+    occ.append(('xtal', (l1a[0] - 1.1, uy0 - 10.0, p53[0] + 0.5, uy0 - 4.1)))
     # its load caps and ground: each ground pad gets its own via
     c2x = pad_pos('C202', '1')
     c2g = pad_pos('C202', '2')
@@ -409,13 +453,51 @@ def build():
     c1g = pad_pos('C201', '2')
     y2g = pad_pos('Y201', '2')
     y4g = pad_pos('Y201', '4')
-    track('XTAL_N', [c2x, (c2x[0], 37.4)], 0.2)
+    track('XTAL_N', [c2x, (c2x[0], xn_y)], 0.2)
     track('XTAL_P_L', [c1x, (l1a[0] - 0.7, c1x[1]), (l1a[0] - 0.7, y3p[1])], 0.2)
     for g, vxy in ((y4g, (y4g[0], y4g[1] + 0.95)), (y2g, (y2g[0] + 0.95, y2g[1] - 0.8)), (c2g, (c2g[0] + 0.9, c2g[1] - 0.4)),
                    (c1g, (c1g[0], c1g[1] - 0.9))):
         via('GND', vxy, 0.6, 0.3)
         track('GND', [g, vxy], 0.3)
-    occ.append(('xtal2', (c1g[0] - 1.4, 33.3, c2g[0] + 1.4, 37.0)))
+    occ.append(('xtal2', (c1g[0] - 1.4, uy0 - 10.7, c2g[0] + 1.4, uy0 - 7.0)))
+
+    # The buck's small nets, as they closed cleanly before (the router left them open twice): BUCK_RT down the
+    # pocket inside BUCK_EN; BUCK_EN's two halves (pin 3 to R124, R113 to R114) joined by a B.Cu hop; BUCK_BOOT
+    # west between the input caps' pad rows, under BUCK_EN's via on B.Cu, and up into C112. Laid out for U104 at
+    # (20, 62); shifted with it.
+    bx, by = U104_XY[0] - 20.0, U104_XY[1] - 62.0
+
+    def bk(*p_):
+        return [(x + bx, y + by) for x, y in p_]
+    track('BUCK_RT', bk((17.44, 63.91), (15.45, 65.89), (15.45, 67.31), (14.75, 68.01)), 0.2)
+    track('BUCK_EN', bk((17.44, 62.63), (17.25, 62.63), (15.46, 64.42), (12.32, 64.42), (11.75, 64.99)), 0.2)
+    track('BUCK_EN', bk((16.5, 66.24), (15.92, 66.82), (15.92, 67.6), (16.32, 68.0), (18.49, 68.0)), 0.2)
+    via('BUCK_EN', bk((17.4, 68.0))[0], 0.6, 0.3)
+    track('BUCK_EN', bk((17.4, 68.0), (12.6, 64.42)), 0.2, 'B.Cu')
+    via('BUCK_EN', bk((12.6, 64.42))[0], 0.6, 0.3)
+    track('BUCK_BOOT', bk((17.44, 60.09), (16.72, 60.81), (13.0, 60.81), (12.6, 61.21), (12.6, 61.6)), 0.2)
+    via('BUCK_BOOT', bk((12.6, 61.6))[0], 0.6, 0.3)
+    track('BUCK_BOOT', bk((12.6, 61.6), (11.9, 62.3), (11.9, 65.2), (13.0, 65.9)), 0.2, 'B.Cu')
+    via('BUCK_BOOT', bk((13.0, 65.9))[0], 0.6, 0.3)
+    track('BUCK_BOOT', bk((13.0, 65.9), (13.52, 65.38), (13.52, 65.0)), 0.2)
+    occ.append(('buck', (bx + 11.0, by + 59.8, bx + 18.8, by + 68.6)))
+
+    # The ESP32's bottom pins 15-18 sit in a pocket closed by the 3.3 V feed from pin 20: fan them out to vias
+    # (the router left LED_STAT boxed in twice) and neck pin 20's escape to 0.25 mm. Laid out for U201 at (72, 44).
+    ex, ey = U201_XY[0] - 72.0, U201_XY[1] - 44.0
+
+    def es(*p_):
+        return [(x + ex, y + ey) for x, y in p_]
+    track('V5_SENSE', es((69.4, 47.43), (69.4, 48.0), (68.97, 48.0), (68.44, 47.47)), 0.2)
+    via('V5_SENSE', es((68.44, 47.47))[0], 0.6, 0.3)
+    track('LED_FAULT', es((69.8, 47.43), (69.8, 48.93), (69.64, 49.09)), 0.2)
+    via('LED_FAULT', es((69.64, 49.09))[0], 0.6, 0.3)
+    track('LED_STAT', es((70.2, 47.43), (70.2, 50.1)), 0.2)
+    via('LED_STAT', es((70.2, 50.1))[0], 0.6, 0.3)
+    track('PI_TX', es((70.6, 47.43), (70.6, 48.4), (70.8, 48.6), (70.8, 48.9)), 0.2)
+    via('PI_TX', es((70.8, 48.9))[0], 0.6, 0.3)
+    track('+3V3', es((71.4, 47.43), (71.4, 50.87)), 0.25)
+    occ.append(('esp-fan', (ex + 67.9, ey + 47.0, ex + 71.8, ey + 51.2)))
 
 
     rings = []
@@ -527,13 +609,12 @@ def build():
 
     zone('+5V', 'In2.Cu', IN2_5V, 1)
     # the keep-out starts 1 mm into the plane, so the feeders (which end at 56.8) touch copper without entering it
-    keepout([(0.3, 51.5), (45.5, 51.5), (45.5, 57.5), (W - 0.3, 57.5), (W - 0.3, H - 0.3), (0.3, H - 0.3)],
-            '5V plane: no tracks on In2')
+    keepout(KEEPOUT_5V, '5V plane: no tracks on In2')
     for net, polys in MOTOR_POURS.items():
         for layer, poly in polys:
             zone(net, layer, poly, 2, 0.3, thermal=False, minw=0.5)
 
-    for ref in ('FID1', 'FID2', 'FID3'):
+    for ref in [r for r in fps if r.startswith('FID')]:
         c = fps[ref].GetPosition()
         ka = pcbnew.ZONE(board)
         ka.SetIsRuleArea(True)
@@ -553,7 +634,7 @@ def build():
 
     silk = pcbnew.PCB_TEXT(board)
     silk.SetText('SPIN RIG CONTROLLER ${REVISION}')
-    silk.SetPosition(pt(80.0, 66.0))
+    silk.SetPosition(pt(W / 2, H / 2))      # silk.py moves it to where it fits
     silk.SetLayer(pcbnew.F_SilkS)
     silk.SetTextSize(pcbnew.VECTOR2I(mm(1.5), mm(1.5)))
     silk.SetTextThickness(mm(0.25))
