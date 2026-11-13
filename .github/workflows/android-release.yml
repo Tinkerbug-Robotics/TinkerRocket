@@ -59,6 +59,11 @@ jobs:
       - name: Every declared @Test ran
         run: python3 tools/check_android_tests_ran.py
 
+      # The same gate again: a Java API above minSdk compiles in the JVM
+      # modules and crashes the app on an older phone (#1612).
+      - name: No API above minSdk
+        run: python3 tools/check_android_api_level.py
+
       - name: Decode release keystore
         env:
           TR_ANDROID_KEYSTORE_B64: ${{ secrets.TR_ANDROID_KEYSTORE_B64 }}
