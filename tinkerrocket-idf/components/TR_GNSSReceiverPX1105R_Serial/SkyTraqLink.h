@@ -28,9 +28,20 @@
 //   0x0C      power normal (it ships in power save, which throttles the search)
 //   0x2B      elevation mask 5 deg (it ships at 15)
 // Then each is read back where the receiver can say (0x10, 0x1F, 0x64/0x18,
-// 0x15), and the link runs only once 0xE5 arrives at the period asked for. A
-// readback that disagrees sets the whole setup up again (twice at most, then
-// the link runs with what it has and says so).
+// 0x15), and the link runs once 0xDF arrives: the receiver's state, which an
+// RTK base sends every epoch whether or not it tracks anything (the rig,
+// 2026-11-01). A readback that disagrees, or no 0xDF, sets the whole setup up
+// again (twice at most, then the link runs with what it has and says so).
+//
+// Once per power-up: the setup restarts the receiver (the rig's tools lose the
+// 0x0E ACK while it does), so its search starts over each time. 0xE5 comes only
+// while it tracks satellites -- none on a cold start until it has found them --
+// so a missing 0xE5 is not a lost setup, and the link never sets the receiver
+// up again for it (V10 board 1 by a window, 2026-11-13: set up every ~10 s for
+// that, it tracked 0-1 satellites in 13 min). Only silence does that: a reset
+// takes the receiver back to its factory baud. And a receiver found already
+// set up at the target baud (the FC rebooted alone) is read back first and,
+// when it agrees, left alone: no command, no restart.
 //
 // Commands go one at a time: the receiver answers slowly after a change (its
 // ACKs come up to ~1-2 s late on the bench, 2026-10-11), and a command sent
@@ -57,9 +68,8 @@ struct LinkConfig
     uint32_t switch_ms     = 300;    // after 0x05: let the ACK and the switch finish
     uint32_t reply_ms      = 2500;   // an ACK or a query's reply
     uint8_t  retries       = 2;      // re-sends of an unanswered command
-    uint32_t stream_ms     = 5000;   // after the setup: 0xE5 at the period within this
+    uint32_t stream_ms     = 5000;   // after the setup: 0xDF within this
     uint32_t silence_ms    = 3000;   // running with no frame this long: find the receiver again
-    uint32_t no_raw_ms     = 4000;   // running with frames but no 0xE5 this long: set it up again
     uint8_t  max_setups    = 3;      // setups in a row before the link runs with what it has
 };
 
@@ -69,8 +79,8 @@ enum class LinkState : uint8_t
     SWITCH_BAUD,   // 0x05 sent; waiting out the switch
     VERIFY_BAUD,   // at the target baud, waiting for a frame
     CONFIGURE,     // the setup commands
-    CHECK,         // the readbacks
-    STREAM,        // waiting for 0xE5 at the period
+    CHECK,         // the readbacks (after the setup, or before it at the target baud)
+    STREAM,        // waiting for 0xDF
     RUNNING,       // set up; watching for silence
 };
 
@@ -111,7 +121,7 @@ public:
     bool        foundNmea() const { return found_nmea_; }   //   talking NMEA (a fresh power-up)
     uint32_t    setups() const { return setups_; }          // times the setup finished
     uint32_t    relinks() const { return relinks_; }        // times a running link went silent
-    uint32_t    reconfigs() const { return reconfigs_; }    // times a running link lost its 0xE5
+    bool        leftAlone() const { return left_alone_; }   // the last found already set up: no command sent
     uint32_t    refused() const { return refused_; }        // commands NACKed or unanswered, last setup
     uint32_t    checksFailed() const { return checks_failed_; }   // readbacks that disagreed, last setup
     bool        degraded() const { return degraded_; }      // running without the whole setup
@@ -165,16 +175,17 @@ private:
     bool       got_nack_ = false;
 
     int        query_ = 0;              // CHECK: which readback
+    bool       precheck_ = false;       // CHECK before any command: found at the target baud
+    bool       left_alone_ = false;
     bool       got_reply_ = false;
     bool       reply_ok_ = false;
     uint8_t    setups_in_row_ = 0;
 
     uint32_t   last_frame_ms_ = 0;
-    uint32_t   last_raw_ms_ = 0;
     uint16_t   raw_period_ms_ = 0;
-    uint8_t    raw_ok_in_row_ = 0;
+    uint8_t    states_seen_ = 0;        // STREAM: 0xDF since the setup
 
-    uint32_t   setups_ = 0, relinks_ = 0, reconfigs_ = 0, refused_ = 0, checks_failed_ = 0;
+    uint32_t   setups_ = 0, relinks_ = 0, refused_ = 0, checks_failed_ = 0;
     bool       degraded_ = false;
     char       last_failure_[48] = {};
     char       version_[40] = {};   // the longest a version can print to (three bytes a field)

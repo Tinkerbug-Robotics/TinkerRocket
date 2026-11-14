@@ -3,8 +3,10 @@
 // already set up at 921600 (the FC rebooted alone), refusing a command, or
 // resetting while the link runs. The simulated receiver answers each command
 // the way the rig's tools saw the PX1105R answer (ACK per command, the
-// readbacks' replies), 300 ms late, and streams 0xE5 at its position rate once
-// it is an RTK base with the raw output on.
+// readbacks' replies), 300 ms late, and once it is an RTK base sends 0xDF at its
+// position rate, with 0xE5 when the raw output is on and it tracks satellites
+// (none on a cold start until it finds them). Each setup restarts the real
+// receiver's search, so the link sets it up once per power-up.
 #include <gtest/gtest.h>
 
 #include <cstring>
@@ -30,6 +32,9 @@ struct FakeRx
     uint8_t  nav_mode = 0;
     uint8_t  power = 1;         // ships in power save
     bool     nack_nav = false;  // refuse 0x64/0x17
+    bool     sky = true;        // tracking satellites: 0xE5 comes
+    bool     fake_base = false; // ACKs 0x6A/0x06 but stays a rover (NMEA, no binary)
+    int      base_sets = 0;     // 0x6A/0x06 received: setups (each a restart of the real one)
     bool     dead = false;
     uint32_t ack_delay_ms = 300;
     struct Out { uint32_t at; std::vector<uint8_t> body; };
@@ -61,7 +66,7 @@ struct FakeRx
             pending_at = now + 100;
             break;
         case 0x6A:
-            if (len >= 2 && b[1] == 0x06) { base = b[2] == 1; ack(now, 0x6A, 0x06); }
+            if (len >= 2 && b[1] == 0x06) { base = b[2] == 1 && !fake_base; base_sets++; ack(now, 0x6A, 0x06); }
             break;
         case 0x1E:
             rate_code = b[1]; ext_raw = b[7] == 1; subframes = b[6]; ack(now, 0x1E);
@@ -128,7 +133,7 @@ struct Bench
             {
                 uint8_t df[81] = {MSG_RCV_STATE};
                 link.onFrame(df, sizeof df, now);
-                if (rx.ext_raw)
+                if (rx.ext_raw && rx.sky)
                 {
                     uint8_t e5[14] = {MSG_EXT_RAW, 1, 0, 0x09, 0x85, 0, 0, 0, 0,
                                       static_cast<uint8_t>(period >> 8), static_cast<uint8_t>(period & 0xFF), 0, 0, 0};
@@ -181,20 +186,60 @@ TEST(SkyTraqLink, SetsUpAFactoryReceiverTalkingNmea)
     EXPECT_STREQ(b.link.version(), "3.6.0 1.7.33 230831");
 }
 
-TEST(SkyTraqLink, FindsAReceiverAlreadySetUpAtTheTargetBaud)
+// the FC rebooted alone: the receiver as the link left it
+void setUp(FakeRx& rx)
+{
+    rx.baud = 921600;
+    rx.base = true;
+    rx.ext_raw = true;
+    rx.rate_code = 5;
+    rx.pos_rate = 20;
+    rx.subframes = 0x0D;
+    rx.nav_mode = 5;
+    rx.power = 0;
+}
+
+TEST(SkyTraqLink, LeavesAReceiverAlreadySetUpAlone)
 {
     Bench b;
-    b.rx.baud = 921600;
-    b.rx.base = true;
-    b.rx.ext_raw = true;
-    b.rx.rate_code = 5;
-    b.rx.pos_rate = 20;
+    setUp(b.rx);
     b.link.start(LinkConfig{}, b.now);
     const uint32_t t0 = b.now;
     ASSERT_TRUE(b.runUntilRunning(30000));
     EXPECT_EQ(b.link.foundBaud(), 921600u);
     EXPECT_FALSE(b.link.foundNmea());
-    EXPECT_LT(b.now - t0, 8000u);   // no baud search: the setup and its readbacks only
+    EXPECT_TRUE(b.link.leftAlone());
+    EXPECT_EQ(b.rx.base_sets, 0);   // read back only: no command, so no restart
+    EXPECT_FALSE(b.link.degraded());
+    EXPECT_LT(b.now - t0, 5000u);   // no baud search, no setup: the readbacks only
+}
+
+TEST(SkyTraqLink, SetsUpAReceiverAtTheTargetBaudThatReadsBackOtherwise)
+{
+    Bench b;
+    setUp(b.rx);
+    b.rx.nav_mode = 0;   // set up by something else
+    b.link.start(LinkConfig{}, b.now);
+    ASSERT_TRUE(b.runUntilRunning(30000));
+    EXPECT_FALSE(b.link.leftAlone());
+    EXPECT_EQ(b.rx.base_sets, 1);
+    EXPECT_EQ(b.rx.nav_mode, 5);
+    EXPECT_FALSE(b.link.degraded());
+}
+
+TEST(SkyTraqLink, ATrackingReceiverIsLeftAloneAfterAnFcReboot)
+{
+    Bench b;
+    b.link.start(LinkConfig{}, b.now);
+    ASSERT_TRUE(b.runUntilRunning(30000));
+    ASSERT_EQ(b.rx.base_sets, 1);
+    b.runFor(2000);
+    // the FC restarts; the receiver, powered on, keeps its setup
+    b.link = SkyTraqLink{};
+    b.link.start(LinkConfig{}, b.now);
+    ASSERT_TRUE(b.runUntilRunning(30000));
+    EXPECT_TRUE(b.link.leftAlone());
+    EXPECT_EQ(b.rx.base_sets, 1);
 }
 
 TEST(SkyTraqLink, ARefusedCommandRunsDegraded)
@@ -226,16 +271,40 @@ TEST(SkyTraqLink, AReceiverResetWhileRunningIsSetUpAgain)
     EXPECT_EQ(b.rx.nav_mode, 5);
 }
 
-TEST(SkyTraqLink, AReceiverThatLosesItsRawOutputIsSetUpAgain)
+TEST(SkyTraqLink, AReceiverTrackingNothingIsSetUpOnce)
 {
+    // a cold start: 0xDF every epoch, no 0xE5 until satellites are found --
+    // set up again for that, the real receiver restarts its search each time
+    // and never finds them (V10 board 1, 2026-11-13)
     Bench b;
+    b.rx.sky = false;
     b.link.start(LinkConfig{}, b.now);
-    ASSERT_TRUE(b.runUntilRunning(30000));
-    b.rx.ext_raw = false;   // 0xDF still comes, 0xE5 not
-    b.runFor(5000);
-    EXPECT_EQ(b.link.reconfigs(), 1u);
-    ASSERT_TRUE(b.runUntilRunning(30000));
-    EXPECT_TRUE(b.rx.ext_raw);
+    ASSERT_TRUE(b.runUntilRunning(30000)) << b.link.lastFailure();
+    b.runFor(120000);
+    EXPECT_TRUE(b.link.running());
+    EXPECT_FALSE(b.link.degraded());
+    EXPECT_EQ(b.link.setups(), 1u);
+    EXPECT_EQ(b.link.relinks(), 0u);
+    EXPECT_EQ(b.rx.base_sets, 1);
+    b.rx.sky = true;   // found them
+    b.runFor(1000);
+    EXPECT_EQ(b.link.rawPeriodMs(), 50);
+    EXPECT_EQ(b.rx.base_sets, 1);
+}
+
+TEST(SkyTraqLink, NoStateAfterTheSetupSetsItUpAgainThenRunsDegraded)
+{
+    // ACKs and readbacks fine, but no 0xDF: not an RTK base after all
+    Bench b;
+    b.rx.fake_base = true;
+    b.link.start(LinkConfig{}, b.now);
+    ASSERT_TRUE(b.runUntilRunning(60000));
+    EXPECT_TRUE(b.link.degraded());
+    EXPECT_STREQ(b.link.lastFailure(), "no 0xDF after the setup");
+    EXPECT_EQ(b.rx.base_sets, 3);   // max_setups, then it runs with what it has
+    b.runFor(60000);
+    EXPECT_TRUE(b.link.running());
+    EXPECT_EQ(b.rx.base_sets, 3);
 }
 
 TEST(SkyTraqLink, ADeadReceiverKeepsTheLinkSearching)

@@ -166,7 +166,6 @@ void SkyTraqLink::start(const LinkConfig& cfg, uint32_t now_ms)
     setups_in_row_ = 0;
     degraded_ = false;
     last_frame_ms_ = now_ms;
-    last_raw_ms_ = now_ms;
     buildSetup();
     enterProbe(0, now_ms);
 }
@@ -204,6 +203,8 @@ void SkyTraqLink::enterVerify(uint32_t now_ms)
 void SkyTraqLink::enterConfigure(uint32_t now_ms)
 {
     state_ = LinkState::CONFIGURE;
+    precheck_ = false;
+    left_alone_ = false;
     refused_ = 0;
     checks_failed_ = 0;
     last_frame_ms_ = now_ms;
@@ -247,7 +248,7 @@ void SkyTraqLink::enterStream(uint32_t now_ms)
 {
     state_ = LinkState::STREAM;
     t0_ = now_ms;
-    raw_ok_in_row_ = 0;
+    states_seen_ = 0;
 }
 
 void SkyTraqLink::enterRunning(uint32_t now_ms)
@@ -255,7 +256,6 @@ void SkyTraqLink::enterRunning(uint32_t now_ms)
     state_ = LinkState::RUNNING;
     setups_++;
     last_frame_ms_ = now_ms;
-    last_raw_ms_ = now_ms;
 }
 
 bool SkyTraqLink::checkReply(const uint8_t* b, size_t len)
@@ -304,12 +304,12 @@ void SkyTraqLink::onFrame(const uint8_t* b, size_t len, uint32_t now_ms)
     if (b[0] == MSG_EXT_RAW && len >= 11)
     {
         raw_period_ms_ = be16(b + 9);
-        last_raw_ms_ = now_ms;
-        if (state_ == LinkState::STREAM)
-        {
-            const uint16_t want = static_cast<uint16_t>(1000 / (cfg_.rate_hz ? cfg_.rate_hz : 1));
-            raw_ok_in_row_ = raw_period_ms_ == want ? static_cast<uint8_t>(raw_ok_in_row_ + 1) : 0;
-        }
+        return;
+    }
+    if (b[0] == MSG_RCV_STATE)
+    {
+        if (state_ == LinkState::STREAM && states_seen_ < 255)
+            states_seen_++;
         return;
     }
     if (b[0] == MSG_SW_VERSION && len >= 14)
@@ -360,7 +360,17 @@ LinkAction SkyTraqLink::poll(uint32_t now_ms)
             if (heard_)
             {
                 found_baud_ = baud_;
-                if (baud_ == cfg_.target_baud)
+                if (baud_ == cfg_.target_baud && !found_nmea_)
+                {
+                    // binary at the target baud: set up before (the FC rebooted
+                    // alone). Read it back first; a setup it still has is left
+                    // alone, so its tracking goes on.
+                    precheck_ = true;
+                    refused_ = 0;
+                    checks_failed_ = 0;
+                    enterCheck(now_ms);
+                }
+                else if (baud_ == cfg_.target_baud)
                     enterConfigure(now_ms);
                 else
                     enterSwitch(now_ms);
@@ -441,6 +451,19 @@ LinkAction SkyTraqLink::poll(uint32_t now_ms)
                 {
                     sendQuery(now_ms);
                 }
+                else if (precheck_)
+                {
+                    precheck_ = false;
+                    if (checks_failed_ == 0)
+                    {
+                        left_alone_ = true;
+                        enterStream(now_ms);
+                    }
+                    else
+                    {
+                        enterConfigure(now_ms);
+                    }
+                }
                 else if (checks_failed_ > 0 && ++setups_in_row_ < cfg_.max_setups)
                 {
                     enterConfigure(now_ms);
@@ -454,14 +477,16 @@ LinkAction SkyTraqLink::poll(uint32_t now_ms)
             }
             break;
         case LinkState::STREAM:
-            if (raw_ok_in_row_ >= 3)
+            if (states_seen_ >= 3)
             {
                 setups_in_row_ = 0;
                 enterRunning(now_ms);
             }
             else if (dt >= cfg_.stream_ms)
             {
-                noteFailure("no 0xE5 at the rate");
+                // not an RTK base sending its state: the setup did not take
+                // (or, left alone, was not what it read back as)
+                noteFailure("no 0xDF after the setup");
                 if (++setups_in_row_ < cfg_.max_setups)
                 {
                     enterConfigure(now_ms);
@@ -475,19 +500,14 @@ LinkAction SkyTraqLink::poll(uint32_t now_ms)
             }
             break;
         case LinkState::RUNNING:
+            // silence only: no 0xE5 is a receiver tracking nothing, which a
+            // setup (a restart) would only set back
             if (now_ms - last_frame_ms_ >= cfg_.silence_ms)
             {
                 relinks_++;
                 degraded_ = false;
                 noteFailure("silent while running");
                 enterProbe(0, now_ms);
-            }
-            else if (now_ms - last_raw_ms_ >= cfg_.no_raw_ms)
-            {
-                reconfigs_++;
-                degraded_ = false;
-                noteFailure("0xE5 stopped while running");
-                enterConfigure(now_ms);
             }
             break;
         }

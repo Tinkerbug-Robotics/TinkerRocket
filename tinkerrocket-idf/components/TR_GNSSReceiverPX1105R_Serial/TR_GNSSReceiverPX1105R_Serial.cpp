@@ -339,7 +339,7 @@ bool TR_GNSSReceiverPX1105RSerial::begin(uint8_t update_rate_hz, uint8_t GNSS_RX
     drainUartEvents();
     if (!link_.running())
     {
-        // Found but not streaming yet (setting up, or no 0xE5 at the rate):
+        // Found but not running yet (setting up, or no 0xDF after it):
         // the poll task carries on with it, and the FC still has its receiver.
         if (link_.state() != skytraq::LinkState::PROBE && link_.state() != skytraq::LinkState::VERIFY_BAUD)
         {
@@ -358,8 +358,9 @@ bool TR_GNSSReceiverPX1105RSerial::begin(uint8_t update_rate_hz, uint8_t GNSS_RX
 
 void TR_GNSSReceiverPX1105RSerial::logSetup()
 {
-    ESP_LOGI(TAG, "PX1105R set up (#%lu): %lu baud (found at %lu%s), RTK kinematic base, airborne, %u Hz 0xE5/0xDF, "
+    ESP_LOGI(TAG, "PX1105R %s (#%lu): %lu baud (found at %lu%s), RTK kinematic base, airborne, %u Hz 0xE5/0xDF, "
                   "receiver %s; %lu refused, %lu readbacks off%s%s",
+             link_.leftAlone() ? "found set up, left alone" : "set up",
              static_cast<unsigned long>(link_.setups()), static_cast<unsigned long>(link_.baud()),
              static_cast<unsigned long>(link_.foundBaud()), link_.foundNmea() ? ", NMEA" : ", binary",
              update_rate_hz_, link_.version()[0] ? link_.version() : "version not read",
@@ -522,13 +523,13 @@ void TR_GNSSReceiverPX1105RSerial::logStatus()
     status_us_ = now;
     ESP_LOGI(TAG, "PX1105R: %.1f 0xE5/s, %.1f 0xDF/s (%.1f with a fix), %.1f subframes/s; %lu frames, checksum "
                   "fails %lu, bad lengths %lu, NMEA lines %lu; log ring drops %lu, too long %lu; UART overflows %lu; "
-                  "link %s, relinks %lu, reconfigs %lu; raw period %u ms; used %u of %u tracked; poll task stack %lu B free",
+                  "link %s, relinks %lu; raw period %u ms; used %u of %u tracked; poll task stack %lu B free",
              n_e5_ / span_s, n_df_ / span_s, n_fix_ / span_s, n_nav_ / span_s, static_cast<unsigned long>(n_frames_),
              static_cast<unsigned long>(parser_.badChecksums()), static_cast<unsigned long>(parser_.badLengths()),
              static_cast<unsigned long>(parser_.nmeaLines()), static_cast<unsigned long>(ring_dropped_),
              static_cast<unsigned long>(too_long_), static_cast<unsigned long>(fifo_overflows_),
              link_.running() ? (link_.degraded() ? "running DEGRADED" : "running") : "setting up",
-             static_cast<unsigned long>(link_.relinks()), static_cast<unsigned long>(link_.reconfigs()),
+             static_cast<unsigned long>(link_.relinks()),
              link_.rawPeriodMs(), channels_.used, channels_.tracked,
              static_cast<unsigned long>(uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t)));
     ESP_LOGI(TAG, "PX1105R clock: bias %.4f ms, drift %+.3f ppm, %lu jumps, %lu restarts; arrival line %s, MCU %+.2f ppm, "
