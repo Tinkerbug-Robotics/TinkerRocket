@@ -427,7 +427,12 @@ void TR_GNSSReceiverPX1105RSerial::onFrame(const uint8_t* body, size_t len, size
         break;
     }
     case skytraq::MSG_SV_CH_STATUS:
-        if (skytraq::decodeSvChStatus(body, len, channels_)) have_channels_ = true;
+        if (skytraq::decodeSvChStatus(body, len, channels_))
+        {
+            have_channels_ = true;
+            last_e7_len_ = std::min(len, sizeof last_e7_);
+            std::memcpy(last_e7_, body, last_e7_len_);
+        }
         break;
     case skytraq::MSG_GPS_SUBFRAME:
     case skytraq::MSG_BDS_D1:
@@ -532,6 +537,7 @@ void TR_GNSSReceiverPX1105RSerial::logStatus()
              static_cast<unsigned long>(link_.relinks()),
              link_.rawPeriodMs(), channels_.used, channels_.tracked,
              static_cast<unsigned long>(uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t)));
+    logChannels();
     ESP_LOGI(TAG, "PX1105R clock: bias %.4f ms, drift %+.3f ppm, %lu jumps, %lu restarts; arrival line %s, MCU %+.2f ppm, "
                   "rms %.3f ms, late90 %.2f ms, %lu restarts; clock records dropped %lu",
              clk_.bias_ms, clk_.drift_ms_per_s * 1.0e3, static_cast<unsigned long>(clk_.jumps),
@@ -555,6 +561,33 @@ void TR_GNSSReceiverPX1105RSerial::logStatus()
                  static_cast<unsigned long>(st.fixes_dropped));
     }
     n_e5_ = n_df_ = n_nav_ = n_fix_ = 0;
+}
+
+// Each signal the last 0xE7 lists with a C/N0 above 0: G GPS, S SBAS, R GLONASS,
+// E Galileo, J QZSS, C BeiDou, I NavIC, then the satellite; "/5" the L5 band's
+// signal; "*" used in the fix.
+void TR_GNSSReceiverPX1105RSerial::logChannels()
+{
+    if (last_e7_len_ < 4) return;
+    static constexpr char kLetter[] = "GSREJCI?";
+    char line[480];
+    size_t n = 0;
+    unsigned shown = 0;
+    const size_t listed = last_e7_[3];
+    for (size_t i = 0; i < listed && 4 + 7 * (i + 1) <= last_e7_len_; ++i)
+    {
+        const uint8_t* r = last_e7_ + 4 + 7 * i;
+        const int cn0 = static_cast<int8_t>(r[5]);
+        if (cn0 <= 0) continue;
+        const int w = std::snprintf(line + n, sizeof line - n, "%s%c%02u%s %d%s", shown ? ", " : "",
+                                    kLetter[std::min<uint8_t>(r[1] & 0x07, 7)], r[2],
+                                    (r[1] >> 4) == skytraq::kSigL5 ? "/5" : "", cn0, (r[6] & 0x10) ? "*" : "");
+        if (w < 0 || static_cast<size_t>(w) >= sizeof line - n) break;
+        n += static_cast<size_t>(w);
+        shown++;
+    }
+    ESP_LOGI(TAG, "PX1105R C/N0 (dB-Hz, * in the fix), %u of %u listed: %s", shown, static_cast<unsigned>(listed),
+             shown ? line : "none above 0");
 }
 
 // ── Raw outputs ─────────────────────────────────────────────────────────

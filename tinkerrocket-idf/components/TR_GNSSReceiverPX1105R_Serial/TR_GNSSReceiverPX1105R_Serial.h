@@ -220,6 +220,7 @@ class TR_GNSSReceiverPX1105RSerial : private skytraq::FrameSink
         void runLink();
         void drainUartEvents();
         void logStatus();
+        void logChannels();
         void logSetup();
         int64_t arrivalUs(size_t index) const;
         void publishFix(const skytraq::RcvState& s, int64_t end_us);
@@ -253,6 +254,9 @@ class TR_GNSSReceiverPX1105RSerial : private skytraq::FrameSink
         bool        new_pvt_ = false;
         skytraq::ChannelSummary channels_ = {};
         bool        have_channels_ = false;
+        // the last 0xE7 as it came, for the status log's C/N0 line (poll task only)
+        uint8_t     last_e7_[4 + 7 * 80] = {};
+        size_t      last_e7_len_ = 0;
 
         // Frames for the flight log (as the mosaic's ring: aligned storage)
         static constexpr size_t kRingBytes = 24576;
