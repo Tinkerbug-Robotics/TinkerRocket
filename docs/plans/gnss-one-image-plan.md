@@ -75,6 +75,16 @@ choice is `rawNavChoice` (host-tested, test_raw_nav_choice).
   byte-identical to main.
 - The one image builds for the V10 and V9, and its boot path is walked per receiver.
 
+## Results (2026-11-13, d84b0e68)
+
+- Host tests 3538/3538; test_gnss_detect 67/67; test_raw_nav_choice 5/5.
+- raw_replay --receiver sdr --fw-defaults on the eleven recordings, healthy and with GNSS lost from
+  T+1: 22/22 byte-identical to main 5463028c.
+- The other images against the 4a9d1e5a baseline: u-blox-only, V9 mosaic, PX1105R identical;
+  gnss-sdr-dev and M1 differ in startRawShadow and rawGnssMeasTask only, with the same calls in the
+  same order and the same relocation targets; the auto image differs in detection.
+- Builds: the one image for the V10 (d84b0e68-v10, 1.19 MB, 62 % of the app partition free) and V9.
+
 ## Left for the rig (its owner, not this branch's author)
 
 - The PX1105R query and the other probes' bytes against the board's 4002 reader (`rx fc`).
