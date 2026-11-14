@@ -261,11 +261,12 @@ bool TR_GNSSAuto::begin(uint8_t update_rate_hz,
                              static_cast<unsigned long>(detector_.probesRun()),
                              up.plan().fallback == GNSS_TYPE_UBLOX
                                  ? "; the u-blox driver searches as it always has"
+                             : up.plan().fallback == GNSS_TYPE_SDR && rememberedType() == GNSS_TYPE_PX1105R
+                                 ? "; not the PX1105R that answered last boot (it answers within seconds): "
+                                   "listening for a gnss-sdr-dev board, the one receiver silent this long"
                              : up.plan().fallback == GNSS_TYPE_SDR
                                  ? "; the gnss-sdr-dev board that streamed last boot sends from its first fix: "
                                    "listening for it"
-                             : up.plan().fallback == GNSS_TYPE_PX1105R
-                                 ? "; the PX1105R that answered last boot gets its driver, which goes on looking"
                                  : "");
                 }
                 up.detected(detector_.found());

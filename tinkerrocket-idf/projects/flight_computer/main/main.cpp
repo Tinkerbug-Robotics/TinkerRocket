@@ -8504,6 +8504,13 @@ static void setup_fc()
     // the bring-up and before either filter starts; it holds for the boot.
     raw_nav_auto::rx = rawNavChoice(sensor_collector_hw.gnssType(), sensor_collector_hw.gnssLastBootType());
     ekf.useRaw(RAW_ON);
+#if TR_RAW_GNSS_SHADOW
+    // The broadcast ionosphere the last pad calibration stored: setup read it
+    // before this choice (padCalLoadIono), when RAW_ON was still false, so it
+    // goes to the filter's link now, as each raw receiver's own image hands
+    // it over at the same read -- before the filter starts either way
+    if (RAW_ON && pad_cal_iono.iono_gps_day != 0) rawShadowSetIono(pad_cal_iono);
+#endif
     if (RAW_ON)
         ESP_LOGI(TAG, "[RAWGNSS] navigation filter: the raw-GNSS filter on the %s%s", gnssTypeName(raw_nav_auto::rx),
                  sensor_collector_hw.gnssType() == raw_nav_auto::rx ? "" : " (remembered: not found this boot)");

@@ -60,9 +60,9 @@ const char* proofName(Proof p)
 }
 
 // The PX1105R's two probes into a plan: first of all with it the hint (then
-// its own budget, and its driver when nothing answers, which goes on looking
-// at both bauds), else just before the first other probe at 115200, where its
-// NMEA would otherwise read as a u-blox's (or at the end with none there).
+// its own budget, and the gnss-sdr-dev board's driver when nothing answers:
+// kBudgetPx1105rMs), else just before the first other probe at 115200, where
+// its NMEA would otherwise read as a u-blox's (or at the end with none there).
 static void addPx1105r(Plan& p, bool first)
 {
     const Probe px[2] = {Probe{kPx1105rRunBaud, GNSS_TYPE_PX1105R, kPx1105rRunListenMs},
@@ -92,7 +92,7 @@ static void addPx1105r(Plan& p, bool first)
     if (first)
     {
         p.budget_ms = kBudgetPx1105rMs;
-        p.fallback = GNSS_TYPE_PX1105R;
+        p.fallback = GNSS_TYPE_SDR;
     }
 }
 

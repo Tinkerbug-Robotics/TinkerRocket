@@ -27,7 +27,16 @@ The receiver is chosen once, at boot, before the filter starts, and holds for th
   a PX1105R or mosaic still booting): its driver listens and the raw filter starts degraded, as
   each dedicated image does; a u-blox or no hint: the auto image's path (GpsInsEKF, GNSS-absent);
 - a restored flight: no probes, straight to the hinted driver (setBeginWait off), as the mosaic
-  and PX1105R images do today.
+  and PX1105R images do today;
+- a PX1105R hint and nothing answering in 6 s of rounds: the gnss-sdr-dev board's driver, not the
+  PX1105R's. A PX1105R answers within seconds (board 1 booting with the FC: 1.3 s), so one this
+  silent is not on J1; the board, silent until its receiver starts and streaming from its first
+  fix, is the one receiver that can be -- a stale hint with the board put on since would otherwise
+  leave it unheard for the boot (the rig owner's review, 2026-11-13). The hint stays until a
+  receiver is proven.
+
+The ionosphere the last pad calibration stored is read in setup before the choice; it goes to the
+raw filter right after the choice (the rig owner's review: it was dropped, RAW_ON still false).
 
 Raw receiver -> the raw filter is the one navigation filter (RawNavAdapter), with that receiver's
 profile, flight profile and safeguards, in the dedicated image's order. u-blox -> GpsInsEKF, the

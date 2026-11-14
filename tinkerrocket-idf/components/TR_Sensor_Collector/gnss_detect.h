@@ -115,9 +115,14 @@ static constexpr uint32_t kBudgetMosaicMs = 30000;
 static constexpr uint32_t kBudgetUbloxMs  = 0;
 static constexpr uint32_t kBudgetSdrMs    = 2000;
 static constexpr uint32_t kBudgetNoneMs   = 6000;
-// With the PX1105R last time: twice round, as the board's; its own driver,
-// which follows, finds it at either baud and sets it up whenever it answers.
-static constexpr uint32_t kBudgetPx1105rMs = 3000;
+// With the PX1105R last time: three times round. It answers its query within
+// ~0.1 s at either baud, and booting with the flight computer it answered
+// 1.3 s in (V10 board 1, 2026-11-13), so one silent through this is not on
+// J1; the gnss-sdr-dev board, silent until its receiver starts (then a status
+// a second, a stream from its first fix), is the one receiver that can be,
+// so the plan's fallback is its driver, which listens (a stale hint with the
+// board put on since: the PX1105R's driver would never hear it).
+static constexpr uint32_t kBudgetPx1105rMs = 6000;
 
 // What proved the receiver.
 enum class Proof : uint8_t { NONE, SBF_BLOCK, PROMPT, REPLY, UBX_FRAME, NMEA, RTCM_TR, SKYTRAQ_FRAME };

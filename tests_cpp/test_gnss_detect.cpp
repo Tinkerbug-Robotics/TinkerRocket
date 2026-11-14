@@ -1498,7 +1498,7 @@ TEST(GnssDetectPx1105r, SetUpReceiverAt921600AfterAnFcReset)
     EXPECT_LT(r.ms, 300u);
 }
 
-TEST(GnssDetectPx1105r, ItsHintPutsItsProbesFirstAndItsDriverLast)
+TEST(GnssDetectPx1105r, ItsHintPutsItsProbesFirstAndTheBoardsDriverLast)
 {
     const Plan p = planFor(GNSS_TYPE_PX1105R, 0, false, true);
     ASSERT_GE(p.n, 2u);
@@ -1506,14 +1506,40 @@ TEST(GnssDetectPx1105r, ItsHintPutsItsProbesFirstAndItsDriverLast)
     EXPECT_EQ(p.probes[0].baud, kPx1105rRunBaud);
     EXPECT_EQ(p.probes[1].asks, GNSS_TYPE_PX1105R);
     EXPECT_EQ(p.probes[1].baud, kPx1105rFactoryBaud);
-    EXPECT_EQ(p.fallback, GNSS_TYPE_PX1105R);
+    // silent through the budget: not a PX1105R, which answers within
+    // seconds -- the board, the one receiver that can be silent this long
+    EXPECT_EQ(p.fallback, GNSS_TYPE_SDR);
     EXPECT_EQ(p.budget_ms, kBudgetPx1105rMs);
     EXPECT_TRUE(p.px1105r);
+    bool board = false;
+    for (size_t i = 0; i < p.n; i++) board = board || p.probes[i].asks == GNSS_TYPE_SDR;
+    EXPECT_TRUE(board);
 
     FakePx1105r px;   // a factory one, booting with the flight computer
     px.boots_at_ms = 4500;
     const Result r = detect(&px, p);
     EXPECT_EQ(r.found, GNSS_TYPE_PX1105R);
+}
+
+TEST(GnssDetectPx1105r, ItsHintStillFindsAPx1105rSlowToBoot)
+{
+    // detect() starts at 4000 ms: one booting 4 s after that (three times
+    // what board 1's took, 2026-11-13) is inside the budget's third round
+    const Plan p = planFor(GNSS_TYPE_PX1105R, 0, false, true);
+    FakePx1105r px;
+    px.boots_at_ms = 8000;
+    EXPECT_EQ(detect(&px, p).found, GNSS_TYPE_PX1105R);
+}
+
+TEST(GnssDetectPx1105r, AStaleHintOfItFindsABoardStreamingMidPlan)
+{
+    // the board put on J1 since: streaming from 2.5 s into the plan
+    const Plan p = planFor(GNSS_TYPE_PX1105R, 0, false, true);
+    FakeSdr board;
+    board.streams_from_ms = 6500;
+    const Result r = detect(&board, p);
+    EXPECT_EQ(r.found, GNSS_TYPE_SDR);
+    EXPECT_EQ(r.proof, Proof::RTCM_TR);
 }
 
 TEST(GnssDetectPx1105r, ItsNmeaIsNeverAUblox)
@@ -1676,14 +1702,18 @@ TEST(GnssBringUpPx1105r, AProvenPx1105rGetsItsDriverAndIsRemembered)
     EXPECT_EQ(b.hint(), GNSS_TYPE_PX1105R);
 }
 
-TEST(GnssBringUpPx1105r, ARememberedPx1105rThatIsSilentGetsItsDriver)
+TEST(GnssBringUpPx1105r, ARememberedPx1105rThatIsSilentGetsTheBoardsDriver)
 {
+    // a stale hint with the board on J1 since, not streaming yet: its driver
+    // listens for it (the PX1105R's would never hear it); the hint stays
+    // until a receiver is proven, so a PX1105R back on J1 is looked for first
     BringUp b;
     b.start(GNSS_TYPE_PX1105R, 0, false, false, true);
     b.detected(GNSS_TYPE_NONE);
-    EXPECT_EQ(b.step(), Step::BEGIN_PX1105R);   // its driver goes on looking
+    EXPECT_EQ(b.step(), Step::BEGIN_SDR);
     b.driverResult(true);
-    EXPECT_EQ(b.active(), GNSS_TYPE_PX1105R);
+    EXPECT_EQ(b.step(), Step::DONE);
+    EXPECT_EQ(b.active(), GNSS_TYPE_SDR);
     EXPECT_FALSE(b.hintChanged());
 }
 
@@ -1712,13 +1742,13 @@ TEST(GnssBringUpPx1105r, WithoutTheFlagItsHintReadsAsNothingKnown)
 
 TEST(GnssBringUpPx1105r, ItsPathsFinishWellInsideTheSetupWatchdog)
 {
-    // Its hint and silence: the budget, the round it ends inside, then its
-    // driver (setBeginWait off on the image: begin() returns at once).
+    // Its hint and silence: the budget, the round it ends inside, then the
+    // board's driver, which only listens (its begin() returns at once).
     BringUp b;
     b.start(GNSS_TYPE_PX1105R, 0, false, false, true);
     uint32_t round = 0;
     for (size_t i = 0; i < b.plan().n; i++) round += b.plan().probes[i].listen_ms;
-    EXPECT_LT(b.plan().budget_ms + round, 6000u);
+    EXPECT_LT(b.plan().budget_ms + round, 10000u);
     // nothing known: the u-blox path as before, the round two probes longer
     BringUp n;
     n.start(GNSS_TYPE_NONE, 0, false, false, true);
