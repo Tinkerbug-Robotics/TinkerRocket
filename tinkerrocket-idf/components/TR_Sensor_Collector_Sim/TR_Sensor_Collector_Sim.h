@@ -22,7 +22,18 @@
 #include "SimSensorModel.h"
 #include "sim_landed_hold.h"
 #include <freertos/FreeRTOS.h>
-#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
+// The builds whose rig replay takes its clock from the receiver's timed raw
+// epochs: the mosaic-only image's, the gnss-sdr-dev image's, and the rig
+// replay of the one image (TR_GNSS_AUTO_RAW with TR_RAW_NAV_RIG_REPLAY: the
+// gnss-sdr-dev board on J1, as the gnss-sdr-dev image's). The one image's
+// flight build has none of it, as before.
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR) \
+    || ((defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW) && (defined(TR_RAW_NAV_RIG_REPLAY) && TR_RAW_NAV_RIG_REPLAY))
+#define TR_SIM_RAW_REPLAY_CLOCK 1
+#else
+#define TR_SIM_RAW_REPLAY_CLOCK 0
+#endif
+#if TR_SIM_RAW_REPLAY_CLOCK
 #include <atomic>
 #endif
 
@@ -78,14 +89,20 @@ public:
     bool getGNSSFix(gnss_raw::TimedFix& out);
 #if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
     // The image that flies the raw-GNSS filter on every receiver giving
-    // measurements (no rig replay on it): the three images' calls, by the
-    // mosaic's and the PX1105R's rules -- the receiver's GPS ionosphere a real
-    // sky's while idle, none while a sim runs (the last one decoded, not
-    // consumed); the grid, the pairs, the bands and the board's Doppler means
-    // straight to the receiver; the PX1105R's decoded ephemerides passed on in
-    // a sim too, as the mosaic's blocks and the board's RTCM3 are.
+    // measurements: the three images' calls, by the mosaic's and the
+    // PX1105R's rules -- the receiver's GPS ionosphere a real sky's while
+    // idle, none while a sim runs (the last one decoded, not consumed); the
+    // grid, the pairs, the bands and the board's Doppler means straight to the
+    // receiver; the PX1105R's decoded ephemerides passed on in a sim too, as
+    // the mosaic's blocks and the board's RTCM3 are. Its rig replay build
+    // (the gnss-sdr-dev board on J1) takes the sky's day and ionosphere as
+    // the gnss-sdr-dev image's does.
     bool getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const;
+#if TR_SIM_RAW_REPLAY_CLOCK
+    uint16_t replaySkyGpsDay() const { return replay_sky_day_.load(std::memory_order_acquire); }
+#else
     uint16_t replaySkyGpsDay() const { return 0; }
+#endif
     void setGNSSRawEpochPeriodMs(uint32_t period_ms) { real_.setGNSSRawEpochPeriodMs(period_ms); }
     bool setGNSSRawDopplerPairing(const mosaic::MosaicDopplerPairConfig& c)
     {
@@ -279,7 +296,7 @@ public:
         float    last_fix_t_s = 0.0f; // the latest of the rig's fixes, s from ignition
     };
     void replayStatus(ReplayStatus& out) const;
-#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
+#if TR_SIM_RAW_REPLAY_CLOCK
     // The replay's time (s from ignition) at a recent 32-bit MCU stamp
     // (micros(): a sample's, a navigation state's); false before the clock.
     bool replayTAt(uint32_t time_us, double& t_s) const;
@@ -453,7 +470,7 @@ private:
     float replay_last_t_ = 0.0f;             // the latest IMU sample's (replayStatus)
     bool  replay_last_have_t_ = false;
     uint8_t replay_last_phase_ = 0;
-#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
+#if TR_SIM_RAW_REPLAY_CLOCK
     float replay_hg_bias_[3] = {};           // setReplayHighGBias
     std::atomic<uint16_t> replay_sky_day_{0};   // replaySkyGpsDay
     uint32_t replay_pps_seen_ = 0;           // the driver's 1PPS checks handed to the clock (replayNoteEpoch)
@@ -464,7 +481,7 @@ private:
     // The field the magnetometer reads in that attitude, rocket frame, uT.
     void replayField(const sim_replay::Sample& s, float b[3]) const;
     void replayNoteFix(const gnss_raw::TimedFix& f);
-#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
+#if TR_SIM_RAW_REPLAY_CLOCK
     void replayNoteEpoch(const gnss_raw::TimedRawEpoch& e);
 #endif
 };

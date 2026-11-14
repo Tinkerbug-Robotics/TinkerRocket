@@ -335,16 +335,24 @@ endif()
 # rinex_gps_iono.py <the scenario's RINEX>) (TR_Sensor_Collector_Sim). Without
 # it the filter builds the rig's sky with no Klobuchar.
 if(TR_SIM_REPLAY_BLOB)
-    if(TR_GNSS_AUTO_RAW)
-        message(FATAL_ERROR "TR_SIM_REPLAY_BLOB is not built for the image that flies the raw-GNSS filter on every receiver (-DTR_GNSS_AUTO_RAW=1) yet: the rig replay is the M1's, the mosaic-only image's, the gnss-sdr-dev image's or the auto image's")
-    elseif(TR_GNSS_PX1105R)
+    if(TR_GNSS_PX1105R)
         message(FATAL_ERROR "TR_SIM_REPLAY_BLOB is not for the PX1105R image (-DTR_GNSS_PX1105R=1): the rig replay is the M1's (-DTR_BOARD_M1=1), the mosaic-only image's (-DTR_GNSS_MOSAIC=1) or the gnss-sdr-dev board's")
     elseif(TR_GNSS_MOSAIC AND NOT _tr_mosaic_rawnav)
         message(FATAL_ERROR "TR_SIM_REPLAY_BLOB on the mosaic-only image takes its clock from the raw-GNSS filter's timed epochs: build it with the filter (no -DTR_RAW_GNSS_SHADOW=0)")
     elseif(NOT TR_GNSS_MOSAIC AND NOT TR_GNSS_SDR AND NOT TR_BOARD_M1 AND NOT ((TR_BOARD_V9 OR TR_BOARD_V10) AND (NOT DEFINED TR_GNSS_AUTO OR TR_GNSS_AUTO)))
         message(FATAL_ERROR "TR_SIM_REPLAY_BLOB needs a receiver whose time sets the replay's clock: the M1's LC86G (-DTR_BOARD_M1=1), the mosaic-only image (-DTR_GNSS_MOSAIC=1 on a V8 or V9), the V10's gnss-sdr-dev image (-DTR_GNSS_SDR=1) or the gnss-sdr-dev board on the V9's or V10's auto image")
     endif()
-    if(NOT TR_GNSS_MOSAIC AND NOT TR_GNSS_SDR AND NOT TR_BOARD_M1)
+    if(TR_GNSS_AUTO_RAW)
+        # The one image (-DTR_GNSS_AUTO_RAW=1) with the gnss-sdr-dev board on
+        # J1: as the gnss-sdr-dev image's replay (below), the raw-GNSS filter's
+        # timed epochs set the replay's clock and main.cpp's rig replay paths
+        # are its (TR_RAW_NAV_RIG_REPLAY: the sky's ionosphere rule, the
+        # navigation console the scorer reads, the replayed high-g counts with
+        # the converter's bias, the transport the clock carries taken off the
+        # board's epochs). With any other receiver on J1 it stays on the pad.
+        add_compile_definitions(TR_RAW_NAV_RIG_REPLAY=1)
+        message(STATUS "flight_computer: RIG REPLAY of the one image (TR_RAW_NAV_RIG_REPLAY=1): the gnss-sdr-dev board's timed epochs set the replay's clock, as on the gnss-sdr-dev image (with any other receiver on J1 the replay stays on the pad)")
+    elseif(NOT TR_GNSS_MOSAIC AND NOT TR_GNSS_SDR AND NOT TR_BOARD_M1)
         message(STATUS "flight_computer: RIG REPLAY of the V9/V10 auto image: the gnss-sdr-dev board's clock line sets the replay's clock (with any other receiver on J1 the replay stays on the pad)")
     endif()
     if(TR_GNSS_SDR)
@@ -369,8 +377,8 @@ if(TR_SIM_REPLAY_BLOB)
         endif()
     endif()
 endif()
-if(TR_SIM_REPLAY_GPS_IONO AND NOT (TR_SIM_REPLAY_BLOB AND (TR_GNSS_MOSAIC OR TR_GNSS_SDR)))
-    message(FATAL_ERROR "TR_SIM_REPLAY_GPS_IONO is the rig sky's ionosphere for a rig replay (-DTR_SIM_REPLAY_BLOB) of the mosaic-only image (-DTR_GNSS_MOSAIC=1) or the V10's gnss-sdr-dev image (-DTR_GNSS_SDR=1)")
+if(TR_SIM_REPLAY_GPS_IONO AND NOT (TR_SIM_REPLAY_BLOB AND (TR_GNSS_MOSAIC OR TR_GNSS_SDR OR TR_GNSS_AUTO_RAW)))
+    message(FATAL_ERROR "TR_SIM_REPLAY_GPS_IONO is the rig sky's ionosphere for a rig replay (-DTR_SIM_REPLAY_BLOB) of the mosaic-only image (-DTR_GNSS_MOSAIC=1), the V10's gnss-sdr-dev image (-DTR_GNSS_SDR=1) or the one image (-DTR_GNSS_AUTO_RAW=1)")
 endif()
 foreach(_v TR_BENCH_MOSAIC_CN0 TR_BENCH_MOSAIC_COLD_START TR_BENCH_MOSAIC_TAG_TRACE)
     if(${_v} AND NOT TR_GNSS_MOSAIC)
