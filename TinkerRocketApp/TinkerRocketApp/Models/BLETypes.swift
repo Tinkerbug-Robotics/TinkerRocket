@@ -178,6 +178,15 @@ nonisolated struct RocketGuidanceExtras: Equatable {
     var enabled: Bool? = nil
 }
 
+/// The guidance tilt limits (cmd 65's tail) from the rocket's `config_tilt`
+/// readback: the off-vertical angle above which the flight computer latches
+/// guidance off, before (`boostDeg`) and after (`coastDeg`) burnout.  A frame
+/// of its own because config_guid is already near the BLE notify limit.
+nonisolated struct RocketGuidanceTilt: Equatable {
+    var boostDeg: Float
+    var coastDeg: Float
+}
+
 /// Source of a `config_pyro` readback (#1231).  Raw values are the wire
 /// spelling of the frame's `"src"` key.
 ///
@@ -318,6 +327,10 @@ struct RocketConfig {
 
     var servoExtras: RocketServoExtras?
     var guidanceExtras: RocketGuidanceExtras?
+    /// nil = not reported: firmware from before the tilt limits were
+    /// settable, which flies its compiled ones.  Not one of the three groups
+    /// `configReportGroupsMissing` waits on — such firmware never sends it.
+    var guidanceTilt: RocketGuidanceTilt?
     /// nil = not reported.  EMPTY = reported, and the rocket is flying
     /// rate-only.  The two must not be conflated: one means "we don't know",
     /// the other means "we know, and there are none".
