@@ -306,6 +306,12 @@ public:
     // build's own, or the V9 image's NVS record (GNSS_TYPE_NONE when it has
     // none yet).
     uint8_t gnssLastBootType();
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    // The one image makes the raw outputs with the driver of the receiver
+    // found (enableGNSSRawOutputs() only asks for them): after begin(),
+    // whether they could not be made.
+    bool gnssRawOutputsFailed() const { return gnss_receiver.rawOutputsFailed(); }
+#endif
     // Raw GNSS measurements for the raw-GNSS shadow filter (#1600), from the
     // LC86G's MSM7 and broadcast ephemeris, or the mosaic-G5's MeasEpoch and
     // SBF navigation blocks on the mosaic-only image; never from the u-blox,

@@ -13,8 +13,10 @@
 // does into the magnetometer's. type() says which receiver begin() found.
 //
 // The image that flies the raw-GNSS filter on every receiver that gives
-// measurements (TR_GNSS_AUTO_RAW) holds the PX1105R's driver too, looks for
-// it (gnss_detect's px1105r), and passes on each raw receiver's raw outputs
+// measurements (TR_GNSS_AUTO_RAW) has the PX1105R's driver too, looks for it
+// (gnss_detect's px1105r), builds only the raw receiver's driver it found
+// (each holds ~40 kB of internal RAM; see buildRaw), and passes on that
+// receiver's raw outputs
 // (epochs, ephemerides, fixes, ionosphere, statistics, settings) to the one
 // in use: false, nothing or a no-op with any other, so each reaches the
 // raw-GNSS filter exactly as its own image's driver hands it over. A
@@ -27,6 +29,7 @@
 // mosaic's driver is known for one on the boot that follows (main.cpp keeps
 // the mosaic out of a boot after a crash, as the mosaic image did).
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <driver/uart.h>
@@ -50,7 +53,11 @@ public:
     // the mosaic's driver sets it up once the mosaic is found, and nothing
     // touches it otherwise, because on the PX1105R carrier that pin is a
     // receiver input. Its rate: the mosaic's permission file allows 20 Hz.
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    void setPpsPin(int8_t pin) { pps_pin_ = pin; }   // the mosaic's driver takes it when it is built
+#else
     void setPpsPin(int8_t pin) { mosaic_.setPpsPin(pin); }
+#endif
     void setMosaicRateHz(uint8_t hz) { mosaic_rate_hz_ = hz; }
 
     // The receiver found last boot (GNSS_TYPE_*), from NVS. Readable before
@@ -98,7 +105,11 @@ public:
     // Whether the receiver in use gives raw measurements (mosaic-G5, PX1105R,
     // gnss-sdr-dev board): the raw-GNSS filter's receiver.
     bool rawReceiver() const;
+    // Before begin(), as each image calls it: the driver built for the
+    // receiver found makes its raw outputs then, before its begin(). True
+    // here; rawOutputsFailed() says after begin() whether they could be made.
     bool enableRawOutputs();
+    bool rawOutputsFailed() const { return raw_failed_; }
     bool takeRawEpoch(gnss_raw::TimedRawEpoch& out);
     bool takeEphemeris(uint8_t* out, size_t cap, size_t& len);   // the mosaic's SBF blocks, the board's RTCM3
     bool takeEphemeris(gps_eph_t& out);                          // the PX1105R's, decoded from its subframes
@@ -140,12 +151,43 @@ private:
     uint8_t     hint_ = GNSS_TYPE_NONE;   // what NVS holds
 
     TR_GNSSReceiverUBloxSerial  ublox_;
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    // The three raw receivers' drivers hold ~40 kB of buffers each in
+    // internal RAM (the mosaic's 43 kB, the board's 41 kB, the PX1105R's
+    // 39 kB), and one runs a boot: they share this block, and the one found
+    // is built in it when its begin() is due (buildRaw), once. Held as
+    // members, all three left the raw-GNSS filter's start no margin over its
+    // internal-RAM floor (the rig, 2026-11-15: largest block 57344 B against
+    // RAW_INTERNAL_FLOOR_B 57344). A call to one not built does what an idle
+    // driver's would: nothing, false, zeroed statistics.
+    static constexpr size_t kRawDriverBytes = std::max({sizeof(TR_GNSSReceiverMosaicSerial),
+                                                        sizeof(TR_GNSSReceiverSdrSerial),
+                                                        sizeof(TR_GNSSReceiverPX1105RSerial)});
+    alignas(TR_GNSSReceiverMosaicSerial) alignas(TR_GNSSReceiverSdrSerial) alignas(TR_GNSSReceiverPX1105RSerial)
+        unsigned char raw_driver_mem_[kRawDriverBytes];
+    TR_GNSSReceiverMosaicSerial*  mosaic_ = nullptr;
+    TR_GNSSReceiverSdrSerial*     sdr_ = nullptr;
+    TR_GNSSReceiverPX1105RSerial* px_ = nullptr;
+    int8_t                        pps_pin_ = -1;
+    bool                          raw_wanted_ = false;   // enableRawOutputs() came
+    bool                          raw_failed_ = false;   // the driver built could not make them
+    bool                          begin_wait_ = true;
+    // Build the driver of `type` (mosaic, board, PX1105R) in the block: its
+    // PPS pin and its raw outputs as asked before begin(). False for another
+    // type once one is built.
+    bool buildRaw(uint8_t type);
+    TR_GNSSReceiverMosaicSerial&  mosaic() const { return *mosaic_; }
+    TR_GNSSReceiverSdrSerial&     sdr() const { return *sdr_; }
+    TR_GNSSReceiverPX1105RSerial& px() const { return *px_; }
+    bool beginHintedRaw(uint8_t hint, uint8_t rx, uint8_t tx, int8_t reset_n_pin, int8_t safeboot_n_pin);
+#else
     TR_GNSSReceiverMosaicSerial mosaic_;
     TR_GNSSReceiverSdrSerial    sdr_;
-#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
-    TR_GNSSReceiverPX1105RSerial px_;
-    bool                         begin_wait_ = true;
-    bool beginHintedRaw(uint8_t hint, uint8_t rx, uint8_t tx, int8_t reset_n_pin, int8_t safeboot_n_pin);
+    static constexpr bool buildRaw(uint8_t) { return true; }
+    TR_GNSSReceiverMosaicSerial&       mosaic() { return mosaic_; }
+    const TR_GNSSReceiverMosaicSerial& mosaic() const { return mosaic_; }
+    TR_GNSSReceiverSdrSerial&          sdr() { return sdr_; }
+    const TR_GNSSReceiverSdrSerial&    sdr() const { return sdr_; }
 #endif
     gnss_detect::Detector       detector_;
 };

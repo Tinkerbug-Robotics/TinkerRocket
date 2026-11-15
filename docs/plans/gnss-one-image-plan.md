@@ -18,6 +18,12 @@ image keeps its own flags and code: the auto image's detection plans are unchang
 `px1105r` flag false), and each dedicated image's compiled functions are checked against a
 baseline built from the commit this branch starts from.
 
+Internal RAM: the three raw receivers' drivers (the mosaic's 43 kB, the board's 41 kB, the PX1105R's
+39 kB, mostly buffers) share one block in TR_GNSSAuto, and only the receiver found has its driver
+built there, and its raw outputs made (2026-11-15, the rig owner's e4816e26 runs: with all three held
+and all three raw blocks made, the raw filter's start saw its largest internal block exactly on
+RAW_INTERNAL_FLOOR_B). The collector went 143,600 -> 63,688 B.
+
 ## Which filter
 
 The receiver is chosen once, at boot, before the filter starts, and holds for the boot:

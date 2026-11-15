@@ -8510,6 +8510,14 @@ static void setup_fc()
     // goes to the filter's link now, as each raw receiver's own image hands
     // it over at the same read -- before the filter starts either way
     if (RAW_ON && pad_cal_iono.iono_gps_day != 0) rawShadowSetIono(pad_cal_iono);
+    // The raw outputs are made with the receiver's driver, in the bring-up
+    // above (enableGNSSRawOutputs only asked for them): no memory for them
+    // leaves the filter GNSS-absent, as the boot says below
+    if (RAW_ON && sensor_collector_hw.gnssRawOutputsFailed())
+    {
+        ESP_LOGE(TAG, "[RAWGNSS] no memory for the raw GNSS queues");
+        raw_outputs_failed = true;
+    }
 #endif
     if (RAW_ON)
         ESP_LOGI(TAG, "[RAWGNSS] navigation filter: the raw-GNSS filter on the %s%s", gnssTypeName(raw_nav_auto::rx),
