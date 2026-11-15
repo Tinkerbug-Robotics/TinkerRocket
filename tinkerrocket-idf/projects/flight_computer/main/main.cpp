@@ -539,7 +539,7 @@ static uint8_t b2r_setting = IMU_ORIENT_AUTO;
 static bool b2r_setting_from_nvs = false;
 
 // #915 full config report.  Set by any handler that changes a field the
-// report carries; drained in loop_fc so the 201-byte enqueue never happens
+// report carries; drained in loop_fc so the 209-byte enqueue never happens
 // inside the I2C command path the OC is waiting on.  Declared up here rather
 // than beside buildConfigReport() because persistOrientSetting() — which sits
 // with the orientation code above it — is one of the setters.
@@ -755,6 +755,14 @@ static float    pn_target_alt     = config::PN_TARGET_ALT_M;
 static float    pn_kp_pos         = config::PN_KP_POS_PER_S2;
 static float    pn_kd_vel         = config::PN_KD_VEL_PER_S;
 static uint8_t  pn_guidance_law   = config::GUIDANCE_LAW_DEFAULT;  // GUIDE_LAW_*
+// Tilt-limit latch angles (deg), seeded from config:: and overridden by NVS
+// "gtlb"/"gtlc" and cmd 65's tail (GuidanceTiltLimitData).
+static float    pn_tilt_limit_boost = config::GUIDANCE_TILT_LIMIT_BOOST_DEG;
+static float    pn_tilt_limit_coast = config::GUIDANCE_TILT_LIMIT_COAST_DEG;
+static inline bool guidanceTiltLimitValid(float deg)
+{
+    return deg > 0.0f && deg <= config::GUIDANCE_TILT_LIMIT_MAX_DEG;  // false for NaN
+}
 // Drift-Cast geodetic aim point (#435, BLE cmd 28).  RAM ONLY — deliberately
 // never persisted to NVS: a stale wind-compensated target self-applying on a
 // later boot is the hazard; Drift-Cast targets are per-flight ephemeral (the
@@ -889,7 +897,7 @@ static bool mach_locked_out = false;    // promoted from baro block for apogee v
 static bool gps_new_for_kc = false;     // new GPS sample available for kinematic checks
 static bool guidance_active = false;
 // Tilt-limit safety latch: set true once the off-vertical tilt exceeds the
-// phase limit (config::GUIDANCE_TILT_LIMIT_*); guidance then stays roll-only
+// phase limit (pn_tilt_limit_boost/coast); guidance then stays roll-only
 // for the rest of the flight. Reset at re-arm alongside guidance.reset().
 static bool guidance_tilt_inhibited = false;
 // Guidance's own origin: the launch point, in the datum's local ENU (m), set
@@ -3058,7 +3066,7 @@ static void sendPadContextCal()
 // makes it survive an OC that rebooted on its own — with request/response the
 // OC would have to know to ask again, and it has no way to know it missed one.
 
-// Repeat cadence while not INFLIGHT.  201 bytes every 5 s against a 22 kHz
+// Repeat cadence while not INFLIGHT.  209 bytes every 5 s against a 22 kHz
 // I2S stream is noise; the point is bounded staleness after an OC reboot, not
 // throughput.
 static constexpr uint32_t CONFIG_REPORT_PERIOD_MS = 5000;
@@ -3108,6 +3116,8 @@ static void buildConfigReport(ConfigReportData &r)
     r.guidance.kp_pos_per_s2    = pn_kp_pos;
     r.guidance.kd_vel_per_s     = pn_kd_vel;
     r.guidance.guidance_law     = pn_guidance_law;
+    r.guidance_tilt.tilt_limit_boost_deg = pn_tilt_limit_boost;
+    r.guidance_tilt.tilt_limit_coast_deg = pn_tilt_limit_coast;
 
     r.roll = roll_profile;
 
@@ -8050,6 +8060,18 @@ static void setup_fc()
                       (unsigned)pn_guidance_law);
         pn_guidance_law = GUIDE_LAW_PN;
     }
+    pn_tilt_limit_boost = prefs.getFloat("gtlb", config::GUIDANCE_TILT_LIMIT_BOOST_DEG);
+    pn_tilt_limit_coast = prefs.getFloat("gtlc", config::GUIDANCE_TILT_LIMIT_COAST_DEG);
+    if (!guidanceTiltLimitValid(pn_tilt_limit_boost)) {     // corrupt NVS record
+        ESP_LOGW(TAG, "[GUID CFG] stored boost tilt limit %.1f out of range — using %.1f",
+                      (double)pn_tilt_limit_boost, (double)config::GUIDANCE_TILT_LIMIT_BOOST_DEG);
+        pn_tilt_limit_boost = config::GUIDANCE_TILT_LIMIT_BOOST_DEG;
+    }
+    if (!guidanceTiltLimitValid(pn_tilt_limit_coast)) {
+        ESP_LOGW(TAG, "[GUID CFG] stored coast tilt limit %.1f out of range — using %.1f",
+                      (double)pn_tilt_limit_coast, (double)config::GUIDANCE_TILT_LIMIT_COAST_DEG);
+        pn_tilt_limit_coast = config::GUIDANCE_TILT_LIMIT_COAST_DEG;
+    }
     // Fin→servo layout (servo azimuth + reverse), shared by every mix site.
     float fin_az[4] = {
         prefs.getFloat("fa0", config::FIN_AZIMUTH_0_DEG),
@@ -8085,6 +8107,8 @@ static void setup_fc()
         ESP_LOGI(TAG, "  PN: N=%.1f maxA=%.0f m/s^2 alt=%.0f m (aim point ignored by this law)",
                       (double)pn_nav_gain, (double)pn_max_accel, (double)pn_target_alt);
     }
+    ESP_LOGI(TAG, "  tilt latch: boost %.1f deg, coast %.1f deg",
+                  (double)pn_tilt_limit_boost, (double)pn_tilt_limit_coast);
 #else
     ESP_LOGW(TAG, "Guidance: NOT COMPILED IN (TR_GuidancePN submodule not initialized — stub active)");
 #endif
@@ -10706,7 +10730,7 @@ static void loop_fc()
     // SECTION: Full config report (#915)
     // ==========================================================================
     // Drained here rather than sent from the I2C command handlers: those run
-    // inside the OC's poll window, and a 201-byte enqueue there would sit in
+    // inside the OC's poll window, and a 209-byte enqueue there would sit in
     // the same path the OC is waiting on.
 #if !TR_BOARD_M1
     serviceAntennaHeld();   // a GNSS antenna offset held INFLIGHT: applied, and in this pass's report
@@ -13843,14 +13867,16 @@ static void loop_fc()
             else if (out_pending_command == GUIDANCE_CONFIG_PENDING)
             {
                 delay_ms(1);
-                uint8_t cfg_payload[sizeof(GuidanceConfigData)];
+                uint8_t cfg_payload[sizeof(GuidanceConfigFrame)];
                 size_t  cfg_len = 0;
-                if (readConfigFrame(GUIDANCE_CONFIG_MSG, sizeof(GuidanceConfigData),
+                if (readConfigFrame(GUIDANCE_CONFIG_MSG, sizeof(GuidanceConfigFrame),
                                     cfg_payload, sizeof(cfg_payload), cfg_len)
-                    && cfg_len >= sizeof(GuidanceConfigData))
+                    && cfg_len >= sizeof(GuidanceConfigFrame))
                 {
                     GuidanceConfigData g;
-                    memcpy(&g, cfg_payload, sizeof(g));
+                    memcpy(&g, cfg_payload + offsetof(GuidanceConfigFrame, config), sizeof(g));
+                    GuidanceTiltLimitData tilt;
+                    memcpy(&tilt, cfg_payload + offsetof(GuidanceConfigFrame, tilt), sizeof(tilt));
                     guidance_enabled = (g.enable != 0);
                     // Positive/sane values override; out-of-range leaves the default.
                     if (g.nav_gain         > 0.0f && g.nav_gain         <= 20.0f)  pn_nav_gain     = g.nav_gain;
@@ -13885,6 +13911,25 @@ static void loop_fc()
                         g.target_mode == GUIDE_TARGET_POINT)   pn_target_mode = g.target_mode;
                     else ESP_LOGW(TAG, "[GUID CFG] target_mode %u unknown — keeping %u",
                                        (unsigned)g.target_mode, (unsigned)pn_target_mode);
+                    // Tilt latch angles.  Both 0 is a 45-byte app frame the OC
+                    // zero-filled (GuidanceConfigFrame): an app that predates
+                    // the setting, so keep the limits quietly.  Any other
+                    // out-of-range value keeps the prior limit, loudly.
+                    if (tilt.tilt_limit_boost_deg == 0.0f && tilt.tilt_limit_coast_deg == 0.0f) {
+                        ESP_LOGI(TAG, "[GUID CFG] no tilt limits in frame (older app) — keeping %.1f/%.1f",
+                                      (double)pn_tilt_limit_boost, (double)pn_tilt_limit_coast);
+                    } else {
+                        if (guidanceTiltLimitValid(tilt.tilt_limit_boost_deg)) pn_tilt_limit_boost = tilt.tilt_limit_boost_deg;
+                        else ESP_LOGW(TAG, "[GUID CFG] boost tilt limit %.1f out of (0,%.0f] — keeping %.1f",
+                                           (double)tilt.tilt_limit_boost_deg,
+                                           (double)config::GUIDANCE_TILT_LIMIT_MAX_DEG,
+                                           (double)pn_tilt_limit_boost);
+                        if (guidanceTiltLimitValid(tilt.tilt_limit_coast_deg)) pn_tilt_limit_coast = tilt.tilt_limit_coast_deg;
+                        else ESP_LOGW(TAG, "[GUID CFG] coast tilt limit %.1f out of (0,%.0f] — keeping %.1f",
+                                           (double)tilt.tilt_limit_coast_deg,
+                                           (double)config::GUIDANCE_TILT_LIMIT_MAX_DEG,
+                                           (double)pn_tilt_limit_coast);
+                    }
                     // Aim point.  The FC — not the library — owns magnitude
                     // policy (TR_GuidancePN.h).  REJECT and keep the previous
                     // point; do NOT clamp, so the flown aim point always equals
@@ -13937,14 +13982,16 @@ static void loop_fc()
                         out_status_query_data,
                         guidanceFlownTargetSrc(false, pn_target_mode));
                     ESP_LOGI(TAG, "[GUID CFG] en=%s law=%s N=%.1f maxA=%.0f a2f=%.1f maxFin=%.0f "
-                                  "minV=%.0f mode=%u alt=%.0f kp=%.2f kd=%.2f aim=(%.1f,%.1f)",
+                                  "minV=%.0f mode=%u alt=%.0f kp=%.2f kd=%.2f aim=(%.1f,%.1f) "
+                                  "tilt=%.1f/%.1f",
                                   guidance_enabled ? "ON" : "OFF",
                                   pn_guidance_law == GUIDE_LAW_STATION_KEEP ? "STATION_KEEP" : "PN",
                                   (double)pn_nav_gain, (double)pn_max_accel, (double)pn_accel_to_fin,
                                   (double)pn_max_fin_deg, (double)pn_min_speed,
                                   (unsigned)pn_target_mode, (double)pn_target_alt,
                                   (double)pn_kp_pos, (double)pn_kd_vel,
-                                  (double)pn_target_e, (double)pn_target_n);
+                                  (double)pn_target_e, (double)pn_target_n,
+                                  (double)pn_tilt_limit_boost, (double)pn_tilt_limit_coast);
                     prefs.begin("servo", false);
                     prefs.putBool("guid_en", guidance_enabled);
                     prefs.putFloat("gng", pn_nav_gain);
@@ -13960,23 +14007,28 @@ static void loop_fc()
                     prefs.putFloat("gkp", pn_kp_pos);
                     prefs.putFloat("gkd", pn_kd_vel);
                     prefs.putUChar("glw", pn_guidance_law);
+                    prefs.putFloat("gtlb", pn_tilt_limit_boost);
+                    prefs.putFloat("gtlc", pn_tilt_limit_coast);
                     config_report_dirty = true; log_next_report_send = true;   // #915
                     prefs.end();
                     ESP_LOGI(TAG, "[GUID CFG] Saved to NVS");
                 }
                 else
                 {
-                    // #534: this is now ALSO the "app is older than the
-                    // firmware" path — a 36-byte-era app frame fails the
-                    // cfg_len >= sizeof(GuidanceConfigData) gate.  Echo the
-                    // lengths so a version skew is diagnosable from the log
-                    // instead of looking like an I2C fault.  A skewed frame
-                    // never matches, so its retries end with the OC's repeat
+                    // #534: this is now ALSO the "OC is older than the
+                    // firmware" path — an OC that predates GuidanceConfigFrame
+                    // relays only the 45-byte GuidanceConfigData, which fails
+                    // the cfg_len >= sizeof(GuidanceConfigFrame) gate.  (An
+                    // older APP no longer lands here: the OC zero-fills its
+                    // 45-byte frame's tilt tail.)  Echo the lengths so a
+                    // version skew is diagnosable from the log instead of
+                    // looking like an I2C fault.  A skewed frame never
+                    // matches, so its retries end with the OC's repeat
                     // window — bounded, like any other miss.
                     ESP_LOGW(TAG, "[GUID CFG] readConfigFrame FAILED — got %u bytes, need %u. "
-                                  "If the FC is healthy this is an OUT-OF-DATE APP: guidance "
+                                  "If the FC is healthy this is an OUT-OF-DATE OC: guidance "
                                   "config was NOT applied and the previous config still flies.",
-                                  (unsigned)cfg_len, (unsigned)sizeof(GuidanceConfigData));
+                                  (unsigned)cfg_len, (unsigned)sizeof(GuidanceConfigFrame));
                     cfgRetryOnNextPoll("GUID CFG");   // #1112
                 }
             }
@@ -15398,12 +15450,12 @@ static void loop_fc()
                             if (nose_up < -1.0f) nose_up = -1.0f;
                             float tilt_deg = acosf(nose_up) * (180.0f / (float)M_PI);
                             float tilt_limit = burnout_detected
-                                ? config::GUIDANCE_TILT_LIMIT_COAST_DEG
-                                : config::GUIDANCE_TILT_LIMIT_BOOST_DEG;
+                                ? pn_tilt_limit_coast
+                                : pn_tilt_limit_boost;
                             if (guidance_enabled && !guidance_tilt_inhibited &&
                                 tilt_deg > tilt_limit) {
                                 guidance_tilt_inhibited = true;
-                                ESP_LOGW(TAG, "[GUID] tilt %.1f deg > %.0f limit (%s) "
+                                ESP_LOGW(TAG, "[GUID] tilt %.1f deg > %.1f limit (%s) "
                                          "— guidance LATCHED off, roll-only for flight",
                                          (double)tilt_deg, (double)tilt_limit,
                                          burnout_detected ? "coast" : "boost");

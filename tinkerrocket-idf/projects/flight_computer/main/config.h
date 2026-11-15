@@ -1225,8 +1225,14 @@ struct config : board_pins
     // in coast) and a heading-error could push the wrong way, so a hard tilt
     // ceiling is a safety floor. Boost limit is tighter (a vertical boost
     // should stay near-vertical); coast allows more before giving up.
+    // These are the factory defaults: the app sets both (cmd 65's
+    // GuidanceTiltLimitData tail, NVS "gtlb"/"gtlc").  The FC refuses
+    // anything outside (0, GUIDANCE_TILT_LIMIT_MAX_DEG] and keeps the limit
+    // it had — past 60 deg a lateral command is mostly along the flight path
+    // and the latch has stopped being a safety floor.
     static constexpr float GUIDANCE_TILT_LIMIT_BOOST_DEG = 15.0f;
     static constexpr float GUIDANCE_TILT_LIMIT_COAST_DEG = 20.0f;
+    static constexpr float GUIDANCE_TILT_LIMIT_MAX_DEG   = 60.0f;
     // Fin→servo layout (cruciform mix shared by roll / ground-test / guidance).
     // FIN_AZIMUTH_n_DEG = ring-POSITION azimuth of servo n's fin (0 = top slot,
     // 90 = right, … looking from the rear — what the app's ring GUI shows).

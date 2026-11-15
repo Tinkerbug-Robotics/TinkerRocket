@@ -3390,7 +3390,7 @@ static constexpr uint8_t LOG_BUFFER_STATS_MSG = 0xE2;  // OC→self: 52-byte Log
 // the I2S telemetry stream exists, which is the whole point — see
 // FcBootStatusData above.  Stops once the FC enters loop_fc().
 static constexpr uint8_t FC_BOOT_STATUS_MSG   = 0xFA;  // FC→OC: 4-byte FcBootStatusData, boot progress during setup_fc only
-static constexpr uint8_t CONFIG_REPORT_MSG   = 0xFB;  // FC→OC: 201-byte ConfigReportData, everything the app's config
+static constexpr uint8_t CONFIG_REPORT_MSG   = 0xFB;  // FC→OC: 209-byte ConfigReportData, everything the app's config
                                                       // readback cannot otherwise see (#915).  PUSHED, not requested —
                                                       // see the struct comment.  0xFC/0xFD have since gone to the base
                                                       // station's own log records: 0xA0-0xFD is FULL.  New codes open
@@ -3431,7 +3431,7 @@ static constexpr uint8_t FC_IDENTITY         = 0xEC;
 static constexpr uint8_t ORIENT_CONFIG_PENDING = 0xED;  // OC→FC: payload follows as ORIENT_CONFIG_MSG
 static constexpr uint8_t ORIENT_CONFIG_MSG     = 0xEE;  // 1-byte ImuOrientConfigData
 static constexpr uint8_t GUIDANCE_CONFIG_PENDING = 0xEF;  // OC→FC: payload follows as GUIDANCE_CONFIG_MSG
-static constexpr uint8_t GUIDANCE_CONFIG_MSG     = 0xF0;  // 45-byte GuidanceConfigData
+static constexpr uint8_t GUIDANCE_CONFIG_MSG     = 0xF0;  // 53-byte GuidanceConfigFrame
 static constexpr uint8_t FIN_CONFIG_PENDING      = 0xF2;  // OC→FC: payload follows as FIN_CONFIG_MSG
 static constexpr uint8_t FIN_CONFIG_MSG          = 0xF3;  // 18-byte FinConfigData
 // IMU logging rate (user setting, BLE cmd 67): the ISM6HG256 ODR the FC
@@ -4037,6 +4037,40 @@ typedef struct __attribute__((packed))
 } GuidanceConfigData;
 static_assert(sizeof(GuidanceConfigData) == 45, "GuidanceConfigData must be 45 bytes");
 
+// The guidance tilt-limit safety gate (config::GUIDANCE_TILT_LIMIT_*_DEG),
+// settable from the app.  Off-vertical angle of the nose above which guidance
+// is latched off for the rest of the flight: `boost` before burnout, `coast`
+// after.  The FC accepts (0, 60] deg and keeps its previous value for
+// anything else — 0 included, which is what an older app's frame carries
+// (see GuidanceConfigFrame).
+//
+// Its own struct rather than two more fields on GuidanceConfigData: that
+// struct is embedded mid-ConfigReportData, where growing it would move every
+// block after it and break the report's prefix versioning.  The report
+// carries this one at its end instead (v5).
+typedef struct __attribute__((packed))
+{
+    float tilt_limit_boost_deg;  // latch angle before burnout (deg)
+    float tilt_limit_coast_deg;  // latch angle after burnout (deg)
+} GuidanceTiltLimitData;
+static_assert(sizeof(GuidanceTiltLimitData) == 8, "GuidanceTiltLimitData must be 8 bytes");
+
+// The BLE cmd 65 payload and the OC->FC GUIDANCE_CONFIG_MSG (v3 of the
+// frame): GuidanceConfigData, then the tilt limits APPENDED at offset 45, so
+// the 45-byte v2 frame stays a byte-exact prefix.  A v2-era FC reading this
+// frame through a v2-era OC gets its 45 bytes (the OC relays only what it
+// knows) and flies its compiled tilt limits.  A v3 OC given a 45-byte frame
+// by an older app zero-fills the tail before relaying, and the FC keeps the
+// limits it already holds.  A v2-era FC behind a v3 OC refuses the 53-byte
+// frame (its length check) and logs it, as #534's step did — the OTA relay
+// updates both.
+typedef struct __attribute__((packed))
+{
+    GuidanceConfigData    config;
+    GuidanceTiltLimitData tilt;
+} GuidanceConfigFrame;
+static_assert(sizeof(GuidanceConfigFrame) == 53, "GuidanceConfigFrame must be 53 bytes");
+
 // Drift-Cast guidance aim point (#435, BLE cmd 28).  Byte-for-byte the app
 // payload built by BLEDevice.sendGuidancePoint: {lat f64, lon f64, alt f32} LE.
 // The FC converts to pad-relative ENU at receipt (and re-converts when the
@@ -4422,14 +4456,15 @@ struct __attribute__((packed)) ConfigReportData
 {
     // v1 (#915): 169 bytes, through `roll`.  v2 (#1231): + `pyro`, 193
     // bytes.  v3 (#1472): + `camera_type`, 194 bytes.  v4 (BLE cmd 81): +
-    // `antenna`, 201 bytes.  Each version is a byte-exact PREFIX of the next
-    // — the OC accepts all four and simply has nothing FC-sourced to serve
-    // for the groups an older sender lacks.
+    // `antenna`, 201 bytes.  v5: + `guidance_tilt`, 209 bytes.  Each version
+    // is a byte-exact PREFIX of the next — the OC accepts all five and
+    // simply has nothing FC-sourced to serve for the groups an older sender
+    // lacks.
     // An OC OLDER than its FC refuses the newer version outright (it will
-    // not reinterpret a layout it does not know), so a v4 FC behind a
-    // pre-v4 OC has no report at all until the OC is updated — the OTA
+    // not reinterpret a layout it does not know), so a v5 FC behind a
+    // pre-v5 OC has no report at all until the OC is updated — the OTA
     // relay updates the OC first, which is the order that never hits this.
-    static constexpr uint8_t VERSION = 4;
+    static constexpr uint8_t VERSION = 5;
 
     // flags bit positions
     // bit 0: retired (was F_SOUNDS, piezo sounds enabled).  Never set by
@@ -4498,9 +4533,14 @@ struct __attribute__((packed)) ConfigReportData
     // on the Beetle's FC.  Appended after `camera_type` so a v3 report stays
     // a prefix; see VERSION.
     AntennaOffsetConfigData antenna;
+    // v5.  The guidance tilt limits the FC will latch at (cmd 65's tail) —
+    // its live values, NVS or compiled defaults alike, since every FC has a
+    // pair it will fly.  Not inside `guidance`: see GuidanceTiltLimitData.
+    // Appended after `antenna` so a v4 report stays a prefix; see VERSION.
+    GuidanceTiltLimitData   guidance_tilt;
 };
-static_assert(sizeof(ConfigReportData) == 201,
-              "ConfigReportData layout check (v4: v3 194 + antenna 7)");
+static_assert(sizeof(ConfigReportData) == 209,
+              "ConfigReportData layout check (v5: v4 201 + guidance_tilt 8)");
 // Nested-struct starts are wire ABI: the OC parses this by memcpy of the
 // whole thing, so a member reordered here silently reinterprets every field
 // after it.
@@ -4510,17 +4550,21 @@ static_assert(offsetof(ConfigReportData, servo) == 8 &&
               offsetof(ConfigReportData, roll) == 93 &&
               offsetof(ConfigReportData, pyro) == 169 &&
               offsetof(ConfigReportData, camera_type) == 193 &&
-              offsetof(ConfigReportData, antenna) == 194,
+              offsetof(ConfigReportData, antenna) == 194 &&
+              offsetof(ConfigReportData, guidance_tilt) == 201,
               "ConfigReportData member order is wire ABI");
 // The OC copies an older report by these lengths, so each must equal the
 // whole of that version's layout — v1 is everything before `pyro`, v2
-// everything before `camera_type`, v3 everything before `antenna`.
+// everything before `camera_type`, v3 everything before `antenna`, v4
+// everything before `guidance_tilt`.
 static_assert(offsetof(ConfigReportData, pyro) == 169,
               "v1 ConfigReportData must remain a byte-exact prefix of v2");
 static_assert(offsetof(ConfigReportData, camera_type) == 193,
               "v2 ConfigReportData must remain a byte-exact prefix of v3");
 static_assert(offsetof(ConfigReportData, antenna) == 194,
               "v3 ConfigReportData must remain a byte-exact prefix of v4");
+static_assert(offsetof(ConfigReportData, guidance_tilt) == 201,
+              "v4 ConfigReportData must remain a byte-exact prefix of v5");
 
 // --- Log Buffer Stats Data (OC self-emitted, ~1 Hz while logging) -----------
 // Snapshot of the OC's ring-buffer health written into the flight log so the

@@ -78,6 +78,10 @@ public data class RocketProfile(
     val pnKpPos: Float = 0.8f,             // config::PN_KP_POS_PER_S2
     val pnKdVel: Float = 1.5f,             // config::PN_KD_VEL_PER_S
     val pnGuidanceLaw: Int = 0,            // config::GUIDANCE_LAW_DEFAULT
+    // Guidance latches off for the rest of the flight past this tilt from
+    // vertical: boost before burnout, coast after (cmd 65's tail).
+    val pnTiltLimitBoostDeg: Float = 15f,  // config::GUIDANCE_TILT_LIMIT_BOOST_DEG
+    val pnTiltLimitCoastDeg: Float = 20f,  // config::GUIDANCE_TILT_LIMIT_COAST_DEG
     val cameraType: Int = 2,               // config::CAMERA_TYPE (RunCam)
     // #1095 item 2: pad auto-detect (IMU_ORIENT_AUTO), in lockstep with the
     // iOS RocketProfile default and config::BOARD_TO_ROCKET_ORIENT on both
@@ -310,6 +314,8 @@ public object RocketProfileCodec {
         put("pnKpPos", JsonPrimitive(p.pnKpPos))
         put("pnKdVel", JsonPrimitive(p.pnKdVel))
         put("pnGuidanceLaw", JsonPrimitive(p.pnGuidanceLaw))
+        put("pnTiltLimitBoostDeg", JsonPrimitive(p.pnTiltLimitBoostDeg))
+        put("pnTiltLimitCoastDeg", JsonPrimitive(p.pnTiltLimitCoastDeg))
         put("cameraType", JsonPrimitive(p.cameraType))
         put("imuOrientSetting", JsonPrimitive(p.imuOrientSetting))
         put("imuRateHz", JsonPrimitive(p.imuRateHz))
@@ -461,6 +467,8 @@ public object RocketProfileCodec {
             pnKpPos = o.float("pnKpPos") ?: d.pnKpPos,
             pnKdVel = o.float("pnKdVel") ?: d.pnKdVel,
             pnGuidanceLaw = o.int("pnGuidanceLaw") ?: d.pnGuidanceLaw,
+            pnTiltLimitBoostDeg = o.float("pnTiltLimitBoostDeg") ?: d.pnTiltLimitBoostDeg,
+            pnTiltLimitCoastDeg = o.float("pnTiltLimitCoastDeg") ?: d.pnTiltLimitCoastDeg,
             // Normalize enum-ish ints on load.  Older builds edited these as
             // free-typed numbers, so a stored value can sit outside the range
             // the firmware defines; the pickers that replaced those fields

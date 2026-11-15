@@ -43,6 +43,9 @@ public object TelemetryDispatch {
             // half of it.
             "config_servo" -> TelemetryCharMessage.ConfigServo(ConfigServoMessage.parse(json))
             "config_guid" -> TelemetryCharMessage.ConfigGuid(ConfigGuidMessage.parse(json))
+            // The guidance tilt limits, after config_guid in their own frame;
+            // only from a flight computer that reports them.
+            "config_tilt" -> TelemetryCharMessage.ConfigTilt(ConfigTiltMessage.parse(json))
             "config_roll" -> TelemetryCharMessage.ConfigRoll(ConfigRollMessage.parse(json))
             "config_identity" -> TelemetryCharMessage.ConfigIdentity(ConfigIdentityMsg.parse(json))
             "fc_identity" -> TelemetryCharMessage.FcIdentity(FcIdentityMsg.parse(json))
@@ -93,6 +96,9 @@ public sealed interface TelemetryCharMessage {
 
     /** `"type":"config_guid"` (#915); null payload = the frame was malformed. */
     public data class ConfigGuid(val extras: RocketGuidanceExtras?) : TelemetryCharMessage
+
+    /** `"type":"config_tilt"` — guidance tilt limits; null payload = the frame was malformed. */
+    public data class ConfigTilt(val tilt: GuidanceTilt?) : TelemetryCharMessage
 
     /** `"type":"config_roll"` (#915). EMPTY list = rate-only, null = malformed. */
     public data class ConfigRoll(val waypoints: List<ReportedRollWaypoint>?) : TelemetryCharMessage

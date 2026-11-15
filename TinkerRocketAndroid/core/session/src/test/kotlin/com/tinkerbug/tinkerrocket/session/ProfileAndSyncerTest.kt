@@ -70,6 +70,8 @@ class FirmwareDefaultsTest {
         assertEquals(0, p.pnGuidanceLaw)             // config.h:363 GUIDANCE_LAW_DEFAULT
         assertEquals(0.8f, p.pnKpPos)                // config.h:378 PN_KP_POS_PER_S2
         assertEquals(1.5f, p.pnKdVel)                // config.h:379 PN_KD_VEL_PER_S
+        assertEquals(15.0f, p.pnTiltLimitBoostDeg)   // config.h GUIDANCE_TILT_LIMIT_BOOST_DEG
+        assertEquals(20.0f, p.pnTiltLimitCoastDeg)   // config.h GUIDANCE_TILT_LIMIT_COAST_DEG
     }
 
     @Test
@@ -117,6 +119,22 @@ class RocketProfileCodecTest {
         assertEquals(0.12f, decoded.pidKp)
         assertEquals(333, decoded.servoHz)
         assertNull(decoded.magCal)
+    }
+
+    /** A profile saved before the tilt limits were settable gets the firmware's. */
+    @Test
+    fun tiltLimits_defaultOnAnOldRecord_andRoundTrip() {
+        val old = RocketProfileCodec.decode("""{"name":"Old","pnKdVel":1.2}""", nowMs = 0)
+        assertNotNull(old)
+        assertEquals(15f, old.pnTiltLimitBoostDeg)
+        assertEquals(20f, old.pnTiltLimitCoastDeg)
+
+        val edited = RocketProfile.makeDefault("Atlas", nowMs = 0)
+            .copy(pnTiltLimitBoostDeg = 25f, pnTiltLimitCoastDeg = 32.5f)
+        val decoded = RocketProfileCodec.decode(RocketProfileCodec.encode(edited), nowMs = 0)
+        assertNotNull(decoded)
+        assertEquals(25f, decoded.pnTiltLimitBoostDeg)
+        assertEquals(32.5f, decoded.pnTiltLimitCoastDeg)
     }
 
     @Test
@@ -677,6 +695,64 @@ class ActiveRocketSyncerTest {
         assertIs<ActiveRocketSyncer.SyncState.Synced>(r.syncer.syncState.value)
     }
 
+    /** cmd 65 carries the profile's tilt limits in its 53-byte form. */
+    @Test
+    fun pushGroup_guidance_sendsTheProfilesTiltLimits() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA", pnTiltLimitBoostDeg = 25f, pnTiltLimitCoastDeg = 32.5f) }
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+
+        val before = r.fw.commandFrames.size
+        r.syncer.pushGroup(ActiveRocketSyncer.ConfigGroup.GUIDANCE)
+        runCurrent()
+        val frame = r.fw.commandFrames.drop(before).single()
+        assertEquals(BleCommandId.GUIDANCE_CONFIG, frame[0].toInt())
+        assertEquals(54, frame.size)
+        val tail = java.nio.ByteBuffer.wrap(frame, 46, 8).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        assertEquals(25f, tail.float)
+        assertEquals(32.5f, tail.float)
+    }
+
+    /**
+     * config_tilt lands between config_guid and config_roll, so the #915
+     * re-adopt takes the tilt limits with the guidance parameters.
+     */
+    @Test
+    fun theExtrasReAdopt_takesTheReportedTiltLimits() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA") }
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        assertEquals(15f, r.store.activeProfile?.pnTiltLimitBoostDeg)
+
+        r.emitConfigReport(servoBias2 = 0, tilt = """{"type":"config_tilt","gtlb":25.0,"gtlc":32.5}""")
+        runCurrent()
+
+        assertEquals(25f, r.store.activeProfile?.pnTiltLimitBoostDeg)
+        assertEquals(32.5f, r.store.activeProfile?.pnTiltLimitCoastDeg)
+        assertTrue(ActiveRocketSyncer.GROUP_GUIDANCE_PARAMS in r.adoptedGroups())
+    }
+
+    /** No config_tilt (older firmware): the report still lands, the limits stay. */
+    @Test
+    fun theExtrasReAdopt_withoutConfigTilt_keepsTheProfilesTiltLimits() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA", pnTiltLimitBoostDeg = 25f, pnTiltLimitCoastDeg = 32.5f) }
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+
+        r.emitConfigReport(servoBias2 = 40)
+        runCurrent()
+
+        val cfg = assertNotNull(r.session.rocketConfig.value)
+        assertFalse(cfg.configReportGroupsMissing)
+        assertNull(cfg.guidanceTilt)
+        assertEquals(40, r.store.activeProfile?.servoBias2, "the extras re-adopt ran")
+        assertEquals(25f, r.store.activeProfile?.pnTiltLimitBoostDeg)
+        assertEquals(32.5f, r.store.activeProfile?.pnTiltLimitCoastDeg)
+    }
+
     /**
      * cmd 81 carries the profile's offset, and the cached readback follows at
      * once (iOS sendAntennaOffsetConfig) — but only on a rocket that reported
@@ -923,7 +999,7 @@ class ActiveRocketSyncerTest {
      * The three #915 config-report frames the out computer relays after the
      * config frame, each one a copy of the current readback plus its group.
      */
-    private fun Rig.emitConfigReport(servoBias2: Int) {
+    private fun Rig.emitConfigReport(servoBias2: Int, tilt: String? = null) {
         fw.emitTelemetryJson(
             """{"type":"config_servo","sb2":$servoBias2,"sb3":0,"sb4":0,"fmn":-60.00,"fmx":60.00,""" +
                 """"faz":[0.0,90.0,180.0,270.0],"frv":0,"frrv":0,"snd":true}""",
@@ -932,6 +1008,7 @@ class ActiveRocketSyncerTest {
             """{"type":"config_guid","gng":3.00,"gma":30.0,"gaf":0.50,"gmf":15.0,"gms":30.0,""" +
                 """"gcd":0,"gtm":0,"gte":0.0,"gtn":0.0,"gta":0.0,"gkp":0.00,"gkd":0.00,"glw":0}""",
         )
+        tilt?.let { fw.emitTelemetryJson(it) }
         fw.emitTelemetryJson("""{"type":"config_roll","n":0,"wp":[]}""")
     }
 
@@ -1841,6 +1918,45 @@ class ActiveRocketSyncerTest {
         assertEquals(listOf(ActiveRocketSyncer.GROUP_GUIDANCE_PARAMS), r.changed)
         assertEquals(5.0f, r.profile.pnNavGain)
         assertEquals(0, r.profile.pnGuidanceLaw)
+    }
+
+    @Test
+    fun guidanceTiltLimits_areAdoptedWhenReported() {
+        val p = RocketProfile.makeDefault("x", 0)
+        val tilt = com.tinkerbug.tinkerrocket.protocol.GuidanceTilt(boostDeg = 25f, coastDeg = 32.5f)
+        val r = ActiveRocketSyncer.adopt(p, fullyReportingConfig().copy(guidanceTilt = tilt))
+        assertEquals(listOf(ActiveRocketSyncer.GROUP_GUIDANCE_PARAMS), r.changed)
+        assertEquals(25f, r.profile.pnTiltLimitBoostDeg)
+        assertEquals(32.5f, r.profile.pnTiltLimitCoastDeg)
+
+        // With the other guidance parameters also differing, one group.
+        val both = ActiveRocketSyncer.adopt(
+            p.copy(pnNavGain = 9f), fullyReportingConfig().copy(guidanceTilt = tilt),
+        )
+        assertEquals(listOf(ActiveRocketSyncer.GROUP_GUIDANCE_PARAMS), both.changed)
+        assertEquals(5.0f, both.profile.pnNavGain)
+        assertEquals(25f, both.profile.pnTiltLimitBoostDeg)
+
+        // Agreeing to the readback's one decimal is no change.
+        val same = com.tinkerbug.tinkerrocket.protocol.GuidanceTilt(15.0f, 20.0f)
+        assertEquals(
+            emptyList(),
+            ActiveRocketSyncer.adopt(
+                p.copy(pnTiltLimitBoostDeg = 15.04f), fullyReportingConfig().copy(guidanceTilt = same),
+            ).changed,
+        )
+    }
+
+    /** Older firmware sends no config_tilt: the profile keeps its own limits. */
+    @Test
+    fun guidanceTiltLimits_areLeftAloneWhenNotReported() {
+        val p = RocketProfile.makeDefault("x", 0)
+            .copy(pnTiltLimitBoostDeg = 25f, pnTiltLimitCoastDeg = 32.5f)
+        val r = ActiveRocketSyncer.adopt(p, fullyReportingConfig())
+        assertEquals(emptyList(), r.changed)
+        assertEquals(25f, r.profile.pnTiltLimitBoostDeg)
+        assertEquals(32.5f, r.profile.pnTiltLimitCoastDeg)
+        assertEquals(emptyList(), fullyReportingConfig().unreportedGroups)
     }
 
     /**

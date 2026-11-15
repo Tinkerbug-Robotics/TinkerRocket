@@ -508,6 +508,53 @@ class TelemetryDispatchTest {
         assertEquals(listOf("Camera"), cfg.unreportedGroups)
     }
 
+    // ── guidance tilt limits (config_tilt) ────────────────────────────────
+
+    @Test
+    fun `config_tilt carries both tilt limits`() {
+        val msg = assertIs<TelemetryCharMessage.ConfigTilt>(
+            TelemetryDispatch.parse("""{"type":"config_tilt","gtlb":15.0,"gtlc":20.0}"""),
+        )
+        assertEquals(GuidanceTilt(boostDeg = 15f, coastDeg = 20f), msg.tilt)
+    }
+
+    @Test
+    fun `config_tilt missing either key is malformed`() {
+        for (frame in listOf(
+            """{"type":"config_tilt","gtlb":15.0}""",
+            """{"type":"config_tilt","gtlc":20.0}""",
+        )) {
+            assertNull(assertIs<TelemetryCharMessage.ConfigTilt>(TelemetryDispatch.parse(frame)).tilt, frame)
+        }
+    }
+
+    @Test
+    fun `config_guid parses with no tilt frame, and the tilt stays unreported`() {
+        val msg = assertIs<TelemetryCharMessage.ConfigGuid>(
+            TelemetryDispatch.parse(
+                """{"type":"config_guid","gng":3.00,"gma":30.0,"gaf":0.50,"gmf":15.0,"gms":30.0,""" +
+                    """"gcd":0,"gtm":0,"gte":0.0,"gtn":0.0,"gta":0.0,"gkp":0.00,"gkd":0.00,"glw":0}""",
+            ),
+        )
+        assertEquals(3f, msg.extras?.navGain)
+        // A rocket that sent only config_guid has no tilt to report, and the
+        // tilt limits are not a group the #915 re-adopt waits on.
+        val cfg = RocketConfig(
+            servoExtras = RocketServoExtras(0, 0, 0, -60f, 60f, listOf(0f, 90f, 180f, 270f), 0, 0),
+            guidanceExtras = msg.extras,
+            rollWaypoints = emptyList(),
+        )
+        assertNull(cfg.guidanceTilt)
+        assertFalse(cfg.configReportGroupsMissing)
+    }
+
+    @Test
+    fun `a config rebuild keeps the reported tilt`() {
+        val before = RocketConfig(guidanceTilt = GuidanceTilt(25f, 32.5f))
+        val after = config("""{"type":"config","shz":333}""", previous = before)
+        assertEquals(GuidanceTilt(25f, 32.5f), after.guidanceTilt)
+    }
+
     @Test
     fun `config then config_pyro then config keeps both sides`() {
         // The real connect-time sequence: OC pushes config, then config_pyro,

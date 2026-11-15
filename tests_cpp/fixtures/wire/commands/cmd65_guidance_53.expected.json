@@ -13,4 +13,6 @@
  "target_mode": 0,
  "kp_pos_per_s2": 0.0500000007,
  "kd_vel_per_s": 0.400000006,
- "guidance_law": 1}
+ "guidance_law": 1,
+ "tilt_limit_boost_deg": 25,
+ "tilt_limit_coast_deg": 32.5}

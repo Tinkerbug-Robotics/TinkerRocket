@@ -122,7 +122,9 @@ final class GuidanceStateReadbackTests: XCTestCase {
                                   minSpeed: p.pnMinSpeed, coastDelayMs: p.pnCoastDelayMs,
                                   targetMode: p.pnTargetMode, targetE: p.pnTargetE,
                                   targetN: p.pnTargetN, targetAlt: p.pnTargetAltM,
-                                  kpPos: p.pnKpPos, kdVel: p.pnKdVel, guidanceLaw: 1)
+                                  kpPos: p.pnKpPos, kdVel: p.pnKdVel, guidanceLaw: 1,
+                                  tiltLimitBoostDeg: p.pnTiltLimitBoostDeg,
+                                  tiltLimitCoastDeg: p.pnTiltLimitCoastDeg)
         XCTAssertEqual(sent, 65)
         XCTAssertEqual(rocket.rocketConfig?.guidanceEnabled, false,
                        "a send that never arrived must not read as applied")
