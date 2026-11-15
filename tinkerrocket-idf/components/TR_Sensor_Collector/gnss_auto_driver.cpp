@@ -67,6 +67,23 @@ uint8_t TR_GNSSAuto::rememberedType()
     {
         hint_loaded_ = true;
         hint_ = GNSS_TYPE_NONE;
+#if defined(TR_BENCH_GNSS_HINT)
+        // BENCH (-DTR_BENCH_GNSS_HINT=<GNSS_TYPE_*>, 0 none): the record set
+        // before the bring-up reads it, every boot, so the rig reaches that
+        // hint's plan with any receiver on J1. Never fly this image.
+        {
+            Preferences w;
+            if (w.begin(kHintNamespace, false))
+            {
+                if (TR_BENCH_GNSS_HINT == GNSS_TYPE_NONE) (void)w.remove(kHintKey);
+                else w.putUChar(kHintKey, static_cast<uint8_t>(TR_BENCH_GNSS_HINT));
+                w.end();
+            }
+            ESP_LOGE(TAG, "*** BENCH IMAGE: the receiver found last boot forced to %s (-DTR_BENCH_GNSS_HINT=%d) "
+                          "-- never fly this image ***",
+                     nameOr(static_cast<uint8_t>(TR_BENCH_GNSS_HINT), "nothing known"), TR_BENCH_GNSS_HINT);
+        }
+#endif
         Preferences prefs;
         if (prefs.begin(kHintNamespace, true))   // absent until a receiver is first found
         {
@@ -222,6 +239,11 @@ bool TR_GNSSAuto::begin(uint8_t update_rate_hz,
     uint32_t ublox_baud = 0;
     bool ublox_swapped = false;
     ubloxLastLink(ublox_baud, ublox_swapped);
+#if defined(TR_GNSS_UBLOX_NO_SWAP) && TR_GNSS_UBLOX_NO_SWAP
+    // This board's J1 is wired one way: a swapped record is no u-blox of its
+    // own, and the probes run (TR_GNSSReceiverUBlox_Serial never tries them)
+    ublox_swapped = false;
+#endif
     gnss_detect::BringUp up;
     up.start(rememberedType(), ublox_baud, kept_power, ublox_swapped, kLookForPx1105r);
     ESP_LOGI(TAG, "GNSS auto: which receiver is on J1 (RX=%u TX=%u)? Last boot: %s",

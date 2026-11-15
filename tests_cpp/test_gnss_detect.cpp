@@ -381,6 +381,7 @@ private:
 struct FakeSdr : Receiver
 {
     uint32_t streams_from_ms = 0;   // its first fix
+    uint32_t every_ms = 10;         // its epochs' spacing (1000: a status a second, before its first fix)
     size_t   heard = 0;             // bytes the host sent it, read at its 2 Mbaud
 
     void tick(uint32_t now_ms, const Line& from_host, Line& to_host) override
@@ -399,7 +400,7 @@ struct FakeSdr : Receiver
         if (k_ == 0) to_host.send(kSdrStream, kSdrStreamEpochsOffset, sdr_rtcm::kBaud, t);
         to_host.send(kSdrStream + kSdrStreamEpochsOffset + k_ * epoch_bytes, epoch_bytes, sdr_rtcm::kBaud, t);
         k_ = (k_ + 1) % kSdrStreamEpochs;
-        next_ms_ = now_ms + 10;
+        next_ms_ = now_ms + every_ms;
     }
 
 private:
@@ -1755,4 +1756,67 @@ TEST(GnssBringUpPx1105r, ItsPathsFinishWellInsideTheSetupWatchdog)
     uint32_t r2 = 0;
     for (size_t i = 0; i < n.plan().n; i++) r2 += n.plan().probes[i].listen_ms;
     EXPECT_LT(n.plan().budget_ms + r2 + 63000u + 2000u + BringUp::kMosaicLateTimeoutMs, 95000u);
+}
+
+// The one image (the rig owner's #1705 review, 2026-11-15): with a u-blox
+// hint or nothing known, a board still before its first fix (a status a
+// second) must be heard by the plan, or the u-blox driver's 60 s search runs
+// with it on J1; and the second look, after that search, hears it the same.
+TEST(GnssDetectOneImage, ItsBoardWindowCatchesAStatusASecond)
+{
+    for (uint8_t hint : {GNSS_TYPE_UBLOX, GNSS_TYPE_NONE, GNSS_TYPE_MOSAIC, GNSS_TYPE_SDR, GNSS_TYPE_PX1105R})
+    {
+        const Plan p = planFor(hint, 0, false, true);
+        bool board = false;
+        for (size_t i = 0; i < p.n; i++)
+        {
+            if (p.probes[i].asks != GNSS_TYPE_SDR) continue;
+            board = true;
+            EXPECT_GE(p.probes[i].listen_ms, 1000u) << int(hint);
+        }
+        EXPECT_TRUE(board) << int(hint);
+    }
+    const Plan second = secondLookPlan(true);
+    EXPECT_EQ(second.probes[0].asks, GNSS_TYPE_SDR);
+    EXPECT_GE(second.probes[0].listen_ms, 1000u);
+    // the auto image's own plans keep their 250 ms
+    EXPECT_EQ(planFor(GNSS_TYPE_UBLOX, 0, false, false).probes[planFor(GNSS_TYPE_UBLOX, 0, false, false).n - 3].listen_ms,
+              kSdrListenMs);
+}
+
+TEST(GnssDetectOneImage, AUbloxHintGoesRoundLongEnoughForABoardStartingUp)
+{
+    const Plan p = planFor(GNSS_TYPE_UBLOX, 9600, false, true);
+    EXPECT_EQ(p.fallback, GNSS_TYPE_UBLOX);
+    EXPECT_GE(p.budget_ms, kBudgetBoardMs);
+    EXPECT_EQ(planFor(GNSS_TYPE_UBLOX, 9600, false, false).budget_ms, kBudgetUbloxMs);   // the auto image's
+}
+
+TEST(GnssDetectOneImage, AUbloxOrBlankHintFindsABoardBeforeItsFirstFix)
+{
+    // detect() starts at 4000 ms; the board's receiver starts 2.5 s into the
+    // plan and sends a status a second from then
+    for (uint8_t hint : {GNSS_TYPE_UBLOX, GNSS_TYPE_NONE})
+    {
+        for (uint32_t phase : {0u, 300u, 600u, 900u})
+        {
+            const Plan p = planFor(hint, 0, false, true);
+            FakeSdr board;
+            board.streams_from_ms = 6500 + phase;
+            board.every_ms = 1000;
+            const Result r = detect(&board, p);
+            EXPECT_EQ(r.found, GNSS_TYPE_SDR) << int(hint) << " phase " << phase;
+        }
+    }
+}
+
+TEST(GnssDetectOneImage, TheSecondLookFindsABoardBeforeItsFirstFix)
+{
+    for (uint32_t phase : {0u, 250u, 500u, 750u})
+    {
+        FakeSdr board;
+        board.streams_from_ms = 4000 + phase;
+        board.every_ms = 1000;
+        EXPECT_EQ(detect(&board, secondLookPlan(true)).found, GNSS_TYPE_SDR) << phase;
+    }
 }

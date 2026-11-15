@@ -690,6 +690,23 @@ if(TR_GNSS_AUTO_RAW)
     set(TR_GNSS_AUTO ON)
     # Every ephemeris each raw receiver sends, as their own images hold them
     add_compile_definitions(TR_GNSS_AUTO_RAW=1 TR_EPH_CAPACITY=128)
+    # The V10's J1 is wired one way: the u-blox driver's swapped-wire search
+    # (for older boards' wiring) would drive J1 pin 2, the gnss-sdr-dev
+    # board's TX, against the board whenever its search runs with the board
+    # silent (the rig owner's #1705 review, 2026-11-15)
+    if(TR_BOARD_V10)
+        add_compile_definitions(TR_GNSS_UBLOX_NO_SWAP=1)
+    endif()
+    # Bench (-DTR_BENCH_GNSS_HINT=<GNSS_TYPE_*>, 0 for none): the receiver
+    # found last boot forced each boot, so the rig reaches that hint's path
+    # with the board on J1 (TR_GNSSAuto::rememberedType). Marked -bench.
+    if(DEFINED TR_BENCH_GNSS_HINT)
+        add_compile_definitions(TR_BENCH_GNSS_HINT=${TR_BENCH_GNSS_HINT})
+        message(WARNING "TR_BENCH_GNSS_HINT=${TR_BENCH_GNSS_HINT} -- the receiver found last boot forced every boot (bench): never fly it")
+    endif()
+endif()
+if(DEFINED TR_BENCH_GNSS_HINT AND NOT TR_GNSS_AUTO_RAW)
+    message(FATAL_ERROR "TR_BENCH_GNSS_HINT is for the one image (-DTR_GNSS_AUTO_RAW=1)")
 endif()
 if(NOT DEFINED TR_GNSS_AUTO AND (TR_BOARD_V9 OR TR_BOARD_V10) AND NOT TR_GNSS_MOSAIC AND NOT TR_GNSS_SDR AND NOT TR_GNSS_PX1105R)
     set(TR_GNSS_AUTO ON)

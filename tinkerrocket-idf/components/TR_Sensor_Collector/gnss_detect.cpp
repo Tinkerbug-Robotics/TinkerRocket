@@ -125,7 +125,8 @@ Plan planFor(uint8_t hint, uint32_t ublox_last_baud, bool receiver_kept_power, b
     auto addUblox = [&]() {
         for (size_t i = 0; i < nub; i++) p.probes[p.n++] = Probe{ub[i], GNSS_TYPE_UBLOX, ubloxListenMs(ub[i])};
     };
-    auto addSdr = [&]() { p.probes[p.n++] = Probe{kSdrBaud, GNSS_TYPE_SDR, kSdrListenMs}; };
+    const uint16_t sdr_listen_ms = px1105r ? kSdrListenRawMs : kSdrListenMs;
+    auto addSdr = [&]() { p.probes[p.n++] = Probe{kSdrBaud, GNSS_TYPE_SDR, sdr_listen_ms}; };
 
     if (hint == GNSS_TYPE_SDR)
     {
@@ -160,6 +161,7 @@ Plan planFor(uint8_t hint, uint32_t ublox_last_baud, bool receiver_kept_power, b
         p.budget_ms = (hint == GNSS_TYPE_UBLOX) ? kBudgetUbloxMs : kBudgetNoneMs;
         p.fallback = GNSS_TYPE_UBLOX;
     }
+    if (px1105r && p.fallback == GNSS_TYPE_UBLOX && p.budget_ms < kBudgetBoardMs) p.budget_ms = kBudgetBoardMs;
     if (px1105r) addPx1105r(p, hint == GNSS_TYPE_PX1105R);
     return p;
 }
@@ -167,10 +169,10 @@ Plan planFor(uint8_t hint, uint32_t ublox_last_baud, bool receiver_kept_power, b
 Plan secondLookPlan(bool px1105r)
 {
     Plan p;
-    p.probes[p.n++] = Probe{kSdrBaud, GNSS_TYPE_SDR, kSdrListenMs};
+    p.probes[p.n++] = Probe{kSdrBaud, GNSS_TYPE_SDR, px1105r ? kSdrListenRawMs : kSdrListenMs};
     p.probes[p.n++] = Probe{kMosaicTargetBaud, GNSS_TYPE_MOSAIC, kMosaicTargetListenMs};
     p.probes[p.n++] = Probe{kMosaicFactoryBaud, GNSS_TYPE_MOSAIC, kMosaicFactoryListenMs};
-    p.budget_ms = 1000;   // twice round
+    p.budget_ms = px1105r ? kBudgetSecondLookRawMs : 1000;   // twice round
     p.fallback = GNSS_TYPE_NONE;
     if (px1105r) addPx1105r(p, false);
     return p;

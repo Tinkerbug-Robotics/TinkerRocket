@@ -97,6 +97,12 @@ uint16_t ubloxListenMs(uint32_t baud);
 // measurement mode, every 100 ms in its fix mode, each a few hundred bytes
 // after the last.
 static constexpr uint16_t kSdrListenMs = 250;
+// In the one image's plans (px1105r): long enough for one of the board's
+// status frames, which come a second apart from its receiver's start until
+// its first fix (sdr_nav_start_policy.h kHeardMs) -- 250 ms caught a quarter
+// of them, and a board missed by a u-blox hint's plan got the u-blox driver's
+// 60 s search (the rig owner's #1705 review, 2026-11-15).
+static constexpr uint16_t kSdrListenRawMs = 1100;
 // The PX1105R answers its query within ~100 ms; set up, it streams 20 frames
 // a second. At 115200 the longer wait is for one booting with the flight
 // computer.
@@ -123,6 +129,13 @@ static constexpr uint32_t kBudgetNoneMs   = 6000;
 // so the plan's fallback is its driver, which listens (a stale hint with the
 // board put on since: the PX1105R's driver would never hear it).
 static constexpr uint32_t kBudgetPx1105rMs = 6000;
+// In the one image's plans whose fallback is the u-blox driver (a u-blox
+// hint, or nothing known): at least this long round, for a board whose
+// receiver starts within kHeardMs (3 s) of the sensors -- the plan then hands
+// the u-blox driver a J1 with no board talking on it. And the second look's,
+// after that driver: twice round with the board's longer window.
+static constexpr uint32_t kBudgetBoardMs = 4000;
+static constexpr uint32_t kBudgetSecondLookRawMs = 3000;
 
 // What proved the receiver.
 enum class Proof : uint8_t { NONE, SBF_BLOCK, PROMPT, REPLY, UBX_FRAME, NMEA, RTCM_TR, SKYTRAQ_FRAME };

@@ -41,6 +41,14 @@ The receiver is chosen once, at boot, before the filter starts, and holds for th
   leave it unheard for the boot (the rig owner's review, 2026-11-13). The hint stays until a
   receiver is proven.
 
+- a u-blox hint or nothing known (the rig owner's #1705 review, 2026-11-15): the board's listen is
+  1.1 s in every one-image plan (its status comes a second apart until its first fix; 250 ms caught a
+  quarter of them), the plan goes round at least 4 s before the u-blox driver's search, and the second
+  look after that search listens the same. On the V10 the u-blox driver never tries swapped RX/TX
+  (TR_GNSS_UBLOX_NO_SWAP): its J1 is wired one way, and the swap drove J1 pin 2, the board's TX, against
+  a board still silent. A bench build can force the hint each boot (-DTR_BENCH_GNSS_HINT=<type>, 0 none;
+  marked -bench) so the rig reaches these paths with the board on J1.
+
 The ionosphere the last pad calibration stored is read in setup before the choice; it goes to the
 raw filter right after the choice (the rig owner's review: it was dropped, RAW_ON still false).
 
