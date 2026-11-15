@@ -127,6 +127,13 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     var pnKpPos: Float = 0.8            // config::PN_KP_POS_PER_S2
     var pnKdVel: Float = 1.5            // config::PN_KD_VEL_PER_S
     var pnGuidanceLaw: UInt8 = 0        // config::GUIDANCE_LAW_DEFAULT (0 = PN, 1 = station-keep)
+    // Guidance tilt limits (cmd 65 tail, offsets 45/49): the off-vertical
+    // angle above which the FC latches guidance off for the rest of the
+    // flight, before and after burnout.  Defaults MUST equal config.h.  The
+    // FC accepts (0, 60] deg; reported back in config_tilt by firmware that
+    // has them.
+    var pnTiltLimitBoostDeg: Float = 15.0   // config::GUIDANCE_TILT_LIMIT_BOOST_DEG
+    var pnTiltLimitCoastDeg: Float = 20.0   // config::GUIDANCE_TILT_LIMIT_COAST_DEG
     var cameraType: UInt8 = 2          // 0=None, 1=GoPro, 2=RunCam
     /// IMU mounting orientation: 0xFF = auto (pad-gravity detect), 0..23 =
     /// manual board→rocket code. Manual fixes the roll clocking the control
@@ -420,6 +427,8 @@ extension RocketProfile {
         pnKpPos = try c.decodeIfPresent(Float.self, forKey: .pnKpPos) ?? defaults.pnKpPos
         pnKdVel = try c.decodeIfPresent(Float.self, forKey: .pnKdVel) ?? defaults.pnKdVel
         pnGuidanceLaw = try c.decodeIfPresent(UInt8.self, forKey: .pnGuidanceLaw) ?? defaults.pnGuidanceLaw
+        pnTiltLimitBoostDeg = try c.decodeIfPresent(Float.self, forKey: .pnTiltLimitBoostDeg) ?? defaults.pnTiltLimitBoostDeg
+        pnTiltLimitCoastDeg = try c.decodeIfPresent(Float.self, forKey: .pnTiltLimitCoastDeg) ?? defaults.pnTiltLimitCoastDeg
         cameraType = try c.decodeIfPresent(UInt8.self, forKey: .cameraType) ?? defaults.cameraType
         imuOrientSetting = try c.decodeIfPresent(UInt8.self, forKey: .imuOrientSetting) ?? defaults.imuOrientSetting
         imuRateHz = try c.decodeIfPresent(UInt16.self, forKey: .imuRateHz) ?? defaults.imuRateHz

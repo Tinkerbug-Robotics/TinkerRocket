@@ -259,9 +259,9 @@
  "size": 2,
  "notes": "ImuOrientConfigData; 0xFF = auto, else orientation code 0..23"},
  {
- "file": "commands/cmd65_guidance_45.bin",
- "size": 46,
- "notes": "GuidanceConfigData: first 36 bytes FROZEN, append-only (#534); a 45-B-era FC rejects a 36-B frame — ship in lockstep"},
+ "file": "commands/cmd65_guidance_53.bin",
+ "size": 54,
+ "notes": "GuidanceConfigFrame: GuidanceConfigData (first 36 bytes FROZEN, #534) + tilt limits appended at 45; the 45-B v2 frame is a prefix — ship in lockstep"},
  {
  "file": "commands/cmd66_fin_18.bin",
  "size": 19,

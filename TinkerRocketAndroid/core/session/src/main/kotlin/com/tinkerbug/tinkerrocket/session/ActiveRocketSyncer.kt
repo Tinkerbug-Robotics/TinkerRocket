@@ -685,6 +685,8 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
                     targetAlt = profile.pnTargetAltM,
                     kpPos = profile.pnKpPos, kdVel = profile.pnKdVel,
                     guidanceLaw = profile.pnGuidanceLaw,
+                    tiltLimitBoostDeg = profile.pnTiltLimitBoostDeg,
+                    tiltLimitCoastDeg = profile.pnTiltLimitCoastDeg,
                 ),
             )
             ConfigGroup.FIN_LAYOUT -> Commands.finConfig(
@@ -1264,6 +1266,17 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
                         pnGuidanceLaw = g.guidanceLaw,
                     )
                     changed += GROUP_GUIDANCE_PARAMS
+                }
+            }
+
+            // The tilt limits ride config_tilt, which only a flight computer
+            // that holds settable limits sends; null leaves the profile's.
+            cfg.guidanceTilt?.let { t ->
+                if (!same(p.pnTiltLimitBoostDeg, t.boostDeg, 1) ||
+                    !same(p.pnTiltLimitCoastDeg, t.coastDeg, 1)
+                ) {
+                    p = p.copy(pnTiltLimitBoostDeg = t.boostDeg, pnTiltLimitCoastDeg = t.coastDeg)
+                    if (GROUP_GUIDANCE_PARAMS !in changed) changed += GROUP_GUIDANCE_PARAMS
                 }
             }
 

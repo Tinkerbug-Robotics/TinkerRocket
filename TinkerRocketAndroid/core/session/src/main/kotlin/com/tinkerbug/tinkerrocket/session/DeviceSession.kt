@@ -726,6 +726,10 @@ public class DeviceSession(
                 _rocketConfig.value = (_rocketConfig.value ?: RocketConfig())
                     .copy(guidanceExtras = e)
             }
+            is TelemetryCharMessage.ConfigTilt -> msg.tilt?.let { t ->
+                _rocketConfig.value = (_rocketConfig.value ?: RocketConfig())
+                    .copy(guidanceTilt = t)
+            }
             is TelemetryCharMessage.ConfigRoll -> msg.waypoints?.let { w ->
                 _rocketConfig.value = (_rocketConfig.value ?: RocketConfig())
                     .copy(rollWaypoints = w)

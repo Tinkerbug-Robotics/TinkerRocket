@@ -582,7 +582,9 @@ final class ActiveRocketSyncer: ObservableObject {
                                   targetE: profile.pnTargetE, targetN: profile.pnTargetN,
                                   targetAlt: profile.pnTargetAltM,
                                   kpPos: profile.pnKpPos, kdVel: profile.pnKdVel,
-                                  guidanceLaw: profile.pnGuidanceLaw)
+                                  guidanceLaw: profile.pnGuidanceLaw,
+                                  tiltLimitBoostDeg: profile.pnTiltLimitBoostDeg,
+                                  tiltLimitCoastDeg: profile.pnTiltLimitCoastDeg)
         device.sendFinConfig(ringMode: profile.finRingMode,
                              servoAtSlot: profile.finServoAtSlot,
                              reverse: profile.finReverse,
@@ -857,6 +859,17 @@ final class ActiveRocketSyncer: ObservableObject {
                 p.pnGuidanceLaw = g.guidanceLaw
                 changed.append(groupGuidanceParams)
             }
+        }
+
+        // The tilt limits ride config_tilt, sent only by firmware that has
+        // them; it lands before config_roll, so the extras re-adopt sees it.
+        // Same group as the rest of the guidance parameters.
+        if let t = cfg.guidanceTilt,
+           !same(p.pnTiltLimitBoostDeg, t.boostDeg, decimals: 1)
+            || !same(p.pnTiltLimitCoastDeg, t.coastDeg, decimals: 1) {
+            p.pnTiltLimitBoostDeg = t.boostDeg
+            p.pnTiltLimitCoastDeg = t.coastDeg
+            if !changed.contains(groupGuidanceParams) { changed.append(groupGuidanceParams) }
         }
 
         if let wps = cfg.rollWaypoints {
