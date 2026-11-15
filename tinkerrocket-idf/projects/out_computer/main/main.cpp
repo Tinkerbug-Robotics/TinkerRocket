@@ -2088,8 +2088,11 @@ static bool             fc_config_report_has_camera = false;
 // False for a v1-v3 report, which has no `antenna` — its zero would
 // otherwise read as "unknown", a real antenna setting.
 static bool             fc_config_report_has_antenna = false;
+// False for a v1-v4 report, which has no `guidance_tilt` — its zeros are not
+// limits the FC holds, so no config_tilt frame is sent for it.
+static bool             fc_config_report_has_guidance_tilt = false;
 // #1149 item 3: the same treatment last_query_cfg got, for the same reason.
-// This 201-byte struct is overwritten WHOLESALE by the I2S parser task (core 1,
+// This 209-byte struct is overwritten WHOLESALE by the I2S parser task (core 1,
 // prio 6) and was read field-by-field by loop_oc (core 1, prio 5) through a
 // reference held across dozens of statements and three String builds. The
 // parser strictly preempts loopTask, so a config readback could mix two report
@@ -2098,7 +2101,8 @@ static portMUX_TYPE fc_config_report_mux = portMUX_INITIALIZER_UNLOCKED;
 static inline ConfigReportData snapshotConfigReport(bool* valid_out,
                                                     bool* has_pyro_out = nullptr,
                                                     bool* has_camera_out = nullptr,
-                                                    bool* has_antenna_out = nullptr)
+                                                    bool* has_antenna_out = nullptr,
+                                                    bool* has_guidance_tilt_out = nullptr)
 {
     portENTER_CRITICAL(&fc_config_report_mux);
     const ConfigReportData snap = fc_config_report;
@@ -2106,11 +2110,13 @@ static inline ConfigReportData snapshotConfigReport(bool* valid_out,
     const bool has_pyro = fc_config_report_has_pyro;
     const bool has_camera = fc_config_report_has_camera;
     const bool has_antenna = fc_config_report_has_antenna;
+    const bool has_guidance_tilt = fc_config_report_has_guidance_tilt;
     portEXIT_CRITICAL(&fc_config_report_mux);
     if (valid_out) *valid_out = valid;
     if (has_pyro_out) *has_pyro_out = has_pyro;
     if (has_camera_out) *has_camera_out = has_camera;
     if (has_antenna_out) *has_antenna_out = has_antenna;
+    if (has_guidance_tilt_out) *has_guidance_tilt_out = has_guidance_tilt;
     return snap;
 }
 static volatile bool    fc_config_report_dirty = false;
@@ -5335,7 +5341,8 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         // (#915, 169 bytes) is a byte-exact prefix of v2 (#1231, 193 bytes:
         // + the live deployment configuration), which is a prefix of v3
         // (#1472, 194 bytes: + the camera type), which is a prefix of v4
-        // (201 bytes: + the GNSS antenna offset), so an older sender is still
+        // (201 bytes: + the GNSS antenna offset), which is a prefix of v5
+        // (209 bytes: + the guidance tilt limits), so an older sender is still
         // accepted — with nothing to serve for the blocks it lacks — rather
         // than refused.  The FC image is relayed through the OC, so an OC
         // updated ahead of its FC is the normal OTA order; refusing an older
@@ -5344,15 +5351,25 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         constexpr size_t kV1Bytes   = offsetof(ConfigReportData, pyro);
         constexpr size_t kV2Bytes   = offsetof(ConfigReportData, camera_type);
         constexpr size_t kV3Bytes   = offsetof(ConfigReportData, antenna);
+        constexpr size_t kV4Bytes   = offsetof(ConfigReportData, guidance_tilt);
         constexpr size_t kVersionAt = offsetof(ConfigReportData, version);
         const uint8_t ver = (payload_len > kVersionAt) ? payload[kVersionAt] : 0xFF;
         ConfigReportData incoming = {};
         bool has_pyro = false;
         bool has_camera = false;
         bool has_antenna = false;
+        bool has_guidance_tilt = false;
         if (ver == ConfigReportData::VERSION && payload_len >= sizeof(ConfigReportData))
         {
             memcpy(&incoming, payload, sizeof(incoming));
+            has_pyro = true;
+            has_camera = true;
+            has_antenna = true;
+            has_guidance_tilt = true;
+        }
+        else if (ver == 4U && payload_len >= kV4Bytes)
+        {
+            memcpy(&incoming, payload, kV4Bytes);   // guidance_tilt stays zeroed, and is never served
             has_pyro = true;
             has_camera = true;
             has_antenna = true;
@@ -5405,6 +5422,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         fc_config_report_has_pyro = has_pyro;
         fc_config_report_has_camera = has_camera;
         fc_config_report_has_antenna = has_antenna;
+        fc_config_report_has_guidance_tilt = has_guidance_tilt;
         portEXIT_CRITICAL(&fc_config_report_mux);
         if (changed) fc_config_report_dirty = true;
 
@@ -7239,12 +7257,13 @@ static void sendLoRaBeacon()
 // disconnected, so any frames still queued at disconnect drain out harmlessly.
 // MUST exceed the connect burst, which sendCurrentConfig() enqueues in ONE
 // synchronous pass before any drain runs: config, config_pyro,
-// config_identity, fc_identity, imu_orient, guid_target, and the three #915
-// report frames = 9.  At the old cap of 8 the ninth enqueue evicted the
-// oldest — the main "config" frame — and the app silently never received it.
+// config_identity, fc_identity, imu_orient, guid_target, and the four report
+// frames (#915's three + config_tilt) = 10.  At the old cap of 8 the ninth
+// enqueue evicted the oldest — the main "config" frame — and the app silently
+// never received it.
 // Raise this WITH the burst, or the drop is invisible except for one warning
 // line on a console nobody is watching on the pad.  The report-dirty path
-// (extras + config_pyro = 4) could land in the SAME pass as a connect burst;
+// (extras + config_pyro = 5) could land in the SAME pass as a connect burst;
 // sendCurrentConfig() clears the dirty flag so the two never stack.
 static constexpr uint8_t  CFG_RB_CAP     = 12;
 static constexpr uint32_t CFG_RB_PACE_MS = 20;   // >= negotiated max conn interval
@@ -7389,7 +7408,7 @@ static void sendGuidTarget()
 
 // #915: the settings the "config" frame never carried, published from the
 // FC's own report so the app can SHOW and VERIFY them instead of displaying
-// profile values it has no way to check.  Split across three frames for the
+// profile values it has no way to check.  Split across four frames for the
 // same reason everything else here is kept small — sendConfigJSON silently
 // drops anything over the BLE notify MTU, so a single fat frame would vanish
 // without a trace.
@@ -7404,7 +7423,9 @@ static void sendConfigExtras()
     // #1149 item 3: a COPY, not a reference to the live global — the parser
     // task can replace it between any two of the reads below.
     bool r_valid = false;
-    const ConfigReportData r = snapshotConfigReport(&r_valid);
+    bool has_guidance_tilt = false;
+    const ConfigReportData r = snapshotConfigReport(&r_valid, nullptr, nullptr, nullptr,
+                                                    &has_guidance_tilt);
     (void)r_valid;
 
     // 1) Servo trim 2-4, fin travel, fin layout.
@@ -7457,6 +7478,22 @@ static void sendConfigExtras()
     g += "}";
     enqueueConfigReadback(g);
     ESP_LOGI("CFG", "Queued config_guid readback (%u bytes)", (unsigned)g.length());
+
+    // 2b) The guidance tilt-limit latch angles (cmd 65's tail), in a frame of
+    // their own: config_guid is already ~170 bytes against a 182-byte notify
+    // at the usual iPhone MTU, and two more keys would have it skipped
+    // outright.  Only from a v5 report — an older FC has no limits to show
+    // but its compiled ones, and the app keeps the profile's for it.  Keep it
+    // BEFORE config_roll: the apps' connect-time adopt runs when config_roll
+    // lands, and a later config_tilt would miss it.
+    if (has_guidance_tilt) {
+        String t = "{\"type\":\"config_tilt\"";
+        t += ",\"gtlb\":"; t += fmtf(r.guidance_tilt.tilt_limit_boost_deg, 1);
+        t += ",\"gtlc\":"; t += fmtf(r.guidance_tilt.tilt_limit_coast_deg, 1);
+        t += "}";
+        enqueueConfigReadback(t);
+        ESP_LOGI("CFG", "Queued config_tilt readback (%u bytes)", (unsigned)t.length());
+    }
 
     // 3) The roll profile.  num_waypoints == 0 is a real answer ("rate-only"),
     // not an absent one — the app must be able to tell that from "this rocket
@@ -13863,13 +13900,19 @@ static void loop_oc()
         }
         else if (ble_cmd == 65)
         {
-            // Full guidance config (GuidanceConfigData): relay the whole struct to the FC
+            // Full guidance config (GuidanceConfigFrame): relay the whole frame to the FC.
+            // A 45-byte frame from an app that predates the tilt limits is
+            // relayed with its tail zero-filled; the FC reads that as "keep
+            // the limits you have" (GuidanceConfigFrame).
             const uint8_t* payload = ble_app.getCommandPayload();
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= sizeof(GuidanceConfigData))
             {
-                                setPendingCommandWithConfig(GUIDANCE_CONFIG_PENDING, GUIDANCE_CONFIG_MSG, payload, sizeof(GuidanceConfigData));
-                ESP_LOGI("BLE", "Guidance config queued for RocketComputer");
+                uint8_t frame[sizeof(GuidanceConfigFrame)] = {};
+                memcpy(frame, payload, plen < sizeof(frame) ? plen : sizeof(frame));
+                setPendingCommandWithConfig(GUIDANCE_CONFIG_PENDING, GUIDANCE_CONFIG_MSG, frame, sizeof(frame));
+                ESP_LOGI("BLE", "Guidance config queued for RocketComputer (%u-byte app frame)",
+                         (unsigned)plen);
             }
         }
         else if (ble_cmd == 66)

@@ -422,6 +422,34 @@ TEST(RocketComputerTypes, GuidanceConfigData_Layout) {
     EXPECT_LE(10u + 4u + 1u + 1u + sizeof(GuidanceConfigData) + 2u, 96u);
 }
 
+TEST(RocketComputerTypes, GuidanceConfigFrame_Layout) {
+    // cmd 65 v3: the 45-byte GuidanceConfigData, then the tilt limits
+    // appended at 45 — unaligned, and that is the point: the v2 frame stays
+    // a byte-exact prefix.
+    EXPECT_EQ(sizeof(GuidanceTiltLimitData), 8u);
+    EXPECT_EQ(offsetof(GuidanceTiltLimitData, tilt_limit_boost_deg), 0u);
+    EXPECT_EQ(offsetof(GuidanceTiltLimitData, tilt_limit_coast_deg), 4u);
+    EXPECT_EQ(sizeof(GuidanceConfigFrame), 53u);
+    EXPECT_EQ(offsetof(GuidanceConfigFrame, config), 0u);
+    EXPECT_EQ(offsetof(GuidanceConfigFrame, tilt),   45u);
+    // Still fits the OC->FC combined-read window: 10 + 4 + 1 + 1 + 53 + 2 = 71.
+    EXPECT_LE(10u + 4u + 1u + 1u + sizeof(GuidanceConfigFrame) + 2u, 96u);
+
+    // A 45-byte frame from an older app, as the OC relays it: copied into a
+    // zeroed frame, the config intact and both limits 0 ("keep yours").
+    GuidanceConfigData g{};
+    g.nav_gain = 4.0f; g.kd_vel_per_s = 1.5f; g.guidance_law = GUIDE_LAW_STATION_KEEP;
+    uint8_t frame[sizeof(GuidanceConfigFrame)] = {};
+    memcpy(frame, &g, sizeof(g));
+    GuidanceConfigFrame f;
+    memcpy(&f, frame, sizeof(f));
+    EXPECT_FLOAT_EQ(f.config.nav_gain, 4.0f);
+    EXPECT_FLOAT_EQ(f.config.kd_vel_per_s, 1.5f);
+    EXPECT_EQ((unsigned)f.config.guidance_law, (unsigned)GUIDE_LAW_STATION_KEEP);
+    EXPECT_EQ(f.tilt.tilt_limit_boost_deg, 0.0f);
+    EXPECT_EQ(f.tilt.tilt_limit_coast_deg, 0.0f);
+}
+
 TEST(RocketComputerTypes, GuidanceLawCodes_MatchGuidanceLibrary) {
     // Wire codes mirror TR_GuidancePN::Mode by value.  The library is not
     // linked into the host test build, so this pins the wire side only; the
@@ -1223,9 +1251,9 @@ TEST(LoraMinValidSnrDb, AcceptsGenuineBorderlinePackets) {
 // field after it — and the app would then display the result as VERIFIED,
 // which is worse than the "cannot verify" state this frame exists to remove.
 TEST(RocketComputerTypes, ConfigReportData_Layout) {
-    // v4: v3's 194 bytes (v2's 193 + the one-byte camera type, #1472) + the
-    // 7-byte GNSS antenna offset.
-    EXPECT_EQ(sizeof(ConfigReportData), 201u);
+    // v5: v4's 201 bytes (v3's 194 + the 7-byte GNSS antenna offset) + the
+    // 8-byte guidance tilt limits.
+    EXPECT_EQ(sizeof(ConfigReportData), 209u);
     // Rides the same I2S frame path as everything else FC→OC.
     EXPECT_LE(sizeof(ConfigReportData), MAX_PAYLOAD);
 
@@ -1261,6 +1289,12 @@ TEST(RocketComputerTypes, ConfigReportData_Layout) {
     EXPECT_EQ(offsetof(ConfigReportData, camera_type) + sizeof(uint8_t),
               offsetof(ConfigReportData, antenna));
     EXPECT_EQ(offsetof(ConfigReportData, antenna) + sizeof(AntennaOffsetConfigData),
+              offsetof(ConfigReportData, guidance_tilt));
+    // v5: appended AFTER antenna, so a v4 report is a byte-exact prefix of
+    // v5 — the OC copies a v4 frame by exactly this many bytes and serves no
+    // config_tilt for it.
+    EXPECT_EQ(offsetof(ConfigReportData, guidance_tilt),    201u);
+    EXPECT_EQ(offsetof(ConfigReportData, guidance_tilt) + sizeof(GuidanceTiltLimitData),
               sizeof(ConfigReportData));
 
     // The starts are the running sum of the nested sizes — spelled out so a
@@ -1272,6 +1306,7 @@ TEST(RocketComputerTypes, ConfigReportData_Layout) {
     EXPECT_EQ(sizeof(RollProfileData),    76u);
     EXPECT_EQ(sizeof(PyroConfigData),     24u);
     EXPECT_EQ(sizeof(AntennaOffsetConfigData), 7u);
+    EXPECT_EQ(sizeof(GuidanceTiltLimitData), 8u);
 
     // Flag bits are wire ABI: the OC reads F_ORIENT_FROM_NVS to decide
     // whether to leave the FC's orientation alone or re-push its own, and
@@ -1285,14 +1320,14 @@ TEST(RocketComputerTypes, ConfigReportData_Layout) {
     EXPECT_EQ(ConfigReportData::F_PYRO_FROM_NVS,    2u);
     EXPECT_EQ(ConfigReportData::F_CAMERA_FROM_NVS,  3u);
     EXPECT_EQ(ConfigReportData::F_ANTENNA_FROM_NVS, 4u);
-    EXPECT_EQ(ConfigReportData::VERSION,            4u);
+    EXPECT_EQ(ConfigReportData::VERSION,            5u);
 }
 
 // The OC accepts every older report by copying the length that version
 // implies (its CONFIG_REPORT_MSG handler): each is the whole of the next
-// version's prefix, and a v4 report copied whole carries the antenna at the
-// offset the FC wrote it.
-TEST(RocketComputerTypes, ConfigReportData_V4PrefixRoundTrip) {
+// version's prefix, and a v5 report copied whole carries the antenna and the
+// tilt limits at the offsets the FC wrote them.
+TEST(RocketComputerTypes, ConfigReportData_V5PrefixRoundTrip) {
     ConfigReportData r;
     memset(&r, 0, sizeof(r));
     r.version     = ConfigReportData::VERSION;
@@ -1302,12 +1337,23 @@ TEST(RocketComputerTypes, ConfigReportData_V4PrefixRoundTrip) {
     r.antenna.x_mm  = -12;
     r.antenna.y_mm  = 34;
     r.antenna.z_mm  = 2000;
+    r.guidance_tilt.tilt_limit_boost_deg = 25.0f;
+    r.guidance_tilt.tilt_limit_coast_deg = 32.5f;
     uint8_t wire[sizeof(ConfigReportData)];
     memcpy(wire, &r, sizeof(r));
 
-    // a v4 OC reading the whole frame
+    // a v5 OC reading the whole frame
+    ConfigReportData v5 = {};
+    memcpy(&v5, wire, sizeof(v5));
+    EXPECT_FLOAT_EQ(v5.guidance_tilt.tilt_limit_boost_deg, 25.0f);
+    EXPECT_FLOAT_EQ(v5.guidance_tilt.tilt_limit_coast_deg, 32.5f);
+
+    // a v4 sender's frame, copied by v4's length: the antenna arrives, the
+    // tilt limits stay the zeros the OC never serves
     ConfigReportData v4 = {};
-    memcpy(&v4, wire, sizeof(v4));
+    memcpy(&v4, wire, offsetof(ConfigReportData, guidance_tilt));
+    EXPECT_EQ(v4.guidance_tilt.tilt_limit_boost_deg, 0.0f);
+    EXPECT_EQ(v4.guidance_tilt.tilt_limit_coast_deg, 0.0f);
     EXPECT_EQ((unsigned)v4.antenna.known, 1u);
     EXPECT_EQ((int)v4.antenna.x_mm, -12);
     EXPECT_EQ((int)v4.antenna.y_mm, 34);

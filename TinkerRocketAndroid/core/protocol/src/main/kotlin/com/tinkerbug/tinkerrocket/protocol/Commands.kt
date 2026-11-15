@@ -231,12 +231,18 @@ public object Commands {
         frame(BleCommandId.GUIDANCE_POINT) { f64(latDeg); f64(lonDeg); f32(altitudeM) }
 
     /**
-     * cmd 65 — GuidanceConfigData, 45 B.  v1 floats LE in struct order, then
+     * cmd 65 — GuidanceConfigFrame, 53 B.  v1 floats LE in struct order, then
      * `coast_delay u16`, `enable u8`, `target_mode u8`; #534 appended
-     * `kp_pos f32`, `kd_vel f32`, `guidance_law u8` at offsets 36/40/44.
-     * THE FIRST 36 BYTES ARE FROZEN — the FC parses by offset; append only,
-     * never insert.  Both laws' parameters are always sent, regardless of
-     * which law is selected.  A 45-byte-era FC rejects a 36-byte frame.
+     * `kp_pos f32`, `kd_vel f32`, `guidance_law u8` at offsets 36/40/44
+     * (GuidanceConfigData, 45 B); v3 appends the tilt limits
+     * `tilt_limit_boost_deg f32`, `tilt_limit_coast_deg f32` at 45/49
+     * (GuidanceTiltLimitData).  THE FIRST 36 BYTES ARE FROZEN — the FC parses
+     * by offset; append only, never insert.  Both laws' parameters are always
+     * sent, regardless of which law is selected.  The FC takes each tilt limit
+     * in (0, 60] deg and keeps its previous one otherwise.  Firmware that
+     * predates the tilt limits flies the first 45 bytes and its compiled
+     * limits (its OC relays only those); a newer OC in front of an older FC
+     * gets the frame refused and logged, so update both boards.
      */
     public fun guidanceConfig(
         enabled: Boolean,
@@ -253,6 +259,8 @@ public object Commands {
         kpPos: Float,
         kdVel: Float,
         guidanceLaw: Int,
+        tiltLimitBoostDeg: Float,
+        tiltLimitCoastDeg: Float,
     ): ByteArray = frame(BleCommandId.GUIDANCE_CONFIG) {
         f32(navGain); f32(maxAccel); f32(accelToFin); f32(maxFinDeg); f32(minSpeed)
         f32(targetE); f32(targetN); f32(targetAlt)
@@ -262,6 +270,8 @@ public object Commands {
         // --- appended #534 (offsets 36/40/44) ---
         f32(kpPos); f32(kdVel)
         u8(guidanceLaw)
+        // --- appended v3: tilt limits (offsets 45/49) ---
+        f32(tiltLimitBoostDeg); f32(tiltLimitCoastDeg)
     }
 
     // ------------------------------------------------------------ fin layout

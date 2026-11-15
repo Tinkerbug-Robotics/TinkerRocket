@@ -63,6 +63,14 @@ public data class RocketGuidanceExtras(
     val enabled: Boolean? = null,
 )
 
+/**
+ * The guidance tilt limits the flight computer holds (the tail of cmd 65):
+ * guidance latches off for the rest of the flight above [boostDeg] off
+ * vertical before burnout, [coastDeg] after.  Its own `config_tilt` frame —
+ * config_guid has no room left under the notify limit.
+ */
+public data class GuidanceTilt(val boostDeg: Float, val coastDeg: Float)
+
 /** One reported roll-profile waypoint (#915). */
 public data class ReportedRollWaypoint(val timeS: Float, val angleDeg: Float)
 
@@ -231,6 +239,13 @@ public data class RocketConfig(
     // value and present it as the vehicle's.
     val servoExtras: RocketServoExtras? = null,
     val guidanceExtras: RocketGuidanceExtras? = null,
+    /**
+     * `config_tilt`.  null = not reported: the frame comes only from a flight
+     * computer whose report carries the limits, so an older one never sends
+     * it and flies its compiled limits.  Not one of the groups
+     * [configReportGroupsMissing] waits on, for that reason.
+     */
+    val guidanceTilt: GuidanceTilt? = null,
     /**
      * null = not reported.  EMPTY = reported, and the rocket is flying
      * rate-only.  The two must not be conflated: one means "we don't know",
@@ -483,6 +498,7 @@ public data class ConfigMessage(
             // "this rocket reports nothing" every readback.
             servoExtras = previous?.servoExtras,
             guidanceExtras = previous?.guidanceExtras,
+            guidanceTilt = previous?.guidanceTilt,
             rollWaypoints = previous?.rollWaypoints,
         )
     }
@@ -674,6 +690,18 @@ public object ConfigGuidMessage {
             kpPos = kp, kdVel = kd, guidanceLaw = law.coerceIn(0, 0xFF).toInt(),
             enabled = JsonBridging.nsBool(json, "gen"),
         )
+    }
+}
+
+/**
+ * Parsed `"type":"config_tilt"` readback — the guidance tilt limits
+ * (`"gtlb"` boost, `"gtlc"` coast).  Both keys are required.
+ */
+public object ConfigTiltMessage {
+    public fun parse(json: JsonObject): GuidanceTilt? {
+        val boost = JsonBridging.parseFloatIos(json, "gtlb") ?: return null
+        val coast = JsonBridging.parseFloatIos(json, "gtlc") ?: return null
+        return GuidanceTilt(boostDeg = boost, coastDeg = coast)
     }
 }
 

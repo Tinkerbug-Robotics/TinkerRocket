@@ -1124,21 +1124,27 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         sendRawCommand(32, payload: Data([enabled ? 0x01 : 0x00]))
     }
 
-    /// Full guidance config (GuidanceConfigData = 45 bytes, cmd 65).  v1 floats LE
+    /// Full guidance config (GuidanceConfigFrame = 53 bytes, cmd 65).  v1 floats LE
     /// in struct order, then coast_delay(u16), enable(u8), target_mode(u8); #534
-    /// appended kp_pos(f32), kd_vel(f32), guidance_law(u8).  THE FIRST 36 BYTES
-    /// ARE FROZEN — the FC parses by offset, so append only, never insert.
+    /// appended kp_pos(f32), kd_vel(f32), guidance_law(u8) — the 45-byte
+    /// GuidanceConfigData; then the tilt limits tilt_limit_boost_deg(f32) and
+    /// tilt_limit_coast_deg(f32) at offsets 45/49.  THE FIRST 36 BYTES ARE
+    /// FROZEN — the FC parses by offset, so append only, never insert.
     ///
     /// Both laws' parameters are sent unconditionally, every time, regardless of
     /// which law is selected or which fields the UI is showing: the FC keeps the
     /// unused law fully configured so switching laws never flies an untuned one.
+    /// The FC takes each tilt limit in (0, 60] deg and keeps its previous value
+    /// for anything else.
     ///
-    /// A 45-byte-era FC REJECTS a 36-byte frame outright (length check) and logs
-    /// it, so app and firmware must ship in lockstep.
+    /// Firmware that predates the tilt limits flies the first 45 bytes and its
+    /// compiled limits (its OC relays only those); a newer OC in front of an
+    /// older FC gets the frame refused and logged, so update both boards.
     func sendGuidanceConfig(enabled: Bool, navGain: Float, maxAccel: Float, accelToFin: Float,
                             maxFinDeg: Float, minSpeed: Float, coastDelayMs: UInt16,
                             targetMode: UInt8, targetE: Float, targetN: Float, targetAlt: Float,
-                            kpPos: Float, kdVel: Float, guidanceLaw: UInt8) {
+                            kpPos: Float, kdVel: Float, guidanceLaw: UInt8,
+                            tiltLimitBoostDeg: Float, tiltLimitCoastDeg: Float) {
         var payload = Data()
         var ng = navGain, ma = maxAccel, a2f = accelToFin, mf = maxFinDeg, ms = minSpeed
         var te = targetE, tn = targetN, ta = targetAlt
@@ -1158,10 +1164,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         payload.append(Data(bytes: &kp, count: 4))
         payload.append(Data(bytes: &kd, count: 4))
         payload.append(guidanceLaw)
+        // --- appended tilt limits (offsets 45/49) ---
+        var tlb = tiltLimitBoostDeg, tlc = tiltLimitCoastDeg
+        payload.append(Data(bytes: &tlb, count: 4))
+        payload.append(Data(bytes: &tlc, count: 4))
         #if DEBUG
-        assert(payload.count == 45, "GuidanceConfigData must be 45 bytes, built \(payload.count)")
+        assert(payload.count == 53, "GuidanceConfigFrame must be 53 bytes, built \(payload.count)")
         #endif
-        sendRawCommand(65, payload: payload)   // GuidanceConfigData = 45 bytes
+        sendRawCommand(65, payload: payload)   // GuidanceConfigFrame = 53 bytes
         // Nothing is written into rocketConfig here: the flight computer's
         // report says what it applied ("gen" in config_guid), and a send that
         // never arrived must not read as applied.  An optimistic write here
@@ -2674,6 +2684,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 // on the can't-verify list.
                 cfg.servoExtras = existing.servoExtras
                 cfg.guidanceExtras = existing.guidanceExtras
+                cfg.guidanceTilt = existing.guidanceTilt
                 cfg.rollWaypoints = existing.rollWaypoints
             }
             self.rocketConfig = cfg
@@ -2764,6 +2775,20 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                     targetE: te, targetN: tn, targetAltM: ta,
                     kpPos: kp, kdVel: kd, guidanceLaw: UInt8(clamping: law),
                     enabled: dict["gen"] as? Bool)
+                self.rocketConfig = cfg
+            }
+            return
+        }
+
+        // The guidance tilt limits, in a frame of their own (config_guid is
+        // already near the notify limit).  Sent only by firmware that has
+        // them; both keys are required, and a malformed frame leaves the
+        // group nil (= "not reported"), as above.
+        if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           dict["type"] as? String == "config_tilt" {
+            var cfg = self.rocketConfig ?? RocketConfig()
+            if let b = parseFloat(dict["gtlb"]), let c = parseFloat(dict["gtlc"]) {
+                cfg.guidanceTilt = RocketGuidanceTilt(boostDeg: b, coastDeg: c)
                 self.rocketConfig = cfg
             }
             return

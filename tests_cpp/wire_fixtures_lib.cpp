@@ -1150,16 +1150,22 @@ void buildCommands(Builder& b) {
         g.coast_delay_ms = 500; g.enable = 1; g.target_mode = GUIDE_TARGET_OVERHEAD;
         g.kp_pos_per_s2 = 0.05f; g.kd_vel_per_s = 0.4f;
         g.guidance_law = GUIDE_LAW_STATION_KEEP;
-        b.add("commands", "cmd65_guidance_45.bin", cmd(65, bytesOf(g)),
+        // The tilt tail at offset 45 is unaligned — distinct values so a
+        // shifted or swapped decode is visible.
+        GuidanceConfigFrame f{};
+        f.config = g;
+        f.tilt.tilt_limit_boost_deg = 25.0f; f.tilt.tilt_limit_coast_deg = 32.5f;
+        b.add("commands", "cmd65_guidance_53.bin", cmd(65, bytesOf(f)),
               Json().u("cmd", 65).f("nav_gain", 3.5f).f("max_accel_mps2", 30.0f)
                   .f("accel_to_fin_deg", 0.5f).f("max_fin_deg", 10.0f)
                   .f("min_speed_mps", 8.0f).f("target_e_m", 25.5f)
                   .f("target_n_m", -30.25f).f("target_alt_m", 250.0f)
                   .u("coast_delay_ms", 500).u("enable", 1).u("target_mode", 0)
                   .f("kp_pos_per_s2", 0.05f).f("kd_vel_per_s", 0.4f)
-                  .u("guidance_law", 1).done(),
-              "GuidanceConfigData: first 36 bytes FROZEN, append-only (#534); "
-              "a 45-B-era FC rejects a 36-B frame — ship in lockstep");
+                  .u("guidance_law", 1)
+                  .f("tilt_limit_boost_deg", 25.0f).f("tilt_limit_coast_deg", 32.5f).done(),
+              "GuidanceConfigFrame: GuidanceConfigData (first 36 bytes FROZEN, #534) + "
+              "tilt limits appended at 45; the 45-B v2 frame is a prefix — ship in lockstep");
     }
 
     {

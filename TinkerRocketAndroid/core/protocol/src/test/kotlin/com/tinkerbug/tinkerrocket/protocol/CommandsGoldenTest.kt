@@ -74,7 +74,7 @@ class CommandsGoldenTest {
         "cmd60_scan_12.bin",
         "cmd62_sensorcal_18.bin",
         "cmd64_imuorient_auto.bin",
-        "cmd65_guidance_45.bin",
+        "cmd65_guidance_53.bin",
         "cmd66_fin_18.bin",
         "cmd67_imurate_2.bin",
         "cmd70_otabegin_37.bin",
@@ -338,8 +338,8 @@ class CommandsGoldenTest {
     }
 
     @Test
-    fun `cmd65 guidance config 45 bytes`() {
-        val s = side("cmd65_guidance_45.bin")
+    fun `cmd65 guidance config 53 bytes`() {
+        val s = side("cmd65_guidance_53.bin")
         val built = Commands.guidanceConfig(
             enabled = s.i("enable") != 0,
             navGain = s.f("nav_gain"),
@@ -355,9 +355,16 @@ class CommandsGoldenTest {
             kpPos = s.f("kp_pos_per_s2"),
             kdVel = s.f("kd_vel_per_s"),
             guidanceLaw = s.i("guidance_law"),
+            tiltLimitBoostDeg = s.f("tilt_limit_boost_deg"),
+            tiltLimitCoastDeg = s.f("tilt_limit_coast_deg"),
         )
-        assertEquals(46, built.size, "GuidanceConfigData frame must be 1+45 bytes")
-        assertMatchesFixture("cmd65_guidance_45.bin", built)
+        assertEquals(54, built.size, "GuidanceConfigFrame must be 1+53 bytes")
+        assertMatchesFixture("cmd65_guidance_53.bin", built)
+        // The tilt limits sit after the 45-byte GuidanceConfigData (frame
+        // offsets 46/50 behind the cmd byte), little-endian.
+        val tail = java.nio.ByteBuffer.wrap(built, 46, 8).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        assertEquals(s.f("tilt_limit_boost_deg"), tail.float)
+        assertEquals(s.f("tilt_limit_coast_deg"), tail.float)
     }
 
     @Test

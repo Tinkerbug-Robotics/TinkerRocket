@@ -584,6 +584,25 @@ public:
     // of the filter takes it along; init turns it off.
     void setImuFree(bool on);
     bool imuFree() const { return imu_free_; }
+    // The IMU-free mode's re-anchor (RawGnssShadow's vertical latch,
+    // vert_imu_free_release_s): the velocity (NED) and clock rate moved by a
+    // fit of the epoch's Dopplers (lastVelocityFit), the velocity's covariance
+    // with every other state cleared and its 1-sigma set to vel_sigma (a
+    // block taken out of a positive P leaves it positive), the position's
+    // 1-sigma raised to at least pos_sigma (the drift while the latch held),
+    // and the refusal counts cleared. Raising the velocity's variance alone
+    // and fusing the Dopplers one at a time does not do it: at a 70 m/s step
+    // the first rows took the clock rate and the velocity together the wrong
+    // way and the rest were refused (the host test, 2026-11-13).
+    void reanchorVelocity(const double dv_ned[3], double dclk_mps, T vel_sigma, T pos_sigma);
+    // screenRangeRates' last fit of the epoch's Dopplers: the velocity (NED)
+    // and clock rate to add to the filter's, m/s; false when it could not fit.
+    bool lastVelocityFit(double x[4]) const
+    {
+        for (int i = 0; i < 4; ++i)
+            x[i] = vfit_x_[i];
+        return vfit_valid_;
+    }
     // The epoch about to be worked has its Dopplers in pairs (rr_pair_lag_s;
     // RawGnssShadow sets it at each epoch's start where the params have a
     // pair lag, from the epoch's BuiltEpoch::rr_paired): its Dopplers are
@@ -921,6 +940,8 @@ private:
     mutable double vfit_y_[RawEpoch::kMaxObs] = {};
     mutable double vfit_s_[RawEpoch::kMaxObs] = {};
     mutable bool   vfit_in_[RawEpoch::kMaxObs] = {};
+    mutable double vfit_x_[4] = {};       // screenRangeRates' last fit (lastVelocityFit)
+    mutable bool   vfit_valid_ = false;
 
     Hist   hist_[kHist] = {};
     // lever_on: each history entry's antenna offset C r (0-2) and velocity

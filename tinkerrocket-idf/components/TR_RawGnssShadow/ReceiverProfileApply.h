@@ -391,18 +391,27 @@ inline void applyMosaicFlightSafeguards(RawGnssShadow::Config& c)
 //     place of the flight filter's constant 9.807: gravity is 0.06 m/s^2
 //     weaker at 20 km and 0.08 at 26 km, and with GNSS lost the coast
 //     integrates the difference. On the V10's rig run rs2 (2026-11-13, the
-//     GNSS board rebooted 1 s into the boost and never re-acquired) that was
+//     GNSS board rebooted after burnout and never re-acquired) that was
 //     the coast's 3.6 m/s and 87 m of vertical error (p90); offline, the
 //     same with it 0.02 m/s and 5 m, the GNSS-absent filter's. GpsInsEKF
 //     has flown it since #1530. With GNSS it changes nothing measurable. The
 //     mosaic's image and the Beetle's do not take it: their climbs are a
 //     kilometre, where the height term is 0.003 m/s^2.
+//   - The vertical check's latch lets go in the IMU-free descent
+//     (vert_imu_free_release_s, 1 s): there a chute's opening the filter
+//     cannot follow is dropped and latched like a stale receiver, and with
+//     no barometer to bring it back GNSS stayed out for the rest of the
+//     descent (the host test AChutesOpeningInTheImuFreeDescent: 40 m/s at
+//     6.8 g, 69 at 9.9 g). With the barometer the latch let go by itself
+//     (1.0 s, 1.75 s). The mosaic's image and the Beetle's are verified as
+//     they are and do not take it (yet).
 inline void applySdrFlightSafeguards(RawGnssShadow::Config& c)
 {
     applyMosaicFlightSafeguards(c);
     c.windup_k = 0.0;
     c.dv_imu_free_off = true;
     c.ekf.gravity_wgs84 = true;
+    c.vert_imu_free_release_s = 1.0;
 }
 
 // The antenna's offset from the IMU, where the rocket's owner measured it: an
