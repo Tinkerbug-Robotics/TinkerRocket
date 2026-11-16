@@ -293,6 +293,21 @@ void RawGnssShadow::applyBaro(double t, uint8_t imu_flags)
         return;                           // on the pad: not learned long enough yet
     st_.baro_offset_m = baro_offset_;
     st_.baro_offset_frozen = baro_frozen_ ? 1 : 0;
+    // On the pad with baro_pad_fuse off, the barometer only learns its offset
+    // (above): the pseudoranges set the height. Its offset is the filter's own
+    // height, so fused it says nothing absolute, yet each sample counts as an
+    // independent 2 m: a hundred of them (two seconds, before the first
+    // pseudorange) took the height's 1-sigma from 10 m to 0.3 m, and the seed's
+    // height -- the receiver's first 3-D fix, 5-35 m off on the RF rig's
+    // Traveler and Hotshot flights and once 325 m, where the receiver itself
+    // came within 0.5-5 m ten seconds later -- held to launch against two
+    // minutes of pseudoranges (2026-10-23). The pad's zero-velocity updates
+    // hold the vertical still; in flight it is fused as before.
+    if (!in_flight && !cfg_.baro_pad_fuse)
+    {
+        st_.baro_pad_skipped++;
+        return;
+    }
 
     // Its variance: the barometer's own, and the static port's error at the
     // dynamic pressure the filter's speed and height give (#1579)
@@ -1210,6 +1225,12 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
     // called without a pair lag: every other receiver's epochs as before
     if (ekf_.params().rr_pair_lag_s > 0.0)
         ekf_.setRrPaired(built_.rr_paired != 0);
+    // and under thrust further back again (the params' rr_dyn_lag_s): by the
+    // IMU's specific force now, every consumer after this taking it
+    // (RawGnssEKF::setRrDynLag). Never called without it: every other
+    // receiver's epochs as before
+    if (ekf_.params().rr_dyn_lag_s > 0.0)
+        ekf_.setRrDynLag(ekf_.dynLagFor(static_cast<double>(ekf_.specificForceLpG())));
     // the carrier wind-up on an epoch the GNSS task built, here, after the
     // pairs' mark just above: it takes each Doppler at its own instant
     // (applyWindup; one built here takes it once built, jobUnit)
@@ -1601,7 +1622,7 @@ void RawGnssShadow::dvReset()
 void RawGnssShadow::leverRoll(double age, const double w[3], const double C[3][3], const DopplerChangeImu& imu)
 {
     float p2[3], v2[3], n2[3];
-    ekf_.leverAt(age + (cfg_.ekf.rr_lag_s + ekf_.rrPairLag()), p2, v2, n2);
+    ekf_.leverAt(age + ekf_.rrLag(), p2, v2, n2);
     double a1[3], a2[3], nm[3];
     for (int i = 0; i < 3; ++i)
     {
@@ -2033,7 +2054,7 @@ void RawGnssShadow::jobDvCheck(double age)
     if (lev_ref_ok_)
     {
         float lp[3], lv[3];
-        ekf_.leverAt(age + (cfg_.ekf.rr_lag_s + ekf_.rrPairLag()), lp, lv, lev_ref_n_);
+        ekf_.leverAt(age + ekf_.rrLag(), lp, lv, lev_ref_n_);
         for (int i = 0; i < 3; ++i)
             lev_ref_v_[i] = imu.v_lev[i];
     }
@@ -2541,7 +2562,7 @@ bool RawGnssShadow::jobHeading(double age)
         st_.heading_vel_fails++;
         return false;
     }
-    const double td = job_.te - (cfg_.ekf.rr_lag_s + ekf_.rrPairLag());   // the Dopplers' instant
+    const double td = job_.te - ekf_.rrLag();   // the Dopplers' instant
     if (!fit_.gnss(td, v_ned, var_h))
         return false;                     // too slow sideways yet, or past the fit's history
     fit_last_te_ = job_.te;

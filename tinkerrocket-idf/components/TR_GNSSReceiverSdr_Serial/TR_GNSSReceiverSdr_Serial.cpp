@@ -10,7 +10,7 @@
 #include <esp_timer.h>
 #include <freertos/task.h>
 #include <GnssClockRecord.h>   // TR_GNSSReceiverLC86_Serial: GNSS_CLOCK_MSG's record
-#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+#if TR_SDR_RAW_SIDE
 #include <new>
 #include <sdkconfig.h>
 #include <esp_heap_caps.h>
@@ -55,7 +55,7 @@ static constexpr uint32_t kWeekMs = 604800000U;
 
 static inline int64_t nowUs() { return esp_timer_get_time(); }
 
-#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+#if TR_SDR_RAW_SIDE
 // The raw outputs (enableRawOutputs). Three epochs (~2 kB each, internal
 // RAM): the GNSS task takes them every 5 ms, and two more ride out a pass it
 // spends on something else. 40 ephemerides in PSRAM: the board sends each one
@@ -138,7 +138,7 @@ bool TR_GNSSReceiverSdrSerial::begin(uint8_t update_rate_hz,
     uart_flush_input(_uartPort);
     framer_.reset();
     status_us_ = nowUs();
-#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+#if TR_SDR_RAW_SIDE
     ESP_LOGI(TAG, "gnss-sdr-dev: listening for its RTCM3 at %lu baud (RX=%u); logged, and %s",
              static_cast<unsigned long>(sdr_rtcm::kBaud), rx_pin_,
              raw_ != nullptr ? "navigated on by the raw-GNSS filter (its epochs, ephemerides and fixes)"
@@ -188,7 +188,7 @@ void TR_GNSSReceiverSdrSerial::pump(size_t max_bytes)
 
 bool TR_GNSSReceiverSdrSerial::pollNewPVT(GNSSData& data)
 {
-#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+#if TR_SDR_RAW_SIDE
     pump(kMaxBytesPerPoll);
     drainUartEvents();
     logStatus();
@@ -255,7 +255,7 @@ void TR_GNSSReceiverSdrSerial::onFrame(const uint8_t* frame, size_t len, size_t 
                 n_fix_valid_ += f.valid ? 1 : 0;
                 last_fix_valid_ = f.valid;
                 last_fix_nsat_ = f.nsat;
-#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+#if TR_SDR_RAW_SIDE
                 noteFix(f, end_us);
 #endif
             }
@@ -263,7 +263,7 @@ void TR_GNSSReceiverSdrSerial::onFrame(const uint8_t* frame, size_t len, size_t 
             {
                 n_status_++;
             }
-#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+#if TR_SDR_RAW_SIDE
             else
             {
                 sdr_rtcm::TrIono io;
@@ -283,7 +283,7 @@ void TR_GNSSReceiverSdrSerial::onFrame(const uint8_t* frame, size_t len, size_t 
             n_other_++;
             break;
     }
-#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+#if TR_SDR_RAW_SIDE
     // The raw outputs, after the clock line took this record's sample
     // (noteLink): the epoch it makes whole is placed on the line as it now
     // stands (SdrRawFeed.h has the order)
@@ -361,7 +361,7 @@ void TR_GNSSReceiverSdrSerial::noteLink(const uint8_t* frame, size_t len, const 
 
 // ── Raw outputs for the raw-GNSS navigation filter ──────────────────────
 // The SDR raw-nav image's alone (TR_GNSS_DRIVER_SDR; the header says why).
-#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+#if TR_SDR_RAW_SIDE
 
 bool TR_GNSSReceiverSdrSerial::enableRawOutputs()
 {
@@ -699,7 +699,7 @@ void TR_GNSSReceiverSdrSerial::logStatus()
 #if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
     logLink();
 #endif
-#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+#if TR_SDR_RAW_SIDE
     logRaw();
 #endif
 }

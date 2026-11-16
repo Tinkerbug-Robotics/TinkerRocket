@@ -1,7 +1,8 @@
 // raw_iono_rule.h — which GPS broadcast ionosphere the mosaic-only image's
 // raw-GNSS filter builds its epochs with (pure, header-only, host-tested)
 //
-// Mosaic-only build (TR_RAW_NAV_MOSAIC; main.cpp's GNSS task, rawIonoOffer).
+// The P4 raw-GNSS images, the mosaic-G5's, the gnss-sdr-dev board's and the
+// PX1105R's (main.cpp's GNSS task, rawIonoOffer).
 // The filter's measurement stage has two sources for the eight Klobuchar
 // bytes GPS broadcasts:
 //   - the set the app sends with a pad calibration, kept in NVS: the GPS day

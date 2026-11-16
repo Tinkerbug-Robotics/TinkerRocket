@@ -55,8 +55,8 @@ def test_the_image_selects_the_board_alone_with_psram_and_128_ephemerides():
 
 def test_the_auto_image_is_not_turned_on_beside_it():
     src = read(FC_CMAKE)
-    assert ("if(NOT DEFINED TR_GNSS_AUTO AND (TR_BOARD_V9 OR TR_BOARD_V10) AND NOT TR_GNSS_MOSAIC AND NOT TR_GNSS_SDR)"
-            in src)
+    assert ("if(NOT DEFINED TR_GNSS_AUTO AND (TR_BOARD_V9 OR TR_BOARD_V10) AND NOT TR_GNSS_MOSAIC AND NOT TR_GNSS_SDR "
+            "AND NOT TR_GNSS_PX1105R)" in src)
     # and the SDR block comes before the auto default, so its define is seen first
     assert src.index("if(TR_GNSS_SDR)\n") < src.index("if(NOT DEFINED TR_GNSS_AUTO AND")
 
@@ -74,7 +74,9 @@ def test_its_bench_switches_and_rig_replay_are_allowed():
 
 def test_the_psram_check_knows_it():
     src = read(MAIN_CMAKE)
-    assert "if((TR_GNSS_MOSAIC AND (NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW)) OR TR_GNSS_SDR)" in src
+    # the board's image, and the one image that flies the raw filter on the board too (TR_GNSS_AUTO_RAW)
+    assert ("if((TR_GNSS_MOSAIC AND (NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW)) OR TR_GNSS_SDR "
+            "OR TR_GNSS_AUTO_RAW)") in src
 
 
 def test_config_h_defines_its_paths_and_keeps_the_auto_image_off_the_raw_filter():
@@ -82,8 +84,11 @@ def test_config_h_defines_its_paths_and_keeps_the_auto_image_off_the_raw_filter(
     assert re.search(r"#if defined\(TR_GNSS_DRIVER_SDR\) && TR_GNSS_DRIVER_SDR && TR_RAW_GNSS_PRIMARY\n"
                      r"#define TR_RAW_NAV_SDR 1\n#endif", src)
     assert re.search(r"#if \(defined\(TR_RAW_NAV_MOSAIC\) && TR_RAW_NAV_MOSAIC\) \|\| "
-                     r"\(defined\(TR_RAW_NAV_SDR\) && TR_RAW_NAV_SDR\)\n#define TR_RAW_NAV_P4 1\n#endif", src)
-    assert "#if TR_RAW_GNSS_SHADOW && defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO\n#error" in src
+                     r"\(defined\(TR_RAW_NAV_SDR\) && TR_RAW_NAV_SDR\) \|\| \\\n"
+                     r"    \(defined\(TR_RAW_NAV_PX1105R\) && TR_RAW_NAV_PX1105R\)\n#define TR_RAW_NAV_P4 1\n#endif", src)
+    # the auto image stays off the raw filter; only the one image (TR_GNSS_AUTO_RAW) flies it with that driver
+    assert ("#if TR_RAW_GNSS_SHADOW && defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO && "
+            "!(defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)\n#error") in src
     # the bands combined stay the mosaic's
     assert "#define TR_RAW_MULTIBAND TR_RAW_NAV_MOSAIC" in src
 
@@ -103,11 +108,13 @@ def test_start_raw_shadow_flies_the_boards_profile_and_its_doppler_means():
     means = body.index("gnss_raw::applySdrDopplerMeans(rx, cfg);")
     assert cfg < apply_profile < means
     # the safeguards are the image's own (the mosaic's, no wind-up taken off, the change check standing down in
-    # the IMU-free descent: ReceiverProfileApply.h), under TR_RAW_NAV_SDR, the mosaic's call kept for the mosaic
+    # the IMU-free descent: ReceiverProfileApply.h), under TR_RAW_NAV_SDR (with the board, in the one image); the
+    # mosaic's call is the mosaic's alone: never on the board's image, and with the mosaic in the one image
     i = body.index("#if TR_RAW_NAV_SDR\n    // The gnss-sdr-dev image's (ReceiverProfileApply.h")
     block = body[i:body.index("#endif", i)]
-    assert "gnss_raw::applySdrFlightSafeguards(cfg);" in block
-    assert "#else\n    gnss_raw::applyMosaicFlightSafeguards(cfg);\n" in block
+    assert "RAW_NAV_WHEN(RAW_IS_SDR)\n    gnss_raw::applySdrFlightSafeguards(cfg);" in block
+    assert ("#if !(TR_RAW_NAV_SDR || TR_RAW_NAV_PX1105R) || TR_RAW_NAV_AUTO\n    RAW_NAV_WHEN(RAW_IS_MOSAIC)\n"
+            "    gnss_raw::applyMosaicFlightSafeguards(cfg);\n#endif") in body
     apply = read(os.path.join(ROOT, "tinkerrocket-idf", "components", "TR_RawGnssShadow", "ReceiverProfileApply.h"))
     fn = apply[apply.index("inline void applySdrFlightSafeguards"):]
     fn = fn[:fn.index("\n}\n")]
@@ -118,16 +125,16 @@ def test_the_boards_ionosphere_goes_through_the_mosaics_rule():
     # The board's 4001 sub-type 4 (its GPS Klobuchar set) and the app's NVS set go through raw_iono_rule.h as the
     # mosaic's GPSIon and the app's do, and the filter's task takes the set the rule chose
     src = read(MAIN_CPP)
-    assert "#if TR_RAW_NAV_SDR\n#include \"raw_iono_rule.h\"" in src
-    assert "#if TR_RAW_NAV_MOSAIC || TR_RAW_NAV_SDR\n// The GNSS task's ionosphere" in src
+    assert "#if TR_RAW_NAV_SDR || TR_RAW_NAV_PX1105R\n#include \"raw_iono_rule.h\"" in src
+    assert "#if TR_RAW_NAV_MOSAIC || TR_RAW_NAV_SDR || TR_RAW_NAV_PX1105R\n// The GNSS task's ionosphere" in src
     task = src[src.index("static void rawGnssMeasTask(void*)"):]
     task = task[:task.index("\n}\n")]
-    i = task.index("#if TR_RAW_NAV_MOSAIC || TR_RAW_NAV_SDR\n        if (raw_shadow_link.iono.read(io, seq)")
+    i = task.index("#if TR_RAW_NAV_MOSAIC || TR_RAW_NAV_SDR || TR_RAW_NAV_PX1105R\n        if (raw_shadow_link.iono.read(io, seq)")
     block = task[i:task.index("#else", i)]
     assert "rawIonoOffer(io, false, st);" in block
     assert "if (sensor_collector.getGNSSBroadcastIono(rx.raw, rx.gps_day)) rawIonoOffer(rx, true, st);" in block
     assert "#elif TR_RAW_NAV_SDR" not in task[:task.index("gnss_raw::ShadowRelock rl;")]
-    assert ("#if TR_RAW_NAV_MOSAIC || TR_RAW_NAV_SDR\n        // the set the GNSS task chose from both sources "
+    assert ("#if TR_RAW_NAV_MOSAIC || TR_RAW_NAV_SDR || TR_RAW_NAV_PX1105R\n        // the set the GNSS task chose from both sources "
             "(rawIonoOffer)\n        if (raw_iono_chosen.read(io, seq) && seq != iono_seq)") in src
     drv = read(os.path.join(ROOT, "tinkerrocket-idf", "components", "TR_GNSSReceiverSdr_Serial",
                             "TR_GNSSReceiverSdr_Serial.cpp"))
@@ -159,7 +166,7 @@ def test_a_silent_or_late_board_still_starts_the_filter():
     src = read(MAIN_CPP)
     assert '#if TR_RAW_NAV_SDR\n#include "sdr_nav_start_policy.h"' in src
     i = src.index("const bool normal_init = have_ref_pos && gnss_gate3_init;")
-    init = src[i:src.index("#endif", i)]
+    init = src[i:src.index("#else", i)]   # the board's branch (the one image's rule for other receivers inside it)
     assert "#if TR_RAW_NAV_SDR" in init
     assert ("sdr_nav_start::degradedStartDue(normal_init, initGyroN >= 8,\n"
             "                                                    (int32_t)(millis() - gnss_absent_dwell_ms) >= 0, millis(),\n"
@@ -170,15 +177,16 @@ def test_a_silent_or_late_board_still_starts_the_filter():
     assert "ekf_initialized = false;" in restart and "gnss_absent_flight = false;" in restart
     assert "raw_sdr_gnss_held = gnss_absent_flight;" in restart
     assert r < src.index("if (rocket_state == MAG_CALIBRATION)", r) < i
-    assert src.index("if (ekf_initialized && gnss_absent_flight &&") < r
+    # (RAW_NAV_AND: with the board alone in the one image, nothing in every other)
+    assert src.index("if (RAW_NAV_AND(RAW_IS_SDR) ekf_initialized && gnss_absent_flight &&") < r
     # held out of the filter in the GNSS task while it stands
     task = fn_body(src, "static void rawGnssMeasTask(void*)")
-    h = task.index("#if TR_RAW_NAV_SDR\n            if (raw_sdr_gnss_held)")
+    h = task.index("#if TR_RAW_NAV_SDR\n            if (RAW_NAV_AND(RAW_IS_SDR) raw_sdr_gnss_held)")
     held = task[h:task.index("#endif", h)]
     assert "raw_sdr_gnss_held_n++;" in held and "continue;" in held
     assert task.index("while (sensor_collector.getGNSSRawEpoch(epoch))") < h
     # armed or flying, the board's fixes set no pad datum (nor its average) under a degraded start
-    assert "const bool sdr_degraded_armed = gnss_absent_flight && rocket_state != READY;" in src
+    assert "const bool sdr_degraded_armed = RAW_NAV_AND(RAW_IS_SDR) gnss_absent_flight && rocket_state != READY;" in src
     assert "const bool ref_take = (!ref_from_nav || ref_nav_now) && !sdr_degraded_armed;" in src
     assert "#if TR_RAW_NAV_SDR\n                if (gnss_gate3_init && !sdr_degraded_armed &&" in src
 

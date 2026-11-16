@@ -90,6 +90,7 @@ void expectSameEkf(const RawGnssEKFParams& a, const RawGnssEKFParams& b)
     EXPECT_EQ(a.w_markov_sigma, b.w_markov_sigma);
     EXPECT_EQ(a.w_markov_tau, b.w_markov_tau);
     EXPECT_EQ(a.accel_var, b.accel_var);
+    EXPECT_EQ(a.a_noise_per_g, b.a_noise_per_g);
     EXPECT_EQ(a.level_heading_free, b.level_heading_free);
     EXPECT_EQ(a.mag_sigma_ut, b.mag_sigma_ut);
     EXPECT_EQ(a.mag_tilt_sigma_mps2, b.mag_tilt_sigma_mps2);
@@ -108,6 +109,10 @@ void expectSameEkf(const RawGnssEKFParams& a, const RawGnssEKFParams& b)
     EXPECT_EQ(a.drift_step_spread_mps, b.drift_step_spread_mps);
     EXPECT_EQ(a.rr_lag_s, b.rr_lag_s);
     EXPECT_EQ(a.rr_pair_lag_s, b.rr_pair_lag_s);
+    EXPECT_EQ(a.rr_dyn_lag_s, b.rr_dyn_lag_s);
+    EXPECT_EQ(a.rr_dyn_lag_g0, b.rr_dyn_lag_g0);
+    EXPECT_EQ(a.rr_dyn_lag_g1, b.rr_dyn_lag_g1);
+    EXPECT_EQ(a.f_lp_tau_s, b.f_lp_tau_s);
     EXPECT_EQ(a.att_gate_cos4, b.att_gate_cos4);
     EXPECT_EQ(a.att_gate_vertical, b.att_gate_vertical);
     EXPECT_EQ(a.att_gnss_off, b.att_gnss_off);
@@ -219,7 +224,7 @@ void expectSameNumbers(const GnssReceiverProfile& a, const GnssReceiverProfile& 
 // TheShadowSafeguardDefaultsAreTheBeetles) before its size goes in here: the
 // Beetle's filter is its defaults, and the M1 build applies the LC86G's
 // profile over them. The sizes are a 64-bit host's (macOS and Linux alike).
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssEKFParams) == 504,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssEKFParams) == 544,
               "RawGnssEKFParams changed: add the field to expectSameEkf, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(RawMeasBuilder::Config) == 336,
               "RawMeasBuilder::Config changed: add the field to expectSameBuilder, then update this size");
@@ -227,7 +232,7 @@ static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 32,
               "GnssSignalProfile changed: add the field to expectSameSignal, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 576,
               "GnssReceiverProfile changed: add the field to expectSameNumbers, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1832,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1880,
               "RawGnssShadow::Config changed: pin the field in TheShadowSafeguardDefaultsAreTheBeetles, then update "
               "this size");
 
@@ -369,7 +374,6 @@ TEST(ReceiverProfile, TheStubsAreTheLc86gsNumbersMarkedUnmeasured)
         gnss_raw::GnssReceiverType type;
         const char* name;
     } stubs[] = {{gnss_raw::neoM8tProfile(), gnss_raw::kRxNeoM8t, "NEO-M8T"},
-                 {gnss_raw::px1105rProfile(), gnss_raw::kRxPx1105r, "PX1105R"},
                  {gnss_raw::genericProfile(), gnss_raw::kRxGeneric, "generic"}};
     for (const auto& s : stubs)
     {
@@ -382,6 +386,74 @@ TEST(ReceiverProfile, TheStubsAreTheLc86gsNumbersMarkedUnmeasured)
     }
     EXPECT_EQ(gnss_raw::profileFor(gnss_raw::kRxLc86g).type, gnss_raw::kRxLc86g);
     EXPECT_TRUE(gnss_raw::profileFor(gnss_raw::kRxLc86g).measured);
+}
+
+// The PX1105R's v0: the mosaic-G5's design with its own receiver's numbers.
+TEST(ReceiverProfile, ThePx1105rIsTheMosaicsDesignWithItsOwnReceiver)
+{
+    const GnssReceiverProfile p = gnss_raw::px1105rProfile();
+    const GnssReceiverProfile m = gnss_raw::mosaicG5Profile();
+    EXPECT_EQ(p.type, gnss_raw::kRxPx1105r);
+    EXPECT_STREQ(p.name, "PX1105R");
+    EXPECT_FALSE(p.measured);
+    EXPECT_EQ(gnss_raw::profileFor(gnss_raw::kRxPx1105r).type, gnss_raw::kRxPx1105r);
+    // the same epochs, grid and fusion as the mosaic's
+    EXPECT_EQ(p.raw_epoch_period_s, m.raw_epoch_period_s);
+    EXPECT_EQ(p.fuse_epoch_period_s, m.fuse_epoch_period_s);
+    EXPECT_EQ(p.pr_period_s, m.pr_period_s);
+    EXPECT_EQ(p.sat_cap, m.sat_cap);
+    EXPECT_EQ(p.relock_gap_s, m.relock_gap_s);
+    EXPECT_EQ(p.cr_mode, gnss_raw::kCarrierOff);
+    EXPECT_TRUE(gnss_raw::dopplerPairsFit(p));
+    for (int k = 0; k < gnss_raw::kProfileSys; ++k)
+    {
+        EXPECT_EQ(p.sig[k].carrier_hz, m.sig[k].carrier_hz) << k;
+        EXPECT_EQ(p.sig[k].cn0_min_pr, m.sig[k].cn0_min_pr) << k;
+        EXPECT_EQ(p.sig[k].cn0_min_rr, m.sig[k].cn0_min_rr) << k;
+    }
+    // and its own receiver: the Doppler a carrier change over the epoch before,
+    // in whole hertz; the code its own fit, unscaled; no 1PPS (no latency known)
+    EXPECT_DOUBLE_EQ(p.rr_lag_s, 0.025);
+    EXPECT_DOUBLE_EQ(p.doppler_step_hz, 1.0);
+    EXPECT_DOUBLE_EQ(p.pr_corr_scale, 1.0);
+    EXPECT_DOUBLE_EQ(p.pr_white_a, 0.026);
+    EXPECT_DOUBLE_EQ(p.pr_white_b, 0.157);
+    EXPECT_DOUBLE_EQ(p.epoch_latency_s, 0.0);
+    EXPECT_DOUBLE_EQ(p.windup_k, 0.0);   // the antenna's: the image's safeguards set it
+    // the image's safeguards: the mosaic's, its antenna's wind-up, and on the
+    // pad the pseudoranges setting the position (the seed 100 m unsure, the
+    // barometer not fused there)
+    RawGnssShadow::Config px, mo;
+    gnss_raw::applyPx1105rFlightSafeguards(px);
+    gnss_raw::applyMosaicFlightSafeguards(mo);
+    EXPECT_EQ(px.windup_k, 1.0);
+    EXPECT_FALSE(px.baro_pad_fuse);
+    EXPECT_TRUE(mo.baro_pad_fuse);
+    EXPECT_EQ(px.ekf.p0_pos, 100.0);
+    EXPECT_EQ(mo.ekf.p0_pos, 10.0);
+    // and in a boost: its Dopplers' lag under thrust, more trust in them taken
+    // at it, and the accelerometer's noise grown past 1 g; the mosaic's none
+    EXPECT_EQ(px.ekf.rr_dyn_lag_s, 0.060);
+    EXPECT_EQ(px.ekf.rr_dyn_lag_g0, 11.5);
+    EXPECT_EQ(px.ekf.rr_dyn_lag_g1, 12.5);
+    EXPECT_EQ(px.meas.rr_dyn_sigma, 0.25);
+    EXPECT_EQ(px.ekf.a_noise_per_g, 0.005);
+    EXPECT_EQ(mo.ekf.rr_dyn_lag_s, 0.0);
+    EXPECT_EQ(mo.meas.rr_dyn_sigma, 0.5);
+    EXPECT_EQ(mo.ekf.a_noise_per_g, 0.0);
+    // and the gnss-sdr-dev image's descent and coast safeguards, the same
+    // values; the mosaic's none of them
+    RawGnssShadow::Config sd;
+    gnss_raw::applySdrFlightSafeguards(sd);
+    EXPECT_TRUE(px.dv_imu_free_off);
+    EXPECT_EQ(px.vert_imu_free_release_s, 1.0);
+    EXPECT_TRUE(px.ekf.gravity_wgs84);
+    EXPECT_EQ(px.dv_imu_free_off, sd.dv_imu_free_off);
+    EXPECT_EQ(px.vert_imu_free_release_s, sd.vert_imu_free_release_s);
+    EXPECT_EQ(px.ekf.gravity_wgs84, sd.ekf.gravity_wgs84);
+    EXPECT_FALSE(mo.dv_imu_free_off);
+    EXPECT_EQ(mo.vert_imu_free_release_s, 0.0);
+    EXPECT_FALSE(mo.ekf.gravity_wgs84);
 }
 
 TEST(ReceiverProfile, ThePhaseSigmaIsLogLinearInCn0)
@@ -1234,6 +1306,7 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_EQ(c.baro_port_k, 0.0075);
     EXPECT_EQ(c.baro_offset_tau_s, 30.0);
     EXPECT_EQ(c.baro_offset_min_s, 10.0);
+    EXPECT_EQ(c.baro_pad_fuse, true);
     EXPECT_EQ(c.baro_hold_port_m, 2.0);
     EXPECT_EQ(c.baro_hold_max_s, 30.0);
     EXPECT_FALSE(c.descent_imu_free);                    // fc/raw-descent-mode: off until a build turns it on

@@ -1,7 +1,7 @@
 #pragma once
 
 // Raw vote guard: may the raw-GNSS filter still cast its two apogee votes?
-// Mosaic-only build (V8 + mosaic-G5, TR_RAW_NAV_MOSAIC); the plan's critic
+// The P4 raw-GNSS images (mosaic-G5, gnss-sdr-dev or PX1105R, TR_RAW_NAV_P4); the plan's critic
 // item F5, "fresh but wrong filter".
 //
 // WHY IT EXISTS.  On the mosaic-only build the raw-GNSS filter is the ONLY

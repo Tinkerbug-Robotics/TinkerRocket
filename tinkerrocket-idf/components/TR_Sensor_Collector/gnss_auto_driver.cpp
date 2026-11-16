@@ -12,6 +12,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <TR_NVS.h>
+#include <new>
 
 // The mosaic streams ~66 kB/s at 2 Mbaud (the gnss-sdr-dev board up to
 // ~55 kB/s), which fills the UART's 128-byte RX FIFO in 0.64 ms: less than a
@@ -32,6 +33,9 @@ constexpr size_t kTxBuf = 256;
 // The gnss-sdr-dev board's driver is read as often as the mosaic's: 1.4 kB a
 // read at its 55 kB/s, its 16 kB UART ring 0.3 s of the stream.
 constexpr uint8_t kSdrPollRateHz = 20;
+// The PX1105R's 0xE5 and 0xDF at 20 Hz, as its own image sets it up
+// (config.h GNSS_UPDATE_RATE there); its poll task twice that.
+constexpr uint8_t kPx1105rRateHz = 20;
 
 constexpr const char* kHintNamespace = "gnssauto";
 constexpr const char* kHintKey = "rx";
@@ -47,7 +51,11 @@ const char* nameOr(uint8_t type, const char* none)
 }  // namespace
 
 TR_GNSSAuto::TR_GNSSAuto(uart_port_t uart_port)
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    : port_(uart_port), ublox_(uart_port)
+#else
     : port_(uart_port), ublox_(uart_port), mosaic_(uart_port), sdr_(uart_port)
+#endif
 {
 }
 
@@ -59,6 +67,23 @@ uint8_t TR_GNSSAuto::rememberedType()
     {
         hint_loaded_ = true;
         hint_ = GNSS_TYPE_NONE;
+#if defined(TR_BENCH_GNSS_HINT)
+        // BENCH (-DTR_BENCH_GNSS_HINT=<GNSS_TYPE_*>, 0 none): the record set
+        // before the bring-up reads it, every boot, so the rig reaches that
+        // hint's plan with any receiver on J1. Never fly this image.
+        {
+            Preferences w;
+            if (w.begin(kHintNamespace, false))
+            {
+                if (TR_BENCH_GNSS_HINT == GNSS_TYPE_NONE) (void)w.remove(kHintKey);
+                else w.putUChar(kHintKey, static_cast<uint8_t>(TR_BENCH_GNSS_HINT));
+                w.end();
+            }
+            ESP_LOGE(TAG, "*** BENCH IMAGE: the receiver found last boot forced to %s (-DTR_BENCH_GNSS_HINT=%d) "
+                          "-- never fly this image ***",
+                     nameOr(static_cast<uint8_t>(TR_BENCH_GNSS_HINT), "nothing known"), TR_BENCH_GNSS_HINT);
+        }
+#endif
         Preferences prefs;
         if (prefs.begin(kHintNamespace, true))   // absent until a receiver is first found
         {
@@ -202,11 +227,25 @@ bool TR_GNSSAuto::begin(uint8_t update_rate_hz,
     const esp_reset_reason_t rr = esp_reset_reason();
     const bool kept_power = !(rr == ESP_RST_POWERON || rr == ESP_RST_BROWNOUT);
 
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    // A restored flight: no probes, the raw receiver it flew with at once
+    // (the u-blox, or nothing known, take the path below as always)
+    if (!begin_wait_ && beginHintedRaw(rememberedType(), GNSS_RX, GNSS_TX, reset_n_pin, safeboot_n_pin))
+        return type_ != GNSS_TYPE_NONE;
+    constexpr bool kLookForPx1105r = true;
+#else
+    constexpr bool kLookForPx1105r = false;
+#endif
     uint32_t ublox_baud = 0;
     bool ublox_swapped = false;
     ubloxLastLink(ublox_baud, ublox_swapped);
+#if defined(TR_GNSS_UBLOX_NO_SWAP) && TR_GNSS_UBLOX_NO_SWAP
+    // This board's J1 is wired one way: a swapped record is no u-blox of its
+    // own, and the probes run (TR_GNSSReceiverUBlox_Serial never tries them)
+    ublox_swapped = false;
+#endif
     gnss_detect::BringUp up;
-    up.start(rememberedType(), ublox_baud, kept_power, ublox_swapped);
+    up.start(rememberedType(), ublox_baud, kept_power, ublox_swapped, kLookForPx1105r);
     ESP_LOGI(TAG, "GNSS auto: which receiver is on J1 (RX=%u TX=%u)? Last boot: %s",
              rx_pin_, tx_pin_, nameOr(rememberedType(), "nothing known"));
     if (up.plan().n == 0)
@@ -246,6 +285,9 @@ bool TR_GNSSAuto::begin(uint8_t update_rate_hz,
                              static_cast<unsigned long>(detector_.probesRun()),
                              up.plan().fallback == GNSS_TYPE_UBLOX
                                  ? "; the u-blox driver searches as it always has"
+                             : up.plan().fallback == GNSS_TYPE_SDR && rememberedType() == GNSS_TYPE_PX1105R
+                                 ? "; not the PX1105R that answered last boot (it answers within seconds): "
+                                   "listening for a gnss-sdr-dev board, the one receiver silent this long"
                              : up.plan().fallback == GNSS_TYPE_SDR
                                  ? "; the gnss-sdr-dev board that streamed last boot sends from its first fix: "
                                    "listening for it"
@@ -276,25 +318,47 @@ bool TR_GNSSAuto::begin(uint8_t update_rate_hz,
             }
             case gnss_detect::BringUp::Step::BEGIN_MOSAIC:
             {
-                mosaic_.setBeginTimeoutMs(up.mosaicTimeoutMs());
-                const bool ok = mosaic_.begin(mosaic_rate_hz_, GNSS_RX, GNSS_TX, reset_n_pin, safeboot_n_pin);
+                bool ok = false;
+                if (buildRaw(GNSS_TYPE_MOSAIC))
+                {
+                    mosaic().setBeginTimeoutMs(up.mosaicTimeoutMs());
+                    ok = mosaic().begin(mosaic_rate_hz_, GNSS_RX, GNSS_TX, reset_n_pin, safeboot_n_pin);
+                }
                 up.driverResult(ok);
                 storeHint(up.hint());
                 break;
             }
             case gnss_detect::BringUp::Step::BEGIN_SDR:
             {
-                const bool ok = sdr_.begin(kSdrPollRateHz, GNSS_RX, GNSS_TX, reset_n_pin, safeboot_n_pin);
+                const bool ok =
+                    buildRaw(GNSS_TYPE_SDR) && sdr().begin(kSdrPollRateHz, GNSS_RX, GNSS_TX, reset_n_pin, safeboot_n_pin);
                 up.driverResult(ok);
                 storeHint(up.hint());
                 break;
             }
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+            case gnss_detect::BringUp::Step::BEGIN_PX1105R:
+            {
+                const bool ok = buildRaw(GNSS_TYPE_PX1105R) &&
+                                px().begin(kPx1105rRateHz, GNSS_RX, GNSS_TX, reset_n_pin, safeboot_n_pin);
+                up.driverResult(ok);
+                storeHint(up.hint());
+                break;
+            }
+#endif
             default:
                 break;
         }
     }
 
     type_ = up.active();
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    if (rawReceiver())
+    {
+        ESP_LOGI(TAG, "GNSS auto: flying the raw-GNSS filter on the %s", gnssTypeName(type_));
+    }
+    else
+#endif
     if (type_ == GNSS_TYPE_SDR)
     {
         ESP_LOGI(TAG, "GNSS auto: logging the gnss-sdr-dev board's RTCM3; the FC navigates without GNSS");
@@ -312,33 +376,46 @@ uint8_t TR_GNSSAuto::updateRateHz() const
 {
     if (type_ == GNSS_TYPE_MOSAIC) return mosaic_rate_hz_ > 20 ? 20 : mosaic_rate_hz_;
     if (type_ == GNSS_TYPE_SDR) return kSdrPollRateHz;
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    if (type_ == GNSS_TYPE_PX1105R) return kPx1105rRateHz;
+#endif
     return ublox_rate_hz_;
 }
 
 uint8_t TR_GNSSAuto::otpState() const
 {
-    if (type_ == GNSS_TYPE_MOSAIC) return mosaic_.otpState();
-    if (type_ == GNSS_TYPE_SDR) return sdr_.otpState();
+    if (type_ == GNSS_TYPE_MOSAIC) return mosaic().otpState();
+    if (type_ == GNSS_TYPE_SDR) return sdr().otpState();
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    if (type_ == GNSS_TYPE_PX1105R) return px().otpState();
+#endif
     return ublox_.otpState();
 }
 
 void TR_GNSSAuto::getGNSSData(GNSSData& data)
 {
     if (type_ == GNSS_TYPE_MOSAIC)
-        mosaic_.getGNSSData(data);
+        mosaic().getGNSSData(data);
     else if (type_ == GNSS_TYPE_SDR)
-        sdr_.getGNSSData(data);
+        sdr().getGNSSData(data);
     else if (type_ == GNSS_TYPE_UBLOX)
         ublox_.getGNSSData(data);
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    else if (type_ == GNSS_TYPE_PX1105R)
+        px().getGNSSData(data);
+#endif
     else
         data = GNSSData{};
 }
 
 bool TR_GNSSAuto::pollNewPVT(GNSSData& data)
 {
-    if (type_ == GNSS_TYPE_MOSAIC) return mosaic_.pollNewPVT(data);
+    if (type_ == GNSS_TYPE_MOSAIC) return mosaic().pollNewPVT(data);
     if (type_ == GNSS_TYPE_UBLOX) return ublox_.pollNewPVT(data);
-    if (type_ == GNSS_TYPE_SDR) return sdr_.pollNewPVT(data);   // reads the UART; never a PVT
+    if (type_ == GNSS_TYPE_SDR) return sdr().pollNewPVT(data);   // reads the UART; its fix on TR_GNSS_AUTO_RAW
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    if (type_ == GNSS_TYPE_PX1105R) return px().pollNewPVT(data);
+#endif
     return false;
 }
 
@@ -349,30 +426,254 @@ bool TR_GNSSAuto::pollNewSat(GNSSSatData& out)
 
 bool TR_GNSSAuto::pollRawFrame(uint8_t* out, size_t cap, size_t& len, uint32_t& time_us)
 {
-    if (type_ == GNSS_TYPE_SDR) return sdr_.pollRawFrame(out, cap, len, time_us);
-    return type_ == GNSS_TYPE_MOSAIC && mosaic_.pollRawFrame(out, cap, len, time_us);
+    if (type_ == GNSS_TYPE_SDR) return sdr().pollRawFrame(out, cap, len, time_us);
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    if (type_ == GNSS_TYPE_PX1105R) return px().pollRawFrame(out, cap, len, time_us);
+#endif
+    return type_ == GNSS_TYPE_MOSAIC && mosaic().pollRawFrame(out, cap, len, time_us);
 }
 
 bool TR_GNSSAuto::takeClockLine(GnssClockData& out)
 {
-    if (type_ == GNSS_TYPE_SDR) return sdr_.takeClockLine(out);
-    return type_ == GNSS_TYPE_MOSAIC && mosaic_.takeClockLine(out);
+    if (type_ == GNSS_TYPE_SDR) return sdr().takeClockLine(out);
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    if (type_ == GNSS_TYPE_PX1105R) return px().takeClockLine(out);   // its 0xE5 arrival line
+#endif
+    return type_ == GNSS_TYPE_MOSAIC && mosaic().takeClockLine(out);
 }
 
 bool TR_GNSSAuto::sendAidFrame(const uint8_t* frame, size_t len)
 {
-    return type_ == GNSS_TYPE_SDR && sdr_.sendAidFrame(frame, len);
+    return type_ == GNSS_TYPE_SDR && sdr().sendAidFrame(frame, len);
 }
 
 bool TR_GNSSAuto::geoidSeparationM(float& sep_m) const
 {
-    return type_ == GNSS_TYPE_MOSAIC && mosaic_.geoidSeparationM(sep_m);
+    return type_ == GNSS_TYPE_MOSAIC && mosaic().geoidSeparationM(sep_m);
 }
 
 void TR_GNSSAuto::requestNavResend()
 {
-    if (type_ == GNSS_TYPE_MOSAIC) mosaic_.requestNavResend();
+    if (type_ == GNSS_TYPE_MOSAIC) mosaic().requestNavResend();
 }
+
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+// ── The raw receivers' raw outputs (TR_GNSS_AUTO_RAW) ───────────────────
+
+bool TR_GNSSAuto::beginHintedRaw(uint8_t hint, uint8_t rx, uint8_t tx, int8_t reset_n_pin, int8_t safeboot_n_pin)
+{
+    // Each driver's own restored-flight start: it returns at once and its
+    // poll task brings the receiver up when it answers (the board's only
+    // listens anyway). A u-blox or nothing known: false, the usual path.
+    bool ok = false;
+    if (hint != GNSS_TYPE_MOSAIC && hint != GNSS_TYPE_PX1105R && hint != GNSS_TYPE_SDR)
+    {
+        return false;
+    }
+    if (!buildRaw(hint))
+    {
+        ok = false;
+    }
+    else if (hint == GNSS_TYPE_MOSAIC)
+    {
+        mosaic().setBeginWait(false);
+        ok = mosaic().begin(mosaic_rate_hz_, rx, tx, reset_n_pin, safeboot_n_pin);
+    }
+    else if (hint == GNSS_TYPE_PX1105R)
+    {
+        px().setBeginWait(false);
+        ok = px().begin(kPx1105rRateHz, rx, tx, reset_n_pin, safeboot_n_pin);
+    }
+    else
+    {
+        ok = sdr().begin(kSdrPollRateHz, rx, tx, reset_n_pin, safeboot_n_pin);
+    }
+    type_ = ok ? hint : GNSS_TYPE_NONE;
+    ESP_LOGW(TAG, "GNSS auto: a restored flight: no probes, the %s it flew with (%s)", gnssTypeName(hint),
+             ok ? "brought up by its poll task when it answers" : "its driver did not start");
+    return true;
+}
+
+bool TR_GNSSAuto::rawReceiver() const
+{
+    return type_ == GNSS_TYPE_MOSAIC || type_ == GNSS_TYPE_SDR || type_ == GNSS_TYPE_PX1105R;
+}
+
+bool TR_GNSSAuto::buildRaw(uint8_t type)
+{
+    if (mosaic_ != nullptr || sdr_ != nullptr || px_ != nullptr)
+    {
+        // one a boot (begin() never starts a second): the block is taken
+        const bool same = (type == GNSS_TYPE_MOSAIC && mosaic_ != nullptr) || (type == GNSS_TYPE_SDR && sdr_ != nullptr) ||
+                          (type == GNSS_TYPE_PX1105R && px_ != nullptr);
+        if (!same)
+            ESP_LOGE(TAG, "GNSS auto: no %s driver: another receiver's holds its memory this boot", gnssTypeName(type));
+        return same;
+    }
+    bool raw_ok = true;
+    if (type == GNSS_TYPE_MOSAIC)
+    {
+        mosaic_ = new (raw_driver_mem_) TR_GNSSReceiverMosaicSerial(port_);
+        mosaic_->setPpsPin(pps_pin_);
+        if (raw_wanted_) raw_ok = mosaic_->enableRawOutputs();
+    }
+    else if (type == GNSS_TYPE_SDR)
+    {
+        sdr_ = new (raw_driver_mem_) TR_GNSSReceiverSdrSerial(port_);
+        if (raw_wanted_) raw_ok = sdr_->enableRawOutputs();
+    }
+    else if (type == GNSS_TYPE_PX1105R)
+    {
+        px_ = new (raw_driver_mem_) TR_GNSSReceiverPX1105RSerial(port_);
+        if (raw_wanted_) raw_ok = px_->enableRawOutputs();
+    }
+    else
+    {
+        return false;
+    }
+    raw_failed_ = !raw_ok;
+    return true;
+}
+
+bool TR_GNSSAuto::enableRawOutputs()
+{
+    // Before begin(), as each image calls it: the driver built for the
+    // receiver found makes them (buildRaw), before its begin(), so it hands
+    // its raw measurements over as its own image's does; the two not found
+    // are never built and allocate nothing.
+    raw_wanted_ = true;
+    return true;
+}
+
+bool TR_GNSSAuto::takeRawEpoch(gnss_raw::TimedRawEpoch& out)
+{
+    if (type_ == GNSS_TYPE_MOSAIC) return mosaic().takeRawEpoch(out);
+    if (type_ == GNSS_TYPE_SDR) return sdr().takeRawEpoch(out);
+    if (type_ == GNSS_TYPE_PX1105R) return px().takeRawEpoch(out);
+    return false;
+}
+
+bool TR_GNSSAuto::takeEphemeris(uint8_t* out, size_t cap, size_t& len)
+{
+    if (type_ == GNSS_TYPE_MOSAIC) return mosaic().takeEphemeris(out, cap, len);
+    if (type_ == GNSS_TYPE_SDR) return sdr().takeEphemeris(out, cap, len);
+    return false;
+}
+
+bool TR_GNSSAuto::takeEphemeris(gps_eph_t& out)
+{
+    return type_ == GNSS_TYPE_PX1105R && px().takeEphemeris(out);
+}
+
+bool TR_GNSSAuto::takeFix(gnss_raw::TimedFix& out)
+{
+    return type_ == GNSS_TYPE_PX1105R && px().takeFix(out);
+}
+
+bool TR_GNSSAuto::broadcastIono(int8_t raw[8], uint16_t& gps_day) const
+{
+    if (type_ == GNSS_TYPE_MOSAIC) return mosaic().broadcastIono(raw, gps_day);
+    if (type_ == GNSS_TYPE_SDR) return sdr().broadcastIono(raw, gps_day);
+    if (type_ == GNSS_TYPE_PX1105R) return px().broadcastIono(raw, gps_day);
+    return false;
+}
+
+void TR_GNSSAuto::setRawEpochPeriodMs(uint32_t period_ms)
+{
+    // the mosaic's or the PX1105R's, whichever was built
+    if (mosaic_ != nullptr) mosaic().setRawEpochPeriodMs(period_ms);
+    if (px_ != nullptr) px().setRawEpochPeriodMs(period_ms);
+}
+
+void TR_GNSSAuto::setRawEpochConfig(uint32_t period_ms, const sdr_rtcm::SdrDopplerMeanConfig& mean)
+{
+    if (sdr_ != nullptr) sdr().setRawEpochConfig(period_ms, mean);
+}
+
+bool TR_GNSSAuto::setRawDopplerPairing(const mosaic::MosaicDopplerPairConfig& c)
+{
+    if (type_ == GNSS_TYPE_PX1105R) return px().setRawDopplerPairing(c);
+    if (type_ == GNSS_TYPE_MOSAIC) return mosaic().setRawDopplerPairing(c);
+    return false;
+}
+
+void TR_GNSSAuto::rawStats(TR_GNSSReceiverMosaicSerial::RawStats& out) const
+{
+    if (mosaic_ != nullptr) mosaic().rawStats(out);
+    else out = TR_GNSSReceiverMosaicSerial::RawStats{};
+}
+void TR_GNSSAuto::rawStats(TR_GNSSReceiverSdrSerial::RawStats& out) const
+{
+    if (sdr_ != nullptr) sdr().rawStats(out);
+    else out = TR_GNSSReceiverSdrSerial::RawStats{};
+}
+void TR_GNSSAuto::rawStats(TR_GNSSReceiverPX1105RSerial::RawStats& out) const
+{
+    if (px_ != nullptr) px().rawStats(out);
+    else out = TR_GNSSReceiverPX1105RSerial::RawStats{};
+}
+
+bool TR_GNSSAuto::rawPairStats(TR_GNSSReceiverMosaicSerial::RawPairStats& out) const
+{
+    if (type_ == GNSS_TYPE_PX1105R)
+    {
+        // The PX1105R pairs by the mosaic's rule and counts the same things:
+        // its counts in the mosaic's shape, which main.cpp's console reads
+        TR_GNSSReceiverPX1105RSerial::RawPairStats ps;
+        if (!px().rawPairStats(ps)) return false;
+        out.pair = ps.pair;
+        out.reads = ps.reads;
+        out.read_us_max = ps.read_us_max;
+        out.read_us_sum = ps.read_us_sum;
+        out.adapts = ps.adapts;
+        out.adapt_us_max = ps.adapt_us_max;
+        out.adapt_us_sum = ps.adapt_us_sum;
+        out.avg_us_max = ps.avg_us_max;
+        return true;
+    }
+    if (mosaic_ == nullptr)
+    {
+        out = TR_GNSSReceiverMosaicSerial::RawPairStats{};
+        return false;
+    }
+    return mosaic().rawPairStats(out);
+}
+
+bool TR_GNSSAuto::rawPairStats(TR_GNSSReceiverPX1105RSerial::RawPairStats& out) const
+{
+    if (px_ == nullptr)
+    {
+        out = TR_GNSSReceiverPX1105RSerial::RawPairStats{};
+        return false;
+    }
+    return px().rawPairStats(out);
+}
+
+bool TR_GNSSAuto::setRawMultiband(const mosaic::MosaicMultibandConfig& c, float windup_k)
+{
+    return type_ == GNSS_TYPE_MOSAIC && mosaic().setRawMultiband(c, windup_k);
+}
+
+void TR_GNSSAuto::noteRollRate(float p_rps)
+{
+    if (type_ == GNSS_TYPE_MOSAIC) mosaic().noteRollRate(p_rps);
+}
+
+bool TR_GNSSAuto::rawMbStats(TR_GNSSReceiverMosaicSerial::RawMbStats& out) const
+{
+    if (mosaic_ == nullptr)
+    {
+        out = TR_GNSSReceiverMosaicSerial::RawMbStats{};
+        return false;
+    }
+    return mosaic().rawMbStats(out);
+}
+
+bool TR_GNSSAuto::heardBoard() const
+{
+    return type_ == GNSS_TYPE_SDR && sdr().heardBoard();
+}
+#endif
 
 #if defined(TR_GNSS_COCOM_DIAG) && TR_GNSS_COCOM_DIAG
 void TR_GNSSAuto::logSatDiag()

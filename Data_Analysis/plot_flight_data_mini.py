@@ -494,24 +494,103 @@ def sbf_epoch_rate(blocks, number=SBF_MEAS_EPOCH):
     return len(stamps), span_s, (len(stamps) - 1) / span_s
 
 
+# SkyTraq binary, the V9 PX1105R image's (TR_GNSSReceiverPX1105R_Serial):
+# each frame logged whole, A0 A1, the body's length (u16 big-endian), the body
+# (its first byte the message ID), the XOR of the body, 0D 0A. Numbers in the
+# bodies are big-endian. The ones the image streams at 20 Hz: 0xE5 raw
+# measurements (body [3..4] the receiver's GPS week, [5..8] its time of week,
+# ms, [9..10] the measurement period, ms) and 0xDF its navigation state; 0xE7 /
+# 0xE8 channel status at 1 Hz; the navigation subframes 0xE0 (GPS), 0xE2
+# (BeiDou D1), 0xE6 (Galileo I/NAV); 0x83 / 0x84 ACK / NACK and the replies to
+# the setup's queries.
+SKYTRAQ_MSG_NAMES = {
+    0xE5: "ext raw meas (E5)", 0xDF: "nav state (DF)", 0xE7: "channel status (E7)",
+    0xE8: "elev/azimuth (E8)", 0xE0: "GPS subframe (E0)", 0xE2: "BDS D1 subframe (E2)",
+    0xE6: "GAL I/NAV page (E6)", 0x83: "ACK", 0x84: "NACK", 0x80: "sw version (80)",
+}
+SKYTRAQ_EXT_RAW = 0xE5
+
+
+def skytraq_frame_body(frame):
+    """A whole SkyTraq frame's body (from its message ID), or None if the
+    frame does not check: its sync, its length, its XOR and its 0D 0A."""
+    if len(frame) < 8 or frame[:2] != b"\xa0\xa1":
+        return None
+    n = (frame[2] << 8) | frame[3]
+    if n == 0 or len(frame) != n + 7 or frame[-2:] != b"\r\n":
+        return None
+    body = frame[4:4 + n]
+    cs = 0
+    for x in body:
+        cs ^= x
+    return body if cs == frame[4 + n] else None
+
+
+def skytraq_e5_rate(frames):
+    """[(time_us, frame)] -> (epochs, span_s, rate_hz) of 0xE5 by the
+    receiver's own time stamps (week and time of week), as sbf_epoch_rate."""
+    stamps = set()
+    for _, f in frames:
+        b = skytraq_frame_body(f)
+        if b is not None and b[0] == SKYTRAQ_EXT_RAW and len(b) >= 14:
+            week, tow = struct.unpack_from(">HI", b, 3)
+            stamps.add(week * SBF_WEEK_MS + tow)
+    stamps = sorted(stamps)
+    if len(stamps) < 2:
+        return len(stamps), None, None
+    span_s = (stamps[-1] - stamps[0]) / 1000.0
+    return len(stamps), span_s, (len(stamps) - 1) / span_s
+
+
 def split_gnss_raw_frames(frames):
     """join_gnss_rtcm()'s frames -> {"rtcm3": [(time_us, frame)],
-    "sbf": [(time_us, block)], "bad": count}, each list in log order.
+    "sbf": [(time_us, block)], "skytraq": [(time_us, frame)], "bad": count},
+    each list in log order.
 
     A frame that starts 0xD3 is RTCM3 (its CRC-24Q is the RTCM3 reader's to
     check: extract_gnss_rtcm.frame_ok); one that starts "$@" and checks
-    (sbf_block_ok) is an SBF block. Anything else, an SBF block that fails
-    included, is counted as bad.
+    (sbf_block_ok) is an SBF block; one that starts A0 A1 and checks
+    (skytraq_frame_body) is a SkyTraq frame. Anything else, an SBF block or a
+    SkyTraq frame that fails included, is counted as bad.
     """
-    out = {"rtcm3": [], "sbf": [], "bad": 0}
+    out = {"rtcm3": [], "sbf": [], "skytraq": [], "bad": 0}
     for t, f in frames:
         if f[:1] == b"\xd3":
             out["rtcm3"].append((t, f))
         elif sbf_block_ok(f):
             out["sbf"].append((t, f))
+        elif skytraq_frame_body(f) is not None:
+            out["skytraq"].append((t, f))
         else:
             out["bad"] += 1
     return out
+
+
+def print_gnss_skytraq_summary(recs):
+    """Print what a log's GNSS_RTCM records hold as SkyTraq frames (the V9
+    PX1105R image's): the messages by ID, 0xE5's rate over the receiver's own
+    time stamps, and what the link lost. Prints nothing for a log without them."""
+    frames, dropped = join_gnss_rtcm(recs)
+    raw = split_gnss_raw_frames(frames)
+    if not raw["skytraq"]:
+        return
+    counts = {}
+    for _, f in raw["skytraq"]:
+        mid = f[4]
+        name = SKYTRAQ_MSG_NAMES.get(mid, f"message 0x{mid:02X}")
+        counts[name] = counts.get(name, 0) + 1
+    print("  GNSS receiver frames (SkyTraq, PX1105R):")
+    print(f"    {len(recs):,} records -> {len(raw['skytraq']):,} frames")
+    print(f"    Dropped: {dropped:,} incomplete (a record lost), "
+          f"{raw['bad']:,} bad (sync, length, XOR or end)")
+    for name, n in sorted(counts.items(), key=lambda x: (-x[1], x[0])):
+        print(f"    {name:<24s} {n:>8,}")
+    epochs, span_s, rate_hz = skytraq_e5_rate(raw["skytraq"])
+    if rate_hz is None:
+        print(f"    0xE5: {epochs} epochs, too few for a rate")
+    else:
+        print(f"    0xE5: {epochs:,} epochs over {span_s:.2f} s of receiver time -> {rate_hz:.2f} Hz")
+    print()
 
 
 def print_gnss_sbf_summary(recs):
@@ -3220,6 +3299,8 @@ def main(filepath=BINARY_FILE, output_dir=OUTPUT_DIR, show_plots=SHOW_PLOTS,
     print()
     # The mosaic-G5's SBF blocks, if this log has them (nothing otherwise)
     print_gnss_sbf_summary(records["GNSS_RTCM"])
+    # The PX1105R's SkyTraq frames, the same way
+    print_gnss_skytraq_summary(records["GNSS_RTCM"])
 
     # Print sensor configuration
     print("  Sensor configuration:")

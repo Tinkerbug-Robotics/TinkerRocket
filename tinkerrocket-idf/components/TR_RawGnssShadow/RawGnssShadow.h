@@ -571,6 +571,8 @@ public:
         double   baro_port_k     = 0.0075;    // the static port's error, m per Pa of dynamic pressure (#1579)
         double   baro_offset_tau_s = 30.0;    // the pad offset follows the filter's height this slowly
         double   baro_offset_min_s = 10.0;    // and is used once it has had this long
+        bool     baro_pad_fuse   = true;      // on the pad: fused (false: only its offset learned, the height left
+                                              //   to the pseudoranges, the pad's zero velocity holding the vertical)
         double   baro_hold_port_m = 2.0;      // in flight: held out while that error at the vertical speed is above this
         double   baro_hold_max_s  = 30.0;     //   but no longer than this after launch
         // The descent without the IMU (off by default): from the apogee call
@@ -909,6 +911,7 @@ public:
         uint8_t  imu_free = 0;             // the descent's IMU-free mode on (descent_imu_free)
         uint16_t imu_free_exits = 0;       //   left for GNSS and the barometer gone stale in it (imu_free_gnss_s)
         double   imu_free_t = 0.0;         //   since this (the filter's clock, s): its last entry
+        uint32_t baro_pad_skipped = 0;     //   not fused on the pad (baro_pad_fuse off)
         double   baro_offset_m = 0.0;      // the filter's height less the barometer's, on the pad
         uint8_t  baro_offset_frozen = 0;   //   frozen at launch
         uint32_t zupts = 0;                // landed zero-velocity updates

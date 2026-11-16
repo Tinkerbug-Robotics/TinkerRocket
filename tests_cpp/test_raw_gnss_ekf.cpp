@@ -773,6 +773,115 @@ TEST(RawGnssEKF, AnEpochInPairsTakesEachSatellitesRangeAccelerationOnce)
 
 // ---- the barometer and zero velocity (#1600: the shadow's aiding without satellites)
 
+TEST(RawGnssEKF, AnEpochUnderThrustTakesItsDopplersAtTheThrustsLag)
+{
+    // The Doppler's lag under thrust (rr_dyn_lag_s, setRrDynLag): an epoch
+    // given it is taken that much further back, bit for bit as a filter whose
+    // every epoch lags that much; given none, as one with none. dynLagFor: the
+    // lag by the specific force, none below rr_dyn_lag_g0, all of it above
+    // rr_dyn_lag_g1, linear between; nothing without rr_dyn_lag_s. The
+    // specific force it goes by is the IMU's, low-passed, and only kept with
+    // rr_dyn_lag_s on.
+    const double a_ned[3] = {0.0, 0.0, -20.0};
+    const double lag = 0.060;
+    RawGnssEKFParams all_lag = quietParams(), none = quietParams(), dyn = quietParams();
+    all_lag.rr_lag_s = lag;
+    none.rr_lag_s = 0.0;
+    dyn.rr_lag_s = 0.0;
+    dyn.rr_dyn_lag_s = lag;
+    {
+        RawGnssEKF<double> f(none), g(dyn);
+        EXPECT_EQ(f.dynLagFor(30.0), 0.0);
+        EXPECT_EQ(g.dynLagFor(11.0), 0.0);
+        EXPECT_EQ(g.dynLagFor(11.5), 0.0);
+        EXPECT_DOUBLE_EQ(g.dynLagFor(12.0), 0.5 * lag);
+        EXPECT_EQ(g.dynLagFor(12.5), lag);
+        EXPECT_EQ(g.dynLagFor(30.0), lag);
+        EXPECT_EQ(g.rrLag(), 0.0);
+        g.setRrDynLag(lag);
+        EXPECT_EQ(g.rrLag(), lag);
+        g.setRrDynLag(0.0);
+        EXPECT_EQ(g.rrLag(), 0.0);
+        // the low-passed specific force: 1 g from the start, 15 g a second
+        // into a 15 g push, a tenth of a second's time constant; not kept
+        // without the lag
+        const double v0[3] = {0.0, 0.0, 0.0};
+        initLevel(f, kLla0, v0);
+        initLevel(g, kLla0, v0);
+        EXPECT_EQ(g.specificForceLpG(), 1.0);
+        const double push[3] = {0.0, 0.0, -14.0 * kG};
+        imuSecond(f, push);
+        imuSecond(g, push);
+        EXPECT_EQ(f.specificForceLpG(), 1.0);
+        EXPECT_NEAR(g.specificForceLpG(), 15.0, 1e-2);
+        EXPECT_EQ(g.dynLagFor(g.specificForceLpG()), lag);
+    }
+    for (bool thrust : {true, false})
+    {
+        SCOPED_TRACE(thrust ? "under thrust" : "without");
+        RawGnssEKF<double> truth(all_lag), ref(thrust ? all_lag : none), f(dyn);
+        const double v0[3] = {0.0, 0.0, 0.0};
+        initLevel(truth, kLla0, v0);
+        initLevel(ref, kLla0, v0);
+        initLevel(f, kLla0, v0);
+        const auto sky = makeSky(kLla0);
+        Clock clk;
+        const double still[3] = {0.0, 0.0, 0.0};
+        double worst = 0.0;
+        for (int e = 0; e < 8; ++e)
+        {
+            const double* acc = e == 0 ? still : a_ned;
+            imuSecond(truth, acc);
+            imuSecond(ref, acc);
+            imuSecond(f, acc);
+            clk.tick(1.0);
+            double r[3], v[3], a[3];
+            truth.receiverEcef(r, v);
+            nedToEcef(truth.lla()[0], truth.lla()[1], acc, a);
+            const auto m = measure(sky, r, v, clk, a, thrust ? lag : 0.0);
+            f.setRrDynLag(thrust ? lag : 0.0);
+            ref.updateGnssRaw(m.data(), static_cast<int>(m.size()));
+            f.updateGnssRaw(m.data(), static_cast<int>(m.size()));
+            for (int i = 0; i < 3; ++i)
+            {
+                EXPECT_EQ(f.velNed()[i], ref.velNed()[i]);
+                EXPECT_EQ(f.lla()[i], ref.lla()[i]);
+            }
+            if (thrust && e >= 2)
+                worst = std::fmax(worst, std::fabs(f.velNed()[2] - truth.velNed()[2]));
+        }
+        if (thrust)
+            EXPECT_LT(worst, 0.05);
+    }
+}
+
+TEST(RawGnssEKF, TheAccelerometersNoiseGrowsPastOneGOnly)
+{
+    // a_noise_per_g: the velocity's variance grows by (a_noise_per_g times
+    // the specific force past 1 g)^2 a second more than a_noise alone gives;
+    // at 1 g and under (the pad, a coast) it is that filter bit for bit
+    RawGnssEKFParams plain = quietParams(), grows = quietParams();
+    grows.a_noise_per_g = 0.01;
+    RawGnssEKF<double> f(plain), g(grows);
+    const double v0[3] = {0.0, 0.0, 0.0};
+    initLevel(f, kLla0, v0);
+    initLevel(g, kLla0, v0);
+    imuSecond(f);
+    imuSecond(g);
+    const double coast[3] = {0.0, 0.0, kG};     // free fall: no specific force
+    imuSecond(f, coast);
+    imuSecond(g, coast);
+    for (int i = 0; i < 19; ++i)
+        for (int j = 0; j < 19; ++j)
+            EXPECT_EQ(g.P(i, j), f.P(i, j)) << i << "," << j;
+    const double push[3] = {0.0, 0.0, -9.0 * kG};   // 10 g of specific force: 9 past 1
+    imuSecond(f, push);
+    imuSecond(g, push);
+    const double extra = (0.01 * 9.0 * kG) * (0.01 * 9.0 * kG);   // a second of it
+    for (int i = 3; i < 6; ++i)
+        EXPECT_NEAR(g.P(i, i) - f.P(i, i), extra, 0.01 * extra) << i;
+}
+
 TEST(RawGnssEKF, AHeightHoldsTheVerticalAnIMUWouldLose)
 {
     // An accelerometer 0.3 m/s^2 strong in the vertical for 20 s: alone it

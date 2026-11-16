@@ -56,7 +56,16 @@
 #include "SdrAid.h"
 #include "SdrRtcm.h"
 #include <GnssTimeSync.h>      // TR_GNSSReceiverLC86_Serial: the clock line, shared
-#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+// Its raw side (the fix as GNSSData and the raw outputs): the SDR raw-nav
+// image's, and the image that flies the raw-GNSS filter on every receiver
+// giving measurements (TR_GNSS_AUTO_RAW), where the board is that filter's
+// receiver whenever it is the one found.
+#if (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
+#define TR_SDR_RAW_SIDE 1
+#else
+#define TR_SDR_RAW_SIDE 0
+#endif
+#if TR_SDR_RAW_SIDE
 #include <RawMeas.h>           // TR_GNSSRaw: gnss_raw::TimedRawEpoch
 #include "SdrRawEpoch.h"
 #endif
@@ -78,7 +87,7 @@ class TR_GNSSReceiverSdrSerial : private sdr_rtcm::Rtcm3Framer::Sink
                    int8_t reset_n_pin = -1,
                    int8_t safeboot_n_pin = -1);
 
-#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+#if TR_SDR_RAW_SIDE
         // The board's last fix (see the top of this file), from the poll task.
         void getGNSSData(GNSSData &data) { data = fix_data_; }
 
@@ -199,7 +208,7 @@ class TR_GNSSReceiverSdrSerial : private sdr_rtcm::Rtcm3Framer::Sink
 #if defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID
         void logLink();
 #endif
-#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+#if TR_SDR_RAW_SIDE
         void rawFrame(const uint8_t* frame, size_t len, uint16_t number, int64_t end_us);
         void noteFix(const sdr_rtcm::TrFix& f, int64_t end_us);
         void logRaw();
@@ -269,7 +278,7 @@ class TR_GNSSReceiverSdrSerial : private sdr_rtcm::Rtcm3Framer::Sink
         uint32_t          clock_dropped_ = 0;
         uint32_t          late_left_out_ = 0;    // epochs the board marked late, not on the line
 
-#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+#if TR_SDR_RAW_SIDE
         // The fix (this task alone writes and reads these)
         GNSSData          fix_data_ = {};
         bool              new_fix_ = false;
