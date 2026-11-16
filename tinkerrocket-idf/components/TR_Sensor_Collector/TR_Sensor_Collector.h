@@ -63,6 +63,8 @@
 #include <TR_GNSSReceiverMosaic_Serial.h>
 #elif defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
 #include <TR_GNSSReceiverSdr_Serial.h>
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+#include <TR_GNSSReceiverPX1105R_Serial.h>
 #elif defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
 #include "gnss_auto_driver.h"
 #else
@@ -277,7 +279,12 @@ public:
     // Whether begin() looks for the receiver this boot: built in, and not
     // left out by skipGNSSThisBoot().
     bool gnssWantedThisBoot() const { return use_gnss; }
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    // The image that flies the raw-GNSS filter on every receiver giving
+    // measurements, the same: no probes, the raw receiver it flew with
+    // (TR_GNSSAuto::setBeginWait).
+    void deferGNSSBringUpThisBoot() { gnss_defer_ = true; }
+#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
     // The mosaic-only image, on a reboot in flight: begin() starts looking for
     // the receiver but does not wait for it (up to 30 s with no flight logic);
     // the GNSS poll task finds and sets it up whenever it answers, as it does
@@ -285,6 +292,9 @@ public:
     // setBeginWait). isGnssOnline() is true from begin(), with no fix until
     // the receiver sends one. Call before begin(); skipGNSSThisBoot() still
     // leaves the receiver out.
+    void deferGNSSBringUpThisBoot() { gnss_defer_ = true; }
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+    // The PX1105R image's, the same (TR_GNSSReceiverPX1105RSerial::setBeginWait).
     void deferGNSSBringUpThisBoot() { gnss_defer_ = true; }
 #endif
     // Which receiver the FC talks to (GNSS_TYPE_*): the build's own, or on the
@@ -296,6 +306,12 @@ public:
     // build's own, or the V9 image's NVS record (GNSS_TYPE_NONE when it has
     // none yet).
     uint8_t gnssLastBootType();
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    // The one image makes the raw outputs with the driver of the receiver
+    // found (enableGNSSRawOutputs() only asks for them): after begin(),
+    // whether they could not be made.
+    bool gnssRawOutputsFailed() const { return gnss_receiver.rawOutputsFailed(); }
+#endif
     // Raw GNSS measurements for the raw-GNSS shadow filter (#1600), from the
     // LC86G's MSM7 and broadcast ephemeris, or the mosaic-G5's MeasEpoch and
     // SBF navigation blocks on the mosaic-only image; never from the u-blox,
@@ -311,7 +327,29 @@ public:
     // The receiver's own fixes with their GPS instant on the MCU clock, for
     // the shadow's check of each fix against the IMU (#1508). LC86G only.
     bool getGNSSFix(gnss_raw::TimedFix& out);
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    // The image that flies the raw-GNSS filter on every receiver giving
+    // measurements: each of the three images' calls below, handed to the
+    // receiver in use (TR_GNSSAuto), false or a no-op with another.
+    bool getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const;
+    void setGNSSRawEpochPeriodMs(uint32_t period_ms);
+    bool getGNSSRawStats(TR_GNSSReceiverMosaicSerial::RawStats& out) const;
+    bool getGNSSRawStats(TR_GNSSReceiverSdrSerial::RawStats& out) const;
+    bool getGNSSRawStats(TR_GNSSReceiverPX1105RSerial::RawStats& out) const;
+    bool setGNSSRawDopplerPairing(const mosaic::MosaicDopplerPairConfig& c);
+    bool getGNSSRawPairStats(TR_GNSSReceiverMosaicSerial::RawPairStats& out) const;
+    bool getGNSSRawPairStats(TR_GNSSReceiverPX1105RSerial::RawPairStats& out) const;
+    uint32_t gnssPollStackFree() const;
+    bool setGNSSRawMultiband(const mosaic::MosaicMultibandConfig& c, float windup_k);
+    void noteGNSSRollRate(float p_rps);
+    bool getGNSSRawMbStats(TR_GNSSReceiverMosaicSerial::RawMbStats& out) const;
+    bool getGNSSEphemerisDecoded(gps_eph_t& out);
+    void setGNSSRawEpochConfig(uint32_t period_ms, const sdr_rtcm::SdrDopplerMeanConfig& mean);
+    bool gnssBoardHeard() const;
+    // Whether the receiver found gives raw measurements (the mosaic-G5, the
+    // PX1105R or the gnss-sdr-dev board): the raw-GNSS filter's receiver.
+    bool gnssRawReceiver() const;
+#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
     // The mosaic-only image's raw outputs beside those (its driver's
     // broadcastIono, setRawEpochPeriodMs and rawStats): the last GPS
     // ionosphere the receiver decoded (the 8 broadcast bytes and their GPS
@@ -334,6 +372,19 @@ public:
     bool setGNSSRawMultiband(const mosaic::MosaicMultibandConfig& c, float windup_k);
     void noteGNSSRollRate(float p_rps);
     bool getGNSSRawMbStats(TR_GNSSReceiverMosaicSerial::RawMbStats& out) const;
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+    // The PX1105R image's, the same as the mosaic's (its driver's
+    // broadcastIono, setRawEpochPeriodMs, rawStats, setRawDopplerPairing --
+    // the mosaic's pair rule -- and rawPairStats), and its ephemerides, which
+    // the driver decodes from the subframes itself (with the receiver's week):
+    // for RawGnssMeasStage::addEphemeris. getGNSSEphemeris gives nothing here.
+    bool getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const;
+    void setGNSSRawEpochPeriodMs(uint32_t period_ms);
+    bool getGNSSRawStats(TR_GNSSReceiverPX1105RSerial::RawStats& out) const;
+    bool setGNSSRawDopplerPairing(const mosaic::MosaicDopplerPairConfig& c);
+    bool getGNSSRawPairStats(TR_GNSSReceiverPX1105RSerial::RawPairStats& out) const;
+    uint32_t gnssPollStackFree() const;
+    bool getGNSSEphemerisDecoded(gps_eph_t& out);
 #endif
 #if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
     // The SDR raw-nav image's raw outputs beside those (its driver's
@@ -515,8 +566,10 @@ private:
     // begin() has run the GNSS bring-up: until then (and in rescue mode,
     // which never starts the sensors) gnssType() names no receiver.
     bool gnss_begun_ = false;
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
     // deferGNSSBringUpThisBoot(): the poll task brings the receiver up
+    bool gnss_defer_ = false;
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
     bool gnss_defer_ = false;
 #endif
     // Set by begin() once the barometer has both answered and been configured.
@@ -540,6 +593,8 @@ private:
     TR_GNSSReceiverMosaicSerial gnss_receiver;
 #elif defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
     TR_GNSSReceiverSdrSerial gnss_receiver;
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+    TR_GNSSReceiverPX1105RSerial gnss_receiver;
 #elif defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
     TR_GNSSAuto gnss_receiver;
 #else

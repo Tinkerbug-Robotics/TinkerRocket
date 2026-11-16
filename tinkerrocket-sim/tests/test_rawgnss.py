@@ -214,9 +214,8 @@ def test_the_lc86g_profile_is_the_bound_defaults():
     assert (p.fuse_epoch_period_s, p.pr_period_s, p.sat_cap, p.reject_persist_s) == (0.0, 0.0, 0, 0.0)
     assert (p.level_min_dt_s, p.heading_fit_period_s, p.rr_dyn_window_s) == (0.0, 0.0, 0.0)
     assert (p.max_epoch_age_s, p.epoch_job_max_s) == (0.6, 0.3)
-    # the stubs: the LC86G's numbers, UNMEASURED
-    for make, rx in ((rg.neo_m8t_profile, rg.RX_NEO_M8T), (rg.px1105r_profile, rg.RX_PX1105R),
-                     (rg.generic_profile, rg.RX_GENERIC)):
+    # the stubs: the LC86G's numbers, UNMEASURED (the PX1105R has its own: test_the_px1105r_profile)
+    for make, rx in ((rg.neo_m8t_profile, rg.RX_NEO_M8T), (rg.generic_profile, rg.RX_GENERIC)):
         q = make()
         assert not q.measured and q.type == rx and rg.profile_for(rx).name == q.name
         assert q.cr_sigma_floor_mps == p.cr_sigma_floor_mps and q.rr_lag_s == p.rr_lag_s
@@ -224,6 +223,17 @@ def test_the_lc86g_profile_is_the_bound_defaults():
     p.cr_mode = rg.CARRIER_OFF
     rg.apply_profile(p, b1)
     assert not b1.carrier
+
+
+def test_the_px1105r_profile():
+    # the mosaic-G5's design on the SkyTraq PX1105R (ReceiverProfile.h px1105rProfile): fused at 10 Hz from its
+    # 20 Hz 0xE5, the code once a second, its Doppler taken 25 ms back (its carrier's change over the 50 ms before
+    # the tag), whole hertz, the carrier off, UNMEASURED
+    q = rg.px1105r_profile()
+    assert q.name == "PX1105R" and not q.measured and q.type == rg.RX_PX1105R
+    assert rg.profile_for(rg.RX_PX1105R).name == q.name
+    assert q.rr_lag_s == 0.025 and q.cr_mode == rg.CARRIER_OFF and q.doppler_step_hz == 1.0
+    assert (q.raw_epoch_period_s, q.fuse_epoch_period_s, q.pr_period_s) == (0.05, 0.1, 1.0)
 
 
 def test_the_mosaic_g5_v0_profile():

@@ -313,10 +313,6 @@ inline GnssReceiverProfile placeholderProfile(GnssReceiverType type, const char*
 // u-blox NEO-M8T: UNMEASURED (its UBX-RXM-RAWX would carry the phase).
 inline GnssReceiverProfile neoM8tProfile() { return placeholderProfile(kRxNeoM8t, "NEO-M8T"); }
 
-// SkyTraq PX1105R: UNMEASURED. (The base C/N0 noise model is this receiver's
-// own fit, 2026-09-26, so its pr_corr_scale is likely 1, not the LC86G's 0.5;
-// its Doppler is rounded to 1 Hz, doppler_step_hz.)
-inline GnssReceiverProfile px1105rProfile() { return placeholderProfile(kRxPx1105r, "PX1105R"); }
 
 // Septentrio mosaic-G5 (the Goblin, V8/V9 J1), v0: UNMEASURED in flight. Set
 // up as the driver sets it (High dynamics, 20 Hz MeasEpoch, no smoothing) and
@@ -511,6 +507,62 @@ inline GnssReceiverProfile sdrDevProfile()
     // code minus carrier: 0.20 / 0.14 / 0.07 / 0.06 / 0.05 m in those bins),
     // but the board's delay loop smooths it, so most of its error is the
     // correlated part this model gives the mosaic's numbers for
+    return p;
+}
+
+// SkyTraq PX1105R (the V9's PX1105R carrier, hardware/gnss-px1105r-18mm-hv),
+// v0: UNMEASURED in flight. The mosaic-G5's profile -- the same design, set up
+// the same way (20 Hz raw epochs fused at 10 Hz on the GPS-time grid, one
+// L1-band signal a system, the code once a second, the carrier off) -- with
+// what this receiver does differently. Each number's source:
+//   "09-26 static": the PX1105R's 20-minute open-sky run at 20 Hz, 2026-09-26
+//     (bench-backups/px1105r_outdoor_20hz_1200s_2026-09-26), its own 0xE5;
+//   "rig flights": the PX1105R on the RF rig's eagleclaw and gtv67 skies in
+//     airborne mode (gnss repo cocom-rig/sdr/captures), its 0xE5's Doppler
+//     against its own carrier, 2026-10-21;
+//   "the mosaic's": the mosaic-G5 profile's number kept, for the reason given
+//     there (most are the plan's or the airframe's, not the receiver's).
+inline GnssReceiverProfile px1105rProfile()
+{
+    GnssReceiverProfile p = mosaicG5Profile();
+    p.type = kRxPx1105r;
+    p.name = "PX1105R";
+    p.measured = false;
+
+    // One signal per system, signal type 0 of 0xE5: GPS L1 C/A, Galileo E1,
+    // BeiDou B1I (TGD1 from its D1 subframes); its L5-band signals are left
+    // out. C/N0 floors of 25 dB-Hz on the code and the Doppler: the mosaic's
+    // (the PX1105R's whole dB-Hz on the same scale, unmeasured against it).
+
+    // timing
+    p.rr_lag_s = 0.025;             // rig flights: its Doppler is its carrier's change over the 50 ms before
+                                    //   the tag, whole hertz (residual 0.047 m/s median = the step's at 25 ms,
+                                    //   0.08 at 0 and 50 ms)
+    p.epoch_latency_s = 0.0;        // UNCALIBRATED: no 1PPS reaches the FC on this carrier (J3 pin 5 is the
+                                    //   receiver's RXD2), so the epochs are placed by their 0xE5's arrival,
+                                    //   late by the receiver's own delay (a scope on the PPS LED, D1, against
+                                    //   the UART measures it)
+    p.raw_epoch_period_s = 0.05;    // 09-26 static: every 0xE5 50 ms after the last (period field 50 ms)
+
+    // the code: this receiver's own C/N0 fit (09-26 static; the LC86G's
+    // numbers were this fit scaled), its correlated part unscaled
+    p.pr_white_a = 0.026;
+    p.pr_white_b = 0.157;
+    p.pr_corr_a = 1.94;
+    p.pr_corr_b = 3.5;
+    p.pr_corr_scale = 1.0;
+    p.pr_tau_s = 15.0;
+
+    // the Doppler: whole hertz, truncated toward zero (the driver moves it to
+    // the middle of its step: SkyTraqBinary.h dopplerHz), whose rounding joins
+    // its sigma (0.055 m/s at L1); the thermal part and the margin the
+    // mosaic's (its carrier's own change, unmeasured against truth here)
+    p.doppler_step_hz = 1.0;
+
+    // the carrier: off, as the mosaic's. (Its 50 ms carrier change is the
+    // Doppler before the rounding: a carrier rate would take the step out, a
+    // feature for the offline harness first.)
+    p.cr_mode = kCarrierOff;
     return p;
 }
 

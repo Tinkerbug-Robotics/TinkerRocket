@@ -176,7 +176,7 @@ def test_reader_joins_and_splits_the_blocks(tmp_path):
     assert [(r["part"], r["parts"]) for r in recs[:8]] == [(k, 7) for k in range(7)] + [(0, 1)]
     frames, dropped = pfd.join_gnss_rtcm(recs)
     assert dropped == 0 and frames == BLOCKS
-    assert pfd.split_gnss_raw_frames(frames) == {"rtcm3": [], "sbf": BLOCKS, "bad": 0}
+    assert pfd.split_gnss_raw_frames(frames) == {"rtcm3": [], "sbf": BLOCKS, "skytraq": [], "bad": 0}
 
 
 def test_the_record_boundary_is_219_bytes():
@@ -194,7 +194,7 @@ def test_the_record_boundary_is_219_bytes():
     frames, dropped = pfd.join_gnss_rtcm(recs)
     assert dropped == 0 and frames == seq
     raw = pfd.split_gnss_raw_frames(frames)
-    assert raw == {"rtcm3": [(30, r219)], "sbf": [(10, one), (20, two)], "bad": 1}
+    assert raw == {"rtcm3": [(30, r219)], "sbf": [(10, one), (20, two)], "skytraq": [], "bad": 1}
 
 
 def test_the_longest_block_goes_in_fifteen_parts():

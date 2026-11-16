@@ -1759,6 +1759,7 @@ add_executable(test_gnss_detect test_gnss_detect.cpp
     ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial/SbfParser.cpp
     ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrRtcm.cpp
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
+    ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial/SkyTraqBinary.cpp
 )
 target_include_directories(test_gnss_detect PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -1766,6 +1767,7 @@ target_include_directories(test_gnss_detect PRIVATE
     ${LIB_DIR}/TR_Sensor_Collector
     ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial
     ${LIB_DIR}/TR_GNSSReceiverSdr_Serial
+    ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
     ${LIB_DIR}/TR_RocketComputerTypes
 )
@@ -1845,6 +1847,19 @@ target_include_directories(test_sdr_nav_start_policy PRIVATE
 )
 target_link_libraries(test_sdr_nav_start_policy GTest::gtest_main)
 gtest_discover_tests(test_sdr_nav_start_policy)
+
+# ---------- test_raw_nav_choice ----------
+# Which navigation filter the one V9/V10 image (TR_GNSS_AUTO_RAW) flies at
+# boot (flight_computer/main/raw_nav_auto.h rawNavChoice, pure), and that its
+# gates are nothing in every other image.
+add_executable(test_raw_nav_choice test_raw_nav_choice.cpp)
+target_include_directories(test_raw_nav_choice PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+target_link_libraries(test_raw_nav_choice GTest::gtest_main)
+gtest_discover_tests(test_raw_nav_choice)
 
 # ---------- test_sdr_board_config ----------
 # The V10's SDR raw-nav image's switches (config.h with TR_BOARD_V10 and
@@ -2661,8 +2676,64 @@ gtest_discover_tests(test_fc_reboot_display_policy)
 # registers its own tests in tests_cpp/v9raw/<piece>.cmake, so pieces built at
 # the same time never edit this file. Each .cmake uses LIB_DIR and SHIM_DIR as
 # the targets above do.
+# ---------- test_skytraq_binary / test_skytraq_link ----------
+# The PX1105R's binary stream (TR_GNSSReceiverPX1105R_Serial/SkyTraqBinary.cpp:
+# framing, resync, the 0xE5 / 0xDF / 0xE7 decoders on its own frames,
+# fixtures/skytraq_frames.h), its 0xE5 as the raw filter's cells and the
+# epoch's GPS instant (Px1105rRawEpoch.h), and its setup against a simulated
+# receiver (SkyTraqLink.cpp). With PX1105R_CAPTURE naming the 09-26 open-sky
+# capture (.log.gz), its 20 minutes too.
+add_executable(test_skytraq_binary test_skytraq_binary.cpp
+    ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial/SkyTraqBinary.cpp
+)
+target_include_directories(test_skytraq_binary PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+)
+target_link_libraries(test_skytraq_binary GTest::gtest_main)
+gtest_discover_tests(test_skytraq_binary)
+
+add_executable(test_skytraq_link test_skytraq_link.cpp
+    ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial/SkyTraqBinary.cpp
+    ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial/SkyTraqLink.cpp
+)
+target_include_directories(test_skytraq_link PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial
+)
+target_link_libraries(test_skytraq_link GTest::gtest_main)
+gtest_discover_tests(test_skytraq_link)
+
 file(GLOB V9RAW_CMAKE CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/v9raw/*.cmake)
 list(SORT V9RAW_CMAKE)
 foreach(_v9raw_cmake IN LISTS V9RAW_CMAKE)
     include(${_v9raw_cmake})
 endforeach()
+
+# ---------- test_skytraq_nav ----------
+# The PX1105R's navigation-message assembler (TR_GNSSReceiverPX1105R_Serial/
+# SkyTraqNav.cpp): 0xE0 GPS LNAV subframes, 0xE6 Galileo I/NAV page pairs
+# and 0xE2 BeiDou D1 subframes to gps_eph_t, checked field for field against
+# the bench prototype's decode (gnss_raw.py EphStore) of the frames of the
+# 09-26 outdoor capture (fixtures/skytraq_nav_frames.h); what is refused (bad
+# preamble, GPS cutover, Galileo CRC, BeiDou GEO, short frames, unknown
+# week); GPS subframe 4 page 18 to the 8 Klobuchar bytes. With
+# TR_SKYTRAQ_NAV_CAPTURE naming the capture, all of it (statistics only).
+add_executable(test_skytraq_nav test_skytraq_nav.cpp
+    ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial/SkyTraqNav.cpp
+    ${LIB_DIR}/TR_GNSSRaw/eph.c
+    ${LIB_DIR}/TR_GNSSRaw/RtcmEphemeris.cpp
+    ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
+)
+target_include_directories(test_skytraq_nav PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+)
+target_link_libraries(test_skytraq_nav GTest::gtest_main)
+gtest_discover_tests(test_skytraq_nav)

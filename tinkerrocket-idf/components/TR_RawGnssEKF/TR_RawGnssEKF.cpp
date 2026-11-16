@@ -176,6 +176,8 @@ void RawGnssEKF<T>::init(const double lla[3], const T v_ned[3], const T q[4], do
     isb_[0] = isb_[1] = T(0);
     clk_ready_ = false;
     g_excess_ = g_peak_ = T(0);
+    f_lp_g_ = T(1);
+    rr_dyn_lag_ = 0.0;
     rate_peak_ = rate_across_peak_ = T(0);
     att_hold_ = false;
     imu_free_ = false;
@@ -532,6 +534,12 @@ void RawGnssEKF<T>::propagate(const T acc[3], const T gyro[3], T dt)
     g_excess_ = fn / T(kG0) - T(1);
     if (g_excess_ > g_peak_)
         g_peak_ = g_excess_;
+    if (p_.rr_dyn_lag_s > 0.0)
+    {
+        // the specific force the Doppler's lag under thrust goes by (dynLagFor)
+        const T kf = p_.f_lp_tau_s > static_cast<double>(dt) ? dt / T(p_.f_lp_tau_s) : T(1);
+        f_lp_g_ += kf * (fn / T(kG0) - f_lp_g_);
+    }
     if (track_rate_)
     {
         const T across = std::sqrt(w[1] * w[1] + w[2] * w[2]);
@@ -718,15 +726,24 @@ void RawGnssEKF<T>::propagateCovariance(const T Tb2n[3][3], const T f_b[3], cons
         Pi[15] += dt * Ai[16];
     }
 
-    // Qd
+    // Qd; the accelerometer's noise grown by the specific force past 1 g
+    // (a_noise_per_g), but not in the descent's IMU-free mode, which uses no
+    // accelerometer (q_vel is its constant-velocity noise there)
     const T h2 = half * dt * dt;
+    T q_v = q_vel;
+    if (!imu_free_ && p_.a_noise_per_g > 0.0)
+    {
+        const T ex = std::sqrt(f_b[0] * f_b[0] + f_b[1] * f_b[1] + f_b[2] * f_b[2]) - T(kG0);
+        if (ex > T(0))
+            q_v += (T(p_.a_noise_per_g) * ex) * (T(p_.a_noise_per_g) * ex);
+    }
     for (int i = 0; i < 3; ++i)
     {
-        P_[3 + i][3 + i] += dt * q_vel;
+        P_[3 + i][3 + i] += dt * q_v;
         P_[6 + i][6 + i] += dt * q_att_;
         P_[9 + i][9 + i] += dt * q_ab_ + h2 * T(2) * f_ab_ * q_ab_;
         P_[12 + i][12 + i] += dt * q_wb_ + h2 * T(2) * f_wb_ * q_wb_;
-        const T pv = h2 * q_vel;                        // position-velocity
+        const T pv = h2 * q_v;                          // position-velocity
         P_[i][3 + i] += pv;
         P_[3 + i][i] += pv;
         const T aw = h2 * (-half) * q_wb_;              // attitude-gyro bias

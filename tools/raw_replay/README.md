@@ -873,6 +873,43 @@ Checked 2026-11-09 on the V10 bench log above, re-timed onto a still IMU at the 
 applied as through `extract.py --sdr`, none refused, 2.2 m horizontal from the survey (median; 2.1 m from the log's
 own arrivals), velocity within 0.07 m/s.
 
+## The V9 with the SkyTraq PX1105R (`--receiver px1105r`)
+
+The PX1105R image flies the mosaic-only image's design (one navigation filter, cold start on the pad, the heading at
+the firmware's defaults, the 30 ms GNSS task delay, the 128-entry store: use `raw_replay_mosaic`, the quorum) on its
+own receiver: `px1105rProfile()`, `applyPx1105rFlightProfile()` and `applyPx1105rFlightSafeguards()`
+(ReceiverProfileApply.h), where `--receiver mosaic` applies the mosaic's. Its stream is whole SkyTraq frames, one R
+line each (`A0 A1 .. 0D 0A`, hex) at the MCU time its last byte arrived, taken through the driver's own chain
+(`skytraq_feed.h`, from TR_GNSSReceiverPX1105R_Serial's pure code: SkyTraqBinary, SkyTraqNav, Px1105rRawEpoch.h):
+the 0xE5 decoded, its GPS instant the time of week less the last 0xDF's bias carried by its drift, a sample of the
+driver's arrival-time clock line (the LC86G driver's GnssTimeSync at the profile's `epoch_latency_s`); on the 100 ms
+grid an epoch, its Dopplers averaged with the off-grid epoch's before it (none across a clock cut); the 0xDF the
+clock (a step cuts the locks) and the fix the flight loop gets (its height above the ellipsoid; the cold start's
+position is the first 3-D one); the subframes into ephemerides and the GPS Klobuchar through the GNSS task's
+ionosphere rule. Built where the tree has the PX1105R's code and image profile (`RAW_REPLAY_PX1105R`, off by itself
+elsewhere); `--receiver lc86g` and `mosaic` are unchanged by it (their CSV, digest and events JSON compared byte for
+byte before and after, 2026-10-21: a V9 mosaic log and the Beetle's ec10).
+
+- `--px-tag sync|line`: the epochs placed by the driver's time sync on the frames' arrivals (the firmware's, default),
+  or on the events file's K line (an ideal tag); `--px-latency-ms X` the time sync's latency in place of the profile's
+  (0: uncalibrated, no 1PPS on this carrier); `--epoch-shift-ms` moves the tags as for the other receivers.
+- `META app_iono a0 a1 a2 a3 b0 b1 b2 b3 gps_day`: the app's set, offered to the rule as the app's (the rig's sky never
+  broadcasts page 18; the V9 rig image injects the sky's own).
+
+Beside it:
+- `px_events.py`: a rig capture of the PX1105R (`<host_t> B <hex body>`) beside the same simulated flight's sensors
+  (`scenarios/sim_<flight>_sensors.csv.gz`) as an events file on one MCU clock by GPS time (sim_events.py's I, B and
+  M conventions; the frames' host stamps mapped to GPS time by the 0xE5s' lower envelope, plus `--latency-ms`, a
+  stand-in for the receiver's and the UART's delay); `--static` for a still capture (a level, still IMU).
+- `px_score.py`: the phases pad, boost, coast, apogee +-2 s and descent against the sim's truth (scorelib), for harness
+  runs, a V9 rig run's on-board `[REPLAY-NAV]` (`--onboard NAME=fc_console.txt`) and the PX1105R's own fix
+  (`--capture`).
+- `px_meas_check` (built with it) and `px_meas.py`: the measurement stage alone -- every fused-grid epoch built by the
+  image's stage at a known receiver (`--fixed lat,lon,h`, or `--truth` a trajectory) and its pseudorange and range-rate
+  residuals by system, C/N0 and elevation, with a scan of where the Dopplers sit in time against the trajectory;
+  `--eph-out` the group delays for a per-satellite check; `--x-out` a mosaic-grade receiver on the PX1105R's own
+  satellites as sim epochs (X lines: the truth's ranges plus the mosaic profile's noise) for the same IMU.
+
 ## The Beetle's bit-identity check (`bitident.sh`, `../m1_identity.sh`)
 
 Code the Beetle (M1, LC86G) shares with the mosaic-G5 work must leave the Beetle's filter bit-identical. Two scripts

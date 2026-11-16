@@ -224,11 +224,14 @@ endforeach()
 # -bench. Never set for flight.
 #
 # These and TR_RAW_GNSS_IRAM below act only where the raw-GNSS filter
-# navigates on a P4 (main.cpp's TR_RAW_NAV_P4): the mosaic-G5 image, and the
+# navigates on a P4 (main.cpp's TR_RAW_NAV_P4): the mosaic-G5 image, the
 # V10's gnss-sdr-dev image (-DTR_GNSS_SDR=1, below), where TR_BENCH_RAW_DOP_AVG
 # turns the board's Doppler means on or off and the fused grid is any whole
-# number of its 10 ms epochs. Any other build refuses them rather than build
-# an image that silently ignores them.
+# number of its 10 ms epochs, and the PX1105R image (-DTR_GNSS_PX1105R=1,
+# below). Any other build refuses them rather than build an image that
+# silently ignores them. _tr_mosaic_rawnav is the mosaic-only and gnss-sdr-dev
+# images' alone (their rig replay and the TR_BENCH_MOSAIC_* switches below);
+# _tr_p4_rawnav adds the PX1105R image.
 if(TR_GNSS_MOSAIC AND (NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW))
     set(_tr_mosaic_rawnav ON)
 elseif(TR_GNSS_SDR)
@@ -236,13 +239,18 @@ elseif(TR_GNSS_SDR)
 else()
     set(_tr_mosaic_rawnav OFF)
 endif()
+if(_tr_mosaic_rawnav OR (TR_GNSS_PX1105R AND (NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW)))
+    set(_tr_p4_rawnav ON)
+else()
+    set(_tr_p4_rawnav OFF)
+endif()
 set(_tr_mosaic_rawnav_hooks TR_BENCH_RAW_START_FAIL TR_BENCH_RESTORE_SIM TR_BENCH_PANIC_AT_S
     TR_BENCH_PANIC_FILTER_AT_S TR_BENCH_RAW_STOP_AT_S)
 foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G TR_BENCH_DV_CHECK TR_BENCH_RAW_BUILD_LITE
         TR_BENCH_RAW_SHARE_LOS TR_BENCH_RAW_DOP_AVG TR_RAW_GNSS_IRAM TR_BENCH_RAW_CAP_MAX TR_BENCH_RAW_CAP_PAD
         TR_BENCH_RAW_SLICE_US TR_BENCH_RAW_TROPO_RATE ${_tr_mosaic_rawnav_hooks})
-    if(DEFINED ${_v} AND NOT _tr_mosaic_rawnav)
-        message(FATAL_ERROR "${_v} is for the raw-GNSS navigation filter of the mosaic-only image (-DTR_GNSS_MOSAIC=1 on a V8 or V9) or the V10's gnss-sdr-dev image (-DTR_GNSS_SDR=1): this build would ignore it. A build dir keeps every -D value: use a fresh one.")
+    if(DEFINED ${_v} AND NOT _tr_p4_rawnav)
+        message(FATAL_ERROR "${_v} is for the raw-GNSS navigation filter of the mosaic-only image (-DTR_GNSS_MOSAIC=1 on a V8 or V9), the V10's gnss-sdr-dev image (-DTR_GNSS_SDR=1) or the PX1105R image (-DTR_GNSS_PX1105R=1 on a V9 or V10): this build would ignore it. A build dir keeps every -D value: use a fresh one.")
     endif()
 endforeach()
 foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G TR_BENCH_DV_CHECK TR_BENCH_RAW_BUILD_LITE
@@ -254,7 +262,7 @@ foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G TR_
     endif()
 endforeach()
 # Bench hooks for the mosaic-only image's robustness bench (P3, gate G8), one
-# image each, never flown (main.cpp, TR_RAW_NAV_MOSAIC):
+# image each, never flown (main.cpp, TR_RAW_NAV_P4: the PX1105R image's too):
 #   TR_BENCH_RAW_START_FAIL=1     the filter's start fails before it allocates:
 #                                 NO NAVIGATION FILTER and FCB_DEG_SENSORS
 #   TR_BENCH_RESTORE_SIM=1        a sim flight's snapshot is restored like a
@@ -269,7 +277,7 @@ endforeach()
 foreach(_v ${_tr_mosaic_rawnav_hooks})
     if(DEFINED ${_v})
         add_compile_definitions(${_v}=${${_v}})
-        message(WARNING "${_v}=${${_v}} -- a BENCH hook of the mosaic-only image (P3): never fly this image")
+        message(WARNING "${_v}=${${_v}} -- a BENCH hook of the raw-GNSS navigation image (P3): never fly this image")
     endif()
 endforeach()
 # Bench: the raw-GNSS filter's EKF and measurement builder in internal RAM
@@ -327,12 +335,24 @@ endif()
 # rinex_gps_iono.py <the scenario's RINEX>) (TR_Sensor_Collector_Sim). Without
 # it the filter builds the rig's sky with no Klobuchar.
 if(TR_SIM_REPLAY_BLOB)
-    if(TR_GNSS_MOSAIC AND NOT _tr_mosaic_rawnav)
+    if(TR_GNSS_PX1105R)
+        message(FATAL_ERROR "TR_SIM_REPLAY_BLOB is not for the PX1105R image (-DTR_GNSS_PX1105R=1): the rig replay is the M1's (-DTR_BOARD_M1=1), the mosaic-only image's (-DTR_GNSS_MOSAIC=1) or the gnss-sdr-dev board's")
+    elseif(TR_GNSS_MOSAIC AND NOT _tr_mosaic_rawnav)
         message(FATAL_ERROR "TR_SIM_REPLAY_BLOB on the mosaic-only image takes its clock from the raw-GNSS filter's timed epochs: build it with the filter (no -DTR_RAW_GNSS_SHADOW=0)")
     elseif(NOT TR_GNSS_MOSAIC AND NOT TR_GNSS_SDR AND NOT TR_BOARD_M1 AND NOT ((TR_BOARD_V9 OR TR_BOARD_V10) AND (NOT DEFINED TR_GNSS_AUTO OR TR_GNSS_AUTO)))
         message(FATAL_ERROR "TR_SIM_REPLAY_BLOB needs a receiver whose time sets the replay's clock: the M1's LC86G (-DTR_BOARD_M1=1), the mosaic-only image (-DTR_GNSS_MOSAIC=1 on a V8 or V9), the V10's gnss-sdr-dev image (-DTR_GNSS_SDR=1) or the gnss-sdr-dev board on the V9's or V10's auto image")
     endif()
-    if(NOT TR_GNSS_MOSAIC AND NOT TR_GNSS_SDR AND NOT TR_BOARD_M1)
+    if(TR_GNSS_AUTO_RAW)
+        # The one image (-DTR_GNSS_AUTO_RAW=1) with the gnss-sdr-dev board on
+        # J1: as the gnss-sdr-dev image's replay (below), the raw-GNSS filter's
+        # timed epochs set the replay's clock and main.cpp's rig replay paths
+        # are its (TR_RAW_NAV_RIG_REPLAY: the sky's ionosphere rule, the
+        # navigation console the scorer reads, the replayed high-g counts with
+        # the converter's bias, the transport the clock carries taken off the
+        # board's epochs). With any other receiver on J1 it stays on the pad.
+        add_compile_definitions(TR_RAW_NAV_RIG_REPLAY=1)
+        message(STATUS "flight_computer: RIG REPLAY of the one image (TR_RAW_NAV_RIG_REPLAY=1): the gnss-sdr-dev board's timed epochs set the replay's clock, as on the gnss-sdr-dev image (with any other receiver on J1 the replay stays on the pad)")
+    elseif(NOT TR_GNSS_MOSAIC AND NOT TR_GNSS_SDR AND NOT TR_BOARD_M1)
         message(STATUS "flight_computer: RIG REPLAY of the V9/V10 auto image: the gnss-sdr-dev board's clock line sets the replay's clock (with any other receiver on J1 the replay stays on the pad)")
     endif()
     if(TR_GNSS_SDR)
@@ -357,8 +377,8 @@ if(TR_SIM_REPLAY_BLOB)
         endif()
     endif()
 endif()
-if(TR_SIM_REPLAY_GPS_IONO AND NOT (TR_SIM_REPLAY_BLOB AND (TR_GNSS_MOSAIC OR TR_GNSS_SDR)))
-    message(FATAL_ERROR "TR_SIM_REPLAY_GPS_IONO is the rig sky's ionosphere for a rig replay (-DTR_SIM_REPLAY_BLOB) of the mosaic-only image (-DTR_GNSS_MOSAIC=1) or the V10's gnss-sdr-dev image (-DTR_GNSS_SDR=1)")
+if(TR_SIM_REPLAY_GPS_IONO AND NOT (TR_SIM_REPLAY_BLOB AND (TR_GNSS_MOSAIC OR TR_GNSS_SDR OR TR_GNSS_AUTO_RAW)))
+    message(FATAL_ERROR "TR_SIM_REPLAY_GPS_IONO is the rig sky's ionosphere for a rig replay (-DTR_SIM_REPLAY_BLOB) of the mosaic-only image (-DTR_GNSS_MOSAIC=1), the V10's gnss-sdr-dev image (-DTR_GNSS_SDR=1) or the one image (-DTR_GNSS_AUTO_RAW=1)")
 endif()
 foreach(_v TR_BENCH_MOSAIC_CN0 TR_BENCH_MOSAIC_COLD_START TR_BENCH_MOSAIC_TAG_TRACE)
     if(${_v} AND NOT TR_GNSS_MOSAIC)
@@ -584,6 +604,52 @@ if(TR_GNSS_SDR)
     message(STATUS "flight_computer: GNSS driver gnss-sdr-dev alone (TR_GNSS_DRIVER_SDR=1), overlays sdkconfig.defaults.mosaic + sdkconfig.defaults.rawnav (PSRAM on)")
     message(STATUS "flight_computer: raw-GNSS NAVIGATION filter on the gnss-sdr-dev board; GpsInsEKF not instantiated (ephemeris store 128)")
 endif()
+# A V9 flying a SkyTraq PX1105R carrier on J1 in place of the mosaic-G5
+# (`idf.py -B build_v9_px1105r -DTR_BOARD_V9=1 -DTR_GNSS_PX1105R=1 build`;
+# hardware/gnss-px1105r-18mm-hv, its J3 on the V9's J1), or a V10 with the
+# same carrier (-DTR_BOARD_V10=1; its J1 is the V9's net for net), with the mosaic
+# image's raw-GNSS navigation filter (main.cpp's TR_RAW_NAV_P4). The same seam
+# as TR_GNSS_MOSAIC: the driver is the build's choice
+# (TR_Sensor_Collector's TR_GNSS_DRIVER_PX1105R), and config.h refuses it on
+# any other board -- only the V9's J1 has been checked for this carrier, whose
+# J3 pin 5 is the receiver's RXD2 (an input: no 1PPS, the pin never touched).
+# The receiver runs at 921600 baud, so its UART interrupt goes in IRAM as the
+# mosaic's does (sdkconfig.defaults.mosaic: at 921600 the 128-byte RX FIFO
+# lasts 1.4 ms, under a flash write's wait), and the raw-GNSS filter takes
+# PSRAM and the 128-entry ephemeris store as the mosaic image's
+# (sdkconfig.defaults.rawnav; main/CMakeLists.txt checks the resolved
+# sdkconfig). -DTR_RAW_GNSS_SHADOW=0 builds it without the filter (GpsInsEKF
+# alone, PSRAM off).
+if(TR_GNSS_PX1105R)
+    if(NOT TR_BOARD_V9 AND NOT TR_BOARD_V10)
+        message(FATAL_ERROR "TR_GNSS_PX1105R is for the V9 or V10 (-DTR_BOARD_V9=1 or -DTR_BOARD_V10=1): only their J1 has been checked for the PX1105R carrier")
+    endif()
+    if(TR_GNSS_MOSAIC)
+        message(FATAL_ERROR "TR_GNSS_PX1105R and TR_GNSS_MOSAIC are both on: one GNSS receiver per image")
+    endif()
+    if(TR_GNSS_SDR)
+        message(FATAL_ERROR "TR_GNSS_PX1105R and TR_GNSS_SDR are both on: one GNSS receiver per image")
+    endif()
+    if(TR_GNSS_AUTO)
+        message(FATAL_ERROR "TR_GNSS_PX1105R and TR_GNSS_AUTO are both on: the PX1105R image or the image that finds the u-blox or the mosaic, not both")
+    endif()
+    add_compile_definitions(TR_GNSS_DRIVER_PX1105R=1)
+    if(NOT SDKCONFIG_DEFAULTS)
+        set(SDKCONFIG_DEFAULTS "sdkconfig.defaults")
+    endif()
+    list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.mosaic")
+    if(NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW)
+        list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.rawnav")
+        # The receiver sends every GPS, Galileo and BeiDou ephemeris it
+        # tracks, as the mosaic's: the store holds 128, laid out alike by
+        # every component (main.cpp checks at boot, ephCapacityAgrees).
+        add_compile_definitions(TR_EPH_CAPACITY=128)
+        message(STATUS "flight_computer: GNSS driver SkyTraq PX1105R (TR_GNSS_DRIVER_PX1105R=1), overlays sdkconfig.defaults.mosaic (UART ISR in IRAM) + sdkconfig.defaults.rawnav (PSRAM on)")
+        message(STATUS "flight_computer: raw-GNSS NAVIGATION filter; GpsInsEKF not instantiated (ephemeris store 128)")
+    else()
+        message(STATUS "flight_computer: GNSS driver SkyTraq PX1105R (TR_GNSS_DRIVER_PX1105R=1), overlay sdkconfig.defaults.mosaic (TR_RAW_GNSS_SHADOW=0: no raw-GNSS filter, PSRAM off)")
+    endif()
+endif()
 # The V9 and V10 images find their GNSS receiver at boot: the stock u-blox
 # SAM-M10Q carrier, the mosaic-G5 harness or TinkerRocket's gnss-sdr-dev
 # board, all on J1 (TR_Sensor_Collector's TR_GNSS_DRIVER_AUTO,
@@ -597,7 +663,52 @@ endif()
 # GPIO3/GPIO4, the mosaic's 1PPS on pin 5 = GPIO2), so one V8 image flies
 # either receiver. The V8's default build stays u-blox-only. Neither auto
 # image takes sdkconfig.defaults.rawnav: they fly GpsInsEKF, PSRAM off.
-if(NOT DEFINED TR_GNSS_AUTO AND (TR_BOARD_V9 OR TR_BOARD_V10) AND NOT TR_GNSS_MOSAIC AND NOT TR_GNSS_SDR)
+# One image for every receiver on a V9's or V10's J1, flying the raw-GNSS
+# filter on each one that gives measurements -- the mosaic-G5, the PX1105R
+# carrier, the gnss-sdr-dev board -- and GpsInsEKF on the u-blox SAM-M10Q,
+# chosen at boot (`idf.py -B build_v10_one -DTR_BOARD_V10=1
+# -DTR_GNSS_AUTO_RAW=1 build`; docs/plans/gnss-one-image-plan.md). It is the
+# auto image below (TR_GNSS_DRIVER_AUTO) with the PX1105R looked for too, the
+# three raw receivers' raw outputs compiled in (TR_GNSS_AUTO_RAW), and the
+# raw-GNSS filter's PSRAM overlay and 128-entry ephemeris store besides the
+# mosaic's overlay. Its filter is the raw-GNSS filter or GpsInsEKF, never both
+# (config.h TR_RAW_NAV_AUTO). Not for flight before it has been benched with
+# each receiver; the rig replay is not built for it yet.
+if(TR_GNSS_AUTO_RAW)
+    if(NOT TR_BOARD_V9 AND NOT TR_BOARD_V10)
+        message(FATAL_ERROR "TR_GNSS_AUTO_RAW is for the V9 or V10 (-DTR_BOARD_V9=1 or -DTR_BOARD_V10=1): its J1 takes every receiver")
+    endif()
+    if(TR_GNSS_MOSAIC OR TR_GNSS_SDR OR TR_GNSS_PX1105R)
+        message(FATAL_ERROR "TR_GNSS_AUTO_RAW finds its receiver at boot: not with -DTR_GNSS_MOSAIC, -DTR_GNSS_SDR or -DTR_GNSS_PX1105R")
+    endif()
+    if(DEFINED TR_GNSS_AUTO AND NOT TR_GNSS_AUTO)
+        message(FATAL_ERROR "TR_GNSS_AUTO_RAW is the auto image with the raw-GNSS filter: not with -DTR_GNSS_AUTO=0")
+    endif()
+    if((DEFINED TR_RAW_GNSS_SHADOW AND NOT TR_RAW_GNSS_SHADOW) OR (DEFINED TR_RAW_GNSS_PRIMARY AND NOT TR_RAW_GNSS_PRIMARY))
+        message(FATAL_ERROR "TR_GNSS_AUTO_RAW flies the raw-GNSS filter on the raw receivers: not with -DTR_RAW_GNSS_SHADOW=0 or -DTR_RAW_GNSS_PRIMARY=0 (the auto image flies GpsInsEKF alone)")
+    endif()
+    set(TR_GNSS_AUTO ON)
+    # Every ephemeris each raw receiver sends, as their own images hold them
+    add_compile_definitions(TR_GNSS_AUTO_RAW=1 TR_EPH_CAPACITY=128)
+    # The V10's J1 is wired one way: the u-blox driver's swapped-wire search
+    # (for older boards' wiring) would drive J1 pin 2, the gnss-sdr-dev
+    # board's TX, against the board whenever its search runs with the board
+    # silent (the rig owner's #1705 review, 2026-11-15)
+    if(TR_BOARD_V10)
+        add_compile_definitions(TR_GNSS_UBLOX_NO_SWAP=1)
+    endif()
+    # Bench (-DTR_BENCH_GNSS_HINT=<GNSS_TYPE_*>, 0 for none): the receiver
+    # found last boot forced each boot, so the rig reaches that hint's path
+    # with the board on J1 (TR_GNSSAuto::rememberedType). Marked -bench.
+    if(DEFINED TR_BENCH_GNSS_HINT)
+        add_compile_definitions(TR_BENCH_GNSS_HINT=${TR_BENCH_GNSS_HINT})
+        message(WARNING "TR_BENCH_GNSS_HINT=${TR_BENCH_GNSS_HINT} -- the receiver found last boot forced every boot (bench): never fly it")
+    endif()
+endif()
+if(DEFINED TR_BENCH_GNSS_HINT AND NOT TR_GNSS_AUTO_RAW)
+    message(FATAL_ERROR "TR_BENCH_GNSS_HINT is for the one image (-DTR_GNSS_AUTO_RAW=1)")
+endif()
+if(NOT DEFINED TR_GNSS_AUTO AND (TR_BOARD_V9 OR TR_BOARD_V10) AND NOT TR_GNSS_MOSAIC AND NOT TR_GNSS_SDR AND NOT TR_GNSS_PX1105R)
     set(TR_GNSS_AUTO ON)
 endif()
 if(TR_GNSS_AUTO)
@@ -612,8 +723,14 @@ if(TR_GNSS_AUTO)
         set(SDKCONFIG_DEFAULTS "sdkconfig.defaults")
     endif()
     list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.mosaic")
+    if(TR_GNSS_AUTO_RAW)
+        list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.rawnav")
+        message(STATUS "flight_computer: GNSS driver auto with raw navigation (u-blox, mosaic-G5, PX1105R or gnss-sdr-dev, found at boot: TR_GNSS_DRIVER_AUTO=1 TR_GNSS_AUTO_RAW=1), overlays sdkconfig.defaults.mosaic + sdkconfig.defaults.rawnav (PSRAM on)")
+        message(STATUS "flight_computer: navigation filter chosen at boot: the raw-GNSS filter on a mosaic-G5, PX1105R or gnss-sdr-dev board, GpsInsEKF on the u-blox (ephemeris store 128)")
+    else()
     message(STATUS "flight_computer: GNSS driver auto (u-blox, mosaic-G5 or gnss-sdr-dev, found at boot: TR_GNSS_DRIVER_AUTO=1), overlay sdkconfig.defaults.mosaic")
-elseif((TR_BOARD_V9 OR TR_BOARD_V10) AND NOT TR_GNSS_MOSAIC AND NOT TR_GNSS_SDR)
+    endif()
+elseif((TR_BOARD_V9 OR TR_BOARD_V10) AND NOT TR_GNSS_MOSAIC AND NOT TR_GNSS_SDR AND NOT TR_GNSS_PX1105R)
     message(STATUS "flight_computer: GNSS driver u-blox only (-DTR_GNSS_AUTO=0)")
 endif()
 set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")

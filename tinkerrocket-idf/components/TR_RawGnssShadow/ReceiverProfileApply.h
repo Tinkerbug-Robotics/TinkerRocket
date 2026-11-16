@@ -414,6 +414,68 @@ inline void applySdrFlightSafeguards(RawGnssShadow::Config& c)
     c.vert_imu_free_release_s = 1.0;
 }
 
+// The PX1105R image's flight profile: the mosaic-only image's exactly (the
+// cheaper build, the shared geometry, the Doppler's float prediction, its
+// pairs, 16 satellites, the cap fixed). Its receiver has the mosaic's 50 ms
+// epochs on the 100 ms grid, so the pairs fit (dopplerPairsFit).
+inline void applyPx1105rFlightProfile(GnssReceiverProfile& p)
+{
+    applyMosaicFlightProfile(p);
+}
+
+// The PX1105R image's flight safeguards: the mosaic-only image's (none needs
+// the receiver: they are the airframe's and the filter's), with this carrier's
+// antenna's wind-up. Its Taoglas GVLB208.A is a right-hand circularly
+// polarised patch, one cycle a turn about its boresight: k = 1, UNMEASURED,
+// and right only with the patch facing up the nose (the carrier standing on
+// J1 as the SAM-M10Q carrier does). The clock drift takes the common part
+// either way (the windup study: no ascent median moved more than 0.03 deg).
+// On the pad the pseudoranges set the position: the cold start's seed is the
+// receiver's first 3-D fix, 5-35 m off on the RF rig's flights and up to 169 m
+// and 325 m, so it starts 100 m unsure (p0_pos; 10 m took over two minutes to
+// give way, 15 m still off at launch), and the barometer, which would hold it,
+// only learns its offset to it there (baro_pad_fuse).
+// In a boost: its Dopplers lag 60 ms more above 12 g of specific force
+// (rr_dyn_lag_s, the step at 11.5-12.5 g), so taken at their own instant they
+// are trusted more than the LC86G's, 0.25 m/s per g past 1 g (rr_dyn_sigma,
+// 0.5); and the accelerometer's noise grows 0.5 % of the specific force past
+// 1 g (a_noise_per_g). The three together on the RF rig's 31 flights
+// (2026-10-23, the replay at the latency its events were built with): Hotshot
+// coast and apogee 5.1 -> 1.7 m, its two-band coast above 515 m/s 56 -> 9 m;
+// the Traveler's boost 6.5 -> 5.7 m, after its block 13.8 -> 12.2 m; the rp5
+// twin unchanged; at a cost of the Traveler's coast above 515 m/s 8.9 -> 10.6 m
+// and the Eagle Claw twin's boost velocity 1.25 -> 1.46 m/s. Either alone does
+// worse: the lag taken without more trust in the Dopplers leaves a long boost
+// to an IMU that drifts (the rig's simulated one, +2.6 m/s by the Traveler's
+// burnout, which the lagging Dopplers had hidden), and more trust without the
+// lag pulls the filter onto the lagging Dopplers (Hotshot two-band 56 -> 62 m).
+// All at the 20 ms output delay the replay's events were built with: with no
+// delay (epoch_latency_s 0, as the profile has it) the Traveler's boost goes
+// 6.0 -> 14.7 m and its coast above 515 m/s 13.5 -> 22.2 m, so the receiver's
+// real delay wants measuring before this flies.
+// And the gnss-sdr-dev image's three descent and coast safeguards
+// (applySdrFlightSafeguards, where each is measured), none of them the
+// receiver's: the Doppler change check stands down in the IMU-free descent
+// (dv_imu_free_off), the vertical check's latch lets go there after 1 s
+// (vert_imu_free_release_s), and gravity is WGS84's with height
+// (gravity_wgs84). Owner's call 2026-11-13; not replayed on a PX1105R flight
+// (its rig captures are on the RF rig's Pi).
+inline void applyPx1105rFlightSafeguards(RawGnssShadow::Config& c)
+{
+    applyMosaicFlightSafeguards(c);
+    c.windup_k = 1.0;
+    c.baro_pad_fuse = false;
+    c.ekf.p0_pos = 100.0;
+    c.ekf.rr_dyn_lag_s = 0.060;
+    c.ekf.rr_dyn_lag_g0 = 11.5;
+    c.ekf.rr_dyn_lag_g1 = 12.5;
+    c.meas.rr_dyn_sigma = 0.25;
+    c.ekf.a_noise_per_g = 0.005;
+    c.dv_imu_free_off = true;
+    c.vert_imu_free_release_s = 1.0;
+    c.ekf.gravity_wgs84 = true;
+}
+
 // The antenna's offset from the IMU, where the rocket's owner measured it: an
 // optional per-rocket setting (the apps' Antenna offset, BLE cmd 81), unknown
 // unless set.

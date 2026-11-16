@@ -66,6 +66,16 @@ int TR_GNSSReceiverUBloxSerial::uartRead()
 
 // ── begin() ─────────────────────────────────────────────────────────────
 
+// Whether begin() may try the swapped RX/TX: the wiring of older boards'
+// revs. Never on a board whose J1 is wired one way (TR_GNSS_UBLOX_NO_SWAP,
+// the V10's one image: the swap would drive J1 pin 2 -- the receiver's TX,
+// the gnss-sdr-dev board's output -- from this side).
+#if defined(TR_GNSS_UBLOX_NO_SWAP) && TR_GNSS_UBLOX_NO_SWAP
+#define TR_UBLOX_MAY_SWAP(rx, tx) false
+#else
+#define TR_UBLOX_MAY_SWAP(rx, tx) ((rx) != (tx))
+#endif
+
 bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
                                        uint8_t GNSS_RX,
                                        uint8_t GNSS_TX,
@@ -90,6 +100,9 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
     uint32_t connected_baud = 0U;
     uint8_t active_rx = GNSS_RX;
     uint8_t active_tx = GNSS_TX;
+#if defined(TR_GNSS_UBLOX_NO_SWAP) && TR_GNSS_UBLOX_NO_SWAP
+    ESP_LOGI(TAG, "Swapped RX/TX not tried: this board's J1 is wired one way");
+#endif
 
     // Bring-up deadline (#557).  A dead or deaf-UART module used to hang begin()
     // forever in the retry loops below — delay() feeds the WDT, so the FC sat
@@ -301,7 +314,7 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
             return true;
         }
 
-        if ((GNSS_RX != GNSS_TX) && scanAndConnectPins(GNSS_TX, GNSS_RX, found_baud))
+        if (TR_UBLOX_MAY_SWAP(GNSS_RX, GNSS_TX) && scanAndConnectPins(GNSS_TX, GNSS_RX, found_baud))
         {
             ESP_LOGW(TAG, "Detected swapped RX/TX wiring; using swapped pin assignment");
             return true;
@@ -334,8 +347,12 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         prefs.end();
         // Only honour a record that matches how this build is wired; a board
         // header change must not send us probing pins that are no longer GNSS.
+#if defined(TR_GNSS_UBLOX_NO_SWAP) && TR_GNSS_UBLOX_NO_SWAP
+        const bool pins_known = (l.rx == GNSS_RX && l.tx == GNSS_TX);   // a swapped record: not this board's
+#else
         const bool pins_known = (l.rx == GNSS_RX && l.tx == GNSS_TX) ||
                                 (l.rx == GNSS_TX && l.tx == GNSS_RX);
+#endif
         l.valid = (l.baud != 0U) && pins_known;
         return l;
     };
@@ -401,7 +418,7 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
     // up already at preferred_baud on the swapped pins. Try that before the
     // 9600 orientation probe + full sweep — otherwise the sweep crawls
     // 9600→…→preferred (~30 s) even though the orientation was found quickly.
-    if (connected_baud == 0U && GNSS_RX != GNSS_TX)
+    if (connected_baud == 0U && TR_UBLOX_MAY_SWAP(GNSS_RX, GNSS_TX))
     {
         ESP_LOGI(TAG, "Bootstrap try %lu baud on swapped RX/TX", (unsigned long)bootstrap_baud);
         uartBegin(bootstrap_baud, GNSS_TX, GNSS_RX);
@@ -438,7 +455,7 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         {
             detected = true;
         }
-        else if ((GNSS_RX != GNSS_TX) && hasSerialActivity(GNSS_TX, GNSS_RX, 9600U, kOrientationProbeMs))
+        else if (TR_UBLOX_MAY_SWAP(GNSS_RX, GNSS_TX) && hasSerialActivity(GNSS_TX, GNSS_RX, 9600U, kOrientationProbeMs))
         {
             detected = true;
             swapped  = true;

@@ -146,9 +146,9 @@ if(NOT TR_BOARD_M1 AND CONFIG_IDF_TARGET AND NOT "${CONFIG_IDF_TARGET}" STREQUAL
 endif()
 # PSRAM on a P4 board is the image's choice, so check what the build dir
 # resolved to rather than trusting the overlays. Only the mosaic-only image
-# with the raw-GNSS filter takes sdkconfig.defaults.rawnav (the project
-# CMakeLists.txt); every other P4 image keeps PSRAM off (sdkconfig.defaults,
-# #851). The overlay alone does not decide it: kconfgen keeps a value a
+# and the PX1105R image, each with the raw-GNSS filter, take
+# sdkconfig.defaults.rawnav (the project CMakeLists.txt); every other P4 image
+# keeps PSRAM off (sdkconfig.defaults, #851). The overlay alone does not decide it: kconfgen keeps a value a
 # defaults file once wrote to a build dir's sdkconfig, so a dir that built the
 # mosaic image still has CONFIG_SPIRAM=y when it is reconfigured as the auto
 # image or with -DTR_RAW_GNSS_SHADOW=0, which is the #851 timing risk on an
@@ -157,20 +157,40 @@ endif()
 # here too. M1's own overlay turns its PSRAM on, and the target check above
 # guards its build dir.
 if(NOT TR_BOARD_M1)
-    if((TR_GNSS_MOSAIC AND (NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW)) OR TR_GNSS_SDR)
+    if((TR_GNSS_MOSAIC AND (NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW)) OR TR_GNSS_SDR OR TR_GNSS_AUTO_RAW)
         if(NOT CONFIG_SPIRAM)
             message(FATAL_ERROR
-                "flight_computer: the mosaic-only image and the V10's gnss-sdr-dev image run the raw-GNSS "
-                "filter from PSRAM (sdkconfig.defaults.rawnav), but ${CMAKE_BINARY_DIR}/sdkconfig has "
-                "CONFIG_SPIRAM off. Use a fresh build dir, or delete that sdkconfig.")
+                "flight_computer: the mosaic-only image, the V10's gnss-sdr-dev image and the image that flies "
+                "the raw-GNSS filter on every receiver (TR_GNSS_AUTO_RAW) run that filter from PSRAM "
+                "(sdkconfig.defaults.rawnav), but ${CMAKE_BINARY_DIR}/sdkconfig has CONFIG_SPIRAM off. Use a "
+                "fresh build dir, or delete that sdkconfig.")
+        endif()
+    elseif(TR_GNSS_PX1105R AND (NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW))
+        if(NOT CONFIG_SPIRAM)
+            message(FATAL_ERROR
+                "flight_computer: the PX1105R image runs the raw-GNSS filter from PSRAM "
+                "(sdkconfig.defaults.rawnav), but ${CMAKE_BINARY_DIR}/sdkconfig has CONFIG_SPIRAM "
+                "off. Use a fresh build dir, or delete that sdkconfig.")
         endif()
     elseif(CONFIG_SPIRAM)
         message(FATAL_ERROR
-            "flight_computer: this image keeps PSRAM off (#851; only the mosaic-only image with "
-            "the raw-GNSS filter turns it on), but ${CMAKE_BINARY_DIR}/sdkconfig has "
+            "flight_computer: this image keeps PSRAM off (#851; only the mosaic-only and PX1105R "
+            "images with the raw-GNSS filter turn it on), but ${CMAKE_BINARY_DIR}/sdkconfig has "
             "CONFIG_SPIRAM=y, kept from an image built there before. Use a fresh build dir, or "
             "delete that sdkconfig.")
     endif()
+endif()
+# The PX1105R runs its UART at 921600 baud, which needs the UART interrupt in
+# IRAM (sdkconfig.defaults.mosaic, the project CMakeLists.txt) to run through
+# flash writes. Checked on the resolved sdkconfig, as PSRAM is above, rather
+# than trusting the overlay (the auto image checks the same at compile time,
+# gnss_auto_driver.cpp): a value a build dir's sdkconfig keeps, or one set by
+# hand there, is caught here.
+if(TR_GNSS_PX1105R AND NOT CONFIG_UART_ISR_IN_IRAM)
+    message(FATAL_ERROR
+        "flight_computer: the PX1105R image needs CONFIG_UART_ISR_IN_IRAM (sdkconfig.defaults.mosaic: "
+        "921600 baud through flash writes), but ${CMAKE_BINARY_DIR}/sdkconfig has it off. Use a fresh "
+        "build dir, or delete that sdkconfig.")
 endif()
 if(TR_BOARD_M1)
     message(STATUS "flight_computer: board pin map M1 (main/board/board_m1.h, Tinker-Beetle rev1, ESP32-S3)")
