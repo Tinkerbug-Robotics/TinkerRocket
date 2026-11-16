@@ -13216,7 +13216,10 @@ static void loop_fc()
                 {
                     SdrAlignCmdData cmd;
                     memcpy(&cmd, cfg_payload, sizeof(cmd));
-#if defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO && !(defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID)
+#if ((defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)) && \
+    !(defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID)
+                    // (the relay's images: the auto image's and the V10's
+                    // gnss-sdr-dev image's, as sdrAlignStep)
                     const bool board = sensor_collector_hw.gnssType() == GNSS_TYPE_SDR;
                     const bool allowed = board && !(isCommandLockoutState(rocket_state) || post_flight_lockout);
                     const int64_t now_us = esp_timer_get_time();
