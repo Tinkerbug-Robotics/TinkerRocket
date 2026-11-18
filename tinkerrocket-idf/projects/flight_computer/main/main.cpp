@@ -1467,6 +1467,23 @@ static inline float pyroChValue(int ch_idx)
     return 0.0f;
 }
 
+// A deployment channel enabled for this flight that has not fired yet. Both
+// trigger modes wait for apogee, so after it this is a charge still owed.
+static bool pyroDeploymentWaiting()
+{
+    for (int i = 0; i < 4; ++i)
+        if (pyroChEnabled(i) && pyro_ch[i].state == PyroChState::Idle) return true;
+    return false;
+}
+
+// The flight timeout (the INFLIGHT case): 600 s, but up to the ceiling while a
+// channel is still owed after apogee (V10 pre-flight review, 2026-11-18). The
+// restore's arm gate bounds the same flight.
+static constexpr uint32_t MAX_FLIGHT_TIME_MS         = 600000U;
+static constexpr uint32_t MAX_FLIGHT_TIME_CEILING_MS = 1800000U;
+static_assert(RecoveryArmGate::Config{}.max_flight_ms == MAX_FLIGHT_TIME_CEILING_MS,
+              "a restored flight can last as long as the timeout lets a live one");
+
 // New PCB inverts continuity sense vs the old board: with the shared
 // arming FET enabled, the channel's CONT line idles HIGH when the squib
 // loop is OPEN and gets pulled LOW when a load (closed circuit) is
@@ -9461,6 +9478,7 @@ static void resetFlightStateForSim(const char* edge)
     guidance.reset();
     control_mixer.reset();
     roll_rate_pid_standalone.reset();
+    servo_control.resetPID();   // the sim flew it: see enterInflight
     burnout_detected = false;
     burnout_time_ms = 0;
     burnout_neg_count = 0;
@@ -9537,6 +9555,23 @@ static void magCalEndSession(const char* why)
     mag_cal_climb_since_ms  = 0;
     mag_calibrator.abort();
     mag_cal_status_dirty    = true;
+}
+
+// Every way out of MAG_CALIBRATION back to READY (verify pass, force-apply,
+// abort, session timeout). The loop neither inits nor updates the navigation
+// filter during the session, so the raw filter saw none of the turning: it
+// would bridge the gap with one step on a still gyro, or restart from the
+// attitude of its pre-session init (V10 pre-flight review, 2026-11-18: a 90 deg
+// roll during the session, then raised vertical, left 49 deg of tilt error at
+// launch). Re-init from gravity, as an orientation change does.
+static void magCalBackToReady()
+{
+    rocket_state = READY;
+    if (ekf_initialized)
+    {
+        ekf_initialized = false;
+        ESP_LOGI(TAG, "[MAGCAL] EKF re-init scheduled: the vehicle was turned during the session");
+    }
 }
 
 static void enterInflight(uint32_t now_ms, const char* from_state)
@@ -9715,6 +9750,11 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     guidance.reset();
     control_mixer.reset();
     roll_rate_pid_standalone.reset();
+    // And the roll-only flight PID (V10 pre-flight review, 2026-11-18). TR_PID
+    // takes dt from the clock since its last call, so a sim earlier in this
+    // power cycle left it a dt of the whole pad wait and an integrator ready to
+    // hold up to the fin limit on the first control tick of the real flight.
+    servo_control.resetPID();
     burnout_detected = false;
     burnout_time_ms = 0;
     burnout_neg_count = 0;
@@ -10813,7 +10853,7 @@ static void loop_fc()
 
                 mag_cal_session_active = false;
                 mag_cal_status_dirty = true;
-                rocket_state = READY;
+                magCalBackToReady();
                 // Don't clear() here — leave the calibrator in APPLIED so
                 // the next status frame published reports sub_type=APPLIED
                 // and iOS shows the success banner.  Otherwise clear()
@@ -12646,7 +12686,7 @@ static void loop_fc()
                 // Same code path for "abort during sampling", "abort during
                 // review", and "abort during verifying".
                 magCalEndSession("abort");   // #1118: shared teardown
-                if (rocket_state == MAG_CALIBRATION) rocket_state = READY;
+                if (rocket_state == MAG_CALIBRATION) magCalBackToReady();
                 // Calibrator is now in ABORTED — leave it there.  iOS
                 // treats .aborted and .idle the same (introSection).
                 // calibrator.start() on the next session resets cleanly.
@@ -12823,7 +12863,7 @@ static void loop_fc()
                         mag_cal_session_active = false;
                         mag_cal_verify_active = false;
                         mag_cal_status_dirty = true;
-                        rocket_state = READY;
+                        magCalBackToReady();
                         // Leave the calibrator in APPLIED (not IDLE) so
                         // the next status frame shows iOS the "Saved"
                         // banner — same reason as the verify-PASS path.
@@ -15696,9 +15736,19 @@ static void loop_fc()
                 }
 
                 // Safety timeout: force LANDED if flight exceeds 10 minutes
-                // (landing detection failure, stuck at altitude, KF divergence)
-                static constexpr uint32_t MAX_FLIGHT_TIME_MS = 600000U;
-                if (now_ms - launch_time_millis > MAX_FLIGHT_TIME_MS)
+                // (landing detection failure, stuck at altitude, KF divergence).
+                // Not while a deployment channel is still owed after apogee
+                // (V10 pre-flight review, 2026-11-18): a main due at its
+                // altitude under a slow drogue from 10 km or more comes after
+                // T+600 s (10.5 km under a 15 m/s drogue reaches 300 m at
+                // T+592 s), and this timeout used to safe it before it could
+                // fire. Then the bound is MAX_FLIGHT_TIME_CEILING_MS, which the
+                // OC's silent-FC hold and snapshot serve-TTL
+                // (inflight_refusal_policy.h kMaxFlightTimeMs) match.
+                const uint32_t flight_limit_ms =
+                    (pyro_apogee_detected && pyroDeploymentWaiting())
+                        ? MAX_FLIGHT_TIME_CEILING_MS : MAX_FLIGHT_TIME_MS;
+                if (now_ms - launch_time_millis > flight_limit_ms)
                 {
                     pyroSafeAll();
                     rocket_state = LANDED;
@@ -15865,7 +15915,7 @@ static void loop_fc()
                              (unsigned)(now_ms - mag_cal_start_ms));
                     magCalEndSession("session timeout");
                     mag_cal_start_ms = 0;
-                    rocket_state = READY;
+                    magCalBackToReady();
                 }
                 break;
             }

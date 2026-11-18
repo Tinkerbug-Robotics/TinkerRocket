@@ -164,12 +164,44 @@ TEST(PyroFaultTripRearm, HeldForTheHoldOffThenReleased) {
     EXPECT_TRUE(pinHigh(true, s.holding)) << "the main must still be able to fire";
 }
 
-TEST(PyroFaultTripRearm, NeverReArmsWhileThePackStillReadsOverTheLimit) {
+TEST(PyroFaultTripRearm, DoesNotReArmWhileThePackStillReadsOverTheLimit) {
     State s;
     onOverLimit(s, 0, 32767, kFlight, Source::Poll);
     EXPECT_TRUE(stillHolding(s, kHoldOffMs, reading(35.0f)));
-    EXPECT_TRUE(stillHolding(s, 10 * kHoldOffMs, reading(41.0f)));
-    EXPECT_FALSE(stillHolding(s, 10 * kHoldOffMs + 1, reading(29.0f)));
+    EXPECT_TRUE(stillHolding(s, kMaxHoldMs - 1, reading(41.0f)));
+    EXPECT_FALSE(stillHolding(s, kMaxHoldMs - 1, reading(29.0f)));
+    EXPECT_FALSE(s.implausible) << "it came back under the limit: a real trip";
+}
+
+// V10 pre-flight review (2026-11-18): past the hold-off U9 is open, so a
+// reading still over the limit is not the fire loop (a bad shunt, its traces,
+// the INA230). It used to hold consent low for the rest of the flight and veto
+// every later deployment; now it lets go at kMaxHoldMs and the poll stops
+// tripping on it until a reading under the limit.
+TEST(PyroFaultTripRearm, AReadingStuckOverTheLimitLetsGoAtTheMaximumHold) {
+    State s;
+    ASSERT_TRUE(onOverLimit(s, 0, amps(41.0f), kFlight, Source::Poll));
+    EXPECT_TRUE(stillHolding(s, kMaxHoldMs - 1, reading(41.0f)));
+    EXPECT_FALSE(stillHolding(s, kMaxHoldMs, reading(41.0f)));
+    EXPECT_TRUE(s.implausible);
+    EXPECT_FALSE(onOverLimit(s, kMaxHoldMs + 1, amps(41.0f), kFlight, Source::Poll))
+        << "the poll does not re-trip on the stuck reading";
+    EXPECT_FALSE(stillHolding(s, kMaxHoldMs + 2, reading(41.0f)));
+    EXPECT_TRUE(pinHigh(true, s.holding)) << "consent follows the arm rule again";
+    EXPECT_EQ(s.trips, 1u);
+
+    noteUnderLimit(s);   // the measurement is the pack's again
+    EXPECT_FALSE(s.implausible);
+    EXPECT_TRUE(onOverLimit(s, kMaxHoldMs + 10, amps(41.0f), kFlight, Source::Poll))
+        << "a real over-limit after that trips as before";
+}
+
+TEST(PyroFaultTripRearm, AnAlertEdgeStillTripsWhileThePollIsSuspended) {
+    State s;
+    onOverLimit(s, 0, amps(41.0f), kFlight, Source::Poll);
+    stillHolding(s, kMaxHoldMs, reading(41.0f));
+    ASSERT_TRUE(s.implausible);
+    EXPECT_TRUE(onOverLimit(s, kMaxHoldMs + 5, kTripLimitCounts, kFlight, Source::Alert));
 }
 
 TEST(PyroFaultTripRearm, ADeadInaNeverHoldsConsentLow) {

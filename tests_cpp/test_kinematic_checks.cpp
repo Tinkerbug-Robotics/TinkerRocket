@@ -499,7 +499,10 @@ TEST_F(KinematicChecksTest, Apogee_DeadIMUInBoost_BaroBackstopStillFires) {
     // mach lockout latches true and never releases (it clears only below
     // BARO_MACH_LOCKOUT_OFF) — which vetoed the backstop and left the vehicle
     // ballistic.  The backstop must NOT be gated on the lockout and must fire
-    // anyway.  Stays silent until > 30 m below the peak, then latches.
+    // anyway.  Stays silent until > 30 m below the peak, then latches.  The
+    // IMU is reported unhealthy, as it is when it has died: with a healthy IMU
+    // the backstop waits for burnout and the lockout's end (the V10 pre-flight
+    // review's tests below).
     uint32_t t = 600;
     float alt = 140.0f;
     bool fired_too_high = false;
@@ -507,7 +510,8 @@ TEST_F(KinematicChecksTest, Apogee_DeadIMUInBoost_BaroBackstopStillFires) {
         alt -= 0.5f;
         setMockMillis(t);
         callFlight(alt, 5.0f, -10.0f, 0.0f, 0.0f, false, -0.5f,
-                   /*burnout*/false, /*baro_lockout*/true);
+                   /*burnout*/false, /*baro_lockout*/true, 0.0f,
+                   /*ekf_healthy*/false, /*baro_healthy*/true, /*imu_healthy*/false);
         if (kc.apogee_flag && (140.0f - kc.alt_est) < 28.0f) fired_too_high = true;
     }
     EXPECT_TRUE(kc.apogee_flag)
@@ -1179,8 +1183,10 @@ TEST_F(KinematicChecksTest, Apogee_EKFUnhealthy_BaroBackstopFires) {
 
     // Descend ~0.5 m/call (inside the baro rate-gate) with the EKF UNHEALTHY
     // and baro healthy.  The backstop must stay silent until > 30 m below the
-    // peak, then latch apogee.
-    uint32_t t = 600;
+    // peak, then latch apogee.  The descent starts past the baro settle window
+    // that began at burnout (t = 0), which the backstop waits for while the IMU
+    // is healthy.
+    uint32_t t = 1100;
     float alt = 140.0f;
     bool fired_too_high = false;
     for (int i = 0; i < 160; i++, t += 2) {
@@ -1193,6 +1199,55 @@ TEST_F(KinematicChecksTest, Apogee_EKFUnhealthy_BaroBackstopFires) {
     EXPECT_TRUE(kc.apogee_flag)          << "backstop should fire once > 30 m below peak";
     EXPECT_TRUE(kc.apogee_backstop_flag) << "Layer-2 backstop should be the firing path";
     EXPECT_FALSE(fired_too_high)         << "backstop must not fire < 30 m below the peak";
+}
+
+// V10 pre-flight review (2026-11-18): the static port's error grows with the
+// dynamic pressure through the boost and jumps near Mach 1, so the indicated
+// altitude can fall well over 30 m below its peak while the rocket climbs
+// under thrust.  On the project's own port model the backstop called apogee at
+// T+0.94 s, 294 m/s up, and both pyro triggers took it.  With a healthy IMU
+// the backstop now waits for burnout, the baro settle window and the end of
+// the mach lockout, as the vote does.
+TEST_F(KinematicChecksTest, Apogee_PortDipUnderThrust_HealthyIMU_BackstopHeld) {
+    for (int i = 0; i < 80; i++) {                       // launch
+        setMockMillis(i * 2);
+        callFlight(float(i), 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    uint32_t t = 160;
+    float alt = 80.0f;
+    for (int i = 0; i < 100; i++, t += 2) {              // the climb to a 130 m indicated peak
+        alt += 0.5f;
+        setMockMillis(t);
+        callFlight(alt, 300.0f, 250.0f);
+    }
+    for (int i = 0; i < 120; i++, t += 2) {              // the port's dip, motor still burning
+        alt -= 0.5f;
+        setMockMillis(t);
+        callFlight(alt, 300.0f, 250.0f, 0.0f, 0.0f, false, 1.5f, /*burnout*/false);
+    }
+    EXPECT_GT(kc.max_altitude - kc.alt_est, 30.0f) << "the dip must reach the backstop's depth";
+    EXPECT_FALSE(kc.apogee_flag)          << "no apogee under thrust from the port's dip";
+    EXPECT_FALSE(kc.apogee_backstop_flag);
+}
+
+TEST_F(KinematicChecksTest, Apogee_PortDipInMachLockoutAfterBurnout_BackstopHeld) {
+    kc.launch_flag = true;
+    uint32_t t = 0;
+    float alt = 300.0f;
+    for (int i = 0; i < 600; i++, t += 2) {              // a supersonic coast, burnout long past
+        alt += 0.5f;
+        setMockMillis(t);
+        callFlight(alt, 5.0f, 300.0f, 0.0f, 0.0f, false, 1.5f, /*burnout*/true, /*baro_lockout*/true);
+    }
+    for (int i = 0; i < 120; i++, t += 2) {              // the transonic pressure jump at the port
+        alt -= 0.5f;
+        setMockMillis(t);
+        callFlight(alt, 5.0f, 280.0f, 0.0f, 0.0f, false, 1.5f, /*burnout*/true, /*baro_lockout*/true);
+    }
+    EXPECT_GT(kc.max_altitude - kc.alt_est, 30.0f) << "the dip must reach the backstop's depth";
+    EXPECT_FALSE(kc.apogee_flag)          << "no apogee from the port inside the mach lockout";
+    EXPECT_FALSE(kc.apogee_backstop_flag);
 }
 
 // False-positive guard: the EKF flagged unhealthy DURING ascent must not fire

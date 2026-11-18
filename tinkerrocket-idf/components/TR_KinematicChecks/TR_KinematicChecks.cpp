@@ -1038,7 +1038,23 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
     // recovery path.  Latches apogee_flag exactly like the vote, enabling the
     // full drogue + main sequence; apogee_backstop_flag records that Layer 2
     // (not the vote) was the path that fired, for post-flight diagnostics.
+    //
+    // V10 pre-flight review (2026-11-18): "cannot occur while climbing" is not
+    // true of the static port.  Its error grows with dynamic pressure through
+    // the boost and jumps near Mach 1, and on the project's own port model (5 %
+    // of q) the indicated altitude fell 30 m below its peak at T+0.94 s, 294 m/s
+    // up, motor burning: apogee, drogue and main under thrust.  So while the
+    // IMU is healthy the backstop waits for what the vote waits for -- burnout
+    // plus the baro settle window, and no mach lockout (which a live IMU's
+    // filter drives correctly).  With a dead IMU neither signal can be trusted
+    // (see above), and the backstop stays ungated as #556 made it.
+    const bool backstop_baro_trusted =
+        !imu_healthy ||
+        (burnout_seen_ &&
+         (millis() - burnout_seen_ms_ >= BARO_BURNOUT_SETTLE_MS) &&
+         !baro_locked_out);
     if (launch_flag &&
+        backstop_baro_trusted &&
         baro_healthy &&
         alt_est > 15.0f &&
         alt_est <= max_altitude - APOGEE_BACKSTOP_DROP_M &&
