@@ -50,6 +50,18 @@ public:
                             uint32_t range_end,
                             uint32_t& out_start) const;
 
+    // Where a new flight can grow furthest: the first run of `n_blocks` FREE
+    // blocks inside the stretch of FREE-or-BAD blocks in [range_start,
+    // range_end) that holds the most FREE blocks (a flight steps over BAD
+    // blocks as it grows; an allocated block ends its growth). First-fit put a
+    // flight into the hole an evicted flight left and capped it at the next
+    // stored flight (V10 pre-flight review, 2026-11-18). False when no stretch
+    // holds such a run.
+    bool findRoomiestFree(uint32_t n_blocks,
+                          uint32_t range_start,
+                          uint32_t range_end,
+                          uint32_t& out_start) const;
+
     // Aggregate counters for health reporting. countInState walks the WHOLE
     // die — including the pre-region (LFS) and metadata blocks, which are
     // never allocated and so always read FREE. A caller reasoning about the

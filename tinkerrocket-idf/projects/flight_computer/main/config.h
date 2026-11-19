@@ -1136,6 +1136,20 @@ struct config : board_pins
     static constexpr float BARO_MACH_LOCKOUT_ON  = 260.0f;  // m/s (~Mach 0.76)
     static constexpr float BARO_MACH_LOCKOUT_OFF = 240.0f;  // m/s (~Mach 0.70)
 
+    // The apogee vote by sensor (owner's design, 2026-11-19; InertialVertical,
+    // TR_KinematicChecks::InertialVote).  The voters are the barometer, GNSS,
+    // the accelerometer and the gyro; the navigation filter, which fuses GNSS
+    // and the barometer, casts no vote.  The accelerometer votes with its own
+    // vertical velocity, the gyro with its own pitch, and pitch only below the
+    // barometer's range (in thin air nothing keeps the nose on its path).
+    // With one sensor left it calls apogee alone past a 15 m/s descent.
+    // False restores the vote by filter (velocity and pitch from the filter).
+    static constexpr bool  APOGEE_VOTE_BY_SENSOR = true;
+    // Solidly in the atmosphere, for the pitch voter: below the barometer's
+    // 25 kPa floor (ISA 10,363 m).  By the barometer while it reads; with no
+    // fresh reading, by the IMU's height over the pad's pressure altitude.
+    static constexpr float PITCH_VOTE_CEILING_MSL_M = 10363.0f;
+
     // EKF decimation: run EKF predict+update every Nth flight-loop iteration.
     // Navigation at 400–600 Hz is more than sufficient for rocket flight.
     // Setting this to 2 halves EKF compute load; the sensor read/log path

@@ -21,9 +21,11 @@ constexpr uint32_t kSec = 1000U;
 }
 
 TEST(InflightRefusalPolicy, BoundIsTheFcFlightTimeout) {
-    // flight_computer main.cpp MAX_FLIGHT_TIME_MS, and kSnapshotServeTtlMs in
-    // the OC (a static_assert there ties the two). Ten minutes.
-    EXPECT_EQ(kMaxFlightTimeMs, 600U * kSec);
+    // flight_computer main.cpp MAX_FLIGHT_TIME_CEILING_MS, and kSnapshotServeTtlMs
+    // in the OC (a static_assert there ties the two). Thirty minutes: the FC's
+    // 600 s timeout waits up to this long while a deployment channel is still
+    // owed after apogee (V10 pre-flight review, 2026-11-18).
+    EXPECT_EQ(kMaxFlightTimeMs, 1800U * kSec);
 }
 
 TEST(InflightRefusalPolicy, NotInflightNeverRefuses) {

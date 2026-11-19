@@ -2417,6 +2417,18 @@ target_include_directories(test_gnss_ascent_gate PRIVATE
 target_link_libraries(test_gnss_ascent_gate GTest::gtest_main)
 gtest_discover_tests(test_gnss_ascent_gate)
 
+# ---------- test_inertial_vertical (owner's design 2026-11-19) ----------
+# The IMU's own vertical velocity, height and pitch for the apogee vote's
+# accelerometer and gyro voters: pad levelling, a boost through apogee, and
+# the ways it gives up (no still pad moment, a gap, a railed gyro).  Pure
+# header in the shared TR_KinematicChecks component.
+add_executable(test_inertial_vertical test_inertial_vertical.cpp)
+target_include_directories(test_inertial_vertical PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/components/TR_KinematicChecks
+)
+target_link_libraries(test_inertial_vertical GTest::gtest_main)
+gtest_discover_tests(test_inertial_vertical)
+
 # ---------- test_ground_ref_freeze (#1108) ----------
 # May the barometric ground reference follow the current sample?  Before
 # PRELAUNCH the FC re-seeds the datum every pass; this helper holds it while

@@ -149,6 +149,32 @@ TEST(LandedLockoutPolicy, AnFcResetAfterASimLandingClearsIt)
     EXPECT_FALSE(feed(s, {{INITIALIZATION, false}}));
 }
 
+TEST(LandedLockoutPolicy, AFlownOutSimWithNoFlaggedLandedFrameThenStopClearsIt)
+{
+    // V10 pre-flight review (2026-11-18): since #971 the sim ends on the pass
+    // after the FC's LANDED, so at most one LANDED frame carries the flag, and
+    // the 500 Hz NonSensorData frame misses it about half the time.  The
+    // flight's own INFLIGHT frames, flagged throughout, decide it then.
+    State s;
+    EXPECT_TRUE(feed(s, {{READY, true}, {PRELAUNCH, true}, {INFLIGHT, true}, {INFLIGHT, true},
+                         {LANDED, false}, {LANDED, false}}));
+    EXPECT_TRUE(s.landed_was_sim);
+    EXPECT_FALSE(feed(s, {{READY, false}}));                  // sim Stop: FC resets
+    EXPECT_FALSE(feed(s, {{PRELAUNCH, false}, {INFLIGHT, false}}));   // the real flight logs
+}
+
+TEST(LandedLockoutPolicy, ARealFlightAfterASimIsJudgedByItsOwnFrames)
+{
+    // The sim's flight memory ends with it: a later real landing, even one
+    // whose INFLIGHT frames the OC never saw (a paused ingest), holds.
+    State s;
+    feed(s, {{READY, true}, {INFLIGHT, true}, {LANDED, false}});
+    EXPECT_FALSE(feed(s, {{READY, false}}));                  // sim Stop
+    EXPECT_TRUE(feed(s, {{PRELAUNCH, false}, {LANDED, false}}));
+    EXPECT_FALSE(s.landed_was_sim);
+    EXPECT_TRUE(feed(s, {{INITIALIZATION, false}, {READY, false}, {PRELAUNCH, false}}));
+}
+
 // ── phase bookkeeping ───────────────────────────────────────────────────────
 
 TEST(LandedLockoutPolicy, ARealLandingAfterASimIsHeldLikeAnyRealLanding)

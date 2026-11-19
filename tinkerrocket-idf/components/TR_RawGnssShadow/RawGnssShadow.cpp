@@ -1,6 +1,7 @@
 // RawGnssShadow.cpp — see RawGnssShadow.h
 #include "RawGnssShadow.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -2249,23 +2250,42 @@ void RawGnssShadow::jobScreen(double age)
 // filter's velocity and clock rate are then set to the fit's
 // (RawGnssEKF::reanchorVelocity: the velocity's 1-sigma vert_release_mps, the
 // position's opened by the drift the latch let build) and the epoch fused.
+//
+// Not only in the IMU-free descent (V10 pre-flight review, 2026-11-18): a boost
+// that leaves the IMU's vertical more than vert_check_mps wrong latches the
+// check, and above 10.4 km (out of the barometer's range) or in the mach
+// lockout no barometer reaches the filter to bring it back -- and the IMU-free
+// mode, which needs GNSS or the barometer to start, never begins. The latch
+// then held GNSS out of the whole coast and descent above 10.4 km. So outside
+// the IMU-free mode too, once past the boost (no specific force over
+// boost_screen_g for boost_screen_window_s: never a fit from under thrust),
+// after a longer hold and with steadier fits (kVertCoastReleaseHoldS,
+// kVertCoastSteadyMps), so a receiver still recovering from the boost is not
+// taken for a steady one.
 bool RawGnssShadow::imuFreeLatchRelease(const gnss_raw::RawGnssStats& rs)
 {
     // where the barometer is fused it judges: it brings a right fit back within
     // vert_release_mps, and keeps the filter on a wrong one's side
     const bool baro_live = ekf_.time() - last_baro_fused_t_ <= cfg_.vert_imu_free_release_s;
-    if (!(cfg_.vert_imu_free_release_s > 0.0) || !ekf_.imuFree() || rs.screen_fit_n < 4 || baro_live)
+    const bool past_boost = ekf_.time() - boost_seen_t_ > cfg_.boost_screen_window_s;
+    if (!(cfg_.vert_imu_free_release_s > 0.0) || !(ekf_.imuFree() || past_boost)
+        || rs.screen_fit_n < 4 || baro_live)
     {
         vert_steady_n_ = 0;
         return false;
     }
+    const bool imu_free = ekf_.imuFree();
+    const double steady_mps = imu_free ? cfg_.vert_release_mps
+                                       : std::min(cfg_.vert_release_mps, kVertCoastSteadyMps);
+    const double hold_s = imu_free ? cfg_.vert_imu_free_release_s
+                                   : std::max(cfg_.vert_imu_free_release_s, kVertCoastReleaseHoldS);
     const float dv = rs.screen_dv_down_mps;
     const bool steady = vert_steady_n_ > 0
-                        && std::fabs(static_cast<double>(dv - vert_last_dv_)) <= cfg_.vert_release_mps;
+                        && std::fabs(static_cast<double>(dv - vert_last_dv_)) <= steady_mps;
     vert_steady_n_ = steady ? vert_steady_n_ + 1 : 1;
     vert_last_dv_ = dv;
     double x[4];
-    if (vert_steady_n_ < kVertSteadyFits || ekf_.time() - vert_latch_t_ < cfg_.vert_imu_free_release_s
+    if (vert_steady_n_ < kVertSteadyFits || ekf_.time() - vert_latch_t_ < hold_s
         || !ekf_.lastVelocityFit(x))
         return false;
     // the drift the latch let build: the fit's speed off the filter's over the latch, and 20 m besides
