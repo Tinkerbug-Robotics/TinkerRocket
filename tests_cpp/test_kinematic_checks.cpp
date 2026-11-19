@@ -42,6 +42,36 @@ protected:
                            pitch_rad, burnout, baro_lockout, gps_vel_u, ekf_healthy, baro_healthy,
                            imu_healthy, gnss_may_vote);
     }
+
+    // The vote by sensor (owner's design 2026-11-19).  The filter is passed
+    // as sure of apogee -- falling at 50 m/s, nose down -- to show it casts
+    // no vote; the sensors' own readings come in the InertialVote.  The
+    // barometer reads a constant 100 m: available when healthy, never passing.
+    void callSensor(float inertial_vz, float inertial_pitch, bool pitch_may_vote,
+                    bool new_gps, float gps_vel_u, bool baro_healthy,
+                    bool inertial_healthy = true) {
+        const float alt = 100.0f;
+        float pos[3] = {0, 0, alt};
+        float vel[3] = {0, 0, -50.0f};
+        TR_KinematicChecks::InertialVote iv;
+        iv.in_use = true;
+        iv.healthy = inertial_healthy;
+        iv.vz_up_mps = inertial_vz;
+        iv.height_m = alt;
+        iv.pitch_rad = inertial_pitch;
+        iv.pitch_may_vote = pitch_may_vote;
+        kc.kinematicChecks(alt, 5.0f, pos, vel, 0.0f, true, alt, new_gps,
+                           /*filter pitch*/ -1.0f, /*burnout*/ true, /*baro_lockout*/ false,
+                           gps_vel_u, /*ekf_healthy*/ true, baro_healthy, /*imu_healthy*/ true,
+                           /*gnss_may_vote*/ true, /*baro_reading_fresh*/ true, &iv);
+    }
+    void launch() {
+        for (int i = 0; i < 80; i++) {
+            setMockMillis(i * 2);
+            callFlight(0.5f * i, 25.0f, 10.0f);
+        }
+        ASSERT_TRUE(kc.launch_flag);
+    }
 };
 
 TEST_F(KinematicChecksTest, NoLaunch_BelowThreshold) {
@@ -1716,4 +1746,160 @@ TEST_F(KinematicChecksTest, Landing_HealthyImuFlightIsUnchangedByTheBaroPath) {
     }
     EXPECT_TRUE(kc.alt_landed_flag);
     EXPECT_FALSE(kc.baro_landed_flag) << "the baro-only path fired on a healthy flight";
+}
+
+// ===================== The apogee vote by sensor (owner's design 2026-11-19) =====================
+// The voters are the four sensors -- barometer, GNSS, accelerometer, gyro --
+// and the navigation filter, which fuses GNSS and the barometer, is none of
+// them.  Pitch votes only solidly in the atmosphere.  With one sensor left it
+// may call apogee alone past a clear descent (15 m/s); two that disagree wait.
+
+TEST_F(KinematicChecksTest, BySensor_TheFilterCastsNoVote) {
+    launch();
+    // Below the barometer's range, no GNSS: the filter says apogee, the
+    // accelerometer and the gyro say climbing nose-up.
+    for (int i = 0; i < 60; i++) {
+        setMockMillis(200 + i * 2);
+        callSensor(/*vz*/ +20.0f, /*pitch*/ 1.4f, /*pitch_may_vote*/ true,
+                   /*new_gps*/ false, 0.0f, /*baro_healthy*/ true);
+    }
+    EXPECT_FALSE(kc.vel_u_apogee_flag);
+    EXPECT_FALSE(kc.pitch_apogee_flag);
+    EXPECT_FALSE(kc.apogee_flag) << "the filter's velocity and pitch must not vote";
+}
+
+TEST_F(KinematicChecksTest, BySensor_AccelerometerAndGyro_AreTwoSensors) {
+    // Solidly in the atmosphere the gyro's pitch and the accelerometer's
+    // velocity are different sensors (owner): two of the three available.
+    launch();
+    for (int i = 0; i < 60; i++) {
+        setMockMillis(200 + i * 2);
+        callSensor(-2.0f, -0.3f, true, false, 0.0f, true);
+    }
+    EXPECT_TRUE(kc.vel_u_apogee_flag);
+    EXPECT_TRUE(kc.pitch_apogee_flag);
+    EXPECT_TRUE(kc.apogee_flag);
+    EXPECT_FALSE(kc.apogee_single_sensor_flag);
+}
+
+TEST_F(KinematicChecksTest, BySensor_AboveTheBarometersRange_PitchDoesNotVote) {
+    // Thin air: the nose down says nothing.  The accelerometer is the only
+    // sensor left and has not yet read a clear descent: no call.
+    launch();
+    for (int i = 0; i < 60; i++) {
+        setMockMillis(200 + i * 2);
+        callSensor(-2.0f, -0.3f, /*pitch_may_vote*/ false, false, 0.0f, /*baro_healthy*/ false);
+    }
+    EXPECT_FALSE(kc.pitch_apogee_flag) << "held at zero above the barometer's range";
+    EXPECT_TRUE(kc.vel_u_apogee_flag);
+    EXPECT_FALSE(kc.apogee_flag) << "one sensor, short of the clear-descent bar";
+}
+
+TEST_F(KinematicChecksTest, BySensor_AboveTheBarometersRange_AccelerometerAndGnssAgree) {
+    launch();
+    for (int i = 0; i < 60; i++) {
+        setMockMillis(200 + i * 2);
+        callSensor(-2.0f, 1.4f, false, /*new_gps*/ true, /*gps_vel_u*/ -2.0f, false);
+    }
+    EXPECT_TRUE(kc.apogee_flag) << "the two sensors left agree";
+    EXPECT_FALSE(kc.apogee_single_sensor_flag);
+}
+
+TEST_F(KinematicChecksTest, BySensor_AboveTheBarometersRange_TwoThatDisagree_Wait) {
+    // The accelerometer reads a clear descent, GNSS (fresh, admitted) a
+    // climb: one is wrong and nothing can say which, so no call.
+    launch();
+    for (int i = 0; i < 60; i++) {
+        setMockMillis(200 + i * 2);
+        callSensor(-30.0f, 1.4f, false, true, /*gps_vel_u*/ +5.0f, false);
+    }
+    EXPECT_FALSE(kc.apogee_flag);
+    EXPECT_FALSE(kc.apogee_single_sensor_flag);
+}
+
+TEST_F(KinematicChecksTest, BySensor_GnssLost_TheAccelerometerCallsAlone) {
+    launch();
+    for (int i = 0; i < 30; i++) {          // descending, short of 15 m/s
+        setMockMillis(200 + i * 2);
+        callSensor(-10.0f, 1.4f, false, false, 0.0f, false);
+    }
+    ASSERT_FALSE(kc.apogee_flag);
+    for (int i = 0; i < 30; i++) {          // past it
+        setMockMillis(260 + i * 2);
+        callSensor(-16.0f, 1.4f, false, false, 0.0f, false);
+    }
+    EXPECT_TRUE(kc.apogee_flag);
+    EXPECT_TRUE(kc.apogee_single_sensor_flag);
+}
+
+TEST_F(KinematicChecksTest, BySensor_ImuDown_GnssCallsAlone) {
+    launch();
+    for (int i = 0; i < 30; i++) {          // the normal voter passes, but alone
+        setMockMillis(200 + i * 2);
+        callSensor(0.0f, 1.4f, false, true, -10.0f, false, /*inertial_healthy*/ false);
+    }
+    EXPECT_TRUE(kc.gps_apogee_flag);
+    ASSERT_FALSE(kc.apogee_flag);
+    for (int i = 0; i < 30; i++) {
+        setMockMillis(260 + i * 2);
+        callSensor(0.0f, 1.4f, false, true, -16.0f, false, false);
+    }
+    EXPECT_TRUE(kc.apogee_flag);
+    EXPECT_TRUE(kc.apogee_single_sensor_flag);
+}
+
+TEST_F(KinematicChecksTest, BySensor_PitchNeverCallsAlone) {
+    // Below the range with the accelerometer down there is no gyro either
+    // (one InertialVertical); with only the barometer, the backstop decides.
+    launch();
+    for (int i = 0; i < 60; i++) {
+        setMockMillis(200 + i * 2);
+        callSensor(-30.0f, -1.0f, true, false, 0.0f, /*baro_healthy*/ true, /*inertial*/ false);
+    }
+    EXPECT_FALSE(kc.pitch_apogee_flag);
+    EXPECT_FALSE(kc.apogee_flag);
+}
+
+TEST_F(KinematicChecksTest, BySensor_InThePresenceOfASecondSensor_NoSingleCall) {
+    // Below the range, accelerometer and gyro available: a clear descent on
+    // the accelerometer with the gyro nose-up is one of two, not a lone call.
+    launch();
+    for (int i = 0; i < 60; i++) {
+        setMockMillis(200 + i * 2);
+        callSensor(-30.0f, 1.4f, true, false, 0.0f, /*baro_healthy*/ false);
+    }
+    EXPECT_FALSE(kc.apogee_flag);
+}
+
+TEST_F(KinematicChecksTest, BySensor_ResetClearsTheSingleSensorCall) {
+    launch();
+    for (int i = 0; i < 30; i++) {
+        setMockMillis(200 + i * 2);
+        callSensor(-16.0f, 1.4f, false, false, 0.0f, false);
+    }
+    ASSERT_TRUE(kc.apogee_single_sensor_flag);
+    kc.reset();
+    EXPECT_FALSE(kc.apogee_single_sensor_flag);
+    EXPECT_FALSE(kc.apogee_flag);
+}
+
+TEST_F(KinematicChecksTest, GpsApogeeCountHi_TwoOfTheBoardsFixes) {
+    // The gnss-sdr-dev board's fix comes once a second: two descending fixes
+    // make the GPS voter, not four (the owner's 2 s bar, above the
+    // barometer's range where GNSS is one of two sensors left).
+    kc.setGpsApogeeFreshMs(1500);
+    kc.setGpsApogeeCountHi(2);
+    launch();
+    uint32_t t = 200;
+    for (int fix = 0; fix < 2; fix++) {
+        for (int i = 0; i < 500; i++, t += 2) {
+            setMockMillis(t);
+            callSensor(-2.0f, 1.4f, false, /*new_gps*/ i == 0, -2.0f, false);
+        }
+        if (fix == 0) {
+            EXPECT_FALSE(kc.gps_apogee_flag) << "one fix is not enough";
+        }
+    }
+    EXPECT_TRUE(kc.gps_apogee_flag);
+    EXPECT_TRUE(kc.apogee_flag) << "the accelerometer and GNSS agree above the barometer's range";
 }

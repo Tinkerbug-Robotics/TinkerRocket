@@ -73,7 +73,15 @@ constexpr float    GPS_VEL_APOGEE_DESCENT_MPS = 1.0f;
 // gets a longer one from its caller (setGpsApogeeFreshMs: the gnss-sdr-dev
 // board's once-a-second fix, 1.5 s).
 constexpr uint32_t GPS_APOGEE_FRESH_MS     = 500;
+// The vote by sensor: with fewer than two sensors available, the one left may
+// call apogee alone once it reads a descent this fast.  It allows for the
+// accelerometer's own error at apogee on a high flight (about 10 m/s on a
+// 12.8 km, Mach 2 boost: test_inertial_vertical), so its call comes about
+// 1.5 s after the apogee it sees; GNSS takes the same bar.  Detection, not a
+// prediction: nothing here estimates when apogee will come.
+constexpr float    SINGLE_SENSOR_DESCENT_MPS = 15.0f;
 static_assert(GPS_APOGEE_FRESH_MS == 500, "TR_KinematicChecks.h's gps_apogee_fresh_ms_ default is 500");
+static_assert(GPS_APOGEE_COUNT_HI == 4, "TR_KinematicChecks.h's gps_apogee_count_hi_ default is 4");
 
 // Launch accel-only fallback (#258, ungated in #1102): latch launch on
 // sustained high-G alone -- LAUNCH_ACCEL_FALLBACK_COUNT consecutive samples
@@ -310,6 +318,7 @@ TR_KinematicChecks::TR_KinematicChecks()
     pitch_apogee_flag = false;
     apogee_flag = false;
     apogee_backstop_flag = false;
+    apogee_single_sensor_flag = false;
     launch_count = 0;
     launch_count_hi = 0;
     launch_count_baro = 0;
@@ -323,6 +332,8 @@ TR_KinematicChecks::TR_KinematicChecks()
     vel_apogee_count_ = 0;
     pitch_apogee_count_ = 0;
     backstop_descent_count_ = 0;
+    single_accel_count_ = 0;
+    single_gps_count_ = 0;
     impact_seen_count = 0;
     impact_flag = false;
     baro_stable_flag = false;
@@ -379,6 +390,7 @@ void TR_KinematicChecks::reset()
     pitch_apogee_flag = false;
     apogee_flag = false;
     apogee_backstop_flag = false;
+    apogee_single_sensor_flag = false;
     launch_count = 0;
     launch_count_hi = 0;
     launch_count_baro = 0;
@@ -391,6 +403,8 @@ void TR_KinematicChecks::reset()
     vel_apogee_count_ = 0;
     pitch_apogee_count_ = 0;
     backstop_descent_count_ = 0;
+    single_accel_count_ = 0;
+    single_gps_count_ = 0;
     impact_seen_count = 0;
     impact_flag = false;
     baro_stable_flag = false;
@@ -438,7 +452,8 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
                                          bool  baro_healthy,
                                          bool  imu_healthy,
                                          bool  gnss_may_vote,
-                                         bool  baro_reading_fresh)
+                                         bool  baro_reading_fresh,
+                                         const InertialVote* inertial)
 {
     // Snapshot apogee_flag so the rising-edge reset below sees the
     // state *before* this tick's apogee voting fires (#192).
@@ -872,8 +887,16 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
             burnout_seen_ms_ = millis();
         }
 
+        // The vote by sensor (InertialVote): the accelerometer's and the
+        // gyro's own estimates stand in for the filter's.
+        const bool by_sensor = inertial != nullptr && inertial->in_use;
+        const bool inertial_ok = by_sensor && inertial->healthy;
+
         // --- Test 1: Velocity (EKF vertical velocity negative) ---
-        const bool vel_pass = (position[2] > 15.0f && velocity[2] < 0.0f);
+        // By sensor: the accelerometer's own vertical velocity.
+        const bool vel_pass = by_sensor
+            ? (inertial_ok && inertial->height_m > 15.0f && inertial->vz_up_mps < 0.0f)
+            : (position[2] > 15.0f && velocity[2] < 0.0f);
         if (vel_pass) {
             if (vel_apogee_count_ < APOGEE_COUNT_MAX) vel_apogee_count_++;
         } else {
@@ -929,15 +952,47 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
             } else {
                 if (gps_apogee_count_ > 0) gps_apogee_count_--;
             }
-            if (gps_apogee_count_ >= GPS_APOGEE_COUNT_HI) gps_apogee_flag = true;
+            if (gps_apogee_count_ >= gps_apogee_count_hi_) gps_apogee_flag = true;
             else if (gps_apogee_count_ == 0)              gps_apogee_flag = false;
+        }
+
+        // --- The vote by sensor: each velocity sensor's clear descent ---
+        // Counted whatever the quorum, so a sensor left alone mid-descent
+        // can call at once; used only when it is alone (below).
+        if (by_sensor)
+        {
+            const bool accel_down = inertial_ok && inertial->height_m > 15.0f &&
+                                    inertial->vz_up_mps < -SINGLE_SENSOR_DESCENT_MPS;
+            if (accel_down) {
+                if (single_accel_count_ < APOGEE_COUNT_MAX) single_accel_count_++;
+            } else if (single_accel_count_ > 0) {
+                single_accel_count_--;
+            }
+            if (!gnss_may_vote)
+                single_gps_count_ = 0;
+            else if (new_gps && gps_available_)
+            {
+                if (gps_vel_u < -SINGLE_SENSOR_DESCENT_MPS) {
+                    if (single_gps_count_ < GPS_APOGEE_COUNT_MAX) single_gps_count_++;
+                } else if (single_gps_count_ > 0) {
+                    single_gps_count_--;
+                }
+            }
         }
 
         // --- Test 4: Pitch below horizontal ---
         // NED convention: +90° = nose up, 0° = horizontal, negative = past horizontal.
         // -5° threshold avoids false trigger from coast oscillation.
-        const bool pitch_pass = (pitch_rad < -0.087f);
-        if (pitch_pass) {
+        // By sensor: the gyro's own pitch, and only while the rocket is
+        // solidly in the atmosphere.  In thin air nothing holds the nose on
+        // its path, so pitch says little about apogee; held at zero there,
+        // like GPS before admission, so no thin-air history votes later.
+        const bool pitch_may_vote = !by_sensor || (inertial_ok && inertial->pitch_may_vote);
+        const bool pitch_pass = pitch_may_vote &&
+                                (by_sensor ? inertial->pitch_rad : pitch_rad) < -0.087f;
+        if (!pitch_may_vote) {
+            pitch_apogee_count_ = 0;
+        } else if (pitch_pass) {
             if (pitch_apogee_count_ < APOGEE_COUNT_MAX) pitch_apogee_count_++;
         } else {
             if (pitch_apogee_count_ > 0) pitch_apogee_count_--;
@@ -954,13 +1009,22 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         // EKF-derived, so an unhealthy EKF excludes BOTH (no double-counting a
         // single sick filter).  With < 2 healthy voters the vote cannot fire —
         // the Layer-2 baro backstop below covers that degraded case.
+        //
+        // By sensor (InertialVote, owner's design 2026-11-19): the voters are
+        // the four sensors -- barometer, GNSS, accelerometer, gyro -- and the
+        // filter is none of them.  The floor of two then means two SENSORS.
+        // Above the barometer's range only GNSS and the accelerometer remain,
+        // and both must agree; with one of them gone, the one sensor left
+        // calls alone (below the quorum).
         if (!apogee_flag)
         {
             uint8_t available = 0;
             uint8_t passed = 0;
 
-            // Velocity (EKF) — available only when the EKF is healthy
-            if (ekf_healthy)
+            // Velocity (EKF) — available only when the EKF is healthy.
+            // By sensor: the accelerometer, while InertialVertical is.
+            const bool vel_available = by_sensor ? inertial_ok : ekf_healthy;
+            if (vel_available)
             {
                 available++;
                 if (vel_u_apogee_flag) passed++;
@@ -997,8 +1061,10 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
                 if (gps_apogee_flag) passed++;
             }
 
-            // Pitch (EKF) — available only when the EKF is healthy
-            if (ekf_healthy)
+            // Pitch (EKF) — available only when the EKF is healthy.
+            // By sensor: the gyro, while InertialVertical is healthy and
+            // the rocket solidly in the atmosphere.
+            if (by_sensor ? (inertial_ok && inertial->pitch_may_vote) : ekf_healthy)
             {
                 available++;
                 if (pitch_apogee_flag) passed++;
@@ -1017,6 +1083,28 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
             if (available >= 2 && passed >= 2 && passed >= need)
             {
                 apogee_flag = true;
+            }
+
+            // --- The vote by sensor: one sensor left ---
+            // With fewer than two sensors available the floor of two can
+            // never be met: above the barometer's range with GNSS lost, or
+            // with the IMU down and the barometer out.  Rather than wait for
+            // a sensor to come back (the barometer, on the way down through
+            // 10.4 km at about 210 m/s), the one sensor left may call apogee
+            // alone once it reads a clear descent.  The barometer's own
+            // single-sensor call is the Layer-2 backstop below; pitch never
+            // calls alone, as it does not measure a descent.  Two available
+            // sensors that disagree still wait: one of them is wrong, and
+            // nothing here can tell which.
+            if (by_sensor && !apogee_flag && available == 1)
+            {
+                const bool accel_alone = vel_available && single_accel_count_ >= APOGEE_COUNT_HI;
+                const bool gps_alone = gps_fresh && gnss_may_vote && single_gps_count_ >= gps_apogee_count_hi_;
+                if (accel_alone || gps_alone)
+                {
+                    apogee_flag = true;
+                    apogee_single_sensor_flag = true;
+                }
             }
         }
     } // end burnout gate
