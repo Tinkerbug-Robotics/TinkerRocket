@@ -167,6 +167,10 @@
  "size": 115,
  "notes": "AccelCalStatusFrame behind 0xD1: AccelCalStatusData then AccelCalHighGStatus; frame = 115 B"},
  {
+ "file": "fileops/sdralign_0xD2_111.bin",
+ "size": 112,
+ "notes": "SdrAlignStatusData behind 0xD2; frame = 112 B"},
+ {
  "file": "commands/cmd05_simconfig_16.bin",
  "size": 17,
  "notes": "sim config; mass is GRAMS on the wire (OC /1000 -> SimConfigData.mass_kg)"},
@@ -254,6 +258,10 @@
  "file": "commands/cmd80_hgcal_49.bin",
  "size": 50,
  "notes": "HighGCalApplyData; op 1 store (0 clears the matrix and keeps the bias)"},
+ {
+ "file": "commands/cmd83_sdralign_2.bin",
+ "size": 3,
+ "notes": "SdrAlignCmdData; op 1 save, 2 clear, 3 restart, 4 report; the app's id"},
  {
  "file": "commands/cmd64_imuorient_auto.bin",
  "size": 2,

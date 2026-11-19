@@ -361,6 +361,12 @@ public:
     // The next discriminator after 0xD0.
     void sendAccelCalStatus(const uint8_t* status_bytes, size_t len);
 
+    // Send the gnss-sdr-dev board's IMU mounting, as the FC relays the
+    // board's report, on the file-ops characteristic.  Format:
+    //   [0][0xD2 marker] [1..111][SdrAlignStatusData LE bytes]
+    // The next discriminator after 0xD1.
+    void sendSdrAlignStatus(const uint8_t* status_bytes, size_t len);
+
     // Send a flash-space stats frame for the storage bar on the file-ops
     // characteristic.  Format: [0]=marker (0xCC rocket / 0xCD base station)
     // [1..]=packed struct LE bytes (RocketStorageStatsData / BaseStationStorageStatsData).

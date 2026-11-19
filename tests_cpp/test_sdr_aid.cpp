@@ -2928,46 +2928,78 @@ TEST(SdrAidFc, ARestGoesAfterTheAttitudeStampedAtItsWindowsMiddle)
     tx.sent(T + 5001500);
 }
 
-TEST(SdrAidFc, ARestWithNoLineWaitsUpToThreeSeconds)
+TEST(SdrAidFc, ARestWithNoLineGoesAtOnceUnstamped)
 {
-    const GnssClockData line = validLine();
-    sdr_phase::Sender ph;   // no line yet
+    // Indoors, before the board's first fix: no line. The rest goes on the
+    // first pass after its window, tq 0 and no stamp (the board places it at
+    // its arrival less half its length), in this IMU's axes; the attitude
+    // does not go
+    sdr_phase::Sender ph;   // no line
     sdr_aid_fc::Sender tx;
+    tx.noteFilter(stateAt(10000000, kNoseUp, {0.0, 0.0, 0.0}));
     RestWindow w;
     w.t0_us = 9000000;
     w.t1_us = 10000000;
-    w.f[2] = -9.81;
+    w.n = 500;
+    std::copy(kStillF.begin(), kStillF.end(), w.f);
+    w.sd_f = 0.0042;
     w.still = true;
     tx.noteRest(w);
     uint8_t b[kMaxFrame];
-    for (int64_t now = 10000000; now <= 13000000; now += 1000)
-        ASSERT_EQ(tx.frame(now, ph, false, b, sizeof(b)), 0u);
-    EXPECT_TRUE(tx.restPending());   // 3 s after its window: still kept
-    // The line comes 1 ms too late: dropped, nothing sent but the attitude
-    ph.noteLine(line, 13001000);
-    size_t len = tx.frame(13001000, ph, false, b, sizeof(b));
-    EXPECT_FALSE(tx.restPending());
-    EXPECT_EQ(tx.restsDropped(), 1u);
-    ASSERT_EQ(len, kAttitudeFrame);
-    tx.sent(13001000);
-    EXPECT_EQ(tx.frame(13002000, ph, false, b, sizeof(b)), 0u);
-    // One whose line comes within the 3 s goes then
-    w.t0_us = 20000000;
-    w.t1_us = 21000000;
-    tx.noteRest(w);
-    ph = sdr_phase::Sender{};
-    for (int64_t now = 21000000; now < 23000000; now += 1000)
-        ASSERT_EQ(tx.frame(now, ph, false, b, sizeof(b)), 0u);
-    ph.noteLine(line, 23000000);
-    len = tx.frame(23000000, ph, false, b, sizeof(b));   // the attitude first
-    ASSERT_EQ(len, kAttitudeFrame);
-    tx.sent(23000000);
-    len = tx.frame(23001000, ph, false, b, sizeof(b));
+    size_t len = tx.frame(10000500, ph, false, b, sizeof(b));
     ASSERT_EQ(len, kRestFrame);
     Rest r;
     ASSERT_TRUE(decode(b, len, r));
-    expectStamp(r.h, stampOn(line, 20500000));
-    tx.sent(23001000);
+    EXPECT_EQ(r.h.week, 0);
+    EXPECT_EQ(r.h.tow_ms, 0u);
+    EXPECT_EQ(r.h.sub_ns, 0);
+    EXPECT_EQ(r.h.tq, 0);
+    EXPECT_EQ(r.h.seq, 0);
+    EXPECT_EQ(r.h.src, kSrcOwn);
+    EXPECT_FALSE(r.h.test);
+    EXPECT_TRUE(r.valid);
+    EXPECT_EQ(r.frame, kFrameImu);
+    EXPECT_EQ(r.dur_ms, 1000);
+    EXPECT_EQ(lsb(r.f[2], 10000.0), -97801);
+    tx.sent(10000500);
+    EXPECT_FALSE(tx.restPending());
+    EXPECT_EQ(tx.restSeq(), 1);
+    // Nothing more: no attitude without a line
+    for (int64_t now = 10001500; now < 11000000; now += 1000)
+        ASSERT_EQ(tx.frame(now, ph, false, b, sizeof(b)), 0u);
+
+    // One that found no room until past 100 ms after its window: dropped (its
+    // arrival would misplace it)
+    w.t0_us = 20000000;
+    w.t1_us = 21000000;
+    tx.noteRest(w);
+    EXPECT_EQ(tx.frame(21000000 + sdr_aid_fc::Sender::kRestNoLineUs + 1, ph, false, b, sizeof(b)), 0u);
+    EXPECT_FALSE(tx.restPending());
+    EXPECT_EQ(tx.restsDropped(), 1u);
+    // At 100 ms it still goes
+    w.t0_us = 30000000;
+    w.t1_us = 31000000;
+    tx.noteRest(w);
+    ASSERT_EQ(tx.frame(31000000 + sdr_aid_fc::Sender::kRestNoLineUs, ph, false, b, sizeof(b)), kRestFrame);
+    tx.sent(31100000);
+
+    // With the line, stamped as before, and a stamped one still waits up to
+    // 3 s for room
+    const GnssClockData line = validLine();
+    ph.noteLine(line, 40000000);
+    w.t0_us = 39000000;
+    w.t1_us = 40000000;
+    tx.noteRest(w);
+    len = tx.frame(40000000, ph, false, b, sizeof(b));   // the attitude first
+    ASSERT_EQ(len, kAttitudeFrame);
+    tx.sent(40000000);
+    len = tx.frame(40001000, ph, false, b, sizeof(b));
+    ASSERT_EQ(len, kRestFrame);
+    ASSERT_TRUE(decode(b, len, r));
+    expectStamp(r.h, stampOn(line, 39500000));
+    EXPECT_EQ(r.h.tq, kLineTq);
+    EXPECT_EQ(r.h.seq, 2);
+    tx.sent(40001000);
     EXPECT_EQ(tx.restsDropped(), 1u);
 }
 
@@ -3019,10 +3051,19 @@ TEST(SdrAidFc, APadAMoveAndANewPose)
     // The attitude every 100 ms from the line's first pass
     ASSERT_EQ(att_at.size(), 250u);
     for (size_t i = 0; i < att_at.size(); i++) EXPECT_EQ(att_at[i], 5 * s + static_cast<int64_t>(i) * 100000) << i;
-    // The rests: the first window's (0-1 s) found no line within 3 s and was
-    // dropped; the sixth's (5-6 s) goes as it closes, the attitude ahead of it
-    // on that pass, then every 5 s; after the move the first whole still
-    // window (22-23 s) and the one five on
+    // The rests: the first window's (0-1 s) goes as it closes, with no line
+    // yet: unstamped (tq 0), for the board to place at its arrival; the
+    // sixth's (5-6 s) goes as it closes, the attitude ahead of it on that
+    // pass, then every 5 s; after the move the first whole still window
+    // (22-23 s) and the one five on
+    ASSERT_FALSE(rests.empty());
+    EXPECT_EQ(rests[0].now, s);
+    EXPECT_EQ(rests[0].r.h.tq, 0);
+    EXPECT_EQ(rests[0].r.h.week, 0);
+    EXPECT_EQ(rests[0].r.h.tow_ms, 0u);
+    EXPECT_EQ(rests[0].r.h.seq, 0);
+    EXPECT_TRUE(rests[0].r.valid);
+    rests.erase(rests.begin());
     const std::vector<int64_t> want_mid = {5500000, 10500000, 15500000, 22500000, 27500000};
     ASSERT_EQ(rests.size(), want_mid.size());
     for (size_t i = 0; i < rests.size(); i++)
@@ -3033,11 +3074,11 @@ TEST(SdrAidFc, APadAMoveAndANewPose)
         // Each window closes on a whole second, with an attitude due: the
         // rest on the pass after
         EXPECT_EQ(rests[i].now, want_mid[i] + 500000 + 1000);
-        EXPECT_EQ(r.h.seq, i);
+        EXPECT_EQ(r.h.seq, i + 1);
         EXPECT_TRUE(r.valid);
         EXPECT_EQ(r.dur_ms, 1000);
         for (int k = 0; k < 3; k++) EXPECT_EQ(lsb(r.f[k], 10000.0), lsb(nose_up_f[k], 10000.0)) << k;
         EXPECT_EQ(code(r.sd_f, 1000.0, 255), 1);   // no spread: the least code
     }
-    EXPECT_EQ(tx.restsDropped(), 1u);
+    EXPECT_EQ(tx.restsDropped(), 0u);
 }

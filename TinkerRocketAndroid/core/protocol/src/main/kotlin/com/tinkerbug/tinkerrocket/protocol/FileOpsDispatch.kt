@@ -17,6 +17,7 @@ package com.tinkerbug.tinkerrocket.protocol
  *   0xCE → pyro-test refusal       (gate: frame >= 4, decoded inline)
  *   0xD0 → pad-cal status          (gate: frame >= 41 → [PadCalStatus.decode])
  *   0xD1 → accel-cal status        (gate: frame >= 41 → [AccelCalStatus.decode])
+ *   0xD2 → SDR board IMU mounting  (gate: frame >= 112 → [SdrAlignStatus.decode])
  *   0x7B '{' → try ota_status JSON, else file-list parse (which fails on '{')
  *   anything else → file-list JSON array
  *
@@ -82,6 +83,13 @@ public object FileOpsDispatch {
                 AccelCalStatus.decode(frame.copyOfRange(1, frame.size))
                     ?.let { FileOpsMessage.AccelCal(it) }
             }
+            0xD2 -> {
+                // The gnss-sdr-dev board's IMU mounting, as the flight
+                // computer relays the board's report.
+                if (frame.size < 1 + SdrAlignStatus.SIZE) return null
+                SdrAlignStatus.decode(frame.copyOfRange(1, frame.size))
+                    ?.let { FileOpsMessage.SdrAlign(it) }
+            }
             0x7B -> {   // '{' → JSON object
                 OtaStatusUpdate.parse(frame)?.let { return FileOpsMessage.Ota(it) }
                 fileList(frame)
@@ -144,6 +152,14 @@ public sealed interface FileOpsMessage {
      * 76/77/78 or the close of a face window the app asked for.
      */
     public data class AccelCal(val status: AccelCalStatus) : FileOpsMessage
+
+    /**
+     * 0xD2 — the gnss-sdr-dev board's IMU mounting and calibration, as the
+     * flight computer relays the board's report: once a second on the
+     * ground with the board on J1, at each change, and in answer to command
+     * 83.
+     */
+    public data class SdrAlign(val status: SdrAlignStatus) : FileOpsMessage
 
     /** '{' JSON with `"type":"ota_status"` (#8 phase 2). */
     public data class Ota(val status: OtaStatusUpdate) : FileOpsMessage

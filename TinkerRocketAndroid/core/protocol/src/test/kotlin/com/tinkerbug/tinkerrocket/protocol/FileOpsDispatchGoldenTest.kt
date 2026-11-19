@@ -113,6 +113,46 @@ class FileOpsDispatchGoldenTest {
                         assertNull(s.highG, "$rel: a 40-byte frame carries no high-g")
                     }
                 }
+                f.name.startsWith("sdralign_") -> {
+                    // The gnss-sdr-dev board's IMU mounting: every field the
+                    // sidecar records, byte-, float- and pose-wise.
+                    val s = assertIs<FileOpsMessage.SdrAlign>(msg, rel).status
+                    fun i(key: String): Int = side[key]!!.jsonPrimitive.int
+                    fun f(key: String): Float = side[key]!!.jsonPrimitive.float
+                    assertEquals(1 + SdrAlignStatus.SIZE, WireFixtures.bytes(rel).size, rel)
+                    assertEquals(i("ver"), s.ver, rel)
+                    assertEquals(i("flags"), s.flags, rel)
+                    assertEquals(i("imu"), s.imu, rel)
+                    assertEquals(i("have"), s.have.raw, rel)
+                    assertEquals(i("from"), s.from, rel)
+                    assertEquals(i("saved"), s.saved.raw, rel)
+                    assertEquals(i("n_pose"), s.poses.size, rel)
+                    assertEquals(i("cal_axes"), s.calAxes, rel)
+                    assertEquals(i("last_rest"), s.lastRestRaw, rel)
+                    assertEquals(i("gen"), s.gen, rel)
+                    assertEquals(i("n_rest"), s.nRest, rel)
+                    assertEquals(i("n_pair"), s.nPair, rel)
+                    assertEquals(i("cmd_id"), s.cmdId, rel)
+                    assertEquals(i("cmd_op"), s.cmdOp, rel)
+                    assertEquals(i("cmd_res"), s.cmdResRaw, rel)
+                    assertEquals(i("fc_cmd_state"), s.fcCmdStateRaw, rel)
+                    assertEquals(i("fc_cmd_op"), s.fcCmdOp, rel)
+                    assertEquals(i("fc_cmd_id"), s.fcCmdId, rel)
+                    assertEquals(i("rests_sent"), s.restsSent, rel)
+                    assertEquals(i("rest_age_ds"), s.restAgeDs, rel)
+                    assertEquals(i("board_age_ds"), s.boardAgeDs, rel)
+                    assertEquals(f("spread_deg"), s.spreadDeg, rel)
+                    assertEquals(f("resid_deg"), s.residDeg, rel)
+                    assertEquals(f("cal_rms"), s.calRms, rel)
+                    assertEquals(listOf(f("q0"), f("q1"), f("q2"), f("q3")), s.q, rel)
+                    assertEquals(listOf(f("scale_x"), f("scale_y"), f("scale_z")), s.scale, rel)
+                    assertEquals(listOf(f("bias_x"), f("bias_y"), f("bias_z")), s.bias, rel)
+                    assertEquals(
+                        listOf(i("pose1_x"), i("pose1_y"), i("pose1_z")).map { it / 127.0 }, s.poses[1].dir, rel,
+                    )
+                    assertEquals(i("pose5_pairs"), s.poses[5].pairs, rel)
+                    assertEquals(f("moved_deg"), s.movedDeg, rel)
+                }
                 else -> throw AssertionError("unmapped fixture $rel — extend this walk")
             }
         }

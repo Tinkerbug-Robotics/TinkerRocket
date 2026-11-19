@@ -29,13 +29,15 @@ On a V9 or V10 with TinkerRocket's gnss-sdr-dev board the record carries that
 board's RTCM3 (MSM7 at up to 100 Hz, TinkerRocket's message 4001, its
 ephemerides), and the same .rtcm3 comes out. The summary then also gives the
 MSM7 epochs' step and any missing between them, and the 4001 sub-types:
-1 after each epoch, 2 after each fix (RTKLIB passes 4001 over). The flight
+1 after each epoch, 2 after each fix, 4 its ionosphere, 5 the board IMU's
+mounting (the last report's said in one line; RTKLIB passes 4001 over). The flight
 computer logs beside them each frame it sent the board, TinkerRocket's message
 4002: a flight image its flight phase (sub-type 3, about one a second and
 three more after each change), its attitude (sub-type 1, ten a second) and its
 rests (sub-type 5, still seconds, one every 5 s), a bench one
-(TR_BENCH_SDR_AID) its P1 script. The summary counts those by sub-type (1
-attitude, 2 navigation state, 3 phase, 4 geometry, 5 rest). They stay in the .rtcm3, which the board's rtcmdump reads; RTKLIB
+(TR_BENCH_SDR_AID) its P1 script, and the apps' commands about the board's
+IMU mounting (sub-type 6). The summary counts those by sub-type (1 attitude,
+2 navigation state, 3 phase, 4 geometry, 5 rest, 6 command). They stay in the .rtcm3, which the board's rtcmdump reads; RTKLIB
 passes 4002 over too.
 
 The board's own IMU into its tracking loops (the aided-receiver plan's P2)
@@ -218,7 +220,7 @@ def decode_eph(frame: bytes):
 
 TR_MESSAGE = 4001                             # TinkerRocket's own (the gnss-sdr-dev board's)
 FC_MESSAGE = 4002                             # TinkerRocket's from the flight computer to the board
-FC_SUBTYPES = {1: "attitude", 2: "state", 3: "phase", 4: "geometry", 5: "rest"}
+FC_SUBTYPES = {1: "attitude", 2: "state", 3: "phase", 4: "geometry", 5: "rest", 6: "command"}
 WEEK_MS = 604800000
 
 
@@ -278,6 +280,65 @@ def decode_epoch_aid(frame: bytes):
             d["lo"] = tuple(0.2 * get(at + 48 + 10 * j, 10, signed=True) for j in range(3))
         d["pad"] = 0.02 * get(at + 78, 8)
     return d
+
+
+ALIGN_HAVE = {0: "none", 1: "tilt only (one pose)", 2: "whole"}
+ALIGN_FROM = {0: "none", 1: "this boot's rests", 2: "the saved one", 3: "the saved one with this boot's rests"}
+ALIGN_SAVED = {0: "nothing saved", 1: "saved", 2: "saved, but another in use"}
+
+
+def decode_align(frame: bytes):
+    """A 4001 sub-type 5 (the board IMU's mounting and calibration) as a dict, or None.
+
+    The board's report, once a second and at each change (the alignment
+    protocol; TinkerRocket's SdrRtcm.h decodeTrAlign reads the same): seq 8,
+    gen 8, imu 2, time 1, have 2, from 2, saved 2, autosave 1, frame 1, poses
+    4, calibrated axes 3, the last rest 3, rests 8, paired 8, the last
+    command's id 8, op 3 and result 3, spread 8 (1 deg), residual 8 (0.02
+    deg), the fit 8 (1e-3 m/s^2), the mounting 4 x 16 (2^-14), each axis's
+    scale - 1 (1e-5) and bias (1e-4 m/s^2) 3 x 16 each, the rail pose's angle
+    off a saved rotation 8 (0.02 deg; from 3 only), then each pose's direction
+    3 x 8 (1/127) and its pairs 8.
+    """
+    if message_type(frame) != TR_MESSAGE or len(frame) < 6:
+        return None
+    pay = frame[3:-3]
+    nb = 8 * len(pay)
+    v = int.from_bytes(pay, "big")
+
+    def get(pos, n, signed=False):
+        x = (v >> (nb - pos - n)) & ((1 << n) - 1)
+        return x - (1 << n) if signed and x >> (n - 1) else x
+
+    if nb < 275 or get(12, 4) != 5:
+        return None
+    n = get(43, 4)
+    if n > 8 or nb < 275 + 32 * n:
+        return None
+    return {"seq": get(16, 8), "gen": get(24, 8), "imu": get(32, 2), "time": get(34, 1), "have": get(35, 2),
+            "from": get(37, 2), "saved": get(39, 2), "autosave": get(41, 1), "frame": get(42, 1), "n_pose": n,
+            "cal_axes": get(47, 3), "last_rest": get(50, 3), "n_rest": get(53, 8), "n_pair": get(61, 8),
+            "cmd_id": get(69, 8), "cmd_op": get(77, 3), "cmd_res": get(80, 3), "spread_deg": float(get(83, 8)),
+            "resid_deg": 0.02 * get(91, 8), "cal_rms": 1e-3 * get(99, 8),
+            "q": tuple(get(107 + 16 * k, 16, signed=True) / 16384.0 for k in range(4)),
+            "scale": tuple(1.0 + 1e-5 * get(171 + 16 * k, 16, signed=True) for k in range(3)),
+            "bias": tuple(1e-4 * get(219 + 16 * k, 16, signed=True) for k in range(3)),
+            "moved_deg": 0.02 * get(267, 8),
+            "poses": [(tuple(get(275 + 32 * i + 8 * k, 8, signed=True) / 127.0 for k in range(3)),
+                       get(275 + 32 * i + 24, 8)) for i in range(n)]}
+
+
+def align_line(a) -> str:
+    """The board IMU's mounting as the log's last report has it, in one line."""
+    if a["have"] == 2:
+        what = (f"whole, {a['n_pose']} poses {a['spread_deg']:.0f} deg apart, "
+                f"the worst {a['resid_deg']:.2f} deg off")
+    else:
+        what = ALIGN_HAVE.get(a["have"], f"have {a['have']}")
+    axes = "".join("xyz"[j] for j in range(3) if a["cal_axes"] >> j & 1) or "none"
+    moved = f"; the rail pose {a['moved_deg']:.2f} deg off the saved rotation" if a["from"] == 3 else ""
+    return (f"{what}; accelerometer axes calibrated: {axes}; {ALIGN_SAVED.get(a['saved'], 'saved ?')}, "
+            f"in use from {ALIGN_FROM.get(a['from'], '?')}{moved}")
 
 
 def imu_watch(frames):
@@ -441,6 +502,7 @@ def epoch_summary(frames):
     tr = Counter()
     fc = Counter()
     fixes_valid = 0
+    align = None
     for _, f in frames:
         tow = msm_gps_tow(f)
         if tow is not None and (not tows or tows[-1] != tow):
@@ -450,6 +512,8 @@ def epoch_summary(frames):
             tr[sub] += 1
             if sub == 2 and len(f) >= 3 + 11 + 3:
                 fixes_valid += (f[3 + 10] >> 5) & 1      # bit 82 of the payload
+            elif sub == 5:
+                align = decode_align(f) or align
         elif message_type(f) == FC_MESSAGE and len(f) > 6:
             fc[f[4] & 0x0F] += 1
     steps = [(b - a) % WEEK_MS for a, b in zip(tows, tows[1:])]
@@ -458,7 +522,7 @@ def epoch_summary(frames):
     missing = sum(-(-d // step) - 1 for d in forward if d > step) if step else 0
     return {"epochs": len(tows), "step_ms": step, "missing": missing,
             "backward": len(steps) - len(forward), "tr_epochs": tr[1], "tr_fixes": tr[2],
-            "tr_fixes_valid": fixes_valid, "fc_sent": dict(fc)}
+            "tr_fixes_valid": fixes_valid, "fc_sent": dict(fc), "tr_align": tr[5], "align": align}
 
 
 def extract(bin_path: Path):
@@ -509,6 +573,8 @@ def main(argv=None) -> int:
     if es["tr_epochs"] or es["tr_fixes"]:
         print(f"  TinkerRocket 4001 (gnss-sdr-dev): {es['tr_epochs']} epochs, "
               f"{es['tr_fixes']} fixes ({es['tr_fixes_valid']} valid)")
+    if es["align"]:
+        print(f"  the board's IMU mounting ({es['tr_align']} reports; the last): {align_line(es['align'])}")
     if es["fc_sent"]:
         sent = ", ".join(f"{n} {FC_SUBTYPES.get(sub, f'sub-type {sub}')}" for sub, n in sorted(es["fc_sent"].items()))
         print(f"  TinkerRocket 4002 (this flight computer to the gnss-sdr-dev board): {sent}")

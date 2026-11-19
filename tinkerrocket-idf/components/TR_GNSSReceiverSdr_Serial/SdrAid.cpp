@@ -276,6 +276,17 @@ size_t encode(const Rest& a, uint8_t* out, size_t cap)
     return close(out, kRestBytes);
 }
 
+size_t encode(const Command& a, uint8_t* out, size_t cap)
+{
+    if (out == nullptr || cap < kCommandFrame) return 0;
+    std::memset(out, 0, kCommandFrame);
+    uint8_t* m = out + 3;
+    putHeader(m, kCommand, a.h);
+    put(m, 96, 4, a.op & 15U);
+    put(m, 100, 8, a.id);   // 4 bits reserved
+    return close(out, kCommandBytes);
+}
+
 uint8_t fcSubType(const uint8_t* frame, size_t len)
 {
     return sdr_rtcm::messageNumber(frame, len) == kFcMessage ? static_cast<uint8_t>(frame[4] & 0x0F) : 0;
@@ -350,6 +361,16 @@ bool decode(const uint8_t* frame, size_t len, Rest& out)
     out.dur_ms = static_cast<uint16_t>(get(m, 100, 12));
     for (int k = 0; k < 3; k++) out.f[k] = static_cast<double>(getS(m, 112 + 20 * k, 20)) * 1e-4;
     out.sd_f = sigValue(get(m, 172, 8), 8, 1e-3);
+    return true;
+}
+
+bool decode(const uint8_t* frame, size_t len, Command& out)
+{
+    const uint8_t* m = fcPayload(frame, len, kCommand, kCommandBytes);
+    if (m == nullptr) return false;
+    out.h = getHeader(m);
+    out.op = static_cast<uint8_t>(get(m, 96, 4));
+    out.id = static_cast<uint8_t>(get(m, 100, 8));
     return true;
 }
 

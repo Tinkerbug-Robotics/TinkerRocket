@@ -846,6 +846,71 @@ void buildFileops(Builder& b) {
               .f("hg_bias_z", acf.hg.hg_bias_mps2[2])
               .done(),
           "AccelCalStatusFrame behind 0xD1: AccelCalStatusData then AccelCalHighGStatus; frame = 115 B");
+
+    // 0xD2 the gnss-sdr-dev board IMU's mounting, as the FC relays the
+    // board's report: six faces held, the whole rotation (U10 turned 45 deg
+    // about this IMU's z), every axis calibrated, a save the board echoed;
+    // every byte field distinct, signs mixed.
+    SdrAlignStatusData sa{};
+    sa.ver = SDR_ALIGN_STATUS_VER;
+    sa.flags = SDRA_BOARD | SDRA_REPORT | SDRA_TIME | SDRA_LINE | SDRA_AUTOSAVE | SDRA_STILL;
+    sa.imu = 2;
+    sa.have = SDRA_HAVE_WHOLE;
+    sa.from = SDRA_FROM_RESTS;
+    sa.saved = SDRA_SAVED_SAME;
+    sa.n_pose = 6;
+    sa.cal_axes = 7;
+    sa.last_rest = SDRA_REST_PAIRED;
+    sa.gen = 17;
+    sa.n_rest = 44;
+    sa.n_pair = 13;
+    sa.cmd_id = 42;
+    sa.cmd_op = SDR_ALIGN_OP_SAVE;
+    sa.cmd_res = SDRA_RES_DONE;
+    sa.fc_cmd_state = SDRA_CMD_ECHOED;
+    sa.fc_cmd_op = SDR_ALIGN_OP_SAVE;
+    sa.fc_cmd_id = 9;
+    sa.rests_sent = 51;
+    sa.rest_age_ds = 23;
+    sa.board_age_ds = 4;
+    sa.spread_deg = 90.0f;
+    sa.resid_deg = 0.14f;
+    sa.cal_rms_mps2 = 0.012f;
+    sa.q[0] = 0.70710677f;
+    sa.q[1] = 0.0012f;
+    sa.q[2] = -0.0034f;
+    sa.q[3] = 0.70710677f;
+    sa.scale[0] = 1.012f;
+    sa.scale[1] = 0.987f;
+    sa.scale[2] = 1.003f;
+    sa.bias_mps2[0] = 0.153f;
+    sa.bias_mps2[1] = -0.271f;
+    sa.bias_mps2[2] = 0.0089f;
+    const int8_t dirs[6][3] = {{127, 0, 0}, {-127, 1, -2}, {0, 127, 3}, {-4, -127, 0}, {5, 0, 127}, {0, -6, -127}};
+    const uint8_t pairs[6] = {2, 3, 2, 1, 4, 255};
+    for (int i = 0; i < 6; i++)
+    {
+        memcpy(sa.pose_dir[i], dirs[i], 3);
+        sa.pose_pairs[i] = pairs[i];
+    }
+    sa.moved_deg = 0.0f;   // from 1: this boot's rests (moved is from 3's)
+    std::vector<uint8_t> saF{0xD2};
+    append(saF, bytesOf(sa));
+    b.add("fileops", "sdralign_0xD2_111.bin", saF,
+          Json().u("ver", sa.ver).u("flags", sa.flags).u("imu", sa.imu).u("have", sa.have).u("from", sa.from)
+              .u("saved", sa.saved).u("n_pose", sa.n_pose).u("cal_axes", sa.cal_axes).u("last_rest", sa.last_rest)
+              .u("gen", sa.gen).u("n_rest", sa.n_rest).u("n_pair", sa.n_pair).u("cmd_id", sa.cmd_id)
+              .u("cmd_op", sa.cmd_op).u("cmd_res", sa.cmd_res).u("fc_cmd_state", sa.fc_cmd_state)
+              .u("fc_cmd_op", sa.fc_cmd_op).u("fc_cmd_id", sa.fc_cmd_id).u("rests_sent", sa.rests_sent)
+              .u("rest_age_ds", sa.rest_age_ds).u("board_age_ds", sa.board_age_ds)
+              .f("spread_deg", sa.spread_deg).f("resid_deg", sa.resid_deg).f("cal_rms", sa.cal_rms_mps2)
+              .f("q0", sa.q[0]).f("q1", sa.q[1]).f("q2", sa.q[2]).f("q3", sa.q[3])
+              .f("scale_x", sa.scale[0]).f("scale_y", sa.scale[1]).f("scale_z", sa.scale[2])
+              .f("bias_x", sa.bias_mps2[0]).f("bias_y", sa.bias_mps2[1]).f("bias_z", sa.bias_mps2[2])
+              .i("pose1_x", dirs[1][0]).i("pose1_y", dirs[1][1]).i("pose1_z", dirs[1][2])
+              .u("pose5_pairs", pairs[5]).f("moved_deg", sa.moved_deg)
+              .done(),
+          "SdrAlignStatusData behind 0xD2; frame = 112 B");
 }
 
 // App→device command payloads: [cmd u8][payload], byte-exact.  Struct-backed
@@ -1060,6 +1125,14 @@ void buildCommands(Builder& b) {
                   .f("m12", m[5]).f("m20", m[6]).f("m21", m[7]).f("m22", m[8])
                   .f("bias_x", -0.6512f).f("bias_y", 1.48f).f("bias_z", -0.3127f).done(),
               "HighGCalApplyData; op 1 store (0 clears the matrix and keeps the bias)");
+    }
+
+    {
+        // the gnss-sdr-dev board IMU's mounting: save it, the app's id 9 (BLE 83)
+        SdrAlignCmdData c{SDR_ALIGN_OP_SAVE, 9};
+        b.add("commands", "cmd83_sdralign_2.bin", cmd(83, bytesOf(c)),
+              Json().u("cmd", 83).u("op", 1).u("id", 9).done(),
+              "SdrAlignCmdData; op 1 save, 2 clear, 3 restart, 4 report; the app's id");
     }
 
     b.add("commands", "cmd64_imuorient_auto.bin", cmd(64, bytesOf(ImuOrientConfigData{IMU_ORIENT_AUTO})),

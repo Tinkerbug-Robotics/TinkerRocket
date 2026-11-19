@@ -31,6 +31,15 @@
 //  only a hint: the measurement names its face from its own reading. Tapping
 //  a row shows how to set the board on that face.
 //
+//  With a gnss-sdr-dev board on J1 the same faces calibrate its IMU too: the
+//  board pairs each still second the flight computer sends it with its own
+//  reading, which gives its mounting and its accelerometer's scale and
+//  offset (BoardAlignFlow; its report comes behind 0xD2, command 83 drives
+//  it). The first face starts the board afresh; each row says whether the
+//  board holds that face; after the flight computer's save the board's
+//  mounting is saved too, or the faces are asked for once more when the
+//  flight computer's offset moved under the board's calibration.
+//
 
 import SwiftUI
 
@@ -39,6 +48,9 @@ struct AccelCalibrationView: View {
     @EnvironmentObject var store: RocketProfileStore
 
     @State private var flow = AccelCalFlow()
+    /// The gnss-sdr-dev board's part, when the rocket has one.
+    @State private var board = BoardAlignFlow()
+    @State private var confirmBoardClear = false
     /// When the open face window's MEASURING frame came: drives the 3 s bar.
     @State private var windowOpenedAt: Date?
     @State private var confirmClear = false
@@ -87,6 +99,19 @@ struct AccelCalibrationView: View {
     /// A high-g alignment is stored on the board.
     private var highGStored: Bool { status?.highG?.isStored == true }
 
+    /// The gnss-sdr-dev board's report, when the rocket has the board.
+    private var boardStatus: SdrAlignStatus? {
+        guard let s = board.status, s.boardPresent else { return nil }
+        return s
+    }
+
+    /// The flight computer's offset in use now: what the rests it sends the
+    /// board are corrected by.
+    private var offsetInUse: [Float] {
+        guard let s = status, s.isApplied else { return [0, 0, 0] }
+        return s.offset
+    }
+
     var body: some View {
         Form {
             whySection
@@ -94,6 +119,7 @@ struct AccelCalibrationView: View {
             facesSection
             if let solution = flow.captures.solution { resultSection(solution) }
             if let highG = flow.captures.highG { highGSection(highG) }
+            if let b = boardStatus { boardSection(b) }
             clearSection
         }
         .navigationTitle("Accelerometer Calibration")
@@ -104,6 +130,7 @@ struct AccelCalibrationView: View {
             // did and the last disconnect re-arms auto-lock.
             if device.isConnected { UIApplication.shared.isIdleTimerDisabled = true }
             if canRun { run(flow.read()) }
+            if let s = device.sdrAlignStatus { runBoard(board.take(s)) }
         }
         // The rocket came up with the screen open: read what it has stored.
         .onChange(of: canRun) { ok in
@@ -118,6 +145,21 @@ struct AccelCalibrationView: View {
         // A high-g save's report, whether its read-back came or timed out.
         .onChange(of: flow.lastHighGWrite) { w in
             if let w { highGWritten(w) }
+        }
+        // The board's reports; its save once the flight computer's offset is
+        // saved and read back.
+        .onReceive(device.sdrAlignFrames) { s in runBoard(board.take(s)) }
+        .onChange(of: flow.lastWrite) { w in
+            if let w, w.confirmed, case .save(let o) = w.write {
+                runBoard(board.flightComputerSaved(offset: o))
+            }
+        }
+        .confirmationDialog("Clear the GNSS board's mounting?", isPresented: $confirmBoardClear,
+                            titleVisibility: .visible) {
+            Button("Clear Mounting", role: .destructive) { runBoard(board.request(SdrAlignCommand.opClear)) }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("The GNSS board forgets its mounting and its accelerometer calibration, the saved ones too. Until the faces are measured again it finds only its tilt on the pad.")
         }
         .confirmationDialog(highGStored ? "Clear the stored calibration?" : "Clear the stored offset?",
                             isPresented: $confirmClear, titleVisibility: .visible) {
@@ -214,6 +256,10 @@ struct AccelCalibrationView: View {
             }
             measureRow(live)
             if let report = flow.lastFace, !flow.isMeasuring { faceReportRow(report) }
+            if let again = board.again, boardStatus != nil {
+                Label(again.text, systemImage: "arrow.triangle.2.circlepath")
+                    .font(.callout).foregroundColor(.orange)
+            }
             if !flow.captures.faces.isEmpty {
                 Button("Start Over") { flow.startOver() }
                     .font(.callout)
@@ -252,12 +298,24 @@ struct AccelCalibrationView: View {
                     Text(String(format: "%.1f° off", c.tiltDeg))
                         .font(.caption).monospacedDigit().foregroundColor(.secondary)
                 }
+                if boardStatus != nil { boardMark(face) }
                 if isLive { nowTag }
             }
             .contentShape(Rectangle())
         }
         .listRowBackground(isLive ? Color.accentColor.opacity(0.12) : nil)
         .accessibilityHint("Shows how to place the board for this face")
+    }
+
+    /// Whether the GNSS board holds this face, and its pairs.
+    private func boardMark(_ face: Face) -> some View {
+        let pairs = board.started ? (boardStatus?.pairsByFace[face] ?? 0) : 0
+        return Label(pairs > 0 ? "\(pairs)" : "–",
+                     systemImage: pairs > 0 ? "antenna.radiowaves.left.and.right.circle.fill"
+                                            : "antenna.radiowaves.left.and.right.circle")
+            .font(.caption).monospacedDigit()
+            .foregroundColor(pairs > 0 ? .green : .secondary)
+            .accessibilityLabel(pairs > 0 ? "GNSS board: \(pairs) readings" : "GNSS board: not yet")
     }
 
     private var nowTag: some View {
@@ -288,7 +346,7 @@ struct AccelCalibrationView: View {
             // Named for the live face as a hint; enabled whatever the hint
             // says, since the measurement judges the face itself.
             // Dark blue and filled: the button to press at each face.
-            Button(action: { run(flow.measure()) }) {
+            Button(action: measure) {
                 Label(AccelSixFace.measureLabel(live: live, allCaptured: flow.captures.isComplete),
                       systemImage: "scope")
                     .frame(maxWidth: .infinity)
@@ -452,7 +510,77 @@ struct AccelCalibrationView: View {
         }
     }
 
+    // MARK: - The GNSS board
+
+    private func boardSection(_ b: SdrAlignStatus) -> some View {
+        Section {
+            Label(b.mountingText, systemImage: b.have == .whole ? "checkmark.circle.fill" : "circle.dashed")
+                .foregroundColor(b.have == .whole ? .green : .primary)
+            if b.have != .none {
+                Text(b.rotationText).font(.caption).monospacedDigit().foregroundColor(.secondary)
+            }
+            ForEach(0..<3, id: \.self) { j in
+                LabeledContent("Board \(AccelSixFace.axisNames[j])", value: b.axisText(j))
+                    .monospacedDigit()
+            }
+            Label(b.savedText, systemImage: b.saved == .same ? "checkmark.seal.fill" : "circle.dashed")
+                .foregroundColor(.secondary)
+            if let moved = b.movedText {
+                let warn = b.movedDeg > SdrAlignStatus.movedWarnDeg
+                Label(moved, systemImage: warn ? "exclamationmark.triangle.fill" : "scope")
+                    .font(.callout).foregroundColor(warn ? .orange : .secondary)
+            }
+            if let poor = b.poorFitText {
+                Label(poor, systemImage: "exclamationmark.triangle.fill").font(.callout).foregroundColor(.orange)
+            }
+            if let why = b.blockedText {
+                Label(why, systemImage: "exclamationmark.triangle.fill").font(.callout).foregroundColor(.orange)
+            } else if let rest = b.lastRestText {
+                Label(rest, systemImage: "hand.raised.fill").font(.callout).foregroundColor(.orange)
+            }
+            if board.isBusy {
+                HStack(spacing: 10) {
+                    ProgressView()
+                    Text("Talking to the GNSS board…")
+                }
+            } else {
+                Button(action: { runBoard(board.request(SdrAlignCommand.opSave)) }) {
+                    Label("Save to the GNSS Board", systemImage: "square.and.arrow.down")
+                }
+                .disabled(!canRun || b.have != .whole)
+                Button("Clear the Board's Mounting…", role: .destructive) { confirmBoardClear = true }
+                    .disabled(!canRun)
+            }
+            if let o = board.lastOutcome {
+                Label(o.text, systemImage: o.isGood ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundColor(o.isGood ? .green : .orange)
+            }
+        } header: {
+            Text("GNSS Board IMU")
+        } footer: {
+            Text("The GNSS board on the flight computer has its own IMU. The same six faces find how it is mounted and calibrate its accelerometer against the flight computer's: hold each face still for 3 s while the board pairs the readings. The first face starts the board afresh; its saved mounting stays until the new one is saved, after the flight computer's.")
+        }
+    }
+
     // MARK: - Commands
+
+    /// Measure a face; the first of a set starts the GNSS board afresh.
+    private func measure() {
+        let fresh = flow.captures.faces.isEmpty
+        guard let command = flow.measure() else { return }
+        runBoard(board.faceStarting(fresh: fresh, offsetInUse: offsetInUse))
+        run(command)
+    }
+
+    /// Send the board's command and arm its timeout.
+    private func runBoard(_ command: BoardAlignFlow.Command?) {
+        guard let command else { return }
+        let gen = board.generation
+        device.sendSdrAlignCommand(op: command.op, id: command.id)
+        DispatchQueue.main.asyncAfter(deadline: .now() + BoardAlignFlow.timeout) {
+            board.timedOut(gen)
+        }
+    }
 
     /// Send what the flow asked for and arm its timeout.
     private func run(_ command: AccelCalFlow.Command?) {
