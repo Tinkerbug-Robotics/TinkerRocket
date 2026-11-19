@@ -1270,7 +1270,7 @@ static uint32_t snapshot_seed_bytes = 0;
 // applies both and gates the V7/V8 MRAM fallback too — that store has no
 // clock of its own and, now that a failed recovery no longer clears it
 // (#834-3), can hold an INFLIGHT frame indefinitely.
-static constexpr uint32_t kSnapshotServeTtlMs = 600000;  // = FC MAX_FLIGHT_TIME
+static constexpr uint32_t kSnapshotServeTtlMs = 1800000;  // = FC MAX_FLIGHT_TIME_CEILING_MS
 static_assert(kSnapshotServeTtlMs == InflightRefusalPolicy::kMaxFlightTimeMs,
               "#1162: the snapshot serve-TTL and the silent-FC INFLIGHT hold "
               "bound the same flight");
@@ -4683,7 +4683,10 @@ static void pyroFaultTask(void*)
         if (ok && overLimit(raw))
             pyroFaultTripLocked(raw, Source::Poll, now_ms);
         else if (ok)
+        {
             notePeak(pyro_fault, raw);
+            noteUnderLimit(pyro_fault);
+        }
         portEXIT_CRITICAL(&pyro_fault_mux);
 
         ulTaskNotifyTake(pdTRUE, 1);   // the next tick, or at once on an alert edge

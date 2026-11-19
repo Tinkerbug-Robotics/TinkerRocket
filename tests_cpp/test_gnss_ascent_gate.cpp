@@ -429,7 +429,8 @@ TEST(GnssAscentGate, SnapshotByteRoundTrips)
     EXPECT_EQ(encode(st), CODE_HELD_OUT);
     for (auto [why, code] : {std::pair{Reason::BaroAgreed,   CODE_BARO_AGREED},
                              std::pair{Reason::FilterAgreed, CODE_EKF_AGREED},
-                             std::pair{Reason::BaroStuck,    CODE_BARO_STUCK}})
+                             std::pair{Reason::BaroStuck,    CODE_BARO_STUCK},
+                             std::pair{Reason::AboveBaro,    CODE_ABOVE_BARO}})
     {
         st.phase  = Phase::Admitted;
         st.reason = why;
@@ -453,4 +454,85 @@ TEST(GnssAscentGate, AnythingButAnAdmissionRequalifiesAfterAReboot)
         EXPECT_FALSE(gnssVerticalToEkf(st));
         EXPECT_FALSE(st.baro_stuck) << "the stuck verdict is re-derived, not restored";
     }
+}
+
+// ---------------------------------------------------------------------------
+// The barometer lost to altitude (owner's decision 2026-11-19, #1707)
+// ---------------------------------------------------------------------------
+namespace {
+// The raw-GNSS images: no filter reference, the barometer above its range.
+void aboveTheBarometer(Sim& s)
+{
+    s.padThenLaunch();
+    s.in.ekf_valid        = false;
+    s.in.baro_healthy     = false;
+    s.in.baro_above_range = true;
+    s.in.baro_agl_m       = 12000.0f;
+    s.in.gnss_agl_m       = 13500.0f;   // nothing it could agree with
+}
+}  // namespace
+
+TEST(GnssAscentGate, AboveTheBarometersRangeGnssIsAdmittedWithNoCrossCheck)
+{
+    Sim s;
+    aboveTheBarometer(s);
+    s.in.burnout = true;
+    s.run(5);
+    EXPECT_EQ(s.st.phase, Phase::Admitted);
+    EXPECT_EQ(s.st.reason, Reason::AboveBaro);
+    EXPECT_TRUE(gnssVotes(s.st));
+}
+
+TEST(GnssAscentGate, AboveTheBarometersRangeStillWaitsForBurnout)
+{
+    Sim s;
+    aboveTheBarometer(s);
+    s.run(3000);
+    EXPECT_EQ(s.st.phase, Phase::HeldOut);
+}
+
+TEST(GnssAscentGate, AboveTheBarometersRangeStillNeedsAFix)
+{
+    Sim s;
+    aboveTheBarometer(s);
+    s.in.burnout     = true;
+    s.in.gnss_fix_ok = false;
+    s.run(3000);
+    EXPECT_EQ(s.st.phase, Phase::HeldOut);
+}
+
+TEST(GnssAscentGate, BelowTheBarometersRangeItsAgreementStillDecides)
+{
+    Sim s;
+    s.padThenLaunch();
+    s.in.ekf_valid  = false;
+    s.in.burnout    = true;
+    s.in.baro_agl_m = 8000.0f;
+    s.in.gnss_agl_m = 9500.0f;   // 1500 m off: over the 800 m band
+    s.run(10000);
+    EXPECT_EQ(s.st.phase, Phase::HeldOut);
+}
+
+// The gnss-sdr-dev board's own fix comes once a second (V10 pre-flight review):
+// with the default 500 ms gap it never qualifies; its caller's 1500 ms does.
+TEST(GnssAscentGate, OnceASecondFixesNeverQualifyWithTheDefaultGap)
+{
+    Sim s;
+    s.fix_period = 1000;
+    s.padThenLaunch();
+    s.in.burnout = true;
+    s.run(20000);
+    EXPECT_EQ(s.st.phase, Phase::HeldOut);
+}
+
+TEST(GnssAscentGate, OnceASecondFixesQualifyWithTheBoardsGap)
+{
+    Sim s;
+    s.fix_period         = 1000;
+    s.cfg.max_fix_gap_ms = 1500;
+    s.padThenLaunch();
+    s.in.burnout = true;
+    s.run(3500);
+    EXPECT_EQ(s.st.phase, Phase::Admitted);
+    EXPECT_EQ(s.st.reason, Reason::BaroAgreed);
 }

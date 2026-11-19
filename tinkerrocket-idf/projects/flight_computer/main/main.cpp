@@ -27,6 +27,7 @@
 #include <TR_KinematicChecks.h>
 #include <MainDeployGate.h>    // #834 item 4: main-deploy source-of-truth gate
 #include <GnssAscentGate.h>    // GNSS held out of the EKF + apogee vote until it qualifies after burnout
+#include <InertialVertical.h>  // the IMU's own vertical velocity and pitch: the apogee vote by sensor
 #include <landing_transition_policy.h> // #1137 items 7-8: the LANDED dwell and bounded gyro veto
 #include <sensor_staleness_policy.h> // #1137 items 10/12: debounced scorecard staleness
 #include <GroundRefFreeze.h>   // #1108: hold the ground datum while the vehicle is moving
@@ -564,6 +565,19 @@ static inline bool baroPressureInRange(float pa)
 {
     return pa > 25000.0f && pa < 125000.0f;
 }
+// Under that floor and above 0: a barometer lost to altitude, not a dead one
+// (#1707: GNSS then votes on apogee with no barometer cross-check).
+static inline bool baroAboveRange(float pa)
+{
+    return pa > 0.0f && pa <= 25000.0f;
+}
+// The apogee vote by sensor (config::APOGEE_VOTE_BY_SENSOR): the
+// accelerometer's own vertical velocity and the gyro's own pitch, levelled on
+// the pad's still moments and flown from launch, with no GNSS, barometer or
+// filter in them.  Fed every new IMU sample in the estimator block; launched
+// in enterInflight; forgotten on a sim's edge.
+static InertialVertical inertial_vert;
+static uint32_t inertial_vert_last_us = 0;
 static float pressure_alt_m = 0.0f;
 static float pressure_alt_rate_mps = 0.0f;
 // #834 item 4: pressure_alt_m/_rate come from a KF that FREE-RUNS at a
@@ -1468,6 +1482,23 @@ static inline float pyroChValue(int ch_idx)
     return 0.0f;
 }
 
+// A deployment channel enabled for this flight that has not fired yet. Both
+// trigger modes wait for apogee, so after it this is a charge still owed.
+static bool pyroDeploymentWaiting()
+{
+    for (int i = 0; i < 4; ++i)
+        if (pyroChEnabled(i) && pyro_ch[i].state == PyroChState::Idle) return true;
+    return false;
+}
+
+// The flight timeout (the INFLIGHT case): 600 s, but up to the ceiling while a
+// channel is still owed after apogee (V10 pre-flight review, 2026-11-18). The
+// restore's arm gate bounds the same flight.
+static constexpr uint32_t MAX_FLIGHT_TIME_MS         = 600000U;
+static constexpr uint32_t MAX_FLIGHT_TIME_CEILING_MS = 1800000U;
+static_assert(RecoveryArmGate::Config{}.max_flight_ms == MAX_FLIGHT_TIME_CEILING_MS,
+              "a restored flight can last as long as the timeout lets a live one");
+
 // New PCB inverts continuity sense vs the old board: with the shared
 // arming FET enabled, the channel's CONT line idles HIGH when the squib
 // loop is OPEN and gets pulled LOW when a load (closed circuit) is
@@ -1718,13 +1749,18 @@ static void servicePyroChannels(uint32_t now_ms)
     if (!pyro_apogee_detected && kinematics.apogee_flag) {
         pyro_apogee_detected = true;
         pyro_apogee_time_ms  = now_ms;
-        ESP_LOGI(TAG, "[PYRO] Apogee detected at t=%lu ms (vel=%d baro=%d gps=%d pitch=%d backstop=%d)",
+        // vel and pitch are the accelerometer's and the gyro's own with the
+        // vote by sensor (config::APOGEE_VOTE_BY_SENSOR), the filter's without
+        ESP_LOGI(TAG, "[PYRO] Apogee detected at t=%lu ms (vel=%d baro=%d gps=%d pitch=%d backstop=%d) "
+                      "single=%d by_sensor=%d",
                  (unsigned long)now_ms,
                  kinematics.vel_u_apogee_flag,
                  kinematics.alt_apogee_flag,
                  kinematics.gps_apogee_flag,
                  kinematics.pitch_apogee_flag,
-                 kinematics.apogee_backstop_flag);
+                 kinematics.apogee_backstop_flag,
+                 kinematics.apogee_single_sensor_flag ? 1 : 0,
+                 config::APOGEE_VOTE_BY_SENSOR ? 1 : 0);
     }
 
     bool just_fired[4]  = { false, false, false, false };
@@ -9406,6 +9442,9 @@ static void resetFlightStateForSim(const char* edge)
     // second time.
     sim_flight_latched = false;
     prev_sim_active    = sensor_collector.isSimActive();
+    // The apogee vote by sensor: the sim's IMU is another vehicle; level on
+    // its own pad before its launch.
+    inertial_vert.reset();
     pwrHoldRelease("sim reset");  // #848: a sim abort exits INFLIGHT without LANDED
     // A sim start/stop used to leave a REAL camera powered and the start phase
     // machine armed — and with the sim driving rocket_state to INFLIGHT, that
@@ -9462,6 +9501,7 @@ static void resetFlightStateForSim(const char* edge)
     guidance.reset();
     control_mixer.reset();
     roll_rate_pid_standalone.reset();
+    servo_control.resetPID();   // the sim flew it: see enterInflight
     burnout_detected = false;
     burnout_time_ms = 0;
     burnout_neg_count = 0;
@@ -9540,6 +9580,23 @@ static void magCalEndSession(const char* why)
     mag_cal_status_dirty    = true;
 }
 
+// Every way out of MAG_CALIBRATION back to READY (verify pass, force-apply,
+// abort, session timeout). The loop neither inits nor updates the navigation
+// filter during the session, so the raw filter saw none of the turning: it
+// would bridge the gap with one step on a still gyro, or restart from the
+// attitude of its pre-session init (V10 pre-flight review, 2026-11-18: a 90 deg
+// roll during the session, then raised vertical, left 49 deg of tilt error at
+// launch). Re-init from gravity, as an orientation change does.
+static void magCalBackToReady()
+{
+    rocket_state = READY;
+    if (ekf_initialized)
+    {
+        ekf_initialized = false;
+        ESP_LOGI(TAG, "[MAGCAL] EKF re-init scheduled: the vehicle was turned during the session");
+    }
+}
+
 static void enterInflight(uint32_t now_ms, const char* from_state)
 {
     rocket_state = INFLIGHT;
@@ -9577,6 +9634,16 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     // A new flight: the raw filter votes until this flight's barometer says
     // otherwise, and may restart in it kMaxRestarts times
     RawVoteGuard::reset(raw_guard);
+    // The apogee vote by sensor: fly the IMU's own estimate from here.  It
+    // must have levelled on a still pad moment in the last 5 s.
+    inertial_vert.launch(time_us());
+    if (inertial_vert.healthy())
+        ESP_LOGI(TAG, "[APOGEE] the IMU's own velocity and pitch fly from launch (pitch %.1f deg, g %.3f)",
+                 (double)(inertial_vert.pitchRad() * 57.29578f), (double)inertial_vert.gravity());
+    else
+        ESP_LOGW(TAG, "[APOGEE] the IMU's own velocity and pitch cannot fly: %s -- "
+                      "the accelerometer and gyro cast no apogee vote this flight",
+                 inertial_vert.failReason());
     raw_nav_restarts = 0;
     raw_restore_at_speed = false;
 #endif
@@ -9710,12 +9777,18 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     kinematics.gps_apogee_flag = false;
     kinematics.pitch_apogee_flag = false;
     kinematics.apogee_flag = false;
+    kinematics.apogee_single_sensor_flag = false;
     kinematics.alt_landed_flag = false;
     kinematics.max_speed = 0.0f;
     // Reset guidance state for new flight
     guidance.reset();
     control_mixer.reset();
     roll_rate_pid_standalone.reset();
+    // And the roll-only flight PID (V10 pre-flight review, 2026-11-18). TR_PID
+    // takes dt from the clock since its last call, so a sim earlier in this
+    // power cycle left it a dt of the whole pad wait and an integrator ready to
+    // hold up to the fin limit on the first control tick of the real flight.
+    servo_control.resetPID();
     burnout_detected = false;
     burnout_time_ms = 0;
     burnout_neg_count = 0;
@@ -10862,7 +10935,7 @@ static void loop_fc()
 
                 mag_cal_session_active = false;
                 mag_cal_status_dirty = true;
-                rocket_state = READY;
+                magCalBackToReady();
                 // Don't clear() here — leave the calibrator in APPLIED so
                 // the next status frame published reports sub_type=APPLIED
                 // and iOS shows the success banner.  Otherwise clear()
@@ -11043,6 +11116,25 @@ static void loop_fc()
             const float acc_y = low_g_near_sat ? hy : ay;
             const float acc_z = low_g_near_sat ? hz : az;
             accel_norm = sqrtf(acc_x * acc_x + acc_y * acc_y + acc_z * acc_z);
+
+            // The apogee vote by sensor: every new sample, body FLU as the
+            // filter's input (the high-g channel near the low-g rail), the
+            // gyro held through a railed window.
+            if (ism6_latest_si.time_us != inertial_vert_last_us)
+            {
+                inertial_vert_last_us = ism6_latest_si.time_us;
+                const InertialVertical::State was = inertial_vert.state();
+                const float f_b[3] = {acc_x, acc_y, acc_z};
+                const float w_b[3] = {(float)ism6_latest_si.gyro_x,
+                                      (float)ism6_latest_si.gyro_y,
+                                      (float)ism6_latest_si.gyro_z};
+                inertial_vert.update(ism6_latest_si.time_us, f_b, w_b, ism6_gyro_rail_pending);
+                if (was == InertialVertical::State::Flying &&
+                    inertial_vert.state() == InertialVertical::State::Failed)
+                    ESP_LOGE(TAG, "[APOGEE] the IMU's own velocity and pitch are out for this flight: %s -- "
+                                  "the accelerometer and gyro cast no apogee vote",
+                             inertial_vert.failReason());
+            }
 
             // ── Board→rocket orientation: pad auto-detect + thrust check ──
             // On the pad, the averaged specific-force direction reveals the
@@ -12695,7 +12787,7 @@ static void loop_fc()
                 // Same code path for "abort during sampling", "abort during
                 // review", and "abort during verifying".
                 magCalEndSession("abort");   // #1118: shared teardown
-                if (rocket_state == MAG_CALIBRATION) rocket_state = READY;
+                if (rocket_state == MAG_CALIBRATION) magCalBackToReady();
                 // Calibrator is now in ABORTED — leave it there.  iOS
                 // treats .aborted and .idle the same (introSection).
                 // calibrator.start() on the next session resets cleanly.
@@ -12872,7 +12964,7 @@ static void loop_fc()
                         mag_cal_session_active = false;
                         mag_cal_verify_active = false;
                         mag_cal_status_dirty = true;
-                        rocket_state = READY;
+                        magCalBackToReady();
                         // Leave the calibrator in APPLIED (not IDLE) so
                         // the next status frame shows iOS the "Saved"
                         // banner — same reason as the verify-PASS path.
@@ -14461,6 +14553,27 @@ static void loop_fc()
                 have_bmp_si &&
                 baroPressureInRange(bmp_latest_si.pressure) &&  // 25-125 kPa (#257)
                 (uint32_t)(time_us() - bmp_latest_si.time_us) < BARO_STALE_TIMEOUT_US;
+            // Fresh and positive whatever its range (NaN compares false): the
+            // barometer still reads, above its 25 kPa floor too (V10
+            // pre-flight review; the quiescence landing path and #1707).
+            const bool baro_reading_fresh =
+                have_bmp_si && bmp_latest_si.pressure > 0.0f &&
+                (uint32_t)(time_us() - bmp_latest_si.time_us) < BARO_STALE_TIMEOUT_US;
+            // The gnss-sdr-dev board's own fix (4001 sub-type 2) comes once a
+            // second in the measurements mode it flies in, against the u-blox's
+            // 18 Hz: GnssAscentGate's 500 ms fix gap and the GPS voter's 500 ms
+            // freshness never let it qualify or count (V10 pre-flight review).
+            const bool gnss_fix_once_a_second =
+                sensor_collector_hw.gnssType() == GNSS_TYPE_SDR
+#if TR_RAW_NAV_AUTO
+                || RAW_IS_SDR   // remembered and flown on before it is heard
+#endif
+                ;
+            kinematics.setGpsApogeeFreshMs(gnss_fix_once_a_second ? 1500u : 500u);
+            // Two of the board's once-a-second fixes, not four: above the
+            // barometer's range GNSS is one of the two sensors left, and four
+            // would put the call 3-4 s after apogee (the owner's bar is 2 s).
+            kinematics.setGpsApogeeCountHi(gnss_fix_once_a_second ? 2u : 4u);
             const bool ekf_healthy = ekf_initialized && ekf.isHealthy();
 
             // #259 applied to launch detection.  ism6_latest_si RETAINS its last
@@ -14508,6 +14621,7 @@ static void loop_fc()
                 ga.gnss_agl_m     = (float)(gnss_latest_si.alt - ref_alt_m);
                 ga.gnss_vel_u_mps = (float)gnss_latest_si.vel_u;
                 ga.baro_healthy   = baro_healthy;
+                ga.baro_above_range = baro_reading_fresh && baroAboveRange(bmp_latest_si.pressure);
                 ga.baro_locked    = mach_locked_out;
                 ga.baro_agl_m     = pressure_altitude_m;
                 ga.baro_rate_mps  = kinematics.d_alt_est_;
@@ -14527,7 +14641,9 @@ static void loop_fc()
 
                 const GnssAscentGate::Phase was_phase = gnss_admit_state.phase;
                 const bool was_stuck = gnss_admit_state.baro_stuck;
-                GnssAscentGate::step(gnss_admit_state, ga);
+                GnssAscentGate::Config ga_cfg;
+                if (gnss_fix_once_a_second) ga_cfg.max_fix_gap_ms = 1500;   // two fixes a second apart
+                GnssAscentGate::step(gnss_admit_state, ga, ga_cfg);
 
                 const float t_flight_s = (float)(now_ms - launch_time_millis) * 1e-3f;
                 if (was_stuck != gnss_admit_state.baro_stuck)
@@ -14550,6 +14666,11 @@ static void loop_fc()
                                           "the barometer is stuck, GNSS is the reference",
                                      (double)t_flight_s);
                             break;
+                        case GnssAscentGate::Reason::AboveBaro:
+                            ESP_LOGW(TAG, "[GNSS] Vertical admitted at T+%.2f s with no cross-check: "
+                                          "the barometer is lost to altitude (under 25 kPa, #1707)",
+                                     (double)t_flight_s);
+                            break;
                         case GnssAscentGate::Reason::FilterAgreed:
                             ESP_LOGI(TAG, "[GNSS] Vertical admitted to the EKF at T+%.2f s: "
                                           "agreed with the filter's own altitude for 1 s "
@@ -14568,6 +14689,26 @@ static void loop_fc()
                     }
                 }
             }
+
+            // The apogee vote by sensor: the accelerometer's and the gyro's
+            // own estimates.  Pitch votes only solidly in the atmosphere:
+            // below the barometer's range, by the barometer while it reads,
+            // else by the IMU's height over the pad's pressure altitude.
+            TR_KinematicChecks::InertialVote inertial_vote;
+            inertial_vote.in_use    = config::APOGEE_VOTE_BY_SENSOR;
+            inertial_vote.healthy   = inertial_vert.healthy();
+            inertial_vote.vz_up_mps = inertial_vert.vzUp();
+            inertial_vote.height_m  = inertial_vert.heightM();
+            inertial_vote.pitch_rad = inertial_vert.pitchRad();
+            {
+                const float pad_msl_m = ground_pressure_pa > 0.0f
+                    ? 44330.0f * (1.0f - powf(ground_pressure_pa / 101325.0f, 1.0f / 5.255f))
+                    : 0.0f;
+                inertial_vote.pitch_may_vote =
+                    baro_reading_fresh ? !baroAboveRange(bmp_latest_si.pressure)
+                                       : (pad_msl_m + inertial_vert.heightM() < config::PITCH_VOTE_CEILING_MSL_M);
+            }
+            const bool single_was = kinematics.apogee_single_sensor_flag;
 
 #if TR_RAW_NAV_P4
             // The raw vote guard (raw_vote_guard.h): after burnout and before
@@ -14622,7 +14763,9 @@ static void loop_fc()
                                        baro_healthy,
                                        ism6_fresh_kc,    // #1108 imu_healthy
                                        // GnssAscentGate: no apogee vote until admitted
-                                       GnssAscentGate::gnssVotes(gnss_admit_state));
+                                       GnssAscentGate::gnssVotes(gnss_admit_state),
+                                       baro_reading_fresh,
+                                       &inertial_vote);
 #if TR_RAW_NAV_RIG_REPLAY
             // The rig replay of the mosaic-only image: the navigation state
             // the voters just read, its attitude too, at the replayed flight's
@@ -14650,7 +14793,10 @@ static void loop_fc()
                                            (burnout_detected ? 0x040u : 0u) |
                                            (gnss_admit_state.phase == GnssAscentGate::Phase::Admitted ? 0x080u : 0u) |
                                            (raw_guard.latched ? 0x100u : 0u) | (mach_locked_out ? 0x200u : 0u) |
-                                           (ekf_may_vote ? 0x400u : 0u);
+                                           (ekf_may_vote ? 0x400u : 0u) |
+                                           (kinematics.apogee_single_sensor_flag ? 0x800u : 0u) |
+                                           (inertial_vote.healthy ? 0x1000u : 0u) |
+                                           (inertial_vote.pitch_may_vote ? 0x2000u : 0u);
                     static uint16_t replay_flags = 0;
                     static uint32_t vote_window_ms = 0, vote_lines = 0, vote_unprinted = 0;
                     if (flags != replay_flags)
@@ -14668,13 +14814,15 @@ static void loop_fc()
                             double vt = 0.0;
                             const bool have_vt = sensor_collector.replayTAt(time_us(), vt);
                             ESP_LOGI(TAG, "[REPLAY-VOTE] t=%+.4f%s st=%u votes=%d%d%d%d call=%d backstop=%d burnout=%d "
-                                          "gps_admitted=%d guard=%d mach=%d vote=%d unprinted=%lu",
+                                          "gps_admitted=%d guard=%d mach=%d vote=%d unprinted=%lu "
+                                          "single=%d imu=%d pitch_votes=%d",
                                      vt, have_vt ? "" : "(pad, no clock)", (unsigned)rocket_state,
                                      (flags & 0x001u) ? 1 : 0, (flags & 0x002u) ? 1 : 0, (flags & 0x004u) ? 1 : 0,
                                      (flags & 0x008u) ? 1 : 0, (flags & 0x010u) ? 1 : 0, (flags & 0x020u) ? 1 : 0,
                                      (flags & 0x040u) ? 1 : 0, (flags & 0x080u) ? 1 : 0, (flags & 0x100u) ? 1 : 0,
                                      (flags & 0x200u) ? 1 : 0, (flags & 0x400u) ? 1 : 0,
-                                     (unsigned long)vote_unprinted);
+                                     (unsigned long)vote_unprinted,
+                                     (flags & 0x800u) ? 1 : 0, (flags & 0x1000u) ? 1 : 0, (flags & 0x2000u) ? 1 : 0);
                             vote_unprinted = 0;
                         }
                         else
@@ -14702,7 +14850,8 @@ static void loop_fc()
                     ekf.getQuaternion(q);
                     ESP_LOGI(TAG, "[REPLAY-NAV] t=%+.4f%s st=%u ekf=%d vote=%d q=(%.5f,%.5f,%.5f,%.5f) "
                                   "pos=(%.2f,%.2f,%.2f) vel=(%.3f,%.3f,%.3f) baro=(%.2f,%+.2f) gps_vu=%+.2f "
-                                  "votes=%d%d%d%d call=%d backstop=%d burnout=%d gps_admitted=%d guard=%d mach=%d",
+                                  "votes=%d%d%d%d call=%d backstop=%d burnout=%d gps_admitted=%d guard=%d mach=%d "
+                                  "imu_vz=%+.2f imu_h=%.1f imu_pitch=%+.1f imu=%u pitch_votes=%d single=%d",
                              have_nt ? nt : (double)rs.t_s, (have_nt || rs.have_t) ? "" : "(pad, no clock)",
                              (unsigned)rocket_state, ekf_healthy ? 1 : 0, ekf_may_vote ? 1 : 0,
                              (double)q[0], (double)q[1], (double)q[2], (double)q[3],
@@ -14715,7 +14864,10 @@ static void loop_fc()
                              kinematics.apogee_flag ? 1 : 0, kinematics.apogee_backstop_flag ? 1 : 0,
                              burnout_detected ? 1 : 0,
                              gnss_admit_state.phase == GnssAscentGate::Phase::Admitted ? 1 : 0,
-                             raw_guard.latched ? 1 : 0, mach_locked_out ? 1 : 0);
+                             raw_guard.latched ? 1 : 0, mach_locked_out ? 1 : 0,
+                             (double)inertial_vote.vz_up_mps, (double)inertial_vote.height_m,
+                             (double)(inertial_vote.pitch_rad * 57.29578f), (unsigned)inertial_vert.state(),
+                             inertial_vote.pitch_may_vote ? 1 : 0, kinematics.apogee_single_sensor_flag ? 1 : 0);
                     // A replay image on a real sky: every epoch outside the
                     // rig file's span for 10 min. It plays a canned pad for
                     // ever and never sees a real launch -- the flight image
@@ -14753,8 +14905,15 @@ static void loop_fc()
                                        baro_healthy,
                                        ism6_fresh_kc,    // #1108 imu_healthy
                                        // GnssAscentGate: no apogee vote until admitted
-                                       GnssAscentGate::gnssVotes(gnss_admit_state));
+                                       GnssAscentGate::gnssVotes(gnss_admit_state),
+                                       baro_reading_fresh,
+                                       &inertial_vote);
 #endif
+            if (!single_was && kinematics.apogee_single_sensor_flag)
+                ESP_LOGW(TAG, "[APOGEE] called by one sensor alone, none other available: the accelerometer "
+                              "%s (%+.1f m/s), GNSS %+.1f m/s",
+                         inertial_vote.healthy ? "in" : "out", (double)inertial_vote.vz_up_mps,
+                         (double)gnss_latest_si.vel_u);
 #if ((defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)) && !(defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID)
             // The gnss-sdr-dev board's ignition cue (sdr_phase_policy.h
             // IgnitionCue), on the launch detector's own argument: the
@@ -15794,9 +15953,19 @@ static void loop_fc()
                 }
 
                 // Safety timeout: force LANDED if flight exceeds 10 minutes
-                // (landing detection failure, stuck at altitude, KF divergence)
-                static constexpr uint32_t MAX_FLIGHT_TIME_MS = 600000U;
-                if (now_ms - launch_time_millis > MAX_FLIGHT_TIME_MS)
+                // (landing detection failure, stuck at altitude, KF divergence).
+                // Not while a deployment channel is still owed after apogee
+                // (V10 pre-flight review, 2026-11-18): a main due at its
+                // altitude under a slow drogue from 10 km or more comes after
+                // T+600 s (10.5 km under a 15 m/s drogue reaches 300 m at
+                // T+592 s), and this timeout used to safe it before it could
+                // fire. Then the bound is MAX_FLIGHT_TIME_CEILING_MS, which the
+                // OC's silent-FC hold and snapshot serve-TTL
+                // (inflight_refusal_policy.h kMaxFlightTimeMs) match.
+                const uint32_t flight_limit_ms =
+                    (pyro_apogee_detected && pyroDeploymentWaiting())
+                        ? MAX_FLIGHT_TIME_CEILING_MS : MAX_FLIGHT_TIME_MS;
+                if (now_ms - launch_time_millis > flight_limit_ms)
                 {
                     pyroSafeAll();
                     rocket_state = LANDED;
@@ -15963,7 +16132,7 @@ static void loop_fc()
                              (unsigned)(now_ms - mag_cal_start_ms));
                     magCalEndSession("session timeout");
                     mag_cal_start_ms = 0;
-                    rocket_state = READY;
+                    magCalBackToReady();
                 }
                 break;
             }

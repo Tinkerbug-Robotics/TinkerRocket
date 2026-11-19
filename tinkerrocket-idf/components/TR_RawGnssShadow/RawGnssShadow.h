@@ -694,7 +694,10 @@ public:
         // barometer fused for that long: where there is one it judges, as
         // before (it brought 6.8 g back in 1.0 s and 9.9 g in 1.75 s). A
         // single bad epoch, or a stale receiver shorter than that, is still
-        // dropped. 0: never (as before).
+        // dropped. 0: never (as before). And outside the IMU-free mode, once
+        // past the boost, the same way (V10 pre-flight review, 2026-11-18): a
+        // boost that left the IMU's vertical over vert_check_mps off latched
+        // GNSS out of a whole flight above the barometer's range.
         double   vert_imu_free_release_s = 0.0;
         // the Doppler change check (above; DvCheck, off by default)
         uint8_t  dv_check = 0;
@@ -1297,6 +1300,12 @@ private:
     int           vert_steady_n_ = 0;   //   latched fits in a row within vert_release_mps of the one before
     float         vert_last_dv_ = 0.0f; //   the last latched fit's vertical
     static constexpr int kVertSteadyFits = 3;
+    // Outside the IMU-free descent the latch's release waits longer and wants
+    // steadier fits: a receiver recovering after the boost (its loops' time
+    // constant about 2 s) moves its fit about 1 m/s an epoch, which the
+    // descent's 5 m/s steadiness would take (V10 pre-flight review).
+    static constexpr double kVertCoastReleaseHoldS = 5.0;
+    static constexpr double kVertCoastSteadyMps    = 1.0;
     // the Doppler change check (dv_check)
     DopplerRef    dv_ref_;              // the last epoch's Dopplers, the next change's start
     DopplerRef    dv_next_;             //   this epoch's, taken by the check
