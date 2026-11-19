@@ -67,6 +67,16 @@
 //     Without this, a sealed port would leave only the pitch voter standing:
 //     no apogee, no drogue, no main.  A receiver lag reads LOW on a climb, so
 //     it cannot fake the barometer being flat while GNSS climbs.
+//   * Lost to altitude -- a fresh reading under the range's 25 kPa floor,
+//     about 10.4 km (owner's decision, 2026-11-19, #1707): GNSS is admitted
+//     at once, with no cross-check.  With the barometer gone the apogee vote
+//     has fewer independent sources left, and keeping GNSS beats excluding it
+//     even if its fix is sometimes bad.  Where the raw-GNSS filter navigates,
+//     the barometer was the only reference allowed (agreeing with a filter
+//     that fuses the same receiver proves nothing), so a flight whose
+//     transonic lockout released above 10.4 km never let GNSS vote.  Below
+//     the floor the rule above stands.  #1707 revisits this with flight data
+//     from the end-item receivers.
 //
 // NOT DONE, deliberately:
 //   * The horizontal is NOT held out.  The corruption measured is vertical,
@@ -108,6 +118,7 @@ enum class Reason : uint8_t {
     BaroAgreed   = 1,   // altitude agreed with the barometer
     FilterAgreed = 2,   // barometer could not vouch; agreed with the EKF
     BaroStuck    = 3,   // barometer judged stuck; GNSS is the only reference
+    AboveBaro    = 4,   // barometer lost to altitude (#1707); GNSS taken as is
 };
 
 struct Config {
@@ -115,6 +126,8 @@ struct Config {
     float    agree_frac       = 0.10f;   // band grows with |reference AGL|
     uint32_t agree_dwell_ms   = 1000;    // agreement held this long
     uint32_t max_fix_gap_ms   = 500;     // a longer gap between fixes restarts it
+                                         // (the gnss-sdr-dev board's own fix comes
+                                         // once a second: its caller passes 1500)
     float    pad_offset_tau_s = 5.0f;    // pad offset EMA time constant
     // Stuck-barometer mirror of MainDeployGate Layer 1 (same bars).
     float    stuck_baro_mps   = 1.0f;
@@ -134,6 +147,8 @@ struct Inputs {
     float    gnss_vel_u_mps = 0.0f;  // up-positive
     // Barometer.
     bool     baro_healthy  = false;  // fresh and 25-125 kPa (#257 predicate)
+    bool     baro_above_range = false;   // fresh, but under the 25 kPa floor:
+                                         // lost to altitude (#1707)
     bool     baro_locked   = false;  // transonic lockout
     float    baro_agl_m    = 0.0f;   // pressure altitude above the pad
     float    baro_rate_mps = 0.0f;   // baro KF rate, up-positive
@@ -306,6 +321,12 @@ inline void step(State& st, const Inputs& in, const Config& cfg = Config{})
         return;
     }
 
+    if (in.baro_above_range && in.gnss_fix_ok)
+    {
+        admit(Reason::AboveBaro, 0.0f, 0.0f);
+        return;
+    }
+
     if (!new_fix)
     {
         if (st.agreeing && (uint32_t)(in.now_ms - st.last_fix_ms) > cfg.max_fix_gap_ms)
@@ -353,7 +374,8 @@ inline void step(State& st, const Inputs& in, const Config& cfg = Config{})
 // vertical is in the EKF yet.  0 is what every older writer left in that pad
 // byte and means "not recorded".
 //   low nibble: 1 pad, 2 held out, 3 admitted (baro agreed),
-//               4 admitted (filter agreed), 5 admitted (barometer stuck)
+//               4 admitted (filter agreed), 5 admitted (barometer stuck),
+//               6 admitted (barometer lost to altitude, #1707)
 //   bit 7:      the barometer is judged stuck now (EKF not fusing it)
 // ---------------------------------------------------------------------------
 static constexpr uint8_t CODE_PAD          = 1;
@@ -361,6 +383,7 @@ static constexpr uint8_t CODE_HELD_OUT     = 2;
 static constexpr uint8_t CODE_BARO_AGREED  = 3;
 static constexpr uint8_t CODE_EKF_AGREED   = 4;
 static constexpr uint8_t CODE_BARO_STUCK   = 5;
+static constexpr uint8_t CODE_ABOVE_BARO   = 6;
 static constexpr uint8_t CODE_STUCK_BIT    = 0x80;
 
 inline uint8_t encode(const State& st)
@@ -371,6 +394,7 @@ inline uint8_t encode(const State& st)
     {
         c = (st.reason == Reason::FilterAgreed) ? CODE_EKF_AGREED
           : (st.reason == Reason::BaroStuck)    ? CODE_BARO_STUCK
+          : (st.reason == Reason::AboveBaro)    ? CODE_ABOVE_BARO
           :                                       CODE_BARO_AGREED;
     }
     if (st.baro_stuck) c |= CODE_STUCK_BIT;
@@ -389,6 +413,7 @@ inline void restore(State& st, uint8_t code, uint32_t now_ms)
         case CODE_BARO_AGREED: st.phase = Phase::Admitted; st.reason = Reason::BaroAgreed;   break;
         case CODE_EKF_AGREED:  st.phase = Phase::Admitted; st.reason = Reason::FilterAgreed; break;
         case CODE_BARO_STUCK:  st.phase = Phase::Admitted; st.reason = Reason::BaroStuck;    break;
+        case CODE_ABOVE_BARO:  st.phase = Phase::Admitted; st.reason = Reason::AboveBaro;    break;
         default: break;   // held out
     }
     if (st.phase == Phase::Admitted) st.admitted_ms = now_ms;

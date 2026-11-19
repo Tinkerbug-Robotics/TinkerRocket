@@ -563,6 +563,12 @@ static inline bool baroPressureInRange(float pa)
 {
     return pa > 25000.0f && pa < 125000.0f;
 }
+// Under that floor and above 0: a barometer lost to altitude, not a dead one
+// (#1707: GNSS then votes on apogee with no barometer cross-check).
+static inline bool baroAboveRange(float pa)
+{
+    return pa > 0.0f && pa <= 25000.0f;
+}
 static float pressure_alt_m = 0.0f;
 static float pressure_alt_rate_mps = 0.0f;
 // #834 item 4: pressure_alt_m/_rate come from a KF that FREE-RUNS at a
@@ -14403,6 +14409,23 @@ static void loop_fc()
                 have_bmp_si &&
                 baroPressureInRange(bmp_latest_si.pressure) &&  // 25-125 kPa (#257)
                 (uint32_t)(time_us() - bmp_latest_si.time_us) < BARO_STALE_TIMEOUT_US;
+            // Fresh and positive whatever its range (NaN compares false): the
+            // barometer still reads, above its 25 kPa floor too (V10
+            // pre-flight review; the quiescence landing path and #1707).
+            const bool baro_reading_fresh =
+                have_bmp_si && bmp_latest_si.pressure > 0.0f &&
+                (uint32_t)(time_us() - bmp_latest_si.time_us) < BARO_STALE_TIMEOUT_US;
+            // The gnss-sdr-dev board's own fix (4001 sub-type 2) comes once a
+            // second in the measurements mode it flies in, against the u-blox's
+            // 18 Hz: GnssAscentGate's 500 ms fix gap and the GPS voter's 500 ms
+            // freshness never let it qualify or count (V10 pre-flight review).
+            const bool gnss_fix_once_a_second =
+                sensor_collector_hw.gnssType() == GNSS_TYPE_SDR
+#if TR_RAW_NAV_AUTO
+                || RAW_IS_SDR   // remembered and flown on before it is heard
+#endif
+                ;
+            kinematics.setGpsApogeeFreshMs(gnss_fix_once_a_second ? 1500u : 500u);
             const bool ekf_healthy = ekf_initialized && ekf.isHealthy();
 
             // #259 applied to launch detection.  ism6_latest_si RETAINS its last
@@ -14450,6 +14473,7 @@ static void loop_fc()
                 ga.gnss_agl_m     = (float)(gnss_latest_si.alt - ref_alt_m);
                 ga.gnss_vel_u_mps = (float)gnss_latest_si.vel_u;
                 ga.baro_healthy   = baro_healthy;
+                ga.baro_above_range = baro_reading_fresh && baroAboveRange(bmp_latest_si.pressure);
                 ga.baro_locked    = mach_locked_out;
                 ga.baro_agl_m     = pressure_altitude_m;
                 ga.baro_rate_mps  = kinematics.d_alt_est_;
@@ -14469,7 +14493,9 @@ static void loop_fc()
 
                 const GnssAscentGate::Phase was_phase = gnss_admit_state.phase;
                 const bool was_stuck = gnss_admit_state.baro_stuck;
-                GnssAscentGate::step(gnss_admit_state, ga);
+                GnssAscentGate::Config ga_cfg;
+                if (gnss_fix_once_a_second) ga_cfg.max_fix_gap_ms = 1500;   // two fixes a second apart
+                GnssAscentGate::step(gnss_admit_state, ga, ga_cfg);
 
                 const float t_flight_s = (float)(now_ms - launch_time_millis) * 1e-3f;
                 if (was_stuck != gnss_admit_state.baro_stuck)
@@ -14490,6 +14516,11 @@ static void loop_fc()
                         case GnssAscentGate::Reason::BaroStuck:
                             ESP_LOGW(TAG, "[GNSS] Vertical admitted to the EKF at T+%.2f s: "
                                           "the barometer is stuck, GNSS is the reference",
+                                     (double)t_flight_s);
+                            break;
+                        case GnssAscentGate::Reason::AboveBaro:
+                            ESP_LOGW(TAG, "[GNSS] Vertical admitted at T+%.2f s with no cross-check: "
+                                          "the barometer is lost to altitude (under 25 kPa, #1707)",
                                      (double)t_flight_s);
                             break;
                         case GnssAscentGate::Reason::FilterAgreed:
@@ -14564,7 +14595,8 @@ static void loop_fc()
                                        baro_healthy,
                                        ism6_fresh_kc,    // #1108 imu_healthy
                                        // GnssAscentGate: no apogee vote until admitted
-                                       GnssAscentGate::gnssVotes(gnss_admit_state));
+                                       GnssAscentGate::gnssVotes(gnss_admit_state),
+                                       baro_reading_fresh);
 #if TR_RAW_NAV_RIG_REPLAY
             // The rig replay of the mosaic-only image: the navigation state
             // the voters just read, its attitude too, at the replayed flight's
@@ -14695,7 +14727,8 @@ static void loop_fc()
                                        baro_healthy,
                                        ism6_fresh_kc,    // #1108 imu_healthy
                                        // GnssAscentGate: no apogee vote until admitted
-                                       GnssAscentGate::gnssVotes(gnss_admit_state));
+                                       GnssAscentGate::gnssVotes(gnss_admit_state),
+                                       baro_reading_fresh);
 #endif
 #if ((defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)) && !(defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID)
             // The gnss-sdr-dev board's ignition cue (sdr_phase_policy.h

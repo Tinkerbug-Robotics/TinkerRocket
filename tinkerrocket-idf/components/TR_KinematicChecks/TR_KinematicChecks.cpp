@@ -69,7 +69,11 @@ constexpr float    GPS_VEL_APOGEE_DESCENT_MPS = 1.0f;
 // (~55 ms/fix, worst observed gap ~136 ms), so a fix older than this is stale
 // for an apogee decision (a 5 s-old fix would be from the launch rail).  Much
 // tighter than the landing vote's 5 s gate, which is a slower ground event.
+// The default of gps_apogee_fresh_ms_; a receiver whose fix comes less often
+// gets a longer one from its caller (setGpsApogeeFreshMs: the gnss-sdr-dev
+// board's once-a-second fix, 1.5 s).
 constexpr uint32_t GPS_APOGEE_FRESH_MS     = 500;
+static_assert(GPS_APOGEE_FRESH_MS == 500, "TR_KinematicChecks.h's gps_apogee_fresh_ms_ default is 500");
 
 // Launch accel-only fallback (#258, ungated in #1102): latch launch on
 // sustained high-G alone -- LAUNCH_ACCEL_FALLBACK_COUNT consecutive samples
@@ -433,7 +437,8 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
                                          bool  ekf_healthy,
                                          bool  baro_healthy,
                                          bool  imu_healthy,
-                                         bool  gnss_may_vote)
+                                         bool  gnss_may_vote,
+                                         bool  baro_reading_fresh)
 {
     // Snapshot apogee_flag so the rising-edge reset below sees the
     // state *before* this tick's apogee voting fires (#192).
@@ -722,7 +727,14 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         // band: that is what lets a rocket that landed hundreds of metres off
         // the pad reference — never able to satisfy baro_stable — still finish
         // its flight.
-        const bool quiescent_alt_ok = (!baro_healthy ||
+        //
+        // "Unusable" means dead or stale, not out of range (V10 pre-flight
+        // review): above about 10.4 km the reading is under the 25 kPa floor
+        // and baro_healthy goes false, but the barometer still reads, and a
+        // steady drogue descent up there passes both IMU gates.  Without the
+        // altitude test the count could reach 30 and call LANDED in the air,
+        // making the main safe.  So a fresh reading keeps the test.
+        const bool quiescent_alt_ok = (!(baro_healthy || baro_reading_fresh) ||
                                        landing_altitude_change < BARO_STABLE_DELTA_MAX);
         const bool quiescent_pass = (apogee_flag &&
                                      imu_healthy &&   // #1137: both gyro and
@@ -972,10 +984,11 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
             // sustained descending samples, so a transient can't fire it.  Being non-EKF, it restores
             // voter diversity exactly when the EKF voters and/or baro are at
             // risk — baro mach-locked-out (the #262 common-mode case) or a
-            // degraded EKF.  Gated on GPS_APOGEE_FRESH_MS freshness (500 ms
-            // since #262 — this comment used to claim 5 s).
+            // degraded EKF.  Gated on freshness: gps_apogee_fresh_ms_,
+            // GPS_APOGEE_FRESH_MS (500 ms since #262 — this comment used to
+            // claim 5 s) unless the caller set the receiver's own.
             const bool gps_fresh = gps_available_ &&
-                                   (millis() - last_gps_time_ms_) < GPS_APOGEE_FRESH_MS;
+                                   (millis() - last_gps_time_ms_) < gps_apogee_fresh_ms_;
             // Not admitted yet (GnssAscentGate): not a voter at all, so it
             // neither passes nor raises the bar for the others.
             if (gps_fresh && gnss_may_vote)

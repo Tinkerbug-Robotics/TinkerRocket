@@ -885,6 +885,45 @@ TEST_F(KinematicChecksTest, Recovery_SeededBeforeApogee_QuiescenceStillCannotLat
     EXPECT_FALSE(kc.alt_landed_flag);
 }
 
+// V10 pre-flight review: above about 10.4 km the barometer reads under its
+// 25 kPa floor and baro_healthy goes false, but it still reads.  A steady
+// drogue descent passes both quiescence IMU gates up there; only the altitude
+// test stops the count from calling LANDED in the air (and safing the main).
+namespace {
+void driftDownQuietly(TR_KinematicChecks& kc, bool baro_reading_fresh, int seconds)
+{
+    float alt = 14000.0f;
+    for (int second = 0; second < seconds; second++) {
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(1000 + second * 1000 + i * 2);
+            alt -= 0.4f;                                    // 20 m/s under the drogue
+            float pos[3] = {0, 0, alt};
+            float vel[3] = {0, 0, -20.0f};
+            kc.kinematicChecks(alt, 9.80665f, pos, vel, 0.0f, true, 0.0f, false,
+                               -1.0f, true, false, 0.0f, true,
+                               /*baro_healthy*/false, /*imu_healthy*/true, true,
+                               baro_reading_fresh);
+        }
+    }
+}
+}  // namespace
+
+TEST_F(KinematicChecksTest, Quiescence_AboveTheBarometersRange_KeepsTheAltitudeTest) {
+    kc.launch_flag = true;
+    kc.apogee_flag = true;
+    driftDownQuietly(kc, /*baro_reading_fresh*/true, 90);
+    EXPECT_FALSE(kc.quiescent_flag) << "the barometer still reads the descent";
+    EXPECT_FALSE(kc.alt_landed_flag);
+}
+
+TEST_F(KinematicChecksTest, Quiescence_DeadBarometer_StillLands) {
+    // #824's case unchanged: with no reading at all the IMU decides.
+    kc.launch_flag = true;
+    kc.apogee_flag = true;
+    driftDownQuietly(kc, /*baro_reading_fresh*/false, 40);
+    EXPECT_TRUE(kc.quiescent_flag);
+}
+
 TEST_F(KinematicChecksTest, AltKF_ConvergesToMeasurement) {
     // Feed constant altitude measurements
     for (int i = 0; i < 500; i++) {

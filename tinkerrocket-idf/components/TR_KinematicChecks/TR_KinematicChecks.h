@@ -33,7 +33,19 @@ public:
                          // false the GPS voter neither counts toward the
                          // quorum nor accumulates.  Default keeps every
                          // caller that predates the gate unchanged.
-                         bool  gnss_may_vote = true);
+                         bool  gnss_may_vote = true,
+                         // A fresh barometer reading in or out of its range:
+                         // the extended-quiescence landing path keeps its
+                         // altitude test while the barometer still reads,
+                         // even above its 25 kPa floor (V10 pre-flight
+                         // review).  False keeps the old rule (the test only
+                         // while baro_healthy).
+                         bool  baro_reading_fresh = false);
+
+    // How old a GNSS fix may be and still count the GPS apogee voter as
+    // available: 500 ms by default, longer for a receiver whose fix comes
+    // less often (the gnss-sdr-dev board's once a second).
+    void setGpsApogeeFreshMs(uint32_t ms) { gps_apogee_fresh_ms_ = ms; }
 
     bool launch_flag;
     // #1102: which detector latched launch_flag, and what the barometer claimed
@@ -92,6 +104,7 @@ private:
     uint8_t gps_apogee_count_;
     bool gps_available_;
     uint32_t last_gps_time_ms_;
+    uint32_t gps_apogee_fresh_ms_ = 500;   // = GPS_APOGEE_FRESH_MS (the .cpp); setGpsApogeeFreshMs
 
     // Baro settle window after burnout (7/05 V2 F1): thrust tail-off can snap
     // the bay pressure back from its boost-suction offset, dropping indicated

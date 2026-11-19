@@ -1240,6 +1240,7 @@ SNAPSHOT_GNSS_ADMISSION = {
     3: "admitted_baro_agreed",
     4: "admitted_filter_agreed",
     5: "admitted_baro_stuck",
+    6: "admitted_above_baro",    # the barometer lost to altitude (#1707)
 }
 # The EKF's 15 error states, in P_diag order (TR_GpsInsEKF.cpp:96-108): position,
 # velocity, attitude, accel bias, gyro bias — three each.  Named here so the
