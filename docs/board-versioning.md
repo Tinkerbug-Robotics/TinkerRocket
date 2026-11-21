@@ -30,7 +30,7 @@ that cannot include it — the hash changes when you commit. Tags avoid that.
 tinker-mantis-v<semver>                      v10.0.0 ordered; V11 in work. Earlier: rocket-computer-v9.0.0
 tinker-beetle-v<semver>                      V2 in work. Earlier: rocket-computer-mini-v1.0.1
 tinker-base-v<semver>                        never fabricated, no tag yet
-lora-daughterboard-v<semver>                 v3.0.0 fabricated; V4 laid out, not yet tagged
+lora-daughterboard-v<semver>                 v4.0.0 ordered (4a7904c3) and built; V5 in work. Earlier: v3.0.0
 gnss-sam10m8-18mm-hv-v3.0.0
 gnss-px1105r-18mm-hv-v1.0.0                  the PX1105R version of the SAM-M10Q carrier; V1 (4-layer, 1.2 mm) released 2026-10-12, not yet fabricated
 gnss-px100-18mm-hv-v1.0.0                    the PX100 version of the carrier; V1 (4-layer, 1.6 mm, SMA-fed prototype) released and ordered as bare boards 2026-10-23, not yet fabricated; V2 in work
@@ -121,14 +121,15 @@ every earlier one is 8 MB.**
 | rocket-computer (legacy) | V8 | `W25Q64` | 8 MB | predates the swap; confirmed by the board owner 2026-08-24 ("latest version only is 16 MB, others are 8"). No V8 artwork was ever committed, so there is no BOM to check it against |
 | tinker-mantis (was rocket-computer) | V9 (tag `rocket-computer-v9.0.0`) | U13 / U16 `W25Q128JVSIQ` | 16 MB | tag BOM. **Measured** at the first V9's bring-up, 2026-08-22: its out computer (`9c:13:9e:28:ab:5c`) reads `ef:4018` (Winbond, 16 MB), and a V9 FC logged `Detected size(16384k)` against an 8 MB header. (The row used to name `GD25Q128ESIG`, which reached the BOM on 2026-08-15, after this fab.) |
 | tinker-mantis | V10 (tag `tinker-mantis-v10.0.0`, ordered) | U13 / U16 `W25Q128JVYIQ` | 16 MB | tag BOM; the 24-ball WLCSP since 2026-09-13 (#1452), after `GD25Q128ESIG` from 2026-08-15. Ordered, not yet built. **Unmeasured** |
-| tinker-mantis | V11 (in work) | U13 / U16 `W25Q128JVYIQ` | 16 MB | BOM, unchanged from V10. **Unmeasured** |
+| tinker-mantis | V11 (in work) | out computer: none, `U15` is an `ESP32-S3FH4R2`; flight computer: U16 `W25Q128JVYIQ` | OC 4 MB in the package; FC 16 MB | BOM (#1684). The out computer's image still declares 8 MB, the fatal direction, so V11 needs its own 4 MB partition table before an out computer image goes on one. **Unmeasured** |
 | base-station (legacy) | V1, V2 | `W25Q64` | 8 MB | BOM history + confirmed by the board owner 2026-08-24 ("latest version only is 16 MB, others are 8") |
 | base-station (legacy) | V3 (PCB V5/V6) | U1 `GD25Q128ESIG` | 16 MB | BOM |
 | lora-daughterboard | as-built V3 | U22 `W25Q64JVXGIQ` | 8 MB | the board the firmware was written against; **measured** on two articles — `E0:72:A1:CA:F6:7C` and `E0:72:A1:CA:F6:48`, both GigaDevice `c8:6517` |
 | lora-daughterboard | V3 (tag `lora-daughterboard-v3.0.0`) | U22 `W25Q128JVSIQ` | 16 MB | U22 at the tag. **Measured** on `E0:72:A1:CA:F6:40`, a board from this fab: `flash-id` read `ef:4018` (Winbond, 16 MB) on 2026-08-23, and on 2026-08-27 it flashed and booted `radio up, listening at 915.0 MHz SF8`. (The row used to name `GD25Q128ESIG`, a BOM-only change on 2026-08-15, after this fab. It also used to say "first article is unflashable, so untested"; that article is one dead board, not the revision.) |
-| lora-daughterboard | V4 (2026-09-28) | U22 `W25Q128JVYIQ` | 16 MB | BOM and layout; the Beetle/Mantis 24-ball WLCSP part, placed and routed. No V4 board has been built yet. **Unmeasured** |
+| lora-daughterboard | V4 (tag `lora-daughterboard-v4.0.0`, ordered) | U22 `W25Q128JVYIQ` | 16 MB | tag BOM; the Beetle/Mantis 24-ball WLCSP part. **Measured** on the first V4 board (`9C:13:9E:28:9E:7C`) on 2026-11-14: `esptool flash-id` reads `EF 4018` (Winbond, 16 MB), and `radio_board` boots with the radio listening at 915.0 MHz SF8 |
+| lora-daughterboard | V5 (in work) | none: `U28` is an `ESP32-S3FH4R2` | 4 MB in the package | #1684. `radio_board` declares 4 MB with PSRAM off, so its image fits. No V5 board has been built. **Unmeasured** |
 | tinker-beetle (was rocket-computer-mini) | V1 (tag `rocket-computer-mini-v1.0.1`) | U13 / U33 `W25Q128JVYIQ` | 16 MB | BOM, the 24-ball WLCSP. **Measured** 2026-09-23 on the second board's out computer (`9C:13:9E:28:9E:88`): `esptool flash-id` reads JEDEC `EF 4018` (Winbond, 16 MB). The flight computer's `U33` has not been read. (The row used to name `GD25Q128ESIG` on `U13` alone and say no hardware existed.) |
-| tinker-beetle | V2 (in work) | U13 / U33 `W25Q128JVYIQ` | 16 MB | BOM, unchanged from V1. **Unmeasured** |
+| tinker-beetle | V2 (in work) | none: `U15` and `U32` are `ESP32-S3FH4R2`s | 4 MB in the package, each | BOM (#1684). Both images still declare 8 MB, the fatal direction, so V2 needs 4 MB partition tables before any image goes on one. **Unmeasured** |
 | tinker-base (was base-station-mini) | V1 (not fabricated) | U1 `W25Q128JVYIQ` | 16 MB | BOM; the Beetle/Mantis WLCSP part since 2026-09-27 (was `GD25Q128ESIG`). **Unmeasured** |
 
 **How firmware handles it — changed 2026-09-09 (#916).** Each project now
@@ -197,6 +198,20 @@ takes effect where someone would look for it. Any root `projects/*/sdkconfig`
 left over from before is now ignored and can be deleted.
 
 ## Current state
+
+**2026-11-21 — lora-daughterboard V4 tagged as ordered; the in-work LoRa moves to
+V5.** The V4 was plotted on 2026-09-28 from 4a7904c3 (#1543) and ordered from
+that package. Its README asked for `lora-daughterboard-v4.0.0` on that commit at
+order time, and the tag was never made. It is made now, on 4a7904c3: the board
+file there is byte-identical to the one plotted (md5 50b5a735), and the first V4
+board came up on 2026-11-14. The board was worked on after the order, with copper
+changes: #1684 (2026-10-30) put an ESP32-S3FH4R2 on `U28` and removed the boot
+flash `U22` and its `C18`, but kept the title block at V4, so two different boards
+claimed V4. A fabricated revision is superseded, so the in-work board moves to the
+next major: the title block now reads V5, and the silkscreen follows through
+`${REVISION}`. `FABRICATION-NOTES.md` still describes V4 in its order block;
+revise it before V5 is ordered. `radio_board` needs no board flag: it already
+fits 4 MB with PSRAM off.
 
 **2026-10-10 — Tinker-Mantis V10 tagged as ordered; the in-work Mantis and Beetle
 move to V11 and V2.** The Mantis V10 was plotted on 2026-09-30 from 86aa08de

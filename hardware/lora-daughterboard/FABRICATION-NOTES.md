@@ -4,7 +4,7 @@
 
 This file exists because **none of it can travel in the design files.** Via protection, surface finish and the deliberate plane void were each verified absent from the gerbers, the `.gbrjob`, the Excellon drill file, IPC-2581 *and* ODB++. Written text is the only channel to the fab.
 
-**Status 2026-10-29: V4, not yet built.** V4 has no external boot flash: `U28` is an ESP32-S3FH4R2, with 4 MB of flash and 2 MB of PSRAM in the package, so the WLCSP NOR `U22` and its 100 nF `C18` are gone. The radio firmware already fits 4 MB with PSRAM off. `R79` (GPIO0 pull-up) and `R80` (radio receive-enable pull-down) are new. No V4 board has been built yet. The block below still describes `U22`: its stencil apertures, the 0.08 mm foil they forced and the via counts. Revise it once the layout has lost `U22`, before V4 is ordered.
+**Status 2026-11-21: V5 in work; V4 was ordered and built.** V4 as ordered is tag `lora-daughterboard-v4.0.0` (4a7904c3, plotted 2026-09-28): the 16 MB WLCSP boot flash `U22` with its 100 nF `C18`, plus `R79` (GPIO0 pull-up) and `R80` (radio receive-enable pull-down). The first V4 board came up on 2026-11-14. V5, the board in work, has no external boot flash: `U28` is an ESP32-S3FH4R2, with 4 MB of flash and 2 MB of PSRAM in the package, so `U22` and `C18` are gone (#1684). The radio firmware already fits 4 MB with PSRAM off. No V5 board has been built. The layout has lost `U22`, but the block below still describes V4: `U22`'s stencil apertures, the 0.08 mm foil they forced and the via counts. Revise it before V5 is ordered.
 
 ---
 

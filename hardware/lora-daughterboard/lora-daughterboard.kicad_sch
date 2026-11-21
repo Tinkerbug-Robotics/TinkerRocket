@@ -5,7 +5,7 @@
 	(uuid "ae61c2c4-72e9-4776-93ae-2e716b9dc70f")
 	(paper "A4")
 	(title_block
-		(rev "V4")
+		(rev "V5")
 	)
 	(lib_symbols
 		(symbol "Connector_Generic:Conn_01x04"
