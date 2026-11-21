@@ -199,7 +199,7 @@ This is V2. The title blocks on all four sheets and on the PCB say V2. The
 PCB caught up with the schematic on 2026-10-30; see *PCB* below.
 
 - **`U3` is an ESP32-S3FH4R2**, with 4 MB flash and 2 MB PSRAM in the package.
-  The Beetle V2, the Mantis V11 out computer and the LoRa daughterboard V4 moved
+  The Beetle V2, the Mantis V11 out computer and the LoRa daughterboard V5 moved
   to the same part on the same day. The symbol and the QFN-56 footprint are
   unchanged.
 - **`U1`, the WLCSP boot NOR, is gone,** along with its 100 nF `C1` and the
