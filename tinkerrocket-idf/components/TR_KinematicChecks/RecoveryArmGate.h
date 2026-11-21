@@ -168,8 +168,10 @@ struct Config {
     uint32_t refute_hold_ms   = 30000;
 
     // A restored flight older than the FC's own flight timeout is over by
-    // definition, whatever the sensors say.
-    uint32_t max_flight_ms    = 600000;  // = FC MAX_FLIGHT_TIME_MS
+    // definition, whatever the sensors say.  The timeout is 600 s, but up to
+    // this ceiling while a deployment channel is still owed after apogee (V10
+    // pre-flight review, 2026-11-18), so a restore may be that old.
+    uint32_t max_flight_ms    = 1800000;  // = FC MAX_FLIGHT_TIME_CEILING_MS
 
     // Open must PERSIST this long before the apogee latch is handed to the
     // trigger conditions.  A second checkpoint on the same evidence, so a

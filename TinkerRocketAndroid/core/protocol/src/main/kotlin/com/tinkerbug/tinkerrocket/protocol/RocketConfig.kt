@@ -52,7 +52,24 @@ public data class RocketGuidanceExtras(
     val kpPos: Float,
     val kdVel: Float,
     val guidanceLaw: Int,
+    /**
+     * The flight computer's own guidance on/off (`"gen"`), sent only while its
+     * rail is up.  null = not vouched for by the flight computer: rail off, or
+     * an out computer that predates the key.  Unlike [RocketConfig.guidanceEnabled]
+     * (the `config` frame's `"ge"`, the out computer's own copy) this is what
+     * the rocket will fly — GTV Blue, 2026-11-01, flew with guidance off while
+     * the app showed it on.
+     */
+    val enabled: Boolean? = null,
 )
+
+/**
+ * The guidance tilt limits the flight computer holds (the tail of cmd 65):
+ * guidance latches off for the rest of the flight above [boostDeg] off
+ * vertical before burnout, [coastDeg] after.  Its own `config_tilt` frame —
+ * config_guid has no room left under the notify limit.
+ */
+public data class GuidanceTilt(val boostDeg: Float, val coastDeg: Float)
 
 /** One reported roll-profile waypoint (#915). */
 public data class ReportedRollWaypoint(val timeS: Float, val angleDeg: Float)
@@ -148,6 +165,11 @@ public data class RocketConfig(
      * must not mistake them for a report.  Not a wire field.
      */
     val rollGainsReported: Boolean = false,
+    /**
+     * The `config` frame's `"ge"`: the out computer's copy — its NVS from the
+     * last cmd 32 until the flight computer's frames flow.  Not the flight
+     * computer's word; see [guidanceEnabledOnFlightComputer].
+     */
     val guidanceEnabled: Boolean = false,       // "ge"
     val cameraType: Int = 2,                    // u8, "camt"
     /**
@@ -218,6 +240,13 @@ public data class RocketConfig(
     val servoExtras: RocketServoExtras? = null,
     val guidanceExtras: RocketGuidanceExtras? = null,
     /**
+     * `config_tilt`.  null = not reported: the frame comes only from a flight
+     * computer whose report carries the limits, so an older one never sends
+     * it and flies its compiled limits.  Not one of the groups
+     * [configReportGroupsMissing] waits on, for that reason.
+     */
+    val guidanceTilt: GuidanceTilt? = null,
+    /**
      * null = not reported.  EMPTY = reported, and the rocket is flying
      * rate-only.  The two must not be conflated: one means "we don't know",
      * the other means "we know, and there are none".
@@ -244,6 +273,14 @@ public data class RocketConfig(
      */
     public val cameraIsFlightComputerSourced: Boolean
         get() = cameraSource == CameraTypeSource.FLIGHT_COMPUTER
+
+    /**
+     * Guidance on/off as the flight computer holds it — the only value the
+     * profile may adopt or a screen may present as the rocket's.  null = not
+     * vouched for (see [RocketGuidanceExtras.enabled]).
+     */
+    public val guidanceEnabledOnFlightComputer: Boolean?
+        get() = guidanceExtras?.enabled
 
     /**
      * True while any of the three #915 config-report groups is still missing.
@@ -461,6 +498,7 @@ public data class ConfigMessage(
             // "this rocket reports nothing" every readback.
             servoExtras = previous?.servoExtras,
             guidanceExtras = previous?.guidanceExtras,
+            guidanceTilt = previous?.guidanceTilt,
             rollWaypoints = previous?.rollWaypoints,
         )
     }
@@ -650,7 +688,20 @@ public object ConfigGuidMessage {
             targetMode = tm.coerceIn(0, 0xFF).toInt(),
             targetE = te, targetN = tn, targetAltM = ta,
             kpPos = kp, kdVel = kd, guidanceLaw = law.coerceIn(0, 0xFF).toInt(),
+            enabled = JsonBridging.nsBool(json, "gen"),
         )
+    }
+}
+
+/**
+ * Parsed `"type":"config_tilt"` readback — the guidance tilt limits
+ * (`"gtlb"` boost, `"gtlc"` coast).  Both keys are required.
+ */
+public object ConfigTiltMessage {
+    public fun parse(json: JsonObject): GuidanceTilt? {
+        val boost = JsonBridging.parseFloatIos(json, "gtlb") ?: return null
+        val coast = JsonBridging.parseFloatIos(json, "gtlc") ?: return null
+        return GuidanceTilt(boostDeg = boost, coastDeg = coast)
     }
 }
 

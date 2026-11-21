@@ -173,6 +173,10 @@ MSG_ISM6HG256         = 0xA2
 MSG_BMP585            = 0xA3
 MSG_MMC5983MA         = 0xA4
 MSG_FC_STATUS         = 0x92  # FcStatusData: the FC's own camera truth, 5 Hz (#1154 item 4)
+# FcStatusData v2 (#1409): scap_mv carries V_SCAP when FCS_SCAP_SENSE is set
+# (the V10/V11 flight computer reads the hold-up cap); 0xFFFF = no reading.
+FCS_SCAP_SENSE        = 0x04
+FCS_SCAP_NO_READING   = 0xFFFF
 MSG_NON_SENSOR        = 0xA5
 MSG_POWER             = 0xA6
 MSG_START_LOGGING     = 0xA7
@@ -256,7 +260,7 @@ MSG_EXPECTED_LEN = {
     MSG_MMC5983MA:         16,
     MSG_IIS2MDC:           10,   # IIS2MDCData (new PCB rev)
     MSG_SNAPSHOT:          224,  # FlightSnapshotData (v2-v5 are all 224 B; version gates meaning, not size)
-    MSG_FC_STATUS:         5,    # FcStatusData: u32 time_us + u8 flags (#1154 item 4)
+    MSG_FC_STATUS:        (5, 7),  # FcStatusData v1: u32 time_us + u8 flags (#1154 item 4) / v2: + u16 scap_mv (#1409)
     MSG_NON_SENSOR:        None,  # 42 (legacy) or 43 (with pyro_status byte)
     MSG_POWER:            (10, 14),  # #850: v2 appends cam_ma + servo_ma
     MSG_START_LOGGING:     None,  # variable / no payload
@@ -490,24 +494,103 @@ def sbf_epoch_rate(blocks, number=SBF_MEAS_EPOCH):
     return len(stamps), span_s, (len(stamps) - 1) / span_s
 
 
+# SkyTraq binary, the V9 PX1105R image's (TR_GNSSReceiverPX1105R_Serial):
+# each frame logged whole, A0 A1, the body's length (u16 big-endian), the body
+# (its first byte the message ID), the XOR of the body, 0D 0A. Numbers in the
+# bodies are big-endian. The ones the image streams at 20 Hz: 0xE5 raw
+# measurements (body [3..4] the receiver's GPS week, [5..8] its time of week,
+# ms, [9..10] the measurement period, ms) and 0xDF its navigation state; 0xE7 /
+# 0xE8 channel status at 1 Hz; the navigation subframes 0xE0 (GPS), 0xE2
+# (BeiDou D1), 0xE6 (Galileo I/NAV); 0x83 / 0x84 ACK / NACK and the replies to
+# the setup's queries.
+SKYTRAQ_MSG_NAMES = {
+    0xE5: "ext raw meas (E5)", 0xDF: "nav state (DF)", 0xE7: "channel status (E7)",
+    0xE8: "elev/azimuth (E8)", 0xE0: "GPS subframe (E0)", 0xE2: "BDS D1 subframe (E2)",
+    0xE6: "GAL I/NAV page (E6)", 0x83: "ACK", 0x84: "NACK", 0x80: "sw version (80)",
+}
+SKYTRAQ_EXT_RAW = 0xE5
+
+
+def skytraq_frame_body(frame):
+    """A whole SkyTraq frame's body (from its message ID), or None if the
+    frame does not check: its sync, its length, its XOR and its 0D 0A."""
+    if len(frame) < 8 or frame[:2] != b"\xa0\xa1":
+        return None
+    n = (frame[2] << 8) | frame[3]
+    if n == 0 or len(frame) != n + 7 or frame[-2:] != b"\r\n":
+        return None
+    body = frame[4:4 + n]
+    cs = 0
+    for x in body:
+        cs ^= x
+    return body if cs == frame[4 + n] else None
+
+
+def skytraq_e5_rate(frames):
+    """[(time_us, frame)] -> (epochs, span_s, rate_hz) of 0xE5 by the
+    receiver's own time stamps (week and time of week), as sbf_epoch_rate."""
+    stamps = set()
+    for _, f in frames:
+        b = skytraq_frame_body(f)
+        if b is not None and b[0] == SKYTRAQ_EXT_RAW and len(b) >= 14:
+            week, tow = struct.unpack_from(">HI", b, 3)
+            stamps.add(week * SBF_WEEK_MS + tow)
+    stamps = sorted(stamps)
+    if len(stamps) < 2:
+        return len(stamps), None, None
+    span_s = (stamps[-1] - stamps[0]) / 1000.0
+    return len(stamps), span_s, (len(stamps) - 1) / span_s
+
+
 def split_gnss_raw_frames(frames):
     """join_gnss_rtcm()'s frames -> {"rtcm3": [(time_us, frame)],
-    "sbf": [(time_us, block)], "bad": count}, each list in log order.
+    "sbf": [(time_us, block)], "skytraq": [(time_us, frame)], "bad": count},
+    each list in log order.
 
     A frame that starts 0xD3 is RTCM3 (its CRC-24Q is the RTCM3 reader's to
     check: extract_gnss_rtcm.frame_ok); one that starts "$@" and checks
-    (sbf_block_ok) is an SBF block. Anything else, an SBF block that fails
-    included, is counted as bad.
+    (sbf_block_ok) is an SBF block; one that starts A0 A1 and checks
+    (skytraq_frame_body) is a SkyTraq frame. Anything else, an SBF block or a
+    SkyTraq frame that fails included, is counted as bad.
     """
-    out = {"rtcm3": [], "sbf": [], "bad": 0}
+    out = {"rtcm3": [], "sbf": [], "skytraq": [], "bad": 0}
     for t, f in frames:
         if f[:1] == b"\xd3":
             out["rtcm3"].append((t, f))
         elif sbf_block_ok(f):
             out["sbf"].append((t, f))
+        elif skytraq_frame_body(f) is not None:
+            out["skytraq"].append((t, f))
         else:
             out["bad"] += 1
     return out
+
+
+def print_gnss_skytraq_summary(recs):
+    """Print what a log's GNSS_RTCM records hold as SkyTraq frames (the V9
+    PX1105R image's): the messages by ID, 0xE5's rate over the receiver's own
+    time stamps, and what the link lost. Prints nothing for a log without them."""
+    frames, dropped = join_gnss_rtcm(recs)
+    raw = split_gnss_raw_frames(frames)
+    if not raw["skytraq"]:
+        return
+    counts = {}
+    for _, f in raw["skytraq"]:
+        mid = f[4]
+        name = SKYTRAQ_MSG_NAMES.get(mid, f"message 0x{mid:02X}")
+        counts[name] = counts.get(name, 0) + 1
+    print("  GNSS receiver frames (SkyTraq, PX1105R):")
+    print(f"    {len(recs):,} records -> {len(raw['skytraq']):,} frames")
+    print(f"    Dropped: {dropped:,} incomplete (a record lost), "
+          f"{raw['bad']:,} bad (sync, length, XOR or end)")
+    for name, n in sorted(counts.items(), key=lambda x: (-x[1], x[0])):
+        print(f"    {name:<24s} {n:>8,}")
+    epochs, span_s, rate_hz = skytraq_e5_rate(raw["skytraq"])
+    if rate_hz is None:
+        print(f"    0xE5: {epochs} epochs, too few for a rate")
+    else:
+        print(f"    0xE5: {epochs:,} epochs over {span_s:.2f} s of receiver time -> {rate_hz:.2f} Hz")
+    print()
 
 
 def print_gnss_sbf_summary(recs):
@@ -1157,6 +1240,7 @@ SNAPSHOT_GNSS_ADMISSION = {
     3: "admitted_baro_agreed",
     4: "admitted_filter_agreed",
     5: "admitted_baro_stuck",
+    6: "admitted_above_baro",    # the barometer lost to altitude (#1707)
 }
 # The EKF's 15 error states, in P_diag order (TR_GpsInsEKF.cpp:96-108): position,
 # velocity, attitude, accel bias, gyro bias — three each.  Named here so the
@@ -1177,6 +1261,18 @@ FMT_GUIDANCE_19 = '<I hhhhhhh B'
 FMT_GUIDANCE_15 = '<I hhhhh B'  # legacy: time, accel_n, accel_e, lateral, los, closing, flags
 GUID_FLAG_ACTIVE  = (1 << 0)
 GUID_FLAG_BURNOUT = (1 << 1)
+# Why guidance is not steering (GF_* in flight_computer/main/guidance_gate_policy.h).
+# Frames with ACTIVE clear are the ~10 Hz status stream sent while guidance is
+# enabled in flight but not steering; their command fields are 0.  Older logs
+# never set these bits and never sent status frames.
+GUID_FLAG_REASONS = {
+    "tilt_latched": (1 << 2),   # tilt-limit latch tripped (for the flight)
+    "too_slow":     (1 << 3),   # speed at or below the guidance floor
+    "ekf_not_ok":   (1 << 4),   # filter never initialised, or not healthy
+    "no_origin":    (1 << 5),   # no datum, or no launch origin (e.g. after a reboot)
+    "no_heading":   (1 << 6),   # magnetometer not healthy at launch (for the flight)
+    "fins_held":    (1 << 7),   # roll delay, speed gate, reboot settle or stale IMU
+}
 
 SYNC = b'\xAA\x55\xAA\x55'
 
@@ -1852,13 +1948,23 @@ def parse_binary_file(filepath):
                         "servo_a":  (fields[5] / 1000.0) if v2 else None,
                     })
 
-            elif msg_type == MSG_FC_STATUS and msg_len == 5:
+            elif msg_type == MSG_FC_STATUS and msg_len in (5, 7):
                 # #1154 item 4: the FC's ACTUAL camera state, as distinct from
                 # the out computer's camera_recording_requested, which is only
                 # what it last asked for. The two disagreeing is the whole
                 # reason this message exists — the FC can stop the camera on
                 # its own and, before this, said so to nobody.
-                t_us, fcs_flags = struct.unpack('<I B', payload)
+                t_us, fcs_flags = struct.unpack_from('<I B', payload, 0)
+                scap_v = None
+                if msg_len == 7:
+                    # #1409 (v2): the hold-up supercap voltage where the sense
+                    # line is the flight computer's (Tinker-Mantis V10/V11),
+                    # read once a second and repeated in every frame. Only
+                    # with FCS_SCAP_SENSE (0x04), and 0xFFFF = its ADC did not
+                    # answer. None on v1 frames and on every other board.
+                    (scap_mv,) = struct.unpack_from('<H', payload, 5)
+                    if (fcs_flags & FCS_SCAP_SENSE) and scap_mv != FCS_SCAP_NO_READING:
+                        scap_v = scap_mv / 1000.0
                 records["FcStatus"].append({
                     "time_us": t_us,
                     # "Engaged" is wider than "recording": true from the moment
@@ -1871,6 +1977,7 @@ def parse_binary_file(filepath):
                     # velocity and pitch apogee votes are withheld until the
                     # next launch. Always False on every other image.
                     "fc_raw_votes_withheld": bool(fcs_flags & 0x02),
+                    "scap_v": scap_v,
                 })
             elif msg_type == MSG_SNAPSHOT and msg_len == SNAPSHOT_LEN:
                 # #752: the FC's crash-recovery snapshot, 10 Hz through INFLIGHT.
@@ -2069,6 +2176,7 @@ def parse_binary_file(filepath):
                     "yaw_fin_cmd":    yaw_fin_cmd,        # deg (None on legacy)
                     "active":         bool(gflags & GUID_FLAG_ACTIVE),
                     "burnout":        bool(gflags & GUID_FLAG_BURNOUT),
+                    **{k: bool(gflags & b) for k, b in GUID_FLAG_REASONS.items()},
                 })
 
         except struct.error:
@@ -2855,7 +2963,9 @@ def plot_guidance(records, t0_global):
     of roll_cmd — plus the roll command from NonSensor for context.
     Bottom: guidance internals (LOS angle, lateral offset, closing velocity).
     """
-    g = records["Guidance"]
+    # Steering frames only: the status frames sent while guidance is enabled
+    # but not steering carry no commands.
+    g = [r for r in records["Guidance"] if r["active"]]
     if not g:
         return None
 
@@ -3190,6 +3300,8 @@ def main(filepath=BINARY_FILE, output_dir=OUTPUT_DIR, show_plots=SHOW_PLOTS,
     print()
     # The mosaic-G5's SBF blocks, if this log has them (nothing otherwise)
     print_gnss_sbf_summary(records["GNSS_RTCM"])
+    # The PX1105R's SkyTraq frames, the same way
+    print_gnss_skytraq_summary(records["GNSS_RTCM"])
 
     # Print sensor configuration
     print("  Sensor configuration:")

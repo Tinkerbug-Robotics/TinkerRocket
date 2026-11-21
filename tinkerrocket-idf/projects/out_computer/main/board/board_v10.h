@@ -128,9 +128,12 @@ struct board_pins
     // --- High-side-switch current monitors (TPS22811 U26/U28), as on V9 ---
     // ILOAD = V(pin) / (IMON_GAIN_A_PER_A * R). Calibrate before trusting amps.
     // No hold-up sense on this processor: V10's V_SCAP_ADC goes to the flight
-    // computer's GPIO17, and nothing reads it yet (#1409).
+    // computer's GPIO17 (the V11's too).
     static constexpr int   SCAP_ADC_PIN       = -1;
     static constexpr float SCAP_DIVIDER_RATIO = 1.0f;    // unused with no pin
+    // #1409: the flight computer reads it instead and sends it in
+    // FcStatusData.scap_mv; the #1166 verdict runs here on that value.
+    static constexpr bool  SCAP_FROM_FC       = true;
     static constexpr int   CAM_IMON_GPIO      = 8;         // CAM_IMON, ADC1_CH7
     static constexpr int   SERVO_IMON_GPIO    = 9;         // SERVO_IMON, ADC1_CH8
     static constexpr float IMON_GAIN_A_PER_A  = 95.3e-6f;  // TPS22811 GIMON typ

@@ -790,3 +790,175 @@ TEST(RawMeasLite, TheCapHoldsAPickWaitingForItsSolve)
         }
     }
 }
+
+// ---- The troposphere's rate off each Doppler (Config::tropo_rate; the
+// gnss-sdr-dev flight profile's rr_tropo_rate) ----
+
+namespace
+{
+
+constexpr double kClimb = 850.0;   // m/s up: the hotshot's coast through 3-10 km
+
+// Each satellite's slant tropospheric delay as the builder takes it off the
+// code: its code with the troposphere off less with it on, same epoch.
+std::vector<double> slantDelays(RawMeasBuilder::Config c, const RawEpoch& ep, const EphemerisStore& store,
+                                const double r[3], const double lla[3], bool lite)
+{
+    RawMeas with[RawEpoch::kMaxObs], without[RawEpoch::kMaxObs];
+    c.lite = lite;
+    c.atmo_period_s = lite ? 1.0 : 0.0;
+    c.troposphere = true;
+    RawMeasBuilder a(c);
+    c.troposphere = false;
+    RawMeasBuilder b(c);
+    a.setIono(goldenIono());
+    b.setIono(goldenIono());
+    const int n = build(a, ep, store, r, lla, with);
+    EXPECT_EQ(n, build(b, ep, store, r, lla, without));
+    std::vector<double> d(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i)
+        d[static_cast<size_t>(i)] = without[i].pr - with[i].pr;
+    return d;
+}
+
+}  // namespace
+
+TEST(RawMeasTropoRate, TheZenithGradientIsTheModelsSlope)
+{
+    // tropo_zenith_gradient: the zenith delay's slope with height, negative
+    // and thinning upward, through the stratosphere's switch at 11 km, and
+    // none above 40 km (nor below 0 m, where the model holds sea level's: a
+    // pad below the ellipsoid takes no rate for its first ten metres up)
+    const double lat = 0.6;
+    auto zen = [&](double h) { return tropo_saastamoinen(lat, h, M_PI / 2.0); };
+    double last = -1.0;
+    for (double h : {50.0, 1200.0, 3000.0, 6000.0, 10000.0, 10990.0, 11010.0, 15000.0, 25000.0, 39000.0})
+    {
+        SCOPED_TRACE(testing::Message() << "h " << h);
+        const double g = tropo_zenith_gradient(lat, h);
+        EXPECT_NEAR(g, (zen(h + 0.5) - zen(h - 0.5)) / 1.0, 2e-7);
+        EXPECT_LT(g, 0.0);
+        EXPECT_GT(g, last);   // its size shrinks upward
+        last = g;
+    }
+    EXPECT_NEAR(tropo_zenith_gradient(lat, 50.0), -3.2e-4, 0.3e-4);   // dry -2.7e-4 (2.3 m over ~8 km), wet -0.5e-4
+    EXPECT_EQ(tropo_zenith_gradient(lat, 41000.0), 0.0);
+    EXPECT_EQ(tropo_zenith_gradient(lat, -50.0), 0.0);
+}
+
+TEST(RawMeasTropoRate, OffTheClimbChangesNothing)
+{
+    // the default (every profile but the gnss-sdr-dev image's): a climb rate
+    // given is kept and not used -- the Doppler and the code to the bit, the
+    // full build and the cheaper one alike
+    const std::vector<RawEpoch> eps = parseEpochs();
+    const EphemerisStore store = storeAll();
+    for (bool lite : {false, true})
+    {
+        RawMeasBuilder a(mosaicLike(lite)), b(mosaicLike(lite));
+        a.setIono(goldenIono());
+        b.setIono(goldenIono());
+        a.setClimbRate(kClimb);
+        RawMeas ma[RawEpoch::kMaxObs], mb[RawEpoch::kMaxObs];
+        for (int k = 0; k < 12; ++k)
+        {
+            double r[3], lla[3];
+            receiverAt(k, kClimb, r, lla);
+            const RawEpoch ep = epochAt(eps[1], k);
+            const int n = build(a, ep, store, r, lla, ma);
+            ASSERT_EQ(n, build(b, ep, store, r, lla, mb));
+            ASSERT_GT(n, 8);
+            for (int i = 0; i < n; ++i)
+            {
+                EXPECT_EQ(ma[i].rr, mb[i].rr);
+                EXPECT_EQ(ma[i].pr, mb[i].pr);
+            }
+        }
+    }
+}
+
+TEST(RawMeasTropoRate, EachDopplerLosesItsSlantDelaysRate)
+{
+    // On: each Doppler loses the rate its slant delay changes at as the
+    // receiver climbs -- the zenith's (the model's gradient times the climb)
+    // mapped as the code's delay is, so the rate over the delay is the same
+    // for every satellite; up, the delay thins and the Doppler rises. The
+    // full build and the cheaper one alike, the code untouched, and at no
+    // climb nothing.
+    const std::vector<RawEpoch> eps = parseEpochs();
+    const EphemerisStore store = storeAll();
+    double r[3], lla[3];
+    receiverAt(0, 0.0, r, lla);
+    const RawEpoch ep = eps[1];
+    const double zen = tropo_saastamoinen(lla[0], lla[2], M_PI / 2.0);
+    const double rate_z = tropo_zenith_gradient(lla[0], lla[2]) * kClimb;   // m/s at the zenith, negative
+    ASSERT_LT(rate_z, -0.15);
+    for (bool lite : {false, true})
+    {
+        SCOPED_TRACE(lite ? "lite" : "full");
+        const std::vector<double> slant = slantDelays(mosaicLike(lite), ep, store, r, lla, lite);
+        RawMeasBuilder::Config c = mosaicLike(lite);
+        RawMeasBuilder off(c);
+        c.tropo_rate = true;
+        RawMeasBuilder on(c), still(c);
+        for (RawMeasBuilder* b : {&off, &on, &still})
+            b->setIono(goldenIono());
+        on.setClimbRate(kClimb);
+        still.setClimbRate(0.0);
+        RawMeas m0[RawEpoch::kMaxObs], m1[RawEpoch::kMaxObs], m2[RawEpoch::kMaxObs];
+        const int n = build(off, ep, store, r, lla, m0);
+        ASSERT_EQ(n, build(on, ep, store, r, lla, m1));
+        ASSERT_EQ(n, build(still, ep, store, r, lla, m2));
+        ASSERT_EQ(static_cast<size_t>(n), slant.size());
+        ASSERT_GT(n, 8);
+        for (int i = 0; i < n; ++i)
+        {
+            SCOPED_TRACE(testing::Message() << "sat " << int(m0[i].sys) << ":" << int(m0[i].prn));
+            ASSERT_TRUE(m0[i].has_rr);
+            const double expect = -slant[static_cast<size_t>(i)] * rate_z / zen;   // the rate off: up, positive
+            EXPECT_NEAR(m1[i].rr - m0[i].rr, expect, 1e-9 + 1e-9 * std::fabs(expect));
+            EXPECT_GT(m1[i].rr - m0[i].rr, 0.15);
+            EXPECT_EQ(m1[i].pr, m0[i].pr);
+            EXPECT_EQ(m2[i].rr, m0[i].rr);
+        }
+    }
+}
+
+TEST(RawMeasTropoRate, TheStageTakesTheClimbFromTheNavigationState)
+{
+    // The GNSS task's stage (the V10's path: the cheaper build with the cap):
+    // offer() gives the builder the filter's vertical velocity, so a climbing
+    // filter's Dopplers lose the troposphere's rate and a still one's do not
+    const std::vector<RawEpoch> eps = parseEpochs();
+    gnss_raw::RawGnssMeasStage::Config cfg;
+    cfg.meas = mosaicLike(true);
+    cfg.meas.tropo_rate = true;
+    cfg.sat_cap = 16;
+    gnss_raw::RawGnssMeasStage climbing(cfg), still(cfg);
+    for (int i = 0; i < kGoldenRmEphN; ++i)
+    {
+        ASSERT_TRUE(climbing.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len)));
+        ASSERT_TRUE(still.onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len)));
+    }
+    gnss_raw::ShadowNav up = {}, rest = {};
+    up.running = rest.running = 1;
+    double r[3];
+    receiverAt(0, 0.0, r, up.lla);
+    receiverAt(0, 0.0, r, rest.lla);
+    up.vel_ned[2] = -static_cast<float>(kClimb);
+    gnss_raw::TimedRawEpoch te;
+    te.epoch = eps[1];
+    te.mcu_us = 1000000;
+    te.gps_week = kNearWeek;
+    static gnss_raw::BuiltEpoch bu, bs;
+    ASSERT_TRUE(climbing.offer(te, up, bu));
+    ASSERT_TRUE(still.offer(te, rest, bs));
+    ASSERT_EQ(bu.n, bs.n);
+    ASSERT_GT(bu.n, 8);
+    for (int i = 0; i < bu.n; ++i)
+    {
+        EXPECT_GT(bu.meas[i].rr - bs.meas[i].rr, 0.15);
+        EXPECT_LT(bu.meas[i].rr - bs.meas[i].rr, 0.35 / std::sin(3.0 * M_PI / 180.0));
+        EXPECT_EQ(bu.meas[i].pr, bs.meas[i].pr);
+    }
+}

@@ -144,6 +144,10 @@ public:
     void see(const TimedRawEpoch& e);
     // An epoch that will not be built: its satellites' lock ages only.
     void noteEpoch(const RawEpoch& ep) { builder_.noteEpoch(ep); }
+    // The receiver's climb rate (m/s, up) for the builds begun after it (the
+    // troposphere's rate, RawMeasBuilder::setClimbRate). offer() takes it
+    // from the navigation state itself.
+    void setClimbRate(double v_up_mps) { builder_.setClimbRate(v_up_mps); }
 
     // Build: begin(), then next() until it says done -- max_obs observations
     // a call, as the shadow's own job slices it -- or build() at once. e must

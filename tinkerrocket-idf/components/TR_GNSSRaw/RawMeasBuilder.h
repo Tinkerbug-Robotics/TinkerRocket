@@ -10,6 +10,18 @@
 // frequency) and the Saastamoinen troposphere taken out and satellites under
 // the elevation mask dropped; the range rate less the satellite clock drift.
 //
+// The troposphere's rate (Config::tropo_rate; off unless the receiver
+// profile's rr_tropo_rate sets it). A receiver climbing through the
+// troposphere sees every satellite's delay thin as it goes, and that rate is
+// in every measured range rate and in no prediction: each Doppler then takes
+// off the zenith delay's height gradient (tropo_zenith_gradient, at the
+// epoch's receiver) times the caller's climb rate (setClimbRate) over the
+// sine of the satellite's elevation, the pseudorange's own model and mapping.
+// Through 0-10 km at 600-900 m/s that is 0.2-0.3 m/s at the zenith and over a
+// metre a second at 15 deg, which the filter reads as its vertical velocity
+// (the RF rig's hotshot, 2026-11-12: the board's Dopplers alone read the
+// climb 0.5-1.5 m/s slow until the scene's troposphere ends at 10 km).
+//
 // Noise per measurement, from C/N0 (a PX1105R, 20 min static, 2026-09-26):
 // a white and a time-correlated pseudorange part and a white range-rate part,
 // sigma^2 = a^2 + b^2 * 10^(-(C/N0 - 35)/10). Then the LC86G's own, measured
@@ -123,6 +135,7 @@ public:
     {
         double el_mask_deg     = 3.0;
         bool   troposphere     = true;    // Saastamoinen
+        bool   tropo_rate      = false;   // and its rate as the receiver climbs off each Doppler (above)
         // each system's signal (gnss_sys_t): its carrier and C/N0 floors, its
         // carrier phase's noise
         GnssSignalProfile sig[kProfileSys] = {
@@ -213,6 +226,11 @@ public:
         }
         return io;
     }
+
+    // The receiver's climb rate (m/s, up) for the epochs begun after it: the
+    // caller's filter's vertical velocity, which the troposphere's rate takes
+    // (Config::tropo_rate; with it off, kept and not used).
+    void setClimbRate(double v_up_mps) { climb_mps_ = v_up_mps; }
 
     // Forget every satellite's lock history.
     void reset();
@@ -349,6 +367,7 @@ private:
     int  satSlotLite(const gps_eph_t& e, int sys, int prn, double t_sv, int slot, bool kept);
     void atmoLite(const GnssSignalProfile& sig, const double rs[3], const double vs[3], double tow, LiteSat& a);
     void zenithLite();
+    double tropoRateZenith() const;
     void beginLite(const RawEpoch& ep, bool spread);
 
     Config     cfg_;
@@ -361,6 +380,8 @@ private:
     double     r_approx_[3] = {};
     double     lat_ = 0.0, lon_ = 0.0, hgt_ = 0.0;
     double     el_mask_ = 0.0, g_over_ = 0.0;
+    double     climb_mps_ = 0.0;   // setClimbRate's
+    double     trop_rate_z_ = 0.0; // the zenith delay's rate at the epoch's receiver (m/s; 0 with tropo_rate off)
     double     first_[kSys][kPrn];
     double     last_[kSys][kPrn];
     bool       seen_[kSys][kPrn];

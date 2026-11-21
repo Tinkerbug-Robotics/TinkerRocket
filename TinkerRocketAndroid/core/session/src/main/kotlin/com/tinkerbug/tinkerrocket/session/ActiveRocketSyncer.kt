@@ -685,6 +685,8 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
                     targetAlt = profile.pnTargetAltM,
                     kpPos = profile.pnKpPos, kdVel = profile.pnKdVel,
                     guidanceLaw = profile.pnGuidanceLaw,
+                    tiltLimitBoostDeg = profile.pnTiltLimitBoostDeg,
+                    tiltLimitCoastDeg = profile.pnTiltLimitCoastDeg,
                 ),
             )
             ConfigGroup.FIN_LAYOUT -> Commands.finConfig(
@@ -1108,9 +1110,17 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
                 changed += GROUP_ROLL_CONTROL
             }
 
-            // Enable flag only — the PN parameters behind it aren't reported.
-            if (p.guidanceEnabled != cfg.guidanceEnabled) {
-                p = p.copy(guidanceEnabled = cfg.guidanceEnabled)
+            // Only the flight computer's own on/off (config_guid "gen"), by the
+            // camera's #1472 rule.  The config frame's "ge" is the out
+            // computer's copy — its NVS until the FC's frames flow — and
+            // adopting it let a connect with the rail off write a stale "on"
+            // into the profile that nothing ever corrected (GTV Blue,
+            // 2026-11-01).  With no FC value the profile is left alone and
+            // GuidanceStateCheck says "unverified"; the extras re-adopt picks
+            // the FC's up when config_guid lands.
+            val fcOn = cfg.guidanceEnabledOnFlightComputer
+            if (fcOn != null && p.guidanceEnabled != fcOn) {
+                p = p.copy(guidanceEnabled = fcOn)
                 changed += GROUP_GUIDANCE_ENABLE
             }
 
@@ -1256,6 +1266,17 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
                         pnGuidanceLaw = g.guidanceLaw,
                     )
                     changed += GROUP_GUIDANCE_PARAMS
+                }
+            }
+
+            // The tilt limits ride config_tilt, which only a flight computer
+            // that holds settable limits sends; null leaves the profile's.
+            cfg.guidanceTilt?.let { t ->
+                if (!same(p.pnTiltLimitBoostDeg, t.boostDeg, 1) ||
+                    !same(p.pnTiltLimitCoastDeg, t.coastDeg, 1)
+                ) {
+                    p = p.copy(pnTiltLimitBoostDeg = t.boostDeg, pnTiltLimitCoastDeg = t.coastDeg)
+                    if (GROUP_GUIDANCE_PARAMS !in changed) changed += GROUP_GUIDANCE_PARAMS
                 }
             }
 

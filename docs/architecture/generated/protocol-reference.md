@@ -108,7 +108,7 @@ this list is CI-enforced for uniqueness.
 | `0xEE` | `ORIENT_CONFIG_MSG` | FC → OC | 1-byte ImuOrientConfigData |
 | `0xF1` | `LORA_MSG` | FC → OC |  |
 | `0xEF` | `GUIDANCE_CONFIG_PENDING` | OC → FC | OC→FC: payload follows as GUIDANCE_CONFIG_MSG |
-| `0xF0` | `GUIDANCE_CONFIG_MSG` | FC → OC | 45-byte GuidanceConfigData |
+| `0xF0` | `GUIDANCE_CONFIG_MSG` | FC → OC | 53-byte GuidanceConfigFrame |
 | `0xF2` | `FIN_CONFIG_PENDING` | OC → FC | OC→FC: payload follows as FIN_CONFIG_MSG |
 | `0xF3` | `FIN_CONFIG_MSG` | FC → OC | 18-byte FinConfigData |
 | `0xF5` | `IMU_RATE_CONFIG_PENDING` | OC → FC | OC→FC: payload follows as IMU_RATE_CONFIG_MSG |
@@ -118,7 +118,7 @@ this list is CI-enforced for uniqueness.
 | `0xF4` | `I2C_TX_RESYNC` | — |  |
 | `0xF9` | `LORA_UPLINK_MSG` | OC → log | OC→self: 13-byte LoRaUplinkData, one per uplink decode, straight to the log |
 | `0xFA` | `FC_BOOT_STATUS_MSG` | FC → OC | FC→OC: 4-byte FcBootStatusData, boot progress during setup_fc only |
-| `0xFB` | `CONFIG_REPORT_MSG` | FC → OC | FC→OC: 201-byte ConfigReportData, everything the app's config |
+| `0xFB` | `CONFIG_REPORT_MSG` | FC → OC | FC→OC: 209-byte ConfigReportData, everything the app's config |
 | `0x90` | `GNSS_SAT_MSG` | FC → OC | FC→OC over I2S: GNSSSatData, per-satellite C/N0 at every GNSS |
 | `0x91` | `RECOVERY_END_PENDING` | OC → FC |  |
 | `0x93` | `ISM6_BATCH_MSG` | FC → OC | FC→OC over I2S: a count byte, then that many ISM6HG256Data records |
@@ -163,8 +163,8 @@ that changes size fails the build rather than corrupting a log silently.
 |--------|-------|
 | `FlightSnapshotData` | 224 |
 | `FlightSettingsData` | 223 |
+| `ConfigReportData` | 209 |
 | `GNSSSatData` | 202 |
-| `ConfigReportData` | 201 |
 | `PadContextNav` | 124 |
 | `AccelCalStatusFrame` | 114 |
 | `RawGnssEkfData` | 90 |
@@ -175,6 +175,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `OcIdentityData` | 68 |
 | `LoRaFastData` | 55 |
 | `LoRaFastData` | 55 |
+| `GuidanceConfigFrame` | 53 |
 | `LogBufferStatsData` | 52 |
 | `NonSensorData` | 52 |
 | `NonSensorData` | 52 |
@@ -223,14 +224,15 @@ that changes size fails the build rather than corrupting a log silently.
 | `PadCalConfigData` | 10 |
 | `BsEventHeader` | 9 |
 | `RollWaypoint` | 9 |
+| `GuidanceTiltLimitData` | 8 |
 | `ServoTestAnglesData` | 8 |
 | `AntennaOffsetConfigData` | 7 |
+| `FcStatusData` | 7 |
 | `LoRaFrameHeader` | 7 |
 | `PadContextHeader` | 7 |
 | `GNSSSatBlock` | 6 |
 | `Ism6TempData` | 6 |
 | `Vec3i16` | 6 |
-| `FcStatusData` | 5 |
 | `GnssRtcmHeader` | 5 |
 | `FcBootStatusData` | 4 |
 | `ServoReplayData` | 4 |
@@ -304,7 +306,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 62 |  | Issue #132 — app pushes a saved sensor cal (gyro + high-g) back into FC NVS as part of the rocket-profile… |
 | 63 |  | (Renumbered 58 -> 63, see note on the MAG_CAL_READ case above.) |
 | 64 |  | IMU mounting orientation: [setting:1] — IMU_ORIENT_AUTO or a TR_Orientation code (0..23, manual incl. roll… |
-| 65 |  | Full guidance config (GuidanceConfigData): relay the whole struct to the FC |
+| 65 |  | Full guidance config (GuidanceConfigFrame): relay the whole frame to the FC. A 45-byte frame from an app that… |
 | 66 |  | Full fin layout (FinConfigData): relay the whole struct to the FC |
 | 67 |  | IMU logging rate: [rate_hz:2 LE] — IMU_RATE_DYNAMIC (0, "4k Dynamic"), IMU_RATE_DYNAMIC_8K (1) or a… |
 | 68 | `LORA_CMD_SET_TX_DISABLED` | "LoRa off": [disabled:1] — 1 mutes every LoRa transmit, 0 resumes. Same constant (and therefore the same… |

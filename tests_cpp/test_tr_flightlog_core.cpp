@@ -1472,6 +1472,75 @@ TEST(TRFlightLogRead, RoundTripMatchesWrittenBytes) {
     }
 }
 
+// V10 pre-flight review (2026-11-18): a factory-bad block in an extension's
+// window used to end the log for the rest of the flight (NoSpace on every
+// later page). The extension now steps over it, as the writer, the reader and
+// recovery already step over a block that went bad mid-flight.
+TEST(TRFlightLogRead, ExtensionStepsOverABadBlockAndReadsBackIntact) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    TR_FlightLog::Config cfg;
+    cfg.prealloc_blocks = 4;
+    cfg.extend_blocks   = 2;
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+    const uint32_t bad = cfg.flight_region_start + cfg.prealloc_blocks;   // first block of the first extension
+    ASSERT_EQ(fl.markBlockBad(bad), Status::Ok);
+
+    uint32_t id = 0;
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+    ASSERT_EQ(fl.activeStartBlock(), cfg.flight_region_start);
+
+    const uint32_t n_pages = 7 * NAND_PAGES_PER_BLK;   // past the bad block and two extensions
+    std::vector<uint8_t> frame(PAYLOAD_PER_PAGE);
+    for (uint32_t p = 0; p < n_pages; ++p) {
+        std::memset(frame.data(), 0, frame.size());
+        std::memcpy(frame.data(), &p, sizeof(p));
+        ASSERT_EQ(fl.writeFrame(frame.data(), frame.size()), Status::Ok) << "page " << p;
+    }
+    EXPECT_EQ(fl.bitmap().get(bad), BLOCK_BAD);
+    ASSERT_EQ(fl.finalizeFlight("f.bin", n_pages * PAYLOAD_PER_PAGE), Status::Ok);
+
+    std::vector<uint8_t> out(PAYLOAD_PER_PAGE);
+    for (uint32_t p = 0; p < n_pages; ++p) {
+        size_t out_len = 0;
+        ASSERT_EQ(fl.readFlightPage("f.bin", p * PAYLOAD_PER_PAGE, out.data(), out.size(), out_len),
+                  Status::Ok) << "page " << p;
+        uint32_t tag = 0;
+        std::memcpy(&tag, out.data(), sizeof(tag));
+        ASSERT_EQ(tag, p) << "page " << p;
+    }
+}
+
+// V10 pre-flight review (2026-11-18): first-fit put a new flight into the hole
+// an evicted or deleted flight left, where it could only grow up to the next
+// stored flight. It now starts where it can grow furthest.
+TEST(TRFlightLogPrepare, NewFlightStartsWhereItCanGrowFurthest) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    TR_FlightLog::Config cfg;
+    cfg.prealloc_blocks = 4;
+    cfg.extend_blocks   = 2;
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+    std::vector<uint8_t> frame(PAYLOAD_PER_PAGE, 0x5A);
+
+    uint32_t id = 0;   // flight A: six blocks at the region's start
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+    for (uint32_t p = 0; p < 6 * NAND_PAGES_PER_BLK; ++p)
+        ASSERT_EQ(fl.writeFrame(frame.data(), frame.size()), Status::Ok);
+    ASSERT_EQ(fl.finalizeFlight("a.bin", 6 * NAND_PAGES_PER_BLK * PAYLOAD_PER_PAGE), Status::Ok);
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);   // flight B: one block right after it
+    const uint32_t b_start = fl.activeStartBlock();
+    ASSERT_EQ(b_start, cfg.flight_region_start + 6);
+    ASSERT_EQ(fl.writeFrame(frame.data(), frame.size()), Status::Ok);
+    ASSERT_EQ(fl.finalizeFlight("b.bin", PAYLOAD_PER_PAGE), Status::Ok);
+    ASSERT_EQ(fl.deleteFlight("a.bin"), Status::Ok);   // a six-block hole below B
+
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+    EXPECT_EQ(fl.activeStartBlock(), b_start + 1) << "the open region after B, not A's hole";
+}
+
 TEST(TRFlightLogRead, ReadAcrossPageBoundary) {
     // Straddle a frame/page boundary to verify the mapping advances correctly.
     FakeNandBackend nand;

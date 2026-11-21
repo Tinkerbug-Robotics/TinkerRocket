@@ -75,6 +75,7 @@ struct board_pins
     // V_SCAP_ADC goes to the flight computer; V7/V8/V9 have no hold-up).
     static constexpr int   SCAP_ADC_PIN       = -1;
     static constexpr float SCAP_DIVIDER_RATIO = 1.0f;    // unused with no pin
+    static constexpr bool  SCAP_FROM_FC       = false;   // no hold-up on this board (#1409)
     static constexpr int   CAM_IMON_GPIO      = -1;
     static constexpr int   SERVO_IMON_GPIO    = -1;
     static constexpr float IMON_GAIN_A_PER_A  = 0.0f;

@@ -148,6 +148,8 @@ struct board_pins
     // termination is 1.25 V at the pad.  C144 100 nF at the pin (#1022) lets
     // the 50 k source drive the SAR sample-and-hold.
     static constexpr float SCAP_DIVIDER_RATIO = 2.0f;
+    // Read on this processor (above), not relayed by the flight computer.
+    static constexpr bool SCAP_FROM_FC = false;
 
     // --- I2C slave (commands from the FlightComputer) ---
     static constexpr int I2C_SDA_PIN = 5;    // ESP_SDA (CONFIRMED)

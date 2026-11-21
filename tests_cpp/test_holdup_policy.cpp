@@ -7,7 +7,9 @@
 #include "holdup_policy.h"
 #include <SPI.h>       // host shim: SPI_MODE0, which the OC config.h names
 #include "config.h"    // the SHIPPED HOLDUP_* constants (TR_BOARD_M1 from CMake)
+#include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <vector>
 
 using namespace holdup_policy;
@@ -325,4 +327,135 @@ TEST(HoldupPolicy1485, TheThresholdSitsBetweenARealCapAndAnEmptyNode)
     EXPECT_LT(config::HOLDUP_JUMP_V, 0.39f);
     EXPECT_LE(config::HOLDUP_JUMPS_NOT_FITTED, FIT_WINDOW);
     EXPECT_GT(config::HOLDUP_CALM_TO_CLEAR, FIT_WINDOW);   // the window empties before it clears
+}
+
+// ============================================================================
+// #1409: the Tinker-Mantis V10/V11, where the sense line is the FLIGHT
+// computer's (P4 GPIO17). The FC sends its once-a-second reading in every
+// FC_STATUS_MSG (5 Hz) and the out computer runs the verdict above on it.
+// While the FC is off or silent there is nothing to judge, and nothing wrong.
+// ============================================================================
+namespace
+{
+constexpr uint32_t kStale = config::FC_FRAME_STALE_MS;
+}
+
+TEST(HoldupPolicy1409, AFreshReportIsTheReading)
+{
+    const RemoteReading r = remoteReading(FC_SCAP_VOLTS, 2487, 10000u, 9800u, kStale);
+    EXPECT_TRUE(r.live);
+    EXPECT_FLOAT_EQ(r.volts, 2.487f);
+    // An empty cap is 0 V, a reading: charging, not silence.
+    const RemoteReading z = remoteReading(FC_SCAP_VOLTS, 0, 10000u, 9800u, kStale);
+    EXPECT_TRUE(z.live);
+    EXPECT_FLOAT_EQ(z.volts, 0.0f);
+}
+
+TEST(HoldupPolicy1409, AnFcWhoseAdcFailedIsNoReadingNotSilence)
+{
+    const RemoteReading r = remoteReading(FC_SCAP_NO_READING, 0, 10000u, 9800u, kStale);
+    EXPECT_TRUE(r.live);
+    EXPECT_TRUE(std::isnan(r.volts));
+    Tracker t;
+    EXPECT_EQ(t.update(r.volts, 10000u, kBarV, kAdvisory), NO_READING);
+}
+
+TEST(HoldupPolicy1409, NoReportOrAStaleOneIsQuiet)
+{
+    // Never heard from, an image too old to send the field, or a board
+    // without the sense line: FC_SCAP_ABSENT.
+    EXPECT_FALSE(remoteReading(FC_SCAP_ABSENT, 0, 10000u, 9800u, kStale).live);
+    EXPECT_FALSE(remoteReading(FC_SCAP_ABSENT, 0, 10000u, 0u, kStale).live);
+    // The FC rail goes off: the last report ages out after the same window
+    // the OC uses for every FC frame, and not before.
+    EXPECT_TRUE(remoteReading(FC_SCAP_VOLTS, 2500, 9800u + kStale, 9800u, kStale).live);
+    EXPECT_FALSE(remoteReading(FC_SCAP_VOLTS, 2500, 9801u + kStale, 9800u, kStale).live);
+    EXPECT_FALSE(remoteReading(FC_SCAP_NO_READING, 0, 9801u + kStale, 9800u, kStale).live);
+}
+
+TEST(HoldupPolicy1409, TheAgeIsWrapSafe)
+{
+    const uint32_t rx = 0xFFFFFF00u;   // ~49.7 days of uptime
+    EXPECT_TRUE(remoteReading(FC_SCAP_VOLTS, 2500, rx + 1000u, rx, kStale).live);
+    EXPECT_FALSE(remoteReading(FC_SCAP_VOLTS, 2500, rx + kStale + 1u, rx, kStale).live);
+}
+
+TEST(HoldupPolicy1409, QuietWithdrawsTheVerdictAndKeepsTheChargeHistory)
+{
+    Tracker t;
+    EXPECT_EQ(t.update(2.40f, 60u * kSecond, kBarV, kAdvisory), CHARGED);
+    t.quiet();   // the FC rail goes off
+    EXPECT_EQ(t.state, NONE);   // "hu" absent: nothing to say, not an advisory
+    EXPECT_TRUE(t.seen_charged);
+    // Back on two minutes later, at the bar: still charged.
+    EXPECT_EQ(t.update(2.45f, 180u * kSecond, kBarV, kAdvisory), CHARGED);
+    t.quiet();
+    // Back on ten minutes after the last charged reading and under the bar:
+    // the window ran from that reading, as if the cap had been watched.
+    EXPECT_EQ(t.update(1.00f, 780u * kSecond, kBarV, kAdvisory), NOT_CHARGING);
+}
+
+TEST(HoldupPolicy1409, AColdStartWithTheFcOnLateStillCountsFromBoot)
+{
+    // The pack goes in (the OC boots and C130 starts charging) and the rocket
+    // is switched on four minutes later: a cap that never charged is flagged
+    // on the first reading, because it has been under the bar since boot.
+    Tracker t;
+    t.quiet();
+    EXPECT_EQ(t.update(0.30f, 240u * kSecond, kBarV, kAdvisory), NOT_CHARGING);
+    // One that did charge reads charged at once.
+    Tracker u;
+    EXPECT_EQ(u.update(2.48f, 240u * kSecond, kBarV, kAdvisory), CHARGED);
+}
+
+TEST(HoldupPolicy1409, TheFirstReadingAfterAGapIsNotAJump)
+{
+    // The cap can move a long way while nobody watches (charging 0 -> 2.5 V
+    // takes ~50 s into the V10's 2 F). That must not count toward NOT FITTED.
+    Tracker t = fitted();
+    EXPECT_EQ(t.update(0.40f, 10u * kSecond, config::HOLDUP_CHARGED_V,
+                       config::HOLDUP_LOW_ADVISORY_MS), CHARGING);
+    t.quiet();
+    EXPECT_EQ(t.update(2.45f, 70u * kSecond, config::HOLDUP_CHARGED_V,
+                       config::HOLDUP_LOW_ADVISORY_MS), CHARGED);
+    t.quiet();
+    EXPECT_EQ(t.update(0.90f, 90u * kSecond, config::HOLDUP_CHARGED_V,
+                       config::HOLDUP_LOW_ADVISORY_MS), CHARGING);
+    EXPECT_EQ(t.jump_history, 0u);
+}
+
+TEST(HoldupPolicy1409, TheV10TwoFaradRampIsChargingThenCharged)
+{
+    // 100 mA into 2 F is 50 mV/s: 0 -> 2.2 V in 44 s, well inside the grace
+    // window and far under the 0.3 V/s a jump takes.
+    Tracker t = fitted();
+    uint32_t first_charged_s = 0;
+    for (uint32_t s = 1; s <= 120; ++s)
+    {
+        const float v = std::min(0.05f * (float)s, 2.5f);
+        const uint8_t st = t.update(v, s * kSecond, config::HOLDUP_CHARGED_V,
+                                    config::HOLDUP_LOW_ADVISORY_MS);
+        EXPECT_TRUE(st == CHARGING || st == CHARGED) << s << " s: " << stateName(st);
+        if (st == CHARGED && first_charged_s == 0) first_charged_s = s;
+    }
+    EXPECT_NEAR((double)first_charged_s, 44.0, 1.0);
+}
+
+TEST(HoldupPolicy1409, TheFcFieldRoundTripsIntoTheVerdict)
+{
+    // FC side: a 1.243 V pad behind the 2:1 divider; OC side: the report.
+    const uint16_t field = fcStatusScapMv(1.243f * 2.0f);
+    FcStatusData d{};
+    d.flags   = FCS_SCAP_SENSE;
+    d.scap_mv = field;
+    uint8_t buf[sizeof d];
+    memcpy(buf, &d, sizeof d);
+    uint16_t mv = 0;
+    const uint8_t rep = fcStatusScapReport(buf, sizeof buf, &mv);
+    const RemoteReading r = remoteReading(rep, mv, 5000u, 4900u, kStale);
+    ASSERT_TRUE(r.live);
+    EXPECT_NEAR(r.volts, 2.486f, 0.0006f);
+    Tracker t;
+    EXPECT_EQ(t.update(r.volts, 5000u, config::HOLDUP_CHARGED_V,
+                       config::HOLDUP_LOW_ADVISORY_MS), CHARGED);
 }

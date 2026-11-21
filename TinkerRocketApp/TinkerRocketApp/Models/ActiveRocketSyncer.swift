@@ -582,7 +582,9 @@ final class ActiveRocketSyncer: ObservableObject {
                                   targetE: profile.pnTargetE, targetN: profile.pnTargetN,
                                   targetAlt: profile.pnTargetAltM,
                                   kpPos: profile.pnKpPos, kdVel: profile.pnKdVel,
-                                  guidanceLaw: profile.pnGuidanceLaw)
+                                  guidanceLaw: profile.pnGuidanceLaw,
+                                  tiltLimitBoostDeg: profile.pnTiltLimitBoostDeg,
+                                  tiltLimitCoastDeg: profile.pnTiltLimitCoastDeg)
         device.sendFinConfig(ringMode: profile.finRingMode,
                              servoAtSlot: profile.finServoAtSlot,
                              reverse: profile.finReverse,
@@ -719,9 +721,15 @@ final class ActiveRocketSyncer: ObservableObject {
             changed.append(groupRollControl)
         }
 
-        // Enable flag only — the PN parameters behind it aren't reported.
-        if p.guidanceEnabled != cfg.guidanceEnabled {
-            p.guidanceEnabled = cfg.guidanceEnabled
+        // Only the flight computer's own on/off (config_guid "gen"), by the
+        // camera's #1472 rule.  The config frame's "ge" is the out computer's
+        // copy — its NVS until the FC's frames flow — and adopting it let a
+        // connect with the rail off write a stale "on" into the profile that
+        // nothing ever corrected (GTV Blue, 2026-11-01).  With no FC value the
+        // profile is left alone and GuidanceStateCheck says "unverified"; the
+        // extras re-adopt picks the FC's up when config_guid lands.
+        if let fcOn = cfg.guidanceEnabledOnFlightComputer, p.guidanceEnabled != fcOn {
+            p.guidanceEnabled = fcOn
             changed.append(groupGuidanceEnable)
         }
 
@@ -851,6 +859,17 @@ final class ActiveRocketSyncer: ObservableObject {
                 p.pnGuidanceLaw = g.guidanceLaw
                 changed.append(groupGuidanceParams)
             }
+        }
+
+        // The tilt limits ride config_tilt, sent only by firmware that has
+        // them; it lands before config_roll, so the extras re-adopt sees it.
+        // Same group as the rest of the guidance parameters.
+        if let t = cfg.guidanceTilt,
+           !same(p.pnTiltLimitBoostDeg, t.boostDeg, decimals: 1)
+            || !same(p.pnTiltLimitCoastDeg, t.coastDeg, decimals: 1) {
+            p.pnTiltLimitBoostDeg = t.boostDeg
+            p.pnTiltLimitCoastDeg = t.coastDeg
+            if !changed.contains(groupGuidanceParams) { changed.append(groupGuidanceParams) }
         }
 
         if let wps = cfg.rollWaypoints {

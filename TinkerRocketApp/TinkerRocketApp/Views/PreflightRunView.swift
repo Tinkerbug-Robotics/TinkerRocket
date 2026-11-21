@@ -207,7 +207,11 @@ struct PreflightRunView: View {
                              isRelay: device.isBaseStation,
                              telemetry: device.telemetry,
                              syncState: syncer.syncState,
-                             profile: profile)
+                             profile: profile,
+                             guidance: GuidanceStateCheck.evaluate(
+                                 profile: profile, config: device.rocketConfig,
+                                 isConnected: device.isConnected,
+                                 isBaseStation: device.isBaseStation))
     }
 }
 
@@ -234,7 +238,11 @@ struct PreflightAdvisoryRow: View {
                                                isRelay: device.isBaseStation,
                                                telemetry: device.telemetry,
                                                syncState: syncer.syncState,
-                                               profile: profile)
+                                               profile: profile,
+                                               guidance: GuidanceStateCheck.evaluate(
+                                                   profile: profile, config: device.rocketConfig,
+                                                   isConnected: device.isConnected,
+                                                   isBaseStation: device.isBaseStation))
                 let progress = PreflightChecklist.progress(items: items,
                                                            config: preflight.config(for: profile.id),
                                                            ctx: ctx)

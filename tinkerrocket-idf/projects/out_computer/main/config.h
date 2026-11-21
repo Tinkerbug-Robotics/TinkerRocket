@@ -135,6 +135,17 @@ static_assert(board_pins::SCAP_ADC_PIN >= 0,
 static_assert(board_pins::SCAP_ADC_PIN < 0 ||
               (board_pins::SCAP_ADC_PIN >= 1 && board_pins::SCAP_ADC_PIN <= 10),
               "SCAP_ADC_PIN must be an ADC1 pad (GPIO1-10) or -1 (#1166)");
+// #1409: one source per board. A sense line here AND the flight computer's
+// relayed reading would be two verdicts fighting over one telemetry key.
+static_assert(!(board_pins::SCAP_FROM_FC && board_pins::SCAP_ADC_PIN >= 0),
+              "SCAP_FROM_FC and SCAP_ADC_PIN are exclusive: the cap is read on one processor (#1409)");
+#if TR_BOARD_V10
+// The V10's (and V11's) V_SCAP_ADC is P4 GPIO17: the flight computer reads it
+// and this processor judges it. false here would put the V10 back to "scap"
+// absent and the hold-up unwatched.
+static_assert(board_pins::SCAP_FROM_FC,
+              "board_v10.h: V_SCAP_ADC reaches the flight computer, which relays it — SCAP_FROM_FC (#1409)");
+#endif
 // #1553: the INA230 alert edge drops OC_ARM_EN, so it means nothing on a board
 // with no consent pin to drop.
 static_assert(board_pins::INA_ALERT_PIN < 0 || board_pins::ARM_CONSENT_PIN >= 0,
@@ -280,11 +291,16 @@ struct config : board_pins
     static constexpr uint8_t DEFAULT_ROCKET_ID  = 1;
     static constexpr const char* DEVICE_TYPE     = "R";  // "R" = rocket
 
-    // --- #1166: hold-up supercap health (rocket-computer-mini) ---
+    // --- #1166: hold-up supercap health (rocket-computer-mini, V10/V11) ---
     // SCAP_ADC_PIN / SCAP_DIVIDER_RATIO come from the board header (-1 on
     // boards without the sense line).  The TPS61094 charges C130 (5 F) at
     // 100 mA to a 2.5 V termination — about two minutes from empty — and
     // nothing else on the board reports whether it did (holdup_policy.h).
+    // #1409: on the Tinker-Mantis V10/V11 (SCAP_FROM_FC) the sense line is the
+    // flight computer's; it sends its reading in every FC_STATUS_MSG, and the
+    // same rules below run on that.  C130 is 2 F there: ~50 s from empty.
+    // With no FC_STATUS_MSG for FC_FRAME_STALE_MS (the FC rail off, a reboot)
+    // the verdict is withheld, not judged on a stale number.
     //   CHARGED_V: at or above this the backup is there (2.2 V of the 2.5 V
     //     termination is 77 % of the energy).
     //   LOW_ADVISORY_MS: after this long continuously under CHARGED_V the OC

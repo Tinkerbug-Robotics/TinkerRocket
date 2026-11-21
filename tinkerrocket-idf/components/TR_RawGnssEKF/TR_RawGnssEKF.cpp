@@ -139,6 +139,27 @@ void RawGnssEKF<T>::setImuFree(bool on)
 }
 
 template <typename T>
+void RawGnssEKF<T>::reanchorVelocity(const double dv_ned[3], double dclk_mps, T vel_sigma, T pos_sigma)
+{
+    for (int a = 0; a < 3; ++a)
+        v_[a] += T(dv_ned[a]);
+    clk_d_ += T(dclk_mps);
+    for (int a = 0; a < 3; ++a)
+    {
+        const int i = kVel + a;
+        for (int j = 0; j < N; ++j)
+            if (j != i)
+                P_[i][j] = P_[j][i] = T(0);
+        P_[i][i] = vel_sigma * vel_sigma;
+    }
+    const T pfloor = pos_sigma * pos_sigma;
+    for (int a = 0; a < 3; ++a)
+        if (P_[kPos + a][kPos + a] < pfloor)
+            P_[kPos + a][kPos + a] = pfloor;
+    std::memset(rejects_, 0, sizeof(rejects_));
+}
+
+template <typename T>
 void RawGnssEKF<T>::init(const double lla[3], const T v_ned[3], const T q[4], double t0)
 {
     for (int i = 0; i < 3; ++i)
@@ -155,6 +176,8 @@ void RawGnssEKF<T>::init(const double lla[3], const T v_ned[3], const T q[4], do
     isb_[0] = isb_[1] = T(0);
     clk_ready_ = false;
     g_excess_ = g_peak_ = T(0);
+    f_lp_g_ = T(1);
+    rr_dyn_lag_ = 0.0;
     rate_peak_ = rate_across_peak_ = T(0);
     att_hold_ = false;
     imu_free_ = false;
@@ -421,15 +444,22 @@ void RawGnssEKF<T>::gravityNed(T g[3]) const
         return;
     }
     // Somigliana on the ellipsoid, the second-order height term, and the
-    // small north component above it (tc_ekf.py gravity_wgs84)
+    // small north component above it (tc_ekf.py gravity_wgs84). Its latitude
+    // part is worked out again only once the latitude has moved 1e-4 rad
+    // (600 m; Somigliana's slope is ~0.05 m/s^2 a radian, so 5e-6 m/s^2):
+    // three sines and a root are soft double on the P4, every IMU step
     const double lat = lla_[0], h = lla_[2];
-    const double s2 = std::sin(lat) * std::sin(lat);
-    const double g0 = kGammaE * (1.0 + kSomK * s2) / std::sqrt(1.0 - kE2 * s2);
-    const double gd = g0 * (1.0 - 2.0 / kRe * (1.0 + kFlat + kGravM - 2.0 * kFlat * s2) * h
-                            + 3.0 / (kRe * kRe) * h * h);
-    g[0] = T(-8.08e-9 * h * std::sin(2.0 * lat));
+    if (!(std::fabs(lat - grav_lat_) <= 1.0e-4))
+    {
+        const double s2 = std::sin(lat) * std::sin(lat);
+        grav_g0_ = kGammaE * (1.0 + kSomK * s2) / std::sqrt(1.0 - kE2 * s2);
+        grav_c1_ = 2.0 / kRe * (1.0 + kFlat + kGravM - 2.0 * kFlat * s2);
+        grav_n_ = -8.08e-9 * std::sin(2.0 * lat);
+        grav_lat_ = lat;
+    }
+    g[0] = T(grav_n_ * h);
     g[1] = T(0);
-    g[2] = T(gd);
+    g[2] = T(grav_g0_ * (1.0 - grav_c1_ * h + 3.0 / (kRe * kRe) * h * h));
 }
 
 template <typename T>
@@ -504,6 +534,12 @@ void RawGnssEKF<T>::propagate(const T acc[3], const T gyro[3], T dt)
     g_excess_ = fn / T(kG0) - T(1);
     if (g_excess_ > g_peak_)
         g_peak_ = g_excess_;
+    if (p_.rr_dyn_lag_s > 0.0)
+    {
+        // the specific force the Doppler's lag under thrust goes by (dynLagFor)
+        const T kf = p_.f_lp_tau_s > static_cast<double>(dt) ? dt / T(p_.f_lp_tau_s) : T(1);
+        f_lp_g_ += kf * (fn / T(kG0) - f_lp_g_);
+    }
     if (track_rate_)
     {
         const T across = std::sqrt(w[1] * w[1] + w[2] * w[2]);
@@ -690,15 +726,24 @@ void RawGnssEKF<T>::propagateCovariance(const T Tb2n[3][3], const T f_b[3], cons
         Pi[15] += dt * Ai[16];
     }
 
-    // Qd
+    // Qd; the accelerometer's noise grown by the specific force past 1 g
+    // (a_noise_per_g), but not in the descent's IMU-free mode, which uses no
+    // accelerometer (q_vel is its constant-velocity noise there)
     const T h2 = half * dt * dt;
+    T q_v = q_vel;
+    if (!imu_free_ && p_.a_noise_per_g > 0.0)
+    {
+        const T ex = std::sqrt(f_b[0] * f_b[0] + f_b[1] * f_b[1] + f_b[2] * f_b[2]) - T(kG0);
+        if (ex > T(0))
+            q_v += (T(p_.a_noise_per_g) * ex) * (T(p_.a_noise_per_g) * ex);
+    }
     for (int i = 0; i < 3; ++i)
     {
-        P_[3 + i][3 + i] += dt * q_vel;
+        P_[3 + i][3 + i] += dt * q_v;
         P_[6 + i][6 + i] += dt * q_att_;
         P_[9 + i][9 + i] += dt * q_ab_ + h2 * T(2) * f_ab_ * q_ab_;
         P_[12 + i][12 + i] += dt * q_wb_ + h2 * T(2) * f_wb_ * q_wb_;
-        const T pv = h2 * q_vel;                        // position-velocity
+        const T pv = h2 * q_v;                          // position-velocity
         P_[i][3 + i] += pv;
         P_[3 + i][i] += pv;
         const T aw = h2 * (-half) * q_wb_;              // attitude-gyro bias

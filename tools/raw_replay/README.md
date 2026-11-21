@@ -780,6 +780,136 @@ Doppler's refusal count (`r2/exp_reject_persist_rr{3,10,255}`, `--harness-args "
 stale-satellite and coherent patterns at magnetometer 0): 255 (never let back) flies as the profile's 30; 3 and 10
 make settle40's worst coast excess over the twin 41-43 deg against 28.5.
 
+## The V9/V10 with the gnss-sdr-dev board (`--receiver sdr`)
+
+TinkerRocket's own receiver board on J1 sends RTCM3 only: MSM7 1077/1097/1127 at 100 Hz, its 4001 records (sub-type
+1 after each epoch, 2 after each fix) and its ephemerides 1019/1046/1042. The V9/V10 image logs every frame in 0x95
+and flies GNSS-absent beside it (PR #1688). `--receiver sdr` replays that stream through the raw-GNSS filter as the
+one navigation filter would fly it, for the offline half of fusing it.
+
+```
+python3 tools/raw_replay/extract.py --sdr OC_LOG run.events
+build/raw_replay_mosaic --in run.events --out run.csv --receiver sdr [--gnss-only-from-s X] [--cut-from-s X --cut-to-s Y]
+```
+
+`extract.py --sdr` writes no S, A, P, F, V or K lines (a cold start on the pad from the board's own fix), each frame
+as an R line at its arrival, and every ephemeris the log carries once more at the start, marked preload (the board
+repeats each every 30 s; a log's first seconds would have none). Use `raw_replay_mosaic` (128 ephemerides, as the
+mosaic-only image).
+
+What `--receiver sdr` sets: `sdrDevProfile()` (ReceiverProfile.h: the mosaic's shape, BeiDou's B1C pilot on L1's
+carrier, 100 Hz epochs fused at 10 Hz, the Doppler from the bench), then everything `--receiver mosaic` sets for the
+image (its flight profile, its flight safeguards, the firmware's heading defaults, the 30 ms hand-over, the restore
+sigmas) except the carrier wind-up's k, which is the Goblin helix's: 0 here. Each frame goes through
+`SdrRawEpoch.h` (the firmware's own, as the driver would run it): an epoch is made whole by its 4001, the board's
+clock steps go back into every pseudorange, phase and the time of week (its 4001's step sum), its marks are obeyed
+(a range the board's fix left out loses its code and phase, a channel not settled loses its Doppler too;
+`--sdr-keep-marked` keeps them), and the first epoch of each 100 ms period is handed over (the board's epochs sit at
+a millisecond phase of their own). Since 2026-11-12 the replay runs the V10 image's own lines (`SdrRawFeed.h`, the
+driver's): each 4001's latch (its tag less its sub-ms shift; a record the board marks late left out) goes on the
+clock line (`GnssTimeSync`: the V1 board has no 1PPS), and each epoch handed over is placed on it at its tag,
+`--sdr-latency-ms` taken off as the board's output delay (uncalibrated: 0); until the line is valid (10 s of history)
+the epochs are untimed. Each fused epoch's Dopplers are the means of the board's ten epochs since the last
+(`SdrRawEpoch.h` SdrDopplerMean, the image's `applySdrFlightProfile`), taken 45 ms back; `--rr-pair-avg 0` flies
+each epoch's own. The board's first valid fix seeds the cold start (ellipsoidal height, no geoid).
+`--sdr-raw-steps` leaves the clock steps in, as an experiment. The board's GPS ionosphere (4001 sub-type 4, since
+2026-11-12) goes through the image's ionosphere rule as the receiver's set; `--gps-iono a0,..,b3` offers a set the
+same way at the first record, for a log from before the board sent one (`-`: none, even the board's).
+Since fc/sdr-tropo-rate the image's profile takes the troposphere's rate off each Doppler (`rr_tropo_rate`,
+RawMeasBuilder.h: the filter's climb through the zenith delay's height gradient, over the elevation's sine);
+`--tropo-rate 0` replays the image before it, `--tropo-rate 1` turns it on for `--receiver mosaic` too. On the RF
+rig's scenes it shows an artifact above 10 km: SignalSim's troposphere ends there (its TropoDelay returns 0 above
+10 km) and the firmware's does not, so from the 10 km crossing on (the hotshot's T+14) the filter carries about
+-0.1 m/s of vertical velocity (NED down, against the truth) and ~3 m of height by apogee that a real sky would not
+give it. A rig score's height gets worse for a second reason: without the rate, the troposphere's +0.8 m/s happened
+to drag back the ~-6 m the pad datum (the board's fix, no ionosphere) and the boost leave; with it, those stay.
+
+The V10 bench log of 2026-11-02 (`flight_20261102_213043.bin`, 52 s, the board on its bench antenna, static): 525
+epochs handed over, 107 untimed while the line filled, 418 applied; every one of 672 pseudoranges and 6,688 Dopplers
+fused, none refused, the largest NIS 5.4 (`--sdr-raw-steps`: 348 of the 672 refused, NIS to 41, across the 8 clock
+steps in the window); the time sync 17.4 ppm, its envelope 0.54 ms rms, 90 % of stamps within 21 ms of it. The
+filter's position sat 1.5-2 m from the mean of the board's own fixes: RTCM carries no ionosphere, so it flew with
+none. A static minute cannot score the Doppler weights (the clock drift's walk, the mosaic's 100 m^2/s^3, dominates
+every innovation's spread: NIS median 0.16) nor dynamics. Through the image's lines (2026-11-12) the same 418 epochs
+apply, none refused, NIS 5.4; with the Doppler means 11,486 of 11,542 Dopplers averaged and the filter's static
+velocity 0.012 m/s rms against 0.021 without them.
+
+### An RF-rig run (`sdr_rig_events.py`, `score_sdr_rig.py`)
+
+On the RF replay rig the board tracks a SignalSim flight (the gnss repo's `cocom-rig/sdr/signalsim` B1C files) while
+the flight computer sits still, so the board's stream is real and the flight's IMU is not. `sdr_rig_events.py` makes
+the IMU, barometer and magnetometer from the same SignalSim config's trajectory (its own segments, so the file's
+exact motion: vertical, the body nose up, no roll) and puts the board's frames on that clock by GPS time, each at the
+flight computer's next 25 ms poll after its epoch, its delay and its bytes' UART time; the truth goes beside the
+events file (`.truth.nav`):
+
+```
+python3 tools/raw_replay/sdr_rig_events.py CONFIG.json STREAM run.events     # STREAM: rec-get's .rtcm3 or a V10 log
+build/raw_replay_mosaic --in run.events --out run.csv --receiver sdr
+build/raw_replay_mosaic --in run.events --out cut.csv --receiver sdr --cut-from-s 0 --cut-to-s 99999
+python3 tools/raw_replay/score_sdr_rig.py run.events aided=run.csv gnss-lost=cut.csv
+```
+
+The cold start waits for the board's own fix, as on the flight computer (`--seed-truth`: from the truth instead).
+`--clean` drops the IMU's noise and biases; `none` as STREAM makes the IMU alone. The made IMU senses what a real one
+would: the earth's rate, the Coriolis force of the climb (2 Omega x v) and normal gravity with its height term, none
+of which the filter models (its gravity is 9.807 unless `gravity_wgs84`). On the files' equatorial pad, with no
+GNSS, that alone leaves a 27 km hotshot ~3.9 m/s east and a few m/s vertical by apogee (`--clean --seed-truth`,
+2026-11-09: boost 0.5 m/s, attitude exact).
+
+`--imu-free-gnss-s X` sets the IMU-free descent's window (RawGnssShadow imu_free_gnss_s: the mode only while raw
+measurements or a barometer sample were fused within X s; 0 the old rule, from the apogee call on whatever), and
+`--gravity-wgs84 0|1` the raw filter's gravity (RawGnssEKFParams::gravity_wgs84). The image's IMU-free descent needs
+`--descent-imu-free 1` (or `--fw-defaults`) and, on an RF-rig events file, the V10's apogee call (`--apogee-call-s`,
+the rig run's console): without them the replay flies the IMU-coupled descent the image does not.
+
+`--imu-tick-mean` gives each IMU tick the mean specific force over the tick before it, as the filter integrates a
+sample. Without it each tick carries its instant's, so each of a thrust curve's 0.1 s steps reaches the filter one
+tick (2 ms) early: the hotshot's boost then gathers -a x 2 ms of vertical velocity (-0.68 m/s at burnout, GNSS or
+not), the boost error left open on 2026-11-12. With it the GNSS-absent filter holds the boost within 0.01 m/s.
+
+Checked 2026-11-09 on the V10 bench log above, re-timed onto a still IMU at the open-sky antenna's surveyed position
+(a config of one Const segment there, `--start-gpst`, `--pad`, `--field-ned-ut` from TR_GeoMag): the same 418 epochs
+applied as through `extract.py --sdr`, none refused, 2.2 m horizontal from the survey (median; 2.1 m from the log's
+own arrivals), velocity within 0.07 m/s.
+
+## The V9 with the SkyTraq PX1105R (`--receiver px1105r`)
+
+The PX1105R image flies the mosaic-only image's design (one navigation filter, cold start on the pad, the heading at
+the firmware's defaults, the 30 ms GNSS task delay, the 128-entry store: use `raw_replay_mosaic`, the quorum) on its
+own receiver: `px1105rProfile()`, `applyPx1105rFlightProfile()` and `applyPx1105rFlightSafeguards()`
+(ReceiverProfileApply.h), where `--receiver mosaic` applies the mosaic's. Its stream is whole SkyTraq frames, one R
+line each (`A0 A1 .. 0D 0A`, hex) at the MCU time its last byte arrived, taken through the driver's own chain
+(`skytraq_feed.h`, from TR_GNSSReceiverPX1105R_Serial's pure code: SkyTraqBinary, SkyTraqNav, Px1105rRawEpoch.h):
+the 0xE5 decoded, its GPS instant the time of week less the last 0xDF's bias carried by its drift, a sample of the
+driver's arrival-time clock line (the LC86G driver's GnssTimeSync at the profile's `epoch_latency_s`); on the 100 ms
+grid an epoch, its Dopplers averaged with the off-grid epoch's before it (none across a clock cut); the 0xDF the
+clock (a step cuts the locks) and the fix the flight loop gets (its height above the ellipsoid; the cold start's
+position is the first 3-D one); the subframes into ephemerides and the GPS Klobuchar through the GNSS task's
+ionosphere rule. Built where the tree has the PX1105R's code and image profile (`RAW_REPLAY_PX1105R`, off by itself
+elsewhere); `--receiver lc86g` and `mosaic` are unchanged by it (their CSV, digest and events JSON compared byte for
+byte before and after, 2026-10-21: a V9 mosaic log and the Beetle's ec10).
+
+- `--px-tag sync|line`: the epochs placed by the driver's time sync on the frames' arrivals (the firmware's, default),
+  or on the events file's K line (an ideal tag); `--px-latency-ms X` the time sync's latency in place of the profile's
+  (0: uncalibrated, no 1PPS on this carrier); `--epoch-shift-ms` moves the tags as for the other receivers.
+- `META app_iono a0 a1 a2 a3 b0 b1 b2 b3 gps_day`: the app's set, offered to the rule as the app's (the rig's sky never
+  broadcasts page 18; the V9 rig image injects the sky's own).
+
+Beside it:
+- `px_events.py`: a rig capture of the PX1105R (`<host_t> B <hex body>`) beside the same simulated flight's sensors
+  (`scenarios/sim_<flight>_sensors.csv.gz`) as an events file on one MCU clock by GPS time (sim_events.py's I, B and
+  M conventions; the frames' host stamps mapped to GPS time by the 0xE5s' lower envelope, plus `--latency-ms`, a
+  stand-in for the receiver's and the UART's delay); `--static` for a still capture (a level, still IMU).
+- `px_score.py`: the phases pad, boost, coast, apogee +-2 s and descent against the sim's truth (scorelib), for harness
+  runs, a V9 rig run's on-board `[REPLAY-NAV]` (`--onboard NAME=fc_console.txt`) and the PX1105R's own fix
+  (`--capture`).
+- `px_meas_check` (built with it) and `px_meas.py`: the measurement stage alone -- every fused-grid epoch built by the
+  image's stage at a known receiver (`--fixed lat,lon,h`, or `--truth` a trajectory) and its pseudorange and range-rate
+  residuals by system, C/N0 and elevation, with a scan of where the Dopplers sit in time against the trajectory;
+  `--eph-out` the group delays for a per-satellite check; `--x-out` a mosaic-grade receiver on the PX1105R's own
+  satellites as sim epochs (X lines: the truth's ranges plus the mosaic profile's noise) for the same IMU.
+
 ## The Beetle's bit-identity check (`bitident.sh`, `../m1_identity.sh`)
 
 Code the Beetle (M1, LC86G) shares with the mosaic-G5 work must leave the Beetle's filter bit-identical. Two scripts

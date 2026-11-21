@@ -239,6 +239,48 @@ final class ActiveRocketSyncerTests: XCTestCase {
         XCTAssertEqual(p.pnGuidanceLaw, 0)
     }
 
+    /// config_tilt: adopted under the guidance-parameters group, named once
+    /// even when the rest of the group differs too.
+    func testTiltLimitsAreAdoptedWhenReported() {
+        var p = RocketProfile.makeDefault(name: "x")
+        var cfg = fullyReportingConfig()
+        cfg.guidanceTilt = RocketGuidanceTilt(boostDeg: 25, coastDeg: 32.5)
+        XCTAssertEqual(ActiveRocketSyncer.adopt(&p, from: cfg),
+                       [ActiveRocketSyncer.groupGuidanceParams])
+        XCTAssertEqual(p.pnTiltLimitBoostDeg, 25)
+        XCTAssertEqual(p.pnTiltLimitCoastDeg, 32.5)
+        XCTAssertEqual(ActiveRocketSyncer.adopt(&p, from: cfg), [], "idempotent")
+
+        p.pnNavGain = 9
+        p.pnTiltLimitCoastDeg = 20
+        XCTAssertEqual(ActiveRocketSyncer.adopt(&p, from: cfg),
+                       [ActiveRocketSyncer.groupGuidanceParams])
+        XCTAssertEqual(p.pnNavGain, 5.0)
+        XCTAssertEqual(p.pnTiltLimitCoastDeg, 32.5)
+    }
+
+    /// Firmware without the setting sends no config_tilt: the profile keeps its own.
+    func testUnreportedTiltLimitsAreLeftAlone() {
+        var p = RocketProfile.makeDefault(name: "x")
+        p.pnTiltLimitBoostDeg = 10
+        p.pnTiltLimitCoastDeg = 45
+        let cfg = fullyReportingConfig()
+        XCTAssertNil(cfg.guidanceTilt)
+        XCTAssertEqual(ActiveRocketSyncer.adopt(&p, from: cfg), [])
+        XCTAssertEqual(p.pnTiltLimitBoostDeg, 10)
+        XCTAssertEqual(p.pnTiltLimitCoastDeg, 45)
+        XCTAssertEqual(cfg.unreportedGroups, [], "not a group of its own")
+    }
+
+    func testTiltLimitsCompareToOneDecimal() {
+        var p = RocketProfile.makeDefault(name: "x")
+        p.pnTiltLimitBoostDeg = 15.01
+        var cfg = fullyReportingConfig()
+        cfg.guidanceTilt = RocketGuidanceTilt(boostDeg: 15.0, coastDeg: 20.0)
+        XCTAssertEqual(ActiveRocketSyncer.adopt(&p, from: cfg), [],
+                       "the readback carries one decimal")
+    }
+
     /// "No waypoints" and "we can't see the waypoints" must not be the same
     /// thing: one clears the profile's roll profile, the other must not.
     func testEmptyWaypointListIsAnAnswerButNilIsNot() {

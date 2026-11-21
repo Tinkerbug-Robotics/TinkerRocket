@@ -3,6 +3,7 @@
 
     extract.py OC_LOG OUT.txt [--ref-log OC_LOG_WITH_PAD_CONTEXT]
     extract.py --sbf OC_LOG OUT.txt          # a V8/V9 log with the mosaic-G5's SBF (raw_replay --receiver mosaic)
+    extract.py --sdr OC_LOG OUT.txt          # a V9/V10 log with the gnss-sdr-dev board's RTCM3 (--receiver sdr)
 
 What the flight computer's raw task was handed, rebuilt from the log:
   I  the IMU ticks: the flight loop's drain-window means (integer-rounded raw counts, every
@@ -32,6 +33,13 @@ preloaded issue only once a receiver could have had it (the RINEX rule: a GPS se
 for a comparison with the on-board filter's own records (0x96) when that is so. The flight's time is the log's
 in-flight edge (T+0), or the log's own clock where it has none. A day's broadcast RINEX file goes to raw_replay
 itself (--rinex).
+
+With --sdr (a V9/V10 log with TinkerRocket's gnss-sdr-dev board on J1, whose stream the flight computer logs and
+does not navigate on): as --sbf, no S, A or P lines (raw_replay --receiver sdr starts on the pad), and R carries the
+board's RTCM3 frames as they arrived (0x95): MSM7, its 4001 epoch records and fixes, its ephemerides. Every
+ephemeris frame of the log goes at the start as well, marked "preload", unless --nav-as-logged: the board repeats
+each one every 30 s, but a log's first seconds would otherwise have none. No F, V or K lines: the board gives the
+flight computer no fix and no clock line (raw_replay places its epochs by their arrivals, GnssTimeSync).
 
 Times are the FC's microseconds, unwrapped to 64 bits.
 """
@@ -166,9 +174,12 @@ def main():
     ap.add_argument("--sbf", action="store_true",
                     help="a V8/V9 log with the mosaic-G5's SBF: no raw-filter records needed, the receiver's blocks "
                          "as R lines (raw_replay --receiver mosaic --cold-start)")
+    ap.add_argument("--sdr", action="store_true",
+                    help="a V9/V10 log with the gnss-sdr-dev board's RTCM3: no raw-filter records needed, its frames "
+                         "as R lines (raw_replay --receiver sdr)")
     ap.add_argument("--nav-as-logged", action="store_true",
-                    help="with --sbf: the navigation blocks only where the log has them, not also at the start (a "
-                         "log the flight computer booted in)")
+                    help="with --sbf or --sdr: the navigation blocks only where the log has them, not also at the "
+                         "start (a log the flight computer booted in)")
     ap.add_argument("--rig", action="store_true",
                     help="with --sbf: a rig replay of the mosaic-only image (tools/rig_replay/run_v9.sh): the flight's "
                          "time from the replay's ignition edge (--blob) against the log's accelerometer, and the start "
@@ -182,8 +193,12 @@ def main():
     args = ap.parse_args()
     if args.rig and not args.sbf:
         raise SystemExit("--rig is for a mosaic log (--sbf); an LC86G rig log takes --blob alone")
+    if args.sbf and args.sdr:
+        raise SystemExit("--sbf (the mosaic-G5) or --sdr (the gnss-sdr-dev board), not both")
     if args.sbf:
         return extract_sbf(args)
+    if args.sdr:
+        return extract_sdr(args)
     if args.blob is None:
         args.blob = DEFAULT_BLOB
 
@@ -466,7 +481,7 @@ def sbf_signal_counts(blocks):
 DEFAULT_BLOB = os.path.join(HERE, "..", "replay", "sim_replay.bin")
 
 
-def common_events(recs, config, ekf_rate, t_ref, inflight_of):
+def common_events(recs, config, ekf_rate, t_ref, inflight_of, imu_phase_us=0.0):
     """The I, B, M, F and K events every log gives the harness. inflight_of(tick_us, k) says whether the loop was in
     flight at an IMU tick (k: its NonSensor record)."""
     ns = recs["NonSensor"]
@@ -475,7 +490,7 @@ def common_events(recs, config, ekf_rate, t_ref, inflight_of):
     landed = np.array([bool(r.get("alt_landed", False)) for r in ns]) | (state == LANDED)
     nt = unwrap([r["time_us"] for r in ns], t_ref)
     events = []
-    ticks = imu_ticks(recs, config, ekf_rate, t_ref, args.imu_phase_us)
+    ticks = imu_ticks(recs, config, ekf_rate, t_ref, imu_phase_us)
     ki = np.searchsorted(nt, [tk[0] for tk in ticks], side="right") - 1
     for tk, k in zip(ticks, ki):
         k = max(int(k), 0)
@@ -565,7 +580,7 @@ def extract_sbf(args):
         if pcx and pcx["nav"]:
             t_launch = int(unwrap([pcx["nav"]["filter_time_us"]], t_ref)[0])
             inflight_of = lambda tu, k: tu >= t_launch and state[k] != LANDED  # noqa: E731
-    events, n_ticks = common_events(recs, config, ekf_rate, t_ref, inflight_of)
+    events, n_ticks = common_events(recs, config, ekf_rate, t_ref, inflight_of, args.imu_phase_us)
     frames, dropped = P.join_gnss_rtcm(recs.get("GNSS_RTCM") or [])
     raw = P.split_gnss_raw_frames(frames)
     sbf = raw["sbf"]
@@ -606,6 +621,83 @@ def extract_sbf(args):
           f"({dropped} frames dropped, {raw['bad']} bad; {top}), {n_nav} nav blocks preloaded, inflight "
           f"{t_inflight}, apogee flag {t_apogee}, landed {t_landed}; MeasEpoch signals (main antenna) "
           + (", ".join(f"{k} {v}" for k, v in sorted(sig_counts.items())) or "none"))
+
+
+SDR_EPH = (1019, 1042, 1046)   # the gnss-sdr-dev board's ephemerides: GPS, BeiDou, Galileo I/NAV
+
+
+def extract_sdr(args):
+    """--sdr: a V9/V10 log with the gnss-sdr-dev board's RTCM3, for raw_replay --receiver sdr (a cold start on the
+    pad). The flight computer's time base as --sbf's (T+0 the in-flight edge, else the log's clock)."""
+    sys.path.insert(0, os.path.join(WT, "Data_Analysis"))
+    import extract_gnss_rtcm as XR  # noqa: E402
+    recs, _stats, config = P.parse_binary_file(args.log)
+    imu = recs["ISM6HG256"]
+    t_ref = int(imu[0]["time_us"])
+    ns = recs["NonSensor"]
+    nt = unwrap([r["time_us"] for r in ns], t_ref)
+    if args.ekf_rate:
+        ekf_rate = args.ekf_rate
+    else:
+        ek = np.array([r["ekf_ticks"] for r in ns], dtype=np.int64)
+        ekf_rate = float((np.diff(ek) % 65536).sum() / ((nt[-1] - nt[0]) * 1e-6))
+    state = np.array([r["rocket_state"] for r in ns])
+    apo = np.array([bool(r.get("apogee_flag", False)) for r in ns])
+    landed = np.array([bool(r.get("alt_landed", False)) for r in ns]) | (state == LANDED)
+    k3 = np.flatnonzero(state == INFLIGHT)
+    t_inflight = int(nt[k3[0]]) if k3.size else None
+    ka = np.flatnonzero(apo)
+    t_apogee = int(nt[ka[0]]) if ka.size else None
+    kl = np.flatnonzero(landed)
+    t_landed = int(nt[kl[0]]) if kl.size else None
+    lines = [f"# extract.py --sdr {os.path.basename(args.log)}",
+             f"META ekf_rate {ekf_rate:.3f}",
+             f"META t_base_s {(-t_inflight * 1e-6 if t_inflight is not None else 0.0)!r}",
+             f"META t_inflight_us {t_inflight if t_inflight is not None else -1}",
+             f"META t_apogee_flag_us {t_apogee if t_apogee is not None else -1}",
+             f"META t_landed_flag_us {t_landed if t_landed is not None else -1}"]
+    snap = recs.get("Snapshot") or []
+    gp = [r["ground_pressure_pa"] for r in snap if r.get("ground_pressure_pa", 0) > 0]
+    lines.append(f"META ground_pressure_pa {repr(float(gp[0])) if gp else -1}")
+    if args.seed_quat_from_log:
+        qs = [np.array([r["q0"], r["q1"], r["q2"], r["q3"]]) for r in ns]
+        qs = [q for q in qs if abs(np.linalg.norm(q) - 1.0) < 0.01][:50]
+        if not qs:
+            raise SystemExit("--seed-quat-from-log: no unit quaternion in the log's NonSensor records")
+        qm = sum(q if np.dot(q, qs[0]) >= 0 else -q for q in qs)
+        qm = qm / np.linalg.norm(qm)
+        lines.append("META seed_quat " + " ".join(repr(float(x)) for x in qm))
+    inflight_of = lambda tu, k: bool(state[k] == INFLIGHT)  # noqa: E731
+    events, n_ticks = common_events(recs, config, ekf_rate, t_ref, inflight_of, args.imu_phase_us)
+    joined, dropped = P.join_gnss_rtcm(recs.get("GNSS_RTCM") or [])
+    frames = [(t, f) for t, f in joined if XR.frame_ok(f)]
+    if not any(XR.message_type(f) == XR.TR_MESSAGE for _t, f in frames):
+        raise SystemExit("no 4001 frames in this log: not the gnss-sdr-dev board's stream")
+    es = XR.epoch_summary(frames)
+    lines.append(f"META sdr_frames {len(frames)} dropped {dropped} bad {len(joined) - len(frames)} "
+                 f"epochs {es['epochs']} step_ms {es['step_ms']} missing {es['missing']} fixes {es['tr_fixes']}")
+    t0 = min([e[0] for e in events] + [int(unwrap([frames[0][0]], t_ref)[0])])
+    n_nav = 0
+    if not args.nav_as_logged:
+        # each ephemeris the log carries, once, just before its first event (the board's last of each satellite
+        # issue wins: the same bytes again are skipped)
+        seen = set()
+        for _tu32, f in frames:
+            if XR.message_type(f) in SDR_EPH and f not in seen:
+                seen.add(f)
+                events.append((t0 - 1, -1, f"R {t0 - 1} {bytes(f).hex()} preload"))
+                n_nav += 1
+    lines.append(f"META nav_preloaded {n_nav}")
+    for tu32, f in frames:
+        tu = int(unwrap([tu32], t_ref)[0])
+        events.append((tu, 5, f"R {tu} {bytes(f).hex()}"))
+    events.sort(key=lambda e: (e[0], e[1]))
+    lines.extend(e[2] for e in events)
+    with open(args.out, "w") as fh:
+        fh.write("\n".join(lines) + "\n")
+    print(f"{os.path.basename(args.log)}: {n_ticks} IMU ticks at {ekf_rate:.1f}/s, {len(frames)} RTCM frames "
+          f"({dropped} incomplete), {es['epochs']} MSM7 epochs at {es['step_ms']} ms ({es['missing']} missing), "
+          f"{es['tr_fixes']} board fixes, {n_nav} ephemerides preloaded, inflight {t_inflight}")
 
 
 if __name__ == "__main__":

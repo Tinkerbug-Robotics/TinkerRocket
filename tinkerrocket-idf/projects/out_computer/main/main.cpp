@@ -68,6 +68,8 @@ static inline std::string itos(int v)
 #include "token_page_policy.h"   // #1659: room for W2 on the token's active NVS page
 #include "holdup_policy.h"        // #1166: the verdict on the hold-up supercap
 #include "supply_status_policy.h" // #1593: the V10's PG_RAIL / VBUCK_OK edges
+#include "cam_draw_policy.h"      // CENJARS 11-01: is the camera running, from its rail current
+#include <atomic>
 #include <esp_attr.h>             // RTC_NOINIT_ATTR
 #include <esp_system.h>           // esp_reset_reason
 #include <esp_random.h>           // esp_random: transmit-slot phase on a release
@@ -1268,7 +1270,7 @@ static uint32_t snapshot_seed_bytes = 0;
 // applies both and gates the V7/V8 MRAM fallback too — that store has no
 // clock of its own and, now that a failed recovery no longer clears it
 // (#834-3), can hold an INFLIGHT frame indefinitely.
-static constexpr uint32_t kSnapshotServeTtlMs = 600000;  // = FC MAX_FLIGHT_TIME
+static constexpr uint32_t kSnapshotServeTtlMs = 1800000;  // = FC MAX_FLIGHT_TIME_CEILING_MS
 static_assert(kSnapshotServeTtlMs == InflightRefusalPolicy::kMaxFlightTimeMs,
               "#1162: the snapshot serve-TTL and the silent-FC INFLIGHT hold "
               "bound the same flight");
@@ -1355,6 +1357,13 @@ static bool fc_camera_engaged_prev = false;
 // When the last FC_STATUS_MSG arrived (millis), so a flag from an FC that has
 // since gone silent is not trusted (fcCameraEngagedNow).
 static uint32_t fc_status_last_ms = 0;
+// #1409: the V10/V11's hold-up cap as the flight computer reads it, from the
+// last FC_STATUS_MSG: FcScapReport << 16 | scap_mv, and when it arrived.
+// Written by processFrame (the I2S parse task or loop_oc), read by
+// serviceHoldup (loop_oc), hence atomics; a reading and a time from two
+// different frames are 200 ms apart and harmless.
+static std::atomic<uint32_t> fc_scap_report{0};
+static std::atomic<uint32_t> fc_scap_rx_ms{0};
 static bool peripherals_initialized = false; // Deferred init for peripherals behind PWR_PIN
 // #1228: the flight-logger half of initPeripherals() has a life of its own.
 // peripherals_initialized says the radio and the FC link are up; oc_logger_ok
@@ -2079,8 +2088,11 @@ static bool             fc_config_report_has_camera = false;
 // False for a v1-v3 report, which has no `antenna` — its zero would
 // otherwise read as "unknown", a real antenna setting.
 static bool             fc_config_report_has_antenna = false;
+// False for a v1-v4 report, which has no `guidance_tilt` — its zeros are not
+// limits the FC holds, so no config_tilt frame is sent for it.
+static bool             fc_config_report_has_guidance_tilt = false;
 // #1149 item 3: the same treatment last_query_cfg got, for the same reason.
-// This 201-byte struct is overwritten WHOLESALE by the I2S parser task (core 1,
+// This 209-byte struct is overwritten WHOLESALE by the I2S parser task (core 1,
 // prio 6) and was read field-by-field by loop_oc (core 1, prio 5) through a
 // reference held across dozens of statements and three String builds. The
 // parser strictly preempts loopTask, so a config readback could mix two report
@@ -2089,7 +2101,8 @@ static portMUX_TYPE fc_config_report_mux = portMUX_INITIALIZER_UNLOCKED;
 static inline ConfigReportData snapshotConfigReport(bool* valid_out,
                                                     bool* has_pyro_out = nullptr,
                                                     bool* has_camera_out = nullptr,
-                                                    bool* has_antenna_out = nullptr)
+                                                    bool* has_antenna_out = nullptr,
+                                                    bool* has_guidance_tilt_out = nullptr)
 {
     portENTER_CRITICAL(&fc_config_report_mux);
     const ConfigReportData snap = fc_config_report;
@@ -2097,11 +2110,13 @@ static inline ConfigReportData snapshotConfigReport(bool* valid_out,
     const bool has_pyro = fc_config_report_has_pyro;
     const bool has_camera = fc_config_report_has_camera;
     const bool has_antenna = fc_config_report_has_antenna;
+    const bool has_guidance_tilt = fc_config_report_has_guidance_tilt;
     portEXIT_CRITICAL(&fc_config_report_mux);
     if (valid_out) *valid_out = valid;
     if (has_pyro_out) *has_pyro_out = has_pyro;
     if (has_camera_out) *has_camera_out = has_camera;
     if (has_antenna_out) *has_antenna_out = has_antenna;
+    if (has_guidance_tilt_out) *has_guidance_tilt_out = has_guidance_tilt;
     return snap;
 }
 static volatile bool    fc_config_report_dirty = false;
@@ -2317,6 +2332,25 @@ static void initRailCurrentAdc()
 // How often commitPowerSample re-reads the rail currents (#1485: 10 Hz).
 static constexpr uint32_t RAIL_AMPS_PERIOD_MS = 100;
 
+// CENJARS 11-01: the camera rail's running/dark verdict (cam_draw_policy.h),
+// for the FC's RunCam start. Written by the power sampler at each 10 Hz rail
+// read and read by the status serve, so it crosses tasks as one atomic byte
+// plus the read's time: a verdict older than CAM_DRAW_FRESH_MS (a stalled
+// sampler, an INA fault) is reported as not monitored rather than as stale.
+static CamDrawPolicy::Debounce cam_draw;
+static std::atomic<uint8_t>  cam_draw_bits{0};   // OUT_STATUS_CAM_* bits
+static std::atomic<uint32_t> cam_draw_ms{0};     // millis() of the read behind them
+static constexpr uint32_t CAM_DRAW_FRESH_MS = 1000;
+
+static uint8_t camDrawStatusBits(uint32_t now_ms)
+{
+    const uint8_t bits = cam_draw_bits.load(std::memory_order_acquire);
+    if (bits == 0) return 0;
+    if ((uint32_t)(now_ms - cam_draw_ms.load(std::memory_order_relaxed)) > CAM_DRAW_FRESH_MS)
+        return 0;
+    return bits;
+}
+
 static float readRailAmps(int gpio, float r_ohm)
 {
     if (!rail_adc_ready || gpio < 0 || r_ohm <= 0.0f) return NAN;
@@ -2358,6 +2392,12 @@ static float readRailAmps(int gpio, float r_ohm)
 //  trace the first-article cold-start log asks for, and nowhere else — no
 //  arm block.  Boards without the sense line (SCAP_ADC_PIN < 0) skip all of
 //  it and their telemetry never carries the keys.
+//
+//  #1409: the Tinker-Mantis V10/V11 (SCAP_FROM_FC) has the same divider on the
+//  FLIGHT computer's GPIO17. The FC reads it and sends it in every
+//  FC_STATUS_MSG; serviceHoldup takes that reading in place of an ADC read
+//  here, and the verdict, the keys and the trace are the mini's. While the FC
+//  is off or silent the verdict is withheld (key absent), not judged stale.
 // ---------------------------------------------------------------------------
 static adc_cali_handle_t      scap_adc_cali  = nullptr;
 static bool                   scap_adc_ready = false;
@@ -2383,6 +2423,16 @@ static inline adc_channel_t adc1ChannelForGpio(int gpio)
 
 static void initHoldupAdc()
 {
+    if (config::SCAP_FROM_FC)
+    {
+        // #1409: the V10/V11's sense line is the flight computer's GPIO17; its
+        // reading arrives in FC_STATUS_MSG and serviceHoldup judges it here.
+        ESP_LOGI("OC", "[HOLDUP] V_SCAP from the flight computer (FC_STATUS_MSG): charged at %.2f V, "
+                       "advisory after %lu s under it; no verdict while the FC is off (#1166, #1409)",
+                 (double)config::HOLDUP_CHARGED_V,
+                 (unsigned long)(config::HOLDUP_LOW_ADVISORY_MS / 1000u));
+        return;
+    }
     if (config::SCAP_ADC_PIN < 0) return;   // no sense line on this board
 
     if (rail_adc_unit == nullptr)
@@ -2464,7 +2514,7 @@ static float readHoldupVolts()
 // verdict.  NOT CHARGING and NO READING are warnings; everything else is info.
 static void serviceHoldup(uint32_t now_ms)
 {
-    if (!scap_adc_ready) return;
+    if (!scap_adc_ready && !config::SCAP_FROM_FC) return;
     static bool     ever_read      = false;
     static uint32_t last_read_ms   = 0;
     static bool     ever_traced    = false;
@@ -2475,7 +2525,39 @@ static void serviceHoldup(uint32_t now_ms)
     ever_read    = true;
     last_read_ms = now_ms;
 
-    holdup_scap_v = readHoldupVolts();
+    if (config::SCAP_FROM_FC)
+    {
+        // #1409: the flight computer's last report, if it is current. The
+        // clock is read AFTER the arrival time: the frame lands on another
+        // task, and an arrival stamped after this call's now_ms would wrap the
+        // unsigned age and read as 49 days stale.
+        const uint32_t rx_ms  = fc_scap_rx_ms.load(std::memory_order_acquire);
+        const uint32_t rep    = fc_scap_report.load(std::memory_order_relaxed);
+        const uint32_t age_at = millis();
+        const holdup_policy::RemoteReading r =
+            holdup_policy::remoteReading((uint8_t)(rep >> 16), (uint16_t)(rep & 0xFFFFu),
+                                         age_at, rx_ms, config::FC_FRAME_STALE_MS);
+        if (!r.live)
+        {
+            // FC off, rebooting, too old to send it: nothing to judge and
+            // nothing wrong. Say so once when a verdict goes away.
+            if (last_state != holdup_policy::NONE)
+            {
+                ESP_LOGI("OC", "[HOLDUP] +%lu s no V_SCAP from the flight computer (off or silent) "
+                               "— verdict withheld until it reports (#1409)",
+                         (unsigned long)(now_ms / 1000u));
+            }
+            holdup_scap_v = NAN;
+            holdup_tracker.quiet();
+            last_state = holdup_policy::NONE;
+            return;
+        }
+        holdup_scap_v = r.volts;
+    }
+    else
+    {
+        holdup_scap_v = readHoldupVolts();
+    }
     const uint8_t st = holdup_tracker.update(holdup_scap_v, now_ms,
                                              config::HOLDUP_CHARGED_V,
                                              config::HOLDUP_LOW_ADVISORY_MS);
@@ -2640,6 +2722,12 @@ static bool commitPowerSample(float bus_v, float current_a)
         rail_amps_ms   = rail_now_ms;
         cam_a   = readRailAmps(config::CAM_IMON_GPIO, config::CAM_IMON_R_OHM);
         servo_a = readRailAmps(config::SERVO_IMON_GPIO, config::SERVO_IMON_R_OHM);
+        cam_draw.update(cam_a);
+        cam_draw_ms.store(rail_now_ms, std::memory_order_relaxed);
+        cam_draw_bits.store(
+            (uint8_t)((cam_draw.monitored() ? OUT_STATUS_CAM_MONITORED_BIT : 0) |
+                      (cam_draw.drawing()   ? OUT_STATUS_CAM_DRAWING_BIT   : 0)),
+            std::memory_order_release);
     }
     psi.cam_current   = cam_a;
     psi.servo_current = servo_a;
@@ -3976,8 +4064,14 @@ static void queueOutStatusResponse(bool ready)
     // #1137 item 4: byte 2 is the serving-window epoch (0 while idle).  An FC
     // that predates it reads payload_len >= 2 and simply never sees the byte,
     // so this is additive on the wire.
-    uint8_t payload[OUT_STATUS_PAYLOAD_BYTES] = { outStatusByte(ready, boot_token_powered), cmd,
-                           (cmd != 0U) ? cmd_serve_epoch : (uint8_t)0 };
+    // CENJARS 11-01: bits 2-3 carry the camera rail's running/dark verdict for
+    // the FC's RunCam start; an older FC reads `!= 0` and never sees them.
+    const uint8_t cam_bits = camDrawStatusBits(millis());
+    uint8_t payload[OUT_STATUS_PAYLOAD_BYTES] = {
+        outStatusByte(ready, boot_token_powered,
+                      (cam_bits & OUT_STATUS_CAM_MONITORED_BIT) != 0,
+                      (cam_bits & OUT_STATUS_CAM_DRAWING_BIT) != 0),
+        cmd, (cmd != 0U) ? cmd_serve_epoch : (uint8_t)0 };
     size_t frame_len = 0;
     if (!TR_I2C_Interface::packMessage(OUT_STATUS_RESPONSE,
                                        payload,
@@ -4589,7 +4683,10 @@ static void pyroFaultTask(void*)
         if (ok && overLimit(raw))
             pyroFaultTripLocked(raw, Source::Poll, now_ms);
         else if (ok)
+        {
             notePeak(pyro_fault, raw);
+            noteUnderLimit(pyro_fault);
+        }
         portEXIT_CRITICAL(&pyro_fault_mux);
 
         ulTaskNotifyTake(pdTRUE, 1);   // the next tick, or at once on an alert edge
@@ -5233,7 +5330,8 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         // (#915, 169 bytes) is a byte-exact prefix of v2 (#1231, 193 bytes:
         // + the live deployment configuration), which is a prefix of v3
         // (#1472, 194 bytes: + the camera type), which is a prefix of v4
-        // (201 bytes: + the GNSS antenna offset), so an older sender is still
+        // (201 bytes: + the GNSS antenna offset), which is a prefix of v5
+        // (209 bytes: + the guidance tilt limits), so an older sender is still
         // accepted — with nothing to serve for the blocks it lacks — rather
         // than refused.  The FC image is relayed through the OC, so an OC
         // updated ahead of its FC is the normal OTA order; refusing an older
@@ -5242,15 +5340,25 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         constexpr size_t kV1Bytes   = offsetof(ConfigReportData, pyro);
         constexpr size_t kV2Bytes   = offsetof(ConfigReportData, camera_type);
         constexpr size_t kV3Bytes   = offsetof(ConfigReportData, antenna);
+        constexpr size_t kV4Bytes   = offsetof(ConfigReportData, guidance_tilt);
         constexpr size_t kVersionAt = offsetof(ConfigReportData, version);
         const uint8_t ver = (payload_len > kVersionAt) ? payload[kVersionAt] : 0xFF;
         ConfigReportData incoming = {};
         bool has_pyro = false;
         bool has_camera = false;
         bool has_antenna = false;
+        bool has_guidance_tilt = false;
         if (ver == ConfigReportData::VERSION && payload_len >= sizeof(ConfigReportData))
         {
             memcpy(&incoming, payload, sizeof(incoming));
+            has_pyro = true;
+            has_camera = true;
+            has_antenna = true;
+            has_guidance_tilt = true;
+        }
+        else if (ver == 4U && payload_len >= kV4Bytes)
+        {
+            memcpy(&incoming, payload, kV4Bytes);   // guidance_tilt stays zeroed, and is never served
             has_pyro = true;
             has_camera = true;
             has_antenna = true;
@@ -5303,6 +5411,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         fc_config_report_has_pyro = has_pyro;
         fc_config_report_has_camera = has_camera;
         fc_config_report_has_antenna = has_antenna;
+        fc_config_report_has_guidance_tilt = has_guidance_tilt;
         portEXIT_CRITICAL(&fc_config_report_mux);
         if (changed) fc_config_report_dirty = true;
 
@@ -5781,10 +5890,12 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         //     no edge to fall from);
         //   - the guard means an ordinary operator stop, where we have already
         //     cleared the request, produces no log and no work.
-        if (payload_len >= sizeof(FcStatusData))
+        // v1 (5 bytes, an FC image from before #1409) or v2: the flags are
+        // in both, so the length gate is v1's, not sizeof.
+        if (payload_len >= FC_STATUS_V1_SIZE)
         {
             FcStatusData fcs{};
-            memcpy(&fcs, payload, sizeof(FcStatusData));
+            memcpy(&fcs, payload, FC_STATUS_V1_SIZE);
             const bool fc_cam = (fcs.flags & FCS_CAMERA_ENGAGED) != 0;
             if (fc_camera_engaged_prev && !fc_cam && camera_recording_requested)
             {
@@ -5795,6 +5906,16 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             }
             fc_camera_engaged_prev = fc_cam;
             fc_status_last_ms = millis();
+
+            // #1409: the hold-up cap, where the sense line is the FC's. A v1
+            // frame (an FC image from before #1409) has none: ABSENT.
+            if (config::SCAP_FROM_FC)
+            {
+                uint16_t mv = 0;
+                const uint8_t rep = fcStatusScapReport(payload, payload_len, &mv);
+                fc_scap_report.store(((uint32_t)rep << 16) | mv, std::memory_order_relaxed);
+                fc_scap_rx_ms.store(fc_status_last_ms, std::memory_order_release);
+            }
         }
     }
     else if (type == FC_BOOT_STATUS_MSG)
@@ -7125,12 +7246,13 @@ static void sendLoRaBeacon()
 // disconnected, so any frames still queued at disconnect drain out harmlessly.
 // MUST exceed the connect burst, which sendCurrentConfig() enqueues in ONE
 // synchronous pass before any drain runs: config, config_pyro,
-// config_identity, fc_identity, imu_orient, guid_target, and the three #915
-// report frames = 9.  At the old cap of 8 the ninth enqueue evicted the
-// oldest — the main "config" frame — and the app silently never received it.
+// config_identity, fc_identity, imu_orient, guid_target, and the four report
+// frames (#915's three + config_tilt) = 10.  At the old cap of 8 the ninth
+// enqueue evicted the oldest — the main "config" frame — and the app silently
+// never received it.
 // Raise this WITH the burst, or the drop is invisible except for one warning
 // line on a console nobody is watching on the pad.  The report-dirty path
-// (extras + config_pyro = 4) could land in the SAME pass as a connect burst;
+// (extras + config_pyro = 5) could land in the SAME pass as a connect burst;
 // sendCurrentConfig() clears the dirty flag so the two never stack.
 static constexpr uint8_t  CFG_RB_CAP     = 12;
 static constexpr uint32_t CFG_RB_PACE_MS = 20;   // >= negotiated max conn interval
@@ -7275,7 +7397,7 @@ static void sendGuidTarget()
 
 // #915: the settings the "config" frame never carried, published from the
 // FC's own report so the app can SHOW and VERIFY them instead of displaying
-// profile values it has no way to check.  Split across three frames for the
+// profile values it has no way to check.  Split across four frames for the
 // same reason everything else here is kept small — sendConfigJSON silently
 // drops anything over the BLE notify MTU, so a single fat frame would vanish
 // without a trace.
@@ -7290,7 +7412,9 @@ static void sendConfigExtras()
     // #1149 item 3: a COPY, not a reference to the live global — the parser
     // task can replace it between any two of the reads below.
     bool r_valid = false;
-    const ConfigReportData r = snapshotConfigReport(&r_valid);
+    bool has_guidance_tilt = false;
+    const ConfigReportData r = snapshotConfigReport(&r_valid, nullptr, nullptr, nullptr,
+                                                    &has_guidance_tilt);
     (void)r_valid;
 
     // 1) Servo trim 2-4, fin travel, fin layout.
@@ -7331,9 +7455,34 @@ static void sendConfigExtras()
     g += ",\"gkp\":"; g += fmtf(r.guidance.kp_pos_per_s2, 2);
     g += ",\"gkd\":"; g += fmtf(r.guidance.kd_vel_per_s, 2);
     g += ",\"glw\":"; g += itos(r.guidance.guidance_law);
+    // The flight computer's own guidance on/off, while it is up: what it will
+    // fly.  The "config" frame's "ge" is this OC's copy -- its NVS from the
+    // last cmd 32 until the FC's frames flow -- and the app used to show the
+    // profile over both.  GTV Blue (2026-11-01) flew with guidance off while
+    // the app said on.  Absent with the rail off and from older OCs, which
+    // the apps show as "unverified" (the camera's #1472 rule).
+    if (pwr_pin_on) {
+        g += ",\"gen\":"; g += r.guidance.enable ? "true" : "false";
+    }
     g += "}";
     enqueueConfigReadback(g);
     ESP_LOGI("CFG", "Queued config_guid readback (%u bytes)", (unsigned)g.length());
+
+    // 2b) The guidance tilt-limit latch angles (cmd 65's tail), in a frame of
+    // their own: config_guid is already ~170 bytes against a 182-byte notify
+    // at the usual iPhone MTU, and two more keys would have it skipped
+    // outright.  Only from a v5 report — an older FC has no limits to show
+    // but its compiled ones, and the app keeps the profile's for it.  Keep it
+    // BEFORE config_roll: the apps' connect-time adopt runs when config_roll
+    // lands, and a later config_tilt would miss it.
+    if (has_guidance_tilt) {
+        String t = "{\"type\":\"config_tilt\"";
+        t += ",\"gtlb\":"; t += fmtf(r.guidance_tilt.tilt_limit_boost_deg, 1);
+        t += ",\"gtlc\":"; t += fmtf(r.guidance_tilt.tilt_limit_coast_deg, 1);
+        t += "}";
+        enqueueConfigReadback(t);
+        ESP_LOGI("CFG", "Queued config_tilt readback (%u bytes)", (unsigned)t.length());
+    }
 
     // 3) The roll profile.  num_waypoints == 0 is a real answer ("rate-only"),
     // not an absent one — the app must be able to tell that from "this rocket
@@ -13740,13 +13889,19 @@ static void loop_oc()
         }
         else if (ble_cmd == 65)
         {
-            // Full guidance config (GuidanceConfigData): relay the whole struct to the FC
+            // Full guidance config (GuidanceConfigFrame): relay the whole frame to the FC.
+            // A 45-byte frame from an app that predates the tilt limits is
+            // relayed with its tail zero-filled; the FC reads that as "keep
+            // the limits you have" (GuidanceConfigFrame).
             const uint8_t* payload = ble_app.getCommandPayload();
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= sizeof(GuidanceConfigData))
             {
-                                setPendingCommandWithConfig(GUIDANCE_CONFIG_PENDING, GUIDANCE_CONFIG_MSG, payload, sizeof(GuidanceConfigData));
-                ESP_LOGI("BLE", "Guidance config queued for RocketComputer");
+                uint8_t frame[sizeof(GuidanceConfigFrame)] = {};
+                memcpy(frame, payload, plen < sizeof(frame) ? plen : sizeof(frame));
+                setPendingCommandWithConfig(GUIDANCE_CONFIG_PENDING, GUIDANCE_CONFIG_MSG, frame, sizeof(frame));
+                ESP_LOGI("BLE", "Guidance config queued for RocketComputer (%u-byte app frame)",
+                         (unsigned)plen);
             }
         }
         else if (ble_cmd == 66)

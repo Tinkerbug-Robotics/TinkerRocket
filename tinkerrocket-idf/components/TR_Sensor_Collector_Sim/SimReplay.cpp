@@ -9,7 +9,8 @@ namespace sim_replay {
 namespace {
 
 constexpr uint8_t kMagic[4] = {'T', 'R', 'R', 'P'};
-constexpr uint16_t kVersion = 1;
+constexpr uint16_t kVersionLinear = 1;   // the pressure's counts in Pa
+constexpr uint16_t kVersionLog = 2;      // in ln(p / p_ref): the same height step at any height
 constexpr uint8_t kPhasePad = 0;
 constexpr uint8_t kPhaseLanded = 6;
 
@@ -69,7 +70,8 @@ bool SimReplay::load(const uint8_t* blob, size_t len)
     std::memcpy(h.name, blob + 100, sizeof(h.name));
     h.name[sizeof(h.name) - 1] = '\0';
 
-    if (h.version != kVersion || header_bytes != kHeaderBytes || sample_bytes != kSampleBytes)
+    if ((h.version != kVersionLinear && h.version != kVersionLog) || header_bytes != kHeaderBytes
+        || sample_bytes != kSampleBytes)
     {
         why_ = "another version of the format";
         return false;
@@ -133,7 +135,8 @@ void SimReplay::raw(uint32_t i, Sample& out) const
     }
     for (int k = 0; k < 4; ++k)
         out.q[k] = rd<int16_t>(p, 12 + 2 * k) * (1.0f / 32767.0f);
-    out.p_pa = h_.p_ref_pa + rd<int16_t>(p, 20) * h_.p_lsb_pa;
+    const float pc = static_cast<float>(rd<int16_t>(p, 20)) * h_.p_lsb_pa;
+    out.p_pa = h_.version == kVersionLog ? h_.p_ref_pa * std::exp(pc) : h_.p_ref_pa + pc;
     out.phase = p[22];
     out.high_g = (p[23] & 0x01) != 0;
 }

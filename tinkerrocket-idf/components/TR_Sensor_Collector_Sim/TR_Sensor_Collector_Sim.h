@@ -22,7 +22,18 @@
 #include "SimSensorModel.h"
 #include "sim_landed_hold.h"
 #include <freertos/FreeRTOS.h>
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+// The builds whose rig replay takes its clock from the receiver's timed raw
+// epochs: the mosaic-only image's, the gnss-sdr-dev image's, and the rig
+// replay of the one image (TR_GNSS_AUTO_RAW with TR_RAW_NAV_RIG_REPLAY: the
+// gnss-sdr-dev board on J1, as the gnss-sdr-dev image's). The one image's
+// flight build has none of it, as before.
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR) \
+    || ((defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW) && (defined(TR_RAW_NAV_RIG_REPLAY) && TR_RAW_NAV_RIG_REPLAY))
+#define TR_SIM_RAW_REPLAY_CLOCK 1
+#else
+#define TR_SIM_RAW_REPLAY_CLOCK 0
+#endif
+#if TR_SIM_RAW_REPLAY_CLOCK
 #include <atomic>
 #endif
 
@@ -62,7 +73,8 @@ public:
     // only files them; and that receiver sends each one once (when it
     // changes, or on a resend at link setup and launch), where the LC86G
     // repeats them every second, so one dropped in a sim on the pad would be
-    // missing until its next upload, hours on.
+    // missing until its next upload, hours on. (The PX1105R image's decoded
+    // ephemerides likewise: getGNSSEphemerisDecoded below.)
     bool enableGNSSRawOutputs() { return real_.enableGNSSRawOutputs(); }
     bool getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out);
     bool getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len);
@@ -75,7 +87,38 @@ public:
     // each fix's GPS time sets the replay's clock -- on the mosaic-G5, which
     // hands no timed fix, each timed raw epoch's (getGNSSRawEpoch).
     bool getGNSSFix(gnss_raw::TimedFix& out);
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    // The image that flies the raw-GNSS filter on every receiver giving
+    // measurements: the three images' calls, by the mosaic's and the
+    // PX1105R's rules -- the receiver's GPS ionosphere a real sky's while
+    // idle, none while a sim runs (the last one decoded, not consumed); the
+    // grid, the pairs, the bands and the board's Doppler means straight to the
+    // receiver; the PX1105R's decoded ephemerides passed on in a sim too, as
+    // the mosaic's blocks and the board's RTCM3 are. Its rig replay build
+    // (the gnss-sdr-dev board on J1) takes the sky's day and ionosphere as
+    // the gnss-sdr-dev image's does.
+    bool getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const;
+#if TR_SIM_RAW_REPLAY_CLOCK
+    uint16_t replaySkyGpsDay() const { return replay_sky_day_.load(std::memory_order_acquire); }
+#else
+    uint16_t replaySkyGpsDay() const { return 0; }
+#endif
+    void setGNSSRawEpochPeriodMs(uint32_t period_ms) { real_.setGNSSRawEpochPeriodMs(period_ms); }
+    bool setGNSSRawDopplerPairing(const mosaic::MosaicDopplerPairConfig& c)
+    {
+        return real_.setGNSSRawDopplerPairing(c);
+    }
+    bool setGNSSRawMultiband(const mosaic::MosaicMultibandConfig& c, float windup_k)
+    {
+        return real_.setGNSSRawMultiband(c, windup_k);
+    }
+    void noteGNSSRollRate(float p_rps) { real_.noteGNSSRollRate(p_rps); }
+    bool getGNSSEphemerisDecoded(gps_eph_t& out) { return real_.getGNSSEphemerisDecoded(out); }
+    void setGNSSRawEpochConfig(uint32_t period_ms, const sdr_rtcm::SdrDopplerMeanConfig& mean)
+    {
+        real_.setGNSSRawEpochConfig(period_ms, mean);
+    }
+#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
     // The mosaic-only image's GPS ionosphere, by the same rule: a real sky's
     // while idle or in the rig replay, none while a sim runs. It is the last
     // one decoded, not consumed, so the GNSS task finds it again after the
@@ -108,6 +151,32 @@ public:
     }
     // the replayed IMU's roll, as the real one's: the receiver is real in a sim
     void noteGNSSRollRate(float p_rps) { real_.noteGNSSRollRate(p_rps); }
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+    // The PX1105R image's, by the mosaic's rules (no rig replay on this
+    // image): its GPS ionosphere a real sky's while idle, none while a sim
+    // runs (the last one decoded, not consumed); the fused grid and the
+    // Dopplers in pairs straight to the receiver; and the ephemerides its
+    // driver decoded from the subframes, passed on while a sim runs too, as
+    // the mosaic's navigation blocks are: they say where the satellites are,
+    // not what the IMU did, and the stage only files them.
+    bool getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const;
+    void setGNSSRawEpochPeriodMs(uint32_t period_ms) { real_.setGNSSRawEpochPeriodMs(period_ms); }
+    bool setGNSSRawDopplerPairing(const mosaic::MosaicDopplerPairConfig& c)
+    {
+        return real_.setGNSSRawDopplerPairing(c);
+    }
+    bool getGNSSEphemerisDecoded(gps_eph_t& out) { return real_.getGNSSEphemerisDecoded(out); }
+#endif
+#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+    // The SDR raw-nav image's fused grid and Doppler means go straight to the
+    // board's driver; its ionosphere (the board's 4001 sub-type 4) and its
+    // sky's day as the mosaic's, by the same rule (getGNSSBroadcastIono).
+    bool getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const;
+    uint16_t replaySkyGpsDay() const { return replay_sky_day_.load(std::memory_order_acquire); }
+    void setGNSSRawEpochConfig(uint32_t period_ms, const sdr_rtcm::SdrDopplerMeanConfig& mean)
+    {
+        real_.setGNSSRawEpochConfig(period_ms, mean);
+    }
 #endif
 
     // Debug passthrough
@@ -210,6 +279,11 @@ public:
     // False in a build without a flight, or if the carried one does not load.
     bool startReplay();
     bool isReplay() const { return replay_on_; }
+    // A GPS instant on the MCU clock (esp_timer, us) from a receiver whose
+    // driver hands no timed fix: the gnss-sdr-dev board's GPS-to-MCU line,
+    // which the flight loop drains (GnssClockData). It sets the replay's
+    // clock as an LC86G fix does. Nothing outside a replay.
+    void replayNoteTime(double gps_s, int64_t mcu_us);
 
     // For the console.
     struct ReplayStatus
@@ -222,7 +296,7 @@ public:
         float    last_fix_t_s = 0.0f; // the latest of the rig's fixes, s from ignition
     };
     void replayStatus(ReplayStatus& out) const;
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if TR_SIM_RAW_REPLAY_CLOCK
     // The replay's time (s from ignition) at a recent 32-bit MCU stamp
     // (micros(): a sample's, a navigation state's); false before the clock.
     bool replayTAt(uint32_t time_us, double& t_s) const;
@@ -396,7 +470,7 @@ private:
     float replay_last_t_ = 0.0f;             // the latest IMU sample's (replayStatus)
     bool  replay_last_have_t_ = false;
     uint8_t replay_last_phase_ = 0;
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if TR_SIM_RAW_REPLAY_CLOCK
     float replay_hg_bias_[3] = {};           // setReplayHighGBias
     std::atomic<uint16_t> replay_sky_day_{0};   // replaySkyGpsDay
     uint32_t replay_pps_seen_ = 0;           // the driver's 1PPS checks handed to the clock (replayNoteEpoch)
@@ -407,7 +481,7 @@ private:
     // The field the magnetometer reads in that attitude, rocket frame, uT.
     void replayField(const sim_replay::Sample& s, float b[3]) const;
     void replayNoteFix(const gnss_raw::TimedFix& f);
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if TR_SIM_RAW_REPLAY_CLOCK
     void replayNoteEpoch(const gnss_raw::TimedRawEpoch& e);
 #endif
 };

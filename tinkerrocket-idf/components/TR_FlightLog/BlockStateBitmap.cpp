@@ -78,6 +78,35 @@ bool BlockStateBitmap::findContiguousFree(uint32_t n_blocks,
     return false;
 }
 
+bool BlockStateBitmap::findRoomiestFree(uint32_t n_blocks,
+                                        uint32_t range_start,
+                                        uint32_t range_end,
+                                        uint32_t& out_start) const {
+    if (n_blocks == 0) return false;
+    if (range_start >= range_end) return false;
+    if (range_end > block_count_) range_end = block_count_;
+
+    bool     found     = false;
+    uint32_t best_free = 0;
+    uint32_t b = range_start;
+    while (b < range_end) {
+        if (get(b) != BLOCK_FREE && get(b) != BLOCK_BAD) { ++b; continue; }
+        const uint32_t stretch_start = b;
+        uint32_t free_n = 0;
+        while (b < range_end && (get(b) == BLOCK_FREE || get(b) == BLOCK_BAD)) {
+            if (get(b) == BLOCK_FREE) ++free_n;
+            ++b;
+        }
+        uint32_t start = 0;
+        if (free_n > best_free && findContiguousFree(n_blocks, stretch_start, b, start)) {
+            best_free = free_n;
+            out_start = start;
+            found     = true;
+        }
+    }
+    return found;
+}
+
 size_t BlockStateBitmap::countInState(BlockState state) const {
     return countInStateRange(state, 0, block_count_);
 }

@@ -27,7 +27,8 @@ Format (little-endian, no padding; SimReplay.cpp reads it), a 128-byte header:
     56 f64      the rig file's first instant, s from ignition (minus the prologue)
     64 f64      its last, s from ignition
     72 f32      accelerometer LSB, m/s^2     76 f32 gyro LSB, rad/s
-    80 f32      pressure reference, Pa       84 f32 pressure LSB, Pa
+    80 f32      pressure reference, Pa       84 f32 pressure LSB: Pa (version 1), or of ln(p / reference)
+                                                    (version 2, --log-pressure: the same height step at any height)
     88 f32      pad loop, s: the first this many seconds are the pad, played in a loop before the clock is known
     92 f32      landed loop, s: the last this many seconds are landed, played in a loop after the end
     96 f32      decimal year, for the magnetic model
@@ -36,7 +37,7 @@ then per sample, 24 bytes:
     0  i16[3]  specific force, rocket frame FLU (x nose, y left, z up), accelerometer LSB
     6  i16[3]  angular rate, FLU, gyro LSB
     12 i16[4]  attitude, FLU body -> NED, scalar first, 1/32767
-    20 i16     pressure minus the reference, pressure LSB
+    20 i16     pressure minus the reference (version 1), or ln(pressure / reference) (version 2), pressure LSB
     22 u8      phase (0 pad, 1 rail, 2 boost, 3 coast, 4 drogue, 5 main, 6 landed)
     23 u8      flags: bit 0 the high-g channel was in use
 """
@@ -52,6 +53,7 @@ import numpy as np
 
 MAGIC = b"TRRP"
 VERSION = 1
+VERSION_LOG = 2                              # the pressure as ln(p / p_ref): a flight to 26 km in int16
 HEADER_BYTES = 128
 SAMPLE_BYTES = 24
 HEADER_FMT = "<4sHHHHIdddddddfffffff28s"
@@ -111,7 +113,7 @@ def lsb_for(peak, floor, step):
     return max(floor, step * np.ceil(need / step - 1e-9))
 
 
-def build(cols, scen, t_from=-30.0, port_error=True, pad_loop_s=10.0, land_loop_s=5.0, name=None):
+def build(cols, scen, t_from=-30.0, port_error=True, pad_loop_s=10.0, land_loop_s=5.0, name=None, log_pressure=False):
     """The blob's bytes and a summary."""
     t = cols["t_s"]
     keep = t >= t_from - 1e-9
@@ -161,7 +163,13 @@ def build(cols, scen, t_from=-30.0, port_error=True, pad_loop_s=10.0, land_loop_
     acc_lsb = lsb_for(np.abs(f).max(), 0.01, 0.01)
     gyro_lsb = lsb_for(np.abs(w).max(), 0.001, 0.001)
     p_ref = float(np.round(p[0]))
-    p_lsb = lsb_for(np.abs(p - p_ref).max(), 0.25, 0.25)
+    if log_pressure:
+        # a count is the same fraction of the pressure everywhere: a height step of about ln(1 + lsb) * 8 km
+        p_code = np.log(p / p_ref)
+        p_lsb = lsb_for(np.abs(p_code).max(), 1e-6, 1e-6)
+    else:
+        p_code = p - p_ref
+        p_lsb = lsb_for(np.abs(p_code).max(), 0.25, 0.25)
 
     t0 = float(tt[0])
     t_last = float(tt[-1])
@@ -181,7 +189,8 @@ def build(cols, scen, t_from=-30.0, port_error=True, pad_loop_s=10.0, land_loop_
     flight = scen.get("flight") if isinstance(scen.get("flight"), dict) else {}
     nm = (name or flight.get("id") or scen["scenario"]).encode()[:27]
 
-    header = struct.pack(HEADER_FMT, MAGIC, VERSION, HEADER_BYTES, SAMPLE_BYTES, rate, len(tt),
+    header = struct.pack(HEADER_FMT, MAGIC, VERSION_LOG if log_pressure else VERSION, HEADER_BYTES, SAMPLE_BYTES,
+                         rate, len(tt),
                          t0, ignition_gps, float(origin["lat_deg"]), float(origin["lon_deg"]),
                          float(origin["alt_m"]), -prologue, float(scen["duration_s"]) - prologue,
                          acc_lsb, gyro_lsb, p_ref, p_lsb, pad_loop_s, land_loop_s,
@@ -196,7 +205,7 @@ def build(cols, scen, t_from=-30.0, port_error=True, pad_loop_s=10.0, land_loop_
     fi = i16(f, acc_lsb)
     wi = i16(w, gyro_lsb)
     qi = i16(q, 1.0 / 32767.0)
-    pi = i16(p - p_ref, p_lsb)
+    pi = i16(p_code, p_lsb)
     rec = np.zeros(len(tt), dtype=np.dtype([("f", "<i2", 3), ("w", "<i2", 3), ("q", "<i2", 4), ("p", "<i2"),
                                              ("phase", "u1"), ("flags", "u1")]))
     assert rec.dtype.itemsize == SAMPLE_BYTES
@@ -206,7 +215,7 @@ def build(cols, scen, t_from=-30.0, port_error=True, pad_loop_s=10.0, land_loop_
         "samples": len(tt), "rate_hz": rate, "t0_s": t0, "t_last_s": t_last,
         "ignition_gps_s": ignition_gps, "gps_week": int(ignition_gps // 604800),
         "ignition_tow_s": ignition_gps % 604800, "acc_lsb": acc_lsb, "gyro_lsb": gyro_lsb,
-        "p_ref_pa": p_ref, "p_lsb_pa": p_lsb, "peak_acc_mps2": float(np.abs(f).max()),
+        "p_ref_pa": p_ref, "p_lsb_pa": p_lsb, "log_pressure": log_pressure, "peak_acc_mps2": float(np.abs(f).max()),
         "peak_gyro_rps": float(np.abs(w).max()), "min_p_pa": float(p.min()),
         "bytes": HEADER_BYTES + len(tt) * SAMPLE_BYTES,
     }
@@ -224,16 +233,21 @@ def main(argv=None):
     ap.add_argument("--name", help="the flight's name in the header (default: the scenario's)")
     ap.add_argument("--pad-loop", type=float, default=10.0, help="s of pad looped before the clock (default 10)")
     ap.add_argument("--land-loop", type=float, default=5.0, help="s of ground looped after the end (default 5)")
+    ap.add_argument("--log-pressure", action="store_true",
+                    help="the pressure as ln(p / reference) (format version 2): a flight to many km keeps about a "
+                         "metre of height a count, where the linear LSB would be metres at the top")
     args = ap.parse_args(argv)
     with open(args.scenario_json) as f:
         scen = json.load(f)
     blob, s = build(read_csv(args.sensors_csv), scen, t_from=args.t_from, port_error=not args.no_port_error,
-                    pad_loop_s=args.pad_loop, land_loop_s=args.land_loop, name=args.name)
+                    pad_loop_s=args.pad_loop, land_loop_s=args.land_loop, name=args.name,
+                    log_pressure=args.log_pressure)
     with open(args.out, "wb") as f:
         f.write(blob)
     print(f"{args.out}: {s['bytes'] / 1e6:.2f} MB, {s['samples']} samples at {s['rate_hz']} Hz, "
           f"t {s['t0_s']:.3f} .. {s['t_last_s']:.3f} s; ignition GPS week {s['gps_week']} TOW "
-          f"{s['ignition_tow_s']:.3f}; LSBs {s['acc_lsb']:g} m/s^2, {s['gyro_lsb']:g} rad/s, {s['p_lsb_pa']:g} Pa "
+          f"{s['ignition_tow_s']:.3f}; LSBs {s['acc_lsb']:g} m/s^2, {s['gyro_lsb']:g} rad/s, "
+          f"{s['p_lsb_pa']:g} {'of ln p' if s['log_pressure'] else 'Pa'} "
           f"(peaks {s['peak_acc_mps2']:.1f} m/s^2, {s['peak_gyro_rps']:.2f} rad/s, lowest {s['min_p_pa']:.0f} Pa)")
     return 0
 

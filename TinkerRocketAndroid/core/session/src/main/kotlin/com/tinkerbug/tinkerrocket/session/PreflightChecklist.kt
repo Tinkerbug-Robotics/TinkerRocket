@@ -150,6 +150,8 @@ public data class PreflightAutoContext(
     val telemetry: TelemetryData = TelemetryData(),
     val syncState: ActiveRocketSyncer.SyncState = ActiveRocketSyncer.SyncState.Idle,
     val profile: RocketProfile? = null,
+    /** The flight computer's guidance on/off against the profile's. */
+    val guidance: GuidanceStateCheck = GuidanceStateCheck.NotApplicable,
 )
 
 public data class PreflightProgress(val done: Int = 0, val total: Int = 0) {
@@ -214,6 +216,13 @@ public object PreflightChecklist {
 
             PreflightItemKind.SETTINGS_SYNCED -> when {
                 ctx.isRelay -> PreflightAutoStatus.NotApplicable("Needs a direct connection")
+                // Read and adopted is not enough when the rocket will fly
+                // something else: a guidance send can be lost after the adopt,
+                // and the profile then shows a guidance the flight computer
+                // does not hold (GTV Blue, 2026-11-01).  Unverified does not
+                // block — older out computers never say — the header carries it.
+                ctx.guidance.isMismatch ->
+                    PreflightAutoStatus.Pending(ctx.guidance.message ?: "Rocket guidance differs")
                 // #915: Adopted means the app read the rocket's own settings and
                 // brought the profile into line — app and vehicle agree, which is
                 // exactly what this step asks.  The changed groups are surfaced as

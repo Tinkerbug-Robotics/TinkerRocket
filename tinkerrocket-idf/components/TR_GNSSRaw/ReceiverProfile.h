@@ -45,6 +45,7 @@ enum GnssReceiverType : uint8_t
     kRxNeoM8t = 2,     // u-blox NEO-M8T
     kRxPx1105r = 3,    // SkyTraq PX1105R
     kRxMosaicG5 = 4,   // Septentrio mosaic-G5
+    kRxSdrDev = 5,     // TinkerRocket's gnss-sdr-dev board (its RTCM3: SdrRawEpoch.h)
 };
 
 // What the carrier range rates are for.
@@ -77,6 +78,8 @@ struct GnssSignalProfile
     float  phase_sigma45_m = 0.0f;        //   and at 45 dB-Hz (phaseSigmaM)
     bool   half_cycle_unflagged = true;   // a half-cycle step can come with its flag (DF420) clear: a data
                                           // channel's Costas loop, not a pilot's PLL
+    bool   pr_fused = true;               // its pseudorange fused; false: still read for the transmit time
+                                          // its Doppler is built at, never fused (RawMeas::has_pr false)
 };
 
 struct GnssReceiverProfile
@@ -131,6 +134,12 @@ struct GnssReceiverProfile
     // (TR_BENCH_RAW_DOP_AVG=0).
     bool   rr_pair_avg = false;
     double rr_pair_max_diff_mps = 15.0;   // the pair at most this far apart (300 m/s^2 over 50 ms)
+    // The troposphere's rate off each Doppler as the receiver climbs
+    // (RawMeasBuilder::Config::tropo_rate): the delay thins upward, and a
+    // climb puts that rate in every measured range rate. Off in every profile:
+    // the V10's gnss-sdr-dev image turns it on (applySdrFlightProfile), a bench
+    // image off again (TR_BENCH_RAW_TROPO_RATE=0).
+    bool   rr_tropo_rate = false;
     double epoch_slice_us = 2500.0;       // the navigation filter works an epoch at most this long a 10 ms step
                                           //   (RawGnssShadow's epoch_slice_us; main.cpp's primary filter takes it,
                                           //   not applyReceiverProfile: a shadow works an epoch at once)
@@ -304,10 +313,6 @@ inline GnssReceiverProfile placeholderProfile(GnssReceiverType type, const char*
 // u-blox NEO-M8T: UNMEASURED (its UBX-RXM-RAWX would carry the phase).
 inline GnssReceiverProfile neoM8tProfile() { return placeholderProfile(kRxNeoM8t, "NEO-M8T"); }
 
-// SkyTraq PX1105R: UNMEASURED. (The base C/N0 noise model is this receiver's
-// own fit, 2026-09-26, so its pr_corr_scale is likely 1, not the LC86G's 0.5;
-// its Doppler is rounded to 1 Hz, doppler_step_hz.)
-inline GnssReceiverProfile px1105rProfile() { return placeholderProfile(kRxPx1105r, "PX1105R"); }
 
 // Septentrio mosaic-G5 (the Goblin, V8/V9 J1), v0: UNMEASURED in flight. Set
 // up as the driver sets it (High dynamics, 20 Hz MeasEpoch, no smoothing) and
@@ -436,6 +441,131 @@ inline GnssReceiverProfile mosaicG5Profile()
     return p;
 }
 
+// TinkerRocket's gnss-sdr-dev board (V9/V10 J1, its RTCM3 at 2 Mbaud), v0:
+// UNMEASURED in flight. Its MSM7 at 100 Hz in the measurement mode, one
+// signal a system (GPS L1 C/A, Galileo E1-C, BeiDou B1C pilot), each epoch
+// made whole by its 4001 and put on the board's unstepped clock
+// (SdrRawEpoch.h). Fused as the mosaic is, at 10 Hz on the GPS-time grid.
+// Each number's source:
+//   "bench 11/02": the V10's OC log of 2026-11-02 (flight_20261102_213043,
+//     52 s, the board on its bench antenna, static);
+//   "the mosaic's": its number kept, for the reason given there;
+//   "the board": what its firmware does (gnss repo, receiver/README.md).
+inline GnssReceiverProfile sdrDevProfile()
+{
+    GnssReceiverProfile p = mosaicG5Profile();
+    p.type = kRxSdrDev;
+    p.name = "gnss-sdr-dev";
+    p.measured = false;
+
+    // BeiDou's B1C pilot shares L1's carrier (the board), not B1I's 1561.098
+    // MHz; its group delay against the ephemeris's B1I TGD1 is one more common
+    // BeiDou offset, which the filter's inter-system bias takes.
+    p.sig[GNSS_SYS_BDS].carrier_hz = GNSS_FREQ_L1_HZ;
+    p.sig[GNSS_SYS_GAL].half_cycle_unflagged = false;   // pilots, with a PLL (the board)
+    p.sig[GNSS_SYS_BDS].half_cycle_unflagged = false;
+    for (int k = 0; k < kProfileSys; ++k)
+    {
+        p.sig[k].cn0_min_pr = 25.0f;   // the mosaic's floors (its v0): the rig's runs sat at 34-39 dB-Hz,
+        p.sig[k].cn0_min_rr = 25.0f;   //   the bench's 20-52
+    }
+    // No BeiDou pseudorange fused: the board sends its B1C ephemerides
+    // (B-CNAV1) as RTCM 1042, which has no field for the semi-major axis's
+    // rate (Adot) or the mean motion's (delta-n dot), so the orbit the filter
+    // builds misses Adot x (t - toe) -- up to ~18 m in range (review,
+    // 2026-11-12). Their Dopplers stay: the rate is off by about Adot, a
+    // fraction of a mm/s. The pseudorange is still read, for the transmit
+    // time each Doppler is built at (RawMeasBuilder).
+    p.sig[GNSS_SYS_BDS].pr_fused = false;
+
+    // timing: each observable carried to the whole millisecond along its own
+    // Doppler (the board), so the Doppler is the tag's; 100 epochs a second,
+    // fused every 10th
+    p.rr_lag_s = 0.0;
+    p.epoch_latency_s = 0.0;        // the time sync's line (uncalibrated: no 1PPS on the V1 board)
+    p.raw_epoch_period_s = 0.01;    // the board's measurement mode, 100 Hz
+    p.fuse_epoch_period_s = 0.1;    // the mosaic's: 10 Hz
+    // the epochs between the fused ones averaged in (SdrRawEpoch.h's Doppler
+    // means, the mosaic's pairs widened to the fused period): off here, on in
+    // the V10's gnss-sdr-dev image (ReceiverProfileApply.h
+    // applySdrFlightProfile); two consecutive Dopplers at most 5 m/s apart
+    // (500 m/s^2 over the board's 10 ms: a slip or a false lock beyond it)
+    p.rr_pair_avg = false;
+    p.rr_pair_max_diff_mps = 5.0;
+    p.relock_gap_s = 0.5;           // the mosaic's: 5 fused epochs
+
+    // the Doppler at the fused 10 Hz (bench 11/02: second differences of each
+    // satellite's range rate 100 ms apart, robust sigma, the common clock's
+    // part included): 0.032 / 0.042 / 0.025 / 0.023 / 0.015 m/s in the
+    // 20-30 / 30-35 / 35-40 / 40-45 / 45-52 dB-Hz bins; by system GPS 0.034,
+    // Galileo 0.039, BeiDou's B1C pilot 0.010. sigma^2 = a^2 + b^2 * 10^(-(C/N0
+    // - 35)/10) with these over every bin; the mosaic's 1.5 kept on top for
+    // flight (vibration and the TCXO's phase noise, neither measured standing)
+    p.rr_white_a = 0.03;
+    p.rr_white_b = 0.03;
+    // the code: the mosaic's. Its white part measured smaller (bench 11/02,
+    // code minus carrier: 0.20 / 0.14 / 0.07 / 0.06 / 0.05 m in those bins),
+    // but the board's delay loop smooths it, so most of its error is the
+    // correlated part this model gives the mosaic's numbers for
+    return p;
+}
+
+// SkyTraq PX1105R (the V9's PX1105R carrier, hardware/gnss-px1105r-18mm-hv),
+// v0: UNMEASURED in flight. The mosaic-G5's profile -- the same design, set up
+// the same way (20 Hz raw epochs fused at 10 Hz on the GPS-time grid, one
+// L1-band signal a system, the code once a second, the carrier off) -- with
+// what this receiver does differently. Each number's source:
+//   "09-26 static": the PX1105R's 20-minute open-sky run at 20 Hz, 2026-09-26
+//     (bench-backups/px1105r_outdoor_20hz_1200s_2026-09-26), its own 0xE5;
+//   "rig flights": the PX1105R on the RF rig's eagleclaw and gtv67 skies in
+//     airborne mode (gnss repo cocom-rig/sdr/captures), its 0xE5's Doppler
+//     against its own carrier, 2026-10-21;
+//   "the mosaic's": the mosaic-G5 profile's number kept, for the reason given
+//     there (most are the plan's or the airframe's, not the receiver's).
+inline GnssReceiverProfile px1105rProfile()
+{
+    GnssReceiverProfile p = mosaicG5Profile();
+    p.type = kRxPx1105r;
+    p.name = "PX1105R";
+    p.measured = false;
+
+    // One signal per system, signal type 0 of 0xE5: GPS L1 C/A, Galileo E1,
+    // BeiDou B1I (TGD1 from its D1 subframes); its L5-band signals are left
+    // out. C/N0 floors of 25 dB-Hz on the code and the Doppler: the mosaic's
+    // (the PX1105R's whole dB-Hz on the same scale, unmeasured against it).
+
+    // timing
+    p.rr_lag_s = 0.025;             // rig flights: its Doppler is its carrier's change over the 50 ms before
+                                    //   the tag, whole hertz (residual 0.047 m/s median = the step's at 25 ms,
+                                    //   0.08 at 0 and 50 ms)
+    p.epoch_latency_s = 0.0;        // UNCALIBRATED: no 1PPS reaches the FC on this carrier (J3 pin 5 is the
+                                    //   receiver's RXD2), so the epochs are placed by their 0xE5's arrival,
+                                    //   late by the receiver's own delay (a scope on the PPS LED, D1, against
+                                    //   the UART measures it)
+    p.raw_epoch_period_s = 0.05;    // 09-26 static: every 0xE5 50 ms after the last (period field 50 ms)
+
+    // the code: this receiver's own C/N0 fit (09-26 static; the LC86G's
+    // numbers were this fit scaled), its correlated part unscaled
+    p.pr_white_a = 0.026;
+    p.pr_white_b = 0.157;
+    p.pr_corr_a = 1.94;
+    p.pr_corr_b = 3.5;
+    p.pr_corr_scale = 1.0;
+    p.pr_tau_s = 15.0;
+
+    // the Doppler: whole hertz, truncated toward zero (the driver moves it to
+    // the middle of its step: SkyTraqBinary.h dopplerHz), whose rounding joins
+    // its sigma (0.055 m/s at L1); the thermal part and the margin the
+    // mosaic's (its carrier's own change, unmeasured against truth here)
+    p.doppler_step_hz = 1.0;
+
+    // the carrier: off, as the mosaic's. (Its 50 ms carrier change is the
+    // Doppler before the rounding: a carrier rate would take the step out, a
+    // feature for the offline harness first.)
+    p.cr_mode = kCarrierOff;
+    return p;
+}
+
 // A receiver with no profile of its own: UNMEASURED.
 inline GnssReceiverProfile genericProfile() { return placeholderProfile(kRxGeneric, "generic"); }
 
@@ -452,6 +582,8 @@ inline GnssReceiverProfile profileFor(GnssReceiverType type)
         return px1105rProfile();
     case kRxMosaicG5:
         return mosaicG5Profile();
+    case kRxSdrDev:
+        return sdrDevProfile();
     default:
         return genericProfile();
     }

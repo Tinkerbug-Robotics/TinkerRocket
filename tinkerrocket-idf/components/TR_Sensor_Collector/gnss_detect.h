@@ -1,12 +1,13 @@
 #pragma once
-// gnss_detect.h — which GNSS receiver is on the V9's J1 (pure, host-compilable)
+// gnss_detect.h — which GNSS receiver is on the V9's or V10's J1 (pure, host-compilable)
 //
-// The V9's J1 takes the stock u-blox SAM-M10Q carrier or the harness of a
-// Septentrio mosaic-G5 (mosaic-go G5 P3): one connector, pins 1-4 the same on
-// both (board_v9.h). Until this the receiver was a build-time choice, and an
-// image built for the other one searched for 30-60 s and flew GNSS-absent.
-// This finds out which one is there before either driver starts, by asking at
-// the bauds each can be at:
+// The J1 of a V9 or V10 takes the stock u-blox SAM-M10Q carrier, the harness
+// of a Septentrio mosaic-G5 (mosaic-go G5 P3) or TinkerRocket's own
+// gnss-sdr-dev receiver board: one connector, pins 1-4 the same on all three
+// (board_v9.h). Until this the receiver was a build-time choice, and an image
+// built for another one searched for 30-60 s and flew GNSS-absent. This finds
+// out which one is there before any driver starts, by asking (or listening)
+// at the bauds each can be at:
 //
 //   mosaic-G5  2 Mbaud once a flight computer has set it up (the setup is
 //              saved into the receiver, so it streams SBF from power-up);
@@ -21,17 +22,41 @@
 //              NMEA sentence whose checksum checks. NMEA counts only at the
 //              end of a probe that brought no mosaic proof: a mosaic can be
 //              told to send NMEA, but never UBX.
+//   gnss-sdr-dev 2 Mbaud, RTCM3 only (SdrRtcm.h): its 4001 status at 10 Hz
+//              from its receiver's start (its firmware since TinkerRocket-
+//              GNSS #24; older firmware sent nothing before its first fix),
+//              its measurements and fixes from its first fix on; with its
+//              UART output off, nothing at all. Its probe sends nothing and
+//              listens (its 4002 reader frames by CRC, so the other probes'
+//              bytes should be dropped there: not yet checked on the board).
+//              Proof: a frame whose CRC-24Q checks carrying TinkerRocket's
+//              message 4001, heard by any probe at 2 Mbaud.
+//   PX1105R    (the image that flies the raw filter on every receiver that
+//              gives measurements, TR_GNSS_AUTO_RAW, alone: a plan built
+//              with px1105r) 921600 with the binary set streaming once a
+//              flight computer has set it up, until it loses power (its
+//              driver sets it up in SRAM only); 115200 with NMEA from power-up.
+//              The probe is SkyTraq's binary software-version query, which it
+//              answers in either state. Proof: a SkyTraq binary frame whose
+//              length, checksum and 0D 0A check. Its NMEA at 115200, a u-blox
+//              baud, would read as a u-blox's, so in such a plan its probes
+//              come before any other at 115200 and NMEA there proves nothing.
 //
-// Neither probe can upset the other receiver: each is a few bytes at a baud
-// the other is not at, which its UART reads as noise, and neither receiver
-// acts on the other's protocol. Nothing here touches J1 pin 5 (GPIO2): it is
-// the receiver's PPS on two carriers and a receiver INPUT on the PX1105R's.
+// No probe can upset another receiver: each is a few bytes at a baud the
+// other is not at, which its UART reads as noise, and no receiver acts on
+// another's protocol. Nothing here touches J1 pin 5 (GPIO2): it is the
+// receiver's PPS on two carriers and a receiver INPUT on the PX1105R's.
 //
 // The hint (the receiver found last boot) puts that receiver's probes first,
 // so a boot with the same receiver as last time costs one probe, 0.1-0.4 s.
-// Anything not proven a mosaic-G5 gets the u-blox driver, which is what every
-// V9 ran before this, and which has its own, longer search for a receiver in
-// an odd state (another baud, swapped wires).
+// Anything not proven a mosaic-G5 or the gnss-sdr-dev board gets the u-blox
+// driver, which is what every V9 ran before this, and which has its own,
+// longer search for a receiver in an odd state (another baud, swapped wires:
+// that one drives J1 pin 2, the gnss-sdr-dev board's output, so the board's
+// probe is in every round before it). A board that had the gnss-sdr-dev board
+// last boot and hears nothing gets that board's driver, which only listens:
+// after a cold power-up the board is still looking for its first fix when the
+// probes run, and starts its stream a minute or so later.
 //
 // MosaicLink's shape: the driver feeds it the bytes and the time and carries
 // out the actions it returns (set the UART's baud, send bytes). All of the
@@ -43,6 +68,8 @@
 
 #include <RocketComputerTypes.h>   // GNSS_TYPE_*
 #include "SbfParser.h"             // TR_GNSSReceiverMosaic_Serial: blocks, reply lines, prompts
+#include "SdrRtcm.h"               // TR_GNSSReceiverSdr_Serial: the gnss-sdr-dev board's RTCM3 frames
+#include "SkyTraqBinary.h"         // TR_GNSSReceiverPX1105R_Serial: the PX1105R's binary frames
 
 namespace gnss_detect
 {
@@ -51,6 +78,9 @@ namespace gnss_detect
 static constexpr uint32_t kMosaicTargetBaud  = 2000000;   // TR_GNSSReceiverMosaic_Serial's kTargetBaud
 static constexpr uint32_t kMosaicFactoryBaud = 115200;    // and its kFactoryBaud
 static constexpr uint32_t kUbloxRunBaud      = 460800;    // TR_GNSSReceiverUBlox_Serial's preferred_baud
+static constexpr uint32_t kSdrBaud           = sdr_rtcm::kBaud;   // 2 Mbaud, the mosaic's too
+static constexpr uint32_t kPx1105rRunBaud     = 921600;   // skytraq::LinkConfig's target_baud
+static constexpr uint32_t kPx1105rFactoryBaud = 115200;   // where it comes up
 
 // The bauds the u-blox driver sweeps (its probe_bauds): the only rates a
 // remembered u-blox baud is trusted at.
@@ -63,38 +93,79 @@ bool isUbloxBaud(uint32_t baud);
 static constexpr uint16_t kMosaicTargetListenMs  = 150;
 static constexpr uint16_t kMosaicFactoryListenMs = 250;
 uint16_t ubloxListenMs(uint32_t baud);
+// The gnss-sdr-dev board sends a 4001 after every epoch: every 10 ms in its
+// measurement mode, every 100 ms in its fix mode, each a few hundred bytes
+// after the last.
+static constexpr uint16_t kSdrListenMs = 250;
+// In the one image's plans (px1105r): long enough for one of the board's
+// status frames, which come a second apart from its receiver's start until
+// its first fix (sdr_nav_start_policy.h kHeardMs) -- 250 ms caught a quarter
+// of them, and a board missed by a u-blox hint's plan got the u-blox driver's
+// 60 s search (the rig owner's #1705 review, 2026-11-15).
+static constexpr uint16_t kSdrListenRawMs = 1100;
+// The PX1105R answers its query within ~100 ms; set up, it streams 20 frames
+// a second. At 115200 the longer wait is for one booting with the flight
+// computer.
+static constexpr uint16_t kPx1105rRunListenMs     = 200;
+static constexpr uint16_t kPx1105rFactoryListenMs = 600;
 
 // How long planFor() keeps going round its probes, by hint. With the mosaic
 // last time: as long as the mosaic driver's own search, for a receiver still
 // booting. With the u-blox: once round, because the u-blox driver searches
-// for 60 s itself. With nothing known (the first boot of this image): long
-// enough for a receiver that powered up with the flight computer to boot.
+// for 60 s itself. With the gnss-sdr-dev board: twice round, for another
+// receiver put on since (the board's own driver, which follows, listens for
+// it as long as the FC runs). With nothing known (the first boot of this
+// image): long enough for a receiver that powered up with the flight computer
+// to boot.
 static constexpr uint32_t kBudgetMosaicMs = 30000;
 static constexpr uint32_t kBudgetUbloxMs  = 0;
+static constexpr uint32_t kBudgetSdrMs    = 2000;
 static constexpr uint32_t kBudgetNoneMs   = 6000;
+// With the PX1105R last time: three times round. It answers its query within
+// ~0.1 s at either baud, and booting with the flight computer it answered
+// 1.3 s in (V10 board 1, 2026-11-13), so one silent through this is not on
+// J1; the gnss-sdr-dev board, silent until its receiver starts (then a status
+// a second, a stream from its first fix), is the one receiver that can be,
+// so the plan's fallback is its driver, which listens (a stale hint with the
+// board put on since: the PX1105R's driver would never hear it).
+static constexpr uint32_t kBudgetPx1105rMs = 6000;
+// In the one image's plans whose fallback is the u-blox driver (a u-blox
+// hint, or nothing known): at least this long round, for a board whose
+// receiver starts within kHeardMs (3 s) of the sensors -- the plan then hands
+// the u-blox driver a J1 with no board talking on it. And the second look's,
+// after that driver: twice round with the board's longer window.
+static constexpr uint32_t kBudgetBoardMs = 4000;
+static constexpr uint32_t kBudgetSecondLookRawMs = 3000;
 
 // What proved the receiver.
-enum class Proof : uint8_t { NONE, SBF_BLOCK, PROMPT, REPLY, UBX_FRAME, NMEA };
+enum class Proof : uint8_t { NONE, SBF_BLOCK, PROMPT, REPLY, UBX_FRAME, NMEA, RTCM_TR, SKYTRAQ_FRAME };
 const char* proofName(Proof p);
 
 struct Probe
 {
     uint32_t baud = 0;
-    uint8_t  asks = GNSS_TYPE_NONE;   // GNSS_TYPE_MOSAIC: a CR; GNSS_TYPE_UBLOX: a UBX-MON-VER poll
+    uint8_t  asks = GNSS_TYPE_NONE;   // GNSS_TYPE_MOSAIC: a CR; GNSS_TYPE_UBLOX: a UBX-MON-VER poll;
+                                      // GNSS_TYPE_SDR: nothing (it listens);
+                                      // GNSS_TYPE_PX1105R: SkyTraq's version query
     uint16_t listen_ms = 0;
 };
 
 struct Plan
 {
-    static constexpr size_t kMaxProbes = 8;
+    static constexpr size_t kMaxProbes = 10;   // 7 on the auto image, 2 more with the PX1105R
     Probe    probes[kMaxProbes] = {};
     size_t   n = 0;
     // Round and round the probes until this long has passed since start(),
     // checked at the end of each round (0: once round).
     uint32_t budget_ms = 0;
     // What to run when nothing answered: GNSS_TYPE_UBLOX (that driver's own
-    // full search) or GNSS_TYPE_NONE (fly GNSS-absent).
+    // full search), GNSS_TYPE_SDR (the gnss-sdr-dev board's driver, which
+    // listens for a board not streaming yet) or GNSS_TYPE_NONE (fly
+    // GNSS-absent).
     uint8_t  fallback = GNSS_TYPE_UBLOX;
+    // The PX1105R is looked for (planFor's px1105r): its frames are proof,
+    // and NMEA at its factory baud is not the u-blox's.
+    bool     px1105r = false;
 };
 
 // The probes for this boot.
@@ -104,15 +175,22 @@ struct Plan
 //                        at (its "gnsslink" record), 0 for none
 //   receiver_kept_power  not a power-on, so a u-blox the flight computer set
 //                        up last boot is still at 460800
-Plan planFor(uint8_t hint, uint32_t ublox_last_baud, bool receiver_kept_power);
+//   px1105r              look for the PX1105R too (TR_GNSS_AUTO_RAW): its
+//                        probes first with it the hint, else before the first
+//                        other probe at 115200; false builds every plan the
+//                        auto image has always run
+Plan planFor(uint8_t hint, uint32_t ublox_last_baud, bool receiver_kept_power, bool px1105r = false);
 
 // After the u-blox driver's own search found nothing: one more look for a
-// mosaic-G5, which a minute on has finished booting if it is there at all.
-Plan secondLookPlan();
+// mosaic-G5, which a minute on has finished booting if it is there at all,
+// and for the gnss-sdr-dev board, which may have its first fix by then.
+Plan secondLookPlan(bool px1105r = false);
 
 // UBX-MON-VER poll and the CR, as the probes send them.
 extern const uint8_t kUbxMonVerPoll[8];
 extern const uint8_t kCr[1];
+// SkyTraq's Query Software Version (0x02, system code), a whole frame.
+extern const uint8_t kSkyTraqVersionQuery[9];
 
 struct Action
 {
@@ -149,7 +227,7 @@ private:
 // that are the XOR of everything between '$' and '*'.
 bool isNmeaSentence(const char* line);
 
-class Detector : private mosaic::SbfSink
+class Detector : private mosaic::SbfSink, private sdr_rtcm::Rtcm3Framer::Sink
 {
 public:
     void start(const Plan& plan, uint32_t now_ms);
@@ -174,6 +252,16 @@ private:
     void onBlock(const uint8_t* block, size_t len, size_t index) override;
     void onLine(const char* line, size_t index) override;
     void onPrompt(const char* port, size_t index) override;
+    // Rtcm3Framer::Sink
+    void onFrame(const uint8_t* frame, size_t len, size_t after) override;
+    // The PX1105R's frames (skytraq::FrameSink's onFrame has the same
+    // signature as the RTCM framer's, hence a sink of its own)
+    struct SkyTraqSink : skytraq::FrameSink
+    {
+        Detector* d = nullptr;
+        void onFrame(const uint8_t* body, size_t len, size_t index) override;
+    };
+    void onSkyTraqFrame();
 
     void enterProbe(size_t i, uint32_t now_ms);
     void finish(uint8_t type, Proof proof, uint32_t now_ms);
@@ -193,8 +281,11 @@ private:
     uint32_t   elapsed_ms_ = 0;
     uint32_t   probes_run_ = 0;
 
-    mosaic::SbfParser parser_;
-    UbxScanner        ubx_;
+    mosaic::SbfParser     parser_;
+    UbxScanner            ubx_;
+    sdr_rtcm::Rtcm3Framer rtcm_;
+    skytraq::FrameParser  skytraq_;
+    SkyTraqSink           skytraq_sink_;
 
     // A probe queues at most a baud change and a send.
     static constexpr size_t kQueue = 2;
@@ -211,27 +302,37 @@ private:
 //                 driverResult()
 //   BEGIN_MOSAIC  the mosaic driver's begin() (mosaicTimeoutMs()), then
 //                 driverResult()
+//   BEGIN_SDR     the gnss-sdr-dev board's driver's begin(), then
+//                 driverResult()
+//   BEGIN_PX1105R the PX1105R's driver's begin(), then driverResult()
+//                 (TR_GNSS_AUTO_RAW alone)
 //   SECOND_LOOK   run plan() again, then detected(): after the u-blox
 //                 driver's own search came up empty, a last look for a
-//                 mosaic-G5 that was still booting during DETECT
+//                 mosaic-G5 that was still booting during DETECT, or a
+//                 gnss-sdr-dev board that has its first fix since
 //   DONE          active() is the receiver in use, GNSS_TYPE_NONE for none
 //
 // A receiver the probes proved gets its own driver straight away. With
 // nothing proven the plan's fallback runs: the u-blox driver (what every V9
-// ran before this), or, for a board whose mosaic answered last time, nothing
-// at all. The hint to keep for next boot is hint(); hintChanged() says
-// whether it needs writing (the probes found another receiver, the u-blox
-// driver found its own by its full search, or a mosaic board answered
-// nothing and is forgotten so that next boot is not stuck on its plan).
+// ran before this); for a board whose gnss-sdr-dev board streamed last time,
+// that board's driver, which listens for it from then on; or, for a board
+// whose mosaic answered last time, nothing at all. The hint to keep for next
+// boot is hint(); hintChanged() says whether it needs writing (the probes
+// found another receiver, the u-blox driver found its own by its full
+// search, or a mosaic board answered nothing and is forgotten so that next
+// boot is not stuck on its plan). A gnss-sdr-dev board that is silent is not
+// forgotten: it is silent at every cold power-up (it sends from its first
+// fix), so only another receiver's proof replaces it.
 //
-// Worst case, a dead receiver: about 31 s with the mosaic hint; with any
-// other, the round of probes (~1.2 s, 6 s on the first boot) plus the u-blox
-// driver's 60 s plus the second look (~0.8 s), where the u-blox image took
-// the 60 s alone.
+// Worst case, a dead receiver: about 31 s with the mosaic hint; ~2-3 s with
+// the gnss-sdr-dev board's (then GNSS-absent, its driver listening); with
+// any other, the round of probes (~1.5 s, 6 s on the first boot) plus the
+// u-blox driver's 60 s plus the second look (~1.3 s), where the u-blox image
+// took the 60 s alone.
 class BringUp
 {
 public:
-    enum class Step : uint8_t { DETECT, BEGIN_UBLOX, BEGIN_MOSAIC, SECOND_LOOK, DONE };
+    enum class Step : uint8_t { DETECT, BEGIN_UBLOX, BEGIN_MOSAIC, BEGIN_SDR, SECOND_LOOK, DONE, BEGIN_PX1105R };
 
     // The mosaic driver's own search: its usual 30 s, and 15 s when it
     // follows the u-blox driver's 60 s, to keep the boot well inside the
@@ -244,9 +345,10 @@ public:
     // board's own wiring, so they would hear nothing there and drive the TX
     // line against the receiver's output for a round: such a board goes
     // straight to the u-blox driver, which knows the wiring, unless a mosaic
-    // was found since.
+    // or the gnss-sdr-dev board was found since. px1105r: the PX1105R is
+    // looked for too, and a hint of it kept (TR_GNSS_AUTO_RAW).
     void start(uint8_t hint, uint32_t ublox_last_baud, bool receiver_kept_power,
-               bool ublox_wires_swapped = false);
+               bool ublox_wires_swapped = false, bool px1105r = false);
     void detected(uint8_t found);
     void driverResult(bool ok);
 
@@ -267,6 +369,7 @@ private:
     uint8_t proven_ = GNSS_TYPE_NONE;
     uint8_t active_ = GNSS_TYPE_NONE;
     bool    second_look_ = false;
+    bool    px1105r_ = false;
 };
 
 }  // namespace gnss_detect

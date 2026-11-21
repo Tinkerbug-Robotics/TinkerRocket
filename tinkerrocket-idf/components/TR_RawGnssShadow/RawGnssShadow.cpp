@@ -1,6 +1,7 @@
 // RawGnssShadow.cpp — see RawGnssShadow.h
 #include "RawGnssShadow.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -293,6 +294,21 @@ void RawGnssShadow::applyBaro(double t, uint8_t imu_flags)
         return;                           // on the pad: not learned long enough yet
     st_.baro_offset_m = baro_offset_;
     st_.baro_offset_frozen = baro_frozen_ ? 1 : 0;
+    // On the pad with baro_pad_fuse off, the barometer only learns its offset
+    // (above): the pseudoranges set the height. Its offset is the filter's own
+    // height, so fused it says nothing absolute, yet each sample counts as an
+    // independent 2 m: a hundred of them (two seconds, before the first
+    // pseudorange) took the height's 1-sigma from 10 m to 0.3 m, and the seed's
+    // height -- the receiver's first 3-D fix, 5-35 m off on the RF rig's
+    // Traveler and Hotshot flights and once 325 m, where the receiver itself
+    // came within 0.5-5 m ten seconds later -- held to launch against two
+    // minutes of pseudoranges (2026-10-23). The pad's zero-velocity updates
+    // hold the vertical still; in flight it is fused as before.
+    if (!in_flight && !cfg_.baro_pad_fuse)
+    {
+        st_.baro_pad_skipped++;
+        return;
+    }
 
     // Its variance: the barometer's own, and the static port's error at the
     // dynamic pressure the filter's speed and height give (#1579)
@@ -717,12 +733,25 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
     if (static_cast<double>(ekf_.gExcess()) + 1.0 > cfg_.boost_screen_g)
         boost_seen_t_ = ekf_.time();      // the boost screen's window (startJob)
     t_prev_ = t;
-    // The descent without the IMU (descent_imu_free): from the apogee call on
-    if (cfg_.descent_imu_free && !ekf_.imuFree() && (s.flags & kShadowInFlight) && (s.flags & kShadowApogee))
+    // The descent without the IMU (descent_imu_free): from the apogee call on,
+    // while GNSS or the barometer holds its velocity (imu_free_gnss_s); with
+    // neither the IMU-coupled filter, and the mode again when one returns
+    if (cfg_.descent_imu_free && (s.flags & kShadowInFlight) && (s.flags & kShadowApogee))
     {
-        ekf_.setImuFree(true);
-        st_.imu_free = 1;
-        st_.imu_free_t = ekf_.time();
+        const bool live = cfg_.imu_free_gnss_s <= 0.0 || t - last_meas_t_ <= cfg_.imu_free_gnss_s
+                          || t - last_baro_fused_t_ <= cfg_.imu_free_gnss_s;
+        if (!ekf_.imuFree() && live)
+        {
+            ekf_.setImuFree(true);
+            st_.imu_free = 1;
+            st_.imu_free_t = ekf_.time();
+        }
+        else if (ekf_.imuFree() && !live)
+        {
+            ekf_.setImuFree(false);
+            st_.imu_free = 0;
+            st_.imu_free_exits++;
+        }
     }
     if (windupRingOn() || (cfg_.dv_check != kDvOff && cfg_.dv_lever_mode == 1))
     {
@@ -910,6 +939,7 @@ void RawGnssShadow::start(double t)
     obs_apogee_ = false;
     boost_seen_t_ = -1.0e9;
     vert_latch_ = false;
+    vert_steady_n_ = 0;
     dvReset();
     wu_ring_.reset();
     wu_mon_.reset();
@@ -972,6 +1002,7 @@ void RawGnssShadow::start(double t)
     mag_fused_run_ = 0;
     last_mag_fused_t_ = -1.0e9;
     last_aided_t_ = -1.0e9;
+    last_meas_t_ = -1.0e9;
     last_baro_fused_t_ = -1.0e9;
     prop_sum_ = 0;
     prop_n_ = 0;
@@ -1183,6 +1214,7 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
         npending_--;
         double r[3], v[3];
         ekf_.receiverEcef(r, v);
+        stage_.setClimbRate(-static_cast<double>(ekf_.velNed()[2]));   // the troposphere's rate (tropo_rate)
         stage_.begin(job_.e, r, job_.in_flight, built_);
         job_.phase = kJobBuild;
         job_.build_us = 0;
@@ -1194,6 +1226,12 @@ void RawGnssShadow::startJob(double te, uint8_t imu_flags)
     // called without a pair lag: every other receiver's epochs as before
     if (ekf_.params().rr_pair_lag_s > 0.0)
         ekf_.setRrPaired(built_.rr_paired != 0);
+    // and under thrust further back again (the params' rr_dyn_lag_s): by the
+    // IMU's specific force now, every consumer after this taking it
+    // (RawGnssEKF::setRrDynLag). Never called without it: every other
+    // receiver's epochs as before
+    if (ekf_.params().rr_dyn_lag_s > 0.0)
+        ekf_.setRrDynLag(ekf_.dynLagFor(static_cast<double>(ekf_.specificForceLpG())));
     // the carrier wind-up on an epoch the GNSS task built, here, after the
     // pairs' mark just above: it takes each Doppler at its own instant
     // (applyWindup; one built here takes it once built, jobUnit)
@@ -1585,7 +1623,7 @@ void RawGnssShadow::dvReset()
 void RawGnssShadow::leverRoll(double age, const double w[3], const double C[3][3], const DopplerChangeImu& imu)
 {
     float p2[3], v2[3], n2[3];
-    ekf_.leverAt(age + (cfg_.ekf.rr_lag_s + ekf_.rrPairLag()), p2, v2, n2);
+    ekf_.leverAt(age + ekf_.rrLag(), p2, v2, n2);
     double a1[3], a2[3], nm[3];
     for (int i = 0; i < 3; ++i)
     {
@@ -1716,6 +1754,27 @@ void RawGnssShadow::jobDvCheck(double age)
         // (dv_ref_ stays as dvReset left it, invalid: the check is off)
         (void)ekf_.dopplerChange(built_.meas, built_.n, age, dv_ref_, dv_next_, dv_rows_, imu);
         windupMonitor();
+        return;
+    }
+    if (cfg_.dv_imu_free_off && ekf_.imuFree())
+    {
+        // The IMU-free descent (descent_imu_free, dv_imu_free_off): the
+        // filter's velocity is a random walk there and its history records no
+        // acceleration (RawGnssEKF::propagate), so the IMU's change this check
+        // holds each Doppler's against is zero -- a free fall's 9.8 m/s^2
+        // reads as a failure on every epoch, the latch never lets go, and only
+        // the 1 Hz pseudoranges are left to carry the velocity (the V10's RF
+        // rig run of 2026-11-12, hil1: 20-25 m/s off from the apogee call).
+        // Nor is there anything for it to protect: GNSS reaches no attitude or
+        // bias in the mode. So it neither runs nor acts: whatever it held is
+        // let go, and its reference dropped (a restarted filter starts anew).
+        if (dv_ref_.valid || dv_latch_ || n_dv_hold_ > 0 || dv_epoch_until_ > -1.0e9)
+            dvReset();
+        if (cfg_.windup_monitor)
+        {
+            (void)ekf_.dopplerChange(built_.meas, built_.n, age, dv_ref_, dv_next_, dv_rows_, imu);
+            windupMonitor();
+        }
         return;
     }
     const int nr = ekf_.dopplerChange(built_.meas, built_.n, age, dv_ref_, dv_next_, dv_rows_, imu);
@@ -1996,7 +2055,7 @@ void RawGnssShadow::jobDvCheck(double age)
     if (lev_ref_ok_)
     {
         float lp[3], lv[3];
-        ekf_.leverAt(age + (cfg_.ekf.rr_lag_s + ekf_.rrPairLag()), lp, lv, lev_ref_n_);
+        ekf_.leverAt(age + ekf_.rrLag(), lp, lv, lev_ref_n_);
         for (int i = 0; i < 3; ++i)
             lev_ref_v_[i] = imu.v_lev[i];
     }
@@ -2125,11 +2184,12 @@ void RawGnssShadow::jobScreen(double age)
     ekf_.screenRangeRates(built_.meas, built_.n, age, rs);
     // after a vertical drop, an epoch is dropped too unless its fit is back
     // within vert_release_mps: too thin to fit, it is not
+    bool reanchored = false;
     if (vert_latch_)
     {
         const bool back = rs.screen_fit_n >= 4
                           && std::fabs(static_cast<double>(rs.screen_dv_down_mps)) <= cfg_.vert_release_mps;
-        if (!back)
+        if (!back && !(reanchored = imuFreeLatchRelease(rs)))
         {
             st_.vert_latched++;
             rs.screen_dropped = true;
@@ -2138,7 +2198,7 @@ void RawGnssShadow::jobScreen(double age)
         }
         vert_latch_ = false;
     }
-    if (job_.vcheck && rs.screen_fit_n >= 4)
+    if (job_.vcheck && rs.screen_fit_n >= 4 && !reanchored)
     {
         const float dv = rs.screen_dv_down_mps;
         const bool drop = std::fabs(static_cast<double>(dv)) > cfg_.vert_check_mps;
@@ -2148,6 +2208,8 @@ void RawGnssShadow::jobScreen(double age)
         {
             st_.vert_dropped++;
             vert_latch_ = cfg_.vert_release_mps > 0.0;
+            vert_latch_t_ = ekf_.time();
+            vert_steady_n_ = 0;
         }
         else if (std::fabs(dv) > std::fabs(st_.vert_worst_dv_down))
             st_.vert_worst_dv_down = dv;
@@ -2179,6 +2241,60 @@ void RawGnssShadow::jobScreen(double age)
     job_.dry_age = age;
     job_.dry_rs = RawGnssStats();
     job_.phase = kJobScreenDry;
+}
+
+// The latch in the IMU-free descent (vert_imu_free_release_s, RawGnssShadow.h):
+// a latched epoch's fit, judged for letting the latch go. True when no
+// barometer was fused for vert_imu_free_release_s, the latch has held that
+// long, and its last kVertSteadyFits fits agree within vert_release_mps: the
+// filter's velocity and clock rate are then set to the fit's
+// (RawGnssEKF::reanchorVelocity: the velocity's 1-sigma vert_release_mps, the
+// position's opened by the drift the latch let build) and the epoch fused.
+//
+// Not only in the IMU-free descent (V10 pre-flight review, 2026-11-18): a boost
+// that leaves the IMU's vertical more than vert_check_mps wrong latches the
+// check, and above 10.4 km (out of the barometer's range) or in the mach
+// lockout no barometer reaches the filter to bring it back -- and the IMU-free
+// mode, which needs GNSS or the barometer to start, never begins. The latch
+// then held GNSS out of the whole coast and descent above 10.4 km. So outside
+// the IMU-free mode too, once past the boost (no specific force over
+// boost_screen_g for boost_screen_window_s: never a fit from under thrust),
+// after a longer hold and with steadier fits (kVertCoastReleaseHoldS,
+// kVertCoastSteadyMps), so a receiver still recovering from the boost is not
+// taken for a steady one.
+bool RawGnssShadow::imuFreeLatchRelease(const gnss_raw::RawGnssStats& rs)
+{
+    // where the barometer is fused it judges: it brings a right fit back within
+    // vert_release_mps, and keeps the filter on a wrong one's side
+    const bool baro_live = ekf_.time() - last_baro_fused_t_ <= cfg_.vert_imu_free_release_s;
+    const bool past_boost = ekf_.time() - boost_seen_t_ > cfg_.boost_screen_window_s;
+    if (!(cfg_.vert_imu_free_release_s > 0.0) || !(ekf_.imuFree() || past_boost)
+        || rs.screen_fit_n < 4 || baro_live)
+    {
+        vert_steady_n_ = 0;
+        return false;
+    }
+    const bool imu_free = ekf_.imuFree();
+    const double steady_mps = imu_free ? cfg_.vert_release_mps
+                                       : std::min(cfg_.vert_release_mps, kVertCoastSteadyMps);
+    const double hold_s = imu_free ? cfg_.vert_imu_free_release_s
+                                   : std::max(cfg_.vert_imu_free_release_s, kVertCoastReleaseHoldS);
+    const float dv = rs.screen_dv_down_mps;
+    const bool steady = vert_steady_n_ > 0
+                        && std::fabs(static_cast<double>(dv - vert_last_dv_)) <= steady_mps;
+    vert_steady_n_ = steady ? vert_steady_n_ + 1 : 1;
+    vert_last_dv_ = dv;
+    double x[4];
+    if (vert_steady_n_ < kVertSteadyFits || ekf_.time() - vert_latch_t_ < hold_s
+        || !ekf_.lastVelocityFit(x))
+        return false;
+    // the drift the latch let build: the fit's speed off the filter's over the latch, and 20 m besides
+    const double off = std::sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2]);
+    ekf_.reanchorVelocity(x, x[3], static_cast<float>(cfg_.vert_release_mps),
+                          static_cast<float>(off * (ekf_.time() - vert_latch_t_) + 20.0));
+    st_.vert_imu_free_releases++;
+    vert_steady_n_ = 0;
+    return true;
 }
 
 // The epoch's next measurement on the scratch copy, as the update fuses it --
@@ -2297,6 +2413,8 @@ void RawGnssShadow::closeJob(double age, double t)
         own_fix_ = true;
         last_aided_t_ = t;
     }
+    if (rs.used_pr + rs.used_rr > 0)
+        last_meas_t_ = t;                 // GNSS live (the IMU-free descent's imu_free_gnss_s)
     // pr_period_s: its pseudoranges went through the update (fused or
     // refused), the period's code -- an epoch whose clock could not be taken
     // fused none, and one dropped never comes here
@@ -2464,7 +2582,7 @@ bool RawGnssShadow::jobHeading(double age)
         st_.heading_vel_fails++;
         return false;
     }
-    const double td = job_.te - (cfg_.ekf.rr_lag_s + ekf_.rrPairLag());   // the Dopplers' instant
+    const double td = job_.te - ekf_.rrLag();   // the Dopplers' instant
     if (!fit_.gnss(td, v_ned, var_h))
         return false;                     // too slow sideways yet, or past the fit's history
     fit_last_te_ = job_.te;

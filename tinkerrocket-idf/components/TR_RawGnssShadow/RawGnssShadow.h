@@ -571,6 +571,8 @@ public:
         double   baro_port_k     = 0.0075;    // the static port's error, m per Pa of dynamic pressure (#1579)
         double   baro_offset_tau_s = 30.0;    // the pad offset follows the filter's height this slowly
         double   baro_offset_min_s = 10.0;    // and is used once it has had this long
+        bool     baro_pad_fuse   = true;      // on the pad: fused (false: only its offset learned, the height left
+                                              //   to the pseudoranges, the pad's zero velocity holding the vertical)
         double   baro_hold_port_m = 2.0;      // in flight: held out while that error at the vertical speed is above this
         double   baro_hold_max_s  = 30.0;     //   but no longer than this after launch
         // The descent without the IMU (off by default): from the apogee call
@@ -584,6 +586,21 @@ public:
         // pull back (the Beetle, 301 and 663 m off), or a vertical the held-out
         // barometer and the vertical check's latch let run (the Goblin, -740 m).
         bool     descent_imu_free = false;
+        // and only while something holds its velocity: raw measurements or
+        // a barometer sample fused within this long (0: from the apogee call
+        // on whatever, as before). With neither -- no GNSS, and above the
+        // barometer's 25 kPa floor or under the transonic lockout no
+        // barometer -- the mode holds its velocity on nothing: on the V10's
+        // rig run of 2026-11-13 (rs2, the GNSS board rebooted 1 s into the
+        // boost and never re-acquired) it held -5 m/s at 26 km while the
+        // scene fell, the descent 4.9 km off. Then the IMU-coupled filter
+        // navigates, as through the coast, and the mode comes back with GNSS
+        // or the barometer. With the barometer alone it stays: a descent
+        // the antenna path drops in and out of (the Goblin's, 2026-10-24) is
+        // what the mode is for. 2 s: 20 epochs at 10 Hz, past the single
+        // epochs a burnout jolt or the boost screen drops, and the window
+        // gnss_aided already means.
+        double   imu_free_gnss_s = 2.0;
         double   zupt_sigma_mps  = 0.5;       // landed: zero velocity, 1 sigma (#1418)
         double   zupt_period_s   = 0.1;       //   this often
         bool     pad_zupt        = true;      // the navigation filter, on the pad while still: zero velocity too
@@ -659,6 +676,29 @@ public:
                                                  //   the filter's is dropped (0: off)
         double   vert_release_mps = 5.0;         //   and, after one, every epoch after it until one's fitted
                                                  //   vertical is back within this (0: no latch)
+        // The latch in the IMU-free descent (descent_imu_free): there the
+        // filter's vertical is GNSS's and the barometer's, not the IMU's, so
+        // a chute's opening faster than it can follow (60 to 7 m/s in 0.8 s:
+        // the Dopplers refused, the fit 20 m/s off) is dropped and latched
+        // like a stale receiver, and with no barometer to pull it back (above
+        // 10 km, inside the port hold, a lost one) nothing brings the fit
+        // within vert_release_mps: GNSS stays out, the mode leaves after
+        // imu_free_gnss_s, and the IMU-coupled filter keeps the error (the
+        // host test AChutesOpeningInTheImuFreeDescent: 40 m/s at 6.8 g, 69 at
+        // 9.9 g). So in the IMU-free mode, once the latch has held this long
+        // (s) and its last kVertSteadyFits fits agree within vert_release_mps
+        // -- a steady velocity, not a receiver on its way back -- the filter
+        // takes GNSS's: its velocity and clock rate are set to that epoch's
+        // fit (TR_RawGnssEKF::reanchorVelocity) and the epoch is fused, not
+        // judged by the check. Only with no
+        // barometer fused for that long: where there is one it judges, as
+        // before (it brought 6.8 g back in 1.0 s and 9.9 g in 1.75 s). A
+        // single bad epoch, or a stale receiver shorter than that, is still
+        // dropped. 0: never (as before). And outside the IMU-free mode, once
+        // past the boost, the same way (V10 pre-flight review, 2026-11-18): a
+        // boost that left the IMU's vertical over vert_check_mps off latched
+        // GNSS out of a whole flight above the barometer's range.
+        double   vert_imu_free_release_s = 0.0;
         // the Doppler change check (above; DvCheck, off by default)
         uint8_t  dv_check = 0;
         double   dv_sat_k = 5.0;                 // a satellite this many 1-sigmas off the epoch's fit fails
@@ -676,6 +716,10 @@ public:
         double   dv_window_s = 0.0;              // also judged summed over this long, leaky (0: epoch by epoch only)
         bool     dv_deweight = false;            // grow a failed Doppler's sigma by its excess, not hold it out
         bool     dv_ground = false;              // act on the ground too (else in flight only)
+        bool     dv_imu_free_off = false;        // neither run nor act in the IMU-free descent (descent_imu_free):
+                                                 //   its history holds no acceleration, so a free fall's g reads
+                                                 //   as a failure on every epoch, and GNSS reaches no attitude or
+                                                 //   bias there for the check to protect (false: as before)
         double   dv_noise_tau_s = 0.0;           // the Dopplers' measured excess noise on their variance, let fall
                                                  //   with this time constant (0: not measured)
         double   dv_hold_all_frac = 0.5;         // more than this share of an epoch's Dopplers held: all of them
@@ -868,7 +912,9 @@ public:
         uint32_t baro_fused = 0;           //   fused (an offset learned)
         uint32_t baro_held = 0;            //   held out in flight at speed (the port's error)
         uint8_t  imu_free = 0;             // the descent's IMU-free mode on (descent_imu_free)
-        double   imu_free_t = 0.0;         //   since this (the filter's clock, s)
+        uint16_t imu_free_exits = 0;       //   left for GNSS and the barometer gone stale in it (imu_free_gnss_s)
+        double   imu_free_t = 0.0;         //   since this (the filter's clock, s): its last entry
+        uint32_t baro_pad_skipped = 0;     //   not fused on the pad (baro_pad_fuse off)
         double   baro_offset_m = 0.0;      // the filter's height less the barometer's, on the pad
         uint8_t  baro_offset_frozen = 0;   //   frozen at launch
         uint32_t zupts = 0;                // landed zero-velocity updates
@@ -935,6 +981,7 @@ public:
         float    vert_last_dv_down = 0.0f; //   the last one's: its vertical against the filter's, m/s
         float    vert_worst_dv_down = 0.0f;//   and the largest kept (|.|), m/s
         uint32_t vert_latched = 0;         // epochs dropped after a vertical drop, not yet back (vert_release_mps)
+        uint32_t vert_imu_free_releases = 0;   // latches the IMU-free mode let go (vert_imu_free_release_s)
         // the Doppler change check
         uint32_t dv_checks = 0;            // epochs checked: a reference, the IMU's history across, five changes
         uint32_t dv_sat_fails = 0;         //   satellites that failed (epoch by epoch, or summed)
@@ -1120,6 +1167,7 @@ private:
     void jobDvCheck(double age);
     void jobScreen(double age);
     void jobScreenDry();
+    bool imuFreeLatchRelease(const gnss_raw::RawGnssStats& rs);
     void screenVerdict(bool drop, bool dry);
     void closeJob(double age, double t);
     void relock(int sys, int prn, double tow);
@@ -1218,6 +1266,7 @@ private:
     bool          restored_ = false;    // started in flight from a restored flight
     uint8_t       start_gen_ = 0;       // the seed's start_gen it started from
     double        last_aided_t_ = -1.0e9;   // raw measurements last applied
+    double        last_meas_t_ = -1.0e9;    // any raw measurement (a code or a Doppler) last applied
     double        last_baro_fused_t_ = -1.0e9;
     void          applyMag(double t, const float acc[3]);
     void          applyBaro(double t, uint8_t imu_flags);
@@ -1247,6 +1296,16 @@ private:
     int64_t       pr_period_k_ = -1;    // pr_period_s: the period the code was last fused in (< 0: none since the start)
     double        fit_last_te_ = -1.0;  // heading_fit_period_s: the last epoch the fit took (< 0: none this flight)
     bool          vert_latch_ = false;  // a vertical drop, and no epoch back within vert_release_mps since
+    double        vert_latch_t_ = 0.0;  //   the filter's time it was set
+    int           vert_steady_n_ = 0;   //   latched fits in a row within vert_release_mps of the one before
+    float         vert_last_dv_ = 0.0f; //   the last latched fit's vertical
+    static constexpr int kVertSteadyFits = 3;
+    // Outside the IMU-free descent the latch's release waits longer and wants
+    // steadier fits: a receiver recovering after the boost (its loops' time
+    // constant about 2 s) moves its fit about 1 m/s an epoch, which the
+    // descent's 5 m/s steadiness would take (V10 pre-flight review).
+    static constexpr double kVertCoastReleaseHoldS = 5.0;
+    static constexpr double kVertCoastSteadyMps    = 1.0;
     // the Doppler change check (dv_check)
     DopplerRef    dv_ref_;              // the last epoch's Dopplers, the next change's start
     DopplerRef    dv_next_;             //   this epoch's, taken by the check

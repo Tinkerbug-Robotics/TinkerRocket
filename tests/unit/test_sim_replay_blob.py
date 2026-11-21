@@ -108,6 +108,16 @@ class SimReplayBlobTest(unittest.TestCase):
         self.assertAlmostEqual(dp, srb.BARO_N * p / (44330.0 - 80.25) * 2.0, delta=lsb)
         self.assertEqual(a[50][10], b[50][10])            # on the pad: none
 
+    def test_log_pressure_is_version_two(self):
+        blob, s = tiny_blob(port_error=False, log_pressure=True)
+        hdr, recs = samples(blob)
+        self.assertEqual(hdr[1], 2)
+        self.assertTrue(s["log_pressure"])
+        p_ref, lsb = hdr[15], hdr[16]
+        i = 180                                           # t = 1.605 s
+        p = 100000.0 * (1.0 - 50.0 * 1.605 / 44330.0) ** srb.BARO_N
+        self.assertAlmostEqual(p_ref * np.exp(recs[i][10] * lsb), p, delta=p * lsb)
+
     def test_refuses_a_file_without_its_pad(self):
         with self.assertRaises(ValueError):
             tiny_blob(t_from=-0.5)                        # the first second is not all pad

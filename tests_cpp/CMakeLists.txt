@@ -1015,6 +1015,19 @@ target_include_directories(test_baro_gate_policy PRIVATE
 target_link_libraries(test_baro_gate_policy GTest::gtest_main)
 gtest_discover_tests(test_baro_gate_policy)
 
+# ---------- test_guidance_gate_policy ----------
+# Coast guidance's gate, launch origin and heading trust (GTV Blue/White,
+# 2026-11-01): the origin was the power-up datum 43 m from the rail, Blue's
+# heading was ~90 deg off on an amber magnetometer, and nothing logged why
+# White's guidance never steered.  guidance_gate_policy.h is pure.
+add_executable(test_guidance_gate_policy test_guidance_gate_policy.cpp)
+target_include_directories(test_guidance_gate_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/flight_computer/main
+)
+target_link_libraries(test_guidance_gate_policy GTest::gtest_main)
+gtest_discover_tests(test_guidance_gate_policy)
+
 # ---------- test_blind_window_policy ----------
 # #1271/#917: a launch during a BLE-download pause. The OC's launch edge is
 # DELAYED by the pause rather than missed, so a short window leaves a log that
@@ -1253,6 +1266,18 @@ target_include_directories(test_boot_cue_policy PRIVATE
 target_link_libraries(test_boot_cue_policy GTest::gtest_main)
 gtest_discover_tests(test_boot_cue_policy)
 
+# ---------- test_runcam_probe_policy (CENJARS 2026-11-01) ----------
+# The RunCam readiness probe without waiting on the camera: the CRC, the reply
+# parser fed in pieces, the per-pass decision and a silent camera's cadence.
+# Pure header in the FC project.
+add_executable(test_runcam_probe_policy test_runcam_probe_policy.cpp)
+target_include_directories(test_runcam_probe_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/flight_computer/main
+)
+target_link_libraries(test_runcam_probe_policy GTest::gtest_main)
+gtest_discover_tests(test_runcam_probe_policy)
+
 # ---------- test_rail_restore_policy (#825) ----------
 # OC boot rail re-assert decision: fault reset restores, the deliberate
 # power-off reboot stands down. Pure header in the OC project.
@@ -1338,6 +1363,32 @@ target_include_directories(test_arm_consent_policy PRIVATE
 )
 target_link_libraries(test_arm_consent_policy GTest::gtest_main)
 gtest_discover_tests(test_arm_consent_policy)
+
+# ---------- test_cam_draw_policy (CENJARS 2026-11-01) ----------
+# The out computer's camera-rail verdict for the FC's RunCam start: running vs
+# dark from the #850 current monitor, debounced, with an unreadable monitor
+# reported as unknown. Pure header in the OC project.
+add_executable(test_cam_draw_policy test_cam_draw_policy.cpp)
+target_include_directories(test_cam_draw_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_cam_draw_policy GTest::gtest_main)
+gtest_discover_tests(test_cam_draw_policy)
+
+# ---------- test_scap_sense_policy (#1409) ----------
+# The V10's hold-up cap sense on the flight computer (P4 GPIO17): eight
+# calibrated pad samples, averaged, times the R125/R126 divider, as the
+# FcStatusData.scap_mv field. Built against the V10's own config.h.
+add_executable(test_scap_sense_policy test_scap_sense_policy.cpp)
+target_include_directories(test_scap_sense_policy PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+target_compile_definitions(test_scap_sense_policy PRIVATE TR_BOARD_V10=1 TR_MAG_DRIVER_QMC5883P=1)
+target_link_libraries(test_scap_sense_policy GTest::gtest_main)
+gtest_discover_tests(test_scap_sense_policy)
 
 # ---------- test_supply_status_policy (#1593) ----------
 # The Tinker-Mantis V10's PG_RAIL and VBUCK_OK, as the out computer reports
@@ -1510,10 +1561,12 @@ foreach(BOARD V5 V7 V8 V9 V10 M1)
         target_compile_definitions(test_i2s_link_budget_${BOARD} PRIVATE
             TR_MAG_DRIVER_QMC5883P=1 TR_GNSS_DRIVER_LC86=1)
     elseif(BOARD STREQUAL "V10")
-        target_compile_definitions(test_i2s_link_budget_${BOARD} PRIVATE TR_MAG_DRIVER_QMC5883P=1)
+        # The V10 image finds its receiver at boot as the V9's does.
+        target_compile_definitions(test_i2s_link_budget_${BOARD} PRIVATE TR_MAG_DRIVER_QMC5883P=1
+            TR_GNSS_DRIVER_AUTO=1)
     elseif(BOARD STREQUAL "V9")
-        # The V9 image finds its receiver at boot, so it flies either: the
-        # budget is checked for both (TR_GNSS_DRIVER_AUTO, CMakeLists.txt).
+        # The V9 image finds its receiver at boot, so it flies any of them:
+        # the budget is checked for each (TR_GNSS_DRIVER_AUTO, CMakeLists.txt).
         target_compile_definitions(test_i2s_link_budget_${BOARD} PRIVATE TR_GNSS_DRIVER_AUTO=1)
     endif()
     target_link_libraries(test_i2s_link_budget_${BOARD} GTest::gtest_main)
@@ -1704,16 +1757,161 @@ gtest_discover_tests(test_mosaic_link)
 add_executable(test_gnss_detect test_gnss_detect.cpp
     ${LIB_DIR}/TR_Sensor_Collector/gnss_detect.cpp
     ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial/SbfParser.cpp
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrRtcm.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
+    ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial/SkyTraqBinary.cpp
 )
 target_include_directories(test_gnss_detect PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${SHIM_DIR}
     ${LIB_DIR}/TR_Sensor_Collector
     ${LIB_DIR}/TR_GNSSReceiverMosaic_Serial
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial
+    ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
     ${LIB_DIR}/TR_RocketComputerTypes
 )
 target_link_libraries(test_gnss_detect GTest::gtest_main)
 gtest_discover_tests(test_gnss_detect)
+
+# ---------- test_sdr_rtcm ----------
+# The gnss-sdr-dev board's RTCM3 stream on the V9 and V10 flight computer
+# (TR_GNSSReceiverSdr_Serial/SdrRtcm.cpp): its frames pulled out of the byte
+# stream in any slicing, a lost or corrupted byte costing only its own frame,
+# and the fields of TinkerRocket's message 4001 the FC reads, on the board's
+# own recorded stream (fixtures/sdr_rtcm_stream.h).
+add_executable(test_sdr_rtcm test_sdr_rtcm.cpp
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrRtcm.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
+)
+target_include_directories(test_sdr_rtcm PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+)
+target_link_libraries(test_sdr_rtcm GTest::gtest_main)
+gtest_discover_tests(test_sdr_rtcm)
+
+# ---------- test_sdr_raw_epoch ----------
+# The gnss-sdr-dev board's epochs as the raw-GNSS filter takes them
+# (TR_GNSSReceiverSdr_Serial/SdrRawEpoch.h): made whole by their 4001, the
+# board's clock steps put back into every range, its marks obeyed, the fused
+# grid, a lost or lone record; on the board's recorded stream.
+add_executable(test_sdr_raw_epoch test_sdr_raw_epoch.cpp
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrRtcm.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
+)
+target_include_directories(test_sdr_raw_epoch PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+)
+target_link_libraries(test_sdr_raw_epoch GTest::gtest_main)
+gtest_discover_tests(test_sdr_raw_epoch)
+
+# ---------- test_sdr_raw_feed ----------
+# The gnss-sdr-dev board's stream as the V10's SDR raw-nav image hands it to
+# the raw-GNSS filter, on its driver's path (SdrRawEpoch.h's Doppler means,
+# SdrRawFeed.h's clock-line sample, placement and the fix as GNSSData): the
+# means' rules, the recorded epochs averaged, a 20 s stream re-timed from them
+# placed by the line its records build, a late record left off the line.
+add_executable(test_sdr_raw_feed test_sdr_raw_feed.cpp
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrRtcm.cpp
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrAid.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/GnssTimeSync.cpp
+)
+set_source_files_properties(${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrAid.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
+target_include_directories(test_sdr_raw_feed PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_sdr_raw_feed GTest::gtest_main)
+gtest_discover_tests(test_sdr_raw_feed)
+
+# ---------- test_sdr_nav_start_policy ----------
+# The V10's gnss-sdr-dev image's start without the board and a late board's
+# take-over (flight_computer/main/sdr_nav_start_policy.h, pure).
+add_executable(test_sdr_nav_start_policy test_sdr_nav_start_policy.cpp)
+target_include_directories(test_sdr_nav_start_policy PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+target_link_libraries(test_sdr_nav_start_policy GTest::gtest_main)
+gtest_discover_tests(test_sdr_nav_start_policy)
+
+# ---------- test_raw_nav_choice ----------
+# Which navigation filter the one V9/V10 image (TR_GNSS_AUTO_RAW) flies at
+# boot (flight_computer/main/raw_nav_auto.h rawNavChoice, pure), and that its
+# gates are nothing in every other image.
+add_executable(test_raw_nav_choice test_raw_nav_choice.cpp)
+target_include_directories(test_raw_nav_choice PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+target_link_libraries(test_raw_nav_choice GTest::gtest_main)
+gtest_discover_tests(test_raw_nav_choice)
+
+# ---------- test_sdr_board_config ----------
+# The V10's SDR raw-nav image's switches (config.h with TR_BOARD_V10 and
+# TR_GNSS_DRIVER_SDR, as its CMake sets them) and the receiver profile it flies
+# (ReceiverProfileApply.h applySdrFlightProfile, the Doppler means' lag).
+add_executable(test_sdr_board_config test_sdr_board_config.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/RawGnssShadow.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/RawGnssMeasStage.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/PadSurvey.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/SatJumpCheck.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/FixCheck.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/EphemerisFrames.cpp
+    ${LIB_DIR}/TR_RawGnssShadow/HeadingFit.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssCarrier.cpp
+    ${LIB_DIR}/TR_GNSSRaw/eph.c
+    ${LIB_DIR}/TR_GNSSRaw/atmo.c
+    ${LIB_DIR}/TR_GNSSRaw/RtcmEphemeris.cpp
+    ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilder.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasCarrier.cpp
+    ${LIB_DIR}/TR_GNSSRaw/RawMeasBuilderLite.cpp
+)
+target_include_directories(test_sdr_board_config PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/../projects/flight_computer/main
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/TR_RawGnssShadow
+    ${LIB_DIR}/TR_RawGnssEKF
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+)
+target_compile_definitions(test_sdr_board_config PRIVATE TR_BOARD_V10=1 TR_MAG_DRIVER_QMC5883P=1
+    TR_GNSS_DRIVER_SDR=1 TR_EPH_CAPACITY=128)
+target_link_libraries(test_sdr_board_config GTest::gtest_main)
+gtest_discover_tests(test_sdr_board_config TEST_PREFIX "V10_SDR.")
+
+# The same image's link budget: the board's stream, its fixes as GNSSData and
+# the raw-GNSS filter's records (test_i2s_link_budget.cpp under
+# TR_GNSS_DRIVER_SDR).
+add_executable(test_i2s_link_budget_V10_SDR test_i2s_link_budget.cpp)
+target_include_directories(test_i2s_link_budget_V10_SDR PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+target_compile_definitions(test_i2s_link_budget_V10_SDR PRIVATE TR_BOARD_V10=1 TR_MAG_DRIVER_QMC5883P=1
+    TR_GNSS_DRIVER_SDR=1)
+target_link_libraries(test_i2s_link_budget_V10_SDR GTest::gtest_main)
+gtest_discover_tests(test_i2s_link_budget_V10_SDR TEST_PREFIX "V10_SDR.")
 
 # ---------- test_gnss_log_policy ----------
 # The GNSS log setting (BLE cmd 79): the IMU limit each value gives
@@ -2069,6 +2267,22 @@ target_compile_definitions(test_sim_replay PRIVATE
 target_link_libraries(test_sim_replay GTest::gtest_main)
 gtest_discover_tests(test_sim_replay)
 
+# ---------- test_sim_replay_sdr ----------
+# The rig replay's clock from the gnss-sdr-dev board's clock line (#1600 on the
+# V10's auto image): the records the flight loop drains, each its own instant
+# in GPS time, follow the pad and freeze the clock as the LC86G's fixes do.
+add_executable(test_sim_replay_sdr test_sim_replay_sdr.cpp
+    ${LIB_DIR}/TR_Sensor_Collector_Sim/SimReplay.cpp
+)
+target_include_directories(test_sim_replay_sdr PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_Sensor_Collector_Sim
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_sim_replay_sdr GTest::gtest_main)
+gtest_discover_tests(test_sim_replay_sdr)
+
 # ---------- test_level_gate ----------
 # When the raw-GNSS shadow may level on its accelerometer in flight (#1600):
 # once its velocity has held steady from epoch to epoch and the specific force
@@ -2095,6 +2309,36 @@ target_include_directories(test_gnss_time_sync PRIVATE
 )
 target_link_libraries(test_gnss_time_sync GTest::gtest_main)
 gtest_discover_tests(test_gnss_time_sync)
+
+# ---------- test_sdr_aid ----------
+# TinkerRocket's message 4002, the flight computer to the gnss-sdr-dev board
+# (TR_GNSSReceiverSdr_Serial/SdrAid.cpp): the golden frames the board's own
+# tests pin too, the stamp, the P1 bench script and the schedule that paces
+# it, the aiding block the board appends to its 4001 epoch and the frames it
+# says it took, and the bench's stamps from the board's epochs through
+# GnssTimeSync, and the flight image's phase (flight_computer/main/
+# sdr_phase_policy.h, pure): its map, the IMU's ignition cue, its keeping of
+# the board's line and its gating on it, and its pacing; and the attitude and
+# the rests it sends beside the phase (sdr_aid_policy.h, pure). SdrAid.cpp is
+# built as the firmware builds it, with no fused multiply-add, so its bytes
+# are the reference codec's on any host.
+add_executable(test_sdr_aid test_sdr_aid.cpp
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrAid.cpp
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrRtcm.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/GnssTimeSync.cpp
+)
+set_source_files_properties(${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrAid.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
+target_include_directories(test_sdr_aid PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_GNSSReceiverSdr_Serial
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+target_link_libraries(test_sdr_aid GTest::gtest_main)
+gtest_discover_tests(test_sdr_aid)
 
 # ---------- wire fixture corpus (docs/plans/android-port.md §2.1) ----------
 # Golden-vector generation from the REAL packed structs: wire_fixture_gen
@@ -2172,6 +2416,18 @@ target_include_directories(test_gnss_ascent_gate PRIVATE
 )
 target_link_libraries(test_gnss_ascent_gate GTest::gtest_main)
 gtest_discover_tests(test_gnss_ascent_gate)
+
+# ---------- test_inertial_vertical (owner's design 2026-11-19) ----------
+# The IMU's own vertical velocity, height and pitch for the apogee vote's
+# accelerometer and gyro voters: pad levelling, a boost through apogee, and
+# the ways it gives up (no still pad moment, a gap, a railed gyro).  Pure
+# header in the shared TR_KinematicChecks component.
+add_executable(test_inertial_vertical test_inertial_vertical.cpp)
+target_include_directories(test_inertial_vertical PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/components/TR_KinematicChecks
+)
+target_link_libraries(test_inertial_vertical GTest::gtest_main)
+gtest_discover_tests(test_inertial_vertical)
 
 # ---------- test_ground_ref_freeze (#1108) ----------
 # May the barometric ground reference follow the current sample?  Before
@@ -2408,8 +2664,64 @@ gtest_discover_tests(test_fc_reboot_display_policy)
 # registers its own tests in tests_cpp/v9raw/<piece>.cmake, so pieces built at
 # the same time never edit this file. Each .cmake uses LIB_DIR and SHIM_DIR as
 # the targets above do.
+# ---------- test_skytraq_binary / test_skytraq_link ----------
+# The PX1105R's binary stream (TR_GNSSReceiverPX1105R_Serial/SkyTraqBinary.cpp:
+# framing, resync, the 0xE5 / 0xDF / 0xE7 decoders on its own frames,
+# fixtures/skytraq_frames.h), its 0xE5 as the raw filter's cells and the
+# epoch's GPS instant (Px1105rRawEpoch.h), and its setup against a simulated
+# receiver (SkyTraqLink.cpp). With PX1105R_CAPTURE naming the 09-26 open-sky
+# capture (.log.gz), its 20 minutes too.
+add_executable(test_skytraq_binary test_skytraq_binary.cpp
+    ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial/SkyTraqBinary.cpp
+)
+target_include_directories(test_skytraq_binary PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+)
+target_link_libraries(test_skytraq_binary GTest::gtest_main)
+gtest_discover_tests(test_skytraq_binary)
+
+add_executable(test_skytraq_link test_skytraq_link.cpp
+    ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial/SkyTraqBinary.cpp
+    ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial/SkyTraqLink.cpp
+)
+target_include_directories(test_skytraq_link PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial
+)
+target_link_libraries(test_skytraq_link GTest::gtest_main)
+gtest_discover_tests(test_skytraq_link)
+
 file(GLOB V9RAW_CMAKE CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/v9raw/*.cmake)
 list(SORT V9RAW_CMAKE)
 foreach(_v9raw_cmake IN LISTS V9RAW_CMAKE)
     include(${_v9raw_cmake})
 endforeach()
+
+# ---------- test_skytraq_nav ----------
+# The PX1105R's navigation-message assembler (TR_GNSSReceiverPX1105R_Serial/
+# SkyTraqNav.cpp): 0xE0 GPS LNAV subframes, 0xE6 Galileo I/NAV page pairs
+# and 0xE2 BeiDou D1 subframes to gps_eph_t, checked field for field against
+# the bench prototype's decode (gnss_raw.py EphStore) of the frames of the
+# 09-26 outdoor capture (fixtures/skytraq_nav_frames.h); what is refused (bad
+# preamble, GPS cutover, Galileo CRC, BeiDou GEO, short frames, unknown
+# week); GPS subframe 4 page 18 to the 8 Klobuchar bytes. With
+# TR_SKYTRAQ_NAV_CAPTURE naming the capture, all of it (statistics only).
+add_executable(test_skytraq_nav test_skytraq_nav.cpp
+    ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial/SkyTraqNav.cpp
+    ${LIB_DIR}/TR_GNSSRaw/eph.c
+    ${LIB_DIR}/TR_GNSSRaw/RtcmEphemeris.cpp
+    ${LIB_DIR}/TR_GNSSRaw/EphemerisStore.cpp
+)
+target_include_directories(test_skytraq_nav PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+)
+target_link_libraries(test_skytraq_nav GTest::gtest_main)
+gtest_discover_tests(test_skytraq_nav)

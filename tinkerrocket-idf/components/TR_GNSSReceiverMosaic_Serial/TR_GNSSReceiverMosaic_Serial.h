@@ -47,7 +47,17 @@
 #include "MosaicLink.h"
 #include "PpsPairer.h"
 #include "SbfParser.h"
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+// Its raw side (the raw outputs, and the 1PPS line and navigation blocks as
+// the raw-GNSS filter needs them): the mosaic-only image's, and the image
+// that flies that filter on every receiver giving measurements
+// (TR_GNSS_AUTO_RAW), where it stays off until the mosaic is the receiver
+// found (enableRawOutputs).
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
+#define TR_MOSAIC_RAW_SIDE 1
+#else
+#define TR_MOSAIC_RAW_SIDE 0
+#endif
+#if TR_MOSAIC_RAW_SIDE
 #include <RawMeas.h>           // TR_GNSSRaw: gnss_raw::TimedRawEpoch
 #include "MosaicMultiband.h"
 #include "MosaicRawEpoch.h"
@@ -130,7 +140,7 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         // them then).
         void requestNavResend() { nav_resend_.store(true, std::memory_order_relaxed); }
 
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if TR_MOSAIC_RAW_SIDE
         // ── Raw outputs for the raw-GNSS navigation filter (#1600 on the mosaic) ──
         // The mosaic-only image's alone (see the top of this file).
         // Off until enableRawOutputs(), called before begin(): it makes the
@@ -302,7 +312,7 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         void drainUartEvents();
         void logStatus();
         void logSetup();
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if TR_MOSAIC_RAW_SIDE
         // the raw outputs (enableRawOutputs), all in the poll task
         void rawMeasEpoch(const uint8_t* block, size_t len, uint32_t tow_ms, int64_t end_us);
         void rawPvt(const mosaic::PvtGeodetic& p);
@@ -383,7 +393,7 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         QueueHandle_t     clock_q_ = nullptr;
         uint32_t          clock_seq_seen_ = 0;
         uint32_t          clock_dropped_ = 0;
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if TR_MOSAIC_RAW_SIDE
         uint32_t          pairs_refused_late_ = 0;   // pairings refused while the link was backed up
 #endif
 #if defined(TR_BENCH_MOSAIC_TAG_TRACE) && TR_BENCH_MOSAIC_TAG_TRACE
@@ -394,7 +404,7 @@ class TR_GNSSReceiverMosaicSerial : private mosaic::SbfSink
         std::atomic<bool> nav_resend_{false};
         uint32_t          nav_resends_ = 0;
 
-#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if TR_MOSAIC_RAW_SIDE
         // The raw outputs: everything they keep is in one block allocated by
         // enableRawOutputs(), so a mosaic image that never asks for them (the
         // -DTR_RAW_GNSS_SHADOW=0 one) carries only this pointer and the lock.

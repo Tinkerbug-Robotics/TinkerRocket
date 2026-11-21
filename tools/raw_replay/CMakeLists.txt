@@ -130,6 +130,35 @@ if(RAW_REPLAY_FLIGHT_PROFILE)
         set(RAW_REPLAY_FLIGHT_PROFILE OFF)
     endif()
 endif()
+# the SkyTraq PX1105R's path (--receiver px1105r, skytraq_feed.h): its driver's pure code (SkyTraqBinary, SkyTraqNav,
+# Px1105rRawEpoch.h), the LC86G driver's GnssTimeSync it places epochs with, and the PX1105R image's flight profile and
+# safeguards (applyPx1105rFlightProfile / applyPx1105rFlightSafeguards) on the mosaic's design: a tree that has them
+# all (off by itself elsewhere), with the mosaic's path, its safeguards, its flight profile and the Dopplers in pairs
+option(RAW_REPLAY_PX1105R "the firmware tree has the PX1105R's driver code and image profile (--receiver px1105r)" ON)
+if(RAW_REPLAY_PX1105R)
+    set(_tr_px "")
+    if(EXISTS "${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial/Px1105rRawEpoch.h" AND
+       EXISTS "${LIB_DIR}/TR_RawGnssShadow/ReceiverProfileApply.h")
+        file(STRINGS "${LIB_DIR}/TR_RawGnssShadow/ReceiverProfileApply.h" _tr_px REGEX "void applyPx1105rFlightSafeguards\\(")
+    endif()
+    if(NOT _tr_px)
+        message(STATUS "raw_replay: ${SRC_ROOT} has no PX1105R driver code or image profile: RAW_REPLAY_PX1105R off")
+        set(RAW_REPLAY_PX1105R OFF)
+    elseif(NOT (RAW_REPLAY_MOSAIC AND RAW_REPLAY_MOSAIC_SAFEGUARDS AND RAW_REPLAY_FLIGHT_PROFILE AND RAW_REPLAY_DOPAVG))
+        message(STATUS "raw_replay: RAW_REPLAY_PX1105R off (it flies the mosaic image's design: RAW_REPLAY_MOSAIC, "
+                       "MOSAIC_SAFEGUARDS, FLIGHT_PROFILE and DOPAVG)")
+        set(RAW_REPLAY_PX1105R OFF)
+    endif()
+endif()
+set(PX_SRC "")
+set(PX_INC "")
+if(RAW_REPLAY_PX1105R)
+    set(PX_SRC
+        ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial/SkyTraqBinary.cpp
+        ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial/SkyTraqNav.cpp
+        ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/GnssTimeSync.cpp)
+    set(PX_INC ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial)
+endif()
 set(FC_MAIN "${SRC_ROOT}/tinkerrocket-idf/projects/flight_computer/main")
 set(SHIM_DIR "${SRC_ROOT}/tests_cpp/host_shim")
 # A later tree whose filter needs a source file or include directory this list does not name: its paths, relative
@@ -170,10 +199,30 @@ if(RAW_REPLAY_MOSAIC)
         ${LIB_DIR}/TR_GpsInsEKF
         ${LIB_DIR}/TR_GeoMag
         ${LIB_DIR}/TR_Orientation)
+    # the gnss-sdr-dev board's path (--receiver sdr): its RTCM3 epochs (SdrRawEpoch.h), placed by the time sync its
+    # records' latches build (GnssTimeSync, SdrAid's latchGps) the way the V10 image's driver does (SdrRawFeed.h),
+    # where the tree has them
+    if(EXISTS "${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrRawFeed.h")
+        list(APPEND MOSAIC_SRC ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrRtcm.cpp
+                               ${LIB_DIR}/TR_GNSSReceiverSdr_Serial/SdrAid.cpp
+                               ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/GnssTimeSync.cpp)
+        list(APPEND MOSAIC_INC ${LIB_DIR}/TR_GNSSReceiverSdr_Serial)
+        set(RAW_REPLAY_SDR ON)
+    else()
+        set(RAW_REPLAY_SDR OFF)
+        message(STATUS "raw_replay: ${SRC_ROOT} has no gnss-sdr-dev path (SdrRawFeed.h): --receiver sdr off")
+    endif()
+else()
+    set(RAW_REPLAY_SDR OFF)
 endif()
 
 function(raw_replay_target name)
-    add_executable(${name} raw_replay.cpp ${CARRIER_SRC} ${LITE_SRC} ${MOSAIC_SRC} ${RAW_REPLAY_EXTRA_SRC}
+    # an optional second argument: another main over the same firmware sources (px_meas_check.cpp)
+    set(_main raw_replay.cpp)
+    if(ARGC GREATER 1)
+        set(_main ${ARGV1})
+    endif()
+    add_executable(${name} ${_main} ${CARRIER_SRC} ${LITE_SRC} ${MOSAIC_SRC} ${PX_SRC} ${RAW_REPLAY_EXTRA_SRC}
         ${LIB_DIR}/TR_RawGnssShadow/RawGnssShadow.cpp
         ${LIB_DIR}/TR_RawGnssShadow/RawGnssMeasStage.cpp
         ${LIB_DIR}/TR_RawGnssShadow/PadSurvey.cpp
@@ -200,6 +249,7 @@ function(raw_replay_target name)
         ${LIB_DIR}/TR_RocketComputerTypes
         ${FC_MAIN}
         ${MOSAIC_INC}
+        ${PX_INC}
         ${RAW_REPLAY_EXTRA_INC}
     )
     target_compile_definitions(${name} PRIVATE RAW_REPLAY_OLD=$<BOOL:${RAW_REPLAY_OLD}>
@@ -221,11 +271,19 @@ function(raw_replay_target name)
         RAW_REPLAY_FLIGHT_PROFILE=$<BOOL:${RAW_REPLAY_FLIGHT_PROFILE}>
         RAW_REPLAY_WINDUP=$<BOOL:${RAW_REPLAY_WINDUP}>
         RAW_REPLAY_DESCENT=$<BOOL:${RAW_REPLAY_DESCENT}>
-        RAW_REPLAY_MULTIBAND=$<BOOL:${RAW_REPLAY_MULTIBAND}>)
+        RAW_REPLAY_MULTIBAND=$<BOOL:${RAW_REPLAY_MULTIBAND}>
+        RAW_REPLAY_SDR=$<BOOL:${RAW_REPLAY_SDR}>
+        RAW_REPLAY_PX1105R=$<BOOL:${RAW_REPLAY_PX1105R}>)
 endfunction()
 
 raw_replay_target(raw_replay)
 if(RAW_REPLAY_MOSAIC)
     raw_replay_target(raw_replay_mosaic)
     target_compile_definitions(raw_replay_mosaic PRIVATE TR_EPH_CAPACITY=128)
+endif()
+# the PX1105R's measurements through the PX1105R image's GNSS task against a known receiver (px_meas_check.cpp), with
+# the image's 128-entry store
+if(RAW_REPLAY_PX1105R)
+    raw_replay_target(px_meas_check px_meas_check.cpp)
+    target_compile_definitions(px_meas_check PRIVATE TR_EPH_CAPACITY=128)
 endif()

@@ -128,6 +128,14 @@ struct RawGnssEKFParams
     double w_markov_sigma = 0.00025;
     double w_markov_tau   = 50.0;
     double accel_var      = 0.25;      // pad levelling, (m/s^2)^2
+    // The accelerometer's noise grows with the specific force past 1 g, by
+    // this fraction of the excess (its scale factor, a high-g channel's own
+    // offset): 0, a_noise alone, as the flight filter's. A boost the IMU
+    // carries through a GNSS gap otherwise leaves the velocity, and the
+    // height after it, far surer than they are: on the RF rig's Hotshot the
+    // filter came out of the boost 8-12 m high with a 2 m 1-sigma and kept it
+    // for two minutes (0.005: 1.7 m, ReceiverProfileApply.h's PX1105R image).
+    double a_noise_per_g  = 0.0;
     // Gravity carries no heading: a levelling update (updateAccelLevel), on
     // the ground or in flight, corrects the tilt and the biases and never the
     // rotation about the vertical -- the gain's rows along the vertical, the
@@ -183,6 +191,18 @@ struct RawGnssEKFParams
     // middle, half the receiver's period (the receiver profile's
     // rr_pair_avg). 0: no epoch is (every receiver but that one).
     double rr_pair_lag_s  = 0.0;
+    // And under thrust, this much further back again: rr_dyn_lag_s, ramping
+    // in from rr_dyn_lag_g0 to rr_dyn_lag_g1 of specific force (the IMU's,
+    // low-passed over f_lp_tau_s), set at each epoch's start by RawGnssShadow
+    // (setRrDynLag, dynLagFor). The PX1105R's Dopplers, against the RF rig's
+    // truth (2026-10-23): 0-20 ms more below ~11.5 g, 55-72 ms more above
+    // ~12 g, a step, the same for every satellite whatever its own line of
+    // sight's acceleration -- Hotshot from 16 g, the Traveler from 12.4 g, a
+    // -9 m/s Doppler there. 0: none (every receiver but that one).
+    double rr_dyn_lag_s   = 0.0;
+    double rr_dyn_lag_g0  = 11.5;      // g of specific force: none below
+    double rr_dyn_lag_g1  = 12.5;      // g: all of it above
+    double f_lp_tau_s     = 0.1;       // the specific force's low-pass, s
     bool   att_gate_cos4  = true;      // false: GNSS corrections reach the attitude in full
     // GNSS corrections to the attitude about the vertical only (wins over
     // att_gate_cos4): the heading, and the gyro biases only along the
@@ -584,6 +604,25 @@ public:
     // of the filter takes it along; init turns it off.
     void setImuFree(bool on);
     bool imuFree() const { return imu_free_; }
+    // The IMU-free mode's re-anchor (RawGnssShadow's vertical latch,
+    // vert_imu_free_release_s): the velocity (NED) and clock rate moved by a
+    // fit of the epoch's Dopplers (lastVelocityFit), the velocity's covariance
+    // with every other state cleared and its 1-sigma set to vel_sigma (a
+    // block taken out of a positive P leaves it positive), the position's
+    // 1-sigma raised to at least pos_sigma (the drift while the latch held),
+    // and the refusal counts cleared. Raising the velocity's variance alone
+    // and fusing the Dopplers one at a time does not do it: at a 70 m/s step
+    // the first rows took the clock rate and the velocity together the wrong
+    // way and the rest were refused (the host test, 2026-11-13).
+    void reanchorVelocity(const double dv_ned[3], double dclk_mps, T vel_sigma, T pos_sigma);
+    // screenRangeRates' last fit of the epoch's Dopplers: the velocity (NED)
+    // and clock rate to add to the filter's, m/s; false when it could not fit.
+    bool lastVelocityFit(double x[4]) const
+    {
+        for (int i = 0; i < 4; ++i)
+            x[i] = vfit_x_[i];
+        return vfit_valid_;
+    }
     // The epoch about to be worked has its Dopplers in pairs (rr_pair_lag_s;
     // RawGnssShadow sets it at each epoch's start where the params have a
     // pair lag, from the epoch's BuiltEpoch::rr_paired): its Dopplers are
@@ -600,13 +639,36 @@ public:
     }
     bool rrPaired() const { return rr_paired_; }
     // The epoch's Dopplers' lag (s, at least 0): rr_lag_s, plus rr_pair_lag_s
-    // on an epoch in pairs. rrPairLag() is the second part alone (0 off one).
+    // on an epoch in pairs, plus the thrust's (setRrDynLag). rrPairLag() is
+    // the second part alone (0 off one).
     double rrLag() const
     {
-        const double tau = rr_paired_ ? p_.rr_lag_s + p_.rr_pair_lag_s : p_.rr_lag_s;
+        const double tau = (rr_paired_ ? p_.rr_lag_s + p_.rr_pair_lag_s : p_.rr_lag_s) + rr_dyn_lag_;
         return tau > 0.0 ? tau : 0.0;
     }
     double rrPairLag() const { return rr_paired_ ? p_.rr_pair_lag_s : 0.0; }
+    // The epoch about to be worked has its Dopplers this much later again
+    // under thrust (the params' rr_dyn_lag_s; RawGnssShadow sets it at each
+    // epoch's start from dynLagFor(specificForceLpG())): every consumer takes
+    // it, as the pairs' lag. A copy of the filter takes it along.
+    void setRrDynLag(double s)
+    {
+        rr_dyn_lag_ = s;
+        acc_memo_.have = 0;
+    }
+    // rr_dyn_lag_s at f_g g of specific force: none below rr_dyn_lag_g0, all
+    // of it above rr_dyn_lag_g1, linear between
+    double dynLagFor(double f_g) const
+    {
+        if (p_.rr_dyn_lag_s <= 0.0 || f_g <= p_.rr_dyn_lag_g0)
+            return 0.0;
+        if (f_g >= p_.rr_dyn_lag_g1)
+            return p_.rr_dyn_lag_s;
+        return p_.rr_dyn_lag_s * ((f_g - p_.rr_dyn_lag_g0) / (p_.rr_dyn_lag_g1 - p_.rr_dyn_lag_g0));
+    }
+    // The IMU's specific force, g, low-passed over f_lp_tau_s (kept only with
+    // rr_dyn_lag_s on; 1 from init)
+    T specificForceLpG() const { return f_lp_g_; }
     // A flight restored after a reboot: the position's, velocity's and
     // attitude's 1-sigmas set to these on every axis (the attitude's a
     // rotation, rad), their cross-covariances dropped. A block whose sigma is
@@ -887,6 +949,9 @@ private:
     T      q_acc_, q_att_, q_ab_, q_wb_, f_ab_, f_wb_, q_clkb_, q_clkd_, q_isb_;
 
     double lla_[3] = {0.0, 0.0, 0.0};
+    // gravity_wgs84: normal gravity's latitude part (Somigliana, the height
+    // term's coefficient, the north component's) at grav_lat_ (gravityNed)
+    mutable double grav_lat_ = 1.0e9, grav_g0_ = 0.0, grav_c1_ = 0.0, grav_n_ = 0.0;
     T      v_[3] = {};
     T      q_[4] = {1, 0, 0, 0};
     T      ab_[3] = {};
@@ -905,6 +970,8 @@ private:
     T      a_ned_[3] = {};
     T      g_excess_ = 0;
     T      g_peak_ = 0;
+    T      f_lp_g_ = 1;          // the specific force, g, low-passed (rr_dyn_lag_s)
+    double rr_dyn_lag_ = 0.0;    // setRrDynLag: this epoch's Dopplers' lag under thrust, s
     // hdg_obs_mode: the horizontal specific force's mean, NED (m/s^2); when
     // the IMU last read past hdg_obs_open_g; applied or not; the last epoch's s
     T      fh_ew_[2] = {};
@@ -918,6 +985,8 @@ private:
     mutable double vfit_y_[RawEpoch::kMaxObs] = {};
     mutable double vfit_s_[RawEpoch::kMaxObs] = {};
     mutable bool   vfit_in_[RawEpoch::kMaxObs] = {};
+    mutable double vfit_x_[4] = {};       // screenRangeRates' last fit (lastVelocityFit)
+    mutable bool   vfit_valid_ = false;
 
     Hist   hist_[kHist] = {};
     // lever_on: each history entry's antenna offset C r (0-2) and velocity

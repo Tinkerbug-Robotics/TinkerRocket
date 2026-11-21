@@ -602,6 +602,7 @@ private fun preflightContext(
         telemetry = telemetry,
         syncState = syncState,
         profile = profile,
+        guidance = rememberGuidanceStateCheck(session, profile),
     )
 }
 

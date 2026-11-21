@@ -65,6 +65,8 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawMeasBuilder::C
     // the cheaper build: the atmosphere once in each period the code is fused in
     c.lite = p.build_lite;
     c.atmo_period_s = p.build_lite ? p.pr_period_s : 0.0;
+    // the troposphere's rate off each Doppler
+    c.tropo_rate = p.rr_tropo_rate;
 }
 
 inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssEKFParams& e)
@@ -185,6 +187,77 @@ inline void applyMosaicFlightProfile(GnssReceiverProfile& p)
     p.sat_cap_max = 0;
 }
 
+// The V10's gnss-sdr-dev image's flight profile (main.cpp startRawShadow
+// under TR_RAW_NAV_SDR, before any bench override, and tools/raw_replay's
+// --receiver sdr in the same place): the mosaic image's 10/24 set -- the
+// cheaper epoch build, the epoch's geometry shared with the Doppler's
+// prediction in float, at most 16 satellites with the cap fixed -- and the
+// epochs between the fused ones averaged in (rr_pair_avg): on the board each
+// fused epoch's Doppler is the mean of its satellite's Dopplers over the
+// board's epochs since the last fused one (SdrRawEpoch.h, ten at 10 Hz), the
+// mosaic's pairs widened to the fused period. The 16 satellites at 10 Hz are
+// what the RF rig's runs were scored on offline (2026-11-09). And the
+// troposphere's rate off each Doppler (rr_tropo_rate, RawMeasBuilder.h): on
+// the RF rig's hotshot the board's Dopplers alone read the climb 0.5-1.5 m/s
+// slow from late boost until the scene's troposphere ended at 10 km, which
+// the filter followed as +0.7-0.8 m/s of vertical velocity to T+12; offline
+// (2026-11-12, bench-backups v10-sdr-logs/rate-study) taking it off cut that
+// to 0.25 m/s (p90). The mosaic's image has not flown it: the Goblin's climb
+// is a fifth as fast, and its image is verified as it is.
+//
+// And the board's output delay (epoch_latency_s). The V10 places each epoch
+// on its clock by the line its 4001 records' arrivals give (SdrRawFeed.h), so
+// each sits late by the transport -- the board's latch to that record's last
+// byte -- and by the lag of the board's own Dopplers. Calibrated on the RF rig
+// (2026-11-13, bench-backups v10-sdr-logs rfrig-20261110/p2/hil RESULTS_hil.md):
+//   - the transport about 2.5 ms: the V10's frames, stamped off that line,
+//     reach the board 2.6-3.2 ms late at the least, the trip back included,
+//     and an epoch's ~500 bytes take 2.2-2.7 ms at 2 Mbaud;
+//   - the whole about 5 ms: offline on ten of the rig's flights with that
+//     transport, the early coast's vertical velocity was best there (p90
+//     0.150 to 0.061 m/s; the boost's 0.039 to 0.018).
+// A rig replay's clock carries the transport too (main.cpp takes it off
+// there: kSdrTransportS).
+constexpr double kSdrEpochLatencyS = 0.005;
+constexpr double kSdrTransportS = 0.0025;
+inline void applySdrFlightProfile(GnssReceiverProfile& p)
+{
+    p.build_lite = true;
+    p.share_los = true;
+    p.rr_float = true;
+    p.rr_pair_avg = true;
+    p.sat_cap = 16;
+    p.sat_cap_max = 0;
+    p.rr_tropo_rate = true;
+    p.epoch_latency_s = kSdrEpochLatencyS;
+}
+
+// The gnss-sdr-dev board's Doppler means (SdrRawEpoch.h, the profile's
+// rr_pair_avg): how many of the board's epochs each fused epoch's mean takes
+// (the fused period over the board's, 0 with them off or a period that is not
+// at least two of the board's), and where their mean falls: the window's
+// middle, (n - 1) / 2 of the board's periods before the fused epoch's tag
+// (45 ms at ten 10 ms epochs) -- the filter's rr_pair_lag_s on an epoch
+// handed over with them (TimedRawEpoch::rr_paired); one handed over as it came
+// keeps rr_lag_s. applyReceiverProfile's pair lag is the mosaic's (two
+// epochs); this one replaces it on the gnss-sdr-dev image, after it.
+inline int sdrDopplerMeanEpochs(const GnssReceiverProfile& p)
+{
+    if (!p.rr_pair_avg || !(p.raw_epoch_period_s > 0.0))
+        return 0;
+    const long n = std::lround(fusedEpochPeriod(p) / p.raw_epoch_period_s);
+    return n >= 2 ? static_cast<int>(n) : 0;
+}
+inline double sdrDopplerMeanLag(const GnssReceiverProfile& p)
+{
+    const int n = sdrDopplerMeanEpochs(p);
+    return n >= 2 ? 0.5 * static_cast<double>(n - 1) * p.raw_epoch_period_s : 0.0;
+}
+inline void applySdrDopplerMeans(const GnssReceiverProfile& p, RawGnssShadow::Config& c)
+{
+    c.ekf.rr_pair_lag_s = sdrDopplerMeanLag(p);
+}
+
 // The mosaic-only image's flight safeguards (wave 3, 2026-10-18), in one place:
 // main.cpp's startRawShadow calls it under TR_RAW_NAV_MOSAIC after the profile
 // and before any bench override, and tools/raw_replay's --receiver mosaic calls
@@ -297,6 +370,110 @@ inline void applyMosaicFlightSafeguards(RawGnssShadow::Config& c)
     c.dv_lever_mode = 1;
     c.dv_lever_radial_m = 0.0;
     c.windup_k = 0.99;
+}
+
+// The V10's gnss-sdr-dev image's flight safeguards (main.cpp's startRawShadow
+// under TR_RAW_NAV_SDR, tools/raw_replay's --receiver sdr): the mosaic image's
+// above, with two of its own.
+//   - No carrier wind-up taken off (windup_k 0): 0.99 is the Goblin helix's,
+//     measured on the spin rig; the board's antenna's is not measured. The
+//     clock drift takes the common part.
+//   - The Doppler change check stands down in the IMU-free descent
+//     (dv_imu_free_off): there the filter's velocity is a random walk and its
+//     history holds no acceleration, so the check measured every Doppler
+//     against no change at all. On the V10's RF-rig run of 2026-11-12 (hil1,
+//     the hotshot scene's ballistic fall from 26 km) it held every Doppler
+//     from the apogee call on, the latch never let go, and the vertical
+//     velocity rode the 1 Hz pseudoranges 20-25 m/s off for 30 s. GNSS
+//     reaches no attitude or bias in the mode, which is what the check is
+//     there to protect; a bad Doppler meets the update's own gate.
+//   - WGS84 normal gravity with height (RawGnssEKFParams::gravity_wgs84), in
+//     place of the flight filter's constant 9.807: gravity is 0.06 m/s^2
+//     weaker at 20 km and 0.08 at 26 km, and with GNSS lost the coast
+//     integrates the difference. On the V10's rig run rs2 (2026-11-13, the
+//     GNSS board rebooted after burnout and never re-acquired) that was
+//     the coast's 3.6 m/s and 87 m of vertical error (p90); offline, the
+//     same with it 0.02 m/s and 5 m, the GNSS-absent filter's. GpsInsEKF
+//     has flown it since #1530. With GNSS it changes nothing measurable. The
+//     mosaic's image and the Beetle's do not take it: their climbs are a
+//     kilometre, where the height term is 0.003 m/s^2.
+//   - The vertical check's latch lets go in the IMU-free descent
+//     (vert_imu_free_release_s, 1 s): there a chute's opening the filter
+//     cannot follow is dropped and latched like a stale receiver, and with
+//     no barometer to bring it back GNSS stayed out for the rest of the
+//     descent (the host test AChutesOpeningInTheImuFreeDescent: 40 m/s at
+//     6.8 g, 69 at 9.9 g). With the barometer the latch let go by itself
+//     (1.0 s, 1.75 s). The mosaic's image and the Beetle's are verified as
+//     they are and do not take it (yet).
+inline void applySdrFlightSafeguards(RawGnssShadow::Config& c)
+{
+    applyMosaicFlightSafeguards(c);
+    c.windup_k = 0.0;
+    c.dv_imu_free_off = true;
+    c.ekf.gravity_wgs84 = true;
+    c.vert_imu_free_release_s = 1.0;
+}
+
+// The PX1105R image's flight profile: the mosaic-only image's exactly (the
+// cheaper build, the shared geometry, the Doppler's float prediction, its
+// pairs, 16 satellites, the cap fixed). Its receiver has the mosaic's 50 ms
+// epochs on the 100 ms grid, so the pairs fit (dopplerPairsFit).
+inline void applyPx1105rFlightProfile(GnssReceiverProfile& p)
+{
+    applyMosaicFlightProfile(p);
+}
+
+// The PX1105R image's flight safeguards: the mosaic-only image's (none needs
+// the receiver: they are the airframe's and the filter's), with this carrier's
+// antenna's wind-up. Its Taoglas GVLB208.A is a right-hand circularly
+// polarised patch, one cycle a turn about its boresight: k = 1, UNMEASURED,
+// and right only with the patch facing up the nose (the carrier standing on
+// J1 as the SAM-M10Q carrier does). The clock drift takes the common part
+// either way (the windup study: no ascent median moved more than 0.03 deg).
+// On the pad the pseudoranges set the position: the cold start's seed is the
+// receiver's first 3-D fix, 5-35 m off on the RF rig's flights and up to 169 m
+// and 325 m, so it starts 100 m unsure (p0_pos; 10 m took over two minutes to
+// give way, 15 m still off at launch), and the barometer, which would hold it,
+// only learns its offset to it there (baro_pad_fuse).
+// In a boost: its Dopplers lag 60 ms more above 12 g of specific force
+// (rr_dyn_lag_s, the step at 11.5-12.5 g), so taken at their own instant they
+// are trusted more than the LC86G's, 0.25 m/s per g past 1 g (rr_dyn_sigma,
+// 0.5); and the accelerometer's noise grows 0.5 % of the specific force past
+// 1 g (a_noise_per_g). The three together on the RF rig's 31 flights
+// (2026-10-23, the replay at the latency its events were built with): Hotshot
+// coast and apogee 5.1 -> 1.7 m, its two-band coast above 515 m/s 56 -> 9 m;
+// the Traveler's boost 6.5 -> 5.7 m, after its block 13.8 -> 12.2 m; the rp5
+// twin unchanged; at a cost of the Traveler's coast above 515 m/s 8.9 -> 10.6 m
+// and the Eagle Claw twin's boost velocity 1.25 -> 1.46 m/s. Either alone does
+// worse: the lag taken without more trust in the Dopplers leaves a long boost
+// to an IMU that drifts (the rig's simulated one, +2.6 m/s by the Traveler's
+// burnout, which the lagging Dopplers had hidden), and more trust without the
+// lag pulls the filter onto the lagging Dopplers (Hotshot two-band 56 -> 62 m).
+// All at the 20 ms output delay the replay's events were built with: with no
+// delay (epoch_latency_s 0, as the profile has it) the Traveler's boost goes
+// 6.0 -> 14.7 m and its coast above 515 m/s 13.5 -> 22.2 m, so the receiver's
+// real delay wants measuring before this flies.
+// And the gnss-sdr-dev image's three descent and coast safeguards
+// (applySdrFlightSafeguards, where each is measured), none of them the
+// receiver's: the Doppler change check stands down in the IMU-free descent
+// (dv_imu_free_off), the vertical check's latch lets go there after 1 s
+// (vert_imu_free_release_s), and gravity is WGS84's with height
+// (gravity_wgs84). Owner's call 2026-11-13; not replayed on a PX1105R flight
+// (its rig captures are on the RF rig's Pi).
+inline void applyPx1105rFlightSafeguards(RawGnssShadow::Config& c)
+{
+    applyMosaicFlightSafeguards(c);
+    c.windup_k = 1.0;
+    c.baro_pad_fuse = false;
+    c.ekf.p0_pos = 100.0;
+    c.ekf.rr_dyn_lag_s = 0.060;
+    c.ekf.rr_dyn_lag_g0 = 11.5;
+    c.ekf.rr_dyn_lag_g1 = 12.5;
+    c.meas.rr_dyn_sigma = 0.25;
+    c.ekf.a_noise_per_g = 0.005;
+    c.dv_imu_free_off = true;
+    c.vert_imu_free_release_s = 1.0;
+    c.ekf.gravity_wgs84 = true;
 }
 
 // The antenna's offset from the IMU, where the rocket's owner measured it: an

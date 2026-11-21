@@ -46,8 +46,11 @@
 
 namespace InflightRefusalPolicy {
 
-// = flight_computer MAX_FLIGHT_TIME_MS, the FC's own INFLIGHT timeout.
-inline constexpr uint32_t kMaxFlightTimeMs = 600000;
+// = flight_computer MAX_FLIGHT_TIME_CEILING_MS, the longest the FC stays
+// INFLIGHT: its timeout is 600 s, but up to 1800 s while a deployment channel
+// is still owed after apogee (V10 pre-flight review, 2026-11-18: a main due
+// at its altitude under a slow drogue from 10 km or more comes after T+600 s).
+inline constexpr uint32_t kMaxFlightTimeMs = 1800000;
 
 inline bool refuse(bool state_inflight, bool fc_frame_fresh, uint32_t inflight_age_ms)
 {

@@ -726,6 +726,10 @@ fun SettingsScreen(
                             "law runs."
                     },
                 )
+                // The picker is the profile; this is what the flight computer holds.
+                if (session != null) {
+                    GuidanceStateLine(rememberGuidanceStateCheck(session, active))
+                }
                 ToggleRow(
                     "Angle control",
                     active.useAngleControl,
@@ -981,6 +985,24 @@ fun SettingsScreen(
                     Caption(
                         "Engages at the Activation Delay after launch (shared with roll " +
                             "control), not after burnout.",
+                    )
+                    // Both laws. Clamped to what the flight computer takes,
+                    // (0, 60]: it keeps its old limit for anything else.
+                    FieldRow {
+                        NumField("Tilt limit, boost (°)", fmt(active.pnTiltLimitBoostDeg), Modifier.weight(1f)) { s ->
+                            s.toFloatOrNull()?.takeIf { it.isFinite() }?.let { v ->
+                                edit(ConfigGroup.GUIDANCE) { it.copy(pnTiltLimitBoostDeg = v.coerceIn(1f, 60f)) }
+                            }
+                        }
+                        NumField("Tilt limit, coast (°)", fmt(active.pnTiltLimitCoastDeg), Modifier.weight(1f)) { s ->
+                            s.toFloatOrNull()?.takeIf { it.isFinite() }?.let { v ->
+                                edit(ConfigGroup.GUIDANCE) { it.copy(pnTiltLimitCoastDeg = v.coerceIn(1f, 60f)) }
+                            }
+                        }
+                    }
+                    Caption(
+                        "Guidance switches off for the rest of the flight if the rocket tilts " +
+                            "more than this from vertical. Boost is before burnout, coast after.",
                     )
                 } else {
                     Caption("Switch the control mode above to Guidance to configure it.")

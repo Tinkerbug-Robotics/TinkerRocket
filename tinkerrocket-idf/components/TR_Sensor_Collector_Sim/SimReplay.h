@@ -60,7 +60,8 @@ struct Header
     float    acc_lsb = 0.0f;        // m/s^2
     float    gyro_lsb = 0.0f;       // rad/s
     float    p_ref_pa = 0.0f;
-    float    p_lsb_pa = 0.0f;
+    float    p_lsb_pa = 0.0f;       // version 1: Pa a count; version 2: ln(p / p_ref_pa) a count (log pressure,
+                                    // the same height step at any height: a flight to 26 km in int16)
     float    pad_loop_s = 0.0f;     // the first this many seconds are the pad, looped before the clock
     float    land_loop_s = 0.0f;    // the last this many are landed, looped after the end
     float    decimal_year = 0.0f;   // for the magnetic model, as the flight computer works it out

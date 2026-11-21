@@ -78,6 +78,8 @@ private struct SettingsContent: View {
     @State private var sPnMinSpeed = ""
     @State private var sPnKpPos = ""
     @State private var sPnKdVel = ""
+    @State private var sPnTiltBoost = ""
+    @State private var sPnTiltCoast = ""
 
     // Roll waypoints edited as strings; committed to the profile on change.
     @State private var rollWaypoints: [(time: String, angle: String)] = []
@@ -231,6 +233,7 @@ private struct SettingsContent: View {
         case integralSep
         case guidTargetAlt, guidNavGain, guidMaxAccel, guidAccelToFin, guidMaxFin, guidMinSpeed
         case guidKpPos, guidKdVel
+        case guidTiltBoost, guidTiltCoast
         case wpTime(Int), wpAngle(Int)
         case pyroValue(Int)   // ch index 0..3
         case drogueRate, mainRate, mainDeployAlt, dragK
@@ -270,7 +273,7 @@ private struct SettingsContent: View {
         case .pidKp, .pidKi, .pidKd, .pidMin, .pidMax: return .pid
         case .rollDelay, .rollMinSpeed, .rateCap, .kpAngle, .integralSep: return .rollControl
         case .guidTargetAlt, .guidNavGain, .guidMaxAccel, .guidAccelToFin, .guidMaxFin, .guidMinSpeed,
-             .guidKpPos, .guidKdVel: return .guidance
+             .guidKpPos, .guidKdVel, .guidTiltBoost, .guidTiltCoast: return .guidance
         case .wpTime, .wpAngle: return .rollWaypoints
         case .pyroValue: return .pyro
         case .drogueRate, .mainRate, .mainDeployAlt, .dragK: return .recovery
@@ -1351,6 +1354,11 @@ private struct SettingsContent: View {
                 ? "PN guidance steers pitch/yaw toward the target. Roll is rate-nulled \u{2014} the profile is ignored."
                 : "The roll controller holds the airframe (null roll, or track a roll-angle profile). No guidance.")
                 .font(.caption).foregroundColor(.secondary)
+            // The picker is the profile; this is what the flight computer holds.
+            GuidanceStateLine(check: GuidanceStateCheck.evaluate(
+                profile: profile, config: device.rocketConfig,
+                isConnected: device.isConnected,
+                isBaseStation: device.isBaseStation))
         }
     }
 
@@ -1471,6 +1479,7 @@ private struct SettingsContent: View {
             guidanceIntroCopy
             guidanceLawFields
             guidanceSharedFields
+            guidanceTiltFields
         }
     }
 
@@ -1597,6 +1606,30 @@ private struct SettingsContent: View {
             Text(profile.pnGuidanceLaw == 0
                  ? "Nav gain = PN aggressiveness (3\u{2013}5). Min speed turns steering off below useful fin authority, checked all flight; roll is still rate-nulled below it. Stored in the rocket profile."
                  : "Min speed turns steering off below useful fin authority, checked all flight; roll is still rate-nulled below it. Stored in the rocket profile.")
+                .font(.caption).foregroundColor(.secondary)
+        }
+    }
+
+    /// The tilt-limit safety latch, shared by both laws.
+    @ViewBuilder private var guidanceTiltFields: some View {
+        Group {
+            HStack {
+                Text("Tilt limit, boost")
+                Spacer()
+                TextField("15", text: $sPnTiltBoost)
+                    .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
+                    .focused($focusedField, equals: .guidTiltBoost)
+                Text("deg").foregroundColor(.secondary)
+            }
+            HStack {
+                Text("Tilt limit, coast")
+                Spacer()
+                TextField("20", text: $sPnTiltCoast)
+                    .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
+                    .focused($focusedField, equals: .guidTiltCoast)
+                Text("deg").foregroundColor(.secondary)
+            }
+            Text("Guidance switches off for the rest of the flight if the rocket tilts more than this from vertical. Boost is before burnout, coast after. 1\u{2013}60\u{00B0}.")
                 .font(.caption).foregroundColor(.secondary)
         }
     }
@@ -1793,6 +1826,8 @@ private struct SettingsContent: View {
         sPnMinSpeed = formatDecimal(Double(p.pnMinSpeed))
         sPnKpPos = formatDecimal(Double(p.pnKpPos))
         sPnKdVel = formatDecimal(Double(p.pnKdVel))
+        sPnTiltBoost = formatDecimal(Double(p.pnTiltLimitBoostDeg))
+        sPnTiltCoast = formatDecimal(Double(p.pnTiltLimitCoastDeg))
         rollWaypoints = p.rollWaypoints.map {
             (time: trimFloat($0.timeSeconds), angle: trimFloat($0.angleDeg))
         }
@@ -2046,11 +2081,16 @@ private struct SettingsContent: View {
         // they log on rejection.  Both laws' values are sent every time.
         let kpPos      = max(0, parseFloat(sPnKpPos,      fallback: profile.pnKpPos))
         let kdVel      = max(0, parseFloat(sPnKdVel,      fallback: profile.pnKdVel))
+        // Tilt limits: the FC takes (0, 60] and keeps its previous value for
+        // anything else, so clamp to what it will fly.
+        let tiltBoost  = min(60, max(1, parseFloat(sPnTiltBoost, fallback: profile.pnTiltLimitBoostDeg)))
+        let tiltCoast  = min(60, max(1, parseFloat(sPnTiltCoast, fallback: profile.pnTiltLimitCoastDeg)))
         updateProfile {
             $0.pnNavGain = navGain; $0.pnMaxAccel = maxAccel; $0.pnAccelToFin = accelToFin
             $0.pnMaxFinDeg = maxFin; $0.pnMinSpeed = minSpeed; $0.pnCoastDelayMs = coastDelay
             $0.pnTargetAltM = targetAlt
             $0.pnKpPos = kpPos; $0.pnKdVel = kdVel
+            $0.pnTiltLimitBoostDeg = tiltBoost; $0.pnTiltLimitCoastDeg = tiltCoast
         }
         if device.isConnected {
             device.sendGuidanceConfig(enabled: profile.guidanceEnabled,
@@ -2060,7 +2100,8 @@ private struct SettingsContent: View {
                                       targetE: profile.pnTargetE, targetN: profile.pnTargetN,
                                       targetAlt: targetAlt,
                                       kpPos: kpPos, kdVel: kdVel,
-                                      guidanceLaw: profile.pnGuidanceLaw)
+                                      guidanceLaw: profile.pnGuidanceLaw,
+                                      tiltLimitBoostDeg: tiltBoost, tiltLimitCoastDeg: tiltCoast)
         }
         showApplied($guidanceApplied)
     }

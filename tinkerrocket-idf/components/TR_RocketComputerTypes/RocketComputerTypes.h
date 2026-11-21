@@ -945,18 +945,34 @@ static constexpr int8_t magTypeChipSign(uint8_t mag_type, int axis)
 }
 
 // Which GNSS receiver the flight computer talks to.  The build chooses it on
-// most boards (the u-blox on V7-V10, the LC86G on the Beetle); the V9 image
-// finds it at boot, because its J1 takes either the stock u-blox SAM-M10Q
-// carrier or a Septentrio mosaic-G5 harness (TR_Sensor_Collector's
-// TR_GNSS_DRIVER_AUTO, gnss_detect.h).  The FC names it in its FC_IDENTITY
-// push (BoardIdentity.h encodePayload) and the OC relays the name to the apps
-// as fc_identity's "fc_gnss", so the pad shows which receiver the FC found.
+// most boards (the u-blox on V7-V8, the LC86G on the Beetle); the V9 and V10
+// images find it at boot, because their J1 takes the stock u-blox SAM-M10Q
+// carrier, a Septentrio mosaic-G5 harness or TinkerRocket's own gnss-sdr-dev
+// receiver board (TR_Sensor_Collector's TR_GNSS_DRIVER_AUTO, gnss_detect.h).
+// The FC names it in its FC_IDENTITY push (BoardIdentity.h encodePayload) and
+// the OC relays the name to the apps as fc_identity's "fc_gnss", so the pad
+// shows which receiver the FC found.
 // NONE: no receiver came up (the FC flies GNSS-absent, #557), the FC is in
 // rescue mode, or the FC predates this.
 static constexpr uint8_t GNSS_TYPE_NONE   = 0;
 static constexpr uint8_t GNSS_TYPE_UBLOX  = 1;   // u-blox SAM-M10Q: UBX
 static constexpr uint8_t GNSS_TYPE_MOSAIC = 2;   // Septentrio mosaic-G5: SBF
 static constexpr uint8_t GNSS_TYPE_LC86G  = 3;   // Quectel LC86G (the Beetle): NMEA and RTCM3
+// TinkerRocket's gnss-sdr-dev board: RTCM3 only (MSM7 at up to 100 Hz,
+// TinkerRocket's message 4001, ephemerides), logged and not yet navigated on
+// (gnssTypeGivesFix).
+static constexpr uint8_t GNSS_TYPE_SDR    = 4;
+static constexpr uint8_t GNSS_TYPE_PX1105R = 5;  // SkyTraq PX1105R on the V9's or V10's J1 (its own image): SkyTraq binary
+// The PX1105R's name, and its IMU limit below, are compiled into the PX1105R
+// image and the one that flies the raw-GNSS filter on every receiver
+// (TR_GNSS_AUTO_RAW) alone: every other image, the OC's included,
+// keeps exactly the code it had, so an OC names that FC's receiver "none"
+// until it learns the name too.
+#if (defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
+static constexpr uint8_t GNSS_TYPE_LAST_NAMED = GNSS_TYPE_PX1105R;
+#else
+static constexpr uint8_t GNSS_TYPE_LAST_NAMED = GNSS_TYPE_SDR;
+#endif
 
 // The name each type goes by on the wire and on screen ("" for NONE).
 constexpr const char* gnssTypeName(uint8_t type)
@@ -964,7 +980,19 @@ constexpr const char* gnssTypeName(uint8_t type)
     return type == GNSS_TYPE_UBLOX  ? "u-blox"
          : type == GNSS_TYPE_MOSAIC ? "mosaic-G5"
          : type == GNSS_TYPE_LC86G  ? "LC86G"
+         : type == GNSS_TYPE_SDR    ? "gnss-sdr-dev"
+#if (defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
+         : type == GNSS_TYPE_PX1105R ? "PX1105R"
+#endif
          : "";
+}
+
+// Whether the FC's navigation filter takes this receiver's fixes. The
+// gnss-sdr-dev board's stream is logged only, so with it the FC flies
+// GNSS-absent (#557) as with no receiver at all.
+constexpr bool gnssTypeGivesFix(uint8_t type)
+{
+    return type == GNSS_TYPE_UBLOX || type == GNSS_TYPE_MOSAIC || type == GNSS_TYPE_LC86G;
 }
 
 // gnssTypeName() read back: NONE for an empty name or one this firmware does
@@ -972,7 +1000,7 @@ constexpr const char* gnssTypeName(uint8_t type)
 constexpr uint8_t gnssTypeFromName(const char* name)
 {
     if (name == nullptr || name[0] == '\0') return GNSS_TYPE_NONE;
-    for (uint8_t t = GNSS_TYPE_UBLOX; t <= GNSS_TYPE_LC86G; t++)
+    for (uint8_t t = GNSS_TYPE_UBLOX; t <= GNSS_TYPE_LAST_NAMED; t++)
     {
         const char* a = gnssTypeName(t);
         size_t i = 0;
@@ -1052,6 +1080,18 @@ static_assert(sizeof(OutStatusQueryData) == 42,
 // "ready" on any firmware pairing, and an old FC simply never sees the cue.
 static constexpr uint8_t OUT_STATUS_READY_BIT         = 0x01;
 static constexpr uint8_t OUT_STATUS_TOKEN_POWERED_BIT = 0x02;
+// Bits 2-3 (CENJARS 2026-11-01): what the OC's camera-rail current monitor
+// (#850) says, so the FC can tell a RunCam that is running from one that is
+// dark without waiting on its UART. Neither GTV RunCam ever answered the
+// readiness probe; both were running and recording, and the FC power-cycled
+// each twice on the pad because silence was all it could see.
+//   CAM_MONITORED — this OC reads the camera rail and the reading is current
+//                   (V9/V10). Without it, CAM_DRAWING means nothing.
+//   CAM_DRAWING   — the camera rail has drawn running current for the last
+//                   half second (out_computer/main/cam_draw_policy.h).
+// Never without READY, and DRAWING never without MONITORED.
+static constexpr uint8_t OUT_STATUS_CAM_MONITORED_BIT = 0x04;
+static constexpr uint8_t OUT_STATUS_CAM_DRAWING_BIT   = 0x08;
 
 // Payload width of OUT_STATUS_RESPONSE: [status byte][pending cmd][serve epoch].
 //
@@ -1073,11 +1113,15 @@ static constexpr size_t OUT_STATUS_PAYLOAD_BYTES = 3;
 // link. The config frame the OC appends starts at this offset too, so a stale
 // literal here silently misaligns that read as well.
 static constexpr size_t OUT_STATUS_FRAME_BYTES = 4 + 1 + 1 + OUT_STATUS_PAYLOAD_BYTES + 2;
-static inline uint8_t outStatusByte(bool ready, bool token_powered)
+static inline uint8_t outStatusByte(bool ready, bool token_powered,
+                                    bool cam_monitored = false,
+                                    bool cam_drawing = false)
 {
     if (!ready) return 0;
     return (uint8_t)(OUT_STATUS_READY_BIT |
-                     (token_powered ? OUT_STATUS_TOKEN_POWERED_BIT : 0));
+                     (token_powered ? OUT_STATUS_TOKEN_POWERED_BIT : 0) |
+                     (cam_monitored ? OUT_STATUS_CAM_MONITORED_BIT : 0) |
+                     ((cam_monitored && cam_drawing) ? OUT_STATUS_CAM_DRAWING_BIT : 0));
 }
 
 // ### Data Structures ###
@@ -1574,14 +1618,29 @@ static_assert(sizeof(FcBootStatusData) == 4,
 // option.
 //
 // `flags` is a byte rather than a bool so the next FC-truth signal is free.
+//
+// v2 (#1409) appends `scap_mv`: the hold-up supercap voltage on the boards
+// whose sense line lands on the FLIGHT computer (the Tinker-Mantis V10 and
+// V11: V_SCAP_ADC is P4 GPIO17). On the mini the out computer reads the cap
+// itself (#1166); here the out computer runs the same verdict on this field.
+// Read once a second by the FC and repeated in every frame until the next
+// read; 2 bytes at 5 Hz, inside the I2S budget (test_i2s_link_budget). A v1
+// frame (5 bytes, an FC image from before #1409) is still a valid frame:
+// the out computer takes the flags and has no V_SCAP from it, and the
+// decoders accept both lengths (FC_STATUS_V1_SIZE).
 typedef struct __attribute__((packed))
 {
     uint32_t time_us;   // FC clock at send — same micros() origin as every
                         // other FC stream, so this overlays the sensor traces
     uint8_t  flags;     // FCS_* bits below
+    uint16_t scap_mv;   // v2: V_SCAP in mV (after the divider), meaningful only
+                        // with FCS_SCAP_SENSE; FCS_SCAP_NO_READING = none
 } FcStatusData;
-static_assert(sizeof(FcStatusData) == 5,
-              "FcStatusData must be 5 bytes");
+static_assert(sizeof(FcStatusData) == 7,
+              "FcStatusData must be 7 bytes");
+static constexpr size_t FC_STATUS_V1_SIZE = 5;   // time_us + flags, before #1409
+static_assert(FC_STATUS_V1_SIZE == offsetof(FcStatusData, scap_mv),
+              "FcStatusData v2 only appends: v1 is its first FC_STATUS_V1_SIZE bytes");
 
 // "Engaged", deliberately wider than "recording": the rail is up and the start
 // sequence is running from the moment of the request, but camera_recording only
@@ -1600,6 +1659,45 @@ static constexpr uint8_t FCS_CAMERA_ENGAGED = (1u << 0);
 // are withheld until the next launch (or sim edge). Never set on any other
 // image. A flight log reads the latch time from the first frame with it set.
 static constexpr uint8_t FCS_RAW_VOTES_WITHHELD = (1u << 1);
+
+// #1409: this flight computer has the hold-up cap's sense line (V10/V11), so
+// scap_mv is its reading of V_SCAP, or FCS_SCAP_NO_READING when its ADC did
+// not answer (no calibration, a failed read). Clear on every other board,
+// whose scap_mv is FCS_SCAP_NO_READING and means nothing.
+static constexpr uint8_t  FCS_SCAP_SENSE      = (1u << 2);
+static constexpr uint16_t FCS_SCAP_NO_READING = 0xFFFFu;
+
+// The FC side: the scap_mv field for a V_SCAP reading in volts. NaN (no
+// reading) becomes the sentinel, a reading at or below zero is 0 mV, and the
+// top is clamped under the sentinel, so a reading never passes for "no
+// reading".
+static inline uint16_t fcStatusScapMv(float scap_v)
+{
+    if (!(scap_v == scap_v)) return FCS_SCAP_NO_READING;   // NaN
+    if (scap_v <= 0.0f) return 0;
+    const float mv = scap_v * 1000.0f + 0.5f;
+    if (mv >= (float)(FCS_SCAP_NO_READING - 1u)) return (uint16_t)(FCS_SCAP_NO_READING - 1u);
+    return (uint16_t)mv;
+}
+
+// The out computer's side: what an FC_STATUS_MSG payload says about V_SCAP.
+enum FcScapReport : uint8_t
+{
+    FC_SCAP_ABSENT     = 0,   // nothing: a v1 frame, or an FC with no sense line
+    FC_SCAP_VOLTS      = 1,   // *mv_out holds V_SCAP in mV
+    FC_SCAP_NO_READING = 2,   // the FC has the sense line and its ADC did not answer
+};
+static inline uint8_t fcStatusScapReport(const uint8_t* payload, size_t len, uint16_t* mv_out)
+{
+    if (payload == nullptr || len < sizeof(FcStatusData)) return FC_SCAP_ABSENT;
+    const uint8_t flags = payload[offsetof(FcStatusData, flags)];
+    if ((flags & FCS_SCAP_SENSE) == 0) return FC_SCAP_ABSENT;
+    const size_t o = offsetof(FcStatusData, scap_mv);   // little-endian, as packed
+    const uint16_t mv = (uint16_t)(payload[o] | ((uint16_t)payload[o + 1] << 8));
+    if (mv == FCS_SCAP_NO_READING) return FC_SCAP_NO_READING;
+    if (mv_out != nullptr) *mv_out = mv;
+    return FC_SCAP_VOLTS;
+}
 
 // ── RawGnssEkfData (RAW_GNSS_EKF_MSG 0x96, 10 Hz) ───────────────────────────
 // #1600 phase 4.  The raw-GNSS shadow filter (TR_RawGnssEKF, run by
@@ -1679,6 +1777,12 @@ static_assert(sizeof(RawGnssAttData) == 46,
 //   t = gps_s - gps0_s
 //   mcu_us = mcu0_us + llround((t + a_s + drift * (t - t_ref_s) - latency_s) * 1e6)
 // Valid (GCL_VALID) once it holds 10 s of history; mcuAt answers nothing before.
+// A V9 or V10 (the auto images) with TinkerRocket's gnss-sdr-dev board on J1
+// logs the board's line, fitted the same way to its 4001 epochs, each at its
+// latch (the MSMs' tag less the board's sub-ms shift), against when the frame
+// arrived, all but those the board marks late (its aiding block); time_us is
+// that frame's backdated end. The 4002 frames sent to the board are stamped
+// off it: the flight image's phase, a bench image's script.
 typedef struct __attribute__((packed))
 {
     uint32_t time_us;      // FC micros the line took effect: the backdated end of the $PQTMPVT that moved it
@@ -3053,7 +3157,20 @@ static constexpr uint8_t ISM6_BATCH_MAX      = 10;
 // data.  The blocks joined in order ARE a standard .sbf file
 // (Data_Analysis/extract_gnss_sbf.py).  A block takes up to 15 parts
 // (GNSS_SBF_MAX_FRAME); MeasEpoch and MeasExtra take 7-9.
-static constexpr uint8_t GNSS_RTCM_MSG       = 0x95;  // FC→OC over I2S: GnssRtcmHeader + the GNSS receiver's own frame (RTCM3 or SBF)
+//
+// On the V9 and V10 with TinkerRocket's gnss-sdr-dev board on J1 it is that
+// board's RTCM3, every frame as on the mini: MSM7 1077/1097/1127 each epoch
+// (100 Hz in its measurement mode), TinkerRocket's message 4001 after each
+// epoch (sub-type 1) and each fix (sub-type 2), and its ephemerides
+// (1019/1046/1042), about 400 frames and 40-55 kB a second. The flight
+// computer also logs here every frame it sent the board, TinkerRocket's
+// message 4002 (TR_GNSSReceiverSdr_Serial/SdrAid.h), each whole in one
+// record, time_us when it went out: a flight image's flight phase (sub-type
+// 3 alone, about one a second and three more after each change), a bench
+// image's (TR_BENCH_SDR_AID) P1 script, every sub-type, about 16 a second.
+// Only the flight computer sends 4002 and only the board 4001, so the number
+// gives the direction.
+static constexpr uint8_t GNSS_RTCM_MSG      = 0x95;  // FC→OC over I2S: GnssRtcmHeader + the GNSS receiver's own frame (RTCM3 or SBF)
                                                       // (or one part of it), straight to the log.  VARIABLE length.
 
 // FC→OC over I2S: the raw-GNSS shadow filter's state (#1600), 10 Hz while it
@@ -3080,7 +3197,8 @@ static constexpr uint8_t IMU_TEMP_MSG        = 0x9C;  // FC→OC over I2S: Ism6T
                                                       // second; straight to the log.
 static constexpr uint8_t GNSS_CLOCK_MSG      = 0x9D;  // FC→OC over I2S: GnssClockData, the MCU clock against GPS time
                                                       // each time its line moves (~1 Hz); straight to the log.  LC86G
-                                                      // boards, and the V9 with a mosaic-G5 (from its 1PPS: GCL_PPS).
+                                                      // boards, and the V9 with a mosaic-G5 (from its 1PPS: GCL_PPS),
+                                                      // and the V9 or V10 with the gnss-sdr-dev board (its epochs).
 static constexpr uint8_t PAD_CONTEXT_MSG     = 0x9E;  // FC→OC over I2S: PadContextHeader + its kind's body, what a
                                                       // replay needs from the pad, once after launch; straight to the
                                                       // log.  VARIABLE length.
@@ -3272,7 +3390,7 @@ static constexpr uint8_t LOG_BUFFER_STATS_MSG = 0xE2;  // OC→self: 52-byte Log
 // the I2S telemetry stream exists, which is the whole point — see
 // FcBootStatusData above.  Stops once the FC enters loop_fc().
 static constexpr uint8_t FC_BOOT_STATUS_MSG   = 0xFA;  // FC→OC: 4-byte FcBootStatusData, boot progress during setup_fc only
-static constexpr uint8_t CONFIG_REPORT_MSG   = 0xFB;  // FC→OC: 201-byte ConfigReportData, everything the app's config
+static constexpr uint8_t CONFIG_REPORT_MSG   = 0xFB;  // FC→OC: 209-byte ConfigReportData, everything the app's config
                                                       // readback cannot otherwise see (#915).  PUSHED, not requested —
                                                       // see the struct comment.  0xFC/0xFD have since gone to the base
                                                       // station's own log records: 0xA0-0xFD is FULL.  New codes open
@@ -3313,7 +3431,7 @@ static constexpr uint8_t FC_IDENTITY         = 0xEC;
 static constexpr uint8_t ORIENT_CONFIG_PENDING = 0xED;  // OC→FC: payload follows as ORIENT_CONFIG_MSG
 static constexpr uint8_t ORIENT_CONFIG_MSG     = 0xEE;  // 1-byte ImuOrientConfigData
 static constexpr uint8_t GUIDANCE_CONFIG_PENDING = 0xEF;  // OC→FC: payload follows as GUIDANCE_CONFIG_MSG
-static constexpr uint8_t GUIDANCE_CONFIG_MSG     = 0xF0;  // 45-byte GuidanceConfigData
+static constexpr uint8_t GUIDANCE_CONFIG_MSG     = 0xF0;  // 53-byte GuidanceConfigFrame
 static constexpr uint8_t FIN_CONFIG_PENDING      = 0xF2;  // OC→FC: payload follows as FIN_CONFIG_MSG
 static constexpr uint8_t FIN_CONFIG_MSG          = 0xF3;  // 18-byte FinConfigData
 // IMU logging rate (user setting, BLE cmd 67): the ISM6HG256 ODR the FC
@@ -3673,8 +3791,9 @@ constexpr uint16_t imuRateResolve(uint16_t setting_hz, bool deployed)
 //     (gnss_log_policy.h). The IMU flies the board's own limit, 8k included.
 // The receiver streams the full set either way, to the FC, which parses all
 // of it, and to its own microSD card; only the FC's log is cut. No other
-// receiver has a stream this touches (the u-blox sends no raw data, and the
-// LC86G's RTCM3 is ~0.6 kB/s), so for them the setting changes nothing.
+// receiver has a stream this touches (the u-blox sends no raw data, the
+// LC86G's RTCM3 is ~0.6 kB/s, and the gnss-sdr-dev board's RTCM3 is logged
+// whole), so for them the setting changes nothing.
 // Kept like the IMU rate: the OC stores it and relays it, the FC stores it
 // and applies it (never INFLIGHT), and both start a fresh board on DETAILED.
 static constexpr uint8_t GNSS_LOG_DETAILED = 0;
@@ -3752,13 +3871,28 @@ constexpr bool antennaOffsetValid(const AntennaOffsetConfigData& a)
 // ("irate") and this limit ("irmax"), so the apps' menus offer only what
 // flies. A gnss_log that is no setting reads as DETAILED: the limit that is
 // safe for every log.
+// The gnss-sdr-dev board's RTCM3 (MSM7 at 100 Hz: ~40 kB/s on a 26-satellite
+// sky, ~71 kB/s with the framing budgeted at 32) is the same size of stream,
+// and the GNSS log setting does not thin it, so it holds the IMU at 3840 Hz
+// whatever the setting.
+// The PX1105R image logs every 0xE5 and 0xDF at 20 Hz (~30 kB/s on the open
+// sky, 2026-09-26: 1.4 kB a 0xE5), half the mosaic's SBF, but 7680 Hz would
+// still put the log at ~97 % of the drain: it stops at 3840 Hz too, whatever
+// the log setting (the REDUCED log thins SBF alone, gnss_log_policy.h).
 static constexpr uint16_t IMU_RATE_MAX_HZ_MOSAIC = 3840;
+static constexpr uint16_t IMU_RATE_MAX_HZ_SDR    = 3840;
 constexpr uint16_t imuRateMaxForGnss(uint16_t board_max_hz, uint8_t gnss_type,
                                      uint8_t gnss_log = GNSS_LOG_DETAILED)
 {
+#if (defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
+    if (gnss_type == GNSS_TYPE_PX1105R && board_max_hz > IMU_RATE_MAX_HZ_MOSAIC)
+        return IMU_RATE_MAX_HZ_MOSAIC;
+#endif
     return (gnss_type == GNSS_TYPE_MOSAIC && gnss_log != GNSS_LOG_REDUCED &&
             board_max_hz > IMU_RATE_MAX_HZ_MOSAIC)
                ? IMU_RATE_MAX_HZ_MOSAIC
+           : (gnss_type == GNSS_TYPE_SDR && board_max_hz > IMU_RATE_MAX_HZ_SDR)
+               ? IMU_RATE_MAX_HZ_SDR
                : board_max_hz;
 }
 
@@ -3902,6 +4036,40 @@ typedef struct __attribute__((packed))
                                 //   (mirrors TR_GuidancePN::Mode by value)
 } GuidanceConfigData;
 static_assert(sizeof(GuidanceConfigData) == 45, "GuidanceConfigData must be 45 bytes");
+
+// The guidance tilt-limit safety gate (config::GUIDANCE_TILT_LIMIT_*_DEG),
+// settable from the app.  Off-vertical angle of the nose above which guidance
+// is latched off for the rest of the flight: `boost` before burnout, `coast`
+// after.  The FC accepts (0, 60] deg and keeps its previous value for
+// anything else — 0 included, which is what an older app's frame carries
+// (see GuidanceConfigFrame).
+//
+// Its own struct rather than two more fields on GuidanceConfigData: that
+// struct is embedded mid-ConfigReportData, where growing it would move every
+// block after it and break the report's prefix versioning.  The report
+// carries this one at its end instead (v5).
+typedef struct __attribute__((packed))
+{
+    float tilt_limit_boost_deg;  // latch angle before burnout (deg)
+    float tilt_limit_coast_deg;  // latch angle after burnout (deg)
+} GuidanceTiltLimitData;
+static_assert(sizeof(GuidanceTiltLimitData) == 8, "GuidanceTiltLimitData must be 8 bytes");
+
+// The BLE cmd 65 payload and the OC->FC GUIDANCE_CONFIG_MSG (v3 of the
+// frame): GuidanceConfigData, then the tilt limits APPENDED at offset 45, so
+// the 45-byte v2 frame stays a byte-exact prefix.  A v2-era FC reading this
+// frame through a v2-era OC gets its 45 bytes (the OC relays only what it
+// knows) and flies its compiled tilt limits.  A v3 OC given a 45-byte frame
+// by an older app zero-fills the tail before relaying, and the FC keeps the
+// limits it already holds.  A v2-era FC behind a v3 OC refuses the 53-byte
+// frame (its length check) and logs it, as #534's step did — the OTA relay
+// updates both.
+typedef struct __attribute__((packed))
+{
+    GuidanceConfigData    config;
+    GuidanceTiltLimitData tilt;
+} GuidanceConfigFrame;
+static_assert(sizeof(GuidanceConfigFrame) == 53, "GuidanceConfigFrame must be 53 bytes");
 
 // Drift-Cast guidance aim point (#435, BLE cmd 28).  Byte-for-byte the app
 // payload built by BLEDevice.sendGuidancePoint: {lat f64, lon f64, alt f32} LE.
@@ -4288,14 +4456,15 @@ struct __attribute__((packed)) ConfigReportData
 {
     // v1 (#915): 169 bytes, through `roll`.  v2 (#1231): + `pyro`, 193
     // bytes.  v3 (#1472): + `camera_type`, 194 bytes.  v4 (BLE cmd 81): +
-    // `antenna`, 201 bytes.  Each version is a byte-exact PREFIX of the next
-    // — the OC accepts all four and simply has nothing FC-sourced to serve
-    // for the groups an older sender lacks.
+    // `antenna`, 201 bytes.  v5: + `guidance_tilt`, 209 bytes.  Each version
+    // is a byte-exact PREFIX of the next — the OC accepts all five and
+    // simply has nothing FC-sourced to serve for the groups an older sender
+    // lacks.
     // An OC OLDER than its FC refuses the newer version outright (it will
-    // not reinterpret a layout it does not know), so a v4 FC behind a
-    // pre-v4 OC has no report at all until the OC is updated — the OTA
+    // not reinterpret a layout it does not know), so a v5 FC behind a
+    // pre-v5 OC has no report at all until the OC is updated — the OTA
     // relay updates the OC first, which is the order that never hits this.
-    static constexpr uint8_t VERSION = 4;
+    static constexpr uint8_t VERSION = 5;
 
     // flags bit positions
     // bit 0: retired (was F_SOUNDS, piezo sounds enabled).  Never set by
@@ -4364,9 +4533,14 @@ struct __attribute__((packed)) ConfigReportData
     // on the Beetle's FC.  Appended after `camera_type` so a v3 report stays
     // a prefix; see VERSION.
     AntennaOffsetConfigData antenna;
+    // v5.  The guidance tilt limits the FC will latch at (cmd 65's tail) —
+    // its live values, NVS or compiled defaults alike, since every FC has a
+    // pair it will fly.  Not inside `guidance`: see GuidanceTiltLimitData.
+    // Appended after `antenna` so a v4 report stays a prefix; see VERSION.
+    GuidanceTiltLimitData   guidance_tilt;
 };
-static_assert(sizeof(ConfigReportData) == 201,
-              "ConfigReportData layout check (v4: v3 194 + antenna 7)");
+static_assert(sizeof(ConfigReportData) == 209,
+              "ConfigReportData layout check (v5: v4 201 + guidance_tilt 8)");
 // Nested-struct starts are wire ABI: the OC parses this by memcpy of the
 // whole thing, so a member reordered here silently reinterprets every field
 // after it.
@@ -4376,17 +4550,21 @@ static_assert(offsetof(ConfigReportData, servo) == 8 &&
               offsetof(ConfigReportData, roll) == 93 &&
               offsetof(ConfigReportData, pyro) == 169 &&
               offsetof(ConfigReportData, camera_type) == 193 &&
-              offsetof(ConfigReportData, antenna) == 194,
+              offsetof(ConfigReportData, antenna) == 194 &&
+              offsetof(ConfigReportData, guidance_tilt) == 201,
               "ConfigReportData member order is wire ABI");
 // The OC copies an older report by these lengths, so each must equal the
 // whole of that version's layout — v1 is everything before `pyro`, v2
-// everything before `camera_type`, v3 everything before `antenna`.
+// everything before `camera_type`, v3 everything before `antenna`, v4
+// everything before `guidance_tilt`.
 static_assert(offsetof(ConfigReportData, pyro) == 169,
               "v1 ConfigReportData must remain a byte-exact prefix of v2");
 static_assert(offsetof(ConfigReportData, camera_type) == 193,
               "v2 ConfigReportData must remain a byte-exact prefix of v3");
 static_assert(offsetof(ConfigReportData, antenna) == 194,
               "v3 ConfigReportData must remain a byte-exact prefix of v4");
+static_assert(offsetof(ConfigReportData, guidance_tilt) == 201,
+              "v4 ConfigReportData must remain a byte-exact prefix of v5");
 
 // --- Log Buffer Stats Data (OC self-emitted, ~1 Hz while logging) -----------
 // Snapshot of the OC's ring-buffer health written into the flight log so the
@@ -4489,7 +4667,13 @@ typedef struct __attribute__((packed))
     int16_t  closing_vel_cmps;   // closing velocity to target (m/s x100)
     int16_t  pitch_fin_cmd_cdeg; // commanded pitch fin deflection, pre-mix (deg x100)
     int16_t  yaw_fin_cmd_cdeg;   // commanded yaw fin deflection, pre-mix (deg x100)
-    uint8_t  guid_flags;         // bit 0: guidance_active, bit 1: burnout_detected
+    uint8_t  guid_flags;         // bit 0: guidance_active, bit 1: burnout_detected,
+                                 // bits 2-7: why it is not steering (tilt latch, speed
+                                 // floor, EKF, no origin, no heading, fins held) --
+                                 // GF_* in flight_computer/main/guidance_gate_policy.h.
+                                 // Frames with bit 0 clear are the ~10 Hz status stream
+                                 // sent while guidance is enabled in flight but not
+                                 // steering; their command fields are 0.
 } GuidanceTelemData;
 static_assert(sizeof(GuidanceTelemData) == 19, "GuidanceTelemData must be 19 bytes");
 

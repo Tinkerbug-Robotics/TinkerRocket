@@ -8,6 +8,7 @@
 #include <set>
 #include <string>
 #include <utility>
+#include <vector>
 #include "RocketComputerTypes.h"
 #include "GuidancePointGate.h"
 #include "RollProfileGate.h"
@@ -44,9 +45,13 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(sizeof(NonSensorData),  52u);  // #1190: +uint16 shock_gate_trips (2 B) after #529's ekf_ticks
     // #1154 item 4: the FC's own camera truth, 5 Hz on FC_STATUS_MSG.
     // Deliberately NOT a byte in NonSensorData — see FcStatusData.
-    EXPECT_EQ(sizeof(FcStatusData),    5u);
+    // #1409: v2 appends the V10's hold-up cap voltage; v1 (5 B) stays the
+    // length decoders and the out computer must still accept.
+    EXPECT_EQ(sizeof(FcStatusData),    7u);
+    EXPECT_EQ(FC_STATUS_V1_SIZE,       5u);
     EXPECT_EQ(offsetof(FcStatusData, time_us), 0u);
     EXPECT_EQ(offsetof(FcStatusData, flags),   4u);
+    EXPECT_EQ(offsetof(FcStatusData, scap_mv), 5u);
     EXPECT_EQ(sizeof(LoRaFrameHeader), 7u);   // #850: shared prefix, both frames
     EXPECT_EQ(sizeof(LoRaFastData),   55u);  // #850: 5-of-6 slots
     EXPECT_EQ(sizeof(LoRaSlowData),   22u);  // #850: 1-of-6 slots
@@ -124,6 +129,81 @@ TEST(RocketComputerTypes, KnownSizes) {
 // FC boot progress: the app renders a step name and a stall from these, so the
 // enum ordering and the degraded bits are wire contract, not implementation
 // detail.  Append-only — the apps map an unknown step to a generic message.
+// #1409: FcStatusData.scap_mv, the V10/V11's hold-up cap voltage from the
+// flight computer to the out computer.
+TEST(FcStatusScap1409, FlagBitsDoNotOverlap) {
+    EXPECT_EQ(FCS_CAMERA_ENGAGED & FCS_RAW_VOTES_WITHHELD, 0);
+    EXPECT_EQ(FCS_SCAP_SENSE & (FCS_CAMERA_ENGAGED | FCS_RAW_VOTES_WITHHELD), 0);
+    EXPECT_EQ(FCS_SCAP_SENSE, 0x04);
+    EXPECT_EQ(FCS_SCAP_NO_READING, 0xFFFFu);
+}
+
+TEST(FcStatusScap1409, VoltsToFieldRoundsAndNeverReachesTheSentinel) {
+    EXPECT_EQ(fcStatusScapMv(2.5f),    2500u);
+    EXPECT_EQ(fcStatusScapMv(2.2004f), 2200u);
+    EXPECT_EQ(fcStatusScapMv(2.2006f), 2201u);   // rounded, not truncated
+    EXPECT_EQ(fcStatusScapMv(0.0f),    0u);      // an empty cap is a reading
+    EXPECT_EQ(fcStatusScapMv(-0.01f),  0u);
+    EXPECT_EQ(fcStatusScapMv(NAN),     FCS_SCAP_NO_READING);
+    EXPECT_EQ(fcStatusScapMv(70.0f),   FCS_SCAP_NO_READING - 1u);   // clamped under it
+    EXPECT_EQ(fcStatusScapMv(65.535f), FCS_SCAP_NO_READING - 1u);
+}
+
+namespace {
+std::vector<uint8_t> fcStatusBytes(uint8_t flags, uint16_t scap_mv)
+{
+    FcStatusData d{};
+    d.time_us = 123456u;
+    d.flags   = flags;
+    d.scap_mv = scap_mv;
+    std::vector<uint8_t> b(sizeof d);
+    memcpy(b.data(), &d, sizeof d);
+    return b;
+}
+}  // namespace
+
+TEST(FcStatusScap1409, ReportReadsTheV10Reading) {
+    const auto b = fcStatusBytes(FCS_SCAP_SENSE | FCS_CAMERA_ENGAGED, 2487);
+    uint16_t mv = 0;
+    EXPECT_EQ(fcStatusScapReport(b.data(), b.size(), &mv), FC_SCAP_VOLTS);
+    EXPECT_EQ(mv, 2487u);
+    // An empty cap reads 0 mV, a voltage, not "no reading".
+    const auto z = fcStatusBytes(FCS_SCAP_SENSE, 0);
+    mv = 99;
+    EXPECT_EQ(fcStatusScapReport(z.data(), z.size(), &mv), FC_SCAP_VOLTS);
+    EXPECT_EQ(mv, 0u);
+}
+
+TEST(FcStatusScap1409, ASenseWithNoReadingIsNotAVoltage) {
+    const auto b = fcStatusBytes(FCS_SCAP_SENSE, FCS_SCAP_NO_READING);
+    uint16_t mv = 1234;
+    EXPECT_EQ(fcStatusScapReport(b.data(), b.size(), &mv), FC_SCAP_NO_READING);
+    EXPECT_EQ(mv, 1234u);   // untouched
+}
+
+TEST(FcStatusScap1409, NoSenseOrAV1FrameSaysNothing) {
+    // Every board but the V10/V11: the flag is clear, whatever the field holds.
+    const auto v9 = fcStatusBytes(FCS_CAMERA_ENGAGED, FCS_SCAP_NO_READING);
+    EXPECT_EQ(fcStatusScapReport(v9.data(), v9.size(), nullptr), FC_SCAP_ABSENT);
+    const auto stray = fcStatusBytes(0, 2500);
+    EXPECT_EQ(fcStatusScapReport(stray.data(), stray.size(), nullptr), FC_SCAP_ABSENT);
+    // A v1 frame (an FC image older than #1409) is five bytes: no voltage,
+    // whatever its flags say.
+    const auto v1 = fcStatusBytes(FCS_SCAP_SENSE, 2500);
+    EXPECT_EQ(fcStatusScapReport(v1.data(), FC_STATUS_V1_SIZE, nullptr), FC_SCAP_ABSENT);
+    EXPECT_EQ(fcStatusScapReport(nullptr, sizeof(FcStatusData), nullptr), FC_SCAP_ABSENT);
+}
+
+TEST(FcStatusScap1409, FieldRoundTripsThroughTheReport) {
+    for (float v : {0.05f, 1.0f, 2.2f, 2.5f, 2.7f})
+    {
+        const auto b = fcStatusBytes(FCS_SCAP_SENSE, fcStatusScapMv(v));
+        uint16_t mv = 0;
+        ASSERT_EQ(fcStatusScapReport(b.data(), b.size(), &mv), FC_SCAP_VOLTS) << v;
+        EXPECT_NEAR(mv * 0.001f, v, 0.0005f) << v;
+    }
+}
+
 TEST(RocketComputerTypes, FcBootStepContract) {
     EXPECT_EQ(FCB_LINKS,      0u);
     EXPECT_EQ(FCB_NVS,        1u);
@@ -340,6 +420,34 @@ TEST(RocketComputerTypes, GuidanceConfigData_Layout) {
     // framed = 4 (sync/hdr) + 1 (type) + 1 (len) + 45 + 2 (crc) = 53, staged
     // after a 10-byte status response inside FC_COMBINED_READ_SIZE (96).
     EXPECT_LE(10u + 4u + 1u + 1u + sizeof(GuidanceConfigData) + 2u, 96u);
+}
+
+TEST(RocketComputerTypes, GuidanceConfigFrame_Layout) {
+    // cmd 65 v3: the 45-byte GuidanceConfigData, then the tilt limits
+    // appended at 45 — unaligned, and that is the point: the v2 frame stays
+    // a byte-exact prefix.
+    EXPECT_EQ(sizeof(GuidanceTiltLimitData), 8u);
+    EXPECT_EQ(offsetof(GuidanceTiltLimitData, tilt_limit_boost_deg), 0u);
+    EXPECT_EQ(offsetof(GuidanceTiltLimitData, tilt_limit_coast_deg), 4u);
+    EXPECT_EQ(sizeof(GuidanceConfigFrame), 53u);
+    EXPECT_EQ(offsetof(GuidanceConfigFrame, config), 0u);
+    EXPECT_EQ(offsetof(GuidanceConfigFrame, tilt),   45u);
+    // Still fits the OC->FC combined-read window: 10 + 4 + 1 + 1 + 53 + 2 = 71.
+    EXPECT_LE(10u + 4u + 1u + 1u + sizeof(GuidanceConfigFrame) + 2u, 96u);
+
+    // A 45-byte frame from an older app, as the OC relays it: copied into a
+    // zeroed frame, the config intact and both limits 0 ("keep yours").
+    GuidanceConfigData g{};
+    g.nav_gain = 4.0f; g.kd_vel_per_s = 1.5f; g.guidance_law = GUIDE_LAW_STATION_KEEP;
+    uint8_t frame[sizeof(GuidanceConfigFrame)] = {};
+    memcpy(frame, &g, sizeof(g));
+    GuidanceConfigFrame f;
+    memcpy(&f, frame, sizeof(f));
+    EXPECT_FLOAT_EQ(f.config.nav_gain, 4.0f);
+    EXPECT_FLOAT_EQ(f.config.kd_vel_per_s, 1.5f);
+    EXPECT_EQ((unsigned)f.config.guidance_law, (unsigned)GUIDE_LAW_STATION_KEEP);
+    EXPECT_EQ(f.tilt.tilt_limit_boost_deg, 0.0f);
+    EXPECT_EQ(f.tilt.tilt_limit_coast_deg, 0.0f);
 }
 
 TEST(RocketComputerTypes, GuidanceLawCodes_MatchGuidanceLibrary) {
@@ -1143,9 +1251,9 @@ TEST(LoraMinValidSnrDb, AcceptsGenuineBorderlinePackets) {
 // field after it — and the app would then display the result as VERIFIED,
 // which is worse than the "cannot verify" state this frame exists to remove.
 TEST(RocketComputerTypes, ConfigReportData_Layout) {
-    // v4: v3's 194 bytes (v2's 193 + the one-byte camera type, #1472) + the
-    // 7-byte GNSS antenna offset.
-    EXPECT_EQ(sizeof(ConfigReportData), 201u);
+    // v5: v4's 201 bytes (v3's 194 + the 7-byte GNSS antenna offset) + the
+    // 8-byte guidance tilt limits.
+    EXPECT_EQ(sizeof(ConfigReportData), 209u);
     // Rides the same I2S frame path as everything else FC→OC.
     EXPECT_LE(sizeof(ConfigReportData), MAX_PAYLOAD);
 
@@ -1181,6 +1289,12 @@ TEST(RocketComputerTypes, ConfigReportData_Layout) {
     EXPECT_EQ(offsetof(ConfigReportData, camera_type) + sizeof(uint8_t),
               offsetof(ConfigReportData, antenna));
     EXPECT_EQ(offsetof(ConfigReportData, antenna) + sizeof(AntennaOffsetConfigData),
+              offsetof(ConfigReportData, guidance_tilt));
+    // v5: appended AFTER antenna, so a v4 report is a byte-exact prefix of
+    // v5 — the OC copies a v4 frame by exactly this many bytes and serves no
+    // config_tilt for it.
+    EXPECT_EQ(offsetof(ConfigReportData, guidance_tilt),    201u);
+    EXPECT_EQ(offsetof(ConfigReportData, guidance_tilt) + sizeof(GuidanceTiltLimitData),
               sizeof(ConfigReportData));
 
     // The starts are the running sum of the nested sizes — spelled out so a
@@ -1192,6 +1306,7 @@ TEST(RocketComputerTypes, ConfigReportData_Layout) {
     EXPECT_EQ(sizeof(RollProfileData),    76u);
     EXPECT_EQ(sizeof(PyroConfigData),     24u);
     EXPECT_EQ(sizeof(AntennaOffsetConfigData), 7u);
+    EXPECT_EQ(sizeof(GuidanceTiltLimitData), 8u);
 
     // Flag bits are wire ABI: the OC reads F_ORIENT_FROM_NVS to decide
     // whether to leave the FC's orientation alone or re-push its own, and
@@ -1205,14 +1320,14 @@ TEST(RocketComputerTypes, ConfigReportData_Layout) {
     EXPECT_EQ(ConfigReportData::F_PYRO_FROM_NVS,    2u);
     EXPECT_EQ(ConfigReportData::F_CAMERA_FROM_NVS,  3u);
     EXPECT_EQ(ConfigReportData::F_ANTENNA_FROM_NVS, 4u);
-    EXPECT_EQ(ConfigReportData::VERSION,            4u);
+    EXPECT_EQ(ConfigReportData::VERSION,            5u);
 }
 
 // The OC accepts every older report by copying the length that version
 // implies (its CONFIG_REPORT_MSG handler): each is the whole of the next
-// version's prefix, and a v4 report copied whole carries the antenna at the
-// offset the FC wrote it.
-TEST(RocketComputerTypes, ConfigReportData_V4PrefixRoundTrip) {
+// version's prefix, and a v5 report copied whole carries the antenna and the
+// tilt limits at the offsets the FC wrote them.
+TEST(RocketComputerTypes, ConfigReportData_V5PrefixRoundTrip) {
     ConfigReportData r;
     memset(&r, 0, sizeof(r));
     r.version     = ConfigReportData::VERSION;
@@ -1222,12 +1337,23 @@ TEST(RocketComputerTypes, ConfigReportData_V4PrefixRoundTrip) {
     r.antenna.x_mm  = -12;
     r.antenna.y_mm  = 34;
     r.antenna.z_mm  = 2000;
+    r.guidance_tilt.tilt_limit_boost_deg = 25.0f;
+    r.guidance_tilt.tilt_limit_coast_deg = 32.5f;
     uint8_t wire[sizeof(ConfigReportData)];
     memcpy(wire, &r, sizeof(r));
 
-    // a v4 OC reading the whole frame
+    // a v5 OC reading the whole frame
+    ConfigReportData v5 = {};
+    memcpy(&v5, wire, sizeof(v5));
+    EXPECT_FLOAT_EQ(v5.guidance_tilt.tilt_limit_boost_deg, 25.0f);
+    EXPECT_FLOAT_EQ(v5.guidance_tilt.tilt_limit_coast_deg, 32.5f);
+
+    // a v4 sender's frame, copied by v4's length: the antenna arrives, the
+    // tilt limits stay the zeros the OC never serves
     ConfigReportData v4 = {};
-    memcpy(&v4, wire, sizeof(v4));
+    memcpy(&v4, wire, offsetof(ConfigReportData, guidance_tilt));
+    EXPECT_EQ(v4.guidance_tilt.tilt_limit_boost_deg, 0.0f);
+    EXPECT_EQ(v4.guidance_tilt.tilt_limit_coast_deg, 0.0f);
     EXPECT_EQ((unsigned)v4.antenna.known, 1u);
     EXPECT_EQ((int)v4.antenna.x_mm, -12);
     EXPECT_EQ((int)v4.antenna.y_mm, 34);
@@ -1504,6 +1630,30 @@ TEST(RocketComputerTypes, OutStatusByte_TokenPoweredNeverWithoutReady) {
     }
     EXPECT_NE(outStatusByte(true, true)  & OUT_STATUS_TOKEN_POWERED_BIT, 0);
     EXPECT_EQ(outStatusByte(true, false) & OUT_STATUS_TOKEN_POWERED_BIT, 0);
+}
+
+// CENJARS 2026-11-01: bits 2-3 carry the OC's camera-rail verdict. Same rule as
+// #1188's bit (never without ready), plus DRAWING never without MONITORED: an
+// FC must not read "running" from an OC that cannot see the rail.
+TEST(RocketComputerTypes, OutStatusByte_CameraBits) {
+    EXPECT_EQ(OUT_STATUS_CAM_MONITORED_BIT, 0x04u);
+    EXPECT_EQ(OUT_STATUS_CAM_DRAWING_BIT,   0x08u);
+    // The two-argument form is unchanged: byte-identical to every older OC.
+    EXPECT_EQ(outStatusByte(true, false), 0x01u);
+    EXPECT_EQ(outStatusByte(true, true),  0x03u);
+    EXPECT_EQ(outStatusByte(true, false, true,  false), 0x05u);   // monitored, dark
+    EXPECT_EQ(outStatusByte(true, false, true,  true),  0x0Du);   // monitored, running
+    EXPECT_EQ(outStatusByte(true, true,  true,  true),  0x0Fu);
+    EXPECT_EQ(outStatusByte(true, false, false, true),  0x01u);   // drawing without a monitor drops
+    for (bool tok : {false, true})
+        for (bool mon : {false, true})
+            for (bool draw : {false, true}) {
+                EXPECT_EQ(outStatusByte(false, tok, mon, draw), 0u);        // never without ready
+                EXPECT_NE(outStatusByte(true,  tok, mon, draw), 0u);        // `!= 0` is still "ready"
+                const uint8_t b = outStatusByte(true, tok, mon, draw);
+                EXPECT_EQ((b & OUT_STATUS_CAM_DRAWING_BIT) != 0, mon && draw);
+                EXPECT_EQ((b & OUT_STATUS_TOKEN_POWERED_BIT) != 0, tok);    // independent of the camera
+            }
 }
 
 TEST(RocketComputerTypes, OutStatusQuery_MagType_V6) {

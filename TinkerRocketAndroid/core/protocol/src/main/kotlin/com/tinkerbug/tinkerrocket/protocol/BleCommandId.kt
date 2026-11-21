@@ -92,7 +92,7 @@ public object BleCommandId {
     public const val SENSOR_CAL_APPLY_OC: Int = 62 // SensorCalApplyData 18 B
     public const val SENSOR_CAL_READ_OC: Int = 63
     public const val IMU_ORIENT: Int = 64          // [0xFF auto | code 0..23]
-    public const val GUIDANCE_CONFIG: Int = 65     // GuidanceConfigData 45 B — first 36 FROZEN (#534)
+    public const val GUIDANCE_CONFIG: Int = 65     // GuidanceConfigFrame 53 B — first 36 FROZEN (#534)
     public const val FIN_CONFIG: Int = 66          // FinConfigData 18 B
     public const val IMU_RATE: Int = 67            // [rate_hz u16] 960/1920/3840
     // "LoRa off" — [bool] 1 = hold radio silence.  Rocket link only: the BS
