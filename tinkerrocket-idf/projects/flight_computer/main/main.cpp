@@ -5032,7 +5032,7 @@ static void startRawShadow()
         snprintf(cap_txt, sizeof(cap_txt), "at most %d satellites (the cap fixed)", cfg.sat_cap);
     ESP_LOGI(TAG, "[RAWGNSS] flight safeguards: Doppler change check %s (window %.1f s, attitude allowance %.0f deg, "
                   "%.0f deg about the vertical after a launch with no magnetometer heading, epoch %.0f and latch "
-                  "%.0f sigmas, %s) | heading share %s (full at %.1f m/s^2 over %.1f s, open past %.1f g within "
+                  "%.0f sigmas, %s, the window %s) | heading share %s (full at %.1f m/s^2 over %.1f s, open past %.1f g within "
                   "%.1f s, %s) | turning body: Dopplers allow %.2f m along the nose and %.2f m across from %.1f "
                   "rad/s%s | spinning body: attitude transition %s, the change check's lever on %s (radial %.3f m), "
                   "wind-up %.2f cycles a turn taken off | epochs (%s): the cheaper build %s, the geometry %s with the "
@@ -5042,6 +5042,7 @@ static void startRawShadow()
                  : (cfg.dv_check == gnss_raw::RawGnssShadow::kDvObserve ? "observing" : "off"),
              cfg.dv_window_s, cfg.dv_att_allow_deg, cfg.dv_hdg_unset_deg, cfg.dv_epoch_k, cfg.dv_latch_k,
              cfg.dv_ground ? "on the pad too" : "in flight only",
+             cfg.dv_window_restart ? "starting over as a step's latch lets go" : "kept through a step's latch",
              cfg.ekf.hdg_obs_mode == gnss_raw::kHdgObsForce ? "by the horizontal specific force"
                                                              : (cfg.ekf.hdg_obs_mode == gnss_raw::kHdgObsOff ? "off"
                                                                                                              : "other"),

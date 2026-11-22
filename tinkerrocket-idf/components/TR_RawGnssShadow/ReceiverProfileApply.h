@@ -278,7 +278,12 @@ inline void applySdrDopplerMeans(const GnssReceiverProfile& p, RawGnssShadow::Co
 //     magnetometer heading (the V9's until its magnetometer is calibrated in
 //     flight configuration) takes any heading about the vertical as well
 //     (dv_hdg_unset_deg 180): with a pad heading 120-180 deg off, the 10 deg
-//     allowance alone held the Dopplers out of no-fault flights.
+//     allowance alone held the Dopplers out of no-fault flights. A latch an
+//     epoch's own test began (a step) lets go on that test and the level
+//     alone, and the window starts over then (dv_window_restart,
+//     2026-11-22): the window had carried the step for its whole memory and
+//     held the V10's 11-21 boost Dopplers 1.3 s past the board's 0.3 s jump
+//     (RawGnssShadow.h). A latch the window began (a slow ramp) is as before.
 //   - GNSS's heading gain by how well the moment observes it (TR_RawGnssEKF.h
 //     hdg_obs_mode): the rows' gain on the attitude about the vertical and the
 //     gyro bias along it scaled by the 1 s mean horizontal specific force over
@@ -320,6 +325,7 @@ inline void applyMosaicFlightSafeguards(RawGnssShadow::Config& c)
     // the Doppler change check
     c.dv_check = RawGnssShadow::kDvAct;
     c.dv_window_s = 1.0;
+    c.dv_window_restart = true;
     c.dv_att_allow_deg = 10.0;
     c.dv_epoch_k = 4.0;
     c.dv_latch_k = 5.0;

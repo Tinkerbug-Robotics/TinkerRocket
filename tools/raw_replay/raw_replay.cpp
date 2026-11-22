@@ -349,7 +349,7 @@ struct Args
     int dv_check = -1;               // 0 off (the firmware's), 1 observe, 2 act
     double dv_sat_k = -1.0, dv_epoch_k = -1.0, dv_floor = -1.0, dv_per_g = -1.0, dv_att_deg = -1.0,
            dv_scale = -1.0, dv_bias = -1.0, dv_lever_m = -1.0, dv_hold_s = -1.0, dv_epoch_hold_s = -1.0,
-           dv_window_s = -1.0, dv_noise_tau_s = -1.0, dv_hold_all_frac = -1.0, dv_latch_k = -1.0;
+           dv_window_s = -1.0, dv_window_restart = -1.0, dv_noise_tau_s = -1.0, dv_hold_all_frac = -1.0, dv_latch_k = -1.0;
     double dv_hdg_unset_deg = -1.0;  // a launch with no magnetometer heading: the heading allowance (a RAW_REPLAY_DVHDG build)
     int dv_deweight = -1, dv_ground = -1;
     std::string dv_trace;            // offline only: each change check's satellites, their residuals off its fit
@@ -441,7 +441,7 @@ void usage()
                  "  [--dv-epoch-k X] [--dv-floor X] [--dv-per-g X] [--dv-att-deg X] [--dv-scale X] [--dv-bias X]\n"
                  "  [--dv-lever-m X] [--dv-hold-s X] [--dv-epoch-hold-s X] [--dv-window-s X] [--dv-deweight 0|1]\n"
                  "  [--dv-ground 0|1] [--dv-noise-tau-s X] [--dv-hold-all-frac X] [--dv-latch-k X]\n"
-                 "  [--dv-hdg-unset-deg X] [--dv-trace FILE]\n"
+                 "  [--dv-hdg-unset-deg X] [--dv-window-restart 0|1] [--dv-trace FILE]\n"
                  "  the heading's gain by its observability (a RAW_REPLAY_HDGOBS build): [--hdg-obs-mode 0|1|2|3]\n"
                  "  [--hdg-obs-fh X] [--hdg-obs-tau X] [--hdg-obs-sigma-v X] [--hdg-obs-window X] [--hdg-obs-open-g X]\n"
                  "  [--hdg-obs-open-hold X] [--hdg-obs-floor X] [--hdg-obs-scope 0|1|2]\n"
@@ -584,6 +584,7 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--dv-hold-s") a.dv_hold_s = std::atof(val());
         else if (k == "--dv-epoch-hold-s") a.dv_epoch_hold_s = std::atof(val());
         else if (k == "--dv-window-s") a.dv_window_s = std::atof(val());
+        else if (k == "--dv-window-restart") a.dv_window_restart = std::atof(val());
         else if (k == "--dv-deweight") a.dv_deweight = std::atoi(val());
         else if (k == "--dv-ground") a.dv_ground = std::atoi(val());
         else if (k == "--dv-noise-tau-s") a.dv_noise_tau_s = std::atof(val());
@@ -2261,6 +2262,8 @@ int main(int argc, char** argv)
         cfg.dv_epoch_hold_s = a.dv_epoch_hold_s;
     if (a.dv_window_s >= 0.0)
         cfg.dv_window_s = a.dv_window_s;
+    if (a.dv_window_restart >= 0.0)
+        cfg.dv_window_restart = a.dv_window_restart > 0.0;
     if (a.dv_deweight >= 0)
         cfg.dv_deweight = a.dv_deweight != 0;
     if (a.dv_ground >= 0)
@@ -5243,14 +5246,16 @@ int main(int argc, char** argv)
                                      "\"held_epochs\": %u, \"max_chi2\": %.2f, \"max_e\": %.2f, "
                                      "\"epoch_fail_t\": %s, \"sat_fail_t\": %s, \"sat_fail_n\": %s, \"held_t\": %s, "
                                      "\"held_n\": %s, \"noise_max\": %.3f, \"all_held\": %u, \"latches\": %u, "
-                                     "\"latch_releases\": %u, \"latch_epochs\": %u, ",
+                                     "\"latch_releases\": %u, \"latch_epochs\": %u, \"window_restart\": %d, "
+                                     "\"window_restarts\": %u, ",
                                  sh.cfg_.dv_check, fs.dv_checks, fs.dv_sat_fails, fs.dv_sat_win_fails,
                                  fs.dv_epoch_fails, fs.dv_epoch_win_fails, fs.dv_held_rr, fs.dv_held_epochs,
                                  static_cast<double>(fs.dv_max_chi2), static_cast<double>(fs.dv_max_e),
                                  list(dv_epoch_fail_t).c_str(), list(dv_sat_fail_t).c_str(),
                                  ilist(dv_sat_fail_n).c_str(), list(dv_held_t).c_str(), ilist(dv_held_n).c_str(),
                                  static_cast<double>(fs.dv_noise_max_mps), fs.dv_all_held, fs.dv_latches,
-                                 fs.dv_latch_releases, fs.dv_latch_epochs);
+                                 fs.dv_latch_releases, fs.dv_latch_epochs, sh.cfg_.dv_window_restart ? 1 : 0,
+                                 fs.dv_window_restarts);
 #if RAW_REPLAY_DVHDG
                     // the heading allowance for a launch with no magnetometer heading: its setting, and whether
                     // the flight took it (the launch's)
