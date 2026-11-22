@@ -2513,7 +2513,7 @@
 				)
 			)
 		)
-		(property "Value" "33.2 k"
+		(property "Value" "23.2 k"
 			(at 0 1.17 90)
 			(layer "F.Fab")
 			(hide yes)
@@ -2547,7 +2547,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0733K2L"
+		(property "MPN" "RC0402FR-0723K2L"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -17663,7 +17663,7 @@
 				)
 			)
 		)
-		(property "Value" "33.2 k"
+		(property "Value" "23.2 k"
 			(at 0 1.17 90)
 			(layer "F.Fab")
 			(hide yes)
@@ -17697,7 +17697,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0733K2L"
+		(property "MPN" "RC0402FR-0723K2L"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -17837,7 +17837,7 @@
 				)
 			)
 		)
-		(property "Value" "33.2 k"
+		(property "Value" "23.2 k"
 			(at 0 1.17 90)
 			(layer "F.Fab")
 			(hide yes)
@@ -17871,7 +17871,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0733K2L"
+		(property "MPN" "RC0402FR-0723K2L"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -50918,7 +50918,7 @@
 			(size 0.54 0.64)
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(roundrect_rratio 0.25)
-			(net "Net-(U7-EN)")
+			(net "Net-(U7-EN1)")
 			(pintype "passive")
 			(uuid "1df5a4a4-05e0-4b6c-9e70-4eb847baa5f2")
 		)
@@ -54642,7 +54642,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Value" "TPS1HC08-Q1"
+		(property "Value" "TPS2HC16-Q1"
 			(at 0 -3.1 180)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -54656,7 +54656,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps1hc08-q1.pdf"
+		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps2hc16-q1.pdf"
 			(at 0 0 180)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -54670,7 +54670,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Description" "Single-channel 8 mOhm smart high-side switch (eFuse), adjustable current limit, VQFN-HR-11"
+		(property "Description" "Dual-channel 18.7 mOhm smart high-side switch, adjustable current limit, VQFN-HR-11; used as one channel (EN2/SEL open, internal pull-downs), VOUT1+VOUT2 tied"
 			(at 0 0 180)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -54684,7 +54684,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "TPS1HC08PQVAHRQ1"
+		(property "MPN" "TPS2HC16PQVAHRQ1"
 			(at 0 0 0)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -54898,7 +54898,7 @@
 			(size 0.1 0.1)
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO1_EXT")
-			(pinfunction "VOUT_1")
+			(pinfunction "VOUT1_1")
 			(pintype "passive")
 			(options
 				(clearance outline)
@@ -54995,9 +54995,9 @@
 			(at -0.8943 -1.6649)
 			(size 0.1 0.1)
 			(layers "B.Cu" "B.Mask" "B.Paste")
-			(net "unconnected-(U8-NC-Pad5)")
-			(pinfunction "NC_5")
-			(pintype "no_connect")
+			(net "unconnected-(U8-SEL-Pad5)")
+			(pinfunction "SEL_5")
+			(pintype "input+no_connect")
 			(options
 				(clearance outline)
 				(anchor rect)
@@ -55042,8 +55042,8 @@
 			(at 0.2752 -1.7025)
 			(size 0.1 0.1)
 			(layers "B.Cu" "B.Mask" "B.Paste")
-			(net "Net-(U8-EN)")
-			(pinfunction "EN_7")
+			(net "Net-(U8-EN1)")
+			(pinfunction "EN1_7")
 			(pintype "input")
 			(options
 				(clearance outline)
@@ -55065,9 +55065,9 @@
 			(at 0.8943 -1.6649)
 			(size 0.1 0.1)
 			(layers "B.Cu" "B.Mask" "B.Paste")
-			(net "unconnected-(U8-NC-Pad8)")
-			(pinfunction "NC_8")
-			(pintype "no_connect")
+			(net "unconnected-(U8-EN2-Pad8)")
+			(pinfunction "EN2_8")
+			(pintype "input+no_connect")
 			(options
 				(clearance outline)
 				(anchor rect)
@@ -55136,7 +55136,7 @@
 			(size 0.1 0.1)
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO1_EXT")
-			(pinfunction "VOUT_11")
+			(pinfunction "VOUT2_11")
 			(pintype "passive")
 			(options
 				(clearance outline)
@@ -57800,7 +57800,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Value" "TPS1HC08-Q1"
+		(property "Value" "TPS2HC16-Q1"
 			(at 0 -3.1 180)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -57814,7 +57814,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps1hc08-q1.pdf"
+		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps2hc16-q1.pdf"
 			(at 0 0 180)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -57828,7 +57828,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Description" "Single-channel 8 mOhm smart high-side switch (eFuse), adjustable current limit, VQFN-HR-11"
+		(property "Description" "Dual-channel 18.7 mOhm smart high-side switch, adjustable current limit, VQFN-HR-11; used as one channel (EN2/SEL open, internal pull-downs), VOUT1+VOUT2 tied"
 			(at 0 0 180)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -57842,7 +57842,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "TPS1HC08PQVAHRQ1"
+		(property "MPN" "TPS2HC16PQVAHRQ1"
 			(at 0 0 0)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -58056,7 +58056,7 @@
 			(size 0.1 0.1)
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO2_EXT")
-			(pinfunction "VOUT_1")
+			(pinfunction "VOUT1_1")
 			(pintype "passive")
 			(options
 				(clearance outline)
@@ -58153,9 +58153,9 @@
 			(at -0.8943 -1.6649)
 			(size 0.1 0.1)
 			(layers "B.Cu" "B.Mask" "B.Paste")
-			(net "unconnected-(U6-NC-Pad5)")
-			(pinfunction "NC_5")
-			(pintype "no_connect")
+			(net "unconnected-(U6-SEL-Pad5)")
+			(pinfunction "SEL_5")
+			(pintype "input+no_connect")
 			(options
 				(clearance outline)
 				(anchor rect)
@@ -58200,8 +58200,8 @@
 			(at 0.2752 -1.7025)
 			(size 0.1 0.1)
 			(layers "B.Cu" "B.Mask" "B.Paste")
-			(net "Net-(U6-EN)")
-			(pinfunction "EN_7")
+			(net "Net-(U6-EN1)")
+			(pinfunction "EN1_7")
 			(pintype "input")
 			(options
 				(clearance outline)
@@ -58223,9 +58223,9 @@
 			(at 0.8943 -1.6649)
 			(size 0.1 0.1)
 			(layers "B.Cu" "B.Mask" "B.Paste")
-			(net "unconnected-(U6-NC-Pad8)")
-			(pinfunction "NC_8")
-			(pintype "no_connect")
+			(net "unconnected-(U6-EN2-Pad8)")
+			(pinfunction "EN2_8")
+			(pintype "input+no_connect")
 			(options
 				(clearance outline)
 				(anchor rect)
@@ -58294,7 +58294,7 @@
 			(size 0.1 0.1)
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO2_EXT")
-			(pinfunction "VOUT_11")
+			(pinfunction "VOUT2_11")
 			(pintype "passive")
 			(options
 				(clearance outline)
@@ -58358,7 +58358,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Value" "TPS1HC08-Q1"
+		(property "Value" "TPS2HC16-Q1"
 			(at 0 -3.1 180)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -58372,7 +58372,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps1hc08-q1.pdf"
+		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps2hc16-q1.pdf"
 			(at 0 0 180)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -58386,7 +58386,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Description" "Single-channel 8 mOhm smart high-side switch (eFuse), adjustable current limit, VQFN-HR-11"
+		(property "Description" "Dual-channel 18.7 mOhm smart high-side switch, adjustable current limit, VQFN-HR-11; used as one channel (EN2/SEL open, internal pull-downs), VOUT1+VOUT2 tied"
 			(at 0 0 180)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -58400,7 +58400,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "TPS1HC08PQVAHRQ1"
+		(property "MPN" "TPS2HC16PQVAHRQ1"
 			(at 0 0 0)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -58614,7 +58614,7 @@
 			(size 0.1 0.1)
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO3_EXT")
-			(pinfunction "VOUT_1")
+			(pinfunction "VOUT1_1")
 			(pintype "passive")
 			(options
 				(clearance outline)
@@ -58711,9 +58711,9 @@
 			(at -0.8943 -1.6649)
 			(size 0.1 0.1)
 			(layers "B.Cu" "B.Mask" "B.Paste")
-			(net "unconnected-(U7-NC-Pad5)")
-			(pinfunction "NC_5")
-			(pintype "no_connect")
+			(net "unconnected-(U7-SEL-Pad5)")
+			(pinfunction "SEL_5")
+			(pintype "input+no_connect")
 			(options
 				(clearance outline)
 				(anchor rect)
@@ -58758,8 +58758,8 @@
 			(at 0.2752 -1.7025)
 			(size 0.1 0.1)
 			(layers "B.Cu" "B.Mask" "B.Paste")
-			(net "Net-(U7-EN)")
-			(pinfunction "EN_7")
+			(net "Net-(U7-EN1)")
+			(pinfunction "EN1_7")
 			(pintype "input")
 			(options
 				(clearance outline)
@@ -58781,9 +58781,9 @@
 			(at 0.8943 -1.6649)
 			(size 0.1 0.1)
 			(layers "B.Cu" "B.Mask" "B.Paste")
-			(net "unconnected-(U7-NC-Pad8)")
-			(pinfunction "NC_8")
-			(pintype "no_connect")
+			(net "unconnected-(U7-EN2-Pad8)")
+			(pinfunction "EN2_8")
+			(pintype "input+no_connect")
 			(options
 				(clearance outline)
 				(anchor rect)
@@ -58852,7 +58852,7 @@
 			(size 0.1 0.1)
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO3_EXT")
-			(pinfunction "VOUT_11")
+			(pinfunction "VOUT2_11")
 			(pintype "passive")
 			(options
 				(clearance outline)
@@ -62981,7 +62981,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Value" "33.2 k"
+		(property "Value" "23.2 k"
 			(at 0 -1.17 90)
 			(layer "B.Fab")
 			(hide yes)
@@ -63018,7 +63018,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "RC0402FR-0733K2L"
+		(property "MPN" "RC0402FR-0723K2L"
 			(at 0 0 270)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -64497,7 +64497,7 @@
 			(size 0.54 0.64)
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(roundrect_rratio 0.25)
-			(net "Net-(U10-EN)")
+			(net "Net-(U10-EN1)")
 			(pintype "passive")
 			(uuid "5effccc3-e37d-472e-b8b6-0ddd5361feb5")
 		)
@@ -68354,7 +68354,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Value" "TPS1HC08-Q1"
+		(property "Value" "TPS2HC16-Q1"
 			(at 0 -3.1 180)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -68368,7 +68368,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps1hc08-q1.pdf"
+		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps2hc16-q1.pdf"
 			(at 0 0 180)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -68382,7 +68382,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Description" "Single-channel 8 mOhm smart high-side switch (eFuse), adjustable current limit, VQFN-HR-11"
+		(property "Description" "Dual-channel 18.7 mOhm smart high-side switch, adjustable current limit, VQFN-HR-11; used as one channel (EN2/SEL open, internal pull-downs), VOUT1+VOUT2 tied"
 			(at 0 0 180)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -68396,7 +68396,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "TPS1HC08PQVAHRQ1"
+		(property "MPN" "TPS2HC16PQVAHRQ1"
 			(at 0 0 0)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -68610,7 +68610,7 @@
 			(size 0.1 0.1)
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO4_EXT")
-			(pinfunction "VOUT_1")
+			(pinfunction "VOUT1_1")
 			(pintype "passive")
 			(options
 				(clearance outline)
@@ -68707,9 +68707,9 @@
 			(at -0.8943 -1.6649)
 			(size 0.1 0.1)
 			(layers "B.Cu" "B.Mask" "B.Paste")
-			(net "unconnected-(U10-NC-Pad5)")
-			(pinfunction "NC_5")
-			(pintype "no_connect")
+			(net "unconnected-(U10-SEL-Pad5)")
+			(pinfunction "SEL_5")
+			(pintype "input+no_connect")
 			(options
 				(clearance outline)
 				(anchor rect)
@@ -68754,8 +68754,8 @@
 			(at 0.2752 -1.7025)
 			(size 0.1 0.1)
 			(layers "B.Cu" "B.Mask" "B.Paste")
-			(net "Net-(U10-EN)")
-			(pinfunction "EN_7")
+			(net "Net-(U10-EN1)")
+			(pinfunction "EN1_7")
 			(pintype "input")
 			(options
 				(clearance outline)
@@ -68777,9 +68777,9 @@
 			(at 0.8943 -1.6649)
 			(size 0.1 0.1)
 			(layers "B.Cu" "B.Mask" "B.Paste")
-			(net "unconnected-(U10-NC-Pad8)")
-			(pinfunction "NC_8")
-			(pintype "no_connect")
+			(net "unconnected-(U10-EN2-Pad8)")
+			(pinfunction "EN2_8")
+			(pintype "input+no_connect")
 			(options
 				(clearance outline)
 				(anchor rect)
@@ -68848,7 +68848,7 @@
 			(size 0.1 0.1)
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(net "PYRO4_EXT")
-			(pinfunction "VOUT_11")
+			(pinfunction "VOUT2_11")
 			(pintype "passive")
 			(options
 				(clearance outline)
@@ -69048,7 +69048,7 @@
 			(size 0.54 0.64)
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(roundrect_rratio 0.25)
-			(net "Net-(U8-EN)")
+			(net "Net-(U8-EN1)")
 			(pintype "passive")
 			(uuid "f1a2b356-06a0-4b2c-9715-c0b2326244e2")
 		)
@@ -69229,7 +69229,7 @@
 			(size 0.54 0.64)
 			(layers "B.Cu" "B.Mask" "B.Paste")
 			(roundrect_rratio 0.25)
-			(net "Net-(U6-EN)")
+			(net "Net-(U6-EN1)")
 			(pintype "passive")
 			(uuid "3e8b4f06-7fa9-4b89-892d-b94f3e9d6b48")
 		)
@@ -101230,7 +101230,7 @@
 		(end 85.13 152.51)
 		(width 0.1)
 		(layer "B.Cu")
-		(net "Net-(U7-EN)")
+		(net "Net-(U7-EN1)")
 		(uuid "05d7f419-672b-4fd6-8222-2f5b443099c3")
 	)
 	(segment
@@ -101238,7 +101238,7 @@
 		(end 85.2652 152.6452)
 		(width 0.1)
 		(layer "B.Cu")
-		(net "Net-(U7-EN)")
+		(net "Net-(U7-EN1)")
 		(uuid "e17b44ce-5204-4dac-8ef9-9953a34fcbcf")
 	)
 	(segment
@@ -101566,7 +101566,7 @@
 		(end 77.3095 147.8095)
 		(width 0.127)
 		(layer "B.Cu")
-		(net "Net-(U8-EN)")
+		(net "Net-(U8-EN1)")
 		(uuid "9a2ec3f0-3a45-472c-b42b-0e7aa1042e74")
 	)
 	(segment
@@ -101574,7 +101574,7 @@
 		(end 77.29 147.79)
 		(width 0.127)
 		(layer "B.Cu")
-		(net "Net-(U8-EN)")
+		(net "Net-(U8-EN1)")
 		(uuid "c87b71c1-5f87-4b1b-b44b-0dd80c204c7e")
 	)
 	(via
@@ -101710,7 +101710,7 @@
 		(end 82.08 152.45)
 		(width 0.1)
 		(layer "B.Cu")
-		(net "Net-(U6-EN)")
+		(net "Net-(U6-EN1)")
 		(uuid "0fe17818-145b-414a-8858-52ed8429731d")
 	)
 	(segment
@@ -101718,7 +101718,7 @@
 		(end 82.0952 152.4652)
 		(width 0.1)
 		(layer "B.Cu")
-		(net "Net-(U6-EN)")
+		(net "Net-(U6-EN1)")
 		(uuid "4cc91031-42e6-4531-a980-67dd6facc309")
 	)
 	(segment
@@ -101766,7 +101766,7 @@
 		(end 88.4245 152.7345)
 		(width 0.1)
 		(layer "B.Cu")
-		(net "Net-(U10-EN)")
+		(net "Net-(U10-EN1)")
 		(uuid "15b32762-7e71-4b56-91bd-06b27d60b2d0")
 	)
 	(segment
@@ -101774,7 +101774,7 @@
 		(end 88.22 152.53)
 		(width 0.1)
 		(layer "B.Cu")
-		(net "Net-(U10-EN)")
+		(net "Net-(U10-EN1)")
 		(uuid "41feaaaf-9482-47fa-a962-ccfd3b1a16fc")
 	)
 	(segment
