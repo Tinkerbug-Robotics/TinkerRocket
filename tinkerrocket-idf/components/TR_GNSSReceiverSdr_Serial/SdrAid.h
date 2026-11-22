@@ -306,7 +306,10 @@ enum : uint8_t
     kWhyNaN = 5,        // not a number
     kWhyRange = 6,      // its sensor at the end of its range
     kWhyPadCheck = 7,   // refused by the pad check
-    kWhyNoMount = 8,    // asked to aid, but no mounting into the flight computer yet: watched only
+    kWhyNoMount = 8,    // asked to aid, but no mounting into the flight computer yet: watched only (no longer
+                        // sent: the board aids the vertical only instead, kWhyVertical)
+    kWhyVertical = 9,   // with src 2: the IMU aids the vertical only, its heading not known yet (its own levelling,
+                        // or a mounting that is not whole); a full aid once it has one
 };
 // Any 4001 sub-type 1 SdrRtcm's decodeTrEpoch takes: true, with its shift
 // and the block if it has one.

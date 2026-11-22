@@ -393,9 +393,10 @@ final class TelemetryDataTests: XCTestCase {
             XCTAssertEqual(t.sensorHealthRows.count, 7, "6 core + Storage")
         }
         let expected: [(String, TelemetryData.SensorHealth, String)] = [
-            ("1", .ok, "The GNSS board's IMU is aiding its tracking loops."),
-            ("2", .degraded, "The GNSS board's IMU is not aiding. Run the six-face calibration"
-                + " with the GNSS board on J1 (or its IMU is off in the board's settings)."),
+            ("1", .ok, "The GNSS board's IMU is fully aiding its tracking loops."),
+            ("2", .degraded, "The GNSS board's IMU is not fully aiding: it aids the vertical only"
+                + " until it knows its heading (the six-face calibration with the GNSS board"
+                + " on J1 gives it one), or its IMU is off in the board's settings."),
             ("3", .bad, "The GNSS board stopped using its IMU: its at-rest check failed"
                 + " or its samples stopped."),
         ]

@@ -178,8 +178,9 @@ MSG_FC_STATUS         = 0x92  # FcStatusData: the FC's own camera truth, 5 Hz (#
 FCS_SCAP_SENSE        = 0x04
 FCS_SCAP_NO_READING   = 0xFFFF
 # Bits 3-4: the gnss-sdr-dev board's IMU aiding, a SensorHealthState
-# (0 no board on J1 or an image from before it, 1 aiding, 2 not aiding: off
-# or no mounting yet, 3 refused or dropped), in v1 and v2 frames alike.
+# (0 no board on J1 or an image from before it, 1 fully aiding, 2 not fully
+# aiding: the vertical only until it knows its heading, or off, 3 refused or
+# dropped), in v1 and v2 frames alike.
 FCS_GNSS_IMU_SHIFT    = 3
 FCS_GNSS_IMU_MASK     = 0x18
 MSG_NON_SENSOR        = 0xA5
@@ -1984,7 +1985,8 @@ def parse_binary_file(filepath):
                     "fc_raw_votes_withheld": bool(fcs_flags & 0x02),
                     "scap_v": scap_v,
                     # the gnss-sdr-dev board's IMU aiding (FCS_GNSS_IMU_*): 0
-                    # none reported, 1 aiding, 2 not aiding, 3 refused/dropped
+                    # none reported, 1 fully aiding, 2 not fully (the vertical
+                    # only, or off), 3 refused/dropped
                     "gnss_imu": (fcs_flags & FCS_GNSS_IMU_MASK) >> FCS_GNSS_IMU_SHIFT,
                 })
             elif msg_type == MSG_SNAPSHOT and msg_len == SNAPSHOT_LEN:
