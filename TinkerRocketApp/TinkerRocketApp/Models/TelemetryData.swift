@@ -309,7 +309,7 @@ struct TelemetryData: Codable {
         case .degraded:
             return "The GNSS board's IMU is not fully aiding: it aids the vertical only"
                 + " until it knows its heading (the six-face calibration with the GNSS board"
-                + " on J1 gives it one), or its IMU is off in the board's settings."
+                + " on J1 gives it one; run it again if the board was moved), or its IMU is off in the board's settings."
         case .bad:
             return "The GNSS board stopped using its IMU: its at-rest check failed"
                 + " or its samples stopped."

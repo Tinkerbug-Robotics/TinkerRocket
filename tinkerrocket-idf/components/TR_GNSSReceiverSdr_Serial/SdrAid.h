@@ -310,6 +310,8 @@ enum : uint8_t
                         // sent: the board aids the vertical only instead, kWhyVertical)
     kWhyVertical = 9,   // with src 2: the IMU aids the vertical only, its heading not known yet (its own levelling,
                         // or a mounting that is not whole); a full aid once it has one
+    kWhyMountDisagrees = 10,  // with src 2: a whole mounting exists, but through it the flight computer's attitude
+                              // disagrees with the board's own: its own levelling, the vertical only
 };
 // Any 4001 sub-type 1 SdrRtcm's decodeTrEpoch takes: true, with its shift
 // and the block if it has one.

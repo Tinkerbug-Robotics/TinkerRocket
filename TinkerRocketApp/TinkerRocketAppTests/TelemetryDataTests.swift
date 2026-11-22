@@ -396,7 +396,7 @@ final class TelemetryDataTests: XCTestCase {
             ("1", .ok, "The GNSS board's IMU is fully aiding its tracking loops."),
             ("2", .degraded, "The GNSS board's IMU is not fully aiding: it aids the vertical only"
                 + " until it knows its heading (the six-face calibration with the GNSS board"
-                + " on J1 gives it one), or its IMU is off in the board's settings."),
+                + " on J1 gives it one; run it again if the board was moved), or its IMU is off in the board's settings."),
             ("3", .bad, "The GNSS board stopped using its IMU: its at-rest check failed"
                 + " or its samples stopped."),
         ]

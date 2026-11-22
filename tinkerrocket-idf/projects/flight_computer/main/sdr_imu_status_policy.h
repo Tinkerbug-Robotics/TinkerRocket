@@ -11,7 +11,8 @@
 // SH_OK while the IMU aids fully (its heading known: a whole mounting into
 // this flight computer, which the apps' six-face calibration sets, or one the
 // board found itself), SH_DEGRADED while it does not fully aid (the vertical
-// only, its heading not known yet; or off in the board's settings), SH_BAD
+// only: its heading not known yet, or its mounting disagreeing with this
+// flight computer's attitude; or off in the board's settings), SH_BAD
 // when the board refused or dropped its IMU (its at-rest check failed, its
 // samples stopped, its attitude lapsed). The flight computer sends it in FC_STATUS_MSG's flags
 // (FCS_GNSS_IMU_*); the out computer passes it to the apps ("gi").
@@ -63,8 +64,10 @@ public:
             return SH_NA;
         if (have_aid_ && now_us - aid_us_ < kStaleUs)
         {
-            if (aid_.src == 2)                       // aids: fully, or the vertical only
-                return (aid_.ver >= 2 && aid_.why == sdr_aid::kWhyVertical) ? SH_DEGRADED : SH_OK;
+            if (aid_.src == 2)                       // aids: fully (no reason), or not fully (the vertical only:
+                                                     // no heading yet, kWhyVertical; or its mounting disagrees,
+                                                     // kWhyMountDisagrees; any later reason likewise)
+                return (aid_.ver >= 2 && aid_.why != sdr_aid::kWhyAids) ? SH_DEGRADED : SH_OK;
             if (aid_.check == 2)
                 return SH_BAD;   // the board's at-rest check refused its IMU
             if (aid_.ver >= 2 && aid_.why >= sdr_aid::kWhyStale && aid_.why <= sdr_aid::kWhyPadCheck)

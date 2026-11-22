@@ -103,6 +103,11 @@ TEST(SdrImuStatus, AidingTheVerticalOnlyIsDegraded)
     EXPECT_EQ(t.state(true, kT + 10'000), SH_OK);
     t.noteAid(block(2, 0, sdr_aid::kWhyVertical, 1), kT);      // version 1's bits there are reserved
     EXPECT_EQ(t.state(true, kT), SH_OK);
+    // A whole mounting that disagrees with this flight computer's attitude: the board's own, the vertical only
+    t.noteAid(block(2, 1, sdr_aid::kWhyMountDisagrees), kT);
+    EXPECT_EQ(t.state(true, kT), SH_DEGRADED);
+    t.noteAid(block(2, 1, 13), kT);                               // a reason from a later board: not full either
+    EXPECT_EQ(t.state(true, kT), SH_DEGRADED);
 }
 
 TEST(SdrImuStatus, NotAidingByChoiceOrNoMountingIsDegraded)
