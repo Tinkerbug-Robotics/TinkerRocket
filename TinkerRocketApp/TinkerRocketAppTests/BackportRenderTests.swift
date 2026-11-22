@@ -103,4 +103,18 @@ final class BackportRenderTests: XCTestCase {
         XCTAssertEqual(names.count, 11)
         _ = try render(HealthDotRow(rows: t.sensorHealthRows), name: "health_dot_row_11")
     }
+
+    /// The GNSS board's IMU ("gi") adds the longest name, and with all four
+    /// pyros the row is at its widest: twelve dots, six to a line.
+    func testHealthCard_gnssImuWithFourPyros_rendersTwelveDots() throws {
+        let h = 1 | (1 << 2) | (1 << 4) | (1 << 6) | (1 << 8) | (1 << 10) |
+            (2 << 12) | (2 << 14) | (2 << 16) | (2 << 18) | (1 << 20)
+        let t = try JSONDecoder().decode(
+            TelemetryData.self, from: "{\"h\":\(h),\"gi\":2}".data(using: .utf8)!)
+        let names = t.sensorHealthRows.map(\.name)
+        XCTAssertEqual(names, ["Baro", "IMU", "EKF", "GNSS", "Battery", "Mag", "GNSS IMU",
+                               "Storage", "Pyro 1", "Pyro 2", "Pyro 3", "Pyro 4"])
+        _ = try render(HealthDotRow(rows: t.sensorHealthRows), name: "health_dot_row_12_gnss_imu")
+        _ = try render(HealthCardView(telemetry: t), name: "health_card_gnss_imu")
+    }
 }

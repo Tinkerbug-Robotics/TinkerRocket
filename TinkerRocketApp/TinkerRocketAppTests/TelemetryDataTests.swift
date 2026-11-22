@@ -346,6 +346,90 @@ final class TelemetryDataTests: XCTestCase {
         XCTAssertEqual(t.flightReadiness, .ready)
     }
 
+    // MARK: - GNSS board IMU ("gi")
+
+    /// `"h"` plus an optional `"gi"`; a nil `gi` leaves the key out entirely,
+    /// the way older firmware and the base-station relay send the frame.
+    private func decode(health: Int, gi: String?) throws -> TelemetryData {
+        let giPart = gi.map { ",\"gi\":\($0)" } ?? ""
+        return try JSONDecoder().decode(TelemetryData.self,
+                                        from: "{\"h\":\(health)\(giPart)}".data(using: .utf8)!)
+    }
+
+    /// "gi" is a plain integer with the SensorHealth values, not a bitfield.
+    /// Absent = not applicable; so is a value this build does not know.
+    func testGnssImu_KeyDecodes() throws {
+        let absent = try decode(health: 1, gi: nil)
+        XCTAssertNil(absent.gnss_imu_state)
+        XCTAssertEqual(absent.gnssImuHealth, .na)
+        XCTAssertEqual(try decode(health: 1, gi: "0").gnssImuHealth, .na)
+        XCTAssertEqual(try decode(health: 1, gi: "1").gnssImuHealth, .ok)
+        XCTAssertEqual(try decode(health: 1, gi: "2").gnssImuHealth, .degraded)
+        XCTAssertEqual(try decode(health: 1, gi: "3").gnssImuHealth, .bad)
+        XCTAssertEqual(try decode(health: 1, gi: "3").gnss_imu_state, 3)
+        // Out of range reads as N/A (hidden), not as a state it isn't.
+        XCTAssertEqual(try decode(health: 1, gi: "4").gnssImuHealth, .na)
+        XCTAssertEqual(try decode(health: 1, gi: "-1").gnssImuHealth, .na)
+        // #571 tolerance: a float or string on the wire still decodes, and
+        // never costs the rest of the frame.
+        XCTAssertEqual(try decode(health: 1, gi: "2.0").gnssImuHealth, .degraded)
+        let str = try decode(health: 1, gi: "\"1\"")
+        XCTAssertEqual(str.gnssImuHealth, .ok)
+        XCTAssertEqual(str.baroHealth, .ok)
+        // "gi" lives outside "h": it must not leak into any bitfield item.
+        let giOnly = try decode(health: 0, gi: "3")
+        XCTAssertEqual(giOnly.sensor_health, 0)
+        XCTAssertEqual(giOnly.magHealth, .na)
+        XCTAssertFalse(giOnly.hasSensorHealth)
+    }
+
+    /// The row appears only when "gi" is present and not 0, right after Mag
+    /// (its advisory sibling), with the matching state and plain-language line.
+    func testGnssImu_RowOnlyWhenPresentAndNonZero() throws {
+        let h = pack(baro: .ok, imu: .ok, ekf: .ok, mag: .ok, gnss: .ok, batt: .ok, storage: .ok)
+        for gi in [nil, "0"] {
+            let t = try decode(health: h, gi: gi)
+            XCTAssertFalse(t.sensorHealthRows.contains { $0.name == "GNSS IMU" }, "gi \(gi ?? "absent")")
+            XCTAssertEqual(t.sensorHealthRows.count, 7, "6 core + Storage")
+        }
+        let expected: [(String, TelemetryData.SensorHealth, String)] = [
+            ("1", .ok, "The GNSS board's IMU is aiding its tracking loops."),
+            ("2", .degraded, "The GNSS board's IMU is not aiding. Run the six-face calibration"
+                + " with the GNSS board on J1 (or its IMU is off in the board's settings)."),
+            ("3", .bad, "The GNSS board stopped using its IMU: its at-rest check failed"
+                + " or its samples stopped."),
+        ]
+        for (gi, state, detail) in expected {
+            let t = try decode(health: h, gi: gi)
+            XCTAssertEqual(t.sensorHealthRows.map(\.name),
+                           ["Baro", "IMU", "EKF", "GNSS", "Battery", "Mag", "GNSS IMU", "Storage"])
+            let row = try XCTUnwrap(t.sensorHealthRows.first { $0.name == "GNSS IMU" })
+            XCTAssertEqual(row.state, state)
+            XCTAssertEqual(row.detail, detail)
+        }
+        // The other rows carry no line of their own.
+        let t = try decode(health: h, gi: "1")
+        XCTAssertTrue(t.sensorHealthRows.filter { $0.name != "GNSS IMU" }.allSatisfy { $0.detail == nil })
+        XCTAssertNil(TelemetryData.gnssImuHealthDetail(.na))
+    }
+
+    /// Advisory only, like Mag: no "gi" value moves the go/no-go verdict, in
+    /// any of its four outcomes.
+    func testGnssImu_NeverChangesReadiness() throws {
+        let cases: [(Int, TelemetryData.FlightReadiness)] = [
+            (pack(baro: .ok, imu: .ok, ekf: .ok, mag: .ok, gnss: .ok, batt: .ok, storage: .ok), .ready),
+            (pack(baro: .ok, imu: .ok, ekf: .deg, mag: .ok, gnss: .ok, batt: .ok), .caution),
+            (pack(baro: .ok, imu: .bad, ekf: .ok, mag: .ok, gnss: .ok, batt: .ok), .notReady),
+            (0, .unknown),
+        ]
+        for (h, verdict) in cases {
+            for gi in [nil, "0", "1", "2", "3", "4"] {
+                XCTAssertEqual(try decode(health: h, gi: gi).flightReadiness, verdict,
+                               "h \(h), gi \(gi ?? "absent")")
+            }
+        }
+    }
+
     /// Unconfigured pyros (N/A) are ignored; configured ones add a card row.
     func testSensorHealthRows_OnlyConfiguredPyros() throws {
         let none = try decode(health: pack(baro: .ok, imu: .ok))

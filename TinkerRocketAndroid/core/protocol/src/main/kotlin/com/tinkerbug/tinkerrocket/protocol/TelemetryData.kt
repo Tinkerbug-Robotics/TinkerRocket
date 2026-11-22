@@ -308,6 +308,13 @@ public data class TelemetryData(
     // #303 sensor health scorecard ("h"): 2 bits/item, shifts mirror
     // RocketComputerTypes.h SH_*_SHIFT.  0 = nothing reported → card hidden.
     val sensorHealth: Int = 0,
+    // The GNSS board's own IMU ("gi"): a plain integer with the SensorHealth
+    // values (0 not applicable, 1 OK, 2 degraded, 3 bad), NOT part of "h".  The
+    // out computer sends it on the direct link only while the flight computer
+    // reports it; older firmware and the base-station relay never do, so null
+    // means "not applicable", never "fine".  Advisory only, like Mag.  iOS
+    // `gnss_imu_state`.
+    val gnssImuState: Int? = null,            // "gi"
 
     // Source rocket identity (base station relay only, null for direct BLE)
     val sourceRocketId: Int? = null,          // "rid"
@@ -536,6 +543,10 @@ public data class TelemetryData(
     // baro+IMU path (dead/deaf module): no absolute position, guidance off.
     public val gnssAbsentMode: Boolean get() = shState(22) == SensorHealth.BAD
 
+    /** The GNSS board's IMU ([gnssImuState]); absent or unknown values read NA. */
+    public val gnssImuHealth: SensorHealth
+        get() = SensorHealth.entries.firstOrNull { it.raw == gnssImuState } ?: SensorHealth.NA
+
     /** #1166: the one quiet advisory line for a hold-up cap that never charged, or null. */
     public val holdupAdvisoryText: String? get() = holdupAdvisoryText(holdupState, scapVoltage)
 
@@ -577,11 +588,18 @@ public data class TelemetryData(
     /** The base station flags this rocket ID as two rockets ([duplicateId]). */
     public val duplicateIdSuspected: Boolean get() = (duplicateId ?: 0) != 0
 
-    /** One row of the pre-launch health card (iOS SensorHealthRow; id = name). */
-    public data class SensorHealthRow(val name: String, val state: SensorHealth)
+    /**
+     * One row of the pre-launch health card (iOS SensorHealthRow; id = name).
+     * [detail] is an optional plain-language line (the dot's TalkBack state).
+     */
+    public data class SensorHealthRow(
+        val name: String,
+        val state: SensorHealth,
+        val detail: String? = null,
+    )
 
-    // Core sensors always shown; Storage only when reported; a pyro channel
-    // only when configured for the flight (state != NA).
+    // Core sensors always shown; GNSS IMU and Storage only when reported; a
+    // pyro channel only when configured for the flight (state != NA).
     public val sensorHealthRows: List<SensorHealthRow>
         get() {
             val rows = mutableListOf(
@@ -592,6 +610,9 @@ public data class TelemetryData(
                 SensorHealthRow("Battery", battHealth),
                 SensorHealthRow("Mag", magHealth),
             )
+            if (gnssImuHealth != SensorHealth.NA) {   // "gi": direct link only, while the FC reports it
+                rows.add(SensorHealthRow("GNSS IMU", gnssImuHealth, gnssImuHealthDetail(gnssImuHealth)))
+            }
             if (storageHealth != SensorHealth.NA) {
                 rows.add(SensorHealthRow("Storage", storageHealth))
             }
@@ -618,9 +639,10 @@ public data class TelemetryData(
 
     // Red = a hard fault waiting won't fix (baro/IMU/battery BAD, full/failing
     // flight-log store, or a configured pyro with no continuity).  Green needs
-    // every required item OK — including EKF converged and a GNSS fix.  Mag is
-    // advisory and never gates.  Storage absent (NA, older firmware) is
-    // ignored, not red.  Amber = anything in between.
+    // every required item OK — including EKF converged and a GNSS fix.  Mag and
+    // the GNSS board's IMU ("gi") are advisory and never gate: neither is read
+    // below.  Storage absent (NA, older firmware) is ignored, not red.  Amber =
+    // anything in between.
     public val flightReadiness: FlightReadiness
         get() {
             if (!hasSensorHealth) return FlightReadiness.UNKNOWN
@@ -925,6 +947,7 @@ public data class TelemetryData(
             flightStatusBits = flexInt(json, "fs") ?: 0,     // #293: tolerant
             pyroStatusBits = flexInt(json, "ps") ?: 0,       // #293: tolerant
             sensorHealth = flexInt(json, "h") ?: 0,                     // #571
+            gnssImuState = flexInt(json, "gi"),                         // absent stays null = NA
             sourceRocketId = flexInt(json, "rid"),           // #571: rid is the demux key
             sourceUnitName = strictString(json, "run"),
             duplicateId = flexInt(json, "dup"),                         // #1650
@@ -982,6 +1005,23 @@ public fun modemAdvisoryText(state: Int?): String? = when (state) {
     2 -> "Radio daughterboard not answering — no LoRa"
     3 -> "Radio daughterboard firmware mismatch — no LoRa"
     else -> null
+}
+
+/**
+ * One plain sentence on what the GNSS IMU dot ("gi") means, or null when the
+ * row is hidden (NA). Read out by TalkBack as the dot's state.
+ *
+ * iOS twin: `TelemetryData.gnssImuHealthDetail(_:)`.
+ */
+public fun gnssImuHealthDetail(state: TelemetryData.SensorHealth): String? = when (state) {
+    TelemetryData.SensorHealth.OK -> "The GNSS board's IMU is aiding its tracking loops."
+    TelemetryData.SensorHealth.DEGRADED ->
+        "The GNSS board's IMU is not aiding. Run the six-face calibration" +
+            " with the GNSS board on J1 (or its IMU is off in the board's settings)."
+    TelemetryData.SensorHealth.BAD ->
+        "The GNSS board stopped using its IMU: its at-rest check failed" +
+            " or its samples stopped."
+    TelemetryData.SensorHealth.NA -> null
 }
 
 public fun holdupAdvisoryText(state: Int?, scapVolts: Float?): String? = when (HoldupState.fromCode(state)) {
