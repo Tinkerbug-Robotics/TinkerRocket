@@ -97,7 +97,8 @@ def load(paths, events_out=None):
 
 
 def _frame_toa(row, radio):
-    size = bs_log.SIZE_OF_LORA_SLOW if row.get('frame') == 'slow' else bs_log.SIZE_OF_LORA_FAST
+    size = row.get('frame_len') or (   # the frame as received (a v5 slow frame is 22 B)
+        bs_log.SIZE_OF_LORA_SLOW if row.get('frame') == 'slow' else bs_log.SIZE_OF_LORA_FAST)
     return time_on_air_ms(size, **radio)
 
 

@@ -22,7 +22,7 @@ Start-of-frame bytes from [`TR_I2C_Interface.h`](https://github.com/Tinkerbug-Ro
 
 ## FC ↔ OC message types
 
-119 codes. The dispatch on both ends is a flat first-match chain, so
+122 codes. The dispatch on both ends is a flat first-match chain, so
 two handlers sharing a value means the second is silently dead — which is why
 this list is CI-enforced for uniqueness.
 
@@ -147,8 +147,11 @@ this list is CI-enforced for uniqueness.
 | `0x8F` | `GNSS_LOG_CONFIG_MSG` | OC → FC | OC→FC: 1-byte GnssLogConfigData |
 | `0x8C` | `ANTENNA_CONFIG_PENDING` | OC → FC | OC→FC: payload follows as ANTENNA_CONFIG_MSG |
 | `0x8D` | `ANTENNA_CONFIG_MSG` | OC → FC | OC→FC: 7-byte AntennaOffsetConfigData |
+| `0x88` | `SDR_ALIGN_STATUS_MSG` | FC → OC | FC→OC over I2S: 111-byte SdrAlignStatusData, 1 Hz on the ground with the board on J1 |
+| `0x89` | `SDR_ALIGN_CMD_PENDING` | OC → FC | OC→FC: payload follows as SDR_ALIGN_CMD_MSG |
+| `0x8A` | `SDR_ALIGN_CMD_MSG` | OC → FC | OC→FC: 2-byte SdrAlignCmdData payload |
 
-> 54 of these 119 codes carry no comment in the header,
+> 54 of these 122 codes carry no comment in the header,
 > so the Notes column is blank for them. Direction is inferred from the
 > `_PENDING` / `_CMD` / `_MSG` suffix in that case, which is a convention,
 > not a guarantee. A trailing `// OC→FC: what it does` on the constant
@@ -167,6 +170,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `GNSSSatData` | 202 |
 | `PadContextNav` | 124 |
 | `AccelCalStatusFrame` | 114 |
+| `SdrAlignStatusData` | 111 |
 | `RawGnssEkfData` | 90 |
 | `RollProfileData` | 76 |
 | `RollProfileData` | 76 |
@@ -196,9 +200,9 @@ that changes size fails the build rather than corrupting a log silently.
 | `BaseStationStorageStatsData` | 26 |
 | `GnssCheckData` | 24 |
 | `PyroConfigData` | 24 |
+| `LoRaSlowData` | 23 |
+| `LoRaSlowData` | 23 |
 | `ISM6HG256Data` | 22 |
-| `LoRaSlowData` | 22 |
-| `LoRaSlowData` | 22 |
 | `ServoConfigData` | 22 |
 | `ServoConfigData` | 22 |
 | `GuidancePointData` | 20 |
@@ -238,6 +242,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `ServoReplayData` | 4 |
 | `i24le_t` | 3 |
 | `ImuRateConfigData` | 2 |
+| `SdrAlignCmdData` | 2 |
 | `CameraConfigData` | 1 |
 | `DataReadyFlags` | 1 |
 | `GnssLogConfigData` | 1 |
@@ -254,7 +259,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 
 ### app to Out Computer
 
-63 commands.
+64 commands.
 
 | Cmd | Constant | Description |
 |-----|----------|-------------|
@@ -320,6 +325,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 79 |  | GNSS log setting: [setting:1] — GNSS_LOG_DETAILED (0, every SBF block of a mosaic-G5) or GNSS_LOG_REDUCED (1,… |
 | 80 |  | The high-g's six-face alignment to the low-g: store and apply the fitted matrix and bias, or clear the matrix… |
 | 81 |  | GNSS antenna offset: [known:1][x_mm:2][y_mm:2][z_mm:2], LE — the antenna's phase centre from the FC's IMU in… |
+| 83 |  | The gnss-sdr-dev board's IMU on its flight board: save, clear or restart its mounting, or ask for its report… |
 | 200 |  | Bench-only: arm config-frame drops, see test_cfg_drop_count |
 
 > 8 of these have no comment in the dispatch and so no
@@ -428,7 +434,8 @@ Two bits per sensor at the shifts below, each holding a `SensorHealthState`
 | `LORA_NOISE_THRESHOLD_DB` | `0x0F` (15) | skip if peak > median + this |
 | `LORA_NUM_SATS_MASK` | `0x3F` (63) |  |
 | `LORA_NVS_SCHEMA_VERSION` | `0x04` (4) |  |
-| `LORA_PROTO_VERSION` | `0x05` (5) |  |
+| `LORA_PROTO_VERSION` | `0x06` (6) |  |
+| `LORA_PROTO_VERSION_V5` | `0x05` (5) | still read: see v6 above |
 | `LORA_SIM_BIT` | `0x40` (64) |  |
 | `LORA_SLOT_CYCLE` | `0x06` (6) |  |
 | `LORA_SLOW_SLOT` | `0x05` (5) | 0-based index within the cycle |

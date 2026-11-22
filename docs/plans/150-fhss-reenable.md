@@ -100,7 +100,8 @@ BW250), SF8/BW250/CR4:5, preamble 12, unconditional 2 Hz cadence.
 
 **Frame size, revised by #850.** The downlink is now two interleaved frames —
 a 55-byte FAST frame on 5 of every 6 slots and a 22-byte SLOW frame on the
-6th. Airtime and dwell are budgeted against `SIZE_OF_LORA_BUDGET`, which is
+6th (23 bytes since LoRa v6, which added a status byte; the dwell is unchanged,
+since it is budgeted on the fast frame). Airtime and dwell are budgeted against `SIZE_OF_LORA_BUDGET`, which is
 deliberately the LARGER (fast) frame: sizing the schedule on the slow one
 would under-count every fast frame and walk the link into the occupancy limit.
 The numbers below are therefore the 55-byte figures, and all of them moved in

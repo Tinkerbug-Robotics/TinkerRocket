@@ -36,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -45,18 +46,25 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.tinkerbug.tinkerrocket.app.theme.TrTheme
 import com.tinkerbug.tinkerrocket.protocol.AccelCalStatus
+import com.tinkerbug.tinkerrocket.protocol.SdrAlignCommand
+import com.tinkerbug.tinkerrocket.protocol.SdrAlignHave
+import com.tinkerbug.tinkerrocket.protocol.SdrAlignSaved
+import com.tinkerbug.tinkerrocket.protocol.SdrAlignStatus
 import com.tinkerbug.tinkerrocket.session.AccelCalReadout
 import com.tinkerbug.tinkerrocket.session.AccelSixFace
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.Face
 import com.tinkerbug.tinkerrocket.session.AccelSixFace.HighGWrite
 import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer
+import com.tinkerbug.tinkerrocket.session.BoardAlign
 import com.tinkerbug.tinkerrocket.session.DeviceSession
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -86,6 +94,15 @@ import kotlinx.coroutines.launch
  * then keeps the alignment and re-measures only the high-g's bias; a rocket
  * profile holding this board's sensor cal gets the new bias ([syncer]'s
  * adoptHighGBias), so its connect-time push does not put the old one back.
+ *
+ * With a gnss-sdr-dev board on J1 the same faces calibrate its IMU too: the
+ * board pairs each still second the flight computer sends it with its own
+ * reading, which gives its mounting and its accelerometer's scale and offset
+ * ([BoardAlign.Flow]; its report comes behind 0xD2, command 83 drives it).
+ * The first face starts the board afresh; each row says whether the board
+ * holds that face; after the flight computer's save the board's mounting is
+ * saved too, or the faces are asked for once more when the flight computer's
+ * offset moved under the board's calibration.
  */
 @Composable
 fun AccelCalScreen(
@@ -132,6 +149,37 @@ fun AccelCalScreen(
     var windowOpen by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
     var opened by remember { mutableStateOf(false) }
+
+    // The gnss-sdr-dev board's part, when the rocket has one. The flow is a
+    // plain class: boardRev moves on each of its changes, so what reads it
+    // recomposes.
+    val board = remember(deviceKey) { BoardAlign.Flow() }
+    var boardRev by remember { mutableIntStateOf(0) }
+    var confirmBoardClear by remember { mutableStateOf(false) }
+
+    /** Send the board's command and arm its timeout. */
+    fun runBoard(c: BoardAlign.Command?) {
+        boardRev++
+        if (c == null) return
+        val gen = board.generation
+        session.sendSdrAlign(c.op, c.id)
+        scope.launch {
+            delay(BoardAlign.TIMEOUT_MS)
+            board.timedOut(gen)
+            boardRev++
+        }
+    }
+
+    // The board's reports; its save once the flight computer's offset is in.
+    LaunchedEffect(session, board) {
+        session.sdrAlignStatus.value?.let { runBoard(board.take(it)) }
+        session.sdrAlignFrames.collect { runBoard(board.take(it)) }
+    }
+
+    /** The flight computer's offset saved and read back: the board's save, or the faces again. */
+    fun offsetWritten(w: AccelSixFace.WriteReport) {
+        if (!w.isClear && w.confirmed) runBoard(board.flightComputerSaved(w.sent))
+    }
 
     fun read() {
         if (op != null) return
@@ -184,6 +232,7 @@ fun AccelCalScreen(
             try {
                 val w = session.writeAccelCal(clear, sent, highG) { offset ->
                     lastWrite = offset
+                    offsetWritten(offset)
                     if (highG != null && !clear) op = AccelCalOp.SAVING_HIGH_G
                 }
                 w.highG?.let {
@@ -209,6 +258,9 @@ fun AccelCalScreen(
 
     fun measure() {
         if (op != null) return
+        // The first face of a set starts the GNSS board afresh.
+        val inUse = status?.takeIf { it.applied }?.offset ?: listOf(0f, 0f, 0f)
+        runBoard(board.faceStarting(fresh = faces.isEmpty(), offsetInUse = inUse))
         op = AccelCalOp.MEASURING
         windowOpen = false
         placementFace = null
@@ -244,7 +296,7 @@ fun AccelCalScreen(
         lastWrite = null
         scope.launch {
             try {
-                lastWrite = w.copy(readBack = session.readAccelCal())
+                lastWrite = w.copy(readBack = session.readAccelCal()).also { offsetWritten(it) }
             } finally {
                 op = null
             }
@@ -352,8 +404,14 @@ fun AccelCalScreen(
             Caption(AccelCalReadout.FACES_HOW)
             Caption(AccelCalReadout.FACES_NO_PICK)
             ReadoutText(live.line)
+            // boardRev: the board's flow changed (its status, its restart)
+            val boardFaces = boardRev.let { board.status?.takeIf { s -> s.boardPresent } }
+                ?.let { s -> if (board.started) BoardAlign.pairsByFace(s) else emptyMap() }
             Face.entries.forEach { face ->
-                FaceRow(face, faces[face], isLive = live.face == face, onTap = { placementFace = face })
+                FaceRow(
+                    face, faces[face], isLive = live.face == face, boardPairs = boardFaces?.let { it[face] ?: 0 },
+                    onTap = { placementFace = face },
+                )
             }
             placementFace?.let {
                 Text(AccelCalReadout.placement(it), style = MaterialTheme.typography.bodyMedium)
@@ -382,6 +440,9 @@ fun AccelCalScreen(
                     ReadoutText(r.line)
                     r.detail?.let { MonoCaption(it) }
                 }
+            }
+            boardRev.let { board.again }?.takeIf { board.boardPresent }?.let {
+                Text(BoardAlign.again(it), style = MaterialTheme.typography.bodyMedium, color = tr.statusWarn)
             }
             if (faces.isNotEmpty()) {
                 TextButton(onClick = ::startOver, enabled = op == null) { Text(AccelCalReadout.START_OVER) }
@@ -464,6 +525,18 @@ fun AccelCalScreen(
             }
         }
 
+        // ── The GNSS board's IMU ────────────────────────────────────────
+        boardRev.let { board.status }?.takeIf { it.boardPresent }?.let { b ->
+            Section(BoardAlign.HEADER) {
+                BoardSection(
+                    b, busy = board.isBusy, outcome = board.lastOutcome, canRun = canRun,
+                    onSave = { runBoard(board.request(SdrAlignCommand.OP_SAVE)) },
+                    onClear = { confirmBoardClear = true },
+                )
+                Caption(BoardAlign.FOOTER)
+            }
+        }
+
         // ── Clear: out of the way, and behind a confirmation ────────────
         Section(title = null) {
             if (op == AccelCalOp.CLEARING) {
@@ -483,6 +556,26 @@ fun AccelCalScreen(
             }
             Caption(if (highGStored) AccelCalReadout.CLEAR_ALL_FOOTER else AccelCalReadout.CLEAR_FOOTER)
         }
+    }
+
+    if (confirmBoardClear) {
+        AlertDialog(
+            onDismissRequest = { confirmBoardClear = false },
+            title = { Text(BoardAlign.CLEAR_TITLE) },
+            text = { Text(BoardAlign.CLEAR_MESSAGE) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmBoardClear = false
+                        runBoard(board.request(SdrAlignCommand.OP_CLEAR))
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = tr.statusBad),
+                ) { Text(BoardAlign.CLEAR_CONFIRM) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmBoardClear = false }) { Text(AccelCalReadout.CANCEL) }
+            },
+        )
     }
 
     if (confirmClear) {
@@ -572,7 +665,7 @@ private data class AccelLive(
  * "Now" tag.  A tap shows how to place the board for it.
  */
 @Composable
-private fun FaceRow(face: Face, window: AccelCalStatus?, isLive: Boolean, onTap: () -> Unit) {
+private fun FaceRow(face: Face, window: AccelCalStatus?, isLive: Boolean, boardPairs: Int?, onTap: () -> Unit) {
     val tr = TrTheme.colors
     val accent = MaterialTheme.colorScheme.primary
     val shape = RoundedCornerShape(8.dp)
@@ -602,6 +695,18 @@ private fun FaceRow(face: Face, window: AccelCalStatus?, isLive: Boolean, onTap:
         window?.let { w ->
             MonoCaption(AccelCalReadout.captured(AccelSixFace.identify(w.faceMean.map { it.toDouble() }).tiltDeg))
         }
+        // The GNSS board's readings on this face (iOS's antenna mark and count).
+        boardPairs?.let { n ->
+            Text(
+                if (n > 0) "◉ $n" else "○ –",
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = if (n > 0) tr.statusOk else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .padding(start = 8.dp)
+                    .semantics { contentDescription = if (n > 0) "GNSS board: $n readings" else "GNSS board: not yet" },
+            )
+        }
         if (isLive) {
             Text(
                 AccelCalReadout.NOW,
@@ -613,6 +718,63 @@ private fun FaceRow(face: Face, window: AccelCalStatus?, isLive: Boolean, onTap:
                     .padding(horizontal = 8.dp, vertical = 2.dp),
             )
         }
+    }
+}
+
+/** The GNSS board's IMU: its mounting, each axis's calibration, what is saved, why a face is not counting, its buttons. */
+@Composable
+private fun BoardSection(
+    b: SdrAlignStatus,
+    busy: Boolean,
+    outcome: BoardAlign.Outcome?,
+    canRun: Boolean,
+    onSave: () -> Unit,
+    onClear: () -> Unit,
+) {
+    val tr = TrTheme.colors
+    Text(
+        BoardAlign.mounting(b),
+        style = MaterialTheme.typography.bodyMedium,
+        color = if (b.have == SdrAlignHave.WHOLE) tr.statusOk else MaterialTheme.colorScheme.onSurface,
+    )
+    if (b.have != SdrAlignHave.NONE) MonoCaption(BoardAlign.rotation(b))
+    for (j in 0..2) ValueRow(BoardAlign.axisLabel(j), BoardAlign.axis(b, j))
+    Text(
+        BoardAlign.saved(b),
+        style = MaterialTheme.typography.bodyMedium,
+        color = if (b.saved == SdrAlignSaved.SAME) tr.statusOk else MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    BoardAlign.moved(b)?.let {
+        Text(
+            it,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (BoardAlign.movedWarns(b)) tr.statusWarn else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    BoardAlign.poorFit(b)?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = tr.statusWarn) }
+    (BoardAlign.blocked(b) ?: BoardAlign.lastRest(b))?.let {
+        Text(it, style = MaterialTheme.typography.bodyMedium, color = tr.statusWarn)
+    }
+    if (busy) {
+        Busy(BoardAlign.BUSY)
+    } else {
+        Button(
+            onClick = onSave,
+            enabled = canRun && b.have == SdrAlignHave.WHOLE,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(BoardAlign.SAVE) }
+        TextButton(
+            onClick = onClear,
+            enabled = canRun,
+            colors = ButtonDefaults.textButtonColors(contentColor = tr.statusBad),
+        ) { Text(BoardAlign.CLEAR) }
+    }
+    outcome?.let { o ->
+        Text(
+            BoardAlign.outcome(o),
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (BoardAlign.isGood(o)) tr.statusOk else tr.statusWarn,
+        )
     }
 }
 

@@ -314,7 +314,8 @@ TEST(BsUplinkGapGate, PreambleTwelveAirtimes) {
     // preamble (LORA_PREAMBLE_LEN in both config.h). The old preamble-8 default
     // under-counts every uplink by ~4 ms.
     EXPECT_EQ(timeOnAirMs(SIZE_OF_LORA_FAST, 8, 250.0f, 5, LORA_TELEM_PREAMBLE_SYMS), 102u);
-    EXPECT_EQ(timeOnAirMs(SIZE_OF_LORA_SLOW, 8, 250.0f, 5, LORA_TELEM_PREAMBLE_SYMS), 56u);
+    EXPECT_EQ(timeOnAirMs(SIZE_OF_LORA_SLOW, 8, 250.0f, 5, LORA_TELEM_PREAMBLE_SYMS), 61u);      // v6: 23 B
+    EXPECT_EQ(timeOnAirMs(SIZE_OF_LORA_SLOW_V5, 8, 250.0f, 5, LORA_TELEM_PREAMBLE_SYMS), 56u);   // v5: 22 B
     EXPECT_EQ(kFast, 102u);
     // Uplink packets (6 B header + payload).
     EXPECT_EQ(pkt(6),  35u);   // heartbeat / sim start

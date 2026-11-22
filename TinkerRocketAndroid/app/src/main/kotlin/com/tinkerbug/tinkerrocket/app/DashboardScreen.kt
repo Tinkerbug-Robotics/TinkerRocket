@@ -47,6 +47,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import com.tinkerbug.tinkerrocket.app.theme.TrPyroContinuityBadge
 import com.tinkerbug.tinkerrocket.protocol.IMUOrientationMode
@@ -1080,7 +1082,7 @@ internal fun RocketStatusCards(
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         healthRows.chunked(perLine).forEach { line ->
                             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                line.forEach { row -> HealthDot(row.name, row.state) }
+                                line.forEach { row -> HealthDot(row.name, row.state, row.detail) }
                             }
                         }
                     }
@@ -1263,8 +1265,13 @@ private fun FlagChip(label: String, on: Boolean) {
 /** #1070: iOS HealthDotRow.maxPerLine — keeps a line legible on the narrowest phone. */
 private const val HEALTH_DOTS_PER_LINE = 6
 
+/**
+ * One dot of the health row. [detail] (the row's plain-language line, e.g. the
+ * GNSS IMU's) becomes the merged node's TalkBack state; rows without one are
+ * left exactly as they were. `internal` for the module's Compose tests.
+ */
 @Composable
-private fun HealthDot(name: String, state: TelemetryData.SensorHealth) {
+internal fun HealthDot(name: String, state: TelemetryData.SensorHealth, detail: String? = null) {
     val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val color = when (state) {
         TelemetryData.SensorHealth.OK -> tr.statusOk
@@ -1272,7 +1279,12 @@ private fun HealthDot(name: String, state: TelemetryData.SensorHealth) {
         TelemetryData.SensorHealth.BAD -> tr.statusBad
         else -> tr.statusIdle
     }
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    val a11y = if (detail != null) {
+        Modifier.semantics(mergeDescendants = true) { stateDescription = detail }
+    } else {
+        Modifier
+    }
+    Column(a11y, horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
             "●",
             color = color,

@@ -1667,6 +1667,30 @@ static constexpr uint8_t FCS_RAW_VOTES_WITHHELD = (1u << 1);
 static constexpr uint8_t  FCS_SCAP_SENSE      = (1u << 2);
 static constexpr uint16_t FCS_SCAP_NO_READING = 0xFFFFu;
 
+// Bits 3-4: the gnss-sdr-dev board's own IMU, as the flight computer reads it
+// from the board's frames (flight_computer main/sdr_imu_status_policy.h): a
+// sensor-health state (SH_NA, SH_OK, SH_DEGRADED, SH_BAD, defined further
+// down). SH_NA: no gnss-sdr-dev board on J1 (or an image without its driver);
+// SH_OK: the board's IMU aids its tracking loops; SH_DEGRADED: the board is
+// there and its IMU does not aid (off, or no mounting into this flight
+// computer yet: the six-face calibration sets it); SH_BAD: the board refused
+// or dropped its IMU (its at-rest check failed, its samples stopped). The out
+// computer passes it to the apps' health dots (telemetry key "gi"). An FC
+// image from before this sends 0 there: SH_NA.
+static constexpr uint8_t FCS_GNSS_IMU_SHIFT = 3;
+static constexpr uint8_t FCS_GNSS_IMU_MASK  = (uint8_t)(0x3u << FCS_GNSS_IMU_SHIFT);
+static inline uint8_t fcStatusWithGnssImu(uint8_t flags, uint8_t state)
+{
+    return (uint8_t)((flags & (uint8_t)~FCS_GNSS_IMU_MASK) | (uint8_t)((state & 0x3u) << FCS_GNSS_IMU_SHIFT));
+}
+// The out computer's side: the state in an FC_STATUS_MSG payload (v1 or v2;
+// 0 = SH_NA for a payload too short to carry the flags).
+static inline uint8_t fcStatusGnssImu(const uint8_t* payload, size_t len)
+{
+    if (payload == nullptr || len < FC_STATUS_V1_SIZE) return 0;
+    return (uint8_t)((payload[offsetof(FcStatusData, flags)] & FCS_GNSS_IMU_MASK) >> FCS_GNSS_IMU_SHIFT);
+}
+
 // The FC side: the scap_mv field for a V_SCAP reading in volts. NaN (no
 // reading) becomes the sentinel, a reading at or below zero is 0 mV, and the
 // top is clamped under the sentinel, so a reading never passes for "no
@@ -2200,6 +2224,95 @@ typedef struct __attribute__((packed))
     AccelCalHighGStatus hg;
 } AccelCalStatusFrame;
 static_assert(sizeof(AccelCalStatusFrame) == 114, "AccelCalStatusFrame must be 114 bytes");
+
+// ── The gnss-sdr-dev board's IMU on its flight board ──
+// The board on J1 has its own IMU (U10), and finds how it is mounted, and
+// calibrates its accelerometer, against this flight computer: each rest the
+// flight computer sends it (its mean specific force over a still second,
+// TinkerRocket's 4002 sub-type 5) paired with its own mean over the same
+// window is one direction seen in both frames. Two poses apart give the whole
+// rotation, six faces every axis's scale and bias (the gnss repo's
+// gnss/imu_align.h). The board keeps the result in its own NVS and reports it
+// in its 4001 sub-type 5 (sdr_align_policy.h); the flight computer relays it
+// here, its poses turned into its own IMU's frame -- the six-face board frame
+// above, so the apps match them to the same faces -- and sends the board the
+// apps' commands (4002 sub-type 6), again until the board echoes their id.
+static constexpr uint8_t SDR_ALIGN_STATUS_VER  = 1;
+static constexpr uint8_t SDR_ALIGN_POSES       = 8;      // the board keeps this many at most
+// SdrAlignCmdData.op (BLE 83), as the board's 4002 sub-type 6.
+static constexpr uint8_t SDR_ALIGN_OP_SAVE     = 1;      // the mounting and calibration in use, to the board's NVS
+static constexpr uint8_t SDR_ALIGN_OP_CLEAR    = 2;      // forget the one in use and the saved one
+static constexpr uint8_t SDR_ALIGN_OP_RESTART  = 3;      // forget the one in use, keep the saved one: a new procedure
+static constexpr uint8_t SDR_ALIGN_OP_REPORT   = 4;      // the board's report now (no change)
+// SdrAlignStatusData.flags
+static constexpr uint8_t SDRA_BOARD    = 1u << 0;  // the receiver on J1 is the gnss-sdr-dev board
+static constexpr uint8_t SDRA_REPORT   = 1u << 1;  // its report is held: one under 3 s old
+static constexpr uint8_t SDRA_TIME     = 1u << 2;  // the board can place a rest (GPS time, or a tq-0 rest's arrival)
+static constexpr uint8_t SDRA_LINE     = 1u << 3;  // this side's clock line is valid: its rests go stamped (else tq 0)
+static constexpr uint8_t SDRA_AUTOSAVE = 1u << 4;  // the board saves by its own rule this boot (any command turns it off)
+static constexpr uint8_t SDRA_BODY     = 1u << 5;  // the board solved against the body: turned here with the mounting
+static constexpr uint8_t SDRA_STILL    = 1u << 6;  // this side's last 1 s window was still
+// SdrAlignStatusData.have / from / saved / last_rest / cmd_res, as the board's
+static constexpr uint8_t SDRA_HAVE_NONE = 0, SDRA_HAVE_TILT = 1, SDRA_HAVE_WHOLE = 2;
+static constexpr uint8_t SDRA_FROM_NONE = 0, SDRA_FROM_RESTS = 1, SDRA_FROM_SAVED = 2, SDRA_FROM_SAVED_RESTS = 3;
+static constexpr uint8_t SDRA_SAVED_NONE = 0, SDRA_SAVED_SAME = 1, SDRA_SAVED_DIFFERS = 2;
+static constexpr uint8_t SDRA_REST_NONE = 0, SDRA_REST_PAIRED = 1, SDRA_REST_MOVING = 2, SDRA_REST_SHORT = 3,
+                         SDRA_REST_LATE = 4, SDRA_REST_NOT_1G = 5, SDRA_REST_NO_TIME = 6, SDRA_REST_IMU_OFF = 7;
+static constexpr uint8_t SDRA_RES_NONE = 0, SDRA_RES_DONE = 1, SDRA_RES_NOTHING = 2,
+                         SDRA_RES_REFUSED = 3,   // a flight phase, a test frame, or the board's IMU off
+                         SDRA_RES_NVS = 4, SDRA_RES_UNKNOWN = 5;
+// SdrAlignStatusData.fc_cmd_state: this side's command to the board
+static constexpr uint8_t SDRA_CMD_IDLE     = 0;   // none since boot
+static constexpr uint8_t SDRA_CMD_SENDING  = 1;   // going out every 200 ms until echoed
+static constexpr uint8_t SDRA_CMD_ECHOED   = 2;   // the board echoed its id: cmd_res says what it did
+static constexpr uint8_t SDRA_CMD_NO_ANSWER = 3;  // no echo within 3 s
+static constexpr uint8_t SDRA_CMD_REFUSED  = 4;   // not sent: in flight, after a flight, or no board on J1
+
+// SDR_ALIGN_CMD_MSG payload (BLE 83): the op and the app's id for it, which
+// the board echoes (1-255; the app's next request takes the next one).
+typedef struct __attribute__((packed))
+{
+    uint8_t op;   // SDR_ALIGN_OP_*
+    uint8_t id;
+} SdrAlignCmdData;
+static_assert(sizeof(SdrAlignCmdData) == 2, "SdrAlignCmdData must be 2 bytes");
+
+// SDR_ALIGN_STATUS_MSG (FC->OC over I2S), forwarded to the app on file-ops
+// behind 0xD2: the board's report and this side's part in it.
+typedef struct __attribute__((packed))
+{
+    uint8_t  ver;                // SDR_ALIGN_STATUS_VER
+    uint8_t  flags;              // SDRA_*
+    uint8_t  imu;                // the board's IMU watch: 0 off (no pairing), 1 watching, 2 aiding
+    uint8_t  have;               // SDRA_HAVE_*
+    uint8_t  from;               // SDRA_FROM_*: what the one in use comes from
+    uint8_t  saved;              // SDRA_SAVED_*
+    uint8_t  n_pose;             // poses held, 0..SDR_ALIGN_POSES
+    uint8_t  cal_axes;           // bit j: the board's accelerometer axis j calibrated
+    uint8_t  last_rest;          // SDRA_REST_*: what the board did with the last rest
+    uint8_t  gen;                // the board's solution's generation (+1 on each change, mod 256)
+    uint8_t  n_rest;             // rests the board received, mod 256
+    uint8_t  n_pair;             //   and paired, mod 256
+    uint8_t  cmd_id;             // the board's echo: the last command it acted on
+    uint8_t  cmd_op;             //   its op
+    uint8_t  cmd_res;            //   SDRA_RES_*
+    uint8_t  fc_cmd_state;       // SDRA_CMD_*: this side's last command
+    uint8_t  fc_cmd_op;
+    uint8_t  fc_cmd_id;
+    uint8_t  rests_sent;         // this side's rests sent, mod 256
+    uint16_t rest_age_ds;        // since this side's last rest, 0.1 s (65535: none, or that long)
+    uint16_t board_age_ds;       // since the board's last report, 0.1 s (65535: none, or that long)
+    float    spread_deg;         // whole: the poses apart, the most short of opposite
+    float    resid_deg;          // the poses off the solution, the largest
+    float    cal_rms_mps2;       // the calibration fit's rms
+    float    q[4];               // the mounting: U10 to this IMU's (board) frame, Hamilton, scalar first, q0 >= 0
+    float    scale[3];           // the board's accelerometer, its axes: f_read = s f_true + b (1 and 0 uncalibrated)
+    float    bias_mps2[3];
+    int8_t   pose_dir[SDR_ALIGN_POSES][3];  // each pose's specific force's direction, this IMU's frame, 1/127
+    uint8_t  pose_pairs[SDR_ALIGN_POSES];   //   and its pairs (255: that or more); n_pose of each are used
+    float    moved_deg;          // from SDRA_FROM_SAVED_RESTS only: the rail pose off the saved rotation (5.1: that or more)
+} SdrAlignStatusData;
+static_assert(sizeof(SdrAlignStatusData) == 111, "SdrAlignStatusData must be 111 bytes");
 
 // ── Pad calibration (#1600 phase 5) ──────────────────────────────────────────
 // OC→FC, after PAD_CAL_PENDING: the GPS broadcast (Klobuchar) ionosphere the
@@ -2797,7 +2910,14 @@ static constexpr uint8_t IDENTITY_NVS_SCHEMA_VERSION = 1;
 //       checked — see the note on LoRaFrameHeader and #837 item 14, which
 //       recorded that the constant had been decorative (and its own changelog
 //       wrong: it described v4 as 62 B against a 65-byte struct) since #191.
-static constexpr uint8_t LORA_PROTO_VERSION = 5;
+//   v6: the SLOW frame grows one byte (22 -> 23 B), `status`: bits 0-1 the
+//       gnss-sdr-dev board's IMU aiding (LORA_SLOW_GNSS_IMU_MASK), 2-7 spare.
+//       The FAST frame is unchanged. A v6 base station still reads v5 frames
+//       (loraTelemetryLenOk: a v5 SLOW frame is v6's without the byte), so a
+//       base station can be flashed ahead of its rockets; a v5 base station
+//       drops v6 frames as a version mismatch, loudly, as before.
+static constexpr uint8_t LORA_PROTO_VERSION = 6;
+static constexpr uint8_t LORA_PROTO_VERSION_V5 = 5;   // still read: see v6 above
 
 // Slow-hop dwell (#133) — how many consecutive packets the rocket
 // transmits on a single channel before advancing.  Dwell > 1 gives the
@@ -2953,9 +3073,15 @@ typedef struct __attribute__((packed))
     // missing measurement as absent, not as a measured zero.
     uint16_t cam_ma;
     uint16_t servo_ma;
+
+    // v6: bits 0-1 the gnss-sdr-dev board's IMU aiding as the flight computer
+    // reports it (a SensorHealthState; 0 = no board, or a rocket without it),
+    // the apps' "GNSS IMU" dot on a relayed link; bits 2-7 spare (0).
+    uint8_t  status;
 } LoRaSlowData;
 
-static_assert(sizeof(LoRaSlowData) == 22, "LoRaSlowData must be 22 bytes");
+static_assert(sizeof(LoRaSlowData) == 23, "LoRaSlowData must be 23 bytes");
+static constexpr uint8_t LORA_SLOW_GNSS_IMU_MASK = 0x03u;   // LoRaSlowData.status bits 0-1
 
 // The two frames MUST agree on the shared prefix, or dispatch reads garbage.
 static_assert(offsetof(LoRaFastData, hdr) == 0, "header must lead the fast frame");
@@ -3071,6 +3197,8 @@ typedef struct
     bool    burnout_detected;       // #191 NSF_BURNOUT relay (flags2 bit 0)
     uint8_t imu_orient_code;        // #390: b2r code 0-23; LORA2_ORIENT_CODE_NONE = none
     uint8_t imu_orient_mode;        // #390: LORA2_OMODE_* (0 = not reported)
+    uint8_t gnss_imu;               // v6 SLOW status bits 0-1: the gnss-sdr-dev board's
+                                    // IMU aiding, a SensorHealthState (0 = not reported)
 } LoRaDataSI;
 
 
@@ -3372,6 +3500,13 @@ static constexpr uint8_t HG_CAL_APPLY_MSG      = 0x86;  // 49-byte HighGCalApply
 // takes the next free one here. See OcIdentityData.
 static constexpr uint8_t OC_IDENTITY_MSG       = 0x87;  // OC→self: 68-byte OcIdentityData, ~1 Hz while logging, straight to the log
 
+// The gnss-sdr-dev board's IMU mounting and calibration on its flight board
+// (SdrAlignStatusData, SdrAlignCmdData; BLE 83): the board's own report,
+// relayed, and the app's commands to it, through the flight computer.
+static constexpr uint8_t SDR_ALIGN_STATUS_MSG  = 0x88;  // FC→OC over I2S: 111-byte SdrAlignStatusData, 1 Hz on the ground with the board on J1
+static constexpr uint8_t SDR_ALIGN_CMD_PENDING = 0x89;  // OC→FC: payload follows as SDR_ALIGN_CMD_MSG
+static constexpr uint8_t SDR_ALIGN_CMD_MSG     = 0x8A;  // OC→FC: 2-byte SdrAlignCmdData payload
+
 // FC→OC over I2S, emitted once at the PRELAUNCH→INFLIGHT transition. A
 // snapshot of the active roll-control / IMU settings so the per-flight .bin
 // (and the .json the app derives from it) records what actually flew (#165).
@@ -3609,8 +3744,8 @@ typedef struct __attribute__((packed))
     int16_t  snr_db_x10;     // dB  * 10
     uint32_t rx_freq_hz;     // channel it was received on (hop state)
     // The raw LoRa frame follows immediately: SIZE_OF_LORA_FAST or
-    // SIZE_OF_LORA_SLOW bytes, verbatim, self-describing through its own
-    // ver_type. NOT repeated here — the record's length byte gives the frame
+    // SIZE_OF_LORA_SLOW bytes (SIZE_OF_LORA_SLOW_V5 from a v5 rocket),
+    // verbatim, self-describing through its own ver_type. NOT repeated here — the record's length byte gives the frame
     // length as (payload_len - sizeof(BsLoRaRxHeader)), so the two can never
     // disagree the way a duplicated length field can.
 } BsLoRaRxHeader;
@@ -4831,7 +4966,7 @@ static constexpr size_t SIZE_OF_NON_SENSOR_DATA = sizeof(NonSensorData);
 // loud compile error on firmware and host builds alike. Values were
 // derived from the declared layouts; the compiler proves each line.
 static_assert(sizeof(LoRaFastData) == 55, "LoRaFastData wire size");
-static_assert(sizeof(LoRaSlowData) == 22, "LoRaSlowData wire size");
+static_assert(sizeof(LoRaSlowData) == 23, "LoRaSlowData wire size");
 // Shared header — byte-identical in both frames, which is what makes
 // dispatch-before-you-know-the-size safe. If these ever diverge, a receiver
 // reads ver_type out of the middle of a payload field.
@@ -4876,6 +5011,7 @@ static_assert(offsetof(LoRaSlowData, current_ma) == 15, "slow.current_ma moved")
 static_assert(offsetof(LoRaSlowData, soc_i8) == 17, "slow.soc_i8 moved");
 static_assert(offsetof(LoRaSlowData, cam_ma) == 18, "slow.cam_ma moved");
 static_assert(offsetof(LoRaSlowData, servo_ma) == 20, "slow.servo_ma moved");
+static_assert(offsetof(LoRaSlowData, status) == 22, "slow.status moved");
 
 static_assert(sizeof(GNSSData) == 42, "GNSSData wire size");
 static_assert(offsetof(GNSSData, time_us) == 0, "GNSSData.time_us moved");
@@ -4978,6 +5114,22 @@ static_assert(sizeof(LoRaChannelSetSelection) == 1 + LORA_SKIP_MASK_MAX_BYTES,
 
 static constexpr size_t SIZE_OF_LORA_FAST       = sizeof(LoRaFastData);
 static constexpr size_t SIZE_OF_LORA_SLOW       = sizeof(LoRaSlowData);
+// A v5 rocket's SLOW frame: v6's without its last byte (status). Still read.
+static constexpr size_t SIZE_OF_LORA_SLOW_V5    = SIZE_OF_LORA_SLOW - 1;
+static_assert(offsetof(LoRaSlowData, status) == SIZE_OF_LORA_SLOW_V5,
+              "v6 only appends to the v5 SLOW frame");
+
+// Whether a received frame is telemetry this build reads: its header's
+// version and type, and its length, agree. v6 frames, and v5 ones (the same
+// FAST frame, the SLOW one a byte shorter). Anything else is a beacon (if it
+// starts with LORA_BEACON_SYNC), corrupt, or another build's.
+static inline constexpr bool loraTelemetryLenOk(uint8_t version, uint8_t frame_type, size_t len)
+{
+    return (version == LORA_PROTO_VERSION || version == LORA_PROTO_VERSION_V5)
+        && ((frame_type == LORA_FRAME_FAST && len == SIZE_OF_LORA_FAST)
+            || (frame_type == LORA_FRAME_SLOW
+                && len == (version == LORA_PROTO_VERSION ? SIZE_OF_LORA_SLOW : SIZE_OF_LORA_SLOW_V5)));
+}
 
 // How many NUL pad bytes a name beacon needs so its length cannot be mistaken
 // for a telemetry frame (#1147 item 4).
@@ -4985,7 +5137,7 @@ static constexpr size_t SIZE_OF_LORA_SLOW       = sizeof(LoRaSlowData);
 // The beacon is [0xBE][network_id][rocket_id][unit_name...] with no length
 // field, and the base station tells beacons from telemetry PURELY by length:
 // `rx_len >= 3 && rx_len != SIZE_OF_LORA_FAST && rx_len != SIZE_OF_LORA_SLOW
-// && rx_buf[0] == LORA_BEACON_SYNC`.  SIZE_OF_LORA_SLOW is 22, so a
+// && rx_buf[0] == LORA_BEACON_SYNC`.  SIZE_OF_LORA_SLOW was 22 (v5), so a
 // 19-character rocket name produced exactly 22 bytes and fell through to the
 // telemetry branch, where ver_type is read from unit_name[2] and almost never
 // matches LORA_PROTO_VERSION -- so the beacon was counted as a version
@@ -4999,12 +5151,15 @@ static constexpr size_t SIZE_OF_LORA_SLOW       = sizeof(LoRaSlowData);
 // early -- the name it displays is unchanged.
 //
 // Loops rather than returning a flat 1 so that a future frame size landing on
-// beacon_len + 1 cannot silently reintroduce the collision.
+// beacon_len + 1 cannot silently reintroduce the collision. v6: v5's SLOW
+// size too, since a v6 base station still reads v5 frames (and a v5 base
+// station reads that length as telemetry).
 static inline size_t loraBeaconPadBytes(size_t beacon_len)
 {
     size_t pad = 0;
     while ((beacon_len + pad) == SIZE_OF_LORA_FAST ||
-           (beacon_len + pad) == SIZE_OF_LORA_SLOW)
+           (beacon_len + pad) == SIZE_OF_LORA_SLOW ||
+           (beacon_len + pad) == SIZE_OF_LORA_SLOW_V5)
     {
         pad++;
     }

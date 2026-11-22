@@ -18,19 +18,27 @@ import kotlin.math.withSign
  * exactly like the rocket computer's log — and the CSV is generated here.
  *
  * THE FORWARD-FILL is the load-bearing part.  A log holds two interleaved frame
- * types: a 55-byte FAST frame five slots out of six and a 22-byte SLOW frame on
- * the sixth.  Each carries a subset, so a row is built by merging the frame into
+ * types: a 55-byte FAST frame five slots out of six and a SLOW frame on the
+ * sixth.  Each carries a subset, so a row is built by merging the frame into
  * a running accumulator per rocket, exactly as the base station does in RAM.
  * That is what keeps the rows rectangular; without it a slow frame would blank
  * the position and a fast frame would blank the battery, and the CSV would
  * alternate between half-empty rows.
  *
+ * TWO LORA PROTOCOL VERSIONS are read, as the v6 base station reads them
+ * (`loraTelemetryLenOk`): v6, whose SLOW frame is 23 bytes (v5's 22 plus a
+ * `status` byte at offset 22: bits 0-1 the gnss-sdr-dev board's IMU aiding),
+ * and v5, whose SLOW frame is 22 bytes with no status (read as 0).  The FAST
+ * frame is 55 bytes in both.  The status byte reaches [Row.gnssImu] only; the
+ * CSV layout is the same for both versions.
+ *
  * Ports of [ecefToGeodetic] and [eulerFromQuat] are deliberately literal
  * transcriptions of `TR_Coordinates::ecefToGeodetic` and
  * `SensorConverter::eulerFromQuat` rather than tidier equivalents, so the
  * Python, Kotlin and Swift renderings cannot drift in the last decimal.  All
- * three are pinned against the same golden, which is packed by the REAL
- * firmware packers (tests_cpp/fixtures/wire/csv/bs_tiny.bin).
+ * three are pinned against the same golden, whose inputs are packed by the
+ * REAL firmware packers (tests_cpp/fixtures/wire/csv/bs_tiny.bin, a v6 log,
+ * and bs_tiny_v5.bin, the same log as a v5 rocket sent it).
  *
  * iOS twin: `BSLogCSVGenerator.swift`.
  */
@@ -50,9 +58,13 @@ public class BsLogCsvGenerator {
         internal const val BS_EVENT_MSG = 0xFD
 
         internal const val SIZE_OF_LORA_FAST = 55
-        internal const val SIZE_OF_LORA_SLOW = 22
-        internal const val LORA_PROTO_VERSION = 5
+        internal const val SIZE_OF_LORA_SLOW = 23      // v6: v5's 22 + status
+        internal const val SIZE_OF_LORA_SLOW_V5 = 22   // a v5 rocket: no status byte
+        internal const val LORA_PROTO_VERSION = 6
+        internal const val LORA_PROTO_VERSION_V5 = 5   // still read
+        internal const val LORA_FRAME_FAST = 0x0
         internal const val LORA_FRAME_SLOW = 0x1
+        internal const val LORA_SLOW_GNSS_IMU_MASK = 0x03   // status bits 0-1
 
         internal const val LORA_HDR_LEN = 7
         internal const val BS_RX_HDR_LEN = 12
@@ -91,6 +103,18 @@ public class BsLogCsvGenerator {
         /** True when [bytes] opens with the base-station log magic. */
         public fun isBaseStationLog(bytes: ByteArray): Boolean =
             bytes.size >= MAGIC.size && MAGIC.indices.all { bytes[it] == MAGIC[it] }
+
+        /**
+         * The firmware's `loraTelemetryLenOk`: a frame is telemetry this build
+         * reads only as one of (v6, FAST, 55), (v6, SLOW, 23), (v5, FAST, 55)
+         * or (v5, SLOW, 22).  Type and length must agree, so a corrupt type
+         * nibble can never send a short frame into the fast decoder.
+         */
+        internal fun loraTelemetryLenOk(version: Int, frameType: Int, len: Int): Boolean =
+            (version == LORA_PROTO_VERSION || version == LORA_PROTO_VERSION_V5) &&
+                ((frameType == LORA_FRAME_FAST && len == SIZE_OF_LORA_FAST) ||
+                    (frameType == LORA_FRAME_SLOW &&
+                        len == (if (version == LORA_PROTO_VERSION) SIZE_OF_LORA_SLOW else SIZE_OF_LORA_SLOW_V5)))
 
         /**
          * printf("%.Nf") semantics.
@@ -154,6 +178,8 @@ public class BsLogCsvGenerator {
         var soc = 0.0
         var camA = 0.0
         var servoA = 0.0
+        /** v6 status bits 0-1, a SensorHealthState (0 from a v5 rocket).  No CSV column. */
+        var gnssImu = 0
 
         var gap = -1
 
@@ -170,7 +196,7 @@ public class BsLogCsvGenerator {
             r.pressureAlt = pressureAlt; r.altRate = altRate; r.speed = speed
             r.maxAlt = maxAlt; r.maxSpeed = maxSpeed
             r.voltage = voltage; r.current = current; r.soc = soc
-            r.camA = camA; r.servoA = servoA
+            r.camA = camA; r.servoA = servoA; r.gnssImu = gnssImu
             return r
         }
     }
@@ -244,7 +270,11 @@ public class BsLogCsvGenerator {
         r.speed = sqrt(ve * ve + vn * vn + vu * vu)
     }
 
-    /** Writes ONLY what the slow frame carries. */
+    /**
+     * Writes ONLY what the slow frame carries.  [f] is a v6 frame (23 bytes) or
+     * a v5 one (22, no status byte): the status then reads as 0, no board
+     * reported, as the firmware's unpackLoRaSlowV5Bytes does.
+     */
     private fun unpackSlow(f: ByteArray, r: Row) {
         val o = LORA_HDR_LEN
         r.maxAlt = i24(f, o).toDouble()
@@ -254,6 +284,7 @@ public class BsLogCsvGenerator {
         r.soc = i8(f, o + 10).toDouble()
         r.camA = u16(f, o + 11) / 1000.0
         r.servoA = u16(f, o + 13) / 1000.0
+        r.gnssImu = if (f.size == SIZE_OF_LORA_SLOW) u8(f, o + 15) and LORA_SLOW_GNSS_IMU_MASK else 0
     }
 
     // ---- geodesy / attitude ----------------------------------------------
@@ -342,12 +373,14 @@ public class BsLogCsvGenerator {
             val snrX10 = i16(payload, 6)
             val freqHz = u32(payload, 8)
             val frame = payload.copyOfRange(BS_RX_HDR_LEN, payload.size)
-            if (frame.size != SIZE_OF_LORA_FAST && frame.size != SIZE_OF_LORA_SLOW) continue
+            if (frame.size < LORA_HDR_LEN) continue
 
+            // v6 or v5, FAST or SLOW, at the length that version gives that
+            // type; anything else is skipped, as the base station drops it.
             val probe = Row()
             val verType = unpackHeader(frame, probe)
-            if ((verType shr 4) != LORA_PROTO_VERSION) continue
             val ftype = verType and 0x0F
+            if (!loraTelemetryLenOk(verType shr 4, ftype, frame.size)) continue
 
             // Forward-fill: start from this rocket's last known state and let
             // the frame overwrite only what it actually contains.
