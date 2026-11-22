@@ -290,7 +290,23 @@ struct EpochAid
     bool    att = false;      // a flight computer attitude is in the receiver
     bool    nav = false;      // a navigation state under 1 s old is held
     bool    late = false;     // read with the board's latch ring more than an epoch behind
+    uint8_t why = 0;          // version 2 on: why the board's IMU does not aid the loops now (kWhy*);
+                              // 0 it aids, or was never given (version 1: always 0)
     uint8_t fc_frames = 0;    // CRC-good 4002 frames the board has received, mod 256
+};
+// The block's `why` (the gnss repo's RX_ACC_*: receiver/README.md "The RTCM
+// stream"): what keeps the board's IMU out of its loops.
+enum : uint8_t
+{
+    kWhyAids = 0,       // it aids (or was never given)
+    kWhyLetGo = 1,      // turned off
+    kWhyStale = 2,      // none given for 30 ms
+    kWhyGap = 3,        // a gap in its samples
+    kWhyAttitude = 4,   // its attitude lapsed (no flight computer attitude)
+    kWhyNaN = 5,        // not a number
+    kWhyRange = 6,      // its sensor at the end of its range
+    kWhyPadCheck = 7,   // refused by the pad check
+    kWhyNoMount = 8,    // asked to aid, but no mounting into the flight computer yet: watched only
 };
 // Any 4001 sub-type 1 SdrRtcm's decodeTrEpoch takes: true, with its shift
 // and the block if it has one.

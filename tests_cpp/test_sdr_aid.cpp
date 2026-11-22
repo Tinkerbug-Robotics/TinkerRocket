@@ -978,7 +978,14 @@ TEST(SdrAid, TheBoardsEpochs)
     EXPECT_TRUE(a.att);
     EXPECT_TRUE(a.nav);
     EXPECT_FALSE(a.late);
+    EXPECT_EQ(a.why, kWhyPadCheck);   // version 2: why the IMU does not aid (version 1's reserved bits)
     EXPECT_EQ(a.fc_frames, 0x3C);
+
+    // Version 1's bits there are reserved: never read as a reason
+    ASSERT_TRUE(decodeEpochAid(kE1.data(), kE1.size(), a));
+    EXPECT_EQ(a.why, kWhyAids);
+    ASSERT_TRUE(decodeEpochAid(kE2.data(), kE2.size(), a));   // version 15: read (its reserved bits are 0)
+    EXPECT_EQ(a.why, 0);
 }
 
 TEST(SdrAid, AnOlderEpochHasNoBlock)

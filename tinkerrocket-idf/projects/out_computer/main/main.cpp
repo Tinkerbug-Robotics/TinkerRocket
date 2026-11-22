@@ -1364,6 +1364,19 @@ static uint32_t fc_status_last_ms = 0;
 // different frames are 200 ms apart and harmless.
 static std::atomic<uint32_t> fc_scap_report{0};
 static std::atomic<uint32_t> fc_scap_rx_ms{0};
+// The gnss-sdr-dev board's IMU aiding, from the last FC_STATUS_MSG's flags
+// (FCS_GNSS_IMU_*, a SensorHealthState; 0 from an FC without the board or an
+// image from before it), for the apps' dot ("gi"). Written by processFrame,
+// read by the telemetry builders (fcGnssImuNow), hence atomic.
+static std::atomic<uint8_t> fc_gnss_imu{0};
+
+// The gnss-sdr-dev board's IMU aiding as the FC last reported it, while that
+// report is recent (as fcCameraEngagedNow, below); 0 (not sent to the apps) otherwise.
+static uint8_t fcGnssImuNow()
+{
+    if ((millis() - fc_status_last_ms) >= 1500U) return 0;
+    return fc_gnss_imu.load(std::memory_order_relaxed);
+}
 static bool peripherals_initialized = false; // Deferred init for peripherals behind PWR_PIN
 // #1228: the flight-logger half of initPeripherals() has a life of its own.
 // peripherals_initialized says the radio and the FC link are up; oc_logger_ok
@@ -5920,6 +5933,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             }
             fc_camera_engaged_prev = fc_cam;
             fc_status_last_ms = millis();
+            fc_gnss_imu.store(fcStatusGnssImu(payload, payload_len), std::memory_order_relaxed);
 
             // #1409: the hold-up cap, where the sense line is the FC's. A v1
             // frame (an FC image from before #1409) has none: ABSENT.
@@ -9297,6 +9311,7 @@ static void printStats()
         // #1166: hold-up cap voltage + verdict (NaN / 0 = not on this board).
         ble_telem.scap_voltage = holdup_scap_v;
         ble_telem.holdup_state = holdup_tracker.state;
+        ble_telem.gnss_imu = fcGnssImuNow();
         fillModemTelem(ble_telem);
         fillPyroFaultTelem(ble_telem);   // #1553
         ble_telem.latitude = NAN;
@@ -9849,6 +9864,7 @@ static void printStats()
     // #1166: hold-up cap voltage + verdict (NaN / 0 = not on this board).
     ble_telem.scap_voltage = holdup_scap_v;
     ble_telem.holdup_state = holdup_tracker.state;
+    ble_telem.gnss_imu = fcGnssImuNow();
     fillModemTelem(ble_telem);
     fillPyroFaultTelem(ble_telem);   // #1553
     if (latest_gnss_valid)

@@ -533,6 +533,8 @@ bool decodeEpochAid(const uint8_t* frame, size_t len, EpochAid& out)
     out.att = get(m, at + 16, 1) != 0;
     out.nav = get(m, at + 17, 1) != 0;
     out.late = get(m, at + 18, 1) != 0;
+    if (out.ver >= 2)
+        out.why = static_cast<uint8_t>(get(m, at + 19, 4));   // version 1's reserved bits
     out.fc_frames = static_cast<uint8_t>(get(m, at + 24, 8));
     return true;
 }

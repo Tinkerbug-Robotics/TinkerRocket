@@ -2296,6 +2296,10 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     addFloat("scap", data.scap_voltage, 2);
     if (data.holdup_state != 0) { addUint("hu", data.holdup_state); }
 
+    // The gnss-sdr-dev board's IMU aiding (a SensorHealthState): absent with
+    // no board, so every other build pays nothing. The apps' "GNSS IMU" dot.
+    if (data.gnss_imu != 0) { addUint("gi", data.gnss_imu); }
+
     // #1553: the pyro fault-current trip, same shape — absent until there is
     // something to say. A channel that did nothing in a flight has no other
     // explanation on the phone, so this rides tier 2 with the hold-up.

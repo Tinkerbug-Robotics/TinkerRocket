@@ -99,6 +99,7 @@
 #include "sdr_phase_policy.h"     // the flight phase the board's tracking loops follow (host-tested)
 #include "sdr_aid_policy.h"       // the attitude and the rests the board is sent beside it (host-tested)
 #include "sdr_align_policy.h"     // the board IMU's mounting: its report to the apps, their commands to it (host-tested)
+#include "sdr_imu_status_policy.h" // whether the board's IMU aids its loops: the apps' health dot (host-tested)
 #endif
 #if TR_RAW_NAV_MOSAIC
 #include <SbfNav.h>               // the mosaic-G5's navigation blocks as gps_eph_t (TR_GNSSReceiverMosaic_Serial)
@@ -10314,6 +10315,7 @@ static sdr_phase::IgnitionCue sdr_ignition_cue;
 static sdr_aid_fc::Sender     sdr_aid_sender;
 static sdr_aid_fc::RestDetector sdr_rest;
 static sdr_align::Relay       sdr_align_relay;                  // the board IMU's mounting (sdrAlignStep)
+static sdr_imu_status::Tracker sdr_imu_tracker;                 // the board IMU's aiding, for FC_STATUS_MSG
 static int64_t                sdr_tx_last_us = INT64_MIN / 2;   // the last 4002 frame of any sender
 
 static void sdrPhaseStep()
@@ -10399,15 +10401,24 @@ static void sdrAidNoteUpdate(const EkfIMUData& imu)
 // (4001 sub-type 2) is the attitude's place. Followed on the ground, held
 // through a flight (a few km of it turn the attitude under 0.05 deg, and the
 // board's fixes in a boost can be off) unless there is none yet. Its IMU's
-// mounting (sub-type 5) goes to the relay (sdrAlignStep).
+// mounting (sub-type 5) goes to the relay (sdrAlignStep), and with each
+// epoch's aiding block (sub-type 1) to the IMU's health dot (sdr_imu_tracker).
 static void sdrAidNoteBoardFrame(const uint8_t* frame, size_t len)
 {
     if (sensor_collector_hw.gnssType() != GNSS_TYPE_SDR)
         return;
+    if (sdr_rtcm::trSubType(frame, len) == sdr_rtcm::kTrEpoch)
+    {
+        sdr_aid::EpochAid aid;
+        if (sdr_aid::decodeEpochAid(frame, len, aid))
+            sdr_imu_tracker.noteAid(aid, esp_timer_get_time());
+        return;
+    }
     sdr_rtcm::TrAlign align;
     if (sdr_rtcm::decodeTrAlign(frame, len, align))
     {
         sdr_align_relay.noteReport(align, esp_timer_get_time());
+        sdr_imu_tracker.noteAlign(align, esp_timer_get_time());
         return;
     }
     sdr_rtcm::TrFix fix;
@@ -16598,6 +16609,12 @@ static void loop_fc()
                 // the raw vote guard latched (it withholds the filter's apogee votes only
                 // where config::RAW_VOTE_GUARD_ACTS; otherwise it is the would-have)
                 if (raw_guard.latched) fc_status.flags |= FCS_RAW_VOTES_WITHHELD;
+#endif
+#if ((defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)) && !(defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID)
+                // the gnss-sdr-dev board's own IMU: aiding its loops or not (the apps' dot)
+                fc_status.flags = fcStatusWithGnssImu(
+                    fc_status.flags,
+                    sdr_imu_tracker.state(sensor_collector_hw.gnssType() == GNSS_TYPE_SDR, esp_timer_get_time()));
 #endif
                 // #1409: the hold-up cap, where this board's sense line is
                 // ours (V10/V11): the latest once-a-second reading.

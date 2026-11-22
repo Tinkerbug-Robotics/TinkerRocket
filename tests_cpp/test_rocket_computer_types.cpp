@@ -194,6 +194,36 @@ TEST(FcStatusScap1409, NoSenseOrAV1FrameSaysNothing) {
     EXPECT_EQ(fcStatusScapReport(nullptr, sizeof(FcStatusData), nullptr), FC_SCAP_ABSENT);
 }
 
+// The gnss-sdr-dev board's IMU aiding (FCS_GNSS_IMU_*, a SensorHealthState in
+// bits 3-4), the apps' "GNSS IMU" dot.
+TEST(FcStatusGnssImu, BitsSitAboveTheOthers) {
+    EXPECT_EQ(FCS_GNSS_IMU_MASK, 0x18);
+    EXPECT_EQ(FCS_GNSS_IMU_MASK & (FCS_CAMERA_ENGAGED | FCS_RAW_VOTES_WITHHELD | FCS_SCAP_SENSE), 0);
+}
+
+TEST(FcStatusGnssImu, SetLeavesTheOtherFlags) {
+    const uint8_t others = FCS_CAMERA_ENGAGED | FCS_RAW_VOTES_WITHHELD | FCS_SCAP_SENSE | 0xE0;
+    for (uint8_t st : {SH_NA, SH_OK, SH_DEGRADED, SH_BAD})
+    {
+        const uint8_t f = fcStatusWithGnssImu(others, st);
+        EXPECT_EQ(f & (uint8_t)~FCS_GNSS_IMU_MASK, others);
+        const auto b = fcStatusBytes(f, 2500);
+        EXPECT_EQ(fcStatusGnssImu(b.data(), b.size()), st);
+        EXPECT_EQ(fcStatusGnssImu(b.data(), FC_STATUS_V1_SIZE), st);   // in v1's flags too
+    }
+    // a new state replaces the old, and only two bits are taken
+    EXPECT_EQ(fcStatusWithGnssImu(fcStatusWithGnssImu(0, SH_BAD), SH_OK), (uint8_t)(SH_OK << FCS_GNSS_IMU_SHIFT));
+    EXPECT_EQ(fcStatusWithGnssImu(0, 0xFF), FCS_GNSS_IMU_MASK);
+}
+
+TEST(FcStatusGnssImu, AnOlderImageOrNoFrameSaysNoBoard) {
+    // An FC image from before this leaves the bits 0: SH_NA, not sent to the apps.
+    const auto old = fcStatusBytes(FCS_CAMERA_ENGAGED | FCS_SCAP_SENSE, 2500);
+    EXPECT_EQ(fcStatusGnssImu(old.data(), old.size()), SH_NA);
+    EXPECT_EQ(fcStatusGnssImu(old.data(), FC_STATUS_V1_SIZE - 1), SH_NA);
+    EXPECT_EQ(fcStatusGnssImu(nullptr, sizeof(FcStatusData)), SH_NA);
+}
+
 TEST(FcStatusScap1409, FieldRoundTripsThroughTheReport) {
     for (float v : {0.05f, 1.0f, 2.2f, 2.5f, 2.7f})
     {

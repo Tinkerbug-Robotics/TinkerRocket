@@ -177,6 +177,11 @@ MSG_FC_STATUS         = 0x92  # FcStatusData: the FC's own camera truth, 5 Hz (#
 # (the V10/V11 flight computer reads the hold-up cap); 0xFFFF = no reading.
 FCS_SCAP_SENSE        = 0x04
 FCS_SCAP_NO_READING   = 0xFFFF
+# Bits 3-4: the gnss-sdr-dev board's IMU aiding, a SensorHealthState
+# (0 no board on J1 or an image from before it, 1 aiding, 2 not aiding: off
+# or no mounting yet, 3 refused or dropped), in v1 and v2 frames alike.
+FCS_GNSS_IMU_SHIFT    = 3
+FCS_GNSS_IMU_MASK     = 0x18
 MSG_NON_SENSOR        = 0xA5
 MSG_POWER             = 0xA6
 MSG_START_LOGGING     = 0xA7
@@ -1978,6 +1983,9 @@ def parse_binary_file(filepath):
                     # next launch. Always False on every other image.
                     "fc_raw_votes_withheld": bool(fcs_flags & 0x02),
                     "scap_v": scap_v,
+                    # the gnss-sdr-dev board's IMU aiding (FCS_GNSS_IMU_*): 0
+                    # none reported, 1 aiding, 2 not aiding, 3 refused/dropped
+                    "gnss_imu": (fcs_flags & FCS_GNSS_IMU_MASK) >> FCS_GNSS_IMU_SHIFT,
                 })
             elif msg_type == MSG_SNAPSHOT and msg_len == SNAPSHOT_LEN:
                 # #752: the FC's crash-recovery snapshot, 10 Hz through INFLIGHT.

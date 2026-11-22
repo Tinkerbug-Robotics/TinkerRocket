@@ -1667,6 +1667,30 @@ static constexpr uint8_t FCS_RAW_VOTES_WITHHELD = (1u << 1);
 static constexpr uint8_t  FCS_SCAP_SENSE      = (1u << 2);
 static constexpr uint16_t FCS_SCAP_NO_READING = 0xFFFFu;
 
+// Bits 3-4: the gnss-sdr-dev board's own IMU, as the flight computer reads it
+// from the board's frames (flight_computer main/sdr_imu_status_policy.h): a
+// sensor-health state (SH_NA, SH_OK, SH_DEGRADED, SH_BAD, defined further
+// down). SH_NA: no gnss-sdr-dev board on J1 (or an image without its driver);
+// SH_OK: the board's IMU aids its tracking loops; SH_DEGRADED: the board is
+// there and its IMU does not aid (off, or no mounting into this flight
+// computer yet: the six-face calibration sets it); SH_BAD: the board refused
+// or dropped its IMU (its at-rest check failed, its samples stopped). The out
+// computer passes it to the apps' health dots (telemetry key "gi"). An FC
+// image from before this sends 0 there: SH_NA.
+static constexpr uint8_t FCS_GNSS_IMU_SHIFT = 3;
+static constexpr uint8_t FCS_GNSS_IMU_MASK  = (uint8_t)(0x3u << FCS_GNSS_IMU_SHIFT);
+static inline uint8_t fcStatusWithGnssImu(uint8_t flags, uint8_t state)
+{
+    return (uint8_t)((flags & (uint8_t)~FCS_GNSS_IMU_MASK) | (uint8_t)((state & 0x3u) << FCS_GNSS_IMU_SHIFT));
+}
+// The out computer's side: the state in an FC_STATUS_MSG payload (v1 or v2;
+// 0 = SH_NA for a payload too short to carry the flags).
+static inline uint8_t fcStatusGnssImu(const uint8_t* payload, size_t len)
+{
+    if (payload == nullptr || len < FC_STATUS_V1_SIZE) return 0;
+    return (uint8_t)((payload[offsetof(FcStatusData, flags)] & FCS_GNSS_IMU_MASK) >> FCS_GNSS_IMU_SHIFT);
+}
+
 // The FC side: the scap_mv field for a V_SCAP reading in volts. NaN (no
 // reading) becomes the sentinel, a reading at or below zero is 0 mV, and the
 // top is clamped under the sentinel, so a reading never passes for "no
