@@ -20,7 +20,8 @@
 //             so it may move
 //   0x1E      binary measurement output at the rate: 0xE5 raw, 0xDF state,
 //             0xE7/0xE8 status, the navigation subframes of GPS, Galileo and
-//             BeiDou (0x0D)
+//             BeiDou (0x0D), and GLONASS's strings where the driver asks
+//             (0x0F: TR_RAW_GLONASS)
 //   0x0E      position update rate, the same (with 0x1E at 20 Hz and this
 //             left at 1 Hz, 0xE5 came at 0.4 Hz)
 //   0x64/0x17 navigation mode airborne (5): in auto (0) the rig's flights
@@ -62,7 +63,7 @@ struct LinkConfig
     uint8_t  rate_hz       = 20;     // 1, 2, 4, 5, 8, 10 or 20
     uint8_t  nav_mode      = 5;      // airborne
     uint8_t  elev_mask_deg = 5;
-    uint8_t  subframes     = 0x0D;   // 1 GPS, 4 Galileo, 8 BeiDou
+    uint8_t  subframes     = 0x0D;   // 1 GPS, 2 GLONASS (0xE1 strings), 4 Galileo, 8 BeiDou
     bool     flash         = false;  // SRAM only: a power cycle undoes the setup
     uint32_t probe_ms      = 700;    // listen at one baud for a frame or NMEA
     uint32_t switch_ms     = 300;    // after 0x05: let the ACK and the switch finish

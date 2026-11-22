@@ -12,8 +12,9 @@
 //     mode with the kinematic function (the PX1105R sends raw measurements
 //     only as an RTK base: AN0037), airborne navigation mode, power normal, a
 //     5 deg elevation mask, 0xE5 raw measurements, 0xDF navigation state, 0xE7
-//     channel status and the GPS / Galileo / BeiDou navigation subframes at
-//     20 Hz; all in the receiver's SRAM, so a power cycle undoes it and the
+//     channel status and the GPS / Galileo / BeiDou navigation subframes (and
+//     GLONASS's strings with TR_RAW_GLONASS) at 20 Hz; all in the receiver's
+//     SRAM, so a power cycle undoes it and the
 //     next begin() sets it up again;
 //   - GNSSData from 0xDF (its ECEF fix; the height is above the ellipsoid:
 //     the receiver sends no geoid in binary, geoidSeparationM is false);
@@ -182,10 +183,10 @@ class TR_GNSSReceiverPX1105RSerial : private skytraq::FrameSink
             float    line_rms_ms = 0.0f;
             float    late90_ms = 0.0f;
             uint32_t line_restarts = 0;
-            // navigation data, by GPS, Galileo, BeiDou
-            uint32_t eph_queued[3] = {};
-            uint32_t eph_dropped[3] = {};    // the queue was full
-            uint32_t nav_frames[3] = {};     // subframes / pages read
+            // navigation data, by GPS, Galileo, BeiDou, GLONASS (TR_RAW_GLONASS)
+            uint32_t eph_queued[4] = {};
+            uint32_t eph_dropped[4] = {};    // the queue was full
+            uint32_t nav_frames[4] = {};     // subframes / pages / strings read
             uint32_t nav_refused = 0;        // refused by the decoder (parity, CRC, cutover, GEO, ...)
             uint32_t ions = 0;               // ionospheres decoded
             // fixes

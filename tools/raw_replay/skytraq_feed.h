@@ -179,6 +179,10 @@ private:
             time_sync_.addSample(gps_s, end_us);
         const bool on_grid = px1105r::onFuseGrid(e5_.tow_ms, cfg_.fuse_period_ms);
         te = gnss_raw::TimedRawEpoch();
+        if (cfg_.glonass)
+            for (int i = 0; i < e5_.n; ++i)   // each GLONASS slot's frequency number, as the driver notes it
+                if (e5_.cell[i].gnss == skytraq::kGnssGlo)
+                    nav_.noteGloFreq(e5_.cell[i].svid, static_cast<int>(e5_.cell[i].glo_freq) - 7);
         const int cells = px1105r::rawEpochFromE5(e5_, lock_, te.epoch, cfg_.glonass);
         n_.cells_listed += e5_.n_listed;
         if (!on_grid)
@@ -238,7 +242,8 @@ private:
         gps_eph_t eph;
         int8_t io[8];
         const int week = clk_.have ? static_cast<int>(clk_.rx_ms / 604800000LL) : 0;
-        const skytraq::NavStatus st = nav_.add(body, len, week, eph, io);
+        const double now_gps_s = clk_.have ? static_cast<double>(clk_.rx_ms) * 1.0e-3 : 0.0;   // a GLONASS tb's day
+        const skytraq::NavStatus st = nav_.add(body, len, week, eph, io, now_gps_s);
         Kind k = Kind::OTHER;
         switch (st)
         {
@@ -268,6 +273,7 @@ private:
         case skytraq::NavStatus::PART:
         case skytraq::NavStatus::UNUSED:
         case skytraq::NavStatus::NO_WEEK:
+        case skytraq::NavStatus::NO_TIME:
             break;
         default:
             n_.nav_refused++;

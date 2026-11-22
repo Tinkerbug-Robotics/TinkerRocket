@@ -514,6 +514,20 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 // band's Dopplers alone. Replayed on the 2026-10-24 Goblin flight (five
 // satellites' L1 C/A or B1I Dopplers 3-19 m/s off through the boost): the
 // boost's attitude error 2.0 -> 0.8 deg.
+// GLONASS from the PX1105R (2026-11-22, branch fc/v10-px1105r-glonass): the
+// receiver asked for its GLONASS strings, their ephemerides decoded, and the
+// 0xE5's GLONASS L1OF Dopplers fused with the rest (pseudoranges not: the
+// filter has no GLONASS clock offset yet). Off until a bench capture pins the
+// 0xE1 strings' layout (SkyTraqNav.h: none has been seen from this receiver);
+// -DTR_RAW_GLONASS=1 turns it on. The 11-21 flight replayed with it
+// (tools/raw_replay --glonass 1): the burn and the coast unchanged (the
+// Doppler change check held GLONASS's with the rest), a third more Dopplers
+// after. No default #define here (the M1 image sees no new macro,
+// tools/m1_identity.sh): the PX1105R driver reads 0 where it is not set.
+#if defined(TR_RAW_GLONASS) && TR_RAW_GLONASS && !TR_RAW_NAV_PX1105R
+#error "TR_RAW_GLONASS needs the PX1105R's raw-GNSS filter (TR_RAW_NAV_PX1105R=1): only its driver asks for GLONASS"
+#endif
+
 #ifndef TR_RAW_MULTIBAND
 #define TR_RAW_MULTIBAND TR_RAW_NAV_MOSAIC
 #endif

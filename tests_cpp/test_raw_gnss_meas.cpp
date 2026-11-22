@@ -211,6 +211,60 @@ TEST(RawGnssMeas, ASatelliteMissingLongerThanTheGapHasRelocked)
     EXPECT_DOUBLE_EQ(b.relockAge(GNSS_SYS_GPS, 7, 1.0), 2.0);
 }
 
+TEST(RawGnssMeas, AGlonassSatelliteGivesItsDopplerNotItsCode)
+{
+    // R11's broadcast set of 2026-11-21 (tb 16:15 UTC; gnss/eph.h's GLONASS layout), 866 s on: the builder's
+    // default GLONASS signal fuses the Doppler and reads the code for the transmit time alone (pr_fused false)
+    gps_eph_t e{};
+    e.valid = 1;
+    e.sys = GNSS_SYS_GLO;
+    e.prn = 11;
+    e.week = 2445;
+    e.toe = e.toc = 576918.0;
+    e.iode = e.iodc = 77;
+    e.af0 = -1.867301762104e-06;
+    e.af1 = 9.094947017729e-13;
+    const double pos[3] = {-1196560.058594, -19449728.02734, 16479836.42578};
+    const double vel[3] = {926.9247055054, 2058.210372925, 2495.192527771};
+    const double acc[3] = {0.0, -1.862645149231e-06, -2.793967723846e-06};
+    for (int k = 0; k < 3; ++k)
+    {
+        e.glo_pos[k] = pos[k];
+        e.glo_vel[k] = vel[k];
+        e.glo_acc[k] = acc[k];
+    }
+    EphemerisStore store;
+    ASSERT_TRUE(store.add(e));
+    RawEpoch ep;
+    ep.tow_s = 576918.0 + 866.0;
+    ep.n = 1;
+    ep.obs[0] = gnss_raw::RawObs{GNSS_SYS_GLO, 11, true, true, 34.0f, 2.05e7, -172.9, 0};
+    RawMeasBuilder b;
+    RawMeas m[RawEpoch::kMaxObs];
+    ASSERT_EQ(b.build(ep, store, nullptr, 0.0, m, RawEpoch::kMaxObs), 1);
+    EXPECT_EQ(m[0].sys, GNSS_SYS_GLO);
+    EXPECT_EQ(m[0].prn, 11);
+    EXPECT_FALSE(m[0].has_pr);
+    EXPECT_TRUE(m[0].has_rr);
+    EXPECT_FALSE(m[0].has_cr);
+    // the satellite where gnss/eph.h puts it at the transmit time, and its clock drift back in the Doppler
+    // (as the clock goes back into the code: rr = rate + c x the clock's rate, gamma_n's)
+    double p[3], v[3], clk;
+    const double t_tx = ep.tow_s - 2.05e7 / GNSS_C - gps_sat_clock(&e, ep.tow_s - 2.05e7 / GNSS_C);
+    gps_sat_pos(&e, t_tx, p, v, &clk);
+    for (int k = 0; k < 3; ++k)
+    {
+        EXPECT_NEAR(m[0].sat_pos[k], p[k], 0.01) << k;
+        EXPECT_NEAR(m[0].sat_vel[k], v[k], 0.01) << k;
+    }
+    EXPECT_NEAR(m[0].rr, -172.9 + GNSS_C * e.af1, 1e-6);
+    // under the GLONASS floor (the builder's default has none; a profile's 25 dB-Hz does)
+    RawMeasBuilder::Config c;
+    c.sig[GNSS_SYS_GLO].cn0_min_pr = 35.0f;
+    RawMeasBuilder b2(c);
+    EXPECT_EQ(b2.build(ep, store, nullptr, 0.0, m, RawEpoch::kMaxObs), 0);
+}
+
 TEST(RawGnssMeas, Lc86EpochKeepsOneL1SignalOfGpsGalileoAndBeiDou)
 {
     rtcm3::MsmEpoch me{};

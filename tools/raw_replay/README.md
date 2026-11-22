@@ -911,8 +911,11 @@ byte before and after, 2026-10-21: a V9 mosaic log and the Beetle's ec10).
   none): each satellite on its own carrier, 1602 MHz + k x 562.5 kHz, its Dopplers fused, its pseudorange read for
   the transmit time alone (`pr_fused` false: the filter has no GLONASS clock offset yet). Their orbits come from
   `--rinex`, whose GLONASS records rinex_nav reads only with it (the state at tb integrated, gnss/eph.h; tb moved
-  from UTC by 18 s, filed from tb - 15 min, when a receiver first has the set). The 11-21 flight: the change check
-  holds GLONASS's Dopplers with the rest through the burn and the coast; after it lets go, a third more Dopplers.
+  from UTC by 18 s, filed from tb - 15 min, when a receiver first has the set). A log whose receiver was asked for
+  GLONASS (the image's TR_RAW_GLONASS) carries its strings (0xE1): skytraq_feed.h decodes them as the driver does
+  (SkyTraqNav.h), each slot's frequency number from the 0xE5, and files them as it files the others. The 11-21
+  flight: the change check holds GLONASS's Dopplers with the rest through the burn and the coast; after it lets
+  go, a third more Dopplers.
 
 Beside it:
 - `px_events.py`: a rig capture of the PX1105R (`<host_t> B <hex body>`) beside the same simulated flight's sensors

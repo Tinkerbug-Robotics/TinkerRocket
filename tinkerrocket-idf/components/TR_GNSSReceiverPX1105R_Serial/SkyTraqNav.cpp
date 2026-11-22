@@ -269,12 +269,68 @@ NavStatus decodeBds(const uint8_t (&sf)[3][28], int prn, gps_eph_t& e)
     return NavStatus::EPHEMERIS;
 }
 
+// ── GLONASS strings (ICD L1/L2 FDMA 5.1 table 4.5; RTKLIB rcvraw.c decode_glostr) ──
+// Each string's 72 data bits as the 0xE1 carries them: bit 0 is the ICD's bit 80.
+
+// A sign-magnitude field (the ICD's: the top bit the sign, 1 negative).
+double getbitg(const uint8_t* b, size_t pos, int len)
+{
+    const double m = static_cast<double>(getbitu(b, pos + 1, len - 1));
+    return getbitu(b, pos, 1) ? -m : m;
+}
+
+// Strings 1-4 into e (its time and week left to the caller). Returns the
+// slot string 4 names.
+int decodeGlo(const uint8_t (&s)[4][9], gps_eph_t& e)
+{
+    std::memset(&e, 0, sizeof(e));
+    e.sys = GNSS_SYS_GLO;
+    // string 1: -- 2, P1 2, tk 12 (h 5, min 6, 30 s 1), x' 24, x'' 5, x 27
+    e.glo_vel[0] = getbitg(s[0], 16, 24) * P2(-20) * 1.0e3;
+    e.glo_acc[0] = getbitg(s[0], 40, 5) * P2(-30) * 1.0e3;
+    e.glo_pos[0] = getbitg(s[0], 45, 27) * P2(-11) * 1.0e3;
+    // string 2: Bn 3, P2 1, tb 7, -- 5, y' 24, y'' 5, y 27
+    const uint32_t bn = getbitu(s[1], 0, 3);
+    const uint32_t tb = getbitu(s[1], 4, 7);
+    e.glo_vel[1] = getbitg(s[1], 16, 24) * P2(-20) * 1.0e3;
+    e.glo_acc[1] = getbitg(s[1], 40, 5) * P2(-30) * 1.0e3;
+    e.glo_pos[1] = getbitg(s[1], 45, 27) * P2(-11) * 1.0e3;
+    // string 3: P3 1, gamma_n 11, -- 1, P 2, l_n 1, z' 24, z'' 5, z 27
+    const double gamma_n = getbitg(s[2], 1, 11) * P2(-40);
+    const uint32_t ln = getbitu(s[2], 15, 1);
+    e.glo_vel[2] = getbitg(s[2], 16, 24) * P2(-20) * 1.0e3;
+    e.glo_acc[2] = getbitg(s[2], 40, 5) * P2(-30) * 1.0e3;
+    e.glo_pos[2] = getbitg(s[2], 45, 27) * P2(-11) * 1.0e3;
+    // string 4: tau_n 22, dtau_n 5, E_n 5, -- 14, P4 1, F_T 4, -- 3, N_T 11, n 5, M 2
+    const double tau_n = getbitg(s[3], 0, 22) * P2(-30);
+    e.ura = static_cast<int>(getbitu(s[3], 47, 4));          // F_T
+    const int slot = static_cast<int>(getbitu(s[3], 65, 5));
+    e.af0 = -tau_n;
+    e.af1 = gamma_n;
+    e.iode = e.iodc = static_cast<int>(tb);
+    e.health = static_cast<int>(((bn >> 2) & 1u) | (ln << 1));
+    e.toe = static_cast<double>(tb);                          // tb's index until the caller places it
+    return slot;
+}
+
+// tb (15 min steps of the Moscow day) as continuous GPS seconds: on the UTC
+// day that puts it within 12 h of the receiver's time gps_s.
+double gloToeGpsS(uint32_t tb, double gps_s)
+{
+    const double utc = gps_s - kGpsMinusUtcS;
+    const double day0 = std::floor(utc / 86400.0) * 86400.0;
+    double t = day0 + static_cast<double>(tb) * 900.0 - 10800.0;   // Moscow -> UTC
+    if (t < utc - 43200.0) t += 86400.0;
+    else if (t > utc + 43200.0) t -= 86400.0;
+    return t + kGpsMinusUtcS;
+}
+
 }  // namespace
 
 bool isNavMessage(const uint8_t* payload, size_t len)
 {
     if (payload == nullptr || len < 1) return false;
-    if (payload[0] == kNavIdGps || payload[0] == kNavIdBdsD1) return true;
+    if (payload[0] == kNavIdGps || payload[0] == kNavIdBdsD1 || payload[0] == kNavIdGlo) return true;
     return payload[0] == kNavIdGnss && len >= 3 && payload[2] == kNavGnssGalE1;
 }
 
@@ -299,6 +355,7 @@ const char* navStatusName(NavStatus s)
         case NavStatus::FRAME_MISMATCH: return "FRAME_MISMATCH";
         case NavStatus::SVID_MISMATCH: return "SVID_MISMATCH";
         case NavStatus::NO_WEEK: return "NO_WEEK";
+        case NavStatus::NO_TIME: return "NO_TIME";
         case NavStatus::COUNT: break;
     }
     return "?";
@@ -309,9 +366,12 @@ void NavAssembler::reset()
     std::memset(gps_, 0, sizeof(gps_));
     std::memset(gal_, 0, sizeof(gal_));
     std::memset(bds_, 0, sizeof(bds_));
+    std::memset(glo_, 0, sizeof(glo_));
     for (auto& s : gps_) s.last_issue = kNoIssue;
     for (auto& s : gal_) s.last_issue = kNoIssue;
     for (auto& s : bds_) s.last_issue = kNoIssue;
+    for (auto& s : glo_) s.last_issue = kNoIssue;
+    for (auto& k : glo_k_) k = kGloKUnknown;
     std::memset(&counters_, 0, sizeof(counters_));
     iono_tow_s_ = 0;
     iono_day_ = 0;
@@ -326,7 +386,8 @@ void NavAssembler::issued(const gps_eph_t& e, uint32_t& last_issue)
     last_issue = key;
 }
 
-NavStatus NavAssembler::add(const uint8_t* payload, size_t len, int near_gps_week, gps_eph_t& eph, int8_t iono[8])
+NavStatus NavAssembler::add(const uint8_t* payload, size_t len, int near_gps_week, gps_eph_t& eph, int8_t iono[8],
+                            double gps_s)
 {
     NavStatus st = NavStatus::NOT_NAV;
     if (payload != nullptr && len >= 1)
@@ -340,6 +401,10 @@ NavStatus NavAssembler::add(const uint8_t* payload, size_t len, int near_gps_wee
             case kNavIdBdsD1:
                 counters_.frames[GNSS_SYS_BDS]++;
                 st = addBds(payload, len, eph);
+                break;
+            case kNavIdGlo:
+                counters_.frames[GNSS_SYS_GLO]++;
+                st = addGlo(payload, len, gps_s, eph);
                 break;
             case kNavIdGnss:
                 if (len < 3)
@@ -474,6 +539,41 @@ NavStatus NavAssembler::addBds(const uint8_t* p, size_t len, gps_eph_t& eph)
     issued(e, s.last_issue);
     eph = e;
     return st;
+}
+
+void NavAssembler::noteGloFreq(int slot, int k)
+{
+    if (slot >= 1 && slot <= kGloSlots && k >= -7 && k <= 6)
+        glo_k_[slot] = static_cast<int8_t>(k);
+}
+
+NavStatus NavAssembler::addGlo(const uint8_t* p, size_t len, double gps_s, gps_eph_t& eph)
+{
+    if (len < kNavGloLen) return NavStatus::SHORT;
+    const int slot = p[1] > 64 ? p[1] - 64 : p[1];
+    if (slot < 1 || slot > kGloSlots) return NavStatus::BAD_PRN;
+    const int m = p[2];
+    if (m == 0) return NavStatus::BAD_SUBFRAME;
+    if (m > 4) return NavStatus::UNUSED;                      // string 5 and the almanac's
+    GloSat& g = glo_[slot - 1];
+    std::memcpy(g.str[m - 1], p + 3, 9);
+    g.at[m - 1] = gps_s;
+    g.have |= static_cast<uint8_t>(1u << (m - 1));
+    if (m != 4 || (g.have & 0x0F) != 0x0F) return NavStatus::PART;
+    if (!(gps_s > 0.0)) return NavStatus::NO_TIME;
+    for (int k = 0; k < 3; ++k)
+        if (!(g.at[k] > 0.0) || std::fabs(gps_s - g.at[k]) > kGloFrameS) return NavStatus::FRAME_MISMATCH;
+    gps_eph_t e;
+    if (decodeGlo(g.str, e) != slot) return NavStatus::SVID_MISMATCH;
+    const double toe = gloToeGpsS(static_cast<uint32_t>(e.toe), gps_s);
+    e.week = static_cast<int>(std::floor(toe / 604800.0));
+    e.toe = e.toc = toe - e.week * 604800.0;
+    e.prn = slot;
+    e.glo_k = glo_k_[slot] == kGloKUnknown ? 0 : glo_k_[slot];
+    e.valid = 1;
+    issued(e, g.last_issue);
+    eph = e;
+    return NavStatus::EPHEMERIS;
 }
 
 }  // namespace skytraq

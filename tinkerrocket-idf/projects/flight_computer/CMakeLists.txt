@@ -115,6 +115,12 @@ if(DEFINED TR_RAW_DESCENT_IMU_FREE)
     add_compile_definitions(TR_RAW_DESCENT_IMU_FREE=${TR_RAW_DESCENT_IMU_FREE})
     message(STATUS "TR_RAW_DESCENT_IMU_FREE=${TR_RAW_DESCENT_IMU_FREE} -- the descent without the IMU set by hand")
 endif()
+# GLONASS from the PX1105R (main/config.h; off): -DTR_RAW_GLONASS=1 asks the
+# receiver for its GLONASS strings and fuses its GLONASS Dopplers.
+if(DEFINED TR_RAW_GLONASS)
+    add_compile_definitions(TR_RAW_GLONASS=${TR_RAW_GLONASS})
+    message(STATUS "TR_RAW_GLONASS=${TR_RAW_GLONASS} -- GLONASS from the PX1105R set by hand")
+endif()
 # Each satellite's other bands with its L1 band's Doppler (main/config.h; on in
 # the mosaic image): -DTR_RAW_MULTIBAND=0 flies the L1 band's Dopplers alone.
 if(DEFINED TR_RAW_MULTIBAND)

@@ -43,6 +43,7 @@ enum MsgId : uint8_t
     MSG_ELEV_CNR_MASK = 0xB0,   // reply to 0x2F
     MSG_POWER_MODE    = 0xB9,   // reply to 0x15
     MSG_GPS_SUBFRAME  = 0xE0,
+    MSG_GLO_STRING    = 0xE1,   // a GLONASS string (SkyTraqNav.h), with the 0x1E mask's bit 1
     MSG_BDS_D1        = 0xE2,
     MSG_RCV_STATE     = 0xDF,
     MSG_EXT_RAW       = 0xE5,

@@ -510,7 +510,7 @@ def sbf_epoch_rate(blocks, number=SBF_MEAS_EPOCH):
 # the setup's queries.
 SKYTRAQ_MSG_NAMES = {
     0xE5: "ext raw meas (E5)", 0xDF: "nav state (DF)", 0xE7: "channel status (E7)",
-    0xE8: "elev/azimuth (E8)", 0xE0: "GPS subframe (E0)", 0xE2: "BDS D1 subframe (E2)",
+    0xE8: "elev/azimuth (E8)", 0xE0: "GPS subframe (E0)", 0xE1: "GLONASS string (E1)", 0xE2: "BDS D1 subframe (E2)",
     0xE6: "GAL I/NAV page (E6)", 0x83: "ACK", 0x84: "NACK", 0x80: "sw version (80)",
 }
 SKYTRAQ_EXT_RAW = 0xE5
