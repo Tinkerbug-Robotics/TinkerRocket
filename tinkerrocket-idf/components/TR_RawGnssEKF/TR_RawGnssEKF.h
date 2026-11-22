@@ -379,7 +379,7 @@ struct RawGnssEKFParams
     uint8_t cr_half_cycle       = kHalfCycleReject;  // HalfCycleAction
     // each system's carrier (its wavelength), and whether its half-cycle
     // steps can come unflagged (gnss_sys_t: GPS, Galileo, BeiDou, QZSS)
-    double  cr_carrier_hz[kProfileSys] = {GNSS_FREQ_L1_HZ, GNSS_FREQ_L1_HZ, 1561.098e6, GNSS_FREQ_L1_HZ, 1602.0e6};
+    double  cr_carrier_hz[kProfileSys] = {GNSS_FREQ_L1_HZ, GNSS_FREQ_L1_HZ, 1561.098e6, GNSS_FREQ_L1_HZ, GNSS_FREQ_L1_HZ};
     bool    cr_half_cycle_unflagged[kProfileSys] = {true, false, true, true, true};
 };
 

@@ -213,8 +213,9 @@ TEST(RawGnssMeas, ASatelliteMissingLongerThanTheGapHasRelocked)
 
 TEST(RawGnssMeas, AGlonassSatelliteGivesItsDopplerNotItsCode)
 {
-    // R11's broadcast set of 2026-11-21 (tb 16:15 UTC; gnss/eph.h's GLONASS layout), 866 s on: the builder's
-    // default GLONASS signal fuses the Doppler and reads the code for the transmit time alone (pr_fused false)
+    // R11's broadcast set of 2026-11-21 (tb 16:15 UTC; gnss/eph.h's GLONASS layout), 866 s on: with the
+    // PX1105R's GLONASS signal (its profile's: the only receiver that gives GLONASS) the builder fuses the
+    // Doppler and reads the code for the transmit time alone (pr_fused false)
     gps_eph_t e{};
     e.valid = 1;
     e.sys = GNSS_SYS_GLO;
@@ -239,7 +240,9 @@ TEST(RawGnssMeas, AGlonassSatelliteGivesItsDopplerNotItsCode)
     ep.tow_s = 576918.0 + 866.0;
     ep.n = 1;
     ep.obs[0] = gnss_raw::RawObs{GNSS_SYS_GLO, 11, true, true, 34.0f, 2.05e7, -172.9, 0};
-    RawMeasBuilder b;
+    RawMeasBuilder::Config cfg;
+    cfg.sig[GNSS_SYS_GLO] = gnss_raw::px1105rProfile().sig[GNSS_SYS_GLO];
+    RawMeasBuilder b(cfg);
     RawMeas m[RawEpoch::kMaxObs];
     ASSERT_EQ(b.build(ep, store, nullptr, 0.0, m, RawEpoch::kMaxObs), 1);
     EXPECT_EQ(m[0].sys, GNSS_SYS_GLO);
@@ -258,10 +261,9 @@ TEST(RawGnssMeas, AGlonassSatelliteGivesItsDopplerNotItsCode)
         EXPECT_NEAR(m[0].sat_vel[k], v[k], 0.01) << k;
     }
     EXPECT_NEAR(m[0].rr, -172.9 + GNSS_C * e.af1, 1e-6);
-    // under the GLONASS floor (the builder's default has none; a profile's 25 dB-Hz does)
-    RawMeasBuilder::Config c;
-    c.sig[GNSS_SYS_GLO].cn0_min_pr = 35.0f;
-    RawMeasBuilder b2(c);
+    // under the profile's 25 dB-Hz floor: not built
+    ep.obs[0].cn0_dbhz = 24.0f;
+    RawMeasBuilder b2(cfg);
     EXPECT_EQ(b2.build(ep, store, nullptr, 0.0, m, RawEpoch::kMaxObs), 0);
 }
 

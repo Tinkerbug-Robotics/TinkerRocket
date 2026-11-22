@@ -224,15 +224,18 @@ void expectSameNumbers(const GnssReceiverProfile& a, const GnssReceiverProfile& 
 // TheShadowSafeguardDefaultsAreTheBeetles) before its size goes in here: the
 // Beetle's filter is its defaults, and the M1 build applies the LC86G's
 // profile over them. The sizes are a 64-bit host's (macOS and Linux alike).
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssEKFParams) == 544,
+// (2026-11-22: GLONASS's slot, gnss_sys_t 4, grew the per-system arrays the
+// comparators already loop over -- sig[], cr_carrier_hz[],
+// cr_half_cycle_unflagged[] -- by one each; no field was added.)
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssEKFParams) == 552,
               "RawGnssEKFParams changed: add the field to expectSameEkf, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawMeasBuilder::Config) == 336,
+static_assert(sizeof(void*) != 8 || sizeof(RawMeasBuilder::Config) == 368,
               "RawMeasBuilder::Config changed: add the field to expectSameBuilder, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 32,
               "GnssSignalProfile changed: add the field to expectSameSignal, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 576,
+static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 608,
               "GnssReceiverProfile changed: add the field to expectSameNumbers, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1880,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1920,
               "RawGnssShadow::Config changed: pin the field in TheShadowSafeguardDefaultsAreTheBeetles, then update "
               "this size");
 
@@ -405,12 +408,21 @@ TEST(ReceiverProfile, ThePx1105rIsTheMosaicsDesignWithItsOwnReceiver)
     EXPECT_EQ(p.relock_gap_s, m.relock_gap_s);
     EXPECT_EQ(p.cr_mode, gnss_raw::kCarrierOff);
     EXPECT_TRUE(gnss_raw::dopplerPairsFit(p));
-    for (int k = 0; k < gnss_raw::kProfileSys; ++k)
+    for (int k = 0; k < GNSS_SYS_GLO; ++k)
     {
         EXPECT_EQ(p.sig[k].carrier_hz, m.sig[k].carrier_hz) << k;
         EXPECT_EQ(p.sig[k].cn0_min_pr, m.sig[k].cn0_min_pr) << k;
         EXPECT_EQ(p.sig[k].cn0_min_rr, m.sig[k].cn0_min_rr) << k;
+        EXPECT_TRUE(p.sig[k].pr_fused) << k;
     }
+    // and GLONASS, which only it gives (Px1105rRawEpoch.h glonass): k = 0's carrier, the mosaic's floors, its
+    // Doppler alone fused (the filter has no GLONASS clock offset), no carrier
+    const gnss_raw::GnssSignalProfile& g = p.sig[GNSS_SYS_GLO];
+    EXPECT_EQ(g.carrier_hz, 1602.0e6);
+    EXPECT_EQ(g.cn0_min_pr, 25.0f);
+    EXPECT_EQ(g.cn0_min_rr, 25.0f);
+    EXPECT_EQ(g.cn0_min_cr, 99.0f);
+    EXPECT_FALSE(g.pr_fused);
     // and its own receiver: the Doppler a carrier change over the epoch before,
     // in whole hertz; the code its own fit, unscaled; no 1PPS (no latency known)
     EXPECT_DOUBLE_EQ(p.rr_lag_s, 0.025);
@@ -679,7 +691,8 @@ TEST(ReceiverProfile, TheMosaicG5V0Profile)
     // signals: L1 C/A, E1, B1I (and QZSS as GPS), the code and Doppler floored
     // at 25 dB-Hz; the carrier's as the LC86G's (off)
     const GnssReceiverProfile lc = gnss_raw::lc86gProfile();
-    const double hz[4] = {GNSS_FREQ_L1_HZ, GNSS_FREQ_L1_HZ, 1561.098e6, GNSS_FREQ_L1_HZ};
+    const double hz[gnss_raw::kProfileSys] = {GNSS_FREQ_L1_HZ, GNSS_FREQ_L1_HZ, 1561.098e6, GNSS_FREQ_L1_HZ,
+                                              GNSS_FREQ_L1_HZ};   // GLONASS: the default, no mosaic GLONASS
     for (int k = 0; k < gnss_raw::kProfileSys; ++k)
     {
         SCOPED_TRACE(testing::Message() << "sys " << k);
