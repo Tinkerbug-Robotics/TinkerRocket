@@ -2612,6 +2612,20 @@ target_include_directories(test_json_escape PRIVATE
 target_link_libraries(test_json_escape GTest::gtest_main)
 gtest_discover_tests(test_json_escape)
 
+# ---------- test_telemetry_json_packer (#282 / #283) ----------
+# The BLE telemetry frame's fit rules: each field at the width it really prints
+# (a number was charged 24 B, which trimmed frames up to ~30 B short of the
+# window), never past the window, "tr":1 when anything was left
+# out, and the Tier 1 floor. TelemetryJsonPacker.h is pure; TR_BLE_To_APP.cpp
+# builds the frame with it.
+add_executable(test_telemetry_json_packer test_telemetry_json_packer.cpp)
+target_include_directories(test_telemetry_json_packer PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_BLE_To_APP
+)
+target_link_libraries(test_telemetry_json_packer GTest::gtest_main)
+gtest_discover_tests(test_telemetry_json_packer)
+
 # ---------- test_lora_dio1_policy (#1155 item 7) ----------
 # A packet decoded during a spectrum-scan dwell was booked as a transmit
 # completion. The DIO1 owner rule is three lines; the test pins the

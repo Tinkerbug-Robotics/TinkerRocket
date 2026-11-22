@@ -14,6 +14,7 @@
 #include <host/ble_hs.h>
 #include <host/ble_att.h>          // ble_att_mtu — authoritative live MTU (#283)
 #include "BleChunkSize.h"          // #524: LL-fragment-aligned chunk sizing
+#include "TelemetryJsonPacker.h"   // #282: the telemetry frame's fit rules (host-tested)
 #include <host/util/util.h>
 #include <services/gap/ble_svc_gap.h>
 #include <services/gatt/ble_svc_gatt.h>
@@ -1990,115 +1991,33 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     // every telemetry update once size crept past 512.  See #138 / memory:
     // "BLE telemetry JSON exceeding MTU silently drops all updates".
     char buf[640];
-    size_t pos = 0;
-    bool first = true;
-    bool dropped = false;   // set when a field is skipped for lack of MTU room (#282)
-    // Set once Tier 1 finishes having lost anything. See the note at the Tier 2
-    // boundary: without it the packer is best-fit, not priority-ordered, and a
-    // tiny MTU keeps the LEAST important field while dropping every vital one.
-    bool tier1_incomplete = false;
-
-    // #282: budget the build against the *actual* BLE send window, not just the
-    // backing buffer.  sendTelemetry() drops the WHOLE notification when the
-    // finished JSON exceeds (negotiated_mtu_ - 3), so building past that window
-    // silently blacks out the live dashboard during the highest-information
-    // phase of flight (boost/apogee with GPS fix, armed pyro, rid+run, af).
-    // Cap the logical JSON at the send window (still bounded by the 640 B
-    // buffer) and let the low-priority tail fall off instead, so a
-    // trimmed-but-valid frame always goes out rather than a silent blackout.
-    // Fields are ordered below recovery/dashboard-critical first → least
-    // important last, so the tail that drops is the data the operator can
-    // most afford to lose live.
-    // #283: budget against the live ATT MTU (maxNotifyBytes reads ble_att_mtu,
-    // so a missed BLE_GAP_EVENT_MTU callback can't strand us at the 0 cache).
-    // Before the exchange completes the window is the 23-B default → only the
-    // top-priority fields fit, which is correct (a larger frame can't physically
-    // go out); once the link MTU is up, full frames flow, callback or not.
-    const size_t max_notify = maxNotifyBytes();
-    const size_t cap = (max_notify + 1 < sizeof(buf)) ? (max_notify + 1) : sizeof(buf);
-
-    // Reserve trailing bytes: closing '}' + '\0' (2) plus a worst-case
-    // ',"tr":1' trim flag (7) so that flag can always be appended at the end
-    // even on a fully-packed frame.
-    const size_t kReserve = 2 + 7;
-
-    buf[pos++] = '{';
-
-    // Returns true if `n` more bytes (plus the reserved tail) still fit within
-    // the MTU-derived budget.
-    auto room = [&](size_t n) -> bool {
-        // Hard stop once Tier 1 came up short: nothing below it is worth
-        // emitting if the operator-critical set did not survive.
-        if (tier1_incomplete) return false;
-        return pos + n + kReserve <= cap;
-    };
-
-    // Comma separator helper.  Bytes accounted for in each caller's fit check.
-    auto sep = [&]() { if (!first) buf[pos++] = ','; first = false; };
-
-    // Bytes appendKey will write for `key`: optional ',' + '"' + key + '":'
-    auto keyBytes = [&](const char* key) -> size_t {
-        return (first ? 0 : 1) + 2 + strlen(key) + 1;
-    };
-
-    // Append a key (quoted).  Assumes caller pre-checked space via `room()`.
-    auto appendKey = [&](const char* key) {
-        sep();
-        buf[pos++] = '"';
-        size_t klen = strlen(key);
-        memcpy(buf + pos, key, klen);
-        pos += klen;
-        buf[pos++] = '"';
-        buf[pos++] = ':';
-    };
-
-    // Numeric max-width budget: floats/doubles at any reasonable precision
-    // and 32-bit ints both fit comfortably in 24 chars (incl. sign/decimal).
-    const size_t kNumMax = 24;
-
-    // Optional float — skips NaN values entirely to save BLE payload bytes.
-    auto addFloat = [&](const char* key, float value, int decimals) {
-        if (std::isnan(value)) return;
-        if (!room(keyBytes(key) + kNumMax)) { dropped = true; return; }
-        appendKey(key);
-        pos += snprintf(buf + pos, sizeof(buf) - pos, "%.*f", decimals, (double)value);
-    };
-
-    // Optional double — skips NaN values
-    auto addDouble = [&](const char* key, double value, int decimals) {
-        if (std::isnan(value)) return;
-        if (!room(keyBytes(key) + kNumMax)) { dropped = true; return; }
-        appendKey(key);
-        pos += snprintf(buf + pos, sizeof(buf) - pos, "%.*f", decimals, value);
-    };
-
-    auto addInt = [&](const char* key, int value) {
-        if (!room(keyBytes(key) + kNumMax)) { dropped = true; return; }
-        appendKey(key);
-        pos += snprintf(buf + pos, sizeof(buf) - pos, "%d", value);
-    };
-    auto addUint = [&](const char* key, uint32_t value) {
-        if (!room(keyBytes(key) + kNumMax)) { dropped = true; return; }
-        appendKey(key);
-        pos += snprintf(buf + pos, sizeof(buf) - pos, "%lu", (unsigned long)value);
-    };
-    auto addString = [&](const char* key, const char* value) {
-        size_t vlen = value ? strlen(value) : 0;
-        // 2 extra for the value's surrounding quotes.
-        if (!room(keyBytes(key) + 2 + vlen)) { dropped = true; return; }
-        appendKey(key);
-        buf[pos++] = '"';
-        if (value) {
-            memcpy(buf + pos, value, vlen);
-            pos += vlen;
-        }
-        buf[pos++] = '"';
-    };
+    // #282/#283: the frame is capped at the live link's payload window
+    // (maxNotifyBytes reads ble_att_mtu, so a missed BLE_GAP_EVENT_MTU callback
+    // can't strand us at the 0 cache). sendTelemetry() drops the WHOLE
+    // notification when the finished JSON exceeds (negotiated_mtu_ - 3), so
+    // building past that window silently blacked out the live dashboard during
+    // the highest-information phase of flight. Instead the low-priority tail
+    // falls off and the frame carries "tr":1: a trimmed-but-valid frame always
+    // goes out. Before the MTU exchange completes the window is the 23-B default,
+    // so only the top of Tier 1 fits, which is correct.
+    //
+    // TelemetryJsonPacker.h holds the fit rules: each field at the width it
+    // really prints (2026-11-22; a number used to be charged 24 B, which trimmed
+    // frames up to ~30 B short of the window), the bytes held back
+    // for "tr":1, and the Tier 1 floor. Fields go in below in priority order,
+    // recovery- and dashboard-critical first, so what falls off is what the
+    // operator can most afford to lose live.
+    tr_ble::TelemetryJsonPacker pk(buf, sizeof(buf), maxNotifyBytes());
+    auto addFloat  = [&](const char* key, float value, int decimals)  { pk.addFloat(key, value, decimals); };
+    auto addDouble = [&](const char* key, double value, int decimals) { pk.addDouble(key, value, decimals); };
+    auto addInt    = [&](const char* key, int value)                   { pk.addInt(key, value); };
+    auto addUint   = [&](const char* key, uint32_t value)              { pk.addUint(key, value); };
+    auto addString = [&](const char* key, const char* value)           { pk.addString(key, value); };
     // (addBool removed — every bool now lives in the "fs" bitfield.)
 
     // Fields are emitted in priority order (#282): recovery- and
     // dashboard-critical first, diagnostics last.  When a worst-case frame
-    // exceeds the MTU window, `room()` drops fields from the tail — so the
+    // exceeds the MTU window, the packer drops fields from the tail — so the
     // operator keeps state, flight-phase/pyro/health flags, position, altitude,
     // and battery live, and only loses low-value extras (filename, link
     // stats, unit name) during the brief peak-payload window.
@@ -2235,10 +2154,10 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     // Tier 1 is over. If ANY of it was dropped, stop here — do not let Tiers 2
     // and 3 backfill the space it could not use.
     //
-    // The packer is best-fit, not priority-ordered: room() skips a field that
+    // The packer is best-fit, not priority-ordered: it skips a field that
     // does not fit and keeps going, so a SMALLER field further down slips into
     // the gap a bigger, more important one just failed to fill. Worse,
-    // keyBytes() charges one byte less while `first` is still true, so a field
+    // a key costs one byte less while it is the frame's first, so a field
     // reached after everything above it was dropped is actively CHEAPER than
     // the ones it outranks. At MTU 23 those two effects combine to emit
     // {"af":"","tr":1} — the empty active-filename, a Tier 3 diagnostic, as the
@@ -2250,7 +2169,7 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     // Best-fit is still right WITHIN the discretionary tiers — losing one bulky
     // field to keep three small ones is a good trade there — so the floor is
     // applied only at this boundary, not between Tier 2 and Tier 3.
-    tier1_incomplete = dropped;
+    pk.endTier1();
 
     // ── Tier 2: attitude + IMU detail (dropped only under MTU pressure) ───
     // ("rid" moved to the head of Tier 1 — #570: it is the demux key.)
@@ -2390,16 +2309,10 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     }
     addString("af", data.active_file);
 
-    // #282: if any field was dropped to stay under the MTU window, tell the
-    // app so the partial frame isn't a silent blackout.  Space for this tag
-    // is held back in kReserve, so it always fits.
-    if (dropped) {
-        appendKey("tr");
-        buf[pos++] = '1';
-    }
-
-    buf[pos++] = '}';
-    buf[pos] = '\0';
+    // #282: if any field was dropped to stay under the MTU window, "tr":1 tells
+    // the app, so the partial frame isn't a silent blackout. Its bytes are held
+    // back from every fit check, so it always fits.
+    pk.finish();
 
     return String(buf);
 }
