@@ -2217,6 +2217,9 @@ static void buildBLETelemetry(const LoRaDataSI& lora, float rssi, float snr,
     // distinguishable, on a relayed one they do not.
     out.cam_current   = lora.cam_current;
     out.servo_current = lora.servo_current;
+    // v6: the gnss-sdr-dev board's IMU aiding, from the SLOW frame (every 3 s;
+    // 0 from a v5 rocket or one without the board: "gi" not sent).
+    out.gnss_imu = lora.gnss_imu;
 
     // GPS (pre-computed lat/lon)
     out.latitude = lat_deg;
@@ -5309,10 +5312,14 @@ static void loop_bs()
         // #384: a telemetry frame whose first byte (network_id) happens to
         // equal LORA_BEACON_SYNC (0xBE = nid 190) would otherwise parse as a
         // beacon and shadow 100% of telemetry. Inert today (boot forces
-        // nid 0), so require the length to disambiguate: beacons are short,
-        // telemetry is exactly SIZE_OF_LORA_FAST or SIZE_OF_LORA_SLOW.
-        if (rx_len >= 3 && rx_len != SIZE_OF_LORA_FAST && rx_len != SIZE_OF_LORA_SLOW
-            && rx_buf[0] == LORA_BEACON_SYNC)
+        // nid 0), so require the frame not to be telemetry: its header's
+        // version, type and length must not agree (loraTelemetryLenOk). Since
+        // v6 the length alone cannot say: a v5 rocket pads its beacon only
+        // around 22 and 55, so a 20-character name sends 23 bytes, v6's SLOW.
+        const bool rx_telem = rx_len >= sizeof(LoRaFrameHeader)
+            && loraTelemetryLenOk(loraFrameVersion(rx_buf[offsetof(LoRaFrameHeader, ver_type)]),
+                                  loraFrameType(rx_buf[offsetof(LoRaFrameHeader, ver_type)]), rx_len);
+        if (rx_len >= 3 && rx_len < SIZE_OF_LORA_FAST && !rx_telem && rx_buf[0] == LORA_BEACON_SYNC)
         {
             uint8_t bcn_nid = rx_buf[1];
             uint8_t bcn_rid = rx_buf[2];
@@ -5341,9 +5348,10 @@ static void loop_bs()
                 }
             }
         }
-        // --- Telemetry packet: FAST (55 B) or SLOW (22 B) ---
+        // --- Telemetry packet: FAST or SLOW, v6 or v5 ---
         // (#570: no literal here — a stale "(73)" outlived two frame diets.)
-        else if (rx_len == SIZE_OF_LORA_FAST || rx_len == SIZE_OF_LORA_SLOW)
+        else if (rx_len == SIZE_OF_LORA_FAST || rx_len == SIZE_OF_LORA_SLOW
+                 || rx_len == SIZE_OF_LORA_SLOW_V5)
         {
             // #850: both frames open with the same 7-byte LoRaFrameHeader, so
             // the routing fields and ver_type can be read before we know which
@@ -5360,10 +5368,9 @@ static void loop_bs()
             // layout change at the same length would have been invisible.
             // Type and length must agree. A frame claiming SLOW at 55 bytes is
             // corrupt in a way the CRC did not catch, and decoding it would
-            // read 33 bytes past the struct.
-            const bool len_ok = (frame_type == LORA_FRAME_SLOW)
-                                    ? (rx_len == SIZE_OF_LORA_SLOW)
-                                    : (frame_type == LORA_FRAME_FAST && rx_len == SIZE_OF_LORA_FAST);
+            // read 32 bytes past the struct. v6: a v5 rocket's SLOW frame is
+            // a byte shorter (no status) and still read.
+            const bool len_ok = loraTelemetryLenOk(frame_ver, frame_type, rx_len);
 
             // Header only for now — enough for the network filter and the slot
             // lookup below. The payload is merged into the per-rocket
@@ -5374,7 +5381,7 @@ static void loop_bs()
             // Drop ladder, most-fundamental first: a frame we cannot parse,
             // then one we can parse but is malformed, then one that parses
             // fine but belongs to somebody else's network.
-            if (frame_ver != LORA_PROTO_VERSION)
+            if (frame_ver != LORA_PROTO_VERSION && frame_ver != LORA_PROTO_VERSION_V5)
             {
                 lora_size_mismatch_drops++;
                 lora_size_last_drop_ms = millis();
@@ -5448,7 +5455,11 @@ static void loop_bs()
                 {
                     decoded = tracked_rockets[slot].last_data;
                 }
-                if (frame_type == LORA_FRAME_SLOW)
+                if (frame_type == LORA_FRAME_SLOW && rx_len == SIZE_OF_LORA_SLOW_V5)
+                {
+                    sensor_converter.unpackLoRaSlowV5Bytes(rx_buf, decoded);   // a v5 rocket
+                }
+                else if (frame_type == LORA_FRAME_SLOW)
                 {
                     sensor_converter.unpackLoRaSlowBytes(rx_buf, decoded);
                 }

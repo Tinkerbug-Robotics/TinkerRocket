@@ -154,6 +154,8 @@ public:
     void packLoRaSlowBytes(const LoRaDataSI& in, uint8_t out_bytes[SIZE_OF_LORA_SLOW]);
     void unpackLoRaFastBytes(const uint8_t in_bytes[SIZE_OF_LORA_FAST], LoRaDataSI& out);
     void unpackLoRaSlowBytes(const uint8_t in_bytes[SIZE_OF_LORA_SLOW], LoRaDataSI& out);
+    // A v5 rocket's SLOW frame (SIZE_OF_LORA_SLOW_V5 bytes: v6's without `status`).
+    void unpackLoRaSlowV5Bytes(const uint8_t in_bytes[SIZE_OF_LORA_SLOW_V5], LoRaDataSI& out);
                                
     
 private:

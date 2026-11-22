@@ -711,6 +711,10 @@ void SensorConverter::packLoRaSlow(const LoRaDataSI& in, LoRaSlowData& out)
     // fitted) and negative noise as 0, and saturates rather than wrapping.
     out.cam_ma   = encodeRailMilliamps(in.cam_current);
     out.servo_ma = encodeRailMilliamps(in.servo_current);
+
+    // v6: the gnss-sdr-dev board's IMU aiding (a SensorHealthState); the
+    // spare bits stay 0.
+    out.status = (uint8_t)(in.gnss_imu & LORA_SLOW_GNSS_IMU_MASK);
 }
 
 void SensorConverter::unpackLoRaSlow(const LoRaSlowData& in, LoRaDataSI& out)
@@ -727,6 +731,10 @@ void SensorConverter::unpackLoRaSlow(const LoRaSlowData& in, LoRaDataSI& out)
 
     out.cam_current   = (float)in.cam_ma * 0.001f;
     out.servo_current = (float)in.servo_ma * 0.001f;
+
+    // v6. A v5 frame (a rocket from before it) reaches here through
+    // unpackLoRaSlowV5Bytes with the byte 0: no board reported.
+    out.gnss_imu = (uint8_t)(in.status & LORA_SLOW_GNSS_IMU_MASK);
 }
 
 // --- byte-level wrappers -----------------------------------------------------
@@ -756,5 +764,12 @@ void SensorConverter::unpackLoRaSlowBytes(const uint8_t in_bytes[SIZE_OF_LORA_SL
 {
     LoRaSlowData p{};
     memcpy(&p, in_bytes, sizeof(LoRaSlowData));
+    unpackLoRaSlow(p, out);
+}
+
+void SensorConverter::unpackLoRaSlowV5Bytes(const uint8_t in_bytes[SIZE_OF_LORA_SLOW_V5], LoRaDataSI& out)
+{
+    LoRaSlowData p{};   // status stays 0: a v5 frame has none
+    memcpy(&p, in_bytes, SIZE_OF_LORA_SLOW_V5);
     unpackLoRaSlow(p, out);
 }

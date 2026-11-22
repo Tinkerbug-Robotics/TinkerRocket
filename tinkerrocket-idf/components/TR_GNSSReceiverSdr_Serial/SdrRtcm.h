@@ -12,8 +12,9 @@
 //     correlator's sample count, then the ranges its checks left out and the
 //     satellites it marked: up to 78 bytes), sub-type 2 after each fix (ECEF
 //     position and velocity, clock bias and drift, PDOP, residual rms),
-//     sub-type 4 the GPS broadcast ionosphere it has (RTCM has no message for
-//     it), when it changes and again every 30 s;
+//     sub-type 3 its state before its first fix, sub-type 4 the GPS broadcast
+//     ionosphere it has (RTCM has no message for it), when it changes and
+//     again every 30 s, sub-type 5 its IMU's mounting (below);
 //   - its ephemerides, 1019, 1046 and 1042, each new one and again every 30 s.
 // It sends nothing before its first fix (no time, no epochs).
 //
@@ -38,6 +39,7 @@ static constexpr uint8_t  kTrEpoch     = 1;         // its sub-types
 static constexpr uint8_t  kTrFix       = 2;
 static constexpr uint8_t  kTrStatus    = 3;         // before the board has GPS time: once a second
 static constexpr uint8_t  kTrIono      = 4;         // the GPS broadcast ionosphere it has
+static constexpr uint8_t  kTrAlign     = 5;         // its IMU's mounting: once a second, and on each change
 static constexpr size_t   kMaxFrame    = 3 + 1023 + 3;   // preamble and length, the payload, the CRC
 
 // The message number of a whole frame (the 12 bits after its 3-byte header);
@@ -126,6 +128,58 @@ struct TrIono
     uint16_t gpsDay() const { return static_cast<uint16_t>(week * 7u + tow_s / 86400u); }
 };
 bool decodeTrIono(const uint8_t* frame, size_t len, TrIono& out);
+
+// And of a sub-type 5: the board IMU's mounting in the flight computer and
+// its accelerometer's calibration, which it finds from the flight computer's
+// rests (4002 sub-type 5, its own IMU's mean over the same still window
+// beside each: the gnss repo's gnss/imu_align.h), and what it keeps in its
+// NVS. Once a second, before GPS time too, and within 100 ms of a change (a
+// rest paired, a command, a save). Layout: the gnss repo's receiver/README.md
+// ("The RTCM stream"); scales below. A frame shorter than its poses need is
+// not decoded; bits after them (a later revision's) are left.
+struct TrAlign
+{
+    static constexpr int kPoses = 8;
+    enum : uint8_t { kHaveNone = 0, kHaveTilt = 1, kHaveWhole = 2 };
+    enum : uint8_t { kFrameBody = 0, kFrameImu = 1 };   // what the mounting turns U10 into
+    uint8_t seq = 0;          // this sub-type's frames sent, mod 256
+    uint8_t gen = 0;          // the solution's generation: +1 on every change, mod 256
+    uint8_t imu = 0;          // the IMU watch: 0 off (no pairing), 1 watching, 2 aiding
+    bool    time = false;     // the board can place a rest: GPS time, or a tq-0 rest's arrival
+    uint8_t have = 0;         // kHave*
+    uint8_t from = 0;         // the one in use: 0 none, 1 this boot's rests, 2 the saved one,
+                              // 3 the saved one with this boot's rests added
+    uint8_t saved = 0;        // 0 nothing saved, 1 saved and the same as in use, 2 saved but
+                              // the one in use differs
+    bool    autosave = false; // the board saves by its own rule this boot (any 4002/6 turns it off)
+    uint8_t frame = 0;        // kFrame*: the flight computer's body, or its IMU's own axes
+    uint8_t n_pose = 0;       // poses held, 0-8
+    uint8_t cal_axes = 0;     // bit j: the board's axis j calibrated
+    uint8_t last_rest = 0;    // the last rest's fate: 0 none yet, 1 paired, 2 the board moving,
+                              // 3 not covered by its still windows, 4 never reached, 5 not
+                              // 1 g, 6 no time to place it, 7 the IMU off
+    uint8_t n_rest = 0;       // rests received, mod 256
+    uint8_t n_pair = 0;       // rests paired, mod 256
+    uint8_t cmd_id = 0;       // the last 4002 sub-type 6 it acted on: its id, op and result
+    uint8_t cmd_op = 0;
+    uint8_t cmd_res = 0;      // 0 none yet, 1 done, 2 nothing to save, 3 refused (a flight
+                              // phase, a test frame, or its IMU off), 4 its NVS write failed,
+                              // 5 an unknown op
+    double  spread_deg = 0;   // whole: the poses apart (1 deg)
+    double  resid_deg = 0;    // the poses off the solution, the largest (0.02 deg; 5.1: that or more)
+    double  cal_rms = 0;      // the calibration's fit, rms, m/s^2 (1e-3; 0.255: that or more)
+    double  q[4] = {1, 0, 0, 0};          // U10 to `frame`, Hamilton, scalar first (2^-14)
+    double  scale[3] = {1, 1, 1};         // each board axis's: f_read = s f_true + b (1e-5 on s - 1)
+    double  bias[3] = {};                 // m/s^2 (1e-4)
+    double  moved_deg = 0;    // from 3 only (a saved rotation with this boot's rests): the rail
+                              // pose off the saved rotation (0.02 deg; 5.1: that or more); else 0
+    struct Pose
+    {
+        double  dir[3] = {};  // the specific force's direction, `frame`'s axes (1/127)
+        uint8_t pairs = 0;    // the rests paired into it (255: that or more)
+    } pose[kPoses];
+};
+bool decodeTrAlign(const uint8_t* frame, size_t len, TrAlign& out);
 
 class Rtcm3Framer
 {

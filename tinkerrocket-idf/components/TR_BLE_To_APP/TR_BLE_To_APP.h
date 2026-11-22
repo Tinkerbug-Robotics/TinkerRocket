@@ -66,6 +66,12 @@ public:
         // one that is, which is why the verdict travels at all.
         float   scap_voltage = NAN;
         uint8_t holdup_state = 0;
+        // Whether the gnss-sdr-dev board's own IMU aids its tracking loops, as
+        // the flight computer reports it (FC_STATUS_MSG, FCS_GNSS_IMU_*): a
+        // SensorHealthState, 0 = no board on J1 or no recent report (not
+        // emitted), 1 aiding, 2 not aiding (off, or no mounting yet: the
+        // six-face calibration sets it), 3 refused or dropped. Advisory.
+        uint8_t gnss_imu = 0;
         // #1553: the pyro fault-current trip. Trips this boot ("pft"; 0 = none,
         // not emitted), the last trip's peak pack current in amps ("pfa"; NaN
         // = no trip; 40.9 = the INA230 clipped), and the most channels the
@@ -360,6 +366,12 @@ public:
     //   [41..114][AccelCalHighGStatus LE bytes] from an FC that sends the high-g
     // The next discriminator after 0xD0.
     void sendAccelCalStatus(const uint8_t* status_bytes, size_t len);
+
+    // Send the gnss-sdr-dev board's IMU mounting, as the FC relays the
+    // board's report, on the file-ops characteristic.  Format:
+    //   [0][0xD2 marker] [1..111][SdrAlignStatusData LE bytes]
+    // The next discriminator after 0xD1.
+    void sendSdrAlignStatus(const uint8_t* status_bytes, size_t len);
 
     // Send a flash-space stats frame for the storage bar on the file-ops
     // characteristic.  Format: [0]=marker (0xCC rocket / 0xCD base station)

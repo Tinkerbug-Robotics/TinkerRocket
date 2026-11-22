@@ -104,8 +104,12 @@
  "notes": "FlightSettingsData version-ladder truncation of the v9 image"},
  {
  "file": "csv/bs_tiny.bin",
- "size": 868,
+ "size": 870,
  "notes": "base-station binary log built with the real packers; the CSV golden generated from it lives in tests_cpp/fixtures/csv_golden/ (app output, not emitter output)"},
+ {
+ "file": "csv/bs_tiny_v5.bin",
+ "size": 868,
+ "notes": "bs_tiny.bin as a v5 rocket sent it (version 5, 22-byte slow frames with no status byte); a v6 reader must render the same CSV, bs_tiny.expected.csv"},
  {
  "file": "framed/stream_good.bin",
  "size": 455,
@@ -166,6 +170,10 @@
  "file": "fileops/accelcal_0xD1_114.bin",
  "size": 115,
  "notes": "AccelCalStatusFrame behind 0xD1: AccelCalStatusData then AccelCalHighGStatus; frame = 115 B"},
+ {
+ "file": "fileops/sdralign_0xD2_111.bin",
+ "size": 112,
+ "notes": "SdrAlignStatusData behind 0xD2; frame = 112 B"},
  {
  "file": "commands/cmd05_simconfig_16.bin",
  "size": 17,
@@ -254,6 +262,10 @@
  "file": "commands/cmd80_hgcal_49.bin",
  "size": 50,
  "notes": "HighGCalApplyData; op 1 store (0 clears the matrix and keeps the bias)"},
+ {
+ "file": "commands/cmd83_sdralign_2.bin",
+ "size": 3,
+ "notes": "SdrAlignCmdData; op 1 save, 2 clear, 3 restart, 4 report; the app's id"},
  {
  "file": "commands/cmd64_imuorient_auto.bin",
  "size": 2,

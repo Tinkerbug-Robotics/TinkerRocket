@@ -1770,6 +1770,29 @@ void TR_BLE_To_APP::sendAccelCalStatus(const uint8_t* status_bytes, size_t len)
     }
 }
 
+void TR_BLE_To_APP::sendSdrAlignStatus(const uint8_t* status_bytes, size_t len)
+{
+    if (!device_connected_ || status_bytes == nullptr || len == 0) return;
+    // 0xD2 marker + SdrAlignStatusData (111 B); cap defensively.
+    constexpr size_t MAX_PAYLOAD = 128;
+    if (len > MAX_PAYLOAD) len = MAX_PAYLOAD;
+
+    uint8_t buf[1 + MAX_PAYLOAD];
+    buf[0] = 0xD2;
+    memcpy(&buf[1], status_bytes, len);
+
+    int rc = notify_data(conn_handle_, file_ops_val_handle_, buf, 1 + len);
+    if (rc != 0)
+    {
+        static uint32_t fail_count = 0;
+        if ((fail_count++ % 32) == 0)
+        {
+            ESP_LOGW(BLE_TAG, "SDR board IMU status notify failed, rc=%d (count=%lu)",
+                     rc, (unsigned long)fail_count);
+        }
+    }
+}
+
 void TR_BLE_To_APP::sendStorageStats(uint8_t marker, const uint8_t* bytes, size_t len)
 {
     if (!device_connected_ || bytes == nullptr || len == 0) return;
@@ -2272,6 +2295,10 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     // Two decimals: the bar is 2.2 V on a 2.5 V termination, 10 mV is plenty.
     addFloat("scap", data.scap_voltage, 2);
     if (data.holdup_state != 0) { addUint("hu", data.holdup_state); }
+
+    // The gnss-sdr-dev board's IMU aiding (a SensorHealthState): absent with
+    // no board, so every other build pays nothing. The apps' "GNSS IMU" dot.
+    if (data.gnss_imu != 0) { addUint("gi", data.gnss_imu); }
 
     // #1553: the pyro fault-current trip, same shape — absent until there is
     // something to say. A channel that did nothing in a flight has no other

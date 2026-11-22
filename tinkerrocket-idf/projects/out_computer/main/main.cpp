@@ -1364,6 +1364,19 @@ static uint32_t fc_status_last_ms = 0;
 // different frames are 200 ms apart and harmless.
 static std::atomic<uint32_t> fc_scap_report{0};
 static std::atomic<uint32_t> fc_scap_rx_ms{0};
+// The gnss-sdr-dev board's IMU aiding, from the last FC_STATUS_MSG's flags
+// (FCS_GNSS_IMU_*, a SensorHealthState; 0 from an FC without the board or an
+// image from before it), for the apps' dot ("gi"). Written by processFrame,
+// read by the telemetry builders (fcGnssImuNow), hence atomic.
+static std::atomic<uint8_t> fc_gnss_imu{0};
+
+// The gnss-sdr-dev board's IMU aiding as the FC last reported it, while that
+// report is recent (as fcCameraEngagedNow, below); 0 (not sent to the apps) otherwise.
+static uint8_t fcGnssImuNow()
+{
+    if ((millis() - fc_status_last_ms) >= 1500U) return 0;
+    return fc_gnss_imu.load(std::memory_order_relaxed);
+}
 static bool peripherals_initialized = false; // Deferred init for peripherals behind PWR_PIN
 // #1228: the flight-logger half of initPeripherals() has a life of its own.
 // peripherals_initialized says the radio and the FC link are up; oc_logger_ok
@@ -5178,6 +5191,9 @@ static bool isKnownMessageType(uint8_t type)
         case ACC_CAL_STATUS_MSG:     // FC→OC over I2S — its readback and face windows
         case HG_CAL_APPLY_PENDING:   // the high-g's six-face alignment — OC→FC only
         case HG_CAL_APPLY_MSG:
+        case SDR_ALIGN_STATUS_MSG:   // FC→OC over I2S — the gnss-sdr-dev board's IMU mounting, relayed to the app only
+        case SDR_ALIGN_CMD_PENDING:  // the app's command to that board — OC→FC only
+        case SDR_ALIGN_CMD_MSG:
         case OTA_STATUS_MSG:         // FC→OC over I2S — OTA relay status (#8 Phase 4)
         case FLIGHT_SETTINGS_MSG:    // FC→OC over I2S at flight-start — issue #165
         case FC_IDENTITY:            // FC→OC over I2C — FC firmware version (#8 Phase 4)
@@ -5315,6 +5331,17 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                 config_readback_dirty = true;
             }
         }
+        return;
+    }
+
+    // The gnss-sdr-dev board's IMU mounting and calibration, as the FC relays
+    // the board's own report: to the app on file-ops behind 0xD2, and kept out
+    // of the flight log -- a bench readback, and the board's report itself is
+    // logged already, among the board's frames (GNSS_RTCM_MSG).
+    if (type == SDR_ALIGN_STATUS_MSG)
+    {
+        if (payload_len >= sizeof(SdrAlignStatusData))
+            ble_app.sendSdrAlignStatus(payload, sizeof(SdrAlignStatusData));
         return;
     }
 
@@ -5906,6 +5933,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             }
             fc_camera_engaged_prev = fc_cam;
             fc_status_last_ms = millis();
+            fc_gnss_imu.store(fcStatusGnssImu(payload, payload_len), std::memory_order_relaxed);
 
             // #1409: the hold-up cap, where the sense line is the FC's. A v1
             // frame (an FC image from before #1409) has none: ABSENT.
@@ -6963,6 +6991,9 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_BUDGET], uint16_t 
         lora.cam_current   = p.cam_current;
         lora.servo_current = p.servo_current;
     }
+    // v6: the gnss-sdr-dev board's IMU aiding rides the SLOW frame too, for the
+    // apps' "GNSS IMU" dot on a base-station link (as "gi" on a direct one).
+    lora.gnss_imu = fcGnssImuNow();
 
     if (frame_type == LORA_FRAME_SLOW)
     {
@@ -9283,6 +9314,7 @@ static void printStats()
         // #1166: hold-up cap voltage + verdict (NaN / 0 = not on this board).
         ble_telem.scap_voltage = holdup_scap_v;
         ble_telem.holdup_state = holdup_tracker.state;
+        ble_telem.gnss_imu = fcGnssImuNow();
         fillModemTelem(ble_telem);
         fillPyroFaultTelem(ble_telem);   // #1553
         ble_telem.latitude = NAN;
@@ -9835,6 +9867,7 @@ static void printStats()
     // #1166: hold-up cap voltage + verdict (NaN / 0 = not on this board).
     ble_telem.scap_voltage = holdup_scap_v;
     ble_telem.holdup_state = holdup_tracker.state;
+    ble_telem.gnss_imu = fcGnssImuNow();
     fillModemTelem(ble_telem);
     fillPyroFaultTelem(ble_telem);   // #1553
     if (latest_gnss_valid)
@@ -14409,6 +14442,26 @@ static void loop_oc()
             {
                 ESP_LOGW("BLE", "Accel cal APPLY: payload too short (%u < %u)",
                               (unsigned)plen, (unsigned)sizeof(AccelCalApplyData));
+            }
+        }
+        // The gnss-sdr-dev board's IMU on its flight board: save, clear or
+        // restart its mounting, or ask for its report (2-byte SdrAlignCmdData:
+        // op, the app's id). The FC sends it to the board and relays the
+        // board's answer (SDR_ALIGN_STATUS_MSG, 0xD2).
+        else if (ble_cmd == 83)
+        {
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= sizeof(SdrAlignCmdData))
+            {
+                setPendingCommandWithConfig(SDR_ALIGN_CMD_PENDING, SDR_ALIGN_CMD_MSG, payload, sizeof(SdrAlignCmdData));
+                ESP_LOGI("BLE", "SDR board IMU op %u (id %u) queued for FlightComputer",
+                         (unsigned)payload[0], (unsigned)payload[1]);
+            }
+            else
+            {
+                ESP_LOGW("BLE", "SDR board IMU command: payload too short (%u < %u)",
+                         (unsigned)plen, (unsigned)sizeof(SdrAlignCmdData));
             }
         }
         // #1629 — read the stored low-g offset and the last face window back.

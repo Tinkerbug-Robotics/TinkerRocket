@@ -73,3 +73,21 @@ def test_v1_and_v2_in_one_log(tmp_path):
     assert rows[3]["scap_v"] is None      # the sense, but no reading
     assert rows[4]["scap_v"] is None and rows[4]["fc_camera_engaged"] is True
     assert rows[5]["scap_v"] is None      # the flag gates the field
+    assert all(r["gnss_imu"] == 0 for r in rows)   # no board reported in any
+
+
+def test_gnss_imu_aiding_bits(tmp_path):
+    # Bits 3-4: the gnss-sdr-dev board's IMU aiding, beside the other flags
+    p = tmp_path / "flight_fcs_gi.bin"
+    p.write_bytes(
+        frame(v2(1_000_000, SENSE | (1 << 3), 2487))           # aiding
+        + frame(v2(1_200_000, CAMERA | (2 << 3), 0xFFFF))     # not aiding
+        + frame(v1(1_400_000, VOTES | (3 << 3)))              # refused, in a v1 frame
+        + b"\x00" * 16)
+    records, _stats, _config = pfd.parse_binary_file(str(p))
+    rows = records["FcStatus"]
+    assert pfd.FCS_GNSS_IMU_MASK == 0x18 and pfd.FCS_GNSS_IMU_SHIFT == 3
+    assert [r["gnss_imu"] for r in rows] == [1, 2, 3]
+    assert rows[0]["scap_v"] == 2.487                  # the other flags are untouched
+    assert rows[1]["fc_camera_engaged"] is True
+    assert rows[2]["fc_raw_votes_withheld"] is True
