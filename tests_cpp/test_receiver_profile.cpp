@@ -661,6 +661,7 @@ TEST(ReceiverProfile, TheSdrImagesSafeguardsAreTheMosaicsLessTheWindupAndTheChan
     EXPECT_EQ(s.dv_check, m.dv_check);
     EXPECT_EQ(s.dv_latch_k, m.dv_latch_k);
     EXPECT_EQ(s.dv_window_s, m.dv_window_s);
+    EXPECT_EQ(s.dv_window_restart, m.dv_window_restart);
     EXPECT_EQ(s.ekf.hdg_obs_mode, m.ekf.hdg_obs_mode);
     EXPECT_EQ(s.rot_lever_axial_m, m.rot_lever_axial_m);
     EXPECT_EQ(s.ekf.att_exact, m.ekf.att_exact);
@@ -885,6 +886,7 @@ void takeFlightSafeguards(RawGnssShadow::Config& r, const RawGnssShadow::Config&
 {
     r.dv_check = b.dv_check;
     r.dv_window_s = b.dv_window_s;
+    r.dv_window_restart = b.dv_window_restart;
     r.dv_att_allow_deg = b.dv_att_allow_deg;
     r.dv_epoch_k = b.dv_epoch_k;
     r.dv_latch_k = b.dv_latch_k;
@@ -944,6 +946,7 @@ TEST(ReceiverProfile, TheMosaicFlightSafeguards)
     // antenna's offset)
     EXPECT_EQ(c.dv_check, RawGnssShadow::kDvAct);
     EXPECT_EQ(c.dv_window_s, 1.0);
+    EXPECT_TRUE(c.dv_window_restart);   // a failed epoch's step left to the latch
     EXPECT_EQ(c.dv_att_allow_deg, 10.0);
     EXPECT_EQ(c.dv_epoch_k, 4.0);
     EXPECT_EQ(c.dv_latch_k, 5.0);
@@ -1365,6 +1368,7 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_EQ(c.dv_hold_s, 1.0);
     EXPECT_EQ(c.dv_epoch_hold_s, 0.5);
     EXPECT_EQ(c.dv_window_s, 0.0);
+    EXPECT_FALSE(c.dv_window_restart);
     EXPECT_FALSE(c.dv_deweight);
     EXPECT_FALSE(c.dv_ground);
     EXPECT_FALSE(c.dv_imu_free_off);

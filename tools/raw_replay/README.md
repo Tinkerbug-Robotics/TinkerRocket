@@ -214,7 +214,7 @@ What `startRawShadow()` builds under `TR_RAW_NAV_MOSAIC` (build_units D1a; check
 - the restore sigmas (100 m, 20 m/s, 15 deg) and the snapshot's accelerometer bias, `level_on_fused_epochs`;
 - the flight safeguards, by the firmware's own call (`gnss_raw::applyMosaicFlightSafeguards`,
   `ReceiverProfileApply.h`; a `RAW_REPLAY_MOSAIC_SAFEGUARDS` build): the Doppler change check acting in flight
-  (`--dv-check 2 --dv-window-s 1 --dv-att-deg 10 --dv-epoch-k 4 --dv-latch-k 5`, and any heading about the
+  (`--dv-check 2 --dv-window-s 1 --dv-window-restart 1 --dv-att-deg 10 --dv-epoch-k 4 --dv-latch-k 5`, and any heading about the
   vertical after a launch with no magnetometer heading: `--dv-hdg-unset-deg 180`), GNSS's heading gain by the
   horizontal specific force (`--hdg-obs-mode 1 --hdg-obs-fh 5 --hdg-obs-tau 1 --hdg-obs-scope 0`), the turning
   body's Doppler allowance (`--rot-lever-axial-m 0.3 --rot-lever-radial-m 0.03 --rot-lever-min-rate 2`) and the
@@ -583,14 +583,16 @@ The firmware's one navigation filter on E0's 16 simulated drogue flights (gnss-a
   sigmas), `--dv-floor`, `--dv-per-g`, `--dv-att-deg`, `--dv-scale`, `--dv-bias`, `--dv-lever-m` (the change's
   floor and the epoch test's allowances), `--dv-hold-s`, `--dv-epoch-hold-s`, `--dv-window-s` (the leaky sum),
   `--dv-latch-k` (a failed epoch holds every Doppler until the Dopplers' level agrees with the filter's velocity
-  within this many sigmas), `--dv-deweight`, `--dv-ground`, `--dv-noise-tau-s`, `--dv-hold-all-frac`,
+  within this many sigmas), `--dv-window-restart 0|1` (a latch the epoch's own test began -- a step -- lets go on
+  that test and the level alone, and the window starts over then; the flight safeguards' 1 since 2026-11-22, 0 the
+  rule flown on 11-21), `--dv-deweight`, `--dv-ground`, `--dv-noise-tau-s`, `--dv-hold-all-frac`,
   `--dv-hdg-unset-deg` (a `RAW_REPLAY_DVHDG` build: after a launch with no magnetometer heading -- the sims'
   `--mag-flags 0` -- the epoch test also allows the IMU's change turned this far about the vertical; 180 any
   heading). `--dv-trace FILE` (offline only, a mosaic build): a CSV row per satellite of each check -- its time, the
   epoch's time of week, the satellite, its residual off the epoch's fit in its own sigmas and in m/s, that sigma,
   whether the fit took it, whether it failed the satellite test, and its window's leaky sum; no positions (the
   multi-band composition study joins it with `--rr-mb-trace`). The events JSON gets `"dv"`: the counts (checks, satellite and epoch fails, Dopplers and epochs held,
-  latches begun and let go, epochs latched), when each epoch failed, had satellites fail or had Dopplers held, and
+  latches begun and let go, epochs latched, `window_restart` and the windows started over), when each epoch failed, had satellites fail or had Dopplers held, and
   the heading allowance's setting and whether the flight took it, as its launch left it (`hdg_unset_deg`,
   `hdg_unset`). `RAW_REPLAY_DVLOG=1`
   prints each check (2: the window's sums and allowances too). `sim_tables.score_run` keeps the block.

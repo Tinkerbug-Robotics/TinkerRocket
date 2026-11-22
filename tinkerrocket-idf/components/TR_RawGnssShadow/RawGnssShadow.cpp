@@ -1608,6 +1608,7 @@ void RawGnssShadow::dvReset()
     dv_noise_var_ = 0.0;
     dv_noise_te_ = 0.0;
     dv_latch_ = false;
+    dv_latch_step_ = false;
     dv_hdg_known_ = false;    // a flight restored in the air never knows
     lev_ref_ok_ = false;
     dv_nose_ = dvc::NoseTurn<float>();
@@ -1839,6 +1840,7 @@ void RawGnssShadow::jobDvCheck(double age)
     for (int i = 0; i < dv_next_.n; ++i)
         dv_S2_[i] = dv_V2_[i] = 0.0;
     bool epoch_fail = false;
+    bool step_fail = false;   // the epoch failed its own test (its change, or over half its satellites), not the window's
     int sat_fails = 0;
     if (f.ok)
     {
@@ -1977,6 +1979,7 @@ void RawGnssShadow::jobDvCheck(double age)
             st_.dv_max_chi2 = static_cast<float>(chi2);
         double excess = std::sqrt(wu[0] * wu[0] + wu[1] * wu[1] + wu[2] * wu[2]);
         epoch_fail = chi2 < 0.0 || chi2 > ke2 || 2 * sat_fails > nr;
+        step_fail = epoch_fail;
         if (win)
         {
             // the change summed as each satellite's (above): its noise this epoch's covariance and the leaky
@@ -2037,15 +2040,7 @@ void RawGnssShadow::jobDvCheck(double age)
     else
     {
         // nothing to sum across: the window starts over
-        for (int i = 0; i < 3; ++i)
-        {
-            dv_SW_[i] = dv_SF_[i] = 0.0;
-            for (int j = 0; j < 3; ++j)
-                dv_CW_[i][j] = 0.0;
-        }
-        dv_SB_ = dv_SL_ = 0.0;
-        dv_wwin_ = 0.0;
-        dv_wpwin_ = 0.0;
+        dvWindowReset();
     }
     // this epoch is the next one's start: its Dopplers, and (lever_on) the lever's velocity they were predicted
     // with, as dopplerChange took it, and the nose then (the lever roll's); a reference taken with the offset
@@ -2092,17 +2087,25 @@ void RawGnssShadow::jobDvCheck(double age)
         else if (epoch_fail && !dv_latch_)
         {
             dv_latch_ = true;
+            dv_latch_step_ = step_fail;
             st_.dv_latches++;
         }
-        else if (dv_latch_ && !epoch_fail)
+        else if (dv_latch_ && (!epoch_fail || (dv_latch_step_ && cfg_.dv_window_restart && !step_fail)))
         {
-            // each Doppler's noise as the change's model gives it (one Doppler's, not two)
+            // each Doppler's noise as the change's model gives it (one Doppler's, not two). With
+            // dv_window_restart, a latch the epoch's own test began lets go on that test and the level alone, and
+            // the window starts over then: it carried the step the latch was judging (RawGnssShadow.h)
             const double c2 = dvLevelChi2(cfg_.dv_floor_mps * cfg_.dv_floor_mps + dyn * dyn + nvar, imu.v_lev);
             st_.dv_last_level_chi2 = static_cast<float>(c2);
             if (c2 >= 0.0 && c2 <= cfg_.dv_latch_k * cfg_.dv_latch_k)
             {
                 dv_latch_ = false;
                 st_.dv_latch_releases++;
+                if (dv_latch_step_ && cfg_.dv_window_restart && win)
+                {
+                    dvWindowReset();
+                    st_.dv_window_restarts++;
+                }
             }
         }
         if (dv_latch_)

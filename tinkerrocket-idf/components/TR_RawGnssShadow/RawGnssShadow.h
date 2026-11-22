@@ -323,10 +323,24 @@
 // the body's rate now and its largest in the window: the antenna's velocity
 // changes telescope like the Dopplers', so summed epoch by epoch a
 // weathercocking coast's turns would add up to a window that misses a slow
-// ramp. With dv_latch_k, a failed epoch holds every Doppler not for
-// dv_epoch_hold_s but until the epoch's Dopplers as they stand agree with the
-// filter's velocity -- the IMU's, the barometer's and the pseudoranges' while
-// they were held -- within dv_latch_k sigmas of the filter's velocity
+// ramp. With dv_window_restart (and dv_latch_k), a latch the epoch's own
+// test began -- a step it caught, not a drift only the window saw -- lets go
+// on that test and the level (below) alone, and the window starts over as it
+// does: the window had carried the step for its whole memory. On the V10's
+// 11-21 flight the gnss-sdr-dev board's Dopplers jumped together for 0.3 s
+// mid-boost (its GPS-led loop aiding saturated; board IMU aiding off), every
+// epoch after passed on its own and agreed with the filter's velocity, and
+// the window still failed them for 1.3 s more: every Doppler held from +0.71
+// to +2.81 s, the 20 deg pad heading's horizontal drift uncorrected
+// (replayed). A latch the window began (a slow ramp) lets go as without it.
+// Zeroing the window at the failed epoch instead fails a step that comes
+// back gradually -- the window then sees the return alone, as a drift, where
+// the step and its return had cancelled (the host test
+// AStepsLatchLetsGoAndTheWindowStartsOver). With
+// dv_latch_k, a failed epoch holds every Doppler not for dv_epoch_hold_s but
+// until the epoch's Dopplers as they stand agree with the filter's velocity
+// -- the IMU's, the barometer's and the pseudoranges' while they were held --
+// within dv_latch_k sigmas of the filter's velocity
 // covariance, the fit's and dv_floor_mps. No lever-arm allowance there: an
 // antenna off the IMU only keeps the latch on while the body turns, where the
 // allowance would let a bias of that size back in at a drogue's deployment. A
@@ -714,6 +728,8 @@ public:
         double   dv_hold_s = 1.0;                // a failed satellite held out until this long after its last failure
         double   dv_epoch_hold_s = 0.5;          // a failed epoch: every Doppler held out until this long after
         double   dv_window_s = 0.0;              // also judged summed over this long, leaky (0: epoch by epoch only)
+        bool     dv_window_restart = false;      // a latch the epoch's own test began lets go on that test and the
+                                                 //   level alone, and the window starts over then (dv_latch_k)
         bool     dv_deweight = false;            // grow a failed Doppler's sigma by its excess, not hold it out
         bool     dv_ground = false;              // act on the ground too (else in flight only)
         bool     dv_imu_free_off = false;        // neither run nor act in the IMU-free descent (descent_imu_free):
@@ -1001,6 +1017,7 @@ public:
         uint32_t dv_latches = 0;           // dv_latch_k: latches begun (a failed epoch, none on)
         uint32_t dv_latch_releases = 0;    //   and let go (the Dopplers back with the filter's velocity)
         uint32_t dv_latch_epochs = 0;      //   epochs checked while one was on
+        uint32_t dv_window_restarts = 0;   // dv_window_restart: windows started over as a step's latch let go
         float    dv_last_level_chi2 = 0.0f;//   the last level test's chi-square (3 dof; -1: no fit)
         uint8_t  dv_hdg_unset = 0;         // the check takes dv_hdg_unset_deg now: no magnetometer heading (on
                                            //   the pad, now; in flight and landed, at the launch)
@@ -1335,6 +1352,7 @@ private:
     double        dv_noise_var_ = 0.0;  // dv_noise_tau_s: the Dopplers' excess variance, (m/s)^2
     double        dv_noise_te_ = 0.0;   //   the epoch it was last updated at
     bool          dv_latch_ = false;    // dv_latch_k: a failed epoch's latch, on
+    bool          dv_latch_step_ = false; //   begun by the epoch's own test (a step), not the window's alone
     bool          dv_hdg_known_ = false;// dv_hdg_unset_deg: the heading is the magnetometer's (on the ground,
                                         //   each step; in flight, as the launch left it)
     void          dvReset();
@@ -1362,6 +1380,19 @@ private:
         return 2.0 * (axial ? std::fabs(r[0]) : std::sqrt(r[1] * r[1] + r[2] * r[2]));
     }
     double        leverMinRps() const { return cfg_.ekf.lever_on ? cfg_.antenna_min_rps : cfg_.rot_lever_min_rps; }
+    // the Doppler change check's window (dv_window_s): every sum and its allowances' let go, to start over
+    void          dvWindowReset()
+    {
+        for (int i = 0; i < 3; ++i)
+        {
+            dv_SW_[i] = dv_SF_[i] = 0.0;
+            for (int j = 0; j < 3; ++j)
+                dv_CW_[i][j] = 0.0;
+        }
+        dv_SB_ = dv_SL_ = 0.0;
+        dv_wwin_ = 0.0;
+        dv_wpwin_ = 0.0;
+    }
     double        dvLeverM() const
     {
         return cfg_.ekf.lever_on ? std::fmax(cfg_.antenna_sigma_axial_m, cfg_.antenna_sigma_radial_m)

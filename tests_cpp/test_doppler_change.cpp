@@ -602,6 +602,16 @@ struct DvFlight
     double coh_max = 0.0;
     // the pad's heading guess this far off the truth, about the vertical (no magnetometer here: the start's)
     double seed_hdg_deg = 0.0;
+    // a short common jump (the V10's 11-21 boost: the board's loops pushed off together for 0.3 s): every
+    // Doppler at the receiver's velocity plus burst_mps down from burst_from for burst_s, then right again
+    // (burst_from < 0: none)
+    double burst_from = -1.0;
+    double burst_s = 0.0;
+    double burst_mps = 0.0;
+    double burst_back_s = 0.0;            // then back to the truth linearly over this long (0: at once)
+    // the span whose largest velocity error v_err_span_max reports (s, flight time; span_to <= span_from: none)
+    double span_from = 0.0;
+    double span_to = 0.0;
 };
 
 struct DvRun
@@ -611,6 +621,7 @@ struct DvRun
     double v_err_coast_max = 0.0;         // |filter - truth| velocity, the largest from 1 s after burnout
     double v_err_end = 0.0;               //   at the end
     uint32_t held_last = 0;               // Dopplers held in the last second
+    double v_err_span_max = 0.0;          // |filter - truth| velocity, the largest over span_from .. span_to
     double hdg_share_end = 1.0;           // the last epoch's heading share (hdg_obs_mode; 1 with it off)
 };
 
@@ -703,6 +714,13 @@ DvRun flyDv(const DvFlight& o)
                 run.v_err_coast_max = std::max(run.v_err_coast_max, e);
                 run.v_err_end = e;
             }
+            if (t >= o.span_from && t < o.span_to && sh.running())
+            {
+                const float* fv = sh.filter().velNed();
+                const double e = std::sqrt((fv[0] - v[0]) * (fv[0] - v[0]) + (fv[1] - v[1]) * (fv[1] - v[1])
+                                           + (fv[2] - v[2]) * (fv[2] - v[2]));
+                run.v_err_span_max = std::max(run.v_err_span_max, e);
+            }
             if (std::fabs(t - (t_end - 1.0)) < 0.5 * dt * 4)
                 held_at_last_s = sh.stats().dv_held_rr;
         }
@@ -719,9 +737,16 @@ DvRun flyDv(const DvFlight& o)
             nedToEcef(kLla0[0], kLla0[1], vs_n, vs);
             std::vector<const double*> vrr(sky.size(), nullptr);
             double vb[3];
-            if (o.coh_from >= 0.0 && t > o.coh_from)
+            const bool coh_on = o.coh_from >= 0.0 && t > o.coh_from;
+            const double burst_end = o.burst_from + o.burst_s;
+            const bool burst_on = o.burst_from >= 0.0 && t > o.burst_from && t <= burst_end + o.burst_back_s;
+            const double burst_b = !burst_on ? 0.0
+                                   : t <= burst_end ? o.burst_mps
+                                                    : o.burst_mps * (1.0 - (t - burst_end) / o.burst_back_s);
+            if (coh_on || burst_on)
             {
-                const double b = std::min(o.coh_rate * (t - o.coh_from), o.coh_max);
+                const double b = (coh_on ? std::min(o.coh_rate * (t - o.coh_from), o.coh_max) : 0.0)
+                                 + burst_b;
                 const double vb_n[3] = {v[0], v[1], v[2] + b};
                 nedToEcef(kLla0[0], kLla0[1], vb_n, vb);
                 for (size_t i = 0; i < sky.size(); ++i)
@@ -761,6 +786,7 @@ TEST(DopplerChange, TheChecksDefaultIsOff)
     const RawGnssShadow::Config c;
     EXPECT_EQ(c.dv_check, RawGnssShadow::kDvOff);
     EXPECT_EQ(c.dv_window_s, 0.0);
+    EXPECT_FALSE(c.dv_window_restart);
     EXPECT_EQ(c.dv_noise_tau_s, 0.0);
     EXPECT_FALSE(c.dv_deweight);
     EXPECT_FALSE(c.dv_ground);
@@ -1179,4 +1205,93 @@ TEST(DopplerChange, ThePitchOverUnderARollIsTheNosesOwnTurnInNed)
     }
     EXPECT_NEAR(allow[0], 0.3 * (want_dn + 0.12 * want_ndd), 1e-4);
     EXPECT_NEAR(allow[1], allow[0], 1e-4);
+}
+
+// ------------------------------------------------------- the window started over as a step's latch lets go
+
+namespace
+{
+
+// a step the epoch's own test catches, coming back over burst_back_s (the V10's 11-21 boost: the board's loops
+// pushed off together, then right): the check as the mosaic, PX1105R and gnss-sdr-dev images fly it, the window
+// restart on or off
+DvRun flyStep(double amp, double back_s, bool restart)
+{
+    DvFlight o;
+    o.burst_from = 3.6;
+    o.burst_s = 0.1;
+    o.burst_mps = amp;
+    o.burst_back_s = back_s;
+    o.seed_hdg_deg = 20.0;
+    o.span_from = 3.6;
+    o.span_to = 6.0;
+    o.cfg = dvCfg(RawGnssShadow::kDvAct);
+    o.cfg.dv_window_s = 1.0;
+    o.cfg.dv_latch_k = 5.0;
+    o.cfg.dv_window_restart = restart;
+    return flyDv(o);
+}
+
+}  // namespace
+
+TEST(DopplerChange, AStepsLatchLetsGoAndTheWindowStartsOver)
+{
+    // 15 m/s in one epoch mid-boost, back over 1 s: the epoch's own test catches the step and latches; without
+    // the restart the window, carrying the step, fails the epochs after it for most of its memory and the latch
+    // cannot let go; with it the latch lets go once the Dopplers agree with the filter again, the window starts
+    // over then, and the filter is no worse off for the Dopplers it gets back
+    const DvRun flown = flyStep(15.0, 1.0, false);
+    const DvRun rs = flyStep(15.0, 1.0, true);
+    EXPECT_GE(flown.st.dv_latches, 1u);
+    EXPECT_GE(rs.st.dv_latches, 1u);
+    EXPECT_EQ(flown.st.dv_window_restarts, 0u);
+    EXPECT_GE(rs.st.dv_window_restarts, 1u);
+    EXPECT_GT(flown.st.dv_epoch_win_fails, 10u);
+    EXPECT_LT(rs.st.dv_held_rr, flown.st.dv_held_rr / 2) << "flown " << flown.st.dv_held_rr << ", restart "
+                                                           << rs.st.dv_held_rr;
+    EXPECT_LE(rs.v_err_span_max, flown.v_err_span_max + 0.05);
+    EXPECT_LE(rs.v_err_coast_max, flown.v_err_coast_max + 0.05);
+}
+
+TEST(DopplerChange, AStepsLatchIsNeverHeldLongerForTheRestart)
+{
+    // the restart at the latch's release, not at the failed epoch: zeroed there, the window would see a step's
+    // gradual return alone, as a drift, and hold it longer than the step and its return cancelling (8 m/s back
+    // over 0.6 s held 50 Dopplers as flown, 240 so)
+    for (double amp : {8.0, 15.0})
+        for (double back : {0.0, 0.6, 1.0, 1.5})
+        {
+            const DvRun flown = flyStep(amp, back, false);
+            const DvRun rs = flyStep(amp, back, true);
+            EXPECT_LE(rs.st.dv_held_rr, flown.st.dv_held_rr) << amp << " m/s back over " << back << " s";
+        }
+}
+
+TEST(DopplerChange, TheRestartLeavesTheWindowsOwnWorkAlone)
+{
+    // a slow drift no epoch shows is still the window's (no latch, nothing to restart) ...
+    DvFlight o;
+    o.drift_sat = 7;
+    o.drift_mps2 = 0.6;
+    o.cfg = dvCfg(RawGnssShadow::kDvObserve);
+    o.cfg.dv_window_s = 1.0;
+    const DvRun win = flyDv(o);
+    o.cfg.dv_window_restart = true;
+    const DvRun win_rs = flyDv(o);
+    EXPECT_GT(win_rs.st.dv_sat_win_fails, 0u);
+    EXPECT_EQ(win_rs.st.dv_sat_win_fails, win.st.dv_sat_win_fails);
+    EXPECT_EQ(win_rs.st.dv_window_restarts, 0u);
+    // ... and a receiver that ramped away and stays there stays latched out
+    DvFlight r;
+    r.coh_from = 4.7;
+    r.coh_rate = 3.0;
+    r.coh_max = 6.0;
+    r.cfg = dvCfg(RawGnssShadow::kDvAct);
+    r.cfg.dv_window_s = 1.0;
+    r.cfg.dv_latch_k = 5.0;
+    r.cfg.dv_window_restart = true;
+    const DvRun latch = flyDv(r);
+    EXPECT_GE(latch.st.dv_latches, 1u);
+    EXPECT_GT(latch.held_last, 50u);
+    EXPECT_LT(latch.v_err_end, 1.0);
 }
