@@ -897,6 +897,15 @@ byte before and after, 2026-10-21: a V9 mosaic log and the Beetle's ec10).
   (0: uncalibrated, no 1PPS on this carrier); `--epoch-shift-ms` moves the tags as for the other receivers.
 - `META app_iono a0 a1 a2 a3 b0 b1 b2 b3 gps_day`: the app's set, offered to the rule as the app's (the rig's sky never
   broadcasts page 18; the V9 rig image injects the sky's own).
+- `--px-seed-locks 1`: a log the filter starts from its own state (S lines: a V10 flight log, whose ring holds ~2 s
+  before launch) takes its first epochs' satellites as long locked, as the LC86G's restored start does. Without it
+  each enters as just relocked: its Doppler carries `rr_relock_sigma` (3 m/s) decaying over `relock_tau_s` (10 s),
+  2.5-2.9 m/s at launch against ~0.12-0.2 m/s locked, and the Doppler change check cannot see a burn. On the 65mm
+  Roll Control flight of 2026-11-21 (V10, PX100) the replay with it follows the flight's own filter to
+  0.12 / 0.06 / 0.18 m/s rms north / east / down (T-2 to T+14 s) and holds the Dopplers from the first burn epoch
+  to T+7.23 s as the flight did (the change check's window, then its latch, which lets go on the first epoch with
+  five Dopplers); without it, it never holds them. A satellite counts as seen min(1 s, half the relock gap) before
+  its first epoch: the LC86G's 1 s, unchanged; 1 s was past the PX1105R's 0.5 s gap, a relock at once.
 
 Beside it:
 - `px_events.py`: a rig capture of the PX1105R (`<host_t> B <hex body>`) beside the same simulated flight's sensors
