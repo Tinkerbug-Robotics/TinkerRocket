@@ -26,6 +26,10 @@ import Combine
 protocol TelemetryAnnouncer: AnyObject {
     func processTelemetry(_ telemetry: TelemetryData)
     func reset()
+    /// Voice moved to another rocket's stream on the same base station (see
+    /// `VoiceRocketPolicy`). `baseline` is that rocket's last frame before
+    /// the one about to be processed, or nil if none was heard.
+    func followStream(baseline: TelemetryData?)
 }
 
 /// The speech engine as the policy sees it — same shape as Android's
@@ -298,6 +302,37 @@ class FlightAnnouncer: NSObject, ObservableObject, TelemetryAnnouncer {
     func reset() {
         resetFlightState()
         speech.stop()
+    }
+
+    /// Start following another rocket's stream (`VoiceRocketPolicy`).
+    ///
+    /// The one-shots and detectors were tracking the previous rocket's flight,
+    /// so they start over. Without that, a rocket that flew earlier leaves
+    /// apogee and landing marked as announced, and the next flight calls
+    /// neither. `baseline` becomes the edge reference: a computer already past
+    /// apogee or landed does not re-announce it at the switch, which a frame
+    /// from the other rocket as the reference would cause.
+    ///
+    /// The pad position carries over unless the baseline gives a fresh one:
+    /// rockets fly from one site, and a computer picked up mid-flight has no
+    /// pad fix of its own. Picked up in flight, the burnout callout is skipped
+    /// (its climb was not watched) but the altitude cadence it gates runs.
+    /// Picked up past apogee or landed, those count as said: the live apogee
+    /// votes toggle in descent (the V9's did on 2026-11-21), and each toggle
+    /// would otherwise be a fresh "Apogee". Anything still playing finishes.
+    func followStream(baseline: TelemetryData?) {
+        let pad = launchLocation
+        resetFlightState()
+        launchLocation = pad
+        previousTelemetry = baseline
+        guard let b = baseline else { return }
+        if !b.launch_flag && b.state != "INFLIGHT",
+           let lat = b.latitude, let lon = b.longitude, !lat.isNaN && !lon.isNaN {
+            launchLocation = (lat: lat, lon: lon)
+        }
+        if b.state == "INFLIGHT" { burnoutAnnounced = true }
+        if b.past_apogee { apogeeAnnounced = true }
+        if b.landed_flag || b.state == "LANDED" { landedAnnounced = true }
     }
 
     // MARK: - Event Detectors

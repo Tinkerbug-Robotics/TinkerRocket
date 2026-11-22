@@ -24,6 +24,7 @@ final class AnnouncerRoutingTests: XCTestCase {
         var received: [TelemetryData] = []
         func processTelemetry(_ telemetry: TelemetryData) { received.append(telemetry) }
         func reset() {}
+        func followStream(baseline: TelemetryData?) {}
     }
 
     // MARK: - Helpers

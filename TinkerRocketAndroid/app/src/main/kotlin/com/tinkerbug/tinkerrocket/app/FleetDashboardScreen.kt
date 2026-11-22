@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -83,6 +84,8 @@ internal fun FleetDashboardContent(
     activeDevice: FleetDevice<DeviceSession>,
     phoneLocation: PhoneLocationManager?,
     deviceContent: @Composable (FleetDevice<DeviceSession>, DashboardSection?) -> Unit,
+    /** Voice callouts are on: mark the rocket they follow. */
+    voiceOn: Boolean = false,
 ) {
     val devices by fleet.devices.collectAsState()
     // Rebuilt on every connect, drop, identity readback and relayed-roster
@@ -95,6 +98,13 @@ internal fun FleetDashboardContent(
     val foreground = FleetDashboard.foregroundBaseStation(devices.values, foregroundId)
     val focus = foreground?.session?.focusRocketId?.collectAsState()?.value
     val layout = FleetDashboard.layout(roster, foreground, focus, hidden)
+    // The rocket the callouts follow: the computer on screen, usually the
+    // followed one (VoiceRocketPolicy). Voice speaks from the foreground
+    // base station only (FleetManager.voiceDevice).
+    val voiceRid = foreground?.session?.voiceRocketId?.collectAsState()?.value
+    val voiceNid = foreground?.session?.identity?.collectAsState()?.value?.networkId ?: 0
+    val voiceKey = voiceRid?.takeIf { voiceOn }
+        ?.let { com.tinkerbug.tinkerrocket.session.RocketKey(voiceNid, it) }
 
     // The phone IS the base station's position — the BS has no GNSS — so push
     // it down and let the BS write it into its CSV.  Without this the range
@@ -118,7 +128,7 @@ internal fun FleetDashboardContent(
             PairSwitcher(stations, foreground) { fleet.setForegroundBS(it) }
         }
         if (layout.scoped.isNotEmpty()) {
-            UnitsBar(layout.scoped, foreground, focus, hidden, fleet)
+            UnitsBar(layout.scoped, foreground, focus, hidden, fleet, voiceKey)
         }
         foreground?.let { BaseStationStrip(it, focus) }
 
@@ -133,6 +143,7 @@ internal fun FleetDashboardContent(
                         showHeaderWhenSolo = { false },
                         deviceContent = deviceContent,
                         knownDevices = fleet.knownDevices,
+                        speaks = section.subject.key == voiceKey,
                     )
                     is DashboardSection.FocusedRelay -> DeviceSection(
                         section = section,
@@ -145,6 +156,7 @@ internal fun FleetDashboardContent(
                         },
                         deviceContent = deviceContent,
                         knownDevices = fleet.knownDevices,
+                        speaks = section.subject.key == voiceKey,
                     )
                     is DashboardSection.Relay -> RelayRocketSection(
                         section = section,
@@ -152,6 +164,7 @@ internal fun FleetDashboardContent(
                         followTarget = FleetDashboard.followTarget(section.subject, foreground, focus),
                         fleet = fleet,
                         phoneLocation = phoneLocation,
+                        speaks = section.subject.key == voiceKey,
                     )
                 }
             }
@@ -246,6 +259,7 @@ private fun UnitsBar(
     focus: Int?,
     hidden: Set<com.tinkerbug.tinkerrocket.session.RocketKey>,
     fleet: FleetManager<DeviceSession>,
+    voiceKey: com.tinkerbug.tinkerrocket.session.RocketKey?,
 ) {
     val now = rememberNowMs()
     Row(
@@ -262,6 +276,7 @@ private fun UnitsBar(
                     freshness = subject.freshness(now),
                     hidden = isHidden,
                     focused = FleetDashboard.isFocused(subject, foreground, focus),
+                    speaks = key != null && key == voiceKey,
                     onToggleHidden = {
                         if (key != null) {
                             if (isHidden) fleet.unhideRocket(key) else fleet.hideRocket(key)
@@ -282,6 +297,7 @@ private fun RocketChip(
     freshness: RocketFreshness,
     hidden: Boolean,
     focused: Boolean,
+    speaks: Boolean,
     onToggleHidden: () -> Unit,
     onFocusHere: (() -> Unit)?,
     onDisconnect: (() -> Unit)?,
@@ -308,6 +324,9 @@ private fun RocketChip(
             )
             if (focused) {
                 Icon(Icons.Filled.GpsFixed, "Base station follows", tint = fg, modifier = Modifier.size(12.dp))
+            }
+            if (speaks) {
+                Icon(Icons.AutoMirrored.Filled.VolumeUp, "Voice callouts", tint = fg, modifier = Modifier.size(12.dp))
             }
             if (subject.direct != null) {
                 Icon(Icons.Filled.Smartphone, "Direct Bluetooth", tint = fg, modifier = Modifier.size(12.dp))
@@ -411,6 +430,7 @@ private fun DeviceSection(
     showHeaderWhenSolo: (nowMs: Long) -> Boolean,
     deviceContent: @Composable (FleetDevice<DeviceSession>, DashboardSection?) -> Unit,
     knownDevices: com.tinkerbug.tinkerrocket.session.KnownDeviceStore,
+    speaks: Boolean,
 ) {
     var collapsed by remember { mutableStateOf(false) }
     // A section left collapsed when the others go away must not stay shut
@@ -424,6 +444,7 @@ private fun DeviceSection(
             collapsible = collapsible,
             collapsed = isCollapsed,
             onToggle = { collapsed = !collapsed },
+            speaks = speaks,
         )
     }
     // A direct link reads its board live (the device content's own line);
@@ -450,6 +471,8 @@ private fun RocketSectionHeader(
     collapsed: Boolean,
     onToggle: () -> Unit,
     onFollow: (() -> Unit)? = null,
+    /** The voice callouts follow this rocket. */
+    speaks: Boolean = false,
 ) {
     val tr = TrTheme.colors
     Row(
@@ -464,7 +487,19 @@ private fun RocketSectionHeader(
     ) {
         Box(Modifier.size(8.dp).background(freshnessColor(subject.freshness(nowMs)), CircleShape))
         Column(Modifier.weight(1f)) {
-            Text(subject.name, style = MaterialTheme.typography.titleMedium)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(subject.name, style = MaterialTheme.typography.titleMedium)
+                if (speaks) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.VolumeUp, "Voice callouts follow this rocket",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+            }
             Text(
                 FleetDashboard.sourceLine(subject, nowMs),
                 style = MaterialTheme.typography.labelSmall,
@@ -575,6 +610,7 @@ private fun RelayRocketSection(
     followTarget: FleetDevice<DeviceSession>?,
     fleet: FleetManager<DeviceSession>,
     phoneLocation: PhoneLocationManager?,
+    speaks: Boolean,
 ) {
     var collapsed by remember { mutableStateOf(false) }
     val isCollapsed = collapsed && collapsible
@@ -591,6 +627,7 @@ private fun RelayRocketSection(
         collapsed = isCollapsed,
         onToggle = { collapsed = !collapsed },
         onFollow = followTarget?.let { bs -> { bs.session.setFocusRocket(section.remote.rocketId) } },
+        speaks = speaks,
     )
     if (isCollapsed) {
         CollapsedRocketSummary(telemetry, Modifier.alpha(opacity))

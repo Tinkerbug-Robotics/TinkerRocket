@@ -274,6 +274,7 @@ class AppContainer(app: Application) {
                     onIdentity = { msg, pusher -> fleetRef.onIdentityReadback(deviceId, msg, pusher) },   // #1041
                     onRocketFix = fleetRef::recordRocketFix,
                     fixLookup = fleetRef::lastValidRocketFix,
+                    hiddenRockets = { fleetRef.hiddenRocketKeys.value },
                 )
                 seedFocusRocket?.let { session.seedFocusRocket(it) }
                 session.start()

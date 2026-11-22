@@ -18,6 +18,7 @@ final class FlightAnnouncerDispatchTests: XCTestCase {
         func reset() {
             resetCount += 1
         }
+        func followStream(baseline: TelemetryData?) {}
     }
 
     // MARK: - Helpers

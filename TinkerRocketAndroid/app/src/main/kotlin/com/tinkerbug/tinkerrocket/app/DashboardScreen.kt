@@ -166,10 +166,12 @@ fun DashboardScreen(
     // base-station strip, then one section per displayed rocket.  A direct
     // rocket and the rocket the base station follows each get the full
     // device dashboard below; other relayed rockets get their card stack.
+    val voiceOn = container?.announcer?.enabled?.collectAsState()?.value ?: false
     FleetDashboardContent(
         fleet = fleet,
         activeDevice = device,
         phoneLocation = phoneLocation,
+        voiceOn = voiceOn,
         deviceContent = { d, section ->
             DeviceDashboardContent(
                 device = d,

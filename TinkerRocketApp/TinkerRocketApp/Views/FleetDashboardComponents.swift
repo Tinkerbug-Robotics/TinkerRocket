@@ -90,9 +90,34 @@ struct UnitsBarView: View {
     }
 }
 
+// MARK: - Voice marker
+
+private struct VoiceCalloutsOnKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// Voice callouts are switched on. The dashboard sets it so the chip and
+    /// the section header of the rocket the callouts follow
+    /// (`BLEFleet.voiceRocketKey`) can carry a speaker.
+    var voiceCalloutsOn: Bool {
+        get { self[VoiceCalloutsOnKey.self] }
+        set { self[VoiceCalloutsOnKey.self] = newValue }
+    }
+}
+
+extension BLEFleet {
+    /// The callouts are on and follow `subject`: the speaker marker's test.
+    func speaksFor(_ subject: RocketSubject, voiceOn: Bool) -> Bool {
+        guard voiceOn, let key = subject.key else { return false }
+        return voiceRocketKey == key
+    }
+}
+
 private struct RocketChip: View {
     @ObservedObject var fleet: BLEFleet
     let subject: RocketSubject
+    @Environment(\.voiceCalloutsOn) private var voiceOn
 
     private var isHidden: Bool {
         guard let key = subject.key else { return false }
@@ -133,6 +158,10 @@ private struct RocketChip: View {
                     .lineLimit(1)
                 if isFocused {
                     Image(systemName: "scope").font(.system(size: 9))
+                }
+                if fleet.speaksFor(subject, voiceOn: voiceOn) {
+                    Image(systemName: "speaker.wave.2.fill").font(.system(size: 9))
+                        .accessibilityLabel("Voice callouts")
                 }
                 if subject.direct != nil {
                     Image(systemName: "iphone").font(.system(size: 9))
@@ -235,6 +264,8 @@ struct RocketSectionHeader: View {
     /// Point the base station's radio at this rocket. nil hides the button
     /// (direct link, or already the followed rocket).
     var onFollow: (() -> Void)? = nil
+    /// The voice callouts follow this rocket (`BLEFleet.speaksFor`).
+    var speaks: Bool = false
 
     /// The warning for a rocket ID that looks like two rockets — the base
     /// station's "dup", or the relayed name alternating — or nil.
@@ -289,8 +320,16 @@ struct RocketSectionHeader: View {
             HStack(spacing: 8) {
                 Circle().fill(freshnessColor).frame(width: 8, height: 8)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(subject.name)
-                        .font(.headline)
+                    HStack(spacing: 4) {
+                        Text(subject.name)
+                            .font(.headline)
+                        if speaks {
+                            Image(systemName: "speaker.wave.2.fill")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .accessibilityLabel("Voice callouts follow this rocket")
+                        }
+                    }
                     Text(sourceLine(now: context.date))
                         .font(.caption2)
                         .foregroundColor(.secondary)
@@ -361,6 +400,7 @@ struct RelayRocketSectionView: View {
     /// nil to hide Follow.
     var followTarget: BLEDevice? = nil
     @State private var collapsed = false
+    @Environment(\.voiceCalloutsOn) private var voiceOn
 
     private var follow: (() -> Void)? {
         guard let bs = followTarget, let fleet, bs.focusRocketID != remote.rocketID else { return nil }
@@ -394,7 +434,8 @@ struct RelayRocketSectionView: View {
                                 collapsible: collapsible,
                                 collapsed: $collapsed,
                                 identityLine: identityLine,
-                                onFollow: follow)
+                                onFollow: follow,
+                                speaks: fleet?.speaksFor(subject, voiceOn: voiceOn) ?? false)
             // 1 Hz clock.  remote.lastSeen is @Published, so a NEW frame
             // re-renders this section — but the case that matters here is
             // frames STOPPING, and then nothing publishes and the staleness

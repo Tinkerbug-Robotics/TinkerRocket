@@ -52,6 +52,7 @@ class FlightAnnouncerTest {
         override fun reset() {
             resetCount++
         }
+        override fun followStream(baseline: TelemetryData?) {}
     }
 
     // ── Frame builder ────────────────────────────────────────────────────
