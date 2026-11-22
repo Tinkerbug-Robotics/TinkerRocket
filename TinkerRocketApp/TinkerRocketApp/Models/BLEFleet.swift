@@ -381,7 +381,7 @@ class BLEFleet: NSObject, ObservableObject {
     }
 
     /// The link that speaks: the foreground base station, and only ever a
-    /// base station.  Its stream is pinned to its focused rocket, so callouts
+    /// base station.  It speaks one rocket, `voiceRocketKey`, so callouts
     /// never interleave two rockets.
     ///
     /// A direct rocket link used to win here (full frame rate), with the base
@@ -393,6 +393,14 @@ class BLEFleet: NSObject, ObservableObject {
     /// base station depended on whether the rocket happened to be paired.
     /// With no base station connected there are no callouts.
     var voiceDevice: BLEDevice? { foregroundBaseStation }
+
+    /// The rocket the callouts follow: the computer the dashboard is showing,
+    /// usually the followed one (`VoiceRocketPolicy`). The units bar and the
+    /// section headers mark it.
+    var voiceRocketKey: RocketKey? {
+        guard let bs = voiceDevice, let rid = bs.voiceRocketID else { return nil }
+        return RocketKey(networkID: bs.networkID, rocketID: rid)
+    }
 
     /// Re-run every binding the fleet owns.  Idempotent and cheap — safe to
     /// call from any state change, and called from several deliberately

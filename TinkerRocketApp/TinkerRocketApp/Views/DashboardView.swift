@@ -156,6 +156,9 @@ struct DashboardView: View {
                             locationManager: locationManager,
                             activeSheet: $activeSheet
                         )
+                        // Marks the rocket the callouts follow (chip and
+                        // section header) while voice is on.
+                        .environment(\.voiceCalloutsOn, flightAnnouncer.isEnabled)
                     } else {
                         // --- Not connected ---
                         NavigationLink(destination: FlightLogsView()) {
@@ -598,6 +601,7 @@ private struct DirectRocketSection: View {
     @Binding var activeSheet: DashboardSheet?
     let collapsible: Bool
     @State private var collapsed = false
+    @Environment(\.voiceCalloutsOn) private var voiceOn
 
     var body: some View {
         // Header only when it does real work: separating sections and
@@ -607,7 +611,8 @@ private struct DirectRocketSection: View {
         if collapsible {
             RocketSectionHeader(subject: subject,
                                 collapsible: collapsible,
-                                collapsed: $collapsed)
+                                collapsed: $collapsed,
+                                speaks: fleet.speaksFor(subject, voiceOn: voiceOn))
         }
         if collapsed {
             CollapsedRocketSummary(telemetry: device.telemetry)
@@ -632,6 +637,7 @@ private struct FocusedRelaySection: View {
     @Binding var activeSheet: DashboardSheet?
     let collapsible: Bool
     @State private var collapsed = false
+    @Environment(\.voiceCalloutsOn) private var voiceOn
 
     private var identityLine: String? {
         guard let key = subject.key else { return nil }
@@ -650,7 +656,8 @@ private struct FocusedRelaySection: View {
             RocketSectionHeader(subject: subject,
                                 collapsible: collapsible,
                                 collapsed: $collapsed,
-                                identityLine: identityLine)
+                                identityLine: identityLine,
+                                speaks: fleet.speaksFor(subject, voiceOn: voiceOn))
         }
         if collapsed {
             CollapsedRocketSummary(telemetry: bs.telemetry)

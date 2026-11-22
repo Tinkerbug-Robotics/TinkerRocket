@@ -381,7 +381,41 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     // Flight voice announcer, set by `BLEFleet.routeAnnouncer` on the
     // foreground base station only.  Typed as a protocol so dispatch tests
     // can inject a spy without touching AVAudioSession.
-    var flightAnnouncer: (any TelemetryAnnouncer)?
+    var flightAnnouncer: (any TelemetryAnnouncer)? {
+        didSet {
+            // routeAnnouncer re-assigns the same announcer on every routing
+            // pass; only a different one starts with no stream.
+            if flightAnnouncer !== oldValue { voiceStreamRocketID = nil }
+        }
+    }
+
+    /// The relayed rocket whose frames the announcer was last handed. A
+    /// change is a hand-over (`TelemetryAnnouncer.followStream`).
+    private(set) var voiceStreamRocketID: UInt8?
+
+    /// The relayed rocket the callouts follow: the computer the dashboard is
+    /// showing (`VoiceRocketPolicy`). Usually the focused rocket. nil before
+    /// anything is heard or pinned.
+    var voiceRocketID: UInt8? {
+        let hidden = fleet?.hiddenRocketKeys ?? []
+        let now = Date()
+        return VoiceRocketPolicy.choose(
+            focus: focusRocketID,
+            focusHidden: focusRocketID.map {
+                hidden.contains(RocketKey(networkID: networkID, rocketID: $0))
+            } ?? false,
+            focusPinFresh: now < (focusPinGraceUntil ?? .distantPast),
+            current: voiceStreamRocketID,
+            rockets: remoteRockets.map { r in
+                VoiceRocketPolicy.Candidate(
+                    rocketID: r.rocketID,
+                    hidden: hidden.contains(RocketKey(networkID: networkID, rocketID: r.rocketID)),
+                    silentFor: now.timeIntervalSince(r.lastSeen),
+                    state: r.telemetry.state,
+                    landed: r.telemetry.landed_flag,
+                    simulated: r.telemetry.sim_active)
+            })
+    }
 
     // MARK: - Internal state
 
@@ -2931,7 +2965,11 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             if let rid = newTelemetry.source_rocket_id, rid > 0, isBaseStation {
                 let bsID = peripheral?.identifier ?? UUID()
                 let rocketID = UInt8(rid)
+                // This rocket's previous frame: the edge reference if voice
+                // hands over to it on this one.
+                var priorFrame: TelemetryData?
                 if let existing = remoteRockets.first(where: { $0.rocketID == rocketID }) {
+                    priorFrame = existing.telemetry
                     existing.updateTelemetry(newTelemetry, unitName: newTelemetry.source_unit_name)
                 } else {
                     let remote = RemoteRocket(
@@ -3014,13 +3052,21 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                     // cache returns a non-nil value so a GPS-less packet
                     // can't blank the marker.
                     if let fix { self.lastValidRocketFix = fix }
-                    // The relayed JSON carries the full rocket state (st/aapo/
-                    // lnch/land/mspd/palt — see TR_BLE_To_APP.cpp).  Without
-                    // this call voice callouts only fire when paired directly
-                    // to the rocket, never during a real flight (#138).
-                    // Focused rocket only — two interleaved flights' callouts
-                    // are noise (#390).
-                    self.flightAnnouncer?.processTelemetry(newTelemetry)
+                }
+                // The relayed JSON carries the full rocket state (st/aapo/
+                // lnch/land/mspd/palt — see TR_BLE_To_APP.cpp).  Without this
+                // voice callouts only fire when paired directly to the rocket,
+                // never during a real flight (#138).  One rocket only — two
+                // interleaved flights' callouts are noise (#390) — and that
+                // rocket is the one on screen, which is usually but not always
+                // the focused one (VoiceRocketPolicy).
+                if let announcer = self.flightAnnouncer, rocketID == self.voiceRocketID {
+                    if let following = self.voiceStreamRocketID, following != rocketID {
+                        print("[VOICE] callouts move from rocket \(following) to rocket \(rocketID)")
+                        announcer.followStream(baseline: priorFrame)
+                    }
+                    self.voiceStreamRocketID = rocketID
+                    announcer.processTelemetry(newTelemetry)
                 }
                 return
             }

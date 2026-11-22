@@ -141,6 +141,12 @@ public class DeviceSession(
      * this session does NOT push to [knownDevices] itself — the fleet does.
      */
     private val onIdentity: ((ConfigIdentityMsg, DeviceIdentityPusher) -> Unit)? = null,
+    /**
+     * The rockets the user hid from the dashboard (iOS
+     * `fleet?.hiddenRocketKeys`): voice follows the computer on screen
+     * ([VoiceRocketPolicy]). Wire to [FleetManager.hiddenRocketKeys].
+     */
+    private val hiddenRockets: (() -> Set<RocketKey>)? = null,
 ) : DeviceIdentityPusher {
 
     // ── Connection / link state ──────────────────────────────────────────
@@ -150,11 +156,34 @@ public class DeviceSession(
      * DIRECT, not via the [telemetry] StateFlow: a StateFlow dedups equal
      * frames, and burnout detection counts *consecutive unchanged* max-speed
      * frames — conflation would eat exactly the frames it counts. Relay path
-     * feeds only the FOCUSED rocket (#390 — two interleaved flights' callouts
-     * are noise). The app attaches/detaches this on the fleet dispatcher, on
-     * the foreground base station only ([FleetManager.voiceDevice]).
+     * feeds one rocket (#390 — two interleaved flights' callouts are noise):
+     * the one on screen, usually the focused one ([voiceRocketId]). The app
+     * attaches/detaches this on the fleet dispatcher, on the foreground base
+     * station only ([FleetManager.voiceDevice]).
      */
     public var telemetryAnnouncer: TelemetryAnnouncer? = null
+        set(value) {
+            // routeDeviceBindings re-assigns the same announcer on every
+            // pass; only a different one starts with no stream.
+            if (value !== field) voiceStreamRocketId = null
+            field = value
+        }
+
+    /**
+     * The relayed rocket whose frames the announcer was last handed (iOS
+     * `voiceStreamRocketID`). A change is a hand-over
+     * ([TelemetryAnnouncer.followStream]).
+     */
+    public var voiceStreamRocketId: Int? = null
+        private set
+
+    private val _voiceRocketId = MutableStateFlow<Int?>(null)
+    /**
+     * The relayed rocket the callouts follow, as of the last relayed frame:
+     * the computer the dashboard is showing ([VoiceRocketPolicy]; iOS
+     * `BLEDevice.voiceRocketID`). The units bar and section headers mark it.
+     */
+    public val voiceRocketId: StateFlow<Int?> = _voiceRocketId.asStateFlow()
 
     private val _isConnected = MutableStateFlow(false)
     public val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
@@ -811,6 +840,9 @@ public class DeviceSession(
             // RemoteRocket.updateTelemetry; the two must not diverge.
             val heardNow = data.dataStatus == TelemetryData.DataStatus.LIVE
             val existing = remoteMap[rid]
+            // This rocket's previous frame: the edge reference if voice hands
+            // over to it on this one.
+            val priorFrame = existing?.telemetry
             remoteMap[rid] = if (existing != null) {
                 // #1650: the relayed name feeds the two-rockets-under-one-ID
                 // check before the copy (iOS RemoteRocket.updateTelemetry).
@@ -862,11 +894,20 @@ public class DeviceSession(
                 // Mirror the latched fix only when non-null — a GPS-less
                 // packet must not blank the marker (#140).
                 if (fix != null) _lastValidRocketFix.value = fix
-                // The relayed JSON carries the full rocket state. Without
-                // this, voice callouts only fire when paired directly to the
-                // rocket, never during a real flight (#138). Focused rocket
-                // only (#390).
-                telemetryAnnouncer?.processTelemetry(data)
+            }
+            // The relayed JSON carries the full rocket state. Without this,
+            // voice callouts only fire when paired directly to the rocket,
+            // never during a real flight (#138). One rocket only (#390), and
+            // that rocket is the one on screen, which is usually but not
+            // always the focused one (VoiceRocketPolicy).
+            val voice = chooseVoiceRocket(now)
+            _voiceRocketId.value = voice
+            val announcer = telemetryAnnouncer
+            if (announcer != null && rid == voice) {
+                val following = voiceStreamRocketId
+                if (following != null && following != rid) announcer.followStream(priorFrame)
+                voiceStreamRocketId = rid
+                announcer.processTelemetry(data)
             }
             // #1061: the sim latch has to see RELAYED frames too. It sat
             // below the `return` above, so on a base-station link it never
@@ -1369,6 +1410,29 @@ public class DeviceSession(
         // #1040: the fleet's sticky map first, then the wire — iOS order.
         onUserFocus?.invoke(rocketId)
         sessionScope.launch { writeCommand(Commands.setFocusRocket(rocketId)) }
+    }
+
+    /** [VoiceRocketPolicy] over this link's roster, focus and the fleet's hidden set. */
+    private fun chooseVoiceRocket(now: Long): Int? {
+        val hidden = hiddenRockets?.invoke() ?: emptySet()
+        val nid = _identity.value.networkId ?: 0
+        val focus = _focusRocketId.value
+        return VoiceRocketPolicy.choose(
+            focus = focus,
+            focusHidden = focus != null && RocketKey(nid, focus) in hidden,
+            focusPinFresh = now < (focusPinGraceUntilMs ?: Long.MIN_VALUE),
+            current = voiceStreamRocketId,
+            rockets = remoteMap.values.map { r ->
+                VoiceRocketPolicy.Candidate(
+                    rocketId = r.rocketId,
+                    hidden = RocketKey(nid, r.rocketId) in hidden,
+                    silentForMs = now - r.lastSeenMs,
+                    state = r.telemetry.state,
+                    landed = r.telemetry.landedFlag,
+                    simulated = r.telemetry.simActive,
+                )
+            },
+        )
     }
 
     /**

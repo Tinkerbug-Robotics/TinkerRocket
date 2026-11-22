@@ -776,8 +776,9 @@ public class FleetManager<S : Any>(
 
     /**
      * The link that speaks: the foreground base station, and only ever a base
-     * station (iOS `BLEFleet.voiceDevice`). Its stream is pinned to its
-     * focused rocket, so callouts never interleave two rockets.
+     * station (iOS `BLEFleet.voiceDevice`). It speaks one rocket, the computer
+     * on screen ([DeviceSession.voiceRocketId], [VoiceRocketPolicy]), so
+     * callouts never interleave two rockets.
      *
      * A connected direct rocket used to win (full frame rate), with the base
      * station as the fallback. But a direct link always leaves range at
