@@ -512,7 +512,7 @@ The main sensor frames, with the rate each is produced at:
 | 0xA6 | Power | 14 B | 100 Hz |
 | 0xD1 | IIS2MDC (Mag) | 10 B | 100 Hz |
 | 0xF1 | LoRa Telemetry (fast) | 55 B | 1.67 Hz |
-| 0xF1 | LoRa Telemetry (slow) | 22 B | 0.33 Hz |
+| 0xF1 | LoRa Telemetry (slow) | 23 B | 0.33 Hz |
 | 0xF9 | LoRa Uplink RX | 13 B | per uplink decode |
 | 0x94 | Pyro fault-current trip | 13 B | two per trip (trip + release) |
 

@@ -54,7 +54,7 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(offsetof(FcStatusData, scap_mv), 5u);
     EXPECT_EQ(sizeof(LoRaFrameHeader), 7u);   // #850: shared prefix, both frames
     EXPECT_EQ(sizeof(LoRaFastData),   55u);  // #850: 5-of-6 slots
-    EXPECT_EQ(sizeof(LoRaSlowData),   22u);  // #850: 1-of-6 slots
+    EXPECT_EQ(sizeof(LoRaSlowData),   23u);  // #850: 1-of-6 slots; v6: + status
     EXPECT_EQ(sizeof(LoRaUplinkData), 13u);  // uplink RSSI/SNR log record (0xF9)
     EXPECT_EQ(sizeof(PyroFaultTripData), 13u);  // #1553 fault-current trip log record (0x94)
     // #1658: the computer that wrote the log (0x87); the apps and Python read
@@ -2875,24 +2875,29 @@ TEST(LoraHopChangeAllowed, PrelaunchStillAllowsAnEnable) {
 // ── #1147 item 4: a name beacon must never look like a telemetry frame ──
 //
 // The beacon carries no length field, and the base station disambiguates
-// beacon from telemetry PURELY by length. SIZE_OF_LORA_SLOW is 22, and the
-// beacon is 3 + strlen(name), so a 19-character rocket name produced exactly
-// 22 bytes: the beacon fell through to the telemetry branch, read ver_type
-// from unit_name[2], failed the protocol-version check and was logged as a
-// firmware mismatch. That rocket never appeared in the BS's list.
+// beacon from telemetry PURELY by length. SIZE_OF_LORA_SLOW was 22 (v5), and
+// the beacon is 3 + strlen(name), so a 19-character rocket name produced
+// exactly 22 bytes: the beacon fell through to the telemetry branch, read
+// ver_type from unit_name[2], failed the protocol-version check and was logged
+// as a firmware mismatch. That rocket never appeared in the BS's list. Since
+// v6 (SLOW 23 B, v5's 22 still read) both slow sizes are padded around.
 
 TEST(LoraBeaconPadBytes, NineteenCharacterNameIsThePathologicalCase) {
-    // 3 + 19 == SIZE_OF_LORA_SLOW: the exact reported collision.
-    ASSERT_EQ(SIZE_OF_LORA_SLOW, 22u);
-    EXPECT_EQ(loraBeaconPadBytes(3 + 19), 1u);
-    EXPECT_NE(3 + 19 + loraBeaconPadBytes(3 + 19), SIZE_OF_LORA_SLOW);
+    // 3 + 19 == SIZE_OF_LORA_SLOW_V5: the exact reported collision; 3 + 20 is
+    // v6's, so both step past both.
+    ASSERT_EQ(SIZE_OF_LORA_SLOW_V5, 22u);
+    ASSERT_EQ(SIZE_OF_LORA_SLOW, 23u);
+    EXPECT_EQ(loraBeaconPadBytes(3 + 19), 2u);
+    EXPECT_EQ(loraBeaconPadBytes(3 + 20), 1u);
+    EXPECT_EQ(3 + 19 + loraBeaconPadBytes(3 + 19), 24u);
+    EXPECT_EQ(3 + 20 + loraBeaconPadBytes(3 + 20), 24u);
 }
 
 TEST(LoraBeaconPadBytes, OrdinaryNamesAreNotPadded) {
     // Padding costs a byte of airtime, so it must apply only where needed.
     for (size_t name_len = 1; name_len <= 20; ++name_len) {
         const size_t len = 3 + name_len;
-        if (len == SIZE_OF_LORA_SLOW || len == SIZE_OF_LORA_FAST) continue;
+        if (len == SIZE_OF_LORA_SLOW || len == SIZE_OF_LORA_SLOW_V5 || len == SIZE_OF_LORA_FAST) continue;
         EXPECT_EQ(loraBeaconPadBytes(len), 0u) << "padded a safe name_len "
                                                << name_len;
     }
@@ -2905,6 +2910,7 @@ TEST(LoraBeaconPadBytes, NoReachableNameLengthCanCollideAfterPadding) {
         const size_t len = 3 + name_len + loraBeaconPadBytes(3 + name_len);
         EXPECT_NE(len, SIZE_OF_LORA_FAST) << "name_len " << name_len;
         EXPECT_NE(len, SIZE_OF_LORA_SLOW) << "name_len " << name_len;
+        EXPECT_NE(len, SIZE_OF_LORA_SLOW_V5) << "name_len " << name_len;
     }
 }
 
@@ -2916,6 +2922,8 @@ TEST(LoraBeaconPadBytes, PaddingWouldStepPastTwoAdjacentFrameSizes) {
     const size_t len = SIZE_OF_LORA_FAST + loraBeaconPadBytes(SIZE_OF_LORA_FAST);
     EXPECT_NE(len, SIZE_OF_LORA_FAST);
     EXPECT_NE(len, SIZE_OF_LORA_SLOW);
+    // v6's two slow sizes ARE adjacent: a v5-slow-length beacon clears both.
+    EXPECT_EQ(SIZE_OF_LORA_SLOW_V5 + loraBeaconPadBytes(SIZE_OF_LORA_SLOW_V5), SIZE_OF_LORA_SLOW + 1);
 }
 
 TEST(LoraBeaconPadBytes, TheBaseStationStillReadsTheSameName) {
@@ -2934,7 +2942,7 @@ TEST(LoraBeaconPadBytes, TheBaseStationStillReadsTheSameName) {
     memcpy(&beacon[3], nineteen, 19);
     size_t len = 3 + 19;
     len += loraBeaconPadBytes(len);          // the OC's padding, verbatim
-    ASSERT_EQ(len, 23u);
+    ASSERT_EQ(len, 24u);
 
     // The base station's extraction, verbatim.
     char received[24] = {};
@@ -2944,6 +2952,41 @@ TEST(LoraBeaconPadBytes, TheBaseStationStillReadsTheSameName) {
     received[name_len] = '\0';
 
     EXPECT_STREQ(received, nineteen);
+}
+
+// ── LoRa v6: which frames the base station reads as telemetry ──
+// v6 frames, and a v5 rocket's (the same FAST frame, the SLOW one without its
+// status byte); every other combination is a beacon, corrupt, or another build.
+TEST(LoraTelemetryLenOk, V6AndV5FramesAndNothingElse) {
+    EXPECT_EQ(LORA_PROTO_VERSION, 6u);
+    EXPECT_EQ(LORA_PROTO_VERSION_V5, 5u);
+    EXPECT_TRUE(loraTelemetryLenOk(6, LORA_FRAME_FAST, 55));
+    EXPECT_TRUE(loraTelemetryLenOk(6, LORA_FRAME_SLOW, 23));
+    EXPECT_TRUE(loraTelemetryLenOk(5, LORA_FRAME_FAST, 55));
+    EXPECT_TRUE(loraTelemetryLenOk(5, LORA_FRAME_SLOW, 22));
+    EXPECT_FALSE(loraTelemetryLenOk(6, LORA_FRAME_SLOW, 22));   // v6 always sends the byte
+    EXPECT_FALSE(loraTelemetryLenOk(5, LORA_FRAME_SLOW, 23));   // v5 never had it
+    EXPECT_FALSE(loraTelemetryLenOk(6, LORA_FRAME_SLOW, 55));   // type and length disagree
+    EXPECT_FALSE(loraTelemetryLenOk(6, LORA_FRAME_FAST, 23));
+    EXPECT_FALSE(loraTelemetryLenOk(4, LORA_FRAME_FAST, 55));   // another build's
+    EXPECT_FALSE(loraTelemetryLenOk(7, LORA_FRAME_SLOW, 23));
+    EXPECT_FALSE(loraTelemetryLenOk(6, 2, 23));                 // no such frame type
+}
+
+TEST(LoraTelemetryLenOk, AV5RocketsLongNameBeaconIsNotTelemetry) {
+    // A v5 rocket pads its beacon only around 22 and 55, so a 20-character
+    // name sends 23 bytes: v6's SLOW length. Its "ver_type" is unit_name[2].
+    uint8_t beacon[32] = {};
+    beacon[0] = LORA_BEACON_SYNC;
+    beacon[2] = 7;
+    memcpy(&beacon[3], "TwentyCharacterNameX", 20);
+    const uint8_t vt = beacon[offsetof(LoRaFrameHeader, ver_type)];
+    EXPECT_FALSE(loraTelemetryLenOk(loraFrameVersion(vt), loraFrameType(vt), 23));
+}
+
+TEST(LoraSlowStatus, TheGnssImuBitsOnly) {
+    EXPECT_EQ(LORA_SLOW_GNSS_IMU_MASK, 0x03u);
+    EXPECT_EQ(SIZE_OF_LORA_SLOW_V5, offsetof(LoRaSlowData, status));
 }
 
 // ============================================================================

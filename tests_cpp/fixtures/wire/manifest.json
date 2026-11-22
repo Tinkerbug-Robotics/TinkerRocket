@@ -104,8 +104,12 @@
  "notes": "FlightSettingsData version-ladder truncation of the v9 image"},
  {
  "file": "csv/bs_tiny.bin",
- "size": 868,
+ "size": 870,
  "notes": "base-station binary log built with the real packers; the CSV golden generated from it lives in tests_cpp/fixtures/csv_golden/ (app output, not emitter output)"},
+ {
+ "file": "csv/bs_tiny_v5.bin",
+ "size": 868,
+ "notes": "bs_tiny.bin as a v5 rocket sent it (version 5, 22-byte slow frames with no status byte); a v6 reader must render the same CSV, bs_tiny.expected.csv"},
  {
  "file": "framed/stream_good.bin",
  "size": 455,

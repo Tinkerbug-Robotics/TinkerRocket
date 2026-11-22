@@ -45,9 +45,11 @@ MSG_ISM6HG256 = 0xA2          # carries FC time_us; dates neighbouring records
 # #850: the downlink is two interleaved frames. Both open with the same
 # 7-byte header, so seq — the whole point of this tool — is readable from
 # either without knowing which one arrived.
-SIZE_OF_LORA_FAST = 55
-SIZE_OF_LORA_SLOW = 22
-LORA_PROTO_VERSION = 5
+# LoRa v6 (SLOW 23 B) and v5 (SLOW 22 B): bs_log.telemetry_len_ok.
+SIZE_OF_LORA_FAST = bs_log.SIZE_OF_LORA_FAST
+SIZE_OF_LORA_SLOW = bs_log.SIZE_OF_LORA_SLOW
+SIZE_OF_LORA_SLOW_V5 = bs_log.SIZE_OF_LORA_SLOW_V5
+LORA_PROTO_VERSION = bs_log.LORA_PROTO_VERSION
 LORA_FRAME_FAST = 0x0
 LORA_FRAME_SLOW = 0x1
 SIZE_OF_LORA_UPLINK = 13
@@ -108,18 +110,19 @@ def read_rocket_bin(path):
                                 sf=sf, cmd=cmd, flags=fl,
                                 disp=next((n for b, n in UL_FLAGS if fl & b), 'unknown')))
         elif mtype == MSG_LORA:
-            if len(payload) not in (SIZE_OF_LORA_FAST, SIZE_OF_LORA_SLOW):
+            if len(payload) not in (SIZE_OF_LORA_FAST, SIZE_OF_LORA_SLOW, SIZE_OF_LORA_SLOW_V5):
                 print(f"  ! 0xF1 record with {len(payload)} B payload, expected "
-                      f"{SIZE_OF_LORA_FAST} (fast) or {SIZE_OF_LORA_SLOW} (slow) "
+                      f"{SIZE_OF_LORA_FAST} (fast) or {SIZE_OF_LORA_SLOW} "
+                      f"({SIZE_OF_LORA_SLOW_V5} at v5) (slow) "
                       f"— the LoRa frames changed size and this parser was not "
                       f"swept (#227)", file=sys.stderr)
                 continue
             nid, rid, nch, seq, ver_type, _flags = struct.unpack_from(
                 FMT_LORA_HDR, payload, 0)
             ver, ftype = ver_type >> 4, ver_type & 0x0F
-            if ver != LORA_PROTO_VERSION:
-                print(f"  ! 0xF1 record at proto v{ver}, this parser speaks "
-                      f"v{LORA_PROTO_VERSION}", file=sys.stderr)
+            if not bs_log.telemetry_len_ok(ver, ftype, len(payload)):
+                print(f"  ! 0xF1 record at proto v{ver} with {len(payload)} B, this "
+                      f"parser speaks v{LORA_PROTO_VERSION} and v5", file=sys.stderr)
                 continue
             # num_sats / pdop ride the FAST frame only. Slow frames still count
             # for loss measurement — seq is in the shared header — so they are

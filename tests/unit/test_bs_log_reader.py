@@ -89,7 +89,7 @@ def test_slow_frame_offsets_match_the_header():
     expected = {
         'max_alt_m': o, 'max_speed': o + 3, 'temp_x10': o + 5,
         'voltage_u8': o + 7, 'current_ma': o + 8, 'soc_i8': o + 10,
-        'cam_ma': o + 11, 'servo_ma': o + 13,
+        'cam_ma': o + 11, 'servo_ma': o + 13, 'status': o + 15,
     }
     for field, want in expected.items():
         assert off[field] == want, (
@@ -109,8 +109,9 @@ def _framed(mtype, payload):
     return bs_log.PREAMBLE + bytes([mtype, len(payload)]) + payload + _crc_stub()
 
 
-def _lora_hdr(seq, ftype, rocket_id=1, network_id=0, next_ch=0xFF, flags_state=0x10):
-    ver_type = (bs_log.LORA_PROTO_VERSION << 4) | ftype
+def _lora_hdr(seq, ftype, rocket_id=1, network_id=0, next_ch=0xFF, flags_state=0x10,
+              version=bs_log.LORA_PROTO_VERSION):
+    ver_type = (version << 4) | ftype
     return struct.pack(bs_log.FMT_LORA_HDR, network_id, rocket_id, next_ch,
                        seq, ver_type, flags_state)
 
@@ -128,9 +129,12 @@ def _fast_frame(seq, *, palt=1234, sats=11):
     return bytes(b)
 
 
-def _slow_frame(seq, *, cam_ma=1480, servo_ma=340, volt_u8=187):
-    b = bytearray(bs_log.SIZE_OF_LORA_SLOW)
-    b[0:7] = _lora_hdr(seq, bs_log.LORA_FRAME_SLOW)
+def _slow_frame(seq, *, cam_ma=1480, servo_ma=340, volt_u8=187, gnss_imu=0, v5=False):
+    b = bytearray(bs_log.SIZE_OF_LORA_SLOW_V5 if v5 else bs_log.SIZE_OF_LORA_SLOW)
+    b[0:7] = _lora_hdr(seq, bs_log.LORA_FRAME_SLOW,
+                       version=bs_log.LORA_PROTO_VERSION_V5 if v5 else bs_log.LORA_PROTO_VERSION)
+    if not v5:
+        b[7 + 15] = gnss_imu                          # v6 status
     o = 7
     b[o:o + 3] = (2500).to_bytes(3, 'little')         # max_alt
     struct.pack_into('<h', b, o + 3, 120)             # max_speed
@@ -236,6 +240,63 @@ def test_wrong_proto_version_is_skipped(tmp_path):
     rows, _, _ = bs_log.read_bs_log(p)
     assert len(rows) == 1
     assert rows[0]['seq'] == 1
+
+
+def test_v6_slow_frame_carries_the_gnss_imu_and_v5_reads_as_none(tmp_path):
+    p = tmp_path / 'lora_008.bin'
+    _write_log(p, [_rx_record(100, _slow_frame(0, gnss_imu=2)),
+                   _rx_record(600, _fast_frame(1)),
+                   _rx_record(1100, _slow_frame(2, gnss_imu=0x0F)),   # spare bits: not read
+                   _rx_record(1600, _slow_frame(3, v5=True, cam_ma=900))])
+    rows, _, _ = bs_log.read_bs_log(p)
+    assert [r['frame'] for r in rows] == ['slow', 'fast', 'slow', 'slow']
+    assert [r['gnss_imu'] for r in rows] == [2, 2, 3, 0]   # forward-filled across the fast frame
+    assert [r['frame_len'] for r in rows] == [23, 55, 23, 22]
+    assert [r['lora_proto'] for r in rows] == [6, 6, 6, 5]
+    assert rows[3]['cam_a'] == pytest.approx(0.9)          # every v5 field still read
+
+
+def test_a_slow_frame_whose_length_disagrees_with_its_version_is_skipped(tmp_path):
+    p = tmp_path / 'lora_009.bin'
+    v6_short = _slow_frame(0)[:bs_log.SIZE_OF_LORA_SLOW_V5]      # v6 header, 22 B
+    v5_long = _slow_frame(1, v5=True) + b'\x00'                 # v5 header, 23 B
+    _write_log(p, [_rx_record(100, v6_short), _rx_record(600, v5_long),
+                   _rx_record(1100, _fast_frame(2))])
+    rows, _, _ = bs_log.read_bs_log(p)
+    assert [r['seq'] for r in rows] == [2]
+    assert bs_log.telemetry_len_ok(5, bs_log.LORA_FRAME_FAST, 55)
+    assert not bs_log.telemetry_len_ok(4, bs_log.LORA_FRAME_FAST, 55)
+
+
+def test_camera_bit_is_bit_7_not_the_state(tmp_path):
+    # flags_state: bits 0-3 flags, 4-6 the state, 7 the camera
+    p = tmp_path / 'lora_010.bin'
+    fast = bytearray(_fast_frame(0))
+    fast[6] = (3 << bs_log.LORA_STATE_SHIFT)             # INFLIGHT, camera off
+    fast2 = bytearray(_fast_frame(1))
+    fast2[6] = (2 << bs_log.LORA_STATE_SHIFT) | 0x80    # PRELAUNCH, camera on
+    _write_log(p, [_rx_record(100, bytes(fast)), _rx_record(600, bytes(fast2))])
+    rows, _, _ = bs_log.read_bs_log(p)
+    assert [(r['state'], r['camera_rec']) for r in rows] == [('INFLIGHT', 0), ('PRELAUNCH', 1)]
+
+
+def test_the_v6_and_v5_goldens_read_alike():
+    # Both built by the firmware's own packers (tests_cpp/wire_fixtures_lib.cpp)
+    wire = REPO / 'tests_cpp' / 'fixtures' / 'wire' / 'csv'
+    v6_rows, v6_events, _ = bs_log.read_bs_log(wire / 'bs_tiny.bin')
+    v5_rows, v5_events, _ = bs_log.read_bs_log(wire / 'bs_tiny_v5.bin')
+    assert len(v6_rows) == len(v5_rows) == 12
+    assert v6_events == v5_events
+    assert {r['gnss_imu'] for r in v6_rows if r['frame'] == 'slow'} == {1}
+    assert all(r.get('gnss_imu', 0) == 0 for r in v5_rows)
+    skip = {'gnss_imu', 'frame_len', 'lora_proto'}
+
+    def same(r):   # NaN (an unknown RSSI) compares equal to itself here
+        return {k: ('nan' if isinstance(v, float) and v != v else v)
+                for k, v in r.items() if k not in skip}
+    for a, b in zip(v6_rows, v5_rows):
+        assert same(a) == same(b)
+    assert bs_log.rows_to_csv(v6_rows, v6_events) == bs_log.rows_to_csv(v5_rows, v5_events)
 
 
 def test_bad_magic_is_refused(tmp_path):

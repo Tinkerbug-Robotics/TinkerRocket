@@ -290,9 +290,11 @@ struct TelemetryData: Codable {
     // The GNSS board's own IMU ("gi"): whether that board's tracking loops are
     // using its IMU.  A plain integer with the SensorHealth values (0 not
     // applicable, 1 OK, 2 degraded, 3 bad), NOT part of the "h" bitfield.  The
-    // out computer sends it on the direct link only while the flight computer
-    // reports it; older firmware and the base-station relay never do, so nil
-    // means "not applicable", never "fine".  Advisory only, like Mag.
+    // out computer sends it while the flight computer reports it, and a base
+    // station relays it from the LoRa slow frame, so on a base-station link it
+    // updates every 3 s.  It is absent from older firmware and from a v5 rocket
+    // or base station, so nil means "not applicable", never "fine".  Advisory
+    // only, like Mag.
     var gnss_imu_state: Int?
     var gnssImuHealth: SensorHealth {
         gnss_imu_state.flatMap(SensorHealth.init(rawValue:)) ?? .na
@@ -423,7 +425,7 @@ struct TelemetryData: Codable {
             SensorHealthRow(name: "Battery", state: battHealth),
             SensorHealthRow(name: "Mag",     state: magHealth),
         ]
-        if gnssImuHealth != .na {   // "gi": direct link only, while the FC reports it
+        if gnssImuHealth != .na {   // "gi": absent from older firmware / a v5 rocket or BS
             rows.append(SensorHealthRow(name: "GNSS IMU", state: gnssImuHealth,
                                         detail: Self.gnssImuHealthDetail(gnssImuHealth)))
         }
@@ -665,7 +667,7 @@ struct TelemetryData: Codable {
         case flight_status_bits = "fs"
         case pyro_status_bits = "ps"  // packed bitfield: b0=armed (global), then (cont,fired) per channel 1..4
         case sensor_health = "h"      // #303 scorecard: 2 bits/sensor, see RocketComputerTypes.h
-        case gnss_imu_state = "gi"    // GNSS board IMU: SensorHealth value, direct link only
+        case gnss_imu_state = "gi"    // GNSS board IMU: SensorHealth value; BS link: every 3 s
         case source_rocket_id = "rid"
         case source_unit_name = "run"
         case duplicate_id = "dup"      // three rockets, one base station

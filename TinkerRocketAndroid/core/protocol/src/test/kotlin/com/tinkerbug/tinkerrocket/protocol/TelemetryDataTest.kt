@@ -424,7 +424,7 @@ class TelemetryDataTest {
 
     // ── GNSS board IMU ("gi") ─────────────────────────────────────────────
 
-    /** "h" plus an optional "gi"; null leaves the key out, as older firmware and the relay do. */
+    /** "h" plus an optional "gi"; null leaves the key out, as older firmware and a v5 rocket or BS do. */
     private fun decodeHealth(health: Int, gi: String?): TelemetryData =
         decodeOk(if (gi == null) """{"h":$health}""" else """{"h":$health,"gi":$gi}""")
 

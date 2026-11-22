@@ -200,9 +200,9 @@ that changes size fails the build rather than corrupting a log silently.
 | `BaseStationStorageStatsData` | 26 |
 | `GnssCheckData` | 24 |
 | `PyroConfigData` | 24 |
+| `LoRaSlowData` | 23 |
+| `LoRaSlowData` | 23 |
 | `ISM6HG256Data` | 22 |
-| `LoRaSlowData` | 22 |
-| `LoRaSlowData` | 22 |
 | `ServoConfigData` | 22 |
 | `ServoConfigData` | 22 |
 | `GuidancePointData` | 20 |
@@ -434,7 +434,8 @@ Two bits per sensor at the shifts below, each holding a `SensorHealthState`
 | `LORA_NOISE_THRESHOLD_DB` | `0x0F` (15) | skip if peak > median + this |
 | `LORA_NUM_SATS_MASK` | `0x3F` (63) |  |
 | `LORA_NVS_SCHEMA_VERSION` | `0x04` (4) |  |
-| `LORA_PROTO_VERSION` | `0x05` (5) |  |
+| `LORA_PROTO_VERSION` | `0x06` (6) |  |
+| `LORA_PROTO_VERSION_V5` | `0x05` (5) | still read: see v6 above |
 | `LORA_SIM_BIT` | `0x40` (64) |  |
 | `LORA_SLOT_CYCLE` | `0x06` (6) |  |
 | `LORA_SLOW_SLOT` | `0x05` (5) | 0-based index within the cycle |

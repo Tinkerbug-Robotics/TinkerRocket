@@ -2910,7 +2910,14 @@ static constexpr uint8_t IDENTITY_NVS_SCHEMA_VERSION = 1;
 //       checked — see the note on LoRaFrameHeader and #837 item 14, which
 //       recorded that the constant had been decorative (and its own changelog
 //       wrong: it described v4 as 62 B against a 65-byte struct) since #191.
-static constexpr uint8_t LORA_PROTO_VERSION = 5;
+//   v6: the SLOW frame grows one byte (22 -> 23 B), `status`: bits 0-1 the
+//       gnss-sdr-dev board's IMU aiding (LORA_SLOW_GNSS_IMU_MASK), 2-7 spare.
+//       The FAST frame is unchanged. A v6 base station still reads v5 frames
+//       (loraTelemetryLenOk: a v5 SLOW frame is v6's without the byte), so a
+//       base station can be flashed ahead of its rockets; a v5 base station
+//       drops v6 frames as a version mismatch, loudly, as before.
+static constexpr uint8_t LORA_PROTO_VERSION = 6;
+static constexpr uint8_t LORA_PROTO_VERSION_V5 = 5;   // still read: see v6 above
 
 // Slow-hop dwell (#133) — how many consecutive packets the rocket
 // transmits on a single channel before advancing.  Dwell > 1 gives the
@@ -3066,9 +3073,15 @@ typedef struct __attribute__((packed))
     // missing measurement as absent, not as a measured zero.
     uint16_t cam_ma;
     uint16_t servo_ma;
+
+    // v6: bits 0-1 the gnss-sdr-dev board's IMU aiding as the flight computer
+    // reports it (a SensorHealthState; 0 = no board, or a rocket without it),
+    // the apps' "GNSS IMU" dot on a relayed link; bits 2-7 spare (0).
+    uint8_t  status;
 } LoRaSlowData;
 
-static_assert(sizeof(LoRaSlowData) == 22, "LoRaSlowData must be 22 bytes");
+static_assert(sizeof(LoRaSlowData) == 23, "LoRaSlowData must be 23 bytes");
+static constexpr uint8_t LORA_SLOW_GNSS_IMU_MASK = 0x03u;   // LoRaSlowData.status bits 0-1
 
 // The two frames MUST agree on the shared prefix, or dispatch reads garbage.
 static_assert(offsetof(LoRaFastData, hdr) == 0, "header must lead the fast frame");
@@ -3184,6 +3197,8 @@ typedef struct
     bool    burnout_detected;       // #191 NSF_BURNOUT relay (flags2 bit 0)
     uint8_t imu_orient_code;        // #390: b2r code 0-23; LORA2_ORIENT_CODE_NONE = none
     uint8_t imu_orient_mode;        // #390: LORA2_OMODE_* (0 = not reported)
+    uint8_t gnss_imu;               // v6 SLOW status bits 0-1: the gnss-sdr-dev board's
+                                    // IMU aiding, a SensorHealthState (0 = not reported)
 } LoRaDataSI;
 
 
@@ -3729,8 +3744,8 @@ typedef struct __attribute__((packed))
     int16_t  snr_db_x10;     // dB  * 10
     uint32_t rx_freq_hz;     // channel it was received on (hop state)
     // The raw LoRa frame follows immediately: SIZE_OF_LORA_FAST or
-    // SIZE_OF_LORA_SLOW bytes, verbatim, self-describing through its own
-    // ver_type. NOT repeated here — the record's length byte gives the frame
+    // SIZE_OF_LORA_SLOW bytes (SIZE_OF_LORA_SLOW_V5 from a v5 rocket),
+    // verbatim, self-describing through its own ver_type. NOT repeated here — the record's length byte gives the frame
     // length as (payload_len - sizeof(BsLoRaRxHeader)), so the two can never
     // disagree the way a duplicated length field can.
 } BsLoRaRxHeader;
@@ -4951,7 +4966,7 @@ static constexpr size_t SIZE_OF_NON_SENSOR_DATA = sizeof(NonSensorData);
 // loud compile error on firmware and host builds alike. Values were
 // derived from the declared layouts; the compiler proves each line.
 static_assert(sizeof(LoRaFastData) == 55, "LoRaFastData wire size");
-static_assert(sizeof(LoRaSlowData) == 22, "LoRaSlowData wire size");
+static_assert(sizeof(LoRaSlowData) == 23, "LoRaSlowData wire size");
 // Shared header — byte-identical in both frames, which is what makes
 // dispatch-before-you-know-the-size safe. If these ever diverge, a receiver
 // reads ver_type out of the middle of a payload field.
@@ -4996,6 +5011,7 @@ static_assert(offsetof(LoRaSlowData, current_ma) == 15, "slow.current_ma moved")
 static_assert(offsetof(LoRaSlowData, soc_i8) == 17, "slow.soc_i8 moved");
 static_assert(offsetof(LoRaSlowData, cam_ma) == 18, "slow.cam_ma moved");
 static_assert(offsetof(LoRaSlowData, servo_ma) == 20, "slow.servo_ma moved");
+static_assert(offsetof(LoRaSlowData, status) == 22, "slow.status moved");
 
 static_assert(sizeof(GNSSData) == 42, "GNSSData wire size");
 static_assert(offsetof(GNSSData, time_us) == 0, "GNSSData.time_us moved");
@@ -5098,6 +5114,22 @@ static_assert(sizeof(LoRaChannelSetSelection) == 1 + LORA_SKIP_MASK_MAX_BYTES,
 
 static constexpr size_t SIZE_OF_LORA_FAST       = sizeof(LoRaFastData);
 static constexpr size_t SIZE_OF_LORA_SLOW       = sizeof(LoRaSlowData);
+// A v5 rocket's SLOW frame: v6's without its last byte (status). Still read.
+static constexpr size_t SIZE_OF_LORA_SLOW_V5    = SIZE_OF_LORA_SLOW - 1;
+static_assert(offsetof(LoRaSlowData, status) == SIZE_OF_LORA_SLOW_V5,
+              "v6 only appends to the v5 SLOW frame");
+
+// Whether a received frame is telemetry this build reads: its header's
+// version and type, and its length, agree. v6 frames, and v5 ones (the same
+// FAST frame, the SLOW one a byte shorter). Anything else is a beacon (if it
+// starts with LORA_BEACON_SYNC), corrupt, or another build's.
+static inline constexpr bool loraTelemetryLenOk(uint8_t version, uint8_t frame_type, size_t len)
+{
+    return (version == LORA_PROTO_VERSION || version == LORA_PROTO_VERSION_V5)
+        && ((frame_type == LORA_FRAME_FAST && len == SIZE_OF_LORA_FAST)
+            || (frame_type == LORA_FRAME_SLOW
+                && len == (version == LORA_PROTO_VERSION ? SIZE_OF_LORA_SLOW : SIZE_OF_LORA_SLOW_V5)));
+}
 
 // How many NUL pad bytes a name beacon needs so its length cannot be mistaken
 // for a telemetry frame (#1147 item 4).
@@ -5105,7 +5137,7 @@ static constexpr size_t SIZE_OF_LORA_SLOW       = sizeof(LoRaSlowData);
 // The beacon is [0xBE][network_id][rocket_id][unit_name...] with no length
 // field, and the base station tells beacons from telemetry PURELY by length:
 // `rx_len >= 3 && rx_len != SIZE_OF_LORA_FAST && rx_len != SIZE_OF_LORA_SLOW
-// && rx_buf[0] == LORA_BEACON_SYNC`.  SIZE_OF_LORA_SLOW is 22, so a
+// && rx_buf[0] == LORA_BEACON_SYNC`.  SIZE_OF_LORA_SLOW was 22 (v5), so a
 // 19-character rocket name produced exactly 22 bytes and fell through to the
 // telemetry branch, where ver_type is read from unit_name[2] and almost never
 // matches LORA_PROTO_VERSION -- so the beacon was counted as a version
@@ -5119,12 +5151,15 @@ static constexpr size_t SIZE_OF_LORA_SLOW       = sizeof(LoRaSlowData);
 // early -- the name it displays is unchanged.
 //
 // Loops rather than returning a flat 1 so that a future frame size landing on
-// beacon_len + 1 cannot silently reintroduce the collision.
+// beacon_len + 1 cannot silently reintroduce the collision. v6: v5's SLOW
+// size too, since a v6 base station still reads v5 frames (and a v5 base
+// station reads that length as telemetry).
 static inline size_t loraBeaconPadBytes(size_t beacon_len)
 {
     size_t pad = 0;
     while ((beacon_len + pad) == SIZE_OF_LORA_FAST ||
-           (beacon_len + pad) == SIZE_OF_LORA_SLOW)
+           (beacon_len + pad) == SIZE_OF_LORA_SLOW ||
+           (beacon_len + pad) == SIZE_OF_LORA_SLOW_V5)
     {
         pad++;
     }

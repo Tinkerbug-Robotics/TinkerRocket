@@ -349,7 +349,7 @@ final class TelemetryDataTests: XCTestCase {
     // MARK: - GNSS board IMU ("gi")
 
     /// `"h"` plus an optional `"gi"`; a nil `gi` leaves the key out entirely,
-    /// the way older firmware and the base-station relay send the frame.
+    /// the way older firmware and a v5 rocket or base station send the frame.
     private func decode(health: Int, gi: String?) throws -> TelemetryData {
         let giPart = gi.map { ",\"gi\":\($0)" } ?? ""
         return try JSONDecoder().decode(TelemetryData.self,

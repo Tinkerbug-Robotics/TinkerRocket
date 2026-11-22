@@ -310,10 +310,11 @@ public data class TelemetryData(
     val sensorHealth: Int = 0,
     // The GNSS board's own IMU ("gi"): a plain integer with the SensorHealth
     // values (0 not applicable, 1 OK, 2 degraded, 3 bad), NOT part of "h".  The
-    // out computer sends it on the direct link only while the flight computer
-    // reports it; older firmware and the base-station relay never do, so null
-    // means "not applicable", never "fine".  Advisory only, like Mag.  iOS
-    // `gnss_imu_state`.
+    // out computer sends it while the flight computer reports it, and a base
+    // station relays it from the LoRa slow frame, so on a base-station link it
+    // updates every 3 s.  It is absent from older firmware and from a v5 rocket
+    // or base station, so null means "not applicable", never "fine".  Advisory
+    // only, like Mag.  iOS `gnss_imu_state`.
     val gnssImuState: Int? = null,            // "gi"
 
     // Source rocket identity (base station relay only, null for direct BLE)
@@ -610,7 +611,7 @@ public data class TelemetryData(
                 SensorHealthRow("Battery", battHealth),
                 SensorHealthRow("Mag", magHealth),
             )
-            if (gnssImuHealth != SensorHealth.NA) {   // "gi": direct link only, while the FC reports it
+            if (gnssImuHealth != SensorHealth.NA) {   // "gi": absent from older firmware / a v5 rocket or BS
                 rows.add(SensorHealthRow("GNSS IMU", gnssImuHealth, gnssImuHealthDetail(gnssImuHealth)))
             }
             if (storageHealth != SensorHealth.NA) {

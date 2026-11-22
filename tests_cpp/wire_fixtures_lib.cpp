@@ -1379,7 +1379,14 @@ void buildCsvFlight(Builder& b) {
 // types on the real 5:1 schedule, a slow frame that must not blank the
 // position, a fast frame that must not blank the battery, an unknown-RSSI
 // sentinel, a sequence gap, and an event record interleaved with telemetry.
-void buildBsLogGolden(Builder& b) {
+//
+// LoRa v6: written twice. bs_tiny.bin is today's (the slow frames 23 B, their
+// status byte carrying the gnss-sdr-dev board's IMU aiding, 1); bs_tiny_v5.bin
+// is the same log as a v5 rocket sent it (every frame's version 5, the slow
+// frames 22 B: no status), which a reader must still read, as the base station
+// does. Both render the same CSV (bs_tiny.expected.csv): the CSV has no column
+// for the status.
+std::vector<uint8_t> bsLogGoldenStream(bool v5) {
     std::vector<uint8_t> stream;
     const uint8_t magic[8] = {'T', 'R', 'B', 'S', 'L', 'O', 'G',
                               BS_LOG_FORMAT_VERSION};
@@ -1417,6 +1424,7 @@ void buildBsLogGolden(Builder& b) {
     si.burnout_detected = false;
     si.imu_orient_code = 0;
     si.imu_orient_mode = 1;
+    si.gnss_imu = 1;                // v6: the board's IMU aiding (SH_OK)
 
     uint32_t frames = 0;
     // seq 3 is skipped on purpose so a reader has a gap to compute.
@@ -1428,13 +1436,15 @@ void buildBsLogGolden(Builder& b) {
 
         uint8_t frame_bytes[SIZE_OF_LORA_FAST] = {0};
         size_t  frame_len = 0;
-        if (loraFrameTypeForSlot(seq) == LORA_FRAME_SLOW) {
+        const uint8_t ftype = loraFrameTypeForSlot(seq);
+        if (ftype == LORA_FRAME_SLOW) {
             conv.packLoRaSlowBytes(si, frame_bytes);
-            frame_len = SIZE_OF_LORA_SLOW;
+            frame_len = v5 ? SIZE_OF_LORA_SLOW_V5 : SIZE_OF_LORA_SLOW;   // v5: no status
         } else {
             conv.packLoRaFastBytes(si, frame_bytes);
             frame_len = SIZE_OF_LORA_FAST;
         }
+        if (v5) frame_bytes[offsetof(LoRaFrameHeader, ver_type)] = loraVerType(LORA_PROTO_VERSION_V5, ftype);
 
         BsLoRaRxHeader hdr{};
         hdr.time_ms = 500u * static_cast<uint32_t>(seq);
@@ -1463,15 +1473,29 @@ void buildBsLogGolden(Builder& b) {
         append(payload, std::vector<uint8_t>(text, text + eh.text_len));
         append(stream, frame(BS_EVENT_MSG, payload));
     }
+    (void)frames;
+    return stream;
+}
 
-    b.add("csv", "bs_tiny.bin", stream,
-          Json().u("rx_records", frames).u("event_records", 1)
+void buildBsLogGolden(Builder& b) {
+    b.add("csv", "bs_tiny.bin", bsLogGoldenStream(false),
+          Json().u("rx_records", 12).u("event_records", 1)
               .u("fast_frames", 10).u("slow_frames", 2)
-              .u("skipped_seq", 3)
+              .u("skipped_seq", 3).u("lora_proto", LORA_PROTO_VERSION)
+              .u("slow_frame_len", SIZE_OF_LORA_SLOW).u("gnss_imu", 1)
               .done(),
           "base-station binary log built with the real packers; the CSV golden "
           "generated from it lives in tests_cpp/fixtures/csv_golden/ (app "
           "output, not emitter output)");
+    b.add("csv", "bs_tiny_v5.bin", bsLogGoldenStream(true),
+          Json().u("rx_records", 12).u("event_records", 1)
+              .u("fast_frames", 10).u("slow_frames", 2)
+              .u("skipped_seq", 3).u("lora_proto", LORA_PROTO_VERSION_V5)
+              .u("slow_frame_len", SIZE_OF_LORA_SLOW_V5).u("gnss_imu", 0)
+              .done(),
+          "bs_tiny.bin as a v5 rocket sent it (version 5, 22-byte slow frames "
+          "with no status byte); a v6 reader must render the same CSV, "
+          "bs_tiny.expected.csv");
 }
 
 }  // namespace

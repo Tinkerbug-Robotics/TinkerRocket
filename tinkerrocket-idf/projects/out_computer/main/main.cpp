@@ -6991,6 +6991,9 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_BUDGET], uint16_t 
         lora.cam_current   = p.cam_current;
         lora.servo_current = p.servo_current;
     }
+    // v6: the gnss-sdr-dev board's IMU aiding rides the SLOW frame too, for the
+    // apps' "GNSS IMU" dot on a base-station link (as "gi" on a direct one).
+    lora.gnss_imu = fcGnssImuNow();
 
     if (frame_type == LORA_FRAME_SLOW)
     {
