@@ -191,6 +191,17 @@ public:
 
 private:
     static constexpr int kPrns = 64;    // PRNs a system, 0-63, as the builder keeps them
+    // The systems the stage files, caps and builds: GPS, Galileo, BeiDou and GLONASS (QZSS's slot never
+    // filled: no receiver's epoch carries it). Its per-system masks are by gnss_sys_t.
+    static constexpr int kStageSys = GNSS_SYS_COUNT;
+    bool anyMasked() const
+    {
+        uint64_t m = 0;
+        for (int s = 0; s < kStageSys; ++s)
+            m |= masked_[s];
+        return m != 0;
+    }
+    static bool stageSys(int sys) { return (sys >= GNSS_SYS_GPS && sys <= GNSS_SYS_BDS) || sys == GNSS_SYS_GLO; }
 
     void chooseIono(bool in_flight, BuiltEpoch& out);
     void offerLite(const TimedRawEpoch& e, const ShadowNav& nav, const double r[3], BuiltEpoch& out);
@@ -219,9 +230,9 @@ private:
     // of those was dropped
     TimedRawEpoch    sel_;
     int              cap_ = 0;           // the cap in use: cfg_.sat_cap, or the governor's (useNavCap)
-    uint64_t         picked_[3] = {};
-    uint64_t         floor_picked_[3] = {};  // of picked_ before the build, the first cfg_.sat_cap (cap_ above it)
-    uint64_t         masked_[3] = {};
+    uint64_t         picked_[kStageSys] = {};
+    uint64_t         floor_picked_[kStageSys] = {};  // of picked_ before the build, the first cfg_.sat_cap (cap_ above it)
+    uint64_t         masked_[kStageSys] = {};
     double           masked_tow_ = 0.0;
     // the cheaper build: each observation's ephemeris as see() looked it up
     // for the epoch offer() builds (by e's observations; by the cap's picks)

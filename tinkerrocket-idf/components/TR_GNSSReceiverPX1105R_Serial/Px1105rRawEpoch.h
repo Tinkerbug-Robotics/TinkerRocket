@@ -5,8 +5,14 @@
 // Mirrors MosaicRawEpoch.h: one cell per satellite, on the L1-band signal
 // whose ephemeris and group delay the filter has (SkyTraqNav.h) -- GPS L1 C/A,
 // Galileo E1 and BeiDou B1I, signal type 0 -- and nothing else: the L5 band's
-// signals (type 4), GLONASS, SBAS, QZSS, NavIC, and BeiDou GEO (C01-C05,
-// C59-C63: gnss/eph.h cannot place a D2 orbit).
+// signals (type 4), SBAS, QZSS, NavIC, and BeiDou GEO (C01-C05, C59-C63:
+// gnss/eph.h cannot place a D2 orbit). GLONASS L1OF (slots 1-24) only where
+// the caller asks (glonass): each satellite on its own carrier, 1602 MHz +
+// k x 562.5 kHz, k from the cell's frequency number (its byte 2's low
+// nibble, k + 7). The filter fuses its Dopplers alone (RawMeasBuilder: a
+// GLONASS pseudorange needs a clock offset of its own, which the filter does
+// not carry yet); its pseudorange still places the satellite at its transmit
+// time.
 //
 // Units are the other receivers' (RawMeas.h):
 //   - pr_m: the pseudorange, m, with the receiver's clock bias in it;
@@ -45,6 +51,7 @@
 
 #include "RawMeas.h"
 #include "SkyTraqBinary.h"
+#include "gnss/eph.h"
 #include "gnss/types.h"
 
 namespace px1105r
@@ -54,13 +61,16 @@ static constexpr double kC = 299792458.0;            // m/s, as gnss/atmo.h's GN
 static constexpr double kFreqB1iHz = 1561.098e6;
 static constexpr int    kMaxPrn = 64;
 
-// The filter's system for an 0xE5 cell, or -1 for one it does not take.
-inline int filterSystem(const skytraq::RawCell& c)
+// The filter's system for an 0xE5 cell, or -1 for one it does not take
+// (GLONASS only with glonass, and a frequency number in -7..+6).
+inline int filterSystem(const skytraq::RawCell& c, bool glonass = false)
 {
     if (c.sig != skytraq::kSigL1)
         return -1;
     switch (c.gnss)
     {
+    case skytraq::kGnssGlo:
+        return (glonass && c.svid >= 1 && c.svid <= 24 && c.glo_freq <= 13) ? GNSS_SYS_GLO : -1;
     case skytraq::kGnssGps:
         return (c.svid >= 1 && c.svid <= 32) ? GNSS_SYS_GPS : -1;
     case skytraq::kGnssGal:
@@ -75,6 +85,14 @@ inline int filterSystem(const skytraq::RawCell& c)
 inline double carrierHz(int sys)
 {
     return sys == GNSS_SYS_BDS ? kFreqB1iHz : GNSS_FREQ_L1_HZ;
+}
+
+// A cell's own carrier: carrierHz's, or a GLONASS satellite's by its frequency number
+inline double carrierHz(int sys, const skytraq::RawCell& c)
+{
+    if (sys == GNSS_SYS_GLO)
+        return GLO_F1_HZ + GLO_DF1_HZ * (static_cast<int>(c.glo_freq) - 7);
+    return carrierHz(sys);
 }
 
 // Each satellite's last carrier break (a flagged slip), and the receiver's
@@ -209,8 +227,10 @@ inline double epochGpsS(uint16_t week, uint32_t tow_ms, double dtr_ms)
 // The cells of one 0xE5 as a RawEpoch (tow_s the receiver's own time of week:
 // tow_s - pr / c is still each satellite's transmit time). Slip flags are
 // noted into lk (they hold the satellite's lock from then on). Returns the
-// cells kept; out.n = 0 for an epoch with none.
-inline int rawEpochFromE5(const skytraq::RawE5& in, Px1105rLockState& lk, gnss_raw::RawEpoch& out)
+// cells kept; out.n = 0 for an epoch with none. glonass: its GLONASS cells as
+// well (filterSystem).
+inline int rawEpochFromE5(const skytraq::RawE5& in, Px1105rLockState& lk, gnss_raw::RawEpoch& out,
+                          bool glonass = false)
 {
     out.n = 0;
     out.tow_s = in.tow_ms * 1.0e-3;
@@ -218,7 +238,7 @@ inline int rawEpochFromE5(const skytraq::RawE5& in, Px1105rLockState& lk, gnss_r
     for (int i = 0; i < in.n && out.n < gnss_raw::RawEpoch::kMaxObs; ++i)
     {
         const skytraq::RawCell& c = in.cell[i];
-        const int sys = filterSystem(c);
+        const int sys = filterSystem(c, glonass);
         if (sys < 0)
             continue;
         const bool has_pr = (c.ind & skytraq::kIndPr) && std::isfinite(c.pr_m) && c.pr_m > 0.0;
@@ -241,7 +261,7 @@ inline int rawEpochFromE5(const skytraq::RawE5& in, Px1105rLockState& lk, gnss_r
         if (since_cut < static_cast<int64_t>(lock))
             lock = since_cut > 0 ? static_cast<uint32_t>(since_cut) : 0U;
 
-        const double lambda = kC / carrierHz(sys);
+        const double lambda = kC / carrierHz(sys, c);
         gnss_raw::RawObs& o = out.obs[out.n++];
         o.sys = static_cast<uint8_t>(sys);
         o.prn = c.svid;

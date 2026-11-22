@@ -45,9 +45,9 @@ bool RawGnssMeasStage::addEphemeris(const gps_eph_t& e)
 {
     // The RTCM decode gives only what the builder can place, and a driver's
     // is held to the same: a GPS, Galileo or BeiDou MEO/IGSO satellite
-    // (gnss/eph.h has no GEO orbit), PRN 1-63.
-    bool ok = e.valid != 0 && e.sys >= GNSS_SYS_GPS && e.sys <= GNSS_SYS_BDS && e.prn >= 1 && e.prn < kPrns
-              && !(e.sys == GNSS_SYS_BDS && (e.prn <= 5 || e.prn >= 59));
+    // (gnss/eph.h has no GEO orbit), PRN 1-63, or a GLONASS slot 1-24.
+    bool ok = e.valid != 0 && stageSys(e.sys) && e.prn >= 1 && e.prn < kPrns
+              && !(e.sys == GNSS_SYS_BDS && (e.prn <= 5 || e.prn >= 59)) && !(e.sys == GNSS_SYS_GLO && e.prn > 24);
     // And, where the last epoch named its week, its toe within
     // kEphMaxOffsetS of the receiver's time: the store goes by second of week
     // alone, so one a whole number of weeks old (a receiver's stored copy)
@@ -113,7 +113,7 @@ void RawGnssMeasStage::see(const TimedRawEpoch& e)
         const RawObs& o = e.epoch.obs[i];
         if (lite && i < RawEpoch::kMaxObs)
             eph_of_[i] = nullptr;
-        if (!o.has_pr || o.sys > GNSS_SYS_BDS)
+        if (!o.has_pr || !stageSys(o.sys))
             continue;
         tracked++;
         const double to_sys = o.sys == GNSS_SYS_BDS ? BDT_MINUS_GPST : 0.0;   // as the builder picks
@@ -307,8 +307,9 @@ void RawGnssMeasStage::capEpoch(const TimedRawEpoch& e)
     const int n = in.n < RawEpoch::kMaxObs ? in.n : RawEpoch::kMaxObs;
     // a satellite rises through the mask in minutes: those under it are
     // tried again, as any other, kCapMaskRetryS after the first of them
-    if ((masked_[0] | masked_[1] | masked_[2]) != 0 && std::fabs(gps_time_diff(in.tow_s, masked_tow_)) >= kCapMaskRetryS)
-        masked_[0] = masked_[1] = masked_[2] = 0;
+    if (anyMasked() != 0 && std::fabs(gps_time_diff(in.tow_s, masked_tow_)) >= kCapMaskRetryS)
+        for (int s = 0; s < kStageSys; ++s)
+            masked_[s] = 0;
     float score[RawEpoch::kMaxObs];
     int8_t state[RawEpoch::kMaxObs];
     int cand_sats = 0;                    // the candidates not under the mask
@@ -317,7 +318,7 @@ void RawGnssMeasStage::capEpoch(const TimedRawEpoch& e)
         const RawObs& o = in.obs[i];
         state[i] = kNot;
         score[i] = 0.0f;
-        if (!o.has_pr || o.sys > GNSS_SYS_BDS || o.prn >= kPrns || o.cn0_dbhz < cfg_.meas.sig[o.sys].cn0_min_pr
+        if (!o.has_pr || !stageSys(o.sys) || o.prn >= kPrns || o.cn0_dbhz < cfg_.meas.sig[o.sys].cn0_min_pr
             || !(cfg_.meas.lite ? eph_of_[i] != nullptr : hasEphemeris(o.sys, o.prn, in.tow_s)))
             continue;
         bool first = true;                // a satellite's first observation counts it
@@ -336,7 +337,7 @@ void RawGnssMeasStage::capEpoch(const TimedRawEpoch& e)
             return in.obs[a].sys < in.obs[b].sys;
         return in.obs[a].prn < in.obs[b].prn;
     };
-    uint64_t picked[3] = {};
+    uint64_t picked[kStageSys] = {};
     int sats = 0, kept = 0;               // picked; of them, not under the mask
     for (int pass = 0; pass < 3; ++pass)
     {
@@ -359,12 +360,12 @@ void RawGnssMeasStage::capEpoch(const TimedRawEpoch& e)
             sats++;
             kept += from == kCand ? 1 : 0;
             if (sats == cfg_.sat_cap)
-                for (int s = 0; s < 3; ++s)
+                for (int s = 0; s < kStageSys; ++s)
                     floor_picked_[s] = picked[s];
         }
     }
     if (sats < cfg_.sat_cap)
-        for (int s = 0; s < 3; ++s)
+        for (int s = 0; s < kStageSys; ++s)
             floor_picked_[s] = picked[s];
     sel_.epoch.tow_s = in.tow_s;
     int k = 0;
@@ -380,7 +381,7 @@ void RawGnssMeasStage::capEpoch(const TimedRawEpoch& e)
     sel_.arrival_us = e.arrival_us;
     sel_.gps_week = e.gps_week;
     sel_.rr_paired = e.rr_paired;
-    for (int s = 0; s < 3; ++s)
+    for (int s = 0; s < kStageSys; ++s)
         picked_[s] = picked[s];
     st_.capped_out += static_cast<uint32_t>(cand_sats - kept);
 }
@@ -395,20 +396,20 @@ void RawGnssMeasStage::capEpoch(const TimedRawEpoch& e)
 // would have made, where it has others (floor_keep).
 void RawGnssMeasStage::capBuilt(BuiltEpoch& out)
 {
-    uint64_t built[3] = {};
+    uint64_t built[kStageSys] = {};
     for (int i = 0; i < out.n; ++i)
-        if (out.meas[i].sys <= GNSS_SYS_BDS && out.meas[i].prn < kPrns)
+        if (stageSys(out.meas[i].sys) && out.meas[i].prn < kPrns)
             built[out.meas[i].sys] |= uint64_t{1} << out.meas[i].prn;
     if (cfg_.meas.lite)
-        for (int s = 0; s < 3; ++s)
+        for (int s = 0; s < kStageSys; ++s)
             built[s] |= builder_.waiting(s);
-    const bool none = (masked_[0] | masked_[1] | masked_[2]) == 0;
-    for (int s = 0; s < 3; ++s)
+    const bool none = anyMasked() == 0;
+    for (int s = 0; s < kStageSys; ++s)
     {
         masked_[s] = (masked_[s] | picked_[s]) & ~built[s];
         picked_[s] = built[s];
     }
-    if (none && (masked_[0] | masked_[1] | masked_[2]) != 0)
+    if (none && anyMasked() != 0)
         masked_tow_ = out.tow_s;
     out.floor_trim = 0;
     out.floor_keep = 0;
@@ -422,7 +423,7 @@ __attribute__((noinline)) void RawGnssMeasStage::floorKeep(BuiltEpoch& out) cons
 {
     int kept = 0;
     for (int i = 0; i < out.n; ++i)
-        if (out.meas[i].sys <= GNSS_SYS_BDS && out.meas[i].prn < kPrns
+        if (stageSys(out.meas[i].sys) && out.meas[i].prn < kPrns
             && ((floor_picked_[out.meas[i].sys] >> out.meas[i].prn) & 1u) != 0)
         {
             out.floor_keep |= uint64_t{1} << i;

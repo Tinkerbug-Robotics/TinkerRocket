@@ -88,7 +88,7 @@ template <typename T>
 RawGnssEKF<T>::RawGnssEKF(const RawGnssEKFParams& p)
 {
     setParams(p);
-    for (int s = 0; s < 3; ++s)
+    for (int s = 0; s < GNSS_SYS_COUNT; ++s)
         for (int k = 0; k < 64; ++k)
             last_upd_[s][k][0] = last_upd_[s][k][1] = kNever;
 }
@@ -214,7 +214,7 @@ void RawGnssEKF<T>::init(const double lla[3], const T v_ned[3], const T q[4], do
     hhead_ = hn_ = 0;
     hopen_ = t0;
     std::memset(rejects_, 0, sizeof(rejects_));
-    for (int s = 0; s < 3; ++s)
+    for (int s = 0; s < GNSS_SYS_COUNT; ++s)
         for (int k = 0; k < 64; ++k)
             last_upd_[s][k][0] = last_upd_[s][k][1] = kNever;
     // the carrier: no receiver kept, nothing screened

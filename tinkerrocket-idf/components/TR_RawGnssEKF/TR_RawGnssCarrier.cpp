@@ -1102,7 +1102,7 @@ void RawGnssEKF<T>::losFill(const RawMeas* m, int n, double te, const double r[3
         S.sys[i] = mi.sys;
         S.prn[i] = mi.prn;
         S.sx[i] = mi.sat_pos[0];
-        S.ok[i] = mi.sys <= GNSS_SYS_BDS;
+        S.ok[i] = mi.sys <= GNSS_SYS_BDS || mi.sys == GNSS_SYS_GLO;   // GLONASS's for its Dopplers
         if (!S.ok[i])
             continue;
         Los L;

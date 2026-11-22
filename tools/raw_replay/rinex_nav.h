@@ -48,6 +48,10 @@ namespace rinex
 constexpr double kGpsLeadS = -7200.0;
 constexpr double kGalLagS = 665.0;
 constexpr double kBdsLagS = 18.0;
+// GLONASS: a set is broadcast through the 30 min centred on its tb (ICD 5.1 4.4), so a receiver has it from
+// tb - 15 min; its UTC epoch moves to GPS time by the leap seconds (18 s since 2017-01-01)
+constexpr double kGloLeadS = -900.0;
+constexpr double kGpsMinusUtcS = 18.0;
 
 struct NavRecord
 {
@@ -60,7 +64,7 @@ struct NavFile
 {
     std::vector<NavRecord> recs;   // GPS, Galileo I/NAV and BeiDou MEO/IGSO, file order
     int version_major = 0;
-    int skipped_system = 0;        // GLONASS, SBAS, QZSS, NavIC records
+    int skipped_system = 0;        // SBAS, QZSS, NavIC records (GLONASS's too unless asked for)
     int skipped_fnav = 0;          // Galileo F/NAV, or with no E5b,E1 clock
     int skipped_geo = 0;           // BeiDou GEO
     int bad = 0;                   // records that did not parse
@@ -86,10 +90,10 @@ int sisaIndex(double metres);
 
 // Read a RINEX 3 navigation file. False if it cannot be opened or is not
 // RINEX 3 navigation data; err says why.
-bool readNavFile(const std::string& path, NavFile& out, std::string& err);
+bool readNavFile(const std::string& path, NavFile& out, std::string& err, bool glonass = false);
 
 // The same from text in memory (the tests).
-bool parseNav(const std::string& text, NavFile& out, std::string& err);
+bool parseNav(const std::string& text, NavFile& out, std::string& err, bool glonass = false);
 
 }  // namespace rinex
 

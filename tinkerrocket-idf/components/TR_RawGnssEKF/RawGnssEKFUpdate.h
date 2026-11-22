@@ -184,7 +184,8 @@ void RawGnssEKF<T>::updateGnssRawPartAs(const RawMeas* m, int i0, int i1, double
     for (int i = i0; i < i1; ++i)
     {
         const RawMeas& mi = m[i];
-        if (mi.sys > GNSS_SYS_BDS || mi.prn >= 64)
+        // GPS, Galileo, BeiDou; GLONASS's Dopplers (its pseudorange never comes: GnssSignalProfile::pr_fused)
+        if ((mi.sys > GNSS_SYS_BDS && mi.sys != GNSS_SYS_GLO) || mi.prn >= 64)
             continue;
         if ((!mi.has_pr || !fuse_pr_) && !mi.has_rr)
             continue;

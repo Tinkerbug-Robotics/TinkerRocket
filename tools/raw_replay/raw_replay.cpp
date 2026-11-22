@@ -262,6 +262,8 @@ struct Args
     double px_latency_ms = -1.0;     // --px-latency-ms: the PX1105R's time sync latency (-1: the profile's epoch_latency_s)
     std::string px_tag = "sync";     // --px-tag sync|line: its epochs placed by its driver's time sync on the frames'
                                      //   arrivals (the firmware's), or on the events file's K line (an ideal tag)
+    bool px_glonass = false;         // --glonass 1: the PX1105R's GLONASS L1OF Dopplers as well (Px1105rRawEpoch.h),
+                                     //   their orbits from --rinex (the flown image takes none)
     bool px_seed_locks = false;      // --px-seed-locks 1: a warm start (S lines) of a PX1105R log seeds its first epochs'
                                      //   satellites as long locked, as the LC86G's restored start does (the flight's
                                      //   filter had held them since the pad); without it each enters as relocked, its
@@ -562,6 +564,7 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--receiver" || k == "--profile") a.receiver = val();
         else if (k == "--px-latency-ms") a.px_latency_ms = std::atof(val());
         else if (k == "--px-tag") a.px_tag = val();
+        else if (k == "--glonass") a.px_glonass = std::atoi(val()) != 0;
         else if (k == "--px-seed-locks") a.px_seed_locks = std::atoi(val()) != 0;
         else if (k == "--cold-start") a.cold_start = true;
         else if (k == "--sdr-latency-ms") a.sdr_latency_ms = std::atof(val());
@@ -2912,6 +2915,7 @@ int main(int argc, char** argv)
     pcfg.epoch_latency_s = a.px_latency_ms >= 0.0 ? a.px_latency_ms * 1.0e-3 : rx.epoch_latency_s;
     pcfg.pair = fcfg.pair;
     pcfg.pair_cfg = fcfg.pair_cfg;
+    pcfg.glonass = a.px_glonass;
     std::unique_ptr<rr::SkyTraqFeed> pxfeedp(new rr::SkyTraqFeed(pcfg));
     rr::SkyTraqFeed& pxfeed = *pxfeedp;
     std::unique_ptr<skytraq::FrameParser> stqp(new skytraq::FrameParser());
@@ -2968,14 +2972,15 @@ int main(int argc, char** argv)
     {
         rinex::NavFile nf;
         std::string err;
-        if (!rinex::readNavFile(path, nf, err))
+        if (!rinex::readNavFile(path, nf, err, a.px_glonass))
         {
             std::fprintf(stderr, "--rinex %s: %s\n", path.c_str(), err.c_str());
             return 1;
         }
-        std::fprintf(stderr, "RINEX %s: %zu records (GPS, Galileo I/NAV, BeiDou MEO/IGSO); left out %d other "
+        std::fprintf(stderr, "RINEX %s: %zu records (GPS, Galileo I/NAV, BeiDou MEO/IGSO%s); left out %d other "
                              "systems, %d F/NAV, %d GEO, %d bad\n",
-                     path.c_str(), nf.recs.size(), nf.skipped_system, nf.skipped_fnav, nf.skipped_geo, nf.bad);
+                     path.c_str(), nf.recs.size(), a.px_glonass ? ", GLONASS" : "", nf.skipped_system,
+                     nf.skipped_fnav, nf.skipped_geo, nf.bad);
         rnx.insert(rnx.end(), nf.recs.begin(), nf.recs.end());
     }
     std::stable_sort(rnx.begin(), rnx.end(), [](const rinex::NavRecord& x, const rinex::NavRecord& y) {
@@ -3818,7 +3823,7 @@ int main(int argc, char** argv)
             for (int i = 0; i < te.epoch.n; ++i)
             {
                 const RawObs& o = te.epoch.obs[i];
-                if (o.sys >= 3 || o.prn >= 64 || b.seen_[o.sys][o.prn])
+                if (o.sys >= GNSS_SYS_COUNT || o.prn >= 64 || b.seen_[o.sys][o.prn])
                     continue;
                 b.seen_[o.sys][o.prn] = true;
                 b.first_[o.sys][o.prn] = te.epoch.tow_s - 600.0;

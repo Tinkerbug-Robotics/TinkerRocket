@@ -148,6 +148,7 @@ struct RawCell
     uint8_t  sig = 0;           // signal type (bits 4-7 of [0])
     uint8_t  svid = 0;
     uint8_t  lock_ind = 0;      // bits 4-7 of [2]
+    uint8_t  glo_freq = 0;      // bits 0-3 of [2]: a GLONASS satellite's frequency number plus 7
     uint8_t  cn0 = 0;           // dB-Hz
     uint16_t ind = 0;           // channel indicator
     double   pr_m = 0.0;

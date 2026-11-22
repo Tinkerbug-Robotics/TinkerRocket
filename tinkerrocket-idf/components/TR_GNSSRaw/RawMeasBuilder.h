@@ -142,7 +142,10 @@ public:
             {GNSS_FREQ_L1_HZ, 0.0f, 0.0f, 32.5f, 0.0045f, 0.0014f, true},    // GPS L1 C/A
             {GNSS_FREQ_L1_HZ, 0.0f, 0.0f, 35.0f, 0.0024f, 0.0011f, false},   // Galileo E1
             {1561.098e6, 0.0f, 0.0f, 32.5f, 0.0045f, 0.0014f, true},         // BeiDou B1I
-            {GNSS_FREQ_L1_HZ, 0.0f, 0.0f, 32.5f, 0.0045f, 0.0014f, true}};   // QZSS L1 C/A
+            {GNSS_FREQ_L1_HZ, 0.0f, 0.0f, 32.5f, 0.0045f, 0.0014f, true},    // QZSS L1 C/A
+            // GLONASS L1OF: k = 0's carrier for the ionosphere (each satellite's own is its Doppler's,
+            // Px1105rRawEpoch.h); the Dopplers alone fused (no GLONASS clock offset in the filter yet)
+            {GLO_F1_HZ, 0.0f, 0.0f, 99.0f, 0.0045f, 0.0014f, true, false}};
         double pr_white_a      = kPrWhiteA, pr_white_b = kPrWhiteB;   // the noise model's fit
         double pr_corr_a       = kPrCorrA, pr_corr_b = kPrCorrB;
         double pr_tau_s        = kPrTauS;
@@ -295,7 +298,7 @@ public:
     void markRelock(int sys, int prn, double tow);
 
 private:
-    static constexpr int kSys = 3;
+    static constexpr int kSys = GNSS_SYS_COUNT;   // GLONASS's too (gnss/types.h)
     static constexpr int kPrn = 64;
 
     // A satellite's state at one instant, from one ephemeris.

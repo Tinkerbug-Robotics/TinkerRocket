@@ -59,6 +59,7 @@ public:
         double   epoch_latency_s = 0.0;  // the profile's epoch_latency_s (the driver's setEpochLatencyS)
         bool     pair = false;           // the Dopplers in pairs (the profile's rr_pair_avg)
         mosaic::MosaicDopplerPairConfig pair_cfg;
+        bool     glonass = false;        // its GLONASS cells as well (px1105r::rawEpochFromE5's glonass)
     };
 
     enum class Kind : uint8_t
@@ -178,7 +179,7 @@ private:
             time_sync_.addSample(gps_s, end_us);
         const bool on_grid = px1105r::onFuseGrid(e5_.tow_ms, cfg_.fuse_period_ms);
         te = gnss_raw::TimedRawEpoch();
-        const int cells = px1105r::rawEpochFromE5(e5_, lock_, te.epoch);
+        const int cells = px1105r::rawEpochFromE5(e5_, lock_, te.epoch, cfg_.glonass);
         n_.cells_listed += e5_.n_listed;
         if (!on_grid)
         {

@@ -533,6 +533,14 @@ inline GnssReceiverProfile px1105rProfile()
     // BeiDou B1I (TGD1 from its D1 subframes); its L5-band signals are left
     // out. C/N0 floors of 25 dB-Hz on the code and the Doppler: the mosaic's
     // (the PX1105R's whole dB-Hz on the same scale, unmeasured against it).
+    // GLONASS L1OF where the epoch reader takes it (Px1105rRawEpoch.h,
+    // glonass): the same floors; k = 0's carrier for the ionosphere (each
+    // satellite's Doppler on its own); its Dopplers alone fused -- the code
+    // places the satellite at its transmit time, but a GLONASS pseudorange
+    // needs a clock offset (and per-frequency biases) the filter does not
+    // carry yet: 11-21's pad read GLONASS 26-47 m off GPS's clock -- and no
+    // carrier (its floor out of reach).
+    p.sig[GNSS_SYS_GLO] = GnssSignalProfile{1602.0e6, 25.0f, 25.0f, 99.0f, 0.0045f, 0.0014f, true, false};
 
     // timing
     p.rr_lag_s = 0.025;             // rig flights: its Doppler is its carrier's change over the 50 ms before

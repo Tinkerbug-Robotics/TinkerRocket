@@ -16,6 +16,10 @@ namespace rinex
 namespace
 {
 
+// parseNav's glonass for this file's records (GLONASS records are counted skipped without it)
+bool glonass_wanted = false;
+
+
 constexpr int kBdtWeek0 = 1356;   // BDT week 0 = GPS week 1356 (2006-01-01)
 
 // One field of a record: 19 characters, a FORTRAN D or E exponent, blank = 0.
@@ -66,10 +70,68 @@ int intOf(const std::string& s, size_t at, size_t n, bool& ok)
 // One record: its first line and its broadcast-orbit lines.
 enum class Took { OK, SYSTEM, FNAV, GEO, BAD };
 
+// A GLONASS record (RINEX 3: the epoch in UTC, -TauN, +GammaN, tk; then X, Vx, ax, health; Y, Vy, ay, the
+// frequency number; Z, Vz, az, the age; 3.05's fourth line not needed), into gps_eph_t as gnss/eph.h lays a
+// GLONASS set out: tb in GPS time (UTC + kGpsMinusUtcS), km to m.
+Took parseGlonass(const std::vector<std::string>& L, NavRecord& r)
+{
+    if (L.size() < 4)
+        return Took::BAD;
+    const std::string& h = L[0];
+    bool ok = true;
+    const int prn = intOf(h, 1, 2, ok);
+    const int year = intOf(h, 4, 4, ok), month = intOf(h, 9, 2, ok), day = intOf(h, 12, 2, ok);
+    const int hour = intOf(h, 15, 2, ok), minute = intOf(h, 18, 2, ok), second = intOf(h, 21, 2, ok);
+    const double minus_taun = field(h, 23, ok), gamman = field(h, 42, ok);
+    double o[3][4];
+    for (int k = 0; k < 3; ++k)
+        orbit(L[1 + k], o[k], ok);
+    if (!ok || prn < 1 || prn > 24)
+        return Took::BAD;
+    gps_eph_t e;
+    std::memset(&e, 0, sizeof(e));
+    e.sys = GNSS_SYS_GLO;
+    e.prn = prn;
+    int week = 0;
+    double sow = 0.0;
+    calendarToWeek(year, month, day, hour, minute, static_cast<double>(second) + kGpsMinusUtcS, week, sow);
+    if (sow >= 604800.0)
+    {
+        sow -= 604800.0;
+        week++;
+    }
+    e.week = week;
+    e.toe = e.toc = sow;
+    e.af0 = minus_taun;
+    e.af1 = gamman;
+    for (int k = 0; k < 3; ++k)
+    {
+        e.glo_pos[k] = o[k][0] * 1.0e3;
+        e.glo_vel[k] = o[k][1] * 1.0e3;
+        e.glo_acc[k] = o[k][2] * 1.0e3;
+    }
+    e.health = static_cast<int>(std::lround(o[0][3]));
+    e.glo_k = static_cast<int>(std::lround(o[1][3]));
+    // tb's index in the Moscow day (UTC + 3 h), as RTCM 1020 and the strings count it
+    const long sod_msk = (static_cast<long>(hour) * 3600 + minute * 60 + second + 10800) % 86400;
+    e.iode = e.iodc = static_cast<int>(sod_msk / 900);
+    e.ura = 0;
+    if (!(std::isfinite(e.glo_pos[0]) && std::fabs(e.glo_pos[0]) + std::fabs(e.glo_pos[1]) + std::fabs(e.glo_pos[2]) > 1.0e6)
+        || e.glo_k < -7 || e.glo_k > 6)
+        return Took::BAD;
+    e.valid = 1;
+    r.eph = e;
+    r.toe_gps_s = toeGpsS(e);
+    r.avail_gps_s = availGpsS(e);
+    return Took::OK;
+}
+
 Took parseRecord(const std::vector<std::string>& L, NavRecord& r)
 {
     const std::string& h = L[0];
     const char sys = h[0];
+    if (sys == 'R' && glonass_wanted)
+        return parseGlonass(L, r);
     if (sys != 'G' && sys != 'E' && sys != 'C')
         return Took::SYSTEM;
     if (L.size() < 8)
@@ -180,7 +242,10 @@ double toeGpsS(const gps_eph_t& e)
 
 double availGpsS(const gps_eph_t& e)
 {
-    const double lag = e.sys == GNSS_SYS_GAL ? kGalLagS : (e.sys == GNSS_SYS_BDS ? kBdsLagS : kGpsLeadS);
+    const double lag = e.sys == GNSS_SYS_GAL ? kGalLagS
+                     : e.sys == GNSS_SYS_BDS ? kBdsLagS
+                     : e.sys == GNSS_SYS_GLO ? kGloLeadS
+                                             : kGpsLeadS;
     return toeGpsS(e) + lag;
 }
 
@@ -231,9 +296,10 @@ int sisaIndex(double m)
     return 255;
 }
 
-bool parseNav(const std::string& text, NavFile& out, std::string& err)
+bool parseNav(const std::string& text, NavFile& out, std::string& err, bool glonass)
 {
     out = NavFile{};
+    glonass_wanted = glonass;
     std::istringstream in(text);
     std::string line;
     bool header = true;
@@ -294,7 +360,7 @@ bool parseNav(const std::string& text, NavFile& out, std::string& err)
     return true;
 }
 
-bool readNavFile(const std::string& path, NavFile& out, std::string& err)
+bool readNavFile(const std::string& path, NavFile& out, std::string& err, bool glonass)
 {
     std::ifstream f(path, std::ios::binary);
     if (!f)
@@ -304,7 +370,7 @@ bool readNavFile(const std::string& path, NavFile& out, std::string& err)
     }
     std::ostringstream ss;
     ss << f.rdbuf();
-    return parseNav(ss.str(), out, err);
+    return parseNav(ss.str(), out, err, glonass);
 }
 
 }  // namespace rinex

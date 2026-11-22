@@ -379,8 +379,8 @@ struct RawGnssEKFParams
     uint8_t cr_half_cycle       = kHalfCycleReject;  // HalfCycleAction
     // each system's carrier (its wavelength), and whether its half-cycle
     // steps can come unflagged (gnss_sys_t: GPS, Galileo, BeiDou, QZSS)
-    double  cr_carrier_hz[kProfileSys] = {GNSS_FREQ_L1_HZ, GNSS_FREQ_L1_HZ, 1561.098e6, GNSS_FREQ_L1_HZ};
-    bool    cr_half_cycle_unflagged[kProfileSys] = {true, false, true, true};
+    double  cr_carrier_hz[kProfileSys] = {GNSS_FREQ_L1_HZ, GNSS_FREQ_L1_HZ, 1561.098e6, GNSS_FREQ_L1_HZ, 1602.0e6};
+    bool    cr_half_cycle_unflagged[kProfileSys] = {true, false, true, true, true};
 };
 
 // RawGnssEKFParams::hdg_obs_mode
@@ -998,9 +998,10 @@ private:
     int    hn_ = 0;
     double hopen_ = 0.0;      // start of the newest entry's span
 
-    // per satellite (gnss_sys_t x PRN) and kind (0 pseudorange, 1 range rate)
-    uint8_t rejects_[3][64][2] = {};
-    double  last_upd_[3][64][2] = {};
+    // per satellite (gnss_sys_t x PRN) and kind (0 pseudorange, 1 range rate): every system's slot,
+    // GLONASS's (its Dopplers) included
+    uint8_t rejects_[GNSS_SYS_COUNT][64][2] = {};
+    double  last_upd_[GNSS_SYS_COUNT][64][2] = {};
 
     // The carrier range rate (above). A receiver snapshot: where the filter
     // put the receiver at an epoch (ECEF), and the corrections since, NED, as
