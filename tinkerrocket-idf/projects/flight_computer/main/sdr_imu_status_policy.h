@@ -8,11 +8,13 @@
 
 // Whether the gnss-sdr-dev board's own IMU aids its tracking loops, as a
 // sensor-health state for the apps' health dots: SH_NA with no board on J1,
-// SH_OK while the IMU aids, SH_DEGRADED while the board is there and its IMU
-// does not aid (off in the board's settings, or no mounting into this flight
-// computer yet: the apps' six-face calibration sets it), SH_BAD when the board
-// refused or dropped its IMU (its at-rest check failed, its samples stopped,
-// its attitude lapsed). The flight computer sends it in FC_STATUS_MSG's flags
+// SH_OK while the IMU aids fully (its heading known: a whole mounting into
+// this flight computer, which the apps' six-face calibration sets, or one the
+// board found itself), SH_DEGRADED while it does not fully aid (the vertical
+// only: its heading not known yet, or its mounting disagreeing with this
+// flight computer's attitude; or off in the board's settings), SH_BAD
+// when the board refused or dropped its IMU (its at-rest check failed, its
+// samples stopped, its attitude lapsed). The flight computer sends it in FC_STATUS_MSG's flags
 // (FCS_GNSS_IMU_*); the out computer passes it to the apps ("gi").
 //
 // From the board's own frames as the flight loop drains them: each epoch's
@@ -20,9 +22,10 @@
 // why the IMU does not), and its mounting report (4001 sub-type 5, once a
 // second from firmware that has it: whether its IMU runs). The epochs decide
 // while they come; the report alone (before the board's first fix it sends
-// no epochs) says aiding only while it says so. Either one goes stale after
-// kStaleUs. A board from before the aiding block's version 2 never says why,
-// so it shows SH_OK or SH_DEGRADED only.
+// no epochs) says full aiding only while it says the IMU aids with a whole
+// mounting in use. Either one goes stale after kStaleUs. A board from before
+// the aiding block's version 2 never says why, so it shows SH_OK or
+// SH_DEGRADED only (and an IMU aiding at all as SH_OK).
 //
 // Advisory: the state is shown, never part of go/no-go.
 //
@@ -49,6 +52,7 @@ public:
     void noteAlign(const sdr_rtcm::TrAlign& al, int64_t now_us)
     {
         align_imu_ = al.imu;
+        align_whole_ = al.have == sdr_rtcm::TrAlign::kHaveWhole;
         align_us_ = now_us;
         have_align_ = true;
     }
@@ -60,16 +64,18 @@ public:
             return SH_NA;
         if (have_aid_ && now_us - aid_us_ < kStaleUs)
         {
-            if (aid_.src == 2)
-                return SH_OK;
+            if (aid_.src == 2)                       // aids: fully (no reason), or not fully (the vertical only:
+                                                     // no heading yet, kWhyVertical; or its mounting disagrees,
+                                                     // kWhyMountDisagrees; any later reason likewise)
+                return (aid_.ver >= 2 && aid_.why != sdr_aid::kWhyAids) ? SH_DEGRADED : SH_OK;
             if (aid_.check == 2)
                 return SH_BAD;   // the board's at-rest check refused its IMU
             if (aid_.ver >= 2 && aid_.why >= sdr_aid::kWhyStale && aid_.why <= sdr_aid::kWhyPadCheck)
                 return SH_BAD;   // given to the loops, then dropped (or refused)
-            return SH_DEGRADED;  // off, let go, or no mounting yet
+            return SH_DEGRADED;  // off, let go, or (an older board) no mounting yet
         }
         if (have_align_ && now_us - align_us_ < kStaleUs && align_imu_ == 2)
-            return SH_OK;
+            return align_whole_ ? SH_OK : SH_DEGRADED;   // a whole mounting: its heading known
         return SH_DEGRADED;      // the board is there, and says nothing of its IMU aiding
     }
 
@@ -78,6 +84,7 @@ private:
     int64_t aid_us_ = 0;
     bool    have_aid_ = false;
     uint8_t align_imu_ = 0;
+    bool    align_whole_ = false;
     int64_t align_us_ = 0;
     bool    have_align_ = false;
 };

@@ -171,8 +171,9 @@ def _unpack_slow(frame, row):
     cam_ma, servo_ma = struct.unpack_from('<2H', frame, o + 11)
     row['cam_a'] = cam_ma / 1000.0
     row['servo_a'] = servo_ma / 1000.0
-    # v6: the gnss-sdr-dev board's IMU aiding (0 none, 1 aiding, 2 not aiding,
-    # 3 refused or dropped); a v5 frame has no status byte: 0.
+    # v6: the gnss-sdr-dev board's IMU aiding (0 none, 1 fully aiding, 2 not
+    # fully: the vertical only or off, 3 refused or dropped); a v5 frame has no
+    # status byte: 0.
     row['gnss_imu'] = (frame[o + 15] & LORA_SLOW_GNSS_IMU_MASK
                        if len(frame) == SIZE_OF_LORA_SLOW else 0)
 
