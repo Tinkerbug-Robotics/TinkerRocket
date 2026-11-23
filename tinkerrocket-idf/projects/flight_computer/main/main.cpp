@@ -8730,10 +8730,14 @@ static void setup_fc()
     // well past zero here.  A receiver whose stream is only logged (the
     // gnss-sdr-dev board on a V9 or V10, gnssTypeGivesFix) is online and
     // gives no fix, so the FC flies the same path beside it.
-#if TR_RAW_NAV_SDR
-    // The V10's gnss-sdr-dev image navigates on the board: its measurements
-    // through the raw-GNSS filter and its fixes as GNSSData (the start's
-    // position, the GPS voter's), as the mosaic-only image does on the mosaic
+#if TR_RAW_NAV_P4
+    // A P4 raw-nav image (mosaic, the gnss-sdr-dev board or the PX1105R)
+    // navigates ON the board: its measurements through the raw-GNSS filter and
+    // its fixes as GNSSData (the start's position, the GPS voter's). The
+    // sdr-dev board and the PX1105R are not in gnssTypeGivesFix(), so without
+    // this their raw-nav images would wrongly latch the log-only path meant for
+    // a receiver merely logged beside another. (Was TR_RAW_NAV_SDR, which the
+    // auto image sets but a PX1105R- or mosaic-specific build does not.)
     const bool gnss_log_only = false;
 #else
     const bool gnss_log_only = sensor_collector_hw.isGnssOnline() &&
