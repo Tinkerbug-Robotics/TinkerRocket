@@ -231,7 +231,9 @@ endforeach()
 # below). Any other build refuses them rather than build an image that
 # silently ignores them. _tr_mosaic_rawnav is the mosaic-only and gnss-sdr-dev
 # images' alone (their rig replay and the TR_BENCH_MOSAIC_* switches below);
-# _tr_p4_rawnav adds the PX1105R image.
+# _tr_p4_rawnav adds the PX1105R image and the one image (-DTR_GNSS_AUTO_RAW=1,
+# which compiles every TR_RAW_NAV_P4 path: the rig's restored-flight, panic and
+# start-fail checks run on it).
 if(TR_GNSS_MOSAIC AND (NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW))
     set(_tr_mosaic_rawnav ON)
 elseif(TR_GNSS_SDR)
@@ -239,7 +241,7 @@ elseif(TR_GNSS_SDR)
 else()
     set(_tr_mosaic_rawnav OFF)
 endif()
-if(_tr_mosaic_rawnav OR (TR_GNSS_PX1105R AND (NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW)))
+if(_tr_mosaic_rawnav OR (TR_GNSS_PX1105R AND (NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW)) OR TR_GNSS_AUTO_RAW)
     set(_tr_p4_rawnav ON)
 else()
     set(_tr_p4_rawnav OFF)
@@ -250,7 +252,7 @@ foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G TR_
         TR_BENCH_RAW_SHARE_LOS TR_BENCH_RAW_DOP_AVG TR_RAW_GNSS_IRAM TR_BENCH_RAW_CAP_MAX TR_BENCH_RAW_CAP_PAD
         TR_BENCH_RAW_SLICE_US TR_BENCH_RAW_TROPO_RATE ${_tr_mosaic_rawnav_hooks})
     if(DEFINED ${_v} AND NOT _tr_p4_rawnav)
-        message(FATAL_ERROR "${_v} is for the raw-GNSS navigation filter of the mosaic-only image (-DTR_GNSS_MOSAIC=1 on a V8 or V9), the V10's gnss-sdr-dev image (-DTR_GNSS_SDR=1) or the PX1105R image (-DTR_GNSS_PX1105R=1 on a V9 or V10): this build would ignore it. A build dir keeps every -D value: use a fresh one.")
+        message(FATAL_ERROR "${_v} is for the raw-GNSS navigation filter of the mosaic-only image (-DTR_GNSS_MOSAIC=1 on a V8 or V9), the V10's gnss-sdr-dev image (-DTR_GNSS_SDR=1), the PX1105R image (-DTR_GNSS_PX1105R=1 on a V9 or V10) or the one image (-DTR_GNSS_AUTO_RAW=1): this build would ignore it. A build dir keeps every -D value: use a fresh one.")
     endif()
 endforeach()
 foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G TR_BENCH_DV_CHECK TR_BENCH_RAW_BUILD_LITE
