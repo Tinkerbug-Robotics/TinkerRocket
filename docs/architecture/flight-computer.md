@@ -172,6 +172,14 @@ and since #1153 that includes the simulator's Start: it used to reset the flight
 session — a Stop, or the sim's own give-up — now ends it and restores the persisted
 offsets, as a reboot would.
 
+The session calibrates whichever magnetometer the board runs. With the I2C slot's chip
+(IIS2MDC, or the QMC5883P behind it), the offset goes into that chip. With an MMC5983MA
+(the Tinker-Beetle V2, or a V7 whose slot probe found nothing), the chip has no offset
+register, so the converter subtracts the offset in software. The calibrator, the NVS
+record and the apps see the MMC's counts restated at the IIS2MDC's 0.15 µT
+(`TR_MagCalibrator/mag_cal_mmc.h`), so a saved calibration round-trips through a rocket
+profile the same way on every board.
+
 ## Estimation
 
 A 15-state error-state EKF fuses IMU, barometer, magnetometer, and GNSS. The IMU feed is

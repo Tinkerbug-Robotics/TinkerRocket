@@ -177,6 +177,13 @@ void SensorCollectorSim::configureSimMmcRotation(float rot_z_deg)
     ESP_LOGI("SIM", "MMC5983MA rotation: %.1f deg", (double)rot_z_deg);
 }
 
+void SensorCollectorSim::setSimMmcOffset(int32_t cx, int32_t cy, int32_t cz)
+{
+    mmc_off_[0] = cx;
+    mmc_off_[1] = cy;
+    mmc_off_[2] = cz;
+}
+
 void SensorCollectorSim::configureSimBoardToRocket(const float R[9])
 {
     // Store the transpose (rocket→board); flag identity to skip the
@@ -1161,9 +1168,17 @@ void SensorCollectorSim::packMMC5983MA(uint32_t time_us, float bx, float by, flo
     const float sx = bx * mmc_inv_c_ + by * mmc_inv_s_;
     const float sy = -bx * mmc_inv_s_ + by * mmc_inv_c_;
 
-    out.mag_x = (uint32_t)(lroundf(sx * COUNTS_PER_UT) + 131072);
-    out.mag_y = (uint32_t)(lroundf(sy * COUNTS_PER_UT) + 131072);
-    out.mag_z = (uint32_t)(lroundf(bz * COUNTS_PER_UT) + 131072);
+    // Plus the hard iron the converter takes off (setSimMmcOffset), held to
+    // the chip's 18-bit rails.
+    auto count = [](float uT, int32_t off) {
+        long c = lroundf(uT * COUNTS_PER_UT) + 131072L + off;
+        if (c < 0) c = 0;
+        if (c > 0x3FFFF) c = 0x3FFFF;
+        return (uint32_t)c;
+    };
+    out.mag_x = count(sx, mmc_off_[0]);
+    out.mag_y = count(sy, mmc_off_[1]);
+    out.mag_z = count(bz, mmc_off_[2]);
 }
 
 void SensorCollectorSim::encodeIIS2MDC(uint32_t time_us, IIS2MDCData& out)

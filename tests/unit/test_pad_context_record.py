@@ -363,3 +363,12 @@ def test_the_alignment_comes_before_the_high_g_bias_and_offset(tmp_path):
         assert on[f"high_acc_{axis}"] == pytest_approx(want)
         assert on[f"low_acc_{axis}"] == base[f"low_acc_{axis}"]
         assert sim[f"high_acc_{axis}"] == base[f"high_acc_{axis}"]
+
+
+def test_the_mmc_offset_comes_off_before_scaling():
+    # SensorConverter::convertMMC5983MAData: centered, less the PCX_CAL
+    # mmc_offset_counts, at 800/131072 uT a count
+    raw = 131072 + 8192 - 34406          # +50 uT of field over -210 uT of hard iron
+    assert abs(pfd.decode_mmc_centered(raw, -34406) - 50.0) < 1e-9
+    assert abs(pfd.decode_mmc_centered(raw) - (8192 - 34406) * pfd.MMC_UT_PER_COUNT) < 1e-9
+    assert pfd.decode_mmc_centered(131072) == 0.0
