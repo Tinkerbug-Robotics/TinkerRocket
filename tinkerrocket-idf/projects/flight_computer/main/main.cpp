@@ -35,6 +35,7 @@
 #include <BurnoutDetector.h>      // shared burnout detector (#197/#256)
 #include <DeploymentDetector.h>   // shared recovery-deployment detector
 #include <TR_MagCalibrator.h>
+#include <mag_cal_mmc.h>
 #include <TR_ServoControl_ledc_mult.h>
 #include <TR_GuidancePN.h>
 #include <TR_ControlMixer.h>
@@ -220,18 +221,52 @@ static char    provisioned_board_rev[board_identity::kMaxRev + 1] = {0};
 
 static bool    pending_mag_apply = false;
 
+// The magnetometer the hard-iron calibration belongs to.  One runs on any
+// board: the I2C slot's chip when begin() found one (IIS2MDC, or the QMC5883P
+// behind it), else the MMC5983MA on the boards that carry one (the
+// Tinker-Beetle V2; a V7 whose slot probe found nothing).  The IIS2MDC takes
+// the offset in its OFFSET registers; the MMC has none, so the converter
+// subtracts it (setMMCOffset), in MMC counts.  The calibrator, the NVS
+// cx/cy/cz and the apps speak 0.15 µT counts either way (mag_cal_mmc.h).
+static bool magCalOnMmc()
+{
+    return config::USE_MMC5983MA && !sensor_collector.isIIS2MDCActive();
+}
+
+static const char* magCalChipName()
+{
+    return magCalOnMmc() ? "MMC5983MA" : sensor_collector_hw.magName();
+}
+
+// Program a hard-iron offset (calibrator counts) into the running
+// magnetometer.  False when there is none yet (an I2C chip not up).
+static bool programMagOffset(int16_t cx, int16_t cy, int16_t cz)
+{
+    if (sensor_collector.isIIS2MDCActive())
+        return sensor_collector.setIIS2MDCHardIronOffset(cx, cy, cz);
+    if (magCalOnMmc())
+    {
+        const int32_t ox = mag_cal_mmc::toMmcCounts(cx);
+        const int32_t oy = mag_cal_mmc::toMmcCounts(cy);
+        const int32_t oz = mag_cal_mmc::toMmcCounts(cz);
+        sensor_converter.setMMCOffset(ox, oy, oz);
+        sensor_collector.setSimMmcOffset(ox, oy, oz);   // a sim's counts carry it too
+        return true;
+    }
+    return false;
+}
+
 // #1303: program the stored hard iron, clearing the pending flag ONLY on a
 // real success.  Called at boot and retried from the flight loop until it
 // takes, so a magnetometer that comes up late still flies calibrated.
 static bool applyPendingMagOffset(const char* why)
 {
     if (!pending_mag_apply) return true;
-    if (!sensor_collector.isIIS2MDCActive()) return false;
-    const bool ok = sensor_collector.setIIS2MDCHardIronOffset(
-                        pending_mag_cx, pending_mag_cy, pending_mag_cz);
+    const bool ok = programMagOffset(pending_mag_cx, pending_mag_cy, pending_mag_cz);
     if (ok) pending_mag_apply = false;
-    ESP_LOGI(TAG, "IIS2MDC OFFSET applied (%s): (%d,%d,%d) %s",
-             why, (int)pending_mag_cx, (int)pending_mag_cy, (int)pending_mag_cz,
+    ESP_LOGI(TAG, "%s hard-iron offset applied (%s): (%d,%d,%d) %s",
+             magCalChipName(), why,
+             (int)pending_mag_cx, (int)pending_mag_cy, (int)pending_mag_cz,
              ok ? "OK" : "FAILED");
     return ok;
 }
@@ -307,9 +342,16 @@ static constexpr int64_t MAG_CAL_VERIFY_DURATION_US = 60'000'000;
 // hard iron is under one count on every axis.
 static bool magHardIronApplied()
 {
+    if (mag_cal_session_active || pending_mag_apply) return false;
+    if (magCalOnMmc())
+    {
+        // The MMC5983MA's is the converter's software offset.
+        int32_t ox = 0, oy = 0, oz = 0;
+        sensor_converter.mmcOffset(ox, oy, oz);
+        return ox != 0 || oy != 0 || oz != 0;
+    }
     int16_t cx = 0, cy = 0, cz = 0;
     if (!sensor_collector_hw.iis2mdcHardIronOffset(cx, cy, cz)) return false;
-    if (mag_cal_session_active || pending_mag_apply) return false;
     return cx != 0 || cy != 0 || cz != 0;
 }
 #endif
@@ -5429,6 +5471,28 @@ static void serviceBootCue(uint32_t now_ms)
 // ==========================================================================
 // SECTION: Calibration status publishing
 // ==========================================================================
+// Store a hard-iron calibration (calibrator counts) in the "mag_cal" NVS
+// namespace: a verify pass, a forced save and an app push all write the same
+// record.  cx/cy/cz are the calibration, the one the boot applies and the app
+// keeps; mmc_cx/cy/cz are what the converter subtracts on an MMC5983MA board
+// (zero on the others), for whoever reads the namespace.
+static void magCalSaveNvs(int16_t cx, int16_t cy, int16_t cz, float R_uT, float res_uT)
+{
+    const bool mmc = magCalOnMmc();
+    prefs.begin("mag_cal", false);
+    prefs.putUChar("ver",    MAG_CAL_NVS_SCHEMA_VERSION);
+    prefs.putBool ("done",   true);
+    prefs.putShort("cx",     cx);
+    prefs.putShort("cy",     cy);
+    prefs.putShort("cz",     cz);
+    prefs.putFloat("R_uT",   R_uT);
+    prefs.putFloat("res_uT", res_uT);
+    prefs.putInt  ("mmc_cx", mmc ? mag_cal_mmc::toMmcCounts(cx) : 0);
+    prefs.putInt  ("mmc_cy", mmc ? mag_cal_mmc::toMmcCounts(cy) : 0);
+    prefs.putInt  ("mmc_cz", mmc ? mag_cal_mmc::toMmcCounts(cz) : 0);
+    prefs.end();
+}
+
 // Issue #132 — publish a one-shot status frame built from whatever the
 // "mag_cal" NVS namespace currently holds.  Used by MAG_CAL_APPLY (after
 // persisting a pushed cal) and MAG_CAL_READ (pure query) so the app sees
@@ -8375,14 +8439,10 @@ static void setup_fc()
     fcLoadProvisionedBoardRev();   // #773 step 2
 
     // Restore magnetometer hard-iron offset from NVS (namespace "mag_cal", issue #96).
-    // Apply to IIS2MDC OFFSET_X/Y/Z if the chip is active, and to the
-    // MMC5983MA software-offset path in the converter regardless (the
-    // converter is a no-op on uncalibrated MMC counts since defaults are
-    // zero).  IIS2MDC offsets must be reapplied AFTER sensor_collector.begin()
-    // because softReset() inside begin() zeroes them — ensure call order
-    // below.  The converter offset is set here too even though the IIS2MDC
-    // chip handles its own subtraction; this lets a single NVS schema cover
-    // both mag chips without divergence.
+    // Applied after sensor_collector.begin() (applyPendingMagOffset), which
+    // is when the board's magnetometer is known: the IIS2MDC's OFFSET_X/Y/Z
+    // (softReset() inside begin() zeroes them, so not before), or the
+    // MMC5983MA's software offset in the converter, from the same cx/cy/cz.
     prefs.begin("mag_cal", false);
     if (prefs.isKey("ver"))
     {
@@ -8393,13 +8453,9 @@ static void setup_fc()
             const int16_t cy = (int16_t)prefs.getShort("cy", 0);
             const int16_t cz = (int16_t)prefs.getShort("cz", 0);
             const float   R  = prefs.getFloat("R_uT", 0.0f);
-            const int32_t mmc_cx = prefs.getInt("mmc_cx", 0);
-            const int32_t mmc_cy = prefs.getInt("mmc_cy", 0);
-            const int32_t mmc_cz = prefs.getInt("mmc_cz", 0);
-            sensor_converter.setMMCOffset(mmc_cx, mmc_cy, mmc_cz);
-            ESP_LOGI(TAG, "NVS mag_cal: offset=(%d,%d,%d) raw counts, R=%.2f µT (apply after sensor_collector.begin)",
+            ESP_LOGI(TAG, "NVS mag_cal: offset=(%d,%d,%d) counts, R=%.2f µT (apply after sensor_collector.begin)",
                           (int)cx, (int)cy, (int)cz, (double)R);
-            // Stash on the side; we'll apply to the IIS2MDC chip after begin()
+            // Stash on the side; we'll apply to the magnetometer after begin()
             // returns (softReset inside begin() zeroes OFFSET_X/Y/Z).
             pending_mag_cx = cx;
             pending_mag_cy = cy;
@@ -8739,7 +8795,10 @@ static void setup_fc()
     const float mag_rot_z_deg = config::magRotZDeg(mag_type == MAG_TYPE_QMC5883P);
     sensor_converter.configureIIS2MDCRotationZ(mag_rot_z_deg);
     sensor_converter.configureMagType(mag_type);
-    mag_calibrator.setCountScale(sensor_collector.magLsbToUt());
+    // An MMC5983MA board calibrates at the IIS2MDC's 0.15 µT counts
+    // (mag_cal_mmc.h), the scale its MAG_TYPE_IIS2MDC stamp tells the apps.
+    mag_calibrator.setCountScale(magCalOnMmc() ? (float)MAG_UT_PER_LSB_IIS2MDC
+                                               : sensor_collector.magLsbToUt());
     sensor_collector.configureSimRotation(config::ISM6HG256_ROT_Z_DEG);
     sensor_collector.configureSimIis2mdcRotation(mag_rot_z_deg);
     sensor_collector.configureSimMmcRotation(config::MMC5983MA_ROT_Z_DEG);
@@ -8768,8 +8827,8 @@ static void setup_fc()
     if (pending_mag_apply)
     {
         if (!applyPendingMagOffset("boot")) {
-            ESP_LOGW(TAG, "IIS2MDC OFFSET (%d,%d,%d) NOT applied at boot "
-                          "(chip not active) — will retry",
+            ESP_LOGW(TAG, "Mag hard-iron offset (%d,%d,%d) NOT applied at boot "
+                          "(no magnetometer up) — will retry",
                      (int)pending_mag_cx, (int)pending_mag_cy, (int)pending_mag_cz);
         }
     }
@@ -9586,12 +9645,12 @@ static void resetFlightStateForSim(const char* edge)
 // a stranded session corrupt the magnetometer as well as inhibit launch.
 static void magCalEndSession(const char* why)
 {
-    if (mag_cal_session_active && sensor_collector.isIIS2MDCActive())
+    if (mag_cal_session_active)
     {
-        const bool ok = sensor_collector.setIIS2MDCHardIronOffset(
+        const bool ok = programMagOffset(
             mag_cal_prior_cx, mag_cal_prior_cy, mag_cal_prior_cz);
-        ESP_LOGI(TAG, "[MAGCAL] %s — restored prior OFFSET (%d,%d,%d) %s",
-                 why, (int)mag_cal_prior_cx, (int)mag_cal_prior_cy,
+        ESP_LOGI(TAG, "[MAGCAL] %s — restored prior %s offset (%d,%d,%d) %s",
+                 why, magCalChipName(), (int)mag_cal_prior_cx, (int)mag_cal_prior_cy,
                  (int)mag_cal_prior_cz, ok ? "OK" : "FAIL");
     }
     mag_cal_session_active  = false;
@@ -10721,6 +10780,23 @@ static void loop_fc()
         (void)enqueueI2STx(MMC5983MA_MSG,
                            mmc5983ma_data_buffer,
                            SIZE_OF_MMC5983MA_DATA);
+
+        // Issue #96, the MMC5983MA's turn (the IIS2MDC block below has the
+        // I2C chip's): on a board whose magnetometer this is, its samples
+        // feed the calibrator, restated at 0.15 µT and less the offset the
+        // converter takes off now (zero while sampling, the candidate while
+        // verifying) -- what the IIS2MDC's OFFSET registers would hand on.
+        if (rocket_state == MAG_CALIBRATION && magCalOnMmc())
+        {
+            int32_t ox = 0, oy = 0, oz = 0;
+            sensor_converter.mmcOffset(ox, oy, oz);
+            if (mag_calibrator.addSample(mag_cal_mmc::toCalCounts(mmc5983ma_data.mag_x, ox),
+                                         mag_cal_mmc::toCalCounts(mmc5983ma_data.mag_y, oy),
+                                         mag_cal_mmc::toCalCounts(mmc5983ma_data.mag_z, oz)))
+            {
+                mag_cal_status_dirty = true;
+            }
+        }
     }
 
     if (sensor_collector.getIIS2MDCData(iis2mdc_data))
@@ -10949,18 +11025,7 @@ static void loop_fc()
                 uint8_t reject;
                 mag_calibrator.getResult(cx, cy, cz, R_uT, res_uT, reject);
 
-                prefs.begin("mag_cal", false);
-                prefs.putUChar("ver",    MAG_CAL_NVS_SCHEMA_VERSION);
-                prefs.putBool ("done",   true);
-                prefs.putShort("cx",     cx);
-                prefs.putShort("cy",     cy);
-                prefs.putShort("cz",     cz);
-                prefs.putFloat("R_uT",   R_uT);
-                prefs.putFloat("res_uT", res_uT);
-                prefs.putInt  ("mmc_cx", 0);
-                prefs.putInt  ("mmc_cy", 0);
-                prefs.putInt  ("mmc_cz", 0);
-                prefs.end();
+                magCalSaveNvs(cx, cy, cz, R_uT, res_uT);
 
                 ESP_LOGI(TAG, "[MAGCAL] verify PASS — saved cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT",
                          (int)cx, (int)cy, (int)cz, (double)R_uT, (double)res_uT);
@@ -10983,12 +11048,11 @@ static void loop_fc()
                 // restore prior) so the user can immediately Retry into
                 // SAMPLING and see raw mag values.  If they Abort
                 // instead, the abort handler does the prior restore.
-                if (sensor_collector.isIIS2MDCActive())
                 {
-                    const bool ok = sensor_collector.setIIS2MDCHardIronOffset(0, 0, 0);
-                    ESP_LOGW(TAG, "[MAGCAL] verify FAIL (worst=%.1fµT) — zeroed OFFSET %s; "
+                    const bool ok = programMagOffset(0, 0, 0);
+                    ESP_LOGW(TAG, "[MAGCAL] verify FAIL (worst=%.1fµT) — zeroed %s offset %s; "
                                   "user can Retry (raw sampling) or Abort (restore prior)",
-                             (double)worst_uT, ok ? "OK" : "FAIL");
+                             (double)worst_uT, magCalChipName(), ok ? "OK" : "FAIL");
                 }
                 // Stamp the worst observed |B| into the calibrator's
                 // inst_field slot via buildStatusFrame — already true
@@ -12734,12 +12798,11 @@ static void loop_fc()
                     // values.  Without this a recalibration fits the residual
                     // hard-iron (post-prior-offset), then overwrites the prior
                     // cal with that partial value and fails verification.
-                    if (sensor_collector.isIIS2MDCActive())
                     {
-                        const bool ok = sensor_collector.setIIS2MDCHardIronOffset(0, 0, 0);
-                        ESP_LOGI(TAG, "[MAGCAL] start: zeroed IIS2MDC OFFSET %s  "
+                        const bool ok = programMagOffset(0, 0, 0);
+                        ESP_LOGI(TAG, "[MAGCAL] start: zeroed %s offset %s  "
                                       "prior=(%d,%d,%d)",
-                                 ok ? "OK" : "FAIL",
+                                 magCalChipName(), ok ? "OK" : "FAIL",
                                  (int)mag_cal_prior_cx, (int)mag_cal_prior_cy,
                                  (int)mag_cal_prior_cz);
                     }
@@ -12838,11 +12901,11 @@ static void loop_fc()
                     // new sphere fit sees raw mag values.  Only matters when
                     // retrying out of VERIFYING — in REVIEW/SAMPLING the chip
                     // is already at zero from MAG_CAL_START.
-                    if (mag_cal_verify_active && sensor_collector.isIIS2MDCActive())
+                    if (mag_cal_verify_active)
                     {
-                        const bool ok = sensor_collector.setIIS2MDCHardIronOffset(0, 0, 0);
-                        ESP_LOGI(TAG, "[MAGCAL] retry during VERIFYING — zeroed OFFSET %s",
-                                 ok ? "OK" : "FAIL");
+                        const bool ok = programMagOffset(0, 0, 0);
+                        ESP_LOGI(TAG, "[MAGCAL] retry during VERIFYING — zeroed %s offset %s",
+                                 magCalChipName(), ok ? "OK" : "FAIL");
                     }
                     mag_cal_verify_active = false;
                     mag_calibrator.retry();
@@ -12890,18 +12953,13 @@ static void loop_fc()
                     // verify window measures the corrected stream.  On verify
                     // pass we'll persist; on fail we zero the chip and the
                     // session abort path takes care of full prior restore.
-                    if (sensor_collector.isIIS2MDCActive())
                     {
-                        const bool ok = sensor_collector.setIIS2MDCHardIronOffset(cx, cy, cz);
-                        ESP_LOGI(TAG, "[MAGCAL] IIS2MDC OFFSET applied (pre-verify): "
+                        const bool ok = programMagOffset(cx, cy, cz);
+                        ESP_LOGI(TAG, "[MAGCAL] %s offset applied (pre-verify): "
                                       "(%d,%d,%d) %s  prior=(%d,%d,%d)",
-                                 (int)cx, (int)cy, (int)cz, ok ? "OK" : "FAIL",
+                                 magCalChipName(), (int)cx, (int)cy, (int)cz, ok ? "OK" : "FAIL",
                                  (int)mag_cal_prior_cx, (int)mag_cal_prior_cy, (int)mag_cal_prior_cz);
                     }
-                    // MMC path is the same regardless; clear any prior
-                    // converter-side offset (sphere fit runs against
-                    // IIS2MDC LSB units, not MMC counts).
-                    sensor_converter.setMMCOffset(0, 0, 0);
 
                     // Enter verification window — the per-tick block
                     // below polls esp_timer_get_time() and calls
@@ -12968,26 +13026,13 @@ static void loop_fc()
                     {
                         // Program chip OFFSET (idempotent — same regs if
                         // we already wrote them via MAG_CAL_ACCEPT).
-                        if (sensor_collector.isIIS2MDCActive())
                         {
-                            const bool ok = sensor_collector.setIIS2MDCHardIronOffset(cx, cy, cz);
-                            ESP_LOGI(TAG, "[MAGCAL] FORCE_APPLY OFFSET (%d,%d,%d) %s",
-                                     (int)cx, (int)cy, (int)cz, ok ? "OK" : "FAIL");
+                            const bool ok = programMagOffset(cx, cy, cz);
+                            ESP_LOGI(TAG, "[MAGCAL] FORCE_APPLY %s offset (%d,%d,%d) %s",
+                                     magCalChipName(), (int)cx, (int)cy, (int)cz, ok ? "OK" : "FAIL");
                         }
-                        sensor_converter.setMMCOffset(0, 0, 0);
 
-                        prefs.begin("mag_cal", false);
-                        prefs.putUChar("ver",    MAG_CAL_NVS_SCHEMA_VERSION);
-                        prefs.putBool ("done",   true);
-                        prefs.putShort("cx",     cx);
-                        prefs.putShort("cy",     cy);
-                        prefs.putShort("cz",     cz);
-                        prefs.putFloat("R_uT",   R_uT);
-                        prefs.putFloat("res_uT", res_uT);
-                        prefs.putInt  ("mmc_cx", 0);
-                        prefs.putInt  ("mmc_cy", 0);
-                        prefs.putInt  ("mmc_cz", 0);
-                        prefs.end();
+                        magCalSaveNvs(cx, cy, cz, R_uT, res_uT);
 
                         ESP_LOGI(TAG, "[MAGCAL] FORCE_APPLY — saved cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT "
                                       "(user override, gates not re-checked)",
@@ -13061,26 +13106,13 @@ static void loop_fc()
                         MagCalApplyData ap;
                         memcpy(&ap, cfg_payload, sizeof(ap));
 
-                        if (sensor_collector.isIIS2MDCActive())
                         {
-                            const bool ok = sensor_collector.setIIS2MDCHardIronOffset(ap.cx, ap.cy, ap.cz);
-                            ESP_LOGI(TAG, "[MAGCAL] APPLY IIS2MDC OFFSET (%d,%d,%d) %s",
-                                     (int)ap.cx, (int)ap.cy, (int)ap.cz, ok ? "OK" : "FAIL");
+                            const bool ok = programMagOffset(ap.cx, ap.cy, ap.cz);
+                            ESP_LOGI(TAG, "[MAGCAL] APPLY %s offset (%d,%d,%d) %s",
+                                     magCalChipName(), (int)ap.cx, (int)ap.cy, (int)ap.cz, ok ? "OK" : "FAIL");
                         }
-                        sensor_converter.setMMCOffset(0, 0, 0);
 
-                        prefs.begin("mag_cal", false);
-                        prefs.putUChar("ver",    MAG_CAL_NVS_SCHEMA_VERSION);
-                        prefs.putBool ("done",   true);
-                        prefs.putShort("cx",     ap.cx);
-                        prefs.putShort("cy",     ap.cy);
-                        prefs.putShort("cz",     ap.cz);
-                        prefs.putFloat("R_uT",   ap.R_uT);
-                        prefs.putFloat("res_uT", ap.res_uT);
-                        prefs.putInt  ("mmc_cx", 0);
-                        prefs.putInt  ("mmc_cy", 0);
-                        prefs.putInt  ("mmc_cz", 0);
-                        prefs.end();
+                        magCalSaveNvs(ap.cx, ap.cy, ap.cz, ap.R_uT, ap.res_uT);
 
                         ESP_LOGI(TAG, "[MAGCAL] APPLY+saved: cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT",
                                  (int)ap.cx, (int)ap.cy, (int)ap.cz,

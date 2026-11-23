@@ -372,7 +372,7 @@ void SensorConverter::convertMMC5983MAData(const MMC5983MAData& in, MMC5983MADat
 
   // Gauss = centered * (8 / 131072)
   // SI: uT = Gauss * 100
-  static constexpr double UT_PER_COUNT = (8.0 * 100.0) / 131072.0; // 0.006103515625
+  static constexpr double UT_PER_COUNT = MAG_UT_PER_COUNT_MMC5983MA; // 0.006103515625
 
   const double mx = (double)cx * UT_PER_COUNT;
   const double my = (double)cy * UT_PER_COUNT;

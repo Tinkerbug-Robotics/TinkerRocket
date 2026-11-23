@@ -1447,10 +1447,12 @@ def decode_bmp585_temp(temp_q16):
     """Decode BMP585 temperature from Q16 int32 to °C."""
     return float(temp_q16) / 65536.0
 
-def decode_mmc_centered(raw_u32):
-    """Center an 18-bit MMC5983MA raw reading and convert to µT."""
+def decode_mmc_centered(raw_u32, offset_counts=0):
+    """Center an 18-bit MMC5983MA raw reading, take off its hard-iron offset
+    (centered counts, the flight's PCX_CAL mmc_offset_counts) and convert to
+    µT, as SensorConverter::convertMMC5983MAData does."""
     raw18 = raw_u32 & 0x3FFFF
-    centered = raw18 - 131072
+    centered = raw18 - 131072 - offset_counts
     return centered * MMC_UT_PER_COUNT
 
 def decode_voltage(raw_u16):
@@ -2294,10 +2296,19 @@ def parse_binary_file(filepath):
     # --- Post-process MMC raw data with rotation ---
     mmc_rad = math.radians(config["mmc_rot_z_deg"])
     c_mmc, s_mmc = math.cos(mmc_rad), math.sin(mmc_rad)
+    # The MMC5983MA's hard-iron offset, centered counts: the MMC has no offset
+    # register, so its logged counts carry the board's hard iron and the
+    # converter takes it off after the log -- the flight's PCX_CAL record (a
+    # log without one: none, as before the MMC was calibrated)
+    mmc_ox = mmc_oy = mmc_oz = 0
+    for pr in records["PadContext"]:
+        if pr.get("kind") == "cal":
+            mmc_ox, mmc_oy, mmc_oz = pr["mmc_offset_counts"]
+    config["mmc_offset_counts"] = (mmc_ox, mmc_oy, mmc_oz)
     for rec in records["MMC5983MA"]:
-        mx = decode_mmc_centered(rec.pop("raw_x"))
-        my = decode_mmc_centered(rec.pop("raw_y"))
-        mz = decode_mmc_centered(rec.pop("raw_z"))
+        mx = decode_mmc_centered(rec.pop("raw_x"), mmc_ox)
+        my = decode_mmc_centered(rec.pop("raw_y"), mmc_oy)
+        mz = decode_mmc_centered(rec.pop("raw_z"), mmc_oz)
         mag = apply_b2r(mx * c_mmc - my * s_mmc,
                         mx * s_mmc + my * c_mmc,
                         mz)
