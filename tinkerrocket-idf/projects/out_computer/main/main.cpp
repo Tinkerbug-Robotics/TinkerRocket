@@ -90,7 +90,7 @@ static inline std::string itos(int v)
 #include "snapshot_answer_policy.h"   // when the OC may answer the FC's snapshot ask with "no flight"
 #include "snapshot_replay_filter.h"   // #383/#846: which of the FC's snapshots the OC keeps
 #include "lora_slot_follow_policy.h"  // three rockets: the base station's transmit grid (uplink 82)
-#if !TR_BOARD_M1
+#if TR_OC_ANTENNA_OFFSET
 #include "antenna_readback_policy.h"  // whose GNSS antenna offset the config readback serves
 #endif
 
@@ -1743,7 +1743,7 @@ static void setAntennaCache(const AntennaOffsetConfigData& a)
     portEXIT_CRITICAL(&cfg_antenna_mux);
 }
 
-#if !TR_BOARD_M1
+#if TR_OC_ANTENNA_OFFSET
 // An antenna command staged for the FC and not yet confirmed by its config
 // report, and the value staged: while it stands the readback serves the cache
 // (antenna_readback_policy.h has why). Set by stageAntennaConfig, on loop_oc
@@ -1768,7 +1768,7 @@ static AntennaOffsetConfigData ant_staged      = {};
 static void stageAntennaConfig(const AntennaOffsetConfigData& cfg)
 {
     setPendingCommandWithConfig(ANTENNA_CONFIG_PENDING, ANTENNA_CONFIG_MSG, &cfg, sizeof(cfg));
-#if !TR_BOARD_M1
+#if TR_OC_ANTENNA_OFFSET
     portENTER_CRITICAL(&cmd_queue_mux);   // after the enqueue: see ant_unconfirmed
     ant_staged      = cfg;
     ant_unconfirmed = true;
@@ -1776,7 +1776,7 @@ static void stageAntennaConfig(const AntennaOffsetConfigData& cfg)
 #endif
 }
 
-#if !TR_BOARD_M1
+#if TR_OC_ANTENNA_OFFSET
 static bool antennaUnconfirmed()
 {
     portENTER_CRITICAL(&cmd_queue_mux);
@@ -2134,7 +2134,7 @@ static inline ConfigReportData snapshotConfigReport(bool* valid_out,
 }
 static volatile bool    fc_config_report_dirty = false;
 
-#if !TR_BOARD_M1
+#if TR_OC_ANTENNA_OFFSET
 // The GNSS antenna offset the readback reports ("antk".."antz"), and where it
 // came from ("antsrc") — the FC's own when the FC is up with a report that
 // carries one (v4), has taken the antenna command the OC last staged, and
@@ -2829,6 +2829,25 @@ static void readINA230Power()
 #error "Stale sdkconfig: CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION missing — light sleep will kill the USB console on the bench. rm sdkconfig && idf.py build (#519)"
 #endif
 #endif  // ESP_PLATFORM
+
+// ---------------------------------------------------------------------------
+//  Boot-flash guard for the Tinker-Beetle V2 — fail the BUILD, not the board.
+//
+//  The V2's out computer boots from the 4 MB of flash inside its
+//  ESP32-S3FH4R2, so its image has to declare 4 MB. A larger declaration is the
+//  one mistake nothing at runtime can report: the bootloader finds less flash
+//  than the image header claims and stops there, before app_main and before
+//  any log of ours (docs/board-versioning.md, "Boot NOR size per revision").
+//
+//  The declaration comes from sdkconfig.defaults.flash4mb, which the project
+//  CMakeLists adds for -DTR_BOARD_M2=1, and the stale-sdkconfig trap above
+//  applies to it: a build_m2 dir configured before that overlay existed keeps
+//  the base 8 MB and the 8 MB partition table, and builds without complaint.
+//  If this fires, delete build_m2/sdkconfig and build again.
+// ---------------------------------------------------------------------------
+#if defined(ESP_PLATFORM) && TR_BOARD_M2 && !defined(CONFIG_ESPTOOLPY_FLASHSIZE_4MB)
+#error "Stale sdkconfig: a Tinker-Beetle V2 (TR_BOARD_M2) image must declare 4 MB of flash (CONFIG_ESPTOOLPY_FLASHSIZE_4MB, from sdkconfig.defaults.flash4mb) — its ESP32-S3FH4R2 has no more, and the bootloader of an 8 MB image refuses it. rm build_m2/sdkconfig && idf.py -B build_m2 -DTR_BOARD_M2=1 build"
+#endif
 
 // ==========================================================================
 // SECTION: Clock sources, low-power mode, and boot USB-serial grace
@@ -5429,7 +5448,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             memcmp((const uint8_t*)&incoming + sizeof(incoming.time_us),
                    (const uint8_t*)&fc_config_report + sizeof(incoming.time_us),
                    sizeof(incoming) - sizeof(incoming.time_us)) != 0;
-#if !TR_BOARD_M1
+#if TR_OC_ANTENNA_OFFSET
         const AntennaReadback ant_was = antennaReadback();
 #endif
         portENTER_CRITICAL(&fc_config_report_mux);   // #1149 item 3
@@ -5497,7 +5516,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             cam_diverged = differs;
         }
 
-#if !TR_BOARD_M1
+#if TR_OC_ANTENNA_OFFSET
         // The GNSS antenna offset. First the report settles an antenna
         // command the OC staged (ant_unconfirmed): confirmed when it carries
         // the value, given up on once the command has left the queue and the
@@ -5970,7 +5989,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             if (fc_boot_status.step != FCB_COMPLETE)
             {
                 fc_boot_retire_pending = true;
-#if !TR_BOARD_M1
+#if TR_OC_ANTENNA_OFFSET
                 ant_heal_sent = false;   // a new FC session: its first report may need the antenna again
 #endif
             }
@@ -7676,7 +7695,7 @@ static void sendCurrentConfig()
     // firmware that has no such setting, which the apps read as "this rocket
     // cannot change it".
     j += ",\"glog\":"; j += itos(cfg_gnss_log);
-#if !TR_BOARD_M1
+#if TR_OC_ANTENNA_OFFSET
     // The GNSS antenna offset (cmd 81): 0 unknown or 1 measured, and the board
     // frame's mm (0 when unknown); "antsrc" "fc" when it is the FC's report,
     // "oc" when the cache stands in: until the FC has taken what was sent and
@@ -7709,7 +7728,7 @@ static void sendCurrentConfig()
     j += "}";
     enqueueConfigReadback(j);   // #398 item 3: paced drain in loop_oc, no delay()
     ESP_LOGI("CFG", "Queued config readback (%u bytes)", (unsigned)j.length());
-#if !TR_BOARD_M1
+#if TR_OC_ANTENNA_OFFSET
     // Its own line, like the camera type's
     if (ant.cfg.known)
         ESP_LOGI("CFG", "GNSS antenna offset readback: board X %d, Y %d, Z %d mm (from %s)", (int)ant.cfg.x_mm,
@@ -11254,6 +11273,25 @@ static void setup_oc()
                 pinMode(config::GPS_PWR_PIN, OUTPUT);
                 digitalWrite(config::GPS_PWR_PIN, HIGH);
             }
+        }
+
+        // The Tinker-Beetle V2's ESP_I2S_WS is on MTCK (GPIO39), which the chip
+        // pulls up after every reset (config::LINK_NET_ON_MTCK has the rule).
+        // Turn the pull off: left on it feeds about 60 uA into the flight
+        // computer's unpowered pad for the whole pad standby, until the first
+        // power-off parks the link pins. An input with no pulls is what the
+        // other link pads reset to, and it is right with the rail up too: a
+        // tier-1 restore above means the flight computer is driving this net,
+        // and the I2S driver takes the pad over when the link starts. After
+        // tier 1 so the rail's ~0.8 s race does not wait on it. if constexpr:
+        // no other board has a link net on this pad, and this compiles to
+        // nothing there.
+        if constexpr (config::LINK_NET_ON_MTCK)
+        {
+            gpio_set_direction((gpio_num_t)config::S3_MTCK_GPIO, GPIO_MODE_INPUT);
+            gpio_set_pull_mode((gpio_num_t)config::S3_MTCK_GPIO, GPIO_FLOATING);
+            ESP_LOGI("OC", "link pad GPIO%d (MTCK): reset pull-up off",
+                     (int)config::S3_MTCK_GPIO);
         }
 
         // ── #1176 TIER 2: the durable flight token ───────────────────────────

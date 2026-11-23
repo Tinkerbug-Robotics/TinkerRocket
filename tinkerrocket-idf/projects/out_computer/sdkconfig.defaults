@@ -276,6 +276,13 @@ CONFIG_I2S_ISR_IRAM_SAFE=y
 # stop building — gen_esp32part.py refuses a table larger than the declared
 # flash, which is the safe way for that mistake to surface.
 #
+# 2026-11-21: one board carries LESS than this. The Tinker-Beetle V2's out
+# computer (-DTR_BOARD_M2=1) boots from the 4 MB inside its ESP32-S3FH4R2, so
+# for that board the 8 MB above is the too-large case. Its build adds
+# sdkconfig.defaults.flash4mb after this file: a 4 MB declaration and
+# partitions_4mb.csv. main.cpp refuses to compile an M2 image that still
+# declares 8 MB.
+#
 # TRAP: IDF does not re-apply sdkconfig.defaults to an EXISTING sdkconfig, and
 # this project deliberately keeps one PER BUILD DIR (#822, so a V9 build
 # cannot poison a V8 one).  A build dir created before a change here keeps

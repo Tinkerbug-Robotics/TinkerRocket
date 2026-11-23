@@ -123,6 +123,15 @@
 #include <esp_system.h>
 #include <esp_rom_sys.h>           // esp_rom_delay_us
 #include <CRC32.h>
+// The Tinker-Beetle V2's ESP32-S3FH4R2 boots from the 4 MB in its package: an
+// image that declares the base 8 MB is refused by its bootloader before any
+// firmware runs, with no log of ours (the project CMakeLists appends
+// sdkconfig.defaults.flash4mb last for M2). A build dir configured before that
+// overlay existed keeps 8 MB, because IDF never re-applies defaults to an
+// sdkconfig that is already there.
+#if TR_BOARD_M2 && !defined(CONFIG_ESPTOOLPY_FLASHSIZE_4MB)
+#error "Stale sdkconfig: a Tinker-Beetle V2 (TR_BOARD_M2) flight computer image must declare 4 MB of flash (CONFIG_ESPTOOLPY_FLASHSIZE_4MB, from sdkconfig.defaults.flash4mb) — its ESP32-S3FH4R2 has no more, and the bootloader of an 8 MB image refuses it. rm build_m2/sdkconfig && idf.py -B build_m2 -DTR_BOARD_M2=1 build"
+#endif
 static const char* TAG = "FC";
 
 // IDF-native timing helpers — replace the Arduino-shim time_ms()/time_us()
@@ -836,7 +845,7 @@ static uint16_t imu_rate_max_hz = config::IMU_RATE_MAX_HZ;
 // receiver it changes nothing.
 static uint8_t gnss_log_setting = GNSS_LOG_DETAILED;
 static gnss_log::SbfCut sbf_log_cut;   // the REDUCED log's place in the SBF stream
-#if !TR_BOARD_M1
+#if TR_FC_ANTENNA_OFFSET
 // The GNSS antenna's offset from the IMU (BLE cmd 81, NVS "antenna"/"ofs"):
 // where the owner measured it, in the board's own frame, or unknown (the
 // default). Kept on every board but the Beetle's, so a setting survives a
@@ -855,6 +864,12 @@ static bool antenna_cfg_from_nvs = false;
 // later frame replaces it.
 static AntennaOffsetConfigData antenna_held = {};
 static bool antenna_held_set = false;
+#elif TR_RAW_NAV_P4
+// A board that keeps no offset (TR_FC_ANTENNA_OFFSET 0) flying the P4 images'
+// raw-GNSS filter -- the Tinker-Beetle V2's PX100: the unknown every board
+// starts on, for good, so the filter predicts at the IMU as it does on any
+// board never told.
+static const AntennaOffsetConfigData antenna_cfg = {};
 #endif
 #if TR_RAW_NAV_P4
 static void rawAntennaPublish();
@@ -3053,7 +3068,7 @@ static void sendPadContextCal()
     memcpy(rg.g.matrix, rg_m, sizeof(rg_m));
     static_assert(sizeof(rg) == sizeof(PadContextHeader) + sizeof(PadContextHg), "PCX_HG record is packed");
     (void)enqueueI2STx(PAD_CONTEXT_MSG, reinterpret_cast<const uint8_t*>(&rg), sizeof(rg));
-#if !TR_BOARD_M1
+#if TR_FC_ANTENNA_OFFSET
     // PCX_ANT: the GNSS antenna's offset (BLE cmd 81), the same in the
     // filter's frame, and the one the filter flew with; none changes in
     // flight (one sent INFLIGHT is held for the ground), and `used` says
@@ -3166,7 +3181,7 @@ static void buildConfigReport(ConfigReportData &r)
     // #1472: the type cameraStart() dispatches on, for the same reason.
     r.camera_type = runtime_camera_type;
 
-#if !TR_BOARD_M1
+#if TR_FC_ANTENNA_OFFSET
     // The GNSS antenna offset the FC holds and gives its filter, not one held
     // INFLIGHT for the ground (that one is reported once it is applied).
     // The Beetle keeps none: zero, flag clear.
@@ -3212,7 +3227,7 @@ static void sendConfigReport()
                  camera_type_from_nvs ? "nvs" : "dflt",
                  r.camera_type == CAM_TYPE_GOPRO ? "GoPro" :
                  r.camera_type == CAM_TYPE_RUNCAM ? "RunCam" : "None");
-#if !TR_BOARD_M1
+#if TR_FC_ANTENNA_OFFSET
         // its own line: the Beetle keeps no antenna offset
         if (r.antenna.known)
             ESP_LOGI(TAG, "[CFG] Config report antenna(%s): board X %d, Y %d, Z %d mm",
@@ -3237,7 +3252,7 @@ static void serviceConfigReport()
     }
 }
 
-#if !TR_BOARD_M1
+#if TR_FC_ANTENNA_OFFSET
 // A checked GNSS antenna offset (BLE cmd 81) made the FC's: kept in NVS,
 // given to the mosaic-only image's filter (which takes it on the ground) and
 // reported to the OC, whose readback serves the report. Never INFLIGHT: one
@@ -8240,7 +8255,7 @@ static void setup_fc()
     ESP_LOGI(TAG, "GNSS log: %s", gnss_log_setting == GNSS_LOG_REDUCED
                                       ? "reduced (a mosaic-G5's raw measurements once a second)"
                                       : "detailed (every SBF block)");
-#if !TR_BOARD_M1
+#if TR_FC_ANTENNA_OFFSET
     // The GNSS antenna's offset (BLE cmd 81): a record that is no setting
     // reads as unknown, the antenna nobody measured, and is not reported as
     // a record (F_ANTENNA_FROM_NVS), so the OC sends its own copy again.
@@ -8553,6 +8568,10 @@ static void setup_fc()
     // The mosaic-G5's 1PPS (J1 pin 5); -1 and a no-op on every other build.
     // The V9 image's mosaic rate as well; its GNSS_UPDATE_RATE is the u-blox's.
     sensor_collector_hw.setGNSSPpsPin(config::GNSS_PPS_PIN);
+    // The board's parts on the back (board_m2.h; +1 everywhere on every other
+    // board): turned over as they are read, so everything after the read sees
+    // a front part turned only about Z (config::ISM6HG256_ROT_Z_DEG / _MMC5983MA_)
+    sensor_collector_hw.configureAxisSigns(config::ISM6HG256_AXIS_SIGN, config::MMC5983MA_AXIS_SIGN);
     sensor_collector_hw.setGNSSMosaicRate(config::GNSS_MOSAIC_UPDATE_RATE);
     sensor_collector.begin(config::SENSOR_CORE);
 #if TR_RAW_NAV_SDR
@@ -8723,6 +8742,7 @@ static void setup_fc()
     mag_calibrator.setCountScale(sensor_collector.magLsbToUt());
     sensor_collector.configureSimRotation(config::ISM6HG256_ROT_Z_DEG);
     sensor_collector.configureSimIis2mdcRotation(mag_rot_z_deg);
+    sensor_collector.configureSimMmcRotation(config::MMC5983MA_ROT_Z_DEG);
 
     // Board→rocket mounting orientation (converter + sim + OC query payload).
     // #915: driven by the stored SETTING, so a manual clocking survives a
@@ -10866,7 +10886,7 @@ static void loop_fc()
     // Drained here rather than sent from the I2C command handlers: those run
     // inside the OC's poll window, and a 209-byte enqueue there would sit in
     // the same path the OC is waiting on.
-#if !TR_BOARD_M1
+#if TR_FC_ANTENNA_OFFSET
     serviceAntennaHeld();   // a GNSS antenna offset held INFLIGHT: applied, and in this pass's report
 #endif
     serviceConfigReport();
@@ -13624,7 +13644,7 @@ static void loop_fc()
                     cfgRetryOnNextPoll("GNSS LOG CFG");   // #1112
                 }
             }
-#if !TR_BOARD_M1
+#if TR_FC_ANTENNA_OFFSET
             else if (out_pending_command == ANTENNA_CONFIG_PENDING)
             {
                 delay_ms(1);

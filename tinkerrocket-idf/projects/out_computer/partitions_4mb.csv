@@ -1,0 +1,26 @@
+# Name,   Type, SubType, Offset,  Size,    Flags
+# The out computer's partition table for a board whose boot flash is 4 MB: the
+# Tinker-Beetle V2 (-DTR_BOARD_M2=1), whose ESP32-S3FH4R2 carries its flash in
+# the package. Selected by sdkconfig.defaults.flash4mb, with the 4 MB
+# declaration that goes with it. Every other board keeps partitions.csv.
+#
+# The same partitions as partitions.csv, in the same order, with the two app
+# slots cut from 3 MB to 1.875 MB each: the largest pair that leaves room for
+# the core dump and the flight token inside 4 MB. The image is 0.83 MB
+# (2026-11-21), so a slot is a little over twice what it holds. An image that
+# outgrows a slot fails the build ("All app partitions are too small for
+# binary"), and an OTA of one is refused by esp_ota_begin before anything is
+# erased.
+#
+# `nvs` and `otadata` keep the offsets and sizes they have in partitions.csv,
+# so the tools and notes that name them hold for both tables. The core dump
+# moves: espcoredump.py reads it at 0x3d0000 here, not 0x610000.
+# Ends at 0x3e4000, 112 KB short of the end of the part.
+nvs,      data, nvs,     0x9000,  0x5000,
+otadata,  data, ota,     0xe000,  0x2000,
+ota_0,    app,  ota_0,   0x10000, 0x1E0000,
+ota_1,    app,  ota_1,   0x1F0000,0x1E0000,
+coredump, data, coredump,0x3D0000,0x10000,
+# #1176: the in-flight recovery token, a partition of its own for the reasons
+# partitions.csv gives.
+flighttok,data, nvs,     0x3E0000,0x4000,

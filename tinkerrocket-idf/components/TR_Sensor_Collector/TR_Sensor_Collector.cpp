@@ -10,6 +10,7 @@
 #include <freertos/task.h>
 #include <esp_heap_caps.h>
 #include "ism6_whoami.h"
+#include "axis_sign.h"
 
 static const char* SC_TAG = "SENSORS";
 
@@ -152,6 +153,10 @@ static inline int16_t satSubI16(int16_t a, int16_t b)
     if (d < INT16_MIN) return INT16_MIN;
     return (int16_t)d;
 }
+// configureAxisSigns: a chip axis reversed, for a part on the back of the
+// board (axis_sign.h, host-tested)
+static inline int16_t signI16(int16_t v, int8_t s) { return axis_sign::i16(v, s); }
+static inline uint32_t signMmc18(uint32_t raw18, int8_t s) { return axis_sign::mmc18(raw18, s); }
 
 static inline void     delay_ms(uint32_t ms) { vTaskDelay(pdMS_TO_TICKS(ms)); }
 
@@ -645,10 +650,24 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         }
 
         mmc5983ma_instance = this;
-        gpio_set_direction((gpio_num_t)(MMC5983MA_INT), GPIO_MODE_INPUT);
-        gpio_set_intr_type((gpio_num_t)(MMC5983MA_INT), GPIO_INTR_POSEDGE);
-        gpio_isr_handler_add((gpio_num_t)(MMC5983MA_INT), &onMMC5983MAIntTrampoline, nullptr);
-        gpio_intr_enable((gpio_num_t)(MMC5983MA_INT));
+        // The INT pad reaches a GPIO on every board but the Tinker-Beetle V2,
+        // whose -1 arrives here as 255: no interrupt to attach, so the poll
+        // task asks the status register instead (twice a sample period).
+        mmc_int_wired_ = (MMC5983MA_INT < GPIO_NUM_MAX);
+        if (mmc_int_wired_)
+        {
+            gpio_set_direction((gpio_num_t)(MMC5983MA_INT), GPIO_MODE_INPUT);
+            gpio_set_intr_type((gpio_num_t)(MMC5983MA_INT), GPIO_INTR_POSEDGE);
+            gpio_isr_handler_add((gpio_num_t)(MMC5983MA_INT), &onMMC5983MAIntTrampoline, nullptr);
+            gpio_intr_enable((gpio_num_t)(MMC5983MA_INT));
+        }
+        else
+        {
+            mmc_poll_period_us_ = 500000UL / (uint32_t)mmc_freq;
+            mmc_next_poll_us_ = time_us();
+            ESP_LOGI(SC_TAG, "MMC5983MA INT not wired: polling its status every %u us",
+                     (unsigned)mmc_poll_period_us_);
+        }
     }
 
     ESP_LOGI(SC_TAG, "Initializing ISM6HG256...");
@@ -1073,6 +1092,21 @@ void SensorCollector::pollIMUdata(void* parameter)
             if (mmc_pending > 0) self->mmc5983ma_irq_pending_count = 0;
             portENABLE_INTERRUPTS();
 
+            // No INT line (the Tinker-Beetle V2's U3): ask the part. Twice a
+            // sample period, so a sample waits at most half a period, and only
+            // a finished measurement is read -- the datasheet's order, status
+            // then data then clear, as the interrupt path keeps it.
+            if (mmc_pending == 0 && !self->mmc_int_wired_)
+            {
+                const uint32_t poll_now_us = time_us();
+                if ((int32_t)(poll_now_us - self->mmc_next_poll_us_) >= 0)
+                {
+                    self->mmc_next_poll_us_ = poll_now_us + self->mmc_poll_period_us_;
+                    self->mmc5983ma_status_polls_++;
+                    if (self->mmc5983ma.isMeasurementDone()) mmc_pending = 1;
+                }
+            }
+
             self->mmc5983ma_loop_checks++;
 
             if (mmc_pending > 0)
@@ -1092,9 +1126,10 @@ void SensorCollector::pollIMUdata(void* parameter)
                     if (xSemaphoreTake(self->mmc5983maDataSemaphore, 0) == pdTRUE)
                     {
                         self->mmc5983ma_data.time_us = time_us();
-                        self->mmc5983ma_data.mag_x = mx;
-                        self->mmc5983ma_data.mag_y = my;
-                        self->mmc5983ma_data.mag_z = mz;
+                        // a part on the back (configureAxisSigns)
+                        self->mmc5983ma_data.mag_x = signMmc18(mx, self->mmc_sign_[0]);
+                        self->mmc5983ma_data.mag_y = signMmc18(my, self->mmc_sign_[1]);
+                        self->mmc5983ma_data.mag_z = signMmc18(mz, self->mmc_sign_[2]);
                         self->mmc5983ma_data_ready = true;
                         xSemaphoreGive(self->mmc5983maDataSemaphore);
                     }
@@ -2177,11 +2212,47 @@ void IRAM_ATTR SensorCollector::onMMC5983MAInt()
 // FIFO, #1485): gyro offset, gap tracking, the pad-calibration sums, and the
 // drop-oldest enqueue. t_us is the sample's time; read_ok gates the
 // calibration sums to reads the driver accepted.
-void SensorCollector::publishIsm6Sample(const TR_ISM6HG256_AxesRaw_t &g_raw,
-                                        const TR_ISM6HG256_AxesRaw_t &lg_raw,
-                                        const TR_ISM6HG256_AxesRaw_t &hg_raw,
+void SensorCollector::configureAxisSigns(const int8_t ism6_sign[3], const int8_t mmc_sign[3])
+{
+    for (int i = 0; i < 3; i++)
+    {
+        ism6_sign_[i] = ism6_sign[i] < 0 ? -1 : 1;
+        mmc_sign_[i]  = mmc_sign[i] < 0 ? -1 : 1;
+    }
+    ism6_signed_ = ism6_sign_[0] < 0 || ism6_sign_[1] < 0 || ism6_sign_[2] < 0;
+    mmc_signed_  = mmc_sign_[0] < 0 || mmc_sign_[1] < 0 || mmc_sign_[2] < 0;
+    if (ism6_signed_ || mmc_signed_)
+    {
+        ESP_LOGI(SC_TAG, "Axis signs (a part on the back): ISM6 %+d %+d %+d, MMC5983MA %+d %+d %+d",
+                 ism6_sign_[0], ism6_sign_[1], ism6_sign_[2], mmc_sign_[0], mmc_sign_[1], mmc_sign_[2]);
+    }
+}
+
+void SensorCollector::publishIsm6Sample(const TR_ISM6HG256_AxesRaw_t &g_chip,
+                                        const TR_ISM6HG256_AxesRaw_t &lg_chip,
+                                        const TR_ISM6HG256_AxesRaw_t &hg_chip,
                                         uint32_t t_us, bool read_ok)
     {
+        // A part on the back (configureAxisSigns): from here on the sample
+        // is the one a front-mounted part would read -- the calibration sums,
+        // the gyro offset and the queue all take it so. A board with no sign
+        // reads the chip's own sample, as it always has.
+        TR_ISM6HG256_AxesRaw_t signed_s[3];
+        const TR_ISM6HG256_AxesRaw_t *g_p = &g_chip, *lg_p = &lg_chip, *hg_p = &hg_chip;
+        if (ism6_signed_)
+        {
+            const TR_ISM6HG256_AxesRaw_t *chip[3] = {&g_chip, &lg_chip, &hg_chip};
+            for (int k = 0; k < 3; k++)
+            {
+                signed_s[k].x = signI16(chip[k]->x, ism6_sign_[0]);
+                signed_s[k].y = signI16(chip[k]->y, ism6_sign_[1]);
+                signed_s[k].z = signI16(chip[k]->z, ism6_sign_[2]);
+            }
+            g_p = &signed_s[0];
+            lg_p = &signed_s[1];
+            hg_p = &signed_s[2];
+        }
+        const TR_ISM6HG256_AxesRaw_t &g_raw = *g_p, &lg_raw = *lg_p, &hg_raw = *hg_p;
         start_time = t_us;
         ism6hg256_data.time_us = start_time;
 

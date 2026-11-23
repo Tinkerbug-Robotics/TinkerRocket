@@ -53,6 +53,20 @@ struct board_pins
     // V9 places them (U3 at 0, U2 at 45), so V9's bench-measured +90 holds.
     static constexpr float MAG_ROT_Z_DEG_IIS2MDC = 90.0f;
 
+    // --- IMU and MMC5983MA placement (sensor -> board frame) ---
+    // A reading is multiplied by AXIS_SIGN, chip axis by chip axis, as it is
+    // read (SensorCollector::configureAxisSigns), and the converter then turns
+    // it ROT_Z_DEG, CCW about +Z. Every sign is +1 on a board whose parts sit
+    // on the front, so what is logged is what the chip read; only a part on
+    // the back has one (board_m2.h). These were config.h's, one pair for
+    // every board, until the Beetle V2 moved its IMU and magnetometer to the
+    // back.
+    // No MMC5983MA here: its angle is still the one the status query reports.
+    static constexpr float  ISM6HG256_ROT_Z_DEG    = -45.0f;
+    static constexpr int8_t ISM6HG256_AXIS_SIGN[3] = {1, 1, 1};
+    static constexpr float  MMC5983MA_ROT_Z_DEG    = 180.0f;
+    static constexpr int8_t MMC5983MA_AXIS_SIGN[3] = {1, 1, 1};
+
     // ### Part presence ###
     static constexpr bool USE_BMP585 = true;
     static constexpr bool USE_MMC5983MA = false;  // no MMC5983MA net on this board

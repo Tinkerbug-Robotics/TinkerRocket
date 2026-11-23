@@ -393,7 +393,7 @@ gtest_discover_tests(test_sensor_data_converter)
 # converter at that board's MAG_ROT_Z_DEG_*, against the measured matrix.
 # One build per board because each board's config.h is its own; the driver
 # seam flags are the ones flight_computer/CMakeLists.txt sets for it.
-foreach(BOARD V5 V8 V9 V10 M1)
+foreach(BOARD V5 V8 V9 V10 M1 M2)
     add_executable(test_mag_frame_${BOARD} test_mag_frame_board.cpp
         ${LIB_DIR}/TR_Sensor_Data_Converter/TR_Sensor_Data_Converter.cpp
         ${LIB_DIR}/TR_Orientation/TR_Orientation.cpp
@@ -403,6 +403,7 @@ foreach(BOARD V5 V8 V9 V10 M1)
         ${LIB_DIR}/TR_Sensor_Data_Converter
         ${LIB_DIR}/TR_RocketComputerTypes
         ${LIB_DIR}/TR_Orientation
+        ${LIB_DIR}/TR_Sensor_Collector
         ${LIB_DIR}/../projects/flight_computer/main
     )
     target_compile_definitions(test_mag_frame_${BOARD} PRIVATE TR_BOARD_${BOARD}=1)
@@ -413,9 +414,46 @@ foreach(BOARD V5 V8 V9 V10 M1)
     elseif(BOARD STREQUAL "M1")
         target_compile_definitions(test_mag_frame_${BOARD} PRIVATE
             TR_MAG_DRIVER_QMC5883P=1 TR_GNSS_DRIVER_LC86=1)
+    elseif(BOARD STREQUAL "M2")
+        # The Tinker-Beetle V2: its MMC5983MA needs no driver seam; its PX100
+        # needs the PX1105R driver (config.h refuses an M2 build without it).
+        target_compile_definitions(test_mag_frame_${BOARD} PRIVATE TR_GNSS_DRIVER_PX1105R=1)
     endif()
     target_link_libraries(test_mag_frame_${BOARD} GTest::gtest_main)
     gtest_discover_tests(test_mag_frame_${BOARD} TEST_PREFIX "${BOARD}.")
+endforeach()
+
+# ---------- test_imu_frame_board ----------
+# Every board's IMU, chip counts to board frame: the board header's axis signs
+# as the collector applies them (axis_sign.h), then the real converter at the
+# board's rotation, against the layout's matrix. One build per board, as the
+# mag's above; the Tinker-Beetle V2 (M2) is the board whose IMU is on the back.
+foreach(BOARD V5 V7 V8 V9 V10 M1 M2)
+    add_executable(test_imu_frame_${BOARD} test_imu_frame_board.cpp
+        ${LIB_DIR}/TR_Sensor_Data_Converter/TR_Sensor_Data_Converter.cpp
+        ${LIB_DIR}/TR_Orientation/TR_Orientation.cpp
+    )
+    target_include_directories(test_imu_frame_${BOARD} PRIVATE
+        ${SHIM_DIR}
+        ${LIB_DIR}/TR_Sensor_Data_Converter
+        ${LIB_DIR}/TR_RocketComputerTypes
+        ${LIB_DIR}/TR_Orientation
+        ${LIB_DIR}/TR_Sensor_Collector
+        ${LIB_DIR}/../projects/flight_computer/main
+    )
+    target_compile_definitions(test_imu_frame_${BOARD} PRIVATE TR_BOARD_${BOARD}=1)
+    if(BOARD STREQUAL "V9")
+        target_compile_definitions(test_imu_frame_${BOARD} PRIVATE TR_MAG_DRIVER_AUTO=1)
+    elseif(BOARD STREQUAL "V10")
+        target_compile_definitions(test_imu_frame_${BOARD} PRIVATE TR_MAG_DRIVER_QMC5883P=1)
+    elseif(BOARD STREQUAL "M1")
+        target_compile_definitions(test_imu_frame_${BOARD} PRIVATE
+            TR_MAG_DRIVER_QMC5883P=1 TR_GNSS_DRIVER_LC86=1)
+    elseif(BOARD STREQUAL "M2")
+        target_compile_definitions(test_imu_frame_${BOARD} PRIVATE TR_GNSS_DRIVER_PX1105R=1)
+    endif()
+    target_link_libraries(test_imu_frame_${BOARD} GTest::gtest_main)
+    gtest_discover_tests(test_imu_frame_${BOARD} TEST_PREFIX "${BOARD}.")
 endforeach()
 
 # ---------- test_sensor_cal_math ----------
@@ -1548,7 +1586,7 @@ gtest_discover_tests(test_pwr_hold_release_policy)
 # Built once per board: the wire sizes and the link rate are shared, but the
 # fastest IMU rate is not (#1485: IMU_RATE_MAX_HZ, 7680 only where the FC
 # reads the IMU from its FIFO), and that is the stream that dominates.
-foreach(BOARD V5 V7 V8 V9 V10 M1)
+foreach(BOARD V5 V7 V8 V9 V10 M1 M2)
     add_executable(test_i2s_link_budget_${BOARD} test_i2s_link_budget.cpp)
     target_include_directories(test_i2s_link_budget_${BOARD} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
@@ -1560,6 +1598,9 @@ foreach(BOARD V5 V7 V8 V9 V10 M1)
     if(BOARD STREQUAL "M1")
         target_compile_definitions(test_i2s_link_budget_${BOARD} PRIVATE
             TR_MAG_DRIVER_QMC5883P=1 TR_GNSS_DRIVER_LC86=1)
+    elseif(BOARD STREQUAL "M2")
+        # The Tinker-Beetle V2's PX100: the PX1105R image's stream on the link
+        target_compile_definitions(test_i2s_link_budget_${BOARD} PRIVATE TR_GNSS_DRIVER_PX1105R=1)
     elseif(BOARD STREQUAL "V10")
         # The V10 image finds its receiver at boot as the V9's does.
         target_compile_definitions(test_i2s_link_budget_${BOARD} PRIVATE TR_MAG_DRIVER_QMC5883P=1
@@ -1593,7 +1634,7 @@ gtest_discover_tests(test_i2s_link_budget_V9_MOSAIC TEST_PREFIX "V9_MOSAIC.")
 # app shows 8k while the vehicle flies the old rate. The two config.h files
 # cannot share a translation unit (both declare `struct config`), so each is
 # compiled into its own small library and the test compares the answers.
-foreach(BOARD V5 V7 V8 V9 V10 M1)
+foreach(BOARD V5 V7 V8 V9 V10 M1 M2)
     add_library(imu_cap_fc_${BOARD} STATIC imu_rate_cap_fc.cpp)
     target_include_directories(imu_cap_fc_${BOARD} PRIVATE
         ${SHIM_DIR}
@@ -1608,6 +1649,8 @@ foreach(BOARD V5 V7 V8 V9 V10 M1)
             TR_MAG_DRIVER_QMC5883P=1 TR_GNSS_DRIVER_LC86=1)
     elseif(BOARD STREQUAL "V10")
         target_compile_definitions(imu_cap_fc_${BOARD} PRIVATE TR_MAG_DRIVER_QMC5883P=1)
+    elseif(BOARD STREQUAL "M2")
+        target_compile_definitions(imu_cap_fc_${BOARD} PRIVATE TR_GNSS_DRIVER_PX1105R=1)
     endif()
     add_library(imu_cap_oc_${BOARD} STATIC imu_rate_cap_oc.cpp)
     target_include_directories(imu_cap_oc_${BOARD} PRIVATE
@@ -1623,6 +1666,25 @@ foreach(BOARD V5 V7 V8 V9 V10 M1)
     target_link_libraries(test_imu_rate_board_parity_${BOARD}
         imu_cap_fc_${BOARD} imu_cap_oc_${BOARD} GTest::gtest_main)
     gtest_discover_tests(test_imu_rate_board_parity_${BOARD} TEST_PREFIX "${BOARD}.")
+endforeach()
+
+# ---------- test_oc_board_map ----------
+# The out computer's config.h, built for one board at a time: the antenna-offset
+# switch and the reset pull-up rule that the Tinker-Beetle V2 target put in code
+# every board compiles, and for M2 the V2 pin map itself (the seven signals the
+# 2026-11-21 layout moved, pinned beside everything that stayed). This is the
+# only build of board_m2.h on every change: the V2 is not ordered, so no
+# firmware job builds an M2 image yet.
+foreach(BOARD V9 V10 M1 M2)
+    add_executable(test_oc_board_map_${BOARD} test_oc_board_map.cpp)
+    target_compile_definitions(test_oc_board_map_${BOARD} PRIVATE TR_BOARD_${BOARD}=1)
+    target_include_directories(test_oc_board_map_${BOARD} PRIVATE
+        ${SHIM_DIR}
+        ${LIB_DIR}/TR_RocketComputerTypes
+        ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+    )
+    target_link_libraries(test_oc_board_map_${BOARD} GTest::gtest_main)
+    gtest_discover_tests(test_oc_board_map_${BOARD} TEST_PREFIX "${BOARD}.")
 endforeach()
 
 # ---------- test_test_mode_gate_policy (#1137 item 5) ----------
