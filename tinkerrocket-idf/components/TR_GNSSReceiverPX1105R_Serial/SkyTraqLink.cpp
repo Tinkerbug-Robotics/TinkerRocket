@@ -33,6 +33,7 @@ constexpr Query kQueries[] = {
     {{0x1F, 0x00}, 1, MSG_BIN_MEAS_CFG, -1, "binary output"},
     {{0x64, 0x18}, 2, MSG_SUB_64, 0x8B, "navigation mode"},
     {{0x15, 0x00}, 1, MSG_POWER_MODE, -1, "power mode"},
+    {{0x64, 0x1A}, 2, MSG_SUB_64, 0x8C, "constellations"},
 };
 constexpr int kNumQueries = sizeof(kQueries) / sizeof(kQueries[0]);
 
@@ -118,6 +119,8 @@ void SkyTraqLink::buildSetup()
         c.ack_sub = sub;
         c.required = required;
         c.name = name;
+        c.reply_sub = -1;
+        c.if_mask_off = false;
     };
     {
         // AN0037 0x6A/0x06: base mode (1), kinematic function (0), survey
@@ -157,12 +160,27 @@ void SkyTraqLink::buildSetup()
         const uint8_t b[] = {0x2B, 0x01, cfg_.elev_mask_deg, 0x00, attr};
         add(b, sizeof b, -1, false, "elevation mask");
     }
+    if (cfg_.constellations != 0)
+    {
+        // AN0028 0x64/0x1A, then 0x64/0x19 only where its reply differs: the
+        // mask, then the attribute. Last: sent to a receiver already an RTK
+        // base, as on the rig (2026-11-09), after the base mode's restart
+        const uint8_t q[] = {0x64, 0x1A};
+        add(q, sizeof q, 0x1A, false, "constellations query");
+        cmds_[n_cmds_ - 1].reply_sub = 0x8C;
+        const uint8_t b[] = {0x64, 0x19, static_cast<uint8_t>(cfg_.constellations >> 8),
+                             static_cast<uint8_t>(cfg_.constellations & 0xFF), attr};
+        add(b, sizeof b, 0x19, true, "constellations");
+        cmds_[n_cmds_ - 1].if_mask_off = true;
+    }
 }
 
 void SkyTraqLink::start(const LinkConfig& cfg, uint32_t now_ms)
 {
     cfg_ = cfg;
     q_head_ = q_n_ = 0;
+    mask_read_ = -1;
+    mask_sets_ = 0;
     setups_in_row_ = 0;
     degraded_ = false;
     last_frame_ms_ = now_ms;
@@ -208,21 +226,32 @@ void SkyTraqLink::enterConfigure(uint32_t now_ms)
     refused_ = 0;
     checks_failed_ = 0;
     last_frame_ms_ = now_ms;
-    cmd_ = 0;
-    sendCommand(now_ms);
+    mask_read_ = -1;   // read again before anything is set from it
+    cmd_ = -1;
+    nextCommand(now_ms);
 }
 
 void SkyTraqLink::sendCommand(uint32_t now_ms)
 {
     attempt_ = 0;
     got_ack_ = got_nack_ = false;
+    got_reply_ = false;
     t0_ = now_ms;
     push(LinkAction::SEND, 0, cmds_[cmd_].body, cmds_[cmd_].len);
 }
 
+bool SkyTraqLink::skipCommand(const Cmd& c) const
+{
+    // a receiver that said nothing keeps its own
+    return c.if_mask_off && (mask_read_ < 0 || mask_read_ == cfg_.constellations);
+}
+
 void SkyTraqLink::nextCommand(uint32_t now_ms)
 {
-    if (++cmd_ < n_cmds_)
+    while (++cmd_ < n_cmds_ && skipCommand(cmds_[cmd_]))
+    {
+    }
+    if (cmd_ < n_cmds_)
         sendCommand(now_ms);
     else
         enterCheck(now_ms);
@@ -271,6 +300,8 @@ bool SkyTraqLink::checkReply(const uint8_t* b, size_t len)
         return len >= 3 && b[2] == cfg_.nav_mode;
     case 3:   // 0xB9: [1] 0 normal, 1 save
         return len >= 2 && b[1] == 0;
+    case 4:   // 0x64/0x8C: [2..3] the mask
+        return cfg_.constellations == 0 || (len >= 4 && be16(b + 2) == cfg_.constellations);
     default:
         return true;
     }
@@ -318,15 +349,25 @@ void SkyTraqLink::onFrame(const uint8_t* b, size_t len, uint32_t now_ms)
                       b[11], b[12], b[13]);
         return;
     }
+    if (b[0] == MSG_SUB_64 && len >= 4 && b[1] == 0x8C)
+        mask_read_ = be16(b + 2);   // the CONFIGURE's query or the CHECK's readback, which uses it below
     bool acked = false;
-    if (state_ == LinkState::CONFIGURE && cmd_ < n_cmds_ &&
-        isAckOf(b, len, cmds_[cmd_].body[0], cmds_[cmd_].ack_sub, acked))
+    if (state_ == LinkState::CONFIGURE && cmd_ >= 0 && cmd_ < n_cmds_)
     {
-        if (acked)
-            got_ack_ = true;
-        else
-            got_nack_ = true;
-        return;
+        const Cmd& c = cmds_[cmd_];
+        if (isAckOf(b, len, c.body[0], c.ack_sub, acked))
+        {
+            if (acked)
+                got_ack_ = true;
+            else
+                got_nack_ = true;
+            return;
+        }
+        if (c.reply_sub >= 0 && b[0] == c.body[0] && len >= 2 && b[1] == c.reply_sub)
+        {
+            got_reply_ = true;
+            return;
+        }
     }
     if (state_ == LinkState::CHECK && query_ < kNumQueries)
     {
@@ -400,8 +441,17 @@ LinkAction SkyTraqLink::poll(uint32_t now_ms)
             }
             break;
         case LinkState::CONFIGURE:
-            if (got_ack_)
+            if (cmds_[cmd_].reply_sub < 0 ? got_ack_ : got_reply_)   // a query: its reply says it all
+            {
+                if (cmds_[cmd_].if_mask_off)
+                    mask_sets_++;
                 nextCommand(now_ms);
+            }
+            else if (got_nack_ && cmds_[cmd_].reply_sub >= 0)
+            {
+                // a query this receiver does not answer: what it says nothing of is left as it is
+                nextCommand(now_ms);
+            }
             else if (got_nack_)
             {
                 refused_++;

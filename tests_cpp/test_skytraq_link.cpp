@@ -1,7 +1,8 @@
 // Finding and setting up the PX1105R (TR_GNSSReceiverPX1105R_Serial/SkyTraqLink.h)
 // against a simulated receiver: at its factory 115200 baud talking NMEA, or
 // already set up at 921600 (the FC rebooted alone), refusing a command, or
-// resetting while the link runs. The simulated receiver answers each command
+// resetting while the link runs, tracking constellations other than the ones
+// asked for (a mask an earlier test saved to its flash). The simulated receiver answers each command
 // the way the rig's tools saw the PX1105R answer (ACK per command, the
 // readbacks' replies), 300 ms late, and once it is an RTK base sends 0xDF at its
 // position rate, with 0xE5 when the raw output is on and it tracks satellites
@@ -32,6 +33,12 @@ struct FakeRx
     uint8_t  nav_mode = 0;
     uint8_t  power = 1;         // ships in power save
     bool     nack_nav = false;  // refuse 0x64/0x17
+    uint16_t flash_gnss = 0x0F; // constellations (0x64/0x19's mask) saved in flash: what a reset comes back with
+    uint16_t gnss = 0x0F;       //   and now
+    bool     no_gnss_query = false;  // NACK 0x64/0x1A (a receiver that cannot say)
+    bool     nack_gnss = false; // refuse 0x64/0x19
+    int      gnss_sets = 0;     // 0x64/0x19 taken: each restarts every channel of the real one
+    bool     gnss_set_as_base = false;  // the last one came to an RTK base (as on the rig)
     bool     sky = true;        // tracking satellites: 0xE5 comes
     bool     fake_base = false; // ACKs 0x6A/0x06 but stays a rover (NMEA, no binary)
     int      base_sets = 0;     // 0x6A/0x06 received: setups (each a restart of the real one)
@@ -79,6 +86,27 @@ struct FakeRx
                 else { nav_mode = b[2]; ack(now, 0x64, 0x17); }
             }
             else if (b[1] == 0x18) { ack(now, 0x64, 0x18); reply(now, {0x64, 0x8B, nav_mode}); }
+            else if (b[1] == 0x19)
+            {
+                if (nack_gnss) reply(now, {MSG_NACK, 0x64, 0x19});
+                else
+                {
+                    gnss = static_cast<uint16_t>((b[2] << 8) | b[3]);
+                    if (b[4] == 1) flash_gnss = gnss;
+                    gnss_sets++;
+                    gnss_set_as_base = base;
+                    ack(now, 0x64, 0x19);
+                }
+            }
+            else if (b[1] == 0x1A)
+            {
+                if (no_gnss_query) reply(now, {MSG_NACK, 0x64, 0x1A});
+                else
+                {
+                    ack(now, 0x64, 0x1A);
+                    reply(now, {0x64, 0x8C, static_cast<uint8_t>(gnss >> 8), static_cast<uint8_t>(gnss & 0xFF)});
+                }
+            }
             break;
         case 0x0C: power = b[1]; ack(now, 0x0C); break;
         case 0x2B: ack(now, 0x2B); break;
@@ -92,8 +120,14 @@ struct FakeRx
     // a reset: its flash defaults (SRAM settings gone)
     void reset()
     {
+        const uint16_t f = flash_gnss;
+        const bool q = no_gnss_query, n = nack_gnss;
         *this = FakeRx{};
+        flash_gnss = gnss = f;
+        no_gnss_query = q;
+        nack_gnss = n;
     }
+    void saved(uint16_t mask) { flash_gnss = gnss = mask; }
 };
 
 struct Bench
@@ -184,6 +218,10 @@ TEST(SkyTraqLink, SetsUpAFactoryReceiverTalkingNmea)
     EXPECT_EQ(b.link.setups(), 1u);
     EXPECT_EQ(b.link.rawPeriodMs(), 50);
     EXPECT_STREQ(b.link.version(), "3.6.0 1.7.33 230831");
+    // it already tracks all four: read, not set (a set restarts every channel)
+    EXPECT_EQ(b.link.constellations(), 0x0F);
+    EXPECT_EQ(b.rx.gnss_sets, 0);
+    EXPECT_EQ(b.link.constellationSets(), 0u);
 }
 
 // the FC rebooted alone: the receiver as the link left it
@@ -314,4 +352,104 @@ TEST(SkyTraqLink, ADeadReceiverKeepsTheLinkSearching)
     b.link.start(LinkConfig{}, b.now);
     EXPECT_FALSE(b.runUntilRunning(20000));
     EXPECT_EQ(b.link.state(), LinkState::PROBE);
+}
+
+// ── The constellations it tracks (0x64/0x1A read, 0x64/0x19 only where they differ) ──
+
+TEST(SkyTraqLink, AMaskSavedWithoutGlonassIsSetForThisPowerUpOnly)
+{
+    Bench b;
+    b.rx.saved(0x0D);   // GPS, Galileo, BeiDou: an earlier test's
+    b.link.start(LinkConfig{}, b.now);
+    ASSERT_TRUE(b.runUntilRunning(30000)) << b.link.lastFailure();
+    EXPECT_EQ(b.rx.gnss, 0x0F);
+    EXPECT_EQ(b.rx.flash_gnss, 0x0D);   // SRAM, as the rest of the setup
+    EXPECT_EQ(b.rx.gnss_sets, 1);
+    EXPECT_TRUE(b.rx.gnss_set_as_base);         // after the base mode's restart
+    EXPECT_EQ(b.link.constellationSets(), 1u);
+    EXPECT_EQ(b.link.constellations(), 0x0F);   // the readback after the setup
+    EXPECT_EQ(b.rx.base_sets, 1);               // in the one setup
+    EXPECT_EQ(b.link.checksFailed(), 0u);
+    EXPECT_EQ(b.link.refused(), 0u);
+    EXPECT_FALSE(b.link.degraded());
+    b.runFor(60000);
+    EXPECT_EQ(b.rx.gnss_sets, 1);
+}
+
+TEST(SkyTraqLink, AReceiverThatCannotSayKeepsItsOwnConstellations)
+{
+    Bench b;
+    b.rx.saved(0x0D);
+    b.rx.no_gnss_query = true;
+    b.link.start(LinkConfig{}, b.now);
+    ASSERT_TRUE(b.runUntilRunning(30000)) << b.link.lastFailure();
+    EXPECT_EQ(b.rx.gnss_sets, 0);
+    EXPECT_EQ(b.rx.gnss, 0x0D);
+    EXPECT_EQ(b.link.constellations(), -1);
+    EXPECT_EQ(b.link.refused(), 0u);
+    EXPECT_EQ(b.link.checksFailed(), 0u);
+    EXPECT_FALSE(b.link.degraded());
+    EXPECT_EQ(b.rx.base_sets, 1);
+}
+
+TEST(SkyTraqLink, AnFcRebootFindingTheConstellationsOffSetsItUp)
+{
+    Bench b;
+    setUp(b.rx);
+    b.rx.gnss = 0x0D;   // set up at the target baud, but not tracking GLONASS
+    b.link.start(LinkConfig{}, b.now);
+    ASSERT_TRUE(b.runUntilRunning(30000)) << b.link.lastFailure();
+    EXPECT_FALSE(b.link.leftAlone());
+    EXPECT_EQ(b.rx.gnss, 0x0F);
+    EXPECT_EQ(b.rx.gnss_sets, 1);
+    EXPECT_EQ(b.rx.base_sets, 1);
+    EXPECT_FALSE(b.link.degraded());
+}
+
+TEST(SkyTraqLink, AReceiverResetWhileRunningGetsItsConstellationsAgain)
+{
+    Bench b;
+    b.rx.saved(0x0D);
+    b.link.start(LinkConfig{}, b.now);
+    ASSERT_TRUE(b.runUntilRunning(30000));
+    b.runFor(2000);
+    b.rx.reset();   // back to its flash's 0x0D
+    b.rx.next_nmea = b.now;
+    b.runFor(4000);
+    ASSERT_TRUE(b.runUntilRunning(30000));
+    EXPECT_EQ(b.link.setups(), 2u);
+    EXPECT_EQ(b.rx.gnss, 0x0F);
+    EXPECT_EQ(b.rx.gnss_sets, 1);   // the reset's fake receiver counts afresh: one in this power-up
+    EXPECT_EQ(b.link.constellationSets(), 2u);
+}
+
+TEST(SkyTraqLink, ZeroConstellationsLeavesTheReceiversOwn)
+{
+    Bench b;
+    b.rx.saved(0x0D);
+    LinkConfig cfg;
+    cfg.constellations = 0;
+    b.link.start(cfg, b.now);
+    ASSERT_TRUE(b.runUntilRunning(30000)) << b.link.lastFailure();
+    EXPECT_EQ(b.rx.gnss_sets, 0);
+    EXPECT_EQ(b.rx.gnss, 0x0D);
+    EXPECT_EQ(b.link.constellations(), 0x0D);   // read back all the same
+    EXPECT_EQ(b.link.checksFailed(), 0u);
+    EXPECT_FALSE(b.link.degraded());
+}
+
+TEST(SkyTraqLink, ARefusedConstellationsSetRunsDegraded)
+{
+    Bench b;
+    b.rx.saved(0x0D);
+    b.rx.nack_gnss = true;
+    b.link.start(LinkConfig{}, b.now);
+    ASSERT_TRUE(b.runUntilRunning(90000));
+    EXPECT_TRUE(b.link.degraded());
+    EXPECT_EQ(b.rx.gnss, 0x0D);
+    EXPECT_EQ(b.rx.base_sets, 3);   // its readback disagrees: max_setups, then it runs with what it has
+    EXPECT_TRUE(b.rx.ext_raw);
+    b.runFor(60000);
+    EXPECT_TRUE(b.link.running());
+    EXPECT_EQ(b.rx.base_sets, 3);
 }
