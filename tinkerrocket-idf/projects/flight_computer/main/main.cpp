@@ -35,6 +35,7 @@
 #include <BurnoutDetector.h>      // shared burnout detector (#197/#256)
 #include <DeploymentDetector.h>   // shared recovery-deployment detector
 #include <TR_MagCalibrator.h>
+#include <mag_cal_mmc.h>
 #include <TR_ServoControl_ledc_mult.h>
 #include <TR_GuidancePN.h>
 #include <TR_ControlMixer.h>
@@ -123,6 +124,15 @@
 #include <esp_system.h>
 #include <esp_rom_sys.h>           // esp_rom_delay_us
 #include <CRC32.h>
+// The Tinker-Beetle V2's ESP32-S3FH4R2 boots from the 4 MB in its package: an
+// image that declares the base 8 MB is refused by its bootloader before any
+// firmware runs, with no log of ours (the project CMakeLists appends
+// sdkconfig.defaults.flash4mb last for M2). A build dir configured before that
+// overlay existed keeps 8 MB, because IDF never re-applies defaults to an
+// sdkconfig that is already there.
+#if TR_BOARD_M2 && !defined(CONFIG_ESPTOOLPY_FLASHSIZE_4MB)
+#error "Stale sdkconfig: a Tinker-Beetle V2 (TR_BOARD_M2) flight computer image must declare 4 MB of flash (CONFIG_ESPTOOLPY_FLASHSIZE_4MB, from sdkconfig.defaults.flash4mb) — its ESP32-S3FH4R2 has no more, and the bootloader of an 8 MB image refuses it. rm build_m2/sdkconfig && idf.py -B build_m2 -DTR_BOARD_M2=1 build"
+#endif
 static const char* TAG = "FC";
 
 // IDF-native timing helpers — replace the Arduino-shim time_ms()/time_us()
@@ -211,18 +221,52 @@ static char    provisioned_board_rev[board_identity::kMaxRev + 1] = {0};
 
 static bool    pending_mag_apply = false;
 
+// The magnetometer the hard-iron calibration belongs to.  One runs on any
+// board: the I2C slot's chip when begin() found one (IIS2MDC, or the QMC5883P
+// behind it), else the MMC5983MA on the boards that carry one (the
+// Tinker-Beetle V2; a V7 whose slot probe found nothing).  The IIS2MDC takes
+// the offset in its OFFSET registers; the MMC has none, so the converter
+// subtracts it (setMMCOffset), in MMC counts.  The calibrator, the NVS
+// cx/cy/cz and the apps speak 0.15 µT counts either way (mag_cal_mmc.h).
+static bool magCalOnMmc()
+{
+    return config::USE_MMC5983MA && !sensor_collector.isIIS2MDCActive();
+}
+
+static const char* magCalChipName()
+{
+    return magCalOnMmc() ? "MMC5983MA" : sensor_collector_hw.magName();
+}
+
+// Program a hard-iron offset (calibrator counts) into the running
+// magnetometer.  False when there is none yet (an I2C chip not up).
+static bool programMagOffset(int16_t cx, int16_t cy, int16_t cz)
+{
+    if (sensor_collector.isIIS2MDCActive())
+        return sensor_collector.setIIS2MDCHardIronOffset(cx, cy, cz);
+    if (magCalOnMmc())
+    {
+        const int32_t ox = mag_cal_mmc::toMmcCounts(cx);
+        const int32_t oy = mag_cal_mmc::toMmcCounts(cy);
+        const int32_t oz = mag_cal_mmc::toMmcCounts(cz);
+        sensor_converter.setMMCOffset(ox, oy, oz);
+        sensor_collector.setSimMmcOffset(ox, oy, oz);   // a sim's counts carry it too
+        return true;
+    }
+    return false;
+}
+
 // #1303: program the stored hard iron, clearing the pending flag ONLY on a
 // real success.  Called at boot and retried from the flight loop until it
 // takes, so a magnetometer that comes up late still flies calibrated.
 static bool applyPendingMagOffset(const char* why)
 {
     if (!pending_mag_apply) return true;
-    if (!sensor_collector.isIIS2MDCActive()) return false;
-    const bool ok = sensor_collector.setIIS2MDCHardIronOffset(
-                        pending_mag_cx, pending_mag_cy, pending_mag_cz);
+    const bool ok = programMagOffset(pending_mag_cx, pending_mag_cy, pending_mag_cz);
     if (ok) pending_mag_apply = false;
-    ESP_LOGI(TAG, "IIS2MDC OFFSET applied (%s): (%d,%d,%d) %s",
-             why, (int)pending_mag_cx, (int)pending_mag_cy, (int)pending_mag_cz,
+    ESP_LOGI(TAG, "%s hard-iron offset applied (%s): (%d,%d,%d) %s",
+             magCalChipName(), why,
+             (int)pending_mag_cx, (int)pending_mag_cy, (int)pending_mag_cz,
              ok ? "OK" : "FAILED");
     return ok;
 }
@@ -298,9 +342,16 @@ static constexpr int64_t MAG_CAL_VERIFY_DURATION_US = 60'000'000;
 // hard iron is under one count on every axis.
 static bool magHardIronApplied()
 {
+    if (mag_cal_session_active || pending_mag_apply) return false;
+    if (magCalOnMmc())
+    {
+        // The MMC5983MA's is the converter's software offset.
+        int32_t ox = 0, oy = 0, oz = 0;
+        sensor_converter.mmcOffset(ox, oy, oz);
+        return ox != 0 || oy != 0 || oz != 0;
+    }
     int16_t cx = 0, cy = 0, cz = 0;
     if (!sensor_collector_hw.iis2mdcHardIronOffset(cx, cy, cz)) return false;
-    if (mag_cal_session_active || pending_mag_apply) return false;
     return cx != 0 || cy != 0 || cz != 0;
 }
 #endif
@@ -836,7 +887,7 @@ static uint16_t imu_rate_max_hz = config::IMU_RATE_MAX_HZ;
 // receiver it changes nothing.
 static uint8_t gnss_log_setting = GNSS_LOG_DETAILED;
 static gnss_log::SbfCut sbf_log_cut;   // the REDUCED log's place in the SBF stream
-#if !TR_BOARD_M1
+#if TR_FC_ANTENNA_OFFSET
 // The GNSS antenna's offset from the IMU (BLE cmd 81, NVS "antenna"/"ofs"):
 // where the owner measured it, in the board's own frame, or unknown (the
 // default). Kept on every board but the Beetle's, so a setting survives a
@@ -855,6 +906,12 @@ static bool antenna_cfg_from_nvs = false;
 // later frame replaces it.
 static AntennaOffsetConfigData antenna_held = {};
 static bool antenna_held_set = false;
+#elif TR_RAW_NAV_P4
+// A board that keeps no offset (TR_FC_ANTENNA_OFFSET 0) flying the P4 images'
+// raw-GNSS filter -- the Tinker-Beetle V2's PX100: the unknown every board
+// starts on, for good, so the filter predicts at the IMU as it does on any
+// board never told.
+static const AntennaOffsetConfigData antenna_cfg = {};
 #endif
 #if TR_RAW_NAV_P4
 static void rawAntennaPublish();
@@ -3053,7 +3110,7 @@ static void sendPadContextCal()
     memcpy(rg.g.matrix, rg_m, sizeof(rg_m));
     static_assert(sizeof(rg) == sizeof(PadContextHeader) + sizeof(PadContextHg), "PCX_HG record is packed");
     (void)enqueueI2STx(PAD_CONTEXT_MSG, reinterpret_cast<const uint8_t*>(&rg), sizeof(rg));
-#if !TR_BOARD_M1
+#if TR_FC_ANTENNA_OFFSET
     // PCX_ANT: the GNSS antenna's offset (BLE cmd 81), the same in the
     // filter's frame, and the one the filter flew with; none changes in
     // flight (one sent INFLIGHT is held for the ground), and `used` says
@@ -3166,7 +3223,7 @@ static void buildConfigReport(ConfigReportData &r)
     // #1472: the type cameraStart() dispatches on, for the same reason.
     r.camera_type = runtime_camera_type;
 
-#if !TR_BOARD_M1
+#if TR_FC_ANTENNA_OFFSET
     // The GNSS antenna offset the FC holds and gives its filter, not one held
     // INFLIGHT for the ground (that one is reported once it is applied).
     // The Beetle keeps none: zero, flag clear.
@@ -3212,7 +3269,7 @@ static void sendConfigReport()
                  camera_type_from_nvs ? "nvs" : "dflt",
                  r.camera_type == CAM_TYPE_GOPRO ? "GoPro" :
                  r.camera_type == CAM_TYPE_RUNCAM ? "RunCam" : "None");
-#if !TR_BOARD_M1
+#if TR_FC_ANTENNA_OFFSET
         // its own line: the Beetle keeps no antenna offset
         if (r.antenna.known)
             ESP_LOGI(TAG, "[CFG] Config report antenna(%s): board X %d, Y %d, Z %d mm",
@@ -3237,7 +3294,7 @@ static void serviceConfigReport()
     }
 }
 
-#if !TR_BOARD_M1
+#if TR_FC_ANTENNA_OFFSET
 // A checked GNSS antenna offset (BLE cmd 81) made the FC's: kept in NVS,
 // given to the mosaic-only image's filter (which takes it on the ground) and
 // reported to the OC, whose readback serves the report. Never INFLIGHT: one
@@ -5414,6 +5471,28 @@ static void serviceBootCue(uint32_t now_ms)
 // ==========================================================================
 // SECTION: Calibration status publishing
 // ==========================================================================
+// Store a hard-iron calibration (calibrator counts) in the "mag_cal" NVS
+// namespace: a verify pass, a forced save and an app push all write the same
+// record.  cx/cy/cz are the calibration, the one the boot applies and the app
+// keeps; mmc_cx/cy/cz are what the converter subtracts on an MMC5983MA board
+// (zero on the others), for whoever reads the namespace.
+static void magCalSaveNvs(int16_t cx, int16_t cy, int16_t cz, float R_uT, float res_uT)
+{
+    const bool mmc = magCalOnMmc();
+    prefs.begin("mag_cal", false);
+    prefs.putUChar("ver",    MAG_CAL_NVS_SCHEMA_VERSION);
+    prefs.putBool ("done",   true);
+    prefs.putShort("cx",     cx);
+    prefs.putShort("cy",     cy);
+    prefs.putShort("cz",     cz);
+    prefs.putFloat("R_uT",   R_uT);
+    prefs.putFloat("res_uT", res_uT);
+    prefs.putInt  ("mmc_cx", mmc ? mag_cal_mmc::toMmcCounts(cx) : 0);
+    prefs.putInt  ("mmc_cy", mmc ? mag_cal_mmc::toMmcCounts(cy) : 0);
+    prefs.putInt  ("mmc_cz", mmc ? mag_cal_mmc::toMmcCounts(cz) : 0);
+    prefs.end();
+}
+
 // Issue #132 — publish a one-shot status frame built from whatever the
 // "mag_cal" NVS namespace currently holds.  Used by MAG_CAL_APPLY (after
 // persisting a pushed cal) and MAG_CAL_READ (pure query) so the app sees
@@ -8240,7 +8319,7 @@ static void setup_fc()
     ESP_LOGI(TAG, "GNSS log: %s", gnss_log_setting == GNSS_LOG_REDUCED
                                       ? "reduced (a mosaic-G5's raw measurements once a second)"
                                       : "detailed (every SBF block)");
-#if !TR_BOARD_M1
+#if TR_FC_ANTENNA_OFFSET
     // The GNSS antenna's offset (BLE cmd 81): a record that is no setting
     // reads as unknown, the antenna nobody measured, and is not reported as
     // a record (F_ANTENNA_FROM_NVS), so the OC sends its own copy again.
@@ -8360,14 +8439,10 @@ static void setup_fc()
     fcLoadProvisionedBoardRev();   // #773 step 2
 
     // Restore magnetometer hard-iron offset from NVS (namespace "mag_cal", issue #96).
-    // Apply to IIS2MDC OFFSET_X/Y/Z if the chip is active, and to the
-    // MMC5983MA software-offset path in the converter regardless (the
-    // converter is a no-op on uncalibrated MMC counts since defaults are
-    // zero).  IIS2MDC offsets must be reapplied AFTER sensor_collector.begin()
-    // because softReset() inside begin() zeroes them — ensure call order
-    // below.  The converter offset is set here too even though the IIS2MDC
-    // chip handles its own subtraction; this lets a single NVS schema cover
-    // both mag chips without divergence.
+    // Applied after sensor_collector.begin() (applyPendingMagOffset), which
+    // is when the board's magnetometer is known: the IIS2MDC's OFFSET_X/Y/Z
+    // (softReset() inside begin() zeroes them, so not before), or the
+    // MMC5983MA's software offset in the converter, from the same cx/cy/cz.
     prefs.begin("mag_cal", false);
     if (prefs.isKey("ver"))
     {
@@ -8378,13 +8453,9 @@ static void setup_fc()
             const int16_t cy = (int16_t)prefs.getShort("cy", 0);
             const int16_t cz = (int16_t)prefs.getShort("cz", 0);
             const float   R  = prefs.getFloat("R_uT", 0.0f);
-            const int32_t mmc_cx = prefs.getInt("mmc_cx", 0);
-            const int32_t mmc_cy = prefs.getInt("mmc_cy", 0);
-            const int32_t mmc_cz = prefs.getInt("mmc_cz", 0);
-            sensor_converter.setMMCOffset(mmc_cx, mmc_cy, mmc_cz);
-            ESP_LOGI(TAG, "NVS mag_cal: offset=(%d,%d,%d) raw counts, R=%.2f µT (apply after sensor_collector.begin)",
+            ESP_LOGI(TAG, "NVS mag_cal: offset=(%d,%d,%d) counts, R=%.2f µT (apply after sensor_collector.begin)",
                           (int)cx, (int)cy, (int)cz, (double)R);
-            // Stash on the side; we'll apply to the IIS2MDC chip after begin()
+            // Stash on the side; we'll apply to the magnetometer after begin()
             // returns (softReset inside begin() zeroes OFFSET_X/Y/Z).
             pending_mag_cx = cx;
             pending_mag_cy = cy;
@@ -8553,6 +8624,10 @@ static void setup_fc()
     // The mosaic-G5's 1PPS (J1 pin 5); -1 and a no-op on every other build.
     // The V9 image's mosaic rate as well; its GNSS_UPDATE_RATE is the u-blox's.
     sensor_collector_hw.setGNSSPpsPin(config::GNSS_PPS_PIN);
+    // The board's parts on the back (board_m2.h; +1 everywhere on every other
+    // board): turned over as they are read, so everything after the read sees
+    // a front part turned only about Z (config::ISM6HG256_ROT_Z_DEG / _MMC5983MA_)
+    sensor_collector_hw.configureAxisSigns(config::ISM6HG256_AXIS_SIGN, config::MMC5983MA_AXIS_SIGN);
     sensor_collector_hw.setGNSSMosaicRate(config::GNSS_MOSAIC_UPDATE_RATE);
     sensor_collector.begin(config::SENSOR_CORE);
 #if TR_RAW_NAV_SDR
@@ -8655,10 +8730,14 @@ static void setup_fc()
     // well past zero here.  A receiver whose stream is only logged (the
     // gnss-sdr-dev board on a V9 or V10, gnssTypeGivesFix) is online and
     // gives no fix, so the FC flies the same path beside it.
-#if TR_RAW_NAV_SDR
-    // The V10's gnss-sdr-dev image navigates on the board: its measurements
-    // through the raw-GNSS filter and its fixes as GNSSData (the start's
-    // position, the GPS voter's), as the mosaic-only image does on the mosaic
+#if TR_RAW_NAV_P4
+    // A P4 raw-nav image (mosaic, the gnss-sdr-dev board or the PX1105R)
+    // navigates ON the board: its measurements through the raw-GNSS filter and
+    // its fixes as GNSSData (the start's position, the GPS voter's). The
+    // sdr-dev board and the PX1105R are not in gnssTypeGivesFix(), so without
+    // this their raw-nav images would wrongly latch the log-only path meant for
+    // a receiver merely logged beside another. (Was TR_RAW_NAV_SDR, which the
+    // auto image sets but a PX1105R- or mosaic-specific build does not.)
     const bool gnss_log_only = false;
 #else
     const bool gnss_log_only = sensor_collector_hw.isGnssOnline() &&
@@ -8720,9 +8799,13 @@ static void setup_fc()
     const float mag_rot_z_deg = config::magRotZDeg(mag_type == MAG_TYPE_QMC5883P);
     sensor_converter.configureIIS2MDCRotationZ(mag_rot_z_deg);
     sensor_converter.configureMagType(mag_type);
-    mag_calibrator.setCountScale(sensor_collector.magLsbToUt());
+    // An MMC5983MA board calibrates at the IIS2MDC's 0.15 µT counts
+    // (mag_cal_mmc.h), the scale its MAG_TYPE_IIS2MDC stamp tells the apps.
+    mag_calibrator.setCountScale(magCalOnMmc() ? (float)MAG_UT_PER_LSB_IIS2MDC
+                                               : sensor_collector.magLsbToUt());
     sensor_collector.configureSimRotation(config::ISM6HG256_ROT_Z_DEG);
     sensor_collector.configureSimIis2mdcRotation(mag_rot_z_deg);
+    sensor_collector.configureSimMmcRotation(config::MMC5983MA_ROT_Z_DEG);
 
     // Board→rocket mounting orientation (converter + sim + OC query payload).
     // #915: driven by the stored SETTING, so a manual clocking survives a
@@ -8748,8 +8831,8 @@ static void setup_fc()
     if (pending_mag_apply)
     {
         if (!applyPendingMagOffset("boot")) {
-            ESP_LOGW(TAG, "IIS2MDC OFFSET (%d,%d,%d) NOT applied at boot "
-                          "(chip not active) — will retry",
+            ESP_LOGW(TAG, "Mag hard-iron offset (%d,%d,%d) NOT applied at boot "
+                          "(no magnetometer up) — will retry",
                      (int)pending_mag_cx, (int)pending_mag_cy, (int)pending_mag_cz);
         }
     }
@@ -9566,12 +9649,12 @@ static void resetFlightStateForSim(const char* edge)
 // a stranded session corrupt the magnetometer as well as inhibit launch.
 static void magCalEndSession(const char* why)
 {
-    if (mag_cal_session_active && sensor_collector.isIIS2MDCActive())
+    if (mag_cal_session_active)
     {
-        const bool ok = sensor_collector.setIIS2MDCHardIronOffset(
+        const bool ok = programMagOffset(
             mag_cal_prior_cx, mag_cal_prior_cy, mag_cal_prior_cz);
-        ESP_LOGI(TAG, "[MAGCAL] %s — restored prior OFFSET (%d,%d,%d) %s",
-                 why, (int)mag_cal_prior_cx, (int)mag_cal_prior_cy,
+        ESP_LOGI(TAG, "[MAGCAL] %s — restored prior %s offset (%d,%d,%d) %s",
+                 why, magCalChipName(), (int)mag_cal_prior_cx, (int)mag_cal_prior_cy,
                  (int)mag_cal_prior_cz, ok ? "OK" : "FAIL");
     }
     mag_cal_session_active  = false;
@@ -10701,6 +10784,23 @@ static void loop_fc()
         (void)enqueueI2STx(MMC5983MA_MSG,
                            mmc5983ma_data_buffer,
                            SIZE_OF_MMC5983MA_DATA);
+
+        // Issue #96, the MMC5983MA's turn (the IIS2MDC block below has the
+        // I2C chip's): on a board whose magnetometer this is, its samples
+        // feed the calibrator, restated at 0.15 µT and less the offset the
+        // converter takes off now (zero while sampling, the candidate while
+        // verifying) -- what the IIS2MDC's OFFSET registers would hand on.
+        if (rocket_state == MAG_CALIBRATION && magCalOnMmc())
+        {
+            int32_t ox = 0, oy = 0, oz = 0;
+            sensor_converter.mmcOffset(ox, oy, oz);
+            if (mag_calibrator.addSample(mag_cal_mmc::toCalCounts(mmc5983ma_data.mag_x, ox),
+                                         mag_cal_mmc::toCalCounts(mmc5983ma_data.mag_y, oy),
+                                         mag_cal_mmc::toCalCounts(mmc5983ma_data.mag_z, oz)))
+            {
+                mag_cal_status_dirty = true;
+            }
+        }
     }
 
     if (sensor_collector.getIIS2MDCData(iis2mdc_data))
@@ -10866,7 +10966,7 @@ static void loop_fc()
     // Drained here rather than sent from the I2C command handlers: those run
     // inside the OC's poll window, and a 209-byte enqueue there would sit in
     // the same path the OC is waiting on.
-#if !TR_BOARD_M1
+#if TR_FC_ANTENNA_OFFSET
     serviceAntennaHeld();   // a GNSS antenna offset held INFLIGHT: applied, and in this pass's report
 #endif
     serviceConfigReport();
@@ -10929,18 +11029,7 @@ static void loop_fc()
                 uint8_t reject;
                 mag_calibrator.getResult(cx, cy, cz, R_uT, res_uT, reject);
 
-                prefs.begin("mag_cal", false);
-                prefs.putUChar("ver",    MAG_CAL_NVS_SCHEMA_VERSION);
-                prefs.putBool ("done",   true);
-                prefs.putShort("cx",     cx);
-                prefs.putShort("cy",     cy);
-                prefs.putShort("cz",     cz);
-                prefs.putFloat("R_uT",   R_uT);
-                prefs.putFloat("res_uT", res_uT);
-                prefs.putInt  ("mmc_cx", 0);
-                prefs.putInt  ("mmc_cy", 0);
-                prefs.putInt  ("mmc_cz", 0);
-                prefs.end();
+                magCalSaveNvs(cx, cy, cz, R_uT, res_uT);
 
                 ESP_LOGI(TAG, "[MAGCAL] verify PASS — saved cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT",
                          (int)cx, (int)cy, (int)cz, (double)R_uT, (double)res_uT);
@@ -10963,12 +11052,11 @@ static void loop_fc()
                 // restore prior) so the user can immediately Retry into
                 // SAMPLING and see raw mag values.  If they Abort
                 // instead, the abort handler does the prior restore.
-                if (sensor_collector.isIIS2MDCActive())
                 {
-                    const bool ok = sensor_collector.setIIS2MDCHardIronOffset(0, 0, 0);
-                    ESP_LOGW(TAG, "[MAGCAL] verify FAIL (worst=%.1fµT) — zeroed OFFSET %s; "
+                    const bool ok = programMagOffset(0, 0, 0);
+                    ESP_LOGW(TAG, "[MAGCAL] verify FAIL (worst=%.1fµT) — zeroed %s offset %s; "
                                   "user can Retry (raw sampling) or Abort (restore prior)",
-                             (double)worst_uT, ok ? "OK" : "FAIL");
+                             (double)worst_uT, magCalChipName(), ok ? "OK" : "FAIL");
                 }
                 // Stamp the worst observed |B| into the calibrator's
                 // inst_field slot via buildStatusFrame — already true
@@ -12714,12 +12802,11 @@ static void loop_fc()
                     // values.  Without this a recalibration fits the residual
                     // hard-iron (post-prior-offset), then overwrites the prior
                     // cal with that partial value and fails verification.
-                    if (sensor_collector.isIIS2MDCActive())
                     {
-                        const bool ok = sensor_collector.setIIS2MDCHardIronOffset(0, 0, 0);
-                        ESP_LOGI(TAG, "[MAGCAL] start: zeroed IIS2MDC OFFSET %s  "
+                        const bool ok = programMagOffset(0, 0, 0);
+                        ESP_LOGI(TAG, "[MAGCAL] start: zeroed %s offset %s  "
                                       "prior=(%d,%d,%d)",
-                                 ok ? "OK" : "FAIL",
+                                 magCalChipName(), ok ? "OK" : "FAIL",
                                  (int)mag_cal_prior_cx, (int)mag_cal_prior_cy,
                                  (int)mag_cal_prior_cz);
                     }
@@ -12818,11 +12905,11 @@ static void loop_fc()
                     // new sphere fit sees raw mag values.  Only matters when
                     // retrying out of VERIFYING — in REVIEW/SAMPLING the chip
                     // is already at zero from MAG_CAL_START.
-                    if (mag_cal_verify_active && sensor_collector.isIIS2MDCActive())
+                    if (mag_cal_verify_active)
                     {
-                        const bool ok = sensor_collector.setIIS2MDCHardIronOffset(0, 0, 0);
-                        ESP_LOGI(TAG, "[MAGCAL] retry during VERIFYING — zeroed OFFSET %s",
-                                 ok ? "OK" : "FAIL");
+                        const bool ok = programMagOffset(0, 0, 0);
+                        ESP_LOGI(TAG, "[MAGCAL] retry during VERIFYING — zeroed %s offset %s",
+                                 magCalChipName(), ok ? "OK" : "FAIL");
                     }
                     mag_cal_verify_active = false;
                     mag_calibrator.retry();
@@ -12870,18 +12957,13 @@ static void loop_fc()
                     // verify window measures the corrected stream.  On verify
                     // pass we'll persist; on fail we zero the chip and the
                     // session abort path takes care of full prior restore.
-                    if (sensor_collector.isIIS2MDCActive())
                     {
-                        const bool ok = sensor_collector.setIIS2MDCHardIronOffset(cx, cy, cz);
-                        ESP_LOGI(TAG, "[MAGCAL] IIS2MDC OFFSET applied (pre-verify): "
+                        const bool ok = programMagOffset(cx, cy, cz);
+                        ESP_LOGI(TAG, "[MAGCAL] %s offset applied (pre-verify): "
                                       "(%d,%d,%d) %s  prior=(%d,%d,%d)",
-                                 (int)cx, (int)cy, (int)cz, ok ? "OK" : "FAIL",
+                                 magCalChipName(), (int)cx, (int)cy, (int)cz, ok ? "OK" : "FAIL",
                                  (int)mag_cal_prior_cx, (int)mag_cal_prior_cy, (int)mag_cal_prior_cz);
                     }
-                    // MMC path is the same regardless; clear any prior
-                    // converter-side offset (sphere fit runs against
-                    // IIS2MDC LSB units, not MMC counts).
-                    sensor_converter.setMMCOffset(0, 0, 0);
 
                     // Enter verification window — the per-tick block
                     // below polls esp_timer_get_time() and calls
@@ -12948,26 +13030,13 @@ static void loop_fc()
                     {
                         // Program chip OFFSET (idempotent — same regs if
                         // we already wrote them via MAG_CAL_ACCEPT).
-                        if (sensor_collector.isIIS2MDCActive())
                         {
-                            const bool ok = sensor_collector.setIIS2MDCHardIronOffset(cx, cy, cz);
-                            ESP_LOGI(TAG, "[MAGCAL] FORCE_APPLY OFFSET (%d,%d,%d) %s",
-                                     (int)cx, (int)cy, (int)cz, ok ? "OK" : "FAIL");
+                            const bool ok = programMagOffset(cx, cy, cz);
+                            ESP_LOGI(TAG, "[MAGCAL] FORCE_APPLY %s offset (%d,%d,%d) %s",
+                                     magCalChipName(), (int)cx, (int)cy, (int)cz, ok ? "OK" : "FAIL");
                         }
-                        sensor_converter.setMMCOffset(0, 0, 0);
 
-                        prefs.begin("mag_cal", false);
-                        prefs.putUChar("ver",    MAG_CAL_NVS_SCHEMA_VERSION);
-                        prefs.putBool ("done",   true);
-                        prefs.putShort("cx",     cx);
-                        prefs.putShort("cy",     cy);
-                        prefs.putShort("cz",     cz);
-                        prefs.putFloat("R_uT",   R_uT);
-                        prefs.putFloat("res_uT", res_uT);
-                        prefs.putInt  ("mmc_cx", 0);
-                        prefs.putInt  ("mmc_cy", 0);
-                        prefs.putInt  ("mmc_cz", 0);
-                        prefs.end();
+                        magCalSaveNvs(cx, cy, cz, R_uT, res_uT);
 
                         ESP_LOGI(TAG, "[MAGCAL] FORCE_APPLY — saved cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT "
                                       "(user override, gates not re-checked)",
@@ -13041,26 +13110,13 @@ static void loop_fc()
                         MagCalApplyData ap;
                         memcpy(&ap, cfg_payload, sizeof(ap));
 
-                        if (sensor_collector.isIIS2MDCActive())
                         {
-                            const bool ok = sensor_collector.setIIS2MDCHardIronOffset(ap.cx, ap.cy, ap.cz);
-                            ESP_LOGI(TAG, "[MAGCAL] APPLY IIS2MDC OFFSET (%d,%d,%d) %s",
-                                     (int)ap.cx, (int)ap.cy, (int)ap.cz, ok ? "OK" : "FAIL");
+                            const bool ok = programMagOffset(ap.cx, ap.cy, ap.cz);
+                            ESP_LOGI(TAG, "[MAGCAL] APPLY %s offset (%d,%d,%d) %s",
+                                     magCalChipName(), (int)ap.cx, (int)ap.cy, (int)ap.cz, ok ? "OK" : "FAIL");
                         }
-                        sensor_converter.setMMCOffset(0, 0, 0);
 
-                        prefs.begin("mag_cal", false);
-                        prefs.putUChar("ver",    MAG_CAL_NVS_SCHEMA_VERSION);
-                        prefs.putBool ("done",   true);
-                        prefs.putShort("cx",     ap.cx);
-                        prefs.putShort("cy",     ap.cy);
-                        prefs.putShort("cz",     ap.cz);
-                        prefs.putFloat("R_uT",   ap.R_uT);
-                        prefs.putFloat("res_uT", ap.res_uT);
-                        prefs.putInt  ("mmc_cx", 0);
-                        prefs.putInt  ("mmc_cy", 0);
-                        prefs.putInt  ("mmc_cz", 0);
-                        prefs.end();
+                        magCalSaveNvs(ap.cx, ap.cy, ap.cz, ap.R_uT, ap.res_uT);
 
                         ESP_LOGI(TAG, "[MAGCAL] APPLY+saved: cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT",
                                  (int)ap.cx, (int)ap.cy, (int)ap.cz,
@@ -13624,7 +13680,7 @@ static void loop_fc()
                     cfgRetryOnNextPoll("GNSS LOG CFG");   // #1112
                 }
             }
-#if !TR_BOARD_M1
+#if TR_FC_ANTENNA_OFFSET
             else if (out_pending_command == ANTENNA_CONFIG_PENDING)
             {
                 delay_ms(1);

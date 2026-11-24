@@ -101,6 +101,20 @@ struct board_pins
     // heading 180 deg off.
     static constexpr float MAG_ROT_Z_DEG_QMC5883P = -90.0f;
 
+    // --- IMU and MMC5983MA placement (sensor -> board frame) ---
+    // A reading is multiplied by AXIS_SIGN, chip axis by chip axis, as it is
+    // read (SensorCollector::configureAxisSigns), and the converter then turns
+    // it ROT_Z_DEG, CCW about +Z. Every sign is +1 on a board whose parts sit
+    // on the front, so what is logged is what the chip read; only a part on
+    // the back has one (board_m2.h). These were config.h's, one pair for
+    // every board, until the Beetle V2 moved its IMU and magnetometer to the
+    // back.
+    // No MMC5983MA here: its angle is still the one the status query reports.
+    static constexpr float  ISM6HG256_ROT_Z_DEG    = -45.0f;
+    static constexpr int8_t ISM6HG256_AXIS_SIGN[3] = {1, 1, 1};
+    static constexpr float  MMC5983MA_ROT_Z_DEG    = 180.0f;
+    static constexpr int8_t MMC5983MA_AXIS_SIGN[3] = {1, 1, 1};
+
     // --- Which sensors this board actually has ---
     // The part fitted is a BMP581, not a BMP585; the driver seam is shared
     // and USE_BMP585 selects it, as on the single-MCU mini map.

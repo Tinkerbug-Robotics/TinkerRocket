@@ -464,11 +464,12 @@ class TelemetryDataTest {
             assertEquals(7, t.sensorHealthRows.size)              // 6 core + Storage
         }
         val expected = listOf(
-            Triple("1", SH.OK, "The GNSS board's IMU is aiding its tracking loops."),
+            Triple("1", SH.OK, "The GNSS board's IMU is fully aiding its tracking loops."),
             Triple(
                 "2", SH.DEGRADED,
-                "The GNSS board's IMU is not aiding. Run the six-face calibration" +
-                    " with the GNSS board on J1 (or its IMU is off in the board's settings).",
+                "The GNSS board's IMU is not fully aiding: it aids the vertical only" +
+                    " until it knows its heading (the six-face calibration with the GNSS board" +
+                    " on J1 gives it one; run it again if the board was moved), or its IMU is off in the board's settings.",
             ),
             Triple(
                 "3", SH.BAD,

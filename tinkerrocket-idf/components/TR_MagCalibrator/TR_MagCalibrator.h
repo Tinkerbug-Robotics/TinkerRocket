@@ -28,11 +28,13 @@
 //
 // Units: samples come in as raw int16 LSB counts of whichever chip feeds
 // addSample() — IIS2MDC 0.15 µT/LSB by default, the mini's QMC5883P
-// 100/3750 via setCountScale() (#1312).  The fit is computed in raw counts
+// 100/3750 via setCountScale() (#1312), and an MMC5983MA's 18-bit counts
+// restated at the IIS2MDC's 0.15 by the FC (mag_cal_mmc.h).  The fit is computed in raw counts
 // and converted to µT only for the review/reject decisions and telemetry.
 // This keeps the offset programmable directly into the chip (IIS2MDC
 // OFFSET_X/Y/Z, or the QMC5883P driver's software offset) without scaling
-// round-trips.
+// round-trips.  The MMC5983MA takes one: the FC turns the fit into MMC counts
+// for the converter's software offset (mag_cal_mmc::toMmcCounts).
 
 #include <compat.h>
 #include <RocketComputerTypes.h>

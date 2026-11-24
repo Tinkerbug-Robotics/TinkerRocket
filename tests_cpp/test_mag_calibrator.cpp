@@ -745,3 +745,126 @@ TEST(MagCalibratorScale, TheRollyPollyVHardIronInQmcCounts) {
     EXPECT_NEAR((int)fz, 145, 5);
     EXPECT_NEAR(R, 50.3f, 1.0f);
 }
+
+
+// --- The MMC5983MA in the calibration (mag_cal_mmc.h) ---
+//
+// An MMC5983MA board (the Tinker-Beetle V2) calibrates in the IIS2MDC's
+// 0.15 µT counts: the FC restates each 18-bit MMC count for the calibrator and
+// turns the fit back into MMC counts for the converter's software offset.
+
+#include <mag_cal_mmc.h>
+
+namespace {
+
+constexpr uint32_t kMmcZero = 131072;   // 2^17, the MMC's zero field
+
+uint32_t mmcRaw(int32_t centered) { return (uint32_t)(centered + (int32_t)kMmcZero); }
+
+}  // namespace
+
+TEST(MagCalMmcUnits, OneIis2mdcCountIs24576ThousandthsOfAnMmcCount) {
+    EXPECT_EQ(mag_cal_mmc::toMmcCounts(1000), 24576);
+    EXPECT_EQ(mag_cal_mmc::toMmcCounts(-1000), -24576);
+    EXPECT_EQ(mag_cal_mmc::toMmcCounts(0), 0);
+    EXPECT_EQ(mag_cal_mmc::toCalCounts(mmcRaw(24576), 0), 1000);
+    EXPECT_EQ(mag_cal_mmc::toCalCounts(mmcRaw(-24576), 0), -1000);
+    // 50 µT in either count reads 50 µT, to the half MMC count the rounding costs
+    EXPECT_NEAR(mag_cal_mmc::toMmcCounts(333) * MAG_UT_PER_COUNT_MMC5983MA, 333 * 0.15,
+                MAG_UT_PER_COUNT_MMC5983MA / 2);
+}
+
+TEST(MagCalMmcUnits, RoundsHalfAwayFromZeroBothWays) {
+    // 12 MMC counts = 0.488 of a calibrator count -> 0; 13 = 0.529 -> 1
+    EXPECT_EQ(mag_cal_mmc::toCalCounts(mmcRaw(12), 0), 0);
+    EXPECT_EQ(mag_cal_mmc::toCalCounts(mmcRaw(13), 0), 1);
+    EXPECT_EQ(mag_cal_mmc::toCalCounts(mmcRaw(-12), 0), 0);
+    EXPECT_EQ(mag_cal_mmc::toCalCounts(mmcRaw(-13), 0), -1);
+    // 1 calibrator count = 24.576 MMC counts -> 25
+    EXPECT_EQ(mag_cal_mmc::toMmcCounts(1), 25);
+    EXPECT_EQ(mag_cal_mmc::toMmcCounts(-1), -25);
+}
+
+TEST(MagCalMmcUnits, TheOffsetComesOffBeforeTheRestating) {
+    // The calibrator sees what the converter turns into µT: centered less the offset.
+    EXPECT_EQ(mag_cal_mmc::toCalCounts(mmcRaw(24576 + 4915), 4915), 1000);
+    EXPECT_EQ(mag_cal_mmc::toCalCounts(mmcRaw(4915), 4915), 0);
+    // Only 18 bits count
+    EXPECT_EQ(mag_cal_mmc::toCalCounts(mmcRaw(24576) | 0xFFFC0000u, 0), 1000);
+}
+
+TEST(MagCalMmcUnits, TheWholeRangeWithAnyOffsetFitsInt16) {
+    // Rail to rail, less a rail-sized offset the other way: 2^18 counts.
+    EXPECT_EQ(mag_cal_mmc::toCalCounts(0u, 131072), -10667);
+    EXPECT_EQ(mag_cal_mmc::toCalCounts(0x3FFFFu, -131072), 10667);
+}
+
+// A tumble of an MMC5983MA board with 210 µT of hard iron on it -- the
+// Rolly-Polly V nosecone's, 34406 MMC counts, past what an int16 of MMC counts
+// holds -- through the FC's restating: the fit, made MMC counts, is the hard
+// iron; with it on, the verify pass sees the Earth field and passes.
+TEST(MagCalibratorMmc, FitsAnMmcHardIronAndTheOffsetTakesItOut) {
+    struct D { int16_t x, y, z; };
+    const D dirs[] = {
+        {1000, 0, 0}, {-1000, 0, 0}, {0, 1000, 0}, {0, -1000, 0},
+        {0, 0, 1000}, {0, 0, -1000},
+        {707, 707, 0}, {-707, 707, 0}, {707, -707, 0}, {-707, -707, 0},
+        {707, 0, 707}, {-707, 0, 707}, {707, 0, -707}, {-707, 0, -707},
+        {0, 707, 707}, {0, -707, 707}, {0, 707, -707}, {0, -707, -707},
+        {577, 577, 577}, {-577, 577, 577}, {577, -577, 577}, {577, 577, -577},
+        {-577, -577, 577}, {-577, 577, -577}, {577, -577, -577}, {-577, -577, -577},
+    };
+    const int N = sizeof(dirs) / sizeof(dirs[0]);
+    const double R_counts = 50.3 / MAG_UT_PER_COUNT_MMC5983MA;          // 8241
+    const int32_t hard[3] = {1229, -34406, 2376};                        // 7.5, -210, 14.5 µT
+
+    // The MMC's raw count along a direction, hard iron on.
+    auto raw = [&](const D& d, int axis) {
+        const double L = sqrt((double)d.x * d.x + (double)d.y * d.y + (double)d.z * d.z);
+        const double u = (axis == 0 ? d.x : axis == 1 ? d.y : d.z) / L;
+        return mmcRaw((int32_t)lround(u * R_counts) + hard[axis]);
+    };
+
+    MagCalibrator cal;   // default scale, 0.15 µT: the FC's on an MMC board
+    cal.start();
+    for (int rep = 0; rep < 40; rep++)
+        for (int i = 0; i < N; i++) {
+            cal.setLiveAccel(dirs[i].x, dirs[i].y, dirs[i].z);
+            cal.addSample(mag_cal_mmc::toCalCounts(raw(dirs[i], 0), 0),    // session: offset zeroed
+                          mag_cal_mmc::toCalCounts(raw(dirs[i], 1), 0),
+                          mag_cal_mmc::toCalCounts(raw(dirs[i], 2), 0));
+        }
+    ASSERT_TRUE(cal.computeFit());
+    int16_t fx, fy, fz; float R, res; uint8_t reject;
+    cal.getResult(fx, fy, fz, R, res, reject);
+    EXPECT_EQ((int)reject, (int)MAG_CAL_OK);
+    EXPECT_NEAR(R, 50.3f, 0.5f);
+    EXPECT_LT(res, 0.5f);
+
+    // The fit, as the converter's offset: within one calibrator count (0.15 µT).
+    const int32_t off[3] = {mag_cal_mmc::toMmcCounts(fx), mag_cal_mmc::toMmcCounts(fy),
+                            mag_cal_mmc::toMmcCounts(fz)};
+    for (int a = 0; a < 3; a++)
+        EXPECT_NEAR(off[a], hard[a], 25) << "axis " << a;
+
+    // Verify: samples now come less the candidate offset, as the FC feeds them.
+    ASSERT_TRUE(cal.accept());
+    for (int rep = 0; rep < 30; rep++)
+        for (int i = 0; i < N; i++) {
+            cal.setLiveAccel(dirs[i].x, dirs[i].y, dirs[i].z);
+            cal.addSample(mag_cal_mmc::toCalCounts(raw(dirs[i], 0), off[0]),
+                          mag_cal_mmc::toCalCounts(raw(dirs[i], 1), off[1]),
+                          mag_cal_mmc::toCalCounts(raw(dirs[i], 2), off[2]));
+        }
+    float worst = -1.0f;
+    EXPECT_TRUE(cal.evaluateVerify(worst)) << "worst |B| " << worst << " uT";
+
+    // And the converter's own sum: centered less the offset, at its scale.
+    const D up = {0, 0, 1000};
+    double b2 = 0.0;
+    for (int a = 0; a < 3; a++) {
+        const double ut = (mag_cal_mmc::centered(raw(up, a)) - off[a]) * MAG_UT_PER_COUNT_MMC5983MA;
+        b2 += ut * ut;
+    }
+    EXPECT_NEAR(sqrt(b2), 50.3, 0.5);
+}

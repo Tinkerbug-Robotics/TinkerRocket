@@ -220,6 +220,20 @@ public:
     // out geodetically correct after the converter re-applies the forward
     // rotation (mirrors configureSimRotation for the ISM6).
     void configureSimIis2mdcRotation(float rot_z_deg);
+    // The MMC5983MA's, the same way (config::MMC5983MA_ROT_Z_DEG): only a board
+    // with the part gets its samples replaced (the V7, the Tinker-Beetle V2).
+    // Its axis signs (a part on the back) need nothing here: the collector
+    // applies them as it reads, ahead of this wrapper, so the converter sees a
+    // front part turned only about Z, and that is what the sim encodes.
+    void configureSimMmcRotation(float rot_z_deg);
+    // The MMC5983MA's hard-iron offset, centered counts, that the converter
+    // takes off (SensorConverter::setMMCOffset; the FC sets both together).
+    // The MMC has no offset register: a real board's counts carry its hard
+    // iron and the converter subtracts it.  So the sim adds the offset to the
+    // counts it packs, and the subtraction lands on the sim's field, as it
+    // does on the bench.  (The IIS2MDC needs nothing: the chip subtracts, and
+    // the sim packs what comes out of it.)
+    void setSimMmcOffset(int32_t cx, int32_t cy, int32_t cz);
     // Board→rocket mounting rotation (row-major, v_rocket = R * v_board).
     // The sim's physics are rocket-frame; encoders apply the INVERSE so the
     // forward conversion (chip rotZ, then board→rocket) reproduces the
@@ -358,6 +372,9 @@ private:
     // Inverse rotation (board frame → sensor frame) for IIS2MDC encoding (#463)
     float iis_inv_c_ = 1.0f;
     float iis_inv_s_ = 0.0f;
+    float mmc_inv_c_ = 1.0f;    // configureSimMmcRotation
+    float mmc_inv_s_ = 0.0f;
+    int32_t mmc_off_[3] = {0, 0, 0};   // setSimMmcOffset
 
     // Inverse board→rocket rotation (rocket frame → board frame), i.e. the
     // transpose of the configured mounting matrix.  Identity by default.

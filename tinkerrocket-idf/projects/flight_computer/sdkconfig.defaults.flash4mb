@@ -1,0 +1,29 @@
+# sdkconfig overlay applied ONLY to -DTR_BOARD_M2=1 builds (the Tinker-Beetle
+# V2), last, on top of sdkconfig.defaults, sdkconfig.defaults.m1 and
+# sdkconfig.defaults.mosaic. Selected by the project CMakeLists, not by the
+# build-dir name. The out computer's file of the same name does the same for
+# that processor.
+#
+# It sets the one thing the M1's overlay cannot share with this board: the boot
+# flash. The V2's flight computer is an ESP32-S3FH4R2, which boots from the
+# 4 MB of flash in its package; the V1's external NOR is gone. The base declares
+# 8 MB because partitions.csv ends at 6.06 MB, and on a 4 MB part that is the
+# FATAL direction: the bootloader finds less flash than the image header claims
+# and stops before any firmware runs, with no log of ours to say why (the "Boot
+# NOR size" block in sdkconfig.defaults, and docs/board-versioning.md).
+#
+# So this board gets a table that fits, partitions_4mb.csv, and the declaration
+# that covers it. Still the policy every project follows (#916): the smallest
+# standard size that fits the build's own partition table, which
+# tinkerrocket-idf/tools/check_flash_declarations.py checks for this build too.
+# The two lines go together. Either one alone fails the build: gen_esp32part.py
+# refuses partitions.csv in 4 MB, and the checker refuses 8 MB for a table that
+# ends below 4 MB.
+#
+# TRAP, the same one as everywhere else: IDF does not re-apply sdkconfig
+# defaults to an sdkconfig that already exists. A build_m2 dir configured
+# before this file existed keeps declaring 8 MB. main.cpp refuses to compile an
+# M2 image without CONFIG_ESPTOOLPY_FLASHSIZE_4MB; delete build_m2/sdkconfig
+# and build again when it does.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_4mb.csv"

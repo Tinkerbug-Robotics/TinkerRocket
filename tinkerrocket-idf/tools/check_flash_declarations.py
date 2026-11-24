@@ -12,7 +12,9 @@ it just leaves the top of the part unaddressable. Sizing to the TABLE rather
 than to the PART means an image is safe on any board carrying at least that
 much flash, which removed the per-revision fork entirely for flight_computer
 and out_computer — they share one partition table across V7/V8/V9/V10/M1, so the
-16 MB overlays were buying nothing at all.
+16 MB overlays were buying nothing at all. (The Tinker-Beetle V2's out computer,
+M2, is the exception that needs a table of its own: its part is 4 MB, smaller
+than the shared table.)
 
 That fork is what went wrong twice: the original V7 boot loop (ec2a0728), and
 rocket-computer-mini's two processors declaring different sizes for one board.
@@ -48,10 +50,19 @@ BUILDS = [
     ("flight_computer V9", "flight_computer", ["sdkconfig.defaults", "sdkconfig.defaults.v9"]),
     ("flight_computer V10", "flight_computer", ["sdkconfig.defaults", "sdkconfig.defaults.v9"]),
     ("flight_computer M1", "flight_computer", ["sdkconfig.defaults", "sdkconfig.defaults.m1"]),
+    # The Tinker-Beetle V2's flight computer: the same 4 MB in-package flash as
+    # its out computer. The PX1105R image's overlay sets no flash, so it is left
+    # out here; flash4mb comes last in the project CMakeLists as it does here.
+    ("flight_computer M2", "flight_computer",
+     ["sdkconfig.defaults", "sdkconfig.defaults.m1", "sdkconfig.defaults.flash4mb"]),
     ("out_computer V5/V7/V8", "out_computer", ["sdkconfig.defaults"]),
     ("out_computer V9", "out_computer", ["sdkconfig.defaults", "sdkconfig.defaults.v9"]),
     ("out_computer V10", "out_computer", ["sdkconfig.defaults", "sdkconfig.defaults.v9"]),
     ("out_computer M1", "out_computer", ["sdkconfig.defaults", "sdkconfig.defaults.v9"]),
+    # The Tinker-Beetle V2: the one out computer whose boot flash is 4 MB (in
+    # the ESP32-S3FH4R2's package), with a partition table cut to fit it.
+    ("out_computer M2", "out_computer",
+     ["sdkconfig.defaults", "sdkconfig.defaults.v9", "sdkconfig.defaults.flash4mb"]),
     ("base_station V1/V2", "base_station", ["sdkconfig.defaults"]),
     ("base_station V3", "base_station", ["sdkconfig.defaults", "sdkconfig.defaults.v3"]),
     ("base_station V4 (Tinker-Base)", "base_station", ["sdkconfig.defaults", "sdkconfig.defaults.v3"]),
@@ -66,6 +77,8 @@ BUILDS = [
 # V9 and V10, docs/board-versioning.md).
 BOARD_PAIRS = [
     ("tinker-beetle", "flight_computer M1", "out_computer M1"),
+    # The V2: two ESP32-S3FH4R2, each booting from the 4 MB in its package.
+    ("tinker-beetle V2", "flight_computer M2", "out_computer M2"),
     ("tinker-mantis V9", "flight_computer V9", "out_computer V9"),
     ("tinker-mantis V10", "flight_computer V10", "out_computer V10"),
     # V5 fits two W25Q64JV (U17 for the flight computer, U13 for the out

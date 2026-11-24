@@ -45,10 +45,11 @@ sdr_aid::EpochAid block(uint8_t src, uint8_t check, uint8_t why, uint8_t ver = 2
     return a;
 }
 
-sdr_rtcm::TrAlign report(uint8_t imu)
+sdr_rtcm::TrAlign report(uint8_t imu, uint8_t have = sdr_rtcm::TrAlign::kHaveWhole)
 {
     sdr_rtcm::TrAlign al;
     al.imu = imu;
+    al.have = have;
     return al;
 }
 
@@ -90,6 +91,23 @@ TEST(SdrImuStatus, AidingIsOk)
     EXPECT_EQ(t.state(true, kT), SH_OK);
     t.noteAid(block(2, 0, sdr_aid::kWhyAids, 1), kT);   // version 1 says no reason
     EXPECT_EQ(t.state(true, kT), SH_OK);
+}
+
+TEST(SdrImuStatus, AidingTheVerticalOnlyIsDegraded)
+{
+    // The board aids with its own levelling before it knows its heading: src 2 (its IMU), why 9.
+    Tracker t;
+    t.noteAid(block(2, 1, sdr_aid::kWhyVertical), kT);
+    EXPECT_EQ(t.state(true, kT), SH_DEGRADED);
+    t.noteAid(block(2, 1, sdr_aid::kWhyAids), kT + 10'000);   // its heading found: a full aid
+    EXPECT_EQ(t.state(true, kT + 10'000), SH_OK);
+    t.noteAid(block(2, 0, sdr_aid::kWhyVertical, 1), kT);      // version 1's bits there are reserved
+    EXPECT_EQ(t.state(true, kT), SH_OK);
+    // A whole mounting that disagrees with this flight computer's attitude: the board's own, the vertical only
+    t.noteAid(block(2, 1, sdr_aid::kWhyMountDisagrees), kT);
+    EXPECT_EQ(t.state(true, kT), SH_DEGRADED);
+    t.noteAid(block(2, 1, 13), kT);                               // a reason from a later board: not full either
+    EXPECT_EQ(t.state(true, kT), SH_DEGRADED);
 }
 
 TEST(SdrImuStatus, NotAidingByChoiceOrNoMountingIsDegraded)
@@ -134,9 +152,13 @@ TEST(SdrImuStatus, TheReportAloneSaysAidingWhileItIsFresh)
 {
     // Before its first fix the board sends no epochs, only its mounting report.
     Tracker t;
-    t.noteAlign(report(2), kT);
+    t.noteAlign(report(2), kT);                                   // aiding, a whole mounting in use
     EXPECT_EQ(t.state(true, kT), SH_OK);
     EXPECT_EQ(t.state(true, kT + Tracker::kStaleUs), SH_DEGRADED);
+    t.noteAlign(report(2, sdr_rtcm::TrAlign::kHaveTilt), kT);    // aiding, its heading not known: the vertical only
+    EXPECT_EQ(t.state(true, kT), SH_DEGRADED);
+    t.noteAlign(report(2, sdr_rtcm::TrAlign::kHaveNone), kT);    // its own levelling alone
+    EXPECT_EQ(t.state(true, kT), SH_DEGRADED);
     t.noteAlign(report(1), kT);   // watching only
     EXPECT_EQ(t.state(true, kT), SH_DEGRADED);
     t.noteAlign(report(0), kT);   // off

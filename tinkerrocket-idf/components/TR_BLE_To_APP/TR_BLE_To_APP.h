@@ -69,8 +69,8 @@ public:
         // Whether the gnss-sdr-dev board's own IMU aids its tracking loops, as
         // the flight computer reports it (FC_STATUS_MSG, FCS_GNSS_IMU_*): a
         // SensorHealthState, 0 = no board on J1 or no recent report (not
-        // emitted), 1 aiding, 2 not aiding (off, or no mounting yet: the
-        // six-face calibration sets it), 3 refused or dropped. Advisory.
+        // emitted), 1 fully aiding, 2 not fully aiding (the vertical only
+        // until it knows its heading, or off), 3 refused or dropped. Advisory.
         uint8_t gnss_imu = 0;
         // #1553: the pyro fault-current trip. Trips this boot ("pft"; 0 = none,
         // not emitted), the last trip's peak pack current in amps ("pfa"; NaN

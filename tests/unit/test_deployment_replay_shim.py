@@ -39,6 +39,8 @@ BOARDS = {
     "v9": ("-DTR_BOARD_V9=1",),
     "v10": ("-DTR_BOARD_V10=1", "-DTR_MAG_DRIVER_QMC5883P=1"),
     "m1": ("-DTR_BOARD_M1=1", "-DTR_MAG_DRIVER_QMC5883P=1", "-DTR_GNSS_DRIVER_LC86=1"),
+    # The Tinker-Beetle V2: its PX100's driver, which config.h requires for M2
+    "m2": ("-DTR_BOARD_M2=1", "-DTR_GNSS_DRIVER_PX1105R=1"),
 }
 
 

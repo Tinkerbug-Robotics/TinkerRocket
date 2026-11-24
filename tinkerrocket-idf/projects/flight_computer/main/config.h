@@ -18,6 +18,7 @@
 //   V9 (Tinker-Mantis as fabbed):  idf.py -B build_v9 -DTR_BOARD_V9=1 build
 //   V10 (Tinker-Mantis, ordered):  idf.py -B build_v10 -DTR_BOARD_V10=1 build
 //   rocket-computer-mini rev1:  idf.py -B build_m1 -DTR_BOARD_M1=1 build
+//   Tinker-Beetle V2:  idf.py -B build_m2 -DTR_BOARD_M2=1 build
 //
 // M1 is the one that is NOT an ESP32-P4 — the mini's flight computer is a
 // second ESP32-S3, and its pyro map shares no useful pin with V9's. Building
@@ -46,12 +47,26 @@
 #ifndef TR_BOARD_M1
 #define TR_BOARD_M1 0
 #endif
-#if (TR_BOARD_V5 + TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9 + TR_BOARD_V10 + TR_BOARD_M1) != 1
-#error "Set exactly one board revision: -DTR_BOARD_V5=1, -DTR_BOARD_V7=1, -DTR_BOARD_V8=1, -DTR_BOARD_V9=1, -DTR_BOARD_V10=1 or -DTR_BOARD_M1=1. There is no default — the V8 and V9 pyro maps differ (ARM 5 vs 16, FIRE 2/3 swapped), V10 moved ARM again (33, and it needs the out computer's consent), and M1 (rocket-computer-mini) is an ESP32-S3 whose pyro map shares no pin with any of them. V5 has an arm per channel and V7's FIRE/CONT pins swapped. A wrong map fires the wrong channel, or none, silently."
+// TR_BOARD_M2=1 selects board_m2.h: the Tinker-Beetle V2, in work and not
+// ordered. M1's pyro map, power latch and sensor bus, with a PX100 receiver
+// in place of the LC86G, an MMC5983MA on the sensor SPI bus in place of the
+// QMC5883P, the IMU and magnetometer on the back of the board, and an
+// ESP32-S3FH4R2 whose boot flash is the 4 MB in its package. rev1 boards keep
+// TR_BOARD_M1: an M1 image on a V2 looks for a magnetometer and a receiver that
+// are not there, flies its IMU upside down, and declares 8 MB of flash, which
+// a V2's bootloader refuses.
+#ifndef TR_BOARD_M2
+#define TR_BOARD_M2 0
+#endif
+#if (TR_BOARD_V5 + TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9 + TR_BOARD_V10 + TR_BOARD_M1 + TR_BOARD_M2) != 1
+#error "Set exactly one board revision: -DTR_BOARD_V5=1, -DTR_BOARD_V7=1, -DTR_BOARD_V8=1, -DTR_BOARD_V9=1, -DTR_BOARD_V10=1, -DTR_BOARD_M1=1 or -DTR_BOARD_M2=1. There is no default — the V8 and V9 pyro maps differ (ARM 5 vs 16, FIRE 2/3 swapped), V10 moved ARM again (33, and it needs the out computer's consent), and M1 (rocket-computer-mini) is an ESP32-S3 whose pyro map shares no pin with any of them. V5 has an arm per channel and V7's FIRE/CONT pins swapped. M2 (Tinker-Beetle V2) is M1's pyro map with its IMU and magnetometer on the back. A wrong map fires the wrong channel, or none, silently."
 #endif
 #if TR_BOARD_M1
 #include "board/board_m1.h"
 #define TR_BOARD_REV_STR "M1 (rocket-computer-mini)"
+#elif TR_BOARD_M2
+#include "board/board_m2.h"
+#define TR_BOARD_REV_STR "M2 (Tinker-Beetle V2)"
 #elif TR_BOARD_V10
 #include "board/board_v10.h"
 #define TR_BOARD_REV_STR "V10"
@@ -69,10 +84,13 @@
 #define TR_BOARD_REV_STR "V7"
 #endif
 
-#if TR_BOARD_M1
+#if TR_BOARD_M1 || TR_BOARD_M2
 // ======================================================================
 // M1 invariants, asserted rather than trusted (this board fires pyros)
 // ======================================================================
+// Both Beetle revisions (board_m1.h, board_m2.h): the V2 kept the V1's pyro
+// map, power latch and sensor bus pad for pad, so every check down to the
+// magnetometer's holds for both, and the messages name board_m1.h for the V1.
 // The mini's flight computer is an ESP32-S3, and its pyro map shares no
 // useful pin with the P4 maps. Every failure below is SILENT at runtime — the
 // board boots, continuity reads plausibly, and the wrong channel fires — so
@@ -113,11 +131,14 @@ static_assert(board_pins::PWR_HOLD_PIN != 3,
 // The sensor SPI bus moved on 2026-09-03 and the two constants below are the
 // ones a maintainer is most likely to "restore" from the stale comment that
 // used to sit above them in board_m1.h: pads 36 and 37 (GPIO48 and GPIO47) are
-// BARE on this board. A barometer whose chip select never asserts and an IMU
+// BARE on the V1 (the V2 spends them on IND_1 and the PX100's PPS, never on
+// these two). A barometer whose chip select never asserts and an IMU
 // interrupt that never fires are both silent at runtime.
 static_assert(board_pins::BMP585_CS == 9 && board_pins::ISM6HG256_INT == 8,
               "board_m1.h: BMP585_CS is pad 14 (GPIO9) and ISM6HG256_INT is pad 13 "
               "(GPIO8) since the 2026-09-03 pin swap — GPIO47/48 are spare pads");
+#endif
+#if TR_BOARD_M1
 // The magnetometer is on OUR bus and must stay there — it is a flight sensor,
 // and the out computer has no driver for one. Its pull-ups are on
 // V_MCU_SWTCH with the part, so master, slave and pull-ups share a rail.
@@ -146,6 +167,52 @@ static_assert(board_pins::USE_IIS2MDC &&
 #error "board_m1.h: U5 is a Quectel LC86G — an M1 build needs TR_GNSS_DRIVER_LC86=1 (flight_computer/CMakeLists.txt sets it under TR_BOARD_M1; #1032)"
 #endif
 #endif
+
+#if TR_BOARD_M2
+// ======================================================================
+// M2 invariants: what the V2 changed from the V1, pinned
+// ======================================================================
+// Each of these is silent at runtime when wrong. Re-derive them from a netlist
+// export of the V2 schematic before changing one: the V2 is not ordered, and
+// its map can still move.
+//
+// The magnetometer is an MMC5983MA on the sensor SPI bus (MAG_CS, GPIO1), not
+// the V1's I2C QMC5883P: with the I2C slot on, the collector would probe a bus
+// with no part and no pull-ups; with the MMC off, the board has no
+// magnetometer and nothing says so.
+static_assert(board_pins::USE_MMC5983MA && board_pins::MMC5983MA_CS == 1 &&
+              !board_pins::USE_IIS2MDC && board_pins::IIS2MDC_SDA < 0 && board_pins::IIS2MDC_SCL < 0,
+              "board_m2.h: U3 is an MMC5983MA on the sensor SPI bus (MAG_CS = GPIO1), and the I2C magnetometer slot is empty");
+#if (defined(TR_MAG_DRIVER_QMC5883P) && TR_MAG_DRIVER_QMC5883P) || (defined(TR_MAG_DRIVER_AUTO) && TR_MAG_DRIVER_AUTO)
+#error "board_m2.h: U3 is an MMC5983MA on SPI — no I2C magnetometer driver (TR_MAG_DRIVER_QMC5883P / TR_MAG_DRIVER_AUTO) belongs in an M2 build"
+#endif
+// U5 is a SkyTraq PX100 on this processor's UART: the PX1105R carrier's driver,
+// which flight_computer/CMakeLists.txt sets for M2. Without it the image speaks
+// UBX at a receiver that answers only SkyTraq binary and flies GNSS-absent
+// (#557), looking exactly like a dead receiver.
+#if !defined(TR_GNSS_DRIVER_PX1105R) || !TR_GNSS_DRIVER_PX1105R
+#error "board_m2.h: U5 is a SkyTraq PX100 — an M2 build needs TR_GNSS_DRIVER_PX1105R=1 (flight_computer/CMakeLists.txt sets it under TR_BOARD_M2)"
+#endif
+// IND_1 moved from GPIO43 (U0TXD, now bare) to GPIO48; the PX100's PPS is on
+// GPIO47.
+static_assert(board_pins::RED_LED_PIN == 48 && board_pins::BLUE_LED_PIN == 45 &&
+              board_pins::GNSS_PPS_PAD == 47,
+              "board_m2.h: IND_1 is GPIO48 (pad 36), IND_2 GPIO45, and the PX100's PPS GPIO47 (pad 37) on the Tinker-Beetle V2");
+// Both sensors are on the back: an M2 image with a front-side placement flies
+// the IMU upside down.
+static_assert(board_pins::ISM6HG256_AXIS_SIGN[2] == -1,
+              "board_m2.h: U2 is on the back of the Tinker-Beetle V2 — its Z axis must be reversed");
+#endif
+
+// The GNSS antenna's offset from the IMU (BLE cmd 81, NVS "antenna"/"ofs"):
+// kept, reported and given to the raw-GNSS filter on every board but the
+// Beetle's, whose flight computer keeps none (RocketComputerTypes.h,
+// F_ANTENNA_FROM_NVS). The V2 follows the V1, as its out computer's build
+// does (out_computer config.h, TR_OC_ANTENNA_OFFSET): the two processors
+// must agree, or one stages a setting the other never reads back. Its PX100
+// filter flies with the antenna at the IMU, a few centimetres off on this
+// board. It replaced eight `#if !TR_BOARD_M1` in main.cpp.
+#define TR_FC_ANTENNA_OFFSET (!TR_BOARD_M1 && !TR_BOARD_M2)
 
 #if TR_BOARD_V5
 // ======================================================================
@@ -201,10 +268,33 @@ static_assert(board_pins::PYRO_CONT_CLOSED_LEVEL == 0 || board_pins::PYRO_CONT_C
 // pads with the sensor SPI bus and the servo block, and a wrong pad reads a
 // floating input as a verdict. The mini (an S3) has no sense here.
 static_assert(board_pins::SCAP_ADC_PIN < 0 ||
-              (!TR_BOARD_M1 && board_pins::SCAP_ADC_PIN >= 16 && board_pins::SCAP_ADC_PIN <= 23),
+              (!TR_BOARD_M1 && !TR_BOARD_M2 && board_pins::SCAP_ADC_PIN >= 16 && board_pins::SCAP_ADC_PIN <= 23),
               "SCAP_ADC_PIN must be an ESP32-P4 ADC1 pad (GPIO16-23) or -1 (#1409)");
 static_assert(board_pins::SCAP_ADC_PIN < 0 || board_pins::SCAP_DIVIDER_RATIO >= 1.0f,
               "SCAP_DIVIDER_RATIO is V_SCAP over the pad voltage: at least 1 (#1409)");
+
+// Every board: the IMU's and the MMC5983MA's placement (the board header's
+// "IMU and MMC5983MA placement"). A sign is +1 or -1, nothing else.
+namespace board_axis_check {
+constexpr bool signsOk(const int8_t s[3])
+{
+    return (s[0] == 1 || s[0] == -1) && (s[1] == 1 || s[1] == -1) && (s[2] == 1 || s[2] == -1);
+}
+}  // namespace board_axis_check
+static_assert(board_axis_check::signsOk(board_pins::ISM6HG256_AXIS_SIGN) &&
+              board_axis_check::signsOk(board_pins::MMC5983MA_AXIS_SIGN),
+              "an AXIS_SIGN entry is +1 or -1");
+// The ISM6HG256X's axes are right-handed, and no placement mirrors a part: one
+// on the back is the front one turned over, two axes reversed. One reversed
+// axis (or three) would fly a mirror image of the rocket's motion, the gyro and
+// the accelerometer agreeing with each other and both wrong. (The MMC5983MA is
+// not held to this: its datasheet axes are left-handed, so on the Beetle V2 the
+// sign that turns them right-handed rides in the same triple, board_m2.h. The
+// legacy V7's triple predates that reading and has no such sign; it was never
+// checked against a dip angle.)
+static_assert(board_pins::ISM6HG256_AXIS_SIGN[0] * board_pins::ISM6HG256_AXIS_SIGN[1] *
+              board_pins::ISM6HG256_AXIS_SIGN[2] == 1,
+              "ISM6HG256_AXIS_SIGN must reverse two axes or none: a part on the back is turned over, not mirrored");
 
 #if TR_BOARD_V10
 // ======================================================================
@@ -301,10 +391,12 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 // V9's net for net (rocket-computer-v9.0.0 and tinker-mantis-v10.0.0
 // netlists: pin 1 GNSS_RX = P4 GPIO4, pin 2 GNSS_TX = GPIO3, pin 3 the U27
 // GPS_ACT switch through FL1, pin 4 GND, pin 5 GNSS_RXD2 = GPIO2), so it
-// takes the carrier too. Refused anywhere else.
+// takes the carrier too. The Tinker-Beetle V2 (M2) solders the same receiver
+// on, a PX100, on its own UART (board_m2.h), and its build always takes this
+// driver. Refused anywhere else.
 #if defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
-#if !TR_BOARD_V9 && !TR_BOARD_V10
-#error "TR_GNSS_DRIVER_PX1105R is a V9 or V10 build (-DTR_BOARD_V9=1 or -DTR_BOARD_V10=1 with -DTR_GNSS_PX1105R=1): only their J1 has been checked for the PX1105R carrier"
+#if !TR_BOARD_V9 && !TR_BOARD_V10 && !TR_BOARD_M2
+#error "TR_GNSS_DRIVER_PX1105R is a V9 or V10 build (-DTR_BOARD_V9=1 or -DTR_BOARD_V10=1 with -DTR_GNSS_PX1105R=1), or the Tinker-Beetle V2's (-DTR_BOARD_M2=1): only their J1, and the V2's soldered PX100, have been checked for this receiver"
 #endif
 #if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
 #error "One GNSS driver per build: TR_GNSS_DRIVER_PX1105R and TR_GNSS_DRIVER_LC86 are both set"
@@ -716,10 +808,15 @@ struct config : board_pins
     // ### Sensor Frame Rotations ###
     // ISM6 frame -> board frame rotation (deg), CCW positive about +Z.
     // Note: board frame: +X forward, +Y left, +Z up.
-    static constexpr float ISM6HG256_ROT_Z_DEG = -45.0f;
+    // ISM6HG256_ROT_Z_DEG and MMC5983MA_ROT_Z_DEG are the board header's (this
+    // struct inherits board_pins), with the ISM6HG256_AXIS_SIGN /
+    // MMC5983MA_AXIS_SIGN the collector applies first: a placement fact of
+    // each board, not one value for all of them, since the Beetle V2 put its
+    // IMU and magnetometer on the back (board_m2.h). -45 and 180, with no
+    // signs, on every other board. Checked beside the other board facts,
+    // above this struct.
     // MMC5983MA -> board frame (deg), CCW positive about +Z.
     // Note: board frame: +X forward, +Y left, +Z up.
-    static constexpr float MMC5983MA_ROT_Z_DEG = 180.0f;
     // Magnetometer -> board frame (deg), CCW positive about +Z, applied to the
     // chip's NORMALIZED frame (magTypeChipSign in RocketComputerTypes.h:
     // right-handed, Z out of the top).  A placement fact of each board and

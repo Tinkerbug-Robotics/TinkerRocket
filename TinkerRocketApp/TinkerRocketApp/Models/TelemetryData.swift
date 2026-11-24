@@ -305,10 +305,11 @@ struct TelemetryData: Codable {
     static func gnssImuHealthDetail(_ state: SensorHealth) -> String? {
         switch state {
         case .ok:
-            return "The GNSS board's IMU is aiding its tracking loops."
+            return "The GNSS board's IMU is fully aiding its tracking loops."
         case .degraded:
-            return "The GNSS board's IMU is not aiding. Run the six-face calibration"
-                + " with the GNSS board on J1 (or its IMU is off in the board's settings)."
+            return "The GNSS board's IMU is not fully aiding: it aids the vertical only"
+                + " until it knows its heading (the six-face calibration with the GNSS board"
+                + " on J1 gives it one; run it again if the board was moved), or its IMU is off in the board's settings."
         case .bad:
             return "The GNSS board stopped using its IMU: its at-rest check failed"
                 + " or its samples stopped."

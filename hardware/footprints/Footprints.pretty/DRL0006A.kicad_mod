@@ -53,14 +53,14 @@
 	(attr smd)
 	(duplicate_pad_numbers_are_jumpers no)
 	(fp_line
-		(start -0.900001 -0.950001)
-		(end 0.499999 -0.950001)
+		(start -0.9 -0.9)
+		(end 0.5 -0.9)
 		(stroke
 			(width 0.2)
 			(type solid)
 		)
 		(layer "F.SilkS")
-		(uuid "80c32e63-7af1-4477-a1d1-570668ce6a02")
+		(uuid "fd75ed69-e5b5-4363-8501-a8facd85aeba")
 	)
 	(fp_line
 		(start -0.499999 0.950001)
@@ -70,7 +70,7 @@
 			(type solid)
 		)
 		(layer "F.SilkS")
-		(uuid "59aaef56-ea06-417e-bf6e-53e8c6dc5c05")
+		(uuid "d28c275e-a702-45eb-917d-89c546e13396")
 	)
 	(fp_line
 		(start -0.850001 -0.625)
@@ -424,6 +424,17 @@
 				(thickness 0.15)
 			)
 		)
+	)
+	(fp_rect
+		(start 1.275001 -0.850001)
+		(end -1.275001 0.849998)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(fill no)
+		(layer "F.CrtYd")
+		(uuid "833bb12d-ed85-4e90-b333-d0a0c680c270")
 	)
 	(pad "1" smd rect
 		(at -0.740001 -0.500002 90)

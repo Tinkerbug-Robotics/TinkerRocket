@@ -905,6 +905,10 @@ static constexpr uint8_t MAG_TYPE_QMC5883P = 1;
 // a log marks it, and none of them is a flight.
 static constexpr double MAG_UT_PER_LSB_IIS2MDC  = 0.15;              // 1.5 mgauss/LSB
 static constexpr double MAG_UT_PER_LSB_QMC5883P = 100.0 / 3750.0;   // 3750 LSB/G at ±8 G
+// The MMC5983MA's own stream (MMC5983MA_MSG, not a MAG_TYPE): 18-bit counts
+// centered on 2^17, ±8 G full scale.  The converter's scale; the calibrator
+// restates these counts at MAG_UT_PER_LSB_IIS2MDC (TR_MagCalibrator/mag_cal_mmc.h).
+static constexpr double MAG_UT_PER_COUNT_MMC5983MA = (8.0 * 100.0) / 131072.0;  // 0.006103515625
 static constexpr double magTypeUtPerLsb(uint8_t mag_type)
 {
     // Unknown → IIS2MDC: the pre-v6 reader convention, and what a zeroed
@@ -1561,10 +1565,11 @@ static_assert(sizeof(MagCalStatusData) == 36,
               "MagCalStatusData must be 36 bytes");
 
 // 14-byte payload for MAG_CAL_APPLY_MSG (issue #132).  Carries the hard-iron
-// offsets in IIS2MDC LSB units plus the R / residual diagnostics so NVS state
-// is bit-identical to what cmd 52 writes after a fresh cal — re-boot path is
-// the same regardless of whether cal came from the sphere fit or an app push.
-// No soft-iron / no MMC offsets: v1 behaviour matches MAG_CAL_ACCEPT.
+// offsets in the calibrator's counts (the status frame's: IIS2MDC LSB, a
+// QMC5883P's own, or an MMC5983MA board's restated at 0.15 µT, mag_cal_mmc.h)
+// plus the R / residual diagnostics so NVS state is bit-identical to what
+// cmd 52 writes after a fresh cal — re-boot path is the same regardless of
+// whether cal came from the sphere fit or an app push.  No soft-iron.
 typedef struct __attribute__((packed))
 {
     int16_t cx;        // raw IIS2MDC LSB
@@ -1671,9 +1676,10 @@ static constexpr uint16_t FCS_SCAP_NO_READING = 0xFFFFu;
 // from the board's frames (flight_computer main/sdr_imu_status_policy.h): a
 // sensor-health state (SH_NA, SH_OK, SH_DEGRADED, SH_BAD, defined further
 // down). SH_NA: no gnss-sdr-dev board on J1 (or an image without its driver);
-// SH_OK: the board's IMU aids its tracking loops; SH_DEGRADED: the board is
-// there and its IMU does not aid (off, or no mounting into this flight
-// computer yet: the six-face calibration sets it); SH_BAD: the board refused
+// SH_OK: the board's IMU fully aids its tracking loops (its heading known);
+// SH_DEGRADED: the board is there and its IMU does not fully aid (the
+// vertical only until it knows its heading, which the six-face calibration's
+// mounting gives it, or off); SH_BAD: the board refused
 // or dropped its IMU (its at-rest check failed, its samples stopped). The out
 // computer passes it to the apps' health dots (telemetry key "gi"). An FC
 // image from before this sends 0 there: SH_NA.

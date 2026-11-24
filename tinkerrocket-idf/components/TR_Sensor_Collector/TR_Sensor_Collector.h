@@ -267,6 +267,16 @@ public:
     // block it holds once more, from any task (the flight log starts at
     // launch, long after the receiver first sent them).
     void setGNSSPpsPin(int8_t pin);
+    // A part on the BACK of the board (the Tinker-Beetle V2's IMU and
+    // magnetometer, board_m2.h): each sign, +1 or -1 per chip axis, is applied
+    // to every reading as it is read, before anything else sees it -- the
+    // calibration sums, the gyro offset, the queue, the log -- so everything
+    // downstream sees a part on the front, turned only about Z as on every
+    // other board (the converter's ROT_Z). {1, 1, 1}, the default and every
+    // other board's, leaves the readings as the chip gave them. An ISM6 sign
+    // saturates (-32768 reads +32767), and an MMC5983MA sign negates its
+    // 18-bit count about the chip's zero, 2^17. Call before begin().
+    void configureAxisSigns(const int8_t ism6_sign[3], const int8_t mmc_sign[3]);
     void setGNSSMosaicRate(uint8_t rate_hz);
     void requestGNSSNavResend();
     // Leave the GNSS receiver out of this boot: begin() does not look for it,
@@ -731,6 +741,18 @@ private:
 
     uint32_t ism6hg256_update_period;
     uint32_t mmc_last_sample_time_us;
+    // configureAxisSigns(): the per-axis signs, and whether any is -1
+    int8_t ism6_sign_[3] = {1, 1, 1};
+    int8_t mmc_sign_[3]  = {1, 1, 1};
+    bool   ism6_signed_ = false;
+    bool   mmc_signed_  = false;
+    // An MMC5983MA whose INT pad reaches no GPIO (the Tinker-Beetle V2): the
+    // poll task asks the part's status register instead, twice a sample period
+    // (begin() sets these)
+    bool     mmc_int_wired_      = true;
+    uint32_t mmc_poll_period_us_ = 0;
+    uint32_t mmc_next_poll_us_   = 0;
+    volatile uint32_t mmc5983ma_status_polls_ = 0;
     uint32_t mmc_last_recover_time_us;
     uint32_t mmc_stall_threshold_us;
     uint32_t mmc_recover_cooldown_us;

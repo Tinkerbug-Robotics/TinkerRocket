@@ -237,7 +237,9 @@ endforeach()
 # below). Any other build refuses them rather than build an image that
 # silently ignores them. _tr_mosaic_rawnav is the mosaic-only and gnss-sdr-dev
 # images' alone (their rig replay and the TR_BENCH_MOSAIC_* switches below);
-# _tr_p4_rawnav adds the PX1105R image.
+# _tr_p4_rawnav adds the PX1105R image and the one image (-DTR_GNSS_AUTO_RAW=1,
+# which compiles every TR_RAW_NAV_P4 path: the rig's restored-flight, panic and
+# start-fail checks run on it).
 if(TR_GNSS_MOSAIC AND (NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW))
     set(_tr_mosaic_rawnav ON)
 elseif(TR_GNSS_SDR)
@@ -245,7 +247,7 @@ elseif(TR_GNSS_SDR)
 else()
     set(_tr_mosaic_rawnav OFF)
 endif()
-if(_tr_mosaic_rawnav OR (TR_GNSS_PX1105R AND (NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW)))
+if(_tr_mosaic_rawnav OR (TR_GNSS_PX1105R AND (NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW)) OR TR_GNSS_AUTO_RAW)
     set(_tr_p4_rawnav ON)
 else()
     set(_tr_p4_rawnav OFF)
@@ -256,7 +258,7 @@ foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G TR_
         TR_BENCH_RAW_SHARE_LOS TR_BENCH_RAW_DOP_AVG TR_RAW_GNSS_IRAM TR_BENCH_RAW_CAP_MAX TR_BENCH_RAW_CAP_PAD
         TR_BENCH_RAW_SLICE_US TR_BENCH_RAW_TROPO_RATE ${_tr_mosaic_rawnav_hooks})
     if(DEFINED ${_v} AND NOT _tr_p4_rawnav)
-        message(FATAL_ERROR "${_v} is for the raw-GNSS navigation filter of the mosaic-only image (-DTR_GNSS_MOSAIC=1 on a V8 or V9), the V10's gnss-sdr-dev image (-DTR_GNSS_SDR=1) or the PX1105R image (-DTR_GNSS_PX1105R=1 on a V9 or V10): this build would ignore it. A build dir keeps every -D value: use a fresh one.")
+        message(FATAL_ERROR "${_v} is for the raw-GNSS navigation filter of the mosaic-only image (-DTR_GNSS_MOSAIC=1 on a V8 or V9), the V10's gnss-sdr-dev image (-DTR_GNSS_SDR=1), the PX1105R image (-DTR_GNSS_PX1105R=1 on a V9 or V10) or the one image (-DTR_GNSS_AUTO_RAW=1): this build would ignore it. A build dir keeps every -D value: use a fresh one.")
     endif()
 endforeach()
 foreach(_v TR_BENCH_RAW_FUSE_MS TR_BENCH_RAW_SAT_CAP TR_BENCH_BOOST_SCREEN_G TR_BENCH_DV_CHECK TR_BENCH_RAW_BUILD_LITE
@@ -415,6 +417,8 @@ endif()
 
 if(TR_BOARD_M1)
     set(TR_BOARD_SUFFIX "-m1")
+elseif(TR_BOARD_M2)
+    set(TR_BOARD_SUFFIX "-m2")
 elseif(TR_BOARD_V10)
     set(TR_BOARD_SUFFIX "-v10")
 elseif(TR_BOARD_V9)
@@ -512,6 +516,25 @@ if(TR_BOARD_M1)
     # that lacks it.
     add_compile_definitions(TR_GNSS_DRIVER_LC86=1)
     message(STATUS "flight_computer: GNSS driver LC86G (TR_GNSS_DRIVER_LC86=1)")
+elseif(TR_BOARD_M2)
+    # The Tinker-Beetle V2: the M1's ESP32-S3 overlay (the target, its quad
+    # PSRAM, no radio stack, 240 MHz, QIO, the brownout level), forced the same
+    # way and for the same reason, and checked the same way in
+    # main/CMakeLists.txt. Its flash is the 4 MB in the ESP32-S3FH4R2's package:
+    # sdkconfig.defaults.flash4mb, appended last below, so nothing after it
+    # puts the 8 MB declaration back.
+    set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.m1")
+    set(IDF_TARGET "esp32s3" CACHE STRING "M2 flight computer is an ESP32-S3" FORCE)
+    message(STATUS "flight_computer: sdkconfig overlay sdkconfig.defaults.m1 (ESP32-S3 target, PSRAM on), shared with M1")
+    # U5 is a SkyTraq PX100 on this processor's UART (board_m2.h): the PX1105R
+    # image's driver and filter, through the block below. Not a choice an M2
+    # build makes: config.h refuses one without the driver.
+    if(TR_GNSS_MOSAIC OR TR_GNSS_SDR OR TR_GNSS_AUTO OR TR_GNSS_AUTO_RAW OR (DEFINED TR_GNSS_PX1105R AND NOT TR_GNSS_PX1105R))
+        message(FATAL_ERROR "-DTR_BOARD_M2=1 carries a PX100 soldered on: its build is the PX1105R image, with no other GNSS switch")
+    endif()
+    set(TR_GNSS_PX1105R ON)
+    # U3 is an MMC5983MA on the sensor SPI bus, driven by the collector's own
+    # MMC5983MA path: no I2C magnetometer driver (config.h refuses one).
 elseif(TR_BOARD_V10)
     # The V9 overlay is the Tinker-Mantis per-board hook, and it sets nothing
     # since #916; V10 shares it, so a setting both revisions need has one home.
@@ -627,8 +650,8 @@ endif()
 # sdkconfig). -DTR_RAW_GNSS_SHADOW=0 builds it without the filter (GpsInsEKF
 # alone, PSRAM off).
 if(TR_GNSS_PX1105R)
-    if(NOT TR_BOARD_V9 AND NOT TR_BOARD_V10)
-        message(FATAL_ERROR "TR_GNSS_PX1105R is for the V9 or V10 (-DTR_BOARD_V9=1 or -DTR_BOARD_V10=1): only their J1 has been checked for the PX1105R carrier")
+    if(NOT TR_BOARD_V9 AND NOT TR_BOARD_V10 AND NOT TR_BOARD_M2)
+        message(FATAL_ERROR "TR_GNSS_PX1105R is for the V9 or V10 (-DTR_BOARD_V9=1 or -DTR_BOARD_V10=1): only their J1 has been checked for the PX1105R carrier (the Tinker-Beetle V2, -DTR_BOARD_M2=1, takes it by itself)")
     endif()
     if(TR_GNSS_MOSAIC)
         message(FATAL_ERROR "TR_GNSS_PX1105R and TR_GNSS_MOSAIC are both on: one GNSS receiver per image")
@@ -645,12 +668,17 @@ if(TR_GNSS_PX1105R)
     endif()
     list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.mosaic")
     if(NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW)
-        list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.rawnav")
+        # The P4's PSRAM overlay (hex, 200 MHz). Not on the Tinker-Beetle V2:
+        # its ESP32-S3 has quad PSRAM, which sdkconfig.defaults.m1 already
+        # turns on, and the P4's mode and speed would undo that.
+        if(NOT TR_BOARD_M2)
+            list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.rawnav")
+        endif()
         # The receiver sends every GPS, Galileo and BeiDou ephemeris it
         # tracks, as the mosaic's: the store holds 128, laid out alike by
         # every component (main.cpp checks at boot, ephCapacityAgrees).
         add_compile_definitions(TR_EPH_CAPACITY=128)
-        message(STATUS "flight_computer: GNSS driver SkyTraq PX1105R (TR_GNSS_DRIVER_PX1105R=1), overlays sdkconfig.defaults.mosaic (UART ISR in IRAM) + sdkconfig.defaults.rawnav (PSRAM on)")
+        message(STATUS "flight_computer: GNSS driver SkyTraq PX1105R (TR_GNSS_DRIVER_PX1105R=1), overlay sdkconfig.defaults.mosaic (UART ISR in IRAM), PSRAM on")
         message(STATUS "flight_computer: raw-GNSS NAVIGATION filter; GpsInsEKF not instantiated (ephemeris store 128)")
     else()
         message(STATUS "flight_computer: GNSS driver SkyTraq PX1105R (TR_GNSS_DRIVER_PX1105R=1), overlay sdkconfig.defaults.mosaic (TR_RAW_GNSS_SHADOW=0: no raw-GNSS filter, PSRAM off)")
@@ -738,6 +766,12 @@ if(TR_GNSS_AUTO)
     endif()
 elseif((TR_BOARD_V9 OR TR_BOARD_V10) AND NOT TR_GNSS_MOSAIC AND NOT TR_GNSS_SDR AND NOT TR_GNSS_PX1105R)
     message(STATUS "flight_computer: GNSS driver u-blox only (-DTR_GNSS_AUTO=0)")
+endif()
+# The Tinker-Beetle V2's boot flash, last of all its overlays (see the M2
+# branch above, and sdkconfig.defaults.flash4mb).
+if(TR_BOARD_M2)
+    list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.flash4mb")
+    message(STATUS "flight_computer: overlay sdkconfig.defaults.flash4mb (4 MB boot flash in the package, partitions_4mb.csv)")
 endif()
 set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")
 
