@@ -115,11 +115,22 @@ void RawGnssMeasStage::see(const TimedRawEpoch& e)
             eph_of_[i] = nullptr;
         if (!o.has_pr || !stageSys(o.sys))
             continue;
-        tracked++;
         const double to_sys = o.sys == GNSS_SYS_BDS ? BDT_MINUS_GPST : 0.0;   // as the builder picks
         const gps_eph_t* eph = store_.select(o.sys, o.prn, e.epoch.tow_s + to_sys);
         if (lite && i < RawEpoch::kMaxObs)
             eph_of_[i] = eph;
+        // a satellite once, whichever bands it has: an L5-band signal counts
+        // only where its satellite has no L1-band one in the epoch
+        if (o.band != kBandL1)
+        {
+            bool l1 = false;
+            for (int j = 0; j < e.epoch.n && !l1; ++j)
+                l1 = e.epoch.obs[j].band == kBandL1 && e.epoch.obs[j].sys == o.sys && e.epoch.obs[j].prn == o.prn
+                     && e.epoch.obs[j].has_pr;
+            if (l1)
+                continue;
+        }
+        tracked++;
         if (eph == nullptr)
             no_eph++;
     }
@@ -318,7 +329,7 @@ void RawGnssMeasStage::capEpoch(const TimedRawEpoch& e)
         const RawObs& o = in.obs[i];
         state[i] = kNot;
         score[i] = 0.0f;
-        if (!o.has_pr || !stageSys(o.sys) || o.prn >= kPrns || o.cn0_dbhz < cfg_.meas.sig[o.sys].cn0_min_pr
+        if (!o.has_pr || !stageSys(o.sys) || o.prn >= kPrns || o.cn0_dbhz < cfg_.meas.signal(o.sys, o.band).cn0_min_pr
             || !(cfg_.meas.lite ? eph_of_[i] != nullptr : hasEphemeris(o.sys, o.prn, in.tow_s)))
             continue;
         bool first = true;                // a satellite's first observation counts it

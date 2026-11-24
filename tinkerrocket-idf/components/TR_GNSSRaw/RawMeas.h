@@ -19,6 +19,18 @@
 namespace gnss_raw
 {
 
+// A signal's band. Every receiver's own signal of a system is its L1-band
+// one (GPS L1 C/A, Galileo E1, BeiDou B1I, GLONASS L1OF): band 0, what every
+// adapter gave before there was a band. A receiver that also tracks the L5
+// band (the PX1105R: GPS L5, Galileo E5a, BeiDou B2a, all on 1176.45 MHz) gives
+// those as band 1, beside the same satellite's band 0. Each band of a
+// satellite is a signal of its own wherever a signal's history is kept (its
+// lock, relock age, Doppler pair, rejects); the satellite itself -- its orbit,
+// its place in the cap, its pad corrections -- is one.
+static constexpr uint8_t kBandL1 = 0;
+static constexpr uint8_t kBandL5 = 1;
+static constexpr int     kBands  = 2;
+
 // One satellite's signal as the receiver reported it.
 struct RawObs
 {
@@ -32,6 +44,11 @@ struct RawObs
     uint32_t lock_ms;     // the receiver's minimum lock time, ms (0 if it gives none)
     bool     has_phase;   // a carrier phase (phase_m)
     bool     halfcyc;     // its half-cycle ambiguity unresolved (MSM7 DF420): it can step by half a cycle
+    // In halfcyc's padding, so the struct's size and every field's place are
+    // unchanged, and 0 / false for every adapter that sets neither:
+    uint8_t  band = kBandL1;   // kBandL1 or kBandL5 (above)
+    bool     pr_l1 = false;    // band 1 only: pr_m was moved onto its satellite's L1-band code (CodeBridge.h),
+                               // so it takes the L1-band signal's corrections and is fused as that code
     double   phase_m;     // the carrier phase as a range, m (MSM7: the rough range DF397 + DF398 plus the
                           // fine phase range DF406). It carries the receiver's own integer per lock: its
                           // changes are the measurement (RawMeasBuilder's carrier range rate)
@@ -102,6 +119,7 @@ struct RawMeas
     uint8_t prn;
     bool    has_pr;
     bool    has_rr;
+    uint8_t band = kBandL1;   // its signal's band (RawObs::band), in the padding before sat_pos
     double  sat_pos[3];   // m
     double  sat_vel[3];   // m/s
     double  sat_acc[3];   // m/s^2, to predict a late Doppler

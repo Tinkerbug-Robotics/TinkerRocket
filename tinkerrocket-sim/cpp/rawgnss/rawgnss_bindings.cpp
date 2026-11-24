@@ -523,7 +523,8 @@ PYBIND11_MODULE(_rawgnss, m)
         })
         .def("reset", &RawMeasBuilder::reset)
         .def("note_epoch", &RawMeasBuilder::noteEpoch)
-        .def("relock_age", &RawMeasBuilder::relockAge)
+        .def("relock_age", &RawMeasBuilder::relockAge, py::arg("sys"), py::arg("prn"), py::arg("tow"),
+             py::arg("band") = static_cast<int>(gnss_raw::kBandL1))   // a signal's band (RawObs::band): the L1 band's
         .def("build", [](RawMeasBuilder& b, const RawEpoch& ep, const EphemerisStore& store, py::object r_approx,
                          double g_peak) {
             double r[3];

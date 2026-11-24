@@ -823,7 +823,8 @@ bool dopplerVelocity(const RawMeas* m, int n, const double r[3], double v[3], do
     for (int i = 0; i < n && nr < RawEpoch::kMaxObs; ++i)
     {
         const RawMeas& mi = m[i];
-        if (!mi.has_rr || !(mi.sigma_rr > 0.0f))
+        // one row a satellite, its L1-band one: the fit's floors count satellites
+        if (!mi.has_rr || !(mi.sigma_rr > 0.0f) || mi.band != kBandL1)
             continue;
         float d[3] = {static_cast<float>(mi.sat_pos[0] - r[0]), static_cast<float>(mi.sat_pos[1] - r[1]),
                       static_cast<float>(mi.sat_pos[2] - r[2])};

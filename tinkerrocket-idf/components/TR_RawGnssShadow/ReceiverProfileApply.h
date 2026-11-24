@@ -39,7 +39,10 @@ inline int persistEpochs(double persist_s, double period_s)
 inline void applyReceiverProfile(const GnssReceiverProfile& p, RawMeasBuilder::Config& c)
 {
     for (int k = 0; k < kProfileSys; ++k)
+    {
         c.sig[k] = p.sig[k];
+        c.sig_l5[k] = p.sig_l5[k];
+    }
     c.pr_white_a = p.pr_white_a;
     c.pr_white_b = p.pr_white_b;
     c.pr_corr_a = p.pr_corr_a;
@@ -82,6 +85,7 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssEKFParams&
     e.p0_clk_drift = p.p0_clk_drift;
     e.p0_isb = p.p0_isb;
     e.rr_lag_s = p.rr_lag_s;
+    e.rr_lag_l5_s = p.rr_lag_l5_s;
     e.share_los = p.share_los;
     e.rr_float = p.rr_float;
     // the Dopplers in pairs: the mean of two raw_epoch_period_s apart is the
@@ -99,6 +103,7 @@ inline void applyReceiverProfile(const GnssReceiverProfile& p, RawGnssEKFParams&
     {
         e.cr_carrier_hz[k] = p.sig[k].carrier_hz;
         e.cr_half_cycle_unflagged[k] = p.sig[k].half_cycle_unflagged;
+        e.l5_carrier_hz[k] = p.sig_l5[k].carrier_hz;
     }
     // A refusal's let-in in time, not epochs: the Doppler counts every fused
     // epoch, the pseudorange only those it is fused on (pr_period_s)

@@ -502,6 +502,7 @@ struct MosaicDopplerCell
 {
     uint8_t  sys = 0;
     uint8_t  prn = 0;
+    uint8_t  band = gnss_raw::kBandL1;   // RawObs::band: a pair is one band's (the mosaic's: the L1 band's alone)
     bool     has_pr = false;
     bool     has_rate = false;
     float    cn0_dbhz = 0.0f;
@@ -521,6 +522,7 @@ struct MosaicDopplerPairConfig
 {
     uint32_t dt_ms = 50;                       // the receiver's epochs this far apart
     float    cn0_min[GNSS_SYS_COUNT] = {};     // dB-Hz by gnss_sys_t: the profile's cn0_min_rr, at both ends
+    float    cn0_min_l5[GNSS_SYS_COUNT] = {};  //   and its L5-band signals' (RawObs band 1)
     double   max_diff_mps = 15.0;              // the pair at most this far apart
 };
 
@@ -622,6 +624,7 @@ inline void dopplerSetFromRawEpoch(const gnss_raw::RawEpoch& e, int64_t rx_ms, M
         MosaicDopplerCell& c = set.c[set.n++];
         c.sys = o.sys;
         c.prn = o.prn;
+        c.band = o.band;
         c.has_pr = o.has_pr;
         c.has_rate = o.has_rate;
         c.cn0_dbhz = o.cn0_dbhz;
@@ -645,8 +648,12 @@ inline int averageDopplerPairs(gnss_raw::RawEpoch& e, int64_t rx_ms, bool clock_
     static_assert(gnss_raw::RawEpoch::kMaxObs <= 64, "the paired mask is 64 bits");
     if (paired != nullptr)
         *paired = 0;
-    auto floor_of = [&](uint8_t sys) { return sys < GNSS_SYS_COUNT ? c.cn0_min[sys] : 0.0f; };
-    auto usableAt = [&](int i) { return e.obs[i].has_rate && !(e.obs[i].cn0_dbhz < floor_of(e.obs[i].sys)); };
+    auto floor_of = [&](uint8_t sys, uint8_t band) {
+        return sys < GNSS_SYS_COUNT ? (band == gnss_raw::kBandL5 ? c.cn0_min_l5[sys] : c.cn0_min[sys]) : 0.0f;
+    };
+    auto usableAt = [&](int i) {
+        return e.obs[i].has_rate && !(e.obs[i].cn0_dbhz < floor_of(e.obs[i].sys, e.obs[i].band));
+    };
     int usable = 0;
     for (int i = 0; i < e.n; ++i)
         if (usableAt(i))
@@ -670,11 +677,11 @@ inline int averageDopplerPairs(gnss_raw::RawEpoch& e, int64_t rx_ms, bool clock_
     auto mateOf = [&](const gnss_raw::RawObs& o, const MosaicDopplerCell*& m) -> uint8_t {
         m = nullptr;
         for (int j = 0; j < prev.n && m == nullptr; ++j)
-            if (prev.c[j].sys == o.sys && prev.c[j].prn == o.prn)
+            if (prev.c[j].sys == o.sys && prev.c[j].prn == o.prn && prev.c[j].band == o.band)
                 m = &prev.c[j];
         if (m == nullptr || !m->has_rate)
             return kMate;
-        if (m->cn0_dbhz < floor_of(o.sys))
+        if (m->cn0_dbhz < floor_of(o.sys, o.band))
             return kCn0;
         if (o.lock_ms < m->lock_ms)
             return kLock;

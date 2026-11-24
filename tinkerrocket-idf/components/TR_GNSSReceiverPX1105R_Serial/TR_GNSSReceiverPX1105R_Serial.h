@@ -48,6 +48,7 @@
 #include <GnssTimeSync.h>      // TR_GNSSReceiverLC86_Serial: the clock line, shared
 #include <MosaicRawEpoch.h>    // TR_GNSSReceiverMosaic_Serial: the Doppler pairs' rule, shared
 #include <RawMeas.h>           // TR_GNSSRaw: gnss_raw::TimedRawEpoch
+#include <CodeBridge.h>        // TR_GNSSRaw: the L5-band codes moved onto the L1 band's (TR_RAW_L5)
 #include "gnss/eph.h"
 #include "Px1105rRawEpoch.h"
 #include "SkyTraqBinary.h"
@@ -297,6 +298,7 @@ class TR_GNSSReceiverPX1105RSerial : private skytraq::FrameSink
             gnss_raw::TimedRawEpoch scratch;
             px1105r::Px1105rLockState lock;
             skytraq::NavAssembler* nav = nullptr;   // its own block, PSRAM where there is some
+            gnss_raw::CodeBridge* bridge = nullptr; // TR_RAW_L5: the L5-band codes' (its own block, PSRAM)
             int8_t        iono_raw[8] = {};
             bool          iono_have = false;     // (under raw_mux_)
             uint16_t      iono_day = 0;

@@ -3929,7 +3929,10 @@ static __attribute__((noinline)) bool rawPairsStart(const gnss_raw::GnssReceiver
     mosaic::MosaicDopplerPairConfig pc;
     pc.dt_ms = (uint32_t)llround(rx.raw_epoch_period_s * 1000.0);
     for (int k = 0; k < GNSS_SYS_COUNT; ++k)
+    {
         pc.cn0_min[k] = rx.sig[k].cn0_min_rr;
+        pc.cn0_min_l5[k] = rx.sig_l5[k].cn0_min_rr;
+    }
     pc.max_diff_mps = rx.rr_pair_max_diff_mps;
     if (!sensor_collector.setGNSSRawDopplerPairing(pc))
     {

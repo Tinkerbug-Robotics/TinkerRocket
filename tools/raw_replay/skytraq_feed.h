@@ -40,6 +40,7 @@
 #include "GnssTimeSync.h"
 #include "MosaicRawEpoch.h"
 #include "Px1105rRawEpoch.h"
+#include "CodeBridge.h"
 #include "RawMeas.h"
 #include "ShadowLink.h"
 #include "SkyTraqBinary.h"
@@ -60,6 +61,8 @@ public:
         bool     pair = false;           // the Dopplers in pairs (the profile's rr_pair_avg)
         mosaic::MosaicDopplerPairConfig pair_cfg;
         bool     glonass = false;        // its GLONASS cells as well (px1105r::rawEpochFromE5's glonass)
+        bool     l5 = false;             // its L5-band cells as well (rawEpochFromE5's l5), their codes through
+                                         //   the driver's bridge (CodeBridge.h)
     };
 
     enum class Kind : uint8_t
@@ -183,7 +186,9 @@ private:
             for (int i = 0; i < e5_.n; ++i)   // each GLONASS slot's frequency number, as the driver notes it
                 if (e5_.cell[i].gnss == skytraq::kGnssGlo)
                     nav_.noteGloFreq(e5_.cell[i].svid, static_cast<int>(e5_.cell[i].glo_freq) - 7);
-        const int cells = px1105r::rawEpochFromE5(e5_, lock_, te.epoch, cfg_.glonass);
+        const int cells = px1105r::rawEpochFromE5(e5_, lock_, te.epoch, cfg_.glonass, cfg_.l5);
+        if (cfg_.l5)
+            bridge_.apply(te.epoch);   // every epoch, as the driver
         n_.cells_listed += e5_.n_listed;
         if (!on_grid)
         {
@@ -353,6 +358,7 @@ private:
     skytraq::ChannelSummary channels_;
     bool have_channels_ = false;
     px1105r::Px1105rLockState lock_;
+    gnss_raw::CodeBridge bridge_;   // cfg_.l5: the driver's (TR_RAW_L5)
     px1105r::Px1105rClock clk_;
     lc86::GnssTimeSync time_sync_;
     skytraq::NavAssembler nav_;

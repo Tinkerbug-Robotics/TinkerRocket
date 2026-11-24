@@ -42,6 +42,7 @@ void expectSameSignal(const GnssSignalProfile& a, const GnssSignalProfile& b)
     EXPECT_EQ(a.phase_sigma45_m, b.phase_sigma45_m);
     EXPECT_EQ(a.half_cycle_unflagged, b.half_cycle_unflagged);
     EXPECT_EQ(a.pr_fused, b.pr_fused);
+    EXPECT_EQ(a.rr_sigma_scale, b.rr_sigma_scale);
 }
 
 void expectSameBuilder(const RawMeasBuilder::Config& a, const RawMeasBuilder::Config& b)
@@ -53,7 +54,10 @@ void expectSameBuilder(const RawMeasBuilder::Config& a, const RawMeasBuilder::Co
     {
         SCOPED_TRACE(testing::Message() << "sys " << k);
         expectSameSignal(a.sig[k], b.sig[k]);
+        SCOPED_TRACE("its L5 band");
+        expectSameSignal(a.sig_l5[k], b.sig_l5[k]);
     }
+    EXPECT_EQ(a.bridge_sigma_m, b.bridge_sigma_m);
     EXPECT_EQ(a.pr_white_a, b.pr_white_a);
     EXPECT_EQ(a.pr_white_b, b.pr_white_b);
     EXPECT_EQ(a.pr_corr_a, b.pr_corr_a);
@@ -108,6 +112,9 @@ void expectSameEkf(const RawGnssEKFParams& a, const RawGnssEKFParams& b)
     EXPECT_EQ(a.drift_step_mps, b.drift_step_mps);
     EXPECT_EQ(a.drift_step_spread_mps, b.drift_step_spread_mps);
     EXPECT_EQ(a.rr_lag_s, b.rr_lag_s);
+    EXPECT_EQ(a.rr_lag_l5_s, b.rr_lag_l5_s);
+    for (int k = 0; k < gnss_raw::kProfileSys; ++k)
+        EXPECT_EQ(a.l5_carrier_hz[k], b.l5_carrier_hz[k]);
     EXPECT_EQ(a.rr_pair_lag_s, b.rr_pair_lag_s);
     EXPECT_EQ(a.rr_dyn_lag_s, b.rr_dyn_lag_s);
     EXPECT_EQ(a.rr_dyn_lag_g0, b.rr_dyn_lag_g0);
@@ -181,7 +188,11 @@ void expectSameShadowSettings(const RawGnssShadow::Config& a, const RawGnssShado
 void expectSameNumbers(const GnssReceiverProfile& a, const GnssReceiverProfile& b)
 {
     for (int k = 0; k < gnss_raw::kProfileSys; ++k)
+    {
         expectSameSignal(a.sig[k], b.sig[k]);
+        expectSameSignal(a.sig_l5[k], b.sig_l5[k]);
+    }
+    EXPECT_EQ(a.rr_lag_l5_s, b.rr_lag_l5_s);
     RawMeasBuilder::Config ca, cb;
     gnss_raw::applyReceiverProfile(a, ca);
     gnss_raw::applyReceiverProfile(b, cb);
@@ -227,15 +238,20 @@ void expectSameNumbers(const GnssReceiverProfile& a, const GnssReceiverProfile& 
 // (2026-11-22: GLONASS's slot, gnss_sys_t 4, grew the per-system arrays the
 // comparators already loop over -- sig[], cr_carrier_hz[],
 // cr_half_cycle_unflagged[] -- by one each; no field was added.)
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssEKFParams) == 552,
+// (2026-11-24: the L5 band -- GnssSignalProfile::rr_sigma_scale, the
+// profile's sig_l5[] and rr_lag_l5_s, the builder's sig_l5[] and
+// bridge_sigma_m, the EKF's rr_lag_l5_s and l5_carrier_hz[], each in its
+// comparator above; the shadow's Config grew only by the builder's and the
+// EKF's, which it holds: no field of its own.)
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssEKFParams) == 600,
               "RawGnssEKFParams changed: add the field to expectSameEkf, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawMeasBuilder::Config) == 368,
+static_assert(sizeof(void*) != 8 || sizeof(RawMeasBuilder::Config) == 616,
               "RawMeasBuilder::Config changed: add the field to expectSameBuilder, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 32,
+static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 40,
               "GnssSignalProfile changed: add the field to expectSameSignal, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 608,
+static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 856,
               "GnssReceiverProfile changed: add the field to expectSameNumbers, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 1920,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 2216,
               "RawGnssShadow::Config changed: pin the field in TheShadowSafeguardDefaultsAreTheBeetles, then update "
               "this size");
 

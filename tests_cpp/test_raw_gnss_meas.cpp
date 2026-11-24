@@ -211,6 +211,83 @@ TEST(RawGnssMeas, ASatelliteMissingLongerThanTheGapHasRelocked)
     EXPECT_DOUBLE_EQ(b.relockAge(GNSS_SYS_GPS, 7, 1.0), 2.0);
 }
 
+// The L5 band (RawObs band 1): a GPS satellite's L5-band signal beside its
+// L1-band one, both the golden epoch's, in the full build and the cheaper one.
+// As it comes, its Doppler is built (its own floor, its sigma the wavelength's
+// over the L1 band's) and its code is read for the transmit time alone; moved
+// onto the L1 band's code (CodeBridge.h, pr_l1) its code is fused as that:
+// the L1 band's corrections, bridge_sigma_m more.
+TEST(RawGnssMeas, AnL5BandSignalGivesItsDopplerAndOnlyAMovedCode)
+{
+    const auto eps = parseEpochs();
+    ASSERT_EQ(eps.size(), 2u);
+    const EphemerisStore store = storeAll();
+    for (bool lite : {false, true})
+    {
+        SCOPED_TRACE(lite ? "the cheaper build" : "the full build");
+        RawEpoch ep = eps[1];
+        int g = -1;
+        for (int i = 0; i < ep.n && g < 0; ++i)
+            if (ep.obs[i].sys == GNSS_SYS_GPS && ep.obs[i].has_pr && ep.obs[i].has_rate)
+                g = i;
+        ASSERT_GE(g, 0);
+        ASSERT_LE(ep.n + 2, RawEpoch::kMaxObs);
+        gnss_raw::RawObs l5 = ep.obs[g];
+        l5.band = gnss_raw::kBandL5;
+        l5.has_phase = false;
+        ep.obs[ep.n++] = l5;                   // as it came
+        l5.pr_l1 = true;
+        ep.obs[ep.n++] = l5;                   // moved (a second copy: the builder takes each as it is)
+        RawMeasBuilder::Config cfg;
+        cfg.doppler_step_hz = 1.0;
+        cfg.lite = lite;
+        cfg.rr_relock_sigma = 0.0;             // every signal new here: no relock terms in the sigmas
+        cfg.relock_sigma_m = 0.0;
+        RawMeasBuilder b(cfg);
+        RawMeas m[RawEpoch::kMaxObs];
+        const int n = b.build(ep, store, kGoldenRmRx, 0.0, m, RawEpoch::kMaxObs);
+        const RawMeas *m1 = nullptr, *m5 = nullptr, *m5m = nullptr;
+        for (int i = 0; i < n; ++i)
+            if (m[i].sys == GNSS_SYS_GPS && m[i].prn == ep.obs[g].prn)
+            {
+                if (m[i].band == gnss_raw::kBandL1)
+                    m1 = &m[i];
+                else if (m5 == nullptr)
+                    m5 = &m[i];
+                else
+                    m5m = &m[i];
+            }
+        ASSERT_NE(m1, nullptr);
+        ASSERT_NE(m5, nullptr);
+        ASSERT_NE(m5m, nullptr);
+        EXPECT_TRUE(m1->has_pr);
+        EXPECT_FALSE(m5->has_pr);              // its code never as it came
+        EXPECT_TRUE(m5m->has_pr);              // moved: the L1 band's sig.pr_fused
+        EXPECT_EQ(m5m->pr, m1->pr);            // the same code, the L1 band's corrections
+        EXPECT_TRUE(m5->has_rr);
+        EXPECT_EQ(m5->rr, m1->rr);             // the same rate in, the same clock drift added
+        for (int k = 0; k < 3; ++k)
+            EXPECT_EQ(m5->sat_pos[k], m1->sat_pos[k]);
+        // its Doppler's sigma: the model's times 1176.45 / 1575.42 the L1 band's, the 1 Hz step at its wavelength
+        const double cn0 = ep.obs[g].cn0_dbhz;
+        const double w = std::sqrt(cfg.rr_white_a * cfg.rr_white_a +
+                                   cfg.rr_white_b * cfg.rr_white_b * std::pow(10.0, -(cn0 - 35.0) / 10.0));
+        const double w5 = w * static_cast<double>(static_cast<float>(GNSS_FREQ_L1_HZ / GNSS_FREQ_L5_HZ));
+        const double s5 = std::hypot(w5, GNSS_C / GNSS_FREQ_L5_HZ / std::sqrt(12.0));
+        const double s1 = std::hypot(w, GNSS_C / GNSS_FREQ_L1_HZ / std::sqrt(12.0));
+        EXPECT_NEAR(m5->sigma_rr, s5 * cfg.rr_scale, 1e-5);
+        EXPECT_NEAR(m1->sigma_rr, s1 * cfg.rr_scale, 1e-5);
+        // the moved code's correlated sigma: bridge_sigma_m more, in quadrature
+        EXPECT_NEAR(m5m->sigma_pr_corr, std::hypot(static_cast<double>(m1->sigma_pr_corr), cfg.bridge_sigma_m), 1e-4);
+        EXPECT_EQ(m5->sigma_pr, m1->sigma_pr);
+        // its own floor: under the L5 band's, not built; the L1 band's untouched
+        cfg.sig_l5[GNSS_SYS_GPS].cn0_min_pr = static_cast<float>(cn0) + 1.0f;
+        RawMeasBuilder b2(cfg);
+        const int n2 = b2.build(ep, store, kGoldenRmRx, 0.0, m, RawEpoch::kMaxObs);
+        EXPECT_EQ(n2, n - 2);
+    }
+}
+
 TEST(RawGnssMeas, AGlonassSatelliteGivesItsDopplerNotItsCode)
 {
     // R11's broadcast set of 2026-11-21 (tb 16:15 UTC; gnss/eph.h's GLONASS layout), 866 s on: with the

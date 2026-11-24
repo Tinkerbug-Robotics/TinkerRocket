@@ -647,6 +647,102 @@ TEST(RawGnssEKF, PredictsADopplerThatLagsItsTag)
     EXPECT_GT(worst_g, 0.3);                  // ignored: the Doppler drags the velocity back 20 * 0.0555 m/s
 }
 
+TEST(RawGnssEKF, AnL5BandDopplerIsTakenAtItsOwnLag)
+{
+    // 2 g up. Each satellite's L1-band Doppler 25 ms before the tag, its
+    // L5-band one (RawMeas band 1, a Doppler only) 40 ms further back, as the
+    // PX1105R's on the RF rig (ReceiverProfile.h px1105rProfile, rr_lag_l5_s).
+    // A filter that knows the L5 band's extra lag takes every L5 row and holds
+    // the velocity; one that takes both bands at the L1 band's instant sees
+    // each L5 row up to 0.8 m/s off, and once its gate's persistence lets them
+    // in its vertical velocity is dragged.
+    const double a_ned[3] = {0.0, 0.0, -20.0};
+    const double lag = 0.025, lag5 = 0.040;
+    RawGnssEKFParams own = quietParams(), same = quietParams();
+    own.rr_lag_s = same.rr_lag_s = lag;
+    own.rr_lag_l5_s = lag5;
+    same.rr_lag_l5_s = 0.0;
+    RawGnssEKF<double> truth(own), f(own), g(same);
+    const double v0[3] = {0.0, 0.0, 0.0};
+    initLevel(truth, kLla0, v0);
+    initLevel(f, kLla0, v0);
+    initLevel(g, kLla0, v0);
+    const auto sky = makeSky(kLla0);
+    Clock clk;
+    double worst_f = 0.0, worst_g = 0.0;
+    const double still[3] = {0.0, 0.0, 0.0};
+    for (int e = 0; e < 8; ++e)
+    {
+        const double* acc = e == 0 ? still : a_ned;
+        imuSecond(truth, acc);
+        imuSecond(f, acc);
+        imuSecond(g, acc);
+        clk.tick(1.0);
+        double r[3], v[3], a[3];
+        truth.receiverEcef(r, v);
+        nedToEcef(truth.lla()[0], truth.lla()[1], acc, a);
+        auto m = measure(sky, r, v, clk, a, lag);
+        auto m5 = measure(sky, r, v, clk, a, lag + lag5);
+        for (RawMeas& x : m5)
+        {
+            x.band = gnss_raw::kBandL5;
+            x.has_pr = false;             // its code never fused as it came (CodeBridge.h)
+            m.push_back(x);
+        }
+        const RawGnssStats sf = f.updateGnssRaw(m.data(), static_cast<int>(m.size()));
+        const RawGnssStats sg = g.updateGnssRaw(m.data(), static_cast<int>(m.size()));
+        if (e >= 2)
+        {
+            worst_f = std::fmax(worst_f, std::fabs(f.velNed()[2] - truth.velNed()[2]));
+            worst_g = std::fmax(worst_g, std::fabs(g.velNed()[2] - truth.velNed()[2]));
+            EXPECT_EQ(sf.used_rr, static_cast<int>(m.size())) << e;   // both bands' Dopplers
+            EXPECT_EQ(sf.rejected_rr, 0) << e;
+            (void)sg;
+        }
+    }
+    EXPECT_LT(worst_f, 0.01);                 // the lags modelled: the truth's own Dopplers
+    EXPECT_GT(worst_g, 0.05);                 // ignored: the gate lets the L5 rows back in, dragging (0.09 m/s)
+}
+
+TEST(RawGnssEKF, AnL5BandRowsRefusalsAreItsOwn)
+{
+    // An L5-band row that keeps failing the gate is let back in after
+    // reject_persist of its own refusals, not its satellite's L1-band row's:
+    // the L1 rows of a clean sky keep passing while one satellite's L5 Doppler
+    // is 30 m/s off, and every L1 Doppler is used every epoch.
+    RawGnssEKFParams p = quietParams();
+    p.reject_persist_rr = 100;            // never let back in over this run
+    RawGnssEKF<double> truth(p), f(p);
+    const double v0[3] = {0.0, 0.0, 0.0};
+    initLevel(truth, kLla0, v0);
+    initLevel(f, kLla0, v0);
+    const auto sky = makeSky(kLla0);
+    Clock clk;
+    for (int e = 0; e < 6; ++e)
+    {
+        imuSecond(truth);
+        imuSecond(f);
+        clk.tick(1.0);
+        double r[3], v[3];
+        truth.receiverEcef(r, v);
+        auto m = measure(sky, r, v, clk);
+        const int n1 = static_cast<int>(m.size());
+        RawMeas bad = m[0];
+        bad.band = gnss_raw::kBandL5;
+        bad.has_pr = false;
+        bad.rr += 30.0;
+        m.push_back(bad);
+        const RawGnssStats st = f.updateGnssRaw(m.data(), static_cast<int>(m.size()));
+        if (e >= 1)
+        {
+            EXPECT_EQ(st.used_rr, n1) << e;   // every L1 Doppler, none of the bad L5 one
+            EXPECT_EQ(st.rejected_rr, 1) << e;
+        }
+    }
+    for (int i = 0; i < 3; ++i)
+        EXPECT_NEAR(f.velNed()[i], 0.0, 0.05);
+}
+
 TEST(RawGnssEKF, AnEpochInPairsTakesItsDopplersAtThePairsLag)
 {
     // The Dopplers in pairs (rr_pair_lag_s, setRrPaired): an epoch in pairs is

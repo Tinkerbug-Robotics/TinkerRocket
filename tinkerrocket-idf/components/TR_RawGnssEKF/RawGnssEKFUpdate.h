@@ -71,6 +71,9 @@ bool RawGnssEKF<T>::beginGnssRawAs(const RawMeas* m, int n, double age_s, RawGns
         const double b_e = clk_b_ - static_cast<double>(clk_d_) * age_s;
         for (int i = 0; i < n; ++i)
         {
+            // GPS, Galileo, BeiDou, either band: an L5-band row's Doppler carries
+            // the same clock drift, and its code is fused only moved onto its
+            // satellite's L1-band code (RawObs::pr_l1), which carries the same bias
             if (m[i].sys > GNSS_SYS_BDS)
                 continue;
             ekf_geom::Los L;
@@ -155,6 +158,15 @@ void RawGnssEKF<T>::updateGnssRawPartAs(const RawMeas* m, int i0, int i1, double
     T dp_e[3], dv_e[3], dp_l[3], dv_l[3];
     historyChange(age_s, dv_e, dp_e);
     historyChange(age_s + tau, dv_l, dp_l);
+    // an L5-band Doppler's own instant, rr_lag_l5_s further back (only where
+    // the part has such a row with a Doppler: none on an L1-only receiver)
+    const double tau5 = tau + p_.rr_lag_l5_s;
+    T dp_l5[3], dv_l5[3];
+    bool have_l5 = false;
+    for (int i = i0; i < i1 && !have_l5; ++i)
+        have_l5 = m[i].band == kBandL5 && m[i].has_rr;
+    if (have_l5 && p_.rr_lag_l5_s > 0.0)
+        historyChange(age_s + tau5, dv_l5, dp_l5);
     // lever_on: the antenna, not the IMU, at the epoch and the Doppler's instant
     LeverEpoch lv;
     if (p_.lever_on)
@@ -184,9 +196,11 @@ void RawGnssEKF<T>::updateGnssRawPartAs(const RawMeas* m, int i0, int i1, double
     for (int i = i0; i < i1; ++i)
     {
         const RawMeas& mi = m[i];
-        // GPS, Galileo, BeiDou; GLONASS's Dopplers (its pseudorange never comes: GnssSignalProfile::pr_fused)
-        if ((mi.sys > GNSS_SYS_BDS && mi.sys != GNSS_SYS_GLO) || mi.prn >= 64)
+        // GPS, Galileo, BeiDou; GLONASS's Dopplers (its pseudorange never comes: GnssSignalProfile::pr_fused);
+        // the L5 band's GPS, Galileo and BeiDou (rowKept)
+        if (!rowKept(mi))
             continue;
+        const bool l5 = mi.band == kBandL5;
         if ((!mi.has_pr || !fuse_pr_) && !mi.has_rr)
             continue;
         // The geometry once per satellite, at the state every satellite
@@ -227,7 +241,7 @@ void RawGnssEKF<T>::updateGnssRawPartAs(const RawMeas* m, int i0, int i1, double
             double pred_rate = 0.0;
             if constexpr (kShare)
             {
-                if (kind == 1 && rr_float)
+                if (kind == 1 && rr_float && !l5)
                 {
                     // rr_float (TR_RawGnssEKF.h): the receiver's part in NED, float
                     T vl[3];
@@ -236,7 +250,7 @@ void RawGnssEKF<T>::updateGnssRawPartAs(const RawMeas* m, int i0, int i1, double
                     pred_rate = rrFloat(L.u[0] * L.vs[0] + L.u[1] * L.vs[1] + L.u[2] * L.vs[2], u_ned, vl);
                 }
             }
-            if (kind == 1 && !rr_float)
+            if (kind == 1 && (!rr_float || l5))
             {
                 // the receiver's velocity as the pseudorange update left it,
                 // taken back to the Doppler's instant (a late Doppler: tau
@@ -247,7 +261,10 @@ void RawGnssEKF<T>::updateGnssRawPartAs(const RawMeas* m, int i0, int i1, double
                 for (int a = 0; a < 3; ++a)
                     vr[a] = Tm[0][a] * static_cast<double>(v_[0]) + Tm[1][a] * static_cast<double>(v_[1])
                           + Tm[2][a] * static_cast<double>(v_[2]);
-                const T* dv = tau > 0.0 ? dv_l : dv_e;
+                // an L5-band row at its own instant, rr_lag_l5_s further back
+                const bool own = l5 && p_.rr_lag_l5_s > 0.0;
+                const double tau_i = own ? tau5 : tau;
+                const T* dv = own ? dv_l5 : (tau > 0.0 ? dv_l : dv_e);
                 for (int a = 0; a < 3; ++a)
                     v_l[a] = vr[a] - (Tm[0][a] * static_cast<double>(dv[0]) + Tm[1][a] * static_cast<double>(dv[1])
                                       + Tm[2][a] * static_cast<double>(dv[2]));
@@ -255,16 +272,16 @@ void RawGnssEKF<T>::updateGnssRawPartAs(const RawMeas* m, int i0, int i1, double
                 Lr.rate = 0.0;
                 for (int a = 0; a < 3; ++a)
                     Lr.rate += L.u[a] * (L.vs[a] - v_l[a]);
-                pred_rate = tau > 0.0 ? Lr.rate - tau * (rr_paired_ ? pairAccel(i, mi, Lr, v_l)
-                                                                    : ekf_geom::satRangeAccel(mi, Lr, v_l))
-                                      : Lr.rate;
+                pred_rate = tau_i > 0.0 ? Lr.rate - tau_i * (rr_paired_ ? pairAccel(i, mi, Lr, v_l)
+                                                                        : ekf_geom::satRangeAccel(mi, Lr, v_l))
+                                        : Lr.rate;
             }
 
             int hidx[10];
             T hval[10];
             int hn = 0;
             T y, R;
-            const double dt_i = t_ - last_upd_[mi.sys][mi.prn][kind];
+            const double dt_i = t_ - lastUpdOf(mi, kind);
             if (kind == 0)
             {
                 for (int a = 0; a < 3; ++a)
@@ -311,7 +328,7 @@ void RawGnssEKF<T>::updateGnssRawPartAs(const RawMeas* m, int i0, int i1, double
                     hn = leverRows(u_ned, lv, hidx, hval, hn, R);
             }
 
-            uint8_t& rej = rejects_[mi.sys][mi.prn][kind];
+            uint8_t& rej = rejectOf(mi, kind);
             T gate = T(p_.gate_chi2);
             if (rej >= rejectPersist(kind))
             {
@@ -331,7 +348,7 @@ void RawGnssEKF<T>::updateGnssRawPartAs(const RawMeas* m, int i0, int i1, double
             {
                 inject(dx);
                 stabilize();
-                last_upd_[mi.sys][mi.prn][kind] = t_;
+                lastUpdOf(mi, kind) = t_;
                 rej = 0;
                 if (static_cast<float>(nis) > st.nis_max)
                     st.nis_max = static_cast<float>(nis);

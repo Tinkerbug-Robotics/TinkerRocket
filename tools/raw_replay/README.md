@@ -916,6 +916,16 @@ byte before and after, 2026-10-21: a V9 mosaic log and the Beetle's ec10).
   (SkyTraqNav.h), each slot's frequency number from the 0xE5, and files them as it files the others. The 11-21
   flight: the change check holds GLONASS's Dopplers with the rest through the burn and the coast; after it lets
   go, a third more Dopplers.
+- `--l5 1`: the PX1105R's L5-band cells as well (GPS L5, Galileo E5a, BeiDou B2a; Px1105rRawEpoch.h's `l5`, the
+  image's TR_RAW_L5), as band 1 beside each satellite's L1-band cell. Their Dopplers are fused at their own instant,
+  the profile's `rr_lag_l5_s` (40 ms) further back than the L1 band's; the vertical check, the boost screen and the
+  change check judge the L1-band rows alone. Their code is fused only where the satellite's L1-band code is gone,
+  moved onto it by the driver's bridge (TR_GNSSRaw/CodeBridge.h: each satellite's L5 - L1 difference kept while it
+  has both). `--rr-lag-l5-ms X` (offline only) puts X in place of the profile's L5 lag. The 11-21 flight with it:
+  116 more Dopplers on the pad, 8 in the burn, none in the coast (the change check held every Doppler, as flown, and
+  the receiver had lost the L5 band before the L1 band) and 4 after; the velocity against the PX100's own fix
+  unchanged (1.00 / 0.95 / 4.72 m/s rms N / E / D, T+8.95-14). With `--l5 0` (the default) every PX1105R replay is
+  byte-identical to the tree before it.
 
 Beside it:
 - `px_events.py`: a rig capture of the PX1105R (`<host_t> B <hex body>`) beside the same simulated flight's sensors

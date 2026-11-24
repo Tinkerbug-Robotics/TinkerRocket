@@ -121,6 +121,12 @@ if(DEFINED TR_RAW_GLONASS)
     add_compile_definitions(TR_RAW_GLONASS=${TR_RAW_GLONASS})
     message(STATUS "TR_RAW_GLONASS=${TR_RAW_GLONASS} -- GLONASS from the PX1105R set by hand")
 endif()
+# The L5 band from the PX1105R (main/config.h; off): -DTR_RAW_L5=1 hands its
+# GPS L5, Galileo E5a and BeiDou B2a cells to the raw-GNSS filter.
+if(DEFINED TR_RAW_L5)
+    add_compile_definitions(TR_RAW_L5=${TR_RAW_L5})
+    message(STATUS "TR_RAW_L5=${TR_RAW_L5} -- the L5 band from the PX1105R set by hand")
+endif()
 # Each satellite's other bands with its L1 band's Doppler (main/config.h; on in
 # the mosaic image): -DTR_RAW_MULTIBAND=0 flies the L1 band's Dopplers alone.
 if(DEFINED TR_RAW_MULTIBAND)

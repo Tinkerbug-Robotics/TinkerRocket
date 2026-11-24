@@ -20,6 +20,13 @@
 #ifndef TR_RAW_GLONASS
 #define TR_RAW_GLONASS 0
 #endif
+// The L5 band (TR_RAW_L5: flight_computer/CMakeLists.txt and main/config.h, off unless set): the 0xE5's GPS L5,
+// Galileo E5a and BeiDou B2a cells handed over beside the L1 band's (Px1105rRawEpoch.h l5), each L5-band code
+// moved onto its satellite's L1-band one where that is gone (CodeBridge.h, its own block). Off, the image is as
+// before.
+#ifndef TR_RAW_L5
+#define TR_RAW_L5 0
+#endif
 #include <cstdio>
 #include <cstring>
 #include <new>
@@ -644,6 +651,17 @@ bool TR_GNSSReceiverPX1105RSerial::enableRawOutputs()
     }
     r->nav = new (nav_mem) skytraq::NavAssembler();
     r->nav->reset();
+#if TR_RAW_L5
+    // the L5-band codes' bridge, PSRAM where there is some (a few KB, once an epoch); without it the L5
+    // band's codes are left as they come (never fused) and its Dopplers still go
+    void* br_mem = heap_caps_malloc(sizeof(gnss_raw::CodeBridge), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (br_mem == nullptr) br_mem = heap_caps_malloc(sizeof(gnss_raw::CodeBridge), MALLOC_CAP_8BIT);
+    if (br_mem != nullptr)
+        r->bridge = new (br_mem) gnss_raw::CodeBridge();
+    else
+        ESP_LOGW(TAG, "PX1105R raw: no memory for the L5 code bridge (%u B): L5-band codes never fused",
+                 static_cast<unsigned>(sizeof(gnss_raw::CodeBridge)));
+#endif
     r->st.enabled = true;
     raw_ = r;   // before begin(): the poll task does not exist yet
     ESP_LOGI(TAG, "PX1105R raw: outputs on -- %u epochs (%u B), %u ephemerides (%u B), %u B of state, "
@@ -758,7 +776,8 @@ void TR_GNSSReceiverPX1105RSerial::rawE5(const uint8_t* body, size_t len, int64_
         if (r.e5.cell[i].gnss == skytraq::kGnssGlo)
             r.nav->noteGloFreq(r.e5.cell[i].svid, static_cast<int>(r.e5.cell[i].glo_freq) - 7);
 #endif
-    const int cells = px1105r::rawEpochFromE5(r.e5, r.lock, e.epoch, TR_RAW_GLONASS != 0);
+    const int cells = px1105r::rawEpochFromE5(r.e5, r.lock, e.epoch, TR_RAW_GLONASS != 0, TR_RAW_L5 != 0);
+    if (r.bridge != nullptr) r.bridge->apply(e.epoch);   // every epoch: its differences kept at 20 Hz
     r.st.slips = r.lock.slips;
     if (!on_grid)
     {

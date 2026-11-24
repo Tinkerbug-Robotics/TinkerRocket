@@ -619,6 +619,16 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 #if defined(TR_RAW_GLONASS) && TR_RAW_GLONASS && !TR_RAW_NAV_PX1105R
 #error "TR_RAW_GLONASS needs the PX1105R's raw-GNSS filter (TR_RAW_NAV_PX1105R=1): only its driver asks for GLONASS"
 #endif
+// The L5 band from the PX1105R (2026-11-24, branch fc/px1105r-dual-band): its
+// GPS L5, Galileo E5a and BeiDou B2a cells handed over beside the L1 band's
+// (Px1105rRawEpoch.h l5), each satellite's L5-band Doppler fused at its own
+// instant (rr_lag_l5_s), and its L5-band code fused only where its L1-band
+// code is gone, moved onto the L1 band's (CodeBridge.h). -DTR_RAW_L5=1 turns
+// it on. Like TR_RAW_GLONASS, no default #define here: the PX1105R driver
+// reads 0 where it is not set, and the M1 image sees no new macro.
+#if defined(TR_RAW_L5) && TR_RAW_L5 && !TR_RAW_NAV_PX1105R
+#error "TR_RAW_L5 needs the PX1105R's raw-GNSS filter (TR_RAW_NAV_PX1105R=1): only its driver hands the L5 band over"
+#endif
 
 #ifndef TR_RAW_MULTIBAND
 #define TR_RAW_MULTIBAND TR_RAW_NAV_MOSAIC

@@ -85,12 +85,28 @@ TR_RAW_GNSS_UPDATE_EXTERN(double)
 #undef TR_RAW_GNSS_UPDATE_EXTERN
 
 template <typename T>
-RawGnssEKF<T>::RawGnssEKF(const RawGnssEKFParams& p)
+void RawGnssEKF<T>::clearRejectArrays()
 {
-    setParams(p);
+    std::memset(rejects_, 0, sizeof(rejects_));
+    std::memset(rejects_l5_, 0, sizeof(rejects_l5_));
+}
+
+template <typename T>
+void RawGnssEKF<T>::neverUpdated()
+{
     for (int s = 0; s < GNSS_SYS_COUNT; ++s)
         for (int k = 0; k < 64; ++k)
             last_upd_[s][k][0] = last_upd_[s][k][1] = kNever;
+    for (int s = 0; s < kL5Sys; ++s)
+        for (int k = 0; k < 64; ++k)
+            last_upd_l5_[s][k][0] = last_upd_l5_[s][k][1] = kNever;
+}
+
+template <typename T>
+RawGnssEKF<T>::RawGnssEKF(const RawGnssEKFParams& p)
+{
+    setParams(p);
+    neverUpdated();
 }
 
 template <typename T>
@@ -135,7 +151,7 @@ void RawGnssEKF<T>::setImuFree(bool on)
         if (P_[kPos + a][kPos + a] < pfloor)
             P_[kPos + a][kPos + a] = pfloor;
     // what the gate refused under the IMU's state is judged afresh
-    std::memset(rejects_, 0, sizeof(rejects_));
+    clearRejectArrays();
 }
 
 template <typename T>
@@ -156,7 +172,7 @@ void RawGnssEKF<T>::reanchorVelocity(const double dv_ned[3], double dclk_mps, T 
     for (int a = 0; a < 3; ++a)
         if (P_[kPos + a][kPos + a] < pfloor)
             P_[kPos + a][kPos + a] = pfloor;
-    std::memset(rejects_, 0, sizeof(rejects_));
+    clearRejectArrays();
 }
 
 template <typename T>
@@ -213,10 +229,8 @@ void RawGnssEKF<T>::init(const double lla[3], const T v_ned[3], const T q[4], do
 
     hhead_ = hn_ = 0;
     hopen_ = t0;
-    std::memset(rejects_, 0, sizeof(rejects_));
-    for (int s = 0; s < GNSS_SYS_COUNT; ++s)
-        for (int k = 0; k < 64; ++k)
-            last_upd_[s][k][0] = last_upd_[s][k][1] = kNever;
+    clearRejectArrays();
+    neverUpdated();
     // the carrier: no receiver kept, nothing screened
     cr_cur_.valid = cr_prev_.valid = false;
     cr_ninfo_ = cr_nfuse_ = 0;
@@ -358,7 +372,7 @@ void RawGnssEKF<T>::releaseVelocity(T sigma)
 template <typename T>
 void RawGnssEKF<T>::clearRejects()
 {
-    std::memset(rejects_, 0, sizeof(rejects_));
+    clearRejectArrays();
 }
 
 template <typename T>

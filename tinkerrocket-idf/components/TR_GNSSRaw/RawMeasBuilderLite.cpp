@@ -39,14 +39,16 @@ int64_t RawMeasBuilder::litePeriodOf(double tow_s, double period_s)
 
 // The C/N0's part of the noise: sigma_pr, and the correlated code's and the
 // Doppler's before their relock and stress terms.
-void RawMeasBuilder::liteNoise(const Config& c, double cn0, double carrier_hz, float& sigma_pr, double& s_corr,
-                               double& s_rr2)
+void RawMeasBuilder::liteNoise(const Config& c, double cn0, const GnssSignalProfile& sig, float& sigma_pr,
+                               double& s_corr, double& s_rr2)
 {
     // the three sigma^2 = a^2 + b^2 * 10^(-(C/N0 - 35)/10) on one exp
     const double q = std::exp(kNegLn10Over10 * (cn0 - 35.0));
     double s_rr = std::sqrt(c.rr_white_a * c.rr_white_a + c.rr_white_b * c.rr_white_b * q);
+    if (sig.rr_sigma_scale != 1.0f)
+        s_rr *= static_cast<double>(sig.rr_sigma_scale);   // the band's wavelength (GnssSignalProfile)
     if (c.doppler_step_hz != 0.0)
-        s_rr = std::hypot(s_rr, GNSS_C / carrier_hz * c.doppler_step_hz / std::sqrt(12.0));
+        s_rr = std::hypot(s_rr, GNSS_C / sig.carrier_hz * c.doppler_step_hz / std::sqrt(12.0));
     s_corr = std::sqrt(c.pr_corr_a * c.pr_corr_a + c.pr_corr_b * c.pr_corr_b * q) * c.pr_corr_scale;
     s_rr2 = s_rr * c.rr_scale;
     sigma_pr = static_cast<float>(std::sqrt(c.pr_white_a * c.pr_white_a + c.pr_white_b * c.pr_white_b * q));
@@ -73,7 +75,9 @@ void RawMeasBuilder::liteSigmas(const Config& c, double cn0, double age_s, doubl
                                 float& sigma_pr, float& sigma_pr_corr, float& sigma_rr)
 {
     double s_corr, s_rr2;
-    liteNoise(c, cn0, carrier_hz, sigma_pr, s_corr, s_rr2);
+    GnssSignalProfile sig;
+    sig.carrier_hz = carrier_hz;
+    liteNoise(c, cn0, sig, sigma_pr, s_corr, s_rr2);
     liteRelock(c, age_s, g_over, s_corr, s_rr2, sigma_pr_corr, sigma_rr);
 }
 
@@ -170,7 +174,7 @@ bool RawMeasBuilder::liteObs(const RawEpoch& ep, const EphemerisStore& eph, cons
     const RawObs& o = ep.obs[i];
     if (!o.has_pr || o.sys >= kSys || o.prn >= kPrn)
         return false;
-    if (o.cn0_dbhz < cfg_.sig[o.sys].cn0_min_pr)   // the receiver's signal of that system
+    if (o.cn0_dbhz < cfg_.signal(o.sys, o.band).cn0_min_pr)   // the receiver's signal of that system and band
         return false;
     // each ephemeris keeps its own system's time: BeiDou runs 14 s behind GPS
     const double to_sys = o.sys == GNSS_SYS_BDS ? kBdtMinusGpst : 0.0;
@@ -271,7 +275,7 @@ int RawMeasBuilder::satSlotLite(const gps_eph_t& e, int sys, int prn, double t_s
                 slot = i;
         }
         lite_[slot].atmo_k = -1;
-        lite_[slot].sig_cn0 = -1.0f;
+        lite_[slot].sig_cn0[0] = lite_[slot].sig_cn0[1] = -1.0f;
     }
     // as satState() solves it
     const double t_tx = t_sv - gps_sat_clock(&e, t_sv);
@@ -427,7 +431,12 @@ int RawMeasBuilder::nextLite(const RawEpoch& ep, const EphemerisStore& eph, cons
         double t_sv = 0.0;
         if (!liteObs(ep, eph, eph_of, i, e, t_sv))
             continue;
-        const GnssSignalProfile& sig = cfg_.sig[o.sys];   // the receiver's signal of that system
+        const GnssSignalProfile& sig = cfg_.signal(o.sys, o.band);   // the receiver's signal of that system and band
+        // the atmosphere on the L1 band's carrier whatever the band: the slot's
+        // kept one is its satellite's, and an L5-band code is fused only moved
+        // onto the L1 band's (RawObs::pr_l1)
+        const GnssSignalProfile& sig_atm = cfg_.sig[o.sys];
+        const int b = o.band == kBandL5 ? 1 : 0;
 
         // its orbit: kept, or solved -- where the epoch's solves are held to
         // lite_solves (spread), one that must be solved to be built in its
@@ -473,7 +482,7 @@ int RawMeasBuilder::nextLite(const RawEpoch& ep, const EphemerisStore& eph, cons
             LiteSat& a = lite_[slot];
             if (!(cfg_.atmo_period_s > 0.0 && a.atmo_k == lite_k_ && a.atmo_gen == iono_gen_
                   && !(cfg_.carrier && o.has_phase)))
-                atmoLite(sig, rs, c.vel, ep.tow_s, a);
+                atmoLite(sig_atm, rs, c.vel, ep.tow_s, a);
             if (a.el < el_mask_)
                 continue;
             if (!lite_zen_)
@@ -492,27 +501,33 @@ int RawMeasBuilder::nextLite(const RawEpoch& ep, const EphemerisStore& eph, cons
         RawMeas& m = out[n++];
         m.sys = o.sys;
         m.prn = o.prn;
+        m.band = o.band;
         for (int k = 0; k < 3; ++k)
         {
             m.sat_pos[k] = rs[k];
             m.sat_vel[k] = c.vel[k] + c.acc[k] * dt;
             m.sat_acc[k] = c.acc[k];
         }
-        m.has_pr = sig.pr_fused;   // false: read for the transmit time alone (GnssSignalProfile::pr_fused)
+        // false: read for the transmit time alone (GnssSignalProfile::pr_fused); an L5-band code moved onto
+        // the L1 band's as that band's
+        const bool moved = b == 1 && o.pr_l1;
+        m.has_pr = moved ? sig_atm.pr_fused : sig.pr_fused;
         m.pr = o.pr_m + corr;
         m.has_rr = o.has_rate && !(o.cn0_dbhz < sig.cn0_min_rr);
         m.rr = m.has_rr ? o.rate_mps + GNSS_C * c.clk_rate - trop_rate : 0.0;
-        // the noise: its C/N0 part as the satellite's last epoch had it where
+        // the noise: its C/N0 part as the signal's last epoch had it where
         // its C/N0 is the same (three times in four at 10 Hz)
         LiteSat& a = lite_[slot];
-        if (!(a.sig_cn0 == o.cn0_dbhz))
+        if (!(a.sig_cn0[b] == o.cn0_dbhz))
         {
-            liteNoise(cfg_, static_cast<double>(o.cn0_dbhz), sig.carrier_hz, a.sig_pr, a.sig_corr, a.sig_rr2);
-            a.sig_cn0 = o.cn0_dbhz;
+            liteNoise(cfg_, static_cast<double>(o.cn0_dbhz), sig, a.sig_pr[b], a.sig_corr[b], a.sig_rr2[b]);
+            a.sig_cn0[b] = o.cn0_dbhz;
         }
-        m.sigma_pr = a.sig_pr;
-        liteRelock(cfg_, relockAge(o.sys, o.prn, ep.tow_s), g_over_, a.sig_corr, a.sig_rr2, m.sigma_pr_corr,
-                   m.sigma_rr);
+        m.sigma_pr = a.sig_pr[b];
+        liteRelock(cfg_, relockAge(o.sys, o.prn, ep.tow_s, o.band), g_over_, a.sig_corr[b], a.sig_rr2[b],
+                   m.sigma_pr_corr, m.sigma_rr);
+        if (moved && cfg_.bridge_sigma_m > 0.0)
+            m.sigma_pr_corr = static_cast<float>(std::hypot(static_cast<double>(m.sigma_pr_corr), cfg_.bridge_sigma_m));
         m.tau_pr = static_cast<float>(cfg_.pr_tau_s);
         m.tau_rr = static_cast<float>(cfg_.rr_tau_s);
 

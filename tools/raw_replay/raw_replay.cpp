@@ -264,6 +264,8 @@ struct Args
                                      //   arrivals (the firmware's), or on the events file's K line (an ideal tag)
     bool px_glonass = false;         // --glonass 1: the PX1105R's GLONASS L1OF Dopplers as well (Px1105rRawEpoch.h),
                                      //   their orbits from --rinex (the flown image takes none)
+    bool px_l5 = false;              // --l5 1: the PX1105R's L5-band cells as well (GPS L5, Galileo E5a, BeiDou B2a:
+                                     //   Px1105rRawEpoch.h l5, CodeBridge.h), as the image's TR_RAW_L5
     bool px_seed_locks = false;      // --px-seed-locks 1: a warm start (S lines) of a PX1105R log seeds its first epochs'
                                      //   satellites as long locked, as the LC86G's restored start does (the flight's
                                      //   filter had held them since the pad); without it each enters as relocked, its
@@ -308,6 +310,7 @@ struct Args
     double rr_pair_sigma = -1.0;     //   offline only: each averaged Doppler's sigma scaled by this (no firmware path)
     bool sim_fuse_grid = false;      // a sim's epochs (X) cut to the fused grid as the driver cuts the receiver's
     double rr_lag_ms = -1.0;         // offline only: the filter's rr_lag_s in place of the profile's, ms (-1: the profile's)
+    double rr_lag_l5_ms = -1.0;      // offline only: its rr_lag_l5_s (the L5 band's further lag, --l5), ms (-1: the profile's)
     bool sim_pair_exact = false;     // offline only, a sim with --truth-nav: each averaged Doppler made the range rate
                                      //   at the pair's middle exactly (the truth's second-order term taken out)
     // offline only (a RAW_REPLAY_MULTIBAND build, --receiver mosaic on an SBF log; no firmware path): each
@@ -565,6 +568,7 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--px-latency-ms") a.px_latency_ms = std::atof(val());
         else if (k == "--px-tag") a.px_tag = val();
         else if (k == "--glonass") a.px_glonass = std::atoi(val()) != 0;
+        else if (k == "--l5") a.px_l5 = std::atoi(val()) != 0;
         else if (k == "--px-seed-locks") a.px_seed_locks = std::atoi(val()) != 0;
         else if (k == "--cold-start") a.cold_start = true;
         else if (k == "--sdr-latency-ms") a.sdr_latency_ms = std::atof(val());
@@ -635,6 +639,7 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--rr-pair-sigma") a.rr_pair_sigma = std::atof(val());
         else if (k == "--sim-fuse-grid") a.sim_fuse_grid = true;
         else if (k == "--rr-lag-ms") a.rr_lag_ms = std::atof(val());
+        else if (k == "--rr-lag-l5-ms") a.rr_lag_l5_ms = std::atof(val());
         else if (k == "--sim-pair-exact") a.sim_pair_exact = true;
         else if (k == "--rr-multiband") a.rr_multiband = std::atoi(val());
         else if (k == "--rr-mb-bands") a.rr_mb_bands = val();
@@ -2127,6 +2132,8 @@ int main(int argc, char** argv)
     // an experiment on the Doppler's instant: the filter's rr_lag_s in place of the profile's (offline only)
     if (a.rr_lag_ms >= 0.0)
         cfg.ekf.rr_lag_s = a.rr_lag_ms * 1.0e-3;
+    if (a.rr_lag_l5_ms >= 0.0)
+        cfg.ekf.rr_lag_l5_s = a.rr_lag_l5_ms * 1.0e-3;
     // an experiment on the filter's own parameter: the Doppler's refusal count before it is let back in (the
     // profile sets it from reject_persist_s; a field of the fc/v9-raw-primary tree, as the mosaic path's)
 #if RAW_REPLAY_MOSAIC
@@ -2524,7 +2531,10 @@ int main(int argc, char** argv)
     fcfg.pair = rx.rr_pair_avg;
     fcfg.pair_cfg.dt_ms = static_cast<uint32_t>(std::llround(rx.raw_epoch_period_s * 1000.0));
     for (int k = 0; k < GNSS_SYS_COUNT; ++k)
+    {
         fcfg.pair_cfg.cn0_min[k] = rx.sig[k].cn0_min_rr;
+        fcfg.pair_cfg.cn0_min_l5[k] = rx.sig_l5[k].cn0_min_rr;
+    }
     fcfg.pair_cfg.max_diff_mps = rx.rr_pair_max_diff_mps;
     // a sim's epochs (X) take the same rule here: the ones between the grid's read for their Dopplers only
     const bool sim_grid = a.sim_fuse_grid || rx.rr_pair_avg;
@@ -2568,7 +2578,9 @@ int main(int argc, char** argv)
         int u = 0;
         for (int i = 0; i < ep.n; ++i)
             if (ep.obs[i].has_rate && !(ep.obs[i].sys < GNSS_SYS_COUNT &&
-                                        ep.obs[i].cn0_dbhz < fcfg.pair_cfg.cn0_min[ep.obs[i].sys]))
+                                        ep.obs[i].cn0_dbhz < (ep.obs[i].band == gnss_raw::kBandL5
+                                                                  ? fcfg.pair_cfg.cn0_min_l5[ep.obs[i].sys]
+                                                                  : fcfg.pair_cfg.cn0_min[ep.obs[i].sys])))
                 u++;
         return u;
     };
@@ -2916,6 +2928,7 @@ int main(int argc, char** argv)
     pcfg.pair = fcfg.pair;
     pcfg.pair_cfg = fcfg.pair_cfg;
     pcfg.glonass = a.px_glonass;
+    pcfg.l5 = a.px_l5;
     std::unique_ptr<rr::SkyTraqFeed> pxfeedp(new rr::SkyTraqFeed(pcfg));
     rr::SkyTraqFeed& pxfeed = *pxfeedp;
     std::unique_ptr<skytraq::FrameParser> stqp(new skytraq::FrameParser());
@@ -3823,16 +3836,22 @@ int main(int argc, char** argv)
             for (int i = 0; i < te.epoch.n; ++i)
             {
                 const RawObs& o = te.epoch.obs[i];
-                if (o.sys >= GNSS_SYS_COUNT || o.prn >= 64 || b.seen_[o.sys][o.prn])
+                // each band's signal its own (the L5 band's: --l5)
+                const bool l5 = o.band == gnss_raw::kBandL5;
+                if (o.sys >= GNSS_SYS_COUNT || o.prn >= 64 || (l5 && o.sys > GNSS_SYS_BDS))
                     continue;
-                b.seen_[o.sys][o.prn] = true;
-                b.first_[o.sys][o.prn] = te.epoch.tow_s - 600.0;
+                bool& seen = l5 ? b.seen_l5_[o.sys][o.prn] : b.seen_[o.sys][o.prn];
+                if (seen)
+                    continue;
+                seen = true;
+                (l5 ? b.first_l5_ : b.first_)[o.sys][o.prn] = te.epoch.tow_s - 600.0;
                 // seen an epoch ago: the LC86G's 1 s, or within a faster receiver's relock gap (the PX1105R's
                 // 0.5 s, where 1 s back reads as a dropout and relocks it at once)
-                b.last_[o.sys][o.prn] = te.epoch.tow_s - std::min(1.0, 0.5 * b.config().relock_gap_s);
+                (l5 ? b.last_l5_ : b.last_)[o.sys][o.prn] = te.epoch.tow_s - std::min(1.0, 0.5 * b.config().relock_gap_s);
                 const double t_prev = te.mcu_us * 1e-6 - 0.85;
-                f.last_upd_[o.sys][o.prn][0] = t_prev;
-                f.last_upd_[o.sys][o.prn][1] = t_prev;
+                double* lu = l5 ? f.last_upd_l5_[o.sys][o.prn] : f.last_upd_[o.sys][o.prn];
+                lu[0] = t_prev;
+                lu[1] = t_prev;
             }
         }
         // handed over as the flight computer did: when its filter closed this epoch (the logged
