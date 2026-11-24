@@ -197,8 +197,10 @@ def test_the_lc86g_profile_is_the_bound_defaults():
     p = rg.lc86g_profile()
     assert p.name == "LC86G" and p.measured and p.type == rg.RX_LC86G
     assert p.cr_mode == rg.CARRIER_OBSERVE and p.cr_half_cycle == rg.HALF_CYCLE_REJECT
-    assert [s.cn0_min_cr for s in p.sig] == [32.5, 35.0, 32.5, 32.5]
-    assert [s.half_cycle_unflagged for s in p.sig] == [True, False, True, True]
+    # GPS, Galileo, BeiDou, QZSS, then GLONASS's slot (gnss_sys_t 4): GnssSignalProfile's own, as every profile
+    # but the PX1105R's leaves it
+    assert [s.cn0_min_cr for s in p.sig] == [32.5, 35.0, 32.5, 32.5, 0.0]
+    assert [s.half_cycle_unflagged for s in p.sig] == [True, False, True, True, True]
     assert p.sig[rg.SYS_GPS].phase_sigma(40.0) == pytest.approx(math.sqrt(0.0045 * 0.0014), rel=1e-5)
     # applied, the builder's and the filter's defaults: what they flew with, and the carrier's
     b0, b1 = rg.BuilderConfig(), rg.BuilderConfig()
