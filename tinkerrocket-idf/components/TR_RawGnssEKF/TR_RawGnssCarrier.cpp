@@ -266,7 +266,7 @@ int RawGnssEKF<T>::beginCarrier(const RawMeas* m, int n, double age_s, RawGnssSt
     for (int i = 0; i < n && k < RawEpoch::kMaxObs; ++i)
     {
         const RawMeas& mi = m[i];
-        if (!mi.has_cr || mi.sys > GNSS_SYS_BDS || mi.prn >= 64)
+        if (!mi.has_cr || mi.sys > GNSS_SYS_BDS || mi.prn >= 64 || mi.band != kBandL1)
             continue;
         st.cr_built++;
         CarrierInfo& c = cr_info_[k++];
@@ -716,7 +716,9 @@ void RawGnssEKF<T>::screenRangeRates(const RawMeas* m, int n, double age_s, RawG
     for (int i = 0; i < n; ++i)
     {
         const RawMeas& mi = m[i];
-        if (mi.sys > GNSS_SYS_BDS || mi.prn >= 64 || !mi.has_rr)
+        // the L1 band's GPS, Galileo and BeiDou: one instant an epoch here (an
+        // L5-band Doppler is rr_lag_l5_s further back: the update's alone)
+        if (mi.sys > GNSS_SYS_BDS || mi.prn >= 64 || !mi.has_rr || mi.band != kBandL1)
             continue;
         Los L;
         if (share)
@@ -1005,7 +1007,9 @@ int RawGnssEKF<T>::dopplerChange(const RawMeas* m, int n, double age_s, const Do
     for (int i = 0; i < n; ++i)
     {
         const RawMeas& mi = m[i];
-        if (mi.sys > GNSS_SYS_BDS || mi.prn >= 64 || !mi.has_rr)
+        // the L1 band's GPS, Galileo and BeiDou: one instant an epoch here (an
+        // L5-band Doppler is rr_lag_l5_s further back: the update's alone)
+        if (mi.sys > GNSS_SYS_BDS || mi.prn >= 64 || !mi.has_rr || mi.band != kBandL1)
             continue;
         Los L;
         if (share)
@@ -1102,7 +1106,7 @@ void RawGnssEKF<T>::losFill(const RawMeas* m, int n, double te, const double r[3
         S.sys[i] = mi.sys;
         S.prn[i] = mi.prn;
         S.sx[i] = mi.sat_pos[0];
-        S.ok[i] = mi.sys <= GNSS_SYS_BDS;
+        S.ok[i] = mi.sys <= GNSS_SYS_BDS || mi.sys == GNSS_SYS_GLO;   // GLONASS's for its Dopplers
         if (!S.ok[i])
             continue;
         Los L;

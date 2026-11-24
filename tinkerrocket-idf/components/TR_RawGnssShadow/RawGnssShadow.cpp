@@ -1434,7 +1434,8 @@ void RawGnssShadow::applyWindup(double age)
     {
         RawMeas& m = built_.meas[i];
         const int sys = m.sys < kProfileSys ? m.sys : 0;
-        const double lam = GNSS_C / cfg_.ekf.cr_carrier_hz[sys];
+        // its own band's wavelength: an L5-band Doppler winds up 1.339 times an L1 one
+        const double lam = GNSS_C / (m.band == kBandL5 ? cfg_.ekf.l5_carrier_hz[sys] : cfg_.ekf.cr_carrier_hz[sys]);
         if (m.has_rr)
         {
             double c = -windup::rollRate(lam, k, wd[0]);

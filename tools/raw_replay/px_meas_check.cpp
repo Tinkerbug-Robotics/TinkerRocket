@@ -160,7 +160,10 @@ int main(int argc, char** argv)
     pc.pair = xmode ? false : rx.rr_pair_avg;
     pc.pair_cfg.dt_ms = static_cast<uint32_t>(std::llround(rx.raw_epoch_period_s * 1000.0));
     for (int k = 0; k < GNSS_SYS_COUNT; ++k)
+    {
         pc.pair_cfg.cn0_min[k] = rx.sig[k].cn0_min_rr;
+        pc.pair_cfg.cn0_min_l5[k] = rx.sig_l5[k].cn0_min_rr;
+    }
     pc.pair_cfg.max_diff_mps = rx.rr_pair_max_diff_mps;
     std::unique_ptr<rr::SkyTraqFeed> feedp(new rr::SkyTraqFeed(pc));
     rr::SkyTraqFeed& feed = *feedp;

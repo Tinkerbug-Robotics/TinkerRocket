@@ -186,6 +186,12 @@ struct RawGnssEKFParams
     // The Doppler is the range rate this long before the epoch's tag (LC86G
     // MSM7, fitted against the rig's truth in boost and coast, 2026-10-12)
     double rr_lag_s       = 0.0555;
+    // An L5-band Doppler (RawMeas band 1) is the range rate this much further
+    // back again (the receiver profile's rr_lag_l5_s): the update predicts
+    // each such row at its own instant. The vertical check, the boost screen
+    // and the change check, which take one instant an epoch, judge the L1-band
+    // rows alone. 0: as an L1-band one.
+    double rr_lag_l5_s    = 0.0;
     // An epoch whose Dopplers are pairs' means (the mosaic-G5's Dopplers in
     // pairs: setRrPaired) has them this much further back again: the pair's
     // middle, half the receiver's period (the receiver profile's
@@ -379,8 +385,12 @@ struct RawGnssEKFParams
     uint8_t cr_half_cycle       = kHalfCycleReject;  // HalfCycleAction
     // each system's carrier (its wavelength), and whether its half-cycle
     // steps can come unflagged (gnss_sys_t: GPS, Galileo, BeiDou, QZSS)
-    double  cr_carrier_hz[kProfileSys] = {GNSS_FREQ_L1_HZ, GNSS_FREQ_L1_HZ, 1561.098e6, GNSS_FREQ_L1_HZ};
-    bool    cr_half_cycle_unflagged[kProfileSys] = {true, false, true, true};
+    double  cr_carrier_hz[kProfileSys] = {GNSS_FREQ_L1_HZ, GNSS_FREQ_L1_HZ, 1561.098e6, GNSS_FREQ_L1_HZ, GNSS_FREQ_L1_HZ};
+    bool    cr_half_cycle_unflagged[kProfileSys] = {true, false, true, true, true};
+    // each system's L5-band carrier (RawMeas band 1): its Dopplers' wavelength, for the wind-up
+    // (RawGnssShadow) -- GPS L5, Galileo E5a and BeiDou B2a all at 1176.45 MHz
+    double  l5_carrier_hz[kProfileSys] = {GNSS_FREQ_L5_HZ, GNSS_FREQ_L5_HZ, GNSS_FREQ_L5_HZ, GNSS_FREQ_L5_HZ,
+                                          GNSS_FREQ_L5_HZ};
 };
 
 // RawGnssEKFParams::hdg_obs_mode
@@ -998,9 +1008,43 @@ private:
     int    hn_ = 0;
     double hopen_ = 0.0;      // start of the newest entry's span
 
-    // per satellite (gnss_sys_t x PRN) and kind (0 pseudorange, 1 range rate)
-    uint8_t rejects_[3][64][2] = {};
-    double  last_upd_[3][64][2] = {};
+    // per satellite (gnss_sys_t x PRN) and kind (0 pseudorange, 1 range rate): every system's slot,
+    // GLONASS's (its Dopplers) included
+    uint8_t rejects_[GNSS_SYS_COUNT][64][2] = {};
+    double  last_upd_[GNSS_SYS_COUNT][64][2] = {};
+    // and an L5-band signal's (RawMeas band 1: GPS, Galileo and BeiDou only),
+    // apart from its satellite's L1-band one: its own refusals and its own
+    // correlated noise's time
+    static constexpr int kL5Sys = GNSS_SYS_BDS + 1;
+    uint8_t rejects_l5_[kL5Sys][64][2] = {};
+    double  last_upd_l5_[kL5Sys][64][2] = {};
+    // a row's slot in those (row(): false for one the filter keeps none for)
+    static bool rowKept(const RawMeas& m)
+    {
+        if (m.prn >= 64)
+            return false;
+        if (m.band == kBandL5)
+            return m.sys < kL5Sys;
+        return m.band == kBandL1 && (m.sys <= GNSS_SYS_BDS || m.sys == GNSS_SYS_GLO);
+    }
+    uint8_t& rejectOf(const RawMeas& m, int kind)
+    {
+        return m.band == kBandL5 ? rejects_l5_[m.sys][m.prn][kind] : rejects_[m.sys][m.prn][kind];
+    }
+    uint8_t rejectOf(const RawMeas& m, int kind) const
+    {
+        return m.band == kBandL5 ? rejects_l5_[m.sys][m.prn][kind] : rejects_[m.sys][m.prn][kind];
+    }
+    double& lastUpdOf(const RawMeas& m, int kind)
+    {
+        return m.band == kBandL5 ? last_upd_l5_[m.sys][m.prn][kind] : last_upd_[m.sys][m.prn][kind];
+    }
+    double lastUpdOf(const RawMeas& m, int kind) const
+    {
+        return m.band == kBandL5 ? last_upd_l5_[m.sys][m.prn][kind] : last_upd_[m.sys][m.prn][kind];
+    }
+    void clearRejectArrays();   // every refusal count to 0, both bands
+    void neverUpdated();        // every signal's last update to never, both bands
 
     // The carrier range rate (above). A receiver snapshot: where the filter
     // put the receiver at an epoch (ECEF), and the corrections since, NED, as

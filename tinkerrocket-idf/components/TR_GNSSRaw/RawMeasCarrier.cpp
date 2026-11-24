@@ -23,7 +23,9 @@ void RawMeasBuilder::carrierRate(const RawObs& o, const GnssSignalProfile& sig, 
     m.cr_dphi_m = 0.0;
     for (int k = 0; k < 3; ++k)
         m.sat_pos_prev[k] = 0.0;
-    if (!cfg_.carrier || !o.has_phase)
+    // the L1 band's alone: the atmosphere the builder hands over is on its
+    // carrier (an L5-band row's code takes the L1 band's, RawMeasBuilder.h)
+    if (!cfg_.carrier || !o.has_phase || o.band != kBandL1)
         return;
     // the phase range corrected as the code is, but for the ionosphere's sign
     // (it advances the phase)
@@ -35,6 +37,7 @@ void RawMeasBuilder::carrierRate(const RawObs& o, const GnssSignalProfile& sig, 
         CarrierEnd& e = cr_end_[cr_side_ ^ 1][ncur++];
         e.sys = o.sys;
         e.prn = o.prn;
+        e.band = o.band;
         e.halfcyc = o.halfcyc;
         e.model = cr_model_;
         e.cn0 = o.cn0_dbhz;
@@ -49,7 +52,7 @@ void RawMeasBuilder::carrierRate(const RawObs& o, const GnssSignalProfile& sig, 
     for (int i = 0; i < cr_n_[cr_side_]; ++i)
     {
         const CarrierEnd& e = cr_end_[cr_side_][i];
-        if (e.sys == o.sys && e.prn == o.prn)
+        if (e.sys == o.sys && e.prn == o.prn && e.band == o.band)
         {
             p = &e;
             break;

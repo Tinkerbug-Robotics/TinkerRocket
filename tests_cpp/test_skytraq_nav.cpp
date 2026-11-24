@@ -632,9 +632,266 @@ TEST(SkyTraqNav, StatusNames)
 
 TEST(SkyTraqNav, Footprint)
 {
-    // Fixed tables for GPS 1-32, Galileo 1-36 and BeiDou 6-58: ~11 KB.
-    EXPECT_LT(sizeof(NavAssembler), 12u * 1024u);
+    // Fixed tables for GPS 1-32, Galileo 1-36, BeiDou 6-58 and GLONASS 1-24: ~13 KB.
+    EXPECT_LT(sizeof(NavAssembler), 14u * 1024u);
     std::printf("[ info ] sizeof(NavAssembler) = %zu bytes\n", sizeof(NavAssembler));
+}
+
+// ── GLONASS strings (0xE1) ──────────────────────────────────────────────────
+// No capture holds one from this receiver yet (the flight setups asked for
+// 0x0D), so these strings are built here from a real broadcast set by the
+// ICD's layout, as RTKLIB reads the SkyTraq message: R11's tb 19:15 Moscow
+// (16:15 UTC) of 2026-11-21 from BRDC00WRD_S_20263250000_01D_MN.rnx, its
+// fields as the broadcast's integers. The first bench capture with GLONASS
+// asked for (TR_RAW_GLONASS) is what pins the message itself.
+namespace glo {
+
+constexpr int    kSlot = 11;
+constexpr int    kTb = 77;                       // 19:15 Moscow, 16:15 UTC
+constexpr int    kWeek = 2445;
+constexpr double kToeSow = 576918.0;             // 16:15:00 UTC + 18 s, Saturday
+constexpr double kToeGps = kWeek * 604800.0 + kToeSow;
+// x, y, z (2^-11 km), x', y', z' (2^-20 km/s), x'', y'', z'' (2^-30 km/s^2)
+constexpr int64_t kPos[3] = {-2450555, -39833043, 33750705};
+constexpr int64_t kVel[3] = {971951, 2158190, 2616399};
+constexpr int64_t kAcc[3] = {0, -2, -3};
+constexpr int64_t kTauN = 2005;                  // 2^-30 s (RINEX's -TauN -1.867301762104e-06)
+constexpr int64_t kGammaN = 1;                   // 2^-40 (RINEX's 9.094947017729e-13)
+
+void putsm(uint8_t* b, size_t pos, int len, int64_t v)
+{
+    setbitu(b, pos, 1, v < 0 ? 1u : 0u);
+    setbitu(b, pos + 1, len - 1, static_cast<uint32_t>(v < 0 ? -v : v));
+}
+
+struct Set
+{
+    int slot = kSlot, tb = kTb, bn = 0, ln = 0;
+    uint8_t s[4][9] = {};
+    void build()
+    {
+        std::memset(s, 0, sizeof s);
+        // string 1: -- 2, P1 2, tk 12, x' 24, x'' 5, x 27 (tk 16:14:30 UTC + 3 h)
+        setbitu(s[0], 4, 5, 19);
+        setbitu(s[0], 9, 6, 14);
+        setbitu(s[0], 15, 1, 1);
+        putsm(s[0], 16, 24, kVel[0]);
+        putsm(s[0], 40, 5, kAcc[0]);
+        putsm(s[0], 45, 27, kPos[0]);
+        // string 2: Bn 3, P2 1, tb 7, -- 5, y' 24, y'' 5, y 27
+        setbitu(s[1], 0, 3, static_cast<uint32_t>(bn));
+        setbitu(s[1], 4, 7, static_cast<uint32_t>(tb));
+        putsm(s[1], 16, 24, kVel[1]);
+        putsm(s[1], 40, 5, kAcc[1]);
+        putsm(s[1], 45, 27, kPos[1]);
+        // string 3: P3 1, gamma_n 11, -- 1, P 2, l_n 1, z' 24, z'' 5, z 27
+        putsm(s[2], 1, 11, kGammaN);
+        setbitu(s[2], 15, 1, static_cast<uint32_t>(ln));
+        putsm(s[2], 16, 24, kVel[2]);
+        putsm(s[2], 40, 5, kAcc[2]);
+        putsm(s[2], 45, 27, kPos[2]);
+        // string 4: tau_n 22, dtau_n 5, E_n 5, -- 14, P4 1, F_T 4, -- 3, N_T 11, n 5, M 2
+        putsm(s[3], 0, 22, kTauN);
+        setbitu(s[3], 47, 4, 2);
+        setbitu(s[3], 54, 11, 326);
+        setbitu(s[3], 65, 5, static_cast<uint32_t>(slot));
+        setbitu(s[3], 70, 2, 1);
+    }
+    // string m (1-4) as an 0xE1 body; svid as the message numbers it (slot + 64)
+    std::vector<uint8_t> body(int m, int svid = kSlot + 64) const
+    {
+        std::vector<uint8_t> b = {kNavIdGlo, static_cast<uint8_t>(svid), static_cast<uint8_t>(m)};
+        b.insert(b.end(), s[m - 1], s[m - 1] + 9);
+        return b;
+    }
+};
+
+// strings 1-4 of one frame, 2 s apart from t: the last one's status
+NavStatus frame(NavAssembler& nav, const Set& g, double t, gps_eph_t& eph, int svid = kSlot + 64)
+{
+    int8_t iono[8];
+    NavStatus st = NavStatus::NOT_NAV;
+    for (int m = 1; m <= 4; ++m)
+    {
+        const auto b = g.body(m, svid);
+        st = nav.add(b.data(), b.size(), kWeek, eph, iono, t > 0.0 ? t + 2.0 * (m - 1) : 0.0);
+        if (m < 4)
+            EXPECT_EQ(st, NavStatus::PART) << "string " << m;
+    }
+    return st;
+}
+
+}  // namespace glo
+
+TEST(SkyTraqNav, GlonassStringsGiveTheBroadcastSet)
+{
+    NavAssembler nav;
+    nav.noteGloFreq(glo::kSlot, 0);
+    glo::Set g;
+    g.build();
+    gps_eph_t eph{};
+    ASSERT_EQ(glo::frame(nav, g, glo::kToeGps + 900.0, eph), NavStatus::EPHEMERIS);
+    EXPECT_EQ(eph.valid, 1);
+    EXPECT_EQ(eph.sys, GNSS_SYS_GLO);
+    EXPECT_EQ(eph.prn, glo::kSlot);
+    EXPECT_EQ(eph.week, glo::kWeek);
+    EXPECT_DOUBLE_EQ(eph.toe, glo::kToeSow);
+    EXPECT_DOUBLE_EQ(eph.toc, glo::kToeSow);
+    EXPECT_EQ(eph.iode, glo::kTb);
+    EXPECT_EQ(eph.health, 0);
+    EXPECT_EQ(eph.glo_k, 0);
+    EXPECT_EQ(eph.ura, 2);
+    // the broadcast's integers exactly, and the file's own numbers as far as
+    // it prints them (RINEX: -TauN, +GammaN; km, km/s, km/s^2, 13 digits)
+    EXPECT_DOUBLE_EQ(eph.af0, -static_cast<double>(glo::kTauN) * std::ldexp(1.0, -30));
+    EXPECT_DOUBLE_EQ(eph.af1, static_cast<double>(glo::kGammaN) * std::ldexp(1.0, -40));
+    EXPECT_NEAR(eph.af0, -1.867301762104e-06, 1e-17);
+    EXPECT_NEAR(eph.af1, 9.094947017729e-13, 1e-25);
+    EXPECT_DOUBLE_EQ(eph.af2, 0.0);
+    EXPECT_DOUBLE_EQ(eph.tgd, 0.0);
+    const double pos_km[3] = {-1.196560058594e+03, -1.944972802734e+04, 1.647983642578e+04};
+    const double vel_kms[3] = {9.269247055054e-01, 2.058210372925e+00, 2.495192527771e+00};
+    const double acc_kms2[3] = {0.0, -1.862645149231e-09, -2.793967723846e-09};
+    for (int k = 0; k < 3; ++k)
+    {
+        EXPECT_DOUBLE_EQ(eph.glo_pos[k], glo::kPos[k] * std::ldexp(1.0, -11) * 1e3) << k;
+        EXPECT_DOUBLE_EQ(eph.glo_vel[k], glo::kVel[k] * std::ldexp(1.0, -20) * 1e3) << k;
+        EXPECT_DOUBLE_EQ(eph.glo_acc[k], glo::kAcc[k] * std::ldexp(1.0, -30) * 1e3) << k;
+        EXPECT_NEAR(eph.glo_pos[k], pos_km[k] * 1e3, 1e-4) << k;
+        EXPECT_NEAR(eph.glo_vel[k], vel_kms[k] * 1e3, 1e-8) << k;
+        EXPECT_NEAR(eph.glo_acc[k], acc_kms2[k] * 1e3, 1e-15) << k;
+    }
+    EXPECT_EQ(nav.counters().frames[GNSS_SYS_GLO], 4u);
+    EXPECT_EQ(nav.counters().ephemerides[GNSS_SYS_GLO], 1u);
+    EXPECT_EQ(nav.counters().issues[GNSS_SYS_GLO], 1u);
+
+    // Placed by gnss/eph.h against an independent integration of the same set
+    // (Python, RK4 60 s, the ICD's equations: the scratch check that put the
+    // PX100's GLONASS Dopplers within 0.1-0.4 m/s of the receiver's drift on
+    // the 11-21 pad), 866 s ahead and 600 s back.
+    double p[3], v[3], clk;
+    gps_sat_pos(&eph, glo::kToeSow + 866.0, p, v, &clk);
+    const double p866[3] = {-271626.2885067952, -17591299.13916104, 18486217.94369201};
+    const double v866[3] = {1210.1558311875726, 2222.801432723715, 2131.5333449968216};
+    for (int k = 0; k < 3; ++k)
+    {
+        EXPECT_NEAR(p[k], p866[k], 0.01) << k;
+        EXPECT_NEAR(v[k], v866[k], 1e-5) << k;
+    }
+    EXPECT_NEAR(clk, -1.8665141396922646e-06, 1e-15);
+    EXPECT_NEAR(gps_sat_clock(&eph, glo::kToeSow + 866.0), clk, 1e-15);
+    gps_sat_pos(&eph, glo::kToeSow - 600.0, p, nullptr, nullptr);
+    const double pm600[3] = {-1695336.4804111046, -20640621.754261263, 14913783.746104088};
+    for (int k = 0; k < 3; ++k)
+        EXPECT_NEAR(p[k], pm600[k], 0.01) << k;
+
+    // the next frame repeats the issue: returned again, not a new issue
+    ASSERT_EQ(glo::frame(nav, g, glo::kToeGps + 930.0, eph), NavStatus::EPHEMERIS);
+    EXPECT_EQ(nav.counters().ephemerides[GNSS_SYS_GLO], 2u);
+    EXPECT_EQ(nav.counters().issues[GNSS_SYS_GLO], 1u);
+    // and the store takes it
+    gnss_raw::EphemerisStore store;
+    EXPECT_TRUE(store.add(eph));
+    EXPECT_NE(store.select(GNSS_SYS_GLO, glo::kSlot, glo::kToeSow + 866.0), nullptr);
+}
+
+TEST(SkyTraqNav, GlonassTbOnTheDayNearestTheReceiversTime)
+{
+    // tb 23:45 Moscow (20:45 UTC) heard just after midnight UTC: the day before
+    NavAssembler nav;
+    glo::Set g;
+    g.tb = 95;
+    g.build();
+    gps_eph_t eph{};
+    const double day0 = std::floor((glo::kToeGps - kGpsMinusUtcS) / 86400.0) * 86400.0;
+    ASSERT_EQ(glo::frame(nav, g, day0 + 86400.0 + 600.0 + kGpsMinusUtcS, eph), NavStatus::EPHEMERIS);
+    EXPECT_DOUBLE_EQ(eph.week * 604800.0 + eph.toe, day0 + 20.75 * 3600.0 + kGpsMinusUtcS);
+    // tb 00:15 Moscow (21:15 UTC the day before) heard at 21:20 UTC
+    g.tb = 1;
+    g.build();
+    NavAssembler nav2;
+    ASSERT_EQ(glo::frame(nav2, g, day0 + 21.0 * 3600.0 + 1200.0 + kGpsMinusUtcS, eph), NavStatus::EPHEMERIS);
+    EXPECT_DOUBLE_EQ(eph.week * 604800.0 + eph.toe, day0 + 21.25 * 3600.0 + kGpsMinusUtcS);
+}
+
+TEST(SkyTraqNav, GlonassWaitsForTheReceiversTime)
+{
+    NavAssembler nav;
+    glo::Set g;
+    g.build();
+    gps_eph_t eph{};
+    EXPECT_EQ(glo::frame(nav, g, 0.0, eph), NavStatus::NO_TIME);
+    EXPECT_EQ(nav.counters().ephemerides[GNSS_SYS_GLO], 0u);
+    // the next frame, with the time: complete
+    EXPECT_EQ(glo::frame(nav, g, glo::kToeGps + 960.0, eph), NavStatus::EPHEMERIS);
+}
+
+TEST(SkyTraqNav, GlonassRefusals)
+{
+    glo::Set g;
+    g.build();
+    gps_eph_t eph{};
+    int8_t iono[8];
+    const double t = glo::kToeGps + 900.0;
+    {
+        // strings of two frames: 1-3 forty seconds before string 4
+        NavAssembler nav;
+        for (int m = 1; m <= 3; ++m)
+        {
+            const auto b = g.body(m);
+            EXPECT_EQ(nav.add(b.data(), b.size(), glo::kWeek, eph, iono, t), NavStatus::PART);
+        }
+        const auto b4 = g.body(4);
+        EXPECT_EQ(nav.add(b4.data(), b4.size(), glo::kWeek, eph, iono, t + 40.0), NavStatus::FRAME_MISMATCH);
+    }
+    {
+        // string 4 names another slot
+        NavAssembler nav;
+        glo::Set h = g;
+        h.slot = 12;
+        h.build();
+        EXPECT_EQ(glo::frame(nav, h, t, eph), NavStatus::SVID_MISMATCH);
+    }
+    {
+        // a slot given as it is (not + 64) is taken; outside 1-24 is not
+        NavAssembler nav;
+        EXPECT_EQ(glo::frame(nav, g, t, eph, glo::kSlot), NavStatus::EPHEMERIS);
+        for (int svid : {0, 64, 64 + 25, 25})
+        {
+            const auto b = g.body(1, svid);
+            EXPECT_EQ(nav.add(b.data(), b.size(), glo::kWeek, eph, iono, t), NavStatus::BAD_PRN) << svid;
+        }
+    }
+    {
+        // string 0 is no string; string 5 and the almanac's are not needed; short
+        NavAssembler nav;
+        auto b = g.body(1);
+        b[2] = 0;
+        EXPECT_EQ(nav.add(b.data(), b.size(), glo::kWeek, eph, iono, t), NavStatus::BAD_SUBFRAME);
+        b[2] = 5;
+        EXPECT_EQ(nav.add(b.data(), b.size(), glo::kWeek, eph, iono, t), NavStatus::UNUSED);
+        b[2] = 15;
+        EXPECT_EQ(nav.add(b.data(), b.size(), glo::kWeek, eph, iono, t), NavStatus::UNUSED);
+        EXPECT_EQ(nav.add(b.data(), kNavGloLen - 1, glo::kWeek, eph, iono, t), NavStatus::SHORT);
+        EXPECT_TRUE(isNavMessage(b.data(), b.size()));
+    }
+    {
+        // Bn's malfunction bit, and l_n: unhealthy
+        NavAssembler nav;
+        glo::Set h = g;
+        h.bn = 4;
+        h.build();
+        ASSERT_EQ(glo::frame(nav, h, t, eph), NavStatus::EPHEMERIS);
+        EXPECT_EQ(eph.health, 1);
+        h.bn = 0;
+        h.ln = 1;
+        h.build();
+        ASSERT_EQ(glo::frame(nav, h, t + 30.0, eph), NavStatus::EPHEMERIS);
+        EXPECT_EQ(eph.health, 2);
+        gnss_raw::EphemerisStore store;
+        store.add(eph);
+        EXPECT_EQ(store.select(GNSS_SYS_GLO, glo::kSlot, glo::kToeSow), nullptr);   // unhealthy: not placed
+    }
 }
 
 // ── The whole 09-26 capture (TR_SKYTRAQ_NAV_CAPTURE) ─────────────────────────

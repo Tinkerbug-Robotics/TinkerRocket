@@ -239,6 +239,7 @@ bool decodeRawE5(const uint8_t* b, size_t len, RawE5& out)
         c.sig = static_cast<uint8_t>(r[0] >> 4);
         c.svid = r[1];
         c.lock_ind = static_cast<uint8_t>(r[2] >> 4);
+        c.glo_freq = static_cast<uint8_t>(r[2] & 0x0F);
         c.cn0 = r[3];
         c.pr_m = beF64(r + 4);
         c.carrier_cyc = beF64(r + 12);

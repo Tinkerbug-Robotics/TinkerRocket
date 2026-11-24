@@ -1,4 +1,4 @@
-// SkyTraqNav.h — the PX1105R's forwarded navigation data (0xE0 GPS LNAV subframes, 0xE2 BeiDou D1 subframes, 0xE6 Galileo I/NAV page pairs) assembled into gps_eph_t ephemerides and the GPS Klobuchar ionosphere (pure, host-compilable)
+// SkyTraqNav.h — the PX1105R's forwarded navigation data (0xE0 GPS LNAV subframes, 0xE2 BeiDou D1 subframes, 0xE6 Galileo I/NAV page pairs, 0xE1 GLONASS strings) assembled into gps_eph_t ephemerides and the GPS Klobuchar ionosphere (pure, host-compilable)
 //
 // Unlike the LC86G (RTCM 1019/1046/1042) and the mosaic-G5 (GPSNav/GALNav/
 // BDSNav), the PX1105R does not send decoded ephemerides: it forwards each
@@ -38,9 +38,15 @@
 //     (their seconds of week 6 s apart): the first after 36 s for a strong
 //     satellite, but 2-8 min for a weak one, which seldom gives three clean
 //     subframes in a row (C11 348 s, C27 474 s).
+//   - GLONASS on string 4, once strings 1-3 are held, all four within
+//     kGloFrameS of the receiver's time (they are the first 8 s of each 30 s
+//     frame): only with the receiver's GPS time given (add's gps_s), which
+//     places tb's day. GLONASS strings come only where the receiver is asked
+//     for them (the 0x1E subframe mask's bit 1, SkyTraqLink).
 // Each completion returns the ephemeris again; EphemerisStore::add ignores a
 // repeat (same IODE and toe). counters().issues counts the new ones. A new
-// issue: GPS every 2 h, Galileo every 10 min, BeiDou every hour.
+// issue: GPS every 2 h, Galileo every 10 min, BeiDou every hour, GLONASS
+// every 30 min.
 //
 // What is refused, and why:
 //   - GPS at a cutover: IODE (subframe 2), IODE (subframe 3) and IODC's low
@@ -55,7 +61,21 @@
 //     place (RTKLIB has D2 as 0xE3, not taken). The 0xE2's PRN + 200 in a
 //     byte cannot number C56-C63 at all; none came on 09-26;
 //   - BeiDou subframes 1-3 not of one frame, or toc != toe (the prototype's
-//     same-issue check: only subframe 1 carries the AODE).
+//     same-issue check: only subframe 1 carries the AODE);
+//   - GLONASS strings 1-4 not within kGloFrameS of one another (two frames,
+//     perhaps two issues), string 4's slot not the message's, a slot outside
+//     1-24; a complete set while the receiver's time is unknown (NO_TIME: the
+//     strings are kept, and the next string 4 completes it).
+//
+// GLONASS (ICD L1/L2 FDMA 5.1, as RTKLIB rcvraw.c decode_glostr reads the
+// strings): into gps_eph_t as gnss/eph.h lays a GLONASS set out -- its state
+// at tb (PZ-90.11, km to m: x 2^-11 km, x' 2^-20 km/s, x'' 2^-30 km/s^2,
+// sign-magnitude), af0 = -tau_n (2^-30 s), af1 = +gamma_n (2^-40), toe = toc =
+// tb as GPS seconds of week: tb (15 min steps of the Moscow day, UTC + 3 h)
+// placed on the UTC day within 12 h of the receiver's time, then + 18 s (GPS -
+// UTC since 2017); week its GPS week; iode = iodc = tb's index; health
+// (Bn's top bit: a malfunction) | (l_n << 1), 0 usable; glo_k the frequency
+// number the 0xE5 cells give the slot (noteGloFreq), 0 until one has.
 //
 // Message layouts (as the prototype and RTKLIB skytraq.c read them; every
 // frame of the 09-26 capture, bench-backups/px1105r_outdoor_20hz_1200s_
@@ -72,6 +92,13 @@
 //                Galileo (3) E1-B (0), the I/NAV the prototype decodes; the
 //                PX1105R also tracks E5a, whose F/NAV pages are another format
 //                (none came on 09-26: all 3121 0xE6 were 0x03).
+//   0xE1 (12 B)  [1] slot + 64 (a slot 1-24 is also taken as it is)  [2] the
+//                string number  [3..11] the string's 72 data bits (ICD bits
+//                80-9, MSB first: no idle bit, string number or Hamming code),
+//                as RTKLIB skytraq.c decode_stqglo reads them. Strings 1-4
+//                taken, 5 and the almanac's UNUSED. NOT YET SEEN FROM THIS
+//                RECEIVER: no capture held a 0xE1 (the flight setups asked for
+//                0x0D); the first bench capture with GLONASS asked for pins it.
 // The PRN/SVID byte, the subframe ID and the Galileo word type are read from
 // the message; the GPS subframe ID from the HOW (it equals [2] on 09-26).
 //
@@ -84,6 +111,7 @@
 #include <cstdint>
 
 #include "gnss/eph.h"
+#include "gnss/types.h"
 
 namespace skytraq
 {
@@ -93,14 +121,19 @@ namespace skytraq
 static constexpr uint8_t kNavIdGps     = 0xE0;
 static constexpr uint8_t kNavIdBdsD1   = 0xE2;
 static constexpr uint8_t kNavIdGnss    = 0xE6;
+static constexpr uint8_t kNavIdGlo     = 0xE1;
 static constexpr uint8_t kNavGnssGalE1 = 0x03;   // 0xE6 [2]: Galileo, E1-B (I/NAV)
 static constexpr size_t  kNavGpsLen    = 33;
 static constexpr size_t  kNavBdsLen    = 31;
 static constexpr size_t  kNavGalLen    = 37;
+static constexpr size_t  kNavGloLen    = 12;
+static constexpr double  kGloFrameS    = 12.0;   // strings 1-4 of one 30 s frame come within 8 s
+static constexpr double  kGpsMinusUtcS = 18.0;   // leap seconds since 2017-01-01
 
 // A body (from its message ID on, after A0 A1 and the length, before the
-// checksum) that NavAssembler::add takes: an 0xE0, an 0xE2, or an 0xE6 of
-// sub-type 0x03 (Galileo I/NAV on E1-B). Lengths are add()'s to check.
+// checksum) that NavAssembler::add takes: an 0xE0, an 0xE2, an 0xE6 of
+// sub-type 0x03 (Galileo I/NAV on E1-B), or an 0xE1 (a GLONASS string).
+// Lengths are add()'s to check.
 bool isNavMessage(const uint8_t* payload, size_t len);
 
 enum class NavStatus : uint8_t
@@ -110,19 +143,20 @@ enum class NavStatus : uint8_t
     IONO,            // iono[8] holds the GPS Klobuchar parameters (subframe 4 page 18)
     UNUSED,          // a good message with nothing needed here: GPS subframes 4-5 but page 18,
                      //   Galileo word types 0 and 6-63, BeiDou subframes 4-5
-    NOT_NAV,         // not an 0xE0, 0xE2 or 0xE6 of sub-type 0x03
+    NOT_NAV,         // not an 0xE0, 0xE2, 0xE1 or 0xE6 of sub-type 0x03
     SHORT,           // shorter than its message's length
-    BAD_PRN,         // outside GPS 1-32, Galileo 1-36, BeiDou 1-63
+    BAD_PRN,         // outside GPS 1-32, Galileo 1-36, BeiDou 1-63, GLONASS slots 1-24
     GEO,             // a BeiDou GEO (1-5, 59-63)
     BAD_PREAMBLE,    // GPS TLM not 0x8B; BeiDou word 1 not 11100010010
-    BAD_SUBFRAME,    // GPS HOW subframe ID not 1-5; BeiDou [2] not 1-5, or not word 1's FraID
+    BAD_SUBFRAME,    // GPS HOW subframe ID not 1-5; BeiDou [2] not 1-5, or not word 1's FraID; GLONASS string 0
     BAD_PAGE,        // Galileo: not an even page then an odd one
     ALERT_PAGE,      // Galileo alert page
     CRC_FAIL,        // Galileo CRC-24Q
     IOD_MISMATCH,    // GPS IODE2, IODE3 and IODC & 0xFF disagree; Galileo IODnav of words 1-4 differ
-    FRAME_MISMATCH,  // BeiDou subframes 1-3 not of one frame, or toc != toe
-    SVID_MISMATCH,   // Galileo word 4's SVID is not the page's satellite
+    FRAME_MISMATCH,  // BeiDou subframes 1-3 not of one frame, or toc != toe; GLONASS strings 1-4 not
+    SVID_MISMATCH,   // Galileo word 4's SVID is not the page's satellite; GLONASS string 4's slot
     NO_WEEK,         // GPS complete but near_gps_week unknown (<= 0): held for takePending()
+    NO_TIME,         // GLONASS complete but the receiver's GPS time unknown (gps_s <= 0): strings kept
     COUNT
 };
 
@@ -130,12 +164,12 @@ enum class NavStatus : uint8_t
 const char* navStatusName(NavStatus s);
 
 // Counters for a status line. Indices of the per-system arrays are
-// gnss_sys_t: 0 GPS, 1 Galileo, 2 BeiDou.
+// gnss_sys_t: 0 GPS, 1 Galileo, 2 BeiDou, 4 GLONASS (3, QZSS, never counts).
 struct NavCounters
 {
-    uint32_t frames[3];       // messages offered of each system (an 0xE0, 0xE6 sub-type 0x03, 0xE2)
-    uint32_t ephemerides[3];  // complete ephemerides returned, a repeat of an issue included
-    uint32_t issues[3];       //   of which a new issue (IODE, toe) for its satellite
+    uint32_t frames[GNSS_SYS_COUNT];       // messages offered of each system (0xE0, 0xE6 sub-type 0x03, 0xE2, 0xE1)
+    uint32_t ephemerides[GNSS_SYS_COUNT];  // complete ephemerides returned, a repeat of an issue included
+    uint32_t issues[GNSS_SYS_COUNT];       //   of which a new issue (IODE, toe) for its satellite
     uint32_t iono;            // ionosphere pages returned
     uint32_t status[static_cast<size_t>(NavStatus::COUNT)];   // every add() result, by NavStatus
 };
@@ -149,6 +183,7 @@ public:
     static constexpr int kGalPrns  = 36;
     static constexpr int kBdsFirst = 6;
     static constexpr int kBdsLast  = 58;
+    static constexpr int kGloSlots = 24;
 
     NavAssembler() { reset(); }
 
@@ -167,7 +202,16 @@ public:
     // touched otherwise. A page 18 comes from every GPS satellite tracked,
     // once per 12.5 min frame; satellites uploaded at different times can
     // send different sets (on 09-26, G15/G23 one set, G18/G24/G32 another).
-    NavStatus add(const uint8_t* payload, size_t len, int near_gps_week, gps_eph_t& eph, int8_t iono[8]);
+    //
+    // gps_s: the receiver's GPS time now (continuous seconds, week * 604800 +
+    // time of week; its clock bias does not matter here), which a GLONASS set
+    // needs to place tb's day; 0 = unknown (NO_TIME, the strings kept).
+    NavStatus add(const uint8_t* payload, size_t len, int near_gps_week, gps_eph_t& eph, int8_t iono[8],
+                  double gps_s = 0.0);
+
+    // A GLONASS slot's frequency number (-7..+6), as its 0xE5 cells give it
+    // (Px1105rRawEpoch.h): the ephemerides of that slot carry it (glo_k).
+    void noteGloFreq(int slot, int k);
 
     // A GPS ephemeris held as NO_WEEK, now that the week is known: EPHEMERIS
     // with eph filled for one satellite (call again for the next), NO_WEEK
@@ -209,10 +253,20 @@ private:
         uint8_t  sf[3][28];
         uint8_t  have;
     };
+    // GLONASS: strings 1-4's data bits as the 0xE1 carries them (72 bits
+    // each), and the receiver's time each came at (0: unknown).
+    struct GloSat
+    {
+        uint32_t last_issue;
+        uint8_t  str[4][9];
+        double   at[4];
+        uint8_t  have;           // bit k: string k + 1 held
+    };
 
     NavStatus addGps(const uint8_t* p, size_t len, int near_gps_week, gps_eph_t& eph, int8_t iono[8]);
     NavStatus addGal(const uint8_t* p, size_t len, gps_eph_t& eph);
     NavStatus addBds(const uint8_t* p, size_t len, gps_eph_t& eph);
+    NavStatus addGlo(const uint8_t* p, size_t len, double gps_s, gps_eph_t& eph);
     NavStatus completeGps(int prn, int near_gps_week, gps_eph_t& eph);
     // Count a completed ephemeris, and whether it is a new issue for its satellite.
     void issued(const gps_eph_t& e, uint32_t& last_issue);
@@ -220,6 +274,9 @@ private:
     GpsSat      gps_[kGpsPrns];
     GalSat      gal_[kGalPrns];
     BdsSat      bds_[kBdsLast - kBdsFirst + 1];
+    GloSat      glo_[kGloSlots];
+    int8_t      glo_k_[kGloSlots + 1];   // by slot; kGloKUnknown until noteGloFreq
+    static constexpr int8_t kGloKUnknown = 127;
     NavCounters counters_;
     uint32_t    iono_tow_s_ = 0;
     uint16_t    iono_day_ = 0;

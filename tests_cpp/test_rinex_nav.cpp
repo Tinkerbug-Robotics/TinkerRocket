@@ -340,6 +340,49 @@ TEST(RinexNav, DatesWeeksAndAvailability)
     }
 }
 
+TEST(RinexNav, GlonassOnlyWhenAsked)
+{
+    // R11's tb 16:15 UTC, 2026-11-21, as BRDC00WRD_S_20263250000_01D_MN.rnx has it (RINEX 3.05's four lines;
+    // the epoch in UTC, -TauN, +GammaN, tk; X, Vx, ax, health; Y, Vy, ay, k; Z, Vz, az, age; status flags)
+    const std::string rec =
+        "R11 2026 11 21 16 15 00-1.867301762104e-06 9.094947017729e-13 5.760000000000e+05\n"
+        "    -1.196560058594e+03 9.269247055054e-01 0.000000000000e+00 0.000000000000e+00\n"
+        "    -1.944972802734e+04 2.058210372925e+00-1.862645149231e-09 0.000000000000e+00\n"
+        "     1.647983642578e+04 2.495192527771e+00-2.793967723846e-09 0.000000000000e+00\n"
+        "     1.510000000000e+02 2.793967723846e-09 2.000000000000e+00 3.000000000000e+00\n";
+    const std::string text = std::string(kHeader) + rec;
+    rinex::NavFile nf;
+    std::string err;
+    ASSERT_TRUE(rinex::parseNav(text, nf, err)) << err;          // without: left out, as before
+    EXPECT_EQ(nf.recs.size(), 0u);
+    EXPECT_EQ(nf.skipped_system, 1);
+    ASSERT_TRUE(rinex::parseNav(text, nf, err, true)) << err;
+    ASSERT_EQ(nf.recs.size(), 1u);
+    const gps_eph_t& e = nf.recs[0].eph;
+    EXPECT_EQ(e.sys, GNSS_SYS_GLO);
+    EXPECT_EQ(e.prn, 11);
+    EXPECT_EQ(e.valid, 1);
+    EXPECT_EQ(e.week, 2445);
+    EXPECT_EQ(e.toe, 576918.0);                                   // 16:15:00 UTC + 18 s, a Saturday
+    EXPECT_EQ(e.toc, e.toe);
+    EXPECT_EQ(e.iode, 77);                                        // 19:15 Moscow
+    EXPECT_EQ(e.health, 0);
+    EXPECT_EQ(e.glo_k, 0);
+    EXPECT_DOUBLE_EQ(e.af0, -1.867301762104e-06);
+    EXPECT_DOUBLE_EQ(e.af1, 9.094947017729e-13);
+    EXPECT_DOUBLE_EQ(e.glo_pos[1], -1.944972802734e+04 * 1e3);
+    EXPECT_DOUBLE_EQ(e.glo_vel[2], 2.495192527771e+00 * 1e3);
+    EXPECT_DOUBLE_EQ(e.glo_acc[2], -2.793967723846e-09 * 1e3);
+    EXPECT_EQ(nf.recs[0].toe_gps_s, 2445 * 604800.0 + 576918.0);
+    EXPECT_EQ(nf.recs[0].avail_gps_s, nf.recs[0].toe_gps_s - 900.0);   // broadcast from tb - 15 min
+    // a slot past 24 or a frequency number past +6: refused
+    std::string bad = rec;
+    bad.replace(1, 2, "26");
+    ASSERT_TRUE(rinex::parseNav(std::string(kHeader) + bad, nf, err, true)) << err;
+    EXPECT_EQ(nf.recs.size(), 0u);
+    EXPECT_EQ(nf.bad, 1);
+}
+
 TEST(RinexNav, NotRinex3NavigationIsRefused)
 {
     rinex::NavFile nf;

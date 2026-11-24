@@ -142,7 +142,24 @@ public:
             {GNSS_FREQ_L1_HZ, 0.0f, 0.0f, 32.5f, 0.0045f, 0.0014f, true},    // GPS L1 C/A
             {GNSS_FREQ_L1_HZ, 0.0f, 0.0f, 35.0f, 0.0024f, 0.0011f, false},   // Galileo E1
             {1561.098e6, 0.0f, 0.0f, 32.5f, 0.0045f, 0.0014f, true},         // BeiDou B1I
-            {GNSS_FREQ_L1_HZ, 0.0f, 0.0f, 32.5f, 0.0045f, 0.0014f, true}};   // QZSS L1 C/A
+            {GNSS_FREQ_L1_HZ, 0.0f, 0.0f, 32.5f, 0.0045f, 0.0014f, true},    // QZSS L1 C/A
+            // GLONASS: GnssSignalProfile's own, as every profile but the PX1105R's leaves it (the Beetle's
+            // filter is these defaults with the LC86G's profile over them: test_receiver_profile). Only the
+            // PX1105R gives GLONASS, and its profile sets the signal: 1602 MHz, the Doppler alone fused
+            {}};
+        // each system's L5-band signal (RawObs band 1): l5SignalDefault's (ReceiverProfile.h) unless the
+        // receiver's profile names its own. Its floors, Doppler and code as sig's are the L1 band's; its
+        // code is fused only moved onto its satellite's L1-band code (RawObs::pr_l1), and then as that code:
+        // sig's pr_fused, the L1 band's ionosphere and group delay, and bridge_sigma_m more
+        GnssSignalProfile sig_l5[kProfileSys] = {l5SignalDefault(), l5SignalDefault(), l5SignalDefault(),
+                                                 l5SignalDefault(), l5SignalDefault()};
+        double bridge_sigma_m  = 3.0;     // a moved L5-band code's correlated sigma more, in quadrature: what its
+                                          //   satellite's L5-minus-L1 code moves between the move's fit and the
+                                          //   epoch (RF rig, 2026-11-24: 2-5 m pad to flight)
+        const GnssSignalProfile& signal(int sys, int band) const
+        {
+            return band == kBandL5 ? sig_l5[sys] : sig[sys];
+        }
         double pr_white_a      = kPrWhiteA, pr_white_b = kPrWhiteB;   // the noise model's fit
         double pr_corr_a       = kPrCorrA, pr_corr_b = kPrCorrB;
         double pr_tau_s        = kPrTauS;
@@ -195,7 +212,7 @@ public:
     {
         cfg_ = cfg;
         for (LiteSat& l : lite_)
-            l.sig_cn0 = -1.0f;            // the cheaper build's noise, worked out anew
+            l.sig_cn0[0] = l.sig_cn0[1] = -1.0f;   // the cheaper build's noise, worked out anew
     }
     const Config& config() const { return cfg_; }
 
@@ -286,16 +303,18 @@ public:
     // periods, so a period's first epoch is the one the shadow fuses the code on.
     static int64_t litePeriodOf(double tow_s, double period_s);
 
-    // Seconds since the satellite last (re)appeared, at GPS time of week tow.
-    double relockAge(int sys, int prn, double tow) const;
+    // Seconds since the satellite's signal on band (RawObs::band) last
+    // (re)appeared, at GPS time of week tow.
+    double relockAge(int sys, int prn, double tow, int band = kBandL1) const;
 
     // Take the satellite as relocked at tow, as if it had just reappeared: its
     // pseudoranges from then on carry the relock sigma (a jump the shadow's
-    // SatJumpCheck saw, #1508).
+    // SatJumpCheck saw, #1508). Both its bands: the jump is in its code, which
+    // an L5-band row carries only moved onto the L1 band's.
     void markRelock(int sys, int prn, double tow);
 
 private:
-    static constexpr int kSys = 3;
+    static constexpr int kSys = GNSS_SYS_COUNT;   // GLONASS's too (gnss/types.h)
     static constexpr int kPrn = 64;
 
     // A satellite's state at one instant, from one ephemeris.
@@ -318,7 +337,7 @@ private:
     // one epoch.
     struct CarrierEnd
     {
-        uint8_t  sys = 0, prn = 0;
+        uint8_t  sys = 0, prn = 0, band = kBandL1;
         bool     halfcyc = false;
         uint8_t  model = 0;          // the corrections it took (atmosphere, ionosphere's generation)
         float    cn0 = 0.0f;
@@ -348,12 +367,13 @@ private:
         float   cz_rate = 0.0f;      // cz's rate then from the satellite's own motion, 1/s
         double  t_atmo = 0.0;        // the epoch's time of week it was worked out at
         double  el = 0.0, iono = 0.0, cz = 0.0;
-        float   sig_cn0 = -1.0f;     // (< 0: none)
-        float   sig_pr = 0.0f;
-        double  sig_corr = 0.0, sig_rr2 = 0.0;
+        // the noise, by band (RawObs::band): its own C/N0 and carrier
+        float   sig_cn0[kBands] = {-1.0f, -1.0f};   // (< 0: none)
+        float   sig_pr[kBands] = {};
+        double  sig_corr[kBands] = {}, sig_rr2[kBands] = {};
     };
-    static void liteNoise(const Config& c, double cn0, double carrier_hz, float& sigma_pr, double& s_corr,
-                          double& s_rr2);
+    static void liteNoise(const Config& c, double cn0, const GnssSignalProfile& sig, float& sigma_pr,
+                          double& s_corr, double& s_rr2);
     static void liteRelock(const Config& c, double age_s, double g_over, double s_corr, double s_rr2,
                            float& sigma_pr_corr, float& sigma_rr);
     double klobucharLite(double ca, double sa, double el, double t) const;
@@ -382,9 +402,17 @@ private:
     double     el_mask_ = 0.0, g_over_ = 0.0;
     double     climb_mps_ = 0.0;   // setClimbRate's
     double     trop_rate_z_ = 0.0; // the zenith delay's rate at the epoch's receiver (m/s; 0 with tropo_rate off)
-    double     first_[kSys][kPrn];
+    double     first_[kSys][kPrn];       // each L1-band signal's (a harness seeds these: kept as they were)
     double     last_[kSys][kPrn];
     bool       seen_[kSys][kPrn];
+    double     first_l5_[kSys][kPrn];    // and each L5-band one's (RawObs band 1)
+    double     last_l5_[kSys][kPrn];
+    bool       seen_l5_[kSys][kPrn];
+    double* firstOf(int band) { return band == kBandL5 ? &first_l5_[0][0] : &first_[0][0]; }
+    double* lastOf(int band) { return band == kBandL5 ? &last_l5_[0][0] : &last_[0][0]; }
+    bool*   seenOf(int band) { return band == kBandL5 ? &seen_l5_[0][0] : &seen_[0][0]; }
+    const double* firstOf(int band) const { return band == kBandL5 ? &first_l5_[0][0] : &first_[0][0]; }
+    const bool*   seenOf(int band) const { return band == kBandL5 ? &seen_l5_[0][0] : &seen_[0][0]; }
     // the carrier: the last epoch built's ends and the one being built's
     // (cr_side_ the last's), its corrections' model, setIono's generation
     CarrierEnd cr_end_[2][RawEpoch::kMaxObs];

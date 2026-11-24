@@ -28,12 +28,12 @@ void RawMeasBuilder::reset()
         cache_[i].valid = false;
     cr_n_[0] = cr_n_[1] = 0;
     cr_done_ = true;
-    for (int s = 0; s < kSys; ++s)
-        for (int p = 0; p < kPrn; ++p)
+    for (int b = 0; b < kBands; ++b)
+        for (int k = 0; k < kSys * kPrn; ++k)
         {
-            first_[s][p] = 0.0;
-            last_[s][p] = 0.0;
-            seen_[s][p] = false;
+            firstOf(b)[k] = 0.0;
+            lastOf(b)[k] = 0.0;
+            seenOf(b)[k] = false;
         }
 }
 
@@ -42,12 +42,16 @@ void RawMeasBuilder::noteEpoch(const RawEpoch& ep)
     for (int i = 0; i < ep.n; ++i)
     {
         const RawObs& o = ep.obs[i];
-        if (o.sys >= kSys || o.prn >= kPrn)
+        if (o.sys >= kSys || o.prn >= kPrn || o.band >= kBands)
             continue;
-        if (!seen_[o.sys][o.prn] || gps_time_diff(ep.tow_s, last_[o.sys][o.prn]) > cfg_.relock_gap_s)
-            first_[o.sys][o.prn] = ep.tow_s;
-        last_[o.sys][o.prn] = ep.tow_s;
-        seen_[o.sys][o.prn] = true;
+        const int k = o.sys * kPrn + o.prn;
+        double* first = firstOf(o.band);
+        double* last = lastOf(o.band);
+        bool* seen = seenOf(o.band);
+        if (!seen[k] || gps_time_diff(ep.tow_s, last[k]) > cfg_.relock_gap_s)
+            first[k] = ep.tow_s;
+        last[k] = ep.tow_s;
+        seen[k] = true;
     }
 }
 
@@ -117,16 +121,20 @@ void RawMeasBuilder::markRelock(int sys, int prn, double tow)
 {
     if (sys < 0 || sys >= kSys || prn < 0 || prn >= kPrn)
         return;
-    first_[sys][prn] = tow;
-    last_[sys][prn] = tow;
-    seen_[sys][prn] = true;
+    for (int b = 0; b < kBands; ++b)
+    {
+        firstOf(b)[sys * kPrn + prn] = tow;
+        lastOf(b)[sys * kPrn + prn] = tow;
+        seenOf(b)[sys * kPrn + prn] = true;
+    }
 }
 
-double RawMeasBuilder::relockAge(int sys, int prn, double tow) const
+double RawMeasBuilder::relockAge(int sys, int prn, double tow, int band) const
 {
-    if (sys < 0 || sys >= kSys || prn < 0 || prn >= kPrn || !seen_[sys][prn])
+    if (sys < 0 || sys >= kSys || prn < 0 || prn >= kPrn || band < 0 || band >= kBands
+        || !seenOf(band)[sys * kPrn + prn])
         return 0.0;
-    return gps_time_diff(tow, first_[sys][prn]);
+    return gps_time_diff(tow, firstOf(band)[sys * kPrn + prn]);
 }
 
 int RawMeasBuilder::build(const RawEpoch& ep, const EphemerisStore& eph, const double* r_approx,
@@ -180,11 +188,16 @@ int RawMeasBuilder::next(const RawEpoch& ep, const EphemerisStore& eph, RawMeas*
     {
         const int i = next_obs_++;
         const RawObs& o = ep.obs[i];
-        if (!o.has_pr || o.sys >= kSys || o.prn >= kPrn)
+        if (!o.has_pr || o.sys >= kSys || o.prn >= kPrn || o.band >= kBands)
             continue;
-        const GnssSignalProfile& sig = cfg_.sig[o.sys];   // the receiver's signal of that system
+        const GnssSignalProfile& sig = cfg_.signal(o.sys, o.band);   // the receiver's signal of that system and band
         if (o.cn0_dbhz < sig.cn0_min_pr)
             continue;
+        // the atmosphere on the L1 band's carrier whatever the band, as the
+        // cheaper build keeps it: an L5-band code is fused only moved onto the
+        // L1 band's (RawObs::pr_l1)
+        const GnssSignalProfile& sig_atm = cfg_.sig[o.sys];
+        const bool moved = o.band == kBandL5 && o.pr_l1;
         // each ephemeris keeps its own system's time: BeiDou runs 14 s behind GPS
         const double to_sys = o.sys == GNSS_SYS_BDS ? kBdtMinusGpst : 0.0;
         const gps_eph_t* e = eph.select(o.sys, o.prn, ep.tow_s + to_sys);
@@ -211,7 +224,7 @@ int RawMeasBuilder::next(const RawEpoch& ep, const EphemerisStore& eph, RawMeas*
             gnss_az_el(lat_, lon_, d, &az, &el);
             if (el < el_mask_)
                 continue;
-            const double fr = GNSS_FREQ_L1_HZ / sig.carrier_hz;
+            const double fr = GNSS_FREQ_L1_HZ / sig_atm.carrier_hz;
             iono = iono_klobuchar(&iono_, lat_, lon_, az, el, ep.tow_s) * fr * fr;
             trop = cfg_.troposphere ? tropo_saastamoinen(lat_, hgt_, el) : 0.0;
             corr -= iono + trop;
@@ -222,26 +235,33 @@ int RawMeasBuilder::next(const RawEpoch& ep, const EphemerisStore& eph, RawMeas*
         RawMeas& m = out[n++];
         m.sys = o.sys;
         m.prn = o.prn;
+        m.band = o.band;
         for (int k = 0; k < 3; ++k)
         {
             m.sat_pos[k] = rs[k];
             m.sat_vel[k] = c.vel[k] + c.acc[k] * dt;
             m.sat_acc[k] = c.acc[k];
         }
-        m.has_pr = sig.pr_fused;   // false: read for the transmit time alone (GnssSignalProfile::pr_fused)
+        // false: read for the transmit time alone (GnssSignalProfile::pr_fused); an L5-band code moved onto
+        // the L1 band's as that band's
+        m.has_pr = moved ? sig_atm.pr_fused : sig.pr_fused;
         m.pr = o.pr_m + corr;
         m.has_rr = o.has_rate && !(o.cn0_dbhz < sig.cn0_min_rr);
         m.rr = m.has_rr ? o.rate_mps + GNSS_C * c.clk_rate - trop_rate : 0.0;
 
         const double cn0 = static_cast<double>(o.cn0_dbhz);
         const double lam = GNSS_C / sig.carrier_hz;
-        const double s_rr = std::hypot(cn0Sigma(cfg_.rr_white_a, cfg_.rr_white_b, cn0),
-                                       lam * cfg_.doppler_step_hz / std::sqrt(12.0));
+        double s_rr_w = cn0Sigma(cfg_.rr_white_a, cfg_.rr_white_b, cn0);
+        if (sig.rr_sigma_scale != 1.0f)
+            s_rr_w *= static_cast<double>(sig.rr_sigma_scale);   // the band's wavelength (GnssSignalProfile)
+        const double s_rr = std::hypot(s_rr_w, lam * cfg_.doppler_step_hz / std::sqrt(12.0));
         double s_corr = cn0Sigma(cfg_.pr_corr_a, cfg_.pr_corr_b, cn0) * cfg_.pr_corr_scale;
-        const double age = relockAge(o.sys, o.prn, ep.tow_s);
+        const double age = relockAge(o.sys, o.prn, ep.tow_s, o.band);
         const double fresh = std::exp(-age / cfg_.relock_tau_s);
         if (cfg_.relock_sigma_m > 0.0)
             s_corr = std::hypot(s_corr, cfg_.relock_sigma_m * fresh);
+        if (moved && cfg_.bridge_sigma_m > 0.0)
+            s_corr = std::hypot(s_corr, cfg_.bridge_sigma_m);
         const double s_dyn = cfg_.rr_dyn_sigma * g_over_;
         const double s_rel = cfg_.rr_relock_sigma * fresh;
         const double s_rr2 = s_rr * cfg_.rr_scale;

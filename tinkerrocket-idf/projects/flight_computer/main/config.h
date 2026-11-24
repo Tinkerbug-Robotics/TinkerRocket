@@ -606,6 +606,30 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 // band's Dopplers alone. Replayed on the 2026-10-24 Goblin flight (five
 // satellites' L1 C/A or B1I Dopplers 3-19 m/s off through the boost): the
 // boost's attitude error 2.0 -> 0.8 deg.
+// GLONASS from the PX1105R (2026-11-22, branch fc/v10-px1105r-glonass): the
+// receiver asked for its GLONASS strings, their ephemerides decoded, and the
+// 0xE5's GLONASS L1OF Dopplers fused with the rest (pseudoranges not: the
+// filter has no GLONASS clock offset yet). Off until a bench capture pins the
+// 0xE1 strings' layout (SkyTraqNav.h: none has been seen from this receiver);
+// -DTR_RAW_GLONASS=1 turns it on. The 11-21 flight replayed with it
+// (tools/raw_replay --glonass 1): the burn and the coast unchanged (the
+// Doppler change check held GLONASS's with the rest), a third more Dopplers
+// after. No default #define here (the M1 image sees no new macro,
+// tools/m1_identity.sh): the PX1105R driver reads 0 where it is not set.
+#if defined(TR_RAW_GLONASS) && TR_RAW_GLONASS && !TR_RAW_NAV_PX1105R
+#error "TR_RAW_GLONASS needs the PX1105R's raw-GNSS filter (TR_RAW_NAV_PX1105R=1): only its driver asks for GLONASS"
+#endif
+// The L5 band from the PX1105R (2026-11-24, branch fc/px1105r-dual-band): its
+// GPS L5, Galileo E5a and BeiDou B2a cells handed over beside the L1 band's
+// (Px1105rRawEpoch.h l5), each satellite's L5-band Doppler fused at its own
+// instant (rr_lag_l5_s), and its L5-band code fused only where its L1-band
+// code is gone, moved onto the L1 band's (CodeBridge.h). -DTR_RAW_L5=1 turns
+// it on. Like TR_RAW_GLONASS, no default #define here: the PX1105R driver
+// reads 0 where it is not set, and the M1 image sees no new macro.
+#if defined(TR_RAW_L5) && TR_RAW_L5 && !TR_RAW_NAV_PX1105R
+#error "TR_RAW_L5 needs the PX1105R's raw-GNSS filter (TR_RAW_NAV_PX1105R=1): only its driver hands the L5 band over"
+#endif
+
 #ifndef TR_RAW_MULTIBAND
 #define TR_RAW_MULTIBAND TR_RAW_NAV_MOSAIC
 #endif

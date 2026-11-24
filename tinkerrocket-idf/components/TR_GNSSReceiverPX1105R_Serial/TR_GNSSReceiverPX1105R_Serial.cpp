@@ -12,6 +12,21 @@
 
 #include <algorithm>
 #include <cmath>
+
+// GLONASS (TR_RAW_GLONASS: flight_computer/CMakeLists.txt and main/config.h, off unless set): the receiver asked
+// for its strings (the 0x1E subframe mask's bit 1, LinkConfig::subframes), each slot's frequency number noted from
+// the 0xE5, the strings decoded into ephemerides (SkyTraqNav.h), and the 0xE5's GLONASS cells handed over with the
+// rest (Px1105rRawEpoch.h glonass). Off, the image is as before.
+#ifndef TR_RAW_GLONASS
+#define TR_RAW_GLONASS 0
+#endif
+// The L5 band (TR_RAW_L5: flight_computer/CMakeLists.txt and main/config.h, off unless set): the 0xE5's GPS L5,
+// Galileo E5a and BeiDou B2a cells handed over beside the L1 band's (Px1105rRawEpoch.h l5), each L5-band code
+// moved onto its satellite's L1-band one where that is gone (CodeBridge.h, its own block). Off, the image is as
+// before.
+#ifndef TR_RAW_L5
+#define TR_RAW_L5 0
+#endif
 #include <cstdio>
 #include <cstring>
 #include <new>
@@ -317,6 +332,7 @@ bool TR_GNSSReceiverPX1105RSerial::begin(uint8_t update_rate_hz, uint8_t GNSS_RX
     skytraq::LinkConfig cfg;
     cfg.target_baud = kTargetBaud;
     cfg.rate_hz = update_rate_hz_;
+    cfg.subframes = static_cast<uint8_t>(0x0D | (TR_RAW_GLONASS ? 0x02 : 0x00));   // GPS, Galileo, BeiDou (+ GLONASS)
     link_.start(cfg, nowMs());
     setups_logged_ = 0;
 
@@ -437,6 +453,7 @@ void TR_GNSSReceiverPX1105RSerial::onFrame(const uint8_t* body, size_t len, size
     case skytraq::MSG_GPS_SUBFRAME:
     case skytraq::MSG_BDS_D1:
     case skytraq::MSG_GAL_PAGE:
+    case skytraq::MSG_GLO_STRING:
         n_nav_++;
         if (raw_ != nullptr) rawNav(body, len);
         break;
@@ -548,15 +565,17 @@ void TR_GNSSReceiverPX1105RSerial::logStatus()
     {
         const RawStats& st = raw_->st;
         ESP_LOGI(TAG, "PX1105R raw: %lu epochs, %lu handed over (%lu untimed), %lu off the grid, %lu empty, %lu dropped, "
-                      "%lu slips; ephemerides GPS %lu GAL %lu BDS %lu (dropped %lu/%lu/%lu), refused %lu, ionospheres %lu; "
+                      "%lu slips; ephemerides GPS %lu GAL %lu BDS %lu GLO %lu (dropped %lu/%lu/%lu/%lu), refused %lu, "
+                      "ionospheres %lu; "
                       "fixes %lu (dropped %lu)",
                  static_cast<unsigned long>(st.epochs), static_cast<unsigned long>(st.published),
                  static_cast<unsigned long>(st.untimed), static_cast<unsigned long>(st.decimated),
                  static_cast<unsigned long>(st.empty), static_cast<unsigned long>(st.dropped),
                  static_cast<unsigned long>(st.slips), static_cast<unsigned long>(st.eph_queued[0]),
                  static_cast<unsigned long>(st.eph_queued[1]), static_cast<unsigned long>(st.eph_queued[2]),
-                 static_cast<unsigned long>(st.eph_dropped[0]), static_cast<unsigned long>(st.eph_dropped[1]),
-                 static_cast<unsigned long>(st.eph_dropped[2]), static_cast<unsigned long>(st.nav_refused),
+                 static_cast<unsigned long>(st.eph_queued[3]), static_cast<unsigned long>(st.eph_dropped[0]),
+                 static_cast<unsigned long>(st.eph_dropped[1]), static_cast<unsigned long>(st.eph_dropped[2]),
+                 static_cast<unsigned long>(st.eph_dropped[3]), static_cast<unsigned long>(st.nav_refused),
                  static_cast<unsigned long>(st.ions), static_cast<unsigned long>(st.fixes),
                  static_cast<unsigned long>(st.fixes_dropped));
     }
@@ -632,6 +651,17 @@ bool TR_GNSSReceiverPX1105RSerial::enableRawOutputs()
     }
     r->nav = new (nav_mem) skytraq::NavAssembler();
     r->nav->reset();
+#if TR_RAW_L5
+    // the L5-band codes' bridge, PSRAM where there is some (a few KB, once an epoch); without it the L5
+    // band's codes are left as they come (never fused) and its Dopplers still go
+    void* br_mem = heap_caps_malloc(sizeof(gnss_raw::CodeBridge), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (br_mem == nullptr) br_mem = heap_caps_malloc(sizeof(gnss_raw::CodeBridge), MALLOC_CAP_8BIT);
+    if (br_mem != nullptr)
+        r->bridge = new (br_mem) gnss_raw::CodeBridge();
+    else
+        ESP_LOGW(TAG, "PX1105R raw: no memory for the L5 code bridge (%u B): L5-band codes never fused",
+                 static_cast<unsigned>(sizeof(gnss_raw::CodeBridge)));
+#endif
     r->st.enabled = true;
     raw_ = r;   // before begin(): the poll task does not exist yet
     ESP_LOGI(TAG, "PX1105R raw: outputs on -- %u epochs (%u B), %u ephemerides (%u B), %u B of state, "
@@ -740,7 +770,14 @@ void TR_GNSSReceiverPX1105RSerial::rawE5(const uint8_t* body, size_t len, int64_
     gnss_raw::TimedRawEpoch& e = r.scratch;
     const bool on_grid = px1105r::onFuseGrid(r.e5.tow_ms, r.period_ms.load(std::memory_order_relaxed));
     const int64_t t_adapt = nowUs();
-    const int cells = px1105r::rawEpochFromE5(r.e5, r.lock, e.epoch);
+#if TR_RAW_GLONASS
+    // each GLONASS slot's frequency number, for its ephemerides (the strings carry none)
+    for (int i = 0; i < r.e5.n; ++i)
+        if (r.e5.cell[i].gnss == skytraq::kGnssGlo)
+            r.nav->noteGloFreq(r.e5.cell[i].svid, static_cast<int>(r.e5.cell[i].glo_freq) - 7);
+#endif
+    const int cells = px1105r::rawEpochFromE5(r.e5, r.lock, e.epoch, TR_RAW_GLONASS != 0, TR_RAW_L5 != 0);
+    if (r.bridge != nullptr) r.bridge->apply(e.epoch);   // every epoch: its differences kept at 20 Hz
     r.st.slips = r.lock.slips;
     if (!on_grid)
     {
@@ -831,10 +868,17 @@ void TR_GNSSReceiverPX1105RSerial::rawNav(const uint8_t* body, size_t len)
 {
     RawState& r = *raw_;
     if (!skytraq::isNavMessage(body, len)) return;
-    const int sys = body[0] == skytraq::MSG_GPS_SUBFRAME ? 0 : (body[0] == skytraq::MSG_GAL_PAGE ? 1 : 2);
+    // RawStats' index: 0 GPS, 1 Galileo, 2 BeiDou, 3 GLONASS
+    const int sys = body[0] == skytraq::MSG_GPS_SUBFRAME ? 0
+                  : body[0] == skytraq::MSG_GAL_PAGE     ? 1
+                  : body[0] == skytraq::MSG_GLO_STRING   ? 3
+                                                         : 2;
     r.st.nav_frames[sys]++;
     auto queue = [&](const gps_eph_t& eph) {
-        const int k = eph.sys == GNSS_SYS_GPS ? 0 : (eph.sys == GNSS_SYS_GAL ? 1 : 2);
+        const int k = eph.sys == GNSS_SYS_GPS ? 0
+                    : eph.sys == GNSS_SYS_GAL ? 1
+                    : eph.sys == GNSS_SYS_GLO ? 3
+                                              : 2;
         if (xQueueSend(r.eph_q, &eph, 0) == pdTRUE)
             r.st.eph_queued[k]++;
         else if (r.taking_eph.load(std::memory_order_relaxed))
@@ -845,7 +889,9 @@ void TR_GNSSReceiverPX1105RSerial::rawNav(const uint8_t* body, size_t len)
     // the receiver's GPS week, from its own clock (0 until a 0xDF has come: a
     // GPS ephemeris then waits as NO_WEEK, completed below once it is known)
     const int week = clk_.have ? static_cast<int>(clk_.rx_ms / 604800000LL) : 0;
-    const skytraq::NavStatus st = r.nav->add(body, len, week, eph, iono);
+    // and its time, which places a GLONASS set's tb on its day (0: unknown, the strings kept)
+    const double gps_s = clk_.have ? static_cast<double>(clk_.rx_ms) * 1.0e-3 : 0.0;
+    const skytraq::NavStatus st = r.nav->add(body, len, week, eph, iono, gps_s);
     switch (st)
     {
     case skytraq::NavStatus::EPHEMERIS:
@@ -870,6 +916,7 @@ void TR_GNSSReceiverPX1105RSerial::rawNav(const uint8_t* body, size_t len)
     case skytraq::NavStatus::PART:
     case skytraq::NavStatus::UNUSED:
     case skytraq::NavStatus::NO_WEEK:
+    case skytraq::NavStatus::NO_TIME:
         break;
     default:
         r.st.nav_refused++;

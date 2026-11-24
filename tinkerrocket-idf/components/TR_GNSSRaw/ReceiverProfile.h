@@ -65,6 +65,7 @@ enum HalfCycleAction : uint8_t
 
 // gnss_sys_t's systems: GPS, Galileo, BeiDou, QZSS.
 constexpr int kProfileSys = GNSS_SYS_COUNT;
+static_assert(kProfileSys == 5, "GnssReceiverProfile::sig_l5's initializer names every system");
 
 // One system's signal as the receiver tracks it.
 struct GnssSignalProfile
@@ -80,7 +81,28 @@ struct GnssSignalProfile
                                           // channel's Costas loop, not a pilot's PLL
     bool   pr_fused = true;               // its pseudorange fused; false: still read for the transmit time
                                           // its Doppler is built at, never fused (RawMeas::has_pr false)
+    float  rr_sigma_scale = 1.0f;         // its Doppler's sigma over the profile's model (rr_white_*), which is
+                                          // the L1 band's: a loop's noise is the same in hertz, so a longer
+                                          // wavelength's is that much more in m/s (the L5 band's 1.339)
 };
+
+// The L5 band's signal of a system (RawObs band 1) where no profile names
+// one: 1176.45 MHz (GPS L5, Galileo E5a and BeiDou B2a all sit there), a
+// pilot's carrier (no unflagged half cycle), its Doppler's sigma the
+// wavelength's ratio to L1's over the model's, and nothing fused (its code
+// never, its Doppler under no floor but the receiver's) -- only a profile that
+// takes the band (px1105rProfile) sets floors. An epoch reader gives band 1 only
+// when its caller asks.
+inline GnssSignalProfile l5SignalDefault()
+{
+    GnssSignalProfile s;
+    s.carrier_hz = GNSS_FREQ_L5_HZ;
+    s.cn0_min_cr = 99.0f;                 // no carrier range rate on this band
+    s.half_cycle_unflagged = false;
+    s.pr_fused = false;
+    s.rr_sigma_scale = static_cast<float>(GNSS_FREQ_L1_HZ / GNSS_FREQ_L5_HZ);
+    return s;
+}
 
 struct GnssReceiverProfile
 {
@@ -89,9 +111,15 @@ struct GnssReceiverProfile
     bool             measured = false;    // false: UNMEASURED, every number a placeholder
 
     GnssSignalProfile sig[kProfileSys];   // by gnss_sys_t
+    // each system's L5-band signal (RawObs band 1), where the receiver's epoch
+    // reader is asked for it (the PX1105R's TR_RAW_L5): l5SignalDefault's
+    // unless the profile names its own
+    GnssSignalProfile sig_l5[kProfileSys] = {l5SignalDefault(), l5SignalDefault(), l5SignalDefault(),
+                                             l5SignalDefault(), l5SignalDefault()};
 
     // timing
     double rr_lag_s = 0.0;                // the Doppler is the range rate this long before the epoch's tag
+    double rr_lag_l5_s = 0.0;             //   and an L5-band Doppler this much longer before it
     double epoch_latency_s = 0.0;         // the delay the receiver's time sync leaves in
     double raw_epoch_period_s = 0.0;      // its raw epochs come this often
 
@@ -533,8 +561,34 @@ inline GnssReceiverProfile px1105rProfile()
     // BeiDou B1I (TGD1 from its D1 subframes); its L5-band signals are left
     // out. C/N0 floors of 25 dB-Hz on the code and the Doppler: the mosaic's
     // (the PX1105R's whole dB-Hz on the same scale, unmeasured against it).
+    // GLONASS L1OF where the epoch reader takes it (Px1105rRawEpoch.h,
+    // glonass): the same floors; k = 0's carrier for the ionosphere (each
+    // satellite's Doppler on its own); its Dopplers alone fused -- the code
+    // places the satellite at its transmit time, but a GLONASS pseudorange
+    // needs a clock offset (and per-frequency biases) the filter does not
+    // carry yet: 11-21's pad read GLONASS 26-47 m off GPS's clock -- and no
+    // carrier (its floor out of reach).
+    p.sig[GNSS_SYS_GLO] = GnssSignalProfile{1602.0e6, 25.0f, 25.0f, 99.0f, 0.0045f, 0.0014f, true, false};
+    // The L5 band where the epoch reader takes it (Px1105rRawEpoch.h, l5):
+    // GPS L5, Galileo E5a, BeiDou B2a at 1176.45 MHz, the L1 band's floors.
+    // Their Dopplers fused (the receiver's clock drift is one in m/s on both
+    // bands); their code never as it comes (it carries the receiver's
+    // inter-band delay, which the filter has no state for, and B2a's group
+    // delay comes in no message this receiver forwards) -- only where
+    // CodeBridge has moved it onto its satellite's L1-band code (RawObs
+    // pr_l1), fused then as that code. No carrier on this band.
+    for (int k = GNSS_SYS_GPS; k <= GNSS_SYS_BDS; ++k)
+    {
+        p.sig_l5[k] = l5SignalDefault();
+        p.sig_l5[k].cn0_min_pr = 25.0f;
+        p.sig_l5[k].cn0_min_rr = 25.0f;
+    }
 
     // timing
+    p.rr_lag_l5_s = 0.040;          // RF rig, rcv65 C/N0 study (2026-11-24, six runs at three levels): each
+                                    //   satellite's L5-band Doppler is its L1-band one 21-53 ms later (40 ms
+                                    //   typical; the fit to the L1 Doppler's own rate of change), with no
+                                    //   such offset in its code -- the receiver's L5 loop, not the scene
     p.rr_lag_s = 0.025;             // rig flights: its Doppler is its carrier's change over the 50 ms before
                                     //   the tag, whole hertz (residual 0.047 m/s median = the step's at 25 ms,
                                     //   0.08 at 0 and 50 ms)

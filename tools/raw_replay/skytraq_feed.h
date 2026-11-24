@@ -40,6 +40,7 @@
 #include "GnssTimeSync.h"
 #include "MosaicRawEpoch.h"
 #include "Px1105rRawEpoch.h"
+#include "CodeBridge.h"
 #include "RawMeas.h"
 #include "ShadowLink.h"
 #include "SkyTraqBinary.h"
@@ -59,6 +60,9 @@ public:
         double   epoch_latency_s = 0.0;  // the profile's epoch_latency_s (the driver's setEpochLatencyS)
         bool     pair = false;           // the Dopplers in pairs (the profile's rr_pair_avg)
         mosaic::MosaicDopplerPairConfig pair_cfg;
+        bool     glonass = false;        // its GLONASS cells as well (px1105r::rawEpochFromE5's glonass)
+        bool     l5 = false;             // its L5-band cells as well (rawEpochFromE5's l5), their codes through
+                                         //   the driver's bridge (CodeBridge.h)
     };
 
     enum class Kind : uint8_t
@@ -178,7 +182,13 @@ private:
             time_sync_.addSample(gps_s, end_us);
         const bool on_grid = px1105r::onFuseGrid(e5_.tow_ms, cfg_.fuse_period_ms);
         te = gnss_raw::TimedRawEpoch();
-        const int cells = px1105r::rawEpochFromE5(e5_, lock_, te.epoch);
+        if (cfg_.glonass)
+            for (int i = 0; i < e5_.n; ++i)   // each GLONASS slot's frequency number, as the driver notes it
+                if (e5_.cell[i].gnss == skytraq::kGnssGlo)
+                    nav_.noteGloFreq(e5_.cell[i].svid, static_cast<int>(e5_.cell[i].glo_freq) - 7);
+        const int cells = px1105r::rawEpochFromE5(e5_, lock_, te.epoch, cfg_.glonass, cfg_.l5);
+        if (cfg_.l5)
+            bridge_.apply(te.epoch);   // every epoch, as the driver
         n_.cells_listed += e5_.n_listed;
         if (!on_grid)
         {
@@ -237,7 +247,8 @@ private:
         gps_eph_t eph;
         int8_t io[8];
         const int week = clk_.have ? static_cast<int>(clk_.rx_ms / 604800000LL) : 0;
-        const skytraq::NavStatus st = nav_.add(body, len, week, eph, io);
+        const double now_gps_s = clk_.have ? static_cast<double>(clk_.rx_ms) * 1.0e-3 : 0.0;   // a GLONASS tb's day
+        const skytraq::NavStatus st = nav_.add(body, len, week, eph, io, now_gps_s);
         Kind k = Kind::OTHER;
         switch (st)
         {
@@ -267,6 +278,7 @@ private:
         case skytraq::NavStatus::PART:
         case skytraq::NavStatus::UNUSED:
         case skytraq::NavStatus::NO_WEEK:
+        case skytraq::NavStatus::NO_TIME:
             break;
         default:
             n_.nav_refused++;
@@ -346,6 +358,7 @@ private:
     skytraq::ChannelSummary channels_;
     bool have_channels_ = false;
     px1105r::Px1105rLockState lock_;
+    gnss_raw::CodeBridge bridge_;   // cfg_.l5: the driver's (TR_RAW_L5)
     px1105r::Px1105rClock clk_;
     lc86::GnssTimeSync time_sync_;
     skytraq::NavAssembler nav_;

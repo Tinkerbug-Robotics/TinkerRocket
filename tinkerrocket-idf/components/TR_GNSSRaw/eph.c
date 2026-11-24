@@ -1,4 +1,4 @@
-/* From the GNSS receiver (gnss repo receiver/core/nav/eph.c at 7511d11), unchanged. */
+/* From the GNSS receiver (gnss repo receiver/core/nav/eph.c at 7511d11), with GLONASS added here (eph.h). */
 #include "gnss/eph.h"
 #include "gnss/types.h"
 
@@ -68,8 +68,66 @@ static void position(const gps_eph_t *e, double t, double pos[3])
     pos[2] = yp * si;
 }
 
+/* GLONASS (eph.h): the equations of motion in PZ-90.11's rotating frame, the Earth's central term
+ * and J2 and the broadcast lunisolar acceleration (held for the interval), ICD 5.1 appendix A.3.1.2 */
+static void glo_deriv(const double x[6], const double acc[3], double xd[6])
+{
+    const double r2 = x[0] * x[0] + x[1] * x[1] + x[2] * x[2];
+    if (r2 <= 0.0) {
+        for (int k = 0; k < 6; k++) {
+            xd[k] = 0.0;
+        }
+        return;
+    }
+    const double r3 = r2 * sqrt(r2);
+    const double w2 = GLO_OMEGA_E * GLO_OMEGA_E;
+    const double a = 1.5 * GLO_J20 * GLO_MU * GLO_AE * GLO_AE / (r2 * r3);
+    const double b = 5.0 * x[2] * x[2] / r2;
+    const double c = -GLO_MU / r3 - a * (1.0 - b);
+    xd[0] = x[3];
+    xd[1] = x[4];
+    xd[2] = x[5];
+    xd[3] = (c + w2) * x[0] + 2.0 * GLO_OMEGA_E * x[4] + acc[0];
+    xd[4] = (c + w2) * x[1] - 2.0 * GLO_OMEGA_E * x[3] + acc[1];
+    xd[5] = (c - 2.0 * a) * x[2] + acc[2];
+}
+
+/* The state at t (GPS s of week): tb's carried there in GLO_STEP_S steps, the last one short */
+static void glo_state(const gps_eph_t *e, double t, double x[6])
+{
+    for (int k = 0; k < 3; k++) {
+        x[k] = e->glo_pos[k];
+        x[3 + k] = e->glo_vel[k];
+    }
+    double left = gps_time_diff(t, e->toe);
+    while (fabs(left) > 1e-9) {
+        const double h = fabs(left) > GLO_STEP_S ? (left > 0.0 ? GLO_STEP_S : -GLO_STEP_S) : left;
+        double k1[6], k2[6], k3[6], k4[6], y[6];
+        glo_deriv(x, e->glo_acc, k1);
+        for (int k = 0; k < 6; k++) {
+            y[k] = x[k] + 0.5 * h * k1[k];
+        }
+        glo_deriv(y, e->glo_acc, k2);
+        for (int k = 0; k < 6; k++) {
+            y[k] = x[k] + 0.5 * h * k2[k];
+        }
+        glo_deriv(y, e->glo_acc, k3);
+        for (int k = 0; k < 6; k++) {
+            y[k] = x[k] + h * k3[k];
+        }
+        glo_deriv(y, e->glo_acc, k4);
+        for (int k = 0; k < 6; k++) {
+            x[k] += h / 6.0 * (k1[k] + 2.0 * k2[k] + 2.0 * k3[k] + k4[k]);
+        }
+        left -= h;
+    }
+}
+
 static double clock_at(const gps_eph_t *e, double t)
 {
+    if (e->sys == GNSS_SYS_GLO) {
+        return e->af0 + e->af1 * gps_time_diff(t, e->toc);   /* -tau_n + gamma_n (t - tb): relativity in it */
+    }
     double tc = gps_time_diff(t, e->toc);
     double rel = frel_of(e) * e->e * e->sqrt_a * sin(ecc_anomaly(e, t));
     return e->af0 + e->af1 * tc + e->af2 * tc * tc + rel - e->tgd;
@@ -77,6 +135,20 @@ static double clock_at(const gps_eph_t *e, double t)
 
 void gps_sat_pos(const gps_eph_t *e, double t, double pos[3], double vel[3], double *clk)
 {
+    if (e->sys == GNSS_SYS_GLO) {
+        double x[6];
+        glo_state(e, t, x);
+        for (int k = 0; k < 3; k++) {
+            pos[k] = x[k];
+            if (vel) {
+                vel[k] = x[3 + k];
+            }
+        }
+        if (clk) {
+            *clk = clock_at(e, t);
+        }
+        return;
+    }
     position(e, t, pos);
     if (vel) {
         double p0[3], p1[3];

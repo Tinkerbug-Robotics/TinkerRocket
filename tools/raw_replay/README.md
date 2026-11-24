@@ -311,7 +311,8 @@ no earlier than a receiver first has it, by the mosaic's own nav blocks (the 10/
 GPS set 2 h before its toe, a Galileo I/NAV batch 665 s after its toe, a BeiDou set 18 s after (BDT). Before each
 epoch is offered, the two latest such records of each satellite the epoch carries are filed (`addEphemeris`; a
 merged file's repeats of one issue are filed once), and none more than 4 h from the epoch (counted `rinex_stale`).
-The approved file is `gnss-attitude-study/v9-mosaic-filter-plan/reference/rinex-2026-289/`.
+The approved file is `gnss-attitude-study/v9-mosaic-filter-plan/reference/rinex-2026-289/`. GLONASS records
+are read with `--glonass 1` (the PX1105R's section).
 
 ### The unaided twin (`--unaided`)
 
@@ -897,6 +898,34 @@ byte before and after, 2026-10-21: a V9 mosaic log and the Beetle's ec10).
   (0: uncalibrated, no 1PPS on this carrier); `--epoch-shift-ms` moves the tags as for the other receivers.
 - `META app_iono a0 a1 a2 a3 b0 b1 b2 b3 gps_day`: the app's set, offered to the rule as the app's (the rig's sky never
   broadcasts page 18; the V9 rig image injects the sky's own).
+- `--px-seed-locks 1`: a log the filter starts from its own state (S lines: a V10 flight log, whose ring holds ~2 s
+  before launch) takes its first epochs' satellites as long locked, as the LC86G's restored start does. Without it
+  each enters as just relocked: its Doppler carries `rr_relock_sigma` (3 m/s) decaying over `relock_tau_s` (10 s),
+  2.5-2.9 m/s at launch against ~0.12-0.2 m/s locked, and the Doppler change check cannot see a burn. On the 65mm
+  Roll Control flight of 2026-11-21 (V10, PX100) the replay with it follows the flight's own filter to
+  0.12 / 0.06 / 0.18 m/s rms north / east / down (T-2 to T+14 s) and holds the Dopplers from the first burn epoch
+  to T+7.23 s as the flight did (the change check's window, then its latch, which lets go on the first epoch with
+  five Dopplers); without it, it never holds them. A satellite counts as seen min(1 s, half the relock gap) before
+  its first epoch: the LC86G's 1 s, unchanged; 1 s was past the PX1105R's 0.5 s gap, a relock at once.
+- `--glonass 1`: the PX1105R's GLONASS L1OF cells as well (Px1105rRawEpoch.h's `glonass`; the flown image takes
+  none): each satellite on its own carrier, 1602 MHz + k x 562.5 kHz, its Dopplers fused, its pseudorange read for
+  the transmit time alone (`pr_fused` false: the filter has no GLONASS clock offset yet). Their orbits come from
+  `--rinex`, whose GLONASS records rinex_nav reads only with it (the state at tb integrated, gnss/eph.h; tb moved
+  from UTC by 18 s, filed from tb - 15 min, when a receiver first has the set). A log whose receiver was asked for
+  GLONASS (the image's TR_RAW_GLONASS) carries its strings (0xE1): skytraq_feed.h decodes them as the driver does
+  (SkyTraqNav.h), each slot's frequency number from the 0xE5, and files them as it files the others. The 11-21
+  flight: the change check holds GLONASS's Dopplers with the rest through the burn and the coast; after it lets
+  go, a third more Dopplers.
+- `--l5 1`: the PX1105R's L5-band cells as well (GPS L5, Galileo E5a, BeiDou B2a; Px1105rRawEpoch.h's `l5`, the
+  image's TR_RAW_L5), as band 1 beside each satellite's L1-band cell. Their Dopplers are fused at their own instant,
+  the profile's `rr_lag_l5_s` (40 ms) further back than the L1 band's; the vertical check, the boost screen and the
+  change check judge the L1-band rows alone. Their code is fused only where the satellite's L1-band code is gone,
+  moved onto it by the driver's bridge (TR_GNSSRaw/CodeBridge.h: each satellite's L5 - L1 difference kept while it
+  has both). `--rr-lag-l5-ms X` (offline only) puts X in place of the profile's L5 lag. The 11-21 flight with it:
+  116 more Dopplers on the pad, 8 in the burn, none in the coast (the change check held every Doppler, as flown, and
+  the receiver had lost the L5 band before the L1 band) and 4 after; the velocity against the PX100's own fix
+  unchanged (1.00 / 0.95 / 4.72 m/s rms N / E / D, T+8.95-14). With `--l5 0` (the default) every PX1105R replay is
+  byte-identical to the tree before it.
 
 Beside it:
 - `px_events.py`: a rig capture of the PX1105R (`<host_t> B <hex body>`) beside the same simulated flight's sensors

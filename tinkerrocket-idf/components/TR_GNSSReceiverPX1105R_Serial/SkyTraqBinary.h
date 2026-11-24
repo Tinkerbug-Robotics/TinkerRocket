@@ -43,6 +43,7 @@ enum MsgId : uint8_t
     MSG_ELEV_CNR_MASK = 0xB0,   // reply to 0x2F
     MSG_POWER_MODE    = 0xB9,   // reply to 0x15
     MSG_GPS_SUBFRAME  = 0xE0,
+    MSG_GLO_STRING    = 0xE1,   // a GLONASS string (SkyTraqNav.h), with the 0x1E mask's bit 1
     MSG_BDS_D1        = 0xE2,
     MSG_RCV_STATE     = 0xDF,
     MSG_EXT_RAW       = 0xE5,
@@ -148,6 +149,7 @@ struct RawCell
     uint8_t  sig = 0;           // signal type (bits 4-7 of [0])
     uint8_t  svid = 0;
     uint8_t  lock_ind = 0;      // bits 4-7 of [2]
+    uint8_t  glo_freq = 0;      // bits 0-3 of [2]: a GLONASS satellite's frequency number plus 7
     uint8_t  cn0 = 0;           // dB-Hz
     uint16_t ind = 0;           // channel indicator
     double   pr_m = 0.0;

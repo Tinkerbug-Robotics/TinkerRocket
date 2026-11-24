@@ -5,8 +5,24 @@
 // Mirrors MosaicRawEpoch.h: one cell per satellite, on the L1-band signal
 // whose ephemeris and group delay the filter has (SkyTraqNav.h) -- GPS L1 C/A,
 // Galileo E1 and BeiDou B1I, signal type 0 -- and nothing else: the L5 band's
-// signals (type 4), GLONASS, SBAS, QZSS, NavIC, and BeiDou GEO (C01-C05,
-// C59-C63: gnss/eph.h cannot place a D2 orbit).
+// signals (type 4), SBAS, QZSS, NavIC, and BeiDou GEO (C01-C05, C59-C63:
+// gnss/eph.h cannot place a D2 orbit). GLONASS L1OF (slots 1-24) only where
+// the caller asks (glonass): each satellite on its own carrier, 1602 MHz +
+// k x 562.5 kHz, k from the cell's frequency number (its byte 2's low
+// nibble, k + 7). The filter fuses its Dopplers alone (RawMeasBuilder: a
+// GLONASS pseudorange needs a clock offset of its own, which the filter does
+// not carry yet); its pseudorange still places the satellite at its transmit
+// time.
+//
+// The L5 band (signal type 4: GPS L5, Galileo E5a, BeiDou B2a, all on
+// 1176.45 MHz) only where the caller asks (l5), as band 1 (RawMeas.h) of the
+// same satellites, after every L1-band cell, so a full epoch never loses an
+// L1-band cell to them. Each such cell's own lock and slips (its loop is its
+// own); its range rate on its own wavelength; no carrier phase (the filter's
+// carrier range rate is the L1 band's alone); its pseudorange as it came,
+// which the filter fuses only once CodeBridge.h has moved it onto the L1
+// band's (the receiver's own inter-band delay, tens of metres, and the
+// satellite's are in it).
 //
 // Units are the other receivers' (RawMeas.h):
 //   - pr_m: the pseudorange, m, with the receiver's clock bias in it;
@@ -45,6 +61,7 @@
 
 #include "RawMeas.h"
 #include "SkyTraqBinary.h"
+#include "gnss/eph.h"
 #include "gnss/types.h"
 
 namespace px1105r
@@ -54,11 +71,39 @@ static constexpr double kC = 299792458.0;            // m/s, as gnss/atmo.h's GN
 static constexpr double kFreqB1iHz = 1561.098e6;
 static constexpr int    kMaxPrn = 64;
 
-// The filter's system for an 0xE5 cell, or -1 for one it does not take.
-inline int filterSystem(const skytraq::RawCell& c)
+// The filter's system for an 0xE5 cell, or -1 for one it does not take
+// (GLONASS only with glonass, and a frequency number in -7..+6). The L1 band's
+// signals alone: filterSignal takes the L5 band's too.
+inline int filterSystem(const skytraq::RawCell& c, bool glonass = false)
 {
     if (c.sig != skytraq::kSigL1)
         return -1;
+    switch (c.gnss)
+    {
+    case skytraq::kGnssGlo:
+        return (glonass && c.svid >= 1 && c.svid <= 24 && c.glo_freq <= 13) ? GNSS_SYS_GLO : -1;
+    case skytraq::kGnssGps:
+        return (c.svid >= 1 && c.svid <= 32) ? GNSS_SYS_GPS : -1;
+    case skytraq::kGnssGal:
+        return (c.svid >= 1 && c.svid <= 36) ? GNSS_SYS_GAL : -1;
+    case skytraq::kGnssBds:
+        return (c.svid >= 6 && c.svid <= 58) ? GNSS_SYS_BDS : -1;   // MEO / IGSO only
+    default:
+        return -1;
+    }
+}
+
+// The filter's system and band (RawMeas.h) for an 0xE5 cell, or -1: an
+// L1-band cell as filterSystem takes it, and with l5 an L5-band one of GPS
+// (1-32), Galileo (1-36) or BeiDou MEO/IGSO (C06-C58) as band 1.
+inline int filterSignal(const skytraq::RawCell& c, bool glonass, bool l5, uint8_t& band)
+{
+    band = gnss_raw::kBandL1;
+    if (c.sig == skytraq::kSigL1)
+        return filterSystem(c, glonass);
+    if (!l5 || c.sig != skytraq::kSigL5)
+        return -1;
+    band = gnss_raw::kBandL5;
     switch (c.gnss)
     {
     case skytraq::kGnssGps:
@@ -77,12 +122,27 @@ inline double carrierHz(int sys)
     return sys == GNSS_SYS_BDS ? kFreqB1iHz : GNSS_FREQ_L1_HZ;
 }
 
+// A cell's own carrier: carrierHz's, or a GLONASS satellite's by its frequency number
+inline double carrierHz(int sys, const skytraq::RawCell& c)
+{
+    if (sys == GNSS_SYS_GLO)
+        return GLO_F1_HZ + GLO_DF1_HZ * (static_cast<int>(c.glo_freq) - 7);
+    return carrierHz(sys);
+}
+
+// And on a band: the L5 band's signals all on 1176.45 MHz
+inline double carrierHz(int sys, const skytraq::RawCell& c, uint8_t band)
+{
+    return band == gnss_raw::kBandL5 ? GNSS_FREQ_L5_HZ : carrierHz(sys, c);
+}
+
 // Each satellite's last carrier break (a flagged slip), and the receiver's
 // last clock jump, on the receiver's clock (week * 604800000 + TOW, ms), so a
 // lock never claims to run across either.
 struct Px1105rLockState
 {
-    int64_t slip_ms[GNSS_SYS_COUNT][kMaxPrn] = {};   // 0: none seen
+    int64_t slip_ms[GNSS_SYS_COUNT][kMaxPrn] = {};   // 0: none seen (the L1 band's)
+    int64_t slip_l5_ms[GNSS_SYS_BDS + 1][kMaxPrn] = {};   //   and the L5 band's (GPS, Galileo, BeiDou)
     bool    have_cut = false;
     int64_t cut_ms = 0;                              // the last clock jump (or a restart of the receiver's time)
     uint32_t slips = 0;
@@ -209,18 +269,25 @@ inline double epochGpsS(uint16_t week, uint32_t tow_ms, double dtr_ms)
 // The cells of one 0xE5 as a RawEpoch (tow_s the receiver's own time of week:
 // tow_s - pr / c is still each satellite's transmit time). Slip flags are
 // noted into lk (they hold the satellite's lock from then on). Returns the
-// cells kept; out.n = 0 for an epoch with none.
-inline int rawEpochFromE5(const skytraq::RawE5& in, Px1105rLockState& lk, gnss_raw::RawEpoch& out)
+// cells kept; out.n = 0 for an epoch with none. glonass: its GLONASS cells as
+// well (filterSystem); l5: its L5-band cells as well, after every L1-band one
+// (filterSignal). Without either, an L1-band epoch as before.
+inline int rawEpochFromE5(const skytraq::RawE5& in, Px1105rLockState& lk, gnss_raw::RawEpoch& out,
+                          bool glonass = false, bool l5 = false)
 {
     out.n = 0;
     out.tow_s = in.tow_ms * 1.0e-3;
     const int64_t now = rxMs(in.week, in.tow_ms);
+    // the L1 band's cells, then (l5) the L5 band's
+    for (int pass = 0; pass < (l5 ? 2 : 1); ++pass)
     for (int i = 0; i < in.n && out.n < gnss_raw::RawEpoch::kMaxObs; ++i)
     {
         const skytraq::RawCell& c = in.cell[i];
-        const int sys = filterSystem(c);
-        if (sys < 0)
+        uint8_t band = gnss_raw::kBandL1;
+        const int sys = filterSignal(c, glonass, l5, band);
+        if (sys < 0 || band != pass)
             continue;
+        int64_t& slip = band == gnss_raw::kBandL5 ? lk.slip_l5_ms[sys][c.svid] : lk.slip_ms[sys][c.svid];
         const bool has_pr = (c.ind & skytraq::kIndPr) && std::isfinite(c.pr_m) && c.pr_m > 0.0;
         const bool has_rate = (c.ind & skytraq::kIndDoppler) && std::isfinite(c.doppler_hz);
         const bool has_carrier = (c.ind & skytraq::kIndCarrier) && std::isfinite(c.carrier_cyc);
@@ -228,30 +295,32 @@ inline int rawEpochFromE5(const skytraq::RawE5& in, Px1105rLockState& lk, gnss_r
             continue;
         if (c.ind & skytraq::kIndSlip)
         {
-            lk.slip_ms[sys][c.svid] = now;
+            slip = now;
             lk.slips++;
         }
         // the lock, held to the last slip and clock jump
         uint32_t lock = skytraq::lockTimeMinMs(c.lock_ind);
         int64_t since_cut = INT64_MAX;
-        if (lk.slip_ms[sys][c.svid] != 0)
-            since_cut = now - lk.slip_ms[sys][c.svid];
+        if (slip != 0)
+            since_cut = now - slip;
         if (lk.have_cut && now - lk.cut_ms < since_cut)
             since_cut = now - lk.cut_ms;
         if (since_cut < static_cast<int64_t>(lock))
             lock = since_cut > 0 ? static_cast<uint32_t>(since_cut) : 0U;
 
-        const double lambda = kC / carrierHz(sys);
+        const double lambda = kC / carrierHz(sys, c, band);
         gnss_raw::RawObs& o = out.obs[out.n++];
         o.sys = static_cast<uint8_t>(sys);
         o.prn = c.svid;
+        o.band = band;
+        o.pr_l1 = false;
         o.cn0_dbhz = static_cast<float>(c.cn0);
         o.has_pr = has_pr;
         o.pr_m = has_pr ? c.pr_m : 0.0;
         o.has_rate = has_rate;
         o.rate_mps = has_rate ? -lambda * skytraq::dopplerHz(c.doppler_hz) : 0.0;
         o.lock_ms = lock;
-        o.has_phase = has_pr && has_carrier && !(c.ind & skytraq::kIndSlip) && lock > 0;
+        o.has_phase = band == gnss_raw::kBandL1 && has_pr && has_carrier && !(c.ind & skytraq::kIndSlip) && lock > 0;
         o.halfcyc = (c.ind & skytraq::kIndHalfCyc) != 0;
         o.phase_m = o.has_phase ? lambda * c.carrier_cyc : 0.0;
     }
