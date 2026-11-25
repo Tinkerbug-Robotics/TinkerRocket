@@ -20,8 +20,8 @@ series resistor, or 1–2 Ω power resistors, as dummy loads on J2.
   Check the boot log before anything else.
 - **New out-computer inputs:** `PG_RAIL` (GPIO17), `INA_ALERT` (GPIO18), `VBUCK_OK` (GPIO34).
 - **New parts behind unchanged pins:** BMP581 (not BMP585), QMC5883P magnetometer (not
-  IIS2MDC), and WSD20L50DN33 P-FETs as the pyro switches. The TPS1HC08-Q1 switches of
-  #1554 are V11's.
+  IIS2MDC), and WSD20L50DN33 P-FETs as the pyro switches. The #1554 smart switches
+  (TPS2HC16-Q1 since 2026-11-22, first the TPS1HC08-Q1) are V11's.
 
 ## 1. Before power
 
