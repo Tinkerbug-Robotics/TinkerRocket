@@ -9264,14 +9264,22 @@ static void setup_fc()
             // loop reassigns max_alt_m/max_speed_mps from kinematics every
             // tick, so restoring only the mirrors would be silently undone on
             // the very next pass. kinematics owns these; the mirrors follow.
-            // fmaxf rather than assignment because the live values can already
-            // have advanced past the snapshot in the ticks before we get here.
-            kinematics.max_altitude = fmaxf(kinematics.max_altitude, snap.max_alt_m);
-            kinematics.max_speed    = fmaxf(kinematics.max_speed,    snap.max_speed_mps);
-            max_alt_m     = kinematics.max_altitude;
+            //
+            // #1754: the reported maximum keeps the snapshot's, but the running
+            // maximum the barometer's apogee tests measure against takes it
+            // only past apogee. Before apogee the snapshot's altitude is behind
+            // the climb; seeded, the 50 m spike window refused every reading
+            // above it and apogee came late in the descent, back near the
+            // snapshot's altitude (80-120 m/s down after a boost or coast
+            // reboot). Unseeded, the first reading of this boot sets it.
+            kinematics.restoreFlightMaxima(snap.max_alt_m, snap.max_speed_mps,
+                                           snap.pyro_apogee_detected != 0);
+            max_alt_m     = kinematics.maxAltitudeReported();
             max_speed_mps = kinematics.max_speed;
-            ESP_LOGW(TAG, "[RECOVERY] flight maxima restored: alt %.1f m, speed %.1f m/s",
-                     (double)max_alt_m, (double)max_speed_mps);
+            ESP_LOGW(TAG, "[RECOVERY] flight maxima restored: alt %.1f m (apogee tests from %s), speed %.1f m/s",
+                     (double)max_alt_m,
+                     snap.pyro_apogee_detected ? "it" : "this boot's readings",
+                     (double)max_speed_mps);
 
             // Restore control state
             ekf_initialized  = snap.ekf_initialized;
@@ -15177,7 +15185,7 @@ static void loop_fc()
 
         pressure_alt_m = kinematics.alt_est;
         pressure_alt_rate_mps = kinematics.d_alt_est_;
-        max_alt_m = kinematics.max_altitude;
+        max_alt_m = kinematics.maxAltitudeReported();   // #1754: a restored maximum too
         max_speed_mps = kinematics.max_speed;
 
         // #452: periodic pre-flight settings snapshot.  Command-started bench

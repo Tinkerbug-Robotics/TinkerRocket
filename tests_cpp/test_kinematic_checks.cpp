@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <limits>
 #include "TR_KinematicChecks.h"
 #include "fixtures/boost_20260517_rp54.h"
 #include "GroundRefFreeze.h"
@@ -532,8 +533,10 @@ TEST_F(KinematicChecksTest, Apogee_DeadIMUInBoost_BaroBackstopStillFires) {
     // anyway.  Stays silent until > 30 m below the peak, then latches.  The
     // IMU is reported unhealthy, as it is when it has died: with a healthy IMU
     // the backstop waits for burnout and the lockout's end (the V10 pre-flight
-    // review's tests below).
-    uint32_t t = 600;
+    // review's tests below).  The descent starts past the altitude filter's
+    // first second, as in flight, where the filter starts on the pad (#1754:
+    // the stale-IMU backstop waits out a filter that has just started).
+    uint32_t t = 1100;
     float alt = 140.0f;
     bool fired_too_high = false;
     for (int i = 0; i < 160; i++, t += 2) {
@@ -913,6 +916,217 @@ TEST_F(KinematicChecksTest, Recovery_SeededBeforeApogee_QuiescenceStillCannotLat
     EXPECT_FALSE(kc.apogee_flag);
     EXPECT_FALSE(kc.quiescent_flag);
     EXPECT_FALSE(kc.alt_landed_flag);
+}
+
+// #1754: an FC reboot in the boost or coast restores the flight from a
+// snapshot taken just before the reset. The restore used to seed max_altitude
+// from it; the snapshot's altitude is behind the climb, so the 50 m spike
+// window refused every reading of the rest of the climb, and the barometer's
+// apogee vote and backstop -- which measure the drop from max_altitude -- came
+// on the descent, back near the snapshot's altitude. After a restore the
+// InertialVertical voters are not flying (only enterInflight launches them) and
+// the filter casts no vote, so the barometer decides, alone or with GNSS.
+namespace {
+
+struct RestoredCoast {
+    // Drag-free coast from the restore: 400 m, 80 m/s up (apogee 726.2 m at
+    // t = 8.155 s after the restore). The snapshot was taken at 300 m.
+    static constexpr float kH0 = 400.0f, kV0 = 80.0f, kG = 9.80665f;
+    static float alt(float t) { return kH0 + kV0 * t - 0.5f * kG * t * t; }
+    static float vel(float t) { return kV0 - kG * t; }
+    static float apogeeT() { return kV0 / kG; }
+    static float apogeeH() { return alt(apogeeT()); }
+};
+
+struct CallResult { bool called = false; float t = 0.0f; float alt = 0.0f; bool backstop = false; };
+// The first pass after the restore: a bad reading, or none.
+struct First { float error_m = 0.0f; bool no_reading = false; };
+
+} // namespace
+
+class KinematicRestoreTest : public KinematicChecksTest {
+protected:
+    // One pass as the flight loop makes it after a restore: the vote by
+    // sensor with the inertial voters not flying, burnout restored, the
+    // barometer healthy, GNSS (when given) at 10 Hz and admitted.
+    void pass(float t_s, bool with_gnss, float baro_error_m = 0.0f, bool new_baro = true,
+              bool imu_healthy = true) {
+        const float alt = RestoredCoast::alt(t_s);
+        float pos[3] = {0, 0, alt};
+        float vel[3] = {0, 0, RestoredCoast::vel(t_s)};
+        TR_KinematicChecks::InertialVote iv;
+        iv.in_use = true;
+        iv.healthy = false;
+        const uint32_t ms = static_cast<uint32_t>(t_s * 1000.0f + 0.5f);
+        const bool new_gps = with_gnss && (ms % 100U == 0U);
+        kc.kinematicChecks(new_baro ? alt + baro_error_m : 0.0f, 3.0f, pos, vel, 0.0f, new_baro,
+                           alt, new_gps, /*pitch*/ 1.0f, /*burnout*/ true, /*baro_lockout*/ false,
+                           RestoredCoast::vel(t_s), /*ekf_healthy*/ true, /*baro_healthy*/ true,
+                           imu_healthy, /*gnss_may_vote*/ true,
+                           /*baro_reading_fresh*/ true, &iv);
+    }
+    // `first` shapes the first pass after the restore: a bad reading, or none.
+    CallResult fly(bool with_gnss, First first = {}, bool imu_healthy = true) {
+        CallResult r;
+        for (uint32_t ms = 0; ms <= 20000U; ms += 2U) {
+            setMockMillis(5000U + ms);
+            const float t = ms / 1000.0f;
+            if (ms == 0U) pass(t, with_gnss, first.error_m, !first.no_reading, imu_healthy);
+            else          pass(t, with_gnss, 0.0f, true, imu_healthy);
+            if (kc.apogee_flag) {
+                r.called = true; r.t = t; r.alt = RestoredCoast::alt(t);
+                r.backstop = kc.apogee_backstop_flag;
+                break;
+            }
+        }
+        return r;
+    }
+};
+
+TEST_F(KinematicRestoreTest, BeforeApogee_BarometerAlone_CallsApogeeNearThePeak) {
+    kc.launch_flag = true;                                   // as the restore sets it
+    kc.restoreFlightMaxima(300.0f, 120.0f, /*past_apogee=*/false);
+    EXPECT_EQ(kc.max_altitude, 0.0f) << "not seeded before apogee";
+
+    const CallResult r = fly(/*with_gnss=*/false);
+    ASSERT_TRUE(r.called);
+    EXPECT_TRUE(r.backstop) << "the barometer alone calls by its backstop";
+    EXPECT_GT(r.t, RestoredCoast::apogeeT());
+    EXPECT_LT(r.t - RestoredCoast::apogeeT(), 3.5f) << "called " << r.t << " s, apogee "
+                                                    << RestoredCoast::apogeeT() << " s";
+    EXPECT_LT(RestoredCoast::apogeeH() - r.alt, 45.0f);
+}
+
+TEST_F(KinematicRestoreTest, BeforeApogee_BarometerAndGnss_VoteNearThePeak) {
+    kc.launch_flag = true;
+    kc.restoreFlightMaxima(300.0f, 120.0f, /*past_apogee=*/false);
+
+    const CallResult r = fly(/*with_gnss=*/true);
+    ASSERT_TRUE(r.called);
+    EXPECT_FALSE(r.backstop) << "two sensors: the vote calls";
+    EXPECT_LT(r.t - RestoredCoast::apogeeT(), 2.0f);
+    EXPECT_LT(RestoredCoast::apogeeH() - r.alt, 20.0f);
+}
+
+TEST_F(KinematicRestoreTest, BeforeApogee_ABadLowFirstReading_StillCallsNearThePeak) {
+    // The rate gate takes the first reading unchecked and then refuses the
+    // next ten good ones against it; the eleventh pulls the filter most of
+    // the way up in one step. The maximum follows the filter while it settles.
+    for (float err : {-55.0f, -80.0f, -200.0f}) {
+        kc.reset();
+        kc.launch_flag = true;
+        kc.restoreFlightMaxima(300.0f, 120.0f, /*past_apogee=*/false);
+        const CallResult r = fly(/*with_gnss=*/false, First{err, false});
+        ASSERT_TRUE(r.called) << err;
+        EXPECT_LT(r.t - RestoredCoast::apogeeT(), 3.5f) << "first reading " << err << " m";
+        EXPECT_LT(RestoredCoast::apogeeH() - r.alt, 45.0f) << "first reading " << err << " m";
+    }
+}
+
+TEST_F(KinematicRestoreTest, BeforeApogee_ABadHighFirstReading_DoesNotCallInTheClimb) {
+    // With the IMU stale after the reboot the backstop is not gated on
+    // burnout; a maximum left at a high first reading would let it fire while
+    // the filter pulls back down to the climbing rocket. Kilometres high, the
+    // filter is still falling when the follow window closes; the stale-IMU
+    // backstop then waits for the filter's first second.
+    for (float err : {40.0f, 150.0f, 10000.0f, 30000.0f}) {
+        kc.reset();
+        kc.launch_flag = true;
+        kc.restoreFlightMaxima(300.0f, 120.0f, /*past_apogee=*/false);
+        const CallResult r = fly(/*with_gnss=*/false, First{err, false}, /*imu_healthy=*/false);
+        ASSERT_TRUE(r.called) << err;
+        EXPECT_GT(r.t, RestoredCoast::apogeeT()) << "called climbing, first reading +" << err << " m";
+        EXPECT_LT(RestoredCoast::apogeeH() - r.alt, 45.0f) << "first reading +" << err << " m";
+    }
+}
+
+TEST_F(KinematicRestoreTest, BeforeApogee_AFirstPassWithNoReading_StillCallsNearThePeak) {
+    kc.launch_flag = true;
+    kc.restoreFlightMaxima(300.0f, 120.0f, /*past_apogee=*/false);
+    const CallResult r = fly(/*with_gnss=*/false, First{0.0f, /*no_reading=*/true});
+    ASSERT_TRUE(r.called);
+    EXPECT_LT(r.t - RestoredCoast::apogeeT(), 3.5f);
+    EXPECT_LT(RestoredCoast::apogeeH() - r.alt, 45.0f);
+}
+
+TEST_F(KinematicRestoreTest, TheOldSeedBeforeApogee_CalledApogeeOnTheDescent) {
+    // Why the restore must not seed before apogee: a seeded maximum is
+    // outside the follow window (that is for an unseeded start), so the 50 m
+    // window holds it at the snapshot's 300 m through the whole climb.
+    kc.launch_flag = true;
+    kc.restoreFlightMaxima(300.0f, 120.0f, /*past_apogee=*/true);
+    ASSERT_EQ(kc.max_altitude, 300.0f);
+
+    const CallResult r = fly(/*with_gnss=*/false);
+    ASSERT_TRUE(r.called);
+    EXPECT_GT(RestoredCoast::apogeeH() - r.alt, 300.0f)
+        << "the seeded maximum stalls the barometer until the descent";
+    EXPECT_LT(RestoredCoast::vel(r.t), -70.0f);
+}
+
+TEST_F(KinematicRestoreTest, PastApogee_TheRunningMaximumIsTheSnapshots) {
+    kc.launch_flag = true;
+    kc.apogee_flag = true;
+    kc.restoreFlightMaxima(800.0f, 150.0f, /*past_apogee=*/true);
+    EXPECT_EQ(kc.max_altitude, 800.0f);
+    EXPECT_EQ(kc.maxAltitudeReported(), 800.0f);
+    EXPECT_EQ(kc.max_speed, 150.0f);
+}
+
+TEST_F(KinematicRestoreTest, BeforeApogee_TheReportedMaximumKeepsTheSnapshotUntilPassed) {
+    // #1154 item 9 still holds: the flight's reported maximum never drops
+    // below the snapshot's.
+    kc.launch_flag = true;
+    kc.restoreFlightMaxima(300.0f, 120.0f, /*past_apogee=*/false);
+    EXPECT_EQ(kc.maxAltitudeReported(), 300.0f);
+    EXPECT_EQ(kc.max_speed, 120.0f);
+
+    setMockMillis(1000);
+    callFlight(250.0f, 3.0f, 10.0f);             // a first reading below it
+    EXPECT_EQ(kc.max_altitude, 250.0f);
+    EXPECT_EQ(kc.maxAltitudeReported(), 300.0f);
+
+    for (int i = 1; i <= 2000; i++) {            // climb 0.2 m a pass to 650 m
+        setMockMillis(1000 + i * 2);
+        callFlight(250.0f + 0.2f * i, 3.0f, 10.0f);
+    }
+    EXPECT_GT(kc.max_altitude, 640.0f) << "the running maximum follows the climb";
+    EXPECT_EQ(kc.maxAltitudeReported(), kc.max_altitude);
+}
+
+TEST_F(KinematicRestoreTest, ANanSnapshotIsIgnored) {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    kc.restoreFlightMaxima(nan, nan, /*past_apogee=*/true);
+    EXPECT_EQ(kc.max_altitude, 0.0f);
+    EXPECT_EQ(kc.maxAltitudeReported(), 0.0f);
+    EXPECT_EQ(kc.max_speed, 0.0f);
+}
+
+TEST_F(KinematicRestoreTest, ResetClearsTheRestoredMaximum) {
+    kc.restoreFlightMaxima(300.0f, 120.0f, /*past_apogee=*/false);
+    kc.reset();
+    EXPECT_EQ(kc.maxAltitudeReported(), 0.0f);
+}
+
+TEST_F(KinematicChecksTest, AltKF_StartsOnTheFirstRealReading) {
+    // #1754: a pass with no barometer reading used to start the filter at 0.
+    // After a reboot at 1000 m its climb back outran the 50 m window, leaving
+    // max_altitude short of the rocket.
+    kc.launch_flag = true;
+    setMockMillis(1000);
+    callStationary(/*alt=*/0.0f, 9.81f, /*new_baro=*/false);
+    EXPECT_FALSE(kc.alt_est > 0.0f);
+
+    setMockMillis(1002);
+    callStationary(1000.0f, 9.81f, /*new_baro=*/true);
+    EXPECT_FLOAT_EQ(kc.alt_est, 1000.0f) << "started on the reading, not pulled up from 0";
+    EXPECT_FLOAT_EQ(kc.max_altitude, 1000.0f);
+
+    for (int i = 1; i <= 500; i++) {             // climb 0.5 m a pass
+        setMockMillis(1002 + i * 2);
+        callStationary(1000.0f + 0.5f * i, 9.81f, true);
+    }
+    EXPECT_GT(kc.max_altitude, 1200.0f) << "and the maximum follows the climb";
 }
 
 // V10 pre-flight review: above about 10.4 km the barometer reads under its
