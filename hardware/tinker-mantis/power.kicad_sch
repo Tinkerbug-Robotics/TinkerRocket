@@ -6519,7 +6519,7 @@
 		)
 		(uuid "cf87a5d9-763e-4149-87fb-c228878a2eea")
 	)
-	(text "Supercap hold-up (rework): U47 charges the cap to\n2.5 V at 100 mA, bypasses V_BUCK to +3V3 in normal\noperation, and boosts from the cap to a flat 3.3 V\nwhen V_BUCK collapses -- the rail no longer sags,\nand the 2.9 V cutoff chain is gone.  OSEL/VCHG/ICHG\nare 1% code resistors: 4.75k = 3.3 V out, 6.65k =\n2.5 V termination (bounded by VIN - 800 mV), 22.1k\n= 100 mA charge.\nHold: ~2.6-3.9 s @0.7 A (5 F, 2.5 -> 1.5-1.9 V\nfloor at that load, eta 0.9, flat 3.3 V out) --\nrides any firing event with margin.\nVBUCK_OK (100k/1M off V_BUCK) replaces CAP_ACTIVE,\nINVERTED: HIGH = buck present, LOW = riding the cap.\nEN/MODE to VIN = auto buck/boost.  Keep L7 and C141\ntight to U47 -- the SW node is hot."
+	(text "Supercap hold-up (rework): U47 charges the cap to\n2.5 V at 100 mA, bypasses V_BUCK to +3V3 in normal\noperation, and boosts from the cap to a flat 3.0 V\nwhen V_BUCK collapses -- the rail no longer sags,\nand the 2.9 V cutoff chain is gone.  OSEL/VCHG/ICHG\nare 1% code resistors: 3.09k = 3.0 V out, 6.65k =\n2.5 V termination (bounded by VIN - 800 mV), 22.1k\n= 100 mA charge.\n3.0 V not 3.3 so the cap always charges: VBYPASS is\n150 mV worst case against V_BUCK 3.465 V.\nCell: C130, 2 F. Hold-up times are in\nholdup-tps61094-rework.md.\nVBUCK_OK (100k/1M off V_BUCK) replaces CAP_ACTIVE,\nINVERTED: HIGH = buck present, LOW = riding the cap.\nEN/MODE high via D10 (V_BUCK or +3V3) = auto\nbuck/boost.  Keep L11 and C141 tight to U47 -- the\nSW node is hot."
 		(exclude_from_sim no)
 		(at 298.45 53.34 0)
 		(effects
@@ -11540,7 +11540,7 @@
 				)
 			)
 		)
-		(property "Description" "Supercap hold-up: bypass V_BUCK->+3V3, charge 2.6V/100mA, boost to 3.3V on loss"
+		(property "Description" "Supercap hold-up: bypass V_BUCK->+3V3, charge 2.5 V / 100 mA, boost to 3.0 V on loss"
 			(at 240.03 52.07 0)
 			(hide yes)
 			(show_name no)
@@ -18569,7 +18569,7 @@
 				)
 			)
 		)
-		(property "Description" "OSEL: VOUT = 3.3 V"
+		(property "Description" "OSEL: VOUT = 3.0 V"
 			(at 273.05 55.88 0)
 			(hide yes)
 			(show_name no)

@@ -11848,7 +11848,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "23.2 k"
+		(property "Value" "24.9 k"
 			(at 81.915 178.435 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11892,7 +11892,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0723K2L"
+		(property "MPN" "RC0402FR-0724K9L"
 			(at 189.23 122.555 0)
 			(hide yes)
 			(show_name no)
@@ -13183,7 +13183,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "23.2 k"
+		(property "Value" "24.9 k"
 			(at 88.265 55.245 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -13227,7 +13227,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0723K2L"
+		(property "MPN" "RC0402FR-0724K9L"
 			(at 189.23 122.555 0)
 			(hide yes)
 			(show_name no)
@@ -16110,7 +16110,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "23.2 k"
+		(property "Value" "24.9 k"
 			(at 80.645 116.84 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -16154,7 +16154,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0723K2L"
+		(property "MPN" "RC0402FR-0724K9L"
 			(at 187.96 108.585 0)
 			(hide yes)
 			(show_name no)
@@ -17011,7 +17011,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "23.2 k"
+		(property "Value" "24.9 k"
 			(at 172.72 135.255 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -17055,7 +17055,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0723K2L"
+		(property "MPN" "RC0402FR-0724K9L"
 			(at 189.23 122.555 0)
 			(hide yes)
 			(show_name no)
