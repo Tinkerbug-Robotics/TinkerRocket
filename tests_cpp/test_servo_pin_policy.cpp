@@ -1,10 +1,10 @@
-// servoPinsValid() read the rocket-computer-mini as having four servos.
+// servoPinsValid() read the Tinker-Beetle V1 as having four servos.
 //
 // The board headers spell an absent pin two ways. V7/V8/V9 declare the servo
-// pins as uint8_t GPIO numbers (255 = unmapped); M1, which has no servos,
-// declares all four as `static constexpr int ... = -1`. main.cpp compared each
-// pin with `!= 255U`, and an int -1 converts to 0xFFFFFFFF under the usual
-// arithmetic conversions, so the mini passed: setup_fc ran
+// pins as uint8_t GPIO numbers (255 = unmapped); the Beetle, which has no
+// servos, declares all four as `static constexpr int ... = -1` (the V2 as the
+// V1 did). main.cpp compared each pin with `!= 255U`, and an int -1 converts
+// to 0xFFFFFFFF under the usual arithmetic conversions, so the V1 passed: setup_fc ran
 // servo_control.begin() with every pin narrowed to uint8_t 255, all four LEDC
 // channel configs failed, and servo_enabled was never forced off.
 
@@ -27,7 +27,7 @@ struct V9Pins {   // board/board_v9.h (V8 is the same map)
     static constexpr uint8_t SERVO_PIN_3 = 43;
     static constexpr uint8_t SERVO_PIN_4 = 54;
 };
-struct M1Pins {   // board/board_m1.h — no servos on this board
+struct M2Pins {   // board/board_m2.h — no servos on this board
     static constexpr int SERVO_PIN_1 = -1;
     static constexpr int SERVO_PIN_2 = -1;
     static constexpr int SERVO_PIN_3 = -1;
@@ -48,11 +48,11 @@ TEST(ServoPinPolicy, V9Uint8PinsAreMapped) {
     EXPECT_TRUE(servoPinsValid<V9Pins>());
 }
 
-TEST(ServoPinPolicy, M1IntMinusOnePinsAreUnmapped) {
+TEST(ServoPinPolicy, M2IntMinusOnePinsAreUnmapped) {
     // THE BUG. The old `SERVO_PIN_1 != 255U` compared 0xFFFFFFFF with 255 and
     // said yes; begin() then ran against pin 255 on all four channels.
-    EXPECT_FALSE(servoPinsValid<M1Pins>());
-    EXPECT_FALSE(pinMapped(M1Pins::SERVO_PIN_1));
+    EXPECT_FALSE(servoPinsValid<M2Pins>());
+    EXPECT_FALSE(pinMapped(M2Pins::SERVO_PIN_1));
 }
 
 TEST(ServoPinPolicy, TheUint8SentinelStillMeansUnmapped) {

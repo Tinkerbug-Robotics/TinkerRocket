@@ -1,5 +1,6 @@
-// Lc86Parser.cpp — see Lc86Parser.h. NO ESP-IDF includes in this file:
-// it must compile on the host for tests_cpp/test_lc86_parser.cpp.
+// Lc86Parser.cpp — see Lc86Parser.h. NO ESP-IDF includes in this file: it
+// is a host-only decoder now (tests_cpp/test_gnss_wire_rtcm.cpp, the raw-GNSS
+// tests, tools/raw_replay, tinkerrocket-sim).
 #include "Lc86Parser.h"
 
 #include <cstring>

@@ -4,7 +4,7 @@
 
 // When the OC gives its half of the Beetle's two-processor pyro arm.
 //
-// On the Beetle (TR_BOARD_M1) the squib return FET U9 closes only while BOTH
+// On the Beetle (TR_BOARD_M2, and the retired V1) the squib return FET U9 closes only while BOTH
 // FC_ARM (FC GPIO44) and OC_ARM_EN (OC GPIO11, config::ARM_CONSENT_PIN) are
 // high: Q12 and Q14 in series pull Q13's base, and Q13 drives U9's gate from
 // the pack. With U9 open the return reaches ground only through R73 (2.2 k),

@@ -3,7 +3,7 @@
 // Built once per board (tests_cpp/CMakeLists.txt). Two things are checked for
 // every board, because the Tinker-Beetle V2 target (TR_BOARD_M2) added them to
 // code that all boards compile:
-//   * TR_OC_ANTENNA_OFFSET, which replaced ten `#if !TR_BOARD_M1` in main.cpp:
+//   * TR_OC_ANTENNA_OFFSET, which replaced ten per-board checks in main.cpp:
 //     the antenna offset is served everywhere but on the Beetle.
 //   * config::LINK_NET_ON_MTCK, which decides whether setup_oc() turns off the
 //     pull-up the chip puts on GPIO39 at reset. Only the V2 has a link net
@@ -55,8 +55,8 @@ std::vector<std::pair<std::string, int>> wiredPins()
         {"LoRa_ACT",            config::LORA_ACT_PIN},
         {"camera IMON",         config::CAM_IMON_GPIO},
         {"servo IMON",          config::SERVO_IMON_GPIO},
-#if TR_BOARD_M1 || TR_BOARD_M2
-        {"L_RXEN",              config::LORA_RXEN_PIN},   // only the Beetle's headers name it
+#if TR_BOARD_M2
+        {"L_RXEN",              config::LORA_RXEN_PIN},   // only the Beetle's header names it
 #endif
     };
     std::vector<std::pair<std::string, int>> wired;
@@ -68,7 +68,7 @@ std::vector<std::pair<std::string, int>> wiredPins()
 
 TEST(OcBoardMap, TheAntennaOffsetIsServedEverywhereButOnTheBeetle)
 {
-#if TR_BOARD_M1 || TR_BOARD_M2
+#if TR_BOARD_M2
     EXPECT_EQ(TR_OC_ANTENNA_OFFSET, 0);
 #else
     EXPECT_EQ(TR_OC_ANTENNA_OFFSET, 1);
@@ -121,8 +121,7 @@ TEST(OcBoardM2, TheSevenSignalsTheV2LayoutMovedAreOnTheirNewPads)
 
 TEST(OcBoardM2, EverythingElseIsWhereRev1HasIt)
 {
-    // board_m1.h's numbers, written out: the two headers are separate files
-    // and cannot share a translation unit.
+    // rev1's numbers, written out (its header was retired with the V1).
     EXPECT_EQ(config::I2S_DIN_PIN, 3);
     EXPECT_EQ(config::I2C_SDA_PIN, 5);
     EXPECT_EQ(config::I2C_SCL_PIN, 6);
@@ -215,22 +214,3 @@ TEST(OcBoardM2, TheBoardNameReducesToM2)
 
 #endif   // TR_BOARD_M2
 
-#if TR_BOARD_M1
-
-TEST(OcBoardM1, Rev1KeepsItsMap)
-{
-    // The seven signals V2 moved, where rev1 boards have them. A change here
-    // is a change to boards that exist and fly.
-    EXPECT_EQ(config::PWR_PIN, 7);
-    EXPECT_EQ(config::LORA_CS_PIN, 13);
-    EXPECT_EQ(config::I2S_FSYNC_PIN, 4);
-    EXPECT_EQ(config::I2S_WS_PIN, 1);
-    EXPECT_EQ(config::I2S_BCLK_PIN, 2);
-    EXPECT_EQ(config::LORA_BUSY_PIN, 14);
-    EXPECT_EQ(config::LORA_RXEN_PIN, 10);
-    char norm[board_identity::kMaxRev + 1];
-    board_identity::normalizeRev(TR_BOARD_REV_STR, norm, sizeof(norm));
-    EXPECT_STREQ(norm, "M1");
-}
-
-#endif   // TR_BOARD_M1

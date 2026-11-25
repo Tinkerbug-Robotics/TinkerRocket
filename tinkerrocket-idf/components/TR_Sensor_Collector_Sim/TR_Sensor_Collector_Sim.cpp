@@ -24,10 +24,9 @@
 #include <compat.h>
 // The `Serial` object this file prints through is the SparkFun shim in the
 // u-blox driver (sfe_bus.h). It used to arrive transitively through
-// SensorCollector.h; on boards where the collector selects the LC86 GNSS
-// driver instead (TR_GNSS_DRIVER_LC86) that path is gone, so include it
-// explicitly. The shim is compiled unconditionally, so this is
-// declaration-only on every board.
+// SensorCollector.h; on boards where the collector selects another GNSS
+// driver that path is gone, so include it explicitly. The shim is compiled
+// unconditionally, so this is declaration-only on every board.
 #include <sfe_bus.h>
 
 // ============================================================================
@@ -743,7 +742,7 @@ bool SensorCollectorSim::getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out)
 {
     const bool have = real_.getGNSSRawEpoch(out);
 #if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
-    // The mosaic-G5 hands no timed fix (getGNSSFix is the LC86G's): its timed
+    // The mosaic-G5 hands no timed fix (getGNSSFix is the PX1105R's): its timed
     // epochs set the replay's clock, on the GPS-to-MCU mapping the filter
     // builds the same epochs with (#1600 rig replay on the V9); the
     // gnss-sdr-dev board's on the SDR raw-nav image the same way
@@ -1200,7 +1199,7 @@ void SensorCollectorSim::packIIS2MDC(uint32_t time_us, float bx, float by, float
                                      IIS2MDCData& out) const
 {
     // Counts at the scale of the chip behind the seam (#1312): 0.15 µT/LSB on
-    // the IIS2MDC, 100/3750 on the mini's QMC5883P — so the converter, which
+    // the IIS2MDC, 100/3750 on the V10's QMC5883P — so the converter, which
     // reads the same seam, reproduces the simulated field on either board.
     const float COUNTS_PER_UT = 1.0f / real_.magLsbToUt();
     memset(&out, 0, sizeof(out));

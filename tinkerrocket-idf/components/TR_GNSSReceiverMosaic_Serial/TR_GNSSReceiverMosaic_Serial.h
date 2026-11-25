@@ -1,6 +1,6 @@
 // TR_GNSSReceiverMosaic_Serial.h — Septentrio mosaic-G5 driver, ESP-IDF native UART
 //
-// Drop-in for TR_GNSSReceiverUBloxSerial / TR_GNSSReceiverLC86Serial: the
+// Drop-in for TR_GNSSReceiverUBloxSerial: the
 // same begin / pollNewPVT / getGNSSData surface and the same GNSSData,
 // selected in TR_Sensor_Collector by TR_GNSS_DRIVER_MOSAIC (the V9 flying a
 // mosaic-go G5 P3 on J1). It speaks SBF (Septentrio Binary Format): the

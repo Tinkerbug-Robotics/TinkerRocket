@@ -89,9 +89,9 @@ if(TR_TEST_NO_FLIGHT_LOOP)
     add_compile_definitions(TR_TEST_NO_FLIGHT_LOOP=${TR_TEST_NO_FLIGHT_LOOP})
     message(WARNING "TR_TEST_NO_FLIGHT_LOOP=${TR_TEST_NO_FLIGHT_LOOP} -- the flight task is starved ON PURPOSE (bench no-flight-loop test image)")
 endif()
-# #1600 phase 4: the raw-GNSS shadow filter runs wherever the LC86G driver does
-# (main/config.h). -DTR_RAW_GNSS_SHADOW=0 builds an LC86G image without it, for
-# a bench A/B of what it costs on core 0.
+# #1600 phase 4: the raw-GNSS shadow filter runs wherever a driver hands over
+# raw measurements (main/config.h). -DTR_RAW_GNSS_SHADOW=0 builds the
+# mosaic-only or PX1105R image without it (GpsInsEKF alone).
 if(DEFINED TR_RAW_GNSS_SHADOW)
     add_compile_definitions(TR_RAW_GNSS_SHADOW=${TR_RAW_GNSS_SHADOW})
     message(STATUS "TR_RAW_GNSS_SHADOW=${TR_RAW_GNSS_SHADOW} -- raw-GNSS shadow filter set by hand")
@@ -324,17 +324,17 @@ endif()
 #
 # The rig replay (#1600: -DTR_SIM_REPLAY_BLOB=FILE, TR_Sensor_Collector_Sim/
 # CMakeLists.txt) plays a flight's sensors against the receiver's GPS time,
-# which only three receivers give it: the M1's LC86G (its timed fixes), the
-# mosaic-only image's mosaic-G5 (the raw-GNSS filter's timed epochs, which its
-# GNSS task drains) and, on the V9's or V10's auto image, the gnss-sdr-dev
+# which only these receivers give it: the mosaic-only image's mosaic-G5 (the
+# raw-GNSS filter's timed epochs, which its GNSS task drains), the V10's
+# gnss-sdr-dev image and, on the V9's or V10's auto image, the gnss-sdr-dev
 # board (the GPS-to-MCU line its RTCM epochs build, which the flight loop
-# drains: the P1 rig's boost through the V10). Any other build would play the
-# pad for ever, so it is refused. On the mosaic-only image a replay build
+# drains: the P1 rig's boost through the V10). The Beetle V1's LC86G (its
+# timed fixes) was the first, and went with the V1. Any other build would play
+# the pad for ever, so it is refused. On the mosaic-only image a replay build
 #   - cold-starts the receiver at each boot, as TR_BENCH_MOSAIC_COLD_START
-#     does (the LC86G's replay build does its own,
-#     TR_GNSSReceiverLC86_Serial/CMakeLists.txt): the rig's sky is another
-#     day and place than the one the receiver last tracked, and every good rig
-#     capture of the mosaic was cold-started first;
+#     does: the rig's sky is another day and place than the one the receiver
+#     last tracked, and every good rig capture of the mosaic was cold-started
+#     first;
 #   - tells main.cpp it flies the rig's sky (TR_RAW_NAV_RIG_REPLAY): the
 #     sky's broadcast ionosphere wins over the app's or NVS's, whatever their
 #     days, and no set dated more than a day from the sky's is taken
@@ -350,11 +350,11 @@ endif()
 # it the filter builds the rig's sky with no Klobuchar.
 if(TR_SIM_REPLAY_BLOB)
     if(TR_GNSS_PX1105R)
-        message(FATAL_ERROR "TR_SIM_REPLAY_BLOB is not for the PX1105R image (-DTR_GNSS_PX1105R=1): the rig replay is the M1's (-DTR_BOARD_M1=1), the mosaic-only image's (-DTR_GNSS_MOSAIC=1) or the gnss-sdr-dev board's")
+        message(FATAL_ERROR "TR_SIM_REPLAY_BLOB is not for the PX1105R image (-DTR_GNSS_PX1105R=1, and so not the Tinker-Beetle V2's): the rig replay is the mosaic-only image's (-DTR_GNSS_MOSAIC=1) or the gnss-sdr-dev board's")
     elseif(TR_GNSS_MOSAIC AND NOT _tr_mosaic_rawnav)
         message(FATAL_ERROR "TR_SIM_REPLAY_BLOB on the mosaic-only image takes its clock from the raw-GNSS filter's timed epochs: build it with the filter (no -DTR_RAW_GNSS_SHADOW=0)")
-    elseif(NOT TR_GNSS_MOSAIC AND NOT TR_GNSS_SDR AND NOT TR_BOARD_M1 AND NOT ((TR_BOARD_V9 OR TR_BOARD_V10) AND (NOT DEFINED TR_GNSS_AUTO OR TR_GNSS_AUTO)))
-        message(FATAL_ERROR "TR_SIM_REPLAY_BLOB needs a receiver whose time sets the replay's clock: the M1's LC86G (-DTR_BOARD_M1=1), the mosaic-only image (-DTR_GNSS_MOSAIC=1 on a V8 or V9), the V10's gnss-sdr-dev image (-DTR_GNSS_SDR=1) or the gnss-sdr-dev board on the V9's or V10's auto image")
+    elseif(NOT TR_GNSS_MOSAIC AND NOT TR_GNSS_SDR AND NOT ((TR_BOARD_V9 OR TR_BOARD_V10) AND (NOT DEFINED TR_GNSS_AUTO OR TR_GNSS_AUTO)))
+        message(FATAL_ERROR "TR_SIM_REPLAY_BLOB needs a receiver whose time sets the replay's clock: the mosaic-only image (-DTR_GNSS_MOSAIC=1 on a V8 or V9), the V10's gnss-sdr-dev image (-DTR_GNSS_SDR=1) or the gnss-sdr-dev board on the V9's or V10's auto image")
     endif()
     if(TR_GNSS_AUTO_RAW)
         # The one image (-DTR_GNSS_AUTO_RAW=1) with the gnss-sdr-dev board on
@@ -366,7 +366,7 @@ if(TR_SIM_REPLAY_BLOB)
         # board's epochs). With any other receiver on J1 it stays on the pad.
         add_compile_definitions(TR_RAW_NAV_RIG_REPLAY=1)
         message(STATUS "flight_computer: RIG REPLAY of the one image (TR_RAW_NAV_RIG_REPLAY=1): the gnss-sdr-dev board's timed epochs set the replay's clock, as on the gnss-sdr-dev image (with any other receiver on J1 the replay stays on the pad)")
-    elseif(NOT TR_GNSS_MOSAIC AND NOT TR_GNSS_SDR AND NOT TR_BOARD_M1)
+    elseif(NOT TR_GNSS_MOSAIC AND NOT TR_GNSS_SDR)
         message(STATUS "flight_computer: RIG REPLAY of the V9/V10 auto image: the gnss-sdr-dev board's clock line sets the replay's clock (with any other receiver on J1 the replay stays on the pad)")
     endif()
     if(TR_GNSS_SDR)
@@ -421,9 +421,7 @@ if(TR_GNSS_BENCH_COLD_START)
     message(STATUS "TR_GNSS_BENCH_COLD_START=1 -- u-blox cold start at every boot (bench)")
 endif()
 
-if(TR_BOARD_M1)
-    set(TR_BOARD_SUFFIX "-m1")
-elseif(TR_BOARD_M2)
+if(TR_BOARD_M2)
     set(TR_BOARD_SUFFIX "-m2")
 elseif(TR_BOARD_V10)
     set(TR_BOARD_SUFFIX "-v10")
@@ -470,10 +468,10 @@ set(PROJECT_VER "${TR_GIT_SHA}${TR_BOARD_SUFFIX}${TR_BENCH_SUFFIX}+${TR_BUILD_DA
 # a firmware image is installed.
 add_compile_definitions(TR_BOARD_OTA_SUFFIX="${TR_BOARD_SUFFIX}")
 
-# Board revision has to reach sdkconfig, not just the compiler. M1
-# (rocket-computer-mini) is the only flight computer that is NOT an ESP32-P4 —
-# its FC is an ESP32-S3RH2 — so the overlay changes CONFIG_IDF_TARGET as well
-# as turning on that part's in-package PSRAM.
+# Board revision has to reach sdkconfig, not just the compiler. M2 (the
+# Tinker-Beetle V2) is the only flight computer that is NOT an ESP32-P4 — its
+# FC is an ESP32-S3FH4R2 — so the overlay changes CONFIG_IDF_TARGET as well as
+# turning on that part's in-package PSRAM.
 #
 # For V9 and V10 the overlay sets nothing any more. Until #916 it raised the boot
 # NOR declaration to 16 MB for the GD25Q128 those boards carry; since the
@@ -485,7 +483,7 @@ add_compile_definitions(TR_BOARD_OTA_SUFFIX="${TR_BOARD_SUFFIX}")
 # "Detected size(16384k) larger than ... (8192k)" boot line; over-declaring is
 # the direction that boot-loops an 8 MB V7/V8 inside the bootloader, before
 # any firmware runs. The comments-only overlay stays as the V9 per-board hook,
-# so a future V9-only setting has the same home the M1 branch below uses.
+# so a future V9-only setting has the same home the M2 branch below uses.
 #
 # Both lines matter, and the second is the one that is easy to leave out.
 # SDKCONFIG_DEFAULTS picks the overlay. SDKCONFIG moves the GENERATED config
@@ -495,43 +493,20 @@ add_compile_definitions(TR_BOARD_OTA_SUFFIX="${TR_BOARD_SUFFIX}")
 # quietly share one config — a wrong target or a wrong flash size ride into
 # the next build with a correct-looking log. `idf.py -B <dir> reconfigure`
 # re-seeds from these defaults; a root sdkconfig is now ignored (untracked).
-if(TR_BOARD_M1)
-    set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.m1")
+if(TR_BOARD_M2)
+    # The Tinker-Beetle V2: the ESP32-S3 overlay (the target, its quad PSRAM,
+    # no radio stack, 240 MHz, QIO, the brownout level). Its flash is the 4 MB
+    # in the ESP32-S3FH4R2's package: sdkconfig.defaults.flash4mb, appended
+    # last below, so nothing after it puts the 8 MB declaration back.
+    set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.m2")
     # CONFIG_IDF_TARGET in the overlay is NOT enough on its own. idf.py
-    # resolves the target before SDKCONFIG_DEFAULTS is applied, so an M1 build
+    # resolves the target before SDKCONFIG_DEFAULTS is applied, so an M2 build
     # with only the overlay produces a perfectly successful ESP32-P4 image
     # carrying the ESP32-S3 pin map — the exact silent wrong-chip build this
     # project refuses to allow for pin maps. Force it into the cache here, and
     # main/CMakeLists.txt asserts the result after resolution.
-    set(IDF_TARGET "esp32s3" CACHE STRING "M1 flight computer is an ESP32-S3" FORCE)
-    message(STATUS "flight_computer: sdkconfig overlay sdkconfig.defaults.m1 (ESP32-S3 target, PSRAM on)")
-    # The mini's magnetometer (U3) is a QST QMC5883P, not the IIS2MDC every
-    # other board carries (#797).  This swaps the TR_QMC5883P driver into
-    # TR_Sensor_Collector's IIS2MDC-named slot and stamps the log's mag_type
-    # accordingly (#1312).  Project-wide, like TR_GNSS_DRIVER_LC86 on the
-    # mini, because the seam lives in a component; config.h refuses an M1
-    # build that lacks it.
-    add_compile_definitions(TR_MAG_DRIVER_QMC5883P=1)
-    message(STATUS "flight_computer: magnetometer driver QMC5883P (TR_MAG_DRIVER_QMC5883P=1)")
-    # The mini's GNSS (U5) is a Quectel LC86G on THIS processor's UART, not the
-    # u-blox every other board carries.  The same kind of seam as the
-    # magnetometer above, and it had been missed: only the single-MCU
-    # rocket_computer_mini project set it, so the M1 flight-computer image —
-    # the one that actually flies on the fabbed dual-MCU board — was speaking
-    # UBX at a module that answers NMEA (#1032).  config.h refuses an M1 build
-    # that lacks it.
-    add_compile_definitions(TR_GNSS_DRIVER_LC86=1)
-    message(STATUS "flight_computer: GNSS driver LC86G (TR_GNSS_DRIVER_LC86=1)")
-elseif(TR_BOARD_M2)
-    # The Tinker-Beetle V2: the M1's ESP32-S3 overlay (the target, its quad
-    # PSRAM, no radio stack, 240 MHz, QIO, the brownout level), forced the same
-    # way and for the same reason, and checked the same way in
-    # main/CMakeLists.txt. Its flash is the 4 MB in the ESP32-S3FH4R2's package:
-    # sdkconfig.defaults.flash4mb, appended last below, so nothing after it
-    # puts the 8 MB declaration back.
-    set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.m1")
     set(IDF_TARGET "esp32s3" CACHE STRING "M2 flight computer is an ESP32-S3" FORCE)
-    message(STATUS "flight_computer: sdkconfig overlay sdkconfig.defaults.m1 (ESP32-S3 target, PSRAM on), shared with M1")
+    message(STATUS "flight_computer: sdkconfig overlay sdkconfig.defaults.m2 (ESP32-S3 target, PSRAM on)")
     # U5 is a SkyTraq PX100 on this processor's UART (board_m2.h): the PX1105R
     # image's driver and filter, through the block below. Not a choice an M2
     # build makes: config.h refuses one without the driver.
@@ -547,7 +522,7 @@ elseif(TR_BOARD_V10)
     set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.v9")
     message(STATUS "flight_computer: sdkconfig overlay sdkconfig.defaults.v9 (shared with V9, comments only — boot NOR keeps the base 8 MB declaration, #916)")
     # U3 on the V10 is a QST QMC5883P (0x2C, no DRDY), where the V9 fits an ST
-    # IIS2MDC. The same seam the Beetle uses; config.h refuses a V10 build
+    # IIS2MDC. The same seam the Beetle V1 used; config.h refuses a V10 build
     # without it, and the board rotation is board_v10.h's
     # MAG_ROT_Z_DEG_QMC5883P (#1590, #1593).
     add_compile_definitions(TR_MAG_DRIVER_QMC5883P=1)
@@ -565,8 +540,8 @@ endif()
 # carrier (`idf.py -B build_v9_rawnav -DTR_BOARD_V9=1 -DTR_GNSS_MOSAIC=1 build`,
 # the Goblin's, or `-B build_v8_rawnav -DTR_BOARD_V8=1 -DTR_GNSS_MOSAIC=1`;
 # docs/builds/v9-mosaic-rawnav.md names the configuration). The same seam as
-# TR_GNSS_DRIVER_LC86 on the M1: the driver is the build's choice, and
-# config.h refuses it on any other board. The V8's J1 is
+# TR_GNSS_DRIVER_PX1105R on the Tinker-Beetle V2: the driver is the build's
+# choice, and config.h refuses it on any other board. The V8's J1 is
 # the V9's (the receiver's UART on GPIO3/GPIO4, its 1PPS on pin 5 = GPIO2), so
 # the harness lands the same way on both. Its own overlay puts the UART
 # interrupt in IRAM: at 2 Mbaud the RX FIFO lasts 0.64 ms, shorter than a
@@ -599,7 +574,7 @@ if(TR_GNSS_MOSAIC)
         list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.rawnav")
         # The receiver sends every GPS, Galileo and BeiDou ephemeris it
         # tracks, ~50 satellites over a 2-4 h pad wait: the raw-GNSS filter's
-        # store holds 128 (the Beetle's 64). Project-wide, before project(),
+        # store holds 128 (the default is 64). Project-wide, before project(),
         # so TR_GNSSRaw, TR_RawGnssShadow and main lay the pool out alike;
         # main.cpp checks at boot that they did (ephCapacityAgrees).
         add_compile_definitions(TR_EPH_CAPACITY=128)
@@ -675,7 +650,7 @@ if(TR_GNSS_PX1105R)
     list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.mosaic")
     if(NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW)
         # The P4's PSRAM overlay (hex, 200 MHz). Not on the Tinker-Beetle V2:
-        # its ESP32-S3 has quad PSRAM, which sdkconfig.defaults.m1 already
+        # its ESP32-S3 has quad PSRAM, which sdkconfig.defaults.m2 already
         # turns on, and the P4's mode and speed would undo that.
         if(NOT TR_BOARD_M2)
             list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.rawnav")

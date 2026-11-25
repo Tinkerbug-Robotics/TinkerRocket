@@ -6,8 +6,8 @@
 // m/s), C/N0 to 1/16 dB-Hz and a lock-time counter. This unit turns one
 // message body into those numbers; Lc86Parser pulls the frames out of the
 // mixed byte stream and gathers a receiver epoch's messages. Like the parser
-// it has no ESP-IDF dependency, so tests_cpp/test_lc86_parser.cpp pins it
-// against frames the Beetle's own module sent.
+// it has no ESP-IDF dependency, so tests_cpp/test_gnss_wire_rtcm.cpp pins it
+// against frames the Beetle V1's own module sent.
 //
 // What the module puts in them, measured on the bench (2026-09-25 to 27,
 // gnss/cocom-rig/sdr/results/README.md):

@@ -41,9 +41,8 @@ cannot parse that way rather than guessing. A handler that lives in a function
 of its own (the OTA commands, which rescue mode serves through the same
 functions) is attributed to the one dispatch branch whose whole body calls it,
 `if (out_pending_command == X) { fn(); }`. A retry hidden in a helper called
-from the else is not seen, and none exists today. The single-MCU rocket_computer_mini is not
-scanned: its command queue is exactly-once and has no dedup key. The M1 mini's
-flight computer builds this same file.
+from the else is not seen, and none exists today. Every flight computer that
+builds, the Tinker-Beetle V2's included, builds this same file.
 
 Run from anywhere; paths resolve relative to this file. Pass a source file as
 an argument to check it instead of the flight computer's main.cpp.

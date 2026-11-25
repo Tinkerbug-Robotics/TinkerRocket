@@ -11,12 +11,29 @@
 // pad -> pinfunction -> net, on the day the layout moved seven of this
 // processor's signals. Repeat that walk against the ordered commit before a V2
 // image goes on a board, and correct this file first if the two disagree.
-// rev1 (tag rocket-computer-mini-v1.0.1) is board_m1.h and keeps its map.
+// rev1 (tag rocket-computer-mini-v1.0.1) is retired, and its header with it;
+// this file carries the reasoning of rev1's that still holds here.
 //
-// ### One half of a pair that does not exist yet ###
-// There is no flight-computer header for V2, so there is no image to run on
-// the other processor, and no V2 board has been built: nothing here has run on
-// hardware.
+// ### This board has TWO ESP32-S3s, not an S3 and a P4 ###
+// rocket-computer splits the work between an ESP32-S3 out computer and an
+// ESP32-P4 flight computer. The Beetle does the same split with an S3 on BOTH
+// ends. That is why this file exists next to board_v7/v8/v9.h rather than
+// being an alias: the topology is rocket-computer's, but the far side of the
+// link is a different part with a different pin map, and the Beetle carries
+// its radio and GNSS on-board instead of on daughterboards. Do not alias
+// board_v9.h: the radio and GNSS blocks below are completely different, and a
+// UART-modem backend on this board talks to nothing.
+//
+// What is NOT on this board, and why the constants are -1:
+//   * no LoRa daughterboard  — the E220 is on-board, on the memory SPI bus
+//   * no LoRa_ACT rail gate  — the radio sits on V_MCU_SWTCH with everything
+//                              else behind U30, so PWR_PIN is its only switch
+//   * no camera, no servo    — so no TPS22811 high-side switches, no IMON
+//   * no separate GNSS rail  — the receiver is on V_MCU_SWTCH too
+//
+// ### Not yet run on hardware ###
+// The other processor's map is flight_computer/main/board/board_m2.h. No V2
+// board has been built: nothing here has run on hardware.
 //
 // ### Boot flash: 4 MB, in the package ###
 // U15 is an ESP32-S3FH4R2 on V2: it boots from the 4 MB of flash in its
@@ -87,9 +104,12 @@
 // in this layout) and GPIO43, 44, 45. GPIO43/44 keep the ROM console's reset
 // pull-ups and GPIO45 is the VDD_SPI strap.
 //
-// KNOWN FIRMWARE GAP, carried over from board_m1.h: LORA_RXEN_PIN is still not
+// KNOWN FIRMWARE GAP, carried over from rev1: LORA_RXEN_PIN is still not
 // consumed by this project. TR_LoRa_Comms takes it (Config::rxen_pin), and
-// main.cpp does not pass it, so R142 holds the E220's receive-enable low.
+// main.cpp does not pass it, so R142 holds the E220's receive-enable low. The
+// E220-900MM22S needs its RF switch driven; the base station has already been
+// bitten by an RXEN left floating in RX. Wire it up before trusting a link
+// budget.
 struct board_pins
 {
     // --- Flight-computer rail switch ---
@@ -97,7 +117,8 @@ struct board_pins
     // Raising this starts the flight computer AND everything else behind U30:
     // sensors, GNSS, radio, NAND. The FC then holds the rail up itself through
     // FC_EN_HOLD (D9), so dropping this pin powers the board down on the
-    // ground but NOT during a flight.
+    // ground but NOT during a flight (flight_computer/main/board/board_m2.h has
+    // the hold policy and the R84/C105 arithmetic).
     //
     // MOVED on V2: GPIO7 -> GPIO48 (pad 36, SPICLK_N). The pad is a high-Z
     // input from reset until setup_oc() drives it, so R84 (100 k) holds
@@ -108,25 +129,36 @@ struct board_pins
     // rail off, when this pin is low anyway.
     static constexpr int PWR_PIN = 48;       // FC_EN_OC (CONFIRMED; was 7)
     // No separate GNSS rail on this board: the receiver hangs off V_MCU_SWTCH
-    // with the rest. -1 = call sites skip it.
+    // with the rest. -1 = call sites skip it. A wedged receiver is recovered
+    // only by cycling PWR_PIN, which takes the radio, the sensors and the NAND
+    // with it.
     static constexpr int GPS_PWR_PIN = -1;   // no separate rail (CONFIRMED)
 
     // --- Power monitoring (INA230 @ 0x40, always-on I2C bus) ---
     // U23, this MCU and the pull-ups R67/R69 (5.11 k) are all on the always-on
-    // +3V3 rail, and nothing else is on the bus. Keep it that way: board_m1.h
-    // has what a part behind U30 on this bus did to it.
+    // +3V3 rail, and nothing else is on the bus. Keep it that way: on an early
+    // rev1 the magnetometer hung here while its own supply sat behind U30, and
+    // those +3V3 pull-ups drove its pads against a rail the switch was
+    // actively discharging — which clamped the bus below VIL and made the pack
+    // monitor unreadable during pad standby.
     static constexpr int PWR_SDA = 21;       // SEN_SDA (CONFIRMED)
     static constexpr int PWR_SCL = 33;       // SEN_SCL (CONFIRMED)
 
     // --- Memory + radio shared SPI bus ---
     // The NAND (U11) and the radio (U16) share this host, as on rev1. Both are
     // behind U30, with R140 and R141 (100 k to V_MCU_SWTCH) holding their chip
-    // selects high while this processor's pads are high-Z.
+    // selects high while this processor's pads are high-Z. Unlike
+    // rocket-computer, the telemetry radio lives on THIS bus: the NAND's
+    // page-sized bursts and the radio's twice-a-second packet share a host;
+    // the sensors deliberately do not, because head-of-line blocking behind a
+    // NAND page lands as jitter on the sample timebase.
     static constexpr int SPI_SCK = 37;       // M_SCK      (CONFIRMED)
     static constexpr int SPI_MISO = 35;      // M_MISO     (CONFIRMED)
     static constexpr int SPI_MOSI = 38;      // M_MOSI     (CONFIRMED)
     static constexpr int NAND_CS = 36;       // M_FLASH_CS (CONFIRMED)
-    // No MRAM on this board and never was.
+    // No MRAM on this board and never was. As on V9/V10 this costs the FC's
+    // in-flight reboot recovery and the dirty-ring replay their storage; the
+    // NAND-log snapshot + boot tail-scan is the replacement.
     static constexpr int MRAM_CS = -1;       // not fitted (CONFIRMED)
     // The FH4R2's 2 MB of in-package quad PSRAM is the same PSRAM rev1's
     // S3RH2 carries, on the same chip select (SPICS1, GPIO26). Still volatile:
@@ -134,17 +166,32 @@ struct board_pins
     static constexpr bool RING_IN_PSRAM = true;   // 2 MB in-package (CONFIRMED)
 
     // #1485: the highest IMU logging rate this board flies. rev1's value,
-    // because the IMU (U2, ISM6HG256X) and the link are rev1's. The flight
-    // computer derives its own limit from its FIFO capture, and the two must
-    // be equal: test_imu_rate_board_parity pins that for M1, and has no V2
-    // pair to pin until the flight computer has a V2 header.
+    // because the IMU (U2, ISM6HG256X) and the link are rev1's. 7680 Hz needs
+    // the FC's FIFO capture, which its board_m2.h turns on; the flight
+    // computer derives its own limit from that, and the two must be equal:
+    // test_imu_rate_board_parity pins that for M2. The OC rejects a setting
+    // above it and reports it to the apps as "irmax".
     static constexpr uint16_t IMU_RATE_MAX_HZ = 7680;
 
     // --- Pyro arm consent (net OC_ARM_EN) ---
     // The out computer's half of the two-processor arm, unchanged from rev1:
-    // into the base of Q14, in series with the flight computer's FC_ARM. Driven
-    // LOW first thing in setup_oc(), and raised only by arm_consent_policy.h's
-    // rule. board_m1.h has the full account.
+    // into the base of Q14, in series with the flight computer's FC_ARM, and
+    // the arm FET only turns on when BOTH are high. Neither processor can arm
+    // the board alone, which is the whole point: an FC that hangs with its arm
+    // line stuck high, or one whose GPIO44 is still sitting at the ROM
+    // console's boot pull-up, cannot fire anything while we hold this low.
+    //
+    // Drive it LOW explicitly and EARLY — before the FC rail comes up through
+    // PWR_PIN. This pad floats from reset until we configure it, and a
+    // floating gate on a consent transistor is not a consent decision.
+    // setup_oc() drives it low first thing. After that it goes high for
+    // exactly two reasons: a PYRO_FIRE_TEST being served to the FC, or a real
+    // (not simulated) flight in progress. The rule is in arm_consent_policy.h.
+    // Without it the board cannot fire a channel at all.
+    //
+    // This is a real vote, not a formality. Do not wire it to "always high at
+    // boot" for bench convenience; that silently collapses the design back to
+    // a single-processor arm.
     static constexpr int ARM_CONSENT_PIN = 11;   // OC_ARM_EN (CONFIRMED)
     // U23's ALERT (pin 3) is still not connected on V2, so the fault-current
     // trip (pyro_fault_trip_policy.h) polls the shunt register, as on rev1.
@@ -214,9 +261,22 @@ struct board_pins
     // MOVED on V2: GPIO10 -> GPIO42 (pad 48, MTMS). What made GPIO10 right
     // holds here: no strapping role and no reset pull, so R142 (100 k to GND)
     // keeps the receive path off from power-on until firmware drives the pin.
-    // board_m1.h has why that matters (#1015) and the light-sleep caveat.
-    // GPIO42 is not an RTC pad; gpio_hold_en() still works on it in light
-    // sleep, through the digital pad hold.
+    //
+    // Why that matters (#1015): rev1 first had it on GPIO44, which is U0RXD
+    // and carries the ROM console's weak pull-up from power-on until the pad
+    // is configured, forcing RXEN high through every reset — before any code
+    // runs. Reset the board mid-transmit and DIO2 is still holding TXEN high
+    // for the tail of that packet, so both arms of the RF switch are asserted
+    // at once on a 22 dBm module. Off is the safe default; the failure this
+    // avoids is silent, because it degrades RECEIVE while transmit keeps
+    // working, so telemetry looks healthy while the uplink (arming, the pyro
+    // commands, mute) quietly stops answering.
+    //
+    // If this board is ever put into light sleep while it needs to hear
+    // uplink, this pin needs gpio_hold_en — otherwise the pad goes high-Z,
+    // R142 wins, and the receiver goes deaf with no error (the same shape as
+    // the V9 GPIO12 lesson). GPIO42 is not an RTC pad; gpio_hold_en() still
+    // works on it in light sleep, through the digital pad hold.
     //
     // NOT YET CONSUMED by this project: see the file header.
     static constexpr int LORA_RXEN_PIN = 42; // L_RXEN (CONFIRMED; was 10)

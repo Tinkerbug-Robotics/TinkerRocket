@@ -1,5 +1,5 @@
-# sdkconfig overlay applied ONLY to -DTR_BOARD_V9=1, -DTR_BOARD_V10=1,
-# -DTR_BOARD_M1=1 and -DTR_BOARD_M2=1 builds, on top of sdkconfig.defaults.
+# sdkconfig overlay applied ONLY to -DTR_BOARD_V9=1, -DTR_BOARD_V10=1 and
+# -DTR_BOARD_M2=1 builds, on top of sdkconfig.defaults.
 # Selected by the project CMakeLists, not by the build-dir name — see there.
 # M2 (the Tinker-Beetle V2, in work) is the one board here whose part is an
 # ESP32-S3FH4R2: the same 2 MB of quad PSRAM, and 4 MB of quad flash in the
@@ -12,10 +12,9 @@
 # support into their images would buy a failed init and a scary boot warning on
 # a board that is working correctly. This file sets two things, both facts
 # about the ESP32-S3RH2 boards: PSRAM (the five CONFIG_SPIRAM lines) and code
-# fetch (QIO flash and a 32 KB instruction cache, at the bottom). M1
-# (rocket-computer-mini's out computer, the same ESP32-S3RH2 with the same
-# in-package PSRAM) shares it for those lines; the V9 board history in the
-# prose is rocket-computer's, not the mini's.
+# fetch (QIO flash and a 32 KB instruction cache, at the bottom). The Beetle
+# V1 (rev1, retired) shared it for those lines with the same ESP32-S3RH2; the
+# V9 board history in the prose is rocket-computer's, not the Beetle's.
 
 # === Boot NOR: no longer declared here (#916, owner decision 2026-09-09) ===
 # Until #1314 this file also carried CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y, because
@@ -27,11 +26,13 @@
 # That per-board declaration is gone. Every project now declares the SMALLEST
 # standard size that fits its own partition table, not the part fitted, and
 # tinkerrocket-idf/tools/check_flash_declarations.py fails the Docs job on any
-# headroom above the table — including a 16 MB line put back here — and on the
-# mini's two processors disagreeing about their shared board's part (#1310).
-# partitions.csv ends at 0x624000 (6.14 MB), so the 8 MB in sdkconfig.defaults
-# covers every board this project builds for (V7, V8, V9, M1), and a V9 or M1
-# build generates CONFIG_ESPTOOLPY_FLASHSIZE="8MB".
+# headroom above the table — including a 16 MB line put back here — and on
+# one board's two processors disagreeing about their shared board's part
+# (#1310, found on the Beetle V1). partitions.csv ends at 0x624000 (6.14 MB),
+# so the 8 MB in sdkconfig.defaults covers every board this project builds for
+# but the Tinker-Beetle V2 (V7, V8, V9, V10; the V2 takes 4 MB,
+# sdkconfig.defaults.flash4mb), and a V9 or V10 build generates
+# CONFIG_ESPTOOLPY_FLASHSIZE="8MB".
 #
 # What that costs a V9 is deliberate: it logs "Detected size(16384k) larger
 # than the size in the binary image header(8192k)" on every boot and the top
@@ -53,8 +54,9 @@
 # the S3's internal ~14 ohm R_SPI with the PSRAM) was FIXED before fab — U13's
 # VCC moved to +3V3 and OUT_VDD_SPI now carries only U15.29, verified against
 # the live netlist. Budget is ~30 mA x 14 = 0.42 V -> ~2.88 V against a 2.7 V
-# minimum. Note this is the OPPOSITE of the mini, whose sdkconfig says "PSRAM:
-# deliberately OFF" precisely because that board still shares the rail.
+# minimum. Note this is the OPPOSITE of the single-MCU mini (since retired),
+# whose sdkconfig said "PSRAM: deliberately OFF" precisely because that board
+# still shared the rail.
 #
 # One residual, WORKLIST M-4, and it is SMALLER than that entry claims: C27 is
 # 1 uF in the fabbed V9 (close-out 8f87aa0, 2026-08-09) — WORKLIST still says
@@ -76,7 +78,7 @@ CONFIG_SPIRAM_SPEED_40M=y
 CONFIG_SPIRAM_USE_CAPS_ALLOC=y
 # Boot without PSRAM instead of panicking. Written when these lines lived in
 # sdkconfig.defaults and reached the V7/V8 images too; since the #822 split
-# only V9 and M1 builds see this file, so that case is gone. It stays because
+# only V9, V10 and M2 builds see this file, so that case is gone. It stays because
 # the failure it covers is still real: a PSRAM that fails to initialise, or a
 # V9 image reaching a board without one over USB (the #1125 suffix check runs
 # only on OTA), should boot to a log rather than abort before app_main.
@@ -87,7 +89,7 @@ CONFIG_SPIRAM_IGNORE_NOTFOUND=y
 # Nothing set either, so the out computer fetched its code at IDF's defaults:
 # the flash in DIO and a 16 KB instruction cache, the defaults that left the
 # Beetle's flight computer stalled on instruction fetch (#1607). Measured on
-# the Beetle's OC (M1) at -O2, on the pad with the FC streaming ~7,290 IMU
+# the Beetle V1's OC at -O2, on the pad with the FC streaming ~7,290 IMU
 # samples/s, 2026-10-13, core 1 busy (TASKCPU):
 #
 #                                  READY    PRELAUNCH   internal heap free

@@ -2,8 +2,9 @@
 // #1104: what the flight computer does when the simulator's active flag
 // changes, and when a pyro decision is "dry".  Lives next to
 // sim_landed_hold.h because the two are one contract: the hold decides when
-// the sim ends, this decides what the FC does about it — and the mini's
-// flight task, which shares this component, needs the same rules.
+// the sim ends, this decides what the FC does about it — and the retired
+// single-MCU mini's flight task, which shared this component, needed the same
+// rules.
 //
 // The FC used to act only on the RISING edge of isSimActive(), on the
 // assumption that the falling edge always coincides with the FC in LANDED —

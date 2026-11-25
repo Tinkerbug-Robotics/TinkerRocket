@@ -97,8 +97,9 @@ def board_of(version: str) -> str | None:
     compiler as TR_BOARD_OTA_SUFFIX:
 
       -v7 -v8 -v9   flight_computer, out_computer, base_station
-      -m1           flight_computer, out_computer, on the rocket-computer-mini
-      -b1           rocket_computer_mini, when TR_MINI_BOARD is set
+      -m2           flight_computer, out_computer, on the Tinker-Beetle V2
+      -m1           the same, on the Tinker-Beetle V1 (retired; images exist)
+      -b1           the single-MCU mini (retired), when TR_MINI_BOARD was set
 
     This matched only `-v` until 2026-09-10, so every `-m1` image came out of
     the manifest with no board at all — labelled "applies everywhere" when it

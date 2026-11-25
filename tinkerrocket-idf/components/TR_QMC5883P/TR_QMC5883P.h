@@ -8,7 +8,7 @@
 // ---------------------------------------------------------------------------
 //  TR_QMC5883P — QST QMC5883P magnetometer on the ESP-IDF i2c_master API.
 //
-//  rocket-computer-mini's U3 (#797), driven through TR_Sensor_Collector's
+//  The V10's U3 (and the retired Beetle V1's, #797), driven through TR_Sensor_Collector's
 //  TR_MAG_DRIVER_QMC5883P seam (#1312).  Register facts are in
 //  qmc5883p_regs.h with their datasheet references.
 //

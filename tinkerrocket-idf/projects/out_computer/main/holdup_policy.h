@@ -6,7 +6,7 @@
 
 // #1166: is the hold-up supercap actually there?
 //
-// On rocket-computer-mini the +3V3 rail rides a 5 F supercap (C130) that a
+// On the Tinker-Beetle the +3V3 rail rides a 5 F supercap (C130) that a
 // TPS61094 (U47) buck-charges at 100 mA to a 2.5 V termination — about two
 // minutes from empty — and boosts back onto the rail when the pack bounces.
 // The failure mode this watches for is silent by construction: with the cap
@@ -15,7 +15,7 @@
 // charge-entry margin was inside the converter's tolerance band and fixed it
 // in hardware (OSEL 3.0 V); this is the diagnostic that says so if a unit
 // still ends up that way.  The out computer has the sense line
-// (V_SCAP_ADC, board_m1.h), so the verdict is made here and travels to the
+// (V_SCAP_ADC, board_m2.h), so the verdict is made here and travels to the
 // app as the telemetry key "hu" — an advisory line, never an arm block.
 //
 // The rule: the cap counts as charged at or above `charged_v` (2.2 V of the

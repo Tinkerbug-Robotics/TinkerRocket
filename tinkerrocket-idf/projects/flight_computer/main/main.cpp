@@ -67,7 +67,7 @@
 #include "test_mode_gate_policy.h"   // #1137 item 5: the #363 failsafe and the test-command gates
 #include "flight_timeout_policy.h"  // #1753: the INFLIGHT timeout holds for an owed or just-fired channel
 #include "oc_cmd_dedup.h"        // #1112: dispatch only on the poll pass; bounded config retry
-#include "servo_pin_policy.h"    // servoPinsValid(): an M1 int -1 pin is unmapped, not GPIO 0xFFFFFFFF
+#include "servo_pin_policy.h"    // servoPinsValid(): a Beetle int -1 pin is unmapped, not GPIO 0xFFFFFFFF
 #include "loop_profile.h"        // bench only: -DTR_LOOP_PROFILE=1 section profiler (TR_LP_LAP)
 #include "scap_sense_policy.h"   // #1409: the V10's V_SCAP reading as FcStatusData.scap_mv
 #include <atomic>
@@ -577,8 +577,8 @@ static int16_t b2r_active_residual_cdeg = 0;
 // The user's orientation SETTING (BLE cmd 64), as distinct from what the
 // converter is actively applying above: IMU_ORIENT_AUTO lets pad-gravity
 // detect drive the mapping, 0..23 pins a manual code.  NVS-persisted in
-// namespace "orient" key "set" — the same namespace/key the OC and the mini
-// use — so a manual mounting survives an FC power cycle on its own.
+// namespace "orient" key "set" — the same namespace/key the OC uses — so a
+// manual mounting survives an FC power cycle on its own.
 //
 // #915: it used to be the ONE config group the FC did not store.  Every other
 // handler writes NVS; ORIENT_CONFIG_PENDING did not, so the FC always came up
@@ -1322,9 +1322,9 @@ static void applyRollPidSepThreshold(float threshold)
     roll_rate_pid_standalone.setIntegralSeparationThreshold(threshold);
 }
 
-// Compared as int, not against 255U: M1 spells its absent servo pins int -1,
-// and -1 != 255U is true, which read the mini as having four servos
-// (servo_pin_policy.h).
+// Compared as int, not against 255U: the Beetle spells its absent servo pins
+// int -1, and -1 != 255U is true, which once read the Beetle V1 as having four
+// servos (servo_pin_policy.h).
 static bool servoPinsValid()
 {
     return ServoPinPolicy::allPinsMapped(config::SERVO_PIN_1,
@@ -3472,7 +3472,7 @@ static bool padAverageLla(double lla[3], float* scatter_m, uint32_t* span_ms);
 // ==========================================================================
 // The tightly coupled GNSS/INS filter (TR_RawGnssEKF), run as a SHADOW beside
 // the flight filter: it gets the flight filter's own IMU input, tick by tick,
-// and the LC86G's raw MSM7 epochs and broadcast ephemerides, and its state
+// and the receiver's raw epochs and broadcast ephemerides, and its state
 // goes to the log at 10 Hz (RAW_GNSS_EKF_MSG).  Nothing it computes reaches
 // the flight filter, the state machine or a deployment.
 //
@@ -3815,7 +3815,7 @@ static void rawGnssMeasTask(void*)
         }
 #endif
 #if !(TR_RAW_NAV_MOSAIC || TR_RAW_NAV_PX1105R) || TR_RAW_NAV_AUTO
-        // The LC86G's and the gnss-sdr-dev board's, RTCM3
+        // The gnss-sdr-dev board's, RTCM3
         RAW_NAV_WHEN(RAW_IS_SDR)
         {
             gnss_raw::ShadowEphFrame ef;
@@ -4828,9 +4828,7 @@ static void startRawShadow()
     // The receiver's profile (TR_GNSSRaw/ReceiverProfile.h): every gate,
     // noise model and feature mode the filter takes from the receiver the
     // board carries, before any bench override below
-#if TR_BOARD_M1
-    gnss_raw::GnssReceiverProfile rx = gnss_raw::lc86gProfile();     // U5: a Quectel LC86G
-#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
     gnss_raw::GnssReceiverProfile rx = gnss_raw::mosaicG5Profile();  // the mosaic-G5 on J1 (v0: unmeasured in flight)
 #elif defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
     gnss_raw::GnssReceiverProfile rx = gnss_raw::sdrDevProfile();    // the gnss-sdr-dev board on J1 (v0: the bench's)
@@ -5777,7 +5775,7 @@ static void padAverageAdd(double lat_rad, double lon_rad, double alt_msl_m, uint
 {
     if (pad_avg.frozen) return;
     float sep = 0.0f;
-    if (!sensor_collector.getGNSSGeoidSeparation(sep)) return;   // the LC86G's raw-GNSS filter's
+    if (!sensor_collector.getGNSSGeoidSeparation(sep)) return;   // where the receiver reports it (the mosaic-G5)
     const double h = alt_msl_m + (double)sep;
     if (pad_avg.n == 0)
     {
@@ -6980,7 +6978,7 @@ static inline void fcMaybeMarkOtaValid()
 // SECTION: Hold-up supercap sense (#1409, V10/V11)
 // ==========================================================================
 // V_SCAP_ADC: R125/R126 (100 k / 100 k) halve V_SCAP onto SCAP_ADC_PIN (P4
-// GPIO17 = ADC1_CH1), C143 100 nF at the pad. On the mini the same divider is
+// GPIO17 = ADC1_CH1), C143 100 nF at the pad. On the Beetle the same divider is
 // the out computer's and it judges the cap itself (#1166); on the V10 and V11
 // it lands here, so this reads it once a second and every FC_STATUS_MSG
 // carries the latest reading (FcStatusData.scap_mv) to the out computer,
@@ -6998,7 +6996,7 @@ static inline void fcMaybeMarkOtaValid()
 // (the cap terminates at 2.5 V = 1.25 V here, and the P4's narrower ranges
 // are not characterised for this design); the curve-fitting calibration is
 // per attenuation and, on the P4, per channel. Without eFuse calibration it
-// reports no reading rather than an uncalibrated guess, as the mini's out
+// reports no reading rather than an uncalibrated guess, as the Beetle's out
 // computer does. Boards without the line (SCAP_ADC_PIN < 0) never start any
 // of it and send FcStatusData without FCS_SCAP_SENSE.
 static std::atomic<uint32_t>     scap_field{FCS_SCAP_NO_READING};  // FcStatusData.scap_mv
@@ -7285,9 +7283,9 @@ static OcSnapshotAnswer fcAskOcForFlightSnapshot()
             // Since the read length equals the frame length, offset 0 is
             // the only offset that can hold a frame, so the scan is now
             // stated as the single check it always was.  (The [CFG READ]
-            // path at the top of this file bounds by actual_read and the
-            // mini bounds by `avail`; both read MORE than one frame, which
-            // is what makes a scan meaningful there.  Reading extra bytes
+            // path at the top of this file bounds by actual_read, and the
+            // retired single-MCU mini bounded by `avail`; both read MORE than
+            // one frame, which is what makes a scan meaningful there.  Reading extra bytes
             // here would change what the OC's slave TX ring is asked to
             // clock out mid-recovery, which is not a change to make on
             // this path.)
@@ -7859,7 +7857,7 @@ static void setup_fc()
     // FIRE 2/3 and move ARM, but keep all four CONT pins), so print the
     // numbers rather than just the revision — they can be checked against the
     // connector with a meter before anything is armed.
-    ESP_LOGW(TAG, "[BOARD] pin map: %s  (select with -DTR_BOARD_V5/V7/V8/V9/V10/M1=1; no default)",
+    ESP_LOGW(TAG, "[BOARD] pin map: %s  (select with -DTR_BOARD_V5/V7/V8/V9/V10/M2=1; no default)",
              TR_BOARD_REV_STR);
     ESP_LOGW(TAG, "[BOARD] pyro: ARM=%d FIRE=%d/%d/%d/%d CONT=%d/%d/%d/%d",
              (int)config::PYRO_ARM_PIN,
@@ -8816,8 +8814,8 @@ static void setup_fc()
     ekf.setShockGateSettle(config::EKF_SHOCK_SETTLE_MS * 1000u);
     sensor_converter.configureMMC5983MARotationZ(config::MMC5983MA_ROT_Z_DEG);
     // #1312: the count scale of the IIS2MDC-named stream is the chip's, and
-    // the chip is the collector's seam — IIS2MDC on V8, QMC5883P on the mini
-    // and the V10, and on the V9 image whichever begin() found above (#1590).
+    // the chip is the collector's seam — IIS2MDC on V8, QMC5883P on the V10,
+    // and on the V9 image whichever begin() found above (#1590).
     // The converter (EKF input, WMM gate) and the calibrator (R band, verify
     // band, status frame) take it from there; so do its board rotation, the
     // SIL's inverse and the status-query stamps below.
@@ -8982,8 +8980,8 @@ static void setup_fc()
     // prevent.  Camera type is a runtime property now.)
     cameraGateInit();
     goproShutterPark();
-    // A negative RunCam pin is a board with no RunCam UART (the mini, which has
-    // no camera at all). No driver: runcam_uart_ready stays false, so
+    // A negative RunCam pin is a board with no RunCam UART (the Beetle, which
+    // has no camera at all). No driver: runcam_uart_ready stays false, so
     // runcamUartPark() never hands the GPIO driver a -1 (an error log per call,
     // six per park) and every attach, probe and send returns early.
     // cameraStart() refuses a RunCam start on the same pins.
@@ -10907,9 +10905,9 @@ static void loop_fc()
     }
 
     // The receiver's raw RTCM3 frames (GNSS_RTCM_MSG), verbatim, so a flight
-    // can be reconstructed later: on the mini the LC86G's MSM7, ~5 frames once
-    // a second, and one ephemeris message a second; ~600 B/s with the
-    // framing.  On a V9 with a mosaic-G5 the same record carries its SBF
+    // can be reconstructed later: on the Beetle V1 the LC86G's MSM7 was ~5
+    // frames once a second, and one ephemeris message a second; ~600 B/s with
+    // the framing.  On a V9 with a mosaic-G5 the same record carries its SBF
     // blocks: ~60 a second, ~70 kB/s with the framing, or ~9 kB/s with the
     // REDUCED GNSS log, which keeps the raw measurements once a second
     // (gnss_log_policy.h).  Log-only.  A frame longer than one payload goes

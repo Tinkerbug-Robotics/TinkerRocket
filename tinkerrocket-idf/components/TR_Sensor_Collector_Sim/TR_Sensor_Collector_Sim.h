@@ -71,8 +71,8 @@ public:
     // ephemerides (its navigation blocks), passed on in a sim too: they say
     // where the satellites are, not what the IMU did, and the filter's stage
     // only files them; and that receiver sends each one once (when it
-    // changes, or on a resend at link setup and launch), where the LC86G
-    // repeats them every second, so one dropped in a sim on the pad would be
+    // changes, or on a resend at link setup and launch), where the Beetle V1's
+    // LC86G repeated them every second, so one dropped in a sim on the pad would be
     // missing until its next upload, hours on. (The PX1105R image's decoded
     // ephemerides likewise: getGNSSEphemerisDecoded below.)
     bool enableGNSSRawOutputs() { return real_.enableGNSSRawOutputs(); }
@@ -296,7 +296,7 @@ public:
     // A GPS instant on the MCU clock (esp_timer, us) from a receiver whose
     // driver hands no timed fix: the gnss-sdr-dev board's GPS-to-MCU line,
     // which the flight loop drains (GnssClockData). It sets the replay's
-    // clock as an LC86G fix does. Nothing outside a replay.
+    // clock as a timed fix does. Nothing outside a replay.
     void replayNoteTime(double gps_s, int64_t mcu_us);
 
     // For the console.

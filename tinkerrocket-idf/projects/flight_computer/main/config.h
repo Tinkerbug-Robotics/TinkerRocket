@@ -17,10 +17,9 @@
 //   V8 bench boards:  idf.py -B build_v8 -DTR_BOARD_V8=1 build
 //   V9 (Tinker-Mantis as fabbed):  idf.py -B build_v9 -DTR_BOARD_V9=1 build
 //   V10 (Tinker-Mantis, ordered):  idf.py -B build_v10 -DTR_BOARD_V10=1 build
-//   rocket-computer-mini rev1:  idf.py -B build_m1 -DTR_BOARD_M1=1 build
 //   Tinker-Beetle V2:  idf.py -B build_m2 -DTR_BOARD_M2=1 build
 //
-// M1 is the one that is NOT an ESP32-P4 — the mini's flight computer is a
+// M2 is the one that is NOT an ESP32-P4 — the Beetle's flight computer is a
 // second ESP32-S3, and its pyro map shares no useful pin with V9's. Building
 // a V9 image for it fires the wrong channel silently. V10 moved the arm to
 // GPIO33 and made it a two-processor vote, so a V9 image on a V10 (or the
@@ -44,27 +43,19 @@
 #ifndef TR_BOARD_V10
 #define TR_BOARD_V10 0
 #endif
-#ifndef TR_BOARD_M1
-#define TR_BOARD_M1 0
-#endif
 // TR_BOARD_M2=1 selects board_m2.h: the Tinker-Beetle V2, in work and not
-// ordered. M1's pyro map, power latch and sensor bus, with a PX100 receiver
-// in place of the LC86G, an MMC5983MA on the sensor SPI bus in place of the
-// QMC5883P, the IMU and magnetometer on the back of the board, and an
-// ESP32-S3FH4R2 whose boot flash is the 4 MB in its package. rev1 boards keep
-// TR_BOARD_M1: an M1 image on a V2 looks for a magnetometer and a receiver that
-// are not there, flies its IMU upside down, and declares 8 MB of flash, which
-// a V2's bootloader refuses.
+// ordered. The V1's pyro map, power latch and sensor bus, with a PX100
+// receiver in place of the LC86G, an MMC5983MA on the sensor SPI bus in place
+// of the QMC5883P, the IMU and magnetometer on the back of the board, and an
+// ESP32-S3FH4R2 whose boot flash is the 4 MB in its package. The V1 (rev1)
+// is retired and has no build here.
 #ifndef TR_BOARD_M2
 #define TR_BOARD_M2 0
 #endif
-#if (TR_BOARD_V5 + TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9 + TR_BOARD_V10 + TR_BOARD_M1 + TR_BOARD_M2) != 1
-#error "Set exactly one board revision: -DTR_BOARD_V5=1, -DTR_BOARD_V7=1, -DTR_BOARD_V8=1, -DTR_BOARD_V9=1, -DTR_BOARD_V10=1, -DTR_BOARD_M1=1 or -DTR_BOARD_M2=1. There is no default — the V8 and V9 pyro maps differ (ARM 5 vs 16, FIRE 2/3 swapped), V10 moved ARM again (33, and it needs the out computer's consent), and M1 (rocket-computer-mini) is an ESP32-S3 whose pyro map shares no pin with any of them. V5 has an arm per channel and V7's FIRE/CONT pins swapped. M2 (Tinker-Beetle V2) is M1's pyro map with its IMU and magnetometer on the back. A wrong map fires the wrong channel, or none, silently."
+#if (TR_BOARD_V5 + TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9 + TR_BOARD_V10 + TR_BOARD_M2) != 1
+#error "Set exactly one board revision: -DTR_BOARD_V5=1, -DTR_BOARD_V7=1, -DTR_BOARD_V8=1, -DTR_BOARD_V9=1, -DTR_BOARD_V10=1 or -DTR_BOARD_M2=1. There is no default — the V8 and V9 pyro maps differ (ARM 5 vs 16, FIRE 2/3 swapped), V10 moved ARM again (33, and it needs the out computer's consent), and M2 (Tinker-Beetle V2) is an ESP32-S3 whose pyro map shares no pin with any of them. V5 has an arm per channel and V7's FIRE/CONT pins swapped. A wrong map fires the wrong channel, or none, silently."
 #endif
-#if TR_BOARD_M1
-#include "board/board_m1.h"
-#define TR_BOARD_REV_STR "M1 (rocket-computer-mini)"
-#elif TR_BOARD_M2
+#if TR_BOARD_M2
 #include "board/board_m2.h"
 #define TR_BOARD_REV_STR "M2 (Tinker-Beetle V2)"
 #elif TR_BOARD_V10
@@ -84,23 +75,21 @@
 #define TR_BOARD_REV_STR "V7"
 #endif
 
-#if TR_BOARD_M1 || TR_BOARD_M2
+#if TR_BOARD_M2
 // ======================================================================
-// M1 invariants, asserted rather than trusted (this board fires pyros)
+// Beetle invariants, asserted rather than trusted (this board fires pyros)
 // ======================================================================
-// Both Beetle revisions (board_m1.h, board_m2.h): the V2 kept the V1's pyro
-// map, power latch and sensor bus pad for pad, so every check down to the
-// magnetometer's holds for both, and the messages name board_m1.h for the V1.
-// The mini's flight computer is an ESP32-S3, and its pyro map shares no
-// useful pin with the P4 maps. Every failure below is SILENT at runtime — the
-// board boots, continuity reads plausibly, and the wrong channel fires — so
-// pin them at compile time.
+// The V2 kept the V1's pyro map, power latch and sensor bus pad for pad
+// (board_m2.h). The Beetle's flight computer is an ESP32-S3, and its pyro map
+// shares no useful pin with the P4 maps. Every failure below is SILENT at
+// runtime — the board boots, continuity reads plausibly, and the wrong channel
+// fires — so pin them at compile time.
 static_assert(board_pins::PYRO_ARM_PIN   == 44 &&
               board_pins::PYRO1_FIRE_PIN == 38 && board_pins::PYRO1_CONT_PIN == 10 &&
               board_pins::PYRO2_FIRE_PIN == 35 && board_pins::PYRO2_CONT_PIN == 11 &&
               board_pins::PYRO3_FIRE_PIN == 34 && board_pins::PYRO3_CONT_PIN == 12 &&
               board_pins::PYRO4_FIRE_PIN == 33 && board_pins::PYRO4_CONT_PIN == 42,
-              "board_m1.h pyro map changed — re-derive it from a netlist export of "
+              "board_m2.h pyro map changed — re-derive it from a netlist export of "
               "hardware/tinker-beetle before editing this assert away");
 // No pyro line may land on a strapping pad. GPIO45 sets the flash rail
 // voltage and GPIO46 is sampled at boot; a continuity input's level depends
@@ -115,57 +104,28 @@ static_assert(board_pins::PYRO_ARM_PIN != 45 && board_pins::PYRO_ARM_PIN != 46 &
               board_pins::PYRO2_CONT_PIN != 45 && board_pins::PYRO2_CONT_PIN != 46 &&
               board_pins::PYRO3_CONT_PIN != 45 && board_pins::PYRO3_CONT_PIN != 46 &&
               board_pins::PYRO4_CONT_PIN != 45 && board_pins::PYRO4_CONT_PIN != 46,
-              "board_m1.h: a pyro line landed on an ESP32-S3 strapping pad");
+              "board_m2.h: a pyro line landed on an ESP32-S3 strapping pad");
 // The in-flight power latch (#848) needs gpio_hold_en to reach the RTC hold,
 // which on this part covers GPIO0-GPIO21 only (SOC_RTCIO_PIN_COUNT = 22).
 // Above that the call still returns ESP_OK and degrades to a deep-sleep-only
 // hold that evaporates on the first panic reset — #825, silently.
 static_assert(board_pins::PWR_HOLD_PIN >= 0 && board_pins::PWR_HOLD_PIN <= 21,
-              "board_m1.h: PWR_HOLD_PIN must be an RTC pad (GPIO0-21) or the in-flight "
+              "board_m2.h: PWR_HOLD_PIN must be an RTC pad (GPIO0-21) or the in-flight "
               "rail latch does not survive a reset — see #848/#825");
 // GPIO3 is a strapping pin (JTAG source select); latching it HIGH through
 // every in-flight reset is exactly what moving the hold off it avoided.
 static_assert(board_pins::PWR_HOLD_PIN != 3,
-              "board_m1.h: PWR_HOLD_PIN must not be GPIO3 — gpio_hold_en would latch a "
+              "board_m2.h: PWR_HOLD_PIN must not be GPIO3 — gpio_hold_en would latch a "
               "strapping pad HIGH through every in-flight reset");
 // The sensor SPI bus moved on 2026-09-03 and the two constants below are the
-// ones a maintainer is most likely to "restore" from the stale comment that
-// used to sit above them in board_m1.h: pads 36 and 37 (GPIO48 and GPIO47) are
-// BARE on the V1 (the V2 spends them on IND_1 and the PX100's PPS, never on
-// these two). A barometer whose chip select never asserts and an IMU
+// ones a maintainer is most likely to "restore" from a stale note that once
+// sat above them in the V1's header: pads 36 and 37 (GPIO48 and GPIO47) were
+// BARE on the V1, and the V2 spends them on IND_1 and the PX100's PPS, never
+// on these two. A barometer whose chip select never asserts and an IMU
 // interrupt that never fires are both silent at runtime.
 static_assert(board_pins::BMP585_CS == 9 && board_pins::ISM6HG256_INT == 8,
-              "board_m1.h: BMP585_CS is pad 14 (GPIO9) and ISM6HG256_INT is pad 13 "
-              "(GPIO8) since the 2026-09-03 pin swap — GPIO47/48 are spare pads");
-#endif
-#if TR_BOARD_M1
-// The magnetometer is on OUR bus and must stay there — it is a flight sensor,
-// and the out computer has no driver for one. Its pull-ups are on
-// V_MCU_SWTCH with the part, so master, slave and pull-ups share a rail.
-static_assert(board_pins::USE_IIS2MDC &&
-              board_pins::IIS2MDC_SDA >= 0 && board_pins::IIS2MDC_SCL >= 0,
-              "board_m1.h: the mini's magnetometer belongs to the flight computer — "
-              "USE_IIS2MDC on, with real MAG_SDA/MAG_SCL pins");
-// U3 on this board is a QST QMC5883P, not an ST IIS2MDC (#797).  The driver
-// behind the IIS2MDC-named slot is a build-time choice (TR_Sensor_Collector's
-// TR_MAG_DRIVER_QMC5883P seam, #1312) and CMakeLists.txt makes it for M1.  An
-// M1 image built without it drives the QMC5883P with ST register addresses —
-// the chip ID never matches, the board simply has no magnetometer — and
-// stamps every log with the IIS2MDC count scale, 5.6x off.  Refuse to build
-// that rather than find out on the pad.
-#if !defined(TR_MAG_DRIVER_QMC5883P) || !TR_MAG_DRIVER_QMC5883P
-#error "board_m1.h: U3 is a QMC5883P — an M1 build needs TR_MAG_DRIVER_QMC5883P=1 (flight_computer/CMakeLists.txt sets it under TR_BOARD_M1; #1312)"
-#endif
-// U5 is a Quectel LC86G, and it is OURS — GNSS_RX/GNSS_TX land on this
-// processor.  Same seam, same trap as the magnetometer above: the receiver
-// driver is a build-time choice (TR_Sensor_Collector's TR_GNSS_DRIVER_LC86)
-// and an M1 image built without it speaks UBX at a module that answers only
-// NMEA and Quectel PAIR/PQTM.  Nothing would ACK, begin() would return false,
-// and the board would fly in the GNSS-absent degraded mode (#557) looking
-// exactly like a dead receiver.  Refuse to build it.
-#if !defined(TR_GNSS_DRIVER_LC86) || !TR_GNSS_DRIVER_LC86
-#error "board_m1.h: U5 is a Quectel LC86G — an M1 build needs TR_GNSS_DRIVER_LC86=1 (flight_computer/CMakeLists.txt sets it under TR_BOARD_M1; #1032)"
-#endif
+              "board_m2.h: BMP585_CS is pad 14 (GPIO9) and ISM6HG256_INT is pad 13 "
+              "(GPIO8) since the 2026-09-03 pin swap — GPIO47/48 are IND_1 and the PX100's PPS");
 #endif
 
 #if TR_BOARD_M2
@@ -211,8 +171,8 @@ static_assert(board_pins::ISM6HG256_AXIS_SIGN[2] == -1,
 // does (out_computer config.h, TR_OC_ANTENNA_OFFSET): the two processors
 // must agree, or one stages a setting the other never reads back. Its PX100
 // filter flies with the antenna at the IMU, a few centimetres off on this
-// board. It replaced eight `#if !TR_BOARD_M1` in main.cpp.
-#define TR_FC_ANTENNA_OFFSET (!TR_BOARD_M1 && !TR_BOARD_M2)
+// board. It replaced eight per-board checks in main.cpp.
+#define TR_FC_ANTENNA_OFFSET (!TR_BOARD_M2)
 
 #if TR_BOARD_V5
 // ======================================================================
@@ -266,9 +226,9 @@ static_assert(board_pins::PYRO_CONT_CLOSED_LEVEL == 0 || board_pins::PYRO_CONT_C
 // #1409: wherever this processor has the hold-up sense it is an ESP32-P4 ADC1
 // pad (GPIO16-23, ADC1_CH0-7; soc/esp32p4 adc_channel.h). ADC2 shares its
 // pads with the sensor SPI bus and the servo block, and a wrong pad reads a
-// floating input as a verdict. The mini (an S3) has no sense here.
+// floating input as a verdict. The Beetle (an S3) has no sense here.
 static_assert(board_pins::SCAP_ADC_PIN < 0 ||
-              (!TR_BOARD_M1 && !TR_BOARD_M2 && board_pins::SCAP_ADC_PIN >= 16 && board_pins::SCAP_ADC_PIN <= 23),
+              (!TR_BOARD_M2 && board_pins::SCAP_ADC_PIN >= 16 && board_pins::SCAP_ADC_PIN <= 23),
               "SCAP_ADC_PIN must be an ESP32-P4 ADC1 pad (GPIO16-23) or -1 (#1409)");
 static_assert(board_pins::SCAP_ADC_PIN < 0 || board_pins::SCAP_DIVIDER_RATIO >= 1.0f,
               "SCAP_DIVIDER_RATIO is V_SCAP over the pad voltage: at least 1 (#1409)");
@@ -366,19 +326,16 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 #endif
 
 // The V9 or the V8 flying a Septentrio mosaic-G5 on J1 (-DTR_GNSS_MOSAIC=1,
-// CMakeLists.txt). The driver is the build's choice, like the M1's LC86G; the
+// CMakeLists.txt). The driver is the build's choice, like the Beetle's PX100; the
 // harness puts the receiver's 1PPS on J1 pin 5, which only this build reads,
 // and only as an input (board_v9.h, board_v8.h). The V8's J1 is the V9's,
 // GPIO3/GPIO4 and pin 5 on GPIO2 (#1642). The Goblin flies the V9 on
 // 2026-10-24 (its V8 lost its barometer); the V8 build stays supported.
-// Refused anywhere else: the M1's receiver is soldered on, and no other
+// Refused anywhere else: the Beetle's receiver is soldered on, and no other
 // board's J1 has been checked for this harness.
 #if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
 #if !TR_BOARD_V9 && !TR_BOARD_V8
 #error "TR_GNSS_DRIVER_MOSAIC is a V9 or V8 build (-DTR_BOARD_V9=1 or -DTR_BOARD_V8=1, with -DTR_GNSS_MOSAIC=1)"
-#endif
-#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
-#error "One GNSS driver per build: TR_GNSS_DRIVER_MOSAIC and TR_GNSS_DRIVER_LC86 are both set"
 #endif
 #endif
 
@@ -397,9 +354,6 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 #if defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
 #if !TR_BOARD_V9 && !TR_BOARD_V10 && !TR_BOARD_M2
 #error "TR_GNSS_DRIVER_PX1105R is a V9 or V10 build (-DTR_BOARD_V9=1 or -DTR_BOARD_V10=1 with -DTR_GNSS_PX1105R=1), or the Tinker-Beetle V2's (-DTR_BOARD_M2=1): only their J1, and the V2's soldered PX100, have been checked for this receiver"
-#endif
-#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
-#error "One GNSS driver per build: TR_GNSS_DRIVER_PX1105R and TR_GNSS_DRIVER_LC86 are both set"
 #endif
 #if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
 #error "One GNSS driver per build: TR_GNSS_DRIVER_PX1105R and TR_GNSS_DRIVER_MOSAIC are both set"
@@ -425,8 +379,8 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 #if !TR_BOARD_V9 && !TR_BOARD_V10 && !TR_BOARD_V8
 #error "TR_GNSS_DRIVER_AUTO is the V9's and V10's (and a V8 bench build's): their J1 is where the receivers land"
 #endif
-#if (defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86) || (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC)
-#error "One GNSS driver per build: TR_GNSS_DRIVER_AUTO is set with TR_GNSS_DRIVER_LC86 or TR_GNSS_DRIVER_MOSAIC"
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#error "One GNSS driver per build: TR_GNSS_DRIVER_AUTO is set with TR_GNSS_DRIVER_MOSAIC"
 #endif
 #endif
 
@@ -442,26 +396,24 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 #if !TR_BOARD_V10
 #error "TR_GNSS_DRIVER_SDR is a V10 build (-DTR_BOARD_V10=1 -DTR_GNSS_SDR=1)"
 #endif
-#if (defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86) || (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || \
-    (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO)
-#error "One GNSS driver per build: TR_GNSS_DRIVER_SDR is set with TR_GNSS_DRIVER_LC86, TR_GNSS_DRIVER_MOSAIC or TR_GNSS_DRIVER_AUTO"
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO)
+#error "One GNSS driver per build: TR_GNSS_DRIVER_SDR is set with TR_GNSS_DRIVER_MOSAIC or TR_GNSS_DRIVER_AUTO"
 #endif
 #endif
 
 // #1600 phase 4: the raw-GNSS shadow filter (TR_RawGnssShadow, main.cpp's
 // "raw-GNSS shadow filter" section).  It needs a receiver's raw measurements,
-// so it runs wherever a driver hands them over and nowhere else: the LC86G's
-// MSM7 (the Beetle), the mosaic-G5's MeasEpoch (the mosaic-only image on the
-// V8 or V9) and the gnss-sdr-dev board's MSM7 (the V10's SDR raw-nav image,
-// which is not built without it). -DTR_RAW_GNSS_SHADOW=0 builds either of the
-// first two without it
-// (flight_computer/CMakeLists.txt passes it on): an LC86G image for a bench
-// A/B of what it costs, a mosaic image that flies GpsInsEKF alone, with PSRAM
-// off. The auto image (TR_GNSS_DRIVER_AUTO) never has it: it finds its
-// receiver at boot, and choosing its one filter then waits for after 10/24.
-// The PX1105R image (TR_GNSS_DRIVER_PX1105R) has it as the mosaic's does,
-// from the receiver's 0xE5 raw measurements.
-// (No TR_GNSS_HAS_RAW macro: the Beetle's image must see no new one.)
+// so it runs wherever a driver hands them over and nowhere else: the mosaic-G5's
+// MeasEpoch (the mosaic-only image on the V8 or V9) and the gnss-sdr-dev
+// board's MSM7 (the V10's SDR raw-nav image, which is not built without it).
+// (The Beetle V1's LC86G MSM7 was the first; that image is retired.)
+// -DTR_RAW_GNSS_SHADOW=0 builds the mosaic image without it
+// (flight_computer/CMakeLists.txt passes it on): a mosaic image that flies
+// GpsInsEKF alone, with PSRAM off. The auto image (TR_GNSS_DRIVER_AUTO) never
+// has it: it finds its receiver at boot, and choosing its one filter then
+// waits for after 10/24. The PX1105R image (TR_GNSS_DRIVER_PX1105R, the
+// Tinker-Beetle V2's too) has it as the mosaic's does, from the receiver's
+// 0xE5 raw measurements.
 // The image that flies the raw-GNSS filter on every J1 receiver giving
 // measurements (TR_GNSS_AUTO_RAW: the auto image's driver, which finds the
 // receiver at boot, with the three raw receivers' raw outputs) has it too:
@@ -472,7 +424,7 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 #endif
 #endif
 #ifndef TR_RAW_GNSS_SHADOW
-#if (defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86) || (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || \
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || \
     (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR) || (defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R) || \
     (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
 #define TR_RAW_GNSS_SHADOW 1
@@ -483,10 +435,10 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 #if TR_RAW_GNSS_SHADOW && defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO && !(defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
 #error "TR_RAW_GNSS_SHADOW is not for the auto image: it finds its receiver at boot and flies GpsInsEKF (the mosaic-only image, -DTR_GNSS_MOSAIC=1, flies the raw-GNSS filter)"
 #endif
-#if TR_RAW_GNSS_SHADOW && !((defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86) || (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || \
+#if TR_RAW_GNSS_SHADOW && !((defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || \
                              (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR) || (defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R) || \
                              (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW))
-#error "TR_RAW_GNSS_SHADOW needs raw measurements: the LC86G's MSM7 (TR_GNSS_DRIVER_LC86=1), the mosaic-G5's MeasEpoch (TR_GNSS_DRIVER_MOSAIC=1), the gnss-sdr-dev board's MSM7 (TR_GNSS_DRIVER_SDR=1) or the PX1105R's 0xE5 (TR_GNSS_DRIVER_PX1105R=1)"
+#error "TR_RAW_GNSS_SHADOW needs raw measurements: the mosaic-G5's MeasEpoch (TR_GNSS_DRIVER_MOSAIC=1), the gnss-sdr-dev board's MSM7 (TR_GNSS_DRIVER_SDR=1) or the PX1105R's 0xE5 (TR_GNSS_DRIVER_PX1105R=1)"
 #endif
 // The SDR raw-nav image is that filter or nothing: its driver hands the FC no
 // fix GpsInsEKF could fly on the way the auto image's does not either.
@@ -498,8 +450,9 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 // Beetle, and the mosaic-only image (the Goblin's V9 on 10/24). GpsInsEKF does
 // not run there; main.cpp's `ekf` is RawNavAdapter (raw_nav_adapter.h),
 // GpsInsEKF's face on the raw filter's state. The V9 and V8 auto images keep
-// GpsInsEKF on the receiver's fix. On the LC86G, -DTR_RAW_GNSS_PRIMARY=0 flies
-// GpsInsEKF with the raw filter as a shadow beside it, as before.
+// GpsInsEKF on the receiver's fix. (On the retired Beetle V1's LC86G,
+// -DTR_RAW_GNSS_PRIMARY=0 flew GpsInsEKF with the raw filter as a shadow
+// beside it; every image that has the raw filter now refuses that.)
 #ifndef TR_RAW_GNSS_PRIMARY
 #define TR_RAW_GNSS_PRIMARY TR_RAW_GNSS_SHADOW
 #endif
@@ -521,8 +474,8 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 // The mosaic-only image's own paths for its one filter (main.cpp: the
 // profile, the restore's sigmas, the start's checks, the navigation blocks
 // and the ionosphere). Defined there and only there, so `#if
-// TR_RAW_NAV_MOSAIC` reads 0 everywhere else and the Beetle's image sees
-// neither the macro nor any of those lines.
+// TR_RAW_NAV_MOSAIC` reads 0 everywhere else and no other image sees any of
+// those lines.
 #if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC && TR_RAW_GNSS_PRIMARY
 #define TR_RAW_NAV_MOSAIC 1
 #endif
@@ -558,8 +511,9 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 // image: the restore's sigmas, the start's checks and memory floor, the
 // crash-loop rule, the transonic lockout, the raw vote guard, the hold and
 // restart of a filter that stops in flight, the antenna's offset, the rig
-// replay's console. The Beetle's (the M1's LC86G) is the other raw-filter
-// image and has none of it.
+// replay's console. The Tinker-Beetle V2's PX1105R image takes it too, on its
+// ESP32-S3: the name dates from when the Beetle V1's LC86G image, since
+// retired, was the one raw-filter image without it.
 #if (defined(TR_RAW_NAV_MOSAIC) && TR_RAW_NAV_MOSAIC) || (defined(TR_RAW_NAV_SDR) && TR_RAW_NAV_SDR) || \
     (defined(TR_RAW_NAV_PX1105R) && TR_RAW_NAV_PX1105R)
 #define TR_RAW_NAV_P4 1
@@ -614,8 +568,8 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 // -DTR_RAW_GLONASS=1 turns it on. The 11-21 flight replayed with it
 // (tools/raw_replay --glonass 1): the burn and the coast unchanged (the
 // Doppler change check held GLONASS's with the rest), a third more Dopplers
-// after. No default #define here (the M1 image sees no new macro,
-// tools/m1_identity.sh): the PX1105R driver reads 0 where it is not set.
+// after. No default #define here: the PX1105R driver reads 0 where it is not
+// set.
 #if defined(TR_RAW_GLONASS) && TR_RAW_GLONASS && !TR_RAW_NAV_PX1105R
 #error "TR_RAW_GLONASS needs the PX1105R's raw-GNSS filter (TR_RAW_NAV_PX1105R=1): only its driver asks for GLONASS"
 #endif
@@ -625,7 +579,7 @@ static_assert(board_pins::USE_IIS2MDC && board_pins::IIS2MDC_INT < 0,
 // instant (rr_lag_l5_s), and its L5-band code fused only where its L1-band
 // code is gone, moved onto the L1 band's (CodeBridge.h). -DTR_RAW_L5=1 turns
 // it on. Like TR_RAW_GLONASS, no default #define here: the PX1105R driver
-// reads 0 where it is not set, and the M1 image sees no new macro.
+// reads 0 where it is not set.
 #if defined(TR_RAW_L5) && TR_RAW_L5 && !TR_RAW_NAV_PX1105R
 #error "TR_RAW_L5 needs the PX1105R's raw-GNSS filter (TR_RAW_NAV_PX1105R=1): only its driver hands the L5 band over"
 #endif
@@ -768,7 +722,7 @@ struct config : board_pins
     static constexpr uint32_t FC_STATUS_PERIOD_US = 1000000UL / FC_STATUS_RATE_HZ;
     // #1409: how often the V10's hold-up cap sense (SCAP_ADC_PIN) is read. Each
     // FC_STATUS_MSG carries the latest reading; the out computer judges it once
-    // a second, as the mini's does its own (#1166). The cap moves ~50 mV/s at
+    // a second, as the Beetle's does its own (#1166). The cap moves ~50 mV/s at
     // most while charging (100 mA into 2 F), so a second is plenty.
     static constexpr uint32_t SCAP_SAMPLE_PERIOD_MS = 1000;
     // Guidance telemetry (GUIDANCE_TELEM_MSG) log rate while guidance is active.
@@ -833,7 +787,7 @@ struct config : board_pins
     // chip, so it lives in the board header (MAG_ROT_Z_DEG_IIS2MDC /
     // MAG_ROT_Z_DEG_QMC5883P).  It used to be one IIS2MDC_ROT_Z_DEG = +90 for
     // every board: right for the V8/V9 IIS2MDC once its left-handed X is
-    // negated (#1589), wrong for the Beetle's QMC5883P (#1590).
+    // negated (#1589), wrong for the Beetle V1's QMC5883P (#1590).
     //
     // The V9 image probes for either chip, so a V9 image on a V10 still finds
     // its QMC5883P; it learns which only at SensorCollector::begin()

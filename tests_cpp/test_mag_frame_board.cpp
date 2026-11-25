@@ -11,9 +11,10 @@
 //     plus Z out of the top; det -1, ST's left-handed axes (#1589).
 //     V5 (U23, F.Cu, rotation 0, with its ISM6HG256 at 45 as on V9): the
 //     same matrix, inferred from the placement; no V5 has been benched.
-//   QMC5883P, Beetle/M1 (U3, F.Cu, rotation 90): [[0,-1,0],[-1,0,0],[0,0,-1]]
+//   QMC5883P, Beetle V1 (U3, F.Cu, rotation 90): [[0,-1,0],[-1,0,0],[0,0,-1]]
 //     — a 2026-10-05 bench log: gyro-vs-field kinematics and the dip at
-//     rest; det +1 with Z into the board as configured (#1590).
+//     rest; det +1 with Z into the board as configured (#1590). Not tested
+//     here since the V1 was retired; the V10's matrix is derived from it.
 //   QMC5883P, V10 (U3, F.Cu, rotation 0): diag(-1, 1, -1)
 //     — the Beetle's chip axes turned back by the 90 deg its footprint is
 //     turned; inferred, no V10 has been built (#1590).
@@ -87,7 +88,6 @@ void expectFlatFieldPointsDown(uint8_t mag_type, float rot_z_deg, const double (
 }
 
 constexpr double kIis2mdcV8V9[3][3]  = {{0, -1, 0}, {-1, 0, 0}, {0, 0, 1}};
-constexpr double kQmc5883pBeetle[3][3] = {{0, -1, 0}, {-1, 0, 0}, {0, 0, -1}};
 constexpr double kQmc5883pV10[3][3]  = {{-1, 0, 0}, {0, 1, 0}, {0, 0, -1}};
 
 }  // namespace
@@ -111,15 +111,6 @@ TEST(MagFrameBoard, TheV10sQMC5883PMapsAsInferred) {
     EXPECT_FLOAT_EQ(rot, config::MAG_ROT_Z_DEG_QMC5883P);
     expectMatrix(chipToBoard(MAG_TYPE_QMC5883P, rot), kQmc5883pV10, "V10 QMC5883P");
     expectFlatFieldPointsDown(MAG_TYPE_QMC5883P, rot, kQmc5883pV10, "V10 QMC5883P");
-}
-#endif
-
-#if TR_BOARD_M1
-TEST(MagFrameBoard, TheBeetlesQMC5883PMapsAsMeasured) {
-    const float rot = config::magRotZDeg(true);
-    EXPECT_FLOAT_EQ(rot, config::MAG_ROT_Z_DEG_QMC5883P);
-    expectMatrix(chipToBoard(MAG_TYPE_QMC5883P, rot), kQmc5883pBeetle, "Beetle QMC5883P");
-    expectFlatFieldPointsDown(MAG_TYPE_QMC5883P, rot, kQmc5883pBeetle, "Beetle QMC5883P");
 }
 #endif
 

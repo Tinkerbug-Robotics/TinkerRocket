@@ -5,7 +5,8 @@ out computer's framing, [AA 55 AA 55][type][len][payload][CRC16 BE], and the
 FC's split rule: GnssRtcmHeader (time_us, part = index << 4 | count), then up
 to 219 frame bytes. The frames are real: an MSM7 epoch the Beetle's LC86G sent
 on 2026-09-25, plus a synthetic 400-byte frame that has to go in two parts.
-Expected values are the independent decode pinned in tests_cpp/test_lc86_parser.cpp.
+Expected values are the independent decode pinned in tests_cpp/test_gnss_wire_rtcm.cpp
+(Lc86Msm7.RealEpochDecodesAsTheModuleSentIt).
 """
 
 from __future__ import annotations

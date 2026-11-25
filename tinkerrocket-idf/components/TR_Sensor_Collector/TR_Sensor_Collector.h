@@ -10,8 +10,8 @@
 #include <TR_BMP585.h>
 #include <TR_MMC5983MA.h>
 // Magnetometer driver is a compile-time seam as well (#1312).  rocket-computer
-// V8+ carries an ST IIS2MDC; rocket-computer-mini's U3 is a QST QMC5883P
-// (#797).  TR_QMC5883P mirrors TR_IIS2MDC's call surface — begin / configure
+// V8+ carries an ST IIS2MDC; the V10's U3 is a QST QMC5883P, as the Beetle
+// V1's was (#797).  TR_QMC5883P mirrors TR_IIS2MDC's call surface — begin / configure
 // / readRawXYZ / setHardIronOffset — and hands out the same int16 counts into
 // the same IIS2MDCData, so the selection is the type alone and the slot keeps
 // its IIS2MDC name everywhere downstream (isIIS2MDCActive, IIS2MDC_MSG, the
@@ -38,13 +38,15 @@
 #include "ism6_fifo_decoder.h"
 #include "imu_sample_clock.h"
 // GNSS driver is a compile-time seam: the rocket-computer boards carry a
-// u-blox receiver, the mini carries a Quectel LC86G, and a V9 can fly a
-// Septentrio mosaic-G5 on J1 instead of its u-blox carrier. All three drivers
-// expose the identical begin/pollNewPVT/getGNSSData surface and produce the
-// same GNSSData, so the selection is the type alone. Projects opt in with
-// add_compile_definitions(TR_GNSS_DRIVER_LC86=1) or TR_GNSS_DRIVER_MOSAIC=1
-// at project level (same pattern as TR_GUIDANCE_AVAILABLE); default is
-// u-blox, unchanged.
+// u-blox receiver, a V9 can fly a Septentrio mosaic-G5 on J1 instead of its
+// u-blox carrier, and the Tinker-Beetle V2 carries a SkyTraq PX100 (the
+// PX1105R driver). Every driver exposes the identical
+// begin/pollNewPVT/getGNSSData surface and produces the same GNSSData, so the
+// selection is the type alone. Projects opt in with
+// add_compile_definitions(TR_GNSS_DRIVER_MOSAIC=1) or
+// TR_GNSS_DRIVER_PX1105R=1 at project level (same pattern as
+// TR_GUIDANCE_AVAILABLE); default is u-blox, unchanged. (The Beetle V1's
+// Quectel LC86G driver was retired with that board.)
 //
 // TR_GNSS_DRIVER_AUTO=1 puts TR_GNSSAuto in the slot instead: the V9 and V10
 // images, whose J1 takes the u-blox carrier, the mosaic-G5 harness or the
@@ -57,9 +59,7 @@
 // slot alone: the V10's SDR raw-nav image, whose one navigation filter is the
 // raw-GNSS filter on that board's measurements (no probing: the board is the
 // build's choice, as the mosaic is the mosaic image's).
-#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
-#include <TR_GNSSReceiverLC86_Serial.h>
-#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
 #include <TR_GNSSReceiverMosaic_Serial.h>
 #elif defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
 #include <TR_GNSSReceiverSdr_Serial.h>
@@ -187,7 +187,7 @@ public:
 #endif
 
     /** GNSS high-perf-clock OTP state at boot; a gnss_otp::* constant.
-     *  Board-agnostic: the LC86 driver reports NOT_M10 (#837 item 6). */
+     *  Board-agnostic: a non-u-blox driver reports NOT_M10 (#837 item 6). */
     uint8_t gnssOtpState() const { return gnss_receiver.otpState(); }
     SensorCollector(uint8_t ISM6HG256_CS,
                     uint8_t ISM6HG256_INT,
@@ -224,10 +224,11 @@ public:
                     uint8_t  ism6_low_g_fs_g   = 16,
                     uint16_t ism6_high_g_fs_g  = 256,
                     uint16_t ism6_gyro_fs_dps  = 4000,
-                    // Mini seam: the mini's magnetometer shares one physical
-                    // I2C bus with the INA230, so the app creates the bus and
-                    // hands the same handle to both. nullptr (the default and
-                    // every existing caller) keeps the collector creating and
+                    // Shared-bus seam: an app whose magnetometer shares one
+                    // physical I2C bus with another device creates the bus
+                    // and hands the same handle here (the retired single-MCU
+                    // mini's, with its INA230). nullptr (the default and
+                    // every caller today) keeps the collector creating and
                     // owning its own bus on I2C_NUM_1.
                     i2c_master_bus_handle_t external_i2c_bus = nullptr);
 
@@ -250,16 +251,15 @@ public:
     bool getIIS2MDCData(IIS2MDCData &data_out);
     bool getGNSSData(GNSSData &data_out);
     // Per-satellite report for the latest GNSS epoch (GNSSSatData): every
-    // epoch from the u-blox, about once a second from the LC86G's GSV.  Same
+    // epoch from the u-blox, at the receiver's own rate from the others.  Same
     // pop-once contract as getGNSSData(): true at most once per epoch.
     bool getGNSSSatData(GNSSSatData &data_out);
-    // Raw frames from the GNSS receiver (GNSS_RTCM_MSG), oldest first: ~5 a
-    // second of RTCM3 from the LC86G's MSM7, ~60 SBF blocks a second from the
-    // mosaic-G5, ~400 RTCM3 frames a second from the gnss-sdr-dev board,
-    // never anything from the u-blox.  Drains a ring the GNSS poll task
-    // fills, so call it until it returns false.  `cap` must be
-    // GNSS_RTCM_MAX_FRAME (LC86G) or GNSS_SBF_MAX_FRAME (mosaic-G5; the V9
-    // and V10 images).
+    // Raw frames from the GNSS receiver (GNSS_RTCM_MSG), oldest first: ~60
+    // SBF blocks a second from the mosaic-G5, ~400 RTCM3 frames a second from
+    // the gnss-sdr-dev board, whole SkyTraq frames from the PX1105R, never
+    // anything from the u-blox.  Drains a ring the GNSS poll task fills, so
+    // call it until it returns false.  `cap` must be GNSS_SBF_MAX_FRAME
+    // (mosaic-G5; the V9 and V10 images) where the mosaic may be found.
     bool getGNSSRtcmFrame(uint8_t* out, size_t cap, size_t& len, uint32_t& time_us);
     // mosaic-G5 only (no-ops elsewhere): the pin its 1PPS reaches and its
     // navigation rate, set before begin() (on the V9 image the pin is touched
@@ -323,19 +323,21 @@ public:
     bool gnssRawOutputsFailed() const { return gnss_receiver.rawOutputsFailed(); }
 #endif
     // Raw GNSS measurements for the raw-GNSS shadow filter (#1600), from the
-    // LC86G's MSM7 and broadcast ephemeris, or the mosaic-G5's MeasEpoch and
-    // SBF navigation blocks on the mosaic-only image; never from the u-blox,
-    // nor on the auto image. Off until enableGNSSRawOutputs() (call it before
+    // mosaic-G5's MeasEpoch and SBF navigation blocks on the mosaic-only
+    // image, the gnss-sdr-dev board's MSM7 and RTCM3 ephemerides, or the
+    // PX1105R's 0xE5; never from the u-blox, nor on the auto image without
+    // TR_GNSS_AUTO_RAW. Off until enableGNSSRawOutputs() (call it before
     // begin()). Safe from any task: the driver hands them over through
     // queues. getGNSSEphemeris gives an RTCM3 payload (1019/1046/1042) on the
-    // LC86G and a whole GPSNav/GALNav/BDSNav block on the mosaic-G5
-    // (SbfNav.h decodes it). See TR_GNSSReceiverLC86Serial::takeRawEpoch /
-    // takeEphemeris and TR_GNSSReceiverMosaicSerial's.
+    // gnss-sdr-dev board and a whole GPSNav/GALNav/BDSNav block on the
+    // mosaic-G5 (SbfNav.h decodes it). See TR_GNSSReceiverMosaicSerial's
+    // takeRawEpoch / takeEphemeris.
     bool enableGNSSRawOutputs();
     bool getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out);
     bool getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len);
     // The receiver's own fixes with their GPS instant on the MCU clock, for
-    // the shadow's check of each fix against the IMU (#1508). LC86G only.
+    // the shadow's check of each fix against the IMU (#1508). The PX1105R's
+    // (and the one image's, TR_GNSS_AUTO_RAW) only.
     bool getGNSSFix(gnss_raw::TimedFix& out);
 #if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
     // The image that flies the raw-GNSS filter on every receiver giving
@@ -413,7 +415,7 @@ public:
     bool gnssBoardHeard() const;
 #endif
     // The GPS-to-MCU clock line each time it moves (GNSS_CLOCK_MSG): the
-    // LC86G's from its sentences' arrival, the mosaic-G5's from its 1PPS, the
+    // PX1105R's from its 0xE5 arrival, the mosaic-G5's from its 1PPS, the
     // gnss-sdr-dev board's from its epochs (the auto images; its 4002 frames
     // are stamped by it); false on the u-blox.
     bool getGNSSClockLine(GnssClockData& out);
@@ -425,8 +427,8 @@ public:
     // TR_GNSS_DRIVER_AUTO.
     bool sendGNSSAidFrame(const uint8_t* frame, size_t len);
     // The geoid's height above the WGS84 ellipsoid at the last fix, m
-    // (GNSSData's alt is above the geoid). LC86G and mosaic-G5; false
-    // elsewhere or before a fix.
+    // (GNSSData's alt is above the geoid). The mosaic-G5 (and the auto
+    // image's driver); false elsewhere or before a fix.
     bool getGNSSGeoidSeparation(float& sep_m) const;
     void getISM6HG256DebugSnapshot(ISM6HG256DebugSnapshot &snapshot_out) const;
     void getMMC5983MADebugSnapshot(MMC5983MADebugSnapshot &snapshot_out) const;
@@ -597,9 +599,7 @@ private:
     TR_BMP585 bmp585;
     TR_MMC5983MA mmc5983ma;
     MagDriver iis2mdc;   // the IIS2MDC-named slot; the type is the seam's choice
-#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
-    TR_GNSSReceiverLC86Serial gnss_receiver;
-#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
     TR_GNSSReceiverMosaicSerial gnss_receiver;
 #elif defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
     TR_GNSSReceiverSdrSerial gnss_receiver;

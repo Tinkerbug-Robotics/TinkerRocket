@@ -1,12 +1,13 @@
 # sdkconfig overlay applied ONLY to -DTR_BOARD_M2=1 builds (the Tinker-Beetle
-# V2), last, on top of sdkconfig.defaults, sdkconfig.defaults.m1 and
+# V2), last, on top of sdkconfig.defaults, sdkconfig.defaults.m2 and
 # sdkconfig.defaults.mosaic. Selected by the project CMakeLists, not by the
 # build-dir name. The out computer's file of the same name does the same for
 # that processor.
 #
-# It sets the one thing the M1's overlay cannot share with this board: the boot
-# flash. The V2's flight computer is an ESP32-S3FH4R2, which boots from the
-# 4 MB of flash in its package; the V1's external NOR is gone. The base declares
+# It sets the one thing sdkconfig.defaults.m2, written for the Beetle V1 (now
+# retired), left out: the boot flash. The V2's flight computer is an
+# ESP32-S3FH4R2, which boots from the 4 MB of flash in its package; the V1's
+# external NOR is gone. The base declares
 # 8 MB because partitions.csv ends at 6.06 MB, and on a 4 MB part that is the
 # FATAL direction: the bootloader finds less flash than the image header claims
 # and stops before any firmware runs, with no log of ours to say why (the "Boot

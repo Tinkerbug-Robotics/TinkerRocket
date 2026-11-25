@@ -275,7 +275,7 @@ struct board_pins
     // is the OC's P4_EN_S3 (its GPIO7), and the common cathode POWER_SWITCH is
     // the enable of U30 (TPS22810), whose output V_MCU_SWTCH feeds this
     // processor. R84 (100 k) and C105 (10 uF) hold the enable up for a
-    // fraction of a second after the last driver lets go; board_m1.h has the
+    // fraction of a second after the last driver lets go; board_m2.h has the
     // arithmetic for the same parts.
     //
     // #848: held HIGH with gpio_hold_en while INFLIGHT (pwr_hold_policy.h).

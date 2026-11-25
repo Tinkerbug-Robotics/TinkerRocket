@@ -1,11 +1,12 @@
 // Lc86Parser.h — Quectel LC86G NMEA/PQTM stream parser (pure, host-compilable)
 //
 // Bytes in, GNSSData out. This unit is deliberately free of every ESP-IDF /
-// FreeRTOS dependency so the checksum rules, the $PQTMPVT field mapping
-// (including the vel_u = -VelD sign the EKF's life depends on), the $PQTMEPE
-// accuracy merge, and the framing robustness are all pinned by host tests
-// (tests_cpp/test_lc86_parser.cpp). The ESP UART glue lives in
-// TR_GNSSReceiverLC86_Serial.cpp — keep it there.
+// FreeRTOS dependency. It was the protocol half of the Tinker-Beetle V1's
+// LC86G flight driver; since the V1 was retired (and the driver with it) no
+// firmware image builds it, and it stays as the host decoder of the V1's
+// logged RTCM3 frames: tools/raw_replay, tinkerrocket-sim and the raw-GNSS
+// host tests read them through it, and tests_cpp/test_gnss_wire_rtcm.cpp
+// pins its RTCM3 path.
 //
 // Protocol: Quectel LC26G/LC76G/LC86G GNSS Protocol Specification V1.4.
 // Framing:  $<Address>[,<Data>]*<Checksum><CR><LF>. Checksum is the 8-bit XOR
@@ -161,7 +162,7 @@ public:
 
     // Valid after Event::GGA. Debug/liveness only — GGA is NEVER a fix
     // source here (no vertical velocity; see the PQTMPVT-is-load-bearing
-    // rule in TR_GNSSReceiverLC86_Serial.cpp).
+    // rule of the retired LC86G flight driver).
     uint8_t ggaQuality() const { return gga_quality_; }
     uint8_t ggaNumSats() const { return gga_num_sats_; }
 

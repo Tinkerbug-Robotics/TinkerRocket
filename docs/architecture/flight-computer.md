@@ -79,7 +79,7 @@ flight computer is not running instead of "Flight computer ready". A bench image
 `-DTR_TEST_NO_FLIGHT_LOOP=1` starves the flight task on purpose to show it.
 
 The IMU task reads the chip's FIFO where the board header turns that on
-(`ISM6_FIFO_CAPTURE`: the mini and V9/V10; #1485), a burst at a time on the FIFO-threshold
+(`ISM6_FIFO_CAPTURE`: the Tinker-Beetle and V9/V10; #1485), a burst at a time on the FIFO-threshold
 interrupt, and times each sample from the burst's sample count (`imu_sample_clock.h`);
 elsewhere it reads one sample per data-ready edge. The magnetometer has its own task
 since #1485: its I2C read inside the IMU task was holding the IMU off for milliseconds
@@ -427,7 +427,7 @@ once they said seen, pass an all-zero position and velocity under the marker's
 timestamp. Whenever the two disagreed the filter fused a lat=0/lon=0/vel=0 fix: first on
 decimation-off ticks (#367), then on ticks where a frozen IMU timestamp skips the whole
 EKF update before its GNSS block (#1107). The feed lives in `EkfGnssFeed.h` in the EKF
-component and the mini shares it. Never hand the filter a placeholder: a real fix, or
+component. Never hand the filter a placeholder: a real fix, or
 the previous one again.
 
 **`sdkconfig` is generated and untracked, and it overrides `sdkconfig.defaults`.** Same
