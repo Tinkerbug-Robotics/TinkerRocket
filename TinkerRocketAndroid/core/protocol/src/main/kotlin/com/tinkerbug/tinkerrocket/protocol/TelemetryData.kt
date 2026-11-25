@@ -316,6 +316,15 @@ public data class TelemetryData(
     // or base station, so null means "not applicable", never "fine".  Advisory
     // only, like Mag.  iOS `gnss_imu_state`.
     val gnssImuState: Int? = null,            // "gi"
+    // #1755: on AUTO board-to-rocket mounting, whether a still moment on the
+    // pad confirmed the frame lately ("mo"): a plain integer with the
+    // SensorHealth values (0 not applicable, 1 OK: a window in the last 30 s,
+    // 2 degraded: none), NOT part of "h".  0 or absent on a manual mounting
+    // code, off the pad (anything but READY and PRELAUNCH), from older firmware
+    // on either board, and from an older base station, so null means "not
+    // applicable", never "fine".  On a base-station link it updates every 3 s.
+    // Degraded holds "Ready to fly" to amber, never red.  iOS `mount_state`.
+    val mountState: Int? = null,              // "mo"
 
     // Source rocket identity (base station relay only, null for direct BLE)
     val sourceRocketId: Int? = null,          // "rid"
@@ -548,6 +557,10 @@ public data class TelemetryData(
     public val gnssImuHealth: SensorHealth
         get() = SensorHealth.entries.firstOrNull { it.raw == gnssImuState } ?: SensorHealth.NA
 
+    /** #1755: the AUTO mounting's pad confirmation ([mountState]); absent or unknown values read NA. */
+    public val mountHealth: SensorHealth
+        get() = SensorHealth.entries.firstOrNull { it.raw == mountState } ?: SensorHealth.NA
+
     /** #1166: the one quiet advisory line for a hold-up cap that never charged, or null. */
     public val holdupAdvisoryText: String? get() = holdupAdvisoryText(holdupState, scapVoltage)
 
@@ -599,8 +612,8 @@ public data class TelemetryData(
         val detail: String? = null,
     )
 
-    // Core sensors always shown; GNSS IMU and Storage only when reported; a
-    // pyro channel only when configured for the flight (state != NA).
+    // Core sensors always shown; GNSS IMU, Mounting and Storage only when
+    // reported; a pyro channel only when configured for the flight (state != NA).
     public val sensorHealthRows: List<SensorHealthRow>
         get() {
             val rows = mutableListOf(
@@ -613,6 +626,9 @@ public data class TelemetryData(
             )
             if (gnssImuHealth != SensorHealth.NA) {   // "gi": absent from older firmware / a v5 rocket or BS
                 rows.add(SensorHealthRow("GNSS IMU", gnssImuHealth, gnssImuHealthDetail(gnssImuHealth)))
+            }
+            if (mountHealth != SensorHealth.NA) {     // "mo": absent on a manual code, off the pad, or from older firmware / BS
+                rows.add(SensorHealthRow("Mounting", mountHealth, mountHealthDetail(mountHealth)))
             }
             if (storageHealth != SensorHealth.NA) {
                 rows.add(SensorHealthRow("Storage", storageHealth))
@@ -642,8 +658,12 @@ public data class TelemetryData(
     // flight-log store, or a configured pyro with no continuity).  Green needs
     // every required item OK — including EKF converged and a GNSS fix.  Mag and
     // the GNSS board's IMU ("gi") are advisory and never gate: neither is read
-    // below.  Storage absent (NA, older firmware) is ignored, not red.  Amber =
-    // anything in between.
+    // below.  Storage absent (NA, older firmware) is ignored, not red.  #1755:
+    // an AUTO mounting not confirmed on the pad lately ("mo" degraded) holds
+    // green back to amber but never turns it red: the frame is most often still
+    // right, and the flight computer's thrust-axis check stands guard in the
+    // boost.  NA (a manual code, off the pad, older firmware or BS) is ignored.
+    // Amber = anything in between.
     public val flightReadiness: FlightReadiness
         get() {
             if (!hasSensorHealth) return FlightReadiness.UNKNOWN
@@ -653,6 +673,7 @@ public data class TelemetryData(
             if (hardFault) return FlightReadiness.NOT_READY
             val mustBeOK = mutableListOf(baroHealth, imuHealth, battHealth, ekfHealth, gnssHealth)
             if (storageHealth != SensorHealth.NA) mustBeOK.add(storageHealth)  // #281/#278
+            if (mountHealth != SensorHealth.NA) mustBeOK.add(mountHealth)      // #1755: amber at worst (not in hardFault)
             for (ch in 1..4) {
                 if (pyroHealth(ch) != SensorHealth.NA) mustBeOK.add(pyroHealth(ch))
             }
@@ -949,6 +970,7 @@ public data class TelemetryData(
             pyroStatusBits = flexInt(json, "ps") ?: 0,       // #293: tolerant
             sensorHealth = flexInt(json, "h") ?: 0,                     // #571
             gnssImuState = flexInt(json, "gi"),                         // absent stays null = NA
+            mountState = flexInt(json, "mo"),                           // #1755: absent stays null = NA
             sourceRocketId = flexInt(json, "rid"),           // #571: rid is the demux key
             sourceUnitName = strictString(json, "run"),
             duplicateId = flexInt(json, "dup"),                         // #1650
@@ -1023,6 +1045,21 @@ public fun gnssImuHealthDetail(state: TelemetryData.SensorHealth): String? = whe
     TelemetryData.SensorHealth.BAD ->
         "The GNSS board stopped using its IMU: its at-rest check failed" +
             " or its samples stopped."
+    TelemetryData.SensorHealth.NA -> null
+}
+
+/**
+ * #1755: one plain sentence on what the Mounting dot ("mo") means, or null
+ * when the row is hidden (NA). Read out by TalkBack as the dot's state.
+ *
+ * iOS twin: `TelemetryData.mountHealthDetail(_:)`.
+ */
+public fun mountHealthDetail(state: TelemetryData.SensorHealth): String? = when (state) {
+    TelemetryData.SensorHealth.OK ->
+        "The board found which way its nose points from a still moment on the pad in the last 30 s."
+    TelemetryData.SensorHealth.DEGRADED, TelemetryData.SensorHealth.BAD ->
+        "The AUTO mounting has not been confirmed by a still moment on the pad in the last 30 s:" +
+            " let the rocket sit still on the rail, or set a manual mounting code."
     TelemetryData.SensorHealth.NA -> null
 }
 

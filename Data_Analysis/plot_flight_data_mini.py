@@ -183,6 +183,11 @@ FCS_SCAP_NO_READING   = 0xFFFF
 # dropped), in v1 and v2 frames alike.
 FCS_GNSS_IMU_SHIFT    = 3
 FCS_GNSS_IMU_MASK     = 0x18
+# Bits 5-6 (#1755): on AUTO mounting, whether a still pad window confirmed the
+# frame lately, a SensorHealthState (0 a manual code, off the pad, or an image
+# from before it; 1 a window in the last 30 s; 2 none).
+FCS_MOUNT_SHIFT       = 5
+FCS_MOUNT_MASK        = 0x60
 MSG_NON_SENSOR        = 0xA5
 MSG_POWER             = 0xA6
 MSG_START_LOGGING     = 0xA7
@@ -1990,6 +1995,9 @@ def parse_binary_file(filepath):
                     # none reported, 1 fully aiding, 2 not fully (the vertical
                     # only, or off), 3 refused/dropped
                     "gnss_imu": (fcs_flags & FCS_GNSS_IMU_MASK) >> FCS_GNSS_IMU_SHIFT,
+                    # an AUTO mounting's pad confirmation (FCS_MOUNT_*): 0 not
+                    # reported, 1 a still window in the last 30 s, 2 none
+                    "mount": (fcs_flags & FCS_MOUNT_MASK) >> FCS_MOUNT_SHIFT,
                 })
             elif msg_type == MSG_SNAPSHOT and msg_len == SNAPSHOT_LEN:
                 # #752: the FC's crash-recovery snapshot, 10 Hz through INFLIGHT.

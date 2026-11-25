@@ -712,9 +712,11 @@ void SensorConverter::packLoRaSlow(const LoRaDataSI& in, LoRaSlowData& out)
     out.cam_ma   = encodeRailMilliamps(in.cam_current);
     out.servo_ma = encodeRailMilliamps(in.servo_current);
 
-    // v6: the gnss-sdr-dev board's IMU aiding (a SensorHealthState); the
-    // spare bits stay 0.
-    out.status = (uint8_t)(in.gnss_imu & LORA_SLOW_GNSS_IMU_MASK);
+    // v6: the gnss-sdr-dev board's IMU aiding (a SensorHealthState), and
+    // (#1755) an AUTO mounting's pad confirmation (another); the spare bits
+    // stay 0.
+    out.status = (uint8_t)((in.gnss_imu & LORA_SLOW_GNSS_IMU_MASK)
+                         | ((in.mount << LORA_SLOW_MOUNT_SHIFT) & LORA_SLOW_MOUNT_MASK));
 }
 
 void SensorConverter::unpackLoRaSlow(const LoRaSlowData& in, LoRaDataSI& out)
@@ -733,8 +735,10 @@ void SensorConverter::unpackLoRaSlow(const LoRaSlowData& in, LoRaDataSI& out)
     out.servo_current = (float)in.servo_ma * 0.001f;
 
     // v6. A v5 frame (a rocket from before it) reaches here through
-    // unpackLoRaSlowV5Bytes with the byte 0: no board reported.
+    // unpackLoRaSlowV5Bytes with the byte 0: no board reported, and no
+    // mounting state; a v6 rocket from before #1755 sends bits 2-3 as 0 too.
     out.gnss_imu = (uint8_t)(in.status & LORA_SLOW_GNSS_IMU_MASK);
+    out.mount    = (uint8_t)((in.status & LORA_SLOW_MOUNT_MASK) >> LORA_SLOW_MOUNT_SHIFT);
 }
 
 // --- byte-level wrappers -----------------------------------------------------

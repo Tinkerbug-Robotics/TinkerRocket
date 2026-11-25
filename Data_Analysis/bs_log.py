@@ -46,6 +46,8 @@ LORA_PROTO_VERSION_V5 = 5        # still read: the same FAST frame, SLOW without
 LORA_FRAME_FAST = 0x0
 LORA_FRAME_SLOW = 0x1
 LORA_SLOW_GNSS_IMU_MASK = 0x03   # LoRaSlowData.status bits 0-1, a SensorHealthState
+LORA_SLOW_MOUNT_SHIFT = 2        # LoRaSlowData.status bits 2-3 (#1755), another
+LORA_SLOW_MOUNT_MASK = 0x0C
 
 # LoRaFrameHeader: network_id, rocket_id, next_channel_idx, seq, ver_type, flags_state
 FMT_LORA_HDR = '<BBBHBB'
@@ -176,6 +178,11 @@ def _unpack_slow(frame, row):
     # status byte: 0.
     row['gnss_imu'] = (frame[o + 15] & LORA_SLOW_GNSS_IMU_MASK
                        if len(frame) == SIZE_OF_LORA_SLOW else 0)
+    # #1755: an AUTO mounting's pad confirmation (0 a manual code, off the pad
+    # or a rocket from before it, 1 a still pad window in the last 30 s, 2 none);
+    # 0 from a v5 frame too.
+    row['mount'] = ((frame[o + 15] & LORA_SLOW_MOUNT_MASK) >> LORA_SLOW_MOUNT_SHIFT
+                    if len(frame) == SIZE_OF_LORA_SLOW else 0)
 
 
 def read_bs_bin(path):

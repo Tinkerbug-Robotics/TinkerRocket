@@ -677,6 +677,56 @@ TEST_F(LoRaRoundtripTest, GnssImuRidesTheSlowFrameStatus) {
     EXPECT_EQ(acc.gnss_imu, 3u);
 }
 
+/// #1755: an AUTO mounting's pad confirmation rides the same status byte, bits
+/// 2-3, beside the GNSS IMU's bits 0-1: every pair of states round-trips, each
+/// without disturbing the other, and the spare bits 4-7 go out 0.
+TEST_F(LoRaRoundtripTest, MountRidesTheSlowFrameStatusBesideTheGnssImu) {
+    for (uint8_t gi : {uint8_t{0}, uint8_t{1}, uint8_t{2}, uint8_t{3}}) {
+        for (uint8_t mo : {uint8_t{0}, uint8_t{1}, uint8_t{2}, uint8_t{3}}) {
+            LoRaDataSI in = makeNominal();
+            in.gnss_imu = gi;
+            in.mount = mo;
+            uint8_t bytes[SIZE_OF_LORA_SLOW] = {};
+            conv.packLoRaSlowBytes(in, bytes);
+            EXPECT_EQ(bytes[SIZE_OF_LORA_SLOW - 1], (uint8_t)(gi | (mo << 2)));
+            LoRaDataSI out{};
+            conv.unpackLoRaSlowBytes(bytes, out);
+            EXPECT_EQ(out.gnss_imu, gi);
+            EXPECT_EQ(out.mount, mo);
+        }
+    }
+    LoRaDataSI in = makeNominal();
+    in.gnss_imu = 0;
+    in.mount = 0xFF;   // never more than its two bits, and never into the gnss_imu's
+    LoRaSlowData s{}; conv.packLoRaSlow(in, s);
+    EXPECT_EQ(s.status, 0x0Cu);
+    // a status byte with every bit set reads 3 and 3: the spare bits are not read
+    s.status = 0xFF;
+    LoRaDataSI acc{};
+    conv.unpackLoRaSlow(s, acc);
+    EXPECT_EQ(acc.gnss_imu, 3u);
+    EXPECT_EQ(acc.mount, 3u);
+    // and the fast frame neither carries nor clears it
+    LoRaFastData f{}; conv.packLoRaFast(in, f);
+    conv.unpackLoRaFast(f, acc);
+    EXPECT_EQ(acc.mount, 3u);
+}
+
+/// A v6 rocket from before #1755 sends bits 2-3 as 0: N/A, never a false OK or
+/// amber, whatever the accumulator held.
+TEST_F(LoRaRoundtripTest, ARocketFromBeforeTheMountBitsReadsNotApplicable) {
+    LoRaDataSI in = makeNominal();
+    in.gnss_imu = 1;
+    uint8_t bytes[SIZE_OF_LORA_SLOW] = {};
+    conv.packLoRaSlowBytes(in, bytes);
+    bytes[SIZE_OF_LORA_SLOW - 1] = 0x01;   // its status byte: the gnss_imu alone
+    LoRaDataSI out{};
+    out.mount = 2;
+    conv.unpackLoRaSlowBytes(bytes, out);
+    EXPECT_EQ(out.gnss_imu, 1u);
+    EXPECT_EQ(out.mount, 0u);
+}
+
 /// A v5 rocket's SLOW frame is v6's without its last byte: the v5 reader takes
 /// every field v5 had and reports no board.
 TEST_F(LoRaRoundtripTest, AV5SlowFrameReadsAsV6WithoutTheBoard) {
@@ -694,6 +744,7 @@ TEST_F(LoRaRoundtripTest, AV5SlowFrameReadsAsV6WithoutTheBoard) {
     LoRaDataSI a{}, b{};
     conv.unpackLoRaSlowBytes(v6, a);
     b.gnss_imu = 2;   // whatever the accumulator held: a v5 frame says no board
+    b.mount = 2;      //   and no mounting state
     conv.unpackLoRaSlowV5Bytes(v5, b);
     EXPECT_FLOAT_EQ(b.max_alt, a.max_alt);
     EXPECT_FLOAT_EQ(b.voltage, a.voltage);
@@ -701,6 +752,7 @@ TEST_F(LoRaRoundtripTest, AV5SlowFrameReadsAsV6WithoutTheBoard) {
     EXPECT_EQ(b.rocket_id, a.rocket_id);
     EXPECT_EQ(a.gnss_imu, 1u);
     EXPECT_EQ(b.gnss_imu, 0u);
+    EXPECT_EQ(b.mount, 0u);
 }
 
 /// Five FAST then one SLOW. At LORA_TX_RATE_HZ = 2 that puts the slow set on

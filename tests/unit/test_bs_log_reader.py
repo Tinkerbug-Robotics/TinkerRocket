@@ -129,12 +129,12 @@ def _fast_frame(seq, *, palt=1234, sats=11):
     return bytes(b)
 
 
-def _slow_frame(seq, *, cam_ma=1480, servo_ma=340, volt_u8=187, gnss_imu=0, v5=False):
+def _slow_frame(seq, *, cam_ma=1480, servo_ma=340, volt_u8=187, gnss_imu=0, mount=0, v5=False):
     b = bytearray(bs_log.SIZE_OF_LORA_SLOW_V5 if v5 else bs_log.SIZE_OF_LORA_SLOW)
     b[0:7] = _lora_hdr(seq, bs_log.LORA_FRAME_SLOW,
                        version=bs_log.LORA_PROTO_VERSION_V5 if v5 else bs_log.LORA_PROTO_VERSION)
     if not v5:
-        b[7 + 15] = gnss_imu                          # v6 status
+        b[7 + 15] = gnss_imu | (mount << 2)           # v6 status
     o = 7
     b[o:o + 3] = (2500).to_bytes(3, 'little')         # max_alt
     struct.pack_into('<h', b, o + 3, 120)             # max_speed
@@ -256,6 +256,21 @@ def test_v6_slow_frame_carries_the_gnss_imu_and_v5_reads_as_none(tmp_path):
     assert rows[3]['cam_a'] == pytest.approx(0.9)          # every v5 field still read
 
 
+def test_the_mount_bits_ride_beside_the_gnss_imu(tmp_path):
+    # #1755: status bits 2-3, an AUTO mounting's pad confirmation; 0 from a v5
+    # rocket and from a v6 one that predates the bits
+    p = tmp_path / 'lora_011.bin'
+    _write_log(p, [_rx_record(100, _slow_frame(0, gnss_imu=1, mount=2)),
+                   _rx_record(600, _fast_frame(1)),
+                   _rx_record(1100, _slow_frame(2, gnss_imu=3, mount=1)),
+                   _rx_record(1600, _slow_frame(3, gnss_imu=2)),        # before #1755: 0
+                   _rx_record(2100, _slow_frame(4, v5=True))])
+    rows, _, _ = bs_log.read_bs_log(p)
+    assert bs_log.LORA_SLOW_MOUNT_MASK == 0x0C and bs_log.LORA_SLOW_MOUNT_SHIFT == 2
+    assert [r['mount'] for r in rows] == [2, 2, 1, 0, 0]       # forward-filled across the fast frame
+    assert [r['gnss_imu'] for r in rows] == [1, 1, 3, 2, 0]    # untouched by the mount bits
+
+
 def test_a_slow_frame_whose_length_disagrees_with_its_version_is_skipped(tmp_path):
     p = tmp_path / 'lora_009.bin'
     v6_short = _slow_frame(0)[:bs_log.SIZE_OF_LORA_SLOW_V5]      # v6 header, 22 B
@@ -289,7 +304,9 @@ def test_the_v6_and_v5_goldens_read_alike():
     assert v6_events == v5_events
     assert {r['gnss_imu'] for r in v6_rows if r['frame'] == 'slow'} == {1}
     assert all(r.get('gnss_imu', 0) == 0 for r in v5_rows)
-    skip = {'gnss_imu', 'frame_len', 'lora_proto'}
+    assert {r['mount'] for r in v6_rows if r['frame'] == 'slow'} == {2}   # #1755
+    assert all(r.get('mount', 0) == 0 for r in v5_rows)
+    skip = {'gnss_imu', 'mount', 'frame_len', 'lora_proto'}
 
     def same(r):   # NaN (an unknown RSSI) compares equal to itself here
         return {k: ('nan' if isinstance(v, float) and v != v else v)

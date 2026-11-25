@@ -1369,6 +1369,11 @@ static std::atomic<uint32_t> fc_scap_rx_ms{0};
 // image from before it), for the apps' dot ("gi"). Written by processFrame,
 // read by the telemetry builders (fcGnssImuNow), hence atomic.
 static std::atomic<uint8_t> fc_gnss_imu{0};
+// #1755: an AUTO mounting's pad confirmation, from the last FC_STATUS_MSG's
+// flags (FCS_MOUNT_*, a SensorHealthState; 0 on a manual code, off the pad,
+// or from an FC image from before it), for the apps' "Mounting" dot ("mo").
+// Written by processFrame, read by the telemetry builders (fcMountNow).
+static std::atomic<uint8_t> fc_mount{0};
 
 // The gnss-sdr-dev board's IMU aiding as the FC last reported it, while that
 // report is recent (as fcCameraEngagedNow, below); 0 (not sent to the apps) otherwise.
@@ -1376,6 +1381,14 @@ static uint8_t fcGnssImuNow()
 {
     if ((millis() - fc_status_last_ms) >= 1500U) return 0;
     return fc_gnss_imu.load(std::memory_order_relaxed);
+}
+
+// The mounting's pad confirmation as the FC last reported it, while that
+// report is recent; 0 (not sent to the apps: N/A, never a stale OK) otherwise.
+static uint8_t fcMountNow()
+{
+    if ((millis() - fc_status_last_ms) >= 1500U) return 0;
+    return fc_mount.load(std::memory_order_relaxed);
 }
 static bool peripherals_initialized = false; // Deferred init for peripherals behind PWR_PIN
 // #1228: the flight-logger half of initPeripherals() has a life of its own.
@@ -5953,6 +5966,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             fc_camera_engaged_prev = fc_cam;
             fc_status_last_ms = millis();
             fc_gnss_imu.store(fcStatusGnssImu(payload, payload_len), std::memory_order_relaxed);
+            fc_mount.store(fcStatusMount(payload, payload_len), std::memory_order_relaxed);
 
             // #1409: the hold-up cap, where the sense line is the FC's. A v1
             // frame (an FC image from before #1409) has none: ABSENT.
@@ -7013,6 +7027,9 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_BUDGET], uint16_t 
     // v6: the gnss-sdr-dev board's IMU aiding rides the SLOW frame too, for the
     // apps' "GNSS IMU" dot on a base-station link (as "gi" on a direct one).
     lora.gnss_imu = fcGnssImuNow();
+    // #1755: and an AUTO mounting's pad confirmation, the apps' "Mounting"
+    // dot (as "mo" on a direct link); bits 2-3 of the same status byte.
+    lora.mount = fcMountNow();
 
     if (frame_type == LORA_FRAME_SLOW)
     {
@@ -9334,6 +9351,7 @@ static void printStats()
         ble_telem.scap_voltage = holdup_scap_v;
         ble_telem.holdup_state = holdup_tracker.state;
         ble_telem.gnss_imu = fcGnssImuNow();
+        ble_telem.mount = fcMountNow();
         fillModemTelem(ble_telem);
         fillPyroFaultTelem(ble_telem);   // #1553
         ble_telem.latitude = NAN;
@@ -9887,6 +9905,7 @@ static void printStats()
     ble_telem.scap_voltage = holdup_scap_v;
     ble_telem.holdup_state = holdup_tracker.state;
     ble_telem.gnss_imu = fcGnssImuNow();
+    ble_telem.mount = fcMountNow();
     fillModemTelem(ble_telem);
     fillPyroFaultTelem(ble_telem);   // #1553
     if (latest_gnss_valid)

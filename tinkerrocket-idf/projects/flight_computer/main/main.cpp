@@ -67,6 +67,7 @@
 #include "test_mode_gate_policy.h"   // #1137 item 5: the #363 failsafe and the test-command gates
 #include "flight_timeout_policy.h"  // #1753: the INFLIGHT timeout holds for an owed or just-fired channel
 #include "thrust_axis_policy.h"     // #1755: the boost thrust axis against an AUTO frame
+#include "mount_health_policy.h"    // #1755: the apps' "Mounting" dot: an AUTO frame confirmed on the pad lately
 #include "oc_cmd_dedup.h"        // #1112: dispatch only on the poll pass; bounded config retry
 #include "servo_pin_policy.h"    // servoPinsValid(): a Beetle int -1 pin is unmapped, not GPIO 0xFFFFFFFF
 #include "loop_profile.h"        // bench only: -DTR_LOOP_PROFILE=1 section profiler (TR_LP_LAP)
@@ -2822,9 +2823,10 @@ static constexpr float ORIENT_ACCEPT_TOL_DEG = 5.0f;
 // board is ACTUALLY resting when a sim run starts (#508).
 static float pad_up_rocket[3]   = {0.0f, 0.0f, 0.0f};
 static bool  pad_up_rocket_valid = false;
-// When the last still pad window completed (0: none this boot), for the
-// launch log (#1755): on AUTO, how long before launch the frame flown was
-// last confirmed against gravity.
+// When the last still pad window completed (0: none this boot, or none since
+// a switch back to AUTO reset the frame), for the launch log (#1755): on
+// AUTO, how long before launch the frame flown was last confirmed against
+// gravity; and for the apps' "Mounting" dot (mount_health_policy.h).
 static uint32_t orient_last_window_ms = 0;
 
 static void handleOrientationEstimate(const float up_rocket[3])
@@ -9835,7 +9837,8 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     {
         if (orient_last_window_ms == 0)
             ESP_LOGW(TAG, "[ORIENT] AUTO frame at launch: %s (mode %u), never confirmed by a still "
-                          "pad window this boot -- the thrust-axis check is the only test of it",
+                          "pad window (none this boot, or since AUTO was set) -- the thrust-axis "
+                          "check is the only test of it",
                      orientCodeName(b2r_active_code), (unsigned)b2r_active_mode);
         else
             ESP_LOGI(TAG, "[ORIENT] AUTO frame at launch: %s (mode %u), last confirmed by a still "
@@ -13686,6 +13689,10 @@ static void loop_fc()
                             applyBoardToRocketOrientation(ORIENT_CODE_IDENTITY,
                                                           ORIENT_MODE_DEFAULT);
                             orient_estimator.reset();
+                            // #1755: no window has confirmed the identity frame
+                            // yet (the last one, under the manual code, changed
+                            // nothing): the "Mounting" dot waits for the next.
+                            orient_last_window_ms = 0;
                             if (ekf_initialized) ekf_initialized = false;
                             ESP_LOGI(TAG, "[CFG] IMU orientation: AUTO (pad-gravity detect)");
                         }
@@ -16846,6 +16853,14 @@ static void loop_fc()
                     fc_status.flags,
                     sdr_imu_tracker.state(sensor_collector_hw.gnssType() == GNSS_TYPE_SDR, esp_timer_get_time()));
 #endif
+                // #1755: on AUTO mounting, whether a still pad window confirmed
+                // the frame lately (the apps' "Mounting" dot; NA on a manual
+                // code and off the pad)
+                fc_status.flags = fcStatusWithMount(
+                    fc_status.flags,
+                    MountHealthPolicy::state(b2r_active_mode == ORIENT_MODE_MANUAL,
+                                             rocket_state == READY || rocket_state == PRELAUNCH,
+                                             orient_last_window_ms, time_ms()));
                 // #1409: the hold-up cap, where this board's sense line is
                 // ours (V10/V11): the latest once-a-second reading.
                 fc_status.scap_mv = FCS_SCAP_NO_READING;

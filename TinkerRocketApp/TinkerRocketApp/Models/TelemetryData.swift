@@ -318,6 +318,36 @@ struct TelemetryData: Codable {
         }
     }
 
+    // #1755: on AUTO board-to-rocket mounting, whether a still moment on the
+    // pad confirmed the frame lately ("mo"): the flight computer flies the
+    // frame its last still pad window found, and a board snapped on a prep
+    // table, then racked on a rail swaying too much to finish one, flies the
+    // table's.  A plain integer with the SensorHealth values (0 not
+    // applicable, 1 OK: a window in the last 30 s, 2 degraded: none), NOT part
+    // of the "h" bitfield.  0 or absent on a manual mounting code, off the pad
+    // (anything but READY and PRELAUNCH), from older firmware on either board,
+    // and from an older base station, so nil means "not applicable", never
+    // "fine".  On a base-station link it updates every 3 s.  Degraded holds
+    // "Ready to fly" to amber, never red (flightReadiness).
+    var mount_state: Int?
+    var mountHealth: SensorHealth {
+        mount_state.flatMap(SensorHealth.init(rawValue:)) ?? .na
+    }
+    /// One plain sentence on what the Mounting dot means, or nil when the row
+    /// is hidden.  Read out by VoiceOver as the dot's hint.  Android twin:
+    /// `mountHealthDetail(SensorHealth)`.
+    static func mountHealthDetail(_ state: SensorHealth) -> String? {
+        switch state {
+        case .ok:
+            return "The board found which way its nose points from a still moment on the pad in the last 30 s."
+        case .degraded, .bad:
+            return "The AUTO mounting has not been confirmed by a still moment on the pad in the last 30 s:"
+                + " let the rocket sit still on the rail, or set a manual mounting code."
+        case .na:
+            return nil
+        }
+    }
+
     // #1166: the out computer's verdict on the hold-up supercap ("hu").
     enum HoldupState: Int { case charging = 1, charged = 2, notCharging = 3, noReading = 4, notFitted = 5 }
     var holdupState: HoldupState? { holdup_state.flatMap(HoldupState.init(rawValue:)) }
@@ -430,6 +460,10 @@ struct TelemetryData: Codable {
             rows.append(SensorHealthRow(name: "GNSS IMU", state: gnssImuHealth,
                                         detail: Self.gnssImuHealthDetail(gnssImuHealth)))
         }
+        if mountHealth != .na {     // "mo": absent on a manual code, off the pad, or from older firmware / BS
+            rows.append(SensorHealthRow(name: "Mounting", state: mountHealth,
+                                        detail: Self.mountHealthDetail(mountHealth)))
+        }
         if storageHealth != .na {   // OC-reported only; absent on older firmware / BS self-frames
             rows.append(SensorHealthRow(name: "Storage", state: storageHealth))
         }
@@ -445,6 +479,11 @@ struct TelemetryData: Codable {
     // initialized/converged and a GNSS fix.  Mag and the GNSS board's IMU
     // ("gi") are advisory and never gate: neither is read below.
     // Storage is OC-reported: absent (N/A) on older firmware → ignored, not red.
+    // #1755: an AUTO mounting not confirmed on the pad lately ("mo" degraded)
+    // holds green back to amber but never turns it red: the frame is most
+    // often still right, and the flight computer's thrust-axis check stands
+    // guard in the boost.  N/A (a manual code, off the pad, older firmware or
+    // BS) is ignored.
     // Amber = anything in between.
     enum FlightReadiness { case unknown, ready, caution, notReady
         var label: String {
@@ -461,6 +500,7 @@ struct TelemetryData: Codable {
         if hardFault { return .notReady }
         var mustBeOK = [baroHealth, imuHealth, battHealth, ekfHealth, gnssHealth]
         if storageHealth != .na { mustBeOK.append(storageHealth) }   // #281/#278: low/full space gates green
+        if mountHealth != .na { mustBeOK.append(mountHealth) }       // #1755: amber at worst (not in hardFault)
         for ch in 1...4 where pyroHealth(channel: ch) != .na { mustBeOK.append(pyroHealth(channel: ch)) }
         return mustBeOK.allSatisfy { $0 == .ok } ? .ready : .caution
     }
@@ -669,6 +709,7 @@ struct TelemetryData: Codable {
         case pyro_status_bits = "ps"  // packed bitfield: b0=armed (global), then (cont,fired) per channel 1..4
         case sensor_health = "h"      // #303 scorecard: 2 bits/sensor, see RocketComputerTypes.h
         case gnss_imu_state = "gi"    // GNSS board IMU: SensorHealth value; BS link: every 3 s
+        case mount_state = "mo"       // #1755: AUTO mounting confirmed on the pad lately; BS link: every 3 s
         case source_rocket_id = "rid"
         case source_unit_name = "run"
         case duplicate_id = "dup"      // three rockets, one base station
@@ -775,6 +816,7 @@ struct TelemetryData: Codable {
         pyro_status_bits = flexInt(.pyro_status_bits) ?? 0       // #293: tolerant
         sensor_health = flexInt(.sensor_health) ?? 0                 // #571
         gnss_imu_state = flexInt(.gnss_imu_state)                    // absent stays nil = N/A
+        mount_state = flexInt(.mount_state)                          // #1755: absent stays nil = N/A
         source_rocket_id = flexInt(.source_rocket_id)                // #571: rid is the demux key
         source_unit_name = try c.decodeIfPresent(String.self, forKey: .source_unit_name)
         duplicate_id = flexInt(.duplicate_id)

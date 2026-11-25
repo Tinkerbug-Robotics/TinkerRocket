@@ -1484,7 +1484,8 @@ struct RocketStateView: View {
 /// Driven by the packed "h" bitfield (FC sensors/EKF + OC battery); the parent
 /// only renders it once the rocket actually reports a scorecard.  The rollup
 /// rule lives in TelemetryData.flightReadiness — EKF-init and a GNSS fix gate
-/// green, configured pyros must have continuity, and mag and the GNSS board's
+/// green, configured pyros must have continuity, an AUTO mounting not confirmed
+/// on the pad lately holds it to amber (#1755), and mag and the GNSS board's
 /// IMU are advisory.
 /// The compact per-subsystem dot row inside HealthCardView's horizontal
 /// scroller.  Split out so the render test can draw it directly —

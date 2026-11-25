@@ -525,6 +525,19 @@ target_include_directories(test_orientation_sway PRIVATE
 target_link_libraries(test_orientation_sway GTest::gtest_main)
 gtest_discover_tests(test_orientation_sway)
 
+# ---------- test_mount_health_policy ----------
+# #1755: the apps' "Mounting" dot: on AUTO, whether a still pad window
+# confirmed the frame in the last 30 s (flight_computer
+# main/mount_health_policy.h, pure; SensorHealthState from the types header).
+add_executable(test_mount_health_policy test_mount_health_policy.cpp)
+target_include_directories(test_mount_health_policy PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/../projects/flight_computer/main   # mount_health_policy.h only
+)
+target_link_libraries(test_mount_health_policy GTest::gtest_main)
+gtest_discover_tests(test_mount_health_policy)
+
 # Board→rocket mounting orientation utilities (discrete 24-code set,
 # quaternion round-trips, gravity nose snap, pad attitude init).
 add_executable(test_orientation test_orientation.cpp

@@ -2220,6 +2220,9 @@ static void buildBLETelemetry(const LoRaDataSI& lora, float rssi, float snr,
     // v6: the gnss-sdr-dev board's IMU aiding, from the SLOW frame (every 3 s;
     // 0 from a v5 rocket or one without the board: "gi" not sent).
     out.gnss_imu = lora.gnss_imu;
+    // #1755: an AUTO mounting's pad confirmation, bits 2-3 of the same byte
+    // (0 from a rocket without it, a manual code or off the pad: "mo" not sent).
+    out.mount = lora.mount;
 
     // GPS (pre-computed lat/lon)
     out.latitude = lat_deg;

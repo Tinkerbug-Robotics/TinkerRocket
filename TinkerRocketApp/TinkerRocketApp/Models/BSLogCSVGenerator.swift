@@ -16,10 +16,11 @@
 //
 //  TWO LORA PROTOCOL VERSIONS are read, as the v6 base station reads them
 //  (loraTelemetryLenOk): v6, whose SLOW frame is 23 bytes (v5's 22 plus a
-//  `status` byte at offset 22: bits 0-1 the gnss-sdr-dev board's IMU aiding),
-//  and v5, whose SLOW frame is 22 bytes with no status (read as 0). The FAST
-//  frame is 55 bytes in both. The status byte reaches `Row.gnssImu` only; the
-//  CSV layout is the same for both versions.
+//  `status` byte at offset 22: bits 0-1 the gnss-sdr-dev board's IMU aiding,
+//  bits 2-3 an AUTO mounting's pad confirmation, #1755), and v5, whose SLOW
+//  frame is 22 bytes with no status (read as 0). The FAST frame is 55 bytes in
+//  both. The status byte reaches `Row.gnssImu` and `Row.mount` only; the CSV
+//  layout is the same for both versions.
 //
 //  `ecefToGeodetic` and `eulerFromQuat` are deliberately literal transcriptions
 //  of TR_Coordinates::ecefToGeodetic and SensorConverter::eulerFromQuat rather
@@ -64,6 +65,8 @@ nonisolated final class BSLogCSVGenerator {
     private static let loRaFrameFast = 0x0
     private static let loRaFrameSlow = 0x1
     private static let loRaSlowGnssImuMask = 0x03   // status bits 0-1
+    private static let loRaSlowMountShift = 2       // status bits 2-3 (#1755)
+    private static let loRaSlowMountMask = 0x0C
 
     private static let loRaHdrLen = 7
     private static let bsRxHdrLen = 12
@@ -139,6 +142,9 @@ nonisolated final class BSLogCSVGenerator {
         var camA = 0.0, servoA = 0.0
         /// v6 status bits 0-1, a SensorHealth value (0 from a v5 rocket). No CSV column.
         var gnssImu = 0
+        /// #1755: status bits 2-3, an AUTO mounting's pad confirmation, a SensorHealth
+        /// value (0 from a v5 rocket or one from before it). No CSV column.
+        var mount = 0
 
         var gap = -1
     }
@@ -217,7 +223,7 @@ nonisolated final class BSLogCSVGenerator {
 
     /// Writes ONLY what the slow frame carries. `f` is a v6 frame (23 bytes) or
     /// a v5 one (22, no status byte): the status then reads as 0, no board
-    /// reported, as the firmware's unpackLoRaSlowV5Bytes does.
+    /// and no mounting state reported, as the firmware's unpackLoRaSlowV5Bytes does.
     private static func unpackSlow(_ f: [UInt8], _ r: inout Row) {
         let o = loRaHdrLen
         r.maxAlt = Double(i24(f, o))
@@ -228,6 +234,7 @@ nonisolated final class BSLogCSVGenerator {
         r.camA = Double(u16(f, o + 11)) / 1000.0
         r.servoA = Double(u16(f, o + 13)) / 1000.0
         r.gnssImu = f.count == sizeOfLoRaSlow ? u8(f, o + 15) & loRaSlowGnssImuMask : 0
+        r.mount = f.count == sizeOfLoRaSlow ? (u8(f, o + 15) & loRaSlowMountMask) >> loRaSlowMountShift : 0
     }
 
     // MARK: - geodesy / attitude

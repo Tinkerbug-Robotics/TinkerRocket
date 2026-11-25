@@ -105,7 +105,7 @@
  {
  "file": "csv/bs_tiny.bin",
  "size": 870,
- "notes": "base-station binary log built with the real packers; the CSV golden generated from it lives in tests_cpp/fixtures/csv_golden/ (app output, not emitter output)"},
+ "notes": "base-station binary log built with the real packers; the CSV golden generated from it lives in tests_cpp/fixtures/csv_golden/ (app output, not emitter output); slow-frame status 0x09: GNSS IMU 1 (bits 0-1), mounting 2 (bits 2-3, #1755)"},
  {
  "file": "csv/bs_tiny_v5.bin",
  "size": 868,

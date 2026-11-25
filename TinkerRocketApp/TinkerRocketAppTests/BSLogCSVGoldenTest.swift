@@ -97,12 +97,16 @@ final class BSLogCSVGoldenTest: XCTestCase {
             guard let firstSlow = rows.firstIndex(where: { $0.frame == "slow" }), firstSlow > 0 else {
                 return XCTFail("\(rel): a fast frame must lead the slow one")
             }
-            XCTAssertTrue(rows[..<firstSlow].allSatisfy { $0.gnssImu == 0 },
+            XCTAssertTrue(rows[..<firstSlow].allSatisfy { $0.gnssImu == 0 && $0.mount == 0 },
                           "\(rel): nothing before the first slow frame")
             // Set by the slow frame and forward-filled onto the fast rows after it.
             let want = side.int("gnss_imu")
             XCTAssertTrue(rows[firstSlow...].allSatisfy { $0.gnssImu == want },
                           "\(rel): gnss_imu \(want) from the slow frame on")
+            // #1755: bits 2-3 of the same byte, each read apart from the other.
+            let wantMount = side.int("mount")
+            XCTAssertTrue(rows[firstSlow...].allSatisfy { $0.mount == wantMount },
+                          "\(rel): mount \(wantMount) from the slow frame on")
         }
     }
 
@@ -122,7 +126,7 @@ final class BSLogCSVGoldenTest: XCTestCase {
             XCTAssertEqual(rows.count, 10, "\(rel): only the ten fast frames survive")
             XCTAssertTrue(rows.allSatisfy { $0.frame == "fast" }, rel)
             // Nothing from a skipped frame leaks into the forward-fill.
-            XCTAssertTrue(rows.allSatisfy { $0.camA == 0 && $0.maxAlt == 0 && $0.gnssImu == 0 }, rel)
+            XCTAssertTrue(rows.allSatisfy { $0.camA == 0 && $0.maxAlt == 0 && $0.gnssImu == 0 && $0.mount == 0 }, rel)
             XCTAssertEqual(events.count, 1, rel)
             // The CSV still renders, header plus 10 rows plus the event.
             let csv = try BSLogCSVGenerator.writeCSV(bin)

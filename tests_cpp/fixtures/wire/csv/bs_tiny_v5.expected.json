@@ -6,4 +6,5 @@
  "skipped_seq": 3,
  "lora_proto": 5,
  "slow_frame_len": 22,
- "gnss_imu": 0}
+ "gnss_imu": 0,
+ "mount": 0}

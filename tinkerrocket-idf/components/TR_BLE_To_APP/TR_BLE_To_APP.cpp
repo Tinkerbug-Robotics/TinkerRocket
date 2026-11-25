@@ -2117,6 +2117,12 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     // Sensor health scorecard bitfield (#303): 2 bits/sensor, NA/OK/DEGRADED/BAD.
     // Omitted when zero (nothing reported) to save MTU; iOS unpacks per SH_*_SHIFT.
     if (data.sensor_health != 0) { addInt("h", (int)data.sensor_health); }
+    // #1755: an AUTO mounting's pad confirmation (a SensorHealthState), the
+    // apps' "Mounting" dot. Tier 1 beside "h" because it gates the same
+    // go/no-go: trimmed, it would read N/A and let "Ready to fly" through.
+    // Absent on a manual code and off the pad, so in flight, the
+    // peak-payload case, it costs nothing.
+    if (data.mount != 0) { addUint("mo", data.mount); }
 
     // GPS — 5 decimals = ~1.1 m precision, plenty for tracking and saves
     // ~4 B/frame vs 7 decimals.  iOS decodes as Double regardless.
