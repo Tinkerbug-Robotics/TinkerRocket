@@ -4684,18 +4684,24 @@ static void IRAM_ATTR pyroFaultAlertIsr(void*)
     portYIELD_FROM_ISR(woken);
 }
 
-// Caller holds pyro_fault_mux. Pin low first, then the record.
-static void pyroFaultTripLocked(int16_t counts, PyroFaultTrip::Source src, uint32_t now_ms)
+// Caller holds pyro_fault_mux. The pin drops only while a trip holds it: a
+// poll reading the policy refuses as implausible must not touch it, or every
+// loop pass raises it and every poll drops it again (#1757).
+static void pyroFaultApplyLocked(PyroFaultTrip::OverLimit r)
 {
-    if (arm_consent_pin_level)
+    if (r.drop_pin && arm_consent_pin_level)
     {
         gpio_set_level((gpio_num_t)kArmConsentGpio, 0);
         arm_consent_pin_level = false;
     }
-    if (PyroFaultTrip::onOverLimit(pyro_fault, now_ms, counts, pyro_fault_reason, src))
-    {
-        pyro_fault_log_trip = true;
-    }
+    if (r.started) pyro_fault_log_trip = true;
+}
+
+// Caller holds pyro_fault_mux.
+static void pyroFaultTripLocked(int16_t counts, PyroFaultTrip::Source src, uint32_t now_ms)
+{
+    pyroFaultApplyLocked(PyroFaultTrip::overLimitSeen(pyro_fault, now_ms, counts,
+                                                      pyro_fault_reason, src));
 }
 
 static void pyroFaultTask(void*)
@@ -4714,24 +4720,11 @@ static void pyroFaultTask(void*)
         const bool     ok     = ina230.readShuntVoltageRaw(&raw) == TR_INA230_OK;
         const uint32_t now_ms = millis();
 
+        // The reading, an alert edge and the pin: pollShunt() (the policy
+        // header, host-tested), applied under the lock.
         portENTER_CRITICAL(&pyro_fault_mux);
-        pyro_fault_reading.valid  = ok;
-        pyro_fault_reading.counts = ok ? raw : 0;
-        if (pyro_fault_alert_edge)
-        {
-            // The edge says the limit was crossed; the reading may already be
-            // falling with U9 open, so record at least the limit.
-            pyro_fault_alert_edge = false;
-            pyroFaultTripLocked((ok && raw > kTripLimitCounts) ? raw : kTripLimitCounts,
-                                Source::Alert, now_ms);
-        }
-        if (ok && overLimit(raw))
-            pyroFaultTripLocked(raw, Source::Poll, now_ms);
-        else if (ok)
-        {
-            notePeak(pyro_fault, raw);
-            noteUnderLimit(pyro_fault);
-        }
+        pyroFaultApplyLocked(pollShunt(pyro_fault, pyro_fault_reading, pyro_fault_alert_edge,
+                                       ok, raw, now_ms, pyro_fault_reason));
         portEXIT_CRITICAL(&pyro_fault_mux);
 
         ulTaskNotifyTake(pdTRUE, 1);   // the next tick, or at once on an alert edge
@@ -4855,6 +4848,10 @@ static void servicePyroFaultTrip(uint32_t now_ms)
     if (was_holding && !stillHolding(pyro_fault, now_ms, pyro_fault_reading)) released = true;
     ev    = released ? held : pyro_fault.last;
     index = pyro_fault.trips;
+    // Released with the reading still over the limit: only stillHolding()'s
+    // kMaxHoldMs release does that, and it marks the reading implausible.
+    const bool still_over = released && pyro_fault_reading.valid &&
+                            overLimit(pyro_fault_reading.counts);
     portEXIT_CRITICAL(&pyro_fault_mux);
 
     if (report_trip)
@@ -4875,9 +4872,12 @@ static void servicePyroFaultTrip(uint32_t now_ms)
         const uint32_t held_ms = now_ms - ev.at_ms;
         const int16_t  da      = countsToDeciAmps(ev.peak_counts);
         ESP_LOGW("PYRO", "fault-current trip #%u released after %lu ms (peak %d.%d A%s): "
-                         "OC_ARM_EN follows the arm rule again",
+                         "OC_ARM_EN follows the arm rule again%s",
                  (unsigned)index, (unsigned long)held_ms, da / 10, da % 10,
-                 ev.peak_counts >= 32767 ? ", clipped" : "");
+                 ev.peak_counts >= 32767 ? ", clipped" : "",
+                 still_over ? ". The shunt still reads over the limit with U9 open, so it "
+                               "is taken as a bad measurement: the poll ignores it until "
+                               "a reading is under the limit" : "");
         pyroFaultLogRecord(ev, index, PYRO_FAULT_PHASE_RELEASE, held_ms);
     }
 }

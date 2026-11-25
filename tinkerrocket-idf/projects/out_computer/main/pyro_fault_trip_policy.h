@@ -68,7 +68,8 @@
 // function may run only while consent is down (alertOwner()).
 //
 // Pure so the decision table is host-testable (test_pyro_fault_trip_policy).
-// main.cpp owns the pin, the INA230 and the task that polls it.
+// main.cpp owns the pin, the INA230 and the task that polls it; what the poll
+// does to the pin is pollShunt() below, so that is host-tested too.
 
 namespace PyroFaultTrip {
 
@@ -294,6 +295,66 @@ inline bool stillHolding(State& s, uint32_t now_ms, Reading latest)
 inline bool pinHigh(bool consent_wanted, bool holding)
 {
     return consent_wanted && !holding;
+}
+
+// ---- The poll's side of the pin (#1757) ---------------------------------------
+//
+// main.cpp's poll task runs pollShunt() under its lock and applies the result
+// to OC_ARM_EN; loop_oc then runs stillHolding() and pinHigh() above. The pin
+// drops only while a trip holds it. A reading the policy refuses as implausible
+// starts no trip, so nothing would hold the pin low: the next loop pass would
+// raise it and the next poll drop it again, chopping consent at the loop rate
+// through every later deployment, the main's included. Such a reading leaves
+// the pin where the arm rule puts it.
+
+// What one over-limit sighting does.
+struct OverLimit
+{
+    bool started  = false;   // a new trip: log it
+    bool drop_pin = false;   // OC_ARM_EN must be low now
+};
+
+// An over-limit seen at now_ms: recorded (onOverLimit), and the pin dropped
+// only while a trip holds.
+inline OverLimit overLimitSeen(State& s, uint32_t now_ms, int16_t counts,
+                               uint8_t reason, Source src)
+{
+    OverLimit r;
+    r.started  = onOverLimit(s, now_ms, counts, reason, src);
+    r.drop_pin = s.holding;
+    return r;
+}
+
+// One pass of the shunt poll: `ok` and `raw` are its INA230 read, `alert_edge`
+// the flag the INA_ALERT ISR leaves (it has already dropped the pin itself).
+// Stores the reading for the re-arm, turns an edge into a trip, then judges
+// the reading.
+inline OverLimit pollShunt(State& s, Reading& latest, bool& alert_edge,
+                           bool ok, int16_t raw, uint32_t now_ms, uint8_t reason)
+{
+    latest.valid  = ok;
+    latest.counts = ok ? raw : 0;
+    OverLimit r;
+    if (alert_edge)
+    {
+        // The edge says the limit was crossed; the reading may already be
+        // falling with U9 open, so record at least the limit.
+        alert_edge = false;
+        r = overLimitSeen(s, now_ms, (ok && raw > kTripLimitCounts) ? raw : kTripLimitCounts,
+                          reason, Source::Alert);
+    }
+    if (ok && overLimit(raw))
+    {
+        const OverLimit p = overLimitSeen(s, now_ms, raw, reason, Source::Poll);
+        r.started  = r.started || p.started;
+        r.drop_pin = r.drop_pin || p.drop_pin;
+    }
+    else if (ok)
+    {
+        notePeak(s, raw);
+        noteUnderLimit(s);
+    }
+    return r;
 }
 
 // Shunt counts as amps x10, for the log record and telemetry.
