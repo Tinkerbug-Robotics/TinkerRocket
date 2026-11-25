@@ -833,6 +833,16 @@ struct config : board_pins
     // control / guidance must know which way the control surfaces point".
     // servoControlEnabled defaults to TRUE in both apps, so a rocket flown on
     // defaults is roll-controlled — SET A MANUAL CODE before flying one.
+    //
+    // And AUTO only knows the nose axis once a 2 s still window has completed
+    // with the rocket racked: the frame flown is the last window's, so a board
+    // powered on a prep table and racked in wind used to fly the table's
+    // frame (#1755).  Rail sway and gyro bias no longer stop a window (the
+    // estimator judges 250 ms blocks), the launch log says when the frame was
+    // last confirmed, and in the boost a measured thrust axis more than 25 deg
+    // off the frame takes over burnout and stands down the pitch apogee voter
+    // and roll control (thrust_axis_policy.h).  A manual code is still the
+    // certain answer, and is flown as set.
     // Hardcoded to 0xFF rather than IMU_ORIENT_AUTO because this header is
     // included without RocketComputerTypes.h; a gtest pins the two equal.
     static constexpr uint8_t BOARD_TO_ROCKET_ORIENT = 0xFF;

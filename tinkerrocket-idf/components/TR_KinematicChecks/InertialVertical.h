@@ -166,6 +166,15 @@ public:
         const float s = 2.0f * (q_[1] * q_[3] - q_[0] * q_[2]);   // (R x_body).up
         return std::asin(s > 1.0f ? 1.0f : (s < -1.0f ? -1.0f : s));
     }
+    // The up component of a body-frame vector, (R v).up: pitchRad() is the
+    // asin of it for body +X.  #1755: whether the measured thrust axis points
+    // up (thrust) or down (coast drag), in whatever frame the board flies.
+    float upOf(const float v[3]) const
+    {
+        const float w = q_[0], x = q_[1], y = q_[2], z = q_[3];
+        return 2.0f * (x * z - w * y) * v[0] + 2.0f * (y * z + w * x) * v[1] +
+               (1.0f - 2.0f * (x * x + y * y)) * v[2];
+    }
     float gravity() const { return g0_; }    // the pad's measured g
 
 private:

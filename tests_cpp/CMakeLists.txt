@@ -509,6 +509,21 @@ target_link_libraries(test_imu_drain_window GTest::gtest_main)
 gtest_discover_tests(test_imu_drain_window)
 
 # ---------- test_orientation ----------
+# #1755 / #1734: the pad orientation estimator on a swaying rail, the
+# thrust-axis check's window, and burnout read along the measured thrust axis
+# in a right, reversed and lateral frame (real TR_Orientation + BurnoutDetector.h).
+add_executable(test_orientation_sway test_orientation_sway.cpp
+    ${LIB_DIR}/TR_Orientation/TR_Orientation.cpp
+)
+target_include_directories(test_orientation_sway PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_Orientation
+    ${LIB_DIR}/TR_KinematicChecks
+    ${LIB_DIR}/../projects/flight_computer/main   # thrust_axis_policy.h only
+)
+target_link_libraries(test_orientation_sway GTest::gtest_main)
+gtest_discover_tests(test_orientation_sway)
+
 # Board→rocket mounting orientation utilities (discrete 24-code set,
 # quaternion round-trips, gravity nose snap, pad attitude init).
 add_executable(test_orientation test_orientation.cpp

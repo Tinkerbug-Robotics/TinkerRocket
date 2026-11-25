@@ -451,8 +451,10 @@ TEST(OrientationEstimator, Motion_ResetsWindow) {
     EXPECT_FALSE(est.update(t, acc[0], acc[1], acc[2], 50.0f, 0.0f, 0.0f));
     // …then 900 more quiet samples: still not enough for a NEW window
     EXPECT_FALSE(feedStill(est, t, 900, acc));
-    // …and completing the new window works
-    EXPECT_TRUE(feedStill(est, t, 200, acc));
+    // …and completing the new window works.  #1755: stillness is judged per
+    // 250 ms block, so the new window opens at the block after the one the
+    // spike failed, up to a block later than the next quiet sample.
+    EXPECT_TRUE(feedStill(est, t, 300, acc));
 }
 
 TEST(OrientationEstimator, NonOneG_NeverAccumulates) {

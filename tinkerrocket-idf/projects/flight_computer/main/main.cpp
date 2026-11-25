@@ -66,6 +66,7 @@
 #include "guidance_gate_policy.h"   // GTV 2026-11-01: guidance origin, heading trust, why it is not steering
 #include "test_mode_gate_policy.h"   // #1137 item 5: the #363 failsafe and the test-command gates
 #include "flight_timeout_policy.h"  // #1753: the INFLIGHT timeout holds for an owed or just-fired channel
+#include "thrust_axis_policy.h"     // #1755: the boost thrust axis against an AUTO frame
 #include "oc_cmd_dedup.h"        // #1112: dispatch only on the poll pass; bounded config retry
 #include "servo_pin_policy.h"    // servoPinsValid(): a Beetle int -1 pin is unmapped, not GPIO 0xFFFFFFFF
 #include "loop_profile.h"        // bench only: -DTR_LOOP_PROFILE=1 section profiler (TR_LP_LAP)
@@ -609,6 +610,10 @@ static volatile bool log_next_report_send = true;
 static OrientationEstimator orient_estimator;
 static ThrustAxisCheck      orient_thrust_check;
 static bool                 orient_thrust_mismatch = false;
+// #1755 (thrust_axis_policy.h): the boost thrust axis disproved an AUTO frame.
+// Burnout then reads that axis; the pitch voter and roll control stand down.
+static bool                 orient_frame_disproved = false;
+static float                orient_burnout_axis[3] = {1.0f, 0.0f, 0.0f};
 static float ground_pressure_pa = 101325.0f;
 // #257 barometer plausibility window.  BMP585/581 are specified 30-125 kPa;
 // the 25 kPa floor is margin below spec (~10.4 km ISA).  One definition for
@@ -2807,9 +2812,15 @@ static constexpr float ORIENT_ACCEPT_TOL_DEG = 5.0f;
 // board is ACTUALLY resting when a sim run starts (#508).
 static float pad_up_rocket[3]   = {0.0f, 0.0f, 0.0f};
 static bool  pad_up_rocket_valid = false;
+// When the last still pad window completed (0: none this boot), for the
+// launch log (#1755): on AUTO, how long before launch the frame flown was
+// last confirmed against gravity.
+static uint32_t orient_last_window_ms = 0;
 
 static void handleOrientationEstimate(const float up_rocket[3])
 {
+    orient_last_window_ms = time_ms();
+    if (orient_last_window_ms == 0) orient_last_window_ms = 1;
     pad_up_rocket[0] = up_rocket[0];
     pad_up_rocket[1] = up_rocket[1];
     pad_up_rocket[2] = up_rocket[2];
@@ -9786,7 +9797,22 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     // READY/PRELAUNCH).  Start the boost-phase thrust-axis
     // cross-check on what was latched.
     orient_thrust_mismatch = false;
+    orient_frame_disproved = false;
     orient_thrust_check.start(time_us());
+    // #1755: on AUTO, say how long ago a still pad window last confirmed the
+    // frame being flown; the thrust-axis check above tests it in the boost.
+    if (b2r_active_mode != ORIENT_MODE_MANUAL)
+    {
+        if (orient_last_window_ms == 0)
+            ESP_LOGW(TAG, "[ORIENT] AUTO frame at launch: %s (mode %u), never confirmed by a still "
+                          "pad window this boot -- the thrust-axis check is the only test of it",
+                     orientCodeName(b2r_active_code), (unsigned)b2r_active_mode);
+        else
+            ESP_LOGI(TAG, "[ORIENT] AUTO frame at launch: %s (mode %u), last confirmed by a still "
+                          "pad window %.1f s before launch",
+                     orientCodeName(b2r_active_code), (unsigned)b2r_active_mode,
+                     (double)(now_ms - orient_last_window_ms) / 1000.0);
+    }
     // Safety: warn and disable guidance if EKF never initialized
     if (!ekf_initialized) {
         ESP_LOGW(TAG, "[EKF] WARNING: Launching without EKF initialization!");
@@ -11283,8 +11309,13 @@ static void loop_fc()
             // On the pad, the averaged specific-force direction reveals the
             // mounting (continuously re-estimated, so late re-racking after
             // horizontal prep self-corrects; latched by leaving READY/
-            // PRELAUNCH at launch).  During boost, the thrust direction
-            // cross-checks whatever was latched.
+            // PRELAUNCH at launch).  #1755: a window is 2 s of 250 ms blocks
+            // whose rate MEAN and SPREAD stay small, so a racked rocket
+            // swaying in wind, or a biased gyro, still confirms its frame;
+            // before, one sample over 3 dps threw the window away.  During
+            // boost, the thrust direction cross-checks whatever was latched;
+            // if it disproves an AUTO frame, burnout reads that measured axis
+            // (thrust_axis_policy.h).
             // Tilting the board during a bench ground test must NOT re-trigger the
             // pad orientation auto-detect — it would keep re-racking the board→rocket
             // frame mid-test (the fins then chase a moving reference).  Freeze the
@@ -11309,20 +11340,52 @@ static void loop_fc()
                 if (orient_thrust_check.update(ism6_latest_si.time_us,
                                                acc_x, acc_y, acc_z))
                 {
-                    if (orient_thrust_check.valid() &&
-                        orient_thrust_check.angleFromNoseDeg() > 25.0f)
+                    float u[3] = {1.0f, 0.0f, 0.0f};
+                    const bool have_axis = orient_thrust_check.axis(u);
+                    const ThrustAxisPolicy::Verdict v = ThrustAxisPolicy::judge(
+                        have_axis, orient_thrust_check.angleFromNoseDeg(),
+                        inertial_vert.healthy(), inertial_vert.upOf(u),
+                        b2r_active_mode == ORIENT_MODE_MANUAL);
+                    orient_thrust_mismatch = v.mismatch;
+                    if (v.disproved)
                     {
-                        orient_thrust_mismatch = true;
-                        ESP_LOGE(TAG, "[ORIENT] thrust axis %.1f° off nose — "
-                                      "latched orientation %s (mode %u) suspect",
+                        // #1755: the AUTO frame flown is not the rocket's.
+                        // Burnout reads the measured thrust axis; what needs a
+                        // true rocket +X stands down for the flight: the
+                        // IMU's pitch voter and roll control (fins neutral,
+                        // guidance held).
+                        orient_frame_disproved = true;
+                        orient_burnout_axis[0] = u[0];
+                        orient_burnout_axis[1] = u[1];
+                        orient_burnout_axis[2] = u[2];
+                        ESP_LOGE(TAG, "[ORIENT] thrust axis %.1f° off nose — AUTO orientation %s "
+                                      "(mode %u) is wrong: burnout reads the thrust axis; the pitch "
+                                      "apogee voter and roll control stand down for this flight",
                                  (double)orient_thrust_check.angleFromNoseDeg(),
                                  orientCodeName(b2r_active_code),
                                  (unsigned)b2r_active_mode);
                     }
-                    else if (orient_thrust_check.valid())
+                    else if (v.mismatch)
+                    {
+                        ESP_LOGE(TAG, "[ORIENT] thrust axis %.1f° off nose — MANUAL orientation %s "
+                                      "suspect (flown as set; check the mounting code)",
+                                 (double)orient_thrust_check.angleFromNoseDeg(),
+                                 orientCodeName(b2r_active_code));
+                    }
+                    else if (v.thrust)
                     {
                         ESP_LOGI(TAG, "[ORIENT] thrust-axis check OK (%.1f° off nose)",
                                  (double)orient_thrust_check.angleFromNoseDeg());
+                    }
+                    else if (have_axis)
+                    {
+                        // Coast drag (a flight entered at or after burnout)
+                        // or no levelled attitude to tell: no verdict.
+                        ESP_LOGW(TAG, "[ORIENT] thrust-axis check: what it measured (%.1f° off nose) "
+                                      "is not upward thrust (up %.2f, IMU attitude %s) -- no verdict",
+                                 (double)orient_thrust_check.angleFromNoseDeg(),
+                                 (double)inertial_vert.upOf(u),
+                                 inertial_vert.healthy() ? "flying" : "not levelled");
                     }
                 }
             }
@@ -14815,9 +14878,13 @@ static void loop_fc()
                 const float pad_msl_m = ground_pressure_pa > 0.0f
                     ? 44330.0f * (1.0f - powf(ground_pressure_pa / 101325.0f, 1.0f / 5.255f))
                     : 0.0f;
+                // #1755: the pitch is rocket +X's elevation, so an AUTO frame
+                // the thrust axis disproved (a reversed +X reads -90 deg from
+                // the start) has no pitch to vote with.
                 inertial_vote.pitch_may_vote =
-                    baro_reading_fresh ? !baroAboveRange(bmp_latest_si.pressure)
-                                       : (pad_msl_m + inertial_vert.heightM() < config::PITCH_VOTE_CEILING_MSL_M);
+                    !orient_frame_disproved &&
+                    (baro_reading_fresh ? !baroAboveRange(bmp_latest_si.pressure)
+                                        : (pad_msl_m + inertial_vert.heightM() < config::PITCH_VOTE_CEILING_MSL_M));
             }
             const bool single_was = kinematics.apogee_single_sensor_flag;
 
@@ -15674,9 +15741,24 @@ static void loop_fc()
                 const bool ism6_fresh = have_ism6_si &&
                     (uint32_t)(time_us() - ism6_latest_si.time_us) < IMU_STALE_TIMEOUT_US;
 
+                // #1755 (thrust_axis_policy.h): on AUTO, along the measured
+                // thrust axis once it has disproved the frame (rocket +X is
+                // then a lateral or reversed axis), rocket +X otherwise.  AUTO
+                // burnout is held while the check measures (150 ms, inside the
+                // 200 ms lockout), never past ThrustAxisPolicy::kWaitMs.
+                const float f_lowg[3] = {(float)ism6_latest_si.low_g_acc_x,
+                                         (float)ism6_latest_si.low_g_acc_y,
+                                         (float)ism6_latest_si.low_g_acc_z};
+                float burnout_axial = 0.0f;
                 if (ism6_fresh &&
+                    tr::burnoutAxialInput(f_lowg,
+                                          ThrustAxisPolicy::holdBurnout(
+                                              b2r_active_mode == ORIENT_MODE_MANUAL,
+                                              orient_thrust_check.running(), t_since_launch_ms),
+                                          orient_frame_disproved ? orient_burnout_axis : nullptr,
+                                          burnout_axial) &&
                     tr::burnoutDetectStep(burnout_detected, burnout_neg_count,
-                                          ism6_latest_si.low_g_acc_x,
+                                          burnout_axial,
                                           t_since_launch_ms,
                                           config::BURNOUT_NEG_HYSTERESIS))
                 {
@@ -15744,8 +15826,11 @@ static void loop_fc()
                     // Delay roll control activation after launch if configured.
                     // Time and speed gates are ANDed: control starts when the
                     // delay has elapsed AND the vehicle has enough authority.
+                    // #1755: an AUTO frame the thrust axis disproved has no
+                    // roll axis to control (gyro_x is a pitch or yaw rate):
+                    // fins neutral and guidance held for the rest of it.
                     if (reboot_recovery || t_since_launch_ms < roll_delay_ms ||
-                        !roll_speed_gate_open)
+                        !roll_speed_gate_open || orient_frame_disproved)
                     {
                         // Hold fins neutral until delay/settle elapses and the
                         // speed gate opens.  #270: centre the fins (no PID) and

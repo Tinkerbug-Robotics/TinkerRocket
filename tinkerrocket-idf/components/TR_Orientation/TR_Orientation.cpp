@@ -223,44 +223,112 @@ bool orientMatrixFromNoseVector(const float v_board[3], float R[9])
 
 static constexpr float kOrientG = 9.80665f;
 
-void OrientationEstimator::reset()
+void OrientationEstimator::restartWindow()
 {
     sum_[0] = sum_[1] = sum_[2] = 0.0;
     count_ = 0;
     accumulating_ = false;
+}
+
+void OrientationEstimator::startBlock(uint32_t t_us)
+{
+    blk_start_us_ = t_us;
+    blk_n_ = 0;
+    for (int i = 0; i < 3; i++)
+    {
+        blk_acc_[i] = 0.0;
+        blk_gyro_[i] = 0.0;
+    }
+    blk_amag_ = 0.0;
+}
+
+void OrientationEstimator::reset()
+{
+    restartWindow();
+    blk_n_ = 0;
+    have_last_ = false;
     fresh_ = false;
 }
 
 bool OrientationEstimator::update(uint32_t t_us, float ax, float ay, float az,
                                   float gx, float gy, float gz)
 {
-    if (t_us == last_t_us_) return false;  // caller re-fed the same sample
+    if (have_last_ && t_us == last_t_us_) return false;  // caller re-fed the same sample
+    // A gap in the feed (a state outside READY/PRELAUNCH, a stalled IMU):
+    // what came before it says nothing about the pose now.
+    if (have_last_ && (uint32_t)(t_us - last_t_us_) >= gap_us)
+    {
+        restartWindow();
+        blk_n_ = 0;
+    }
     last_t_us_ = t_us;
+    have_last_ = true;
 
     const float a_mag = sqrtf(ax * ax + ay * ay + az * az);
-    const bool quiet = fabsf(gx) < gyro_quiet_dps &&
-                       fabsf(gy) < gyro_quiet_dps &&
-                       fabsf(gz) < gyro_quiet_dps &&
-                       fabsf(a_mag - kOrientG) < acc_tol_ms2;
-    if (!quiet)
+    const float g[3] = {gx, gy, gz};
+    if (blk_n_ == 0)
+    {
+        startBlock(t_us);
+        for (int i = 0; i < 3; i++) blk_gmin_[i] = blk_gmax_[i] = g[i];
+        blk_amin_ = blk_amax_ = a_mag;
+    }
+    blk_acc_[0] += ax; blk_acc_[1] += ay; blk_acc_[2] += az;
+    for (int i = 0; i < 3; i++)
+    {
+        blk_gyro_[i] += g[i];
+        if (g[i] < blk_gmin_[i]) blk_gmin_[i] = g[i];
+        if (g[i] > blk_gmax_[i]) blk_gmax_[i] = g[i];
+    }
+    if (a_mag < blk_amin_) blk_amin_ = a_mag;
+    if (a_mag > blk_amax_) blk_amax_ = a_mag;
+    blk_amag_ += a_mag;
+    blk_n_++;
+
+    if ((uint32_t)(t_us - blk_start_us_) < block_us) return false;
+
+    // ---- The block is complete: is it still? ----
+    const double n = (double)blk_n_;
+    bool still = fabs(blk_amag_ / n - kOrientG) < acc_tol_ms2 &&
+                 (blk_amax_ - blk_amin_) < acc_range_ms2;
+    for (int i = 0; i < 3 && still; i++)
+    {
+        still = fabs(blk_gyro_[i] / n) < gyro_mean_dps &&
+                (blk_gmax_[i] - blk_gmin_[i]) < gyro_range_dps;
+    }
+    const double bm = sqrt(blk_acc_[0] * blk_acc_[0] + blk_acc_[1] * blk_acc_[1] +
+                           blk_acc_[2] * blk_acc_[2]);
+    float dir[3] = {0.0f, 0.0f, 0.0f};
+    if (bm > 1e-9)
+    {
+        for (int i = 0; i < 3; i++) dir[i] = (float)(blk_acc_[i] / bm);
+    }
+    else
+    {
+        still = false;
+    }
+    if (still && accumulating_)
+    {
+        const float c = first_dir_[0] * dir[0] + first_dir_[1] * dir[1] + first_dir_[2] * dir[2];
+        still = c >= cosf(dir_tol_deg * ((float)M_PI / 180.0f));
+    }
+
+    const uint32_t blk_start = blk_start_us_;
+    blk_n_ = 0;  // the next sample opens the next block
+    if (!still)
     {
         // Motion: drop the partial window and wait for stillness again.
-        sum_[0] = sum_[1] = sum_[2] = 0.0;
-        count_ = 0;
-        accumulating_ = false;
+        restartWindow();
         return false;
     }
 
     if (!accumulating_)
     {
         accumulating_ = true;
-        window_start_us_ = t_us;
-        sum_[0] = sum_[1] = sum_[2] = 0.0;
-        count_ = 0;
+        window_start_us_ = blk_start;
+        for (int i = 0; i < 3; i++) first_dir_[i] = dir[i];
     }
-
-    sum_[0] += ax; sum_[1] += ay; sum_[2] += az;
-    count_++;
+    for (int i = 0; i < 3; i++) sum_[i] += blk_acc_[i];
+    count_ += (uint32_t)n;
 
     if ((uint32_t)(t_us - window_start_us_) < window_us || count_ < min_samples)
     {
@@ -277,7 +345,7 @@ bool OrientationEstimator::update(uint32_t t_us, float ax, float ay, float az,
     }
     // Start the next window immediately — continuous re-estimation until
     // the caller latches at launch.
-    accumulating_ = false;
+    restartWindow();
     return fresh_;
 }
 
@@ -300,17 +368,35 @@ void ThrustAxisCheck::start(uint32_t t_us)
     count_ = 0;
     start_us_ = t_us;
     last_t_us_ = 0;
+    first_ = true;
     running_ = true;
     done_ = false;
     valid_ = false;
     angle_deg_ = 0.0f;
+    axis_[0] = 1.0f; axis_[1] = 0.0f; axis_[2] = 0.0f;
+}
+
+bool ThrustAxisCheck::axis(float u[3]) const
+{
+    if (!valid_) return false;
+    u[0] = axis_[0]; u[1] = axis_[1]; u[2] = axis_[2];
+    return true;
 }
 
 bool ThrustAxisCheck::update(uint32_t t_us, float ax, float ay, float az)
 {
     if (!running_ || done_) return false;
-    if (t_us == last_t_us_) return false;
+    if (!first_ && t_us == last_t_us_) return false;
     last_t_us_ = t_us;
+    // #1734: the window opens on the first sample, whatever its stamp.
+    // start() runs late in a loop pass and the sample handed over next is an
+    // IMU window's centre, stamped before it: timed from start(), the
+    // unsigned age wrapped to ~4.29e9 and the check closed at once, invalid.
+    if (first_)
+    {
+        first_ = false;
+        start_us_ = t_us;
+    }
 
     if ((uint32_t)(t_us - start_us_) <= window_us)
     {
@@ -333,6 +419,9 @@ bool ThrustAxisCheck::update(uint32_t t_us, float ax, float ay, float az)
         const double m = sqrt(sum_[0] * sum_[0] + sum_[1] * sum_[1] + sum_[2] * sum_[2]);
         if (m > 1e-9)
         {
+            axis_[0] = (float)(sum_[0] / m);
+            axis_[1] = (float)(sum_[1] / m);
+            axis_[2] = (float)(sum_[2] / m);
             double cx = sum_[0] / m;
             if (cx > 1.0) cx = 1.0;
             if (cx < -1.0) cx = -1.0;
