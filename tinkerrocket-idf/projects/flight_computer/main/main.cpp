@@ -9754,12 +9754,12 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     // qualifies after burnout.  The GNSS-minus-baro pad offset it will be
     // judged against is frozen now.
     GnssAscentGate::onLaunch(gnss_admit_state, now_ms);
-#if TR_RAW_NAV_P4
-    // A new flight: the raw filter votes until this flight's barometer says
-    // otherwise, and may restart in it kMaxRestarts times
-    RawVoteGuard::reset(raw_guard);
     // The apogee vote by sensor: fly the IMU's own estimate from here.  It
-    // must have levelled on a still pad moment in the last 5 s.
+    // must have levelled on a still pad moment in the last 5 s.  On EVERY
+    // image (#1752): APOGEE_VOTE_BY_SENSOR drops the navigation filter's
+    // velocity and pitch votes on every board, so an image that never launched
+    // this lost its accelerometer and gyro voters with nothing in their place.
+    // tests/unit/test_inertial_vertical_launch.py keeps it out of any #if.
     inertial_vert.launch(time_us());
     if (inertial_vert.healthy())
         ESP_LOGI(TAG, "[APOGEE] the IMU's own velocity and pitch fly from launch (pitch %.1f deg, g %.3f)",
@@ -9768,6 +9768,10 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
         ESP_LOGW(TAG, "[APOGEE] the IMU's own velocity and pitch cannot fly: %s -- "
                       "the accelerometer and gyro cast no apogee vote this flight",
                  inertial_vert.failReason());
+#if TR_RAW_NAV_P4
+    // A new flight: the raw filter votes until this flight's barometer says
+    // otherwise, and may restart in it kMaxRestarts times
+    RawVoteGuard::reset(raw_guard);
     raw_nav_restarts = 0;
     raw_restore_at_speed = false;
 #endif
