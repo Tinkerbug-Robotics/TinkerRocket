@@ -168,9 +168,11 @@ def test_a_silent_or_late_board_still_starts_the_filter():
     i = src.index("const bool normal_init = have_ref_pos && gnss_gate3_init;")
     init = src[i:src.index("#else", i)]   # the board's branch (the one image's rule for other receivers inside it)
     assert "#if TR_RAW_NAV_SDR" in init
-    assert ("sdr_nav_start::degradedStartDue(normal_init, initGyroN >= 8,\n"
-            "                                                    (int32_t)(millis() - gnss_absent_dwell_ms) >= 0, millis(),\n"
-            "                                                    rocket_state);") in init
+    # #1756: "no usable fix" is none for a while (boardWait), not none on this pass
+    assert ("sdr_nav_start::degradedStartDue(\n"
+            "                        normal_init || sdr_nav_start::boardWait(sdr_last_usable_fix_ms, sdr_reinit_ms, millis()),\n"
+            "                        initGyroN >= 8, (int32_t)(millis() - gnss_absent_dwell_ms) >= 0, millis(),\n"
+            "                        rocket_state);") in init
     # the restart comes before MAG_CALIBRATION's check and the init chain, and hands the next pass the normal start
     r = src.index("sdr_nav_start::restartOnFix(true, have_ref_pos && gnss_gate3_init, rocket_state)")
     restart = src[r:src.index("#endif", r)]
