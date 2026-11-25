@@ -50,6 +50,17 @@ constexpr float    MIN_BARO_SPIKE_STEP_M    = 5.0f;
 // unconditionally and reseeds, preventing a permanently wedged sensor
 // from blinding the detector for the rest of the flight.
 constexpr uint8_t  MAX_CONSEC_BARO_REJECTS  = 10;
+// #1754: how many accepted barometer readings max_altitude follows the
+// altitude filter for, both ways, after the filter starts unseeded (a boot,
+// or an in-flight reboot restored before apogee). The rate gate takes its
+// first reading unchecked, so one bad sample becomes the filter's start and,
+// through the max_altitude == 0 bypass, the maximum too; the gate then refuses
+// the next MAX_CONSEC_BARO_REJECTS good readings, and the 11th pulls the filter
+// ~0.9 of the error in one step. More than 50 m and the spike window below
+// refused it, stalling the maximum under the climb (apogee on the descent), or
+// a high start left it above the rocket. Following for the filter's settle
+// closes both; on the pad it is a few readings at about 0 m.
+constexpr uint8_t  MAX_FOLLOW_BARO_SAMPLES  = 25;
 
 // Apogee sub-detector leaky-counter thresholds (#166).
 // Each test runs +1 on pass / -1 on miss (clamped) so a single false
@@ -324,6 +335,8 @@ TR_KinematicChecks::TR_KinematicChecks()
     launch_count_baro = 0;
     launch_baro_start_alt_ = 0.0f;
     max_altitude = 0.0f;
+    max_altitude_restored_ = 0.0f;
+    max_follow_left_ = 0;
     max_speed = 0.0f;
     landing_check_time = 0;
     landing_look_back_alt = 0.0;
@@ -361,6 +374,7 @@ TR_KinematicChecks::TR_KinematicChecks()
 
     // KF init
     kf_init_ = false;
+    kf_start_ms_ = 0;
     alt_est = 0.0f;
     d_alt_est_ = 0.0f;
     P00_ = 10.0f;  P01_ = 0.0f;
@@ -396,6 +410,8 @@ void TR_KinematicChecks::reset()
     launch_count_baro = 0;
     launch_baro_start_alt_ = 0.0f;
     max_altitude = 0.0f;
+    max_altitude_restored_ = 0.0f;
+    max_follow_left_ = 0;
     max_speed = 0.0f;
     landing_check_time = 0;
     landing_look_back_alt = 0.0;
@@ -430,6 +446,7 @@ void TR_KinematicChecks::reset()
     burnout_seen_ = false;
     burnout_seen_ms_ = 0;
     kf_init_ = false;
+    kf_start_ms_ = 0;
     alt_est = 0.0f;
     d_alt_est_ = 0.0f;
     P00_ = 10.0f;  P01_ = 0.0f;
@@ -508,7 +525,10 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
     // Predict step runs every call; update step only when new_baro is true
     // to avoid double-counting stale measurements.
     // Runs before launch check so d_alt_est_ is current for altitude rate confirmation.
+    const bool kf_was_init = kf_init_;
     updateAltKF(pressure_altitude, new_baro);
+    if (!kf_was_init && kf_init_ && max_altitude == 0.0f)
+        max_follow_left_ = MAX_FOLLOW_BARO_SAMPLES;   // #1754: unseeded start
 
     // ### Check for Launch Conditions ###
 
@@ -588,7 +608,13 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
     // 50 m spike-reject window let through, ratcheting max_altitude above the
     // true climb and tripping the baro apogee detector during ascent — #142).
     // First reading always accepted.
-    if (max_altitude == 0.0f || fabs(alt_est - max_altitude) < 50.0f) {
+    // #1754: for the filter's first MAX_FOLLOW_BARO_SAMPLES accepted readings
+    // after an unseeded start the maximum follows it both ways (never below
+    // 0), so a bad first reading cannot leave it stalled behind the window.
+    if (max_follow_left_ > 0) {
+        max_altitude = std::max(0.0f, alt_est);
+        if (new_baro) max_follow_left_--;
+    } else if (max_altitude == 0.0f || fabs(alt_est - max_altitude) < 50.0f) {
         max_altitude = std::max(max_altitude, alt_est);
     }
 
@@ -1148,10 +1174,15 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
     // IMU is healthy the backstop waits for what the vote waits for -- burnout
     // plus the baro settle window, and no mach lockout (which a live IMU's
     // filter drives correctly).  With a dead IMU neither signal can be trusted
-    // (see above), and the backstop stays ungated as #556 made it.
+    // (see above), and the backstop stays ungated as #556 made it -- except
+    // for the altitude filter's own first second (#1754): after an in-flight
+    // reboot a grossly wrong first reading (kilometres high) pulls the filter
+    // down through the rocket with its rate far below zero, which reads as a
+    // 30 m descent.  The filter starts on the pad, so a normal flight never
+    // sees this gate.
     const bool backstop_baro_trusted =
-        !imu_healthy ||
-        (burnout_seen_ &&
+        (!imu_healthy && kf_init_ && millis() - kf_start_ms_ >= BARO_BURNOUT_SETTLE_MS) ||
+        (imu_healthy && burnout_seen_ &&
          (millis() - burnout_seen_ms_ >= BARO_BURNOUT_SETTLE_MS) &&
          !baro_locked_out);
     if (launch_flag &&
@@ -1207,6 +1238,21 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
 
 }
 
+void TR_KinematicChecks::restoreFlightMaxima(float max_alt_m, float max_speed_mps,
+                                             bool past_apogee)
+{
+    // fmaxf: a NaN from the snapshot is ignored rather than adopted.
+    max_altitude_restored_ = fmaxf(max_altitude_restored_, max_alt_m);
+    max_speed              = fmaxf(max_speed, max_speed_mps);
+    if (past_apogee)
+        max_altitude = fmaxf(max_altitude, max_alt_m);
+}
+
+float TR_KinematicChecks::maxAltitudeReported() const
+{
+    return fmaxf(max_altitude, max_altitude_restored_);
+}
+
 // ======================================================================
 // 1D Constant-Velocity Kalman Filter
 //
@@ -1235,7 +1281,14 @@ float TR_KinematicChecks::updateAltKF(float z_meas, bool new_measurement)
 
     if (!kf_init_)
     {
+        // Start on the first real barometer reading (#1754). A pass with none
+        // has no altitude to start from: on the pad 0 was close enough, but
+        // after an in-flight reboot it started the filter 0 m below a rocket
+        // high up, and its climb back to the truth outran the 50 m window on
+        // max_altitude.
+        if (!new_measurement) return alt_est;
         // Initialize state to first measurement
+        kf_start_ms_ = now;
         alt_est = z_meas;
         d_alt_est_ = 0.0f;
         // Covariance already set in ctor

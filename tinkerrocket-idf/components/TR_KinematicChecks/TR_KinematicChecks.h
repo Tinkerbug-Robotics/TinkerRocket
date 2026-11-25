@@ -78,6 +78,21 @@ public:
     // only two sensors left (the vote by sensor).
     void setGpsApogeeCountHi(uint8_t n) { gps_apogee_count_hi_ = n ? n : 1; }
 
+    // Reboot recovery: the flight's maxima from the snapshot. The reported
+    // maximum altitude (maxAltitudeReported(): telemetry, the log, the next
+    // snapshot) and max_speed keep them (#1154 item 9). The running maximum
+    // the apogee tests measure against (max_altitude) takes the snapshot's
+    // only past apogee (#1754): before apogee the snapshot's is
+    // the altitude of a moment ago, below the rocket's now, and the 50 m
+    // spike window would refuse every reading of the climb above it, so the
+    // barometer's apogee vote and backstop came on the descent, back near the
+    // snapshot's altitude. Left at 0, the filter's first readings after the
+    // reboot set it, as on the pad.
+    void restoreFlightMaxima(float max_alt_m, float max_speed_mps, bool past_apogee);
+    // The flight's highest altitude for reporting: the running maximum, or a
+    // restored one above it.
+    float maxAltitudeReported() const;
+
     bool launch_flag;
     // #1102: which detector latched launch_flag, and what the barometer claimed
     // on that tick -- read at INFLIGHT entry for the log.  An AccelOnly latch
@@ -159,8 +174,15 @@ private:
     uint32_t last_baro_gate_ms_;
     uint8_t  consec_baro_rejects_;
     
+    // A restored flight's maximum altitude, for reporting only (#1754).
+    float max_altitude_restored_ = 0.0f;
+    // Accepted readings left for max_altitude to follow the filter after an
+    // unseeded start (#1754, MAX_FOLLOW_BARO_SAMPLES).
+    uint8_t max_follow_left_ = 0;
+
     // 1D CV Kalman filter for altitude & rate
     bool kf_init_;
+    uint32_t kf_start_ms_ = 0;   // when it started (#1754: the stale-IMU backstop waits 1 s)
 
     // 2x2 covariance (row-major): [P00 P01; P10 P11]
     float P00_, P01_, P10_, P11_;
