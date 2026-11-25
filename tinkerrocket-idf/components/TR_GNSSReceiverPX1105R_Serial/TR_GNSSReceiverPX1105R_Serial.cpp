@@ -333,6 +333,9 @@ bool TR_GNSSReceiverPX1105RSerial::begin(uint8_t update_rate_hz, uint8_t GNSS_RX
     cfg.target_baud = kTargetBaud;
     cfg.rate_hz = update_rate_hz_;
     cfg.subframes = static_cast<uint8_t>(0x0D | (TR_RAW_GLONASS ? 0x02 : 0x00));   // GPS, Galileo, BeiDou (+ GLONASS)
+    // tracked: all four, GLONASS too whether or not the filter takes it (the receiver's own fix and its 0xE5 do);
+    // set only on a receiver that reads back otherwise (SkyTraqLink.h)
+    cfg.constellations = 0x0F;
     link_.start(cfg, nowMs());
     setups_logged_ = 0;
 
@@ -374,12 +377,18 @@ bool TR_GNSSReceiverPX1105RSerial::begin(uint8_t update_rate_hz, uint8_t GNSS_RX
 
 void TR_GNSSReceiverPX1105RSerial::logSetup()
 {
+    char gnss[24];
+    if (link_.constellations() < 0)
+        std::snprintf(gnss, sizeof gnss, "not read");
+    else
+        std::snprintf(gnss, sizeof gnss, "0x%02X%s", static_cast<unsigned>(link_.constellations()),
+                      link_.constellationSets() > 0 ? " (set)" : "");
     ESP_LOGI(TAG, "PX1105R %s (#%lu): %lu baud (found at %lu%s), RTK kinematic base, airborne, %u Hz 0xE5/0xDF, "
-                  "receiver %s; %lu refused, %lu readbacks off%s%s",
+                  "constellations %s, receiver %s; %lu refused, %lu readbacks off%s%s",
              link_.leftAlone() ? "found set up, left alone" : "set up",
              static_cast<unsigned long>(link_.setups()), static_cast<unsigned long>(link_.baud()),
              static_cast<unsigned long>(link_.foundBaud()), link_.foundNmea() ? ", NMEA" : ", binary",
-             update_rate_hz_, link_.version()[0] ? link_.version() : "version not read",
+             update_rate_hz_, gnss, link_.version()[0] ? link_.version() : "version not read",
              static_cast<unsigned long>(link_.refused()), static_cast<unsigned long>(link_.checksFailed()),
              link_.degraded() ? "; DEGRADED, last failure: " : "", link_.degraded() ? link_.lastFailure() : "");
 }

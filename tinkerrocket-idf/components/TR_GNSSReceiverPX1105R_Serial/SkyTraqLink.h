@@ -28,11 +28,22 @@
 //             froze after apogee (2026-10-21); airborne fixed the descent
 //   0x0C      power normal (it ships in power save, which throttles the search)
 //   0x2B      elevation mask 5 deg (it ships at 15)
+//   0x64/0x1A the constellations it tracks, read (AN0028: the 0x64/0x8C reply,
+//             a mask: 1 GPS, 2 GLONASS, 4 Galileo, 8 BeiDou), and only where
+//             they are not the ones asked for (all four, 0x0F),
+//   0x64/0x19 those set: a receiver tracks no system its mask leaves out, and
+//             a mask saved to its flash by an earlier test comes back at every
+//             power-up. Sending it restarts every channel (0xE5 stopped 9-16 s
+//             on the rig, 2026-11-09), so a receiver that already tracks them
+//             never gets it; it goes last, to a receiver already an RTK base,
+//             as on the rig. A receiver that does not answer the query keeps
+//             its own.
 // Then each is read back where the receiver can say (0x10, 0x1F, 0x64/0x18,
-// 0x15), and the link runs once 0xDF arrives: the receiver's state, which an
-// RTK base sends every epoch whether or not it tracks anything (the rig,
-// 2026-11-01). A readback that disagrees, or no 0xDF, sets the whole setup up
-// again (twice at most, then the link runs with what it has and says so).
+// 0x15, 0x64/0x1A), and the link runs once 0xDF arrives: the receiver's
+// state, which an RTK base sends every epoch whether or not it tracks
+// anything (the rig, 2026-11-01). A readback that disagrees, or no 0xDF, sets
+// the whole setup up again (twice at most, then the link runs with what it
+// has and says so).
 //
 // Once per power-up: the setup restarts the receiver (the rig's tools lose the
 // 0x0E ACK while it does), so its search starts over each time. 0xE5 comes only
@@ -64,6 +75,7 @@ struct LinkConfig
     uint8_t  nav_mode      = 5;      // airborne
     uint8_t  elev_mask_deg = 5;
     uint8_t  subframes     = 0x0D;   // 1 GPS, 2 GLONASS (0xE1 strings), 4 Galileo, 8 BeiDou
+    uint16_t constellations = 0x0F;  // tracked (0x64/0x19): the same bits; 0 leaves the receiver's own
     bool     flash         = false;  // SRAM only: a power cycle undoes the setup
     uint32_t probe_ms      = 700;    // listen at one baud for a frame or NMEA
     uint32_t switch_ms     = 300;    // after 0x05: let the ACK and the switch finish
@@ -131,6 +143,10 @@ public:
     const char* version() const { return version_; }
     // The last 0xE5's measurement period (ms), as the receiver states it.
     uint16_t    rawPeriodMs() const { return raw_period_ms_; }
+    // The constellations the receiver last said it tracks (0x64/0x8C), -1 when
+    // it has not said since the setup began.
+    int         constellations() const { return mask_read_; }
+    uint32_t    constellationSets() const { return mask_sets_; }   // 0x64/0x19 sent and ACKed
 
 private:
     struct Cmd
@@ -140,6 +156,8 @@ private:
         int16_t     ack_sub;    // the sub-ID the ACK names (-1: none)
         bool        required;
         const char* name;
+        int16_t     reply_sub;  // a query: done at its 0x64 reply of this sub-ID, after the ACK (-1: a command)
+        bool        if_mask_off;   // sent only when the receiver's constellations are not cfg_.constellations
     };
     void enterProbe(uint32_t baud_idx, uint32_t now_ms);
     void enterSwitch(uint32_t now_ms);
@@ -150,6 +168,7 @@ private:
     void enterRunning(uint32_t now_ms);
     void sendCommand(uint32_t now_ms);
     void nextCommand(uint32_t now_ms);
+    bool skipCommand(const Cmd& c) const;
     void sendQuery(uint32_t now_ms);
     void buildSetup();
     void noteFailure(const char* what);
@@ -185,6 +204,8 @@ private:
     uint32_t   last_frame_ms_ = 0;
     uint16_t   raw_period_ms_ = 0;
     uint8_t    states_seen_ = 0;        // STREAM: 0xDF since the setup
+    int        mask_read_ = -1;         // the last 0x64/0x8C's mask; -1 none since the setup began
+    uint32_t   mask_sets_ = 0;
 
     uint32_t   setups_ = 0, relinks_ = 0, refused_ = 0, checks_failed_ = 0;
     bool       degraded_ = false;
