@@ -33,7 +33,7 @@
 //    30 dps it vetoes LANDED for the rest of the flight, and LANDED is what
 //    arms post_flight_lockout (#317), safes the pyro rail and closes the log.
 //    A rocket lying in a field with a wedged IMU therefore keeps live squibs
-//    on the ground until the 10-minute MAX_FLIGHT_TIME_MS backstop in the
+//    on the ground until the 10-minute flight-timeout backstop in the
 //    flight loop safes them for it.  That backstop is what makes this a
 //    bounded hazard rather than an unbounded one -- it is not a reason to
 //    spend ten minutes reaching it, since it is also the last line of defence

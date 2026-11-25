@@ -4,7 +4,7 @@
 // replaced measured its reset arm from the candidate START, which made every
 // false sample inside the window invisible), and the gyro veto has to be
 // survivable: it may not hold a landed rocket in INFLIGHT on a frozen reading
-// until the 10-minute MAX_FLIGHT_TIME_MS backstop bails it out, because LANDED
+// until the 10-minute flight-timeout backstop bails it out, because LANDED
 // is what arms post_flight_lockout, safes the pyro rail and closes the log.
 
 #include <gtest/gtest.h>

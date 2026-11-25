@@ -284,7 +284,7 @@ constexpr uint8_t  QUIESCENT_COUNT_MAX      = 45;
 // detectors by definition; and gps_stationary, despite its name, is an EKF
 // SPEED proxy -- and the EKF is driven by the IMU, so on a dead-IMU flight it
 // holds the boost velocity (~260 m/s on the 2026-07-21 HIL bench) and can
-// never pass.  That left the 600 s MAX_FLIGHT_TIME_MS timeout as the only way
+// never pass.  That left the 600 s flight timeout as the only way
 // a dead-IMU flight reached LANDED, with the servos driving, post_flight_lockout
 // unset and the log unfinalised for ten minutes after touchdown.
 //

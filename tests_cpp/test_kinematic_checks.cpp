@@ -1655,7 +1655,7 @@ TEST_F(KinematicChecksTest, Landing_StaleImu_WithAZeroedEkfVelocityStillLands) {
 // bench measured ~260 m/s), so gps_stationary fails permanently; impact and
 // quiescent both read acc_mag and are equally dead.  Every route to
 // alt_landed_flag was therefore IMU-dependent, and the vehicle sat in INFLIGHT
-// until the 600 s MAX_FLIGHT_TIME_MS timeout -- servos driving,
+// until the 600 s flight timeout -- servos driving,
 // post_flight_lockout unset, log unfinalised, for ten minutes after touchdown.
 TEST_F(KinematicChecksTest, Landing_DeadImu_FrozenEkfVelocity_StillLands) {
     for (int i = 0; i < 80; i++) {

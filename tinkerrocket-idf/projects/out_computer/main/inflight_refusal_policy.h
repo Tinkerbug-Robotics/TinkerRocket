@@ -21,10 +21,10 @@
 // #846 re-seed would then skip.
 //
 // The escape hatch is bounded by FLIGHT TIME instead. The FC forces
-// INFLIGHT -> LANDED at launch + MAX_FLIGHT_TIME_MS (flight_computer
-// main.cpp), a restored flight back-dates its launch time from the snapshot,
-// and the OC can only observe INFLIGHT after launch. So once the OC's OWN
-// first sighting of INFLIGHT is MAX_FLIGHT_TIME old, no live FC could still be
+// INFLIGHT -> LANDED by launch + MAX_FLIGHT_TIME_CEILING_MS at the latest
+// (flight_computer flight_timeout_policy.h), a restored flight back-dates its
+// launch time from the snapshot, and the OC can only observe INFLIGHT after
+// launch. So once the OC's OWN first sighting of INFLIGHT is that old, no live FC could still be
 // flying this flight, and a dead one has no deployment left to protect. It is
 // the same bound kSnapshotServeTtlMs applies to a cached snapshot, for the
 // same reason.
