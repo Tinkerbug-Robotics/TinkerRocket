@@ -4,7 +4,8 @@ An AUTO-mounted board can fly a wrong board-to-rocket frame. The thrust-axis che
 in the first 150 ms; ThrustAxisPolicy (host-tested in tests_cpp/test_orientation_sway.cpp) decides whether it is
 upward thrust that disproves the frame. main.cpp then has to act on that verdict in four places: burnout reads the
 measured axis (held, boundedly, while the check measures), the IMU's pitch apogee voter stands down, roll control
-stands down, and every launch clears the verdict. main.cpp is not host-built, so these tests read the source.
+stands down, and every launch clears the verdict. After a reboot the verdict comes back from the OC's snapshot, and
+every reader of the roll rate gets it about the real axis. main.cpp is not host-built, so these tests read the source.
 """
 import os
 import re
@@ -49,10 +50,13 @@ def test_the_verdict_comes_from_the_policy_with_the_imus_attitude_and_the_mounti
     args = call_args(src, "ThrustAxisPolicy::judge")
     for needed in ("inertial_vert.healthy()", "inertial_vert.upOf(", "b2r_active_mode == ORIENT_MODE_MANUAL"):
         assert needed in args, "judge() is not given %s" % needed
-    # The frame is disproved only on the policy's say-so.
+    # The frame is disproved only on the policy's say-so: the boost verdict, or
+    # the snapshot's after a reboot.
     sets = [m.start() for m in re.finditer(r"orient_frame_disproved\s*=\s*true", src)]
-    assert len(sets) == 1
-    assert "if (v.disproved)" in src[sets[0] - 700:sets[0]]
+    assert len(sets) == 2
+    guards = [src[i - 700:i] for i in sets]
+    assert any("if (v.disproved)" in g for g in guards)
+    assert any("if (ThrustAxisPolicy::restoredVerdict(snap.b2r_mode" in g for g in guards)
 
 
 def test_burnout_reads_the_policys_input():
@@ -82,3 +86,42 @@ def test_every_launch_clears_the_verdict_before_the_check_starts():
     before = src[i - 300:i]
     assert "orient_frame_disproved = false;" in before
     assert "orient_thrust_mismatch = false;" in before
+
+
+def test_the_verdict_rides_the_snapshot_and_the_restore_applies_the_mode_alone():
+    src = read()
+    build = statement(src, r"snap\.b2r_mode\s*=")
+    assert "ThrustAxisPolicy::packSnapshotMode(" in build
+    assert "orient_frame_disproved" in build and "orient_burnout_axis" in build
+    # The restore applies the low nibble only: the verdict bits are not a mode.
+    m = re.search(r"applyBoardToRocketRotation\(R, snap\.b2r_code,([^;]*);", src)
+    assert m, "the restore's orientation apply moved"
+    assert "snap.b2r_mode" not in m.group(1)
+    assert "ThrustAxisPolicy::snapshotMode(snap.b2r_mode)" in src
+
+
+def test_every_reader_of_the_roll_rate_gets_it_about_the_real_axis():
+    src = read()
+    assign = statement(src, r"roll_rate_dps\s*=\s*ThrustAxisPolicy::rollRateDps")
+    assert "orient_frame_disproved" in assign and "orient_burnout_axis" in assign
+    # And nothing else assigns it from gyro_x directly.
+    assert not re.search(r"roll_rate_dps\s*=\s*\(float\)ism6_latest_si\.gyro_x", src)
+
+
+def test_a_sim_reset_clears_the_verdict():
+    src = read()
+    i = src.index("static void resetFlightStateForSim(")
+    body = src[i:src.index("\n}\n", i)]
+    assert "orient_frame_disproved = false;" in body
+    assert "orient_thrust_mismatch = false;" in body
+
+
+def test_a_new_frame_starts_without_a_verdict_and_the_restore_sets_it_after_the_frame():
+    src = read()
+    i = src.index("static void applyBoardToRocketRotation(")
+    body = src[i:src.index("\n}\n", i)]
+    assert "orient_frame_disproved = false;" in body
+    # The restore applies the frame first, then the snapshot's verdict.
+    apply_at = src.index("applyBoardToRocketRotation(R, snap.b2r_code")
+    verdict_at = src.index("ThrustAxisPolicy::restoredVerdict(snap.b2r_mode")
+    assert apply_at < verdict_at

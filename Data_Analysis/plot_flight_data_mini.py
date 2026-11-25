@@ -2016,7 +2016,14 @@ def parse_binary_file(filepath):
                     # prove it wasn't a sim flight".  None, not 0.
                     sim_flight = f[3] if version >= 4 else None
                     b2r_code = f[13] if version >= 3 else None
-                    b2r_mode = f[14] if version >= 3 else None
+                    # #1755: b2r_mode's low nibble is the mode; bit 7 says the
+                    # boost thrust axis disproved this AUTO frame and bits 4-6
+                    # name that axis (1-6 = +X, -X, +Y, -Y, +Z, -Z), which a
+                    # restore flies.  Older writers left the high bits 0.
+                    b2r_mode = (f[14] & 0x0F) if version >= 3 else None
+                    thrust_disproved = bool(f[14] & 0x80) if version >= 3 else None
+                    thrust_axis = ({1: "+X", 2: "-X", 3: "+Y", 4: "-Y", 5: "+Z", 6: "-Z"}
+                                   .get((f[14] >> 4) & 0x07) if thrust_disproved else None)
                     b2r_q = ([f[59 + i] / 10000.0 for i in range(4)]
                              if version >= 3 else [None] * 4)
                     # v5 (#1154 item 9) reclaimed ekf_euler's three floats IN
@@ -2068,6 +2075,8 @@ def parse_binary_file(filepath):
                         "snap_pyro4_fired":     bool(f[12]),
                         "b2r_code":             b2r_code,
                         "b2r_mode":             b2r_mode,
+                        "thrust_axis_disproved": thrust_disproved,
+                        "thrust_axis":          thrust_axis,
                         "ref_datum_converged":  bool(f[15]),
                         "ground_pressure_pa":   f[16],
                         # Reference datum: radians on the wire, degrees here to

@@ -558,3 +558,105 @@ TEST(BurnoutAxis, NoInputWhileTheAxisIsBeingMeasured)
     ASSERT_TRUE(tr::burnoutAxialInput(g, false, v, axial));
     EXPECT_FLOAT_EQ(axial, 2.0f);
 }
+
+// ---- After a reboot in flight: the verdict in the snapshot ------------------
+
+TEST(ThrustAxisSnapshot, TheVerdictRoundTripsOnEveryAxisAndKeepsTheMode)
+{
+    const float axes[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+    for (uint8_t mode : {ORIENT_MODE_DEFAULT, ORIENT_MODE_AUTO_SNAP, ORIENT_MODE_AUTO_EXACT})
+        for (const auto& a : axes)
+        {
+            const uint8_t b = ThrustAxisPolicy::packSnapshotMode(mode, true, a);
+            EXPECT_EQ(ThrustAxisPolicy::snapshotMode(b), mode);
+            float u[3] = {9, 9, 9};
+            ASSERT_TRUE(ThrustAxisPolicy::restoredVerdict(b, u)) << (int)mode;
+            for (int i = 0; i < 3; i++) EXPECT_EQ(u[i], a[i]);
+        }
+}
+
+TEST(ThrustAxisSnapshot, AnOffAxisThrustKeepsItsNearestAxis)
+{
+    // 20 deg off -X toward +Y (an AUTO_EXACT frame, or thrust misalignment)
+    const float a[3] = {-cosf(20.0f * kD2R), sinf(20.0f * kD2R), 0.0f};
+    const uint8_t b = ThrustAxisPolicy::packSnapshotMode(ORIENT_MODE_AUTO_EXACT, true, a);
+    float u[3];
+    ASSERT_TRUE(ThrustAxisPolicy::restoredVerdict(b, u));
+    EXPECT_EQ(u[0], -1.0f);
+    EXPECT_EQ(u[1], 0.0f);
+}
+
+TEST(ThrustAxisSnapshot, NoVerdictIsThePlainModeAndOlderBytesReadNoVerdict)
+{
+    const float a[3] = {0, 1, 0};
+    for (uint8_t mode = 0; mode <= 3; mode++)
+    {
+        // What every writer before this wrote, and what a frame not disproved writes.
+        EXPECT_EQ(ThrustAxisPolicy::packSnapshotMode(mode, false, a), mode);
+        float u[3] = {9, 9, 9};
+        EXPECT_FALSE(ThrustAxisPolicy::restoredVerdict(mode, u));
+        EXPECT_EQ(u[0], 9.0f);
+        EXPECT_EQ(ThrustAxisPolicy::snapshotMode(mode), mode);
+    }
+}
+
+TEST(ThrustAxisSnapshot, AManualCodeOrABadAxisNeverRestoresAVerdict)
+{
+    float u[3];
+    // A manual frame is flown as set, whatever the byte says.
+    EXPECT_FALSE(ThrustAxisPolicy::restoredVerdict(
+        (uint8_t)(ORIENT_MODE_MANUAL | SNAP_B2R_DISPROVED | (2u << SNAP_B2R_AXIS_SHIFT)), u));
+    // The disproved bit with no axis, or an axis code past 6.
+    EXPECT_FALSE(ThrustAxisPolicy::restoredVerdict((uint8_t)(ORIENT_MODE_AUTO_SNAP | SNAP_B2R_DISPROVED), u));
+    EXPECT_FALSE(ThrustAxisPolicy::restoredVerdict(
+        (uint8_t)(ORIENT_MODE_AUTO_SNAP | SNAP_B2R_DISPROVED | (7u << SNAP_B2R_AXIS_SHIFT)), u));
+    // A non-finite axis is not packed as a verdict.
+    const float bad[3] = {NAN, 0.0f, 0.0f};
+    EXPECT_EQ(ThrustAxisPolicy::packSnapshotMode(ORIENT_MODE_AUTO_SNAP, true, bad), ORIENT_MODE_AUTO_SNAP);
+}
+
+TEST(ThrustAxisRollRate, AboutTheMeasuredAxisOnlyOnADisprovedFrame)
+{
+    const float w[3] = {10.0f, -20.0f, 30.0f};
+    const float minus_x[3] = {-1, 0, 0}, plus_y[3] = {0, 1, 0};
+    EXPECT_EQ(ThrustAxisPolicy::rollRateDps(w, false, plus_y), 10.0f);   // gyro_x, as before
+    EXPECT_EQ(ThrustAxisPolicy::rollRateDps(w, true, minus_x), -10.0f);
+    EXPECT_EQ(ThrustAxisPolicy::rollRateDps(w, true, plus_y), -20.0f);
+}
+
+TEST(BurnoutAxis, ARebootInTheBoostKeepsTheDisprovedAxis)
+{
+    // A reversed AUTO frame disproved in the boost, then an FC reboot at T+1.5 s:
+    // the restore never reruns the check.  With the verdict from the snapshot,
+    // burnout reads the restored axis and latches at the real cutoff; without
+    // it, rocket +X reads the thrust as negative and latches in the boost.
+    float axis[3] = {1.0f, 0.0f, 0.0f};
+    const float measured[3] = {-0.999f, 0.03f, 0.0f};
+    const uint8_t snap = ThrustAxisPolicy::packSnapshotMode(ORIENT_MODE_AUTO_SNAP, true, measured);
+    for (bool with_verdict : {true, false})
+    {
+        const bool disproved = with_verdict && ThrustAxisPolicy::restoredVerdict(snap, axis);
+        bool detected = false;
+        uint16_t neg = 0;
+        uint32_t at = 0;
+        for (uint32_t t = 1500; t <= 10000 && !at; t++)
+        {
+            float f[3];
+            specificForce(Frame::Reversed, t, 1.2f, f);
+            float axial = 0.0f;
+            if (tr::burnoutAxialInput(f, ThrustAxisPolicy::holdBurnout(false, /*running=*/false, t),
+                                      disproved ? axis : nullptr, axial) &&
+                tr::burnoutDetectStep(detected, neg, axial, t, 50))
+                at = t;
+        }
+        if (with_verdict)
+        {
+            EXPECT_GE(at, 3000u);
+            EXPECT_LE(at, 3100u);
+        }
+        else
+        {
+            EXPECT_LT(at, 1600u);   // under thrust, right after the reboot
+        }
+    }
+}
