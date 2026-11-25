@@ -1659,6 +1659,21 @@ _P(
     caution="None on v2 logs.",
 )
 _P(
+    "Snapshot.thrust_axis_disproved", "Thrust axis disproved the frame",
+    kind=KIND_BOOL,
+    note=
+        "Whether the boost thrust-axis check found this AUTO frame wrong (#1755): burnout then reads "
+        "the measured thrust axis, and the pitch apogee voter and roll control stand down. Carried in "
+        "b2r_mode's high bits so a restore keeps flying the rocket's real axis.",
+    caution="None on v2 logs; False on logs from firmware before #1755's follow-up, which never set it.",
+)
+_P(
+    "Snapshot.thrust_axis", "Measured thrust axis",
+    kind=KIND_ENUM,
+    note="The measured thrust axis's nearest rocket-frame axis (+X, -X, +Y, -Y, +Z, -Z) when the frame was disproved.",
+    caution="None unless thrust_axis_disproved.",
+)
+_P(
     "Snapshot.ref_datum_converged", "Pad datum converged",
     kind=KIND_BOOL,
     note=

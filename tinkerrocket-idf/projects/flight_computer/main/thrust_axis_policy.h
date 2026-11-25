@@ -26,8 +26,21 @@
 //     most kWaitMs after launch (the 200 ms burnout lockout normally covers
 //     the 150 ms window); a check still open then gives way to rocket +X.
 
+//
+// After a reboot in flight (follow-up to #1755) the verdict rides the OC's
+// snapshot in FlightSnapshotData.b2r_mode's high bits, with the measured axis
+// as its nearest rocket-frame axis (packSnapshotMode / restoredVerdict): a
+// snapped frame's real nose IS one of those six axes, and on an AUTO_EXACT
+// frame the nearest one still puts thrust and drag on the right side of
+// zero.  And the roll rate every reader takes (rollRateDps) is the rate about
+// the measured axis on a disproved frame, not gyro_x, which there is a pitch
+// or yaw rate: the landing checks and the recovery arm gate read it too.
+
 #include <cmath>
 #include <cstdint>
+
+#include "RocketComputerTypes.h"   // SNAP_B2R_*
+#include "TR_Orientation.h"        // ORIENT_MODE_MANUAL
 
 namespace ThrustAxisPolicy {
 
@@ -58,6 +71,68 @@ inline Verdict judge(bool check_valid, float angle_deg, bool inertial_healthy,
 inline bool holdBurnout(bool manual_mounting, bool check_running, uint32_t t_since_launch_ms)
 {
     return !manual_mounting && check_running && t_since_launch_ms < kWaitMs;
+}
+
+// The roll rate (dps, + about the nose): about the measured thrust axis once
+// it has disproved the frame, rocket +X's gyro otherwise.
+inline float rollRateDps(const float w_dps[3], bool disproved, const float axis[3])
+{
+    return disproved ? w_dps[0] * axis[0] + w_dps[1] * axis[1] + w_dps[2] * axis[2] : w_dps[0];
+}
+
+// ---- The verdict in the snapshot --------------------------------------------
+
+// The nearest rocket-frame axis to a vector: 1-6 = +X, -X, +Y, -Y, +Z, -Z;
+// 0 for a zero or non-finite one.
+inline uint8_t axisCode(const float u[3])
+{
+    if (!(std::isfinite(u[0]) && std::isfinite(u[1]) && std::isfinite(u[2]))) return 0;
+    int best = -1;
+    float mag = 0.0f;
+    for (int i = 0; i < 3; i++)
+    {
+        if (std::fabs(u[i]) > mag)
+        {
+            mag = std::fabs(u[i]);
+            best = i;
+        }
+    }
+    if (best < 0) return 0;
+    return (uint8_t)(1 + 2 * best + (u[best] < 0.0f ? 1 : 0));
+}
+
+// The unit vector of an axisCode; false (u untouched) for 0 or past 6.
+inline bool axisFromCode(uint8_t code, float u[3])
+{
+    if (code < 1 || code > 6) return false;
+    const int i = (code - 1) / 2;
+    u[0] = u[1] = u[2] = 0.0f;
+    u[i] = ((code - 1) % 2) ? -1.0f : 1.0f;
+    return true;
+}
+
+// FlightSnapshotData.b2r_mode: the mode, and the verdict when the frame was
+// disproved.
+inline uint8_t packSnapshotMode(uint8_t mode, bool disproved, const float axis[3])
+{
+    uint8_t b = (uint8_t)(mode & SNAP_B2R_MODE_MASK);
+    const uint8_t code = disproved ? axisCode(axis) : 0;
+    if (code != 0)
+        b = (uint8_t)(b | SNAP_B2R_DISPROVED | (uint8_t)(code << SNAP_B2R_AXIS_SHIFT));
+    return b;
+}
+
+// The mode a restore applies.
+inline uint8_t snapshotMode(uint8_t b2r_mode) { return (uint8_t)(b2r_mode & SNAP_B2R_MODE_MASK); }
+
+// The restore's verdict: true, with the axis, when the snapshot says the boost
+// thrust axis disproved its frame.  Never on a manual code (a manual frame is
+// flown as set), and never from an older writer's byte (high bits 0).
+inline bool restoredVerdict(uint8_t b2r_mode, float axis[3])
+{
+    if (!(b2r_mode & SNAP_B2R_DISPROVED)) return false;
+    if (snapshotMode(b2r_mode) == ORIENT_MODE_MANUAL) return false;
+    return axisFromCode((uint8_t)((b2r_mode & SNAP_B2R_AXIS_MASK) >> SNAP_B2R_AXIS_SHIFT), axis);
 }
 
 } // namespace ThrustAxisPolicy

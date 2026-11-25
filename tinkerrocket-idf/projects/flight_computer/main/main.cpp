@@ -1198,7 +1198,11 @@ static void buildFlightSnapshot(FlightSnapshotData& snap, uint32_t now_ms, uint8
     // Board→rocket orientation latched at launch (v3) — the EKF state
     // below is only meaningful in this rocket frame.
     snap.b2r_code = b2r_active_code;
-    snap.b2r_mode = b2r_active_mode;
+    // #1755: and, in the high bits, whether the boost thrust axis disproved
+    // this AUTO frame, with that axis, so a reboot keeps flying the rocket's
+    // real axis (thrust_axis_policy.h).
+    snap.b2r_mode = ThrustAxisPolicy::packSnapshotMode(b2r_active_mode, orient_frame_disproved,
+                                                       orient_burnout_axis);
     for (int i = 0; i < 4; ++i) {
         snap.b2r_q[i] = (int16_t)lroundf(b2r_active_quat[i] * ORIENT_QUAT_WIRE_SCALE);
     }
@@ -2746,6 +2750,12 @@ static void applyBoardToRocketRotation(const float R[9], uint8_t code,
     memcpy(b2r_active_R, R, sizeof(b2r_active_R));
     b2r_active_code = code;
     b2r_active_mode = mode;
+    // #1755: a thrust-axis verdict belongs to the frame it judged.  A new
+    // frame (a mounting set after a disproved flight, in LANDED; a pad
+    // re-snap) starts without one; the in-flight restore re-applies the
+    // snapshot's verdict right after it restores the frame.
+    orient_frame_disproved = false;
+    orient_thrust_mismatch = false;
     b2r_active_residual_cdeg = residual_cdeg;
     orientMatrixToQuat(R, b2r_active_quat);
 
@@ -9259,9 +9269,25 @@ static void setup_fc()
                 }
                 float R[9];
                 orientQuatToMatrix(q, R);
-                applyBoardToRocketRotation(R, snap.b2r_code, snap.b2r_mode, 0);
+                const uint8_t b2r_mode = ThrustAxisPolicy::snapshotMode(snap.b2r_mode);
+                applyBoardToRocketRotation(R, snap.b2r_code, b2r_mode, 0);
                 ESP_LOGW(TAG, "[RECOVERY] Board→rocket orientation restored: %s (mode %u)",
-                         orientCodeName(snap.b2r_code), (unsigned)snap.b2r_mode);
+                         orientCodeName(snap.b2r_code), (unsigned)b2r_mode);
+                // #1755: a frame the boost thrust axis disproved before the
+                // reboot stays disproved: burnout, the roll rate, the pitch
+                // voter and roll control read as they did.  The check itself
+                // never runs again in a restored flight.
+                float axis[3];
+                if (ThrustAxisPolicy::restoredVerdict(snap.b2r_mode, axis))
+                {
+                    orient_frame_disproved = true;
+                    orient_thrust_mismatch = true;
+                    for (int i = 0; i < 3; ++i) orient_burnout_axis[i] = axis[i];
+                    ESP_LOGW(TAG, "[RECOVERY] the boost thrust axis had disproved this AUTO frame: "
+                                  "burnout and the roll rate read rocket (%+.0f, %+.0f, %+.0f); the "
+                                  "pitch apogee voter and roll control stay down",
+                             (double)axis[0], (double)axis[1], (double)axis[2]);
+                }
             }
 
             // #1154 item 9: restore the flight maxima. Without this a flight
@@ -9578,6 +9604,10 @@ static void resetFlightStateForSim(const char* edge)
     // The apogee vote by sensor: the sim's IMU is another vehicle; level on
     // its own pad before its launch.
     inertial_vert.reset();
+    // #1755: and its boost thrust axis judged its own frame, not the board's
+    // on the pad now (the flag used to stay in READY telemetry after a sim).
+    orient_thrust_mismatch = false;
+    orient_frame_disproved = false;
     pwrHoldRelease("sim reset");  // #848: a sim abort exits INFLIGHT without LANDED
     // A sim start/stop used to leave a REAL camera powered and the start phase
     // machine armed — and with the sim driving rocket_state to INFLIGHT, that
@@ -11268,7 +11298,17 @@ static void loop_fc()
             const float ax = (float)ism6_latest_si.low_g_acc_x;
             const float ay = (float)ism6_latest_si.low_g_acc_y;
             const float az = (float)ism6_latest_si.low_g_acc_z;
-            roll_rate_dps = (float)ism6_latest_si.gyro_x;
+            // #1755: about the measured thrust axis on a disproved AUTO frame,
+            // where gyro_x is a pitch or yaw rate.  Roll control stands down
+            // there, but the landing checks and the recovery arm gate read
+            // this rate too.
+            {
+                const float w_dps[3] = {(float)ism6_latest_si.gyro_x,
+                                        (float)ism6_latest_si.gyro_y,
+                                        (float)ism6_latest_si.gyro_z};
+                roll_rate_dps = ThrustAxisPolicy::rollRateDps(w_dps, orient_frame_disproved,
+                                                              orient_burnout_axis);
+            }
 
             // Switch to the high-g channel when the low-g part is near its
             // rail.  #1191: the verdict is the drain window's worst raw sample

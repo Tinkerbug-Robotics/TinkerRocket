@@ -519,6 +519,7 @@ target_include_directories(test_orientation_sway PRIVATE
     ${SHIM_DIR}
     ${LIB_DIR}/TR_Orientation
     ${LIB_DIR}/TR_KinematicChecks
+    ${LIB_DIR}/TR_RocketComputerTypes              # SNAP_B2R_* for the snapshot verdict
     ${LIB_DIR}/../projects/flight_computer/main   # thrust_axis_policy.h only
 )
 target_link_libraries(test_orientation_sway GTest::gtest_main)

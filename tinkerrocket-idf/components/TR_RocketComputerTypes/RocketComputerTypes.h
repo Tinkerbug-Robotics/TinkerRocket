@@ -4889,7 +4889,14 @@ struct __attribute__((packed)) FlightSnapshotData
     // velocities and biases were all estimated in this rocket frame, so a
     // post-reboot boot-default orientation would silently invalidate them.
     uint8_t  b2r_code;            // discrete orientation code
-    uint8_t  b2r_mode;            // ORIENT_MODE_*
+    // Low nibble: ORIENT_MODE_* (SNAP_B2R_MODE_MASK).  #1755, high bits: bit 7
+    // (SNAP_B2R_DISPROVED) set when the boost thrust axis disproved this AUTO
+    // frame, bits 4-6 (SNAP_B2R_AXIS_*) that axis's nearest rocket-frame axis,
+    // 1-6 = +X, -X, +Y, -Y, +Z, -Z (0 = none).  A restore then reads burnout,
+    // the roll rate and the pitch voter as the flight before the reboot did.
+    // Size- and offset-neutral, and every older writer left the high bits 0,
+    // which reads "not disproved": the frame as before.  No VERSION bump.
+    uint8_t  b2r_mode;
     // #834 item 4: did ref_alt_m below come from a CONVERGED pad average?
     // The GNSS main-deploy backstop compares against ref_alt_m, and an
     // under-converged pad datum has been measured 132 m off — far past the
@@ -4959,6 +4966,13 @@ struct __attribute__((packed)) FlightSnapshotData
 };
 static_assert(sizeof(FlightSnapshotData) == 224,
               "FlightSnapshotData must be 224 bytes — fits one I2S frame and one I2C TX response");
+// FlightSnapshotData.b2r_mode (#1755): the mode in the low nibble, the boost
+// thrust-axis verdict in the high bits.  Encoded and decoded by the flight
+// computer's thrust_axis_policy.h; Data_Analysis decodes the same bits.
+static constexpr uint8_t SNAP_B2R_MODE_MASK  = 0x0Fu;
+static constexpr uint8_t SNAP_B2R_DISPROVED  = 0x80u;
+static constexpr uint8_t SNAP_B2R_AXIS_SHIFT = 4;
+static constexpr uint8_t SNAP_B2R_AXIS_MASK  = 0x70u;   // 1-6 = +X, -X, +Y, -Y, +Z, -Z
 
 static constexpr size_t SIZE_OF_GNSS_DATA = sizeof(GNSSData);
 static constexpr size_t SIZE_OF_BMP585_DATA     = sizeof(BMP585Data);
