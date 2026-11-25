@@ -118,6 +118,17 @@ reach the cap; it also rides the 4.3 s eFuse restart up to about 0.25 A. Same
 VCHG, ICHG and OSEL. Numbers in
 [`../tinker-mantis/v10-power-parity-2026-09-11.md`](../tinker-mantis/v10-power-parity-2026-09-11.md) §3.3.
 
+**2026-11-16 — the mini (Tinker-Beetle V2) takes the Mantis's 2 F cell as well
+(owner call), lying down rather than standing.** `C130` = CXHP2R7205R-TW on the
+new `Supercap_Radial_D8.0mm_L12.0mm_P3.50mm_Horizontal` (lead bend mirrored
+against the 10 mm footprint), pointing up the board with its + leg on the right.
+VCHG/ICHG/OSEL were already the
+Mantis's, so nothing else moves: 2 F from 2.5 V to ~0.9 V at eta 0.9 is ~4.9 J,
+~8.5 s at 190 mA and ~5 s at 300 mA on the flat 3.0 V bridge (the 5 F gave
+~12.2 J, 21 s and 13.6 s), and a full charge takes ~50 s at 100 mA. The 280 mOhm
+DC resistance shortens the 300 mA figure somewhat. The sheet note and
+`power-budget.md` carry the new numbers.
+
 **2.7 V single-cell selection (open; both boards ~22 mm wide — mini GND zone
 21.9×65.4, V10 outline 22.4×75):**
 
@@ -325,6 +336,8 @@ were resting on that, worst exactly when the board is running off the cap.
 with its own `+3V3`/`GND` symbols on the power sheet. Takes the pin to ~33 µF
 effective and the net to ~42 µF. ERC unchanged at 808; netlist delta is exactly one
 component, `C143` pin 1 → `+3V3`, pin 2 → `GND`, no other net touched.
+(2026-11-20: `C143` is now drawn wired to `U47` pins 9/10 on the power sheet, with
+the note "at U47 pins 9/10", so the drawing shows where it goes. Same net.)
 
 **Placement is outstanding** and is the whole point of the change — `C143` must go
 on the **bottom** side beside `C17`, next to pins 9/10. Parked anywhere else it

@@ -245,4 +245,26 @@
 		)
 	)
 	(embedded_fonts no)
+	(model "${KIPRJMOD}/../3dmodels/OSC_Epson_TG2520SMN_2.5x2.0mm.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+	(model "${KIPRJMOD}/../../3dmodels/OSC_Epson_TG2520SMN_2.5x2.0mm.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
 )

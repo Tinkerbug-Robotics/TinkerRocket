@@ -22,7 +22,7 @@ fabbed):
 ```
 2S pack ─> mux U21 ─> V_MCU_2S ─> L5 ─> [buck U18] ─> V_BUCK ─> [hold-up U47] ─> +3V3
                                                           │                        │
-                                                    supercap C130 5 F        ┌─────┴──────────┐
+                                                    supercap C130 2 F        ┌─────┴──────────┐
                                                     on V_SCAP, via L11       │                │
                                                                         load switch U30   direct loads:
                                                                              │            out computer U15,
@@ -46,10 +46,10 @@ this document had one:
   ([`holdup-tps61094-rework.md`](holdup-tps61094-rework.md)). With the pack
   present it is a **150 mΩ bypass switch** from `V_BUCK` to `+3V3` — the whole
   rail current flows through it, about 0.1 V of drop at 0.7 A — while it
-  buck-charges the 5 F supercap `C130` on `V_SCAP` at **100 mA to a 2.5 V
-  termination**, about two minutes from empty. When `V_BUCK` collapses it boosts
-  from the cap to a **flat 3.0 V** until the cap is spent: about 21 s at 190 mA,
-  13.6 s at 300 mA. It draws 60 nA once the cap is full.
+  buck-charges the 2 F supercap `C130` on `V_SCAP` at **100 mA to a 2.5 V
+  termination**, about 50 s from empty. When `V_BUCK` collapses it boosts
+  from the cap to a **flat 3.0 V** until the cap is spent: about 8.5 s at 190 mA,
+  5 s at 300 mA (V2's 2 F cell; V1's 5 F gave 21 s and 13.6 s). It draws 60 nA once the cap is full.
 
 So `+3V3` is `V_BUCK` less the bypass drop while the pack is present — about
 3.4 V; the hold-up note walks the tolerance stack, with the ESP32-S3's 3.6 V
@@ -88,7 +88,7 @@ With the GNSS module, the radio and the charger added the inventory becomes:
 | GNSS module | tracking | ~30 mA |
 | NAND + NOR flash | writing | ~40 mA |
 | Sensors + current monitor | active | ~4 mA |
-| Hold-up converter `U47` | charging the supercap — the first ~2 min after a cold power-up, or after a hold-up event | **100 mA**, drawn on `V_BUCK` |
+| Hold-up converter `U47` | charging the supercap — the first ~50 s after a cold power-up, or after a hold-up event | **100 mA**, drawn on `V_BUCK` |
 | Hold-up converter `U47` | cap charged, bypass | ~0 (60 nA) |
 
 The telemetry radio is the same 900 MHz module already carried by
@@ -103,7 +103,7 @@ The telemetry radio is the same 900 MHz module already carried by
 | Pad idle | both MCUs idle, radio RX, GNSS tracking, no logging | **~160 mA** |
 | Realistic flight | OC active + BLE, FC active, radio TX, GNSS tracking, logging | **~300 mA** |
 | Worst credible | OC WiFi TX, FC active, radio TX, GNSS acquisition, NAND write | **~605 mA** |
-| Flight computer off, cap charging | as the first row plus `U47` charging `C130` — the two minutes after a pad power-up | **~145 mA** |
+| Flight computer off, cap charging | as the first row plus `U47` charging `C130` — the first ~50 s after a pad power-up | **~145 mA** |
 | Pad idle, cap charging | as pad idle plus the charge current | **~260 mA** |
 | Worst credible, cap charging | a launch inside two minutes of power-up — what the hold-up advisory (`hu`, #1166) exists to flag | **~705 mA** |
 

@@ -190,4 +190,26 @@
 		)
 	)
 	(embedded_fonts no)
+	(model "${KIPRJMOD}/../3dmodels/FIL_SAW-5_1.1x0.9mm_Murata.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+	(model "${KIPRJMOD}/../../3dmodels/FIL_SAW-5_1.1x0.9mm_Murata.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
 )

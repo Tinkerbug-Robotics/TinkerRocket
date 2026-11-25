@@ -60,7 +60,7 @@
           "hatch_smoothing_level": 0,
           "hatch_smoothing_value": 0.1,
           "hatch_thickness": 1.0,
-          "min_clearance": 0.0,
+          "min_clearance": 0.127,
           "min_island_area": 10.0,
           "min_thickness": 0.127,
           "pad_connection": 3,
@@ -76,7 +76,44 @@
           "width": 0.0
         }
       ],
-      "drc_exclusions": [],
+      "drc_exclusions": [
+        [
+          "courtyards_overlap|84495000|171065000|43c07683-b840-4b35-bf43-96f5111262b5|a1dd0f0b-0497-4f0c-8534-075e02a67616",
+          "Accepted (production review 2026-11-24): R17 is an 0402 outside J2's housing; it only enters the courtyard drawn for the WAGO 2601 levers, whose tips sit about 10 mm above the board."
+        ],
+        [
+          "courtyards_overlap|83545000|170085000|5c06beec-0c55-4683-8bc6-6e21a1c9fbf4|a1dd0f0b-0497-4f0c-8534-075e02a67616",
+          "Accepted (production review 2026-11-24): R146 is an 0402 outside J2's housing; it only enters the courtyard drawn for the WAGO 2601 levers, whose tips sit about 10 mm above the board."
+        ],
+        [
+          "courtyards_overlap|80295000|169955000|896ddc50-2fd6-45c8-932c-9d2e3e24731e|a1dd0f0b-0497-4f0c-8534-075e02a67616",
+          "Accepted (production review 2026-11-24): R79 is an 0402 outside J2's housing; it only enters the courtyard drawn for the WAGO 2601 levers, whose tips sit about 10 mm above the board."
+        ],
+        [
+          "courtyards_overlap|84495000|170075000|9ad5da86-717a-4d70-b1d3-aaae1b3eb4b2|a1dd0f0b-0497-4f0c-8534-075e02a67616",
+          "Accepted (production review 2026-11-24): R80 is an 0402 outside J2's housing; it only enters the courtyard drawn for the WAGO 2601 levers, whose tips sit about 10 mm above the board."
+        ],
+        [
+          "courtyards_overlap|89515000|170205000|a1dd0f0b-0497-4f0c-8534-075e02a67616|aeeaea35-7ec4-4ad2-afc1-a1bc1c39a50d",
+          "Accepted (production review 2026-11-24): R81 is an 0402 outside J2's housing; it only enters the courtyard drawn for the WAGO 2601 levers, whose tips sit about 10 mm above the board."
+        ],
+        [
+          "courtyards_overlap|89505000|171195000|a1dd0f0b-0497-4f0c-8534-075e02a67616|b4684c85-3d93-4dcb-9f72-6eda8df1100c",
+          "Accepted (production review 2026-11-24): R23 is an 0402 outside J2's housing; it only enters the courtyard drawn for the WAGO 2601 levers, whose tips sit about 10 mm above the board."
+        ],
+        [
+          "courtyards_overlap|79305000|170025000|a1dd0f0b-0497-4f0c-8534-075e02a67616|bb2b8936-c191-428c-b624-a27a6fdb955d",
+          "Accepted (production review 2026-11-24): R145 is an 0402 outside J2's housing; it only enters the courtyard drawn for the WAGO 2601 levers, whose tips sit about 10 mm above the board."
+        ],
+        [
+          "courtyards_overlap|80285000|170935000|a1dd0f0b-0497-4f0c-8534-075e02a67616|df08415a-437a-4911-b068-0da064d9e3ef",
+          "Accepted (production review 2026-11-24): R16 is an 0402 outside J2's housing; it only enters the courtyard drawn for the WAGO 2601 levers, whose tips sit about 10 mm above the board."
+        ],
+        [
+          "courtyards_overlap|88525000|170265000|a1dd0f0b-0497-4f0c-8534-075e02a67616|f2240d53-3252-4316-a598-0ced70761bdc",
+          "Accepted (production review 2026-11-24): R147 is an 0402 outside J2's housing; it only enters the courtyard drawn for the WAGO 2601 levers, whose tips sit about 10 mm above the board."
+        ]
+      ],
       "meta": {
         "version": 2
       },
@@ -556,6 +593,24 @@
         "via_diameter": 0.4,
         "via_drill": 0.3,
         "wire_width": 6
+      },
+      {
+        "bus_width": 12,
+        "clearance": 0.2,
+        "diff_pair_gap": 0.2,
+        "diff_pair_width": 0.2,
+        "line_style": 0,
+        "microvia_diameter": 0.3,
+        "microvia_drill": 0.1,
+        "name": "RF",
+        "pcb_color": "rgba(255, 140, 0, 0.600)",
+        "priority": 0,
+        "schematic_color": "rgba(0, 0, 0, 0.000)",
+        "track_width": 0.18,
+        "tuning_profile": "",
+        "via_diameter": 0.4,
+        "via_drill": 0.3,
+        "wire_width": 6
       }
     ],
     "meta": {
@@ -563,7 +618,84 @@
     },
     "net_colors": null,
     "netclass_assignments": null,
-    "netclass_patterns": []
+    "netclass_patterns": [
+      {
+        "netclass": "RF",
+        "pattern": "/GNSS/RF_IN"
+      },
+      {
+        "netclass": "RF",
+        "pattern": "Net-(FL1-COM)"
+      },
+      {
+        "netclass": "RF",
+        "pattern": "Net-(FL1-HB)"
+      },
+      {
+        "netclass": "RF",
+        "pattern": "Net-(FL1-LB)"
+      },
+      {
+        "netclass": "RF",
+        "pattern": "Net-(C63-Pad2)"
+      },
+      {
+        "netclass": "RF",
+        "pattern": "Net-(U12-RFIN)"
+      },
+      {
+        "netclass": "RF",
+        "pattern": "Net-(U12-RFOUT)"
+      },
+      {
+        "netclass": "RF",
+        "pattern": "Net-(FL2-IN)"
+      },
+      {
+        "netclass": "RF",
+        "pattern": "Net-(FL2-OUT)"
+      },
+      {
+        "netclass": "RF",
+        "pattern": "Net-(C68-Pad2)"
+      },
+      {
+        "netclass": "RF",
+        "pattern": "/GNSS/LNA_IN1"
+      },
+      {
+        "netclass": "RF",
+        "pattern": "Net-(C69-Pad2)"
+      },
+      {
+        "netclass": "RF",
+        "pattern": "Net-(U13-RFIN)"
+      },
+      {
+        "netclass": "RF",
+        "pattern": "Net-(U13-RFOUT)"
+      },
+      {
+        "netclass": "RF",
+        "pattern": "Net-(FL3-IN)"
+      },
+      {
+        "netclass": "RF",
+        "pattern": "Net-(FL3-OUT)"
+      },
+      {
+        "netclass": "RF",
+        "pattern": "Net-(C74-Pad2)"
+      },
+      {
+        "netclass": "RF",
+        "pattern": "/GNSS/LNA_IN2"
+      },
+      {
+        "netclass": "RF",
+        "pattern": "Net-(U16-ANT)"
+      }
+    ]
   },
   "pcbnew": {
     "last_paths": {
@@ -647,12 +779,174 @@
           "label": "Datasheet",
           "name": "Datasheet",
           "show": true
+        },
+        {
+          "group_by": false,
+          "label": "Check_prices",
+          "name": "Check_prices",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "Description_1",
+          "name": "Description_1",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "DigiKey_Part_Number",
+          "name": "DigiKey_Part_Number",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "Dist",
+          "name": "Dist",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "Dist_PN",
+          "name": "Dist_PN",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "LCSC_Part_Number",
+          "name": "LCSC_Part_Number",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "MANUFACTURER",
+          "name": "MANUFACTURER",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "MAXIMUM_PACKAGE_HEIGHT",
+          "name": "MAXIMUM_PACKAGE_HEIGHT",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "MF",
+          "name": "MF",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "Mfr",
+          "name": "Mfr",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "MinVRating",
+          "name": "MinVRating",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "MP",
+          "name": "MP",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "MPN",
+          "name": "MPN",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "Notes",
+          "name": "Notes",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "Package",
+          "name": "Package",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "Part_Rev",
+          "name": "Part_Rev",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "PARTREV",
+          "name": "PARTREV",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "Price",
+          "name": "Price",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "Sim.Pins",
+          "name": "Sim.Pins",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "SnapEDA_Link",
+          "name": "SnapEDA_Link",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "SNAPEDA_PACKAGE_ID",
+          "name": "SNAPEDA_PACKAGE_ID",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "SNAPEDA_PN",
+          "name": "SNAPEDA_PN",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "STANDARD",
+          "name": "STANDARD",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "Unit",
+          "name": "Unit",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "Availability",
+          "name": "Availability",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "Description",
+          "name": "Description",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "#",
+          "name": "${ITEM_NUMBER}",
+          "show": false
         }
       ],
       "filter_string": "",
       "group_symbols": true,
       "include_excluded_from_bom": true,
-      "name": "Default Editing",
+      "name": "",
       "sort_asc": true,
       "sort_field": "Reference"
     },
@@ -713,7 +1007,7 @@
         "uuid": "ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
       }
     ],
-    "used_designators": "U12,AE1",
+    "used_designators": "",
     "variants": []
   },
   "sheets": [
@@ -740,6 +1034,10 @@
     [
       "4387b4db-c729-4e1d-84b2-dffd80f2e21f",
       "Power"
+    ],
+    [
+      "668eabf5-e267-5970-84d5-0d65f171b9e0",
+      "GNSS"
     ]
   ],
   "text_variables": {},

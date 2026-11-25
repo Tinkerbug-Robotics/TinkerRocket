@@ -11,6 +11,268 @@
 		(company "TinkerRocket")
 	)
 	(lib_symbols
+		(symbol "Custom:SMF10A"
+			(pin_names
+				(offset 1.016)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "CR"
+				(at -5.08 2.54 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left bottom)
+				)
+			)
+			(property "Value" "SMF10A"
+				(at -5.08 -3.81 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left bottom)
+				)
+			)
+			(property "Footprint" "Footprints:SODFL3617X108N"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "TVS diode, unidirectional, 10 V standoff, 11.1 V breakdown min, 17 V clamp at 11.8 A Ipp, 200 W peak pulse, SOD-123FL"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "MPN" "SMF10A"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "Mfr" "PTTC"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "Package" "SOD-123FL"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "MAXIMUM_PACKAGE_HEIGHT" "1.08mm"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "Dist" "LCSC"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "Dist_PN" "C5444308"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "Notes" "Clamp must stay below the TPS62913 VIN abs max of 18 V. SMF12A clamps 19.9 V and is NOT a substitute. Standoff must clear the 8.4 V full-charge 2S pack, so 10 V is the only SMF step that fits both ends."
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(symbol "SMF10A_0_0"
+				(polyline
+					(pts
+						(xy -2.54 0) (xy -1.27 0)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -1.27 1.27) (xy -1.27 -1.27)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -1.27 -1.27) (xy 1.27 0)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 1.27 0) (xy -1.27 1.27)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 1.27 0) (xy 2.54 0)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 1.905 1.27) (xy 1.27 1.27) (xy 1.27 -1.27) (xy 0.635 -1.27)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(pin passive line
+					(at -5.08 0 0)
+					(length 2.54)
+					(name ""
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "A"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 5.08 0 180)
+					(length 2.54)
+					(name ""
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "C"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
 		(symbol "Connector_Generic:Conn_01x02"
 			(pin_names
 				(offset 1.016)
@@ -6975,6 +7237,17 @@
 		)
 		(uuid "4e666655-762e-5ae6-9b9f-c5e7852fcd29")
 	)
+	(text "C145-C148: +3V3 rail decoupling,\nno pin of their own;\nspread them along the rail."
+		(exclude_from_sim no)
+		(at 247.65 109.22 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "5b07328e-e596-42bd-875b-6bdbb742dde3")
+	)
 	(text ""
 		(exclude_from_sim no)
 		(at 386.08 124 0)
@@ -7001,7 +7274,7 @@
 	)
 	(text "Super Cap and \nBrownout Protection\n"
 		(exclude_from_sim no)
-		(at 241.935 24.765 0)
+		(at 260.35 24.13 0)
 		(effects
 			(font
 				(size 3 3)
@@ -7047,7 +7320,7 @@
 		)
 		(uuid "96b68b04-df05-4061-b9b1-166c0d0f02d9")
 	)
-	(text "Supercap hold-up: U47 charges the cap to\n2.5 V at 100 mA, bypasses V_BUCK to +3V3 in normal\noperation, and boosts from the cap to a flat 3.0 V.\nOSEL/VCHG/ICHG are 1% code resistors: \n3.09k = 3.0 V out\n6.65k = 2.5 V termination (bounded by VIN - 800 mV)\n22.1k = 100 mA charge.\n3.0 V not 3.3 so the cap always charges: VBYPASS is\n150 mV worst case against V_BUCK 3.465 V.\nHold: ~21 s @190 mA, ~13.6 s @300 mA (5 F,\n2.5 -> ~0.9 V floor, eta 0.9, flat 3.0 V out).\nVBUCK_OK (100k/360k off V_BUCK)\nINVERTED: HIGH = buck present, LOW = riding the cap.\nEN/MODE to VIN = auto buck/boost.  Keep L11 and C141\ntight to U47."
+	(text "Supercap hold-up: U47 charges the cap to\n2.5 V at 100 mA, bypasses V_BUCK to +3V3 in normal\noperation, and boosts from the cap to a flat 3.0 V.\nOSEL/VCHG/ICHG are 1% code resistors: \n3.09k = 3.0 V out\n6.65k = 2.5 V termination (bounded by VIN - 800 mV)\n22.1k = 100 mA charge.\n3.0 V not 3.3 so the cap always charges: VBYPASS is\n150 mV worst case against V_BUCK 3.465 V.\nHold: ~8.5 s @190 mA, ~5 s @300 mA (2 F,\n2.5 -> ~0.9 V floor, eta 0.9, flat 3.0 V out).\nVBUCK_OK (100k/360k off V_BUCK)\nINVERTED: HIGH = buck present, LOW = riding the cap.\nEN/MODE to VIN = auto buck/boost.  Keep L11 and C141\ntight to U47."
 		(exclude_from_sim no)
 		(at 288.29 100.33 0)
 		(effects
@@ -7135,6 +7408,17 @@
 			(justify left bottom)
 		)
 		(uuid "dc987231-4e09-41fa-a977-ab64765657b8")
+	)
+	(text "at U47 pins 9/10"
+		(exclude_from_sim no)
+		(at 268.605 32.385 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "e34100db-63e8-4dd0-bb7a-2898ad401c66")
 	)
 	(text "Battery"
 		(exclude_from_sim no)
@@ -7339,6 +7623,12 @@
 		(uuid "3a84043d-5027-4e37-8ef4-e7422255f0a9")
 	)
 	(junction
+		(at 263.525 35.56)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "46e2a316-7b1f-4489-b943-ecd919834ea9")
+	)
+	(junction
 		(at 218.44 72.39)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -7391,6 +7681,12 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "5e05280d-2bac-4f09-8187-6cb4fd5d8672")
+	)
+	(junction
+		(at 219.075 37.465)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "5fc6c06f-d07f-4c8a-840f-166953cf943c")
 	)
 	(junction
 		(at 61.595 66.675)
@@ -7471,12 +7767,6 @@
 		(uuid "ba50bb9e-6298-449e-8caa-2bfa0b414577")
 	)
 	(junction
-		(at 220.98 37.465)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "bab8dc87-1ee2-4342-b4c5-2b7470fc0faa")
-	)
-	(junction
 		(at 64.77 152.4)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -7519,12 +7809,6 @@
 		(uuid "d28dfe7a-6b73-45e2-a00a-b1b145765948")
 	)
 	(junction
-		(at 233.045 37.465)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "d4928bf3-68da-46f2-b8c8-3762220c27d8")
-	)
-	(junction
 		(at 167.005 33.02)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -7547,6 +7831,12 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "dfa26c26-daa2-48fa-9362-0649ae1a6c7e")
+	)
+	(junction
+		(at 234.95 36.195)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "e5834af5-bb98-4990-84ae-2cac2cc06420")
 	)
 	(junction
 		(at 61.595 69.215)
@@ -7594,13 +7884,29 @@
 	)
 	(wire
 		(pts
-			(xy 137.795 23.495) (xy 131.445 23.495)
+			(xy 135.255 23.495) (xy 131.445 23.495)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
 		(uuid "0180fd29-3bf0-46ef-a60d-7cc103e64938")
+	)
+	(wire
+		(pts
+			(xy 137.795 23.495) (xy 135.255 23.495)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "e53c6a5e-e943-44d7-b3bc-ea5effd5fbb2")
+	)
+	(junction
+		(at 135.255 23.495)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "5c35a030-62db-4192-9abf-c3c3cfbe492b")
 	)
 	(wire
 		(pts
@@ -7694,6 +8000,16 @@
 	)
 	(wire
 		(pts
+			(xy 219.075 37.465) (xy 216.535 37.465)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "17661eb0-9778-43ad-8d5c-c5ce2ef233dc")
+	)
+	(wire
+		(pts
 			(xy 111.125 93.98) (xy 111.125 97.155)
 		)
 		(stroke
@@ -7704,6 +8020,16 @@
 	)
 	(wire
 		(pts
+			(xy 263.525 35.56) (xy 283.21 35.56)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "18b672fb-d8af-4ca7-80b8-560f30bfd89d")
+	)
+	(wire
+		(pts
 			(xy 263.525 41.275) (xy 263.525 43.815)
 		)
 		(stroke
@@ -7711,6 +8037,16 @@
 			(type default)
 		)
 		(uuid "19c977d9-db19-4a5e-b157-91929400cf89")
+	)
+	(wire
+		(pts
+			(xy 234.95 36.195) (xy 243.205 36.195)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "1a0f5bef-0646-4d45-9c9a-ab0862e5eee1")
 	)
 	(wire
 		(pts
@@ -7784,16 +8120,6 @@
 	)
 	(wire
 		(pts
-			(xy 220.98 37.465) (xy 216.535 37.465)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "25e8f0b3-0693-4132-bc31-faa90b5dbbb4")
-	)
-	(wire
-		(pts
 			(xy 20.955 96.52) (xy 25.4 96.52)
 		)
 		(stroke
@@ -7801,6 +8127,16 @@
 			(type default)
 		)
 		(uuid "27566a53-9e05-4902-aa6c-de04b9e40f94")
+	)
+	(wire
+		(pts
+			(xy 219.075 37.465) (xy 225.425 37.465)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "28de54db-b908-4e69-a6c3-ca7938796370")
 	)
 	(wire
 		(pts
@@ -8284,7 +8620,7 @@
 	)
 	(wire
 		(pts
-			(xy 133.985 35.56) (xy 133.985 31.75)
+			(xy 133.35 35.56) (xy 133.35 31.75)
 		)
 		(stroke
 			(width 0)
@@ -8414,7 +8750,7 @@
 	)
 	(wire
 		(pts
-			(xy 133.985 31.75) (xy 131.445 31.75)
+			(xy 133.35 31.75) (xy 131.445 31.75)
 		)
 		(stroke
 			(width 0)
@@ -8491,16 +8827,6 @@
 			(type default)
 		)
 		(uuid "8386c871-6767-4be2-a2e7-aeb6ac0e89b5")
-	)
-	(wire
-		(pts
-			(xy 205.74 125.73) (xy 205.74 127)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "84b88963-1c15-41e0-8c16-fc5d0bd1c475")
 	)
 	(wire
 		(pts
@@ -8654,16 +8980,6 @@
 	)
 	(wire
 		(pts
-			(xy 243.205 36.195) (xy 238.125 36.195)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "a27969eb-0e7e-4997-8bf5-8a0cee524948")
-	)
-	(wire
-		(pts
 			(xy 260.35 61.595) (xy 260.35 64.135)
 		)
 		(stroke
@@ -8754,16 +9070,6 @@
 	)
 	(wire
 		(pts
-			(xy 225.425 37.465) (xy 220.98 37.465)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "b0cad591-9300-46d4-8b14-e94850e11690")
-	)
-	(wire
-		(pts
 			(xy 212.725 125.73) (xy 212.725 127)
 		)
 		(stroke
@@ -8791,6 +9097,16 @@
 			(type default)
 		)
 		(uuid "b24501cd-4c4a-4c62-81b2-967522cef9f9")
+	)
+	(wire
+		(pts
+			(xy 234.95 33.655) (xy 234.95 36.195)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b2ad7a6d-2010-43a5-9314-592d83d1d7f4")
 	)
 	(wire
 		(pts
@@ -8841,6 +9157,16 @@
 			(type default)
 		)
 		(uuid "ba2987b4-3248-48b2-a937-3684b6cae986")
+	)
+	(wire
+		(pts
+			(xy 234.95 19.685) (xy 234.95 26.035)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "bc31831f-9dc5-46fb-a9a6-e30abd075020")
 	)
 	(wire
 		(pts
@@ -9014,6 +9340,16 @@
 	)
 	(wire
 		(pts
+			(xy 234.95 36.195) (xy 229.87 36.195)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d7f7ea6f-6222-4fd7-ae21-71a5d5d53a2f")
+	)
+	(wire
+		(pts
 			(xy 29.845 187.325) (xy 36.83 187.325)
 		)
 		(stroke
@@ -9031,6 +9367,16 @@
 			(type default)
 		)
 		(uuid "d9f8ddcd-853d-4e55-a385-80b9f589adb9")
+	)
+	(wire
+		(pts
+			(xy 263.525 41.275) (xy 263.525 35.56)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "dc3c028a-0fc8-423b-b8a4-aef8a29755dd")
 	)
 	(wire
 		(pts
@@ -9204,7 +9550,7 @@
 	)
 	(wire
 		(pts
-			(xy 137.795 35.56) (xy 133.985 35.56)
+			(xy 137.795 35.56) (xy 133.35 35.56)
 		)
 		(stroke
 			(width 0)
@@ -9500,7 +9846,7 @@
 	)
 	(global_label "V_BUCK"
 		(shape input)
-		(at 225.425 37.465 90)
+		(at 223.52 37.465 90)
 		(fields_autoplaced yes)
 		(effects
 			(font
@@ -9510,7 +9856,7 @@
 		)
 		(uuid "42309813-2507-4fe3-b903-ed24bd4caf86")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 225.425 27.2831 90)
+			(at 223.52 27.2831 90)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9751,6 +10097,30 @@
 		(uuid "afa2179b-2882-5d24-b085-642834015353")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 228.4707 84.455 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
+	(global_label "V_BUCK"
+		(shape input)
+		(at 229.87 28.575 90)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "bf32c7c3-c556-43a2-839f-ba23053d6c73")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 229.87 18.395 90)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10007,7 +10377,7 @@
 				)
 			)
 		)
-		(property "Description" "OSEL: VOUT = 3.3 V"
+		(property "Description" "OSEL: VOUT = 3.0 V"
 			(at 276.86 52.705 0)
 			(hide yes)
 			(show_name no)
@@ -10633,84 +11003,6 @@
 		)
 	)
 	(symbol
-		(lib_id "power:+3V3")
-		(at 205.74 125.73 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "07b303ba-4332-4fd6-9752-51ce705bd3b1")
-		(property "Reference" "#PWR9001"
-			(at 205.74 129.54 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "+3V3"
-			(at 205.74 121.285 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 205.74 125.73 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 205.74 125.73 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"+3V3\""
-			(at 205.74 125.73 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "3c0ff90c-c68e-4724-8ce2-6407f7c684fb")
-		)
-		(instances
-			(project "tinker-beetle"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
-					(reference "#PWR9001")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
 		(lib_id "power:GND")
 		(at 180.975 40.64 0)
 		(unit 1)
@@ -10790,7 +11082,7 @@
 	)
 	(symbol
 		(lib_id "Device:C")
-		(at 205.74 130.81 0)
+		(at 283.21 39.37 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -10800,7 +11092,7 @@
 		(dnp no)
 		(uuid "0b04e488-ff4d-4106-afa6-ff1ed9a5ea7b")
 		(property "Reference" "C143"
-			(at 205.74 128.27 0)
+			(at 270.51 34.29 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -10811,7 +11103,7 @@
 			)
 		)
 		(property "Value" "22 uF"
-			(at 205.74 133.35 0)
+			(at 276.86 34.29 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -10822,7 +11114,7 @@
 			)
 		)
 		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
-			(at 206.7052 134.62 0)
+			(at 284.1752 43.18 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10833,7 +11125,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 205.74 130.81 0)
+			(at 283.21 39.37 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10843,8 +11135,8 @@
 				)
 			)
 		)
-		(property "Description" "Unpolarized capacitor"
-			(at 205.74 130.81 0)
+		(property "Description" "at U47 pins 9 and 10 (VOUT), same side as U47"
+			(at 283.21 39.37 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10855,7 +11147,7 @@
 			)
 		)
 		(property "MPN" "CL21A226MOQNNNE"
-			(at 205.74 130.81 0)
+			(at 283.21 39.37 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10866,7 +11158,7 @@
 			)
 		)
 		(property "Mfr" "Samsung"
-			(at 205.74 130.81 0)
+			(at 283.21 39.37 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11024,7 +11316,7 @@
 				)
 			)
 		)
-		(property "Description" "Unpolarized capacitor"
+		(property "Description" "+3V3 rail decoupling, no specific pin"
 			(at 265.43 93.98 0)
 			(hide yes)
 			(show_name no)
@@ -11807,7 +12099,7 @@
 				)
 			)
 		)
-		(property "Description" "Supercap hold-up: bypass V_BUCK->+3V3, charge 2.6V/100mA, boost to 3.3V on loss"
+		(property "Description" "Supercap hold-up: bypass V_BUCK->+3V3, charge 2.5 V / 100 mA, boost to 3.0 V on loss"
 			(at 245.745 48.895 0)
 			(hide yes)
 			(show_name no)
@@ -13954,7 +14246,7 @@
 				)
 			)
 		)
-		(property "Description" "Unpolarized capacitor"
+		(property "Description" "+3V3 rail decoupling, no specific pin"
 			(at 250.19 93.98 0)
 			(hide yes)
 			(show_name no)
@@ -14424,7 +14716,7 @@
 				)
 			)
 		)
-		(property "Description" "Unpolarized capacitor"
+		(property "Description" "+3V3 rail decoupling, no specific pin"
 			(at 273.05 93.98 0)
 			(hide yes)
 			(show_name no)
@@ -16969,6 +17261,83 @@
 		)
 	)
 	(symbol
+		(lib_id "power:+3V3")
+		(at 234.95 19.685 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "8a35a098-3d3a-4e3f-ac76-5e2eb9b41bf2")
+		(property "Reference" "#PWR9117"
+			(at 234.95 23.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "+3V3"
+			(at 236.22 15.24 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 234.95 19.685 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 234.95 19.685 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"+3V3\""
+			(at 234.95 19.685 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "303f2178-b809-491b-b6a3-0d22ba7267a6")
+		)
+		(instances
+			(project "tinker-beetle"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
+					(reference "#PWR9117")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "Device:R_US")
 		(at 218.44 146.05 0)
 		(unit 1)
@@ -17070,7 +17439,7 @@
 	)
 	(symbol
 		(lib_id "power:PWR_FLAG")
-		(at 220.98 37.465 0)
+		(at 219.075 37.465 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -17080,7 +17449,7 @@
 		(dnp no)
 		(uuid "8e874403-febd-4801-9fb1-d9bb346f22c7")
 		(property "Reference" "#FLG06"
-			(at 220.98 35.56 0)
+			(at 219.075 35.56 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -17091,7 +17460,7 @@
 			)
 		)
 		(property "Value" "PWR_FLAG"
-			(at 223.52 33.02 0)
+			(at 221.615 33.02 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -17102,7 +17471,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 220.98 37.465 0)
+			(at 219.075 37.465 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -17113,7 +17482,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 220.98 37.465 0)
+			(at 219.075 37.465 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -17124,7 +17493,7 @@
 			)
 		)
 		(property "Description" "Special symbol for telling ERC where power comes from"
-			(at 220.98 37.465 0)
+			(at 219.075 37.465 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -17268,7 +17637,7 @@
 				(justify bottom)
 			)
 		)
-		(property "Datasheet" "TPS259631DDAR"
+		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps2596.pdf"
 			(at 94.615 170.18 0)
 			(hide yes)
 			(show_name no)
@@ -17279,151 +17648,7 @@
 				)
 			)
 		)
-		(property "Description" "2.7-V to 24-V, 2.7-mΩ, 15-A eFuse with hot-swap protection, ±1.5% current monitor & adj. fault mgmt."
-			(at 94.615 170.18 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify bottom)
-			)
-		)
-		(property "MF" "Texas Instruments"
-			(at 94.615 170.18 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify bottom)
-			)
-		)
-		(property "Maximum_Package_Height" "1 mm"
-			(at 94.615 170.18 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify bottom)
-			)
-		)
-		(property "Package" "QFN-24 Texas Instruments"
-			(at 94.615 170.18 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify bottom)
-			)
-		)
-		(property "Notes" ""
-			(at 94.615 170.18 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify bottom)
-			)
-		)
-		(property "Check_prices" "https://www.snapeda.com/parts/TPS259824LNRGER/Texas+Instruments/view-part/?ref=eda"
-			(at 94.615 170.18 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify bottom)
-			)
-		)
-		(property "Part_Rev" "C"
-			(at 94.615 170.18 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify bottom)
-			)
-		)
-		(property "Availability" "In Stock"
-			(at 94.615 170.18 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify bottom)
-			)
-		)
-		(property "SnapEDA_Link" "https://www.snapeda.com/parts/TPS259824LNRGER/Texas+Instruments/view-part/?ref=snap"
-			(at 94.615 170.18 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify bottom)
-			)
-		)
-		(property "MP" "TPS259824LNRGET"
-			(at 94.615 170.18 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify bottom)
-			)
-		)
-		(property "Price" "None"
-			(at 94.615 170.18 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify bottom)
-			)
-		)
-		(property "Unit" "mm"
-			(at 94.615 170.18 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify bottom)
-			)
-		)
-		(property "Manufacturer" "Texas Instruments"
+		(property "Description" "eFuse, TPS2596 family: 2.7-19 V, 0.125-2 A adjustable current limit, 89 mOhm, adjustable OVLO, auto-retry, SO PowerPAD-8"
 			(at 94.615 170.18 0)
 			(hide yes)
 			(show_name no)
@@ -17548,7 +17773,7 @@
 				)
 			)
 		)
-		(property "Description" "Unpolarized capacitor"
+		(property "Description" "at U30 pin 6 (VIN)"
 			(at 212.725 130.81 0)
 			(hide yes)
 			(show_name no)
@@ -18901,6 +19126,109 @@
 			(project "tinker-beetle"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
 					(reference "#PWR530")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:D_Schottky")
+		(at 229.87 32.385 90)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "b6152a9f-e519-48bd-88c0-019f839010b5")
+		(property "Reference" "D13"
+			(at 232.41 32.385 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "BAT54XV2T1G"
+			(at 227.33 31.75 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Footprints:SOD-523_0P9X1P3_ONS"
+			(at 229.87 32.385 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 229.87 32.385 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "U47 EN/MODE OR-gate, V_BUCK side: enables U47 at power-up"
+			(at 229.87 32.385 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "BAT54XV2T1G"
+			(at 229.87 32.385 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "onsemi"
+			(at 229.87 32.385 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "fca72bed-8db4-405c-89ed-18af4932c795")
+		)
+		(pin "2"
+			(uuid "e4ac866c-27cd-4fe4-9ba0-a034d1a09578")
+		)
+		(instances
+			(project "tinker-beetle"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
+					(reference "D13")
 					(unit 1)
 				)
 			)
@@ -20272,7 +20600,7 @@
 				)
 			)
 		)
-		(property "Value" "HV1020-2R7505-R"
+		(property "Value" "CXHP2R7205R-TW"
 			(at 202.565 84.455 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -20282,7 +20610,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Footprints:Supercap_Radial_D10.0mm_L20.0mm_P5.00mm_Horizontal"
+		(property "Footprint" "Footprints:Supercap_Radial_D8.0mm_L12.0mm_P3.50mm_Horizontal"
 			(at 206.375 84.455 0)
 			(hide yes)
 			(show_name no)
@@ -20315,7 +20643,7 @@
 				)
 			)
 		)
-		(property "MPN" "HV1020-2R7505-R"
+		(property "MPN" "CXHP2R7205R-TW"
 			(at 206.375 84.455 0)
 			(hide yes)
 			(show_name no)
@@ -20326,7 +20654,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Eaton"
+		(property "Mfr" "CDA (Zhifengwei)"
 			(at 206.375 84.455 0)
 			(hide yes)
 			(show_name no)
@@ -21926,7 +22254,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 205.74 134.62 0)
+		(at 283.21 43.18 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -21936,7 +22264,7 @@
 		(dnp no)
 		(uuid "e8798050-211b-4f64-8d2e-ed38337fa6f0")
 		(property "Reference" "#PWR9002"
-			(at 205.74 140.97 0)
+			(at 283.21 49.53 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -21947,7 +22275,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 205.74 139.065 0)
+			(at 283.21 47.625 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -21957,7 +22285,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 205.74 134.62 0)
+			(at 283.21 43.18 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -21968,7 +22296,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 205.74 134.62 0)
+			(at 283.21 43.18 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -21979,7 +22307,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 205.74 134.62 0)
+			(at 283.21 43.18 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -22134,7 +22462,7 @@
 				)
 			)
 		)
-		(property "Description" "Unpolarized capacitor"
+		(property "Description" "+3V3 rail decoupling, no specific pin"
 			(at 257.81 93.98 0)
 			(hide yes)
 			(show_name no)
@@ -22285,7 +22613,7 @@
 	)
 	(symbol
 		(lib_id "power:+3V3")
-		(at 263.525 41.275 0)
+		(at 263.525 35.56 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -22296,7 +22624,7 @@
 		(fields_autoplaced yes)
 		(uuid "f27de758-7988-4b32-b8b7-1316248d93bd")
 		(property "Reference" "#PWR0139"
-			(at 263.525 45.085 0)
+			(at 263.525 39.37 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -22307,7 +22635,7 @@
 			)
 		)
 		(property "Value" "+3V3"
-			(at 263.525 36.83 0)
+			(at 263.525 31.115 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -22317,7 +22645,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 263.525 41.275 0)
+			(at 263.525 35.56 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -22328,7 +22656,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 263.525 41.275 0)
+			(at 263.525 35.56 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -22339,7 +22667,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"+3V3\""
-			(at 263.525 41.275 0)
+			(at 263.525 35.56 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -22356,6 +22684,109 @@
 			(project "tinker-beetle"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
 					(reference "#PWR0139")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:D_Schottky")
+		(at 234.95 29.845 90)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "f4213632-84e9-4355-907c-2ac82e504595")
+		(property "Reference" "D14"
+			(at 236.855 27.305 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "BAT54XV2T1G"
+			(at 233.045 27.94 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Footprints:SOD-523_0P9X1P3_ONS"
+			(at 234.95 29.845 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 234.95 29.845 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "U47 EN/MODE OR-gate, +3V3 side: keeps U47 enabled through the hold-up"
+			(at 234.95 29.845 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "BAT54XV2T1G"
+			(at 234.95 29.845 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "onsemi"
+			(at 234.95 29.845 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "3a5fcf88-dd77-4281-8f8b-e3d17687769b")
+		)
+		(pin "2"
+			(uuid "825a1b2f-b421-469f-8be4-0f1b4bbd206b")
+		)
+		(instances
+			(project "tinker-beetle"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
+					(reference "D14")
 					(unit 1)
 				)
 			)
@@ -23130,8 +23561,8 @@
 		)
 	)
 	(symbol
-		(lib_id "Device:D_Schottky")
-		(at 233.045 32.385 90)
+		(lib_id "Device:C")
+		(at 135.255 27.305 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -23139,10 +23570,9 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "b6152a9f-e519-48bd-88c0-019f839010b5")
-		(property "Reference" "D13"
-			(at 234.95 31.75 0)
+		(uuid "6595267b-188d-4d04-aad2-f88211706122")
+		(property "Reference" "C161"
+			(at 138.43 25.4 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -23152,8 +23582,8 @@
 				(justify left)
 			)
 		)
-		(property "Value" "BAT54XV2T1G"
-			(at 234.95 33.655 0)
+		(property "Value" "1 uF"
+			(at 138.43 27.305 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -23163,8 +23593,8 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Footprints:SOD-523_0P9X1P3_ONS"
-			(at 233.045 32.385 0)
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
+			(at 135.255 27.305 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -23175,7 +23605,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 233.045 32.385 0)
+			(at 135.255 27.305 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -23185,8 +23615,8 @@
 				)
 			)
 		)
-		(property "Description" "U47 EN/MODE OR-gate, V_BUCK side: enables U47 at power-up"
-			(at 233.045 32.385 0)
+		(property "Description" "at U21 pin 7 (IN1)"
+			(at 135.255 27.305 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -23196,8 +23626,8 @@
 				)
 			)
 		)
-		(property "MPN" "BAT54XV2T1G"
-			(at 233.045 32.385 0)
+		(property "MPN" "CL05A105KO5NNNC"
+			(at 135.255 27.305 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -23207,112 +23637,8 @@
 				)
 			)
 		)
-		(property "Mfr" "onsemi"
-			(at 233.045 32.385 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "fca72bed-8db4-405c-89ed-18af4932c795")
-		)
-		(pin "2"
-			(uuid "e4ac866c-27cd-4fe4-9ba0-a034d1a09578")
-		)
-		(instances
-			(project "tinker-beetle"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
-					(reference "D13")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:D_Schottky")
-		(at 238.125 32.385 90)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "f4213632-84e9-4355-907c-2ac82e504595")
-		(property "Reference" "D14"
-			(at 240.03 31.75 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "BAT54XV2T1G"
-			(at 240.03 33.655 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "Footprints:SOD-523_0P9X1P3_ONS"
-			(at 238.125 32.385 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 238.125 32.385 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "U47 EN/MODE OR-gate, +3V3 side: keeps U47 enabled through the hold-up"
-			(at 238.125 32.385 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "BAT54XV2T1G"
-			(at 238.125 32.385 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "onsemi"
-			(at 238.125 32.385 0)
+		(property "Mfr" "Samsung"
+			(at 135.255 27.305 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -23323,23 +23649,23 @@
 			)
 		)
 		(pin "1"
-			(uuid "3a5fcf88-dd77-4281-8f8b-e3d17687769b")
+			(uuid "454568c6-0f6d-49fa-a51e-71f8695a3792")
 		)
 		(pin "2"
-			(uuid "825a1b2f-b421-469f-8be4-0f1b4bbd206b")
+			(uuid "e6c6f3e6-c86e-4b99-bca5-e39ab35641e2")
 		)
 		(instances
 			(project "tinker-beetle"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
-					(reference "D14")
+					(reference "C161")
 					(unit 1)
 				)
 			)
 		)
 	)
 	(symbol
-		(lib_id "power:+3V3")
-		(at 238.125 28.575 0)
+		(lib_id "power:GND")
+		(at 135.255 31.115 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -23347,10 +23673,9 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "8a35a098-3d3a-4e3f-ac76-5e2eb9b41bf2")
-		(property "Reference" "#PWR9117"
-			(at 238.125 32.385 0)
+		(uuid "7343b3dc-35df-4a82-b4b7-76105bd26b1e")
+		(property "Reference" "#PWR9160"
+			(at 135.255 37.464999999999996 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -23360,8 +23685,9 @@
 				)
 			)
 		)
-		(property "Value" "+3V3"
-			(at 238.125 24.13 0)
+		(property "Value" "GND"
+			(at 135.255 34.925 0)
+			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -23371,7 +23697,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 238.125 28.575 0)
+			(at 135.255 31.115 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -23382,7 +23708,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 238.125 28.575 0)
+			(at 135.255 31.115 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -23392,8 +23718,8 @@
 				)
 			)
 		)
-		(property "Description" "Power symbol creates a global label with name \"+3V3\""
-			(at 238.125 28.575 0)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 135.255 31.115 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -23404,31 +23730,46 @@
 			)
 		)
 		(pin "1"
-			(uuid "303f2178-b809-491b-b6a3-0d22ba7267a6")
+			(uuid "93c3b6be-137c-4c7a-b1f7-f39fd65e04be")
 		)
 		(instances
 			(project "tinker-beetle"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
-					(reference "#PWR9117")
+					(reference "#PWR9160")
 					(unit 1)
 				)
 			)
 		)
 	)
-	(global_label "V_BUCK"
-		(shape input)
-		(at 233.045 28.575 90)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
+	(wire
+		(pts
+			(xy 193.675 106.045) (xy 193.675 108.585)
 		)
-		(uuid "bf32c7c3-c556-43a2-839f-ba23053d6c73")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 233.045 18.395 90)
-			(hide yes)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d11d2114-05b7-4209-8be4-16ac44fef523")
+	)
+	(junction
+		(at 193.675 106.045)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "111c16a3-38ca-460f-adb1-63f714a28440")
+	)
+	(symbol
+		(lib_id "Custom:SMF10A")
+		(at 193.675 113.665 90)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "396bbf3c-9369-4b83-8ffc-4ef18bdc5f84")
+		(property "Reference" "CR4"
+			(at 191.77 113.03 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -23438,21 +23779,195 @@
 				(justify left)
 			)
 		)
-	)
-	(junction
-		(at 238.125 36.195)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "ddb31144-3502-4c58-95cf-778a2c1e6331")
-	)
-	(wire
-		(pts
-			(xy 238.125 36.195) (xy 233.045 36.195)
+		(property "Value" "SMF10A"
+			(at 191.77 115.57 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
 		)
-		(stroke
-			(width 0)
-			(type default)
+		(property "Footprint" "Footprints:SODFL3617X108N"
+			(at 193.675 113.665 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
 		)
-		(uuid "1a0f5bef-0646-4d45-9c9a-ab0862e5eee1")
+		(property "Datasheet" ""
+			(at 193.675 113.665 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "at Q11 S pins 1-3 (VBAT_Terminal): TVS, unidirectional, 10 V standoff, 11.1 V breakdown min, 17 V clamp at 11.8 A Ipp, 200 W, SOD-123FL"
+			(at 193.675 113.665 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "SMF10A"
+			(at 193.675 113.665 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "PTTC"
+			(at 193.675 113.665 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Dist" "LCSC"
+			(at 193.675 113.665 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Dist_PN" "C5444308"
+			(at 193.675 113.665 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Notes" "Breakdown (11.1 V min) sits above U19's 10.59 V OVLO and the 8.4 V full pack; the 17 V clamp stays under U19's 21 V abs max. Unidirectional is right here because Q11 blocks a reversed pack; at J3 it would need the SMF10CA."
+			(at 193.675 113.665 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "A"
+			(uuid "111767f8-dacf-497f-92b3-da6d27000957")
+		)
+		(pin "C"
+			(uuid "d677f6b1-f94a-40c5-ad18-a6f2f6e96d9c")
+		)
+		(instances
+			(project "tinker-beetle"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
+					(reference "CR4")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 193.675 118.745 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "5d6d2e13-8405-42da-a0d5-25a438af81ac")
+		(property "Reference" "#PWR9161"
+			(at 193.675 125.095 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 193.675 122.555 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 193.675 118.745 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 193.675 118.745 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 193.675 118.745 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "89b2e5ee-0c06-4308-b068-e7cc7de28461")
+		)
+		(instances
+			(project "tinker-beetle"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
+					(reference "#PWR9161")
+					(unit 1)
+				)
+			)
+		)
 	)
 )

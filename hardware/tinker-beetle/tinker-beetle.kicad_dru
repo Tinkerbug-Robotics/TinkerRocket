@@ -24,3 +24,20 @@
 (rule "hole_to_hole_different_nets"
 	(constraint hole_to_hole (min 0.25mm))
 	(condition "A.Net != B.Net"))
+
+# GNSS sheet (2026-11-16): the PX100 front end's RF class is 0.18 mm track on a 0.20 mm gap, a
+# 50 ohm coplanar line over In1 (GND) through the 0.1164 mm 2116 prepreg. The width scales the
+# PX100 carrier's 0.16 mm on 0.0994 mm 3313 by the ideal-geometry ratio; confirm it in JLC's
+# impedance calculator before routing. The 0.20 mm gap is load-bearing, so the class keeps it.
+#
+# The PX100 (U5) is QFN-40 at 0.4 mm pitch with 0.22 mm lands: 0.18 mm between pads. LNA_IN1 and
+# LNA_IN2 (pins 40/37) are in the RF class, so inside U5's courtyard an RF item may sit 0.15 mm
+# from its neighbours (the rule the carrier uses). Other pairs keep the board's 0.10 mm.
+(rule "PX100 QFN-40 RF pin fan-out"
+	(constraint clearance (min 0.15mm))
+	(condition "A.Type != 'Zone' && B.Type != 'Zone' && (A.NetClass == 'RF' || B.NetClass == 'RF') && A.intersectsCourtyard('U5') && B.intersectsCourtyard('U5')"))
+
+# JLC: NPTH to copper 0.2 mm (non-plated holes are drilled after plating)
+(rule "NPTH to copper, JLC"
+	(constraint hole_clearance (min 0.2mm))
+	(condition "A.Type == 'Pad' && A.Pad_Type == 'NPTH, mechanical'"))

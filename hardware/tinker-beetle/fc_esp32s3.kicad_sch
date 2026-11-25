@@ -2832,7 +2832,7 @@
 		)
 		(uuid "3a4e0060-4dd4-4733-b611-86d657423542")
 	)
-	(text "Strapping Pins:\nGPIO 0  (internal pull up) - boot button SW2\nGPIO 3  (JTAG selection) - carries VBUCK_OK, held at\n        0.78 x V_BUCK by R137/R138\nGPIO 45 (internal pull down) - drives IND_2 (D11, blue)\n        through R71 10 k to GND, so it cannot lift the strap\nGPIO 46 (pull down at boot) - R111 10 k to GND\n\nUART0 is repurposed: GPIO43 drives IND_1 (D10, green) and\nGPIO44 carries FC_ARM. The console is the USB Serial/JTAG\non GPIO19/20.\n"
+	(text "Strapping Pins:\nGPIO 0  (internal pull up) - boot button SW2\nGPIO 3  (JTAG selection) - carries VBUCK_OK, held at\n        0.78 x V_BUCK by R137/R138\nGPIO 45 (internal pull down) - drives IND_2 (D11, blue)\n        through R71 10 k to GND, so it cannot lift the strap\nGPIO 46 (pull down at boot) - R111 10 k to GND\n\nGPIO48 drives IND_1 (D10, green). UART0: GPIO43 (TX) is free,\nGPIO44 carries FC_ARM. The console is the USB Serial/JTAG\non GPIO19/20.\n"
 		(exclude_from_sim no)
 		(at 214.63 123.825 0)
 		(effects
@@ -2929,20 +2929,44 @@
 		(uuid "fe28b8e9-86fc-49fa-9996-5962c84667f0")
 	)
 	(no_connect
+		(at 139.065 125.73)
+		(uuid "110c6745-b764-4b6c-b4d4-11f64abbfb0e")
+	)
+	(no_connect
 		(at 139.065 80.01)
 		(uuid "295aeeb0-3209-474b-a4de-64e7c5448fbb")
+	)
+	(no_connect
+		(at 139.065 115.57)
+		(uuid "4079a423-91a8-4fc9-a000-4854ea7f4b8d")
+	)
+	(no_connect
+		(at 139.065 128.27)
+		(uuid "44d47407-4114-4358-a625-8caaaadfb223")
 	)
 	(no_connect
 		(at 139.065 123.19)
 		(uuid "506db82c-d9f1-4646-b71c-e00c79616008")
 	)
 	(no_connect
-		(at 139.065 110.49)
-		(uuid "9a13f1e3-0da4-408c-9067-531dd3b6614c")
+		(at 139.065 102.87)
+		(uuid "7ebad4d3-029f-49a2-aeae-e2f2b0ae0a04")
+	)
+	(no_connect
+		(at 139.065 118.11)
+		(uuid "99f03595-0b72-49b5-87c2-e10b8b80f8cd")
+	)
+	(no_connect
+		(at 139.065 130.81)
+		(uuid "9fbcfe7e-73bf-4dcf-908f-c9cf4d30e278")
 	)
 	(no_connect
 		(at 139.065 67.31)
 		(uuid "a487edbb-f861-4b88-a5c6-eec3dd0022aa")
+	)
+	(no_connect
+		(at 139.065 120.65)
+		(uuid "b6ff51d8-6b67-4b08-ab5e-beb7dd08499a")
 	)
 	(no_connect
 		(at 139.065 82.55)
@@ -2951,30 +2975,6 @@
 	(no_connect
 		(at 189.865 69.85)
 		(uuid "f6f02b30-5d60-45bd-98ac-91c3d3d778b2")
-	)
-	(no_connect
-		(at 139.065 115.57)
-		(uuid "4079a423-91a8-4fc9-a000-4854ea7f4b8d")
-	)
-	(no_connect
-		(at 139.065 118.11)
-		(uuid "99f03595-0b72-49b5-87c2-e10b8b80f8cd")
-	)
-	(no_connect
-		(at 139.065 120.65)
-		(uuid "b6ff51d8-6b67-4b08-ab5e-beb7dd08499a")
-	)
-	(no_connect
-		(at 139.065 125.73)
-		(uuid "110c6745-b764-4b6c-b4d4-11f64abbfb0e")
-	)
-	(no_connect
-		(at 139.065 128.27)
-		(uuid "44d47407-4114-4358-a625-8caaaadfb223")
-	)
-	(no_connect
-		(at 139.065 130.81)
-		(uuid "9fbcfe7e-73bf-4dcf-908f-c9cf4d30e278")
 	)
 	(wire
 		(pts
@@ -4004,7 +4004,7 @@
 	)
 	(global_label "IND_1"
 		(shape input)
-		(at 139.065 102.87 180)
+		(at 139.065 110.49 180)
 		(fields_autoplaced yes)
 		(effects
 			(font
@@ -4014,7 +4014,7 @@
 		)
 		(uuid "a6708d94-3034-43a0-8d65-928f852099a1")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 127.5527 102.87 180)
+			(at 127.5527 110.49 180)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)

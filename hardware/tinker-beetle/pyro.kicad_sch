@@ -503,7 +503,7 @@
 			)
 			(embedded_fonts no)
 		)
-		(symbol "Custom:TPS1HC08-Q1"
+		(symbol "Custom:TPS2HC16-Q1"
 			(pin_names
 				(offset 1.016)
 			)
@@ -522,7 +522,7 @@
 					)
 				)
 			)
-			(property "Value" "TPS1HC08-Q1"
+			(property "Value" "TPS2HC16-Q1"
 				(at 0 -16.51 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -543,7 +543,7 @@
 					)
 				)
 			)
-			(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps1hc08-q1.pdf"
+			(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps2hc16-q1.pdf"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -554,7 +554,7 @@
 					)
 				)
 			)
-			(property "Description" "Single-channel 8 mOhm smart high-side switch (eFuse), 4-18 V (28 V abs max), adjustable current limit 10-25 A, hot-short breaker, integrated inductive clamp, AEC-Q100, VQFN-HR-11"
+			(property "Description" "Dual-channel 18.7 mOhm smart high-side switch, 3-28 V, adjustable current limit 5-15 A (one ILIM for both channels), hot-short breaker, AEC-Q100, VQFN-HR-11. Pin superset of the TPS1HC08-Q1: 1 VOUT1, 11 VOUT2, 5 SEL, 7 EN1, 8 EN2"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -565,7 +565,7 @@
 					)
 				)
 			)
-			(property "MPN" "TPS1HC08PQVAHRQ1"
+			(property "MPN" "TPS2HC16PQVAHRQ1"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -598,7 +598,7 @@
 					)
 				)
 			)
-			(property "ki_keywords" "high side switch efuse current limit protected TPS1HC08"
+			(property "ki_keywords" "high side switch efuse current limit protected dual TPS2HC16"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -620,7 +620,7 @@
 					)
 				)
 			)
-			(symbol "TPS1HC08-Q1_0_0"
+			(symbol "TPS2HC16-Q1_0_0"
 				(rectangle
 					(start -7.62 5.08)
 					(end 7.62 -10.16)
@@ -635,7 +635,7 @@
 				(pin passive line
 					(at 10.16 0 180)
 					(length 2.54)
-					(name "VOUT"
+					(name "VOUT1"
 						(effects
 							(font
 								(size 1.016 1.016)
@@ -704,11 +704,10 @@
 						)
 					)
 				)
-				(pin no_connect line
+				(pin input line
 					(at 0 -12.7 90)
 					(length 2.54)
-					(hide yes)
-					(name "NC"
+					(name "SEL"
 						(effects
 							(font
 								(size 1.016 1.016)
@@ -744,7 +743,7 @@
 				(pin input line
 					(at 2.54 -12.7 90)
 					(length 2.54)
-					(name "EN"
+					(name "EN1"
 						(effects
 							(font
 								(size 1.016 1.016)
@@ -759,11 +758,10 @@
 						)
 					)
 				)
-				(pin no_connect line
+				(pin input line
 					(at 5.08 -12.7 90)
 					(length 2.54)
-					(hide yes)
-					(name "NC"
+					(name "EN2"
 						(effects
 							(font
 								(size 1.016 1.016)
@@ -817,7 +815,7 @@
 				(pin passive line
 					(at 10.16 2.54 180)
 					(length 2.54)
-					(name "VOUT"
+					(name "VOUT2"
 						(effects
 							(font
 								(size 1.016 1.016)
@@ -2987,6 +2985,10 @@
 		(uuid "294334f3-ddde-4157-8a6b-c8278b922813")
 	)
 	(no_connect
+		(at 74.93 113.665)
+		(uuid "345ef8e1-e8ee-417a-a29d-f0c5f2eaeadc")
+	)
+	(no_connect
 		(at 85.09 165.735)
 		(uuid "39f9367e-0fca-4f80-87c1-25a2102c1ee7")
 	)
@@ -3009,6 +3011,34 @@
 	(no_connect
 		(at 91.44 42.545)
 		(uuid "71d8ecc8-6324-4764-8f2b-b8e7278f0b39")
+	)
+	(no_connect
+		(at 165.735 130.175)
+		(uuid "7628319d-b5e4-4d12-ad4c-b19df29bd8e3")
+	)
+	(no_connect
+		(at 74.93 173.355)
+		(uuid "81c0c4c1-ca6c-460a-866c-bf1d766db791")
+	)
+	(no_connect
+		(at 69.85 173.355)
+		(uuid "8cbf0585-e836-4568-9ca2-79f28bd1ae80")
+	)
+	(no_connect
+		(at 160.655 130.175)
+		(uuid "8e735ae7-4f90-4879-b223-6468d62a0cf7")
+	)
+	(no_connect
+		(at 69.85 113.665)
+		(uuid "af3362d8-b9bd-40b3-a1b1-b41eed22ebb2")
+	)
+	(no_connect
+		(at 81.28 50.165)
+		(uuid "d593ddd7-6e1b-4c8c-87c7-a1321542bffa")
+	)
+	(no_connect
+		(at 76.2 50.165)
+		(uuid "d75a2c44-5901-4f4b-9cb0-f62dfb3522ba")
 	)
 	(no_connect
 		(at 64.77 163.195)
@@ -5582,7 +5612,7 @@
 		)
 	)
 	(symbol
-		(lib_id "Custom:TPS1HC08-Q1")
+		(lib_id "Custom:TPS2HC16-Q1")
 		(at 74.93 100.965 0)
 		(mirror y)
 		(unit 1)
@@ -5603,7 +5633,7 @@
 				)
 			)
 		)
-		(property "Value" "TPS1HC08-Q1"
+		(property "Value" "TPS2HC16-Q1"
 			(at 74.93 94.615 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5625,7 +5655,7 @@
 				)
 			)
 		)
-		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps1hc08-q1.pdf"
+		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps2hc16-q1.pdf"
 			(at 93.345 95.885 0)
 			(hide yes)
 			(show_name no)
@@ -5637,7 +5667,7 @@
 				)
 			)
 		)
-		(property "Description" "Single-channel 8 mOhm smart high-side switch (eFuse), adjustable current limit, VQFN-HR-11"
+		(property "Description" "Dual-channel 18.7 mOhm smart high-side switch, adjustable current limit, VQFN-HR-11; used as one channel (EN2/SEL open, internal pull-downs), VOUT1+VOUT2 tied"
 			(at 100.33 99.06 0)
 			(hide yes)
 			(show_name no)
@@ -5648,7 +5678,7 @@
 				)
 			)
 		)
-		(property "MPN" "TPS1HC08PQVAHRQ1"
+		(property "MPN" "TPS2HC16PQVAHRQ1"
 			(at 100.33 99.06 0)
 			(hide yes)
 			(show_name no)
@@ -6243,7 +6273,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "33.2 k"
+		(property "Value" "24.9 k"
 			(at 81.915 178.435 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6287,7 +6317,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0733K2L"
+		(property "MPN" "RC0402FR-0724K9L"
 			(at 189.23 122.555 0)
 			(hide yes)
 			(show_name no)
@@ -6500,7 +6530,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "33.2 k"
+		(property "Value" "24.9 k"
 			(at 88.265 55.245 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6544,7 +6574,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0733K2L"
+		(property "MPN" "RC0402FR-0724K9L"
 			(at 189.23 122.555 0)
 			(hide yes)
 			(show_name no)
@@ -6582,7 +6612,7 @@
 		)
 	)
 	(symbol
-		(lib_id "Custom:TPS1HC08-Q1")
+		(lib_id "Custom:TPS2HC16-Q1")
 		(at 74.93 160.655 0)
 		(mirror y)
 		(unit 1)
@@ -6603,7 +6633,7 @@
 				)
 			)
 		)
-		(property "Value" "TPS1HC08-Q1"
+		(property "Value" "TPS2HC16-Q1"
 			(at 74.93 154.305 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6625,7 +6655,7 @@
 				)
 			)
 		)
-		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps1hc08-q1.pdf"
+		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps2hc16-q1.pdf"
 			(at 93.345 155.575 0)
 			(hide yes)
 			(show_name no)
@@ -6637,7 +6667,7 @@
 				)
 			)
 		)
-		(property "Description" "Single-channel 8 mOhm smart high-side switch (eFuse), adjustable current limit, VQFN-HR-11"
+		(property "Description" "Dual-channel 18.7 mOhm smart high-side switch, adjustable current limit, VQFN-HR-11; used as one channel (EN2/SEL open, internal pull-downs), VOUT1+VOUT2 tied"
 			(at 100.33 158.75 0)
 			(hide yes)
 			(show_name no)
@@ -6648,7 +6678,7 @@
 				)
 			)
 		)
-		(property "MPN" "TPS1HC08PQVAHRQ1"
+		(property "MPN" "TPS2HC16PQVAHRQ1"
 			(at 100.33 158.75 0)
 			(hide yes)
 			(show_name no)
@@ -7697,7 +7727,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "33.2 k"
+		(property "Value" "24.9 k"
 			(at 81.915 118.745 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -7741,7 +7771,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0733K2L"
+		(property "MPN" "RC0402FR-0724K9L"
 			(at 189.23 122.555 0)
 			(hide yes)
 			(show_name no)
@@ -9250,7 +9280,7 @@
 		)
 	)
 	(symbol
-		(lib_id "Custom:TPS1HC08-Q1")
+		(lib_id "Custom:TPS2HC16-Q1")
 		(at 165.735 117.475 0)
 		(mirror y)
 		(unit 1)
@@ -9271,7 +9301,7 @@
 				)
 			)
 		)
-		(property "Value" "TPS1HC08-Q1"
+		(property "Value" "TPS2HC16-Q1"
 			(at 165.735 111.125 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9293,7 +9323,7 @@
 				)
 			)
 		)
-		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps1hc08-q1.pdf"
+		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps2hc16-q1.pdf"
 			(at 184.15 112.395 0)
 			(hide yes)
 			(show_name no)
@@ -9305,7 +9335,7 @@
 				)
 			)
 		)
-		(property "Description" "Single-channel 8 mOhm smart high-side switch (eFuse), adjustable current limit, VQFN-HR-11"
+		(property "Description" "Dual-channel 18.7 mOhm smart high-side switch, adjustable current limit, VQFN-HR-11; used as one channel (EN2/SEL open, internal pull-downs), VOUT1+VOUT2 tied"
 			(at 191.135 115.57 0)
 			(hide yes)
 			(show_name no)
@@ -9316,7 +9346,7 @@
 				)
 			)
 		)
-		(property "MPN" "TPS1HC08PQVAHRQ1"
+		(property "MPN" "TPS2HC16PQVAHRQ1"
 			(at 191.135 115.57 0)
 			(hide yes)
 			(show_name no)
@@ -10480,7 +10510,7 @@
 		)
 	)
 	(symbol
-		(lib_id "Custom:TPS1HC08-Q1")
+		(lib_id "Custom:TPS2HC16-Q1")
 		(at 81.28 37.465 0)
 		(mirror y)
 		(unit 1)
@@ -10501,7 +10531,7 @@
 				)
 			)
 		)
-		(property "Value" "TPS1HC08-Q1"
+		(property "Value" "TPS2HC16-Q1"
 			(at 81.28 31.115 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10523,7 +10553,7 @@
 				)
 			)
 		)
-		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps1hc08-q1.pdf"
+		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps2hc16-q1.pdf"
 			(at 92.075 32.385 0)
 			(hide yes)
 			(show_name no)
@@ -10535,7 +10565,7 @@
 				)
 			)
 		)
-		(property "Description" "Single-channel 8 mOhm smart high-side switch (eFuse), adjustable current limit, VQFN-HR-11"
+		(property "Description" "Dual-channel 18.7 mOhm smart high-side switch, adjustable current limit, VQFN-HR-11; used as one channel (EN2/SEL open, internal pull-downs), VOUT1+VOUT2 tied"
 			(at 99.06 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -10546,7 +10576,7 @@
 				)
 			)
 		)
-		(property "MPN" "TPS1HC08PQVAHRQ1"
+		(property "MPN" "TPS2HC16PQVAHRQ1"
 			(at 99.06 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -10710,7 +10740,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "33.2 k"
+		(property "Value" "24.9 k"
 			(at 172.72 135.255 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10754,7 +10784,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0733K2L"
+		(property "MPN" "RC0402FR-0724K9L"
 			(at 189.23 122.555 0)
 			(hide yes)
 			(show_name no)

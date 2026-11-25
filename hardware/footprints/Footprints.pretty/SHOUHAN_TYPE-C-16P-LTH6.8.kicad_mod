@@ -37,7 +37,7 @@
 			)
 		)
 	)
-	(property "Description" "SHOU HAN TYPE-C 16P LTH6.8 (LCSC C5187468): vertical USB Type-C receptacle, USB 2.0, 16 contacts, 6.80 mm over the board; 16 SMT pads 0.30 x 0.87 in two rows, four shell legs in plated 0.85 x 0.60 slots (pads S1-S4, pasted for pin-in-paste), two locating posts (round 0.52 and slotted 0.72 x 0.52 NPTH). Land from the maker's recommended layout; the legs are 0.95 mm long and the maker recommends a 0.8 mm board, so on 1.6 mm they reach about 60 % into the slot."
+	(property "Description" "SHOU HAN TYPE-C 16P LTH6.8 (LCSC C5187468): vertical USB Type-C receptacle, USB 2.0, 16 contacts, 6.80 mm over the board; 16 SMT pads 0.30 x 0.87 in two rows, four shell legs in plated 1.20 x 0.60 slots (pads S1-S4, 1.60 x 1.10, pasted for pin-in-paste; 2:1 for JLC's plated-slot rule), two locating posts in round NPTH holes: 0.60 at -x locates, 0.80 at +x takes the 7.50 +/-0.10 post spacing. The maker's drawing (VER A, 07/19/21) has no PCB layout: signal pads and post holes follow LCSC's land for C5187468, the slots are lengthened from its 0.91 x 0.61; the legs are 0.95 mm long and the maker recommends a 0.8 mm board, so on 1.6 mm they reach about 60 % into the slot."
 		(at 0 0 0)
 		(layer "F.Fab")
 		(hide yes)
@@ -256,8 +256,8 @@
 	)
 	(pad "S1" thru_hole oval
 		(at -2.4 -2.15)
-		(size 1.35 1.1)
-		(drill oval 0.85 0.6)
+		(size 1.6 1.1)
+		(drill oval 1.2 0.6)
 		(layers "*.Cu" "*.Mask" "F.Paste")
 		(remove_unused_layers yes)
 		(keep_end_layers yes)
@@ -265,8 +265,8 @@
 	)
 	(pad "S2" thru_hole oval
 		(at 2.4 -2.15)
-		(size 1.35 1.1)
-		(drill oval 0.85 0.6)
+		(size 1.6 1.1)
+		(drill oval 1.2 0.6)
 		(layers "*.Cu" "*.Mask" "F.Paste")
 		(remove_unused_layers yes)
 		(keep_end_layers yes)
@@ -274,8 +274,8 @@
 	)
 	(pad "S3" thru_hole oval
 		(at -2.4 2.15)
-		(size 1.35 1.1)
-		(drill oval 0.85 0.6)
+		(size 1.6 1.1)
+		(drill oval 1.2 0.6)
 		(layers "*.Cu" "*.Mask" "F.Paste")
 		(remove_unused_layers yes)
 		(keep_end_layers yes)
@@ -283,8 +283,8 @@
 	)
 	(pad "S4" thru_hole oval
 		(at 2.4 2.15)
-		(size 1.35 1.1)
-		(drill oval 0.85 0.6)
+		(size 1.6 1.1)
+		(drill oval 1.2 0.6)
 		(layers "*.Cu" "*.Mask" "F.Paste")
 		(remove_unused_layers yes)
 		(keep_end_layers yes)
@@ -292,15 +292,15 @@
 	)
 	(pad "" np_thru_hole circle
 		(at -3.75 0)
-		(size 0.52 0.52)
-		(drill 0.52)
+		(size 0.6 0.6)
+		(drill 0.6)
 		(layers "*.Cu" "*.Mask")
 		(uuid "67bae216-e4e5-40ae-9535-111757e9aa0c")
 	)
-	(pad "" np_thru_hole oval
+	(pad "" np_thru_hole circle
 		(at 3.75 0)
-		(size 0.72 0.52)
-		(drill oval 0.72 0.52)
+		(size 0.8 0.8)
+		(drill 0.8)
 		(layers "*.Cu" "*.Mask")
 		(uuid "68255312-8041-433c-9d23-6097c2a83f1c")
 	)
