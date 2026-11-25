@@ -504,7 +504,7 @@ left GPIO26) carries over verbatim.
 | `MAG_CS` | 1 | V2: the magnetometer (`U3`, now an MMC5983MA) is on the `SENS_*` SPI bus with the IMU and baro, on its own chip select; `R118` (10 k, like `R4`/`R5`) pulls it up to `V_MCU_SWTCH`. On V1.0.x GPIO1/2 were `MAG_SDA`/`MAG_SCL` (I2C to the QMC5883P, pull-ups `R117`/`R118`) — the magnetometer had moved off the OC's power-monitor bus onto ours, where the driver lives |
 | `FC_EN_HOLD` | 17 | self-hold into `D9`. **Deliberately not GPIO3**, and **must stay in GPIO0–21** — the in-flight latch needs the RTC hold (`SOC_RTCIO_PIN_COUNT = 22`); above GPIO21 `gpio_hold_en` still returns `ESP_OK` but degrades to deep-sleep-only |
 | `Net-(U32-GPIO19)` / `Net-(U32-GPIO20)` | 19, 20 | USB-Serial-JTAG, through the `U1` mux — the console and flashing path |
-| `IND_1` / `IND_2` | 43, 45 | LED drives, driven high to light. `IND_1` → `R70` → `D10` **green** on `U0TXD` (red on V1.0.x; weak reset pull-up, ~73 µA — dark, and the green die's higher knee keeps it darker still); `IND_2` → `R71` → `D11` **blue** on the VDD_SPI strap, safe only because a blue die behind 10 k cannot pull it high — keep a high-Vf colour here |
+| `IND_1` / `IND_2` | 48 (V2), 45 | LED drives, driven high to light. `IND_1` → `R70` → `D10` **green**: on V2 from GPIO48 (pad 36, since 2026-11-22; see *V2 moves `IND_1`* below), before that on `U0TXD`, GPIO43 (red on V1.0.x; weak reset pull-up, ~73 µA — dark, and the green die's higher knee keeps it darker still); `IND_2` → `R71` → `D11` **blue** on the VDD_SPI strap, safe only because a blue die behind 10 k cannot pull it high — keep a high-Vf colour here |
 | `VBUCK_OK` | 3 | hold-up status, `R137`/`R138` divider off `V_BUCK`, read as ADC1_CH2 — see the GPIO3 correction above |
 
 
@@ -515,7 +515,8 @@ GPIO43 carries `IND_1` and GPIO44 carries `FC_ARM` — so both UART0 IO_MUX pads
 wanted; day to day the console is USB-Serial-JTAG. GPIO45 is **not** free either (`IND_2`), GPIO46
 carries the strapping network, and **GPIO26 stays unused** for the quad-PSRAM reason argued above.
 *(This paragraph has been wrong twice: it claimed GPIO3/38/43/44 free until 2026-08-30, and
-GPIO43 free until 2026-09-04.)*
+GPIO43 free until 2026-09-04.)* **On V2 it no longer holds:** GPIO47 carries `PPS` and GPIO48
+carries `IND_1`, and GPIO43 is free again; the V2 notes below list what is spare.
 
 **V2 adds GPIO15 and GPIO16** (pads 21, 22, `XTAL_32K_P`/`XTAL_32K_N`): the flight computer's
 32.768 kHz crystal `Y3` and its caps `C110`/`C111` are gone, because the firmware never selected
@@ -525,6 +526,17 @@ re-using either one gives up the option of fitting the crystal again for FC ligh
 **V2 also frees GPIO2** (pad 7): the magnetometer moved from I2C to the sensor SPI bus, so its
 clock pin went and `R117` with it; GPIO1 stayed as its chip select `MAG_CS`. GPIO2 carries a
 no-connect flag, is RTC-capable and is not a strapping pin.
+
+**V2 moves `IND_1` to GPIO48** (pad 36, `SPICLK_N`; schematic and layout 2026-11-22). In the V2
+layout pad 49 (GPIO43) has no via site: pads 47–51 need five and the space around them holds four.
+GPIO2 (pad 7) was tried first and is boxed in as well. Pad 36 is on the side of the chip facing
+`R70`, so the route is 14.4 mm with three vias. GPIO48 resets as an input with no pull and is not
+in the power-up glitch table (datasheet v2.2, Tables 2-1 and 2-2), so `D10` stays dark through
+reset. It is not RTC-capable, which an LED does not need. It sits in the VDD_SPI domain, which is
+3.3 V on this part. **GPIO43 (`U0TXD`, pad 49) is free again** and carries a no-connect flag: the
+flight computer has a hardware UART0 TX pad back (RX, GPIO44, is still `FC_ARM`). V2's spare
+flight-computer pads are now **GPIO2, GPIO15, GPIO16 and GPIO43**. A V2 flight-computer board header
+must put `IND_1` on GPIO48; `board_m1.h` (rev1) keeps GPIO43.
 
 ### Out computer `U15` — on `+3V3`, always on
 
@@ -543,6 +555,52 @@ The single-MCU board spent all four on the GNSS pair, `BMP585_INT` and
 own four. Nothing was designed to recover the out computer's JTAG — it is a side
 effect of the split, and it is worth knowing before someone spends those pads
 again.
+
+### Correction — the 2026-11-21 layout pin move on the out computer (V2)
+
+Routing V2 showed that seven out-computer signals could not leave their pads:
+the hold-up charger (`U47`, `L6`, `L11` and their zones) sits on the back
+directly under `U15`'s GPIO1–14 corner, so there is nowhere to drop a via. They
+moved to pads on the other two sides of the package. Every statement above that
+names one of these pins is historical; the netlist is the authority.
+
+| signal | was | now | pad |
+|---|---|---|---|
+| `FC_EN_OC` | GPIO7 | **GPIO48** (SPICLK_N) | 36 |
+| `L_CS` | GPIO13 | **GPIO47** (SPICLK_P) | 37 |
+| `ESP_I2S_FSYNC` | GPIO4 | **GPIO34** | 39 |
+| `ESP_I2S_WS` | GPIO1 | **GPIO39** (MTCK) | 44 |
+| `ESP_I2S_BCLK` | GPIO2 | **GPIO40** (MTDO) | 45 |
+| `L_BUSY` | GPIO14 | **GPIO41** (MTDI) | 47 |
+| `L_RXEN` | GPIO10 | **GPIO42** (MTMS) | 48 |
+
+Checked against the ESP32-S3 datasheet v2.2 (Tables 2-1, 2-2 and 3-1) on
+2026-11-21, after the move. None of the seven new pads is a strapping pad and
+none is in the power-up glitch table, so `FC_EN_OC` and `L_RXEN` still cannot
+assert before firmware runs; the pads they left (GPIO7, GPIO10) are in that
+table. GPIO47 and GPIO48 are input-enabled with no pull at and after reset;
+GPIO34, 40, 41 and 42 are input-enabled after reset with no pull. GPIO43, 44
+and 45 were left alone for the reasons already given.
+
+**One of the seven does carry a reset pull: GPIO39 (MTCK).** The chip turns on
+its weak pull-up (45 kΩ typical) after reset unless `EFUSE_DIS_PAD_JTAG` is
+burnt, and it is not (Table 2-1, note 7). This section said until that check
+that none of the seven had one. The pad carries `ESP_I2S_WS`, an input the
+flight computer drives, so the cost is about 60 µA into the unpowered flight
+computer's pad during pad standby, until firmware turns the pull off; the V2
+out-computer header does that at boot. **Do not put `FC_EN_OC` or `L_RXEN` on
+GPIO39 in a later move:** against their 100 k pull-downs (`R84`, `R142`) that
+pull-up reads high, which starts the switched rail or asserts the receive
+enable at every reset.
+
+**Consequences.** The out computer's pad JTAG is spent again (GPIO39–42); the
+link pins no longer equal `rocket-computer`'s numbers, so the out-computer board
+header needs these seven constants (`ESP_I2S_SD`=3, `ESP_SDA`=5, `ESP_SCL`=6 are
+unchanged); none of the new pads is an RTC pad. A V2 header with them
+(`board_m2.h`, build flag `TR_BOARD_M2`) is on the local firmware branch
+`oc/beetle-v2-pin-map` since 2026-11-21, not merged. **Spare on the out computer
+now: GPIO1, 2, 4, 7, 9, 10, 12, 13, 14** — bare, and not reachable in this
+layout — **and GPIO43, 44, 45.** The no-connect flags came off pads 36 and 37.
 
 ### Why these numbers
 

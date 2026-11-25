@@ -1,0 +1,135 @@
+(footprint "PogoPads_1x03_P2.54mm_D1.8mm"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(layer "F.Cu")
+	(descr "Three pogo-pin landing pads in a row, 2.54 mm apart, 1.8 mm across, copper and mask opening only (no paste, no part). Pad 1 is the squared one.")
+	(tags "pogo pin landing pad test point UART")
+	(property "Reference" "REF**"
+		(at 0 -1.9 0)
+		(layer "F.SilkS")
+		(hide yes)
+		(uuid "2e268153-9701-5138-b07b-91efd1075f5f")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "PogoPads_1x03_P2.54mm_D1.8mm"
+		(at 0 1.9 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "6c6eb039-7851-5bd5-b1fb-fedfb56aa250")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "b6a78f1f-d33c-5941-ab2c-01e90ff83eb2")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "db458286-f591-56b2-9796-037415c15c4a")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr exclude_from_pos_files exclude_from_bom)
+	(duplicate_pad_numbers_are_jumpers no)
+	(fp_rect
+		(start -3.69 -1.15)
+		(end 3.69 1.15)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(fill no)
+		(layer "F.CrtYd")
+		(uuid "22e744ce-d961-59ff-82d3-67f1fede1351")
+	)
+	(fp_rect
+		(start -3.44 -0.9)
+		(end 3.44 0.9)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(fill no)
+		(layer "F.Fab")
+		(uuid "80d47e5c-fdd1-5c9c-9bcd-281cb013f273")
+	)
+	(fp_text user "1"
+		(at -2.54 0 0)
+		(layer "F.Fab")
+		(uuid "dd1b4dd4-5fea-5a7b-9941-a6fc2f713179")
+		(effects
+			(font
+				(size 0.5 0.5)
+				(thickness 0.08)
+			)
+		)
+	)
+	(fp_text user "2"
+		(at 0 0 0)
+		(layer "F.Fab")
+		(uuid "af2f4d67-51c3-57f8-b58c-b480cbc003f5")
+		(effects
+			(font
+				(size 0.5 0.5)
+				(thickness 0.08)
+			)
+		)
+	)
+	(fp_text user "3"
+		(at 2.54 0 0)
+		(layer "F.Fab")
+		(uuid "a35446d6-909c-5441-9839-aa77a87e875b")
+		(effects
+			(font
+				(size 0.5 0.5)
+				(thickness 0.08)
+			)
+		)
+	)
+	(pad "1" smd roundrect
+		(at -2.54 0)
+		(size 1.8 1.8)
+		(layers "F.Cu" "F.Mask")
+		(roundrect_rratio 0.15)
+		(uuid "08b6a6a1-6dcf-51e9-be8f-5fa83e1a3061")
+	)
+	(pad "2" smd circle
+		(at 0 0)
+		(size 1.8 1.8)
+		(layers "F.Cu" "F.Mask")
+		(uuid "290db0ed-cabd-5414-ae1d-5a8737bf70bf")
+	)
+	(pad "3" smd circle
+		(at 2.54 0)
+		(size 1.8 1.8)
+		(layers "F.Cu" "F.Mask")
+		(uuid "df223a04-63b7-50a7-abfe-12056600eafa")
+	)
+	(embedded_fonts no)
+)

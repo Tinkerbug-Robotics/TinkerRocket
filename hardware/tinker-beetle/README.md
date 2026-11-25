@@ -94,6 +94,62 @@ the antenna-side tuning slot. Molex's reference is a 100 x 40 mm two-layer
 board with the antenna at a corner, so check the match with a VNA on the first
 article.
 
+**V2 replaces the LC86G with the PX100 receiver and its own L1/L5 front end**
+(2026-11-16), on a new sheet, [`gnss.kicad_sch`](gnss.kicad_sch) ("GNSS"). `U5` is
+now SkyTraq's PX100-5C-01A, and the RF page of the PX100 carrier
+([`../gnss-px100-18mm-hv/`](../gnss-px100-18mm-hv/), V2) comes across nearly
+whole: a Taoglas GVLB258.A passive stacked patch (`AE1`, 25 x 25 x 8.12 mm, wider
+than the 22.55 mm board) -> ESD clamp `D5` -> `C7` (the series part of a pi match;
+its shunt positions `C157` at the patch pin and `C158` on the diplexer side were
+added 2026-11-20 and stay unfitted until the patch is tuned on this board) -> the
+Bourns FDP2009N122157H4 diplexer (`FL1`) -> one LNA per band (`U12` AT2659S on L1; `U13` on L5, since
+2026-11-20 a Zhongkewei ATR2652S on the same SOT-23-6 footprint with pin 5, its enable, on `V_LNA`,
+behind a 915 MHz trap, `L14` + `C159` to ground with `C160` across, for the board's own LoRa
+transmitter, which the diplexer's low-band port passes) -> the band SAWs (`FL2` B39162B9621P810, `FL3` TA2471A) -> SkyTraq's L-matches ->
+the PX100, with its 26 MHz TCXO (`Y3`), 32.768 kHz crystal (`Y5`), DC/DC parts
+and decoupling, under a one-piece Laird BMI-S-102 shield (`SH1`; since 2026-11-20 it replaces the two-piece
+BMI-S-202-F frame and cover on the same land pattern, so it no longer opens).
+Left off from the carrier: its supply (LDO, header, ferrites; the receiver runs
+from `V_MCU_SWTCH`, as the LC86G did), the antenna-bias network and jumper (the
+patch is passive, so ANT_BIAS, pin 9, is open), the active-antenna bypass
+resistors, its PPS LED (`R66`/`D7` stay on `PPS`), and every test pad but
+`TP1` (RSTN) and `TP2` (BOOT_SEL), which are kept for reflashing the receiver.
+`J9` (2026-11-20) is three pogo landing pads 2.54 mm apart, pad 1 squared: GND, the PX100's TXD and its RXD, so a
+USB-UART bridge can reach the receiver with the shield on. The flight computer (`U32` GPIO40) drives RXD too,
+so since 2026-11-21 it does so through `R149` (1 k): a bridge on pad 3 wins with the flight computer running,
+at 3.3 mA from the bridge while the two disagree. `GNSS_RX` now ends at `R149`; the receiver's side of it is the
+sheet-local net `RXD1` (PX100 pin 18, the pull-up `R20` and pad 3), so on the board `R149` goes between `U32`
+and the pad.
+The LC86G's 100 nF and 10 nF (`C38`, `C39`) went with it; `C37` (22 uF) stays
+as the rail's bulk. `GNSS_RX`, `GNSS_TX`, `PPS` and their flight-computer pins
+are unchanged. The unwired PX1105R (`U12`) and GVLB208.A (`AE1`) placeholders
+are gone too, and their designators now name the new parts. On the board the
+59 new footprints are parked right of the outline for placement; the old
+GNSS_RX/GNSS_TX vias and track ends where the LC86G sat are left for the
+reroute. An `RF` net class (0.18 mm on a 0.20 mm gap: 50 ohm coplanar over In1,
+scaled from the carrier's 0.16 mm; confirm in JLC's calculator) covers the RF
+nets, with the carrier's 0.15 mm fan-out allowance inside `U5`'s courtyard
+([`tinker-beetle.kicad_dru`](tinker-beetle.kicad_dru)). Taoglas tunes the
+GVLB258.A on a 70 x 70 mm ground plane, so check it on the rig. Not yet updated
+for the swap: `power-budget.md` (LC86G figures), the fab notes, `bom.csv`, and
+the M1 firmware, which drives the LC86G; the PX100 talks SkyTraq binary, like
+the PX1105R.
+
+**V2 takes the Tinker-Mantis's supercap, still lying down** (2026-11-16, owner
+call). `C130` is now the CDA (Zhifengwei) CXHP2R7205R-TW, 2.0 F, 2.7 V, 8 x 12 mm
+(up to 9 x 13.5) on a 3.5 mm pitch, in place of V1's Eaton HV1020-2R7505-R
+(5 F, 10 x 20 mm). The Mantis stands it; here it lies on its side, on the new
+footprint `Supercap_Radial_D8.0mm_L12.0mm_P3.50mm_Horizontal` (leg-only
+courtyard, like the 10 mm one, but with the lead bend mirrored: the can lies on
+the +X side of the pads). On the board it points up the board as V1's did,
+with its + leg (`V_SCAP`) on the right, nearer `U47`; turning the 10 mm
+footprint round would have put + on the left. As placed it lies over the GNSS
+shield (`SH1`), which is also on the back. The charge settings are the Mantis's
+already (`R135` 6.65 k, `R136` 22.1 k), so only the hold time changes: about
+8.5 s at 190 mA and 5 s at 300 mA, against 21 s and 13.6 s, and it charges in
+about 50 s instead of two minutes. The cell's 280 mOhm DC resistance (the HV1020
+is about 40) trims the high-current end.
+
 ### The flight computer starts off, and holds itself on
 
 This is `rocket-computer`'s arrangement, reproduced part for part, except that
@@ -102,7 +158,7 @@ dual `BAV170M`. The BAV170M is out of stock at LCSC and discontinued at DigiKey,
 and the BAT54XV2T1G is already on the board as the pyro continuity clamp:
 
 ```
-FC_EN_OC   (OC GPIO7) ──>|─┐  D12
+FC_EN_OC  (OC GPIO48) ──>|─┐  D12
                           ├── POWER_SWITCH ──> U30 EN/UVLO ──> V_MCU_SWTCH
 FC_EN_HOLD (FC GPIO17) ─>|─┘  D9      │  │
                    BAT54XV2T1G x2     │  └── C105 10 uF   (rides out a drop-out)
@@ -265,10 +321,10 @@ Six wires, the same net names and the same protocols as `rocket-computer`:
 
 | Net | OC pin | FC pin | Role |
 |---|---|---|---|
-| `ESP_I2S_BCLK` | GPIO2 | GPIO21 | I2S bit clock |
-| `ESP_I2S_WS` | GPIO1 | GPIO18 | I2S word select |
+| `ESP_I2S_BCLK` | GPIO40 | GPIO21 | I2S bit clock |
+| `ESP_I2S_WS` | GPIO39 | GPIO18 | I2S word select |
 | `ESP_I2S_SD` | GPIO3 | GPIO13 | I2S data, FC → OC |
-| `ESP_I2S_FSYNC` | GPIO4 | GPIO14 | frame sync — a plain GPIO, not an I2S signal |
+| `ESP_I2S_FSYNC` | GPIO34 | GPIO14 | frame sync — a plain GPIO, not an I2S signal |
 | `ESP_SCL` | GPIO6 | GPIO37 | I2C clock |
 | `ESP_SDA` | GPIO5 | GPIO36 | I2C data |
 
@@ -594,6 +650,25 @@ The next spin's checklist is the *Still open* list in `FABRICATION-NOTES.md`;
 the bench items the review collected are on #993 and
 [#1211](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/1211).
 
+### Mounting holes (V2)
+
+The V2 board is **26.83 × 70.35 mm** (Edge.Cuts centerline, 1 mm corner
+radii). Its four M2 holes (2.2 mm plated, with
+3.8 mm DIN 965 pads front and back) form a rectangle **22.03 mm across and
+48.77 mm down** (48.79 on the left, 48.76 on the right; squared 2026-11-25):
+
+| Hole | x (mm) | y (mm) |
+|---|---|---|
+| `H1` | 72.78 | 104.16 |
+| `H3` | 94.81 | 104.16 |
+| `H2` | 72.78 | 152.95 |
+| `H4` | 94.81 | 152.92 |
+
+The pads are deliberately on no net. Anything on the board that shorts to a
+screw or a ring then touches nothing, where a grounded ring would short it to
+`GND`. V1's reflow carrier, sleds and nose-cone plate (V1 was 22.55 × 69.62 mm)
+do not fit V2.
+
 ### Open items
 
 Each of these is a decision left open rather than an oversight:
@@ -614,13 +689,17 @@ Each of these is a decision left open rather than an oversight:
   `CEN_D+`; it was not copied, on the grounds that the out computer has never
   had one either. Symmetry, not a defect — but it is an asymmetry with the
   reference design.
-- **The out computer keeps twelve spare pads and the flight computer two.**
-  The flight computer's are GPIO47/GPIO48; the 2026-09-03 pin swap spent the
-  rest (`pin-budget.md`, *The split*). Ten of the out computer's (GPIO9, 12, 34,
-  39–45) are left bare rather than no-connect-flagged, so ERC reports each one —
-  flagging them would assert they are permanently unused, which is not the
-  intent. GPIO47/GPIO48 on both processors carry no-connect flags since the
-  2026-09-11 ERC pass, as octal-SPI pads that will never be general-purpose here.
+- **The out computer keeps twelve spare pads and the flight computer four.**
+  The flight computer's are GPIO2, GPIO15, GPIO16 and GPIO43 on V2. GPIO47
+  carries `PPS`, and GPIO48 has carried `IND_1` since 2026-11-22, when pad 49
+  (GPIO43) turned out to have no via site in the layout (`pin-budget.md`, *V2
+  moves `IND_1`*). Since the 2026-11-21 layout pin move the
+  out computer's are GPIO1, 2, 4, 7, 9, 10, 12, 13, 14 and GPIO43–45, all left
+  bare rather than no-connect-flagged, so ERC reports each one — flagging them
+  would assert they are permanently unused, which is not the intent. (The first
+  nine cannot be reached in this layout: the hold-up charger sits on the back
+  under them.) The flight computer's four spares carry no-connect flags. On the
+  out computer GPIO47/GPIO48 carry `L_CS` and `FC_EN_OC`.
 - **Both processors' spare `GPIO26`** is the quad-PSRAM chip select on this part
   and remains unusable on each — see `pin-budget.md`.
 - **Fifteen out-computer signals cross into the switched rail** — the six link

@@ -85,6 +85,11 @@ spare pads left on the flight computer are GPIO47 and GPIO48, which are bare. Th
 GPIO33 and GPIO35, which older tables give for it, are `PYRO4_FIRE` and
 `PYRO2_FIRE` now.
 
+**V2 (2026-11-22): `IND_1` is on FC GPIO48** (pad 36), not GPIO43, because pad 49 has no via site in
+the V2 layout. A V2 flight-computer header must use GPIO48 for `IND_1`. GPIO43 (`U0TXD`) is free
+again, and so are GPIO2, GPIO15 and GPIO16. `board_m1.h` (rev1) is unchanged. See `pin-budget.md`,
+*V2 moves `IND_1`*.
+
 `board_m1.h` in both projects carries all three (netlist-verified 2026-09-04);
 re-run the netlist parity sweep (`kicad-cli` GPIO→net table vs the header — see
 the board-header parity procedure) after any pin change, because nothing in CI
