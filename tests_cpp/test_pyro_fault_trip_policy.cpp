@@ -10,7 +10,10 @@
 //     pack still reads over the limit; a dead INA230 never holds it low;
 //   - while consent is up SOL owns the INA230's alert pin; #1409's function
 //     only gets it while consent is down;
-//   - a config that can put 3+ channels in Firing at once is flagged.
+//   - a config that can put 3+ channels in Firing at once is flagged;
+//   - after a stuck reading's release the poll leaves the pin alone, so consent
+//     is not chopped at the loop rate (#1757). OcPin below drives the pin the
+//     way main.cpp's poll task, loop_oc and the INA_ALERT ISR do.
 
 #include <gtest/gtest.h>
 
@@ -245,6 +248,316 @@ TEST(PyroFaultTripRearm, TripCountSaturates) {
     s.trips = 0xFFFF;
     onOverLimit(s, 0, 32767, kFlight, Source::Poll);
     EXPECT_EQ(s.trips, 0xFFFFu);
+}
+
+// ---------------------------------------------------------------------------
+// The poll's side of the pin (#1757)
+// ---------------------------------------------------------------------------
+
+namespace {
+// A trip released at kMaxHoldMs on a reading still over the limit.
+State releasedImplausible()
+{
+    State s;
+    onOverLimit(s, 0, 32767, kFlight, Source::Poll);
+    stillHolding(s, kMaxHoldMs, reading(41.0f));
+    return s;
+}
+}  // namespace
+
+TEST(PyroFaultTripPoll, AnOverLimitReadingTripsAndDropsThePin) {
+    State s; Reading latest; bool edge = false;
+    const OverLimit r = pollShunt(s, latest, edge, true, amps(41.0f), 1000, kFlight);
+    EXPECT_TRUE(r.started);
+    EXPECT_TRUE(r.drop_pin);
+    EXPECT_TRUE(s.holding);
+    EXPECT_EQ(s.last.source, (uint8_t)Source::Poll);
+}
+
+TEST(PyroFaultTripPoll, WhileATripHoldsThePinStaysDropped) {
+    State s; Reading latest; bool edge = false;
+    pollShunt(s, latest, edge, true, 32767, 1000, kFlight);
+    const OverLimit r = pollShunt(s, latest, edge, true, 32767, 1001, kFlight);
+    EXPECT_FALSE(r.started) << "one trip";
+    EXPECT_TRUE(r.drop_pin);
+}
+
+TEST(PyroFaultTripPoll, AnImplausibleReadingLeavesThePinAlone) {
+    State s = releasedImplausible();
+    ASSERT_TRUE(s.implausible);
+    ASSERT_FALSE(s.holding);
+    Reading latest; bool edge = false;
+    const OverLimit r = pollShunt(s, latest, edge, true, 32767, kMaxHoldMs + 1, kFlight);
+    EXPECT_FALSE(r.started);
+    EXPECT_FALSE(r.drop_pin) << "nothing holds the pin, so dropping it only chops consent";
+    EXPECT_FALSE(s.holding);
+    EXPECT_EQ(s.trips, 1u);
+}
+
+TEST(PyroFaultTripPoll, OverLimitSeenDropsExactlyWhileATripHolds) {
+    // Every state the poll or an edge can meet: the pin drops iff a trip holds after it.
+    for (int implausible = 0; implausible < 2; ++implausible)
+        for (int holding = 0; holding < 2; ++holding)
+            for (Source src : {Source::Poll, Source::Alert})
+            {
+                State s;
+                s.implausible = implausible != 0;
+                if (holding) { s.holding = true; s.current.at_ms = 0; }
+                const OverLimit r = overLimitSeen(s, 10, 32767, kFlight, src);
+                EXPECT_EQ(r.drop_pin, s.holding);
+                EXPECT_EQ(r.drop_pin, holding || !(implausible && src == Source::Poll))
+                    << "implausible=" << implausible << " holding=" << holding
+                    << " src=" << (int)src;
+                EXPECT_EQ(r.started, !holding && !(implausible && src == Source::Poll));
+            }
+}
+
+TEST(PyroFaultTripPoll, AnAlertEdgeTripsEvenOnAnImplausibleReading) {
+    State s = releasedImplausible();
+    Reading latest; bool edge = true;
+    const OverLimit r = pollShunt(s, latest, edge, true, 32767, kMaxHoldMs + 5, kFlight);
+    EXPECT_FALSE(edge) << "the edge is consumed";
+    EXPECT_TRUE(r.started);
+    EXPECT_TRUE(r.drop_pin);
+    EXPECT_EQ(s.current.source, (uint8_t)Source::Alert);
+    EXPECT_EQ(s.trips, 2u);
+}
+
+TEST(PyroFaultTripPoll, AnAlertEdgeRecordsAtLeastTheLimit) {
+    State s; Reading latest; bool edge = true;
+    const OverLimit r = pollShunt(s, latest, edge, true, amps(8.0f), 1000, kFlight);
+    EXPECT_TRUE(r.started);
+    EXPECT_TRUE(r.drop_pin);
+    EXPECT_EQ(s.current.peak_counts, kTripLimitCounts);
+    EXPECT_FALSE(s.implausible);
+}
+
+TEST(PyroFaultTripPoll, AFailedReadTripsNothingAndIsStoredAsMissing) {
+    State s; Reading latest; bool edge = false;
+    const OverLimit r = pollShunt(s, latest, edge, false, 32767, 1000, kFlight);
+    EXPECT_FALSE(r.started);
+    EXPECT_FALSE(r.drop_pin);
+    EXPECT_FALSE(latest.valid);
+    EXPECT_EQ(latest.counts, 0);
+}
+
+TEST(PyroFaultTripPoll, TheReadingIsStoredForTheReArm) {
+    State s; Reading latest; bool edge = false;
+    pollShunt(s, latest, edge, true, amps(3.0f), 1000, kFlight);
+    EXPECT_TRUE(latest.valid);
+    EXPECT_EQ(latest.counts, amps(3.0f));
+}
+
+TEST(PyroFaultTripPoll, AReadingUnderTheLimitMakesThePollTripAgain) {
+    State s = releasedImplausible();
+    Reading latest; bool edge = false;
+    pollShunt(s, latest, edge, true, amps(2.0f), kMaxHoldMs + 1, kFlight);
+    EXPECT_FALSE(s.implausible);
+    const OverLimit r = pollShunt(s, latest, edge, true, 32767, kMaxHoldMs + 2, kFlight);
+    EXPECT_TRUE(r.started);
+    EXPECT_TRUE(r.drop_pin);
+}
+
+// ---------------------------------------------------------------------------
+// The pin through main.cpp's tasks (#1757)
+// ---------------------------------------------------------------------------
+//
+// main.cpp's three writers of OC_ARM_EN, in its order: the poll task every
+// 1 ms tick (pollShunt, then pyroFaultApplyLocked's drop), loop_oc every pass
+// (servicePyroFaultTrip's stillHolding, then armConsentApplyPin's pinHigh),
+// and on the V10 board the INA_ALERT ISR (pin low, then the edge flag).
+
+namespace {
+struct OcPin
+{
+    State   s;
+    Reading latest;
+    bool    edge  = false;
+    bool    level = false;
+    int     drops = 0, raises = 0;
+    bool    old_wiring = false;   // main.cpp before #1757: the poll dropped the pin first
+
+    void drop()
+    {
+        if (level) { level = false; drops++; }
+    }
+    void poll(bool ok, int16_t raw, uint32_t now)
+    {
+        if (old_wiring)
+        {
+            latest.valid  = ok;
+            latest.counts = ok ? raw : 0;
+            if (edge)
+            {
+                edge = false;
+                drop();
+                onOverLimit(s, now, (ok && raw > kTripLimitCounts) ? raw : kTripLimitCounts,
+                            kFlight, Source::Alert);
+            }
+            if (ok && overLimit(raw)) { drop(); onOverLimit(s, now, raw, kFlight, Source::Poll); }
+            else if (ok) { notePeak(s, raw); noteUnderLimit(s); }
+            return;
+        }
+        const OverLimit r = pollShunt(s, latest, edge, ok, raw, now, kFlight);
+        if (r.drop_pin) drop();
+    }
+    void loopPass(bool wanted, uint32_t now)
+    {
+        if (s.holding) stillHolding(s, now, latest);
+        const bool high = pinHigh(wanted, s.holding || edge);
+        if (high != level)
+        {
+            level = high;
+            if (high) raises++; else drops++;
+        }
+    }
+    void alertEdge()
+    {
+        drop();
+        edge = true;
+    }
+};
+
+// What the pin did over a run.
+struct PinRun
+{
+    int      drops_after_release  = 0;   // pin drops once the first trip let go
+    int      low_ms_after_release = 0;   // ticks the pin sat low after that
+    int      high_ms_while_held   = 0;   // ticks the pin sat high while a trip held
+    uint32_t released_at          = 0;   // first release; 0 = never
+};
+
+// 1 ms ticks from 0 to end_ms with consent wanted throughout. `counts(t)`
+// is the INA230's reading at t (INT16_MIN: the read fails); `edges` are the
+// ticks an INA_ALERT edge lands on. The loop runs every loop_ms, at `phase`
+// in it, before or after the poll on a shared tick.
+template <class Counts>
+PinRun drive(OcPin& oc, uint32_t end_ms, uint32_t loop_ms, uint32_t phase, bool loop_first,
+        Counts counts, std::initializer_list<uint32_t> edges = {})
+{
+    PinRun out;
+    for (uint32_t t = 0; t <= end_ms; ++t)
+    {
+        for (uint32_t e : edges)
+            if (e == t) oc.alertEdge();
+        const int32_t c   = counts(t);
+        const bool    ok  = c != INT16_MIN;
+        const bool    due = t % loop_ms == phase;
+        const bool    was_holding = oc.s.holding;
+        const int     drops_before = oc.drops;
+        if (due && loop_first) oc.loopPass(true, t);
+        oc.poll(ok, ok ? (int16_t)c : 0, t);
+        if (due && !loop_first) oc.loopPass(true, t);
+        if (was_holding && !oc.s.holding && out.released_at == 0) out.released_at = t;
+        if (out.released_at != 0 && t > out.released_at)
+        {
+            out.drops_after_release += oc.drops - drops_before;
+            // a loop pass due on the release tick may come before it: give it one period
+            if (!oc.level && t > out.released_at + loop_ms) out.low_ms_after_release++;
+        }
+        if (oc.s.holding && oc.level) out.high_ms_while_held++;
+    }
+    return out;
+}
+}  // namespace
+
+TEST(PyroFaultTripPin, AStuckReadingNoLongerChopsConsent) {
+    // A failed INA230 or an open sense joint reads 41 A from t = 1 s on, and
+    // keeps reading it. One trip, held to kMaxHoldMs, then consent stays up.
+    for (uint32_t loop_ms : {1u, 2u, 5u, 10u})
+        for (uint32_t phase = 0; phase < loop_ms; ++phase)
+            for (bool loop_first : {true, false})
+            {
+                OcPin oc;
+                const PinRun r = drive(oc, 4000, loop_ms, phase, loop_first,
+                                  [](uint32_t t) { return t >= 1000 ? 32767 : amps(0.5f); });
+                SCOPED_TRACE(::testing::Message() << "loop " << loop_ms << " ms, phase " << phase
+                                                  << (loop_first ? ", loop first" : ", poll first"));
+                EXPECT_EQ(oc.s.trips, 1u);
+                EXPECT_TRUE(oc.s.implausible);
+                EXPECT_GE(r.released_at, 1000u + kMaxHoldMs);
+                EXPECT_LT(r.released_at, 1000u + kMaxHoldMs + loop_ms);
+                EXPECT_EQ(r.high_ms_while_held, 0) << "the trip held the pin low";
+                EXPECT_EQ(r.drops_after_release, 0) << "consent chopped after the release";
+                EXPECT_EQ(r.low_ms_after_release, 0);
+                EXPECT_EQ(oc.drops, 1);
+                EXPECT_EQ(oc.raises, 2) << "up at boot, and back up at the release";
+                EXPECT_TRUE(oc.level);
+            }
+}
+
+TEST(PyroFaultTripPin, BeforeThisFixTheStuckReadingChoppedConsent) {
+    // The model reproduces #1757 with main.cpp's old order: drop, then ask.
+    OcPin oc;
+    oc.old_wiring = true;
+    const PinRun r = drive(oc, 4000, 1, 0, true,
+                      [](uint32_t t) { return t >= 1000 ? 32767 : amps(0.5f); });
+    EXPECT_EQ(oc.s.trips, 1u);
+    EXPECT_GT(r.drops_after_release, 2000) << "one drop per poll from the release on";
+}
+
+TEST(PyroFaultTripPin, ARealShortStillTripsHoldsAndReArms) {
+    // The drogue's harness shorts for its 150 ms of pulse left, then the main's
+    // fires clean at t = 3 s, then the main's harness shorts at t = 5 s.
+    for (uint32_t loop_ms : {1u, 5u})
+        for (bool loop_first : {true, false})
+        {
+            OcPin oc;
+            const PinRun r = drive(oc, 6000, loop_ms, 0, loop_first, [](uint32_t t) -> int32_t {
+                if (t >= 1000 && t < 1150) return 32767;
+                if (t >= 3000 && t < 3200) return amps(8.0f);
+                if (t >= 5000 && t < 5100) return 32767;
+                return amps(0.5f);
+            });
+            SCOPED_TRACE(::testing::Message() << "loop " << loop_ms << " ms"
+                                              << (loop_first ? ", loop first" : ", poll first"));
+            EXPECT_EQ(oc.s.trips, 2u);
+            EXPECT_FALSE(oc.s.implausible);
+            EXPECT_GE(r.released_at, 1000u + kHoldOffMs);
+            EXPECT_LT(r.released_at, 1000u + kHoldOffMs + loop_ms);
+            EXPECT_EQ(r.high_ms_while_held, 0);
+            EXPECT_EQ(oc.drops, 2) << "one per short";
+            EXPECT_TRUE(oc.level);
+        }
+}
+
+TEST(PyroFaultTripPin, AStuckReadingThatClearsThenOverAgainTripsAgain) {
+    // Stuck for 2 s, under the limit for 50 ms, then over again: the poll trusts
+    // the measurement again and trips once more, then lets go at kMaxHoldMs.
+    OcPin oc;
+    drive(oc, 6000, 2, 1, true, [](uint32_t t) -> int32_t {
+        if (t >= 1000 && t < 3000) return 32767;
+        if (t >= 3000 && t < 3050) return amps(1.0f);
+        if (t >= 3050) return 32767;
+        return amps(0.5f);
+    });
+    EXPECT_EQ(oc.s.trips, 2u);
+    EXPECT_EQ(oc.drops, 2);
+    EXPECT_TRUE(oc.level);
+}
+
+TEST(PyroFaultTripPin, OnTheV10AnAlertEdgeOnAStuckReadingHoldsThenLetsGo) {
+    // The INA230's alert is transparent: a reading that stays over the limit
+    // keeps ALERT low and makes one edge. A later edge (a conversion under the
+    // limit the poll never saw, then over again) trips again.
+    OcPin oc;
+    const PinRun r = drive(oc, 5000, 1, 0, true,
+                      [](uint32_t t) { return t >= 1000 ? 32767 : amps(0.5f); },
+                      {1000u, 3000u});
+    EXPECT_EQ(oc.s.trips, 2u);
+    EXPECT_EQ(oc.s.last.source, (uint8_t)Source::Alert);
+    EXPECT_EQ(r.high_ms_while_held, 0);
+    EXPECT_GE(r.released_at, 1000u + kMaxHoldMs);
+    EXPECT_EQ(oc.drops, 2) << "one per edge, none from the poll";
+    EXPECT_TRUE(oc.level) << "the second trip let go at kMaxHoldMs too";
+}
+
+TEST(PyroFaultTripPin, AFailedInaNeverTouchesThePin) {
+    OcPin oc;
+    drive(oc, 3000, 1, 0, false, [](uint32_t) { return (int32_t)INT16_MIN; });
+    EXPECT_EQ(oc.drops, 0);
+    EXPECT_EQ(oc.s.trips, 0u);
+    EXPECT_TRUE(oc.level);
 }
 
 // ---------------------------------------------------------------------------

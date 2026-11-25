@@ -37,6 +37,13 @@ on:
       # config.h-only change, which would not have triggered this workflow.
       - 'tinkerrocket-idf/projects/flight_computer/main/config.h'
       - 'tinkerrocket-idf/projects/flight_computer/main/board/**'
+      # The wiring tests (test_*_wiring.py, test_inertial_vertical_launch,
+      # test_sdr_rawnav_image, test_raw_bench_switches) read the FC's and OC's
+      # main.cpp, policy headers and CMakeLists.txt, and the partition-table
+      # tests read the tables. No host build compiles main.cpp, so a change
+      # there alone ran none of them (#1757).
+      - 'tinkerrocket-idf/projects/flight_computer/**'
+      - 'tinkerrocket-idf/projects/out_computer/**'
       - '.github/workflows/unit-tests.yml'
   pull_request:
     paths:
@@ -55,6 +62,8 @@ on:
       - 'tinkerrocket-idf/projects/flight_computer/main/loop_profile.h'
       - 'tinkerrocket-idf/projects/flight_computer/main/config.h'
       - 'tinkerrocket-idf/projects/flight_computer/main/board/**'
+      - 'tinkerrocket-idf/projects/flight_computer/**'
+      - 'tinkerrocket-idf/projects/out_computer/**'
       - '.github/workflows/unit-tests.yml'
 
 jobs:
