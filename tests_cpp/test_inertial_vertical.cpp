@@ -156,6 +156,48 @@ TEST(InertialVertical, LevelsOnThePad)
     EXPECT_NEAR(iv.gravity(), kG, 1e-3f);
 }
 
+TEST(InertialVertical, UpOf_IsTheUpComponentOfAnyBodyVector)
+{
+    // #1755: the flight computer asks whether the measured thrust axis points
+    // up (thrust) or down (coast drag), in whatever frame the board flies.
+    Flight fl;
+    fl.end_s = 0.0f;
+    const auto s = fly(fl);
+    InertialVertical iv;
+    for (const auto& x : s)
+        iv.update(x.t_us, x.f, x.w, false);
+    const float x_body[3] = {1.0f, 0.0f, 0.0f};
+    EXPECT_NEAR(iv.upOf(x_body), std::sin(iv.pitchRad()), 1e-5f);
+    // The pad's specific force points straight up; its reverse straight down.
+    const auto& f = s.back().f;
+    const float n = std::sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+    const float up[3] = {f[0] / n, f[1] / n, f[2] / n};
+    const float down[3] = {-up[0], -up[1], -up[2]};
+    EXPECT_NEAR(iv.upOf(up), 1.0f, 1e-3f);
+    EXPECT_NEAR(iv.upOf(down), -1.0f, 1e-3f);
+    // A body axis square to it is level.
+    const float side[3] = {0.0f, 1.0f, 0.0f};
+    EXPECT_NEAR(iv.upOf(side), up[1], 1e-3f);
+
+    // A pad tilted on all three body axes, so every term of R's up row has a
+    // sign to get right: levelled on it, upOf(v) is v's component along the
+    // pad's measured up.
+    const float d[3] = {0.3f, -0.5f, 0.81f};
+    const float dn = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    const float u3[3] = {d[0] / dn, d[1] / dn, d[2] / dn};
+    InertialVertical iv3;
+    const float w0[3] = {0.0f, 0.0f, 0.0f};
+    const float f3[3] = {kG * u3[0], kG * u3[1], kG * u3[2]};
+    for (uint32_t i = 1; i <= 1000; i++)
+        iv3.update(i * 1000u, f3, w0, false);
+    ASSERT_EQ(iv3.state(), InertialVertical::State::Pad);
+    const float ex[3] = {1.0f, 0.0f, 0.0f}, ey[3] = {0.0f, 1.0f, 0.0f}, ez[3] = {0.0f, 0.0f, 1.0f};
+    EXPECT_NEAR(iv3.upOf(ex), u3[0], 1e-3f);
+    EXPECT_NEAR(iv3.upOf(ey), u3[1], 1e-3f);
+    EXPECT_NEAR(iv3.upOf(ez), u3[2], 1e-3f);
+    EXPECT_NEAR(iv3.upOf(u3), 1.0f, 1e-3f);
+}
+
 TEST(InertialVertical, PerfectImu_TracksAHighFlightToApogee)
 {
     Flight fl;   // 35 g for 2.3 s off a 89 deg rail: above the barometer's range

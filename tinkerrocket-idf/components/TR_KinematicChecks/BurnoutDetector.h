@@ -19,6 +19,30 @@ namespace tr {
 // t == 200 ms is still locked out, t == 201 ms is live.
 inline constexpr uint32_t kBurnoutLaunchLockoutMs = 200;
 
+// The axial specific force the detector reads (#1755).  Rocket +X is only the
+// thrust axis when the board-to-rocket frame is right, and on AUTO mounting a
+// frame snapped on a prep table, or a board mounted tail-forward that never
+// confirmed its frame on the rail, flies a lateral or reversed +X: burnout then
+// latched under thrust (thrust reads negative) or at a random time, or never.
+// The thrust-axis check (TR_Orientation's ThrustAxisCheck) measures the real
+// thrust direction over the first 150 ms of the flight; the flight computer's
+// thrust_axis_policy.h decides what to do with it.  This step only applies it:
+//   - axis_measuring: no input (returns false), so burnout cannot latch on an
+//     axis not yet known (the 200 ms lockout normally covers it);
+//   - thrust_axis (unit, rocket frame): the specific force along it, once the
+//     measured thrust axis has disproved an AUTO frame;
+//   - nullptr: rocket +X, as before (a right or manual frame, a restored
+//     flight that never ran the check, no verdict).
+inline bool burnoutAxialInput(const float f_rocket[3], bool axis_measuring,
+                              const float* thrust_axis, float& axial_mps2)
+{
+    if (axis_measuring) return false;
+    axial_mps2 = thrust_axis
+        ? f_rocket[0] * thrust_axis[0] + f_rocket[1] * thrust_axis[1] + f_rocket[2] * thrust_axis[2]
+        : f_rocket[0];
+    return true;
+}
+
 // Advance the burnout detector by one IMU sample.
 //
 //   detected, neg_count : caller-owned latching state (persist across calls).

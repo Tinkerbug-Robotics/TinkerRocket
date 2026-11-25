@@ -103,18 +103,37 @@ bool orientMatrixFromNoseVector(const float v_board[3], float R[9]);
 // completed window, decides whether the active rotation needs updating —
 // if the mounting is already correct the estimate simply confirms +X.
 //
-// Stationarity gating: every gyro axis under gyro_quiet_dps AND |‖a‖−g|
-// under acc_tol_ms2; any violation restarts the window, so handling,
-// wind-rock, and transport never contribute samples.  Duplicate timestamps
-// (caller polls faster than the IMU updates) are ignored.
+// Stationarity gating (#1755): stillness is judged over short blocks, as
+// InertialVertical's rest test does, not sample by sample.  A block passes
+// when, over its samples:
+//   - each gyro axis's MEAN is under gyro_mean_dps (a bias, not a turn),
+//   - each gyro axis's SPREAD is under gyro_range_dps (rail sway passes),
+//   - ‖a‖'s spread is under acc_range_ms2 and its mean within acc_tol_ms2
+//     of g (handling and transport fail), and
+//   - its mean specific-force direction is within dir_tol_deg of the
+//     window's first block (a slow turn or a rail being raised fails).
+// A window is window_us of consecutive passing blocks; a failing block, or a
+// sample gap of gap_us, restarts it.  The old per-sample test (every gyro
+// axis under 3 dps on every sample) threw a window away on one sample of
+// ordinary rail sway, or of gyro bias, so a racked rocket in wind never
+// confirmed its frame and flew whatever the last still moment (a prep table)
+// had snapped it to.  Duplicate timestamps (caller polls faster than the IMU
+// updates) are ignored.
 class OrientationEstimator
 {
 public:
     // Thresholds are members (not constructor params) so tests and future
-    // config plumbing can tune them; defaults match the landing detector's
-    // notion of "still" with margin for pad wind.
-    float    gyro_quiet_dps = 3.0f;      // per-axis |gyro| ceiling
-    float    acc_tol_ms2    = 2.0f;      // | ‖a‖ − g | ceiling (~0.2 g)
+    // config plumbing can tune them.  The gyro and |f| limits are
+    // InertialVertical's rest-block limits (kRestRateDps, kRestMeanDps,
+    // kRestRangeMps2); the g tolerance stays loose because the pad direction
+    // needs no calibrated g.
+    uint32_t block_us       = 250000;    // a stillness block
+    float    gyro_mean_dps  = 5.0f;      // per-axis |mean rate| in a block
+    float    gyro_range_dps = 30.0f;     // per-axis rate spread in a block
+    float    acc_range_ms2  = 3.0f;      // ‖a‖ spread in a block
+    float    acc_tol_ms2    = 2.0f;      // | mean ‖a‖ − g | in a block (~0.2 g)
+    float    dir_tol_deg    = 5.0f;      // block direction from the window's first
+    uint32_t gap_us         = 100000;    // a gap this long restarts the window
     uint32_t window_us      = 2000000;   // averaging window
     uint32_t min_samples    = 200;       // floor on samples per window
 
@@ -130,10 +149,26 @@ public:
     bool takeEstimate(float up_rocket[3]);
 
 private:
+    void restartWindow();
+    void startBlock(uint32_t t_us);
+
+    // The block being filled
+    uint32_t blk_start_us_  = 0;
+    uint32_t blk_n_         = 0;
+    double   blk_acc_[3]    = {0.0, 0.0, 0.0};
+    double   blk_gyro_[3]   = {0.0, 0.0, 0.0};
+    float    blk_gmin_[3]   = {0.0f, 0.0f, 0.0f};
+    float    blk_gmax_[3]   = {0.0f, 0.0f, 0.0f};
+    float    blk_amin_      = 0.0f;
+    float    blk_amax_      = 0.0f;
+    double   blk_amag_      = 0.0;
+    // The window: consecutive passing blocks
     double   sum_[3]        = {0.0, 0.0, 0.0};
     uint32_t count_         = 0;
     uint32_t window_start_us_ = 0;
+    float    first_dir_[3]  = {0.0f, 0.0f, 0.0f};
     uint32_t last_t_us_     = 0;
+    bool     have_last_     = false;
     bool     accumulating_  = false;
     bool     fresh_         = false;
     float    est_[3]        = {1.0f, 0.0f, 0.0f};
@@ -148,31 +183,46 @@ private:
 // detection and comparing it to +X validates the latched orientation: a
 // large angle means the pad-gravity estimate (or a manual setting) was
 // wrong — e.g. the rocket sat non-vertical at the final stationary window.
-// The result is a flag, not a correction: re-orienting mid-boost would
-// yank the EKF and control frames at the worst possible moment.
+// The result is not a frame correction: re-orienting mid-boost would yank
+// the EKF and control frames at the worst possible moment.  It is the
+// measured thrust axis (axis()).  When it is upward thrust and disproves an
+// AUTO frame (the flight computer's thrust_axis_policy.h, #1755), burnout
+// reads it in place of rocket +X, and what needs a true rocket +X stands
+// down: the pitch voter and roll control.
+//
+// The window opens at the first sample update() sees after start() (#1734):
+// the caller's sample stamps can lie before the start time (an IMU window's
+// centre), and timing the window from start() wrapped the unsigned age, so
+// the check closed on its first sample with nothing counted.
 class ThrustAxisCheck
 {
 public:
     float    min_acc_ms2 = 20.0f;   // only count clearly-thrusting samples
-    uint32_t window_us   = 150000;  // averaging window after start()
+    uint32_t window_us   = 150000;  // averaging window from the first sample
 
     void start(uint32_t t_us);
     // Feed rocket-frame accel.  Returns true once, when the window closes.
     bool update(uint32_t t_us, float ax, float ay, float az);
 
+    bool  running() const { return running_; }  // started, not yet closed
     bool  done() const  { return done_; }
     bool  valid() const { return valid_; }      // enough samples to judge
     float angleFromNoseDeg() const { return angle_deg_; }
+    // The measured thrust direction (unit, rocket frame).  False, and u
+    // untouched, unless valid().
+    bool  axis(float u[3]) const;
 
 private:
     double   sum_[3]   = {0.0, 0.0, 0.0};
     uint32_t count_    = 0;
     uint32_t start_us_ = 0;
     uint32_t last_t_us_ = 0;
+    bool     first_    = true;      // the next sample opens the window
     bool     running_  = false;
     bool     done_     = false;
     bool     valid_    = false;
     float    angle_deg_ = 0.0f;
+    float    axis_[3]  = {1.0f, 0.0f, 0.0f};
 };
 
 #endif // TR_ORIENTATION_H
