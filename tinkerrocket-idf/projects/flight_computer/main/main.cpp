@@ -65,6 +65,7 @@
 #include "roll_control_mode_policy.h" // #1137 item 6: which roll law runs this tick
 #include "guidance_gate_policy.h"   // GTV 2026-11-01: guidance origin, heading trust, why it is not steering
 #include "test_mode_gate_policy.h"   // #1137 item 5: the #363 failsafe and the test-command gates
+#include "flight_timeout_policy.h"  // #1753: the INFLIGHT timeout holds for an owed or just-fired channel
 #include "oc_cmd_dedup.h"        // #1112: dispatch only on the poll pass; bounded config retry
 #include "servo_pin_policy.h"    // servoPinsValid(): an M1 int -1 pin is unmapped, not GPIO 0xFFFFFFFF
 #include "loop_profile.h"        // bench only: -DTR_LOOP_PROFILE=1 section profiler (TR_LP_LAP)
@@ -1058,6 +1059,10 @@ static PyroChRuntime pyro_ch[4] = {};
 static bool          pyro_arm_pin_state   = false;   // last value driven onto PYRO_ARM_PIN (and its gang)
 static bool          pyro_apogee_detected = false;
 static uint32_t      pyro_apogee_time_ms  = 0;
+// #1753: when this flight's last pulse ended, for the flight timeout's
+// after-fire hold (flight_timeout_policy.h). Flight task only.
+static bool          pyro_fired_this_flight = false;
+static uint32_t      pyro_last_fire_ms      = 0;
 
 // PRELAUNCH-edge continuity check: on the new PCB the CONT divider is fed
 // from VPP (always on) and is independent of the shared ARM rail, so we
@@ -1540,20 +1545,33 @@ static inline float pyroChValue(int ch_idx)
     return 0.0f;
 }
 
-// A deployment channel enabled for this flight that has not fired yet. Both
-// trigger modes wait for apogee, so after it this is a charge still owed.
+// A charge still to come: an enabled channel not yet triggered, or any channel
+// mid-pulse (ArmSettle or Firing). Both trigger modes wait for apogee, so after
+// it this is a deployment still owed. #1753: Idle alone is not enough -- on the
+// pass a late main triggers it is already in ArmSettle, and the timeout used to
+// safe it on that same pass.
+static FlightTimeoutPolicy::Channel pyroTimeoutChannel(PyroChState st)
+{
+    switch (st) {
+        case PyroChState::Idle:      return FlightTimeoutPolicy::Channel::Idle;
+        case PyroChState::ArmSettle:
+        case PyroChState::Firing:    return FlightTimeoutPolicy::Channel::Pulsing;
+        case PyroChState::Done:      return FlightTimeoutPolicy::Channel::Done;
+    }
+    return FlightTimeoutPolicy::Channel::Idle;
+}
 static bool pyroDeploymentWaiting()
 {
     for (int i = 0; i < 4; ++i)
-        if (pyroChEnabled(i) && pyro_ch[i].state == PyroChState::Idle) return true;
+        if (FlightTimeoutPolicy::owed(pyroChEnabled(i), pyroTimeoutChannel(pyro_ch[i].state)))
+            return true;
     return false;
 }
 
-// The flight timeout (the INFLIGHT case): 600 s, but up to the ceiling while a
-// channel is still owed after apogee (V10 pre-flight review, 2026-11-18). The
-// restore's arm gate bounds the same flight.
-static constexpr uint32_t MAX_FLIGHT_TIME_MS         = 600000U;
-static constexpr uint32_t MAX_FLIGHT_TIME_CEILING_MS = 1800000U;
+// The flight timeout (the INFLIGHT case): 600 s, up to the ceiling while a
+// channel is owed after apogee, and held kAfterFireMs past the last pulse
+// (flight_timeout_policy.h). The restore's arm gate bounds the same flight.
+static constexpr uint32_t MAX_FLIGHT_TIME_CEILING_MS = FlightTimeoutPolicy::kCeilingMs;
 static_assert(RecoveryArmGate::Config{}.max_flight_ms == MAX_FLIGHT_TIME_CEILING_MS,
               "a restored flight can last as long as the timeout lets a live one");
 
@@ -1958,7 +1976,12 @@ static void servicePyroChannels(uint32_t now_ms)
                              : (double)pressure_alt_m,
                      by_gnss ? "GNSS-backstop" : "baro");
         }
-        if (pulse_done[i]) ESP_LOGI(TAG, "[PYRO] CH%d fire pulse complete", i + 1);
+        if (pulse_done[i]) {
+            // #1753: the flight timeout holds kAfterFireMs past the last pulse
+            pyro_fired_this_flight = true;
+            pyro_last_fire_ms      = now_ms;
+            ESP_LOGI(TAG, "[PYRO] CH%d fire pulse complete", i + 1);
+        }
     }
 }
 
@@ -9174,6 +9197,11 @@ static void setup_fc()
                 pyro_ch[i].phase_start_ms = 0;
             }
             portEXIT_CRITICAL(&pyro_spinlock);
+            // #1753: the snapshot does not say when a fired channel fired, so
+            // the timeout's after-fire hold runs from this boot: a restore
+            // under a late main is not declared LANDED in the air.
+            pyro_fired_this_flight = fired_snap[0] || fired_snap[1] || fired_snap[2] || fired_snap[3];
+            pyro_last_fire_ms      = now_ms;
 
             // #834 item 4: the sensor stack has just come up cold while the
             // snapshot restored a mid-flight apogee, so the main-deploy gate
@@ -9897,6 +9925,8 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     // channel's trigger fires (per-fire arming on new PCB).
     pyro_apogee_detected = false;
     pyro_apogee_time_ms  = 0;
+    pyro_fired_this_flight = false;   // #1753: the timeout's after-fire hold is per flight
+    pyro_last_fire_ms      = 0;
     // #382: re-arm the per-flight settings snapshot (#165) —
     // without this only the first flight/sim per boot emitted
     // FlightSettingsData, so sim runs #2+ in one boot had no
@@ -16023,20 +16053,25 @@ static void loop_fc()
                     break;
                 }
 
-                // Safety timeout: force LANDED if flight exceeds 10 minutes
+                // Safety timeout: force LANDED if the flight outlasts its bound
                 // (landing detection failure, stuck at altitude, KF divergence).
-                // Not while a deployment channel is still owed after apogee
-                // (V10 pre-flight review, 2026-11-18): a main due at its
-                // altitude under a slow drogue from 10 km or more comes after
-                // T+600 s (10.5 km under a 15 m/s drogue reaches 300 m at
-                // T+592 s), and this timeout used to safe it before it could
-                // fire. Then the bound is MAX_FLIGHT_TIME_CEILING_MS, which the
-                // OC's silent-FC hold and snapshot serve-TTL
-                // (inflight_refusal_policy.h kMaxFlightTimeMs) match.
-                const uint32_t flight_limit_ms =
-                    (pyro_apogee_detected && pyroDeploymentWaiting())
-                        ? MAX_FLIGHT_TIME_CEILING_MS : MAX_FLIGHT_TIME_MS;
-                if (now_ms - launch_time_millis > flight_limit_ms)
+                // The bound is 600 s, but the ceiling while a deployment channel
+                // is still owed after apogee (V10 pre-flight review, 2026-11-18):
+                // a main due at its altitude under a slow drogue from 10 km or
+                // more comes after T+600 s. A channel stays owed until its pulse
+                // is done, and the bound holds FlightTimeoutPolicy::kAfterFireMs
+                // past the last pulse (#1753: the main used to be safed on the
+                // pass it triggered, and a late main that did fire was followed
+                // by LANDED in the air). The ceiling is what the OC's silent-FC
+                // hold and snapshot serve-TTL (inflight_refusal_policy.h
+                // kMaxFlightTimeMs) match.
+                const FlightTimeoutPolicy::In timeout_in{
+                    pyro_apogee_detected,
+                    pyroDeploymentWaiting(),
+                    pyro_fired_this_flight,
+                    pyro_last_fire_ms - launch_time_millis,
+                };
+                if (FlightTimeoutPolicy::expired(now_ms - launch_time_millis, timeout_in))
                 {
                     pyroSafeAll();
                     rocket_state = LANDED;

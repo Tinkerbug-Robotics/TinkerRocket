@@ -236,8 +236,9 @@ inline sdr_aid::PhaseMsg stamped(sdr_aid::PhaseMsg p, double gps_s, uint8_t seq)
 }
 
 // How long the last valid line stays good after it last moved, us: the
-// flight computer's longest flight (main.cpp MAX_FLIGHT_TIME_MS, 600 s, after
-// which it calls the flight landed).
+// flight timeout's 600 s base (flight_timeout_policy.h kBaseMs). A flight the
+// timeout holds open longer, for a channel owed or fired late (up to 1800 s),
+// can outlast it.
 static constexpr int64_t kLineHoldUs = 600000000;
 // How long a held line's stamps keep tq 5 (under 16.4 ms), us: the line's own
 // 2-6 ms plus a crystal at GnssTimeSync::kMaxDrift (100 ppm) for 100 s is

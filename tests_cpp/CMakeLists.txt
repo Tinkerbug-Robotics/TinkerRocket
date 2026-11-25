@@ -1697,6 +1697,17 @@ target_include_directories(test_test_mode_gate_policy PRIVATE
 target_link_libraries(test_test_mode_gate_policy GTest::gtest_main)
 gtest_discover_tests(test_test_mode_gate_policy)
 
+# ---------- test_flight_timeout_policy (#1753) ----------
+# The INFLIGHT timeout: a main due after T+600 s fires, and the flight stays
+# open past its pulse. flight_timeout_policy.h is pure.
+add_executable(test_flight_timeout_policy test_flight_timeout_policy.cpp)
+target_include_directories(test_flight_timeout_policy PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+target_link_libraries(test_flight_timeout_policy GTest::gtest_main)
+gtest_discover_tests(test_flight_timeout_policy)
+
 # ---------- test_landing_transition_policy (#1137 items 7-8) ----------
 # Pure header: the LANDED dwell, the sustained-false reset arm and the bounded
 # gyro veto, none of which could be exercised without a flight before.
