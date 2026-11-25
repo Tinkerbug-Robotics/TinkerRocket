@@ -10,7 +10,7 @@ if(TR_SIM_DEAD_IMU)
     message(STATUS "TR_Sensor_Collector_Sim: DEAD-IMU sim mode ENABLED (#556 bench)")
 endif()
 
-# #1600 the rig replay: `idf.py -B build_replay -DTR_BOARD_M1=1
+# #1600 the rig replay: `idf.py -B build_replay -DTR_BOARD_V9=1 -DTR_GNSS_MOSAIC=1
 # -DTR_SIM_REPLAY_BLOB=/abs/path/flight.bin build` carries a flight's IMU,
 # barometer and attitude (tools/sim_replay_blob.py writes the file) and plays
 # them from boot against the receiver's GPS time while the COCOM rig plays the

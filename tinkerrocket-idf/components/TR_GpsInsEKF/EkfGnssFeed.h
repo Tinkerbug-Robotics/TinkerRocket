@@ -1,6 +1,6 @@
 // EkfGnssFeed — the GNSS input the flight loop hands the EKF on every tick
-// (issue #1107).  Pure header, no ESP-IDF dependencies, shared by the flight
-// computer and the rocket-computer-mini, host-tested in tests_cpp.
+// (issue #1107).  Pure header, no ESP-IDF dependencies, used by the flight
+// computer, host-tested in tests_cpp.
 //
 // THE PROBLEM THIS SOLVES.  The flight loop polls the receiver far faster than
 // it produces fixes (~480 EKF ticks/s against ~18 fixes/s), so the same fix

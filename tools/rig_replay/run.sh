@@ -5,7 +5,7 @@
 #   tools/rig_replay/run.sh PORT [GAIN] [TAG]
 #
 #   PORT        the FC's USB port -- check it is the FC by its MAC (USB serial number) before anything
-#   GAIN        HackRF TX gain (46 for the LC86G in the cage, 2026-10)
+#   GAIN        HackRF TX gain (46 for the Beetle V1's LC86G in the cage, 2026-10)
 #   TAG         the run's name: its files go to $RIG_OUT/run_TAG/
 # Environment:
 #   COCOM_SDR   the rig's folder (TinkerRocket-GNSS cocom-rig/sdr); default: this repo's gnss submodule

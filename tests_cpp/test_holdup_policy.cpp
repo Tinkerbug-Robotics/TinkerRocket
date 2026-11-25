@@ -1,12 +1,12 @@
 // #1166: the out computer's verdict on the hold-up supercap — charged, still
 // charging, or never charged — from a stream of V_SCAP readings and uptime.
-// The mini's TPS61094 charges the 5 F cap at 100 mA to 2.5 V in about two
+// The Beetle's TPS61094 charges the 5 F cap at 100 mA to 2.5 V in about two
 // minutes; a cap that silently never charges looks exactly like one that did,
 // so this is the one thing on the board that says which.
 #include <gtest/gtest.h>
 #include "holdup_policy.h"
 #include <SPI.h>       // host shim: SPI_MODE0, which the OC config.h names
-#include "config.h"    // the SHIPPED HOLDUP_* constants (TR_BOARD_M1 from CMake)
+#include "config.h"    // the SHIPPED HOLDUP_* constants (TR_BOARD_M2 from CMake)
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -150,7 +150,7 @@ TEST(HoldupPolicy1166, ADischargeRidingTheCapLogsEverySecond)
 }
 
 // The local kBarV / kAdvisory above are what the cases are written against;
-// this ties them to the values the M1 build actually ships, so a config.h
+// this ties them to the values the M2 build actually ships, so a config.h
 // edit cannot leave the suite proving the wrong window.
 TEST(HoldupPolicy1166, TheSuiteMirrorsTheShippedConstants)
 {
@@ -158,7 +158,7 @@ TEST(HoldupPolicy1166, TheSuiteMirrorsTheShippedConstants)
     EXPECT_EQ(kAdvisory, config::HOLDUP_LOW_ADVISORY_MS);
     EXPECT_FLOAT_EQ(0.05f, config::HOLDUP_TRACE_DELTA_V);
     EXPECT_EQ(60u * kSecond, config::HOLDUP_TRACE_PERIOD_MS);
-    EXPECT_GE(config::SCAP_ADC_PIN, 0);   // the mini reads it (config.h asserts this too)
+    EXPECT_GE(config::SCAP_ADC_PIN, 0);   // the Beetle reads it (config.h asserts this too)
 }
 
 TEST(HoldupPolicy1166, TheGraceWindowOutlastsTheSlowCornerOfTheRamp)

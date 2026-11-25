@@ -317,8 +317,8 @@ This is a statement about behavior, not bytes.
     `.flash.rodata` with the app descriptor, the init array and `.flash.tdata`; static DRAM is `.dram0.data`,
     `.dram0.bss`, `.dram1.bss` and `.noinit`.
 - **The Beetle's filter is bit-identical to main's:** `tools/raw_replay/bitident.sh` reports 450 of 450 runs
-  IDENTICAL. `tools/m1_identity.sh` reports its `main.cpp` and sensor collectors preprocess IDENTICAL. Neither
-  covers GnssTimeSync; the host tests cover its default path.
+  IDENTICAL. The Beetle V1's macro-identity script (removed when the V1 was retired) reported its `main.cpp` and
+  sensor collectors preprocessed IDENTICAL. Neither covers GnssTimeSync; the host tests cover its default path.
 - **The wire:** the antenna offset adds BLE command 81, the out computer's ANTENNA_CONFIG_PENDING/MSG pair
   (0x8C/0x8D), the config report's version 4 (`ConfigReportData`, 201 bytes: the offset the flight computer holds,
   and `F_ANTENNA_FROM_NVS`) and the pad context's `PCX_ANT` record (every board but the Beetle writes it). Firmware
@@ -334,7 +334,7 @@ This is a statement about behavior, not bytes.
   spin-rig logs.
 - [`tools/rig_replay`](../../tools/rig_replay/README.md): `run_v9.sh` (one RF-rig run on the V9, after the MAC
   check), `score_v9.py`, `tx_log.py`, `usb_ports.py` and `rinex_gps_iono.py`.
-- `tools/raw_replay/bitident.sh` and `tools/m1_identity.sh`: the Beetle's identity gates.
+- `tools/raw_replay/bitident.sh`: the Beetle's filter identity gate.
 - Bench switches (`flight_computer/CMakeLists.txt`, all marked `-bench`): `TR_BENCH_MOSAIC_CN0`,
   `TR_BENCH_MOSAIC_COLD_START` and `TR_BENCH_MOSAIC_TAG_TRACE` for the receiver; `TR_BENCH_RAW_FUSE_MS`,
   `TR_BENCH_RAW_SAT_CAP`, `TR_BENCH_BOOST_SCREEN_G` and `TR_BENCH_DV_CHECK` for the filter's CPU and checks; the

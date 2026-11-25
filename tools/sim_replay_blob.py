@@ -11,9 +11,10 @@ time, prologue and pad).
 
     tools/sim_replay_blob.py SENSORS_CSV SCENARIO_JSON OUT.bin [--from -30] [--no-port-error]
 
-then build the flight computer with it (any board; the Beetle's LC86G is the one whose fixes carry GPS time):
+then build the flight computer with it, on an image whose receiver sets the replay's clock (the mosaic-only image, the
+V10's gnss-sdr-dev image or the V9's or V10's auto image; flight_computer/CMakeLists.txt refuses any other):
 
-    idf.py -B build_replay -DTR_BOARD_M1=1 -DTR_SIM_REPLAY_BLOB=/abs/path/OUT.bin build
+    idf.py -B build_replay -DTR_BOARD_V9=1 -DTR_GNSS_MOSAIC=1 -DTR_SIM_REPLAY_BLOB=/abs/path/OUT.bin build
 
 Samples are the CSV's averaged in pairs, 500 Hz: the mean over each 2 ms keeps the integral the filters take of
 them. The barometer reads the static-port error the CSV models (baro_alt_port_m) unless --no-port-error.

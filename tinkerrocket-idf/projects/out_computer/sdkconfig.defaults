@@ -212,7 +212,7 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
 # Compiler optimization: -O2 (Performance), not IDF's -Og default.
 # The same line as flight_computer/sdkconfig.defaults, whose note has the FC
-# measurement and what else -O2 changes. On the Beetle's OC (M1, 240 MHz, on
+# measurement and what else -O2 changes. On the Beetle V1's OC (240 MHz, on
 # the pad, the FC streaming 7,300 IMU samples/s, not logging) core 1 went from
 # 52 % busy to 43 % (oc_loop 27 -> 22.5 %, I2S Parse 24 -> 19 %), 2026-10-12:
 # more of the headroom #1485 raised the clock for. The images change by -0.5
@@ -236,7 +236,7 @@ CONFIG_COMPILER_OPTIMIZATION_PERF=y
 # callback outside IRAM or a context outside internal RAM. The ISR now keeps
 # filling the 64 KB rx_ring (~186 ms at 88200) and the parser catches up after
 # the stall. That covers every OC flash write (NVS, NimBLE bonding, OTA), not
-# only the token. Cost on M1: +436 B of internal RAM, with the stall
+# only the token. Cost on the Beetle V1: +436 B of internal RAM, with the stall
 # measurement in i2sRecvCallback.
 CONFIG_I2S_ISR_IRAM_SAFE=y
 

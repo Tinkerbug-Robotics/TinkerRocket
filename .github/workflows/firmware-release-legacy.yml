@@ -8,8 +8,9 @@ name: Firmware Release (legacy boards)
 # The product release, firmware-release.yml, carries only Tinker-Mantis,
 # Tinker-Beetle, Tinker-Base and the LoRa daughterboard. Everything here runs
 # on hardware that is still in hand but no longer offered: the V7 and V8 rocket
-# computers, the V1/V2 base station, and the single-MCU mini firmware for a
-# shape that was never fabbed. The matrix must equal the legacy group of
+# computers and the V1/V2 base station. (The single-MCU mini firmware, for a
+# shape that was never fabbed, was retired with the Tinker-Beetle V1 on
+# 2026-11-25 and is no longer built.) The matrix must equal the legacy group of
 # firmware-build.yml, which keeps all of it compiling on every push.
 #
 # Neither app ever offers these images: both look for releases whose tag
@@ -69,12 +70,6 @@ jobs:
             asset: legacy-base_station-V2
             project: base_station
             flags: -B build_v2
-          # The single-MCU mini, for the S3-alone shape that was never fabbed.
-          - line: legacy
-            asset: legacy-rocket_computer_mini
-            project: rocket_computer_mini
-            path: legacy/rocket_computer_mini
-            flags: -B build
 
     steps:
       - uses: actions/checkout@v5
@@ -167,8 +162,8 @@ jobs:
           # release is worse than none: the app would offer a catalog with
           # holes and no way to know they are holes.
           COUNT=$(python3 -c "import json,sys; print(len(json.load(open('artifacts/manifest.json'))['images']))")
-          if [ "$COUNT" -ne 6 ]; then
-            echo "manifest has $COUNT images, expected 6 — refusing to publish" >&2
+          if [ "$COUNT" -ne 5 ]; then
+            echo "manifest has $COUNT images, expected 5 — refusing to publish" >&2
             exit 1
           fi
 
@@ -204,6 +199,5 @@ jobs:
               '|---|---|' \
               '| Rocket computer V7 | `legacy-flight_computer-V7.bin`, `legacy-out_computer-V7.bin` |' \
               '| Rocket computer V8 | `legacy-flight_computer-V8.bin`, `legacy-out_computer-V8.bin` |' \
-              '| Base station V2 | `legacy-base_station-V2.bin` |' \
-              '| Single-MCU mini (never fabbed) | `legacy-rocket_computer_mini.bin` |')" \
+              '| Base station V2 | `legacy-base_station-V2.bin` |')" \
             --generate-notes --latest=false $PRERELEASE

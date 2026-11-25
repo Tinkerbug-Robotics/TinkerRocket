@@ -186,7 +186,7 @@ gtest_discover_tests(test_ekf_heading_aids)
 # placeholder under a "consumed" timestamp.  The loop's own consume markers and
 # the filter's dedup disagreed on a frozen-IMU-timestamp tick (the #440 skip
 # returns before the GNSS block) and the filter then fused lat=0/lon=0/vel=0.
-# Pure header in the shared TR_GpsInsEKF component (the mini shares it); the
+# Pure header in the shared TR_GpsInsEKF component; the
 # end-to-end cases drive the real filter.
 add_executable(test_ekf_gnss_feed test_ekf_gnss_feed.cpp
     ${LIB_DIR}/TR_GpsInsEKF/TR_GpsInsEKF.cpp
@@ -295,7 +295,7 @@ target_link_libraries(test_i2s_link_check GTest::gtest_main)
 gtest_discover_tests(test_i2s_link_check)
 
 # ---------- test_qmc5883p_regs ----------
-# The mini's magnetometer (#1312): register packing pinned to the QMC5883P
+# The V10's magnetometer, and the Beetle V1's (#1312): register packing pinned to the QMC5883P
 # datasheet's worked examples, the ±8 G scale MAG_TYPE_QMC5883P promises, and
 # the saturating software hard-iron subtract.  Header-only and IDF-free.
 add_executable(test_qmc5883p_regs test_qmc5883p_regs.cpp)
@@ -393,7 +393,7 @@ gtest_discover_tests(test_sensor_data_converter)
 # converter at that board's MAG_ROT_Z_DEG_*, against the measured matrix.
 # One build per board because each board's config.h is its own; the driver
 # seam flags are the ones flight_computer/CMakeLists.txt sets for it.
-foreach(BOARD V5 V8 V9 V10 M1 M2)
+foreach(BOARD V5 V8 V9 V10 M2)
     add_executable(test_mag_frame_${BOARD} test_mag_frame_board.cpp
         ${LIB_DIR}/TR_Sensor_Data_Converter/TR_Sensor_Data_Converter.cpp
         ${LIB_DIR}/TR_Orientation/TR_Orientation.cpp
@@ -411,9 +411,6 @@ foreach(BOARD V5 V8 V9 V10 M1 M2)
         target_compile_definitions(test_mag_frame_${BOARD} PRIVATE TR_MAG_DRIVER_AUTO=1)
     elseif(BOARD STREQUAL "V10")
         target_compile_definitions(test_mag_frame_${BOARD} PRIVATE TR_MAG_DRIVER_QMC5883P=1)
-    elseif(BOARD STREQUAL "M1")
-        target_compile_definitions(test_mag_frame_${BOARD} PRIVATE
-            TR_MAG_DRIVER_QMC5883P=1 TR_GNSS_DRIVER_LC86=1)
     elseif(BOARD STREQUAL "M2")
         # The Tinker-Beetle V2: its MMC5983MA needs no driver seam; its PX100
         # needs the PX1105R driver (config.h refuses an M2 build without it).
@@ -428,7 +425,7 @@ endforeach()
 # as the collector applies them (axis_sign.h), then the real converter at the
 # board's rotation, against the layout's matrix. One build per board, as the
 # mag's above; the Tinker-Beetle V2 (M2) is the board whose IMU is on the back.
-foreach(BOARD V5 V7 V8 V9 V10 M1 M2)
+foreach(BOARD V5 V7 V8 V9 V10 M2)
     add_executable(test_imu_frame_${BOARD} test_imu_frame_board.cpp
         ${LIB_DIR}/TR_Sensor_Data_Converter/TR_Sensor_Data_Converter.cpp
         ${LIB_DIR}/TR_Orientation/TR_Orientation.cpp
@@ -446,9 +443,6 @@ foreach(BOARD V5 V7 V8 V9 V10 M1 M2)
         target_compile_definitions(test_imu_frame_${BOARD} PRIVATE TR_MAG_DRIVER_AUTO=1)
     elseif(BOARD STREQUAL "V10")
         target_compile_definitions(test_imu_frame_${BOARD} PRIVATE TR_MAG_DRIVER_QMC5883P=1)
-    elseif(BOARD STREQUAL "M1")
-        target_compile_definitions(test_imu_frame_${BOARD} PRIVATE
-            TR_MAG_DRIVER_QMC5883P=1 TR_GNSS_DRIVER_LC86=1)
     elseif(BOARD STREQUAL "M2")
         target_compile_definitions(test_imu_frame_${BOARD} PRIVATE TR_GNSS_DRIVER_PX1105R=1)
     endif()
@@ -524,8 +518,8 @@ target_include_directories(test_orientation PRIVATE
     ${SHIM_DIR}
     ${LIB_DIR}/TR_Orientation
     # #1095 item 2: the board-default lockstep test needs IMU_ORIENT_AUTO and
-    # the flight computer's config.h.  Only the FC's — the mini declares its
-    # own `namespace config`, so the two config.h files cannot share a TU.
+    # the flight computer's config.h.  Only the FC's — the OC declares its
+    # own `struct config`, so the two config.h files cannot share a TU.
     ${LIB_DIR}/TR_RocketComputerTypes
     ${LIB_DIR}/../projects/flight_computer/main
 )
@@ -605,7 +599,7 @@ target_link_libraries(test_tr_flightlog_core GTest::gtest_main Threads::Threads)
 gtest_discover_tests(test_tr_flightlog_core)
 
 # #671: the same binary re-registered at the two GD5F geometries — every test
-# runs three times (legacy above, then V9's 2048B/2048blk and the mini's
+# runs three times (legacy above, then V9's 2048B/2048blk and the Beetle V1's
 # 2048B/1024blk). TEST_SUFFIX keeps the three sets distinct in ctest output.
 gtest_discover_tests(test_tr_flightlog_core
     PROPERTIES ENVIRONMENT "TR_TEST_NAND_GEOMETRY=gd2g"
@@ -1202,7 +1196,7 @@ gtest_discover_tests(test_bad_block_scan_policy)
 
 # ---------- test_nand_geometry (#671) ----------
 # The RDID -> geometry table: F35SQB004G (V8 bench), GD5F2GQ5UE (V9),
-# GD5F1GQ5UE (mini), the unknown-ID legacy fallback, and dead-bus behaviour.
+# GD5F1GQ5UE (Beetle V1), the unknown-ID legacy fallback, and dead-bus behaviour.
 # nand_geometry.h is pure, so the test just adds the component dir.
 add_executable(test_nand_geometry test_nand_geometry.cpp)
 target_include_directories(test_nand_geometry PRIVATE
@@ -1328,16 +1322,16 @@ target_link_libraries(test_rail_restore_policy GTest::gtest_main)
 gtest_discover_tests(test_rail_restore_policy)
 
 # ---------- test_holdup_policy (#1166) ----------
-# The out computer's verdict on rocket-computer-mini's hold-up supercap from a
+# The out computer's verdict on the Tinker-Beetle's hold-up supercap from a
 # stream of V_SCAP readings: charging through the ~2 min ramp, charged at the
 # 2.2 V bar, NOT_CHARGING after three minutes under it, with the grace window
 # running from the last charged reading after a drain. Pure header in the OC
 # project; the ADC read and the telemetry key stay in main.cpp.
 add_executable(test_holdup_policy test_holdup_policy.cpp)
-# The suite also includes the OC config.h as the M1 build sees it, so the
+# The suite also includes the OC config.h as the M2 build sees it, so the
 # window/bar cases are tied to the shipped HOLDUP_* constants rather than to
 # local copies of them (test_bs_storage_policy / test_fc_gnss_reset_map pattern).
-target_compile_definitions(test_holdup_policy PRIVATE TR_BOARD_M1=1)
+target_compile_definitions(test_holdup_policy PRIVATE TR_BOARD_M2=1)
 target_include_directories(test_holdup_policy PRIVATE
     ${SHIM_DIR}
     ${LIB_DIR}/TR_RocketComputerTypes
@@ -1457,8 +1451,7 @@ target_include_directories(pyro_timing_fc PRIVATE
     ${LIB_DIR}/TR_RocketComputerTypes
     ${LIB_DIR}/../projects/flight_computer/main
 )
-target_compile_definitions(pyro_timing_fc PRIVATE TR_BOARD_M1=1
-    TR_MAG_DRIVER_QMC5883P=1 TR_GNSS_DRIVER_LC86=1)
+target_compile_definitions(pyro_timing_fc PRIVATE TR_BOARD_M2=1 TR_GNSS_DRIVER_PX1105R=1)
 add_executable(test_pyro_fault_trip_policy test_pyro_fault_trip_policy.cpp)
 target_include_directories(test_pyro_fault_trip_policy PRIVATE
     ${SHIM_DIR}
@@ -1557,7 +1550,7 @@ gtest_discover_tests(test_sensor_staleness_policy)
 # sample may only become the reference while the flight side's state is KNOWN
 # and not INFLIGHT, and a comms side that is INFLIGHT with no reference adopts
 # the flight side's own from the snapshot it already streams, once. Pure header
-# in TR_RocketComputerTypes, shared by the OC and the mini's comms half.
+# in TR_RocketComputerTypes, used by the OC.
 add_executable(test_ground_baseline_policy test_ground_baseline_policy.cpp)
 target_include_directories(test_ground_baseline_policy PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -1586,7 +1579,7 @@ gtest_discover_tests(test_pwr_hold_release_policy)
 # Built once per board: the wire sizes and the link rate are shared, but the
 # fastest IMU rate is not (#1485: IMU_RATE_MAX_HZ, 7680 only where the FC
 # reads the IMU from its FIFO), and that is the stream that dominates.
-foreach(BOARD V5 V7 V8 V9 V10 M1 M2)
+foreach(BOARD V5 V7 V8 V9 V10 M2)
     add_executable(test_i2s_link_budget_${BOARD} test_i2s_link_budget.cpp)
     target_include_directories(test_i2s_link_budget_${BOARD} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
@@ -1595,10 +1588,7 @@ foreach(BOARD V5 V7 V8 V9 V10 M1 M2)
         ${LIB_DIR}/../projects/flight_computer/main
     )
     target_compile_definitions(test_i2s_link_budget_${BOARD} PRIVATE TR_BOARD_${BOARD}=1)
-    if(BOARD STREQUAL "M1")
-        target_compile_definitions(test_i2s_link_budget_${BOARD} PRIVATE
-            TR_MAG_DRIVER_QMC5883P=1 TR_GNSS_DRIVER_LC86=1)
-    elseif(BOARD STREQUAL "M2")
+    if(BOARD STREQUAL "M2")
         # The Tinker-Beetle V2's PX100: the PX1105R image's stream on the link
         target_compile_definitions(test_i2s_link_budget_${BOARD} PRIVATE TR_GNSS_DRIVER_PX1105R=1)
     elseif(BOARD STREQUAL "V10")
@@ -1634,7 +1624,7 @@ gtest_discover_tests(test_i2s_link_budget_V9_MOSAIC TEST_PREFIX "V9_MOSAIC.")
 # app shows 8k while the vehicle flies the old rate. The two config.h files
 # cannot share a translation unit (both declare `struct config`), so each is
 # compiled into its own small library and the test compares the answers.
-foreach(BOARD V5 V7 V8 V9 V10 M1 M2)
+foreach(BOARD V5 V7 V8 V9 V10 M2)
     add_library(imu_cap_fc_${BOARD} STATIC imu_rate_cap_fc.cpp)
     target_include_directories(imu_cap_fc_${BOARD} PRIVATE
         ${SHIM_DIR}
@@ -1642,12 +1632,9 @@ foreach(BOARD V5 V7 V8 V9 V10 M1 M2)
         ${LIB_DIR}/../projects/flight_computer/main
     )
     target_compile_definitions(imu_cap_fc_${BOARD} PRIVATE TR_BOARD_${BOARD}=1)
-    if(BOARD STREQUAL "M1")
-        # The M1 header refuses a build without the driver seams its parts
-        # need (flight_computer/CMakeLists.txt sets them for the firmware).
-        target_compile_definitions(imu_cap_fc_${BOARD} PRIVATE
-            TR_MAG_DRIVER_QMC5883P=1 TR_GNSS_DRIVER_LC86=1)
-    elseif(BOARD STREQUAL "V10")
+    # A board header refuses a build without the driver seams its parts need
+    # (flight_computer/CMakeLists.txt sets them for the firmware).
+    if(BOARD STREQUAL "V10")
         target_compile_definitions(imu_cap_fc_${BOARD} PRIVATE TR_MAG_DRIVER_QMC5883P=1)
     elseif(BOARD STREQUAL "M2")
         target_compile_definitions(imu_cap_fc_${BOARD} PRIVATE TR_GNSS_DRIVER_PX1105R=1)
@@ -1672,10 +1659,9 @@ endforeach()
 # The out computer's config.h, built for one board at a time: the antenna-offset
 # switch and the reset pull-up rule that the Tinker-Beetle V2 target put in code
 # every board compiles, and for M2 the V2 pin map itself (the seven signals the
-# 2026-11-21 layout moved, pinned beside everything that stayed). This is the
-# only build of board_m2.h on every change: the V2 is not ordered, so no
-# firmware job builds an M2 image yet.
-foreach(BOARD V9 V10 M1 M2)
+# 2026-11-21 layout moved, pinned beside everything that stayed). The firmware
+# build job compiles the whole M2 image too; this pins the map on the host.
+foreach(BOARD V9 V10 M2)
     add_executable(test_oc_board_map_${BOARD} test_oc_board_map.cpp)
     target_compile_definitions(test_oc_board_map_${BOARD} PRIVATE TR_BOARD_${BOARD}=1)
     target_include_directories(test_oc_board_map_${BOARD} PRIVATE
@@ -1733,7 +1719,7 @@ target_link_libraries(test_roll_control_mode_policy GTest::gtest_main)
 gtest_discover_tests(test_roll_control_mode_policy)
 
 # ---------- test_servo_pin_policy ----------
-# Pure header: servoPinsValid()'s rule. M1 spells its absent servo pins int -1,
+# Pure header: servoPinsValid()'s rule. The Beetle spells its absent servo pins int -1,
 # and the old `!= 255U` comparison read that as four mapped servos.
 add_executable(test_servo_pin_policy test_servo_pin_policy.cpp)
 target_include_directories(test_servo_pin_policy PRIVATE
@@ -1767,27 +1753,25 @@ target_include_directories(test_sim_sensor_model PRIVATE
 target_link_libraries(test_sim_sensor_model GTest::gtest_main)
 gtest_discover_tests(test_sim_sensor_model)
 
-# ---------- test_lc86_parser ----------
-# Host-side test for the Quectel LC86G NMEA/PQTM stream parser — the protocol
-# half of the mini's GNSS driver (TR_GNSSReceiverLC86_Serial). Lc86Parser.cpp
-# is deliberately IDF-free (bytes in, GNSSData out), so the checksum rules
-# (anchored on the protocol doc's published examples), the $PQTMPVT mapping
-# incl. the vel_u = -VelD sign the EKF hard-fuses, the Quality==0 fix-trust
-# gate, the $PQTMEPE accuracy merge, junk/partial-line resilience, and the
-# RTCM3 MSM7 frames interleaved with the NMEA (Rtcm3Msm.cpp) are all pinned
-# on the host. The ESP UART glue lives in TR_GNSSReceiverLC86_Serial.cpp
-# and is not compiled here.
-add_executable(test_lc86_parser test_lc86_parser.cpp
+# ---------- test_gnss_wire_rtcm ----------
+# What the GNSS wire formats and the RTCM3 decoders share: the packed GNSSData
+# and GNSS_SAT_MSG layouts the log and the radio links carry, the RTCM3 helpers
+# (Rtcm3Msm.cpp: CRC-24Q, DF407 lock times, the MSM7 decode), and the RTCM3
+# half of Lc86Parser.cpp, the host decoder for the Tinker-Beetle V1's logged
+# raw frames (tools/raw_replay, tinkerrocket-sim). Both sources are IDF-free.
+# Moved from test_lc86_parser when the V1 and its LC86G flight driver were
+# retired.
+add_executable(test_gnss_wire_rtcm test_gnss_wire_rtcm.cpp
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Lc86Parser.cpp
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Rtcm3Msm.cpp
 )
-target_include_directories(test_lc86_parser PRIVATE
+target_include_directories(test_gnss_wire_rtcm PRIVATE
     ${SHIM_DIR}
     ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
     ${LIB_DIR}/TR_RocketComputerTypes
 )
-target_link_libraries(test_lc86_parser GTest::gtest_main)
-gtest_discover_tests(test_lc86_parser)
+target_link_libraries(test_gnss_wire_rtcm GTest::gtest_main)
+gtest_discover_tests(test_gnss_wire_rtcm)
 
 # ---------- test_sbf_parser / test_mosaic_link ----------
 # The protocol half of the V9's Septentrio mosaic-G5 driver
@@ -2511,8 +2495,8 @@ gtest_discover_tests(test_wire_fixture_freshness)
 # Source-of-truth gate for the ALTITUDE_ON_DESCENT main-deploy trigger: refuses
 # a free-running (dead-baro) altitude estimate, catches a stuck static port via
 # a GNSS Doppler cross-check, and backstops both with a late-biased GNSS AGL
-# comparison. Pure header in the shared TR_KinematicChecks component (the FC and
-# the mini both use it).
+# comparison. Pure header in the shared TR_KinematicChecks component (the FC
+# uses it).
 add_executable(test_main_deploy_gate test_main_deploy_gate.cpp)
 target_include_directories(test_main_deploy_gate PRIVATE
     ${SHIM_DIR}
@@ -2567,7 +2551,7 @@ gtest_discover_tests(test_ground_ref_freeze)
 # produce, and refuted by sustained stillness. Every arm is a RATE or an
 # acceleration: a reboot cannot establish absolute altitude, because a stale token
 # supplies a foreign ground reference. Pure header in the shared TR_KinematicChecks
-# component, beside MainDeployGate, so the mini shares it.
+# component, beside MainDeployGate.
 add_executable(test_recovery_arm_gate test_recovery_arm_gate.cpp)
 target_include_directories(test_recovery_arm_gate PRIVATE
     ${SHIM_DIR}
@@ -2664,7 +2648,7 @@ gtest_discover_tests(test_cmd_queue_admit_policy)
 # ---------- test_wall_clock (#1155 item 3) ----------
 # Flight filenames are "phone sync + elapsed"; the day carry used to stop at
 # the month boundary and wrap at 256 days. WallClock.h is pure integer
-# arithmetic shared by the OC and the mini.
+# arithmetic used by the OC.
 add_executable(test_wall_clock test_wall_clock.cpp)
 target_include_directories(test_wall_clock PRIVATE
     ${SHIM_DIR}

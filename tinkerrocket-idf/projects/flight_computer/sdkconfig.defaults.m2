@@ -1,30 +1,35 @@
-# sdkconfig overlay applied ONLY to -DTR_BOARD_M1=1 builds, on top of
-# sdkconfig.defaults. Selected by the project CMakeLists, not by the build-dir
-# name — see there.
+# sdkconfig overlay applied ONLY to -DTR_BOARD_M2=1 builds (the Tinker-Beetle
+# V2), on top of sdkconfig.defaults and before sdkconfig.defaults.mosaic and
+# sdkconfig.defaults.flash4mb. Selected by the project CMakeLists, not by the
+# build-dir name — see there. It was written for the Beetle V1 (rev1) and
+# named for its build until the V1 was retired; the V2's flight computer is
+# the same S3 family, and the numbers below that were measured on the V1 say
+# so.
 #
 # === THIS IS THE ONE THAT CHANGES THE CHIP ===
-# Every other flight_computer build targets an ESP32-P4. rocket-computer-mini's
-# flight computer (U32) is an ESP32-S3RH2 — the same part as its out computer.
-# That is not a variant of the P4 image, it is a different architecture
-# (Xtensa, not RISC-V), so this overlay MUST come after sdkconfig.defaults and
-# MUST land in a build dir of its own. A stale sdkconfig from a P4 build in the
-# same directory is the quiet failure mode here, which is why the project
-# CMakeLists also redirects SDKCONFIG into the build dir.
+# Every other flight_computer build targets an ESP32-P4. The Beetle's flight
+# computer (U32) is an ESP32-S3 — an ESP32-S3FH4R2 on the V2, the same part as
+# its out computer (the V1's was an ESP32-S3RH2). That is not a variant of the
+# P4 image, it is a different architecture (Xtensa, not RISC-V), so this
+# overlay MUST come after sdkconfig.defaults and MUST land in a build dir of
+# its own. A stale sdkconfig from a P4 build in the same directory is the
+# quiet failure mode here, which is why the project CMakeLists also redirects
+# SDKCONFIG into the build dir.
 #
-#   idf.py -B build_m1 -DTR_BOARD_M1=1 build
+#   idf.py -B build_m2 -DTR_BOARD_M2=1 build
 #
-# If IDF has already fixed a target in build_m1, `idf.py -B build_m1 set-target
+# If IDF has already fixed a target in build_m2, `idf.py -B build_m2 set-target
 # esp32s3` first, or delete the dir — set-target rewrites sdkconfig, and a
 # target mismatch surfaces as a wall of unrelated compile errors rather than a
 # clear message.
 CONFIG_IDF_TARGET="esp32s3"
 
-# === PSRAM: 2 MB in-package quad on the S3RH2 ===
-# Same part and same reasoning as the out computer's V9 overlay: the RH2 is the
-# embedded-PSRAM S3, the PSRAM sits on SPICS1 (pad 28, externally NC by
-# design), and GPIO33-37/47/48 stay usable because the octal restriction does
-# not apply to a quad part. IGNORE_NOTFOUND so a board that does not bring it
-# up boots anyway rather than panicking.
+# === PSRAM: 2 MB in-package quad ===
+# Same reasoning as the out computer's V9 overlay: the S3FH4R2 (and the V1's
+# S3RH2) carries 2 MB of quad PSRAM in its package on SPICS1 (pad 28,
+# externally NC by design), and GPIO33-37/47/48 stay usable because the octal
+# restriction does not apply to a quad part. IGNORE_NOTFOUND so a board that
+# does not bring it up boots anyway rather than panicking.
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_QUAD=y
 CONFIG_SPIRAM_SPEED_40M=y
@@ -33,7 +38,7 @@ CONFIG_SPIRAM_IGNORE_NOTFOUND=y
 
 # === No radios on this processor ===
 # The S3 has WiFi and BLE where the P4 has neither, and this processor uses
-# neither: the mini's 2.4 GHz chip antenna is on the OUT computer, and U32 has
+# neither: the Beetle's 2.4 GHz chip antenna is on the OUT computer, and U32 has
 # no antenna or matching network at all — its LNA_IN is a deliberate
 # no-connect. Compiling the stacks in would buy image size and a radio that
 # radiates into a via.
@@ -44,7 +49,7 @@ CONFIG_ESP_WIFI_ENABLED=n
 # Nothing set a clock, so this processor ran at 160 MHz. The flight code's
 # budgets were set on the P4 at 360 MHz: config.h fills the 44.1 kHz FC->OC
 # link to ~95 % at the 3,840 Hz boost rate, and i2sSenderTask's comment puts
-# core 0 at ~76 %. On the first mini at 160 MHz the sender managed ~1,450
+# core 0 at ~76 %. On the first Beetle V1 at 160 MHz the sender managed ~1,450
 # frames/s against ~3,600 queued, so ~60 % of frames dropped at the queue.
 # The IMU read ~2,750 of its 3,840 samples/s. 240 MHz is the S3's ceiling.
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
@@ -53,7 +58,7 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 # Nothing set either, so this processor fetched its code at IDF's defaults: the
 # flash in DIO (two data lines) and a 16 KB instruction cache. The flight loop
 # does not fit in that. loop_fc() alone is 52 KB of code and the EKF 25 KB, and
-# one pass runs through about 38 KB of it. Profiled on the Beetle's FC
+# one pass runs through about 38 KB of it. Profiled on the Beetle V1's FC
 # (-DTR_LOOP_PROFILE=1, #1606) on the pad with a GNSS fix and the IMU at
 # 7,680 Hz, at -O2, 2026-10-12: 81 % of core 1's cycles were stalls on
 # instruction fetch, about 1,200 cache misses a pass at 485 CPU cycles each,
@@ -68,12 +73,13 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 # 591/s, QIO 623/s; QIO cuts a miss to 279 cycles. No IMU, I2S or queue drops
 # at any setting. Core 0 runs from the same cache and gains too.
 #
-# QIO: the FC's W25Q128JV (U33) has IO2/IO3 on SPIWP/SPIHD, and the bootloader
-# finds a quad part ("Enabling QIO for flash chip WinBond"). The in-package
+# QIO: the V1 FC's W25Q128JV (U33) had IO2/IO3 on SPIWP/SPIHD, and the
+# bootloader found a quad part ("Enabling QIO for flash chip WinBond"); the
+# V2's flash is the 4 MB in the S3FH4R2's package, also quad. The in-package
 # PSRAM shares those four lines and is unaffected. The read mode belongs to the
 # SECOND-STAGE BOOTLOADER, which an OTA update never replaces: a board updated
 # over the air keeps DIO, with the bigger cache, until its bootloader is
-# written once over USB (`idf.py -B build_m1 -DTR_BOARD_M1=1 flash`, or
+# written once over USB (`idf.py -B build_m2 -DTR_BOARD_M2=1 flash`, or
 # bootloader/bootloader.bin at 0x0).
 #
 # The 32 KB cache takes its extra 16 KB from internal RAM: 146 -> 130 KB free
@@ -93,7 +99,7 @@ CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
 # So the inherited SEL_5 gives this processor 2.67 V: not the most lenient
 # level but a STRICTER one than the S3's own default (SEL_7), and 0.23 V above
 # what the out computer runs on the very same +3V3 rail (its build takes the
-# S3 default). The mini FC would therefore brown out first in any supply decay
+# S3 default). The Beetle FC would therefore brown out first in any supply decay
 # and throw away a quarter-volt of the TPS61094 hold-up tail it was supposed
 # to have. Pin the S3's actually-most-lenient level, which also matches the OC.
 #

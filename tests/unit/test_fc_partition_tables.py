@@ -95,9 +95,9 @@ def test_only_the_beetle_v2_build_takes_the_overlay_and_takes_it_last():
     append = 'list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.flash4mb")'
     assert src.count("sdkconfig.defaults.flash4mb\")") == 1
     guard = src.index("if(TR_BOARD_M2)\n    " + append)
-    # after every other overlay the M2 build takes (the M1's S3 overlay, the PX1105R image's), so the last file wins,
+    # after every other overlay the M2 build takes (its S3 overlay, the PX1105R image's), so the last file wins,
     # and before the IDF project is entered
-    assert src.index('set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.m1")') < guard
+    assert src.index('set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.m2")') < guard
     assert src.rindex('list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.mosaic")') < guard
     assert guard < src.index("include($ENV{IDF_PATH}/tools/cmake/project.cmake)")
     assert 'set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")' in src

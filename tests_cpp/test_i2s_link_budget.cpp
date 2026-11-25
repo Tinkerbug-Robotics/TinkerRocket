@@ -44,16 +44,10 @@ double imuBatched(double rate_hz)
          + frames * (double)(1 + kFrameOverhead);          // count byte + framing, per frame
 }
 
-// GNSS_RTCM_MSG: the LC86G's raw MSM7, one epoch a second as five messages
-// (GPS, GLONASS, Galileo, BeiDou, QZSS). An open sky measured 441 B/s of
-// frames (Beetle, 2026-09-25, up to 29 satellites); budgeted at 40 satellites,
-// 15 B each (one L1 signal: 36 bits per satellite and 80 per cell, plus a mask
-// bit of each), 22 B of message header and 6 of RTCM3 framing per message, and
-// the record header and I2S framing per frame. Plus the broadcast ephemeris
-// ($PAIR436,1): measured at exactly one message a second (Beetle,
-// 2026-10-12), budgeted at the largest, BeiDou's 1042 (64 B + 6 of framing).
-// Zero on u-blox boards, which emit none.
-// The same record on the V9 with a mosaic-G5 carries its SBF blocks (TR_GNSS_DRIVER_MOSAIC):
+// GNSS_RTCM_MSG: the receiver's raw frames (the retired Beetle V1's LC86G
+// sent its MSM7 here, 441 B/s on an open sky). Zero on u-blox boards, which
+// emit none.
+// The record on the V9 with a mosaic-G5 carries its SBF blocks (TR_GNSS_DRIVER_MOSAIC):
 // MeasEpoch, MeasExtra and PVTGeodetic at 20 Hz, status at 1 Hz. The
 // 2026-10-15 spin-rig capture (33 satellites, ~99 signals) measured MeasEpoch
 // 1,495 B, MeasExtra 1,631 B and PVTGeodetic 96 B; budgeted here at 45
@@ -147,9 +141,7 @@ std::vector<Flight> sdrFlights()
 std::vector<Flight> flights()
 {
     const double board = (double)config::IMU_RATE_MAX_HZ;
-#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
-    return {{"LC86G", GNSS_TYPE_LC86G, board, (double)config::GNSS_UPDATE_RATE, GNSS_LOG_DETAILED}};
-#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
     return mosaicFlights((double)config::GNSS_UPDATE_RATE);
 #elif defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
     // The V10's gnss-sdr-dev image: the board alone, its fixes as GNSSData at
@@ -169,12 +161,6 @@ std::vector<Flight> flights()
 
 double gnssRtcmInflow(const Flight& f)
 {
-    if (f.gnss == GNSS_TYPE_LC86G)
-    {
-        const double msgs_per_sec = 5.0 + 1.0;
-        const double frame_bytes  = 40.0 * 15.0 + 5.0 * (22.0 + 6.0) + 1.0 * (64.0 + 6.0);
-        return frame_bytes + msgs_per_sec * (double)(sizeof(GnssRtcmHeader) + kFrameOverhead);
-    }
     if (f.gnss == GNSS_TYPE_MOSAIC)
     {
         const double sats = 45.0, signals = 130.0;
@@ -189,29 +175,21 @@ double gnssRtcmInflow(const Flight& f)
 }
 
 // RAW_GNSS_EKF_MSG: the raw-GNSS filter's state (#1600), 10 a second where
-// it runs (config.h TR_RAW_GNSS_SHADOW: the LC86G boards, and the mosaic-only
-// image, where it is the one navigation filter), and the attitude 1-sigma and
-// IMU biases beside each state record (RAW_GNSS_ATT_MSG). On the LC86G also
-// its check of each receiver fix against the IMU (GNSS_CHECK_MSG, #1508), one
-// per fix at the receiver's 10 Hz; the mosaic-G5's driver hands over no fixes
-// to check, so none there. The clock line (GNSS_CLOCK_MSG) once a second, and
-// the heading from thrust (HEADING_FIT_MSG) once a second in flight: each
-// LC86G epoch, and the mosaic-G5's fused 10 Hz taken a second apart
-// (heading_fit_period_s).
+// it runs (config.h TR_RAW_GNSS_SHADOW: the mosaic-only image, where it is
+// the one navigation filter, and the other raw images), and the attitude
+// 1-sigma and IMU biases beside each state record (RAW_GNSS_ATT_MSG). The
+// mosaic-G5's driver hands over no fixes to check (GNSS_CHECK_MSG, #1508), so
+// none here. The clock line (GNSS_CLOCK_MSG) once a second, and the heading
+// from thrust (HEADING_FIT_MSG) once a second in flight: the mosaic-G5's
+// fused 10 Hz taken a second apart (heading_fit_period_s). (The retired
+// Beetle V1's LC86G also checked each of its 10 Hz fixes.)
 double rawGnssShadowInflow()
 {
 #if TR_RAW_GNSS_SHADOW
-#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
-    return framed(sizeof(RawGnssEkfData), 10.0) + framed(sizeof(RawGnssAttData), 10.0)
-         + framed(sizeof(GnssCheckData), 10.0)
-         + framed(sizeof(GnssClockData), 1.0)    // the clock line, once a second with a fix
-         + framed(sizeof(HeadingFitData), 1.0);  // the heading from thrust, each raw epoch in flight
-#else
     return framed(sizeof(RawGnssEkfData), 10.0) + framed(sizeof(RawGnssAttData), 10.0)
          + framed(sizeof(GnssCheckData), 0.0)    // no fixes to check
          + framed(sizeof(GnssClockData), 1.0)    // the 1PPS line, once a second
          + framed(sizeof(HeadingFitData), 1.0);  // the heading from thrust, an epoch a second in flight
-#endif
 #else
     return 0.0;
 #endif
@@ -224,12 +202,12 @@ double rawGnssShadowInflow()
 // mosaic-only image the filter's ephemerides are not in it (the receiver's
 // own navigation blocks are in the log's SBF), so its largest record is the
 // state's, the covariance's or the pad survey's. The gnss-sdr-dev image's
-// filter takes the board's RTCM3 ephemerides as the LC86G's, so its pad
-// context carries them as the Beetle's does.
+// filter takes the board's RTCM3 ephemerides, so its pad context carries
+// them (as the retired Beetle V1's LC86G image's did).
 double padContextBurst()
 {
 #if TR_RAW_GNSS_SHADOW
-#if (defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
+#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
     const size_t largest = sizeof(PadContextHeader)
                          + std::max({sizeof(PadContextNav), padContextCovWireSize(PCX_COV_PER_PART),
                                      padContextSurveyWireSize(PCX_SURVEY_PER_PART), PCX_EPH_MAX_FRAME});
@@ -478,8 +456,8 @@ TEST(OcFlashBudget, TheModelGivesTheGoblinsLog) {
 
 TEST(I2SLinkBudget, TheRawFilterIsCountedWhereItRuns) {
     // Its state, attitude, clock and heading records (and its pad context) on
-    // every image that runs it: the Beetle's LC86G and the mosaic-only image,
-    // where it is the one navigation filter. Nowhere else.
+    // every image that runs it: the mosaic-only image, where it is the one
+    // navigation filter, and the other raw images. Nowhere else.
 #if TR_RAW_GNSS_SHADOW
     EXPECT_GT(rawGnssShadowInflow(), 0.0);
     EXPECT_GT(padContextBurst(), 0.0);

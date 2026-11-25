@@ -7,8 +7,8 @@ silent -- and from then on the tool exited 1 before replaying anything.
 Nothing ran it, so nobody noticed for five weeks.
 
 The tool now passes V9's flag.  That is only safe while every value the shim
-reads is the same on every board: an M1 log replayed against a V9 threshold
-that differs from M1's would disagree with the vehicle with no symptom, which
+reads is the same on every board: a Beetle log replayed against a V9 threshold
+that differs from the Beetle's would disagree with the vehicle with no symptom, which
 is exactly the drift the tool exists to prevent.  So the second test builds
 the shim for every board config.h accepts and compares the shipped values bit
 for bit.  If it fails, do not just change the pick -- replay each log with the
@@ -29,16 +29,15 @@ import replay_deployment_detector as rdd  # noqa: E402
 
 # One entry per board_<rev>.h under flight_computer/main/board/ -- legacy/
 # included, since config.h still builds V7 and V8 from there -- with the defines
-# the FC's CMake passes for it.  M1 needs its two driver seams as well, or
-# config.h refuses the build (flight_computer/CMakeLists.txt sets both under
-# TR_BOARD_M1); V10 needs its magnetometer seam the same way (#1593).
+# the FC's CMake passes for it.  M2 needs its GNSS driver seam as well, or
+# config.h refuses the build (flight_computer/CMakeLists.txt sets it under
+# TR_BOARD_M2); V10 needs its magnetometer seam the same way (#1593).
 BOARDS = {
     "v5": ("-DTR_BOARD_V5=1",),
     "v7": ("-DTR_BOARD_V7=1",),
     "v8": ("-DTR_BOARD_V8=1",),
     "v9": ("-DTR_BOARD_V9=1",),
     "v10": ("-DTR_BOARD_V10=1", "-DTR_MAG_DRIVER_QMC5883P=1"),
-    "m1": ("-DTR_BOARD_M1=1", "-DTR_MAG_DRIVER_QMC5883P=1", "-DTR_GNSS_DRIVER_LC86=1"),
     # The Tinker-Beetle V2: its PX100's driver, which config.h requires for M2
     "m2": ("-DTR_BOARD_M2=1", "-DTR_GNSS_DRIVER_PX1105R=1"),
 }

@@ -104,9 +104,10 @@ struct board_pins
     //         at ~2.53 V against a 2.7 V minimum for both — out of spec
     //         exactly during heavy logging. The prescribed fix is a schematic
     //         change (move U13's VCC to +3V3) and is still unaddressed.
-    //       * rocket_computer_mini/sdkconfig.defaults already carries a
-    //         "PSRAM: deliberately OFF — do not enable" note for this same
-    //         part, citing rail sag measured on radio_board and base station.
+    //       * the single-MCU mini's sdkconfig.defaults (since retired)
+    //         carried a "PSRAM: deliberately OFF — do not enable" note for
+    //         this same part, citing rail sag measured on radio_board and
+    //         base station.
     //       * TR_LogToFlash asks for MALLOC_CAP_INTERNAL, so enabling PSRAM
     //         alone would not move the ring anyway.
     //     And note it would not buy back the reboot features below: PSRAM is

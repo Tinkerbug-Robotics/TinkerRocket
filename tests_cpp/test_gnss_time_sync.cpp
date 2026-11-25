@@ -3,7 +3,7 @@
 // $PQTMPVT a fixed delay after its GPS epoch and sends the rest of its burst
 // behind it; a simulated GNSS poll reads the UART every 27 ms (give or take
 // its scheduling) and backdates the sentence by the bytes behind it, as
-// TR_GNSSReceiverLC86Serial::pollNewPVT does. The MCU crystal runs 30 ppm fast.
+// the Beetle V1's LC86G driver's pollNewPVT did. The MCU crystal runs 30 ppm fast.
 #include <gtest/gtest.h>
 
 #include <algorithm>

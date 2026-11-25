@@ -107,11 +107,11 @@ def test_only_the_beetle_v2_build_takes_the_overlay_and_takes_it_last():
     append = 'list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.defaults.flash4mb")'
     assert append in src
     # inside the M2 branch of the overlay block, after the list is set: the last file wins
-    m2 = src.index("    elseif(TR_BOARD_M2)\n        message(STATUS \"out_computer: sdkconfig overlay sdkconfig.defaults.v9")
+    m2 = src.index("    if(TR_BOARD_M2)\n        message(STATUS \"out_computer: sdkconfig overlay sdkconfig.defaults.v9")
     nxt = src.index("    elseif(TR_BOARD_V10)", m2)
     assert m2 < src.index(append) < nxt
     assert src.index('set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.v9")') < src.index(append)
-    # and the generated config stays per build dir, or an M1 build could inherit the 4 MB table
+    # and the generated config stays per build dir, or another board's build could inherit the 4 MB table
     assert 'set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")' in src
 
 

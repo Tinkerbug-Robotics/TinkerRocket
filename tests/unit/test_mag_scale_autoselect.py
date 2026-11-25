@@ -2,8 +2,8 @@
 
 The IIS2MDC-named (0xD1) log stream carries raw int16 counts at a
 sensitivity that depends on which board wrote the log: the big board's
-IIS2MDC (0.15 µT/LSB) or the rocket-computer-mini's QMC5883P (100/3750
-µT/LSB, #797).  OUT_STATUS_QUERY v6 stamps the chip in a mag_type byte;
+IIS2MDC (0.15 µT/LSB) or a QMC5883P (the Tinker-Beetle V1's and the V10's;
+100/3750 µT/LSB, #797).  OUT_STATUS_QUERY v6 stamps the chip in a mag_type byte;
 `parse_binary_file` must key the scale off it and assume the IIS2MDC for
 older logs (every pre-v6 log came from a big board).
 

@@ -2391,9 +2391,9 @@ static float readRailAmps(int gpio, float r_ohm)
 }
 
 // ---------------------------------------------------------------------------
-//  #1166: hold-up supercap voltage (net V_SCAP_ADC, rocket-computer-mini)
+//  #1166: hold-up supercap voltage (net V_SCAP_ADC, the Tinker-Beetle)
 //
-//  R125/R126 halve V_SCAP onto SCAP_ADC_PIN (ADC1_CH7 on the M1), C144 at the
+//  R125/R126 halve V_SCAP onto SCAP_ADC_PIN (ADC1_CH7 on the Beetle), C144 at the
 //  pin.  The TPS61094 terminates the cap at 2.5 V, so the pad sees ~1.25 V
 //  plus the converter's tolerance: ADC_ATTEN_DB_6 (~0-1.75 V) is the
 //  narrowest range that cannot clip it, and it needs its own calibration
@@ -2409,7 +2409,7 @@ static float readRailAmps(int gpio, float r_ohm)
 //  #1409: the Tinker-Mantis V10/V11 (SCAP_FROM_FC) has the same divider on the
 //  FLIGHT computer's GPIO17. The FC reads it and sends it in every
 //  FC_STATUS_MSG; serviceHoldup takes that reading in place of an ADC read
-//  here, and the verdict, the keys and the trace are the mini's. While the FC
+//  here, and the verdict, the keys and the trace are the Beetle's. While the FC
 //  is off or silent the verdict is withheld (key absent), not judged stale.
 // ---------------------------------------------------------------------------
 static adc_cali_handle_t      scap_adc_cali  = nullptr;
@@ -3522,7 +3522,7 @@ static inline IRAM_ATTR void rxPush(uint8_t b)
     // The byte must land before the index that covers it. volatile orders
     // rx_head against the other volatile accesses only, not against this plain
     // store, and at -O2 GCC sinks the store below the rx_head write (it does in
-    // the M1 image). Harmless while every channel is created from loop_oc: this
+    // the Beetle V1 image). Harmless while every channel is created from loop_oc: this
     // ISR then runs on core 1 with i2sParserTask and finishes before the parser
     // resumes. The fence keeps the ring correct if either ever moves to core 0,
     // and costs nothing on the S3, where it shares the memw the volatile store
@@ -10406,7 +10406,7 @@ static bool initLoggingSubsystem()
                 ESP_LOGW("PWR", "This chip has %d MB of in-package PSRAM that the "
                                 "selected board map does not use. Expected on a V7/V8 "
                                 "board (MRAM is fitted); if this IS a V9/V10 board or "
-                                "the mini (M1), it was built with the wrong "
+                                "the Beetle (M2), it was built with the wrong "
                                 "-DTR_BOARD_* flag.", psram_mb);
             }
         }
@@ -10423,7 +10423,7 @@ static bool initLoggingSubsystem()
             ESP_LOGW("PWR", "  In-flight reboot recovery (#104): RAM cache + NAND");
             ESP_LOGW("PWR", "  tail-scan (#846) — no longer MRAM-dependent.");
             ESP_LOGW("PWR", "  Dirty-ring replay (#274): UNAVAILABLE.");
-            ESP_LOGW("PWR", "  Expected on V9/V10 and the mini (M1). On a V8 board this");
+            ESP_LOGW("PWR", "  Expected on V9/V10 and the Beetle (M2). On a V8 board this");
             ESP_LOGW("PWR", "  means the image was built with the wrong -DTR_BOARD_* flag.");
             ESP_LOGW("PWR", "========================================");
             // #822: PSRAM is the ring's intended home on V9/V10. Landing on

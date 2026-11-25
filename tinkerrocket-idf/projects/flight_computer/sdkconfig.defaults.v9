@@ -3,7 +3,7 @@
 # name — see there.
 #
 # This file sets NOTHING. It is the V9 per-board hook — the same shape as
-# out_computer/sdkconfig.defaults.v9 and as the M1 overlay next to it, which
+# out_computer/sdkconfig.defaults.v9 and as the M2 overlay next to it, which
 # exist because sdkconfig is per-project while some settings are per-BOARD —
 # and it currently has no such setting to carry. It stays so a V9-only
 # setting has a home when one is needed, and so the CMake status line can say
@@ -21,7 +21,8 @@
 # tinkerrocket-idf/tools/check_flash_declarations.py fails the Docs job on any
 # headroom above the table — including a 16 MB line put back here.
 # partitions.csv ends at 0x610000 (6.06 MB), so the 8 MB in sdkconfig.defaults
-# covers every board this project builds for (V7, V8, V9, M1), and a V9 build
+# covers every P4 board this project builds for (V7, V8, V9, V10; the
+# Tinker-Beetle V2 takes 4 MB, sdkconfig.defaults.flash4mb), and a V9 build
 # generates CONFIG_ESPTOOLPY_FLASHSIZE="8MB".
 #
 # What that costs a V9 is deliberate: it logs "Detected size(16384k) larger

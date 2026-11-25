@@ -883,7 +883,8 @@ static inline void loraSelectChannelSet(
 // carried in OutStatusQueryData v6+ so log readers can pick the count scale
 // per log instead of assuming the big board's chip:
 //   IIS2MDC  — 0.15 µT/LSB (ST datasheet 9.13), big board V8+
-//   QMC5883P — 100/3750 µT/LSB at ±8 G (QST Table 2), rocket-computer-mini
+//   QMC5883P — 100/3750 µT/LSB at ±8 G (QST Table 2), the V10 (and the
+//              retired Beetle V1)
 //              via TR_Sensor_Collector's TR_MAG_DRIVER_QMC5883P seam, which
 //              swaps the TR_QMC5883P driver into the IIS2MDC-named slot (#1312)
 // Logs older than v6 carry no field; readers assume IIS2MDC.
@@ -4637,7 +4638,8 @@ struct __attribute__((packed)) ConfigReportData
     // been told starts on.  Both can read "unknown" on the wire; only the
     // first is a setting somebody chose, and the OC re-sends its own copy to
     // the second, as it does the orientation (F_ORIENT_FROM_NVS).  Never set
-    // by the Beetle's FC (TR_BOARD_M1), which keeps no antenna offset.
+    // by the Beetle's FC (TR_BOARD_M2, as the V1's before it), which keeps no
+    // antenna offset.
     static constexpr uint8_t F_ANTENNA_FROM_NVS = 4;
 
     uint32_t time_us;              // micros() at build — first, so the generic

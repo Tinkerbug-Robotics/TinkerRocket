@@ -3,7 +3,12 @@
 The rig replay flies one flight on the bench, end to end (#1600, #1620):
 
 - The flight computer runs a `TR_SIM_REPLAY` build. It plays the flight's IMU, barometer and magnetometer through the sensor sim's path, timed by the receiver's GPS time.
-- At the same time the COCOM rig (HackRF/PortaPack into a Faraday cage) plays the same flight's GNSS signals to the Beetle's LC86G.
+- At the same time the COCOM rig (HackRF/PortaPack into a Faraday cage) plays the same flight's GNSS signals to the receiver.
+
+This page was first written for the Tinker-Beetle V1 and its LC86G, whose image has since been retired with the V1; the run
+below is that procedure, with step 2 now building the mosaic-only image. The images that carry a rig replay today are the
+mosaic-only image ("The mosaic-G5" below, which lists how its run differs), the V10's gnss-sdr-dev image and the V9's or V10's
+auto image (the last section).
 - So the raw-GNSS filter, the physics checks and the flight logic all see one consistent flight, and the result can be scored against its truth.
 
 For how it works, see "The rig replay" in [docs/plans/1600-realtime-raw-gnss.md](../../docs/plans/1600-realtime-raw-gnss.md).
@@ -40,7 +45,7 @@ For how it works, see "The rig replay" in [docs/plans/1600-realtime-raw-gnss.md]
 2. **Build the replay image** (bench only). Then revert `dependencies.lock`.
    ```
    cd tinkerrocket-idf/projects/flight_computer
-   idf.py -B build_replay -DTR_BOARD_M1=1 -DTR_SIM_REPLAY_BLOB=/abs/path/sim_replay.bin build
+   idf.py -B build_replay -DTR_BOARD_V9=1 -DTR_GNSS_MOSAIC=1 -DTR_SIM_REPLAY_BLOB=/abs/path/sim_replay.bin build
    ```
 3. **Flash the FC, and only the FC.** The Beetle's FC and OC both enumerate on the same USB port, so check which chip is there before writing:
    - `ioreg -p IOUSB -l -w0 | grep 'USB Serial Number'` shows the chip's MAC without opening the port.
@@ -168,8 +173,9 @@ cmake --build build_rig_rp5_0829 -j 4
   `CONFIG_FREERTOS_USE_TRACE_FACILITY=y` and `CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y` to the build dir's
   `sdkconfig` (`[CPU]`). Both perturb timing, so keep them out of the scored runs.
 - The build is marked `-bench`. It plays a canned flight from boot as a sim, with every pyro dry.
-- It is refused on the mosaic image built without the filter (no epochs to clock from) and on any board but the M1
-  and the mosaic image.
+- It is refused on the mosaic image built without the filter (no epochs to clock from) and on any image but the mosaic
+  image, the V10's gnss-sdr-dev image and the V9's or V10's auto image (the Beetle V1's LC86G image, since retired, was
+  the first).
 - The staged images, their blobs and the exact commands are in `firmware-ota/v9-rig-replay-rc3/<flight>/` (RC3's
   commit; the older `firmware-ota/v9-rig-replay/` is 48f9b61a's). `run_v9.sh` reads `firmware-ota/v9-rig-replay/`
   unless `RIG_IMAGE_DIR` names the folder: set it to the one flashed, so the run records that image's SHA256SUMS.

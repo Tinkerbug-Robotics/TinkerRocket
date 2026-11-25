@@ -34,9 +34,7 @@ string(TIMESTAMP TR_BUILD_DATE "%Y%m%d-%H%M" UTC)
 # matters at runtime and not only for provenance: the two select different
 # headers (V9/V10 has no MRAM), so a "-v8" image on V9 hardware is a real
 # misconfiguration, not just a mislabel.
-if(TR_BOARD_M1)
-    set(TR_BOARD_SUFFIX "-m1")
-elseif(TR_BOARD_M2)
+if(TR_BOARD_M2)
     set(TR_BOARD_SUFFIX "-m2")
 elseif(TR_BOARD_V10)
     set(TR_BOARD_SUFFIX "-v10")
@@ -99,22 +97,18 @@ add_compile_definitions(TR_BOARD_OTA_SUFFIX="${TR_BOARD_SUFFIX}")
 # existing one. Without the second line, a root sdkconfig written by a V9 build
 # would silently carry CONFIG_SPIRAM into the next V8 build — the same
 # stale-cache trap as a wrong -DTR_BOARD_* flag, and just as quiet.
-if(TR_BOARD_V9 OR TR_BOARD_V10 OR TR_BOARD_M1 OR TR_BOARD_M2)
-    # V10 is the same ESP32-S3RH2 as V9 (#1593). M1 shares the overlay:
-    # rocket-computer-mini's out computer is the same
-    # ESP32-S3RH2 with the same 2 MB of in-package quad PSRAM, so the log
-    # ring belongs in the same place. The file's V9-specific prose about U13's
-    # VCC and WORKLIST M-4 is rocket-computer's history, not the mini's; the
-    # CONFIG_* lines are what apply here.
-    # M2 (Tinker-Beetle V2) shares it too: U15 is an ESP32-S3FH4R2 there, with
-    # the same 2 MB of quad PSRAM and its flash in the package, also quad.
+if(TR_BOARD_V9 OR TR_BOARD_V10 OR TR_BOARD_M2)
+    # V10 is the same ESP32-S3RH2 as V9 (#1593). M2 (Tinker-Beetle V2) shares
+    # the overlay: U15 is an ESP32-S3FH4R2 there, with the same 2 MB of
+    # in-package quad PSRAM and its flash in the package, also quad, so the
+    # log ring belongs in the same place. The file's V9-specific prose about
+    # U13's VCC and WORKLIST M-4 is rocket-computer's history, not the
+    # Beetle's; the CONFIG_* lines are what apply here.
     set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.v9")
-    if(TR_BOARD_M1)
-        message(STATUS "out_computer: sdkconfig overlay sdkconfig.defaults.v9 (PSRAM on, QIO flash and a 32 KB I-cache, shared with M1 — boot NOR keeps the base 8 MB declaration, #916)")
-    elseif(TR_BOARD_M2)
+    if(TR_BOARD_M2)
         message(STATUS "out_computer: sdkconfig overlay sdkconfig.defaults.v9 (PSRAM on, QIO flash and a 32 KB I-cache, shared with M2)")
         # The one board whose boot flash is smaller than the base declares: the
-        # 4 MB inside the V2's ESP32-S3FH4R2, where rev1 has an external 16 MB
+        # 4 MB inside the V2's ESP32-S3FH4R2, where rev1 had an external 16 MB
         # NOR. 8 MB on that part is the FATAL direction (the "Boot NOR size"
         # block in sdkconfig.defaults, and docs/board-versioning.md), so M2 takes
         # a second overlay with a partition table that fits 4 MB and the

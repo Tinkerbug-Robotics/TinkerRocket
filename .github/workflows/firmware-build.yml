@@ -26,7 +26,7 @@ jobs:
         include:
           # Grouped by product line. `line` only labels the job; `project` is the
           # CMake project name and `path` (when present) the folder under
-          # tinkerrocket-idf/projects/ for the projects that moved into legacy/ or
+          # tinkerrocket-idf/projects/ for the projects that moved into
           # bench/. Project names did NOT change with the 2026-09-24 product
           # rename: both apps refuse an OTA image whose project name is not the
           # unit's own, so those names are the update contract with every board
@@ -69,24 +69,25 @@ jobs:
             project: out_computer
             board: V10
             flags: -B build_v10 -DTR_BOARD_V10=1
-          # Tinker-Beetle (hardware/tinker-beetle, fabbed as rocket-computer-mini-
-          # v1.0.1) is a two-ESP32-S3 board that runs out_computer and
-          # flight_computer with -DTR_BOARD_M1=1 — not the single-MCU
-          # rocket_computer_mini project under legacy/, which targets a shape that
-          # was never fabbed (#1188). M1 is the one flight computer that is NOT an
-          # ESP32-P4: sdkconfig.defaults.m1 changes CONFIG_IDF_TARGET as well as
-          # the pin map, and the project CMakeLists forces the target into a build
-          # dir of its own. The out computer shares the V9 PSRAM overlay but has
-          # its own pin map: the radio is on-board SPI and there is no GNSS/LoRa
-          # rail switch of its own.
+          # Tinker-Beetle V2 (hardware/tinker-beetle) is a two-ESP32-S3 board that
+          # runs out_computer and flight_computer with -DTR_BOARD_M2=1. The V1
+          # (rev1) is retired and has no build. M2 is the one
+          # flight computer that is NOT an ESP32-P4: sdkconfig.defaults.m2
+          # changes CONFIG_IDF_TARGET as well as the pin map, and the project
+          # CMakeLists forces the target into a build dir of its own; its PX100
+          # makes it the PX1105R image. Both halves boot from the 4 MB in their
+          # packages (sdkconfig.defaults.flash4mb). The out computer shares the
+          # V9 PSRAM overlay but has its own pin map: the radio is on-board SPI
+          # and there is no GNSS/LoRa rail switch of its own. Built here but not
+          # yet released (firmware-release.yml): no V2 has passed bring-up.
           - line: Tinker-Beetle
             project: flight_computer
-            board: M1
-            flags: -B build_m1 -DTR_BOARD_M1=1
+            board: M2
+            flags: -B build_m2 -DTR_BOARD_M2=1
           - line: Tinker-Beetle
             project: out_computer
-            board: M1
-            flags: -B build_m1 -DTR_BOARD_M1=1
+            board: M2
+            flags: -B build_m2 -DTR_BOARD_M2=1
           # Tinker-Base (hardware/tinker-base) runs base_station with its own map,
           # board_v4.h (-DTR_BS_BOARD=4): the on-board radio over SPI, no I2C, no
           # pack charger. Netlist-verified, not yet run on hardware — so until a
@@ -162,10 +163,6 @@ jobs:
           - line: legacy
             project: base_station
             board: V2-default
-          # The single-MCU merge for the never-fabbed S3-alone mini.
-          - line: legacy
-            project: rocket_computer_mini
-            path: legacy/rocket_computer_mini
           #
           # ---- Bench tools: never released -----------------------------------
           #
@@ -173,7 +170,7 @@ jobs:
           # at all. Its flag is mandatory too (#834): V7's PYRO1 FIRE pin is
           # PYRO_ARM on V9, so a flagless build armed the board on the keypress
           # meant to pulse channel 1. Build every map so none of them rots. It
-          # refuses V10 and M1, whose arm needs the out computer's consent.
+          # refuses V10 and M2, whose arm needs the out computer's consent.
           - line: bench
             project: pyro_channel_test
             path: bench/pyro_channel_test

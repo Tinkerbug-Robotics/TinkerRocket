@@ -579,7 +579,7 @@ void SensorCollector::begin(uint8_t imu_execution_core)
             }
             // Tear down the bus so the pins are released (on V7 this frees
             // shared pin 13 for SPI CS use). Never tear down a shared,
-            // app-owned bus — other devices (mini: INA230) live on it.
+            // app-owned bus — other devices live on it.
             if (!iis2mdc_bus_external)
             {
                 (void)i2c_del_master_bus(iis2mdc_bus);
@@ -1207,7 +1207,7 @@ void SensorCollector::pollIMUdata(void* parameter)
         // out (CFG/OFFSET regs back at power-on defaults = idle mode) does
         // not return "answering" but parked.
         // #1485: the magnetometer is polled by pollMagData(), not here. Its I2C
-        // read took this task ~1.6 ms on the mini (QMC5883P: status, burst,
+        // read took this task ~1.6 ms on the Beetle V1 (QMC5883P: status, burst,
         // status, sometimes a re-read), long enough to lose IMU samples.
 
         // Track total iteration time (excluding the notification wait)
@@ -1222,7 +1222,7 @@ void SensorCollector::pollIMUdata(void* parameter)
 }
 
 // #1485: the magnetometer's own poll task. Its I2C read is slow next to the
-// IMU's sample period (~1.6 ms for the mini's QMC5883P when it was three
+// IMU's sample period (~1.6 ms for the Beetle V1's QMC5883P when it was three
 // transactions, against 260 us at 3,840 Hz), so it runs below the IMU task,
 // which preempts it; the mag bus is private, so nothing else waits on it.
 // It sleeps until the gate's next read is due; the gate paces to the ODR.
@@ -1235,7 +1235,7 @@ void SensorCollector::pollMagData(void* parameter)
         // #1485: sleep until the gate's next attempt is due — at least a tick,
         // at most 100 ms so a sensor that comes up later is still noticed —
         // rather than waking every millisecond to ask. Those 1,000 wakes a
-        // second cost ~4 % of core 0 on the mini (bench A/B), for reads that
+        // second cost ~4 % of core 0 on the Beetle V1 (bench A/B), for reads that
         // only happen every 10 ms. Waking up to a tick early just loops once.
         uint32_t wait_us = self->iis2mdc_active ? self->iis2mdc_gate.usUntilDue(time_us())
                                                 : 100000u;
@@ -1335,7 +1335,7 @@ void SensorCollector::pollGNSSdata(void* parameter)
         const bool have_new = self->gnss_receiver.pollNewPVT(gnss_sample);
 
         // Per-satellite report for the same epoch (GNSS_SAT_MSG): every epoch
-        // from the u-blox, about once a second from the LC86G.  Inside
+        // from the u-blox, at their own rate from the others.  Inside
         // the timing accounting on purpose: this is flight data now, so its
         // parse cost belongs in the GNSS budget the >1 ms counters watch.
         // Static, not a local: this task has a 4 KB stack and the record is
@@ -1348,7 +1348,7 @@ void SensorCollector::pollGNSSdata(void* parameter)
         const uint32_t gnss_elapsed = time_us() - gnss_t0;
         self->pt_gnss_calls++;
 
-#if defined(TR_GNSS_COCOM_DIAG) && TR_GNSS_COCOM_DIAG && !(defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86) \
+#if defined(TR_GNSS_COCOM_DIAG) && TR_GNSS_COCOM_DIAG \
     && !(defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) && !(defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
         // ~1 Hz, and after the poll so the NAV-PVT cache is fresh. Deliberately
         // outside the timing accounting above: this is diagnostic load and
@@ -1524,14 +1524,10 @@ bool SensorCollector::getGNSSSatData(GNSSSatData& sat_out)
 bool SensorCollector::getGNSSRtcmFrame(uint8_t* out, size_t cap, size_t& len,
                                        uint32_t& time_us)
 {
-#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
-    // No semaphore: the driver's ring is safe between the poll task and us.
-    if (!use_gnss || !gnss_online_) return false;
-    return gnss_receiver.pollRtcmFrame(out, cap, len, time_us);
-#elif (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) \
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) \
     || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
-    // SBF blocks, through the driver's ring like the LC86G's frames (none
-    // while the V9 image flies a u-blox); the gnss-sdr-dev board's RTCM3.
+    // SBF blocks, through the driver's ring (none while the V9 image flies a
+    // u-blox); the gnss-sdr-dev board's RTCM3.
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.pollRawFrame(out, cap, len, time_us);
 #elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
@@ -1575,9 +1571,7 @@ void SensorCollector::requestGNSSNavResend()
 uint8_t SensorCollector::gnssType() const
 {
     if (!gnss_begun_ || !isGnssOnline()) return GNSS_TYPE_NONE;
-#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
-    return GNSS_TYPE_LC86G;
-#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
     return GNSS_TYPE_MOSAIC;
 #elif defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
     return GNSS_TYPE_SDR;
@@ -1592,9 +1586,7 @@ uint8_t SensorCollector::gnssType() const
 
 uint8_t SensorCollector::gnssLastBootType()
 {
-#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
-    return GNSS_TYPE_LC86G;
-#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
     return GNSS_TYPE_MOSAIC;
 #elif defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
     return GNSS_TYPE_SDR;
@@ -1609,9 +1601,7 @@ uint8_t SensorCollector::gnssLastBootType()
 
 bool SensorCollector::enableGNSSRawOutputs()
 {
-#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
-    return gnss_receiver.enableRawOutputs();
-#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
     // The mosaic-only image's: its MeasEpoch, navigation blocks and GPSIon
     return gnss_receiver.enableRawOutputs();
 #elif defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
@@ -1630,11 +1620,7 @@ bool SensorCollector::enableGNSSRawOutputs()
 
 bool SensorCollector::getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out)
 {
-#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
-    // No semaphore: the driver's queue is safe between the poll task and us.
-    if (!use_gnss || !gnss_online_) return false;
-    return gnss_receiver.takeRawEpoch(out);
-#elif (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
     // The same: the driver's queue, the epochs on the fused grid
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.takeRawEpoch(out);
@@ -1649,17 +1635,14 @@ bool SensorCollector::getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out)
 
 bool SensorCollector::getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len)
 {
-#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
-    if (!use_gnss || !gnss_online_) return false;
-    return gnss_receiver.takeEphemeris(out, cap, len);
-#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
     // A whole SBF navigation block; one longer than cap is dropped and
     // counted by the driver (cap is mosaic::kSbfNavMaxLen)
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.takeEphemeris(out, cap, len);
 #elif (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
-    // The board's 1019/1046/1042 as RTCM3 payloads, as the LC86G's (the
-    // mosaic's blocks too on TR_GNSS_AUTO_RAW)
+    // The board's 1019/1046/1042 as RTCM3 payloads (the mosaic's blocks too
+    // on TR_GNSS_AUTO_RAW)
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.takeEphemeris(out, cap, len);
 #else
@@ -1876,10 +1859,7 @@ bool SensorCollector::getGNSSEphemerisDecoded(gps_eph_t& out)
 
 bool SensorCollector::getGNSSFix(gnss_raw::TimedFix& out)
 {
-#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
-    if (!use_gnss || !gnss_online_) return false;
-    return gnss_receiver.takeFix(out);
-#elif (defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
+#if (defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
     // its 0xDF fixes, timed on the arrival line
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.takeFix(out);
@@ -1891,16 +1871,13 @@ bool SensorCollector::getGNSSFix(gnss_raw::TimedFix& out)
 
 bool SensorCollector::getGNSSClockLine(GnssClockData& out)
 {
-#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
-    if (!use_gnss || !gnss_online_) return false;
-    return gnss_receiver.takeClockLine(out);   // the driver's queue: no semaphore
-#elif (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) \
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) \
     || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.takeClockLine(out);   // the mosaic's PPS line (GCL_PPS), or the gnss-sdr-dev board's
 #elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
     if (!use_gnss || !gnss_online_) return false;
-    return gnss_receiver.takeClockLine(out);   // its 0xE5 arrival line, as the LC86G's
+    return gnss_receiver.takeClockLine(out);   // its 0xE5 arrival line
 #else
     (void)out;
     return false;
@@ -1920,10 +1897,7 @@ bool SensorCollector::sendGNSSAidFrame(const uint8_t* frame, size_t len)
 
 bool SensorCollector::getGNSSGeoidSeparation(float& sep_m) const
 {
-#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
-    if (!use_gnss || !gnss_online_) return false;
-    return gnss_receiver.geoidSeparationM(sep_m);
-#elif (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO)
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO)
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.geoidSeparationM(sep_m);
 #else

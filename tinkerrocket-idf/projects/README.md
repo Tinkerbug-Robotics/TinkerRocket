@@ -16,8 +16,8 @@ find, verify and flash these.
 | | [`out_computer`](out_computer/) | `idf.py -B build_v9 -DTR_BOARD_V9=1 build` | ESP32-S3 | `tinker-mantis-out_computer-V9.bin` |
 | **Tinker-Mantis** V10 | [`flight_computer`](flight_computer/) | `idf.py -B build_v10 -DTR_BOARD_V10=1 build` | ESP32-P4 | not released until a V10 passes bring-up (#1593) |
 | | [`out_computer`](out_computer/) | `idf.py -B build_v10 -DTR_BOARD_V10=1 build` | ESP32-S3 | not released until a V10 passes bring-up |
-| **Tinker-Beetle** | [`flight_computer`](flight_computer/) | `idf.py -B build_m1 -DTR_BOARD_M1=1 build` | ESP32-S3 | `tinker-beetle-flight_computer-M1.bin` |
-| | [`out_computer`](out_computer/) | `idf.py -B build_m1 -DTR_BOARD_M1=1 build` | ESP32-S3 | `tinker-beetle-out_computer-M1.bin` |
+| **Tinker-Beetle** V2 | [`flight_computer`](flight_computer/) | `idf.py -B build_m2 -DTR_BOARD_M2=1 build` | ESP32-S3 | not released until a V2 passes bring-up |
+| | [`out_computer`](out_computer/) | `idf.py -B build_m2 -DTR_BOARD_M2=1 build` | ESP32-S3 | not released until a V2 passes bring-up |
 | **Tinker-Base** | [`base_station`](base_station/) | `idf.py -B build_v4 -DTR_BS_BOARD=4 build` | ESP32-S3 | `tinker-base-base_station-V3.bin` — the V3 image, until V4 has run on hardware |
 | LoRa daughterboard (Tinker-Mantis) | [`radio_board`](radio_board/) | `idf.py build` | ESP32-S3 | `lora-daughterboard-radio_board.bin` |
 
@@ -38,7 +38,7 @@ Both apps read `project_name` out of an image's header and refuse to flash one
 that is not the unit's own (`EspImage.kt` / `EspImage.swift`), and the release
 catalog filters on it — so renaming `flight_computer` would make every board in
 the field refuse its next update. The product name lives in the release asset
-name, the board code (`V9`, `M1`, `-DTR_BS_BOARD=3`) selects the pin map, and a
+name, the board code (`V9`, `M2`, `-DTR_BS_BOARD=3`) selects the pin map, and a
 single project serves more than one product: `flight_computer` and
 `out_computer` build both the Tinker-Mantis and the Tinker-Beetle.
 
@@ -56,7 +56,10 @@ with the app's file picker or over USB.
 | Rocket computer V7 | `flight_computer`, `out_computer` — `main/board/legacy/board_v7.h` | `-B build_v7 -DTR_BOARD_V7=1` |
 | Rocket computer V5 (archived "TinkerRocket Full V5") | `flight_computer`, `out_computer` — `main/board/legacy/board_v5.h`; bring-up in [docs/plans/v5-board-bring-up.md](../../docs/plans/v5-board-bring-up.md) | `-B build_v5 -DTR_BOARD_V5=1` |
 | Base station V1/V2 | `base_station` — `main/board/legacy/board_v{1,2}.h` | `-DTR_BS_BOARD=1`, or no flag for V2 |
-| Single-MCU mini (never fabbed) | [`legacy/rocket_computer_mini`](legacy/rocket_computer_mini/) | `idf.py build` |
+
+The Tinker-Beetle V1 (rev1, its LC86G and QMC5883P) and the single-MCU mini
+firmware before it were retired on 2026-11-25 and have no build any more; the
+Tinker-Beetle V2 (`-DTR_BOARD_M2=1`) carries the board forward.
 
 The legacy pin maps stay inside the projects they belong to because those
 projects are the product firmware too: a V8 build is the same code as a

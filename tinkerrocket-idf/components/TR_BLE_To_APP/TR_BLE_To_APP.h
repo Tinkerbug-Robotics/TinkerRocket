@@ -58,7 +58,7 @@ public:
         // claimed a measured zero on hardware that has no monitor at all.
         float cam_current   = NAN;  // Camera rail current A  (NaN = not measured)
         float servo_current = NAN;  // Servo rail current A   (NaN = not measured)
-        // #1166: the hold-up supercap (rocket-computer-mini: V_SCAP_ADC lands
+        // #1166: the hold-up supercap (the Tinker-Beetle: V_SCAP_ADC lands
         // on the out computer).  Cap voltage in volts, NaN where the board has
         // no sense line (V7/V8/V9) so the key is simply absent; and the OC's
         // verdict on it — one of the HoldupState values below, 0 = not

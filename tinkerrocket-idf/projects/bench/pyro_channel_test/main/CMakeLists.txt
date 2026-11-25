@@ -25,7 +25,7 @@ idf_component_register(
 # out computer's half, so U9 never closes and every channel reads as a dead
 # igniter. A V9 build on a V10 is the same thing with the arm on an unconnected
 # pad (#1593).
-if(TR_BOARD_V10 OR TR_BOARD_M1)
+if(TR_BOARD_V10 OR TR_BOARD_M2)
     message(FATAL_ERROR
         "pyro_channel_test: the V10 and the Beetle are not supported. Their arm "
         "needs the out computer's consent (OC_ARM_EN), which this flight-computer-"

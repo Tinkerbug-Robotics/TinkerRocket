@@ -28,8 +28,8 @@
 #include "gnss/atmo.h"
 #include "gnss/types.h"
 
-// The Beetle's build sets no TR_EPH_CAPACITY, and the headers must not
-// either: tools/m1_identity.sh diffs every TR_* macro main.cpp sees.
+// A default build sets no TR_EPH_CAPACITY, and the headers must not either:
+// a build that does not set it sees no macro it did not see before.
 #ifdef TR_EPH_CAPACITY
 #error "TR_EPH_CAPACITY is defined on a default build: EphemerisStore.h must not #define it"
 #endif

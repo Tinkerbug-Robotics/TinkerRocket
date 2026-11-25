@@ -10,8 +10,8 @@
 // is still there for the epochs that straddle an update. Pure and
 // host-compilable (tests_cpp/test_gnss_raw.cpp).
 //
-// The pool's size is a build's (TR_EPH_CAPACITY): 64 by default, the
-// Beetle's. The mosaic-G5 build takes 128, set project-wide: that receiver
+// The pool's size is a build's (TR_EPH_CAPACITY): 64 by default, the Beetle
+// V1's. The mosaic-G5 build takes 128, set project-wide: that receiver
 // sends the navigation data of every GPS, Galileo and BeiDou satellite it
 // tracks, ~50 different ones over a 2-4 h pad wait, and two each of them is
 // ~100 (tests_cpp/test_eph_store_pad_wait.cpp).
@@ -29,7 +29,7 @@ class EphemerisStore
 {
 public:
     // No default #define of TR_EPH_CAPACITY: a build that does not set it
-    // sees no macro it did not see before (tools/m1_identity.sh diffs them).
+    // sees no macro it did not see before.
 #ifdef TR_EPH_CAPACITY
     static constexpr size_t kCapacity = TR_EPH_CAPACITY;
 #else

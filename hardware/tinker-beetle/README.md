@@ -580,15 +580,15 @@ symbols replaced, the stale cached copies refreshed, a title block on every
 sheet. `ARM_GATE` is a sheet-local label by design, so its net is
 `/Pyro/ARM_GATE` — the name the docs use is the label, the path is KiCad's.
 
-**Firmware is the two-processor pair, and CI builds it.** The fabbed board runs
+**Firmware is the two-processor pair, and CI builds it.** The V2 runs
 [`projects/out_computer`](../../tinkerrocket-idf/projects/out_computer/) and
 [`projects/flight_computer`](../../tinkerrocket-idf/projects/flight_computer/)
-with `-DTR_BOARD_M1=1` — a `board_m1.h` in each, netlist-verified on 2026-09-04
-(73 constants, none pointing at an unconnected pad) — and `firmware-build.yml`
-builds both as board `M1`.
-[`projects/rocket_computer_mini`](../../tinkerrocket-idf/projects/legacy/rocket_computer_mini/),
-the single-MCU merge, is still built so it does not rot, but it targets a shape
-that was never fabbed (#1188): do not flash it to this board.
+with `-DTR_BOARD_M2=1` — a `board_m2.h` in each — and `firmware-build.yml`
+builds both as board `M2`. The fabbed V1 ran the same projects with
+`-DTR_BOARD_M1=1` (a `board_m1.h` in each, netlist-verified on 2026-09-04)
+until the V1 was retired from the firmware on 2026-11-25; the single-MCU
+`rocket_computer_mini` project, for a shape that was never fabbed (#1188), was
+removed at the same time.
 
 The next spin's checklist is the *Still open* list in `FABRICATION-NOTES.md`;
 the bench items the review collected are on #993 and

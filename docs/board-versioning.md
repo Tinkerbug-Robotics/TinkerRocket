@@ -141,10 +141,11 @@ at runtime can catch it, while under-declaring is harmless and merely leaves the
 top of the part unaddressable.
 
 That removed the per-revision fork entirely for `flight_computer` and
-`out_computer`. Both share ONE `partitions.csv` across V7/V8/V9/V10/M1 — ending at
-6.06 MB and 6.14 MB — so the 16 MB overlays were buying nothing at all, while
-being exactly the thing that has gone wrong twice: the V7 boot loop below, and
-rocket-computer-mini's two processors declaring different sizes for one board.
+`out_computer`. Both share ONE `partitions.csv` across V7/V8/V9/V10 (and did
+across the Beetle V1, now retired) — ending at 6.06 MB and 6.14 MB — so the
+16 MB overlays were buying nothing at all, while being exactly the thing that
+has gone wrong twice: the V7 boot loop below, and the Beetle V1's two
+processors declaring different sizes for one board.
 
 One board is the exception, because its parts are smaller than the shared
 tables: the Tinker-Beetle V2 (`-DTR_BOARD_M2=1`), whose two `ESP32-S3FH4R2`s
@@ -171,11 +172,10 @@ one `out_computer` uses for V9 PSRAM:
 
 | project | base | overlay |
 |---|---|---|
-| `flight_computer` | 8 MB | `sdkconfig.defaults.v9` (`-DTR_BOARD_V9=1`, and V10) — comments only since #916; the flash size stays the base 8 MB. M2 takes M1's `sdkconfig.defaults.m1` and then `sdkconfig.defaults.flash4mb` → 4 MB + `partitions_4mb.csv` |
-| `out_computer` | 8 MB | `sdkconfig.defaults.v9` (`-DTR_BOARD_V9=1`, V10, M1 and M2) — PSRAM only since #916; the flash size stays the base 8 MB. M2 adds `sdkconfig.defaults.flash4mb` → 4 MB + `partitions_4mb.csv` |
+| `flight_computer` | 8 MB | `sdkconfig.defaults.v9` (`-DTR_BOARD_V9=1`, and V10) — comments only since #916; the flash size stays the base 8 MB. M2 takes its ESP32-S3 overlay, `sdkconfig.defaults.m2` (the Beetle V1's `sdkconfig.defaults.m1` until the V1 was retired), and then `sdkconfig.defaults.flash4mb` → 4 MB + `partitions_4mb.csv` |
+| `out_computer` | 8 MB | `sdkconfig.defaults.v9` (`-DTR_BOARD_V9=1`, V10 and M2) — PSRAM only since #916; the flash size stays the base 8 MB. M2 adds `sdkconfig.defaults.flash4mb` → 4 MB + `partitions_4mb.csv` |
 | `base_station` | 8 MB + `partitions.csv` | `sdkconfig.defaults.v3` → 16 MB + `partitions_v3.csv` (`-DTR_BS_BOARD=3`, and `=4` for the Tinker-Base) |
 | `radio_board` | 4 MB | none — table ends at 3.13 MB, and 4 MB is safe on both the 8 MB as-built and the 16 MB artwork |
-| `legacy/rocket_computer_mini` | 8 MB | none — table ends at 6.13 MB; the fitted part is 16 MB but nothing addresses the top half |
 
 The base value is deliberately the safe one, so a forgotten or unsupported flag
 costs a big board the top of its part rather than costing a small board its
@@ -212,6 +212,13 @@ takes effect where someone would look for it. Any root `projects/*/sdkconfig`
 left over from before is now ignored and can be deleted.
 
 ## Current state
+
+**2026-11-25 — Tinker-Beetle V1 retired from the firmware.** The owner
+deprecated the Beetle V1 (rev1, tag `rocket-computer-mini-v1.0.1`): its
+board target (the `M1` build, with its LC86G and QMC5883P drivers) and the
+single-MCU mini project were removed, and the Tinker-Beetle V2 (`M2`) is the
+Beetle's only build. The V1's tag, fabrication files and the history below are
+kept; V1 images already in the field keep their `-m1` suffix and rev code.
 
 **2026-11-21 — lora-daughterboard V4 tagged as ordered; the in-work LoRa moves to
 V5.** The V4 was plotted on 2026-09-28 from 4a7904c3 (#1543) and ordered from

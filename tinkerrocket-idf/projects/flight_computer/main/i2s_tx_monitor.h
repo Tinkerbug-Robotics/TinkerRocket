@@ -1,10 +1,10 @@
 #pragma once
 
 // Bench diagnostic, TR_I2S_TX_MONITOR=1 builds only: what the FC's I2S TX
-// really puts on its pins, frame by frame. It found the Beetle's IMU batch
+// really puts on its pins, frame by frame. It found the Beetle V1's IMU batch
 // gaps (2026-10-12, i2s_tx_fill_policy.h). Not for flight.
 //
-//   idf.py -B build_m1_mon -DTR_BOARD_M1=1 -DTR_I2S_TX_MONITOR=1 build
+//   idf.py -B build_m2_mon -DTR_BOARD_M2=1 -DTR_I2S_TX_MONITOR=1 build
 //
 // Two views of the link, parsed the way the OC parses it (i2s_link_check.h)
 // and matched in order against the sender's own log of what it wrote:
