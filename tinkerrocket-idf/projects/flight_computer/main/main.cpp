@@ -3620,6 +3620,14 @@ static volatile bool raw_nav_on_pad = false;
 // counts them
 static volatile bool raw_sdr_gnss_held = false;
 static uint32_t raw_sdr_gnss_held_n = 0;
+// #1756 (sdr_nav_start_policy.h boardWait): millis() of the board's last fix
+// the normal start would take (0: none), whether the filter is flying on the
+// board's fixes, and millis() of that filter's last re-init (0: none) -- so a
+// re-init on the pad waits for the board's next fix instead of starting
+// degraded between two of them
+static uint32_t sdr_last_usable_fix_ms = 0;
+static bool     sdr_filter_on_board = false;
+static uint32_t sdr_reinit_ms = 0;
 // when the sensors started (setup_fc), for the boot's verdict on the board
 static uint32_t sdr_sensors_started_ms = 0;
 #endif
@@ -9663,6 +9671,13 @@ static void resetFlightStateForSim(const char* edge)
     // sim's ~100 ms first fix reaches the normal init path before any fallback.
     gnss_absent_flight   = false;
     gnss_absent_dwell_ms = millis() + GNSS_ABSENT_INIT_DWELL_MS;
+#if TR_RAW_NAV_SDR
+    // #1756: the sim's fixes are another vehicle's; its start waits on the
+    // settle above, not on the board's
+    sdr_last_usable_fix_ms = 0;
+    sdr_filter_on_board    = false;
+    sdr_reinit_ms          = 0;
+#endif
     guidance.reset();
     control_mixer.reset();
     roll_rate_pid_standalone.reset();
@@ -9755,6 +9770,18 @@ static void magCalEndSession(const char* why)
 static void magCalBackToReady()
 {
     rocket_state = READY;
+#if TR_RAW_NAV_SDR
+    // #1756: a session's exit is a re-init on the pad: the board's grace runs
+    // from here when the filter flew on its fixes before (or was waiting to
+    // after an earlier re-init: a re-snap just before the session started).
+    // The rocket was being turned, so its fixes may have failed the init gate
+    // for the whole session.
+    if (sdr_filter_on_board || sdr_reinit_ms != 0)
+    {
+        const uint32_t m = millis();
+        sdr_reinit_ms = m ? m : 1u;
+    }
+#endif
     if (ekf_initialized)
     {
         ekf_initialized = false;
@@ -11723,6 +11750,15 @@ static void loop_fc()
             // separate: MAG_CALIBRATION inhibits the estimator ENTIRELY, as the
             // architecture doc says it does.
 #if TR_RAW_NAV_SDR
+            // #1756: a fix the normal start would take arrives on one pass in a
+            // hundred or more; remember when, for the degraded start's wait
+            // (here, after the pad average above may have set have_ref_pos on
+            // this very fix)
+            if (have_ref_pos && gnss_gate3_init)
+            {
+                const uint32_t m = millis();
+                sdr_last_usable_fix_ms = m ? m : 1u;
+            }
             // The gnss-sdr-dev image (sdr_nav_start_policy.h): a degraded
             // start gives way to the board's first usable fix while the rocket
             // is on the pad, unarmed -- the normal start below, a new start
@@ -11759,6 +11795,15 @@ static void loop_fc()
                 // injected sim fix wins first.
                 const bool normal_init = have_ref_pos && gnss_gate3_init;
 #if TR_RAW_NAV_SDR
+                // #1756: the first pass after a filter flying on the board's
+                // fixes was cleared (a mag-cal exit, an orientation re-snap or
+                // setting change): the start of the board's grace
+                if (sdr_filter_on_board)
+                {
+                    sdr_filter_on_board = false;
+                    const uint32_t m = millis();
+                    sdr_reinit_ms = m ? m : 1u;
+                }
                 // The gnss-sdr-dev image never knows the board absent at boot
                 // (its driver listens whether or not one is there): the
                 // degraded start once no usable fix has come 2 min after boot
@@ -11770,9 +11815,12 @@ static void loop_fc()
                     !RAW_IS_SDR ? (!normal_init && gnss_absent_mode && !gnss_started && (initGyroN >= 8) &&
                                    ((int32_t)(millis() - gnss_absent_dwell_ms) >= 0)) :
 #endif
-                    sdr_nav_start::degradedStartDue(normal_init, initGyroN >= 8,
-                                                    (int32_t)(millis() - gnss_absent_dwell_ms) >= 0, millis(),
-                                                    rocket_state);
+                    // #1756: "no usable fix" is none for a while, not none on
+                    // this pass (boardWait)
+                    sdr_nav_start::degradedStartDue(
+                        normal_init || sdr_nav_start::boardWait(sdr_last_usable_fix_ms, sdr_reinit_ms, millis()),
+                        initGyroN >= 8, (int32_t)(millis() - gnss_absent_dwell_ms) >= 0, millis(),
+                        rocket_state);
 #else
                 const bool degraded_init =
                     !normal_init && gnss_absent_mode && !gnss_started &&
@@ -11908,6 +11956,11 @@ static void loop_fc()
                         }
                     }
                     ekf_initialized = true;
+#if TR_RAW_NAV_SDR
+                    // #1756: a filter flying on the board's fixes; its re-init
+                    // will wait for the board
+                    sdr_filter_on_board = RAW_NAV_AND(RAW_IS_SDR) !degraded_init;
+#endif
                     if (degraded_init) {
                         // #557: mark the session degraded so the SH_GNSS_ABSENT
                         // telemetry flag and the launch-time guidance force-off

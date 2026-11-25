@@ -53,3 +53,199 @@ TEST(SdrNavStart, TheBoardIsSilentOnlyAfterItsSecondsWithNoFrame)
     EXPECT_FALSE(boardSilent(true, 10u * kHeardMs));
     EXPECT_GE(kHeardMs, 2000u);   // its status comes once a second
 }
+
+// ---- #1756: a re-init on the pad waits for the board's next fix --------------
+
+TEST(SdrNavStart, TheBoardIsWaitedForAfterAUsableFixAndAfterAReinit)
+{
+    EXPECT_FALSE(boardWait(0, 0, 50000u));                       // never a fix, never a re-init
+    EXPECT_TRUE(boardWait(10000u, 0, 10000u + kUsableFixMs - 1));
+    EXPECT_FALSE(boardWait(10000u, 0, 10000u + kUsableFixMs));
+    EXPECT_TRUE(boardWait(0, 20000u, 20000u + kReinitGraceMs - 1));
+    EXPECT_FALSE(boardWait(0, 20000u, 20000u + kReinitGraceMs));
+    // across the 32-bit millisecond wrap
+    EXPECT_TRUE(boardWait(0xFFFFFF00u, 0, 0x00000100u));
+    EXPECT_TRUE(boardWait(0, 0xFFFFFF00u, 0x00000100u));
+    EXPECT_EQ(kUsableFixMs, 3000u);
+    EXPECT_EQ(kReinitGraceMs, 5000u);
+}
+
+namespace {
+
+// main.cpp's pass order for the gnss-sdr-dev board's filter start, at 1 kHz.
+// `fix`: the board's fix passed the init gate this pass. It is usable (what
+// the normal start takes) with the pad datum, which the pad average sets on
+// such a fix unless a degraded start stands armed (sdr_degraded_armed).  Then
+// the stamp of the last usable fix; the late board's restart (the only clear
+// of gnss_absent_flight, `degraded`, besides a sim's reset); MAG_CALIBRATION
+// does nothing; an unstarted filter stamps a re-init of a filter that flew on
+// the board, then starts normally on a usable fix or degraded when
+// degradedStartDue says so.  magCalExit() is magCalBackToReady.  `old_wiring`
+// is main.cpp before #1756: degradedStartDue told of a usable fix on THIS
+// pass, and no stamps.
+struct Pad
+{
+    RocketState state = READY;
+    bool     ekf = false, degraded = false, on_board = false, ever_degraded = false, have_ref = false;
+    uint32_t last_usable = 0, reinit = 0, degraded_at = 0;
+    bool     old_wiring = false;
+
+    void pass(uint32_t now, bool fix)
+    {
+        if (fix && !(degraded && state != READY)) have_ref = true;
+        const bool usable = fix && have_ref;
+        if (usable) last_usable = now ? now : 1u;
+        if (ekf && degraded && restartOnFix(true, usable, state))
+        {
+            ekf = false;
+            degraded = false;
+        }
+        if (state == MAG_CALIBRATION) return;
+        if (!ekf)
+        {
+            if (on_board && !old_wiring)
+            {
+                on_board = false;
+                reinit = now ? now : 1u;
+            }
+            const bool wait = old_wiring ? usable : (usable || boardWait(last_usable, reinit, now));
+            const bool deg = degradedStartDue(wait, true, true, now, state);
+            if (usable || deg)
+            {
+                ekf = true;
+                on_board = !deg;
+                if (deg) degraded = true;
+                if (deg && !ever_degraded)
+                {
+                    ever_degraded = true;
+                    degraded_at = now;
+                }
+            }
+        }
+    }
+
+    void magCalExit(uint32_t now)
+    {
+        state = READY;
+        if (!old_wiring && (on_board || reinit != 0)) reinit = now ? now : 1u;
+        ekf = false;
+    }
+};
+
+// Run [from, to) with a usable fix every `fix_ms` (phase `phase_ms`), or none.
+void run(Pad& p, uint32_t from, uint32_t to, uint32_t fix_ms, uint32_t phase_ms = 0, bool fixes = true)
+{
+    for (uint32_t t = from; t < to; t++) p.pass(t, fixes && fix_ms && (t % fix_ms) == phase_ms);
+}
+
+// Started on the board in READY, armed (PRELAUNCH) at 60 s, running to `at`.
+Pad armedOnTheBoard(uint32_t fix_ms, uint32_t at, bool old_wiring = false)
+{
+    Pad p;
+    p.old_wiring = old_wiring;
+    run(p, 5000, 60000, fix_ms);
+    p.state = PRELAUNCH;
+    run(p, 60000, at, fix_ms);
+    return p;
+}
+
+} // namespace
+
+TEST(SdrNavStartReinit, AReinitBetweenFixesArmedStartsNormallyOnTheNextFix)
+{
+    // An orientation re-snap or setting change, armed on the pad, at any
+    // phase between two fixes, at 1 Hz and 10 Hz.
+    for (uint32_t fix_ms : {1000u, 100u})
+        for (uint32_t phase : {1u, fix_ms / 3, fix_ms - 1})
+        {
+            Pad p = armedOnTheBoard(fix_ms, 300000u + phase);
+            ASSERT_TRUE(p.ekf && p.on_board);
+            p.ekf = false;   // the re-init
+            run(p, 300000u + phase, 310000u, fix_ms);
+            EXPECT_FALSE(p.ever_degraded) << fix_ms << " ms fixes, phase " << phase;
+            EXPECT_TRUE(p.ekf && p.on_board && !p.degraded);
+        }
+}
+
+TEST(SdrNavStartReinit, BeforeThisPRTheSameReinitStartedDegradedForTheFlight)
+{
+    for (uint32_t fix_ms : {1000u, 100u})
+    {
+        Pad p = armedOnTheBoard(fix_ms, 300000u + fix_ms / 3, /*old_wiring=*/true);
+        p.ekf = false;
+        run(p, 300000u + fix_ms / 3, 310000u, fix_ms);
+        EXPECT_TRUE(p.ever_degraded) << fix_ms;
+        EXPECT_TRUE(p.degraded);   // and armed it stood: no restart
+    }
+}
+
+TEST(SdrNavStartReinit, AMagCalThatTumblesTheRocketStartsNormallyOnceItIsSetDown)
+{
+    // The session runs 30 s with fixes that fail the init gate (the rocket is
+    // being turned); its exit clears the filter and returns READY, and the
+    // pad's state machine re-arms on the next pass. The board's fixes are
+    // usable again 1.5 s after the exit. At 10 min after boot, where READY's
+    // own 2 min rule would also have started degraded at the exit.
+    for (uint32_t fix_ms : {1000u, 100u})
+        for (bool old_wiring : {false, true})
+        {
+            Pad p = armedOnTheBoard(fix_ms, 600000u, old_wiring);
+            p.state = MAG_CALIBRATION;
+            run(p, 600000u, 630000u, fix_ms, 0, /*fixes=*/false);
+            p.magCalExit(630000u);
+            p.pass(630000u, false);
+            p.state = PRELAUNCH;   // re-armed on the next pass
+            run(p, 630001u, 631500u, fix_ms, 0, false);
+            run(p, 631500u, 640000u, fix_ms);
+            if (old_wiring)
+                EXPECT_TRUE(p.ever_degraded) << fix_ms;
+            else
+            {
+                EXPECT_FALSE(p.ever_degraded) << fix_ms;
+                EXPECT_TRUE(p.ekf && p.on_board);
+            }
+        }
+}
+
+TEST(SdrNavStartReinit, ABoardThatWentSilentStillStartsDegradedAfterTheGrace)
+{
+    Pad p = armedOnTheBoard(1000u, 300000u);
+    // The board's last fix at 299 s; it goes silent, then a re-init at 300 s.
+    p.ekf = false;
+    run(p, 300000u, 320000u, 1000u, 0, /*fixes=*/false);
+    EXPECT_TRUE(p.ever_degraded);
+    EXPECT_EQ(p.degraded_at, 300000u + kReinitGraceMs);
+    EXPECT_TRUE(p.ekf && p.degraded);
+}
+
+TEST(SdrNavStartReinit, ABoardThatNeverGaveAFixStillStartsAtOnceWhenArmed)
+{
+    Pad p;
+    p.state = PRELAUNCH;
+    run(p, 5000u, 6000u, 1000u, 0, /*fixes=*/false);
+    EXPECT_TRUE(p.ever_degraded);
+    EXPECT_EQ(p.degraded_at, 5000u);
+}
+
+TEST(SdrNavStartReinit, AReSnapThenAMagCalBeforeTheNextFixStillWaitsForTheBoard)
+{
+    // An orientation re-snap armed, then a mag cal started before the board's
+    // next fix: the re-snap's grace runs out during the session, whose fixes
+    // fail the init gate (the rocket is being turned). Its exit is a re-init
+    // of its own, so the grace starts again there.
+    for (uint32_t fix_ms : {1000u, 100u})
+    {
+        Pad p = armedOnTheBoard(fix_ms, 300000u + fix_ms / 3);
+        p.ekf = false;                    // the re-snap
+        p.pass(300000u + fix_ms / 3, false);
+        p.state = MAG_CALIBRATION;        // before the next fix
+        run(p, 300000u + fix_ms / 3 + 1, 330000u, fix_ms, 0, /*fixes=*/false);
+        p.magCalExit(330000u);
+        p.pass(330000u, false);
+        p.state = PRELAUNCH;
+        run(p, 330001u, 331500u, fix_ms, 0, false);
+        run(p, 331500u, 340000u, fix_ms);
+        EXPECT_FALSE(p.ever_degraded) << fix_ms;
+        EXPECT_TRUE(p.ekf && p.on_board);
+    }
+}
